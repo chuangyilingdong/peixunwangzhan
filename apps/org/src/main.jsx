@@ -311,6 +311,28 @@ function UsagePage({ api }) {
   </>;
 }
 
+function BillingAccountPage({ api, user }) {
+  const overview = useData(() => api.get('org/billing/account-overview'), [api]);
+  if (user?.role === 'TEACHER') return <>
+    <PageHeader eyebrow="机构运营" title="积分充值" description="查看机构共享魔法石余额、充值订单与积分流水。" />
+    <Panel title="权限说明"><Notice tone="info">账务视图仅机构管理员可见。授课教师可在“积分用量”查看本机构用量汇总。</Notice></Panel>
+  </>;
+  return <>
+    <PageHeader eyebrow="机构运营" title="积分充值" description="查看共享魔法石余额、充值订单与积分流水；在线支付接入前不做虚假充值。" actions={<button className="secondary-button" onClick={overview.refresh}>刷新</button>} />
+    <div className="metrics">
+      <MetricCard label="当前余额" value={formatCredits(overview.data?.balance || 0)} hint="机构共享魔法石池" />
+      <MetricCard label="累计充值" value={formatCredits(overview.data?.totalCreditsIn || 0)} hint={`实收金额 ¥${((overview.data?.paidTotalFen || 0) / 100).toFixed(2)}`} tone="teal" />
+      <MetricCard label="累计消耗" value={formatCredits(overview.data?.totalCreditsSpent || 0)} hint="按成功调用扣减" tone="orange" />
+      <MetricCard label="充值订单" value={`${overview.data?.paidOrderCount || 0}/${overview.data?.orders?.length || 0}`} hint={`已支付 / 全部订单，待处理 ${overview.data?.pendingOrderCount || 0}`} tone="pink" />
+    </div>
+    <div className="split">
+      <Panel title="充值订单"><table><thead><tr><th>订单号</th><th>金额</th><th>魔法石</th><th>状态</th><th>创建时间</th></tr></thead><tbody>{(overview.data?.orders || []).map((item) => <tr key={item.id}><td>{item.orderNo}</td><td>¥{(item.amountFen / 100).toFixed(2)}</td><td>{formatCredits(item.credits)}{item.bonusCredits ? <div className="muted">赠 {formatCredits(item.bonusCredits)}</div> : null}</td><td><Status value={item.status} /></td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="积分流水"><table><thead><tr><th>时间</th><th>类型</th><th>方向 / 积分</th><th>余额</th><th>状态</th></tr></thead><tbody>{(overview.data?.entries || []).map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.type}<div className="muted">{item.reason || item.modality || '—'}</div></td><td>{item.direction === 'IN' ? '+' : '-'}{formatCredits(item.credits)}</td><td>{formatCredits(item.balanceAfter)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></Panel>
+    </div>
+    <Panel title="支付接入说明"><Notice tone="info">当前页面只读取真实充值单与积分流水，不提供模拟支付或伪造支付成功状态。</Notice></Panel>
+  </>;
+}
+
 function OrgPage({ kind, user }) {
   const teacher = user?.role === 'TEACHER';
   const pages = {
@@ -337,6 +359,6 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgPage kind="inbox" user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<OrgPage kind="work-data" user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<OrgPage kind="recharge" user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgPage kind="materials" user={session.user} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgPage kind="inbox" user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<OrgPage kind="work-data" user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgPage kind="materials" user={session.user} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

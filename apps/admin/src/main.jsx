@@ -174,6 +174,78 @@ function PlatformAdmins({ api, currentUser }) {
   </>;
 }
 
+function PlatformWorks({ api }) {
+  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const [filters, setFilters] = useState({ status: '', orgId: '', search: '' });
+  const [message, setMessage] = useState('');
+  const [action, setAction] = useState(null);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
+  const works = useData(() => api.get(`admin/works?${query.toString()}`), [api, query]);
+  const statusLabels = { PENDING: '待审核', APPROVED: '已通过', REJECTED: '已下架', PUBLISHED: '已发布' };
+  async function unpublish() {
+    if (!action) return;
+    setSaving(true); setMessage('');
+    try {
+      await api.put(`admin/works/${action.id}/unpublish`, { reason });
+      setMessage(`已下架《${action.title}》。`);
+      setAction(null); setReason(''); works.refresh();
+    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
+  }
+  return <>
+    <PageHeader eyebrow="内容治理" title="平台作品库" description="聚合查看各机构作品状态，并对公开发布作品执行平台下架。" actions={<button className="secondary-button" onClick={works.refresh}>刷新</button>} />
+    <Panel title="筛选条件">
+      <div className="form-grid">
+        <label>状态<select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
+        <label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
+      </div>
+      {message && <Notice tone={message.includes('已下架') ? 'success' : 'danger'}>{message}</Notice>}
+    </Panel>
+    <Panel title="作品列表">
+      {works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>班级 / 课时</th><th>状态</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'}</div></td><td>{item.className || '—'}{item.courseLessonTitle ? <div className="muted">{item.courseLessonTitle}</div> : null}</td><td><Status value={item.status} />{item.status === 'REJECTED' && item.teacherComment ? <div className="muted">{item.teacherComment}</div> : null}</td><td>{formatDate(item.submittedAt)}</td><td>{item.status === 'PUBLISHED' ? <button className="secondary-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button> : <span className="muted">—</span>}</td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的作品" />}
+    </Panel>
+    {action ? <Panel title={`下架《${action.title}》`}>
+      <label>下架原因<input value={reason} placeholder="例如：内容不适合公开展示" onChange={(e) => setReason(e.target.value)} /></label>
+      <div className="row-actions top-gap"><button className="primary-button" disabled={saving} onClick={unpublish}>{saving ? '处理中…' : '确认下架'}</button><button className="secondary-button" disabled={saving} onClick={() => { setAction(null); setReason(''); }}>取消</button></div>
+    </Panel> : null}
+  </>;
+}
+
+function PlatformBilling({ api }) {
+  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const overview = useData(() => api.get('admin/billing/usage-overview'), [api]);
+  const [filters, setFilters] = useState({ days: '30', orgId: '', modality: '', status: '', search: '' });
+  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
+  const records = useData(() => api.get(`admin/billing/usage-records?${query.toString()}`), [api, query]);
+  return <>
+    <PageHeader eyebrow="平台计费" title="计费与模型" description="查看全平台魔法石余额、能力消耗与逐条调用明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
+    <div className="metrics">
+      <MetricCard label="机构积分池" value={formatCredits(overview.data?.totalCredits || 0)} hint="所有机构当前余额合计" />
+      <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生用量的模型能力" tone="teal" />
+      <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `累计消耗 ${formatCredits(overview.data.topOrgs[0].credits)}` : '暂无消耗'} tone="orange" />
+      <MetricCard label="当前明细" value={records.data?.total || 0} hint="按筛选条件命中的记录数" tone="pink" />
+    </div>
+    <div className="split">
+      <Panel title="能力消耗"><table><thead><tr><th>能力</th><th>调用次数</th><th>积分</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计积分</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
+    </div>
+    <Panel title="用量明细筛选">
+      <div className="form-grid">
+        <label>时间范围<select value={filters.days} onChange={(e) => setFilters({ ...filters, days: e.target.value })}><option value="1">今日</option><option value="7">近 7 日</option><option value="30">近 30 日</option><option value="365">近一年</option></select></label>
+        <label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
+        <label>能力<input value={filters.modality} placeholder="TEXT / IMAGE / MUSIC" onChange={(e) => setFilters({ ...filters, modality: e.target.value })} /></label>
+        <label>状态<select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">全部状态</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">拦截</option></select></label>
+        <label>关键词<input value={filters.search} placeholder="机构 / 用户 / 项目 / 作品" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
+      </div>
+    </Panel>
+    <Panel title="调用明细">
+      {overview.loading || records.loading || organizations.loading ? <Loading label="正在读取计费数据…" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>上下文</th><th>积分</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty title="所选范围内暂无调用记录" />}
+    </Panel>
+  </>;
+}
+
 function PlatformPage({ kind }) {
   const pages = {
     users: ['平台用户', '统一查看机构管理员、教师与学员的账号状态，支持后续接入筛选、启停和变更记录。', [['机构账号', '按机构归属查看管理者、教师和学员'], ['账号安全', '登录状态、有效期与权限将统一在此管理']]],
@@ -197,7 +269,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformPage kind="works" />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformPage kind="billing" />} /><Route path="/materials" element={<PlatformPage kind="materials" />} /><Route path="/inbox" element={<PlatformPage kind="inbox" />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<PlatformPage kind="materials" />} /><Route path="/inbox" element={<PlatformPage kind="inbox" />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

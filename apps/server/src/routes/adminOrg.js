@@ -259,6 +259,63 @@ export async function handleAdmin(ctx) {
     requireRole(ctx, ['SUPER_ADMIN']);
     return { totalCredits: Number(row('SELECT COALESCE(SUM(credit_balance),0) n FROM org_billing_accounts').n || 0), usage: rows('SELECT modality,SUM(credits_charged) credits,COUNT(*) calls FROM usage_records GROUP BY modality'), topOrgs: rows('SELECT organization.id,organization.name,COALESCE(SUM(usage.credits_charged),0) credits FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id GROUP BY organization.id ORDER BY credits DESC LIMIT 10') };
   }
+  if (part === '/billing/usage-records' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
+    const orgFilter = ctx.search.get('orgId'); const modality = ctx.search.get('modality'); const status = ctx.search.get('status'); const search = String(ctx.search.get('search') || '').trim();
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const conditions = ['usage.created_at>=?']; const params = [since];
+    if (orgFilter) { conditions.push('usage.org_id=?'); params.push(orgFilter); }
+    if (modality) { conditions.push('usage.modality=?'); params.push(modality); }
+    if (['SUCCESS', 'FAILED', 'BLOCKED'].includes(status)) { conditions.push('usage.status=?'); params.push(status); }
+    if (search) {
+      conditions.push('(organization.name LIKE ? OR user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR work.title LIKE ?)');
+      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      params.push(keyword, keyword, keyword, keyword, keyword);
+    }
+    const items = rows(
+      'SELECT usage.*,organization.name organization_name,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,class.id class_id,class.name class_name FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + conditions.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200',
+      params,
+    ).map((item) => ({
+      id: item.id, orgId: item.org_id, organizationName: item.organization_name || null,
+      userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
+      classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
+      lessonId: item.session_lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
+      workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
+      credits: Number(item.credits_charged || 0), inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
+      status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
+    }));
+    return { items, total: items.length };
+  }
+  if (part === '/works' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const status = ctx.search.get('status'); const orgFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
+    const conditions = []; const params = [];
+    if (['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED'].includes(status)) { conditions.push('work.status=?'); params.push(status); }
+    if (orgFilter) { conditions.push('work.org_id=?'); params.push(orgFilter); }
+    if (search) {
+      conditions.push('(work.title LIKE ? OR student.display_name LIKE ? OR organization.name LIKE ?)');
+      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      params.push(keyword, keyword, keyword);
+    }
+    const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const items = rows(
+      'SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by' + where + ' ORDER BY work.submitted_at DESC LIMIT 200',
+      params,
+    ).map((work) => ({ ...normalizeWork(work), organizationName: work.organization_name || null }));
+    return { items, total: items.length };
+  }
+  let platformWorkMatch = part.match(/^\/works\/([^/]+)\/unpublish$/);
+  if (platformWorkMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    const reason = String(ctx.body?.reason || '平台下架').trim().slice(0, 2000);
+    q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=?', ['REJECTED', reason, auth.user.id, nowIso(), work.id]);
+    audit(ctx, 'PLATFORM_WORK_UNPUBLISH', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reason }, { orgId: work.org_id });
+    const updated = row('SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE work.id=?', [work.id]);
+    return { ...normalizeWork(updated), organizationName: updated.organization_name || null };
+  }
   return null;
 }
 
@@ -359,6 +416,28 @@ export async function handleOrg(ctx) {
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total: items.length };
+  }
+  if (part === '/billing/account-overview' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看账务视图', 'ORG_BILLING_PERMISSION_DENIED');
+    ensureOrgBilling(currentOrgId);
+    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);
+    const orders = rows('SELECT * FROM recharge_orders WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [currentOrgId]).map((order) => ({
+      id: order.id, orderNo: order.order_no, packageId: order.package_id || null, amountFen: Number(order.amount_fen || 0),
+      credits: Number(order.credits || 0), bonusCredits: Number(order.bonus_credits || 0), status: order.status,
+      paidAt: order.paid_at || null, invoiceStatus: order.invoice_status, createdAt: order.created_at,
+    }));
+    const entries = rows('SELECT * FROM credit_entries WHERE org_id=? ORDER BY created_at DESC LIMIT 200', [currentOrgId]).map((entry) => ({
+      id: entry.id, direction: entry.direction, type: entry.type, credits: Number(entry.credits || 0),
+      balanceAfter: Number(entry.balance_after || 0), modality: entry.modality || null, model: entry.model || null,
+      relatedOrderId: entry.related_order_id || null, status: entry.status, reason: entry.reason || null, createdAt: entry.created_at,
+    }));
+    return {
+      balance: Number(account.credit_balance || 0), totalCreditsIn: Number(account.total_credits_in || 0),
+      totalCreditsSpent: Number(account.total_credits_spent || 0), paidTotalFen: Number(account.currency_paid_total_fen || 0),
+      pendingOrderCount: orders.filter((order) => order.status === 'PENDING').length,
+      paidOrderCount: orders.filter((order) => order.status === 'PAID').length,
+      orders, entries,
+    };
   }
   if (part === '/billing/credit-entries' && method === 'GET') { const items = rows('SELECT * FROM credit_entries WHERE org_id=? ORDER BY created_at DESC LIMIT 200', [currentOrgId]); return { items, total: items.length }; }
 

@@ -37,9 +37,9 @@
 | `/users` | `/super/platform-users` 平台用户 | SUPER_ADMIN | `真实已有（2026-09-02）` | `users`、`organizations`、`billing_packages` | 新增 `GET /api/admin/platform-users` | 用户 `ACTIVE/DISABLED`；目标 `ADMIN_USERS` | 单用户启停、重置密码、解绑手机接口 | role/orgId/search 正反向验证；org/student token 403 |
 | `/courses` | `/super/courses` 平台课程 | SUPER_ADMIN | `真实已有` | `course_series`、`course_lessons`、`course_assignments` | `GET/POST /api/admin/course-series`、assignments | 课包 `DRAFT/PUBLISHED/ARCHIVED` | 详情编辑、课时/资产 CRUD、封面与课件上传 | 创建课包并授权机构；重复标题 409 |
 | `/marketplace` | `/super/course-marketplace` 课程广场 | SUPER_ADMIN | `页面壳层` | `course_series.marketplace_status` | 待定 | `marketplace_status`、奖励积分 | 分区、蒸馏、上下架与奖励规则 | 基准登录态逐页对照后实施 |
-| `/works` | `/super/published-works` 作品库 | SUPER_ADMIN | `页面壳层` | `works`、`student_projects` | 待新增 | `PENDING/APPROVED/REJECTED/PUBLISHED` | 平台聚合筛选、详情、下架 | 使用 seed 已发布作品验证空态与真实列表 |
+| `/works` | `/super/published-works` 作品库 | SUPER_ADMIN | `真实已有（2026-09-02）` | `works`、`student_projects`、`users`、`organizations`、`classes`、`course_lessons` | 新增 `GET /api/admin/works`、`PUT /api/admin/works/:id/unpublish` | `PENDING/APPROVED/REJECTED/PUBLISHED`；仅 `SUPER_ADMIN`；下架写为 `REJECTED`、记录原因与审核人并审计 `PLATFORM_WORK_UNPUBLISH` | 作品详情、精选、举报、违规处理、公开分享；服务端尚未强制仅 `PUBLISHED` 可下架，当前由前端操作边界约束 | 临时库验证状态/机构/关键词筛选、搜索、下架、审计与机构/学生 403 |
 | `/hackathon` | `/super/hackathon` 黑客松审核 | SUPER_ADMIN | `页面壳层` | 现无赛季表，需迁移 | 待新增 | `DRAFT/ACTIVE/ENDED`；投稿 `PENDING/APPROVED/REJECTED/WITHDRAWN` | 数据模型、赛季配置、审核流 | 表迁移后用临时库验证状态机 |
-| `/billing` | `/super/usage-records + recharge + billing-settings` | SUPER_ADMIN | `部分真实` | `org_billing_accounts`、`usage_records`、`recharge_orders` | 现有用量汇总；充值与设置待新增 | 充值单 `PENDING/PAID/CANCELLED/EXPIRED` | 平台用量明细、在线充值、计费设置 | 支付链路属外部决策；先补本地可验证明细 |
+| `/billing` | `/super/usage-records + recharge + billing-settings` | SUPER_ADMIN | `真实已有（2026-09-02，用量汇总与明细；在线充值/计费设置仍外部决策）` | `org_billing_accounts`、`usage_records`、`recharge_orders`、`users`、`organizations`、`class_sessions`、`classes` | 现有 `GET /api/admin/billing/usage-overview`；新增 `GET /api/admin/billing/usage-records` | 仅 `SUPER_ADMIN`；支持 `days/orgId/modality/status/search`；无效 `days` 返回 `VALIDATION_ERROR` | 在线支付回调、计费规则/模型开关配置、冻结与预警、导出对账 | 临时库验证汇总、筛选、搜索、上下文关联、非法参数与越权 403 |
 | `/materials` | `/super/materials + promo-materials` | SUPER_ADMIN | `页面壳层` | `media_assets` 可承接 | 待新增 | 素材/物料启停 | 文件上传、OSS、下载地址 | 上传与外部存储为外部决策 |
 | `/inbox` | `/super/inbox` 站内信 | SUPER_ADMIN | `页面壳层` | 现无 inbox 表，需迁移 | 待新增 | 已读/未读 | 建表、发送、已读状态 | 迁移后用临时库验证 |
 | `/admins` | `/super/platform-admins` 平台管理员 | SUPER_ADMIN | `真实已有（2026-09-02）` | `users(role=SUPER_ADMIN)` | 新增 `GET/POST/PUT /api/admin/platform-admins` | 用户 `ACTIVE/DISABLED`；`ADMIN_*` 权限码 | 独立 enabled/password/permissions 子路径可在后续扩展 | 创建/编辑/停自己失败/非法权限码/重复登录名 |
@@ -59,7 +59,7 @@
 | `/inbox` | `/org/inbox` 站内信 | ORG_ADMIN、TEACHER | `页面壳层` | 现无 inbox 表 | 待新增 | 已读/未读 | 建表与发送读取链路 | 迁移后临时库验证 |
 | `/work-data` | `/org/published-work-data` 作品数据中心 | ORG_ADMIN | `页面壳层` | `works` + 未来 visit 表 | 待新增 | 7/14/30 日统计 | 访问去重、趋势、授权访客 | 需公开分享与访客模型迁移 |
 | `/enrollment` | `/org/student-orders` 学员开通 | ORG_ADMIN | `页面壳层` | 需新增开通单/商品表 | 待新增 | 履约、收款、作废状态机 | 数据模型与 API | 设计迁移后实施 |
-| `/recharge` | `/org/recharge` 积分充值 | ORG_ADMIN | `页面壳层` | `recharge_orders`、`credit_entries` | 待新增 | `PENDING/PAID/CANCELLED/EXPIRED` | 微信/支付宝支付回调 | 支付外部决策；先可做线下/平台调整记录 |
+| `/recharge` | `/org/recharge` 积分充值 | ORG_ADMIN | `真实账务视图（2026-09-02）；在线支付仍外部决策` | `org_billing_accounts`、`recharge_orders`、`credit_entries` | 新增 `GET /api/org/billing/account-overview` | 仅 `ORG_ADMIN`；教师返回 `ORG_BILLING_PERMISSION_DENIED`；充值单 `PENDING/PAID/CANCELLED/EXPIRED` | 微信/支付宝支付回调、冻结金额、退款/冲正、人工调整、导出对账 | 管理员可读余额/累计/订单/流水；教师 403；不伪造到账数据 |
 | `/materials` | `/org/promo-materials` 宣传物料 | ORG_ADMIN | `页面壳层` | `media_assets` 可承接 | 待新增 | 物料启停 | 上传与下载地址 | 外部存储与文件大小策略待定 |
 | `/hackathon` | `/org/hackathon` 黑客松 | ORG_ADMIN | `页面壳层` | 需新增赛季/投稿表 | 待新增 | 投稿状态机 | 建表、配置、推送审核 | 数据模型迁移后实施 |
 | `/afee` | `/org/mp-notify` 阿飞提醒 | ORG_ADMIN | `页面壳层` | 需新增微信绑定/访客表 | 待新增 | 绑定状态机 | 微信开放平台对接 | 外部决策 |
@@ -93,17 +93,29 @@
 
 ## 7. P0 后续批次建议
 
-1. **P4-01 平台计费与作品闭环**：平台用量明细、平台作品库、作品下架、机构账务视图。
+1. **P4-01 平台计费与作品闭环（2026-09-02 第一批已完成）**：平台用量明细、平台作品库、作品下架、机构账务视图；在线支付、计费规则配置、精选/举报/违规处理未包含，转入后续批次。
 2. **P4-02 学生课程与账号闭环**：学生课程、额度、账号安全，仅使用现有表。
 3. **P4-03 通知与物料闭环**：先补 inbox / promo-materials 表，再接两端页面。
 4. **P4-04 运营活动与外部能力**：黑客松、微信提醒、支付、上传、真实 AI 均需先迁移或明确外部决策。
 
-## 8. 本轮总验收
+## 8. 本轮总验收（P4-00 / P4-01）
+
+### 8.1 P4-00 第一批验收记录
 
 - [x] `node --check apps/server/src/routes/adminOrg.js` 通过。
 - [x] 临时 SQLite 初始化 + seed 后，API 正反向场景全部符合第 2 节完成标准。
 - [x] `node .\p3-api-integration.mjs` 在同一临时库服务上通过。
 - [x] `pnpm run build` 全量通过。
 - [x] 平台端 `/users`、`/admins` 与机构端 `/courses`、`/packages`、`/usage` 不再是壳层。
-- [x] 总控 P4-00 更新为 `[-]`，并追加变更日志。
+- [x] 总控 P4-00 更新，并追加变更日志。
 - [x] Git 提交并推送 `main`；不部署线上环境。
+
+### 8.2 P4-01 第一批验收记录（2026-09-02）
+
+- [x] `node --check apps/server/src/routes/adminOrg.js` 通过。
+- [x] 临时 SQLite 初始化 + seed 后，`47 pass / 0 fail`：覆盖平台用量筛选、搜索、上下文关联、非法 `days=0`、平台作品筛选/搜索/下架/审计、机构与学生越权 403、机构账务聚合、教师账务 403。
+- [x] `node .\p3-api-integration.mjs` 回归通过，`46 pass / 0 fail`。
+- [x] `pnpm run build` 四端生产构建全部通过。
+- [x] 平台端 `/works`、`/billing` 与机构端 `/recharge` 从壳层/部分真实升级为真实只读或治理视图；不伪造支付到账、模型配置和运营数据。
+- [x] 已知边界：在线支付、计费规则配置、精选/举报/违规处理未包含；平台下架接口当前由前端限制仅对 `PUBLISHED` 操作，服务端严格状态机校验留待统一状态机批次。
+- [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不部署线上环境。
