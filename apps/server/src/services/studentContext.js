@@ -244,8 +244,29 @@ function studentLessonProgressMap(user) {
     [userId, orgId],
   );
   const works = rows(
-    `SELECT project_id, course_lesson_id, title, status, teacher_comment, reviewed_at, submitted_at
-     FROM works WHERE student_id = ? AND org_id = ?`,
+    `SELECT work.id, work.project_id, work.course_lesson_id, work.title, work.status,
+            work.teacher_comment, work.reviewed_at, work.submitted_at,
+            (SELECT MAX(submission.round) FROM work_submissions submission WHERE submission.work_id=work.id) AS submission_round,
+            (SELECT COUNT(1)
+               FROM work_annotations annotation
+              WHERE annotation.work_id=work.id
+                AND NOT EXISTS (
+                  SELECT 1 FROM work_feedback_reads annotation_read
+                  WHERE annotation_read.annotation_id=annotation.id
+                    AND annotation_read.student_id=work.student_id
+                )) AS unread_annotation_count,
+            CASE
+              WHEN work.teacher_comment IS NULL OR work.teacher_comment='' THEN 0
+              WHEN EXISTS (
+                SELECT 1 FROM work_feedback_reads overall_read
+                WHERE overall_read.work_id=work.id
+                  AND overall_read.student_id=work.student_id
+                  AND overall_read.annotation_id IS NULL
+                  AND overall_read.submission_round=COALESCE((SELECT MAX(submission.round) FROM work_submissions submission WHERE submission.work_id=work.id),0)
+              ) THEN 0
+              ELSE 1
+            END AS overall_unread_count
+     FROM works work WHERE work.student_id = ? AND work.org_id = ?`,
     [userId, orgId],
   );
   const progress = new Map();
@@ -260,6 +281,8 @@ function studentLessonProgressMap(user) {
         bestWorkStatus: null,
         feedbackCount: 0,
         unreadFeedbackCount: 0,
+        unreadAnnotationCount: 0,
+        overallUnreadCount: 0,
         lastActivityAt: null,
       });
     }
@@ -299,10 +322,13 @@ function studentLessonProgressMap(user) {
     if ((WORK_PROGRESS_RANK[work.status] || 0) > (WORK_PROGRESS_RANK[item.bestWorkStatus] || 0)) {
       item.bestWorkStatus = work.status;
     }
-    if (work.reviewed_at && work.teacher_comment) {
-      item.feedbackCount += 1;
-      item.unreadFeedbackCount += 1;
-    }
+    const unreadAnnotations = Number(work.unread_annotation_count || 0);
+    const overallUnread = Number(work.overall_unread_count || 0);
+    if (work.reviewed_at && work.teacher_comment) item.feedbackCount += 1;
+    if (work.status === 'REJECTED') item.feedbackCount += 1;
+    item.unreadFeedbackCount += unreadAnnotations + overallUnread;
+    if (unreadAnnotations > 0) item.unreadAnnotationCount = (item.unreadAnnotationCount || 0) + unreadAnnotations;
+    if (overallUnread > 0) item.overallUnreadCount = (item.overallUnreadCount || 0) + overallUnread;
     if (work.submitted_at && work.submitted_at > item.lastActivityAt) item.lastActivityAt = work.submitted_at;
   }
   for (const item of progress.values()) {
@@ -356,7 +382,7 @@ export function buildStudentDashboard(user) {
     const lessons = (course.lessons || []).map((lesson) => {
       const progress = progressByLesson.get(lesson.id) || {
         projectCount: 0, draftProjects: [], workCount: 0, works: [], bestWorkStatus: null,
-        feedbackCount: 0, unreadFeedbackCount: 0, lastActivityAt: null,
+        feedbackCount: 0, unreadFeedbackCount: 0, unreadAnnotationCount: 0, overallUnreadCount: 0, lastActivityAt: null,
       };
       const session = activeSessionByLesson.get(lesson.id) || null;
       const task = {
@@ -418,7 +444,7 @@ export function buildStudentDashboard(user) {
   });
 
   const unfinishedTasks = allLessonTasks.filter((item) => item.status !== 'PUBLISHED' && item.status !== 'APPROVED');
-  const pendingFeedbackTasks = allLessonTasks.filter((item) => item.progress.unreadFeedbackCount > 0 || item.status === 'REJECTED');
+  const pendingFeedbackTasks = allLessonTasks.filter((item) => item.progress.unreadFeedbackCount > 0);
   const taskPriority = { REJECTED: 0, IN_PROGRESS: 1, NOT_STARTED: 2, PENDING: 3 };
   const learningTasks = [...unfinishedTasks]
     .sort((a, b) => (taskPriority[a.status] ?? 9) - (taskPriority[b.status] ?? 9)

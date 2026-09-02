@@ -397,6 +397,67 @@ CREATE TABLE IF NOT EXISTS work_annotations (
 CREATE INDEX IF NOT EXISTS idx_work_annotations_work_created ON work_annotations(work_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_work_annotations_org_created ON work_annotations(org_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS work_submissions (
+  id TEXT PRIMARY KEY,
+  work_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  org_id TEXT,
+  round INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  canvas_snapshot TEXT NOT NULL,
+  snapshot_version INTEGER NOT NULL,
+  submitted_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  review_status TEXT,
+  review_comment TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_work_submissions_work_round ON work_submissions(work_id, round DESC);
+CREATE INDEX IF NOT EXISTS idx_work_submissions_student_created ON work_submissions(student_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS work_feedback_reads (
+  id TEXT PRIMARY KEY,
+  work_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  annotation_id TEXT,
+  submission_round INTEGER NOT NULL DEFAULT 0,
+  read_at TEXT NOT NULL,
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (annotation_id) REFERENCES work_annotations(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_feedback_reads_annotation ON work_feedback_reads(annotation_id) WHERE annotation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_feedback_reads_work ON work_feedback_reads(work_id, student_id, read_at DESC);
+
+CREATE TABLE IF NOT EXISTS work_publish_requests (
+  id TEXT PRIMARY KEY,
+  work_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  org_id TEXT,
+  round INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','WITHDRAWN')),
+  reason TEXT NOT NULL DEFAULT '',
+  requested_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolved_by TEXT,
+  resolution TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_publish_requests_work ON work_publish_requests(work_id, requested_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_publish_requests_open ON work_publish_requests(work_id) WHERE status='PENDING';
+
 CREATE TABLE IF NOT EXISTS usage_records (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,

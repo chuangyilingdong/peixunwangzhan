@@ -526,16 +526,61 @@ function Works({ api }) {
   const [selectedWork, setSelectedWork] = useState(null);
   const [annotations, setAnnotations] = useState([]);
   const [annotationsLoading, setAnnotationsLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [busyWorkId, setBusyWorkId] = useState(null);
+  const [historyWorkId, setHistoryWorkId] = useState(null);
+  const [histories, setHistories] = useState({});
+  const workStatusText = { PENDING: '待审核', APPROVED: '已通过', REJECTED: '待修改', PUBLISHED: '已发布' };
+  const requestStatusText = { PENDING: '发布申请处理中', APPROVED: '发布申请已通过', REJECTED: '发布申请未通过', WITHDRAWN: '发布申请已撤回' };
   async function openFeedback(work) {
     setSelectedWork(work); setAnnotationsLoading(true);
-    try { setAnnotations((await api.get(`student/works/${work.id}/annotations`)).items || []); }
-    finally { setAnnotationsLoading(false); }
+    try {
+      const result = await api.get(`student/works/${work.id}/annotations`);
+      setAnnotations(result.items || []);
+      if (result.unreadCount > 0) {
+        await api.post(`student/works/${work.id}/feedback-read`, { annotationIds: result.items.filter((item) => !item.readAt).map((item) => item.id) });
+        const next = await api.get(`student/works/${work.id}/annotations`);
+        setAnnotations(next.items || []);
+        refresh();
+      }
+    } finally { setAnnotationsLoading(false); }
+  }
+  async function readOverallFeedback(work) {
+    setBusyWorkId(work.id);
+    try { await api.post(`student/works/${work.id}/feedback-read`, { annotationIds: [] }); setMessage('整体点评已标记为已读。'); refresh(); }
+    catch (apiError) { setMessage(apiError.message || '标记已读失败。'); }
+    finally { setBusyWorkId(null); }
+  }
+  async function toggleHistory(work) {
+    if (historyWorkId === work.id) { setHistoryWorkId(null); return; }
+    setHistoryWorkId(work.id);
+    try {
+      const result = await api.get(`student/works/${work.id}/submissions`);
+      setHistories((current) => ({ ...current, [work.id]: result.items || [] }));
+    } catch { setHistories((current) => ({ ...current, [work.id]: [] })); }
+  }
+  async function requestPublish(work) {
+    setBusyWorkId(work.id);
+    try { await api.post(`student/works/${work.id}/publish-request`, { reason: '' }); setMessage('发布申请已提交，请等待老师处理。'); refresh(); }
+    catch (apiError) { setMessage(apiError.message || '发布申请失败。'); }
+    finally { setBusyWorkId(null); }
+  }
+  async function withdrawPublish(work) {
+    setBusyWorkId(work.id);
+    try { await api.post(`student/works/${work.id}/publish-request/withdraw`); setMessage('发布申请已撤回。'); refresh(); }
+    catch (apiError) { setMessage(apiError.message || '撤回发布申请失败。'); }
+    finally { setBusyWorkId(null); }
   }
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
-  return <><PageHeader eyebrow="成果展" title="我的作品" description="查看老师的整体点评与画布卡片反馈；发布后的优秀作品会出现在机构作品墙。" /><Panel title="提交记录" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>{data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>课程 / 课时</th><th>提交时间</th><th>状态</th><th>老师点评</th><th>反馈</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'}</div></td><td>{item.courseLessonTitle || item.lessonTitle || '—'}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} />{item.copyrightConfirmedAt ? <div className="muted">已确认展示授权</div> : <div className="muted">未确认展示授权</div>}</td><td>{item.teacherComment || '等待老师点评'}</td><td><button className="text-button" onClick={() => openFeedback(item)}>查看画布反馈</button></td></tr>)}</tbody></table></div> : <Empty title="还没有提交作品" body="在项目画布完成创作后，提交给老师点评吧。" />}</Panel>{selectedWork && <Panel title={`老师反馈 · ${selectedWork.title}`} actions={<button className="secondary-button" onClick={() => setSelectedWork(null)}>关闭</button>}><CanvasEditor key={`feedback-${selectedWork.id}`} initialSnapshot={selectedWork.canvasSnapshot} readOnly />{annotationsLoading ? <Loading label="正在读取反馈…" /> : annotations.length ? <div className="card-list">{annotations.map((annotation) => <article className="item-card" key={annotation.id}><div className="row-actions"><strong>{annotation.nodeId ? `卡片反馈：${nodeFeedbackLabel(selectedWork.canvasSnapshot, annotation.nodeId)}` : '整体补充反馈'}</strong><Status value={annotation.resolvedAt ? 'APPROVED' : 'PENDING'} /></div><p>{annotation.content}</p><p className="muted">{annotation.authorName} · {formatDate(annotation.createdAt)}{annotation.resolvedAt ? ' · 老师已标记完成' : ''}</p></article>)}</div> : <Empty title="老师暂未添加画布批注" body="整体点评会显示在提交记录中。" />}</Panel>}</>;
+  return <><PageHeader eyebrow="成果展" title="我的作品" description="查看提交轮次、老师反馈与发布申请；被驳回的作品修改后可以再次提交。" />
+    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
+    <Panel title="提交记录" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>{data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>课程 / 课时</th><th>轮次</th><th>提交时间</th><th>状态</th><th>老师点评</th><th>反馈</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => {
+      const request = item.pendingPublishRequest || item.latestPublishRequest;
+      return <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'}</div></td><td>{item.courseLessonTitle || item.lessonTitle || '—'}</td><td>第 {item.submissionRound || 1} 轮</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{workStatusText[item.status] || item.status}</div>{item.copyrightConfirmedAt ? <div className="muted">已确认展示授权</div> : <div className="muted">未确认展示授权</div>}{request ? <div className="muted">{requestStatusText[request.status] || request.status}{request.resolvedAt ? ' · ' + formatDate(request.resolvedAt) : ''}</div> : null}</td><td>{item.teacherComment || '等待老师点评'}{item.overallUnreadCount > 0 ? <button className="text-button" disabled={busyWorkId === item.id} onClick={() => readOverallFeedback(item)}>标记已读</button> : null}</td><td>{item.unreadFeedbackCount > 0 ? <span className="status warning">{item.unreadFeedbackCount} 条未读</span> : <span className="muted">无新反馈</span>}<button className="text-button" onClick={() => openFeedback(item)}>查看画布反馈</button><button className="text-button" onClick={() => toggleHistory(item)}>{historyWorkId === item.id ? '收起提交历史' : '查看提交历史'}</button>{historyWorkId === item.id ? <div className="card-list">{(histories[item.id] || []).length ? histories[item.id].map((submission) => <article className="item-card" key={submission.id}><div className="row-actions"><strong>第 {submission.round} 轮</strong><Status value={submission.reviewStatus} /></div><p className="muted">提交：{formatDate(submission.submittedAt)} · 版本 {submission.snapshotVersion}</p><p>{submission.reviewComment || (submission.reviewStatus === 'PENDING' ? '等待老师审核' : '老师未填写点评')}</p></article>) : <Empty title="暂无提交历史" body="首次提交后会显示每一轮审核结果。" />}</div> : null}</td><td><div className="row-actions">{item.actions?.canEditProject ? <a className="secondary-button" href={`/projects/${item.projectId}/canvas`}>去修改项目</a> : null}{item.actions?.canRequestPublish ? <button className="primary-button" disabled={busyWorkId === item.id} onClick={() => requestPublish(item)}>申请发布</button> : null}{item.actions?.canWithdrawPublishRequest ? <button className="secondary-button" disabled={busyWorkId === item.id} onClick={() => withdrawPublish(item)}>撤回申请</button> : null}</div></td></tr>;
+    })}</tbody></table></div> : <Empty title="还没有提交作品" body="在项目画布完成创作后，提交给老师点评吧。" />}</Panel>
+    {selectedWork && <Panel title={`老师反馈 · ${selectedWork.title}`} actions={<button className="secondary-button" onClick={() => { setSelectedWork(null); setAnnotations([]); }}>关闭</button>}><CanvasEditor key={`feedback-${selectedWork.id}`} initialSnapshot={selectedWork.canvasSnapshot} readOnly />{annotationsLoading ? <Loading label="正在读取反馈…" /> : annotations.length ? <div className="card-list">{annotations.map((annotation) => <article className="item-card" key={annotation.id}><div className="row-actions"><strong>{annotation.nodeId ? `卡片反馈：${nodeFeedbackLabel(selectedWork.canvasSnapshot, annotation.nodeId)}` : '整体补充反馈'}</strong><Status value={annotation.resolvedAt ? 'APPROVED' : 'PENDING'} />{annotation.readAt ? <span className="muted">已读</span> : <span className="status warning">未读</span>}</div><p>{annotation.content}</p><p className="muted">{annotation.authorName} · {formatDate(annotation.createdAt)}{annotation.resolvedAt ? ' · 老师已标记完成' : ''}</p></article>)}</div> : <Empty title="老师暂未添加画布批注" body="整体点评会显示在提交记录中。" />}</Panel>}</>;
 }
-
 function Showcase({ api, user }) {
   const [filters, setFilters] = useState({ search: '', featured: false });
   const query = useMemo(() => { const value = new URLSearchParams(); if (filters.search.trim()) value.set('search', filters.search.trim()); if (filters.featured) value.set('featured', 'true'); return value.toString(); }, [filters]);

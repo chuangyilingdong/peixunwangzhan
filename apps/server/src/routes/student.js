@@ -111,6 +111,132 @@ function fetchWork(ctx, workId) {
   );
 }
 
+function getOwnWork(ctx, workId) {
+  const work = row('SELECT * FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, ctx.auth.user.id, ctx.auth.user.orgId]);
+  if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+  return work;
+}
+
+function currentSubmissionRound(workId) {
+  const latest = row('SELECT round FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [workId]);
+  return Number(latest?.round || 0);
+}
+
+function workSubmissionRows(workIds) {
+  const ids = Array.isArray(workIds) ? workIds.filter(Boolean) : [workIds].filter(Boolean);
+  if (!ids.length) return new Map();
+  const placeholders = ids.map(() => '?').join(',');
+  const items = rows(
+    `SELECT submission.id, submission.work_id, submission.round, submission.title, submission.description,
+            submission.snapshot_version, submission.submitted_at, submission.review_status, submission.review_comment,
+            submission.reviewed_at
+     FROM work_submissions submission
+     WHERE submission.work_id IN (${placeholders})
+     ORDER BY submission.work_id, submission.round DESC`,
+    ids,
+  );
+  const grouped = new Map();
+  for (const item of items) {
+    if (!grouped.has(item.work_id)) grouped.set(item.work_id, []);
+    grouped.get(item.work_id).push({
+      id: item.id,
+      workId: item.work_id,
+      round: Number(item.round || 0),
+      title: item.title,
+      description: item.description,
+      snapshotVersion: Number(item.snapshot_version || 0),
+      submittedAt: item.submitted_at,
+      reviewStatus: item.review_status || 'PENDING',
+      reviewComment: item.review_comment || null,
+      reviewedAt: item.reviewed_at || null,
+    });
+  }
+  return grouped;
+}
+
+function annotationRowsForStudent(workId, studentId, orgId) {
+  return rows(
+    `SELECT annotation.*, author.display_name AS author_name, resolver.display_name AS resolver_name,
+            read_record.read_at
+     FROM work_annotations annotation
+     JOIN users author ON author.id = annotation.author_id
+     LEFT JOIN users resolver ON resolver.id = annotation.resolved_by
+     LEFT JOIN work_feedback_reads read_record ON read_record.annotation_id = annotation.id
+       AND read_record.student_id = ?
+     WHERE annotation.work_id=? AND annotation.org_id=?
+     ORDER BY annotation.created_at DESC`,
+    [studentId, workId, orgId],
+  ).map((annotation) => ({
+    id: annotation.id,
+    workId: annotation.work_id,
+    nodeId: annotation.node_id || null,
+    content: annotation.content,
+    authorId: annotation.author_id,
+    authorName: annotation.author_name || '教师',
+    createdAt: annotation.created_at,
+    resolvedAt: annotation.resolved_at || null,
+    resolvedBy: annotation.resolved_by || null,
+    resolverName: annotation.resolver_name || null,
+    readAt: annotation.read_at || null,
+  }));
+}
+
+function normalizeWorkPublishRequest(request) {
+  if (!request) return null;
+  return {
+    id: request.id,
+    workId: request.work_id,
+    projectId: request.project_id,
+    studentId: request.student_id,
+    orgId: request.org_id,
+    round: Number(request.round || 0),
+    status: request.status,
+    reason: request.reason || '',
+    requestedAt: request.requested_at,
+    resolvedAt: request.resolved_at || null,
+    resolvedBy: request.resolved_by || null,
+    resolution: request.resolution || null,
+    createdAt: request.created_at,
+    updatedAt: request.updated_at,
+  };
+}
+
+function decorateWork(work, ctx, { includeSubmissions = false } = {}) {
+  if (!work) return work;
+  const submissionsByWork = workSubmissionRows(work.id).get(work.id) || [];
+  const submissionRound = submissionsByWork[0]?.round || 0;
+  const annotations = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
+  const unreadAnnotationCount = annotations.filter((item) => !item.readAt).length;
+  const overallRead = Boolean(row(
+    'SELECT id FROM work_feedback_reads WHERE work_id=? AND student_id=? AND annotation_id IS NULL AND submission_round=?',
+    [work.id, ctx.auth.user.id, submissionRound],
+  ));
+  const hasOverallFeedback = Boolean(work.teacherComment);
+  const overallUnreadCount = hasOverallFeedback && !overallRead ? 1 : 0;
+  const publishRequests = rows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id]).map(normalizeWorkPublishRequest);
+  const pendingPublishRequest = publishRequests.find((item) => item.status === 'PENDING') || null;
+  const latestPublishRequest = publishRequests[0] || null;
+  const project = row('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.projectId, ctx.auth.user.id, ctx.auth.user.orgId]);
+  return {
+    ...work,
+    submissionRound,
+    submissions: includeSubmissions ? submissionsByWork : undefined,
+    unreadFeedbackCount: unreadAnnotationCount + overallUnreadCount,
+    unreadAnnotationCount,
+    overallUnreadCount,
+    overallFeedbackRead: overallRead,
+    publishRequests: includeSubmissions ? publishRequests : undefined,
+    pendingPublishRequest,
+    latestPublishRequest,
+    actions: {
+      canEditProject: work.status === 'REJECTED' && project?.status === 'DRAFT' && !project?.deleted_at,
+      canSubmitProject: project?.status === 'DRAFT' && !project?.deleted_at,
+      canRequestPublish: work.status === 'APPROVED' && !pendingPublishRequest,
+      canWithdrawPublishRequest: Boolean(pendingPublishRequest),
+    },
+  };
+}
+
 function assertDraft(project) {
   if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能继续编辑', 'PROJECT_NOT_EDITABLE');
 }
@@ -596,11 +722,14 @@ export async function handleStudent(ctx) {
     let canvasSnapshot = JSON.parse(project.canvas_snapshot);
     let latestVersion = Number(project.latest_version || 1);
     const requestedSnapshot = ctx.body?.canvasSnapshot === undefined ? null : normalizeCanvasSnapshot(ctx.body.canvasSnapshot);
-    const workId = id('work');
+    let workId = id('work');
+    let round = 1;
+    let resubmission = false;
     transaction(() => {
       const fresh = getOwnProject(ctx, project.id);
       if (fresh.status !== 'DRAFT') throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
       assertProjectUsable(ctx, fresh);
+      const existingWork = row('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [fresh.id, auth.user.id, auth.user.orgId]);
       if (requestedSnapshot) {
         canvasSnapshot = requestedSnapshot;
         latestVersion = Number(fresh.latest_version || 1) + 1;
@@ -620,20 +749,147 @@ export async function handleStudent(ctx) {
           [now, fresh.id, auth.user.id, auth.user.orgId],
         );
       }
+      if (existingWork) {
+        resubmission = true;
+        const latestSubmission = row('SELECT round FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [existingWork.id]);
+        round = Number(latestSubmission?.round || 0) + 1;
+        q(
+          `UPDATE works SET title=?,description=?,canvas_snapshot=?,status='PENDING',teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,
+             featured_at=NULL,featured_by=NULL,featured_reason=NULL,submitted_at=?
+           WHERE id=? AND project_id=? AND student_id=? AND org_id=?`,
+          [fresh.title, description, json(canvasSnapshot), now, existingWork.id, fresh.id, auth.user.id, auth.user.orgId],
+        );
+        workId = existingWork.id;
+      } else {
+        q(
+          `INSERT INTO works(
+            id,project_id,student_id,org_id,class_id,course_lesson_id,title,description,canvas_snapshot,status,copyright_confirmed_at,copyright_confirmed_by,submitted_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now, auth.user.id, now],
+        );
+      }
       q(
-        `INSERT INTO works(
-          id,project_id,student_id,org_id,class_id,course_lesson_id,title,description,canvas_snapshot,status,copyright_confirmed_at,copyright_confirmed_by,submitted_at
+        `INSERT INTO work_submissions(
+          id,work_id,project_id,student_id,org_id,round,title,description,canvas_snapshot,snapshot_version,submitted_at,created_at,updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now, auth.user.id, now],
+        [id('submission'), workId, fresh.id, auth.user.id, fresh.org_id, round, fresh.title, description, json(canvasSnapshot), latestVersion, now, now, now],
       );
     });
-    audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id }, { description });
+    audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id, round, resubmission }, { description, round, resubmission });
     return {
       project: normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true }),
-      work: normalizeWork(fetchWork(ctx, workId), { includeSnapshot: true }),
+      work: decorateWork(normalizeWork(fetchWork(ctx, workId), { includeSnapshot: true }), ctx, { includeSubmissions: true }),
     };
   }
 
+  match = part.match(/^\/works\/([^/]+)\/submissions$/);
+  if (match && method === 'GET') {
+    const work = getOwnWork(ctx, match[1]);
+    return { items: workSubmissionRows(work.id).get(work.id) || [], submissionRound: currentSubmissionRound(work.id) };
+  }
+
+  match = part.match(/^\/works\/([^/]+)\/annotations$/);
+  if (match && method === 'GET') {
+    const work = getOwnWork(ctx, match[1]);
+    const items = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
+    return {
+      items,
+      unreadCount: items.filter((item) => !item.readAt).length,
+      submissionRound: currentSubmissionRound(work.id),
+    };
+  }
+
+  match = part.match(/^\/works\/([^/]+)\/feedback-read$/);
+  if (match && method === 'POST') {
+    const work = getOwnWork(ctx, match[1]);
+    const bodyIds = Array.isArray(ctx.body?.annotationIds) ? ctx.body.annotationIds : null;
+    let annotationIds = bodyIds ? [...new Set(bodyIds.map((value) => String(value || '').trim()).filter(Boolean))] : null;
+    // 空数组与缺省字段语义一致，都表示读取整体点评；学生端“标记已读”使用空数组。
+    if (annotationIds && annotationIds.length === 0) annotationIds = null;
+    if (annotationIds && annotationIds.length > 100) throw errors.badRequest('单次最多标记 100 条点评已读', 'ANNOTATION_READ_BATCH_TOO_LARGE');
+    const round = currentSubmissionRound(work.id);
+    const now = nowIso();
+    transaction(() => {
+      if (!annotationIds) {
+        q(
+          `INSERT INTO work_feedback_reads(id,work_id,student_id,annotation_id,submission_round,read_at)
+           SELECT ?,?,?,?,?,? FROM works
+           WHERE id=? AND student_id=? AND org_id=?
+             AND teacher_comment IS NOT NULL AND teacher_comment != ''
+             AND NOT EXISTS (
+               SELECT 1 FROM work_feedback_reads existing
+               WHERE existing.work_id=? AND existing.student_id=? AND existing.annotation_id IS NULL
+                 AND existing.submission_round=?
+             )`,
+          [id('read'), work.id, ctx.auth.user.id, null, round, now, work.id, ctx.auth.user.id, ctx.auth.user.orgId, work.id, ctx.auth.user.id, round],
+        );
+      } else {
+        for (const annotationId of annotationIds) {
+          const annotation = row('SELECT id FROM work_annotations WHERE id=? AND work_id=? AND org_id=?', [annotationId, work.id, ctx.auth.user.orgId]);
+          if (!annotation) throw errors.notFound('画布点评不存在', 'ANNOTATION_NOT_FOUND');
+          const existingRead = row(
+            'SELECT id FROM work_feedback_reads WHERE annotation_id=? AND student_id=?',
+            [annotationId, ctx.auth.user.id],
+          );
+          if (existingRead) {
+            q('UPDATE work_feedback_reads SET read_at=?,updated_at=read_at WHERE id=?', [now, existingRead.id]);
+          } else {
+            q(
+              `INSERT INTO work_feedback_reads(id,work_id,student_id,annotation_id,submission_round,read_at)
+               VALUES (?,?,?,?,?,?)`,
+              [id('read'), work.id, ctx.auth.user.id, annotationId, round, now],
+            );
+          }
+        }
+      }
+    });
+    audit(ctx, 'WORK_FEEDBACK_READ', 'WORK', work.id, null, { annotationIds: annotationIds || [], submissionRound: round });
+    const items = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
+    const overallRead = Boolean(row(
+      'SELECT id FROM work_feedback_reads WHERE work_id=? AND student_id=? AND annotation_id IS NULL AND submission_round=?',
+      [work.id, ctx.auth.user.id, round],
+    ));
+    const unreadCount = items.filter((item) => !item.readAt).length + (work.teacher_comment && !overallRead ? 1 : 0);
+    return { ok: true, unreadCount, submissionRound: round, overallRead };
+  }
+
+  match = part.match(/^\/works\/([^/]+)\/publish-request\/withdraw$/);
+  if (match && method === 'POST') {
+    const work = getOwnWork(ctx, match[1]);
+    const requestRow = row("SELECT * FROM work_publish_requests WHERE work_id=? AND student_id=? AND org_id=? AND status='PENDING' ORDER BY requested_at DESC LIMIT 1", [work.id, ctx.auth.user.id, work.org_id]);
+    if (!requestRow) throw errors.notFound('没有可撤回的发布申请', 'WORK_PUBLISH_REQUEST_NOT_FOUND');
+    const now = nowIso();
+    q(
+      "UPDATE work_publish_requests SET status='WITHDRAWN',resolved_at=?,resolved_by=?,resolution='学生撤回',updated_at=? WHERE id=? AND status='PENDING'",
+      [now, ctx.auth.user.id, now, requestRow.id],
+    );
+    audit(ctx, 'WORK_PUBLISH_REQUEST_WITHDRAW', 'WORK_PUBLISH_REQUEST', requestRow.id, normalizeWorkPublishRequest(requestRow), null);
+    return normalizeWorkPublishRequest(row('SELECT * FROM work_publish_requests WHERE id=?', [requestRow.id]));
+  }
+
+  match = part.match(/^\/works\/([^/]+)\/publish-request$/);
+  if (match && method === 'POST') {
+    const work = getOwnWork(ctx, match[1]);
+    if (work.status !== 'APPROVED') {
+      throw errors.conflict('作品通过审核后才能申请发布', 'WORK_NOT_APPROVED_FOR_PUBLISH_REQUEST');
+    }
+    if (!work.copyright_confirmed_at) throw errors.conflict('请先确认作品版权与机构内展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+    const pending = row("SELECT id FROM work_publish_requests WHERE work_id=? AND status='PENDING'", [work.id]);
+    if (pending) throw errors.conflict('该作品已有待处理的发布申请', 'WORK_PUBLISH_REQUEST_ALREADY_PENDING');
+    const reason = String(ctx.body?.reason || '').trim();
+    if (reason.length > 1000) throw errors.badRequest('申请说明不能超过 1000 个字符', 'WORK_PUBLISH_REQUEST_REASON_TOO_LONG');
+    const round = currentSubmissionRound(work.id);
+    const requestId = id('publish_request');
+    const now = nowIso();
+    q(
+      `INSERT INTO work_publish_requests(
+        id,work_id,project_id,student_id,org_id,round,status,reason,requested_at,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [requestId, work.id, work.project_id, ctx.auth.user.id, work.org_id, round, 'PENDING', reason, now, now, now],
+    );
+    audit(ctx, 'WORK_PUBLISH_REQUEST_CREATE', 'WORK_PUBLISH_REQUEST', requestId, null, { workId: work.id, round, reason });
+    return normalizeWorkPublishRequest(row('SELECT * FROM work_publish_requests WHERE id=?', [requestId]));
+  }
   match = part.match(/^\/works\/([^/]+)\/annotations$/);
   if (match && method === 'GET') {
     const work = row('SELECT id FROM works WHERE id=? AND student_id=? AND org_id=?', [match[1], auth.user.id, auth.user.orgId]);
@@ -666,7 +922,7 @@ export async function handleStudent(ctx) {
       [match[1], auth.user.id, auth.user.orgId],
     );
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-    return normalizeWork(work, { includeSnapshot: true });
+    return decorateWork(normalizeWork(work, { includeSnapshot: true }), ctx, { includeSubmissions: true });
   }
 
   if (part === '/showcase' && method === 'GET') {
@@ -728,7 +984,7 @@ export async function handleStudent(ctx) {
   }
 
   if (part === '/works' && method === 'GET') {
-    const items = rows(
+    const rawItems = rows(
       `SELECT work.*, class.name AS class_name, lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
        FROM works work
        LEFT JOIN classes class ON class.id = work.class_id AND class.org_id = work.org_id
@@ -737,7 +993,41 @@ export async function handleStudent(ctx) {
        WHERE work.student_id = ? AND work.org_id = ?
        ORDER BY work.submitted_at DESC LIMIT 200`,
       [auth.user.id, auth.user.orgId],
-    ).map((work) => normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }));
+    );
+    const submissionsByWork = workSubmissionRows(rawItems.map((work) => work.id));
+    const items = rawItems.map((work) => {
+      const normalized = normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' });
+      const submissions = submissionsByWork.get(work.id) || [];
+      const submissionRound = submissions[0]?.round || 0;
+      const annotations = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
+      const unreadAnnotationCount = annotations.filter((item) => !item.readAt).length;
+      const overallRead = Boolean(row(
+        'SELECT id FROM work_feedback_reads WHERE work_id=? AND student_id=? AND annotation_id IS NULL AND submission_round=?',
+        [work.id, ctx.auth.user.id, submissionRound],
+      ));
+      const overallUnreadCount = work.teacher_comment && !overallRead ? 1 : 0;
+      const publishRequests = rows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id]).map(normalizeWorkPublishRequest);
+      const pendingPublishRequest = publishRequests.find((item) => item.status === 'PENDING') || null;
+      const project = row('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.project_id, ctx.auth.user.id, ctx.auth.user.orgId]);
+      return {
+        ...normalized,
+        submissionRound,
+        submissions,
+        unreadFeedbackCount: unreadAnnotationCount + overallUnreadCount,
+        unreadAnnotationCount,
+        overallUnreadCount,
+        overallFeedbackRead: overallRead,
+        publishRequests,
+        pendingPublishRequest,
+        latestPublishRequest: publishRequests[0] || null,
+        actions: {
+          canEditProject: work.status === 'REJECTED' && project?.status === 'DRAFT' && !project?.deleted_at,
+          canSubmitProject: project?.status === 'DRAFT' && !project?.deleted_at,
+          canRequestPublish: work.status === 'APPROVED' && !pendingPublishRequest,
+          canWithdrawPublishRequest: Boolean(pendingPublishRequest),
+        },
+      };
+    });
     return { items };
   }
 

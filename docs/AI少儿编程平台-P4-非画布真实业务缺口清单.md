@@ -72,7 +72,7 @@
 | `/dashboard` | 学生学习首页 | STUDENT | `真实已有（2026-09-03，P4-S01）` | `class_members`、`classes`、`class_curriculum_items`、`course_series`、`course_lessons`、`class_sessions`、`student_projects`、`works`、`notifications`、`notification_recipients` | `GET /api/student/dashboard` | 仅 STUDENT；按本人机构、班级课程表、项目和作品隔离聚合 | 反馈逐条已读状态、真实 AI / 充值服务、头像 / 监护人 / 隐私 / 注销与数据请求入口 | 临时库验证未登录 / 教师越权、开课前 / 开课中 / 结课后、自主练习、通知、驳回反馈、跨学生隔离与真实空态 |
 | `/projects` | 我的创作项目 | STUDENT | `真实已有（2026-09-03，P4-S02）` | `student_projects`、`project_snapshots`、`works`、`course_series`、`course_lessons`、`classes` | `GET/POST/PATCH/DELETE /api/student/projects`、`POST /:id`（复制）、`/:id/archive`、`/:id/restore`、版本与导入导出 | 仅 STUDENT；视图 `ACTIVE/ARCHIVED/DELETED`；草稿可重命名 / 复制 / 归档 / 软删除，已提交或已发布项目只读 | 批量管理、云同步冲突；30 天到期自动清理任务未实现 | 临时库验证权限、搜索筛选、重命名、复制、归档 / 恢复、软删除 / 恢复、提交后保护、发布后复制限制与学生隔离 |
 | `/projects/:projectId/canvas` | 创作画布 | STUDENT | `真实已有（画布冻结）` | `student_projects`、`project_snapshots` | projects API | 草稿/提交 | 不修改 `packages/canvas` | 仅回归，不做画布改动 |
-| `/works` | 我的作品 / 提交记录 | STUDENT | `真实已有` | `works` | works submit/status | `PENDING/APPROVED/REJECTED/PUBLISHED` | 独立发布、重新发布、下架 | 学生只能访问本人作品 |
+| `/works` | 我的作品 / 提交记录 | STUDENT | `真实已有（2026-09-03，P4-S03）` | `works`、`work_submissions`、`work_feedback_reads`、`work_publish_requests`、`work_annotations` | works submit/status、submissions、feedback-read、publish-request/withdraw | `PENDING/APPROVED/REJECTED/PUBLISHED`；反馈已读与多轮提交 | 独立站外发布、重新发布历史版本 | 学生只能访问本人作品；临时 SQLite 验收 `72 pass / 0 fail` |
 | `/showcase` | 公开作品墙 | STUDENT | `真实已有` | `works` | showcase | `PUBLISHED` | 浏览计数与访客模型 | 当前只显示已发布作品 |
 | `/courses` | 我的课程 | STUDENT | `真实已有（2026-09-02）` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons`、`student_projects`、`works` | `GET /api/student/courses` | 课单进度；学生本人 / 机构隔离 | 学习首页任务、老师通知、继续创作聚合待补 | 临时库验证课程、班级、课时、作品状态与空态；学生只能看到本人数据 |
 | `/credits` | 套餐与用量 | STUDENT | `真实已有（2026-09-02）` | `users`、`billing_packages`、`usage_records`、`student_projects`、`class_sessions`、`classes` | `GET /api/student/credits` | 套餐有效期；学生本人 / 机构隔离 | 真实扣费服务、充值与对账仍属后续 / 外部决策 | 临时库验证额度、模态 / 状态 / 天数筛选、课堂上下文与越权 |
@@ -108,8 +108,9 @@
 10. [x] **P4-O07 套餐、学员开通与席位管理（2026-09-02 已完成）**：已形成套餐席位配置、待开通单、线下履约登记、开通 / 停用 / 恢复 / 续费 / 作废、到期扫描、学生权限失效和审计 / 事件留痕闭环；仅 `ACTIVE` 占用席位。在线支付、支付回调、自动续费和自动消息提醒未实现。
 11. [x] **P4-O08 积分充值、用量和对账（2026-09-03 已完成）**：机构积分账务已形成期初流水、冻结、人工调整、退款 / 冲正、原子扣减、流水复算、筛选导出和失败任务不扣费规则；在线支付、支付回调、自动续费与真实充值成功状态未接入，也未伪装。
 12. [x] **P4-S02 我的项目管理（画布外层）（2026-09-03 已完成）**：项目列表支持关键词搜索、课程 / 课时 / 班级 / 状态筛选和进行中 / 归档 / 回收站视图；草稿支持重命名、复制、归档、软删除与恢复，提交后和发布后规则明确，所有操作限定本人项目并写审计。
+13. [x] **P4-S03 我的作品与反馈闭环（2026-09-03 已完成）**：多轮提交历史、驳回 / 下架后修改重提、整体点评与节点批注已读、首页待反馈真实消失、发布申请 / 撤回和教师处理申请均已接通真实数据与审计。
 
-## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06 / P4-O07 / P4-O08 / P4-S01 / P4-S02）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06 / P4-O07 / P4-O08 / P4-S01 / P4-S02 / P4-S03）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -247,7 +248,7 @@
 - [x] 学生端页面：`/dashboard` 展示当前课堂与课堂能力、待完成课时、未读老师 / 平台通知、学习任务、继续创作、待处理反馈、课程进度总览和真实空态；“开始创作”携带课时参数进入 `/projects` 并预选课时。
 - [x] 权限与隔离：仅 STUDENT 可访问；未登录返回 401，教师访问返回 403；聚合范围限定本人机构、班级课程表、项目和作品，跨学生数据隔离。
 - [x] 验证：临时 SQLite P4-S01 API 验收 `53 pass / 0 fail`，覆盖开课前 / 开课中 / 结课后、自主练习账号、项目创建保存、通知、提交、驳回反馈、跨学生隔离和真实空态；P3 API 回归 `48 pass / 0 fail`；后端模块导入检查、四端生产构建和 `git diff --check` 通过。
-- [ ] 边界：教师点评反馈暂以“已有点评”推断待处理，未建设逐条反馈已读模型；真实 AI / 充值服务、头像 / 监护人 / 隐私 / 注销与数据请求入口仍未实现，留待后续批次。
+- [x] 边界：逐条反馈已读模型已在 P4-S03 建设并接入学习首页；真实 AI / 充值服务、头像 / 监护人 / 隐私 / 注销与数据请求入口仍未实现，留待后续批次。
 - [x] 本批未新增数据表；未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
 
 ### 8.15 P4-S02 验收记录（2026-09-03）
@@ -259,3 +260,13 @@
 - [x] 审计：新增 / 复用 `PROJECT_RENAME`、`PROJECT_COPY`、`PROJECT_ARCHIVE`、`PROJECT_SOFT_DELETE`、`PROJECT_RESTORE` 动作留痕。
 - [x] 验证：临时 SQLite P4-S02 API `73 pass / 0 fail`，覆盖未登录 / 教师越权、搜索筛选、非法参数、重命名、复制、归档 / 恢复、软删除 / 恢复、提交后保护、发布后复制限制和跨学生隔离；P3 API 回归 `48 pass / 0 fail`；后端 `node --check`、四端 `pnpm.cmd run build`、`git diff --check` 通过。
 - [x] 边界：未新增真实文件存储、云同步冲突合并或批量管理；30 天到期后的自动清理任务未实现，当前由恢复接口校验过期。本批未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
+### 8.16 P4-S03 验收记录（2026-09-03）
+
+- [x] 数据模型：新增 `work_submissions`（每轮提交与审核结果）、`work_feedback_reads`（整体点评 / 节点批注已读）和 `work_publish_requests`（发布申请、撤回与处理），保留项目与当前作品的一一对应关系。
+- [x] 提交闭环：首次提交创建作品并写入第 1 轮；再次提交复用原作品，更新标题、说明、画布快照和版本，清空旧点评 / 精选并追加第 N 轮历史；教师审核和举报下架同步最新一轮审核结果。
+- [x] 修改闭环：教师驳回或举报下架后，未软删除的 SUBMITTED 项目恢复 DRAFT；学生可修改后重新提交，旧作品不再阻塞新轮次。
+- [x] 反馈闭环：`GET /student/works`、详情、`/:id/submissions`、`/:id/annotations` 返回轮次、历史、未读数、读取时间和可执行动作；`POST /:id/feedback-read` 支持整体点评与批注已读，首页待反馈按真实读取记录消失与重现。
+- [x] 发布申请：仅 APPROVED 且已确认版权授权的作品可申请；同一作品仅一个 PENDING；学生可撤回，教师可批准 / 拒绝，批准后作品 PUBLISHED 并写入审计。
+- [x] 页面：学生端 `/works` 展示轮次、状态语义、未读反馈、提交历史、整体点评已读、去修改、申请发布与撤回；机构端作品点评页新增发布申请队列和处理面板。
+- [x] 验证：临时 SQLite P4-S03 API `76 pass / 0 fail`，覆盖未登录 / 教师越权、提交历史、反馈已读、驳回重提、发布申请 / 撤回 / 批准、举报下架重提和跨学生隔离；P3 API 回归 `48 pass / 0 fail`；后端语法检查、四端生产构建和 `git diff --check` 通过。
+- [x] 边界：仅机构内发布与展示，不提供站外公开分享、评论 / 点赞或重新发布历史版本；未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。

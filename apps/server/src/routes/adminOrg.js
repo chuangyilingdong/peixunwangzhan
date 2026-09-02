@@ -434,6 +434,51 @@ function reportResolution(body) {
   return resolution;
 }
 
+function normalizeWorkPublishRequest(request) {
+  if (!request) return null;
+  return {
+    id: request.id,
+    workId: request.work_id,
+    projectId: request.project_id,
+    studentId: request.student_id,
+    orgId: request.org_id,
+    round: Number(request.round || 0),
+    status: request.status,
+    reason: request.reason || '',
+    requestedAt: request.requested_at,
+    resolvedAt: request.resolved_at || null,
+    resolvedBy: request.resolved_by || null,
+    resolution: request.resolution || null,
+    createdAt: request.created_at,
+    updatedAt: request.updated_at,
+  };
+}
+
+function orgWorkPublishRequestRow(request) {
+  return {
+    ...normalizeWorkPublishRequest(request),
+    workTitle: request.work_title || null,
+    workStatus: request.work_status || null,
+    studentName: request.student_name || null,
+    handlerName: request.handler_name || null,
+  };
+}
+
+function orgWorkPublishRequestRows(where = '1=1', params = []) {
+  return rows(
+    `SELECT request.*, work.title AS work_title, work.status AS work_status, work.class_id AS work_class_id,
+            student.display_name AS student_name, handler.display_name AS handler_name
+     FROM work_publish_requests request
+     JOIN works work ON work.id=request.work_id AND work.org_id=request.org_id
+     JOIN users student ON student.id=request.student_id AND student.org_id=request.org_id
+     LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+     LEFT JOIN users handler ON handler.id=request.resolved_by
+     WHERE ${where}
+     ORDER BY CASE request.status WHEN 'PENDING' THEN 0 ELSE 1 END, request.requested_at DESC`,
+    params,
+  ).map(orgWorkPublishRequestRow);
+}
+
 
 const WORK_DATA_DAYS = new Set([7, 14, 30]);
 
@@ -1624,7 +1669,15 @@ export async function handleOrg(ctx) {
     if (actionTaken === 'UNPUBLISH' && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可因举报下架', 'WORK_NOT_PUBLISHED');
     const now = nowIso();
     transaction(() => {
-      if (actionTaken === 'UNPUBLISH') q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=? AND org_id=?', ['REJECTED', resolution, auth.user.id, now, work.id, currentOrgId]);
+      if (actionTaken === 'UNPUBLISH') {
+        q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=? AND org_id=?', ['REJECTED', resolution, auth.user.id, now, work.id, currentOrgId]);
+        const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
+        if (latestSubmission) q('UPDATE work_submissions SET review_status=?,review_comment=?,reviewed_at=?,updated_at=? WHERE id=?', ['REJECTED', resolution, now, now, latestSubmission.id]);
+        q(
+          "UPDATE student_projects SET status='DRAFT',updated_at=? WHERE id=? AND org_id=? AND status='SUBMITTED' AND deleted_at IS NULL",
+          [now, work.project_id, currentOrgId],
+        );
+      }
       q('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=? AND org_id=?', [status, auth.user.id, now, resolution, actionTaken, report.id, currentOrgId]);
     });
     audit(ctx, 'ORG_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: currentOrgId });
@@ -1643,9 +1696,81 @@ export async function handleOrg(ctx) {
     if (!allowed[work.status]?.includes(status)) throw errors.conflict('当前作品状态不允许执行该操作', 'INVALID_WORK_TRANSITION');
     if (status === 'PUBLISHED' && !work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     const comment = String(ctx.body?.teacherComment || '').trim(); if (comment.length > 2000) throw errors.badRequest('老师点评不能超过 2000 个字符', 'WORK_COMMENT_TOO_LONG');
-    q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [status, comment, auth.user.id, nowIso(), work.id, currentOrgId]);
-    audit(ctx, 'WORK_REVIEW', 'WORK', work.id, normalizeWork(work), { status, teacherComment: comment || null }, { orgId: currentOrgId });
+    const now = nowIso();
+    transaction(() => {
+      q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [status, comment, auth.user.id, now, work.id, currentOrgId]);
+      const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
+      if (latestSubmission) {
+        q('UPDATE work_submissions SET review_status=?,review_comment=?,reviewed_at=?,updated_at=? WHERE id=?', [status, comment, now, now, latestSubmission.id]);
+      }
+      if (status === 'REJECTED') {
+        q(
+          "UPDATE student_projects SET status='DRAFT',updated_at=? WHERE id=? AND org_id=? AND status='SUBMITTED' AND deleted_at IS NULL",
+          [now, work.project_id, currentOrgId],
+        );
+      }
+    });
+    audit(ctx, 'WORK_REVIEW', 'WORK', work.id, normalizeWork(work), { status, teacherComment: comment || null, projectReopened: status === 'REJECTED' }, { orgId: currentOrgId });
     return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
+  }
+
+  if (part === '/work-publish-requests' && method === 'GET') {
+    const params = [currentOrgId]; let where = 'request.org_id=?';
+    if (auth.user.role === 'TEACHER') {
+      where += ` AND (class.teacher_id=? OR EXISTS (
+        SELECT 1 FROM class_members scoped_member
+        WHERE scoped_member.class_id=class.id AND scoped_member.user_id=?
+          AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL
+      ))`;
+      params.push(auth.user.id, auth.user.id);
+    }
+    const status = ctx.search.get('status');
+    if (['PENDING','APPROVED','REJECTED','WITHDRAWN'].includes(status)) { where += ' AND request.status=?'; params.push(status); }
+    const items = rows(
+      `SELECT request.*, work.title AS work_title, work.status AS work_status, work.class_id AS work_class_id,
+              student.display_name AS student_name, handler.display_name AS handler_name
+       FROM work_publish_requests request
+       JOIN works work ON work.id=request.work_id AND work.org_id=request.org_id
+       JOIN users student ON student.id=request.student_id AND student.org_id=request.org_id
+       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+       LEFT JOIN users handler ON handler.id=request.resolved_by
+       WHERE ${where}
+       ORDER BY CASE request.status WHEN 'PENDING' THEN 0 ELSE 1 END, request.requested_at DESC`,
+      params,
+    ).map(orgWorkPublishRequestRow);
+    return { items, total: items.length, pending: items.filter((item) => item.status === 'PENDING').length };
+  }
+
+  let publishRequestMatch = part.match(/^\/work-publish-requests\/([^/]+)$/);
+  if (publishRequestMatch && method === 'PUT') {
+    const requestRow = row('SELECT * FROM work_publish_requests WHERE id=? AND org_id=?', [publishRequestMatch[1], currentOrgId]);
+    if (!requestRow) throw errors.notFound('发布申请不存在', 'WORK_PUBLISH_REQUEST_NOT_FOUND');
+    const work = workInReviewScope(auth, currentOrgId, requestRow.work_id);
+    if (requestRow.status !== 'PENDING') throw errors.conflict('发布申请已处理，不能重复处理', 'WORK_PUBLISH_REQUEST_ALREADY_HANDLED');
+    const status = ctx.body?.status;
+    if (!['APPROVED','REJECTED'].includes(status)) throw errors.badRequest('发布申请处理状态无效', 'INVALID_WORK_PUBLISH_REQUEST_STATUS');
+    const resolution = String(ctx.body?.resolution || '').trim();
+    if (resolution.length > 2000) throw errors.badRequest('处理说明不能超过 2000 个字符', 'WORK_PUBLISH_RESOLUTION_TOO_LONG');
+    if (status === 'APPROVED' && work.status !== 'APPROVED') throw errors.conflict('仅审核通过的作品可以批准发布', 'WORK_NOT_APPROVED');
+    if (status === 'APPROVED' && !work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+    const now = nowIso();
+    transaction(() => {
+      q(
+        'UPDATE work_publish_requests SET status=?,resolved_at=?,resolved_by=?,resolution=?,updated_at=? WHERE id=? AND org_id=? AND status=?',
+        [status, now, auth.user.id, resolution, now, requestRow.id, currentOrgId, 'PENDING'],
+      );
+      if (status === 'APPROVED') {
+        q(
+          `UPDATE works SET status='PUBLISHED',reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL
+           WHERE id=? AND org_id=? AND status='APPROVED'`,
+          [auth.user.id, now, work.id, currentOrgId],
+        );
+        const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
+        if (latestSubmission) q('UPDATE work_submissions SET review_status=?,reviewed_at=?,updated_at=? WHERE id=?', ['PUBLISHED', now, now, latestSubmission.id]);
+      }
+    });
+    audit(ctx, status === 'APPROVED' ? 'WORK_PUBLISH_REQUEST_APPROVE' : 'WORK_PUBLISH_REQUEST_REJECT', 'WORK_PUBLISH_REQUEST', requestRow.id, normalizeWorkPublishRequest(requestRow), { status, resolution, workId: work.id }, { orgId: currentOrgId });
+    return orgWorkPublishRequestRows('request.id=?', [requestRow.id])[0];
   }
   return null;
 }
