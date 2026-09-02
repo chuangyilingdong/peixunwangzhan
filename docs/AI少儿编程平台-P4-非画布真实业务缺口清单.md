@@ -50,7 +50,7 @@
 
 | 本地路由 | 基准路由 / 页面 | 角色 | 当前状态 | 主要数据表 | 后端 API | 状态机 / 权限 | 缺失项 | 验收方法 |
 |---|---|---|---|---|---|---|---|---|
-| `/dashboard` | `/org/home` 机构/教学首页 | ORG_ADMIN、TEACHER | `真实已有` | `organizations`、`users`、`classes`、`class_sessions`、`works` | `GET /api/org/overview` | 管理员经营视图 / 教师教学视图分化 | 教师首页个性化待补 | 管理员与教师 token 均返回本机构数据 |
+| `/dashboard` | `/org/home` 机构/教学首页 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，P4-O01 第一批）` | `organizations`、`users`、`classes`、`class_members`、`class_sessions`、`works`、`notifications`、`notification_recipients`、`org_billing_accounts` | `GET /api/org/overview` | 管理员经营视图 / 教师教学视图分化；教师仅本人负责 / 授权班级 | 班级、作品等既有教务接口的教师授权范围待 P4-O02 统一；运营分析下钻待 P4-O06 | 临时 SQLite 验证管理员 / 教师范围、跨教师、跨机构、未读消息、预警、空态和明细复算；P3 回归与四端构建通过 |
 | `/classes` | `/org/classes` 班级与课堂 | ORG_ADMIN、TEACHER | `真实已有` | `classes`、`class_members`、`class_curriculum_items`、`class_sessions` | classes、curriculum、sessions | 班级 `ACTIVE/ARCHIVED`；课堂 `ACTIVE/ENDED`；教师需 `MANAGE_CLASSES` | 归档恢复、跨课包拖动、导入替换规则 | P3 API 回归 + 前端课单展示 |
 | `/members` | `/org/accounts` 账号管理 | ORG_ADMIN、TEACHER 按权限 | `真实已有` | `users`、`billing_packages` | `GET/POST/PUT/DELETE /api/org/users` 等 | 用户 `ACTIVE/DISABLED`；`MANAGE_MEMBERS` | 批量导入、变更记录、统一走开通策略 | 创建/编辑/禁用/重置密码/权限越权失败 |
 | `/works` | `/org/published-works` 作品点评 | ORG_ADMIN、TEACHER | `真实已有` | `works`、`work_annotations` | works、review、annotations | `PENDING/APPROVED/REJECTED/PUBLISHED`；教师只能管本班 | 下架、访客统计、公开分享 | P3 回归含审核与批注 |
@@ -99,9 +99,10 @@
 2. **P4-02 学生课程与账号闭环（2026-09-02 第一批已完成）**：学生课程、额度、账号安全已接通现有表和真实 API；学习首页任务聚合、AI 能力中心增强、头像 / 监护人 / 隐私 / 注销等剩余项转入后续批次。
 3. **P4-03 通知与物料闭环（2026-09-02 第二批已完成）**：在第一批基础上补齐通知模板、逻辑定时发布与补偿扫描、学生消息中心、物料统计详情和接收范围同步；失败重试、高可用队列、外部通知通道、真实上传与下载代理转入后续基础设施批次。
 4. **P4-04 黑客松 / 运营活动（2026-09-02 产品取消）**：用户明确确认不做；平台端和机构端均不新增相关数据表、API 或真实页面，历史 `/hackathon` 壳层后续从导航与路由移除。
-5. **当前唯一下一步：P4-O01 机构首页真实经营看板第一批闭环**：基于现有 `GET /api/org/overview` 增强机构管理员经营视图与教师教学视图，严格限制教师仅统计本人负责 / 授权班级，并补齐近期课堂、待点评作品、未读消息及合同 / 席位 / 余额预警；不依赖支付、OSS 或真实 AI。
+5. **P4-O01 机构首页真实经营看板第一批闭环（2026-09-02 已完成）**：`GET /api/org/overview` 已实现机构管理员经营视图、教师教学视图、本人负责 / 授权班级范围、近期课堂、待点评作品、未读消息及合同 / 席位 / 余额预警；不依赖支付、OSS 或真实 AI。
+6. **当前唯一下一步：P4-O02 机构账号 / 成员完整管理**：补齐批量导入、调班 / 教师授权、禁用立即失效、重置密码、失败回滚和审计，并统一班级 / 作品等教务接口的教师授权范围。
 
-## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -154,3 +155,14 @@
 - [x] `node .\p3-api-integration.mjs` 回归通过，`46 pass / 0 fail`；`pnpm.cmd run build` 四端生产构建通过；后端语法与 `git diff --check` 通过。
 - [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不触碰真实 `platform.db`，不部署线上环境。
 - [ ] 当前边界：投递失败重试、高可用异步队列、邮件 / 短信 / 微信、真实上传 / OSS / 下载代理与签名、阿飞提醒；未将这些外部能力伪装为已完成。
+
+### 8.6 P4-O01 第一批验收记录（2026-09-02）
+
+- [x] `GET /api/org/overview` 已返回角色化 `scope`、机构经营 / 教师教学统计、`breakdown`、近期课堂、待点评作品、未读消息摘要和预警；管理员与教师数据均按当前机构隔离。
+- [x] 教师范围验证通过：仅能统计本人负责班级或 `class_members.role='TEACHER'` 且未移除的授权班级；跨教师课堂 / 作品 / 用量不可见；不返回机构积分余额和教师总席位。
+- [x] 机构管理员范围验证通过：可看到本机构活跃班级、活跃课堂、学员、教师、作品、积分余额、合同 / 席位 / 余额预警；第二机构数据不可见。
+- [x] 通知验证通过：发布平台公告后，教师首页只返回本人未读且已投递的消息摘要；空数据使用真实空态，不伪造数字或消息。
+- [x] `apps/org/src/main.jsx` 已展示角色化标题、统计口径、提醒、未读消息、近期课堂、待点评作品和刷新入口；修正教师席位展示文案模板错误。
+- [x] 临时 SQLite 验证完成；后端语法、P3 API 回归 `46 pass / 0 fail`、`pnpm run build` 四端生产构建和 `git diff --check` 通过。
+- [x] 本批仅修改非画布代码与文档，`packages/canvas` 无改动，不触碰真实 `platform.db`，不部署线上环境。
+- [ ] 已知边界：`/api/org/classes`、`/api/org/works` 等既有教务接口仍主要按班级负责人过滤，教师授权班级的统一读取 / 管理规则转入 P4-O02；更深层作品数据下钻转入 P4-O06。

@@ -17,8 +17,40 @@ function useData(load, deps = []) {
 
 function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/overview'), [api]);
-  if (loading) return <Loading />; if (error) return <ErrorState error={error} onRetry={refresh} />;
-  return <><PageHeader eyebrow="机构教务" title={data.org.name} description="实时掌握班级开课、作品和机构积分余额。" /><div className="metrics"><MetricCard label="活跃班级" value={data.activeClasses} hint={`${data.activeSessions} 个课堂正在进行`} /><MetricCard label="学员" value={data.students} hint={`${data.teachers} 位教师`} tone="teal" /><MetricCard label="作品" value={data.works} hint="等待教师点评" tone="orange" /><MetricCard label="可用积分" value={formatCredits(data.creditBalance)} hint={`近 7 日消耗 ${formatCredits(data.usage7)}`} tone="pink" /></div><Panel title="本机构状态"><div className="row-actions"><Status value={data.org.status} /><span className="muted">合同到期：{formatDate(data.org.contractExpiresAt)}</span><span className="muted">教师席位：{data.org.teacherUsedSeats} / {data.org.teacherSeats}</span></div></Panel></>;
+  if (loading) return <Loading />;
+  if (error) return <ErrorState error={error} onRetry={refresh} />;
+  const isAdmin = data.scope?.role === 'ORG_ADMIN';
+  const alerts = data.alerts || [];
+  const recentSessions = data.recentSessions || [];
+  const pendingWorks = data.pendingWorkItems || [];
+  const unreadMessages = data.unreadNotificationItems || [];
+  return <>
+    <PageHeader eyebrow={isAdmin ? '机构经营' : '教师教学'} title={data.org.name} description={data.scope?.description || '实时掌握班级开课、作品和机构积分余额。'} actions={<button className="secondary-button" onClick={refresh}>刷新看板</button>} />
+    <div className="metrics">
+      <MetricCard label="活跃班级" value={data.activeClasses} hint={`${data.activeSessions} 个课堂正在进行`} />
+      <MetricCard label="覆盖学员" value={data.students} hint={isAdmin ? `${data.teachers} 位教师` : `${data.scope?.classCount || 0} 个负责/授权班级`} tone="teal" />
+      <MetricCard label="待点评作品" value={data.pendingWorks} hint={`作品总数 ${data.works} · 可按明细复算`} tone="orange" />
+      <MetricCard label={isAdmin ? '可用积分' : '近 7 日课堂消耗'} value={isAdmin ? formatCredits(data.creditBalance) : formatCredits(data.usage7)} hint={isAdmin ? `近 7 日消耗 ${formatCredits(data.usage7)}` : '仅统计本人负责/授权班级'} tone="pink" />
+    </div>
+    <Panel title="统计口径">
+      <div className="row-actions"><Status value={data.org.status} /><span className="muted">{data.scope?.description}</span><span className="muted">活跃班级：{data.breakdown?.activeClasses ?? data.activeClasses}</span><span className="muted">活跃课堂：{data.breakdown?.activeSessions ?? data.activeSessions}</span></div>
+      <p className="muted">合同到期：{formatDate(data.org.contractExpiresAt)}{isAdmin ? ` · 教师席位：${data.org.teacherUsedSeats} / ${data.org.teacherSeats}` : ' · 经营席位与积分余额仅机构管理员可见'}</p>
+    </Panel>
+    <div className="split">
+      <Panel title={isAdmin ? '经营提醒' : '教学提醒'}>
+        {alerts.length ? <div className="card-list">{alerts.map((alert) => <Notice key={alert.code} tone={alert.level || 'info'}><strong>{alert.title}</strong><div>{alert.message}</div>{alert.daysRemaining !== undefined && <small>剩余 {alert.daysRemaining} 天</small>}{alert.used !== undefined && <small>已用 {alert.used} / {alert.total}</small>}</Notice>)}</div> : <Empty title={isAdmin ? '暂无经营预警' : '暂无教学预警'} body={isAdmin ? '合同、教师席位和积分余额目前没有触发预警。' : '当前范围内没有需要优先处理的系统预警。'} />}
+      </Panel>
+      <Panel title={`未读消息摘要（${data.unreadNotifications || 0}）`}>
+        {unreadMessages.length ? <div className="card-list">{unreadMessages.map((item) => <article className="item-card" key={item.id}><strong>{item.title}</strong><p>{item.body}</p><span className="muted">{item.senderName || '系统'} · {formatDate(item.publishAt || item.createdAt)}</span></article>)}</div> : <Empty title="暂无未读消息" body="新的平台公告或机构通知会显示在这里。" />}
+      </Panel>
+    </div>
+    <Panel title="近期课堂">
+      {recentSessions.length ? <div className="table-wrap"><table><thead><tr><th>班级</th><th>课时</th><th>状态</th><th>开始时间</th><th>结束时间</th></tr></thead><tbody>{recentSessions.map((item) => <tr key={item.id}><td>{item.className || '—'}</td><td>{item.lessonTitle || '未关联课时'}</td><td><Status value={item.status} /></td><td>{formatDate(item.startedAt)}</td><td>{formatDate(item.endedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无课堂记录" body="开始课堂后，最近课堂会出现在这里。" />}
+    </Panel>
+    <Panel title={`待点评作品（${data.pendingWorks || 0}）`}>
+      {pendingWorks.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>班级 / 课时</th><th>提交时间</th><th>状态</th></tr></thead><tbody>{pendingWorks.map((item) => <tr key={item.id}><td><strong>{item.title}</strong></td><td>{item.studentName || '—'}</td><td>{item.className || '—'}<div className="muted">{item.courseLessonTitle || '—'}</div></td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty title="暂无待点评作品" body="当前统计范围内没有状态为 PENDING 的作品。" />}
+    </Panel>
+  </>;
 }
 
 function Classes({ api, user }) {
