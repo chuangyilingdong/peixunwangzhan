@@ -219,11 +219,11 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 | 生产服务器密钥角色 | 只读：仅用于服务器从该仓库 `clone` / `fetch` / `pull` 代码。 |
 | GitHub Deploy key 写权限 | 未开启；当前与后续常规发布均不需要服务器向仓库写入。 |
 | 线上验证结果 | 用户已确认服务器通过该 Deploy key 的 SSH 认证和仓库读取验证。 |
-| 本地 Git 基线 | 已在 `platform-v2` 初始化 `main` 分支；远程 `origin` 已配置为 `https://github.com/chuangyilingdong/peixunwangzhan.git`；初始提交为 `d271b44`。 |
+| 本地 Git 基线（已推送） | 已在 `platform-v2` 初始化 `main` 分支；2026-09-02 已通过本机专用 SSH 密钥及 `ssh.github.com:443` 推送到 GitHub。`origin` 使用本机别名 `git@github.com-peixunwangzhan-local:chuangyilingdong/peixunwangzhan.git`；远程 `main` 已核验为 `485b763`。 |
 
 必须严格区分三类凭据：
 
-1. **开发者 / 本地 Git 凭据**：用于把经过验证的提交推送到 GitHub；不得使用生产服务器 Deploy key。
+1. **开发者 / 本地 Git 凭据**：2026-09-02 已建立并验证本机专用 SSH 写入密钥；通过 `ssh.github.com:443` 推送已成功。私钥仅保存在本机，不得上传、外传或提交到仓库；不得使用生产服务器 Deploy key。
 2. **生产服务器 Deploy key**：只读拉取 `chuangyilingdong/peixunwangzhan`；不得用于写入、不得外传私钥。
 3. **GitHub Actions → 生产服务器部署凭据**：后续自动发布时单独创建独立密钥，并作为 GitHub Actions Secret 保存；**不得复用本次 Deploy key**。
 
@@ -239,7 +239,7 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 8. 发布后用 `https://iicili.cyou/` 和 `/api/` 做冒烟测试、观察日志和监控；
 9. 验证失败时按发布记录回滚，禁止直接在线上临时改代码而不回写 Git。
 
-> 当前仅完成了“生产服务器从 GitHub 安全读取仓库”的前置能力。GitHub Actions、分支保护、CI、自动部署、服务器专用 `deploy` 账号、备份演练与正式发布尚未完成，仍必须按 P9 清单实施。
+> 已完成“生产服务器从 GitHub 安全读取仓库”及“本机通过 SSH 443 安全推送 GitHub”的前置能力，远程 `main` 基线已建立。GitHub Actions、分支保护、CI、自动部署、服务器专用 `deploy` 账号、备份演练与正式发布尚未完成，仍必须按 P9 清单实施。
 ---
 
 ## 3. 已完成工作清单（已验证或已有明确实现边界）
@@ -734,7 +734,8 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 优先级：P0
   - 已有前置：生产服务器可通过只读 Deploy key 拉取 `chuangyilingdong/peixunwangzhan`；该 key 不用于 Actions 登录服务器。
   - 已完成前置：
-    - [x] 本地仓库已于 2026-09-02 初始化：`main` 分支、远程 `origin`、`.gitignore` / `.gitattributes` 安全基线已建立；初始提交 `d271b44` 已完成，并通过全量 `pnpm run build`。
+    - [x] 本地仓库已于 2026-09-02 初始化：`main` 分支、远程 `origin`、`.gitignore` / `.gitattributes` 安全基线已建立；已通过全量 `pnpm run build`。
+    - [x] 本机专用 SSH 写入密钥已添加至 GitHub 账号，并通过 `ssh.github.com:443` 验证身份；远程 `origin/main` 已成功建立，当前基线提交为 `485b763`。
   - 范围：依赖安装、lint、测试、构建、镜像 / 制品、SBOM、部署审批、版本号、变更记录；GitHub Actions 使用独立的“Actions → 生产服务器”部署密钥 / Secret 连接服务器，执行受控发布脚本。
   - 验收：
     - [ ] 从干净环境可重复构建；每次生产发布可定位 commit / 制品 / 配置版本；失败可停止与回滚；
@@ -818,7 +819,7 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 | D-10 | 是否需要真实客户端下载（Windows / macOS） | 影响安装包、签名、下载、更新、客服支持 | `[!]` 待确认 |
 | D-11 | 是否启动画布统一改造、时间和允许范围 | 当前画布冻结，影响 P7 是否解锁 | `[!]` 待用户明确授权 |
 | D-12 | 是否接入微信生态、短信、邮件、企业微信等通道 | 影响登录、通知、支付、客服与合规 | `[!]` 待确认 |
-| D-13 | GitHub 仓库与生产服务器读取凭据 | 仓库已创建为 `chuangyilingdong/peixunwangzhan`；生产服务器只读 Deploy key 已验证。仍需建立本地推送凭据、分支保护、Actions 部署 Secret 与权限台账 | `[-]` 仓库与服务器读取已就绪；自动化发布待建 |
+| D-13 | GitHub 仓库与读写凭据基线 | 仓库已创建为 `chuangyilingdong/peixunwangzhan`；生产服务器只读 Deploy key 与本机 SSH 443 写入凭据均已验证，远程 `main` 已建立。仍需分支保护、Actions 部署 Secret 与权限台账 | `[x]` 仓库、服务器读取与本机写入基线均已就绪；自动化发布待建 |
 
 ---
 
@@ -883,13 +884,12 @@ node .\p3-api-integration.mjs
 | 2026-09-02 | 创建本“完整上线执行总控”，作为后续跨对话唯一进度依据。 | 待后续每次工作持续更新。 |
 | 2026-09-02 | 记录既有线上部署环境：`iicili.cyou`、Nginx、`learning-platform`、`127.0.0.1:8787` 内部监听和旧站可替换授权；新增 P9-D00 发布前备份 / 替换要求。 | 未执行线上清理或部署；后续必须先备份、演练、验证和保留回滚。 |
 | 2026-09-02 | GitHub 仓库 `chuangyilingdong/peixunwangzhan` 已确认；生产服务器只读 Deploy key 已添加并由用户验证仓库读取成功。 | 已记录密钥职责分离、推送 / 测试 / 发布流程；未创建 CI/CD、未发布线上版本。 |
-| 2026-09-02 | 在 `platform-v2` 建立 Git 初始基线：配置远程仓库、忽略数据库 / 密钥 / 日志 / 构建产物、提交 `d271b44`；并将总控文件纳入仓库 `docs/`。 | Node `v24.19.0` / pnpm `11.19.0` 下全量 `pnpm run build` 通过；尚待本地 GitHub 写入认证后推送到远程。 |
+| 2026-09-02 | 在 `platform-v2` 建立 Git 初始基线：配置远程仓库、忽略数据库 / 密钥 / 日志 / 构建产物、提交 `d271b44`；并将总控文件纳入仓库 `docs/`。 | Node `v24.19.0` / pnpm `11.19.0` 下全量 `pnpm run build` 通过。 |
+| 2026-09-02 | 建立并验证本机 GitHub SSH 443 推送链路：本机专用 SSH 写入密钥已添加至 GitHub 账号，`origin` 切换为专用 SSH 别名；将初始基线及 Deploy key / 发布流程记录成功推送到远程 `main`。 | SSH 返回 `Hi chuangyilingdong!`；远程 `refs/heads/main` 已核验为提交 `485b763`；未部署或改动生产服务器。 |
 
 ---
 
 ## 15. 下一次新对话的固定开场指令
 
 > 请先读取 `D:\学习平台\platform-v2\docs\AI少儿编程平台-完整上线执行总控.md`，以其中“当前唯一下一步”和未勾选事项为准推进。先核对代码与文档是否一致；完成任何事项后，必须更新本文件的勾选、完成记录、验证方式和变更日志。除非用户重新明确授权，禁止修改 `D:\学习平台\platform-v2\packages\canvas`。所有非画布页面继续按 `D:\学习平台\docs\AI魔法学院基准` 实施，但不得伪造真实 AI、支付、文件存储、运营数据或生产上线能力。
-
-
 
