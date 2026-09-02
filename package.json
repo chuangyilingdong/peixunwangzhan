@@ -1,0 +1,29 @@
+{
+  "name": "ai-kids-platform",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "setup": "pnpm install --ignore-scripts",
+    "db:init": "node packages/database/src/db.js --init",
+    "db:seed": "node packages/database/src/seed.js",
+    "server": "node apps/server/src/index.js",
+    "dev:admin": "vite apps/admin --config apps/admin/vite.config.mjs",
+    "dev:org": "vite apps/org --config apps/org/vite.config.mjs",
+    "dev:student": "vite apps/student --config apps/student/vite.config.mjs",
+    "build": "vite build apps/admin --config apps/admin/vite.config.mjs && vite build apps/org --config apps/org/vite.config.mjs && vite build apps/student --config apps/student/vite.config.mjs && vite build apps/website --config apps/website/vite.config.mjs",
+    "dev:website": "vite apps/website --config apps/website/vite.config.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.0",
+    "zustand": "^5.0.8",
+    "@xyflow/react": "^12.3.6"
+  },
+  "devDependencies": {
+    "vite": "^7.1.9",
+    "@vitejs/plugin-react": "^5.0.3"
+  }
+}

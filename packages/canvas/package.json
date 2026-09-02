@@ -1,0 +1,9 @@
+{
+  "name": "@platform/canvas",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.jsx",
+  "exports": {
+    ".": "./src/index.jsx"
+  }
+}

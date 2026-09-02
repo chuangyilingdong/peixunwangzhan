@@ -1,0 +1,449 @@
+import { randomBytes, scryptSync, randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const dataDir = process.env.PLATFORM_DATA_DIR || path.resolve(__dirname, '../../data');
+export const databasePath = process.env.PLATFORM_DB_PATH || path.join(dataDir, 'platform.db');
+fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+export const db = new DatabaseSync(databasePath);
+db.exec('PRAGMA journal_mode = WAL');
+db.exec('PRAGMA foreign_keys = ON');
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS platform_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  platform_name TEXT NOT NULL DEFAULT 'AI魔法学院兼容平台',
+  modalities TEXT NOT NULL DEFAULT '{}',
+  billing_settings TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'TRIAL' CHECK (status IN ('TRIAL','ACTIVE','FROZEN','DISABLED','EXPIRED')),
+  contract_start_at TEXT NOT NULL,
+  contract_expires_at TEXT NOT NULL,
+  is_trial INTEGER NOT NULL DEFAULT 1,
+  base_teacher_seats INTEGER NOT NULL DEFAULT 3,
+  purchased_teacher_seats INTEGER NOT NULL DEFAULT 0,
+  contact TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_name ON organizations(name);
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  org_id TEXT,
+  login TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('SUPER_ADMIN','ORG_ADMIN','TEACHER','STUDENT')),
+  permissions TEXT NOT NULL DEFAULT '[]',
+  password_hash TEXT NOT NULL,
+  phone TEXT,
+  phone_verified_at TEXT,
+  must_bind_phone INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','DISABLED')),
+  expires_at TEXT,
+  student_usage_scope TEXT CHECK (student_usage_scope IN ('FOLLOW_CLASS','HOME_PRACTICE')),
+  billing_package_id TEXT,
+  monthly_credit_allowance INTEGER NOT NULL DEFAULT 0,
+  monthly_bonus_credits INTEGER NOT NULL DEFAULT 0,
+  month_period_boost_credits INTEGER NOT NULL DEFAULT 0,
+  used_credits_this_period INTEGER NOT NULL DEFAULT 0,
+  period_start_at TEXT,
+  period_reset_at TEXT,
+  magic_stones INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_users_org_role ON users(org_id, role, deleted_at, status);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  org_id TEXT,
+  client_type TEXT NOT NULL DEFAULT 'web',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  superseded_at TEXT,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS org_billing_accounts (
+  org_id TEXT PRIMARY KEY,
+  credit_balance INTEGER NOT NULL DEFAULT 0,
+  total_credits_in INTEGER NOT NULL DEFAULT 0,
+  total_credits_spent INTEGER NOT NULL DEFAULT 0,
+  currency_paid_total_fen INTEGER NOT NULL DEFAULT 0,
+  hackathon_reward_credits INTEGER NOT NULL DEFAULT 0,
+  updated_version INTEGER NOT NULL DEFAULT 1,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS credit_entries (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('IN','OUT')),
+  type TEXT NOT NULL,
+  credits INTEGER NOT NULL CHECK (credits > 0),
+  balance_after INTEGER NOT NULL,
+  modality TEXT,
+  model TEXT,
+  upstream_cost_fen INTEGER,
+  pricing_snapshot TEXT,
+  user_id TEXT,
+  class_session_id TEXT,
+  project_id TEXT,
+  work_id TEXT,
+  related_order_id TEXT,
+  related_submission_id TEXT,
+  status TEXT NOT NULL DEFAULT 'EFFECTIVE' CHECK (status IN ('EFFECTIVE','VOIDED')),
+  reason TEXT,
+  actor_id TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_credit_entries_org_created ON credit_entries(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_entries_session ON credit_entries(class_session_id);
+
+CREATE TABLE IF NOT EXISTS billing_packages (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  price_fen INTEGER NOT NULL DEFAULT 0,
+  monthly_credits INTEGER NOT NULL DEFAULT 0,
+  bonus_credits INTEGER NOT NULL DEFAULT 0,
+  duration_days INTEGER NOT NULL DEFAULT 30,
+  allow_image INTEGER NOT NULL DEFAULT 1,
+  allow_music INTEGER NOT NULL DEFAULT 1,
+  allow_video INTEGER NOT NULL DEFAULT 0,
+  allow_podcast INTEGER NOT NULL DEFAULT 0,
+  allow_dubbing INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','DISABLED')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_packages_org_name ON billing_packages(org_id, name);
+
+CREATE TABLE IF NOT EXISTS course_series (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  cover_image_url TEXT,
+  owner_type TEXT NOT NULL DEFAULT 'PLATFORM' CHECK (owner_type IN ('PLATFORM','ORG')),
+  org_id TEXT,
+  visibility TEXT NOT NULL DEFAULT 'ALL_ORGS' CHECK (visibility IN ('ALL_ORGS','ASSIGNED_ORGS','PRIVATE')),
+  version TEXT NOT NULL DEFAULT '1.0',
+  sort INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
+  marketplace_status TEXT NOT NULL DEFAULT 'NONE',
+  marketplace_reward_credits INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_course_series_platform_title ON course_series(title) WHERE owner_type = 'PLATFORM';
+
+CREATE TABLE IF NOT EXISTS course_lessons (
+  id TEXT PRIMARY KEY,
+  series_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  sort INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
+  duration_minutes INTEGER NOT NULL DEFAULT 45,
+  prompt_pack_asset_id TEXT,
+  outcome_pack_asset_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_course_lessons_series_sort ON course_lessons(series_id, sort);
+
+CREATE TABLE IF NOT EXISTS course_assignments (
+  id TEXT PRIMARY KEY,
+  series_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REVOKED')),
+  assigned_by TEXT,
+  assigned_at TEXT NOT NULL,
+  FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_course_assignments_unique ON course_assignments(series_id, org_id);
+
+CREATE TABLE IF NOT EXISTS classes (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  teacher_id TEXT,
+  usage_mode TEXT NOT NULL DEFAULT 'CLASS_ONLY' CHECK (usage_mode IN ('CLASS_ONLY','ALWAYS_AVAILABLE')),
+  default_series_id TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','ARCHIVED')),
+  current_session_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_classes_org_active_name ON classes(org_id, name) WHERE status = 'ACTIVE';
+
+CREATE TABLE IF NOT EXISTS class_members (
+  id TEXT PRIMARY KEY,
+  class_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'STUDENT' CHECK (role IN ('STUDENT','TEACHER','ORG_ADMIN')),
+  joined_at TEXT NOT NULL,
+  removed_at TEXT,
+  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_members_unique ON class_members(class_id, user_id) WHERE removed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS class_curriculum_items (
+  id TEXT PRIMARY KEY,
+  class_id TEXT NOT NULL,
+  lesson_id TEXT NOT NULL,
+  sort INTEGER NOT NULL,
+  source_series_id TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_class_lesson ON class_curriculum_items(class_id, lesson_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_class_sort ON class_curriculum_items(class_id, sort);
+
+CREATE TABLE IF NOT EXISTS class_sessions (
+  id TEXT PRIMARY KEY,
+  class_id TEXT NOT NULL,
+  lesson_id TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','ENDED')),
+  session_credit_cap INTEGER,
+  consumed_credits_total INTEGER NOT NULL DEFAULT 0,
+  allow_image INTEGER NOT NULL DEFAULT 1,
+  allow_music INTEGER NOT NULL DEFAULT 1,
+  allow_video INTEGER NOT NULL DEFAULT 0,
+  allow_podcast INTEGER NOT NULL DEFAULT 0,
+  allow_dubbing INTEGER NOT NULL DEFAULT 0,
+  started_by TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_by TEXT,
+  ended_at TEXT,
+  ended_reason TEXT,
+  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_sessions_active ON class_sessions(class_id) WHERE status = 'ACTIVE';
+
+CREATE TABLE IF NOT EXISTS student_projects (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  org_id TEXT,
+  class_id TEXT,
+  course_lesson_id TEXT,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','SUBMITTED','GRADED','ARCHIVED')),
+  canvas_snapshot TEXT NOT NULL DEFAULT '{"nodes":[],"edges":[],"viewport":{"x":0,"y":0,"zoom":1}}',
+  latest_version INTEGER NOT NULL DEFAULT 1,
+  last_saved_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_projects_student_updated ON student_projects(student_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projects_org_updated ON student_projects(org_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  label TEXT,
+  canvas_snapshot TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_snapshot_version ON project_snapshots(project_id, version);
+
+CREATE TABLE IF NOT EXISTS works (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  org_id TEXT,
+  class_id TEXT,
+  course_lesson_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  canvas_snapshot TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','PUBLISHED')),
+  teacher_comment TEXT,
+  reviewed_by TEXT,
+  reviewed_at TEXT,
+  submitted_at TEXT NOT NULL,
+  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_works_org_submitted ON works(org_id, submitted_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_works_project_unique ON works(project_id);
+
+CREATE TABLE IF NOT EXISTS work_annotations (
+  id TEXT PRIMARY KEY,
+  work_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  node_id TEXT,
+  content TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolved_by TEXT,
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_work_annotations_work_created ON work_annotations(work_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_annotations_org_created ON work_annotations(org_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS usage_records (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  class_session_id TEXT,
+  project_id TEXT,
+  work_id TEXT,
+  modality TEXT NOT NULL,
+  model TEXT NOT NULL DEFAULT 'local-p0',
+  credits_charged INTEGER NOT NULL CHECK (credits_charged >= 0),
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'SUCCESS' CHECK (status IN ('SUCCESS','FAILED','BLOCKED')),
+  fail_code TEXT,
+  pricing_snapshot TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_usage_org_created ON usage_records(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_records(user_id, created_at DESC);
+
+
+CREATE TABLE IF NOT EXISTS generation_jobs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  modality TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('QUEUED','RUNNING','SUCCEEDED','FAILED')),
+  credits_charged INTEGER NOT NULL DEFAULT 0,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_project_created ON generation_jobs(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_org_created ON generation_jobs(org_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS media_assets (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  modality TEXT NOT NULL,
+  label TEXT NOT NULL,
+  mime_type TEXT,
+  asset_url TEXT NOT NULL,
+  preview_url TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (job_id) REFERENCES generation_jobs(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_media_assets_project_created ON media_assets(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS recharge_orders (
+  id TEXT PRIMARY KEY,
+  order_no TEXT NOT NULL UNIQUE,
+  org_id TEXT NOT NULL,
+  package_id TEXT,
+  amount_fen INTEGER NOT NULL,
+  credits INTEGER NOT NULL,
+  bonus_credits INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','PAID','CANCELLED','REFUNDED','INVOICED')),
+  paid_at TEXT,
+  invoice_status TEXT NOT NULL DEFAULT 'NONE',
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_recharge_orders_org_created ON recharge_orders(org_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT,
+  actor_id TEXT,
+  actor_role TEXT,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT,
+  request_method TEXT,
+  request_path TEXT,
+  before_data TEXT,
+  after_data TEXT,
+  ip TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_org_created ON audit_logs(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_actor_created ON audit_logs(actor_id, created_at DESC);
+`;
+
+db.exec(SCHEMA);
+db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
+
+export function q(sql, params = []) { return db.prepare(sql).run(...params); }
+export function rows(sql, params = []) { return db.prepare(sql).all(...params); }
+export function row(sql, params = []) { return db.prepare(sql).get(...params); }
+export function count(sql, params = []) { return Number(row(sql, params).n || 0); }
+export function one(sql, params = []) { return db.prepare(sql).get(...params); }
+export function json(value) { return JSON.stringify(value ?? null); }
+export function parseJson(value, fallback = null) { if (value == null) return fallback; try { return JSON.parse(value); } catch { return fallback; } }
+export function transaction(fn) {
+  db.exec('BEGIN');
+  try { const result = fn(); db.exec('COMMIT'); return result; }
+  catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+export function initDatabase() { return db; }
+
+const PEPPER = process.env.AUTH_PEPPER || 'p0-local-pepper';
+export function hashPassword(password) {
+  const salt = randomBytes(16).toString('hex');
+  return `scrypt:${salt}:${scryptSync(`${PEPPER}:${password}`, salt, 64).toString('hex')}`;
+}
+
+
+
+
+
+export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
+export function nowIso() { return new Date().toISOString(); }
+

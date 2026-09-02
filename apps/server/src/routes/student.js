@@ -1,0 +1,385 @@
+import {
+  audit,
+  errors,
+  id,
+  json,
+  nonEmptyString,
+  normalizeProject,
+  normalizeWork,
+  nowIso,
+  q,
+  requireRole,
+  row,
+  rows,
+  transaction,
+} from '../lib.js';
+import {
+  buildStudentContext,
+  resolveProjectUsageContext,
+  resolveStudentLessonContext,
+} from '../services/studentContext.js';
+
+const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
+
+function cloneJson(value) {
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { throw errors.badRequest('画布数据必须是可序列化的 JSON', 'INVALID_CANVAS_SNAPSHOT'); }
+}
+
+export function normalizeCanvasSnapshot(input, { fallback = EMPTY_CANVAS } = {}) {
+  if (input === undefined || input === null) return cloneJson(fallback);
+  if (Array.isArray(input) || typeof input !== 'object') throw errors.badRequest('画布快照必须是对象', 'INVALID_CANVAS_SNAPSHOT');
+  if (input.nodes !== undefined && !Array.isArray(input.nodes)) throw errors.badRequest('画布 nodes 必须是数组', 'INVALID_CANVAS_SNAPSHOT');
+  if (input.edges !== undefined && !Array.isArray(input.edges)) throw errors.badRequest('画布 edges 必须是数组', 'INVALID_CANVAS_SNAPSHOT');
+  const viewport = input.viewport && typeof input.viewport === 'object' && !Array.isArray(input.viewport)
+    ? input.viewport : EMPTY_CANVAS.viewport;
+  const snapshot = cloneJson({
+    ...input,
+    nodes: input.nodes ?? [],
+    edges: input.edges ?? [],
+    viewport: {
+      x: Number.isFinite(Number(viewport.x)) ? Number(viewport.x) : 0,
+      y: Number.isFinite(Number(viewport.y)) ? Number(viewport.y) : 0,
+      zoom: Number.isFinite(Number(viewport.zoom)) ? Number(viewport.zoom) : 1,
+    },
+  });
+  if (Buffer.byteLength(JSON.stringify(snapshot)) > 1024 * 1024) {
+    throw errors.badRequest('画布快照不能超过 1MB', 'CANVAS_SNAPSHOT_TOO_LARGE');
+  }
+  return snapshot;
+}
+
+function getOwnProject(ctx, projectId, { includeArchived = false } = {}) {
+  const project = row(
+    `SELECT project.*, lesson.title AS lesson_title
+     FROM student_projects project
+     LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
+     WHERE project.id = ? AND project.student_id = ? AND project.org_id = ?
+       ${includeArchived ? '' : "AND project.status != 'ARCHIVED'"}`,
+    [projectId, ctx.auth.user.id, ctx.auth.user.orgId],
+  );
+  if (!project) throw errors.notFound('项目不存在', 'PROJECT_NOT_FOUND');
+  return project;
+}
+
+function fetchProject(ctx, projectId) {
+  return row(
+    `SELECT project.*, lesson.title AS lesson_title
+     FROM student_projects project
+     LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
+     WHERE project.id = ? AND project.student_id = ? AND project.org_id = ?`,
+    [projectId, ctx.auth.user.id, ctx.auth.user.orgId],
+  );
+}
+
+function fetchWork(ctx, workId) {
+  return row(
+    `SELECT work.*, student.display_name AS student_name, class.name AS class_name,
+            lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
+     FROM works work
+     JOIN users student ON student.id = work.student_id AND student.org_id = work.org_id
+     LEFT JOIN classes class ON class.id = work.class_id AND class.org_id = work.org_id
+     LEFT JOIN course_lessons lesson ON lesson.id = work.course_lesson_id
+     LEFT JOIN users reviewer ON reviewer.id = work.reviewed_by
+     WHERE work.id = ? AND work.student_id = ? AND work.org_id = ?`,
+    [workId, ctx.auth.user.id, ctx.auth.user.orgId],
+  );
+}
+
+function assertDraft(project) {
+  if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能继续编辑', 'PROJECT_NOT_EDITABLE');
+}
+
+function assertProjectUsable(ctx, project) {
+  assertDraft(project);
+  const usageContext = resolveProjectUsageContext(ctx.auth.rawUser, project);
+  if (!usageContext.canUseNow) throw errors.forbidden(usageContext.blockReason, usageContext.blockCode);
+  return usageContext;
+}
+
+export async function handleStudent(ctx) {
+  const { pathname, method } = ctx;
+  if (!pathname.startsWith('/api/student')) return null;
+  const auth = requireRole(ctx, ['STUDENT']);
+  const part = pathname.slice('/api/student'.length);
+
+  if (part === '/dashboard' && method === 'GET') return buildStudentContext(auth.rawUser);
+  if (part === '/courses' && method === 'GET') return { items: buildStudentContext(auth.rawUser).courses };
+
+  if (part === '/projects' && method === 'GET') {
+    const params = [auth.user.id, auth.user.orgId];
+    let where = "project.student_id = ? AND project.org_id = ? AND project.status != 'ARCHIVED'";
+    if (ctx.search.get('lessonId')) { where += ' AND project.course_lesson_id = ?'; params.push(ctx.search.get('lessonId')); }
+    if (ctx.search.get('status')) { where += ' AND project.status = ?'; params.push(ctx.search.get('status')); }
+    const items = rows(
+      `SELECT project.*, lesson.title AS lesson_title
+       FROM student_projects project
+       LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
+       WHERE ${where}
+       ORDER BY project.updated_at DESC LIMIT 200`,
+      params,
+    ).map((project) => normalizeProject(project));
+    return { items };
+  }
+
+  if (part === '/projects' && method === 'POST') {
+    const courseLessonId = nonEmptyString(ctx.body?.courseLessonId, '课时', { max: 100 });
+    const lessonContext = resolveStudentLessonContext(auth.rawUser, courseLessonId, ctx.body?.classId || null);
+    if (!lessonContext.canUseNow) throw errors.forbidden(lessonContext.blockReason, lessonContext.blockCode);
+    const now = nowIso();
+    const projectId = id('project');
+    const title = ctx.body?.title === undefined || String(ctx.body.title).trim() === ''
+      ? `${lessonContext.lesson.title}作品`
+      : nonEmptyString(ctx.body.title, '项目名称', { max: 100 });
+    const snapshot = normalizeCanvasSnapshot(ctx.body?.canvasSnapshot);
+    transaction(() => {
+      q(
+        `INSERT INTO student_projects(
+          id,student_id,org_id,class_id,course_lesson_id,title,status,canvas_snapshot,
+          latest_version,last_saved_at,created_at,updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [projectId, auth.user.id, auth.user.orgId, lessonContext.class.id, lessonContext.lesson.id, title, 'DRAFT', json(snapshot), 1, now, now, now],
+      );
+      q(
+        `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
+         VALUES (?,?,?,?,?,?,?)`,
+        [id('snapshot'), projectId, 1, '初始版本', json(snapshot), auth.user.id, now],
+      );
+    });
+    audit(ctx, 'PROJECT_CREATE', 'STUDENT_PROJECT', projectId, null, { classId: lessonContext.class.id, courseLessonId, title });
+    return normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+  }
+
+  let match = part.match(/^\/projects\/([^/]+)$/);
+  if (match && method === 'GET') return normalizeProject(getOwnProject(ctx, match[1]), { includeSnapshot: true });
+
+  if (match && method === 'PUT') {
+    const project = getOwnProject(ctx, match[1]);
+    assertProjectUsable(ctx, project);
+    const body = ctx.body || {};
+    if (body.title === undefined && body.canvasSnapshot === undefined && body.label === undefined) {
+      throw errors.badRequest('请提交需要保存的项目内容', 'NO_PROJECT_CHANGES');
+    }
+    const now = nowIso();
+    const title = body.title === undefined ? project.title : nonEmptyString(body.title, '项目名称', { max: 100 });
+    const snapshot = body.canvasSnapshot === undefined ? null : normalizeCanvasSnapshot(body.canvasSnapshot);
+    let nextVersion = Number(project.latest_version || 1);
+    transaction(() => {
+      const fresh = getOwnProject(ctx, project.id);
+      assertProjectUsable(ctx, fresh);
+      if (snapshot) {
+        nextVersion = Number(fresh.latest_version || 1) + 1;
+        q(
+          `UPDATE student_projects SET title=?,canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?
+           WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
+          [title, json(snapshot), nextVersion, now, now, fresh.id, auth.user.id, auth.user.orgId],
+        );
+        q(
+          `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
+           VALUES (?,?,?,?,?,?,?)`,
+          [id('snapshot'), fresh.id, nextVersion, body.label ? String(body.label).slice(0, 100) : `版本 ${nextVersion}`, json(snapshot), auth.user.id, now],
+        );
+      } else {
+        q(
+          "UPDATE student_projects SET title=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'",
+          [title, now, fresh.id, auth.user.id, auth.user.orgId],
+        );
+      }
+    });
+    audit(ctx, 'PROJECT_SAVE', 'STUDENT_PROJECT', project.id, { latestVersion: project.latest_version }, { title, latestVersion: nextVersion, hasCanvasSnapshot: Boolean(snapshot) });
+    return normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true });
+  }
+
+  if (match && method === 'DELETE') {
+    const project = getOwnProject(ctx, match[1]);
+    assertDraft(project);
+    q("UPDATE student_projects SET status='ARCHIVED',updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'", [nowIso(), project.id, auth.user.id, auth.user.orgId]);
+    audit(ctx, 'PROJECT_ARCHIVE', 'STUDENT_PROJECT', project.id);
+    return { archived: true, id: project.id };
+  }
+
+  match = part.match(/^\/projects\/([^/]+)\/snapshots$/);
+  if (match && method === 'GET') {
+    const project = getOwnProject(ctx, match[1]);
+    const items = rows(
+      `SELECT snapshot.id, snapshot.project_id, snapshot.version, snapshot.label,
+              snapshot.actor_id, snapshot.created_at, actor.display_name AS actor_name
+       FROM project_snapshots snapshot
+       LEFT JOIN users actor ON actor.id = snapshot.actor_id
+       WHERE snapshot.project_id = ?
+       ORDER BY snapshot.version DESC`,
+      [project.id],
+    );
+    return {
+      items: items.map((snapshot) => ({
+        id: snapshot.id,
+        projectId: snapshot.project_id,
+        version: Number(snapshot.version),
+        label: snapshot.label || null,
+        actorId: snapshot.actor_id,
+        actorName: snapshot.actor_name || null,
+        createdAt: snapshot.created_at,
+      })),
+    };
+  }
+
+  match = part.match(/^\/projects\/([^/]+)\/snapshots\/(\d+)$/);
+  if (match && method === 'PUT') {
+    const project = getOwnProject(ctx, match[1]);
+    assertDraft(project);
+    const version = Number(match[2]);
+    const label = nonEmptyString(ctx.body?.label, '版本名称', { max: 100 });
+    const snapshot = row('SELECT * FROM project_snapshots WHERE project_id = ? AND version = ?', [project.id, version]);
+    if (!snapshot) throw errors.notFound('项目版本不存在', 'PROJECT_SNAPSHOT_NOT_FOUND');
+    q('UPDATE project_snapshots SET label = ? WHERE project_id = ? AND version = ?', [label, project.id, version]);
+    audit(ctx, 'PROJECT_SNAPSHOT_LABEL', 'PROJECT_SNAPSHOT', snapshot.id, { label: snapshot.label || null }, { label, version });
+    return {
+      id: snapshot.id,
+      projectId: snapshot.project_id,
+      version,
+      label,
+      actorId: snapshot.actor_id,
+      createdAt: snapshot.created_at,
+    };
+  }
+
+  if (match && method === 'GET') {
+    const project = getOwnProject(ctx, match[1]);
+    const snapshot = row('SELECT * FROM project_snapshots WHERE project_id = ? AND version = ?', [project.id, Number(match[2])]);
+    if (!snapshot) throw errors.notFound('项目版本不存在', 'PROJECT_SNAPSHOT_NOT_FOUND');
+    return {
+      id: snapshot.id, projectId: snapshot.project_id, version: Number(snapshot.version), label: snapshot.label || null,
+      canvasSnapshot: JSON.parse(snapshot.canvas_snapshot), actorId: snapshot.actor_id, createdAt: snapshot.created_at,
+    };
+  }
+
+  match = part.match(/^\/projects\/([^/]+)\/submit$/);
+  if (match && method === 'POST') {
+    const project = getOwnProject(ctx, match[1]);
+    if (project.status !== 'DRAFT') {
+      throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
+    }
+    assertProjectUsable(ctx, project);
+    const now = nowIso();
+    const description = String(ctx.body?.description || '').trim().slice(0, 1000);
+    let canvasSnapshot = JSON.parse(project.canvas_snapshot);
+    let latestVersion = Number(project.latest_version || 1);
+    const requestedSnapshot = ctx.body?.canvasSnapshot === undefined ? null : normalizeCanvasSnapshot(ctx.body.canvasSnapshot);
+    const workId = id('work');
+    transaction(() => {
+      const fresh = getOwnProject(ctx, project.id);
+      if (fresh.status !== 'DRAFT') throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
+      assertProjectUsable(ctx, fresh);
+      if (requestedSnapshot) {
+        canvasSnapshot = requestedSnapshot;
+        latestVersion = Number(fresh.latest_version || 1) + 1;
+        q(
+          `UPDATE student_projects SET status='SUBMITTED',canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?
+           WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
+          [json(canvasSnapshot), latestVersion, now, now, fresh.id, auth.user.id, auth.user.orgId],
+        );
+        q(
+          `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
+           VALUES (?,?,?,?,?,?,?)`,
+          [id('snapshot'), fresh.id, latestVersion, '提交版本', json(canvasSnapshot), auth.user.id, now],
+        );
+      } else {
+        q(
+          "UPDATE student_projects SET status='SUBMITTED',updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'",
+          [now, fresh.id, auth.user.id, auth.user.orgId],
+        );
+      }
+      q(
+        `INSERT INTO works(
+          id,project_id,student_id,org_id,class_id,course_lesson_id,title,description,canvas_snapshot,status,submitted_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now],
+      );
+    });
+    audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id }, { description });
+    return {
+      project: normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true }),
+      work: normalizeWork(fetchWork(ctx, workId), { includeSnapshot: true }),
+    };
+  }
+
+  match = part.match(/^\/works\/([^/]+)\/annotations$/);
+  if (match && method === 'GET') {
+    const work = row('SELECT id FROM works WHERE id=? AND student_id=? AND org_id=?', [match[1], auth.user.id, auth.user.orgId]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    const items = rows(
+      `SELECT annotation.*, author.display_name AS author_name, resolver.display_name AS resolver_name
+       FROM work_annotations annotation
+       JOIN users author ON author.id=annotation.author_id
+       LEFT JOIN users resolver ON resolver.id=annotation.resolved_by
+       WHERE annotation.work_id=? AND annotation.org_id=?
+       ORDER BY annotation.created_at DESC`,
+      [work.id, auth.user.orgId],
+    ).map((annotation) => ({
+      id: annotation.id, workId: annotation.work_id, nodeId: annotation.node_id || null, content: annotation.content,
+      authorId: annotation.author_id, authorName: annotation.author_name || '教师', createdAt: annotation.created_at,
+      resolvedAt: annotation.resolved_at || null, resolvedBy: annotation.resolved_by || null, resolverName: annotation.resolver_name || null,
+    }));
+    return { items };
+  }
+
+  match = part.match(/^\/works\/([^/]+)$/);
+  if (match && method === 'GET') {
+    const work = row(
+      `SELECT work.*, class.name AS class_name, lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
+       FROM works work
+       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+       LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
+       LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by
+       WHERE work.id=? AND work.student_id=? AND work.org_id=?`,
+      [match[1], auth.user.id, auth.user.orgId],
+    );
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    return normalizeWork(work, { includeSnapshot: true });
+  }
+
+  if (part === '/showcase' && method === 'GET') {
+    const items = rows(
+      `SELECT work.*, student.display_name AS student_name, class.name AS class_name, lesson.title AS lesson_title
+       FROM works work
+       JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
+       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+       LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
+       WHERE work.org_id=? AND work.status='PUBLISHED'
+       ORDER BY work.reviewed_at DESC, work.submitted_at DESC LIMIT 100`,
+      [auth.user.orgId],
+    ).map((work) => normalizeWork(work, { includeSnapshot: false }));
+    return { items };
+  }
+
+  match = part.match(/^\/showcase\/([^/]+)$/);
+  if (match && method === 'GET') {
+    const work = row(
+      `SELECT work.*, student.display_name AS student_name, class.name AS class_name, lesson.title AS lesson_title
+       FROM works work
+       JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
+       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+       LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
+       WHERE work.id=? AND work.org_id=? AND work.status='PUBLISHED'`,
+      [match[1], auth.user.orgId],
+    );
+    if (!work) throw errors.notFound('已发布作品不存在', 'SHOWCASE_WORK_NOT_FOUND');
+    return normalizeWork(work, { includeSnapshot: true });
+  }
+
+  if (part === '/works' && method === 'GET') {
+    const items = rows(
+      `SELECT work.*, class.name AS class_name, lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
+       FROM works work
+       LEFT JOIN classes class ON class.id = work.class_id AND class.org_id = work.org_id
+       LEFT JOIN course_lessons lesson ON lesson.id = work.course_lesson_id
+       LEFT JOIN users reviewer ON reviewer.id = work.reviewed_by
+       WHERE work.student_id = ? AND work.org_id = ?
+       ORDER BY work.submitted_at DESC LIMIT 200`,
+      [auth.user.id, auth.user.orgId],
+    ).map((work) => normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }));
+    return { items };
+  }
+
+  return null;
+}

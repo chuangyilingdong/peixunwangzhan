@@ -1,0 +1,41 @@
+# 依赖与构建产物
+node_modules/
+dist/
+coverage/
+.vite/
+
+# 本地环境与敏感凭据
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 本地数据库与运行时数据
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# 日志、PID、临时输出
+*.log
+*.pid
+*.pid.lock
+restart.flag
+
+# 本地调试与一次性分析文件
+/_*.txt
+/schema-out.txt
+/tmp-*.mjs
+/inspect-schema.mjs
+
+# 操作系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+/apps/server/debug-*.mjs
+

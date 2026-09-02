@@ -1,0 +1,13 @@
+# Normalize text files for Linux production deployments.
+* text=auto eol=lf
+
+# Keep binary assets untouched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
