@@ -1,6 +1,6 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
-  normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, parseJson,
+  normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, nonEmptyString, nowIso, parseJson,
   q, requireRole, row, rows, transaction,
 } from '@platform/server-lib';
 import { hashPassword } from '@platform/database';
@@ -358,10 +358,159 @@ function platformUserRow(value) {
 
 function curriculumItem(value) { return { id: value.id, lessonId: value.lesson_id, title: value.title, summary: value.summary || '', sort: Number(value.sort || 0), durationMinutes: Number(value.duration_minutes || 0), sourceSeriesId: value.source_series_id }; }
 
+function orgAccountRequestRow(value) {
+  return {
+    id: value.id,
+    userId: value.user_id,
+    orgId: value.org_id || null,
+    studentId: value.user_id,
+    studentName: value.student_name || null,
+    studentLogin: value.student_login || null,
+    type: value.type,
+    reason: value.reason || null,
+    status: value.status,
+    requestedAt: value.requested_at,
+    resolvedAt: value.resolved_at || null,
+    resolvedBy: value.resolved_by || null,
+    handlerName: value.handler_name || null,
+    resolution: value.resolution || null,
+    exportPayload: value.export_payload ? parseJson(value.export_payload, null) : null,
+  };
+}
+
+function orgAccountRequestRows(where, params) {
+  return rows(
+    `SELECT request.*, student.display_name AS student_name, student.login AS student_login, handler.display_name AS handler_name
+     FROM account_requests request
+     JOIN users student ON student.id=request.user_id AND student.org_id=request.org_id
+     LEFT JOIN users handler ON handler.id=request.resolved_by
+     WHERE ${where}`,
+    params,
+  ).map(orgAccountRequestRow);
+}
+
+function buildStudentDataExport(user, org) {
+  const classes = rows(
+    `SELECT class.id, class.name, class.usage_mode, class.status, class_member.role AS member_role, class_member.joined_at
+     FROM class_members class_member
+     JOIN classes class ON class.id=class_member.class_id
+     WHERE class_member.user_id=? AND class.org_id=? AND class_member.removed_at IS NULL
+     ORDER BY class_member.joined_at DESC`,
+    [user.id, user.org_id],
+  );
+  const projects = rows(
+    `SELECT project.id, project.title, project.status, project.created_at, project.updated_at,
+            lesson.title AS lesson_title, class.name AS class_name
+     FROM student_projects project
+     LEFT JOIN course_lessons lesson ON lesson.id=project.course_lesson_id
+     LEFT JOIN classes class ON class.id=project.class_id AND class.org_id=project.org_id
+     WHERE project.student_id=? AND project.org_id=?
+     ORDER BY project.created_at DESC LIMIT 500`,
+    [user.id, user.org_id],
+  );
+  const works = rows(
+    `SELECT work.id, work.title, work.status, work.submitted_at, work.reviewed_at,
+            lesson.title AS lesson_title, class.name AS class_name
+     FROM works work
+     LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
+     LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+     WHERE work.student_id=? AND work.org_id=?
+     ORDER BY work.submitted_at DESC LIMIT 500`,
+    [user.id, user.org_id],
+  );
+  const generationJobs = rows(
+    `SELECT job.id, job.modality, job.provider, job.model, job.status, job.credits_charged,
+            job.created_at, job.completed_at, project.title AS project_title
+     FROM generation_jobs job
+     LEFT JOIN student_projects project ON project.id=job.project_id
+     WHERE job.user_id=? AND job.org_id=?
+     ORDER BY job.created_at DESC LIMIT 500`,
+    [user.id, user.org_id],
+  );
+  const usageRecords = rows(
+    `SELECT usage.id, usage.modality, usage.model, usage.credits_charged, usage.status, usage.created_at,
+            project.title AS project_title
+     FROM usage_records usage
+ LEFT JOIN student_projects project ON project.id=usage.project_id AND project.student_id=usage.user_id AND project.org_id=usage.org_id
+     WHERE usage.user_id=? AND usage.org_id=?
+     ORDER BY usage.created_at DESC LIMIT 500`,
+    [user.id, user.org_id],
+  );
+  return {
+    format: 'STUDENT_DATA_EXPORT_V1',
+    generatedAt: nowIso(),
+    scope: {
+      organizationId: org?.id || null,
+      organizationName: org?.name || null,
+      statement: '数据来自平台当前数据库，包含该学生在本机构的学习记录概览；不包含密码、会话令牌、内部审计信息等敏感字段。',
+    },
+    profile: {
+      id: user.id,
+      login: user.login,
+      displayName: user.display_name,
+      avatarKey: user.avatar_key || null,
+      status: user.status,
+      createdAt: user.created_at,
+      updatedAt: user.updated_at,
+      guardian: user.guardian_name == null && user.guardian_phone == null && user.guardian_relationship == null ? null : {
+        name: user.guardian_name || null,
+        phone: user.guardian_phone || null,
+        relationship: user.guardian_relationship || null,
+        consentedAt: user.guardian_consented_at || null,
+      },
+      privacy: {
+        showcaseAnonymous: !!user.privacy_showcase_anonymous,
+        allowFeature: !!user.privacy_allow_feature,
+      },
+    },
+    classes: classes.map((item) => ({
+      id: item.id, name: item.name, usageMode: item.usage_mode, status: item.status,
+      memberRole: item.member_role, joinedAt: item.joined_at,
+    })),
+    projects: projects.map((item) => ({
+      id: item.id, title: item.title, status: item.status, lessonTitle: item.lesson_title || null,
+      className: item.class_name || null, createdAt: item.created_at, updatedAt: item.updated_at,
+    })),
+    works: works.map((item) => ({
+      id: item.id, title: item.title, status: item.status, lessonTitle: item.lesson_title || null,
+      className: item.class_name || null, submittedAt: item.submitted_at, reviewedAt: item.reviewed_at || null,
+    })),
+    aiTasks: {
+      total: generationJobs.length,
+      items: generationJobs.map((item) => ({
+        id: item.id, modality: item.modality, provider: item.provider, model: item.model,
+        status: item.status, creditsCharged: Number(item.credits_charged || 0),
+        projectTitle: item.project_title || null, createdAt: item.created_at, completedAt: item.completed_at || null,
+      })),
+    },
+    usageRecords: {
+      total: usageRecords.length,
+      totalCredits: usageRecords.reduce((total, item) => total + Number(item.credits_charged || 0), 0),
+      items: usageRecords.map((item) => ({
+        id: item.id, modality: item.modality, model: item.model,
+        credits: Number(item.credits_charged || 0), status: item.status,
+        projectTitle: item.project_title || null, createdAt: item.created_at,
+      })),
+    },
+  };
+}
+
+function softDeleteStudent(ctx, user, now) {
+  const changes = q(
+    `UPDATE users SET status='DISABLED', deleted_at=?, display_name='已注销学生', avatar_key=NULL,
+     guardian_name=NULL, guardian_phone=NULL, guardian_relationship=NULL, guardian_consented_at=NULL,
+     updated_at=? WHERE id=? AND org_id=? AND deleted_at IS NULL`,
+    [now, now, user.id, user.org_id],
+  ).changes;
+  if (!changes) throw errors.conflict('学生账号已注销，不能重复处理', 'ACCOUNT_REQUEST_STUDENT_DELETED');
+  q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND org_id=? AND superseded_at IS NULL', [now, user.id, user.org_id]);
+}
+
 function workInReviewScope(auth, currentOrgId, workId) {
   const work = row(
-    `SELECT work.*, class.teacher_id
+    `SELECT work.*, student.privacy_allow_feature AS student_allow_feature, class.teacher_id
      FROM works work
+     JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
      LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
      WHERE work.id=? AND work.org_id=?`,
     [workId, currentOrgId],
@@ -887,11 +1036,12 @@ export async function handleAdmin(ctx) {
   platformWorkMatch = part.match(/^\/works\/([^/]+)\/feature$/);
   if (platformWorkMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
+    const work = row('SELECT work.*, student.privacy_allow_feature AS student_allow_feature FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id WHERE work.id=?', [platformWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     if (!Object.hasOwn(ctx.body || {}, 'featured') || typeof ctx.body.featured !== 'boolean') throw errors.badRequest('请选择是否设为精选', 'WORK_FEATURED_REQUIRED');
     const featured = ctx.body.featured;
     if (featured && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可以设为精选', 'WORK_NOT_PUBLISHED');
+    if (featured && !work.student_allow_feature) throw errors.forbidden('该学生已关闭精选展示授权', 'STUDENT_FEATURE_OPT_OUT');
     const reason = featured ? String(ctx.body?.reason || '').trim().slice(0, 500) : null;
     q('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=?', [featured ? nowIso() : null, featured ? auth.user.id : null, reason || null, work.id]);
     audit(ctx, featured ? 'PLATFORM_WORK_FEATURE' : 'PLATFORM_WORK_UNFEATURE', 'WORK', work.id, normalizeWork(work), { featured, reason: reason || null }, { orgId: work.org_id });
@@ -1706,6 +1856,7 @@ export async function handleOrg(ctx) {
     if (!Object.hasOwn(ctx.body || {}, 'featured') || typeof ctx.body.featured !== 'boolean') throw errors.badRequest('请选择是否设为机构精选', 'WORK_FEATURED_REQUIRED');
     const featured = ctx.body.featured;
     if (featured && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可以设为机构精选', 'WORK_NOT_PUBLISHED');
+    if (featured && !work.student_allow_feature) throw errors.forbidden('该学生已关闭机构精选展示授权', 'STUDENT_FEATURE_OPT_OUT');
     const reason = featured ? String(ctx.body?.reason || '').trim().slice(0, 500) : null;
     const now = nowIso();
     transaction(() => {
@@ -1797,6 +1948,56 @@ export async function handleOrg(ctx) {
     });
     audit(ctx, status === 'APPROVED' ? 'WORK_PUBLISH_REQUEST_APPROVE' : 'WORK_PUBLISH_REQUEST_REJECT', 'WORK_PUBLISH_REQUEST', requestRow.id, normalizeWorkPublishRequest(requestRow), { status, resolution, workId: work.id }, { orgId: currentOrgId });
     return orgWorkPublishRequestRows('request.id=?', [requestRow.id])[0];
+  }
+  if (part === '/account-requests' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以处理账号申请', 'ACCOUNT_REQUEST_PERMISSION_DENIED');
+    const status = ctx.search.get('status');
+    const type = ctx.search.get('type');
+    let where = 'request.org_id=?'; const params = [currentOrgId];
+    if (['PENDING','APPROVED','REJECTED','CANCELLED'].includes(status)) { where += ' AND request.status=?'; params.push(status); }
+    if (['DELETION','DATA_EXPORT'].includes(type)) { where += ' AND request.type=?'; params.push(type); }
+    const items = orgAccountRequestRows(where + " ORDER BY CASE request.status WHEN 'PENDING' THEN 0 ELSE 1 END, request.requested_at DESC", params);
+    return { items, total: items.length, pending: items.filter((item) => item.status === 'PENDING').length };
+  }
+
+  let accountRequestMatch = part.match(/^\/account-requests\/([^/]+)$/);
+  if (accountRequestMatch && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以处理账号申请', 'ACCOUNT_REQUEST_PERMISSION_DENIED');
+    const request = orgAccountRequestRows('request.id=? AND request.org_id=?', [accountRequestMatch[1], currentOrgId])[0];
+    if (!request) throw errors.notFound('账号申请不存在', 'ACCOUNT_REQUEST_NOT_FOUND');
+    return request;
+  }
+  if (accountRequestMatch && method === 'PUT') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以处理账号申请', 'ACCOUNT_REQUEST_PERMISSION_DENIED');
+    const requestRow = row('SELECT * FROM account_requests WHERE id=? AND org_id=?', [accountRequestMatch[1], currentOrgId]);
+    if (!requestRow) throw errors.notFound('账号申请不存在', 'ACCOUNT_REQUEST_NOT_FOUND');
+    if (requestRow.status !== 'PENDING') throw errors.conflict('账号申请已处理，不能重复处理', 'ACCOUNT_REQUEST_ALREADY_HANDLED');
+    const status = ctx.body?.status;
+    if (!['APPROVED','REJECTED'].includes(status)) throw errors.badRequest('账号申请处理状态无效', 'INVALID_ACCOUNT_REQUEST_STATUS');
+    const resolution = nonEmptyString(ctx.body?.resolution, '处理说明', { max: 2000 });
+    const student = orgUser(auth, requestRow.user_id);
+    const now = nowIso();
+    let exportPayload = null;
+    if (status === 'APPROVED' && requestRow.type === 'DATA_EXPORT') {
+      exportPayload = buildStudentDataExport(student, ctx.auth.org || row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+    }
+    transaction(() => {
+      q(
+        'UPDATE account_requests SET status=?,resolved_at=?,resolved_by=?,resolution=?,export_payload=? WHERE id=? AND org_id=? AND status=?',
+        [status, now, auth.user.id, resolution, exportPayload ? json(exportPayload) : null, requestRow.id, currentOrgId, 'PENDING'],
+      );
+      if (status === 'APPROVED' && requestRow.type === 'DELETION') softDeleteStudent(ctx, student, now);
+    });
+    audit(
+      ctx,
+      requestRow.type === 'DELETION' ? 'ORG_ACCOUNT_DELETION_' + status : 'ORG_ACCOUNT_DATA_EXPORT_' + status,
+      'ACCOUNT_REQUEST',
+      requestRow.id,
+      orgAccountRequestRow(requestRow),
+      { status, resolution, studentDisabled: status === 'APPROVED' && requestRow.type === 'DELETION' },
+      { orgId: currentOrgId },
+    );
+    return orgAccountRequestRows('request.id=?', [requestRow.id])[0];
   }
   return null;
 }

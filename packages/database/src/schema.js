@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS users (
   period_start_at TEXT,
   period_reset_at TEXT,
   magic_stones INTEGER NOT NULL DEFAULT 0,
+  avatar_key TEXT CHECK (avatar_key IS NULL OR avatar_key IN ('star','rocket','cat','fox','robot','panda','owl','whale')),
+  guardian_name TEXT,
+  guardian_phone TEXT,
+  guardian_relationship TEXT CHECK (guardian_relationship IS NULL OR guardian_relationship IN ('PARENT','GRANDPARENT','OTHER_GUARDIAN')),
+  guardian_consented_at TEXT,
+  privacy_showcase_anonymous INTEGER NOT NULL DEFAULT 1,
+  privacy_allow_feature INTEGER NOT NULL DEFAULT 1,
   deleted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -652,6 +659,25 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_org_created ON audit_logs(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_actor_created ON audit_logs(actor_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS account_requests (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  org_id TEXT,
+  type TEXT NOT NULL CHECK (type IN ('DELETION','DATA_EXPORT')),
+  reason TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED')),
+  requested_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolved_by TEXT,
+  resolution TEXT,
+  export_payload TEXT,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE RESTRICT,
+  FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_account_requests_user_status ON account_requests(user_id, status, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_requests_org_status ON account_requests(org_id, status, requested_at DESC);
 `;
 
 db.exec(SCHEMA);
@@ -702,6 +728,32 @@ try { db.exec('ALTER TABLE student_projects ADD COLUMN deleted_at TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_status_updated ON student_projects(student_id, org_id, status, updated_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_projects(student_id, deleted_at)');
+// Lightweight forward-compatible migration for student account privacy and requests.
+for (const statement of [
+  'ALTER TABLE users ADD COLUMN avatar_key TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_name TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_phone TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_relationship TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_consented_at TEXT',
+  'ALTER TABLE users ADD COLUMN privacy_showcase_anonymous INTEGER NOT NULL DEFAULT 1',
+  'ALTER TABLE users ADD COLUMN privacy_allow_feature INTEGER NOT NULL DEFAULT 1',
+]) {
+  try { db.exec(statement); }
+  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
+// Lightweight forward-compatible migration for student account privacy and requests.
+for (const statement of [
+  'ALTER TABLE users ADD COLUMN avatar_key TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_name TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_phone TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_relationship TEXT',
+  'ALTER TABLE users ADD COLUMN guardian_consented_at TEXT',
+  'ALTER TABLE users ADD COLUMN privacy_showcase_anonymous INTEGER NOT NULL DEFAULT 1',
+  'ALTER TABLE users ADD COLUMN privacy_allow_feature INTEGER NOT NULL DEFAULT 1',
+]) {
+  try { db.exec(statement); }
+  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
 
 export function q(sql, params = []) { return db.prepare(sql).run(...params); }

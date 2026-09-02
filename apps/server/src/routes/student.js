@@ -13,6 +13,7 @@ import {
   normalizeWork,
   normalizeWorkReport,
   nowIso,
+  parseJson,
   q,
   requireRole,
   row,
@@ -360,9 +361,77 @@ function studentUsageOverview(ctx) {
   };
 }
 
+const STUDENT_AVATAR_KEYS = Object.freeze(['star', 'rocket', 'cat', 'fox', 'robot', 'panda', 'owl', 'whale']);
+const GUARDIAN_RELATIONSHIPS = Object.freeze(['PARENT', 'GRANDPARENT', 'OTHER_GUARDIAN']);
+const ACCOUNT_REQUEST_TYPES = Object.freeze(['DELETION', 'DATA_EXPORT']);
+
+function assertCurrentPassword(ctx, value) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    throw errors.badRequest('请输入当前密码', 'CURRENT_PASSWORD_REQUIRED');
+  }
+  const currentPassword = nonEmptyString(value, '当前密码', { max: 500 });
+  if (!verifyPassword(currentPassword, ctx.auth.rawUser.password_hash)) {
+    throw errors.badRequest('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
+  }
+  return currentPassword;
+}
+
+function normalizeStudentAvatarKey(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const avatarKey = String(value);
+  if (!STUDENT_AVATAR_KEYS.includes(avatarKey)) throw errors.badRequest('请选择平台提供的头像', 'INVALID_AVATAR_KEY');
+  return avatarKey;
+}
+
+function normalizeStudentGuardian(value) {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw errors.badRequest('监护人信息无效', 'INVALID_GUARDIAN');
+  const hasAny = ['name', 'phone', 'relationship', 'consent'].some((key) => Object.hasOwn(value, key));
+  if (!hasAny) throw errors.badRequest('请完整填写监护人信息', 'GUARDIAN_INCOMPLETE');
+  const name = nonEmptyString(value.name, '监护人姓名', { max: 60 });
+  const phone = String(value.phone ?? '').trim();
+  if (!/^[0-9+\-\s]{6,20}$/.test(phone)) throw errors.badRequest('监护人手机号格式无效', 'INVALID_GUARDIAN_PHONE');
+  const relationship = String(value.relationship || '');
+  if (!GUARDIAN_RELATIONSHIPS.includes(relationship)) throw errors.badRequest('请选择监护人与学生的关系', 'INVALID_GUARDIAN_RELATIONSHIP');
+  if (value.consent !== true) throw errors.badRequest('需要监护人确认知晓并同意提供联系信息', 'GUARDIAN_CONSENT_REQUIRED');
+  return { name, phone, relationship };
+}
+
+function accountRequestRow(item) {
+  return {
+    id: item.id,
+    userId: item.user_id,
+    orgId: item.org_id,
+    type: item.type,
+    reason: item.reason || null,
+    status: item.status,
+    requestedAt: item.requested_at,
+    resolvedAt: item.resolved_at || null,
+    resolvedBy: item.resolved_by || null,
+    resolution: item.resolution || null,
+    exportPayload: item.export_payload ? parseJson(item.export_payload, null) : null,
+  };
+}
+
+function studentAccountRequests(userId, orgId) {
+  const items = rows(
+    'SELECT * FROM account_requests WHERE user_id = ? AND org_id = ? ORDER BY requested_at DESC LIMIT 100',
+    [userId, orgId],
+  ).map(accountRequestRow);
+  return {
+    items,
+    pendingRequests: {
+      deletion: items.some((item) => item.type === 'DELETION' && item.status === 'PENDING'),
+      dataExport: items.some((item) => item.type === 'DATA_EXPORT' && item.status === 'PENDING'),
+    },
+  };
+}
+
 function studentAccountOverview(ctx) {
-  const rawUser = ctx.auth.rawUser;
+  const rawUser = row('SELECT * FROM users WHERE id = ? AND org_id = ? AND deleted_at IS NULL', [ctx.auth.user.id, ctx.auth.user.orgId]);
+  if (!rawUser) throw errors.notFound('学生账号不存在', 'STUDENT_NOT_FOUND');
   const sessions = rows('SELECT * FROM sessions WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [ctx.auth.user.id, ctx.auth.user.orgId, nowIso()]);
+  const accountRequests = studentAccountRequests(ctx.auth.user.id, ctx.auth.user.orgId);
   return {
     user: normalizeUser(rawUser),
     organization: normalizeOrg(ctx.auth.org),
@@ -370,13 +439,19 @@ function studentAccountOverview(ctx) {
     activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: item.class_id, lessonId: item.lesson_id, lessonTitle: item.lesson_title, status: item.status, startedAt: item.started_at })),
     sessions: sessions.map((item) => ({ id: item.id, clientType: item.client_type, createdAt: item.created_at, expiresAt: item.expires_at, current: item.id === ctx.auth.session.id })),
     currentSessionId: ctx.auth.session.id,
+    profileOptions: {
+      avatarKeys: [...STUDENT_AVATAR_KEYS],
+      guardianRelationships: [...GUARDIAN_RELATIONSHIPS],
+      dataMinimization: '平台只收集学习所需资料；不收集住址、身份证号和社交账号。监护人信息仅用于必要时联系，可随时清空。',
+    },
+    ...accountRequests,
+    requests: accountRequests,
   };
 }
 
-function validStudentPassword(value) {
-  const password = String(value ?? '');
-  if (password.length < 8 || password.length > 72 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) throw errors.badRequest('新密码需为 8-72 位，且同时包含字母和数字', 'PASSWORD_POLICY_FAILED');
-  return password;
+function refreshStudentAccount(ctx, userId, orgId) {
+  const rawUser = row('SELECT * FROM users WHERE id = ? AND org_id = ?', [userId, orgId]);
+  return studentAccountOverview({ ...ctx, auth: { ...ctx.auth, rawUser } });
 }
 
 export async function handleStudent(ctx) {
@@ -391,12 +466,74 @@ export async function handleStudent(ctx) {
   if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);
 
   if (part === '/account/profile' && method === 'PUT') {
+    assertCurrentPassword(ctx, ctx.body?.currentPassword);
     const displayName = nonEmptyString(ctx.body?.displayName, '显示名称', { max: 60 });
-    const before = { displayName: auth.user.displayName };
-    q('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ? AND org_id = ?', [displayName, nowIso(), auth.user.id, auth.user.orgId]);
-    audit(ctx, 'STUDENT_PROFILE_UPDATE', 'USER', auth.user.id, before, { displayName });
-    const updatedAuth = { ...auth, rawUser: row('SELECT * FROM users WHERE id = ?', [auth.user.id]) };
-    return { ...studentAccountOverview({ ...ctx, auth: updatedAuth }), updated: true };
+    const avatarKey = normalizeStudentAvatarKey(ctx.body?.avatarKey);
+    const before = { displayName: auth.user.displayName, avatarKey: auth.rawUser.avatar_key || null };
+    q('UPDATE users SET display_name = ?, avatar_key = ?, updated_at = ? WHERE id = ? AND org_id = ?', [displayName, avatarKey, nowIso(), auth.user.id, auth.user.orgId]);
+    audit(ctx, 'STUDENT_PROFILE_UPDATE', 'USER', auth.user.id, before, { displayName, avatarKey });
+    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), updated: true };
+  }
+
+  if (part === '/account/guardian' && method === 'PUT') {
+    assertCurrentPassword(ctx, ctx.body?.currentPassword);
+    const guardian = normalizeStudentGuardian(ctx.body?.guardian);
+    const before = {
+      name: auth.rawUser.guardian_name || null,
+      phone: auth.rawUser.guardian_phone || null,
+      relationship: auth.rawUser.guardian_relationship || null,
+      consentedAt: auth.rawUser.guardian_consented_at || null,
+    };
+    const now = nowIso();
+    q(
+      'UPDATE users SET guardian_name = ?, guardian_phone = ?, guardian_relationship = ?, guardian_consented_at = ?, updated_at = ? WHERE id = ? AND org_id = ?',
+      guardian ? [guardian.name, guardian.phone, guardian.relationship, now, now, auth.user.id, auth.user.orgId] : [null, null, null, null, now, auth.user.id, auth.user.orgId],
+    );
+    audit(ctx, 'STUDENT_GUARDIAN_UPDATE', 'USER', auth.user.id, before, guardian ? { ...guardian, consentedAt: now } : null);
+    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), updated: true };
+  }
+
+  if (part === '/account/privacy' && method === 'PUT') {
+    assertCurrentPassword(ctx, ctx.body?.currentPassword);
+    if (!Object.hasOwn(ctx.body || {}, 'showcaseAnonymous') || typeof ctx.body.showcaseAnonymous !== 'boolean') throw errors.badRequest('作品墙匿名设置必须是布尔值', 'INVALID_PRIVACY_SETTING');
+    if (!Object.hasOwn(ctx.body || {}, 'allowFeature') || typeof ctx.body.allowFeature !== 'boolean') throw errors.badRequest('精选授权设置必须是布尔值', 'INVALID_PRIVACY_SETTING');
+    const before = { showcaseAnonymous: Boolean(auth.rawUser.privacy_showcase_anonymous), allowFeature: Boolean(auth.rawUser.privacy_allow_feature) };
+    q('UPDATE users SET privacy_showcase_anonymous = ?, privacy_allow_feature = ?, updated_at = ? WHERE id = ? AND org_id = ?', [ctx.body.showcaseAnonymous ? 1 : 0, ctx.body.allowFeature ? 1 : 0, nowIso(), auth.user.id, auth.user.orgId]);
+    audit(ctx, 'STUDENT_PRIVACY_UPDATE', 'USER', auth.user.id, before, { showcaseAnonymous: ctx.body.showcaseAnonymous, allowFeature: ctx.body.allowFeature });
+    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), updated: true };
+  }
+
+  if (part === '/account/requests' && method === 'POST') {
+    assertCurrentPassword(ctx, ctx.body?.currentPassword);
+    const type = String(ctx.body?.type || '');
+    if (!ACCOUNT_REQUEST_TYPES.includes(type)) throw errors.badRequest('账号申请类型无效', 'INVALID_ACCOUNT_REQUEST_TYPE');
+    if (ctx.body?.confirmed !== true) throw errors.badRequest('请先确认知晓申请影响', 'ACCOUNT_REQUEST_CONFIRM_REQUIRED');
+    const reason = String(ctx.body?.reason || '').trim();
+    if (reason.length > 1000) throw errors.badRequest('申请原因不能超过 1000 个字符', 'ACCOUNT_REQUEST_REASON_TOO_LONG');
+    const duplicate = row('SELECT id FROM account_requests WHERE user_id = ? AND org_id = ? AND type = ? AND status = ?', [auth.user.id, auth.user.orgId, type, 'PENDING']);
+    if (duplicate) throw errors.conflict('你已提交过同类型的待处理申请', 'ACCOUNT_REQUEST_ALREADY_PENDING');
+    const requestId = id('account_request');
+    q('INSERT INTO account_requests(id,user_id,org_id,type,reason,status,requested_at) VALUES (?,?,?,?,?,?,?)', [requestId, auth.user.id, auth.user.orgId, type, reason || null, 'PENDING', nowIso()]);
+    audit(ctx, 'STUDENT_ACCOUNT_REQUEST_CREATE', 'ACCOUNT_REQUEST', requestId, null, { type, reason: reason || null });
+    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), request: accountRequestRow(row('SELECT * FROM account_requests WHERE id = ?', [requestId])) };
+  }
+
+  let accountRequestMatch = part.match(/^\/account\/requests\/([^/]+)$/);
+  if (accountRequestMatch && method === 'GET') {
+    const request = row('SELECT * FROM account_requests WHERE id = ? AND user_id = ? AND org_id = ?', [accountRequestMatch[1], auth.user.id, auth.user.orgId]);
+    if (!request) throw errors.notFound('账号申请不存在', 'ACCOUNT_REQUEST_NOT_FOUND');
+    return accountRequestRow(request);
+  }
+
+  accountRequestMatch = part.match(/^\/account\/requests\/([^/]+)\/cancel$/);
+  if (accountRequestMatch && method === 'PUT') {
+    assertCurrentPassword(ctx, ctx.body?.currentPassword);
+    const request = row('SELECT * FROM account_requests WHERE id = ? AND user_id = ? AND org_id = ?', [accountRequestMatch[1], auth.user.id, auth.user.orgId]);
+    if (!request) throw errors.notFound('账号申请不存在', 'ACCOUNT_REQUEST_NOT_FOUND');
+    if (request.status !== 'PENDING') throw errors.conflict('申请已处理，不能撤销', 'ACCOUNT_REQUEST_ALREADY_HANDLED');
+    q("UPDATE account_requests SET status = 'CANCELLED', resolved_at = ?, resolved_by = ? WHERE id = ? AND status = 'PENDING'", [nowIso(), auth.user.id, request.id]);
+    audit(ctx, 'STUDENT_ACCOUNT_REQUEST_CANCEL', 'ACCOUNT_REQUEST', request.id, accountRequestRow(request), { status: 'CANCELLED' });
+    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), cancelled: true };
   }
 
   if (part === '/account/password' && method === 'PUT') {
@@ -417,6 +554,7 @@ export async function handleStudent(ctx) {
 
   const sessionMatch = part.match(/^\/account\/sessions\/([^/]+)\/revoke$/);
   if (sessionMatch && method === 'PUT') {
+    assertCurrentPassword(ctx, ctx.body?.currentPassword);
     const session = row('SELECT * FROM sessions WHERE id = ? AND user_id = ? AND org_id = ?', [sessionMatch[1], auth.user.id, auth.user.orgId]);
     if (!session) throw errors.notFound('登录会话不存在', 'SESSION_NOT_FOUND');
     if (session.superseded_at || session.expires_at <= nowIso()) throw errors.conflict('登录会话已失效', 'SESSION_ALREADY_INVALID');
@@ -940,8 +1078,10 @@ export async function handleStudent(ctx) {
       const keyword = '%' + search.replace(new RegExp(`[%\\_]`, 'g'), (char) => '\\' + char) + '%';
       conditions.push("work.title LIKE ? ESCAPE '\\' OR work.description LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\'"); params.push(keyword, keyword, keyword);
     }
-    const publicName = (value) => {
-      const name = String(value || '').trim(); return name ? name.slice(0, 1) + '同学' : '小创作者';
+    const publicName = (value, anonymous) => {
+      const name = String(value || '').trim();
+      if (anonymous) return '小创作者';
+      return name ? name.slice(0, 1) + '同学' : '小创作者';
     };
     const where = conditions.join(' AND ');
     const total = Number(row(`SELECT COUNT(1) AS total FROM works work LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE ${where}`, params).total || 0);
@@ -972,7 +1112,7 @@ export async function handleStudent(ctx) {
         return accumulator;
       }, []);
     const items = rows(
-      `SELECT work.*, student.display_name AS student_name, class.name AS class_name, lesson.title AS lesson_title
+      `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, lesson.title AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
@@ -984,7 +1124,7 @@ export async function handleStudent(ctx) {
       const normalized = normalizeWork(work, { includeSnapshot: false });
       return {
         ...normalized,
-        studentName: publicName(work.student_name),
+        studentName: publicName(work.student_name, !!work.student_anonymous),
         studentId: undefined,
         projectId: undefined,
         teacherComment: undefined,
@@ -1031,7 +1171,7 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/showcase\/([^/]+)$/);
   if (match && method === 'GET') {
     const work = row(
-      `SELECT work.*, student.display_name AS student_name, class.name AS class_name, lesson.title AS lesson_title
+      `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, lesson.title AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
@@ -1040,11 +1180,10 @@ export async function handleStudent(ctx) {
       [match[1], auth.user.orgId],
     );
     if (!work) throw errors.notFound('已发布作品不存在', 'SHOWCASE_WORK_NOT_FOUND');
-    const name = String(work.student_name || '').trim();
     const normalized = normalizeWork(work, { includeSnapshot: true });
     return {
       ...normalized,
-      studentName: name ? name.slice(0, 1) + '同学' : '小创作者',
+      studentName: work.student_anonymous ? '小创作者' : (String(work.student_name || '').trim().slice(0, 1) + '同学' || '小创作者'),
       studentId: undefined,
       projectId: undefined,
       teacherComment: undefined,

@@ -246,6 +246,17 @@ export function normalizeUser(value, { includeAuthMeta = false } = {}) {
     periodStartAt: value.period_start_at || null,
     periodResetAt: value.period_reset_at || null,
     magicStones: Number(value.magic_stones || 0),
+    avatarKey: value.avatar_key || null,
+    guardian: value.guardian_name == null && value.guardian_phone == null && value.guardian_relationship == null ? null : {
+      name: value.guardian_name || null,
+      phone: value.guardian_phone || null,
+      relationship: value.guardian_relationship || null,
+      consentedAt: value.guardian_consented_at || null,
+    },
+    privacy: {
+      showcaseAnonymous: !!value.privacy_showcase_anonymous,
+      allowFeature: !!value.privacy_allow_feature,
+    },
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };

@@ -747,15 +747,132 @@ function StudentCredits({ api }) {
   </>;
 }
 
+const AVATAR_LABELS = { star: '星星', rocket: '火箭', cat: '小猫', fox: '狐狸', robot: '机器人', panda: '熊猫', owl: '猫头鹰', whale: '鲸鱼' };
+const GUARDIAN_RELATIONSHIP_LABELS = { PARENT: '父母', GRANDPARENT: '祖父母 / 外祖父母', OTHER_GUARDIAN: '其他监护人' };
 function StudentAccount({ api, onRelogin }) {
-  const state = useData(() => api.get('student/account'), [api]); const [displayName, setDisplayName] = useState(''); const [profileMessage, setProfileMessage] = useState(''); const [profileBusy, setProfileBusy] = useState(false); const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '' }); const [passwordMessage, setPasswordMessage] = useState(''); const [passwordBusy, setPasswordBusy] = useState(false); const [revokeBusy, setRevokeBusy] = useState('');
-  useEffect(() => { if (state.data?.user) setDisplayName(state.data.user.displayName || ''); }, [state.data?.user?.id, state.data?.user?.displayName]);
+  const state = useData(() => api.get('student/account'), [api]);
+  const [displayName, setDisplayName] = useState('');
+  const [avatarKey, setAvatarKey] = useState('');
+  const [profilePassword, setProfilePassword] = useState('');
+  const [profileMessage, setProfileMessage] = useState('');
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [guardianForm, setGuardianForm] = useState({ name: '', phone: '', relationship: '', consent: false });
+  const [guardianPassword, setGuardianPassword] = useState('');
+  const [guardianMessage, setGuardianMessage] = useState('');
+  const [guardianBusy, setGuardianBusy] = useState(false);
+  const [privacyForm, setPrivacyForm] = useState({ showcaseAnonymous: true, allowFeature: true });
+  const [privacyPassword, setPrivacyPassword] = useState('');
+  const [privacyMessage, setPrivacyMessage] = useState('');
+  const [privacyBusy, setPrivacyBusy] = useState(false);
+  const [requestForm, setRequestForm] = useState({ type: 'DATA_EXPORT', reason: '', confirmed: false, currentPassword: '' });
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestMessage, setRequestMessage] = useState('');
+  const [requestDetail, setRequestDetail] = useState(null);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '' });
+  const [passwordMessage, setPasswordMessage] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [revokeBusy, setRevokeBusy] = useState('');
+  useEffect(() => {
+    if (!state.data?.user) return;
+    setDisplayName(state.data.user.displayName || '');
+    setAvatarKey(state.data.user.avatarKey || '');
+    setPrivacyForm({ showcaseAnonymous: !!state.data.user.privacy?.showcaseAnonymous, allowFeature: !!state.data.user.privacy?.allowFeature });
+    setGuardianForm({
+      name: state.data.user.guardian?.name || '',
+      phone: state.data.user.guardian?.phone || '',
+      relationship: state.data.user.guardian?.relationship || '',
+      consent: false,
+    });
+  }, [state.data?.user?.id, state.data?.user?.updatedAt]);
   if (state.loading) return <Loading />; if (state.error) return <ErrorState error={state.error} onRetry={state.refresh} />;
   const data = state.data;
-  async function saveProfile(event) { event.preventDefault(); setProfileBusy(true); setProfileMessage(''); try { await api.put('student/account/profile', { displayName }); await state.refresh(); setProfileMessage('资料已更新。'); } catch (error) { setProfileMessage(error.message); } finally { setProfileBusy(false); } }
+  async function saveProfile(event) {
+    event.preventDefault(); setProfileBusy(true); setProfileMessage('');
+    try { await api.put('student/account/profile', { currentPassword: profilePassword, displayName, avatarKey: avatarKey || null }); await state.refresh(); setProfilePassword(''); setProfileMessage('资料已更新。'); }
+    catch (error) { setProfileMessage(error.message); } finally { setProfileBusy(false); }
+  }
+  async function saveGuardian(event) {
+    event.preventDefault(); setGuardianBusy(true); setGuardianMessage('');
+    const guardian = guardianForm.name || guardianForm.phone || guardianForm.relationship || guardianForm.consent ? guardianForm : null;
+    try { await api.put('student/account/guardian', { currentPassword: guardianPassword, guardian }); await state.refresh(); setGuardianPassword(''); setGuardianForm((old) => ({ ...old, consent: false })); setGuardianMessage(guardian ? '监护人信息已保存。' : '监护人信息已清空。'); }
+    catch (error) { setGuardianMessage(error.message); } finally { setGuardianBusy(false); }
+  }
+  async function savePrivacy(event) {
+    event.preventDefault(); setPrivacyBusy(true); setPrivacyMessage('');
+    try { await api.put('student/account/privacy', { currentPassword: privacyPassword, ...privacyForm }); await state.refresh(); setPrivacyPassword(''); setPrivacyMessage('隐私设置已保存。'); }
+    catch (error) { setPrivacyMessage(error.message); } finally { setPrivacyBusy(false); }
+  }
+  async function submitRequest(event) {
+    event.preventDefault(); setRequestBusy(true); setRequestMessage('');
+    try { await api.post('student/account/requests', requestForm); await state.refresh(); setRequestForm((old) => ({ ...old, reason: '', confirmed: false, currentPassword: '' })); setRequestMessage('申请已提交，请等待机构管理员处理。'); }
+    catch (error) { setRequestMessage(error.message); } finally { setRequestBusy(false); }
+  }
+  async function cancelRequest(item) {
+    setRequestBusy(item.id); setRequestMessage('');
+    try { await api.put(`student/account/requests/${item.id}/cancel`, { currentPassword: requestForm.currentPassword }); await state.refresh(); setRequestForm((old) => ({ ...old, currentPassword: '' })); setRequestMessage('待处理申请已撤销。'); }
+    catch (error) { setRequestMessage(error.message); } finally { setRequestBusy(''); }
+  }
+  async function openRequestDetail(item) {
+    setRequestDetail(item); setDetailBusy(true);
+    try { setRequestDetail(await api.get(`student/account/requests/${item.id}`)); }
+    catch (error) { setRequestMessage(error.message); setRequestDetail(null); }
+    finally { setDetailBusy(false); }
+  }
   async function changePassword(event) { event.preventDefault(); setPasswordBusy(true); setPasswordMessage(''); try { const result = await api.put('student/account/password', passwords); if (result.reloginRequired) onRelogin(); } catch (error) { setPasswordMessage(error.message); setPasswordBusy(false); } }
-  async function revoke(session) { setRevokeBusy(session.id); try { const result = await api.put('student/account/sessions/' + session.id + '/revoke', {}); if (result.reloginRequired) onRelogin(); else state.refresh(); } catch (error) { setPasswordMessage(error.message); } finally { setRevokeBusy(''); } }
-  return <><PageHeader eyebrow="账号中心" title="个人账号" description="管理你的个人资料、机构归属和登录安全。" actions={<button className="secondary-button" onClick={state.refresh}>刷新</button>} /><div className="split"><Panel title="个人资料"><form onSubmit={saveProfile}><label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength="60" required /></label><button className="primary-button" disabled={profileBusy}>{profileBusy ? '保存中…' : '保存资料'}</button></form>{profileMessage && <Notice tone={profileMessage.includes('已') ? 'success' : 'danger'}>{profileMessage}</Notice>}</Panel><Panel title="账号状态"><div className="item-card"><p><strong>{data.user.login}</strong> · <Status value={data.user.status} /></p><p className="muted">角色：学生 · 注册于 {formatDate(data.user.createdAt)}</p><p className="muted">账号有效期：{formatDate(data.user.expiresAt)}</p></div></Panel></div><div className="split"><Panel title="机构与班级"><p><strong>{data.organization?.name || '未归属机构'}</strong></p>{data.classes?.length ? <div className="card-list">{data.classes.map((item) => <div className="item-card" key={item.id}><strong>{item.name}</strong><p className="muted">老师：{item.teacherName || '—'} · {item.usageMode || '跟随课堂'}</p></div>)}</div> : <Empty title="暂未加入班级" />}</Panel><Panel title="修改密码"><form onSubmit={changePassword}><label>当前密码<input type="password" value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} required /></label><label>新密码<input type="password" value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} minLength="8" maxLength="72" required /><small className="muted">8-72 位，必须同时包含字母和数字</small></label><button className="primary-button" disabled={passwordBusy}>{passwordBusy ? '修改中…' : '修改密码并重新登录'}</button></form>{passwordMessage && <Notice tone="danger">{passwordMessage}</Notice>}</Panel></div><Panel title="登录会话"><p className="muted">当前会话：{data.currentSessionId}</p>{data.sessions?.length ? <div className="table-wrap"><table><thead><tr><th>客户端</th><th>创建时间</th><th>过期时间</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.sessions.map((session) => <tr key={session.id}><td>{session.clientType}</td><td>{formatDate(session.createdAt)}</td><td>{formatDate(session.expiresAt)}</td><td>{session.current ? <span className="status success">当前会话</span> : <span className="status muted">有效</span>}</td><td><button className="text-button" disabled={revokeBusy === session.id} onClick={() => revoke(session)}>{session.current ? '退出此设备' : '撤销'}</button></td></tr>)}</tbody></table></div> : <Empty title="暂无有效会话" />}</Panel></>;
+  async function revoke(session) { setRevokeBusy(session.id); try { const result = await api.put('student/account/sessions/' + session.id + '/revoke', { currentPassword: passwords.currentPassword }); if (result.reloginRequired) onRelogin(); else { setPasswords({ currentPassword: '', newPassword: '' }); state.refresh(); } } catch (error) { setPasswordMessage(error.message); } finally { setRevokeBusy(''); } }
+  return <>
+    <PageHeader eyebrow="账号中心" title="个人账号" description="管理你的个人资料、监护人联系信息、隐私授权和登录安全。" actions={<button className="secondary-button" onClick={state.refresh}>刷新</button>} />
+    <div className="split">
+      <Panel title="个人资料"><form onSubmit={saveProfile}>
+        <label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength="60" required /></label>
+        <label>平台头像<select value={avatarKey} onChange={(event) => setAvatarKey(event.target.value)}><option value="">不使用头像</option>{(data.profileOptions?.avatarKeys || Object.keys(AVATAR_LABELS)).map((key) => <option key={key} value={key}>{AVATAR_LABELS[key] || key}</option>)}</select></label>
+        <label>当前密码<input type="password" value={profilePassword} onChange={(event) => setProfilePassword(event.target.value)} required /></label>
+        <button className="primary-button" disabled={profileBusy}>{profileBusy ? '保存中…' : '保存资料'}</button>
+      </form>{profileMessage && <Notice tone={profileMessage.includes('已') ? 'success' : 'danger'}>{profileMessage}</Notice>}</Panel>
+      <Panel title="账号状态"><div className="item-card"><p><strong>{data.user.login}</strong> · <Status value={data.user.status} /></p><p className="muted">角色：学生 · 注册于 {formatDate(data.user.createdAt)}</p><p className="muted">账号有效期：{formatDate(data.user.expiresAt)}</p></div></Panel>
+    </div>
+    <Panel title="监护人联系信息（可选）" description={data.profileOptions?.dataMinimization}>
+      <form onSubmit={saveGuardian}>
+        <div className="form-grid">
+          <label>监护人姓名<input value={guardianForm.name} onChange={(event) => setGuardianForm({ ...guardianForm, name: event.target.value })} maxLength="60" /></label>
+          <label>监护人手机号<input value={guardianForm.phone} onChange={(event) => setGuardianForm({ ...guardianForm, phone: event.target.value })} maxLength="20" /></label>
+          <label>与学生关系<select value={guardianForm.relationship} onChange={(event) => setGuardianForm({ ...guardianForm, relationship: event.target.value })}><option value="">请选择</option>{(data.profileOptions?.guardianRelationships || Object.keys(GUARDIAN_RELATIONSHIP_LABELS)).map((key) => <option key={key} value={key}>{GUARDIAN_RELATIONSHIP_LABELS[key] || key}</option>)}</select></label>
+        </div>
+        <label className="check-row"><input type="checkbox" checked={guardianForm.consent} onChange={(event) => setGuardianForm({ ...guardianForm, consent: event.target.checked })} />监护人确认知晓并同意提供上述联系信息</label>
+        <label>当前密码<input type="password" value={guardianPassword} onChange={(event) => setGuardianPassword(event.target.value)} required /></label>
+        <div className="row-actions"><button className="primary-button" disabled={guardianBusy}>{guardianBusy ? '保存中…' : '保存监护人信息'}</button><button type="button" className="secondary-button" disabled={guardianBusy} onClick={() => { setGuardianForm({ name: '', phone: '', relationship: '', consent: false }); }}>清空后保存</button></div>
+      </form>
+      {guardianMessage && <Notice tone={guardianMessage.includes('已') ? 'success' : 'danger'}>{guardianMessage}</Notice>}
+    </Panel>
+    <Panel title="隐私与展示授权">
+      <form onSubmit={savePrivacy}>
+        <label className="check-row"><input type="checkbox" checked={privacyForm.showcaseAnonymous} onChange={(event) => setPrivacyForm({ ...privacyForm, showcaseAnonymous: event.target.checked })} />在作品墙完全匿名展示（作者显示为“小创作者”）</label>
+        <label className="check-row"><input type="checkbox" checked={privacyForm.allowFeature} onChange={(event) => setPrivacyForm({ ...privacyForm, allowFeature: event.target.checked })} />允许老师和机构将我的作品设为精选</label>
+        <label>当前密码<input type="password" value={privacyPassword} onChange={(event) => setPrivacyPassword(event.target.value)} required /></label>
+        <button className="primary-button" disabled={privacyBusy}>{privacyBusy ? '保存中…' : '保存隐私设置'}</button>
+      </form>
+      {privacyMessage && <Notice tone={privacyMessage.includes('已') ? 'success' : 'danger'}>{privacyMessage}</Notice>}
+    </Panel>
+    <div className="split">
+      <Panel title="机构与班级"><p><strong>{data.organization?.name || '未归属机构'}</strong></p>{data.classes?.length ? <div className="card-list">{data.classes.map((item) => <div className="item-card" key={item.id}><strong>{item.name}</strong><p className="muted">老师：{item.teacherName || '—'} · {item.usageMode || '跟随课堂'}</p></div>)}</div> : <Empty title="暂未加入班级" />}</Panel>
+      <Panel title="修改密码"><form onSubmit={changePassword}><label>当前密码<input type="password" value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} required /></label><label>新密码<input type="password" value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} minLength="8" maxLength="72" required /><small className="muted">8-72 位，必须同时包含字母和数字</small></label><button className="primary-button" disabled={passwordBusy}>{passwordBusy ? '修改中…' : '修改密码并重新登录'}</button></form>{passwordMessage && <Notice tone="danger">{passwordMessage}</Notice>}</Panel>
+    </div>
+    <Panel title="注销与数据申请"><form onSubmit={submitRequest}>
+      <div className="form-grid">
+        <label>申请类型<select value={requestForm.type} onChange={(event) => setRequestForm({ ...requestForm, type: event.target.value })}><option value="DATA_EXPORT">导出我的数据概览</option><option value="DELETION">注销我的账号</option></select></label>
+        <label>申请原因（可选）<input value={requestForm.reason} onChange={(event) => setRequestForm({ ...requestForm, reason: event.target.value })} maxLength="1000" /></label>
+      </div>
+      <label className="check-row"><input type="checkbox" checked={requestForm.confirmed} onChange={(event) => setRequestForm({ ...requestForm, confirmed: event.target.checked })} />我确认知晓申请影响：注销申请批准后账号会立即停用；数据导出批准后可在本页查看导出内容。</label>
+      <label>当前密码<input type="password" value={requestForm.currentPassword} onChange={(event) => setRequestForm({ ...requestForm, currentPassword: event.target.value })} required /></label>
+      <button className="primary-button" disabled={requestBusy === true || !requestForm.confirmed}>{requestBusy === true ? '提交中…' : '提交申请'}</button>
+    </form>{requestMessage && <Notice tone={requestMessage.includes('已') ? 'success' : 'danger'}>{requestMessage}</Notice>}</Panel>
+    <Panel title="申请记录">
+      {data.requests?.items?.length ? <div className="table-wrap"><table><thead><tr><th>类型</th><th>状态</th><th>提交时间</th><th>处理结果</th><th>操作</th></tr></thead><tbody>{data.requests.items.map((item) => <tr key={item.id}><td>{item.type === 'DELETION' ? '注销账号' : '数据导出'}</td><td><Status value={item.status} /></td><td>{formatDate(item.requestedAt)}</td><td><div>{item.resolution || '待处理'}</div><div className="muted">{item.resolvedAt ? formatDate(item.resolvedAt) : '—'}</div></td><td><div className="row-actions">{item.status === 'PENDING' && <button className="text-button" disabled={requestBusy === item.id} onClick={() => cancelRequest(item)}>撤销</button>}{item.type === 'DATA_EXPORT' && item.status === 'APPROVED' && <button className="text-button" disabled={detailBusy} onClick={() => openRequestDetail(item)}>查看数据</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="暂无账号申请" body="如需导出数据或注销账号，可在上方提交真实申请。" />}
+      {requestDetail && !detailBusy ? <Panel title="我的数据导出" actions={<button className="secondary-button" onClick={() => setRequestDetail(null)}>关闭</button>}><pre className="json-view">{JSON.stringify(requestDetail.exportPayload, null, 2)}</pre></Panel> : null}
+    </Panel>
+    <Panel title="登录会话"><p className="muted">当前会话：{data.currentSessionId}</p>{data.sessions?.length ? <div className="table-wrap"><table><thead><tr><th>客户端</th><th>创建时间</th><th>过期时间</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.sessions.map((session) => <tr key={session.id}><td>{session.clientType}</td><td>{formatDate(session.createdAt)}</td><td>{formatDate(session.expiresAt)}</td><td>{session.current ? <span className="status success">当前会话</span> : <span className="status muted">有效</span>}</td><td><button className="text-button" disabled={revokeBusy === session.id} onClick={() => revoke(session)}>{session.current ? '退出此设备' : '撤销'}</button></td></tr>)}</tbody></table></div> : <Empty title="暂无有效会话" />}</Panel>
+  </>;
 }
 
 function StudentInbox({ api }) {

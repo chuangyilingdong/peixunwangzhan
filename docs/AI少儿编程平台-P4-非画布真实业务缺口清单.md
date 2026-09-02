@@ -76,7 +76,7 @@
 | `/showcase` | 机构作品墙 | STUDENT | `真实已有（2026-09-03，P4-S04）` | `works`、`classes`、`course_lessons`、`work_reports` | `GET /api/student/showcase`、`GET /:id`、`POST /:id/reports`、`PUT /api/org/works/:id/feature` | 仅本机构 `PUBLISHED`；作者脱敏与内部字段清理 | 站外公开分享、评论 / 点赞、访客统计 | 临时 SQLite P4-S04 API `112 pass / 0 fail`，覆盖筛选搜索分页、精选、举报与权限隔离 |
 | `/courses` | 我的课程 | STUDENT | `真实已有（2026-09-02）` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons`、`student_projects`、`works` | `GET /api/student/courses` | 课单进度；学生本人 / 机构隔离 | 学习首页任务、老师通知、继续创作聚合待补 | 临时库验证课程、班级、课时、作品状态与空态；学生只能看到本人数据 |
 | `/credits` | AI / 魔法石中心 | STUDENT | `真实已有（2026-09-03，P4-S05）` | `users`、`billing_packages`、`usage_records`、`generation_jobs`、`media_assets`、`student_projects`、`project_snapshots`、`class_sessions`、`classes` | `GET /api/ai/center`、`GET/POST /api/ai/generations/history`、`GET /api/ai/generations/history/:id`、`GET /api/student/credits` | 套餐有效期、能力状态、任务 / 素材本人隔离；失败不扣费，成功任务扣 1 积分 | 真实外部 AI provider、充值与对账仍属后续 / 外部决策 | 临时 SQLite P4-S05 API `85 pass / 0 fail`，覆盖能力状态、失败重试、素材使用推导、mock 标识和权限隔离 |
-| `/account` | 账号安全 | STUDENT | `真实已有（2026-09-02）` | `users`、`sessions`、`organizations`、`classes`、`class_members` | `GET/PUT /api/student/account`、`/profile`、`/password`、`/sessions/:id/revoke` | 账号状态；敏感操作需本人当前密码；学生不可改机构归属 | 头像、监护人资料、隐私设置、注销 / 数据请求入口待补 | 临时库验证资料校验、旧密码 / 弱密码 / 重放、当前及跨学生会话撤销 |
+| `/account` | 账号安全 | STUDENT | `真实已有（2026-09-03，P4-S06）` | `users`、`sessions`、`account_requests`、`organizations`、`classes`、`class_members`、`student_projects`、`works`、`generation_jobs`、`usage_records` | `GET/PUT /api/student/account`、`/profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke`、`/requests`、`/requests/:id`、`/requests/:id/cancel`；机构 `GET/PUT /api/org/account-requests/:id` | 申请 `PENDING/APPROVED/REJECTED/CANCELLED`；敏感操作需本人当前密码；仅 ORG_ADMIN 处理；学生不可改机构归属 | 真实头像文件上传、邮件短信、监管删除证明、跨机构迁移 | 临时库验证资料 / 隐私、旧密码、弱密码、会话、申请状态机、导出、软注销、审计与越权 |
 | `/inbox` | 消息中心 | STUDENT | `真实已有（2026-09-02）` | `notifications`、`notification_recipients` | `GET /api/student/inbox`、`PUT /api/student/inbox/:id/read`、`PUT /api/student/inbox/read-all` | 仅本人已投递且当前机构范围内的 `PUBLISHED` 消息；支持单条/全部已读 | 忽略状态、失败重试、外部通知通道 | 临时库验证平台公告、机构学生通知、定时到期、已读持久化、撤回隐藏与跨端越权 |
 | `/help` | 学习帮助 | STUDENT | `页面壳层` | 静态内容 | 无 | 无 | 正式帮助内容 | 内容属产品决策，可接静态 CMS |
 | `/login` | 登录 | public | `真实已有` | `sessions` | auth | 账号状态与会话错误码 | 手机流程 | 现有认证回归 |
@@ -109,8 +109,11 @@
 11. [x] **P4-O08 积分充值、用量和对账（2026-09-03 已完成）**：机构积分账务已形成期初流水、冻结、人工调整、退款 / 冲正、原子扣减、流水复算、筛选导出和失败任务不扣费规则；在线支付、支付回调、自动续费与真实充值成功状态未接入，也未伪装。
 12. [x] **P4-S02 我的项目管理（画布外层）（2026-09-03 已完成）**：项目列表支持关键词搜索、课程 / 课时 / 班级 / 状态筛选和进行中 / 归档 / 回收站视图；草稿支持重命名、复制、归档、软删除与恢复，提交后和发布后规则明确，所有操作限定本人项目并写审计。
 13. [x] **P4-S03 我的作品与反馈闭环（2026-09-03 已完成）**：多轮提交历史、驳回 / 下架后修改重提、整体点评与节点批注已读、首页待反馈真实消失、发布申请 / 撤回和教师处理申请均已接通真实数据与审计。
+14. [x] **P4-S04 机构作品墙体验完善（2026-09-03 已完成）**：作品墙搜索筛选分页、详情只读预览、机构精选、作者脱敏、举报闭环和机构端作品筛选已接通真实数据。
+15. [x] **P4-S05 AI / 魔法石中心（2026-09-03 已完成）**：学生本人 AI 能力状态、额度、任务历史与失败详情、失败重试、素材使用推导和课堂限制提示已接通真实数据；local-mock 与外部 provider 边界明确，失败任务不误扣。
+16. [x] **P4-S06 个人账号与安全设置（2026-09-03 已完成）**：预设头像、监护人资料、隐私授权、当前密码验证、登录设备、账号注销 / 数据导出申请、机构处理、数据概览和软注销均已接通真实数据与审计。
 
-## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06 / P4-O07 / P4-O08 / P4-S01 / P4-S02 / P4-S03）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06 / P4-O07 / P4-O08 / P4-S01 / P4-S02 / P4-S03 / P4-S04 / P4-S05 / P4-S06）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -291,3 +294,15 @@
 - [x] 素材使用：基于当前画布和历史版本中的素材地址推导使用状态，不伪造素材引用表；接口返回素材总数并明确最近 100 条样本边界。
 - [x] 边界：local-mock 明确标识为本地模拟，不上传真实文件；外部 provider 未适配时保留失败任务并返回明确错误，不伪装成功。
 - [x] 验证：临时 SQLite P4-S05 API `85 pass / 0 fail`；P3 API 回归 `48 pass / 0 fail`；学生端生产构建、四端生产构建、后端语法检查和 `git diff --check` 通过。
+
+### 8.19 P4-S06 验收记录（2026-09-03）
+
+- [x] API：`GET /api/student/account` 聚合本人、机构、班级、课堂、登录会话、头像 / 监护人 / 隐私和账号申请状态；`PUT /profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke` 均要求当前密码并只作用于本人。
+- [x] 资料最小化：头像仅限平台白名单键；监护人可选、可清空，填写时校验姓名、手机号、关系和同意项并记录同意时间；不收集住址、身份证号、社交账号或头像文件。
+- [x] 隐私闭环：作品墙匿名展示和精选授权由学生本人控制；关闭精选后机构端、平台端精选操作被拒绝；作品墙作者按匿名策略脱敏。
+- [x] 申请闭环：`account_requests` 支持 `DELETION / DATA_EXPORT`，状态为 `PENDING / APPROVED / REJECTED / CANCELLED`；待处理同类型申请不可重复提交，学生可撤销，机构管理员必须填写处理说明。
+- [x] 数据导出：批准时生成 `STUDENT_DATA_EXPORT_V1` 数据库概览，包含班级、项目、作品、生成任务、用量与课堂上下文；学生和机构管理员按归属查看，导出排除密码、令牌和内部审计字段。
+- [x] 软注销：批准注销后学生 `DISABLED`、写 `deleted_at`、撤销全部会话、清空头像与监护人敏感资料；业务记录和审计保留，登录与会话立即失效。
+- [x] 审计：资料、监护人、隐私、密码、会话撤销、申请创建 / 撤销、数据导出批准和注销批准均写入 `audit_logs`；验收直接查询临时库确认关键 action 存在。
+- [x] 验证：临时 SQLite P4-S06 API `97 pass / 0 fail`；旧 SQLite 35 表 / 6 用户迁移后新增 7 个用户字段与 `account_requests` 表且数据保留；P3 API 回归 `48 pass / 0 fail`；四端生产构建与 `git diff --check` 通过。
+- [x] 边界：未修改 `packages/canvas`，未触碰真实业务数据库，未部署线上；真实头像上传、邮件 / 短信通知、监管删除证明、监管报送和跨机构账号迁移未伪装为已完成。
