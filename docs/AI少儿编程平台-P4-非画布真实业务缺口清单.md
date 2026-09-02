@@ -72,9 +72,9 @@
 | `/projects/:projectId/canvas` | 创作画布 | STUDENT | `真实已有（画布冻结）` | `student_projects`、`project_snapshots` | projects API | 草稿/提交 | 不修改 `packages/canvas` | 仅回归，不做画布改动 |
 | `/works` | 我的作品 / 提交记录 | STUDENT | `真实已有` | `works` | works submit/status | `PENDING/APPROVED/REJECTED/PUBLISHED` | 独立发布、重新发布、下架 | 学生只能访问本人作品 |
 | `/showcase` | 公开作品墙 | STUDENT | `真实已有` | `works` | showcase | `PUBLISHED` | 浏览计数与访客模型 | 当前只显示已发布作品 |
-| `/courses` | 我的课程 | STUDENT | `页面壳层` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons` | 待新增 | 课单进度 | 学生班级课程、课时进度、任务入口 | 先补只读 API，不涉及画布内部 |
-| `/credits` | 套餐与用量 | STUDENT | `页面壳层` | `users`、`billing_packages`、`usage_records` | 待新增 | 套餐有效期 | 本人额度、剩余、本月明细 | 只能查看本人，机构隔离 |
-| `/account` | 账号安全 | STUDENT | `页面壳层` | `users`、`sessions` | 待新增 | 账号状态 | 改名、改密、会话管理 | 需防旧密码/重放 |
+| `/courses` | 我的课程 | STUDENT | `真实已有（2026-09-02）` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons`、`student_projects`、`works` | `GET /api/student/courses` | 课单进度；学生本人 / 机构隔离 | 学习首页任务、老师通知、继续创作聚合待补 | 临时库验证课程、班级、课时、作品状态与空态；学生只能看到本人数据 |
+| `/credits` | 套餐与用量 | STUDENT | `真实已有（2026-09-02）` | `users`、`billing_packages`、`usage_records`、`student_projects`、`class_sessions`、`classes` | `GET /api/student/credits` | 套餐有效期；学生本人 / 机构隔离 | 真实扣费服务、充值与对账仍属后续 / 外部决策 | 临时库验证额度、模态 / 状态 / 天数筛选、课堂上下文与越权 |
+| `/account` | 账号安全 | STUDENT | `真实已有（2026-09-02）` | `users`、`sessions`、`organizations`、`classes`、`class_members` | `GET/PUT /api/student/account`、`/profile`、`/password`、`/sessions/:id/revoke` | 账号状态；敏感操作需本人当前密码；学生不可改机构归属 | 头像、监护人资料、隐私设置、注销 / 数据请求入口待补 | 临时库验证资料校验、旧密码 / 弱密码 / 重放、当前及跨学生会话撤销 |
 | `/help` | 学习帮助 | STUDENT | `页面壳层` | 静态内容 | 无 | 无 | 正式帮助内容 | 内容属产品决策，可接静态 CMS |
 | `/login` | 登录 | public | `真实已有` | `sessions` | auth | 账号状态与会话错误码 | 手机流程 | 现有认证回归 |
 
@@ -94,11 +94,11 @@
 ## 7. P0 后续批次建议
 
 1. **P4-01 平台计费与作品闭环（2026-09-02 第一批已完成）**：平台用量明细、平台作品库、作品下架、机构账务视图；在线支付、计费规则配置、精选/举报/违规处理未包含，转入后续批次。
-2. **P4-02 学生课程与账号闭环**：学生课程、额度、账号安全，仅使用现有表。
+2. **P4-02 学生课程与账号闭环（2026-09-02 第一批已完成）**：学生课程、额度、账号安全已接通现有表和真实 API；学习首页任务聚合、AI 能力中心增强、头像 / 监护人 / 隐私 / 注销等剩余项转入后续批次。
 3. **P4-03 通知与物料闭环**：先补 inbox / promo-materials 表，再接两端页面。
 4. **P4-04 运营活动与外部能力**：黑客松、微信提醒、支付、上传、真实 AI 均需先迁移或明确外部决策。
 
-## 8. 本轮总验收（P4-00 / P4-01）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -119,3 +119,13 @@
 - [x] 平台端 `/works`、`/billing` 与机构端 `/recharge` 从壳层/部分真实升级为真实只读或治理视图；不伪造支付到账、模型配置和运营数据。
 - [x] 已知边界：在线支付、计费规则配置、精选/举报/违规处理未包含；平台下架接口当前由前端限制仅对 `PUBLISHED` 操作，服务端严格状态机校验留待统一状态机批次。
 - [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不部署线上环境。
+
+### 8.3 P4-02 第一批验收记录（2026-09-02）
+
+- [x] `node --check apps/server/src/routes/student.js` 通过。
+- [x] 临时 SQLite 初始化 + seed 后，P4-02 API 验收 `11 pass / 0 fail`：覆盖学生登录、课程 / 额度 / 账号返回结构、非法天数 / 状态、平台 / 机构 / 教师越权、跨学生会话撤销与未登录访问。
+- [x] `node .\p3-api-integration.mjs` 回归通过，`46 pass / 0 fail`。
+- [x] `pnpm.cmd run build` 四端生产构建全部通过。
+- [x] 学生端 `/courses`、`/credits`、`/account` 已由页面壳层升级为真实 API 页面；账号改名、改密后强制重新登录、会话撤销已形成闭环。
+- [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不触碰真实 `platform.db`，不部署线上环境。
+- [ ] 已知边界：学习首页任务聚合、真实 AI / 充值服务、头像 / 监护人 / 隐私 / 注销与数据请求入口仍未实现。

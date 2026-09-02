@@ -1,10 +1,15 @@
 import {
+  asPositiveInteger,
   audit,
+  clearAuthCookie,
   errors,
   id,
   json,
   nonEmptyString,
+  normalizeOrg,
+  normalizePackage,
   normalizeProject,
+  normalizeUser,
   normalizeWork,
   nowIso,
   q,
@@ -12,9 +17,13 @@ import {
   row,
   rows,
   transaction,
+  verifyPassword,
 } from '../lib.js';
+import { hashPassword } from '@platform/database';
 import {
   buildStudentContext,
+  getStudentActiveSessions,
+  getStudentMemberships,
   resolveProjectUsageContext,
   resolveStudentLessonContext,
 } from '../services/studentContext.js';
@@ -97,6 +106,137 @@ function assertProjectUsable(ctx, project) {
   return usageContext;
 }
 
+
+const USAGE_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
+const USAGE_STATUSES = new Set(['SUCCESS', 'FAILED', 'BLOCKED']);
+const WORK_STATUS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
+
+function studentCourseOverview(ctx) {
+  const context = buildStudentContext(ctx.auth.rawUser);
+  const projects = rows(`SELECT id, course_lesson_id, class_id, title, status, updated_at FROM student_projects WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`, [ctx.auth.user.id, ctx.auth.user.orgId]);
+  const works = rows('SELECT id, project_id, course_lesson_id, class_id, title, status, submitted_at FROM works WHERE student_id = ? AND org_id = ?', [ctx.auth.user.id, ctx.auth.user.orgId]);
+  const classById = new Map(context.classes.map((item) => [item.id, item]));
+  const activeLessonIds = new Set(context.activeSessions.map((item) => item.lessonId).filter(Boolean));
+  const projectGroups = new Map();
+  const workGroups = new Map();
+  for (const project of projects) {
+    if (!project.course_lesson_id) continue;
+    const group = projectGroups.get(project.course_lesson_id) || [];
+    group.push(project);
+    projectGroups.set(project.course_lesson_id, group);
+  }
+  for (const work of works) {
+    if (!work.course_lesson_id) continue;
+    const group = workGroups.get(work.course_lesson_id) || [];
+    group.push(work);
+    workGroups.set(work.course_lesson_id, group);
+  }
+  const items = context.courses.map((course) => {
+    const lessons = (course.lessons || []).map((lesson) => {
+      const lessonProjects = projectGroups.get(lesson.id) || [];
+      const lessonWorks = workGroups.get(lesson.id) || [];
+      const bestWork = lessonWorks.reduce((best, item) => WORK_STATUS_RANK[item.status] > (WORK_STATUS_RANK[best?.status] || 0) ? item : best, null);
+      return {
+        ...lesson,
+        projectCount: lessonProjects.length,
+        workCount: lessonWorks.length,
+        workStatus: bestWork?.status || null,
+        activeNow: activeLessonIds.has(lesson.id),
+        lastActivityAt: [...lessonProjects.map((item) => item.updated_at), ...lessonWorks.map((item) => item.submitted_at)].filter(Boolean).sort().at(-1) || null,
+      };
+    });
+    const submittedLessonCount = lessons.filter((item) => item.workCount > 0).length;
+    return {
+      ...course,
+      classes: [...new Set(course.classIds || [])].map((classId) => classById.get(classId)).filter(Boolean).map((item) => ({ id: item.id, name: item.name, teacherName: item.teacherName, usageMode: item.usageMode, status: item.status })),
+      lessons,
+      progress: {
+        lessonCount: lessons.length,
+        startedLessonCount: lessons.filter((item) => item.projectCount > 0).length,
+        submittedLessonCount,
+        publishedLessonCount: lessons.filter((item) => item.workStatus === 'PUBLISHED').length,
+        submittedPercent: lessons.length ? Math.round((submittedLessonCount / lessons.length) * 100) : 0,
+      },
+    };
+  });
+  const allLessons = items.flatMap((course) => course.lessons);
+  return {
+    items,
+    summary: {
+      courseCount: items.length,
+      classCount: context.classes.length,
+      activeLessonCount: allLessons.filter((item) => item.activeNow).length,
+      assignedLessonCount: allLessons.length,
+      startedLessonCount: allLessons.filter((item) => item.projectCount > 0).length,
+      submittedLessonCount: allLessons.filter((item) => item.workCount > 0).length,
+      publishedLessonCount: allLessons.filter((item) => item.workStatus === 'PUBLISHED').length,
+    },
+  };
+}
+
+function studentUsageOverview(ctx) {
+  const days = asPositiveInteger(ctx.search.get('days'), '统计天数', { min: 1, max: 365, fallback: 30 });
+  const modalityInput = ctx.search.get('modality');
+  const modality = modalityInput ? String(modalityInput).trim().toUpperCase() : null;
+  if (modality && !USAGE_MODALITIES.has(modality)) throw errors.badRequest('不支持的素材类型', 'UNSUPPORTED_MODALITY');
+  const status = ctx.search.get('status');
+  if (status && !USAGE_STATUSES.has(status)) throw errors.badRequest('无效的用量状态', 'INVALID_USAGE_STATUS');
+  const since = new Date(Date.now() - days * 86400_000).toISOString();
+  const filters = ['usage.user_id = ?', 'usage.org_id = ?', 'usage.created_at >= ?'];
+  const params = [ctx.auth.user.id, ctx.auth.user.orgId, since];
+  if (modality) { filters.push('usage.modality = ?'); params.push(modality); }
+  if (status) { filters.push('usage.status = ?'); params.push(status); }
+  const records = rows('SELECT usage.*, project.title AS project_title, project.course_lesson_id AS project_lesson_id, lesson.title AS lesson_title, class.name AS class_name FROM usage_records usage LEFT JOIN student_projects project ON project.id = usage.project_id AND project.student_id = usage.user_id AND project.org_id = usage.org_id LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id LEFT JOIN class_sessions session ON session.id = usage.class_session_id LEFT JOIN classes class ON class.id = session.class_id WHERE ' + filters.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200', params);
+  const byModality = new Map();
+  for (const record of records) {
+    const summary = byModality.get(record.modality) || { modality: record.modality, totalCredits: 0, recordCount: 0 };
+    summary.totalCredits += Number(record.credits_charged || 0);
+    summary.recordCount += 1;
+    byModality.set(record.modality, summary);
+  }
+  const rawUser = ctx.auth.rawUser;
+  const allowance = Number(rawUser.monthly_credit_allowance || 0) + Number(rawUser.monthly_bonus_credits || 0) + Number(rawUser.month_period_boost_credits || 0);
+  const used = Number(rawUser.used_credits_this_period || 0);
+  const pkg = rawUser.billing_package_id ? row('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [rawUser.billing_package_id, ctx.auth.user.orgId]) : null;
+  return {
+    user: normalizeUser(rawUser),
+    package: normalizePackage(pkg),
+    period: { allowance, used, remaining: Math.max(0, allowance - used), bonus: Number(rawUser.monthly_bonus_credits || 0), boost: Number(rawUser.month_period_boost_credits || 0), start: rawUser.period_start_at || null, reset: rawUser.period_reset_at || null, expired: Boolean(rawUser.period_reset_at && rawUser.period_reset_at <= nowIso()) },
+    usageScope: rawUser.student_usage_scope || null,
+    magicStones: Number(rawUser.magic_stones || 0),
+    activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: item.class_id, lessonId: item.lesson_id, lessonTitle: item.lesson_title, status: item.status, startedAt: item.started_at })),
+    usage: {
+      days, since,
+      totalCredits: records.reduce((total, item) => total + Number(item.credits_charged || 0), 0),
+      recordCount: records.length,
+      successCount: records.filter((item) => item.status === 'SUCCESS').length,
+      failedCount: records.filter((item) => item.status === 'FAILED').length,
+      blockedCount: records.filter((item) => item.status === 'BLOCKED').length,
+      byModality: [...byModality.values()].sort((a, b) => b.totalCredits - a.totalCredits),
+      items: records.map((record) => ({ id: record.id, projectId: record.project_id || null, projectTitle: record.project_title || null, courseLessonId: record.project_lesson_id || null, courseLessonTitle: record.lesson_title || null, classSessionId: record.class_session_id || null, className: record.class_name || null, modality: record.modality, model: record.model, credits: Number(record.credits_charged || 0), status: record.status, failCode: record.fail_code || null, createdAt: record.created_at })),
+    },
+  };
+}
+
+function studentAccountOverview(ctx) {
+  const rawUser = ctx.auth.rawUser;
+  const sessions = rows('SELECT * FROM sessions WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [ctx.auth.user.id, ctx.auth.user.orgId, nowIso()]);
+  return {
+    user: normalizeUser(rawUser),
+    organization: normalizeOrg(ctx.auth.org),
+    classes: getStudentMemberships(rawUser).map((item) => ({ id: item.id, name: item.name, teacherName: item.teacher_name || null, usageMode: item.usage_mode, status: item.status, createdAt: item.created_at })),
+    activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: item.class_id, lessonId: item.lesson_id, lessonTitle: item.lesson_title, status: item.status, startedAt: item.started_at })),
+    sessions: sessions.map((item) => ({ id: item.id, clientType: item.client_type, createdAt: item.created_at, expiresAt: item.expires_at, current: item.id === ctx.auth.session.id })),
+    currentSessionId: ctx.auth.session.id,
+  };
+}
+
+function validStudentPassword(value) {
+  const password = String(value ?? '');
+  if (password.length < 8 || password.length > 72 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) throw errors.badRequest('新密码需为 8-72 位，且同时包含字母和数字', 'PASSWORD_POLICY_FAILED');
+  return password;
+}
+
 export async function handleStudent(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/student')) return null;
@@ -104,7 +244,46 @@ export async function handleStudent(ctx) {
   const part = pathname.slice('/api/student'.length);
 
   if (part === '/dashboard' && method === 'GET') return buildStudentContext(auth.rawUser);
-  if (part === '/courses' && method === 'GET') return { items: buildStudentContext(auth.rawUser).courses };
+  if (part === '/courses' && method === 'GET') return studentCourseOverview(ctx);
+  if (part === '/credits' && method === 'GET') return studentUsageOverview(ctx);
+  if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);
+
+  if (part === '/account/profile' && method === 'PUT') {
+    const displayName = nonEmptyString(ctx.body?.displayName, '显示名称', { max: 60 });
+    const before = { displayName: auth.user.displayName };
+    q('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ? AND org_id = ?', [displayName, nowIso(), auth.user.id, auth.user.orgId]);
+    audit(ctx, 'STUDENT_PROFILE_UPDATE', 'USER', auth.user.id, before, { displayName });
+    const updatedAuth = { ...auth, rawUser: row('SELECT * FROM users WHERE id = ?', [auth.user.id]) };
+    return { ...studentAccountOverview({ ...ctx, auth: updatedAuth }), updated: true };
+  }
+
+  if (part === '/account/password' && method === 'PUT') {
+    const currentPassword = nonEmptyString(ctx.body?.currentPassword, '当前密码', { max: 500 });
+    const newPassword = validStudentPassword(ctx.body?.newPassword);
+    if (!verifyPassword(currentPassword, auth.rawUser.password_hash)) throw errors.badRequest('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
+    if (verifyPassword(newPassword, auth.rawUser.password_hash)) throw errors.badRequest('新密码不能与当前密码相同', 'PASSWORD_UNCHANGED');
+    const now = nowIso();
+    let sessionsRevoked = 0;
+    transaction(() => {
+      q('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND org_id = ?', [hashPassword(newPassword), now, auth.user.id, auth.user.orgId]);
+      sessionsRevoked = q('UPDATE sessions SET superseded_at = ? WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL', [now, auth.user.id, auth.user.orgId]).changes;
+    });
+    audit(ctx, 'STUDENT_PASSWORD_CHANGE', 'USER', auth.user.id, null, { sessionsRevoked });
+    ctx.setCookie = clearAuthCookie();
+    return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
+  }
+
+  const sessionMatch = part.match(/^\/account\/sessions\/([^/]+)\/revoke$/);
+  if (sessionMatch && method === 'PUT') {
+    const session = row('SELECT * FROM sessions WHERE id = ? AND user_id = ? AND org_id = ?', [sessionMatch[1], auth.user.id, auth.user.orgId]);
+    if (!session) throw errors.notFound('登录会话不存在', 'SESSION_NOT_FOUND');
+    if (session.superseded_at || session.expires_at <= nowIso()) throw errors.conflict('登录会话已失效', 'SESSION_ALREADY_INVALID');
+    q('UPDATE sessions SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL', [nowIso(), session.id]);
+    audit(ctx, 'STUDENT_SESSION_REVOKE', 'SESSION', session.id);
+    const current = session.id === ctx.auth.session.id;
+    if (current) ctx.setCookie = clearAuthCookie();
+    return { revoked: true, id: session.id, reloginRequired: current };
+  }
 
   if (part === '/projects' && method === 'GET') {
     const params = [auth.user.id, auth.user.orgId];
