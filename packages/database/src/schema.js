@@ -233,6 +233,9 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','ENDED')),
   session_credit_cap INTEGER,
   consumed_credits_total INTEGER NOT NULL DEFAULT 0,
+  ai_paused INTEGER NOT NULL DEFAULT 0,
+  student_call_cap INTEGER,
+  allow_text INTEGER NOT NULL DEFAULT 1,
   allow_image INTEGER NOT NULL DEFAULT 1,
   allow_music INTEGER NOT NULL DEFAULT 1,
   allow_video INTEGER NOT NULL DEFAULT 0,
@@ -321,6 +324,7 @@ CREATE TABLE IF NOT EXISTS usage_records (
   user_id TEXT NOT NULL,
   class_session_id TEXT,
   project_id TEXT,
+  generation_job_id TEXT,
   work_id TEXT,
   modality TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT 'local-p0',
@@ -335,7 +339,6 @@ CREATE TABLE IF NOT EXISTS usage_records (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_org_created ON usage_records(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_records(user_id, created_at DESC);
-
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
   id TEXT PRIMARY KEY,
@@ -509,6 +512,18 @@ CREATE INDEX IF NOT EXISTS idx_audit_actor_created ON audit_logs(actor_id, creat
 `;
 
 db.exec(SCHEMA);
+// Lightweight forward-compatible migration for classroom AI controls.
+try { db.exec("ALTER TABLE class_sessions ADD COLUMN allow_text INTEGER NOT NULL DEFAULT 1"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE usage_records ADD COLUMN generation_job_id TEXT"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE class_sessions ADD COLUMN ai_paused INTEGER NOT NULL DEFAULT 0"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec("ALTER TABLE class_sessions ADD COLUMN student_call_cap INTEGER"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+db.exec('CREATE INDEX IF NOT EXISTS idx_usage_session_user_created ON usage_records(class_session_id, user_id, created_at DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_usage_generation_job ON usage_records(generation_job_id)');
+
 // Lightweight forward-compatible migration for the class scheduling domain. Existing
 // local databases may have been created before makeup sessions were introduced.
 try { db.exec("ALTER TABLE class_sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT 'REGULAR'"); }

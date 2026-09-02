@@ -8,9 +8,14 @@ import {
   transaction,
 } from '@platform/server-lib';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
+import { assertSessionAiControls } from '../services/aiControls.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
-const CAPABILITY_BY_MODALITY = {
+const SESSION_CAPABILITY_BY_MODALITY = {
+  IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo',
+  PODCAST: 'allowPodcast', DUBBING: 'allowDubbing',
+};
+const PACKAGE_CAPABILITY_BY_MODALITY = {
   IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video',
   PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing',
 };
@@ -29,32 +34,33 @@ function creditsFor(value) {
   return credits;
 }
 
-function recordUsage({ orgId, userId, projectId = null, sessionId = null, modality, credits, status, failCode = null }) {
+function recordUsage({ orgId, userId, projectId = null, sessionId = null, generationJobId = null, modality, credits, status, failCode = null }) {
   q(
     `INSERT INTO usage_records(
-      id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
-      id('usage'), orgId, userId, sessionId, projectId, modality, 'local-p0', credits,
-      status, failCode, json({ modality, credits, status, failCode }), nowIso(),
+      id('usage'), orgId, userId, sessionId, projectId, generationJobId, modality, 'local-p0', credits,
+      status, failCode, json({ modality, credits, status, failCode, generationJobId }), nowIso(),
     ],
   );
 }
 
-function rejectWithUsage({ orgId, userId, projectId, modality, credits, error }) {
+function rejectWithUsage({ orgId, userId, projectId, sessionId = null, modality, credits, error }) {
   transaction(() => recordUsage({
-    orgId, userId, projectId, modality, credits, status: 'BLOCKED', failCode: error.code || 'BLOCKED',
+    orgId, userId, projectId, sessionId, modality, credits, status: 'BLOCKED', failCode: error.code || 'BLOCKED',
   }));
   throw error;
 }
 
 function assertCapability(modality, session, pkg) {
-  const column = CAPABILITY_BY_MODALITY[modality];
-  if (!column) return;
-  if (session && !session[column]) {
+  const sessionColumn = SESSION_CAPABILITY_BY_MODALITY[modality];
+  const packageColumn = PACKAGE_CAPABILITY_BY_MODALITY[modality];
+  if (!sessionColumn) return;
+  if (session && session.capabilities && !session.capabilities[sessionColumn]) {
     throw errors.forbidden('当前课堂未开放该 AI 能力', 'SESSION_CAPABILITY_DISABLED');
   }
-  if (!pkg || pkg.status !== 'ACTIVE' || !pkg[column]) {
+  if (!pkg || pkg.status !== 'ACTIVE' || !pkg[packageColumn]) {
     throw errors.forbidden('当前套餐未开通该 AI 能力', 'PACKAGE_CAPABILITY_DISABLED');
   }
 }
@@ -128,6 +134,7 @@ export async function handleAi(ctx) {
         ? row('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [currentUser.billing_package_id, orgId])
         : null;
       assertCapability(modality, currentSession, pkg);
+      assertSessionAiControls({ modality, session: currentSession, orgId, userId, credits });
 
       const allowance = Number(currentUser.monthly_credit_allowance || 0)
         + Number(currentUser.monthly_bonus_credits || 0)

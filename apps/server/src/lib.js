@@ -388,7 +388,10 @@ export function normalizeSession(value) {
     status: value.status,
     sessionCreditCap: value.session_credit_cap === null || value.session_credit_cap === undefined ? null : Number(value.session_credit_cap),
     consumedCreditsTotal: Number(value.consumed_credits_total || 0),
+    aiPaused: !!value.ai_paused,
+    studentCallCap: value.student_call_cap === null || value.student_call_cap === undefined ? null : Number(value.student_call_cap),
     capabilities: {
+      allowText: value.allow_text === undefined ? true : !!value.allow_text,
       allowImage: !!value.allow_image,
       allowMusic: !!value.allow_music,
       allowVideo: !!value.allow_video,

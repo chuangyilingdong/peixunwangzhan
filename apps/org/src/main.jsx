@@ -103,6 +103,20 @@ function Classes({ api, user }) {
     try { await api.post(`org/classes/${classId}/sessions/${sessionId}/${cancel ? 'cancel' : 'end'}`, { reason: cancel ? 'CANCELED' : 'MANUAL' }); setMessage(cancel ? '课堂已取消。' : '课堂已结束。'); await classes.refresh(); await loadDetail(classId, true); }
     catch (error) { setMessage(error.message); }
   }
+  async function updateControls(classId, session, patch) {
+    try {
+      await api.put(`org/classes/${classId}/sessions/${session.id}/ai-controls`, { ...patch, capabilities: { ...session.capabilities, ...(patch.capabilities || {}) } });
+      setMessage('课堂 AI 控制已更新。'); await loadDetail(classId, true);
+    } catch (error) { setMessage(error.message); }
+  }
+  async function setSessionLimit(classId, session, field, label) {
+    const current = field === 'sessionCreditCap' ? session.sessionCreditCap : session.studentCallCap;
+    const value = window.prompt(`${label}（留空表示不限制）`, current == null ? '' : String(current));
+    if (value === null) return;
+    const normalized = value.trim() === '' ? null : Number(value);
+    if (normalized !== null && (!Number.isInteger(normalized) || normalized < 1)) return setMessage(`${label}必须是正整数或留空。`);
+    await updateControls(classId, session, { [field]: normalized });
+  }
   async function create(event) {
     event.preventDefault(); setBusy(true); setMessage('');
     try { await api.post('org/classes', { ...form, defaultSeriesId: form.defaultSeriesId || null, teacherId: user.role === 'ORG_ADMIN' ? (form.teacherId || null) : undefined }); setForm({ name: '', defaultSeriesId: '', usageMode: 'CLASS_ONLY', teacherId: '' }); setMessage('班级已创建。请继续配置该班级课单后再开课。'); await classes.refresh(); }
@@ -179,7 +193,7 @@ function Classes({ api, user }) {
                   <button className="primary-button" onClick={() => saveCurriculum(item.id)}>保存课程计划</button>
                 </Panel>
                 <div className="split"><Panel title="课程进度"><div className="table-wrap"><table><thead><tr><th>课时</th><th>开始</th><th>提交</th><th>发布</th></tr></thead><tbody>{(detail.progress || []).map((progress) => <tr key={progress.lessonId}><td>{progress.sort}. {progress.title}</td><td>{progress.startedStudentCount}/{progress.studentCount}（{progress.startedPercent}%）</td><td>{progress.submittedStudentCount}/{progress.studentCount}（{progress.submittedPercent}%）</td><td>{progress.publishedStudentCount}/{progress.studentCount}（{progress.publishedPercent}%）</td></tr>)}</tbody></table></div>{!detail.progress?.length && <Empty title="还没有课程计划" />}</Panel>
-                  <Panel title="课堂记录"><div className="card-list">{(detail.sessions || []).map((session) => <article className="item-card" key={session.id}><div className="row-actions"><strong>{session.lessonTitle || '未指定课时'}</strong><Status value={session.status === 'ACTIVE' ? 'ACTIVE SESSION' : session.endedReason === 'CANCELED' ? 'CANCELED' : 'ENDED'} /><span className="muted">{session.sessionKind === 'MAKEUP' ? '补课' : '常规'}</span></div><p className="muted">开始：{formatDate(session.startedAt)}{session.endedAt ? ` · 结束：${formatDate(session.endedAt)}` : ''}</p><p className="muted">{session.endedReason ? `结果：${session.endedReason}` : '课堂进行中'}</p></article>)}</div>{!detail.sessions?.length && <Empty title="暂无课堂记录" />}</Panel></div>
+                  <Panel title="课堂记录"><div className="card-list">{(detail.sessions || []).map((session) => <article className="item-card" key={session.id}><div className="row-actions"><strong>{session.lessonTitle || '未指定课时'}</strong><Status value={session.status === 'ACTIVE' ? 'ACTIVE SESSION' : session.endedReason === 'CANCELED' ? 'CANCELED' : 'ENDED'} /><span className="muted">{session.sessionKind === 'MAKEUP' ? '补课' : '常规'}</span></div><p className="muted">开始：{formatDate(session.startedAt)}{session.endedAt ? ` · 结束：${formatDate(session.endedAt)}` : ''}</p><p className="muted">{session.endedReason ? `结果：${session.endedReason}` : '课堂进行中'}</p>{session.status === 'ACTIVE' && <div className="top-gap"><div className="row-actions"><strong>课堂 AI 控制</strong><button className="secondary-button" onClick={() => updateControls(item.id, session, { aiPaused: !session.aiPaused })}>{session.aiPaused ? '恢复 AI' : '立即暂停 AI'}</button><button className="text-button" onClick={() => setSessionLimit(item.id, session, 'sessionCreditCap', '课堂积分上限')}>积分上限：{session.sessionCreditCap == null ? '不限' : session.sessionCreditCap}</button><button className="text-button" onClick={() => setSessionLimit(item.id, session, 'studentCallCap', '单学生调用次数')}>单学生次数：{session.studentCallCap == null ? '不限' : session.studentCallCap}</button></div><div className="row-actions top-gap">{[['allowText','文本'],['allowImage','图片'],['allowMusic','音乐'],['allowVideo','视频'],['allowPodcast','播客'],['allowDubbing','配音']].map(([key, label]) => <label className="checkbox-option" key={key}><input type="checkbox" checked={Boolean(session.capabilities?.[key])} onChange={(event) => updateControls(item.id, session, { capabilities: { [key]: event.target.checked } })} />{label}</label>)}</div><small className="muted">{session.aiPaused ? '当前课堂已暂停全部 AI 请求。' : '服务端会强制执行开关、课堂积分上限和单学生调用次数。'}</small></div>}</article>)}</div>{!detail.sessions?.length && <Empty title="暂无课堂记录" />}</Panel></div>
               </>}
             </div>}
           </article>;
@@ -467,7 +481,7 @@ function UsagePage({ api }) {
   const [filters, setFilters] = useState({ days: '30', modality: '', status: '', search: '' });
   const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
   const overview = useData(() => api.get('org/billing/usage-overview?days=' + encodeURIComponent(filters.days)), [api, filters.days]);
-  const records = useData(() => api.get('org/billing/usage-records?' + query.toString()), [api, query]);
+  const records = useData(() => api.get('org/ai-usage?' + query.toString()), [api, query]);
   if (overview.loading) return <Loading />;
   if (overview.error) return <ErrorState error={overview.error} onRetry={overview.refresh} />;
   return <>
@@ -480,11 +494,11 @@ function UsagePage({ api }) {
     <Panel title="用量明细">
       <div className="form-grid">
         <label>时间范围<select value={filters.days} onChange={(e) => setFilters({ ...filters, days: e.target.value })}><option value="1">近 1 日</option><option value="7">近 7 日</option><option value="30">近 30 日</option><option value="365">近 1 年</option></select></label>
-        <label>能力<input value={filters.modality} placeholder="TEXT / IMAGE / AUDIO" onChange={(e) => setFilters({ ...filters, modality: e.target.value })} /></label>
+        <label>能力<input value={filters.modality} placeholder="TEXT / IMAGE / MUSIC" onChange={(e) => setFilters({ ...filters, modality: e.target.value })} /></label>
         <label>状态<select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">全部</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">拦截</option></select></label>
         <label>关键词<input value={filters.search} placeholder="用户 / 项目 / 作品" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
       </div>
-      {records.loading ? <Loading label="正在读取用量明细…" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>能力 / 模型</th><th>上下文</th><th>积分</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.userName || item.userLogin || item.userId}</td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty title="所选范围内暂无用量记录" />}
+      {records.loading ? <Loading label="正在读取用量明细…" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>能力 / 模型</th><th>上下文</th><th>积分</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.userName || item.userLogin || item.userId}</td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.lessonTitle ? <div className="muted">课时：{item.lessonTitle}</div> : null}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} />{item.failCode ? <div className="muted">{item.failCode}</div> : null}</td></tr>)}</tbody></table></div> : <Empty title="所选范围内暂无用量记录" />}
     </Panel>
   </>;
 }

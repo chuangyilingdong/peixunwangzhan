@@ -57,6 +57,7 @@
 | `/courses` | `/org/courses` 课程中心 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02）` | `course_series`、`course_lessons`、`course_assignments` | `GET /api/org/course-series` | 平台公开/授权/机构自有；只含 `PUBLISHED` | 课件资产、上课入口聚合 | 管理员/教师可读，未登录 401，student 403 |
 | `/packages` | `/org/billing-packages` 积分套餐 | ORG_ADMIN 写、TEACHER 只读 | `真实已有（2026-09-02）` | `billing_packages` | `GET/POST` 已有；新增 `GET/PUT /:id` | 套餐 `ACTIVE/DISABLED`；写操作 ORG_ADMIN | 与学员开通单联动 | 教师读 200、写 403；管理员编辑启停成功 |
 | `/usage` | `/org/usage-records` 积分用量 | ORG_ADMIN、TEACHER 按权限 | `真实已有（2026-09-02）` | `org_billing_accounts`、`usage_records`、`class_sessions`、`classes` | overview 已有；新增 usage-records | `SUCCESS/FAILED/BLOCKED` | 今日/7日/30日切换与导出 | SQL 关联经 class_sessions；筛选与越权校验 |
+| `/classes`（课堂内 AI 控制） | `/org/classes/:id` 课堂 AI 控制与用量审计 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，P4-O04）` | `class_sessions`、`usage_records`、`generation_jobs`、`student_projects`、`classes` | `PUT /api/org/classes/:classId/sessions/:sessionId/ai-controls`、`GET /api/org/ai-usage`、`POST /api/ai/usage`、`POST /api/ai/generations` | 课堂 `ACTIVE`；暂停 / 能力开关 / 单学生次数 / 课堂积分上限由服务端强制；教师按负责 / 授权课堂查询 | 真实外部 AI provider、异步队列与账单策略仍按后续基础设施处理 | 临时 SQLite 验证普通调用与生成任务的成功 / BLOCKED 审计、课时 / 项目 / job 关联、教师范围和越权 |
 | `/inbox` | `/org/inbox` 站内信 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，两批）` | `notifications`、`notification_recipients` | `GET/POST /api/org/inbox`、`PUT /api/org/inbox/:id/read`、`PUT /api/org/inbox/read-all` | 平台即时/定时公告接收；机构通知仅 ORG_ADMIN 可发；按当前机构与本人接收记录隔离 | 高可用异步队列、失败重试、忽略状态、邮件/短信/微信渠道 | 临时库验证管理员/教师接收、单条/全部已读、机构发送权限、定时到期和撤回隐藏 |
 | `/work-data` | `/org/published-work-data` 作品数据中心 | ORG_ADMIN | `页面壳层` | `works` + 未来 visit 表 | 待新增 | 7/14/30 日统计 | 访问去重、趋势、授权访客 | 需公开分享与访客模型迁移 |
 | `/enrollment` | `/org/student-orders` 学员开通 | ORG_ADMIN | `页面壳层` | 需新增开通单/商品表 | 待新增 | 履约、收款、作废状态机 | 数据模型与 API | 设计迁移后实施 |
@@ -101,9 +102,10 @@
 4. **P4-04 黑客松 / 运营活动（2026-09-02 产品取消）**：用户明确确认不做；平台端和机构端均不新增相关数据表、API 或真实页面，历史 `/hackathon` 壳层后续从导航与路由移除。
 5. **P4-O01 机构首页真实经营看板第一批闭环（2026-09-02 已完成）**：`GET /api/org/overview` 已实现机构管理员经营视图、教师教学视图、本人负责 / 授权班级范围、近期课堂、待点评作品、未读消息及合同 / 席位 / 余额预警；不依赖支付、OSS 或真实 AI。
 6. [x] **P4-O03 班级、课程与排课闭环增强（2026-09-02 已完成）**：已补齐班级详情、成员与课程计划聚合、课时连续排序、普通 / 补课课堂、结束 / 取消、课堂历史和课程进度，并统一教师范围、归档保护及学生已发布内容隔离。
-7. **当前唯一下一步：P4-O04 课堂内 AI 能力控制与使用审计**：补齐文本 / 图像 / 音频 / 视频能力开关、单学生次数、课堂总额度、教师即时暂停和异常使用查询。
+7. [x] **P4-O04 课堂内 AI 能力控制与使用审计（2026-09-02 已完成）**：已接通服务端课堂暂停、能力开关、单学生调用上限、课堂积分上限、普通调用 / 生成任务审计和机构端用量查询。
+8. **当前唯一下一步：P4-O05 作品社区运营闭环**：补齐精选、举报、评论 / 点赞（如启用）、版权 / 授权确认和未成年人保护规则。
 
-## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -186,3 +188,10 @@
 - [x] 临时 SQLite P4-O03 主验收、跨机构 / 未发布内容隔离验收均通过；P3 API 回归 `46 pass / 0 fail`；`node --check`、四端 `pnpm.cmd run build` 和 `git diff --check` 通过。
 - [x] 本批仅修改非画布代码与文档，`D:\学习平台\platform-v2\packages\canvas` 无改动，不触碰真实 `platform.db`，不伪造 AI、支付、OSS 或运营数据，不部署线上环境。
 - [x] 已知边界：课堂内 AI 能力控制与使用审计切换为 P4-O04；课程资产、导出与更深层作品数据下钻等能力继续保留在后续批次，未将这些能力伪装为已完成。
+### 8.9 P4-O04 完整验收记录（2026-09-02）
+
+- [x] 已新增 `class_sessions.ai_paused`、`class_sessions.student_call_cap` 及兼容旧 SQLite 的迁移；`usage_records.generation_job_id` 与课堂 / 生成任务查询索引可用。
+- [x] 已接通机构课堂 AI 控制接口、机构端控制面板、机构 AI 使用审计接口，以及学生普通 AI 调用 / 素材生成的课堂策略校验。
+- [x] 临时 SQLite API 验收 `36 pass / 0 fail`：暂停、能力关闭、单学生调用次数上限、课堂积分上限、普通调用 BLOCKED 审计、生成任务失败审计、成功任务关联、教师课堂范围和机构接口越权均通过。
+- [x] P3 API 回归 `46 pass / 0 fail`、四端生产构建、后端语法检查和最终 `git diff --check` 全部通过；总控与本清单已完成最终勾选，并将下一步切换为 P4-O05。
+- [x] 本阶段仅修改非画布代码与文档；`D:\学习平台\platform-v2\packages\canvas` 无改动，不触碰真实 `platform.db`，不部署线上环境。
