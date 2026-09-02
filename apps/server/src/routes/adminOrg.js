@@ -49,6 +49,20 @@ function validateTeacher(currentOrgId, teacherId) {
   if (!teacher) throw errors.badRequest('教师不属于当前机构或已停用', 'INVALID_TEACHER');
   return teacher;
 }
+const PLATFORM_ADMIN_PERMISSIONS = new Set([
+  'ADMIN_DASHBOARD', 'ADMIN_ORGANIZATIONS', 'ADMIN_USERS', 'ADMIN_COURSES', 'ADMIN_WORKS',
+  'ADMIN_HACKATHON', 'ADMIN_BILLING', 'ADMIN_MATERIALS', 'ADMIN_INBOX', 'ADMIN_ADMINS',
+  'ADMIN_ADJUSTMENT',
+]);
+function platformAdminPermissions(value) {
+  const items = Array.isArray(value) ? value : [];
+  if (items.some((item) => typeof item !== 'string' || !PLATFORM_ADMIN_PERMISSIONS.has(item))) throw errors.badRequest('包含无效的平台权限码', 'INVALID_ADMIN_PERMISSION');
+  return [...new Set(items)];
+}
+function platformUserRow(value) {
+  return { ...normalizeUser(value, { includeAuthMeta: true }), organizationName: value.organization_name || null, billingPackageName: value.billing_package_name || null };
+}
+
 function curriculumItem(value) { return { id: value.id, lessonId: value.lesson_id, title: value.title, summary: value.summary || '', sort: Number(value.sort || 0), durationMinutes: Number(value.duration_minutes || 0), sourceSeriesId: value.source_series_id }; }
 
 function workInReviewScope(auth, currentOrgId, workId) {
@@ -188,6 +202,59 @@ export async function handleAdmin(ctx) {
     audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds });
     return { assignedCount: assignmentOrgIds.length };
   }
+  if (part === '/platform-users' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const role = ctx.search.get('role'); const orgIdFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
+    const params = []; const conditions = ['user.deleted_at IS NULL'];
+    if (['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER', 'STUDENT'].includes(role)) { conditions.push('user.role=?'); params.push(role); }
+    if (orgIdFilter) { conditions.push('user.org_id=?'); params.push(orgIdFilter); }
+    if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR user.phone LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
+    const items = rows(
+      'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE ' + conditions.join(' AND ') + ' ORDER BY user.created_at DESC LIMIT 500',
+      params,
+    ).map(platformUserRow);
+    return { items, total: items.length };
+  }
+  if (part === '/platform-admins' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const items = rows("SELECT * FROM users WHERE role='SUPER_ADMIN' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 200").map((item) => normalizeUser(item, { includeAuthMeta: true }));
+    return { items, total: items.length };
+  }
+  if (part === '/platform-admins' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {};
+    const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim(); const password = String(body.password || '');
+    if (!login || !displayName || password.length < 6) throw errors.badRequest('登录名、姓名不能为空且密码至少6位', 'ADMIN_INPUT_REQUIRED');
+    if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
+    const permissions = platformAdminPermissions(body.permissions); const adminId = id('user'); const now = nowIso();
+    q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [adminId, null, login, displayName, 'SUPER_ADMIN', json(permissions), hashPassword(password), body.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE', now, now]);
+    audit(ctx, 'PLATFORM_ADMIN_CREATE', 'USER', adminId, null, { login, permissions });
+    return normalizeUser(row('SELECT * FROM users WHERE id=?', [adminId]), { includeAuthMeta: true });
+  }
+  const adminMatch = part.match(/^\/platform-admins\/([^/]+)$/);
+  if (adminMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']); const target = row("SELECT * FROM users WHERE id=? AND role='SUPER_ADMIN' AND deleted_at IS NULL", [adminMatch[1]]);
+    if (!target) throw errors.notFound('平台管理员不存在', 'ADMIN_NOT_FOUND');
+    const body = ctx.body || {};
+    if (body.login !== undefined && String(body.login).trim() !== target.login && row('SELECT id FROM users WHERE login=?', [String(body.login).trim()])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
+    const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim();
+    if (!displayName) throw errors.badRequest('姓名不能为空', 'ADMIN_INPUT_REQUIRED');
+    const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : platformAdminPermissions(body.permissions);
+    if (!Array.isArray(permissions) || permissions.some((item) => !PLATFORM_ADMIN_PERMISSIONS.has(item))) throw errors.badRequest('包含无效的平台权限码', 'INVALID_ADMIN_PERMISSION');
+    let passwordHash = target.password_hash;
+    if (body.password !== undefined) { const password = String(body.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位', 'ADMIN_INPUT_REQUIRED'); passwordHash = hashPassword(password); }
+    let status = target.status;
+    if (body.status !== undefined) {
+      status = body.status;
+      if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('管理员状态无效', 'INVALID_ADMIN_STATUS');
+      if (status === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'ADMIN_SELF_DISABLE_FORBIDDEN');
+    }
+    const login = body.login === undefined ? target.login : String(body.login).trim();
+    if (!login) throw errors.badRequest('登录名不能为空', 'ADMIN_INPUT_REQUIRED');
+    q('UPDATE users SET login=?,display_name=?,permissions=?,password_hash=?,status=?,updated_at=? WHERE id=?', [login, displayName, json([...new Set(permissions)]), passwordHash, status, nowIso(), target.id]);
+    audit(ctx, 'PLATFORM_ADMIN_UPDATE', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { displayName, status, passwordChanged: body.password !== undefined, permissions });
+    return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
+  }
+
   if (part === '/billing/usage-overview' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     return { totalCredits: Number(row('SELECT COALESCE(SUM(credit_balance),0) n FROM org_billing_accounts').n || 0), usage: rows('SELECT modality,SUM(credits_charged) credits,COUNT(*) calls FROM usage_records GROUP BY modality'), topOrgs: rows('SELECT organization.id,organization.name,COALESCE(SUM(usage.credits_charged),0) credits FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id GROUP BY organization.id ORDER BY credits DESC LIMIT 10') };
@@ -236,12 +303,62 @@ export async function handleOrg(ctx) {
   }
   if (part === '/billing/packages' && method === 'GET') return { items: rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC', [currentOrgId]).map(normalizePackage) };
   if (part === '/billing/packages' && method === 'POST') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建套餐', 'ORG_ADMIN_REQUIRED'); const body = ctx.body || {}; const name = String(body.name || '').trim(); if (!name) throw errors.badRequest('套餐名称必填'); const capabilities = body.capabilities || {}; const packageId = id('pkg'); const now = nowIso();
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建套餐', 'ORG_ADMIN_REQUIRED'); const body = ctx.body || {}; const name = String(body.name || '').trim(); if (!name) throw errors.badRequest('套餐名称必填'); if (row('SELECT id FROM billing_packages WHERE org_id=? AND name=?', [currentOrgId, name])) throw errors.conflict('同名套餐已存在', 'BILLING_PACKAGE_EXISTS'); const capabilities = body.capabilities || {}; const packageId = id('pkg'); const now = nowIso();
     q('INSERT INTO billing_packages(id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [packageId, currentOrgId, name, integer(body.priceFen, '价格'), integer(body.monthlyCredits, '月度积分'), integer(body.bonusCredits, '赠送积分'), integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }), capabilities.allowImage ? 1 : 0, capabilities.allowMusic ? 1 : 0, capabilities.allowVideo ? 1 : 0, capabilities.allowPodcast ? 1 : 0, capabilities.allowDubbing ? 1 : 0, now, now]); return normalizePackage(row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageId, currentOrgId]));
   }
+  let packageMatch = part.match(/^\/billing\/packages\/([^/]+)$/);
+  if (packageMatch && ['GET', 'PUT'].includes(method)) {
+    const target = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageMatch[1], currentOrgId]);
+    if (!target) throw errors.notFound('套餐不存在', 'BILLING_PACKAGE_NOT_FOUND');
+    if (method === 'GET') return normalizePackage(target);
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可修改套餐', 'ORG_ADMIN_REQUIRED');
+    const body = ctx.body || {}; const capabilities = body.capabilities || {};
+    const name = body.name === undefined ? target.name : String(body.name).trim();
+    if (!name) throw errors.badRequest('套餐名称必填', 'PACKAGE_NAME_REQUIRED');
+    let status = target.status;
+    if (body.status !== undefined) {
+      status = body.status;
+      if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('套餐状态无效', 'INVALID_PACKAGE_STATUS');
+    }
+    q('UPDATE billing_packages SET name=?,price_fen=?,monthly_credits=?,bonus_credits=?,duration_days=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,status=?,updated_at=? WHERE id=? AND org_id=?', [
+      name,
+      body.priceFen === undefined ? target.price_fen : integer(body.priceFen, '价格'),
+      body.monthlyCredits === undefined ? target.monthly_credits : integer(body.monthlyCredits, '月度积分'),
+      body.bonusCredits === undefined ? target.bonus_credits : integer(body.bonusCredits, '赠送积分'),
+      body.durationDays === undefined ? target.duration_days : integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }),
+      capabilities.allowImage === undefined ? target.allow_image : (capabilities.allowImage ? 1 : 0),
+      capabilities.allowMusic === undefined ? target.allow_music : (capabilities.allowMusic ? 1 : 0),
+      capabilities.allowVideo === undefined ? target.allow_video : (capabilities.allowVideo ? 1 : 0),
+      capabilities.allowPodcast === undefined ? target.allow_podcast : (capabilities.allowPodcast ? 1 : 0),
+      capabilities.allowDubbing === undefined ? target.allow_dubbing : (capabilities.allowDubbing ? 1 : 0),
+      status, nowIso(), target.id, currentOrgId,
+    ]);
+    audit(ctx, 'BILLING_PACKAGE_UPDATE', 'BILLING_PACKAGE', target.id, normalizePackage(target), body);
+    return normalizePackage(row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [target.id, currentOrgId]));
+  }
+
   if (part === '/billing/usage-overview' && method === 'GET') {
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const since = new Date(Date.now() - days * 86400000).toISOString(); ensureOrgBilling(currentOrgId); const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);
     return { balance: Number(account.credit_balance || 0), totalCreditsIn: Number(account.total_credits_in || 0), totalCreditsSpent: Number(account.total_credits_spent || 0), modalities: rows('SELECT modality,SUM(credits_charged) credits,COUNT(*) calls FROM usage_records WHERE org_id=? AND created_at>=? GROUP BY modality', [currentOrgId, since]), topUsers: rows('SELECT user.id,user.display_name studentName,SUM(usage.credits_charged) credits,COUNT(*) calls FROM usage_records usage JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id WHERE usage.org_id=? AND usage.created_at>=? GROUP BY user.id ORDER BY credits DESC LIMIT 10', [currentOrgId, since]) };
+  }
+  if (part === '/billing/usage-records' && method === 'GET') {
+    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const modality = ctx.search.get('modality'); const status = ctx.search.get('status'); const search = String(ctx.search.get('search') || '').trim();
+    const since = new Date(Date.now() - days * 86400000).toISOString(); const params = [currentOrgId, since]; const conditions = ['usage.org_id=?', 'usage.created_at>=?'];
+    if (modality) { conditions.push('usage.modality=?'); params.push(modality); }
+    if (['SUCCESS', 'FAILED', 'BLOCKED'].includes(status)) { conditions.push('usage.status=?'); params.push(status); }
+    if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR work.title LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword, keyword); }
+    const items = rows(
+      'SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,class.id class_id,class.name class_name FROM usage_records usage LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + conditions.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200',
+      params,
+    ).map((item) => ({
+      id: item.id, userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
+      classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
+      lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
+      workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
+      credits: Number(item.credits_charged || 0), inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
+      status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
+    }));
+    return { items, total: items.length };
   }
   if (part === '/billing/credit-entries' && method === 'GET') { const items = rows('SELECT * FROM credit_entries WHERE org_id=? ORDER BY created_at DESC LIMIT 200', [currentOrgId]); return { items, total: items.length }; }
 

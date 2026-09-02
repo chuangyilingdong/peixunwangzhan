@@ -104,6 +104,76 @@ function Courses({ api }) {
   </>;
 }
 
+
+function PlatformUsers({ api }) {
+  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const [filters, setFilters] = useState({ role: '', orgId: '', search: '' });
+  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
+  const users = useData(() => api.get(`admin/platform-users?${query.toString()}`), [api, query]);
+  const [message, setMessage] = useState('');
+  const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学员' };
+  return <>
+    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态。" actions={<button className="secondary-button" onClick={users.refresh}>刷新</button>} />
+    <Panel title="筛选条件">
+      <div className="form-grid">
+        <label>角色<select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
+        <label>关键词<input value={filters.search} placeholder="登录名 / 姓名 / 手机号" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
+      </div>
+      {message && <Notice tone="info">{message}</Notice>}
+    </Panel>
+    <Panel title="用户列表">
+      {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>套餐</th><th>状态</th><th>有效期至</th><th>创建时间</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td>{item.role === 'STUDENT' ? (item.billingPackageName || '未绑定') : '—'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的用户" />}
+    </Panel>
+  </>;
+}
+
+function PlatformAdmins({ api, currentUser }) {
+  const admins = useData(() => api.get('admin/platform-admins'), [api]);
+  const permissionOptions = ['ADMIN_DASHBOARD', 'ADMIN_ORGANIZATIONS', 'ADMIN_USERS', 'ADMIN_COURSES', 'ADMIN_WORKS', 'ADMIN_HACKATHON', 'ADMIN_BILLING', 'ADMIN_MATERIALS', 'ADMIN_INBOX', 'ADMIN_ADMINS', 'ADMIN_ADJUSTMENT'];
+  const [form, setForm] = useState({ login: '', displayName: '', password: '', permissions: [] });
+  const [editing, setEditing] = useState(null);
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+  function toggle(permission) { setForm((current) => ({ ...current, permissions: current.permissions.includes(permission) ? current.permissions.filter((item) => item !== permission) : [...current.permissions, permission] })); }
+  async function create(event) {
+    event.preventDefault(); setSaving(true); setMessage('');
+    try { await api.post('admin/platform-admins', form); setForm({ login: '', displayName: '', password: '', permissions: [] }); setMessage('平台管理员已创建。'); admins.refresh(); }
+    catch (err) { setMessage(err.message); } finally { setSaving(false); }
+  }
+  async function update(target, payload, successMessage) {
+    try { await api.put(`admin/platform-admins/${target.id}`, payload); setMessage(successMessage); admins.refresh(); if (editing?.id === target.id) setEditing(null); }
+    catch (err) { setMessage(err.message); }
+  }
+  async function save(event) {
+    event.preventDefault(); setSaving(true); setMessage('');
+    try { await api.put(`admin/platform-admins/${editing.id}`, { displayName: form.displayName, permissions: form.permissions }); setMessage('平台管理员已更新。'); setEditing(null); admins.refresh(); }
+    catch (err) { setMessage(err.message); } finally { setSaving(false); }
+  }
+  return <>
+    <PageHeader eyebrow="平台系统" title="平台管理员" description="维护平台运营账号、权限码和登录安全。" actions={<button className="secondary-button" onClick={admins.refresh}>刷新</button>} />
+    <div className="split">
+      <Panel title={editing ? `编辑管理员：${editing.displayName}` : '新建平台管理员'}>
+        <form onSubmit={editing ? save : create}>
+          {!editing && <div className="form-grid"><label>登录名<input value={form.login} onChange={(e) => setForm({ ...form, login: e.target.value })} required /></label><label>初始密码<input value={form.password} minLength={6} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label></div>}
+          <label>姓名<input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} required /></label>
+          <label>权限码</label>
+          <div className="row-actions">{permissionOptions.map((permission) => <label key={permission} className="checkbox-option"><input type="checkbox" checked={form.permissions.includes(permission)} onChange={() => toggle(permission)} />{permission}</label>)}</div>
+          {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+          <div className="row-actions">
+            <button className="primary-button" disabled={saving}>{saving ? '保存中…' : editing ? '保存管理员' : '创建管理员'}</button>
+            {editing && <button type="button" className="secondary-button" onClick={() => { setEditing(null); setForm({ login: '', displayName: '', password: '', permissions: [] }); }}>取消编辑</button>}
+          </div>
+        </form>
+      </Panel>
+      <Panel title="权限说明"><Notice>当前本地安全基线仍按 SUPER_ADMIN 角色放行；权限码先完成数据结构、白名单和页面配置能力，后续再逐域收紧 API 判定。不能停用当前登录账号由后端强制校验。</Notice></Panel>
+    </div>
+    <Panel title="管理员列表">
+      {admins.loading ? <Loading /> : admins.error ? <ErrorState error={admins.error} onRetry={admins.refresh} /> : admins.data.items.length ? <div className="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>权限码</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{admins.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div>{item.id === currentUser?.id && <span className="muted">当前账号</span>}</td><td><Status value={item.status} /></td><td>{item.permissions.length ? item.permissions.join(', ') : '全量（本地基线）'}</td><td>{formatDate(item.updatedAt)}</td><td><div className="row-actions"><button className="text-button" onClick={() => { setEditing(item); setForm({ login: '', displayName: item.displayName, password: '', permissions: item.permissions }); }}>编辑</button><button className="text-button" onClick={() => { const password = window.prompt('请输入至少 6 位新密码'); if (password) update(item, { password }, '管理员密码已重置。'); }}>重置密码</button>{item.status === 'ACTIVE' ? <button className="text-button" onClick={() => update(item, { status: 'DISABLED' }, '管理员已停用。')}>停用</button> : <button className="text-button" onClick={() => update(item, { status: 'ACTIVE' }, '管理员已启用。')}>启用</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="暂无平台管理员" />}
+    </Panel>
+  </>;
+}
+
 function PlatformPage({ kind }) {
   const pages = {
     users: ['平台用户', '统一查看机构管理员、教师与学员的账号状态，支持后续接入筛选、启停和变更记录。', [['机构账号', '按机构归属查看管理者、教师和学员'], ['账号安全', '登录状态、有效期与权限将统一在此管理']]],
@@ -127,7 +197,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformPage kind="users" />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformPage kind="works" />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformPage kind="billing" />} /><Route path="/materials" element={<PlatformPage kind="materials" />} /><Route path="/inbox" element={<PlatformPage kind="inbox" />} /><Route path="/admins" element={<PlatformPage kind="admins" />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformPage kind="works" />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformPage kind="billing" />} /><Route path="/materials" element={<PlatformPage kind="materials" />} /><Route path="/inbox" element={<PlatformPage kind="inbox" />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
