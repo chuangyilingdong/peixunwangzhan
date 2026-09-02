@@ -75,7 +75,7 @@
 | `/works` | 我的作品 / 提交记录 | STUDENT | `真实已有（2026-09-03，P4-S03）` | `works`、`work_submissions`、`work_feedback_reads`、`work_publish_requests`、`work_annotations` | works submit/status、submissions、feedback-read、publish-request/withdraw | `PENDING/APPROVED/REJECTED/PUBLISHED`；反馈已读与多轮提交 | 独立站外发布、重新发布历史版本 | 学生只能访问本人作品；临时 SQLite 验收 `72 pass / 0 fail` |
 | `/showcase` | 机构作品墙 | STUDENT | `真实已有（2026-09-03，P4-S04）` | `works`、`classes`、`course_lessons`、`work_reports` | `GET /api/student/showcase`、`GET /:id`、`POST /:id/reports`、`PUT /api/org/works/:id/feature` | 仅本机构 `PUBLISHED`；作者脱敏与内部字段清理 | 站外公开分享、评论 / 点赞、访客统计 | 临时 SQLite P4-S04 API `112 pass / 0 fail`，覆盖筛选搜索分页、精选、举报与权限隔离 |
 | `/courses` | 我的课程 | STUDENT | `真实已有（2026-09-02）` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons`、`student_projects`、`works` | `GET /api/student/courses` | 课单进度；学生本人 / 机构隔离 | 学习首页任务、老师通知、继续创作聚合待补 | 临时库验证课程、班级、课时、作品状态与空态；学生只能看到本人数据 |
-| `/credits` | 套餐与用量 | STUDENT | `真实已有（2026-09-02）` | `users`、`billing_packages`、`usage_records`、`student_projects`、`class_sessions`、`classes` | `GET /api/student/credits` | 套餐有效期；学生本人 / 机构隔离 | 真实扣费服务、充值与对账仍属后续 / 外部决策 | 临时库验证额度、模态 / 状态 / 天数筛选、课堂上下文与越权 |
+| `/credits` | AI / 魔法石中心 | STUDENT | `真实已有（2026-09-03，P4-S05）` | `users`、`billing_packages`、`usage_records`、`generation_jobs`、`media_assets`、`student_projects`、`project_snapshots`、`class_sessions`、`classes` | `GET /api/ai/center`、`GET/POST /api/ai/generations/history`、`GET /api/ai/generations/history/:id`、`GET /api/student/credits` | 套餐有效期、能力状态、任务 / 素材本人隔离；失败不扣费，成功任务扣 1 积分 | 真实外部 AI provider、充值与对账仍属后续 / 外部决策 | 临时 SQLite P4-S05 API `85 pass / 0 fail`，覆盖能力状态、失败重试、素材使用推导、mock 标识和权限隔离 |
 | `/account` | 账号安全 | STUDENT | `真实已有（2026-09-02）` | `users`、`sessions`、`organizations`、`classes`、`class_members` | `GET/PUT /api/student/account`、`/profile`、`/password`、`/sessions/:id/revoke` | 账号状态；敏感操作需本人当前密码；学生不可改机构归属 | 头像、监护人资料、隐私设置、注销 / 数据请求入口待补 | 临时库验证资料校验、旧密码 / 弱密码 / 重放、当前及跨学生会话撤销 |
 | `/inbox` | 消息中心 | STUDENT | `真实已有（2026-09-02）` | `notifications`、`notification_recipients` | `GET /api/student/inbox`、`PUT /api/student/inbox/:id/read`、`PUT /api/student/inbox/read-all` | 仅本人已投递且当前机构范围内的 `PUBLISHED` 消息；支持单条/全部已读 | 忽略状态、失败重试、外部通知通道 | 临时库验证平台公告、机构学生通知、定时到期、已读持久化、撤回隐藏与跨端越权 |
 | `/help` | 学习帮助 | STUDENT | `页面壳层` | 静态内容 | 无 | 无 | 正式帮助内容 | 内容属产品决策，可接静态 CMS |
@@ -241,6 +241,7 @@
 - [x] 验证：临时 SQLite P4-O08 API 验收 `51 pass / 0 fail`；失败任务专项 `19 pass / 0 fail`；P3 API 回归 `48 pass / 0 fail`；后端 `node --check`、四端 `pnpm.cmd run build`、`git diff --check` 均通过。
 - [x] 边界：在线支付、支付回调、自动续费和真实充值成功状态未实现；导出动作写入审计。本批未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
 
+
 ### 8.14 P4-S01 验收记录（2026-09-03）
 
 - [x] API：`GET /api/student/dashboard` 由基础上下文升级为真实学习首页聚合接口，按学生本人班级课程表生成课时任务，并关联进行中课堂、项目 / 作品进度、待反馈作品、可继续草稿和老师 / 平台通知。
@@ -280,3 +281,13 @@
 - [x] 举报闭环：不能举报自己的作品；重复待处理举报被拒绝；教师可查看并选择保留或下架，平台端可查看同一举报流；下架后作品从作品墙消失并清空精选字段。
 - [x] 验证：临时 SQLite P4-S04 API `112 pass / 0 fail`，覆盖未登录 / 教师越权、状态可见性、隐私字段、作者脱敏、精选状态机、取消精选不影响发布申请、搜索筛选分页、机构筛选、举报流转与权限隔离；P3 API 回归 `48 pass / 0 fail`；后端语法检查、四端生产构建和 `git diff --check` 通过。
 - [x] 边界：不新增站外公开分享、评论、点赞、访客统计或数据表；未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
+
+### 8.18 P4-S05 验收记录（2026-09-03）
+
+- [x] 学生中心：`GET /api/ai/center` 返回 provider、额度周期、魔法石、当前课堂限制、六类能力可用状态与原因；数据与服务端实际套餐 / 课堂 / 额度授权一致。
+- [x] 任务历史：跨项目历史支持状态、类型、项目筛选和分页；详情包含失败码、失败消息、素材与项目 / 课时 / 班级上下文；旧项目级接口保持兼容。
+- [x] 失败重试：仅本人失败任务可重试，新 job 记录 `retry_of_job_id`；重试成功才扣 1 积分 / 1 魔法石，成功任务、跨学生任务和非法 jobId 均被拒绝。
+- [x] 失败不误扣：课堂暂停、能力关闭和个人额度不足均保留失败 / 拦截用量记录，个人额度、魔法石和机构余额不变。
+- [x] 素材使用：基于当前画布和历史版本中的素材地址推导使用状态，不伪造素材引用表；接口返回素材总数并明确最近 100 条样本边界。
+- [x] 边界：local-mock 明确标识为本地模拟，不上传真实文件；外部 provider 未适配时保留失败任务并返回明确错误，不伪装成功。
+- [x] 验证：临时 SQLite P4-S05 API `85 pass / 0 fail`；P3 API 回归 `48 pass / 0 fail`；学生端生产构建、四端生产构建、后端语法检查和 `git diff --check` 通过。

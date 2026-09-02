@@ -497,9 +497,11 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   created_at TEXT NOT NULL,
   started_at TEXT,
   completed_at TEXT,
+  retry_of_job_id TEXT,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
+  FOREIGN KEY (retry_of_job_id) REFERENCES generation_jobs(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_project_created ON generation_jobs(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_org_created ON generation_jobs(org_id, created_at DESC);
@@ -675,6 +677,11 @@ for (const statement of [
 db.exec('CREATE INDEX IF NOT EXISTS idx_works_org_featured ON works(org_id, featured_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_usage_session_user_created ON usage_records(class_session_id, user_id, created_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_usage_generation_job ON usage_records(generation_job_id)');
+// Lightweight forward-compatible migration for AI generation retries.
+try { db.exec('ALTER TABLE generation_jobs ADD COLUMN retry_of_job_id TEXT'); }
+catch (error) { if (String(error?.message || '').includes('duplicate column name')) { /* column already exists */ } else throw error; }
+db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_retry_of ON generation_jobs(retry_of_job_id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_user_created ON generation_jobs(user_id, org_id, created_at DESC)');
 
 // Lightweight forward-compatible migration for the class scheduling domain. Existing
 // local databases may have been created before makeup sessions were introduced.

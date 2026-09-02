@@ -616,12 +616,135 @@ function Showcase({ api, user }) {
 }
 
 function StudentCredits({ api }) {
-  const [days, setDays] = useState('30'); const [modality, setModality] = useState(''); const [status, setStatus] = useState('');
-  const params = new URLSearchParams({ days }); if (modality) params.set('modality', modality); if (status) params.set('status', status);
-  const state = useData(() => api.get('student/credits?' + params.toString()), [api, days, modality, status]);
-  if (state.loading) return <Loading />; if (state.error) return <ErrorState error={state.error} onRetry={state.refresh} />;
-  const data = state.data; const period = data.period || {}; const usage = data.usage || {};
-  return <><PageHeader eyebrow="创作能量" title="AI / 魔法石" description="查看本周期额度、套餐能力与 AI 创作使用记录。" actions={<button className="secondary-button" onClick={state.refresh}>刷新</button>} /><div className="metrics"><MetricCard label="可用额度" value={formatCredits(period.remaining)} hint={'总额度 ' + formatCredits(period.allowance)} /><MetricCard label="本周期已用" value={formatCredits(period.used)} hint={'最近 ' + (usage.days || days) + ' 天使用 ' + formatCredits(usage.totalCredits)} tone="teal" /><MetricCard label="魔法石" value={formatCredits(data.magicStones)} hint="个人创作成就" tone="orange" /><MetricCard label="课堂会话" value={data.activeSessions?.length || 0} hint={data.usageScope === 'HOME_PRACTICE' ? '支持自主练习' : '跟随老师课堂使用'} tone="pink" /></div><div className="split"><Panel title="额度周期"><div className="card-list"><div className="item-card"><strong>{formatCredits(period.remaining)} / {formatCredits(period.allowance)} 可用</strong><p className="muted">基础额度 {formatCredits((period.allowance || 0) - (period.bonus || 0) - (period.boost || 0))} · 奖励 {formatCredits(period.bonus)} · 加成 {formatCredits(period.boost)}</p><p className="muted">周期：{formatDate(period.start)} 至 {formatDate(period.reset)}</p>{period.expired && <Notice tone="warning">当前额度周期已到期，请联系机构管理员更新套餐。</Notice>}</div>{data.package ? <div className="item-card"><strong>{data.package.name}</strong><p className="muted">套餐月度额度 {formatCredits(data.package.monthlyCredits)}，有效期 {data.package.durationDays} 天</p><p>{Object.entries(data.package.capabilities || {}).filter(([, enabled]) => enabled).map(([key]) => key.replace('allow','')).join('、') || '基础文字能力'}</p></div> : <Notice>当前账号未绑定机构套餐。</Notice>}</div></Panel><Panel title="筛选用量"><div className="form-grid"><label>统计范围<select value={days} onChange={(event) => setDays(event.target.value)}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 365 天</option></select></label><label>素材类型<select value={modality} onChange={(event) => setModality(event.target.value)}><option value="">全部类型</option>{['TEXT','IMAGE','MUSIC','VIDEO','PODCAST','DUBBING'].map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label>状态<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">已拦截</option></select></label></div></Panel></div><Panel title={'用量明细 · ' + (usage.recordCount || 0) + ' 条'}>{usage.items?.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>项目 / 课时</th><th>课堂</th><th>消耗</th><th>状态</th></tr></thead><tbody>{usage.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.projectTitle || '未关联项目'}<div className="muted">{item.courseLessonTitle || '—'}</div></td><td>{item.className || '自主练习'}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} />{item.failCode && <div className="muted">{item.failCode}</div>}</td></tr>)}</tbody></table></div> : <Empty title="暂无用量记录" body="选择其他时间范围，或完成一次 AI 创作后再来查看。" />}</Panel></>;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const days = searchParams.get('days') || '30';
+  const modality = searchParams.get('modality') || '';
+  const status = searchParams.get('status') || '';
+  const jobStatus = searchParams.get('jobStatus') || '';
+  const jobModality = searchParams.get('jobModality') || '';
+  const page = Number(searchParams.get('jobPage') || 1);
+  const center = useData(() => api.get('ai/center'), [api]);
+  const history = useData(() => {
+    const params = new URLSearchParams();
+    if (jobStatus) params.set('status', jobStatus);
+    if (jobModality) params.set('modality', jobModality);
+    params.set('page', String(Number.isFinite(page) && page > 0 ? page : 1));
+    params.set('pageSize', '10');
+    return api.get('ai/generations/history?' + params.toString());
+  }, [api, jobStatus, jobModality, page]);
+  const usage = useData(() => {
+    const params = new URLSearchParams({ days });
+    if (modality) params.set('modality', modality);
+    if (status) params.set('status', status);
+    return api.get('student/credits?' + params.toString());
+  }, [api, days, modality, status]);
+  const [detail, setDetail] = useState(null);
+  const [busyJob, setBusyJob] = useState('');
+  const [message, setMessage] = useState('');
+  function updateFilter(patch, { resetPage = false } = {}) {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value === undefined || value === '') next.delete(key);
+      else next.set(key, String(value));
+    });
+    if (resetPage) next.delete('jobPage');
+    setSearchParams(next, { replace: true });
+  }
+  async function openJob(jobId) {
+    setBusyJob(jobId); setMessage('');
+    try { setDetail(await api.get('ai/generations/history/' + encodeURIComponent(jobId))); }
+    catch (error) { setMessage(error.message); }
+    finally { setBusyJob(''); }
+  }
+  async function retryJob(jobId) {
+    setBusyJob(jobId); setMessage('');
+    try {
+      const result = await api.post('ai/generations/history', { jobId });
+      setMessage('重试成功，新素材已生成并按成功任务扣 1 积分。');
+      setDetail(result.job);
+      center.refresh(); history.refresh(); usage.refresh();
+    } catch (error) { setMessage(error.message); }
+    finally { setBusyJob(''); }
+  }
+  if (center.loading || usage.loading) return <Loading label="正在读取 AI / 魔法石数据…" />;
+  if (center.error) return <ErrorState error={center.error} onRetry={center.refresh} />;
+  if (usage.error) return <ErrorState error={usage.error} onRetry={usage.refresh} />;
+  const data = center.data;
+  const usageData = usage.data;
+  const period = data.period || {};
+  const provider = data.provider || {};
+  const jobs = history.data || {};
+  const pagination = { page: jobs.page || 1, totalPages: jobs.totalPages || 1, total: jobs.total || 0 };
+  return <>
+    <PageHeader eyebrow="创作能量" title="AI / 魔法石" description="查看能力授权、本周期额度、生成任务、失败原因和素材使用情况。" actions={<button className="secondary-button" onClick={() => { center.refresh(); history.refresh(); usage.refresh(); }}>刷新</button>} />
+    <Notice tone={provider.mode === 'mock' ? 'warning' : 'info'}>{provider.mode === 'mock'
+      ? '当前 AI 供应商为 local-mock：仅生成可追踪的本地模拟素材，不会调用外部模型或上传真实文件。'
+      : '当前已配置外部 AI 供应商；未完成适配器接入前，生成请求会保留失败任务并返回明确错误。'}</Notice>
+    <div className="metrics">
+      <MetricCard label="可用额度" value={formatCredits(period.remaining)} hint={'总额度 ' + formatCredits(period.allowance)} />
+      <MetricCard label="本周期已用" value={formatCredits(period.used)} hint={'重置时间 ' + (period.reset ? formatDate(period.reset) : '未设置')} tone="teal" />
+      <MetricCard label="魔法石" value={formatCredits(data.magicStones)} hint="成功生成会消耗 1 颗" tone="orange" />
+      <MetricCard label="生成任务" value={data.jobs?.total || 0} hint={'成功 ' + (data.jobs?.succeeded || 0) + ' · 失败 ' + (data.jobs?.failed || 0)} tone="pink" />
+    </div>
+    {period.expired && <Notice tone="warning">当前额度周期已到期，请联系机构管理员更新套餐。</Notice>}
+    <div className="split">
+      <Panel title="AI 能力可用状态">
+        <div className="card-list">
+          {data.capabilities?.map((item) => <article className="item-card" key={item.modality}>
+            <div className="row-actions"><strong>{item.label}</strong><span className={item.available ? 'status success' : 'status warning'}>{item.available ? '可使用' : '暂不可用'}</span></div>
+            <p className="muted">{item.modality} · 每次成功生成 {formatCredits(item.creditsPerCall)} 积分 · 套餐 {item.packageEnabled ? '已开通' : '未开通'} · 课堂 {item.sessionEnabled ? '已开放' : '未开放'}</p>
+            {item.reasons?.length ? <p className="muted">限制：{item.reasons.join('；')}</p> : null}
+          </article>)}
+        </div>
+      </Panel>
+      <Panel title="当前课堂限制">
+        {data.activeSessions?.length ? <div className="card-list">{data.activeSessions.map((session) => <article className="item-card" key={session.id}>
+          <strong>{session.lessonTitle || '当前课堂'}</strong>
+          <p className="muted">状态：{session.aiPaused ? '教师已暂停 AI' : '进行中'} · 已消耗 {formatCredits(session.consumedCreditsTotal)} 积分</p>
+          <p className="muted">单学生调用上限：{session.studentCallCap === null ? '不限制' : session.studentCallCap + ' 次'} · 课堂上限：{session.sessionCreditCap === null ? '不限制' : formatCredits(session.sessionCreditCap)}</p>
+          <p className="muted">开放能力：{Object.entries(session.capabilities || {}).filter(([, enabled]) => enabled).map(([key]) => key.replace('allow', '').toUpperCase()).join(' / ') || '未开放'}</p>
+        </article>)}</div> : <Empty title="当前没有进行中的课堂" body={data.usageScope === 'HOME_PRACTICE' ? '你的账号支持自主练习，套餐能力可用时即可创作。' : '老师开启课堂后，这里会显示课堂 AI 限制。'} />}
+      </Panel>
+    </div>
+    <Panel title={'生成任务 · 共 ' + pagination.total + ' 条'} actions={pagination.totalPages > 1 ? <div className="row-actions">
+      <button className="secondary-button" disabled={pagination.page <= 1} onClick={() => updateFilter({ jobPage: pagination.page - 1 })}>上一页</button>
+      <span className="muted">第 {pagination.page} / {pagination.totalPages} 页</span>
+      <button className="secondary-button" disabled={pagination.page >= pagination.totalPages} onClick={() => updateFilter({ jobPage: pagination.page + 1 })}>下一页</button>
+    </div> : null}>
+      <div className="form-grid">
+        <label>任务状态<select value={jobStatus} onChange={(event) => updateFilter({ jobStatus: event.target.value, jobPage: '' }, { resetPage: true })}><option value="">全部状态</option><option value="SUCCEEDED">成功</option><option value="FAILED">失败</option></select></label>
+        <label>任务类型<select value={jobModality} onChange={(event) => updateFilter({ jobModality: event.target.value, jobPage: '' }, { resetPage: true })}><option value="">全部类型</option>{['TEXT','IMAGE','MUSIC','VIDEO','PODCAST','DUBBING'].map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+      </div>
+      {history.loading ? <Loading label="正在加载任务…" /> : history.error ? <ErrorState error={history.error} onRetry={history.refresh} /> : jobs.items?.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>项目</th><th>消耗</th><th>状态</th><th>操作</th></tr></thead><tbody>{jobs.items.map((job) => <tr key={job.id}><td>{formatDate(job.createdAt)}</td><td>{job.modalityLabel || job.modality}</td><td>{job.projectTitle || '未关联项目'}<div className="muted">{job.courseLessonTitle || '—'}</div></td><td>{formatCredits(job.creditsCharged)}</td><td><Status value={job.status === 'SUCCEEDED' ? 'APPROVED' : 'REJECTED'} />{job.status === 'FAILED' && job.errorCode ? <div className="muted">{job.errorCode}</div> : null}</td><td><div className="row-actions"><button className="text-button" disabled={busyJob === job.id} onClick={() => openJob(job.id)}>详情</button>{job.status === 'FAILED' && <button className="text-button" disabled={busyJob === job.id} onClick={() => retryJob(job.id)}>重试</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="暂无生成任务" body="在项目画布的 AI 素材工坊完成一次创作后，这里会显示任务记录。" />}
+    </Panel>
+    {detail && <Panel title={'任务详情 · ' + (detail.modalityLabel || detail.modality)} actions={<button className="secondary-button" onClick={() => setDetail(null)}>关闭</button>}>
+      <p className="muted">任务 ID：{detail.id}</p>
+      {detail.retryOfJobId && <p className="muted">重试来源：{detail.retryOfJobId}</p>}
+      <p className="muted">项目：{detail.projectTitle || '未关联项目'} · 课堂：{detail.className || '自主练习'} · 供应商：{detail.provider} / {detail.model}</p>
+      <p><strong>提示词</strong></p><p>{detail.prompt}</p>
+      <p className="muted">创建：{formatDate(detail.createdAt)} · 完成：{detail.completedAt ? formatDate(detail.completedAt) : '—'} · 消耗：{formatCredits(detail.creditsCharged)} 积分</p>
+      {detail.status === 'FAILED' ? <Notice tone="danger">失败原因：{detail.errorCode || 'GENERATION_FAILED'} · {detail.errorMessage || '素材生成失败'}。失败任务不扣除积分；可在限制解除后重试。</Notice> : <Notice tone="success">任务已成功完成；本次按 1 积分结算。</Notice>}
+      {detail.assets?.length ? <div className="card-list">{detail.assets.map((asset) => <article className="item-card" key={asset.id}><strong>{asset.label}</strong><p className="muted">{asset.mimeType || 'mock asset'} · {formatDate(asset.createdAt)}</p>{asset.previewUrl && <img src={asset.previewUrl} alt={asset.label} style={{ width: '100%', maxWidth: 360, borderRadius: 12 }} />}</article>)}</div> : <Empty title="该任务没有素材" body="失败任务不会生成素材，也不会扣除积分。" />}
+    </Panel>}
+    <Panel title={'素材使用 · 最近样本已使用 ' + (data.assets?.stats?.used || 0) + ' / ' + (data.assets?.stats?.sampled || 0)} actions={<span className="muted">素材总数 {data.assets?.stats?.total || 0} · 展示最近 {data.assets?.stats?.sampled || 0} 条</span>}>
+      <p className="muted">使用状态根据当前画布和历史保存版本中的素材地址推导；这里展示最近 100 条素材，未展示的历史素材仍可在项目版本中追溯。</p>
+      {data.assets?.items?.length ? <div className="card-list">{data.assets.items.map((asset) => <article className="item-card" key={asset.id}>
+        <div className="row-actions"><strong>{asset.label}</strong><span className={asset.usage.used ? 'status success' : 'status warning'}>{asset.usage.used ? (asset.usage.source === 'CURRENT' ? '当前画布使用中' : '历史版本使用过') : '未使用'}</span></div>
+        <p className="muted">{asset.modality} · {asset.projectTitle || '未关联项目'} · {formatDate(asset.createdAt)}</p>
+        {asset.usage.usedInVersion ? <p className="muted">使用版本：v{asset.usage.usedInVersion} · {formatDate(asset.usage.usedAt)}</p> : null}
+        {asset.previewUrl && <img src={asset.previewUrl} alt={asset.label} style={{ width: '100%', maxWidth: 280, borderRadius: 12, marginTop: 8 }} />}
+      </article>)}</div> : <Empty title="暂无 AI 素材" body="成功生成的素材会显示在这里，并标记是否已被画布引用。" />}
+    </Panel>
+    <Panel title={'用量明细 · ' + (usageData.usage?.recordCount || 0) + ' 条'}>
+      <div className="form-grid">
+        <label>统计范围<select value={days} onChange={(event) => updateFilter({ days: event.target.value })}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 365 天</option></select></label>
+        <label>素材类型<select value={modality} onChange={(event) => updateFilter({ modality: event.target.value })}><option value="">全部类型</option>{['TEXT','IMAGE','MUSIC','VIDEO','PODCAST','DUBBING'].map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label>状态<select value={status} onChange={(event) => updateFilter({ status: event.target.value })}><option value="">全部状态</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">已拦截</option></select></label>
+      </div>
+      {usageData.usage?.items?.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>项目 / 课时</th><th>课堂</th><th>消耗</th><th>状态</th></tr></thead><tbody>{usageData.usage.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.projectTitle || '未关联项目'}<div className="muted">{item.courseLessonTitle || '—'}</div></td><td>{item.className || '自主练习'}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} />{item.failCode && <div className="muted">{item.failCode}</div>}</td></tr>)}</tbody></table></div> : <Empty title="暂无用量记录" body="选择其他时间范围，或完成一次 AI 创作后再来查看。" />}
+    </Panel>
+    {message && <Notice tone={message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
+  </>;
 }
 
 function StudentAccount({ api, onRelogin }) {
