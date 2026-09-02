@@ -446,8 +446,26 @@ export function normalizeWork(value, { includeSnapshot = false } = {}) {
     reviewerName: value.reviewer_name || null,
     submittedAt: value.submitted_at,
     reviewedAt: value.reviewed_at || null,
+    copyrightConfirmedAt: value.copyright_confirmed_at || null,
+    copyrightConfirmedBy: value.copyright_confirmed_by || null,
+    featured: Boolean(value.featured_at),
+    featuredAt: value.featured_at || null,
+    featuredBy: value.featured_by || null,
+    featuredReason: value.featured_reason || null,
   };
   if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
+  return result;
+}
+
+export function normalizeWorkReport(value, { includeReporter = false } = {}) {
+  if (!value) return null;
+  const result = {
+    id: value.id, workId: value.work_id, orgId: value.org_id, category: value.category, details: value.details || '',
+    status: value.status, handledBy: value.handled_by || null, handlerName: value.handler_name || null,
+    handledAt: value.handled_at || null, resolution: value.resolution || null, actionTaken: value.action_taken || 'NONE',
+    createdAt: value.created_at, workTitle: value.work_title || null, workStatus: value.work_status || null,
+  };
+  if (includeReporter) { result.reporterId = value.reporter_id; result.reporterName = value.reporter_name || null; }
   return result;
 }
 

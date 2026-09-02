@@ -295,11 +295,37 @@ CREATE TABLE IF NOT EXISTS works (
   teacher_comment TEXT,
   reviewed_by TEXT,
   reviewed_at TEXT,
+  copyright_confirmed_at TEXT,
+  copyright_confirmed_by TEXT,
+  featured_at TEXT,
+  featured_by TEXT,
+  featured_reason TEXT,
   submitted_at TEXT NOT NULL,
   FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_works_org_submitted ON works(org_id, submitted_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_works_project_unique ON works(project_id);
+
+CREATE TABLE IF NOT EXISTS work_reports (
+  id TEXT PRIMARY KEY,
+  work_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  reporter_id TEXT NOT NULL,
+  category TEXT NOT NULL CHECK (category IN ('INAPPROPRIATE','COPYRIGHT','PRIVACY','OTHER')),
+  details TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','RESOLVED','DISMISSED')),
+  handled_by TEXT,
+  handled_at TEXT,
+  resolution TEXT,
+  action_taken TEXT NOT NULL DEFAULT 'NONE' CHECK (action_taken IN ('NONE','UNPUBLISH')),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE RESTRICT,
+  FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_reports_org_status_created ON work_reports(org_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_reports_work_created ON work_reports(work_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS work_annotations (
   id TEXT PRIMARY KEY,
@@ -521,6 +547,17 @@ try { db.exec("ALTER TABLE class_sessions ADD COLUMN ai_paused INTEGER NOT NULL 
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec("ALTER TABLE class_sessions ADD COLUMN student_call_cap INTEGER"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+for (const statement of [
+  "ALTER TABLE works ADD COLUMN copyright_confirmed_at TEXT",
+  "ALTER TABLE works ADD COLUMN copyright_confirmed_by TEXT",
+  "ALTER TABLE works ADD COLUMN featured_at TEXT",
+  "ALTER TABLE works ADD COLUMN featured_by TEXT",
+  "ALTER TABLE works ADD COLUMN featured_reason TEXT",
+]) {
+  try { db.exec(statement); }
+  catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_works_org_featured ON works(org_id, featured_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_usage_session_user_created ON usage_records(class_session_id, user_id, created_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_usage_generation_job ON usage_records(generation_job_id)');
 

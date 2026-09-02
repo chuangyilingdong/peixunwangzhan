@@ -177,39 +177,22 @@ function PlatformAdmins({ api, currentUser }) {
 function PlatformWorks({ api }) {
   const organizations = useData(() => api.get('admin/organizations'), [api]);
   const [filters, setFilters] = useState({ status: '', orgId: '', search: '' });
-  const [message, setMessage] = useState('');
-  const [action, setAction] = useState(null);
-  const [reason, setReason] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState(''); const [action, setAction] = useState(null); const [reason, setReason] = useState(''); const [saving, setSaving] = useState(false);
+  const reports = useData(() => api.get('admin/work-reports?status=PENDING'), [api]);
+  const [reportAction, setReportAction] = useState(null); const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); const [reportBusy, setReportBusy] = useState(false);
   const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
   const works = useData(() => api.get(`admin/works?${query.toString()}`), [api, query]);
   const statusLabels = { PENDING: '待审核', APPROVED: '已通过', REJECTED: '已下架', PUBLISHED: '已发布' };
-  async function unpublish() {
-    if (!action) return;
-    setSaving(true); setMessage('');
-    try {
-      await api.put(`admin/works/${action.id}/unpublish`, { reason });
-      setMessage(`已下架《${action.title}》。`);
-      setAction(null); setReason(''); works.refresh();
-    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
-  }
+  async function unpublish() { if (!action) return; setSaving(true); setMessage(''); try { await api.put(`admin/works/${action.id}/unpublish`, { reason }); setMessage(`已下架《${action.title}》。`); setAction(null); setReason(''); works.refresh(); reports.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
+  async function toggleFeature(item) { setSaving(true); setMessage(''); try { await api.put(`admin/works/${item.id}/feature`, { featured: !item.featured, reason: !item.featured ? '平台精选推荐' : '' }); setMessage(item.featured ? `已取消《${item.title}》的精选。` : `已将《${item.title}》设为精选。`); works.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
+  async function handleReport() { if (!reportAction) return; setReportBusy(true); setMessage(''); try { await api.put(`admin/work-reports/${reportAction.id}`, reportForm); setMessage(`举报《${reportAction.workTitle}》已处理。`); setReportAction(null); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); reports.refresh(); works.refresh(); } catch (err) { setMessage(err.message); } finally { setReportBusy(false); } }
   return <>
-    <PageHeader eyebrow="内容治理" title="平台作品库" description="聚合查看各机构作品状态，并对公开发布作品执行平台下架。" actions={<button className="secondary-button" onClick={works.refresh}>刷新</button>} />
-    <Panel title="筛选条件">
-      <div className="form-grid">
-        <label>状态<select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
-        <label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
-      </div>
-      {message && <Notice tone={message.includes('已下架') ? 'success' : 'danger'}>{message}</Notice>}
-    </Panel>
-    <Panel title="作品列表">
-      {works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>班级 / 课时</th><th>状态</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'}</div></td><td>{item.className || '—'}{item.courseLessonTitle ? <div className="muted">{item.courseLessonTitle}</div> : null}</td><td><Status value={item.status} />{item.status === 'REJECTED' && item.teacherComment ? <div className="muted">{item.teacherComment}</div> : null}</td><td>{formatDate(item.submittedAt)}</td><td>{item.status === 'PUBLISHED' ? <button className="secondary-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button> : <span className="muted">—</span>}</td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的作品" />}
-    </Panel>
-    {action ? <Panel title={`下架《${action.title}》`}>
-      <label>下架原因<input value={reason} placeholder="例如：内容不适合公开展示" onChange={(e) => setReason(e.target.value)} /></label>
-      <div className="row-actions top-gap"><button className="primary-button" disabled={saving} onClick={unpublish}>{saving ? '处理中…' : '确认下架'}</button><button className="secondary-button" disabled={saving} onClick={() => { setAction(null); setReason(''); }}>取消</button></div>
-    </Panel> : null}
+    <PageHeader eyebrow="内容治理" title="平台作品库" description="聚合各机构作品；精选只允许已发布作品，举报处理可保留作品或执行平台下架。" actions={<button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); }}>刷新</button>} />
+    <Panel title="筛选条件"><div className="form-grid"><label>状态<select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label><label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label></div>{message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
+    <Panel title="作品列表">{works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>状态与授权</th><th>举报</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td><Status value={item.status} />{item.featured && <span className="status success">精选</span>}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{item.status === 'PUBLISHED' && <><button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button><button className="text-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button></>}</div></td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的作品" />}</Panel>
+    <Panel title={`待处理举报 · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" onClick={() => { setReportAction(item); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); }}>处理</button></td></tr>)}</tbody></table></div> : <Empty title="暂无待处理举报" />}</Panel>
+    {action ? <Panel title={`下架《${action.title}》`}><label>下架原因<input value={reason} required maxLength={2000} placeholder="例如：内容不适合公开展示" onChange={(e) => setReason(e.target.value)} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={saving || !reason.trim()} onClick={unpublish}>{saving ? '处理中…' : '确认下架'}</button><button className="secondary-button" disabled={saving} onClick={() => { setAction(null); setReason(''); }}>取消</button></div></Panel> : null}
+    {reportAction ? <Panel title={`处理举报 · ${reportAction.workTitle}`}><div className="form-grid"><label>处理结果<select value={reportForm.status} onChange={(event) => setReportForm({ ...reportForm, status: event.target.value })}><option value="RESOLVED">已处理</option><option value="DISMISSED">驳回举报</option></select></label><label>作品动作<select value={reportForm.actionTaken} onChange={(event) => setReportForm({ ...reportForm, actionTaken: event.target.value })}><option value="NONE">保留作品</option><option value="UNPUBLISH">下架作品</option></select></label></div><label>处理说明<textarea value={reportForm.resolution} required maxLength={2000} placeholder="说明处理结论；下架时该说明会作为学生可见的下架原因。" onChange={(event) => setReportForm({ ...reportForm, resolution: event.target.value })} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={reportBusy || !reportForm.resolution.trim()} onClick={handleReport}>{reportBusy ? '处理中…' : '确认处理'}</button><button className="secondary-button" disabled={reportBusy} onClick={() => setReportAction(null)}>取消</button></div></Panel> : null}
   </>;
 }
 

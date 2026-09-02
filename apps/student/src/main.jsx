@@ -38,51 +38,44 @@ function Projects({ api }) {
   const dashboard = useData(() => api.get('student/dashboard'), [api]);
   const [title, setTitle] = useState('我的新创作');
   const [lessonId, setLessonId] = useState('');
+  const [copyrightConfirmed, setCopyrightConfirmed] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
   const lessons = dashboard.data?.courses?.flatMap((course) => course.lessons.map((lesson) => ({ ...lesson, courseTitle: course.title }))) || [];
 
   async function create(event) {
-    event.preventDefault();
-    setBusy('create');
+    event.preventDefault(); setBusy('create');
     try {
       const chosenLesson = lessonId || lessons[0]?.id;
       const project = await api.post('student/projects', { title, courseLessonId: chosenLesson || undefined, canvasSnapshot: { nodes: [], edges: [] } });
-      setTitle('我的新创作');
-      projects.refresh();
-      navigate(`/projects/${project.id}/canvas`);
-    } catch (err) { setMessage(err.message); }
-    finally { setBusy(''); }
+      setTitle('我的新创作'); projects.refresh(); navigate(`/projects/${project.id}/canvas`);
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
   }
 
   async function useAi(project) {
     setBusy(project.id);
     try {
       const result = await api.post('ai/usage', { modality: 'TEXT', credits: 1, projectId: project.id });
-      setMessage(`已记录 1 次 AI 文本创作，剩余机构积分 ${formatCredits(result.balanceAfter)}。`);
-      dashboard.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setBusy(''); }
+      setMessage(`已记录 1 次 AI 文本创作，剩余机构积分 ${formatCredits(result.balanceAfter)}。`); dashboard.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
   }
 
   async function submit(project) {
+    if (!copyrightConfirmed) { setMessage('请先确认作品为本人创作，且同意在本机构作品墙内展示后再提交。'); return; }
     setBusy(project.id);
     try {
-      await api.post(`student/projects/${project.id}/submit`, { description: '来自学生画布的项目提交' });
-      setMessage('作品已提交，等待老师点评。');
-      projects.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setBusy(''); }
+      await api.post(`student/projects/${project.id}/submit`, { description: '来自学生画布的项目提交', copyrightConfirmed: true });
+      setMessage('作品已提交，等待老师点评。'); projects.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
   }
 
   return <>
     <PageHeader eyebrow="创作空间" title="我的项目" description="用可拖拽、可连线的魔法画布组织提示词、画面和故事。" />
     {!dashboard.loading && !dashboard.data?.canUseNow && <Notice tone="warning">{dashboard.data?.blockReason}</Notice>}
-    <div className="split"><Panel title="创建项目"><form onSubmit={create}><label>项目标题<input value={title} onChange={(event) => setTitle(event.target.value)} required /></label><label>关联课时<select value={lessonId} onChange={(event) => setLessonId(event.target.value)}><option value="">自动选择首个可用课时</option>{lessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.courseTitle} · {lesson.title}</option>)}</select></label><button className="primary-button" disabled={busy === 'create'}>{busy === 'create' ? '创建中…' : '创建并打开画布'}</button></form></Panel><Panel title="创作提示"><Notice>每次保存都会在后端生成画布版本。跟随课堂账号只能在老师开启课堂后编辑或提交。</Notice>{message && <Notice tone={message.includes('已') || message.includes('记录') ? 'success' : 'danger'}>{message}</Notice>}</Panel></div>
-    <Panel title="项目列表" actions={<button className="secondary-button" onClick={projects.refresh}>刷新</button>}>{projects.loading ? <Loading /> : projects.error ? <ErrorState error={projects.error} onRetry={projects.refresh} /> : projects.data.items.length ? <div className="card-list">{projects.data.items.map((project) => <article className="item-card" key={project.id}><div className="row-actions"><h3>{project.title}</h3><Status value={project.status} /></div><p>{project.courseLessonTitle || '未绑定课时'} · 版本 {project.latestVersion} · 最近保存：{formatDate(project.lastSavedAt || project.updatedAt)}</p><div className="row-actions"><button className="secondary-button" onClick={() => navigate(`/projects/${project.id}/canvas`)}>{project.status === 'DRAFT' ? '进入画布' : '查看画布'}</button>{project.status === 'DRAFT' && <><button className="secondary-button" disabled={busy === project.id} onClick={() => useAi(project)}>消耗 1 积分进行 AI 文本创作</button><button className="primary-button" disabled={busy === project.id} onClick={() => submit(project)}>提交作品</button></>}</div></article>)}</div> : <Empty title="还没有项目" body="选择一节课，开始你的第一份创作。" />}</Panel>
+    <div className="split"><Panel title="创建项目"><form onSubmit={create}><label>项目标题<input value={title} onChange={(event) => setTitle(event.target.value)} required /></label><label>关联课时<select value={lessonId} onChange={(event) => setLessonId(event.target.value)}><option value="">自动选择首个可用课时</option>{lessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.courseTitle} · {lesson.title}</option>)}</select></label><button className="primary-button" disabled={busy === 'create'}>{busy === 'create' ? '创建中…' : '创建并打开画布'}</button></form></Panel><Panel title="作品提交与展示授权"><label className="muted"><input type="checkbox" checked={copyrightConfirmed} onChange={(event) => setCopyrightConfirmed(event.target.checked)} /> 我确认作品为本人创作或已获授权，不含他人隐私信息；同意老师审核通过后仅在当前机构作品墙展示。</label><Notice tone="warning">作品默认不会公开。教师审核并发布后，作品墙只显示脱敏作者名称；评论、点赞功能当前未启用。</Notice>{message && <Notice tone={message.includes('已') || message.includes('记录') ? 'success' : 'danger'}>{message}</Notice>}</Panel></div>
+    <Panel title="项目列表" actions={<button className="secondary-button" onClick={projects.refresh}>刷新</button>}>{projects.loading ? <Loading /> : projects.error ? <ErrorState error={projects.error} onRetry={projects.refresh} /> : projects.data.items.length ? <div className="card-list">{projects.data.items.map((project) => <article className="item-card" key={project.id}><div className="row-actions"><h3>{project.title}</h3><Status value={project.status} /></div><p>{project.courseLessonTitle || '未绑定课时'} · 版本 {project.latestVersion} · 最近保存：{formatDate(project.lastSavedAt || project.updatedAt)}</p><div className="row-actions"><button className="secondary-button" onClick={() => navigate(`/projects/${project.id}/canvas`)}>{project.status === 'DRAFT' ? '进入画布' : '查看画布'}</button>{project.status === 'DRAFT' && <><button className="secondary-button" disabled={busy === project.id} onClick={() => useAi(project)}>消耗 1 积分进行 AI 文本创作</button><button className="primary-button" disabled={busy === project.id || !copyrightConfirmed} onClick={() => submit(project)}>提交作品</button></>}</div></article>)}</div> : <Empty title="还没有项目" body="选择一节课，开始你的第一份创作。" />}</Panel>
   </>;
 }
-
 
 function snapshotSummary(snapshot) {
   return {
@@ -415,16 +408,23 @@ function Works({ api }) {
   }
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
-  return <><PageHeader eyebrow="成果展" title="我的作品" description="查看老师的整体点评与画布卡片反馈；发布后的优秀作品会出现在机构作品墙。" /><Panel title="提交记录" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>{data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>课程 / 课时</th><th>提交时间</th><th>状态</th><th>老师点评</th><th>反馈</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'}</div></td><td>{item.courseLessonTitle || item.lessonTitle || '—'}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /></td><td>{item.teacherComment || '等待老师点评'}</td><td><button className="text-button" onClick={() => openFeedback(item)}>查看画布反馈</button></td></tr>)}</tbody></table></div> : <Empty title="还没有提交作品" body="在项目画布完成创作后，提交给老师点评吧。" />}</Panel>{selectedWork && <Panel title={`老师反馈 · ${selectedWork.title}`} actions={<button className="secondary-button" onClick={() => setSelectedWork(null)}>关闭</button>}><CanvasEditor key={`feedback-${selectedWork.id}`} initialSnapshot={selectedWork.canvasSnapshot} readOnly />{annotationsLoading ? <Loading label="正在读取反馈…" /> : annotations.length ? <div className="card-list">{annotations.map((annotation) => <article className="item-card" key={annotation.id}><div className="row-actions"><strong>{annotation.nodeId ? `卡片反馈：${nodeFeedbackLabel(selectedWork.canvasSnapshot, annotation.nodeId)}` : '整体补充反馈'}</strong><Status value={annotation.resolvedAt ? 'APPROVED' : 'PENDING'} /></div><p>{annotation.content}</p><p className="muted">{annotation.authorName} · {formatDate(annotation.createdAt)}{annotation.resolvedAt ? ' · 老师已标记完成' : ''}</p></article>)}</div> : <Empty title="老师暂未添加画布批注" body="整体点评会显示在提交记录中。" />}</Panel>}</>;
+  return <><PageHeader eyebrow="成果展" title="我的作品" description="查看老师的整体点评与画布卡片反馈；发布后的优秀作品会出现在机构作品墙。" /><Panel title="提交记录" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>{data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>课程 / 课时</th><th>提交时间</th><th>状态</th><th>老师点评</th><th>反馈</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'}</div></td><td>{item.courseLessonTitle || item.lessonTitle || '—'}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} />{item.copyrightConfirmedAt ? <div className="muted">已确认展示授权</div> : <div className="muted">未确认展示授权</div>}</td><td>{item.teacherComment || '等待老师点评'}</td><td><button className="text-button" onClick={() => openFeedback(item)}>查看画布反馈</button></td></tr>)}</tbody></table></div> : <Empty title="还没有提交作品" body="在项目画布完成创作后，提交给老师点评吧。" />}</Panel>{selectedWork && <Panel title={`老师反馈 · ${selectedWork.title}`} actions={<button className="secondary-button" onClick={() => setSelectedWork(null)}>关闭</button>}><CanvasEditor key={`feedback-${selectedWork.id}`} initialSnapshot={selectedWork.canvasSnapshot} readOnly />{annotationsLoading ? <Loading label="正在读取反馈…" /> : annotations.length ? <div className="card-list">{annotations.map((annotation) => <article className="item-card" key={annotation.id}><div className="row-actions"><strong>{annotation.nodeId ? `卡片反馈：${nodeFeedbackLabel(selectedWork.canvasSnapshot, annotation.nodeId)}` : '整体补充反馈'}</strong><Status value={annotation.resolvedAt ? 'APPROVED' : 'PENDING'} /></div><p>{annotation.content}</p><p className="muted">{annotation.authorName} · {formatDate(annotation.createdAt)}{annotation.resolvedAt ? ' · 老师已标记完成' : ''}</p></article>)}</div> : <Empty title="老师暂未添加画布批注" body="整体点评会显示在提交记录中。" />}</Panel>}</>;
 }
 
-function Showcase({ api }) {
-  const { loading, error, data, refresh } = useData(() => api.get('student/showcase'), [api]);
-  const [work, setWork] = useState(null);
-  async function openWork(item) { setWork(await api.get(`student/showcase/${item.id}`)); }
+function Showcase({ api, user }) {
+  const [filters, setFilters] = useState({ search: '', featured: false });
+  const query = useMemo(() => { const value = new URLSearchParams(); if (filters.search.trim()) value.set('search', filters.search.trim()); if (filters.featured) value.set('featured', 'true'); return value.toString(); }, [filters]);
+  const { loading, error, data, refresh } = useData(() => api.get('student/showcase' + (query ? '?' + query : '')), [api, query]);
+  const [work, setWork] = useState(null); const [message, setMessage] = useState(''); const [report, setReport] = useState({ category: 'INAPPROPRIATE', details: '' }); const [reporting, setReporting] = useState(false);
+  async function openWork(item) { try { setWork(await api.get(`student/showcase/${item.id}`)); setReport({ category: 'INAPPROPRIATE', details: '' }); } catch (err) { setMessage(err.message); } }
+  async function submitReport(event) {
+    event.preventDefault(); if (!work) return; setReporting(true); setMessage('');
+    try { await api.post(`student/showcase/${work.id}/reports`, report); setMessage('举报已提交给机构审核人员处理。'); setReport({ category: 'INAPPROPRIATE', details: '' }); }
+    catch (err) { setMessage(err.message); } finally { setReporting(false); }
+  }
   if (loading) return <Loading label="正在打开作品墙…" />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
-  return <><PageHeader eyebrow="机构作品墙" title="优秀作品展示" description="这里只展示本机构老师已发布的作品，供同学们互相学习创作思路。" /><Panel title="已发布作品" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>{data.items.length ? <div className="card-list">{data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><h3>{item.title}</h3><Status value={item.status} /></div><p>{item.description || '这位同学完成了一份精彩创作。'}</p><p className="muted">创作者：{item.studentName || '同学'} · {item.courseLessonTitle || '创作作品'} · {formatDate(item.reviewedAt || item.submittedAt)}</p><button className="secondary-button" onClick={() => openWork(item)}>查看作品</button></article>)}</div> : <Empty title="作品墙正在筹备" body="老师发布优秀作品后，会显示在这里。" />}</Panel>{work && <Panel title={`作品预览 · ${work.title}`} actions={<button className="secondary-button" onClick={() => setWork(null)}>关闭</button>}><p className="muted">创作者：{work.studentName || '同学'} · {work.courseLessonTitle || '创作作品'}</p><CanvasEditor key={`showcase-${work.id}`} initialSnapshot={work.canvasSnapshot} readOnly /></Panel>}</>;
+  return <><PageHeader eyebrow="机构作品墙" title="优秀作品展示" description="这里只展示当前机构老师审核发布的作品。作者姓名已脱敏，评论和点赞功能尚未启用。" /><Panel title="筛选作品" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}><div className="form-grid"><label>关键词<input value={filters.search} placeholder="作品名称、描述或课时" onChange={(event) => setFilters({ ...filters, search: event.target.value })} /></label><label className="muted"><input type="checkbox" checked={filters.featured} onChange={(event) => setFilters({ ...filters, featured: event.target.checked })} /> 仅看精选作品</label></div></Panel><Panel title="已发布作品">{data.items.length ? <div className="card-list">{data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><h3>{item.title}</h3>{item.featured && <span className="status success">精选</span>}<Status value={item.status} /></div><p>{item.description || '这位同学完成了一份精彩创作。'}</p><p className="muted">创作者：{item.studentName || '小创作者'} · {item.courseLessonTitle || '创作作品'} · {formatDate(item.reviewedAt || item.submittedAt)}</p><button className="secondary-button" onClick={() => openWork(item)}>查看作品</button></article>)}</div> : <Empty title="没有符合条件的已发布作品" body="老师发布优秀作品后，会显示在这里。" />}</Panel>{message && <Notice tone={message.includes('已提交') ? 'success' : 'danger'}>{message}</Notice>}{work && <><Panel title={`作品预览 · ${work.title}`} actions={<button className="secondary-button" onClick={() => setWork(null)}>关闭</button>}><p className="muted">创作者：{work.studentName || '小创作者'} · {work.courseLessonTitle || '创作作品'}{work.featured ? ' · 平台精选' : ''}</p><CanvasEditor key={`showcase-${work.id}`} initialSnapshot={work.canvasSnapshot} readOnly /></Panel>{work.studentId !== user.id && <Panel title="举报作品" description="举报只会发送给本机构审核人员；请勿在说明中填写自己的联系方式或其他敏感个人信息。"><form onSubmit={submitReport}><label>举报类型<select value={report.category} onChange={(event) => setReport({ ...report, category: event.target.value })}><option value="INAPPROPRIATE">不适宜内容</option><option value="COPYRIGHT">疑似版权问题</option><option value="PRIVACY">隐私或个人信息</option><option value="OTHER">其他问题</option></select></label><label>补充说明（可选）<textarea value={report.details} maxLength={1000} placeholder="请简要说明问题，不要填写个人联系方式。" onChange={(event) => setReport({ ...report, details: event.target.value })} /></label><button className="primary-button" disabled={reporting}>{reporting ? '提交中…' : '提交举报'}</button></form></Panel>}</>}</>;
 }
 
 function StudentCourses({ api }) {
@@ -483,7 +483,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="学生创作空间" description="在 AI 魔法学院中学习、创作并分享你的作品。" clientType="student" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'STUDENT') return <LoginPanel title="学生创作空间" description="当前会话没有学生创作权限。" clientType="student" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="小小创作者" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/projects" element={<Projects api={api} />} /><Route path="/projects/:projectId/canvas" element={<CanvasWorkspace api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/showcase" element={<Showcase api={api} />} /><Route path="/inbox" element={<StudentInbox api={api} />} /><Route path="/courses" element={<StudentCourses api={api} />} /><Route path="/credits" element={<StudentCredits api={api} />} /><Route path="/account" element={<StudentAccount api={api} onRelogin={() => { clearSession(); setSession(null); navigate('/login'); }} />} /><Route path="/help" element={<StudentPage kind="help" api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="小小创作者" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/projects" element={<Projects api={api} />} /><Route path="/projects/:projectId/canvas" element={<CanvasWorkspace api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/showcase" element={<Showcase api={api} user={session.user} />} /><Route path="/inbox" element={<StudentInbox api={api} />} /><Route path="/courses" element={<StudentCourses api={api} />} /><Route path="/credits" element={<StudentCredits api={api} />} /><Route path="/account" element={<StudentAccount api={api} onRelogin={() => { clearSession(); setSession(null); navigate('/login'); }} />} /><Route path="/help" element={<StudentPage kind="help" api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

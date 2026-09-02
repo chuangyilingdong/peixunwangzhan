@@ -325,7 +325,11 @@ function nodeLabel(snapshot, nodeId) {
 
 function Works({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/works?includeSnapshot=true'), [api]);
+  const reports = useData(() => api.get('org/work-reports?status=PENDING'), [api]);
   const [message, setMessage] = useState('');
+  const [reportAction, setReportAction] = useState(null);
+  const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' });
+  const [reportBusy, setReportBusy] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
   const [annotations, setAnnotations] = useState([]);
   const [annotationsLoading, setAnnotationsLoading] = useState(false);
@@ -353,6 +357,16 @@ function Works({ api }) {
     } catch (err) { setMessage(err.message); }
   }
 
+  async function handleReport() {
+    if (!reportAction) return;
+    setReportBusy(true); setMessage('');
+    try {
+      await api.put(`org/work-reports/${reportAction.id}`, reportForm);
+      setMessage(`举报《${reportAction.workTitle}》已处理。`);
+      setReportAction(null); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); reports.refresh(); refresh();
+    } catch (err) { setMessage(err.message); } finally { setReportBusy(false); }
+  }
+
   async function addAnnotation(event) {
     event.preventDefault();
     if (!selectedWork) return;
@@ -376,14 +390,16 @@ function Works({ api }) {
   return <>
     <PageHeader eyebrow="学习成果" title="作品点评" description="审核作品、写整体或指定画布卡片的反馈，并将优秀作品发布到机构作品墙。" />
     {message && <Notice tone={message.includes('已') || message.includes('发送') ? 'success' : 'danger'}>{message}</Notice>}
-    <Panel title="作品列表" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>
-      {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>班级 / 课时</th><th>提交时间</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'}</div></td><td>{item.studentName}</td><td>{item.className || '—'}<div className="muted">{item.courseLessonTitle || '—'}</div></td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /></td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看与点评</button><button className="text-button" onClick={() => review(item, 'APPROVED')}>通过</button><button className="text-button" onClick={() => review(item, 'PUBLISHED')}>发布</button></div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
+    <Panel title="作品列表" actions={<button className="secondary-button" onClick={() => { refresh(); reports.refresh(); }}>刷新</button>}>
+      {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'} · {item.className || '—'} / {item.courseLessonTitle || '—'}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看与点评</button>{item.status === 'PENDING' && <button className="text-button" onClick={() => review(item, 'APPROVED')}>通过</button>}{item.status === 'APPROVED' && <button className="text-button" onClick={() => review(item, 'PUBLISHED')}>发布</button>}{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => review(item, 'REJECTED', '机构下架')}>下架</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
     </Panel>
+    <Panel title={`待处理举报 · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" onClick={() => { setReportAction(item); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); }}>处理</button></td></tr>)}</tbody></table></div> : <Empty title="暂无待处理举报" />}</Panel>
+    {reportAction && <Panel title={`处理举报 · ${reportAction.workTitle}`}><div className="form-grid"><label>处理结果<select value={reportForm.status} onChange={(event) => setReportForm({ ...reportForm, status: event.target.value })}><option value="RESOLVED">已处理</option><option value="DISMISSED">驳回举报</option></select></label><label>作品动作<select value={reportForm.actionTaken} onChange={(event) => setReportForm({ ...reportForm, actionTaken: event.target.value })}><option value="NONE">保留作品</option><option value="UNPUBLISH">下架作品</option></select></label></div><label>处理说明<textarea value={reportForm.resolution} required maxLength={2000} placeholder="说明处理结论；下架时该说明会作为学生可见的下架原因。" onChange={(event) => setReportForm({ ...reportForm, resolution: event.target.value })} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={reportBusy || !reportForm.resolution.trim()} onClick={handleReport}>{reportBusy ? '处理中…' : '确认处理'}</button><button className="secondary-button" disabled={reportBusy} onClick={() => setReportAction(null)}>取消</button></div></Panel>}
     {selectedWork && <>
       <Panel title={`画布预览与整体点评 · ${selectedWork.title}`} actions={<button className="secondary-button" onClick={() => setSelectedWork(null)}>关闭预览</button>}>
         <div className="row-actions canvas-meta"><span className="muted">学生：{selectedWork.studentName}</span><span className="muted">提交时间：{formatDate(selectedWork.submittedAt)}</span><Status value={selectedWork.status} /></div>
         <label>整体点评<textarea value={teacherComment} maxLength={2000} placeholder="告诉学生作品做得好的地方，以及下一步可以怎样改进。" onChange={(event) => setTeacherComment(event.target.value)} /></label>
-        <div className="row-actions"><button className="secondary-button" onClick={() => review(selectedWork, 'APPROVED', teacherComment)}>保存点评并通过</button><button className="primary-button" onClick={() => review(selectedWork, 'PUBLISHED', teacherComment)}>保存点评并发布</button></div>
+        <div className="row-actions">{selectedWork.status === 'PENDING' && <button className="secondary-button" onClick={() => review(selectedWork, 'APPROVED', teacherComment)}>保存点评并通过</button>}{selectedWork.status === 'APPROVED' && <button className="primary-button" onClick={() => review(selectedWork, 'PUBLISHED', teacherComment)}>保存点评并发布</button>}{selectedWork.status === 'PUBLISHED' && <button className="secondary-button" onClick={() => review(selectedWork, 'REJECTED', teacherComment || '机构下架')}>下架作品</button>}<span className="muted">{selectedWork.copyrightConfirmedAt ? '学生已确认机构内展示授权' : '学生未确认展示授权，不能发布'}</span></div>
         <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly />
       </Panel>
       <Panel title="画布卡片批注" description="选择某张卡片可发送针对性建议；不选卡片即为整张作品的补充点评。">

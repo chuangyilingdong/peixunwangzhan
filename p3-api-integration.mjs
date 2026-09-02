@@ -77,14 +77,16 @@ const savedSnapshot = {
 };
 const saved = success('save project snapshot', await call('PUT', `/student/projects/${projectId}`, { canvasSnapshot: savedSnapshot, label: '联调版本' }, studentToken));
 must('project version incremented', saved.data.data.latestVersion >= 2, saved);
-const submitted = success('submit project', await call('POST', `/student/projects/${projectId}/submit`, { description: 'P3 接口联调提交', canvasSnapshot: savedSnapshot }, studentToken));
+const submitted = success('submit project', await call('POST', `/student/projects/${projectId}/submit`, { description: 'P3 接口联调提交', canvasSnapshot: savedSnapshot, copyrightConfirmed: true }, studentToken));
 const workId = submitted.data.data.work.id;
 must('work starts pending', submitted.data.data.work.status === 'PENDING', submitted);
 
 const orgWorks = success('teacher list works with snapshots', await call('GET', '/org/works?includeSnapshot=true', undefined, teacherToken));
 const listedWork = orgWorks.data.data.items.find((item) => item.id === workId);
 must('submitted work visible to teacher', Boolean(listedWork) && listedWork.canvasSnapshot.nodes.length === 3, orgWorks);
-const reviewed = success('publish work to organization showcase', await call('PUT', `/org/works/${workId}/review`, { status: 'PUBLISHED', teacherComment: '结构清晰，可以继续完善画面细节。' }, teacherToken));
+const approved = success('approve submitted work', await call('PUT', `/org/works/${workId}/review`, { status: 'APPROVED', teacherComment: '结构清晰，可以继续完善画面细节。' }, teacherToken));
+must('work approved', approved.data.data.status === 'APPROVED', approved);
+const reviewed = success('publish approved work to organization showcase', await call('PUT', `/org/works/${workId}/review`, { status: 'PUBLISHED', teacherComment: '审核通过并发布至机构作品墙。' }, teacherToken));
 must('work published', reviewed.data.data.status === 'PUBLISHED', reviewed);
 const annotation = success('create node annotation', await call('POST', `/org/works/${workId}/annotations`, { nodeId: 'n2', content: '请补充画面主体的动作描述。' }, teacherToken));
 must('annotation linked to real node', annotation.data.data.nodeId === 'n2', annotation);

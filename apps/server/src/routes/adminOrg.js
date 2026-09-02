@@ -1,6 +1,6 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
-  normalizeSeries, normalizeSession, normalizeUser, normalizeWork, nowIso, parseJson,
+  normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, parseJson,
   q, requireRole, row, rows, transaction,
 } from '@platform/server-lib';
 import { hashPassword } from '@platform/database';
@@ -289,6 +289,43 @@ function assertAnnotationNode(work, nodeId) {
   return nodeId;
 }
 
+function workReportRows(where = '1=1', params = []) {
+  return rows(
+    `SELECT report.*, work.title AS work_title, work.status AS work_status,
+      reporter.display_name AS reporter_name, handler.display_name AS handler_name
+     FROM work_reports report
+     JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id
+     JOIN users reporter ON reporter.id=report.reporter_id
+     LEFT JOIN users handler ON handler.id=report.handled_by
+     WHERE ${where}
+     ORDER BY CASE report.status WHEN 'PENDING' THEN 0 ELSE 1 END, report.created_at DESC`,
+    params,
+  ).map((report) => normalizeWorkReport(report, { includeReporter: true }));
+}
+
+function workReportInReviewScope(auth, currentOrgId, reportId) {
+  const report = row(
+    `SELECT report.*, work.title AS work_title, work.status AS work_status, work.class_id AS class_id, class.teacher_id
+     FROM work_reports report
+     JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id
+     LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+     WHERE report.id=? AND report.org_id=?`,
+    [reportId, currentOrgId],
+  );
+  if (!report) throw errors.notFound('举报记录不存在', 'WORK_REPORT_NOT_FOUND');
+  if (auth.user.role === 'TEACHER' && !teacherCanAccessClass(auth, { id: report.class_id, teacher_id: report.teacher_id })) {
+    throw errors.forbidden('不能处理未授权班级作品的举报', 'WORK_REPORT_PERMISSION_DENIED');
+  }
+  return report;
+}
+
+function reportResolution(body) {
+  const resolution = String(body?.resolution || '').trim();
+  if (!resolution) throw errors.badRequest('请填写举报处理说明', 'WORK_REPORT_RESOLUTION_REQUIRED');
+  if (resolution.length > 2000) throw errors.badRequest('举报处理说明不能超过 2000 个字符', 'WORK_REPORT_RESOLUTION_TOO_LONG');
+  return resolution;
+}
+
 export async function handleAdmin(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/')) return null;
@@ -485,9 +522,9 @@ export async function handleAdmin(ctx) {
     }
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
     const items = rows(
-      'SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by' + where + ' ORDER BY work.submitted_at DESC LIMIT 200',
+      `SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by${where} ORDER BY work.featured_at DESC, work.submitted_at DESC LIMIT 200`,
       params,
-    ).map((work) => ({ ...normalizeWork(work), organizationName: work.organization_name || null }));
+    ).map((work) => ({ ...normalizeWork(work), organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
     return { items, total: items.length };
   }
   let platformWorkMatch = part.match(/^\/works\/([^/]+)\/unpublish$/);
@@ -495,11 +532,58 @@ export async function handleAdmin(ctx) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-    const reason = String(ctx.body?.reason || '平台下架').trim().slice(0, 2000);
-    q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=?', ['REJECTED', reason, auth.user.id, nowIso(), work.id]);
+    if (work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可以下架', 'WORK_NOT_PUBLISHED');
+    const reason = String(ctx.body?.reason || '').trim();
+    if (!reason) throw errors.badRequest('请填写下架原因', 'WORK_UNPUBLISH_REASON_REQUIRED');
+    if (reason.length > 2000) throw errors.badRequest('下架原因不能超过 2000 个字符', 'WORK_UNPUBLISH_REASON_TOO_LONG');
+    q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['REJECTED', reason, auth.user.id, nowIso(), work.id]);
     audit(ctx, 'PLATFORM_WORK_UNPUBLISH', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reason }, { orgId: work.org_id });
     const updated = row('SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE work.id=?', [work.id]);
     return { ...normalizeWork(updated), organizationName: updated.organization_name || null };
+  }
+  platformWorkMatch = part.match(/^\/works\/([^/]+)\/feature$/);
+  if (platformWorkMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    if (!Object.hasOwn(ctx.body || {}, 'featured') || typeof ctx.body.featured !== 'boolean') throw errors.badRequest('请选择是否设为精选', 'WORK_FEATURED_REQUIRED');
+    const featured = ctx.body.featured;
+    if (featured && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可以设为精选', 'WORK_NOT_PUBLISHED');
+    const reason = featured ? String(ctx.body?.reason || '').trim().slice(0, 500) : null;
+    q('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=?', [featured ? nowIso() : null, featured ? auth.user.id : null, reason || null, work.id]);
+    audit(ctx, featured ? 'PLATFORM_WORK_FEATURE' : 'PLATFORM_WORK_UNFEATURE', 'WORK', work.id, normalizeWork(work), { featured, reason: reason || null }, { orgId: work.org_id });
+    return normalizeWork(row('SELECT * FROM works WHERE id=?', [work.id]));
+  }
+  if (part === '/work-reports' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const status = ctx.search.get('status'); const orgFilter = ctx.search.get('orgId');
+    const conditions = ['1=1']; const params = [];
+    if (['PENDING', 'RESOLVED', 'DISMISSED'].includes(status)) { conditions.push('report.status=?'); params.push(status); }
+    if (orgFilter) { conditions.push('report.org_id=?'); params.push(orgFilter); }
+    const items = workReportRows(conditions.join(' AND '), params);
+    return { items, total: items.length, pending: items.filter((item) => item.status === 'PENDING').length };
+  }
+  let platformReportMatch = part.match(/^\/work-reports\/([^/]+)$/);
+  if (platformReportMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const report = row('SELECT * FROM work_reports WHERE id=?', [platformReportMatch[1]]);
+    if (!report) throw errors.notFound('举报记录不存在', 'WORK_REPORT_NOT_FOUND');
+    if (report.status !== 'PENDING') throw errors.conflict('举报已处理，不能重复处理', 'WORK_REPORT_ALREADY_HANDLED');
+    const status = ctx.body?.status;
+    if (!['RESOLVED', 'DISMISSED'].includes(status)) throw errors.badRequest('举报处理状态无效', 'INVALID_WORK_REPORT_STATUS');
+    const actionTaken = ctx.body?.actionTaken || 'NONE';
+    if (!['NONE', 'UNPUBLISH'].includes(actionTaken)) throw errors.badRequest('举报处理动作无效', 'INVALID_WORK_REPORT_ACTION');
+    const resolution = reportResolution(ctx.body); const work = row('SELECT * FROM works WHERE id=? AND org_id=?', [report.work_id, report.org_id]);
+    if (!work) throw errors.notFound('关联作品不存在', 'WORK_NOT_FOUND');
+    if (actionTaken === 'UNPUBLISH' && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可因举报下架', 'WORK_NOT_PUBLISHED');
+    const now = nowIso();
+    transaction(() => {
+      if (actionTaken === 'UNPUBLISH') q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['REJECTED', resolution, auth.user.id, now, work.id]);
+      q('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=?', [status, auth.user.id, now, resolution, actionTaken, report.id]);
+    });
+    audit(ctx, 'PLATFORM_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: report.org_id });
+    if (actionTaken === 'UNPUBLISH') audit(ctx, 'PLATFORM_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reportId: report.id }, { orgId: work.org_id });
+    return workReportRows('report.id=?', [report.id])[0];
   }
   return null;
 }
@@ -942,14 +1026,52 @@ export async function handleOrg(ctx) {
     return annotationRows(work.id).find((item) => item.id === annotation.id);
   }
 
+  if (part === '/work-reports' && method === 'GET') {
+    const params = [currentOrgId]; let where = 'report.org_id=?';
+    if (auth.user.role === 'TEACHER') { where += " AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))"; params.push(auth.user.id, auth.user.id); }
+    const status = ctx.search.get('status'); if (['PENDING', 'RESOLVED', 'DISMISSED'].includes(status)) { where += ' AND report.status=?'; params.push(status); }
+    const items = rows(
+      `SELECT report.*, work.title AS work_title, work.status AS work_status, reporter.display_name AS reporter_name, handler.display_name AS handler_name
+       FROM work_reports report JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id
+       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+       JOIN users reporter ON reporter.id=report.reporter_id LEFT JOIN users handler ON handler.id=report.handled_by
+       WHERE ${where}
+       ORDER BY CASE report.status WHEN 'PENDING' THEN 0 ELSE 1 END, report.created_at DESC`, params,
+    ).map((report) => normalizeWorkReport(report, { includeReporter: true }));
+    return { items, total: items.length, pending: items.filter((item) => item.status === 'PENDING').length };
+  }
+  let orgReportMatch = part.match(/^\/work-reports\/([^/]+)$/);
+  if (orgReportMatch && method === 'PUT') {
+    const report = workReportInReviewScope(auth, currentOrgId, orgReportMatch[1]);
+    if (report.status !== 'PENDING') throw errors.conflict('举报已处理，不能重复处理', 'WORK_REPORT_ALREADY_HANDLED');
+    const status = ctx.body?.status; if (!['RESOLVED', 'DISMISSED'].includes(status)) throw errors.badRequest('举报处理状态无效', 'INVALID_WORK_REPORT_STATUS');
+    const actionTaken = ctx.body?.actionTaken || 'NONE'; if (!['NONE', 'UNPUBLISH'].includes(actionTaken)) throw errors.badRequest('举报处理动作无效', 'INVALID_WORK_REPORT_ACTION');
+    const resolution = reportResolution(ctx.body); const work = workInReviewScope(auth, currentOrgId, report.work_id);
+    if (actionTaken === 'UNPUBLISH' && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可因举报下架', 'WORK_NOT_PUBLISHED');
+    const now = nowIso();
+    transaction(() => {
+      if (actionTaken === 'UNPUBLISH') q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=? AND org_id=?', ['REJECTED', resolution, auth.user.id, now, work.id, currentOrgId]);
+      q('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=? AND org_id=?', [status, auth.user.id, now, resolution, actionTaken, report.id, currentOrgId]);
+    });
+    audit(ctx, 'ORG_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: currentOrgId });
+    if (actionTaken === 'UNPUBLISH') audit(ctx, 'ORG_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reportId: report.id }, { orgId: currentOrgId });
+    return workReportRows('report.id=?', [report.id])[0];
+  }
   if (part === '/works' && method === 'GET') {
     const params = [currentOrgId]; let where = 'work.org_id=?'; if (auth.user.role === 'TEACHER') { where += " AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))"; params.push(auth.user.id, auth.user.id); }
-    const items = rows('SELECT work.*,student.display_name student_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ' + where + ' ORDER BY work.submitted_at DESC LIMIT 200', params).map((work) => normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' })); return { items };
+    const items = rows(`SELECT work.*,student.display_name student_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY work.submitted_at DESC LIMIT 200`, params).map((work) => ({ ...normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }), pendingReportCount: Number(work.pending_report_count || 0) })); return { items };
   }
   let workMatch = part.match(/^\/works\/([^/]+)\/review$/);
   if (workMatch && method === 'PUT') {
-    const work = row('SELECT work.*,class.teacher_id FROM works work LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id WHERE work.id=? AND work.org_id=?', [workMatch[1], currentOrgId]); if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND'); if (!teacherCanAccessClass(auth, { id: work.class_id, teacher_id: work.teacher_id })) throw errors.forbidden('不能点评未授权班级的作品', 'WORK_PERMISSION_DENIED');
-    const status = ctx.body?.status; if (!['APPROVED','REJECTED','PUBLISHED'].includes(status)) throw errors.badRequest('作品状态无效', 'INVALID_WORK_STATUS'); q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [status, String(ctx.body?.teacherComment || '').slice(0, 2000), auth.user.id, nowIso(), work.id, currentOrgId]); audit(ctx, 'WORK_REVIEW', 'WORK', work.id, null, { status }); return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
+    const work = workInReviewScope(auth, currentOrgId, workMatch[1]);
+    const status = ctx.body?.status; if (!['APPROVED','REJECTED','PUBLISHED'].includes(status)) throw errors.badRequest('作品状态无效', 'INVALID_WORK_STATUS');
+    const allowed = { PENDING: ['APPROVED', 'REJECTED'], APPROVED: ['PUBLISHED', 'REJECTED'], PUBLISHED: ['REJECTED'], REJECTED: [] };
+    if (!allowed[work.status]?.includes(status)) throw errors.conflict('当前作品状态不允许执行该操作', 'INVALID_WORK_TRANSITION');
+    if (status === 'PUBLISHED' && !work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+    const comment = String(ctx.body?.teacherComment || '').trim(); if (comment.length > 2000) throw errors.badRequest('老师点评不能超过 2000 个字符', 'WORK_COMMENT_TOO_LONG');
+    q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [status, comment, auth.user.id, nowIso(), work.id, currentOrgId]);
+    audit(ctx, 'WORK_REVIEW', 'WORK', work.id, normalizeWork(work), { status, teacherComment: comment || null }, { orgId: currentOrgId });
+    return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
   }
   return null;
 }

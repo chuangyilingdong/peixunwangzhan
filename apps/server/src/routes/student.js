@@ -11,6 +11,7 @@ import {
   normalizeProject,
   normalizeUser,
   normalizeWork,
+  normalizeWorkReport,
   nowIso,
   q,
   requireRole,
@@ -439,6 +440,9 @@ export async function handleStudent(ctx) {
       throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
     }
     assertProjectUsable(ctx, project);
+    if (ctx.body?.copyrightConfirmed !== true) {
+      throw errors.badRequest('提交前请确认作品版权与机构内展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+    }
     const now = nowIso();
     const description = String(ctx.body?.description || '').trim().slice(0, 1000);
     let canvasSnapshot = JSON.parse(project.canvas_snapshot);
@@ -470,9 +474,9 @@ export async function handleStudent(ctx) {
       }
       q(
         `INSERT INTO works(
-          id,project_id,student_id,org_id,class_id,course_lesson_id,title,description,canvas_snapshot,status,submitted_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now],
+          id,project_id,student_id,org_id,class_id,course_lesson_id,title,description,canvas_snapshot,status,copyright_confirmed_at,copyright_confirmed_by,submitted_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now, auth.user.id, now],
       );
     });
     audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id }, { description });
@@ -518,17 +522,45 @@ export async function handleStudent(ctx) {
   }
 
   if (part === '/showcase' && method === 'GET') {
+    const search = String(ctx.search.get('search') || '').trim();
+    const featuredOnly = ctx.search.get('featured') === 'true';
+    const conditions = ["work.org_id=?", "work.status='PUBLISHED'"]; const params = [auth.user.orgId];
+    if (featuredOnly) conditions.push('work.featured_at IS NOT NULL');
+    if (search) {
+      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      conditions.push('(work.title LIKE ? OR work.description LIKE ? OR lesson.title LIKE ?)'); params.push(keyword, keyword, keyword);
+    }
+    const publicName = (value) => {
+      const name = String(value || '').trim(); return name ? name.slice(0, 1) + '同学' : '小创作者';
+    };
     const items = rows(
       `SELECT work.*, student.display_name AS student_name, class.name AS class_name, lesson.title AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
        LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
-       WHERE work.org_id=? AND work.status='PUBLISHED'
-       ORDER BY work.reviewed_at DESC, work.submitted_at DESC LIMIT 100`,
-      [auth.user.orgId],
-    ).map((work) => normalizeWork(work, { includeSnapshot: false }));
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.reviewed_at DESC, work.submitted_at DESC LIMIT 100`,
+      params,
+    ).map((work) => ({ ...normalizeWork(work, { includeSnapshot: false }), studentName: publicName(work.student_name) }));
     return { items };
+  }
+
+  match = part.match(/^\/showcase\/([^/]+)\/reports$/);
+  if (match && method === 'POST') {
+    const work = row("SELECT * FROM works WHERE id=? AND org_id=? AND status='PUBLISHED'", [match[1], auth.user.orgId]);
+    if (!work) throw errors.notFound('已发布作品不存在', 'SHOWCASE_WORK_NOT_FOUND');
+    if (work.student_id === auth.user.id) throw errors.forbidden('不能举报自己的作品', 'CANNOT_REPORT_OWN_WORK');
+    const category = String(ctx.body?.category || '');
+    if (!['INAPPROPRIATE', 'COPYRIGHT', 'PRIVACY', 'OTHER'].includes(category)) throw errors.badRequest('举报类型无效', 'INVALID_WORK_REPORT_CATEGORY');
+    const details = String(ctx.body?.details || '').trim();
+    if (details.length > 1000) throw errors.badRequest('举报说明不能超过 1000 个字符', 'WORK_REPORT_DETAILS_TOO_LONG');
+    const duplicate = row("SELECT id FROM work_reports WHERE work_id=? AND reporter_id=? AND status='PENDING'", [work.id, auth.user.id]);
+    if (duplicate) throw errors.conflict('你已提交过该作品的待处理举报', 'WORK_REPORT_ALREADY_PENDING');
+    const reportId = id('work_report'); const now = nowIso();
+    q('INSERT INTO work_reports(id,work_id,org_id,reporter_id,category,details,status,created_at) VALUES (?,?,?,?,?,?,?,?)', [reportId, work.id, work.org_id, auth.user.id, category, details, 'PENDING', now]);
+    audit(ctx, 'WORK_REPORT_CREATE', 'WORK_REPORT', reportId, null, { workId: work.id, category }, { orgId: work.org_id });
+    return normalizeWorkReport(row('SELECT * FROM work_reports WHERE id=?', [reportId]));
   }
 
   match = part.match(/^\/showcase\/([^/]+)$/);
@@ -543,7 +575,8 @@ export async function handleStudent(ctx) {
       [match[1], auth.user.orgId],
     );
     if (!work) throw errors.notFound('已发布作品不存在', 'SHOWCASE_WORK_NOT_FOUND');
-    return normalizeWork(work, { includeSnapshot: true });
+    const name = String(work.student_name || '').trim();
+    return { ...normalizeWork(work, { includeSnapshot: true }), studentName: name ? name.slice(0, 1) + '同学' : '小创作者' };
   }
 
   if (part === '/works' && method === 'GET') {
