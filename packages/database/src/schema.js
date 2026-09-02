@@ -380,6 +380,81 @@ CREATE TABLE IF NOT EXISTS media_assets (
 );
 CREATE INDEX IF NOT EXISTS idx_media_assets_project_created ON media_assets(project_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('PLATFORM','ORG')),
+  org_id TEXT,
+  sender_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'NOTICE' CHECK (kind IN ('NOTICE','ANNOUNCEMENT','REMINDER')),
+  target_url TEXT,
+  audience TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','PUBLISHED','RECALLED')),
+  publish_at TEXT,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_scope_status ON notifications(scope_type, org_id, status, publish_at, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS notification_recipients (
+  id TEXT PRIMARY KEY,
+  notification_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  delivery_status TEXT NOT NULL DEFAULT 'DELIVERED' CHECK (delivery_status IN ('PENDING','DELIVERED','FAILED')),
+  delivered_at TEXT,
+  read_at TEXT,
+  failure_code TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_recipient_unique ON notification_recipients(notification_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_notification_recipient_user_read ON notification_recipients(user_id, read_at, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS promo_materials (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT 'GENERAL',
+  mime_type TEXT,
+  resource_url TEXT,
+  cover_url TEXT,
+  visibility TEXT NOT NULL DEFAULT 'ALL_ORGS' CHECK (visibility IN ('ALL_ORGS','ASSIGNED_ORGS')),
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','DISABLED')),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_promo_materials_status_created ON promo_materials(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS promo_material_assignments (
+  id TEXT PRIMARY KEY,
+  material_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (material_id) REFERENCES promo_materials(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_material_assignment_unique ON promo_material_assignments(material_id, org_id);
+
+CREATE TABLE IF NOT EXISTS promo_material_events (
+  id TEXT PRIMARY KEY,
+  material_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN ('VIEW','USE','DOWNLOAD')),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (material_id) REFERENCES promo_materials(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_promo_material_events_material_created ON promo_material_events(material_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS recharge_orders (
   id TEXT PRIMARY KEY,
   order_no TEXT NOT NULL UNIQUE,

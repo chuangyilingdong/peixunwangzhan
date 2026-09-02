@@ -5,7 +5,7 @@ import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
 import '@platform/shared/styles.css';
 
-const navigation = [{ to: '/dashboard', icon: '◈', label: '机构总览' }, { to: '/classes', icon: '▦', label: '班级与课堂' }, { to: '/members', icon: '♙', label: '成员管理' }, { to: '/works', icon: '✧', label: '作品点评' }];
+const navigation = [{ to: '/dashboard', icon: '◈', label: '机构总览' }, { to: '/classes', icon: '▦', label: '班级与课堂' }, { to: '/members', icon: '♙', label: '成员管理' }, { to: '/works', icon: '✧', label: '作品点评' }, { to: '/inbox', icon: '✉', label: '站内信' }, { to: '/courses', icon: '◇', label: '课程中心' }, { to: '/materials', icon: '▤', label: '宣传物料' }];
 const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
 
 function useData(load, deps = []) {
@@ -333,6 +333,38 @@ function BillingAccountPage({ api, user }) {
   </>;
 }
 
+function OrgInbox({ api, user }) {
+  const inbox = useData(() => api.get('org/inbox'), [api]);
+  const [form, setForm] = useState({ title: '', body: '', roles: ['TEACHER', 'STUDENT'], pinned: false });
+  const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
+  async function send(event) {
+    event.preventDefault(); setSaving(true); setMessage('');
+    try { await api.post('org/inbox', form); setForm({ title: '', body: '', roles: ['TEACHER', 'STUDENT'], pinned: false }); setMessage('机构通知已发送。'); inbox.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); }
+  }
+  async function read(item) { try { await api.put(`org/inbox/${item.id}/read`, {}); inbox.refresh(); } catch (err) { setMessage(err.message); } }
+  function toggleRole(role) { setForm((old) => ({ ...old, roles: old.roles.includes(role) ? old.roles.filter((item) => item !== role) : [...old.roles, role] })); }
+  const isAdmin = user?.role === 'ORG_ADMIN';
+  return <>
+    <PageHeader eyebrow="机构运营" title="站内信" description="接收平台公告与机构内部通知，已读状态由服务端记录。" actions={<div className="row-actions"><button className="secondary-button" onClick={() => api.put('org/inbox/read-all', {}).then(inbox.refresh).catch((err) => setMessage(err.message))}>全部标记已读</button><button className="secondary-button" onClick={inbox.refresh}>刷新</button></div>} />
+    <div className="metrics"><MetricCard label="收件总数" value={inbox.data?.total || 0} hint="当前账号可见" /><MetricCard label="未读消息" value={inbox.data?.unread || 0} hint="需要关注的通知" tone="orange" /></div>
+    {isAdmin ? <Panel title="发送机构通知"><form onSubmit={send}><div className="form-grid"><label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>接收角色<div className="row-actions top-gap">{[['TEACHER', '教师'], ['STUDENT', '学员']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div></label></div><label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>{message ? <Notice tone={message.includes('失败') || message.includes('不能为空') ? 'danger' : 'success'}>{message}</Notice> : null}<button className="primary-button" disabled={saving}>{saving ? '发送中…' : '发送通知'}</button></form></Panel> : <Notice tone="info">授课教师可以查看和标记消息；机构内部通知由机构管理员发送。</Notice>}
+    <Panel title="消息列表">{inbox.loading ? <Loading /> : inbox.error ? <ErrorState error={inbox.error} onRetry={inbox.refresh} /> : inbox.data.items.length ? <div className="card-list">{inbox.data.items.map((item) => <article className="item-card" key={item.id} style={{ borderColor: item.readAt ? undefined : '#c8baf7', background: item.readAt ? '#fff' : '#faf8ff' }}><div className="row-actions"><Status value={item.kind} /><strong>{item.pinned ? '📌 ' : ''}{item.title}</strong><span className="muted">{formatDate(item.publishAt || item.createdAt)}</span>{!item.readAt ? <button className="text-button" onClick={() => read(item)}>标记已读</button> : <span className="muted">已读</span>}</div><p>{item.body}</p>{item.senderName ? <small className="muted">发送人：{item.senderName}</small> : null}{item.targetUrl ? <div className="top-gap"><span className="muted">跳转：{item.targetUrl}</span></div> : null}</article>)}</div> : <Empty title="暂无站内信" body="平台公告或机构通知送达后会显示在这里。" />}</Panel>
+  </>;
+}
+
+function OrgMaterials({ api }) {
+  const materials = useData(() => api.get('org/materials'), [api]);
+  const [message, setMessage] = useState('');
+  async function useMaterial(item) { try { await api.post(`org/materials/${item.id}/events`, { eventType: 'USE' }); setMessage(`已记录使用：${item.title}`); materials.refresh(); } catch (err) { setMessage(err.message); } }
+  async function openMaterial(item) { try { const result = await api.post(`org/materials/${item.id}/events`, { eventType: 'DOWNLOAD' }); if (result.resourceUrl) window.open(result.resourceUrl, '_blank', 'noopener,noreferrer'); } catch (err) { setMessage(err.message); } }
+  return <>
+    <PageHeader eyebrow="机构运营" title="宣传物料" description="查看平台下发的课程介绍、招生海报和活动资料。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
+    <Notice tone="info">物料访问会记录 VIEW / USE / DOWNLOAD 事件。没有配置真实资源地址的物料不会显示虚假下载链接。</Notice>
+    {message ? <Notice tone="success">{message}</Notice> : null}
+    <Panel title="可用物料">{materials.loading ? <Loading /> : materials.error ? <ErrorState error={materials.error} onRetry={materials.refresh} /> : materials.data.items.length ? <div className="card-list">{materials.data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><strong>{item.title}</strong><Status value={item.category} /><span className="muted">{item.visibility === 'ALL_ORGS' ? '全机构' : '定向授权'}</span></div><p>{item.description || '暂无说明'}</p><div className="row-actions top-gap"><button className="secondary-button" onClick={() => useMaterial(item)}>记录使用</button>{item.resourceConfigured ? <button className="primary-button" onClick={() => openMaterial(item)}>打开资源</button> : <span className="muted">资源待配置</span>}</div></article>)}</div> : <Empty title="暂无可用物料" body="平台配置物料后会按机构授权范围显示。" />}</Panel>
+  </>;
+}
+
 function OrgPage({ kind, user }) {
   const teacher = user?.role === 'TEACHER';
   const pages = {
@@ -359,6 +391,6 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgPage kind="inbox" user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<OrgPage kind="work-data" user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgPage kind="materials" user={session.user} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<OrgPage kind="work-data" user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

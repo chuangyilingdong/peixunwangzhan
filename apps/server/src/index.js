@@ -6,6 +6,7 @@ import { handleAdmin, handleOrg } from './routes/adminOrg.js';
 import { handleStudent } from './routes/student.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration } from './routes/aiGeneration.js';
+import { handleAdminCommunication, handleOrgCommunication } from './routes/communication.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -35,7 +36,9 @@ const server = http.createServer(async (req, res) => {
 
     const data = await handleAuth(ctx)
       ?? await handleAdmin(ctx)
+      ?? await handleAdminCommunication(ctx)
       ?? await handleOrg(ctx)
+      ?? await handleOrgCommunication(ctx)
       ?? await handleStudent(ctx)
       ?? await handleAi(ctx)
       ?? await handleAiGeneration(ctx);

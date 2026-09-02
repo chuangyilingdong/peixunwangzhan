@@ -246,21 +246,77 @@ function PlatformBilling({ api }) {
   </>;
 }
 
+function AdminInbox({ api }) {
+  const inbox = useData(() => api.get('admin/inbox'), [api]);
+  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const [form, setForm] = useState({ title: '', body: '', kind: 'NOTICE', scope: 'ALL_ORGS', orgIds: [], roles: ['ORG_ADMIN', 'TEACHER', 'STUDENT'], targetUrl: '', pinned: false, status: 'DRAFT' });
+  const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
+  async function create(event) {
+    event.preventDefault(); setSaving(true); setMessage('');
+    try {
+      await api.post('admin/inbox', { title: form.title, body: form.body, kind: form.kind, targetUrl: form.targetUrl || null, pinned: form.pinned, status: form.status, audience: { scope: form.scope, orgIds: form.orgIds, roles: form.roles } });
+      setForm({ title: '', body: '', kind: 'NOTICE', scope: 'ALL_ORGS', orgIds: [], roles: ['ORG_ADMIN', 'TEACHER', 'STUDENT'], targetUrl: '', pinned: false, status: 'DRAFT' }); setMessage(form.status === 'PUBLISHED' ? '通知已发布并生成投递记录。' : '通知草稿已保存。'); inbox.refresh();
+    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
+  }
+  async function update(item, status) {
+    try { await api.put(`admin/inbox/${item.id}`, { status }); setMessage(status === 'PUBLISHED' ? '通知已发布。' : '通知已撤回。'); inbox.refresh(); } catch (err) { setMessage(err.message); }
+  }
+  function toggleRole(role) { setForm((old) => ({ ...old, roles: old.roles.includes(role) ? old.roles.filter((item) => item !== role) : [...old.roles, role] })); }
+  return <>
+    <PageHeader eyebrow="平台运营" title="站内信" description="向机构管理员、教师和学员投递可追踪的站内通知。" actions={<button className="secondary-button" onClick={inbox.refresh}>刷新</button>} />
+    <div className="split"><Panel title="新建通知"><form onSubmit={create}>
+      <label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label>
+      <label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>
+      <div className="form-grid"><label>类型<select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}><option value="NOTICE">通知</option><option value="ANNOUNCEMENT">公告</option><option value="REMINDER">提醒</option></select></label><label>保存状态<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">立即发布</option></select></label></div>
+      <label>接收机构<select value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value, orgIds: [] })}><option value="ALL_ORGS">全部可用机构</option><option value="ORG_IDS">指定机构</option></select></label>
+      {form.scope === 'ORG_IDS' ? <label>指定机构<select multiple value={form.orgIds} onChange={(e) => setForm({ ...form, orgIds: [...e.target.selectedOptions].map((option) => option.value) })}>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
+      <div className="row-actions top-gap"><span className="muted">接收角色：</span>{[['ORG_ADMIN', '机构管理员'], ['TEACHER', '教师'], ['STUDENT', '学员']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div>
+      <label>跳转地址（可选）<input value={form.targetUrl} placeholder="例如 /courses" onChange={(e) => setForm({ ...form, targetUrl: e.target.value })} /></label>
+      <label className="row-actions"><input type="checkbox" checked={form.pinned} onChange={(e) => setForm({ ...form, pinned: e.target.checked })} /> 置顶通知</label>
+      {message ? <Notice tone={message.includes('失败') || message.includes('不能为空') ? 'danger' : 'success'}>{message}</Notice> : null}
+      <button className="primary-button" disabled={saving}>{saving ? '保存中…' : '保存通知'}</button>
+    </form></Panel><Panel title="投递说明"><Notice tone="info">发布会按目标机构和角色生成一次性投递记录；重复发布不会重复创建同一用户的收件记录。邮件、短信、微信和定时任务暂未接入。</Notice></Panel></div>
+    <Panel title="平台通知记录">{inbox.loading || organizations.loading ? <Loading /> : inbox.error ? <ErrorState error={inbox.error} onRetry={inbox.refresh} /> : inbox.data.items.length ? <div className="table-wrap"><table><thead><tr><th>通知</th><th>范围</th><th>投递 / 未读</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>{inbox.data.items.map((item) => <tr key={item.id}><td><strong>{item.pinned ? '📌 ' : ''}{item.title}</strong><div className="muted">{item.body}</div></td><td>{item.audience?.scope === 'ALL_ORGS' ? '全部机构' : `指定 ${item.audience?.orgIds?.length || 0} 家机构`}<div className="muted">{(item.audience?.roles || []).join(' / ')}</div></td><td>{item.recipientCount} 人<div className="muted">未读 {item.unreadCount}</div></td><td><Status value={item.status} />{item.deliveryFailedCount ? <div className="muted">失败 {item.deliveryFailedCount}</div> : null}</td><td>{formatDate(item.publishAt || item.createdAt)}</td><td>{item.status === 'DRAFT' ? <button className="secondary-button" onClick={() => update(item, 'PUBLISHED')}>发布</button> : item.status === 'PUBLISHED' ? <button className="secondary-button" onClick={() => update(item, 'RECALLED')}>撤回</button> : <span className="muted">已撤回</span>}</td></tr>)}</tbody></table></div> : <Empty title="还没有平台通知" body="创建并发布后，机构收件箱会出现真实通知。" />}</Panel>
+  </>;
+}
+
+function AdminMaterials({ api }) {
+  const materials = useData(() => api.get('admin/materials'), [api]);
+  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const [form, setForm] = useState({ title: '', description: '', category: 'GENERAL', visibility: 'ALL_ORGS', orgIds: [], mimeType: '', resourceUrl: '', coverUrl: '' });
+  const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
+  async function create(event) {
+    event.preventDefault(); setSaving(true); setMessage('');
+    try { await api.post('admin/materials', { ...form, orgIds: form.visibility === 'ALL_ORGS' ? [] : form.orgIds }); setForm({ title: '', description: '', category: 'GENERAL', visibility: 'ALL_ORGS', orgIds: [], mimeType: '', resourceUrl: '', coverUrl: '' }); setMessage('物料元数据已保存。'); materials.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); }
+  }
+  async function toggle(item) { try { await api.put(`admin/materials/${item.id}`, { status: item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); materials.refresh(); } catch (err) { setMessage(err.message); } }
+  return <>
+    <PageHeader eyebrow="平台内容" title="素材与宣传物料" description="维护招生海报、课程介绍和活动资料的元数据与授权范围。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
+    <Notice tone="info">当前只维护文件元数据和外部资源地址，不提供虚假的上传、OSS 或下载能力；未配置真实资源的物料会在机构端明确显示为“资源待配置”。</Notice>
+    <div className="split"><Panel title="新增宣传物料"><form onSubmit={create}>
+      <label>名称<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>说明<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+      <div className="form-grid"><label>分类<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}><option value="GENERAL">通用</option><option value="COURSE">课程</option><option value="POSTER">海报</option><option value="ACTIVITY">活动</option><option value="PARTNERSHIP">合作</option></select></label><label>可见范围<select value={form.visibility} onChange={(e) => setForm({ ...form, visibility: e.target.value, orgIds: [] })}><option value="ALL_ORGS">全部机构</option><option value="ASSIGNED_ORGS">指定机构</option></select></label></div>
+      {form.visibility === 'ASSIGNED_ORGS' ? <label>指定机构<select multiple value={form.orgIds} onChange={(e) => setForm({ ...form, orgIds: [...e.target.selectedOptions].map((option) => option.value) })}>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
+      <div className="form-grid"><label>MIME 类型（可选）<input value={form.mimeType} placeholder="application/pdf" onChange={(e) => setForm({ ...form, mimeType: e.target.value })} /></label><label>真实资源地址（可选）<input value={form.resourceUrl} placeholder="由外部存储决策后填写" onChange={(e) => setForm({ ...form, resourceUrl: e.target.value })} /></label></div>
+      <label>封面地址（可选）<input value={form.coverUrl} onChange={(e) => setForm({ ...form, coverUrl: e.target.value })} /></label>
+      {message ? <Notice tone={message.includes('失败') || message.includes('不能为空') ? 'danger' : 'success'}>{message}</Notice> : null}<button className="primary-button" disabled={saving}>{saving ? '保存中…' : '保存物料'}</button>
+    </form></Panel><Panel title="物料授权"><Notice tone="info">“全部机构”会对所有状态正常的机构开放；“指定机构”只会在服务端向授权机构返回。教师与机构管理员均可查看机构可见物料。</Notice></Panel></div>
+    <Panel title="物料列表">{materials.loading || organizations.loading ? <Loading /> : materials.error ? <ErrorState error={materials.error} onRetry={materials.refresh} /> : materials.data.items.length ? <div className="table-wrap"><table><thead><tr><th>物料</th><th>范围</th><th>资源</th><th>状态</th><th>使用次数</th><th>操作</th></tr></thead><tbody>{materials.data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.category} · {item.description || '暂无说明'}</div></td><td>{item.visibility === 'ALL_ORGS' ? '全部机构' : `指定 ${item.assignedOrgCount} 家机构`}</td><td>{item.resourceConfigured ? <span className="status success">已配置</span> : <span className="muted">待配置</span>}</td><td><Status value={item.status} /></td><td>{item.eventCount}</td><td><button className="secondary-button" onClick={() => toggle(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button></td></tr>)}</tbody></table></div> : <Empty title="还没有宣传物料" body="先保存一条物料元数据，再决定是否配置外部资源。" />}</Panel>
+  </>;
+}
+
 function PlatformPage({ kind }) {
   const pages = {
     users: ['平台用户', '统一查看机构管理员、教师与学员的账号状态，支持后续接入筛选、启停和变更记录。', [['机构账号', '按机构归属查看管理者、教师和学员'], ['账号安全', '登录状态、有效期与权限将统一在此管理']]],
-    marketplace: ['课程广场', '集中浏览可下发的主题课包、课时与示范素材，支持机构授权和版本管理。', [['标准课包', '11 门系统课程、87 节课时'], ['授课资源', 'PPT、互动课件与课堂素材统一管理']]],
+    marketplace: ['课程广场', '集中浏览可下发的主题课包、课时与示范素材，支持机构授权和版本管理。', [['标准课包', '11 门系统课程、87 节课时'], ['授课资源', 'PPT、HTML 互动课件与课堂备注']]],
     works: ['平台作品库', '聚合机构作品展厅的公开成果，便于审核、运营和沉淀优质案例。', [['作品审核', '查看发布状态与机构归属'], ['精选推荐', '后续可配置推荐位与展示专题']]],
     hackathon: ['黑客松', '配置赛季、作品征集、审核与奖励，帮助机构把课堂作品延展为创作活动。', [['赛季管理', '创建主题、时间范围与参与机构'], ['作品审核', '待审、入选、驳回与撤回统一记录']]],
     billing: ['计费与模型', '统一维护机构积分池、能力开关、模型矩阵和用量规则，让课堂 AI 可用可管。', [['魔法石用量', '机构充值、按调用扣减、余额提醒'], ['模型能力', '文本、图像、音频与视频按权限配置']]],
-    materials: ['素材与宣传物料', '管理课程素材、机构可下载物料与招生内容包。', [['素材中心', '按课程、主题与类型组织素材'], ['宣传物料', '海报、课程介绍与合作资料统一分发']]],
-    inbox: ['站内信', '平台向机构发送开课、运营与系统通知的统一入口。', [['通知中心', '未读数、已读与跳转链接'], ['消息模板', '后续可按场景配置消息模板']]],
     admins: ['平台管理员', '管理平台运营账号与权限码，重要业务权限由后端继续校验。', [['角色权限', '按运营、课程、计费等域配置访问范围'], ['账号安全', '启停、重置密码与操作记录']]],
   };
   const [title, desc, cards] = pages[kind];
-  return <><PageHeader eyebrow="AI魔法学院 · 平台控制台" title={title} description={desc} actions={<button className="primary-button">新建 / 配置</button>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待配置' : '准备就绪'} hint={item[1]} tone={['violet','teal'][index]} />)}</div><Panel title="建设说明"><Notice tone="info">此页面已按 AI魔法学院的信息架构接入平台端导航与视觉壳层；需要服务端数据的筛选、编辑和审批操作将在对应 API 完成后接入，不会伪造业务数据。</Notice></Panel></>;
+  return <><PageHeader eyebrow="AI魔法学院 · 平台控制台" title={title} description={desc} actions={<button className="primary-button">新建 / 配置</button>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待配置' : '准备就绪'} hint={item[1]} tone={['violet', 'teal'][index]} />)}</div><Panel title="建设说明"><Notice tone="info">此页面已按 AI魔法学院的信息架构接入平台端导航与视觉壳层；需要服务端数据的筛选、编辑和审批操作将在对应 API 完成后接入，不会伪造业务数据。</Notice></Panel></>;
 }
-
 function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
@@ -269,7 +325,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<PlatformPage kind="materials" />} /><Route path="/inbox" element={<PlatformPage kind="inbox" />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
