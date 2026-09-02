@@ -28,7 +28,7 @@ function classInOrg(auth, classId) {
 }
 function assertClassManager(auth, cls, permission = 'MANAGE_CLASSES') {
   if (auth.user.role === 'ORG_ADMIN') return;
-  if (auth.user.role === 'TEACHER' && cls.teacher_id === auth.user.id && hasPermission(auth, permission)) return;
+  if (auth.user.role === 'TEACHER' && teacherCanAccessClass(auth, cls) && hasPermission(auth, permission)) return;
   throw errors.forbidden('无班级管理权限', 'CLASS_PERMISSION_DENIED');
 }
 function accessibleLesson(currentOrgId, lessonId) {
@@ -43,6 +43,129 @@ function accessibleSeries(currentOrgId, seriesId) {
     [currentOrgId, seriesId, currentOrgId],
   );
 }
+const ORG_MEMBER_ROLES = new Set(['TEACHER', 'STUDENT']);
+const ORG_TEACHER_PERMISSIONS = new Set(['MANAGE_MEMBERS', 'MANAGE_CLASSES']);
+
+function validateMemberPhone(phone, existingId = null) {
+  const value = phone == null ? '' : String(phone).trim();
+  if (!value) return null;
+  if (!/^[0-9+()\-\s]{6,30}$/.test(value)) throw errors.badRequest('手机号格式无效', 'INVALID_PHONE');
+  const duplicate = row('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL' + (existingId ? ' AND id<>?' : ''), existingId ? [value, existingId] : [value]);
+  if (duplicate) throw errors.conflict('手机号已被其他账号使用', 'PHONE_EXISTS');
+  return value;
+}
+
+function validateMemberPermissions(value, role) {
+  if (role !== 'TEACHER') return [];
+  const permissions = Array.isArray(value) ? [...new Set(value)] : [];
+  if (permissions.some((item) => typeof item !== 'string' || !ORG_TEACHER_PERMISSIONS.has(item))) throw errors.badRequest('包含无效的教师权限码', 'INVALID_MEMBER_PERMISSION');
+  return permissions;
+}
+
+function classMemberships(orgIdValue, userId) {
+  return rows(`SELECT class.id,class.name,class.teacher_id,class.status,class_member.role AS member_role
+    FROM class_members class_member JOIN classes class ON class.id=class_member.class_id
+    WHERE class.org_id=? AND class_member.user_id=? AND class_member.removed_at IS NULL
+    ORDER BY class.created_at DESC`, [orgIdValue, userId]).map((item) => ({
+    id: item.id, name: item.name, teacherId: item.teacher_id || null, status: item.status, role: item.member_role,
+  }));
+}
+
+function orgMemberRow(value, currentOrgId) {
+  return { ...normalizeUser(value, { includeAuthMeta: true }), classes: classMemberships(currentOrgId, value.id) };
+}
+
+function teacherCanAccessClass(auth, cls) {
+  return auth.user.role !== 'TEACHER' || cls.teacher_id === auth.user.id || Boolean(row(
+    "SELECT id FROM class_members WHERE class_id=? AND user_id=? AND role='TEACHER' AND removed_at IS NULL",
+    [cls.id, auth.user.id],
+  ));
+}
+
+function teacherScope(alias, auth, params) {
+  if (auth.user.role !== 'TEACHER') return '';
+  params.push(auth.user.id, auth.user.id);
+  return ` AND (${alias}.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=${alias}.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))`;
+}
+
+function importItems(body) {
+  const items = Array.isArray(body?.items) ? body.items : Array.isArray(body?.rows) ? body.rows : null;
+  if (!items) throw errors.badRequest('批量导入必须提供 items 数组', 'IMPORT_ITEMS_REQUIRED');
+  if (!items.length) throw errors.badRequest('批量导入不能为空', 'IMPORT_ITEMS_REQUIRED');
+  if (items.length > 500) throw errors.badRequest('单批最多导入 500 条', 'IMPORT_LIMIT');
+  return items;
+}
+
+function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, teacherSeatOffset = 0) {
+  const item = raw && typeof raw === 'object' ? raw : {};
+  const role = String(item.role || '').trim().toUpperCase();
+  const login = String(item.login || '').trim();
+  const displayName = String(item.displayName || item.name || '').trim();
+  const password = String(item.password || '');
+  const phone = String(item.phone || '').trim();
+  const errorsForRow = [];
+  let monthlyCreditAllowance = 0;
+  if (!ORG_MEMBER_ROLES.has(role)) errorsForRow.push('角色必须是 TEACHER 或 STUDENT');
+  if (!login) errorsForRow.push('登录名不能为空');
+  if (login.length > 100) errorsForRow.push('登录名不能超过 100 个字符');
+  if (!displayName) errorsForRow.push('姓名不能为空');
+  if (password.length < 6) errorsForRow.push('初始密码至少 6 位');
+  if (phone && !/^[0-9+()\-\s]{6,30}$/.test(phone)) errorsForRow.push('手机号格式无效');
+  if (seenLogins.has(login)) errorsForRow.push('本批次登录名重复');
+  if (row('SELECT id FROM users WHERE login=?', [login])) errorsForRow.push('登录名已存在');
+  if (phone && (seenPhones.has(phone) || row('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL', [phone]))) errorsForRow.push('手机号已被其他账号使用');
+  let permissions = [];
+  if (role === 'TEACHER') {
+    try { permissions = validateMemberPermissions(item.permissions, role); } catch (error) { errorsForRow.push(error.message); }
+  }
+  if (role === 'STUDENT' && item.studentUsageScope !== undefined && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(item.studentUsageScope)) errorsForRow.push('学员额度范围无效');
+  if (role === 'STUDENT') { try { monthlyCreditAllowance = integer(item.monthlyCreditAllowance, '月度积分'); } catch (error) { errorsForRow.push(error.message); } }
+  if (item.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [item.billingPackageId, currentOrgId])) errorsForRow.push('套餐不属于当前机构');
+  if (Array.isArray(item.classIds)) {
+    item.classIds.map(String).filter((classId, position, values) => values.indexOf(classId) === position).forEach((classId) => {
+      if (!row("SELECT id FROM classes WHERE id=? AND org_id=? AND status='ACTIVE'", [classId, currentOrgId])) errorsForRow.push('包含不存在或已归档班级');
+    });
+  }
+  seenLogins.add(login);
+  if (phone) seenPhones.add(phone);
+  return {
+    index,
+    valid: errorsForRow.length === 0,
+    errors: errorsForRow,
+    value: {
+      role, login, displayName, password, phone: phone || null,
+      permissions,
+      expiresAt: item.expiresAt || null,
+      studentUsageScope: role === 'STUDENT' ? (item.studentUsageScope || 'HOME_PRACTICE') : null,
+      billingPackageId: role === 'STUDENT' ? (item.billingPackageId || null) : null,
+      monthlyCreditAllowance,
+      classIds: Array.isArray(item.classIds) ? [...new Set(item.classIds.map(String))] : [],
+    },
+  };
+}
+
+function previewImport(body, currentOrgId) {
+  const items = importItems(body);
+  const seenLogins = new Set(); const seenPhones = new Set();
+  const normalized = items.map((item, index) => validateImportItem(item, currentOrgId, index + 1, seenLogins, seenPhones));
+  const teacherCount = normalized.filter((item) => item.valid && item.value.role === 'TEACHER').length;
+  const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+  if ((org.teacherSeats - org.teacherUsedSeats) < teacherCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'TEACHER') { item.valid = false; item.errors.push('教师席位不足'); } });
+  return { total: normalized.length, validCount: normalized.filter((item) => item.valid).length, invalidCount: normalized.filter((item) => !item.valid).length, items: normalized };
+}
+
+function createMember(currentOrgId, value) {
+  const now = nowIso(); const userId = id('user');
+  q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,monthly_credit_allowance,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, value.monthlyCreditAllowance, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
+  value.classIds.forEach((classId) => {
+    const cls = row('SELECT id FROM classes WHERE id=? AND org_id=? AND status=\'ACTIVE\'', [classId, currentOrgId]);
+    if (!cls) throw errors.badRequest(`第 ${value.login} 条记录包含不存在或已归档班级`, 'INVALID_CLASS');
+    if (!['TEACHER', 'STUDENT'].includes(value.role)) return;
+    q('INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES (?,?,?,?,?)', [id('member'), cls.id, userId, value.role, now]);
+  });
+  return row('SELECT * FROM users WHERE id=?', [userId]);
+}
+
 function validateTeacher(currentOrgId, teacherId) {
   if (!teacherId) return null;
   const teacher = row("SELECT id FROM users WHERE id=? AND org_id=? AND role='TEACHER' AND status='ACTIVE' AND deleted_at IS NULL", [teacherId, currentOrgId]);
@@ -74,8 +197,8 @@ function workInReviewScope(auth, currentOrgId, workId) {
     [workId, currentOrgId],
   );
   if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-  if (auth.user.role === 'TEACHER' && work.teacher_id !== auth.user.id) {
-    throw errors.forbidden('不能点评其他教师班级的作品', 'WORK_PERMISSION_DENIED');
+  if (auth.user.role === 'TEACHER' && !teacherCanAccessClass(auth, { id: work.class_id, teacher_id: work.teacher_id })) {
+    throw errors.forbidden('不能点评未授权班级的作品', 'WORK_PERMISSION_DENIED');
   }
   return work;
 }
@@ -392,34 +515,105 @@ export async function handleOrg(ctx) {
   }
   if (part === '/users' && method === 'GET') {
     if (!hasPermission(auth, 'MANAGE_MEMBERS')) throw errors.forbidden('无账号管理权限', 'ORG_MEMBER_PERMISSION_REQUIRED');
-    const role = ctx.search.get('role'); const params = [currentOrgId]; let where = 'org_id=? AND deleted_at IS NULL'; if (['TEACHER','STUDENT'].includes(role)) { where += ' AND role=?'; params.push(role); }
-    const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC LIMIT 500', params).map((item) => normalizeUser(item, { includeAuthMeta: true })); return { items, total: items.length };
+    const role = ctx.search.get('role'); const search = String(ctx.search.get('search') || '').trim(); const params = [currentOrgId]; let where = 'org_id=? AND deleted_at IS NULL';
+    if (ORG_MEMBER_ROLES.has(role)) { where += ' AND role=?'; params.push(role); }
+    if (search) { where += ' AND (login LIKE ? OR display_name LIKE ? OR phone LIKE ?)'; const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
+    const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC LIMIT 500', params).map((item) => orgMemberRow(item, currentOrgId)); return { items, total: items.length };
+  }
+  let importMatch = part.match(/^\/users\/import\/(preview|commit)$/);
+  if (importMatch && method === 'POST') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可批量导入账号', 'ORG_ADMIN_REQUIRED');
+    const preview = previewImport(ctx.body || {}, currentOrgId);
+    if (importMatch[1] === 'preview') return preview;
+    if (preview.invalidCount) throw errors.badRequest('批量导入校验失败，未写入任何账号', 'IMPORT_VALIDATION_FAILED', preview);
+    const created = transaction(() => preview.items.map((item) => createMember(currentOrgId, item.value)));
+    created.forEach((item) => audit(ctx, 'USER_IMPORT_CREATE', 'USER', item.id, null, { role: item.role, login: item.login }));
+    audit(ctx, 'USER_IMPORT_COMMIT', 'IMPORT_BATCH', null, null, { total: created.length, logins: created.map((item) => item.login) });
+    return { total: created.length, validCount: created.length, invalidCount: 0, items: created.map((item) => orgMemberRow(item, currentOrgId)) };
   }
   if (part === '/users' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建账号', 'ORG_ADMIN_REQUIRED');
-    const body = ctx.body || {}; const role = body.role; const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim();
-    if (!['TEACHER','STUDENT'].includes(role) || !login || !displayName || String(body.password || '').length < 6) throw errors.badRequest('账号信息不完整');
+    const body = ctx.body || {}; const role = String(body.role || '').trim().toUpperCase(); const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim();
+    if (!ORG_MEMBER_ROLES.has(role) || !login || !displayName || String(body.password || '').length < 6) throw errors.badRequest('账号信息不完整');
     if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
-    if (role === 'TEACHER' && normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId])).remainingTeacherSeats <= 0) throw errors.badRequest('教师席位不足', 'TEACHER_SEAT_LIMIT');
+    const phone = validateMemberPhone(body.phone);
+    const permissions = validateMemberPermissions(body.permissions, role);
+    const organization = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+    if (role === 'TEACHER' && organization.teacherSeats - organization.teacherUsedSeats <= 0) throw errors.badRequest('教师席位不足', 'TEACHER_SEAT_LIMIT');
     if (body.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
-    const now = nowIso(); const userId = id('user');
-    q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,expires_at,student_usage_scope,billing_package_id,monthly_credit_allowance,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, login, displayName, role, json(role === 'TEACHER' && Array.isArray(body.permissions) ? body.permissions : []), hashPassword(String(body.password)), 'ACTIVE', body.expiresAt || null, role === 'STUDENT' ? (body.studentUsageScope || 'HOME_PRACTICE') : null, role === 'STUDENT' ? (body.billingPackageId || null) : null, role === 'STUDENT' ? integer(body.monthlyCreditAllowance, '月度积分') : 0, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
-    audit(ctx, 'USER_CREATE', 'USER', userId, null, { role, login }); return normalizeUser(row('SELECT * FROM users WHERE id=?', [userId]), { includeAuthMeta: true });
-  }
-  let match = part.match(/^\/users\/([^/]+)$/);
+    const classIds = Array.isArray(body.classIds) ? [...new Set(body.classIds.map(String))] : [];
+    classIds.forEach((classId) => {
+      if (!row("SELECT id FROM classes WHERE id=? AND org_id=? AND status='ACTIVE'", [classId, currentOrgId])) throw errors.badRequest('包含不存在或已归档班级', 'INVALID_CLASS');
+    });
+    const created = transaction(() => createMember(currentOrgId, {
+      role, login, displayName, password: String(body.password), phone: phone || null,
+      permissions, expiresAt: body.expiresAt || null,
+      studentUsageScope: role === 'STUDENT' ? (body.studentUsageScope || 'HOME_PRACTICE') : null,
+      billingPackageId: role === 'STUDENT' ? (body.billingPackageId || null) : null,
+      monthlyCreditAllowance: role === 'STUDENT' ? integer(body.monthlyCreditAllowance, '月度积分') : 0,
+      classIds,
+    }));
+    audit(ctx, 'USER_CREATE', 'USER', created.id, null, { role, login, classIds });
+    return orgMemberRow(created, currentOrgId);
+  }  let match = part.match(/^\/users\/([^/]+)$/);
   if (match && ['GET','PUT','DELETE'].includes(method)) {
     if (!hasPermission(auth, 'MANAGE_MEMBERS')) throw errors.forbidden('无账号管理权限', 'ORG_MEMBER_PERMISSION_REQUIRED'); const target = orgUser(auth, match[1]); if (method === 'GET') return normalizeUser(target, { includeAuthMeta: true });
-    if (method === 'DELETE') { q('UPDATE users SET deleted_at=?,status=?,updated_at=? WHERE id=? AND org_id=?', [nowIso(), 'DISABLED', nowIso(), target.id, currentOrgId]); audit(ctx, 'USER_DELETE', 'USER', target.id); return { ok: true }; }
-    const body = ctx.body || {}; if (body.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
-    q('UPDATE users SET display_name=COALESCE(?,display_name),phone=COALESCE(?,phone),status=COALESCE(?,status),student_usage_scope=COALESCE(?,student_usage_scope),billing_package_id=COALESCE(?,billing_package_id),monthly_credit_allowance=COALESCE(?,monthly_credit_allowance),updated_at=? WHERE id=? AND org_id=?', [body.displayName || null, body.phone || null, body.status || null, body.studentUsageScope || null, body.billingPackageId || null, body.monthlyCreditAllowance === undefined ? null : integer(body.monthlyCreditAllowance, '月度积分'), nowIso(), target.id, currentOrgId]); audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), body); return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
+    if (method === 'DELETE') {
+      const now = nowIso();
+      transaction(() => { q('UPDATE users SET deleted_at=?,status=?,updated_at=? WHERE id=? AND org_id=?', [now, 'DISABLED', now, target.id, currentOrgId]); q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
+      audit(ctx, 'USER_DELETE', 'USER', target.id, normalizeUser(target), { status: 'DISABLED', deletedAt: now }); return { ok: true };
+    }
+    const body = ctx.body || {};
+    if (body.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
+    const nextStatus = body.status === undefined ? target.status : body.status;
+    if (!['ACTIVE', 'DISABLED'].includes(nextStatus)) throw errors.badRequest('账号状态无效', 'INVALID_MEMBER_STATUS');
+    if (nextStatus === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'SELF_DISABLE_FORBIDDEN');
+    const phone = body.phone === undefined ? target.phone : validateMemberPhone(body.phone, target.id);
+    const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim(); if (!displayName) throw errors.badRequest('姓名不能为空', 'DISPLAY_NAME_REQUIRED');
+    const usageScope = body.studentUsageScope === undefined ? target.student_usage_scope : body.studentUsageScope; if (usageScope && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(usageScope)) throw errors.badRequest('学员额度范围无效', 'INVALID_USAGE_SCOPE');
+    const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);
+    const now = nowIso();
+    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,student_usage_scope=?,billing_package_id=?,monthly_credit_allowance=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, usageScope, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, body.monthlyCreditAllowance === undefined ? target.monthly_credit_allowance : integer(body.monthlyCreditAllowance, '月度积分'), now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
+    audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), { ...body, status: nextStatus }); return orgMemberRow(row('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
+  }
+  let memberClassesMatch = part.match(/^\/users\/([^/]+)\/classes$/);
+  if (memberClassesMatch && method === 'PUT') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可调整成员班级', 'ORG_ADMIN_REQUIRED');
+    const target = orgUser(auth, memberClassesMatch[1]);
+    if (!['TEACHER', 'STUDENT'].includes(target.role)) throw errors.badRequest('该账号不能加入班级', 'INVALID_ROLE');
+    const classIds = Array.isArray(ctx.body?.classIds) ? [...new Set(ctx.body.classIds.map(String))] : [];
+    const validClasses = classIds.map((classId) => row("SELECT id FROM classes WHERE id=? AND org_id=? AND status='ACTIVE'", [classId, currentOrgId]));
+    if (validClasses.some((item) => !item)) throw errors.badRequest('包含不存在或已归档班级', 'INVALID_CLASS');
+    const beforeClassIds = classMemberships(currentOrgId, target.id).filter((item) => item.role === target.role).map((item) => item.id);
+    const now = nowIso();
+    transaction(() => {
+      q('UPDATE class_members SET removed_at=? WHERE user_id=? AND role=? AND removed_at IS NULL AND class_id IN (SELECT id FROM classes WHERE org_id=?)', [now, target.id, target.role, currentOrgId]);
+      classIds.forEach((classId) => q('INSERT INTO class_members(id,class_id,user_id,role,joined_at,removed_at) VALUES (?,?,?,?,?,NULL) ON CONFLICT DO UPDATE SET role=excluded.role,removed_at=NULL', [id('member'), classId, target.id, target.role, now]));
+    });
+    audit(ctx, 'USER_CLASSES_REPLACE', 'USER', target.id, { classIds: beforeClassIds, role: target.role }, { classIds, role: target.role });
+    return orgMemberRow(row('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
   }
   match = part.match(/^\/users\/([^/]+)\/(password|permissions|period-boosts)$/);
   if (match && method === 'PUT') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作', 'ORG_ADMIN_REQUIRED'); const target = orgUser(auth, match[1]);
-    if (match[2] === 'password') { const password = String(ctx.body?.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位'); q('UPDATE users SET password_hash=?,updated_at=? WHERE id=? AND org_id=?', [hashPassword(password), nowIso(), target.id, currentOrgId]); }
-    if (match[2] === 'permissions') { if (target.role !== 'TEACHER') throw errors.badRequest('只能设置教师权限', 'INVALID_ROLE'); q('UPDATE users SET permissions=?,updated_at=? WHERE id=? AND org_id=?', [json(Array.isArray(ctx.body?.permissions) ? ctx.body.permissions : []), nowIso(), target.id, currentOrgId]); }
+    if (match[2] === 'password') { const password = String(ctx.body?.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位'); const now = nowIso(); transaction(() => { q('UPDATE users SET password_hash=?,updated_at=? WHERE id=? AND org_id=?', [hashPassword(password), now, target.id, currentOrgId]); q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); }); }
+    if (match[2] === 'permissions') { if (target.role !== 'TEACHER') throw errors.badRequest('只能设置教师权限', 'INVALID_ROLE'); q('UPDATE users SET permissions=?,updated_at=? WHERE id=? AND org_id=?', [json(validateMemberPermissions(ctx.body?.permissions, target.role)), nowIso(), target.id, currentOrgId]); }
     if (match[2] === 'period-boosts') q('UPDATE users SET month_period_boost_credits=?,updated_at=? WHERE id=? AND org_id=?', [integer(ctx.body?.bonusCredits, '额外积分'), nowIso(), target.id, currentOrgId]);
     audit(ctx, 'USER_' + match[2].toUpperCase(), 'USER', target.id, null, ctx.body); return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
+  }
+  if (part === '/audit-logs' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看操作审计', 'ORG_ADMIN_REQUIRED');
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    const action = String(ctx.search.get('action') || '').trim(); const params = [currentOrgId]; let where = 'audit.org_id=?';
+    if (action) { where += ' AND audit.action=?'; params.push(action); }
+    const items = rows(`SELECT audit.*,actor.display_name actor_name,actor.login actor_login
+      FROM audit_logs audit LEFT JOIN users actor ON actor.id=audit.actor_id
+      WHERE ${where} ORDER BY audit.created_at DESC LIMIT ${limit}`, params).map((item) => ({
+      id: item.id, action: item.action, targetType: item.target_type, targetId: item.target_id || null,
+      actorName: item.actor_name || item.actor_login || '系统', actorRole: item.actor_role || null,
+      before: parseJson(item.before_data, null), after: parseJson(item.after_data, null), createdAt: item.created_at,
+    }));
+    return { items, total: items.length };
   }
   if (part === '/billing/packages' && method === 'GET') return { items: rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC', [currentOrgId]).map(normalizePackage) };
   if (part === '/billing/packages' && method === 'POST') {
@@ -510,7 +704,7 @@ export async function handleOrg(ctx) {
   }
   if (part === '/classes' && method === 'GET') {
     const params = [currentOrgId]; let where = 'class.org_id=?';
-    if (auth.user.role === 'TEACHER') { where += ' AND class.teacher_id=?'; params.push(auth.user.id); }
+    if (auth.user.role === 'TEACHER') where += teacherScope('class', auth, params);
     return { items: rows('SELECT class.* FROM classes class WHERE ' + where + ' ORDER BY class.created_at DESC', params).map(normalizeClass) };
   }
   if (part === '/classes' && method === 'POST') {
@@ -525,7 +719,7 @@ export async function handleOrg(ctx) {
   let classMatch = part.match(/^\/classes\/([^/]+)$/);
   if (classMatch && ['GET','PUT','DELETE'].includes(method)) {
     const cls = classInOrg(auth, classMatch[1]);
-    if (method === 'GET') { if (auth.user.role === 'TEACHER' && cls.teacher_id !== auth.user.id) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND'); return normalizeClass(cls, { detail: true }); }
+    if (method === 'GET') { if (!teacherCanAccessClass(auth, cls)) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND'); return normalizeClass(cls, { detail: true }); }
     assertClassManager(auth, cls);
     if (method === 'DELETE') {
       transaction(() => { const active = row("SELECT * FROM class_sessions WHERE class_id=? AND status='ACTIVE'", [cls.id]); if (active) q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason='CLASS_ARCHIVED' WHERE id=?", [nowIso(), auth.user.id, active.id]); q("UPDATE classes SET status='ARCHIVED',archived_at=?,current_session_id=NULL,updated_at=? WHERE id=? AND org_id=?", [nowIso(), nowIso(), cls.id, currentOrgId]); });
@@ -538,7 +732,7 @@ export async function handleOrg(ctx) {
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/curriculum$/);
   if (classMatch && method === 'GET') {
-    const cls = classInOrg(auth, classMatch[1]); if (auth.user.role === 'TEACHER' && cls.teacher_id !== auth.user.id) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
+    const cls = classInOrg(auth, classMatch[1]); if (!teacherCanAccessClass(auth, cls)) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
     const items = rows('SELECT item.*,lesson.title,lesson.summary,lesson.duration_minutes FROM class_curriculum_items item JOIN course_lessons lesson ON lesson.id=item.lesson_id WHERE item.class_id=? ORDER BY item.sort', [cls.id]); return { items: items.map(curriculumItem) };
   }
   if (classMatch && method === 'PUT') {
@@ -609,12 +803,12 @@ export async function handleOrg(ctx) {
   }
 
   if (part === '/works' && method === 'GET') {
-    const params = [currentOrgId]; let where = 'work.org_id=?'; if (auth.user.role === 'TEACHER') { where += ' AND class.teacher_id=?'; params.push(auth.user.id); }
+    const params = [currentOrgId]; let where = 'work.org_id=?'; if (auth.user.role === 'TEACHER') { where += " AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))"; params.push(auth.user.id, auth.user.id); }
     const items = rows('SELECT work.*,student.display_name student_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ' + where + ' ORDER BY work.submitted_at DESC LIMIT 200', params).map((work) => normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' })); return { items };
   }
   let workMatch = part.match(/^\/works\/([^/]+)\/review$/);
   if (workMatch && method === 'PUT') {
-    const work = row('SELECT work.*,class.teacher_id FROM works work LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id WHERE work.id=? AND work.org_id=?', [workMatch[1], currentOrgId]); if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND'); if (auth.user.role === 'TEACHER' && work.teacher_id !== auth.user.id) throw errors.forbidden('不能点评其他教师班级的作品', 'WORK_PERMISSION_DENIED');
+    const work = row('SELECT work.*,class.teacher_id FROM works work LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id WHERE work.id=? AND work.org_id=?', [workMatch[1], currentOrgId]); if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND'); if (!teacherCanAccessClass(auth, { id: work.class_id, teacher_id: work.teacher_id })) throw errors.forbidden('不能点评未授权班级的作品', 'WORK_PERMISSION_DENIED');
     const status = ctx.body?.status; if (!['APPROVED','REJECTED','PUBLISHED'].includes(status)) throw errors.badRequest('作品状态无效', 'INVALID_WORK_STATUS'); q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [status, String(ctx.body?.teacherComment || '').slice(0, 2000), auth.user.id, nowIso(), work.id, currentOrgId]); audit(ctx, 'WORK_REVIEW', 'WORK', work.id, null, { status }); return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
   }
   return null;

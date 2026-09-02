@@ -150,12 +150,119 @@ function Classes({ api, user }) {
   </>;
 }
 
-function Members({ api }) {
-  const { loading, error, data, refresh } = useData(() => api.get('org/users'), [api]);
-  if (loading) return <Loading />; if (error) return <ErrorState error={error} onRetry={refresh} />;
-  return <><PageHeader eyebrow="机构成员" title="教师与学生" description="成员管理权限由机构管理员或被授权教师控制。" /><Panel title="成员列表" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>{data.items.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>登录名</th><th>本期额度</th><th>状态</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td>{item.displayName}</td><td>{item.role}</td><td>{item.login}</td><td>{item.role === 'STUDENT' ? formatCredits(item.creditsRemaining) : '—'}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty />}</Panel></>;
-}
+function Members({ api, user }) {
+  const isAdmin = user.role === 'ORG_ADMIN';
+  const members = useData(() => api.get('org/users'), [api]);
+  const classes = useData(() => api.get('org/classes'), [api]);
+  const [roleFilter, setRoleFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [form, setForm] = useState({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' });
+  const [importText, setImportText] = useState('');
+  const [importPreview, setImportPreview] = useState(null);
+  const [editing, setEditing] = useState('');
+  const [editDraft, setEditDraft] = useState(null);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const items = members.data?.items || [];
+  const classItems = classes.data?.items || [];
 
+  function parseImport() {
+    const lines = importText.trim().split(/\r?\n/).filter(Boolean);
+    if (!lines.length) throw new Error('请先粘贴批量导入内容');
+    const delimiter = lines[0].includes('\t') ? '\t' : ',';
+    const headers = lines[0].split(delimiter).map((item) => item.trim());
+    const required = ['login', 'displayName', 'role', 'password'];
+    if (required.some((key) => !headers.includes(key))) throw new Error('首行必须包含 login、displayName、role、password 列');
+    return lines.slice(1).map((line) => {
+      const values = line.split(delimiter).map((item) => item.trim());
+      const item = Object.fromEntries(headers.map((header, index) => [header, values[index] || '']));
+      item.classIds = String(item.classIds || '').split('|').map((value) => value.trim()).filter(Boolean);
+      if (item.monthlyCreditAllowance) item.monthlyCreditAllowance = Number(item.monthlyCreditAllowance);
+      return item;
+    });
+  }
+  async function create(event) {
+    event.preventDefault(); setBusy(true); setMessage('');
+    try { await api.post('org/users', form); setForm({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' }); setMessage('账号已创建'); await members.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  function startEdit(item) {
+    setEditing(item.id); setEditDraft({ id: item.id, displayName: item.displayName, phone: item.phone || '', status: item.status, permissions: item.permissions || [] });
+  }
+  async function saveEdit(event) {
+    event.preventDefault(); setBusy(true); setMessage('');
+    try { await api.put(`org/users/${editDraft.id}`, editDraft); setEditing(''); setEditDraft(null); setMessage('成员信息已保存'); await members.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  async function setStatus(item, status) {
+    setBusy(true); setMessage('');
+    try { await api.put(`org/users/${item.id}`, { status }); setMessage(status === 'ACTIVE' ? '账号已启用' : '账号已停用，已有会话已失效'); await members.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  async function resetPassword(item) {
+    const password = window.prompt(`为 ${item.displayName} 设置新密码（至少 6 位）`);
+    if (password === null) return;
+    setBusy(true); setMessage('');
+    try { await api.put(`org/users/${item.id}/password`, { password }); setMessage('密码已重置，原有登录会话已失效'); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  async function saveClasses(item, classIds) {
+    setBusy(true); setMessage('');
+    try { await api.put(`org/users/${item.id}/classes`, { classIds }); setMessage('班级归属已更新'); await members.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  async function previewImport() {
+    setBusy(true); setMessage('');
+    try { const preview = await api.post('org/users/import/preview', { items: parseImport() }); setImportPreview(preview); setMessage(`预览完成：${preview.validCount} 条可导入，${preview.invalidCount} 条失败`); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  async function commitImport() {
+    setBusy(true); setMessage('');
+    try { const result = await api.post('org/users/import/commit', { items: parseImport() }); setImportPreview(null); setImportText(''); setMessage(`批量导入完成：${result.total} 个账号已创建`); await members.refresh(); }
+    catch (error) { setMessage(error.message + (error.details?.items ? `（${error.details.invalidCount} 条失败，已全部回滚）` : '')); } finally { setBusy(false); }
+  }
+  const visibleItems = items.filter((item) => (!roleFilter || item.role === roleFilter) && (!search.trim() || [item.login, item.displayName, item.phone].some((value) => String(value || '').toLowerCase().includes(search.trim().toLowerCase()))));
+  if (members.loading || classes.loading) return <Loading />;
+  if (members.error) return <ErrorState error={members.error} onRetry={members.refresh} />;
+  if (classes.error && isAdmin) return <ErrorState error={classes.error} onRetry={classes.refresh} />;
+
+  return <>
+    <PageHeader eyebrow="机构成员" title="教师与学生" description={isAdmin ? '创建、编辑、停用账号，并维护教师授权班级与学员调班记录。' : '仅展示当前权限范围内的机构成员；成员写操作需要机构管理员权限。'} actions={<button className="secondary-button" onClick={members.refresh}>刷新</button>} />
+    {message && <Notice tone={message.includes('失败') || message.includes('错误') || message.includes('无权') ? 'danger' : 'success'}>{message}</Notice>}
+    {isAdmin && <div className="split">
+      <Panel title="新建账号">
+        <form onSubmit={create}>
+          <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="STUDENT">学生</option><option value="TEACHER">教师</option></select></label>
+          <label>登录名<input value={form.login} required onChange={(event) => setForm({ ...form, login: event.target.value })} /></label>
+          <label>姓名<input value={form.displayName} required onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
+          <label>初始密码<input type="password" minLength="6" value={form.password} required onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+          <label>手机号（可选）<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
+          <button className="primary-button" disabled={busy}>创建账号</button>
+        </form>
+      </Panel>
+      <Panel title="批量导入">
+        <p className="muted">粘贴 CSV 或 TSV。列名：<code>login,displayName,role,password,phone,classIds</code>；多个班级 ID 用竖线分隔。系统先预览，提交时整批原子写入，任何错误都会全部回滚。</p>
+        <textarea value={importText} rows="7" placeholder={'login,displayName,role,password,phone,classIds\nstudent-02,小明,STUDENT,student123,13800000001,class_xxx'} onChange={(event) => setImportText(event.target.value)} />
+        <div className="row-actions"><button className="secondary-button" type="button" disabled={busy} onClick={previewImport}>预览导入</button>{importPreview?.invalidCount === 0 && <button className="primary-button" type="button" disabled={busy} onClick={commitImport}>确认整批导入</button>}</div>
+        {importPreview && <div className="card-list"><Notice tone={importPreview.invalidCount ? 'danger' : 'success'}>共 {importPreview.total} 条，可导入 {importPreview.validCount} 条，失败 {importPreview.invalidCount} 条。</Notice>{importPreview.items.filter((item) => !item.valid).map((item) => <p className="muted" key={item.index}>第 {item.index} 行：{item.errors.join('；')}</p>)}</div>}
+      </Panel>
+    </div>}
+    <Panel title="成员列表">
+      <div className="row-actions"><input placeholder="搜索姓名、登录名或手机号" value={search} onChange={(event) => setSearch(event.target.value)} /><select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}><option value="">全部角色</option><option value="TEACHER">教师</option><option value="STUDENT">学生</option></select></div>
+      {visibleItems.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>登录名</th><th>班级</th><th>额度</th><th>状态</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => {
+        const draft = editing === item.id ? editDraft : null;
+        const assignedIds = (item.classes || []).filter((entry) => entry.role === item.role).map((entry) => entry.id);
+        return <tr key={item.id}>
+          <td>{draft ? <input value={draft.displayName} onChange={(event) => setEditDraft({ ...draft, displayName: event.target.value })} /> : item.displayName}</td>
+          <td>{item.role}</td><td>{item.login}</td><td>{item.classes?.map((entry) => entry.name).join('、') || '未分配'}</td>
+          <td>{item.role === 'STUDENT' ? formatCredits(item.creditsRemaining) : '—'}</td>
+          <td>{draft ? <select value={draft.status} onChange={(event) => setEditDraft({ ...draft, status: event.target.value })}><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select> : <Status value={item.status} />}</td>
+          <td><div className="row-actions">{isAdmin && <>{draft ? <><button className="text-button" disabled={busy} onClick={saveEdit}>保存</button><button className="text-button" onClick={() => { setEditing(''); setEditDraft(null); }}>取消</button></> : <button className="text-button" onClick={() => startEdit(item)}>编辑</button>}<button className="text-button" disabled={busy} onClick={() => setStatus(item, item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE')}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button><button className="text-button" disabled={busy} onClick={() => resetPassword(item)}>重置密码</button>{item.role === 'TEACHER' && <label className="muted">授权班级<select multiple value={assignedIds} onChange={(event) => saveClasses(item, [...event.target.selectedOptions].map((option) => option.value))}>{classItems.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>}{item.role === 'STUDENT' && <label className="muted">调班<select multiple value={assignedIds} onChange={(event) => saveClasses(item, [...event.target.selectedOptions].map((option) => option.value))}>{classItems.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>}</>}</div></td>
+        </tr>;
+      })}</tbody></table></div> : <Empty title="暂无成员" body="请先创建账号或调整搜索条件。" />}
+    </Panel>
+  </>;
+}
 function nodeLabel(snapshot, nodeId) {
   const node = snapshot?.nodes?.find((item) => item.id === nodeId);
   if (!node) return '整体作品';
@@ -423,6 +530,6 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<OrgPage kind="work-data" user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<OrgPage kind="work-data" user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
