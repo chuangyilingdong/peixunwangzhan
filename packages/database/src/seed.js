@@ -137,6 +137,13 @@ function ensureOrganization(now) {
        total_credits_in=MAX(org_billing_accounts.total_credits_in, excluded.total_credits_in)`,
     [organization.id, 100000, 100000, 0, 0],
   );
+  // Keep the seeded opening balance auditable without inventing a paid recharge order.
+  q(
+    `INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,status,reason,actor_id,created_at)
+     SELECT ?,?,?,?,?,?,'EFFECTIVE',?,NULL,?
+     WHERE NOT EXISTS (SELECT 1 FROM credit_entries WHERE org_id=? AND type='OPENING_BALANCE')`,
+    [id('credit'), organization.id, 'IN', 'OPENING_BALANCE', 100000, 100000, '示例机构期初积分', now, organization.id],
+  );
   return organization;
 }
 

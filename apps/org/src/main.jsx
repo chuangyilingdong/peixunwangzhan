@@ -616,25 +616,104 @@ function UsagePage({ api }) {
   </>;
 }
 
+function billingCsvValue(value) {
+  return '"' + String(value ?? '').replace(/"/g, '""') + '"';
+}
 function BillingAccountPage({ api, user }) {
   const overview = useData(() => api.get('org/billing/account-overview'), [api]);
+  const [filters, setFilters] = useState({ direction: '', type: '', status: '', startDate: '', endDate: '' });
+  const [form, setForm] = useState({ type: 'ORG_ADJUSTMENT_IN', credits: '', reason: '' });
+  const [frozenForm, setFrozenForm] = useState({ frozenCredits: '', reason: '' });
+  const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState('');
+  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString(), [filters]);
+  const entries = useData(() => api.get('org/billing/credit-entries?' + query), [api, query]);
   if (user?.role === 'TEACHER') return <>
-    <PageHeader eyebrow="机构运营" title="积分充值" description="查看机构共享魔法石余额、充值订单与积分流水。" />
-    <Panel title="权限说明"><Notice tone="info">账务视图仅机构管理员可见。授课教师可在“积分用量”查看本机构用量汇总。</Notice></Panel>
+    <PageHeader eyebrow="机构运营" title="积分账务" description="查看机构共享魔法石余额、充值订单与积分流水。" />
+    <Panel title="权限说明"><Notice tone="info">账务工作台仅机构管理员可见。授课教师可在“积分用量”查看本机构用量汇总。</Notice></Panel>
   </>;
+  async function refreshAll() { await Promise.all([overview.refresh(), entries.refresh()]); }
+  async function submitAdjustment(event) {
+    event.preventDefault(); setBusy(true); setMessage('');
+    try {
+      const result = await api.post('org/billing/credit-adjustments', form);
+      setMessage('人工账务调整已完成，记账后可用余额 ' + formatCredits(result.balanceAfter) + '。');
+      setForm({ type: 'ORG_ADJUSTMENT_IN', credits: '', reason: '' });
+      await refreshAll();
+    } catch (error) { setMessage(error.message || '人工调整失败'); } finally { setBusy(false); }
+  }
+  async function submitFrozen(event) {
+    event.preventDefault(); setBusy(true); setMessage('');
+    try {
+      const result = await api.put('org/billing/frozen-credits', frozenForm);
+      setMessage('冻结积分已更新为 ' + formatCredits(result.frozenCredits) + '，可用余额 ' + formatCredits(result.availableBalance) + '。');
+      setFrozenForm({ frozenCredits: '', reason: '' }); await refreshAll();
+    } catch (error) { setMessage(error.message || '冻结设置失败'); } finally { setBusy(false); }
+  }
+  async function reverseEntry(item, action) {
+    const reason = window.prompt(action === 'refund' ? '请输入退款 / 退回原因' : '请输入冲正原因', '');
+    if (reason === null) return;
+    if (!reason.trim()) return setMessage('处理原因必填。');
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.post(`org/billing/credit-entries/${item.id}/${action}`, { reason });
+      setMessage((action === 'refund' ? '退款处理已完成' : '冲正处理已完成') + '，记账后可用余额 ' + formatCredits(result.balanceAfter) + '。');
+      await refreshAll();
+    } catch (error) { setMessage(error.message || '账务处理失败'); } finally { setBusy(false); }
+  }
+  async function exportCsv() {
+    setExporting(true); setMessage('');
+    try {
+      const data = await api.get('org/billing/reconciliation/export');
+      const header = (data.columns || []).map((column) => billingCsvValue(column.label)).join(',');
+      const lines = (data.items || []).map((item) => (data.columns || []).map((column) => billingCsvValue(item[column.key])).join(','));
+      const blob = new Blob(['\uFEFF' + [header, ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = data.fileName || '机构积分对账.csv';
+      document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(link.href);
+      setMessage('已导出 ' + lines.length + ' 条积分流水，导出动作已写入审计。');
+    } catch (error) { setMessage(error.message || '对账导出失败'); } finally { setExporting(false); }
+  }
+  if (overview.loading) return <Loading label="正在读取机构账务…" />;
+  if (overview.error) return <ErrorState error={overview.error} onRetry={overview.refresh} />;
+  const data = overview.data || {}; const reconciliation = data.reconciliation || {};
   return <>
-    <PageHeader eyebrow="机构运营" title="积分充值" description="查看共享魔法石余额、充值订单与积分流水；在线支付接入前不做虚假充值。" actions={<button className="secondary-button" onClick={overview.refresh}>刷新</button>} />
+    <PageHeader eyebrow="机构运营" title="积分账务" description="管理共享魔法石余额、冻结、人工调整、退款冲正和流水对账。" actions={<div className="row-actions"><button className="secondary-button" onClick={overview.refresh}>刷新</button><button className="primary-button" onClick={exportCsv} disabled={exporting}>{exporting ? '导出中…' : '导出对账 CSV'}</button></div>} />
+    <Notice tone="info">当前未接入在线支付、支付回调或自动续费；充值订单仅展示真实订单。AI 任务成功后才扣积分，策略拦截和 provider 失败均记录 0 积分审计，不产生扣费，也无需自动退款。冻结只是账务控制，不代表收款能力。</Notice>
+    {message ? <Notice tone={message.includes('失败') || message.includes('必填') ? 'danger' : 'success'}>{message}</Notice> : null}
     <div className="metrics">
-      <MetricCard label="当前余额" value={formatCredits(overview.data?.balance || 0)} hint="机构共享魔法石池" />
-      <MetricCard label="累计充值" value={formatCredits(overview.data?.totalCreditsIn || 0)} hint={`实收金额 ¥${((overview.data?.paidTotalFen || 0) / 100).toFixed(2)}`} tone="teal" />
-      <MetricCard label="累计消耗" value={formatCredits(overview.data?.totalCreditsSpent || 0)} hint="按成功调用扣减" tone="orange" />
-      <MetricCard label="充值订单" value={`${overview.data?.paidOrderCount || 0}/${overview.data?.orders?.length || 0}`} hint={`已支付 / 全部订单，待处理 ${overview.data?.pendingOrderCount || 0}`} tone="pink" />
+      <MetricCard label="可用余额" value={formatCredits(data.availableBalance || 0)} hint="当前可消耗积分" />
+      <MetricCard label="冻结积分" value={formatCredits(data.frozenCredits || 0)} hint="仅锁定，不计收支" tone="orange" />
+      <MetricCard label="总余额" value={formatCredits(data.totalBalance || 0)} hint="可用 + 冻结" tone="teal" />
+      <MetricCard label="对账状态" value={reconciliation.balanced ? '一致' : '不一致'} hint={reconciliation.balanced ? '流水复算与账面一致' : '差异 ' + formatCredits(reconciliation.difference || 0)} tone={reconciliation.balanced ? 'teal' : 'pink'} />
     </div>
     <div className="split">
-      <Panel title="充值订单"><table><thead><tr><th>订单号</th><th>金额</th><th>魔法石</th><th>状态</th><th>创建时间</th></tr></thead><tbody>{(overview.data?.orders || []).map((item) => <tr key={item.id}><td>{item.orderNo}</td><td>¥{(item.amountFen / 100).toFixed(2)}</td><td>{formatCredits(item.credits)}{item.bonusCredits ? <div className="muted">赠 {formatCredits(item.bonusCredits)}</div> : null}</td><td><Status value={item.status} /></td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></Panel>
-      <Panel title="积分流水"><table><thead><tr><th>时间</th><th>类型</th><th>方向 / 积分</th><th>余额</th><th>状态</th></tr></thead><tbody>{(overview.data?.entries || []).map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.type}<div className="muted">{item.reason || item.modality || '—'}</div></td><td>{item.direction === 'IN' ? '+' : '-'}{formatCredits(item.credits)}</td><td>{formatCredits(item.balanceAfter)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></Panel>
+      <Panel title="人工调整"><form onSubmit={submitAdjustment}>
+        <label>调整方向<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="ORG_ADJUSTMENT_IN">人工补入</option><option value="ORG_ADJUSTMENT_OUT">人工扣减</option></select></label>
+        <label>积分<input type="number" min="1" step="1" value={form.credits} onChange={(event) => setForm({ ...form, credits: event.target.value })} required /></label>
+        <label>原因<textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} maxLength="500" placeholder="必须记录线下业务依据，不得虚构充值。" required /></label>
+        <button className="primary-button" disabled={busy}>{busy ? '处理中…' : '提交人工调整'}</button>
+      </form></Panel>
+      <Panel title="冻结控制"><form onSubmit={submitFrozen}>
+        <label>目标冻结积分<input type="number" min="0" step="1" value={frozenForm.frozenCredits} onChange={(event) => setFrozenForm({ ...frozenForm, frozenCredits: event.target.value })} placeholder={'当前冻结 ' + formatCredits(data.frozenCredits || 0)} required /></label>
+        <label>原因<textarea value={frozenForm.reason} onChange={(event) => setFrozenForm({ ...frozenForm, reason: event.target.value })} maxLength="500" placeholder="填写冻结或解冻的业务原因。" required /></label>
+        <button className="primary-button" disabled={busy}>{busy ? '处理中…' : '更新冻结积分'}</button>
+      </form><div className="muted">可用余额 + 冻结积分 = 流水复算总余额；冻结流水只留痕，不计入收入或消耗。</div></Panel>
     </div>
-    <Panel title="支付接入说明"><Notice tone="info">当前页面只读取真实充值单与积分流水，不提供模拟支付或伪造支付成功状态。</Notice></Panel>
+    <div className="split">
+      <Panel title="充值订单"><table><thead><tr><th>订单号</th><th>金额</th><th>魔法石</th><th>状态</th><th>创建时间</th></tr></thead><tbody>{(data.orders || []).map((item) => <tr key={item.id}><td>{item.orderNo}</td><td>¥{(item.amountFen / 100).toFixed(2)}</td><td>{formatCredits(item.credits)}{item.bonusCredits ? <div className="muted">赠 {formatCredits(item.bonusCredits)}</div> : null}</td><td><Status value={item.status} /></td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="对账摘要"><table><tbody><tr><td>累计收入</td><td>{formatCredits(data.totalCreditsIn || 0)}</td></tr><tr><td>累计消耗</td><td>{formatCredits(data.totalCreditsSpent || 0)}</td></tr><tr><td>流水收入合计</td><td>{formatCredits(reconciliation.ledgerCreditsIn || 0)}</td></tr><tr><td>流水消耗合计</td><td>{formatCredits(reconciliation.ledgerCreditsOut || 0)}</td></tr><tr><td>流水条数</td><td>{reconciliation.entryCount || 0}</td></tr><tr><td>最近流水</td><td>{reconciliation.latestEntryAt ? formatDate(reconciliation.latestEntryAt) : '暂无'}</td></tr></tbody></table><div className="muted">{reconciliation.rule}</div></Panel>
+    </div>
+    <Panel title="积分流水">
+      <div className="form-grid">
+        <label>方向<select value={filters.direction} onChange={(event) => setFilters({ ...filters, direction: event.target.value })}><option value="">全部</option><option value="IN">收入</option><option value="OUT">支出</option></select></label>
+        <label>类型<input value={filters.type} placeholder="ORG_ADJUSTMENT_IN / AI_TEXT" onChange={(event) => setFilters({ ...filters, type: event.target.value })} /></label>
+        <label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部</option><option value="EFFECTIVE">有效</option><option value="VOIDED">已处理</option></select></label>
+        <label>开始日期<input type="date" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} /></label>
+        <label>结束日期<input type="date" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} /></label>
+      </div>
+      {entries.loading ? <Loading label="正在读取积分流水…" /> : entries.error ? <ErrorState error={entries.error} onRetry={entries.refresh} /> : (entries.data?.items || []).length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>方向 / 积分</th><th>余额</th><th>状态</th><th>操作</th></tr></thead><tbody>{entries.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.type}{item.reversalOf ? <div className="muted">源：{item.reversalOf}</div> : null}<div className="muted">{item.reason || item.modality || '—'}</div></td><td>{item.direction === 'IN' ? '+' : '-'}{formatCredits(item.credits)}</td><td>{formatCredits(item.balanceAfter)}</td><td><Status value={item.status} /></td><td><div className="row-actions"><button className="text-button" disabled={busy || item.status !== 'EFFECTIVE' || ['FROZEN_HOLD','FROZEN_RELEASE'].includes(item.type)} onClick={() => reverseEntry(item, 'refund')}>退款</button><button className="text-button" disabled={busy || item.status !== 'EFFECTIVE' || ['FROZEN_HOLD','FROZEN_RELEASE'].includes(item.type)} onClick={() => reverseEntry(item, 'reverse')}>冲正</button></div></td></tr>)}</tbody></table></div> : <Empty title="当前筛选范围暂无积分流水" />}
+    </Panel>
   </>;
 }
 

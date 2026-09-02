@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS org_billing_accounts (
   org_id TEXT PRIMARY KEY,
   credit_balance INTEGER NOT NULL DEFAULT 0,
+  frozen_credits INTEGER NOT NULL DEFAULT 0,
   total_credits_in INTEGER NOT NULL DEFAULT 0,
   total_credits_spent INTEGER NOT NULL DEFAULT 0,
   currency_paid_total_fen INTEGER NOT NULL DEFAULT 0,
@@ -109,6 +110,7 @@ CREATE TABLE IF NOT EXISTS credit_entries (
   related_order_id TEXT,
   related_submission_id TEXT,
   status TEXT NOT NULL DEFAULT 'EFFECTIVE' CHECK (status IN ('EFFECTIVE','VOIDED')),
+  reversal_of TEXT,
   reason TEXT,
   actor_id TEXT,
   created_at TEXT NOT NULL,
@@ -116,6 +118,7 @@ CREATE TABLE IF NOT EXISTS credit_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_credit_entries_org_created ON credit_entries(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_credit_entries_session ON credit_entries(class_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_entries_reversal_of ON credit_entries(reversal_of) WHERE reversal_of IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS billing_packages (
   id TEXT PRIMARY KEY,
@@ -614,6 +617,12 @@ try { db.exec("ALTER TABLE class_sessions ADD COLUMN session_kind TEXT NOT NULL 
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec('ALTER TABLE billing_packages ADD COLUMN student_seats INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// Lightweight forward-compatible migration for credit accounting.
+try { db.exec('ALTER TABLE org_billing_accounts ADD COLUMN frozen_credits INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE credit_entries ADD COLUMN reversal_of TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_entries_reversal_of ON credit_entries(reversal_of) WHERE reversal_of IS NOT NULL');
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
 
 export function q(sql, params = []) { return db.prepare(sql).run(...params); }

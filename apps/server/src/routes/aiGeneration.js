@@ -1,7 +1,8 @@
-import { errors, id, json, nowIso, q, row, rows, transaction } from '../lib.js';
+import { ApiError, errors, id, json, nowIso, q, row, rows, transaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
+import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo', PODCAST: 'allowPodcast', DUBBING: 'allowDubbing' };
@@ -63,24 +64,32 @@ export async function handleAiGeneration(ctx) {
       assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: auth.user.orgId, userId: auth.user.id, credits });
       const allowance = Number(user.monthly_credit_allowance || 0) + Number(user.monthly_bonus_credits || 0) + Number(user.month_period_boost_credits || 0);
       if (Number(user.used_credits_this_period || 0) + credits > allowance) throw errors.forbidden('个人额度不足', 'STUDENT_CREDIT_LIMIT');
-      const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [auth.user.orgId]);
-      if (!account || Number(account.credit_balance || 0) < credits) throw errors.forbidden('机构积分池不足', 'ORG_CREDIT_LIMIT');
-      q('UPDATE org_billing_accounts SET credit_balance=credit_balance-?,total_credits_spent=total_credits_spent+?,updated_version=updated_version+1 WHERE org_id=?', [credits, credits, auth.user.orgId]);
+      // Successful generation is the only settlement point; failed jobs never deduct credits.
+      chargeCreditsInTransaction({
+        orgId: auth.user.orgId,
+        credits,
+        type: `AI_GENERATE_${modality}`,
+        modality,
+        model: provider.model,
+        userId: auth.user.id,
+        sessionId: freshContext.activeSession?.id || null,
+        projectId: project.id,
+      });
       q('UPDATE users SET used_credits_this_period=used_credits_this_period+?,magic_stones=MAX(0,magic_stones-?),updated_at=? WHERE id=? AND org_id=?', [credits, credits, nowIso(), auth.user.id, auth.user.orgId]);
       q('INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,pricing_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [id('usage'), auth.user.orgId, auth.user.id, freshContext.activeSession?.id || null, project.id, jobId, modality, provider.model, credits, 'SUCCESS', json({ source: 'generation', provider: provider.name, mode: info.mode }), nowIso()]);
-      q('INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,modality,user_id,class_session_id,project_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [id('credit'), auth.user.orgId, 'OUT', `AI_GENERATE_${modality}`, credits, Number(account.credit_balance) - credits, modality, auth.user.id, freshContext.activeSession?.id || null, project.id, nowIso()]);
       assetPayloads.forEach((asset, index) => { const assetId = id('asset'); assetIds.push(assetId); q('INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,mime_type,asset_url,preview_url,metadata,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [assetId, jobId, auth.user.orgId, auth.user.id, project.id, modality, String(asset.label || `${modality} 素材 ${index + 1}`).slice(0, 120), asset.mimeType || null, String(asset.assetUrl || `mock://generation/${assetId}`), asset.previewUrl || null, json(asset.metadata || {}), nowIso()]); });
       q("UPDATE generation_jobs SET status='SUCCEEDED',credits_charged=?,completed_at=? WHERE id=?", [credits, nowIso(), jobId]);
     });
     const job = row('SELECT * FROM generation_jobs WHERE id=?', [jobId]); return { job: normalizeJob(job), assets: assetsFor(jobId) };
   } catch (error) {
-    q("UPDATE generation_jobs SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?", [error.code || 'GENERATION_FAILED', String(error.message || '素材生成失败').slice(0, 1000), nowIso(), jobId]);
-    // Policy denials are auditable even though they do not charge credits.
-    if (error?.code && ['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP'].includes(error.code)) {
-      const current = row('SELECT * FROM generation_jobs WHERE id=?', [jobId]);
-      q('INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [id('usage'), auth.user.orgId, auth.user.id, context.activeSession?.id || null, project.id, jobId, modality, provider.model, 0, 'BLOCKED', error.code, json({ source: 'generation', provider: provider.name, mode: info.mode, blocked: true }), nowIso()]);
-    }
-    if (error?.code) throw error;
-    throw errors.badRequest('素材生成服务当前不可用，请检查 provider 配置。', 'GENERATION_PROVIDER_UNAVAILABLE');
+    const failCode = error.code || 'GENERATION_FAILED';
+    const failAt = nowIso();
+    q("UPDATE generation_jobs SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?", [failCode, String(error.message || '素材生成失败').slice(0, 1000), failAt, jobId]);
+    // Exactly one audit row is written for each terminal state; failed jobs are never charged.
+    const blocked = error?.code && ['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP'].includes(error.code);
+    const usageStatus = blocked ? 'BLOCKED' : 'FAILED';
+    q('INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [id('usage'), auth.user.orgId, auth.user.id, context.activeSession?.id || null, project.id, jobId, modality, provider.model, 0, usageStatus, failCode, json({ source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: Boolean(blocked) }), failAt]);
+    // Preserve auditability while returning a stable 4xx business error to the caller.
+    throw error instanceof ApiError ? error : errors.badRequest(String(error?.message || '素材生成服务当前不可用，请检查 provider 配置。'), failCode);
   }
 }

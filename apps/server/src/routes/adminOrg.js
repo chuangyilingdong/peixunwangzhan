@@ -4,6 +4,7 @@ import {
   q, requireRole, row, rows, transaction,
 } from '@platform/server-lib';
 import { hashPassword } from '@platform/database';
+import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
 
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
@@ -1316,29 +1317,150 @@ export async function handleOrg(ctx) {
     }));
     return { items, total: items.length };
   }
-  if (part === '/billing/account-overview' && method === 'GET') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看账务视图', 'ORG_BILLING_PERMISSION_DENIED');
-    ensureOrgBilling(currentOrgId);
-    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);
-    const orders = rows('SELECT * FROM recharge_orders WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [currentOrgId]).map((order) => ({
+  const requireOrgBillingAdmin = () => {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可管理机构账务', 'ORG_BILLING_PERMISSION_DENIED');
+    return currentOrgId;
+  };
+  function creditEntryFilters() {
+    const conditions = ['entry.org_id=?'];
+    const params = [currentOrgId];
+    const direction = ctx.search.get('direction');
+    const type = ctx.search.get('type');
+    const status = ctx.search.get('status');
+    const startDate = ctx.search.get('startDate');
+    const endDate = ctx.search.get('endDate');
+    const classId = ctx.search.get('classId');
+    const studentId = ctx.search.get('studentId');
+    const model = ctx.search.get('model');
+    const modality = ctx.search.get('modality');
+    if (['IN','OUT'].includes(direction)) { conditions.push('entry.direction=?'); params.push(direction); }
+    if (type) { conditions.push('entry.type=?'); params.push(type); }
+    if (['EFFECTIVE','VOIDED'].includes(status)) { conditions.push('entry.status=?'); params.push(status); }
+    if (startDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw errors.badRequest('开始日期格式无效', 'INVALID_START_DATE');
+      conditions.push('entry.created_at>=?'); params.push(startDate + 'T00:00:00.000Z');
+    }
+    if (endDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw errors.badRequest('结束日期格式无效', 'INVALID_END_DATE');
+      conditions.push('entry.created_at<=?'); params.push(endDate + 'T23:59:59.999Z');
+    }
+    if (classId) { conditions.push('session.class_id=?'); params.push(classId); }
+    if (studentId) { conditions.push('entry.user_id=?'); params.push(studentId); }
+    if (model) { conditions.push('entry.model=?'); params.push(model); }
+    if (modality) { conditions.push('entry.modality=?'); params.push(modality); }
+    return { conditions, params };
+  }
+  function orgCreditEntries(limit = 200) {
+    const normalizedLimit = integer(limit, '流水条数', { min: 1, max: 1000, fallback: 200 });
+    const { conditions, params } = creditEntryFilters();
+    return rows(
+      'SELECT entry.*,session.class_id,class.name class_name FROM credit_entries entry LEFT JOIN class_sessions session ON session.id=entry.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + conditions.join(' AND ') + ' ORDER BY entry.created_at DESC,entry.id DESC LIMIT ' + normalizedLimit,
+      params,
+    ).map((entry) => ({ ...normalizeEntry(entry), className: entry.class_name || null }));
+  }
+  function normalizedRechargeOrders(limit = 100) {
+    return rows('SELECT * FROM recharge_orders WHERE org_id=? ORDER BY created_at DESC LIMIT ' + integer(limit, '订单条数', { min: 1, max: 1000, fallback: 100 }), [currentOrgId]).map((order) => ({
       id: order.id, orderNo: order.order_no, packageId: order.package_id || null, amountFen: Number(order.amount_fen || 0),
       credits: Number(order.credits || 0), bonusCredits: Number(order.bonus_credits || 0), status: order.status,
       paidAt: order.paid_at || null, invoiceStatus: order.invoice_status, createdAt: order.created_at,
     }));
-    const entries = rows('SELECT * FROM credit_entries WHERE org_id=? ORDER BY created_at DESC LIMIT 200', [currentOrgId]).map((entry) => ({
-      id: entry.id, direction: entry.direction, type: entry.type, credits: Number(entry.credits || 0),
-      balanceAfter: Number(entry.balance_after || 0), modality: entry.modality || null, model: entry.model || null,
-      relatedOrderId: entry.related_order_id || null, status: entry.status, reason: entry.reason || null, createdAt: entry.created_at,
+  }
+  function reconciliationExport() {
+    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);
+    const reconciliation = reconcileCredits(currentOrgId);
+    const items = rows(
+      "SELECT entry.*,user.login user_login,user.display_name user_name,session.class_id,class.name class_name FROM credit_entries entry LEFT JOIN users user ON user.id=entry.user_id AND user.org_id=entry.org_id LEFT JOIN class_sessions session ON session.id=entry.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE entry.org_id=? ORDER BY entry.created_at,entry.id",
+      [currentOrgId],
+    ).map((entry) => ({
+      entryId: entry.id, createdAt: entry.created_at, type: entry.type, direction: entry.direction,
+      credits: Number(entry.credits || 0), balanceAfter: Number(entry.balance_after || 0),
+      status: entry.status, reversalOf: entry.reversal_of || '', user: entry.user_login || entry.user_name || '',
+      classId: entry.class_id || '', class: entry.class_name || '', modality: entry.modality || '',
+      model: entry.model || '', reason: entry.reason || '',
+      countsAsIncome: entry.direction === 'IN' && entry.status === 'EFFECTIVE' && !['FROZEN_HOLD','FROZEN_RELEASE'].includes(entry.type) && !entry.reversal_of,
+      countsAsSpend: entry.direction === 'OUT' && entry.status === 'EFFECTIVE' && !['FROZEN_HOLD','FROZEN_RELEASE'].includes(entry.type) && !entry.reversal_of,
     }));
+    const columns = [
+      { key: 'entryId', label: '流水ID' }, { key: 'createdAt', label: '时间' }, { key: 'type', label: '类型' },
+      { key: 'direction', label: '方向' }, { key: 'credits', label: '积分' }, { key: 'balanceAfter', label: '记账后可用余额' },
+      { key: 'status', label: '状态' }, { key: 'reversalOf', label: '冲销源流水' }, { key: 'user', label: '用户' },
+      { key: 'classId', label: '班级ID' }, { key: 'class', label: '班级' }, { key: 'modality', label: '能力' },
+      { key: 'model', label: '模型' }, { key: 'reason', label: '原因' },
+      { key: 'countsAsIncome', label: '计入收入' }, { key: 'countsAsSpend', label: '计入消耗' },
+    ];
+    const summary = [
+      { key: 'availableBalance', label: '账面可用余额', value: reconciliation.availableBalance },
+      { key: 'frozenCredits', label: '冻结积分', value: reconciliation.frozenCredits },
+      { key: 'accountBalance', label: '账面总余额', value: reconciliation.accountBalance },
+      { key: 'ledgerBalance', label: '流水复算余额', value: reconciliation.ledgerBalance },
+      { key: 'difference', label: '差异', value: reconciliation.difference },
+      { key: 'balanced', label: '对账结果', value: reconciliation.balanced ? '一致' : '不一致' },
+      { key: 'entryCount', label: '流水条数', value: reconciliation.entryCount },
+      { key: 'ledgerCreditsIn', label: '流水收入合计', value: reconciliation.ledgerCreditsIn },
+      { key: 'ledgerCreditsOut', label: '流水消耗合计', value: reconciliation.ledgerCreditsOut },
+      { key: 'totalCreditsIn', label: '账户累计收入', value: Number(account.total_credits_in || 0) },
+      { key: 'totalCreditsSpent', label: '账户累计消耗', value: Number(account.total_credits_spent || 0) },
+    ];
+    return { reconciliation, summary, columns, items, fileName: '机构积分对账-' + new Date().toISOString().slice(0, 10) + '.csv' };
+  }
+  if (part === '/billing/account-overview' && method === 'GET') {
+    requireOrgBillingAdmin(); ensureOrgBilling(currentOrgId);
+    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);
+    const orders = normalizedRechargeOrders();
+    const reconciliation = reconcileCredits(currentOrgId);
+    const entries = orgCreditEntries();
     return {
-      balance: Number(account.credit_balance || 0), totalCreditsIn: Number(account.total_credits_in || 0),
-      totalCreditsSpent: Number(account.total_credits_spent || 0), paidTotalFen: Number(account.currency_paid_total_fen || 0),
+      balance: Number(account.credit_balance || 0),
+      frozenCredits: Number(account.frozen_credits || 0),
+      availableBalance: Number(account.credit_balance || 0),
+      totalBalance: Number(account.credit_balance || 0) + Number(account.frozen_credits || 0),
+      totalCreditsIn: Number(account.total_credits_in || 0), totalCreditsSpent: Number(account.total_credits_spent || 0),
+      paidTotalFen: Number(account.currency_paid_total_fen || 0), reconciliation,
       pendingOrderCount: orders.filter((order) => order.status === 'PENDING').length,
       paidOrderCount: orders.filter((order) => order.status === 'PAID').length,
       orders, entries,
+      policy: {
+        onlinePayment: false, paymentCallback: false, autoRenew: false,
+        failedJobRule: 'AI 任务成功后才扣积分；策略拦截记录 BLOCKED，provider 失败记录 FAILED，均不扣积分，因此无需自动退款。',
+        frozenRule: '冻结只锁定可用积分，不改变流水收支净额；可用余额 + 冻结积分必须等于流水复算余额。',
+      },
     };
   }
-  if (part === '/billing/credit-entries' && method === 'GET') { const items = rows('SELECT * FROM credit_entries WHERE org_id=? ORDER BY created_at DESC LIMIT 200', [currentOrgId]); return { items, total: items.length }; }
+  if (part === '/billing/credit-entries' && method === 'GET') {
+    requireOrgBillingAdmin();
+    const items = orgCreditEntries(ctx.search.get('limit'));
+    return { items, total: items.length };
+  }
+  if (part === '/billing/credit-adjustments' && method === 'POST') {
+    requireOrgBillingAdmin(); const body = ctx.body || {};
+    const result = adjustCredits({ orgId: currentOrgId, type: body.type, credits: body.credits, reason: body.reason, actorId: auth.user.id });
+    audit(ctx, 'ORG_CREDIT_ADJUSTMENT', 'CREDIT_ENTRY', result.entryId, null, { type: body.type, credits: body.credits, reason: body.reason, balanceAfter: result.balanceAfter }, { orgId: currentOrgId });
+    return result;
+  }
+  if (part === '/billing/frozen-credits' && method === 'PUT') {
+    requireOrgBillingAdmin(); const body = ctx.body || {};
+    const before = reconcileCredits(currentOrgId);
+    const result = setFrozenCredits({ orgId: currentOrgId, frozenCredits: body.frozenCredits, reason: body.reason, actorId: auth.user.id });
+    audit(ctx, 'ORG_CREDIT_FROZEN_UPDATE', 'ORG_BILLING_ACCOUNT', currentOrgId, { frozenCredits: before.frozenCredits }, { frozenCredits: result.frozenCredits, availableBalance: result.availableBalance, reason: body.reason }, { orgId: currentOrgId });
+    return result;
+  }
+  let creditEntryMatch = part.match(/^\/billing\/credit-entries\/([^/]+)\/(refund|reverse)$/);
+  if (creditEntryMatch && method === 'POST') {
+    requireOrgBillingAdmin(); const body = ctx.body || {};
+    const result = refundOrReverseEntry({ orgId: currentOrgId, sourceEntryId: creditEntryMatch[1], reason: body.reason, actorId: auth.user.id, mode: creditEntryMatch[2] === 'refund' ? 'REFUND' : 'REVERSAL' });
+    audit(ctx, creditEntryMatch[2] === 'refund' ? 'ORG_CREDIT_REFUND' : 'ORG_CREDIT_REVERSAL', 'CREDIT_ENTRY', result.entryId, { sourceEntryId: result.sourceEntryId }, { sourceEntryId: result.sourceEntryId, reason: body.reason, balanceAfter: result.balanceAfter }, { orgId: currentOrgId });
+    return result;
+  }
+  if (part === '/billing/reconciliation' && method === 'GET') {
+    requireOrgBillingAdmin(); ensureOrgBilling(currentOrgId);
+    return reconcileCredits(currentOrgId);
+  }
+  if (part === '/billing/reconciliation/export' && method === 'GET') {
+    requireOrgBillingAdmin(); ensureOrgBilling(currentOrgId);
+    const data = reconciliationExport();
+    audit(ctx, 'ORG_BILLING_RECONCILIATION_EXPORT', 'ORG_BILLING_ACCOUNT', currentOrgId, null, { rowCount: data.items.length, balanced: data.reconciliation.balanced }, { orgId: currentOrgId });
+    return data;
+  }
 
   if (part === '/course-series' && method === 'GET') {
     const items = rows("SELECT DISTINCT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND assignment.status='ACTIVE' WHERE series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?)) ORDER BY series.sort,series.title", [currentOrgId, currentOrgId]).map((series) => normalizeSeries(series, { orgId: currentOrgId, includeLessons: true }));

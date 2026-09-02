@@ -9,6 +9,7 @@ import {
 } from '@platform/server-lib';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
+import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
 const SESSION_CAPABILITY_BY_MODALITY = {
@@ -142,21 +143,21 @@ export async function handleAi(ctx) {
       if (Number(currentUser.used_credits_this_period || 0) + credits > allowance) {
         throw errors.forbidden('个人额度不足', 'STUDENT_CREDIT_LIMIT');
       }
-      const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [orgId]);
-      if (!account || Number(account.credit_balance || 0) < credits) {
-        throw errors.forbidden('机构积分池不足', 'ORG_CREDIT_LIMIT');
-      }
       if (currentSession?.sessionCreditCap != null
         && Number(currentSession.consumedCreditsTotal || 0) + credits > Number(currentSession.sessionCreditCap)) {
         throw errors.forbidden('课堂用量已达上限', 'SESSION_CREDIT_CAP');
       }
 
-      q(
-        `UPDATE org_billing_accounts
-         SET credit_balance=credit_balance-?, total_credits_spent=total_credits_spent+?, updated_version=updated_version+1
-         WHERE org_id=?`,
-        [credits, credits, orgId],
-      );
+      // Atomic conditional spend prevents concurrent AI calls from overdrawing the pool.
+      chargeCreditsInTransaction({
+        orgId,
+        credits,
+        type: `AI_${modality}`,
+        modality,
+        userId,
+        sessionId: currentSession?.id || null,
+        projectId,
+      });
       if (currentSession) {
         q('UPDATE class_sessions SET consumed_credits_total=consumed_credits_total+? WHERE id=? AND status=?', [credits, currentSession.id, 'ACTIVE']);
       }
@@ -167,15 +168,6 @@ export async function handleAi(ctx) {
         [credits, credits, nowIso(), userId, orgId],
       );
       recordUsage({ orgId, userId, projectId, sessionId: currentSession?.id || null, modality, credits, status: 'SUCCESS' });
-      q(
-        `INSERT INTO credit_entries(
-          id,org_id,direction,type,credits,balance_after,modality,user_id,class_session_id,project_id,created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-          id('credit'), orgId, 'OUT', `AI_${modality}`, credits,
-          Number(account.credit_balance) - credits, modality, userId, currentSession?.id || null, projectId, nowIso(),
-        ],
-      );
     });
   } catch (error) {
     if (error?.code) return rejectWithUsage({ orgId, userId, projectId, modality, credits, sessionId, error });
