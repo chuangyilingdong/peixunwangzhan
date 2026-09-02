@@ -17,6 +17,7 @@ const navigation = [
   { heading: '计费与设置' },
   { to: '/billing', icon: '◌', label: '计费与模型' },
   { to: '/materials', icon: '▤', label: '素材与物料' },
+  { to: '/client-releases', icon: '⤓', label: '客户端版本' },
   { to: '/inbox', icon: '✉', label: '站内信' },
   { to: '/admins', icon: '⚙', label: '平台管理员' },
 ];
@@ -311,6 +312,49 @@ function AdminMaterials({ api }) {
   </>;
 }
 
+const CLIENT_PLATFORM_LABELS = { MACOS_APPLE: 'macOS（Apple 芯片）', WINDOWS_X64: 'Windows（64 位）' };
+const CLIENT_CHANNEL_LABELS = { STABLE: '正式版', BETA: '测试版', INTERNAL: '内测版' };
+
+function ClientReleases({ api }) {
+  const releases = useData(() => api.get('admin/client-releases'), [api]);
+  const [form, setForm] = useState({ platform: 'WINDOWS_X64', channel: 'STABLE', version: '', downloadUrl: '', releaseNotes: '', publishNow: false });
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  async function createRelease(event) {
+    event.preventDefault(); setBusy('create');
+    try { await api.post('admin/client-releases', form); setMessage('客户端版本配置已保存。只有发布后才会在官网和学生帮助中心展示。'); setForm({ ...form, version: '', downloadUrl: '', releaseNotes: '', publishNow: false }); releases.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(''); }
+  }
+  async function toggleRelease(item, action) {
+    setBusy(item.id);
+    try { await api.put(`admin/client-releases/${item.id}`, { action }); setMessage(action === 'PUBLISH' ? '版本已发布，官网和学生帮助中心开始展示真实下载地址。' : '版本已下架，所有下载入口不再展示。'); releases.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(''); }
+  }
+  const items = releases.data?.items || [];
+  return <>
+    <PageHeader eyebrow="AI 魔法学院 · 平台控制台" title="客户端版本管理" description="只登记真实安装包的 HTTPS 下载地址和版本元数据，不做文件上传，也不生成虚假客户端。" actions={<button className="secondary-button" onClick={releases.refresh}>刷新</button>} />
+    <div className="metrics"><MetricCard label="版本配置" value={items.length} hint="平台登记的全部版本" /><MetricCard label="已发布" value={items.filter((item) => item.publishedAt).length} hint="官网与学生帮助中心可见" tone="teal" /><MetricCard label="未发布" value={items.filter((item) => !item.publishedAt).length} hint="仅平台内部可见" tone="orange" /></div>
+    {message ? <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice> : null}
+    <Panel title="新增客户端版本">
+      <Notice tone="warning">请仅在真实安装包可公开访问后登记。下载地址必须是 HTTPS；未发布版本不会出现在官网和学生帮助中心。</Notice>
+      <form onSubmit={createRelease}>
+        <div className="form-grid">
+          <label>平台<select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}>{Object.entries(CLIENT_PLATFORM_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label>通道<select value={form.channel} onChange={(event) => setForm({ ...form, channel: event.target.value })}>{Object.entries(CLIENT_CHANNEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label>版本号<input value={form.version} required maxLength={60} placeholder="例如：1.0.0" onChange={(event) => setForm({ ...form, version: event.target.value })} /></label>
+          <label>HTTPS 下载地址<input value={form.downloadUrl} required maxLength={1000} placeholder="https://cdn.example.com/ai-magic-school-1.0.0.dmg" onChange={(event) => setForm({ ...form, downloadUrl: event.target.value })} /></label>
+        </div>
+        <label>版本说明<textarea value={form.releaseNotes} required maxLength={4000} placeholder="写明真实更新内容、兼容系统和已知问题。" onChange={(event) => setForm({ ...form, releaseNotes: event.target.value })} /></label>
+        <label className="checkbox"><input type="checkbox" checked={form.publishNow} onChange={(event) => setForm({ ...form, publishNow: event.target.checked })} />保存后立即发布到下载页</label>
+        <button className="primary-button" type="submit" disabled={busy === 'create'}>{busy === 'create' ? '保存中…' : '保存版本配置'}</button>
+      </form>
+    </Panel>
+    <Panel title="版本列表">
+      {releases.loading ? <Loading /> : releases.error ? <ErrorState error={releases.error} onRetry={releases.refresh} /> : items.length ? <div className="table-wrap"><table><thead><tr><th>平台 / 通道</th><th>版本</th><th>下载地址</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{CLIENT_PLATFORM_LABELS[item.platform] || item.platform}<div className="muted">{CLIENT_CHANNEL_LABELS[item.channel] || item.channel}</div></td><td><strong>v{item.version}</strong><div className="muted">{item.releaseNotes}</div></td><td><a href={item.downloadUrl} target="_blank" rel="noreferrer">查看地址</a></td><td>{item.publishedAt ? <span className="status success">已发布</span> : <span className="status warning">未发布</span>}</td><td><div className="muted">创建：{formatDate(item.createdAt)}</div><div className="muted">发布：{item.publishedAt ? formatDate(item.publishedAt) : '—'}</div></td><td><button className="text-button" disabled={busy === item.id} onClick={() => toggleRelease(item, item.publishedAt ? 'UNPUBLISH' : 'PUBLISH')}>{item.publishedAt ? '下架' : '发布'}</button></td></tr>)}</tbody></table></div> : <Empty title="尚未登记客户端版本" body="官网与学生帮助中心会明确显示“暂无真实安装包”，不会提供虚假下载。" />}
+    </Panel>
+  </>;
+}
+
 function PlatformPage({ kind }) {
   const pages = {
     users: ['平台用户', '统一查看机构管理员、教师与学员的账号状态，支持后续接入筛选、启停和变更记录。', [['机构账号', '按机构归属查看管理者、教师和学员'], ['账号安全', '登录状态、有效期与权限将统一在此管理']]],
@@ -331,7 +375,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import './styles.css';
@@ -33,7 +34,42 @@ function Org(){const modules=[['机构账号','管理员、教师、学员分级
 function Works(){return <><Title eyebrow="学员作品" title={<>孩子们的灵感，<em>正在发光</em></>} desc="来自课堂与作品社区的真实 HTML 创作。点击卡片即可打开体验，游戏、古诗、3D、单词闯关都能在浏览器里直接玩。"/><main className="inner"><div className="filters"><b>全部作品</b><span>小游戏</span><span>互动故事</span><span>AI 绘本</span><span>智能硬件</span></div><div className="works all">{works.map((w,i)=><Work key={w[1]} work={w} index={i}/>)}</div><div className="note">✦ <div><b>作品来自真实课堂</b><p>每一份作品都记录着孩子从想法、对话到实现的创作过程。机构开通后，可拥有自己的校区作品展厅。</p></div><Button soft to="/org">了解机构作品展厅</Button></div></main></>}
 function Handbook(){return <><Title eyebrow="产品手册 · 2026" title={<>一站式 AI 创作<br/><em>开课方案</em></>} desc="让每个孩子用 AI 做出自己的作品。面向教培机构、学校与青少年科创营。"/><main className="inner"><section className="cover"><div><b>AI魔法学院</b><h2>让每个孩子<br/>用 AI 做出<br/><em>自己的作品</em></h2><p>青少年 AI 编程创作平台<br/>游戏 · 动画 · 开源硬件</p><small>五格殿下 · 机构合作手册 · 2026</small></div><aside><i>✦</i><span>创作<br/>课程<br/>账号<br/>计费<br/>作品</span></aside></section><section className="points">{[['01','统一平台','创作、课程、账号、计费、作品，一个入口完成。'],['02','机构即可开班','标准课包 + 魔法石管控，老师专心带课。'],['03','政策窗口对齐','素养课好落地，生成式 AI 可用可管。']].map(x=><div key={x[0]}><b>{x[0]}</b><strong>{x[1]}</strong><p>{x[2]}</p></div>)}</section><End title="下载完整机构合作手册" text="先预约演示，我们会把最新版本、课件示例与合作说明发给你。"/></main></>}
 function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','原生桌面端一体：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构魔法石池，按用量记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>AI魔法学院</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>预约机构演示</Button></section></main></>}
-function Download(){return <><Title eyebrow="下载客户端" title={<>安装一次，<em>课堂开箱即用</em></>} desc="支持 macOS（Apple 芯片）与 Windows 64 位。安装后按引导完成引擎初始化，机构学员使用校区账号登录即可开始创作。"/><main className="inner"><section className="downloads">{[['⌘','macOS 版','适用于 Apple 芯片 Mac 电脑'],['⊞','Windows 版','适用于 Windows 10 / 11 64 位']].map(x=><article key={x[1]}><i>{x[0]}</i><h2>{x[1]}</h2><p>{x[2]}</p><Button>获取下载包</Button><small>当前版本 v0.1.76 · 应用支持自动更新</small></article>)}</section><div className="note">✦ <div><b>第一次使用？</b><p>安装后按引导完成引擎初始化，再使用机构管理员提供的账号登录。课堂依赖在线服务，建议提前检查机房网络。</p></div><Link to="/org">查看机构开课方案 ↗</Link></div></main></>}
+const DOWNLOAD_PLATFORMS=[['MACOS_APPLE','⌘','macOS 版','适用于 Apple 芯片 Mac 电脑'],['WINDOWS_X64','⊞','Windows 版','适用于 Windows 10 / 11 64 位']];
+const API_BASE=(import.meta.env&&import.meta.env.VITE_API_BASE?String(import.meta.env.VITE_API_BASE).replace(/\/$/,''):'/api');
+function Download(){
+  const [state,setState]=useState({loading:true,error:null,data:null});
+  useEffect(()=>{
+    let live=true;
+    fetch(API_BASE+'/public/downloads')
+      .then((response)=>response.ok?response.json():Promise.reject(new Error('暂时无法读取下载配置')))
+      .then((body)=>{if(live)setState({loading:false,error:null,data:body.data});})
+      .catch((error)=>{if(live)setState({loading:false,error:error.message,data:null});});
+    return()=>{live=false};
+  },[]);
+  const platforms=DOWNLOAD_PLATFORMS.map(([key,icon,title,desc])=>({key,icon,title,desc,release:state.data?.byPlatform?.[key]||null}));
+  const releaseState=(platform)=>{
+    if(state.loading)return <small className="download-state">正在读取版本状态…</small>;
+    if(platform.release)return <>
+      <a className="button" href={platform.release.downloadUrl}>下载 v{platform.release.version} <b>↗</b></a>
+      <small>{platform.release.channel==='STABLE'?'正式版':platform.release.channel==='BETA'?'测试版':'内测版'} · {platform.release.releaseNotes}</small>
+    </>;
+    return <>
+      <button className="button" disabled>暂无真实安装包</button>
+      <small>平台尚未配置该平台安装包，不提供虚假下载；可先使用浏览器访问 Web 版。</small>
+    </>;
+  };
+  return <>
+    <Title eyebrow="下载客户端" title={<>安装一次，<em>课堂开箱即用</em></>} desc={state.loading?'正在读取平台真实发布状态…':'支持 macOS（Apple 芯片）与 Windows 64 位。仅当平台配置真实安装包后才提供下载。'}/>
+    <main className="inner">
+      <section className="downloads">{platforms.map((platform)=>(
+        <article key={platform.key}><i>{platform.icon}</i><h2>{platform.title}</h2><p>{platform.desc}</p>{releaseState(platform)}</article>
+      ))}</section>
+      {state.error?<div className="note">⚠ <div><b>下载状态读取失败</b><p>{state.error} 请稍后刷新，或联系平台管理员确认客户端发布状态。</p></div></div>:null}
+      {state.data?.status==='NOT_CONFIGURED'?<div className="note">✦ <div><b>当前尚未发布桌面客户端</b><p>{state.data.statement} 课堂可先使用现代浏览器访问 Web 版完成创作。</p></div></div>:null}
+      <div className="note">✦ <div><b>第一次使用？</b><p>机构学员使用管理员提供的账号登录。课堂依赖在线服务，建议提前检查机房网络。</p></div><Link to="/org">查看机构开课方案 ↗</Link></div>
+    </main>
+  </>;
+}
 function Demo(){function submit(e){e.preventDefault();e.currentTarget.innerHTML='<div class="success"><i>✦</i><h2>收到你的预约啦！</h2><p>我们会在 1 个工作日内联系你，发送演示安排与资料。</p></div>'}return <><Title eyebrow="预约演示 · 开通试用" title={<>让我们一起<br/><em>把 AI 课开起来</em></>} desc="欢迎教培机构、学校与区域合作伙伴联系，获取演示账号、课包清单与客户端安装包。"/><main className="inner"><section className="demo"><div><h2>预约后，你将获得</h2>{['产品演示与开课流程讲解','11 门标准课包与课件清单','魔法石体验额度与演示账号','Mac / Windows 客户端安装包'].map((x,i)=><p key={x}><b>0{i+1}</b>{x}</p>)}</div><form onSubmit={submit}><label>机构 / 学校名称<input required placeholder="请输入机构名称"/></label><label>联系人<input required placeholder="请输入姓名"/></label><label>联系电话<input required placeholder="请输入手机号"/></label><label>你想了解什么？<select defaultValue=""><option value="" disabled>请选择合作方向</option><option>少儿编程 / AI 素养课程</option><option>学校拓展课 / 社团</option><option>寒暑假科创营</option><option>区域合作</option></select></label><label>补充说明<textarea placeholder="例如：校区数量、预计班级规模……"/></label><button className="button">提交预约 <b>↗</b></button><small>提交即表示同意我们用于联系你的预约信息。</small></form></section></main></>}
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
 function App(){return <div className="site"><Header/><Routes><Route path="/" element={<Home/>}/><Route path="/courses" element={<Courses/>}/><Route path="/org" element={<Org/>}/><Route path="/works" element={<Works/>}/><Route path="/handbook" element={<Handbook/>}/><Route path="/compare" element={<Compare/>}/><Route path="/download" element={<Download/>}/><Route path="/demo" element={<Demo/>}/><Route path="*" element={<Home/>}/></Routes><Footer/></div>};

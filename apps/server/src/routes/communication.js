@@ -338,6 +338,21 @@ function validateMaterialBody(body, existing = null) {
   return { title, description, category, visibility, mimeType, resourceUrl, coverUrl, orgIds };
 }
 
+
+export function handlePublicCommunication(ctx) {
+  const { pathname, method } = ctx;
+  if (pathname !== '/api/public/downloads' || method !== 'GET') return null;
+  const releases = latestDownloadReleases();
+  return {
+    generatedAt: nowIso(),
+    status: releases.length ? 'PARTIAL' : 'NOT_CONFIGURED',
+    statement: releases.length ? '以下仅展示平台已配置的真实客户端版本。' : '平台尚未配置真实客户端安装包，不提供虚假下载链接。',
+    items: releases,
+    byPlatform: Object.fromEntries(releases.map((item) => [item.platform, item])),
+    webCompatibility: ['Chrome / Edge 最新两个稳定版本', 'Safari 17+（macOS）', '课堂依赖稳定网络；建议机构机房提前检查'],
+  };
+}
+
 export async function handleAdminCommunication(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/')) return null;
@@ -450,6 +465,46 @@ export async function handleAdminCommunication(ctx) {
     audit(ctx, 'PROMO_MATERIAL_UPDATE', 'PROMO_MATERIAL', target.id, { status: target.status }, { status, visibility: material.visibility });
     return normalizeMaterial(row('SELECT * FROM promo_materials WHERE id=?', [target.id]));
   }
+  if (part === '/client-releases' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const items = rows('SELECT * FROM client_download_releases ORDER BY platform, channel, published_at DESC, created_at DESC').map(normalizeDownloadRelease);
+    return { items, total: items.length };
+  }
+  if (part === '/client-releases' && method === 'POST') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const platform = String(ctx.body?.platform || '').toUpperCase();
+    if (!['MACOS_APPLE','WINDOWS_X64'].includes(platform)) throw errors.badRequest('下载平台无效', 'INVALID_DOWNLOAD_PLATFORM');
+    const channel = String(ctx.body?.channel || 'STABLE').toUpperCase();
+    if (!['STABLE','BETA','INTERNAL'].includes(channel)) throw errors.badRequest('下载通道无效', 'INVALID_DOWNLOAD_CHANNEL');
+    const version = nonEmptyString(ctx.body?.version, '版本号', { max: 60 });
+    if (!/^[0-9]+(\.[0-9]+){0,3}(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?(\+[A-Za-z0-9][A-Za-z0-9.-]*)?$/.test(version)) throw errors.badRequest('版本号格式无效', 'INVALID_DOWNLOAD_VERSION');
+    const downloadUrl = nonEmptyString(ctx.body?.downloadUrl, '下载地址', { max: 1000 });
+    if (!/^https:\/\//i.test(downloadUrl)) throw errors.badRequest('下载地址必须为 HTTPS', 'DOWNLOAD_URL_NOT_HTTPS');
+    const releaseNotes = nonEmptyString(ctx.body?.releaseNotes, '版本说明', { max: 4000 });
+    const publishNow = bool(ctx.body?.publishNow, false);
+    const duplicate = row('SELECT id FROM client_download_releases WHERE platform=? AND version=? AND channel=?', [platform, version, channel]);
+    if (duplicate) throw errors.conflict('该平台、版本和通道的客户端已存在', 'CLIENT_RELEASE_ALREADY_EXISTS');
+    const now = nowIso();
+    const releaseId = id('clientrelease');
+    q(
+      'INSERT INTO client_download_releases(id,platform,version,channel,download_url,file_size,sha256,release_notes,published_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+      [releaseId, platform, version, channel, downloadUrl, null, null, releaseNotes, publishNow ? now : null, now, now],
+    );
+    audit(ctx, 'PLATFORM_CLIENT_RELEASE_CREATE', 'CLIENT_DOWNLOAD_RELEASE', releaseId, null, { platform, version, channel, published: publishNow });
+    return normalizeDownloadRelease(row('SELECT * FROM client_download_releases WHERE id=?', [releaseId]));
+  }
+  let releaseMatch = part.match(/^\/client-releases\/([^/]+)(?:\/(publish|unpublish))?$/);
+  if (releaseMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const release = row('SELECT * FROM client_download_releases WHERE id=?', [releaseMatch[1]]);
+    if (!release) throw errors.notFound('客户端版本不存在', 'CLIENT_RELEASE_NOT_FOUND');
+    const action = String(releaseMatch[2] || ctx.body?.action || '').toUpperCase();
+    if (action !== 'PUBLISH' && action !== 'UNPUBLISH') throw errors.badRequest('客户端发布操作无效', 'INVALID_CLIENT_RELEASE_ACTION');
+    const now = nowIso();
+    q('UPDATE client_download_releases SET published_at=?,updated_at=? WHERE id=?', [action === 'PUBLISH' ? now : null, now, release.id]);
+    audit(ctx, action === 'PUBLISH' ? 'PLATFORM_CLIENT_RELEASE_PUBLISH' : 'PLATFORM_CLIENT_RELEASE_UNPUBLISH', 'CLIENT_DOWNLOAD_RELEASE', release.id, normalizeDownloadRelease(release), { published: action === 'PUBLISH' }, { orgId: null });
+    return normalizeDownloadRelease(row('SELECT * FROM client_download_releases WHERE id=?', [release.id]));
+  }
   return null;
 }
 
@@ -496,9 +551,165 @@ export async function handleOrgCommunication(ctx) {
     audit(ctx, 'PROMO_MATERIAL_' + eventType, 'PROMO_MATERIAL', material.id);
     return { eventId, eventType, resourceUrl: material.resource_url || null, resourceConfigured: Boolean(material.resource_url) };
   }
+  if (part === '/help-feedback' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以处理问题反馈', 'HELP_FEEDBACK_PERMISSION_DENIED');
+    const status = ctx.search.get('status');
+    const category = String(ctx.search.get('category') || '').toUpperCase();
+    let where = 'feedback.org_id=?'; const params = [currentOrgId];
+    if (['SUBMITTED','IN_PROGRESS','RESOLVED','CLOSED'].includes(status)) { where += ' AND feedback.status=?'; params.push(status); }
+    if (HELP_FEEDBACK_CATEGORIES.has(category)) { where += ' AND feedback.category=?'; params.push(category); }
+    const items = helpFeedbackRows(where + " ORDER BY CASE feedback.status WHEN 'SUBMITTED' THEN 0 WHEN 'IN_PROGRESS' THEN 1 ELSE 2 END, feedback.submitted_at DESC LIMIT 200", params);
+    return {
+      items,
+      total: items.length,
+      submitted: items.filter((item) => item.status === 'SUBMITTED').length,
+      inProgress: items.filter((item) => item.status === 'IN_PROGRESS').length,
+      resolved: items.filter((item) => item.status === 'RESOLVED' || item.status === 'CLOSED').length,
+    };
+  }
+  let helpFeedbackMatch = part.match(/^\/help-feedback\/([^/]+)$/);
+  if (helpFeedbackMatch && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以处理问题反馈', 'HELP_FEEDBACK_PERMISSION_DENIED');
+    const feedback = helpFeedbackRows('feedback.id=? AND feedback.org_id=?', [helpFeedbackMatch[1], currentOrgId])[0];
+    if (!feedback) throw errors.notFound('反馈不存在', 'HELP_FEEDBACK_NOT_FOUND');
+    return feedback;
+  }
+  if (helpFeedbackMatch && method === 'PUT') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以处理问题反馈', 'HELP_FEEDBACK_PERMISSION_DENIED');
+    const feedbackRow = row('SELECT * FROM help_feedback WHERE id=? AND org_id=?', [helpFeedbackMatch[1], currentOrgId]);
+    if (!feedbackRow) throw errors.notFound('反馈不存在', 'HELP_FEEDBACK_NOT_FOUND');
+    const status = String(ctx.body?.status || '').toUpperCase();
+    if (!['IN_PROGRESS','RESOLVED','CLOSED'].includes(status)) throw errors.badRequest('反馈处理状态无效', 'INVALID_HELP_FEEDBACK_STATUS');
+    const resolution = nonEmptyString(ctx.body?.resolution, '处理结果', { max: 2000 });
+    const now = nowIso();
+    q('UPDATE help_feedback SET status=?,handled_by=?,handled_at=?,resolution=?,updated_at=? WHERE id=? AND org_id=?', [status, auth.user.id, now, resolution, now, feedbackRow.id, currentOrgId]);
+    audit(ctx, 'ORG_HELP_FEEDBACK_UPDATE', 'HELP_FEEDBACK', feedbackRow.id, normalizeHelpFeedback(feedbackRow), { status, resolution }, { orgId: currentOrgId });
+    return helpFeedbackRows('feedback.id=? AND feedback.org_id=?', [feedbackRow.id, currentOrgId])[0];
+  }
   return null;
 }
 
+const HELP_CENTER_VERSION = 'P4-S07';
+const HELP_FEEDBACK_CATEGORIES = new Set(['ACCOUNT', 'CANVAS', 'AI', 'COURSE', 'CLIENT', 'DATA', 'OTHER']);
+const HELP_FAQ = [
+  { category: 'ACCOUNT', question: '忘记密码或登录不上怎么办？', answer: '请联系你的老师或机构管理员重置密码。密码重置后，老师会把新账号信息交给你，首次登录可在个人账号中修改。' },
+  { category: 'CANVAS', question: '作品还没做完可以保存吗？', answer: '可以。进入项目后保存画布，作品会保留在“我的项目”。已提交或已发布的作品需按老师反馈修改后重新提交。' },
+  { category: 'AI', question: '为什么 AI 现在不能使用？', answer: '请先查看 AI / 魔法石中心。老师可能关闭了本节课的某类 AI 能力，或课堂积分、调用次数已达到上限。' },
+  { category: 'COURSE', question: '如何知道这节课要做什么？', answer: '在学习首页查看“我的学习任务”，再按课时进入创作。课堂开始后，老师设置的课堂要求也会显示在首页。' },
+  { category: 'CLIENT', question: '可以在家里的电脑使用吗？', answer: 'Web 端可使用现代浏览器访问；桌面安装包需由机构或平台配置真实下载地址后才提供下载。未配置时页面不会提供安装包。' },
+  { category: 'DATA', question: '我的头像和监护人信息会被收集吗？', answer: '平台仅保存昵称、平台预设头像键、必要监护人联系信息和隐私开关，不收集住址、身份证号和社交账号。可在个人账号中查看或清空。' },
+  { category: 'OTHER', question: '遇到页面错误或内容异常怎么办？', answer: '请在帮助与下载页提交问题反馈，选择对应分类并写清楚出现步骤。老师或机构管理员会跟进处理。' },
+];
+
+function normalizeHelpFeedback(value, { includeUser = false } = {}) {
+  if (!value) return null;
+  const item = {
+    id: value.id,
+    userId: value.user_id,
+    orgId: value.org_id || null,
+    category: value.category,
+    subject: value.subject,
+    body: value.body,
+    contact: value.contact || null,
+    status: value.status,
+    submittedAt: value.submitted_at,
+    handledAt: value.handled_at || null,
+    resolvedAt: value.handled_at || null,
+    handledBy: value.handled_by || null,
+    handlerName: value.handler_name || null,
+    resolution: value.resolution || null,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+  if (includeUser) {
+    item.userName = value.user_name || null;
+    item.userLogin = value.user_login || null;
+  }
+  return item;
+}
+
+function helpFeedbackRows(where, params) {
+  return rows(
+    `SELECT feedback.*, student.display_name AS user_name, student.login AS user_login, handler.display_name AS handler_name
+     FROM help_feedback feedback
+     JOIN users student ON student.id=feedback.user_id
+     LEFT JOIN users handler ON handler.id=feedback.handled_by
+     WHERE ${where}`,
+    params,
+  ).map((item) => normalizeHelpFeedback(item, { includeUser: true }));
+}
+
+function normalizeDownloadRelease(value) {
+  if (!value) return null;
+  return {
+    id: value.id,
+    platform: value.platform,
+    version: value.version,
+    channel: value.channel,
+    downloadUrl: value.download_url,
+    fileSize: value.file_size == null ? null : Number(value.file_size),
+    sha256: value.sha256 || null,
+    releaseNotes: value.release_notes || '',
+    publishedAt: value.published_at || null,
+    available: Boolean(value.published_at && value.download_url),
+  };
+}
+
+function latestDownloadReleases(platform = null) {
+  const params = [];
+  let where = "published_at IS NOT NULL AND download_url <> ''";
+  if (platform) {
+    if (!['MACOS_APPLE', 'WINDOWS_X64'].includes(platform)) throw errors.badRequest('下载平台无效', 'INVALID_DOWNLOAD_PLATFORM');
+    where += ' AND platform=?';
+    params.push(platform);
+  }
+  const result = rows(
+    `SELECT release.* FROM client_download_releases release
+     JOIN (
+       SELECT platform, channel, MAX(published_at) AS latest_published_at
+       FROM client_download_releases
+       WHERE published_at IS NOT NULL AND download_url <> ''
+       GROUP BY platform, channel
+     ) latest ON latest.platform=release.platform AND latest.channel=release.channel AND latest.latest_published_at=release.published_at
+     WHERE ${where}
+     ORDER BY platform, channel`,
+    params,
+  ).map(normalizeDownloadRelease);
+  if (platform) return result[0] || null;
+  return result;
+}
+
+function helpCenterPayload() {
+  const releases = latestDownloadReleases();
+  const byPlatform = Object.fromEntries(releases.map((item) => [item.platform, item]));
+  return {
+    version: HELP_CENTER_VERSION,
+    generatedAt: nowIso(),
+    faq: HELP_FAQ,
+    guides: [
+      { title: '第一次进入课堂', steps: ['打开学习首页，查看本节课任务。', '按老师要求进入对应课时。', '创建或继续项目，保存画布后按老师要求提交。'] },
+      { title: '提交作品并查看反馈', steps: ['在“我的作品”选择要提交的项目。', '确认版权和机构展示授权后提交。', '老师点评后查看整体反馈与节点批注，按建议修改重提。'] },
+      { title: '保护个人隐私', steps: ['进入个人账号，检查昵称和预设头像。', '按需填写或清空监护人信息。', '设置作品墙匿名展示和精选授权。'] },
+    ],
+    compatibility: {
+      web: ['Chrome / Edge 最新两个稳定版本', 'Safari 17+（macOS）', '课堂依赖稳定网络；建议机构机房提前检查'],
+      client: ['桌面端配置由机构或平台管理员分发', '未配置真实安装包时不提供下载', '如遇安装失败请联系老师反馈'],
+    },
+    downloads: {
+      status: releases.length ? 'PARTIAL' : 'NOT_CONFIGURED',
+      statement: releases.length ? '以下仅展示平台已配置的真实客户端版本。' : '平台尚未配置真实客户端安装包，不提供虚假下载链接。',
+      items: releases,
+      byPlatform,
+    },
+    feedback: {
+      categories: [...HELP_FEEDBACK_CATEGORIES],
+      privacy: '反馈仅用于排查问题；请勿填写密码、身份证号、家庭住址等敏感信息。',
+      maxSubjectLength: 120,
+      maxBodyLength: 2000,
+      maxContactLength: 100,
+    },
+  };
+}
 export async function handleStudentCommunication(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/student/')) return null;
@@ -513,5 +724,46 @@ export async function handleStudentCommunication(ctx) {
   let match = part.match(/^\/inbox\/([^/]+)\/read$/);
   if (match && method === 'PUT') return markNotificationRead(ctx, currentOrgId, match[1], auth.user.id);
   if (part === '/inbox/read-all' && method === 'PUT') return markAllNotificationsRead(ctx, currentOrgId, auth.user.id);
+  if (part === '/help' && method === 'GET') {
+    const items = helpFeedbackRows('feedback.user_id=? AND feedback.org_id=?', [auth.user.id, currentOrgId]);
+    return {
+      ...helpCenterPayload(),
+      myFeedback: {
+        items,
+        total: items.length,
+        submitted: items.filter((item) => item.status === 'SUBMITTED').length,
+        inProgress: items.filter((item) => item.status === 'IN_PROGRESS').length,
+        resolved: items.filter((item) => item.status === 'RESOLVED' || item.status === 'CLOSED').length,
+      },
+    };
+  }
+  if (part === '/help/feedback' && method === 'POST') {
+    const category = String(ctx.body?.category || '').toUpperCase();
+    if (!HELP_FEEDBACK_CATEGORIES.has(category)) throw errors.badRequest('反馈分类无效', 'INVALID_FEEDBACK_CATEGORY');
+    const subject = nonEmptyString(ctx.body?.subject, '问题标题', { max: 120 });
+    const body = nonEmptyString(ctx.body?.body, '问题描述', { max: 2000 });
+    let contact = null;
+    if (ctx.body?.contact != null && String(ctx.body.contact).trim() !== '') contact = nonEmptyString(ctx.body.contact, '联系方式', { max: 100 });
+    if (/password|密码|身份证|住址/i.test(subject + '\n' + body + '\n' + (contact || ''))) {
+      throw errors.badRequest('反馈中请勿填写密码、身份证号或住址等敏感信息', 'FEEDBACK_SENSITIVE_CONTENT');
+    }
+    const now = nowIso();
+    const feedbackId = id('helpfb');
+    q(
+      'INSERT INTO help_feedback(id,user_id,org_id,category,subject,body,contact,status,submitted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+      [feedbackId, auth.user.id, currentOrgId, category, subject, body, contact, 'SUBMITTED', now, now, now],
+    );
+    audit(ctx, 'HELP_FEEDBACK_CREATE', 'HELP_FEEDBACK', feedbackId, null, { category, subject });
+    return {
+      feedback: normalizeHelpFeedback(row('SELECT * FROM help_feedback WHERE id=?', [feedbackId])),
+      privacy: '反馈已提交给当前机构处理；请勿在描述中包含密码、身份证号或住址。',
+    };
+  }
+  match = part.match(/^\/help\/feedback\/([^/]+)$/);
+  if (match && method === 'GET') {
+    const feedback = helpFeedbackRows('feedback.id=? AND feedback.user_id=? AND feedback.org_id=?', [match[1], auth.user.id, currentOrgId])[0];
+    if (!feedback) throw errors.notFound('反馈不存在', 'HELP_FEEDBACK_NOT_FOUND');
+    return feedback;
+  }
   return null;
 }

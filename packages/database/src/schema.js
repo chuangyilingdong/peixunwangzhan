@@ -678,6 +678,44 @@ CREATE TABLE IF NOT EXISTS account_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_account_requests_user_status ON account_requests(user_id, status, requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_account_requests_org_status ON account_requests(org_id, status, requested_at DESC);
+
+CREATE TABLE IF NOT EXISTS help_feedback (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  org_id TEXT,
+  category TEXT NOT NULL CHECK (category IN ('ACCOUNT','CANVAS','AI','COURSE','CLIENT','DATA','OTHER')),
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  contact TEXT,
+  status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK (status IN ('SUBMITTED','IN_PROGRESS','RESOLVED','CLOSED')),
+  submitted_at TEXT NOT NULL,
+  handled_by TEXT,
+  handled_at TEXT,
+  resolution TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL,
+  FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_help_feedback_org_status ON help_feedback(org_id, status, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_help_feedback_user ON help_feedback(user_id, submitted_at DESC);
+
+CREATE TABLE IF NOT EXISTS client_download_releases (
+  id TEXT PRIMARY KEY,
+  platform TEXT NOT NULL CHECK (platform IN ('MACOS_APPLE','WINDOWS_X64')),
+  version TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'STABLE' CHECK (channel IN ('STABLE','BETA','INTERNAL')),
+  download_url TEXT NOT NULL,
+  file_size INTEGER,
+  sha256 TEXT,
+  release_notes TEXT NOT NULL DEFAULT '',
+  published_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(platform, version, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_client_downloads_platform ON client_download_releases(platform, channel, published_at DESC);
 `;
 
 db.exec(SCHEMA);

@@ -29,7 +29,7 @@
 
 第一批完成前，对应页面状态保持 `本轮实现中`；接口正反向验证、P3 回归、前端构建和总控更新全部通过后才可改判 `真实已有`。
 
-## 3. 平台端入口清单（12 个，含 1 个历史取消入口）
+## 3. 平台端入口清单（13 个，含 1 个历史取消入口）
 
 | 本地路由 | 基准路由 / 页面 | 角色 | 当前状态 | 主要数据表 | 后端 API | 状态机 / 权限 | 缺失项 | 验收方法 |
 |---|---|---|---|---|---|---|---|---|
@@ -43,10 +43,11 @@
 | `/billing` | `/super/usage-records + recharge + billing-settings` | SUPER_ADMIN | `真实已有（2026-09-02，用量汇总与明细；在线充值/计费设置仍外部决策）` | `org_billing_accounts`、`usage_records`、`recharge_orders`、`users`、`organizations`、`class_sessions`、`classes` | 现有 `GET /api/admin/billing/usage-overview`；新增 `GET /api/admin/billing/usage-records` | 仅 `SUPER_ADMIN`；支持 `days/orgId/modality/status/search`；无效 `days` 返回 `VALIDATION_ERROR` | 在线支付回调、计费规则/模型开关配置、冻结与预警、导出对账 | 临时库验证汇总、筛选、搜索、上下文关联、非法参数与越权 403 |
 | `/materials` | `/super/materials + promo-materials` | SUPER_ADMIN | `真实已有（2026-09-02，元数据、外链与统计）` | `promo_materials`、`promo_material_assignments`、`promo_material_events` | `GET/POST/PUT /api/admin/materials`、`GET /api/admin/materials/:id/stats` | 物料 `DRAFT/ACTIVE/DISABLED`；平台超管写入 | 真实文件上传、OSS、封面上传、下载代理与签名 | 当前维护元数据和可选外部资源地址；统计详情返回汇总、机构聚合与最近事件；未配置资源时下载明确拒绝 |
 | `/inbox` | `/super/inbox` 站内信 | SUPER_ADMIN | `真实已有（2026-09-02，两批）` | `notifications`、`notification_recipients`、`notification_templates` | `GET/POST/PUT /api/admin/inbox`、`GET/POST/PUT /api/admin/notification-templates` | `DRAFT/SCHEDULED/PUBLISHED/RECALLED`（`SCHEDULED` 为 `DRAFT + publish_at` 的逻辑状态）；仅平台超管管理 | 投递失败重试、高可用异步队列、邮件/短信/微信渠道 | 支持模板、按机构/角色投递、草稿、立即/定时发布、撤回、置顶和跳转；定时到期生成接收记录并审计 |
+| `/client-releases` | 客户端版本管理 | SUPER_ADMIN | `真实已有（2026-09-03，P4-S07）` | `client_download_releases` | `GET/POST /api/admin/client-releases`、`PUT /:id/publish`、`PUT /:id/unpublish` | 平台 / 通道 / 版本唯一；下载地址必须 HTTPS；未发布与下架不可见 | 真实安装包构建、文件托管、自动更新、下载统计 | 临时库验证非法平台 / 版本 / 非 HTTPS / 重复拒绝，发布 / 下架可见性与教师 403 |
 | `/admins` | `/super/platform-admins` 平台管理员 | SUPER_ADMIN | `真实已有（2026-09-02）` | `users(role=SUPER_ADMIN)` | 新增 `GET/POST/PUT /api/admin/platform-admins` | 用户 `ACTIVE/DISABLED`；`ADMIN_*` 权限码 | 独立 enabled/password/permissions 子路径可在后续扩展 | 创建/编辑/停自己失败/非法权限码/重复登录名 |
 | `/login`、`/forbidden` 等壳层 | 登录、无权限 | public / 登录 | `真实已有` | `sessions` | `/api/auth/*`、`/api/me` | 会话失效与顶替错误码 | 手机绑定、改密、被顶提示 | 现有 P3 认证回归覆盖 |
 
-## 4. 机构 / 教师端入口清单（14 个，含 1 个历史取消入口）
+## 4. 机构 / 教师端入口清单（15 个，含 1 个历史取消入口）
 
 | 本地路由 | 基准路由 / 页面 | 角色 | 当前状态 | 主要数据表 | 后端 API | 状态机 / 权限 | 缺失项 | 验收方法 |
 |---|---|---|---|---|---|---|---|---|
@@ -63,6 +64,7 @@
 | `/enrollment` | `/org/student-orders` 学员开通 | ORG_ADMIN | `页面壳层` | 需新增开通单/商品表 | 待新增 | 履约、收款、作废状态机 | 数据模型与 API | 设计迁移后实施 |
 | `/recharge` | `/org/recharge` 积分充值 | ORG_ADMIN | `真实账务视图（2026-09-02）；在线支付仍外部决策` | `org_billing_accounts`、`recharge_orders`、`credit_entries` | 新增 `GET /api/org/billing/account-overview` | 仅 `ORG_ADMIN`；教师返回 `ORG_BILLING_PERMISSION_DENIED`；充值单 `PENDING/PAID/CANCELLED/EXPIRED` | 微信/支付宝支付回调、冻结金额、退款/冲正、人工调整、导出对账 | 管理员可读余额/累计/订单/流水；教师 403；不伪造到账数据 |
 | `/materials` | `/org/promo-materials` 宣传物料 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，查看与使用）` | `promo_materials`、`promo_material_assignments`、`promo_material_events` | `GET /api/org/materials`、`POST /api/org/materials/:id/events` | 仅当前机构可见；物料 `ACTIVE`；查看/使用/下载事件受服务端校验 | 真实上传、OSS、封面、下载代理、访问签名和统计详情 | 临时库验证全局/指定机构可见范围、使用事件和未配置资源时下载拒绝 |
+| `/help-feedback` | 学生问题反馈处理 | ORG_ADMIN | `真实已有（2026-09-03，P4-S07）` | `help_feedback`、`users` | `GET /api/org/help-feedback`、`GET/PUT /api/org/help-feedback/:id` | `SUBMITTED/IN_PROGRESS/RESOLVED/CLOSED`；仅本机构；教师 403；处理结果必填 | 工单 SLA、外部客服、邮件短信通知 | 临时库验证筛选、详情、状态机、结果必填、学生隔离与审计 |
 | `/hackathon` | `/org/hackathon` 黑客松 | ORG_ADMIN | `产品取消（2026-09-02）` | 不新增 | 不新增 | 不建设报名、投稿、初审或排名状态机 | 用户已明确确认不做；现有页面仅为历史壳层 | 不进入开发与验收；后续导航 / 路由清理时移除 |
 | `/afee` | `/org/mp-notify` 阿飞提醒 | ORG_ADMIN | `页面壳层` | 需新增微信绑定/访客表 | 待新增 | 绑定状态机 | 微信开放平台对接 | 外部决策 |
 
@@ -78,7 +80,7 @@
 | `/credits` | AI / 魔法石中心 | STUDENT | `真实已有（2026-09-03，P4-S05）` | `users`、`billing_packages`、`usage_records`、`generation_jobs`、`media_assets`、`student_projects`、`project_snapshots`、`class_sessions`、`classes` | `GET /api/ai/center`、`GET/POST /api/ai/generations/history`、`GET /api/ai/generations/history/:id`、`GET /api/student/credits` | 套餐有效期、能力状态、任务 / 素材本人隔离；失败不扣费，成功任务扣 1 积分 | 真实外部 AI provider、充值与对账仍属后续 / 外部决策 | 临时 SQLite P4-S05 API `85 pass / 0 fail`，覆盖能力状态、失败重试、素材使用推导、mock 标识和权限隔离 |
 | `/account` | 账号安全 | STUDENT | `真实已有（2026-09-03，P4-S06）` | `users`、`sessions`、`account_requests`、`organizations`、`classes`、`class_members`、`student_projects`、`works`、`generation_jobs`、`usage_records` | `GET/PUT /api/student/account`、`/profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke`、`/requests`、`/requests/:id`、`/requests/:id/cancel`；机构 `GET/PUT /api/org/account-requests/:id` | 申请 `PENDING/APPROVED/REJECTED/CANCELLED`；敏感操作需本人当前密码；仅 ORG_ADMIN 处理；学生不可改机构归属 | 真实头像文件上传、邮件短信、监管删除证明、跨机构迁移 | 临时库验证资料 / 隐私、旧密码、弱密码、会话、申请状态机、导出、软注销、审计与越权 |
 | `/inbox` | 消息中心 | STUDENT | `真实已有（2026-09-02）` | `notifications`、`notification_recipients` | `GET /api/student/inbox`、`PUT /api/student/inbox/:id/read`、`PUT /api/student/inbox/read-all` | 仅本人已投递且当前机构范围内的 `PUBLISHED` 消息；支持单条/全部已读 | 忽略状态、失败重试、外部通知通道 | 临时库验证平台公告、机构学生通知、定时到期、已读持久化、撤回隐藏与跨端越权 |
-| `/help` | 学习帮助 | STUDENT | `页面壳层` | 静态内容 | 无 | 无 | 正式帮助内容 | 内容属产品决策，可接静态 CMS |
+| `/help` | 帮助与下载 | STUDENT | `真实已有（2026-09-03，P4-S07）` | `help_feedback`、`client_download_releases` | `GET /api/student/help`、`POST /api/student/help/feedback`、`GET /api/student/help/feedback/:id` | 仅 STUDENT；反馈仅本人可读；敏感词拦截；下载仅返回已发布真实版本 | 独立 CMS、真实安装包、自动更新 | 临时 SQLite P4-S07 API 42 pass / 0 fail，覆盖内容、下载边界、反馈闭环与越权 |
 | `/login` | 登录 | public | `真实已有` | `sessions` | auth | 账号状态与会话错误码 | 手机流程 | 现有认证回归 |
 
 ## 6. 官网入口清单（8 个）
@@ -91,7 +93,7 @@
 | `/works` | 公开作品 | `真实已有（静态作品页）` | `works` 可承接 | 待新增 public works | 真实公开作品流、访客统计 | P5 公开分享链路 |
 | `/handbook` | 学习手册 | `真实已有（静态页）` | 无 | 无 | CMS | 静态构建 |
 | `/compare` | 对比页 | `真实已有（静态页）` | 无 | 无 | 正式数据口径 | 静态构建 |
-| `/download` | 下载页 | `真实已有（静态页）` | 无 | 待新增下载记录 | 下载统计 | P5 转化闭环 |
+| `/download` | 下载页 | `真实已有（2026-09-03，P4-S07，真实发布状态）` | `client_download_releases` | `GET /api/public/downloads` | 无登录；仅已发布 HTTPS 版本可见；未配置时禁用下载并明示不提供虚假链接 | 真实安装包、下载统计、自动更新 | 临时库验证初始未配置、未发布隐藏、发布可见、下架隐藏与官网构建 |
 | `/demo` | 预约演示 | `页面壳层（仅前端行为）` | 需线索表 | 待新增 | 线索落库、通知、防刷 | P5 与 `/org` 一并实施 |
 
 ## 7. P0 后续批次建议
@@ -113,7 +115,7 @@
 15. [x] **P4-S05 AI / 魔法石中心（2026-09-03 已完成）**：学生本人 AI 能力状态、额度、任务历史与失败详情、失败重试、素材使用推导和课堂限制提示已接通真实数据；local-mock 与外部 provider 边界明确，失败任务不误扣。
 16. [x] **P4-S06 个人账号与安全设置（2026-09-03 已完成）**：预设头像、监护人资料、隐私授权、当前密码验证、登录设备、账号注销 / 数据导出申请、机构处理、数据概览和软注销均已接通真实数据与审计。
 
-## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06 / P4-O07 / P4-O08 / P4-S01 / P4-S02 / P4-S03 / P4-S04 / P4-S05 / P4-S06）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06 / P4-O07 / P4-O08 / P4-S01 / P4-S02 / P4-S03 / P4-S04 / P4-S05 / P4-S06 / P4-S07）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -306,3 +308,16 @@
 - [x] 审计：资料、监护人、隐私、密码、会话撤销、申请创建 / 撤销、数据导出批准和注销批准均写入 `audit_logs`；验收直接查询临时库确认关键 action 存在。
 - [x] 验证：临时 SQLite P4-S06 API `97 pass / 0 fail`；旧 SQLite 35 表 / 6 用户迁移后新增 7 个用户字段与 `account_requests` 表且数据保留；P3 API 回归 `48 pass / 0 fail`；四端生产构建与 `git diff --check` 通过。
 - [x] 边界：未修改 `packages/canvas`，未触碰真实业务数据库，未部署线上；真实头像上传、邮件 / 短信通知、监管删除证明、监管报送和跨机构账号迁移未伪装为已完成。
+
+### 8.20 P4-S07 验收记录（2026-09-03）
+
+- [x] 帮助中心：`GET /api/student/help` 返回版本 `P4-S07`、7 条 FAQ、三组使用指南、Web / 客户端兼容性、反馈分类与隐私提示；学生端 `/help` 全部真实渲染，未登录 401、教师 403。
+- [x] 内容一致性：FAQ 与指南只描述已存在的首页任务、项目保存、作品反馈、AI 限制、账号隐私和帮助反馈能力；没有承诺未实现的自动更新或真实安装包。
+- [x] 下载模型：`client_download_releases` 仅保存平台、版本、通道、HTTPS 地址、大小 / SHA256 元数据与发布时间；`platform + version + channel` 唯一；默认无记录时状态为 `NOT_CONFIGURED`。
+- [x] 平台管理：仅 `SUPER_ADMIN` 可创建、发布和下架；非法平台、非法版本号、非 HTTPS 地址和重复组合均被拒绝；创建 / 发布 / 下架均写审计。
+- [x] 可见性边界：未发布版本对学生帮助中心和公开下载接口不可见；发布后可见；下架后立即隐藏；公开接口仅返回已发布且地址非空的最新版本。
+- [x] 官网真实状态：`/download` 调用 `GET /api/public/downloads`，移除虚构 `v0.1.76`；未配置平台按钮禁用并说明可用 Web 版；接口失败时显示读取失败，不伪造可用状态。
+- [x] 反馈提交：分类、标题 120 字、正文 2000 字、联系方式 100 字服务端校验；密码 / 身份证号 / 住址等敏感词返回 `FEEDBACK_SENSITIVE_CONTENT`；提交写 `HELP_FEEDBACK_CREATE`。
+- [x] 反馈追踪：学生仅能查看本人反馈，其他学生 404；机构管理员可按状态 / 分类筛选、查看详情并处理为 `IN_PROGRESS / RESOLVED / CLOSED`，处理结果必填，教师 403，处理写 `ORG_HELP_FEEDBACK_UPDATE`。
+- [x] 验证：临时 SQLite P4-S07 API `42 pass / 0 fail`；旧 SQLite 35 表 / 6 用户迁移后新增 2 张表和索引且数据保留；P3 API 回归 `48 pass / 0 fail`；后端语法检查、四端生产构建和 `git diff --check` 通过。
+- [x] 边界：未修改 `packages/canvas`，未触碰真实业务数据库，未部署线上；真实安装包构建、文件托管、OSS、自动更新、下载统计、工单 SLA 和外部客服渠道未伪装为已完成。

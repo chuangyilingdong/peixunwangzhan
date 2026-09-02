@@ -5,7 +5,7 @@ import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
 import '@platform/shared/styles.css';
 
-const navigation = [{ to: '/dashboard', icon: '◈', label: '机构总览' }, { to: '/classes', icon: '▦', label: '班级与课堂' }, { to: '/members', icon: '♙', label: '成员管理' }, { to: '/works', icon: '✧', label: '作品点评' }, { to: '/inbox', icon: '✉', label: '站内信' }, { to: '/courses', icon: '◇', label: '课程中心' }, { to: '/work-data', icon: '▥', label: '作品数据中心', adminOnly: true }, { to: '/packages', icon: '◇', label: '积分套餐', adminOnly: true }, { to: '/enrollment', icon: '♙', label: '学员开通', adminOnly: true }, { to: '/account-requests', icon: '◉', label: '账号申请', adminOnly: true }, { to: '/materials', icon: '▤', label: '宣传物料' }];
+const navigation = [{ to: '/dashboard', icon: '◈', label: '机构总览' }, { to: '/classes', icon: '▦', label: '班级与课堂' }, { to: '/members', icon: '♙', label: '成员管理' }, { to: '/works', icon: '✧', label: '作品点评' }, { to: '/inbox', icon: '✉', label: '站内信' }, { to: '/courses', icon: '◇', label: '课程中心' }, { to: '/work-data', icon: '▥', label: '作品数据中心', adminOnly: true }, { to: '/packages', icon: '◇', label: '积分套餐', adminOnly: true }, { to: '/enrollment', icon: '♙', label: '学员开通', adminOnly: true }, { to: '/account-requests', icon: '◉', label: '账号申请', adminOnly: true }, { to: '/materials', icon: '▤', label: '宣传物料' }, { to: '/help-feedback', icon: '◎', label: '问题反馈', adminOnly: true }];
 const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
 
 function useData(load, deps = []) {
@@ -483,6 +483,56 @@ function AccountRequests({ api }) {
   </>;
 }
 
+const HELP_FEEDBACK_CATEGORY_LABELS = { ACCOUNT: '账号', CANVAS: '画布创作', AI: 'AI 能力', COURSE: '课程学习', CLIENT: '客户端', DATA: '数据与隐私', OTHER: '其他' };
+const HELP_FEEDBACK_STATUS_LABELS = { SUBMITTED: '已提交', IN_PROGRESS: '处理中', RESOLVED: '已解决', CLOSED: '已关闭' };
+
+function HelpFeedbackPage({ api }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const status = searchParams.get('status') || '';
+  const category = searchParams.get('category') || '';
+  const query = useMemo(() => { const value = new URLSearchParams(); if (status) value.set('status', status); if (category) value.set('category', category); return value.toString() ? '?' + value.toString() : ''; }, [status, category]);
+  const { loading, error, data, refresh } = useData(() => api.get('org/help-feedback' + query), [api, query]);
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [form, setForm] = useState({ status: 'IN_PROGRESS', resolution: '' });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  function updateFilter(key, value) { const next = new URLSearchParams(searchParams); if (value) next.set(key, value); else next.delete(key); setSearchParams(next, { replace: true }); }
+  async function openDetail(item) {
+    setSelected(item); setDetail(null); setMessage('');
+    try { setDetail(await api.get(`org/help-feedback/${item.id}`)); setForm({ status: item.status === 'SUBMITTED' ? 'IN_PROGRESS' : 'RESOLVED', resolution: item.resolution || '' }); }
+    catch (err) { setMessage(err.message); }
+  }
+  async function handleFeedback() {
+    if (!selected) return; setBusy(true); setMessage('');
+    try { await api.put(`org/help-feedback/${selected.id}`, form); setMessage('反馈处理结果已保存。'); setSelected(null); setDetail(null); refresh(); }
+    catch (err) { setMessage(err.message); } finally { setBusy(false); }
+  }
+  return <>
+    <PageHeader eyebrow="学生服务" title="问题反馈处理" description="跟进学生在帮助中心提交的问题反馈，形成可追踪的处理记录。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
+    <div className="metrics"><MetricCard label="待处理" value={data?.submitted ?? 0} hint="学生已提交，等待机构响应" tone="orange" /><MetricCard label="处理中" value={data?.inProgress ?? 0} hint="已有管理员跟进" /><MetricCard label="已解决 / 关闭" value={data?.resolved ?? 0} hint="含已关闭反馈" tone="teal" /></div>
+    {message ? <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice> : null}
+    <Panel title="筛选">
+      <div className="form-grid">
+        <label>状态<select value={status} onChange={(event) => updateFilter('status', event.target.value)}><option value="">全部状态</option>{Object.entries(HELP_FEEDBACK_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>分类<select value={category} onChange={(event) => updateFilter('category', event.target.value)}><option value="">全部分类</option>{Object.entries(HELP_FEEDBACK_CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      </div>
+    </Panel>
+    <Panel title={`反馈列表 · 共 ${data?.total ?? 0} 条`}>
+      {loading ? <Loading /> : error ? <ErrorState error={error} onRetry={refresh} /> : data?.items?.length ? <div className="table-wrap"><table><thead><tr><th>学生</th><th>分类 / 标题</th><th>状态</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.userName || item.userLogin || item.userId}</strong><div className="muted">{item.userLogin || '—'}</div></td><td>{HELP_FEEDBACK_CATEGORY_LABELS[item.category] || item.category}<div><strong>{item.subject}</strong></div><div className="muted">{item.body}</div></td><td><Status value={HELP_FEEDBACK_STATUS_LABELS[item.status] || item.status} /><div className="muted">{item.handlerName ? `处理人：${item.handlerName}` : '—'}</div></td><td>{formatDate(item.submittedAt)}</td><td><button className="text-button" onClick={() => openDetail(item)}>查看处理</button></td></tr>)}</tbody></table></div> : <Empty title="暂无符合条件的学生反馈" body="学生可在“帮助与下载”页提交问题，机构管理员在这里处理。" />}
+    </Panel>
+    {selected && <Panel title={`处理反馈 · ${selected.subject}`} actions={<button className="secondary-button" onClick={() => { setSelected(null); setDetail(null); }}>关闭</button>}>
+      {!detail ? <Loading label="正在读取反馈详情…" /> : <>
+        <div className="row-actions"><Status value={HELP_FEEDBACK_CATEGORY_LABELS[detail.category] || detail.category} /><Status value={HELP_FEEDBACK_STATUS_LABELS[detail.status] || detail.status} /><span className="muted">{detail.userName || detail.userLogin} · {formatDate(detail.submittedAt)}</span></div>
+        <Panel title="学生描述"><p>{detail.body}</p><p className="muted">{detail.contact ? `联系方式：${detail.contact}` : '学生未填写联系方式'}</p>{detail.resolution ? <p><strong>既有处理结果：</strong>{detail.resolution}</p> : null}</Panel>
+        <label>处理状态<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="IN_PROGRESS">处理中</option><option value="RESOLVED">已解决</option><option value="CLOSED">已关闭</option></select></label>
+        <label>处理结果<textarea value={form.resolution} required maxLength={2000} placeholder="写明排查结论、已采取的措施或需要学生补充的信息。" onChange={(event) => setForm({ ...form, resolution: event.target.value })} /></label>
+        <div className="row-actions top-gap"><button className="primary-button" disabled={busy || !form.resolution.trim()} onClick={handleFeedback}>{busy ? '保存中…' : '保存处理结果'}</button></div>
+      </>}
+    </Panel>}
+  </>;
+}
+
 function OrgCourses({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/course-series'), [api]);
   const [expanded, setExpanded] = useState('');
@@ -849,6 +899,6 @@ function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

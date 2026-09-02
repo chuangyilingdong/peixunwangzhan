@@ -5,7 +5,7 @@ import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
 import '@platform/shared/styles.css';
 
-const navigation = [{ to: '/dashboard', icon: '◈', label: '我的学习' }, { to: '/projects', icon: '✦', label: '我的项目' }, { to: '/works', icon: '▣', label: '我的作品' }, { to: '/showcase', icon: '✧', label: '作品墙' }, { to: '/inbox', icon: '✉', label: '消息中心' }];
+const navigation = [{ to: '/dashboard', icon: '◈', label: '我的学习' }, { to: '/projects', icon: '✦', label: '我的项目' }, { to: '/works', icon: '▣', label: '我的作品' }, { to: '/showcase', icon: '✧', label: '作品墙' }, { to: '/inbox', icon: '✉', label: '消息中心' }, { to: '/help', icon: '?', label: '帮助与下载' }];
 const demos = [{ label: '跟随课堂学生', login: 'student-1', password: 'study123' }, { label: '自主练习学生', login: 'student-2', password: 'study123' }];
 
 function useData(load, deps = []) {
@@ -894,6 +894,57 @@ function StudentPage({ kind, api }) {
   return <><PageHeader eyebrow="AI魔法学院 · 小小创作者" title={title} description={description} actions={<a className="primary-button" href="http://localhost:5176/download">下载客户端 ↗</a>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '可查看' : '下载'} hint={item[1]} tone={index ? 'teal' : 'violet'} />)}</div><Panel title="创作小提示"><Notice tone="info">如需课堂登录或下载客户端，请联系老师获取对应指引。</Notice></Panel></>;
 }
 
+const HELP_CATEGORY_LABELS = { ACCOUNT: '账号', CANVAS: '画布创作', AI: 'AI 能力', COURSE: '课程学习', CLIENT: '客户端', DATA: '数据与隐私', OTHER: '其他' };
+const HELP_PLATFORM_LABELS = { MACOS_APPLE: 'macOS（Apple 芯片）', WINDOWS_X64: 'Windows（64 位）' };
+
+function HelpCenter({ api }) {
+  const help = useData(() => api.get('student/help'), [api]);
+  const [category, setCategory] = useState('OTHER');
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [contact, setContact] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const feedback = help.data?.myFeedback || { items: [], submitted: 0, inProgress: 0, resolved: 0 };
+  const downloads = help.data?.downloads || { status: 'NOT_CONFIGURED', items: [], byPlatform: {} };
+  async function submitFeedback(event) {
+    event.preventDefault(); setBusy(true);
+    try { await api.post('student/help/feedback', { category, subject, body, contact: contact || undefined }); setMessage('反馈已提交，机构管理员会跟进处理。'); setSubject(''); setBody(''); setContact(''); help.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  return <>
+    <PageHeader eyebrow="AI 魔法学院 · 小小创作者" title="帮助与下载" description="查看真实可用的客户端、课堂常见问题和创作指引，并提交可追踪的问题反馈。" actions={<button className="secondary-button" onClick={help.refresh}>刷新</button>} />
+    <div className="metrics"><MetricCard label="帮助中心版本" value={help.data?.version || '—'} hint="与当前平台功能同步维护" /><MetricCard label="真实客户端" value={downloads.items.length} hint={downloads.statement} tone="teal" /><MetricCard label="我的反馈" value={feedback.items.length} hint={`待处理 ${feedback.submitted + feedback.inProgress} 条，已处理 ${feedback.resolved} 条`} tone="orange" /></div>
+    {message ? <Notice tone={message.includes('已提交') ? 'success' : 'danger'}>{message}</Notice> : null}
+    {help.loading ? <Loading /> : help.error ? <ErrorState error={help.error} onRetry={help.refresh} /> : <>
+      <div className="split">
+        <Panel title="客户端下载">
+          <Notice tone={downloads.status === 'NOT_CONFIGURED' ? 'warning' : 'info'}>{downloads.statement}</Notice>
+          {downloads.items.length ? <div className="card-list">{downloads.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={HELP_PLATFORM_LABELS[item.platform] || item.platform} /><span className="status success">{item.channel === 'STABLE' ? '正式版' : item.channel === 'BETA' ? '测试版' : '内测版'}</span></div><h3>v{item.version}</h3><p>{item.releaseNotes}</p><p className="muted">发布时间：{formatDate(item.publishedAt)}{item.fileSize ? ` · 大小 ${Math.max(1, Math.round(item.fileSize / 1024 / 1024))} MB` : ''}{item.sha256 ? ` · SHA256：${item.sha256.slice(0, 12)}…` : ''}</p><div className="row-actions"><a className="primary-button" href={item.downloadUrl}>下载安装包 ↗</a></div></article>)}</div> : <Empty title="暂无真实安装包" body="平台尚未配置桌面客户端下载地址。当前可直接使用浏览器访问 Web 版，页面不会提供虚假下载。" />}
+        </Panel>
+        <Panel title="常见问题">{help.data.faq.map((item) => <details className="faq-item" key={item.question}><summary><span>{HELP_CATEGORY_LABELS[item.category] || item.category}</span>{item.question}</summary><p>{item.answer}</p></details>)}</Panel>
+      </div>
+      <div className="split">
+        <Panel title="使用指南">{help.data.guides.map((guide) => <article className="item-card" key={guide.title}><h3>{guide.title}</h3><ol className="guide-steps">{guide.steps.map((step) => <li key={step}>{step}</li>)}</ol></article>)}</Panel>
+        <Panel title="兼容性说明"><h3>Web 端</h3><ul>{help.data.compatibility.web.map((item) => <li key={item}>{item}</li>)}</ul><h3>桌面客户端</h3><ul>{help.data.compatibility.client.map((item) => <li key={item}>{item}</li>)}</ul></Panel>
+      </div>
+      <div className="split">
+        <Panel title="提交问题反馈">
+          <Notice tone="warning">{help.data.feedback.privacy}</Notice>
+          <form onSubmit={submitFeedback}>
+            <label>问题分类<select value={category} onChange={(event) => setCategory(event.target.value)}>{help.data.feedback.categories.map((item) => <option key={item} value={item}>{HELP_CATEGORY_LABELS[item] || item}</option>)}</select></label>
+            <label>问题标题<input value={subject} maxLength={help.data.feedback.maxSubjectLength} onChange={(event) => setSubject(event.target.value)} required placeholder="例如：画布保存后节点消失" /></label>
+            <label>问题描述<textarea value={body} maxLength={help.data.feedback.maxBodyLength} onChange={(event) => setBody(event.target.value)} required placeholder="请写清楚操作步骤和页面表现，不要填写密码、身份证号或住址。" /></label>
+            <label>联系方式（可选）<input value={contact} maxLength={help.data.feedback.maxContactLength} onChange={(event) => setContact(event.target.value)} placeholder="老师或家长可联系的渠道" /></label>
+            <button className="primary-button" type="submit" disabled={busy || !subject.trim() || !body.trim()}>{busy ? '提交中…' : '提交反馈'}</button>
+          </form>
+        </Panel>
+        <Panel title="我的反馈记录">{feedback.items.length ? <div className="card-list">{feedback.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={HELP_CATEGORY_LABELS[item.category] || item.category} /><span className={`status ${item.status === 'SUBMITTED' ? 'warning' : item.status === 'IN_PROGRESS' ? 'muted' : 'success'}`}>{item.status === 'SUBMITTED' ? '已提交' : item.status === 'IN_PROGRESS' ? '处理中' : item.status === 'RESOLVED' ? '已解决' : '已关闭'}</span></div><h3>{item.subject}</h3><p>{item.body}</p><p className="muted">提交时间：{formatDate(item.submittedAt)}{item.contact ? ` · 联系方式：${item.contact}` : ''}</p>{item.resolution ? <div className="row-actions"><span className="status success">处理结果</span><p>{item.resolution}</p></div> : null}</article>)}</div> : <Empty title="暂无反馈记录" body="提交后可在这里查看机构处理进度和结果。" />}</Panel>
+      </div>
+    </>}
+  </>;
+}
+
 function App() {
   const [session, setSession] = useState(readSession);
   const navigate = useNavigate();
@@ -903,7 +954,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="学生创作空间" description="在 AI 魔法学院中学习、创作并分享你的作品。" clientType="student" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'STUDENT') return <LoginPanel title="学生创作空间" description="当前会话没有学生创作权限。" clientType="student" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="小小创作者" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/projects" element={<Projects api={api} />} /><Route path="/projects/:projectId/canvas" element={<CanvasWorkspace api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/showcase" element={<Showcase api={api} user={session.user} />} /><Route path="/inbox" element={<StudentInbox api={api} />} /><Route path="/courses" element={<StudentCourses api={api} />} /><Route path="/credits" element={<StudentCredits api={api} />} /><Route path="/account" element={<StudentAccount api={api} onRelogin={() => { clearSession(); setSession(null); navigate('/login'); }} />} /><Route path="/help" element={<StudentPage kind="help" api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="小小创作者" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/projects" element={<Projects api={api} />} /><Route path="/projects/:projectId/canvas" element={<CanvasWorkspace api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/showcase" element={<Showcase api={api} user={session.user} />} /><Route path="/inbox" element={<StudentInbox api={api} />} /><Route path="/courses" element={<StudentCourses api={api} />} /><Route path="/credits" element={<StudentCredits api={api} />} /><Route path="/account" element={<StudentAccount api={api} onRelogin={() => { clearSession(); setSession(null); navigate('/login'); }} />} /><Route path="/help" element={<HelpCenter api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
