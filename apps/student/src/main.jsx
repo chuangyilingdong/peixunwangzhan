@@ -47,20 +47,54 @@ function Dashboard({ api }) {
 }
 function Projects({ api }) {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const projects = useData(() => api.get('student/projects'), [api]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get('view') || 'ACTIVE';
+  const status = searchParams.get('status') || '';
+  const seriesId = searchParams.get('seriesId') || '';
+  const lessonId = searchParams.get('lessonId') || '';
+  const [search, setSearch] = useState(searchParams.get('search') || '');
+  const [appliedSearch, setAppliedSearch] = useState(searchParams.get('search') || '');
+  const projects = useData(() => {
+    const params = new URLSearchParams({ view });
+    if (status) params.set('status', status);
+    if (seriesId) params.set('seriesId', seriesId);
+    if (lessonId) params.set('lessonId', lessonId);
+    if (appliedSearch) params.set('search', appliedSearch);
+    return api.get(`student/projects?${params.toString()}`);
+  }, [api, view, status, seriesId, lessonId, appliedSearch]);
   const dashboard = useData(() => api.get('student/dashboard'), [api]);
   const [title, setTitle] = useState('我的新创作');
-  const [lessonId, setLessonId] = useState(searchParams.get('lessonId') || '');
+  const [createLessonId, setCreateLessonId] = useState(searchParams.get('lessonId') || '');
   const [copyrightConfirmed, setCopyrightConfirmed] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
-  const lessons = dashboard.data?.courses?.flatMap((course) => course.lessons.map((lesson) => ({ ...lesson, courseTitle: course.title }))) || [];
+  const [renameProject, setRenameProject] = useState(null);
+  const [renameTitle, setRenameTitle] = useState('');
+  const lessons = dashboard.data?.courses?.flatMap((course) => course.lessons.map((lesson) => ({ ...lesson, courseTitle: course.title, seriesId: course.id }))) || [];
+  const courses = dashboard.data?.courses || [];
+
+  function updateFilter(key, value) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value); else next.delete(key);
+    setSearchParams(next, { replace: true });
+  }
+
+  function applySearch(event) {
+    event.preventDefault();
+    setAppliedSearch(search.trim());
+    updateFilter('search', search.trim());
+  }
+
+  function resetFilters() {
+    setSearch('');
+    setAppliedSearch('');
+    setSearchParams(new URLSearchParams(view === 'ACTIVE' ? {} : { view }), { replace: true });
+  }
 
   async function create(event) {
     event.preventDefault(); setBusy('create');
     try {
-      const chosenLesson = lessonId || lessons[0]?.id;
+      const chosenLesson = createLessonId || lessons[0]?.id;
       const project = await api.post('student/projects', { title, courseLessonId: chosenLesson || undefined, canvasSnapshot: { nodes: [], edges: [] } });
       setTitle('我的新创作'); projects.refresh(); navigate(`/projects/${project.id}/canvas`);
     } catch (err) { setMessage(err.message); } finally { setBusy(''); }
@@ -83,14 +117,91 @@ function Projects({ api }) {
     } catch (err) { setMessage(err.message); } finally { setBusy(''); }
   }
 
+  async function saveRename(event) {
+    event.preventDefault();
+    if (!renameProject) return;
+    setBusy(`rename-${renameProject.id}`);
+    try {
+      await api.patch(`student/projects/${renameProject.id}`, { title: renameTitle });
+      setMessage('项目已重命名。'); setRenameProject(null); projects.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
+
+  async function copy(project) {
+    setBusy(`copy-${project.id}`);
+    try {
+      const copyResult = await api.post(`student/projects/${project.id}`, { action: 'copy' });
+      setMessage(`已创建《${copyResult.title}》。`); projects.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
+
+  async function archive(project) {
+    setBusy(`archive-${project.id}`);
+    try {
+      await api.post(`student/projects/${project.id}/archive`);
+      setMessage('项目已归档，可在归档列表恢复。'); projects.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
+
+  async function softDelete(project) {
+    if (!window.confirm('删除后项目将进入回收站，30 天内可恢复。确认删除吗？')) return;
+    setBusy(`delete-${project.id}`);
+    try {
+      await api.delete(`student/projects/${project.id}?view=${view}&mode=DELETE`);
+      setMessage('项目已移入回收站，30 天内可恢复。'); projects.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
+
+  async function restore(project) {
+    setBusy(`restore-${project.id}`);
+    try {
+      await api.post(`student/projects/${project.id}/restore`);
+      setMessage('项目已恢复为草稿。'); projects.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
+
+  const projectMeta = (project) => (
+    <p>
+      {project.seriesTitle || '未关联课程'} · {project.courseLessonTitle || '未绑定课时'}
+      {project.className ? ` · ${project.className}` : ''} · 版本 {project.latestVersion}
+      {project.workStatus ? ` · 作品状态：${project.workStatus}` : ''} · 最近保存：{formatDate(project.lastSavedAt || project.updatedAt)}
+    </p>
+  );
+
   return <>
     <PageHeader eyebrow="创作空间" title="我的项目" description="用可拖拽、可连线的魔法画布组织提示词、画面和故事。" />
     {!dashboard.loading && !dashboard.data?.canUseNow && <Notice tone="warning">{dashboard.data?.blockReason}</Notice>}
-    <div className="split"><Panel title="创建项目"><form onSubmit={create}><label>项目标题<input value={title} onChange={(event) => setTitle(event.target.value)} required /></label><label>关联课时<select value={lessonId} onChange={(event) => setLessonId(event.target.value)}><option value="">自动选择首个可用课时</option>{lessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.courseTitle} · {lesson.title}</option>)}</select></label><button className="primary-button" disabled={busy === 'create'}>{busy === 'create' ? '创建中…' : '创建并打开画布'}</button></form></Panel><Panel title="作品提交与展示授权"><label className="muted"><input type="checkbox" checked={copyrightConfirmed} onChange={(event) => setCopyrightConfirmed(event.target.checked)} /> 我确认作品为本人创作或已获授权，不含他人隐私信息；同意老师审核通过后仅在当前机构作品墙展示。</label><Notice tone="warning">作品默认不会公开。教师审核并发布后，作品墙只显示脱敏作者名称；评论、点赞功能当前未启用。</Notice>{message && <Notice tone={message.includes('已') || message.includes('记录') ? 'success' : 'danger'}>{message}</Notice>}</Panel></div>
-    <Panel title="项目列表" actions={<button className="secondary-button" onClick={projects.refresh}>刷新</button>}>{projects.loading ? <Loading /> : projects.error ? <ErrorState error={projects.error} onRetry={projects.refresh} /> : projects.data.items.length ? <div className="card-list">{projects.data.items.map((project) => <article className="item-card" key={project.id}><div className="row-actions"><h3>{project.title}</h3><Status value={project.status} /></div><p>{project.courseLessonTitle || '未绑定课时'} · 版本 {project.latestVersion} · 最近保存：{formatDate(project.lastSavedAt || project.updatedAt)}</p><div className="row-actions"><button className="secondary-button" onClick={() => navigate(`/projects/${project.id}/canvas`)}>{project.status === 'DRAFT' ? '进入画布' : '查看画布'}</button>{project.status === 'DRAFT' && <><button className="secondary-button" disabled={busy === project.id} onClick={() => useAi(project)}>消耗 1 积分进行 AI 文本创作</button><button className="primary-button" disabled={busy === project.id || !copyrightConfirmed} onClick={() => submit(project)}>提交作品</button></>}</div></article>)}</div> : <Empty title="还没有项目" body="选择一节课，开始你的第一份创作。" />}</Panel>
+    <div className="split">
+      <Panel title="创建项目"><form onSubmit={create}><label>项目标题<input value={title} onChange={(event) => setTitle(event.target.value)} required /></label><label>关联课时<select value={createLessonId} onChange={(event) => setCreateLessonId(event.target.value)}><option value="">自动选择首个可用课时</option>{lessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.courseTitle} · {lesson.title}</option>)}</select></label><button className="primary-button" disabled={busy === 'create'}>{busy === 'create' ? '创建中…' : '创建并打开画布'}</button></form></Panel>
+      <Panel title="作品提交与展示授权"><label className="muted"><input type="checkbox" checked={copyrightConfirmed} onChange={(event) => setCopyrightConfirmed(event.target.checked)} /> 我确认作品为本人创作或已获授权，不含他人隐私信息；同意老师审核通过后仅在当前机构作品墙展示。</label><Notice tone="warning">作品默认不会公开。教师审核并发布后，作品墙只显示脱敏作者名称；评论、点赞功能当前未启用。</Notice>{message && <Notice tone={message.includes('已') || message.includes('记录') || message.includes('恢复') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
+    </div>
+    <Panel title={`项目列表（${view === 'DELETED' ? '回收站' : view === 'ARCHIVED' ? '归档' : '进行中'}）`} actions={<button className="secondary-button" onClick={projects.refresh}>刷新</button>}>
+      <form className="filter-form" onSubmit={applySearch}>
+        <label>关键词<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="项目 / 课时 / 课程" maxLength="100" /></label>
+        <label>课程<select value={seriesId} onChange={(event) => updateFilter('seriesId', event.target.value)}><option value="">全部课程</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}</select></label>
+        <label>课时<select value={lessonId} onChange={(event) => updateFilter('lessonId', event.target.value)}><option value="">全部课时</option>{lessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.courseTitle} · {lesson.title}</option>)}</select></label>
+        {view === 'ACTIVE' && <label>状态<select value={status} onChange={(event) => updateFilter('status', event.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">已提交</option><option value="GRADED">已评分</option></select></label>}
+        <label>视图<select value={view} onChange={(event) => updateFilter('view', event.target.value)}><option value="ACTIVE">进行中</option><option value="ARCHIVED">归档</option><option value="DELETED">回收站</option></select></label>
+        <button className="secondary-button" type="submit">搜索</button>
+        <button className="text-button" type="button" onClick={resetFilters}>清空筛选</button>
+      </form>
+      {projects.loading ? <Loading /> : projects.error ? <ErrorState error={projects.error} onRetry={projects.refresh} /> : projects.data.items.length ? <div className="card-list">{projects.data.items.map((project) => <article className="item-card" key={project.id}>
+        <div className="row-actions"><h3>{project.title}</h3><Status value={project.status} />{project.workStatus && <Status value={project.workStatus} />}{view === 'DELETED' && <span className="status warning">30 天内可恢复</span>}</div>
+        {projectMeta(project)}
+        <div className="row-actions">
+          {view !== 'DELETED' && <button className="secondary-button" onClick={() => navigate(`/projects/${project.id}/canvas`)}>{project.status === 'DRAFT' && view === 'ACTIVE' ? '进入画布' : '查看画布'}</button>}
+          {view === 'ACTIVE' && project.status === 'DRAFT' && <><button className="secondary-button" disabled={busy === project.id} onClick={() => useAi(project)}>消耗 1 积分进行 AI 文本创作</button><button className="primary-button" disabled={busy === project.id || !copyrightConfirmed} onClick={() => submit(project)}>提交作品</button></>}
+          {view === 'ACTIVE' && project.status === 'DRAFT' && <button className="text-button" disabled={busy === `rename-${project.id}`} onClick={() => { setRenameProject(project); setRenameTitle(project.title); }}>重命名</button>}
+          {view === 'ACTIVE' && project.status === 'DRAFT' && project.workStatus !== 'PUBLISHED' && <button className="text-button" disabled={busy === `copy-${project.id}`} onClick={() => copy(project)}>复制</button>}
+          {view === 'ACTIVE' && project.status === 'DRAFT' && <button className="text-button" disabled={busy === `archive-${project.id}`} onClick={() => archive(project)}>归档</button>}
+          {view !== 'DELETED' && project.status === 'DRAFT' && <button className="text-button danger-text" disabled={busy === `delete-${project.id}`} onClick={() => softDelete(project)}>删除</button>}
+          {view !== 'ACTIVE' && <button className="secondary-button" disabled={busy === `restore-${project.id}`} onClick={() => restore(project)}>恢复</button>}
+        </div>
+      </article>)}</div> : <Empty title={view === 'DELETED' ? '回收站为空' : view === 'ARCHIVED' ? '暂无归档项目' : '还没有项目'} body={view === 'DELETED' ? '删除后的草稿会在这里保留 30 天。' : view === 'ARCHIVED' ? '归档的项目不会出现在学习任务和继续创作中。' : '选择一节课，开始你的第一份创作。'} />}
+    </Panel>
+    {renameProject && <div className="modal-backdrop"><div className="modal"><h3>重命名项目</h3><form onSubmit={saveRename}><label>项目名称<input value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} maxLength="100" required autoFocus /></label><div className="row-actions"><button type="button" className="text-button" onClick={() => setRenameProject(null)}>取消</button><button className="primary-button" type="submit" disabled={busy === `rename-${renameProject.id}`}>{busy === `rename-${renameProject.id}` ? '保存中…' : '保存名称'}</button></div></form></div></div>}
   </>;
 }
-
 function snapshotSummary(snapshot) {
   return {
     nodeCount: Array.isArray(snapshot?.nodes) ? snapshot.nodes.length : 0,

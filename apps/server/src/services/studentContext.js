@@ -240,7 +240,7 @@ function studentLessonProgressMap(user) {
   const projects = rows(
     `SELECT id, class_id, course_lesson_id, title, status, latest_version, last_saved_at, updated_at
      FROM student_projects
-     WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`,
+     WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED' AND deleted_at IS NULL`,
     [userId, orgId],
   );
   const works = rows(

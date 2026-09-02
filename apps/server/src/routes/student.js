@@ -60,29 +60,43 @@ export function normalizeCanvasSnapshot(input, { fallback = EMPTY_CANVAS } = {})
   return snapshot;
 }
 
-function getOwnProject(ctx, projectId, { includeArchived = false } = {}) {
+const PROJECT_DELETE_RESTORE_DAYS = 30;
+
+function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted = false } = {}) {
   const project = row(
-    `SELECT project.*, lesson.title AS lesson_title
+    `SELECT project.*, lesson.title AS lesson_title,
+            series.id AS series_id, series.title AS series_title,
+            class.name AS class_name,
+            work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
      FROM student_projects project
      LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
+     LEFT JOIN course_series series ON series.id = lesson.series_id
+     LEFT JOIN classes class ON class.id = project.class_id
+     LEFT JOIN works work ON work.project_id = project.id
      WHERE project.id = ? AND project.student_id = ? AND project.org_id = ?
+       ${includeDeleted ? '' : 'AND project.deleted_at IS NULL'}
        ${includeArchived ? '' : "AND project.status != 'ARCHIVED'"}`,
     [projectId, ctx.auth.user.id, ctx.auth.user.orgId],
   );
   if (!project) throw errors.notFound('项目不存在', 'PROJECT_NOT_FOUND');
   return project;
 }
-
-function fetchProject(ctx, projectId) {
+function fetchProject(ctx, projectId, { includeDeleted = false } = {}) {
   return row(
-    `SELECT project.*, lesson.title AS lesson_title
+    `SELECT project.*, lesson.title AS lesson_title,
+            series.id AS series_id, series.title AS series_title,
+            class.name AS class_name,
+            work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
      FROM student_projects project
      LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
-     WHERE project.id = ? AND project.student_id = ? AND project.org_id = ?`,
+     LEFT JOIN course_series series ON series.id = lesson.series_id
+     LEFT JOIN classes class ON class.id = project.class_id
+     LEFT JOIN works work ON work.project_id = project.id
+     WHERE project.id = ? AND project.student_id = ? AND project.org_id = ?
+       ${includeDeleted ? '' : 'AND project.deleted_at IS NULL'}`,
     [projectId, ctx.auth.user.id, ctx.auth.user.orgId],
   );
 }
-
 function fetchWork(ctx, workId) {
   return row(
     `SELECT work.*, student.display_name AS student_name, class.name AS class_name,
@@ -288,21 +302,55 @@ export async function handleStudent(ctx) {
   }
 
   if (part === '/projects' && method === 'GET') {
+    const view = ctx.search.get('view') || 'ACTIVE';
+    if (!['ACTIVE', 'ARCHIVED', 'DELETED'].includes(view)) throw errors.badRequest('无效的项目视图', 'INVALID_PROJECT_VIEW');
+    const status = ctx.search.get('status');
+    if (status && !['DRAFT', 'SUBMITTED', 'GRADED', 'ARCHIVED'].includes(status)) throw errors.badRequest('无效的项目状态', 'INVALID_PROJECT_STATUS');
+    if (view !== 'ACTIVE' && status === 'ARCHIVED') throw errors.badRequest('归档视图无需重复按归档状态筛选', 'INVALID_PROJECT_FILTER');
+
     const params = [auth.user.id, auth.user.orgId];
-    let where = "project.student_id = ? AND project.org_id = ? AND project.status != 'ARCHIVED'";
-    if (ctx.search.get('lessonId')) { where += ' AND project.course_lesson_id = ?'; params.push(ctx.search.get('lessonId')); }
-    if (ctx.search.get('status')) { where += ' AND project.status = ?'; params.push(ctx.search.get('status')); }
+    let where = 'project.student_id = ? AND project.org_id = ?';
+    if (view === 'DELETED') {
+      where += " AND project.status = 'ARCHIVED' AND project.deleted_at IS NOT NULL";
+    } else if (view === 'ARCHIVED') {
+      where += " AND project.status = 'ARCHIVED' AND project.deleted_at IS NULL";
+    } else {
+      where += " AND project.status != 'ARCHIVED' AND project.deleted_at IS NULL";
+    }
+    if (view === 'ACTIVE' && status) {
+      where += ' AND project.status = ?';
+      params.push(status);
+    }
+
+    const keyword = String(ctx.search.get('search') || '').trim().slice(0, 100);
+    if (keyword) {
+      where += " AND (project.title LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\' OR series.title LIKE ? ESCAPE '\\')";
+      const escaped = '%' + keyword.replace(/[\\%_]/g, (char) => '\\' + char) + '%';
+      params.push(escaped, escaped, escaped);
+    }
+    const seriesId = ctx.search.get('seriesId');
+    if (seriesId) { where += ' AND series.id = ?'; params.push(seriesId); }
+    const classId = ctx.search.get('classId');
+    if (classId) { where += ' AND project.class_id = ?'; params.push(classId); }
+    const lessonId = ctx.search.get('lessonId');
+    if (lessonId) { where += ' AND project.course_lesson_id = ?'; params.push(lessonId); }
+
     const items = rows(
-      `SELECT project.*, lesson.title AS lesson_title
+      `SELECT project.*, lesson.title AS lesson_title,
+              series.id AS series_id, series.title AS series_title,
+              class.name AS class_name,
+              work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
        FROM student_projects project
        LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
+       LEFT JOIN course_series series ON series.id = lesson.series_id
+       LEFT JOIN classes class ON class.id = project.class_id
+       LEFT JOIN works work ON work.project_id = project.id
        WHERE ${where}
        ORDER BY project.updated_at DESC LIMIT 200`,
       params,
     ).map((project) => normalizeProject(project));
-    return { items };
+    return { items, view };
   }
-
   if (part === '/projects' && method === 'POST') {
     const courseLessonId = nonEmptyString(ctx.body?.courseLessonId, '课时', { max: 100 });
     const lessonContext = resolveStudentLessonContext(auth.rawUser, courseLessonId, ctx.body?.classId || null);
@@ -371,14 +419,78 @@ export async function handleStudent(ctx) {
     return normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true });
   }
 
-  if (match && method === 'DELETE') {
+  if (match && method === 'PATCH') {
     const project = getOwnProject(ctx, match[1]);
-    assertDraft(project);
-    q("UPDATE student_projects SET status='ARCHIVED',updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'", [nowIso(), project.id, auth.user.id, auth.user.orgId]);
+    const title = nonEmptyString(ctx.body?.title, '项目名称', { max: 100 });
+    if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能重命名', 'PROJECT_NOT_RENAMABLE');
+    const now = nowIso();
+    q(
+      "UPDATE student_projects SET title=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
+      [title, now, project.id, auth.user.id, auth.user.orgId],
+    );
+    audit(ctx, 'PROJECT_RENAME', 'STUDENT_PROJECT', project.id, { title: project.title }, { title });
+    return normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true });
+  }
+
+  if (match && method === 'POST') {
+    if (!ctx.body || ctx.body.action !== 'copy') throw errors.badRequest('不支持的项目操作', 'UNSUPPORTED_PROJECT_ACTION');
+    const project = getOwnProject(ctx, match[1]);
+    if (project.work_status === 'PUBLISHED') throw errors.conflict('已发布作品不能复制为可编辑草稿', 'PUBLISHED_WORK_NOT_COPYABLE');
+    if (!project.canvas_snapshot) throw errors.conflict('项目画布内容缺失，不能复制', 'PROJECT_SNAPSHOT_REQUIRED');
+    const usageContext = resolveProjectUsageContext(auth.rawUser, project);
+    if (!usageContext.canUseNow) throw errors.forbidden(usageContext.blockReason, usageContext.blockCode);
+    const now = nowIso();
+    const projectId = id('project');
+    const title = `${String(project.title).slice(0, 96)} 副本`;
+    transaction(() => {
+      q(
+        `INSERT INTO student_projects(
+          id,student_id,org_id,class_id,course_lesson_id,title,status,canvas_snapshot,
+          latest_version,last_saved_at,created_at,updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [projectId, auth.user.id, auth.user.orgId, project.class_id, project.course_lesson_id, title, 'DRAFT', project.canvas_snapshot, 1, now, now, now],
+      );
+      q(
+        `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
+         VALUES (?,?,?,?,?,?,?)`,
+        [id('snapshot'), projectId, 1, `复制自《${project.title}》`, project.canvas_snapshot, auth.user.id, now],
+      );
+    });
+    audit(ctx, 'PROJECT_COPY', 'STUDENT_PROJECT', projectId, null, { sourceProjectId: project.id, sourceVersion: Number(project.latest_version || 0), title });
+    return normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+  }
+
+  if (match && method === 'DELETE') {
+    const view = ctx.search.get('view');
+    const includeArchived = view === 'ARCHIVED' || view === 'DELETED';
+    const project = getOwnProject(ctx, match[1], { includeArchived });
+    const action = ctx.search.get('mode') || 'ARCHIVE';
+    if (!['ARCHIVE', 'DELETE'].includes(action)) throw errors.badRequest('无效的删除模式', 'INVALID_PROJECT_DELETE_MODE');
+    if (action === 'DELETE') {
+      if (project.status !== 'DRAFT' && !(project.status === 'ARCHIVED' && !project.deleted_at)) {
+        throw errors.conflict('已提交或已评分项目不能删除', 'PROJECT_NOT_DELETABLE');
+      }
+    } else if (project.status !== 'DRAFT') {
+      throw errors.conflict('已提交或已评分项目不能删除', 'PROJECT_NOT_DELETABLE');
+    }
+    const now = nowIso();
+
+    if (action === 'DELETE') {
+      const restoreDeadline = new Date(new Date(now).getTime() + PROJECT_DELETE_RESTORE_DAYS * 86400_000).toISOString();
+      q(
+        "UPDATE student_projects SET status='ARCHIVED',archived_at=COALESCE(archived_at,?),deleted_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
+        [now, now, now, project.id, auth.user.id, auth.user.orgId],
+      );
+      audit(ctx, 'PROJECT_SOFT_DELETE', 'STUDENT_PROJECT', project.id, { title: project.title }, { restoreDeadline });
+      return { deleted: true, id: project.id, restoreDays: PROJECT_DELETE_RESTORE_DAYS, restoreDeadline };
+    }
+    q(
+      "UPDATE student_projects SET status='ARCHIVED',archived_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
+      [now, now, project.id, auth.user.id, auth.user.orgId],
+    );
     audit(ctx, 'PROJECT_ARCHIVE', 'STUDENT_PROJECT', project.id);
     return { archived: true, id: project.id };
   }
-
   match = part.match(/^\/projects\/([^/]+)\/snapshots$/);
   if (match && method === 'GET') {
     const project = getOwnProject(ctx, match[1]);
@@ -434,6 +546,41 @@ export async function handleStudent(ctx) {
     };
   }
 
+  match = part.match(/^\/projects\/([^/]+)\/archive$/);
+  if (match && method === 'POST') {
+    const project = getOwnProject(ctx, match[1]);
+    if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能归档', 'PROJECT_NOT_ARCHIVABLE');
+    const now = nowIso();
+    q(
+      "UPDATE student_projects SET status='ARCHIVED',archived_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
+      [now, now, project.id, auth.user.id, auth.user.orgId],
+    );
+    audit(ctx, 'PROJECT_ARCHIVE', 'STUDENT_PROJECT', project.id, { status: project.status }, { status: 'ARCHIVED' });
+    return { archived: true, id: project.id };
+  }
+
+  match = part.match(/^\/projects\/([^/]+)\/restore$/);
+  if (match && method === 'POST') {
+    const project = getOwnProject(ctx, match[1], { includeArchived: true, includeDeleted: true });
+    if (project.status !== 'ARCHIVED') throw errors.conflict('只有归档或已删除草稿可以恢复', 'PROJECT_NOT_RESTORABLE');
+    const now = nowIso();
+    if (project.deleted_at) {
+      const deadline = new Date(new Date(project.deleted_at).getTime() + PROJECT_DELETE_RESTORE_DAYS * 86400_000);
+      if (deadline.getTime() <= Date.now()) throw errors.conflict('项目已超过 30 天恢复期，不能恢复', 'PROJECT_RESTORE_EXPIRED');
+      q(
+        "UPDATE student_projects SET deleted_at=NULL,status='DRAFT',updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='ARCHIVED'",
+        [now, project.id, auth.user.id, auth.user.orgId],
+      );
+      audit(ctx, 'PROJECT_RESTORE', 'STUDENT_PROJECT', project.id, { deletedAt: project.deleted_at }, { status: 'DRAFT' });
+      return normalizeProject(fetchProject(ctx, project.id, { includeDeleted: true }), { includeSnapshot: true });
+    }
+    q(
+      "UPDATE student_projects SET status='DRAFT',archived_at=NULL,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='ARCHIVED' AND deleted_at IS NULL",
+      [now, project.id, auth.user.id, auth.user.orgId],
+    );
+    audit(ctx, 'PROJECT_RESTORE', 'STUDENT_PROJECT', project.id, { status: 'ARCHIVED' }, { status: 'DRAFT' });
+    return normalizeProject(fetchProject(ctx, project.id, { includeDeleted: true }), { includeSnapshot: true });
+  }
   match = part.match(/^\/projects\/([^/]+)\/submit$/);
   if (match && method === 'POST') {
     const project = getOwnProject(ctx, match[1]);

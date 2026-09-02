@@ -422,6 +422,14 @@ export function normalizeProject(value, { includeSnapshot = false } = {}) {
     lastSavedAt: value.last_saved_at,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
+    archivedAt: value.archived_at || null,
+    deletedAt: value.deleted_at || null,
+    className: value.class_name || null,
+    seriesId: value.series_id || null,
+    seriesTitle: value.series_title || null,
+    workId: value.work_id || null,
+    workStatus: value.work_status || null,
+    workSubmittedAt: value.work_submitted_at || null,
   };
   if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   return result;

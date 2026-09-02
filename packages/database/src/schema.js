@@ -311,9 +311,13 @@ CREATE TABLE IF NOT EXISTS student_projects (
   last_saved_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  archived_at TEXT,
+  deleted_at TEXT,
   FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_projects_student_updated ON student_projects(student_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projects_student_status_updated ON student_projects(student_id, org_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_projects(student_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_projects_org_updated ON student_projects(org_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_work_data_scope ON student_projects(org_id, class_id, course_lesson_id, updated_at DESC);
 
@@ -623,6 +627,13 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 try { db.exec('ALTER TABLE credit_entries ADD COLUMN reversal_of TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_entries_reversal_of ON credit_entries(reversal_of) WHERE reversal_of IS NOT NULL');
+// Lightweight forward-compatible migration for student project management.
+try { db.exec('ALTER TABLE student_projects ADD COLUMN archived_at TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE student_projects ADD COLUMN deleted_at TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_status_updated ON student_projects(student_id, org_id, status, updated_at DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_projects(student_id, deleted_at)');
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
 
 export function q(sql, params = []) { return db.prepare(sql).run(...params); }
