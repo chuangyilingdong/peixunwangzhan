@@ -249,49 +249,72 @@ function PlatformBilling({ api }) {
 function AdminInbox({ api }) {
   const inbox = useData(() => api.get('admin/inbox'), [api]);
   const organizations = useData(() => api.get('admin/organizations'), [api]);
-  const [form, setForm] = useState({ title: '', body: '', kind: 'NOTICE', scope: 'ALL_ORGS', orgIds: [], roles: ['ORG_ADMIN', 'TEACHER', 'STUDENT'], targetUrl: '', pinned: false, status: 'DRAFT' });
+  const templates = useData(() => api.get('admin/notification-templates'), [api]);
+  const emptyForm = { title: '', body: '', kind: 'NOTICE', scope: 'ALL_ORGS', orgIds: [], roles: ['ORG_ADMIN', 'TEACHER', 'STUDENT'], targetUrl: '', pinned: false, status: 'DRAFT', publishAt: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [templateName, setTemplateName] = useState('');
   const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
   async function create(event) {
     event.preventDefault(); setSaving(true); setMessage('');
     try {
-      await api.post('admin/inbox', { title: form.title, body: form.body, kind: form.kind, targetUrl: form.targetUrl || null, pinned: form.pinned, status: form.status, audience: { scope: form.scope, orgIds: form.orgIds, roles: form.roles } });
-      setForm({ title: '', body: '', kind: 'NOTICE', scope: 'ALL_ORGS', orgIds: [], roles: ['ORG_ADMIN', 'TEACHER', 'STUDENT'], targetUrl: '', pinned: false, status: 'DRAFT' }); setMessage(form.status === 'PUBLISHED' ? '通知已发布并生成投递记录。' : '通知草稿已保存。'); inbox.refresh();
+      const publishAt = form.status === 'SCHEDULED' && form.publishAt ? new Date(form.publishAt).toISOString() : null;
+      await api.post('admin/inbox', { title: form.title, body: form.body, kind: form.kind, targetUrl: form.targetUrl || null, pinned: form.pinned, status: form.status, publishAt, audience: { scope: form.scope, orgIds: form.orgIds, roles: form.roles } });
+      setForm(emptyForm); setMessage(form.status === 'PUBLISHED' ? '通知已发布并生成投递记录。' : form.status === 'SCHEDULED' ? '通知已加入定时发布队列。' : '通知草稿已保存。'); inbox.refresh();
     } catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }
   async function update(item, status) {
-    try { await api.put(`admin/inbox/${item.id}`, { status }); setMessage(status === 'PUBLISHED' ? '通知已发布。' : '通知已撤回。'); inbox.refresh(); } catch (err) { setMessage(err.message); }
+    try { await api.put(`admin/inbox/${item.id}`, { status }); setMessage(status === 'PUBLISHED' ? '通知已发布。' : status === 'RECALLED' ? '通知已撤回。' : '通知已更新。'); inbox.refresh(); } catch (err) { setMessage(err.message); }
+  }
+  async function saveTemplate() {
+    setMessage('');
+    try {
+      await api.post('admin/notification-templates', { name: templateName, title: form.title, body: form.body, kind: form.kind, targetUrl: form.targetUrl || null, audience: { scope: form.scope, orgIds: form.orgIds, roles: form.roles } });
+      setTemplateName(''); setMessage('通知模板已保存。'); templates.refresh();
+    } catch (err) { setMessage(err.message); }
+  }
+  async function toggleTemplate(item) {
+    try { await api.put(`admin/notification-templates/${item.id}`, { status: item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); templates.refresh(); } catch (err) { setMessage(err.message); }
+  }
+  function applyTemplate(item) {
+    setForm((old) => ({ ...old, title: item.title, body: item.body, kind: item.kind, targetUrl: item.targetUrl || '', scope: item.audience?.scope || 'ALL_ORGS', orgIds: item.audience?.orgIds || [], roles: item.audience?.roles || ['ORG_ADMIN', 'TEACHER', 'STUDENT'] }));
+    setMessage(`已套用模板“${item.name}”。`);
   }
   function toggleRole(role) { setForm((old) => ({ ...old, roles: old.roles.includes(role) ? old.roles.filter((item) => item !== role) : [...old.roles, role] })); }
   return <>
-    <PageHeader eyebrow="平台运营" title="站内信" description="向机构管理员、教师和学员投递可追踪的站内通知。" actions={<button className="secondary-button" onClick={inbox.refresh}>刷新</button>} />
+    <PageHeader eyebrow="平台运营" title="站内信" description="向机构管理员、教师和学员投递可追踪的站内通知。" actions={<button className="secondary-button" onClick={() => { inbox.refresh(); templates.refresh(); }}>刷新</button>} />
     <div className="split"><Panel title="新建通知"><form onSubmit={create}>
       <label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label>
       <label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>
-      <div className="form-grid"><label>类型<select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}><option value="NOTICE">通知</option><option value="ANNOUNCEMENT">公告</option><option value="REMINDER">提醒</option></select></label><label>保存状态<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">立即发布</option></select></label></div>
+      <div className="form-grid"><label>类型<select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}><option value="NOTICE">通知</option><option value="ANNOUNCEMENT">公告</option><option value="REMINDER">提醒</option></select></label><label>保存状态<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">立即发布</option><option value="SCHEDULED">定时发布</option></select></label></div>
+      {form.status === 'SCHEDULED' ? <label>发布时间<input type="datetime-local" value={form.publishAt} onChange={(e) => setForm({ ...form, publishAt: e.target.value })} required /></label> : null}
       <label>接收机构<select value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value, orgIds: [] })}><option value="ALL_ORGS">全部可用机构</option><option value="ORG_IDS">指定机构</option></select></label>
       {form.scope === 'ORG_IDS' ? <label>指定机构<select multiple value={form.orgIds} onChange={(e) => setForm({ ...form, orgIds: [...e.target.selectedOptions].map((option) => option.value) })}>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
       <div className="row-actions top-gap"><span className="muted">接收角色：</span>{[['ORG_ADMIN', '机构管理员'], ['TEACHER', '教师'], ['STUDENT', '学员']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div>
       <label>跳转地址（可选）<input value={form.targetUrl} placeholder="例如 /courses" onChange={(e) => setForm({ ...form, targetUrl: e.target.value })} /></label>
       <label className="row-actions"><input type="checkbox" checked={form.pinned} onChange={(e) => setForm({ ...form, pinned: e.target.checked })} /> 置顶通知</label>
-      {message ? <Notice tone={message.includes('失败') || message.includes('不能为空') ? 'danger' : 'success'}>{message}</Notice> : null}
+      {message ? <Notice tone={message.includes('失败') || message.includes('不能为空') || message.includes('必须') ? 'danger' : 'success'}>{message}</Notice> : null}
       <button className="primary-button" disabled={saving}>{saving ? '保存中…' : '保存通知'}</button>
-    </form></Panel><Panel title="投递说明"><Notice tone="info">发布会按目标机构和角色生成一次性投递记录；重复发布不会重复创建同一用户的收件记录。邮件、短信、微信和定时任务暂未接入。</Notice></Panel></div>
-    <Panel title="平台通知记录">{inbox.loading || organizations.loading ? <Loading /> : inbox.error ? <ErrorState error={inbox.error} onRetry={inbox.refresh} /> : inbox.data.items.length ? <div className="table-wrap"><table><thead><tr><th>通知</th><th>范围</th><th>投递 / 未读</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>{inbox.data.items.map((item) => <tr key={item.id}><td><strong>{item.pinned ? '📌 ' : ''}{item.title}</strong><div className="muted">{item.body}</div></td><td>{item.audience?.scope === 'ALL_ORGS' ? '全部机构' : `指定 ${item.audience?.orgIds?.length || 0} 家机构`}<div className="muted">{(item.audience?.roles || []).join(' / ')}</div></td><td>{item.recipientCount} 人<div className="muted">未读 {item.unreadCount}</div></td><td><Status value={item.status} />{item.deliveryFailedCount ? <div className="muted">失败 {item.deliveryFailedCount}</div> : null}</td><td>{formatDate(item.publishAt || item.createdAt)}</td><td>{item.status === 'DRAFT' ? <button className="secondary-button" onClick={() => update(item, 'PUBLISHED')}>发布</button> : item.status === 'PUBLISHED' ? <button className="secondary-button" onClick={() => update(item, 'RECALLED')}>撤回</button> : <span className="muted">已撤回</span>}</td></tr>)}</tbody></table></div> : <Empty title="还没有平台通知" body="创建并发布后，机构收件箱会出现真实通知。" />}</Panel>
+    </form></Panel><Panel title="通知模板">
+      <div className="form-grid"><label>模板名称<input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="例如：课程更新提醒" /></label><label>保存当前内容<button type="button" className="secondary-button top-gap" onClick={saveTemplate}>保存为模板</button></label></div>
+      {templates.loading ? <Loading /> : templates.error ? <ErrorState error={templates.error} onRetry={templates.refresh} /> : templates.data.items.length ? <div className="card-list">{templates.data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><strong>{item.name}</strong><Status value={item.status} /></div><p>{item.title}</p><div className="row-actions"><button className="secondary-button" disabled={item.status !== 'ACTIVE'} onClick={() => applyTemplate(item)}>套用</button><button className="text-button" onClick={() => toggleTemplate(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button></div></article>)}</div> : <Empty title="暂无通知模板" body="填写左侧通知内容后可保存为复用模板。" />}
+      <Notice tone="info">定时通知由服务进程内调度器发布，并在站内信请求到达时补偿扫描；邮件、短信和微信通道仍未接入。</Notice>
+    </Panel></div>
+    <Panel title="平台通知记录">{inbox.loading || organizations.loading ? <Loading /> : inbox.error ? <ErrorState error={inbox.error} onRetry={inbox.refresh} /> : inbox.data.items.length ? <div className="table-wrap"><table><thead><tr><th>通知</th><th>范围</th><th>投递 / 未读</th><th>状态</th><th>发布时间</th><th>操作</th></tr></thead><tbody>{inbox.data.items.map((item) => <tr key={item.id}><td><strong>{item.pinned ? '置顶 · ' : ''}{item.title}</strong><div className="muted">{item.kind} · {item.body}</div></td><td>{item.audience?.scope === 'ALL_ORGS' ? '全部机构' : `${item.audience?.orgIds?.length || 0} 家机构`}<div className="muted">{item.audience?.roles?.join(' / ')}</div></td><td>{item.recipientCount} / {item.unreadCount}</td><td><Status value={item.status} /></td><td>{item.publishAt ? formatDate(item.publishAt) : '—'}</td><td><div className="row-actions">{['DRAFT', 'SCHEDULED', 'RECALLED'].includes(item.status) ? <button className="secondary-button" onClick={() => update(item, 'PUBLISHED')}>立即发布</button> : null}{item.status === 'PUBLISHED' ? <button className="text-button" onClick={() => update(item, 'RECALLED')}>撤回</button> : null}</div></td></tr>)}</tbody></table></div> : <Empty title="还没有平台通知" body="可先保存草稿、立即发布或设置定时发布。" />}</Panel>
   </>;
 }
 
 function AdminMaterials({ api }) {
-  const materials = useData(() => api.get('admin/materials'), [api]);
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const materials = useData(() => api.get('admin/materials'), [api]); const organizations = useData(() => api.get('admin/organizations'), [api]);
   const [form, setForm] = useState({ title: '', description: '', category: 'GENERAL', visibility: 'ALL_ORGS', orgIds: [], mimeType: '', resourceUrl: '', coverUrl: '' });
-  const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false); const [stats, setStats] = useState({ loading: false, data: null, error: null });
   async function create(event) {
     event.preventDefault(); setSaving(true); setMessage('');
     try { await api.post('admin/materials', { ...form, orgIds: form.visibility === 'ALL_ORGS' ? [] : form.orgIds }); setForm({ title: '', description: '', category: 'GENERAL', visibility: 'ALL_ORGS', orgIds: [], mimeType: '', resourceUrl: '', coverUrl: '' }); setMessage('物料元数据已保存。'); materials.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }
   async function toggle(item) { try { await api.put(`admin/materials/${item.id}`, { status: item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); materials.refresh(); } catch (err) { setMessage(err.message); } }
+  async function loadStats(item) { setStats({ loading: true, data: null, error: null }); try { setStats({ loading: false, data: await api.get(`admin/materials/${item.id}/stats`), error: null }); } catch (error) { setStats({ loading: false, data: null, error }); } }
   return <>
-    <PageHeader eyebrow="平台内容" title="素材与宣传物料" description="维护招生海报、课程介绍和活动资料的元数据与授权范围。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
+    <PageHeader eyebrow="平台内容" title="素材与宣传物料" description="维护招生海报、课程介绍和活动资料的元数据、授权范围与真实使用统计。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
     <Notice tone="info">当前只维护文件元数据和外部资源地址，不提供虚假的上传、OSS 或下载能力；未配置真实资源的物料会在机构端明确显示为“资源待配置”。</Notice>
     <div className="split"><Panel title="新增宣传物料"><form onSubmit={create}>
       <label>名称<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>说明<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
@@ -300,8 +323,8 @@ function AdminMaterials({ api }) {
       <div className="form-grid"><label>MIME 类型（可选）<input value={form.mimeType} placeholder="application/pdf" onChange={(e) => setForm({ ...form, mimeType: e.target.value })} /></label><label>真实资源地址（可选）<input value={form.resourceUrl} placeholder="由外部存储决策后填写" onChange={(e) => setForm({ ...form, resourceUrl: e.target.value })} /></label></div>
       <label>封面地址（可选）<input value={form.coverUrl} onChange={(e) => setForm({ ...form, coverUrl: e.target.value })} /></label>
       {message ? <Notice tone={message.includes('失败') || message.includes('不能为空') ? 'danger' : 'success'}>{message}</Notice> : null}<button className="primary-button" disabled={saving}>{saving ? '保存中…' : '保存物料'}</button>
-    </form></Panel><Panel title="物料授权"><Notice tone="info">“全部机构”会对所有状态正常的机构开放；“指定机构”只会在服务端向授权机构返回。教师与机构管理员均可查看机构可见物料。</Notice></Panel></div>
-    <Panel title="物料列表">{materials.loading || organizations.loading ? <Loading /> : materials.error ? <ErrorState error={materials.error} onRetry={materials.refresh} /> : materials.data.items.length ? <div className="table-wrap"><table><thead><tr><th>物料</th><th>范围</th><th>资源</th><th>状态</th><th>使用次数</th><th>操作</th></tr></thead><tbody>{materials.data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.category} · {item.description || '暂无说明'}</div></td><td>{item.visibility === 'ALL_ORGS' ? '全部机构' : `指定 ${item.assignedOrgCount} 家机构`}</td><td>{item.resourceConfigured ? <span className="status success">已配置</span> : <span className="muted">待配置</span>}</td><td><Status value={item.status} /></td><td>{item.eventCount}</td><td><button className="secondary-button" onClick={() => toggle(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button></td></tr>)}</tbody></table></div> : <Empty title="还没有宣传物料" body="先保存一条物料元数据，再决定是否配置外部资源。" />}</Panel>
+    </form></Panel><Panel title="物料授权"><Notice tone="info">“全部机构”会对所有状态正常的机构开放；“指定机构”只会在服务端向授权机构返回。教师与机构管理员均可查看机构可见物料。</Notice>{stats.loading ? <Loading label="正在读取统计…" /> : stats.error ? <ErrorState error={stats.error} /> : stats.data ? <><h3>{stats.data.material.title}</h3><div className="metrics"><MetricCard label="事件总数" value={stats.data.summary.totalEvents} hint={`${stats.data.summary.organizationCount} 家机构`} /><MetricCard label="查看" value={stats.data.summary.viewCount} hint="VIEW" tone="teal" /><MetricCard label="使用" value={stats.data.summary.useCount} hint="USE" tone="orange" /><MetricCard label="下载" value={stats.data.summary.downloadCount} hint="DOWNLOAD" tone="pink" /></div>{stats.data.organizations.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>查看</th><th>使用</th><th>下载</th><th>最近事件</th></tr></thead><tbody>{stats.data.organizations.map((item) => <tr key={item.orgId}><td>{item.organizationName}</td><td>{item.viewCount}</td><td>{item.useCount}</td><td>{item.downloadCount}</td><td>{formatDate(item.lastEventAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无使用事件" />}</> : <Empty title="选择一条物料查看统计" />}</Panel></div>
+    <Panel title="物料列表">{materials.loading || organizations.loading ? <Loading /> : materials.error ? <ErrorState error={materials.error} onRetry={materials.refresh} /> : materials.data.items.length ? <div className="table-wrap"><table><thead><tr><th>物料</th><th>范围</th><th>资源</th><th>状态</th><th>使用次数</th><th>操作</th></tr></thead><tbody>{materials.data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.category} · {item.description || '暂无说明'}</div></td><td>{item.visibility === 'ALL_ORGS' ? '全部机构' : `指定 ${item.assignedOrgCount} 家机构`}</td><td>{item.resourceConfigured ? <span className="status success">已配置</span> : <span className="muted">待配置</span>}</td><td><Status value={item.status} /></td><td>{item.eventCount}</td><td><div className="row-actions"><button className="secondary-button" onClick={() => loadStats(item)}>统计</button><button className="secondary-button" onClick={() => toggle(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button></div></td></tr>)}</tbody></table></div> : <Empty title="还没有宣传物料" body="先保存一条物料元数据，再决定是否配置外部资源。" />}</Panel>
   </>;
 }
 

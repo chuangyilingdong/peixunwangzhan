@@ -400,6 +400,22 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_scope_status ON notifications(scope_type, org_id, status, publish_at, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS notification_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'NOTICE' CHECK (kind IN ('NOTICE','ANNOUNCEMENT','REMINDER')),
+  target_url TEXT,
+  audience TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','DISABLED')),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_notification_templates_status_updated ON notification_templates(status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS notification_recipients (
   id TEXT PRIMARY KEY,
   notification_id TEXT NOT NULL,

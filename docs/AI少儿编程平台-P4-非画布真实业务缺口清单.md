@@ -40,8 +40,8 @@
 | `/works` | `/super/published-works` 作品库 | SUPER_ADMIN | `真实已有（2026-09-02）` | `works`、`student_projects`、`users`、`organizations`、`classes`、`course_lessons` | 新增 `GET /api/admin/works`、`PUT /api/admin/works/:id/unpublish` | `PENDING/APPROVED/REJECTED/PUBLISHED`；仅 `SUPER_ADMIN`；下架写为 `REJECTED`、记录原因与审核人并审计 `PLATFORM_WORK_UNPUBLISH` | 作品详情、精选、举报、违规处理、公开分享；服务端尚未强制仅 `PUBLISHED` 可下架，当前由前端操作边界约束 | 临时库验证状态/机构/关键词筛选、搜索、下架、审计与机构/学生 403 |
 | `/hackathon` | `/super/hackathon` 黑客松审核 | SUPER_ADMIN | `页面壳层` | 现无赛季表，需迁移 | 待新增 | `DRAFT/ACTIVE/ENDED`；投稿 `PENDING/APPROVED/REJECTED/WITHDRAWN` | 数据模型、赛季配置、审核流 | 表迁移后用临时库验证状态机 |
 | `/billing` | `/super/usage-records + recharge + billing-settings` | SUPER_ADMIN | `真实已有（2026-09-02，用量汇总与明细；在线充值/计费设置仍外部决策）` | `org_billing_accounts`、`usage_records`、`recharge_orders`、`users`、`organizations`、`class_sessions`、`classes` | 现有 `GET /api/admin/billing/usage-overview`；新增 `GET /api/admin/billing/usage-records` | 仅 `SUPER_ADMIN`；支持 `days/orgId/modality/status/search`；无效 `days` 返回 `VALIDATION_ERROR` | 在线支付回调、计费规则/模型开关配置、冻结与预警、导出对账 | 临时库验证汇总、筛选、搜索、上下文关联、非法参数与越权 403 |
-| `/materials` | `/super/materials + promo-materials` | SUPER_ADMIN | `真实已有（2026-09-02，元数据与外链）` | `promo_materials`、`promo_material_assignments`、`promo_material_events` | `GET/POST/PUT /api/admin/materials` | 物料 `DRAFT/ACTIVE/DISABLED`；平台超管写入 | 真实文件上传、OSS、封面上传、下载代理与统计详情 | 当前只维护元数据和可选外部资源地址；未配置资源时下载明确拒绝 |
-| `/inbox` | `/super/inbox` 站内信 | SUPER_ADMIN | `真实已有（2026-09-02，第一批）` | `notifications`、`notification_recipients` | `GET /api/admin/inbox`、`POST /api/admin/inbox`、`PUT /api/admin/inbox/:id` | `DRAFT/PUBLISHED/RECALLED`；平台超管发布/撤回 | 定时发布、投递失败重试、邮件/短信/微信渠道、模板 | 支持按机构/角色投递、草稿、立即发布、撤回、置顶和跳转；发布同步生成接收记录 |
+| `/materials` | `/super/materials + promo-materials` | SUPER_ADMIN | `真实已有（2026-09-02，元数据、外链与统计）` | `promo_materials`、`promo_material_assignments`、`promo_material_events` | `GET/POST/PUT /api/admin/materials`、`GET /api/admin/materials/:id/stats` | 物料 `DRAFT/ACTIVE/DISABLED`；平台超管写入 | 真实文件上传、OSS、封面上传、下载代理与签名 | 当前维护元数据和可选外部资源地址；统计详情返回汇总、机构聚合与最近事件；未配置资源时下载明确拒绝 |
+| `/inbox` | `/super/inbox` 站内信 | SUPER_ADMIN | `真实已有（2026-09-02，两批）` | `notifications`、`notification_recipients`、`notification_templates` | `GET/POST/PUT /api/admin/inbox`、`GET/POST/PUT /api/admin/notification-templates` | `DRAFT/SCHEDULED/PUBLISHED/RECALLED`（`SCHEDULED` 为 `DRAFT + publish_at` 的逻辑状态）；仅平台超管管理 | 投递失败重试、高可用异步队列、邮件/短信/微信渠道 | 支持模板、按机构/角色投递、草稿、立即/定时发布、撤回、置顶和跳转；定时到期生成接收记录并审计 |
 | `/admins` | `/super/platform-admins` 平台管理员 | SUPER_ADMIN | `真实已有（2026-09-02）` | `users(role=SUPER_ADMIN)` | 新增 `GET/POST/PUT /api/admin/platform-admins` | 用户 `ACTIVE/DISABLED`；`ADMIN_*` 权限码 | 独立 enabled/password/permissions 子路径可在后续扩展 | 创建/编辑/停自己失败/非法权限码/重复登录名 |
 | `/login`、`/forbidden` 等壳层 | 登录、无权限 | public / 登录 | `真实已有` | `sessions` | `/api/auth/*`、`/api/me` | 会话失效与顶替错误码 | 手机绑定、改密、被顶提示 | 现有 P3 认证回归覆盖 |
 
@@ -56,7 +56,7 @@
 | `/courses` | `/org/courses` 课程中心 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02）` | `course_series`、`course_lessons`、`course_assignments` | `GET /api/org/course-series` | 平台公开/授权/机构自有；只含 `PUBLISHED` | 课件资产、上课入口聚合 | 管理员/教师可读，未登录 401，student 403 |
 | `/packages` | `/org/billing-packages` 积分套餐 | ORG_ADMIN 写、TEACHER 只读 | `真实已有（2026-09-02）` | `billing_packages` | `GET/POST` 已有；新增 `GET/PUT /:id` | 套餐 `ACTIVE/DISABLED`；写操作 ORG_ADMIN | 与学员开通单联动 | 教师读 200、写 403；管理员编辑启停成功 |
 | `/usage` | `/org/usage-records` 积分用量 | ORG_ADMIN、TEACHER 按权限 | `真实已有（2026-09-02）` | `org_billing_accounts`、`usage_records`、`class_sessions`、`classes` | overview 已有；新增 usage-records | `SUCCESS/FAILED/BLOCKED` | 今日/7日/30日切换与导出 | SQL 关联经 class_sessions；筛选与越权校验 |
-| `/inbox` | `/org/inbox` 站内信 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，第一批）` | `notifications`、`notification_recipients` | `GET/POST /api/org/inbox`、`PUT /api/org/inbox/:id/read`、`PUT /api/org/inbox/read-all` | 平台公告接收；机构通知仅 ORG_ADMIN 可发；按当前机构隔离 | 定时/异步投递、失败重试、忽略状态、邮件/短信/微信渠道 | 临时库验证管理员/教师接收、单条/全部已读、机构发送权限和撤回隐藏 |
+| `/inbox` | `/org/inbox` 站内信 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，两批）` | `notifications`、`notification_recipients` | `GET/POST /api/org/inbox`、`PUT /api/org/inbox/:id/read`、`PUT /api/org/inbox/read-all` | 平台即时/定时公告接收；机构通知仅 ORG_ADMIN 可发；按当前机构与本人接收记录隔离 | 高可用异步队列、失败重试、忽略状态、邮件/短信/微信渠道 | 临时库验证管理员/教师接收、单条/全部已读、机构发送权限、定时到期和撤回隐藏 |
 | `/work-data` | `/org/published-work-data` 作品数据中心 | ORG_ADMIN | `页面壳层` | `works` + 未来 visit 表 | 待新增 | 7/14/30 日统计 | 访问去重、趋势、授权访客 | 需公开分享与访客模型迁移 |
 | `/enrollment` | `/org/student-orders` 学员开通 | ORG_ADMIN | `页面壳层` | 需新增开通单/商品表 | 待新增 | 履约、收款、作废状态机 | 数据模型与 API | 设计迁移后实施 |
 | `/recharge` | `/org/recharge` 积分充值 | ORG_ADMIN | `真实账务视图（2026-09-02）；在线支付仍外部决策` | `org_billing_accounts`、`recharge_orders`、`credit_entries` | 新增 `GET /api/org/billing/account-overview` | 仅 `ORG_ADMIN`；教师返回 `ORG_BILLING_PERMISSION_DENIED`；充值单 `PENDING/PAID/CANCELLED/EXPIRED` | 微信/支付宝支付回调、冻结金额、退款/冲正、人工调整、导出对账 | 管理员可读余额/累计/订单/流水；教师 403；不伪造到账数据 |
@@ -64,7 +64,7 @@
 | `/hackathon` | `/org/hackathon` 黑客松 | ORG_ADMIN | `页面壳层` | 需新增赛季/投稿表 | 待新增 | 投稿状态机 | 建表、配置、推送审核 | 数据模型迁移后实施 |
 | `/afee` | `/org/mp-notify` 阿飞提醒 | ORG_ADMIN | `页面壳层` | 需新增微信绑定/访客表 | 待新增 | 绑定状态机 | 微信开放平台对接 | 外部决策 |
 
-## 5. 学生端入口清单（10 个）
+## 5. 学生端入口清单（11 个）
 
 |---|---|---|---|---|---|---|---|---|
 | `/dashboard` | 学生学习首页 | STUDENT | `真实已有` | `student_projects`、`works`、`classes`、`class_members` | 现有项目/画布/作品 API | 项目与作品状态机已有 | 班级、课程、课单、任务、套餐用量 | 需先补班级视角 API |
@@ -75,6 +75,7 @@
 | `/courses` | 我的课程 | STUDENT | `真实已有（2026-09-02）` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons`、`student_projects`、`works` | `GET /api/student/courses` | 课单进度；学生本人 / 机构隔离 | 学习首页任务、老师通知、继续创作聚合待补 | 临时库验证课程、班级、课时、作品状态与空态；学生只能看到本人数据 |
 | `/credits` | 套餐与用量 | STUDENT | `真实已有（2026-09-02）` | `users`、`billing_packages`、`usage_records`、`student_projects`、`class_sessions`、`classes` | `GET /api/student/credits` | 套餐有效期；学生本人 / 机构隔离 | 真实扣费服务、充值与对账仍属后续 / 外部决策 | 临时库验证额度、模态 / 状态 / 天数筛选、课堂上下文与越权 |
 | `/account` | 账号安全 | STUDENT | `真实已有（2026-09-02）` | `users`、`sessions`、`organizations`、`classes`、`class_members` | `GET/PUT /api/student/account`、`/profile`、`/password`、`/sessions/:id/revoke` | 账号状态；敏感操作需本人当前密码；学生不可改机构归属 | 头像、监护人资料、隐私设置、注销 / 数据请求入口待补 | 临时库验证资料校验、旧密码 / 弱密码 / 重放、当前及跨学生会话撤销 |
+| `/inbox` | 消息中心 | STUDENT | `真实已有（2026-09-02）` | `notifications`、`notification_recipients` | `GET /api/student/inbox`、`PUT /api/student/inbox/:id/read`、`PUT /api/student/inbox/read-all` | 仅本人已投递且当前机构范围内的 `PUBLISHED` 消息；支持单条/全部已读 | 忽略状态、失败重试、外部通知通道 | 临时库验证平台公告、机构学生通知、定时到期、已读持久化、撤回隐藏与跨端越权 |
 | `/help` | 学习帮助 | STUDENT | `页面壳层` | 静态内容 | 无 | 无 | 正式帮助内容 | 内容属产品决策，可接静态 CMS |
 | `/login` | 登录 | public | `真实已有` | `sessions` | auth | 账号状态与会话错误码 | 手机流程 | 现有认证回归 |
 
@@ -95,7 +96,7 @@
 
 1. **P4-01 平台计费与作品闭环（2026-09-02 第一批已完成）**：平台用量明细、平台作品库、作品下架、机构账务视图；在线支付、计费规则配置、精选/举报/违规处理未包含，转入后续批次。
 2. **P4-02 学生课程与账号闭环（2026-09-02 第一批已完成）**：学生课程、额度、账号安全已接通现有表和真实 API；学习首页任务聚合、AI 能力中心增强、头像 / 监护人 / 隐私 / 注销等剩余项转入后续批次。
-3. **P4-03 通知与物料闭环（2026-09-02 第一批已完成）**：平台/机构站内信和宣传物料元数据、可见范围、已读/使用事件已接通；定时投递、外部通知通道、真实上传与下载代理转入后续批次。
+3. **P4-03 通知与物料闭环（2026-09-02 第二批已完成）**：在第一批基础上补齐通知模板、逻辑定时发布与补偿扫描、学生消息中心、物料统计详情和接收范围同步；失败重试、高可用队列、外部通知通道、真实上传与下载代理转入后续基础设施批次。
 4. **P4-04 运营活动与外部能力**：黑客松、微信提醒、支付、上传、真实 AI 均需先迁移或明确外部决策。
 
 ## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03）
@@ -137,5 +138,17 @@
 - [x] `node .\p3-api-integration.mjs` 回归通过，`46 pass / 0 fail`。
 - [x] `pnpm.cmd run build` 四端生产构建全部通过；`git diff --check` 通过。
 - [x] 平台端 `/inbox`、`/materials` 与机构端 `/inbox`、`/materials` 已由页面壳层升级为真实通知/物料元数据页面；通知按机构/角色投递，物料按机构隔离，事件和权限在服务端校验。
-- [x] 已知边界：通知定时发布、失败重试、邮件/短信/微信、模板、真实文件上传、OSS、封面上传、下载代理/签名、物料统计详情、学生端通知中心和阿飞提醒仍未实现。
+- [x] 第一批结束时登记的边界中，通知定时发布、模板、物料统计详情和学生端通知中心已在第二批完成；当前仍缺失败重试、高可用异步队列、邮件/短信/微信、真实文件上传、OSS、封面上传、下载代理/签名和阿飞提醒。
 - [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不触碰真实 `platform.db`，不部署线上环境。
+
+### 8.5 P4-03 第二批验收记录（2026-09-02）
+
+- [x] 新增 `notification_templates` 表及平台模板查询、创建、更新 / 启停 API；平台页面可保存当前通知为模板并套用。
+- [x] 通知支持逻辑 `SCHEDULED`：数据库保持现有约束，以 `status='DRAFT' + publish_at` 保存；服务进程每 15 秒扫描，平台 / 机构 / 学生收件箱 GET 时补偿扫描，到期后生成投递并写入原发送人审计。
+- [x] 学生端新增 `/inbox` 与本人收件箱、单条已读、全部已读 API；平台公告和机构学生通知均通过本人接收记录、机构范围和发布状态校验。
+- [x] 平台物料新增 `GET /api/admin/materials/:id/stats`，返回 VIEW / USE / DOWNLOAD 汇总、机构 / 用户数量、按机构聚合与最近事件。
+- [x] 发布 / 重新发布会删除不再属于新目标范围的旧接收记录，同时保留仍在范围内用户的既有已读状态。
+- [x] 临时 SQLite 初始化 + seed 后，P4-03 第二批 API 验收 `35 pass / 0 fail`；覆盖模板、即时 / 定时通知、学生与机构收件箱、已读持久化、物料事件统计、撤回隐藏和跨端越权。
+- [x] `node .\p3-api-integration.mjs` 回归通过，`46 pass / 0 fail`；`pnpm.cmd run build` 四端生产构建通过；后端语法与 `git diff --check` 通过。
+- [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不触碰真实 `platform.db`，不部署线上环境。
+- [ ] 当前边界：投递失败重试、高可用异步队列、邮件 / 短信 / 微信、真实上传 / OSS / 下载代理与签名、阿飞提醒；未将这些外部能力伪装为已完成。
