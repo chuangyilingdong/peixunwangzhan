@@ -326,6 +326,196 @@ function reportResolution(body) {
   return resolution;
 }
 
+
+const WORK_DATA_DAYS = new Set([7, 14, 30]);
+
+function workDataFilters(ctx, auth, currentOrgId) {
+  if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('作品数据中心仅机构管理员可访问', 'WORK_DATA_PERMISSION_DENIED');
+  const rawDays = ctx.search.get('days');
+  const days = rawDays === null || rawDays === '' ? 30 : Number(rawDays);
+  if (!Number.isInteger(days) || !WORK_DATA_DAYS.has(days)) throw errors.badRequest('统计周期仅支持 7、14 或 30 天', 'INVALID_WORK_DATA_DAYS');
+  const filters = {
+    orgId: currentOrgId,
+    days,
+    since: new Date(Date.now() - days * 86400000).toISOString(),
+    classId: String(ctx.search.get('classId') || '').trim() || null,
+    lessonId: String(ctx.search.get('lessonId') || '').trim() || null,
+    studentId: String(ctx.search.get('studentId') || '').trim() || null,
+  };
+  if (filters.classId && !row('SELECT id FROM classes WHERE id=? AND org_id=?', [filters.classId, currentOrgId])) {
+    throw errors.notFound('班级不存在', 'WORK_DATA_CLASS_NOT_FOUND');
+  }
+  if (filters.lessonId && !row(
+    'SELECT lesson.id FROM course_lessons lesson WHERE lesson.id=? AND (EXISTS (SELECT 1 FROM student_projects project WHERE project.org_id=? AND project.course_lesson_id=lesson.id) OR EXISTS (SELECT 1 FROM works work WHERE work.org_id=? AND work.course_lesson_id=lesson.id))',
+    [filters.lessonId, currentOrgId, currentOrgId],
+  )) throw errors.notFound('课程课时不存在', 'WORK_DATA_LESSON_NOT_FOUND');
+  if (filters.studentId && !row("SELECT id FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [filters.studentId, currentOrgId])) {
+    throw errors.notFound('学员不存在', 'WORK_DATA_STUDENT_NOT_FOUND');
+  }
+  return filters;
+}
+
+function appendWorkDataScope(conditions, params, alias, filters) {
+  conditions.push(alias + '.org_id=?'); params.push(filters.orgId);
+  if (filters.classId) { conditions.push(alias + '.class_id=?'); params.push(filters.classId); }
+  if (filters.lessonId) { conditions.push(alias + '.course_lesson_id=?'); params.push(filters.lessonId); }
+  if (filters.studentId) { conditions.push(alias + '.student_id=?'); params.push(filters.studentId); }
+  return conditions.join(' AND ');
+}
+
+function zeroWorkDataMetrics(item) {
+  return {
+    ...item,
+    activeStudentCount: 0, activeProjectCount: 0, completedProjectCount: 0,
+    submittedWorkCount: 0, publishedWorkCount: 0, feedbackCount: 0,
+    aiCallCount: 0, aiCredits: 0, lastActivityAt: null,
+  };
+}
+
+function maxTimestamp(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return a > b ? a : b;
+}
+
+function workDataDimension(filters, dimension) {
+  const config = {
+    class: { column: 'class_id', itemKey: 'classId', nameKey: 'className' },
+    lesson: { column: 'course_lesson_id', itemKey: 'lessonId', nameKey: 'lessonTitle' },
+    student: { column: 'student_id', itemKey: 'studentId', nameKey: 'studentName' },
+  }[dimension];
+  if (!config) throw new Error('Unknown work-data dimension');
+
+  let baseItems;
+  if (dimension === 'class') {
+    const params = [filters.orgId]; let where = 'class.org_id=?';
+    if (filters.classId) { where += ' AND class.id=?'; params.push(filters.classId); }
+    baseItems = rows('SELECT class.id,class.name FROM classes class WHERE ' + where + ' ORDER BY class.name LIMIT 300', params)
+      .map((item) => ({ classId: item.id, className: item.name }));
+  } else if (dimension === 'lesson') {
+    const params = []; const conditions = [];
+    const projectScope = appendWorkDataScope(conditions, params, 'project', filters);
+    baseItems = rows(
+      'SELECT DISTINCT lesson.id,lesson.title FROM course_lessons lesson JOIN student_projects project ON project.course_lesson_id=lesson.id WHERE ' + projectScope + ' AND project.course_lesson_id IS NOT NULL ORDER BY lesson.title LIMIT 300',
+      params,
+    ).map((item) => ({ lessonId: item.id, lessonTitle: item.title }));
+  } else {
+    const params = [filters.orgId]; let where = "student.org_id=? AND student.role='STUDENT' AND student.deleted_at IS NULL";
+    if (filters.studentId) { where += ' AND student.id=?'; params.push(filters.studentId); }
+    baseItems = rows('SELECT student.id,student.display_name FROM users student WHERE ' + where + ' ORDER BY student.display_name LIMIT 500', params)
+      .map((item) => ({ studentId: item.id, studentName: item.display_name || '未命名学员' }));
+  }
+
+  const index = new Map(baseItems.map((item) => [item[config.itemKey], zeroWorkDataMetrics(item)]));
+  const merge = (entries, keys) => {
+    for (const entry of entries) {
+      const item = index.get(entry.group_id);
+      if (!item) continue;
+      for (const [source, target] of Object.entries(keys)) {
+        if (source === 'last_activity_at') item.lastActivityAt = maxTimestamp(item.lastActivityAt, entry[source]);
+        else item[target] = Number(entry[source] || 0);
+      }
+    }
+  };
+
+  {
+    const params = [filters.since, filters.since]; const conditions = [];
+    const scope = appendWorkDataScope(conditions, params, 'project', filters);
+    merge(rows(
+      'SELECT project.' + config.column + ' group_id,' +
+      ' COUNT(DISTINCT CASE WHEN project.updated_at>=? THEN project.student_id END) active_student_count,' +
+      ' SUM(CASE WHEN project.updated_at>=? THEN 1 ELSE 0 END) active_project_count,' +
+      " SUM(CASE WHEN project.updated_at>=? AND project.status IN ('SUBMITTED','GRADED') THEN 1 ELSE 0 END) completed_project_count," +
+      ' MAX(project.updated_at) last_activity_at FROM student_projects project WHERE ' + scope + ' GROUP BY project.' + config.column,
+      [filters.since, ...params],
+    ), {
+      active_student_count: 'activeStudentCount', active_project_count: 'activeProjectCount',
+      completed_project_count: 'completedProjectCount', last_activity_at: 'lastActivityAt',
+    });
+  }
+  {
+    const params = [filters.since, filters.since]; const conditions = [];
+    const scope = appendWorkDataScope(conditions, params, 'work', filters);
+    merge(rows(
+      'SELECT work.' + config.column + ' group_id,' +
+      ' SUM(CASE WHEN work.submitted_at>=? THEN 1 ELSE 0 END) submitted_work_count,' +
+      " SUM(CASE WHEN work.status='PUBLISHED' AND work.reviewed_at>=? THEN 1 ELSE 0 END) published_work_count," +
+      ' MAX(COALESCE(work.reviewed_at,work.submitted_at)) last_activity_at FROM works work WHERE ' + scope + ' GROUP BY work.' + config.column,
+      [...params],
+    ), {
+      submitted_work_count: 'submittedWorkCount', published_work_count: 'publishedWorkCount', last_activity_at: 'lastActivityAt',
+    });
+  }
+  {
+    const params = [filters.since]; const conditions = [];
+    const scope = appendWorkDataScope(conditions, params, 'work', filters);
+    merge(rows(
+      'SELECT work.' + config.column + ' group_id,COUNT(annotation.id) feedback_count,MAX(annotation.created_at) last_activity_at' +
+      ' FROM work_annotations annotation JOIN works work ON work.id=annotation.work_id AND work.org_id=annotation.org_id' +
+      ' WHERE annotation.created_at>=? AND ' + scope + ' GROUP BY work.' + config.column,
+      params,
+    ), { feedback_count: 'feedbackCount', last_activity_at: 'lastActivityAt' });
+  }
+  {
+    const params = [filters.since]; const conditions = [];
+    const scope = appendWorkDataScope(conditions, params, 'project', filters);
+    merge(rows(
+      'SELECT project.' + config.column + ' group_id,COUNT(usage.id) ai_call_count,COALESCE(SUM(usage.credits_charged),0) ai_credits,MAX(usage.created_at) last_activity_at' +
+      ' FROM usage_records usage JOIN student_projects project ON project.id=usage.project_id AND project.org_id=usage.org_id' +
+      " WHERE usage.status='SUCCESS' AND usage.created_at>=? AND " + scope + ' GROUP BY project.' + config.column,
+      params,
+    ), { ai_call_count: 'aiCallCount', ai_credits: 'aiCredits', last_activity_at: 'lastActivityAt' });
+  }
+  return [...index.values()].sort((a, b) => (
+    b.submittedWorkCount - a.submittedWorkCount || b.activeProjectCount - a.activeProjectCount || String(a[config.nameKey]).localeCompare(String(b[config.nameKey]), 'zh-CN')
+  ));
+}
+
+function buildWorkData(ctx, auth, currentOrgId) {
+  const filters = workDataFilters(ctx, auth, currentOrgId);
+  const classes = workDataDimension(filters, 'class');
+  const lessons = workDataDimension(filters, 'lesson');
+  const students = workDataDimension(filters, 'student');
+  const summary = students.reduce((result, item) => ({
+    activeStudents: result.activeStudents + item.activeStudentCount,
+    activeProjects: result.activeProjects + item.activeProjectCount,
+    completedProjects: result.completedProjects + item.completedProjectCount,
+    submittedWorks: result.submittedWorks + item.submittedWorkCount,
+    publishedWorks: result.publishedWorks + item.publishedWorkCount,
+    feedbackCount: result.feedbackCount + item.feedbackCount,
+    aiCalls: result.aiCalls + item.aiCallCount,
+    aiCredits: result.aiCredits + item.aiCredits,
+  }), { activeStudents: 0, activeProjects: 0, completedProjects: 0, submittedWorks: 0, publishedWorks: 0, feedbackCount: 0, aiCalls: 0, aiCredits: 0 });
+  const enrolledStudents = filters.classId
+    ? count("SELECT COUNT(DISTINCT member.user_id) n FROM class_members member JOIN users student ON student.id=member.user_id WHERE member.class_id=? AND member.role='STUDENT' AND member.removed_at IS NULL AND student.deleted_at IS NULL", [filters.classId])
+    : count("SELECT COUNT(*) n FROM users student WHERE student.org_id=? AND student.role='STUDENT' AND student.deleted_at IS NULL", [currentOrgId]);
+  const selectorClasses = rows('SELECT id,name FROM classes WHERE org_id=? ORDER BY name LIMIT 300', [currentOrgId]).map((item) => ({ id: item.id, name: item.name }));
+  const selectorLessons = rows(
+    'SELECT DISTINCT lesson.id,lesson.title FROM course_lessons lesson JOIN student_projects project ON project.course_lesson_id=lesson.id WHERE project.org_id=? ORDER BY lesson.title LIMIT 300',
+    [currentOrgId],
+  ).map((item) => ({ id: item.id, title: item.title }));
+  const selectorStudents = rows("SELECT id,display_name FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL ORDER BY display_name LIMIT 500", [currentOrgId])
+    .map((item) => ({ id: item.id, name: item.display_name || '未命名学员' }));
+  return {
+    scope: { role: 'ORG_ADMIN', days: filters.days, since: filters.since, classId: filters.classId, lessonId: filters.lessonId, studentId: filters.studentId },
+    definitions: {
+      active: '统计周期内有保存或状态更新的项目及对应学员。',
+      completed: '统计周期内进入已提交或已评分状态的项目。',
+      published: '统计周期内完成审核并发布到本机构作品墙的作品。',
+      feedback: '统计周期内教师新增的画布批注与整体点评。',
+      ai: '统计周期内状态为成功且关联项目的 AI 调用与扣减积分。',
+    },
+    summary: { enrolledStudents, ...summary },
+    filters: { classes: selectorClasses, lessons: selectorLessons, students: selectorStudents },
+    breakdowns: { classes, lessons, students },
+  };
+}
+
+function maskedStudentName(name) {
+  const value = String(name || '').trim();
+  return value ? value.slice(0, 1) + '同学' : '学员';
+}
+
 export async function handleAdmin(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/')) return null;
@@ -592,6 +782,33 @@ export async function handleOrg(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/')) return null;
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']); const currentOrgId = orgId(auth); const part = pathname.slice('/api/org'.length);
+  if (part === '/work-data' && method === 'GET') {
+    return buildWorkData(ctx, auth, currentOrgId);
+  }
+  if (part === '/work-data/export' && method === 'GET') {
+    const data = buildWorkData(ctx, auth, currentOrgId);
+    const items = data.breakdowns.students
+      .filter((item) => item.activeProjectCount || item.completedProjectCount || item.submittedWorkCount || item.publishedWorkCount || item.feedbackCount || item.aiCallCount)
+      .map((item) => ({
+        studentAlias: maskedStudentName(item.studentName),
+        activeProjects: item.activeProjectCount, completedProjects: item.completedProjectCount,
+        submittedWorks: item.submittedWorkCount, publishedWorks: item.publishedWorkCount,
+        feedbackCount: item.feedbackCount, aiCalls: item.aiCallCount, aiCredits: item.aiCredits,
+      }));
+    audit(ctx, 'ORG_WORK_DATA_EXPORT', 'WORK_DATA', currentOrgId, null, {
+      days: data.scope.days, classId: data.scope.classId, lessonId: data.scope.lessonId, studentId: data.scope.studentId, rowCount: items.length,
+    }, { orgId: currentOrgId });
+    return {
+      fileName: '作品数据中心-近' + data.scope.days + '日-脱敏学员汇总.csv',
+      columns: [
+        { key: 'studentAlias', label: '学员（脱敏）' }, { key: 'activeProjects', label: '活跃项目' },
+        { key: 'completedProjects', label: '完成项目' }, { key: 'submittedWorks', label: '提交作品' },
+        { key: 'publishedWorks', label: '已发布作品' }, { key: 'feedbackCount', label: '教师反馈' },
+        { key: 'aiCalls', label: '成功 AI 调用' }, { key: 'aiCredits', label: 'AI 消耗积分' },
+      ],
+      items,
+    };
+  }
   if (part === '/overview' && method === 'GET') {
     ensureOrgBilling(currentOrgId);
     const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);

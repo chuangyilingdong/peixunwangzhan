@@ -59,7 +59,7 @@
 | `/usage` | `/org/usage-records` 积分用量 | ORG_ADMIN、TEACHER 按权限 | `真实已有（2026-09-02）` | `org_billing_accounts`、`usage_records`、`class_sessions`、`classes` | overview 已有；新增 usage-records | `SUCCESS/FAILED/BLOCKED` | 今日/7日/30日切换与导出 | SQL 关联经 class_sessions；筛选与越权校验 |
 | `/classes`（课堂内 AI 控制） | `/org/classes/:id` 课堂 AI 控制与用量审计 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，P4-O04）` | `class_sessions`、`usage_records`、`generation_jobs`、`student_projects`、`classes` | `PUT /api/org/classes/:classId/sessions/:sessionId/ai-controls`、`GET /api/org/ai-usage`、`POST /api/ai/usage`、`POST /api/ai/generations` | 课堂 `ACTIVE`；暂停 / 能力开关 / 单学生次数 / 课堂积分上限由服务端强制；教师按负责 / 授权课堂查询 | 真实外部 AI provider、异步队列与账单策略仍按后续基础设施处理 | 临时 SQLite 验证普通调用与生成任务的成功 / BLOCKED 审计、课时 / 项目 / job 关联、教师范围和越权 |
 | `/inbox` | `/org/inbox` 站内信 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，两批）` | `notifications`、`notification_recipients` | `GET/POST /api/org/inbox`、`PUT /api/org/inbox/:id/read`、`PUT /api/org/inbox/read-all` | 平台即时/定时公告接收；机构通知仅 ORG_ADMIN 可发；按当前机构与本人接收记录隔离 | 高可用异步队列、失败重试、忽略状态、邮件/短信/微信渠道 | 临时库验证管理员/教师接收、单条/全部已读、机构发送权限、定时到期和撤回隐藏 |
-| `/work-data` | `/org/published-work-data` 作品数据中心 | ORG_ADMIN | `页面壳层` | `works` + 未来 visit 表 | 待新增 | 7/14/30 日统计 | 访问去重、趋势、授权访客 | 需公开分享与访客模型迁移 |
+| `/work-data` | `/org/published-work-data` 作品数据中心 | ORG_ADMIN | `真实已有（2026-09-02，P4-O06）` | `student_projects`、`works`、`work_annotations`、`usage_records`、`classes`、`course_lessons`、`users`、`audit_logs` | `GET /api/org/work-data`、`GET /api/org/work-data/export` | 仅 ORG_ADMIN；7/14/30 日；班级/课时/学员范围校验；导出审计 | 访问去重、趋势、授权访客、公开分享 | 仅统计已有创作、审核发布、反馈与成功 AI 用量；导出仅含脱敏学员别名 |
 | `/enrollment` | `/org/student-orders` 学员开通 | ORG_ADMIN | `页面壳层` | 需新增开通单/商品表 | 待新增 | 履约、收款、作废状态机 | 数据模型与 API | 设计迁移后实施 |
 | `/recharge` | `/org/recharge` 积分充值 | ORG_ADMIN | `真实账务视图（2026-09-02）；在线支付仍外部决策` | `org_billing_accounts`、`recharge_orders`、`credit_entries` | 新增 `GET /api/org/billing/account-overview` | 仅 `ORG_ADMIN`；教师返回 `ORG_BILLING_PERMISSION_DENIED`；充值单 `PENDING/PAID/CANCELLED/EXPIRED` | 微信/支付宝支付回调、冻结金额、退款/冲正、人工调整、导出对账 | 管理员可读余额/累计/订单/流水；教师 403；不伪造到账数据 |
 | `/materials` | `/org/promo-materials` 宣传物料 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，查看与使用）` | `promo_materials`、`promo_material_assignments`、`promo_material_events` | `GET /api/org/materials`、`POST /api/org/materials/:id/events` | 仅当前机构可见；物料 `ACTIVE`；查看/使用/下载事件受服务端校验 | 真实上传、OSS、封面、下载代理、访问签名和统计详情 | 临时库验证全局/指定机构可见范围、使用事件和未配置资源时下载拒绝 |
@@ -104,9 +104,10 @@
 6. [x] **P4-O03 班级、课程与排课闭环增强（2026-09-02 已完成）**：已补齐班级详情、成员与课程计划聚合、课时连续排序、普通 / 补课课堂、结束 / 取消、课堂历史和课程进度，并统一教师范围、归档保护及学生已发布内容隔离。
 7. [x] **P4-O04 课堂内 AI 能力控制与使用审计（2026-09-02 已完成）**：已接通服务端课堂暂停、能力开关、单学生调用上限、课堂积分上限、普通调用 / 生成任务审计和机构端用量查询。
 8. [x] **P4-O05 作品社区运营闭环（2026-09-02 已完成）**：已补齐版权 / 机构内展示授权确认、`PENDING → APPROVED → PUBLISHED` 审核发布、精选、举报处理、下架、作者脱敏、教师负责 / 授权班级范围和审计；评论 / 点赞未启用。
-9. **当前唯一下一步：P4-O06 作品数据中心**：按班级 / 课程 / 学生下钻完成、提交、发布、反馈、创作活跃与 AI 用量，补齐权限化统计和脱敏导出。
+9. [x] **P4-O06 作品数据中心（2026-09-02 已完成）**：已按班级 / 课程课时 / 学员下钻活跃、完成、提交、发布、反馈与成功 AI 用量，补齐 ORG_ADMIN 权限、过滤校验、统计口径和脱敏导出审计。`/work-data` 已从壳层接通真实 API，不包含访问量、访客或公开分享统计。
+10. **当前唯一下一步：P4-O07 套餐、学员开通与席位管理**：梳理套餐、学员开通记录、席位分配、有效期、停用 / 续费与到期提醒，所有变更必须留痕；不把线下收款或在线支付伪装为已完成。
 
-## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -205,3 +206,13 @@
 - [x] 页面：学生端提交授权、作品墙搜索 / 精选 / 举报；机构端审核 / 举报队列；平台端作品精选 / 下架 / 举报处理均已接通真实 API。
 - [x] 验证：临时 SQLite P4-O05 API `52 pass / 0 fail`，旧 SQLite 迁移演练通过；P3 回归 `46 pass / 0 fail`、后端语法、四端 `pnpm.cmd run build` 和 `git diff --check` 通过。
 - [x] 边界：评论 / 点赞本批不启用；作品数据下钻、统计和导出转入 P4-O06。画布未修改，真实 `platform.db` 未触碰，未部署线上环境。
+
+### 8.11 P4-O06 验收记录（2026-09-02）
+
+- [x] 服务端已新增 `GET /api/org/work-data`、`GET /api/org/work-data/export`：仅 `ORG_ADMIN` 可访问，周期只允许 7 / 14 / 30 日；`classId`、`lessonId`、`studentId` 均按当前机构校验，跨机构或不存在资源返回明确 404。
+- [x] 统计按班级、课程课时、学员三层下钻，返回活跃学员 / 项目、完成项目、提交、审核发布、教师反馈、成功 AI 调用 / 积分及最近活动；统计口径随接口返回。活跃、完成、发布、反馈、AI 均基于已有业务记录，未捏造访客、浏览、趋势或公开分享数据。
+- [x] 机构端 `/work-data` 已从静态壳层切换为真实页面，支持周期及班级 / 课时 / 学员筛选、指标卡、三层表格、口径说明和刷新；机构管理员导航可见，教师进入时显示权限说明。
+- [x] 导出由服务端提供列与汇总行、前端生成 UTF-8 BOM CSV；仅包含“张同学”式脱敏别名与数字，不返回学员 ID、登录名、手机号或完整姓名；每次导出写入 `ORG_WORK_DATA_EXPORT` 审计。
+- [x] 已增加统计查询索引：`student_projects(org_id,class_id,course_lesson_id,updated_at)`、`works(org_id,class_id,course_lesson_id,submitted_at)`、`usage_records(org_id,project_id,created_at)`。
+- [x] 临时 SQLite P4-O06 API 验收通过：覆盖 7 / 14 / 30 日、非法周期、三层筛选、真实项目保存 / 提交 / 审核发布 / 批注 / 成功 AI 用量、FAILED / BLOCKED 不计入、脱敏导出和审计、教师 / 学员 403、跨机构过滤及空数据机构；P3 API 回归 `46 pass / 0 fail` 通过。
+- [x] 边界：访问去重、访客趋势、授权访客与公开分享模型仍是后续能力；本批未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。

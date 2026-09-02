@@ -5,7 +5,7 @@ import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
 import '@platform/shared/styles.css';
 
-const navigation = [{ to: '/dashboard', icon: '◈', label: '机构总览' }, { to: '/classes', icon: '▦', label: '班级与课堂' }, { to: '/members', icon: '♙', label: '成员管理' }, { to: '/works', icon: '✧', label: '作品点评' }, { to: '/inbox', icon: '✉', label: '站内信' }, { to: '/courses', icon: '◇', label: '课程中心' }, { to: '/materials', icon: '▤', label: '宣传物料' }];
+const navigation = [{ to: '/dashboard', icon: '◈', label: '机构总览' }, { to: '/classes', icon: '▦', label: '班级与课堂' }, { to: '/members', icon: '♙', label: '成员管理' }, { to: '/works', icon: '✧', label: '作品点评' }, { to: '/inbox', icon: '✉', label: '站内信' }, { to: '/courses', icon: '◇', label: '课程中心' }, { to: '/work-data', icon: '▥', label: '作品数据中心', adminOnly: true }, { to: '/materials', icon: '▤', label: '宣传物料' }];
 const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
 
 function useData(load, deps = []) {
@@ -493,6 +493,59 @@ function BillingPackages({ api, user }) {
   </>;
 }
 
+function workDataCsvValue(value) {
+  return '"' + String(value ?? '').replace(/"/g, '""') + '"';
+}
+
+function WorkDataTable({ title, items, labelKey, apiKey }) {
+  const nameField = labelKey === '班级' ? 'className' : labelKey === '课时' ? 'lessonTitle' : 'studentName';
+  return <Panel title={title}>
+    {items.length ? <div className="table-wrap"><table><thead><tr><th>{labelKey}</th><th>活跃学员</th><th>活跃项目</th><th>完成项目</th><th>提交</th><th>发布</th><th>反馈</th><th>AI 调用 / 积分</th><th>最近活动</th></tr></thead><tbody>{items.map((item) => <tr key={item[apiKey]}><td><strong>{item[nameField] || '未关联'}</strong></td><td>{item.activeStudentCount}</td><td>{item.activeProjectCount}</td><td>{item.completedProjectCount}</td><td>{item.submittedWorkCount}</td><td>{item.publishedWorkCount}</td><td>{item.feedbackCount}</td><td>{item.aiCallCount} / {formatCredits(item.aiCredits)}</td><td>{formatDate(item.lastActivityAt)}</td></tr>)}</tbody></table></div> : <Empty title="当前筛选范围暂无可汇总的作品数据" />}
+  </Panel>;
+}
+
+function WorkDataPage({ api, user }) {
+  const [filters, setFilters] = useState({ days: '30', classId: '', lessonId: '', studentId: '' });
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState('');
+  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString(), [filters]);
+  const report = useData(() => api.get('org/work-data?' + query), [api, query]);
+
+  async function exportCsv() {
+    setExporting(true); setMessage('');
+    try {
+      const data = await api.get('org/work-data/export?' + query);
+      const header = (data.columns || []).map((column) => workDataCsvValue(column.label)).join(',');
+      const lines = (data.items || []).map((item) => (data.columns || []).map((column) => workDataCsvValue(item[column.key])).join(','));
+      const blob = new Blob(['\uFEFF' + [header, ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = data.fileName || '作品数据中心-脱敏导出.csv';
+      document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(link.href);
+      setMessage(`已导出 ${lines.length} 行脱敏学员汇总，并已记录导出审计。`);
+    } catch (error) { setMessage(error.message || '导出失败'); } finally { setExporting(false); }
+  }
+
+  if (user?.role !== 'ORG_ADMIN') return <><PageHeader eyebrow="机构运营" title="作品数据中心" description="作品数据与脱敏导出仅向机构管理员开放。" /><Panel title="权限说明"><Notice tone="info">授课教师可在班级、作品点评和积分用量中处理日常教学；为保护未成年人创作数据，本中心及其导出功能仅机构管理员可访问。</Notice></Panel></>;
+  if (report.loading) return <Loading label="正在汇总作品数据…" />;
+  if (report.error) return <ErrorState error={report.error} onRetry={report.refresh} />;
+  const data = report.data; const summary = data.summary || {}; const selectors = data.filters || {}; const breakdowns = data.breakdowns || {};
+  return <>
+    <PageHeader eyebrow="机构运营" title="作品数据中心" description={`按班级、课程课时和学员下钻近 ${data.scope.days} 日真实创作数据；不包含访问量、访客或公开分享统计。`} actions={<div className="row-actions"><button className="secondary-button" onClick={report.refresh}>刷新</button><button className="primary-button" onClick={exportCsv} disabled={exporting}>{exporting ? '导出中…' : '导出脱敏汇总'}</button></div>} />
+    <Notice tone="info">导出仅含“张同学”这类脱敏别名及汇总数字，不含学员 ID、登录名、手机号或完整姓名；每次导出都会写入审计记录。</Notice>
+    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
+    <Panel title="统计范围">
+      <div className="row-actions top-gap">{['7', '14', '30'].map((days) => <button type="button" key={days} className={filters.days === days ? 'primary-button' : 'secondary-button'} onClick={() => setFilters({ ...filters, days })}>近 {days} 日</button>)}</div>
+      <div className="form-grid top-gap">
+        <label>班级<select value={filters.classId} onChange={(e) => setFilters({ ...filters, classId: e.target.value })}><option value="">全部班级</option>{(selectors.classes || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>课程课时<select value={filters.lessonId} onChange={(e) => setFilters({ ...filters, lessonId: e.target.value })}><option value="">全部课时</option>{(selectors.lessons || []).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+        <label>学员<select value={filters.studentId} onChange={(e) => setFilters({ ...filters, studentId: e.target.value })}><option value="">全部学员</option>{(selectors.students || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      </div>
+    </Panel>
+    <div className="metrics"><MetricCard label="覆盖学员" value={summary.enrolledStudents || 0} hint="当前班级范围的在册学员" /><MetricCard label="活跃学员 / 项目" value={`${summary.activeStudents || 0} / ${summary.activeProjects || 0}`} hint="近周期有保存或状态更新" tone="teal" /><MetricCard label="完成 / 提交" value={`${summary.completedProjects || 0} / ${summary.submittedWorks || 0}`} hint="项目状态与作品提交" tone="orange" /><MetricCard label="发布 / 反馈" value={`${summary.publishedWorks || 0} / ${summary.feedbackCount || 0}`} hint="审核发布与教师新增反馈" tone="pink" /><MetricCard label="成功 AI / 积分" value={`${summary.aiCalls || 0} / ${formatCredits(summary.aiCredits)}`} hint="仅统计成功且关联项目的调用" tone="violet" /></div>
+    <div className="split"><WorkDataTable title="按班级下钻" items={breakdowns.classes || []} labelKey="班级" apiKey="classId" /><WorkDataTable title="按课程课时下钻" items={breakdowns.lessons || []} labelKey="课时" apiKey="lessonId" /></div>
+    <WorkDataTable title="按学员下钻" items={breakdowns.students || []} labelKey="学员" apiKey="studentId" />
+    <Panel title="统计口径"><ul className="muted"><li>活跃：{data.definitions.active}</li><li>完成：{data.definitions.completed}</li><li>发布：{data.definitions.published}</li><li>反馈：{data.definitions.feedback}</li><li>AI：{data.definitions.ai}</li></ul></Panel>
+  </>;
+}
 function UsagePage({ api }) {
   const [filters, setFilters] = useState({ days: '30', modality: '', status: '', search: '' });
   const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
@@ -599,6 +652,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<OrgPage kind="work-data" user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<OrgPage kind="enrollment" user={session.user} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

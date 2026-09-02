@@ -268,6 +268,7 @@ CREATE TABLE IF NOT EXISTS student_projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_student_updated ON student_projects(student_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_org_updated ON student_projects(org_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projects_work_data_scope ON student_projects(org_id, class_id, course_lesson_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS project_snapshots (
   id TEXT PRIMARY KEY,
@@ -304,6 +305,7 @@ CREATE TABLE IF NOT EXISTS works (
   FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_works_org_submitted ON works(org_id, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_works_work_data_scope ON works(org_id, class_id, course_lesson_id, submitted_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_works_project_unique ON works(project_id);
 
 CREATE TABLE IF NOT EXISTS work_reports (
@@ -364,6 +366,7 @@ CREATE TABLE IF NOT EXISTS usage_records (
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_usage_org_created ON usage_records(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_work_data_project_created ON usage_records(org_id, project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_records(user_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
