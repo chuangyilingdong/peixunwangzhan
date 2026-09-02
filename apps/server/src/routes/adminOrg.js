@@ -22,7 +22,7 @@ function hasPermission(auth, permission) {
   return auth.user.role === 'ORG_ADMIN' || (auth.user.role === 'TEACHER' && parseJson(auth.rawUser.permissions, []).includes(permission));
 }
 function classInOrg(auth, classId) {
-  const cls = row('SELECT * FROM classes WHERE id=? AND org_id=?', [classId, orgId(auth)]);
+  const cls = row('SELECT class.*, teacher.display_name AS teacher_name FROM classes class LEFT JOIN users teacher ON teacher.id=class.teacher_id AND teacher.org_id=class.org_id WHERE class.id=? AND class.org_id=?', [classId, orgId(auth)]);
   if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
   return cls;
 }
@@ -86,6 +86,68 @@ function teacherScope(alias, auth, params) {
   if (auth.user.role !== 'TEACHER') return '';
   params.push(auth.user.id, auth.user.id);
   return ` AND (${alias}.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=${alias}.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))`;
+}
+
+function classSessionRows(classId) {
+  return rows(`SELECT session.*, lesson.title AS lesson_title,
+      starter.display_name AS started_by_name, ender.display_name AS ended_by_name
+    FROM class_sessions session
+    LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
+    LEFT JOIN users starter ON starter.id=session.started_by
+    LEFT JOIN users ender ON ender.id=session.ended_by
+    WHERE session.class_id=? ORDER BY session.started_at DESC`, [classId]).map((session) => ({
+    ...normalizeSession(session),
+    startedByName: session.started_by_name || null,
+    endedByName: session.ended_by_name || null,
+  }));
+}
+
+function classProgressRows(classId) {
+  return rows(`SELECT item.lesson_id, item.sort, item.source_series_id,
+      lesson.title, lesson.summary, lesson.duration_minutes, lesson.status AS lesson_status,
+      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND student.deleted_at IS NULL THEN member.user_id END) AS student_count,
+      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND project.id IS NOT NULL THEN member.user_id END) AS started_student_count,
+      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND (project.status IN ('SUBMITTED','GRADED') OR work.id IS NOT NULL) THEN member.user_id END) AS submitted_student_count,
+      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND work.status IN ('APPROVED','PUBLISHED') THEN member.user_id END) AS published_student_count
+    FROM class_curriculum_items item
+    JOIN course_lessons lesson ON lesson.id=item.lesson_id
+    LEFT JOIN class_members member ON member.class_id=item.class_id
+    LEFT JOIN users student ON student.id=member.user_id AND student.role='STUDENT'
+    LEFT JOIN student_projects project ON project.class_id=item.class_id AND project.course_lesson_id=item.lesson_id AND project.student_id=member.user_id AND project.status!='ARCHIVED'
+    LEFT JOIN works work ON work.class_id=item.class_id AND work.course_lesson_id=item.lesson_id AND work.student_id=member.user_id
+    WHERE item.class_id=? GROUP BY item.lesson_id,item.sort,item.source_series_id,lesson.title,lesson.summary,lesson.duration_minutes,lesson.status
+    ORDER BY item.sort`, [classId]).map((item) => {
+    const studentCount = Number(item.student_count || 0);
+    const startedCount = Number(item.started_student_count || 0);
+    const submittedCount = Number(item.submitted_student_count || 0);
+    const publishedCount = Number(item.published_student_count || 0);
+    return {
+      lessonId: item.lesson_id, sort: Number(item.sort || 0), sourceSeriesId: item.source_series_id,
+      title: item.title, summary: item.summary || '', durationMinutes: Number(item.duration_minutes || 0), lessonStatus: item.lesson_status,
+      studentCount, startedStudentCount: startedCount, submittedStudentCount: submittedCount, publishedStudentCount: publishedCount,
+      startedPercent: studentCount ? Math.round((startedCount / studentCount) * 100) : 0,
+      submittedPercent: studentCount ? Math.round((submittedCount / studentCount) * 100) : 0,
+      publishedPercent: studentCount ? Math.round((publishedCount / studentCount) * 100) : 0,
+    };
+  });
+}
+
+function classDetail(auth, cls) {
+  const detail = normalizeClass(cls, { detail: true });
+  const sessions = classSessionRows(cls.id);
+  const progress = classProgressRows(cls.id);
+  return {
+    ...detail,
+    sessions,
+    progress,
+    summary: {
+      studentCount: detail.studentCount,
+      curriculumCount: progress.length,
+      sessionCount: sessions.length,
+      completedSessionCount: sessions.filter((session) => session.status === 'ENDED' && session.endedReason !== 'CANCELED').length,
+      canceledSessionCount: sessions.filter((session) => session.endedReason === 'CANCELED').length,
+    },
+  };
 }
 
 function importItems(body) {
@@ -705,7 +767,7 @@ export async function handleOrg(ctx) {
   if (part === '/classes' && method === 'GET') {
     const params = [currentOrgId]; let where = 'class.org_id=?';
     if (auth.user.role === 'TEACHER') where += teacherScope('class', auth, params);
-    return { items: rows('SELECT class.* FROM classes class WHERE ' + where + ' ORDER BY class.created_at DESC', params).map(normalizeClass) };
+    return { items: rows('SELECT class.*,teacher.display_name AS teacher_name FROM classes class LEFT JOIN users teacher ON teacher.id=class.teacher_id AND teacher.org_id=class.org_id WHERE ' + where + ' ORDER BY class.created_at DESC', params).map(normalizeClass) };
   }
   if (part === '/classes' && method === 'POST') {
     if (!hasPermission(auth, 'MANAGE_CLASSES')) throw errors.forbidden('无班级管理权限', 'CLASS_PERMISSION_DENIED');
@@ -719,16 +781,22 @@ export async function handleOrg(ctx) {
   let classMatch = part.match(/^\/classes\/([^/]+)$/);
   if (classMatch && ['GET','PUT','DELETE'].includes(method)) {
     const cls = classInOrg(auth, classMatch[1]);
-    if (method === 'GET') { if (!teacherCanAccessClass(auth, cls)) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND'); return normalizeClass(cls, { detail: true }); }
+    if (method === 'GET') { if (!teacherCanAccessClass(auth, cls)) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND'); return classDetail(auth, cls); }
     assertClassManager(auth, cls);
     if (method === 'DELETE') {
       transaction(() => { const active = row("SELECT * FROM class_sessions WHERE class_id=? AND status='ACTIVE'", [cls.id]); if (active) q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason='CLASS_ARCHIVED' WHERE id=?", [nowIso(), auth.user.id, active.id]); q("UPDATE classes SET status='ARCHIVED',archived_at=?,current_session_id=NULL,updated_at=? WHERE id=? AND org_id=?", [nowIso(), nowIso(), cls.id, currentOrgId]); });
       audit(ctx, 'CLASS_ARCHIVE', 'CLASS', cls.id); return { ok: true };
     }
-    const body = ctx.body || {}; const teacherId = body.teacherId === undefined ? cls.teacher_id : body.teacherId; validateTeacher(currentOrgId, teacherId);
+    if (cls.status !== 'ACTIVE') throw errors.conflict('已归档班级不能修改', 'CLASS_ARCHIVED');
+    const body = ctx.body || {};
+    if (auth.user.role === 'TEACHER' && body.teacherId !== undefined && body.teacherId !== auth.user.id) throw errors.forbidden('教师不能改派其他负责教师', 'TEACHER_ASSIGNMENT_DENIED');
+    const teacherId = auth.user.role === 'TEACHER' ? auth.user.id : (body.teacherId === undefined ? cls.teacher_id : body.teacherId); validateTeacher(currentOrgId, teacherId);
     if (body.defaultSeriesId && !accessibleSeries(currentOrgId, body.defaultSeriesId)) throw errors.badRequest('默认课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
+    const before = normalizeClass(cls);
     q('UPDATE classes SET name=COALESCE(?,name),teacher_id=?,usage_mode=COALESCE(?,usage_mode),default_series_id=?,updated_at=? WHERE id=? AND org_id=?', [body.name ? String(body.name).trim() : null, teacherId, body.usageMode || null, body.defaultSeriesId === undefined ? cls.default_series_id : body.defaultSeriesId, nowIso(), cls.id, currentOrgId]);
-    return normalizeClass(row('SELECT * FROM classes WHERE id=? AND org_id=?', [cls.id, currentOrgId]));
+    const updated = normalizeClass(row('SELECT class.*,teacher.display_name AS teacher_name FROM classes class LEFT JOIN users teacher ON teacher.id=class.teacher_id AND teacher.org_id=class.org_id WHERE class.id=? AND class.org_id=?', [cls.id, currentOrgId]));
+    audit(ctx, 'CLASS_UPDATE', 'CLASS', cls.id, before, updated);
+    return updated;
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/curriculum$/);
   if (classMatch && method === 'GET') {
@@ -736,26 +804,40 @@ export async function handleOrg(ctx) {
     const items = rows('SELECT item.*,lesson.title,lesson.summary,lesson.duration_minutes FROM class_curriculum_items item JOIN course_lessons lesson ON lesson.id=item.lesson_id WHERE item.class_id=? ORDER BY item.sort', [cls.id]); return { items: items.map(curriculumItem) };
   }
   if (classMatch && method === 'PUT') {
-    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); const lessonIds = Array.isArray(ctx.body?.lessonIds) ? [...new Set(ctx.body.lessonIds)] : [];
+    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); if (cls.status !== 'ACTIVE') throw errors.conflict('已归档班级不能修改课程计划', 'CLASS_ARCHIVED'); const lessonIds = Array.isArray(ctx.body?.lessonIds) ? [...new Set(ctx.body.lessonIds)] : [];
     if (lessonIds.length > 80) throw errors.badRequest('课单最多80节', 'CURRICULUM_LIMIT');
     transaction(() => { const lessons = lessonIds.map((lessonId) => { const lesson = accessibleLesson(currentOrgId, lessonId); if (!lesson) throw errors.badRequest('课时未授权或不存在', 'COURSE_NOT_AUTHORIZED'); return lesson; }); q('DELETE FROM class_curriculum_items WHERE class_id=?', [cls.id]); lessons.forEach((lesson, index) => q('INSERT INTO class_curriculum_items(id,class_id,lesson_id,sort,source_series_id,added_at) VALUES (?,?,?,?,?,?)', [id('curr'), cls.id, lesson.id, index + 1, lesson.series_id, nowIso()])); });
-    return normalizeClass(row('SELECT * FROM classes WHERE id=? AND org_id=?', [cls.id, currentOrgId]), { detail: true });
+    return classDetail(auth, row('SELECT * FROM classes WHERE id=? AND org_id=?', [cls.id, currentOrgId]));
+  }
+  classMatch = part.match(/^\/classes\/([^/]+)\/(sessions|progress)$/);
+  if (classMatch && method === 'GET') {
+    const cls = classInOrg(auth, classMatch[1]); if (!teacherCanAccessClass(auth, cls)) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
+    if (classMatch[2] === 'sessions') { const items = classSessionRows(cls.id); return { items, total: items.length }; }
+    const items = classProgressRows(cls.id); return { items, total: items.length };
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/members\/([^/]+)$/);
   if (classMatch && ['POST','DELETE'].includes(method)) {
-    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls, 'MANAGE_MEMBERS'); const target = orgUser(auth, classMatch[2]); if (target.role !== 'STUDENT') throw errors.badRequest('只能管理学员成员', 'INVALID_MEMBER_ROLE');
+    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls, 'MANAGE_MEMBERS'); if (cls.status !== 'ACTIVE') throw errors.conflict('已归档班级不能变更成员', 'CLASS_ARCHIVED'); const target = orgUser(auth, classMatch[2]); if (target.role !== 'STUDENT') throw errors.badRequest('只能管理学员成员', 'INVALID_MEMBER_ROLE');
     if (method === 'POST') q('INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING', [id('member'), cls.id, target.id, 'STUDENT', nowIso()]); else q('UPDATE class_members SET removed_at=? WHERE class_id=? AND user_id=? AND removed_at IS NULL', [nowIso(), cls.id, target.id]);
     audit(ctx, method === 'POST' ? 'CLASS_MEMBER_ADD' : 'CLASS_MEMBER_REMOVE', 'CLASS', cls.id, null, { userId: target.id }); return { ok: true };
   }
-  classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/start$/);
+  classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/(start|makeup)$/);
   if (classMatch && method === 'POST') {
-    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); const lessonId = String(ctx.body?.lessonId || '').trim();
+    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); if (cls.status !== 'ACTIVE') throw errors.conflict('已归档班级不能开课', 'CLASS_ARCHIVED'); const lessonId = String(ctx.body?.lessonId || '').trim();
     if (!lessonId) throw errors.badRequest('开课必须指定课时', 'LESSON_REQUIRED');
     if (!row('SELECT id FROM class_curriculum_items WHERE class_id=? AND lesson_id=?', [cls.id, lessonId]) || !accessibleLesson(currentOrgId, lessonId)) throw errors.badRequest('课时不在本班已授权课单中', 'LESSON_NOT_ASSIGNED');
     if (row("SELECT id FROM class_sessions WHERE class_id=? AND status='ACTIVE'", [cls.id])) throw errors.conflict('当前班级已有进行中的课堂', 'CLASS_SESSION_ACTIVE');
-    const cap = ctx.body?.sessionCreditCap === undefined || ctx.body?.sessionCreditCap === null ? null : integer(ctx.body.sessionCreditCap, '课堂积分上限'); const capability = ctx.body?.capabilities || {}; const sessionId = id('csession'); const now = nowIso();
-    transaction(() => { q('INSERT INTO class_sessions(id,class_id,lesson_id,status,session_credit_cap,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [sessionId, cls.id, lessonId, 'ACTIVE', cap, capability.allowImage ? 1 : 0, capability.allowMusic ? 1 : 0, capability.allowVideo ? 1 : 0, capability.allowPodcast ? 1 : 0, capability.allowDubbing ? 1 : 0, auth.user.id, now]); q('UPDATE classes SET current_session_id=?,updated_at=? WHERE id=? AND org_id=?', [sessionId, now, cls.id, currentOrgId]); });
-    audit(ctx, 'SESSION_START', 'CLASS_SESSION', sessionId, null, { classId: cls.id, lessonId }); return normalizeSession(row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [sessionId, cls.id]));
+    const cap = ctx.body?.sessionCreditCap === undefined || ctx.body?.sessionCreditCap === null ? null : integer(ctx.body.sessionCreditCap, '课堂积分上限'); const capability = ctx.body?.capabilities || {}; const sessionId = id('csession'); const now = nowIso(); const sessionKind = classMatch[2] === 'makeup' || ctx.body?.sessionKind === 'MAKEUP' ? 'MAKEUP' : 'REGULAR';
+    transaction(() => { q('INSERT INTO class_sessions(id,class_id,lesson_id,status,session_kind,session_credit_cap,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [sessionId, cls.id, lessonId, 'ACTIVE', sessionKind, cap, capability.allowImage ? 1 : 0, capability.allowMusic ? 1 : 0, capability.allowVideo ? 1 : 0, capability.allowPodcast ? 1 : 0, capability.allowDubbing ? 1 : 0, auth.user.id, now]); q('UPDATE classes SET current_session_id=?,updated_at=? WHERE id=? AND org_id=?', [sessionId, now, cls.id, currentOrgId]); });
+    audit(ctx, sessionKind === 'MAKEUP' ? 'MAKEUP_SESSION_START' : 'SESSION_START', 'CLASS_SESSION', sessionId, null, { classId: cls.id, lessonId, sessionKind }); return normalizeSession(row('SELECT session.*,lesson.title AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE session.id=? AND session.class_id=?', [sessionId, cls.id]));
+  }
+  classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/cancel$/);
+  if (classMatch && method === 'POST') {
+    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]);
+    if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND');
+    if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束，不能重复取消', 'CLASS_SESSION_ENDED');
+    const now = nowIso(); transaction(() => { q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason='CANCELED' WHERE id=? AND class_id=? AND status='ACTIVE'", [now, auth.user.id, session.id, cls.id]); q('UPDATE classes SET current_session_id=NULL,updated_at=? WHERE id=? AND org_id=? AND current_session_id=?', [now, cls.id, currentOrgId, session.id]); });
+    audit(ctx, 'SESSION_CANCEL', 'CLASS_SESSION', session.id, null, { classId: cls.id, reason: ctx.body?.reason || null }); return normalizeSession(row('SELECT session.*,lesson.title AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE session.id=? AND session.class_id=?', [session.id, cls.id]));
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/(end|credit-cap|capabilities)$/);
   if (classMatch && method === 'POST') {
@@ -764,7 +846,7 @@ export async function handleOrg(ctx) {
     if (action === 'end') transaction(() => { q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason=? WHERE id=? AND class_id=? AND status='ACTIVE'", [nowIso(), auth.user.id, String(ctx.body?.reason || 'MANUAL').slice(0, 100), session.id, cls.id]); q('UPDATE classes SET current_session_id=NULL,updated_at=? WHERE id=? AND org_id=? AND current_session_id=?', [nowIso(), cls.id, currentOrgId, session.id]); });
     if (action === 'credit-cap') q("UPDATE class_sessions SET session_credit_cap=? WHERE id=? AND class_id=? AND status='ACTIVE'", [ctx.body?.sessionCreditCap === null ? null : integer(ctx.body?.sessionCreditCap, '课堂积分上限'), session.id, cls.id]);
     if (action === 'capabilities') { const capability = ctx.body?.capabilities || {}; q("UPDATE class_sessions SET allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=? WHERE id=? AND class_id=? AND status='ACTIVE'", [capability.allowImage ? 1 : 0, capability.allowMusic ? 1 : 0, capability.allowVideo ? 1 : 0, capability.allowPodcast ? 1 : 0, capability.allowDubbing ? 1 : 0, session.id, cls.id]); }
-    audit(ctx, 'SESSION_' + action.toUpperCase(), 'CLASS_SESSION', session.id, null, ctx.body); return normalizeSession(row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [session.id, cls.id]));
+    audit(ctx, 'SESSION_' + action.toUpperCase(), 'CLASS_SESSION', session.id, null, ctx.body); return normalizeSession(row('SELECT session.*,lesson.title AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE session.id=? AND session.class_id=?', [session.id, cls.id]));
   }
   let annotationMatch = part.match(/^\/works\/([^/]+)\/annotations(?:\/([^/]+))?$/);
   if (annotationMatch && method === 'GET') {

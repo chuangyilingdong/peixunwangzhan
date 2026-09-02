@@ -509,6 +509,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_actor_created ON audit_logs(actor_id, creat
 `;
 
 db.exec(SCHEMA);
+// Lightweight forward-compatible migration for the class scheduling domain. Existing
+// local databases may have been created before makeup sessions were introduced.
+try { db.exec("ALTER TABLE class_sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT 'REGULAR'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
 
 export function q(sql, params = []) { return db.prepare(sql).run(...params); }

@@ -384,6 +384,7 @@ export function normalizeSession(value) {
     classId: value.class_id,
     lessonId: value.lesson_id || null,
     lessonTitle: value.lesson_title || null,
+    sessionKind: value.session_kind || 'REGULAR',
     status: value.status,
     sessionCreditCap: value.session_credit_cap === null || value.session_credit_cap === undefined ? null : Number(value.session_credit_cap),
     consumedCreditsTotal: Number(value.consumed_credits_total || 0),

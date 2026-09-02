@@ -56,93 +56,132 @@ function Dashboard({ api }) {
 function Classes({ api, user }) {
   const classes = useData(() => api.get('org/classes'), [api]);
   const courses = useData(() => api.get('org/course-series'), [api]);
+  const teachers = useData(() => api.get('org/users?role=TEACHER'), [api]);
+  const students = useData(() => api.get('org/users?role=STUDENT'), [api]);
   const [curriculum, setCurriculum] = useState({ loading: false, error: null, byClass: {} });
+  const [details, setDetails] = useState({});
+  const [expanded, setExpanded] = useState('');
   const [selected, setSelected] = useState({});
+  const [drafts, setDrafts] = useState({});
+  const [newStudent, setNewStudent] = useState({});
   const [message, setMessage] = useState('');
-  const [form, setForm] = useState({ name: '', defaultSeriesId: '', usageMode: 'CLASS_ONLY' });
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({ name: '', defaultSeriesId: '', usageMode: 'CLASS_ONLY', teacherId: '' });
 
   useEffect(() => {
     let cancelled = false;
     const classItems = classes.data?.items;
     if (!classItems) return undefined;
-    if (!classItems.length) {
-      setCurriculum({ loading: false, error: null, byClass: {} });
-      return undefined;
-    }
-
+    if (!classItems.length) { setCurriculum({ loading: false, error: null, byClass: {} }); return undefined; }
     setCurriculum((current) => ({ ...current, loading: true, error: null }));
     Promise.all(classItems.map(async (item) => [item.id, (await api.get(`org/classes/${item.id}/curriculum`)).items || []]))
-      .then((entries) => {
-        if (!cancelled) setCurriculum({ loading: false, error: null, byClass: Object.fromEntries(entries) });
-      })
-      .catch((error) => {
-        if (!cancelled) setCurriculum({ loading: false, error, byClass: {} });
-      });
-
+      .then((entries) => { if (!cancelled) setCurriculum({ loading: false, error: null, byClass: Object.fromEntries(entries) }); })
+      .catch((error) => { if (!cancelled) setCurriculum({ loading: false, error, byClass: {} }); });
     return () => { cancelled = true; };
   }, [api, classes.data]);
 
-  async function start(classId) {
+  const availableLessons = useMemo(() => (courses.data?.items || []).flatMap((course) => (course.lessons || []).map((lesson) => ({ ...lesson, seriesTitle: course.title, seriesId: course.id }))), [courses.data]);
+  const teacherItems = teachers.data?.items || [];
+  const studentItems = students.data?.items || [];
+
+  async function loadDetail(classId, force = false) {
+    if (!force && details[classId]) return details[classId];
+    setBusy(true); setMessage('');
+    try { const detail = await api.get(`org/classes/${classId}`); setDetails((current) => ({ ...current, [classId]: detail })); setDrafts((current) => ({ ...current, [classId]: (detail.curriculum || []).map((item) => item.lessonId) })); return detail; }
+    catch (error) { setMessage(error.message); return null; } finally { setBusy(false); }
+  }
+  async function toggleDetail(classId) { if (expanded === classId) return setExpanded(''); await loadDetail(classId); setExpanded(classId); }
+  async function start(classId, makeup = false) {
     const lessons = curriculum.byClass[classId] || [];
     const lessonId = selected[classId];
     if (!lessons.length) return setMessage('该班级尚未配置课单，无法开始课堂。');
     if (!lessonId) return setMessage('请先选择本班课单中的课时。');
-    try {
-      await api.post(`org/classes/${classId}/sessions/start`, { lessonId, capabilities: { allowImage: true, allowMusic: true } });
-      setMessage('课堂已开始。');
-      classes.refresh();
-    } catch (err) { setMessage(err.message); }
+    try { await api.post(`org/classes/${classId}/sessions/${makeup ? 'makeup' : 'start'}`, { lessonId, sessionKind: makeup ? 'MAKEUP' : 'REGULAR', capabilities: { allowImage: true, allowMusic: true } }); setMessage(makeup ? '补课课堂已开始。' : '课堂已开始。'); await classes.refresh(); await loadDetail(classId, true); }
+    catch (error) { setMessage(error.message); }
   }
-
-  async function end(classId, sessionId) {
-    try {
-      await api.post(`org/classes/${classId}/sessions/${sessionId}/end`, { reason: 'MANUAL' });
-      setMessage('课堂已结束。');
-      classes.refresh();
-    } catch (err) { setMessage(err.message); }
+  async function end(classId, sessionId, cancel = false) {
+    try { await api.post(`org/classes/${classId}/sessions/${sessionId}/${cancel ? 'cancel' : 'end'}`, { reason: cancel ? 'CANCELED' : 'MANUAL' }); setMessage(cancel ? '课堂已取消。' : '课堂已结束。'); await classes.refresh(); await loadDetail(classId, true); }
+    catch (error) { setMessage(error.message); }
   }
-
   async function create(event) {
-    event.preventDefault();
-    try {
-      await api.post('org/classes', { ...form, defaultSeriesId: form.defaultSeriesId || null });
-      setForm({ name: '', defaultSeriesId: '', usageMode: 'CLASS_ONLY' });
-      setMessage('班级已创建。请继续配置该班级课单后再开课。');
-      classes.refresh();
-    } catch (err) { setMessage(err.message); }
+    event.preventDefault(); setBusy(true); setMessage('');
+    try { await api.post('org/classes', { ...form, defaultSeriesId: form.defaultSeriesId || null, teacherId: user.role === 'ORG_ADMIN' ? (form.teacherId || null) : undefined }); setForm({ name: '', defaultSeriesId: '', usageMode: 'CLASS_ONLY', teacherId: '' }); setMessage('班级已创建。请继续配置该班级课单后再开课。'); await classes.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+  function setDraft(classId, lessonIds) { setDrafts((current) => ({ ...current, [classId]: lessonIds })); }
+  function moveDraft(classId, index, offset) {
+    const current = [...(drafts[classId] || [])]; const target = index + offset;
+    if (target < 0 || target >= current.length) return;
+    [current[index], current[target]] = [current[target], current[index]]; setDraft(classId, current);
+  }
+  async function saveCurriculum(classId) {
+    try { await api.put(`org/classes/${classId}/curriculum`, { lessonIds: drafts[classId] || [] }); setMessage('课程计划和课时排序已保存。'); await classes.refresh(); await loadDetail(classId, true); }
+    catch (error) { setMessage(error.message); }
+  }
+  async function addStudent(classId) {
+    if (!newStudent[classId]) return setMessage('请先选择要加入的学员。');
+    try { await api.post(`org/classes/${classId}/members/${newStudent[classId]}`, {}); setMessage('学员已加入班级。'); setNewStudent((current) => ({ ...current, [classId]: '' })); await loadDetail(classId, true); await classes.refresh(); }
+    catch (error) { setMessage(error.message); }
+  }
+  async function removeStudent(classId, studentId) {
+    try { await api.delete(`org/classes/${classId}/members/${studentId}`); setMessage('学员已移出班级。'); await loadDetail(classId, true); await classes.refresh(); }
+    catch (error) { setMessage(error.message); }
+  }
+  async function assignTeacher(classId, teacherId) {
+    try { await api.put(`org/classes/${classId}`, { teacherId: teacherId || null }); setMessage('负责教师已更新。'); await classes.refresh(); await loadDetail(classId, true); }
+    catch (error) { setMessage(error.message); }
   }
 
-  const refresh = () => { classes.refresh(); courses.refresh(); };
-  const isSuccess = message.includes('已开始') || message.includes('已结束') || message.includes('已创建');
-
+  const refresh = () => { classes.refresh(); courses.refresh(); teachers.refresh(); students.refresh(); };
+  const isSuccess = /已(开始|结束|取消|创建|保存|加入|移出|更新)/.test(message);
   return <>
-    <PageHeader eyebrow="教学管理" title="班级与课堂" description="配置班级课单，并由教师发起、结束课堂。" />
+    <PageHeader eyebrow="教学管理" title="班级与课堂" description="管理班级成员、课程计划、课时排序和课堂生命周期；所有数据均来自当前机构真实业务接口。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
     <div className="split">
       <Panel title="新建班级">
         <form onSubmit={create}>
-          <label>班级名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label>
-          <label>默认课包<select value={form.defaultSeriesId} onChange={(e) => setForm({ ...form, defaultSeriesId: e.target.value })}><option value="">稍后配置</option>{courses.data?.items?.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}</select></label>
-          <label>使用模式<select value={form.usageMode} onChange={(e) => setForm({ ...form, usageMode: e.target.value })}><option value="CLASS_ONLY">仅跟随课堂</option><option value="ALWAYS_AVAILABLE">始终可用</option></select></label>
-          <button className="primary-button">创建班级</button>
+          <label>班级名称<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /></label>
+          {user.role === 'ORG_ADMIN' && <label>负责教师<select value={form.teacherId} onChange={(event) => setForm({ ...form, teacherId: event.target.value })}><option value="">暂不指定</option>{teacherItems.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName}（{teacher.login}）</option>)}</select></label>}
+          <label>默认课包<select value={form.defaultSeriesId} onChange={(event) => setForm({ ...form, defaultSeriesId: event.target.value })}><option value="">稍后配置</option>{courses.data?.items?.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}</select></label>
+          <label>使用模式<select value={form.usageMode} onChange={(event) => setForm({ ...form, usageMode: event.target.value })}><option value="CLASS_ONLY">仅跟随课堂</option><option value="ALWAYS_AVAILABLE">始终可用</option></select></label>
+          <button className="primary-button" disabled={busy}>创建班级</button>
         </form>
       </Panel>
       <Panel title="课堂规则">
-        <Notice>教师只可管理自己担任教师的班级。开课选项仅来自本班已配置且已授权的课单。</Notice>
+        <Notice>教师只能管理本人负责或获授权的班级；开课只能选择本班课单中已发布且机构可访问的课时。补课会留下独立课堂记录，已结束或已取消课堂不能再次操作。</Notice>
         {message && <Notice tone={isSuccess ? 'success' : 'danger'}>{message}</Notice>}
       </Panel>
     </div>
-    <Panel title="我的可管理班级" actions={<button className="secondary-button" onClick={refresh}>刷新</button>}>
+    <Panel title="可管理班级" actions={<span className="muted">共 {classes.data?.items?.length || 0} 个</span>}>
       {classes.loading || courses.loading ? <Loading /> : classes.error ? <ErrorState error={classes.error} onRetry={refresh} /> : classes.data.items.length ? <div className="card-list">
         {curriculum.error && <Notice tone="danger">班级课单加载失败：{curriculum.error.message}</Notice>}
         {classes.data.items.map((item) => {
-          const lessons = curriculum.byClass[item.id] || [];
-          const canStart = !curriculum.loading && !curriculum.error && lessons.length > 0;
+          const lessons = curriculum.byClass[item.id] || []; const detail = details[item.id]; const currentDraft = drafts[item.id] || lessons.map((lesson) => lesson.lessonId);
+          const members = detail?.members || []; const classStudents = members.filter((member) => member.classRole === 'STUDENT');
+          const usedStudentIds = new Set(classStudents.map((member) => member.id));
+          const availableStudents = studentItems.filter((student) => !usedStudentIds.has(student.id) && student.status === 'ACTIVE');
           return <article className="item-card" key={item.id}>
-            <div className="row-actions"><h3>{item.name}</h3><Status value={item.status} />{item.currentSessionId && <Status value="ACTIVE SESSION" />}</div>
+            <div className="row-actions"><h3>{item.name}</h3><Status value={item.status} />{item.currentSessionId && <Status value="ACTIVE SESSION" />}<span className="muted">学员 {item.studentCount || 0}</span></div>
             <p>使用模式：{item.usageMode}　教师：{item.teacherName || (item.teacherId === user.id ? user.displayName : '未设置')}</p>
             <div className="row-actions">
-              {item.currentSessionId ? <button className="primary-button" onClick={() => end(item.id, item.currentSessionId)}>结束当前课堂</button> : curriculum.loading ? <span className="muted">正在加载本班课单…</span> : lessons.length ? <><select value={selected[item.id] || ''} onChange={(e) => setSelected({ ...selected, [item.id]: e.target.value })}><option value="">选择要开课的课时</option>{lessons.map((lesson) => <option key={lesson.lessonId} value={lesson.lessonId}>第 {lesson.sort} 课 · {lesson.title}</option>)}</select><button className="primary-button" onClick={() => start(item.id)} disabled={!canStart}>开始课堂</button></> : <span className="muted">尚未配置课单，请先在教务接口中为该班级设置课程。</span>}
+              <button className="secondary-button" onClick={() => toggleDetail(item.id)}>{expanded === item.id ? '收起详情' : '班级详情 / 课程计划'}</button>
+              {item.currentSessionId ? <><button className="primary-button" onClick={() => end(item.id, item.currentSessionId)}>结束课堂</button><button className="text-button" onClick={() => end(item.id, item.currentSessionId, true)}>取消课堂</button></> : curriculum.loading ? <span className="muted">正在加载本班课单…</span> : lessons.length ? <><select value={selected[item.id] || ''} onChange={(event) => setSelected({ ...selected, [item.id]: event.target.value })}><option value="">选择课时</option>{lessons.map((lesson) => <option key={lesson.lessonId} value={lesson.lessonId}>第 {lesson.sort} 课 · {lesson.title}</option>)}</select><button className="primary-button" onClick={() => start(item.id)}>开始课堂</button><button className="secondary-button" onClick={() => start(item.id, true)}>开始补课</button></> : <span className="muted">尚未配置课单，请先在详情中设置课程计划。</span>}
             </div>
+            {expanded === item.id && <div className="stacked-panels">
+              {!detail ? <Loading label="正在读取班级详情…" /> : <>
+                <Panel title="班级成员" description="成员变更会立即影响学生可见的班级课程内容。">
+                  {user.role === 'ORG_ADMIN' && <div className="row-actions"><select value={newStudent[item.id] || ''} onChange={(event) => setNewStudent({ ...newStudent, [item.id]: event.target.value })}><option value="">选择学员加入班级</option>{availableStudents.map((student) => <option key={student.id} value={student.id}>{student.displayName}（{student.login}）</option>)}</select><button className="secondary-button" onClick={() => addStudent(item.id)}>加入学员</button></div>}
+                  {user.role === 'ORG_ADMIN' && <label>负责教师<select value={item.teacherId || ''} onChange={(event) => assignTeacher(item.id, event.target.value)}><option value="">暂不指定</option>{teacherItems.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName}</option>)}</select></label>}
+                  {members.length ? <div className="table-wrap"><table><thead><tr><th>成员</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.displayName}<div className="muted">{member.login}</div></td><td>{member.classRole === 'TEACHER' ? '教师' : '学员'}</td><td><Status value={member.status} /></td><td>{member.classRole === 'STUDENT' && user.role === 'ORG_ADMIN' ? <button className="text-button" onClick={() => removeStudent(item.id, member.id)}>移出班级</button> : '—'}</td></tr>)}</tbody></table></div> : <Empty title="暂无班级成员" body="可从上方选择学员加入班级。" />}
+                </Panel>
+                <Panel title="课程计划与课时排序" description="保存时服务端会重新编号 sort，确保课时顺序连续且不可重复。">
+                  {availableLessons.length ? <div className="card-list">{currentDraft.map((lessonId, index) => { const lesson = availableLessons.find((candidate) => candidate.id === lessonId) || lessons.find((candidate) => candidate.lessonId === lessonId); return lesson ? <article className="item-card" key={lessonId}><div className="row-actions"><strong>第 {index + 1} 课 · {lesson.title}</strong><span className="muted">{lesson.seriesTitle || '已配置课时'}</span><button className="text-button" onClick={() => moveDraft(item.id, index, -1)} disabled={index === 0}>上移</button><button className="text-button" onClick={() => moveDraft(item.id, index, 1)} disabled={index === currentDraft.length - 1}>下移</button><button className="text-button" onClick={() => setDraft(item.id, currentDraft.filter((value) => value !== lessonId))}>移除</button></div><p className="muted">{lesson.summary || '暂无课时说明'} · {lesson.durationMinutes || 0} 分钟</p></article> : null; })}</div> : <Empty title="暂无可用课时" body="请先由平台或机构配置已发布课程。" />}
+                  <label>添加课时<select value="" onChange={(event) => { if (event.target.value && !currentDraft.includes(event.target.value)) setDraft(item.id, [...currentDraft, event.target.value]); }}><option value="">选择可加入本班的课时</option>{availableLessons.filter((lesson) => !currentDraft.includes(lesson.id)).map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.seriesTitle} · {lesson.title}</option>)}</select></label>
+                  <button className="primary-button" onClick={() => saveCurriculum(item.id)}>保存课程计划</button>
+                </Panel>
+                <div className="split"><Panel title="课程进度"><div className="table-wrap"><table><thead><tr><th>课时</th><th>开始</th><th>提交</th><th>发布</th></tr></thead><tbody>{(detail.progress || []).map((progress) => <tr key={progress.lessonId}><td>{progress.sort}. {progress.title}</td><td>{progress.startedStudentCount}/{progress.studentCount}（{progress.startedPercent}%）</td><td>{progress.submittedStudentCount}/{progress.studentCount}（{progress.submittedPercent}%）</td><td>{progress.publishedStudentCount}/{progress.studentCount}（{progress.publishedPercent}%）</td></tr>)}</tbody></table></div>{!detail.progress?.length && <Empty title="还没有课程计划" />}</Panel>
+                  <Panel title="课堂记录"><div className="card-list">{(detail.sessions || []).map((session) => <article className="item-card" key={session.id}><div className="row-actions"><strong>{session.lessonTitle || '未指定课时'}</strong><Status value={session.status === 'ACTIVE' ? 'ACTIVE SESSION' : session.endedReason === 'CANCELED' ? 'CANCELED' : 'ENDED'} /><span className="muted">{session.sessionKind === 'MAKEUP' ? '补课' : '常规'}</span></div><p className="muted">开始：{formatDate(session.startedAt)}{session.endedAt ? ` · 结束：${formatDate(session.endedAt)}` : ''}</p><p className="muted">{session.endedReason ? `结果：${session.endedReason}` : '课堂进行中'}</p></article>)}</div>{!detail.sessions?.length && <Empty title="暂无课堂记录" />}</Panel></div>
+              </>}
+            </div>}
           </article>;
         })}
       </div> : <Empty title="暂无可管理班级" body="请先创建班级，再配置学生和课程。" />}
