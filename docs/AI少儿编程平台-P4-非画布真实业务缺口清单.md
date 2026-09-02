@@ -73,7 +73,7 @@
 | `/projects` | 我的创作项目 | STUDENT | `真实已有（2026-09-03，P4-S02）` | `student_projects`、`project_snapshots`、`works`、`course_series`、`course_lessons`、`classes` | `GET/POST/PATCH/DELETE /api/student/projects`、`POST /:id`（复制）、`/:id/archive`、`/:id/restore`、版本与导入导出 | 仅 STUDENT；视图 `ACTIVE/ARCHIVED/DELETED`；草稿可重命名 / 复制 / 归档 / 软删除，已提交或已发布项目只读 | 批量管理、云同步冲突；30 天到期自动清理任务未实现 | 临时库验证权限、搜索筛选、重命名、复制、归档 / 恢复、软删除 / 恢复、提交后保护、发布后复制限制与学生隔离 |
 | `/projects/:projectId/canvas` | 创作画布 | STUDENT | `真实已有（画布冻结）` | `student_projects`、`project_snapshots` | projects API | 草稿/提交 | 不修改 `packages/canvas` | 仅回归，不做画布改动 |
 | `/works` | 我的作品 / 提交记录 | STUDENT | `真实已有（2026-09-03，P4-S03）` | `works`、`work_submissions`、`work_feedback_reads`、`work_publish_requests`、`work_annotations` | works submit/status、submissions、feedback-read、publish-request/withdraw | `PENDING/APPROVED/REJECTED/PUBLISHED`；反馈已读与多轮提交 | 独立站外发布、重新发布历史版本 | 学生只能访问本人作品；临时 SQLite 验收 `72 pass / 0 fail` |
-| `/showcase` | 公开作品墙 | STUDENT | `真实已有` | `works` | showcase | `PUBLISHED` | 浏览计数与访客模型 | 当前只显示已发布作品 |
+| `/showcase` | 机构作品墙 | STUDENT | `真实已有（2026-09-03，P4-S04）` | `works`、`classes`、`course_lessons`、`work_reports` | `GET /api/student/showcase`、`GET /:id`、`POST /:id/reports`、`PUT /api/org/works/:id/feature` | 仅本机构 `PUBLISHED`；作者脱敏与内部字段清理 | 站外公开分享、评论 / 点赞、访客统计 | 临时 SQLite P4-S04 API `112 pass / 0 fail`，覆盖筛选搜索分页、精选、举报与权限隔离 |
 | `/courses` | 我的课程 | STUDENT | `真实已有（2026-09-02）` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons`、`student_projects`、`works` | `GET /api/student/courses` | 课单进度；学生本人 / 机构隔离 | 学习首页任务、老师通知、继续创作聚合待补 | 临时库验证课程、班级、课时、作品状态与空态；学生只能看到本人数据 |
 | `/credits` | 套餐与用量 | STUDENT | `真实已有（2026-09-02）` | `users`、`billing_packages`、`usage_records`、`student_projects`、`class_sessions`、`classes` | `GET /api/student/credits` | 套餐有效期；学生本人 / 机构隔离 | 真实扣费服务、充值与对账仍属后续 / 外部决策 | 临时库验证额度、模态 / 状态 / 天数筛选、课堂上下文与越权 |
 | `/account` | 账号安全 | STUDENT | `真实已有（2026-09-02）` | `users`、`sessions`、`organizations`、`classes`、`class_members` | `GET/PUT /api/student/account`、`/profile`、`/password`、`/sessions/:id/revoke` | 账号状态；敏感操作需本人当前密码；学生不可改机构归属 | 头像、监护人资料、隐私设置、注销 / 数据请求入口待补 | 临时库验证资料校验、旧密码 / 弱密码 / 重放、当前及跨学生会话撤销 |
@@ -270,3 +270,13 @@
 - [x] 页面：学生端 `/works` 展示轮次、状态语义、未读反馈、提交历史、整体点评已读、去修改、申请发布与撤回；机构端作品点评页新增发布申请队列和处理面板。
 - [x] 验证：临时 SQLite P4-S03 API `76 pass / 0 fail`，覆盖未登录 / 教师越权、提交历史、反馈已读、驳回重提、发布申请 / 撤回 / 批准、举报下架重提和跨学生隔离；P3 API 回归 `48 pass / 0 fail`；后端语法检查、四端生产构建和 `git diff --check` 通过。
 - [x] 边界：仅机构内发布与展示，不提供站外公开分享、评论 / 点赞或重新发布历史版本；未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
+### 8.17 P4-S04 验收记录（2026-09-03）
+
+- [x] API：`GET /api/student/showcase` 支持关键词（作品标题 / 描述 / 课时标题，LIKE 转义）、班级、课时、仅精选、`page/pageSize` 服务端校验，返回 `total/totalPages`、可用班级 / 课时筛选和机构内展示权限策略；详情仅返回本机构 `PUBLISHED` 作品与只读画布快照。
+- [x] 隐私：列表与详情不返回 `studentId`、`projectId`、教师点评、审核人、精选操作人；作者显示为“姓名首字 + 同学”，无姓名时为“小创作者”；`sharing` 明确 `ORGANIZATION` 范围且关闭公开分享、评论、点赞。
+- [x] 精选：新增 `PUT /api/org/works/:id/feature`，仅授权范围内的 `PUBLISHED` 作品可设精选，理由最多 500 字；取消精选只清空精选字段，作品保持 `PUBLISHED`，不改变待处理发布申请；写入 `ORG_WORK_FEATURE / ORG_WORK_UNFEATURE` 审计。
+- [x] 机构端：`GET /api/org/works` 支持状态、班级、关键词筛选与精选优先排序；作品点评页提供筛选和精选设置 / 取消面板，并明确“取消精选不会下架作品”。
+- [x] 学生端：`/showcase` 提供关键词、班级、课时、仅精选筛选和每页 9 件分页，展示总数、班级、精选标识、详情预览、精选理由、权限提示；仅他人作品展示举报入口。
+- [x] 举报闭环：不能举报自己的作品；重复待处理举报被拒绝；教师可查看并选择保留或下架，平台端可查看同一举报流；下架后作品从作品墙消失并清空精选字段。
+- [x] 验证：临时 SQLite P4-S04 API `112 pass / 0 fail`，覆盖未登录 / 教师越权、状态可见性、隐私字段、作者脱敏、精选状态机、取消精选不影响发布申请、搜索筛选分页、机构筛选、举报流转与权限隔离；P3 API 回归 `48 pass / 0 fail`；后端语法检查、四端生产构建和 `git diff --check` 通过。
+- [x] 边界：不新增站外公开分享、评论、点赞、访客统计或数据表；未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。

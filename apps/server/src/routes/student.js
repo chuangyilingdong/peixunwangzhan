@@ -926,28 +926,89 @@ export async function handleStudent(ctx) {
   }
 
   if (part === '/showcase' && method === 'GET') {
-    const search = String(ctx.search.get('search') || '').trim();
+    const search = String(ctx.search.get('search') || '').trim().slice(0, 100);
     const featuredOnly = ctx.search.get('featured') === 'true';
+    const classId = String(ctx.search.get('classId') || '').trim();
+    const lessonId = String(ctx.search.get('lessonId') || '').trim();
+    const page = asPositiveInteger(ctx.search.get('page'), '页码', { min: 1, max: 1000, fallback: 1 });
+    const pageSize = asPositiveInteger(ctx.search.get('pageSize'), '每页数量', { min: 1, max: 24, fallback: 9 });
     const conditions = ["work.org_id=?", "work.status='PUBLISHED'"]; const params = [auth.user.orgId];
     if (featuredOnly) conditions.push('work.featured_at IS NOT NULL');
+    if (classId) conditions.push('work.class_id=?'), params.push(classId);
+    if (lessonId) conditions.push('work.course_lesson_id=?'), params.push(lessonId);
     if (search) {
-      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
-      conditions.push('(work.title LIKE ? OR work.description LIKE ? OR lesson.title LIKE ?)'); params.push(keyword, keyword, keyword);
+      const keyword = '%' + search.replace(new RegExp(`[%\\_]`, 'g'), (char) => '\\' + char) + '%';
+      conditions.push("work.title LIKE ? ESCAPE '\\' OR work.description LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\'"); params.push(keyword, keyword, keyword);
     }
     const publicName = (value) => {
       const name = String(value || '').trim(); return name ? name.slice(0, 1) + '同学' : '小创作者';
     };
+    const where = conditions.join(' AND ');
+    const total = Number(row(`SELECT COUNT(1) AS total FROM works work LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE ${where}`, params).total || 0);
+    const filterOptions = rows(
+      `SELECT class.id AS class_id, class.name AS class_name, lesson.id AS lesson_id, lesson.title AS lesson_title, lesson.sort AS lesson_sort, COUNT(work.id) AS work_count
+       FROM works work
+       JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
+       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+       LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
+       WHERE work.org_id=? AND work.status='PUBLISHED'
+       GROUP BY class.id, lesson.id
+       ORDER BY class.name, lesson.sort, lesson.title`,
+      [auth.user.orgId],
+    );
+    const classes = filterOptions
+      .filter((item) => item.class_id)
+      .reduce((accumulator, item) => {
+        if (!accumulator.some((existing) => existing.id === item.class_id)) accumulator.push({ id: item.class_id, name: item.class_name, workCount: Number(item.work_count || 0) });
+        return accumulator;
+      }, [])
+      .map((item) => ({ ...item, workCount: filterOptions.filter((option) => option.class_id === item.id).reduce((sum, option) => sum + Number(option.work_count || 0), 0) }));
+    const lessons = filterOptions
+      .filter((item) => item.lesson_id && (!classId || item.class_id === classId))
+      .reduce((accumulator, item) => {
+        const existing = accumulator.find((existingItem) => existingItem.id === item.lesson_id);
+        if (existing) existing.workCount += Number(item.work_count || 0);
+        else accumulator.push({ id: item.lesson_id, title: item.lesson_title, workCount: Number(item.work_count || 0) });
+        return accumulator;
+      }, []);
     const items = rows(
       `SELECT work.*, student.display_name AS student_name, class.name AS class_name, lesson.title AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
        LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.reviewed_at DESC, work.submitted_at DESC LIMIT 100`,
-      params,
-    ).map((work) => ({ ...normalizeWork(work, { includeSnapshot: false }), studentName: publicName(work.student_name) }));
-    return { items };
+       WHERE ${where}
+       ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.reviewed_at DESC, work.submitted_at DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, (page - 1) * pageSize],
+    ).map((work) => {
+      const normalized = normalizeWork(work, { includeSnapshot: false });
+      return {
+        ...normalized,
+        studentName: publicName(work.student_name),
+        studentId: undefined,
+        projectId: undefined,
+        teacherComment: undefined,
+        reviewedBy: undefined,
+        reviewerName: undefined,
+        featuredBy: undefined,
+      };
+    });
+    return {
+      items,
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      filters: { classes, lessons, featuredOnly },
+      sharing: {
+        scope: 'ORGANIZATION',
+        allowPublicShare: false,
+        allowComments: false,
+        allowLikes: false,
+        title: '仅机构内可见',
+        description: '作品只在当前机构的登录学生之间展示；不生成站外公开链接，也不显示学生完整姓名。',
+      },
+    };
   }
 
   match = part.match(/^\/showcase\/([^/]+)\/reports$/);
@@ -980,7 +1041,26 @@ export async function handleStudent(ctx) {
     );
     if (!work) throw errors.notFound('已发布作品不存在', 'SHOWCASE_WORK_NOT_FOUND');
     const name = String(work.student_name || '').trim();
-    return { ...normalizeWork(work, { includeSnapshot: true }), studentName: name ? name.slice(0, 1) + '同学' : '小创作者' };
+    const normalized = normalizeWork(work, { includeSnapshot: true });
+    return {
+      ...normalized,
+      studentName: name ? name.slice(0, 1) + '同学' : '小创作者',
+      studentId: undefined,
+      projectId: undefined,
+      teacherComment: undefined,
+      reviewedBy: undefined,
+      reviewerName: undefined,
+      featuredBy: undefined,
+      canReport: work.student_id !== auth.user.id,
+      sharing: {
+        scope: 'ORGANIZATION',
+        allowPublicShare: false,
+        allowComments: false,
+        allowLikes: false,
+        title: '仅机构内可见',
+        description: '作品只在当前机构的登录学生之间展示；不生成站外公开链接，也不显示学生完整姓名。',
+      },
+    };
   }
 
   if (part === '/works' && method === 'GET') {
