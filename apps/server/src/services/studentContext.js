@@ -5,6 +5,7 @@ import {
   normalizeSeries,
   normalizeSession,
   normalizeUser,
+  nowIso,
   rows,
 } from '../lib.js';
 
@@ -228,6 +229,249 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
     activeSession, canUseNow,
     blockCode: canUseNow ? null : 'CLASS_SESSION_REQUIRED',
     blockReason: canUseNow ? null : '跟随课堂账号需要由教师先开启对应课时的课堂',
+  };
+}
+
+
+const WORK_PROGRESS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
+
+function studentLessonProgressMap(user) {
+  const { id: userId, orgId } = studentIdentity(user);
+  const projects = rows(
+    `SELECT id, class_id, course_lesson_id, title, status, latest_version, last_saved_at, updated_at
+     FROM student_projects
+     WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`,
+    [userId, orgId],
+  );
+  const works = rows(
+    `SELECT project_id, course_lesson_id, title, status, teacher_comment, reviewed_at, submitted_at
+     FROM works WHERE student_id = ? AND org_id = ?`,
+    [userId, orgId],
+  );
+  const progress = new Map();
+  const ensure = (lessonId) => {
+    if (!progress.has(lessonId)) {
+      progress.set(lessonId, {
+        lessonId,
+        projectCount: 0,
+        draftProjects: [],
+        workCount: 0,
+        works: [],
+        bestWorkStatus: null,
+        feedbackCount: 0,
+        unreadFeedbackCount: 0,
+        lastActivityAt: null,
+      });
+    }
+    return progress.get(lessonId);
+  };
+
+  for (const project of projects) {
+    if (!project.course_lesson_id) continue;
+    const item = ensure(project.course_lesson_id);
+    item.projectCount += 1;
+    if (project.status === 'DRAFT') {
+      item.draftProjects.push({
+        id: project.id,
+        title: project.title,
+        status: project.status,
+        latestVersion: Number(project.latest_version || 0),
+        lastSavedAt: project.last_saved_at,
+        updatedAt: project.updated_at,
+      });
+    }
+    const updated = project.updated_at;
+    if (updated && updated > item.lastActivityAt) item.lastActivityAt = updated;
+  }
+  for (const work of works) {
+    if (!work.course_lesson_id) continue;
+    const item = ensure(work.course_lesson_id);
+    item.workCount += 1;
+    item.works.push({
+      id: work.id,
+      projectId: work.project_id,
+      title: work.title,
+      status: work.status,
+      teacherComment: work.teacher_comment || null,
+      submittedAt: work.submitted_at,
+      reviewedAt: work.reviewed_at || null,
+    });
+    if ((WORK_PROGRESS_RANK[work.status] || 0) > (WORK_PROGRESS_RANK[item.bestWorkStatus] || 0)) {
+      item.bestWorkStatus = work.status;
+    }
+    if (work.reviewed_at && work.teacher_comment) {
+      item.feedbackCount += 1;
+      item.unreadFeedbackCount += 1;
+    }
+    if (work.submitted_at && work.submitted_at > item.lastActivityAt) item.lastActivityAt = work.submitted_at;
+  }
+  for (const item of progress.values()) {
+    item.draftProjects.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  }
+  return progress;
+}
+
+function studentLatestNotifications(user, limit = 5) {
+  const { id: userId, orgId } = studentIdentity(user);
+  return rows(
+    `SELECT notification.id, notification.scope_type, notification.kind, notification.title, notification.body,
+            notification.target_url, notification.pinned,
+            COALESCE(notification.publish_at, notification.created_at) AS effective_at,
+            sender.display_name AS sender_name,
+            recipient.read_at
+     FROM notification_recipients recipient
+     JOIN notifications notification ON notification.id = recipient.notification_id
+     LEFT JOIN users sender ON sender.id = notification.sender_id
+     WHERE recipient.user_id = ?
+       AND recipient.delivery_status = 'DELIVERED'
+       AND notification.status = 'PUBLISHED'
+       AND (notification.publish_at IS NULL OR notification.publish_at <= ?)
+       AND ((notification.scope_type = 'ORG' AND notification.org_id = ?) OR notification.scope_type = 'PLATFORM')
+     ORDER BY notification.pinned DESC, effective_at DESC
+     LIMIT ?`,
+    [userId, nowIso(), orgId, limit],
+  ).map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    title: item.title,
+    body: item.body,
+    targetUrl: item.target_url || null,
+    pinned: Boolean(item.pinned),
+    senderName: item.sender_name || (item.scope_type === 'PLATFORM' ? '平台' : '机构'),
+    publishedAt: item.effective_at,
+    read: Boolean(item.read_at),
+  }));
+}
+
+export function buildStudentDashboard(user) {
+  const context = buildStudentContext(user);
+  const { id: userId, orgId } = studentIdentity(user);
+  const progressByLesson = studentLessonProgressMap(user);
+  const classById = new Map(context.classes.map((item) => [item.id, item]));
+  const activeSessionByLesson = new Map(context.activeSessions.filter((item) => item.lessonId).map((item) => [item.lessonId, item]));
+  const allLessonTasks = [];
+  const courses = context.courses.map((course) => {
+    const assignedClasses = (course.classIds || []).map((classId) => classById.get(classId)).filter(Boolean);
+    const primaryClass = assignedClasses[0] || null;
+    const lessons = (course.lessons || []).map((lesson) => {
+      const progress = progressByLesson.get(lesson.id) || {
+        projectCount: 0, draftProjects: [], workCount: 0, works: [], bestWorkStatus: null,
+        feedbackCount: 0, unreadFeedbackCount: 0, lastActivityAt: null,
+      };
+      const session = activeSessionByLesson.get(lesson.id) || null;
+      const task = {
+        lessonId: lesson.id,
+        lessonTitle: lesson.title,
+        lessonSummary: lesson.summary || '',
+        courseId: course.id,
+        courseTitle: course.title,
+        classId: primaryClass?.id || null,
+        className: primaryClass?.name || null,
+        teacherName: primaryClass?.teacherName || null,
+        status: progress.bestWorkStatus || (progress.projectCount > 0 ? 'IN_PROGRESS' : 'NOT_STARTED'),
+        activeNow: Boolean(session),
+        canStart: context.canUseNow,
+        blockReason: context.canUseNow ? null : context.blockReason,
+        session: session ? {
+          id: session.id,
+          classId: session.classId,
+          startedAt: session.startedAt,
+          capabilities: session.capabilities,
+        } : null,
+        progress: {
+          projectCount: progress.projectCount,
+          draftCount: progress.draftProjects.length,
+          workCount: progress.workCount,
+          workStatus: progress.bestWorkStatus,
+          unreadFeedbackCount: progress.unreadFeedbackCount,
+          lastActivityAt: progress.lastActivityAt,
+        },
+        continueProject: progress.draftProjects[0] || null,
+        latestWork: [...progress.works].sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')))[0] || null,
+      };
+      allLessonTasks.push(task);
+      return {
+        ...lesson,
+        courseTitle: course.title,
+        classId: task.classId,
+        className: task.className,
+        activeNow: task.activeNow,
+        status: task.status,
+        projectCount: progress.projectCount,
+        draftCount: progress.draftProjects.length,
+        workCount: progress.workCount,
+        workStatus: progress.bestWorkStatus,
+        lastActivityAt: progress.lastActivityAt,
+      };
+    });
+    return {
+      ...course,
+      lessons,
+      progress: {
+        lessonCount: lessons.length,
+        startedLessonCount: lessons.filter((item) => item.projectCount > 0).length,
+        submittedLessonCount: lessons.filter((item) => item.workCount > 0).length,
+        publishedLessonCount: lessons.filter((item) => item.workStatus === 'PUBLISHED').length,
+        submittedPercent: lessons.length ? Math.round((lessons.filter((item) => item.workCount > 0).length / lessons.length) * 100) : 0,
+      },
+    };
+  });
+
+  const unfinishedTasks = allLessonTasks.filter((item) => item.status !== 'PUBLISHED' && item.status !== 'APPROVED');
+  const pendingFeedbackTasks = allLessonTasks.filter((item) => item.progress.unreadFeedbackCount > 0 || item.status === 'REJECTED');
+  const taskPriority = { REJECTED: 0, IN_PROGRESS: 1, NOT_STARTED: 2, PENDING: 3 };
+  const learningTasks = [...unfinishedTasks]
+    .sort((a, b) => (taskPriority[a.status] ?? 9) - (taskPriority[b.status] ?? 9)
+      || String(b.progress.lastActivityAt || '').localeCompare(String(a.progress.lastActivityAt || '')))
+    .slice(0, 8);
+  const continueProjects = rows(
+    `SELECT project.id, project.title, project.course_lesson_id, project.class_id, project.status,
+            project.latest_version, project.last_saved_at, project.updated_at,
+            lesson.title AS lesson_title, series.title AS course_title
+     FROM student_projects project
+     LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
+     LEFT JOIN course_series series ON series.id = lesson.series_id
+     WHERE project.student_id = ? AND project.org_id = ? AND project.status = 'DRAFT'
+     ORDER BY project.updated_at DESC
+     LIMIT 5`,
+    [userId, orgId],
+  ).map((project) => ({
+    id: project.id,
+    title: project.title,
+    lessonId: project.course_lesson_id,
+    lessonTitle: project.lesson_title || null,
+    courseTitle: project.course_title || null,
+    classId: project.class_id,
+    status: project.status,
+    latestVersion: Number(project.latest_version || 0),
+    lastSavedAt: project.last_saved_at,
+    updatedAt: project.updated_at,
+    editableNow: context.canUseNow,
+    blockReason: context.canUseNow ? null : context.blockReason,
+  }));
+  const notifications = studentLatestNotifications(user);
+
+  return {
+    ...context,
+    courses,
+    summary: {
+      classCount: context.classes.length,
+      courseCount: courses.length,
+      assignedLessonCount: allLessonTasks.length,
+      activeLessonCount: allLessonTasks.filter((item) => item.activeNow).length,
+      startedLessonCount: allLessonTasks.filter((item) => item.progress.projectCount > 0).length,
+      submittedLessonCount: allLessonTasks.filter((item) => item.progress.workCount > 0).length,
+      publishedLessonCount: allLessonTasks.filter((item) => item.progress.workStatus === 'PUBLISHED').length,
+      pendingTaskCount: unfinishedTasks.length,
+      pendingFeedbackCount: pendingFeedbackTasks.length,
+      draftProjectCount: continueProjects.length,
+      unreadNoticeCount: notifications.filter((item) => !item.read).length,
+    },
+    activeTasks: allLessonTasks.filter((item) => item.activeNow).slice(0, 8),
+    learningTasks,
+    pendingFeedbackTasks: pendingFeedbackTasks.slice(0, 8),
+    continueProjects,
+    notifications,
   };
 }
 

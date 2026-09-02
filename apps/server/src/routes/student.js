@@ -23,6 +23,7 @@ import {
 import { hashPassword } from '@platform/database';
 import {
   buildStudentContext,
+  buildStudentDashboard,
   getStudentActiveSessions,
   getStudentMemberships,
   resolveProjectUsageContext,
@@ -244,7 +245,7 @@ export async function handleStudent(ctx) {
   const auth = requireRole(ctx, ['STUDENT']);
   const part = pathname.slice('/api/student'.length);
 
-  if (part === '/dashboard' && method === 'GET') return buildStudentContext(auth.rawUser);
+  if (part === '/dashboard' && method === 'GET') return buildStudentDashboard(auth.rawUser);
   if (part === '/courses' && method === 'GET') return studentCourseOverview(ctx);
   if (part === '/credits' && method === 'GET') return studentUsageOverview(ctx);
   if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);

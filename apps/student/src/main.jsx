@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
 import '@platform/shared/styles.css';
@@ -20,24 +20,38 @@ function useData(load, deps = []) {
 }
 
 function Dashboard({ api }) {
+  const navigate = useNavigate();
   const { loading, error, data, refresh } = useData(() => api.get('student/dashboard'), [api]);
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
-  const lessonCount = data.courses.reduce((total, course) => total + (course.lessons?.length || 0), 0);
+  const taskAction = (task) => {
+    if (!task.canStart) return { label: '等待老师开课', to: null, reason: task.blockReason };
+    if (task.continueProject) return { label: '继续创作', to: `/projects/${task.continueProject.id}/canvas`, reason: null };
+    return { label: '开始创作', to: `/projects?lessonId=${task.lessonId}`, reason: null };
+  };
   return <>
-    <PageHeader eyebrow="我的魔法学院" title={`你好，${data.user.displayName}`} description={data.canUseNow ? '现在可以开始你的 AI 创作了。' : '等待老师开启课堂后，即可继续创作。'} />
-    <div className="metrics"><MetricCard label="可用创作额度" value={formatCredits(data.user.creditsRemaining)} hint="本周期个人额度" /><MetricCard label="魔法石" value={formatCredits(data.user.magicStones)} hint="完成创作可以积累" tone="teal" /><MetricCard label="我的班级" value={data.classes.length} hint={data.classes.map((item) => item.name).join('、') || '尚未加入班级'} tone="orange" /><MetricCard label="可学课时" value={lessonCount} hint={`${data.courses.length} 个课程包`} tone="pink" /></div>
-    {data.canUseNow ? <Panel title="当前课堂"><Notice tone="success">{data.activeSessions.length ? `课堂正在进行：${data.activeSessions.map((item) => item.lessonTitle || '当前课时').join('、')}` : '你的账号支持自主练习，可以随时开始创作。'}</Notice></Panel> : <Panel title="创作暂不可用"><Notice tone="warning">{data.blockReason}</Notice></Panel>}
-    <Panel title="我的课程">{data.courses.length ? <div className="card-list">{data.courses.map((course) => <article className="item-card" key={course.id}><h3>{course.title}</h3><p>{course.description || '准备好用创意完成这门课吧。'}</p><ol className="course-lessons">{course.lessons.map((lesson) => <li key={lesson.id}>{lesson.title} · {lesson.durationMinutes} 分钟</li>)}</ol></article>)}</div> : <Empty title="暂无可用课程" />}</Panel>
+    <PageHeader eyebrow="我的魔法学院" title={`你好，${data.user.displayName}`} description={data.canUseNow ? '这里汇总你的课堂任务、老师通知和最近创作。' : '等待老师开启课堂后，即可继续创作。'} actions={<button className="secondary-button" onClick={refresh}>刷新学习进度</button>} />
+    <div className="metrics"><MetricCard label="待完成课时" value={data.summary.pendingTaskCount} hint={`${data.summary.assignedLessonCount} 个课时中`} /><MetricCard label="进行中课堂" value={data.summary.activeLessonCount} hint={data.activeTasks.map((item) => item.lessonTitle).join('、') || '当前没有课堂'} tone="teal" /><MetricCard label="未读老师通知" value={data.summary.unreadNoticeCount} hint={`最近 ${data.notifications.length} 条消息`} tone="orange" /><MetricCard label="可继续草稿" value={data.summary.draftProjectCount} hint="按最近保存排序" tone="pink" /></div>
+    {!data.canUseNow && <Notice tone="warning">{data.blockReason}</Notice>}
+    <div className="split">
+      <Panel title="当前课堂">{data.activeTasks.length ? <div className="card-list">{data.activeTasks.map((task) => <article className="item-card" key={task.lessonId}><div className="row-actions"><Status value={task.status} /><span className="status success">进行中</span></div><h3>{task.lessonTitle}</h3><p>{task.courseTitle} · {task.className || '未分配班级'} · {task.teacherName || '待分配老师'}</p><p className="muted">开课时间：{formatDate(task.session?.startedAt)} · 支持能力：{Object.entries(task.session?.capabilities || {}).filter(([, enabled]) => enabled).map(([key]) => key.replace('allow', '').toUpperCase()).join(' / ') || '未开放'}</p><div className="row-actions">{(() => { const action = taskAction(task); return action.to ? <button className="primary-button" onClick={() => navigate(action.to)}>{action.label}</button> : <span className="muted">{action.reason}</span>; })()}</div></article>)}</div> : <Empty title="当前没有进行中的课堂" body={data.canUseNow ? '你的账号支持自主练习，可以从下方任务开始创作。' : '老师开启课堂后，这里会显示本节课的任务与可用能力。'} />}</Panel>
+      <Panel title="老师通知">{data.notifications.length ? <div className="card-list">{data.notifications.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={item.kind} />{item.pinned ? <span className="status warning">置顶</span> : null}{item.read ? <span className="muted">已读</span> : <span className="status success">未读</span>}</div><h3>{item.title}</h3><p>{item.body}</p><div className="row-actions"><span className="muted">{item.senderName} · {formatDate(item.publishedAt)}</span>{item.targetUrl ? <a className="secondary-button" href={item.targetUrl}>查看详情</a> : null}</div></article>)}</div> : <Empty title="暂无老师通知" body="老师或平台发布通知后，会出现在这里。" />}</Panel>
+    </div>
+    <Panel title="我的学习任务">{data.learningTasks.length ? <div className="card-list">{data.learningTasks.map((task) => { const action = taskAction(task); return <article className="item-card" key={task.lessonId}><div className="row-actions"><h3>{task.lessonTitle}</h3><Status value={task.status} /></div><p>{task.courseTitle} · {task.className || '未分配班级'} · {task.teacherName || '待分配老师'}</p><p className="muted">{task.progress.projectCount ? `已有 ${task.progress.projectCount} 个项目` : '尚未开始'}{task.progress.workCount ? ` · 已提交 ${task.progress.workCount} 次` : ''}{task.progress.lastActivityAt ? ` · 最近活动：${formatDate(task.progress.lastActivityAt)}` : ''}</p><div className="row-actions">{action.to ? <button className={task.status === 'REJECTED' ? 'primary-button' : 'secondary-button'} onClick={() => navigate(action.to)}>{action.label}</button> : <span className="muted">{action.reason}</span>}<button className="text-button" onClick={() => navigate('/courses')}>查看课程进度</button></div></article>; })}</div> : <Empty title="学习任务都已完成" body="已通过或已发布的课时不会重复出现在待办里。" />}</Panel>
+    <div className="split">
+      <Panel title="继续创作">{data.continueProjects.length ? <div className="card-list">{data.continueProjects.map((project) => <article className="item-card" key={project.id}><div className="row-actions"><h3>{project.title}</h3><Status value={project.status} /></div><p>{project.courseTitle || '未关联课程'} · {project.lessonTitle || '未关联课时'} · 版本 {project.latestVersion}</p><p className="muted">最近保存：{formatDate(project.lastSavedAt || project.updatedAt)}</p><div className="row-actions">{project.editableNow ? <button className="primary-button" onClick={() => navigate(`/projects/${project.id}/canvas`)}>进入画布</button> : <span className="muted">{project.blockReason}</span>}</div></article>)}</div> : <Empty title="暂无可继续的草稿" body={data.canUseNow ? '从学习任务中选择一个课时，开始新创作。' : data.blockReason} />}</Panel>
+      <Panel title="待处理反馈">{data.pendingFeedbackTasks.length ? <div className="card-list">{data.pendingFeedbackTasks.map((task) => <article className="item-card" key={task.lessonId}><div className="row-actions"><h3>{task.lessonTitle}</h3><Status value={task.status} /></div><p>{task.latestWork?.teacherComment || '老师已反馈，请查看作品详情并修改后重新提交。'}</p><div className="row-actions"><span className="muted">最近提交：{formatDate(task.latestWork?.submittedAt)}</span><button className="text-button" onClick={() => navigate('/works')}>查看作品反馈</button></div></article>)}</div> : <Empty title="暂无待处理反馈" body="老师点评后需要修改的作品会出现在这里。" />}</Panel>
+    </div>
+    <Panel title="课程进度总览">{data.courses.length ? <div className="card-list">{data.courses.map((course) => <article className="item-card" key={course.id}><div className="row-actions"><h3>{course.title}</h3><span className="status success">{course.progress.submittedPercent}%</span></div><p>{course.description || '准备好用创意完成这门课吧。'}</p><p className="muted">课时 {course.progress.submittedLessonCount}/{course.progress.lessonCount} · 已开始 {course.progress.startedLessonCount} · 已发布 {course.progress.publishedLessonCount}</p><div className="row-actions"><button className="text-button" onClick={() => navigate('/courses')}>查看课时明细</button></div></article>)}</div> : <Empty title="暂无可用课程" body="加入班级并由老师配置课程后，这里会显示学习进度。" />}</Panel>
   </>;
 }
-
 function Projects({ api }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const projects = useData(() => api.get('student/projects'), [api]);
   const dashboard = useData(() => api.get('student/dashboard'), [api]);
   const [title, setTitle] = useState('我的新创作');
-  const [lessonId, setLessonId] = useState('');
+  const [lessonId, setLessonId] = useState(searchParams.get('lessonId') || '');
   const [copyrightConfirmed, setCopyrightConfirmed] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
