@@ -219,6 +219,7 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 | 生产服务器密钥角色 | 只读：仅用于服务器从该仓库 `clone` / `fetch` / `pull` 代码。 |
 | GitHub Deploy key 写权限 | 未开启；当前与后续常规发布均不需要服务器向仓库写入。 |
 | 线上验证结果 | 用户已确认服务器通过该 Deploy key 的 SSH 认证和仓库读取验证。 |
+| 本地 Git 基线 | 已在 `platform-v2` 初始化 `main` 分支；远程 `origin` 已配置为 `https://github.com/chuangyilingdong/peixunwangzhan.git`；初始提交为 `d271b44`。 |
 
 必须严格区分三类凭据：
 
@@ -732,6 +733,8 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 - [ ] **P9-D03 CI/CD、GitHub Actions 与制品管理**
   - 优先级：P0
   - 已有前置：生产服务器可通过只读 Deploy key 拉取 `chuangyilingdong/peixunwangzhan`；该 key 不用于 Actions 登录服务器。
+  - 已完成前置：
+    - [x] 本地仓库已于 2026-09-02 初始化：`main` 分支、远程 `origin`、`.gitignore` / `.gitattributes` 安全基线已建立；初始提交 `d271b44` 已完成，并通过全量 `pnpm run build`。
   - 范围：依赖安装、lint、测试、构建、镜像 / 制品、SBOM、部署审批、版本号、变更记录；GitHub Actions 使用独立的“Actions → 生产服务器”部署密钥 / Secret 连接服务器，执行受控发布脚本。
   - 验收：
     - [ ] 从干净环境可重复构建；每次生产发布可定位 commit / 制品 / 配置版本；失败可停止与回滚；
@@ -880,6 +883,7 @@ node .\p3-api-integration.mjs
 | 2026-09-02 | 创建本“完整上线执行总控”，作为后续跨对话唯一进度依据。 | 待后续每次工作持续更新。 |
 | 2026-09-02 | 记录既有线上部署环境：`iicili.cyou`、Nginx、`learning-platform`、`127.0.0.1:8787` 内部监听和旧站可替换授权；新增 P9-D00 发布前备份 / 替换要求。 | 未执行线上清理或部署；后续必须先备份、演练、验证和保留回滚。 |
 | 2026-09-02 | GitHub 仓库 `chuangyilingdong/peixunwangzhan` 已确认；生产服务器只读 Deploy key 已添加并由用户验证仓库读取成功。 | 已记录密钥职责分离、推送 / 测试 / 发布流程；未创建 CI/CD、未发布线上版本。 |
+| 2026-09-02 | 在 `platform-v2` 建立 Git 初始基线：配置远程仓库、忽略数据库 / 密钥 / 日志 / 构建产物、提交 `d271b44`；并将总控文件纳入仓库 `docs/`。 | Node `v24.19.0` / pnpm `11.19.0` 下全量 `pnpm run build` 通过；尚待本地 GitHub 写入认证后推送到远程。 |
 
 ---
 
