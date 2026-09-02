@@ -291,6 +291,7 @@ export function normalizePackage(value) {
       allowPodcast: !!value.allow_podcast,
       allowDubbing: !!value.allow_dubbing,
     },
+    studentSeats: Number(value.student_seats || 0),
     status: value.status,
     createdAt: value.created_at,
     updatedAt: value.updated_at,

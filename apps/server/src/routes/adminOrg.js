@@ -75,6 +75,113 @@ function orgMemberRow(value, currentOrgId) {
   return { ...normalizeUser(value, { includeAuthMeta: true }), classes: classMemberships(currentOrgId, value.id) };
 }
 
+const ENROLLMENT_STATUSES = new Set(['PENDING', 'ACTIVE', 'SUSPENDED', 'VOIDED', 'EXPIRED']);
+const PAYMENT_STATUSES = new Set(['UNRECORDED', 'RECORDED', 'WAIVED']);
+
+function packageSnapshot(pkg) {
+  return {
+    name: pkg.name,
+    priceFen: Number(pkg.price_fen || 0),
+    monthlyCredits: Number(pkg.monthly_credits || 0),
+    bonusCredits: Number(pkg.bonus_credits || 0),
+    durationDays: Number(pkg.duration_days || 0),
+    capabilities: {
+      allowImage: !!pkg.allow_image, allowMusic: !!pkg.allow_music, allowVideo: !!pkg.allow_video,
+      allowPodcast: !!pkg.allow_podcast, allowDubbing: !!pkg.allow_dubbing,
+    },
+  };
+}
+
+function enrollmentDate(value, label, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf())) throw errors.badRequest(label + '无效', 'INVALID_ENROLLMENT_DATE');
+  return parsed.toISOString();
+}
+
+function enrollmentRow(currentOrgId, enrollmentId) {
+  const item = row(`SELECT enrollment.*, student.display_name student_name, student.login student_login,
+      package.name package_name, package.student_seats package_student_seats
+    FROM student_enrollments enrollment
+    JOIN users student ON student.id=enrollment.student_id AND student.org_id=enrollment.org_id
+    JOIN billing_packages package ON package.id=enrollment.package_id AND package.org_id=enrollment.org_id
+    WHERE enrollment.id=? AND enrollment.org_id=?`, [enrollmentId, currentOrgId]);
+  if (!item) throw errors.notFound('学员开通单不存在', 'ENROLLMENT_NOT_FOUND');
+  return item;
+}
+
+function normalizeEnrollment(value, { includeEvents = false } = {}) {
+  if (!value) return null;
+  const snapshot = parseJson(value.package_snapshot, {});
+  const result = {
+    id: value.id, orgId: value.org_id, studentId: value.student_id, studentName: value.student_name || null,
+    studentLogin: value.student_login || null, packageId: value.package_id, packageName: value.package_name || snapshot.name || null,
+    status: value.status, paymentStatus: value.payment_status, priceFen: Number(value.price_fen || 0),
+    packageSnapshot: snapshot, startsAt: value.starts_at, expiresAt: value.expires_at,
+    activatedAt: value.activated_at || null, suspendedAt: value.suspended_at || null, voidedAt: value.voided_at || null,
+    notes: value.notes || '', eventCount: Number(value.event_count || 0), lastEventAt: value.last_event_at || null,
+    createdAt: value.created_at, updatedAt: value.updated_at,
+  };
+  if (includeEvents) result.events = rows(`SELECT event.* , actor.display_name actor_name
+    FROM student_enrollment_events event LEFT JOIN users actor ON actor.id=event.actor_id
+    WHERE event.enrollment_id=? ORDER BY event.created_at DESC LIMIT 100`, [value.id]).map((event) => ({
+    id: event.id, type: event.event_type, beforeStatus: event.before_status || null, afterStatus: event.after_status || null,
+    data: parseJson(event.data, {}), actorName: event.actor_name || '系统', createdAt: event.created_at,
+  }));
+  return result;
+}
+
+function appendEnrollmentEvent({ enrollmentId, currentOrgId, eventType, beforeStatus = null, afterStatus = null, actorId = null, data = {} }) {
+  q(`INSERT INTO student_enrollment_events(id,enrollment_id,org_id,event_type,before_status,after_status,data,actor_id,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`, [id('enroll_event'), enrollmentId, currentOrgId, eventType, beforeStatus, afterStatus, json(data), actorId, nowIso()]);
+}
+
+function expireDueEnrollments(currentOrgId) {
+  const now = nowIso();
+  const due = rows("SELECT * FROM student_enrollments WHERE org_id=? AND status='ACTIVE' AND expires_at<=?", [currentOrgId, now]);
+  due.forEach((enrollment) => {
+    q("UPDATE student_enrollments SET status='EXPIRED',updated_at=? WHERE id=?", [now, enrollment.id]);
+    q("UPDATE users SET status='DISABLED',billing_package_id=NULL,monthly_credit_allowance=0,monthly_bonus_credits=0,month_period_boost_credits=0,updated_at=? WHERE id=? AND org_id=? AND billing_package_id=?", [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
+    q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
+    appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: 'EXPIRE', beforeStatus: 'ACTIVE', afterStatus: 'EXPIRED', data: { reason: '有效期届满' } });
+  });
+  return due.length;
+}
+
+function occupiedStudentSeats(currentOrgId, packageId, { excludeEnrollmentId = null } = {}) {
+  const params = [currentOrgId, packageId, nowIso()];
+  let where = "org_id=? AND package_id=? AND status='ACTIVE' AND expires_at>?";
+  if (excludeEnrollmentId) { where += ' AND id<>?'; params.push(excludeEnrollmentId); }
+  return count('SELECT COUNT(*) n FROM student_enrollments WHERE ' + where, params);
+}
+
+function assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId = null } = {}) {
+  const limit = Number(pkg.student_seats || 0);
+  const occupied = occupiedStudentSeats(currentOrgId, pkg.id, { excludeEnrollmentId });
+  if (limit < 1) throw errors.conflict('套餐尚未配置可开通的学员席位', 'PACKAGE_STUDENT_SEATS_REQUIRED');
+  if (occupied >= limit) throw errors.conflict('套餐可用学员席位不足', 'STUDENT_SEAT_LIMIT');
+  return { limit, occupied, available: Math.max(0, limit - occupied) };
+}
+
+function setStudentEnrollmentAccess(currentOrgId, enrollment, status) {
+  const snapshot = parseJson(enrollment.package_snapshot, {});
+  const now = nowIso();
+  if (status === 'ACTIVE') {
+    q(`UPDATE users SET status='ACTIVE',expires_at=?,billing_package_id=?,monthly_credit_allowance=?,monthly_bonus_credits=?,month_period_boost_credits=0,used_credits_this_period=0,period_start_at=?,period_reset_at=?,updated_at=?
+      WHERE id=? AND org_id=? AND role='STUDENT'`, [enrollment.expires_at, enrollment.package_id, Number(snapshot.monthlyCredits || 0), Number(snapshot.bonusCredits || 0), enrollment.starts_at, enrollment.expires_at, now, enrollment.student_id, currentOrgId]);
+  } else {
+    q(`UPDATE users SET status='DISABLED',billing_package_id=NULL,monthly_credit_allowance=0,monthly_bonus_credits=0,month_period_boost_credits=0,updated_at=?
+      WHERE id=? AND org_id=? AND role='STUDENT' AND billing_package_id=?`, [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
+    q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
+  }
+}
+
+function packageWithSeatUsage(currentOrgId, value) {
+  const normalized = normalizePackage(value);
+  const occupiedSeats = occupiedStudentSeats(currentOrgId, value.id);
+  return { ...normalized, occupiedSeats, availableSeats: Math.max(0, Number(value.student_seats || 0) - occupiedSeats) };
+}
+
 function teacherCanAccessClass(auth, cls) {
   return auth.user.role !== 'TEACHER' || cls.teacher_id === auth.user.id || Boolean(row(
     "SELECT id FROM class_members WHERE class_id=? AND user_id=? AND role='TEACHER' AND removed_at IS NULL",
@@ -978,17 +1085,32 @@ export async function handleOrg(ctx) {
     }));
     return { items, total: items.length };
   }
-  if (part === '/billing/packages' && method === 'GET') return { items: rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC', [currentOrgId]).map(normalizePackage) };
+  if (part === '/billing/packages' && method === 'GET') {
+    expireDueEnrollments(currentOrgId);
+    return { items: rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC', [currentOrgId]).map((item) => packageWithSeatUsage(currentOrgId, item)) };
+  }
   if (part === '/billing/packages' && method === 'POST') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建套餐', 'ORG_ADMIN_REQUIRED'); const body = ctx.body || {}; const name = String(body.name || '').trim(); if (!name) throw errors.badRequest('套餐名称必填'); if (row('SELECT id FROM billing_packages WHERE org_id=? AND name=?', [currentOrgId, name])) throw errors.conflict('同名套餐已存在', 'BILLING_PACKAGE_EXISTS'); const capabilities = body.capabilities || {}; const packageId = id('pkg'); const now = nowIso();
-    q('INSERT INTO billing_packages(id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [packageId, currentOrgId, name, integer(body.priceFen, '价格'), integer(body.monthlyCredits, '月度积分'), integer(body.bonusCredits, '赠送积分'), integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }), capabilities.allowImage ? 1 : 0, capabilities.allowMusic ? 1 : 0, capabilities.allowVideo ? 1 : 0, capabilities.allowPodcast ? 1 : 0, capabilities.allowDubbing ? 1 : 0, now, now]); return normalizePackage(row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageId, currentOrgId]));
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建套餐', 'ORG_ADMIN_REQUIRED');
+    const body = ctx.body || {}; const name = String(body.name || '').trim();
+    if (!name) throw errors.badRequest('套餐名称必填', 'PACKAGE_NAME_REQUIRED');
+    if (row('SELECT id FROM billing_packages WHERE org_id=? AND name=?', [currentOrgId, name])) throw errors.conflict('同名套餐已存在', 'BILLING_PACKAGE_EXISTS');
+    const capabilities = body.capabilities || {}; const packageId = id('pkg'); const now = nowIso();
+    const studentSeats = integer(body.studentSeats, '学员席位', { min: 1, max: 100000, fallback: 1 });
+    q('INSERT INTO billing_packages(id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,student_seats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+      packageId, currentOrgId, name, integer(body.priceFen, '价格'), integer(body.monthlyCredits, '月度积分'), integer(body.bonusCredits, '赠送积分'), integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }),
+      capabilities.allowImage ? 1 : 0, capabilities.allowMusic ? 1 : 0, capabilities.allowVideo ? 1 : 0, capabilities.allowPodcast ? 1 : 0, capabilities.allowDubbing ? 1 : 0, studentSeats, now, now,
+    ]);
+    const created = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageId, currentOrgId]);
+    audit(ctx, 'BILLING_PACKAGE_CREATE', 'BILLING_PACKAGE', packageId, null, normalizePackage(created), { orgId: currentOrgId });
+    return packageWithSeatUsage(currentOrgId, created);
   }
   let packageMatch = part.match(/^\/billing\/packages\/([^/]+)$/);
   if (packageMatch && ['GET', 'PUT'].includes(method)) {
     const target = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageMatch[1], currentOrgId]);
     if (!target) throw errors.notFound('套餐不存在', 'BILLING_PACKAGE_NOT_FOUND');
-    if (method === 'GET') return normalizePackage(target);
+    if (method === 'GET') return packageWithSeatUsage(currentOrgId, target);
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可修改套餐', 'ORG_ADMIN_REQUIRED');
+    expireDueEnrollments(currentOrgId);
     const body = ctx.body || {}; const capabilities = body.capabilities || {};
     const name = body.name === undefined ? target.name : String(body.name).trim();
     if (!name) throw errors.badRequest('套餐名称必填', 'PACKAGE_NAME_REQUIRED');
@@ -996,8 +1118,14 @@ export async function handleOrg(ctx) {
     if (body.status !== undefined) {
       status = body.status;
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('套餐状态无效', 'INVALID_PACKAGE_STATUS');
+      if (status === 'DISABLED' && target.status !== 'DISABLED' && occupiedStudentSeats(currentOrgId, target.id) > 0) {
+        throw errors.conflict('套餐仍有已开通学员，请先停用或到期处理对应开通单', 'PACKAGE_HAS_ACTIVE_ENROLLMENTS');
+      }
     }
-    q('UPDATE billing_packages SET name=?,price_fen=?,monthly_credits=?,bonus_credits=?,duration_days=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,status=?,updated_at=? WHERE id=? AND org_id=?', [
+    const studentSeats = body.studentSeats === undefined ? Number(target.student_seats || 0) : integer(body.studentSeats, '学员席位', { min: 1, max: 100000, fallback: 1 });
+    const occupied = occupiedStudentSeats(currentOrgId, target.id);
+    if (studentSeats < occupied) throw errors.conflict('学员席位不能低于当前已占用数量', 'STUDENT_SEAT_BELOW_OCCUPIED');
+    q('UPDATE billing_packages SET name=?,price_fen=?,monthly_credits=?,bonus_credits=?,duration_days=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,student_seats=?,status=?,updated_at=? WHERE id=? AND org_id=?', [
       name,
       body.priceFen === undefined ? target.price_fen : integer(body.priceFen, '价格'),
       body.monthlyCredits === undefined ? target.monthly_credits : integer(body.monthlyCredits, '月度积分'),
@@ -1008,10 +1136,117 @@ export async function handleOrg(ctx) {
       capabilities.allowVideo === undefined ? target.allow_video : (capabilities.allowVideo ? 1 : 0),
       capabilities.allowPodcast === undefined ? target.allow_podcast : (capabilities.allowPodcast ? 1 : 0),
       capabilities.allowDubbing === undefined ? target.allow_dubbing : (capabilities.allowDubbing ? 1 : 0),
-      status, nowIso(), target.id, currentOrgId,
+      studentSeats, status, nowIso(), target.id, currentOrgId,
     ]);
-    audit(ctx, 'BILLING_PACKAGE_UPDATE', 'BILLING_PACKAGE', target.id, normalizePackage(target), body);
-    return normalizePackage(row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [target.id, currentOrgId]));
+    const updated = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [target.id, currentOrgId]);
+    audit(ctx, 'BILLING_PACKAGE_UPDATE', 'BILLING_PACKAGE', target.id, normalizePackage(target), normalizePackage(updated), { orgId: currentOrgId });
+    return packageWithSeatUsage(currentOrgId, updated);
+  }
+
+  if (part === '/billing/enrollments' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学员开通', 'ORG_ADMIN_REQUIRED');
+    expireDueEnrollments(currentOrgId);
+    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
+    if (status && !ENROLLMENT_STATUSES.has(status)) throw errors.badRequest('开通状态无效', 'INVALID_ENROLLMENT_STATUS');
+    const params = [currentOrgId]; let where = 'enrollment.org_id=?';
+    if (status) { where += ' AND enrollment.status=?'; params.push(status); }
+    const items = rows(`SELECT enrollment.*,student.display_name student_name,student.login student_login,package.name package_name,
+        COUNT(event.id) event_count,MAX(event.created_at) last_event_at
+      FROM student_enrollments enrollment
+      JOIN users student ON student.id=enrollment.student_id AND student.org_id=enrollment.org_id
+      JOIN billing_packages package ON package.id=enrollment.package_id AND package.org_id=enrollment.org_id
+      LEFT JOIN student_enrollment_events event ON event.enrollment_id=enrollment.id
+      WHERE ${where}
+      GROUP BY enrollment.id ORDER BY CASE enrollment.status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 WHEN 'SUSPENDED' THEN 2 ELSE 3 END,enrollment.expires_at ASC,enrollment.created_at DESC LIMIT 500`, params).map(normalizeEnrollment);
+    const active = items.filter((item) => item.status === 'ACTIVE');
+    const now = Date.now();
+    return { items, summary: { total: items.length, pending: items.filter((item) => item.status === 'PENDING').length, active: active.length, suspended: items.filter((item) => item.status === 'SUSPENDED').length, expiringSoon: active.filter((item) => { const days = Math.ceil((Date.parse(item.expiresAt) - now) / 86400000); return days >= 0 && days <= 30; }).length } };
+  }
+  if (part === '/billing/enrollments' && method === 'POST') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建学员开通单', 'ORG_ADMIN_REQUIRED');
+    const body = ctx.body || {}; const studentId = String(body.studentId || '').trim(); const packageId = String(body.packageId || '').trim();
+    const student = row("SELECT * FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
+    if (!student) throw errors.badRequest('学员不属于当前机构', 'INVALID_ENROLLMENT_STUDENT');
+    const pkg = row("SELECT * FROM billing_packages WHERE id=? AND org_id=? AND status='ACTIVE'", [packageId, currentOrgId]);
+    if (!pkg) throw errors.badRequest('套餐不存在或已停用', 'INVALID_ENROLLMENT_PACKAGE');
+    if (row("SELECT id FROM student_enrollments WHERE student_id=? AND status='ACTIVE'", [student.id])) throw errors.conflict('该学员已有生效中的开通单，请使用续费或停用操作', 'STUDENT_ALREADY_ENROLLED');
+    const now = nowIso(); const startsAt = enrollmentDate(body.startsAt, '开始时间', now);
+    const expiresAt = new Date(new Date(startsAt).valueOf() + Number(pkg.duration_days || 0) * 86400000).toISOString();
+    const paymentStatus = body.paymentStatus === undefined ? 'UNRECORDED' : String(body.paymentStatus).trim().toUpperCase();
+    if (!PAYMENT_STATUSES.has(paymentStatus)) throw errors.badRequest('线下收款登记状态无效', 'INVALID_PAYMENT_STATUS');
+    const notes = String(body.notes || '').trim(); if (notes.length > 2000) throw errors.badRequest('备注不能超过 2000 个字符', 'ENROLLMENT_NOTES_TOO_LONG');
+    const enrollmentId = id('enrollment'); const snapshot = packageSnapshot(pkg);
+    q(`INSERT INTO student_enrollments(id,org_id,student_id,package_id,status,payment_status,price_fen,package_snapshot,starts_at,expires_at,notes,created_by,updated_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [enrollmentId, currentOrgId, student.id, pkg.id, 'PENDING', paymentStatus, Number(pkg.price_fen || 0), json(snapshot), startsAt, expiresAt, notes, auth.user.id, auth.user.id, now, now]);
+    appendEnrollmentEvent({ enrollmentId, currentOrgId, eventType: 'CREATE', afterStatus: 'PENDING', actorId: auth.user.id, data: { packageId: pkg.id, paymentStatus, startsAt, expiresAt, notes } });
+    const created = enrollmentRow(currentOrgId, enrollmentId);
+    audit(ctx, 'STUDENT_ENROLLMENT_CREATE', 'STUDENT_ENROLLMENT', enrollmentId, null, normalizeEnrollment(created), { orgId: currentOrgId });
+    return normalizeEnrollment(created, { includeEvents: true });
+  }
+  let enrollmentMatch = part.match(/^\/billing\/enrollments\/([^/]+)$/);
+  if (enrollmentMatch && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学员开通', 'ORG_ADMIN_REQUIRED');
+    expireDueEnrollments(currentOrgId);
+    return normalizeEnrollment(enrollmentRow(currentOrgId, enrollmentMatch[1]), { includeEvents: true });
+  }
+  let enrollmentActionMatch = part.match(/^\/billing\/enrollments\/([^/]+)\/(payment-record|activate|suspend|resume|renew|void)$/);
+  if (enrollmentActionMatch && method === 'POST') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作学员开通', 'ORG_ADMIN_REQUIRED');
+    expireDueEnrollments(currentOrgId);
+    const enrollment = enrollmentRow(currentOrgId, enrollmentActionMatch[1]); const action = enrollmentActionMatch[2]; const before = enrollment.status; const now = nowIso();
+    const pkg = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [enrollment.package_id, currentOrgId]);
+    if (!pkg) throw errors.conflict('开通单关联套餐已不可用', 'ENROLLMENT_PACKAGE_MISSING');
+    let after = before; let eventData = {};
+    transaction(() => {
+      if (action === 'payment-record') {
+        const paymentStatus = String(ctx.body?.paymentStatus || 'RECORDED').trim().toUpperCase();
+        if (!PAYMENT_STATUSES.has(paymentStatus)) throw errors.badRequest('线下收款登记状态无效', 'INVALID_PAYMENT_STATUS');
+        const notes = ctx.body?.notes === undefined ? enrollment.notes : String(ctx.body.notes || '').trim();
+        if (notes.length > 2000) throw errors.badRequest('备注不能超过 2000 个字符', 'ENROLLMENT_NOTES_TOO_LONG');
+        q('UPDATE student_enrollments SET payment_status=?,notes=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?', [paymentStatus, notes, auth.user.id, now, enrollment.id, currentOrgId]);
+        eventData = { paymentStatus, notes };
+      } else if (action === 'activate') {
+        if (before !== 'PENDING') throw errors.conflict('仅待开通记录可以完成开通', 'INVALID_ENROLLMENT_TRANSITION');
+        if (pkg.status !== 'ACTIVE') throw errors.conflict('套餐已停用，不能继续开通', 'PACKAGE_DISABLED');
+        assertEnrollmentSeat(currentOrgId, pkg);
+        after = 'ACTIVE';
+        q("UPDATE student_enrollments SET status='ACTIVE',activated_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
+        setStudentEnrollmentAccess(currentOrgId, enrollment, 'ACTIVE');
+      } else if (action === 'suspend') {
+        if (before !== 'ACTIVE') throw errors.conflict('仅生效中的开通单可以停用', 'INVALID_ENROLLMENT_TRANSITION');
+        after = 'SUSPENDED';
+        q("UPDATE student_enrollments SET status='SUSPENDED',suspended_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
+        setStudentEnrollmentAccess(currentOrgId, enrollment, 'SUSPENDED');
+      } else if (action === 'resume') {
+        if (before !== 'SUSPENDED') throw errors.conflict('仅已停用记录可以恢复', 'INVALID_ENROLLMENT_TRANSITION');
+        if (enrollment.expires_at <= now) throw errors.conflict('开通单已到期，请先续费后再恢复', 'ENROLLMENT_EXPIRED');
+        if (pkg.status !== 'ACTIVE') throw errors.conflict('套餐已停用，不能恢复开通', 'PACKAGE_DISABLED');
+        assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId: enrollment.id });
+        after = 'ACTIVE';
+        q("UPDATE student_enrollments SET status='ACTIVE',suspended_at=NULL,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [auth.user.id, now, enrollment.id, currentOrgId]);
+        setStudentEnrollmentAccess(currentOrgId, enrollment, 'ACTIVE');
+      } else if (action === 'renew') {
+        if (!['ACTIVE', 'SUSPENDED', 'EXPIRED'].includes(before)) throw errors.conflict('当前开通单不能续费', 'INVALID_ENROLLMENT_TRANSITION');
+        if (pkg.status !== 'ACTIVE') throw errors.conflict('套餐已停用，不能续费', 'PACKAGE_DISABLED');
+        if (before !== 'ACTIVE') assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId: enrollment.id });
+        const snapshot = parseJson(enrollment.package_snapshot, packageSnapshot(pkg)); const durationDays = Number(snapshot.durationDays || pkg.duration_days || 0);
+        if (!Number.isInteger(durationDays) || durationDays < 1) throw errors.conflict('开通单套餐快照无有效期，无法续费', 'INVALID_ENROLLMENT_SNAPSHOT');
+        const baseTime = Math.max(Date.parse(enrollment.expires_at), Date.now()); const expiresAt = new Date(baseTime + durationDays * 86400000).toISOString();
+        after = 'ACTIVE'; eventData = { previousExpiresAt: enrollment.expires_at, expiresAt, durationDays };
+        q("UPDATE student_enrollments SET status='ACTIVE',expires_at=?,activated_at=COALESCE(activated_at,?),suspended_at=NULL,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [expiresAt, now, auth.user.id, now, enrollment.id, currentOrgId]);
+        const renewed = { ...enrollment, expires_at: expiresAt };
+        setStudentEnrollmentAccess(currentOrgId, renewed, 'ACTIVE');
+      } else if (action === 'void') {
+        if (!['PENDING', 'SUSPENDED'].includes(before)) throw errors.conflict('仅待开通或已停用记录可以作废', 'INVALID_ENROLLMENT_TRANSITION');
+        after = 'VOIDED';
+        q("UPDATE student_enrollments SET status='VOIDED',voided_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
+        if (before === 'SUSPENDED') setStudentEnrollmentAccess(currentOrgId, enrollment, 'VOIDED');
+      }
+      appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: action.toUpperCase(), beforeStatus: before, afterStatus: after, actorId: auth.user.id, data: eventData });
+    });
+    const updated = enrollmentRow(currentOrgId, enrollment.id);
+    audit(ctx, 'STUDENT_ENROLLMENT_' + action.toUpperCase(), 'STUDENT_ENROLLMENT', enrollment.id, normalizeEnrollment(enrollment), normalizeEnrollment(updated), { orgId: currentOrgId });
+    return normalizeEnrollment(updated, { includeEvents: true });
   }
 
   if (part === '/ai-usage' && method === 'GET') {

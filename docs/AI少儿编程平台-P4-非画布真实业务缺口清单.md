@@ -24,7 +24,7 @@
 | 1 | 平台端 · 平台用户 | `/users` | 新增 `GET /api/admin/platform-users` | 支持角色、机构、关键词筛选；返回用户、机构名、套餐名、状态与有效期；未登录 401、越权 403。 |
 | 2 | 平台端 · 平台管理员 | `/admins` | 新增 `GET/POST/PUT /api/admin/platform-admins` | 支持创建、编辑、启停、重置密码、权限码白名单；不能停用自己；重复登录名 409；非法权限码 400。 |
 | 3 | 机构端 · 课程中心 | `/courses` | 复用 `GET /api/org/course-series` | 展示授权来源、可见范围、版本、课时数与课时明细；教师和管理员均可读，不出现伪造课件资源。 |
-| 4 | 机构端 · 积分套餐 | `/packages` | 复用 `GET/POST`，新增 `GET/PUT /api/org/billing/packages/:id` | 管理员可创建、编辑、启停套餐；教师只读；教师写操作 403；数据来自 `billing_packages`。 |
+| 4 | 机构端 · 套餐与学员开通 | `/packages`、`/enrollment` | 套餐 `GET/POST/PUT /api/org/billing/packages`；开通单 `GET/POST /api/org/billing/enrollments` 及登记、开通、停用、恢复、续费、作废动作 | 管理员可配置套餐席位、创建待开通单并按状态机完成履约；教师无开通单访问权限；数据来自 `billing_packages`、`student_enrollments` 与事件表。 |
 | 5 | 机构端 · 积分用量 | `/usage` | 复用 `GET /api/org/billing/usage-overview`，新增 `GET /api/org/billing/usage-records` | 展示余额、能力汇总、Top 用户和可筛选用量明细；课堂上下文通过 `class_sessions -> classes` 关联，不得错误直连班级。 |
 
 第一批完成前，对应页面状态保持 `本轮实现中`；接口正反向验证、P3 回归、前端构建和总控更新全部通过后才可改判 `真实已有`。
@@ -55,7 +55,7 @@
 | `/members` | `/org/accounts` 账号管理 | ORG_ADMIN、TEACHER 按权限 | `真实已有` | `users`、`billing_packages` | `GET/POST/PUT/DELETE /api/org/users` 等 | 用户 `ACTIVE/DISABLED`；`MANAGE_MEMBERS` | 批量导入、变更记录、统一走开通策略 | 创建/编辑/禁用/重置密码/权限越权失败 |
 | `/works` | `/org/published-works` 作品点评 | ORG_ADMIN、TEACHER | `真实已有` | `works`、`work_annotations` | works、review、annotations | `PENDING/APPROVED/REJECTED/PUBLISHED`；教师只能管本班 | 下架、访客统计、公开分享 | P3 回归含审核与批注 |
 | `/courses` | `/org/courses` 课程中心 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02）` | `course_series`、`course_lessons`、`course_assignments` | `GET /api/org/course-series` | 平台公开/授权/机构自有；只含 `PUBLISHED` | 课件资产、上课入口聚合 | 管理员/教师可读，未登录 401，student 403 |
-| `/packages` | `/org/billing-packages` 积分套餐 | ORG_ADMIN 写、TEACHER 只读 | `真实已有（2026-09-02）` | `billing_packages` | `GET/POST` 已有；新增 `GET/PUT /:id` | 套餐 `ACTIVE/DISABLED`；写操作 ORG_ADMIN | 与学员开通单联动 | 教师读 200、写 403；管理员编辑启停成功 |
+| `/packages`、`/enrollment` | `/org/billing-packages` 积分套餐、`/org/enrollment` 学员开通 | ORG_ADMIN；TEACHER 无开通单权限 | `真实已有（2026-09-02，P4-O07）` | `billing_packages`、`student_enrollments`、`student_enrollment_events` | 套餐 `GET/POST/PUT`；开通单列表 / 详情 / 创建、线下履约登记、开通 / 停用 / 恢复 / 续费 / 作废 | `PENDING/ACTIVE/SUSPENDED/VOIDED/EXPIRED`；仅 `ACTIVE` 占席位；停用 / 到期失效学生会话与套餐权限 | 在线支付、支付回调、自动续费和自动消息提醒 | 临时 SQLite 验证席位上限、状态迁移、到期扫描、权限失效与审计；教师读取开通单 403 |
 | `/usage` | `/org/usage-records` 积分用量 | ORG_ADMIN、TEACHER 按权限 | `真实已有（2026-09-02）` | `org_billing_accounts`、`usage_records`、`class_sessions`、`classes` | overview 已有；新增 usage-records | `SUCCESS/FAILED/BLOCKED` | 今日/7日/30日切换与导出 | SQL 关联经 class_sessions；筛选与越权校验 |
 | `/classes`（课堂内 AI 控制） | `/org/classes/:id` 课堂 AI 控制与用量审计 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，P4-O04）` | `class_sessions`、`usage_records`、`generation_jobs`、`student_projects`、`classes` | `PUT /api/org/classes/:classId/sessions/:sessionId/ai-controls`、`GET /api/org/ai-usage`、`POST /api/ai/usage`、`POST /api/ai/generations` | 课堂 `ACTIVE`；暂停 / 能力开关 / 单学生次数 / 课堂积分上限由服务端强制；教师按负责 / 授权课堂查询 | 真实外部 AI provider、异步队列与账单策略仍按后续基础设施处理 | 临时 SQLite 验证普通调用与生成任务的成功 / BLOCKED 审计、课时 / 项目 / job 关联、教师范围和越权 |
 | `/inbox` | `/org/inbox` 站内信 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，两批）` | `notifications`、`notification_recipients` | `GET/POST /api/org/inbox`、`PUT /api/org/inbox/:id/read`、`PUT /api/org/inbox/read-all` | 平台即时/定时公告接收；机构通知仅 ORG_ADMIN 可发；按当前机构与本人接收记录隔离 | 高可用异步队列、失败重试、忽略状态、邮件/短信/微信渠道 | 临时库验证管理员/教师接收、单条/全部已读、机构发送权限、定时到期和撤回隐藏 |
@@ -105,9 +105,10 @@
 7. [x] **P4-O04 课堂内 AI 能力控制与使用审计（2026-09-02 已完成）**：已接通服务端课堂暂停、能力开关、单学生调用上限、课堂积分上限、普通调用 / 生成任务审计和机构端用量查询。
 8. [x] **P4-O05 作品社区运营闭环（2026-09-02 已完成）**：已补齐版权 / 机构内展示授权确认、`PENDING → APPROVED → PUBLISHED` 审核发布、精选、举报处理、下架、作者脱敏、教师负责 / 授权班级范围和审计；评论 / 点赞未启用。
 9. [x] **P4-O06 作品数据中心（2026-09-02 已完成）**：已按班级 / 课程课时 / 学员下钻活跃、完成、提交、发布、反馈与成功 AI 用量，补齐 ORG_ADMIN 权限、过滤校验、统计口径和脱敏导出审计。`/work-data` 已从壳层接通真实 API，不包含访问量、访客或公开分享统计。
-10. **当前唯一下一步：P4-O07 套餐、学员开通与席位管理**：梳理套餐、学员开通记录、席位分配、有效期、停用 / 续费与到期提醒，所有变更必须留痕；不把线下收款或在线支付伪装为已完成。
+10. [x] **P4-O07 套餐、学员开通与席位管理（2026-09-02 已完成）**：已形成套餐席位配置、待开通单、线下履约登记、开通 / 停用 / 恢复 / 续费 / 作废、到期扫描、学生权限失效和审计 / 事件留痕闭环；仅 `ACTIVE` 占用席位。在线支付、支付回调、自动续费和自动消息提醒未实现。
+11. **当前唯一下一步：P4-O08 积分充值、用量和对账**：在既有只读账务与用量视图基础上，继续收敛冻结金额、人工调整、退款 / 冲正、不可篡改流水、并发扣减不透支、失败任务处理规则及导出对账；不得伪造支付回调或在线充值已完成。
 
-## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06）
+## 8. 本轮总验收（P4-00 / P4-01 / P4-02 / P4-03 / P4-O01 / P4-O02 / P4-O03 / P4-O04 / P4-O05 / P4-O06 / P4-O07）
 
 ### 8.1 P4-00 第一批验收记录
 
@@ -216,3 +217,13 @@
 - [x] 已增加统计查询索引：`student_projects(org_id,class_id,course_lesson_id,updated_at)`、`works(org_id,class_id,course_lesson_id,submitted_at)`、`usage_records(org_id,project_id,created_at)`。
 - [x] 临时 SQLite P4-O06 API 验收通过：覆盖 7 / 14 / 30 日、非法周期、三层筛选、真实项目保存 / 提交 / 审核发布 / 批注 / 成功 AI 用量、FAILED / BLOCKED 不计入、脱敏导出和审计、教师 / 学员 403、跨机构过滤及空数据机构；P3 API 回归 `46 pass / 0 fail` 通过。
 - [x] 边界：访问去重、访客趋势、授权访客与公开分享模型仍是后续能力；本批未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
+
+### 8.12 P4-O07 验收记录（2026-09-02）
+
+- [x] 数据模型：`billing_packages` 增加 `student_seats` 及旧 SQLite 兼容迁移；新增 `student_enrollments` 与 `student_enrollment_events`，保存套餐 / 价格快照、有效期、线下履约状态、操作者和过程事件。
+- [x] 状态与席位：开通单仅允许 `PENDING → ACTIVE / VOIDED`、`ACTIVE → SUSPENDED / EXPIRED / VOIDED`、`SUSPENDED / EXPIRED → ACTIVE` 等服务端校验后的转移；仅 `ACTIVE` 占用套餐席位，超额开通返回 `409 STUDENT_SEAT_LIMIT`，套餐不得降到已占用席位以下，存在生效开通单时不能直接停用套餐。
+- [x] 权限失效：停用或到期时，服务端停用学生账号、清除套餐关联和个人套餐额度并撤销既有会话；恢复 / 续费重新校验可用席位。列表 / 详情请求会执行到期扫描，机构页显示 30 日内到期数量和记录。
+- [x] API 与页面：机构管理员已可使用套餐列表 / 配置及开通单列表、详情、创建、线下履约登记、开通、停用、恢复、续费、作废接口；机构端 `/packages`、`/enrollment` 已接通真实页面。教师访问开通单被服务端拒绝并显示权限说明。
+- [x] 验证：临时 SQLite P4-O07 API 验收通过，覆盖管理员 / 教师权限、套餐席位统计、待开通单、线下登记、完成开通、超席位拒绝、套餐保护、停用释放席位与登录拒绝、续费、到期扫描、到期后登录拒绝、审计和事件留痕；P3 API 回归通过。
+- [x] 最终检查：`node --check apps/server/src/routes/adminOrg.js`、`node --check apps/server/src/lib.js`、`node --check packages/database/src/schema.js`、`node --check packages/database/src/seed.js`、`pnpm.cmd run build` 与 `git diff --check` 通过。画布未修改，真实 `platform.db` 未触碰，未部署线上。
+- [ ] 边界：线下履约仅登记 `UNRECORDED / RECORDED / WAIVED`，未接入或伪造在线支付、支付回调、自动续费；到期仅提供数据扫描和机构端提示指标，未接入自动消息推送。

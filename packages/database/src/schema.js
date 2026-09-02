@@ -130,12 +130,56 @@ CREATE TABLE IF NOT EXISTS billing_packages (
   allow_video INTEGER NOT NULL DEFAULT 0,
   allow_podcast INTEGER NOT NULL DEFAULT 0,
   allow_dubbing INTEGER NOT NULL DEFAULT 0,
+  student_seats INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','DISABLED')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_packages_org_name ON billing_packages(org_id, name);
+
+-- 学员套餐开通单仅记录机构线下履约，不承诺或模拟在线支付、自动续费。
+CREATE TABLE IF NOT EXISTS student_enrollments (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  package_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','SUSPENDED','VOIDED','EXPIRED')),
+  payment_status TEXT NOT NULL DEFAULT 'UNRECORDED' CHECK (payment_status IN ('UNRECORDED','RECORDED','WAIVED')),
+  price_fen INTEGER NOT NULL DEFAULT 0,
+  package_snapshot TEXT NOT NULL DEFAULT '{}',
+  starts_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  activated_at TEXT,
+  suspended_at TEXT,
+  voided_at TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  created_by TEXT,
+  updated_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE RESTRICT,
+  FOREIGN KEY (package_id) REFERENCES billing_packages(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_student_enrollments_org_status_expires ON student_enrollments(org_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_student_enrollments_student_created ON student_enrollments(student_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_student_enrollments_active_student ON student_enrollments(student_id) WHERE status='ACTIVE';
+
+CREATE TABLE IF NOT EXISTS student_enrollment_events (
+  id TEXT PRIMARY KEY,
+  enrollment_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  before_status TEXT,
+  after_status TEXT,
+  data TEXT NOT NULL DEFAULT '{}',
+  actor_id TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (enrollment_id) REFERENCES student_enrollments(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_student_enrollment_events_enrollment_created ON student_enrollment_events(enrollment_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS course_series (
   id TEXT PRIMARY KEY,
@@ -567,6 +611,8 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_usage_generation_job ON usage_records(ge
 // Lightweight forward-compatible migration for the class scheduling domain. Existing
 // local databases may have been created before makeup sessions were introduced.
 try { db.exec("ALTER TABLE class_sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT 'REGULAR'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE billing_packages ADD COLUMN student_seats INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
 

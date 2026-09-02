@@ -147,15 +147,15 @@ function ensurePackage(orgId, now) {
     q(
       `INSERT INTO billing_packages(
         id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,
-        allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,status,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [packageId, orgId, '标准创作套餐', 9900, 500, 50, 30, 1, 1, 1, 0, 0, 'ACTIVE', now, now],
+        allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,student_seats,status,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [packageId, orgId, '标准创作套餐', 9900, 500, 50, 30, 1, 1, 1, 0, 0, 30, 'ACTIVE', now, now],
     );
     pkg = row('SELECT * FROM billing_packages WHERE id = ?', [packageId]);
   } else {
     q(
       `UPDATE billing_packages SET monthly_credits=500,bonus_credits=50,duration_days=30,
-       allow_image=1,allow_music=1,allow_video=1,allow_podcast=0,allow_dubbing=0,status='ACTIVE',updated_at=?
+       allow_image=1,allow_music=1,allow_video=1,allow_podcast=0,allow_dubbing=0,student_seats=MAX(student_seats,30),status='ACTIVE',updated_at=?
        WHERE id=?`,
       [now, pkg.id],
     );
