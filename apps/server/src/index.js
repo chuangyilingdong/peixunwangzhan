@@ -12,6 +12,23 @@ import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingC
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+const PUBLIC_SITE_URL = String(process.env.PUBLIC_SITE_URL || 'http://localhost:5176').replace(/\/$/, '');
+const PUBLIC_ROUTES = ['/', '/marketplace', '/courses', '/org', '/works', '/handbook', '/compare', '/download', '/demo', '/terms', '/privacy', '/minors'];
+function sendText(res, status, text, contentType, req) {
+  res.writeHead(status, { ...corsHeaders(req, { 'content-type': contentType, 'cache-control': 'public, max-age=3600' }), 'content-length': Buffer.byteLength(text) });
+  res.end(text);
+}
+function xmlEscape(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;'); }
+function handleSeoAsset(ctx) {
+  if (ctx.method !== 'GET') return false;
+  if (ctx.pathname === '/robots.txt') { sendText(ctx.res, 200, `User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${PUBLIC_SITE_URL}/sitemap.xml\n`, 'text/plain; charset=utf-8', ctx.req); return true; }
+  if (ctx.pathname === '/sitemap.xml') {
+    const body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">', ...PUBLIC_ROUTES.map((route) => `  <url><loc>${xmlEscape(PUBLIC_SITE_URL + route)}</loc></url>`), '</urlset>'].join('\n');
+    sendText(ctx.res, 200, body, 'application/xml; charset=utf-8', ctx.req); return true;
+  }
+  return false;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     sendNoContent(res, req);
@@ -31,6 +48,8 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (bodyMethods.has(ctx.method)) ctx.body = await readJson(req, '2mb');
+    if (handleSeoAsset(ctx)) return;
+
     if (ctx.pathname === '/health' && ctx.method === 'GET') {
       sendJson(res, 200, envelope({ status: 'ok', service: 'ai-kids-platform', time: new Date().toISOString() }), req);
       return;

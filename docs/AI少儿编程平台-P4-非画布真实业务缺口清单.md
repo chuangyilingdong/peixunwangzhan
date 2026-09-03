@@ -408,6 +408,23 @@
 - [x] 验收脚本 `tmp-p5-m01-marketplace.mjs`：**75 / 75 断言通过 / 0 失败**。覆盖 401/越权、4 态过滤、搜索、分页、积分越界/负数/非法 status、状态机 PENDING→APPROVED→REJECTED、积分独立更新、课包不存在 404、公开仅 APPROVED+ALL_ORGS、popular/recent 排序正确、page1/2 无重叠。
 - [x] 后端 ESM 语法（`--check`）：adminOrg.js / communication.js OK；四端生产构建（admin / org / student / website）全部通过；`git diff --check` 通过。
 - [x] 边界：未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上；不做真实付费购买、SLA 评分、评论、用户购买历史。
+### P5-W01 官网 CMS / 配置化验收记录（2026-09-03）
+
+- [x] `website_contents` 与 `website_content_revisions` 已加入 schema，并提供旧库迁移保护；seed 初始化 HOME / FAQ / BRAND 默认已发布内容。
+- [x] 服务端公开端仅返回已发布版本；平台端仅 SUPER_ADMIN 可查看、保存草稿、发布、查看历史和回滚。接口包括 `GET /api/public/website-content[/:key]`、`GET/PUT /api/admin/website-content[/:key]`、发布与回滚接口。
+- [x] admin `/website-content` 已从单一 JSON 编辑升级为首页 / FAQ / 品牌结构化表单：文字字段、可选已有真实资源 URL、FAQ 新增 / 删除 / 上下排序、草稿预览；高级 JSON 入口保留给复杂区块。未实现虚假图片上传或 OSS 托管。
+- [x] 官网首页 Hero / 信任区和机构方案 FAQ 读取已发布 CMS；课程、作品、下载继续读取各自真实 API 并保留安全 fallback。
+- [x] 验收脚本 `tmp-p5-w01-cms.mjs`：临时 SQLite **14 pass / 0 fail**；覆盖公开只读、未登录 401、非超管 403、草稿、非法内容、发布、历史、回滚、结构化表单 / 预览 / 排序 / 无虚假上传断言。
+- [x] 后端语法检查、四端生产构建、`git diff --check` 通过；未修改 `packages/canvas`，未触碰真实 `packages/data/platform.db`，未部署线上。
+
+### P5-W07 SEO / 可访问性 / 性能基础优化验收记录（2026-09-03）
+
+- [x] `GET /robots.txt` 和 `GET /sitemap.xml` 已上线本地服务路由；sitemap 仅列公开页面，站点地址支持 `PUBLIC_SITE_URL` 环境变量，API 路径不纳入索引。
+- [x] 官网 `index.html` 已补 `lang`、title、description、canonical、Open Graph、Twitter Card、theme-color 与 EducationalOrganization JSON-LD；路由切换更新 document.title / canonical / OG URL。
+- [x] 主导航、作品打开、课程广场筛选 / 搜索 / 分页、课程封面增加可访问语义；全局 focus-visible、disabled 样式和移动端窄屏布局已补强。当前官网没有独立图片资源；真实课程封面仅在 API 返回 URL 时展示。
+- [x] 验收脚本 `tmp-p5-w07-seo.mjs`：临时 SQLite / 静态 **13 pass / 0 fail**；覆盖 robots、sitemap 页面范围、SEO head、动态内容、aria、焦点态、课程广场窄屏规则和生产 HTML。
+- [x] 四端生产构建、`git diff --check` 通过；未运行真实 Lighthouse，因此不宣称 Lighthouse 分数；构建保留 org / student 既存大 chunk 警告。
+
 ### P5-W08 协议 / 隐私 / 未成年人说明验收记录（2026-09-03）
 
 - [-] 官网新增 `/terms`、`/privacy`、`/minors` 三类准备稿页面，公开 Footer 可达；统一展示版本 `2026.09.03`、拟生效日期 `2026-09-03`、主体 `五格殿下 · AI魔法学院`，并明确“上线准备稿：正式备案主体与法务确认后生效”。
@@ -417,3 +434,11 @@
 - [x] 验收脚本 `tmp-p5-w08-legal.mjs`：临时 SQLite **18 pass / 0 fail**；覆盖公开元数据、预约缺少 / 旧版本 / 非法时间、线索落库、admin 回读、学生认证 / 当前密码 / 类型 / 版本 / 三类记录 / 幂等。后端语法检查、四端生产构建和 `git diff --check` 通过。
 - [x] 边界：未修改 `packages/canvas`，未触碰真实 `packages/data/platform.db`，未伪造 AI / 微信 / 短信 / 邮件 / OSS / 支付 / 客户端。
 - [-] 阻塞：正式备案主体信息、正式生效日期和法务确认正文尚未提供；当前代码与文案不能视为正式上线合规文本。下一步由用户 / 业务方确认后替换准备稿并重新验收。
+
+
+### P5 后续状态说明（2026-09-03）
+
+- `P5-W08` 保持“本轮实现中”：协议页面是备案主体与法务确认前的上线准备稿，不能视为正式合规文本。
+- `P5-W09` / `P5-W10` 保持外部阻塞 / 暂缓；用户已确认备案后续再做，不在本轮伪造域名、品牌邮箱、HTTPS、ICP 备案或内容合规材料。
+- `/org/afee` 仍依赖微信开放平台，保持外部决策；`/org/enrollment` 已由 P4-O07 覆盖并保持真实已有。
+- P5-W03 客服工单、P5-W06 真实客户端下载继续保持产品取消，不重新建设。

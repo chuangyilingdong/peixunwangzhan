@@ -3,7 +3,7 @@
 > **唯一总控文件 / Single Source of Truth**  
 > 工程根目录：`D:\学习平台\platform-v2`  `n> 受版本控制的总控文件：`docs\AI少儿编程平台-完整上线执行总控.md`  
 > 创建日期：2026-09-02  
-> 当前阶段：**P3 / P3.5 / P4 / P5-W02 / P5-W04 / P5-W05 / P5-M01 已完成；P5-W08 已完成代码闭环但等待备案主体与法务确认；P5 剩余主要为 CMS、SEO、域名备案等事项；非画布三端信息架构与真实业务能力已闭环。**
+> 当前阶段：**P3 / P3.5 / P4 / P5-W01 / P5-W02 / P5-W04 / P5-W05 / P5-M01 / P5-W07 已完成；P5-W08 已完成代码闭环但等待备案主体与法务确认；P5-W09 / P5-W10 及真实外部服务仍需业务方后续决策；非画布三端信息架构与真实业务能力已闭环。**
 > 当前总原则：**除 `packages/canvas` 外，网站与三端按”AI 魔法学院”基准持续实施；画布暂时冻结，必须等待用户再次明确授权后才可改动。**
 
 ---
@@ -104,8 +104,9 @@
     - [x] 边界：未修改 `packages/canvas`，未触碰真实 `packages/data/platform.db`，未伪造 AI / 微信 / 短信 / 邮件 / OSS / 支付 / 客户端；当前文案不是正式法务意见。
   - 阻塞：正式备案主体信息、正式生效日期与法务确认文本尚未由用户 / 业务方提供；因此本事项保持 `[-]`，不能标记为正式上线完成。
   - 下一步：确认主体、备案信息、正式生效日期和协议正文后，替换准备稿并重新运行临时 SQLite 验收与四端构建。
-- [ ] **下一会话推荐：P5-W01 官网内容 CMS / 配置化，或 P5-W07 SEO / 可访问性 / 性能优化。**
-  - 其他开放项：P5-W09 / P5-W10（见 §5.2）；P5-W03/W06 已产品决策取消（见对应 todo 行的 `[~]` 标记）；`/org/afee` 阿飞提醒仍依赖微信开放平台；`/org/enrollment` 学员开通单已由 P4-O07 覆盖并在 P4 清单改判“真实已有”；`/demo` 预约演示已由 P5-W02 覆盖并在 P4 清单改判“真实已有”。
+- [x] **P5-W01 官网内容 CMS / 配置化与 P5-W07 SEO / 可访问性 / 性能优化** ✅ 2026-09-03
+  - 已完成结构化内容编辑、草稿预览、发布 / 历史版本 / 回滚；公开站已接入 SEO head、robots、sitemap、动态标题、关键 aria 语义与窄屏布局。
+  - 其他开放项：P5-W09 / P5-W10（见 §5.2，备案后续再做）；P5-W08 仍等待正式备案主体与法务正文；P5-W03/W06 已产品决策取消（见对应 todo 行的 `[~]` 标记）；`/org/afee` 阿飞提醒仍依赖微信开放平台；`/org/enrollment` 学员开通单已由 P4-O07 覆盖并改判“真实已有”；`/demo` 预约演示已由 P5-W02 覆盖并改判“真实已有”。
 
 - [x] **P4-O01 机构首页真实经营看板第一批闭环。**
   - 优先级：P0
@@ -818,9 +819,13 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 
 ### 5.1 官网内容与转化
 
-- [ ] **P5-W01 官网内容从静态展示升级为可维护 CMS / 配置化内容**
+- [x] **P5-W01 官网内容从静态展示升级为可维护 CMS / 配置化内容** ✅ 2026-09-03
   - 优先级：P1
   - 范围：首页 Banner、课程、机构方案、案例、常见问题、下载、品牌信息。
+  - 完成记录（2026-09-03）：首页 / FAQ / 品牌区块提供结构化表单，FAQ 支持新增、删除、上下排序；高级 JSON 编辑用于复杂区块；封面字段只接受已有真实资源 URL，不伪造上传或 OSS。公开端读取已发布版本，机构方案 FAQ 接入 FAQ CMS，课程 / 作品 / 下载继续读取各自真实 API。
+  - 影响文件 / 接口 / 数据表：`packages/database/src/schema.js`、`packages/database/src/seed.js`、`apps/server/src/routes/communication.js`、`apps/admin/src/main.jsx`、`apps/website/src/main.jsx`、共享样式；`website_contents`、`website_content_revisions`；`GET /api/public/website-content[/:key]`、`GET/PUT /api/admin/website-content[/:key]`、发布 / 回滚接口。
+  - 验收：临时 SQLite 验收脚本 `tmp-p5-w01-cms.mjs` **14 pass / 0 fail**；覆盖公开只读、401/403、草稿、非法内容、发布、历史、回滚，并断言结构化表单、预览、FAQ 排序和无虚假上传；四端生产构建、后端语法检查、`git diff --check` 通过。
+  - 边界：未修改 `packages/canvas`，未触碰真实 `packages/data/platform.db`，未部署线上；其他未接 CMS 的静态页面保留安全 fallback。
   - 验收：内容有草稿 / 发布状态；无技术人员可安全修改文字、封面、排序；发布有预览和回滚。
 - [x] **P5-W02 预约演示 / 商机线索真实提交** ✅ 2026-09-03
   - 优先级：P0
@@ -850,9 +855,13 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 历史壳层：官网 `/download` 与学生端 `/help` 已接通 P4-S07 的真实发布状态（`NOT_CONFIGURED` / 真实已发布 HTTPS 版本），未配置时禁用下载按钮并明示"不提供虚假下载链接"。
   - 边界：不做客户端打包、签名、CDN 托管、自动更新、下载统计与工单 SLA；现有版本管理 API 已具备可扩展性，但不实际投产。
   - 验收：链接指向真实已签名 / 已验证包；不存在客户端时页面仅说明计划，不伪造下载；安装包有回滚方案。
-- [ ] **P5-W07 SEO、可访问性与性能优化**
+- [x] **P5-W07 SEO、可访问性与性能优化** ✅ 2026-09-03
   - 优先级：P1
   - 范围：标题 / 描述、Open Graph、sitemap、robots、语义化、图片优化、首屏性能、移动端适配、无障碍。
+  - 完成记录（2026-09-03）：服务端新增 `robots.txt` / `sitemap.xml`（支持 `PUBLIC_SITE_URL`）；官网增加 lang、title、description、canonical、OG / Twitter、JSON-LD；路由动态标题与 canonical；主导航、作品、课程筛选 / 搜索 / 分页、封面语义增加 aria；焦点态、禁用态和窄屏布局已补强。
+  - 影响文件 / 接口：`apps/server/src/index.js`、`apps/website/index.html`、`apps/website/src/main.jsx`、`apps/website/src/styles.css`；`GET /robots.txt`、`GET /sitemap.xml`。
+  - 验收：临时 SQLite / 静态验收脚本 `tmp-p5-w07-seo.mjs` **13 pass / 0 fail**；覆盖 robots、sitemap 页面范围、SEO head、动态内容、aria、焦点态、移动端规则和生产 HTML。四端生产构建、`git diff --check` 通过。当前未运行真实 Lighthouse，不能宣称 Lighthouse 分数；构建保留既存 org / student 大 chunk 警告。
+  - 边界：当前官网没有独立图片资源优化任务；课程封面来自真实 API URL 时使用语义标识，不伪造图片资源。
   - 验收：主要公开页可被搜索引擎索引（若业务允许）；移动端关键转化流程可用；性能指标有基线与报告。
 - [-] **P5-W08 用户协议、隐私政策、儿童 / 未成年人说明**（代码闭环完成，正式生效待外部确认）
   - 优先级：P1
@@ -1252,6 +1261,8 @@ node .\p3-api-integration.mjs
 | 2026-09-03 | P4-S07 帮助、下载与反馈渠道完成：学生帮助中心、FAQ / 指南 / 兼容性、真实客户端发布配置、公开下载边界、官网禁用虚假下载、学生反馈与机构处理闭环及审计均已接通。 | 临时 SQLite P4-S07 API 42 pass / 0 fail、旧 SQLite 35→38 表迁移演练、P3 回归 48 pass / 0 fail、后端语法、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上；真实安装包、文件托管、自动更新和外部客服未伪装；后续按未勾选事项重新选择。 |
 | 2026-09-03 | P5-W05 课程资料字段（难度 / 年龄 / 标签 / 课时正文）完成：schema 新增 difficulty_level / age_range_min / age_range_max / tags / lesson_content；seed 补默认值；normalize 同步输出；admin CRUD + 学员 / 机构 / 公开三端详情 + 学员筛选均已接通。 | 临时 SQLite P5-W05 API 100 pass / 0 fail、后端语法、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上。 |
 | 2026-09-03 | P5-M01 课程广场完成：admin 上下架 / 积分管理 + 公开列表（difficulty/age/tag/搜索/排序/分页） + 详情（lessonContent 截断）均已接通。 | 临时 SQLite P5-M01 API 75 pass / 0 fail、后端语法、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上；不做真实付费购买、评分和评论。 |
+| 2026-09-03 | P5-W01 官网 CMS / 配置化完成：website_contents + revisions、超级管理员权限、结构化首页 / FAQ / 品牌表单、FAQ 排序、草稿预览、发布、历史与回滚接通；封面仅支持已有真实 URL。 | 临时 SQLite P5-W01 14 pass / 0 fail；四端生产构建、后端语法和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上。 |
+| 2026-09-03 | P5-W07 SEO / 可访问性 / 性能基础优化完成：robots、sitemap、SEO head、动态标题 / canonical、JSON-LD、aria、焦点态和窄屏规则接通。 | 临时 SQLite / 静态 P5-W07 13 pass / 0 fail；四端生产构建和 git diff --check 通过；未运行真实 Lighthouse，不宣称分数；画布未修改、真实数据库未触碰、未部署线上。 |
 | 2026-09-03 | P5-W08 协议 / 隐私 / 未成年人说明代码闭环完成：官网三类协议页、预约同意、学生协议阅读记录、版本元数据和 P4-S06 数据请求入口联动已接通。 | 临时 SQLite P5-W08 `18 pass / 0 fail`；后端语法、四端生产构建和 `git diff --check` 通过；由于备案主体与法务正文未确认，保持 `[-]`，准备稿明确不得作为正式合规文本。 |
 
 ---
@@ -1261,5 +1272,5 @@ node .\p3-api-integration.mjs
 > 请先读取 `D:\学习平台\platform-v2\docs\AI少儿编程平台-完整上线执行总控.md`，以其中”当前唯一下一步”和未勾选事项为准推进。先核对代码与文档是否一致；完成任何事项后，必须更新本文件的勾选、完成记录、验证方式和变更日志。除非用户重新明确授权，禁止修改 `D:\学习平台\platform-v2\packages\canvas`。所有非画布页面继续按 `D:\学习平台\docs\AI魔法学院基准` 实施，但不得伪造真实 AI、支付、文件存储、运营数据或生产上线能力。
 
 
-- 对话交接确认（2026-09-03）：P5-W08 已完成代码与本地验收（18/18），但因正式备案主体与法务正文未确认保持 `[-]`；P5-M01 + P5-W05 仍为已完成（75+100=175 项断言全部通过）。`/org/enrollment` 已由 P4-O07 覆盖并改判真实已有，`/demo` 已由 P5-W02 覆盖并改判真实已有；`/org/afee` 仍依赖微信开放平台。下一步优先 P5-W01 或 P5-W07；继续禁止修改 packages/canvas、触碰真实业务数据库和伪造外部依赖能力。每次完成事项必须同步更新本文件勾选、完成记录与变更日志。
+- 对话交接确认（2026-09-03）：P5-W08 已完成代码与本地验收（18/18），但因正式备案主体与法务正文未确认保持 `[-]`；P5-M01 + P5-W05 仍为已完成（75+100=175 项断言全部通过）。`/org/enrollment` 已由 P4-O07 覆盖并改判真实已有，`/demo` 已由 P5-W02 覆盖并改判真实已有；`/org/afee` 仍依赖微信开放平台。P5-W01 / P5-W07 已完成；备案与正式合规后续再做，继续禁止修改 packages/canvas、触碰真实业务数据库和伪造外部依赖能力。每次完成事项必须同步更新本文件勾选、完成记录与变更日志。
 

@@ -700,8 +700,56 @@ function validateMaterialBody(body, existing = null) {
 }
 
 
+const WEBSITE_CONTENT_KEYS = new Set(['HOME', 'ORG', 'HANDBOOK', 'COMPARE', 'FAQ', 'BRAND']);
+function websiteContentKey(value) {
+  const key = String(value || '').trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]{1,63}$/.test(key) || !WEBSITE_CONTENT_KEYS.has(key)) throw errors.badRequest('官网内容 key 无效', 'INVALID_WEBSITE_CONTENT_KEY');
+  return key;
+}
+function websiteContentValue(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw errors.badRequest('官网内容必须是 JSON 对象', 'INVALID_WEBSITE_CONTENT');
+  let encoded;
+  try { encoded = JSON.stringify(value); } catch { throw errors.badRequest('官网内容无法序列化', 'INVALID_WEBSITE_CONTENT'); }
+  if (Buffer.byteLength(encoded, 'utf8') > 200 * 1024) throw errors.badRequest('官网内容不能超过 200KB', 'WEBSITE_CONTENT_TOO_LARGE');
+  return { value, encoded };
+}
+function normalizeWebsiteContent(item, includeDraft = false) {
+  if (!item) return null;
+  return {
+    key: item.content_key,
+    content: parseJson(includeDraft ? item.draft_content : item.published_content, {}),
+    version: Number(includeDraft ? item.draft_version : item.published_version || 0),
+    status: item.published_content ? 'PUBLISHED' : 'DRAFT',
+    draftVersion: Number(item.draft_version || 0),
+    publishedVersion: item.published_version == null ? null : Number(item.published_version),
+    updatedBy: item.updated_by || null,
+    publishedBy: item.published_by || null,
+    createdAt: item.created_at,
+    updatedAt: item.updated_at,
+    publishedAt: item.published_at || null,
+  };
+}
+function websiteContentRevisions(contentKey) {
+  return rows('SELECT * FROM website_content_revisions WHERE content_key=? ORDER BY version DESC', [contentKey]).map((item) => ({
+    id: item.id, key: item.content_key, version: Number(item.version), content: parseJson(item.content, {}), action: item.action,
+    changedBy: item.changed_by || null, reason: item.reason || '', createdAt: item.created_at,
+  }));
+}
+
 export function handlePublicCommunication(ctx) {
   const { pathname, method } = ctx;
+  if (pathname === '/api/public/website-content' && method === 'GET') {
+    const items = rows("SELECT * FROM website_contents WHERE published_content IS NOT NULL ORDER BY content_key").map((item) => normalizeWebsiteContent(item));
+    return { generatedAt: nowIso(), items, byKey: Object.fromEntries(items.map((item) => [item.key, item.content])) };
+  }
+
+  const publicWebsiteKey = pathname.match(/^\/api\/public\/website-content\/([A-Za-z0-9_]+)$/);
+  if (publicWebsiteKey && method === 'GET') {
+    const item = row('SELECT * FROM website_contents WHERE content_key=? AND published_content IS NOT NULL', [websiteContentKey(publicWebsiteKey[1])]);
+    if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
+    return normalizeWebsiteContent(item);
+  }
+
   if (pathname === '/api/public/downloads' && method === 'GET') {
     const releases = latestDownloadReleases();
     return {
@@ -943,6 +991,62 @@ function publicWorkRow(row) {
 
 export async function handleAdminCommunication(ctx) {
   const { pathname, method } = ctx;
+  const websiteDraft = pathname.match(/^\/api\/admin\/website-content\/([A-Za-z0-9_]+)$/);
+  const websiteAction = pathname.match(/^\/api\/admin\/website-content\/([A-Za-z0-9_]+)\/(publish|rollback)$/);
+  if (pathname === '/api/admin/website-content' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return { items: rows('SELECT * FROM website_contents ORDER BY content_key').map((item) => normalizeWebsiteContent(item, true)) };
+  }
+  if (websiteDraft && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const key = websiteContentKey(websiteDraft[1]);
+    const item = row('SELECT * FROM website_contents WHERE content_key=?', [key]);
+    if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
+    return { ...normalizeWebsiteContent(item, true), publishedContent: parseJson(item.published_content, null), revisions: websiteContentRevisions(key) };
+  }
+  if (websiteDraft && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const key = websiteContentKey(websiteDraft[1]);
+    const parsed = websiteContentValue(ctx.body?.content ?? ctx.body);
+    const now = nowIso();
+    const existing = row('SELECT * FROM website_contents WHERE content_key=?', [key]);
+    const nextVersion = Number(existing?.draft_version || 0) + 1;
+    if (existing) q('UPDATE website_contents SET draft_content=?,draft_version=?,updated_by=?,updated_at=? WHERE content_key=?', [parsed.encoded, nextVersion, auth.user.id, now, key]);
+    else q('INSERT INTO website_contents(content_key,draft_content,published_content,draft_version,published_version,updated_by,published_by,created_at,updated_at,published_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [key, parsed.encoded, null, 1, null, auth.user.id, null, now, now, null]);
+    audit(ctx, 'WEBSITE_CONTENT_DRAFT_UPDATE', 'WEBSITE_CONTENT', key, existing ? normalizeWebsiteContent(existing, true) : null, { key, version: nextVersion });
+    return normalizeWebsiteContent(row('SELECT * FROM website_contents WHERE content_key=?', [key]), true);
+  }
+  if (websiteAction && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const key = websiteContentKey(websiteAction[1]);
+    const action = websiteAction[2].toUpperCase();
+    const item = row('SELECT * FROM website_contents WHERE content_key=?', [key]);
+    if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
+    const reason = String(ctx.body?.reason || '').trim().slice(0, 500);
+    if (action === 'PUBLISH') {
+      const nextVersion = Number(row('SELECT MAX(version) AS v FROM website_content_revisions WHERE content_key=?', [key])?.v || 0) + 1;
+      const now = nowIso();
+      transaction(() => {
+        q('UPDATE website_contents SET published_content=?,published_version=?,published_by=?,published_at=?,updated_at=? WHERE content_key=?', [item.draft_content, nextVersion, auth.user.id, now, now, key]);
+        q('INSERT INTO website_content_revisions(id,content_key,version,content,action,changed_by,reason,created_at) VALUES (?,?,?,?,?,?,?,?)', [id('wrev'), key, nextVersion, item.draft_content, 'PUBLISH', auth.user.id, reason, now]);
+      });
+      audit(ctx, 'WEBSITE_CONTENT_PUBLISH', 'WEBSITE_CONTENT', key, normalizeWebsiteContent(item), { key, version: nextVersion, reason });
+      return normalizeWebsiteContent(row('SELECT * FROM website_contents WHERE content_key=?', [key]), true);
+    }
+    const targetVersion = Number(ctx.body?.version);
+    if (!Number.isInteger(targetVersion) || targetVersion < 1) throw errors.badRequest('回滚版本必须是正整数', 'INVALID_WEBSITE_CONTENT_VERSION');
+    const revision = row('SELECT * FROM website_content_revisions WHERE content_key=? AND version=?', [key, targetVersion]);
+    if (!revision) throw errors.notFound('历史版本不存在', 'WEBSITE_CONTENT_REVISION_NOT_FOUND');
+    const nextVersion = Number(row('SELECT MAX(version) AS v FROM website_content_revisions WHERE content_key=?', [key])?.v || 0) + 1;
+    const now = nowIso();
+    transaction(() => {
+      q('UPDATE website_contents SET draft_content=?,draft_version=?,published_content=?,published_version=?,updated_by=?,published_by=?,published_at=?,updated_at=? WHERE content_key=?', [revision.content, nextVersion, revision.content, nextVersion, auth.user.id, auth.user.id, now, now, key]);
+      q('INSERT INTO website_content_revisions(id,content_key,version,content,action,changed_by,reason,created_at) VALUES (?,?,?,?,?,?,?,?)', [id('wrev'), key, nextVersion, revision.content, 'ROLLBACK', auth.user.id, reason || `rollback to ${targetVersion}`, now]);
+    });
+    audit(ctx, 'WEBSITE_CONTENT_ROLLBACK', 'WEBSITE_CONTENT', key, normalizeWebsiteContent(item), { key, version: nextVersion, rollbackTo: targetVersion, reason });
+    return normalizeWebsiteContent(row('SELECT * FROM website_contents WHERE content_key=?', [key]), true);
+  }
+
   if (!pathname.startsWith('/api/admin/')) return null;
   const part = pathname.slice('/api/admin'.length);
   if (part === '/inbox' && method === 'GET') {

@@ -3,6 +3,36 @@ import { hashPassword, id, json, nowIso, q, row, transaction } from './schema.js
 const DAY = 24 * 60 * 60 * 1000;
 const PLUS_DAYS = (days) => new Date(Date.now() + days * DAY).toISOString();
 
+function ensureWebsiteContent(now) {
+  const defaults = {
+    HOME: {
+      heroKicker: '教培机构青少年 AI 开课平台',
+      heroTitle: '给机构一套',
+      heroAccent: '能落地的青少年 AI 课',
+      heroDescription: 'AI魔法学院把课程、桌面客户端、机构账号、魔法石计费与作品展厅放在一个平台里。',
+      trustTitle: '响应教育部「做中学」领航行动',
+      trustDescription: '真实问题 · 项目式探究 · 每节课都有作品'
+    },
+    FAQ: {
+      title: '开课前，你可能想知道',
+      items: [
+        { question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' },
+        { question: 'Windows 机房和 Mac 教室都能用吗？', answer: '可以，公开客户端支持 macOS Apple 芯片版与 Windows 64 位。' },
+        { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 与 micro:bit 的课堂实践。' }
+      ]
+    },
+    BRAND: { name: 'AI魔法学院', tagline: '青少年 AI 创作开课平台', contactEmail: 'hello@aimagc.cn' }
+  };
+  for (const [contentKey, content] of Object.entries(defaults)) {
+    const existing = row('SELECT content_key FROM website_contents WHERE content_key=?', [contentKey]);
+    if (!existing) {
+      const value = json(content);
+      q('INSERT INTO website_contents(content_key,draft_content,published_content,draft_version,published_version,updated_by,published_by,created_at,updated_at,published_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [contentKey, value, value, 1, 1, null, null, now, now, now]);
+      q('INSERT INTO website_content_revisions(id,content_key,version,content,action,changed_by,reason,created_at) VALUES (?,?,?,?,?,?,?,?)', [id('wrev'), contentKey, 1, value, 'PUBLISH', null, 'seed default', now]);
+    }
+  }
+}
+
 function ensurePlatformSettings(now) {
   q(
     `INSERT INTO platform_settings(id,platform_name,modalities,billing_settings,created_at,updated_at)
@@ -254,6 +284,7 @@ export function seedDatabase() {
   const now = nowIso();
   return transaction(() => {
     ensurePlatformSettings(now);
+    ensureWebsiteContent(now);
     ensureUser({ login: 'root', displayName: '平台超管', role: 'SUPER_ADMIN', password: 'admin123' }, now);
 
     const organization = ensureOrganization(now);

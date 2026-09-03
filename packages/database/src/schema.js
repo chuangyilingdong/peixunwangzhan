@@ -22,6 +22,36 @@ CREATE TABLE IF NOT EXISTS platform_settings (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS website_contents (
+  content_key TEXT PRIMARY KEY,
+  draft_content TEXT NOT NULL DEFAULT '{}',
+  published_content TEXT,
+  draft_version INTEGER NOT NULL DEFAULT 1,
+  published_version INTEGER,
+  updated_by TEXT,
+  published_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  published_at TEXT,
+  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (published_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS website_content_revisions (
+  id TEXT PRIMARY KEY,
+  content_key TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('PUBLISH','ROLLBACK')),
+  changed_by TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(content_key, version),
+  FOREIGN KEY (content_key) REFERENCES website_contents(content_key) ON DELETE CASCADE,
+  FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_website_content_revisions_key_created
+  ON website_content_revisions(content_key, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -907,6 +937,20 @@ CREATE TABLE IF NOT EXISTS platform_config_change_logs (
 `;
 
 db.exec(SCHEMA);
+
+// P5-W01 website CMS tables (safe for existing local databases)
+try { db.exec(`CREATE TABLE IF NOT EXISTS website_contents (
+  content_key TEXT PRIMARY KEY, draft_content TEXT NOT NULL DEFAULT '{}', published_content TEXT,
+  draft_version INTEGER NOT NULL DEFAULT 1, published_version INTEGER, updated_by TEXT, published_by TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT,
+  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL, FOREIGN KEY (published_by) REFERENCES users(id) ON DELETE SET NULL
+)`); } catch (_) {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS website_content_revisions (
+  id TEXT PRIMARY KEY, content_key TEXT NOT NULL, version INTEGER NOT NULL, content TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('PUBLISH','ROLLBACK')), changed_by TEXT, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+  UNIQUE(content_key, version), FOREIGN KEY (content_key) REFERENCES website_contents(content_key) ON DELETE CASCADE, FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+)`); } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_website_content_revisions_key_created ON website_content_revisions(content_key, created_at DESC)'); } catch (_) {}
 
 // Seed default platform modality settings if empty
 {
