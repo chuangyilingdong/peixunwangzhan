@@ -36,7 +36,9 @@ mkdir -p "$RELEASE_DIR/node_modules/@platform/database/src"
 cp packages/database/package.json "$RELEASE_DIR/node_modules/@platform/database/package.json"
 cp -a packages/database/src/. "$RELEASE_DIR/node_modules/@platform/database/src/"
 cp package.json pnpm-lock.yaml pnpm-workspace.yaml "$RELEASE_DIR/"
-if [ -f "apps/server/package.json" ]; then`n  cp apps/server/package.json "$RELEASE_DIR/apps/server/"`nfi
+if [ -f "apps/server/package.json" ]; then
+  cp apps/server/package.json "$RELEASE_DIR/apps/server/"
+fi
 cp packages/database/package.json "$RELEASE_DIR/packages/database/"
 cat > "$RELEASE_DIR/BUILD-METADATA.txt" <<EOF
 release=${STAMP}
