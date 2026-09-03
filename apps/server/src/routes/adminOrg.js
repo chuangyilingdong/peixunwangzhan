@@ -883,6 +883,72 @@ function orgContractMeta(organization) {
   };
 }
 
+function auditQuery(ctx, opts) {
+  opts = opts || {};
+  const conditions = [];
+  const params = [];
+  if (opts.restrictToOrgId) { conditions.push('audit.org_id=?'); params.push(opts.restrictToOrgId); }
+  const orgId = String(ctx.search.get('orgId') || '').trim();
+  const action = String(ctx.search.get('action') || '').trim();
+  const actorId = String(ctx.search.get('actorId') || '').trim();
+  const targetType = String(ctx.search.get('targetType') || '').trim();
+  const targetId = String(ctx.search.get('targetId') || '').trim();
+  const requestPath = String(ctx.search.get('requestPath') || '').trim();
+  const fromProvided = ctx.search.has('from');
+  const from = fromProvided ? String(ctx.search.get('from') || '').trim() : '';
+  const toProvided = ctx.search.has('to');
+  const to = toProvided ? String(ctx.search.get('to') || '').trim() : '';
+  if (orgId) { conditions.push('audit.org_id=?'); params.push(orgId); }
+  if (action) { conditions.push('audit.action=?'); params.push(action); }
+  if (actorId) { conditions.push('audit.actor_id=?'); params.push(actorId); }
+  if (targetType) { conditions.push('audit.target_type=?'); params.push(targetType); }
+  if (targetId) { conditions.push('audit.target_id=?'); params.push(targetId); }
+  if (requestPath) { conditions.push('audit.request_path LIKE ?'); params.push('%' + requestPath.replace(/[%_]/g, (c) => '[' + c + ']') + '%'); }
+  if (fromProvided) {
+    const t = new Date(from);
+    if (!from || Number.isNaN(t.getTime())) throw errors.badRequest('开始时间必须是有效 ISO 时间', 'INVALID_FROM');
+    if (toProvided) { const t2 = new Date(to); if (!Number.isNaN(t2.getTime()) && t >= t2) throw errors.badRequest('开始时间不能晚于结束时间', 'INVALID_TIME_RANGE'); }
+    conditions.push('audit.created_at>=?'); params.push(from);
+  }
+  if (toProvided) {
+    const t = new Date(to);
+    if (!to || Number.isNaN(t.getTime())) throw errors.badRequest('结束时间必须是有效 ISO 时间', 'INVALID_TO');
+    conditions.push('audit.created_at<?'); params.push(to);
+  }
+  return { where: conditions.length ? conditions.join(' AND ') : '1=1', params };
+}
+
+function auditRow(v) {
+  return {
+    id: v.id,
+    orgId: v.org_id || null,
+    orgName: v.org_name || null,
+    actorId: v.actor_id || null,
+    actorRole: v.actor_role || null,
+    actorName: v.actor_name || v.actor_login || '系统',
+    actorLogin: v.actor_login || null,
+    action: v.action,
+    targetType: v.target_type,
+    targetId: v.target_id || null,
+    requestMethod: v.request_method || null,
+    requestPath: v.request_path || null,
+    before: parseJson(v.before_data, null),
+    after: parseJson(v.after_data, null),
+    ip: v.ip || null,
+    createdAt: v.created_at,
+  };
+}
+
+function auditListQuery(where) {
+  return 'SELECT audit.*, actor.display_name actor_name, actor.login actor_login, org.name org_name FROM audit_logs audit LEFT JOIN users actor ON actor.id=audit.actor_id LEFT JOIN organizations org ON org.id=audit.org_id WHERE ' + where + ' ORDER BY audit.created_at DESC';
+}
+
+function escapeCsv(v) {
+  if (v === null || v === undefined) return '';
+  const t = String(v);
+  return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+
 function buildOrganizationDetail(orgId) {
   const organization = organizationRow(orgId);
   ensureOrgBilling(organization.id);
@@ -928,6 +994,45 @@ export async function handleAdmin(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/')) return null;
   const part = pathname.slice('/api/admin'.length) || '/';
+  if (part === '/audit-logs' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const q = auditQuery(ctx);
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    const items = rows(auditListQuery(q.where) + ' LIMIT ' + limit, q.params).map(auditRow);
+    const total = row('SELECT COUNT(*) n FROM audit_logs WHERE ' + q.where.replace(/audit\./g, ''), q.params);
+    return { items, total: Number(total && total.n || 0), limit };
+  }
+  if (part === '/audit-logs/summary' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const q = auditQuery(ctx);
+    const base = 'SELECT audit.*, actor.display_name actor_name, actor.login actor_login, org.name org_name FROM audit_logs audit LEFT JOIN users actor ON actor.id=audit.actor_id LEFT JOIN organizations org ON org.id=audit.org_id WHERE ' + q.where;
+    const byAction = rows('SELECT action, COUNT(*) n FROM (' + base + ') s GROUP BY action ORDER BY n DESC LIMIT 20', q.params).map((i) => ({ action: i.action, count: Number(i.n) }));
+    const byActor = rows("SELECT actor_id, COALESCE(actor_name, actor_login, '系统') as actor_name, COUNT(*) n FROM (" + base + ') s GROUP BY actor_id, actor_name ORDER BY n DESC LIMIT 10', q.params).map((i) => ({ actorId: i.actor_id || null, actorName: i.actor_name, count: Number(i.n) }));
+    const byOrg = rows('SELECT org_id, org_name, COUNT(*) n FROM (' + base + ') s GROUP BY org_id, org_name ORDER BY n DESC LIMIT 10', q.params).map((i) => ({ orgId: i.org_id || null, orgName: i.org_name || '平台', count: Number(i.n) }));
+    const total = row('SELECT COUNT(*) n FROM audit_logs WHERE ' + q.where.replace(/audit\./g, ''), q.params);
+    return { total: Number(total && total.n || 0), byAction, byActor, byOrg };
+  }
+  if (part === '/audit-logs/export' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const q = auditQuery(ctx);
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 2000, fallback: 500 });
+    const items = rows(auditListQuery(q.where) + ' LIMIT ' + limit, q.params).map(auditRow);
+    const hdr = ['时间', '操作者', '角色', '机构', '动作', '目标类型', '目标ID', '请求方法', '请求路径', 'IP', '变更前', '变更后'];
+    const lines = [hdr.map(escapeCsv).join(',')];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      lines.push([item.createdAt, item.actorName, item.actorRole || '', item.orgName || '', item.action, item.targetType, item.targetId || '', item.requestMethod || '', item.requestPath || '', item.ip || '', JSON.stringify(item.before || {}), JSON.stringify(item.after || {})].map(escapeCsv).join(','));
+    }
+    const csv = '\ufeff' + lines.join('\r\n') + '\r\n';
+    audit(ctx, 'PLATFORM_AUDIT_EXPORT', 'AUDIT_LOG', null, null, { count: items.length, filters: { orgId: ctx.search.get('orgId') || null, action: ctx.search.get('action') || null, from: ctx.search.get('from') || null, to: ctx.search.get('to') || null, actorId: ctx.search.get('actorId') || null, targetType: ctx.search.get('targetType') || null, targetId: ctx.search.get('targetId') || null } });
+    return { filename: 'audit-logs-' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv', content: csv, count: items.length };
+  }
+  if (part === '/audit-logs/actions' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const items = rows('SELECT action, COUNT(*) n FROM audit_logs GROUP BY action ORDER BY action ASC').map((i) => ({ action: i.action, count: Number(i.n) }));
+    return { items, total: items.length };
+  }
+
   if (part === '/organizations' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const search = String(ctx.search.get('search') || '').trim();
