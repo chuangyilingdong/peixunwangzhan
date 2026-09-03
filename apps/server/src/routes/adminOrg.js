@@ -818,6 +818,85 @@ function maskedStudentName(name) {
   return value ? value.slice(0, 1) + '同学' : '学员';
 }
 
+function organizationRow(orgId) {
+  const organization = row('SELECT * FROM organizations WHERE id=?', [orgId]);
+  if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
+  return organization;
+}
+
+function contactPayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw errors.badRequest('联系人必须是对象', 'INVALID_ORG_CONTACT');
+  const result = {};
+  Object.entries(value).forEach(([key, item]) => {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,49}$/.test(key)) throw errors.badRequest('联系人字段名无效', 'INVALID_ORG_CONTACT');
+    if (item === null || item === undefined || item === '') return;
+    if (typeof item !== 'string' && typeof item !== 'number' && typeof item !== 'boolean') throw errors.badRequest('联系人字段值无效', 'INVALID_ORG_CONTACT');
+    result[key] = typeof item === 'string' ? item.slice(0, 200) : item;
+  });
+  return result;
+}
+
+function orgAdminRows(orgId) {
+  return rows("SELECT * FROM users WHERE org_id=? AND role='ORG_ADMIN' AND deleted_at IS NULL ORDER BY status='ACTIVE' DESC, created_at ASC", [orgId]).map(normalizeUser);
+}
+
+function assertNotLastOrgAdmin(orgId, targetUserId) {
+  const activeAdmins = rows("SELECT id FROM users WHERE org_id=? AND role='ORG_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL", [orgId]);
+  if (activeAdmins.length <= 1 && activeAdmins.some((item) => item.id === targetUserId)) throw errors.badRequest('不能停用该机构最后一个有效管理员', 'LAST_ORG_ADMIN_FORBIDDEN');
+}
+
+function orgContractMeta(organization) {
+  const expiresTime = new Date(organization.contract_expires_at).getTime();
+  const days = Number.isFinite(expiresTime) ? Math.ceil((expiresTime - Date.now()) / 86400000) : null;
+  const expired = days !== null && days <= 0;
+  return {
+    daysUntilContractExpires: days,
+    contractExpiringSoon: days !== null && days > 0 && days <= 30,
+    serviceAvailable: ['TRIAL', 'ACTIVE'].includes(organization.status) && !expired,
+  };
+}
+
+function buildOrganizationDetail(orgId) {
+  const organization = organizationRow(orgId);
+  ensureOrgBilling(organization.id);
+  const org = { ...normalizeOrg(organization), ...orgContractMeta(organization) };
+  const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
+  const admins = orgAdminRows(organization.id);
+  const packages = rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id]).map(normalizePackage);
+  const courseAssignments = rows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, series.title AS series_title
+    FROM course_assignments assignment JOIN course_series series ON series.id=assignment.series_id
+    WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]).map((item) => ({
+    id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at,
+  }));
+  const summary = {
+    teachers: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [organization.id]),
+    students: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [organization.id]),
+    activeClasses: count("SELECT COUNT(*) AS n FROM classes WHERE org_id=? AND status='ACTIVE'", [organization.id]),
+    activeSessions: count(`SELECT COUNT(*) AS n FROM class_sessions session JOIN classes class ON class.id=session.class_id WHERE class.org_id=? AND session.status='ACTIVE'`, [organization.id]),
+    projects: count('SELECT COUNT(*) AS n FROM student_projects WHERE org_id=? AND deleted_at IS NULL', [organization.id]),
+    works: count('SELECT COUNT(*) AS n FROM works WHERE org_id=?', [organization.id]),
+  };
+  const audits = rows('SELECT id,action,target_type,target_id,actor_id,actor_role,ip,created_at,before_data,after_data FROM audit_logs WHERE org_id=? ORDER BY created_at DESC LIMIT 50', [organization.id]).map((item) => ({
+    id: item.id, action: item.action, targetType: item.target_type, targetId: item.target_id, actorId: item.actor_id,
+    actorRole: item.actor_role, ip: item.ip, createdAt: item.created_at,
+    beforeData: parseJson(item.before_data, null), afterData: parseJson(item.after_data, null),
+  }));
+  return {
+    organization: org,
+    admins,
+    billing: {
+      balance: Number(account?.credit_balance || 0),
+      frozenCredits: Number(account?.frozen_credits || 0),
+      totalCreditsIn: Number(account?.total_credits_in || 0),
+      totalCreditsSpent: Number(account?.total_credits_spent || 0),
+    },
+    packages,
+    courseAssignments,
+    summary,
+    audits,
+  };
+}
+
 export async function handleAdmin(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/')) return null;
@@ -831,6 +910,7 @@ export async function handleAdmin(ctx) {
   if (part === '/organizations' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const name = String(body.name || '').trim();
     if (!name) throw errors.badRequest('机构名称不能为空');
+    if (row('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
     const now = nowIso(); const organizationId = id('org');
     transaction(() => {
       q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, body.isTrial ? 'TRIAL' : 'ACTIVE', body.contractStartAt || now, body.contractExpiresAt || new Date(Date.now() + 365 * 86400000).toISOString(), body.isTrial ? 1 : 0, integer(body.baseTeacherSeats, '基础教师席位', { fallback: 3 }), integer(body.purchasedTeacherSeats, '购买教师席位'), json(body.contact || {}), auth.user.id, now, now]);
@@ -842,12 +922,24 @@ export async function handleAdmin(ctx) {
   }
   let match = part.match(/^\/organizations\/([^/]+)$/);
   if (match && ['GET', 'PUT'].includes(method)) {
-    requireRole(ctx, ['SUPER_ADMIN']); const organization = row('SELECT * FROM organizations WHERE id=?', [match[1]]);
-    if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND'); if (method === 'GET') return normalizeOrg(organization);
+    requireRole(ctx, ['SUPER_ADMIN']); const organization = organizationRow(match[1]);
+    if (method === 'GET') return normalizeOrg(organization);
     const body = ctx.body || {};
-    q('UPDATE organizations SET name=?,status=COALESCE(?,status),contract_start_at=COALESCE(?,contract_start_at),contract_expires_at=COALESCE(?,contract_expires_at),base_teacher_seats=COALESCE(?,base_teacher_seats),purchased_teacher_seats=COALESCE(?,purchased_teacher_seats),contact=COALESCE(?,contact),updated_at=? WHERE id=?', [body.name ? String(body.name).trim() : organization.name, body.status || null, body.contractStartAt || null, body.contractExpiresAt || null, body.baseTeacherSeats === undefined ? null : integer(body.baseTeacherSeats, '基础教师席位'), body.purchasedTeacherSeats === undefined ? null : integer(body.purchasedTeacherSeats, '购买教师席位'), body.contact === undefined ? null : json(body.contact), nowIso(), organization.id]);
-    audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, normalizeOrg(organization), body);
-    return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
+    if (body.status !== undefined && body.status !== organization.status) throw errors.badRequest('机构状态必须通过状态动作接口修改', 'ORG_STATUS_ACTION_REQUIRED');
+    const name = body.name === undefined ? organization.name : nonEmptyString(body.name, '机构名称', { max: 200 });
+    if (name !== organization.name && row('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
+    const contractStartAt = body.contractStartAt === undefined ? organization.contract_start_at : nonEmptyString(body.contractStartAt, '合同开始时间', { max: 64 });
+    const contractExpiresAt = body.contractExpiresAt === undefined ? organization.contract_expires_at : nonEmptyString(body.contractExpiresAt, '合同到期时间', { max: 64 });
+    if (contractStartAt >= contractExpiresAt) throw errors.badRequest('合同开始时间必须早于到期时间', 'INVALID_CONTRACT_TIME');
+    const baseTeacherSeats = body.baseTeacherSeats === undefined ? organization.base_teacher_seats : integer(body.baseTeacherSeats, '基础教师席位');
+    const purchasedTeacherSeats = body.purchasedTeacherSeats === undefined ? organization.purchased_teacher_seats : integer(body.purchasedTeacherSeats, '购买教师席位');
+    if (baseTeacherSeats + purchasedTeacherSeats < organization.base_teacher_seats + organization.purchased_teacher_seats) throw errors.badRequest('教师席位总数不能低于当前配置，请先确认教师数量', 'TEACHER_SEATS_TOO_FEW');
+    const contact = body.contact === undefined ? parseJson(organization.contact, {}) : contactPayload(body.contact);
+    const before = normalizeOrg(organization);
+    q('UPDATE organizations SET name=?,contract_start_at=?,contract_expires_at=?,base_teacher_seats=?,purchased_teacher_seats=?,contact=?,updated_at=? WHERE id=?', [name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, json(contact), nowIso(), organization.id]);
+    const after = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
+    audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, before, { name: after.name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, contact }, { orgId: organization.id });
+    return after;
   }
   match = part.match(/^\/organizations\/([^/]+)\/(credit-adjustments|seat-adjustments)$/);
   if (match && method === 'POST') {
@@ -869,6 +961,82 @@ export async function handleAdmin(ctx) {
     });
     audit(ctx, 'ORG_CREDIT_ADJUST', 'ORG', organization.id, null, ctx.body); return { balanceAfter };
   }
+  let orgDetailMatch = part.match(/^\/organizations\/([^/]+)\/detail$/);
+  if (orgDetailMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return buildOrganizationDetail(orgDetailMatch[1]);
+  }
+
+  let orgAdminMatch = part.match(/^\/organizations\/([^/]+)\/admins$/);
+  if (orgAdminMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const organization = organizationRow(orgAdminMatch[1]);
+    return { items: orgAdminRows(organization.id) };
+  }
+  if (orgAdminMatch && method === 'POST') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const organization = organizationRow(orgAdminMatch[1]);
+    const body = ctx.body || {}; const now = nowIso();
+    const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim(); const password = String(body.password || '');
+    if (!login || !displayName) throw errors.badRequest('登录名和姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
+    if (password.length < 6) throw errors.badRequest('管理员密码至少6位', 'ORG_ADMIN_INPUT_REQUIRED');
+    if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
+    const userId = id('user');
+    q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [userId, organization.id, login, displayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
+    const admin = row('SELECT * FROM users WHERE id=?', [userId]);
+    audit(ctx, 'ORG_ADMIN_CREATE', 'USER', userId, null, { orgId: organization.id, login, displayName }, { orgId: organization.id });
+    return normalizeUser(admin);
+  }
+
+  let orgAdminUpdateMatch = part.match(/^\/organizations\/([^/]+)\/admins\/([^/]+)$/);
+  if (orgAdminUpdateMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const organization = organizationRow(orgAdminUpdateMatch[1]);
+    const target = row("SELECT * FROM users WHERE id=? AND org_id=? AND role='ORG_ADMIN' AND deleted_at IS NULL", [orgAdminUpdateMatch[2], organization.id]);
+    if (!target) throw errors.notFound('机构管理员不存在', 'ORG_ADMIN_NOT_FOUND');
+    const body = ctx.body || {};
+    const displayName = body.displayName === undefined ? target.display_name : String(body.displayName || '').trim();
+    if (!displayName) throw errors.badRequest('管理员姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
+    let passwordHash = target.password_hash;
+    if (body.password !== undefined) {
+      const password = String(body.password || '');
+      if (password.length < 6) throw errors.badRequest('管理员密码至少6位', 'ORG_ADMIN_INPUT_REQUIRED');
+      passwordHash = hashPassword(password);
+    }
+    let status = target.status;
+    if (body.status !== undefined) {
+      status = body.status;
+      if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('管理员状态无效', 'INVALID_ORG_ADMIN_STATUS');
+      if (status === 'DISABLED') assertNotLastOrgAdmin(organization.id, target.id);
+    }
+    q('UPDATE users SET display_name=?,password_hash=?,status=?,updated_at=? WHERE id=?', [displayName, passwordHash, status, nowIso(), target.id]);
+    if (status === 'DISABLED' && target.status !== 'DISABLED') q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [nowIso(), target.id]);
+    audit(ctx, 'ORG_ADMIN_UPDATE', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { displayName, status, passwordChanged: body.password !== undefined }, { orgId: organization.id });
+    return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]));
+  }
+
+  let orgStatusMatch = part.match(/^\/organizations\/([^/]+)\/status$/);
+  if (orgStatusMatch && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const organization = organizationRow(orgStatusMatch[1]);
+    const action = String(ctx.body?.action || '').trim();
+    const transitions = {
+      disable: { to: 'DISABLED', from: ['TRIAL', 'ACTIVE', 'FROZEN'], auditAction: 'ORG_DISABLE' },
+      recover: { to: 'ACTIVE', from: ['DISABLED'], auditAction: 'ORG_RECOVER', requiresValidContract: true },
+      freeze: { to: 'FROZEN', from: ['TRIAL', 'ACTIVE'], auditAction: 'ORG_FROZEN' },
+      activate: { to: 'ACTIVE', from: ['TRIAL', 'FROZEN'], auditAction: 'ORG_ACTIVATE', requiresValidContract: true },
+    };
+    const transition = transitions[action];
+    if (!transition) throw errors.badRequest('无效的机构状态操作', 'INVALID_ORG_STATUS_ACTION');
+    if (!transition.from.includes(organization.status)) throw errors.badRequest(`当前状态 ${organization.status} 不允许执行 ${action}`, 'INVALID_ORG_STATUS_TRANSITION');
+    if (transition.requiresValidContract && organization.contract_expires_at <= nowIso()) throw errors.badRequest('机构合同已到期，请先续签合同再恢复服务', 'ORG_CONTRACT_EXPIRED');
+    const before = normalizeOrg(organization);
+    q('UPDATE organizations SET status=?,is_trial=?,updated_at=? WHERE id=?', [transition.to, transition.to === 'ACTIVE' ? 0 : organization.is_trial, nowIso(), organization.id]);
+    const after = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
+    audit(ctx, transition.auditAction, 'ORG', organization.id, before, { action, status: after.status, actor: auth.user.login }, { orgId: organization.id });
+    return after;
+  }
+
   if (part === '/course-series' && method === 'GET') { requireRole(ctx, ['SUPER_ADMIN']); return { items: rows('SELECT * FROM course_series ORDER BY sort,title').map((item) => normalizeSeries(item, { includeLessons: true, includeAllLessons: true })) }; }
   if (part === '/course-series' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const title = String(body.title || '').trim();
