@@ -19,6 +19,7 @@ const NOTIFICATION_ROLES = new Set(['ORG_ADMIN', 'TEACHER', 'STUDENT']);
 const NOTIFICATION_KINDS = new Set(['NOTICE', 'ANNOUNCEMENT', 'REMINDER']);
 const NOTIFICATION_SCOPES = new Set(['ALL_ORGS', 'ORG_IDS']);
 const MATERIAL_CATEGORIES = new Set(['GENERAL', 'COURSE', 'POSTER', 'ACTIVITY', 'PARTNERSHIP']);
+const LEGAL_POLICY_VERSION = '2026.09.03';
 
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -126,6 +127,8 @@ function normalizeLead(value) {
     assignedTo: value.assigned_to || null,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
+    legalConsentVersion: value.legal_consent_version || null,
+    legalConsentedAt: value.legal_consented_at || null,
   };
 }
 
@@ -711,6 +714,11 @@ export function handlePublicCommunication(ctx) {
     };
   }
 
+  // P5-W08: 公开协议元数据；正文由官网静态页展示，版本由业务 / 法务确认后替换。
+  if (pathname === '/api/public/legal' && method === 'GET') {
+    return { version: LEGAL_POLICY_VERSION, effectiveDate: '2026-09-03', status: 'DRAFT_PENDING_LEGAL_CONFIRMATION', documents: [{ type: 'TERMS', path: '/terms' }, { type: 'PRIVACY', path: '/privacy' }, { type: 'MINORS', path: '/minors' }] };
+  }
+
   // P5-W02: 演示预约（公开 POST，无需认证）
   if (pathname === '/api/public/contact' && method === 'POST') {
     const body = ctx.body || {};
@@ -722,12 +730,17 @@ export function handlePublicCommunication(ctx) {
     }
     const intent = body.intent ? String(body.intent).trim().slice(0, 200) : '';
     const notes = body.notes ? String(body.notes).trim().slice(0, 2000) : '';
+    const legalConsentVersion = String(body.legalConsentVersion || '').trim();
+    if (legalConsentVersion !== LEGAL_POLICY_VERSION) throw errors.badRequest('请先阅读并同意当前版本的协议与隐私说明', 'LEGAL_CONSENT_REQUIRED');
+    const legalConsentDate = new Date(body.legalConsentAt || '');
+    if (Number.isNaN(legalConsentDate.getTime())) throw errors.badRequest('协议同意时间格式无效', 'INVALID_LEGAL_CONSENT_AT');
+    const legalConsentAt = legalConsentDate.toISOString();
     const leadId = id('lead');
     const now = nowIso();
-    q("INSERT INTO leads(id,org_name,contact_name,contact_phone,intent,notes,status,admin_notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-      [leadId, orgName, contactName, contactPhone, intent, notes, 'NEW', '', now, now]);
-    audit(ctx, 'LEAD_CREATE', 'LEAD', leadId, null, { orgName, intent }, { orgId: null });
-    return { id: leadId, status: 'NEW', createdAt: now };
+    q("INSERT INTO leads(id,org_name,contact_name,contact_phone,intent,notes,status,admin_notes,created_at,updated_at,legal_consent_version,legal_consented_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+      [leadId, orgName, contactName, contactPhone, intent, notes, 'NEW', '', now, now, legalConsentVersion, legalConsentAt]);
+    audit(ctx, 'LEAD_CREATE', 'LEAD', leadId, null, { orgName, intent, legalConsentVersion, legalConsentedAt: legalConsentAt }, { orgId: null });
+    return { id: leadId, status: 'NEW', createdAt: now, legalConsentVersion, legalConsentedAt: legalConsentAt };
   }
 
   // P5-W04: 公开作品列表

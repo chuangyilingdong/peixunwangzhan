@@ -62,7 +62,7 @@
 | `/classes`（课堂内 AI 控制） | `/org/classes/:id` 课堂 AI 控制与用量审计 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，P4-O04）` | `class_sessions`、`usage_records`、`generation_jobs`、`student_projects`、`classes` | `PUT /api/org/classes/:classId/sessions/:sessionId/ai-controls`、`GET /api/org/ai-usage`、`POST /api/ai/usage`、`POST /api/ai/generations` | 课堂 `ACTIVE`；暂停 / 能力开关 / 单学生次数 / 课堂积分上限由服务端强制；教师按负责 / 授权课堂查询 | 真实外部 AI provider、异步队列与账单策略仍按后续基础设施处理 | 临时 SQLite 验证普通调用与生成任务的成功 / BLOCKED 审计、课时 / 项目 / job 关联、教师范围和越权 |
 | `/inbox` | `/org/inbox` 站内信 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，两批 + 2026-09-03 队列化）` | `notifications`、`notification_recipients`、`notification_dispatch_jobs` | `GET/POST /api/org/inbox`、`PUT /api/org/inbox/:id/read`、`PUT /api/org/inbox/read-all` | 平台即时/定时公告接收；机构通知仅 ORG_ADMIN 可发；按当前机构与本人接收记录隔离；失败投递自动入队列 | 邮件 / 短信 / 微信渠道 | 临时库验证管理员/教师接收、单条/全部已读、机构发送权限、定时到期和撤回隐藏 |
 | `/work-data` | `/org/published-work-data` 作品数据中心 | ORG_ADMIN | `真实已有（2026-09-02，P4-O06）` | `student_projects`、`works`、`work_annotations`、`usage_records`、`classes`、`course_lessons`、`users`、`audit_logs` | `GET /api/org/work-data`、`GET /api/org/work-data/export` | 仅 ORG_ADMIN；7/14/30 日；班级/课时/学员范围校验；导出审计 | 访问去重、趋势、授权访客、公开分享 | 仅统计已有创作、审核发布、反馈与成功 AI 用量；导出仅含脱敏学员别名 |
-| `/enrollment` | `/org/student-orders` 学员开通 | ORG_ADMIN | `页面壳层` | 需新增开通单/商品表 | 待新增 | 履约、收款、作废状态机 | 数据模型与 API | 设计迁移后实施 |
+| `/enrollment` | `/org/student-orders` 学员开通 | ORG_ADMIN | `真实已有（2026-09-03，P4-O07）` | `billing_packages`、`student_enrollments`、`student_enrollment_events` | 复用套餐与开通单列表 / 详情 / 创建、线下履约登记、开通 / 停用 / 恢复 / 续费 / 作废接口 | 与 P4-O07 相同：`PENDING/ACTIVE/SUSPENDED/VOIDED/EXPIRED`；仅 `ACTIVE` 占席位；教师无开通单权限 | 在线支付、支付回调、自动续费和自动消息提醒 | 已在 P4-O07 临时 SQLite 验收；本行是 `/org/student-orders` 历史别名入口 |
 | `/recharge` | `/org/recharge` 积分充值 | ORG_ADMIN | `真实账务视图（2026-09-02）；在线支付仍外部决策` | `org_billing_accounts`、`recharge_orders`、`credit_entries` | 新增 `GET /api/org/billing/account-overview` | 仅 `ORG_ADMIN`；教师返回 `ORG_BILLING_PERMISSION_DENIED`；充值单 `PENDING/PAID/CANCELLED/EXPIRED` | 微信/支付宝支付回调、冻结金额、退款/冲正、人工调整、导出对账 | 管理员可读余额/累计/订单/流水；教师 403；不伪造到账数据 |
 | `/materials` | `/org/promo-materials` 宣传物料 | ORG_ADMIN、TEACHER | `真实已有（2026-09-02，查看与使用）` | `promo_materials`、`promo_material_assignments`、`promo_material_events` | `GET /api/org/materials`、`POST /api/org/materials/:id/events` | 仅当前机构可见；物料 `ACTIVE`；查看/使用/下载事件受服务端校验 | 真实上传、OSS、封面、下载代理、访问签名和统计详情 | 临时库验证全局/指定机构可见范围、使用事件和未配置资源时下载拒绝 |
 | `/help-feedback` | 学生问题反馈处理 | ORG_ADMIN | `真实已有（2026-09-03，P4-S07）` | `help_feedback`、`users` | `GET /api/org/help-feedback`、`GET/PUT /api/org/help-feedback/:id` | `SUBMITTED/IN_PROGRESS/RESOLVED/CLOSED`；仅本机构；教师 403；处理结果必填 | 工单 SLA、外部客服、邮件短信通知 | 临时库验证筛选、详情、状态机、结果必填、学生隔离与审计 |
@@ -72,7 +72,7 @@
 ## 5. 学生端入口清单（11 个）
 
 |---|---|---|---|---|---|---|---|---|
-| `/dashboard` | 学生学习首页 | STUDENT | `真实已有（2026-09-03，P4-S01）` | `class_members`、`classes`、`class_curriculum_items`、`course_series`、`course_lessons`、`class_sessions`、`student_projects`、`works`、`notifications`、`notification_recipients` | `GET /api/student/dashboard` | 仅 STUDENT；按本人机构、班级课程表、项目和作品隔离聚合 | 反馈逐条已读状态、真实 AI / 充值服务、头像 / 监护人 / 隐私 / 注销与数据请求入口 | 临时库验证未登录 / 教师越权、开课前 / 开课中 / 结课后、自主练习、通知、驳回反馈、跨学生隔离与真实空态 |
+| `/dashboard` | 学生学习首页 | STUDENT | `真实已有（2026-09-03，P4-S01）` | `class_members`、`classes`、`class_curriculum_items`、`course_series`、`course_lessons`、`class_sessions`、`student_projects`、`works`、`notifications`、`notification_recipients` | `GET /api/student/dashboard` | 仅 STUDENT；按本人机构、班级课程表、项目和作品隔离聚合 | 反馈逐条已读状态、真实 AI / 充值服务 | 临时库验证未登录 / 教师越权、开课前 / 开课中 / 结课后、自主练习、通知、驳回反馈、跨学生隔离与真实空态 |
 | `/projects` | 我的创作项目 | STUDENT | `真实已有（2026-09-03，P4-S02）` | `student_projects`、`project_snapshots`、`works`、`course_series`、`course_lessons`、`classes` | `GET/POST/PATCH/DELETE /api/student/projects`、`POST /:id`（复制）、`/:id/archive`、`/:id/restore`、版本与导入导出 | 仅 STUDENT；视图 `ACTIVE/ARCHIVED/DELETED`；草稿可重命名 / 复制 / 归档 / 软删除，已提交或已发布项目只读 | 批量管理、云同步冲突；30 天到期自动清理任务未实现 | 临时库验证权限、搜索筛选、重命名、复制、归档 / 恢复、软删除 / 恢复、提交后保护、发布后复制限制与学生隔离 |
 | `/projects/:projectId/canvas` | 创作画布 | STUDENT | `真实已有（画布冻结）` | `student_projects`、`project_snapshots` | projects API | 草稿/提交 | 不修改 `packages/canvas` | 仅回归，不做画布改动 |
 | `/works` | 我的作品 / 提交记录 | STUDENT | `真实已有（2026-09-03，P4-S03）` | `works`、`work_submissions`、`work_feedback_reads`、`work_publish_requests`、`work_annotations` | works submit/status、submissions、feedback-read、publish-request/withdraw | `PENDING/APPROVED/REJECTED/PUBLISHED`；反馈已读与多轮提交 | 独立站外发布、重新发布历史版本 | 学生只能访问本人作品；临时 SQLite 验收 `72 pass / 0 fail` |
@@ -301,13 +301,13 @@
 
 ### 8.19 P4-S06 验收记录（2026-09-03）
 
-- [x] API：`GET /api/student/account` 聚合本人、机构、班级、课堂、登录会话、头像 / 监护人 / 隐私和账号申请状态；`PUT /profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke` 均要求当前密码并只作用于本人。
+- [x] API：`GET /api/student/account` 聚合本人、机构、班级、课堂、登录会话、头像 / 监护人 / 隐私、账号申请和当前法律协议阅读状态；`PUT /profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke` 均要求当前密码并只作用于本人。
 - [x] 资料最小化：头像仅限平台白名单键；监护人可选、可清空，填写时校验姓名、手机号、关系和同意项并记录同意时间；不收集住址、身份证号、社交账号或头像文件。
 - [x] 隐私闭环：作品墙匿名展示和精选授权由学生本人控制；关闭精选后机构端、平台端精选操作被拒绝；作品墙作者按匿名策略脱敏。
 - [x] 申请闭环：`account_requests` 支持 `DELETION / DATA_EXPORT`，状态为 `PENDING / APPROVED / REJECTED / CANCELLED`；待处理同类型申请不可重复提交，学生可撤销，机构管理员必须填写处理说明。
 - [x] 数据导出：批准时生成 `STUDENT_DATA_EXPORT_V1` 数据库概览，包含班级、项目、作品、生成任务、用量与课堂上下文；学生和机构管理员按归属查看，导出排除密码、令牌和内部审计字段。
 - [x] 软注销：批准注销后学生 `DISABLED`、写 `deleted_at`、撤销全部会话、清空头像与监护人敏感资料；业务记录和审计保留，登录与会话立即失效。
-- [x] 审计：资料、监护人、隐私、密码、会话撤销、申请创建 / 撤销、数据导出批准和注销批准均写入 `audit_logs`；验收直接查询临时库确认关键 action 存在。
+- [x] 审计：资料、监护人、隐私、密码、会话撤销、申请创建 / 撤销、数据导出批准和注销批准、法律协议阅读记录均写入 `audit_logs`；验收直接查询临时库确认关键 action 存在。
 - [x] 验证：临时 SQLite P4-S06 API `97 pass / 0 fail`；旧 SQLite 35 表 / 6 用户迁移后新增 7 个用户字段与 `account_requests` 表且数据保留；P3 API 回归 `48 pass / 0 fail`；四端生产构建与 `git diff --check` 通过。
 - [x] 边界：未修改 `packages/canvas`，未触碰真实业务数据库，未部署线上；真实头像上传、邮件 / 短信通知、监管删除证明、监管报送和跨机构账号迁移未伪装为已完成。
 
@@ -408,3 +408,12 @@
 - [x] 验收脚本 `tmp-p5-m01-marketplace.mjs`：**75 / 75 断言通过 / 0 失败**。覆盖 401/越权、4 态过滤、搜索、分页、积分越界/负数/非法 status、状态机 PENDING→APPROVED→REJECTED、积分独立更新、课包不存在 404、公开仅 APPROVED+ALL_ORGS、popular/recent 排序正确、page1/2 无重叠。
 - [x] 后端 ESM 语法（`--check`）：adminOrg.js / communication.js OK；四端生产构建（admin / org / student / website）全部通过；`git diff --check` 通过。
 - [x] 边界：未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上；不做真实付费购买、SLA 评分、评论、用户购买历史。
+### P5-W08 协议 / 隐私 / 未成年人说明验收记录（2026-09-03）
+
+- [-] 官网新增 `/terms`、`/privacy`、`/minors` 三类准备稿页面，公开 Footer 可达；统一展示版本 `2026.09.03`、拟生效日期 `2026-09-03`、主体 `五格殿下 · AI魔法学院`，并明确“上线准备稿：正式备案主体与法务确认后生效”。
+- [x] `GET /api/public/legal` 返回协议版本、日期、状态和三个页面路径；`POST /api/public/contact` 强制当前版本与合法同意时间，线索保存 `legal_consent_version` / `legal_consented_at`，admin 可回读同意元数据。
+- [x] `legal_consents` 表记录学生 `TERMS` / `PRIVACY` / `MINORS` 版本、时间、来源；`GET /api/student/account` 返回当前阅读状态；`POST /api/student/account/legal-consents` 要求登录、当前密码、当前版本和明确确认，类型校验、幂等写入与审计均已实现；注销 / 数据导出入口继续联动 P4-S06。
+- [x] 影响文件 / 接口 / 数据表：官网 `legal.js`、`main.jsx`、样式；学生端 `main.jsx`、样式；`communication.js`、`student.js`、`schema.js`；`GET /api/public/legal`、`POST /api/public/contact`、`GET/POST /api/student/account/legal-consents`；`leads`、`legal_consents`。
+- [x] 验收脚本 `tmp-p5-w08-legal.mjs`：临时 SQLite **18 pass / 0 fail**；覆盖公开元数据、预约缺少 / 旧版本 / 非法时间、线索落库、admin 回读、学生认证 / 当前密码 / 类型 / 版本 / 三类记录 / 幂等。后端语法检查、四端生产构建和 `git diff --check` 通过。
+- [x] 边界：未修改 `packages/canvas`，未触碰真实 `packages/data/platform.db`，未伪造 AI / 微信 / 短信 / 邮件 / OSS / 支付 / 客户端。
+- [-] 阻塞：正式备案主体信息、正式生效日期和法务确认正文尚未提供；当前代码与文案不能视为正式上线合规文本。下一步由用户 / 业务方确认后替换准备稿并重新验收。

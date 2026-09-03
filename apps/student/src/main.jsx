@@ -805,6 +805,8 @@ function StudentCredits({ api }) {
 
 const AVATAR_LABELS = { star: '星星', rocket: '火箭', cat: '小猫', fox: '狐狸', robot: '机器人', panda: '熊猫', owl: '猫头鹰', whale: '鲸鱼' };
 const GUARDIAN_RELATIONSHIP_LABELS = { PARENT: '父母', GRANDPARENT: '祖父母 / 外祖父母', OTHER_GUARDIAN: '其他监护人' };
+const PUBLIC_SITE_URL = (import.meta.env?.VITE_PUBLIC_SITE_URL || 'http://localhost:5173').replace(/\/$/, '');
+const LEGAL_DOCUMENT_LINKS = { TERMS: ['用户协议', '/terms'], PRIVACY: ['隐私政策', '/privacy'], MINORS: ['儿童 / 未成年人说明', '/minors'] };
 function StudentAccount({ api, onRelogin }) {
   const state = useData(() => api.get('student/account'), [api]);
   const [displayName, setDisplayName] = useState('');
@@ -820,6 +822,9 @@ function StudentAccount({ api, onRelogin }) {
   const [privacyPassword, setPrivacyPassword] = useState('');
   const [privacyMessage, setPrivacyMessage] = useState('');
   const [privacyBusy, setPrivacyBusy] = useState(false);
+  const [legalPassword, setLegalPassword] = useState('');
+  const [legalMessage, setLegalMessage] = useState('');
+  const [legalBusy, setLegalBusy] = useState(false);
   const [requestForm, setRequestForm] = useState({ type: 'DATA_EXPORT', reason: '', confirmed: false, currentPassword: '' });
   const [requestBusy, setRequestBusy] = useState(false);
   const [requestMessage, setRequestMessage] = useState('');
@@ -858,6 +863,11 @@ function StudentAccount({ api, onRelogin }) {
     event.preventDefault(); setPrivacyBusy(true); setPrivacyMessage('');
     try { await api.put('student/account/privacy', { currentPassword: privacyPassword, ...privacyForm }); await state.refresh(); setPrivacyPassword(''); setPrivacyMessage('隐私设置已保存。'); }
     catch (error) { setPrivacyMessage(error.message); } finally { setPrivacyBusy(false); }
+  }
+  async function saveLegalConsent(event) {
+    event.preventDefault(); setLegalBusy(true); setLegalMessage('');
+    try { await api.post('student/account/legal-consents', { currentPassword: legalPassword, version: data.legalConsents.version, types: ['TERMS', 'PRIVACY', 'MINORS'], confirmed: true }); await state.refresh(); setLegalPassword(''); setLegalMessage('协议阅读记录已保存。'); }
+    catch (error) { setLegalMessage(error.message); } finally { setLegalBusy(false); }
   }
   async function submitRequest(event) {
     event.preventDefault(); setRequestBusy(true); setRequestMessage('');
@@ -909,6 +919,11 @@ function StudentAccount({ api, onRelogin }) {
         <button className="primary-button" disabled={privacyBusy}>{privacyBusy ? '保存中…' : '保存隐私设置'}</button>
       </form>
       {privacyMessage && <Notice tone={privacyMessage.includes('已') ? 'success' : 'danger'}>{privacyMessage}</Notice>}
+    </Panel>
+    <Panel title="协议与隐私说明" description="请在监护人指导下阅读。正式备案主体和法务确认完成前，本页标记为上线准备稿。">
+      <div className="legal-account-links">{Object.entries(LEGAL_DOCUMENT_LINKS).map(([type, [label, path]]) => { const consent = data.legalConsents?.current?.[type]; return <div className="item-card" key={type}><div className="row-actions"><a href={PUBLIC_SITE_URL + path} target="_blank" rel="noreferrer"><strong>{label}</strong> ↗</a>{consent ? <span className="status success">已记录 v{consent.version}</span> : <span className="status warning">未记录</span>}</div>{consent && <p className="muted">阅读记录：{formatDate(consent.consentedAt)}</p>}</div>; })}</div>
+      <form onSubmit={saveLegalConsent}><label>当前密码<input type="password" value={legalPassword} onChange={(event) => setLegalPassword(event.target.value)} required /></label><label className="check-row"><input type="checkbox" checked readOnly />我已在监护人指导下阅读当前版本的用户协议、隐私政策和儿童 / 未成年人说明</label><button className="primary-button" disabled={legalBusy}>{legalBusy ? '保存中…' : '保存协议阅读记录'}</button></form>
+      {legalMessage && <Notice tone={legalMessage.includes('已') ? 'success' : 'danger'}>{legalMessage}</Notice>}
     </Panel>
     <div className="split">
       <Panel title="机构与班级"><p><strong>{data.organization?.name || '未归属机构'}</strong></p>{data.classes?.length ? <div className="card-list">{data.classes.map((item) => <div className="item-card" key={item.id}><strong>{item.name}</strong><p className="muted">老师：{item.teacherName || '—'} · {item.usageMode || '跟随课堂'}</p></div>)}</div> : <Empty title="暂未加入班级" />}</Panel>

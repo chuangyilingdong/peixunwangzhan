@@ -367,6 +367,8 @@ function studentUsageOverview(ctx) {
 const STUDENT_AVATAR_KEYS = Object.freeze(['star', 'rocket', 'cat', 'fox', 'robot', 'panda', 'owl', 'whale']);
 const GUARDIAN_RELATIONSHIPS = Object.freeze(['PARENT', 'GRANDPARENT', 'OTHER_GUARDIAN']);
 const ACCOUNT_REQUEST_TYPES = Object.freeze(['DELETION', 'DATA_EXPORT']);
+const LEGAL_POLICY_VERSION = '2026.09.03';
+const LEGAL_CONSENT_TYPES = Object.freeze(['TERMS', 'PRIVACY', 'MINORS']);
 
 function assertCurrentPassword(ctx, value) {
   if (value === undefined || value === null || String(value).trim() === '') {
@@ -416,6 +418,21 @@ function accountRequestRow(item) {
   };
 }
 
+function studentLegalConsents(userId, orgId) {
+  const items = rows('SELECT consent_type, version, consented_at, source FROM legal_consents WHERE user_id = ? AND org_id = ? ORDER BY consented_at DESC', [userId, orgId]);
+  const latest = Object.fromEntries(LEGAL_CONSENT_TYPES.map((type) => {
+    const match = items.find((item) => item.consent_type === type && item.version === LEGAL_POLICY_VERSION);
+    return [type, match ? { version: match.version, consentedAt: match.consented_at, source: match.source } : null];
+  }));
+  return {
+    version: LEGAL_POLICY_VERSION,
+    effectiveDate: '2026-09-03',
+    status: 'DRAFT_PENDING_LEGAL_CONFIRMATION',
+    items: items.map((item) => ({ type: item.consent_type, version: item.version, consentedAt: item.consented_at, source: item.source })),
+    current: latest,
+  };
+}
+
 function studentAccountRequests(userId, orgId) {
   const items = rows(
     'SELECT * FROM account_requests WHERE user_id = ? AND org_id = ? ORDER BY requested_at DESC LIMIT 100',
@@ -435,6 +452,7 @@ function studentAccountOverview(ctx) {
   if (!rawUser) throw errors.notFound('学生账号不存在', 'STUDENT_NOT_FOUND');
   const sessions = rows('SELECT * FROM sessions WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [ctx.auth.user.id, ctx.auth.user.orgId, nowIso()]);
   const accountRequests = studentAccountRequests(ctx.auth.user.id, ctx.auth.user.orgId);
+  const legalConsents = studentLegalConsents(ctx.auth.user.id, ctx.auth.user.orgId);
   return {
     user: normalizeUser(rawUser),
     organization: normalizeOrg(ctx.auth.org),
@@ -442,6 +460,7 @@ function studentAccountOverview(ctx) {
     activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: item.class_id, lessonId: item.lesson_id, lessonTitle: item.lesson_title, status: item.status, startedAt: item.started_at })),
     sessions: sessions.map((item) => ({ id: item.id, clientType: item.client_type, createdAt: item.created_at, expiresAt: item.expires_at, current: item.id === ctx.auth.session.id })),
     currentSessionId: ctx.auth.session.id,
+    legalConsents,
     profileOptions: {
       avatarKeys: [...STUDENT_AVATAR_KEYS],
       guardianRelationships: [...GUARDIAN_RELATIONSHIPS],
@@ -524,6 +543,20 @@ export async function handleStudent(ctx) {
     q('UPDATE users SET privacy_showcase_anonymous = ?, privacy_allow_feature = ?, updated_at = ? WHERE id = ? AND org_id = ?', [ctx.body.showcaseAnonymous ? 1 : 0, ctx.body.allowFeature ? 1 : 0, nowIso(), auth.user.id, auth.user.orgId]);
     audit(ctx, 'STUDENT_PRIVACY_UPDATE', 'USER', auth.user.id, before, { showcaseAnonymous: ctx.body.showcaseAnonymous, allowFeature: ctx.body.allowFeature });
     return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), updated: true };
+  }
+
+  if (part === '/account/legal-consents' && method === 'POST') {
+    assertCurrentPassword(ctx, ctx.body?.currentPassword);
+    if (String(ctx.body?.version || '').trim() !== LEGAL_POLICY_VERSION) throw errors.badRequest('协议版本已更新，请刷新后重试', 'LEGAL_VERSION_MISMATCH');
+    if (ctx.body?.confirmed !== true) throw errors.badRequest('请确认已阅读协议与隐私说明', 'LEGAL_CONSENT_CONFIRM_REQUIRED');
+    const types = Array.isArray(ctx.body?.types) ? [...new Set(ctx.body.types.map((item) => String(item).trim().toUpperCase()))] : [];
+    if (!types.length || types.some((type) => !LEGAL_CONSENT_TYPES.includes(type))) throw errors.badRequest('协议同意类型无效', 'INVALID_LEGAL_CONSENT_TYPE');
+    const now = nowIso();
+    transaction(() => {
+      types.forEach((type) => q('INSERT OR IGNORE INTO legal_consents(id,user_id,org_id,consent_type,version,consented_at,source) VALUES (?,?,?,?,?,?,?)', [id('legal_consent'), auth.user.id, auth.user.orgId, type, LEGAL_POLICY_VERSION, now, 'STUDENT_ACCOUNT']));
+    });
+    audit(ctx, 'STUDENT_LEGAL_CONSENT_CREATE', 'USER', auth.user.id, null, { types, version: LEGAL_POLICY_VERSION, consentedAt: now });
+    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), saved: types };
   }
 
   if (part === '/account/requests' && method === 'POST') {

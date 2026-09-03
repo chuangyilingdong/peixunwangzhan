@@ -738,6 +738,20 @@ CREATE TABLE IF NOT EXISTS account_requests (
 CREATE INDEX IF NOT EXISTS idx_account_requests_user_status ON account_requests(user_id, status, requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_account_requests_org_status ON account_requests(org_id, status, requested_at DESC);
 
+CREATE TABLE IF NOT EXISTS legal_consents (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  org_id TEXT,
+  consent_type TEXT NOT NULL CHECK (consent_type IN ('TERMS','PRIVACY','MINORS')),
+  version TEXT NOT NULL,
+  consented_at TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'STUDENT_ACCOUNT',
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE RESTRICT,
+  UNIQUE (user_id, consent_type, version)
+);
+CREATE INDEX IF NOT EXISTS idx_legal_consents_user_type ON legal_consents(user_id, consent_type, consented_at DESC);
+
 CREATE TABLE IF NOT EXISTS help_feedback (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -1091,8 +1105,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS leads (
   admin_notes TEXT NOT NULL DEFAULT '',
   assigned_to TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  legal_consent_version TEXT,
+  legal_consented_at TEXT
 )`);
+try { db.exec('ALTER TABLE leads ADD COLUMN legal_consent_version TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE leads ADD COLUMN legal_consented_at TEXT'); } catch (_) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_leads_status_created ON leads(status, created_at DESC)'); } catch (_) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(contact_phone)'); } catch (_) {}
 
