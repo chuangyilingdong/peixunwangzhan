@@ -355,6 +355,27 @@ function platformAdminPermissions(value) {
 function platformUserRow(value) {
   return { ...normalizeUser(value, { includeAuthMeta: true }), organizationName: value.organization_name || null, billingPackageName: value.billing_package_name || null };
 }
+function lastSuperAdminGuard(target) {
+  if (target.role !== 'SUPER_ADMIN' || target.status !== 'ACTIVE') return;
+  const activeSuperAdmins = rows("SELECT id FROM users WHERE role='SUPER_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL");
+  if (activeSuperAdmins.length <= 1 && activeSuperAdmins.some((item) => item.id === target.id)) throw errors.badRequest('不能停用最后一个有效平台管理员', 'LAST_SUPER_ADMIN_FORBIDDEN');
+}
+
+function userLoginMeta(userIds) {
+  const meta = new Map();
+  if (!userIds.length) return meta;
+  const marks = userIds.map(() => '?').join(',');
+  for (const item of rows('SELECT actor_id, MAX(created_at) last_login FROM audit_logs WHERE action=\'AUTH_LOGIN\' AND actor_id IN (' + marks + ') GROUP BY actor_id', userIds)) {
+    meta.set(item.actor_id, { lastLoginAt: item.last_login, activeSessions: 0 });
+  }
+  for (const item of rows('SELECT user_id, COUNT(*) n FROM sessions WHERE user_id IN (' + marks + ') AND superseded_at IS NULL AND expires_at>? GROUP BY user_id', [...userIds, nowIso()])) {
+    const existing = meta.get(item.user_id) || { lastLoginAt: null, activeSessions: 0 };
+    existing.activeSessions = Number(item.n || 0);
+    meta.set(item.user_id, existing);
+  }
+  return meta;
+}
+
 
 function curriculumItem(value) { return { id: value.id, lessonId: value.lesson_id, title: value.title, summary: value.summary || '', sort: Number(value.sort || 0), durationMinutes: Number(value.duration_minutes || 0), sourceSeriesId: value.source_series_id }; }
 
@@ -1097,9 +1118,49 @@ export async function handleAdmin(ctx) {
     ).map(platformUserRow);
     return { items, total: items.length };
   }
+  const platformUserMatch = part.match(/^\/platform-users\/([^/]+)\/(status|password|phone)$/);
+  if (platformUserMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const target = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [platformUserMatch[1]]);
+    if (!target) throw errors.notFound('用户不存在', 'USER_NOT_FOUND');
+    const body = ctx.body || {}; const now = nowIso();
+    const targetWithJoins = 'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE user.id=?';
+    if (platformUserMatch[2] === 'status') {
+      const status = body.status;
+      if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('用户状态无效', 'INVALID_USER_STATUS');
+      if (status === target.status) { const unchanged = row(targetWithJoins, [target.id]); return platformUserRow(unchanged); }
+      if (status === 'DISABLED') {
+        if (target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'ADMIN_SELF_DISABLE_FORBIDDEN');
+        lastSuperAdminGuard(target);
+      }
+      q('UPDATE users SET status=?,updated_at=? WHERE id=?', [status, now, target.id]);
+      if (status === 'DISABLED') q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, target.id]);
+      audit(ctx, 'PLATFORM_USER_STATUS', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { status }, { orgId: target.org_id || null });
+      return platformUserRow(row(targetWithJoins, [target.id]));
+    }
+    if (platformUserMatch[2] === 'password') {
+      const password = String(body.password || '');
+      if (password.length < 6) throw errors.badRequest('密码至少6位', 'USER_PASSWORD_REQUIRED');
+      q('UPDATE users SET password_hash=?,updated_at=? WHERE id=?', [hashPassword(password), now, target.id]);
+      q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, target.id]);
+      audit(ctx, 'PLATFORM_USER_PASSWORD_RESET', 'USER', target.id, { login: target.login }, { passwordChanged: true }, { orgId: target.org_id || null });
+      return { id: target.id, login: target.login, passwordReset: true };
+    }
+    const phone = validateMemberPhone(body.phone === undefined ? '' : body.phone, target.id);
+    q('UPDATE users SET phone=?,phone_verified_at=?,updated_at=? WHERE id=?', [phone, phone ? (target.phone_verified_at || now) : null, now, target.id]);
+    audit(ctx, 'PLATFORM_USER_PHONE_UPDATE', 'USER', target.id, { phone: target.phone || null }, { phone }, { orgId: target.org_id || null });
+    return platformUserRow(row(targetWithJoins, [target.id]));
+  }
   if (part === '/platform-admins' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const items = rows("SELECT * FROM users WHERE role='SUPER_ADMIN' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 200").map((item) => normalizeUser(item, { includeAuthMeta: true }));
+    const search = String(ctx.search.get('search') || '').trim();
+    const statusFilter = String(ctx.search.get('status') || '').trim();
+    const params = []; const conditions = ["user.role='SUPER_ADMIN'", 'user.deleted_at IS NULL'];
+    if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword); }
+    if (['ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('user.status=?'); params.push(statusFilter); }
+    const adminUsers = rows('SELECT user.* FROM users user WHERE ' + conditions.join(' AND ') + ' ORDER BY user.created_at DESC LIMIT 200', params);
+    const meta = userLoginMeta(adminUsers.map((item) => item.id));
+    const items = adminUsers.map((item) => ({ ...normalizeUser(item, { includeAuthMeta: true }), lastLoginAt: meta.get(item.id)?.lastLoginAt || null, activeSessions: meta.get(item.id)?.activeSessions || 0 }));
     return { items, total: items.length };
   }
   if (part === '/platform-admins' && method === 'POST') {
@@ -1111,6 +1172,18 @@ export async function handleAdmin(ctx) {
     q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [adminId, null, login, displayName, 'SUPER_ADMIN', json(permissions), hashPassword(password), body.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE', now, now]);
     audit(ctx, 'PLATFORM_ADMIN_CREATE', 'USER', adminId, null, { login, permissions });
     return normalizeUser(row('SELECT * FROM users WHERE id=?', [adminId]), { includeAuthMeta: true });
+  }
+  const adminLogMatch = part.match(/^\/platform-admins\/([^/]+)\/audit-logs$/);
+  if (adminLogMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const target = row("SELECT * FROM users WHERE id=? AND role='SUPER_ADMIN' AND deleted_at IS NULL", [adminLogMatch[1]]);
+    if (!target) throw errors.notFound('平台管理员不存在', 'ADMIN_NOT_FOUND');
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 50 });
+    const items = rows('SELECT audit.*, target_user.display_name target_name FROM audit_logs audit LEFT JOIN users target_user ON target_user.id=audit.target_id AND audit.target_type=\'USER\' WHERE audit.actor_id=? ORDER BY audit.created_at DESC LIMIT ' + limit, [target.id]).map((item) => ({
+      id: item.id, action: item.action, targetType: item.target_type, targetId: item.target_id || null, targetName: item.target_name || null,
+      requestPath: item.request_path || null, before: parseJson(item.before_data, null), after: parseJson(item.after_data, null), ip: item.ip || null, createdAt: item.created_at,
+    }));
+    return { admin: normalizeUser(target, { includeAuthMeta: true }), items, total: items.length };
   }
   const adminMatch = part.match(/^\/platform-admins\/([^/]+)$/);
   if (adminMatch && method === 'PUT') {
@@ -1129,10 +1202,12 @@ export async function handleAdmin(ctx) {
       status = body.status;
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('管理员状态无效', 'INVALID_ADMIN_STATUS');
       if (status === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'ADMIN_SELF_DISABLE_FORBIDDEN');
+      if (status === 'DISABLED' && target.status !== 'DISABLED') lastSuperAdminGuard(target);
     }
     const login = body.login === undefined ? target.login : String(body.login).trim();
     if (!login) throw errors.badRequest('登录名不能为空', 'ADMIN_INPUT_REQUIRED');
     q('UPDATE users SET login=?,display_name=?,permissions=?,password_hash=?,status=?,updated_at=? WHERE id=?', [login, displayName, json([...new Set(permissions)]), passwordHash, status, nowIso(), target.id]);
+    if ((status === 'DISABLED' && target.status !== 'DISABLED') || body.password !== undefined) q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [nowIso(), target.id]);
     audit(ctx, 'PLATFORM_ADMIN_UPDATE', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { displayName, status, passwordChanged: body.password !== undefined, permissions });
     return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
   }

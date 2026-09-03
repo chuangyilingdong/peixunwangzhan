@@ -456,11 +456,18 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - 平台机构页新增机构详情、资料编辑、停用 / 恢复 / 试用转正、管理员管理、积分与席位摘要、套餐 / 课程授权、业务汇总、审计列表；停用、恢复、转正和停用管理员均使用明确影响的二次确认。
     - 审计动作：`ORG_CREATE`、`ORG_UPDATE`、`ORG_DISABLE`、`ORG_RECOVER`、`ORG_FROZEN`、`ORG_ACTIVATE`、`ORG_ADMIN_CREATE`、`ORG_ADMIN_UPDATE`。
     - 验收：P4-A02 临时 SQLite API 验收 `57 pass / 0 fail`；P3 回归 `48 pass / 0 fail`；后端 ESM 语法检查、四端生产构建、`git diff --check` 均通过。本批未修改 canvas，未触碰 `packages/data/platform.db`，未部署线上。
-- [ ] **P4-A03 平台用户管理**
+- [x] **P4-A03 平台用户管理**
   - 优先级：P0
   - 页面：平台用户、平台管理员。
   - 实现范围：平台管理员账号、角色、状态、重置密码 / 安全会话、搜索、筛选、最近登录、操作日志。
   - 验收：不能删除最后一个有效超管；禁用立即使会话失效；密码和 token 不回显。
+  - 完成记录（2026-09-03）：
+    - 新增 `PUT /api/admin/platform-users/:userId/status|password|phone`：平台超管可对任意用户执行启用 / 停用、重置密码、绑定 / 解绑手机；停用与重置密码均立即撤销该账号全部会话；不能停用当前登录账号，停用超管受"最后一个有效平台管理员"守卫保护（并发防御）；手机号复用机构成员校验（格式与占用 409）。
+    - `GET /api/admin/platform-admins` 增强：支持 `search` / `status` 筛选，每条记录返回 `lastLoginAt`（取自 `AUTH_LOGIN` 审计最近一条）与 `activeSessions`（未失效且未过期会话数）。
+    - `PUT /api/admin/platform-admins/:id` 增强：停用其他管理员或重置密码后立即撤销其全部会话；新增 `GET /api/admin/platform-admins/:id/audit-logs` 返回该管理员最近操作日志（含动作、目标、请求路径与变更摘要，limit 1-100）。
+    - 平台端 `/users` 页面新增行内启停（带影响说明二次确认）、重置密码、解绑手机与手机号展示；`/admins` 页面新增关键词 / 状态筛选、最近登录、活跃会话数、操作日志面板和停用二次确认。
+    - 审计动作：`PLATFORM_USER_STATUS`、`PLATFORM_USER_PASSWORD_RESET`、`PLATFORM_USER_PHONE_UPDATE`；所有接口不返回密码哈希或令牌。
+    - 验收：P4-A03 临时 SQLite API 验收 `63 pass / 0 fail`，覆盖 401/403 越权、筛选搜索、停用即会话失效、停用后登录拒绝、重新启用恢复、重置密码旧会话失效与新密码登录、手机号格式 / 占用 / 解绑、自停用拒绝、非法状态与 limit、最近登录与会话数、管理员停用 / 恢复 / 重置、操作日志与审计动作；P3 回归 `48 pass / 0 fail`；后端 ESM 语法检查、四端生产构建、`git diff --check` 均通过。本批未修改 canvas，未触碰 `packages/data/platform.db`，未部署线上。
 - [ ] **P4-A04 课程系列、课时与课包管理**
   - 优先级：P0
   - 页面：平台课程、课程广场。

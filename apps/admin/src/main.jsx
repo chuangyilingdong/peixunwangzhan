@@ -323,37 +323,58 @@ function PlatformUsers({ api }) {
   const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
   const users = useData(() => api.get(`admin/platform-users?${query.toString()}`), [api, query]);
   const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [passwordInput, setPasswordInput] = useState({});
   const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学员' };
+  async function run(target, action, body, successMessage, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(true); setMessage('');
+    try { await api.put(`admin/platform-users/${target.id}/${action}`, body); setPasswordInput({ ...passwordInput, [target.id]: '' }); setMessage(successMessage); users.refresh(); }
+    catch (err) { setMessage(err.message); } finally { setBusy(false); }
+  }
   return <>
-    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态。" actions={<button className="secondary-button" onClick={users.refresh}>刷新</button>} />
+    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态，并可执行启停、重置密码与解绑手机。" actions={<button className="secondary-button" onClick={users.refresh}>刷新</button>} />
     <Panel title="筛选条件">
       <div className="form-grid">
         <label>角色<select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
         <label>关键词<input value={filters.search} placeholder="登录名 / 姓名 / 手机号" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
       </div>
-      {message && <Notice tone="info">{message}</Notice>}
+      {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
     </Panel>
     <Panel title="用户列表">
-      {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>套餐</th><th>状态</th><th>有效期至</th><th>创建时间</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td>{item.role === 'STUDENT' ? (item.billingPackageName || '未绑定') : '—'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的用户" />}
+      {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>套餐</th><th>状态</th><th>有效期至</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td>{item.role === 'STUDENT' ? (item.billingPackageName || '未绑定') : '—'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td><td><div className="row-actions">
+        {item.status === 'ACTIVE'
+          ? <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'DISABLED' }, `已停用 ${item.displayName}，该账号现有登录会话立即失效。`, `确认停用「${item.displayName}」？停用后该账号现有登录会话立即失效，将无法登录和使用平台功能。`)}>停用</button>
+          : <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'ACTIVE' }, `已启用 ${item.displayName}。`)}>启用</button>}
+        <input placeholder="新密码（≥6位）" value={passwordInput[item.id] || ''} onChange={(e) => setPasswordInput({ ...passwordInput, [item.id]: e.target.value })} />
+        <button className="text-button" disabled={busy || (passwordInput[item.id] || '').length < 6} onClick={() => run(item, 'password', { password: passwordInput[item.id] }, `已重置 ${item.displayName} 的密码，该账号全部会话已失效。`)}>重置密码</button>
+        {item.phone ? <button className="text-button" disabled={busy} onClick={() => run(item, 'phone', { phone: '' }, `已解绑 ${item.displayName} 的手机号。`, `确认解绑「${item.displayName}」的手机号 ${item.phone}？`)}>解绑手机</button> : null}
+      </div></td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的用户" />}
     </Panel>
   </>;
 }
 
 function PlatformAdmins({ api, currentUser }) {
-  const admins = useData(() => api.get('admin/platform-admins'), [api]);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const adminQuery = useMemo(() => new URLSearchParams(Object.entries({ search, status: statusFilter }).filter(([, value]) => value)), [search, statusFilter]);
+  const admins = useData(() => api.get(`admin/platform-admins?${adminQuery.toString()}`), [api, adminQuery]);
   const permissionOptions = ['ADMIN_DASHBOARD', 'ADMIN_ORGANIZATIONS', 'ADMIN_USERS', 'ADMIN_COURSES', 'ADMIN_WORKS', 'ADMIN_HACKATHON', 'ADMIN_BILLING', 'ADMIN_MATERIALS', 'ADMIN_INBOX', 'ADMIN_ADMINS', 'ADMIN_ADJUSTMENT'];
   const [form, setForm] = useState({ login: '', displayName: '', password: '', permissions: [] });
   const [editing, setEditing] = useState(null);
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
+  const [logs, setLogs] = useState(null);
+  const [logsLoading, setLogsLoading] = useState(false);
   function toggle(permission) { setForm((current) => ({ ...current, permissions: current.permissions.includes(permission) ? current.permissions.filter((item) => item !== permission) : [...current.permissions, permission] })); }
   async function create(event) {
     event.preventDefault(); setSaving(true); setMessage('');
     try { await api.post('admin/platform-admins', form); setForm({ login: '', displayName: '', password: '', permissions: [] }); setMessage('平台管理员已创建。'); admins.refresh(); }
     catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }
-  async function update(target, payload, successMessage) {
+  async function update(target, payload, successMessage, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
     try { await api.put(`admin/platform-admins/${target.id}`, payload); setMessage(successMessage); admins.refresh(); if (editing?.id === target.id) setEditing(null); }
     catch (err) { setMessage(err.message); }
   }
@@ -362,8 +383,13 @@ function PlatformAdmins({ api, currentUser }) {
     try { await api.put(`admin/platform-admins/${editing.id}`, { displayName: form.displayName, permissions: form.permissions }); setMessage('平台管理员已更新。'); setEditing(null); admins.refresh(); }
     catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }
+  async function showLogs(target) {
+    setLogsLoading(true);
+    try { const result = await api.get(`admin/platform-admins/${target.id}/audit-logs?limit=50`); setLogs({ admin: target, ...result }); }
+    catch (err) { setMessage(err.message); } finally { setLogsLoading(false); }
+  }
   return <>
-    <PageHeader eyebrow="平台系统" title="平台管理员" description="维护平台运营账号、权限码和登录安全。" actions={<button className="secondary-button" onClick={admins.refresh}>刷新</button>} />
+    <PageHeader eyebrow="平台系统" title="平台管理员" description="维护平台运营账号、权限码和登录安全，查看最近登录、活跃会话与操作日志。" actions={<button className="secondary-button" onClick={admins.refresh}>刷新</button>} />
     <div className="split">
       <Panel title={editing ? `编辑管理员：${editing.displayName}` : '新建平台管理员'}>
         <form onSubmit={editing ? save : create}>
@@ -378,11 +404,24 @@ function PlatformAdmins({ api, currentUser }) {
           </div>
         </form>
       </Panel>
-      <Panel title="权限说明"><Notice>当前本地安全基线仍按 SUPER_ADMIN 角色放行；权限码先完成数据结构、白名单和页面配置能力，后续再逐域收紧 API 判定。不能停用当前登录账号由后端强制校验。</Notice></Panel>
+      <Panel title="权限说明"><Notice>当前本地安全基线仍按 SUPER_ADMIN 角色放行；权限码先完成数据结构、白名单和页面配置能力，后续再逐域收紧 API 判定。不能停用当前登录账号和最后一个有效管理员由后端强制校验；停用或重置密码会立即使该账号全部会话失效。</Notice></Panel>
     </div>
-    <Panel title="管理员列表">
-      {admins.loading ? <Loading /> : admins.error ? <ErrorState error={admins.error} onRetry={admins.refresh} /> : admins.data.items.length ? <div className="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>权限码</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{admins.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div>{item.id === currentUser?.id && <span className="muted">当前账号</span>}</td><td><Status value={item.status} /></td><td>{item.permissions.length ? item.permissions.join(', ') : '全量（本地基线）'}</td><td>{formatDate(item.updatedAt)}</td><td><div className="row-actions"><button className="text-button" onClick={() => { setEditing(item); setForm({ login: '', displayName: item.displayName, password: '', permissions: item.permissions }); }}>编辑</button><button className="text-button" onClick={() => { const password = window.prompt('请输入至少 6 位新密码'); if (password) update(item, { password }, '管理员密码已重置。'); }}>重置密码</button>{item.status === 'ACTIVE' ? <button className="text-button" onClick={() => update(item, { status: 'DISABLED' }, '管理员已停用。')}>停用</button> : <button className="text-button" onClick={() => update(item, { status: 'ACTIVE' }, '管理员已启用。')}>启用</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="暂无平台管理员" />}
+    <Panel title="筛选条件">
+      <div className="form-grid">
+        <label>关键词<input value={search} placeholder="登录名 / 姓名" onChange={(e) => setSearch(e.target.value)} /></label>
+        <label>状态<select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="">全部状态</option><option value="ACTIVE">启用</option><option value="DISABLED">停用</option></select></label>
+      </div>
     </Panel>
+    <Panel title="管理员列表">
+      {admins.loading ? <Loading /> : admins.error ? <ErrorState error={admins.error} onRetry={admins.refresh} /> : admins.data.items.length ? <div className="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>权限码</th><th>最近登录</th><th>活跃会话</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{admins.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div>{item.id === currentUser?.id && <span className="muted">当前账号</span>}</td><td><Status value={item.status} /></td><td>{item.permissions.length ? item.permissions.join(', ') : '全量（本地基线）'}</td><td>{formatDate(item.lastLoginAt) || '从未登录'}</td><td>{item.activeSessions}</td><td>{formatDate(item.updatedAt)}</td><td><div className="row-actions"><button className="text-button" onClick={() => { setEditing(item); setForm({ login: '', displayName: item.displayName, password: '', permissions: item.permissions }); setLogs(null); }}>编辑</button><button className="text-button" onClick={() => { const password = window.prompt('请输入至少 6 位新密码'); if (password) update(item, { password }, '管理员密码已重置，该账号全部会话已失效。'); }}>重置密码</button>{item.status === 'ACTIVE' ? <button className="text-button" onClick={() => update(item, { status: 'DISABLED' }, '管理员已停用，该账号全部会话已失效。', `确认停用管理员「${item.displayName}」？停用后该账号现有登录会话立即失效。`)}>停用</button> : <button className="text-button" onClick={() => update(item, { status: 'ACTIVE' }, '管理员已启用。')}>启用</button>}<button className="text-button" disabled={logsLoading} onClick={() => showLogs(item)}>操作日志</button></div></td></tr>)}</tbody></table></div> : <Empty title="暂无平台管理员" />}
+    </Panel>
+    {logs ? (
+      <Panel title={`操作日志：${logs.admin.displayName}（最近 ${logs.items.length} 条）`}>
+        {logs.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>目标</th><th>请求路径</th><th>变更摘要</th></tr></thead><tbody>{logs.items.map((item) => <tr key={item.id}>
+          <td>{formatDate(item.createdAt)}</td><td><code>{item.action}</code></td><td>{item.targetType}{item.targetName ? ` · ${item.targetName}` : item.targetId ? ` · ${item.targetId}` : ''}</td><td>{item.requestPath || '—'}</td><td>{JSON.stringify(item.after || {})}</td>
+        </tr>)}</tbody></table></div> : <Empty title="该管理员暂无操作记录" />}
+      </Panel>
+    ) : null}
   </>;
 }
 
