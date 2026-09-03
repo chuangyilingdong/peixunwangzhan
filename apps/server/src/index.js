@@ -9,6 +9,7 @@ import { handleAiGeneration } from './routes/aiGeneration.js';
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets } from './routes/fileAssets.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
+import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -55,7 +56,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const data = await handlePublicCommunication(ctx)
+    const data = await handlePublicAnalytics(ctx)
+      ?? await handleAdminAnalytics(ctx)
+      ?? await handlePublicCommunication(ctx)
       ?? await handleAuth(ctx)
       ?? await handleAdmin(ctx)
       ?? await handleAdminCommunication(ctx)

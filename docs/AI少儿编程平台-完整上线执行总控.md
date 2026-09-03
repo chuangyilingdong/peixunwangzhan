@@ -3,7 +3,7 @@
 > **唯一总控文件 / Single Source of Truth**  
 > 工程根目录：`D:\学习平台\platform-v2`  `n> 受版本控制的总控文件：`docs\AI少儿编程平台-完整上线执行总控.md`  
 > 创建日期：2026-09-02  
-> 当前阶段：**P3 / P3.5 / P4 / P5-W01 / P5-W02 / P5-W04 / P5-W05 / P5-M01 / P5-W07 已完成；P5-W08 已完成代码闭环但等待备案主体与法务确认；P5-W09 / P5-W10 及真实外部服务仍需业务方后续决策；非画布三端信息架构与真实业务能力已闭环。**
+> 当前阶段：**P3 / P3.5 / P4 / P5-W01 / P5-W02 / P5-W04 / P5-W05 / P5-M01 / P5-W07 / P5-W11 已完成；P5-W08 已完成代码闭环但等待备案主体与法务确认；P5-W09 / P5-W10 及真实外部服务仍需业务方后续决策；非画布三端信息架构与真实业务能力已闭环。**
 > 当前总原则：**除 `packages/canvas` 外，网站与三端按”AI 魔法学院”基准持续实施；画布暂时冻结，必须等待用户再次明确授权后才可改动。**
 
 ---
@@ -105,6 +105,7 @@
   - 阻塞：正式备案主体信息、正式生效日期与法务确认文本尚未由用户 / 业务方提供；因此本事项保持 `[-]`，不能标记为正式上线完成。
   - 下一步：确认主体、备案信息、正式生效日期和协议正文后，替换准备稿并重新运行临时 SQLite 验收与四端构建。
 - [x] **P5-W01 官网内容 CMS / 配置化与 P5-W07 SEO / 可访问性 / 性能优化** ✅ 2026-09-03
+  - P5-W11 已同步完成：第一方匿名统计同意、公开事件接收、平台转化漏斗与 90 天保留策略已接通；备案 / 域名 / 外部服务仍按 §5.2、§6 保持阻塞。
   - 已完成结构化内容编辑、草稿预览、发布 / 历史版本 / 回滚；公开站已接入 SEO head、robots、sitemap、动态标题、关键 aria 语义与窄屏布局。
   - 其他开放项：P5-W09 / P5-W10（见 §5.2，备案后续再做）；P5-W08 仍等待正式备案主体与法务正文；P5-W03/W06 已产品决策取消（见对应 todo 行的 `[~]` 标记）；`/org/afee` 阿飞提醒仍依赖微信开放平台；`/org/enrollment` 学员开通单已由 P4-O07 覆盖并改判“真实已有”；`/demo` 预约演示已由 P5-W02 覆盖并改判“真实已有”。
 
@@ -878,9 +879,15 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 - [ ] **P5-W10 国内部署所需备案与内容要求确认**
   - 优先级：P0（若部署在中国大陆）
   - 验收：确认主体、服务器位置、备案 / 公安备案 / ICP 要求，未完成前不承诺大陆正式对外服务。
-- [ ] **P5-W11 埋点、转化漏斗与隐私合规分析**
+- [x] **P5-W11 埋点、转化漏斗与隐私合规分析** ✅ 2026-09-03
   - 优先级：P1
-  - 验收：统计工具经过合规确认；用户可知情或选择；埋点事件有文档、最小化收集、权限和保留期限。
+  - 完成记录（2026-09-03）：采用平台内置第一方统计，不接入第三方广告 / 跨站跟踪；官网首次访问展示同意选择，拒绝时不发送事件，接受后才生成匿名访问标识并上报白名单事件。
+  - 埋点事件：`page_view`、`marketplace_view`、`marketplace_detail_view`、`cta_click`、`course_view`、`work_view`、`demo_submitted`、`analytics_consent_granted`；页面路径去掉查询参数，预约事件不携带表单内容。
+  - 数据最小化：`analytics_events` 仅保存匿名标识、事件名、路径、白名单元数据和时间；不保存 IP、User-Agent、姓名、电话、邮箱或原始查询参数；服务端自动清理 90 天前数据。
+  - 管理端新增 `/analytics`，仅超级管理员可读，提供区间筛选、匿名访客、事件汇总和预约漏斗；无原始访客明细导出。
+  - 影响文件 / 接口 / 数据表：`apps/website/src/analytics.js`、`apps/website/src/main.jsx`、官网样式、`apps/admin/src/main.jsx`、`apps/server/src/routes/analytics.js`、`apps/server/src/index.js`、`packages/database/src/schema.js`；`POST /api/public/analytics/events`、`GET /api/admin/analytics/overview`；`analytics_events`。
+  - 验收：`tmp-p5-w11-analytics.mjs` 临时 SQLite **15 pass / 0 fail**；覆盖未同意拒绝、未知事件、匿名汇总、超级管理员权限、机构越权、漏斗空值、路径 / 元数据脱敏、前端同意机制；四端生产构建、后端语法检查、`git diff --check` 通过。
+  - 边界：未修改 `packages/canvas`，未触碰真实 `packages/data/platform.db`，未伪造第三方统计、AI、微信、短信、邮件、OSS、支付或客户端；当前仍未运行真实 Lighthouse。
 
 ---
 
@@ -1264,6 +1271,7 @@ node .\p3-api-integration.mjs
 | 2026-09-03 | P5-W01 官网 CMS / 配置化完成：website_contents + revisions、超级管理员权限、结构化首页 / FAQ / 品牌表单、FAQ 排序、草稿预览、发布、历史与回滚接通；封面仅支持已有真实 URL。 | 临时 SQLite P5-W01 14 pass / 0 fail；四端生产构建、后端语法和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上。 |
 | 2026-09-03 | P5-W07 SEO / 可访问性 / 性能基础优化完成：robots、sitemap、SEO head、动态标题 / canonical、JSON-LD、aria、焦点态和窄屏规则接通。 | 临时 SQLite / 静态 P5-W07 13 pass / 0 fail；四端生产构建和 git diff --check 通过；未运行真实 Lighthouse，不宣称分数；画布未修改、真实数据库未触碰、未部署线上。 |
 | 2026-09-03 | P5-W08 协议 / 隐私 / 未成年人说明代码闭环完成：官网三类协议页、预约同意、学生协议阅读记录、版本元数据和 P4-S06 数据请求入口联动已接通。 | 临时 SQLite P5-W08 `18 pass / 0 fail`；后端语法、四端生产构建和 `git diff --check` 通过；由于备案主体与法务正文未确认，保持 `[-]`，准备稿明确不得作为正式合规文本。 |
+| 2026-09-03 | P5-W11 第一方匿名埋点与转化漏斗完成：官网同意选择、白名单事件、90 天保留、平台分析报表和权限边界接通。 | 临时 SQLite P5-W11 `15 pass / 0 fail`；后端语法、四端生产构建和 `git diff --check` 通过；不接入第三方统计、不保存 IP / PII，备案与正式法务仍按外部事项处理。 |
 
 ---
 

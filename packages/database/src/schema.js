@@ -782,6 +782,20 @@ CREATE TABLE IF NOT EXISTS legal_consents (
 );
 CREATE INDEX IF NOT EXISTS idx_legal_consents_user_type ON legal_consents(user_id, consent_type, consented_at DESC);
 
+-- P5-W11：仅保存获得选择同意后的、最小化的匿名官网事件；不保存 IP、User-Agent、姓名、电话或原始 URL 查询参数。
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id TEXT PRIMARY KEY,
+  anonymous_id TEXT NOT NULL,
+  event_name TEXT NOT NULL,
+  path TEXT NOT NULL DEFAULT '/',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_events_created ON analytics_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_events_name_created ON analytics_events(event_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_events_anon_created ON analytics_events(anonymous_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS help_feedback (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,

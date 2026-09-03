@@ -18,6 +18,7 @@ const navigation = [
   { to: '/billing', icon: '◌', label: '计费与模型' },
   { to: '/materials', icon: '▤', label: '素材与物料' },
   { to: '/website-content', icon: '✎', label: '官网内容' },
+  { to: '/analytics', icon: '⌁', label: '转化分析' },
   { to: '/notifications', icon: '✉', label: '通知事件' },
   { to: '/client-releases', icon: '⤓', label: '客户端版本' },
   { to: '/inbox', icon: '✉', label: '站内信' },
@@ -1449,6 +1450,26 @@ function CourseMarketplace({ api }) {
   </>;
 }
 
+function Analytics({ api }) {
+  const [filters, setFilters] = useState({ from: '', to: '' });
+  const query = useMemo(() => { const params = new URLSearchParams(); if (filters.from) params.set('from', new Date(filters.from).toISOString()); if (filters.to) { const end = new Date(filters.to); end.setDate(end.getDate() + 1); params.set('to', end.toISOString()); } return params.toString(); }, [filters]);
+  const report = useData(() => api.get(`admin/analytics/overview${query ? `?${query}` : ''}`), [api, query]);
+  const data = report.data || {};
+  return <>
+    <PageHeader eyebrow="官网运营" title="转化漏斗与匿名分析" description="仅展示获得访客选择同意后的第一方匿名事件；不含 IP、姓名、电话或完整查询参数。" actions={<button className="secondary-button" onClick={report.refresh}>刷新</button>} />
+    <Panel title="统计区间">
+      <div className="form-grid"><label>开始日期<input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} /></label><label>结束日期<input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} /></label><button type="button" className="secondary-button" onClick={() => setFilters({ from: '', to: '' })}>重置</button></div>
+      <small className="muted">默认最近 30 天；数据保留 {data.retentionDays || 90} 天。</small>
+    </Panel>
+    {report.loading ? <Loading label="正在读取匿名分析…" /> : report.error ? <ErrorState error={report.error} onRetry={report.refresh} /> : <>
+      <div className="metric-grid"><MetricCard label="匿名访客" value={data.totals?.visitors || 0} hint="按匿名访问标识去重" /><MetricCard label="事件总量" value={data.totals?.events || 0} hint="只统计已同意记录" /><MetricCard label="预约提交" value={data.funnel?.find((item) => item.eventName === 'demo_submitted')?.visitors || 0} hint="不含预约表单内容" /></div>
+      <Panel title="转化漏斗"><div className="table-wrap"><table><thead><tr><th>步骤</th><th>匿名访客</th><th>事件数</th><th>较上一步</th></tr></thead><tbody>{(data.funnel || []).map((item) => <tr key={item.eventName}><td><strong>{item.label}</strong><div className="muted">{item.eventName}</div></td><td>{item.visitors}</td><td>{item.events}</td><td>{item.rateFromPrevious == null ? '—' : `${item.rateFromPrevious}%`}</td></tr>)}</tbody></table></div></Panel>
+      <Panel title="事件明细"><div className="table-wrap"><table><thead><tr><th>事件</th><th>匿名访客</th><th>次数</th></tr></thead><tbody>{(data.byEvent || []).map((item) => <tr key={item.eventName}><td>{item.eventName}</td><td>{item.visitors}</td><td>{item.events}</td></tr>)}{!(data.byEvent || []).length && <tr><td colSpan="3"><Empty title="暂无已同意的分析事件" description="访客选择同意匿名分析后，这里才会出现汇总数据。" /></td></tr>}</tbody></table></div></Panel>
+      <Notice>统计工具：平台内置第一方存储，不接入第三方广告或跨站跟踪。事件字段采用白名单，页面路径会去掉查询参数。</Notice>
+    </>}
+  </>;
+}
+
 function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
@@ -1457,7 +1478,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<CourseMarketplace api={api} />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/website-content" element={<WebsiteContent api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/leads" element={<LeadsPanel api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="/audit" element={<PlatformAudit api={api} />} /><Route path="/notifications" element={<PlatformNotifications api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<CourseMarketplace api={api} />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/website-content" element={<WebsiteContent api={api} />} /> <Route path="/analytics" element={<Analytics api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/leads" element={<LeadsPanel api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="/audit" element={<PlatformAudit api={api} />} /><Route path="/notifications" element={<PlatformNotifications api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
