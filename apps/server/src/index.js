@@ -15,6 +15,7 @@ const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const PUBLIC_SITE_URL = String(process.env.PUBLIC_SITE_URL || 'http://localhost:5176').replace(/\/$/, '');
 const INTERNAL_TEST = DEPLOYMENT_MODE === 'internal-test';
+const API_HOST = INTERNAL_TEST ? '127.0.0.1' : String(process.env.API_HOST || '0.0.0.0');
 const PUBLIC_ROUTES = ['/', '/marketplace', '/courses', '/org', '/works', '/handbook', '/compare', '/download', '/demo', '/terms', '/privacy', '/minors'];
 function sendText(res, status, text, contentType, req) {
   const internalHeaders = INTERNAL_TEST ? { 'x-robots-tag': 'noindex, nofollow, noarchive', 'x-internal-test': 'true' } : {};
@@ -95,6 +96,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`AI Kids Platform API listening on http://localhost:${PORT}`);
+server.listen(PORT, API_HOST, () => {
+  console.log(`AI Kids Platform API listening on http://${API_HOST}:${PORT}`);
 });
