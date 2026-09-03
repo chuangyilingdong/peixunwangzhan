@@ -468,11 +468,21 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - 平台端 `/users` 页面新增行内启停（带影响说明二次确认）、重置密码、解绑手机与手机号展示；`/admins` 页面新增关键词 / 状态筛选、最近登录、活跃会话数、操作日志面板和停用二次确认。
     - 审计动作：`PLATFORM_USER_STATUS`、`PLATFORM_USER_PASSWORD_RESET`、`PLATFORM_USER_PHONE_UPDATE`；所有接口不返回密码哈希或令牌。
     - 验收：P4-A03 临时 SQLite API 验收 `63 pass / 0 fail`，覆盖 401/403 越权、筛选搜索、停用即会话失效、停用后登录拒绝、重新启用恢复、重置密码旧会话失效与新密码登录、手机号格式 / 占用 / 解绑、自停用拒绝、非法状态与 limit、最近登录与会话数、管理员停用 / 恢复 / 重置、操作日志与审计动作；P3 回归 `48 pass / 0 fail`；后端 ESM 语法检查、四端生产构建、`git diff --check` 均通过。本批未修改 canvas，未触碰 `packages/data/platform.db`，未部署线上。
-- [ ] **P4-A04 课程系列、课时与课包管理**
+- [x] **P4-A04 课程系列、课时与课包管理**
   - 优先级：P0
   - 页面：平台课程、课程广场。
   - 实现范围：课程系列、课时、封面、简介、年龄段、难度、标签、课程资源、发布状态、机构可见范围、版本管理。
   - 验收：未发布课程不能被机构 / 学生看到；已授权机构可按规则加入班级；课程变更有版本与兼容策略。
+  - 完成记录（2026-09-03）：
+    - 新增 `GET /api/admin/course-series/:seriesId/detail`，聚合课包资料、全部课时（含草稿 / 归档）、已授权机构列表与使用统计（引用班级、班级课单项、关联课堂、学生作品）。
+    - 新增 `PUT /api/admin/course-series/:seriesId` 编辑课包资料：标题（重名 409）、简介、HTTPS 封面地址、可见范围、排序；普通编辑不允许直接改状态，内容变更自动递增次版本号（1.0 → 1.1）并写审计。
+    - 新增 `POST /:seriesId/status` 状态机：`publish`（DRAFT/ARCHIVED → PUBLISHED，要求至少一个课时）、`archive`（DRAFT/PUBLISHED → ARCHIVED，软归档可重新发布）；DRAFT 与 ARCHIVED 课包对机构端不可见。
+    - 新增课时管理：`POST /:seriesId/lessons` 追加课时（排序连续追加）、`PUT /:seriesId/lessons/reorder` 重排（两阶段更新规避 `(series_id, sort)` 唯一索引冲突）、`PUT /api/admin/course-lessons/:lessonId` 编辑、`DELETE /api/admin/course-lessons/:lessonId` 删除；被班级课单或课堂引用的课时拒绝删除（`LESSON_IN_USE`），只能归档；删除后剩余课时自动重排。
+    - 新增 `POST /:seriesId/assignments/revoke` 撤销机构授权（`REVOKED`），机构端课程中心与班级课单立即不可见该课包；重新授权立即恢复。
+    - 平台端 `/courses` 升级为课包管理工作台：使用统计指标卡、资料编辑、发布 / 归档、机构授权与撤销、课时表格（编辑 / 上移下移 / 保存 / 删除）与追加课时表单。
+    - 审计动作：`COURSE_SERIES_UPDATE`、`COURSE_SERIES_PUBLISH`、`COURSE_SERIES_ARCHIVE`、`COURSE_LESSON_CREATE`、`COURSE_LESSON_UPDATE`、`COURSE_LESSON_REORDER`、`COURSE_LESSON_DELETE`、`COURSE_SERIES_ASSIGN_REVOKE`。
+    - 验收：P4-A04 临时 SQLite API 验收 `66 pass / 0 fail`，覆盖 401/403 越权、创建与重名 / 空标题 / 非法可见范围校验、详情聚合、编辑与版本递增、非 HTTPS 封面拒绝、状态机正反向、无课时不能发布、课时追加 / 编辑 / 重排（含缺漏 / 重复 / 不存在课时拒绝）、机构可见性联动（授权可见、撤销立即不可见、归档不可见、重新发布恢复、机构端只见已发布课时）、班级课单引用保护、解除引用后可删除、审计动作全部落库；P3 回归 `48 pass / 0 fail`；后端 ESM 语法检查、四端生产构建、`git diff --check` 均通过。本批未修改 canvas，未触碰 `packages/data/platform.db`，未部署线上。
+  - 已知边界：年龄段 / 难度 / 标签字段与课程资产（封面文件、课件上传、素材包）仍属后续批次，当前仅支持 HTTPS 封面元数据；课程广场（marketplace）维持壳层，按缺口清单需基准登录态对照后实施。
 - [-] **P4-A05 作品库与公开作品治理**
   - 优先级：P1
   - 页面：作品库。

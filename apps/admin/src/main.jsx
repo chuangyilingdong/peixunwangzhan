@@ -295,24 +295,130 @@ function Courses({ api }) {
   const courses = useData(() => api.get('admin/course-series'), [api]);
   const organizations = useData(() => api.get('admin/organizations'), [api]);
   const [form, setForm] = useState({ title: '', description: '', visibility: 'ALL_ORGS', lessons: '' });
-  const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false); const [assignment, setAssignment] = useState({});
+  const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
+  const [selectedId, setSelectedId] = useState('');
+  const detail = useData(() => selectedId ? api.get(`admin/course-series/${selectedId}/detail`) : Promise.resolve(null), [api, selectedId]);
+  const [editForm, setEditForm] = useState(null);
+  const [lessonDraft, setLessonDraft] = useState({ title: '', summary: '', durationMinutes: 45 });
+  const [lessonEdits, setLessonEdits] = useState({});
+  const [assignOrgId, setAssignOrgId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const series = detail.data?.series || null;
+  const visibilityLabels = { ALL_ORGS: '所有机构', ASSIGNED_ORGS: '仅已授权机构', PRIVATE: '私有' };
+
+  function selectCourse(course) {
+    setSelectedId(course.id);
+    setMessage('');
+    setEditForm({ title: course.title, description: course.description || '', coverImageUrl: course.coverImageUrl || '', visibility: course.visibility, sort: course.sort });
+    setLessonEdits({});
+  }
   async function create(event) {
     event.preventDefault(); setSaving(true); setMessage('');
     try { const lessons = form.lessons.split('\n').map((title) => title.trim()).filter(Boolean).map((title) => ({ title })); await api.post('admin/course-series', { title: form.title, description: form.description, visibility: form.visibility, lessons }); setForm({ title: '', description: '', visibility: 'ALL_ORGS', lessons: '' }); setMessage('平台课包已创建。'); courses.refresh(); }
     catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }
-  async function assign(courseId) { const orgId = assignment[courseId]; if (!orgId) return; try { await api.post(`admin/course-series/${courseId}/assignments`, { orgIds: [orgId] }); setMessage('课包授权成功。'); } catch (err) { setMessage(err.message); } }
+  async function run(path, method, body, successMessage, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(true); setMessage('');
+    try { await api.request(path, { method, body }); setMessage(successMessage); courses.refresh(); if (selectedId) detail.refresh(); }
+    catch (err) { setMessage(err.message); } finally { setBusy(false); }
+  }
+  async function saveEdit(event) {
+    event.preventDefault(); if (!selectedId || !editForm) return;
+    await run(`admin/course-series/${selectedId}`, 'PUT', { title: editForm.title, description: editForm.description, coverImageUrl: editForm.coverImageUrl || null, visibility: editForm.visibility, sort: Number(editForm.sort) }, '课包资料已保存，版本号已递增。');
+  }
+  async function changeStatus(course, action) {
+    const text = action === 'archive'
+      ? `确认归档「${course.title}」？归档后机构端不再可见该课包，历史班级数据保留，可随时重新发布。`
+      : `确认发布「${course.title}」？发布后按可见范围对机构生效。`;
+    await run(`admin/course-series/${course.id}/status`, 'POST', { action }, action === 'archive' ? '课包已归档。' : '课包已发布。', text);
+  }
+  async function addLesson(event) {
+    event.preventDefault(); if (!selectedId) return;
+    await run(`admin/course-series/${selectedId}/lessons`, 'POST', { lessons: [lessonDraft] }, `已添加课时「${lessonDraft.title}」。`);
+    setLessonDraft({ title: '', summary: '', durationMinutes: 45 });
+  }
+  async function saveLesson(lesson) {
+    const edit = lessonEdits[lesson.id] || {};
+    await run(`admin/course-lessons/${lesson.id}`, 'PUT', { title: edit.title ?? lesson.title, summary: edit.summary ?? lesson.summary, durationMinutes: Number(edit.durationMinutes ?? lesson.durationMinutes), status: edit.status ?? lesson.status }, `课时「${edit.title ?? lesson.title}」已保存。`);
+  }
+  async function deleteLesson(lesson) {
+    await run(`admin/course-lessons/${lesson.id}`, 'DELETE', undefined, `课时「${lesson.title}」已删除，剩余课时已重新排序。`, `确认删除课时「${lesson.title}」？已被班级课单或课堂引用的课时无法删除。`);
+  }
+  async function moveLesson(lesson, direction) {
+    if (!series) return;
+    const ids = series.lessons.map((item) => item.id);
+    const index = ids.indexOf(lesson.id);
+    const target = index + direction;
+    if (target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    await run(`admin/course-series/${selectedId}/lessons/reorder`, 'PUT', { lessonIds: ids }, '课时顺序已更新。');
+  }
+  async function assign(courseId) { if (!assignOrgId) return; try { await api.post(`admin/course-series/${courseId}/assignments`, { orgIds: [assignOrgId] }); setMessage('课包授权成功。'); setAssignOrgId(''); detail.refresh(); } catch (err) { setMessage(err.message); } }
+  async function revokeAssign(orgId, orgName) {
+    await run(`admin/course-series/${selectedId}/assignments/revoke`, 'POST', { orgId }, `已撤销 ${orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${orgName}」对此课包的授权？撤销后该机构课程中心与班级课单立即不可见此课包。`);
+  }
   return <>
-    <PageHeader eyebrow="课程资产" title="平台课包" description="维护平台级课程，并按机构精确授权。" />
+    <PageHeader eyebrow="课程资产" title="平台课包" description="维护平台级课程资料、课时、发布状态与机构授权，内容变更自动递增版本号。" />
     <div className="split"><Panel title="新建平台课包"><form onSubmit={create}>
       <label>课包标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>课程简介<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
       <label>可见范围<select value={form.visibility} onChange={(e) => setForm({ ...form, visibility: e.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
       <label>课时标题（每行一课）<textarea placeholder={'第 1 课：认识 AI\n第 2 课：创意表达'} value={form.lessons} onChange={(e) => setForm({ ...form, lessons: e.target.value })} /></label>
-      {message && <Notice tone={message.includes('成功') || message.includes('创建') ? 'success' : 'danger'}>{message}</Notice>}<button className="primary-button" disabled={saving}>{saving ? '保存中…' : '创建课包'}</button>
-    </form></Panel><Panel title="授权说明"><Notice>“仅已授权机构”课包必须完成授权后，才能出现在机构端课程列表和班级课单中。</Notice></Panel></div>
-    <Panel title="已创建课包" actions={<button className="secondary-button" onClick={courses.refresh}>刷新</button>}>
-      {courses.loading || organizations.loading ? <Loading /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data.items.length ? <div className="card-list">{courses.data.items.map((course) => <article className="item-card" key={course.id}><div className="row-actions"><h3>{course.title}</h3><Status value={course.status} /><span className="muted">{course.visibility}</span></div><p>{course.description || '暂无课程简介'}</p><ol className="course-lessons">{course.lessons.map((lesson) => <li key={lesson.id}>{lesson.title} · {lesson.durationMinutes} 分钟</li>)}</ol><div className="row-actions top-gap"><select value={assignment[course.id] || ''} onChange={(e) => setAssignment({ ...assignment, [course.id]: e.target.value })}><option value="">选择机构进行授权</option>{organizations.data.items.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}</select><button className="secondary-button" onClick={() => assign(course.id)}>授权给机构</button></div></article>)}</div> : <Empty title="尚未创建平台课包" />}
+      {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}<button className="primary-button" disabled={saving}>{saving ? '保存中…' : '创建课包'}</button>
+    </form></Panel><Panel title="规则说明"><Notice>“仅已授权机构”课包必须完成授权后才能出现在机构端；未发布（DRAFT）与已归档课包对机构和学生不可见；被班级课单或课堂引用的课时不能删除，只能归档；编辑资料、课时或排序会自动递增课包版本号并写入审计。</Notice></Panel></div>
+    <Panel title="已创建课包" actions={<button className="secondary-button" onClick={() => { courses.refresh(); if (selectedId) detail.refresh(); }}>刷新</button>}>
+      {courses.loading || organizations.loading ? <Loading /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data.items.length ? <div className="table-wrap"><table><thead><tr><th>课包</th><th>状态</th><th>可见范围</th><th>版本</th><th>课时</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{courses.data.items.map((course) => <tr key={course.id}><td><button className="text-button" onClick={() => selectCourse(course)}><strong>{course.title}</strong></button><div className="muted">{course.id}</div></td><td><Status value={course.status} /></td><td>{visibilityLabels[course.visibility] || course.visibility}</td><td>{course.version}</td><td>{course.lessonCount}</td><td>{formatDate(course.updatedAt)}</td><td><div className="row-actions"><button className="secondary-button" onClick={() => selectCourse(course)}>详情</button>{course.status === 'PUBLISHED' || course.status === 'DRAFT' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus(course, 'archive')}>归档</button> : null}{course.status !== 'PUBLISHED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus(course, 'publish')}>发布</button> : null}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未创建平台课包" />}
     </Panel>
+    {selectedId ? (
+      detail.loading ? <Loading label="正在读取课包详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data && series ? <>
+        <div className="metrics">
+          <MetricCard label="引用班级" value={detail.data.usage.classesUsingSeries} hint="以该课包为默认课程的班级数" />
+          <MetricCard label="班级课单项" value={detail.data.usage.curriculumItems} hint="班级课单引用的课时条目数" tone="teal" />
+          <MetricCard label="关联课堂" value={detail.data.usage.classSessions} hint="使用该课包课时的课堂场次" tone="orange" />
+          <MetricCard label="学生作品" value={detail.data.usage.studentWorks} hint="基于该课包课时提交的作品数" tone="pink" />
+        </div>
+        <div className="split">
+          <Panel title="编辑课包资料">{editForm ? <form onSubmit={saveEdit}>
+            <label>课包标题<input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} required /></label>
+            <label>课程简介<textarea value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} /></label>
+            <label>封面地址（HTTPS，可选）<input value={editForm.coverImageUrl} placeholder="https://…" onChange={(e) => setEditForm({ ...editForm, coverImageUrl: e.target.value })} /></label>
+            <div className="form-grid">
+              <label>可见范围<select value={editForm.visibility} onChange={(e) => setEditForm({ ...editForm, visibility: e.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+              <label>排序<input type="number" min="0" value={editForm.sort} onChange={(e) => setEditForm({ ...editForm, sort: e.target.value })} /></label>
+            </div>
+            <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
+            <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用列表中的发布 / 归档。</p>
+          </form> : null}</Panel>
+          <Panel title={`机构授权（${detail.data.assignedOrgs.length}）`}>
+            <div className="form-grid">
+              <label>授权给机构<select value={assignOrgId} onChange={(e) => setAssignOrgId(e.target.value)}><option value="">选择机构</option>{organizations.data?.items?.map((org) => <option key={org.id} value={org.id}>{org.name}</option>) || null}</select></label>
+              <button type="button" className="secondary-button" disabled={!assignOrgId || busy} onClick={() => assign(selectedId)}>授权</button>
+            </div>
+            {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td><button className="text-button" disabled={busy} onClick={() => revokeAssign(item.orgId, item.orgName)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="“仅已授权机构”课包需完成授权后机构端才可见。" />}
+          </Panel>
+        </div>
+        <Panel title={`课时管理（${series.lessons.length}）`}>
+          <form onSubmit={addLesson} className="form-grid">
+            <label>新课时标题<input value={lessonDraft.title} onChange={(e) => setLessonDraft({ ...lessonDraft, title: e.target.value })} required /></label>
+            <label>时长（分钟）<input type="number" min="1" max="1440" value={lessonDraft.durationMinutes} onChange={(e) => setLessonDraft({ ...lessonDraft, durationMinutes: e.target.value })} /></label>
+            <label>简介<input value={lessonDraft.summary} onChange={(e) => setLessonDraft({ ...lessonDraft, summary: e.target.value })} /></label>
+            <button className="primary-button" disabled={busy}>添加课时</button>
+          </form>
+          {series.lessons.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>状态</th><th>操作</th></tr></thead><tbody>{series.lessons.map((lesson) => { const edit = lessonEdits[lesson.id] || {}; return <tr key={lesson.id}>
+            <td>{lesson.sort}</td>
+            <td><input value={edit.title ?? lesson.title} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, title: e.target.value } })} /></td>
+            <td><input type="number" min="1" max="1440" style={{ width: '5rem' }} value={edit.durationMinutes ?? lesson.durationMinutes} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, durationMinutes: e.target.value } })} /></td>
+            <td><select value={edit.status ?? lesson.status} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, status: e.target.value } })}><option value="PUBLISHED">已发布</option><option value="DRAFT">草稿</option><option value="ARCHIVED">已归档</option></select></td>
+            <td><div className="row-actions">
+              <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, -1)}>上移</button>
+              <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, 1)}>下移</button>
+              <button className="text-button" disabled={busy} onClick={() => saveLesson(lesson)}>保存</button>
+              <button className="text-button" disabled={busy} onClick={() => deleteLesson(lesson)}>删除</button>
+            </div></td>
+          </tr>; })}</tbody></table></div> : <Empty title="暂无课时" body="课包至少需要一个课时才能发布。" />}
+        </Panel>
+      </> : <Empty title="选择课包查看详情" />
+    ) : <Panel title="课包详情"><Empty title="选择课包查看详情" body="点击课包标题或“详情”按钮，可编辑资料、管理课时、发布归档和维护机构授权。" /></Panel>}
   </>;
 }
 
