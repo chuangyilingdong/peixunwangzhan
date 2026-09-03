@@ -210,6 +210,13 @@ CREATE TABLE IF NOT EXISTS course_series (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_series_platform_title ON course_series(title) WHERE owner_type = 'PLATFORM';
 
+-- P5-W05: 课程资料核验字段
+ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 5);
+ALTER TABLE course_series ADD COLUMN age_range_min INTEGER;
+ALTER TABLE course_series ADD COLUMN age_range_max INTEGER;
+ALTER TABLE course_series ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS idx_course_series_difficulty ON course_series(difficulty_level);
+
 CREATE TABLE IF NOT EXISTS course_lessons (
   id TEXT PRIMARY KEY,
   series_id TEXT NOT NULL,
@@ -225,6 +232,9 @@ CREATE TABLE IF NOT EXISTS course_lessons (
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_lessons_series_sort ON course_lessons(series_id, sort);
+
+-- P5-W05: 课时正文/教学指引
+ALTER TABLE course_lessons ADD COLUMN lesson_content TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS course_assignments (
   id TEXT PRIMARY KEY,

@@ -321,13 +321,23 @@ export function normalizeLesson(value) {
     durationMinutes: Number(value.duration_minutes || 0),
     promptPackAssetId: value.prompt_pack_asset_id || null,
     outcomePackAssetId: value.outcome_pack_asset_id || null,
+    lessonContent: value.lesson_content || '',   // P5-W05
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
 }
 
-export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false } = {}) {
+export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true } = {}) {
   if (!value) return null;
+  let tags = [];
+  if (parseTags) {
+    try {
+      const parsed = value.tags ? JSON.parse(value.tags) : [];
+      tags = Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      tags = [];
+    }
+  }
   const result = {
     id: value.id,
     title: value.title,
@@ -341,6 +351,11 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     status: value.status,
     marketplaceStatus: value.marketplace_status,
     marketplaceRewardCredits: Number(value.marketplace_reward_credits || 0),
+    // P5-W05 课程资料核验字段
+    difficultyLevel: value.difficulty_level != null ? Number(value.difficulty_level) : null,
+    ageRangeMin: value.age_range_min != null ? Number(value.age_range_min) : null,
+    ageRangeMax: value.age_range_max != null ? Number(value.age_range_max) : null,
+    tags,
     lessonCount: count(`SELECT COUNT(*) AS n FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"}`, [value.id]),
     createdAt: value.created_at,
     updatedAt: value.updated_at,

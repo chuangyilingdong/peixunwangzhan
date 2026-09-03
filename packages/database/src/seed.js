@@ -176,37 +176,38 @@ function ensureCourse(now) {
   if (!series) {
     const seriesId = id('series');
     q(
-      `INSERT INTO course_series(id,title,description,owner_type,visibility,version,sort,status,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [seriesId, 'AI古诗词创意营', '5 课时古诗情景动画与创意表达课程', 'PLATFORM', 'ALL_ORGS', '1.0', 1, 'PUBLISHED', now, now],
+      `INSERT INTO course_series(id,title,description,owner_type,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [seriesId, 'AI古诗词创意营', '5 课时古诗情景动画与创意表达课程', 'PLATFORM', 'ALL_ORGS', '1.0', 1, 'PUBLISHED', 2, 8, 16, JSON.stringify(['古诗', '创作', '动画']), now, now],
     );
     series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
   } else {
-    q(`UPDATE course_series SET description=?,visibility='ALL_ORGS',status='PUBLISHED',updated_at=? WHERE id=?`, ['5 课时古诗情景动画与创意表达课程', now, series.id]);
+    // P5-W05: 补全新课程元数据字段
+    q(`UPDATE course_series SET description=?,visibility='ALL_ORGS',status='PUBLISHED',difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?`, ['5 课时古诗情景动画与创意表达课程', 2, 8, 16, JSON.stringify(['古诗', '创作', '动画']), now, series.id]);
     series = row('SELECT * FROM course_series WHERE id=?', [series.id]);
   }
 
   const lessons = [
-    ['第1课：认识古诗与创作主题', '认识古诗意境，选择想要表达的诗词主题。'],
-    ['第2课：设计诗词主角与场景', '设计人物、动物或精灵主角，并规划故事发生的场景。'],
-    ['第3课：生成画面与故事分镜', '把诗句转化为画面，完成故事分镜与画面提示词。'],
-    ['第4课：编排动画与声音', '为画面安排动作、镜头和声音，让诗词故事动起来。'],
-    ['第5课：完成作品并展示', '完善创作、讲述设计思路并提交作品展示。'],
+    ['第1课：认识古诗与创作主题', '认识古诗意境，选择想要表达的诗词主题。', '本课时带领学生了解古诗词的意境美，初步感受古诗与创意表达的结合。学生将选择一个自己喜爱的诗词主题，为后续创作奠定基础。'],
+    ['第2课：设计诗词主角与场景', '设计人物、动物或精灵主角，并规划故事发生的场景。', '在选定诗词主题后，学生学习如何设计故事中的主角（人物、动物或精灵），并根据诗词意境规划故事发生的场景。通过角色设定练习，培养学生的创意构思能力。'],
+    ['第3课：生成画面与故事分镜', '把诗句转化为画面，完成故事分镜与画面提示词。', '学习如何将抽象的诗句转化为具体的画面，并完成故事分镜。本课时重点练习画面描述词的编写，为AI生成画面提供精准的提示词。'],
+    ['第4课：编排动画与声音', '为画面安排动作、镜头和声音，让诗词故事动起来。', '在已完成的画面基础上，学习如何为诗词故事编排动画动作、镜头切换和声音效果。通过本课时的学习，学生将掌握简单的动画编排技巧。'],
+    ['第5课：完成作品并展示', '完善创作、讲述设计思路并提交作品展示。', '最后一课时聚焦于作品的整体完善与展示。学生将完成整个诗词创意动画的制作，并准备一段简短的设计思路分享，为作品展示做好充分准备。'],
   ];
   const lessonRows = [];
-  lessons.forEach(([title, summary], index) => {
+  lessons.forEach(([title, summary, content], index) => {
     const sort = index + 1;
     let lesson = row('SELECT * FROM course_lessons WHERE series_id=? AND sort=?', [series.id, sort]);
     if (!lesson) {
       const lessonId = id('lesson');
       q(
-        `INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
-        [lessonId, series.id, title, summary, sort, 'PUBLISHED', 45, now, now],
+        `INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [lessonId, series.id, title, summary, sort, 'PUBLISHED', 45, content, now, now],
       );
       lesson = row('SELECT * FROM course_lessons WHERE id=?', [lessonId]);
     } else {
-      q(`UPDATE course_lessons SET title=?,summary=?,status='PUBLISHED',duration_minutes=45,updated_at=? WHERE id=?`, [title, summary, now, lesson.id]);
+      q(`UPDATE course_lessons SET title=?,summary=?,status='PUBLISHED',duration_minutes=45,lesson_content=?,updated_at=? WHERE id=?`, [title, summary, content, now, lesson.id]);
       lesson = row('SELECT * FROM course_lessons WHERE id=?', [lesson.id]);
     }
     lessonRows.push(lesson);

@@ -767,6 +767,51 @@ export function handlePublicCommunication(ctx) {
     return publicWorkRow(work);
   }
 
+  // P5-W05: 公开课包列表（无需登录，只返回 PUBLISHED 且可见范围合规的课包）
+  if (pathname === '/api/public/course-series' && method === 'GET') {
+    const params = [];
+    const wheres = ["series.status = 'PUBLISHED'", "series.visibility IN ('ALL_ORGS', 'ASSIGNED_ORGS')"];
+    if (ctx.query.difficulty != null) {
+      wheres.push('series.difficulty_level = ?');
+      params.push(Number(ctx.query.difficulty));
+    }
+    if (ctx.query.ageMin != null) {
+      wheres.push('series.age_range_max IS NOT NULL AND series.age_range_max >= ?');
+      params.push(Number(ctx.query.ageMin));
+    }
+    if (ctx.query.ageMax != null) {
+      wheres.push('series.age_range_min IS NOT NULL AND series.age_range_min <= ?');
+      params.push(Number(ctx.query.ageMax));
+    }
+    if (ctx.query.tag) {
+      wheres.push('series.tags LIKE ?');
+      params.push('%' + String(ctx.query.tag) + '%');
+    }
+    const items = rows(
+      `SELECT series.* FROM course_series series WHERE ${wheres.join(' AND ')} ORDER BY series.sort, series.title`,
+      params,
+    ).map((item) => normalizeSeries(item, { parseTags: true }));
+    return { items, total: items.length };
+  }
+
+  // P5-W05: 公开课包详情
+  const publicCourseDetailMatch = pathname.match(/^\/api\/public\/course-series\/([\w-]+)$/);
+  if (publicCourseDetailMatch && method === 'GET') {
+    const series = row(
+      "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND visibility IN ('ALL_ORGS', 'ASSIGNED_ORGS')",
+      [publicCourseDetailMatch[1]],
+    );
+    if (!series) throw errors.notFound('课包不存在或不可公开访问', 'COURSE_SERIES_NOT_FOUND');
+    const detail = normalizeSeries(series, { includeLessons: true, parseTags: true });
+    detail.lessons = (detail.lessons || []).filter((l) => l.status === 'PUBLISHED');
+    // lessonContent 截断到 2000 字
+    detail.lessons = detail.lessons.map((l) => ({
+      ...l,
+      lessonContent: l.lessonContent ? String(l.lessonContent).slice(0, 2000) : '',
+    }));
+    return detail;
+  }
+
   return null;
 }
 

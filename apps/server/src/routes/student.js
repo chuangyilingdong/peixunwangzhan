@@ -26,7 +26,9 @@ import { hashPassword } from '@platform/database';
 import {
   buildStudentContext,
   buildStudentDashboard,
+  getStudentAccessibleCourses,
   getStudentActiveSessions,
+  getStudentCourseDetail,
   getStudentMemberships,
   resolveProjectUsageContext,
   resolveStudentLessonContext,
@@ -462,7 +464,27 @@ export async function handleStudent(ctx) {
   const part = pathname.slice('/api/student'.length);
 
   if (part === '/dashboard' && method === 'GET') return buildStudentDashboard(auth.rawUser);
-  if (part === '/courses' && method === 'GET') return studentCourseOverview(ctx);
+  if (part === '/courses' && method === 'GET') {
+    // P5-W05: 学员端课程列表支持筛选
+    const filters = {
+      difficulty: ctx.query.difficulty != null ? Number(ctx.query.difficulty) : undefined,
+      ageMin: ctx.query.ageMin != null ? Number(ctx.query.ageMin) : undefined,
+      ageMax: ctx.query.ageMax != null ? Number(ctx.query.ageMax) : undefined,
+      tag: ctx.query.tag || undefined,
+      search: ctx.query.search || undefined,
+    };
+    const isFiltered = filters.difficulty || filters.ageMin || filters.ageMax || filters.tag || filters.search;
+    if (isFiltered) {
+      return { items: getStudentAccessibleCourses(ctx.auth.rawUser, filters), filtered: true };
+    }
+    return studentCourseOverview(ctx);
+  }
+  let courseDetailMatch = part.match(/^\/courses\/([^/]+)$/);
+  if (courseDetailMatch && method === 'GET') {
+    requireRole(ctx, ['STUDENT']);
+    const detail = getStudentCourseDetail(ctx.auth.rawUser, courseDetailMatch[1]);
+    return detail;
+  }
   if (part === '/credits' && method === 'GET') return studentUsageOverview(ctx);
   if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);
 

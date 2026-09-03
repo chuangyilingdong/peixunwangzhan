@@ -72,6 +72,7 @@ export function getStudentCourses(user) {
         lesson.status AS lesson_status, lesson.duration_minutes AS lesson_duration_minutes,
         lesson.prompt_pack_asset_id AS lesson_prompt_pack_asset_id,
         lesson.outcome_pack_asset_id AS lesson_outcome_pack_asset_id,
+        lesson.lesson_content AS lesson_lesson_content,
         lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at,
         curriculum.class_id AS curriculum_class_id, curriculum.sort AS curriculum_sort
      FROM class_members member
@@ -110,12 +111,77 @@ export function getStudentCourses(user) {
         duration_minutes: item.lesson_duration_minutes,
         prompt_pack_asset_id: item.lesson_prompt_pack_asset_id,
         outcome_pack_asset_id: item.lesson_outcome_pack_asset_id,
+        lesson_content: item.lesson_lesson_content,
         created_at: item.lesson_created_at,
         updated_at: item.lesson_updated_at,
       }));
     }
   }
   return [...seriesById.values()];
+}
+
+/**
+ * P5-W05: 返回当前学生机构可访问的 PUBLISHED 课包 + 已发布课时清单，
+ * 不受"是否已加入班级课单"限制。用于学员端"我的课程"列表与详情。
+ * 支持 difficulty / ageMin / ageMax / tag / search 筛选。
+ */
+export function getStudentAccessibleCourses(user, filters = {}) {
+  const { orgId } = studentIdentity(user);
+  const params = [orgId, orgId];
+  const wheres = [
+    "series.status = 'PUBLISHED'",
+    `(${orgCourseAccessSql()})`,
+  ];
+  if (filters.difficulty != null) {
+    wheres.push('series.difficulty_level = ?');
+    params.push(filters.difficulty);
+  }
+  if (filters.ageMin != null) {
+    wheres.push('series.age_range_max IS NOT NULL AND series.age_range_max >= ?');
+    params.push(filters.ageMin);
+  }
+  if (filters.ageMax != null) {
+    wheres.push('series.age_range_min IS NOT NULL AND series.age_range_min <= ?');
+    params.push(filters.ageMax);
+  }
+  if (filters.tag) {
+    wheres.push('series.tags LIKE ?');
+    params.push('%' + filters.tag + '%');
+  }
+  if (filters.search) {
+    wheres.push('(series.title LIKE ? OR series.description LIKE ?)');
+    const like = '%' + filters.search + '%';
+    params.push(like, like);
+  }
+  const items = rows(
+    `SELECT series.* FROM course_series series
+     LEFT JOIN course_assignments assignment
+       ON assignment.series_id = series.id AND assignment.org_id = ? AND assignment.status = 'ACTIVE'
+     WHERE ${wheres.join(' AND ')}
+     ORDER BY series.sort, series.title`,
+    params,
+  );
+  return items.map((item) => normalizeSeries(item, { orgId, includeLessons: true }));
+}
+
+/**
+ * P5-W05: 学员端单课包详情。校验可访问性 + 返回完整课时清单（含 lessonContent）。
+ */
+export function getStudentCourseDetail(user, seriesId) {
+  const { orgId } = studentIdentity(user);
+  const series = row(
+    `SELECT series.* FROM course_series series
+     LEFT JOIN course_assignments assignment
+       ON assignment.series_id = series.id AND assignment.org_id = ? AND assignment.status = 'ACTIVE'
+     WHERE series.id = ? AND series.status = 'PUBLISHED'
+       AND ( (series.owner_type = 'PLATFORM' AND (series.visibility = 'ALL_ORGS' OR assignment.id IS NOT NULL))
+             OR (series.owner_type = 'ORG' AND series.org_id = ?) )`,
+    [orgId, seriesId, orgId],
+  );
+  if (!series) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
+  const detail = normalizeSeries(series, { orgId, includeLessons: true });
+  detail.lessons = (detail.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED');
+  return detail;
 }
 
 /**

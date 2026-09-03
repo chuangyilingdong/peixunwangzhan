@@ -297,7 +297,7 @@ function Organizations({ api }) {
 function Courses({ api }) {
   const courses = useData(() => api.get('admin/course-series'), [api]);
   const organizations = useData(() => api.get('admin/organizations'), [api]);
-  const [form, setForm] = useState({ title: '', description: '', visibility: 'ALL_ORGS', lessons: '' });
+  const [form, setForm] = useState({ title: '', description: '', visibility: 'ALL_ORGS', lessons: '', difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '' });
   const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const detail = useData(() => selectedId ? api.get(`admin/course-series/${selectedId}/detail`) : Promise.resolve(null), [api, selectedId]);
@@ -312,13 +312,22 @@ function Courses({ api }) {
   function selectCourse(course) {
     setSelectedId(course.id);
     setMessage('');
-    setEditForm({ title: course.title, description: course.description || '', coverImageUrl: course.coverImageUrl || '', visibility: course.visibility, sort: course.sort });
+    setEditForm({ title: course.title, description: course.description || '', coverImageUrl: course.coverImageUrl || '', visibility: course.visibility, sort: course.sort, difficultyLevel: course.difficultyLevel ?? '', ageRangeMin: course.ageRangeMin ?? '', ageRangeMax: course.ageRangeMax ?? '', tags: (course.tags || []).join(',') });
     setLessonEdits({});
   }
   async function create(event) {
     event.preventDefault(); setSaving(true); setMessage('');
-    try { const lessons = form.lessons.split('\n').map((title) => title.trim()).filter(Boolean).map((title) => ({ title })); await api.post('admin/course-series', { title: form.title, description: form.description, visibility: form.visibility, lessons }); setForm({ title: '', description: '', visibility: 'ALL_ORGS', lessons: '' }); setMessage('平台课包已创建。'); courses.refresh(); }
-    catch (err) { setMessage(err.message); } finally { setSaving(false); }
+    try {
+      const lessons = form.lessons.split('\n').map((title) => title.trim()).filter(Boolean).map((title) => ({ title }));
+      const payload = { title: form.title, description: form.description, visibility: form.visibility, lessons };
+      if (form.difficultyLevel !== '' && form.difficultyLevel != null) payload.difficultyLevel = Number(form.difficultyLevel);
+      if (form.ageRangeMin !== '' && form.ageRangeMin != null) payload.ageRangeMin = Number(form.ageRangeMin);
+      if (form.ageRangeMax !== '' && form.ageRangeMax != null) payload.ageRangeMax = Number(form.ageRangeMax);
+      if (form.tags) payload.tags = String(form.tags).split(',').map((t) => t.trim()).filter(Boolean);
+      await api.post('admin/course-series', payload);
+      setForm({ title: '', description: '', visibility: 'ALL_ORGS', lessons: '', difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '' });
+      setMessage('平台课包已创建。'); courses.refresh();
+    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }
   async function run(path, method, body, successMessage, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -328,7 +337,12 @@ function Courses({ api }) {
   }
   async function saveEdit(event) {
     event.preventDefault(); if (!selectedId || !editForm) return;
-    await run(`admin/course-series/${selectedId}`, 'PUT', { title: editForm.title, description: editForm.description, coverImageUrl: editForm.coverImageUrl || null, visibility: editForm.visibility, sort: Number(editForm.sort) }, '课包资料已保存，版本号已递增。');
+    const body = { title: editForm.title, description: editForm.description, coverImageUrl: editForm.coverImageUrl || null, visibility: editForm.visibility, sort: Number(editForm.sort) };
+    if (editForm.difficultyLevel !== '' && editForm.difficultyLevel != null) body.difficultyLevel = Number(editForm.difficultyLevel); else body.difficultyLevel = null;
+    if (editForm.ageRangeMin !== '' && editForm.ageRangeMin != null) body.ageRangeMin = Number(editForm.ageRangeMin); else body.ageRangeMin = null;
+    if (editForm.ageRangeMax !== '' && editForm.ageRangeMax != null) body.ageRangeMax = Number(editForm.ageRangeMax); else body.ageRangeMax = null;
+    if (editForm.tags != null) body.tags = String(editForm.tags).split(',').map((t) => t.trim()).filter(Boolean);
+    await run(`admin/course-series/${selectedId}`, 'PUT', body, '课包资料已保存，版本号已递增。');
   }
   async function changeStatus(course, action) {
     const text = action === 'archive'
@@ -343,7 +357,7 @@ function Courses({ api }) {
   }
   async function saveLesson(lesson) {
     const edit = lessonEdits[lesson.id] || {};
-    await run(`admin/course-lessons/${lesson.id}`, 'PUT', { title: edit.title ?? lesson.title, summary: edit.summary ?? lesson.summary, durationMinutes: Number(edit.durationMinutes ?? lesson.durationMinutes), status: edit.status ?? lesson.status }, `课时「${edit.title ?? lesson.title}」已保存。`);
+    await run(`admin/course-lessons/${lesson.id}`, 'PUT', { title: edit.title ?? lesson.title, summary: edit.summary ?? lesson.summary, durationMinutes: Number(edit.durationMinutes ?? lesson.durationMinutes), status: edit.status ?? lesson.status, lessonContent: edit.lessonContent ?? lesson.lessonContent ?? '' }, `课时「${edit.title ?? lesson.title}」已保存。`);
   }
   async function deleteLesson(lesson) {
     await run(`admin/course-lessons/${lesson.id}`, 'DELETE', undefined, `课时「${lesson.title}」已删除，剩余课时已重新排序。`, `确认删除课时「${lesson.title}」？已被班级课单或课堂引用的课时无法删除。`);
@@ -366,11 +380,17 @@ function Courses({ api }) {
     <div className="split"><Panel title="新建平台课包"><form onSubmit={create}>
       <label>课包标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>课程简介<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
       <label>可见范围<select value={form.visibility} onChange={(e) => setForm({ ...form, visibility: e.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+      <div className="form-grid">
+        <label>难度（1-5）<input type="number" min="1" max="5" value={form.difficultyLevel} onChange={(e) => setForm({ ...form, difficultyLevel: e.target.value })} placeholder="留空表示未设置" /></label>
+        <label>适学年龄下限<input type="number" min="3" max="99" value={form.ageRangeMin} onChange={(e) => setForm({ ...form, ageRangeMin: e.target.value })} placeholder="如 8" /></label>
+        <label>适学年龄上限<input type="number" min="3" max="99" value={form.ageRangeMax} onChange={(e) => setForm({ ...form, ageRangeMax: e.target.value })} placeholder="如 16" /></label>
+      </div>
+      <label>标签（英文逗号分隔，最多 20 个）<input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="古诗, 创作, 动画" /></label>
       <label>课时标题（每行一课）<textarea placeholder={'第 1 课：认识 AI\n第 2 课：创意表达'} value={form.lessons} onChange={(e) => setForm({ ...form, lessons: e.target.value })} /></label>
       {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}<button className="primary-button" disabled={saving}>{saving ? '保存中…' : '创建课包'}</button>
-    </form></Panel><Panel title="规则说明"><Notice>“仅已授权机构”课包必须完成授权后才能出现在机构端；未发布（DRAFT）与已归档课包对机构和学生不可见；被班级课单或课堂引用的课时不能删除，只能归档；编辑资料、课时或排序会自动递增课包版本号并写入审计。</Notice></Panel></div>
+    </form></Panel><Panel title="规则说明"><Notice>「仅已授权机构」课包必须完成授权后才能出现在机构端；未发布（DRAFT）与已归档课包对机构和学生不可见；被班级课单或课堂引用的课时不能删除，只能归档；编辑资料、课时或排序会自动递增课包版本号并写入审计。新增的难度、适学年龄、标签、课时正文将出现在学员/机构/官网详情页。</Notice></Panel></div>
     <Panel title="已创建课包" actions={<button className="secondary-button" onClick={() => { courses.refresh(); if (selectedId) detail.refresh(); }}>刷新</button>}>
-      {courses.loading || organizations.loading ? <Loading /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data.items.length ? <div className="table-wrap"><table><thead><tr><th>课包</th><th>状态</th><th>可见范围</th><th>版本</th><th>课时</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{courses.data.items.map((course) => <tr key={course.id}><td><button className="text-button" onClick={() => selectCourse(course)}><strong>{course.title}</strong></button><div className="muted">{course.id}</div></td><td><Status value={course.status} /></td><td>{visibilityLabels[course.visibility] || course.visibility}</td><td>{course.version}</td><td>{course.lessonCount}</td><td>{formatDate(course.updatedAt)}</td><td><div className="row-actions"><button className="secondary-button" onClick={() => selectCourse(course)}>详情</button>{course.status === 'PUBLISHED' || course.status === 'DRAFT' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus(course, 'archive')}>归档</button> : null}{course.status !== 'PUBLISHED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus(course, 'publish')}>发布</button> : null}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未创建平台课包" />}
+      {courses.loading || organizations.loading ? <Loading /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data.items.length ? <div className="table-wrap"><table><thead><tr><th>课包</th><th>状态</th><th>可见范围</th><th>难度</th><th>适学年龄</th><th>标签</th><th>版本</th><th>课时</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{courses.data.items.map((course) => <tr key={course.id}><td><button className="text-button" onClick={() => selectCourse(course)}><strong>{course.title}</strong></button><div className="muted">{course.id}</div></td><td><Status value={course.status} /></td><td>{visibilityLabels[course.visibility] || course.visibility}</td><td>{course.difficultyLevel ? `${course.difficultyLevel}/5` : '—'}</td><td>{course.ageRangeMin || course.ageRangeMax ? `${course.ageRangeMin ?? '?'}-${course.ageRangeMax ?? '?'}岁` : '—'}</td><td><span className="tag-list">{Array.isArray(course.tags) ? course.tags.map((t) => <span key={t} className="tag">{t}</span>) : null}</span></td><td>{course.version}</td><td>{course.lessonCount}</td><td>{formatDate(course.updatedAt)}</td><td><div className="row-actions"><button className="secondary-button" onClick={() => selectCourse(course)}>详情</button>{course.status === 'PUBLISHED' || course.status === 'DRAFT' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus(course, 'archive')}>归档</button> : null}{course.status !== 'PUBLISHED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus(course, 'publish')}>发布</button> : null}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未创建平台课包" />}
     </Panel>
     {selectedId ? (
       detail.loading ? <Loading label="正在读取课包详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data && series ? <>
@@ -389,6 +409,12 @@ function Courses({ api }) {
               <label>可见范围<select value={editForm.visibility} onChange={(e) => setEditForm({ ...editForm, visibility: e.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
               <label>排序<input type="number" min="0" value={editForm.sort} onChange={(e) => setEditForm({ ...editForm, sort: e.target.value })} /></label>
             </div>
+            <div className="form-grid">
+              <label>难度（1-5）<input type="number" min="1" max="5" value={editForm.difficultyLevel} onChange={(e) => setEditForm({ ...editForm, difficultyLevel: e.target.value })} placeholder="留空表示未设置" /></label>
+              <label>适学年龄下限<input type="number" min="3" max="99" value={editForm.ageRangeMin} onChange={(e) => setEditForm({ ...editForm, ageRangeMin: e.target.value })} placeholder="如 8" /></label>
+              <label>适学年龄上限<input type="number" min="3" max="99" value={editForm.ageRangeMax} onChange={(e) => setEditForm({ ...editForm, ageRangeMax: e.target.value })} placeholder="如 16" /></label>
+            </div>
+            <label>标签（英文逗号分隔）<input value={editForm.tags} onChange={(e) => setEditForm({ ...editForm, tags: e.target.value })} placeholder="古诗, 创作, 动画" /></label>
             <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
             <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用列表中的发布 / 归档。</p>
           </form> : null}</Panel>
@@ -407,11 +433,12 @@ function Courses({ api }) {
             <label>简介<input value={lessonDraft.summary} onChange={(e) => setLessonDraft({ ...lessonDraft, summary: e.target.value })} /></label>
             <button className="primary-button" disabled={busy}>添加课时</button>
           </form>
-          {series.lessons.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>状态</th><th>操作</th></tr></thead><tbody>{series.lessons.map((lesson) => { const edit = lessonEdits[lesson.id] || {}; return <tr key={lesson.id}>
+          {series.lessons.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>状态</th><th>正文/教学指引</th><th>操作</th></tr></thead><tbody>{series.lessons.map((lesson) => { const edit = lessonEdits[lesson.id] || {}; return <tr key={lesson.id}>
             <td>{lesson.sort}</td>
             <td><input value={edit.title ?? lesson.title} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, title: e.target.value } })} /></td>
             <td><input type="number" min="1" max="1440" style={{ width: '5rem' }} value={edit.durationMinutes ?? lesson.durationMinutes} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, durationMinutes: e.target.value } })} /></td>
             <td><select value={edit.status ?? lesson.status} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, status: e.target.value } })}><option value="PUBLISHED">已发布</option><option value="DRAFT">草稿</option><option value="ARCHIVED">已归档</option></select></td>
+            <td><textarea rows={2} placeholder="课时正文/教学指引（≤50000字）" value={edit.lessonContent ?? lesson.lessonContent ?? ''} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, lessonContent: e.target.value } })} /></td>
             <td><div className="row-actions">
               <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, -1)}>上移</button>
               <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, 1)}>下移</button>

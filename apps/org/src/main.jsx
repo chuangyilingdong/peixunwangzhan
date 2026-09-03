@@ -534,8 +534,30 @@ function HelpFeedbackPage({ api }) {
 }
 
 function OrgCourses({ api }) {
+  const detailMatch = (window.location.pathname || '').match(/^\/courses\/([^/]+)$/);
+  const seriesId = detailMatch ? detailMatch[1] : null;
   const { loading, error, data, refresh } = useData(() => api.get('org/course-series'), [api]);
+  const detail = useData(() => seriesId ? api.get('org/course-series/' + encodeURIComponent(seriesId)) : Promise.resolve(null), [api, seriesId]);
   const [expanded, setExpanded] = useState('');
+  if (seriesId) {
+    if (detail.loading) return <Loading />;
+    if (detail.error) return <ErrorState error={detail.error} onRetry={detail.refresh} />;
+    const c = detail.data;
+    if (!c) return <Empty title="课包不存在" body="该课包不存在或当前机构不可访问。" />;
+    return <>
+      <PageHeader eyebrow="教学资源" title={c.title} description={c.description || '查看课包详细资料与课时正文。'} actions={<button className="secondary-button" onClick={() => navigate('/courses')}>返回课程中心</button>} />
+      <div className="metrics">
+        <MetricCard label="难度" value={c.difficultyLevel ? `${c.difficultyLevel}/5` : '—'} hint="课程难度" />
+        <MetricCard label="适学年龄" value={c.ageRangeMin || c.ageRangeMax ? `${c.ageRangeMin ?? '?'}-${c.ageRangeMax ?? '?'}岁` : '—'} hint="适学年龄范围" />
+        <MetricCard label="课时数" value={c.lessonCount} hint={'共 ' + (c.lessons?.length || 0) + ' 节已发布'} tone="teal" />
+        <MetricCard label="版本" value={c.version} hint={'归属 ' + (c.assignedToCurrentOrg ? '本机构' : '平台公开')} tone="orange" />
+      </div>
+      {Array.isArray(c.tags) && c.tags.length ? <div className="tag-list"><span className="muted">标签：</span>{c.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
+      <Panel title="课时列表">
+        {c.lessons?.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>正文</th></tr></thead><tbody>{c.lessons.map((lesson) => <tr key={lesson.id}><td>{lesson.sort}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td>{lesson.durationMinutes} 分钟</td><td><div style={{ whiteSpace: 'pre-wrap', maxWidth: 480 }}>{lesson.lessonContent || '—'}</div></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
+      </Panel>
+    </>;
+  }
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   const sourceLabels = { PLATFORM: '平台课包', ORG: '机构自有' };
@@ -545,10 +567,11 @@ function OrgCourses({ api }) {
     <div className="metrics"><MetricCard label="可用课包" value={data.items.length} hint="仅统计当前已发布课程" /><MetricCard label="平台授权课包" value={data.items.filter((item) => item.ownerType === 'PLATFORM' && item.assignedToCurrentOrg).length} hint="平台单独授权后可见" tone="teal" /><MetricCard label="总课时" value={data.items.reduce((sum, item) => sum + item.lessonCount, 0)} hint="已发布课时" tone="orange" /></div>
     <Panel title="课程列表">
       {data.items.length ? <div className="card-list">{data.items.map((course) => <article className="item-card" key={course.id}>
-        <div className="row-actions"><h3>{course.title}</h3><Status value={course.status} /><span className="muted">{sourceLabels[course.ownerType] || course.ownerType}</span><span className="muted">{visibilityLabels[course.visibility] || course.visibility}</span><span className="muted">v{course.version}</span></div>
+        <div className="row-actions"><h3><button className="text-button" onClick={() => navigate('/courses/' + course.id)}>{course.title}</button></h3><Status value={course.status} /><span className="muted">{sourceLabels[course.ownerType] || course.ownerType}</span><span className="muted">{visibilityLabels[course.visibility] || course.visibility}</span><span className="muted">v{course.version}</span></div>
         <p>{course.description || '暂无课程说明'}</p>
-        <p className="muted">{course.lessonCount} 节课时{course.ownerType === 'PLATFORM' && course.assignedToCurrentOrg ? ' · 平台已授权' : ''}</p>
-        <div className="row-actions"><button className="text-button" onClick={() => setExpanded(expanded === course.id ? '' : course.id)}>{expanded === course.id ? '收起课时' : '查看课时'}</button><span className="muted">更新：{formatDate(course.updatedAt)}</span></div>
+        <p className="muted">{course.difficultyLevel ? `难度 ${course.difficultyLevel}/5 · ` : ''}{course.ageRangeMin || course.ageRangeMax ? `适学 ${course.ageRangeMin ?? '?'}-${course.ageRangeMax ?? '?'}岁 · ` : ''}{course.lessonCount} 节课时{course.ownerType === 'PLATFORM' && course.assignedToCurrentOrg ? ' · 平台已授权' : ''}</p>
+        {Array.isArray(course.tags) && course.tags.length ? <div className="tag-list">{course.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
+        <div className="row-actions"><button className="text-button" onClick={() => setExpanded(expanded === course.id ? '' : course.id)}>{expanded === course.id ? '收起课时' : '查看课时'}</button><button className="text-button" onClick={() => navigate('/courses/' + course.id)}>查看详情</button><span className="muted">更新：{formatDate(course.updatedAt)}</span></div>
         {expanded === course.id && (course.lessons?.length ? <ol className="course-lessons">{course.lessons.map((lesson) => <li key={lesson.id}>{lesson.title} · {lesson.durationMinutes} 分钟{lesson.summary ? ' · ' + lesson.summary : ''}</li>)}</ol> : <Empty title="该课包暂无已发布课时" />)}
       </article>)}</div> : <Empty title="暂无可用课程" body="请让平台管理员授权课包，或先创建机构自有课程。" />}
     </Panel>
@@ -899,6 +922,6 @@ function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
