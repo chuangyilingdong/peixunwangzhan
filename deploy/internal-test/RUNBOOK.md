@@ -18,11 +18,11 @@
 sudo systemctl start learning-platform-internal-test
 sudo systemctl stop learning-platform-internal-test
 sudo systemctl restart learning-platform-internal-test
-curl -fsS http://127.0.0.1:8787/health
+curl -fsS http://127.0.0.1:8788/health
 sudo systemctl status learning-platform-internal-test --no-pager
 ```
 
-API 只监听 `127.0.0.1:8787`；外部访问必须经过 Nginx 访问控制。
+API 只监听 `127.0.0.1:8788`；外部访问必须经过 Nginx 访问控制。
 
 ## 日志与错误上报
 

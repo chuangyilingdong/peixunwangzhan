@@ -1,77 +1,50 @@
-# 内部测试 Nginx 示例
-# 这是模板，不是可直接用于公网生产的配置。把 server_name 替换为内部 DNS / hosts 中的地址，
-# 并在网络层或 Nginx auth_basic / allow-deny 中落实访问控制后再启用。
+# AI 少儿编程平台｜iicili.cyou 内部测试单域名配置示例
+# 仅用于团队内测：需先在服务器创建 htpasswd，并确认 HTTPS 证书 / 访问控制已就绪。
+# 不读取、不迁移、不写入旧站真实数据库；新 API 使用独立内测 SQLite。
 
-# API：只允许内测前端所在的受控来源；8787 仍只监听回环地址
 server {
     listen 80;
-    server_name api.internal-test.example;
+    server_name iicili.cyou;
 
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    add_header X-Internal-Test "true" always;
     auth_basic "Internal test only";
     auth_basic_user_file /etc/nginx/.htpasswd-ai-kids-test;
 
+    # 新内测 API 使用 8788，避免与旧 learning-platform 8787 冲突。
+    location = /api { return 301 /api/; }
     location /api/ {
-        proxy_pass http://127.0.0.1:8787;
+        proxy_pass http://127.0.0.1:8788;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
-    location = /health {
-        proxy_pass http://127.0.0.1:8787/health;
+
+    location = /admin { return 301 /admin/; }
+    location /admin/ {
+        rewrite ^/admin/(.*)$ /$1 break;
+        root /srv/ai-kids-platform/internal-test/current/apps/admin;
+        try_files $uri $uri/ /index.html;
     }
-}
 
-# 每个前端使用独立内测主机名，避免把四个 dist 目录错误拼到同一路径。
-server {
-    listen 80;
-    server_name internal-test.example;
-    root /srv/ai-kids-platform/internal-test/current/apps/website;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
-    add_header X-Internal-Test "true" always;
-    auth_basic "Internal test only";
-    auth_basic_user_file /etc/nginx/.htpasswd-ai-kids-test;
-    location /api/ { proxy_pass http://127.0.0.1:8787; }
-    location / { try_files $uri $uri/ /index.html; }
-}
+    location = /org { return 301 /org/; }
+    location /org/ {
+        rewrite ^/org/(.*)$ /$1 break;
+        root /srv/ai-kids-platform/internal-test/current/apps/org;
+        try_files $uri $uri/ /index.html;
+    }
 
-server {
-    listen 80;
-    server_name admin.internal-test.example;
-    root /srv/ai-kids-platform/internal-test/current/apps/admin;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
-    add_header X-Internal-Test "true" always;
-    auth_basic "Internal test only";
-    auth_basic_user_file /etc/nginx/.htpasswd-ai-kids-test;
-    location /api/ { proxy_pass http://127.0.0.1:8787; }
-    location / { try_files $uri $uri/ /index.html; }
-}
+    location = /student { return 301 /student/; }
+    location /student/ {
+        rewrite ^/student/(.*)$ /$1 break;
+        root /srv/ai-kids-platform/internal-test/current/apps/student;
+        try_files $uri $uri/ /index.html;
+    }
 
-server {
-    listen 80;
-    server_name org.internal-test.example;
-    root /srv/ai-kids-platform/internal-test/current/apps/org;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
-    add_header X-Internal-Test "true" always;
-    auth_basic "Internal test only";
-    auth_basic_user_file /etc/nginx/.htpasswd-ai-kids-test;
-    location /api/ { proxy_pass http://127.0.0.1:8787; }
-    location / { try_files $uri $uri/ /index.html; }
-}
-
-server {
-    listen 80;
-    server_name student.internal-test.example;
-    root /srv/ai-kids-platform/internal-test/current/apps/student;
-    index index.html;
-    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
-    add_header X-Internal-Test "true" always;
-    auth_basic "Internal test only";
-    auth_basic_user_file /etc/nginx/.htpasswd-ai-kids-test;
-    location /api/ { proxy_pass http://127.0.0.1:8787; }
-    location / { try_files $uri $uri/ /index.html; }
+    location / {
+        root /srv/ai-kids-platform/internal-test/current/apps/website;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
 }

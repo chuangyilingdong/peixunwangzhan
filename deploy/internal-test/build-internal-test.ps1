@@ -34,8 +34,8 @@ try {
   if ($nodeVersion -lt [version]'22.5.0') { throw "Node.js 22.5+ is required because the database uses node:sqlite; found $nodeVersionText" }
   $env:VITE_DEPLOYMENT_MODE = $BuildMode
   $env:VITE_API_BASE = '/api'
-  if ([string]::IsNullOrWhiteSpace($env:VITE_PUBLIC_SITE_URL)) { $env:VITE_PUBLIC_SITE_URL = 'http://internal-test.example' }
-  if ([string]::IsNullOrWhiteSpace($env:VITE_ORG_APP_URL)) { $env:VITE_ORG_APP_URL = 'http://org.internal-test.example' }
+  if ([string]::IsNullOrWhiteSpace($env:VITE_PUBLIC_SITE_URL)) { $env:VITE_PUBLIC_SITE_URL = 'https://iicili.cyou' }
+  if ([string]::IsNullOrWhiteSpace($env:VITE_ORG_APP_URL)) { $env:VITE_ORG_APP_URL = 'https://iicili.cyou/org' }
 
   & $PnpmCommand run build
   if ($LASTEXITCODE -ne 0) { throw "pnpm build failed with exit code $LASTEXITCODE" }

@@ -5,6 +5,8 @@ import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
 import '@platform/shared/styles.css';
 
+const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/student').replace(/\/$/, '');
+
 const navigation = [{ to: '/dashboard', icon: '◈', label: '我的学习' }, { to: '/projects', icon: '✦', label: '我的项目' }, { to: '/works', icon: '▣', label: '我的作品' }, { to: '/showcase', icon: '✧', label: '作品墙' }, { to: '/inbox', icon: '✉', label: '消息中心' }, { to: '/help', icon: '?', label: '帮助与下载' }];
 const demos = [{ label: '跟随课堂学生', login: 'student-1', password: 'study123' }, { label: '自主练习学生', login: 'student-2', password: 'study123' }];
 
@@ -614,7 +616,7 @@ function Showcase({ api, user }) {
   const ageMax = searchParams.get('ageMax') || '';
   const tag = searchParams.get('tag') || '';
   const search = searchParams.get('search') || '';
-  const detailMatch = (window.location.pathname || '').match(/^\/courses\/([^/]+)$/);
+  const detailMatch = (window.location.pathname || '').match(/\/courses\/([^/]+)$/);
   const seriesId = detailMatch ? detailMatch[1] : null;
   const isFiltered = difficulty || ageMin || ageMax || tag || search;
   const state = useData(() => {
@@ -1028,4 +1030,4 @@ function App() {
   return <AppShell product="AI 魔法学院" roleLabel="小小创作者" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/projects" element={<Projects api={api} />} /><Route path="/projects/:projectId/canvas" element={<CanvasWorkspace api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/showcase" element={<Showcase api={api} user={session.user} />} /><Route path="/inbox" element={<StudentInbox api={api} />} /><Route path="/courses" element={<StudentCourses api={api} />} /><Route path="/courses/:seriesId" element={<StudentCourses api={api} />} /><Route path="/credits" element={<StudentCredits api={api} />} /><Route path="/account" element={<StudentAccount api={api} onRelogin={() => { clearSession(); setSession(null); navigate('/login'); }} />} /><Route path="/help" element={<HelpCenter api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
-createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
+createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

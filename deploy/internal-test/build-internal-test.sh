@@ -20,8 +20,8 @@ if (( NODE_MAJOR < 22 || (NODE_MAJOR == 22 && NODE_MINOR < 5) )); then
 fi
 VITE_DEPLOYMENT_MODE="$BUILD_MODE" \
 VITE_API_BASE="${VITE_API_BASE:-/api}" \
-VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-http://internal-test.example}" \
-VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-http://org.internal-test.example}" \
+VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-https://iicili.cyou}" \
+VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-https://iicili.cyou/org}" \
 "$PNPM_COMMAND" run build
 
 for app in admin org student website; do

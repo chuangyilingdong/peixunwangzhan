@@ -5,7 +5,7 @@ import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
 
-const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || 'http://localhost:5175';
+const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
 const INTERNAL_TEST = import.meta.env?.VITE_DEPLOYMENT_MODE === 'internal-test';
 
 const courses=[
@@ -201,10 +201,10 @@ function MarketplaceDetail(){
   const [error,setError]=useState(null);
   function startLearning(){
     const user=localStorage.getItem('user');
-    if(!user){window.location.href='/login';return;}
+    if(!user){window.location.href='/student/login';return;}
     let u=null;
-    try{u=JSON.parse(user);}catch(e){window.location.href='/login';return;}
-    if(u&&u.role==='STUDENT') window.location.href='/student';
+    try{u=JSON.parse(user);}catch(e){window.location.href='/student/login';return;}
+    if(u&&u.role==='STUDENT') window.location.href='/student/';
     else window.location.href='/demo';
   }
   useEffect(()=>{let live=true;

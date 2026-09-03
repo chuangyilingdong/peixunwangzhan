@@ -2,7 +2,7 @@
 
 ## 目标
 
-本目录提供可重复的内部测试构建和部署模板。它不执行正式公开上线，不覆盖 `iicili.cyou`，不修改真实线上数据库，不包含任何真实密钥。
+本目录提供可重复的线上受控内部测试构建和部署模板。目标为 `https://iicili.cyou/` 单域名路径，不执行正式公开上线，不修改真实线上数据库，不包含任何真实密钥。
 
 ## 目录约定
 
@@ -10,8 +10,8 @@
 - 当前版本软链接：`/srv/ai-kids-platform/internal-test/current`
 - 测试数据库：`/srv/ai-kids-platform/internal-test/data/platform.db`
 - 环境变量：`/etc/ai-kids-platform/internal-test.env`
-- API 服务：systemd `learning-platform-internal-test`，仅监听 `127.0.0.1:8787`
-- 前端：Nginx 分别提供 website / admin / org / student 四个内部主机名
+- API 服务：systemd `learning-platform-internal-test`，仅监听 `127.0.0.1:8788`
+- 前端：Nginx 在 `iicili.cyou` 下按 `/`、`/admin/`、`/org/`、`/student/` 提供四端
 
 ## 本地 / CI 构建
 
@@ -53,7 +53,7 @@ node packages/database/src/seed.js
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now learning-platform-internal-test
-curl -fsS http://127.0.0.1:8787/health
+curl -fsS http://127.0.0.1:8788/health
 sudo journalctl -u learning-platform-internal-test -n 100 --no-pager
 ```
 
@@ -72,6 +72,6 @@ sudo journalctl -u learning-platform-internal-test -n 100 --no-pager
 
 - 将主机名替换成内部 DNS / hosts 地址；
 - 创建仅供内部测试的 Basic Auth 账号，或在网络层使用 VPN / IP 白名单；
-- 确认 API 8787 没有公网放行，且服务仅绑定回环地址；
+- 确认 API 8788 没有公网放行，且服务仅绑定回环地址；
 - 验证 SPA 回退、`/api/` 代理、`X-Robots-Tag` 和 `X-Internal-Test`；
 - 页面和协议准备稿仍标识为内部测试，不代表正式服务。

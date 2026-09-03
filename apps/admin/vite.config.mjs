@@ -4,9 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const shared = fileURLToPath(new URL('../../packages/shared/src', import.meta.url));
+const appBase = process.env.VITE_APP_BASE || '/admin/';
 
 export default defineConfig({
   root,
+  base: appBase,
   plugins: [react()],
   resolve: { alias: [{ find: '@platform/shared', replacement: shared }] },
   server: { port: 5173, strictPort: true, proxy: { '/api': 'http://localhost:8787' } },
