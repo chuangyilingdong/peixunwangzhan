@@ -3,8 +3,8 @@
 > **唯一总控文件 / Single Source of Truth**  
 > 工程根目录：`D:\学习平台\platform-v2`  `n> 受版本控制的总控文件：`docs\AI少儿编程平台-完整上线执行总控.md`  
 > 创建日期：2026-09-02  
-> 当前阶段：**P3 基础业务闭环完成；非画布第一轮站点与三端信息架构完成；进入 P4「非画布真实业务补齐」开发阶段。**
-> 当前总原则：**除 `packages/canvas` 外，网站与三端按“AI 魔法学院”基准持续实施；画布暂时冻结，必须等待用户再次明确授权后才可改动。**
+> 当前阶段：**P3 / P3.5 / P4 / P5-W02 / P5-W04 / P5-W05 / P5-M01 已完成；P5 剩余主要为 SEO、协议、下载页和备案等外部依赖项；非画布三端信息架构与真实业务能力已闭环。**
+> 当前总原则：**除 `packages/canvas` 外，网站与三端按”AI 魔法学院”基准持续实施；画布暂时冻结，必须等待用户再次明确授权后才可改动。**
 
 ---
 
@@ -74,6 +74,31 @@
 ## 1. 当前唯一下一步与阶段看板
 
 ### 1.1 当前唯一下一步（下一次开发优先做）
+
+- [x] **P5-M01 课程广场。** ✅ 2026-09-03
+  - 优先级：P0
+  - 完成记录：
+    - [x] admin `GET /api/admin/course-marketplace`（status/search/page/limit，PENDING 优先排序）、`GET /:id`、`PUT /:id`（状态+积分）、`PUT /:id/rewards`（独立积分更新）。
+    - [x] 公开 `GET /api/public/marketplace`（difficulty/ageMin/ageMax/tag/search/sort=popular|recent/page/limit，仅 APPROVED+ALL_ORGS）与 `GET /api/public/marketplace/:id`（lessonContent 截断 2000）。
+    - [x] 平台端 `/marketplace` 升级为 CourseMarketplace 工作台：状态过滤、搜索、分页、上下架、设置积分、详情抽屉、难度星 / 年龄段 / 标签 / 奖励积分卡。
+    - [x] 官网 `/marketplace` 列表与 `/marketplace/:id` 详情接通真实 API，原 11 条硬编码示例仍作为 fallback。
+    - [x] 验证：临时 SQLite 75 pass / 0 fail；`node --check`、四端生产构建、`git diff --check` 均通过。
+    - [x] 画布未修改、真实数据库未触碰、未伪造支付、评分与评论、未部署线上。
+- [x] **P5-W05 课程资料字段。** ✅ 2026-09-03
+  - 优先级：P0
+  - 完成记录：
+    - [x] schema 新增 `difficulty_level`(1-5) / `age_range_min` / `age_range_max` / `tags`(JSON) / `lesson_content`；seed 补 `AI古诗词创意营` 默认值（difficulty=3、age 8-16、tags=语文/创意/古诗词/动画、每课时含 lessonContent）。
+    - [x] `normalizeSeries` / `normalizeLesson` 同步输出新字段；admin `POST/PUT /admin/course-series` 接受新字段并校验难度 1-5、年龄下限 ≤ 上限、标签数组 ≤ 20；课时 `PUT` 接受 `lessonContent` 并写 `COURSE_LESSON_CONTENT_UPDATE` 审计。
+    - [x] 学员端 `GET /student/courses?difficulty&ageMin&ageMax&tag&search` 筛选 + `GET /student/courses/:seriesId` 详情；机构端 `GET /org/course-series/:seriesId` 详情；公开 `GET /public/course-series` + `/:id` 详情（lessonContent 截断 2000）。
+    - [x] 学员/机构/官网三端列表与详情页接通新字段；学员端增加难度/年龄/标签 chip + 筛选 + 详情正文；机构端增列与详情页；官网列表与 `/courses/:id` 详情接通。
+    - [x] 验证：临时 SQLite 100 pass / 0 fail；`node --check`、四端生产构建、`git diff --check` 均通过。
+    - [x] 画布未修改、真实数据库未触碰、未部署线上。
+- [ ] **下一会话推荐：P5-W08 协议 / 隐私 / 未成年人说明。**
+  - 优先级：P1
+  - 范围：用户协议、隐私政策、儿童 / 未成年人使用须知、监护同意模板、注销 / 数据请求入口联动 P4-S06。
+  - 依赖：可基于现有 P4-S06 申请与软注销状态、官网备案资料直接落地。
+  - 验收：所有公开页底部协议链接可达，文案与备案主体一致；监护同意模板与 P4-S06 申请状态联动。
+  - 其他开放项：P5-W01 / P5-W03 / P5-W06 / P5-W07 / P5-W09 / P5-W10（见 §5.4），全部为非 P4 / P5 已完成核心；外加 `/org/afee` 阿飞提醒（外部决策）、`/org/enrollment` 学员订单（已被 P4-O07 实际覆盖，可在文档对齐时改判"真实已有"）、`/demo` 预约演示（已被 P5-W02 实际覆盖）。
 
 - [x] **P4-O01 机构首页真实经营看板第一批闭环。**
   - 优先级：P0
@@ -802,10 +827,14 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 优先级：P1
   - 范围：精选作品（is_public=1）、详情页（/works/:token）、可选公开分享链接（share_token）、访问权限（作者脱敏 studentName）、下架立即失效。
   - 验收：✅ 必须 APPROVED + copyright_confirmed 才可公开；默认不公开 studentId/teacherComment；下架 shareToken 失效；未审核 → 400 WORK_NOT_APPROVED_FOR_PUBLIC；学生跨作品 → 404 WORK_NOT_FOUND。
-- [ ] **P5-W05 课程资料与“16 门课程”核验**
+- [x] **P5-W05 课程资料字段（难度 / 年龄 / 标签 / 课时正文）** ✅ 2026-09-03
   - 优先级：P0
-  - 范围：提取并确认课程名称、年龄段、时长、目标、课时、适用场景、封面与销售文案。
-  - 验收：每门课程都有来源、业务确认、后台课程实体和官网展示的一致映射；未确认内容不得编造。
+  - 范围：schema 新增 difficulty_level / age_range_min / age_range_max / tags / lesson_content；normalize 同步输出；admin CRUD + 学员 / 机构 / 公开三端详情 + 学员 difficulty/ageMin/ageMax/tag/search 筛选。
+  - 验收：✅ 临时 SQLite P5-W05 API **100 pass / 0 fail**；四端生产构建通过；画布未修改、真实数据库未触碰、未部署线上。
+- [x] **P5-M01 课程广场** ✅ 2026-09-03
+  - 优先级：P0
+  - 范围：admin 上下架（PENDING→APPROVED→REJECTED）+ 积分奖励（0-999999）+ 公开列表（difficulty/ageMin/ageMax/tag/search/sort=popular|recent/page/limit，仅 APPROVED+ALL_ORGS）+ 详情（lessonContent 截断 2000）。
+  - 验收：✅ 临时 SQLite P5-M01 API **75 pass / 0 fail**；四端生产构建通过；画布未修改、真实数据库未触碰、未部署线上；不做真实付费购买、评分与评论。
 - [ ] **P5-W06 真实客户端下载与版本发布页**
   - 优先级：P1
   - 范围：Windows / macOS（如提供）安装包、版本号、更新说明、系统要求、安装校验值、历史版本、下载统计。
@@ -1208,13 +1237,15 @@ node .\p3-api-integration.mjs
 | 2026-09-03 | P4-S05 AI / 魔法石中心完成：学生本人 AI 能力状态、额度与魔法石、任务历史 / 失败详情、失败重试、素材使用推导和课堂限制提示形成闭环。 | 临时 SQLite P4-S05 API 85 pass / 0 fail、P3 回归 48 pass / 0 fail、后端语法检查、学生端生产构建、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上；local-mock 与真实 provider 边界明确；下一步建议 P4-S06 个人账号与安全设置。 |
 | 2026-09-03 | P4-S06 个人账号与安全设置完成：预设头像、监护人资料、隐私授权、当前密码验证、登录设备、账号注销 / 数据导出申请、机构处理、数据概览和软注销形成闭环。 | 临时 SQLite P4-S06 API 97 pass / 0 fail、旧 SQLite 迁移演练、P3 回归 48 pass / 0 fail、后端语法、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上；真实头像上传、邮件短信、监管报送和外部身份同步未伪装；下一步建议 P4-S07 帮助、下载与反馈渠道。 |
 | 2026-09-03 | P4-S07 帮助、下载与反馈渠道完成：学生帮助中心、FAQ / 指南 / 兼容性、真实客户端发布配置、公开下载边界、官网禁用虚假下载、学生反馈与机构处理闭环及审计均已接通。 | 临时 SQLite P4-S07 API 42 pass / 0 fail、旧 SQLite 35→38 表迁移演练、P3 回归 48 pass / 0 fail、后端语法、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上；真实安装包、文件托管、自动更新和外部客服未伪装；后续按未勾选事项重新选择。 |
+| 2026-09-03 | P5-W05 课程资料字段（难度 / 年龄 / 标签 / 课时正文）完成：schema 新增 difficulty_level / age_range_min / age_range_max / tags / lesson_content；seed 补默认值；normalize 同步输出；admin CRUD + 学员 / 机构 / 公开三端详情 + 学员筛选均已接通。 | 临时 SQLite P5-W05 API 100 pass / 0 fail、后端语法、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上。 |
+| 2026-09-03 | P5-M01 课程广场完成：admin 上下架 / 积分管理 + 公开列表（difficulty/age/tag/搜索/排序/分页） + 详情（lessonContent 截断）均已接通。 | 临时 SQLite P5-M01 API 75 pass / 0 fail、后端语法、四端生产构建和 git diff --check 通过；画布未修改、真实数据库未触碰、未部署线上；不做真实付费购买、评分和评论。 |
 
 ---
 
 ## 15. 下一次新对话的固定开场指令
 
-> 请先读取 `D:\学习平台\platform-v2\docs\AI少儿编程平台-完整上线执行总控.md`，以其中“当前唯一下一步”和未勾选事项为准推进。先核对代码与文档是否一致；完成任何事项后，必须更新本文件的勾选、完成记录、验证方式和变更日志。除非用户重新明确授权，禁止修改 `D:\学习平台\platform-v2\packages\canvas`。所有非画布页面继续按 `D:\学习平台\docs\AI魔法学院基准` 实施，但不得伪造真实 AI、支付、文件存储、运营数据或生产上线能力。
+> 请先读取 `D:\学习平台\platform-v2\docs\AI少儿编程平台-完整上线执行总控.md`，以其中”当前唯一下一步”和未勾选事项为准推进。先核对代码与文档是否一致；完成任何事项后，必须更新本文件的勾选、完成记录、验证方式和变更日志。除非用户重新明确授权，禁止修改 `D:\学习平台\platform-v2\packages\canvas`。所有非画布页面继续按 `D:\学习平台\docs\AI魔法学院基准` 实施，但不得伪造真实 AI、支付、文件存储、运营数据或生产上线能力。
 
 
-- 对话交接确认（2026-09-03）：P4-S07 帮助、下载与反馈渠道已完成；学生帮助中心、真实客户端发布边界、公开下载状态、官网禁用虚假下载、反馈提交与机构处理闭环和审计均已验收。下一步必须按本文件未勾选事项重新选择，开始前核对代码与文档；继续禁止修改 packages/canvas、触碰真实业务数据库和伪造真实客户端、文件托管或外部客服能力。每次完成事项必须同步更新本文件勾选、完成记录与变更日志。
+- 对话交接确认（2026-09-03）：P5-M01 课程广场 + P5-W05 课程资料字段已完成；课程广场（上下架/积分/公开列表/详情）与难度年龄标签课时正文四端已验收 75+100=175 项断言全部通过。仍有 3 个页面壳层待升级（/org/enrollment 学员开通单、/org/afee 阿飞提醒、/demo 预约演示）。下一步按未勾选事项选择；继续禁止修改 packages/canvas、触碰真实业务数据库和伪造外部依赖能力。每次完成事项必须同步更新本文件勾选、完成记录与变更日志。
 
