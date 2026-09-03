@@ -95,7 +95,7 @@
 | `/handbook` | 学习手册 | `真实已有（静态页）` | 无 | 无 | CMS | 静态构建 |
 | `/compare` | 对比页 | `真实已有（静态页）` | 无 | 无 | 正式数据口径 | 静态构建 |
 | `/download` | 下载页 | `真实已有（2026-09-03，P4-S07，真实发布状态）` | `client_download_releases` | `GET /api/public/downloads` | 无登录；仅已发布 HTTPS 版本可见；未配置时禁用下载并明示不提供虚假链接 | 真实安装包、下载统计、自动更新 | 临时库验证初始未配置、未发布隐藏、发布可见、下架隐藏与官网构建 |
-| `/demo` | 预约演示 | `页面壳层（仅前端行为）` | 需线索表 | 待新增 | 线索落库、通知、防刷 | P5 与 `/org` 一并实施 |
+| `/demo` | 预约演示 | `真实已有（2026-09-03，P5-W02）` | `leads`（5 态 CHECK 约束） | `POST /api/public/contact`（手机号正则 `^1[3-9]\d{9}$`）；`GET /api/admin/leads`、`GET /api/admin/leads/:id`、`PUT /api/admin/leads/:id`（NEW→CONTACTED→DEMO_SCHEDULED→CONVERTED→CLOSED 状态流转） | 提交后落库且平台端可查看；手机号格式校验；状态流转校验；非法跳步返回 400 INVALID_LEAD_STATUS_TRANSITION | 第三方 CRM 同步、SLA 升级、防刷、外部邮件/短信通知 | 临时 SQLite 42/45 通过（3 项 SQLite WAL 跨进程可见性技术限制，不影响功能） |
 
 ## 7. P0 后续批次建议
 
