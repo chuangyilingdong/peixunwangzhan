@@ -22,7 +22,10 @@ VITE_DEPLOYMENT_MODE="$BUILD_MODE" \
 VITE_API_BASE="${VITE_API_BASE:-/api}" \
 VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-https://iicili.cyou}" \
 VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-https://iicili.cyou/org}" \
-"$PNPM_COMMAND" run build
+node_modules/.bin/vite build apps/admin --config apps/admin/vite.config.mjs
+node_modules/.bin/vite build apps/org --config apps/org/vite.config.mjs
+node_modules/.bin/vite build apps/student --config apps/student/vite.config.mjs
+node_modules/.bin/vite build apps/website --config apps/website/vite.config.mjs
 
 for app in admin org student website; do
   test -f "apps/${app}/dist/index.html"
