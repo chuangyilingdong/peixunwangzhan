@@ -33,7 +33,7 @@
 
 | 本地路由 | 基准路由 / 页面 | 角色 | 当前状态 | 主要数据表 | 后端 API | 状态机 / 权限 | 缺失项 | 验收方法 |
 |---|---|---|---|---|---|---|---|---|
-| `/dashboard` | `/super/dashboard` 平台概览 | SUPER_ADMIN | `真实已有` | `organizations`、`usage_records` | `GET /api/admin/organizations`、`GET /api/admin/billing/usage-overview` | `ADMIN_DASHBOARD` 目标权限；当前角色级 SUPER_ADMIN | 用户数、课程数、作品数汇总待补 | seed 登录后页面显示真实机构与用量；401/403 校验 |
+| `/dashboard` | `/super/dashboard` 平台概览 | SUPER_ADMIN | `真实已有（2026-09-03，P4-A01）` | `organizations`、`users`、`course_series`、`course_assignments`、`classes`、`class_sessions`、`student_projects`、`works`、`generation_jobs`、`usage_records`、`org_billing_accounts` | 新增 `GET /api/admin/dashboard/overview`；保留机构下拉所需 `GET /api/admin/organizations` | 仅 SUPER_ADMIN；`orgId/from/to` 严格校验；from/to 左闭右开 UTC，未传默认最近 30 天 | 趋势图、指标下钻、跨时区切换、导出 | 临时 SQLite 40 项断言：401/403、非法 / 空时间、倒置区间、空区间、机构隔离、新旧区间、余额与 Top 汇总全部通过；页面真实渲染 19 项指标与口径 |
 | `/organizations` | `/super/organizations` 机构管理 | SUPER_ADMIN | `真实已有` | `organizations`、`users`、`org_billing_accounts`、`credit_entries` | `GET/POST /api/admin/organizations`、`GET/PUT /:orgId`、credit/seat adjustments | 机构 `TRIAL/ACTIVE`；目标 `ADMIN_ORGANIZATIONS` | 机构详情页、试用转正、账务资料、管理员管理 | API 联调中创建/更新机构、调整积分席位，错误场景失败 |
 | `/users` | `/super/platform-users` 平台用户 | SUPER_ADMIN | `真实已有（2026-09-02）` | `users`、`organizations`、`billing_packages` | 新增 `GET /api/admin/platform-users` | 用户 `ACTIVE/DISABLED`；目标 `ADMIN_USERS` | 单用户启停、重置密码、解绑手机接口 | role/orgId/search 正反向验证；org/student token 403 |
 | `/courses` | `/super/courses` 平台课程 | SUPER_ADMIN | `真实已有` | `course_series`、`course_lessons`、`course_assignments` | `GET/POST /api/admin/course-series`、assignments | 课包 `DRAFT/PUBLISHED/ARCHIVED` | 详情编辑、课时/资产 CRUD、封面与课件上传 | 创建课包并授权机构；重复标题 409 |

@@ -969,6 +969,91 @@ export async function handleAdmin(ctx) {
     return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
   }
 
+  if (part === '/dashboard/overview' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const orgFilter = String(ctx.search.get('orgId') || '').trim();
+    const fromProvided = ctx.search.has('from'); const from = fromProvided ? String(ctx.search.get('from') || '').trim() : '';
+    const toProvided = ctx.search.has('to'); const to = toProvided ? String(ctx.search.get('to') || '').trim() : '';
+    if (orgFilter && !row('SELECT id FROM organizations WHERE id=?', [orgFilter])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    const fromTime = from ? new Date(from) : null;
+    const toTime = to ? new Date(to) : null;
+    if (fromProvided && (!from || !fromTime || Number.isNaN(fromTime.getTime()) || fromTime.toISOString() !== from)) throw errors.badRequest('开始时间必须是有效 ISO 时间', 'INVALID_FROM');
+    if (toProvided && (!to || !toTime || Number.isNaN(toTime.getTime()) || toTime.toISOString() !== to)) throw errors.badRequest('结束时间必须是有效 ISO 时间', 'INVALID_TO');
+    if (fromTime && toTime && fromTime >= toTime) throw errors.badRequest('开始时间必须早于结束时间', 'INVALID_TIME_RANGE');
+    const upperTime = toTime || new Date();
+    const lowerTime = fromTime || new Date(upperTime.getTime() - 29 * 86400000);
+    const since = lowerTime.toISOString();
+    const until = upperTime.toISOString();
+    const scoped = (table) => {
+      const conditions = [`${table}.created_at>=?`, `${table}.created_at<?`];
+      const params = [since, until];
+      if (orgFilter) { conditions.push(`${table}.org_id=?`); params.push(orgFilter); }
+      return { where: conditions.join(' AND '), params };
+    };
+    const singleNumber = (sql, params = []) => Number(row(sql, params)?.n || 0);
+    const organizations = singleNumber("SELECT COUNT(*) n FROM organizations WHERE (?='' OR id=?)", [orgFilter, orgFilter]);
+    const activeOrganizations = singleNumber("SELECT COUNT(*) n FROM organizations WHERE (?='' OR id=?) AND status IN ('TRIAL','ACTIVE')", [orgFilter, orgFilter]);
+    const orgScope = orgFilter ? rows('SELECT id,name,status FROM organizations WHERE id=?', [orgFilter]) : rows('SELECT id,name,status FROM organizations');
+    const orgIds = orgScope.map((item) => item.id);
+    const usersScope = orgFilter ? "org_id=?" : "org_id IS NOT NULL";
+    const usersParams = orgFilter ? [orgFilter] : [];
+    const teachers = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='TEACHER' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
+    const students = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
+    const admins = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='ORG_ADMIN' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
+    const classes = singleNumber(`SELECT COUNT(*) n FROM classes WHERE (?='' OR org_id=?) AND status='ACTIVE'`, [orgFilter, orgFilter]);
+    const publishedCourses = singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED'`);
+    const activeAssignments = singleNumber(`SELECT COUNT(*) n FROM course_assignments WHERE status='ACTIVE' AND (?='' OR org_id=?)`, [orgFilter, orgFilter]);
+    const classSessions = singleNumber(`SELECT COUNT(*) n FROM class_sessions session JOIN classes class ON class.id=session.class_id WHERE (LENGTH(?)=0 OR class.org_id=?) AND session.started_at>=? AND session.started_at<?`, [orgFilter, orgFilter, since, until]);
+    const projects = singleNumber(`SELECT COUNT(*) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?`, [orgFilter, orgFilter, since, until]);
+    const works = singleNumber(`SELECT COUNT(*) n FROM works WHERE (?='' OR org_id=?) AND submitted_at>=? AND submitted_at<?`, [orgFilter, orgFilter, since, until]);
+    const usage = scoped('usage_records');
+    const usageTotal = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where}`, usage.params);
+    const usageSuccess = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='SUCCESS'`, usage.params);
+    const usageFailed = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='FAILED'`, usage.params);
+    const usageBlocked = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='BLOCKED'`, usage.params);
+    const abnormalTasks = usageFailed + usageBlocked;
+    const creditsSpent = singleNumber(`SELECT COALESCE(SUM(credits_charged),0) n FROM usage_records WHERE ${usage.where}`, usage.params);
+    const aiTasks = singleNumber(`SELECT COUNT(*) n FROM generation_jobs WHERE ${scoped('generation_jobs').where}`, scoped('generation_jobs').params);
+    const account = orgIds.length ? singleNumber(`SELECT COALESCE(SUM(credit_balance),0) n FROM org_billing_accounts WHERE org_id IN (${orgIds.map(() => '?').join(',')})`, orgIds) : 0;
+    const frozenCredits = orgIds.length ? singleNumber(`SELECT COALESCE(SUM(frozen_credits),0) n FROM org_billing_accounts WHERE org_id IN (${orgIds.map(() => '?').join(',')})`, orgIds) : 0;
+    const byOrg = rows(`SELECT organization.id,organization.name,COALESCE(SUM(usage.credits_charged),0) credits,COUNT(usage.id) calls
+      FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id AND usage.created_at>=? AND usage.created_at<?
+      ${orgFilter ? 'WHERE organization.id=?' : ''} GROUP BY organization.id ORDER BY credits DESC,organization.name ASC LIMIT 10`, orgFilter ? [since, until, orgFilter] : [since, until]).map((item) => ({ id: item.id, name: item.name, credits: Number(item.credits || 0), calls: Number(item.calls || 0) }));
+    const byModality = rows(`SELECT modality,COUNT(*) calls,COALESCE(SUM(credits_charged),0) credits,COUNT(CASE WHEN status='SUCCESS' THEN 1 END) successCalls,COUNT(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 END) abnormalCalls
+      FROM usage_records WHERE ${usage.where} GROUP BY modality ORDER BY credits DESC,modality ASC`, usage.params).map((item) => ({ modality: item.modality, calls: Number(item.calls || 0), credits: Number(item.credits || 0), successCalls: Number(item.success_calls ?? item.successCalls ?? 0), abnormalCalls: Number(item.abnormal_calls ?? item.abnormalCalls ?? 0) }));
+    return {
+      metrics: {
+        organizations, activeOrganizations, admins, teachers, students,
+        publishedCourses, activeAssignments, activeClasses: classes, classSessions, projects, works,
+        aiTasks, abnormalTasks, usageCalls: usageTotal, successfulCalls: usageSuccess, failedCalls: usageFailed, blockedCalls: usageBlocked,
+        creditsSpent, creditBalance: account, frozenCredits,
+      },
+      byOrg, byModality,
+      filters: { orgId: orgFilter || null, from: since, to: until },
+      meta: {
+        generatedAt: nowIso(), timezone: 'UTC', dataSource: 'local SQLite', version: 'P4-A01',
+        metricDefinitions: {
+          organizations: '机构总数；orgId 筛选后为 1。',
+          activeOrganizations: "状态为 TRIAL 或 ACTIVE 的机构，不含 FROZEN/DISABLED/EXPIRED。",
+          admins: '未删除、未禁用且未过期的机构管理员数量。',
+          teachers: '未删除、未禁用且未过期的机构教师数量。',
+          students: '未删除、未禁用且未过期的机构学生数量。',
+          publishedCourses: '平台已发布课程系列数；不受机构筛选影响。',
+          activeAssignments: 'ACTIVE 状态课程授权数。',
+          activeClasses: 'ACTIVE 状态班级数，为存量口径。',
+          classSessions: '查询时间内启动的课堂场次。',
+          projects: '查询时间内创建的项目数。',
+          works: '查询时间内提交的作品数。',
+          aiTasks: '查询时间内创建的生成任务数。',
+          abnormalTasks: '查询时间内 usage_records 中状态为 FAILED 或 BLOCKED 的调用次数。',
+          creditsSpent: '查询时间内 usage_records.credits_charged 求和。',
+          creditBalance: '机构账面积分余额，含冻结；为筛选范围当前存量。',
+          frozenCredits: '机构冻结积分，为筛选范围当前存量。',
+        },
+        boundary: 'from/to 均为左闭右开 UTC ISO 时间；未传时默认最近 30 天；机构与用户统计不按时间过滤。',
+      },
+    };
+  }
   if (part === '/billing/usage-overview' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     return { totalCredits: Number(row('SELECT COALESCE(SUM(credit_balance),0) n FROM org_billing_accounts').n || 0), usage: rows('SELECT modality,SUM(credits_charged) credits,COUNT(*) calls FROM usage_records GROUP BY modality'), topOrgs: rows('SELECT organization.id,organization.name,COALESCE(SUM(usage.credits_charged),0) credits FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id GROUP BY organization.id ORDER BY credits DESC LIMIT 10') };
