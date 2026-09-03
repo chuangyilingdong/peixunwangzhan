@@ -805,7 +805,7 @@ function StudentCredits({ api }) {
 
 const AVATAR_LABELS = { star: '星星', rocket: '火箭', cat: '小猫', fox: '狐狸', robot: '机器人', panda: '熊猫', owl: '猫头鹰', whale: '鲸鱼' };
 const GUARDIAN_RELATIONSHIP_LABELS = { PARENT: '父母', GRANDPARENT: '祖父母 / 外祖父母', OTHER_GUARDIAN: '其他监护人' };
-const PUBLIC_SITE_URL = (import.meta.env?.VITE_PUBLIC_SITE_URL || 'http://localhost:5173').replace(/\/$/, '');
+const PUBLIC_SITE_URL = (import.meta.env?.VITE_PUBLIC_SITE_URL || 'http://localhost:5176').replace(/\/$/, '');
 const LEGAL_DOCUMENT_LINKS = { TERMS: ['用户协议', '/terms'], PRIVACY: ['隐私政策', '/privacy'], MINORS: ['儿童 / 未成年人说明', '/minors'] };
 function StudentAccount({ api, onRelogin }) {
   const state = useData(() => api.get('student/account'), [api]);
@@ -962,7 +962,7 @@ function StudentInbox({ api }) {
 function StudentPage({ kind, api }) {
   const pages = { help: ['帮助与下载', '查看客户端安装、课堂登录和创作常见问题。', ['客户端下载', '支持 macOS Apple 芯片与 Windows 64 位'], ['创作指南', '学会用中文描述、预览、修改并发布作品']] };
   const [title, description, cards] = pages[kind];
-  return <><PageHeader eyebrow="AI魔法学院 · 小小创作者" title={title} description={description} actions={<a className="primary-button" href="http://localhost:5176/download">下载客户端 ↗</a>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '可查看' : '下载'} hint={item[1]} tone={index ? 'teal' : 'violet'} />)}</div><Panel title="创作小提示"><Notice tone="info">如需课堂登录或下载客户端，请联系老师获取对应指引。</Notice></Panel></>;
+  return <><PageHeader eyebrow="AI魔法学院 · 小小创作者" title={title} description={description} actions={<a className="primary-button" href={`${PUBLIC_SITE_URL}/download`}>下载客户端 ↗</a>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '可查看' : '下载'} hint={item[1]} tone={index ? 'teal' : 'violet'} />)}</div><Panel title="创作小提示"><Notice tone="info">如需课堂登录或下载客户端，请联系老师获取对应指引。</Notice></Panel></>;
 }
 
 const HELP_CATEGORY_LABELS = { ACCOUNT: '账号', CANVAS: '画布创作', AI: 'AI 能力', COURSE: '课程学习', CLIENT: '客户端', DATA: '数据与隐私', OTHER: '其他' };

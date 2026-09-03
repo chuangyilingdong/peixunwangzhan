@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Kids Platform API (internal test only)
+After=network.target
+
+[Service]
+Type=simple
+User=ai-kids-test
+Group=ai-kids-test
+WorkingDirectory=/srv/ai-kids-platform/internal-test/current
+EnvironmentFile=/etc/ai-kids-platform/internal-test.env
+ExecStart=/usr/bin/node /srv/ai-kids-platform/internal-test/current/apps/server/src/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/ai-kids-platform/internal-test/data /srv/ai-kids-platform/internal-test/logs
+
+[Install]
+WantedBy=multi-user.target

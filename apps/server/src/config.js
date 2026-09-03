@@ -1,3 +1,4 @@
+export const DEPLOYMENT_MODE = ['development', 'internal-test', 'public'].includes(process.env.DEPLOYMENT_MODE) ? process.env.DEPLOYMENT_MODE : 'development';
 export const PORT = Number(process.env.PORT || 8787);
 export const ADMIN_APP_ORIGIN = process.env.ADMIN_APP_ORIGIN || 'http://localhost:5173';
 export const STUDENT_APP_ORIGIN = process.env.STUDENT_APP_ORIGIN || 'http://localhost:5174';

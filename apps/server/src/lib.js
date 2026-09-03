@@ -115,16 +115,23 @@ export function corsHeaders(req, extra = {}) {
 
 export function sendJson(res, status, payload, req, extraHeaders = {}) {
   const text = JSON.stringify(payload);
+  const internalHeaders = process.env.DEPLOYMENT_MODE === 'internal-test'
+    ? { 'x-robots-tag': 'noindex, nofollow, noarchive', 'x-internal-test': 'true' }
+    : {};
   res.writeHead(status, corsHeaders(req, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(text),
+    ...internalHeaders,
     ...extraHeaders,
   }));
   res.end(text);
 }
 
 export function sendNoContent(res, req, extraHeaders = {}) {
-  res.writeHead(204, corsHeaders(req, extraHeaders));
+  const internalHeaders = process.env.DEPLOYMENT_MODE === 'internal-test'
+    ? { 'x-robots-tag': 'noindex, nofollow, noarchive', 'x-internal-test': 'true' }
+    : {};
+  res.writeHead(204, corsHeaders(req, { ...internalHeaders, ...extraHeaders }));
   res.end();
 }
 

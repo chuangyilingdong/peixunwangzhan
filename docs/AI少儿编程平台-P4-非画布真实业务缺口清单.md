@@ -477,11 +477,27 @@
 
 ### 内部测试上线执行状态（2026-09-03）
 
-- [ ] P9-I01 内部测试环境部署基线
-- [ ] P9-I02 内部访问控制与不可索引
-- [ ] P9-I03 测试数据、环境隔离与初始化
-- [ ] P9-I04 备份、恢复与回滚演练
-- [ ] P9-I05 内部 UAT 与缺陷闸门
-- [ ] P9-I06 内测运行手册与日志
+- [x] P9-I01 内部测试环境部署基线 ✅ 2026-09-03
+  - 完成记录：固化 `deploy/internal-test/` 的 Windows/Linux 构建脚本、发布目录约定、systemd 服务模板、Nginx 四端模板、环境变量样例和启动 / 停止 / 健康检查命令；发布产物包含 website/admin/org/student 四端、API 源码、数据库运行时和 `BUILD-METADATA.txt`。
+  - 验证：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；四端构建成功，API 可启动并返回 `/health` `status=ok`。本地生成 release `20260903T154014Z`。
+  - 边界：这是可从已推送 commit 重复构建的内测部署基线；本轮未连接、未覆盖旧服务器或 `iicili.cyou`，不宣称已完成真实服务器切换。
+- [x] P9-I02 内部访问控制与不可索引 ✅ 2026-09-03
+  - 完成记录：Nginx 模板四个 server 均启用 Basic Auth、`X-Robots-Tag: noindex, nofollow, noarchive`、`X-Internal-Test: true` 和 SPA fallback；API 内测响应同样加头，`robots.txt` 为 `Disallow: /`，`sitemap.xml` 返回 404；前端显示“内部测试环境 · 不代表正式服务”。
+  - 验证：部署验收 **24 pass / 0 fail**，并在 UAT 中验证未登录 admin API 为 401；静态断言覆盖 Basic Auth、robots、API 代理和 SPA fallback。
+  - 边界：Basic Auth 仍需在目标内测服务器按模板配置账号 / VPN / IP 白名单后生效；未把任何地址称为公开线上服务。
+- [x] P9-I03 测试数据、环境隔离与初始化 ✅ 2026-09-03
+  - 完成记录：环境变量支持独立 `PLATFORM_DATA_DIR` / `PLATFORM_DB_PATH`；初始化、seed、清理命令和五类角色测试账号均纳入手册；构建与验收脚本拒绝使用仓库默认数据库。
+  - 验证：临时 SQLite 初始化和 seed 成功；UAT 以平台超管、机构管理员、教师、学生和官网访客路径执行，未读取或写入 `packages/data/platform.db`。
+- [x] P9-I04 备份、恢复与回滚演练 ✅ 2026-09-03
+  - 完成记录：新增 `backup-internal-test.mjs` / `.sh` 和 `rollback-internal-test.sh`；备份包含 SQLite、当前静态 release、配置、日志和 `MANIFEST.json`，回滚脚本校验 release 位于隔离 releases 目录，切换后健康检查失败自动恢复上一 release。
+  - 验证：`tmp-p9-i04-backup.mjs` 使用临时 SQLite **11 pass / 0 fail**，完成数据库备份、清单、制品 / 配置 / 日志备份和恢复数据一致性校验。
+  - 运行指标：本地演练 RPO 为备份时点，RTO 为健康检查通过后的切换时间；真实服务器演练须在内测主机单独记录实际秒数。
+- [x] P9-I05 内部 UAT 与缺陷闸门 ✅ 2026-09-03
+  - 完成记录：覆盖官网访客公开协议 / 课程广场、平台超管登录与课程广场管理入口、机构管理员课程读取、教师班级读取、学生账户 / 仪表盘，以及未登录和越权 401/403 边界。
+  - 验证：`tmp-p9-i05-uat.mjs` 使用临时 SQLite **30 pass / 0 fail**；四端生产入口、内测标识和不可索引 HTML 均通过。
+  - 放行边界：本地核心 UAT 通过；真实服务器部署后仍需由内部测试人员按角色补做浏览器操作、租户隔离和业务数据回归，P0 缺陷未清零前不得扩大访问范围。
+- [x] P9-I06 内测运行手册与日志 ✅ 2026-09-03
+  - 完成记录：新增 `deploy/internal-test/RUNBOOK.md`，明确发布前检查、启停、健康检查、journal 日志、错误上报、备份、回滚、联系人占位和放行闸门；systemd 使用 journald，API 仅监听回环地址。
+  - 验证：文档与脚本静态检查、P9-I01/I04/I05 验收通过；未承诺公开 SLA，不接收外部真实业务。
 
-以上事项完成前，不将任何部署地址称为正式线上服务；完成后仅称为“内部测试环境”。
+当前 P9 内测上线代码 / 文档基线已完成；下一步是由具备服务器权限的人员在**新建、隔离的内测主机或内网节点**按 runbook 执行部署。备案、正式域名和正式公开服务仍后续处理；本轮没有对外公开上线。

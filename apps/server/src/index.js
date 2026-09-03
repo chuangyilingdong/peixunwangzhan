@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { PORT } from './config.js';
+import { DEPLOYMENT_MODE, PORT } from './config.js';
 import { ApiError, corsHeaders, envelope, errors, readJson, requestContext, resolveAuth, sendJson, sendNoContent } from './lib.js';
 import { handleAuth } from './routes/auth.js';
 import { handleAdmin, handleOrg } from './routes/adminOrg.js';
@@ -14,16 +14,24 @@ import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const PUBLIC_SITE_URL = String(process.env.PUBLIC_SITE_URL || 'http://localhost:5176').replace(/\/$/, '');
+const INTERNAL_TEST = DEPLOYMENT_MODE === 'internal-test';
 const PUBLIC_ROUTES = ['/', '/marketplace', '/courses', '/org', '/works', '/handbook', '/compare', '/download', '/demo', '/terms', '/privacy', '/minors'];
 function sendText(res, status, text, contentType, req) {
-  res.writeHead(status, { ...corsHeaders(req, { 'content-type': contentType, 'cache-control': 'public, max-age=3600' }), 'content-length': Buffer.byteLength(text) });
+  const internalHeaders = INTERNAL_TEST ? { 'x-robots-tag': 'noindex, nofollow, noarchive', 'x-internal-test': 'true' } : {};
+  res.writeHead(status, { ...corsHeaders(req, { 'content-type': contentType, 'cache-control': 'public, max-age=3600' }), ...internalHeaders, 'content-length': Buffer.byteLength(text) });
   res.end(text);
 }
 function xmlEscape(value) { return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;'); }
 function handleSeoAsset(ctx) {
   if (ctx.method !== 'GET') return false;
-  if (ctx.pathname === '/robots.txt') { sendText(ctx.res, 200, `User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${PUBLIC_SITE_URL}/sitemap.xml\n`, 'text/plain; charset=utf-8', ctx.req); return true; }
+  if (ctx.pathname === '/robots.txt') {
+    const body = INTERNAL_TEST
+      ? 'User-agent: *\nDisallow: /\n'
+      : `User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${PUBLIC_SITE_URL}/sitemap.xml\n`;
+    sendText(ctx.res, 200, body, 'text/plain; charset=utf-8', ctx.req); return true;
+  }
   if (ctx.pathname === '/sitemap.xml') {
+    if (INTERNAL_TEST) { sendText(ctx.res, 404, 'Not found\n', 'text/plain; charset=utf-8', ctx.req); return true; }
     const body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">', ...PUBLIC_ROUTES.map((route) => `  <url><loc>${xmlEscape(PUBLIC_SITE_URL + route)}</loc></url>`), '</urlset>'].join('\n');
     sendText(ctx.res, 200, body, 'application/xml; charset=utf-8', ctx.req); return true;
   }

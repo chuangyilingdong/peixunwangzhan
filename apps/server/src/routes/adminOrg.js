@@ -2,7 +2,7 @@ import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, nonEmptyString, nowIso, parseJson,
   q, requireRole, row, rows, transaction,
-} from '@platform/server-lib';
+} from '../lib.js';
 import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
 import { scheduleReminder } from './communication.js';

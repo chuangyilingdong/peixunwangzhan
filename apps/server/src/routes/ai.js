@@ -7,7 +7,7 @@ import {
   requireRole,
   row,
   transaction,
-} from '@platform/server-lib';
+} from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
