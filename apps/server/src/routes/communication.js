@@ -18,6 +18,15 @@ const NOTIFICATION_KINDS = new Set(['NOTICE', 'ANNOUNCEMENT', 'REMINDER']);
 const NOTIFICATION_SCOPES = new Set(['ALL_ORGS', 'ORG_IDS']);
 const MATERIAL_CATEGORIES = new Set(['GENERAL', 'COURSE', 'POSTER', 'ACTIVITY', 'PARTNERSHIP']);
 
+function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) throw errors.badRequest(`${label} 必须是整数`, 'INVALID_INTEGER');
+  if (n < min) throw errors.badRequest(`${label} 不能小于 ${min}`, 'INTEGER_TOO_SMALL');
+  if (n > max) throw errors.badRequest(`${label} 不能超过 ${max}`, 'INTEGER_TOO_LARGE');
+  return n;
+}
+
 function orgId(auth) {
   if (!auth.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
   return auth.user.orgId;
@@ -139,7 +148,7 @@ function scheduledPublishAt(value, fallback = null) {
   return date.toISOString();
 }
 
-function notificationRecipients(notificationId, scopeType, notificationOrgId, audience) {
+function notificationRecipients(notificationId, scopeType, notificationOrgId, audience, eventKey) {
   const params = [...audience.roles];
   let where = `u.status='ACTIVE' AND u.deleted_at IS NULL AND u.role IN (${audience.roles.map(() => '?').join(',')})`;
   if (scopeType === 'ORG') {
@@ -160,9 +169,45 @@ function notificationRecipients(notificationId, scopeType, notificationOrgId, au
   }
   const now = nowIso();
   targets.forEach((target) => {
-    q('INSERT OR IGNORE INTO notification_recipients(id,notification_id,user_id,delivery_status,delivered_at,created_at) VALUES (?,?,?,?,?,?)', [id('nrec'), notificationId, target.id, 'DELIVERED', now, now]);
+    q('INSERT OR IGNORE INTO notification_recipients(id,notification_id,user_id,event_key,delivery_status,delivered_at,created_at) VALUES (?,?,?,?,?,?,?)', [id('nrec'), notificationId, target.id, eventKey || null, 'DELIVERED', now, now]);
   });
   return targets.length;
+}
+
+// 事件去重：在事件抑制窗口内已存在同 event_key + user 的成功或待发投递则跳过；返回 { suppressed, delivered, failed }
+function dispatchRecipientEvent({ userId, notificationId, eventKey, maxRetries }) {
+  if (eventKey) {
+    const prior = row("SELECT id, delivery_status, ignored FROM notification_recipients WHERE event_key=? AND user_id=? AND ignored=0 ORDER BY created_at DESC LIMIT 1", [eventKey, userId]);
+    if (prior && (prior.delivery_status === 'DELIVERED' || prior.delivery_status === 'PENDING')) {
+      return { suppressed: true, reason: 'event_dedup' };
+    }
+  }
+  const now = nowIso();
+  q('INSERT OR REPLACE INTO notification_recipients(id,notification_id,user_id,event_key,delivery_status,delivered_at,retry_count,max_retries,created_at) VALUES (?,?,?,?,?,?,?,?,?)', [id('nrec'), notificationId, userId, eventKey || null, 'DELIVERED', now, 0, maxRetries || 3, now]);
+  return { suppressed: false, delivered: true };
+}
+
+function markRecipientFailed(recipientId, code, reason) {
+  const now = nowIso();
+  q('UPDATE notification_recipients SET delivery_status=\'FAILED\', failure_code=?, failure_reason=?, delivered_at=NULL WHERE id=?', [code || 'UNKNOWN', reason || code || '投递失败', recipientId]);
+}
+
+function retryRecipient(recipientId) {
+  const now = nowIso();
+  const row1 = row('SELECT retry_count, max_retries FROM notification_recipients WHERE id=?', [recipientId]);
+  if (!row1) return { retried: false, reason: 'NOT_FOUND' };
+  if (row1.retry_count >= row1.max_retries) return { retried: false, reason: 'MAX_RETRIES_EXCEEDED' };
+  q('UPDATE notification_recipients SET delivery_status=\'DELIVERED\', failure_code=NULL, failure_reason=NULL, delivered_at=?, retry_count=retry_count+1 WHERE id=?', [now, recipientId]);
+  return { retried: true };
+}
+
+function selectAudienceUsers(audience, orgId) {
+  const params = [...audience.roles];
+  let where = `u.status='ACTIVE' AND u.deleted_at IS NULL AND u.role IN (${audience.roles.map(() => '?').join(',')})`;
+  if (orgId) { where += ' AND u.org_id=?'; params.push(orgId); }
+  else if (audience.scope === 'ORG_IDS') { where += ` AND u.org_id IN (${audience.orgIds.map(() => '?').join(',')})`; params.push(...audience.orgIds); }
+  else { where += ' AND u.org_id IS NOT NULL'; }
+  return rows(`SELECT u.id FROM users u WHERE ${where}`, params);
 }
 
 export function dispatchDueNotifications() {
@@ -504,6 +549,99 @@ export async function handleAdminCommunication(ctx) {
     q('UPDATE client_download_releases SET published_at=?,updated_at=? WHERE id=?', [action === 'PUBLISH' ? now : null, now, release.id]);
     audit(ctx, action === 'PUBLISH' ? 'PLATFORM_CLIENT_RELEASE_PUBLISH' : 'PLATFORM_CLIENT_RELEASE_UNPUBLISH', 'CLIENT_DOWNLOAD_RELEASE', release.id, normalizeDownloadRelease(release), { published: action === 'PUBLISH' }, { orgId: null });
     return normalizeDownloadRelease(row('SELECT * FROM client_download_releases WHERE id=?', [release.id]));
+  }
+  if (part === '/notification-events' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const body = ctx.body || {};
+    const eventKey = String(body.eventKey || '').trim();
+    const eventType = String(body.eventType || '').trim();
+    const title = nonEmptyString(body.title, '事件标题', { max: 160 });
+    const content = nonEmptyString(body.body, '事件内容', { max: 10000 });
+    if (!eventKey) throw errors.badRequest('eventKey 必填', 'EVENT_KEY_REQUIRED');
+    if (!/^[a-zA-Z0-9_.:-]{4,128}$/.test(eventKey)) throw errors.badRequest('eventKey 必须符合 ^[a-zA-Z0-9_.:-]{4,128}$', 'INVALID_EVENT_KEY');
+    if (!eventType) throw errors.badRequest('eventType 必填', 'EVENT_TYPE_REQUIRED');
+    if (row('SELECT id FROM notification_events WHERE event_key=?', [eventKey])) throw errors.conflict('事件已被记录，重复投递将自动抑制', 'EVENT_KEY_DUPLICATE');
+    const audience = validateAudience(body);
+    const orgScope = body.orgId ? (row('SELECT id FROM organizations WHERE id=?', [body.orgId]) ? body.orgId : null) : null;
+    if (body.orgId && !orgScope) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    const eventId = id('nevt');
+    const now = nowIso();
+    const targetUrl = body.targetUrl ? String(body.targetUrl).trim().slice(0, 500) : null;
+    let suppressed = 0; let delivered = 0;
+    transaction(() => {
+      q('INSERT INTO notification_events(id,event_key,event_type,title,body,org_id,audience,target_url,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [eventId, eventKey, eventType, title, content, orgScope, json(audience), targetUrl, 'PENDING', auth.user.id, now, now]);
+      const targets = selectAudienceUsers(audience, orgScope);
+      if (targets.length === 0) {
+        q('UPDATE notification_events SET status=\'DELIVERED\', updated_at=? WHERE id=?', [now, eventId]);
+        return;
+      }
+      const notificationId = id('noti');
+      q('INSERT INTO notifications(id,scope_type,org_id,sender_id,title,body,kind,target_url,audience,status,publish_at,pinned,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [notificationId, orgScope ? 'ORG' : 'PLATFORM', orgScope, auth.user.id, title, content, 'NOTICE', targetUrl, json(audience), 'PUBLISHED', null, 0, now, now]);
+      targets.forEach((target) => {
+        const result = dispatchRecipientEvent({ userId: target.id, notificationId, eventKey, maxRetries: 3 });
+        if (result.suppressed) suppressed += 1; else delivered += 1;
+      });
+      q('UPDATE notification_events SET status=\'DELIVERED\', updated_at=? WHERE id=?', [now, eventId]);
+    });
+    audit(ctx, 'NOTIFICATION_EVENT_DISPATCH', 'NOTIFICATION_EVENT', eventId, null, { eventKey, eventType, delivered, suppressed });
+    return { id: eventId, eventKey, eventType, status: 'DELIVERED', audience, totalTargets: suppressed + delivered, delivered, suppressed };
+  }
+  if (part === '/notification-events/summary' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const total = row('SELECT COUNT(*) n FROM notification_events')?.n || 0;
+    const byStatus = rows('SELECT status, COUNT(*) n FROM notification_events GROUP BY status').map((item) => ({ status: item.status, count: Number(item.n) }));
+    const totalRecipients = row('SELECT COUNT(*) n FROM notification_recipients')?.n || 0;
+    const failed = row("SELECT COUNT(*) n FROM notification_recipients WHERE delivery_status='FAILED' AND ignored=0")?.n || 0;
+    const suppressed = row('SELECT COUNT(*) n FROM notification_recipients WHERE ignored=1')?.n || 0;
+    return { total, byStatus, totalRecipients, failed, suppressed, retriedToday: 0 };
+  }
+  if (part === '/notification-events' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const eventKey = String(ctx.search.get('eventKey') || '').trim();
+    const status = String(ctx.search.get('status') || '').trim();
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    const conditions = []; const params = [];
+    if (eventKey) { conditions.push('event_key=?'); params.push(eventKey); }
+    if (status) { conditions.push('status=?'); params.push(status); }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const items = rows(`SELECT * FROM notification_events ${where} ORDER BY created_at DESC LIMIT ${limit}`, params).map((event) => ({ id: event.id, eventKey: event.event_key, eventType: event.event_type, title: event.title, body: event.body, orgId: event.org_id || null, targetUrl: event.target_url, status: event.status, suppressReason: event.suppress_reason, createdAt: event.created_at, updatedAt: event.updated_at }));
+    return { items, total: items.length, limit };
+  }
+  const failRetry = part.match(/^\/notification-failures\/retry$/);
+  const failIgnore = part.match(/^\/notification-failures\/ignore$/);
+  if ((failRetry || failIgnore) && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const body = ctx.body || {};
+    const ids = Array.isArray(body.recipientIds) ? body.recipientIds.map((v) => String(v || '').trim()).filter(Boolean) : null;
+    if (!ids || !ids.length || ids.length > 500) throw errors.badRequest('recipientIds 必填且不超过 500 个', 'INVALID_RECIPIENT_IDS');
+    let retried = 0; let ignored = 0; let skipped = 0;
+    transaction(() => {
+      for (const idVal of ids) {
+        if (failRetry) {
+          const result = retryRecipient(idVal);
+          if (result.retried) retried += 1; else skipped += 1;
+        } else {
+          const result = q("UPDATE notification_recipients SET ignored=1 WHERE id=? AND delivery_status='FAILED' AND ignored=0", [idVal]);
+          if (result.changes) ignored += 1; else skipped += 1;
+        }
+      }
+    });
+    if (failRetry && retried) audit(ctx, 'NOTIFICATION_FAILURE_RETRY', 'NOTIFICATION_RECIPIENT', ids.join(','), null, { count: retried });
+    if (failIgnore && ignored) audit(ctx, 'NOTIFICATION_FAILURE_IGNORE', 'NOTIFICATION_RECIPIENT', ids.join(','), null, { count: ignored, reason: body.reason || 'MANUAL_IGNORE' });
+    return failRetry ? { retried, skipped } : { ignored, skipped };
+  }
+  if (part === '/notification-failures' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    const conditions = ["r.delivery_status='FAILED'", 'r.ignored=0']; const params = [];
+    const orgId = String(ctx.search.get('orgId') || '').trim();
+    const eventType = String(ctx.search.get('eventType') || '').trim();
+    if (orgId) { conditions.push('u.org_id=?'); params.push(orgId); }
+    if (eventType) { conditions.push('n.kind=?'); params.push(eventType); }
+    const where = 'WHERE ' + conditions.join(' AND ');
+    const items = rows(`SELECT r.id, r.notification_id, r.user_id, r.event_key, r.failure_code, r.failure_reason, r.retry_count, r.max_retries, r.created_at, n.title, n.body, n.kind, n.target_url, u.display_name user_name, u.login user_login, u.org_id, org.name org_name FROM notification_recipients r JOIN notifications n ON n.id=r.notification_id JOIN users u ON u.id=r.user_id LEFT JOIN organizations org ON org.id=u.org_id ${where} ORDER BY r.created_at DESC LIMIT ${limit}`, params).map((item) => ({ id: item.id, notificationId: item.notification_id, userId: item.user_id, eventKey: item.event_key, failureCode: item.failure_code, failureReason: item.failure_reason, retryCount: item.retry_count, maxRetries: item.max_retries, createdAt: item.created_at, title: item.title, body: item.body, kind: item.kind, targetUrl: item.target_url, userName: item.user_name, userLogin: item.user_login, orgId: item.org_id, orgName: item.org_name }));
+    const total = row(`SELECT COUNT(*) n FROM notification_recipients r JOIN users u ON u.id=r.user_id ${where}`, params)?.n || 0;
+    return { items, total, limit };
   }
   return null;
 }

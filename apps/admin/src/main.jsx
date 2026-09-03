@@ -17,6 +17,7 @@ const navigation = [
   { heading: '计费与设置' },
   { to: '/billing', icon: '◌', label: '计费与模型' },
   { to: '/materials', icon: '▤', label: '素材与物料' },
+  { to: '/notifications', icon: '✉', label: '通知事件' },
   { to: '/client-releases', icon: '⤓', label: '客户端版本' },
   { to: '/inbox', icon: '✉', label: '站内信' },
   { to: '/admins', icon: '⚙', label: '平台管理员' },
@@ -621,6 +622,148 @@ function PlatformAudit({ api }) {
   </>;
 }
 
+function PlatformNotifications({ api }) {
+  const [tab, setTab] = useState('dispatch');
+  const [eventForm, setEventForm] = useState({ eventKey: '', eventType: '', title: '', body: '', audience: 'TEACHER,STUDENT', orgId: '' });
+  const [lastEvent, setLastEvent] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [failFilters, setFailFilters] = useState({ orgId: '', eventType: '' });
+  const failQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    Object.entries(failFilters).forEach(([key, value]) => { if (value) params.set(key, value); });
+    params.set('limit', '50');
+    return params.toString();
+  }, [failFilters]);
+  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const summary = useData(() => api.get('admin/notification-events/summary'), [api]);
+  const events = useData(() => api.get('admin/notification-events?limit=50'), [api]);
+  const failures = useData(() => api.get(`admin/notification-failures?${failQuery}`), [api, failQuery]);
+  const [selected, setSelected] = useState({});
+  function reset() { setEventForm({ eventKey: '', eventType: '', title: '', body: '', audience: 'TEACHER,STUDENT', orgId: '' }); setMessage(''); }
+  async function dispatch(event) {
+    event.preventDefault();
+    setBusy(true); setMessage('');
+    try {
+      const audience = { roles: eventForm.audience.split(',').map((s) => s.trim()).filter(Boolean) };
+      const payload = {
+        eventKey: eventForm.eventKey.trim(),
+        eventType: eventForm.eventType.trim(),
+        title: eventForm.title.trim(),
+        body: eventForm.body.trim(),
+        audience,
+      };
+      if (eventForm.orgId) payload.orgId = eventForm.orgId;
+      const result = await api.post('admin/notification-events', payload);
+      setLastEvent(result);
+      setMessage(`事件已发布：${result.delivered} 投递 / ${result.suppressed} 抑制（共 ${result.totalTargets} 个目标）。`);
+      events.refresh(); summary.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+  }
+  async function retryFailures() {
+    const ids = Object.values(selected).filter(Boolean);
+    if (ids.length === 0) { setMessage('请勾选要重试的失败记录。'); return; }
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.post('admin/notification-failures/retry', { recipientIds: ids });
+      setMessage(`已重试 ${result.retried} 条，${result.skipped} 条被跳过（已忽略或达最大次数）。`);
+      setSelected({});
+      failures.refresh(); summary.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+  }
+  async function ignoreFailures() {
+    const ids = Object.values(selected).filter(Boolean);
+    if (ids.length === 0) { setMessage('请勾选要忽略的失败记录。'); return; }
+    if (!window.confirm(`确认忽略 ${ids.length} 条失败记录？忽略后将从失败列表中移除。`)) return;
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.post('admin/notification-failures/ignore', { recipientIds: ids, reason: 'MANUAL_IGNORE' });
+      setMessage(`已忽略 ${result.ignored} 条失败记录。`);
+      setSelected({});
+      failures.refresh(); summary.refresh();
+    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+  }
+  return <>
+    <PageHeader eyebrow="平台系统" title="通知事件与失败运营" description="按 eventKey 投递事件并自动抑制重复投递；查看、批量重试和忽略失败投递。" actions={<button className="secondary-button" onClick={() => { summary.refresh(); events.refresh(); failures.refresh(); }}>刷新</button>} />
+    <Panel title="概要指标">
+      {summary.loading ? <Loading /> : summary.error ? <ErrorState error={summary.error} onRetry={summary.refresh} /> : summary.data ? <div className="metrics">
+        <MetricCard label="事件总数" value={summary.data.total} hint="已记录的事件源" />
+        <MetricCard label="投递总数" value={summary.data.totalRecipients} hint="所有 recipient 记录" tone="teal" />
+        <MetricCard label="当前失败" value={summary.data.failed} hint="delivery_status=FAILED 且未忽略" tone="orange" />
+        <MetricCard label="已忽略" value={summary.data.suppressed} hint="已手动忽略的失败" tone="pink" />
+      </div> : null}
+    </Panel>
+    <div className="row-actions">
+      <button className={tab === 'dispatch' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('dispatch')}>事件投递</button>
+      <button className={tab === 'events' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('events')}>事件列表</button>
+      <button className={tab === 'failures' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('failures')}>失败运营（{summary.data?.failed ?? 0}）</button>
+    </div>
+    {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
+    {tab === 'dispatch' ? (
+      <div className="split">
+        <Panel title="投递事件（按 eventKey 抑制重复）">
+          <form onSubmit={dispatch}>
+            <label>eventKey（4-128 字符）<input value={eventForm.eventKey} placeholder="enrollment-2024-001-abc" onChange={(e) => setEventForm({ ...eventForm, eventKey: e.target.value })} required /></label>
+            <label>eventType<input value={eventForm.eventType} placeholder="STUDENT_ENROLLED" onChange={(e) => setEventForm({ ...eventForm, eventType: e.target.value })} required /></label>
+            <label>标题<input value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} required /></label>
+            <label>内容<textarea value={eventForm.body} onChange={(e) => setEventForm({ ...eventForm, body: e.target.value })} required /></label>
+            <label>角色（逗号分隔）<input value={eventForm.audience} placeholder="TEACHER,STUDENT" onChange={(e) => setEventForm({ ...eventForm, audience: e.target.value })} required /></label>
+            <label>机构 ID（留空 = 全平台）<select value={eventForm.orgId} onChange={(e) => setEventForm({ ...eventForm, orgId: e.target.value })}><option value="">全平台</option>{(organizations.data?.items || []).map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}</select></label>
+            <div className="row-actions">
+              <button type="submit" className="primary-button" disabled={busy}>{busy ? '投递中…' : '投递事件'}</button>
+              <button type="button" className="secondary-button" onClick={reset}>重置</button>
+            </div>
+          </form>
+        </Panel>
+        <Panel title="最近投递结果">
+          {lastEvent ? <>
+            <div className="metrics">
+              <MetricCard label="事件 ID" value={(lastEvent.id || '').slice(0, 12) + '…'} hint={lastEvent.eventKey} />
+              <MetricCard label="状态" value={lastEvent.status} hint={lastEvent.eventType} tone="teal" />
+              <MetricCard label="已投递" value={lastEvent.delivered ?? 0} hint="成功插入 recipient 记录" tone="orange" />
+              <MetricCard label="已抑制" value={lastEvent.suppressed ?? 0} hint="同 eventKey 已存在" tone="pink" />
+            </div>
+            <p className="muted">事件总目标：{lastEvent.totalTargets}</p>
+          </> : <Empty title="尚未投递事件" body="填写左侧表单，提交后系统会按 eventKey 抑制重复投递。" />}
+        </Panel>
+      </div>
+    ) : null}
+    {tab === 'events' ? <Panel title={`事件列表（共 ${events.data?.total ?? 0}）`}>
+      {events.loading ? <Loading /> : events.error ? <ErrorState error={events.error} onRetry={events.refresh} /> : events.data?.items.length ? <div className="table-wrap"><table><thead><tr><th>eventKey</th><th>类型</th><th>状态</th><th>机构</th><th>标题</th><th>创建时间</th></tr></thead><tbody>{events.data.items.map((item) => <tr key={item.id}>
+        <td><code>{item.eventKey}</code></td>
+        <td>{item.eventType}</td>
+        <td><Status value={item.status} /></td>
+        <td>{item.orgId ? item.orgId.slice(0, 12) + '…' : '平台'}</td>
+        <td>{item.title}</td>
+        <td>{formatDate(item.createdAt)}</td>
+      </tr>)}</tbody></table></div> : <Empty title="暂无事件记录" />}
+    </Panel> : null}
+    {tab === 'failures' ? <>
+      <Panel title="筛选">
+        <div className="form-grid">
+          <label>机构<select value={failFilters.orgId} onChange={(e) => setFailFilters({ ...failFilters, orgId: e.target.value })}><option value="">全部机构</option>{(organizations.data?.items || []).map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}</select></label>
+          <label>事件类型（kind）<input value={failFilters.eventType} placeholder="NOTICE / ANNOUNCEMENT" onChange={(e) => setFailFilters({ ...failFilters, eventType: e.target.value })} /></label>
+        </div>
+        <div className="row-actions">
+          <button className="primary-button" disabled={busy || Object.values(selected).filter(Boolean).length === 0} onClick={retryFailures}>重试选中（{Object.values(selected).filter(Boolean).length}）</button>
+          <button className="secondary-button" disabled={busy || Object.values(selected).filter(Boolean).length === 0} onClick={ignoreFailures}>忽略选中</button>
+        </div>
+      </Panel>
+      <Panel title={`失败投递（${failures.data?.total ?? 0}）`}>
+        {failures.loading ? <Loading /> : failures.error ? <ErrorState error={failures.error} onRetry={failures.refresh} /> : failures.data?.items.length ? <div className="table-wrap"><table><thead><tr><th></th><th>用户</th><th>机构</th><th>通知</th><th>原因</th><th>重试</th><th>创建时间</th></tr></thead><tbody>{failures.data.items.map((item) => <tr key={item.id}>
+          <td><input type="checkbox" checked={!!selected[item.id]} onChange={(e) => setSelected({ ...selected, [item.id]: e.target.checked ? item.id : null })} /></td>
+          <td>{item.userName}<div className="muted">{item.userLogin}</div></td>
+          <td>{item.orgName || '平台'}</td>
+          <td>{item.title}<div className="muted"><code>{item.kind}</code></div></td>
+          <td><span className="status danger">{item.failureCode}</span><div className="muted">{item.failureReason}</div></td>
+          <td>{item.retryCount}/{item.maxRetries}</td>
+          <td>{formatDate(item.createdAt)}</td>
+        </tr>)}</tbody></table></div> : <Empty title="当前无失败投递" />}
+      </Panel>
+    </> : null}
+  </>;
+}
+
 function PlatformWorks({ api }) {
   const organizations = useData(() => api.get('admin/organizations'), [api]);
   const [filters, setFilters] = useState({ status: '', orgId: '', search: '' });
@@ -821,7 +964,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="/audit" element={<PlatformAudit api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="/audit" element={<PlatformAudit api={api} />} /><Route path="/notifications" element={<PlatformNotifications api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

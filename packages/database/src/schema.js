@@ -573,16 +573,44 @@ CREATE TABLE IF NOT EXISTS notification_recipients (
   id TEXT PRIMARY KEY,
   notification_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
+  event_key TEXT,
   delivery_status TEXT NOT NULL DEFAULT 'DELIVERED' CHECK (delivery_status IN ('PENDING','DELIVERED','FAILED')),
   delivered_at TEXT,
   read_at TEXT,
   failure_code TEXT,
+  failure_reason TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  max_retries INTEGER NOT NULL DEFAULT 3,
+  ignored INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_recipient_unique ON notification_recipients(notification_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_notification_recipient_user_read ON notification_recipients(user_id, read_at, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_recipient_event_key ON notification_recipients(event_key, user_id);
+CREATE INDEX IF NOT EXISTS idx_notification_recipient_failed ON notification_recipients(user_id, delivery_status, ignored) WHERE delivery_status='FAILED';
+
+CREATE TABLE IF NOT EXISTS notification_events (
+  id TEXT PRIMARY KEY,
+  event_key TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  org_id TEXT,
+  audience TEXT NOT NULL DEFAULT '{}',
+  target_url TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','DELIVERED','SUPPRESSED','FAILED')),
+  suppressed_at TEXT,
+  suppress_reason TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_events_key ON notification_events(event_key);
+CREATE INDEX IF NOT EXISTS idx_notification_events_status ON notification_events(status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS promo_materials (
   id TEXT PRIMARY KEY,
@@ -806,6 +834,40 @@ export function transaction(fn) {
   try { const result = fn(); db.exec('COMMIT'); return result; }
   catch (error) { db.exec('ROLLBACK'); throw error; }
 }
+
+// P4-C03 migration: notification event deduplication, failure retry, ignore/archive
+try { db.exec("ALTER TABLE notification_recipients ADD COLUMN event_key TEXT"); } catch (_) {}
+try { db.exec("ALTER TABLE notification_recipients ADD COLUMN failure_reason TEXT"); } catch (_) {}
+try { db.exec("ALTER TABLE notification_recipients ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+try { db.exec("ALTER TABLE notification_recipients ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3"); } catch (_) {}
+try { db.exec("ALTER TABLE notification_recipients ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_notification_recipient_event_key ON notification_recipients(event_key, user_id)"); } catch (_) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_notification_recipient_failed ON notification_recipients(user_id, delivery_status, ignored) WHERE delivery_status='FAILED'"); } catch (_) {}
+
+const _eventsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='notification_events'").get();
+if (!_eventsTable) {
+  db.exec(`CREATE TABLE IF NOT EXISTS notification_events (
+    id TEXT PRIMARY KEY,
+    event_key TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    org_id TEXT,
+    audience TEXT NOT NULL DEFAULT '{}',
+    target_url TEXT,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','DELIVERED','SUPPRESSED','FAILED')),
+    suppressed_at TEXT,
+    suppress_reason TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_events_key ON notification_events(event_key)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_notification_events_status ON notification_events(status, created_at DESC)");
+}
+
 export function initDatabase() { return db; }
 
 const PEPPER = process.env.AUTH_PEPPER || 'p0-local-pepper';

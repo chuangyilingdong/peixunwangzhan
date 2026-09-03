@@ -720,7 +720,7 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 实现范围：账号、机构、课程、积分、发布、下架、权限、导出、配置修改等关键操作写入并支持受控查询。
   - 验收：日志含操作者、时间、对象、前后状态、来源；敏感字段脱敏；日志不可由普通用户删改。
   - 完成：GET /admin/audit-logs（跨机构/动作/操作者/目标/时间/IP 检索）、GET /admin/audit-logs/summary（按动作/操作者/机构分组汇总）、GET /admin/audit-logs/export（UTF-8 BOM CSV，含分页/过滤/limit 守卫）、GET /admin/audit-logs/actions（动作字典）；机构端 GET /api/org/audit-logs（受限视图）；平台端新增「操作审计」页面集成全部功能；P4-C02 专项 38/38 通过，P3 回归 48/48 通过。
-- [-] **P4-C03 通知领域模型与投递中心**
+- [x] **P4-C03 通知领域模型与投递中心**
   - 优先级：P1
   - 实现范围：站内信、公告、任务提醒统一数据模型、已读、跳转、定时、失败重试；后续可扩展邮件 / 短信 / 微信。
   - 验收：同一事件不会无限重复通知；用户可读取自己接收范围内的消息；投递失败可追踪。
@@ -728,7 +728,15 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - [x] 已建立通知主表、接收者投递表和模板表，支持草稿、立即 / 定时发布、撤回、按机构 / 角色投递、置顶、跳转、已读、模板与唯一投递约束。
     - [x] 进程内 15 秒调度 + 收件箱请求补偿扫描已落地；到期投递使用原发送人写审计，不冒用触发扫描的用户。
     - [x] 平台 / 机构 / 学生收件箱及权限隔离已通过第二批 `35 pass / 0 fail` API 验收。
-    - [ ] 剩余：高可用异步队列、失败重试与失败状态运营、邮件 / 短信 / 微信渠道。
+  - 完成记录（2026-09-03，本批）：
+    - [x] 通知 `notification_recipients` 增加 `event_key` / `failure_reason` / `retry_count` / `max_retries` / `ignored` 列与对应索引；新增 `notification_events` 表保存事件源及 `event_key`/`event_type`/状态。
+    - [x] 后端新增 `POST /api/admin/notification-events` 事件投递：同 `event_key` 重复投递返回 `409 EVENT_KEY_DUPLICATE`，同一用户在抑制窗口内被自动去重。
+    - [x] 新增 `GET /api/admin/notification-events/summary` 汇总、`GET /api/admin/notification-events?eventKey&status` 列表。
+    - [x] 新增 `GET /api/admin/notification-failures` 失败列表（含 `orgId`/`eventType` 过滤），以及 `POST /retry` 与 `POST /ignore` 批量运营，超过 `max_retries` 自动跳过。
+    - [x] 平台端 `/notifications` 页面集成「事件投递 / 事件列表 / 失败运营」三个 Tab，支持批量重试与忽略。
+    - [x] 审计动作 `NOTIFICATION_EVENT_DISPATCH` / `NOTIFICATION_FAILURE_RETRY` / `NOTIFICATION_FAILURE_IGNORE`。
+    - [x] 验收：P4-C03 临时 SQLite 专项 `39 pass / 0 fail`，覆盖 401/403 越权、事件投递 / 去重 / 验证、汇总与列表过滤、失败列表、批量重试与忽略、超过最大次数跳过、500+ 限制、事件表存在与列结构、API 回归不受影响；P3 回归 `48 pass / 0 fail`；后端语法、四端生产构建与 `git diff --check` 均通过。
+  - 剩余：高可用异步队列、邮件 / 短信 / 微信渠道。
 - [ ] **P4-C04 统一文件元数据与访问授权模型**
   - 优先级：P0
   - 实现范围：文件归属、类型、大小、hash、审核状态、可见范围、有效期、下载 / 预览权限，为 P6 对象存储接入做准备。
