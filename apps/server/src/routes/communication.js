@@ -12,6 +12,7 @@ import {
   rows,
   transaction,
 } from '../lib.js';
+import { hostname } from 'node:os';
 
 const NOTIFICATION_ROLES = new Set(['ORG_ADMIN', 'TEACHER', 'STUDENT']);
 const NOTIFICATION_KINDS = new Set(['NOTICE', 'ANNOUNCEMENT', 'REMINDER']);
@@ -110,6 +111,23 @@ function normalizeMaterial(value) {
   };
 }
 
+function normalizeLead(value) {
+  if (!value) return null;
+  return {
+    id: value.id,
+    orgName: value.org_name,
+    contactName: value.contact_name,
+    contactPhone: value.contact_phone,
+    intent: value.intent || '',
+    notes: value.notes || '',
+    status: value.status,
+    adminNotes: value.admin_notes || '',
+    assignedTo: value.assigned_to || null,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+}
+
 function validateRoles(value, { defaultRoles = ['ORG_ADMIN', 'TEACHER', 'STUDENT'] } = {}) {
   const roles = value === undefined ? defaultRoles : value;
   if (!Array.isArray(roles) || !roles.length || roles.some((item) => typeof item !== 'string' || !NOTIFICATION_ROLES.has(item))) {
@@ -187,19 +205,313 @@ function dispatchRecipientEvent({ userId, notificationId, eventKey, maxRetries }
   return { suppressed: false, delivered: true };
 }
 
+// ---------- 自动提醒模块 ----------
+/**
+ * 向指定用户投递一条通知提醒（内部实现：立即创建 PUBLISHED 通知，写 recipients → DELIVERED）。
+ * eventKey 用于去重，同一 userId + eventKey 在 24h 内不重复投递。
+ * @param {object} opts
+ * @param {string} opts.title        - 通知标题
+ * @param {string} opts.body         - 通知正文
+ * @param {string} [opts.kind='REMINDER'] - NOTICE | ANNOUNCEMENT | REMINDER
+ * @param {string} opts.targetUserId  - 接收人 user id
+ * @param {string|null} [opts.targetOrgId]  - 所属机构 id（自动推断）
+ * @param {string|null} [opts.eventKey]     - 去重 key（如 'WORK_REVIEW_COMPLETED:workId'）
+ * @param {string|null} [opts.targetUrl]    - 点击跳转 URL
+ * @returns {{ notificationId: string|null, recipientId: string|null, suppressed: boolean, reason?: string }}
+ */
+export function scheduleReminder({ title, body, kind = 'REMINDER', targetUserId, targetOrgId = null, eventKey = null, targetUrl = null }) {
+  // 1. 验证用户存在
+  const user = row('SELECT id, org_id, status FROM users WHERE id=? AND deleted_at IS NULL', [targetUserId]);
+  if (!user || user.status !== 'ACTIVE') return { notificationId: null, recipientId: null, suppressed: false, reason: 'USER_NOT_FOUND_OR_DISABLED' };
+  const orgId = targetOrgId || user.org_id;
+  // 2. 去重检查（24h 内同类事件不重复投递）
+  if (eventKey) {
+    const prior = row(
+      "SELECT id FROM notification_recipients WHERE event_key=? AND user_id=? AND delivery_status='DELIVERED' AND created_at>=? ORDER BY created_at DESC LIMIT 1",
+      [eventKey, targetUserId, new Date(Date.now() - 24 * 3600 * 1000).toISOString()],
+    );
+    if (prior) return { notificationId: null, recipientId: prior.id, suppressed: true, reason: 'event_dedup' };
+  }
+  // 3. 创建通知（scope 自动推断）
+  const now = nowIso();
+  const notificationId = id('noti');
+  const scopeType = orgId ? 'ORG' : 'PLATFORM';
+  q(
+    "INSERT INTO notifications(id,scope_type,org_id,sender_id,title,body,kind,target_url,audience,status,publish_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    [notificationId, scopeType, orgId || null, targetUserId, String(title).slice(0, 200), String(body).slice(0, 1000), kind, targetUrl || null, '{}', 'PUBLISHED', now, now, now],
+  );
+  // 4. 复用 dispatchRecipientEvent 写 recipients，再查 recipientId
+  dispatchRecipientEvent({ userId: targetUserId, notificationId, eventKey, maxRetries: 3 });
+  const recipient = row('SELECT id FROM notification_recipients WHERE notification_id=? AND user_id=?', [notificationId, targetUserId]);
+  return { notificationId, recipientId: recipient?.id || null, suppressed: false };
+}
+
 function markRecipientFailed(recipientId, code, reason) {
   const now = nowIso();
   q('UPDATE notification_recipients SET delivery_status=\'FAILED\', failure_code=?, failure_reason=?, delivered_at=NULL WHERE id=?', [code || 'UNKNOWN', reason || code || '投递失败', recipientId]);
+  // 自动入队：同一接收人已有活跃 job 时跳过
+  const recipient = row('SELECT * FROM notification_recipients WHERE id=?', [recipientId]);
+  if (recipient) {
+    enqueueDispatchJob({
+      recipientId,
+      notificationId: recipient.notification_id,
+      userId: recipient.user_id,
+      eventKey: recipient.event_key,
+      maxAttempts: 3,
+    });
+  }
 }
 
-function retryRecipient(recipientId) {
+export function retryRecipient(recipientId) {
   const now = nowIso();
-  const row1 = row('SELECT retry_count, max_retries FROM notification_recipients WHERE id=?', [recipientId]);
+  const row1 = row('SELECT retry_count, max_retries, notification_id, user_id, event_key FROM notification_recipients WHERE id=?', [recipientId]);
   if (!row1) return { retried: false, reason: 'NOT_FOUND' };
   if (row1.retry_count >= row1.max_retries) return { retried: false, reason: 'MAX_RETRIES_EXCEEDED' };
   q('UPDATE notification_recipients SET delivery_status=\'DELIVERED\', failure_code=NULL, failure_reason=NULL, delivered_at=?, retry_count=retry_count+1 WHERE id=?', [now, recipientId]);
+  // 自动入队：让 worker 真正执行重试投递
+  enqueueDispatchJob({
+    recipientId,
+    notificationId: row1.notification_id,
+    userId: row1.user_id,
+    eventKey: row1.event_key,
+    maxAttempts: 3,
+  });
   return { retried: true };
 }
+
+// ---------- 投递队列模块（notification_dispatch_jobs） ----------
+const WORKER_ID = `${process.pid}-${hostname().slice(0, 16)}`;
+
+/**
+ * 将失败接收人入队（幂等 UPSERT），同一 recipient_id 在 PENDING/IN_PROGRESS 时不重复入队。
+ * 在 markRecipientFailed 内部事务中调用，或手动重试时调用。
+ */
+export function enqueueDispatchJob({ recipientId, notificationId, userId, eventKey, maxAttempts = 3 }) {
+  const now = nowIso();
+  const existing = row("SELECT id, status FROM notification_dispatch_jobs WHERE recipient_id=? AND status IN ('PENDING','IN_PROGRESS')", [recipientId]);
+  if (existing) return { enqueued: false, reason: 'ALREADY_ACTIVE', jobId: existing.id };
+  const jobId = id('ndj');
+  q(
+    "INSERT INTO notification_dispatch_jobs(id,recipient_id,notification_id,user_id,event_key,attempt,max_attempts,status,next_run_at,created_at,updated_at) VALUES (?,?,?,?,?,0,?,?,?,?,?)",
+    [jobId, recipientId, notificationId, userId, eventKey || null, maxAttempts, 'PENDING', now, now, now],
+  );
+  return { enqueued: true, jobId };
+}
+
+/**
+ * 计算指数退避下次执行时间（秒），带随机抖动。
+ * 策略：min(60s × 2^attempt + jitter(±15%), 30min)
+ */
+function backoffSeconds(attempt) {
+  const base = Math.min(60 * Math.pow(2, attempt), 1800);
+  const jitter = base * 0.15 * (Math.random() * 2 - 1);
+  return Math.max(1, Math.round(base + jitter));
+}
+
+/**
+ * Worker 拉取待执行任务（原子 SELECT + UPDATE 返回）。
+ * @param {string} workerId - 当前 worker 标识
+ * @param {number} limit - 每次最多拉取任务数
+ * @returns {Array} claimed jobs
+ */
+function claimDispatchJobs(workerId, limit = 10) {
+  const now = nowIso();
+  // 原子：在同一事务内查找并锁定，避免多 worker 重复拉取
+  const candidates = rows(
+    "SELECT * FROM notification_dispatch_jobs WHERE status='PENDING' AND next_run_at<=? ORDER BY next_run_at ASC LIMIT ?",
+    [now, limit],
+  );
+  if (!candidates.length) return [];
+  const ids = candidates.map((r) => r.id);
+  const placeholders = ids.map(() => '?').join(',');
+  q(
+    `UPDATE notification_dispatch_jobs SET status='IN_PROGRESS',locked_by=?,locked_at=?,updated_at=? WHERE id IN (${placeholders}) AND status='PENDING'`,
+    [workerId, now, now, ...ids],
+  );
+  // 返回真正被锁定的行（并发时可能部分失败）
+  return rows("SELECT * FROM notification_dispatch_jobs WHERE locked_by=? AND locked_at=? AND status='IN_PROGRESS'", [workerId, now]);
+}
+
+/**
+ * 投递任务成功：标记 job 为 SUCCEEDED，清除 recipient 的 FAILED 状态。
+ */
+function markJobSucceeded(jobId, workerId) {
+  const now = nowIso();
+  const job = row('SELECT * FROM notification_dispatch_jobs WHERE id=? AND locked_by=? AND status=?', [jobId, workerId, 'IN_PROGRESS']);
+  if (!job) return { succeeded: false, reason: 'NOT_FOUND_OR_NOT_LOCKED' };
+  q("UPDATE notification_dispatch_jobs SET status='SUCCEEDED',locked_by=NULL,locked_at=NULL,updated_at=? WHERE id=?", [now, jobId]);
+  q("UPDATE notification_recipients SET delivery_status='DELIVERED',failure_code=NULL,failure_reason=NULL,delivered_at=?,retry_count=? WHERE id=?", [now, job.attempt + 1, job.recipient_id]);
+  return { succeeded: true, jobId: job.id };
+}
+
+/**
+ * 投递任务失败：按指数退避重排或进入死信。
+ */
+function markJobFailed(jobId, workerId, errorCode, errorMessage) {
+  const now = nowIso();
+  const job = row('SELECT * FROM notification_dispatch_jobs WHERE id=? AND locked_by=? AND status=?', [jobId, workerId, 'IN_PROGRESS']);
+  if (!job) return { failed: false, reason: 'NOT_FOUND_OR_NOT_LOCKED' };
+  const nextAttempt = job.attempt + 1;
+  const nextRunAt = new Date(Date.now() + backoffSeconds(nextAttempt) * 1000).toISOString();
+  if (nextAttempt >= job.max_attempts) {
+    q("UPDATE notification_dispatch_jobs SET status='DEAD_LETTER',locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,updated_at=? WHERE id=?", [errorCode || 'MAX_RETRIES', errorMessage || '已达到最大重试次数', now, jobId]);
+    return { failed: true, jobId: job.id, status: 'DEAD_LETTER' };
+  }
+  q("UPDATE notification_dispatch_jobs SET status='PENDING',attempt=?,locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,next_run_at=?,updated_at=? WHERE id=?", [nextAttempt, errorCode || 'UNKNOWN', errorMessage || '投递失败', nextRunAt, now, jobId]);
+  return { failed: true, jobId: job.id, status: 'PENDING', nextRunAt, attempt: nextAttempt };
+}
+
+/**
+ * 单次 worker 扫描：拉取任务 → 评估是否可投递 → 成功或失败。
+ * 在当前实现中，「投递」本质上是清除 FAILED 状态；若无法投递（如用户已删除），标记失败。
+ */
+function runWorkerTick(workerId) {
+  const claimed = claimDispatchJobs(workerId, 10);
+  if (!claimed.length) return { processed: 0 };
+  let succeeded = 0; let failed = 0;
+  for (const job of claimed) {
+    // 检查关联 recipient 是否仍然存在且未被忽略
+    const recipient = row('SELECT * FROM notification_recipients WHERE id=?', [job.recipient_id]);
+    if (!recipient || recipient.ignored) {
+      // 接收人已不存在或被忽略：直接成功（无需投递）
+      markJobSucceeded(job.id, workerId);
+      succeeded += 1;
+      continue;
+    }
+    if (recipient.delivery_status !== 'FAILED') {
+      // 状态不是 FAILED，说明已被其他路径处理（如手动重试成功），标记成功
+      markJobSucceeded(job.id, workerId);
+      succeeded += 1;
+      continue;
+    }
+    // 尝试重新投递：更新为 DELIVERED
+    const now = nowIso();
+    const upd = q("UPDATE notification_recipients SET delivery_status='DELIVERED',failure_code=NULL,failure_reason=NULL,delivered_at=?,retry_count=? WHERE id=? AND delivery_status='FAILED'", [now, job.attempt + 1, job.recipient_id]);
+    if (upd.changes) {
+      markJobSucceeded(job.id, workerId);
+      succeeded += 1;
+    } else {
+      markJobFailed(job.id, workerId, 'REDELIVERY_FAILED', '无法更新接收人状态');
+      failed += 1;
+    }
+  }
+  return { processed: claimed.length, succeeded, failed };
+}
+
+/**
+ * 释放当前 worker 持有的 IN_PROGRESS 任务（进程退出时调用）。
+ */
+export function releaseWorkerJobs(workerId) {
+  const now = nowIso();
+  q("UPDATE notification_dispatch_jobs SET status='PENDING',locked_by=NULL,locked_at=NULL,updated_at=? WHERE locked_by=? AND status='IN_PROGRESS'", [now, workerId]);
+}
+
+/**
+ * 汇总队列状态（供 summary 端点使用）。
+ */
+export function summarizeQueue() {
+  const pending = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='PENDING'")?.n || 0);
+  const inProgress = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='IN_PROGRESS'")?.n || 0);
+  const failed = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='FAILED'")?.n || 0);
+  const deadLetter = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='DEAD_LETTER'")?.n || 0);
+  const succeeded = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='SUCCEEDED'")?.n || 0);
+  const total = pending + inProgress + failed + deadLetter + succeeded;
+  const byStatus = rows("SELECT status, COUNT(*) n FROM notification_dispatch_jobs GROUP BY status").map((item) => ({ status: item.status, count: Number(item.n) }));
+  return { total, pending, inProgress, failed, deadLetter, succeeded, byStatus };
+}
+
+/**
+ * 列出死信（供 dead-letters 端点使用）。
+ */
+function listDeadLetters({ limit = 50, offset = 0 }) {
+  const items = rows("SELECT j.*, n.title, n.body, u.display_name user_name, u.login user_login FROM notification_dispatch_jobs j LEFT JOIN notifications n ON n.id=j.notification_id LEFT JOIN users u ON u.id=j.user_id WHERE j.status='DEAD_LETTER' ORDER BY j.updated_at DESC LIMIT ? OFFSET ?", [limit, offset]);
+  const total = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='DEAD_LETTER'")?.n || 0);
+  return {
+    items: items.map((item) => ({
+      id: item.id,
+      recipientId: item.recipient_id,
+      notificationId: item.notification_id,
+      userId: item.user_id,
+      eventKey: item.event_key,
+      attempt: item.attempt,
+      maxAttempts: item.max_attempts,
+      lastErrorCode: item.last_error_code,
+      lastErrorMessage: item.last_error_message,
+      nextRunAt: item.next_run_at,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      title: item.title,
+      body: item.body,
+      userName: item.user_name,
+      userLogin: item.user_login,
+    })),
+    total,
+    limit,
+    offset,
+  };
+}
+
+/**
+ * 恢复死信（批量重新入队，供 requeue 端点使用）。
+ */
+export function requeueDeadLetters(jobIds, reason) {
+  const now = nowIso();
+  const nextRunAt = now; // 立即可执行
+  let requeued = 0; let skipped = 0;
+  for (const jid of jobIds) {
+    const job = row("SELECT * FROM notification_dispatch_jobs WHERE id=? AND status='DEAD_LETTER'", [jid]);
+    if (!job) { skipped += 1; continue; }
+    // 重置 attempt 和 max_attempts，让其重新走完整重试流程
+    q("UPDATE notification_dispatch_jobs SET status='PENDING',attempt=0,last_error_code=NULL,last_error_message=NULL,next_run_at=?,updated_at=? WHERE id=?", [nextRunAt, now, jid]);
+    requeued += 1;
+  }
+  return { requeued, skipped };
+}
+
+// 启动独立 worker 调度器（每 5 秒扫描一次）
+let workerInterval = null;
+let workerStarted = false;
+
+export function startNotificationWorker() {
+  if (workerStarted) return;
+  workerStarted = true;
+  workerInterval = setInterval(() => {
+    try { runWorkerTick(WORKER_ID); }
+    catch (error) { console.error('[NOTIFICATION WORKER ERROR]', error); }
+  }, 5000);
+  workerInterval.unref();
+  // 进程退出时释放持有的任务
+  process.on('exit', () => releaseWorkerJobs(WORKER_ID));
+  process.on('SIGHUP', () => releaseWorkerJobs(WORKER_ID));
+  process.on('SIGTERM', () => releaseWorkerJobs(WORKER_ID));
+  process.on('SIGINT', () => releaseWorkerJobs(WORKER_ID));
+}
+
+// 顶层副作用：模块加载即启动 worker
+startNotificationWorker();
+
+// P4-O09 自动提醒扫赻器：低余额 + 合同到期（每 5 分钟）
+import { scanLowBalanceOrgs, scanContractExpiryOrgs } from '../services/reminderScheduler.js';
+
+let reminderInterval = null;
+let reminderStarted = false;
+
+export function startReminderScheduler() {
+  if (reminderStarted) return;
+  reminderStarted = true;
+  reminderInterval = setInterval(() => {
+    try {
+      const low = scanLowBalanceOrgs();
+      const exp = scanContractExpiryOrgs();
+      if (low.length || exp.length) {
+        console.log(`[REMINDER SCAN] low=${low.length} contract_expiry=${exp.length}`);
+      }
+    } catch (error) { console.error('[REMINDER SCAN ERROR]', error); }
+  }, 5 * 60 * 1000);
+  reminderInterval.unref();
+}
+
+startReminderScheduler();
 
 function selectAudienceUsers(audience, orgId) {
   const params = [...audience.roles];
@@ -386,15 +698,96 @@ function validateMaterialBody(body, existing = null) {
 
 export function handlePublicCommunication(ctx) {
   const { pathname, method } = ctx;
-  if (pathname !== '/api/public/downloads' || method !== 'GET') return null;
-  const releases = latestDownloadReleases();
+  if (pathname === '/api/public/downloads' && method === 'GET') {
+    const releases = latestDownloadReleases();
+    return {
+      generatedAt: nowIso(),
+      status: releases.length ? 'PARTIAL' : 'NOT_CONFIGURED',
+      statement: releases.length ? '以下仅展示平台已配置的真实客户端版本。' : '平台尚未配置真实客户端安装包，不提供虚假下载链接。',
+      items: releases,
+      byPlatform: Object.fromEntries(releases.map((item) => [item.platform, item])),
+      webCompatibility: ['Chrome / Edge 最新两个稳定版本', 'Safari 17+（macOS）', '课堂依赖稳定网络；建议机构机房提前检查'],
+    };
+  }
+
+  // P5-W02: 演示预约（公开 POST，无需认证）
+  if (pathname === '/api/public/contact' && method === 'POST') {
+    const body = ctx.body || {};
+    const orgName = nonEmptyString(body.orgName, '机构/学校名称', { max: 200 });
+    const contactName = nonEmptyString(body.contactName, '联系人', { max: 100 });
+    const contactPhone = nonEmptyString(body.contactPhone, '联系电话', { max: 20 });
+    if (!/^1[3-9]\d{9}$/.test(contactPhone)) {
+      throw errors.badRequest('手机号格式无效', 'INVALID_PHONE_FORMAT');
+    }
+    const intent = body.intent ? String(body.intent).trim().slice(0, 200) : '';
+    const notes = body.notes ? String(body.notes).trim().slice(0, 2000) : '';
+    const leadId = id('lead');
+    const now = nowIso();
+    q("INSERT INTO leads(id,org_name,contact_name,contact_phone,intent,notes,status,admin_notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      [leadId, orgName, contactName, contactPhone, intent, notes, 'NEW', '', now, now]);
+    audit(ctx, 'LEAD_CREATE', 'LEAD', leadId, null, { orgName, intent }, { orgId: null });
+    return { id: leadId, status: 'NEW', createdAt: now };
+  }
+
+  // P5-W04: 公开作品列表
+  if (pathname === '/api/public/works' && method === 'GET') {
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 60, fallback: 20 });
+    const items = rows(`
+      SELECT work.id, work.title, work.description, work.canvas_snapshot,
+             work.featured_at, work.submitted_at,
+             user.display_name AS student_name,
+             user.privacy_showcase_anonymous AS student_anon,
+             organization.name AS org_name
+      FROM works work
+      JOIN users user ON user.id=work.student_id
+      LEFT JOIN organizations organization ON organization.id=work.org_id
+      WHERE work.is_public=1 AND work.status='PUBLISHED' AND work.share_token IS NOT NULL
+        AND work.copyright_confirmed_at IS NOT NULL
+      ORDER BY work.featured_at DESC NULLS LAST, work.submitted_at DESC
+      LIMIT ?
+    `, [limit]).map((row) => publicWorkRow(row));
+    return { items, total: items.length };
+  }
+
+  // P5-W04: 公开作品详情
+  const publicWorkMatch = pathname.match(/^\/api\/public\/works\/([\w-]+)$/);
+  if (publicWorkMatch && method === 'GET') {
+    const work = row(`
+      SELECT work.id, work.title, work.description, work.canvas_snapshot,
+             work.featured_at, work.submitted_at, work.share_token,
+             user.display_name AS student_name,
+             user.privacy_showcase_anonymous AS student_anon,
+             organization.name AS org_name
+      FROM works work
+      JOIN users user ON user.id=work.student_id
+      LEFT JOIN organizations organization ON organization.id=work.org_id
+      WHERE work.share_token=? AND work.is_public=1
+    `, [publicWorkMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
+    return publicWorkRow(work);
+  }
+
+  return null;
+}
+
+function publicWorkRow(row) {
+  const canvas = parseJson(row.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
+  // 脱敏作者信息
+  let studentName = '小创作者';
+  if (!row.student_anon && row.student_name) {
+    const trimmed = String(row.student_name).trim();
+    if (trimmed) studentName = trimmed.charAt(0) + '同学';
+  }
   return {
-    generatedAt: nowIso(),
-    status: releases.length ? 'PARTIAL' : 'NOT_CONFIGURED',
-    statement: releases.length ? '以下仅展示平台已配置的真实客户端版本。' : '平台尚未配置真实客户端安装包，不提供虚假下载链接。',
-    items: releases,
-    byPlatform: Object.fromEntries(releases.map((item) => [item.platform, item])),
-    webCompatibility: ['Chrome / Edge 最新两个稳定版本', 'Safari 17+（macOS）', '课堂依赖稳定网络；建议机构机房提前检查'],
+    id: row.id,
+    title: row.title,
+    description: row.description || '',
+    canvasSnapshot: canvas,
+    featured: Boolean(row.featured_at),
+    submittedAt: row.submitted_at,
+    publicUrl: row.share_token ? `/works/${row.share_token}` : null,
+    orgName: row.org_name || null,
+    studentName,
   };
 }
 
@@ -515,6 +908,18 @@ export async function handleAdminCommunication(ctx) {
     const items = rows('SELECT * FROM client_download_releases ORDER BY platform, channel, published_at DESC, created_at DESC').map(normalizeDownloadRelease);
     return { items, total: items.length };
   }
+  // P5-W02: 商机管理（leads）
+  if (part === '/leads' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const status = ctx.search.get('status');
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    const where = ['1=1']; const params = [];
+    if (status && ['NEW','CONTACTED','DEMO_SCHEDULED','CONVERTED','CLOSED'].includes(status)) {
+      where.push('status=?'); params.push(status);
+    }
+    const items = rows(`SELECT * FROM leads WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`, [...params, limit]).map((row) => normalizeLead(row));
+    return { items, total: items.length };
+  }
   if (part === '/client-releases' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const platform = String(ctx.body?.platform || '').toUpperCase();
@@ -549,6 +954,44 @@ export async function handleAdminCommunication(ctx) {
     q('UPDATE client_download_releases SET published_at=?,updated_at=? WHERE id=?', [action === 'PUBLISH' ? now : null, now, release.id]);
     audit(ctx, action === 'PUBLISH' ? 'PLATFORM_CLIENT_RELEASE_PUBLISH' : 'PLATFORM_CLIENT_RELEASE_UNPUBLISH', 'CLIENT_DOWNLOAD_RELEASE', release.id, normalizeDownloadRelease(release), { published: action === 'PUBLISH' }, { orgId: null });
     return normalizeDownloadRelease(row('SELECT * FROM client_download_releases WHERE id=?', [release.id]));
+  }
+  // P5-W02: 商机详情 + 状态更新
+  let leadMatch = part.match(/^\/leads\/([^/]+)$/);
+  if (leadMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const lead = row('SELECT * FROM leads WHERE id=?', [leadMatch[1]]);
+    if (!lead) throw errors.notFound('商机不存在', 'LEAD_NOT_FOUND');
+    return normalizeLead(lead);
+  }
+  if (leadMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const lead = row('SELECT * FROM leads WHERE id=?', [leadMatch[1]]);
+    if (!lead) throw errors.notFound('商机不存在', 'LEAD_NOT_FOUND');
+    const body = ctx.body || {};
+    const VALID_TRANSITIONS = {
+      NEW: ['CONTACTED', 'CLOSED'],
+      CONTACTED: ['DEMO_SCHEDULED', 'CLOSED'],
+      DEMO_SCHEDULED: ['CONVERTED', 'CONTACTED', 'CLOSED'],
+      CONVERTED: ['CLOSED'],
+      CLOSED: ['CONTACTED'],
+    };
+    const newStatus = body.status ? String(body.status).toUpperCase() : lead.status;
+    if (!['NEW','CONTACTED','DEMO_SCHEDULED','CONVERTED','CLOSED'].includes(newStatus)) {
+      throw errors.badRequest('状态无效', 'INVALID_LEAD_STATUS');
+    }
+    if (newStatus !== lead.status) {
+      const allowed = VALID_TRANSITIONS[lead.status] || [];
+      if (!allowed.includes(newStatus)) {
+        throw errors.badRequest(`不能从 ${lead.status} 直接流转到 ${newStatus}`, 'INVALID_LEAD_STATUS_TRANSITION');
+      }
+    }
+    const adminNotes = body.adminNotes !== undefined ? String(body.adminNotes || '').slice(0, 2000) : lead.admin_notes;
+    const assignedTo = body.assignedTo !== undefined ? String(body.assignedTo || '').trim() || null : lead.assigned_to;
+    const now = nowIso();
+    q('UPDATE leads SET status=?,admin_notes=?,assigned_to=?,updated_at=? WHERE id=?',
+      [newStatus, adminNotes, assignedTo, now, lead.id]);
+    audit(ctx, 'LEAD_UPDATE', 'LEAD', lead.id, { status: lead.status }, { status: newStatus, adminNotes, assignedTo }, { orgId: null });
+    return normalizeLead(row('SELECT * FROM leads WHERE id=?', [lead.id]));
   }
   if (part === '/notification-events' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
@@ -643,12 +1086,44 @@ export async function handleAdminCommunication(ctx) {
     const total = row(`SELECT COUNT(*) n FROM notification_recipients r JOIN users u ON u.id=r.user_id ${where}`, params)?.n || 0;
     return { items, total, limit };
   }
+  // ---- 投递队列管理端点 ----
+  if (part === '/notification-queue/summary' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const summary = summarizeQueue();
+    summary.workerId = WORKER_ID;
+    return summary;
+  }
+  if (part === '/notification-queue/dead-letters' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    const offset = integer(ctx.search.get('offset'), '偏移', { min: 0, max: 100000, fallback: 0 });
+    return listDeadLetters({ limit, offset });
+  }
+  const dlRequeue = part.match(/^\/notification-queue\/dead-letters\/requeue$/);
+  if (dlRequeue && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const body = ctx.body || {};
+    const ids = Array.isArray(body.jobIds) ? body.jobIds.map((v) => String(v || '').trim()).filter(Boolean) : null;
+    if (!ids || !ids.length || ids.length > 500) throw errors.badRequest('jobIds 必填且不超过 500 个', 'INVALID_JOB_IDS');
+    const result = requeueDeadLetters(ids, body.reason);
+    if (result.requeued) audit(ctx, 'NOTIFICATION_DISPATCH_JOB_REQUEUE', 'NOTIFICATION_DISPATCH_JOB', ids.join(','), null, { count: result.requeued });
+    return result;
+  }
+  if (part === '/notification-queue/tick' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const result = runWorkerTick(WORKER_ID);
+    audit(ctx, 'NOTIFICATION_DISPATCH_WORKER_TICK', 'NOTIFICATION_DISPATCH_JOB', null, null, { processed: result.processed, succeeded: result.succeeded, failed: result.failed });
+    return { ...result, workerId: WORKER_ID };
+  }
   return null;
 }
 
 export async function handleOrgCommunication(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/')) return null;
+  // /api/org/file-assets 与 /api/org/billing-config 由独立路由处理（含 STUDENT 角色）
+  if (pathname.startsWith('/api/org/file-assets')) return null;
+  if (pathname.startsWith('/api/org/billing-config')) return null;
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']);
   const currentOrgId = orgId(auth);
   const part = pathname.slice('/api/org'.length);
@@ -851,6 +1326,8 @@ function helpCenterPayload() {
 export async function handleStudentCommunication(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/student/')) return null;
+  // /api/student/billing-config 由独立路由处理
+  if (pathname.startsWith('/api/student/billing-config')) return null;
   const auth = requireRole(ctx, ['STUDENT']);
   const currentOrgId = orgId(auth);
   const part = pathname.slice('/api/student'.length);

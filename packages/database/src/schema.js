@@ -612,6 +612,31 @@ CREATE TABLE IF NOT EXISTS notification_events (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_events_key ON notification_events(event_key);
 CREATE INDEX IF NOT EXISTS idx_notification_events_status ON notification_events(status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS notification_dispatch_jobs (
+  id TEXT PRIMARY KEY,
+  recipient_id TEXT NOT NULL,
+  notification_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  event_key TEXT,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','IN_PROGRESS','FAILED','DEAD_LETTER','SUCCEEDED')),
+  next_run_at TEXT NOT NULL,
+  last_error_code TEXT,
+  last_error_message TEXT,
+  locked_by TEXT,
+  locked_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (recipient_id) REFERENCES notification_recipients(id) ON DELETE CASCADE,
+  FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ndj_status_next_run ON notification_dispatch_jobs(status, next_run_at ASC);
+CREATE INDEX IF NOT EXISTS idx_ndj_recipient ON notification_dispatch_jobs(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_ndj_notification ON notification_dispatch_jobs(notification_id);
+CREATE INDEX IF NOT EXISTS idx_ndj_user ON notification_dispatch_jobs(user_id);
+
 CREATE TABLE IF NOT EXISTS promo_materials (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -744,9 +769,176 @@ CREATE TABLE IF NOT EXISTS client_download_releases (
   UNIQUE(platform, version, channel)
 );
 CREATE INDEX IF NOT EXISTS idx_client_downloads_platform ON client_download_releases(platform, channel, published_at DESC);
+
+-- 统一文件元数据与访问授权（P4-C04）
+CREATE TABLE IF NOT EXISTS file_assets (
+  id TEXT PRIMARY KEY,
+  owner_type TEXT NOT NULL CHECK (owner_type IN ('PLATFORM','ORG','USER','SYSTEM')),
+  owner_org_id TEXT,
+  owner_user_id TEXT,
+  storage_kind TEXT NOT NULL DEFAULT 'EXTERNAL_URL' CHECK (storage_kind IN ('EXTERNAL_URL','INTERNAL_PROXY','PENDING')),
+  storage_url TEXT,
+  storage_key TEXT,
+  proxy_route TEXT,
+  public_path TEXT,
+  file_name TEXT NOT NULL,
+  mime_type TEXT,
+  file_size INTEGER,
+  checksum TEXT,
+  category TEXT NOT NULL DEFAULT 'GENERAL' CHECK (category IN ('PROMO_MATERIAL','PROMO_COVER','CLIENT_INSTALLER','MEDIA_ASSET','GENERAL')),
+  visibility TEXT NOT NULL DEFAULT 'PRIVATE' CHECK (visibility IN ('PRIVATE','ORG','ASSIGNED_ORGS','PUBLIC_PLATFORM','PUBLIC_RELEASE')),
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','DISABLED','REMOVED')),
+  review_status TEXT NOT NULL DEFAULT 'NOT_REQUIRED' CHECK (review_status IN ('NOT_REQUIRED','PENDING','APPROVED','REJECTED')),
+  expires_at TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (owner_org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_file_assets_owner ON file_assets(owner_type, owner_org_id, owner_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_file_assets_category_status ON file_assets(category, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_file_assets_visibility ON file_assets(visibility, status);
+CREATE INDEX IF NOT EXISTS idx_file_assets_storage_url ON file_assets(storage_url);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_file_assets_storage_key ON file_assets(storage_key) WHERE storage_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS file_access_grants (
+  id TEXT PRIMARY KEY,
+  file_id TEXT NOT NULL,
+  grant_type TEXT NOT NULL CHECK (grant_type IN ('ORG','ROLE','USER','PUBLIC')),
+  org_id TEXT,
+  user_id TEXT,
+  role TEXT,
+  permission TEXT NOT NULL DEFAULT 'READ' CHECK (permission IN ('READ','DOWNLOAD')),
+  granted_by TEXT,
+  expires_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (file_id) REFERENCES file_assets(id) ON DELETE CASCADE,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_file_access_grants_file ON file_access_grants(file_id, grant_type);
+CREATE INDEX IF NOT EXISTS idx_file_access_grants_org ON file_access_grants(org_id) WHERE org_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_file_access_grants_user ON file_access_grants(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_file_access_grants_role ON file_access_grants(role) WHERE role IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS platform_modality_settings (
+  id          TEXT    NOT NULL PRIMARY KEY,
+  modality    TEXT    NOT NULL UNIQUE,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  unit_cost   INTEGER NOT NULL DEFAULT 1,
+  display_name TEXT   NOT NULL,
+  description TEXT    NOT NULL DEFAULT '',
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS platform_credit_quotas (
+  id          TEXT    NOT NULL PRIMARY KEY,
+  scope       TEXT    NOT NULL UNIQUE,
+  period      TEXT    NOT NULL DEFAULT 'MONTH',
+  daily_limit INTEGER NOT NULL,
+  monthly_limit INTEGER NOT NULL,
+  note        TEXT    NOT NULL DEFAULT '',
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS platform_alert_thresholds (
+  id           TEXT    NOT NULL PRIMARY KEY,
+  alert_type   TEXT    NOT NULL UNIQUE,
+  threshold    INTEGER NOT NULL,
+  notify_email TEXT    NOT NULL DEFAULT '',
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  note         TEXT    NOT NULL DEFAULT '',
+  created_at   TEXT    NOT NULL,
+  updated_at   TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS org_capability_overrides (
+  id          TEXT    NOT NULL PRIMARY KEY,
+  org_id      TEXT    NOT NULL,
+  modality    TEXT    NOT NULL,
+  enabled     INTEGER NOT NULL,
+  reason      TEXT    NOT NULL DEFAULT '',
+  created_by  TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_cap_overrides_org_mod
+  ON org_capability_overrides(org_id, modality);
+
+CREATE TABLE IF NOT EXISTS platform_config_change_logs (
+  id           TEXT    NOT NULL PRIMARY KEY,
+  config_type  TEXT    NOT NULL,
+  record_id    TEXT    NOT NULL,
+  field_name   TEXT    NOT NULL,
+  old_value    TEXT    NOT NULL DEFAULT '',
+  new_value    TEXT    NOT NULL,
+  changed_by   TEXT    NOT NULL,
+  reason       TEXT    NOT NULL DEFAULT '',
+  created_at   TEXT    NOT NULL
+);
 `;
 
 db.exec(SCHEMA);
+
+// Seed default platform modality settings if empty
+{
+  const now = new Date().toISOString();
+  const exists = row("SELECT COUNT(*) n FROM platform_modality_settings")?.n || 0;
+  if (!exists) {
+    const defaults = [
+      ['pmod_text',    'TEXT',    1, 1, '文本生成', '', 1, now, now],
+      ['pmod_image',   'IMAGE',   1, 1, '图像创作', '', 2, now, now],
+      ['pmod_music',   'MUSIC',   1, 1, '音乐创作', '', 3, now, now],
+      ['pmod_video',   'VIDEO',   1, 2, '视频生成', '', 4, now, now],
+      ['pmod_podcast', 'PODCAST', 0, 1, '播客',     '', 5, now, now],
+      ['pmod_dubbing', 'DUBBING', 0, 1, '配音',     '', 6, now, now],
+      ['pmod_canvas',  'CANVAS',  1, 0, '画布编辑', '', 7, now, now],
+    ];
+    for (const d of defaults) {
+      q(
+        'INSERT INTO platform_modality_settings(id,modality,enabled,unit_cost,display_name,description,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        d,
+      );
+    }
+  }
+  const qExists = row("SELECT COUNT(*) n FROM platform_credit_quotas")?.n || 0;
+  if (!qExists) {
+    const qdef = [
+      ['pcq_global',  'GLOBAL',  'MONTH', 50000, 500000, '平台全量默认', now, now],
+      ['pcq_student', 'STUDENT', 'MONTH', 200,   3000,   '学生月配额',   now, now],
+      ['pcq_teacher', 'TEACHER', 'MONTH', 500,   8000,   '教师月配额',   now, now],
+    ];
+    for (const d of qdef) {
+      q(
+        'INSERT INTO platform_credit_quotas(id,scope,period,daily_limit,monthly_limit,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+        d,
+      );
+    }
+  }
+  const aExists = row("SELECT COUNT(*) n FROM platform_alert_thresholds")?.n || 0;
+  if (!aExists) {
+    const adef = [
+      ['palert_balance',     'BALANCE_LOW',       100, 'finance@example.com', 1, '机构余额低于此值触发预警', now, now],
+      ['palert_consumption', 'CONSUMPTION_SPIKE', 200, 'ops@example.com',     1, '单日消耗超过此值触发预警', now, now],
+      ['palert_quota',       'QUOTA_EXCEEDED',    90,  'ops@example.com',     1, '使用率超过此百分比触发预警', now, now],
+    ];
+    for (const d of adef) {
+      q(
+        'INSERT INTO platform_alert_thresholds(id,alert_type,threshold,notify_email,enabled,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+        d,
+      );
+    }
+  }
+}
+
 // Lightweight forward-compatible migration for classroom AI controls.
 try { db.exec("ALTER TABLE class_sessions ADD COLUMN allow_text INTEGER NOT NULL DEFAULT 1"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
@@ -879,6 +1071,29 @@ export function hashPassword(password) {
 
 
 
+
+// P5-W02 leads 表（演示预约）
+db.exec(`CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY,
+  org_name TEXT NOT NULL,
+  contact_name TEXT NOT NULL,
+  contact_phone TEXT NOT NULL,
+  intent TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'NEW'
+    CHECK (status IN ('NEW','CONTACTED','DEMO_SCHEDULED','CONVERTED','CLOSED')),
+  admin_notes TEXT NOT NULL DEFAULT '',
+  assigned_to TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`);
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_leads_status_created ON leads(status, created_at DESC)'); } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(contact_phone)'); } catch (_) {}
+
+// P5-W04 works 公开分享字段
+try { db.exec('ALTER TABLE works ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE works ADD COLUMN share_token TEXT'); } catch (_) {}
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_works_share_token ON works(share_token) WHERE share_token IS NOT NULL'); } catch (_) {}
 
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }

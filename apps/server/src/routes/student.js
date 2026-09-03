@@ -21,6 +21,7 @@ import {
   transaction,
   verifyPassword,
 } from '../lib.js';
+import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import {
   buildStudentContext,
@@ -538,7 +539,8 @@ export async function handleStudent(ctx) {
 
   if (part === '/account/password' && method === 'PUT') {
     const currentPassword = nonEmptyString(ctx.body?.currentPassword, '当前密码', { max: 500 });
-    const newPassword = validStudentPassword(ctx.body?.newPassword);
+    const newPassword = nonEmptyString(ctx.body?.newPassword, '新密码', { max: 200 });
+    if (newPassword.length < 6) throw errors.badRequest('新密码至少 6 位', 'PASSWORD_TOO_SHORT');
     if (!verifyPassword(currentPassword, auth.rawUser.password_hash)) throw errors.badRequest('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
     if (verifyPassword(newPassword, auth.rawUser.password_hash)) throw errors.badRequest('新密码不能与当前密码相同', 'PASSWORD_UNCHANGED');
     const now = nowIso();
@@ -1028,6 +1030,38 @@ export async function handleStudent(ctx) {
     audit(ctx, 'WORK_PUBLISH_REQUEST_CREATE', 'WORK_PUBLISH_REQUEST', requestId, null, { workId: work.id, round, reason });
     return normalizeWorkPublishRequest(row('SELECT * FROM work_publish_requests WHERE id=?', [requestId]));
   }
+  // P5-W04: 学员端作品公开分享开关
+  match = part.match(/^\/works\/([^/]+)\/public$/);
+  if (match && method === 'PUT') {
+    const work = getOwnWork(ctx, match[1]);
+    if (typeof ctx.body?.isPublic !== 'boolean') {
+      throw errors.badRequest('isPublic 必须为布尔值', 'INVALID_IS_PUBLIC');
+    }
+    if (ctx.body.isPublic) {
+      if (!['APPROVED', 'PUBLISHED'].includes(work.status)) {
+        throw errors.conflict('作品通过审核后才能公开', 'WORK_NOT_APPROVED_FOR_PUBLIC');
+      }
+      if (!work.copyright_confirmed_at) {
+        throw errors.conflict('请先确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+      }
+    }
+    const now = nowIso();
+    let shareToken = work.share_token;
+    if (ctx.body.isPublic && !shareToken) {
+      // 生成唯一 share_token（16 字符十六进制）
+      shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
+      while (row('SELECT id FROM works WHERE share_token=?', [shareToken])) {
+        shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
+      }
+    } else if (!ctx.body.isPublic) {
+      shareToken = null;
+    }
+    q('UPDATE works SET is_public=?,share_token=? WHERE id=?', [ctx.body.isPublic ? 1 : 0, shareToken, work.id]);
+    audit(ctx, ctx.body.isPublic ? 'WORK_PUBLIC_OPEN' : 'WORK_PUBLIC_CLOSE', 'WORK', work.id,
+      { isPublic: Boolean(work.is_public), shareToken: work.share_token },
+      { isPublic: ctx.body.isPublic, shareToken }, { orgId: work.org_id });
+    return { id: work.id, isPublic: ctx.body.isPublic, shareToken };
+  }
   match = part.match(/^\/works\/([^/]+)\/annotations$/);
   if (match && method === 'GET') {
     const work = row('SELECT id FROM works WHERE id=? AND student_id=? AND org_id=?', [match[1], auth.user.id, auth.user.orgId]);
@@ -1191,14 +1225,21 @@ export async function handleStudent(ctx) {
       reviewerName: undefined,
       featuredBy: undefined,
       canReport: work.student_id !== auth.user.id,
-      sharing: {
-        scope: 'ORGANIZATION',
-        allowPublicShare: false,
-        allowComments: false,
-        allowLikes: false,
-        title: '仅机构内可见',
-        description: '作品只在当前机构的登录学生之间展示；不生成站外公开链接，也不显示学生完整姓名。',
-      },
+      sharing: (() => {
+        const isPublic = Number(work.is_public || 0) === 1;
+        return {
+          scope: isPublic ? 'PUBLIC' : 'ORGANIZATION',
+          allowPublicShare: isPublic,
+          allowComments: false,
+          allowLikes: false,
+          publicUrl: isPublic && work.share_token ? `/works/${work.share_token}` : null,
+          shareToken: isPublic ? work.share_token : null,
+          title: isPublic ? '已开启站外公开' : '仅机构内可见',
+          description: isPublic
+            ? '作品生成站外公开链接，所有用户均可浏览；不显示学生完整姓名。'
+            : '作品只在当前机构的登录学生之间展示；不生成站外公开链接，也不显示学生完整姓名。',
+        };
+      })(),
     };
   }
 
@@ -1244,7 +1285,17 @@ export async function handleStudent(ctx) {
           canSubmitProject: project?.status === 'DRAFT' && !project?.deleted_at,
           canRequestPublish: work.status === 'APPROVED' && !pendingPublishRequest,
           canWithdrawPublishRequest: Boolean(pendingPublishRequest),
+          canTogglePublic: ['APPROVED', 'PUBLISHED'].includes(work.status) && Boolean(work.copyright_confirmed_at),
         },
+        sharing: (() => {
+          const isPublic = Number(work.is_public || 0) === 1;
+          return {
+            scope: isPublic ? 'PUBLIC' : 'ORGANIZATION',
+            isPublic,
+            shareToken: isPublic ? work.share_token : null,
+            publicUrl: isPublic && work.share_token ? `/works/${work.share_token}` : null,
+          };
+        })(),
       };
     });
     return { items };

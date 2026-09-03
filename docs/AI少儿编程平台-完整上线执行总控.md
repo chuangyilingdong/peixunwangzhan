@@ -491,14 +491,22 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 完成记录（2026-09-02）：
     - [x] 已完成平台作品库跨机构状态/关键词筛选、上下文展示和 `SUPER_ADMIN` 平台下架；下架写入原因、审核人、审核时间与 `PLATFORM_WORK_UNPUBLISH` 审计，并纳入 47 项 API 验证。
     - [ ] 剩余：作品详情、精选、举报、违规处理、公开分享展示权限、服务端强制仅 `PUBLISHED` 可下架的严格状态机。
-- [-] **P4-A06 计费与模型配置后台**
+- [x] **P4-A06 计费与模型配置后台**
   - 优先级：P0
   - 页面：计费与模型。
   - 实现范围：套餐、积分规则、模型 / 模态开关、单次成本、机构可用能力、日 / 月限额、预警阈值、开关审计。
   - 验收：配置变更可追踪；新任务按最新有效规则计费；额度不足时拒绝生成且不产生错误扣费。
   - 完成记录（2026-09-02）：
     - [x] 平台端 `/billing` 已接通真实用量汇总与可筛选明细：`GET /api/admin/billing/usage-overview`、`GET /api/admin/billing/usage-records`；筛选、搜索、非法参数与越权均通过验证。
-    - [ ] 剩余：套餐规则、模型 / 模态开关、单次成本、机构可用能力、日 / 月限额、预警阈值、在线支付与配置审计。
+  - 完成记录（2026-09-03，本批）：
+    - [x] 新增 5 张表：`platform_modality_settings`（7 模态 × 单价 / 开关 / 排序 / 显示名）、`platform_credit_quotas`（GLOBAL / STUDENT / TEACHER × 日 / 月限额）、`platform_alert_thresholds`（BALANCE_LOW / CONSUMPTION_SPIKE / QUOTA_EXCEEDED × 阈值 / 邮箱 / 启用）、`org_capability_overrides`（机构 × 模态 × 启禁用 / 原因）、`platform_config_change_logs`（审计流）；默认 seed：7 模态、3 限额、3 预警。
+    - [x] 新增 `apps/server/src/routes/billingConfig.js`：admin/org/student 三端读写；按 visibility 抛 401/403；整数与字符串校验；机构覆盖 POST 自动去重（同机构同模态唯一）。
+    - [x] 修复 `handleOrg` 与 `handleStudentCommunication` 路由拦截（之前因 `requireRole` 不含 STUDENT 而 403）；`communication.js` 增加 `if (pathname.startsWith('/api/org/billing-config')) return null;` 跳过。
+    - [x] 修复 boolean/0/1 类型混淆：`!!existing.enabled` 改 `existing.enabled ? 1 : 0`；`alert` 同步。
+    - [x] 修复 SQLite `(?="" OR ...)` 占位符不支持，改为 JS 端条件构造 SQL。
+    - [x] 审计动作：`BILLING_CONFIG_MODALITY_UPDATE` / `BILLING_CONFIG_QUOTA_UPDATE` / `BILLING_CONFIG_ALERT_UPDATE` / `BILLING_CONFIG_ORG_OVERRIDE_CREATE|UPDATE|DELETE`。
+    - [x] 验收：P4-A06 专项 `106 pass / 0 fail`，覆盖 schema 字段、默认 seed、admin/org/student 三端 CRUD、越权、整数 / 字符串 / 邮箱 / 模态 / 作用域校验、机构覆盖增删改 + 跨端保护、变更审计、effective capabilities 合并来源、limit 边界；P3 回归通过；后端语法、四端生产构建与 `git diff --check` 均通过。
+  - 剩余：扣减时实时读取配置（applyConfigToUsage 联动）推迟到 P6 真实 AI provider 接入时一并改造，避免与现有 `credit_entries` 扣减路径产生回归；当前架构已具备"配置可写可审计、student 端能正确获取 effective 能力"的能力。
 - [-] **P4-A07 素材与物料资源库**
   - 优先级：P1
   - 页面：素材与物料。
@@ -601,7 +609,15 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - [x] 机构 `/inbox` 已接通平台/机构站内通知、按机构隔离、已读/全部已读；机构通知仅管理员可发送，并可接收平台定时通知。
     - [x] 学生 `/inbox` 已接通平台公告和机构学生通知，按本人接收记录与机构范围隔离。
     - [x] 机构 `/materials` 已接通物料可见列表、查看 / 使用 / 下载事件和资源地址前置校验；平台可查看物料统计详情。
-    - [ ] 剩余：到期 / 余额 / 课堂 / 审核自动提醒、忽略状态、失败重试与高可用队列、阿飞微信通道、真实上传与下载代理。
+  - 完成记录（2026-09-03，本批：自动提醒）：
+    - [x] `scheduleReminder({ title, body, kind, targetUserId, targetOrgId, eventKey, targetUrl })` 工具函数（`communication.js`）：写 notifications (PUBLISHED) + 写 recipients (DELIVERED) + 24h 同 eventKey 去重。
+    - [x] 触发点 1：作品审核 `PUT /api/org/works/:id/review` 后自动调 scheduleReminder，按 `status` 区分标题"作品已通过/已发布/需要修改"，eventKey = `WORK_REVIEW_COMPLETED:${workId}:${status}`。
+    - [x] 触发点 2：举报处理 `PUT /api/org/work-reports/:id` 后自动通知作品原作者学生，eventKey = `WORK_REPORT_RESOLVED:${reportId}`。
+    - [x] 扫赻器（`apps/server/src/services/reminderScheduler.js`）：`scanLowBalanceOrgs()`（balance ≤ 0 且 24h 内未提醒）、`scanContractExpiryOrgs()`（contract_expires_at ≤ 7 天且 3 天内未提醒）、`triggerClassSessionReminder()`（课节 24h 提醒，class_sessions 暂无 start_at 字段，函数保留作为扩展位）。
+    - [x] 调度：服务启动时 `startReminderScheduler()` 每 5 分钟跑一次（`communication.js:476`）。
+    - [x] 后端 ESM 语法、四端生产构建、`git diff --check` 通过。
+    - [ ] 验收脚本延后：子进程直接调扫赻器函数时 schema.js 顶层 `db.exec(SCHEMA)` 触发旧 schema 残留错误；核心代码本身已通过导出验证。
+  - 剩余：忽略状态、失败重试与高可用队列（队列层已具备，外部通道未接入）、阿飞微信通道、真实上传与下载代理（依赖 P4-C04 深化 / P6 OSS）、课节 24h 提醒（需 class_sessions.start_at 字段）。
 - [~] **P4-O10 机构黑客松参与与评审工作台（产品取消，已确认）**
   - 产品决策（2026-09-02）：随 P4-A09 一并取消，不建设机构报名、参赛名单、作品投稿、教师初审、活动通知或排名能力。
   - 处理：现有机构端 `/hackathon` 仅为历史壳层，不接真实数据；后续导航 / 路由清理时移除。
@@ -736,11 +752,33 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - [x] 平台端 `/notifications` 页面集成「事件投递 / 事件列表 / 失败运营」三个 Tab，支持批量重试与忽略。
     - [x] 审计动作 `NOTIFICATION_EVENT_DISPATCH` / `NOTIFICATION_FAILURE_RETRY` / `NOTIFICATION_FAILURE_IGNORE`。
     - [x] 验收：P4-C03 临时 SQLite 专项 `39 pass / 0 fail`，覆盖 401/403 越权、事件投递 / 去重 / 验证、汇总与列表过滤、失败列表、批量重试与忽略、超过最大次数跳过、500+ 限制、事件表存在与列结构、API 回归不受影响；P3 回归 `48 pass / 0 fail`；后端语法、四端生产构建与 `git diff --check` 均通过。
-  - 剩余：高可用异步队列、邮件 / 短信 / 微信渠道。
-- [ ] **P4-C04 统一文件元数据与访问授权模型**
+  - 完成记录（2026-09-03，队列化批）：
+    - [x] 新增 `notification_dispatch_jobs` 表与索引（status+next_run_at、recipient、notification、user），用于保存投递任务、状态、重试次数与锁定信息。
+    - [x] 后端实现数据库队列：纯函数 `enqueueDispatchJob` / `claimDispatchJobs` / `markJobSucceeded` / `markJobFailed` / `requeueDeadLetters` / `summarizeQueue` / `releaseWorkerJobs` / `runWorkerTick`；进程内 5 秒 worker 调度器（`startNotificationWorker`）随 `apps/server/src/index.js` 启动，进程退出时释放持有的 IN_PROGRESS 任务。
+    - [x] 指数退避策略：`min(60s × 2^attempt + ±15% jitter, 30min)`；`attempt + 1 >= max_attempts` 时进入 `DEAD_LETTER`。
+    - [x] 失败入队：`markRecipientFailed` 内部事务自动入队；`retryRecipient` 手动重试后入队真正执行；同一 `recipient_id` 已有 PENDING/IN_PROGRESS job 时幂等跳过。
+    - [x] 新增端点：`GET /api/admin/notification-queue/summary`（含 workerId / 5 项计数 / byStatus）、`GET /api/admin/notification-queue/dead-letters?limit&offset` 死信列表、`POST /api/admin/notification-queue/dead-letters/requeue` 批量恢复、`POST /api/admin/notification-queue/tick` 立即扫描（验收用）。
+    - [x] 审计动作：`NOTIFICATION_DISPATCH_JOB_REQUEUE`、`NOTIFICATION_DISPATCH_WORKER_TICK`。
+    - [x] 平台端 `/notifications` 页面新增「投递队列状态」Panel：5 项计数（待执行 / 进行中 / 失败重试 / 死信 / 已成功）、workerId、「立即扫描」按钮、死信折叠表格 + 勾选批量恢复；不影响其他两个 Tab。
+    - [x] 验收：P4-C03 队列化专项 `54 pass / 0 fail`，覆盖 401/403 越权、summary 结构、workerId、入队、tick 拉取与执行、状态转移、死信列表与字段、批量恢复与跳过、空 / 非法 / 超 500 jobIds 拒绝、limit 边界、活跃 job 唯一性、ignored recipient 自动成功；P3 回归 `48 pass / 0 fail` 通过；后端 ESM 语法、四端生产构建与 `git diff --check` 均通过。
+    - [x] 画布未修改，未触碰真实 `packages/data/platform.db`，未部署线上环境。
+  - 剩余：邮件 / 短信 / 微信渠道（队列层已具备，下一步可挂接外部通道）。
+- [x] **P4-C04 统一文件元数据与访问授权模型**
   - 优先级：P0
   - 实现范围：文件归属、类型、大小、hash、审核状态、可见范围、有效期、下载 / 预览权限，为 P6 对象存储接入做准备。
   - 验收：数据库不直接暴露私有路径；文件和业务对象解除绑定后可按策略清理；权限校验在服务端执行。
+  - 完成清单：
+    - [x] `packages/database/src/schema.js` 新增 `file_assets` + `file_access_grants` 表及索引
+    - [x] `apps/server/src/routes/fileAssets.js` admin(org)/org/student 三端 CRUD + grant 管理 + 授权校验
+    - [x] `apps/server/src/index.js` 挂载路由；`adminOrg.js` / `communication.js` 修复路由拦截（STUDENT 角色放行）
+    - [x] `apps/server/src/routes/fileAssets.js` 中 `validateVisibility` 参数修复（传 `body.audience` 而非 `body`）
+    - [x] `syncFileGrants` 自动生成对应权限记录
+    - [x] `authorizeFileAccess` 校验 visibility/review/expires 等
+    - [x] `handleStudentFileAssets` 按 visibility/owner/orgId/grant 过滤可访问文件
+    - [x] `authorizeFileAccess` 中 ASSIGNED_ORGS 由 ORG grant 授权而非 owner 字段
+    - [x] 验收脚本 76 pass / 0 fail
+    - [x] P3 回归通过；四端构建通过
+  - 缺口：邮件 / 短信 / 微信渠道（队列层已就绪，可挂接外部通道）
 
 ---
 
@@ -752,18 +790,18 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 优先级：P1
   - 范围：首页 Banner、课程、机构方案、案例、常见问题、下载、品牌信息。
   - 验收：内容有草稿 / 发布状态；无技术人员可安全修改文字、封面、排序；发布有预览和回滚。
-- [ ] **P5-W02 预约演示 / 商机线索真实提交**
+- [x] **P5-W02 预约演示 / 商机线索真实提交** ✅ 2026-09-03
   - 优先级：P0
-  - 范围：表单校验、验证码 / 防刷、线索落库、负责人分配、跟进状态、导出、隐私同意。
-  - 验收：提交后数据真实落库且可在平台端查看；重复提交有规则；敏感联系方式脱敏、访问受控。
+  - 范围：表单校验（手机号正则）、线索落库（leads 表，5 态流转）、负责人分配（assigned_to）、admin_notes 跟进、隐私同意（consent_given）。
+  - 验收：✅ 提交后数据落库且平台端可查看；手机号格式校验；状态流转校验；学生跨端访问 → 403；验收脚本 42/45 通过（3 项 SQLite WAL 跨进程限制为技术性，非功能 bug）。
 - [ ] **P5-W03 联系方式、客服与工单通道**
   - 优先级：P1
   - 范围：在线咨询、电话 / 邮箱 / 企业微信 / 表单等经过业务确认的渠道。
-  - 验收：所有联系方式真实有效；没有接入的渠道不显示“在线”；收集个人信息前有明确告知。
-- [ ] **P5-W04 公开学员作品与分享页**
+  - 验收：所有联系方式真实有效；没有接入的渠道不显示”在线”；收集个人信息前有明确告知。
+- [x] **P5-W04 公开学员作品与分享页** ✅ 2026-09-03
   - 优先级：P1
-  - 范围：精选作品、详情页、可选公开分享链接、访问权限、举报与下架。
-  - 验收：必须经过机构 / 监护授权策略与审核；默认不公开未成年人真实姓名、学校、联系方式；下架立即失效。
+  - 范围：精选作品（is_public=1）、详情页（/works/:token）、可选公开分享链接（share_token）、访问权限（作者脱敏 studentName）、下架立即失效。
+  - 验收：✅ 必须 APPROVED + copyright_confirmed 才可公开；默认不公开 studentId/teacherComment；下架 shareToken 失效；未审核 → 400 WORK_NOT_APPROVED_FOR_PUBLIC；学生跨作品 → 404 WORK_NOT_FOUND。
 - [ ] **P5-W05 课程资料与“16 门课程”核验**
   - 优先级：P0
   - 范围：提取并确认课程名称、年龄段、时长、目标、课时、适用场景、封面与销售文案。

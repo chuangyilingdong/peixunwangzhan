@@ -7,6 +7,8 @@ import { handleStudent } from './routes/student.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration } from './routes/aiGeneration.js';
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication } from './routes/communication.js';
+import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets } from './routes/fileAssets.js';
+import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -38,9 +40,15 @@ const server = http.createServer(async (req, res) => {
       ?? await handleAuth(ctx)
       ?? await handleAdmin(ctx)
       ?? await handleAdminCommunication(ctx)
+      ?? await handleAdminFileAssets(ctx)
+      ?? await handleAdminBillingConfig(ctx)
       ?? await handleOrg(ctx)
       ?? await handleOrgCommunication(ctx)
+      ?? await handleOrgFileAssets(ctx)
+      ?? await handleOrgBillingConfig(ctx)
       ?? await handleStudentCommunication(ctx)
+      ?? await handleStudentFileAssets(ctx)
+      ?? await handleStudentBillingConfig(ctx)
       ?? await handleStudent(ctx)
       ?? await handleAi(ctx)
       ?? await handleAiGeneration(ctx);

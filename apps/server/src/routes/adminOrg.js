@@ -5,6 +5,7 @@ import {
 } from '@platform/server-lib';
 import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
+import { scheduleReminder } from './communication.js';
 
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
@@ -1675,12 +1676,101 @@ export async function handleAdmin(ctx) {
     if (actionTaken === 'UNPUBLISH') audit(ctx, 'PLATFORM_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reportId: report.id }, { orgId: work.org_id });
     return workReportRows('report.id=?', [report.id])[0];
   }
+  let workDetailMatch = part.match(/^\/works\/([^/]+)\/detail$/);
+  if (workDetailMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const workId = workDetailMatch[1];
+    const workRow = row(
+      `SELECT work.*,
+              student.id AS student_id, student.login AS student_login, student.display_name AS student_name,
+              student.privacy_allow_feature AS student_allow_feature,
+              student.privacy_showcase_anonymous AS student_showcase_anonymous,
+              reviewer.display_name AS reviewer_name,
+              organization.id AS org_id, organization.name AS organization_name,
+              class.id AS class_id, class.name AS class_name,
+              lesson.id AS course_lesson_id, lesson.title AS course_lesson_title
+       FROM works work
+       JOIN users student ON student.id=work.student_id
+       LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by
+       LEFT JOIN organizations organization ON organization.id=work.org_id
+       LEFT JOIN classes class ON class.id=work.class_id
+       LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
+       WHERE work.id=?`,
+      [workId],
+    );
+    if (!workRow) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+
+    const submissions = rows(
+      `SELECT s.*
+       FROM work_submissions s
+       WHERE s.work_id=? ORDER BY s.round DESC LIMIT 10`,
+      [workId],
+    ).map((s) => ({
+      id: s.id, round: s.round, title: s.title, description: s.description || '',
+      reviewStatus: s.review_status || null, reviewComment: s.review_comment || null,
+      reviewerName: null, reviewedAt: s.reviewed_at || null,
+      submittedAt: s.submitted_at,
+    }));
+
+    const annotations = rows(
+      `SELECT a.*, author.display_name AS author_name
+       FROM work_annotations a
+       JOIN users author ON author.id=a.author_id
+       WHERE a.work_id=? ORDER BY a.created_at DESC LIMIT 5`,
+      [workId],
+    ).map((a) => ({
+      id: a.id, nodeId: a.node_id || null, content: a.content,
+      authorName: a.author_name, createdAt: a.created_at,
+      resolvedAt: a.resolved_at || null, resolvedBy: a.resolved_by || null,
+    }));
+
+    const reports = rows(
+      `SELECT report.*, reporter.display_name AS reporter_name, handler.display_name AS handler_name
+       FROM work_reports report
+       JOIN users reporter ON reporter.id=report.reporter_id
+       LEFT JOIN users handler ON handler.id=report.handled_by
+       WHERE report.work_id=? ORDER BY report.created_at DESC`,
+      [workId],
+    ).map((r) => ({
+      id: r.id, category: r.category, details: r.details || '',
+      status: r.status, resolution: r.resolution || null, actionTaken: r.action_taken || 'NONE',
+      reporterName: r.reporter_name, handlerName: r.handler_name || null,
+      handledAt: r.handled_at || null, createdAt: r.created_at,
+    }));
+
+    const latestPublishRequest = row(
+      `SELECT pr.*, handler.display_name AS handler_name
+       FROM work_publish_requests pr
+       LEFT JOIN users handler ON handler.id=pr.resolved_by
+       WHERE pr.work_id=? ORDER BY pr.requested_at DESC LIMIT 1`,
+      [workId],
+    );
+
+    return {
+      ...normalizeWork(workRow, { includeSnapshot: true }),
+      studentLogin: workRow.student_login,
+      studentAllowFeature: Boolean(workRow.student_allow_feature),
+      studentShowcaseAnonymous: Boolean(workRow.student_showcase_anonymous),
+      organizationName: workRow.organization_name || null,
+      courseLessonTitle: workRow.course_lesson_title || null,
+      pendingReportCount: reports.filter((r) => r.status === 'PENDING').length,
+      submissions,
+      annotations,
+      annotationCount: Number(
+        row('SELECT COUNT(*) AS n FROM work_annotations WHERE work_id=?', [workId])?.n || 0,
+      ),
+      reports,
+      latestPublishRequest: latestPublishRequest ? normalizeWorkPublishRequest(latestPublishRequest) : null,
+    };
+  }
   return null;
 }
 
 export async function handleOrg(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/')) return null;
+  // /api/org/file-assets 由独立路由处理（含 STUDENT 角色）
+  if (pathname.startsWith('/api/org/file-assets')) return null;
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']); const currentOrgId = orgId(auth); const part = pathname.slice('/api/org'.length);
   if (part === '/work-data' && method === 'GET') {
     return buildWorkData(ctx, auth, currentOrgId);
@@ -2428,7 +2518,22 @@ export async function handleOrg(ctx) {
       q('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=? AND org_id=?', [status, auth.user.id, now, resolution, actionTaken, report.id, currentOrgId]);
     });
     audit(ctx, 'ORG_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: currentOrgId });
-    if (actionTaken === 'UNPUBLISH') audit(ctx, 'ORG_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reportId: report.id }, { orgId: currentOrgId });
+    if (actionTaken === 'UNPUBLISH') audit(ctx, 'ORG_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWorkReport(report), { status: 'REJECTED', reportId: report.id }, { orgId: currentOrgId });
+    // 自动提醒：举报已处理 → 通知作品作者学生（P4-O09）
+    try {
+      if (work?.student_id) {
+        scheduleReminder({
+          title: status === 'RESOLVED' ? '举报已有处理结果' : '举报已被驳回',
+          body: status === 'RESOLVED'
+            ? `您举报的作品《${work.title || report.work_id}》已处理：${resolution}`
+            : `您举报的作品《${work.title || report.work_id}》因证据不足已被驳回`,
+          targetUserId: work.student_id,
+          targetOrgId: currentOrgId,
+          eventKey: `WORK_REPORT_RESOLVED:${report.id}`,
+          targetUrl: '/works',
+        });
+      }
+    } catch { /* 提醒失败不影响主流程 */ }
     return workReportRows('report.id=?', [report.id])[0];
   }
   if (part === '/works' && method === 'GET') {
@@ -2485,6 +2590,21 @@ export async function handleOrg(ctx) {
       }
     });
     audit(ctx, 'WORK_REVIEW', 'WORK', work.id, normalizeWork(work), { status, teacherComment: comment || null, projectReopened: status === 'REJECTED' }, { orgId: currentOrgId });
+    // 自动提醒：作品审核完成 → 通知学生（P4-O09）
+    try {
+      scheduleReminder({
+        title: status === 'REJECTED' ? '作品需要修改' : status === 'PUBLISHED' ? '作品已发布' : '作品已通过',
+        body: status === 'REJECTED'
+          ? `作品《${work.title}》未通过审核：${comment || '请查看详情'}`
+          : status === 'PUBLISHED'
+            ? `作品《${work.title}》已发布到作品墙`
+            : `作品《${work.title}》已通过审核`,
+        targetUserId: work.student_id,
+        targetOrgId: currentOrgId,
+        eventKey: `WORK_REVIEW_COMPLETED:${work.id}:${status}`,
+        targetUrl: '/works',
+      });
+    } catch { /* 提醒失败不影响主流程 */ }
     return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
   }
 

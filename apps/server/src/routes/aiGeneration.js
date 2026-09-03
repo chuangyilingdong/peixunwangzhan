@@ -1,4 +1,4 @@
-import { ApiError, audit, count, errors, id, json, nowIso, q, row, rows, transaction } from '../lib.js';
+import { ApiError, audit, count, errors, id, json, nowIso, q, requireRole, row, rows, transaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
@@ -367,9 +367,8 @@ function studentAiCenter(ctx) {
 export async function handleAiGeneration(ctx) {
   const { pathname, method, auth } = ctx;
   if (!pathname.startsWith('/api/ai/')) return null;
-  if (!auth) throw errors.unauthorized();
   if (pathname === '/api/ai/providers' && method === 'GET') return generationProviderInfo();
-  if (auth.user.role !== 'STUDENT') throw errors.forbidden();
+  requireRole(ctx, ['STUDENT']);
 
   if (pathname === '/api/ai/center' && method === 'GET') return studentAiCenter(ctx);
   if (pathname === '/api/ai/generations/history' && method === 'GET') return generationHistory(auth, ctx.search);

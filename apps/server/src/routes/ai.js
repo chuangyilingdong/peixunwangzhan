@@ -4,6 +4,7 @@ import {
   json,
   nowIso,
   q,
+  requireRole,
   row,
   transaction,
 } from '@platform/server-lib';
@@ -69,9 +70,8 @@ function assertCapability(modality, session, pkg) {
 export async function handleAi(ctx) {
   const { pathname, method, auth } = ctx;
   if (!pathname.startsWith('/api/ai/')) return null;
-  if (!auth) throw errors.unauthorized();
   if (pathname !== '/api/ai/usage' || method !== 'POST') return null;
-  if (auth.user.role !== 'STUDENT') throw errors.forbidden();
+  requireRole(ctx, ['STUDENT']);
 
   const orgId = auth.user.orgId;
   const userId = auth.user.id;
