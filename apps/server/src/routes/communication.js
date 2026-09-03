@@ -813,6 +813,97 @@ export function handlePublicCommunication(ctx) {
     return detail;
   }
 
+  // P5-M02: Public marketplace listing
+  if (pathname === '/api/public/marketplace' && method === 'GET') {
+    const difficulty = ctx.search.get('difficulty');
+    const ageMin = ctx.search.get('ageMin');
+    const ageMax = ctx.search.get('ageMax');
+    const tag = ctx.search.get('tag');
+    const search = ctx.search.get('search');
+    const sort = ctx.search.get('sort') || 'popular';
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const offset = (page - 1) * limit;
+    const wheres = ["series.status='PUBLISHED'", "series.marketplace_status='APPROVED'", "series.visibility='ALL_ORGS'"];
+    const params = [];
+    if (difficulty != null) { wheres.push('series.difficulty_level=?'); params.push(Number(difficulty)); }
+    if (ageMin != null) { wheres.push('series.age_range_max IS NOT NULL AND series.age_range_max>=?'); params.push(Number(ageMin)); }
+    if (ageMax != null) { wheres.push('series.age_range_min IS NOT NULL AND series.age_range_min<=?'); params.push(Number(ageMax)); }
+    if (tag) { wheres.push('series.tags LIKE ?'); params.push('%' + String(tag) + '%'); }
+    if (search) { wheres.push('series.title LIKE ?'); params.push('%' + String(search) + '%'); }
+    const where = wheres.join(' AND ');
+    const total = Number(row('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params)?.n || 0);
+    const orderBy = sort === 'recent' ? 'series.created_at DESC' : 'series.marketplace_reward_credits DESC';
+    const items = rows(
+      `SELECT series.*, (SELECT COUNT(*) FROM course_lessons lesson WHERE lesson.series_id=series.id AND lesson.status='PUBLISHED') lesson_count
+       FROM course_series series WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    ).map((item) => {
+      let tags = [];
+      try { tags = item.tags ? JSON.parse(item.tags) : []; } catch { tags = []; }
+      return {
+        id: item.id,
+        title: item.title,
+        description: item.description || '',
+        coverImageUrl: item.cover_image_url || null,
+        difficultyLevel: item.difficulty_level != null ? Number(item.difficulty_level) : null,
+        ageRangeMin: item.age_range_min != null ? Number(item.age_range_min) : null,
+        ageRangeMax: item.age_range_max != null ? Number(item.age_range_max) : null,
+        tags,
+        lessonCount: Number(item.lesson_count || 0),
+        marketplaceRewardCredits: Number(item.marketplace_reward_credits || 0),
+      };
+    });
+    return { items, total, page, limit };
+  }
+
+  // P5-M02: Public marketplace detail
+  const publicMarketplaceDetailMatch = pathname.match(/^\/api\/public\/marketplace\/([\w-]+)$/);
+  if (publicMarketplaceDetailMatch && method === 'GET') {
+    const series = row(
+      "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND marketplace_status='APPROVED' AND visibility='ALL_ORGS'",
+      [publicMarketplaceDetailMatch[1]],
+    );
+    if (!series) throw errors.notFound('课程不存在或暂未上架', 'MARKETPLACE_COURSE_NOT_FOUND');
+    const lessons = rows(
+      "SELECT id, series_id, title, summary, sort, status, duration_minutes, lesson_content, created_at, updated_at FROM course_lessons WHERE series_id=? AND status='PUBLISHED' ORDER BY sort, created_at",
+      [series.id],
+    ).map((l) => ({
+      id: l.id,
+      seriesId: l.series_id,
+      title: l.title,
+      summary: l.summary || '',
+      sort: Number(l.sort || 0),
+      status: l.status,
+      durationMinutes: Number(l.duration_minutes || 0),
+      lessonContent: l.lesson_content ? String(l.lesson_content).slice(0, 2000) : '',
+      createdAt: l.created_at,
+      updatedAt: l.updated_at,
+    }));
+    let tags = [];
+    try { tags = series.tags ? JSON.parse(series.tags) : []; } catch { tags = []; }
+    return {
+      id: series.id,
+      title: series.title,
+      description: series.description || '',
+      coverImageUrl: series.cover_image_url || null,
+      ownerType: series.owner_type,
+      visibility: series.visibility,
+      version: series.version,
+      sort: Number(series.sort || 0),
+      status: series.status,
+      difficultyLevel: series.difficulty_level != null ? Number(series.difficulty_level) : null,
+      ageRangeMin: series.age_range_min != null ? Number(series.age_range_min) : null,
+      ageRangeMax: series.age_range_max != null ? Number(series.age_range_max) : null,
+      tags,
+      lessonCount: lessons.length,
+      lessons,
+      marketplaceRewardCredits: Number(series.marketplace_reward_credits || 0),
+      createdAt: series.created_at,
+      updatedAt: series.updated_at,
+    };
+  }
+
   return null;
 }
 

@@ -1413,6 +1413,90 @@ export async function handleAdmin(ctx) {
     audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds });
     return { assignedCount: assignmentOrgIds.length };
   }
+
+  // P5-M01: Marketplace management endpoints
+  if (part === '/course-marketplace' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const statusFilter = String(ctx.search.get('status') || '').trim().toUpperCase();
+    const search = String(ctx.search.get('search') || '').trim();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const offset = (page - 1) * limit;
+    const wheres = ["series.status='PUBLISHED'"];
+    const params = [];
+    if (['PENDING', 'APPROVED', 'REJECTED', 'NONE'].includes(statusFilter)) { wheres.push('series.marketplace_status=?'); params.push(statusFilter); }
+    if (search) { wheres.push('series.title LIKE ?'); params.push('%' + search.replace(/[%_]/g, (c) => '[' + c + ']') + '%'); }
+    const where = wheres.join(' AND ');
+    const total = Number(row('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params)?.n || 0);
+    const items = rows(
+      `SELECT series.* FROM course_series series WHERE ${where}
+       ORDER BY CASE series.marketplace_status WHEN 'PENDING' THEN 0 WHEN 'APPROVED' THEN 1 WHEN 'REJECTED' THEN 2 ELSE 3 END, series.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    ).map((item) => {
+      const normalized = normalizeSeries(item, { parseTags: true });
+      return {
+        id: normalized.id,
+        title: normalized.title,
+        difficultyLevel: normalized.difficultyLevel,
+        ageRangeMin: normalized.ageRangeMin,
+        ageRangeMax: normalized.ageRangeMax,
+        tags: normalized.tags,
+        status: normalized.status,
+        marketplaceStatus: normalized.marketplaceStatus,
+        marketplaceRewardCredits: normalized.marketplaceRewardCredits,
+        visibility: normalized.visibility,
+        createdAt: normalized.createdAt,
+      };
+    });
+    return { items, total, page, limit };
+  }
+
+  const marketplaceDetailMatch = part.match(/^\/course-marketplace\/([^/]+)$/);
+  if (marketplaceDetailMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
+    if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
+    const detail = normalizeSeries(series, { includeLessons: true, includeAllLessons: true, parseTags: true });
+    return {
+      ...detail,
+      marketplaceStatus: detail.marketplaceStatus,
+      marketplaceRewardCredits: detail.marketplaceRewardCredits,
+      lessonTitles: (detail.lessons || []).map((l) => ({ id: l.id, title: l.title, sort: l.sort })),
+    };
+  }
+
+  if (marketplaceDetailMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
+    if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
+    if (series.status !== 'PUBLISHED') throw errors.badRequest('仅已发布课包可变更应用市场状态', 'COURSE_NOT_PUBLISHED');
+    const body = ctx.body || {};
+    const newStatus = body.marketplaceStatus === undefined ? series.marketplace_status : body.marketplaceStatus;
+    if (!['PENDING', 'APPROVED', 'REJECTED', 'NONE'].includes(newStatus)) throw errors.badRequest('应用市场状态无效', 'INVALID_MARKETPLACE_STATUS');
+    const newCredits = body.marketplaceRewardCredits === undefined ? Number(series.marketplace_reward_credits || 0) : integer(body.marketplaceRewardCredits, '积分激励', { min: 0, max: 999999 });
+    const before = normalizeSeries(series, { parseTags: true });
+    q('UPDATE course_series SET marketplace_status=?,marketplace_reward_credits=?,updated_at=? WHERE id=?', [newStatus, newCredits, nowIso(), series.id]);
+    const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
+    audit(ctx, 'COURSE_SERIES_MARKETPLACE_UPDATE', 'COURSE_SERIES', series.id, { marketplaceStatus: before.marketplaceStatus, marketplaceRewardCredits: before.marketplaceRewardCredits }, { marketplaceStatus: after.marketplaceStatus, marketplaceRewardCredits: after.marketplaceRewardCredits });
+    return after;
+  }
+
+  const marketplaceRewardsMatch = part.match(/^\/course-marketplace\/([^/]+)\/rewards$/);
+  if (marketplaceRewardsMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceRewardsMatch[1]]);
+    if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
+    if (series.status !== 'PUBLISHED') throw errors.badRequest('仅已发布课包可调整积分激励', 'COURSE_NOT_PUBLISHED');
+    const body = ctx.body || {};
+    const newCredits = integer(body.marketplaceRewardCredits, '积分激励', { min: 0, max: 999999 });
+    const before = normalizeSeries(series, { parseTags: true });
+    q('UPDATE course_series SET marketplace_reward_credits=?,updated_at=? WHERE id=?', [newCredits, nowIso(), series.id]);
+    const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
+    audit(ctx, 'COURSE_SERIES_MARKETPLACE_REWARD_UPDATE', 'COURSE_SERIES', series.id, { marketplaceRewardCredits: before.marketplaceRewardCredits }, { marketplaceRewardCredits: after.marketplaceRewardCredits });
+    return after;
+  }
+
   if (part === '/platform-users' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const role = ctx.search.get('role'); const orgIdFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
@@ -1554,6 +1638,7 @@ export async function handleAdmin(ctx) {
     const classes = singleNumber(`SELECT COUNT(*) n FROM classes WHERE (?='' OR org_id=?) AND status='ACTIVE'`, [orgFilter, orgFilter]);
     const publishedCourses = singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED'`);
     const activeAssignments = singleNumber(`SELECT COUNT(*) n FROM course_assignments WHERE status='ACTIVE' AND (?='' OR org_id=?)`, [orgFilter, orgFilter]);
+    const marketplaceCourses = singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND marketplace_status='APPROVED'`);
     const classSessions = singleNumber(`SELECT COUNT(*) n FROM class_sessions session JOIN classes class ON class.id=session.class_id WHERE (LENGTH(?)=0 OR class.org_id=?) AND session.started_at>=? AND session.started_at<?`, [orgFilter, orgFilter, since, until]);
     const projects = singleNumber(`SELECT COUNT(*) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?`, [orgFilter, orgFilter, since, until]);
     const works = singleNumber(`SELECT COUNT(*) n FROM works WHERE (?='' OR org_id=?) AND submitted_at>=? AND submitted_at<?`, [orgFilter, orgFilter, since, until]);

@@ -1132,6 +1132,219 @@ function PlatformPage({ kind }) {
   const [title, desc, cards] = pages[kind];
   return <><PageHeader eyebrow="AI魔法学院 · 平台控制台" title={title} description={desc} actions={<button className="primary-button">新建 / 配置</button>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待配置' : '准备就绪'} hint={item[1]} tone={['violet', 'teal'][index]} />)}</div><Panel title="建设说明"><Notice tone="info">此页面已按 AI魔法学院的信息架构接入平台端导航与视觉壳层；需要服务端数据的筛选、编辑和审批操作将在对应 API 完成后接入，不会伪造业务数据。</Notice></Panel></>;
 }
+
+function CourseMarketplace({ api }) {
+  const [filters, setFilters] = useState({ status: '', search: '' });
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [rewardInput, setRewardInput] = useState({});
+  const [showRewardModal, setShowRewardModal] = useState(null);
+
+  const query = useMemo(() => {
+    const params = new URLSearchParams();
+    if (filters.status) params.set('marketplaceStatus', filters.status);
+    if (filters.search) params.set('search', filters.search);
+    params.set('page', String(page));
+    params.set('limit', String(limit));
+    return params.toString();
+  }, [filters, page, limit]);
+
+  const courses = useData(() => api.get(`admin/course-marketplace?${query}`), [api, query]);
+
+  const statusOptions = [
+    { value: '', label: '全部' },
+    { value: 'PENDING', label: '待审核' },
+    { value: 'APPROVED', label: '已上线' },
+    { value: 'REJECTED', label: '已拒绝' },
+    { value: 'NONE', label: '未上架' },
+  ];
+
+  const statusLabels = {
+    PENDING: { text: '待审核', color: 'bg-yellow-100 text-yellow-800' },
+    APPROVED: { text: '已上线', color: 'bg-green-100 text-green-800' },
+    REJECTED: { text: '已拒绝', color: 'bg-red-100 text-red-800' },
+    NONE: { text: '未上架', color: 'bg-gray-100 text-gray-500' },
+  };
+
+  function renderStatusBadge(status) {
+    const s = statusLabels[status] || statusLabels.NONE;
+    return <span className={`px-2 py-0.5 rounded text-xs font-medium ${s.color}`}>{s.text}</span>;
+  }
+
+  function renderDifficulty(level) {
+    if (!level) return <span className="muted">—</span>;
+    const filled = Math.min(Math.max(1, level), 5);
+    return <span>{'⭐'.repeat(filled)}</span>;
+  }
+
+  function renderCover(url) {
+    if (url) {
+      return <img src={url} alt="封面" style={{ width: 60, height: 40, objectFit: 'cover', borderRadius: 4 }} />;
+    }
+    return <div style={{ width: 60, height: 40, background: '#e2e8f0', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#94a3b8' }}>无图</div>;
+  }
+
+  function renderTags(tags) {
+    if (!Array.isArray(tags) || tags.length === 0) return <span className="muted">—</span>;
+    return <span className="tag-list">{tags.slice(0, 3).map((t) => <span key={t} className="tag">{t}</span>)}</span>;
+  }
+
+  async function approveCourse(course) {
+    if (!window.confirm(`确认上架「${course.title}」？`)) return;
+    setBusy(true); setMessage('');
+    try {
+      await api.put(`admin/course-marketplace/${course.id}`, { marketplaceStatus: 'APPROVED' });
+      setMessage(`「${course.title}」已上线。`);
+      courses.refresh();
+    } catch (err) { setMessage(err.message); }
+    finally { setBusy(false); }
+  }
+
+  async function rejectCourse(course) {
+    if (!window.confirm(`确认下架「${course.title}」？`)) return;
+    setBusy(true); setMessage('');
+    try {
+      await api.put(`admin/course-marketplace/${course.id}`, { marketplaceStatus: 'REJECTED' });
+      setMessage(`「${course.title}」已下架。`);
+      courses.refresh();
+    } catch (err) { setMessage(err.message); }
+    finally { setBusy(false); }
+  }
+
+  async function saveReward(course) {
+    const credits = Number(rewardInput[course.id]);
+    if (isNaN(credits) || credits < 0) {
+      setMessage('请输入有效的积分数值。');
+      return;
+    }
+    setBusy(true); setMessage('');
+    try {
+      await api.put(`admin/course-marketplace/${course.id}/rewards`, { marketplaceRewardCredits: credits });
+      setMessage(`「${course.title}」奖励积分已更新为 ${credits}。`);
+      setShowRewardModal(null);
+      courses.refresh();
+    } catch (err) { setMessage(err.message); }
+    finally { setBusy(false); }
+  }
+
+  function openRewardModal(course) {
+    setShowRewardModal(course);
+    setRewardInput({ ...rewardInput, [course.id]: course.marketplaceRewardCredits ?? 0 });
+  }
+
+  function openDetail(course) {
+    setSelectedCourse(course);
+  }
+
+  const totalPages = courses.data?.total ? Math.ceil(courses.data.total / limit) : 1;
+
+  return <>
+    <PageHeader eyebrow="内容运营" title="课程广场管理" description="审核、上架、下架课程到课程广场，设置奖励积分。" actions={<button className="secondary-button" onClick={() => { courses.refresh(); }}>刷新</button>} />
+
+    <Panel title="筛选条件">
+      <div className="form-grid">
+        <label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}>
+          {statusOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+        </select></label>
+        <label>课程名称<input value={filters.search} placeholder="搜索课程名称…" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label>
+        <label>每页条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select></label>
+      </div>
+      {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
+    </Panel>
+
+    <Panel title={`课程列表（${courses.data?.total ?? 0} 门）`}>
+      {courses.loading ? <Loading label="正在读取课程列表…" /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data?.items?.length ? (
+        <>
+          <div className="table-wrap"><table><thead><tr>
+            <th>封面</th>
+            <th>课程名称</th>
+            <th>难度</th>
+            <th>适学年龄</th>
+            <th>标签</th>
+            <th>奖励积分</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr></thead><tbody>
+            {courses.data.items.map((course) => <tr key={course.id}>
+              <td>{renderCover(course.coverImageUrl)}</td>
+              <td><button className="text-button" onClick={() => openDetail(course)}><strong>{course.title}</strong></button></td>
+              <td>{renderDifficulty(course.difficultyLevel)}</td>
+              <td>{course.ageRangeMin || course.ageRangeMax ? `${course.ageRangeMin ?? '?'}-${course.ageRangeMax ?? '?'}岁` : '—'}</td>
+              <td>{renderTags(course.tags)}</td>
+              <td>{course.marketplaceRewardCredits != null ? course.marketplaceRewardCredits : '—'}</td>
+              <td>{renderStatusBadge(course.marketplaceStatus)}</td>
+              <td><div className="row-actions">
+                {course.marketplaceStatus === 'APPROVED' ? (
+                  <button className="text-button" disabled={busy} onClick={() => rejectCourse(course)}>下架</button>
+                ) : (
+                  <button className="text-button" disabled={busy} onClick={() => approveCourse(course)}>上架</button>
+                )}
+                <button className="text-button" onClick={() => openRewardModal(course)}>设置积分</button>
+              </div></td>
+            </tr>)}</tbody></table></div>
+          <div className="row-actions" style={{ marginTop: 12, gap: 8 }}>
+            <button className="secondary-button" disabled={page <= 1 || courses.loading} onClick={() => setPage(page - 1)}>上一页</button>
+            <span className="muted">第 {page} / {totalPages} 页（共 {courses.data?.total ?? 0} 条）</span>
+            <button className="secondary-button" disabled={page >= totalPages || courses.loading} onClick={() => setPage(page + 1)}>下一页</button>
+          </div>
+        </>
+      ) : <Empty title="暂无符合条件的课程" />}
+    </Panel>
+
+    {showRewardModal ? (
+      <Panel title={`设置积分 · ${showRewardModal.title}`} actions={<button className="secondary-button" onClick={() => setShowRewardModal(null)}>关闭</button>}>
+        <div className="form-grid">
+          <label>奖励积分（学完可获）<input type="number" min="0" value={rewardInput[showRewardModal.id] ?? 0} onChange={(e) => setRewardInput({ ...rewardInput, [showRewardModal.id]: e.target.value })} /></label>
+          <button className="primary-button" disabled={busy} onClick={() => saveReward(showRewardModal)}>{busy ? '保存中…' : '保存'}</button>
+        </div>
+        <p className="muted" style={{ marginTop: 8 }}>学员完成课程后可获得的奖励积分。设为 0 则不赠送积分。</p>
+      </Panel>
+    ) : null}
+
+    {selectedCourse ? (
+      <Panel title={`课程详情 · ${selectedCourse.title}`} actions={<button className="secondary-button" onClick={() => setSelectedCourse(null)}>关闭</button>}>
+        <div className="split">
+          <div>
+            <p><strong>课程名称：</strong>{selectedCourse.title}</p>
+            <p><strong>课程描述：</strong>{selectedCourse.description || '暂无描述'}</p>
+            <p><strong>难度：</strong>{renderDifficulty(selectedCourse.difficultyLevel)}</p>
+            <p><strong>适学年龄：</strong>{selectedCourse.ageRangeMin || selectedCourse.ageRangeMax ? `${selectedCourse.ageRangeMin ?? '?'}-${selectedCourse.ageRangeMax ?? '?'}岁` : '—'}</p>
+          </div>
+          <div>
+            <p><strong>标签：</strong>{renderTags(selectedCourse.tags)}</p>
+            <p><strong>课时数：</strong>{selectedCourse.lessonCount ?? '—'}</p>
+            <p><strong>当前状态：</strong>{renderStatusBadge(selectedCourse.marketplaceStatus)}</p>
+            <p><strong>当前奖励积分：</strong>{selectedCourse.marketplaceRewardCredits != null ? selectedCourse.marketplaceRewardCredits : '未设置'}</p>
+          </div>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <p><strong>封面图：</strong></p>
+          {selectedCourse.coverImageUrl ? (
+            <img src={selectedCourse.coverImageUrl} alt="封面" style={{ maxWidth: 300, maxHeight: 200, objectFit: 'contain', borderRadius: 8 }} />
+          ) : (
+            <div style={{ width: 300, height: 200, background: '#e2e8f0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无封面图</div>
+          )}
+        </div>
+        <div className="row-actions" style={{ marginTop: 16 }}>
+          {selectedCourse.marketplaceStatus === 'APPROVED' ? (
+            <button className="primary-button" disabled={busy} onClick={() => { rejectCourse(selectedCourse); setSelectedCourse(null); }}>下架</button>
+          ) : (
+            <button className="primary-button" disabled={busy} onClick={() => { approveCourse(selectedCourse); setSelectedCourse(null); }}>上架</button>
+          )}
+          <button className="secondary-button" disabled={busy} onClick={() => { openRewardModal(selectedCourse); }}>设置积分</button>
+        </div>
+      </Panel>
+    ) : null}
+  </>;
+}
+
 function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
@@ -1140,7 +1353,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<PlatformPage kind="marketplace" />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/leads" element={<LeadsPanel api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="/audit" element={<PlatformAudit api={api} />} /><Route path="/notifications" element={<PlatformNotifications api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<CourseMarketplace api={api} />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/leads" element={<LeadsPanel api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="/audit" element={<PlatformAudit api={api} />} /><Route path="/notifications" element={<PlatformNotifications api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);

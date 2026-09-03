@@ -381,3 +381,20 @@
 - [x] 后端 ESM 语法（`--check`）：server.js、adminOrg.js、student.js、communication.js 全部 OK；四端生产构建（admin / org / student / website）全部通过；`git diff --check` 通过。
 - [x] 边界：未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上；不接邮件/短信/微信；不实现 leads 来源追踪 / SLA 升级 / Excel 导出；不实现公开作品评论/点赞/举报；现有 8 个硬编码示例作品保留为网站 fallback。
 - [ ] 已知延期：验收脚本里"开启 public 后 server 列表计数"等 3 项因 SQLite WAL 跨进程可见性限制需重启 server 才同步，已知不影响功能，下次批次改为单进程集成测试解决。
+
+### P5-W05 验收记录（2026-09-03）
+
+- [x] Schema：`packages/database/src/schema.js` 为 `course_series` 在 CREATE TABLE 内追加 `difficulty_level`（1-5 CHECK）/ `age_range_min` / `age_range_max` / `tags`（默认 `'[]'`），为 `course_lessons` 追加 `lesson_content`（默认 `''`），并补 ALTER TABLE 迁移块（仅旧库）以保证向后兼容；新增 `idx_course_series_difficulty` 索引。
+- [x] Seed：`packages/database/src/seed.js` 为 `AI古诗词创意营` 默认 difficulty=3、age 8-16、tags=`['语文','创意','古诗词','动画']`、每课时含 lessonContent。
+- [x] Backend normalize：`apps/server/src/lib.js` 的 `normalizeSeries` / `normalizeLesson` 同步输出新字段（difficultyLevel/ageRangeMin/ageRangeMax/tags/lessonContent），tags 解析为数组，缺省为 `[]`。
+- [x] Backend Admin：`apps/server/src/routes/adminOrg.js` `POST /api/admin/course-series` 接受新字段 + 难度 1-5 / 年龄下限 ≤ 上限 / 标签数组 ≤ 20；`PUT` 显式 `null` 存为 NULL、`undefined` 不更新；课时 `PUT` 接受 `lessonContent` 并写 `COURSE_LESSON_CONTENT_UPDATE` 审计。
+- [x] Backend Student：`apps/server/src/routes/student.js` + `services/studentContext.js` 新增 `getStudentAccessibleCourses(user, filters)` 与 `getStudentCourseDetail(user, seriesId)`；`GET /student/courses?difficulty&ageMin&ageMax&tag&search` 支持筛选；`GET /student/courses/:seriesId` 详情。
+- [x] Backend Org：`handleOrg` 在 `adminOrg.js` 新增 `GET /api/org/course-series/:seriesId` 详情（机构范围内 PUBLISHED + 可见性合规）。
+- [x] Backend Public：`apps/server/src/routes/communication.js` 新增 `GET /api/public/course-series`（仅 ALL_ORGS/ASSIGNED_ORGS、PUBLISHED；支持 difficulty/ageMin/ageMax/tag 筛选）与 `GET /api/public/course-series/:id` 详情（lessonContent 截断 2000 字）。
+- [x] Frontend Admin：课程编辑表单新增"难度/适学年龄下限/上限/标签"字段；课包列表新增"难度/适学年龄/标签"列；课时表新增"正文/教学指引"列（≤50000 字）。
+- [x] Frontend Student：课程页加筛选栏（难度/年龄下限/年龄上限/标签/关键词），卡片展示新字段；新增 `/courses/:seriesId` 详情页（难度/年龄/版本/标签卡 + 课时正文）。
+- [x] Frontend Org：课程中心加新字段列；新增 `/courses/:seriesId` 详情页（只读含课时正文）。
+- [x] Frontend Website：`/courses` 改读 `GET /api/public/course-series`（保留 11 条硬编码 fallback + 加载/空态/错误）；新增 `/courses/:id` 详情（公开 + 含课时正文）；路由加 `/courses/:id`。
+- [x] 验收脚本 `tmp-p5-w05-course-data.mjs`：**100 / 100 通过 / 0 失败**。覆盖未登录 401 / 越权 403 / 公开未存在 404 / 字段写入与回读 / 学员/机构/公开三端详情 / 难度 1-5 与年龄段校验 / 标签 max 20 / lessonContent ≤ 50000 / 学生端 difficulty/ageMin/ageMax/tag/search 全部筛选 / 课包 DRAFT/ARCHIVED 不可公开 / 已发布可下架 / schema 字段存在。
+- [x] 后端 ESM 语法（`--check`）：lib.js / adminOrg.js / student.js / communication.js / studentContext.js 全部 OK；四端生产构建（admin / org / student / website）全部通过；`git diff --check` 通过。
+- [x] 边界：未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上；不做机构自建课包 CRUD / marketplace 状态 / 真实图片上传 / 教学目标等其他结构化字段。

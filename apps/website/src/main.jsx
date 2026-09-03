@@ -19,7 +19,7 @@ const courses=[
 const FALLBACK_WORKS=[['🫧','点泡泡','小游戏','30 秒内点爆所有泡泡，节奏轻快的点击小游戏。'],['🍂','山行 · 杜牧','语文互动','朗读、探索与闯关结合，把古诗学成可玩的互动课。'],['🧩','C++ 代码大冒险','编程启蒙','积木拼程序，边玩边看 3D 执行过程与代码。'],['🧱','我的世界 · 简化版','沙盒创意','浏览器里搭方块世界，保存自己的创意地图。']];
 
 function Logo(){return <Link className="logo" to="/"><i>✦</i>AI魔法学院</Link>}
-function Header(){const loc=useLocation();const nav=[['/','首页'],['/courses','课程体系'],['/org','机构方案'],['/works','学员作品'],['/handbook','产品手册'],['/compare','选型对比']];return <header><div className="bar"><Logo/><nav>{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="download" to="/download">下载客户端</Link><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link></div></div></header>}
+function Header(){const loc=useLocation();const nav=[['/','首页'],['/marketplace','课程广场'],['/courses','课程体系'],['/org','机构方案'],['/works','学员作品'],['/handbook','产品手册'],['/compare','选型对比']];return <header><div className="bar"><Logo/><nav>{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="download" to="/download">下载客户端</Link><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link></div></div></header>}
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><Link to="/download">下载客户端</Link><a href="http://localhost:5175">机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · Mac / Windows</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
@@ -102,6 +102,120 @@ function Demo(){
   if(state==='success') return <><Title eyebrow="预约演示 · 开通试用" title={<>预约成功！</>} desc="我们会在 1 个工作日内联系你。"/><main className="inner"><section className="demo"><div className="success"><i>✦</i><h2>收到你的预约啦！</h2><p>我们会在 1 个工作日内联系你，发送演示安排与资料。</p></div></section></main></>;
   return <><Title eyebrow="预约演示 · 开通试用" title={<>把 AI 课开起来</>} desc="欢迎教培机构、学校与区域合作伙伴联系，获取演示账号、课包清单与客户端安装包。"/><main className="inner"><section className="demo"><div><h2>预约后，你将获得</h2>{['产品演示与开课流程讲解','11 门标准课包与课件清单','魔法石体验额度与演示账号','Mac / Windows 客户端安装包'].map((x,i)=><p key={x}><b>0{i+1}</b>{x}</p>)}</div><form onSubmit={submit}><label>机构 / 学校名称<input name="orgName" required placeholder="请输入机构名称"/></label><label>联系人<input name="contactName" required placeholder="请输入姓名"/></label><label>联系电话<input name="contactPhone" required placeholder="请输入手机号" maxLength={20}/></label><label>你想了解什么？<select name="intent" defaultValue=""><option value="" disabled>请选择合作方向</option><option>少儿编程 / AI 素养课程</option><option>学校拓展课 / 社团</option><option>寒暑假科创营</option><option>区域合作</option></select></label><label>补充说明<textarea name="notes" placeholder="例如：校区数量、预计班级规模……"/></label>{error&&<small style={{color:'#e74c3c'}}>{error}</small>}<button className="button" disabled={state==='loading'}>{state==='loading'?'提交中…':'提交预约 ↗'}</button><small>提交即表示同意我们用于联系你的预约信息。</small></form></section></main></>;
 }
+
+// ---- Marketplace ----
+function DifficultyStars({level}){
+  if(!level) return null;
+  return <span className="diff-stars">{Array.from({length:5},(_,i)=><b key={i} style={{color:i<level?'#ffb800':'#e0d9f0',fontSize:'13px'}}>★</b>)}</span>;
+}
+function ageLabel(min,max){
+  if(!min&&!max) return null;
+  if(min&&max) return `${min}–${max} 岁`;
+  if(min) return `${min}+ 岁`;
+  return `≤${max} 岁`;
+}
+function Marketplace(){
+  const [items,setItems]=useState([]);
+  const [total,setTotal]=useState(0);
+  const [page,setPage]=useState(1);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState(null);
+  const [filters,setFilters]=useState({difficulty:'',ageMin:'',ageMax:'',tag:'',search:'',sort:'popular'});
+  const limit=20;
+  const difficultyOptions=[{label:'全部',value:''},{label:'1-2',value:'1'},{label:'3',value:'3'},{label:'4-5',value:'4'}];
+  const ageOptions=[{label:'全部',value:'',ageMin:'',ageMax:''},{label:'6-8岁',value:'age6-8',ageMin:'6',ageMax:'8'},{label:'9-12岁',value:'age9-12',ageMin:'9',ageMax:'12'},{label:'13+岁',value:'age13plus',ageMin:'13',ageMax:''}];
+  const [activeAge,setActiveAge]=useState('');
+  const [allTags,setAllTags]=useState([]);
+  const buildParams=()=>{
+    const p=new URLSearchParams();
+    if(filters.difficulty) p.set('difficulty',filters.difficulty);
+    const ageOpt=ageOptions.find(o=>o.value===activeAge);
+    if(ageOpt){if(ageOpt.ageMin) p.set('ageMin',ageOpt.ageMin);if(ageOpt.ageMax) p.set('ageMax',ageOpt.ageMax);}
+    if(filters.tag) p.set('tag',filters.tag);
+    if(filters.search) p.set('search',filters.search);
+    p.set('sort',filters.sort);
+    p.set('page',page);
+    p.set('limit',limit);
+    return p;
+  };
+  useEffect(()=>{let live=true;setLoading(true);setError(null);
+    fetch(API_BASE+'/public/marketplace?'+buildParams())
+      .then(r=>r.ok?r.json():Promise.reject(new Error('加载失败')))
+      .then(j=>{if(live){const d=j.data||j;setItems(d.items||[]);setTotal(d.total||0);setLoading(false);
+        if(d.items){const tags=new Set();d.items.forEach(item=>{(item.tags||[]).forEach(t=>tags.add(t));});setAllTags(Array.from(tags));}
+      }})
+      .catch(e=>{if(live){setError(e.message);setLoading(false);}});
+    return()=>{live=false};
+  },[filters,page]);
+  const totalPages=Math.ceil(total/limit)||1;
+  return <><Title eyebrow="课程广场" title={<>发现优质<em>AI 编程课程</em></>} desc="精选平台优质课程，涵盖 AI 创作、游戏设计、绘本故事与智能硬件，适合 6–16 岁青少年。"/><main className="inner">
+    <div className="mkt-filters">
+      <div className="mkt-row"><span className="mkt-label">难度</span><div className="mkt-chips">{difficultyOptions.map(o=><button key={o.value} className={'mkt-chip'+(filters.difficulty===o.value?' on':'')} onClick={()=>{setFilters(f=>({...f,difficulty:o.value}));setPage(1);}}>{o.label}</button>)}</div></div>
+      <div className="mkt-row"><span className="mkt-label">适学年龄</span><div className="mkt-chips">{ageOptions.map(o=><button key={o.value} className={'mkt-chip'+(activeAge===o.value?' on':'')} onClick={()=>{setActiveAge(activeAge===o.value?'':o.value);setPage(1);}}>{o.label}</button>)}</div></div>
+      {allTags.length>0&&<div className="mkt-row"><span className="mkt-label">标签</span><div className="mkt-chips">{allTags.slice(0,12).map(t=><button key={t} className={'mkt-chip small'+(filters.tag===t?' on':'')} onClick={()=>{setFilters(f=>({...f,tag:f.tag===t?'':t}));setPage(1);}}>{t}</button>)}</div></div>}
+      <div className="mkt-row"><span className="mkt-label">排序</span><div className="mkt-chips"><button className={'mkt-chip'+(filters.sort==='popular'?' on':'')} onClick={()=>{setFilters(f=>({...f,sort:'popular'}));setPage(1);}}>综合推荐</button><button className={'mkt-chip'+(filters.sort==='recent'?' on':'')} onClick={()=>{setFilters(f=>({...f,sort:'recent'}));setPage(1);}}>最新上线</button></div></div>
+      <div className="mkt-search"><input placeholder="搜索课程名称…" value={filters.search} onChange={e=>{setFilters(f=>({...f,search:e.target.value}));setPage(1);}}/><button onClick={()=>{setFilters(f=>({...f,search:'',difficulty:'',tag:'',sort:'popular'}));setActiveAge('');setPage(1);}} className="mkt-reset">重置</button></div>
+    </div>
+    {loading?<div className="mkt-grid">{Array.from({length:8},(_,i)=><div key={i} className="mkt-skeleton"/>)}</div>:
+     error?<div className="note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
+     items.length===0?<div className="note">✦ <div><b>暂无课程，敬请期待</b><p>课程广场将陆续上线优质 AI 编程课程。</p></div></div>:
+     <><div className="mkt-grid">{items.map(item=><Link key={item.id} to={'/marketplace/'+item.id} className="mkt-card">
+       <div className="mkt-cover" style={item.coverImageUrl?{backgroundImage:'url('+item.coverImageUrl+')'}:{}}>{!item.coverImageUrl&&<span>{item.title?.charAt(0)||'课'}</span>}</div>
+       <div className="mkt-body"><h3>{item.title}</h3>
+         <div className="mkt-meta"><DifficultyStars level={item.difficultyLevel}/>{ageLabel(item.ageRangeMin,item.ageRangeMax)?<span className="mkt-age">{ageLabel(item.ageRangeMin,item.ageRangeMax)}</span>:null}</div>
+         {(item.tags||[]).slice(0,3).map(t=><span key={t} className="mkt-tag">{t}</span>)}
+         {(item.tags||[]).length>3&&<span className="mkt-tag-more">+{item.tags.length-3}</span>}
+         {item.marketplaceRewardCredits>0&&<span className="mkt-credits">奖励 {item.marketplaceRewardCredits} 积分</span>}
+       </div>
+     </Link>)}</div>
+     {totalPages>1&&<div className="mkt-pages"><button disabled={page<=1} onClick={()=>setPage(p=>p-1)}>上一页</button><span>{page} / {totalPages}</span><button disabled={page>=totalPages} onClick={()=>setPage(p=>p+1)}>下一页</button></div>}
+     </>}
+  </main></>;
+}
+
+function MarketplaceDetail(){
+  const params=new URLSearchParams(window.location.search);
+  const pathParts=window.location.pathname.split('/');
+  const id=pathParts[pathParts.length-1];
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState(null);
+  function startLearning(){
+    const user=localStorage.getItem('user');
+    if(!user){window.location.href='/login';return;}
+    let u=null;
+    try{u=JSON.parse(user);}catch(e){window.location.href='/login';return;}
+    if(u&&u.role==='STUDENT') window.location.href='/student';
+    else window.location.href='/demo';
+  }
+  useEffect(()=>{let live=true;
+    fetch(API_BASE+'/public/marketplace/'+id)
+      .then(r=>r.ok?r.json():Promise.reject(new Error('课程不存在')))
+      .then(j=>{if(live){setData(j.data||j);setLoading(false);}})
+      .catch(e=>{if(live){setError(e.message);setLoading(false);}});
+    return()=>{live=false};
+  },[id]);
+  if(loading) return <><Title eyebrow="课程详情" title={<>加载中…</>} desc=""/><main className="inner"><div className="mkt-grid">{Array.from({length:4},(_,i)=><div key={i} className="mkt-skeleton"/>)}</div></main></>;
+  if(error) return <><Title eyebrow="课程详情" title={<>未找到</>} desc={error}/><main className="inner"><div className="note">⚠ <div><b>无法加载课程</b><p>{error}</p></div><Link to="/marketplace" className="button" style={{marginTop:'20px'}}>返回课程广场</Link></div></main></>;
+  const d=data;
+  return <><Title eyebrow="课程广场" title={<>{d.title}</>} desc={d.description||''}/>
+  <main className="inner">
+    <Link to="/marketplace" className="back-link">← 返回课程广场</Link>
+    <div className="mkt-detail">
+      {d.coverImageUrl&&<div className="mkt-detail-cover" style={{backgroundImage:'url('+d.coverImageUrl+')'}}/>}
+      <div className="mkt-detail-info">
+        <div className="mkt-detail-row"><span className="mkt-label2">难度</span><DifficultyStars level={d.difficultyLevel}/></div>
+        <div className="mkt-detail-row"><span className="mkt-label2">适学年龄</span><span>{ageLabel(d.ageRangeMin,d.ageRangeMax)||'未设置'}</span></div>
+        {(d.tags||[]).length>0&&<div className="mkt-detail-row"><span className="mkt-label2">标签</span><div className="mkt-chips">{(d.tags||[]).map(t=><span key={t} className="mkt-tag">{t}</span>)}</div></div>}
+        {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">版本</span><span>{d.version}</span></div>}
+        <div className="mkt-detail-row"><span className="mkt-label2">课时</span><span>{d.lessonCount||0} 节</span></div>
+        {d.marketplaceRewardCredits>0&&<div className="mkt-detail-row"><span className="mkt-label2">奖励</span><span className="mkt-credits">奖励 {d.marketplaceRewardCredits} 积分</span></div>}
+      </div>
+    </div>
+    {(d.lessons||[]).length>0&&<div className="mkt-lessons"><h2>课程内容</h2>{(d.lessons||[]).map((l,i)=><div key={l.id} className="mkt-lesson"><div className="mkt-lesson-num">{String(i+1).padStart(2,'0')}</div><div className="mkt-lesson-body"><h3>{l.title}</h3>{l.summary&&<p className="mkt-lesson-summary">{l.summary}</p>}{l.lessonContent&&<p className="mkt-lesson-content">{String(l.lessonContent).slice(0,300)}{l.lessonContent&&l.lessonContent.length>300?'…':''}</p>}</div></div>)}</div>}
+    <div className="mkt-cta"><button className="button mkt-start" onClick={startLearning}>开始学习</button></div>
+  </main></>;
+}
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
-function App(){return <div className="site"><Header/><Routes><Route path="/" element={<Home/>}/><Route path="/courses" element={<Courses/>}/><Route path="/org" element={<Org/>}/><Route path="/works" element={<Works/>}/><Route path="/handbook" element={<Handbook/>}/><Route path="/compare" element={<Compare/>}/><Route path="/download" element={<Download/>}/><Route path="/demo" element={<Demo/>}/><Route path="*" element={<Home/>}/></Routes><Footer/></div>};
+function App(){return <div className="site"><Header/><Routes><Route path="/" element={<Home/>}/><Route path="/marketplace" element={<Marketplace/>}/><Route path="/marketplace/:id" element={<MarketplaceDetail/>}/><Route path="/courses" element={<Courses/>}/><Route path="/org" element={<Org/>}/><Route path="/works" element={<Works/>}/><Route path="/handbook" element={<Handbook/>}/><Route path="/compare" element={<Compare/>}/><Route path="/download" element={<Download/>}/><Route path="/demo" element={<Demo/>}/><Route path="*" element={<Home/>}/></Routes><Footer/></div>};
 createRoot(document.getElementById('root')).render(<BrowserRouter><App/></BrowserRouter>);
