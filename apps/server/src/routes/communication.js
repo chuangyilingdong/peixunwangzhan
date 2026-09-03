@@ -4,6 +4,7 @@ import {
   id,
   json,
   nonEmptyString,
+  normalizeSeries,
   nowIso,
   parseJson,
   q,
@@ -771,21 +772,21 @@ export function handlePublicCommunication(ctx) {
   if (pathname === '/api/public/course-series' && method === 'GET') {
     const params = [];
     const wheres = ["series.status = 'PUBLISHED'", "series.visibility IN ('ALL_ORGS', 'ASSIGNED_ORGS')"];
-    if (ctx.query.difficulty != null) {
+    if (ctx.search.get('difficulty') != null) {
       wheres.push('series.difficulty_level = ?');
-      params.push(Number(ctx.query.difficulty));
+      params.push(Number(ctx.search.get('difficulty')));
     }
-    if (ctx.query.ageMin != null) {
+    if (ctx.search.get('ageMin') != null) {
       wheres.push('series.age_range_max IS NOT NULL AND series.age_range_max >= ?');
-      params.push(Number(ctx.query.ageMin));
+      params.push(Number(ctx.search.get('ageMin')));
     }
-    if (ctx.query.ageMax != null) {
+    if (ctx.search.get('ageMax') != null) {
       wheres.push('series.age_range_min IS NOT NULL AND series.age_range_min <= ?');
-      params.push(Number(ctx.query.ageMax));
+      params.push(Number(ctx.search.get('ageMax')));
     }
-    if (ctx.query.tag) {
+    if (ctx.search.get('tag')) {
       wheres.push('series.tags LIKE ?');
-      params.push('%' + String(ctx.query.tag) + '%');
+      params.push('%' + String(ctx.search.get('tag')) + '%');
     }
     const items = rows(
       `SELECT series.* FROM course_series series WHERE ${wheres.join(' AND ')} ORDER BY series.sort, series.title`,

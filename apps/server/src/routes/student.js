@@ -467,11 +467,11 @@ export async function handleStudent(ctx) {
   if (part === '/courses' && method === 'GET') {
     // P5-W05: 学员端课程列表支持筛选
     const filters = {
-      difficulty: ctx.query.difficulty != null ? Number(ctx.query.difficulty) : undefined,
-      ageMin: ctx.query.ageMin != null ? Number(ctx.query.ageMin) : undefined,
-      ageMax: ctx.query.ageMax != null ? Number(ctx.query.ageMax) : undefined,
-      tag: ctx.query.tag || undefined,
-      search: ctx.query.search || undefined,
+      difficulty: ctx.search.get('difficulty') != null ? Number(ctx.search.get('difficulty')) : undefined,
+      ageMin: ctx.search.get('ageMin') != null ? Number(ctx.search.get('ageMin')) : undefined,
+      ageMax: ctx.search.get('ageMax') != null ? Number(ctx.search.get('ageMax')) : undefined,
+      tag: ctx.search.get('tag') || undefined,
+      search: ctx.search.get('search') || undefined,
     };
     const isFiltered = filters.difficulty || filters.ageMin || filters.ageMax || filters.tag || filters.search;
     if (isFiltered) {

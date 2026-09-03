@@ -178,12 +178,12 @@ function ensureCourse(now) {
     q(
       `INSERT INTO course_series(id,title,description,owner_type,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [seriesId, 'AI古诗词创意营', '5 课时古诗情景动画与创意表达课程', 'PLATFORM', 'ALL_ORGS', '1.0', 1, 'PUBLISHED', 2, 8, 16, JSON.stringify(['古诗', '创作', '动画']), now, now],
+      [seriesId, 'AI古诗词创意营', '5 课时古诗情景动画与创意表达课程', 'PLATFORM', 'ALL_ORGS', '1.0', 1, 'PUBLISHED', 3, 8, 16, JSON.stringify(['语文', '创意', '古诗词', '动画']), now, now],
     );
     series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
   } else {
     // P5-W05: 补全新课程元数据字段
-    q(`UPDATE course_series SET description=?,visibility='ALL_ORGS',status='PUBLISHED',difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?`, ['5 课时古诗情景动画与创意表达课程', 2, 8, 16, JSON.stringify(['古诗', '创作', '动画']), now, series.id]);
+    q(`UPDATE course_series SET description=?,visibility='ALL_ORGS',status='PUBLISHED',difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?`, ['5 课时古诗情景动画与创意表达课程', 3, 8, 16, JSON.stringify(['语文', '创意', '古诗词', '动画']), now, series.id]);
     series = row('SELECT * FROM course_series WHERE id=?', [series.id]);
   }
 

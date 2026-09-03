@@ -204,17 +204,15 @@ CREATE TABLE IF NOT EXISTS course_series (
   status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
   marketplace_status TEXT NOT NULL DEFAULT 'NONE',
   marketplace_reward_credits INTEGER NOT NULL DEFAULT 0,
+  difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 5),
+  age_range_min INTEGER,
+  age_range_max INTEGER,
+  tags TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_series_platform_title ON course_series(title) WHERE owner_type = 'PLATFORM';
-
--- P5-W05: 课程资料核验字段
-ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 5);
-ALTER TABLE course_series ADD COLUMN age_range_min INTEGER;
-ALTER TABLE course_series ADD COLUMN age_range_max INTEGER;
-ALTER TABLE course_series ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_course_series_difficulty ON course_series(difficulty_level);
 
 CREATE TABLE IF NOT EXISTS course_lessons (
@@ -227,14 +225,12 @@ CREATE TABLE IF NOT EXISTS course_lessons (
   duration_minutes INTEGER NOT NULL DEFAULT 45,
   prompt_pack_asset_id TEXT,
   outcome_pack_asset_id TEXT,
+  lesson_content TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_lessons_series_sort ON course_lessons(series_id, sort);
-
--- P5-W05: 课时正文/教学指引
-ALTER TABLE course_lessons ADD COLUMN lesson_content TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS course_assignments (
   id TEXT PRIMARY KEY,
@@ -1104,6 +1100,17 @@ try { db.exec('CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(contact_phone
 try { db.exec('ALTER TABLE works ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE works ADD COLUMN share_token TEXT'); } catch (_) {}
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_works_share_token ON works(share_token) WHERE share_token IS NOT NULL'); } catch (_) {}
+
+// P5-W05 course_series 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
+try { db.exec('ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER'); } catch (_) {}
+try { db.exec('ALTER TABLE course_series ADD COLUMN age_range_min INTEGER'); } catch (_) {}
+try { db.exec('ALTER TABLE course_series ADD COLUMN age_range_max INTEGER'); } catch (_) {}
+try { db.exec("ALTER TABLE course_series ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"); } catch (_) {}
+try { db.exec('ALTER TABLE course_series ADD CONSTRAINT chk_difficulty CHECK (difficulty_level IS NULL OR difficulty_level BETWEEN 1 AND 5)'); } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_difficulty ON course_series(difficulty_level)'); } catch (_) {}
+
+// P5-W05 course_lessons 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
+try { db.exec("ALTER TABLE course_lessons ADD COLUMN lesson_content TEXT NOT NULL DEFAULT ''"); } catch (_) {}
 
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }

@@ -6,6 +6,7 @@ import {
   normalizeSession,
   normalizeUser,
   nowIso,
+  row,
   rows,
 } from '../lib.js';
 
