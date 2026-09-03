@@ -18,10 +18,10 @@ if (( NODE_MAJOR < 22 || (NODE_MAJOR == 22 && NODE_MINOR < 5) )); then
   echo "Node.js 22.5+ is required because the database uses node:sqlite; found ${NODE_VERSION}" >&2
   exit 2
 fi
-VITE_DEPLOYMENT_MODE="$BUILD_MODE" \
-VITE_API_BASE="${VITE_API_BASE:-/api}" \
-VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-https://iicili.cyou}" \
-VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-https://iicili.cyou/org}" \
+export VITE_DEPLOYMENT_MODE="$BUILD_MODE"
+export VITE_API_BASE="${VITE_API_BASE:-/api}"
+export VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-https://iicili.cyou}"
+export VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-https://iicili.cyou/org}"
 node_modules/.bin/vite build apps/admin --config apps/admin/vite.config.mjs
 node_modules/.bin/vite build apps/org --config apps/org/vite.config.mjs
 node_modules/.bin/vite build apps/student --config apps/student/vite.config.mjs
