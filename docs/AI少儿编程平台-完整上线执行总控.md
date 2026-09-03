@@ -84,7 +84,7 @@
   - 当前阻塞：本执行环境对 `39.106.183.200:22` 连接超时，尚无可用服务器控制通道；已完成本地构建和 24/24、11/11、30/30 临时 SQLite 验收。拿到可用 SSH / 云控制台通道后，按 runbook 执行备份、上传、切换、健康检查和浏览器回归。
 - [x] **P9-I01 内部测试环境部署基线。** ✅ 2026-09-03
   - 完成记录：固化 `deploy/internal-test/` 的 Windows/Linux 构建脚本、发布目录约定、systemd 服务模板、Nginx 四端模板、环境变量样例和启动 / 停止 / 健康检查命令；发布产物包含 website/admin/org/student 四端、API 源码、数据库运行时和 `BUILD-METADATA.txt`。
-  - 验证：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；四端构建成功，API 可启动并返回 `/health` `status=ok`。本地生成 release `20260903T154014Z`。
+  - 验证：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；四端构建成功，API 可启动并返回 `/health` `status=ok`。本地生成 release `20260903T160501Z`，并按线上域名构建 `VITE_PUBLIC_SITE_URL=https://iicili.cyou`。
   - 边界：这是可从已推送 commit 重复构建的内测部署基线；本轮未连接、未覆盖旧服务器或 `iicili.cyou`，不宣称已完成真实服务器切换。
 - [x] **P9-I02 内部访问控制与不可索引。** ✅ 2026-09-03
   - 完成记录：Nginx 模板四个 server 均启用 Basic Auth、`X-Robots-Tag: noindex, nofollow, noarchive`、`X-Internal-Test: true` 和 SPA fallback；API 内测响应同样加头，`robots.txt` 为 `Disallow: /`，`sitemap.xml` 返回 404；前端显示“内部测试环境 · 不代表正式服务”。
@@ -1323,6 +1323,7 @@ node .\p3-api-integration.mjs
 | 2026-09-03 | P5-W07 SEO / 可访问性 / 性能基础优化完成：robots、sitemap、SEO head、动态标题 / canonical、JSON-LD、aria、焦点态和窄屏规则接通。 | 临时 SQLite / 静态 P5-W07 13 pass / 0 fail；四端生产构建和 git diff --check 通过；未运行真实 Lighthouse，不宣称分数；画布未修改、真实数据库未触碰、未部署线上。 |
 | 2026-09-03 | P5-W08 协议 / 隐私 / 未成年人说明代码闭环完成：官网三类协议页、预约同意、学生协议阅读记录、版本元数据和 P4-S06 数据请求入口联动已接通。 | 临时 SQLite P5-W08 `18 pass / 0 fail`；后端语法、四端生产构建和 `git diff --check` 通过；由于备案主体与法务正文未确认，保持 `[-]`，准备稿明确不得作为正式合规文本。 |
 | 2026-09-03 | 根据用户新决策重排上线优先级：备案暂缓不阻塞受控内部测试；新增 P9-I01～P9-I06 内测部署、访问控制、数据隔离、备份回滚、UAT 与运行手册闸门，并将正式域名 / HTTPS / 备案 / 公开服务移至正式公开上线阶段。 | 新增《AI少儿编程平台-内部测试上线执行清单.md》；已完成 P9-I01～P9-I06 的代码 / 文档基线与临时 SQLite 验收，尚未连接真实服务器执行部署。 |
+| 2026-09-03 | 根据用户最新授权，将内测目标从隔离节点改为线上网址 `iicili.cyou`；重试服务器 SSH / 网络预检，并检查阿里云 ECS 控制台登录状态。 | `39.106.183.200:22` 仍连接超时；ECS 控制台未登录；未覆盖线上站点、未重启服务、未触碰真实线上数据库。生成线上域名配置的内测 release `20260903T160501Z`；当前仍阻塞于服务器控制通道。 |
 | 2026-09-03 | P5-W11 第一方匿名埋点与转化漏斗完成：官网同意选择、白名单事件、90 天保留、平台分析报表和权限边界接通。 | 临时 SQLite P5-W11 `15 pass / 0 fail`；后端语法、四端生产构建和 `git diff --check` 通过；不接入第三方统计、不保存 IP / PII，备案与正式法务仍按外部事项处理。 |
 
 ---
