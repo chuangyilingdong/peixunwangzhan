@@ -25,21 +25,21 @@ server {
     location /admin/ {
         rewrite ^/admin/(.*)$ /$1 break;
         root /srv/ai-kids-platform/internal-test/current/apps/admin;
-        try_files $uri $uri/ /index.html;
+        try_files $uri $uri/ /admin/index.html;
     }
 
     location = /org { return 301 /org/; }
     location /org/ {
         rewrite ^/org/(.*)$ /$1 break;
         root /srv/ai-kids-platform/internal-test/current/apps/org;
-        try_files $uri $uri/ /index.html;
+        try_files $uri $uri/ /org/index.html;
     }
 
     location = /student { return 301 /student/; }
     location /student/ {
         rewrite ^/student/(.*)$ /$1 break;
         root /srv/ai-kids-platform/internal-test/current/apps/student;
-        try_files $uri $uri/ /index.html;
+        try_files $uri $uri/ /student/index.html;
     }
 
     location / {
