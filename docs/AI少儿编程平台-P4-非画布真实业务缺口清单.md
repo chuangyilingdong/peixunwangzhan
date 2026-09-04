@@ -511,7 +511,9 @@
   - 完成记录：新增 `deploy/internal-test/RUNBOOK.md`，明确发布前检查、启停、健康检查、journal 日志、错误上报、备份、回滚、联系人占位和放行闸门；systemd 使用 journald，API 仅监听回环地址。
   - 验证：文档与脚本静态检查、P9-I01/I04/I05 验收通过；线上 systemd / Nginx / health 检查已通过；未承诺公开 SLA，不接收外部真实业务。
 
-当前 P9 内测上线代码 / 文档基线与真实服务器受控发布均已完成：`iicili.cyou` 当前运行 release `20260903T172458Z`，API 仅监听 `127.0.0.1:8788`，使用独立测试 SQLite，noindex / 内测标识 / 旧站回滚均已落实；Basic Auth 已按用户授权解除。下一步按正式上线节奏推进 P8 质量、安全、隐私、运营与发布回滚门槛；正式公开前必须恢复访问控制。
+当前 P9 内测上线代码 / 文档基线与真实服务器受控发布均已完成：`iicili.cyou` 当前运行 release `20260904T035620Z`；API 仅监听 `127.0.0.1:8788`，使用独立测试 SQLite；线上继续保持 HTTPS、`noindex / nofollow / noarchive`、内测标识和可回滚发布能力。Basic Auth 已于 2026-09-04 按用户明确授权解除；正式公开前必须恢复访问控制。
+- 线上发布确认（2026-09-04）：从已推送 commit `3d9c0f6e0e358aa688151f96576beed7bf7797fa` 在 ECS 内测环境构建 release `20260904T035620Z`，元信息为 Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`；发布前完成独立测试数据库备份 `/srv/ai-kids-platform/internal-test/backups/20260904T035559Z/`，原子切换 `current`，重启 `learning-platform-internal-test`，本机 `/health` 返回 `status=ok`，Nginx 配置检查与 reload 成功。
+- 线上只读复核（2026-09-04）：`/`、`/marketplace`、`/courses`、`/org/`、`/works`、`/handbook`、`/compare`、`/demo`、`/terms`、`/privacy`、`/minors` 均正常渲染；内测标识、`noindex, nofollow, noarchive` 与动态 canonical 均通过，官网控制台错误 0；未读取、复制、迁移或写入真实业务数据库。
 
 - 线上发布确认（2026-09-03）：通过 ECS 云服务器终端完成 `iicili.cyou` 受控内部测试发布；验收 `/`、`/admin/`、`/org/`、`/student/` 均 HTTP 200，`/api/health` 成功，未认证返回 401，旧服务保留。未读取、复制、迁移或写入旧站真实数据库。
 
