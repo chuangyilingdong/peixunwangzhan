@@ -111,6 +111,7 @@
   - 最小告警：升级每分钟 `monitoring-healthcheck.sh`，覆盖 API 失败、磁盘 ≥80%、证书 14 天窗口、备份超过 26 小时 / 失败四类；正常与故障注入路径均验证，状态写入 `production/state/last-alert-state.json`。外部短信 / 飞书 / 邮件通知渠道尚未接入。
   - 运行状态：production active/enabled，`NRestarts=0`，journal error/warn=0，Nginx 4xx/5xx=0，四端公网 200，安全头保持；证书 certbot.timer active。
   - 变更资产：`deploy/production/daily-backup.sh`、`restore-drill.sh`、备份修复、告警探测、systemd 备份模板、README / RUNBOOK、`docs/p9/P9-D02-production-24h-observation.md`。
+  - 安全加固（20:55 CST）：Nginx 敏感扫描路径全部 404、移除 default 站点、启用 ufw 仅放行 22/80/443；四端与 API 复测 200。CUPS 631 被防火墙拦截，snap 锁释放后再停用。
 
 - [ ] **当前唯一执行队列：完成生产 24 小时运行观察（截止 2026-09-05 20:24 CST）。**
   - 观察记录：`docs/p9/P9-D02-production-24h-observation.md` 已建立并写入 2026-09-04 20:44 CST 基线；24 小时窗口未结束，不得提前宣称完成。

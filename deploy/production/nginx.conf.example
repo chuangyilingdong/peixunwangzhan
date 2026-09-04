@@ -26,6 +26,23 @@ server {
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" always;
 
+    # Common scanner targets must not fall back to SPA HTML with HTTP 200.
+    # Exact and prefix locations win before the SPA regex fallback behavior used by try_files.
+    location = /.env { return 404; }
+    location ^~ /.env { return 404; }
+    location ^~ /.git { return 404; }
+    location ^~ /.aws { return 404; }
+    location ^~ /.ssh { return 404; }
+    location ^~ /.svn { return 404; }
+    location = /.DS_Store { return 404; }
+    location = /config.json { return 404; }
+    location = /backup.sql { return 404; }
+    location = /dump.sql { return 404; }
+    location = /wp-login.php { return 404; }
+    location = /xmlrpc.php { return 404; }
+    location ^~ /phpmyadmin { return 404; }
+    location ^~ /actuator { return 404; }
+
     location = /api { return 301 /api/; }
     location = /api/health {
         proxy_pass http://127.0.0.1:8789/health;

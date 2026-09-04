@@ -33,6 +33,17 @@
 | 最新备份 | `20260904T124238Z`，SHA256/integrity 通过 | 正常 |
 | 恢复演练 | 2026-09-04 20:43 CST 通过，临时端口已释放 | 正常 |
 
+## 2026-09-04 20:55 CST 安全加固记录
+
+- 访问日志巡检发现公网扫描密集：`.env`、`.git/config`、`actuator`、WordPress 等探测路径曾因 SPA fallback 返回 200。
+- 已加固 Nginx：常见敏感路径与扫描器目标返回 404；复测 `/.env`、`/.env.production`、`/.git/config`、`/.aws/credentials`、`/.ssh/id_rsa`、`/config.json`、`/wp-login.php`、`/phpmyadmin`、`/actuator` 等 16 项全部 404。
+- 已移除 Nginx default 站点；直接 IP HTTP 访问不再返回默认欢迎页，而是 301 到 HTTPS。
+- 已启用主机 ufw：默认 incoming deny，仅放行 22/80/443；SSH 与四端入口复测正常。
+- CUPS snap 服务仍监听 `0.0.0.0:631`，但 631 已被 ufw 拦截。停用尝试被 snapd 正在进行的 `chromium` 安装全局锁阻塞，未强行 kill snapd；待 snapd 空闲后停用 `cups.cupsd` / `cups.cups-browsed`。
+- TLS 证书当前有效期：2026-09-01 ～ 2026-11-30；certbot.timer active。
+- 观察基线未受影响：production active，四端 200，`/api/health=ok`，安全头保持。
+- 回滚资产：`/etc/nginx/backups/iicili.cyou.before-scanner-hardening.20260904T1255Z`、`/etc/nginx/backups/default.before-disable.20260904T1255Z`；internal-test 回滚资产未触碰。
+
 ## 24 小时结论
 
 待 2026-09-05 20:24 CST 后补充。验收条件：
