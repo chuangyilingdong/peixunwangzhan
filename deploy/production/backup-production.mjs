@@ -36,9 +36,24 @@ db.close();
 
 const current = path.join(root, 'current');
 const currentTarget = fs.existsSync(current) ? fs.realpathSync(current) : null;
-if (currentTarget) copyIfExists(currentTarget, path.join(backupDir, 'release'));
+if (currentTarget) {
+  const releaseBackup = path.join(backupDir, 'release');
+  fs.rmSync(releaseBackup, { recursive: true, force: true });
+  copyIfExists(currentTarget, releaseBackup);
+  if (!fs.existsSync(path.join(releaseBackup, 'BUILD-METADATA.txt')) ||
+      !fs.existsSync(path.join(releaseBackup, 'apps/server/src/index.js'))) {
+    throw new Error(`Release backup incomplete for ${currentTarget}`);
+  }
+}
 copyIfExists(path.join(root, 'config'), path.join(backupDir, 'config'));
-copyIfExists(path.join(root, 'logs'), path.join(backupDir, 'logs'));
+// Only copy a bounded monitoring log snapshot. Copying the whole logs directory would recursively
+// include backup logs when a custom output root is placed under logs, and historical logs are rotated.
+const logBackup = path.join(backupDir, 'logs');
+fs.mkdirSync(logBackup, { recursive: true });
+for (const name of ['monitoring-health.log', 'monitoring-alerts.log']) {
+  const source = path.join(root, 'logs', name);
+  if (fs.existsSync(source)) fs.copyFileSync(source, path.join(logBackup, name));
+}
 const manifest = {
   createdAt: new Date().toISOString(),
   environment: 'production',

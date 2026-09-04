@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI Kids Platform production daily backup at 03:00 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Asia/Shanghai
+Persistent=true
+Unit=daily-backup.service
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

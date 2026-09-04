@@ -1,0 +1,8 @@
+[Unit]
+Description=AI Kids Platform production daily backup
+After=network-online.target learning-platform-production.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/ai-kids-platform/production/bin/daily-backup.sh
+User=root

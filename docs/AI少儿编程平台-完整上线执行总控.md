@@ -103,9 +103,18 @@
   - 公网回归：四端 Playwright 4/4 通过；标题、登录文案、资源前缀、无 `X-Internal-Test`、非 noindex、无内测横幅、HSTS/CSP 等安全头全部通过；`/api/health` 200。
   - 收尾：internal-test 停止并禁用，但 release、数据库、unit、Nginx 配置保留；生产健康 timer active，监控日志 `status=ok`，磁盘 10%。
 
-- [ ] **当前唯一执行队列：生产 24 小时运行观察与备份机制核验。**
-  - 监控每分钟健康与磁盘；检查 journal 是否出现新增 `API INTERNAL ERROR`、未捕获异常或 SQLite 锁错误。
-  - 核验生产每日 03:00 备份尚未自动排程，需要下一步补 timer / cron。
+- [x] **P9-D02 生产备份、账号加固、最小告警与观察基线（2026-09-04）。**
+  - 备份：修复 `backup-production.mjs` release 复制缺陷（旧实现静默缺失 release）；备份现在包含 SQLite 快照、release、有限日志快照与 `MANIFEST.json`，并强制校验 `BUILD-METADATA.txt` 与 server 入口存在。
+  - 自动备份：服务器安装 `ai-kids-platform-production-daily-backup.timer`，每日 03:00 Asia/Shanghai，`Persistent=true`，保留 14 天；首次备份 `20260904T124238Z`，SHA256 与 `PRAGMA integrity_check=ok` 通过。
+  - 恢复演练：`restore-drill.sh` 在隔离目录和 `127.0.0.1:18789` 拉起备份实例，健康检查 200、active_users=6、结束后端口释放；未覆盖生产库，未停止 production，internal-test 回滚资产未触碰。
+  - 账号加固：创建真实负责人账号 `owner`（`SUPER_ADMIN`，随机强密码仅保存在服务器 `/root/.ai-kids-platform-production-credentials`，权限 0600）；登录 + `/api/me` 200/SUPER_ADMIN 验证通过。6 个种子账号全部改为 `DISABLED`，会话全部作废；保留记录而非直接删除，避免破坏演示数据外键。
+  - 最小告警：升级每分钟 `monitoring-healthcheck.sh`，覆盖 API 失败、磁盘 ≥80%、证书 14 天窗口、备份超过 26 小时 / 失败四类；正常与故障注入路径均验证，状态写入 `production/state/last-alert-state.json`。外部短信 / 飞书 / 邮件通知渠道尚未接入。
+  - 运行状态：production active/enabled，`NRestarts=0`，journal error/warn=0，Nginx 4xx/5xx=0，四端公网 200，安全头保持；证书 certbot.timer active。
+  - 变更资产：`deploy/production/daily-backup.sh`、`restore-drill.sh`、备份修复、告警探测、systemd 备份模板、README / RUNBOOK、`docs/p9/P9-D02-production-24h-observation.md`。
+
+- [ ] **当前唯一执行队列：完成生产 24 小时运行观察（截止 2026-09-05 20:24 CST）。**
+  - 观察记录：`docs/p9/P9-D02-production-24h-observation.md` 已建立并写入 2026-09-04 20:44 CST 基线；24 小时窗口未结束，不得提前宣称完成。
+  - 必须复核：2026-09-05 03:00 每日备份 timer 是否真实成功；journal / Nginx 是否新增 P0/P1；四项告警状态是否保持 ok。
   - 观察登录、课程、作品、账务主链路是否有真实用户反馈；发现 P0 立即回滚处置。
   - 已知公开边界保持：法律页准备稿、举报 / 申诉 / 内容审核 / 监护人暂缓、AI 为 `local-mock`、真实支付 / 短信 / 邮件 / OSS / 微信未接入。
 ### 2026-09-04 用户生产决策记录

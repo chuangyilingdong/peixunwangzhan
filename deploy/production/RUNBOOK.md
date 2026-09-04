@@ -32,6 +32,31 @@ bash /srv/ai-kids-platform/internal-test/source/deploy/production/rollback-produ
   --release /srv/ai-kids-platform/production/releases/<known-good>
 ```
 
+## 每日备份与恢复演练
+
+```bash
+systemctl list-timers --all | grep ai-kids-platform-production-daily-backup
+cat /srv/ai-kids-platform/production/state/last-backup-state.json
+bash /srv/ai-kids-platform/production/bin/daily-backup.sh
+bash /srv/ai-kids-platform/production/bin/restore-drill.sh
+```
+
+- 每日 03:00 Asia/Shanghai 自动备份，保留 14 天；timer 为 `ai-kids-platform-production-daily-backup.timer`。
+- 备份必须通过 SHA256 与 SQLite `integrity_check`，状态写入 `production/state/last-backup-state.json`。
+- 恢复演练只使用隔离目录与 `127.0.0.1:18789`，结束必须释放端口；不得覆盖生产库或停生产服务。
+- 每月至少执行一次真实备份恢复演练，并把结果追加到 P9 运维记录。
+
+## 最小告警
+
+`ai-kids-platform-production-healthcheck.timer` 每分钟执行 `monitoring-healthcheck.sh`，检查：
+
+1. API：`http://127.0.0.1:8789/health` 失败即 failed。
+2. 磁盘：使用率 ≥80% 即 failed。
+3. 证书：`/etc/letsencrypt/live/iicili.cyou/fullchain.pem` 14 天窗口失效即 failed。
+4. 备份：最新成功备份超过 26 小时或状态非 ok 即 failed。
+
+状态 JSON 写入 `production/state/last-alert-state.json`，人类可读日志写入 `production/logs/monitoring-health.log`。当前最小告警只保证失败可被 systemd 状态与 journal 检出；外部短信 / 飞书 / 邮件推送尚未接入，不得宣称 7x24 有人值守。
+
 ## 公网验收
 
 在服务器 Node 24 环境执行：

@@ -28,9 +28,12 @@ ln -sfn /srv/ai-kids-platform/production/releases/<timestamp> /srv/ai-kids-platf
 
 ```bash
 bash deploy/production/backup-production.sh
+bash deploy/production/daily-backup.sh
 ```
 
-备份包含 SQLite 快照、release、配置副本、日志副本和 `MANIFEST.json`（含 SHA256）。
+备份包含 SQLite 快照、release、配置副本、有限日志副本和 `MANIFEST.json`（含 SHA256）。`daily-backup.sh` 额外执行 SHA256、`PRAGMA integrity_check` 校验，并把结果写入 `production/state/last-backup-state.json`。
+
+生产 ECS 已安装 `ai-kids-platform-production-daily-backup.timer`：每日 03:00 Asia/Shanghai 执行，`Persistent=true` 补跑错过的窗口，保留 14 天。恢复演练使用 `restore-drill.sh`，在 `127.0.0.1:18789` 拉起隔离实例，绝不覆盖生产库。
 
 ## 回滚 / release 切换
 

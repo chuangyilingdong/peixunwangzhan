@@ -102,7 +102,10 @@
 - [x] production 用户、目录、端口、服务名确定。
 - [x] 数据库、备份、扩容、回滚策略确定。
 - [x] 访问控制与安全头策略确定。
-- [ ] 联系人 / 值班 / 故障升级路径确定；生产每日备份自动排程待补。
+- [x] 生产每日备份自动排程：`ai-kids-platform-production-daily-backup.timer`，03:00 Asia/Shanghai，保留 14 天；首次备份与恢复演练已于 2026-09-04 通过。
+- [x] 生产默认账号处置：真实负责人账号 `owner` 已创建并验证；全部种子账号已 `DISABLED` 且会话作废。
+- [x] 最小告警工程基线：API、磁盘 80%、证书 14 天、备份 26 小时；外部通知渠道未接入。
+- [ ] 联系人 / 值班 / 故障升级路径与外部通知渠道确定。
 
 ## 8. 已知公开风险
 
@@ -120,3 +123,10 @@
 - 入口：Nginx production 配置启用，切换前配置已备份；四端 Playwright 回归 4/4，public 模式与 HTTPS 安全头通过。
 - 回滚资产：internal-test 服务停止并禁用，release、数据库、unit、Nginx 配置均保留；Nginx 切换前配置备份存在。
 - 监控：`ai-kids-platform-production-healthcheck.timer` active，每分钟记录健康与磁盘。
+## 10. P9-D02 运维补强记录（2026-09-04）
+
+- 备份：首次生产备份 `/srv/ai-kids-platform/production/backups/20260904T124238Z`，SHA256 校验与 SQLite `integrity_check=ok` 通过；包含数据库快照、release 与有限日志快照。
+- 保留：每日 03:00 Asia/Shanghai，保留 14 天；`Persistent=true`。
+- 恢复演练：隔离实例 `127.0.0.1:18789` 健康检查通过，active_users=6，演练后端口释放；未覆盖生产数据库。
+- 账号：`owner` 真实负责人 `SUPER_ADMIN` 创建并验证；6 个种子账号 `DISABLED`，全部会话作废。密码仅保存在服务器 0600 凭据文件，未进入 Git / 文档 / 日志。
+- 告警：API 失败、磁盘 ≥80%、证书 14 天、备份超 26 小时；正常与故障注入验证通过。外部通知渠道未接入。
