@@ -1571,3 +1571,15 @@ node .\p3-api-integration.mjs
 - [x] 登出与会话失效：通过隔离 API 使用 `root` 登录后读取 `/api/me` 返回 200；`POST /api/auth/logout` 返回 200 且 `loggedOut=true`；同一 Cookie 再读 `/api/me` 返回 401 `SESSION_SUPERSEDED`，证明服务端旧会话立即失效。前端 `logout()` 同时调用服务端注销、清理本地会话并跳转登录页。
 - [x] 证据：`evidence/p8-q07/admin-notifications-fixed.jpg`（修复后真实浏览器截图）、`evidence/p8-q07/admin-super-admin-uat.txt`（环境、页面矩阵、根因、回归与登出记录）。证据为本仓库持久路径，可复核。
 - [ ] 下一步：按 P8-Q07 继续机构管理员、教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
+
+### 8.14 P8-Q07 角色 UAT：机构管理员阶段（2026-09-04）
+
+- [x] 机构端异常路径：未登录访问 `/org/dashboard` 仅显示机构登录页；`org-admin` 错误密码返回“登录名或密码错误”；`root / admin123` 与 `student-1 / study123` 登录机构端均被拒绝并提示“该账号没有机构教务权限”；`org-admin / org123` 正常进入机构总览。
+- [x] 阻塞缺陷一（P1）与根因：机构端、学生端生产包首次进入白屏，页面错误为 `ReferenceError: React is not defined`，产物内 canvas 组件残留 **1336 / 1073** 处未绑定 `React.createElement`。排查确认不是 canvas 源码、目录 alias 或 React 插件配置问题，而是 `apps/org`、`apps/student`、`apps/server`、`packages/database` 下残留指向 `D:\学习平台\cyldhuabu-main\cyldhuabu-main` 的未跟踪 `node_modules`，使真实构建误用外部项目 `@vitejs/plugin-react 6.1.1` / `vite 8.2.2` 并改变 JSX 转换行为。
+- [x] 修复方式：未修改 `packages/canvas`，未引入全局 `React` 兜底；仅将四组跨项目残留依赖目录隔离出 workspace，并在根 `package.json` 显式声明 `@platform/database: workspace:*`，让服务端依赖本仓库包。清理后 org / student 产物 `React.createElement=0`，四端完整生产构建通过。
+- [x] 阻塞缺陷二（P1）：`/org/help-feedback` 首次巡检白屏，错误为 `ReferenceError: useSearchParams is not defined`。根因是机构端已使用该 Hook 但未从 `react-router-dom` 导入；最小修复仅补齐 import，未改反馈业务逻辑。
+- [x] 机构管理员 16 个页面巡检：`/dashboard`、`/classes`、`/members`、`/works`、`/inbox`、`/courses`、`/work-data`、`/packages`、`/enrollment`、`/account-requests`、`/materials`、`/recharge`、`/usage`、`/hackathon`、`/afee`、`/help-feedback` 全部真实浏览器渲染通过，页面错误 **0**，最终 **16/16 pass**。`/usage` 实际页面标题为“积分用量”，首次失败仅因验收脚本预设关键词错误，已复验通过。
+- [x] 越权与登出：`org-admin` 访问 `/admin/dashboard` 显示“当前会话没有平台管理权限”；同 Cookie 调平台管理 API 返回 403 `FORBIDDEN`。`student-1` 调 `/api/org/billing/account` 返回 403。`org-admin` 登出前 `/api/me=200`，`POST /api/auth/logout=200`，同 Cookie 登出后 `/api/me=401 SESSION_INVALID`，前端回到登录页。浏览器内 Cookie API 验证均复用真实 `platform_token`。
+- [x] 回归：`p4-03-list-api-check.mjs` **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；`p8-q04-e2e.mjs` **54 pass / 0 fail**；四端生产构建通过；`git diff --check` 通过。UAT 继续使用临时 SQLite 与 `60027/60028` 隔离进程，未读取、复制或写入真实线上数据库，未触碰生产站点。
+- [x] 证据：`evidence/p8-q07/org-login-react-fixed.jpg`、`student-login-react-fixed.jpg`、`react-runtime-fix.txt`、`org-*.jpg`（16 页截图）、`admin-org-admin-routes.txt`、`admin-org-admin-authz-logout.txt`。
+- [ ] 下一步：按 P8-Q07 继续教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。

@@ -1,0 +1,121 @@
+{
+  "account": "org-admin",
+  "total": 16,
+  "pass": 16,
+  "fail": [],
+  "results": [
+    {
+      "route": "/dashboard",
+      "url": "http://127.0.0.1:60028/org/dashboard",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/classes",
+      "url": "http://127.0.0.1:60028/org/classes",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/members",
+      "url": "http://127.0.0.1:60028/org/members",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/works",
+      "url": "http://127.0.0.1:60028/org/works",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/inbox",
+      "url": "http://127.0.0.1:60028/org/inbox",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/courses",
+      "url": "http://127.0.0.1:60028/org/courses",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/work-data",
+      "url": "http://127.0.0.1:60028/org/work-data",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/packages",
+      "url": "http://127.0.0.1:60028/org/packages",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/enrollment",
+      "url": "http://127.0.0.1:60028/org/enrollment",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/account-requests",
+      "url": "http://127.0.0.1:60028/org/account-requests",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/materials",
+      "url": "http://127.0.0.1:60028/org/materials",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/recharge",
+      "url": "http://127.0.0.1:60028/org/recharge",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/usage",
+      "url": "http://127.0.0.1:60028/org/usage",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/hackathon",
+      "url": "http://127.0.0.1:60028/org/hackathon",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/afee",
+      "url": "http://127.0.0.1:60028/org/afee",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    },
+    {
+      "route": "/help-feedback",
+      "url": "http://127.0.0.1:60028/org/help-feedback",
+      "rendered": true,
+      "labelFound": true,
+      "bodySample": "✦ AI 魔法学院 机构管理员 ◈ 机构总览 ▦ 班级与课堂 ♙ 成员管理 ✧ 作品点评 ✉ 站内信 ◇ 课程中心 ▥ 作品数据中心 ◇ 积分套餐 ♙ 学员开通 ◉ 账号申请 ▤ 宣传物料 ◎ 问题反馈 ✦ 需要帮助？ 查看开课与创作指南 机 机构管理员 org-admin ↪ AI魔法学院 / 机构管理员 ● 服务正"
+    }
+  ],
+  "pageErrors": []
+}

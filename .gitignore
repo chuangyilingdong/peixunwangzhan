@@ -26,6 +26,10 @@ coverage/
 *.pid.lock
 restart.flag
 
+
+# 本地临时目录与隔离诊断产物
+.tmp/
+
 # 本地调试与一次性分析文件
 /_*.txt
 /schema-out.txt

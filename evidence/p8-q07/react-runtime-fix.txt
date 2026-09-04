@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-09-04T10:00:52.377Z",
+  "results": [
+    {
+      "name": "org-login",
+      "url": "http://127.0.0.1:60028/org/dashboard",
+      "expectFound": true,
+      "body": "✦\nAI魔法学院\n\n青少年 AI 创作开课平台\n\n机构教务工作台\n\n管理班级、课堂、成员和学生创作成果。\n\n✦ 创作\n✦ 课程\n✦ 作品\n\n欢迎回来\n\n登录你的工作台\n\n使用机构或平台分配的账号进入。\n\n登录名\n密码\n进入工作台 ↗\n演示账号\n机构管理员\norg-admin\n使用\n授课教师\nteacher-1\n使用\nAI魔法学院 · 为课堂创作而设计",
+      "rootChildren": 1
+    },
+    {
+      "name": "student-login",
+      "url": "http://127.0.0.1:60028/student/dashboard",
+      "expectFound": true,
+      "body": "✦\nAI魔法学院\n\n青少年 AI 创作开课平台\n\n学生创作空间\n\n在 AI 魔法学院中学习、创作并分享你的作品。\n\n✦ 创作\n✦ 课程\n✦ 作品\n\n欢迎回来\n\n登录你的工作台\n\n使用机构或平台分配的账号进入。\n\n登录名\n密码\n进入工作台 ↗\n演示账号\n跟随课堂学生\nstudent-1\n使用\n自主练习学生\nstudent-2\n使用\nAI魔法学院 · 为课堂创作而设计",
+      "rootChildren": 1
+    }
+  ],
+  "errors": []
+}

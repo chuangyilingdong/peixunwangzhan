@@ -1,0 +1,39 @@
+{
+  "results": [
+    {
+      "case": "org-admin",
+      "meBefore": {
+        "status": 200,
+        "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"user_c89dcae3c10a454185a9\",\"orgId\":\"org_1c997c9641414d09aeed\",\"login\":\"org-admin\",\"displayName\":\"机构管理员\",\"role\":\"ORG_ADMIN\",\"permissions\":[],\"phone\":null,\"phoneVerifiedAt\":null,\"mustBindPhone\":false,\"status\":\"ACTIVE\",\"exp"
+      },
+      "adminApi": {
+        "status": 403,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+      },
+      "logout": {
+        "status": 200,
+        "body": "{\"success\":true,\"ok\":true,\"data\":{\"loggedOut\":true}}"
+      },
+      "meAfter": {
+        "status": 401,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+      },
+      "uiAfterLogout": {
+        "loginShown": true,
+        "dashboardShown": false
+      }
+    },
+    {
+      "case": "student",
+      "me": {
+        "status": 200,
+        "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"user_6d59571b317749978d5c\",\"orgId\":\"org_1c997c9641414d09aeed\",\"login\":\"student-1\",\"displayName\":\"小明\",\"role\":\"STUDENT\",\"permissions\":[],\"phone\":null,\"phoneVerifiedAt\":null,\"mustBindPhone\":false,\"status\":\"ACTIVE\",\"expiresA"
+      },
+      "orgBilling": {
+        "status": 403,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+      }
+    }
+  ],
+  "pass": true
+}

@@ -16,14 +16,16 @@
     "dev:website": "vite apps/website --config apps/website/vite.config.mjs"
   },
   "dependencies": {
+    "@platform/database": "workspace:*",
+    "@xyflow/react": "^12.3.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.0",
-    "zustand": "^5.0.8",
-    "@xyflow/react": "^12.3.6"
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
-    "vite": "^7.1.9",
-    "@vitejs/plugin-react": "^5.0.3"
+    "@vitejs/plugin-react": "^5.0.3",
+    "playwright-core": "^1.62.1",
+    "vite": "^7.1.9"
   }
 }

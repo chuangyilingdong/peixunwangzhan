@@ -728,4 +728,10 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] 复验：通知页概要指标、队列状态、Worker 信息和三个 tab 均可见、可切换；平台超管 17/17 页面通过。`p4-03-list-api-check.mjs` 50/50、`p8-q03-api-integration.mjs` 52/52、`p8-q04-e2e.mjs` 54/54、`pnpm build` 与 `git diff --check` 通过。
 - [x] 登出安全：同一 Cookie 登出前 `/api/me=200`，`POST /api/auth/logout=200` 后再读 `/api/me=401 SESSION_SUPERSEDED`，旧会话立即失效。
 - [x] 证据路径：`evidence/p8-q07/admin-notifications-fixed.jpg`、`evidence/p8-q07/admin-super-admin-uat.txt`。未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
-- [ ] 下一步继续机构管理员、教师、学生、官网访客 UAT；独立浏览器矩阵、真机和真实外部 AI / OSS / 支付 / 微信 / 短信 / 邮件仍为未覆盖边界，不得宣称完成。
+- [x] 下一步已进入机构管理员 UAT（见下节）；教师、学生、官网访客仍待执行；独立浏览器矩阵、真机和真实外部 AI / OSS / 支付 / 微信 / 短信 / 邮件仍为未覆盖边界，不得宣称完成。
+
+### 2026-09-04 P8-Q07 角色 UAT：机构管理员阶段
+
+- [x] 机构管理员 UAT 完成：异常登录矩阵、16 个机构页面、越权边界与登出会话失效全部通过；修复 org/student 生产包跨项目依赖污染导致的 `React is not defined` 白屏，以及 `/org/help-feedback` 缺失 `useSearchParams` 导入白屏。四端构建、50 项列表 API、52 项 P3 集成、54 项 E2E 回归全部通过。
+- [x] 修复边界：未修改 `packages/canvas`；污染 `node_modules` 已移出 workspace，根依赖显式声明 `@platform/database: workspace:*`；证据见 `evidence/p8-q07/org-*.jpg`、`admin-org-admin-routes.txt`、`admin-org-admin-authz-logout.txt`。
+- [ ] 下一步：教师、学生、官网访客角色 UAT；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 `[~]` 暂缓。
