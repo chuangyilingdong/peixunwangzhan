@@ -6,7 +6,7 @@ import { handleAdmin, handleOrg } from './routes/adminOrg.js';
 import { handleStudent } from './routes/student.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration } from './routes/aiGeneration.js';
-import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication } from './routes/communication.js';
+import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets } from './routes/fileAssets.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
@@ -105,3 +105,20 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, API_HOST, () => {
   console.log(`AI Kids Platform API listening on http://${API_HOST}:${PORT}`);
 });
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`API server received ${signal}; shutting down`);
+  const forcedExit = setTimeout(() => process.exit(1), 10000);
+  forcedExit.unref();
+  server.close(() => {
+    clearTimeout(forcedExit);
+    try { shutdownCommunicationWorkers(); }
+    catch (error) { console.error('[COMMUNICATION SHUTDOWN ERROR]', error); }
+    process.exit(0);
+  });
+}
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));

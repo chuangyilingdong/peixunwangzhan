@@ -37,7 +37,7 @@ if [[ -n "$DB_BACKUP" ]]; then
 fi
 ln -sfn "$RELEASE" "$CURRENT"
 sudo systemctl start "$SERVICE"
-if ! curl -fsS --max-time 10 http://127.0.0.1:8788/health >/dev/null; then
+if ! curl -fsS --retry 10 --retry-delay 2 --retry-connrefused --max-time 10 http://127.0.0.1:8788/health >/dev/null; then
   echo "Health check failed; restoring previous release" >&2
   sudo systemctl stop "$SERVICE" || true
   if [[ -n "$PREVIOUS" ]]; then ln -sfn "$PREVIOUS" "$CURRENT"; fi

@@ -11,6 +11,7 @@ EnvironmentFile=/etc/ai-kids-platform/internal-test.env
 ExecStart=/usr/bin/node /srv/ai-kids-platform/internal-test/current/apps/server/src/index.js
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=15s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

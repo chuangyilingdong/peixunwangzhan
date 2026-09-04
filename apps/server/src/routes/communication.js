@@ -406,8 +406,14 @@ function runWorkerTick(workerId) {
 }
 
 /**
- * 释放当前 worker 持有的 IN_PROGRESS 任务（进程退出时调用）。
+ * 释放通知 worker 持有的任务并停止调度器，供服务入口优雅退出时调用。
  */
+export function shutdownCommunicationWorkers() {
+  if (workerInterval) { clearInterval(workerInterval); workerInterval = null; }
+  if (reminderInterval) { clearInterval(reminderInterval); reminderInterval = null; }
+  releaseWorkerJobs(WORKER_ID);
+}
+
 export function releaseWorkerJobs(workerId) {
   const now = nowIso();
   q("UPDATE notification_dispatch_jobs SET status='PENDING',locked_by=NULL,locked_at=NULL,updated_at=? WHERE locked_by=? AND status='IN_PROGRESS'", [now, workerId]);
@@ -487,11 +493,8 @@ export function startNotificationWorker() {
     catch (error) { console.error('[NOTIFICATION WORKER ERROR]', error); }
   }, 5000);
   workerInterval.unref();
-  // 进程退出时释放持有的任务
+  // 进程退出时释放持有的任务；服务入口收到终止信号后统一关闭 HTTP server 并退出。
   process.on('exit', () => releaseWorkerJobs(WORKER_ID));
-  process.on('SIGHUP', () => releaseWorkerJobs(WORKER_ID));
-  process.on('SIGTERM', () => releaseWorkerJobs(WORKER_ID));
-  process.on('SIGINT', () => releaseWorkerJobs(WORKER_ID));
 }
 
 // 顶层副作用：模块加载即启动 worker
