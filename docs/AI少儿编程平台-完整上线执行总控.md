@@ -3,7 +3,7 @@
 > **唯一总控文件 / Single Source of Truth**  
 > 工程根目录：`D:\学习平台\platform-v2`  `n> 受版本控制的总控文件：`docs\AI少儿编程平台-完整上线执行总控.md`  
 > 创建日期：2026-09-02  
-> 当前阶段：**P9-D01 生产部署架构已获用户确认并执行中。用户明确 `iicili.cyou` 就是生产域名，直接复用，不使用子域名，不做内测 / 生产域名隔离；内测数据继承为生产数据，不重新 seed。**旧站已按用户授权清除且无备份，不得宣称存在旧站回滚能力。正式公开前必须先重置或禁用 `root/admin123`、`org-admin/org123`、`student-2/study123`；公开后仍须保持法律页准备稿、举报 / 申诉 / 内容审核 / 监护人暂缓与 `AI_PROVIDER=local-mock` 的边界，不得宣传为正式法务、真实 AI 或已接入支付 / 短信 / 邮件 / OSS / 微信。**
+> 当前阶段：**P9-D01 生产切换已完成并验证通过。用户明确 `iicili.cyou` 就是生产域名，直接复用，不使用子域名，不做内测 / 生产域名隔离；内测数据继承为生产数据，不重新 seed。**旧站已按用户授权清除且无备份，不得宣称存在旧站回滚能力。默认账号 `root/admin123`、`org-admin/org123`、`student-2/study123` 已在切换前全部重置为随机强密码并作废旧会话，旧密码已验证 401；公开后仍须保持法律页准备稿、举报 / 申诉 / 内容审核 / 监护人暂缓与 `AI_PROVIDER=local-mock` 的边界，不得宣传为正式法务、真实 AI 或已接入支付 / 短信 / 邮件 / OSS / 微信。**
 > 当前总原则：**除 `packages/canvas` 外，网站与三端按”AI 魔法学院”基准持续实施；画布暂时冻结，必须等待用户再次明确授权后才可改动。**
 
 ---
@@ -89,20 +89,25 @@
 
 ## 1. 当前唯一下一步与阶段看板
 
-### 1.1 当前唯一下一步（2026-09-04：执行 P9-D01 生产切换）
+### 1.1 当前唯一下一步（2026-09-04：生产切换后运行观察）
 
-> **执行口径：**用户已确认 `iicili.cyou` 为生产域名并授权按 ADR 全部执行。生产使用独立目录、用户、8789 回环端口、独立 SQLite、systemd、Nginx public 配置、备份 / 回滚 / 监控能力；当前内测数据先备份再复制为生产数据，默认账号在公开前必须重置或禁用。切换成功后 internal-test 停止并禁用但保留为代码回滚路径。
+> **执行口径：**P9-D01 生产切换已完成。`https://iicili.cyou` 现由 `learning-platform-production`（8789，仅回环）和 production release `20260904T122323Z` 提供。内测服务已停止并禁用但保留全部回滚资产；生产监控 timer 每分钟运行。当前进入 24 小时运行观察与备份策略核验。
 
-- [ ] **当前唯一执行队列：P9-D01 生产部署与切换。**
-  - P0：生产模板已补齐（`.env`、systemd、Nginx public、构建、备份、回滚、监控、README / RUNBOOK）；入口回归脚本支持 `--mode public`。
-  - P0：提交并推送生产模板；服务器源码 `git pull --ff-only`。
-  - P0：创建 `ai-kids-prod`、production 目录与权限；创建 `/etc/ai-kids-platform/production.env`，继承必要密钥但不输出内容。
-  - P0：备份并停止 internal-test，复制内测 SQLite 为生产库；重置或禁用默认账号 `root/admin123`、`org-admin/org123`、`student-2/study123`，新密码只安全交付用户，不写入 Git。
-  - P0：构建 `mode=public` release，切换 `production/current`，启动 8789 并通过 `/health`、journal、监听地址检查。
-  - P0：备份当前 Nginx enabled 配置，安装 production 配置，`nginx -t` 后 reload；公网执行四端 + API + public 安全头 / robots / 横幅回归。
-  - P1：切换成功后停止并禁用 internal-test，但保留 release、数据库、unit、Nginx 配置作为回滚路径。
-  - P1：更新本总控、ADR 验收记录并提交推送。
+- [x] **P9-D01 生产部署与切换（2026-09-04）。**
+  - 生产模板：`.env`、systemd、Nginx public、构建、备份、回滚、监控、README / RUNBOOK 已入库；入口回归支持 `--mode public`。
+  - 服务器基础：源码同步 `d4f7891`；创建 `ai-kids-prod`、production 目录、systemd unit、健康 timer 与 logrotate。
+  - 数据继承：切换前备份 `/srv/ai-kids-platform/internal-test/backups/20260904T122349Z/platform.db`；停止内测后复制为 `/srv/ai-kids-platform/production/data/platform.db`，原内测库保留。
+  - 账号安全：`root`、`org-admin`、`student-2` 已重置为随机强密码（保存于服务器 `/root/.ai-kids-platform-production-credentials`，权限 0600），全部旧会话作废；新密码登录 + `/api/me` 三角色通过，旧密码全部 401。
+  - 运行状态：production release `20260904T122323Z`，commit `e98ba46`，`mode=public`，Node `v24.19.0`；服务 active/enabled，API 仅监听 `127.0.0.1:8789`，`/health=ok`，journal 错误 0。
+  - Nginx：切换前配置备份 `/etc/nginx/backups/iicili.cyou.before-production-switch.20260904T122512Z`；production 配置启用，`nginx -t` 通过，四端 root 指向 production current，`/api/` 代理 8789。
+  - 公网回归：四端 Playwright 4/4 通过；标题、登录文案、资源前缀、无 `X-Internal-Test`、非 noindex、无内测横幅、HSTS/CSP 等安全头全部通过；`/api/health` 200。
+  - 收尾：internal-test 停止并禁用，但 release、数据库、unit、Nginx 配置保留；生产健康 timer active，监控日志 `status=ok`，磁盘 10%。
 
+- [ ] **当前唯一执行队列：生产 24 小时运行观察与备份机制核验。**
+  - 监控每分钟健康与磁盘；检查 journal 是否出现新增 `API INTERNAL ERROR`、未捕获异常或 SQLite 锁错误。
+  - 核验生产每日 03:00 备份尚未自动排程，需要下一步补 timer / cron。
+  - 观察登录、课程、作品、账务主链路是否有真实用户反馈；发现 P0 立即回滚处置。
+  - 已知公开边界保持：法律页准备稿、举报 / 申诉 / 内容审核 / 监护人暂缓、AI 为 `local-mock`、真实支付 / 短信 / 邮件 / OSS / 微信未接入。
 ### 2026-09-04 用户生产决策记录
 
 - 用户明确：`iicili.cyou` 就是生产域名，直接用，不用隔离。

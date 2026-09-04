@@ -1,9 +1,9 @@
 # P9-D01 生产部署架构决策记录（ADR）
 
 - 日期：2026-09-04
-- 状态：已确认，执行中
+- 状态：已实施并验证（2026-09-04）
 - 用户决策：`iicili.cyou` 就是生产域名，直接复用，不使用子域名，不做内测 / 生产域名隔离；按本 ADR 全部执行
-- 当前线上：`iicili.cyou` 暂由新平台内测 release `20260904T113559Z` 承载，切换完成前作为回滚路径
+- 切换时间：2026-09-04 20:25 CST\n- 当前生产：release `20260904T122323Z`，commit `e98ba46`，`mode=public`\n- 当前线上：`iicili.cyou` 由 `learning-platform-production`（8789，仅回环）承载
 - 旧站状态：已按用户授权清除，无备份、无旧站回滚能力
 
 ## 1. 结论
@@ -102,7 +102,7 @@
 - [x] production 用户、目录、端口、服务名确定。
 - [x] 数据库、备份、扩容、回滚策略确定。
 - [x] 访问控制与安全头策略确定。
-- [ ] 联系人 / 值班 / 故障升级路径确定。
+- [ ] 联系人 / 值班 / 故障升级路径确定；生产每日备份自动排程待补。
 
 ## 8. 已知公开风险
 
@@ -110,3 +110,13 @@
 - 举报、申诉、内容审核、监护人功能继续暂缓。
 - AI 仍为 `local-mock`，不得宣传为真实 AI。
 - 真实支付、短信、邮件、OSS、微信能力未接入。
+
+## 9. 实施验证记录（2026-09-04）
+
+- production release：`20260904T122323Z`，commit `e98ba46`，Node `v24.19.0`，pnpm `11.19.0`，`mode=public`。
+- 数据：切换前备份 `/srv/ai-kids-platform/internal-test/backups/20260904T122349Z/platform.db`；内测库复制为生产库，原库保留。
+- 账号：`root`、`org-admin`、`student-2` 全部重置为随机强密码，旧会话作废；新密码登录通过，旧密码 401。
+- 服务：`learning-platform-production` active/enabled，API 仅监听 `127.0.0.1:8789`，`/health=ok`，journal 错误 0。
+- 入口：Nginx production 配置启用，切换前配置已备份；四端 Playwright 回归 4/4，public 模式与 HTTPS 安全头通过。
+- 回滚资产：internal-test 服务停止并禁用，release、数据库、unit、Nginx 配置均保留；Nginx 切换前配置备份存在。
+- 监控：`ai-kids-platform-production-healthcheck.timer` active，每分钟记录健康与磁盘。
