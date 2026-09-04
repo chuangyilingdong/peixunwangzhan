@@ -700,3 +700,14 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] 验收：`p4-03-list-api-check.mjs` 使用临时 SQLite **23 pass / 0 fail**；四端生产构建、`git diff --check` 通过。
 - [x] 影响文件：`apps/server/src/routes/communication.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。影响接口：`GET /api/admin/inbox`、`GET /api/admin/materials`；无数据库结构变更。
 - [ ] 下一批继续处理账务列表的统一分页 / 筛选 / 排序 / 导出边界；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
+
+### 2026-09-04 P4-03-LIST 账务列表批次
+
+- [x] `GET /api/admin/billing/usage-records` 升级为统一分页返回 `{ items, total, page, limit, totalPages, sort }`，支持 `page` / `limit`、机构、能力、状态、关键词、近 N 天与 `startDate` / `endDate` 日期范围筛选；非法页码和非法日期返回 400。
+- [x] 排序白名单收口为 `created`（创建时间）与 `credits`（积分消耗），未知排序键安全回落 `created`，并带稳定次级排序，禁止拼接任意 SQL 字段。
+- [x] 平台端 `/billing` 明细接入开始 / 结束日期、机构、能力、状态、关键词、排序与每页数量；`ListResultSummary` 显示真实命中总数，`Pagination` 支持跨页浏览，所有筛选、排序、每页数量变化均回到第 1 页，空态保留可调整条件提示。
+- [x] 导出边界说明：本页不做平台用量 CSV 新导出；既有机构积分对账 CSV 继续按机构全量流水导出，不受本页分页影响，避免把当前页误当作导出范围。
+- [x] 修复上一批中文文案替换误伤代码标识符的问题：恢复 `AdminMaterials`、`materials`、`organizations`、`Status`、`resourceConfigured` 与 `admin/materials` API 路径，保留中文界面文案。
+- [x] 验收：`p4-03-list-api-check.mjs` 使用临时 SQLite **29 pass / 0 fail**（覆盖账务分页、排序回落、状态 / 日期筛选和非法参数）；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；四端生产构建、`git diff --check` 通过。
+- [x] 影响文件：`apps/server/src/routes/adminOrg.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。影响接口：`GET /api/admin/billing/usage-records`。无数据库结构变更，未修改 `packages/canvas`。
+- [ ] 下一步：对 P4-03-LIST 做整体验收复核（用户、作品、审计、课程广场、机构、课程、平台管理员、通知、物料、账务），随后进入平台 / 机构 / 教师 / 学生 / 官网访客角色 UAT；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。

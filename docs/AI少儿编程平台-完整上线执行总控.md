@@ -1538,3 +1538,14 @@ node .\p3-api-integration.mjs
 - [x] `p4-03-list-api-check.mjs` 使用临时 SQLite 验收扩展至 **23 pass / 0 fail**，新增通知 / 物料分页、状态筛选和非法排序回退检查。
 - [x] Node 24 下四端生产构建通过，`git diff --check` 通过；未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
 - [ ] 下一批处理账务列表的明细分页、筛选、排序和导出边界；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
+
+### 8.11 P4-03-LIST 账务列表批次（2026-09-04）
+
+- [x] 平台账务 `GET /api/admin/billing/usage-records` 从固定 200 条改为统一分页协议 `{ items, total, page, limit, totalPages, sort }`；`limit` 上限 100，非法 `page` 返回 400。
+- [x] 筛选支持机构、能力、状态、关键词、近 N 天以及 `startDate` / `endDate`（`YYYY-MM-DD`，服务端按当日 00:00 / 23:59:59.999 UTC 边界解释）；日期格式非法返回 400。
+- [x] 排序白名单为 `created` / `credits`，未知键回落 `created`；排序 SQL 由白名单映射生成，并附 `created_at,id` 稳定次级排序。
+- [x] 平台端 `/billing` 明细接入日期范围、机构、能力、状态、关键词、排序、每页数量、`ListResultSummary`、`Pagination` 与空态；所有筛选 / 排序 / 每页数量变化重置到第 1 页。
+- [x] 导出边界：平台用量明细本批不新增 CSV；既有机构积分对账 CSV 仍按机构全量流水导出，不使用列表分页参数，避免“当前页=导出范围”的误解。
+- [x] 修复上一批通知 / 物料中文替换误伤前端标识符的回归：恢复 `AdminMaterials`、`materials`、`organizations`、`Status`、`resourceConfigured` 和 `admin/materials` 请求路径；中文界面文案保留。
+- [x] 验收：`p4-03-list-api-check.mjs` 临时 SQLite **29 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；admin / org / student / website 四端生产构建与 `git diff --check` 通过；未修改 `packages/canvas`，无数据库结构变更。
+- [ ] 下一步：完成 P4-03-LIST 十类列表整体验收复核，再按平台超管、机构管理员、教师、学生、官网访客顺序做角色 UAT；P8-Q05 仍保持进行中，未虚构独立浏览器 / 真机结果；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]`。

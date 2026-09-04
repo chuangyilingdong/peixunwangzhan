@@ -1775,10 +1775,17 @@ export async function handleAdmin(ctx) {
   }
   if (part === '/billing/usage-records' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '每页数量', { min: 1, max: 100, fallback: 20 });
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
     const orgFilter = ctx.search.get('orgId'); const modality = ctx.search.get('modality'); const status = ctx.search.get('status'); const search = String(ctx.search.get('search') || '').trim();
+    const startDate = String(ctx.search.get('startDate') || '').trim(); const endDate = String(ctx.search.get('endDate') || '').trim();
+    if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw errors.badRequest('开始日期格式无效', 'INVALID_START_DATE');
+    if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw errors.badRequest('结束日期格式无效', 'INVALID_END_DATE');
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const conditions = ['usage.created_at>=?']; const params = [since];
+    if (startDate) { conditions.push('usage.created_at>=?'); params.push(startDate + 'T00:00:00.000Z'); }
+    if (endDate) { conditions.push('usage.created_at<=?'); params.push(endDate + 'T23:59:59.999Z'); }
     if (orgFilter) { conditions.push('usage.org_id=?'); params.push(orgFilter); }
     if (modality) { conditions.push('usage.modality=?'); params.push(modality); }
     if (['SUCCESS', 'FAILED', 'BLOCKED'].includes(status)) { conditions.push('usage.status=?'); params.push(status); }
@@ -1787,19 +1794,26 @@ export async function handleAdmin(ctx) {
       const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
       params.push(keyword, keyword, keyword, keyword, keyword);
     }
+    const sortKey = String(ctx.search.get('sort') || 'created').trim();
+    const sort = Object.hasOwn({ created: true, credits: true }, sortKey) ? sortKey : 'created';
+    const orderBy = sort === 'credits' ? 'usage.credits_charged DESC,usage.created_at DESC,usage.id DESC' : 'usage.created_at DESC,usage.id DESC';
+    const where = conditions.join(' AND ');
+    const countFromWhere = `FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id ${where ? 'WHERE ' + where : ''}`;
+    const total = Number(row(`SELECT COUNT(*) n ${countFromWhere}`, params)?.n || 0);
+    const offset = (page - 1) * limit;
     const items = rows(
-      'SELECT usage.*,organization.name organization_name,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,class.id class_id,class.name class_name FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + conditions.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200',
-      params,
+      `SELECT usage.*,organization.name organization_name,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,class.id class_id,class.name class_name FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id LEFT JOIN classes class ON class.id=session.class_id ${where ? 'WHERE ' + where : ''} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
     ).map((item) => ({
       id: item.id, orgId: item.org_id, organizationName: item.organization_name || null,
       userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
       classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
-      lessonId: item.session_lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
+      lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
       workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
       credits: Number(item.credits_charged || 0), inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
-    return { items, total: items.length };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/works' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);

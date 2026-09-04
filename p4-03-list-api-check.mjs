@@ -13,8 +13,8 @@ initDatabase();
 seedDatabase();
 const child = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...process.env, PORT: String(port), DEPLOYMENT_MODE: 'internal-test', API_HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
 let output = '';
-child.stdout.on('data', (b) => { output += b.toString(); });
-child.stderr.on('data', (b) => { output += b.toString(); });
+child.stdout.on('data', (b) => { const text=b.toString(); output += text; console.log(text.trimEnd()); });
+child.stderr.on('data', (b) => { const text=b.toString(); output += text; console.error(text.trimEnd()); });
 const base = `http://127.0.0.1:${port}/api`;
 async function waitForServer() { for (let i = 0; i < 40; i++) { try { const r = await fetch(base + '/meta/domain-states'); if (r.ok) return; } catch {} await new Promise((r) => setTimeout(r, 100)); } throw new Error(`server did not start: ${output}`); }
 async function call(method, route, token) { const response = await fetch(base + route, { method, headers: token ? { authorization: `Bearer ${token}` } : undefined }); const text = await response.text(); let data; try { data = JSON.parse(text); } catch { data = text; } return { status: response.status, data }; }
@@ -69,6 +69,18 @@ try {
   ok('materials unknown sort safely falls back', materialsFallback.status === 200 && materialsFallback.data.data.sort === 'created', materialsFallback);
   const materialsStatus = await call('GET', '/admin/materials?page=1&limit=20&status=ACTIVE', token);
   ok('materials status filter', materialsStatus.status === 200 && materialsStatus.data.data.items.every((item) => item.status === 'ACTIVE'), materialsStatus);
+  const billing = await call('GET', '/admin/billing/usage-records?page=1&limit=1&sort=credits', token);
+  ok('billing pagination and sort', billing.status === 200 && billing.data.success && billing.data.data.page === 1 && billing.data.data.limit === 1 && billing.data.data.sort === 'credits' && Number.isInteger(billing.data.data.totalPages), billing);
+  const billingFallback = await call('GET', '/admin/billing/usage-records?page=1&limit=1&sort=not-a-column', token);
+  ok('billing unknown sort safely falls back', billingFallback.status === 200 && billingFallback.data.data.sort === 'created', billingFallback);
+  const billingStatus = await call('GET', '/admin/billing/usage-records?page=1&limit=20&status=SUCCESS', token);
+  ok('billing status filter', billingStatus.status === 200 && billingStatus.data.data.items.every((item) => item.status === 'SUCCESS'), billingStatus);
+  const billingDate = await call('GET', '/admin/billing/usage-records?page=1&limit=20&startDate=2020-01-01&endDate=2099-12-31', token);
+  ok('billing date range filter', billingDate.status === 200 && Number.isInteger(billingDate.data.data.total), billingDate);
+  const billingInvalidDate = await call('GET', '/admin/billing/usage-records?startDate=01-01-2020', token);
+  ok('billing invalid start date rejected', billingInvalidDate.status === 400, billingInvalidDate);
+  const billingInvalidPage = await call('GET', '/admin/billing/usage-records?page=0', token);
+  ok('billing invalid page rejected', billingInvalidPage.status === 400, billingInvalidPage);
   const unauthenticated = await call('GET', '/admin/platform-users?page=1&limit=2');
   ok('unauthenticated denied', unauthenticated.status === 401, unauthenticated);
   console.log(`ALL PASS ${passed}`);
