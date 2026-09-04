@@ -1,7 +1,7 @@
 # P9-D00 旧线上环境只读盘点与替换发布方案
 
 - 日期：2026-09-04
-- 状态：盘点已完成，等待用户确认方案后进入备份演练
+- 状态：已完成（2026-09-04 用户授权免备份直接清除旧站，清理与回归通过）
 - 服务器：`39.106.183.200`（`iicili.cyou`）
 - 证据：`evidence/p9-d00-20260904/readonly-inventory-redacted.txt`
 - 可重复脚本：`scripts/p9-d00-readonly-inventory.sh`
@@ -58,7 +58,7 @@
 - Nginx：`iicili.cyou.production`，保留 HTTPS、SPA、API 代理、安全头、访问日志与缓存策略
 - 旧站归档：`/srv/ai-kids-platform/legacy-archive/<timestamp>/`，只读保存，不直接删除
 
-## 6. 替换发布流程（建议）
+## 6. 实际执行记录（2026-09-04）
 
 1. **冻结窗口**：确认无内测人员正在操作，公告内测短暂停机。
 2. **替换前完整备份**：
@@ -88,12 +88,21 @@
 - [x] 只读盘点脚本与脱敏证据已入库。
 - [x] 服务、端口、systemd、timer、Nginx、目录、备份、数据库元数据已清点。
 - [x] 替换发布方案、风险清单与回滚方案已形成。
-- [ ] 旧站完整备份尚未执行（等待用户确认窗口）。
+- [x] 用户已于 2026-09-04 明确拒绝旧站备份并授权直接清除；旧站完整备份按用户决策不执行。
 - [ ] 生产目录、systemd、Nginx production 配置尚未创建。
-- [ ] 替换发布与回滚演练尚未执行。
+- [x] 旧站清除与公网复验已于 2026-09-04 完成（6/6）；新平台回滚能力继续由内测 release 机制提供。
 
-## 9. 需要用户确认
+## 9. 原待确认事项（已被第 10 节用户决策覆盖）
 
 1. 是否按第 5 节目标布局建立 production 环境？
 2. 是否批准第 6 节第 2 步的旧站完整备份（包含 `.env` 与数据库文件本体，备份后限权加密）？
 3. 替换窗口选择：现在执行，还是先保持内测站点继续观察？
+
+## 10. 2026-09-04 用户决策与清除结果
+
+- 用户决策原文：“旧站的备份我不需要，直接清除即可，然后进行下一步”。本决策免除第 6 节原建议的旧站备份要求。
+- 实际执行前复验：`learning-platform-internal-test` active；`current -> /srv/ai-kids-platform/internal-test/releases/20260904T113559Z`；enabled Nginx 配置无 `/opt/learning-platform` 引用。
+- 清除内容：`learning-platform.service`（stop / disable / 删除）、`/opt/learning-platform`、三份旧 Nginx 配置副本。
+- 保留内容：`/etc/nginx/sites-enabled/iicili.cyou`、`/etc/nginx/sites-available/iicili.cyou.internal-test`、新平台 release / 数据库 / systemd / timer。
+- 清除后验证：`daemon-reload` 与 `nginx -t` 通过；旧服务 inactive；8787 关闭；8788 仅回环监听；`/health=ok`；官网 / admin / org / student / API 安全头回归 **6/6 通过**。
+- 不可回滚边界：旧站源码、`.env`、旧 SQLite 与旧 Nginx 配置副本已删除且无备份，不能恢复旧站；后续不得宣称已备份旧站或可回滚到旧站。
