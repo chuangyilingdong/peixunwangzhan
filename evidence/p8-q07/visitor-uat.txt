@@ -1,0 +1,187 @@
+{
+  "environment": {
+    "base": "http://127.0.0.1:58511",
+    "isolatedTempDb": true,
+    "role": "website visitor"
+  },
+  "routes": [
+    {
+      "route": "/",
+      "url": "http://127.0.0.1:58511/",
+      "rendered": true,
+      "labelFound": true,
+      "title": "AI魔法学院 · 青少年 AI 创作开课平台",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 教培机构青少年 AI 开课平台 给机构一套 能落地的青少年 AI 课 AI魔法学院把课程、桌面客户端、机构账号、魔法石计费与作品展厅放在一个平台里。 学生用中文与 AI 伙伴「阿飞」对话，当堂做出游戏、动画与硬"
+    },
+    {
+      "route": "/marketplace",
+      "url": "http://127.0.0.1:58511/marketplace",
+      "rendered": true,
+      "labelFound": true,
+      "title": "课程广场 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 课程广场 发现优质AI 编程课程 精选平台优质课程，涵盖 AI 创作、游戏设计、绘本故事与智能硬件，适合 6–16 岁青少年。 难度 全部 1-2 3 4-5 适学年龄 全部 6-8岁 9-12岁 13+岁 "
+    },
+    {
+      "route": "/courses",
+      "url": "http://127.0.0.1:58511/courses",
+      "rendered": true,
+      "labelFound": true,
+      "title": "课程体系 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 课程体系 标准课包，马上开课 给教培机构和学校用的课包清单，不是面向个人家长的选课商城。共 11 门、87 节，建议每节 90 分钟，适学 8–16 岁。 11 门系统课程 87 节精品课时 8–16 岁适学"
+    },
+    {
+      "route": "/org",
+      "url": "http://127.0.0.1:58511/org",
+      "rendered": true,
+      "labelFound": true,
+      "title": "机构方案 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 机构方案 教培机构如何开 青少年 AI 通识课 平台提供课程、桌面客户端、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。 “ 不是再找一个聊天"
+    },
+    {
+      "route": "/works",
+      "url": "http://127.0.0.1:58511/works",
+      "rendered": true,
+      "labelFound": true,
+      "title": "学员作品 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 学员作品 孩子们的灵感，正在发光 来自课堂与作品社区的真实 HTML 创作。点击卡片即可打开体验，游戏、古诗、3D、单词闯关都能在浏览器里直接玩。 全部作品 小游戏 互动故事 AI 绘本 智能硬件 🫧 ✦ "
+    },
+    {
+      "route": "/handbook",
+      "url": "http://127.0.0.1:58511/handbook",
+      "rendered": true,
+      "labelFound": true,
+      "title": "产品手册 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 产品手册 · 2026 一站式 AI 创作 开课方案 让每个孩子用 AI 做出自己的作品。面向教培机构、学校与青少年科创营。 AI魔法学院 让每个孩子 用 AI 做出 自己的作品 青少年 AI 编程创作平台"
+    },
+    {
+      "route": "/compare",
+      "url": "http://127.0.0.1:58511/compare",
+      "rendered": true,
+      "labelFound": true,
+      "title": "选型对比 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 选型对比 为什么不是 再找个对话平台？ 机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。 对比维度 分散拼凑 AI魔法学院 工具形态 多个网站 / App 来回切换 ✓ "
+    },
+    {
+      "route": "/download",
+      "url": "http://127.0.0.1:58511/download",
+      "rendered": true,
+      "labelFound": true,
+      "title": "下载说明 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 下载客户端 安装一次，课堂开箱即用 支持 macOS（Apple 芯片）与 Windows 64 位。仅当平台配置真实安装包后才提供下载。 ⌘ macOS 版 适用于 Apple 芯片 Mac 电脑 暂无"
+    },
+    {
+      "route": "/demo",
+      "url": "http://127.0.0.1:58511/demo",
+      "rendered": true,
+      "labelFound": true,
+      "title": "预约演示 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 预约演示 · 开通试用 把 AI 课开起来 欢迎教培机构、学校与区域合作伙伴联系，获取演示账号、课包清单与客户端安装包。 预约后，你将获得 01 产品演示与开课流程讲解 02 11 门标准课包与课件清单 "
+    },
+    {
+      "route": "/terms",
+      "url": "http://127.0.0.1:58511/terms",
+      "rendered": true,
+      "labelFound": true,
+      "title": "用户协议 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 协议与隐私 AI魔法学院用户协议 本协议说明你使用 AI魔法学院课程、课堂、创作、作品展示和机构服务时的基本权利与义务。 上线准备稿：正式备案主体与法务确认后生效 版本 2026.09.03 生效日期 202"
+    },
+    {
+      "route": "/privacy",
+      "url": "http://127.0.0.1:58511/privacy",
+      "rendered": true,
+      "labelFound": true,
+      "title": "隐私政策 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 协议与隐私 AI魔法学院隐私政策 我们按照最小必要原则处理学习、账号和服务运行所需的信息，并为未成年人提供更清晰的监护与数据请求入口。 上线准备稿：正式备案主体与法务确认后生效 版本 2026.09.03 生"
+    },
+    {
+      "route": "/minors",
+      "url": "http://127.0.0.1:58511/minors",
+      "rendered": true,
+      "labelFound": true,
+      "title": "儿童 / 未成年人说明 · AI魔法学院",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 协议与隐私 儿童与未成年人使用说明 AI魔法学院面向 8–16 岁青少年提供学习和创作服务。我们把监护人知情、资料最小化和可撤回的隐私选择放在重要位置。 上线准备稿：正式备案主体与法务确认后生效 版本 202"
+    },
+    {
+      "route": "/missing-path",
+      "url": "http://127.0.0.1:58511/missing-path",
+      "rendered": true,
+      "labelFound": true,
+      "title": "AI魔法学院 · 青少年 AI 创作开课平台",
+      "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 教培机构青少年 AI 开课平台 给机构一套 能落地的青少年 AI 课 AI魔法学院把课程、桌面客户端、机构账号、魔法石计费与作品展厅放在一个平台里。 学生用中文与 AI 伙伴「阿飞」对话，当堂做出游戏、动画与硬"
+    }
+  ],
+  "seoAndBoundary": {
+    "noindex": true,
+    "internalTestBanner": true
+  },
+  "publicApi": {
+    "marketplaceSetup": null,
+    "legal": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"version\":\"2026.09.03\",\"effectiveDate\":\"2026-09-03\",\"status\":\"DRAFT_PENDING_LEGAL_CONFIRMATION\",\"documents\":[{\"type\":\"TERMS\",\"path\":\"/terms\"},{\"type\":\"PRIVACY\",\"path\":\"/privacy\"},{\"type\":\"MINORS\",\"path\":\"/minors\"}]}}"
+    },
+    "downloads": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"generatedAt\":\"2026-09-04T10:32:27.903Z\",\"status\":\"NOT_CONFIGURED\",\"statement\":\"平台尚未配置真实客户端安装包，不提供虚假下载链接。\",\"items\":[],\"byPlatform\":{},\"webCompatibility\":[\"Chrome / Edge 最新两个稳定版本\",\"Safari 17+（macOS）\",\"课堂依赖稳定网络；建议机构机房提前检查\"]}}"
+    },
+    "works": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"items\":[],\"total\":0}}"
+    },
+    "marketplace": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"items\":[{\"id\":\"series_c6e517f37c9742a6a3ab\",\"title\":\"AI古诗词创意营\",\"description\":\"5 课时古诗情景动画与创意表达课程\",\"coverImageUrl\":null,\"difficultyLevel\":3,\"ageRangeMin\":8,\"ageRangeMax\":16,\"tags\":[\"语文\",\"创意\",\"古诗词\",\"动画\"],\"lessonCount\":5,\"marketplaceRewardCredits\":5}],\"total\":1,\"page\":1,\"limit\":20}}"
+    },
+    "courseDetail": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"series_c6e517f37c9742a6a3ab\",\"title\":\"AI古诗词创意营\",\"description\":\"5 课时古诗情景动画与创意表达课程\",\"coverImageUrl\":null,\"ownerType\":\"PLATFORM\",\"visibility\":\"ALL_ORGS\",\"version\":\"1.0\",\"sort\":1,\"status\":\"PUBLISHED\",\"difficultyLevel\":3,\"ageRangeMin\":8,\"ageRangeMax\":16,\"tags\":[\"语文\",\"创意\",\"古诗词\",\"动画\"],\"lessonCount\":5,\"lessons\":[{\"id\":\"lesson_da9380b9cb654b6298d0\",\"seriesId\":\"series_c6e517f37c9742a6a3ab\",\"title\":\"第1课：认识古诗与创作主题\",\"summary\":\"认识古诗意境，选择想要表达的诗词主题。\",\"sort\":1,\"status\":\"PUBLISHED\",\"durationMinutes\":45,\"lessonContent\":\"本课时带领学生了解古诗词的意境美，初步感受古诗与创意表达的结合。学生将选择一个自己喜爱的诗词主题，为后续创作奠定基础。\",\"createdAt\":\"2026-09-04T10:19:37.982Z\",\"updatedAt\":\"2026-09-04T10:19:37.982Z\"},{\"id\":\"lesson_13212f7d16d14e418a9b\",\"seriesId\":\"series_c6e517f37c9742a6a3ab\",\"title\":\"第2课：设计诗词主角与场景\",\"summary\":\"设计人物、动物或精灵主角，并规划故事发生的场景。\",\"sort\":2,\"status\":\"PUBLISHED\",\"durationMinutes\":45,\"lessonContent\":\"在选定诗词主题后，学生学习如何设计故事中的主角（人物、动物或精灵），并根据诗词意境规划故事发生的场景。通过角色设定练习，培养学生的创意构思能力。\",\"createdAt\":\"2026-09-04T10:19:37.982Z\",\"updatedAt\":\"2026-09-04T10:19:37.982Z\"},{\"id\":\"lesson_c0f6e412d07644bfbc34\",\"seriesId\":\"series_c6e517f37c9742a6a3ab\",\"title\":\"第3课：生成画面与故事分镜\",\"summary\":\"把诗句转化为画面，完成故事分镜与画面提示词。\",\"sort\":3,\"status\":"
+    }
+  },
+  "courseId": "series_c6e517f37c9742a6a3ab",
+  "courseDetailUi": {
+    "rendered": true,
+    "labelFound": true,
+    "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 课程广场 AI古诗词创意营 5 课时古诗情景动画与创意表达课程 ← 返回课程广场 难度 ★ ★ ★ ★ ★ 适学年龄 8–16 岁 标签 语文 创意 古诗词 动画 版本 1.0 课时 5 节 奖励 奖励 5 积分 课程内容 01 第1课：认识古诗与创作主题 认识古诗意境，选择想要表达的诗词主题。 本课时带领学生了解古诗词的意境美，初步感受古诗与创意表达的结合。学"
+  },
+  "contactSubmitApi": {
+    "status": 200,
+    "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"lead_ed34db4d30d84863871e\",\"status\":\"NEW\",\"createdAt\":\"2026-09-04T10:32:27.914Z\",\"legalConsentVersion\":\"2026.09.03\",\"legalConsentedAt\":\"2026-09-04T10:32:27.911Z\"}}"
+  },
+  "demoSubmit": {
+    "submitted": true,
+    "bodySample": "内部测试环境 · 不代表正式服务 ✦ AI魔法学院 首页 课程广场 课程体系 机构方案 学员作品 产品手册 选型对比 下载客户端 预约演示 ↗ ✦ 预约演示 · 开通试用 预约成功！ 我们会在 1 个工作日内联系你。 ✦ 收到你的预约啦！ 我们会在 1 个工作日内联系你，发送演示安排与资料。 ✦ AI魔法学院 面向教培机构与学校的 青少年 AI 通识与 VibeCoding 开课平台。 产品 课程体系 机构方案 学员作品 合作 预约演示 下载客户端 机构后台 了解更多 产品手册 选型对比 用户协议 隐私政策 儿童 / 未成年人说明 联系合作 © 2026 五格殿下 · AI魔法学院 面向 8–16 岁 · Mac / Windows 帮助我们改进官网体验 我们只在你选择同意后记录匿名页面访问与转化事件，不记录 IP、姓名、电话或完整查询参数；数据最多保留 90 天。详见隐私政策。 仅使用必要功能 同意匿名分析"
+  },
+  "protectedApi": {
+    "me": {
+      "status": 401,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+    },
+    "adminOrganizations": {
+      "status": 401,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+    },
+    "orgUsers": {
+      "status": 401,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+    },
+    "orgPackages": {
+      "status": 401,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+    },
+    "studentDashboard": {
+      "status": 401,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+    },
+    "aiCenter": {
+      "status": 401,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+    }
+  },
+  "pageErrors": [],
+  "checks": {
+    "total": 18,
+    "passed": 18,
+    "failed": []
+  },
+  "pass": true
+}
