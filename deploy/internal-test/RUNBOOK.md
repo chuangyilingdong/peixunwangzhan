@@ -80,3 +80,16 @@ ssh -i $key -o IdentitiesOnly=yes root@39.106.183.200 "cd /srv/ai-kids-platform/
 - `git clean -fd` 仅允许在服务器隔离 source 工作区执行；发布前必须确认不会删除未推送的本地修改。
 - 快速通道只降低登录成本，不降低发布闸门：仍需确认 commit、构建元数据、隔离数据库备份、健康检查、入口回归和日志无新增 P0/P1 错误。
 - 复杂远程操作继续采用“本地写 shell 脚本 → 转 LF → `scp` 上传 → `ssh bash /tmp/...`”，避免 Windows CRLF 与 PowerShell 转义问题。
+
+## 2026-09-04 内测发布记录：20260904T113559Z
+
+- 发布来源：已推送 commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`（含低余额字段修复 `6849e49` 与服务优雅退出修复）。
+- 发布产物：`/srv/ai-kids-platform/internal-test/releases/20260904T113559Z`；`BUILD-METADATA.txt` 显示 Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`。
+- 发布前备份：`/srv/ai-kids-platform/internal-test/backups/20260904T113647Z/platform.db` 与完整 `MANIFEST.json`；旧 release 为 `20260904T035620Z`。
+- 切换与健康：使用 `rollback-internal-test.sh` 原子切换 `current`，服务 active，`127.0.0.1:8788/health` 返回 `status=ok`；Nginx `nginx -t` 通过。
+- 入口回归：`scripts/verify-production-entrypoints.mjs` 4/4 通过，官网、`/admin/`、`/org/`、`/student/` 均加载各自产物，`noindex` 与内测标识通过。
+- 角色回归：`root / admin123` 返回 `SUPER_ADMIN`，`org-admin / org123` 返回 `ORG_ADMIN`，`student-2 / study123` 返回 `STUDENT`，登录与 `/api/me` 均 HTTP 200。
+- 低余额修复：临时 SQLite 验证命中余额 0 机构且通知 1 名管理员；发布后自新进程启动以来日志未再出现 `no such column: ba.balance`。
+- 优雅退出：在真实 release 布局下发送 SIGTERM，进程 9ms 内以退出码 0 退出；systemd 重启后 246ms 恢复健康。已为服务器 unit 应用 `TimeoutStopSec=15s` 并同步模板。
+- 发布事故与处置：首次切换 `20260904T112644Z` 时旧进程因历史 SIGTERM 处理缺陷等待 90 秒被 SIGKILL，切换脚本健康检查只尝试一次导致误判并自动回滚旧 release；随后修复服务入口优雅退出、发布脚本健康检查重试与 systemd 停止超时，重新构建发布后成功。
+- 快速发布 SSH 通道按用户 2026-09-04 授权长期保留；仅记录私钥路径与公钥注释，不得输出私钥内容。
