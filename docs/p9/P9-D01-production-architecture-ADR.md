@@ -18,7 +18,7 @@
 - 进程管理：systemd
 - 生产服务：`learning-platform-production.service`
 - 运行用户：`ai-kids-prod`（独立于 `ai-kids-test`）
-- API：仅监听 `127.0.0.1:8789`
+- API：仅监听 `127.0.0.1:8789`，生产 env 必须显式设置 `API_HOST=127.0.0.1`
 - 内测回滚服务：`learning-platform-internal-test`，8788，切换成功后停止并禁用，但不删除 release、数据库、unit 与配置
 
 ### 2.2 目录布局

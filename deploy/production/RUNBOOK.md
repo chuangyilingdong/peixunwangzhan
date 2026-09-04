@@ -4,7 +4,7 @@
 
 - 域名：`https://iicili.cyou`
 - 服务：`learning-platform-production`
-- API：`127.0.0.1:8789`，仅回环
+- API：`127.0.0.1:8789`，仅回环；生产 env 必须设置 `API_HOST=127.0.0.1`
 - 数据库：`/srv/ai-kids-platform/production/data/platform.db`
 - 回滚路径：`learning-platform-internal-test`（8788，切换后停止并禁用，不删除）
 
