@@ -157,7 +157,7 @@ export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
     if (g.grant_type === 'PUBLIC') return file;
     if (g.grant_type === 'USER' && g.user_id === user.id) return file;
     if (g.grant_type === 'ORG' && g.org_id && g.org_id === orgId) return file;
-    if (g.grant_type === 'ROLE' && g.role === role) return file;
+    if (g.grant_type === 'ROLE' && g.org_id === orgId && g.role === role) return file;
   }
   throw errors.forbidden('当前账号无权访问此文件', 'FILE_ACCESS_DENIED');
 }
@@ -324,11 +324,15 @@ export async function handleAdminFileAssets(ctx) {
     const role = body.role ? String(body.role).toUpperCase() : null;
     if (grantType === 'ROLE' && !['ORG_ADMIN', 'TEACHER', 'STUDENT'].includes(role || '')) throw errors.badRequest('role 无效', 'INVALID_ROLE');
     const orgId = body.orgId || null;
+    // 角色授权必须绑定机构，否则一个机构的 STUDENT/TEACHER 角色会意外获得所有机构的文件。
+    if (grantType === 'ROLE' && !orgId) throw errors.badRequest('ROLE 授权必须提供 orgId', 'ORG_REQUIRED');
     if (grantType === 'ORG' && !orgId) throw errors.badRequest('ORG 授权必须提供 orgId', 'ORG_REQUIRED');
     if (orgId && !row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     const userId = body.userId || null;
     if (grantType === 'USER' && !userId) throw errors.badRequest('USER 授权必须提供 userId', 'USER_REQUIRED');
-    if (userId && !row('SELECT id FROM users WHERE id=?', [userId])) throw errors.badRequest('用户不存在', 'USER_NOT_FOUND');
+    const grantedUser = userId ? row('SELECT id,org_id FROM users WHERE id=?', [userId]) : null;
+    if (userId && !grantedUser) throw errors.badRequest('用户不存在', 'USER_NOT_FOUND');
+    if (grantType === 'USER' && orgId && grantedUser.org_id !== orgId) throw errors.badRequest('用户不属于指定机构', 'USER_ORG_MISMATCH');
     const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
     if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
     const grantId = id('fag');
