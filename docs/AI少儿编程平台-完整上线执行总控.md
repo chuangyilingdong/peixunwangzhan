@@ -79,8 +79,8 @@
 > **执行口径：**用户确认备案已经完成，但备案后续由用户自行处理，本项目不反复追问或代办。线上 `https://iicili.cyou/` 当前仍是受控内部测试站；接下来按正式上线节奏推进，继续保持 noindex，不把 `local-mock`、协议准备稿或未接入外部服务宣传为正式能力。
 
 - [ ] **正式上线门槛收敛：质量、接口、安全、隐私与运营保障。**
-  - P0：P8-Q04、P8-Q06、P8-S04、P8-S06 已于 2026-09-04 通过；P8-S05 监控基线已完成但 ECS timer / 日志轮转 / 真实通知仍待运维配置；当前下一步为 registry 恢复后的 P8-S01 依赖漏洞治理，并继续推进 P8-Q01 / Q02 / Q05 与 P8-L02～L06。
-  - P1：P8-Q01 代码质量基线、P8-Q02 单元测试、P8-Q05 视觉 / 跨浏览器回归、P8-L02～P8-L06 隐私与内容治理、运营交接和客服 / 举报 SOP。
+  - P0：P8-Q04、P8-Q06、P8-S04、P8-S06 已于 2026-09-04 通过；P8-S05 监控基线已完成但 ECS timer / 日志轮转 / 真实通知仍待运维配置；当前下一步为 registry 恢复后的 P8-S01 依赖漏洞治理，并继续推进 P8-Q05 与 P8-L02～L06。
+  - P1：P8-Q01 代码质量基线、P8-Q02 单元测试已通过；当前继续推进 P8-Q05 视觉 / 跨浏览器回归、P8-L02～P8-L06 隐私与内容治理、运营交接和客服 / 举报 SOP。
   - 所有自动化验收继续使用临时 SQLite；不得读取、复制、迁移或写入旧站真实数据库。
   - 线上内测部署作为预发布环境继续保留；每次发布前执行独立数据库、备份、健康检查、回滚和浏览器 UAT。
 - [!] **外部 / 用户侧事项。**
@@ -1054,9 +1054,14 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 影响文件 / 接口 / 数据表：`p8-q04-e2e.mjs`；覆盖四端构建产物、官网路由与资源加载，以及 `/auth`、`/me`、`/admin/course-marketplace`、`/org`、`/student`、`/ai`、`/public` 主链路和课程 / 课堂 / 项目 / 作品 / 生成任务 / 会话数据。
   - 验证：使用 Node 24.19.0 + 临时 SQLite 执行 **54 pass / 0 fail**；四端 `pnpm build` 通过；官网页面路由和 JS/CSS 资源加载通过；失败时 API stdout/stderr 会保留在临时 evidence 目录；`node --check` 与 `git diff --check` 通过。
   - 边界：本项是非画布 HTTP / 静态构建 E2E，不修改 `packages/canvas`；AI 仍明确为 `local-mock` 预览，不伪造真实 AI、OSS、支付或第三方渠道；未触碰真实线上数据库。
-- [ ] **P8-Q05 视觉回归、跨浏览器与移动端测试**
+- [-] **P8-Q05 视觉回归、跨浏览器与移动端测试**
   - 优先级：P1
   - 验收：Chrome、Edge、Safari（若支持）、常见移动端宽度上的关键非画布页面通过；品牌视觉不被意外改坏。
+  - 完成记录（2026-09-04）：
+    - 状态：`[-]`
+    - 已修复线上首页首屏 `ReferenceError: works is not defined`：`apps/website/src/main.jsx` 首页作品区改为使用隔离的 `homeWorks` 回退数据，避免官网运行时白屏。
+    - 本地内测构建已验证：首页、课程广场、课程体系、机构方案、学员作品、产品手册、选型对比、预约演示及三类法律页共 11 条路由均有非空渲染；控制台错误 0；内测 banner、`noindex, nofollow, noarchive` 与 canonical 更新通过。
+    - 尚未完成：Chrome / Edge / Safari 真机或独立浏览器矩阵，以及常见移动端宽度截图回归；线上发布修复 release 后再做公网只读复核。
 - [x] **P8-Q06 性能与容量测试。** ✅ 2026-09-04
   - 完成记录：新增 `p8-q06-performance.mjs`，建立内测基线目标并在临时 SQLite + 隔离 API 进程中实测健康 / 公开课程接口、官网首页、并发课堂读取、AI local-mock 任务突发、文件元数据并发写入和 SQLite 写入竞争边界。
   - 影响文件 / 接口 / 数据表：`p8-q06-performance.mjs`；覆盖四端构建产物、官网首页、`/health`、`/public/marketplace`、`/student/dashboard`、`/ai/generations`、`/org/file-assets`、课堂会话和用量数据。
