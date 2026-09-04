@@ -90,7 +90,8 @@
 - [x] **P9-I01 内部测试环境部署基线。** ✅ 2026-09-03
   - 完成记录：固化 `deploy/internal-test/` 的 Windows/Linux 构建脚本、发布目录约定、systemd 服务模板、Nginx 四端模板、环境变量样例和启动 / 停止 / 健康检查命令；发布产物包含 website/admin/org/student 四端、API 源码、数据库运行时和 `BUILD-METADATA.txt`。
   - 验证：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；四端构建成功，API 可启动并返回 `/health` `status=ok`。本地最新 release `deploy/releases/20260903T162708Z`，元信息为 commit `3577ac18d162529ff21fea4aa41c29f56bce0fe4`、Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`，并按线上域名构建 `VITE_PUBLIC_SITE_URL=https://iicili.cyou`。
-  - 边界：这是可从已推送 commit 重复构建的内测部署基线；线上当前发布 commit 为 `6c7c14484bf9aa90262e421113c0f236ae262b8c`，未修改 `packages/canvas`。
+     - 线上路由矩阵补充（2026-09-04）：Codex 内置浏览器 Chromium 桌面视口对 `/`、`/marketplace`、`/courses`、`/org`、`/works`、`/handbook`、`/compare`、`/download`、`/demo`、`/terms`、`/privacy`、`/minors` 共 **12/12** 路由执行渲染检查；页面正文非空、内测 banner 存在、robots 为 `noindex, nofollow, noarchive`、canonical 与动态标题均符合预期，未发现“加载失败 / ReferenceError”等页面失败文本。
+     - 尚未完成：Chrome / Edge / Safari 独立浏览器或真机矩阵，以及 390/414/768 等常见移动端宽度截图回归；当前 Codex 内置浏览器视口为桌面尺寸，因此 P8-Q05 继续保持 `[-]`。
 - [x] **P9-I02 内部访问控制与不可索引。** ✅ 2026-09-03
   - 完成记录：Nginx 模板四个 server 均启用 Basic Auth、`X-Robots-Tag: noindex, nofollow, noarchive`、`X-Internal-Test: true` 和 SPA fallback；API 内测响应同样加头，`robots.txt` 为 `Disallow: /`，`sitemap.xml` 返回 404；前端显示“内部测试环境 · 不代表正式服务”。
   - 验证：部署验收 **24 pass / 0 fail**，并在 UAT 中验证未登录 admin API 为 401；静态断言覆盖 Basic Auth、robots、API 代理和 SPA fallback。
