@@ -1,0 +1,505 @@
+{
+  "generatedAt": "2026-09-04T13:38:09.479Z",
+  "scope": "temporary seeded SQLite only; production database was not opened",
+  "tempDirectory": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\ai-kids-p4-02-inventory-kDly55",
+  "databasePath": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\ai-kids-p4-02-inventory-kDly55\\platform.db",
+  "seedAnchors": {
+    "logins": [
+      "root",
+      "org-admin",
+      "teacher-1",
+      "teacher-2",
+      "student-1",
+      "student-2"
+    ],
+    "organizationNames": [
+      "示例创新学校"
+    ],
+    "className": "三年级AI创作一班",
+    "courseSeriesTitle": "AI创作启蒙课"
+  },
+  "users": {
+    "total": 6,
+    "seed": [
+      {
+        "login": "org-admin",
+        "role": "ORG_ADMIN",
+        "status": "ACTIVE",
+        "orgName": "示例创新学校"
+      },
+      {
+        "login": "root",
+        "role": "SUPER_ADMIN",
+        "status": "ACTIVE",
+        "orgName": null
+      },
+      {
+        "login": "student-1",
+        "role": "STUDENT",
+        "status": "ACTIVE",
+        "orgName": "示例创新学校"
+      },
+      {
+        "login": "student-2",
+        "role": "STUDENT",
+        "status": "ACTIVE",
+        "orgName": "示例创新学校"
+      },
+      {
+        "login": "teacher-1",
+        "role": "TEACHER",
+        "status": "ACTIVE",
+        "orgName": "示例创新学校"
+      },
+      {
+        "login": "teacher-2",
+        "role": "TEACHER",
+        "status": "ACTIVE",
+        "orgName": "示例创新学校"
+      }
+    ],
+    "nonSeed": []
+  },
+  "organizations": [
+    {
+      "name": "示例创新学校",
+      "status": "ACTIVE",
+      "isSeed": true
+    }
+  ],
+  "tableCounts": {
+    "account_requests": 0,
+    "analytics_events": 0,
+    "audit_logs": 0,
+    "billing_packages": 1,
+    "class_curriculum_items": 5,
+    "class_members": 3,
+    "class_sessions": 0,
+    "classes": 1,
+    "client_download_releases": 0,
+    "course_assignments": 1,
+    "course_lessons": 5,
+    "course_series": 1,
+    "credit_entries": 1,
+    "file_access_grants": 0,
+    "file_assets": 0,
+    "generation_jobs": 0,
+    "help_feedback": 0,
+    "leads": 0,
+    "legal_consents": 0,
+    "media_assets": 0,
+    "notification_dispatch_jobs": 0,
+    "notification_events": 0,
+    "notification_recipients": 0,
+    "notification_templates": 0,
+    "notifications": 0,
+    "org_billing_accounts": 1,
+    "org_capability_overrides": 0,
+    "organizations": 1,
+    "platform_alert_thresholds": 3,
+    "platform_config_change_logs": 0,
+    "platform_credit_quotas": 3,
+    "platform_modality_settings": 7,
+    "platform_settings": 1,
+    "project_snapshots": 0,
+    "promo_material_assignments": 0,
+    "promo_material_events": 0,
+    "promo_materials": 0,
+    "recharge_orders": 0,
+    "sessions": 0,
+    "student_enrollment_events": 0,
+    "student_enrollments": 0,
+    "student_projects": 0,
+    "usage_records": 0,
+    "users": 6,
+    "website_content_revisions": 3,
+    "website_contents": 3,
+    "work_annotations": 0,
+    "work_feedback_reads": 0,
+    "work_publish_requests": 0,
+    "work_reports": 0,
+    "work_submissions": 0,
+    "works": 0
+  },
+  "seedScopedCounts": {
+    "sessions": 0,
+    "student_enrollments": 0,
+    "student_projects": 0,
+    "project_snapshots": 0,
+    "works": 0,
+    "work_submissions": 0,
+    "usage_records": 0,
+    "generation_jobs": 0,
+    "media_assets": 0,
+    "notifications_recipients_seed_user": 0,
+    "account_requests_seed_user": 0,
+    "legal_consents_seed_user": 0,
+    "org_scoped_credit_entries": 1,
+    "org_scoped_billing_packages": 1,
+    "org_scoped_classes": 1,
+    "org_scoped_class_members": 3,
+    "org_scoped_works": 0
+  },
+  "seedReferenceMatches": {
+    "account_requests": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "audit_logs": [
+      {
+        "column": "actor_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "billing_packages": [
+      {
+        "column": "org_id",
+        "seedMatches": 1
+      }
+    ],
+    "class_members": [
+      {
+        "column": "user_id",
+        "seedMatches": 3
+      }
+    ],
+    "classes": [
+      {
+        "column": "teacher_id",
+        "seedMatches": 1
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 1
+      }
+    ],
+    "course_assignments": [
+      {
+        "column": "assigned_by",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 1
+      }
+    ],
+    "course_series": [
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "credit_entries": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "actor_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 1
+      }
+    ],
+    "file_access_grants": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "file_assets": [
+      {
+        "column": "owner_user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      }
+    ],
+    "generation_jobs": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "help_feedback": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "legal_consents": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "media_assets": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "notification_dispatch_jobs": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      }
+    ],
+    "notification_events": [
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "notification_recipients": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      }
+    ],
+    "notification_templates": [
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      }
+    ],
+    "notifications": [
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "org_billing_accounts": [
+      {
+        "column": "org_id",
+        "seedMatches": 1
+      }
+    ],
+    "org_capability_overrides": [
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "organizations": [
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      }
+    ],
+    "platform_config_change_logs": [
+      {
+        "column": "changed_by",
+        "seedMatches": 0
+      }
+    ],
+    "project_snapshots": [
+      {
+        "column": "actor_id",
+        "seedMatches": 0
+      }
+    ],
+    "promo_material_assignments": [
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "promo_material_events": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "promo_materials": [
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      }
+    ],
+    "recharge_orders": [
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "sessions": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "student_enrollment_events": [
+      {
+        "column": "actor_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "student_enrollments": [
+      {
+        "column": "student_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "created_by",
+        "seedMatches": 0
+      },
+      {
+        "column": "updated_by",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "student_projects": [
+      {
+        "column": "student_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "usage_records": [
+      {
+        "column": "user_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "users": [
+      {
+        "column": "org_id",
+        "seedMatches": 5
+      }
+    ],
+    "website_content_revisions": [
+      {
+        "column": "changed_by",
+        "seedMatches": 0
+      }
+    ],
+    "website_contents": [
+      {
+        "column": "updated_by",
+        "seedMatches": 0
+      },
+      {
+        "column": "published_by",
+        "seedMatches": 0
+      }
+    ],
+    "work_annotations": [
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "work_feedback_reads": [
+      {
+        "column": "student_id",
+        "seedMatches": 0
+      }
+    ],
+    "work_publish_requests": [
+      {
+        "column": "student_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "work_reports": [
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "work_submissions": [
+      {
+        "column": "student_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ],
+    "works": [
+      {
+        "column": "student_id",
+        "seedMatches": 0
+      },
+      {
+        "column": "org_id",
+        "seedMatches": 0
+      }
+    ]
+  }
+}

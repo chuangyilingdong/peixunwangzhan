@@ -412,7 +412,7 @@
 - [x] 后端 ESM 语法检查（`--check`）：ai.js、aiGeneration.js、student.js、adminOrg.js 全部 OK；四端生产构建（admin / org / student / website）全部通过；`git diff --check` 通过。
 - [x] 边界：未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上；本批为纯服务端修复，前端无改动；后续可将 `if (auth.user.role !== 'ROLE') throw` 统一收口为 `requireRole`（P4 收口批次）。
 
-### P4-O09 验收记录（2026-09-03）
+### P4-O09 验收记录（2026-09-04）
 
 - [x] 核心交付：`apps/server/src/routes/communication.js` 新增 `scheduleReminder({ title, body, kind, targetUserId, targetOrgId, eventKey, targetUrl })` 工具函数：写入 `notifications`（PUBLISHED） + 复用 `dispatchRecipientEvent` 写 `notification_recipients`（DELIVERED） + 24h 同 `eventKey` 去重。
 - [x] 触发点 1：作品审核 `PUT /api/org/works/:id/review`（`adminOrg.js:2576`）后自动调 `scheduleReminder`，按 `status` 区分标题"作品已通过/已发布/需要修改"，eventKey = `WORK_REVIEW_COMPLETED:${workId}:${status}`。
@@ -420,9 +420,9 @@
 - [x] 扫赻器：`apps/server/src/services/reminderScheduler.js` 新文件，导出 `scanLowBalanceOrgs()`（balance <= 0 且 24h 内未提醒 → 写 ORG_ADMIN 通知）、`scanContractExpiryOrgs()`（contract_expires_at ≤ 7 天且 3 天内未提醒 → 写 ORG_ADMIN 通知）、`triggerClassSessionReminder(sessionId)`（课节开始前 24h 窗口，class_sessions 暂无 start_at 字段，函数保留作为后续扩展位）。
 - [x] 调度：服务启动时 `startReminderScheduler()`（`communication.js:476`）每 5 分钟触发 `scanLowBalanceOrgs` + `scanContractExpiryOrgs`，`unref()` 不阻塞进程退出。
 - [x] 修复循环 import：`reminderScheduler.js` 从 `'../lib.js'` import DB 工具，从 `'../routes/communication.js'` import `scheduleReminder`（不经过 `lib.js` re-export 避免 `scheduleReminder is not defined` 错误）。
-- [x] 验收脚本：`tmp-p4-o09-reminders.mjs` 写完但**未通过**——子进程直接调扫赻器函数时 `schema.js` 顶层 `db.exec(SCHEMA)` 触发旧 schema 残留（`no such column: reversal_of`），且与服务器争用 PRAGMA foreign_keys。**核心代码本身已通过后端语法检查 + 四端构建 + 导出口完整**（阶段 6 三项 PASS：`scheduleReminder` / `scanLowBalanceOrgs` / `scanContractExpiryOrgs` 均正常导出）。
+- [x] 验收脚本：新增 `scripts/p4-o09-reminders.mjs`，每次使用操作系统临时目录和独立 SQLite；低余额扫描、合同到期扫描、两类重复扫描去重、通知 / 收件人落库、禁用用户不投递共 **9/9 通过**。证据：`artifacts/p4-o09-reminders.txt`。此前脚本失败属于测试隔离 / 清理问题，未修改生产库；本次已通过独立 `PLATFORM_DATA_DIR` / `PLATFORM_DB_PATH` 验收。
 - [x] 后端 ESM 语法检查（`--check`）：communication.js、adminOrg.js、reminderScheduler.js 全部 OK；四端生产构建（admin / org / student / website）全部通过；`git diff --check` 通过。
-- [x] 边界：未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上；纯服务端 + 调度新增，前端无改动；课节 24h 提醒（`class_sessions.start_at`）作为后续扩展位预留；验收脚本延后到后续批次（已用单元测试或 API 间接验证替代）；外部通道（邮件/短信/微信）未接入，仅生成站内通知。
+- [x] 边界：未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上；纯服务端 + 调度新增，前端无改动；课节 24h 提醒（`class_sessions.start_at`）作为后续扩展位预留；外部通道（邮件/短信/微信）未接入，仅生成站内通知。
 
 ### P5-W02 + W04 验收记录（2026-09-03）
 
@@ -751,3 +751,10 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] 机构管理员 UAT 完成：异常登录矩阵、16 个机构页面、越权边界与登出会话失效全部通过；修复 org/student 生产包跨项目依赖污染导致的 `React is not defined` 白屏，以及 `/org/help-feedback` 缺失 `useSearchParams` 导入白屏。四端构建、50 项列表 API、52 项 P3 集成、54 项 E2E 回归全部通过。
 - [x] 修复边界：未修改 `packages/canvas`；污染 `node_modules` 已移出 workspace，根依赖显式声明 `@platform/database: workspace:*`；证据见 `evidence/p8-q07/org-*.jpg`、`admin-org-admin-routes.txt`、`admin-org-admin-authz-logout.txt`。
 - [ ] 下一步：教师、学生、官网访客角色 UAT；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 `[~]` 暂缓。
+
+### 2026-09-04 P4-02 演示数据隔离盘点与规范
+
+- [x] 在临时 SQLite 中从零初始化 schema 并运行 seed，稳定复现 6 个 seed 用户、1 个示例机构、1 个课程系列、5 个课时、1 个班级和 3 个班级成员；业务行为表初始为 0。
+- [x] 新增 `docs/p4-02-demo-data-isolation.md`，定义基础教学资产保留、seed 用户 / 示例机构行为数据隔离、报表排除、审计保留和生产变更前置条件。
+- [x] 新增 `scripts/p4-02-demo-data-inventory.mjs`，只读输出表计数、seed 锚点与用户 / 机构引用匹配；Node v24.19.0 语法检查与执行通过。
+- [-] 生产演示数据归档 / 清理未执行：须待 24 小时观察结束后独立审批、备份、临时库演练和恢复验证；不得按名称直接删除真实记录。

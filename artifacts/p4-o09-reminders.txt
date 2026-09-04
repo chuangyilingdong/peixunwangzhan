@@ -1,0 +1,114 @@
+{
+  "ok": true,
+  "database": "isolated-temporary-sqlite",
+  "organizationId": "org_4b995aee155941f48a13",
+  "checks": [
+    {
+      "name": "low-balance first scan finds active organization",
+      "pass": true,
+      "details": {
+        "lowFirst": [
+          {
+            "orgId": "org_4b995aee155941f48a13",
+            "adminCount": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "low-balance first scan targets organization admin",
+      "pass": true,
+      "details": {
+        "lowFirst": [
+          {
+            "orgId": "org_4b995aee155941f48a13",
+            "adminCount": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "low-balance second scan is deduplicated",
+      "pass": true,
+      "details": {
+        "lowSecond": [],
+        "lowRecipients": 1
+      }
+    },
+    {
+      "name": "contract-expiry first scan finds organization in 7-day window",
+      "pass": true,
+      "details": {
+        "contractFirst": [
+          {
+            "orgId": "org_4b995aee155941f48a13",
+            "orgName": "示例创新学校",
+            "daysLeft": 3,
+            "adminCount": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "contract-expiry first scan reports positive days remaining",
+      "pass": true,
+      "details": {
+        "contractFirst": [
+          {
+            "orgId": "org_4b995aee155941f48a13",
+            "orgName": "示例创新学校",
+            "daysLeft": 3,
+            "adminCount": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "contract-expiry second scan is deduplicated",
+      "pass": true,
+      "details": {
+        "contractSecond": [],
+        "contractRecipients": 1
+      }
+    },
+    {
+      "name": "scheduleReminder writes notification and delivered recipient",
+      "pass": true,
+      "details": {
+        "direct": {
+          "notificationId": "noti_bbfaa892f0734a9ba1f1",
+          "recipientId": "nrec_014a1cd8dc0242a0a751",
+          "suppressed": false
+        }
+      }
+    },
+    {
+      "name": "scheduleReminder deduplicates same user and event key",
+      "pass": true,
+      "details": {
+        "directAgain": {
+          "notificationId": null,
+          "recipientId": "nrec_014a1cd8dc0242a0a751",
+          "suppressed": true,
+          "reason": "event_dedup"
+        }
+      }
+    },
+    {
+      "name": "scheduleReminder skips disabled user",
+      "pass": true,
+      "details": {
+        "disabled": {
+          "notificationId": null,
+          "recipientId": null,
+          "suppressed": false,
+          "reason": "USER_NOT_FOUND_OR_DISABLED"
+        }
+      }
+    }
+  ],
+  "totals": {
+    "notifications": 3,
+    "deliveredRecipients": 3
+  }
+}
