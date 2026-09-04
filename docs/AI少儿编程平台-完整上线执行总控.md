@@ -1118,16 +1118,30 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 影响文件 / 数据表：`p8-l01-data-inventory.mjs`；核对 `users`、`sessions`、`organizations`、`student_projects`、`works`、`generation_jobs`、`file_assets`、`leads`、`legal_consents`、`account_requests`、`audit_logs`、`analytics_events`。
   - 验证：`p8-l01-data-inventory.mjs` 使用临时 SQLite **71 pass / 0 fail**，进程退出码 0；修复 Windows SQLite 句柄关闭后临时目录清理问题。
   - 边界：仅完成工程数据资产与最小化基线，不代表 P8-L02～P8-L06、正式协议 / 法务确认或第三方服务接入完成；未修改 `packages/canvas`，未触碰真实业务数据库。
-- [ ] **P8-L02 未成年人 / 监护同意流程（按实际用户年龄与地区要求）**
+- [-] **P8-L02 未成年人 / 监护同意流程（按实际用户年龄与地区要求）**
   - 优先级：P0
-  - 验收：注册、作品公开、AI 生成、线索收集涉及的同意与撤回有明确业务 / 法务规则和证据保存。
-- [ ] **P8-L03 隐私请求与账号注销流程**
+  - 完成记录（2026-09-04）：
+    - 状态：`[-]`
+    - 实现：学生端账号页已接通监护人信息录入 / 清空、监护关系与确认校验、用户协议 / 隐私政策 / 儿童与未成年人说明版本化阅读记录；记录进入 `users.guardian_*` 与 `legal_consents`，并写入审计日志。
+    - 影响文件 / 接口 / 数据表：`apps/server/src/routes/student.js`、`apps/student/src/main.jsx`；`PUT /api/student/account/guardian`、`POST /api/student/account/legal-consents`；`users`、`legal_consents`、`audit_logs`。
+    - 验证：`p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite 验证监护同意必填、错误版本拒绝、当前版本写入和撤回，32 项总验收中的相关断言通过；未修改 `packages/canvas`，未触碰真实业务数据库。
+    - 遗留风险或下一步：当前是工程流程与证据基线；正式协议正文、适用地区年龄规则、监护人身份核验和撤回后的业务影响仍需用户 / 法务确认，不得据此宣称正式合规完成。
+- [-] **P8-L03 隐私请求与账号注销流程**
   - 优先级：P0
-  - 范围：访问、更正、导出、删除、注销、申诉、工单、身份核验。
-  - 验收：请求可跟踪；删除会处理关联文件、会话、索引和备份延迟规则；法律保留例外说明清楚。
-- [ ] **P8-L04 内容举报、审核、申诉与记录保留**
+  - 完成记录（2026-09-04）：
+    - 状态：`[-]`
+    - 实现：学生可提交数据导出 / 账号注销申请、查看状态、撤回待处理申请；机构管理员工作台可筛选、审批、填写处理说明；导出审批生成最小化数据概览，注销审批软删除学生并撤销会话，保留审计记录。
+    - 影响文件 / 接口 / 数据表：`apps/server/src/routes/student.js`、`apps/server/src/routes/adminOrg.js`、`apps/student/src/main.jsx`、`apps/org/src/main.jsx`；`/api/student/account/requests`、`/api/org/account-requests`；`account_requests`、`users`、`sessions`、`audit_logs`。
+    - 验证：`p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite 验证申请、重复申请拒绝、机构审批、导出查看、注销后旧会话与重新登录均拒绝，32/32 pass；未读取、复制、迁移或写入真实业务数据库。
+    - 遗留风险或下一步：关联真实对象存储文件、备份延迟删除、身份核验、法律保留例外和正式工单 / 申诉渠道尚未接入；真实 OSS 未接入，不伪造文件删除完成。
+- [-] **P8-L04 内容举报、审核、申诉与记录保留**
   - 优先级：P0
-  - 验收：用户可举报作品 / 评论 / 生成内容；审核人有工作台、证据、处理状态和申诉；公开内容可紧急下架。
+  - 完成记录（2026-09-04）：
+    - 状态：`[-]`
+    - 实现：学生可举报机构内已发布作品，机构管理员可查看待处理举报、填写处理结论并选择紧急下架；处理动作写入 `work_reports`、作品审核字段和审计日志。
+    - 影响文件 / 接口 / 数据表：`apps/server/src/routes/student.js`、`apps/server/src/routes/adminOrg.js`、`apps/student/src/main.jsx`、`apps/org/src/main.jsx`；`POST /api/student/showcase/:id/reports`、`GET/PUT /api/org/work-reports`；`work_reports`、`works`、`audit_logs`。
+    - 验证：`p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite 验证举报、重复举报拒绝、管理员处理与下架后不可见，32/32 pass；未修改 `packages/canvas`，未触碰真实业务数据库。
+    - 遗留风险或下一步：当前仅覆盖作品举报；评论 / AI 生成内容举报、申诉入口、平台超管跨机构工作台和更完整的记录保留策略仍待补齐，不能将本项标记为全部完成。
 
 ---
 
