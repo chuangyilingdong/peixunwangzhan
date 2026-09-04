@@ -1572,6 +1572,17 @@ node .\p3-api-integration.mjs
 - [x] 证据：`evidence/p8-q07/admin-notifications-fixed.jpg`（修复后真实浏览器截图）、`evidence/p8-q07/admin-super-admin-uat.txt`（环境、页面矩阵、根因、回归与登出记录）。证据为本仓库持久路径，可复核。
 - [ ] 下一步：按 P8-Q07 继续机构管理员、教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
 
+### 8.15 P8-Q07 角色 UAT：教师阶段（2026-09-04）
+
+- [x] 登录矩阵：未登录访问 `/org/dashboard` 仅显示登录页；`teacher-1` 错误密码返回“登录名或密码错误”；`root / admin123` 与 `student-1 / study123` 登录机构端均被拒绝；`org-admin / org123` 登录后进入机构管理员视角，不出现教师看板。
+- [x] 教师可见导航与页面巡检：`teacher-1 / teach123` 显示“授课教师”，可见机构总览、班级与课堂、成员管理、作品点评、站内信、课程中心、宣传物料；隐藏作品数据中心、积分套餐、学员开通、账号申请、问题反馈。7 个可见路由全部真实渲染，页面错误 **0**；成员页按无 `MANAGE_MEMBERS` 权限显示服务端 403 边界。
+- [x] 服务端权限修复（P1）：教师 Cookie 调 `GET /api/org/billing/packages` 原先返回 200，可读取学员套餐价格、积分、席位与能力配置，但该页面为教师隐藏且套餐维护属机构管理员职责。已在 `handleOrg` 对该 GET 补充 `ORG_ADMIN` 校验，教师现在返回 403 `ORG_ADMIN_REQUIRED`“仅机构管理员可查看积分套餐”；机构管理员同接口仍为 200。未修改 `packages/canvas`。
+- [x] 教师用量口径保留：`GET /api/org/billing/usage-overview`、`usage-records` 继续允许教师读取，维持既有课堂生成扣积分链路与“授课教师可在积分用量查看本机构用量汇总”的产品口径；P3 集成回归中“机构用量反映生成”通过。账务总览、积分调整、冻结、退款 / 冲正、开通单、作品数据导出、账号申请、平台管理 API 对教师仍全部 403。
+- [x] 隐藏管理页与跨端 UI：教师直访 `/work-data`、`/packages`、`/enrollment`、`/account-requests`、`/recharge` 均显示无权 / 仅机构管理员 / 教师无席位管理权限等边界，不泄露数据；访问 `/admin/dashboard` 显示“当前会话没有平台管理权限”，访问 `/student/dashboard` 显示“当前会话没有学生创作权限”。
+- [x] 登出安全：登出前 `/api/me=200`，`POST /api/auth/logout=200`，同一 Cookie 登出后 `/api/me=401 SESSION_INVALID`，前端回到登录页。
+- [x] 回归：教师角色专项 **19/19 通过**；`p4-c01-rbac-ownership.mjs` **27/27**；`p4-03-list-api-check.mjs` **50/50**；`p8-q03-api-integration.mjs` **52/52**；`p8-q04-e2e.mjs` **54/54**；`pnpm build` 四端通过；四端生产 JS `React.createElement=0`；`git diff --check` 通过。机构管理员套餐 / 用量接口复验 200。
+- [x] 证据：`evidence/p8-q07/teacher-uat.txt`、`teacher-*.jpg`、`teacher-enrollment-detail.txt`、`teacher-usage-permission.txt`、`org-packages-after-teacher-guard.jpg`。UAT 仅使用临时 SQLite 与隔离端口，不触碰默认数据库、真实线上数据库或生产站点。
+- [ ] 下一步：继续学生、官网访客角色 UAT；P8-Q05 仍保持进行中，不虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 `[~]` 暂缓。
 ### 8.14 P8-Q07 角色 UAT：机构管理员阶段（2026-09-04）
 
 - [x] 机构端异常路径：未登录访问 `/org/dashboard` 仅显示机构登录页；`org-admin` 错误密码返回“登录名或密码错误”；`root / admin123` 与 `student-1 / study123` 登录机构端均被拒绝并提示“该账号没有机构教务权限”；`org-admin / org123` 正常进入机构总览。

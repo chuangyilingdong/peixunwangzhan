@@ -2204,6 +2204,7 @@ export async function handleOrg(ctx) {
     return { items, total: items.length };
   }
   if (part === '/billing/packages' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看积分套餐', 'ORG_ADMIN_REQUIRED');
     expireDueEnrollments(currentOrgId);
     return { items: rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC', [currentOrgId]).map((item) => packageWithSeatUsage(currentOrgId, item)) };
   }

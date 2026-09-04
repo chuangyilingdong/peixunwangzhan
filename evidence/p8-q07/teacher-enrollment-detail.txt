@@ -1,0 +1,12 @@
+{
+  "meBefore": {
+    "status": 200
+  },
+  "api": {
+    "status": 403,
+    "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"ORG_ADMIN_REQUIRED\",\"message\":\"仅机构管理员可查看学员开通\"}}"
+  },
+  "forbiddenText": false,
+  "loginShown": false,
+  "body": "内部测试环境 · 不代表正式服务\n✦\nAI 魔法学院\n授课教师\n◈\n机构总览\n▦\n班级与课堂\n♙\n成员管理\n✧\n作品点评\n✉\n站内信\n◇\n课程中心\n▤\n宣传物料\n✦\n需要帮助？\n查看开课与创作指南\n王\n王老师\nteacher-1\n↪\nAI魔法学院 / 授课教师\n● 服务正常\n?\n\n积分经营\n\n学员开通\n\n学员套餐、席位与线下履约由机构管理员统一管理。\n\n当前账号为教师，没有学员套餐开通与席位管理权限。"
+}

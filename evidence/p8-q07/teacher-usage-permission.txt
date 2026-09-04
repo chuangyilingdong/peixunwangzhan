@@ -1,0 +1,17 @@
+{
+  "account": "teacher-1",
+  "apis": {
+    "/api/org/billing/usage-overview?days=7": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"balance\":100000,\"totalCreditsIn\":100000,\"totalCreditsSpent\":0,\"modalities\":[],\"topUsers\":[]}}"
+    },
+    "/api/org/billing/usage-records?days=7": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"items\":[],\"total\":0}}"
+    },
+    "/api/org/billing/packages": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"ORG_ADMIN_REQUIRED\",\"message\":\"仅机构管理员可查看积分套餐\"}}"
+    }
+  }
+}
