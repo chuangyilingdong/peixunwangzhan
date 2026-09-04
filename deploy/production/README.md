@@ -13,6 +13,7 @@
 - API 服务：systemd `learning-platform-production`，仅监听 `127.0.0.1:8789`
 - 运行用户：`ai-kids-prod`
 - 前端：Nginx 在 `https://iicili.cyou` 下按 `/`、`/admin/`、`/org/`、`/student/` 提供四端
+- Nginx 加固：`apply-nginx-sensitive-path-hardening.sh` 由授权运维人员执行，安装源码 / 配置 / 依赖路径 404 规则并完成备份、`nginx -t`、reload 和公网冒烟；不修改 release、数据库或 internal-test 回滚资产。
 
 ## 构建与切换
 

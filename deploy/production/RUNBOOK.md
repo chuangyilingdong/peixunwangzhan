@@ -78,6 +78,24 @@ node scripts/verify-production-entrypoints.mjs --mode public
 
 验收必须包含四端页面、标题、登录文案、资源前缀、无 `X-Internal-Test`、非 noindex、无内测横幅、HTTPS 安全头和 `/api/health`。
 
+## 收口生产 Nginx 敏感路径
+
+P9-D05 当前唯一服务器侧遗留是源码 / 配置 / 依赖路径不能回退到 SPA `index.html`。授权运维人员在服务器仓库 checkout 更新后执行：
+
+```bash
+cd /srv/ai-kids-platform/internal-test/source
+git pull --ff-only origin main
+sudo bash deploy/production/apply-nginx-sensitive-path-hardening.sh
+```
+
+脚本只修改 `/etc/nginx/sites-enabled/iicili.cyou`，先创建带 UTC 时间戳的备份，再执行 `nginx -t`、reload 和公网 404 冒烟；任一步失败会尝试恢复本次备份。它不修改 release、数据库或 `internal-test` 回滚资产。成功输出 `NGINX_SENSITIVE_PATH_HARDENING_OK` 后，运行：
+
+```bash
+node scripts/p9-live-security-smoke.mjs
+```
+
+所有敏感路径均为 404 后，才可将 P9-D05 从 `[-]` 更新为 `[x]`。
+
 ## 回滚到内测
 
 生产切换失败且需要回到切换前版本时：

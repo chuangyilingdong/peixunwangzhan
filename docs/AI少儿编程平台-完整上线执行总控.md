@@ -1637,3 +1637,12 @@ node .\p3-api-integration.mjs
 - [x] 新增 `docs/p4-02-demo-data-isolation.md` 与 `scripts/p4-02-demo-data-inventory.mjs`，定义基础教学资产保留、演示行为数据隔离、报表排除和生产变更前置条件。
 - [x] 验证范围：Node v24.19.0、`node --check`、临时 SQLite 初始化 + seed + 只读盘点；生产数据库未打开，`packages/canvas` 未修改，internal-test 回滚资产未触碰。
 - [-] 生产演示数据归档 / 清理：待 24 小时观察结束后另行建立变更窗口；不得凭名称直接删除真实记录。
+
+
+### 2026-09-04 P9-D05 服务器执行包补齐（未宣称完成）
+
+- [x] 新增 `deploy/production/apply-nginx-sensitive-path-hardening.sh`：授权运维人员执行时，先备份生产 vhost，再安装源码 / 配置 / 依赖路径 404 规则，执行 `nginx -t`、reload 和公网冒烟；配置校验或冒烟失败会尝试恢复本次备份。
+- [x] 修复 `scripts/p9-live-security-smoke.mjs` 对 Node 16 的兼容性：改用 Node 内置 `http` / `https` 请求，不依赖 Node 18+ 全局 `fetch`；不输出响应体、Cookie 或凭据。
+- [x] 更新生产 `README.md` 与 `RUNBOOK.md`，明确执行路径、成功标志、回滚边界，以及不修改 release、数据库和 `internal-test` 回滚资产的约束。
+- [x] 本地验证：Git Bash `bash -n`、`git diff --check` 通过；P9 安全冒烟脚本在 Node `16.13.1` 本地 HTTP fixture 上 **14/14 通过**；GitHub Actions CI run `33881410265`（commit `f886567`）成功。
+- [ ] 服务器侧仍待授权运维执行脚本并运行 `scripts/p9-live-security-smoke.mjs`；在 9 个敏感路径全部返回 404 前，P9-D05 继续保持 `[-]`。
