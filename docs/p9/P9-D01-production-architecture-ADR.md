@@ -85,7 +85,7 @@
 - systemd hardening：`NoNewPrivileges`、`ProtectSystem=strict`、`PrivateTmp`、限定 `ReadWritePaths`。
 - 依赖漏洞扫描纳入 CI；失败发布阻断。
 - 不伪造外部服务能力；真实 AI / OSS / 支付接入前保持边界声明，生产仍为 `AI_PROVIDER=local-mock`。
-- 公开前必须处理已知默认账号：`root/admin123`、`org-admin/org123`、`student-2/study123`。
+- 公开前必须处理全部种子默认账号：`root/admin123`、`org-admin/org123`、`teacher-1/teach123`、`teacher-2/teach123`、`student-1/study123`、`student-2/study123`。
 
 ## 6. 已确认决策
 
@@ -115,7 +115,7 @@
 
 - production release：`20260904T122323Z`，commit `e98ba46`，Node `v24.19.0`，pnpm `11.19.0`，`mode=public`。
 - 数据：切换前备份 `/srv/ai-kids-platform/internal-test/backups/20260904T122349Z/platform.db`；内测库复制为生产库，原库保留。
-- 账号：`root`、`org-admin`、`student-2` 全部重置为随机强密码，旧会话作废；新密码登录通过，旧密码 401。
+- 账号：全部 6 个种子账号重置为随机强密码，旧会话作废；新密码登录通过，旧密码 401。
 - 服务：`learning-platform-production` active/enabled，API 仅监听 `127.0.0.1:8789`，`/health=ok`，journal 错误 0。
 - 入口：Nginx production 配置启用，切换前配置已备份；四端 Playwright 回归 4/4，public 模式与 HTTPS 安全头通过。
 - 回滚资产：internal-test 服务停止并禁用，release、数据库、unit、Nginx 配置均保留；Nginx 切换前配置备份存在。
