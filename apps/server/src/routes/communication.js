@@ -556,18 +556,35 @@ const scheduler = setInterval(() => {
 }, 15000);
 scheduler.unref();
 
-function notificationAdminRows() {
-  return rows(`
+function notificationAdminRows({ search = '', status = '', page = 1, limit = 20, sort = 'created' } = {}) {
+  const conditions = ["n.scope_type='PLATFORM'"]; const params = [];
+  if (search) { conditions.push('(n.title LIKE ? OR n.body LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+  if (status && ['DRAFT', 'PUBLISHED', 'SCHEDULED', 'RECALLED'].includes(status)) {
+    if (status === 'SCHEDULED') conditions.push("n.status='DRAFT' AND n.publish_at IS NOT NULL");
+    else { conditions.push('n.status=?'); params.push(status); }
+  }
+  const orderBy = {
+    created: 'n.created_at DESC',
+    updated: 'n.updated_at DESC',
+    publish: 'COALESCE(n.publish_at,n.created_at) DESC',
+    title: 'n.title COLLATE NOCASE ASC',
+    pinned: 'n.pinned DESC, COALESCE(n.publish_at,n.created_at) DESC',
+  }[sort] || 'n.created_at DESC';
+  const where = conditions.join(' AND ');
+  const total = Number(row(`SELECT COUNT(*) n FROM notifications n WHERE ${where}`, params)?.n || 0);
+  const offset = (page - 1) * limit;
+  const items = rows(`
     SELECT n.*, sender.display_name sender_name,
       (SELECT COUNT(*) FROM notification_recipients recipient WHERE recipient.notification_id=n.id) recipient_count,
       (SELECT COUNT(*) FROM notification_recipients recipient WHERE recipient.notification_id=n.id AND recipient.read_at IS NULL AND recipient.delivery_status='DELIVERED') unread_count,
       (SELECT COUNT(*) FROM notification_recipients recipient WHERE recipient.notification_id=n.id AND recipient.delivery_status='FAILED') delivery_failed_count
     FROM notifications n
     LEFT JOIN users sender ON sender.id=n.sender_id
-    WHERE n.scope_type='PLATFORM'
-    ORDER BY n.pinned DESC, COALESCE(n.publish_at,n.created_at) DESC
-    LIMIT 200
-  `).map(normalizeNotification);
+    WHERE ${where}
+    ORDER BY ${orderBy}
+    LIMIT ? OFFSET ?
+  `, [...params, limit, offset]).map(normalizeNotification);
+  return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
 }
 
 function notificationRecipientRows(currentOrgId, userId) {
@@ -611,20 +628,34 @@ function validateTemplateBody(body, existing = null) {
   return { name, title, body: content, kind, targetUrl, audience };
 }
 
-function materialRows({ currentOrgId = null, admin = false } = {}) {
+function materialRows({ currentOrgId = null, admin = false, search = '', status = '', category = '', visibility = '', page = 1, limit = 20, sort = 'created' } = {}) {
+  const conditions = []; const params = [];
+  if (admin) conditions.push('1=1');
+  else { conditions.push("material.status='ACTIVE'"); conditions.push("(material.visibility='ALL_ORGS' OR EXISTS (SELECT 1 FROM promo_material_assignments assignment WHERE assignment.material_id=material.id AND assignment.org_id=?))"); params.push(currentOrgId); }
+  if (search) { conditions.push('(material.title LIKE ? OR material.description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+  if (status && ['ACTIVE', 'DISABLED'].includes(status)) { conditions.push('material.status=?'); params.push(status); }
+  if (category && ['GENERAL', 'COURSE', 'POSTER', 'ACTIVITY', 'PARTNERSHIP'].includes(category)) { conditions.push('material.category=?'); params.push(category); }
+  if (visibility && ['ALL_ORGS', 'ASSIGNED_ORGS'].includes(visibility)) { conditions.push('material.visibility=?'); params.push(visibility); }
+  const orderBy = {
+    created: 'material.created_at DESC',
+    updated: 'material.updated_at DESC',
+    title: 'material.title COLLATE NOCASE ASC',
+    events: 'event_count DESC, material.created_at DESC',
+  }[sort] || 'material.created_at DESC';
+  const where = conditions.join(' AND ');
   const base = `
-    SELECT material.*, creator.display_name created_by_name,
-      (SELECT GROUP_CONCAT(assignment.org_id) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_ids,
-      (SELECT COUNT(*) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_count,
-      (SELECT COUNT(*) FROM promo_material_events event WHERE event.material_id=material.id) event_count
     FROM promo_materials material
     LEFT JOIN users creator ON creator.id=material.created_by
   `;
-  if (admin) return rows(base + ' ORDER BY material.created_at DESC LIMIT 200').map(normalizeMaterial);
-  return rows(base + `
-    WHERE material.status='ACTIVE' AND (material.visibility='ALL_ORGS' OR EXISTS (SELECT 1 FROM promo_material_assignments assignment WHERE assignment.material_id=material.id AND assignment.org_id=?))
-    ORDER BY material.created_at DESC LIMIT 200
-  `, [currentOrgId]).map(normalizeMaterial);
+  const total = Number(row(`SELECT COUNT(*) n ${base} WHERE ${where}`, params)?.n || 0);
+  const offset = (page - 1) * limit;
+  const items = rows(`SELECT material.*, creator.display_name created_by_name,
+      (SELECT GROUP_CONCAT(assignment.org_id) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_ids,
+      (SELECT COUNT(*) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_count,
+      (SELECT COUNT(*) FROM promo_material_events event WHERE event.material_id=material.id) event_count
+    ${base} WHERE ${where}
+    ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [...params, limit, offset]).map(normalizeMaterial);
+  return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
 }
 
 function materialStats(materialId) {
@@ -1056,8 +1087,14 @@ export async function handleAdminCommunication(ctx) {
   if (part === '/inbox' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     dispatchDueNotifications();
-    const items = notificationAdminRows();
-    return { items, unread: items.reduce((sum, item) => sum + item.unreadCount, 0), total: items.length };
+    const search = String(ctx.search.get('search') || '').trim();
+    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const requestedSort = String(ctx.search.get('sort') || 'created');
+    const sort = ['created', 'updated', 'publish', 'title', 'pinned'].includes(requestedSort) ? requestedSort : 'created';
+    const result = notificationAdminRows({ search, status, page, limit, sort });
+    return { ...result, unread: result.items.reduce((sum, item) => sum + item.unreadCount, 0) };
   }
   if (part === '/inbox' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
@@ -1128,8 +1165,15 @@ export async function handleAdminCommunication(ctx) {
   }
   if (part === '/materials' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const items = materialRows({ admin: true });
-    return { items, total: items.length };
+    const search = String(ctx.search.get('search') || '').trim();
+    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
+    const category = String(ctx.search.get('category') || '').trim().toUpperCase();
+    const visibility = String(ctx.search.get('visibility') || '').trim().toUpperCase();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const requestedSort = String(ctx.search.get('sort') || 'created');
+    const sort = ['created', 'updated', 'title', 'events'].includes(requestedSort) ? requestedSort : 'created';
+    return materialRows({ admin: true, search, status, category, visibility, page, limit, sort });
   }
   if (part === '/materials' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
@@ -1410,8 +1454,8 @@ export async function handleOrgCommunication(ctx) {
   if (match && method === 'PUT') return markNotificationRead(ctx, currentOrgId, match[1], auth.user.id);
   if (part === '/inbox/read-all' && method === 'PUT') return markAllNotificationsRead(ctx, currentOrgId, auth.user.id);
   if (part === '/materials' && method === 'GET') {
-    const items = materialRows({ currentOrgId });
-    return { items, total: items.length };
+    const result = materialRows({ currentOrgId });
+    return { items: result.items, total: result.total };
   }
   match = part.match(/^\/materials\/([^/]+)\/events$/);
   if (match && method === 'POST') {

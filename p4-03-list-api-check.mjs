@@ -57,6 +57,18 @@ try {
   ok('platform admins unknown sort safely falls back', adminsFallback.status === 200 && adminsFallback.data.data.sort === 'created', adminsFallback);
   const marketplace = await call('GET', '/admin/course-marketplace?marketplaceStatus=NONE&page=1&limit=2', token);
   ok('marketplace status alias and pagination', marketplace.status === 200 && marketplace.data.data.page === 1 && marketplace.data.data.limit === 2 && 'totalPages' in marketplace.data.data, marketplace);
+  const inbox = await call('GET', '/admin/inbox?page=1&limit=1&sort=title', token);
+  ok('notification list pagination and sort', inbox.status === 200 && inbox.data.success && inbox.data.data.page === 1 && inbox.data.data.limit === 1 && inbox.data.data.sort === 'title' && Number.isInteger(inbox.data.data.totalPages), inbox);
+  const inboxFallback = await call('GET', '/admin/inbox?page=1&limit=1&sort=not-a-column', token);
+  ok('notification unknown sort safely falls back', inboxFallback.status === 200 && inboxFallback.data.data.sort === 'created', inboxFallback);
+  const inboxStatus = await call('GET', '/admin/inbox?page=1&limit=20&status=PUBLISHED', token);
+  ok('notification status filter', inboxStatus.status === 200 && inboxStatus.data.data.items.every((item) => item.status === 'PUBLISHED'), inboxStatus);
+  const materials = await call('GET', '/admin/materials?page=1&limit=1&sort=title', token);
+  ok('materials pagination and sort', materials.status === 200 && materials.data.success && materials.data.data.page === 1 && materials.data.data.limit === 1 && materials.data.data.sort === 'title' && Number.isInteger(materials.data.data.totalPages), materials);
+  const materialsFallback = await call('GET', '/admin/materials?page=1&limit=1&sort=not-a-column', token);
+  ok('materials unknown sort safely falls back', materialsFallback.status === 200 && materialsFallback.data.data.sort === 'created', materialsFallback);
+  const materialsStatus = await call('GET', '/admin/materials?page=1&limit=20&status=ACTIVE', token);
+  ok('materials status filter', materialsStatus.status === 200 && materialsStatus.data.data.items.every((item) => item.status === 'ACTIVE'), materialsStatus);
   const unauthenticated = await call('GET', '/admin/platform-users?page=1&limit=2');
   ok('unauthenticated denied', unauthenticated.status === 401, unauthenticated);
   console.log(`ALL PASS ${passed}`);

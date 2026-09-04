@@ -1529,3 +1529,12 @@ node .\p3-api-integration.mjs
 - [x] `p4-03-list-api-check.mjs` 临时 SQLite 验收扩展至 **17 pass / 0 fail**，新增平台管理员分页、状态筛选和非法排序回退检查。
 - [x] Node 24 下 admin 生产构建通过，`git diff --check` 通过；未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
 - [ ] 后续小批次：通知 / 物料列表、账务列表；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规仍保持 `[~]` 暂缓。
+
+### 8.10 P4-03-LIST 通知 / 宣传物料列表批次（2026-09-04）
+
+- [x] 服务端 `GET /api/admin/inbox` 增加 `search`、`status`、`page`、`limit`、`sort` 参数；排序字段仅允许 `created` / `updated` / `publish` / `title` / `pinned`，非法值安全回退到 `created`。
+- [x] 服务端 `GET /api/admin/materials` 增加 `search`、`status`、`category`、`visibility`、`page`、`limit`、`sort` 参数；排序字段仅允许 `created` / `updated` / `title` / `events`，非法值安全回退到 `created`。机构端物料读取保持兼容，不改变机构可见范围。
+- [x] 平台端站内通知、宣传物料列表接入筛选、排序、每页数量、`ListResultSummary`、`Pagination` 和筛选空态；筛选 / 排序 / 每页数量变化回到第 1 页。
+- [x] `p4-03-list-api-check.mjs` 使用临时 SQLite 验收扩展至 **23 pass / 0 fail**，新增通知 / 物料分页、状态筛选和非法排序回退检查。
+- [x] Node 24 下四端生产构建通过，`git diff --check` 通过；未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
+- [ ] 下一批处理账务列表的明细分页、筛选、排序和导出边界；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。

@@ -691,3 +691,12 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] 验收：`p4-03-list-api-check.mjs` 使用临时 SQLite **17 pass / 0 fail**；admin 生产构建、`git diff --check` 通过。
 - [x] 影响文件：`apps/server/src/routes/adminOrg.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。影响接口：`GET /api/admin/platform-admins`。无数据库结构变更。
 - [ ] 下一批继续处理通知 / 物料和账务列表的统一分页 / 导出；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
+
+### 2026-09-04 P4-03-LIST 通知 / 宣传物料列表批次
+
+- [x] `GET /api/admin/inbox` 已支持通知标题 / 内容搜索、`DRAFT` / `SCHEDULED` / `PUBLISHED` / `RECALLED` 状态筛选、`created` / `updated` / `publish` / `title` / `pinned` 白名单排序和 `page` / `limit` 分页。非法排序值安全回退到 `created`。
+- [x] `GET /api/admin/materials` 已支持物料名称 / 说明搜索、状态 / 分类 / 可见范围筛选、`created` / `updated` / `title` / `events` 白名单排序和 `page` / `limit` 分页。非法排序值安全回退到 `created`。
+- [x] `/inbox` 与 `/materials` 已接入筛选控件、排序、每页数量、`ListResultSummary`、`Pagination` 和筛选空态；所有条件变更回到第 1 页。
+- [x] 验收：`p4-03-list-api-check.mjs` 使用临时 SQLite **23 pass / 0 fail**；四端生产构建、`git diff --check` 通过。
+- [x] 影响文件：`apps/server/src/routes/communication.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。影响接口：`GET /api/admin/inbox`、`GET /api/admin/materials`；无数据库结构变更。
+- [ ] 下一批继续处理账务列表的统一分页 / 筛选 / 排序 / 导出边界；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
