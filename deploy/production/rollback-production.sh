@@ -21,6 +21,11 @@ RELEASE="$(realpath -m "$RELEASE")"
 RELEASE_ROOT="$(realpath -m "$ROOT/releases")"
 case "$RELEASE" in "$RELEASE_ROOT"/*) ;; *) echo "Release must stay under $RELEASE_ROOT" >&2; exit 2;; esac
 [[ -f "$RELEASE/BUILD-METADATA.txt" ]] || { echo "Invalid release: missing BUILD-METADATA.txt" >&2; exit 2; }
+[[ -f "$RELEASE/apps/server/src/index.js" ]] || { echo "Invalid release: missing server entrypoint" >&2; exit 2; }
+if [[ -n "$DB_BACKUP" ]]; then
+  DB_BACKUP="$(realpath -m "$DB_BACKUP")"
+  [[ -f "$DB_BACKUP" ]] || { echo "Database backup not found: $DB_BACKUP" >&2; exit 2; }
+fi
 CURRENT="$ROOT/current"
 PREVIOUS=""
 if [[ -e "$CURRENT" || -L "$CURRENT" ]]; then PREVIOUS="$(realpath "$CURRENT")"; fi
@@ -28,15 +33,25 @@ DATA_DIR="$ROOT/data"
 DB_PATH="${PLATFORM_DB_PATH:-$DATA_DIR/platform.db}"
 if [[ "${DB_PATH,,}" == *"/packages/data/platform.db"* ]]; then echo "Refusing repository default database" >&2; exit 2; fi
 
+SERVICE_STOPPED=0
+restore_service_if_needed() {
+  if (( SERVICE_STOPPED == 1 )); then
+    sudo systemctl start "$SERVICE" || true
+    SERVICE_STOPPED=0
+  fi
+}
+trap restore_service_if_needed ERR
+
 sudo systemctl stop "$SERVICE"
+SERVICE_STOPPED=1
 if [[ -n "$DB_BACKUP" ]]; then
-  [[ -f "$DB_BACKUP" ]] || { echo "Database backup not found: $DB_BACKUP" >&2; exit 2; }
   mkdir -p "$DATA_DIR"
   install -o ai-kids-prod -g ai-kids-prod -m 0640 "$DB_BACKUP" "$DB_PATH.rollback.tmp"
   mv -f "$DB_PATH.rollback.tmp" "$DB_PATH"
 fi
 ln -sfn "$RELEASE" "$CURRENT"
 sudo systemctl start "$SERVICE"
+SERVICE_STOPPED=0
 if ! curl -fsS --retry 10 --retry-delay 2 --retry-connrefused --max-time 10 http://127.0.0.1:8789/health >/dev/null; then
   echo "Health check failed; restoring previous release" >&2
   sudo systemctl stop "$SERVICE" || true

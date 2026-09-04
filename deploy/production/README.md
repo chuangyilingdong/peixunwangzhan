@@ -43,7 +43,7 @@ bash deploy/production/rollback-production.sh \
   --db-backup /srv/ai-kids-platform/production/backups/<stamp>/platform.db
 ```
 
-脚本校验 release 必须位于生产 releases 目录；健康检查使用 `127.0.0.1:8789`。
+脚本在停止服务前校验 release 位于生产 releases 目录、`BUILD-METADATA.txt` 与服务入口存在，并校验指定数据库备份文件存在；切换期间若安装数据库、更新 current 或启动服务失败，会尝试自动恢复 production 服务。健康检查使用 `127.0.0.1:8789`。
 
 ## 监控
 
