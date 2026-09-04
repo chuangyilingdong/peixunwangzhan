@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
+import { CORS_ALLOWED_ORIGINS } from './config.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -49,6 +50,7 @@ export class ApiError extends Error {
 
 export const errors = {
   unauthorized: (message = '登录状态无效', code = 'SESSION_INVALID', details) => new ApiError(401, code, message, details),
+  tooMany: (message = '请求过于频繁，请稍后再试', code = 'RATE_LIMITED', details) => new ApiError(429, code, message, details),
   forbidden: (message = '无权访问', code = 'FORBIDDEN', details) => new ApiError(403, code, message, details),
   notFound: (message = '资源不存在', code = 'NOT_FOUND', details) => new ApiError(404, code, message, details),
   badRequest: (message = '请求参数错误', code = 'VALIDATION_ERROR', details) => new ApiError(400, code, message, details),
@@ -101,17 +103,35 @@ export async function readJson(req, limit = '1mb') {
   }
 }
 
-export function corsHeaders(req, extra = {}) {
-  const origin = req?.headers?.origin;
+function isAllowedOrigin(origin) {
+  return !origin || CORS_ALLOWED_ORIGINS.includes(origin);
+}
+
+export function securityHeaders(extra = {}) {
   return {
-    'access-control-allow-origin': origin || '*',
-    'access-control-allow-credentials': 'true',
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'strict-origin-when-cross-origin',
+    'permissions-policy': 'camera=(), microphone=(), geolocation=()',
+    ...extra,
+  };
+}
+
+export function corsHeaders(req, extra = {}) {
+  const origin = String(req?.headers?.origin || '').trim();
+  const headers = {
+    ...securityHeaders(),
     'access-control-allow-headers': 'content-type,authorization,x-requested-with',
     'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     'access-control-max-age': '600',
     vary: 'Origin',
     ...extra,
   };
+  if (isAllowedOrigin(origin)) {
+    if (origin) headers['access-control-allow-origin'] = origin;
+    headers['access-control-allow-credentials'] = 'true';
+  }
+  return headers;
 }
 
 export function sendJson(res, status, payload, req, extraHeaders = {}) {

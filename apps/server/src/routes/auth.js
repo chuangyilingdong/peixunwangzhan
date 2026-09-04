@@ -19,6 +19,42 @@ import {
 } from '../lib.js';
 
 const CLIENT_TYPES = new Set(['web', 'admin', 'org', 'student']);
+const LOGIN_RATE_LIMIT = { windowMs: 15 * 60 * 1000, maxAttempts: 10 };
+const loginAttempts = new Map();
+
+function loginRateKey(ctx, login) {
+  const forwarded = String(ctx.req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  const address = forwarded || ctx.req?.socket?.remoteAddress || 'unknown';
+  return `${address}:${login.toLowerCase()}`;
+}
+
+function checkLoginRateLimit(ctx, login) {
+  const key = loginRateKey(ctx, login);
+  const now = Date.now();
+  const record = loginAttempts.get(key);
+  if (!record || now - record.startedAt >= LOGIN_RATE_LIMIT.windowMs) {
+    loginAttempts.set(key, { startedAt: now, failures: 0 });
+    return;
+  }
+  if (record.failures >= LOGIN_RATE_LIMIT.maxAttempts) {
+    throw errors.tooMany();
+  }
+}
+
+function recordLoginFailure(ctx, login) {
+  const key = loginRateKey(ctx, login);
+  const now = Date.now();
+  const previous = loginAttempts.get(key);
+  const record = !previous || now - previous.startedAt >= LOGIN_RATE_LIMIT.windowMs
+    ? { startedAt: now, failures: 0 }
+    : previous;
+  record.failures += 1;
+  loginAttempts.set(key, record);
+}
+
+function clearLoginFailures(ctx, login) {
+  loginAttempts.delete(loginRateKey(ctx, login));
+}
 
 function loginAuditContext(ctx, user) {
   return {
@@ -35,12 +71,15 @@ export async function handleAuth(ctx) {
   if (pathname === '/api/auth/login' && method === 'POST') {
     const login = nonEmptyString(ctx.body?.login, '登录名', { max: 100 });
     const password = nonEmptyString(ctx.body?.password, '密码', { max: 500 });
+    checkLoginRateLimit(ctx, login);
     const suppliedClientType = String(ctx.body?.clientType || 'web').trim().toLowerCase();
     const clientType = CLIENT_TYPES.has(suppliedClientType) ? suppliedClientType : 'web';
     const user = row('SELECT * FROM users WHERE login = ? AND deleted_at IS NULL', [login]);
     if (!user || !verifyPassword(password, user.password_hash)) {
+      recordLoginFailure(ctx, login);
       throw errors.unauthorized('登录名或密码错误', 'INVALID_CREDENTIALS');
     }
+    clearLoginFailures(ctx, login);
     const org = user.org_id ? row('SELECT * FROM organizations WHERE id = ?', [user.org_id]) : null;
     assertUserAccountAvailable(user, org);
 

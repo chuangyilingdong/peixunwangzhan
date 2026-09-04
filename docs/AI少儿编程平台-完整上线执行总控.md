@@ -1060,10 +1060,15 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 
 ### 8.2 安全与可靠性
 
-- [ ] **P8-S01 安全基线与依赖漏洞治理**
+- [-] **P8-S01 安全基线与依赖漏洞治理**
   - 优先级：P0
   - 范围：依赖扫描、SCA、secret 扫描、CSP、CORS、请求大小、速率限制、错误信息脱敏、安全响应头。
-  - 验收：高危漏洞无未评估遗留；密钥不在仓库；安全例外有负责人和到期日期。
+  - 完成记录（2026-09-04）：
+    - 状态：`[-]`
+    - 实现：API 增加安全响应头（nosniff、DENY、Referrer-Policy、Permissions-Policy）；CORS 改为显式来源白名单并禁止任意 Origin 搭配 credentials；登录失败按 IP + 登录名限流（15 分钟最多 10 次）；保留 2MB JSON 请求体上限和结构化错误脱敏；内测 Nginx 增加 CSP、请求体上限、server_tokens off 和同等安全头；内测环境模板补充 `CORS_ALLOWED_ORIGINS`。
+    - 影响文件 / 接口：`apps/server/src/config.js`、`apps/server/src/lib.js`、`apps/server/src/routes/auth.js`、`deploy/internal-test/nginx.conf.example`、`deploy/internal-test/.env.example`；`/health`、`/auth/login`、全 API 响应头。
+    - 验证：`p8-s01-security-baseline.mjs` 使用临时 SQLite **32 pass / 0 fail**；覆盖允许 / 拒绝 Origin、预检、API 安全头、内测 noindex、404 错误脱敏、登录限流、超大请求体、Nginx 静态基线和临时数据库路径；secret pattern 扫描未发现命中；P8-S02 **27/27**、P8-Q03 **52/52** 回归通过。
+    - 遗留风险或下一步：`pnpm audit --prod` 已尝试执行，但 npm registry 在本轮返回 HTTP 503 / 网络失败，尚未获得依赖漏洞清单；因此本项暂不勾选，下一步先完成可重复的离线依赖清单 / 锁文件审查和 registry 恢复后的 SCA 复核。
 - [x] **P8-S02 身份认证与会话安全。** ✅ 2026-09-04
   - 完成记录：内测 / 生产模式认证 Cookie 增加 `Secure`，继续保留 `HttpOnly`、`SameSite=Lax`、路径限制和 7 天有效期；既有单账号单活跃会话策略、密码变更撤销全部会话、注销和会话撤销继续生效。
   - 影响文件 / 接口：`apps/server/src/lib.js`；`POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/me`、`PUT /api/student/account/password`、`PUT /api/student/account/sessions/:id/revoke`。
