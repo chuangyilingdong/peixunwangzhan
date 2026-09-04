@@ -51,3 +51,32 @@ bash deploy/internal-test/rollback-internal-test.sh --release /srv/ai-kids-platf
 - 发布窗口：仅在内部测试人员可在线配合时执行。
 - 放行条件：部署验收、核心角色 UAT、权限 / 租户隔离检查全部通过；P0 缺陷为 0，或有书面豁免。
 - 本阶段不承诺公开 SLA，不做正式域名、备案、品牌邮箱、真实 AI / 支付 / 微信 / 短信 / 邮件 / OSS / 客户端承诺。
+
+## 快速发布 SSH 通道（用户已授权长期保留）
+
+- 服务器：`39.106.183.200`，SSH 用户：`root`，用于维护隔离内测目录 `/srv/ai-kids-platform/internal-test/`。
+- 本机私钥路径：`C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519`；文件名保留历史 `temp` 字样，但自 2026-09-04 起按用户授权长期保留使用。
+- 服务器 `authorized_keys` 对应公钥注释：`codex-temporary-ai-kids-platform-20260904`；不得删除该公钥，除非项目负责人明确要求撤销通道。
+- 严禁在本仓库、日志、聊天输出或文档中粘贴私钥内容、口令、token；文档只记录私钥路径和公钥注释。
+- 安全组要求：SSH 仅对当前办公 / 家庭出口 IP 放行 TCP `22`，不使用 `0.0.0.0/0`；公网出口 IP 会变化，不在本文写死。
+- 若 SSH 超时：先确认本机网络，再由用户在云控制台把安全组来源 IP 更新为当前出口 IP；不得要求放宽为全网开放。
+
+常用连接：
+
+```powershell
+$key = 'C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519'
+ssh -i $key -o IdentitiesOnly=yes -o ServerAliveInterval=30 root@39.106.183.200
+```
+
+快速发布入口（先确认最新 commit 已推送）：
+
+```powershell
+$key = 'C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519'
+ssh -i $key -o IdentitiesOnly=yes root@39.106.183.200 "cd /srv/ai-kids-platform/internal-test/source && git fetch origin main && git reset --hard origin/main && git clean -fd && PATH=/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin:`$PATH bash deploy/internal-test/build-internal-test.sh"
+ssh -i $key -o IdentitiesOnly=yes root@39.106.183.200 "cd /srv/ai-kids-platform/internal-test/source && bash deploy/internal-test/backup-internal-test.sh"
+ssh -i $key -o IdentitiesOnly=yes root@39.106.183.200 "cd /srv/ai-kids-platform/internal-test/source && bash deploy/internal-test/rollback-internal-test.sh --release /srv/ai-kids-platform/internal-test/releases/<timestamp>"
+```
+
+- `git clean -fd` 仅允许在服务器隔离 source 工作区执行；发布前必须确认不会删除未推送的本地修改。
+- 快速通道只降低登录成本，不降低发布闸门：仍需确认 commit、构建元数据、隔离数据库备份、健康检查、入口回归和日志无新增 P0/P1 错误。
+- 复杂远程操作继续采用“本地写 shell 脚本 → 转 LF → `scp` 上传 → `ssh bash /tmp/...`”，避免 Windows CRLF 与 PowerShell 转义问题。

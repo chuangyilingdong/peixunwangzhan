@@ -23,10 +23,11 @@ export function scanLowBalanceOrgs() {
       COALESCE((SELECT MAX(nr.created_at) FROM notification_recipients nr
         JOIN notifications n ON n.id=nr.notification_id
         WHERE n.scope_type='ORG' AND n.org_id=ba.org_id
-        AND nr.event_key LIKE 'LOW_BALANCE:%'), '1970-01-01') last_reminder
+        AND nr.event_key LIKE 'LOW_BALANCE:%'), '1970-01-01') last_reminder,
+      ba.credit_balance
     FROM org_billing_accounts ba
     JOIN organizations o ON o.id=ba.org_id
-    WHERE o.status='ACTIVE' AND ba.balance<=?
+    WHERE o.status='ACTIVE' AND ba.credit_balance<=?
   `, [LOW_BALANCE_THRESHOLD]);
 
   const results = [];
@@ -37,7 +38,7 @@ export function scanLowBalanceOrgs() {
       try {
         scheduleReminder({
           title: '账户余额不足',
-          body: `您的账户余额已不足（${row.balance} 积分），为保障服务连续性，请及时充值。`,
+          body: `您的账户余额已不足（${row.credit_balance} 积分），为保障服务连续性，请及时充值。`,
           kind: 'REMINDER',
           targetUserId: admin.id,
           targetOrgId: row.org_id,

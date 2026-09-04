@@ -1,0 +1,16 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const dir=mkdtempSync(path.join(tmpdir(),'reminder-fix-low-'));
+process.env.PLATFORM_DATA_DIR=dir;
+process.env.PLATFORM_DB_PATH=path.join(dir,'platform.db');
+process.env.DEPLOYMENT_MODE='local-mock';
+const schema=await import('../packages/database/src/schema.js');
+const seed=await import('../packages/database/src/seed.js');
+const seeded=seed.seedDatabase();
+schema.db.prepare('UPDATE org_billing_accounts SET credit_balance=? WHERE org_id=?').run(0,seeded.organizationId);
+const scheduler=await import('../apps/server/src/services/reminderScheduler.js');
+const result=scheduler.scanLowBalanceOrgs();
+const entry=result[0] ?? {};
+console.log(JSON.stringify({ok:true,organizationId:seeded.organizationId,result},null,2));
+if(result.length!==1 || entry.orgId!==seeded.organizationId || Number(entry.adminCount)<1) process.exit(1);
