@@ -27,7 +27,8 @@
 | 优先级 | 事项 | 说明 |
 |---|---|---|
 | P0 | P8-Q03 | **已完成（2026-09-04）**：API 集成测试扩展；临时 SQLite 验收 52/52，并纳入既有 P3 API 回归 |
-| P0 | P8-Q04 / P8-Q06 | E2E、性能与容量，所有剩余 P0 核心链路在临时 SQLite / 隔离环境可重复验收 |
+| P0 | P8-Q04 | **已完成（2026-09-04）**：非画布 HTTP / 静态构建 E2E；临时 SQLite 验收 54/54，四端构建与官网路由 / 资源加载通过 |
+| P0 | P8-Q06 | 性能与容量，所有剩余 P0 核心链路在临时 SQLite / 隔离环境可重复验收 |
 | P0 | P8-S02 | **已完成（2026-09-04）**：身份认证与会话安全；临时 SQLite 验收 27/27 |
 | P0 | P8-S01 | **进行中**：安全响应头、CORS、请求体上限、登录限流与错误脱敏已完成；依赖漏洞扫描待 registry 恢复后复核 |
 | P0 | P8-S04 / P8-S05 / P8-S06 | 备份恢复、监控告警、发布回滚与事故响应 |
@@ -525,7 +526,14 @@
 - [x] **验证结果**：`p8-q03-api-integration.mjs` **52 pass / 0 fail**，既有 P3 回归输出 `P3 API INTEGRATION COMPLETE`，总进程退出码 0；`git diff --check` 通过。
 - [x] **边界**：local-mock 保持明确的本地模拟边界；未伪造真实 AI、OSS、支付、微信、短信、邮件或客户端；未修改 `packages/canvas`，未触碰真实业务数据库。
 
-下一步转入 P8-Q04 E2E 与 P8-S02 / P8-S03 安全门槛，线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+P8-Q04 E2E 已于 2026-09-04 通过，下一步转入 P8-Q06 性能与容量测试；P8-S01 依赖漏洞治理、P8-S04 备份恢复、P8-S05 监控告警与 P8-S06 发布回滚继续收敛，线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+### P8-Q04 验收记录（2026-09-04）
+
+- [x] **端到端业务链路**：新增 `p8-q04-e2e.mjs`，用临时 SQLite、隔离 API 进程、临时静态官网服务器和 Cookie 会话模拟，覆盖官网访客、平台超管课程上架、机构管理员班级 / 对账、教师开课、学生学习 / AI 预览 / 项目版本 / 作品提交、教师审核发布、作品墙查看、跨学生越权、计费权限、课堂结束能力拦截和注销失效。
+- [x] **构建与浏览器导航烟测**：四端 `pnpm build` 通过；官网 `/`、`/marketplace`、课程详情、课程体系、预约演示、三类法律页路由返回 HTML；入口引用的 JS/CSS 资源均可加载；内测构建保留 `noindex, nofollow, noarchive`。
+- [x] **验证结果**：`p8-q04-e2e.mjs` 使用 Node 24.19.0 + 临时 SQLite **54 pass / 0 fail**，退出码 0；失败时 API stdout/stderr 保留在临时 evidence 目录；`node --check` 与 `git diff --check` 通过。
+- [x] **边界**：本项是非画布 HTTP / 静态构建 E2E，未修改 `packages/canvas`、未触碰真实线上数据库；AI 仍为明确标识的 `local-mock` 预览，不伪造真实第三方服务。
+
 ### P8-S02 验收记录（2026-09-04）
 
 - [x] **认证 Cookie 加固**：`apps/server/src/lib.js` 在 `internal-test` / `production` 模式为登录和清除 Cookie 增加 `Secure`，并保留 `HttpOnly`、`SameSite=Lax`、`Path=/` 和 7 天有效期。
