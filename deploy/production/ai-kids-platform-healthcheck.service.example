@@ -1,0 +1,7 @@
+[Unit]
+Description=AI Kids Platform production health probe
+After=network-online.target learning-platform-production.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/ai-kids-platform/production/bin/monitoring-healthcheck.sh

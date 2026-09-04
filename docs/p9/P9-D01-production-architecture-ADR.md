@@ -1,13 +1,14 @@
 # P9-D01 生产部署架构决策记录（ADR）
 
 - 日期：2026-09-04
-- 状态：草案，等待用户确认
-- 当前线上：`iicili.cyou` 运行新平台内测 release `20260904T113559Z`
+- 状态：已确认，执行中
+- 用户决策：`iicili.cyou` 就是生产域名，直接复用，不使用子域名，不做内测 / 生产域名隔离；按本 ADR 全部执行
+- 当前线上：`iicili.cyou` 暂由新平台内测 release `20260904T113559Z` 承载，切换完成前作为回滚路径
 - 旧站状态：已按用户授权清除，无备份、无旧站回滚能力
 
-## 1. 结论建议
+## 1. 结论
 
-采用**单 ECS + 双环境目录 + Nginx 单域名入口 + SQLite（WAL）+ 版本化 release 原子切换**的架构，先完成生产环境目录与治理，再视真实用户量评估是否迁移 PostgreSQL 或引入对象存储 / CDN。
+采用**单 ECS + 双环境目录 + Nginx 单域名入口 + SQLite（WAL）+ 版本化 release 原子切换**的架构。当前内测数据继承为生产数据；生产写入开始后，内测库保持只读保留作为切换前快照与代码回滚路径。达到阈值后再评估迁移 PostgreSQL 或引入对象存储 / CDN。
 
 ## 2. 目标架构
 
@@ -18,7 +19,7 @@
 - 生产服务：`learning-platform-production.service`
 - 运行用户：`ai-kids-prod`（独立于 `ai-kids-test`）
 - API：仅监听 `127.0.0.1:8789`
-- 预留回环端口：8788 继续归内测环境
+- 内测回滚服务：`learning-platform-internal-test`，8788，切换成功后停止并禁用，但不删除 release、数据库、unit 与配置
 
 ### 2.2 目录布局
 
@@ -35,38 +36,41 @@
 - 初期：SQLite WAL，独立生产库，每日 + 发布前备份。
 - 迁移触发条件（满足其一）：并发写峰值 > 20/s、库 > 2GB、需要多实例、需要跨地域容灾。
 - 迁移目标：PostgreSQL 16 + 每日基础备份 + PITR。
+- 切换策略：先备份并停止内测服务，再将内测库复制为生产库；原内测库保留，不重新 seed。
 
 ### 2.4 网络与入口
 
+- 生产域名：`https://iicili.cyou`
 - 公网只开放 80 / 443，80 强制 301 HTTPS。
 - 8788 / 8789 仅回环，不进安全组。
 - Nginx：SPA 四端静态入口 + `/api/` 反代 8789。
 - HTTPS 证书：Let's Encrypt 自动续期，续期后 reload。
-- 安全头：`X-Robots-Tag`、内测阶段保留 `X-Internal-Test`；正式公开时移除 noindex 并补齐 HSTS、CSP、Referrer-Policy、Permissions-Policy。
-- 正式公开前访问控制：Basic Auth / VPN / IP 白名单至少一项。
+- public 模式：不输出 `X-Internal-Test`，不输出 noindex；保留 HSTS、CSP、`X-Content-Type-Options`、`X-Frame-Options`、Referrer-Policy、Permissions-Policy。
+- 用户已授权直接公开；公开前必须先重置或禁用内测种子账号，公开后如需临时收口可再启用 IP 白名单 / Basic Auth。
 
 ### 2.5 备份与恢复
 
 - 生产 SQLite：发布前 + 每日 03:00 本机备份，保留 14 天。
 - 每周归档到独立存储 / 异机；恢复演练每月一次。
-- 备份必须记录 SHA256、大小、时间、release 对应关系。
+- 处置：备份必须记录 SHA256、大小、时间、release 对应关系。
+- 边界：旧站无备份、不可恢复；切换前内测库备份是生产继承数据的唯一快照。
 
 ### 2.6 CI/CD 与发布
 
-- GitHub Actions 构建四端 + API 制品。
-- 部署入口：手动批准 tag。
-- 服务器接收制品，解包到新 release，健康检查通过后切换 `current`。
-- 失败自动停止；上一 release 保留可回滚。
+- 当前阶段：服务器源码工作区执行生产构建脚本，产出 `/srv/ai-kids-platform/production/releases/<timestamp>`。
+- 部署入口：手动批准后执行。
+- 切换闸门：健康检查通过后切换 `current`；失败自动停止；上一 release 保留可回滚。
 - 生产发布前必须通过 RBAC、列表、集成、E2E、入口回归。
+- GitHub Actions / 异机构建可后续演进，不阻塞本次生产切换。
 
 ## 3. 环境隔离
 
 | 环境 | 服务 | 端口 | 数据库 | 域名 |
 |---|---|---|---|---|
-| 内测 | `learning-platform-internal-test` | 8788 | `/internal-test/data/platform.db` | `iicili.cyou` |
-| 生产 | `learning-platform-production` | 8789 | `/production/data/platform.db` | 正式公开后确定 |
+| 内测回滚路径 | `learning-platform-internal-test` | 8788 | `/internal-test/data/platform.db`（切换后只读保留） | 切换完成后不再承载 `iicili.cyou` |
+| 生产 | `learning-platform-production` | 8789 | `/production/data/platform.db` | `https://iicili.cyou` |
 
-过渡期可使用 `iicili.cyou` 承载内测，生产域名待定；若共用域名，必须先完成 Nginx 灰度 / 路由隔离设计。
+过渡期结束后，`iicili.cyou` 的 Nginx enabled 配置指向 production current；internal-test 保留代码回滚路径，不与生产共写数据库。
 
 ## 4. 容量与成本
 
@@ -77,22 +81,32 @@
 ## 5. 安全基线
 
 - 服务非 root 运行，目录最小权限。
-- `.env` 仅 root / 服务用户可读，不进 Git。
+- `.env` 仅 root / 服务用户可读，不进 Git；继承 `AUTH_PEPPER` 时不得输出内容。
 - systemd hardening：`NoNewPrivileges`、`ProtectSystem=strict`、`PrivateTmp`、限定 `ReadWritePaths`。
 - 依赖漏洞扫描纳入 CI；失败发布阻断。
-- 不伪造外部服务能力；真实 AI / OSS / 支付接入前保持边界声明。
+- 不伪造外部服务能力；真实 AI / OSS / 支付接入前保持边界声明，生产仍为 `AI_PROVIDER=local-mock`。
+- 公开前必须处理已知默认账号：`root/admin123`、`org-admin/org123`、`student-2/study123`。
 
-## 6. 决策点
+## 6. 已确认决策
 
-1. 是否接受“SQLite 起步，达到阈值后迁 PostgreSQL”？
-2. 生产是否复用 `iicili.cyou`，还是新购正式域名 / 子域名？
-3. 正式公开前访问控制选择：Basic Auth、VPN，还是 IP 白名单？
-4. 是否批准建立 production 目录、系统用户、8789 服务与 Nginx 生产配置？
+1. 接受 SQLite 起步，达到阈值后迁 PostgreSQL。
+2. 生产直接复用 `iicili.cyou`，不新购域名，不使用子域名。
+3. 用户授权本轮直接 public 暴露；默认账号必须先重置或禁用。
+4. 批准建立 production 目录、系统用户、8789 服务与 Nginx 生产配置。
+5. 内测数据继承为生产数据，不重新 seed；原内测库保留作切换前快照。
+6. 旧站备份不需要，已直接清除且不可恢复。
 
 ## 7. 验收清单
 
-- [ ] 架构图与资产清单入库。
-- [ ] production 用户、目录、端口、服务名确定。
-- [ ] 数据库、备份、扩容、回滚策略确定。
-- [ ] 访问控制与安全头策略确定。
+- [x] 架构图与资产清单入库。
+- [x] production 用户、目录、端口、服务名确定。
+- [x] 数据库、备份、扩容、回滚策略确定。
+- [x] 访问控制与安全头策略确定。
 - [ ] 联系人 / 值班 / 故障升级路径确定。
+
+## 8. 已知公开风险
+
+- 法律页仍是准备稿，不得宣称正式法务文本。
+- 举报、申诉、内容审核、监护人功能继续暂缓。
+- AI 仍为 `local-mock`，不得宣传为真实 AI。
+- 真实支付、短信、邮件、OSS、微信能力未接入。

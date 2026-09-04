@@ -2,6 +2,12 @@
 import { chromium } from 'playwright-core';
 
 const site = process.env.SITE_URL || 'https://iicili.cyou';
+const modeArgIndex = process.argv.indexOf('--mode');
+const mode = modeArgIndex >= 0 ? process.argv[modeArgIndex + 1] : (process.env.EXPECT_MODE || 'internal-test');
+if (!['internal-test', 'public'].includes(mode)) {
+  console.error(`Unsupported mode: ${mode}`);
+  process.exit(2);
+}
 const executablePath = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const cases = [
   { path: '/', title: /AI魔法学院/, requireLogin: false, rejectLogin: false },
@@ -20,6 +26,7 @@ try {
     const assets = [...html.matchAll(/(?:src|href)=\"(\/(?:admin\/|org\/|student\/)?assets\/index-[^\"]+\.(?:js|css))\"/g)].map(m => m[1]);
     const body = await page.locator('body').innerText();
     const title = await page.title();
+    const robotsHeader = (headers['x-robots-tag'] || '').toLowerCase();
     const checked = {
       status: response.status(),
       title,
@@ -27,14 +34,28 @@ try {
       loginOk: !item.requireLogin || body.includes('登录你的工作台'),
       websiteNavRejected: item.requireLogin && !body.includes('预约演示'),
       assetPrefixOk: item.path === '/' ? assets.every(x => x.startsWith('/assets/')) : assets.every(x => x.startsWith(item.path + 'assets/')),
-      noindexOk: (headers['x-robots-tag'] || '').includes('noindex'),
-      internalTestOk: headers['x-internal-test'] === 'true',
+      modeOk: mode === 'internal-test'
+        ? headers['x-internal-test'] === 'true'
+        : headers['x-internal-test'] === undefined,
+      robotsOk: mode === 'internal-test'
+        ? robotsHeader.includes('noindex')
+        : (!robotsHeader || (!robotsHeader.includes('noindex') && !robotsHeader.includes('nofollow'))),
+      bannerOk: mode === 'internal-test'
+        ? body.includes('内部测试环境')
+        : !body.includes('内部测试环境'),
+      securityHeadersOk: mode === 'internal-test' || Boolean(
+        headers['strict-transport-security'] &&
+        headers['content-security-policy'] &&
+        headers['x-content-type-options'] &&
+        headers['x-frame-options'] &&
+        headers['referrer-policy']
+      ),
       assets,
     };
     checked.pass = Object.entries(checked)
       .filter(([k]) => k.endsWith('Ok') || k === 'status')
       .every(([k, v]) => k === 'status' ? v === 200 : v === true);
-    results.push({ path: item.path, ...checked });
+    results.push({ path: item.path, mode, ...checked });
     await page.close();
   }
 } finally {

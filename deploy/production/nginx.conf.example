@@ -1,0 +1,68 @@
+# AI 少儿编程平台｜iicili.cyou 生产单域名配置
+# 生产 API 仅监听 127.0.0.1:8789；80 强制跳转 HTTPS。
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name iicili.cyou;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name iicili.cyou;
+
+    ssl_certificate /etc/letsencrypt/live/iicili.cyou/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/iicili.cyou/privkey.pem;
+
+    server_tokens off;
+    client_max_body_size 2m;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" always;
+
+    location = /api { return 301 /api/; }
+    location = /api/health {
+        proxy_pass http://127.0.0.1:8789/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /api/ {
+        proxy_pass http://127.0.0.1:8789;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /admin { return 301 /admin/; }
+    location /admin/ {
+        root /srv/ai-kids-platform/production/current/apps;
+        try_files $uri $uri/ /admin/index.html;
+    }
+    location = /org { return 301 /org/; }
+    location /org/ {
+        root /srv/ai-kids-platform/production/current/apps;
+        try_files $uri $uri/ /org/index.html;
+    }
+    location = /student { return 301 /student/; }
+    location /student/ {
+        root /srv/ai-kids-platform/production/current/apps;
+        try_files $uri $uri/ /student/index.html;
+    }
+
+    location / {
+        root /srv/ai-kids-platform/production/current/apps/website;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+}

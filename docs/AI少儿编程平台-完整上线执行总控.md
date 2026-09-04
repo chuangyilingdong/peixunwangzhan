@@ -3,7 +3,7 @@
 > **唯一总控文件 / Single Source of Truth**  
 > 工程根目录：`D:\学习平台\platform-v2`  `n> 受版本控制的总控文件：`docs\AI少儿编程平台-完整上线执行总控.md`  
 > 创建日期：2026-09-02  
-> 当前阶段：**非画布真实业务闭环已完成本轮开发；线上受控内部测试已发布，现按内测产品与技术收口推进。正式法律 / 合规、监护人、举报、申诉、违规 / 内容审核和正式公开上线均按 2026-09-04 用户决策暂缓。**用户已确认备案完成，备案后续材料与具体办理由用户自行处理；线上继续保持 noindex、独立测试数据库和“内部测试环境”标识；Basic Auth 已按用户于 2026-09-04 的明确授权解除，仅供内部人员使用，正式公开前仍需补齐访问控制与公开上线门槛。真实 AI / 文件 / 支付 / 微信等外部服务仍必须有真实接入与验收，禁止用占位能力冒充正式服务。**
+> 当前阶段：**P9-D01 生产部署架构已获用户确认并执行中。用户明确 `iicili.cyou` 就是生产域名，直接复用，不使用子域名，不做内测 / 生产域名隔离；内测数据继承为生产数据，不重新 seed。**旧站已按用户授权清除且无备份，不得宣称存在旧站回滚能力。正式公开前必须先重置或禁用 `root/admin123`、`org-admin/org123`、`student-2/study123`；公开后仍须保持法律页准备稿、举报 / 申诉 / 内容审核 / 监护人暂缓与 `AI_PROVIDER=local-mock` 的边界，不得宣传为正式法务、真实 AI 或已接入支付 / 短信 / 邮件 / OSS / 微信。**
 > 当前总原则：**除 `packages/canvas` 外，网站与三端按”AI 魔法学院”基准持续实施；画布暂时冻结，必须等待用户再次明确授权后才可改动。**
 
 ---
@@ -89,54 +89,28 @@
 
 ## 1. 当前唯一下一步与阶段看板
 
-### 1.1 当前唯一下一步（2026-09-04：转入 P9-D01 生产部署架构）
+### 1.1 当前唯一下一步（2026-09-04：执行 P9-D01 生产切换）
 
-> **执行口径：**线上 `https://iicili.cyou/` 当前只作为受控内部测试站。当前继续做非画布核心产品、权限、数据隔离、质量回归和内测运维；举报、申诉、违规 / 内容审核、监护人功能、正式法律 / 合规文本和正式公开上线均按用户决策暂缓，不把 `local-mock`、协议准备稿或未接入外部服务宣传为正式能力。
+> **执行口径：**用户已确认 `iicili.cyou` 为生产域名并授权按 ADR 全部执行。生产使用独立目录、用户、8789 回环端口、独立 SQLite、systemd、Nginx public 配置、备份 / 回滚 / 监控能力；当前内测数据先备份再复制为生产数据，默认账号在公开前必须重置或禁用。切换成功后 internal-test 停止并禁用但保留为代码回滚路径。
 
-- [ ] **当前唯一执行队列：P9-D01 确定生产部署架构。**
-  - P0：内测上线代码 / 文档基线与受控发布均已完成；线上当前 release 为 `20260904T113559Z`（commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`），服务健康、入口回归、三角色登录复验通过。
-  - P1：P8-Q01、P8-Q02、P4-C01、P4-03（含账务列表与十类列表复核）、P8-Q06、P8-S01、P8-S04～P8-S06 已完成；P8-Q07 四角色 UAT 已完成。P8-Q05 已用真实 Chrome 152 / Edge 152 完成官网 12 路由 × 4 视口 96/96 与工作台 52/52 回归并修复 390px 横向溢出；Safari 与真实移动设备仍不可用，保持 `[-]`。举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续 `[~]` 暂缓。
-  - 本阶段先只做 P9-D00 盘点与方案：可读取服务器配置、服务清单、Nginx 配置、发布目录结构和内测运行数据；继续禁止读取、复制、迁移或写入旧站真实数据库。
-  - P9-D00 已于 2026-09-04 完成：只读盘点、替换方案、用户授权免备份直接清除旧站并复验通过；下一步只做 P9-D01 架构方案，不改线上运行环境。
-  - P9-D01 完成并经用户确认后，再进入 P9-D02～P9-D05；正式公开上线前必须恢复 Basic Auth / VPN / IP 白名单之一。
-  - 备案：用户已确认完成，后续材料与办理由用户自行处理；平台侧不代办、不据此伪造正式合规结论。
-  - 真实 AI、OSS / 文件、支付、微信、短信、邮件及客户端能力没有真实账号、合同、密钥或业务规则时不得实现假接入。
-- [~] **当前明确暂缓事项。**
-  - P5-W08 正式协议正文、主体、联系人和生效信息：现有页面只作为准备稿，不得当作正式法律文本，当前不继续拆分开发。
-  - 举报、申诉、违规 / 内容审核、监护人功能和正式公开上线：不进入当前执行队列，后续需要时重新授权。
-- [x] **P9-I01 内部测试环境部署基线。** ✅ 2026-09-03
-  - 完成记录：固化 `deploy/internal-test/` 的 Windows/Linux 构建脚本、发布目录约定、systemd 服务模板、Nginx 四端模板、环境变量样例和启动 / 停止 / 健康检查命令；发布产物包含 website/admin/org/student 四端、API 源码、数据库运行时和 `BUILD-METADATA.txt`。
-  - 验证：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；四端构建成功，API 可启动并返回 `/health` `status=ok`。本地最新 release `deploy/releases/20260903T162708Z`，元信息为 commit `3577ac18d162529ff21fea4aa41c29f56bce0fe4`、Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`，并按线上域名构建 `VITE_PUBLIC_SITE_URL=https://iicili.cyou`。
-     - 线上路由矩阵补充（2026-09-04）：Codex 内置浏览器 Chromium 桌面视口对 `/`、`/marketplace`、`/courses`、`/org`、`/works`、`/handbook`、`/compare`、`/download`、`/demo`、`/terms`、`/privacy`、`/minors` 共 **12/12** 路由执行渲染检查；页面正文非空、内测 banner 存在、robots 为 `noindex, nofollow, noarchive`、canonical 与动态标题均符合预期，未发现“加载失败 / ReferenceError”等页面失败文本。
-     - 独立浏览器增量（2026-09-04）：本机 Chrome 152.0.7977.64 与 Edge 152.0.4191.53 对官网 12 路由 × 1440/390/414/768 视口执行真实渲染、失败文本、控制台错误、横向溢出与 noindex 检查，**96/96 通过**；对 admin/org/student 三端 13 条关键路由执行 1440 与 390 视口检查，桌面 26/26 通过，首次移动 390 检查 26 项全部存在共享布局横向溢出。
-- [x] **P9-I02 内部访问控制与不可索引。** ✅ 2026-09-03
-  - 完成记录：Nginx 模板四个 server 均启用 Basic Auth、`X-Robots-Tag: noindex, nofollow, noarchive`、`X-Internal-Test: true` 和 SPA fallback；API 内测响应同样加头，`robots.txt` 为 `Disallow: /`，`sitemap.xml` 返回 404；前端显示“内部测试环境 · 不代表正式服务”。
-  - 验证：部署验收 **24 pass / 0 fail**，并在 UAT 中验证未登录 admin API 为 401；静态断言覆盖 Basic Auth、robots、API 代理和 SPA fallback。
-  - 线上基线结果（2026-09-03）：Basic Auth 曾在 `iicili.cyou` 生效，未认证请求返回 401；内测响应头、robots 和 sitemap 行为已实测。该站仍不是正式公开服务。
-  - 线上策略变更（2026-09-04）：按用户明确授权，仅从 `/etc/nginx/sites-enabled/iicili.cyou` 移除 `auth_basic` / `auth_basic_user_file` 两行，保留 HTTPS、`X-Robots-Tag`、`X-Internal-Test`、robots 禁索引和独立测试数据库；`nginx -t` 成功、reload 成功，外部 HEAD 与 `/api/health` 均 HTTP 200 且不再返回 `WWW-Authenticate`。Nginx 模板仍保留 Basic Auth，供后续受控部署使用。
-- [x] **P9-I03 测试数据、环境隔离与初始化。** ✅ 2026-09-03
-  - 完成记录：环境变量支持独立 `PLATFORM_DATA_DIR` / `PLATFORM_DB_PATH`；初始化、seed、清理命令和五类角色测试账号均纳入手册；构建与验收脚本拒绝使用仓库默认数据库。
-  - 验证：临时 SQLite 初始化和 seed 成功；UAT 以平台超管、机构管理员、教师、学生和官网访客路径执行，未读取或写入 `packages/data/platform.db`。
-- [x] **P9-I04 备份、恢复与回滚演练。** ✅ 2026-09-03
-  - 完成记录：新增 `backup-internal-test.mjs` / `.sh` 和 `rollback-internal-test.sh`；备份包含 SQLite、当前静态 release、配置、日志和 `MANIFEST.json`，回滚脚本校验 release 位于隔离 releases 目录，切换后健康检查失败自动恢复上一 release。
-  - 验证：`tmp-p9-i04-backup.mjs` 使用临时 SQLite **11 pass / 0 fail**，完成数据库备份、清单、制品 / 配置 / 日志备份和恢复数据一致性校验。
-  - 运行指标：本地演练 RPO 为备份时点，RTO 为健康检查通过后的切换时间；真实服务器已生成备份清单并保留旧 release / 旧 systemd / 旧 Nginx 配置，可按 runbook 回滚。
-- [x] **P9-I05 内部 UAT 与缺陷闸门。** ✅ 2026-09-03
-  - 完成记录：覆盖官网访客公开协议 / 课程广场、平台超管登录与课程广场管理入口、机构管理员课程读取、教师班级读取、学生账户 / 仪表盘，以及未登录和越权 401/403 边界。
-  - 验证：`tmp-p9-i05-uat.mjs` 使用临时 SQLite **30 pass / 0 fail**；四端生产入口、内测标识和不可索引 HTML 均通过。
-  - 放行边界：线上发布后基础 HTTP / 认证 / 四端入口验收通过；仍需内部测试人员按平台超管、机构管理员、教师、学生、官网访客完成浏览器业务回归、租户隔离和真实测试数据检查，P0 缺陷未清零前不得扩大访问范围。
-- [x] **P9-I06 内测运行手册与日志。** ✅ 2026-09-03
-  - 完成记录：新增 `deploy/internal-test/RUNBOOK.md`，明确发布前检查、启停、健康检查、journal 日志、错误上报、备份、回滚、联系人占位和放行闸门；systemd 使用 journald，API 仅监听回环地址。
-  - 验证：文档与脚本静态检查、P9-I01/I04/I05 验收通过；线上 systemd / Nginx / health 检查已通过；未承诺公开 SLA，不接收外部真实业务。
+- [ ] **当前唯一执行队列：P9-D01 生产部署与切换。**
+  - P0：生产模板已补齐（`.env`、systemd、Nginx public、构建、备份、回滚、监控、README / RUNBOOK）；入口回归脚本支持 `--mode public`。
+  - P0：提交并推送生产模板；服务器源码 `git pull --ff-only`。
+  - P0：创建 `ai-kids-prod`、production 目录与权限；创建 `/etc/ai-kids-platform/production.env`，继承必要密钥但不输出内容。
+  - P0：备份并停止 internal-test，复制内测 SQLite 为生产库；重置或禁用默认账号 `root/admin123`、`org-admin/org123`、`student-2/study123`，新密码只安全交付用户，不写入 Git。
+  - P0：构建 `mode=public` release，切换 `production/current`，启动 8789 并通过 `/health`、journal、监听地址检查。
+  - P0：备份当前 Nginx enabled 配置，安装 production 配置，`nginx -t` 后 reload；公网执行四端 + API + public 安全头 / robots / 横幅回归。
+  - P1：切换成功后停止并禁用 internal-test，但保留 release、数据库、unit、Nginx 配置作为回滚路径。
+  - P1：更新本总控、ADR 验收记录并提交推送。
 
-当前 P9 内测上线代码 / 文档基线与真实服务器受控发布均已完成：`iicili.cyou` 当前运行 release `20260904T113559Z`，来源 commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`；API 仅监听 `127.0.0.1:8788`，使用独立测试 SQLite；线上继续保持 HTTPS、`noindex / nofollow / noarchive`、内测标识和可回滚发布能力。Basic Auth 已于 2026-09-0
-- 线上发布确认（2026-09-04）：从已推送 commit `3d9c0f6e0e358aa688151f96576beed7bf7797fa` 在 ECS 内测环境构建 release `20260904T035620Z`，元信息为 Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`；发布前完成独立测试数据库备份 `/srv/ai-kids-platform/internal-test/backups/20260904T035559Z/`，原子切换 `current`，重启 `learning-platform-internal-test`，本机 `/health` 返回 `status=ok`，Nginx 配置检查与 reload 成功。
-- 线上三端入口路由修复（2026-09-04）：用户使用正确链接访问 `/admin/`、`/org/`、`/student/` 时全部回落官网，真实 Chrome 复测确认三者均加载官网产物 `assets/index-BeV1DcaJ.js` / `assets/index-6IYHldkb.css`。服务器诊断发现 `current` 指向 `20260904T035620Z` 且四端 `index.html` 均存在，但三个专用 location 内的 `rewrite ^/(admin|org|student)/(.*)$ /$1 break;` 使 `try_files` fallback 最终解析回官网 root。已备份原配置到 `/etc/nginx/backups/iicili.cyou.before-spa-route-fix.20260904T110906Z`，删除三段 rewrite 并将 root 提升为 `/srv/ai-kids-platform/internal-test/current/apps`，`nginx -t` 与 reload 成功。公网回归 4/4：官网、平台管理、机构教务、学生创作分别加载对应端产物，安全头 `noindex, nofollow, noarchive` 与 `X-Internal-Test: true` 均通过；`root/admin123`、`org-admin/org123`、`student-2/study123` 实际登录均进入各自 dashboard，无浏览器控制台错误。新增 `scripts/verify-production-entrypoints.mjs`，后续验收必须检查标题、登录文案、资源前缀和安全头，不得仅以 HTTP 200 作为入口通过标准。
-- 线上只读复核（2026-09-04）：`/`、`/marketplace`、`/courses`、`/org/`、`/works`、`/handbook`、`/compare`、`/demo`、`/terms`、`/privacy`、`/minors` 均正常渲染；内测标识、`noindex, nofollow, noarchive` 与动态 canonical 均通过，官网控制台错误 0；未读取、复制、迁移或写入真实业务数据库。
-- 内测滚动发布（2026-09-04）：线上 `current` 已切换到 release `20260904T113559Z`，来源 commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`，Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`。本次修复低余额扫描误用 `ba.balance` 导致的每分钟 SQLite 错误、服务 SIGTERM 不退出导致 systemd 90 秒 SIGKILL、发布脚本健康检查无重试三项问题。发布前备份 `/srv/ai-kids-platform/internal-test/backups/20260904T113647Z/platform.db`；切换后 `/health=ok`、入口回归 4/4、三角色登录 `/api/me` 全部通过；新进程日志未再出现 `no such column: ba.balance`，真实 release 布局 SIGTERM 9ms 优雅退出，systemd 重启 246ms 恢复健康。首次切换曾因旧进程退出缺陷触发自动回滚，修复后重新发布成功。
+### 2026-09-04 用户生产决策记录
 
-- 旧站清除（2026-09-04 20:10 CST）：用户明确回复“旧站的备份我不需要，直接清除即可，然后进行下一步”，拒绝备份并授权直接清除。执行前复验：当前 Nginx enabled 配置仅引用 `/srv/ai-kids-platform`，`current -> releases/20260904T113559Z`，新服务 active 且 `/health=ok`。随后停止并禁用 `learning-platform`，删除 `/etc/systemd/system/learning-platform.service`、`/opt/learning-platform` 与三份旧 Nginx 配置 `/etc/nginx/sites-available/iicili.cyou`、`iicili.cyou.legacy-20260903T172106Z`、`iicili.cyou.enabled-backup-20260903T172106Z`；保留当前 enabled 配置与 `iicili.cyou.internal-test` 来源。清理后 `daemon-reload`、`nginx -t` 通过，旧服务 inactive、8787 关闭、`/opt/learning-platform` 不存在；新服务 active，公网官网 / 平台 / 机构 / 学生入口与 `/api/health` 全部通过（6/6），内测安全头保持。旧站数据已按用户决策不可恢复删除，后续不得宣称存在旧站备份或可回滚到旧站。
-- 线上稳定性复查（2026-09-04 19:56 CST）：`learning-platform-internal-test` active / enabled，当前进程 19:38:42 启动，`NRestarts=0`；`current -> releases/20260904T113559Z`；本机 `/health` 返回 `status=ok`。按当前进程启动时间过滤日志，未出现 `REMINDER SCAN ERROR`、`ba.balance`、`API INTERNAL ERROR`、通知错误、未捕获异常、FATAL 或 SIGKILL；近 2 小时内可见的同类错误均来自修复前旧进程。8787 / 8788 均仅监听 `127.0.0.1`，Nginx 配置检查通过。
+- 用户明确：`iicili.cyou` 就是生产域名，直接用，不用隔离。
+- 不使用 `app.iicili.cyou` 等子域名；内测与生产通过目录、用户、端口和数据库隔离。
+- 内测数据继承为生产数据，不重新 seed；切换前必须先备份内测库。
+- 旧站备份不需要，已直接清除且不可恢复。
+- 用户要求保留服务器 SSH 快速发布通道，仅记录私钥路径，不输出私钥内容。
+- 公开前必须处理默认账号风险；法律页仍为准备稿，正式合规与真实外部服务能力不得伪称完成。
 ### 1.2 已完成事项与外部待决事项
 
 - [x] **P5-M01 课程广场。** ✅ 2026-09-03

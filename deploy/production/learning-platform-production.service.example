@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Kids Platform API (production)
+After=network.target
+
+[Service]
+Type=simple
+User=ai-kids-prod
+Group=ai-kids-prod
+WorkingDirectory=/srv/ai-kids-platform/production/current
+EnvironmentFile=/etc/ai-kids-platform/production.env
+ExecStart=/srv/ai-kids-platform/runtime/node/bin/node /srv/ai-kids-platform/production/current/apps/server/src/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/ai-kids-platform/production/data /srv/ai-kids-platform/production/logs
+
+[Install]
+WantedBy=multi-user.target
