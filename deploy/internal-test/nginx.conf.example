@@ -21,6 +21,14 @@ server {
 
     # 新内测 API 使用 8788，避免与旧 learning-platform 8787 冲突。
     location = /api { return 301 /api/; }
+    # 健康检查在应用根路径 /health；为外部运维保留稳定的 /api/health 入口。
+    location = /api/health {
+        proxy_pass http://127.0.0.1:8788/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
     location /api/ {
         proxy_pass http://127.0.0.1:8788;
         proxy_set_header Host $host;

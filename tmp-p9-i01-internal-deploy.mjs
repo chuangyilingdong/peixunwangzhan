@@ -81,8 +81,9 @@ try {
   assert.match(nginx, /auth_basic_user_file/);
   assert.match(nginx, /X-Robots-Tag\s+"noindex, nofollow, noarchive"/);
   assert.match(nginx, /try_files \$uri \$uri\/ \/index\.html/);
+  assert.match(nginx, /location = \/api\/health[\s\S]*?proxy_pass http:\/\/127\.0\.0\.1:8788\/health;/, 'external health endpoint maps to application /health');
   assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:8788;/);
-  assert.doesNotMatch(nginx, /proxy_pass http:\/\/127\.0\.0\.1:8788\//, 'API proxy preserves the /api prefix');
+  assert.doesNotMatch(nginx, /proxy_pass http:\/\/127\.0\.0\.1:8788\/(?!health;)/, 'API proxy preserves the /api prefix');
 
   const websiteHtml = fs.readFileSync(path.join(release, 'apps/website/index.html'), 'utf8');
   assert.match(websiteHtml, /noindex, nofollow, noarchive/);
