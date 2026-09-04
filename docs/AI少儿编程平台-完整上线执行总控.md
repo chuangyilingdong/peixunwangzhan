@@ -1413,3 +1413,9 @@ node .\p3-api-integration.mjs
 - [x] **线上验证**：`nginx -t` 成功并 reload；`https://iicili.cyou/api/health` 返回 HTTP 200，`https://iicili.cyou/api/public/marketplace` 返回 HTTP 200；Nginx 备份已统一移至 `/etc/nginx/backups/`，避免 `sites-enabled` 重复加载警告。
 - [x] **本地验收与版本**：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；提交 `a874e45 fix: expose stable internal health endpoint` 已 push。
 - [ ] **未完成边界**：P8-Q05 仍未完成独立 Chrome / Edge / Safari 与 390/414/768 移动端截图矩阵；不得据此标记 P8-Q05 完成。全程未修改 `packages/canvas`，未触碰真实线上数据库。
+
+### 2026-09-04 继续推进记录：隐私与内容治理回归
+
+- [x] `p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite **32 pass / 0 fail**；复核监护信息同意 / 撤回、协议版本、隐私设置、导出申请、注销申请、作品举报、举报下架、旧会话失效和默认数据库隔离。
+- [x] ECS 线上只读健康复核：当前 release `20260904T035620Z`，Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`；systemd 服务 active；本地 `/health`、线上 `/api/health` 与 `/api/public/marketplace` 均返回 HTTP 200。
+- [ ] **正式合规边界未改变**：真实监护人身份核验、按地区年龄规则、真实对象存储延迟删除 / 备份保留、评论 / AI 内容举报、申诉渠道和法务最终文本仍需外部规则或供应商确认；本轮不伪造完成。
