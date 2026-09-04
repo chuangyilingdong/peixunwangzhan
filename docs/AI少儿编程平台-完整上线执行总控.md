@@ -1174,7 +1174,7 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 ### 8.4 2026-09-04 后续顺序收口记录（当前有效）
 1. **P9-D00：已完成。** 只读盘点、替换方案、用户授权免备份直接清除旧站、清理复验与证据入库均完成；旧站不再存在备份或回滚能力。
 2. **P9-D01：已完成。** 生产部署架构 ADR 已实施并验证，见 `docs/p9/P9-D01-production-architecture-ADR.md`；生产切换、账号处置、备份与恢复演练已完成。
-3. **P9-D02 / D05：生产侧完成。** 生产与 internal-test 服务器侧隔离、Nginx / HTTPS / 域名 / CORS / 安全头已上线；D02 的开发 / 预发完整隔离、密钥轮换台账仍待收口。P9-D03 CI/CD、P9-D04 密钥发布机制未完成。
+3. **P9-D02 / D05：生产侧完成。** 生产与 internal-test 服务器侧隔离、Nginx / HTTPS / 域名 / CORS / 安全头已上线；D02 的开发 / 预发完整隔离、密钥轮换台账仍待收口。P9-D03 最小 CI 工作流与手动生产候选审批门槛已入库，尚待 GitHub Actions 实际运行留证；P9-D04 密钥发布机制未完成。
 4. **P8-Q05：Chrome / Edge 与 390 / 414 / 768 视口证据已完成；Safari 与真实移动设备继续保留未完成边界。**
 5. **正式公开上线：继续暂缓。** 恢复 Basic Auth / VPN / IP 白名单之一，并完成安全、合规、容量与监控闸门。
 6. **暂缓范围：用户明确不做。** P5-W08 正式法律文本与法务确认、P8-L02 监护人 / 监护同意 / 身份核验、P8-L04 举报 / 申诉 / 违规 / 内容审核 / 记录保留扩展；不新增相关页面、字段、API、工作台或验收脚本。
@@ -1214,19 +1214,23 @@ P9-I01～P9-I06 已完成并保留为内测阶段记录。2026-09-04 用户确�
   - 优先级：P0
   - 已完成：production 与 internal-test 在服务器侧完成用户、目录、端口、数据库、systemd、Nginx 与密钥隔离；生产 API 仅 `127.0.0.1:8789`，internal-test 停止并禁用且保留回滚资产；本地测试继续使用 `PLATFORM_DATA_DIR` / `PLATFORM_DB_PATH` 临时 SQLite，禁止写入真实生产库。
   - 待完成：开发 / 预发完整域名与桶隔离、支付与 AI 配额的生产隔离策略、密钥轮换与台账。旧站已清除且无备份，不得再引用为预发或演练目标。
-- [ ] **P9-D03 CI/CD、GitHub Actions 与制品管理**
+- [-] **P9-D03 CI/CD、GitHub Actions 与制品管理**
   - 优先级：P0
   - 已有前置：生产服务器可通过只读 Deploy key 拉取 `chuangyilingdong/peixunwangzhan`；该 key 不用于 Actions 登录服务器。
   - 已完成前置：
     - [x] 本地仓库已于 2026-09-02 初始化：`main` 分支、远程 `origin`、`.gitignore` / `.gitattributes` 安全基线已建立；已通过全量 `pnpm run build`。
-    - [x] 本机专用 SSH 写入密钥已添加至 GitHub 账号，并通过 `ssh.github.com:443` 验证身份；远程 `origin/main` 已成功建立，当前基线提交为 `485b763`。
+    - [x] 本机专用 SSH 写入密钥已添加至 GitHub 账号，并通过 `ssh.github.com:443` 验证身份；远程 `origin/main` 已成功建立。
   - 范围：依赖安装、lint、测试、构建、镜像 / 制品、SBOM、部署审批、版本号、变更记录；GitHub Actions 使用独立的“Actions → 生产服务器”部署密钥 / Secret 连接服务器，执行受控发布脚本。
+  - 本批完成记录（2026-09-04）：
+    - [x] 新增 `.github/workflows/ci.yml`：PR / `main` push 触发，Node `24.19.0` + pnpm `11.19.0`，冻结安装、服务端语法检查、隔离验收（P4-01 / P4-02 / P4-O09）、四端构建，并上传 14 天制品。
+    - [x] 新增 `.github/workflows/production-release-gate.yml`：仅手动 dispatch，使用 `production-approval` environment 审批门槛；选定 ref 后重复验证并上传候选制品，**不自动连接或部署生产服务器**。
+    - [x] 本地等价验证：`node --check`、P4-01 `28/28`、P4-02 成功、P4-O09 `9/9`、`pnpm run build` 历史基线通过；本次未改 `packages/canvas`。
   - 验收：
-    - [ ] 从干净环境可重复构建；每次生产发布可定位 commit / 制品 / 配置版本；失败可停止与回滚；
-    - [ ] GitHub Actions 仅在受保护分支、批准的 tag 或手动审批后部署；
-    - [ ] Actions 的服务器部署私钥、生产环境变量、AI / 支付密钥均保存在 Secrets，不出现在日志、仓库和前端制品中；
-    - [ ] 部署脚本使用版本化 release 目录或等效原子切换，避免直接覆盖运行中的版本；
-    - [ ] 发布后自动执行健康检查，失败自动停止并输出可操作的回滚信息。
+    - [-] 从干净环境可重复构建；每次生产发布可定位 commit / 制品 / 配置版本；失败可停止与回滚；（工作流已入库，需 GitHub Actions 实际运行留证）
+    - [x] GitHub Actions 仅在 push / PR 做验证；生产候选仅允许手动触发并经过 `production-approval` environment，当前不自动部署。
+    - [!] Actions 的服务器部署私钥、生产环境变量、AI / 支付密钥未写入本批工作流；正式 Secret 台账和轮换流程属于 P9-D04，尚未完成。
+    - [ ] 部署脚本使用版本化 release 目录或等效原子切换，避免直接覆盖运行中的版本；（生产侧已有 release 目录，但 Actions 尚未接入受控发布脚本）
+    - [ ] 发布后自动执行健康检查，失败自动停止并输出可操作的回滚信息；（保留为后续人工批准发布批次）
 - [ ] **P9-D04 环境变量与密钥发布机制**
   - 优先级：P0
   - 验收：密钥由受控系统注入；变更有审计；密钥轮换可执行；绝不提交到代码仓库或前端包。

@@ -1,0 +1,78 @@
+name: Production release gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: 'Git ref to verify; production deployment remains a separate manually approved operation'
+        required: true
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24.19.0
+  PNPM_VERSION: 11.19.0
+
+jobs:
+  verify-and-stage:
+    name: Verify and stage production candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: production-approval
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify candidate commit and source boundaries
+        shell: bash
+        run: |
+          test -n "$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+          if git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^packages/canvas/'; then
+            echo 'Production release candidate must not modify packages/canvas.' >&2
+            exit 1
+          fi
+
+      - name: Run release verification
+        run: |
+          node --check apps/server/src/routes/communication.js
+          node --check apps/server/src/services/reminderScheduler.js
+          node --check apps/server/src/routes/adminOrg.js
+          node p4-01-state-machine.mjs
+          node scripts/p4-02-demo-data-inventory.mjs
+          node scripts/p4-o09-reminders.mjs
+          pnpm run build
+
+      - name: Stage immutable candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-kids-platform-release-${{ github.sha }}
+          path: |
+            dist
+            apps/server/src
+            packages/database/src
+            package.json
+            pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 14
