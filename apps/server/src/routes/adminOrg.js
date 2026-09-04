@@ -1039,8 +1039,27 @@ export async function handleAdmin(ctx) {
   if (part === '/organizations' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const search = String(ctx.search.get('search') || '').trim();
-    const items = rows("SELECT * FROM organizations WHERE ?='' OR name LIKE ? ORDER BY created_at DESC LIMIT 200", [search, '%' + search + '%']).map(normalizeOrg);
-    return { items, total: items.length };
+    const statusFilter = String(ctx.search.get('status') || '').trim();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 100 });
+    const sortKey = String(ctx.search.get('sort') || 'created').trim();
+    const sort = Object.hasOwn({ created: true, name: true, expires: true }, sortKey) ? sortKey : 'created';
+    const sortSql = {
+      created: 'organization.created_at DESC, organization.id DESC',
+      name: 'organization.name COLLATE NOCASE ASC, organization.id DESC',
+      expires: 'organization.contract_expires_at ASC, organization.id DESC',
+    }[sort];
+    const conditions = []; const params = [];
+    if (search) {
+      conditions.push('(organization.name LIKE ? OR organization.id LIKE ?)');
+      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      params.push(keyword, keyword);
+    }
+    if (['TRIAL', 'ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('organization.status=?'); params.push(statusFilter); }
+    const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const total = Number(row('SELECT COUNT(*) n FROM organizations organization' + where, params)?.n || 0);
+    const items = rows('SELECT organization.* FROM organizations organization' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map(normalizeOrg);
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/organizations' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const name = String(body.name || '').trim();

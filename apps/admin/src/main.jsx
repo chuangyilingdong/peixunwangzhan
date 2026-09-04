@@ -103,7 +103,16 @@ function isoDateInput(iso) {
 }
 
 function Organizations({ api }) {
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const [filters, setFilters] = useState({ search: '', status: '' });
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [sort, setSort] = useState('created');
+  const query = useMemo(() => {
+    const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+    params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
+    return params;
+  }, [filters, page, limit, sort]);
+  const organizations = useData(() => api.get(`admin/organizations?${query.toString()}`), [api, query]);
   const [selectedId, setSelectedId] = useState('');
   const detail = useData(() => selectedId ? api.get(`admin/organizations/${selectedId}/detail`) : Promise.resolve(null), [api, selectedId]);
   const [form, setForm] = useState({ name: '', adminLogin: '', adminPassword: 'org123', baseTeacherSeats: 3 });
@@ -209,7 +218,13 @@ function Organizations({ api }) {
     </div>
     {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
     <Panel title="机构列表">
-      {organizations.loading ? <Loading /> : organizations.error ? <ErrorState error={organizations.error} onRetry={organizations.refresh} /> : organizations.data.items.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>状态</th><th>合同</th><th>教师席位</th><th>服务</th><th>操作</th></tr></thead><tbody>{organizations.data.items.map((item) => {
+      <div className="form-grid">
+        <label>关键词<input value={filters.search} placeholder="机构名称 / ID" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label>
+        <label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}><option value="">全部状态</option><option value="TRIAL">试用</option><option value="ACTIVE">正常</option><option value="DISABLED">已停用</option></select></label>
+        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="name">机构名称</option><option value="expires">合同到期</option></select></label>
+        <label>每页<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
+      </div>
+      {organizations.loading ? <Loading /> : organizations.error ? <ErrorState error={organizations.error} onRetry={organizations.refresh} /> : organizations.data?.items?.length ? <><ListResultSummary total={organizations.data.total} page={organizations.data.page} totalPages={organizations.data.totalPages} label="家机构" /><div className="table-wrap"><table><thead><tr><th>机构</th><th>状态</th><th>合同</th><th>教师席位</th><th>服务</th><th>操作</th></tr></thead><tbody>{organizations.data.items.map((item) => {
         const disabled = item.status === 'DISABLED';
         return <tr key={item.id}>
           <td><button className="text-button" onClick={() => selectOrg(item)}><strong>{item.name}</strong></button><div className="muted">{item.id}</div></td>
@@ -225,7 +240,7 @@ function Organizations({ api }) {
             {item.status === 'TRIAL' ? <button className="secondary-button" disabled={detailBusy} onClick={() => changeStatus(item, 'activate')}>试用转正</button> : null}
           </div></td>
         </tr>;
-      })}</tbody></table></div> : <Empty title="还没有机构" />}
+      })}</tbody></table></div><Pagination page={organizations.data.page} totalPages={organizations.data.totalPages} onChange={setPage} disabled={organizations.loading} /></> : <Empty title="没有符合条件的机构" body="可以调整关键词或状态筛选条件。" />}
     </Panel>
     {selectedId ? (
       detail.loading ? <Loading label="正在读取机构详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data ? <>

@@ -31,6 +31,12 @@ try {
   ok('users pagination metadata', users.status === 200 && users.data.success && users.data.data.page === 1 && users.data.data.limit === 2 && Number.isInteger(users.data.data.totalPages), users);
   const usersInvalid = await call('GET', '/admin/platform-users?page=0&limit=2', token);
   ok('users invalid page rejected', usersInvalid.status === 400, usersInvalid);
+  const organizations = await call('GET', '/admin/organizations?page=1&limit=1&sort=name', token);
+  ok('organizations pagination and sort', organizations.status === 200 && organizations.data.success && organizations.data.data.page === 1 && organizations.data.data.limit === 1 && organizations.data.data.sort === 'name' && Number.isInteger(organizations.data.data.totalPages), organizations);
+  const organizationsFiltered = await call('GET', '/admin/organizations?page=1&limit=10&status=ACTIVE', token);
+  ok('organizations status filter', organizationsFiltered.status === 200 && organizationsFiltered.data.data.items.every((item) => item.status === 'ACTIVE'), organizationsFiltered);
+  const organizationsFallback = await call('GET', '/admin/organizations?page=1&limit=1&sort=not-a-column', token);
+  ok('organizations unknown sort safely falls back', organizationsFallback.status === 200 && organizationsFallback.data.data.sort === 'created', organizationsFallback);
   const works = await call('GET', '/admin/works?page=1&limit=2&sort=title', token);
   ok('works pagination and whitelist sort', works.status === 200 && works.data.data.page === 1 && works.data.data.limit === 2 && works.data.data.sort === 'title', works);
   const worksFallback = await call('GET', '/admin/works?page=1&limit=2&sort=not-a-column', token);

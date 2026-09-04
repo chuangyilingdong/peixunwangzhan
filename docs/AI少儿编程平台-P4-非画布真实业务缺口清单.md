@@ -65,7 +65,7 @@
 1. **P8-Q05**：在当前可用的 Codex Chromium 中继续回归并记录边界；不得虚构独立 Chrome / Edge / Safari 或真机结果。
 2. **P4-01**：统一状态机、枚举、错误码和异常提示（**已完成，2026-09-04**）。
 3. **P4-03**：统一筛选、分页、排序、空态、导出与列表交互规范。
-   - **P4-03-LIST 首批（2026-09-04）已完成**：平台用户、平台作品、操作审计、课程广场统一分页 / 元数据 / 白名单排序；其余管理端列表后续继续分批收口。
+   - **P4-03-LIST 首批（2026-09-04）已完成**：平台用户、平台作品、操作审计、课程广场统一分页 / 元数据 / 白名单排序；机构列表批次已完成，其他管理端列表后续继续分批收口。
 4. **内测 UAT**：按平台 / 机构管理员 / 教师 / 学生角色验收，记录并修复阻塞缺陷。
 5. **运行维护**：保持独立测试库、noindex、内测标识、备份 / 回滚和健康检查。
 
@@ -663,3 +663,12 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] **专项验收**：`p4-01-state-machine.mjs` 使用临时 SQLite **28 pass / 0 fail**；覆盖纯函数、元数据接口、AI 任务 `QUEUED → RUNNING → SUCCEEDED`、项目重复提交、课堂重复结束、作品重复下架、班级重复归档、非法转换审计和临时数据库隔离。
 - [x] **回归 / 构建**：`p4-c01-rbac-ownership.mjs` **27 pass / 0 fail**；`p8-s03-tenant-isolation.mjs` **20 pass / 0 fail**；Node 24 语法检查、四端生产构建和 `git diff --check` 通过。未修改 `packages/canvas`，未触碰默认 `packages/data/platform.db` 或真实线上数据库。
 - [~] **明确不在本批次**：举报、申诉、违规 / 内容审核、监护人功能、正式法律 / 合规文本继续暂缓；现有历史代码 / 准备稿不代表当前正式能力，后续需要时重新授权。
+
+
+### 2026-09-04 P4-03-LIST 机构列表批次
+
+- [x] `GET /api/admin/organizations` 已支持机构名称 / ID 搜索、`TRIAL` / `ACTIVE` / `DISABLED` 状态筛选、`created` / `name` / `expires` 白名单排序和 `page` / `limit` 分页。非法排序值安全回退到 `created`。
+- [x] `/organizations` 已接入筛选控件、排序、每页数量、`ListResultSummary`、`Pagination` 和筛选空态；所有条件变更回到第 1 页。
+- [x] 验收：`p4-03-list-api-check.mjs` 使用临时 SQLite **11 pass / 0 fail**；admin 生产构建、`git diff --check` 通过。
+- [x] 影响文件：`apps/server/src/routes/adminOrg.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。影响接口：`GET /api/admin/organizations`。无数据库结构变更。
+- [ ] 下一批继续处理课程、平台管理员、通知 / 物料和账务列表的统一分页 / 导出；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
