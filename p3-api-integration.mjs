@@ -1,4 +1,4 @@
-const base = 'http://localhost:8879/api';
+const base = process.env.P3_API_BASE || 'http://localhost:8879/api';
 async function call(method, path, body, token) {
   const response = await fetch(base + path, {
     method,
