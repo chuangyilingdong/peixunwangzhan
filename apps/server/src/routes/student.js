@@ -33,6 +33,7 @@ import {
   resolveProjectUsageContext,
   resolveStudentLessonContext,
 } from '../services/studentContext.js';
+import { assertTransition } from '../services/domainState.js';
 
 const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
 
@@ -787,6 +788,10 @@ export async function handleStudent(ctx) {
     const project = getOwnProject(ctx, match[1], { includeArchived });
     const action = ctx.search.get('mode') || 'ARCHIVE';
     if (!['ARCHIVE', 'DELETE'].includes(action)) throw errors.badRequest('无效的删除模式', 'INVALID_PROJECT_DELETE_MODE');
+    assertTransition(ctx, 'studentProject', project.status, 'ARCHIVED', {
+      targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status, deletedAt: project.deleted_at || null },
+      code: 'INVALID_PROJECT_TRANSITION', message: '已提交或已评分项目不能删除或归档', details: { action },
+    });
     if (action === 'DELETE') {
       if (project.status !== 'DRAFT' && !(project.status === 'ARCHIVED' && !project.deleted_at)) {
         throw errors.conflict('已提交或已评分项目不能删除', 'PROJECT_NOT_DELETABLE');
@@ -870,7 +875,10 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/projects\/([^/]+)\/archive$/);
   if (match && method === 'POST') {
     const project = getOwnProject(ctx, match[1]);
-    if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能归档', 'PROJECT_NOT_ARCHIVABLE');
+    assertTransition(ctx, 'studentProject', project.status, 'ARCHIVED', {
+      targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status },
+      code: 'INVALID_PROJECT_TRANSITION', message: '已提交或已评分项目不能归档', details: { action: 'archive' },
+    });
     const now = nowIso();
     q(
       "UPDATE student_projects SET status='ARCHIVED',archived_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
@@ -883,7 +891,10 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/projects\/([^/]+)\/restore$/);
   if (match && method === 'POST') {
     const project = getOwnProject(ctx, match[1], { includeArchived: true, includeDeleted: true });
-    if (project.status !== 'ARCHIVED') throw errors.conflict('只有归档或已删除草稿可以恢复', 'PROJECT_NOT_RESTORABLE');
+    assertTransition(ctx, 'studentProject', project.status, 'DRAFT', {
+      targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status, deletedAt: project.deleted_at || null },
+      code: 'INVALID_PROJECT_TRANSITION', message: '只有归档或已删除草稿可以恢复', details: { action: 'restore' },
+    });
     const now = nowIso();
     if (project.deleted_at) {
       const deadline = new Date(new Date(project.deleted_at).getTime() + PROJECT_DELETE_RESTORE_DAYS * 86400_000);
@@ -905,9 +916,10 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/projects\/([^/]+)\/submit$/);
   if (match && method === 'POST') {
     const project = getOwnProject(ctx, match[1]);
-    if (project.status !== 'DRAFT') {
-      throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
-    }
+    assertTransition(ctx, 'studentProject', project.status, 'SUBMITTED', {
+      targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status },
+      code: 'INVALID_PROJECT_TRANSITION', message: '项目已提交，不能重复提交', details: { action: 'submit' },
+    });
     assertProjectUsable(ctx, project);
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与机构内展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
@@ -920,6 +932,11 @@ export async function handleStudent(ctx) {
     let workId = id('work');
     let round = 1;
     let resubmission = false;
+    const priorWork = row('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [project.id, auth.user.id, auth.user.orgId]);
+    if (priorWork) assertTransition(ctx, 'work', priorWork.status, 'PENDING', {
+      targetType: 'WORK', targetId: priorWork.id, before: normalizeWork(priorWork), code: 'INVALID_WORK_TRANSITION',
+      message: '当前作品状态不允许重新提交', details: { action: 'resubmit' },
+    });
     transaction(() => {
       const fresh = getOwnProject(ctx, project.id);
       if (fresh.status !== 'DRAFT') throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
@@ -1053,6 +1070,10 @@ export async function handleStudent(ctx) {
     const work = getOwnWork(ctx, match[1]);
     const requestRow = row("SELECT * FROM work_publish_requests WHERE work_id=? AND student_id=? AND org_id=? AND status='PENDING' ORDER BY requested_at DESC LIMIT 1", [work.id, ctx.auth.user.id, work.org_id]);
     if (!requestRow) throw errors.notFound('没有可撤回的发布申请', 'WORK_PUBLISH_REQUEST_NOT_FOUND');
+    assertTransition(ctx, 'workPublishRequest', requestRow.status, 'WITHDRAWN', {
+      targetType: 'WORK_PUBLISH_REQUEST', targetId: requestRow.id, before: normalizeWorkPublishRequest(requestRow),
+      code: 'INVALID_WORK_PUBLISH_REQUEST_TRANSITION', message: '发布申请当前状态不允许撤回', details: { action: 'withdraw' },
+    });
     const now = nowIso();
     q(
       "UPDATE work_publish_requests SET status='WITHDRAWN',resolved_at=?,resolved_by=?,resolution='学生撤回',updated_at=? WHERE id=? AND status='PENDING'",

@@ -3,6 +3,7 @@ import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
+import { assertTransition } from '../services/domainState.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
 const MODALITY_LABELS = {
@@ -91,20 +92,24 @@ function jobDetail(jobId, { requireAuth = null } = {}) {
   return normalizeJob(job, { assets: assetsFor(job.id) });
 }
 
-function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null }) {
+function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null }) {
   const jobId = id('generation');
   const now = nowIso();
   transaction(() => q(`INSERT INTO generation_jobs(
        id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'RUNNING', retryOfJobId, now, now]));
+    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null]));
+    assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
+    q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
   return jobId;
 }
 
-function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error }) {
+function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error, requestContext = null }) {
   const failCode = error?.code || 'GENERATION_FAILED';
   const failAt = nowIso();
   transaction(() => {
+    const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
+    if (currentJob) assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
     q("UPDATE generation_jobs SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",
       [failCode, String(error?.message || '素材生成失败').slice(0, 1000), failAt, jobId]);
     q(`INSERT INTO usage_records(
@@ -116,7 +121,7 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
   });
 }
 
-function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads }) {
+function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext = null }) {
   transaction(() => {
     const user = row("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, auth.user.orgId]);
     const freshProject = ownProject(auth, project.id);
@@ -150,6 +155,8 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
           asset.mimeType || null, String(asset.assetUrl || `mock://generation/${assetId}`), asset.previewUrl || null,
           json(asset.metadata || {}), nowIso()]);
     });
+    const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
+    assertTransition(auditContext(auth, requestContext), 'generationJob', currentJob?.status, 'SUCCEEDED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { modality } });
     q("UPDATE generation_jobs SET status='SUCCEEDED',credits_charged=1,completed_at=? WHERE id=?", [nowIso(), jobId]);
   });
 }
@@ -169,17 +176,17 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const info = generationProviderInfo();
   const context = resolveProjectUsageContext(auth.rawUser, project);
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
-  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId });
+  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext });
   try {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
-    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads });
+    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
     audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
     const job = jobDetail(jobId);
     return { job, assets: job.assets };
   } catch (error) {
-    markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error });
+    markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
     throw error instanceof ApiError ? error : errors.badRequest(String(error?.message || '素材生成服务当前不可用，请检查 provider 配置。'), error?.code || 'GENERATION_FAILED');
   }
 }

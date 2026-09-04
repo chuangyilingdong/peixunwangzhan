@@ -14,6 +14,7 @@ import {
   transaction,
 } from '../lib.js';
 import { hostname } from 'node:os';
+import { assertTransition } from '../services/domainState.js';
 
 const NOTIFICATION_ROLES = new Set(['ORG_ADMIN', 'TEACHER', 'STUDENT']);
 const NOTIFICATION_KINDS = new Set(['NOTICE', 'ANNOUNCEMENT', 'REMINDER']);
@@ -358,9 +359,11 @@ function markJobFailed(jobId, workerId, errorCode, errorMessage) {
   const nextAttempt = job.attempt + 1;
   const nextRunAt = new Date(Date.now() + backoffSeconds(nextAttempt) * 1000).toISOString();
   if (nextAttempt >= job.max_attempts) {
+    assertTransition(null, 'notificationDispatchJob', job.status, 'DEAD_LETTER', { targetType: 'NOTIFICATION_DISPATCH_JOB', targetId: jobId, before: job, details: { errorCode } });
     q("UPDATE notification_dispatch_jobs SET status='DEAD_LETTER',locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,updated_at=? WHERE id=?", [errorCode || 'MAX_RETRIES', errorMessage || '已达到最大重试次数', now, jobId]);
     return { failed: true, jobId: job.id, status: 'DEAD_LETTER' };
   }
+  assertTransition(null, 'notificationDispatchJob', job.status, 'PENDING', { targetType: 'NOTIFICATION_DISPATCH_JOB', targetId: jobId, before: job, details: { errorCode } });
   q("UPDATE notification_dispatch_jobs SET status='PENDING',attempt=?,locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,next_run_at=?,updated_at=? WHERE id=?", [nextAttempt, errorCode || 'UNKNOWN', errorMessage || '投递失败', nextRunAt, now, jobId]);
   return { failed: true, jobId: job.id, status: 'PENDING', nextRunAt, attempt: nextAttempt };
 }
@@ -533,6 +536,7 @@ export function dispatchDueNotifications() {
   let published = 0;
   transaction(() => {
     due.forEach((notification) => {
+      assertTransition(null, 'notification', notification.status, 'PUBLISHED', { targetType: 'NOTIFICATION', targetId: notification.id, before: notification, details: { action: 'SCHEDULED_PUBLISH' } });
       const result = q("UPDATE notifications SET status='PUBLISHED',updated_at=? WHERE id=? AND status='DRAFT' AND publish_at IS NOT NULL AND publish_at<=?", [now, notification.id, now]);
       if (!result.changes) return;
       const audience = parseJson(notification.audience, {});
@@ -1093,6 +1097,7 @@ export async function handleAdminCommunication(ctx) {
     const template = validateTemplateBody(ctx.body || {}, target);
     const status = ctx.body?.status === undefined ? target.status : String(ctx.body.status).toUpperCase();
     if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('通知模板状态无效', 'INVALID_NOTIFICATION_TEMPLATE_STATUS');
+    assertTransition(ctx, 'notificationTemplate', target.status, status, { targetType: 'NOTIFICATION_TEMPLATE', targetId: target.id, before: target, allowSameState: true });
     q('UPDATE notification_templates SET name=?,title=?,body=?,kind=?,target_url=?,audience=?,status=?,updated_at=? WHERE id=?', [template.name, template.title, template.body, template.kind, template.targetUrl, json(template.audience), status, nowIso(), target.id]);
     audit(ctx, 'NOTIFICATION_TEMPLATE_UPDATE', 'NOTIFICATION_TEMPLATE', target.id, { status: target.status }, { status, name: template.name });
     return normalizeTemplate(row('SELECT * FROM notification_templates WHERE id=?', [target.id]));
@@ -1113,6 +1118,7 @@ export async function handleAdminCommunication(ctx) {
     const now = nowIso();
     const publishAt = nextStatus === 'SCHEDULED' ? scheduledPublishAt(ctx.body?.publishAt, currentStatus === 'SCHEDULED' ? target.publish_at : null) : (nextStatus === 'PUBLISHED' ? now : null);
     const storedStatus = nextStatus === 'SCHEDULED' ? 'DRAFT' : nextStatus;
+    assertTransition(ctx, 'notification', target.status, storedStatus, { targetType: 'NOTIFICATION', targetId: target.id, before: target, allowSameState: true });
     transaction(() => {
       q('UPDATE notifications SET title=?,body=?,kind=?,target_url=?,audience=?,status=?,publish_at=?,pinned=?,updated_at=? WHERE id=?', [title, body, kind, targetUrl, json(audience), storedStatus, publishAt, ctx.body?.pinned === undefined ? target.pinned : (bool(ctx.body.pinned) ? 1 : 0), now, target.id]);
       if (storedStatus === 'PUBLISHED') notificationRecipients(target.id, 'PLATFORM', null, audience);
@@ -1148,6 +1154,7 @@ export async function handleAdminCommunication(ctx) {
     const material = validateMaterialBody(ctx.body || {}, target);
     const status = ctx.body?.status === undefined ? target.status : String(ctx.body.status).toUpperCase();
     if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('物料状态无效', 'INVALID_MATERIAL_STATUS');
+    assertTransition(ctx, 'material', target.status, status, { targetType: 'PROMO_MATERIAL', targetId: target.id, before: target, allowSameState: true });
     const now = nowIso();
     transaction(() => {
       q('UPDATE promo_materials SET title=?,description=?,category=?,mime_type=?,resource_url=?,cover_url=?,visibility=?,status=?,updated_at=? WHERE id=?', [material.title, material.description, material.category, material.mimeType, material.resourceUrl, material.coverUrl, material.visibility, status, now, target.id]);

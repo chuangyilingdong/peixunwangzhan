@@ -6,6 +6,7 @@ import {
 import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
 import { scheduleReminder } from './communication.js';
+import { assertKnownState, assertTransition } from '../services/domainState.js';
 
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
@@ -1161,7 +1162,11 @@ export async function handleAdmin(ctx) {
     };
     const transition = transitions[action];
     if (!transition) throw errors.badRequest('无效的机构状态操作', 'INVALID_ORG_STATUS_ACTION');
-    if (!transition.from.includes(organization.status)) throw errors.badRequest(`当前状态 ${organization.status} 不允许执行 ${action}`, 'INVALID_ORG_STATUS_TRANSITION');
+    assertTransition(ctx, 'organization', organization.status, transition.to, {
+      targetType: 'ORGANIZATION', targetId: organization.id, before: normalizeOrg(organization),
+      message: `当前状态 ${organization.status} 不允许执行 ${action}`, code: 'INVALID_ORG_STATUS_TRANSITION',
+      details: { action }, allowedFrom: transition.from,
+    });
     if (transition.requiresValidContract && organization.contract_expires_at <= nowIso()) throw errors.badRequest('机构合同已到期，请先续签合同再恢复服务', 'ORG_CONTRACT_EXPIRED');
     const before = normalizeOrg(organization);
     q('UPDATE organizations SET status=?,is_trial=?,updated_at=? WHERE id=?', [transition.to, transition.to === 'ACTIVE' ? 0 : organization.is_trial, nowIso(), organization.id]);
@@ -1280,7 +1285,11 @@ export async function handleAdmin(ctx) {
     };
     const transition = transitions[action];
     if (!transition) throw errors.badRequest('无效的课包状态操作', 'INVALID_COURSE_STATUS_ACTION');
-    if (!transition.from.includes(series.status)) throw errors.badRequest('当前状态 ' + series.status + ' 不允许执行 ' + action, 'INVALID_COURSE_STATUS_TRANSITION');
+    assertTransition(ctx, 'courseSeries', series.status, transition.to, {
+      targetType: 'COURSE_SERIES', targetId: series.id, before: normalizeSeries(series),
+      allowedFrom: transition.from, code: 'INVALID_COURSE_STATUS_TRANSITION',
+      message: '当前状态 ' + series.status + ' 不允许执行 ' + action, details: { action },
+    });
     if (transition.requireLessons && !row('SELECT id FROM course_lessons WHERE series_id=?', [series.id])) throw errors.badRequest('课包至少需要一个课时才能发布', 'COURSE_LESSONS_REQUIRED');
     const before = normalizeSeries(series);
     q('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, nowIso(), series.id]);
@@ -1347,6 +1356,7 @@ export async function handleAdmin(ctx) {
     if (!orgId) throw errors.badRequest('请选择要撤销授权的机构', 'INVALID_ORG_IDS');
     const assignment = row("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE'", [series.id, orgId]);
     if (!assignment) throw errors.notFound('该机构没有此课包的有效授权', 'ASSIGNMENT_NOT_FOUND');
+    assertTransition(ctx, 'courseAssignment', assignment.status, 'REVOKED', { targetType: 'COURSE_ASSIGNMENT', targetId: assignment.id, before: { status: assignment.status, orgId }, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能撤销' });
     q("UPDATE course_assignments SET status='REVOKED' WHERE id=?", [assignment.id]);
     audit(ctx, 'COURSE_SERIES_ASSIGN_REVOKE', 'COURSE_SERIES', series.id, { orgId }, { orgId, status: 'REVOKED' });
     return { revoked: true, orgId };
@@ -1361,8 +1371,11 @@ export async function handleAdmin(ctx) {
     const title = body.title === undefined ? lesson.title : nonEmptyString(body.title, '课时标题', { max: 200 });
     const summary = body.summary === undefined ? lesson.summary : String(body.summary).slice(0, 10000);
     const durationMinutes = body.durationMinutes === undefined ? lesson.duration_minutes : integer(body.durationMinutes, '课时时长', { min: 1, max: 1440 });
-    const status = body.status === undefined ? lesson.status : body.status;
-    if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) throw errors.badRequest('课时状态无效', 'INVALID_LESSON_STATUS');
+    const status = body.status === undefined ? lesson.status : String(body.status).toUpperCase();
+    if (body.status !== undefined) assertTransition(ctx, 'courseLesson', lesson.status, status, {
+      targetType: 'COURSE_LESSON', targetId: lesson.id, before: { status: lesson.status, title: lesson.title },
+      code: 'INVALID_LESSON_STATUS_TRANSITION', message: '当前课时状态不允许转换', details: { requestedStatus: status },
+    });
     const lessonContent = body.lessonContent === undefined ? lesson.lesson_content : String(body.lessonContent).slice(0, 50000);
     q('UPDATE course_lessons SET title=?,summary=?,duration_minutes=?,status=?,lesson_content=?,updated_at=? WHERE id=?', [title, summary, durationMinutes, status, lessonContent, nowIso(), lesson.id]);
     q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(row('SELECT version FROM course_series WHERE id=?', [lesson.series_id]).version), nowIso(), lesson.series_id]);
@@ -1406,7 +1419,10 @@ export async function handleAdmin(ctx) {
     transaction(() => {
       assignmentOrgIds.forEach((assignmentOrgId) => {
         const existing = row('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, assignmentOrgId]);
-        if (existing) q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=? WHERE id=?", [auth.user.id, now, existing.id]);
+        if (existing) {
+          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, before: { status: existing.status, orgId: assignmentOrgId }, allowSameState: true, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能启用' });
+          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=? WHERE id=?", [auth.user.id, now, existing.id]);
+        }
         else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at) VALUES (?,?,?,?,?,?)", [id('assign'), series.id, assignmentOrgId, 'ACTIVE', auth.user.id, now]);
       });
     });
@@ -1521,6 +1537,7 @@ export async function handleAdmin(ctx) {
       const status = body.status;
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('用户状态无效', 'INVALID_USER_STATUS');
       if (status === target.status) { const unchanged = row(targetWithJoins, [target.id]); return platformUserRow(unchanged); }
+      assertTransition(ctx, 'user', target.status, status, { targetType: 'USER', targetId: target.id, before: target, code: 'INVALID_USER_STATUS' });
       if (status === 'DISABLED') {
         if (target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'ADMIN_SELF_DISABLE_FORBIDDEN');
         lastSuperAdminGuard(target);
@@ -1745,7 +1762,7 @@ export async function handleAdmin(ctx) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-    if (work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可以下架', 'WORK_NOT_PUBLISHED');
+    assertTransition(ctx, 'work', work.status, 'REJECTED', { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), allowedFrom: ['PUBLISHED'], code: 'INVALID_WORK_TRANSITION', message: '仅已发布作品可以下架', details: { action: 'unpublish' } });
     const reason = String(ctx.body?.reason || '').trim();
     if (!reason) throw errors.badRequest('请填写下架原因', 'WORK_UNPUBLISH_REASON_REQUIRED');
     if (reason.length > 2000) throw errors.badRequest('下架原因不能超过 2000 个字符', 'WORK_UNPUBLISH_REASON_TOO_LONG');
@@ -2036,6 +2053,7 @@ export async function handleOrg(ctx) {
     if (!hasPermission(auth, 'MANAGE_MEMBERS')) throw errors.forbidden('无账号管理权限', 'ORG_MEMBER_PERMISSION_REQUIRED'); const target = orgUser(auth, match[1]); if (method === 'GET') return normalizeUser(target, { includeAuthMeta: true });
     if (method === 'DELETE') {
       const now = nowIso();
+      assertTransition(ctx, 'user', target.status, 'DISABLED', { targetType: 'USER', targetId: target.id, before: target });
       transaction(() => { q('UPDATE users SET deleted_at=?,status=?,updated_at=? WHERE id=? AND org_id=?', [now, 'DISABLED', now, target.id, currentOrgId]); q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
       audit(ctx, 'USER_DELETE', 'USER', target.id, normalizeUser(target), { status: 'DISABLED', deletedAt: now }); return { ok: true };
     }
@@ -2043,6 +2061,7 @@ export async function handleOrg(ctx) {
     if (body.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
     const nextStatus = body.status === undefined ? target.status : body.status;
     if (!['ACTIVE', 'DISABLED'].includes(nextStatus)) throw errors.badRequest('账号状态无效', 'INVALID_MEMBER_STATUS');
+    assertTransition(ctx, 'user', target.status, nextStatus, { targetType: 'USER', targetId: target.id, before: target, allowSameState: true, code: 'INVALID_MEMBER_STATUS' });
     if (nextStatus === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'SELF_DISABLE_FORBIDDEN');
     const phone = body.phone === undefined ? target.phone : validateMemberPhone(body.phone, target.id);
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim(); if (!displayName) throw errors.badRequest('姓名不能为空', 'DISPLAY_NAME_REQUIRED');
@@ -2203,10 +2222,24 @@ export async function handleOrg(ctx) {
     const pkg = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [enrollment.package_id, currentOrgId]);
     if (!pkg) throw errors.conflict('开通单关联套餐已不可用', 'ENROLLMENT_PACKAGE_MISSING');
     let after = before; let eventData = {};
+    if (action === 'payment-record') {
+      const paymentStatus = String(ctx.body?.paymentStatus || 'RECORDED').trim().toUpperCase();
+      if (!PAYMENT_STATUSES.has(paymentStatus)) throw errors.badRequest('线下收款登记状态无效', 'INVALID_PAYMENT_STATUS');
+      assertTransition(ctx, 'payment', enrollment.payment_status, paymentStatus, {
+        targetType: 'STUDENT_ENROLLMENT', targetId: enrollment.id, before: normalizeEnrollment(enrollment),
+        code: 'INVALID_PAYMENT_STATUS_TRANSITION', details: { action }, message: `收款状态 ${enrollment.payment_status} 不允许转换为 ${paymentStatus}`, allowSameState: true,
+      });
+    } else {
+      const requestedStatus = { activate: 'ACTIVE', suspend: 'SUSPENDED', resume: 'ACTIVE', renew: 'ACTIVE', void: 'VOIDED' }[action];
+      const allowedFrom = { activate: ['PENDING'], suspend: ['ACTIVE'], resume: ['SUSPENDED'], renew: ['ACTIVE', 'SUSPENDED', 'EXPIRED'], void: ['PENDING', 'SUSPENDED'] }[action];
+      if (requestedStatus) assertTransition(ctx, 'enrollment', before, requestedStatus, {
+        targetType: 'STUDENT_ENROLLMENT', targetId: enrollment.id, before: normalizeEnrollment(enrollment),
+        code: 'INVALID_ENROLLMENT_TRANSITION', details: { action }, message: `当前开通单状态 ${before} 不允许执行 ${action}`, allowedFrom, allowSameState: action === 'renew',
+      });
+    }
     transaction(() => {
       if (action === 'payment-record') {
         const paymentStatus = String(ctx.body?.paymentStatus || 'RECORDED').trim().toUpperCase();
-        if (!PAYMENT_STATUSES.has(paymentStatus)) throw errors.badRequest('线下收款登记状态无效', 'INVALID_PAYMENT_STATUS');
         const notes = ctx.body?.notes === undefined ? enrollment.notes : String(ctx.body.notes || '').trim();
         if (notes.length > 2000) throw errors.badRequest('备注不能超过 2000 个字符', 'ENROLLMENT_NOTES_TOO_LONG');
         q('UPDATE student_enrollments SET payment_status=?,notes=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?', [paymentStatus, notes, auth.user.id, now, enrollment.id, currentOrgId]);
@@ -2499,6 +2532,7 @@ export async function handleOrg(ctx) {
     if (method === 'GET') { if (!teacherCanAccessClass(auth, cls)) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND'); return classDetail(auth, cls); }
     assertClassManager(auth, cls);
     if (method === 'DELETE') {
+      assertTransition(ctx, 'class', cls.status, 'ARCHIVED', { targetType: 'CLASS', targetId: cls.id, before: normalizeClass(cls), code: 'INVALID_CLASS_TRANSITION', message: '已归档班级不能重复归档' });
       transaction(() => { const active = row("SELECT * FROM class_sessions WHERE class_id=? AND status='ACTIVE'", [cls.id]); if (active) q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason='CLASS_ARCHIVED' WHERE id=?", [nowIso(), auth.user.id, active.id]); q("UPDATE classes SET status='ARCHIVED',archived_at=?,current_session_id=NULL,updated_at=? WHERE id=? AND org_id=?", [nowIso(), nowIso(), cls.id, currentOrgId]); });
       audit(ctx, 'CLASS_ARCHIVE', 'CLASS', cls.id); return { ok: true };
     }
@@ -2571,7 +2605,8 @@ export async function handleOrg(ctx) {
   classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/(end|credit-cap|capabilities)$/);
   if (classMatch && method === 'POST') {
     const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]); if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND'); const action = classMatch[3];
-    if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束', 'CLASS_SESSION_ENDED');
+    if (action === 'end') assertTransition(ctx, 'classSession', session.status, 'ENDED', { targetType: 'CLASS_SESSION', targetId: session.id, before: normalizeSession(session), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '课堂已结束，不能重复结束' });
+    else if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束', 'CLASS_SESSION_ENDED');
     if (action === 'end') transaction(() => { q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason=? WHERE id=? AND class_id=? AND status='ACTIVE'", [nowIso(), auth.user.id, String(ctx.body?.reason || 'MANUAL').slice(0, 100), session.id, cls.id]); q('UPDATE classes SET current_session_id=NULL,updated_at=? WHERE id=? AND org_id=? AND current_session_id=?', [nowIso(), cls.id, currentOrgId, session.id]); });
     if (action === 'credit-cap') q("UPDATE class_sessions SET session_credit_cap=? WHERE id=? AND class_id=? AND status='ACTIVE'", [ctx.body?.sessionCreditCap === null ? null : integer(ctx.body?.sessionCreditCap, '课堂积分上限'), session.id, cls.id]);
     if (action === 'capabilities') { const capability = ctx.body?.capabilities || {}; q("UPDATE class_sessions SET allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=? WHERE id=? AND class_id=? AND status='ACTIVE'", [capability.allowText === undefined ? session.allow_text : (capability.allowText ? 1 : 0), capability.allowImage === undefined ? session.allow_image : (capability.allowImage ? 1 : 0), capability.allowMusic === undefined ? session.allow_music : (capability.allowMusic ? 1 : 0), capability.allowVideo === undefined ? session.allow_video : (capability.allowVideo ? 1 : 0), capability.allowPodcast === undefined ? session.allow_podcast : (capability.allowPodcast ? 1 : 0), capability.allowDubbing === undefined ? session.allow_dubbing : (capability.allowDubbing ? 1 : 0), session.id, cls.id]); }
@@ -2701,9 +2736,10 @@ export async function handleOrg(ctx) {
   let workMatch = part.match(/^\/works\/([^/]+)\/review$/);
   if (workMatch && method === 'PUT') {
     const work = workInReviewScope(auth, currentOrgId, workMatch[1]);
-    const status = ctx.body?.status; if (!['APPROVED','REJECTED','PUBLISHED'].includes(status)) throw errors.badRequest('作品状态无效', 'INVALID_WORK_STATUS');
-    const allowed = { PENDING: ['APPROVED', 'REJECTED'], APPROVED: ['PUBLISHED', 'REJECTED'], PUBLISHED: ['REJECTED'], REJECTED: [] };
-    if (!allowed[work.status]?.includes(status)) throw errors.conflict('当前作品状态不允许执行该操作', 'INVALID_WORK_TRANSITION');
+    const status = String(ctx.body?.status || '').toUpperCase();
+    assertKnownState('work', status, { field: '作品状态' });
+    if (status === 'PENDING') throw errors.badRequest('作品状态无效', 'INVALID_WORK_STATUS');
+    assertTransition(ctx, 'work', work.status, status, { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), code: 'INVALID_WORK_TRANSITION', message: '当前作品状态不允许执行该操作' });
     if (status === 'PUBLISHED' && !work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     const comment = String(ctx.body?.teacherComment || '').trim(); if (comment.length > 2000) throw errors.badRequest('老师点评不能超过 2000 个字符', 'WORK_COMMENT_TOO_LONG');
     const now = nowIso();
@@ -2772,8 +2808,9 @@ export async function handleOrg(ctx) {
     if (!requestRow) throw errors.notFound('发布申请不存在', 'WORK_PUBLISH_REQUEST_NOT_FOUND');
     const work = workInReviewScope(auth, currentOrgId, requestRow.work_id);
     if (requestRow.status !== 'PENDING') throw errors.conflict('发布申请已处理，不能重复处理', 'WORK_PUBLISH_REQUEST_ALREADY_HANDLED');
-    const status = ctx.body?.status;
+    const status = String(ctx.body?.status || '').toUpperCase();
     if (!['APPROVED','REJECTED'].includes(status)) throw errors.badRequest('发布申请处理状态无效', 'INVALID_WORK_PUBLISH_REQUEST_STATUS');
+    assertTransition(ctx, 'workPublishRequest', requestRow.status, status, { targetType: 'WORK_PUBLISH_REQUEST', targetId: requestRow.id, before: normalizeWorkPublishRequest(requestRow), code: 'INVALID_WORK_PUBLISH_REQUEST_TRANSITION', message: '发布申请当前状态不允许处理' });
     const resolution = String(ctx.body?.resolution || '').trim();
     if (resolution.length > 2000) throw errors.badRequest('处理说明不能超过 2000 个字符', 'WORK_PUBLISH_RESOLUTION_TOO_LONG');
     if (status === 'APPROVED' && work.status !== 'APPROVED') throw errors.conflict('仅审核通过的作品可以批准发布', 'WORK_NOT_APPROVED');

@@ -12,6 +12,7 @@ import {
   row,
   rows,
 } from '../lib.js';
+import { assertTransition } from '../services/domainState.js';
 
 const STORAGE_KINDS = new Set(['EXTERNAL_URL', 'INTERNAL_PROXY', 'PENDING']);
 const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE']);
@@ -276,11 +277,13 @@ export async function handleAdminFileAssets(ctx) {
     if (body.reviewStatus !== undefined) {
       const reviewStatus = String(body.reviewStatus).toUpperCase();
       if (!REVIEW_STATUSES.has(reviewStatus)) throw errors.badRequest('reviewStatus 无效', 'INVALID_REVIEW_STATUS');
+      assertTransition(ctx, 'fileReview', file.review_status, reviewStatus, { targetType: 'FILE_REVIEW', targetId: file.id, before: file, allowSameState: true });
       q('UPDATE file_assets SET review_status=?, updated_at=? WHERE id=?', [reviewStatus, nowIso(), file.id]);
     }
     if (body.status !== undefined) {
       const status = String(body.status).toUpperCase();
       if (!['PENDING', 'ACTIVE', 'DISABLED', 'REMOVED'].includes(status)) throw errors.badRequest('status 无效', 'INVALID_FILE_STATUS');
+      assertTransition(ctx, 'fileAsset', file.status, status, { targetType: 'FILE_ASSET', targetId: file.id, before: file, allowSameState: true });
       q('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
     }
     if (body.expiresAt !== undefined) {
@@ -295,6 +298,7 @@ export async function handleAdminFileAssets(ctx) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    assertTransition(ctx, 'fileAsset', file.status, 'REMOVED', { targetType: 'FILE_ASSET', targetId: file.id, before: file });
     q("UPDATE file_assets SET status='REMOVED', updated_at=? WHERE id=?", [nowIso(), file.id]);
     q('DELETE FROM file_access_grants WHERE file_id=?', [file.id]);
     audit(ctx, 'FILE_ASSET_REMOVE', 'FILE_ASSET', file.id, normalizeFileAsset(file), null);
@@ -440,11 +444,13 @@ export async function handleOrgFileAssets(ctx) {
     if (body.reviewStatus !== undefined) {
       const reviewStatus = String(body.reviewStatus).toUpperCase();
       if (!REVIEW_STATUSES.has(reviewStatus)) throw errors.badRequest('reviewStatus 无效', 'INVALID_REVIEW_STATUS');
+      assertTransition(ctx, 'fileReview', file.review_status, reviewStatus, { targetType: 'FILE_REVIEW', targetId: file.id, before: file, allowSameState: true });
       q('UPDATE file_assets SET review_status=?, updated_at=? WHERE id=?', [reviewStatus, nowIso(), file.id]);
     }
     if (body.status !== undefined) {
       const status = String(body.status).toUpperCase();
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('status 无效', 'INVALID_FILE_STATUS');
+      assertTransition(ctx, 'fileAsset', file.status, status, { targetType: 'FILE_ASSET', targetId: file.id, before: file, allowSameState: true });
       q('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
     }
     if (body.expiresAt !== undefined) {
@@ -460,6 +466,7 @@ export async function handleOrgFileAssets(ctx) {
     const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.owner_type !== 'ORG' || file.owner_org_id !== currentOrgId) throw errors.forbidden('只能删除本机构文件', 'FILE_OWNER_REQUIRED');
+    assertTransition(ctx, 'fileAsset', file.status, 'REMOVED', { targetType: 'FILE_ASSET', targetId: file.id, before: file });
     q("UPDATE file_assets SET status='REMOVED', updated_at=? WHERE id=?", [nowIso(), file.id]);
     q('DELETE FROM file_access_grants WHERE file_id=?', [file.id]);
     audit(ctx, 'FILE_ASSET_REMOVE', 'FILE_ASSET', file.id, normalizeFileAsset(file), null, { orgId: currentOrgId });

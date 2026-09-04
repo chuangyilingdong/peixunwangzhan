@@ -10,6 +10,7 @@ import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunica
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets } from './routes/fileAssets.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
+import { domainStateContract } from './services/domainState.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -59,6 +60,11 @@ const server = http.createServer(async (req, res) => {
   try {
     if (bodyMethods.has(ctx.method)) ctx.body = await readJson(req, '2mb');
     if (handleSeoAsset(ctx)) return;
+
+    if (ctx.pathname === '/api/meta/domain-states' && ctx.method === 'GET') {
+      sendJson(res, 200, envelope(domainStateContract()), req);
+      return;
+    }
 
     if (ctx.pathname === '/health' && ctx.method === 'GET') {
       sendJson(res, 200, envelope({ status: 'ok', service: 'ai-kids-platform', time: new Date().toISOString() }), req);
