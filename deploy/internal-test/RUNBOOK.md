@@ -2,14 +2,14 @@
 
 ## 适用范围
 
-本手册只适用于受控内部测试环境，不代表正式生产服务。当前环境必须显著显示“内部测试环境 · 不代表正式服务”，使用 Basic Auth / VPN / IP 白名单保护，不能接收真实外部用户，也不能使用真实线上数据库。
+本手册只适用于受控内部测试环境，不代表正式生产服务。当前环境必须显著显示“内部测试环境 · 不代表正式服务”，保持 noindex、HTTPS、独立测试数据库和回滚能力；线上 Basic Auth 已按用户于 2026-09-04 的明确授权解除，因此不得扩大访问范围或接收真实外部用户，也不得使用真实线上数据库。正式公开前必须重新启用 Basic Auth / VPN / IP 白名单之一。
 
 ## 发布前检查
 
 1. 从已推送 commit 构建，确认 `BUILD-METADATA.txt` 的 commit、Node.js 22.5+、pnpm 11 和 `mode=internal-test`。
 2. 确认 `/srv/ai-kids-platform/internal-test/data/platform.db` 不存在或是隔离测试库；不得指向仓库 `packages/data/platform.db`。
 3. 执行数据库初始化和 seed，确认五类测试账号均为测试账号。
-4. 配置 Nginx Basic Auth / VPN / IP 白名单，检查 `nginx -t` 后再 reload。
+4. 新部署默认配置 Nginx Basic Auth / VPN / IP 白名单之一，检查 `nginx -t` 后再 reload；当前线上例外为用户已明确授权解除 Basic Auth，仅用于内部测试。
 5. 运行部署验收脚本和核心 UAT；任何 P0 权限、租户隔离、数据越权或真实外部服务伪接入问题均不得放行。
 
 ## 启停与健康检查

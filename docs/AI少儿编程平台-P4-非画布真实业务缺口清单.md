@@ -37,7 +37,7 @@
 | 外部阻塞 | P5-W08、真实 AI / OSS / 支付 / 微信等 | 需要用户 / 法务 / 供应商给出正式文本、账号、规则或密钥，不得伪造 |
 | 暂不做 | P5-W03 / P5-W06 | 用户已取消，保持产品取消 |
 
-内测网址必须在反向代理或 VPN / IP 白名单 / Basic Auth 中落实至少一种强制访问控制，并返回 `noindex, nofollow, noarchive`；页面应显著标识“内部测试环境，不代表正式服务”。
+内测网址原则上必须在反向代理或 VPN / IP 白名单 / Basic Auth 中落实至少一种强制访问控制，并返回 `noindex, nofollow, noarchive`；页面应显著标识“内部测试环境，不代表正式服务”。本轮用户已于 2026-09-04 明确授权移除线上 Basic Auth，因此当前仅保留 noindex、内测标识、HTTPS、独立测试数据库和回滚能力；不得扩大访问范围，正式公开前必须重新建立访问控制。
 
 
 ## 2. 第一批 P0 范围与完成标准
@@ -488,7 +488,8 @@
 - [x] P9-I02 内部访问控制与不可索引 ✅ 2026-09-03
   - 完成记录：Nginx 模板四个 server 均启用 Basic Auth、`X-Robots-Tag: noindex, nofollow, noarchive`、`X-Internal-Test: true` 和 SPA fallback；API 内测响应同样加头，`robots.txt` 为 `Disallow: /`，`sitemap.xml` 返回 404；前端显示“内部测试环境 · 不代表正式服务”。
   - 验证：部署验收 **24 pass / 0 fail**，并在 UAT 中验证未登录 admin API 为 401；静态断言覆盖 Basic Auth、robots、API 代理和 SPA fallback。
-  - 线上结果：Basic Auth 已在 `iicili.cyou` 生效，未认证请求返回 401；内测响应头、robots 和 sitemap 行为已实测。该站仍不是正式公开服务。
+  - 线上基线结果（2026-09-03）：Basic Auth 曾在 `iicili.cyou` 生效，未认证请求返回 401；内测响应头、robots 和 sitemap 行为已实测。该站仍不是正式公开服务。
+  - 线上策略变更（2026-09-04）：按用户明确授权移除 Nginx Basic Auth 两行，保留 HTTPS、noindex、`X-Internal-Test`、robots 禁索引、独立测试 SQLite 和回滚备份；`nginx -t`、reload、HTTPS HEAD、`/api/health` 均通过，不再返回 `WWW-Authenticate`。
 - [x] P9-I03 测试数据、环境隔离与初始化 ✅ 2026-09-03
   - 完成记录：环境变量支持独立 `PLATFORM_DATA_DIR` / `PLATFORM_DB_PATH`；初始化、seed、清理命令和五类角色测试账号均纳入手册；构建与验收脚本拒绝使用仓库默认数据库。
   - 验证：临时 SQLite 初始化和 seed 成功；UAT 以平台超管、机构管理员、教师、学生和官网访客路径执行，未读取或写入 `packages/data/platform.db`。
@@ -504,7 +505,7 @@
   - 完成记录：新增 `deploy/internal-test/RUNBOOK.md`，明确发布前检查、启停、健康检查、journal 日志、错误上报、备份、回滚、联系人占位和放行闸门；systemd 使用 journald，API 仅监听回环地址。
   - 验证：文档与脚本静态检查、P9-I01/I04/I05 验收通过；线上 systemd / Nginx / health 检查已通过；未承诺公开 SLA，不接收外部真实业务。
 
-当前 P9 内测上线代码 / 文档基线与真实服务器受控发布均已完成：`iicili.cyou` 当前运行 release `20260903T172458Z`，API 仅监听 `127.0.0.1:8788`，使用独立测试 SQLite，Basic Auth / noindex / 内测标识 / 旧站回滚均已落实。下一步仅做内部角色浏览器 UAT、租户隔离和缺陷闭环；备案、正式公开服务和生产数据库迁移仍后续处理。
+当前 P9 内测上线代码 / 文档基线与真实服务器受控发布均已完成：`iicili.cyou` 当前运行 release `20260903T172458Z`，API 仅监听 `127.0.0.1:8788`，使用独立测试 SQLite，noindex / 内测标识 / 旧站回滚均已落实；Basic Auth 已按用户授权解除。下一步按正式上线节奏推进 P8 质量、安全、隐私、运营与发布回滚门槛；正式公开前必须恢复访问控制。
 
 - 线上发布确认（2026-09-03）：通过 ECS 云服务器终端完成 `iicili.cyou` 受控内部测试发布；验收 `/`、`/admin/`、`/org/`、`/student/` 均 HTTP 200，`/api/health` 成功，未认证返回 401，旧服务保留。未读取、复制、迁移或写入旧站真实数据库。
 
@@ -516,7 +517,7 @@
 - [x] **工程验收**：`p8-l01-data-inventory.mjs` 使用临时 SQLite 检查 12 类数据资产表及字段，共 **71 pass / 0 fail**，退出码 0；修复 Windows SQLite 句柄未关闭导致临时目录清理失败的问题。
 - [x] **边界**：本项只完成数据资产与最小化工程基线，不将 P8-L02～P8-L06、正式协议 / 法务确认或任何真实第三方服务接入判为完成；未修改 `packages/canvas`，未触碰真实业务数据库。
 
-下一步继续按正式上线节奏推进 P8 质量、安全、隐私、运营与发布回滚门槛；线上 `https://iicili.cyou/` 继续保持 Basic Auth、noindex、独立测试数据库和内测标识。
+下一步继续按正式上线节奏推进 P8 质量、安全、隐私、运营与发布回滚门槛；线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
 ### P8-Q03 验收记录（2026-09-04）
 
 - [x] **API 集成测试扩展**：新增 `p8-q03-api-integration.mjs`，在临时 SQLite 和隔离 API 进程中覆盖认证登录失败、未认证 / 角色越权、公开接口、机构 / 班级 / 课堂、学生项目创建与版本保存、跨学生项目 / 作品访问拒绝、AI local-mock 生成与历史、作品提交 / 审核 / 发布、教师批注、积分用量和课堂结束后的能力拦截。
@@ -524,7 +525,7 @@
 - [x] **验证结果**：`p8-q03-api-integration.mjs` **52 pass / 0 fail**，既有 P3 回归输出 `P3 API INTEGRATION COMPLETE`，总进程退出码 0；`git diff --check` 通过。
 - [x] **边界**：local-mock 保持明确的本地模拟边界；未伪造真实 AI、OSS、支付、微信、短信、邮件或客户端；未修改 `packages/canvas`，未触碰真实业务数据库。
 
-下一步转入 P8-Q04 E2E 与 P8-S02 / P8-S03 安全门槛，线上 `https://iicili.cyou/` 继续保持 Basic Auth、noindex、独立测试数据库和内测标识。
+下一步转入 P8-Q04 E2E 与 P8-S02 / P8-S03 安全门槛，线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
 ### P8-S02 验收记录（2026-09-04）
 
 - [x] **认证 Cookie 加固**：`apps/server/src/lib.js` 在 `internal-test` / `production` 模式为登录和清除 Cookie 增加 `Secure`，并保留 `HttpOnly`、`SameSite=Lax`、`Path=/` 和 7 天有效期。
@@ -544,6 +545,6 @@
 - [-] **工程安全基线已落地**：API 增加 nosniff、DENY、Referrer-Policy、Permissions-Policy；CORS 使用显式白名单，不反射不受信 Origin；登录失败按 IP + 登录名限流；请求体上限维持 2MB；Nginx 模板增加 CSP、请求体上限、server_tokens off 和安全响应头。
 - [x] **验证结果**：`p8-s01-security-baseline.mjs` 使用临时 SQLite **32 pass / 0 fail**，覆盖来源白名单、预检、响应头、错误脱敏、登录限流、超大请求体、Nginx 静态配置和临时数据库隔离；P8-S02 27/27、P8-Q03 52/52 回归通过；secret pattern 扫描无命中。
 - [!] **外部阻塞**：`pnpm audit --prod` 已尝试执行，但 npm registry 本轮返回 HTTP 503 / 网络失败，未能取得依赖漏洞报告；在完成 SCA 前不宣称 P8-S01 全部通过。
-- [ ] **下一步**：registry 可用后重跑依赖漏洞扫描，审查高危 / 中危结果并记录修复或例外责任人与到期日；线上继续保持 Basic Auth、noindex、独立测试数据库和内测标识。
+- [ ] **下一步**：registry 可用后重跑依赖漏洞扫描，审查高危 / 中危结果并记录修复或例外责任人与到期日；线上继续保持 noindex、独立测试数据库和内测标识，Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
 
-下一步转入 P8-S01 安全基线与依赖漏洞治理；线上 `https://iicili.cyou/` 继续保持 Basic Auth、noindex、独立测试数据库和内测标识。
+下一步转入 P8-S01 安全基线与依赖漏洞治理；线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
