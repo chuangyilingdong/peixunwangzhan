@@ -95,7 +95,7 @@
 
 - [ ] **当前唯一执行队列：内测产品与技术收口。**
   - P0：P8-Q04、P8-Q06、P8-S01、P8-S04、P8-S06 已于 2026-09-04 通过；P8-S05 监控工程基线、ECS timer 与日志轮转已于 2026-09-04 完成；真实飞书 / 电话通知仍属外部运维项，不宣称已接入。
-  - P1：P8-Q01、P8-Q02 已通过；P4-C01、P4-03 已于 2026-09-04 完成；P8-Q07 平台超管阶段已于 2026-09-04 通过并修复 `/admin/notifications` P1 白屏；当前继续推进：① P8-Q05 可用浏览器 / 视口回归边界记录；② P8-Q07 机构管理员、教师、学生、官网访客角色 UAT 与缺陷收口。不得虚构独立 Chrome / Edge / Safari 或真机结果。举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规按用户决策 `[~]` 暂缓。
+  - P1：P8-Q01、P8-Q02 已通过；P4-C01、P4-03 已于 2026-09-04 完成；P8-Q07 四角色 UAT 已于 2026-09-04 全部完成。P8-Q05 已使用本机真实 Chrome 152 / Edge 152 完成官网 96/96 与工作台 52/52 回归，并修复共享工作台 390px 横向溢出；Safari 与真实移动设备仍不可用，P8-Q05 继续 `[-]`，不得宣称全浏览器矩阵完成。举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规按用户决策 `[~]` 暂缓。
   - 所有自动化验收继续使用临时 SQLite；不得读取、复制、迁移或写入旧站真实数据库。
   - 线上内测部署作为预发布环境继续保留；每次发布前执行独立数据库、备份、健康检查、回滚和浏览器 UAT。
 - [!] **外部 / 用户侧事项。**
@@ -108,7 +108,7 @@
   - 完成记录：固化 `deploy/internal-test/` 的 Windows/Linux 构建脚本、发布目录约定、systemd 服务模板、Nginx 四端模板、环境变量样例和启动 / 停止 / 健康检查命令；发布产物包含 website/admin/org/student 四端、API 源码、数据库运行时和 `BUILD-METADATA.txt`。
   - 验证：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；四端构建成功，API 可启动并返回 `/health` `status=ok`。本地最新 release `deploy/releases/20260903T162708Z`，元信息为 commit `3577ac18d162529ff21fea4aa41c29f56bce0fe4`、Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`，并按线上域名构建 `VITE_PUBLIC_SITE_URL=https://iicili.cyou`。
      - 线上路由矩阵补充（2026-09-04）：Codex 内置浏览器 Chromium 桌面视口对 `/`、`/marketplace`、`/courses`、`/org`、`/works`、`/handbook`、`/compare`、`/download`、`/demo`、`/terms`、`/privacy`、`/minors` 共 **12/12** 路由执行渲染检查；页面正文非空、内测 banner 存在、robots 为 `noindex, nofollow, noarchive`、canonical 与动态标题均符合预期，未发现“加载失败 / ReferenceError”等页面失败文本。
-     - 尚未完成：Chrome / Edge / Safari 独立浏览器或真机矩阵，以及 390/414/768 等常见移动端宽度截图回归；当前 Codex 内置浏览器视口为桌面尺寸，因此 P8-Q05 继续保持 `[-]`。
+     - 独立浏览器增量（2026-09-04）：本机 Chrome 152.0.7977.64 与 Edge 152.0.4191.53 对官网 12 路由 × 1440/390/414/768 视口执行真实渲染、失败文本、控制台错误、横向溢出与 noindex 检查，**96/96 通过**；对 admin/org/student 三端 13 条关键路由执行 1440 与 390 视口检查，桌面 26/26 通过，首次移动 390 检查 26 项全部存在共享布局横向溢出。
 - [x] **P9-I02 内部访问控制与不可索引。** ✅ 2026-09-03
   - 完成记录：Nginx 模板四个 server 均启用 Basic Auth、`X-Robots-Tag: noindex, nofollow, noarchive`、`X-Internal-Test: true` 和 SPA fallback；API 内测响应同样加头，`robots.txt` 为 `Disallow: /`，`sitemap.xml` 返回 404；前端显示“内部测试环境 · 不代表正式服务”。
   - 验证：部署验收 **24 pass / 0 fail**，并在 UAT 中验证未登录 admin API 为 401；静态断言覆盖 Basic Auth、robots、API 代理和 SPA fallback。
@@ -1095,7 +1095,10 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - 本地内测构建已验证：首页、课程广场、课程体系、机构方案、学员作品、产品手册、选型对比、预约演示及三类法律页共 11 条路由均有非空渲染；控制台错误 0；内测 banner、`noindex, nofollow, noarchive` 与 canonical 更新通过。
     - 线上复核（2026-09-04）：使用 Codex 内置浏览器复核线上 11 条官网关键路由，均可渲染；内测 banner、动态 canonical 与 `noindex, nofollow, noarchive` 均通过。课程广场空数据时曾因线上生效 Nginx `/api/` 代理剥离 `/api` 前缀而误显示“加载失败”，已备份 `/etc/nginx/sites-enabled/iicili.cyou` 并改为 `proxy_pass http://127.0.0.1:8788;`；`nginx -t`、reload 和线上页面复核通过，现显示“暂无课程，敬请期待”。
     - 本地回归：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**，并新增 API 代理前缀静态断言；未读取、复制或写入真实线上数据库。
-    - 尚未完成：Chrome / Edge / Safari 真机或独立浏览器矩阵，以及常见移动端宽度截图回归；因此 P8-Q05 继续保持 `[-]`。
+     - 工作台移动溢出修复（P1）：根因是 `<=900px` 时 `.app-shell` 使用 `1fr` 网格轨道，顶栏 `.app-nav` 内容最小宽度撑大 `.sidebar`（admin 达 1322px、org/student 约 528px），导致页面级横向滚动。最小修复仅改 `packages/shared/src/styles.css`：移动轨道改 `minmax(0,1fr)`，并为 `.sidebar`、`.app-nav` 增加 `min-width:0`；导航保持内部横向滚动，不改业务组件、不修改 `packages/canvas`。修复后 Chrome / Edge 工作台矩阵 **52/52 通过**，官网矩阵复验仍 **96/96 通过**。
+     - 证据：`artifacts/p8-q05-20260904-independent/matrix.json`、`workspace-matrix-before-fix.json`、`workspace-matrix.json`、`overflow-diagnosis.json` 及 Chrome / Edge 桌面与 390px 截图（含 `*-before-fix.png` 修复前对比）。
+     - 回归：`p4-c01-rbac-ownership.mjs` **27/27**；`p4-03-list-api-check.mjs` **50/50**；`p8-q03-api-integration.mjs` **52/52**；`p8-q04-e2e.mjs` **54/54**；四端生产构建通过。
+     - 尚未完成：Safari 独立浏览器与真实移动 / 平板设备；线上生产站点也未执行本轮独立浏览器复验。P8-Q05 继续保持 `[-]`，不得宣称全浏览器或真机矩阵完成。
 - [x] **P8-Q06 性能与容量测试。** ✅ 2026-09-04
   - 完成记录：新增 `p8-q06-performance.mjs`，建立内测基线目标并在临时 SQLite + 隔离 API 进程中实测健康 / 公开课程接口、官网首页、并发课堂读取、AI local-mock 任务突发、文件元数据并发写入和 SQLite 写入竞争边界。
   - 影响文件 / 接口 / 数据表：`p8-q06-performance.mjs`；覆盖四端构建产物、官网首页、`/health`、`/public/marketplace`、`/student/dashboard`、`/ai/generations`、`/org/file-assets`、课堂会话和用量数据。
@@ -1434,6 +1437,7 @@ node .\p3-api-integration.mjs
 | 2026-09-04 | P8-Q01 代码质量基线完成：纳入非画布语法、构建、静态风险模式和发布边界检查。 | `p8-q01-quality.mjs` **11 pass / 0 fail**；46 个 JavaScript / MJS 文件语法检查、四端生产构建和 `git diff --check` 通过。 |
 | 2026-09-04 | P8-Q05 移动端 / 平板视口回归增量：对官网 12 条关键路由执行 390 / 414 / 768 三视口渲染检查。 | Codex 内置 Chromium **36/36**；正文非空、控制台错误 0、无横向溢出、noindex/canonical/动态标题通过；独立 Chrome / Edge / Safari 与真机仍不可用，P8-Q05 保持 `[-]`。 |
 | 2026-09-04 | P8-Q02 关键规则单元测试完成：认证、请求上下文、错误封装、积分账务和冻结 / 释放规则纳入临时 SQLite 测试。 | `p8-q02-unit.mjs` **17 pass / 0 fail**；尚未宣称全量覆盖率完成。 |
+| 2026-09-04 | P8-Q05 独立浏览器与移动视口回归：本机 Chrome 152 / Edge 152 完成官网 96/96，发现并修复 admin/org/student 共享移动布局 390px 横向溢出。 | 工作台修复前 26/52、修复后 **52/52**；官网复验 **96/96**；RBAC 27/27、列表 50/50、P3 集成 52/52、E2E 54/54、四端构建通过。证据在 `artifacts/p8-q05-20260904-independent/`；Safari 与真机仍未覆盖，线上站点未复验，P8-Q05 保持 `[-]`。 |
 
 
 ---
@@ -1615,3 +1619,14 @@ node .\p3-api-integration.mjs
 - [x] 回归：`p4-03-list-api-check.mjs` **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；`p8-q04-e2e.mjs` **54 pass / 0 fail**；四端生产构建通过；`git diff --check` 通过。UAT 继续使用临时 SQLite 与 `60027/60028` 隔离进程，未读取、复制或写入真实线上数据库，未触碰生产站点。
 - [x] 证据：`evidence/p8-q07/org-login-react-fixed.jpg`、`student-login-react-fixed.jpg`、`react-runtime-fix.txt`、`org-*.jpg`（16 页截图）、`admin-org-admin-routes.txt`、`admin-org-admin-authz-logout.txt`。
 - [ ] 下一步：按 P8-Q07 继续教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
+
+### 8.17 P8-Q05 独立 Chrome / Edge 浏览器与移动布局回归（2026-09-04）
+
+- [x] 独立浏览器真实可用：本机 Chrome `152.0.7977.64`、Edge `152.0.4191.53`，均使用真实可执行文件运行；未用同一个 Codex Chromium 伪装双浏览器结果。
+- [x] 官网矩阵：12 条路由（`/`、`/marketplace`、`/courses`、`/org`、`/works`、`/handbook`、`/compare`、`/download`、`/demo`、`/terms`、`/privacy`、`/minors`）× 1440/390/414/768 视口 × 2 浏览器，共 **96/96 通过**；页面非空、关键词可见、控制台错误 0、无失败文本、无横向溢出、noindex 保持。
+- [x] 工作台矩阵：admin 5 条、org 4 条、student 4 条关键路由 × 1440/390 视口 × 2 浏览器，共 52 项。首轮桌面 26/26 通过，移动 390 项 26/26 失败且均为横向溢出；页面标签、渲染、控制台均正常。
+- [x] 缺陷与根因（P1）：三端表现一致，源头是共享移动顶栏。`.app-nav` 自身可滚动，但 `<=900px` 下 `.app-shell{grid-template-columns:1fr}` 的网格项按内容最小尺寸展开，把 `.sidebar` 撑到 admin 1322px、org/student 528px，触发整页横向滚动。
+- [x] 修复：仅修改 `packages/shared/src/styles.css` 的 `<=900px` 规则：`.app-shell{grid-template-columns:minmax(0,1fr)}`，`.sidebar{min-width:0}`，`.app-nav{min-width:0}`。未改业务组件、权限逻辑和 `packages/canvas`；导航仍在自身容器内横向滚动。
+- [x] 修复后复验：真实 Chrome / Edge 工作台矩阵 **52/52 通过**；官网矩阵复验 **96/96 通过**，确认共享 CSS 未破坏官网。修复前后 390px 截图均保留。
+- [x] 完整回归：`p4-c01-rbac-ownership.mjs` **27/27**；`p4-03-list-api-check.mjs` **50/50**；`p8-q03-api-integration.mjs` **52/52**；`p8-q04-e2e.mjs` **54/54**；四端生产构建通过。
+- [ ] **未完成边界**：Safari 独立浏览器、真实 iOS / Android / 平板设备、线上生产站点独立浏览器复验仍未覆盖；P8-Q05 保持 `[-]`，不得宣称“全浏览器 / 真机矩阵完成”。本轮全部使用隔离临时 SQLite，未修改 `packages/canvas`，未触碰默认数据库、真实线上数据库或 `https://iicili.cyou/` 生产数据。
