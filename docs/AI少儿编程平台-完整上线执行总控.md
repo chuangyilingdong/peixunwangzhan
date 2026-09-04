@@ -89,15 +89,15 @@
 
 ## 1. 当前唯一下一步与阶段看板
 
-### 1.1 当前唯一下一步（2026-09-04：转入内测产品与技术收口）
+### 1.1 当前唯一下一步（2026-09-04：转入 P9-D00 只读盘点与替换发布方案）
 
 > **执行口径：**线上 `https://iicili.cyou/` 当前只作为受控内部测试站。当前继续做非画布核心产品、权限、数据隔离、质量回归和内测运维；举报、申诉、违规 / 内容审核、监护人功能、正式法律 / 合规文本和正式公开上线均按用户决策暂缓，不把 `local-mock`、协议准备稿或未接入外部服务宣传为正式能力。
 
-- [ ] **当前唯一执行队列：内测产品与技术收口。**
-  - P0：P8-Q04、P8-Q06、P8-S01、P8-S04、P8-S06 已于 2026-09-04 通过；P8-S05 监控工程基线、ECS timer 与日志轮转已于 2026-09-04 完成；真实飞书 / 电话通知仍属外部运维项，不宣称已接入。
-  - P1：P8-Q01、P8-Q02 已通过；P4-C01、P4-03 已于 2026-09-04 完成；P8-Q07 四角色 UAT 已于 2026-09-04 全部完成。P8-Q05 已使用本机真实 Chrome 152 / Edge 152 完成官网 96/96 与工作台 52/52 回归，并修复共享工作台 390px 横向溢出；Safari 与真实移动设备仍不可用，P8-Q05 继续 `[-]`，不得宣称全浏览器矩阵完成。举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规按用户决策 `[~]` 暂缓。
-  - 所有自动化验收继续使用临时 SQLite；不得读取、复制、迁移或写入旧站真实数据库。
-  - 线上内测部署作为预发布环境继续保留；每次发布前执行独立数据库、备份、健康检查、回滚和浏览器 UAT。
+- [ ] **当前唯一执行队列：P9-D00 旧线上环境只读盘点、备份方案与新平台替换发布方案。**
+  - P0：内测上线代码 / 文档基线与受控发布均已完成；线上当前 release 为 `20260904T113559Z`（commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`），服务健康、入口回归、三角色登录复验通过。
+  - P1：P8-Q01、P8-Q02、P4-C01、P4-03（含账务列表与十类列表复核）、P8-Q06、P8-S01、P8-S04～P8-S06 已完成；P8-Q07 四角色 UAT 已完成。P8-Q05 已用真实 Chrome 152 / Edge 152 完成官网 12 路由 × 4 视口 96/96 与工作台 52/52 回归并修复 390px 横向溢出；Safari 与真实移动设备仍不可用，保持 `[-]`。举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续 `[~]` 暂缓。
+  - 本阶段先只做 P9-D00 盘点与方案：可读取服务器配置、服务清单、Nginx 配置、发布目录结构和内测运行数据；继续禁止读取、复制、迁移或写入旧站真实数据库。
+  - P9-D00 完成并经用户确认后，才进入备份演练、替换发布方案评审与 P9-D01～P9-D05；正式公开上线前必须恢复 Basic Auth / VPN / IP 白名单之一。
 - [!] **外部 / 用户侧事项。**
   - 备案：用户已确认完成，后续材料与办理由用户自行处理；平台侧不代办、不据此伪造正式合规结论。
   - 真实 AI、OSS / 文件、支付、微信、短信、邮件及客户端能力没有真实账号、合同、密钥或业务规则时不得实现假接入。
@@ -129,12 +129,13 @@
   - 完成记录：新增 `deploy/internal-test/RUNBOOK.md`，明确发布前检查、启停、健康检查、journal 日志、错误上报、备份、回滚、联系人占位和放行闸门；systemd 使用 journald，API 仅监听回环地址。
   - 验证：文档与脚本静态检查、P9-I01/I04/I05 验收通过；线上 systemd / Nginx / health 检查已通过；未承诺公开 SLA，不接收外部真实业务。
 
-当前 P9 内测上线代码 / 文档基线与真实服务器受控发布均已完成：`iicili.cyou` 当前运行 release `20260904T035620Z`；API 仅监听 `127.0.0.1:8788`，使用独立测试 SQLite；线上继续保持 HTTPS、`noindex / nofollow / noarchive`、内测标识和可回滚发布能力。Basic Auth 已于 2026-09-04 按用户明确授权解除；正式公开前必须恢复访问控制。
+当前 P9 内测上线代码 / 文档基线与真实服务器受控发布均已完成：`iicili.cyou` 当前运行 release `20260904T113559Z`，来源 commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`；API 仅监听 `127.0.0.1:8788`，使用独立测试 SQLite；线上继续保持 HTTPS、`noindex / nofollow / noarchive`、内测标识和可回滚发布能力。Basic Auth 已于 2026-09-0
 - 线上发布确认（2026-09-04）：从已推送 commit `3d9c0f6e0e358aa688151f96576beed7bf7797fa` 在 ECS 内测环境构建 release `20260904T035620Z`，元信息为 Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`；发布前完成独立测试数据库备份 `/srv/ai-kids-platform/internal-test/backups/20260904T035559Z/`，原子切换 `current`，重启 `learning-platform-internal-test`，本机 `/health` 返回 `status=ok`，Nginx 配置检查与 reload 成功。
 - 线上三端入口路由修复（2026-09-04）：用户使用正确链接访问 `/admin/`、`/org/`、`/student/` 时全部回落官网，真实 Chrome 复测确认三者均加载官网产物 `assets/index-BeV1DcaJ.js` / `assets/index-6IYHldkb.css`。服务器诊断发现 `current` 指向 `20260904T035620Z` 且四端 `index.html` 均存在，但三个专用 location 内的 `rewrite ^/(admin|org|student)/(.*)$ /$1 break;` 使 `try_files` fallback 最终解析回官网 root。已备份原配置到 `/etc/nginx/backups/iicili.cyou.before-spa-route-fix.20260904T110906Z`，删除三段 rewrite 并将 root 提升为 `/srv/ai-kids-platform/internal-test/current/apps`，`nginx -t` 与 reload 成功。公网回归 4/4：官网、平台管理、机构教务、学生创作分别加载对应端产物，安全头 `noindex, nofollow, noarchive` 与 `X-Internal-Test: true` 均通过；`root/admin123`、`org-admin/org123`、`student-2/study123` 实际登录均进入各自 dashboard，无浏览器控制台错误。新增 `scripts/verify-production-entrypoints.mjs`，后续验收必须检查标题、登录文案、资源前缀和安全头，不得仅以 HTTP 200 作为入口通过标准。
 - 线上只读复核（2026-09-04）：`/`、`/marketplace`、`/courses`、`/org/`、`/works`、`/handbook`、`/compare`、`/demo`、`/terms`、`/privacy`、`/minors` 均正常渲染；内测标识、`noindex, nofollow, noarchive` 与动态 canonical 均通过，官网控制台错误 0；未读取、复制、迁移或写入真实业务数据库。
 - 内测滚动发布（2026-09-04）：线上 `current` 已切换到 release `20260904T113559Z`，来源 commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`，Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`。本次修复低余额扫描误用 `ba.balance` 导致的每分钟 SQLite 错误、服务 SIGTERM 不退出导致 systemd 90 秒 SIGKILL、发布脚本健康检查无重试三项问题。发布前备份 `/srv/ai-kids-platform/internal-test/backups/20260904T113647Z/platform.db`；切换后 `/health=ok`、入口回归 4/4、三角色登录 `/api/me` 全部通过；新进程日志未再出现 `no such column: ba.balance`，真实 release 布局 SIGTERM 9ms 优雅退出，systemd 重启 246ms 恢复健康。首次切换曾因旧进程退出缺陷触发自动回滚，修复后重新发布成功。
 
+- 线上稳定性复查（2026-09-04 19:56 CST）：`learning-platform-internal-test` active / enabled，当前进程 19:38:42 启动，`NRestarts=0`；`current -> releases/20260904T113559Z`；本机 `/health` 返回 `status=ok`。按当前进程启动时间过滤日志，未出现 `REMINDER SCAN ERROR`、`ba.balance`、`API INTERNAL ERROR`、通知错误、未捕获异常、FATAL 或 SIGKILL；近 2 小时内可见的同类错误均来自修复前旧进程。8787 / 8788 均仅监听 `127.0.0.1`，Nginx 配置检查通过。
 ### 1.2 已完成事项与外部待决事项
 
 - [x] **P5-M01 课程广场。** ✅ 2026-09-03
@@ -1180,15 +1181,15 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - 验证：`p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite 验证举报、重复举报拒绝、管理员处理与下架后不可见，32/32 pass；未修改 `packages/canvas`，未触碰真实业务数据库。
     - 用户决策：举报、申诉、违规 / 内容审核、平台超管治理工作台和完整记录保留策略暂不做；现有基础代码保留，不继续扩展，也不作为当前内测承诺。
 
-### 8.4 2026-09-04 重新梳理后的后续顺序
+### 8.4 2026-09-04 重新梳理后的后续顺序（已执行完毕，2026-09-04 收口）
 
-1. **P1：内测技术收口**
-   - P8-Q05：在当前可用的 Codex Chromium 中保留 390 / 414 / 768 视口回归证据；独立 Chrome / Edge / Safari 或真机可用后再补测。
-   - P4-C01：补齐服务端 RBAC、资源归属和跨租户拒绝覆盖。
-   - P4-01：统一仍在产品范围内的状态机、枚举和错误码。
-   - P4-03：统一管理端筛选、分页、排序、空态和导出规则。
-2. **P2：内测 UAT 与运行维护**
-   - 继续按平台、机构管理员、教师、学生、官网访客角色做内测回归；只修复真实发现的 P0 / P1 缺陷。
+1. **P1：正式上线准备（当前队列 P9-D00，仅盘点与方案）**
+   - P9-D00：先完成旧线上环境登录资产、服务、Nginx、发布目录、备份现状与回滚能力的只读盘点，以及新平台替换发布方案；不读取、复制、迁移或写入旧站真实数据库。
+   - P9-D01～P9-D05：在 P9-D00 方案经用户确认后，再依次确定生产架构、环境隔离、CI/CD、密钥发布机制与反向代理 / HTTPS / 域名 / CORS / 安全头。
+   - P8-Q05：Chrome / Edge 与 390 / 414 / 768 视口证据已完成；Safari 与真实移动设备继续保留未完成边界。
+   - P4-C01 / P4-01 / P4-03：均已于 2026-09-04 完成，账务列表与十类列表复核见 8.11、8.12。
+   - P8-Q05：Chrome / Edge 与 390 / 414 / 768 视口证据已完成；Safari 与真实移动设备继续保留未完成边界。
+   - P9-D00：P4 / P8 内测质量收口已完成，当前转入旧线上环境只读盘点与替换发布方案。
    - 保持独立测试数据库、noindex、内测标识、备份和可回滚；正式公开前重新建立访问控制。
 3. **暂缓：用户已明确不做的范围**
    - P5-W08 正式法律文本与法务确认。
@@ -1208,7 +1209,7 @@ P9-I01～P9-I06 是当前阶段的发布闸门。完成后可以进行**受控�
 
 ### 9.2 正式公开上线：环境与交付链路
 
-- [ ] **P9-D00 旧线上环境盘点、备份与新平台替换发布方案**
+- [~] **P9-D00 旧线上环境盘点、备份与新平台替换发布方案（盘点与方案已完成，备份 / 替换等待用户确认）**
   - 优先级：P0
   - 已知目标环境：`iicili.cyou`（公网 IP：`39.106.183.200`）；现有前端目录 `/opt/learning-platform/dist`；后端服务 `learning-platform`；旧后端仅监听 `127.0.0.1:8787`；新内测服务使用 `127.0.0.1:8788`；新内测 Nginx 将 `/api/` 代理到 `127.0.0.1:8788`，旧站保留可回滚。
   - 用户授权：旧站内容可在正式替换时整体清理，按新平台方案部署；**该授权不免除备份、回滚与验证要求**。
@@ -1222,7 +1223,7 @@ P9-I01～P9-I06 是当前阶段的发布闸门。完成后可以进行**受控�
     - [ ] 防火墙 / 云安全组只允许 `80/TCP`、`443/TCP` 对公网访问，`8788/TCP` 仅绑定回环地址且没有公网放行规则；旧 `8787` 不得被新配置覆盖；
     - [ ] 发布可回滚到备份版本，且回滚演练成功；
     - [ ] 已记录发布窗口、版本号、执行人、验证结果与回滚命令。
-  - 完成记录：尚未开始；不可直接删除旧站或覆盖 `dist`，必须先完成备份和发布演练。
+  - 完成记录（2026-09-04）：已完成只读盘点与方案，证据 `evidence/p9-d00-20260904/readonly-inventory-redacted.txt`，脚本 `scripts/p9-d00-readonly-inventory.sh`，方案 `docs/p9/P9-D00-readonly-inventory-plan.md`。确认：公网仅 Nginx 监听 80/443，8787 / 8788 均仅回环；当前 Nginx 已指向内测新平台；旧服务以 root 运行且目录权限 0777 / 文件 0666；旧 SQLite 仅 4096 字节且最后修改 2026-09-01，不能据此判定无业务数据；内测已有 3 份发布前备份。未读取、复制、迁移或写入任何数据库文件内容，未读取 `.env` 内容。下一步等待用户确认后执行旧站完整备份与替换演练。
 - [ ] **P9-D01 确定生产部署架构**
   - 优先级：P0
   - 范围：服务器 / 容器、操作系统、进程管理、数据库形态、对象存储、CDN、网络、WAF、区域和成本。
@@ -1507,7 +1508,7 @@ node .\p3-api-integration.mjs
 - [x] 机构列表批次已完成：机构名称 / ID 搜索、状态筛选、创建时间 / 名称 / 合同到期排序、分页元数据、每页数量切换与空态。
 - [x] 课程列表批次已完成：课包名称 / ID 搜索、状态 / 可见范围筛选、手动顺序 / 创建时间 / 更新时间 / 名称排序、分页元数据、每页数量切换与空态。
 - [x] 平台管理员列表批次已完成：登录名 / 姓名搜索、状态筛选、创建时间 / 姓名 / 状态排序、分页元数据、每页数量切换与空态。
-- [ ] 尚未覆盖的管理端列表继续作为后续小批次：通知 / 物料、账务等页面的统一分页与导出；不得将历史通知 / 物料 P4-03 完成记录改写为本批次。
+- [x] 后续状态：通知 / 物料、账务等管理端列表已由 8.10、8.11、8.12 完成并复核；本行不作为新的待办。
 
 ### 8.7 P4-03-LIST 机构列表批次（2026-09-04）
 
@@ -1516,7 +1517,7 @@ node .\p3-api-integration.mjs
 - [x] 平台端 `/organizations` 接入关键词、状态、排序、每页数量、分页摘要和空态；筛选 / 排序 / 每页数量变化会回到第 1 页。
 - [x] `p4-03-list-api-check.mjs` 临时 SQLite 验收由 8 项扩展至 **11 pass / 0 fail**，新增机构分页、状态筛选和非法排序回退检查。
 - [x] Node 24 下 admin 生产构建通过，`git diff --check` 通过；未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
-- [ ] 后续小批次：课程列表、平台管理员列表、通知 / 物料列表、账务列表；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规仍保持 `[~]` 暂缓。
+- [x] 后续状态：课程、平台管理员、通知 / 物料、账务列表均已由 8.8～8.12 完成并复核；本行不作为新的待办。
 
 ### 8.8 P4-03-LIST 课程列表批次（2026-09-04）
 
@@ -1525,7 +1526,7 @@ node .\p3-api-integration.mjs
 - [x] 平台端 `/courses` 接入关键词、状态、可见范围、排序、每页数量、分页摘要和空态；筛选 / 排序 / 每页数量变化会回到第 1 页。
 - [x] `p4-03-list-api-check.mjs` 临时 SQLite 验收扩展至 **14 pass / 0 fail**，新增课程分页、状态 / 可见范围筛选和非法排序回退检查。
 - [x] Node 24 下 admin 生产构建通过，`git diff --check` 通过；未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
-- [ ] 后续小批次：平台管理员列表、通知 / 物料列表、账务列表；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规仍保持 `[~]` 暂缓。
+- [x] 后续状态：平台管理员、通知 / 物料、账务列表均已由 8.9～8.12 完成并复核；本行不作为新的待办。
 
 ### 8.9 P4-03-LIST 平台管理员列表批次（2026-09-04）
 
@@ -1534,7 +1535,7 @@ node .\p3-api-integration.mjs
 - [x] 平台端 `/admins` 接入排序、每页数量、分页摘要和空态；关键词 / 状态 / 排序 / 每页数量变化会回到第 1 页。
 - [x] `p4-03-list-api-check.mjs` 临时 SQLite 验收扩展至 **17 pass / 0 fail**，新增平台管理员分页、状态筛选和非法排序回退检查。
 - [x] Node 24 下 admin 生产构建通过，`git diff --check` 通过；未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
-- [ ] 后续小批次：通知 / 物料列表、账务列表；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规仍保持 `[~]` 暂缓。
+- [x] 后续状态：通知 / 物料、账务列表均已由 8.10～8.12 完成并复核；本行不作为新的待办。
 
 ### 8.10 P4-03-LIST 通知 / 宣传物料列表批次（2026-09-04）
 
@@ -1543,7 +1544,7 @@ node .\p3-api-integration.mjs
 - [x] 平台端站内通知、宣传物料列表接入筛选、排序、每页数量、`ListResultSummary`、`Pagination` 和筛选空态；筛选 / 排序 / 每页数量变化回到第 1 页。
 - [x] `p4-03-list-api-check.mjs` 使用临时 SQLite 验收扩展至 **23 pass / 0 fail**，新增通知 / 物料分页、状态筛选和非法排序回退检查。
 - [x] Node 24 下四端生产构建通过，`git diff --check` 通过；未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
-- [ ] 下一批处理账务列表的明细分页、筛选、排序和导出边界；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
+- [x] 后续状态：账务列表已由 8.11 完成，十类列表整体验收已由 8.12 完成；本行不作为新的待办。
 
 ### 8.11 P4-03-LIST 账务列表批次（2026-09-04）
 
@@ -1554,7 +1555,7 @@ node .\p3-api-integration.mjs
 - [x] 导出边界：平台用量明细本批不新增 CSV；既有机构积分对账 CSV 仍按机构全量流水导出，不使用列表分页参数，避免“当前页=导出范围”的误解。
 - [x] 修复上一批通知 / 物料中文替换误伤前端标识符的回归：恢复 `AdminMaterials`、`materials`、`organizations`、`Status`、`resourceConfigured` 和 `admin/materials` 请求路径；中文界面文案保留。
 - [x] 验收：`p4-03-list-api-check.mjs` 临时 SQLite **29 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；admin / org / student / website 四端生产构建与 `git diff --check` 通过；未修改 `packages/canvas`，无数据库结构变更。
-- [ ] 下一步：完成 P4-03-LIST 十类列表整体验收复核，再按平台超管、机构管理员、教师、学生、官网访客顺序做角色 UAT；P8-Q05 仍保持进行中，未虚构独立浏览器 / 真机结果；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]`。
+- [x] 后续状态：十类列表整体验收已完成（8.12），五类角色 UAT 已完成（8.13～8.17）；本行不作为新的待办。
 
 ### 8.12 P4-03-LIST 十类列表整体验收复核（2026-09-04）
 
@@ -1576,7 +1577,7 @@ node .\p3-api-integration.mjs
 - [x] 回归与复验：`p4-03-list-api-check.mjs` 临时 SQLite **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；`p8-q04-e2e.mjs` **54 pass / 0 fail**；`pnpm build` 四端生产构建通过；`git diff --check` 通过。修复后重启隔离 UAT 环境并复核 17 个平台页面，无失败文本，当前环境未新增浏览器错误。
 - [x] 登出与会话失效：通过隔离 API 使用 `root` 登录后读取 `/api/me` 返回 200；`POST /api/auth/logout` 返回 200 且 `loggedOut=true`；同一 Cookie 再读 `/api/me` 返回 401 `SESSION_SUPERSEDED`，证明服务端旧会话立即失效。前端 `logout()` 同时调用服务端注销、清理本地会话并跳转登录页。
 - [x] 证据：`evidence/p8-q07/admin-notifications-fixed.jpg`（修复后真实浏览器截图）、`evidence/p8-q07/admin-super-admin-uat.txt`（环境、页面矩阵、根因、回归与登出记录）。证据为本仓库持久路径，可复核。
-- [ ] 下一步：按 P8-Q07 继续机构管理员、教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
+- [x] 后续状态：机构管理员、教师、学生、官网访客 UAT 已由 8.14～8.17 完成；本行不作为新的待办。
 
 ### 8.17 P8-Q07 角色 UAT：官网访客阶段（2026-09-04）
 
@@ -1586,7 +1587,7 @@ node .\p3-api-integration.mjs
 - [x] 公开服务与线索：/api/public/legal、downloads、works、marketplace、marketplace/:id 全部 200；预约演示表单提交成功并生成线索记录，法律版本为 2026.09.03 准备稿状态。
 - [x] 未登录保护：/api/me、平台机构列表、机构用户/套餐、学生看板、AI 中心全部返回 401 SESSION_INVALID，访客不能读取任何工作台数据。
 - [x] 验证与证据：官网访客专项 18/18 通过，无新增 P0/P1。证据见 evidence/p8-q07/visitor-uat.txt 与 visitor-*.jpg。全程使用隔离临时 SQLite，未修改 packages/canvas，未触碰默认数据库或真实线上数据库。
-- [ ] 下一步：P8-Q07 四角色 UAT 已完成，转入 P8-Q05 可用浏览器回归边界记录与内测缺陷收口；不虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规与正式公开上线继续 [~] 暂缓。
+- [x] 后续状态：P8-Q07 四角色 UAT 已完成；P8-Q05 Chrome / Edge 已完成（8.18），Safari / 真机边界保留；下一步转入 P9-D00 只读盘点与替换发布方案。
 
 ### 8.16 P8-Q07 角色 UAT：学生阶段（2026-09-04）
 
@@ -1597,7 +1598,7 @@ node .\p3-api-integration.mjs
 - [x] 机构与管理端边界：学生调用 /api/org/users、/api/org/billing/packages、/api/org/billing/enrollments、/api/org/works、/api/org/classes、/api/admin/organizations 全部 403；访问 /admin/dashboard 与 /org/dashboard 均只显示对应登录页，不渲染平台或机构数据。
 - [x] 登出与旧 Cookie 失效：登出前 /api/me=200；POST /api/auth/logout=200 后同 Cookie /api/me=401 SESSION_INVALID，浏览器回到学生登录页。
 - [x] 验证与证据：学生专项 26/26 通过，未发现需要修复的 P0/P1；RBAC 27/27、列表 50/50、P3 集成 52/52、E2E 54/54 与四端生产构建通过。证据见 evidence/p8-q07/student-uat.txt、student-1-dashboard.jpg、student-1-class-blocked.jpg、student-1-cross-project-boundary.jpg、student-2-*.jpg。全程使用隔离临时 SQLite，未修改 packages/canvas，未触碰默认数据库或真实线上数据库。
-- [ ] 下一步：继续官网访客角色 UAT；P8-Q05 仍保持进行中，不虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 [~] 暂缓。
+- [x] 后续状态：官网访客 UAT 已由 8.17 完成；本行不作为新的待办。
 
 ### 8.15 P8-Q07 角色 UAT：教师阶段（2026-09-04）
 
@@ -1609,7 +1610,7 @@ node .\p3-api-integration.mjs
 - [x] 登出安全：登出前 `/api/me=200`，`POST /api/auth/logout=200`，同一 Cookie 登出后 `/api/me=401 SESSION_INVALID`，前端回到登录页。
 - [x] 回归：教师角色专项 **19/19 通过**；`p4-c01-rbac-ownership.mjs` **27/27**；`p4-03-list-api-check.mjs` **50/50**；`p8-q03-api-integration.mjs` **52/52**；`p8-q04-e2e.mjs` **54/54**；`pnpm build` 四端通过；四端生产 JS `React.createElement=0`；`git diff --check` 通过。机构管理员套餐 / 用量接口复验 200。
 - [x] 证据：`evidence/p8-q07/teacher-uat.txt`、`teacher-*.jpg`、`teacher-enrollment-detail.txt`、`teacher-usage-permission.txt`、`org-packages-after-teacher-guard.jpg`。UAT 仅使用临时 SQLite 与隔离端口，不触碰默认数据库、真实线上数据库或生产站点。
-- [x] 下一步已进入学生 UAT（见上节）；官网访客仍待执行；P8-Q05 仍保持进行中，不虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 `[~]` 暂缓。
+- [x] 后续状态：学生 UAT 已由 8.16 完成，官网访客 UAT 已由 8.17 完成；本行不作为新的待办。
 ### 8.14 P8-Q07 角色 UAT：机构管理员阶段（2026-09-04）
 
 - [x] 机构端异常路径：未登录访问 `/org/dashboard` 仅显示机构登录页；`org-admin` 错误密码返回“登录名或密码错误”；`root / admin123` 与 `student-1 / study123` 登录机构端均被拒绝并提示“该账号没有机构教务权限”；`org-admin / org123` 正常进入机构总览。
@@ -1620,9 +1621,9 @@ node .\p3-api-integration.mjs
 - [x] 越权与登出：`org-admin` 访问 `/admin/dashboard` 显示“当前会话没有平台管理权限”；同 Cookie 调平台管理 API 返回 403 `FORBIDDEN`。`student-1` 调 `/api/org/billing/account` 返回 403。`org-admin` 登出前 `/api/me=200`，`POST /api/auth/logout=200`，同 Cookie 登出后 `/api/me=401 SESSION_INVALID`，前端回到登录页。浏览器内 Cookie API 验证均复用真实 `platform_token`。
 - [x] 回归：`p4-03-list-api-check.mjs` **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；`p8-q04-e2e.mjs` **54 pass / 0 fail**；四端生产构建通过；`git diff --check` 通过。UAT 继续使用临时 SQLite 与 `60027/60028` 隔离进程，未读取、复制或写入真实线上数据库，未触碰生产站点。
 - [x] 证据：`evidence/p8-q07/org-login-react-fixed.jpg`、`student-login-react-fixed.jpg`、`react-runtime-fix.txt`、`org-*.jpg`（16 页截图）、`admin-org-admin-routes.txt`、`admin-org-admin-authz-logout.txt`。
-- [ ] 下一步：按 P8-Q07 继续教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
+- [x] 后续状态：教师、学生、官网访客 UAT 已由 8.15～8.17 完成；本行不作为新的待办。
 
-### 8.17 P8-Q05 独立 Chrome / Edge 浏览器与移动布局回归（2026-09-04）
+### 8.18 P8-Q05 独立 Chrome / Edge 浏览器与移动布局回归（2026-09-04）
 
 - [x] 独立浏览器真实可用：本机 Chrome `152.0.7977.64`、Edge `152.0.4191.53`，均使用真实可执行文件运行；未用同一个 Codex Chromium 伪装双浏览器结果。
 - [x] 官网矩阵：12 条路由（`/`、`/marketplace`、`/courses`、`/org`、`/works`、`/handbook`、`/compare`、`/download`、`/demo`、`/terms`、`/privacy`、`/minors`）× 1440/390/414/768 视口 × 2 浏览器，共 **96/96 通过**；页面非空、关键词可见、控制台错误 0、无失败文本、无横向溢出、noindex 保持。
