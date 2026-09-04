@@ -493,7 +493,8 @@ function PlatformUsers({ api }) {
   const [filters, setFilters] = useState({ role: '', orgId: '', search: '' });
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
-  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); return params; }, [filters, page, limit]);
+  const [sort, setSort] = useState('created');
+  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
   const users = useData(() => api.get(`admin/platform-users?${query.toString()}`), [api, query]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -512,6 +513,8 @@ function PlatformUsers({ api }) {
         <label>角色<select value={filters.role} onChange={(e) => { setFilters({ ...filters, role: e.target.value }); setPage(1); }}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>机构<select value={filters.orgId} onChange={(e) => { setFilters({ ...filters, orgId: e.target.value }); setPage(1); }}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
         <label>关键词<input value={filters.search} placeholder="登录名 / 姓名 / 手机号" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label>
+        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="name">姓名</option><option value="status">状态</option></select></label>
+        <label>每页数量<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value={10}>10 条/页</option><option value={20}>20 条/页</option><option value={50}>50 条/页</option></select></label>
       </div>
       {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
     </Panel>
@@ -523,7 +526,7 @@ function PlatformUsers({ api }) {
         <input placeholder="新密码（≥6位）" value={passwordInput[item.id] || ''} onChange={(e) => setPasswordInput({ ...passwordInput, [item.id]: e.target.value })} />
         <button className="text-button" disabled={busy || (passwordInput[item.id] || '').length < 6} onClick={() => run(item, 'password', { password: passwordInput[item.id] }, `已重置 ${item.displayName} 的密码，该账号全部会话已失效。`)}>重置密码</button>
         {item.phone ? <button className="text-button" disabled={busy} onClick={() => run(item, 'phone', { phone: '' }, `已解绑 ${item.displayName} 的手机号。`, `确认解绑「${item.displayName}」的手机号 ${item.phone}？`)}>解绑手机</button> : null}
-      </div></td></tr>)}</tbody></table></div><Pagination page={users.data.page} totalPages={users.data.totalPages} onChange={setPage} disabled={users.loading} /></> : <Empty title="没有符合条件的用户" />}
+      </div></td></tr>)}</tbody></table></div><Pagination page={users.data.page} totalPages={users.data.totalPages} onChange={setPage} disabled={users.loading} /></> : <Empty title="没有符合条件的用户" body="可以调整角色、机构、关键词、排序或每页数量。" />}
     </Panel>
   </>;
 }
@@ -683,8 +686,8 @@ function PlatformAudit({ api }) {
         </Panel>
       </div>
     </> : null}
-    <Panel title={`审计记录（${list.data?.total ?? 0} 条匹配）`}>
-      {list.loading || actions.loading ? <Loading label="正在读取审计记录…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : list.data?.items.length ? <><div className="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>角色</th><th>机构</th><th>动作</th><th>目标</th><th>请求路径</th><th>IP</th><th>变更前</th><th>变更后</th></tr></thead><tbody>{list.data.items.map((item) => <tr key={item.id}>
+    <Panel title="审计记录">
+      {list.loading || actions.loading ? <Loading label="正在读取审计记录…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : list.data?.items.length ? <><ListResultSummary total={list.data.total} page={list.data.page} totalPages={list.data.totalPages} label="条记录" /><div className="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>角色</th><th>机构</th><th>动作</th><th>目标</th><th>请求路径</th><th>IP</th><th>变更前</th><th>变更后</th></tr></thead><tbody>{list.data.items.map((item) => <tr key={item.id}>
         <td>{formatDate(item.createdAt)}</td>
         <td>{item.actorName}</td>
         <td>{item.actorRole || '—'}</td>
@@ -695,7 +698,7 @@ function PlatformAudit({ api }) {
         <td>{item.ip || '—'}</td>
         <td><code>{item.before ? JSON.stringify(item.before) : '{}'}</code></td>
         <td><code>{item.after ? JSON.stringify(item.after) : '{}'}</code></td>
-      </tr>)}</tbody></table></div><Pagination page={list.data.page} totalPages={list.data.totalPages} onChange={setPage} disabled={list.loading} /></> : <Empty title="当前筛选条件下无审计记录" />}
+      </tr>)}</tbody></table></div><Pagination page={list.data.page} totalPages={list.data.totalPages} onChange={setPage} disabled={list.loading} /></> : <Empty title="当前筛选条件下无审计记录" body="可以调整动作、机构、操作者、目标或时间范围后重试。" />}
     </Panel>
   </>;
 }
@@ -1415,7 +1418,8 @@ function CourseMarketplace({ api }) {
     setSelectedCourse(course);
   }
 
-  const totalPages = courses.data?.total ? Math.ceil(courses.data.total / limit) : 1;
+  const totalPages = courses.data?.totalPages || 1;
+  const currentPage = courses.data?.page || page;
 
   return <>
     <PageHeader eyebrow="内容运营" title="课程广场管理" description="审核、上架、下架课程到课程广场，设置奖励积分。" actions={<button className="secondary-button" onClick={() => { courses.refresh(); }}>刷新</button>} />
@@ -1435,9 +1439,10 @@ function CourseMarketplace({ api }) {
       {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
     </Panel>
 
-    <Panel title={`课程列表（${courses.data?.total ?? 0} 门）`}>
+    <Panel title="课程列表">
       {courses.loading ? <Loading label="正在读取课程列表…" /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data?.items?.length ? (
         <>
+          <ListResultSummary total={courses.data.total} page={courses.data.page} totalPages={courses.data.totalPages} label="门课程" />
           <div className="table-wrap"><table><thead><tr>
             <th>封面</th>
             <th>课程名称</th>
@@ -1465,13 +1470,9 @@ function CourseMarketplace({ api }) {
                 <button className="text-button" onClick={() => openRewardModal(course)}>设置积分</button>
               </div></td>
             </tr>)}</tbody></table></div>
-          <div className="row-actions" style={{ marginTop: 12, gap: 8 }}>
-            <button className="secondary-button" disabled={page <= 1 || courses.loading} onClick={() => setPage(page - 1)}>上一页</button>
-            <span className="muted">第 {page} / {totalPages} 页（共 {courses.data?.total ?? 0} 条）</span>
-            <button className="secondary-button" disabled={page >= totalPages || courses.loading} onClick={() => setPage(page + 1)}>下一页</button>
-          </div>
+          <Pagination page={currentPage} totalPages={totalPages} onChange={setPage} disabled={courses.loading} />
         </>
-      ) : <Empty title="暂无符合条件的课程" />}
+      ) : <Empty title="暂无符合条件的课程" body="可以调整上架状态、课程名称或每页数量后重试。" />}
     </Panel>
 
     {showRewardModal ? (

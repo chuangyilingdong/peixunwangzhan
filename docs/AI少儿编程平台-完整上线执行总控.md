@@ -529,11 +529,11 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 优先级：P0
   - 实现范围：建立 schema 版本、迁移脚本、临时数据库测试方法、seed 数据说明和备份前置检查。
   - 验收：新环境可以从零初始化；升级旧库可以迁移；测试不污染主数据库；迁移失败可回滚或从备份恢复。
-- [ ] **P4-03-LIST 管理端列表交互规范收口**
+- [x] **P4-03-LIST 管理端列表交互规范收口**
   - 优先级：P1
   - 实现范围：对管理端的列表页定义统一 query 参数、分页元数据、筛选器、排序、空态和 CSV / XLSX 导出策略。
   - 验收：大于一页的数据可稳定浏览；无权限、无数据、网络失败的提示一致；导出权限被后端校验。
-  - 当前批次记录（2026-09-04）：本批命名为 P4-03-LIST，避免覆盖历史“通知与宣传物料”P4-03 完成记录；先收口平台用户、平台作品、操作审计与课程广场的分页 / 筛选 / 白名单排序，举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规仍保持 `[~]`。
+  - 当前批次记录（2026-09-04）：已完成平台用户、平台作品、操作审计、课程广场、机构、课程、平台管理员、通知、宣传物料、账务十类列表整体验收复核；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规仍保持 `[~]`。
 
 ### 4.1 平台超管端：平台经营与内容治理
 
@@ -1549,3 +1549,13 @@ node .\p3-api-integration.mjs
 - [x] 修复上一批通知 / 物料中文替换误伤前端标识符的回归：恢复 `AdminMaterials`、`materials`、`organizations`、`Status`、`resourceConfigured` 和 `admin/materials` 请求路径；中文界面文案保留。
 - [x] 验收：`p4-03-list-api-check.mjs` 临时 SQLite **29 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；admin / org / student / website 四端生产构建与 `git diff --check` 通过；未修改 `packages/canvas`，无数据库结构变更。
 - [ ] 下一步：完成 P4-03-LIST 十类列表整体验收复核，再按平台超管、机构管理员、教师、学生、官网访客顺序做角色 UAT；P8-Q05 仍保持进行中，未虚构独立浏览器 / 真机结果；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]`。
+
+### 8.12 P4-03-LIST 十类列表整体验收复核（2026-09-04）
+
+- [x] 复核矩阵覆盖：平台用户、平台作品、操作审计、课程广场、机构、课程、平台管理员、通知、宣传物料、账务；十类接口均返回 `{ items, total, page, limit, totalPages, sort }`，`totalPages` 使用空集安全的 `Math.max(1, Math.ceil(total / limit))`。
+- [x] 排序与参数安全：可排序列表全部使用白名单映射；审计固定返回 `created`，课程广场固定返回 `status`，未知排序键统一安全回落，不拼接任意 SQL 字段；十类接口 `page=0` 均返回 400，未登录均返回 401。
+- [x] 平台用户补齐 `created` / `name` / `status` 排序白名单、排序控件与每页数量选择；操作审计、课程广场补齐固定排序元数据。
+- [x] 前端一致性收口：操作审计与课程广场接入 `ListResultSummary` 和共享 `Pagination`；课程广场不再手写分页；审计、课程广场与平台用户空态均提示可调整筛选条件；筛选、排序、每页数量变化均回到第 1 页。
+- [x] `p4-03-list-api-check.mjs` 重构为十类列表矩阵式断言，临时 SQLite 验收 **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；四端生产构建与 `git diff --check` 通过。
+- [x] 影响文件：`apps/server/src/routes/adminOrg.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。无数据库结构变更，未触碰真实线上数据库，未修改 `packages/canvas`。
+- [x] P4-03-LIST 主任务完成；下一项进入平台超管、机构管理员、教师、学生、官网访客五类角色 UAT。举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。

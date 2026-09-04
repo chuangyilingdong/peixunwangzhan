@@ -27,62 +27,41 @@ try {
   const loginData = await loginResponse.json();
   const token = loginData.data.token;
   ok('root login', loginResponse.status === 200 && loginData.success === true, loginData);
-  const users = await call('GET', '/admin/platform-users?page=1&limit=2', token);
-  ok('users pagination metadata', users.status === 200 && users.data.success && users.data.data.page === 1 && users.data.data.limit === 2 && Number.isInteger(users.data.data.totalPages), users);
-  const usersInvalid = await call('GET', '/admin/platform-users?page=0&limit=2', token);
-  ok('users invalid page rejected', usersInvalid.status === 400, usersInvalid);
-  const organizations = await call('GET', '/admin/organizations?page=1&limit=1&sort=name', token);
-  ok('organizations pagination and sort', organizations.status === 200 && organizations.data.success && organizations.data.data.page === 1 && organizations.data.data.limit === 1 && organizations.data.data.sort === 'name' && Number.isInteger(organizations.data.data.totalPages), organizations);
-  const organizationsFiltered = await call('GET', '/admin/organizations?page=1&limit=10&status=ACTIVE', token);
-  ok('organizations status filter', organizationsFiltered.status === 200 && organizationsFiltered.data.data.items.every((item) => item.status === 'ACTIVE'), organizationsFiltered);
-  const organizationsFallback = await call('GET', '/admin/organizations?page=1&limit=1&sort=not-a-column', token);
-  ok('organizations unknown sort safely falls back', organizationsFallback.status === 200 && organizationsFallback.data.data.sort === 'created', organizationsFallback);
-  const works = await call('GET', '/admin/works?page=1&limit=2&sort=title', token);
-  ok('works pagination and whitelist sort', works.status === 200 && works.data.data.page === 1 && works.data.data.limit === 2 && works.data.data.sort === 'title', works);
-  const worksFallback = await call('GET', '/admin/works?page=1&limit=2&sort=not-a-column', token);
-  ok('works unknown sort safely falls back', worksFallback.status === 200 && worksFallback.data.data.sort === 'featured', worksFallback);
-  const audit = await call('GET', '/admin/audit-logs?page=1&limit=2', token);
-  ok('audit pagination metadata', audit.status === 200 && audit.data.data.page === 1 && audit.data.data.limit === 2 && audit.data.data.totalPages >= 1, audit);
-  const courses = await call('GET', '/admin/course-series?page=1&limit=1&sort=title', token);
-  ok('courses pagination and sort', courses.status === 200 && courses.data.success && courses.data.data.page === 1 && courses.data.data.limit === 1 && courses.data.data.sort === 'title' && Number.isInteger(courses.data.data.totalPages), courses);
-  const coursesFiltered = await call('GET', '/admin/course-series?page=1&limit=20&status=PUBLISHED&visibility=ALL_ORGS', token);
-  ok('courses status and visibility filters', coursesFiltered.status === 200 && coursesFiltered.data.data.items.every((item) => item.status === 'PUBLISHED' && item.visibility === 'ALL_ORGS'), coursesFiltered);
-  const coursesFallback = await call('GET', '/admin/course-series?page=1&limit=1&sort=not-a-column', token);
-  ok('courses unknown sort safely falls back', coursesFallback.status === 200 && coursesFallback.data.data.sort === 'manual', coursesFallback);
-  const admins = await call('GET', '/admin/platform-admins?page=1&limit=1&sort=name', token);
-  ok('platform admins pagination and sort', admins.status === 200 && admins.data.success && admins.data.data.page === 1 && admins.data.data.limit === 1 && admins.data.data.sort === 'name' && Number.isInteger(admins.data.data.totalPages), admins);
-  const adminsFiltered = await call('GET', '/admin/platform-admins?page=1&limit=20&status=ACTIVE', token);
-  ok('platform admins status filter', adminsFiltered.status === 200 && adminsFiltered.data.data.items.every((item) => item.status === 'ACTIVE'), adminsFiltered);
-  const adminsFallback = await call('GET', '/admin/platform-admins?page=1&limit=1&sort=not-a-column', token);
-  ok('platform admins unknown sort safely falls back', adminsFallback.status === 200 && adminsFallback.data.data.sort === 'created', adminsFallback);
-  const marketplace = await call('GET', '/admin/course-marketplace?marketplaceStatus=NONE&page=1&limit=2', token);
-  ok('marketplace status alias and pagination', marketplace.status === 200 && marketplace.data.data.page === 1 && marketplace.data.data.limit === 2 && 'totalPages' in marketplace.data.data, marketplace);
-  const inbox = await call('GET', '/admin/inbox?page=1&limit=1&sort=title', token);
-  ok('notification list pagination and sort', inbox.status === 200 && inbox.data.success && inbox.data.data.page === 1 && inbox.data.data.limit === 1 && inbox.data.data.sort === 'title' && Number.isInteger(inbox.data.data.totalPages), inbox);
-  const inboxFallback = await call('GET', '/admin/inbox?page=1&limit=1&sort=not-a-column', token);
-  ok('notification unknown sort safely falls back', inboxFallback.status === 200 && inboxFallback.data.data.sort === 'created', inboxFallback);
-  const inboxStatus = await call('GET', '/admin/inbox?page=1&limit=20&status=PUBLISHED', token);
-  ok('notification status filter', inboxStatus.status === 200 && inboxStatus.data.data.items.every((item) => item.status === 'PUBLISHED'), inboxStatus);
-  const materials = await call('GET', '/admin/materials?page=1&limit=1&sort=title', token);
-  ok('materials pagination and sort', materials.status === 200 && materials.data.success && materials.data.data.page === 1 && materials.data.data.limit === 1 && materials.data.data.sort === 'title' && Number.isInteger(materials.data.data.totalPages), materials);
-  const materialsFallback = await call('GET', '/admin/materials?page=1&limit=1&sort=not-a-column', token);
-  ok('materials unknown sort safely falls back', materialsFallback.status === 200 && materialsFallback.data.data.sort === 'created', materialsFallback);
-  const materialsStatus = await call('GET', '/admin/materials?page=1&limit=20&status=ACTIVE', token);
-  ok('materials status filter', materialsStatus.status === 200 && materialsStatus.data.data.items.every((item) => item.status === 'ACTIVE'), materialsStatus);
-  const billing = await call('GET', '/admin/billing/usage-records?page=1&limit=1&sort=credits', token);
-  ok('billing pagination and sort', billing.status === 200 && billing.data.success && billing.data.data.page === 1 && billing.data.data.limit === 1 && billing.data.data.sort === 'credits' && Number.isInteger(billing.data.data.totalPages), billing);
-  const billingFallback = await call('GET', '/admin/billing/usage-records?page=1&limit=1&sort=not-a-column', token);
-  ok('billing unknown sort safely falls back', billingFallback.status === 200 && billingFallback.data.data.sort === 'created', billingFallback);
-  const billingStatus = await call('GET', '/admin/billing/usage-records?page=1&limit=20&status=SUCCESS', token);
-  ok('billing status filter', billingStatus.status === 200 && billingStatus.data.data.items.every((item) => item.status === 'SUCCESS'), billingStatus);
-  const billingDate = await call('GET', '/admin/billing/usage-records?page=1&limit=20&startDate=2020-01-01&endDate=2099-12-31', token);
-  ok('billing date range filter', billingDate.status === 200 && Number.isInteger(billingDate.data.data.total), billingDate);
+
+  const listCases = [
+    { name: '平台用户', path: '/admin/platform-users', defaultSort: 'created', sortable: 'name', label: '用户' },
+    { name: '平台作品', path: '/admin/works', defaultSort: 'featured', sortable: 'title', label: '作品' },
+    { name: '操作审计', path: '/admin/audit-logs', defaultSort: 'created', label: '审计记录' },
+    { name: '课程广场', path: '/admin/course-marketplace', defaultSort: 'status', label: '课程' },
+    { name: '机构', path: '/admin/organizations', defaultSort: 'created', sortable: 'name', filter: 'status=ACTIVE&', filterCheck: (item) => item.status === 'ACTIVE', label: '机构' },
+    { name: '课程', path: '/admin/course-series', defaultSort: 'manual', sortable: 'title', filter: 'status=PUBLISHED&visibility=ALL_ORGS&', filterCheck: (item) => item.status === 'PUBLISHED' && item.visibility === 'ALL_ORGS', label: '课包' },
+    { name: '平台管理员', path: '/admin/platform-admins', defaultSort: 'created', sortable: 'name', filter: 'status=ACTIVE&', filterCheck: (item) => item.status === 'ACTIVE', label: '管理员' },
+    { name: '通知', path: '/admin/inbox', defaultSort: 'created', sortable: 'title', filter: 'status=PUBLISHED&', filterCheck: (item) => item.status === 'PUBLISHED', label: '通知' },
+    { name: '宣传物料', path: '/admin/materials', defaultSort: 'created', sortable: 'title', filter: 'status=ACTIVE&', filterCheck: (item) => item.status === 'ACTIVE', label: '物料' },
+    { name: '账务', path: '/admin/billing/usage-records', defaultSort: 'created', sortable: 'credits', filter: 'status=SUCCESS&', filterCheck: (item) => item.status === 'SUCCESS', label: '记录' },
+  ];
+
+  for (const item of listCases) {
+    const normal = await call('GET', `${item.path}?page=1&limit=2${item.sortable ? `&sort=${item.sortable}` : ''}`, token);
+    ok(`${item.name}列表分页协议`, normal.status === 200 && normal.data.success && Array.isArray(normal.data.data.items) && Number.isInteger(normal.data.data.total) && normal.data.data.total >= normal.data.data.items.length && normal.data.data.page === 1 && normal.data.data.limit === 2 && Number.isInteger(normal.data.data.totalPages) && normal.data.data.totalPages === Math.max(1, Math.ceil(normal.data.data.total / 2)) && normal.data.data.sort === (item.sortable || item.defaultSort), normal);
+    const fallback = await call('GET', `${item.path}?page=1&limit=2&sort=not-a-column`, token);
+    ok(`${item.name}列表未知排序安全回落`, fallback.status === 200 && fallback.data.data.sort === item.defaultSort, fallback);
+    const invalidPage = await call('GET', `${item.path}?page=0&limit=2`, token);
+    ok(`${item.name}列表非法页码拒绝`, invalidPage.status === 400, invalidPage);
+    const unauthorized = await call('GET', `${item.path}?page=1&limit=2`);
+    ok(`${item.name}列表未登录拒绝`, unauthorized.status === 401, unauthorized);
+    if (item.filter) {
+      const filtered = await call('GET', `${item.path}?${item.filter}page=1&limit=20`, token);
+      ok(`${item.name}列表状态筛选`, filtered.status === 200 && filtered.data.data.items.every(item.filterCheck), filtered);
+    }
+  }
+
   const billingInvalidDate = await call('GET', '/admin/billing/usage-records?startDate=01-01-2020', token);
-  ok('billing invalid start date rejected', billingInvalidDate.status === 400, billingInvalidDate);
-  const billingInvalidPage = await call('GET', '/admin/billing/usage-records?page=0', token);
-  ok('billing invalid page rejected', billingInvalidPage.status === 400, billingInvalidPage);
-  const unauthenticated = await call('GET', '/admin/platform-users?page=1&limit=2');
-  ok('unauthenticated denied', unauthenticated.status === 401, unauthenticated);
+  ok('账务列表非法开始日期拒绝', billingInvalidDate.status === 400, billingInvalidDate);
+  const billingDateRange = await call('GET', '/admin/billing/usage-records?startDate=2020-01-01&endDate=2099-12-31&page=1&limit=20', token);
+  ok('账务列表日期范围筛选', billingDateRange.status === 200 && Number.isInteger(billingDateRange.data.data.total), billingDateRange);
+  const marketplaceStatusAlias = await call('GET', '/admin/course-marketplace?marketplaceStatus=NONE&page=1&limit=2', token);
+  ok('课程广场状态参数别名', marketplaceStatusAlias.status === 200 && marketplaceStatusAlias.data.data.sort === 'status', marketplaceStatusAlias);
   console.log(`ALL PASS ${passed}`);
 } finally {
   child.kill();

@@ -1001,9 +1001,11 @@ export async function handleAdmin(ctx) {
     const q = auditQuery(ctx);
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    // 审计列表固定按时间倒序；返回 sort 元数据保持十类列表协议一致。
+    const sort = 'created';
     const total = Number(row('SELECT COUNT(*) n FROM audit_logs WHERE ' + q.where.replace(/audit\./g, ''), q.params)?.n || 0);
     const items = rows(auditListQuery(q.where) + ' LIMIT ? OFFSET ?', [...q.params, limit, (page - 1) * limit]).map(auditRow);
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/audit-logs/summary' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -1484,6 +1486,8 @@ export async function handleAdmin(ctx) {
     const search = String(ctx.search.get('search') || '').trim();
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    // 课程广场按审核状态优先级排序；返回 sort 元数据保持十类列表协议一致。
+    const sort = 'status';
     const offset = (page - 1) * limit;
     const wheres = ["series.status='PUBLISHED'"];
     const params = [];
@@ -1512,7 +1516,7 @@ export async function handleAdmin(ctx) {
         createdAt: normalized.createdAt,
       };
     });
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
 
   const marketplaceDetailMatch = part.match(/^\/course-marketplace\/([^/]+)$/);
@@ -1565,6 +1569,13 @@ export async function handleAdmin(ctx) {
     const role = ctx.search.get('role'); const orgIdFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const sortKey = String(ctx.search.get('sort') || 'created').trim();
+    const sort = Object.hasOwn({ created: true, name: true, status: true }, sortKey) ? sortKey : 'created';
+    const sortSql = {
+      created: 'user.created_at DESC, user.id DESC',
+      name: 'user.display_name COLLATE NOCASE ASC, user.id DESC',
+      status: 'user.status ASC, user.created_at DESC, user.id DESC',
+    }[sort];
     const params = []; const conditions = ['user.deleted_at IS NULL'];
     if (['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER', 'STUDENT'].includes(role)) { conditions.push('user.role=?'); params.push(role); }
     if (orgIdFilter) { conditions.push('user.org_id=?'); params.push(orgIdFilter); }
@@ -1572,10 +1583,10 @@ export async function handleAdmin(ctx) {
     const where = conditions.join(' AND ');
     const total = Number(row('SELECT COUNT(*) n FROM users user WHERE ' + where, params)?.n || 0);
     const items = rows(
-      'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE ' + where + ' ORDER BY user.created_at DESC, user.id DESC LIMIT ? OFFSET ?',
+      'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE ' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?',
       [...params, limit, (page - 1) * limit],
     ).map(platformUserRow);
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   const platformUserMatch = part.match(/^\/platform-users\/([^/]+)\/(status|password|phone)$/);
   if (platformUserMatch && method === 'PUT') {

@@ -701,6 +701,15 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] 影响文件：`apps/server/src/routes/communication.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。影响接口：`GET /api/admin/inbox`、`GET /api/admin/materials`；无数据库结构变更。
 - [ ] 下一批继续处理账务列表的统一分页 / 筛选 / 排序 / 导出边界；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
 
+### 2026-09-04 P4-03-LIST 十类列表整体验收复核
+
+- [x] 十类管理端列表（平台用户、平台作品、操作审计、课程广场、机构、课程、平台管理员、通知、宣传物料、账务）统一返回 `{ items, total, page, limit, totalPages, sort }`；非法页码返回 400，未登录返回 401，未知排序键安全回落。
+- [x] 平台用户补齐 `created` / `name` / `status` 白名单排序和每页数量选择；操作审计固定排序元数据为 `created`，课程广场固定排序元数据为 `status`，均不引入任意 SQL 拼接。
+- [x] 操作审计与课程广场补齐 `ListResultSummary` 与共享 `Pagination`，移除课程广场手写分页；空态提示保留可调整筛选条件。
+- [x] 验收：`p4-03-list-api-check.mjs` 使用临时 SQLite 矩阵覆盖十类列表 **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；四端生产构建、`git diff --check` 通过。
+- [x] 影响文件：`apps/server/src/routes/adminOrg.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。无数据库结构变更，未修改 `packages/canvas`。
+- [x] P4-03-LIST 完成；下一步进入平台超管、机构管理员、教师、学生、官网访客角色 UAT。举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
+
 ### 2026-09-04 P4-03-LIST 账务列表批次
 
 - [x] `GET /api/admin/billing/usage-records` 升级为统一分页返回 `{ items, total, page, limit, totalPages, sort }`，支持 `page` / `limit`、机构、能力、状态、关键词、近 N 天与 `startDate` / `endDate` 日期范围筛选；非法页码和非法日期返回 400。
