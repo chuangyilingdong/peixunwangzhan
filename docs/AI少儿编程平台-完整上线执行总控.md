@@ -79,7 +79,7 @@
 > **执行口径：**用户确认备案已经完成，但备案后续由用户自行处理，本项目不反复追问或代办。线上 `https://iicili.cyou/` 当前仍是受控内部测试站；接下来按正式上线节奏推进，不提前解除 Basic Auth / noindex，不把 `local-mock`、协议准备稿或未接入外部服务宣传为正式能力。
 
 - [ ] **正式上线门槛收敛：质量、接口、安全、隐私与运营保障。**
-  - P0：P8-Q04 E2E、P8-Q06 性能与容量、P8-S01 安全基线、P8-S03 多租户隔离、P8-S04 备份恢复、P8-S05 监控告警、P8-S06 发布回滚。
+  - P0：当前下一步为 P8-S01 安全基线与依赖漏洞治理；随后继续 P8-Q04 E2E、P8-Q06 性能与容量、P8-S04 备份恢复、P8-S05 监控告警、P8-S06 发布回滚。
   - P1：P8-Q01 代码质量基线、P8-Q02 单元测试、P8-Q05 视觉 / 跨浏览器回归、P8-L02～P8-L06 隐私与内容治理、运营交接和客服 / 举报 SOP。
   - 所有自动化验收继续使用临时 SQLite；不得读取、复制、迁移或写入旧站真实数据库。
   - 线上内测部署作为预发布环境继续保留；每次发布前执行独立数据库、备份、健康检查、回滚和浏览器 UAT。
@@ -1069,9 +1069,11 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 影响文件 / 接口：`apps/server/src/lib.js`；`POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/me`、`PUT /api/student/account/password`、`PUT /api/student/account/sessions/:id/revoke`。
   - 验证：`p8-s02-session-security.mjs` 使用临时 SQLite **27 pass / 0 fail**；覆盖错误密码、Cookie 安全属性、旧会话被新登录顶下、密码强度与当前密码校验、改密立即失效、旧密码拒绝、注销失效、当前会话撤销和敏感字段不回传；退出码 0。
   - 边界：本项未伪造短信 / 邮件 / 微信 MFA；登录限流、CSRF 防护和正式身份核验仍需在安全基线与架构门槛中继续评估；未修改 `packages/canvas`，未触碰真实业务数据库。
-- [ ] **P8-S03 多租户数据隔离安全测试**
-  - 优先级：P0
-  - 验收：跨机构 ID 猜测、跨班级、跨学生、跨作品、跨文件访问均被拒绝；测试证据留档。
+- [x] **P8-S03 多租户数据隔离安全测试。** ✅ 2026-09-04
+  - 完成记录：新增 `p8-s03-tenant-isolation.mjs`，在临时 SQLite 中创建第二机构、教师和学生，启动隔离 API 进程验证机构 / 班级 / 课堂会话 / 学生项目 / 作品墙 / 学生账户的跨租户访问边界；平台超管保留按设计审计跨机构数据的能力。
+  - 影响文件 / 接口 / 数据表：`p8-s03-tenant-isolation.mjs`；`/auth/login`、`/org/classes`、`/org/classes/:id/sessions/start`、`/org/classes/:id/sessions/:sessionId/end`、`/student/projects`、`/student/projects/:id`、`/student/showcase`、`/student/account`、`/admin/platform-users`；`organizations`、`users`、`classes`、`class_sessions`、`student_projects`、`works`、`sessions`。
+  - 验证：临时 SQLite + 隔离 API 进程 **20 pass / 0 fail**，退出码 0；覆盖两个机构分别登录、各自班级列表、跨租户结束课堂拒绝、跨租户项目读取拒绝、作品墙归属、账户归属、伪造账户路径拒绝及平台超管审计；`node --check` 与 `git diff --check` 通过。
+  - 边界：测试未读取、复制、迁移或写入真实线上数据库；未修改 `packages/canvas`；当前可见文件资源接口不独立暴露跨租户读取路径，文件元数据隔离仍随作品 / 项目归属查询受保护；真实 OSS 未接入，不宣称已完成对象存储隔离。
 - [ ] **P8-S04 数据备份、恢复与灾难演练**
   - 优先级：P0
   - 范围：数据库、对象存储、配置、密钥恢复权限、备份频率、保留周期、异地策略。
@@ -1335,6 +1337,8 @@ node .\p3-api-integration.mjs
 | 2026-09-03 | 根据用户最新授权，将内测目标从隔离节点改为线上网址 `iicili.cyou`；重试服务器 SSH / 网络预检，并检查阿里云 ECS 控制台登录状态。 | `39.106.183.200:22` 仍连接超时；ECS 控制台未登录；未覆盖线上站点、未重启服务、未触碰真实线上数据库。已准备线上域名配置的最新内测 release `20260903T162708Z`（commit `3577ac1`）；当前仍阻塞于服务器控制通道。 |
 | 2026-09-03 | P5-W11 第一方匿名埋点与转化漏斗完成：官网同意选择、白名单事件、90 天保留、平台分析报表和权限边界接通。 | 临时 SQLite P5-W11 `15 pass / 0 fail`；后端语法、四端生产构建和 `git diff --check` 通过；不接入第三方统计、不保存 IP / PII，备案与正式法务仍按外部事项处理。 |
 | 2026-09-03 | 通过 ECS 云服务器终端完成 `iicili.cyou` 线上受控内部测试发布：保留旧站并完成备份，创建独立内测 SQLite，发布 release `20260903T172458Z`（commit `6c7c14484bf9aa90262e421113c0f236ae262b8c`），启用 `learning-platform-internal-test`、Basic Auth、HTTPS、noindex 与内测标识。 | 线上 `/`、`/admin/`、`/org/`、`/student/` HTTP 200；`/api/health` 成功；未认证 HTTP 401；8788 仅监听 `127.0.0.1`；`nginx -t` 成功并 reload。旧服务与真实数据库未被覆盖，正式公开上线 / 备案仍后置。 |
+| 2026-09-04 | P8-S03 多租户数据隔离安全测试完成：临时 SQLite 创建第二机构并完成跨租户拒绝与平台审计边界验证。 | `p8-s03-tenant-isolation.mjs` **20 pass / 0 fail**，退出码 0；未修改 `packages/canvas`，未触碰真实线上数据库；下一步转入 P8-S01 安全基线与依赖漏洞治理。 |
+
 
 ---
 
