@@ -1224,7 +1224,7 @@ P9-I01～P9-I06 已完成并保留为内测阶段记录。2026-09-04 用户确�
   - 本批完成记录（2026-09-04）：
     - [x] 新增 `.github/workflows/ci.yml`：PR / `main` push 触发，Node `24.19.0` + pnpm `11.19.0`，冻结安装、服务端语法检查、隔离验收（P4-01 / P4-02 / P4-O09）、四端构建，并上传 14 天制品。
     - [x] 新增 `.github/workflows/production-release-gate.yml`：仅手动 dispatch，使用 `production-approval` environment 审批门槛；选定 ref 后重复验证并上传候选制品，**不自动连接或部署生产服务器**。
-    - [x] 本地等价验证：`node --check`、P4-01 `28/28`、P4-02 成功、P4-O09 `9/9`、`pnpm run build` 历史基线通过；本次未改 `packages/canvas`。
+    - [x] 本地等价验证：`node --check`、P4-01 `28/28`、P4-02 成功、P4-O09 `9/9`、`pnpm run build` 历史基线通过；本次未改 `packages/canvas`。    - [!] GitHub Actions 首次实际运行已触发（run `33880647166`，commit `0f11c1a`）：依赖安装、语法检查、隔离验收与四端构建均通过，仅 `upload-artifact` 因工作流错误引用仓库根 `dist` 而失败；已将 CI 与 production gate 制品路径修正为四端实际的 `apps/*/dist`，等待下一次运行留证。
   - 验收：
     - [-] 从干净环境可重复构建；每次生产发布可定位 commit / 制品 / 配置版本；失败可停止与回滚；（工作流已入库，需 GitHub Actions 实际运行留证）
     - [x] GitHub Actions 仅在 push / PR 做验证；生产候选仅允许手动触发并经过 `production-approval` environment，当前不自动部署。
@@ -1389,7 +1389,7 @@ node .\p3-api-integration.mjs
 
 | 日期 | 变更 | 状态 / 验证 |
 |---|---|---|
-| 2026-09-04 | 生产公网敏感路径复核与 Nginx 规则补强准备：新增只读 smoke、补齐生产配置模板 / RUNBOOK，并确认 `/server.js` 等仍被 SPA fallback 返回 200。 | 本地 Node 语法与 diff 检查通过；公网 `/api/health=200`、安全头存在；P9-D05 保持 `[-]`，等待授权 ECS 终端执行 Nginx 备份、`nginx -t`、reload 与复测。 |`r`n| 2026-09-04 | 生产切换与运维补强完成：P9-D01 架构实施、每日备份与恢复演练、真实管理员与种子账号禁用、最小告警、Nginx 扫描面加固；同步修正 P9 清单状态。 | `learning-platform-production` active/enabled；四端公网 200；备份 `20260904T124238Z` SHA256 / integrity 通过；恢复演练健康 200；种子账号 DISABLED 且会话清零；告警正常与故障注入验证通过；24 小时观察截止 2026-09-05 20:24 CST。 |
+| 2026-09-04 | GitHub Actions 首次运行诊断：发现制品上传路径误指向根 `dist`，修正 CI / production gate 为上传四端 `apps/*/dist`。 | run `33880647166` 的依赖、检查、隔离验收、四端构建均通过，仅制品上传失败；修复已提交，待新 run 通过后再收口 P9-D03。 |`r`n| 2026-09-04 | 生产公网敏感路径复核与 Nginx 规则补强准备：新增只读 smoke、补齐生产配置模板 / RUNBOOK，并确认 `/server.js` 等仍被 SPA fallback 返回 200。 | 本地 Node 语法与 diff 检查通过；公网 `/api/health=200`、安全头存在；P9-D05 保持 `[-]`，等待授权 ECS 终端执行 Nginx 备份、`nginx -t`、reload 与复测。 |`r`n| 2026-09-04 | 生产切换与运维补强完成：P9-D01 架构实施、每日备份与恢复演练、真实管理员与种子账号禁用、最小告警、Nginx 扫描面加固；同步修正 P9 清单状态。 | `learning-platform-production` active/enabled；四端公网 200；备份 `20260904T124238Z` SHA256 / integrity 通过；恢复演练健康 200；种子账号 DISABLED 且会话清零；告警正常与故障注入验证通过；24 小时观察截止 2026-09-05 20:24 CST。 |
 | 2026-09-02 | P3 基础闭环完成：画布模板与排版、教师批注、学生反馈、机构作品墙、mock AI / 素材任务边界。 | 已通过 P3 API 联调、后端语法和前端构建基线。 |
 | 2026-09-02 | 修复课堂 AI 能力字段映射：`allowImage`。 | 已纳入 P3 API 验证。 |
 | 2026-09-02 | 完成非画布官网与三端品牌视觉、导航、页面壳层第一轮建设；画布未改。 | 全量生产构建通过。 |

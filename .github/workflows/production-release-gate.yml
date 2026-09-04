@@ -70,7 +70,10 @@ jobs:
         with:
           name: ai-kids-platform-release-${{ github.sha }}
           path: |
-            dist
+            apps/admin/dist
+            apps/org/dist
+            apps/student/dist
+            apps/website/dist
             apps/server/src
             packages/database/src
             package.json
