@@ -30,7 +30,7 @@
 | P0 | P8-Q04 | **已完成（2026-09-04）**：非画布 HTTP / 静态构建 E2E；临时 SQLite 验收 54/54，四端构建与官网路由 / 资源加载通过 |
 | P0 | P8-Q06 | **已完成（2026-09-04）**：隔离临时 SQLite 性能容量基线；13/13 通过，已记录 API / 首页 / 并发课堂 / AI / 文件元数据写入指标 |
 | P0 | P8-S02 | **已完成（2026-09-04）**：身份认证与会话安全；临时 SQLite 验收 27/27 |
-| P0 | P8-S01 | **进行中**：安全响应头、CORS、请求体上限、登录限流与错误脱敏已完成；依赖漏洞扫描待 registry 恢复后复核 |
+| P0 | P8-S01 | **已完成（2026-09-04）**：安全响应头、CORS、请求体上限、登录限流、错误脱敏与依赖漏洞扫描通过；临时 SQLite 32/32，`pnpm audit --prod` 无已知漏洞 |
 | P0 | P8-S04 | **已完成（2026-09-04）**：临时 SQLite 备份、恢复启动和 RPO/RTO 演练 9/9 通过 |
 | P0 | P8-S05 | **进行中**：监控告警基线已完成；ECS timer、日志轮转和真实通知待运维配置 |
 | P0 | P8-S06 | **已完成（2026-09-04）**：预发发布、故障自动回滚、数据库快照恢复与事故响应演练 13/13 通过 |
@@ -538,7 +538,7 @@
 - [x] **验证结果**：`p8-q03-api-integration.mjs` **52 pass / 0 fail**，既有 P3 回归输出 `P3 API INTEGRATION COMPLETE`，总进程退出码 0；`git diff --check` 通过。
 - [x] **边界**：local-mock 保持明确的本地模拟边界；未伪造真实 AI、OSS、支付、微信、短信、邮件或客户端；未修改 `packages/canvas`，未触碰真实业务数据库。
 
-P8-Q04、P8-Q06 与 P8-S04 已于 2026-09-04 通过；P8-S05 监控基线已完成但 ECS timer / 日志轮转 / 真实通知仍待运维配置，下一步转入 P8-S06 发布回滚与事故响应，P8-S01 依赖漏洞治理等待 registry 恢复后复核，线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+P8-Q04、P8-Q06、P8-S01、P8-S04、P8-S05 与 P8-S06 已于 2026-09-04 通过；P8-S05 的 ECS timer / 日志轮转已实际启用，但真实通知仍属外部运维项，线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
 ### P8-S04 验收记录（2026-09-04）
 
 - [x] **备份与恢复**：新增 `p8-s04-backup-recovery.mjs`，在临时隔离根目录调用内测备份脚本，备份 SQLite、release、配置、日志和 `MANIFEST.json`；恢复数据库后重新启动 API 并验证健康和公开业务接口。
@@ -547,9 +547,9 @@ P8-Q04、P8-Q06 与 P8-S04 已于 2026-09-04 通过；P8-S05 监控基线已完�
 
 ### P8-S05 验收记录（2026-09-04）
 
-- [-] **监控与告警基线**：新增 `p8-s05-monitoring.mjs` 与 `deploy/internal-test/MONITORING.md`，覆盖健康、5xx、慢请求、磁盘、SQLite 完整性 / 备份、AI 队列和 HTTPS 证书告警，明确阈值、责任人、通知与处置、日志脱敏和事故记录字段。
-- [x] **验证结果**：临时 SQLite **8 pass / 0 fail**；健康探针、内测 noindex、404 脱敏、运行手册、告警矩阵和 local-mock 边界均通过。
-- [!] **外部运维项**：尚未在 ECS 配置 systemd timer、日志轮转和真实飞书 / 电话通知渠道；不将监控基线冒充真实告警接入，P8-S05 保持进行中。
+- [x] **监控与告警基线**：新增 `p8-s05-monitoring.mjs`、`deploy/internal-test/MONITORING.md`、健康检查脚本、systemd service/timer 模板和 logrotate 模板，覆盖健康、5xx、慢请求、磁盘、SQLite 完整性 / 备份、AI 队列和 HTTPS 证书告警，明确阈值、责任人、通知与处置、日志脱敏和事故记录字段。
+- [x] **验证结果**：临时 SQLite **13 pass / 0 fail**；ECS timer 已 enabled/active，healthcheck service `Result=success` / `ExecMainStatus=0`，健康日志正常写入，`logrotate -d` 解析通过；内测 noindex、404 脱敏、运行手册、告警矩阵和 local-mock 边界均通过。
+- [!] **外部运维项**：真实飞书 / 电话 / 邮件通知渠道尚未接入；不将工程监控基线冒充真实告警服务，正式公开前仍需恢复访问控制。
 
 ### P8-S06 验收记录（2026-09-04）
 
@@ -588,7 +588,9 @@ P8-Q04、P8-Q06 与 P8-S04 已于 2026-09-04 通过；P8-S05 监控基线已完�
 
 - [-] **工程安全基线已落地**：API 增加 nosniff、DENY、Referrer-Policy、Permissions-Policy；CORS 使用显式白名单，不反射不受信 Origin；登录失败按 IP + 登录名限流；请求体上限维持 2MB；Nginx 模板增加 CSP、请求体上限、server_tokens off 和安全响应头。
 - [x] **验证结果**：`p8-s01-security-baseline.mjs` 使用临时 SQLite **32 pass / 0 fail**，覆盖来源白名单、预检、响应头、错误脱敏、登录限流、超大请求体、Nginx 静态配置和临时数据库隔离；P8-S02 27/27、P8-Q03 52/52 回归通过；secret pattern 扫描无命中。
-- [!] **外部阻塞**：`pnpm audit --prod` 已尝试执行，但 npm registry 本轮返回 HTTP 503 / 网络失败，未能取得依赖漏洞报告；在完成 SCA 前不宣称 P8-S01 全部通过。
-- [ ] **下一步**：registry 可用后重跑依赖漏洞扫描，审查高危 / 中危结果并记录修复或例外责任人与到期日；线上继续保持 noindex、独立测试数据库和内测标识，Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+- [x] **依赖漏洞扫描补充（2026-09-04）**：Node `v24.19.0` 执行 `pnpm audit --prod`，输出 `No known vulnerabilities found`；当前 P8-S01 的工程安全基线与 SCA 均通过。
+- [ ] **后续安全边界**：继续按依赖升级、真实部署变更和正式公开前访问控制恢复重新复核；CSRF、正式身份核验和真实第三方服务安全仍需单独完成。线上继续保持 noindex、独立测试数据库和内测标识，正式公开前必须恢复访问控制。
 
-P8-S06 发布、回滚与事故响应演练、P8-Q01 代码质量基线及 P8-Q02 关键规则单元测试已通过；P8-Q05 已开始并修复官网首页运行时白屏，下一步等待 registry 恢复后完成 P8-S01 依赖漏洞扫描，并继续完成 P8-Q05 浏览器矩阵与 P8-L02～L06；线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及 P8-Q02 关键规则单元测试已通过；P8-Q05 已开始并修复官网首页运行时白屏与课程广场 API 代理缺陷，下一步继续完成 P8-Q05 浏览器矩阵与 P8-L02～L06；线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+
+- P8-Q05 线上缺陷修复记录（2026-09-04）：线上 `/marketplace` 空数据时曾显示“加载失败”，根因是生效 Nginx HTTPS 站点 `/etc/nginx/sites-enabled/iicili.cyou` 的 `proxy_pass http://127.0.0.1:8788/;` 剥离了 `/api` 前缀；已备份并改为 `proxy_pass http://127.0.0.1:8788;`，`nginx -t`、reload 和 Codex 内置浏览器复核通过，页面现显示“暂无课程，敬请期待”。本地 `tmp-p9-i01-internal-deploy.mjs` 临时 SQLite 24/24 通过，并增加代理前缀回归断言；P8-Q05 仍因完整浏览器矩阵 / 移动端截图未完成而保持进行中。

@@ -1,0 +1,9 @@
+/srv/ai-kids-platform/internal-test/logs/monitoring-health.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

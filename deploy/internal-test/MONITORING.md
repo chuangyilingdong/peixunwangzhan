@@ -31,4 +31,4 @@
 
 ## 当前部署说明
 
-当前线上 `https://iicili.cyou/` 仍为内部测试站，保留 HTTPS、noindex、内测标识、独立测试 SQLite 和回滚能力；Basic Auth 已按用户授权解除。监控基线完成后，仍需在 ECS 上配置 systemd timer / 日志轮转 / 真实通知渠道，正式公开前必须恢复访问控制。
+当前线上 `https://iicili.cyou/` 仍为内部测试站，保留 HTTPS、noindex、内测标识、独立测试 SQLite 和回滚能力；Basic Auth 已按用户授权解除。监控工程基线已完成；ECS 已配置并验证 systemd timer 与日志轮转，真实通知渠道仍需由运维按外部账号 / 规则确认后接入；正式公开前必须恢复访问控制。

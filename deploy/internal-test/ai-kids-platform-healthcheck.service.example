@@ -1,0 +1,7 @@
+[Unit]
+Description=AI Kids Platform internal-test health probe
+After=network-online.target learning-platform-internal-test.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/ai-kids-platform/internal-test/bin/monitoring-healthcheck.sh
