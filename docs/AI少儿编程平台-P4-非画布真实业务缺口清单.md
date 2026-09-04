@@ -14,13 +14,14 @@
 | `页面壳层` | 导航与视觉壳层已存在，但未接真实 API，不能展示或写入业务数据。 |
 | `外部决策` | 依赖支付、真实 AI、外部存储、微信、正式产品文案或用户提供测试账号。 |
 | `产品取消` | 用户已明确确认不做；不再设计数据表、API、业务页面或验收场景，历史壳层后续清理。 |
+| `暂缓` | 用户已明确本阶段不做；保留历史代码 / 准备稿，但不新增功能、不作为当前内测阻塞项；后续需重新授权后再恢复。 |
 
 ## 1.1 2026-09-03 上线口径与优先级重排
 
 用户已明确：**备案先不做，但要先上线用于内部测试，网址不会对外公开。**“上线”在本清单中拆为两种状态：
 
 1. **内部测试上线（当前目标）**：受控访问、不可索引、独立测试数据库和配置、可备份恢复回滚；只供内部角色验收，不接收真实外部用户，不代表正式服务。
-2. **正式公开上线（后续目标）**：正式域名 / HTTPS、备案（如适用）、法务确认文本、真实外部服务、生产监控与运营交接全部满足后，才允许对外开放。
+2. **正式公开上线（后续目标，当前不推进）**：正式域名 / HTTPS、备案（如适用）、法务确认文本、监护人 / 内容治理规则、真实外部服务、生产监控与运营交接全部满足并重新确认范围后，才允许对外开放。
 
 当前优先级：
 
@@ -38,13 +39,35 @@
 | P1 | P8-Q01 | **已完成（2026-09-04）**：非画布语法、四端构建、静态风险模式和发布边界检查 11/11 通过 |
 | P1 | P8-Q02 | **已完成（2026-09-04）**：关键服务与账务规则单元基线 17/17 通过；全量覆盖率持续补充 |
 | P1 | P8-Q05 | **进行中（2026-09-04）**：已修复官网首页作品区运行时白屏；本地内测 11 条关键路由渲染和控制台 0 错误通过，线上 Codex Chromium 桌面视口 12/12 路由复核通过，待独立浏览器 / 移动端截图矩阵 |
-| P1 | P8-L02～P8-L04 | **进行中（2026-09-04）**：工程流程已接通并以临时 SQLite 32/32 验收；正式法务规则、真实身份核验、评论/AI 举报、申诉及真实文件/备份治理仍待补齐 |
-| 用户侧 | P5-W10 备案后续 | 用户已确认备案完成，后续材料和办理由用户自行处理，不阻塞我们继续做正式上线技术门槛 |
-| 外部阻塞 | P5-W08、真实 AI / OSS / 支付 / 微信等 | 需要用户 / 法务 / 供应商给出正式文本、账号、规则或密钥，不得伪造 |
+| 暂缓 | P8-L02～P8-L04 | **用户决策暂缓（2026-09-04）**：不继续做监护人、举报、申诉、违规 / 内容审核和正式法律 / 合规扩展；已有工程代码保留，不作为当前内测阻塞项 |
+| 用户侧 | P5-W10 备案后续 | 用户已确认备案完成，后续材料和办理由用户自行处理；不改变当前内测技术收口范围 |
+| 外部阻塞 | 真实 AI / OSS / 支付 / 微信等 | 需要用户 / 供应商给出真实账号、规则或密钥，不得伪造；不影响当前内测技术收口 |
+| 暂缓 | P5-W08 | 正式法律 / 合规文本暂不推进；准备稿和工程代码只保留历史证据，不继续扩展，后续需重新授权 |
 | 暂不做 | P5-W03 / P5-W06 | 用户已取消，保持产品取消 |
 
 内测网址原则上必须在反向代理或 VPN / IP 白名单 / Basic Auth 中落实至少一种强制访问控制，并返回 `noindex, nofollow, noarchive`；页面应显著标识“内部测试环境，不代表正式服务”。本轮用户已于 2026-09-04 明确授权移除线上 Basic Auth，因此当前仅保留 noindex、内测标识、HTTPS、独立测试数据库和回滚能力；不得扩大访问范围，正式公开前必须重新建立访问控制。
 
+
+
+## 1.2 2026-09-04 用户决策：暂缓范围与当前执行顺序
+
+用户明确：举报、申诉、违规 / 内容审核、监护人功能和正式法律 / 合规事项暂时不做，后续需要时再重新授权。
+
+| 状态 | 暂缓事项 | 处理口径 |
+|---|---|---|
+| `[~]` | 举报、申诉、违规 / 内容审核 | 不新增举报、申诉、审核工作台、违规升级、自动下架或记录保留扩展；已有基础作品举报代码保留但不继续扩展。 |
+| `[~]` | 监护人功能 | 不新增监护人信息、监护同意、身份核验和年龄地区规则；已有代码保留但不作为当前内测必需。 |
+| `[~]` | 正式法律 / 合规文本 | 不推进正式协议、隐私政策、儿童 / 未成年人说明的法务确认和生效发布；准备稿不代表正式法律文本。 |
+
+当前唯一执行顺序：
+1. **P8-Q05**：在当前可用的 Codex Chromium 中继续回归并记录边界；不得虚构独立 Chrome / Edge / Safari 或真机结果。
+2. **P4-C01**：补齐服务端 RBAC 全覆盖、资源归属校验、跨机构 / 跨学生越权验收。
+3. **P4-01**：统一状态机、枚举、错误码和异常提示。
+4. **P4-03**：统一筛选、分页、排序、空态、导出与列表交互规范。
+5. **内测 UAT**：按平台 / 机构管理员 / 教师 / 学生角色验收，记录并修复阻塞缺陷。
+6. **运行维护**：保持独立测试库、noindex、内测标识、备份 / 回滚和健康检查。
+
+以下事项明确不进入当前执行队列：举报、申诉、违规 / 内容审核、监护人功能、正式法律 / 合规文本及正式公开上线；后续需要时必须重新授权。
 
 ## 2. 第一批 P0 范围与完成标准
 
@@ -69,7 +92,7 @@
 | `/users` | `/super/platform-users` 平台用户 | SUPER_ADMIN | `真实已有（2026-09-03，P4-A03 补齐管理动作）` | `users`、`sessions`、`organizations`、`billing_packages`、`audit_logs` | `GET /api/admin/platform-users`；新增 `PUT /:userId/status`、`PUT /:userId/password`、`PUT /:userId/phone` | 仅 SUPER_ADMIN；用户 `ACTIVE/DISABLED`；停用 / 重置密码立即撤销全部会话；不能停用当前登录账号；手机号格式与占用校验 | 角色级 `ADMIN_USERS` 权限码收紧 | 临时 SQLite 63 项断言：筛选搜索、停用即会话失效、登录拒绝、恢复、重置密码、手机绑定 / 解绑、自停用拒绝、401/403 与审计动作全部通过 |
 | `/courses` | `/super/courses` 平台课程 | SUPER_ADMIN | `真实已有（2026-09-03，P4-A04 补齐管理闭环）` | `course_series`、`course_lessons`、`course_assignments`、`classes`、`class_curriculum_items`、`class_sessions`、`works`、`audit_logs` | `GET/POST /api/admin/course-series`、assignments；新增 `GET /:id/detail`、`PUT /:id`、`POST /:id/status`、`POST /:id/lessons`、`PUT /:id/lessons/reorder`、`POST /:id/assignments/revoke`、`PUT /api/admin/course-lessons/:lessonId`、`DELETE /api/admin/course-lessons/:lessonId` | 仅 SUPER_ADMIN；课包 `DRAFT/PUBLISHED/ARCHIVED` 只能走动作接口；内容变更自动递增次版本号；被班级课单 / 课堂引用的课时不能删除；撤销授权后机构端立即不可见 | 年龄段 / 难度 / 标签字段、课程资产（封面文件、课件上传、素材包）、课程广场 | 临时 SQLite 66 项断言：权限、创建 / 重名校验、详情聚合、编辑与版本递增、状态机、课时 CRUD 与重排、机构可见性联动、引用保护、审计动作全部通过 |
 | `/marketplace` | `/super/course-marketplace` 课程广场 | SUPER_ADMIN | `真实已有（2026-09-03，P5-M01）` | `course_series.marketplace_status`、`marketplace_reward_credits` | `GET /api/admin/course-marketplace`（status/search/page/limit，PENDING 优先）、`GET /api/admin/course-marketplace/:id`、`PUT /api/admin/course-marketplace/:id`（状态+积分）、`PUT /api/admin/course-marketplace/:id/rewards`；公开 `GET /api/public/marketplace`（difficulty/ageMin/ageMax/tag/search/sort=popular\|recent/page/limit，仅 APPROVED+ALL_ORGS）、`GET /api/public/marketplace/:id`（lessonContent 截断 2000） | 仅 SUPER_ADMIN；仅 PUBLISHED 课包可变更；marketplaceRewardCredits 0-999999；公开仅 APPROVED+ALL_ORGS；popular=reward_credits desc，recent=createdAt desc | 真实付费购买、SLA 评分与评论 | 临时 SQLite 75 项断言（2026-09-03 P5-M01）：401/403、状态过滤、搜索、分页、积分越界/负数/非法 status、状态机流转、积分独立更新、课包不存在 404、公开仅 APPROVED+ALL_ORGS、排序正确、page1/2 无重叠 |
-| `/works` | `/super/published-works` 作品库 | SUPER_ADMIN | `真实已有（2026-09-02，2026-09-03 P4-A05 补齐详情 + 状态机 + 精选 + 举报）` | `works`、`student_projects`、`users`、`organizations`、`classes`、`course_lessons`、`work_submissions`、`work_annotations`、`work_publish_requests`、`work_reports` | 新增 `GET /api/admin/works`、`PUT /api/admin/works/:id/unpublish`、`PUT /api/admin/works/:id/feature`、`GET /api/admin/work-reports`、`PUT /api/admin/work-reports/:id`；本批新增 `GET /api/admin/works/:id/detail`（聚合作品信息、提交历史、画布批注、举报记录、发布申请、精选状态、画布快照） | `PENDING/APPROVED/REJECTED/PUBLISHED`；仅 `SUPER_ADMIN`；下架写为 `REJECTED`、记录原因与审核人并审计 `PLATFORM_WORK_UNPUBLISH`；服务端强制仅 `PUBLISHED` 可下架 / 精选 / 因举报下架；精选学生需 `privacy_allow_feature` 授权 | 公开分享展示权限、站外分发 | 临时库验证 43 项断言（2026-09-03 P4-A05）：未登录 401 / 教师 403 / 不存在 404、详情含 18 项聚合字段、精选与下架状态机 `WORK_NOT_PUBLISHED`、举报处理审计、举报处理 resolution 必填、精选/取消精选审计落库 |
+| `/works` | `/super/published-works` 作品库 | SUPER_ADMIN | `真实已有（2026-09-02；作品详情、状态机、精选已完成；举报基础代码保留，治理扩展暂缓）` | `works`、`student_projects`、`users`、`organizations`、`classes`、`course_lessons`、`work_submissions`、`work_annotations`、`work_publish_requests`、`work_reports` | 新增 `GET /api/admin/works`、`PUT /api/admin/works/:id/unpublish`、`PUT /api/admin/works/:id/feature`、`GET /api/admin/work-reports`、`PUT /api/admin/work-reports/:id`；本批新增 `GET /api/admin/works/:id/detail`（聚合作品信息、提交历史、画布批注、举报记录、发布申请、精选状态、画布快照） | `PENDING/APPROVED/REJECTED/PUBLISHED`；仅 `SUPER_ADMIN`；下架写为 `REJECTED`、记录原因与审核人并审计 `PLATFORM_WORK_UNPUBLISH`；服务端强制仅 `PUBLISHED` 可下架 / 精选 / 因举报下架；精选学生需 `privacy_allow_feature` 授权 | 公开分享展示权限、站外分发 | 临时库验证 43 项断言（2026-09-03 P4-A05）：未登录 401 / 教师 403 / 不存在 404、详情含 18 项聚合字段、精选与下架状态机 `WORK_NOT_PUBLISHED`、举报处理审计、举报处理 resolution 必填、精选/取消精选审计落库 |
 | `/hackathon` | `/super/hackathon` 黑客松审核 | SUPER_ADMIN | `产品取消（2026-09-02）` | 不新增 | 不新增 | 不建设赛季、报名、投稿或评审状态机 | 用户已明确确认不做；现有页面仅为历史壳层 | 不进入开发与验收；后续导航 / 路由清理时移除 |
 | `/billing` | `/super/usage-records + recharge + billing-settings` | SUPER_ADMIN | `真实已有（2026-09-02，用量汇总与明细；在线充值/计费设置仍外部决策）` | `org_billing_accounts`、`usage_records`、`recharge_orders`、`users`、`organizations`、`class_sessions`、`classes` | 现有 `GET /api/admin/billing/usage-overview`；新增 `GET /api/admin/billing/usage-records` | 仅 `SUPER_ADMIN`；支持 `days/orgId/modality/status/search`；无效 `days` 返回 `VALIDATION_ERROR` | 在线支付回调、计费规则/模型开关配置、冻结与预警、导出对账 | 临时库验证汇总、筛选、搜索、上下文关联、非法参数与越权 403 |
 | `/materials` | `/super/materials + promo-materials` | SUPER_ADMIN | `真实已有（2026-09-02，元数据、外链与统计）` | `promo_materials`、`promo_material_assignments`、`promo_material_events` | `GET/POST/PUT /api/admin/materials`、`GET /api/admin/materials/:id/stats` | 物料 `DRAFT/ACTIVE/DISABLED`；平台超管写入 | 真实文件上传、OSS、封面上传、下载代理与签名 | 当前维护元数据和可选外部资源地址；统计详情返回汇总、机构聚合与最近事件；未配置资源时下载明确拒绝 |
@@ -107,7 +130,7 @@
 | `/projects` | 我的创作项目 | STUDENT | `真实已有（2026-09-03，P4-S02）` | `student_projects`、`project_snapshots`、`works`、`course_series`、`course_lessons`、`classes` | `GET/POST/PATCH/DELETE /api/student/projects`、`POST /:id`（复制）、`/:id/archive`、`/:id/restore`、版本与导入导出 | 仅 STUDENT；视图 `ACTIVE/ARCHIVED/DELETED`；草稿可重命名 / 复制 / 归档 / 软删除，已提交或已发布项目只读 | 批量管理、云同步冲突；30 天到期自动清理任务未实现 | 临时库验证权限、搜索筛选、重命名、复制、归档 / 恢复、软删除 / 恢复、提交后保护、发布后复制限制与学生隔离 |
 | `/projects/:projectId/canvas` | 创作画布 | STUDENT | `真实已有（画布冻结）` | `student_projects`、`project_snapshots` | projects API | 草稿/提交 | 不修改 `packages/canvas` | 仅回归，不做画布改动 |
 | `/works` | 我的作品 / 提交记录 | STUDENT | `真实已有（2026-09-03，P4-S03）` | `works`、`work_submissions`、`work_feedback_reads`、`work_publish_requests`、`work_annotations` | works submit/status、submissions、feedback-read、publish-request/withdraw | `PENDING/APPROVED/REJECTED/PUBLISHED`；反馈已读与多轮提交 | 独立站外发布、重新发布历史版本 | 学生只能访问本人作品；临时 SQLite 验收 `72 pass / 0 fail` |
-| `/showcase` | 机构作品墙 | STUDENT | `真实已有（2026-09-03，P4-S04）` | `works`、`classes`、`course_lessons`、`work_reports` | `GET /api/student/showcase`、`GET /:id`、`POST /:id/reports`、`PUT /api/org/works/:id/feature` | 仅本机构 `PUBLISHED`；作者脱敏与内部字段清理 | 站外公开分享、评论 / 点赞、访客统计 | 临时 SQLite P4-S04 API `112 pass / 0 fail`，覆盖筛选搜索分页、精选、举报与权限隔离 |
+| `/showcase` | 机构作品墙 | STUDENT | `真实已有（2026-09-03，P4-S04；基础举报代码保留，当前不扩展）` | `works`、`classes`、`course_lessons`、`work_reports` | `GET /api/student/showcase`、`GET /:id`、`POST /:id/reports`、`PUT /api/org/works/:id/feature`（举报接口仅保留历史实现，不新增治理能力） | 仅本机构 `PUBLISHED`；作者脱敏与内部字段清理 | 站外公开分享、评论 / 点赞、访客统计；举报 / 违规治理后续暂缓 | 临时 SQLite P4-S04 API `112 pass / 0 fail` 为历史回归记录，当前不据此继续扩展举报能力 |
 | `/courses` | 我的课程 | STUDENT | `真实已有（2026-09-02）` | `class_members`、`class_curriculum_items`、`course_series`、`course_lessons`、`student_projects`、`works` | `GET /api/student/courses` | 课单进度；学生本人 / 机构隔离 | 学习首页任务、老师通知、继续创作聚合待补 | 临时库验证课程、班级、课时、作品状态与空态；学生只能看到本人数据 |
 | `/credits` | AI / 魔法石中心 | STUDENT | `真实已有（2026-09-03，P4-S05）` | `users`、`billing_packages`、`usage_records`、`generation_jobs`、`media_assets`、`student_projects`、`project_snapshots`、`class_sessions`、`classes` | `GET /api/ai/center`、`GET/POST /api/ai/generations/history`、`GET /api/ai/generations/history/:id`、`GET /api/student/credits` | 套餐有效期、能力状态、任务 / 素材本人隔离；失败不扣费，成功任务扣 1 积分 | 真实外部 AI provider、充值与对账仍属后续 / 外部决策 | 临时 SQLite P4-S05 API `85 pass / 0 fail`，覆盖能力状态、失败重试、素材使用推导、mock 标识和权限隔离 |
 | `/account` | 账号安全 | STUDENT | `真实已有（2026-09-03，P4-S06）` | `users`、`sessions`、`account_requests`、`organizations`、`classes`、`class_members`、`student_projects`、`works`、`generation_jobs`、`usage_records` | `GET/PUT /api/student/account`、`/profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke`、`/requests`、`/requests/:id`、`/requests/:id/cancel`；机构 `GET/PUT /api/org/account-requests/:id` | 申请 `PENDING/APPROVED/REJECTED/CANCELLED`；敏感操作需本人当前密码；仅 ORG_ADMIN 处理；学生不可改机构归属 | 真实头像文件上传、邮件短信、监管删除证明、跨机构迁移 | 临时库验证资料 / 隐私、旧密码、弱密码、会话、申请状态机、导出、软注销、审计与越权 |
@@ -130,15 +153,15 @@
 
 ## 7. P0 后续批次建议
 
-1. **P4-01 平台计费与作品闭环（2026-09-02 第一批已完成）**：平台用量明细、平台作品库、作品下架、机构账务视图；在线支付、计费规则配置、精选/举报/违规处理未包含，转入后续批次。
-2. **P4-02 学生课程与账号闭环（2026-09-02 第一批已完成）**：学生课程、额度、账号安全已接通现有表和真实 API；学习首页任务聚合已在 P4-S01 完成，AI 能力中心增强、头像 / 监护人 / 隐私 / 注销等剩余项转入后续批次。
+1. **P4-01 平台计费与作品闭环（2026-09-02 第一批已完成）**：平台用量明细、平台作品库、作品下架、机构账务视图已完成；在线支付、计费规则配置仍属后续外部 / 产品批次；精选、举报、违规处理中的举报 / 违规治理扩展按用户决策 `[~]` 暂缓。
+2. **P4-02 学生课程与账号闭环（2026-09-02 第一批已完成）**：学生课程、额度、账号安全已接通现有表和真实 API；学习首页任务聚合已在 P4-S01 完成，AI 能力中心增强、头像、隐私 / 注销等剩余项转入后续批次；监护人功能按用户决策 `[~]` 暂缓。
 3. **P4-03 通知与物料闭环（2026-09-02 第二批已完成；2026-09-03 队列化已完成）**：在第一批基础上补齐通知模板、逻辑定时发布与补偿扫描、学生消息中心、物料统计详情、接收范围同步，以及数据库化投递队列（`notification_dispatch_jobs` + 5 秒 worker + 指数退避 + 死信 + 失败运营 + 立即扫描）；外部通知通道、真实上传与下载代理转入后续基础设施批次。
 4. **P4-C04 统一文件元数据与访问授权（2026-09-03 已完成）**：`file_assets` + `file_access_grants` 表及索引；`apps/server/src/routes/fileAssets.js` admin(org)/org/student 三端 CRUD 与 grant 管理；`authorizeFileAccess` 校验 visibility/review/expires；`syncFileGrants` 自动生成 grant；download 端点占位（INTERNAL_PROXY 待 P6 接入 OSS）；不破坏现有 `promo_materials` / `client_download_releases` 路径，向后兼容。后续：OSS 接入、真实下载代理与签名、课程封面/课件上传接入。
 4. **P4-04 黑客松 / 运营活动（2026-09-02 产品取消）**：用户明确确认不做；平台端和机构端均不新增相关数据表、API 或真实页面，历史 `/hackathon` 壳层后续从导航与路由移除。
 5. **P4-O01 机构首页真实经营看板第一批闭环（2026-09-02 已完成）**：`GET /api/org/overview` 已实现机构管理员经营视图、教师教学视图、本人负责 / 授权班级范围、近期课堂、待点评作品、未读消息及合同 / 席位 / 余额预警；不依赖支付、OSS 或真实 AI。
 6. [x] **P4-O03 班级、课程与排课闭环增强（2026-09-02 已完成）**：已补齐班级详情、成员与课程计划聚合、课时连续排序、普通 / 补课课堂、结束 / 取消、课堂历史和课程进度，并统一教师范围、归档保护及学生已发布内容隔离。
 7. [x] **P4-O04 课堂内 AI 能力控制与使用审计（2026-09-02 已完成）**：已接通服务端课堂暂停、能力开关、单学生调用上限、课堂积分上限、普通调用 / 生成任务审计和机构端用量查询。
-8. [x] **P4-O05 作品社区运营闭环（2026-09-02 已完成）**：已补齐版权 / 机构内展示授权确认、`PENDING → APPROVED → PUBLISHED` 审核发布、精选、举报处理、下架、作者脱敏、教师负责 / 授权班级范围和审计；评论 / 点赞未启用。
+8. [x] **P4-O05 作品社区基础闭环（2026-09-02 已完成；举报 / 违规治理扩展 `[~]` 暂缓）**：已补齐版权 / 机构内展示授权确认、`PENDING → APPROVED → PUBLISHED` 审核发布、精选、下架、作者脱敏、教师负责 / 授权班级范围和审计；评论 / 点赞未启用。历史举报处理代码保留，但不继续新增举报、申诉、违规审核或内容治理能力。
 9. [x] **P4-O06 作品数据中心（2026-09-02 已完成）**：已按班级 / 课程课时 / 学员下钻活跃、完成、提交、发布、反馈与成功 AI 用量，补齐 ORG_ADMIN 权限、过滤校验、统计口径和脱敏导出审计。`/work-data` 已从壳层接通真实 API，不包含访问量、访客或公开分享统计。
 10. [x] **P4-O07 套餐、学员开通与席位管理（2026-09-02 已完成）**：已形成套餐席位配置、待开通单、线下履约登记、开通 / 停用 / 恢复 / 续费 / 作废、到期扫描、学生权限失效和审计 / 事件留痕闭环；仅 `ACTIVE` 占用席位。在线支付、支付回调、自动续费和自动消息提醒未实现。
 11. [x] **P4-O08 积分充值、用量和对账（2026-09-03 已完成）**：机构积分账务已形成期初流水、冻结、人工调整、退款 / 冲正、原子扣减、流水复算、筛选导出和失败任务不扣费规则；在线支付、支付回调、自动续费与真实充值成功状态未接入，也未伪装。
@@ -167,7 +190,7 @@
 - [x] `node .\p3-api-integration.mjs` 回归通过，`46 pass / 0 fail`。
 - [x] `pnpm run build` 四端生产构建全部通过。
 - [x] 平台端 `/works`、`/billing` 与机构端 `/recharge` 从壳层/部分真实升级为真实只读或治理视图；不伪造支付到账、模型配置和运营数据。
-- [x] 已知边界：在线支付、计费规则配置、精选/举报/违规处理未包含；平台下架接口当前由前端限制仅对 `PUBLISHED` 操作，服务端严格状态机校验留待统一状态机批次。
+- [x] 已知边界：在线支付、计费规则配置未包含；举报 / 违规处理及内容治理按用户决策 `[~]` 暂缓；平台下架接口当前由前端限制仅对 `PUBLISHED` 操作，服务端严格状态机校验留待 P4-01 统一状态机批次。
 - [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不部署线上环境。
 
 ### 8.3 P4-02 第一批验收记录（2026-09-02）
@@ -178,7 +201,7 @@
 - [x] `pnpm.cmd run build` 四端生产构建全部通过。
 - [x] 学生端 `/courses`、`/credits`、`/account` 已由页面壳层升级为真实 API 页面；账号改名、改密后强制重新登录、会话撤销已形成闭环。
 - [x] 本次仅修改非画布代码与文档，`packages/canvas` 无改动，不触碰真实 `platform.db`，不部署线上环境。
-- [ ] 已知边界（第一批时登记）：学习首页任务聚合当时未实现，真实 AI / 充值服务、头像 / 监护人 / 隐私 / 注销与数据请求入口仍未实现。
+- [ ] 已知边界（第一批时登记）：学习首页任务聚合当时未实现，真实 AI / 充值服务、头像 / 隐私 / 注销与数据请求入口仍未实现；监护人功能按用户决策 `[~]` 暂缓。
 
 ### 8.4 P4-03 第一批验收记录（2026-09-02）
 
@@ -287,7 +310,7 @@
 - [x] 学生端页面：`/dashboard` 展示当前课堂与课堂能力、待完成课时、未读老师 / 平台通知、学习任务、继续创作、待处理反馈、课程进度总览和真实空态；“开始创作”携带课时参数进入 `/projects` 并预选课时。
 - [x] 权限与隔离：仅 STUDENT 可访问；未登录返回 401，教师访问返回 403；聚合范围限定本人机构、班级课程表、项目和作品，跨学生数据隔离。
 - [x] 验证：临时 SQLite P4-S01 API 验收 `53 pass / 0 fail`，覆盖开课前 / 开课中 / 结课后、自主练习账号、项目创建保存、通知、提交、驳回反馈、跨学生隔离和真实空态；P3 API 回归 `48 pass / 0 fail`；后端模块导入检查、四端生产构建和 `git diff --check` 通过。
-- [x] 边界：逐条反馈已读模型已在 P4-S03 建设并接入学习首页；真实 AI / 充值服务、头像 / 监护人 / 隐私 / 注销与数据请求入口仍未实现，留待后续批次。
+- [x] 边界：逐条反馈已读模型已在 P4-S03 建设并接入学习首页；真实 AI / 充值服务、头像 / 隐私 / 注销与数据请求入口仍未实现，留待后续批次；监护人功能按用户决策 `[~]` 暂缓。
 - [x] 本批未新增数据表；未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
 
 ### 8.15 P4-S02 验收记录（2026-09-03）
@@ -332,7 +355,7 @@
 
 ### 8.19 P4-S06 验收记录（2026-09-03）
 
-- [x] API：`GET /api/student/account` 聚合本人、机构、班级、课堂、登录会话、头像 / 监护人 / 隐私、账号申请和当前法律协议阅读状态；`PUT /profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke` 均要求当前密码并只作用于本人。
+- [x] API：`GET /api/student/account` 聚合本人、机构、班级、课堂、登录会话、头像 / 监护人 / 隐私、账号申请和当前法律协议阅读状态；其中监护人 / 法律相关代码仅保留历史实现，按用户决策 `[~]` 暂不扩展；`PUT /profile`、`/guardian`、`/privacy`、`/password`、`/sessions/:id/revoke` 均要求当前密码并只作用于本人。
 - [x] 资料最小化：头像仅限平台白名单键；监护人可选、可清空，填写时校验姓名、手机号、关系和同意项并记录同意时间；不收集住址、身份证号、社交账号或头像文件。
 - [x] 隐私闭环：作品墙匿名展示和精选授权由学生本人控制；关闭精选后机构端、平台端精选操作被拒绝；作品墙作者按匿名策略脱敏。
 - [x] 申请闭环：`account_requests` 支持 `DELETION / DATA_EXPORT`，状态为 `PENDING / APPROVED / REJECTED / CANCELLED`；待处理同类型申请不可重复提交，学生可撤销，机构管理员必须填写处理说明。
@@ -456,7 +479,7 @@
 - [x] 验收脚本 `tmp-p5-w07-seo.mjs`：临时 SQLite / 静态 **13 pass / 0 fail**；覆盖 robots、sitemap 页面范围、SEO head、动态内容、aria、焦点态、课程广场窄屏规则和生产 HTML。
 - [x] 四端生产构建、`git diff --check` 通过；未运行真实 Lighthouse，因此不宣称 Lighthouse 分数；构建保留 org / student 既存大 chunk 警告。
 
-### P5-W08 协议 / 隐私 / 未成年人说明验收记录（2026-09-03）
+### P5-W08 协议 / 隐私 / 未成年人说明验收记录（2026-09-03；正式法律 / 合规 `[~]` 暂缓）
 
 - [-] 官网新增 `/terms`、`/privacy`、`/minors` 三类准备稿页面，公开 Footer 可达；统一展示版本 `2026.09.03`、拟生效日期 `2026-09-03`、主体 `五格殿下 · AI魔法学院`，并明确“上线准备稿：正式备案主体与法务确认后生效”。
 - [x] `GET /api/public/legal` 返回协议版本、日期、状态和三个页面路径；`POST /api/public/contact` 强制当前版本与合法同意时间，线索保存 `legal_consent_version` / `legal_consented_at`，admin 可回读同意元数据。
@@ -517,7 +540,7 @@
 
 - 线上发布确认（2026-09-03）：通过 ECS 云服务器终端完成 `iicili.cyou` 受控内部测试发布；验收 `/`、`/admin/`、`/org/`、`/student/` 均 HTTP 200，`/api/health` 成功，未认证返回 401，旧服务保留。未读取、复制、迁移或写入旧站真实数据库。
 
-- 正式上线节奏确认（2026-09-04）：用户确认备案已经完成，备案后续由用户自行处理；清单优先级切换为 P8 质量、安全、隐私、运营与发布门槛，线上继续保持受控内测。
+- 历史口径记录（2026-09-04）：用户确认备案已经完成；该条当时写作“切换为正式上线节奏”，已被后续用户决策替代。当前以本清单 §1.2 的“内测技术收口”顺序为准。
 
 ### 正式上线门槛收敛验收记录（2026-09-04）
 
@@ -525,12 +548,12 @@
 - [x] **工程验收**：`p8-l01-data-inventory.mjs` 使用临时 SQLite 检查 12 类数据资产表及字段，共 **71 pass / 0 fail**，退出码 0；修复 Windows SQLite 句柄未关闭导致临时目录清理失败的问题。
 - [x] **边界**：本项只完成数据资产与最小化工程基线，不将 P8-L02～P8-L06、正式协议 / 法务确认或任何真实第三方服务接入判为完成；未修改 `packages/canvas`，未触碰真实业务数据库。
 
-- [-] **P8-L02 未成年人 / 监护同意流程**：学生端已接通监护人信息录入 / 清空、关系与确认校验、法律文档版本化阅读记录，写入 `users.guardian_*`、`legal_consents` 并记录审计；`p8-l02-l04-privacy-governance.mjs` 在临时 SQLite 验证相关断言通过。正式协议正文、地区年龄规则与监护人身份核验仍需用户 / 法务确认。
-- [-] **P8-L03 隐私请求与账号注销流程**：学生可提交 / 撤回数据导出与注销申请，机构管理员可审批；导出生成最小化数据概览，注销软删除学生并撤销会话。临时 SQLite 验证申请、审批、导出查看、注销后会话失效等断言通过；真实 OSS 文件、备份延迟删除、身份核验与法律保留例外仍待补齐。
-- [-] **P8-L04 内容举报、审核、申诉与记录保留**：已支持机构内已发布作品举报、重复举报拦截、管理员处理与紧急下架；临时 SQLite 验证相关断言通过。评论 / AI 生成内容举报、申诉入口、平台超管工作台及完整记录保留策略仍待补齐。
-- [x] **P8-L02～P8-L04 工程回归**：新增 `p8-l02-l04-privacy-governance.mjs`，使用临时 SQLite + 隔离 API **32 pass / 0 fail**；未修改 `packages/canvas`，未触碰真实业务数据库，未伪造真实 AI / OSS / 通知 / 支付能力。
+- [~] **P8-L02 未成年人 / 监护同意流程（用户决策暂缓，2026-09-04）**：学生端已有监护人信息录入 / 清空、关系与确认校验、法律文档版本化阅读记录代码；历史临时 SQLite 回归通过。当前不继续开发监护人信息、监护同意、身份核验或地区年龄规则；后续需用户重新授权。
+- [~] **P8-L03 隐私请求与账号注销流程（当前不扩展，2026-09-04）**：现有导出 / 注销工程基线和历史回归记录保留；不继续扩展真实 OSS 文件删除、备份延迟删除、身份核验或法律保留例外，后续需重新授权。
+- [~] **P8-L04 内容举报、审核、申诉与记录保留（用户决策暂缓，2026-09-04）**：已有机构内作品举报 / 处理 / 紧急下架代码和历史回归记录保留；当前不新增举报、申诉、违规识别、审核工作台、自动下架或记录保留策略，后续需重新授权。
+- [x] **P8-L02～P8-L04 历史工程回归**：新增 `p8-l02-l04-privacy-governance.mjs`，使用临时 SQLite + 隔离 API **32 pass / 0 fail**；该记录只证明历史代码可回归，不改变当前 `[~]` 暂缓决策；未修改 `packages/canvas`，未触碰真实业务数据库，未伪造真实 AI / OSS / 通知 / 支付能力。
 
-下一步继续按正式上线节奏推进 P8 质量、安全、隐私、运营与发布回滚门槛；线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+当前先按内测技术收口顺序推进 P8-Q05、P4-C01、P4-01、P4-03 和角色 UAT；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规及正式公开上线均 `[~]` 后置。线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
 ### P8-Q03 验收记录（2026-09-04）
 
 - [x] **API 集成测试扩展**：新增 `p8-q03-api-integration.mjs`，在临时 SQLite 和隔离 API 进程中覆盖认证登录失败、未认证 / 角色越权、公开接口、机构 / 班级 / 课堂、学生项目创建与版本保存、跨学生项目 / 作品访问拒绝、AI local-mock 生成与历史、作品提交 / 审核 / 发布、教师批注、积分用量和课堂结束后的能力拦截。
@@ -591,7 +614,7 @@ P8-Q04、P8-Q06、P8-S01、P8-S04、P8-S05 与 P8-S06 已于 2026-09-04 通过�
 - [x] **依赖漏洞扫描补充（2026-09-04）**：Node `v24.19.0` 执行 `pnpm audit --prod`，输出 `No known vulnerabilities found`；当前 P8-S01 的工程安全基线与 SCA 均通过。
 - [ ] **后续安全边界**：继续按依赖升级、真实部署变更和正式公开前访问控制恢复重新复核；CSRF、正式身份核验和真实第三方服务安全仍需单独完成。线上继续保持 noindex、独立测试数据库和内测标识，正式公开前必须恢复访问控制。
 
-P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及 P8-Q02 关键规则单元测试已通过；P8-Q05 已开始并修复官网首页运行时白屏与课程广场 API 代理缺陷，下一步继续完成 P8-Q05 浏览器矩阵与 P8-L02～L06；线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
+P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及 P8-Q02 关键规则单元测试已通过；P8-Q05 已开始并修复官网首页运行时白屏与课程广场 API 代理缺陷，下一步只继续完成 P8-Q05 可用环境回归、P4-C01、P4-01、P4-03 与内测 UAT；P8-L02～L04 已按用户决策 `[~]` 暂缓；线上 `https://iicili.cyou/` 继续保持 noindex、独立测试数据库和内测标识；Basic Auth 已按用户授权解除，正式公开前必须恢复访问控制。
 
 - P8-Q05 线上缺陷修复记录（2026-09-04）：线上 `/marketplace` 空数据时曾显示“加载失败”，根因是生效 Nginx HTTPS 站点 `/etc/nginx/sites-enabled/iicili.cyou` 的 `proxy_pass http://127.0.0.1:8788/;` 剥离了 `/api` 前缀；已备份并改为 `proxy_pass http://127.0.0.1:8788;`，`nginx -t`、reload 和 Codex 内置浏览器复核通过，页面现显示“暂无课程，敬请期待”。本地 `tmp-p9-i01-internal-deploy.mjs` 临时 SQLite 24/24 通过，并增加代理前缀回归断言；P8-Q05 仍因完整浏览器矩阵 / 移动端截图未完成而保持进行中。
 - P8-Q05 线上路由矩阵补充（2026-09-04）：Codex 内置浏览器 Chromium 桌面视口完成 12/12 官网关键路由渲染检查；正文非空、内测 banner、noindex、canonical、动态标题均通过，未发现“加载失败 / ReferenceError”等失败文本。由于独立 Chrome / Edge / Safari 与 390/414/768 等移动端宽度截图尚未完成，P8-Q05 继续保持进行中。
@@ -605,9 +628,9 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 
 ### 2026-09-04 继续推进记录：隐私与内容治理回归
 
-- [x] `p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite **32 pass / 0 fail**；复核监护信息同意 / 撤回、协议版本、隐私设置、导出申请、注销申请、作品举报、举报下架、旧会话失效和默认数据库隔离。
+- [x] **历史回归记录**：`p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite **32 pass / 0 fail**；复核监护信息同意 / 撤回、协议版本、隐私设置、导出申请、注销申请、作品举报、举报下架、旧会话失效和默认数据库隔离。该记录不改变当前 `[~]` 暂缓范围，也不代表正式法律、监护人或内容治理能力已上线。
 - [x] ECS 线上只读健康复核：当前 release `20260904T035620Z`，Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`；systemd 服务 active；本地 `/health`、线上 `/api/health` 与 `/api/public/marketplace` 均返回 HTTP 200。
-- [ ] **正式合规边界未改变**：真实监护人身份核验、按地区年龄规则、真实对象存储延迟删除 / 备份保留、评论 / AI 内容举报、申诉渠道和法务最终文本仍需外部规则或供应商确认；本轮不伪造完成。
+- [~] **用户决策后的正式合规边界**：真实监护人身份核验、按地区年龄规则、评论 / AI 内容举报、申诉渠道、违规 / 内容审核、正式法律文本及其生效发布均暂不做；现有准备稿 / 基础代码仅保留历史证据，不宣传为正式能力，后续需要时重新授权。真实对象存储延迟删除 / 备份保留等外部能力也不在当前内测队列。
 
 ### 2026-09-04 P8-Q05 移动端 / 平板视口回归增量记录
 
@@ -615,3 +638,10 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] 36/36 页面正文非空、无“加载失败 / ReferenceError / Application error / Not Found / 服务器错误”等失败文本；控制台错误 **0**；三种视口均未发现横向溢出（`scrollWidth <= clientWidth`）。
 - [x] 每条路由的 `robots` 均为 `noindex, nofollow, noarchive`，canonical 与动态标题均存在且符合预期；截图证据保存在 `artifacts/p8-q05-20260904/`（`matrix.json`、`home-390.png`、`marketplace-414.png`、`courses-768.png`）。
 - [ ] **未完成边界保持不变**：当前环境仅发现 Codex 内置 Chromium（未提供独立 Chrome、Edge、Safari 或真机连接），因此 P8-Q05 仍保持 `[-]`，不得宣称跨浏览器矩阵已完成。全程未修改 `packages/canvas`，未触碰真实线上数据库。
+
+### 2026-09-04 用户决策更新：暂缓举报、申诉、违规、监护人和正式法律事项
+
+- [x] 用户明确：举报、申诉、违规 / 内容审核、监护人功能以及正式法律 / 合规文本暂时不做，后续需要时再重新提出。
+- [x] 已将上述范围标记为 `[~]` 暂缓；现有代码和准备稿不删除、不宣传为正式能力，也不再作为当前内测上线阻塞项。
+- [x] 当前下一步改为内测技术收口：P8-Q05 可用浏览器回归、P4-C01 权限覆盖、P4-01 状态机 / 错误码、P4-03 列表规范和内测 UAT 缺陷收口。
+- [ ] 正式公开上线、正式法务、真实外部服务和相关合规门槛继续后置；未修改 `packages/canvas`，未触碰真实线上数据库。
