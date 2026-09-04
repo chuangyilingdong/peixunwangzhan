@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 
 const TOKEN_TTL_DAYS = 7;
+const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
 const PEPPER = process.env.AUTH_PEPPER || 'p0-local-pepper';
 
 export function id(prefix) {
@@ -532,11 +533,11 @@ export function audit(ctx, action, targetType, targetId, beforeData = null, afte
 }
 
 export function setAuthCookie(token) {
-  return `platform_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TOKEN_TTL_DAYS * 86400}`;
+  return 'platform_token=' + encodeURIComponent(token) + '; Path=/; HttpOnly; SameSite=Lax' + (COOKIE_SECURE ? '; Secure' : '') + '; Max-Age=' + (TOKEN_TTL_DAYS * 86400);
 }
 
 export function clearAuthCookie() {
-  return 'platform_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0';
+  return 'platform_token=; Path=/; HttpOnly; SameSite=Lax' + (COOKIE_SECURE ? '; Secure' : '') + '; Max-Age=0';
 }
 
 export function tokenExpiresAt() {
