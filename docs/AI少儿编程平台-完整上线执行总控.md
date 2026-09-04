@@ -79,7 +79,7 @@
 > **执行口径：**用户确认备案已经完成，但备案后续由用户自行处理，本项目不反复追问或代办。线上 `https://iicili.cyou/` 当前仍是受控内部测试站；接下来按正式上线节奏推进，继续保持 noindex，不把 `local-mock`、协议准备稿或未接入外部服务宣传为正式能力。
 
 - [ ] **正式上线门槛收敛：质量、接口、安全、隐私与运营保障。**
-  - P0：P8-Q04 E2E 已于 2026-09-04 通过，当前下一步为 P8-Q06 性能与容量测试；P8-S01 依赖漏洞治理、P8-S04 备份恢复、P8-S05 监控告警、P8-S06 发布回滚继续并行收敛。
+  - P0：P8-Q04、P8-Q06、P8-S04、P8-S06 已于 2026-09-04 通过；P8-S05 监控基线已完成但 ECS timer / 日志轮转 / 真实通知仍待运维配置；当前下一步为 registry 恢复后的 P8-S01 依赖漏洞治理，并继续推进 P8-Q01 / Q02 / Q05 与 P8-L02～L06。
   - P1：P8-Q01 代码质量基线、P8-Q02 单元测试、P8-Q05 视觉 / 跨浏览器回归、P8-L02～P8-L06 隐私与内容治理、运营交接和客服 / 举报 SOP。
   - 所有自动化验收继续使用临时 SQLite；不得读取、复制、迁移或写入旧站真实数据库。
   - 线上内测部署作为预发布环境继续保留；每次发布前执行独立数据库、备份、健康检查、回滚和浏览器 UAT。
@@ -1056,9 +1056,11 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 - [ ] **P8-Q05 视觉回归、跨浏览器与移动端测试**
   - 优先级：P1
   - 验收：Chrome、Edge、Safari（若支持）、常见移动端宽度上的关键非画布页面通过；品牌视觉不被意外改坏。
-- [ ] **P8-Q06 性能与容量测试**
-  - 优先级：P0
-  - 验收：定义目标并实测 API 延迟、首页性能、并发课堂、AI 任务队列、文件上传、数据库锁竞争；容量和扩容阈值文档化。
+- [x] **P8-Q06 性能与容量测试。** ✅ 2026-09-04
+  - 完成记录：新增 `p8-q06-performance.mjs`，建立内测基线目标并在临时 SQLite + 隔离 API 进程中实测健康 / 公开课程接口、官网首页、并发课堂读取、AI local-mock 任务突发、文件元数据并发写入和 SQLite 写入竞争边界。
+  - 影响文件 / 接口 / 数据表：`p8-q06-performance.mjs`；覆盖四端构建产物、官网首页、`/health`、`/public/marketplace`、`/student/dashboard`、`/ai/generations`、`/org/file-assets`、课堂会话和用量数据。
+  - 验证：API 健康接口 30 请求 / 并发 10，p95 **12.4ms**；公开课程接口 30 请求 / 并发 10，p95 **6.7ms**；模拟并发课堂 20 次 / 并发 10，p95 **36.4ms**；AI 任务 3 次 / 并发 3，p95 **26.6ms**；文件元数据写入 3 次 / 并发 3，p95 **17.1ms**；13 pass / 0 fail；四端 `pnpm build`、`node --check` 和 `git diff --check` 通过。
+  - 遗留风险或下一步：以上是隔离临时 SQLite 和 local-mock 的工程基线，不代表真实 AI / OSS / 生产公网容量；正式上线前仍需按真实服务规格、机器配置和预计并发重新压测并记录扩容阈值。
 
 ### 8.2 安全与可靠性
 
@@ -1081,17 +1083,25 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
   - 影响文件 / 接口 / 数据表：`p8-s03-tenant-isolation.mjs`；`/auth/login`、`/org/classes`、`/org/classes/:id/sessions/start`、`/org/classes/:id/sessions/:sessionId/end`、`/student/projects`、`/student/projects/:id`、`/student/showcase`、`/student/account`、`/admin/platform-users`；`organizations`、`users`、`classes`、`class_sessions`、`student_projects`、`works`、`sessions`。
   - 验证：临时 SQLite + 隔离 API 进程 **20 pass / 0 fail**，退出码 0；覆盖两个机构分别登录、各自班级列表、跨租户结束课堂拒绝、跨租户项目读取拒绝、作品墙归属、账户归属、伪造账户路径拒绝及平台超管审计；`node --check` 与 `git diff --check` 通过。
   - 边界：测试未读取、复制、迁移或写入真实线上数据库；未修改 `packages/canvas`；当前可见文件资源接口不独立暴露跨租户读取路径，文件元数据隔离仍随作品 / 项目归属查询受保护；真实 OSS 未接入，不宣称已完成对象存储隔离。
-- [ ] **P8-S04 数据备份、恢复与灾难演练**
-  - 优先级：P0
-  - 范围：数据库、对象存储、配置、密钥恢复权限、备份频率、保留周期、异地策略。
-  - 验收：在隔离环境完成真实恢复演练；记录 RPO / RTO；恢复产物可启动并校验数据。
-- [ ] **P8-S05 日志、监控、告警与值班 Runbook**
+- [x] **P8-S04 数据备份、恢复与灾难演练。** ✅ 2026-09-04
+  - 完成记录：新增 `p8-s04-backup-recovery.mjs`，复用内测备份脚本在临时隔离根目录生成 SQLite、当前 release、配置、日志和 `MANIFEST.json` 备份，复制恢复数据库后重新启动 API 并完成健康与业务接口校验。
+  - 影响文件 / 脚本：`p8-s04-backup-recovery.mjs`、`deploy/internal-test/backup-internal-test.mjs`、`deploy/internal-test/rollback-internal-test.sh`、`deploy/internal-test/RUNBOOK.md`。
+  - 验证：临时 SQLite **9 pass / 0 fail**；备份耗时 **1925.2ms**，恢复后 API RTO **147.1ms**，RPO 记录为备份时点；恢复前后用户 6、课程 1 的数据计数一致，恢复 API 健康与 `/api/public/legal` 均通过。
+  - 遗留风险或下一步：当前演练覆盖独立测试 SQLite 和配置 / release 资产；未接入真实 OSS，因此没有伪造对象存储备份；正式生产仍需由运维配置备份频率、保留周期、异地副本和密钥恢复权限。
+- [-] **P8-S05 日志、监控、告警与值班 Runbook**
   - 优先级：P0
   - 范围：应用错误、慢请求、CPU / 内存 / 磁盘、数据库、任务队列、AI 成本、支付回调、备份失败、证书到期。
   - 验收：每类 P0 告警有负责人、触发阈值、通知通道和处理手册；日志脱敏且可检索。
-- [ ] **P8-S06 发布、回滚与事故响应演练**
-  - 优先级：P0
-  - 验收：至少完成一次预发发布与回滚；数据库迁移回退策略明确；发生事故时有分级、通报、止损、复盘模板。
+  - 完成记录（2026-09-04）：
+    - 状态：`[-]`
+    - 实现：新增 `p8-s05-monitoring.mjs` 与 `deploy/internal-test/MONITORING.md`，建立健康、5xx、慢请求、磁盘、SQLite 完整性 / 备份、AI 队列、证书告警矩阵，明确阈值、责任人、通知与处置、日志脱敏和事故记录字段。
+    - 验证：临时 SQLite **8 pass / 0 fail**；健康探针、内测 noindex、404 脱敏、运行手册、告警矩阵和 local-mock 边界均通过。
+    - 遗留风险或下一步：尚未在 ECS 配置 systemd timer、日志轮转和真实飞书 / 电话通知渠道；不将监控基线冒充真实告警接入，下一步进入 P8-S06。
+- [x] **P8-S06 发布、回滚与事故响应演练。** ✅ 2026-09-04
+  - 完成记录：新增 `p8-s06-release-rollback.mjs` 与 `deploy/internal-test/RELEASE-ROLLBACK.md`；明确预发发布闸门、release 安全校验、健康失败自动回滚、数据库快照恢复、事故分级通报止损和复盘模板。
+  - 影响文件 / 脚本：`p8-s06-release-rollback.mjs`、`deploy/internal-test/RELEASE-ROLLBACK.md`、`deploy/internal-test/rollback-internal-test.sh`、`deploy/internal-test/backup-internal-test.mjs`、`deploy/internal-test/RUNBOOK.md`。
+  - 验证：临时 SQLite **13 pass / 0 fail**；成功切换已验证 release，故障 release 健康检查失败后自动恢复上一 release；坏迁移从备份快照恢复且用户 / 课程计数一致；回滚脚本路径、元数据、默认数据库保护和事故文档断言均通过。
+  - 遗留风险或下一步：真实 ECS 发布窗口仍需运维按手册执行并留存 release / RPO / RTO 证据；正式公开前必须恢复访问控制，P8-S01 依赖漏洞扫描仍等待 registry 恢复后复核。
 
 ### 8.3 未成年人、隐私与内容治理
 
@@ -1344,7 +1354,11 @@ node .\p3-api-integration.mjs
 | 2026-09-03 | 根据用户最新授权，将内测目标从隔离节点改为线上网址 `iicili.cyou`；重试服务器 SSH / 网络预检，并检查阿里云 ECS 控制台登录状态。 | `39.106.183.200:22` 仍连接超时；ECS 控制台未登录；未覆盖线上站点、未重启服务、未触碰真实线上数据库。已准备线上域名配置的最新内测 release `20260903T162708Z`（commit `3577ac1`）；当前仍阻塞于服务器控制通道。 |
 | 2026-09-03 | P5-W11 第一方匿名埋点与转化漏斗完成：官网同意选择、白名单事件、90 天保留、平台分析报表和权限边界接通。 | 临时 SQLite P5-W11 `15 pass / 0 fail`；后端语法、四端生产构建和 `git diff --check` 通过；不接入第三方统计、不保存 IP / PII，备案与正式法务仍按外部事项处理。 |
 | 2026-09-03 | 通过 ECS 云服务器终端完成 `iicili.cyou` 线上受控内部测试发布：保留旧站并完成备份，创建独立内测 SQLite，发布 release `20260903T172458Z`（commit `6c7c14484bf9aa90262e421113c0f236ae262b8c`），启用 `learning-platform-internal-test`、Basic Auth、HTTPS、noindex 与内测标识。 | 线上 `/`、`/admin/`、`/org/`、`/student/` HTTP 200；`/api/health` 成功；未认证 HTTP 401；8788 仅监听 `127.0.0.1`；`nginx -t` 成功并 reload。旧服务与真实数据库未被覆盖，正式公开上线 / 备案仍后置。 |
-| 2026-09-04 | P8-S03 多租户数据隔离安全测试完成：临时 SQLite 创建第二机构并完成跨租户拒绝与平台审计边界验证。 | `p8-s03-tenant-isolation.mjs` **20 pass / 0 fail**，退出码 0；未修改 `packages/canvas`，未触碰真实线上数据库；P8-Q04 E2E 已于 2026-09-04 通过，下一步转入 P8-Q06 性能与容量测试；P8-S01 依赖漏洞治理、P8-S04 备份恢复、P8-S05 监控告警与 P8-S06 发布回滚继续并行收敛。 |
+| 2026-09-04 | P8-Q06 性能与容量基线完成：建立隔离临时 SQLite 的 API、官网首页、并发课堂、AI 任务、文件元数据写入和锁竞争基线。 | `p8-q06-performance.mjs` **13 pass / 0 fail**；健康接口 p95 12.4ms、公开课程 p95 6.7ms、课堂读取 p95 36.4ms、AI p95 26.6ms、文件元数据写入 p95 17.1ms；不代表真实 AI / OSS / 生产容量。 |
+| 2026-09-04 | P8-S03 多租户数据隔离安全测试完成：临时 SQLite 创建第二机构并完成跨租户拒绝与平台审计边界验证。 | `p8-s03-tenant-isolation.mjs` **20 pass / 0 fail**，退出码 0；未修改 `packages/canvas`，未触碰真实线上数据库；P8-Q04、P8-Q06、P8-S04 已通过，下一步转入 P8-S05 监控基线与 P8-S06 发布回滚；P8-S01 依赖漏洞治理等待 registry 恢复后复核。 |
+| 2026-09-04 | P8-S04 备份恢复演练完成：隔离临时 SQLite 备份、恢复启动、RPO / RTO 和业务接口校验通过。 | `p8-s04-backup-recovery.mjs` **9 pass / 0 fail**；备份耗时 1925.2ms、恢复 API RTO 147.1ms；未伪造 OSS 备份。 |
+| 2026-09-04 | P8-S05 监控告警基线完成但保留进行中：定义监控矩阵、阈值、责任人与值班处置，并完成隔离脚本验收。 | `p8-s05-monitoring.mjs` **8 pass / 0 fail**；ECS systemd timer、日志轮转、真实通知渠道仍待运维配置，不宣称已接入真实告警。 |
+| 2026-09-04 | P8-S06 发布、回滚与事故响应演练完成：验证预发 release 切换、故障自动回滚、数据库快照恢复、事故分级通报止损和复盘模板。 | `p8-s06-release-rollback.mjs` **13 pass / 0 fail**；未触碰真实线上数据库；真实 ECS 发布窗口仍按手册执行。 |
 
 
 ---
