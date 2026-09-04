@@ -595,3 +595,10 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 
 - P8-Q05 线上缺陷修复记录（2026-09-04）：线上 `/marketplace` 空数据时曾显示“加载失败”，根因是生效 Nginx HTTPS 站点 `/etc/nginx/sites-enabled/iicili.cyou` 的 `proxy_pass http://127.0.0.1:8788/;` 剥离了 `/api` 前缀；已备份并改为 `proxy_pass http://127.0.0.1:8788;`，`nginx -t`、reload 和 Codex 内置浏览器复核通过，页面现显示“暂无课程，敬请期待”。本地 `tmp-p9-i01-internal-deploy.mjs` 临时 SQLite 24/24 通过，并增加代理前缀回归断言；P8-Q05 仍因完整浏览器矩阵 / 移动端截图未完成而保持进行中。
 - P8-Q05 线上路由矩阵补充（2026-09-04）：Codex 内置浏览器 Chromium 桌面视口完成 12/12 官网关键路由渲染检查；正文非空、内测 banner、noindex、canonical、动态标题均通过，未发现“加载失败 / ReferenceError”等失败文本。由于独立 Chrome / Edge / Safari 与 390/414/768 等移动端宽度截图尚未完成，P8-Q05 继续保持进行中。
+
+### P8-Q05 / P9-I01 增量记录（2026-09-04）
+
+- [x] **线上健康入口稳定化**：生效 Nginx 配置新增精确路由 `/api/health`，映射到 API 应用根路径 `/health`；通用 `/api/` 代理保持 `/api` 前缀，不再使用会剥离前缀的尾斜杠 `proxy_pass`。
+- [x] **线上验证**：`nginx -t` 成功并 reload；`https://iicili.cyou/api/health` 返回 HTTP 200，`https://iicili.cyou/api/public/marketplace` 返回 HTTP 200；Nginx 备份已统一移至 `/etc/nginx/backups/`，避免 `sites-enabled` 重复加载警告。
+- [x] **本地验收与版本**：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；提交 `a874e45 fix: expose stable internal health endpoint` 已 push。
+- [ ] **未完成边界**：P8-Q05 仍未完成独立 Chrome / Edge / Safari 与 390/414/768 移动端截图矩阵；不得据此标记 P8-Q05 完成。全程未修改 `packages/canvas`，未触碰真实线上数据库。

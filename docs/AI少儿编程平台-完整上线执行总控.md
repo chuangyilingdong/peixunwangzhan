@@ -1406,3 +1406,10 @@ node .\p3-api-integration.mjs
 - 对话交接确认（2026-09-04）：用户确认备案已经完成；备案后续由用户自行处理，本项目转入正式上线节奏，下一步按 P8 质量 / 安全 / 隐私 / 运营门槛推进；线上继续保持受控内测，不解除 Basic Auth / noindex。
 
 - 对话交接确认（2026-09-04，线上访问策略变更）：用户明确授权移除 `iicili.cyou` 的 Basic Auth。已通过 ECS 终端备份并只修改 Nginx 站点中的 `auth_basic` / `auth_basic_user_file` 两行，清理误放入 `sites-enabled` 的备份链接；`nginx -t`、reload、HTTPS HEAD 和 `/api/health` 验证通过。保留 HTTPS、noindex、内测标识、独立测试数据库和回滚备份；后续正式公开前重新建立访问控制。
+
+### P8-Q05 / P9-I01 增量记录（2026-09-04）
+
+- [x] **线上健康入口稳定化**：生效 Nginx 配置新增精确路由 `/api/health`，映射到 API 应用根路径 `/health`；通用 `/api/` 代理保持 `/api` 前缀，不再使用会剥离前缀的尾斜杠 `proxy_pass`。
+- [x] **线上验证**：`nginx -t` 成功并 reload；`https://iicili.cyou/api/health` 返回 HTTP 200，`https://iicili.cyou/api/public/marketplace` 返回 HTTP 200；Nginx 备份已统一移至 `/etc/nginx/backups/`，避免 `sites-enabled` 重复加载警告。
+- [x] **本地验收与版本**：`tmp-p9-i01-internal-deploy.mjs` 使用临时 SQLite **24 pass / 0 fail**；提交 `a874e45 fix: expose stable internal health endpoint` 已 push。
+- [ ] **未完成边界**：P8-Q05 仍未完成独立 Chrome / Edge / Safari 与 390/414/768 移动端截图矩阵；不得据此标记 P8-Q05 完成。全程未修改 `packages/canvas`，未触碰真实线上数据库。
