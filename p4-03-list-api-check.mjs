@@ -49,6 +49,12 @@ try {
   ok('courses status and visibility filters', coursesFiltered.status === 200 && coursesFiltered.data.data.items.every((item) => item.status === 'PUBLISHED' && item.visibility === 'ALL_ORGS'), coursesFiltered);
   const coursesFallback = await call('GET', '/admin/course-series?page=1&limit=1&sort=not-a-column', token);
   ok('courses unknown sort safely falls back', coursesFallback.status === 200 && coursesFallback.data.data.sort === 'manual', coursesFallback);
+  const admins = await call('GET', '/admin/platform-admins?page=1&limit=1&sort=name', token);
+  ok('platform admins pagination and sort', admins.status === 200 && admins.data.success && admins.data.data.page === 1 && admins.data.data.limit === 1 && admins.data.data.sort === 'name' && Number.isInteger(admins.data.data.totalPages), admins);
+  const adminsFiltered = await call('GET', '/admin/platform-admins?page=1&limit=20&status=ACTIVE', token);
+  ok('platform admins status filter', adminsFiltered.status === 200 && adminsFiltered.data.data.items.every((item) => item.status === 'ACTIVE'), adminsFiltered);
+  const adminsFallback = await call('GET', '/admin/platform-admins?page=1&limit=1&sort=not-a-column', token);
+  ok('platform admins unknown sort safely falls back', adminsFallback.status === 200 && adminsFallback.data.data.sort === 'created', adminsFallback);
   const marketplace = await call('GET', '/admin/course-marketplace?marketplaceStatus=NONE&page=1&limit=2', token);
   ok('marketplace status alias and pagination', marketplace.status === 200 && marketplace.data.data.page === 1 && marketplace.data.data.limit === 2 && 'totalPages' in marketplace.data.data, marketplace);
   const unauthenticated = await call('GET', '/admin/platform-users?page=1&limit=2');

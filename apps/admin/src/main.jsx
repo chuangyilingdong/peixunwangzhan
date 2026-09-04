@@ -531,7 +531,14 @@ function PlatformUsers({ api }) {
 function PlatformAdmins({ api, currentUser }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const adminQuery = useMemo(() => new URLSearchParams(Object.entries({ search, status: statusFilter }).filter(([, value]) => value)), [search, statusFilter]);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [sort, setSort] = useState('created');
+  const adminQuery = useMemo(() => {
+    const params = new URLSearchParams(Object.entries({ search, status: statusFilter }).filter(([, value]) => value));
+    params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
+    return params;
+  }, [search, statusFilter, page, limit, sort]);
   const admins = useData(() => api.get(`admin/platform-admins?${adminQuery.toString()}`), [api, adminQuery]);
   const permissionOptions = ['ADMIN_DASHBOARD', 'ADMIN_ORGANIZATIONS', 'ADMIN_USERS', 'ADMIN_COURSES', 'ADMIN_WORKS', 'ADMIN_HACKATHON', 'ADMIN_BILLING', 'ADMIN_MATERIALS', 'ADMIN_INBOX', 'ADMIN_ADMINS', 'ADMIN_ADJUSTMENT'];
   const [form, setForm] = useState({ login: '', displayName: '', password: '', permissions: [] });
@@ -581,12 +588,14 @@ function PlatformAdmins({ api, currentUser }) {
     </div>
     <Panel title="筛选条件">
       <div className="form-grid">
-        <label>关键词<input value={search} placeholder="登录名 / 姓名" onChange={(e) => setSearch(e.target.value)} /></label>
-        <label>状态<select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="">全部状态</option><option value="ACTIVE">启用</option><option value="DISABLED">停用</option></select></label>
+        <label>关键词<input value={search} placeholder="登录名 / 姓名" onChange={(e) => { setSearch(e.target.value); setPage(1); }} /></label>
+        <label>状态<select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}><option value="">全部状态</option><option value="ACTIVE">启用</option><option value="DISABLED">停用</option></select></label>
+        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="name">姓名</option><option value="status">状态</option></select></label>
+        <label>每页<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
       </div>
     </Panel>
     <Panel title="管理员列表">
-      {admins.loading ? <Loading /> : admins.error ? <ErrorState error={admins.error} onRetry={admins.refresh} /> : admins.data.items.length ? <div className="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>权限码</th><th>最近登录</th><th>活跃会话</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{admins.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div>{item.id === currentUser?.id && <span className="muted">当前账号</span>}</td><td><Status value={item.status} /></td><td>{item.permissions.length ? item.permissions.join(', ') : '全量（本地基线）'}</td><td>{formatDate(item.lastLoginAt) || '从未登录'}</td><td>{item.activeSessions}</td><td>{formatDate(item.updatedAt)}</td><td><div className="row-actions"><button className="text-button" onClick={() => { setEditing(item); setForm({ login: '', displayName: item.displayName, password: '', permissions: item.permissions }); setLogs(null); }}>编辑</button><button className="text-button" onClick={() => { const password = window.prompt('请输入至少 6 位新密码'); if (password) update(item, { password }, '管理员密码已重置，该账号全部会话已失效。'); }}>重置密码</button>{item.status === 'ACTIVE' ? <button className="text-button" onClick={() => update(item, { status: 'DISABLED' }, '管理员已停用，该账号全部会话已失效。', `确认停用管理员「${item.displayName}」？停用后该账号现有登录会话立即失效。`)}>停用</button> : <button className="text-button" onClick={() => update(item, { status: 'ACTIVE' }, '管理员已启用。')}>启用</button>}<button className="text-button" disabled={logsLoading} onClick={() => showLogs(item)}>操作日志</button></div></td></tr>)}</tbody></table></div> : <Empty title="暂无平台管理员" />}
+      {admins.loading ? <Loading /> : admins.error ? <ErrorState error={admins.error} onRetry={admins.refresh} /> : admins.data?.items?.length ? <><ListResultSummary total={admins.data.total} page={admins.data.page} totalPages={admins.data.totalPages} label="名管理员" /><div className="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>权限码</th><th>最近登录</th><th>活跃会话</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{admins.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div>{item.id === currentUser?.id && <span className="muted">当前账号</span>}</td><td><Status value={item.status} /></td><td>{item.permissions.length ? item.permissions.join(', ') : '全量（本地基线）'}</td><td>{formatDate(item.lastLoginAt) || '从未登录'}</td><td>{item.activeSessions}</td><td>{formatDate(item.updatedAt)}</td><td><div className="row-actions"><button className="text-button" onClick={() => { setEditing(item); setForm({ login: '', displayName: item.displayName, password: '', permissions: item.permissions }); setLogs(null); }}>编辑</button><button className="text-button" onClick={() => { const password = window.prompt('请输入至少 6 位新密码'); if (password) update(item, { password }, '管理员密码已重置，该账号全部会话已失效。'); }}>重置密码</button>{item.status === 'ACTIVE' ? <button className="text-button" onClick={() => update(item, { status: 'DISABLED' }, '管理员已停用，该账号全部会话已失效。', `确认停用管理员「${item.displayName}」？停用后该账号现有登录会话立即失效。`)}>停用</button> : <button className="text-button" onClick={() => update(item, { status: 'ACTIVE' }, '管理员已启用。')}>启用</button>}<button className="text-button" disabled={logsLoading} onClick={() => showLogs(item)}>操作日志</button></div></td></tr>)}</tbody></table></div><Pagination page={admins.data.page} totalPages={admins.data.totalPages} onChange={setPage} disabled={admins.loading} /></> : <Empty title="没有符合条件的平台管理员" body="可以调整关键词或状态筛选条件。" />}
     </Panel>
     {logs ? (
       <Panel title={`操作日志：${logs.admin.displayName}（最近 ${logs.items.length} 条）`}>

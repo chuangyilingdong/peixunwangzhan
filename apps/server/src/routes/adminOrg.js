@@ -1615,13 +1615,24 @@ export async function handleAdmin(ctx) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const search = String(ctx.search.get('search') || '').trim();
     const statusFilter = String(ctx.search.get('status') || '').trim();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const sortKey = String(ctx.search.get('sort') || 'created').trim();
+    const sort = Object.hasOwn({ created: true, name: true, status: true }, sortKey) ? sortKey : 'created';
+    const sortSql = {
+      created: 'user.created_at DESC, user.id DESC',
+      name: 'user.display_name COLLATE NOCASE ASC, user.id DESC',
+      status: 'user.status ASC, user.created_at DESC, user.id DESC',
+    }[sort];
     const params = []; const conditions = ["user.role='SUPER_ADMIN'", 'user.deleted_at IS NULL'];
     if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword); }
     if (['ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('user.status=?'); params.push(statusFilter); }
-    const adminUsers = rows('SELECT user.* FROM users user WHERE ' + conditions.join(' AND ') + ' ORDER BY user.created_at DESC LIMIT 200', params);
+    const where = conditions.join(' AND ');
+    const total = Number(row('SELECT COUNT(*) n FROM users user WHERE ' + where, params)?.n || 0);
+    const adminUsers = rows('SELECT user.* FROM users user WHERE ' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]);
     const meta = userLoginMeta(adminUsers.map((item) => item.id));
     const items = adminUsers.map((item) => ({ ...normalizeUser(item, { includeAuthMeta: true }), lastLoginAt: meta.get(item.id)?.lastLoginAt || null, activeSessions: meta.get(item.id)?.activeSessions || 0 }));
-    return { items, total: items.length };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/platform-admins' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {};
