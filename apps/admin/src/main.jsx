@@ -808,7 +808,7 @@ function PlatformNotifications({ api }) {
         <div className="row-actions top-gap">
           <button className="primary-button" disabled={busy} onClick={tickQueue}>立即扫描</button>
           {queueSummary.data.deadLetter > 0 ? <button className="secondary-button" disabled={busy || !Object.values(dlSelected).filter(Boolean).length} onClick={requeueSelectedDeadLetters}>恢复选中死信（{Object.values(dlSelected).filter(Boolean).length}）</button> : null}
-          <span className="muted" style="font-size:0.8em">Worker: {queueSummary.data.workerId || '—'}</span>
+          <span className="muted" style={{ fontSize: '0.8em' }}>Worker: {queueSummary.data.workerId || '—'}</span>
         </div>
         {queueSummary.data.deadLetter > 0 ? <div className="table-wrap top-gap"><table><thead><tr><th></th><th>用户</th><th>通知标题</th><th>尝试/上限</th><th>错误码</th><th>错误信息</th><th>更新于</th></tr></thead><tbody>{deadLetters.data?.items?.map ? deadLetters.data.items.map((item) => <tr key={item.id}>
           <td><input type="checkbox" checked={!!dlSelected[item.id]} onChange={(e) => setDlSelected({ ...dlSelected, [item.id]: e.target.checked ? item.id : null })} /></td>

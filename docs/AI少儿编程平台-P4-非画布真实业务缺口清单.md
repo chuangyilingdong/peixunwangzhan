@@ -720,3 +720,12 @@ P8-S01、P8-S06 发布回滚与事故响应演练、P8-Q01 代码质量基线及
 - [x] 验收：`p4-03-list-api-check.mjs` 使用临时 SQLite **29 pass / 0 fail**（覆盖账务分页、排序回落、状态 / 日期筛选和非法参数）；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；四端生产构建、`git diff --check` 通过。
 - [x] 影响文件：`apps/server/src/routes/adminOrg.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。影响接口：`GET /api/admin/billing/usage-records`。无数据库结构变更，未修改 `packages/canvas`。
 - [ ] 下一步：对 P4-03-LIST 做整体验收复核（用户、作品、审计、课程广场、机构、课程、平台管理员、通知、物料、账务），随后进入平台 / 机构 / 教师 / 学生 / 官网访客角色 UAT；举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
+
+### 2026-09-04 P8-Q07 角色 UAT：平台超管阶段
+
+- [x] 使用 `p8-q07-role-uat.mjs` 建立临时 SQLite + 隔离 API + 四端统一网关 + Codex In-app Browser 的平台超管 UAT 基线；异常登录、未登录拦截、17 个平台页面渲染、通知页缺陷复现 / 修复 / 复验和登出会话失效均使用隔离数据完成。
+- [x] 发现并修复 P1：平台端 `/notifications` 生产包白屏。非压缩错误确认根因为 Worker 标签使用字符串 `style`，React 19 要求 `style` 为对象；生产包压缩后表现为 `Minified React error #62`。修复 `apps/admin/src/main.jsx` 为 `style={{ fontSize: '0.8em' }}`，修复范围仅此一处。
+- [x] 复验：通知页概要指标、队列状态、Worker 信息和三个 tab 均可见、可切换；平台超管 17/17 页面通过。`p4-03-list-api-check.mjs` 50/50、`p8-q03-api-integration.mjs` 52/52、`p8-q04-e2e.mjs` 54/54、`pnpm build` 与 `git diff --check` 通过。
+- [x] 登出安全：同一 Cookie 登出前 `/api/me=200`，`POST /api/auth/logout=200` 后再读 `/api/me=401 SESSION_SUPERSEDED`，旧会话立即失效。
+- [x] 证据路径：`evidence/p8-q07/admin-notifications-fixed.jpg`、`evidence/p8-q07/admin-super-admin-uat.txt`。未修改 `packages/canvas`，未触碰默认数据库或真实线上数据库。
+- [ ] 下一步继续机构管理员、教师、学生、官网访客 UAT；独立浏览器矩阵、真机和真实外部 AI / OSS / 支付 / 微信 / 短信 / 邮件仍为未覆盖边界，不得宣称完成。

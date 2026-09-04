@@ -1,0 +1,10 @@
+P8-Q07 平台超管 UAT
+日期：2026-09-04
+环境：临时 SQLite + 本地隔离网关 http://127.0.0.1:60028 + Codex In-app Browser
+入口：http://127.0.0.1:60028/admin/
+
+17/17 页面复核通过：dashboard, organizations, courses, users, marketplace, works, hackathon, billing, materials, website-content, analytics, notifications, client-releases, inbox, leads, admins, audit。
+通知页 P1 根因：PlatformNotifications 中 Worker span 使用字符串 style，React 19 抛出 style prop 映射错误；生产包表现为 Minified React error #62 白屏。
+修复：style 改为 { fontSize: '0.8em' }；生产包复验标题、概要、队列、三个 tab 均可见。
+登出：API 登录后 /api/me=200，POST /auth/logout=200，同一 Cookie 再读 /api/me=401 SESSION_SUPERSEDED。
+未覆盖：独立 Chrome/Edge/Safari 矩阵、真机、真实外部 AI/OSS/支付/微信/短信/邮件服务。

@@ -95,7 +95,7 @@
 
 - [ ] **当前唯一执行队列：内测产品与技术收口。**
   - P0：P8-Q04、P8-Q06、P8-S01、P8-S04、P8-S06 已于 2026-09-04 通过；P8-S05 监控工程基线、ECS timer 与日志轮转已于 2026-09-04 完成；真实飞书 / 电话通知仍属外部运维项，不宣称已接入。
-  - P1：P8-Q01、P8-Q02 已通过；P4-C01 已于 2026-09-04 完成；当前继续推进：① P8-Q05 可用浏览器 / 视口回归边界记录；② P4-03 筛选 / 分页 / 排序 / 空态 / 导出规范；③ 平台 / 机构管理员 / 教师 / 学生角色 UAT 与缺陷收口。不得虚构独立 Chrome / Edge / Safari 或真机结果。举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规按用户决策 `[~]` 暂缓。
+  - P1：P8-Q01、P8-Q02 已通过；P4-C01、P4-03 已于 2026-09-04 完成；P8-Q07 平台超管阶段已于 2026-09-04 通过并修复 `/admin/notifications` P1 白屏；当前继续推进：① P8-Q05 可用浏览器 / 视口回归边界记录；② P8-Q07 机构管理员、教师、学生、官网访客角色 UAT 与缺陷收口。不得虚构独立 Chrome / Edge / Safari 或真机结果。举报、申诉、违规 / 内容审核、监护人和正式法律 / 合规按用户决策 `[~]` 暂缓。
   - 所有自动化验收继续使用临时 SQLite；不得读取、复制、迁移或写入旧站真实数据库。
   - 线上内测部署作为预发布环境继续保留；每次发布前执行独立数据库、备份、健康检查、回滚和浏览器 UAT。
 - [!] **外部 / 用户侧事项。**
@@ -1559,3 +1559,15 @@ node .\p3-api-integration.mjs
 - [x] `p4-03-list-api-check.mjs` 重构为十类列表矩阵式断言，临时 SQLite 验收 **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；四端生产构建与 `git diff --check` 通过。
 - [x] 影响文件：`apps/server/src/routes/adminOrg.js`、`apps/admin/src/main.jsx`、`p4-03-list-api-check.mjs`。无数据库结构变更，未触碰真实线上数据库，未修改 `packages/canvas`。
 - [x] P4-03-LIST 主任务完成；下一项进入平台超管、机构管理员、教师、学生、官网访客五类角色 UAT。举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓，不新增开发。
+
+### 8.13 P8-Q07 角色 UAT：平台超管阶段（2026-09-04）
+
+- [x] 隔离 UAT 环境与脚本基线：新增 `p8-q07-role-uat.mjs`，强制创建临时 SQLite 并拒绝默认业务数据库，播种数据后启动隔离 API 与统一网关，托管 platform / org / student / website 四端生产构建；网关输出数据库路径、证据目录、四端入口与 API 代理，并附加 `noindex` / internal-test 响应头。本轮复验网关 `http://127.0.0.1:60028`，临时数据库位于系统 Temp 目录，未读取、复制或写入真实线上数据库。
+- [x] 平台端异常路径：未登录访问 `/admin/dashboard` 显示登录页；`root` 错误密码返回“登录名或密码错误”；`org-admin / org123` 登录平台端被拒绝并提示“该账号没有平台管理权限”；`root / admin123` 可正常进入平台端。
+- [x] 平台超管 17 个页面巡检：`/dashboard`、`/organizations`、`/courses`、`/users`、`/marketplace`、`/works`、`/hackathon`、`/billing`、`/materials`、`/website-content`、`/analytics`、`/notifications`、`/client-releases`、`/inbox`、`/leads`、`/admins`、`/audit` 全部完成真实浏览器渲染检查；关键内容可见，未出现“加载失败 / Application error / ReferenceError / TypeError / 服务器内部错误 / 接口不存在”。前 16 页首次巡检通过；`/notifications` 首次发现生产包白屏，修复后复验 **17/17 通过**。
+- [x] 缺陷与根因：`/admin/notifications` 生产包白屏，压缩错误为 `Minified React error #62`。用平台端 Vite 非压缩构建接入隔离 API 后取得完整错误：`The style prop expects a mapping from style properties to values, not a string`。根因是 `PlatformNotifications` 的 Worker 标签把 `style` 写成字符串 `style="font-size:0.8em"`；React 19 在生产包压缩为 #62。
+- [x] 最小修复：仅将 `apps/admin/src/main.jsx` 中该处改为 `style={{ fontSize: '0.8em' }}`；未改动 Hooks、通知业务逻辑、接口或 `packages/canvas`。修复后通知页标题“通知事件与失败运营”、概要指标、队列状态、Worker 信息与“事件投递 / 事件列表 / 失败运营”三个 tab 均可见、可切换，无白屏。
+- [x] 回归与复验：`p4-03-list-api-check.mjs` 临时 SQLite **50 pass / 0 fail**；`p8-q03-api-integration.mjs` **52 pass / 0 fail**；`p8-q04-e2e.mjs` **54 pass / 0 fail**；`pnpm build` 四端生产构建通过；`git diff --check` 通过。修复后重启隔离 UAT 环境并复核 17 个平台页面，无失败文本，当前环境未新增浏览器错误。
+- [x] 登出与会话失效：通过隔离 API 使用 `root` 登录后读取 `/api/me` 返回 200；`POST /api/auth/logout` 返回 200 且 `loggedOut=true`；同一 Cookie 再读 `/api/me` 返回 401 `SESSION_SUPERSEDED`，证明服务端旧会话立即失效。前端 `logout()` 同时调用服务端注销、清理本地会话并跳转登录页。
+- [x] 证据：`evidence/p8-q07/admin-notifications-fixed.jpg`（修复后真实浏览器截图）、`evidence/p8-q07/admin-super-admin-uat.txt`（环境、页面矩阵、根因、回归与登出记录）。证据为本仓库持久路径，可复核。
+- [ ] 下一步：按 P8-Q07 继续机构管理员、教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
