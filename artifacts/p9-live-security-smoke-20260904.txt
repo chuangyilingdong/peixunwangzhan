@@ -1,0 +1,83 @@
+{
+  "site": "https://iicili.cyou",
+  "checks": [
+    {
+      "path": "/server.js",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/package.json",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/pnpm-lock.yaml",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/pnpm-workspace.yaml",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/apps/",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/packages/",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/node_modules/",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/scripts/",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/deploy/",
+      "status": 200,
+      "pass": false
+    },
+    {
+      "path": "/.env",
+      "status": 404,
+      "pass": true
+    },
+    {
+      "path": "/.git/config",
+      "status": 404,
+      "pass": true
+    },
+    {
+      "path": "/backup.sql",
+      "status": 404,
+      "pass": true
+    },
+    {
+      "path": "/api/health",
+      "status": 200,
+      "pass": true
+    },
+    {
+      "path": "/",
+      "status": 200,
+      "securityHeaders": {
+        "hsts": true,
+        "csp": true,
+        "nosniff": true,
+        "frameOptions": true,
+        "referrerPolicy": true
+      },
+      "pass": true
+    }
+  ],
+  "pass": false
+}

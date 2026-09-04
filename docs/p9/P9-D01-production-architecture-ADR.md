@@ -132,6 +132,6 @@
 - 告警：API 失败、磁盘 ≥80%、证书 14 天、备份超 26 小时；正常与故障注入验证通过。外部通知渠道未接入。
 ## 11. P9-D02 安全暴露面加固（2026-09-04）
 
-- Nginx：敏感与常见扫描路径改为 404，避免 SPA fallback 返回 200；移除 default 站点；备份保留于 `/etc/nginx/backups/`。
+- Nginx：已移除 default 站点；备份保留于 `/etc/nginx/backups/`。本地生产配置模板已补齐源码 / 配置 / 依赖路径的显式 404，但 2026-09-04 公网复测仍观察到 `/server.js`、`/package.json` 等路径返回 SPA fallback 200；需通过授权 ECS 终端安装模板规则并执行 `nginx -t` + reload 后再收口，不能提前宣称已修复。
 - 主机防火墙：ufw active，默认 incoming deny，仅放行 22/80/443。
 - 遗留：CUPS snap 仍监听 631 但已被防火墙拦截；snapd 全局安装锁释放后应停用 `cups.cupsd` 与 `cups.cups-browsed`。

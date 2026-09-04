@@ -111,7 +111,7 @@
   - 最小告警：升级每分钟 `monitoring-healthcheck.sh`，覆盖 API 失败、磁盘 ≥80%、证书 14 天窗口、备份超过 26 小时 / 失败四类；正常与故障注入路径均验证，状态写入 `production/state/last-alert-state.json`。外部短信 / 飞书 / 邮件通知渠道尚未接入。
   - 运行状态：production active/enabled，`NRestarts=0`，journal error/warn=0，Nginx 4xx/5xx=0，四端公网 200，安全头保持；证书 certbot.timer active。
   - 变更资产：`deploy/production/daily-backup.sh`、`restore-drill.sh`、备份修复、告警探测、systemd 备份模板、README / RUNBOOK、`docs/p9/P9-D02-production-24h-observation.md`。
-  - 安全加固（20:55 CST）：Nginx 敏感扫描路径全部 404、移除 default 站点、启用 ufw 仅放行 22/80/443；四端与 API 复测 200。CUPS 631 被防火墙拦截，snap 锁释放后再停用。
+  - 安全加固（20:55 CST）：已移除 default 站点、启用 ufw 仅放行 22/80/443；四端与 API 复测 200。公网复测发现 `/server.js`、`/package.json` 等路径仍被 SPA fallback 返回 200；本地 `deploy/production/nginx.conf.example` 已补齐显式 404 规则，待授权 ECS 终端安装并完成 `nginx -t`、reload 和公网复测。CUPS 631 被防火墙拦截，snap 锁释放后再停用。
 
 - [ ] **当前唯一执行队列：完成生产 24 小时运行观察（截止 2026-09-05 20:24 CST）。**
   - 观察记录：`docs/p9/P9-D02-production-24h-observation.md` 已建立并写入 2026-09-04 20:44 CST 基线；24 小时窗口未结束，不得提前宣称完成。
@@ -1239,7 +1239,8 @@ P9-I01～P9-I06 已完成并保留为内测阶段记录。2026-09-04 用户确�
 - [-] **P9-D05 反向代理、HTTPS、域名、CORS 与安全头**
   - 优先级：P0
   - 完成记录：Nginx 生产配置承载 `https://iicili.cyou` 四端静态入口与 `/api/` 反代；API 仅监听 `127.0.0.1:8789`；80 强制 HTTPS，Let's Encrypt 证书与 `certbot.timer` 生效；public 模式保留 HSTS、CSP 等安全头，公网四端与 `/api/health` 回归通过。
-  - 安全加固：已移除 default 站点，ufw 默认 incoming deny 且仅放行 22/80/443；旧 8787 已清除。internal-test 8788 仅作为本机回滚资产，不在公网放行。此前已验证 `/.env` 等路径 404；2026-09-04 公网只读复测发现 `/server.js` 被 SPA fallback 返回 200（未泄露源码，但敏感路径未按预期 404），需授权运维在 Nginx 中补显式拒绝规则后再收口。证据：`artifacts/p9-live-smoke-20260904.txt`。
+  - 安全加固：已移除 default 站点，ufw 默认 incoming deny 且仅放行 22/80/443；旧 8787 已清除。internal-test 8788 仅作为本机回滚资产，不在公网放行。此前已验证 `/.env` 等路径 404；2026-09-04 公网只读复测发现 `/server.js`、`/package.json`、`/apps/` 等被 SPA fallback 返回 200（未泄露源码，但敏感路径未按预期 404）。新增 `scripts/p9-live-security-smoke.mjs` 作为只读回归脚本，本地生产 Nginx 模板已补显式拒绝规则；仍需授权运维安装规则后再收口。证据：`artifacts/p9-live-smoke-20260904.txt`。
+  - 完成记录（2026-09-04）：状态 [-]；实现：新增 scripts/p9-live-security-smoke.mjs、补充 deploy/production/nginx.conf.example 与生产 RUNBOOK；验证：Node 语法检查、git diff --check 通过，公网只读复核 /api/health=200、安全头存在，但 9 个敏感路径仍返回 200；遗留：必须由授权 ECS 运维安装 Nginx 规则后再复测，未完成前不得标记 [x]。
 
 ### 9.3 正式公开上线：发布策略与上线验证
 
@@ -1388,7 +1389,7 @@ node .\p3-api-integration.mjs
 
 | 日期 | 变更 | 状态 / 验证 |
 |---|---|---|
-| 2026-09-04 | 生产切换与运维补强完成：P9-D01 架构实施、每日备份与恢复演练、真实管理员与种子账号禁用、最小告警、Nginx 扫描面加固；同步修正 P9 清单状态。 | `learning-platform-production` active/enabled；四端公网 200；备份 `20260904T124238Z` SHA256 / integrity 通过；恢复演练健康 200；种子账号 DISABLED 且会话清零；告警正常与故障注入验证通过；24 小时观察截止 2026-09-05 20:24 CST。 |
+| 2026-09-04 | 生产公网敏感路径复核与 Nginx 规则补强准备：新增只读 smoke、补齐生产配置模板 / RUNBOOK，并确认 `/server.js` 等仍被 SPA fallback 返回 200。 | 本地 Node 语法与 diff 检查通过；公网 `/api/health=200`、安全头存在；P9-D05 保持 `[-]`，等待授权 ECS 终端执行 Nginx 备份、`nginx -t`、reload 与复测。 |`r`n| 2026-09-04 | 生产切换与运维补强完成：P9-D01 架构实施、每日备份与恢复演练、真实管理员与种子账号禁用、最小告警、Nginx 扫描面加固；同步修正 P9 清单状态。 | `learning-platform-production` active/enabled；四端公网 200；备份 `20260904T124238Z` SHA256 / integrity 通过；恢复演练健康 200；种子账号 DISABLED 且会话清零；告警正常与故障注入验证通过；24 小时观察截止 2026-09-05 20:24 CST。 |
 | 2026-09-02 | P3 基础闭环完成：画布模板与排版、教师批注、学生反馈、机构作品墙、mock AI / 素材任务边界。 | 已通过 P3 API 联调、后端语法和前端构建基线。 |
 | 2026-09-02 | 修复课堂 AI 能力字段映射：`allowImage`。 | 已纳入 P3 API 验证。 |
 | 2026-09-02 | 完成非画布官网与三端品牌视觉、导航、页面壳层第一轮建设；画布未改。 | 全量生产构建通过。 |

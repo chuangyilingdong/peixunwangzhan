@@ -57,6 +57,16 @@ bash /srv/ai-kids-platform/production/bin/restore-drill.sh
 
 状态 JSON 写入 `production/state/last-alert-state.json`，人类可读日志写入 `production/logs/monitoring-health.log`。当前最小告警只保证失败可被 systemd 状态与 journal 检出；外部短信 / 飞书 / 邮件推送尚未接入，不得宣称 7x24 有人值守。
 
+## 敏感路径只读复核
+
+在具备生产公网访问的 Node 24 环境执行；该检查只发起 GET，不登录、不写库、不输出响应体：
+
+```bash
+cd /srv/ai-kids-platform/internal-test/source
+node scripts/p9-live-security-smoke.mjs
+```
+
+`/server.js`、`/package.json`、`/apps/`、`/packages/`、`/node_modules/`、`/scripts/`、`/deploy/`、`/.env` 等必须返回 404；`/api/health` 必须返回 200，入口安全头必须存在。若任一路径返回 200，先不要标记 P9-D05 完成，按 Nginx 变更窗口处理并保留变更前配置备份。
 ## 公网验收
 
 在服务器 Node 24 环境执行：

@@ -41,6 +41,7 @@ jobs:
           node --check apps/server/src/routes/adminOrg.js
           node --check scripts/p4-02-demo-data-inventory.mjs
           node --check scripts/p4-o09-reminders.mjs
+          node --check scripts/p9-live-security-smoke.mjs
 
       - name: Run isolated acceptance tests
         run: |
