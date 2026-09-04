@@ -999,10 +999,11 @@ export async function handleAdmin(ctx) {
   if (part === '/audit-logs' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const q = auditQuery(ctx);
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
-    const items = rows(auditListQuery(q.where) + ' LIMIT ' + limit, q.params).map(auditRow);
-    const total = row('SELECT COUNT(*) n FROM audit_logs WHERE ' + q.where.replace(/audit\./g, ''), q.params);
-    return { items, total: Number(total && total.n || 0), limit };
+    const total = Number(row('SELECT COUNT(*) n FROM audit_logs WHERE ' + q.where.replace(/audit\./g, ''), q.params)?.n || 0);
+    const items = rows(auditListQuery(q.where) + ' LIMIT ? OFFSET ?', [...q.params, limit, (page - 1) * limit]).map(auditRow);
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
   }
   if (part === '/audit-logs/summary' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -1433,7 +1434,7 @@ export async function handleAdmin(ctx) {
   // P5-M01: Marketplace management endpoints
   if (part === '/course-marketplace' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const statusFilter = String(ctx.search.get('status') || '').trim().toUpperCase();
+    const statusFilter = String(ctx.search.get('marketplaceStatus') || ctx.search.get('status') || '').trim().toUpperCase();
     const search = String(ctx.search.get('search') || '').trim();
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
@@ -1465,7 +1466,7 @@ export async function handleAdmin(ctx) {
         createdAt: normalized.createdAt,
       };
     });
-    return { items, total, page, limit };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
   }
 
   const marketplaceDetailMatch = part.match(/^\/course-marketplace\/([^/]+)$/);
@@ -1516,15 +1517,19 @@ export async function handleAdmin(ctx) {
   if (part === '/platform-users' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const role = ctx.search.get('role'); const orgIdFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
     const params = []; const conditions = ['user.deleted_at IS NULL'];
     if (['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER', 'STUDENT'].includes(role)) { conditions.push('user.role=?'); params.push(role); }
     if (orgIdFilter) { conditions.push('user.org_id=?'); params.push(orgIdFilter); }
     if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR user.phone LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
+    const where = conditions.join(' AND ');
+    const total = Number(row('SELECT COUNT(*) n FROM users user WHERE ' + where, params)?.n || 0);
     const items = rows(
-      'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE ' + conditions.join(' AND ') + ' ORDER BY user.created_at DESC LIMIT 500',
-      params,
+      'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE ' + where + ' ORDER BY user.created_at DESC, user.id DESC LIMIT ? OFFSET ?',
+      [...params, limit, (page - 1) * limit],
     ).map(platformUserRow);
-    return { items, total: items.length };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
   }
   const platformUserMatch = part.match(/^\/platform-users\/([^/]+)\/(status|password|phone)$/);
   if (platformUserMatch && method === 'PUT') {
@@ -1742,6 +1747,11 @@ export async function handleAdmin(ctx) {
   if (part === '/works' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const status = ctx.search.get('status'); const orgFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const sortKey = String(ctx.search.get('sort') || 'featured').trim();
+    const sort = Object.hasOwn({ featured: true, submitted: true, title: true }, sortKey) ? sortKey : 'featured';
+    const sortSql = { featured: 'work.featured_at DESC, work.submitted_at DESC, work.id DESC', submitted: 'work.submitted_at DESC, work.id DESC', title: 'work.title COLLATE NOCASE ASC, work.id DESC' }[sort];
     const conditions = []; const params = [];
     if (['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED'].includes(status)) { conditions.push('work.status=?'); params.push(status); }
     if (orgFilter) { conditions.push('work.org_id=?'); params.push(orgFilter); }
@@ -1751,11 +1761,12 @@ export async function handleAdmin(ctx) {
       params.push(keyword, keyword, keyword);
     }
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const total = Number(row('SELECT COUNT(*) n FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id' + where, params)?.n || 0);
     const items = rows(
-      `SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by${where} ORDER BY work.featured_at DESC, work.submitted_at DESC LIMIT 200`,
-      params,
+      `SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by${where} ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
+      [...params, limit, (page - 1) * limit],
     ).map((work) => ({ ...normalizeWork(work), organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
-    return { items, total: items.length };
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   let platformWorkMatch = part.match(/^\/works\/([^/]+)\/unpublish$/);
   if (platformWorkMatch && method === 'PUT') {

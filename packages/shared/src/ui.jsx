@@ -19,3 +19,19 @@ export function Empty({ title='暂时没有数据', body='数据出现后会显�
 export function ErrorState({ error,onRetry }) { return <Notice tone="danger">{error?.message||'加载失败'} {onRetry&&<button className="text-button" onClick={onRetry}>重试</button>}</Notice> }
 export function Panel({ title, children, actions, className='' }) { return <section className={'panel '+className}><div className="panel-heading"><h2>{title}</h2>{actions}</div>{children}</section> }
 export function Status({ value }) {const text=String(value||'UNKNOWN');const tone=/ACTIVE|PUBLISHED|APPROVED|SUCCESS|HOME_PRACTICE|ALWAYS_AVAILABLE/.test(text)?'success':/DRAFT|PENDING|TRIAL/.test(text)?'warning':'muted';return <span className={'status '+tone}>{text.replaceAll('_',' ')}</span> }
+
+export function ListResultSummary({ total = 0, page = 1, totalPages = 1, label = '条' }) {
+  const safeTotalPages = Math.max(1, Number(totalPages) || 1);
+  return <div className="list-result-summary">共 <strong>{Number(total) || 0}</strong> {label} · 第 <strong>{Math.min(Math.max(1, Number(page) || 1), safeTotalPages)}</strong> / <strong>{safeTotalPages}</strong> 页</div>;
+}
+
+export function Pagination({ page = 1, totalPages = 1, onChange, disabled = false }) {
+  const current = Math.max(1, Number(page) || 1);
+  const pages = Math.max(1, Number(totalPages) || 1);
+  if (pages <= 1) return null;
+  return <nav className="pagination" aria-label="分页">
+    <button type="button" className="secondary-button" disabled={disabled || current <= 1} onClick={() => onChange(current - 1)}>上一页</button>
+    <span>第 {current} / {pages} 页</span>
+    <button type="button" className="secondary-button" disabled={disabled || current >= pages} onClick={() => onChange(current + 1)}>下一页</button>
+  </nav>;
+}

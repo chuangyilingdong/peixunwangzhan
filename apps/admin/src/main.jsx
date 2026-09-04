@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, readSession, Status, writeSession } from '@platform/shared';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
@@ -460,7 +460,9 @@ function Courses({ api }) {
 function PlatformUsers({ api }) {
   const organizations = useData(() => api.get('admin/organizations'), [api]);
   const [filters, setFilters] = useState({ role: '', orgId: '', search: '' });
-  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); return params; }, [filters, page, limit]);
   const users = useData(() => api.get(`admin/platform-users?${query.toString()}`), [api, query]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -476,21 +478,21 @@ function PlatformUsers({ api }) {
     <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态，并可执行启停、重置密码与解绑手机。" actions={<button className="secondary-button" onClick={users.refresh}>刷新</button>} />
     <Panel title="筛选条件">
       <div className="form-grid">
-        <label>角色<select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
-        <label>关键词<input value={filters.search} placeholder="登录名 / 姓名 / 手机号" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
+        <label>角色<select value={filters.role} onChange={(e) => { setFilters({ ...filters, role: e.target.value }); setPage(1); }}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>机构<select value={filters.orgId} onChange={(e) => { setFilters({ ...filters, orgId: e.target.value }); setPage(1); }}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
+        <label>关键词<input value={filters.search} placeholder="登录名 / 姓名 / 手机号" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label>
       </div>
       {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
     </Panel>
     <Panel title="用户列表">
-      {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>套餐</th><th>状态</th><th>有效期至</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td>{item.role === 'STUDENT' ? (item.billingPackageName || '未绑定') : '—'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td><td><div className="row-actions">
+      {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <><ListResultSummary total={users.data.total} page={users.data.page} totalPages={users.data.totalPages} label="名用户" /><div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>套餐</th><th>状态</th><th>有效期至</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td>{item.role === 'STUDENT' ? (item.billingPackageName || '未绑定') : '—'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td><td><div className="row-actions">
         {item.status === 'ACTIVE'
           ? <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'DISABLED' }, `已停用 ${item.displayName}，该账号现有登录会话立即失效。`, `确认停用「${item.displayName}」？停用后该账号现有登录会话立即失效，将无法登录和使用平台功能。`)}>停用</button>
           : <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'ACTIVE' }, `已启用 ${item.displayName}。`)}>启用</button>}
         <input placeholder="新密码（≥6位）" value={passwordInput[item.id] || ''} onChange={(e) => setPasswordInput({ ...passwordInput, [item.id]: e.target.value })} />
         <button className="text-button" disabled={busy || (passwordInput[item.id] || '').length < 6} onClick={() => run(item, 'password', { password: passwordInput[item.id] }, `已重置 ${item.displayName} 的密码，该账号全部会话已失效。`)}>重置密码</button>
         {item.phone ? <button className="text-button" disabled={busy} onClick={() => run(item, 'phone', { phone: '' }, `已解绑 ${item.displayName} 的手机号。`, `确认解绑「${item.displayName}」的手机号 ${item.phone}？`)}>解绑手机</button> : null}
-      </div></td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的用户" />}
+      </div></td></tr>)}</tbody></table></div><Pagination page={users.data.page} totalPages={users.data.totalPages} onChange={setPage} disabled={users.loading} /></> : <Empty title="没有符合条件的用户" />}
     </Panel>
   </>;
 }
@@ -568,12 +570,13 @@ function PlatformAdmins({ api, currentUser }) {
 function PlatformAudit({ api }) {
   const [filters, setFilters] = useState({ action: '', actorId: '', targetType: '', targetId: '', requestPath: '', from: '', to: '', orgId: '' });
   const [limit, setLimit] = useState(50);
+  const [page, setPage] = useState(1);
   const auditQuery = useMemo(() => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
-    params.set('limit', String(limit));
+    params.set('limit', String(limit)); params.set('page', String(page));
     return params.toString();
-  }, [filters, limit]);
+  }, [filters, limit, page]);
   const [actionFilter, setActionFilter] = useState('');
   const fullQuery = useMemo(() => {
     const params = new URLSearchParams(auditQuery);
@@ -584,13 +587,16 @@ function PlatformAudit({ api }) {
   const list = useData(() => api.get(`admin/audit-logs?${fullQuery}`), [api, fullQuery]);
   const summary = useData(() => api.get(`admin/audit-logs/summary?${fullQuery}`), [api, fullQuery]);
   const [message, setMessage] = useState('');
+  useEffect(() => { if (list.data?.totalPages && page > list.data.totalPages) setPage(list.data.totalPages); }, [list.data, page]);
+  useEffect(() => { setPage(1); }, [filters, actionFilter, limit]);
   const [exporting, setExporting] = useState(false);
   const organizations = useData(() => api.get('admin/organizations'), [api]);
-  function reset() { setFilters({ action: '', actorId: '', targetType: '', targetId: '', requestPath: '', from: '', to: '', orgId: '' }); setActionFilter(''); setMessage(''); }
+  function reset() { setFilters({ action: '', actorId: '', targetType: '', targetId: '', requestPath: '', from: '', to: '', orgId: '' }); setActionFilter(''); setPage(1); setMessage(''); }
   async function exportCsv() {
     setExporting(true); setMessage('');
     try {
-      const result = await api.get(`admin/audit-logs/export?${fullQuery}&limit=2000`);
+      const exportParams = new URLSearchParams(fullQuery); exportParams.delete('page'); exportParams.set('limit', '2000');
+      const result = await api.get(`admin/audit-logs/export?${exportParams.toString()}`);
       const blob = new Blob([result.content], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -604,16 +610,16 @@ function PlatformAudit({ api }) {
     <PageHeader eyebrow="平台系统" title="操作审计中心" description="按机构、动作、操作者、目标、时间和请求路径检索全平台审计记录，导出 CSV 供归档与合规使用。" actions={<><button className="secondary-button" onClick={() => { list.refresh(); summary.refresh(); actions.refresh(); }}>刷新</button><button className="primary-button" disabled={exporting} onClick={exportCsv}>{exporting ? '导出中…' : '导出 CSV'}</button></>} />
     <Panel title="筛选条件">
       <div className="form-grid">
-        <label>动作<select value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}><option value="">全部动作</option>{(actions.data?.items || []).map((item) => <option key={item.action} value={item.action}>{item.action}（{item.count}）</option>)}</select></label>
+        <label>动作<select value={actionFilter} onChange={(e) => { setActionFilter(e.target.value); setPage(1); }}><option value="">全部动作</option>{(actions.data?.items || []).map((item) => <option key={item.action} value={item.action}>{item.action}（{item.count}）</option>)}</select></label>
         <label>自定义动作<input value={filters.action} placeholder="覆盖上方选择，留空使用下拉" onChange={(e) => setFilters({ ...filters, action: e.target.value })} /></label>
-        <label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{(organizations.data?.items || []).map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}</select></label>
+        <label>机构<select value={filters.orgId} onChange={(e) => { setFilters({ ...filters, orgId: e.target.value }); setPage(1); }}><option value="">全部机构</option>{(organizations.data?.items || []).map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}</select></label>
         <label>操作者 ID<input value={filters.actorId} onChange={(e) => setFilters({ ...filters, actorId: e.target.value })} /></label>
         <label>目标类型<input value={filters.targetType} placeholder="如 COURSE_SERIES / USER" onChange={(e) => setFilters({ ...filters, targetType: e.target.value })} /></label>
         <label>目标 ID<input value={filters.targetId} onChange={(e) => setFilters({ ...filters, targetId: e.target.value })} /></label>
         <label>请求路径（包含）<input value={filters.requestPath} placeholder="如 /admin/course-series" onChange={(e) => setFilters({ ...filters, requestPath: e.target.value })} /></label>
         <label>开始时间（UTC ISO）<input value={filters.from} placeholder="2026-09-01T00:00:00Z" onChange={(e) => setFilters({ ...filters, from: e.target.value })} /></label>
         <label>结束时间（UTC ISO）<input value={filters.to} placeholder="2026-09-04T00:00:00Z" onChange={(e) => setFilters({ ...filters, to: e.target.value })} /></label>
-        <label>返回条数<select value={String(limit)} onChange={(e) => setLimit(Number(e.target.value))}><option value="20">20</option><option value="50">50</option><option value="100">100</option><option value="200">200</option></select></label>
+        <label>返回条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="20">20</option><option value="50">50</option><option value="100">100</option><option value="200">200</option></select></label>
       </div>
       <div className="row-actions"><button type="button" className="secondary-button" onClick={reset}>重置筛选</button></div>
       {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
@@ -637,8 +643,8 @@ function PlatformAudit({ api }) {
         </Panel>
       </div>
     </> : null}
-    <Panel title={`审计记录（${list.data?.total ?? 0} 条匹配，返回前 ${limit} 条）`}>
-      {list.loading || actions.loading ? <Loading label="正在读取审计记录…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : list.data?.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>角色</th><th>机构</th><th>动作</th><th>目标</th><th>请求路径</th><th>IP</th><th>变更前</th><th>变更后</th></tr></thead><tbody>{list.data.items.map((item) => <tr key={item.id}>
+    <Panel title={`审计记录（${list.data?.total ?? 0} 条匹配）`}>
+      {list.loading || actions.loading ? <Loading label="正在读取审计记录…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : list.data?.items.length ? <><div className="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>角色</th><th>机构</th><th>动作</th><th>目标</th><th>请求路径</th><th>IP</th><th>变更前</th><th>变更后</th></tr></thead><tbody>{list.data.items.map((item) => <tr key={item.id}>
         <td>{formatDate(item.createdAt)}</td>
         <td>{item.actorName}</td>
         <td>{item.actorRole || '—'}</td>
@@ -649,7 +655,7 @@ function PlatformAudit({ api }) {
         <td>{item.ip || '—'}</td>
         <td><code>{item.before ? JSON.stringify(item.before) : '{}'}</code></td>
         <td><code>{item.after ? JSON.stringify(item.after) : '{}'}</code></td>
-      </tr>)}</tbody></table></div> : <Empty title="当前筛选条件下无审计记录" />}
+      </tr>)}</tbody></table></div><Pagination page={list.data.page} totalPages={list.data.totalPages} onChange={setPage} disabled={list.loading} /></> : <Empty title="当前筛选条件下无审计记录" />}
     </Panel>
   </>;
 }
@@ -846,6 +852,9 @@ function PlatformNotifications({ api }) {
 function PlatformWorks({ api }) {
   const organizations = useData(() => api.get('admin/organizations'), [api]);
   const [filters, setFilters] = useState({ status: '', orgId: '', search: '' });
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [sort, setSort] = useState('featured');
   const [message, setMessage] = useState(''); const [action, setAction] = useState(null); const [reason, setReason] = useState(''); const [saving, setSaving] = useState(false);
   const reports = useData(() => api.get('admin/work-reports?status=PENDING'), [api]);
   const [reportAction, setReportAction] = useState(null); const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); const [reportBusy, setReportBusy] = useState(false);
@@ -853,7 +862,7 @@ function PlatformWorks({ api }) {
   const detail = useData(() => detailId ? api.get(`admin/works/${detailId}/detail`) : Promise.resolve(null), [api, detailId]);
   const [detailTab, setDetailTab] = useState('basic');
   const [detailFeatureReason, setDetailFeatureReason] = useState('');
-  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)), [filters]);
+  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
   const works = useData(() => api.get(`admin/works?${query.toString()}`), [api, query]);
   const statusLabels = { PENDING: '待审核', APPROVED: '已通过', REJECTED: '已下架', PUBLISHED: '已发布' };
   const reportCategoryLabels = { INAPPROPRIATE: '内容不当', COPYRIGHT: '版权', PRIVACY: '隐私', OTHER: '其他' };
@@ -865,10 +874,10 @@ function PlatformWorks({ api }) {
   function openDetail(item) { setDetailId(item.id); setDetailTab('basic'); setDetailFeatureReason(item.featuredReason || ''); }
   function closeDetail() { setDetailId(null); }
   return <>
-    <PageHeader eyebrow="内容治理" title="平台作品库" description="聚合各机构作品；精选只允许已发布作品，举报处理可保留作品或执行平台下架。" actions={<button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); if (detailId) detail.refresh(); }}>刷新</button>} />
-    <Panel title="筛选条件"><div className="form-grid"><label>状态<select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>机构<select value={filters.orgId} onChange={(e) => setFilters({ ...filters, orgId: e.target.value })}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label><label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label></div>{message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
-    <Panel title="作品列表">{works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>状态与授权</th><th>举报</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><button className="text-button" onClick={() => openDetail(item)}><strong>{item.title}</strong></button><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td><Status value={item.status} />{item.featured && <span className="status success">精选</span>}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{item.status === 'PUBLISHED' && <><button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button><button className="text-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button></>}</div></td></tr>)}</tbody></table></div> : <Empty title="没有符合条件的作品" />}</Panel>
-    <Panel title={`待处理举报 · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" onClick={() => { setReportAction(item); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); }}>处理</button></td></tr>)}</tbody></table></div> : <Empty title="暂无待处理举报" />}</Panel>
+    <PageHeader eyebrow="内容治理" title="平台作品库" description="聚合各机构作品；精选只允许已发布作品。举报 / 违规治理按当前决策暂缓，历史记录仅作只读留存。" actions={<button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); if (detailId) detail.refresh(); }}>刷新</button>} />
+    <Panel title="筛选条件"><div className="form-grid"><label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>机构<select value={filters.orgId} onChange={(e) => { setFilters({ ...filters, orgId: e.target.value }); setPage(1); }}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label><label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label><label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="featured">精选 / 提交时间</option><option value="submitted">最近提交</option><option value="title">作品名称</option></select></label><label>每页条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10</option><option value="20">20</option><option value="50">50</option></select></label></div>{message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
+    <Panel title={`作品列表（${works.data?.total ?? 0} 条）`}>{works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <><ListResultSummary total={works.data.total} page={works.data.page} totalPages={works.data.totalPages} label="件作品" /><div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>状态与授权</th><th>举报（暂缓）</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><button className="text-button" onClick={() => openDetail(item)}><strong>{item.title}</strong></button><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td><Status value={item.status} />{item.featured && <span className="status success">精选</span>}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{item.status === 'PUBLISHED' && <><button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button><button className="text-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button></>}</div></td></tr>)}</tbody></table></div><Pagination page={works.data.page} totalPages={works.data.totalPages} onChange={setPage} disabled={works.loading} /></> : <Empty title="没有符合条件的作品" />}</Panel>
+    <Panel title={`举报记录（当前暂缓，仅保留历史只读） · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作（暂缓）</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" disabled title="举报治理按当前决策暂缓">暂缓</button></td></tr>)}</tbody></table></div> : <Empty title="暂无待处理举报" />}</Panel>
     {detailId ? <Panel title={`作品详情 · ${detail.data?.title || ''}`} actions={<button className="secondary-button" onClick={closeDetail}>关闭</button>}>{detail.loading ? <Loading /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data ? <>
       <div className="metric-row" style={{ marginBottom: 12 }}>
         <span><Status value={detail.data.status} /></span>
@@ -879,7 +888,7 @@ function PlatformWorks({ api }) {
       <div className="tabs" style={{ marginBottom: 12, display: 'flex', gap: 8 }}>
         <button type="button" className={`tab-button ${detailTab === 'basic' ? 'active' : ''}`} style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: 6, background: detailTab === 'basic' ? '#0f172a' : '#fff', color: detailTab === 'basic' ? '#fff' : '#0f172a', cursor: 'pointer' }} onClick={() => setDetailTab('basic')}>基本</button>
         <button type="button" className={`tab-button ${detailTab === 'submissions' ? 'active' : ''}`} style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: 6, background: detailTab === 'submissions' ? '#0f172a' : '#fff', color: detailTab === 'submissions' ? '#fff' : '#0f172a', cursor: 'pointer' }} onClick={() => setDetailTab('submissions')}>提交历史 · {detail.data.submissions.length}</button>
-        <button type="button" className={`tab-button ${detailTab === 'reports' ? 'active' : ''}`} style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: 6, background: detailTab === 'reports' ? '#0f172a' : '#fff', color: detailTab === 'reports' ? '#fff' : '#0f172a', cursor: 'pointer' }} onClick={() => setDetailTab('reports')}>举报记录 · {detail.data.reports.length}</button>
+        <button type="button" className={`tab-button ${detailTab === 'reports' ? 'active' : ''}`} style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: 6, background: detailTab === 'reports' ? '#0f172a' : '#fff', color: detailTab === 'reports' ? '#fff' : '#0f172a', cursor: 'pointer' }} onClick={() => setDetailTab('reports')}>举报记录（暂缓） · {detail.data.reports.length}</button>
       </div>
       {detailTab === 'basic' ? <div className="split">
         <div>
