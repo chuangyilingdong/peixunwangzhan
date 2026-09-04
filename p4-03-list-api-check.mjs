@@ -43,6 +43,12 @@ try {
   ok('works unknown sort safely falls back', worksFallback.status === 200 && worksFallback.data.data.sort === 'featured', worksFallback);
   const audit = await call('GET', '/admin/audit-logs?page=1&limit=2', token);
   ok('audit pagination metadata', audit.status === 200 && audit.data.data.page === 1 && audit.data.data.limit === 2 && audit.data.data.totalPages >= 1, audit);
+  const courses = await call('GET', '/admin/course-series?page=1&limit=1&sort=title', token);
+  ok('courses pagination and sort', courses.status === 200 && courses.data.success && courses.data.data.page === 1 && courses.data.data.limit === 1 && courses.data.data.sort === 'title' && Number.isInteger(courses.data.data.totalPages), courses);
+  const coursesFiltered = await call('GET', '/admin/course-series?page=1&limit=20&status=PUBLISHED&visibility=ALL_ORGS', token);
+  ok('courses status and visibility filters', coursesFiltered.status === 200 && coursesFiltered.data.data.items.every((item) => item.status === 'PUBLISHED' && item.visibility === 'ALL_ORGS'), coursesFiltered);
+  const coursesFallback = await call('GET', '/admin/course-series?page=1&limit=1&sort=not-a-column', token);
+  ok('courses unknown sort safely falls back', coursesFallback.status === 200 && coursesFallback.data.data.sort === 'manual', coursesFallback);
   const marketplace = await call('GET', '/admin/course-marketplace?marketplaceStatus=NONE&page=1&limit=2', token);
   ok('marketplace status alias and pagination', marketplace.status === 200 && marketplace.data.data.page === 1 && marketplace.data.data.limit === 2 && 'totalPages' in marketplace.data.data, marketplace);
   const unauthenticated = await call('GET', '/admin/platform-users?page=1&limit=2');

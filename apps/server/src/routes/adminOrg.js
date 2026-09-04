@@ -1195,7 +1195,34 @@ export async function handleAdmin(ctx) {
     return after;
   }
 
-  if (part === '/course-series' && method === 'GET') { requireRole(ctx, ['SUPER_ADMIN']); return { items: rows('SELECT * FROM course_series ORDER BY sort,title').map((item) => normalizeSeries(item, { includeLessons: true, includeAllLessons: true })) }; }
+  if (part === '/course-series' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const search = String(ctx.search.get('search') || '').trim();
+    const statusFilter = String(ctx.search.get('status') || '').trim();
+    const visibilityFilter = String(ctx.search.get('visibility') || '').trim();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
+    const sortKey = String(ctx.search.get('sort') || 'manual').trim();
+    const sort = Object.hasOwn({ manual: true, created: true, updated: true, title: true }, sortKey) ? sortKey : 'manual';
+    const sortSql = {
+      manual: 'series.sort ASC, series.title COLLATE NOCASE ASC, series.id DESC',
+      created: 'series.created_at DESC, series.id DESC',
+      updated: 'series.updated_at DESC, series.id DESC',
+      title: 'series.title COLLATE NOCASE ASC, series.id DESC',
+    }[sort];
+    const conditions = []; const params = [];
+    if (search) {
+      conditions.push('(series.title LIKE ? OR series.id LIKE ?)');
+      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      params.push(keyword, keyword);
+    }
+    if (['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(statusFilter)) { conditions.push('series.status=?'); params.push(statusFilter); }
+    if (['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibilityFilter)) { conditions.push('series.visibility=?'); params.push(visibilityFilter); }
+    const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const total = Number(row('SELECT COUNT(*) n FROM course_series series' + where, params)?.n || 0);
+    const items = rows('SELECT series.* FROM course_series series' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map((item) => normalizeSeries(item));
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
+  }
   if (part === '/course-series' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const title = String(body.title || '').trim();
     if (!title) throw errors.badRequest('课包标题不能为空', 'COURSE_TITLE_REQUIRED');
