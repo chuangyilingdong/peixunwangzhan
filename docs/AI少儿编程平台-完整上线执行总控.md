@@ -1572,6 +1572,17 @@ node .\p3-api-integration.mjs
 - [x] 证据：`evidence/p8-q07/admin-notifications-fixed.jpg`（修复后真实浏览器截图）、`evidence/p8-q07/admin-super-admin-uat.txt`（环境、页面矩阵、根因、回归与登出记录）。证据为本仓库持久路径，可复核。
 - [ ] 下一步：按 P8-Q07 继续机构管理员、教师、学生、官网访客角色 UAT 与缺陷收口；P8-Q05 仍保持进行中，未虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续保持 `[~]` 暂缓。
 
+### 8.16 P8-Q07 角色 UAT：学生阶段（2026-09-04）
+
+- [x] 登录矩阵：未登录访问 /student/dashboard 仅显示登录页；student-2 错误密码提示“登录名或密码错误”；root、org-admin、teacher-1 登录学生端均被拒绝，未出现学生学习看板。
+- [x] 跟随课堂边界：student-1 登录后显示“小明”和“等待老师开启课堂后”提示；在无进行中课堂时创建项目返回 403 CLASS_SESSION_REQUIRED“跟随课堂账号需要由教师先开启对应课时的课堂”，未产生课堂外项目。
+- [x] 自主练习与页面巡检：student-2 登录后显示“小小创作者 / 小红”，可见我的学习、我的项目、我的作品、作品墙、消息中心、帮助与下载 6 项导航，并可进入课程、AI/魔法石、个人账号页面；9 个学生路由全部真实渲染，无白屏和页面脚本错误。
+- [x] 学生间数据隔离：student-2 创建自主练习项目后自读 200；student-1 对同项目 GET / PUT / DELETE / 快照 / AI 历史全部 404 PROJECT_NOT_FOUND，直访画布仅显示“项目不存在”，不泄露项目 ID 或画布内容。
+- [x] 机构与管理端边界：学生调用 /api/org/users、/api/org/billing/packages、/api/org/billing/enrollments、/api/org/works、/api/org/classes、/api/admin/organizations 全部 403；访问 /admin/dashboard 与 /org/dashboard 均只显示对应登录页，不渲染平台或机构数据。
+- [x] 登出与旧 Cookie 失效：登出前 /api/me=200；POST /api/auth/logout=200 后同 Cookie /api/me=401 SESSION_INVALID，浏览器回到学生登录页。
+- [x] 验证与证据：学生专项 26/26 通过，未发现需要修复的 P0/P1；RBAC 27/27、列表 50/50、P3 集成 52/52、E2E 54/54 与四端生产构建通过。证据见 evidence/p8-q07/student-uat.txt、student-1-dashboard.jpg、student-1-class-blocked.jpg、student-1-cross-project-boundary.jpg、student-2-*.jpg。全程使用隔离临时 SQLite，未修改 packages/canvas，未触碰默认数据库或真实线上数据库。
+- [ ] 下一步：继续官网访客角色 UAT；P8-Q05 仍保持进行中，不虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 [~] 暂缓。
+
 ### 8.15 P8-Q07 角色 UAT：教师阶段（2026-09-04）
 
 - [x] 登录矩阵：未登录访问 `/org/dashboard` 仅显示登录页；`teacher-1` 错误密码返回“登录名或密码错误”；`root / admin123` 与 `student-1 / study123` 登录机构端均被拒绝；`org-admin / org123` 登录后进入机构管理员视角，不出现教师看板。
@@ -1582,7 +1593,7 @@ node .\p3-api-integration.mjs
 - [x] 登出安全：登出前 `/api/me=200`，`POST /api/auth/logout=200`，同一 Cookie 登出后 `/api/me=401 SESSION_INVALID`，前端回到登录页。
 - [x] 回归：教师角色专项 **19/19 通过**；`p4-c01-rbac-ownership.mjs` **27/27**；`p4-03-list-api-check.mjs` **50/50**；`p8-q03-api-integration.mjs` **52/52**；`p8-q04-e2e.mjs` **54/54**；`pnpm build` 四端通过；四端生产 JS `React.createElement=0`；`git diff --check` 通过。机构管理员套餐 / 用量接口复验 200。
 - [x] 证据：`evidence/p8-q07/teacher-uat.txt`、`teacher-*.jpg`、`teacher-enrollment-detail.txt`、`teacher-usage-permission.txt`、`org-packages-after-teacher-guard.jpg`。UAT 仅使用临时 SQLite 与隔离端口，不触碰默认数据库、真实线上数据库或生产站点。
-- [ ] 下一步：继续学生、官网访客角色 UAT；P8-Q05 仍保持进行中，不虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 `[~]` 暂缓。
+- [x] 下一步已进入学生 UAT（见上节）；官网访客仍待执行；P8-Q05 仍保持进行中，不虚构独立 Chrome / Edge / Safari 或真机结果；举报、申诉、违规 / 内容审核、监护人、正式法律 / 合规继续 `[~]` 暂缓。
 ### 8.14 P8-Q07 角色 UAT：机构管理员阶段（2026-09-04）
 
 - [x] 机构端异常路径：未登录访问 `/org/dashboard` 仅显示机构登录页；`org-admin` 错误密码返回“登录名或密码错误”；`root / admin123` 与 `student-1 / study123` 登录机构端均被拒绝并提示“该账号没有机构教务权限”；`org-admin / org123` 正常进入机构总览。

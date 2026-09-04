@@ -1,0 +1,237 @@
+{
+  "environment": {
+    "base": "http://127.0.0.1:58511",
+    "isolatedTempDb": true
+  },
+  "matrix": [
+    {
+      "case": "unauthenticated",
+      "loginShown": true,
+      "dashboardShown": false
+    },
+    {
+      "case": "wrong-password",
+      "denied": true,
+      "wrongPassword": true,
+      "dashboardShown": false
+    },
+    {
+      "case": "super-admin",
+      "denied": true,
+      "wrongPassword": false,
+      "dashboardShown": false
+    },
+    {
+      "case": "org-admin",
+      "denied": true,
+      "wrongPassword": false,
+      "dashboardShown": false
+    },
+    {
+      "case": "teacher",
+      "denied": true,
+      "wrongPassword": false,
+      "dashboardShown": false
+    }
+  ],
+  "followStudent": {
+    "overview": {
+      "roleLabel": true,
+      "displayName": true,
+      "waitingClass": true
+    },
+    "createBlocked": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"CLASS_SESSION_REQUIRED\",\"message\":\"跟随课堂账号需要由教师先开启对应课时的课堂\"}}"
+    }
+  },
+  "navigation": {
+    "roleLabel": true,
+    "displayName": true,
+    "visible": true
+  },
+  "sample": {
+    "seriesId": "series_c6e517f37c9742a6a3ab",
+    "lessonId": "lesson_da9380b9cb654b6298d0",
+    "projectCreate": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"project_78514359aafe4fd98506\",\"studentId\":\"user_00202d33e1fb49a2ad8f\",\"orgId\":\"org_b042ae5c94a84637a9b8\",\"classId\":\"class_380c2345dd0d432ebc3a\",\"courseLessonId\":\"lesson_da9380b9cb654b6298d0\",\"courseLessonTitle\":\"第1课：认识古诗与创作主题\",\"title\":\"小红自主练习隔离样本\",\"status\":\"DRAFT\",\"latestVersion\":1,\"lastSavedAt\":\"2026-09-04T10:28:09.260Z\",\"createdAt\":\"2026-09-04T10:28:09.260Z\",\"updatedAt\":\"2026-09-04T10:28:09.260Z\",\"archivedAt\":null,\"deletedAt\":null,\"className\":\"三年级AI创作一班\",\"seriesId\":\"series_c6e517f37c9742a6a3ab\",\"seriesTitle\":\"AI古诗词创意营\",\"workId\":null,\"workStatus\":null,\"workSubmittedAt\":null,\"canvasSnapshot\":{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}}}"
+    },
+    "projectId": "project_78514359aafe4fd98506",
+    "ownership": {
+      "self": {
+        "status": 200,
+        "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"project_78514359aafe4fd98506\",\"studentId\":\"user_00202d33e1fb49a2ad8f\",\"orgId\":\"org_b042ae5c94a84637a9b8\",\"classId\":\"class_380c2345dd0d432ebc3a\",\"courseLessonId\":\"lesson_da9380b9cb654b6298d0\",\"courseLessonTitle\":\"第1课：认识古诗与创作主题\",\"title\":\"小红自主练习隔离样本\",\"status\":\"DRAFT\",\"latestVersion\":1,\"lastSavedAt\":\"2026-09-04T10:28:09.260Z\",\"createdAt\":\"2026-09-04T10:28:09.260Z\",\"updatedAt\":\"2026-09-04T10:28:09.260Z\",\"archivedAt\":null,\"deletedAt\":null,\"className\":\"三年级AI创作一班\",\"seriesId\":\"series_c6e517f37c9742a6a3ab\",\"seriesTitle\":\"AI古诗词创意营\",\"workId\":null,\"workStatus\":null,\"workSubmittedAt\":null,\"canvasSnapshot\":{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}}}"
+      },
+      "otherGet": {
+        "status": 404,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"PROJECT_NOT_FOUND\",\"message\":\"项目不存在\"}}"
+      },
+      "otherPut": {
+        "status": 404,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"PROJECT_NOT_FOUND\",\"message\":\"项目不存在\"}}"
+      },
+      "otherDelete": {
+        "status": 404,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"PROJECT_NOT_FOUND\",\"message\":\"项目不存在\"}}"
+      },
+      "otherHistory": {
+        "status": 404,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"PROJECT_NOT_FOUND\",\"message\":\"项目不存在\"}}"
+      },
+      "aiHistory": {
+        "status": 404,
+        "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"PROJECT_NOT_FOUND\",\"message\":\"项目不存在\"}}"
+      },
+      "crossStudentUi": {
+        "denied": true,
+        "bodySample": "✦\nAI 魔法学院\n小小创作者\n◈\n我的学习\n✦\n我的项目\n▣\n我的作品\n✧\n作品墙\n✉\n消息中心\n?\n帮助与下载\n✦\n需要帮助？\n查看开课与创作指南\n小\n小明\nstudent-1\n↪\nAI魔法学院 / 小小创作者\n● 服务正常\n?\n项目不存在 重试"
+      }
+    }
+  },
+  "routes": {
+    "total": 9,
+    "pass": 9,
+    "fail": [],
+    "results": [
+      {
+        "route": "/dashboard",
+        "url": "http://127.0.0.1:58511/student/dashboard",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 我的魔法学院 你好，小红 这里汇总你的课堂任务、老师通知和最近创作。 刷新学习进度 ✦ 待完成课时 5 5 个课时"
+      },
+      {
+        "route": "/projects",
+        "url": "http://127.0.0.1:58511/student/projects",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 创作空间 我的项目 用可拖拽、可连线的魔法画布组织提示词、画面和故事。 创建项目 项目标题 关联课时 自动选择首个可用"
+      },
+      {
+        "route": "/works",
+        "url": "http://127.0.0.1:58511/student/works",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 成果展 我的作品 查看提交轮次、老师反馈与发布申请；被驳回的作品修改后可以再次提交。 提交记录 刷新 ✦ 还没有提交作"
+      },
+      {
+        "route": "/showcase",
+        "url": "http://127.0.0.1:58511/student/showcase",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 机构作品墙 优秀作品展示 这里只展示当前机构老师审核发布的作品。作者姓名已脱敏，评论和点赞功能尚未启用。 仅机构内可见"
+      },
+      {
+        "route": "/inbox",
+        "url": "http://127.0.0.1:58511/student/inbox",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 我的魔法学院 消息中心 接收平台公告、课程提醒和老师发送的机构通知。 全部标记已读 刷新 ✦ 消息总数 0 当前账"
+      },
+      {
+        "route": "/courses",
+        "url": "http://127.0.0.1:58511/student/courses",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 学习地图 我的课程 查看机构为你开通的课程与课时，按老师安排进入对应项目创作。 刷新 ✦ 课程包 1 当前可学习课"
+      },
+      {
+        "route": "/credits",
+        "url": "http://127.0.0.1:58511/student/credits",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 创作能量 AI / 魔法石 查看能力授权、本周期额度、生成任务、失败原因和素材使用情况。 刷新 当前 AI 供应商为 "
+      },
+      {
+        "route": "/account",
+        "url": "http://127.0.0.1:58511/student/account",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? 账号中心 个人账号 管理你的个人资料、监护人联系信息、隐私授权和登录安全。 刷新 个人资料 显示名称 平台头像 不使用"
+      },
+      {
+        "route": "/help",
+        "url": "http://127.0.0.1:58511/student/help",
+        "rendered": true,
+        "labelFound": true,
+        "bodySample": "✦ AI 魔法学院 小小创作者 ◈ 我的学习 ✦ 我的项目 ▣ 我的作品 ✧ 作品墙 ✉ 消息中心 ? 帮助与下载 ✦ 需要帮助？ 查看开课与创作指南 小 小红 student-2 ↪ AI魔法学院 / 小小创作者 ● 服务正常 ? AI 魔法学院 · 小小创作者 帮助与下载 查看真实可用的客户端、课堂常见问题和创作指引，并提交可追踪的问题反馈。 刷"
+      }
+    ]
+  },
+  "authz": {
+    "me": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"user_00202d33e1fb49a2ad8f\",\"orgId\":\"org_b042ae5c94a84637a9b8\",\"login\":\"student-2\",\"displayName\":\"小红\",\"role\":\"STUDENT\",\"permissions\":[],\"phone\":null,\"phoneVerifiedAt\":null,\"mustBindPhone\":false,\"status\":\"ACTIVE\",\"expiresAt\":null,\"studentUsageScope\":\"HOME_PRACTICE\",\"billingPackageId\":\"pkg_03fc90be028a4ebeb618\",\"monthlyCreditAllowance\":100,\"monthlyBonusCredits\":20,\"monthPeriodBoostCredits\":0,\"usedCreditsThisPeriod\":0,\"creditsRemaining\":120,\"periodStartAt\":\"2026-09-04T10:19:37.982Z\",\"periodResetAt\":\"2026-10-04T10:19:38.160Z\",\"magicStones\":120,\"avatarKey\":null,\"guardian\":null,\"privacy\":{\"showcaseAnonymous\":true,\"allowFeature\":true},\"createdAt\":\"2026-09-04T10:19:37.982Z\",\"updatedAt\":\"2026-09-04T10:19:37.982Z\",\"authenticated\":true,\"organization\":{\"id\":\"org_b042ae5c94a84637a9b8\",\"name\":\"示例创新学校\",\"status\":\"ACTIVE\",\"contractStartAt\":\"2026-09-04T10:19:37.982Z\",\"contractExpiresAt\":\"2027-09-04T10:19:38.013Z\",\"isTrial\":false,\"baseTeacherSeats\":3,\"purchasedTeacherSeats\":2,\"teacherSeats\":5,\"teacherUsedSeats\":2,\"contact\":{\"contact\":\"张校长\",\"phone\":\"13800000000\",\"email\":\"demo@example.edu.cn\"},\"createdBy\":null,\"createdAt\":\"2026-09-04T10:19:37.982Z\",\"updatedAt\":\"2026-09-04T10:19:37.982Z\"},\"session\":{\"id\":\"session_de42d017d7034b1eb2ec\",\"clientType\":\"student\",\"expiresAt\":\"2026-09-11T10:28:07.427Z\"}}}"
+    },
+    "orgUsers": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+    },
+    "orgPackages": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+    },
+    "orgEnrollments": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+    },
+    "orgWorks": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+    },
+    "adminOrganizations": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+    },
+    "teacherClass": {
+      "status": 403,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"当前角色无权访问该资源\"}}"
+    }
+  },
+  "crossAppUi": {
+    "admin": {
+      "denied": true,
+      "dashboardShown": false
+    },
+    "org": {
+      "denied": true,
+      "dashboardShown": false
+    }
+  },
+  "logout": {
+    "meBefore": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"id\":\"user_00202d33e1fb49a2ad8f\",\"orgId\":\"org_b042ae5c94a84637a9b8\",\"login\":\"student-2\",\"displayName\":\"小红\",\"role\":\"STUDENT\",\"permissions\":[],\"phone\":null,\"phoneVerifiedAt\":null,\"mustBindPhone\":false,\"status\":\"ACTIVE\",\"expiresAt\":null,\"studentUsageScope\":\"HOME_PRACTICE\",\"billingPackageId\":\"pkg_03fc90be028a4ebeb618\",\"monthlyCreditAllowance\":100,\"monthlyBonusCredits\":20,\"monthPeriodBoostCredits\":0,\"usedCreditsThisPeriod\":0,\"creditsRemaining\":120,\"periodStartAt\":\"2026-09-04T10:19:37.982Z\",\"periodResetAt\":\"2026-10-04T10:19:38.160Z\",\"magicStones\":120,\"avatarKey\":null,\"guardian\":null,\"privacy\":{\"showcaseAnonymous\":true,\"allowFeature\":true},\"createdAt\":\"2026-09-04T10:19:37.982Z\",\"updatedAt\":\"2026-09-04T10:19:37.982Z\",\"authenticated\":true,\"organization\":{\"id\":\"org_b042ae5c94a84637a9b8\",\"name\":\"示例创新学校\",\"status\":\"ACTIVE\",\"contractStartAt\":\"2026-09-04T10:19:37.982Z\",\"contractExpiresAt\":\"2027-09-04T10:19:38.013Z\",\"isTrial\":false,\"baseTeacherSeats\":3,\"purchasedTeacherSeats\":2,\"teacherSeats\":5,\"teacherUsedSeats\":2,\"contact\":{\"contact\":\"张校长\",\"phone\":\"13800000000\",\"email\":\"demo@example.edu.cn\"},\"createdBy\":null,\"createdAt\":\"2026-09-04T10:19:37.982Z\",\"updatedAt\":\"2026-09-04T10:19:37.982Z\"},\"session\":{\"id\":\"session_de42d017d7034b1eb2ec\",\"clientType\":\"student\",\"expiresAt\":\"2026-09-11T10:28:07.427Z\"}}}"
+    },
+    "logout": {
+      "status": 200,
+      "body": "{\"success\":true,\"ok\":true,\"data\":{\"loggedOut\":true}}"
+    },
+    "meAfter": {
+      "status": 401,
+      "body": "{\"success\":false,\"ok\":false,\"error\":{\"code\":\"SESSION_INVALID\",\"message\":\"登录状态无效\"}}"
+    },
+    "ui": {
+      "loginShown": true,
+      "dashboardShown": false
+    }
+  },
+  "pageErrors": [
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "follow-console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "checks": {
+    "total": 26,
+    "passed": 26,
+    "failed": []
+  },
+  "pass": true,
+  "pageErrorExplanation": "pageErrors 中的 404 是跨学生越权请求（/api/student/projects/:id 及相关资源）按预期返回 PROJECT_NOT_FOUND 的浏览器资源提示，不是页面脚本错误；9 个学生页面均正常渲染。"
+}
