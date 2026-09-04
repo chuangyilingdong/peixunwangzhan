@@ -1359,6 +1359,7 @@ node .\p3-api-integration.mjs
 | 2026-09-04 | P8-S04 备份恢复演练完成：隔离临时 SQLite 备份、恢复启动、RPO / RTO 和业务接口校验通过。 | `p8-s04-backup-recovery.mjs` **9 pass / 0 fail**；备份耗时 1925.2ms、恢复 API RTO 147.1ms；未伪造 OSS 备份。 |
 | 2026-09-04 | P8-S05 监控告警基线完成但保留进行中：定义监控矩阵、阈值、责任人与值班处置，并完成隔离脚本验收。 | `p8-s05-monitoring.mjs` **8 pass / 0 fail**；ECS systemd timer、日志轮转、真实通知渠道仍待运维配置，不宣称已接入真实告警。 |
 | 2026-09-04 | P8-S06 发布、回滚与事故响应演练完成：验证预发 release 切换、故障自动回滚、数据库快照恢复、事故分级通报止损和复盘模板。 | `p8-s06-release-rollback.mjs` **13 pass / 0 fail**；未触碰真实线上数据库；真实 ECS 发布窗口仍按手册执行。 |
+| 2026-09-04 | P8-Q01 代码质量基线完成：纳入非画布语法、构建、静态风险模式和发布边界检查。 | `p8-q01-quality.mjs` **11 pass / 0 fail**；46 个 JavaScript / MJS 文件语法检查、四端生产构建和 `git diff --check` 通过。 |
 
 
 ---
