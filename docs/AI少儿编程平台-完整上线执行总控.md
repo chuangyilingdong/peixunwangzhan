@@ -1385,6 +1385,7 @@ node .\p3-api-integration.mjs
 | 2026-09-04 | P8-S05 监控告警基线完成：定义监控矩阵、阈值、责任人与值班处置，完成隔离脚本验收并在 ECS 启用 systemd timer 与日志轮转。 | `p8-s05-monitoring.mjs` **13 pass / 0 fail**；ECS timer/service/logrotate 实际验证成功；真实通知渠道未接入，不宣称已接入真实告警。 |
 | 2026-09-04 | P8-S06 发布、回滚与事故响应演练完成：验证预发 release 切换、故障自动回滚、数据库快照恢复、事故分级通报止损和复盘模板。 | `p8-s06-release-rollback.mjs` **13 pass / 0 fail**；未触碰真实线上数据库；真实 ECS 发布窗口仍按手册执行。 |
 | 2026-09-04 | P8-Q01 代码质量基线完成：纳入非画布语法、构建、静态风险模式和发布边界检查。 | `p8-q01-quality.mjs` **11 pass / 0 fail**；46 个 JavaScript / MJS 文件语法检查、四端生产构建和 `git diff --check` 通过。 |
+| 2026-09-04 | P8-Q05 移动端 / 平板视口回归增量：对官网 12 条关键路由执行 390 / 414 / 768 三视口渲染检查。 | Codex 内置 Chromium **36/36**；正文非空、控制台错误 0、无横向溢出、noindex/canonical/动态标题通过；独立 Chrome / Edge / Safari 与真机仍不可用，P8-Q05 保持 `[-]`。 |
 | 2026-09-04 | P8-Q02 关键规则单元测试完成：认证、请求上下文、错误封装、积分账务和冻结 / 释放规则纳入临时 SQLite 测试。 | `p8-q02-unit.mjs` **17 pass / 0 fail**；尚未宣称全量覆盖率完成。 |
 
 
@@ -1419,3 +1420,10 @@ node .\p3-api-integration.mjs
 - [x] `p8-l02-l04-privacy-governance.mjs` 使用临时 SQLite **32 pass / 0 fail**；复核监护信息同意 / 撤回、协议版本、隐私设置、导出申请、注销申请、作品举报、举报下架、旧会话失效和默认数据库隔离。
 - [x] ECS 线上只读健康复核：当前 release `20260904T035620Z`，Node `v24.19.0`、pnpm `11.19.0`、`mode=internal-test`；systemd 服务 active；本地 `/health`、线上 `/api/health` 与 `/api/public/marketplace` 均返回 HTTP 200。
 - [ ] **正式合规边界未改变**：真实监护人身份核验、按地区年龄规则、真实对象存储延迟删除 / 备份保留、评论 / AI 内容举报、申诉渠道和法务最终文本仍需外部规则或供应商确认；本轮不伪造完成。
+
+### 2026-09-04 P8-Q05 移动端 / 平板视口回归增量记录
+
+- [x] 使用 Codex 内置 Chromium 浏览器对官网 12 条关键路由在 `390`、`414`、`768` 三个视口执行 **36/36** 路由渲染检查。
+- [x] 36/36 页面正文非空、无“加载失败 / ReferenceError / Application error / Not Found / 服务器错误”等失败文本；控制台错误 **0**；三种视口均未发现横向溢出（`scrollWidth <= clientWidth`）。
+- [x] 每条路由的 `robots` 均为 `noindex, nofollow, noarchive`，canonical 与动态标题均存在且符合预期；截图证据保存在 `artifacts/p8-q05-20260904/`（`matrix.json`、`home-390.png`、`marketplace-414.png`、`courses-768.png`）。
+- [ ] **未完成边界保持不变**：当前环境仅发现 Codex 内置 Chromium（未提供独立 Chrome、Edge、Safari 或真机连接），因此 P8-Q05 仍保持 `[-]`，不得宣称跨浏览器矩阵已完成。全程未修改 `packages/canvas`，未触碰真实线上数据库。
