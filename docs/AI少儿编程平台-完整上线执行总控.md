@@ -1888,3 +1888,10 @@ node .\p3-api-integration.mjs
 - 配置：基础配置位于 `/etc/ai-kids-platform/production.env`；非统一媒体接口使用 `AI_PROVIDER_MODALITY_ENDPOINTS` JSON 逐模态覆盖 endpoint。网页只保存 provider / model / endpoint / 预算策略，不保存 API key。
 - 验证：`scripts/p6-a01-openai-compatible-adapter.mjs` `23/23`，四端 `pnpm run build` 通过，未产生外部 AI 请求或费用；未修改 `packages/canvas`。
 - 当前生产口径：生产仍为 `AI_PROVIDER=local-mock`。用户填好服务器配置并重启后，才会向外部 AI 发起真实请求；若供应商缺少某模态 endpoint，该模态会明确失败，不伪造成功。
+
+## P6-A01 六类真实 adapter 生产代码发布记录（2026-09-05）
+
+- 发布 commit：`a26cef6`；生产 release：`/srv/ai-kids-platform/production/releases/20260905T163239Z`。
+- 发布前备份：`/srv/ai-kids-platform/production/backups/20260905T163239Z/platform.db`；未重新 seed，未修改生产业务数据。
+- 验证：生产 `/health` 和公网 `/`、`/admin/`、`/org/`、`/student/`、`/api/health` 均成功；`learning-platform-production` 为 `active/running`，`NRestarts=0`，`ExecMainStatus=0`。
+- 生产 `AI_PROVIDER=local-mock` 未改变；真实 adapter 已发布但没有外部 AI 请求或费用。待用户在 `/admin/` 完成策略、在服务器 `/etc/ai-kids-platform/production.env` 完成真实配置并重启后，才会实际调用外部 AI。
