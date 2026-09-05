@@ -214,3 +214,12 @@ D:\学习平台\生产检测账号-20260905.md
 - 修复内容：下载并托管首页动物视频到 `/assets/hero-animal.mp4`，同时生成 `/assets/hero-animal-poster.webp`；首页首屏先显示本地动物海报，视频作为本地增强层加载，不再依赖外部 `r2.motionsites.dev`。
 - 素材优化：视频去除无用音轨并启用 fast-start，首屏海报约 38 KB，视频约 1.8 MB。
 - 发布后：`learning-platform-production` active；`/health` 返回 `status=ok`；生产浏览器确认海报加载完成（1280px 宽），本地视频 `readyState=4`、时长 4 秒。
+
+## 2026-09-05 首页重复兔子图层修复发布记录
+
+- 发布 commit：`bb0cb1b`（`fix(website): hide hero poster after video readiness`）。
+- 新 release：`/srv/ai-kids-platform/production/releases/20260905T082038Z`；旧 release `/srv/ai-kids-platform/production/releases/20260905T081523Z` 保留可回滚。
+- 切换前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T082109Z/platform.db`。
+- 问题原因：本地动物海报和正在播放的视频同时叠加，视频透明度为 72%，导致同一只兔子以两个不同姿势同时出现。
+- 修复内容：视频进入 `ready` 状态后自动淡出海报层；视频未就绪或失败时才显示海报层，保证始终只有一个动物视觉层。
+- 发布后生产浏览器确认：海报 `opacity=0`、视频 `readyState=4`、本地视频正常播放；生产服务 active，`/health` 正常。
