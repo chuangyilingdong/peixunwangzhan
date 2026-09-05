@@ -58,7 +58,7 @@ function Dashboard({ api }) {
 function Classes({ api, user }) {
   const classes = useData(() => api.get('org/classes'), [api]);
   const courses = useData(() => api.get('org/course-series'), [api]);
-  const teachers = useData(() => api.get('org/users?role=TEACHER'), [api]);
+  const teachers = useData(() => user.role === 'ORG_ADMIN' ? api.get('org/users?role=TEACHER') : Promise.resolve({ items: [] }), [api, user.role]);
   const students = useData(() => api.get('org/users?role=STUDENT'), [api]);
   const [curriculum, setCurriculum] = useState({ loading: false, error: null, byClass: {} });
   const [details, setDetails] = useState({});
@@ -163,7 +163,7 @@ function Classes({ api, user }) {
         </form>
       </Panel>
       <Panel title="课堂规则">
-        <Notice>教师只能管理本人负责或获授权的班级；开课只能选择本班课单中已发布且机构可访问的课时。补课会留下独立课堂记录，已结束或已取消课堂不能再次操作。</Notice>
+        <Notice>教师负责创建班级、加入/移出本机构学生、配置本班课程计划和开展课堂；教师只能管理本人负责或获授权的班级，开课只能选择本班课单中已发布且机构可访问的课时。机构管理员可处理机构级账号和班级授权。</Notice>
         {message && <Notice tone={isSuccess ? 'success' : 'danger'}>{message}</Notice>}
       </Panel>
     </div>
@@ -185,9 +185,9 @@ function Classes({ api, user }) {
             {expanded === item.id && <div className="stacked-panels">
               {!detail ? <Loading label="正在读取班级详情…" /> : <>
                 <Panel title="班级成员" description="成员变更会立即影响学生可见的班级课程内容。">
-                  {user.role === 'ORG_ADMIN' && <div className="row-actions"><select value={newStudent[item.id] || ''} onChange={(event) => setNewStudent({ ...newStudent, [item.id]: event.target.value })}><option value="">选择学员加入班级</option>{availableStudents.map((student) => <option key={student.id} value={student.id}>{student.displayName}（{student.login}）</option>)}</select><button className="secondary-button" onClick={() => addStudent(item.id)}>加入学员</button></div>}
+                  {(user.role === 'ORG_ADMIN' || user.role === 'TEACHER') && <div className="row-actions"><select value={newStudent[item.id] || ''} onChange={(event) => setNewStudent({ ...newStudent, [item.id]: event.target.value })}><option value="">选择学员加入班级</option>{availableStudents.map((student) => <option key={student.id} value={student.id}>{student.displayName}（{student.login}）</option>)}</select><button className="secondary-button" onClick={() => addStudent(item.id)}>加入学员</button></div>}
                   {user.role === 'ORG_ADMIN' && <label>负责教师<select value={item.teacherId || ''} onChange={(event) => assignTeacher(item.id, event.target.value)}><option value="">暂不指定</option>{teacherItems.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName}</option>)}</select></label>}
-                  {members.length ? <div className="table-wrap"><table><thead><tr><th>成员</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.displayName}<div className="muted">{member.login}</div></td><td>{member.classRole === 'TEACHER' ? '教师' : '学员'}</td><td><Status value={member.status} /></td><td>{member.classRole === 'STUDENT' && user.role === 'ORG_ADMIN' ? <button className="text-button" onClick={() => removeStudent(item.id, member.id)}>移出班级</button> : '—'}</td></tr>)}</tbody></table></div> : <Empty title="暂无班级成员" body="可从上方选择学员加入班级。" />}
+                  {members.length ? <div className="table-wrap"><table><thead><tr><th>成员</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.displayName}<div className="muted">{member.login}</div></td><td>{member.classRole === 'TEACHER' ? '教师' : '学员'}</td><td><Status value={member.status} /></td><td>{member.classRole === 'STUDENT' && (user.role === 'ORG_ADMIN' || user.role === 'TEACHER') ? <button className="text-button" onClick={() => removeStudent(item.id, member.id)}>移出班级</button> : '—'}</td></tr>)}</tbody></table></div> : <Empty title="暂无班级成员" body="可从上方选择学员加入班级。" />}
                 </Panel>
                 <Panel title="课程计划与课时排序" description="保存时服务端会重新编号 sort，确保课时顺序连续且不可重复。">
                   {availableLessons.length ? <div className="card-list">{currentDraft.map((lessonId, index) => { const lesson = availableLessons.find((candidate) => candidate.id === lessonId) || lessons.find((candidate) => candidate.lessonId === lessonId); return lesson ? <article className="item-card" key={lessonId}><div className="row-actions"><strong>第 {index + 1} 课 · {lesson.title}</strong><span className="muted">{lesson.seriesTitle || '已配置课时'}</span><button className="text-button" onClick={() => moveDraft(item.id, index, -1)} disabled={index === 0}>上移</button><button className="text-button" onClick={() => moveDraft(item.id, index, 1)} disabled={index === currentDraft.length - 1}>下移</button><button className="text-button" onClick={() => setDraft(item.id, currentDraft.filter((value) => value !== lessonId))}>移除</button></div><p className="muted">{lesson.summary || '暂无课时说明'} · {lesson.durationMinutes || 0} 分钟</p></article> : null; })}</div> : <Empty title="暂无可用课时" body="请先由平台或机构配置已发布课程。" />}
