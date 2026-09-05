@@ -43,14 +43,15 @@ await rejects('bad.exe', 'application/octet-stream', Buffer.from('MZ'), 'FILE_EX
 assert.throws(() => parseMultipartFormData(Buffer.from('x'), 'multipart/form-data'), (error) => error.code === 'INVALID_MULTIPART');
 
 
-const downloadKey = '2026/09/p10-download.bin';
+const downloadId = `p10-download-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const downloadKey = `2026/09/${downloadId}.bin`;
 const downloadPath = path.join(root, ...downloadKey.split('/'));
 await mkdir(path.dirname(downloadPath), { recursive: true });
 await writeFile(downloadPath, Buffer.from('secure-download'));
 q(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,file_size,category,visibility,status,review_status,metadata,created_at,updated_at)
-   VALUES ('p10-download','PLATFORM','INTERNAL_PROXY',?,'download.txt','text/plain',15,'GENERAL','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [downloadKey, nowIso(), nowIso()]);
+   VALUES (?,'PLATFORM','INTERNAL_PROXY',?,'download.txt','text/plain',15,'GENERAL','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [downloadId, downloadKey, nowIso(), nowIso()]);
 const response = await handleStudentFileAssets({
-  pathname: '/api/student/file-assets/p10-download/download', method: 'GET',
+  pathname: `/api/student/file-assets/${downloadId}/download`, method: 'GET',
   search: new URLSearchParams(), req: { headers: {}, socket: { remoteAddress: '127.0.0.1' } },
   auth: { user: { id: 'student', role: 'STUDENT', orgId: 'org_test' } },
 });
