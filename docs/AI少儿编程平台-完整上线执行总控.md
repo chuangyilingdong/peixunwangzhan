@@ -986,9 +986,16 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 
 ### 6.2 AI 服务实现
 
-- [ ] **P6-A01 供应商适配器与密钥管理**
+- [-] **P6-A01 供应商适配器与密钥管理**
   - 优先级：P0
   - 范围：每家供应商独立 adapter；环境变量 / 密钥管理服务；按环境隔离；禁止密钥进入仓库或日志。
+  - 当前状态：已完成不产生外部费用的 provider 契约、配置校验、稳定错误码映射和隔离测试；首个真实供应商、模型、endpoint、预算、数据出境政策尚未由用户确认，生产继续使用 `local-mock`。
+  - 完成记录（2026-09-05）：
+    - 状态：`[-]`
+    - 实现：新增 `providerContract.js`，定义 provider 配置校验、超时 / 429 / 5xx / 安全拒绝 / 无效响应 / 未配置错误码；`generationProvider.js` 统一使用服务端环境变量 API key，非 mock provider 只返回明确失败，不回退为假成功。
+    - 影响文件 / 接口 / 数据表：`apps/server/src/services/providerContract.js`、`apps/server/src/services/generationProvider.js`、`apps/server/src/config.js`、`scripts/p6-a01-provider-isolation.mjs`；无数据库变更、无外部调用。
+    - 验证：Node ESM 运行 `node scripts/p6-a01-provider-isolation.mjs`，隔离测试、既有 P4-O12 队列恢复、P4-O13 失败重试、P4-O15 取消、四端生产构建和服务端路由导入均通过。
+    - 遗留风险或下一步：待确认首个供应商 / 模型 / endpoint / 预算 / 是否允许学生内容发送外部服务后，再实现具体 adapter，并在隔离账号与临时 SQLite 中验收；不切换生产 AI。
   - 验收：开发、测试、生产密钥相互隔离；未配置时明确报错；日志永不包含 API Key 或完整敏感提示词。
 - [ ] **P6-A02 异步生成任务队列与状态机**
   - 优先级：P0

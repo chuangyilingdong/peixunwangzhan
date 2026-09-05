@@ -128,7 +128,7 @@ apps/org/dist
 - **教师反馈闭环**：机构端可保存整体点评，也可关联某个画布节点发送批注、标记跟进完成；学生在“我的作品”中可查看只读画布与全部反馈。
 - **机构作品墙**：机构端将作品设为 `PUBLISHED` 后，学生端“作品墙”只展示本机构已发布作品及其只读画布。
 - **AI / 素材服务边界**：新增 `generation_jobs`、`media_assets` 表，`POST /api/ai/generations`、`GET /api/ai/generations` 和 `GET /api/ai/providers`。默认 `AI_PROVIDER=local-mock`，生成可追踪的模拟素材和 SVG 预览，并以 1 积分走既有额度/机构积分扣减链路。
-- **供应商配置**：可通过 `AI_PROVIDER`、`AI_PROVIDER_MODEL`、`AI_PROVIDER_ENDPOINT` 指定后续适配目标；非 mock provider 会明确返回“需要适配器”，不会假装调用成功。
+- **供应商配置**：可通过 `AI_PROVIDER`、`AI_PROVIDER_MODEL`、`AI_PROVIDER_ENDPOINT` 和服务器受限的 `AI_PROVIDER_API_KEY` 声明后续适配目标；P6-A01 已提供配置校验和统一错误映射，非 mock provider 在未接入具体适配器前明确失败，不会假装调用成功，生产仍保持 `local-mock`。
 
 ## 非画布网站建设（2026-09-02）
 

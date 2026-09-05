@@ -1,6 +1,7 @@
 import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, q, requireRole, row, rows, transaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
+import { normalizeProviderError } from '../services/providerContract.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { assertTransition } from '../services/domainState.js';
@@ -229,7 +230,9 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     return { job, assets: job.assets };
   } catch (error) {
     markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
-    throw error instanceof ApiError ? error : errors.badRequest(String(error?.message || '素材生成服务当前不可用，请检查 provider 配置。'), error?.code || 'GENERATION_FAILED');
+    if (error instanceof ApiError) throw error;
+    const normalized = normalizeProviderError(error);
+    throw errors.badRequest(normalized.message, normalized.code);
   }
 }
 
