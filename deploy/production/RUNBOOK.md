@@ -264,3 +264,11 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - 监控：learning-platform-production、i-kids-platform-healthcheck.timer、i-kids-platform-production-daily-backup.timer 均为 enabled；磁盘使用率 15%；公网 /api/health 正常。
 - 公网入口与安全冒烟：四端入口 4/4 通过；敏感路径、HSTS、CSP、nosniff、frame/referrer 策略检查通过。
 - 结论：本次生产环境运维 1—5 项已完成并收口；后续转入日常监控、备份校验和按需迭代。
+## 2026-09-05 教师点评闭环与 AI 队列恢复发布记录
+
+- 发布 commit：`f05823b`。
+- 新 release：`/srv/ai-kids-platform/production/releases/20260905T102834Z`；切换前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T102834Z/platform.db`。
+- 发布内容：教师任务提交、查看、评分、通过 / 驳回、重新提交闭环；教师与学生班级权限收紧；AI 异步任务增加数据库恢复、worker 租约、重试退避、超时回收和取消清理。
+- 发布后验证：`learning-platform-production` active；内外 `/health` 均返回 `status=ok`；四端公网入口 `/`、`/admin/`、`/org/`、`/student/` 均返回 200；P9 敏感路径冒烟 **14/14**；生产 SQLite `PRAGMA integrity_check` 返回 `ok`。
+- 本次仍使用 `AI_PROVIDER=local-mock`，不对外宣称已接入真实 AI 供应商。
+
