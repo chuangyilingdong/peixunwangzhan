@@ -14,6 +14,8 @@ const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic
 const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video', PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing' };
 const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP']);
 const GENERATION_PAGE_SIZE = 20;
+const asyncGenerationQueue = [];
+let asyncGenerationWorkerRunning = false;
 export const AI_MODALITIES = [...MODALITIES];
 
 function modalityOf(value) {
@@ -92,15 +94,17 @@ function jobDetail(jobId, { requireAuth = null } = {}) {
   return normalizeJob(job, { assets: assetsFor(job.id) });
 }
 
-function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null }) {
+function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true }) {
   const jobId = id('generation');
   const now = nowIso();
   transaction(() => q(`INSERT INTO generation_jobs(
        id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
     [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null]));
-    assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
-    q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
+    if (startImmediately) {
+      assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
+      q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
+    }
   return jobId;
 }
 
@@ -189,6 +193,32 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
     throw error instanceof ApiError ? error : errors.badRequest(String(error?.message || '素材生成服务当前不可用，请检查 provider 配置。'), error?.code || 'GENERATION_FAILED');
   }
+}
+
+
+async function processAsyncGeneration(item) {
+  const { auth, project, modality, prompt, title, jobId, requestContext } = item;
+  const provider = getGenerationProvider(); const info = generationProviderInfo();
+  const context = resolveProjectUsageContext(auth.rawUser, project);
+  try {
+    const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
+    if (!current || current.status !== 'QUEUED') return;
+    q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [nowIso(), jobId]);
+    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id });
+    const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
+    if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
+    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
+    audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
+  } catch (error) {
+    markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
+  }
+}
+
+function drainAsyncGenerationQueue() {
+  if (asyncGenerationWorkerRunning || !asyncGenerationQueue.length) return;
+  asyncGenerationWorkerRunning = true;
+  const item = asyncGenerationQueue.shift();
+  processAsyncGeneration(item).finally(() => { asyncGenerationWorkerRunning = false; drainAsyncGenerationQueue(); });
 }
 
 function validPage(value) {
@@ -378,6 +408,23 @@ export async function handleAiGeneration(ctx) {
   requireRole(ctx, ['STUDENT']);
 
   if (pathname === '/api/ai/center' && method === 'GET') return studentAiCenter(ctx);
+  if (pathname === '/api/ai/generations/async' && method === 'POST') {
+    const body = ctx.body || {}; const projectId = String(body.projectId || '').trim(); const prompt = String(body.prompt || '').trim(); const title = String(body.title || '').trim().slice(0, 100); const modality = modalityOf(body.modality);
+    if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
+    const project = ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
+    const provider = getGenerationProvider(); const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
+    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false });
+    asyncGenerationQueue.push({ auth, project, modality, prompt, title, jobId, requestContext: null }); drainAsyncGenerationQueue();
+    return { job: jobDetail(jobId), queued: true };
+  }
+  const cancelMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)\/cancel$/);
+  if (cancelMatch && method === 'POST') {
+    const jobId = decodeURIComponent(cancelMatch[1]); const job = row('SELECT * FROM generation_jobs WHERE id=? AND user_id=? AND org_id=?', [jobId, auth.user.id, auth.user.orgId]);
+    if (!job) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
+    if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
+    q("UPDATE generation_jobs SET status='FAILED',error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), jobId]);
+    return jobDetail(jobId, { requireAuth: auth });
+  }
   if (pathname === '/api/ai/generations/history' && method === 'GET') return generationHistory(auth, ctx.search);
   if (pathname === '/api/ai/generations/history' && method === 'POST') {
     const body = ctx.body || {};
