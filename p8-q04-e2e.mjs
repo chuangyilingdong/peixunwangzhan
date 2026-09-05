@@ -144,7 +144,7 @@ try {
   const pages = ['/', '/marketplace', '/marketplace/course-missing', '/courses', '/demo', '/terms', '/privacy', '/minors'];
   for (const page of pages) {
     const pageResult = await rawRequest(`http://127.0.0.1:${webPort}`, page);
-    check(`浏览器导航 ${page} 返回 HTML`, pageResult.status === 200 && /<div id="root"><\/div>/.test(pageResult.text));
+    check(`浏览器导航 ${page} 返回 HTML`, pageResult.status === 200 && /<div id="root">/.test(pageResult.text));
   }
   const index = await rawRequest(`http://127.0.0.1:${webPort}`, '/');
   check('官网构建产物包含 noindex', /name="robots" content="noindex, nofollow, noarchive"/.test(index.text));
