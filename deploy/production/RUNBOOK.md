@@ -205,3 +205,12 @@ D:\学习平台\生产检测账号-20260905.md
 - 修复内容：首页首屏改为本地 CSS 静态视觉优先，React 尚未挂载时由 `index.html` boot shell 先显示；外部视频改为 `preload="metadata"` 的渐进增强层，视频未就绪、超时或失败时不遮挡页面、不阻塞文案和交互。
 - 发布后：`learning-platform-production` active；`/health` 返回 `status=ok`；四端公网入口验证 **4/4** 通过；敏感路径安全冒烟 **14/14** 通过。
 - 首页生产验证：两个 `.ic-video-fallback` 均存在，视频未就绪时首页仍显示导航、标题、按钮和课程卡片；不再依赖外部视频才能出现首屏。
+
+## 2026-09-05 首页动物素材本地化发布记录
+
+- 发布 commit：`4d94efe`（`fix(website): serve local hero animal media`）。
+- 新 release：`/srv/ai-kids-platform/production/releases/20260905T081523Z`；旧 release `/srv/ai-kids-platform/production/releases/20260905T080206Z` 保留可回滚。
+- 切换前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T081545Z/platform.db`。
+- 修复内容：下载并托管首页动物视频到 `/assets/hero-animal.mp4`，同时生成 `/assets/hero-animal-poster.webp`；首页首屏先显示本地动物海报，视频作为本地增强层加载，不再依赖外部 `r2.motionsites.dev`。
+- 素材优化：视频去除无用音轨并启用 fast-start，首屏海报约 38 KB，视频约 1.8 MB。
+- 发布后：`learning-platform-production` active；`/health` 返回 `status=ok`；生产浏览器确认海报加载完成（1280px 宽），本地视频 `readyState=4`、时长 4 秒。
