@@ -4,11 +4,11 @@ const PROVIDER_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export const GENERATION_PROVIDER_CATALOG = Object.freeze([
   Object.freeze({ id: 'local-mock', label: '本地模拟（当前生产默认）', kind: 'MOCK', adapterAvailable: true, externalContentAllowed: false, endpointRequired: true, modelRequired: true }),
-  Object.freeze({ id: 'openai-compatible', label: 'OpenAI-compatible 通用接口（文本）', kind: 'GENERIC', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
+  Object.freeze({ id: 'openai-compatible', label: 'OpenAI-compatible 通用接口（六类能力）', kind: 'GENERIC', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'aliyun-bailian', label: '阿里云百炼', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'volcengine', label: '火山引擎', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'zhipu', label: '智谱', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
-  Object.freeze({ id: 'custom', label: '自定义供应商（OpenAI-compatible 文本接口）', kind: 'CUSTOM', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
+  Object.freeze({ id: 'custom', label: '自定义供应商（OpenAI-compatible 六类能力）', kind: 'CUSTOM', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
 ]);
 export const GENERATION_PROVIDER_IDS = new Set(GENERATION_PROVIDER_CATALOG.map((item) => item.id));
 export function providerDefinition(id) { return GENERATION_PROVIDER_CATALOG.find((item) => item.id === id) || null; }

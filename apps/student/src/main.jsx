@@ -10,6 +10,17 @@ const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/student').replace(/\/$
 const navigation = [{ to: '/dashboard', icon: '◈', label: '我的学习' }, { to: '/tasks', icon: '✓', label: '课堂任务' }, { to: '/projects', icon: '✦', label: '我的项目' }, { to: '/works', icon: '▣', label: '我的作品' }, { to: '/showcase', icon: '✧', label: '作品墙' }, { to: '/inbox', icon: '✉', label: '消息中心' }, { to: '/help', icon: '?', label: '帮助与下载' }];
 const demos = [{ label: '跟随课堂学生', login: 'student-1', password: 'study123' }, { label: '自主练习学生', login: 'student-2', password: 'study123' }];
 
+function AssetPreview({ asset, compact = false }) {
+  const mimeType = String(asset?.mimeType || '').split(';')[0].toLowerCase();
+  const source = asset?.previewUrl || asset?.assetUrl || '';
+  const style = compact ? { width: '100%', maxWidth: 280, borderRadius: 12, marginTop: 8 } : { width: '100%', maxWidth: 360, borderRadius: 12, marginTop: 8 };
+  if (!source) return null;
+  if (mimeType.startsWith('image/')) return <img src={source} alt={asset.label} style={style} />;
+  if (mimeType.startsWith('audio/')) return <audio controls preload="metadata" src={source} style={{ width: '100%', marginTop: 8 }} />;
+  if (mimeType.startsWith('video/')) return <video controls preload="metadata" src={source} style={style} />;
+  if (mimeType.startsWith('text/')) return <pre style={{ whiteSpace: 'pre-wrap', background: '#f8fafc', borderRadius: 10, padding: 12, marginTop: 8 }}>{asset.metadata?.text || (source.startsWith('data:text/') ? decodeURIComponent(source.split(',').slice(1).join(',')) : source)}</pre>;
+  return <a href={source} target="_blank" rel="noreferrer" className="secondary-button" style={{ display: 'inline-block', marginTop: 8 }}>打开 / 下载素材</a>;
+}
 function useData(load, deps = []) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const refresh = async () => {
@@ -521,7 +532,7 @@ function CanvasWorkspace({ api }) {
     {message && <Notice tone={message.includes('已保存') || message.includes('已将') || message.includes('已重命名') || message.includes('已导出') || message.includes('已导入') || message.includes('已生成') ? 'success' : 'danger'}>{message}</Notice>}
     {editable && <Panel title="导入画布快照"><label>选择已导出的 JSON 文件<input type="file" accept="application/json,.json" disabled={importingCanvas} onChange={importCanvas} /></label><Notice>仅支持本平台导出的画布 JSON，最大 1MB。导入只会替换当前未保存草稿；确认后点击“保存画布”才会创建当前项目的新版本。</Notice></Panel>}
     {editable && <Panel title="下一次保存的版本名称"><label>版本名称<input value={saveLabel} maxLength={100} onChange={(event) => setSaveLabel(event.target.value)} placeholder="例如：完成小狐狸分镜" /></label><Notice>保存时会使用这个名称创建一个新版本；不填写时默认标记为“画布编辑”。</Notice></Panel>}
-    {editable && <Panel title="AI 素材工坊"><form onSubmit={generateMaterial}><label>素材类型<select value={generationForm.modality} onChange={(event) => setGenerationForm((current) => ({ ...current, modality: event.target.value }))}><option value="IMAGE">画面素材</option><option value="VIDEO">故事短片</option><option value="MUSIC">音乐素材</option><option value="PODCAST">播客素材</option><option value="DUBBING">配音素材</option><option value="TEXT">灵感提示词</option></select></label><label>素材名称（可选）<input value={generationForm.title} maxLength={100} placeholder="例如：星光森林封面" onChange={(event) => setGenerationForm((current) => ({ ...current, title: event.target.value }))} /></label><label>描述你的素材<textarea value={generationForm.prompt} required maxLength={2000} placeholder="例如：夜晚的星光森林里，小狐狸举着发光的种子。" onChange={(event) => setGenerationForm((current) => ({ ...current, prompt: event.target.value }))} /></label><button className="primary-button" disabled={generating}>{generating ? '生成中…' : '生成并加入画布（1 积分）'}</button></form><Notice tone="warning">当前供应商：{generations.data?.provider?.provider || 'local-mock'}。真实供应商当前支持 TEXT 文本生成；若平台尚未配置真实 provider 或选择了暂不支持的素材类型，系统会明确提示，不会伪造成功。</Notice>{generations.data?.items?.length ? <div className="card-list">{generations.data.items.slice(0, 3).map((job) => <article className="item-card" key={job.id}><div className="row-actions"><strong>{job.modality} · {job.prompt.slice(0, 40)}</strong><Status value={job.status === 'SUCCEEDED' ? 'APPROVED' : job.status === 'FAILED' ? 'REJECTED' : 'PENDING'} /></div>{job.assets?.[0]?.previewUrl && <img src={job.assets[0].previewUrl} alt={job.assets[0].label} style={{ width: '100%', maxWidth: 360, borderRadius: 12, marginTop: 8 }} />}<p className="muted">{job.provider} · {formatDate(job.createdAt)} · {job.creditsCharged} 积分</p></article>)}</div> : null}</Panel>}
+    {editable && <Panel title="AI 素材工坊"><form onSubmit={generateMaterial}><label>素材类型<select value={generationForm.modality} onChange={(event) => setGenerationForm((current) => ({ ...current, modality: event.target.value }))}><option value="IMAGE">画面素材</option><option value="VIDEO">故事短片</option><option value="MUSIC">音乐素材</option><option value="PODCAST">播客素材</option><option value="DUBBING">配音素材</option><option value="TEXT">灵感提示词</option></select></label><label>素材名称（可选）<input value={generationForm.title} maxLength={100} placeholder="例如：星光森林封面" onChange={(event) => setGenerationForm((current) => ({ ...current, title: event.target.value }))} /></label><label>描述你的素材<textarea value={generationForm.prompt} required maxLength={2000} placeholder="例如：夜晚的星光森林里，小狐狸举着发光的种子。" onChange={(event) => setGenerationForm((current) => ({ ...current, prompt: event.target.value }))} /></label><button className="primary-button" disabled={generating}>{generating ? '生成中…' : '生成并加入画布（1 积分）'}</button></form><Notice tone="warning">当前供应商：{generations.data?.provider?.provider || 'local-mock'}。真实供应商 adapter 当前支持 TEXT、IMAGE、MUSIC、VIDEO、PODCAST、DUBBING 六类调用；若平台尚未配置真实 provider、对应 Endpoint 或服务器密钥，系统会明确提示，不会伪造成功。</Notice>{generations.data?.items?.length ? <div className="card-list">{generations.data.items.slice(0, 3).map((job) => <article className="item-card" key={job.id}><div className="row-actions"><strong>{job.modality} · {job.prompt.slice(0, 40)}</strong><Status value={job.status === 'SUCCEEDED' ? 'APPROVED' : job.status === 'FAILED' ? 'REJECTED' : 'PENDING'} /></div>{job.assets?.[0] && <AssetPreview asset={job.assets[0]} />}<p className="muted">{job.provider} · {formatDate(job.createdAt)} · {job.creditsCharged} 积分</p></article>)}</div> : null}</Panel>}
     <CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} readOnly={!editable} onChange={setDraft} />
     <div className="split">
       <Panel title="版本历史" actions={<button className="secondary-button" onClick={history.refresh}>刷新历史</button>}>
@@ -753,7 +764,7 @@ function StudentCredits({ api }) {
     <PageHeader eyebrow="创作能量" title="AI / 魔法石" description="查看能力授权、本周期额度、生成任务、失败原因和素材使用情况。" actions={<button className="secondary-button" onClick={() => { center.refresh(); history.refresh(); usage.refresh(); }}>刷新</button>} />
     <Notice tone={provider.mode === 'mock' ? 'warning' : 'info'}>{provider.mode === 'mock'
       ? '当前 AI 供应商为 local-mock：仅生成可追踪的本地模拟素材，不会调用外部模型或上传真实文件。'
-      : `当前已配置外部 AI 供应商（${provider.provider || '未命名'}）；TEXT 文本生成已支持，其他素材类型需对应模态 adapter。`}</Notice>
+      : `当前已配置外部 AI 供应商（${provider.provider || '未命名'}）；TEXT、IMAGE、MUSIC、VIDEO、PODCAST、DUBBING 六类调用均已接入，具体能力取决于供应商 Endpoint。`}</Notice>
     <div className="metrics">
       <MetricCard label="可用额度" value={formatCredits(period.remaining)} hint={'总额度 ' + formatCredits(period.allowance)} />
       <MetricCard label="本周期已用" value={formatCredits(period.used)} hint={'重置时间 ' + (period.reset ? formatDate(period.reset) : '未设置')} tone="teal" />
@@ -798,7 +809,7 @@ function StudentCredits({ api }) {
       <p><strong>提示词</strong></p><p>{detail.prompt}</p>
       <p className="muted">创建：{formatDate(detail.createdAt)} · 完成：{detail.completedAt ? formatDate(detail.completedAt) : '—'} · 消耗：{formatCredits(detail.creditsCharged)} 积分</p>
       {detail.status === 'FAILED' ? <Notice tone="danger">失败原因：{detail.errorCode || 'GENERATION_FAILED'} · {detail.errorMessage || '素材生成失败'}。失败任务不扣除积分；可在限制解除后重试。</Notice> : <Notice tone="success">任务已成功完成；本次按 1 积分结算。</Notice>}
-      {detail.assets?.length ? <div className="card-list">{detail.assets.map((asset) => <article className="item-card" key={asset.id}><strong>{asset.label}</strong><p className="muted">{asset.mimeType || 'mock asset'} · {formatDate(asset.createdAt)}</p>{asset.previewUrl && <img src={asset.previewUrl} alt={asset.label} style={{ width: '100%', maxWidth: 360, borderRadius: 12 }} />}</article>)}</div> : <Empty title="该任务没有素材" body="失败任务不会生成素材，也不会扣除积分。" />}
+      {detail.assets?.length ? <div className="card-list">{detail.assets.map((asset) => <article className="item-card" key={asset.id}><strong>{asset.label}</strong><p className="muted">{asset.mimeType || 'mock asset'} · {formatDate(asset.createdAt)}</p><AssetPreview asset={asset} /></article>)}</div> : <Empty title="该任务没有素材" body="失败任务不会生成素材，也不会扣除积分。" />}
     </Panel>}
     <Panel title={'素材使用 · 最近样本已使用 ' + (data.assets?.stats?.used || 0) + ' / ' + (data.assets?.stats?.sampled || 0)} actions={<span className="muted">素材总数 {data.assets?.stats?.total || 0} · 展示最近 {data.assets?.stats?.sampled || 0} 条</span>}>
       <p className="muted">使用状态根据当前画布和历史保存版本中的素材地址推导；这里展示最近 100 条素材，未展示的历史素材仍可在项目版本中追溯。</p>
@@ -806,7 +817,7 @@ function StudentCredits({ api }) {
         <div className="row-actions"><strong>{asset.label}</strong><span className={asset.usage.used ? 'status success' : 'status warning'}>{asset.usage.used ? (asset.usage.source === 'CURRENT' ? '当前画布使用中' : '历史版本使用过') : '未使用'}</span></div>
         <p className="muted">{asset.modality} · {asset.projectTitle || '未关联项目'} · {formatDate(asset.createdAt)}</p>
         {asset.usage.usedInVersion ? <p className="muted">使用版本：v{asset.usage.usedInVersion} · {formatDate(asset.usage.usedAt)}</p> : null}
-        {asset.previewUrl && <img src={asset.previewUrl} alt={asset.label} style={{ width: '100%', maxWidth: 280, borderRadius: 12, marginTop: 8 }} />}
+        <AssetPreview asset={asset} compact />
       </article>)}</div> : <Empty title="暂无 AI 素材" body="成功生成的素材会显示在这里，并标记是否已被画布引用。" />}
     </Panel>
     <Panel title={'用量明细 · ' + (usageData.usage?.recordCount || 0) + ' 条'}>

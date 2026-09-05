@@ -327,3 +327,11 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - 发布后验证：本地 `/health` 与公网 `/api/health` 返回成功；四端 `/`、`/admin/`、`/org/`、`/student/` 均 HTTP 200；服务 `active/running`、`enabled`、`NRestarts=0`、`ExecMainStatus=0`。
 - 当前生产环境仍为 `AI_PROVIDER=local-mock`。本次只是把真实 adapter 代码上线，未产生外部 AI 请求或费用；填写网页供应商配置后仍需在 `/etc/ai-kids-platform/production.env` 配置 API key，并显式切换 provider 后才会真实调用。
 - 支持：`openai-compatible` 与 `custom` 的 OpenAI-compatible Chat Completions `TEXT`；`IMAGE`、`MUSIC`、`VIDEO`、`PODCAST`、`DUBBING` 仍返回不支持，不伪造成功。
+
+## 2026-09-05 P6-A01 六类真实媒体 adapter 代码发布记录
+
+
+- 本次发布的 `openai-compatible` / `custom` 真实 adapter 支持 `TEXT`、`IMAGE`、`MUSIC`、`VIDEO`、`PODCAST`、`DUBBING` 六类能力。
+- `TEXT`、`IMAGE`、`DUBBING` 使用常见兼容路径；`MUSIC`、`VIDEO`、`PODCAST` 的接口没有统一标准，供应商实际路径必须通过服务器环境变量 `AI_PROVIDER_MODALITY_ENDPOINTS` 配置。未配置或供应商不提供对应接口时，调用明确失败，不回退 `local-mock`，不创建假资产。
+- 真实配置位置：`/etc/ai-kids-platform/production.env`。填写 `AI_PROVIDER=openai-compatible` 或 `custom`、`AI_PROVIDER_MODEL`、`AI_PROVIDER_ENDPOINT`、`AI_PROVIDER_API_KEY`；必要时填写模态 endpoint map、`AI_PROVIDER_VOICE` 和轮询间隔，保存后重启服务。
+- 验证：`p6-a01-openai-compatible-adapter` `23/23`；四端生产构建通过。当前生产仍保持 `AI_PROVIDER=local-mock`，本次代码发布不产生外部 AI 费用。

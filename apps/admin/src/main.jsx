@@ -1026,7 +1026,7 @@ function ProviderPolicyPanel({ api }) {
     event.preventDefault(); setBusy(true); setMessage('');
     try {
       await api.put('admin/billing-config/ai-provider', form);
-      setMessage(`AI 供应商策略已保存。学生内容外发已${form.allowStudentExternalContent ? '开启' : '关闭'}；OpenAI-compatible / 自定义供应商的文本 adapter 已就绪，配置服务器密钥并切换生产 provider 后才会真实调用。`);
+      setMessage(`AI 供应商策略已保存。学生内容外发已${form.allowStudentExternalContent ? '开启' : '关闭'}；OpenAI-compatible / 自定义供应商的 6 类真实 adapter 已就绪，配置服务器密钥并切换生产 provider 后才会真实调用。`);
       config.refresh();
     } catch (error) { setMessage(error.message || '保存失败'); } finally { setBusy(false); }
   }
@@ -1034,12 +1034,12 @@ function ProviderPolicyPanel({ api }) {
   if (config.error) return <Panel title="AI 供应商与预算"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
   if (!form) return null;
   return <Panel title="AI 供应商与预算">
-    <Notice tone="warning">学生创作内容外发由平台端统一控制。OpenAI-compatible / 自定义供应商当前已支持 TEXT 文本调用；其他素材类型仍需对应模态 adapter。密钥仍只通过服务器受限环境变量提供，完成服务器配置并切换 provider 后才会产生真实外部请求。</Notice>
+    <Notice tone="warning">学生创作内容外发由平台端统一控制。OpenAI-compatible / 自定义供应商当前支持 TEXT、IMAGE、MUSIC、VIDEO、PODCAST、DUBBING 六类真实调用；密钥仍只通过服务器受限环境变量提供，完成服务器配置并切换 provider 后才会产生真实外部请求。六类能力会真实发起服务器端 HTTP 请求；视频、音乐、播客等非统一标准接口必须在服务器端按模态配置 Endpoint。</Notice>
     {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
     <form onSubmit={save} className="form-grid">
       <label>供应商<select value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value })}>{catalog.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
       {form.provider === 'custom' ? <label>自定义供应商名称<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} maxLength={120} required /></label> : null}
-      <label>模型 / 模型标识<input value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder={definition?.adapterAvailable ? '例如：gpt-4o-mini' : '待对应 adapter 接入后填写'} required={definition?.modelRequired} /></label>
+      <label>模型 / 模型标识<input value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder={definition?.adapterAvailable ? '例如：模型名称或模型 ID' : '该目录项的原生 adapter 尚未接入'} required={definition?.modelRequired} /></label>
       <label>Endpoint<input value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value })} placeholder="https://..." required={definition?.endpointRequired} /></label>
       <label>平台单次预算<input type="number" min="0" step="1" value={form.platformPerCallBudget} onChange={(event) => setForm({ ...form, platformPerCallBudget: event.target.value })} required /></label>
       <label>平台每日预算<input type="number" min="0" step="1" value={form.platformDailyBudget} onChange={(event) => setForm({ ...form, platformDailyBudget: event.target.value })} required /></label>

@@ -995,7 +995,7 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - 实现：新增 `providerContract.js`，定义 provider 配置校验、超时 / 429 / 5xx / 安全拒绝 / 无效响应 / 未配置错误码；`generationProvider.js` 统一使用服务端环境变量 API key，非 mock provider 只返回明确失败，不回退为假成功。
     - 影响文件 / 接口 / 数据表：`apps/server/src/services/providerContract.js`、`apps/server/src/services/generationProvider.js`、`apps/server/src/config.js`、`scripts/p6-a01-provider-isolation.mjs`；无数据库变更、无外部调用。
     - 验证：Node ESM 运行 `node scripts/p6-a01-provider-isolation.mjs`，隔离测试、既有 P4-O12 队列恢复、P4-O13 失败重试、P4-O15 取消、四端生产构建和服务端路由导入均通过。
-    - 遗留风险或下一步：用户已确认允许学生内容发送外部服务；待平台端填写首个供应商 / 模型 / endpoint / 预算 / 服务端密钥后，再实现具体 adapter，并在隔离账号与临时 SQLite 中验收；当前不切换生产 AI。
+    - 遗留风险或下一步：用户已确认允许学生内容发送外部服务；待平台端填写首个供应商 / 模型 / endpoint / 预算 / 服务端密钥后，在隔离账号与临时 SQLite 中逐类验收；当前不切换生产 AI。
   - 验收：开发、测试、生产密钥相互隔离；未配置时明确报错；日志永不包含 API Key 或完整敏感提示词。
 - 补充完成记录（2026-09-05，用户确认允许学生内容外发 + 平台 / 机构两级预算）：
     - 状态：`[-]`
@@ -1004,7 +1004,7 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - 运行语义：非 mock 平台策略会决定运行时 provider 选择；API key 仍只读取服务端环境变量，具体 adapter 未实现时明确失败，不回退 `local-mock` 假成功。
     - 影响文件 / 接口 / 数据表：`providerContract.js`、`generationProvider.js`、`billingConfig.js`、`aiGeneration.js`、admin / org 前端、`platform_settings.ai_provider_policy`、`org_ai_budgets`；新增 `p6-a01-provider-catalog-isolation.mjs` 与 `p6-a01-provider-policy-e2e.mjs`。
     - 验证：供应商契约 8 项、目录 / 隔离 12 项、策略 E2E 18 项通过；P4-O12 队列恢复、P4-O13 失败重试、P4-O15 取消复跑通过且失败 / 取消不扣积分；四端生产构建与 `git diff --check` 通过。全程使用临时 SQLite 和假 endpoint，未产生外部 AI 费用。
-    - 遗留风险或下一步：生产仍保持 `AI_PROVIDER=local-mock`；首个真实 adapter、模型、endpoint、服务端密钥、外部合规确认和具体模态能力仍未接入。
+    - 遗留风险或下一步：生产仍保持 `AI_PROVIDER=local-mock`；生产切换仍等待用户填写并验收真实供应商、模型、endpoint、服务端密钥、预算及各模态实际 endpoint；原生阿里云 / 火山 / 智谱 adapter 仍未单独实现。
 - [ ] **P6-A02 异步生成任务队列与状态机**
   - 优先级：P0
   - 范围：排队、执行、轮询 / webhook、超时、取消、重试、幂等键、死信、回调验签。
@@ -1879,3 +1879,12 @@ node .\p3-api-integration.mjs
 - 发布后验证：本地 `/health`、公网 `/api/health` 成功；`/`、`/admin/`、`/org/`、`/student/` 均 HTTP 200；`learning-platform-production` 为 `active/running`、`NRestarts=0`、`ExecMainStatus=0`；adapter 文件已存在于生产 release。
 - 生产当前仍为 `AI_PROVIDER=local-mock`，因此本次发布**没有真实外部 AI 请求，也没有外部 AI 费用**；学生外发策略虽已开启，但只有完成真实 provider 配置和显式切换后才会调用外部 AI。
 - 后续配置完成后，必须先执行受控 `TEXT` 隔离真实调用，确认预算、错误映射、积分和日志脱敏，再将生产 `AI_PROVIDER` 切换为 `openai-compatible` 或 `custom`。
+
+## P6-A01 六类真实 AI 能力代码实施记录（2026-09-05）
+
+
+- 状态：`[-]`（六类真实 adapter 代码已完成并可发布；生产配置和受控真实调用验收未完成）。
+- 实现：`openai-compatible` 与 `custom` 真实 HTTP adapter 覆盖 `TEXT`、`IMAGE`、`MUSIC`、`VIDEO`、`PODCAST`、`DUBBING`；支持 JSON URL / base64、二进制响应、视频异步任务轮询、统一错误映射和服务端 Bearer API key。
+- 配置：基础配置位于 `/etc/ai-kids-platform/production.env`；非统一媒体接口使用 `AI_PROVIDER_MODALITY_ENDPOINTS` JSON 逐模态覆盖 endpoint。网页只保存 provider / model / endpoint / 预算策略，不保存 API key。
+- 验证：`scripts/p6-a01-openai-compatible-adapter.mjs` `23/23`，四端 `pnpm run build` 通过，未产生外部 AI 请求或费用；未修改 `packages/canvas`。
+- 当前生产口径：生产仍为 `AI_PROVIDER=local-mock`。用户填好服务器配置并重启后，才会向外部 AI 发起真实请求；若供应商缺少某模态 endpoint，该模态会明确失败，不伪造成功。

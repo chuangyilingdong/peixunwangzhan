@@ -1,4 +1,4 @@
-import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY } from '../config.js';
+import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE } from '../config.js';
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 
@@ -25,7 +25,7 @@ export function generationProviderInfo(selection = {}) {
   const config = providerConfig(selection);
   const definition = providerDefinition(config.provider);
   const adapterAvailable = isMockProvider(config.provider) || Boolean(definition?.adapterAvailable);
-  const capabilities = isMockProvider(config.provider) ? ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'] : (adapterAvailable ? ['TEXT'] : []);
+  const capabilities = isMockProvider(config.provider) ? ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'] : (adapterAvailable ? ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'] : []);
   return {
     provider: config.provider,
     model: config.model,
@@ -42,5 +42,5 @@ export function getGenerationProvider(selection = {}) {
   if (isMockProvider(config.provider)) return mockProvider();
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: AI_PROVIDER_API_KEY });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE });
 }
