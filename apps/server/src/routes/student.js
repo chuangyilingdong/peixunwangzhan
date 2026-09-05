@@ -497,6 +497,26 @@ export async function handleStudent(ctx) {
     const projects = rows(`SELECT id,title,status,course_lesson_id,updated_at FROM student_projects WHERE student_id=? AND org_id=? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 10`, [auth.user.id, auth.user.orgId]);
     return { items, summary: { total: items.length, completed: items.filter((item) => item.status === 'COMPLETED').length, inProgress: items.filter((item) => item.status === 'IN_PROGRESS').length, pending: items.filter((item) => item.status !== 'COMPLETED').length }, recentProjects: projects.map((item) => ({ id: item.id, title: item.title, status: item.status, lessonId: item.course_lesson_id, updatedAt: item.updated_at })) };
   }
+  if (part === '/learning/tasks' && method === 'GET') {
+    const now = nowIso();
+    const classes = rows(`SELECT class_id FROM class_members WHERE user_id=? AND role='STUDENT' AND removed_at IS NULL`, [auth.user.id]);
+    const classIds = classes.map((item) => item.class_id);
+    if (!classIds.length) return { items: [], summary: { total: 0, pending: 0, overdue: 0, completed: 0 } };
+    const placeholders = classIds.map(() => '?').join(',');
+    const items = rows(`SELECT task.*, class.name class_name, lesson.title lesson_title, progress.status progress_status, progress.started_at progress_started_at, progress.submitted_at progress_submitted_at, progress.completed_at progress_completed_at, progress.teacher_feedback progress_feedback FROM learning_tasks task JOIN classes class ON class.id=task.class_id LEFT JOIN course_lessons lesson ON lesson.id=task.lesson_id LEFT JOIN learning_task_progress progress ON progress.task_id=task.id AND progress.student_id=? WHERE task.org_id=? AND task.class_id IN (${placeholders}) AND task.status='PUBLISHED' ORDER BY CASE WHEN task.due_at IS NOT NULL AND task.due_at < ? THEN 0 ELSE 1 END, COALESCE(task.due_at,'9999') ASC`, [auth.user.id, auth.user.orgId, ...classIds, now]);
+    return { items: items.map((item) => { const progress = item.progress_status || (item.due_at && item.due_at < now ? 'OVERDUE' : 'NOT_STARTED'); return { id:item.id, classId:item.class_id, className:item.class_name, lessonId:item.lesson_id, lessonTitle:item.lesson_title, title:item.title, description:item.description, dueAt:item.due_at, status:item.status, progressStatus:progress, startedAt:item.progress_started_at||null, submittedAt:item.progress_submitted_at||null, completedAt:item.progress_completed_at||null, teacherFeedback:item.progress_feedback||'' }; }), summary: { total: items.length, pending: items.filter((item) => !['COMPLETED','SUBMITTED'].includes(item.progress_status)).length, overdue: items.filter((item) => item.due_at && item.due_at < now && item.progress_status !== 'COMPLETED').length, completed: items.filter((item) => item.progress_status === 'COMPLETED').length } };
+  }
+  const taskProgressMatch = part.match(/^\/learning\/tasks\/([^/]+)\/(start|submit)$/);
+  if (taskProgressMatch && method === 'POST') {
+    const task = row(`SELECT task.id, task.title FROM learning_tasks task JOIN class_members member ON member.class_id=task.class_id WHERE task.id=? AND task.org_id=? AND task.status='PUBLISHED' AND member.user_id=? AND member.role='STUDENT' AND member.removed_at IS NULL`, [decodeURIComponent(taskProgressMatch[1]), auth.user.orgId, auth.user.id]);
+    if (!task) throw errors.notFound('任务不存在或不属于当前学生', 'TASK_NOT_FOUND');
+    const now = nowIso(); const nextStatus = taskProgressMatch[2] === 'submit' ? 'SUBMITTED' : 'IN_PROGRESS';
+    const existing = row('SELECT id,status FROM learning_task_progress WHERE task_id=? AND student_id=?', [task.id, auth.user.id]);
+    if (existing) q('UPDATE learning_task_progress SET status=?, started_at=COALESCE(started_at,?), submitted_at=CASE WHEN ?=\'SUBMITTED\' THEN ? ELSE submitted_at END, updated_at=? WHERE id=?', [nextStatus, now, nextStatus, now, now, existing.id]);
+    else q('INSERT INTO learning_task_progress(id,task_id,student_id,org_id,status,started_at,submitted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)', [id('task-progress'), task.id, auth.user.id, auth.user.orgId, nextStatus, now, nextStatus === 'SUBMITTED' ? now : null, now, now]);
+    audit(ctx, 'LEARNING_TASK_PROGRESS', 'LEARNING_TASK', task.id, null, { status: nextStatus });
+    return { id: task.id, status: nextStatus };
+  }
   const progressMatch = part.match(/^\/learning\/lessons\/([^/]+)\/(start|complete)$/);
   if (progressMatch && method === 'POST') {
     const lessonId = decodeURIComponent(progressMatch[1]);

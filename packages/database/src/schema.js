@@ -381,6 +381,25 @@ CREATE TABLE IF NOT EXISTS learning_tasks (
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_learning_tasks_class_due ON learning_tasks(class_id, status, due_at);
+  CREATE TABLE IF NOT EXISTS learning_task_progress (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'NOT_STARTED' CHECK (status IN ('NOT_STARTED','IN_PROGRESS','SUBMITTED','COMPLETED','OVERDUE')),
+    started_at TEXT,
+    submitted_at TEXT,
+    completed_at TEXT,
+    teacher_feedback TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(task_id, student_id),
+    FOREIGN KEY (task_id) REFERENCES learning_tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_learning_task_progress_student ON learning_task_progress(student_id, org_id, updated_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_learning_task_progress_task ON learning_task_progress(task_id, status);
 
 CREATE TABLE IF NOT EXISTS student_lesson_progress (
   id TEXT PRIMARY KEY,
