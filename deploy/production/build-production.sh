@@ -26,6 +26,16 @@ if (( NODE_MAJOR < 22 || (NODE_MAJOR == 22 && NODE_MINOR < 5) )); then
   echo "Node.js 22.5+ is required because the database uses node:sqlite; found ${NODE_VERSION}" >&2
   exit 2
 fi
+# Fail before creating a release if any server module contains syntax/import errors.
+mapfile -t SERVER_JS < <(find apps/server/src packages/database/src -type f -name '*.js' -print | sort)
+for file in "${SERVER_JS[@]}"; do
+  node --check "$file" >/dev/null
+done
+node --input-type=module - <<'NODE'
+await import('./apps/server/src/routes/adminOrg.js');
+await import('./apps/server/src/routes/fileAssets.js');
+await import('./apps/server/src/routes/auth.js');
+NODE
 export VITE_DEPLOYMENT_MODE="$BUILD_MODE"
 export VITE_API_BASE="${VITE_API_BASE:-/api}"
 export VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-https://iicili.cyou}"

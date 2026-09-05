@@ -1801,3 +1801,12 @@ node .\p3-api-integration.mjs
 - [x] 备份恢复演练：使用 `/srv/ai-kids-platform/production/backups/20260905T102834Z` 在隔离目录完成 `restore-drill=passed`，健康检查通过，未触碰生产服务。
 - [~] 后续仍需统一执行真实账号 UAT、AI 重试 / 超时 / 取消的 provider 级测试；这些属于上线收口，不提前宣称全部完成。
 
+
+### 2026-09-05 生产真实账号 UAT 与最终复核（账号已授权，本轮只读）
+
+- [x] 四角色真实生产登录：平台 `root`、机构 `org-admin`、教师 `teacher-1`、学生 `student-1` 均通过生产 API 登录，`/api/me` 返回 200；未在文档、日志或证据中记录密码或 token。
+- [x] 只读角色主链路：平台 `/api/admin/dashboard/overview`、`/api/admin/audit-logs`；机构 `/api/org/classes`、`/api/org/course-series`、`/api/org/teaching/tasks`；教师 `/api/org/classes`、`/api/org/course-series`、`/api/org/teaching/tasks`；学生 `/api/student/account`、`/api/student/dashboard` 均返回 200。
+- [x] 跨角色拒绝：学生访问平台管理概览 403；教师访问平台管理概览 403；教师访问机构账务对账 403；学生访问机构班级 403。
+- [x] 生产运行复核：`learning-platform-production` active/enabled，当前 release `20260905T102834Z`、commit `f05823b8`、Node `v24.19.0`；内网 `/health` 与公网 `/api/health` 均 200；Nginx `-t` 通过；生产 API 仅监听 `127.0.0.1:8789`；UFW 仅放行 22/80/443；敏感路径 `/server.js`、`/package.json`、`.env`、源码路径和 `/api/.env` 均 404；最新备份含 `MANIFEST.json`；生产 SQLite `PRAGMA integrity_check=ok`。
+- [!] 运行日志发现 2026-09-05 18:04:50–18:05:42 曾因旧 release `20260905T100426Z` 的 `adminOrg.js:2024` 语法错误触发多次自动重启；18:05:44 后服务恢复，18:08 与 18:29 为正常维护式重启，当前 `NRestarts=0`、主进程状态 0。需在下一次发布流程中补充 release 启动前 `node --check` / import smoke gate，避免坏制品进入 systemd。
+- 遗留：本轮未执行创建、导入、停用、密码重置、发布任务、提交作品、评分 / 驳回等会改变生产数据的操作；需要业务方确认专门的 UAT 测试数据和回滚窗口后再做。P10 文件上传开发项仍未完成，不发布未完成变更。
