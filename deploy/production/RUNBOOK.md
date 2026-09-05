@@ -196,3 +196,12 @@ D:\学习平台\生产检测账号-20260905.md
 - 修复内容：首页外部视频加载失败、超时、加载中断或错过媒体事件时，加载遮罩最多 5 秒自动退出；视频不可用时保留首页色块、文案和交互，不再永久停留在 `LOADING SCROLL STREAM...`。
 - 发布后：`learning-platform-production` active；`/health` 返回 `status=ok`；四端公网入口验证 **4/4** 通过。
 - 首页生产验证：视频资源未及时就绪时两个加载遮罩均自动隐藏，首页不再被加载提示阻塞。
+
+## 2026-09-05 首页首屏静态兜底与快速加载发布记录
+
+- 发布 commit：`470f451`（`fix(website): render fast local homepage fallback`）。
+- 新 release：`/srv/ai-kids-platform/production/releases/20260905T080206Z`；旧 release `/srv/ai-kids-platform/production/releases/20260905T074802Z` 保留可回滚。
+- 切换前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T080223Z/platform.db`。
+- 修复内容：首页首屏改为本地 CSS 静态视觉优先，React 尚未挂载时由 `index.html` boot shell 先显示；外部视频改为 `preload="metadata"` 的渐进增强层，视频未就绪、超时或失败时不遮挡页面、不阻塞文案和交互。
+- 发布后：`learning-platform-production` active；`/health` 返回 `status=ok`；四端公网入口验证 **4/4** 通过；敏感路径安全冒烟 **14/14** 通过。
+- 首页生产验证：两个 `.ic-video-fallback` 均存在，视频未就绪时首页仍显示导航、标题、按钮和课程卡片；不再依赖外部视频才能出现首屏。
