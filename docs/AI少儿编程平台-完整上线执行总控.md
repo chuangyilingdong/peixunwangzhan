@@ -1460,6 +1460,7 @@ node .\p3-api-integration.mjs
 - [x] 用户确认：创建班级、加入学生、为班级分配课程 / 课时均由教师负责；机构管理员负责机构账号和机构级事项。
 - [x] 修正 `p4-c01-rbac-ownership.mjs` 的过时断言：教师无额外 `MANAGE_CLASSES` 权限时可创建本人机构班级；隔离与越权检查保持有效。
 - [x] 验证：教师职责 9/9、P4-C01 27/27、P4-01 状态机 28/28、P4-03 列表 50/50、P8-Q03 API 52/52、P8-Q04 E2E 54/54、P8-Q02 单元 17/17、P8-Q06 性能 13/13；四端生产构建通过。
+- [x] CI 收口：`.github/workflows/ci.yml` 与 `production-release-gate.yml` 已加入 `p3-schema-check.mjs`、`p4-c01-rbac-ownership.mjs`，避免旧权限断言和旧库迁移问题再次漏检。
 - [x] 安全边界：所有验收使用临时 SQLite；未修改 `packages/canvas`；未触碰默认业务数据库或生产数据库；未输出凭据。
 - [-] 下一步：完成全量脚本回归、交付证据归档，并在确认发布关系后执行生产发布。
 
