@@ -36,9 +36,8 @@ jobs:
 
       - name: Check server and acceptance scripts
         run: |
-          node --check apps/server/src/routes/communication.js
-          node --check apps/server/src/services/reminderScheduler.js
-          node --check apps/server/src/routes/adminOrg.js
+          find apps/server/src packages/database/src -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          node --input-type=module -e "await import('./apps/server/src/routes/adminOrg.js'); await import('./apps/server/src/routes/fileAssets.js'); await import('./apps/server/src/routes/auth.js')"
           node --check scripts/p4-02-demo-data-inventory.mjs
           node --check scripts/p4-o09-reminders.mjs
           node --check scripts/p9-live-security-smoke.mjs
