@@ -8,27 +8,57 @@ const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/,
 
 const navigation = [
   { heading: '运营中心' },
-  { to: '/dashboard', icon: '◈', label: '平台概览' },
-  { to: '/organizations', icon: '♙', label: '机构管理' },
-  { to: '/users', icon: '◉', label: '平台用户' },
+  { to: '/dashboard', icon: '◈', label: '平台概览', permission: 'ADMIN_ANALYTICS' },
+  { to: '/organizations', icon: '♙', label: '机构管理', permission: 'ADMIN_ORGANIZATIONS' },
+  { to: '/users', icon: '◉', label: '平台用户', permission: 'ADMIN_ORGANIZATIONS' },
   { heading: '内容与活动' },
-  { to: '/courses', icon: '▦', label: '平台课程' },
-  { to: '/marketplace', icon: '✦', label: '课程广场' },
-  { to: '/works', icon: '◇', label: '作品库' },
-  { to: '/hackathon', icon: '⚑', label: '黑客松' },
+  { to: '/courses', icon: '▦', label: '平台课程', permission: 'ADMIN_COURSES' },
+  { to: '/marketplace', icon: '✦', label: '课程广场', permission: 'ADMIN_COURSES' },
+  { to: '/works', icon: '◇', label: '作品库', permission: 'ADMIN_WORKS' },
+  { to: '/hackathon', icon: '⚑', label: '黑客松', permission: 'ADMIN_CONTENT' },
   { heading: '计费与设置' },
-  { to: '/billing', icon: '◌', label: '计费与模型' },
-  { to: '/materials', icon: '▤', label: '素材与物料' },
-  { to: '/website-content', icon: '✎', label: '官网内容' },
-  { to: '/analytics', icon: '⌁', label: '转化分析' },
-  { to: '/notifications', icon: '✉', label: '通知事件' },
-  { to: '/client-releases', icon: '⤓', label: '客户端版本' },
-  { to: '/inbox', icon: '✉', label: '站内信' },
-  { to: '/leads', icon: '◔', label: '商机管理' },
-  { to: '/admins', icon: '⚙', label: '平台管理员' },
-  { to: '/audit', icon: '☉', label: '操作审计' },
+  { to: '/billing', icon: '◌', label: '计费与模型', permission: 'ADMIN_BILLING' },
+  { to: '/feature-flags', icon: '⚗', label: '灰度开关', permission: 'ADMIN_FEATURE_FLAGS' },
+  { to: '/materials', icon: '▤', label: '素材与物料', permission: 'ADMIN_CONTENT' },
+  { to: '/website-content', icon: '✎', label: '官网内容', permission: 'ADMIN_CONTENT' },
+  { to: '/analytics', icon: '⌁', label: '转化分析', permission: 'ADMIN_ANALYTICS' },
+  { to: '/notifications', icon: '✉', label: '通知事件', permission: 'ADMIN_CONTENT' },
+  { to: '/client-releases', icon: '⤓', label: '客户端版本', permission: 'ADMIN_CONTENT' },
+  { to: '/inbox', icon: '✉', label: '站内信', permission: 'ADMIN_CONTENT' },
+  { to: '/leads', icon: '◔', label: '商机管理', permission: 'ADMIN_CONTENT' },
+  { to: '/admins', icon: '⚙', label: '平台管理员', permission: 'ADMIN_AUDIT' },
+  { to: '/audit', icon: '☉', label: '操作审计', permission: 'ADMIN_AUDIT' },
 ];
 const demos = [{ label: '平台超管', login: 'root', password: 'admin123' }];
+const ADMIN_PERMISSION_LABELS = {
+  ADMIN_ORGANIZATIONS: '机构与平台用户',
+  ADMIN_COURSES: '课程与课程广场',
+  ADMIN_WORKS: '作品与内容审核',
+  ADMIN_BILLING: '计费与模型',
+  ADMIN_CONTENT: '通知、物料与官网内容',
+  ADMIN_ANALYTICS: '平台概览与转化分析',
+  ADMIN_FEATURE_FLAGS: 'Feature Flag 灰度开关',
+  ADMIN_AUDIT: '平台管理员与操作审计',
+};
+function hasAdminPermission(user, permission) {
+  const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  return user?.login === 'root' || permissions.includes('*') || permissions.includes(permission)
+    || Object.keys(ADMIN_PERMISSION_LABELS).every((item) => permissions.includes(item));
+}
+function visibleNavigation(user) {
+  const output = []; let pendingHeading = null;
+  for (const item of navigation) {
+    if (item.heading) { pendingHeading = item; continue; }
+    if (!hasAdminPermission(user, item.permission)) continue;
+    if (pendingHeading) { output.push(pendingHeading); pendingHeading = null; }
+    output.push(item);
+  }
+  return output;
+}
+function AdminPermissionGate({ user, permission, children }) {
+  if (hasAdminPermission(user, permission)) return children;
+  return <><PageHeader eyebrow="平台权限" title="暂无访问权限" description="当前账号没有该业务域的访问权限。" /><Notice tone="danger">需要权限码：<strong>{permission}</strong>（{ADMIN_PERMISSION_LABELS[permission] || permission}）。如需访问，请联系平台管理员授权。</Notice></>;
+}
 
 function useData(load, deps = []) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
@@ -543,7 +573,7 @@ function PlatformAdmins({ api, currentUser }) {
     return params;
   }, [search, statusFilter, page, limit, sort]);
   const admins = useData(() => api.get(`admin/platform-admins?${adminQuery.toString()}`), [api, adminQuery]);
-  const permissionOptions = ['ADMIN_DASHBOARD', 'ADMIN_ORGANIZATIONS', 'ADMIN_USERS', 'ADMIN_COURSES', 'ADMIN_WORKS', 'ADMIN_HACKATHON', 'ADMIN_BILLING', 'ADMIN_MATERIALS', 'ADMIN_INBOX', 'ADMIN_ADMINS', 'ADMIN_ADJUSTMENT'];
+  const permissionOptions = ['ADMIN_ORGANIZATIONS', 'ADMIN_COURSES', 'ADMIN_WORKS', 'ADMIN_BILLING', 'ADMIN_CONTENT', 'ADMIN_ANALYTICS', 'ADMIN_FEATURE_FLAGS', 'ADMIN_AUDIT'];
   const [form, setForm] = useState({ login: '', displayName: '', password: '', permissions: [] });
   const [editing, setEditing] = useState(null);
   const [message, setMessage] = useState('');
@@ -587,7 +617,7 @@ function PlatformAdmins({ api, currentUser }) {
           </div>
         </form>
       </Panel>
-      <Panel title="权限说明"><Notice>当前本地安全基线仍按 SUPER_ADMIN 角色放行；权限码先完成数据结构、白名单和页面配置能力，后续再逐域收紧 API 判定。不能停用当前登录账号和最后一个有效管理员由后端强制校验；停用或重置密码会立即使该账号全部会话失效。</Notice></Panel>
+      <Panel title="权限说明"><Notice>平台接口按业务域权限码判定；默认 root 账号保留完整权限。没有权限的菜单会隐藏，直接访问页面或接口会返回拒绝提示 / 403 PERMISSION_DENIED。不能停用当前登录账号和最后一个有效管理员由后端强制校验；停用或重置密码会立即使该账号全部会话失效。</Notice></Panel>
     </div>
     <Panel title="筛选条件">
       <div className="form-grid">
@@ -1085,6 +1115,12 @@ function AdminInbox({ api }) {
   </>;
 }
 
+function FileUploadPanel({ api, onDone }) {
+  const [file, setFile] = useState(null); const [progress, setProgress] = useState(0); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  async function submit(event) { event.preventDefault(); if (!file) return setMessage('请选择文件'); setBusy(true); setProgress(10); setMessage(''); try { await api.upload('admin/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' }, { onProgress: setProgress }); setMessage('文件上传成功'); setFile(null); onDone?.(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
+  return <Panel title="安全上传"><form onSubmit={submit} className="form-grid"><label>选择图片、音频、视频或 PDF<input type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} disabled={busy} /></label><div className="row-actions"><button className="primary-button" disabled={busy || !file}>{busy ? `上传中 ${progress}%` : '上传文件'}</button>{message ? <span className="muted">{message}</span> : null}</div></form></Panel>;
+}
+
 function AdminMaterials({ api }) {
   const [filters, setFilters] = useState({ search: '', status: '', category: '', visibility: '' });
   const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
@@ -1101,6 +1137,7 @@ function AdminMaterials({ api }) {
   return <>
     <PageHeader eyebrow="平台内容" title="素材与宣传物料" description="维护招生海报、课程介绍和活动资料的元数据、授权范围与真实使用统计。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
     <Notice tone="info">当前只维护文件元数据和外部资源地址，不提供虚假的上传、OSS 或下载能力；未配置真实资源的物料会在机构端明确显示为“资源待配置”。</Notice>
+    <FileUploadPanel api={api} onDone={materials.refresh} />
     <div className="split"><Panel title="新增宣传物料"><form onSubmit={create}>
       <label>名称<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>说明<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
       <div className="form-grid"><label>分类<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}><option value="GENERAL">通用</option><option value="COURSE">课程</option><option value="POSTER">海报</option><option value="ACTIVITY">活动</option><option value="PARTNERSHIP">合作</option></select></label><label>可见范围<select value={form.visibility} onChange={(e) => setForm({ ...form, visibility: e.target.value, orgIds: [] })}><option value="ALL_ORGS">全部机构</option><option value="ASSIGNED_ORGS">指定机构</option></select></label></div>
@@ -1542,6 +1579,56 @@ function Analytics({ api }) {
   </>;
 }
 
+
+function FeatureFlags({ api }) {
+  const list = useData(() => api.get('admin/feature-flags'), [api]);
+  const [form, setForm] = useState({ key: '', name: '', description: '', enabled: true, defaultEnabled: false, rolloutPercent: 0, enabledOrgIds: '', enabledUserIds: '' });
+  const [editing, setEditing] = useState('');
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+  const splitIds = (value) => String(value || '').split(/[\n,，]/).map((item) => item.trim()).filter(Boolean);
+  const toForm = (item) => ({ key: item.key, name: item.name, description: item.description || '', enabled: item.enabled, defaultEnabled: item.defaultEnabled, rolloutPercent: item.rolloutPercent, enabledOrgIds: item.enabledOrgIds.join('\n'), enabledUserIds: item.enabledUserIds.join('\n') });
+  function reset() { setEditing(''); setForm({ key: '', name: '', description: '', enabled: true, defaultEnabled: false, rolloutPercent: 0, enabledOrgIds: '', enabledUserIds: '' }); }
+  async function save(event) {
+    event.preventDefault(); setSaving(true); setMessage('');
+    const payload = { name: form.name, description: form.description, enabled: form.enabled, defaultEnabled: form.defaultEnabled, rolloutPercent: Number(form.rolloutPercent), enabledOrgIds: splitIds(form.enabledOrgIds), enabledUserIds: splitIds(form.enabledUserIds) };
+    try {
+      if (editing) await api.patch(`admin/feature-flags/${encodeURIComponent(editing)}`, payload);
+      else await api.post('admin/feature-flags', { ...payload, key: form.key.trim() });
+      setMessage(editing ? 'Feature Flag 已更新。' : 'Feature Flag 已创建。'); reset(); list.refresh();
+    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
+  }
+  async function remove(item) {
+    if (!window.confirm(`确认删除 Feature Flag「${item.key}」？`)) return;
+    try { await api.delete(`admin/feature-flags/${encodeURIComponent(item.key)}`); setMessage('Feature Flag 已删除。'); list.refresh(); } catch (err) { setMessage(err.message); }
+  }
+  return <>
+    <PageHeader eyebrow="平台系统" title="Feature Flag 灰度中心" description="按默认开关、机构白名单、用户白名单和稳定灰度比例控制新功能；服务端统一判定，变更写入操作审计。" actions={<button className="secondary-button" onClick={list.refresh}>刷新</button>} />
+    <Panel title={editing ? `编辑 ${editing}` : '新建 Feature Flag'}>
+      <form onSubmit={save}>
+        <div className="form-grid">
+          <label>Key{editing ? <input value={form.key} disabled /> : <input required pattern="[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*" maxLength="80" value={form.key} placeholder="例如 real-ai-generation" onChange={(e) => setForm({ ...form, key: e.target.value })} />}</label>
+          <label>名称<input required maxLength="120" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+          <label>灰度比例（%）<input type="number" min="0" max="100" step="1" value={form.rolloutPercent} onChange={(e) => setForm({ ...form, rolloutPercent: e.target.value })} /></label>
+          <label className="checkbox-label"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />总开关开启</label><label className="checkbox-label"><input type="checkbox" checked={form.defaultEnabled} onChange={(e) => setForm({ ...form, defaultEnabled: e.target.checked })} />默认开启</label>
+          <label>机构白名单（每行一个 ID）<textarea rows="3" value={form.enabledOrgIds} placeholder="org_…" onChange={(e) => setForm({ ...form, enabledOrgIds: e.target.value })} /></label>
+          <label>用户白名单（每行一个 ID）<textarea rows="3" value={form.enabledUserIds} placeholder="user_…" onChange={(e) => setForm({ ...form, enabledUserIds: e.target.value })} /></label>
+          <label className="wide-field">说明<textarea rows="2" maxLength="500" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+        </div>
+        <div className="row-actions"><button className="primary-button" disabled={saving}>{saving ? '保存中…' : editing ? '保存修改' : '创建 Flag'}</button>{editing && <button type="button" className="secondary-button" onClick={reset}>取消编辑</button>}</div>
+      </form>
+      {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+    </Panel>
+    {list.loading ? <Loading label="正在读取 Feature Flags…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : <Panel title={`已配置（${list.data?.total || 0}）`}>
+      <div className="table-wrap"><table><thead><tr><th>Key</th><th>状态策略</th><th>白名单</th><th>更新时间</th><th>操作</th></tr></thead><tbody>
+        {(list.data?.items || []).map((item) => <tr key={item.key}><td><strong>{item.key}</strong><div className="muted">{item.name}<br />{item.description}</div></td><td>{item.enabled ? '总开关开' : '总开关关'} · {item.defaultEnabled ? '默认开启' : `灰度 ${item.rolloutPercent}%`}</td><td>机构 {item.enabledOrgIds.length} · 用户 {item.enabledUserIds.length}</td><td>{formatDate(item.updatedAt)}</td><td><button className="secondary-button" onClick={() => { setEditing(item.key); setForm(toForm(item)); }}>编辑</button>{' '}<button className="danger-button" onClick={() => remove(item)}>删除</button></td></tr>)}
+        {!(list.data?.items || []).length && <tr><td colSpan="5"><Empty title="暂无 Feature Flag" description="创建后可在服务端通过 GET /api/feature-flags 获取当前账号的判定结果。" /></td></tr>}
+      </tbody></table></div>
+    </Panel>}
+    <Notice tone="info">判定优先级：用户白名单 → 机构白名单 → 默认开关 → 稳定灰度；关闭默认开关且灰度为 0 时，只有白名单账号启用。当前仅配置能力，不会自动替任何业务开启真实 AI、支付或公开功能。</Notice>
+  </>;
+}
+
 function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
@@ -1550,7 +1637,28 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="平台超管" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/organizations" element={<Organizations api={api} />} /><Route path="/courses" element={<Courses api={api} />} /><Route path="/users" element={<PlatformUsers api={api} />} /><Route path="/marketplace" element={<CourseMarketplace api={api} />} /><Route path="/works" element={<PlatformWorks api={api} />} /><Route path="/hackathon" element={<PlatformPage kind="hackathon" />} /><Route path="/billing" element={<PlatformBilling api={api} />} /><Route path="/materials" element={<AdminMaterials api={api} />} /> <Route path="/website-content" element={<WebsiteContent api={api} />} /> <Route path="/analytics" element={<Analytics api={api} />} /> <Route path="/client-releases" element={<ClientReleases api={api} />} /><Route path="/inbox" element={<AdminInbox api={api} />} /><Route path="/leads" element={<LeadsPanel api={api} />} /><Route path="/admins" element={<PlatformAdmins api={api} currentUser={session.user} />} /><Route path="/audit" element={<PlatformAudit api={api} />} /><Route path="/notifications" element={<PlatformNotifications api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  const page = (permission, element) => <AdminPermissionGate user={session.user} permission={permission}>{element}</AdminPermissionGate>;
+  return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout}><Routes>
+    <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
+    <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
+    <Route path="/courses" element={page('ADMIN_COURSES', <Courses api={api} />)} />
+    <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
+    <Route path="/marketplace" element={page('ADMIN_COURSES', <CourseMarketplace api={api} />)} />
+    <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
+    <Route path="/hackathon" element={page('ADMIN_CONTENT', <PlatformPage kind="hackathon" />)} />
+    <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
+    <Route path="/feature-flags" element={page('ADMIN_FEATURE_FLAGS', <FeatureFlags api={api} />)} />
+    <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
+    <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />
+    <Route path="/analytics" element={page('ADMIN_ANALYTICS', <Analytics api={api} />)} />
+    <Route path="/client-releases" element={page('ADMIN_CONTENT', <ClientReleases api={api} />)} />
+    <Route path="/inbox" element={page('ADMIN_CONTENT', <AdminInbox api={api} />)} />
+    <Route path="/leads" element={page('ADMIN_CONTENT', <LeadsPanel api={api} />)} />
+    <Route path="/admins" element={page('ADMIN_AUDIT', <PlatformAdmins api={api} currentUser={session.user} />)} />
+    <Route path="/audit" element={page('ADMIN_AUDIT', <PlatformAudit api={api} />)} />
+    <Route path="/notifications" element={page('ADMIN_CONTENT', <PlatformNotifications api={api} />)} />
+    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+  </Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

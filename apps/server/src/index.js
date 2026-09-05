@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { DEPLOYMENT_MODE, PORT } from './config.js';
-import { ApiError, corsHeaders, envelope, errors, readJson, requestContext, resolveAuth, sendJson, sendNoContent } from './lib.js';
+import { ApiError, corsHeaders, envelope, errors, platformPermissionForPathname, readBodyBuffer, readJson, requestContext, requirePlatformPermission, resolveAuth, sendJson, sendNoContent } from './lib.js';
 import { handleAuth } from './routes/auth.js';
 import { handleAdmin, handleOrg } from './routes/adminOrg.js';
 import { handleStudent } from './routes/student.js';
@@ -11,6 +11,8 @@ import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets } f
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 import { domainStateContract } from './services/domainState.js';
+import { handleFeatureFlags } from './routes/featureFlags.js';
+import { maxUploadBytes } from './services/fileUploadSecurity.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -18,6 +20,13 @@ const PUBLIC_SITE_URL = String(process.env.PUBLIC_SITE_URL || 'http://localhost:
 const INTERNAL_TEST = DEPLOYMENT_MODE === 'internal-test';
 const API_HOST = INTERNAL_TEST ? '127.0.0.1' : String(process.env.API_HOST || '0.0.0.0');
 const PUBLIC_ROUTES = ['/', '/marketplace', '/courses', '/org', '/works', '/handbook', '/compare', '/download', '/demo', '/terms', '/privacy', '/minors'];
+
+function sendFileResponse(res, fileResponse, req) {
+  const headers = { ...corsHeaders(req, fileResponse.headers || {}) };
+  res.writeHead(fileResponse.status || 200, headers);
+  fileResponse.stream.on('error', () => { if (!res.destroyed) res.destroy(); });
+  fileResponse.stream.pipe(res);
+}
 function sendText(res, status, text, contentType, req) {
   const internalHeaders = INTERNAL_TEST ? { 'x-robots-tag': 'noindex, nofollow, noarchive', 'x-internal-test': 'true' } : {};
   res.writeHead(status, { ...corsHeaders(req, { 'content-type': contentType, 'cache-control': 'public, max-age=3600' }), ...internalHeaders, 'content-length': Buffer.byteLength(text) });
@@ -58,8 +67,20 @@ const server = http.createServer(async (req, res) => {
   };
 
   try {
-    if (bodyMethods.has(ctx.method)) ctx.body = await readJson(req, '2mb');
+    if (bodyMethods.has(ctx.method)) {
+      const contentType = String(req.headers['content-type'] || '').toLowerCase();
+      if (contentType.startsWith('multipart/form-data')) {
+        const declaredLength = Number(req.headers['content-length'] || 0);
+        // 允许 multipart 边界和字段占用少量额外空间，但不接受明显超限请求。
+        const requestLimit = maxUploadBytes() + 1024 * 1024;
+        if (Number.isFinite(declaredLength) && declaredLength > requestLimit) throw errors.badRequest('请求体过大', 'PAYLOAD_TOO_LARGE');
+        ctx.rawBody = await readBodyBuffer(req, requestLimit);
+      } else ctx.body = await readJson(req, '2mb');
+    }
     if (handleSeoAsset(ctx)) return;
+
+    const platformPermission = platformPermissionForPathname(ctx.pathname);
+    if (platformPermission) requirePlatformPermission(ctx, platformPermission);
 
     if (ctx.pathname === '/api/meta/domain-states' && ctx.method === 'GET') {
       sendJson(res, 200, envelope(domainStateContract()), req);
@@ -71,7 +92,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const data = await handlePublicAnalytics(ctx)
+    const data = await handleFeatureFlags(ctx)
+      ?? await handlePublicAnalytics(ctx)
       ?? await handleAdminAnalytics(ctx)
       ?? await handlePublicCommunication(ctx)
       ?? await handleAuth(ctx)
@@ -91,6 +113,10 @@ const server = http.createServer(async (req, res) => {
       ?? await handleAiGeneration(ctx);
 
     if (data === null || data === undefined) throw errors.notFound('接口不存在', 'ROUTE_NOT_FOUND');
+    if (data && data.__fileResponse) {
+      sendFileResponse(res, data, req);
+      return;
+    }
     const extraHeaders = ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {};
     sendJson(res, 200, envelope(data), req, extraHeaders);
   } catch (error) {

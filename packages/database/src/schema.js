@@ -1190,3 +1190,23 @@ try { db.exec("ALTER TABLE course_lessons ADD COLUMN lesson_content TEXT NOT NUL
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }
 
+
+// P9-R02 feature flags: server-side rollout and organization/user allowlists.
+db.exec(`CREATE TABLE IF NOT EXISTS feature_flags (
+  flag_key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  default_enabled INTEGER NOT NULL DEFAULT 0,
+  rollout_percent INTEGER NOT NULL DEFAULT 0 CHECK (rollout_percent BETWEEN 0 AND 100),
+  enabled_org_ids TEXT NOT NULL DEFAULT '[]',
+  enabled_user_ids TEXT NOT NULL DEFAULT '[]',
+  created_by TEXT,
+  updated_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_feature_flags_updated ON feature_flags(updated_at DESC)');
+try { db.exec('ALTER TABLE feature_flags ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1'); } catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }

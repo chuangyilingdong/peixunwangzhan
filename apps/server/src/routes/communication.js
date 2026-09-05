@@ -7,7 +7,9 @@ import {
   normalizeSeries,
   nowIso,
   parseJson,
+  platformPermissionForPathname,
   q,
+  requirePlatformPermission,
   requireRole,
   row,
   rows,
@@ -1086,6 +1088,7 @@ export async function handleAdminCommunication(ctx) {
   }
 
   if (!pathname.startsWith('/api/admin/')) return null;
+  requirePlatformPermission(ctx, platformPermissionForPathname(pathname));
   const part = pathname.slice('/api/admin'.length);
   if (part === '/inbox' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);

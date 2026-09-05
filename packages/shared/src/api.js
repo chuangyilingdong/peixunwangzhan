@@ -53,6 +53,17 @@ export function createApiClient({ baseUrl = apiBase(), getToken = () => null, on
     request,
     get: (path, options = {}) => request(path, { ...options, method: 'GET' }),
     post: (path, body, options = {}) => request(path, { ...options, method: 'POST', body }),
+    upload: async (path, file, fields = {}, { onProgress } = {}) => {
+      const form = new FormData();
+      Object.entries(fields).forEach(([key, value]) => { if (value !== undefined && value !== null) form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value)); });
+      form.append('file', file, file.name);
+      const token = getToken();
+      const response = await fetch(requestUrl(baseUrl, path), { method: 'POST', credentials: 'include', headers: { accept: 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) }, body: form });
+      if (onProgress) onProgress(100);
+      const text = await response.text(); let payload = null; try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+      if (!response.ok || payload?.success === false) { const error = payload?.error || {}; throw new ApiError(error.message || '上传未能完成，请稍后重试', { status: response.status, code: error.code || 'UPLOAD_FAILED', details: error.details || null }); }
+      return payload?.data ?? payload;
+    },
     put: (path, body, options = {}) => request(path, { ...options, method: 'PUT', body }),
     patch: (path, body, options = {}) => request(path, { ...options, method: 'PATCH', body }),
     delete: (path, options = {}) => request(path, { ...options, method: 'DELETE' }),

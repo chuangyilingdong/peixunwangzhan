@@ -6,6 +6,61 @@ const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
 const PEPPER = process.env.AUTH_PEPPER || 'p0-local-pepper';
 
+export const PLATFORM_ADMIN_PERMISSIONS = Object.freeze([
+  'ADMIN_ORGANIZATIONS',
+  'ADMIN_COURSES',
+  'ADMIN_WORKS',
+  'ADMIN_BILLING',
+  'ADMIN_CONTENT',
+  'ADMIN_ANALYTICS',
+  'ADMIN_FEATURE_FLAGS',
+  'ADMIN_AUDIT',
+]);
+const PLATFORM_ADMIN_PERMISSION_SET = new Set(PLATFORM_ADMIN_PERMISSIONS);
+
+export function isRootPlatformAdmin(auth) {
+  return auth?.user?.role === 'SUPER_ADMIN'
+    && (auth.user.login === 'root'
+      || auth.user.permissions?.includes('*')
+      || PLATFORM_ADMIN_PERMISSIONS.every((permission) => auth.user.permissions?.includes(permission)));
+}
+
+export function requirePlatformPermission(ctx, permission) {
+  const auth = requireRole(ctx, ['SUPER_ADMIN']);
+  if (!PLATFORM_ADMIN_PERMISSION_SET.has(permission)) throw new Error(`Unknown platform permission: ${permission}`);
+  if (!isRootPlatformAdmin(auth) && !(auth.user.permissions || []).includes(permission)) {
+    throw errors.forbidden('当前账号没有该业务域权限', 'PERMISSION_DENIED', { permission });
+  }
+  return auth;
+}
+
+export function platformPermissionForPathname(pathname) {
+  const value = String(pathname || '');
+  if (!value.startsWith('/api/admin/')) return null;
+  const routes = [
+    ['/api/admin/feature-flags', 'ADMIN_FEATURE_FLAGS'],
+    ['/api/admin/audit-logs', 'ADMIN_AUDIT'],
+    ['/api/admin/platform-admins', 'ADMIN_AUDIT'],
+    ['/api/admin/analytics', 'ADMIN_ANALYTICS'],
+    ['/api/admin/dashboard', 'ADMIN_ANALYTICS'],
+    ['/api/admin/overview', 'ADMIN_ANALYTICS'],
+    ['/api/admin/ai-usage', 'ADMIN_ANALYTICS'],
+    ['/api/admin/organizations', 'ADMIN_ORGANIZATIONS'],
+    ['/api/admin/platform-users', 'ADMIN_ORGANIZATIONS'],
+    ['/api/admin/course-series', 'ADMIN_COURSES'],
+    ['/api/admin/course-lessons', 'ADMIN_COURSES'],
+    ['/api/admin/course-marketplace', 'ADMIN_COURSES'],
+    ['/api/admin/works', 'ADMIN_WORKS'],
+    ['/api/admin/work-reports', 'ADMIN_WORKS'],
+    ['/api/admin/work-data', 'ADMIN_WORKS'],
+    ['/api/admin/billing', 'ADMIN_BILLING'],
+    ['/api/admin/billing-config', 'ADMIN_BILLING'],
+    ['/api/admin/file-assets', 'ADMIN_CONTENT'],
+    ['/api/admin/website-content', 'ADMIN_CONTENT'],
+  ];
+  return routes.find(([prefix]) => value === prefix || value.startsWith(prefix + '/'))?.[1] || 'ADMIN_CONTENT';
+}
+
 export function id(prefix) {
   return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
 }
@@ -55,6 +110,7 @@ export const errors = {
   notFound: (message = '资源不存在', code = 'NOT_FOUND', details) => new ApiError(404, code, message, details),
   badRequest: (message = '请求参数错误', code = 'VALIDATION_ERROR', details) => new ApiError(400, code, message, details),
   conflict: (message = '资源状态冲突', code = 'CONFLICT', details) => new ApiError(409, code, message, details),
+  serviceUnavailable: (message = '服务暂不可用', code = 'SERVICE_UNAVAILABLE', details) => new ApiError(503, code, message, details),
 };
 
 export function envelope(data) {
@@ -78,6 +134,18 @@ function parseLimit(limit) {
   return Math.floor(Number(match[1]) * multiplier);
 }
 
+export async function readBodyBuffer(req, limit = '1mb') {
+  const maxBytes = parseLimit(limit);
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += value.length;
+    if (total > maxBytes) throw errors.badRequest('请求体过大', 'PAYLOAD_TOO_LARGE');
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
 export async function readJson(req, limit = '1mb') {
   const maxBytes = parseLimit(limit);
   const chunks = [];
@@ -252,13 +320,17 @@ export function nonEmptyString(value, field, { max = 500, fallback = undefined }
 
 export function normalizeUser(value, { includeAuthMeta = false } = {}) {
   if (!value) return null;
+  const storedPermissions = parseJson(value.permissions, []);
+  const permissions = value.role === 'SUPER_ADMIN' && value.login === 'root' && storedPermissions.length === 0
+    ? [...PLATFORM_ADMIN_PERMISSIONS]
+    : storedPermissions;
   const result = {
     id: value.id,
     orgId: value.org_id || null,
     login: value.login,
     displayName: value.display_name,
     role: value.role,
-    permissions: parseJson(value.permissions, []),
+    permissions,
     phone: value.phone || null,
     phoneVerifiedAt: value.phone_verified_at || null,
     mustBindPhone: !!value.must_bind_phone,

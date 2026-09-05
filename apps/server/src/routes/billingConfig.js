@@ -4,7 +4,9 @@ import {
   audit,
   errors,
   nowIso,
+  platformPermissionForPathname,
   q,
+  requirePlatformPermission,
   requireRole,
   row,
   rows,
@@ -161,6 +163,7 @@ export function isModalityEnabled(orgId, modality) {
 export async function handleAdminBillingConfig(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/billing-config')) return null;
+  requirePlatformPermission(ctx, platformPermissionForPathname(pathname));
   // billing-config 独立路由，由本模块处理，adminOrg 通用路由不需要拦截
   const part = pathname.slice('/api/admin'.length);
 

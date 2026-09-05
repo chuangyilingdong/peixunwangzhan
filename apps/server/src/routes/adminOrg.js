@@ -1,7 +1,7 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, nonEmptyString, nowIso, parseJson,
-  q, requireRole, row, rows, transaction,
+  PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
@@ -346,15 +346,14 @@ function validateTeacher(currentOrgId, teacherId) {
   if (!teacher) throw errors.badRequest('教师不属于当前机构或已停用', 'INVALID_TEACHER');
   return teacher;
 }
-const PLATFORM_ADMIN_PERMISSIONS = new Set([
-  'ADMIN_DASHBOARD', 'ADMIN_ORGANIZATIONS', 'ADMIN_USERS', 'ADMIN_COURSES', 'ADMIN_WORKS',
-  'ADMIN_HACKATHON', 'ADMIN_BILLING', 'ADMIN_MATERIALS', 'ADMIN_INBOX', 'ADMIN_ADMINS',
-  'ADMIN_ADJUSTMENT',
-]);
 function platformAdminPermissions(value) {
   const items = Array.isArray(value) ? value : [];
-  if (items.some((item) => typeof item !== 'string' || !PLATFORM_ADMIN_PERMISSIONS.has(item))) throw errors.badRequest('包含无效的平台权限码', 'INVALID_ADMIN_PERMISSION');
+  if (items.some((item) => typeof item !== 'string' || !PLATFORM_ADMIN_PERMISSIONS.includes(item))) throw errors.badRequest('包含无效的平台权限码', 'INVALID_ADMIN_PERMISSION');
   return [...new Set(items)];
+}
+function hasAnyPlatformPermission(value) {
+  const permissions = Array.isArray(value) ? value : [];
+  return permissions.includes('*') || permissions.some((item) => PLATFORM_ADMIN_PERMISSIONS.includes(item));
 }
 function platformUserRow(value) {
   return { ...normalizeUser(value, { includeAuthMeta: true }), organizationName: value.organization_name || null, billingPackageName: value.billing_package_name || null };
@@ -997,6 +996,8 @@ function buildOrganizationDetail(orgId) {
 export async function handleAdmin(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/')) return null;
+  const platformPermission = platformPermissionForPathname(pathname);
+  if (platformPermission) requirePlatformPermission(ctx, platformPermission);
   const part = pathname.slice('/api/admin'.length) || '/';
   if (part === '/audit-logs' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -1652,7 +1653,7 @@ export async function handleAdmin(ctx) {
     const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim(); const password = String(body.password || '');
     if (!login || !displayName || password.length < 6) throw errors.badRequest('登录名、姓名不能为空且密码至少6位', 'ADMIN_INPUT_REQUIRED');
     if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
-    const permissions = platformAdminPermissions(body.permissions); const adminId = id('user'); const now = nowIso();
+    const permissions = login === 'root' ? [...PLATFORM_ADMIN_PERMISSIONS] : platformAdminPermissions(body.permissions); const adminId = id('user'); const now = nowIso();
     q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [adminId, null, login, displayName, 'SUPER_ADMIN', json(permissions), hashPassword(password), body.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE', now, now]);
     audit(ctx, 'PLATFORM_ADMIN_CREATE', 'USER', adminId, null, { login, permissions });
     return normalizeUser(row('SELECT * FROM users WHERE id=?', [adminId]), { includeAuthMeta: true });
@@ -1677,8 +1678,12 @@ export async function handleAdmin(ctx) {
     if (body.login !== undefined && String(body.login).trim() !== target.login && row('SELECT id FROM users WHERE login=?', [String(body.login).trim()])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim();
     if (!displayName) throw errors.badRequest('姓名不能为空', 'ADMIN_INPUT_REQUIRED');
-    const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : platformAdminPermissions(body.permissions);
-    if (!Array.isArray(permissions) || permissions.some((item) => !PLATFORM_ADMIN_PERMISSIONS.has(item))) throw errors.badRequest('包含无效的平台权限码', 'INVALID_ADMIN_PERMISSION');
+    const permissions = target.login === 'root' ? [...PLATFORM_ADMIN_PERMISSIONS] : (body.permissions === undefined ? parseJson(target.permissions, []) : platformAdminPermissions(body.permissions));
+    if (!Array.isArray(permissions) || permissions.some((item) => !PLATFORM_ADMIN_PERMISSIONS.includes(item))) throw errors.badRequest('包含无效的平台权限码', 'INVALID_ADMIN_PERMISSION');
+    if (target.status === 'ACTIVE' && !hasAnyPlatformPermission(permissions)) {
+      const effectiveAdmins = rows("SELECT id FROM users WHERE role='SUPER_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL");
+      if (effectiveAdmins.length <= 1 && effectiveAdmins.some((item) => item.id === target.id)) throw errors.badRequest('不能移除最后一个有效平台管理员的全部权限', 'LAST_SUPER_ADMIN_FORBIDDEN');
+    }
     let passwordHash = target.password_hash;
     if (body.password !== undefined) { const password = String(body.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位', 'ADMIN_INPUT_REQUIRED'); passwordHash = hashPassword(password); }
     let status = target.status;

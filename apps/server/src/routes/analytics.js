@@ -1,4 +1,4 @@
-import { errors, id, json, nowIso, q, requireRole, row, rows } from '../lib.js';
+import { errors, id, json, nowIso, q, requirePlatformPermission, row, rows } from '../lib.js';
 
 const RETENTION_DAYS = 90;
 const EVENTS = new Set([
@@ -109,6 +109,6 @@ export function handlePublicAnalytics(ctx) {
 
 export function handleAdminAnalytics(ctx) {
   if (ctx.pathname !== '/api/admin/analytics/overview' || ctx.method !== 'GET') return null;
-  requireRole(ctx, ['SUPER_ADMIN']);
+  requirePlatformPermission(ctx, 'ADMIN_ANALYTICS');
   return overview(ctx.search);
 }

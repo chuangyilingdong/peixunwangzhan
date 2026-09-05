@@ -232,3 +232,22 @@ D:\学习平台\生产检测账号-20260905.md
 - 问题原因：第二屏仍引用外部 `r2.motionsites.dev` 视频，加载失败时此前又移除了粉色 CSS 兜底，因此第二屏只剩背景和文案；首屏兔子卡顿则来自滚动驱动时持续修改 `video.currentTime`，浏览器频繁 seek。
 - 修复内容：第二屏改为复用本地 `/assets/hero-animal.mp4` 与 `/assets/hero-animal-poster.webp`，保证兔子素材与首屏一致且不依赖外部域名；首屏改用浏览器原生 `autoplay + loop` 连续播放，停止滚动期间的逐帧 seek；第二屏不再渲染粉色圆形 CSS 兜底图。
 - 发布后：生产 `/health` 返回 `status=ok`；四端公网入口验证 **4/4** 通过。
+
+## 文件 / 媒体安全上传（P10）
+
+上传目录必须位于 Web 根目录之外，并由服务账号单独持有：
+
+```bash
+sudo install -d -o ai-kids-platform -g ai-kids-platform -m 0750 /srv/ai-kids-platform/production/uploads
+```
+
+生产环境默认 `FILE_UPLOAD_REQUIRE_SCANNER=true`。正式开放上传前安装并确认 ClamAV：
+
+```bash
+sudo apt-get install clamav
+sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/production/current/package.json
+```
+
+在生产环境文件中设置 `FILE_UPLOAD_SCANNER=/usr/bin/clamscan` 后重启服务。未配置、不可执行、扫描失败或命中恶意文件时，API 会拒绝上传，不会把文件元数据写入数据库；若数据库写入失败，已落盘文件会清理。Nginx 的 `client_max_body_size` 应与服务端默认 25 MB 限制保持为 26 MB，禁止为 `/srv/ai-kids-platform/production/uploads` 增加静态目录映射。
+
+上传限流与配额：FILE_UPLOAD_USER_PER_HOUR、FILE_UPLOAD_ORG_PER_HOUR、FILE_UPLOAD_MAX_CONCURRENT、FILE_UPLOAD_USER_QUOTA_BYTES、FILE_UPLOAD_ORG_QUOTA_BYTES 分别控制用户/机构小时频率、并发数和容量。生产环境应显式配置，修改后重启服务。

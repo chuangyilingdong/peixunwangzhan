@@ -1,5 +1,8 @@
 // P4-C04 统一文件元数据与访问授权模型
-// 提供：file_assets / file_access_grants 表的 CRUD + 授权校验 + 下载代理占位
+// 提供：file_assets / file_access_grants 表的 CRUD + 授权校验 + 受保护文件流下载
+import { createReadStream } from 'node:fs';
+import { stat, rm } from 'node:fs/promises';
+import path from 'node:path';
 import {
   audit,
   errors,
@@ -7,12 +10,16 @@ import {
   json,
   nowIso,
   parseJson,
+  platformPermissionForPathname,
   q,
+  requirePlatformPermission,
   requireRole,
   row,
   rows,
 } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
+import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
+import { reserveUpload } from '../services/uploadLimits.js';
 
 const STORAGE_KINDS = new Set(['EXTERNAL_URL', 'INTERNAL_PROXY', 'PENDING']);
 const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE']);
@@ -167,6 +174,61 @@ export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
  * 同步把 file_assets 行链接到业务对象（写入 metadata）并把 visibility 投射到 grants。
  * 由其他业务表在创建/更新文件元数据时调用。
  */
+async function prepareFileDownload(ctx, file) {
+  if (file.storage_kind !== 'INTERNAL_PROXY') {
+    audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, external: true });
+    return {
+      id: file.id, fileName: file.file_name, mimeType: file.mime_type, fileSize: file.file_size,
+      storageKind: file.storage_kind, storageUrl: file.storage_url, proxyRoute: file.proxy_route,
+      publicPath: file.public_path,
+      statement: 'EXTERNAL_URL 模式：客户端可直接使用已授权的 storageUrl。',
+    };
+  }
+  const root = uploadRoot();
+  const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
+  if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) {
+    throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  }
+  const absolute = path.resolve(root, storageKey);
+  if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  let info;
+  try { info = await stat(absolute); } catch { throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND'); }
+  if (!info.isFile()) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  const total = info.size;
+  const rangeHeader = String(ctx.req.headers.range || '');
+  let start = 0; let end = total - 1; let status = 200;
+  if (rangeHeader) {
+    const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+    if (!match || (!match[1] && !match[2])) throw errors.badRequest('Range 请求无效', 'INVALID_RANGE');
+    if (match[1]) start = Number(match[1]);
+    if (match[2]) end = Number(match[2]);
+    else end = total - 1;
+    if (!match[1]) { const suffix = Number(match[2]); start = suffix > 0 ? Math.max(total - suffix, 0) : 0; }
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= total) {
+      const error = errors.badRequest('Range 超出文件范围', 'RANGE_NOT_SATISFIABLE');
+      error.status = 416;
+      throw error;
+    }
+    end = Math.min(end, total - 1); status = 206;
+  }
+  audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageKey: file.storage_key, range: rangeHeader || null });
+  const safeName = String(file.file_name || 'download').replace(/[\r\n"\\/]/g, '_');
+  return {
+    __fileResponse: true,
+    status,
+    headers: {
+      'content-type': file.mime_type || 'application/octet-stream',
+      'content-length': String(end - start + 1),
+      'content-disposition': `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
+      'accept-ranges': 'bytes',
+      'x-content-type-options': 'nosniff',
+      ...(status === 206 ? { 'content-range': `bytes ${start}-${end}/${total}` } : {}),
+      'cache-control': 'private, no-store',
+    },
+    stream: createReadStream(absolute, { start, end }),
+  };
+}
+
 export function linkFileAsset({ fileId, businessType, businessId, audience, grantedBy }) {
   if (!fileId) return;
   const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
@@ -198,9 +260,61 @@ function syncFileGrants(fileId, file, audience, grantedBy) {
   }
 }
 
+async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null, scope, defaultVisibility }) {
+  const contentType = String(ctx.req.headers['content-type'] || '');
+  let multipart = { fields: {}, file: null };
+  try { multipart = parseMultipartFormData(ctx.rawBody || Buffer.alloc(0), contentType); }
+  catch (error) {
+    audit(ctx, 'FILE_UPLOAD_REJECTED', 'FILE_ASSET', null, null, { code: error?.code || 'INVALID_MULTIPART' }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
+    throw error;
+  }
+  const fields = multipart.fields;
+  const category = String(fields.category || 'MEDIA_ASSET').toUpperCase();
+  if (!CATEGORIES.has(category)) throw errors.badRequest('文件分类无效', 'INVALID_FILE_CATEGORY');
+  const audience = fields.audience ? (() => { try { return JSON.parse(fields.audience); } catch { throw errors.badRequest('audience JSON 无效', 'INVALID_AUDIENCE'); } })() : {};
+  const visibility = validateVisibility(String(fields.visibility || defaultVisibility).toUpperCase(), audience);
+  if (ownerType === 'ORG' && !['ORG', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('机构文件仅允许 PRIVATE/ORG/ASSIGNED_ORGS', 'INVALID_ORG_VISIBILITY');
+  const orgIds = visibility === 'ASSIGNED_ORGS' ? validateAudienceOrgIds(audience.orgIds) : [];
+  if (ownerType === 'ORG' && visibility === 'ASSIGNED_ORGS' && !orgIds.includes(ownerOrgId)) orgIds.unshift(ownerOrgId);
+  const expiresAt = fields.expiresAt ? new Date(fields.expiresAt).toISOString() : null;
+  if (fields.expiresAt && Number.isNaN(new Date(fields.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
+
+  const releaseUpload = reserveUpload({ userId: auth.user.id, orgId: ownerOrgId || `platform:${ownerType}`, bytes: multipart.file?.buffer?.length || 0 });
+  let stored;
+  try {
+    stored = await persistSecureUpload(multipart.file);
+  } catch (error) {
+    audit(ctx, 'FILE_UPLOAD_REJECTED', 'FILE_ASSET', null, null, {
+      code: error?.code || 'UPLOAD_REJECTED', fileName: multipart.file?.fileName || null,
+      mimeType: multipart.file?.mimeType || null, fileSize: multipart.file?.buffer?.length || 0,
+    }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
+    releaseUpload();
+    throw error;
+  }
+  try {
+    const fileId = id('file');
+    const now = nowIso();
+    const metadata = { upload: { originalName: stored.fileName, security: stored.security, uploadedAt: now } };
+    const proxyRoute = `/api/${scope}/file-assets/${fileId}/download`;
+    q(
+      `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [fileId, ownerType, ownerOrgId, ownerType === 'USER' ? auth.user.id : null, 'INTERNAL_PROXY', null, stored.storageKey, proxyRoute, null, stored.fileName, stored.mimeType, stored.fileSize, stored.checksum, category, visibility, 'ACTIVE', 'NOT_REQUIRED', expiresAt, json(metadata), auth.user.id, now, now],
+    );
+    const created = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    syncFileGrants(fileId, created, { orgIds }, auth.user.id);
+    audit(ctx, 'FILE_UPLOAD', 'FILE_ASSET', fileId, null, { category, visibility, mimeType: stored.mimeType, fileSize: stored.fileSize, checksum: stored.checksum, storageKey: stored.storageKey, scanner: stored.security }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
+    releaseUpload();
+    return normalizeFileAsset(created);
+  } catch (error) {
+    if (stored?.storagePath) await rm(stored.storagePath, { force: true }).catch(() => {});
+    releaseUpload();
+    throw error;
+  }
+}
 export async function handleAdminFileAssets(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/file-assets')) return null;
+  requirePlatformPermission(ctx, platformPermissionForPathname(pathname));
   const part = pathname.slice('/api/admin'.length);
 
   if (part === '/file-assets' && method === 'GET') {
@@ -216,6 +330,10 @@ export async function handleAdminFileAssets(ctx) {
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const items = rows(`SELECT * FROM file_assets ${where} ORDER BY created_at DESC LIMIT ${limit}`, params).map(normalizeFileAsset);
     return { items, total: items.length, limit };
+  }
+  if (part === '/file-assets/upload' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    return createUploadedFileAsset(ctx, { auth, ownerType: 'PLATFORM', scope: 'admin', defaultVisibility: 'PRIVATE' });
   }
   if (part === '/file-assets' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
@@ -381,6 +499,10 @@ export async function handleOrgFileAssets(ctx) {
     const items = rows(`SELECT DISTINCT file_assets.* FROM file_assets ${where} ORDER BY created_at DESC LIMIT ${limit}`, params).map(normalizeFileAsset);
     return { items, total: items.length, limit };
   }
+  if (part === '/file-assets/upload' && method === 'POST') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可上传文件', 'ORG_ADMIN_REQUIRED');
+    return createUploadedFileAsset(ctx, { auth, ownerType: 'ORG', ownerOrgId: currentOrgId, scope: 'org', defaultVisibility: 'ORG' });
+  }
   if (part === '/file-assets' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可上传文件', 'ORG_ADMIN_REQUIRED');
     const body = ctx.body || {};
@@ -473,26 +595,9 @@ export async function handleOrgFileAssets(ctx) {
     return { id: file.id, status: 'REMOVED' };
   }
 
-  // 文件访问代理下载（受授权保护）
+  // 文件访问代理下载（先授权，再从 Web 根目录外流式输出）
   const proxyMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
-  if (proxyMatch && method === 'GET') {
-    const file = authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD');
-    // 当前阶段不真正下载文件（无 OSS），返回重定向或元信息
-    audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageUrl: file.storage_url });
-    return {
-      id: file.id,
-      fileName: file.file_name,
-      mimeType: file.mime_type,
-      fileSize: file.file_size,
-      storageKind: file.storage_kind,
-      storageUrl: file.storage_url,
-      proxyRoute: file.proxy_route,
-      publicPath: file.public_path,
-      statement: file.storage_kind === 'INTERNAL_PROXY'
-        ? 'INTERNAL_PROXY 模式：当前阶段不提供真实文件下载，需 P6 接入对象存储后实现代理转发。'
-        : 'EXTERNAL_URL 模式：客户端可直接使用 storageUrl；服务端已校验授权。',
-    };
-  }
+  if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
   return null;
 }
 
@@ -522,22 +627,6 @@ export async function handleStudentFileAssets(ctx) {
     return normalizeFileAsset(authorizeFileAccess(ctx, idMatch[1], 'READ'));
   }
   const proxyMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
-  if (proxyMatch && method === 'GET') {
-    const file = authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD');
-    audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageUrl: file.storage_url });
-    return {
-      id: file.id,
-      fileName: file.file_name,
-      mimeType: file.mime_type,
-      fileSize: file.file_size,
-      storageKind: file.storage_kind,
-      storageUrl: file.storage_url,
-      proxyRoute: file.proxy_route,
-      publicPath: file.public_path,
-      statement: file.storage_kind === 'INTERNAL_PROXY'
-        ? 'INTERNAL_PROXY 模式：当前阶段不提供真实文件下载，需 P6 接入对象存储后实现代理转发。'
-        : 'EXTERNAL_URL 模式：客户端可直接使用 storageUrl；服务端已校验授权。',
-    };
-  }
+  if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
   return null;
 }
