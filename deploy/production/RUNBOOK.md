@@ -27,7 +27,7 @@ tail -100 /srv/ai-kids-platform/production/logs/monitoring-health.log
 ## 备份与恢复
 
 ```bash
-bash /srv/ai-kids-platform/internal-test/source/deploy/production/backup-production.sh
+PATH=/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin:$PATH bash /srv/ai-kids-platform/internal-test/source/deploy/production/backup-production.sh
 bash /srv/ai-kids-platform/internal-test/source/deploy/production/rollback-production.sh \
   --release /srv/ai-kids-platform/production/releases/<known-good>
 ```
@@ -153,3 +153,18 @@ D:\学习平台\生产检测账号-20260905.md
 - 验收后备份：`/srv/ai-kids-platform/production/backups/20260905T051314Z/platform.db`。
 - 本次验收没有遗留进行中的课堂；已审核作品和项目作为历史验收数据保留，未直接删除生产关联记录。
 - 该闭环再次确认：创建班级、加学生、配置课程、开课和课堂反馈均属于教师职责；机构管理员侧保留账号、机构和授权管理职责。
+
+## 账号停用与清除补充
+
+- 机构管理员可以先将教师 / 学生账号停用，再执行删除（软删除）；删除后账号不再出现在机构名册，历史业务关联和审计记录保留。
+- 生产回归已验证“已停用账号直接删除”成功；无需先恢复为 ACTIVE。
+- 远程备份脚本依赖 Node 运行时，执行前必须把 `/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin` 放入 `PATH`，避免出现 `node: not found`。
+
+## 2026-09-05 生产修复发布记录
+
+- 发布 commit：`04fd0773cf4ed60adf4cee372df6c3b999437808`。
+- 新 release：`/srv/ai-kids-platform/production/releases/20260905T051622Z`；旧 release `/srv/ai-kids-platform/production/releases/20260905T045348Z` 保留可回滚。
+- 切换前备份：`/srv/ai-kids-platform/production/backups/20260905T051639Z/platform.db`；账号回归后备份：`/srv/ai-kids-platform/production/backups/20260905T051738Z/platform.db`。
+- 变更内容：允许机构管理员删除已经处于 `DISABLED` 状态的成员账号，避免“停用后无法清除”的状态机阻塞；仍为软删除，不物理删除历史数据。
+- 发布后：服务 `active`，`/health` 返回 `status=ok`，四端公网入口 4/4 通过，敏感路径安全冒烟 14/14 通过。
+- 生产回归：创建临时学生 → 停用 → 直接删除 → 名册不可见，全部通过；临时账号已清理。

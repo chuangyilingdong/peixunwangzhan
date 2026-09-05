@@ -89,7 +89,7 @@ ssh -i $key -o IdentitiesOnly=yes root@39.106.183.200 "cd /srv/ai-kids-platform/
 $key = 'C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519'
 $host = 'root@39.106.183.200'
 ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && git fetch origin main && git reset --hard origin/main && git clean -fd && PATH=/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin:`$PATH VITE_DEPLOYMENT_MODE=public bash deploy/production/build-production.sh"
-ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && bash deploy/production/backup-production.sh"
+ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && PATH=/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin:`$PATH bash deploy/production/backup-production.sh"
 ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && bash deploy/production/rollback-production.sh --release /srv/ai-kids-platform/production/releases/<new-release>"
 ssh -i $key -o IdentitiesOnly=yes $host "systemctl is-active learning-platform-production; curl -fsS --retry 10 --retry-delay 2 --retry-connrefused --max-time 10 http://127.0.0.1:8789/health"
 ```
