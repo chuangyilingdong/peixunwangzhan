@@ -1,7 +1,7 @@
 # P9-R02 官网首页 Inner Circle 改造
 
 日期：2026-09-05
-状态：本地开发完成，待功能批次结束后统一核验；未发布生产。
+状态：已发布生产；统一核验后置。
 
 ## 目标
 
@@ -36,5 +36,16 @@
 
 - Node v24.19.0：四端 pnpm build 通过。
 - 首页 Vite 产物：apps/website/dist 生成成功。
-- 生产发布：未执行。
+- 生产发布：已执行，commit `2628d81` 已切换至 production release `20260905T070953Z`。
 - 统一核验：按当前工作安排后置。
+
+## 2026-09-05 生产发布记录
+
+- 发布 commit：`2628d81`（`feat(website): redesign homepage inner circle landing`）。
+- 生产 release：`/srv/ai-kids-platform/production/releases/20260905T070953Z`。
+- 发布前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T071105Z/platform.db`；备份目录包含当前 release 指针与配置 / 日志快照。
+- 切换结果：`learning-platform-production` 为 `active`；`http://127.0.0.1:8789/health` 返回 `status=ok`。
+- 公网四端验收：`https://iicili.cyou/`、`/admin/`、`/org/`、`/student/` 均 HTTP 200，标题、入口隔离、public 模式、robots、无内测横幅、安全响应头和静态资源前缀检查全部通过（4/4）。
+- 生产安全冒烟：通过；源码、配置、仓库敏感路径均返回 404，`/api/health` 返回 200，首页 HSTS / CSP / nosniff / frame-options / referrer-policy 检查通过。
+- 回滚 release：切换前 production current 为 `20260905T053145Z`，已由备份记录保留；如需回滚，使用生产回滚脚本切回该 release。
+- 尚未纳入本次放行：真实设备矩阵验证、外部视频 CDN 稳定性长期核验，以及此前未统一核验的 Feature Flag 功能。
