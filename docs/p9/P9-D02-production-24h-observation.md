@@ -44,6 +44,17 @@
 - 观察基线未受影响：production active，四端 200，`/api/health=ok`，安全头保持。
 - 回滚资产：`/etc/nginx/backups/iicili.cyou.before-scanner-hardening.20260904T1255Z`、`/etc/nginx/backups/default.before-disable.20260904T1255Z`；internal-test 回滚资产未触碰。
 
+## 2026-09-05 12:05 CST 观察中途复核
+
+- `learning-platform-production`：active/enabled；`ActiveEnterTimestamp=2026-09-04 20:24:38 CST`，`NRestarts=0`。
+- API：`http://127.0.0.1:8789/health` 返回 200 且 `ok=true`；观察窗口内未发现 API 错误关键词。
+- Nginx：观察窗口内未发现 5xx；2026-09-05 完成敏感路径加固，公网安全冒烟 14/14 通过。
+- 备份：`ai-kids-platform-production-daily-backup.timer` 于 2026-09-05 03:00 CST 成功执行；`last-backup-state.json` 为 `ok`，保留 14 天。
+- 恢复：2026-09-05 12:02 CST 隔离恢复演练通过，`active_users=7`，`18789` 端口已释放。
+- 告警：最近一次状态为 `ok`，磁盘 14%，证书检查通过，备份新鲜度正常。
+- 账号：`owner` 唯一活跃超级管理员；6 个种子账号均禁用且无活跃会话。
+- 备注：24 小时窗口截止 **2026-09-05 20:24:38 CST**，当前仍未到截止时间，因此本观察记录继续保持 `[-]`。
+
 ## 24 小时结论
 
 待 2026-09-05 20:24 CST 后补充。验收条件：

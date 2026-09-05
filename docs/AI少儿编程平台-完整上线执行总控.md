@@ -1236,11 +1236,11 @@ P9-I01～P9-I06 已完成并保留为内测阶段记录。2026-09-04 用户确�
   - 验收：密钥由受控系统注入；变更有审计；密钥轮换可执行；绝不提交到代码仓库或前端包。
   - 本批完成记录（2026-09-04）：新增 `docs/p9/P9-D04-secrets-release.md`，定义 Secret 分类台账、发布前检查、轮换 SOP、GitHub Actions 边界与审计模板；不读取、不输出、不提交任何真实凭据。
   - 遗留：正式 Secret 管理器、责任人 / 最近轮换时间台账、轮换周期、外部通知渠道和实际轮换演练仍未完成，P9-D04 保持 `[!]`。
-- [-] **P9-D05 反向代理、HTTPS、域名、CORS 与安全头**
+- [x] **P9-D05 反向代理、HTTPS、域名、CORS 与安全头**
   - 优先级：P0
   - 完成记录：Nginx 生产配置承载 `https://iicili.cyou` 四端静态入口与 `/api/` 反代；API 仅监听 `127.0.0.1:8789`；80 强制 HTTPS，Let's Encrypt 证书与 `certbot.timer` 生效；public 模式保留 HSTS、CSP 等安全头，公网四端与 `/api/health` 回归通过。
-  - 安全加固：已移除 default 站点，ufw 默认 incoming deny 且仅放行 22/80/443；旧 8787 已清除。internal-test 8788 仅作为本机回滚资产，不在公网放行。此前已验证 `/.env` 等路径 404；2026-09-04 公网只读复测发现 `/server.js`、`/package.json`、`/apps/` 等被 SPA fallback 返回 200（未泄露源码，但敏感路径未按预期 404）。新增 `scripts/p9-live-security-smoke.mjs` 作为只读回归脚本，本地生产 Nginx 模板已补显式拒绝规则；仍需授权运维安装规则后再收口。证据：`artifacts/p9-live-smoke-20260904.txt`。
-  - 完成记录（2026-09-04）：状态 [-]；实现：新增 scripts/p9-live-security-smoke.mjs、补充 deploy/production/nginx.conf.example 与生产 RUNBOOK；验证：Node 语法检查、git diff --check 通过，公网只读复核 /api/health=200、安全头存在，但 9 个敏感路径仍返回 200；遗留：必须由授权 ECS 运维安装 Nginx 规则后再复测，未完成前不得标记 [x]。
+  - 安全加固：已移除 default 站点，ufw 默认 incoming deny 且仅放行 22/80/443；旧 8787 已清除。internal-test 8788 仅作为本机回滚资产，不在公网放行。2026-09-05 服务器侧安装 Nginx 敏感路径显式拒绝规则，`nginx -t`、reload 与 `scripts/p9-live-security-smoke.mjs` 通过，源码 / 配置 / 依赖路径全部 404，`/api/health` 200，HTTPS 安全头齐全。证据：`artifacts/p9-live-smoke-20260904.txt`、服务器侧复核记录。
+  - 完成记录（2026-09-05）：状态 [x]；服务器源码 checkout 已同步到 `f9dd7b7`，执行 Nginx 加固脚本并创建变更前备份 `/etc/nginx/backups/iicili.cyou.before-sensitive-path-hardening.20260905T040434Z`；`nginx -t`、reload 与完整公网安全冒烟 14/14 通过。未修改 production release、数据库或 internal-test 回滚资产。
 
 ### 9.3 正式公开上线：发布策略与上线验证
 
@@ -1645,4 +1645,14 @@ node .\p3-api-integration.mjs
 - [x] 修复 `scripts/p9-live-security-smoke.mjs` 对 Node 16 的兼容性：改用 Node 内置 `http` / `https` 请求，不依赖 Node 18+ 全局 `fetch`；不输出响应体、Cookie 或凭据。
 - [x] 更新生产 `README.md` 与 `RUNBOOK.md`，明确执行路径、成功标志、回滚边界，以及不修改 release、数据库和 `internal-test` 回滚资产的约束。
 - [x] 本地验证：Git Bash `bash -n`、`git diff --check` 通过；P9 安全冒烟脚本在 Node `16.13.1` 本地 HTTP fixture 上 **14/14 通过**；提交后 GitHub Actions CI run `33882185933`（commit `7d7eb5e`）成功。
-- [ ] 服务器侧仍待授权运维执行脚本并运行 `scripts/p9-live-security-smoke.mjs`；在 9 个敏感路径全部返回 404 前，P9-D05 继续保持 `[-]`。
+- [x] 服务器侧已由授权运维执行脚本并运行 `scripts/p9-live-security-smoke.mjs`；敏感路径全部返回 404，P9-D05 已收口。
+
+
+### 2026-09-05 生产运维复核与 P9-D05 收口
+
+- [x] 03:00 CST 每日备份 timer 已成功执行；最新状态 `ok`，保留 14 天。
+- [x] 最新备份恢复演练通过：隔离端口 `127.0.0.1:18789` 健康，`active_users=7`，演练端口释放，生产服务持续 active。
+- [x] 账号安全复核：`owner` 为唯一 `SUPER_ADMIN/ACTIVE`；6 个种子账号均 `DISABLED`，活跃会话为 0；未输出任何真实凭据。
+- [x] 最小告警复核：API、磁盘 14%、证书剩余 86 天、备份新鲜度均正常；`NRestarts=0`，观察窗口内无 API 错误或 Nginx 5xx。
+- [x] P9-D05 服务器侧完成：敏感路径全部 404，`/api/health` 200，安全头检查通过；internal-test 回滚资产保留。
+- [ ] P9-D02 24 小时观察仍进行中，截止时间为 **2026-09-05 20:24:38 CST**；未提前宣称观察完成。外部告警通知渠道、值班联系人和正式 Secret 管理仍未接入。
