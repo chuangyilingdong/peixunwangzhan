@@ -1819,3 +1819,11 @@ node .\p3-api-integration.mjs
 - [x] 发布后复核：官网、平台、机构、学生四端 200；公网 `/api/health` 200；HSTS/CSP/安全响应头通过；服务 active/enabled，`NRestarts=0`，`ExecMainStatus=0`；SQLite integrity `ok`；备份状态 `ok`。
 - [x] 真实账号只读 UAT：四角色登录、主链路与跨角色拒绝均通过；未执行破坏性或不可逆生产写入操作。
 - [!] 遗留：真实写入型 UAT（成员创建 / 导入、任务发布、学生提交、教师评分 / 驳回）仍需专用测试数据与回滚窗口；真实 AI、支付和外部消息通道不在本次发布范围。
+
+### 2026-09-05 第二至第五优先级加速收口记录
+
+- [x] 写入型 UAT：使用受控生产账号在现有活动班级创建两条验收课堂任务，学生开始任务并验证学生任务列表、教师任务列表；任务随后关闭，未修改成员、课程或账号。提交接口额外验证了缺少完成说明 / 项目时的 `TASK_SUBMISSION_REQUIRED` 保护。
+- [x] P10 生产配置：确认 `/usr/bin/clamscan` 存在且由 `ai-kids-prod` 扫描生产 package.json 通过；上传目录 `/srv/ai-kids-platform/production/uploads` 位于 Web 根目录外，权限 `750`，归属服务账号；生产环境已显式配置扫描器、fail-closed、用户 / 机构频率、并发和容量配额。
+- [x] CI / 发布自动化：`.github/workflows/ci.yml` 纳入服务端 / 数据库全量语法检查、关键路由 import smoke、P10 两项专项测试；提交 `c829540` 已推送。
+- [x] 异常收口：新 release `20260905T111322Z` 经门禁后发布；当前服务 active，`NRestarts=0`，health 正常，上一轮坏 release 不再为 current。
+- [!] 真实作品评分 / 驳回闭环未执行：当前生产活动班级没有现成任务和可安全写入的作品，且学生提交要求有效项目或完成说明；为避免在生产生成无意义作品数据，本轮保留为下一次明确 UAT 窗口事项。
