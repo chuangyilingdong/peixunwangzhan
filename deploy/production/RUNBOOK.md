@@ -223,3 +223,12 @@ D:\学习平台\生产检测账号-20260905.md
 - 问题原因：本地动物海报和正在播放的视频同时叠加，视频透明度为 72%，导致同一只兔子以两个不同姿势同时出现。
 - 修复内容：视频进入 `ready` 状态后自动淡出海报层；视频未就绪或失败时才显示海报层，保证始终只有一个动物视觉层。
 - 发布后生产浏览器确认：海报 `opacity=0`、视频 `readyState=4`、本地视频正常播放；生产服务 active，`/health` 正常。
+
+## 2026-09-05 首页第二屏兔子恢复与动画流畅度修复发布记录
+
+- 发布 commit：`bd86a5e`（`fix(website): restore rabbit on manifesto screen`）。
+- 新 release：`/srv/ai-kids-platform/production/releases/20260905T082806Z`；旧 release `/srv/ai-kids-platform/production/releases/20260905T082038Z` 保留可回滚。
+- 切换前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T082823Z/platform.db`。
+- 问题原因：第二屏仍引用外部 `r2.motionsites.dev` 视频，加载失败时此前又移除了粉色 CSS 兜底，因此第二屏只剩背景和文案；首屏兔子卡顿则来自滚动驱动时持续修改 `video.currentTime`，浏览器频繁 seek。
+- 修复内容：第二屏改为复用本地 `/assets/hero-animal.mp4` 与 `/assets/hero-animal-poster.webp`，保证兔子素材与首屏一致且不依赖外部域名；首屏改用浏览器原生 `autoplay + loop` 连续播放，停止滚动期间的逐帧 seek；第二屏不再渲染粉色圆形 CSS 兜底图。
+- 发布后：生产 `/health` 返回 `status=ok`；四端公网入口验证 **4/4** 通过。
