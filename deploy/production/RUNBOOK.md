@@ -271,4 +271,5 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - 发布内容：教师任务提交、查看、评分、通过 / 驳回、重新提交闭环；教师与学生班级权限收紧；AI 异步任务增加数据库恢复、worker 租约、重试退避、超时回收和取消清理。
 - 发布后验证：`learning-platform-production` active；内外 `/health` 均返回 `status=ok`；四端公网入口 `/`、`/admin/`、`/org/`、`/student/` 均返回 200；P9 敏感路径冒烟 **14/14**；生产 SQLite `PRAGMA integrity_check` 返回 `ok`。
 - 本次仍使用 `AI_PROVIDER=local-mock`，不对外宣称已接入真实 AI 供应商。
+- 备份恢复演练：`restore-drill=passed`，使用同一备份在隔离目录 `127.0.0.1:18789` 启动并通过健康检查，未触碰生产服务。
 
