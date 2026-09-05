@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS platform_settings (
   platform_name TEXT NOT NULL DEFAULT 'AI魔法学院兼容平台',
   modalities TEXT NOT NULL DEFAULT '{}',
   billing_settings TEXT NOT NULL DEFAULT '{}',
+  ai_provider_policy TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -1003,6 +1004,20 @@ CREATE TABLE IF NOT EXISTS platform_alert_thresholds (
   updated_at   TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS org_ai_budgets (
+  id TEXT NOT NULL PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  per_call_budget INTEGER NOT NULL DEFAULT 0,
+  daily_budget INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_ai_budgets_org
+  ON org_ai_budgets(org_id);
+
 CREATE TABLE IF NOT EXISTS org_capability_overrides (
   id          TEXT    NOT NULL PRIMARY KEY,
   org_id      TEXT    NOT NULL,
@@ -1031,6 +1046,22 @@ CREATE TABLE IF NOT EXISTS platform_config_change_logs (
 `;
 
 db.exec(SCHEMA);
+
+// P6-A01 AI provider policy and org budget migrations; safe for existing databases.
+try { db.exec("ALTER TABLE platform_settings ADD COLUMN ai_provider_policy TEXT NOT NULL DEFAULT '{}'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+db.exec(`CREATE TABLE IF NOT EXISTS org_ai_budgets (
+  id TEXT NOT NULL PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  per_call_budget INTEGER NOT NULL DEFAULT 0,
+  daily_budget INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+)`);
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_org_ai_budgets_org ON org_ai_budgets(org_id)'); } catch (_) {}
 
 // AI generation queue hardening fields; safe for existing production databases.
 for (const statement of [

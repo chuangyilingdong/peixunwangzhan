@@ -784,6 +784,33 @@ function UsagePage({ api }) {
 function billingCsvValue(value) {
   return '"' + String(value ?? '').replace(/"/g, '""') + '"';
 }
+function AiBudgetPanel({ api }) {
+  const config = useData(() => api.get('org/billing-config/ai-budget'), [api]);
+  const [form, setForm] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  const item = config.data?.item;
+  useEffect(() => {
+    if (item) setForm({ perCallBudget: String(item.perCallBudget || 0), dailyBudget: String(item.dailyBudget || 0), reason: '' });
+  }, [item]);
+  async function save(event) {
+    event.preventDefault(); setBusy(true); setMessage('');
+    try { await api.put('org/billing-config/ai-budget', form); setMessage('机构 AI 预算已保存。学生内容外发保持关闭。'); config.refresh(); }
+    catch (error) { setMessage(error.message || '保存失败'); } finally { setBusy(false); }
+  }
+  if (config.loading) return <Panel title="AI 预算"><Loading label="正在读取机构 AI 预算…" /></Panel>;
+  if (config.error) return <Panel title="AI 预算"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
+  if (!form) return null;
+  return <Panel title="AI 预算">
+    <Notice tone="warning">学生创作内容不允许发送到外部 AI 服务。0 表示不启用对应上限；真实调用前还必须满足平台预算。</Notice>
+    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
+    <form onSubmit={save} className="form-grid">
+      <label>机构单次预算<input type="number" min="0" step="1" value={form.perCallBudget} onChange={(event) => setForm({ ...form, perCallBudget: event.target.value })} required /></label>
+      <label>机构每日预算<input type="number" min="0" step="1" value={form.dailyBudget} onChange={(event) => setForm({ ...form, dailyBudget: event.target.value })} required /></label>
+      <label>变更原因<input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} maxLength={500} placeholder="记录业务依据" /></label>
+      <div className="row-actions"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存机构预算'}</button></div>
+    </form>
+  </Panel>;
+}
+
 function BillingAccountPage({ api, user }) {
   const overview = useData(() => api.get('org/billing/account-overview'), [api]);
   const [filters, setFilters] = useState({ direction: '', type: '', status: '', startDate: '', endDate: '' });
@@ -852,6 +879,7 @@ function BillingAccountPage({ api, user }) {
       <MetricCard label="总余额" value={formatCredits(data.totalBalance || 0)} hint="可用 + 冻结" tone="teal" />
       <MetricCard label="对账状态" value={reconciliation.balanced ? '一致' : '不一致'} hint={reconciliation.balanced ? '流水复算与账面一致' : '差异 ' + formatCredits(reconciliation.difference || 0)} tone={reconciliation.balanced ? 'teal' : 'pink'} />
     </div>
+    <AiBudgetPanel api={api} />
     <div className="split">
       <Panel title="人工调整"><form onSubmit={submitAdjustment}>
         <label>调整方向<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="ORG_ADJUSTMENT_IN">人工补入</option><option value="ORG_ADJUSTMENT_OUT">人工扣减</option></select></label>

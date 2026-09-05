@@ -8,6 +8,17 @@ function svgDataUrl(title, subtitle, hue) {
 }
 function mockProvider() { return { name: 'local-mock', model: AI_PROVIDER_MODEL, capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'], async generate({ modality, prompt, title }) { const labels = { TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材', VIDEO: '短片素材', PODCAST: '播客素材', DUBBING: '配音素材' }; const label = title || labels[modality] || '创作素材'; const hue = [...String(prompt)].reduce((total, char) => total + char.charCodeAt(0), 0) % 360; return { assets: [{ label, mimeType: modality === 'IMAGE' ? 'image/svg+xml' : 'application/x-ai-kids-mock', assetUrl: `mock://generation/${Date.now().toString(36)}`, previewUrl: svgDataUrl(label, prompt, hue), metadata: { mock: true, modality, prompt } }] }; } }; }
 
-export function providerConfig() { return validateProviderConfig({ provider: AI_PROVIDER, model: AI_PROVIDER_MODEL, endpoint: AI_PROVIDER_ENDPOINT, apiKey: AI_PROVIDER_API_KEY }); }
-export function generationProviderInfo() { const config = providerConfig(); return { provider: config.provider, model: config.model, mode: isMockProvider(AI_PROVIDER) ? 'mock' : 'adapter-required', configured: config.valid, endpointConfigured: Boolean(config.endpoint), configError: config.reasons.length ? 'AI_PROVIDER_CONFIG_INVALID' : null }; }
-export function getGenerationProvider() { const config = providerConfig(); if (isMockProvider(AI_PROVIDER)) return mockProvider(); return unavailableProvider({ name: config.provider, model: config.model, config }); }
+function providerSelection({ provider, model, endpoint } = {}) {
+  return {
+    provider: String(provider || AI_PROVIDER).trim(),
+    model: String(model || AI_PROVIDER_MODEL).trim(),
+    endpoint: String(endpoint || AI_PROVIDER_ENDPOINT).trim(),
+  };
+}
+
+export function providerConfig(selection = {}) {
+  const selected = providerSelection(selection);
+  return validateProviderConfig({ ...selected, apiKey: AI_PROVIDER_API_KEY });
+}
+export function generationProviderInfo(selection = {}) { const config = providerConfig(selection); return { provider: config.provider, model: config.model, mode: isMockProvider(config.provider) ? 'mock' : 'adapter-required', configured: config.valid, endpointConfigured: Boolean(config.endpoint), configError: config.reasons.length ? 'AI_PROVIDER_CONFIG_INVALID' : null }; }
+export function getGenerationProvider(selection = {}) { const config = providerConfig(selection); if (isMockProvider(config.provider)) return mockProvider(); return unavailableProvider({ name: config.provider, model: config.model, config }); }

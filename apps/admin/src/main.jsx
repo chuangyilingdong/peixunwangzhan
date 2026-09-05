@@ -1010,6 +1010,45 @@ function PlatformWorks({ api }) {
   </>;
 }
 
+function ProviderPolicyPanel({ api }) {
+  const config = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
+  const [form, setForm] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  const policy = config.data?.policy; const catalog = config.data?.catalog || [];
+  const definition = catalog.find((item) => item.id === form?.provider);
+  useEffect(() => {
+    if (policy) setForm({
+      provider: policy.provider, model: policy.model || '', endpoint: policy.endpoint || '',
+      displayName: policy.displayName || '', platformPerCallBudget: String(policy.platformPerCallBudget || 0),
+      platformDailyBudget: String(policy.platformDailyBudget || 0), reason: '',
+    });
+  }, [policy]);
+  async function save(event) {
+    event.preventDefault(); setBusy(true); setMessage('');
+    try {
+      await api.put('admin/billing-config/ai-provider', form);
+      setMessage('AI 供应商策略已保存。学生内容外发保持关闭；具体 adapter 未接入前生成仍会明确失败。');
+      config.refresh();
+    } catch (error) { setMessage(error.message || '保存失败'); } finally { setBusy(false); }
+  }
+  if (config.loading) return <Panel title="AI 供应商与预算"><Loading label="正在读取供应商策略…" /></Panel>;
+  if (config.error) return <Panel title="AI 供应商与预算"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
+  if (!form) return null;
+  return <Panel title="AI 供应商与预算">
+    <Notice tone="warning">学生创作内容外发已全局禁止。通用供应商仅完成登记与安全边界，未确认具体 adapter 前不会真实调用；密钥仍只通过服务器受限环境变量提供。</Notice>
+    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
+    <form onSubmit={save} className="form-grid">
+      <label>供应商<select value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value })}>{catalog.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+      {form.provider === 'custom' ? <label>自定义供应商名称<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} maxLength={120} required /></label> : null}
+      <label>模型 / 模型标识<input value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder={definition?.adapterAvailable ? 'canvas-mock-v1' : '待确认后填写'} required={definition?.modelRequired} /></label>
+      <label>Endpoint<input value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value })} placeholder="https://..." required={definition?.endpointRequired} /></label>
+      <label>平台单次预算<input type="number" min="0" step="1" value={form.platformPerCallBudget} onChange={(event) => setForm({ ...form, platformPerCallBudget: event.target.value })} required /></label>
+      <label>平台每日预算<input type="number" min="0" step="1" value={form.platformDailyBudget} onChange={(event) => setForm({ ...form, platformDailyBudget: event.target.value })} required /></label>
+      <label>变更原因<input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} maxLength={500} placeholder="记录授权与业务依据" /></label>
+      <div className="row-actions"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存供应商策略'}</button><span className="muted">0 表示不启用对应预算上限。</span></div>
+    </form>
+  </Panel>;
+}
+
 function PlatformBilling({ api }) {
   const organizations = useData(() => api.get('admin/organizations?limit=200'), [api]);
   const overview = useData(() => api.get('admin/billing/usage-overview'), [api]);
@@ -1030,6 +1069,8 @@ function PlatformBilling({ api }) {
       <Panel title="能力消耗"><table><thead><tr><th>能力</th><th>调用次数</th><th>积分</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
       <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
     </div>
+    <ProviderPolicyPanel api={api} />
+
     <Panel title="计费明细筛选">
       <div className="form-grid">
         <label>时间范围<select value={filters.days} onChange={(e) => updateFilter('days', e.target.value)}><option value="1">今日</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="365">近一年</option></select></label>

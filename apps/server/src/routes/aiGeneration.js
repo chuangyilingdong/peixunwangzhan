@@ -1,7 +1,8 @@
 import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, q, requireRole, row, rows, transaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
-import { normalizeProviderError } from '../services/providerContract.js';
+import { assertExternalAiAllowed, normalizeProviderError } from '../services/providerContract.js';
+import { assertAiBudgets, assertOrgAiBudget, getAiProviderPolicy, getOrgAiBudget } from './billingConfig.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { assertTransition } from '../services/domainState.js';
@@ -215,8 +216,17 @@ function auditContext(auth, ctx = null) {
 
 export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
-  const provider = getGenerationProvider();
-  const info = generationProviderInfo();
+  const policy = getAiProviderPolicy();
+  const providerSelection = { provider: policy.provider, model: policy.model, endpoint: policy.endpoint };
+  const provider = getGenerationProvider(providerSelection);
+  const info = generationProviderInfo(providerSelection);
+  assertExternalAiAllowed({ mode: info.mode });
+  const orgBudget = getOrgAiBudget(auth.user.orgId);
+  const usedCredits = 1;
+  const platformDailyUsed = Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE status='SUCCEEDED' AND date(created_at)=date('now')")?.n || 0);
+  const orgDailyUsed = Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE org_id=? AND status='SUCCEEDED' AND date(created_at)=date('now')", [auth.user.orgId])?.n || 0);
+  assertAiBudgets(policy, usedCredits, { dailyUsed: platformDailyUsed });
+  assertOrgAiBudget(orgBudget, usedCredits, { dailyUsed: orgDailyUsed });
   const context = resolveProjectUsageContext(auth.rawUser, project);
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext });
@@ -455,7 +465,7 @@ function studentAiCenter(ctx) {
 export async function handleAiGeneration(ctx) {
   const { pathname, method, auth } = ctx;
   if (!pathname.startsWith('/api/ai/')) return null;
-  if (pathname === '/api/ai/providers' && method === 'GET') return generationProviderInfo();
+  if (pathname === '/api/ai/providers' && method === 'GET') { const policy = getAiProviderPolicy(); return generationProviderInfo({ provider: policy.provider, model: policy.model, endpoint: policy.endpoint }); }
   requireRole(ctx, ['STUDENT']);
 
   if (pathname === '/api/ai/center' && method === 'GET') return studentAiCenter(ctx);
