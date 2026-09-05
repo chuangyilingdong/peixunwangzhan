@@ -74,7 +74,7 @@ try {
   const student = studentLogin.data.token;
 
   const before = await api('/api/admin/billing-config/ai-provider', { token: admin });
-  expect(before.status === 200 && before.data.catalog.length === 6, '初始策略接口失败', before);
+  expect(before.status === 200 && before.data.catalog.length === 6 && before.data.policy.allowStudentExternalContent === true, '初始策略接口失败或默认外发未开启', before);
 
   const invalidBudget = await api('/api/admin/billing-config/ai-provider', {
     method: 'PUT',
@@ -100,7 +100,8 @@ try {
       endpoint: 'https://provider.invalid/v1',
       platformPerCallBudget: 5,
       platformDailyBudget: 100,
-      reason: '隔离测试：验证通用与自定义供应商配置',
+      allowStudentExternalContent: false,
+      reason: '隔离测试：先验证关闭外发开关',
     },
   });
   expect(external.status === 200 && external.data.policy.provider === 'custom', '自定义供应商保存失败', external);
@@ -115,7 +116,15 @@ try {
   expect(project.status === 200, '学生项目创建失败', { project, courses: courses.data });
 
   const blocked = await api('/api/ai/generations', { method: 'POST', token: student, body: { projectId: project.data.id, prompt: '隔离测试提示词', modality: 'TEXT' } });
-  expect(blocked.status === 403 && blocked.data?.error?.code === 'STUDENT_EXTERNAL_AI_BLOCKED', '学生外发未拦截', blocked);
+  expect(blocked.status === 403 && blocked.data?.error?.code === 'STUDENT_EXTERNAL_AI_BLOCKED', '关闭开关后学生外发未拦截', blocked);
+
+  const enabled = await api('/api/admin/billing-config/ai-provider', {
+    method: 'PUT', token: admin,
+    body: { provider: 'custom', displayName: '隔离自定义供应商', model: 'custom-test-model', endpoint: 'https://provider.invalid/v1', platformPerCallBudget: 5, platformDailyBudget: 100, allowStudentExternalContent: true, reason: '隔离测试：验证开启外发后进入 provider 层' },
+  });
+  expect(enabled.status === 200 && enabled.data.policy.allowStudentExternalContent === true, '开启学生外发失败', enabled);
+  const unavailable = await api('/api/ai/generations', { method: 'POST', token: student, body: { projectId: project.data.id, prompt: '开启外发后应明确报告 adapter 未安装', modality: 'TEXT' } });
+  expect(unavailable.status === 400 && ['GENERATION_PROVIDER_UNAVAILABLE', 'GENERATION_PROVIDER_CONFIG_INVALID'].includes(unavailable.data?.error?.code), '开启外发后未进入 provider 失败路径', unavailable);
 
   const policy = await import('../apps/server/src/routes/billingConfig.js');
   assert.throws(
@@ -150,7 +159,7 @@ try {
     db.close();
   `]);
   const cleanJobCount = String(jobCount || '').trim();
-  expect(cleanJobCount.includes('0:0'), '拦截后不应产生任务或用量', { cleanJobCount, type: typeof cleanJobCount, length: cleanJobCount.length });
+  expect(cleanJobCount.includes('1:1'), 'provider 失败后应保留失败任务和 0 积分用量记录', { cleanJobCount, type: typeof cleanJobCount, length: cleanJobCount.length });
 
   console.log(JSON.stringify({
     name: 'p6-a01-provider-policy-e2e',
@@ -158,7 +167,8 @@ try {
     catalog: before.data.catalog.length,
     provider: external.data.policy.provider,
     blockCode: blocked.data?.error?.code,
-    checks: 18,
+    unavailableCode: unavailable.data?.error?.code,
+    checks: 23,
   }));
 } finally {
   server.kill('SIGTERM');

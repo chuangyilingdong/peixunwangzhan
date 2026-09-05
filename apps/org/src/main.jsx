@@ -793,14 +793,14 @@ function AiBudgetPanel({ api }) {
   }, [item]);
   async function save(event) {
     event.preventDefault(); setBusy(true); setMessage('');
-    try { await api.put('org/billing-config/ai-budget', form); setMessage('机构 AI 预算已保存。学生内容外发保持关闭。'); config.refresh(); }
+    try { await api.put('org/billing-config/ai-budget', form); setMessage('机构 AI 预算已保存。学生内容外发由平台端统一控制。'); config.refresh(); }
     catch (error) { setMessage(error.message || '保存失败'); } finally { setBusy(false); }
   }
   if (config.loading) return <Panel title="AI 预算"><Loading label="正在读取机构 AI 预算…" /></Panel>;
   if (config.error) return <Panel title="AI 预算"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
   if (!form) return null;
   return <Panel title="AI 预算">
-    <Notice tone="warning">学生创作内容不允许发送到外部 AI 服务。0 表示不启用对应上限；真实调用前还必须满足平台预算。</Notice>
+    <Notice tone="warning">学生创作内容外发由平台端统一控制，当前状态：{config.data?.platformPolicy?.allowStudentExternalContent ? '已开启' : '已关闭'}。0 表示不启用对应上限；真实调用前还必须满足平台预算。</Notice>
     {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
     <form onSubmit={save} className="form-grid">
       <label>机构单次预算<input type="number" min="0" step="1" value={form.perCallBudget} onChange={(event) => setForm({ ...form, perCallBudget: event.target.value })} required /></label>

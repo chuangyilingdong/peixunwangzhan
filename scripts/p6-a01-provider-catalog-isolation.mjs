@@ -11,6 +11,7 @@ assert.equal(unregistered.valid, false);
 const config = validateProviderConfig({ ...registered, apiKey: 'secret-not-logged' });
 assert.equal(config.valid, true);
 await assert.throws(() => assertExternalAiAllowed({ mode: 'adapter-required', role: 'STUDENT' }), (error) => error.code === 'STUDENT_EXTERNAL_AI_BLOCKED');
+assert.doesNotThrow(() => assertExternalAiAllowed({ mode: 'adapter-required', allowStudentExternalContent: true, role: 'STUDENT' }));
 assert.doesNotThrow(() => assertExternalAiAllowed({ mode: 'mock', role: 'STUDENT' }));
 assert.equal(normalizeProviderError({ status: 400, message: 'content policy rejected' }).code, PROVIDER_ERROR_CODES.SAFETY_REJECTED);
-console.log(JSON.stringify({ name: 'p6-a01-provider-catalog-isolation', pass: true, catalog: GENERATION_PROVIDER_CATALOG.length, checks: 12 }));
+console.log(JSON.stringify({ name: 'p6-a01-provider-catalog-isolation', pass: true, catalog: GENERATION_PROVIDER_CATALOG.length, checks: 13 }));

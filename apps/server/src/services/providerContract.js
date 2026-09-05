@@ -64,10 +64,10 @@ export function normalizeProviderError(error, { status } = {}) {
   return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: false, message: 'AI 供应商调用失败' };
 }
 
-export function assertExternalAiAllowed({ mode } = {}) {
-  if (mode !== 'mock') {
+export function assertExternalAiAllowed({ mode, allowStudentExternalContent = false } = {}) {
+  if (mode !== 'mock' && !allowStudentExternalContent) {
     throw errors.forbidden('学生项目生成内容不允许发送到外部 AI 服务。', 'STUDENT_EXTERNAL_AI_BLOCKED');
-}
+  }
 }
 
 export function unavailableProvider({ name, model, config } = {}) {

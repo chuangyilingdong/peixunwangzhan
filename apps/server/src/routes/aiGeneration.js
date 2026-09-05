@@ -220,7 +220,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const providerSelection = { provider: policy.provider, model: policy.model, endpoint: policy.endpoint };
   const provider = getGenerationProvider(providerSelection);
   const info = generationProviderInfo(providerSelection);
-  assertExternalAiAllowed({ mode: info.mode });
+  assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   const orgBudget = getOrgAiBudget(auth.user.orgId);
   const usedCredits = 1;
   const platformDailyUsed = Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE status='SUCCEEDED' AND date(created_at)=date('now')")?.n || 0);
@@ -249,7 +249,13 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
 
 async function processAsyncGeneration(item) {
   const { auth, project, modality, prompt, title, jobId, requestContext } = item;
-  const provider = getGenerationProvider(); const info = generationProviderInfo();
+  const policy = getAiProviderPolicy();
+  const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
+  // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
+  const providerSelection = persistedJob?.provider && persistedJob.provider !== 'local-mock'
+    ? { provider: persistedJob.provider, model: persistedJob.model, endpoint: policy.endpoint }
+    : {};
+  const provider = getGenerationProvider(providerSelection); const info = generationProviderInfo(providerSelection);
   const context = resolveProjectUsageContext(auth.rawUser, project);
   try {
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
@@ -473,7 +479,15 @@ export async function handleAiGeneration(ctx) {
     const body = ctx.body || {}; const projectId = String(body.projectId || '').trim(); const prompt = String(body.prompt || '').trim(); const title = String(body.title || '').trim().slice(0, 100); const modality = modalityOf(body.modality);
     if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
     const project = ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
-    const provider = getGenerationProvider(); const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
+    const policy = getAiProviderPolicy();
+    const providerSelection = { provider: policy.provider, model: policy.model, endpoint: policy.endpoint };
+    const provider = getGenerationProvider(providerSelection);
+    const info = generationProviderInfo(providerSelection);
+    assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
+    const orgBudget = getOrgAiBudget(auth.user.orgId);
+    assertAiBudgets(policy, 1, { dailyUsed: Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE status='SUCCEEDED' AND date(created_at)=date('now')")?.n || 0) });
+    assertOrgAiBudget(orgBudget, 1, { dailyUsed: Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE org_id=? AND status='SUCCEEDED' AND date(created_at)=date('now')", [auth.user.orgId])?.n || 0) });
+    const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };

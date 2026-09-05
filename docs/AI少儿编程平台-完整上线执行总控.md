@@ -989,18 +989,18 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
 - [-] **P6-A01 供应商适配器与密钥管理**
   - 优先级：P0
   - 范围：每家供应商独立 adapter；环境变量 / 密钥管理服务；按环境隔离；禁止密钥进入仓库或日志。
-  - 当前状态：已完成不产生外部费用的 provider 契约、配置校验、稳定错误码映射和隔离测试；首个真实供应商、模型、endpoint、预算、数据出境政策尚未由用户确认，生产继续使用 `local-mock`。
+  - 当前状态：已完成不产生外部费用的 provider 契约、配置校验、稳定错误码映射和隔离测试；用户已确认允许学生内容外发；首个真实供应商、模型、endpoint、服务端密钥和具体预算仍由平台端自行填写，生产继续使用 `local-mock`。
   - 完成记录（2026-09-05）：
     - 状态：`[-]`
     - 实现：新增 `providerContract.js`，定义 provider 配置校验、超时 / 429 / 5xx / 安全拒绝 / 无效响应 / 未配置错误码；`generationProvider.js` 统一使用服务端环境变量 API key，非 mock provider 只返回明确失败，不回退为假成功。
     - 影响文件 / 接口 / 数据表：`apps/server/src/services/providerContract.js`、`apps/server/src/services/generationProvider.js`、`apps/server/src/config.js`、`scripts/p6-a01-provider-isolation.mjs`；无数据库变更、无外部调用。
     - 验证：Node ESM 运行 `node scripts/p6-a01-provider-isolation.mjs`，隔离测试、既有 P4-O12 队列恢复、P4-O13 失败重试、P4-O15 取消、四端生产构建和服务端路由导入均通过。
-    - 遗留风险或下一步：待确认首个供应商 / 模型 / endpoint / 预算 / 是否允许学生内容发送外部服务后，再实现具体 adapter，并在隔离账号与临时 SQLite 中验收；不切换生产 AI。
+    - 遗留风险或下一步：用户已确认允许学生内容发送外部服务；待平台端填写首个供应商 / 模型 / endpoint / 预算 / 服务端密钥后，再实现具体 adapter，并在隔离账号与临时 SQLite 中验收；当前不切换生产 AI。
   - 验收：开发、测试、生产密钥相互隔离；未配置时明确报错；日志永不包含 API Key 或完整敏感提示词。
-- 补充完成记录（2026-09-05，用户确认学生内容不外发 + 平台 / 机构两级预算）：
+- 补充完成记录（2026-09-05，用户确认允许学生内容外发 + 平台 / 机构两级预算）：
     - 状态：`[-]`
     - 实现：新增已批准供应商目录 6 项：`local-mock`、`openai-compatible`、`aliyun-bailian`、`volcengine`、`zhipu`、`custom`；新增目录注册校验、自定义供应商名称校验、平台 AI 供应商 / 预算接口和机构 AI 预算接口。
-    - 安全边界：策略层强制 `allowStudentExternalContent=false`；任意外部供应商策略下，学生项目生成前置返回 `STUDENT_EXTERNAL_AI_BLOCKED`，不创建任务、不扣积分、不产生用量。平台预算与机构预算均由各自端维护，`0` 表示不启用上限，非 0 值按单次和当日成功扣费累计校验。
+    - 安全边界：策略层 `allowStudentExternalContent` 默认开启，平台超管可关闭，机构端只读；关闭时任意外部供应商策略下学生项目生成前置返回 `STUDENT_EXTERNAL_AI_BLOCKED`，不创建任务、不扣积分、不产生用量；开启后未配置真实 adapter / 服务端密钥只允许明确失败，不假成功。平台预算与机构预算均由各自端维护，`0` 表示不启用上限，非 0 值按单次和当日成功扣费累计校验。
     - 运行语义：非 mock 平台策略会决定运行时 provider 选择；API key 仍只读取服务端环境变量，具体 adapter 未实现时明确失败，不回退 `local-mock` 假成功。
     - 影响文件 / 接口 / 数据表：`providerContract.js`、`generationProvider.js`、`billingConfig.js`、`aiGeneration.js`、admin / org 前端、`platform_settings.ai_provider_policy`、`org_ai_budgets`；新增 `p6-a01-provider-catalog-isolation.mjs` 与 `p6-a01-provider-policy-e2e.mjs`。
     - 验证：供应商契约 8 项、目录 / 隔离 12 项、策略 E2E 18 项通过；P4-O12 队列恢复、P4-O13 失败重试、P4-O15 取消复跑通过且失败 / 取消不扣积分；四端生产构建与 `git diff --check` 通过。全程使用临时 SQLite 和假 endpoint，未产生外部 AI 费用。
@@ -1851,3 +1851,11 @@ node .\p3-api-integration.mjs
 - [x] 本轮重新执行 P4 核心专项：P4-O09 **9/9**、P4-O10 **9/9**、P4-O11 **10/10**、P4-O12 队列恢复通过、P4-O13 失败重试通过、P4-O14 成员生命周期 **10/10**、P4-O15 取消清理通过；四端生产构建通过。
 - [x] 生产已发布并运行当前 release `20260905T111322Z`（commit `eabb231`）；发布后 health、四端入口、安全冒烟、SQLite 完整性、备份与服务状态均通过。
 - [x] P4 已按当前线下机构受控交付范围收口。P4-A07 / P4-O09 的真实 OSS、外部下载代理、阿飞微信通道、失败重试高可用和课节定时提醒等外部 / 扩展能力不冒充完成，分别保留至 P6 或后续需求；黑客松、公开内容治理、正式法律合规按用户决策暂缓。
+
+
+### P6-A01 用户决策补充（2026-09-05）
+
+- 用户确认允许学生创作内容外发；平台策略默认开启，平台超管可关闭，机构端只读。
+- 平台端配置位置：`/admin/` → 平台管理 → 计费与用量 → AI 供应商与预算。机构端预算位置：`/org/` → 机构管理 → 账户与计费 → AI 预算。
+- 用户自行填写供应商、模型、Endpoint、平台 / 机构单次与每日预算；API key 不进入数据库、前端或文档，只放生产服务器受限环境变量 / Secret。
+- 本次代码发布仅开启策略和配置界面；真实 provider adapter 尚未接入，生产仍为 `AI_PROVIDER=local-mock`，不得宣称已接入真实 AI。

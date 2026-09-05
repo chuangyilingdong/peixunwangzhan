@@ -28,12 +28,15 @@ function normalizeProviderPolicy(value) {
   const endpoint = String(parsed.endpoint || '').trim();
   const model = String(parsed.model || '').trim();
   const displayName = String(parsed.displayName || '').trim().slice(0, 120);
+  const allowStudentExternalContent = parsed.allowStudentExternalContent === undefined
+    ? true
+    : !(parsed.allowStudentExternalContent === false || parsed.allowStudentExternalContent === 0 || String(parsed.allowStudentExternalContent).toLowerCase() === 'false');
   return {
     provider: GENERATION_PROVIDER_IDS.has(provider) ? provider : 'local-mock',
     endpoint,
     model,
     displayName,
-    allowStudentExternalContent: false,
+    allowStudentExternalContent,
     platformPerCallBudget: Number(parsed.platformPerCallBudget ?? 0),
     platformDailyBudget: Number(parsed.platformDailyBudget ?? 0),
     updatedAt: value?.updated_at || null,
@@ -256,13 +259,14 @@ export async function handleAdminBillingConfig(ctx) {
     return normalizeModality(row('SELECT * FROM platform_modality_settings WHERE id=?', [existing.id]));
   }
 
-  // AI provider 策略：通用目录 + 自定义供应商；学生内容禁止外发；平台预算由平台端维护
+  // AI provider 策略：通用目录 + 自定义供应商；学生外发由平台端统一控制；平台预算由平台端维护
   if (part === '/billing-config/ai-provider' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
+    const policy = getAiProviderPolicy();
     return {
       catalog: GENERATION_PROVIDER_CATALOG,
-      policy: getAiProviderPolicy(),
-      security: { allowStudentExternalContent: false, externalStudentRequestsBlocked: true },
+      policy,
+      security: { allowStudentExternalContent: policy.allowStudentExternalContent, externalStudentRequestsBlocked: !policy.allowStudentExternalContent },
     };
   }
   if (part === '/billing-config/ai-provider' && method === 'PUT') {
@@ -279,11 +283,12 @@ export async function handleAdminBillingConfig(ctx) {
     if (providerDefinition(provider)?.kind === 'CUSTOM' && displayName.length < 2) throw errors.badRequest('自定义供应商名称必填', 'CUSTOM_PROVIDER_NAME_REQUIRED');
     const platformPerCallBudget = body.platformPerCallBudget === undefined ? before.platformPerCallBudget : integer(body.platformPerCallBudget, '平台单次预算', { min: 0, max: BUDGET_MAX });
     const platformDailyBudget = body.platformDailyBudget === undefined ? before.platformDailyBudget : integer(body.platformDailyBudget, '平台每日预算', { min: 0, max: BUDGET_MAX });
+    const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     if (platformDailyBudget > 0 && platformPerCallBudget > platformDailyBudget) throw errors.badRequest('平台单次预算不能超过每日预算', 'AI_BUDGET_RANGE_INVALID');
     const after = {
       provider, model, endpoint,
       displayName: provider === 'custom' ? displayName : '',
-      allowStudentExternalContent: false,
+      allowStudentExternalContent,
       platformPerCallBudget, platformDailyBudget,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });
@@ -292,7 +297,8 @@ export async function handleAdminBillingConfig(ctx) {
       logChange('AI_PROVIDER_POLICY', '1', 'aiProviderPolicy', JSON.stringify({ ...before, updatedAt: undefined }), JSON.stringify(after), auth.user.id, String(body.reason || '').slice(0, 500));
       audit(ctx, 'BILLING_CONFIG_AI_PROVIDER_UPDATE', 'PLATFORM_SETTINGS', '1', { before: { ...before, updatedAt: undefined }, after }, { reason: body.reason || '' });
     }
-    return { catalog: GENERATION_PROVIDER_CATALOG, policy: getAiProviderPolicy(), security: { allowStudentExternalContent: false, externalStudentRequestsBlocked: true } };
+    const savedPolicy = getAiProviderPolicy();
+    return { catalog: GENERATION_PROVIDER_CATALOG, policy: savedPolicy, security: { allowStudentExternalContent: savedPolicy.allowStudentExternalContent, externalStudentRequestsBlocked: !savedPolicy.allowStudentExternalContent } };
   }
 
   // 积分限额
@@ -440,7 +446,8 @@ export async function handleOrgBillingConfig(ctx) {
   }
   if (part === '/billing-config/ai-budget' && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看 AI 预算', 'ORG_ADMIN_REQUIRED');
-    return { item: getOrgAiBudget(auth.user.orgId), platformPolicy: { provider: getAiProviderPolicy().provider, allowStudentExternalContent: false } };
+    const platformPolicy = getAiProviderPolicy();
+    return { item: getOrgAiBudget(auth.user.orgId), platformPolicy: { provider: platformPolicy.provider, allowStudentExternalContent: platformPolicy.allowStudentExternalContent } };
   }
   if (part === '/billing-config/ai-budget' && method === 'PUT') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可设置 AI 预算', 'ORG_ADMIN_REQUIRED');
