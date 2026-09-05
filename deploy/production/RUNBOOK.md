@@ -282,3 +282,17 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - 发布前备份：`/srv/ai-kids-platform/production/backups/20260905T111358Z`，备份状态 `ok`，生产库完整性检查 `ok`。
 - 发布后：四端入口 4/4、`/api/health` 200、安全响应头通过，服务 active/enabled，`NRestarts=0`。
 - 本次未执行生产业务数据写入型 UAT；后续需在明确测试数据和回滚窗口后进行。
+
+## 2026-09-05 19:36 生产稳定观察记录
+
+- 检查时间：2026-09-05 19:36（Asia/Shanghai）。
+- 当前 release：`/srv/ai-kids-platform/production/releases/20260905T111322Z`。
+- `learning-platform-production`：`active`、`enabled`、`running`，`ExecMainStatus=0`，`NRestarts=0`。
+- 本地 `/health` 与公网 `/api/health` 均返回成功；`/`、`/admin/`、`/org/`、`/student/` 均返回 HTTP 200。
+- 敏感路径只读冒烟：全部通过，敏感路径均为 404，`/api/health` 为 200，安全响应头齐全。
+- Nginx：active，`nginx -t` 通过；证书有效期至 2026-11-30 09:38:33 UTC。
+- 监控：healthcheck timer active/enabled，最近一次执行成功；每日备份 timer active/enabled，最近一次备份服务退出码 0/SUCCESS。
+- 备份状态：`ok`；磁盘使用率 15%；SQLite `PRAGMA integrity_check`：`ok`。
+- 最近 60 分钟服务 journal 无 warning/emerg。Nginx 中发现的 405/401/400 为外部扫描或未登录请求，未发现 5xx。
+- `verify-production-entrypoints.mjs --mode public` 未完成，原因是服务器缺少脚本所需的 `C:\Program Files\Google\Chrome\Application\chrome.exe`；这属于验收工具依赖缺失，不代表生产入口失败。已用 HTTP 状态和安全冒烟完成只读替代检查。
+- 结论：本次只读稳定观察通过；当前无须重启、回滚或重新发布。
