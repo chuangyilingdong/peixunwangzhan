@@ -2021,7 +2021,7 @@ export async function handleOrg(ctx) {
   if (part === '/teaching/tasks' && method === 'POST') {
     const classId = String(ctx.body?.classId || '').trim(); const title = String(ctx.body?.title || '').trim();
     if (!classId || !title) throw errors.badRequest('班级和任务标题必填', 'TASK_FIELDS_REQUIRED');
-    const cls = row('SELECT id FROM classes WHERE id=? AND org_id=? AND status != 'ARCHIVED'', [classId, currentOrgId]); if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
+    const cls = row(`SELECT id FROM classes WHERE id=? AND org_id=? AND status != 'ARCHIVED'`, [classId, currentOrgId]); if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
     const now = nowIso(); const taskId = id('task'); q('INSERT INTO learning_tasks(id,org_id,class_id,lesson_id,title,description,due_at,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [taskId,currentOrgId,classId,ctx.body.lessonId||null,title,String(ctx.body.description||''),ctx.body.dueAt||null,'PUBLISHED',auth.user.id,now,now]);
     audit(ctx,'LEARNING_TASK_CREATE','LEARNING_TASK',taskId,null,{classId,title,dueAt:ctx.body.dueAt||null}); return row('SELECT * FROM learning_tasks WHERE id=?',[taskId]);
   }
