@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE RESTRICT
 );
-CREATE INDEX IF NOT EXISTS idx_users_org_role ON users(org_id, role, deleted_at, status);
+
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -242,7 +242,7 @@ CREATE TABLE IF NOT EXISTS course_series (
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_series_platform_title ON course_series(title) WHERE owner_type = 'PLATFORM';
-CREATE INDEX IF NOT EXISTS idx_course_series_difficulty ON course_series(difficulty_level);
+
 
 CREATE TABLE IF NOT EXISTS course_lessons (
   id TEXT PRIMARY KEY,
@@ -359,7 +359,7 @@ CREATE TABLE IF NOT EXISTS student_projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_student_updated ON student_projects(student_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_student_status_updated ON student_projects(student_id, org_id, status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_projects(student_id, deleted_at);
+
 CREATE INDEX IF NOT EXISTS idx_projects_org_updated ON student_projects(org_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_work_data_scope ON student_projects(org_id, class_id, course_lesson_id, updated_at DESC);
 
