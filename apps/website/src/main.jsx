@@ -52,7 +52,20 @@ function InnerCircleHeader({ activeSection, onNavigate }) {
 }
 function ScrubVideo({ src, progress, loaderLabel }) {
   const videoRef = useRef(null); const currentTimeRef = useRef(0); const durationRef = useRef(4.2); const [loaded, setLoaded] = useState(false);
-  useEffect(() => { const video = videoRef.current; if (!video) return undefined; const onMeta = () => { if (Number.isFinite(video.duration) && video.duration > 0) durationRef.current = video.duration; setLoaded(true); }; const onCanPlay = () => setLoaded(true); video.addEventListener('loadedmetadata', onMeta); video.addEventListener('canplay', onCanPlay); return () => { video.removeEventListener('loadedmetadata', onMeta); video.removeEventListener('canplay', onCanPlay); }; }, []);
+  useEffect(() => {
+    const video = videoRef.current; if (!video) return undefined;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      if (Number.isFinite(video.duration) && video.duration > 0) durationRef.current = video.duration;
+      setLoaded(true);
+    };
+    const timeout = window.setTimeout(settle, 5000);
+    video.addEventListener('loadedmetadata', settle); video.addEventListener('loadeddata', settle); video.addEventListener('canplay', settle); video.addEventListener('error', settle); video.addEventListener('abort', settle);
+    if (video.readyState >= 1) settle();
+    return () => { window.clearTimeout(timeout); video.removeEventListener('loadedmetadata', settle); video.removeEventListener('loadeddata', settle); video.removeEventListener('canplay', settle); video.removeEventListener('error', settle); video.removeEventListener('abort', settle); };
+  }, [src]);
   useEffect(() => { const video = videoRef.current; if (!video) return undefined; let active = true; let frame; const tick = () => { if (!active) return; const target = clamp01(progress) * durationRef.current; currentTimeRef.current += (target - currentTimeRef.current) * 0.15; if (!video.seeking && Math.abs(video.currentTime - currentTimeRef.current) > 0.01) { try { video.currentTime = currentTimeRef.current; } catch {} } frame = requestAnimationFrame(tick); }; frame = requestAnimationFrame(tick); return () => { active = false; cancelAnimationFrame(frame); }; }, [progress]);
   return <div className="ic-video-wrap"><video ref={videoRef} className="ic-scrub-video" src={src} playsInline muted preload="auto" aria-hidden="true" /><div className={'ic-video-loader ' + (loaded ? 'is-hidden' : '')}><span className="ic-loader-ring" /><b>{loaderLabel}</b></div></div>;
 }
