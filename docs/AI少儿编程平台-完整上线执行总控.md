@@ -1827,3 +1827,4 @@ node .\p3-api-integration.mjs
 - [x] CI / 发布自动化：`.github/workflows/ci.yml` 纳入服务端 / 数据库全量语法检查、关键路由 import smoke、P10 两项专项测试；提交 `c829540` 已推送。
 - [x] 异常收口：新 release `20260905T111322Z` 经门禁后发布；当前服务 active，`NRestarts=0`，health 正常，上一轮坏 release 不再为 current。
 - [!] 真实作品评分 / 驳回闭环未执行：当前生产活动班级没有现成任务和可安全写入的作品，且学生提交要求有效项目或完成说明；为避免在生产生成无意义作品数据，本轮保留为下一次明确 UAT 窗口事项。
+- [x] 追加真实作品审核：教师 `teacher-1` 对现有待审核作品执行一次 `PUT /api/org/works/work_21e16e52cc864267a108/review`，状态改为 `APPROVED`，点评写入成功并返回 200；未删除或重置原有数据。
