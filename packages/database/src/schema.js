@@ -363,6 +363,24 @@ CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_projects(stud
 CREATE INDEX IF NOT EXISTS idx_projects_org_updated ON student_projects(org_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_work_data_scope ON student_projects(org_id, class_id, course_lesson_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS student_lesson_progress (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  lesson_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'NOT_STARTED' CHECK (status IN ('NOT_STARTED','IN_PROGRESS','COMPLETED')),
+  started_at TEXT,
+  completed_at TEXT,
+  last_accessed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_student_lesson_progress_unique ON student_lesson_progress(student_id, lesson_id);
+CREATE INDEX IF NOT EXISTS idx_student_lesson_progress_student ON student_lesson_progress(student_id, org_id, updated_at DESC);
+
+
 CREATE TABLE IF NOT EXISTS project_snapshots (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,

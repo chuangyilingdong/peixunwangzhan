@@ -484,6 +484,31 @@ export async function handleStudent(ctx) {
   const part = pathname.slice('/api/student'.length);
 
   if (part === '/dashboard' && method === 'GET') return buildStudentDashboard(auth.rawUser);
+  if (part === '/learning/overview' && method === 'GET') {
+    const courses = getStudentAccessibleCourses(auth.rawUser);
+    const lessons = courses.flatMap((course) => (course.lessons || []).map((lesson) => ({ ...lesson, courseId: course.id, courseTitle: course.title })));
+    const progress = rows(`SELECT progress.*, lesson.title AS lesson_title, series.title AS series_title
+      FROM student_lesson_progress progress
+      JOIN course_lessons lesson ON lesson.id=progress.lesson_id
+      JOIN course_series series ON series.id=lesson.series_id
+      WHERE progress.student_id=? AND progress.org_id=?`, [auth.user.id, auth.user.orgId]);
+    const byLesson = new Map(progress.map((item) => [item.lesson_id, item]));
+    const items = lessons.map((lesson) => { const item = byLesson.get(lesson.id); return { id: lesson.id, title: lesson.title, courseId: lesson.courseId, courseTitle: lesson.courseTitle, status: item?.status || 'NOT_STARTED', startedAt: item?.started_at || null, completedAt: item?.completed_at || null, lastAccessedAt: item?.last_accessed_at || null }; });
+    const projects = rows(`SELECT id,title,status,course_lesson_id,updated_at FROM student_projects WHERE student_id=? AND org_id=? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 10`, [auth.user.id, auth.user.orgId]);
+    return { items, summary: { total: items.length, completed: items.filter((item) => item.status === 'COMPLETED').length, inProgress: items.filter((item) => item.status === 'IN_PROGRESS').length, pending: items.filter((item) => item.status !== 'COMPLETED').length }, recentProjects: projects.map((item) => ({ id: item.id, title: item.title, status: item.status, lessonId: item.course_lesson_id, updatedAt: item.updated_at })) };
+  }
+  const progressMatch = part.match(/^\/learning\/lessons\/([^/]+)\/(start|complete)$/);
+  if (progressMatch && method === 'POST') {
+    const lessonId = decodeURIComponent(progressMatch[1]);
+    const lesson = row(`SELECT lesson.id, lesson.title FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'`, [lessonId]);
+    if (!lesson) throw errors.notFound('课时不存在或暂未开放', 'LESSON_NOT_FOUND');
+    const now = nowIso(); const existing = row('SELECT * FROM student_lesson_progress WHERE student_id=? AND lesson_id=?', [auth.user.id, lessonId]);
+    const status = progressMatch[2] === 'complete' ? 'COMPLETED' : (existing?.status === 'COMPLETED' ? 'COMPLETED' : 'IN_PROGRESS');
+    if (existing) q('UPDATE student_lesson_progress SET status=?, started_at=COALESCE(started_at,?), completed_at=?, last_accessed_at=?, updated_at=? WHERE id=?', [status, now, status === 'COMPLETED' ? now : existing.completed_at, now, now, existing.id]);
+    else q('INSERT INTO student_lesson_progress(id,student_id,org_id,lesson_id,status,started_at,completed_at,last_accessed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('lesson_progress'), auth.user.id, auth.user.orgId, lessonId, status, now, status === 'COMPLETED' ? now : null, now, now, now]);
+    audit(ctx, progressMatch[2] === 'complete' ? 'STUDENT_LESSON_COMPLETE' : 'STUDENT_LESSON_START', 'COURSE_LESSON', lessonId, existing, { status });
+    return { lessonId, status, startedAt: existing?.started_at || now, completedAt: status === 'COMPLETED' ? now : (existing?.completed_at || null), lastAccessedAt: now };
+  }
   if (part === '/courses' && method === 'GET') {
     // P5-W05: 学员端课程列表支持筛选
     const filters = {
