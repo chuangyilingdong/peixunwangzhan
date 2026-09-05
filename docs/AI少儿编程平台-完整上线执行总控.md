@@ -1810,3 +1810,12 @@ node .\p3-api-integration.mjs
 - [x] 生产运行复核：`learning-platform-production` active/enabled，当前 release `20260905T102834Z`、commit `f05823b8`、Node `v24.19.0`；内网 `/health` 与公网 `/api/health` 均 200；Nginx `-t` 通过；生产 API 仅监听 `127.0.0.1:8789`；UFW 仅放行 22/80/443；敏感路径 `/server.js`、`/package.json`、`.env`、源码路径和 `/api/.env` 均 404；最新备份含 `MANIFEST.json`；生产 SQLite `PRAGMA integrity_check=ok`。
 - [!] 运行日志发现 2026-09-05 18:04:50–18:05:42 曾因旧 release `20260905T100426Z` 的 `adminOrg.js:2024` 语法错误触发多次自动重启；18:05:44 后服务恢复，18:08 与 18:29 为正常维护式重启，当前 `NRestarts=0`、主进程状态 0。需在下一次发布流程中补充 release 启动前 `node --check` / import smoke gate，避免坏制品进入 systemd。
 - 遗留：本轮未执行创建、导入、停用、密码重置、发布任务、提交作品、评分 / 驳回等会改变生产数据的操作；需要业务方确认专门的 UAT 测试数据和回滚窗口后再做。P10 文件上传开发项仍未完成，不发布未完成变更。
+
+### 2026-09-05 生产发布收口（步骤 1—6）
+
+- [x] 发布门禁：`deploy/production/build-production.sh` 新增服务端 / 数据库 JS 全量 `node --check` 与关键路由 import smoke gate；坏制品在生成 release 前阻断。
+- [x] P10 隔离专项：`p10-file-upload-security.mjs` 9/9、`p10-file-access-matrix.mjs` 6/6；四端构建通过；`git diff --check` 通过。
+- [x] 生产发布：commit `eabb231`，release `20260905T111322Z`；切换前备份 `20260905T111358Z`；未修改生产业务数据。
+- [x] 发布后复核：官网、平台、机构、学生四端 200；公网 `/api/health` 200；HSTS/CSP/安全响应头通过；服务 active/enabled，`NRestarts=0`，`ExecMainStatus=0`；SQLite integrity `ok`；备份状态 `ok`。
+- [x] 真实账号只读 UAT：四角色登录、主链路与跨角色拒绝均通过；未执行破坏性或不可逆生产写入操作。
+- [!] 遗留：真实写入型 UAT（成员创建 / 导入、任务发布、学生提交、教师评分 / 驳回）仍需专用测试数据与回滚窗口；真实 AI、支付和外部消息通道不在本次发布范围。

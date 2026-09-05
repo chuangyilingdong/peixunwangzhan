@@ -273,3 +273,12 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - 本次仍使用 `AI_PROVIDER=local-mock`，不对外宣称已接入真实 AI 供应商。
 - 备份恢复演练：`restore-drill=passed`，使用同一备份在隔离目录 `127.0.0.1:18789` 启动并通过健康检查，未触碰生产服务。
 
+
+## 2026-09-05 生产发布门禁与 P10 收口
+
+- 发布 commit：`eabb231`；release：`20260905T111322Z`。
+- 发布前新增门禁：服务端 / 数据库 JavaScript 全量 `node --check`，关键路由 import smoke test；门禁失败不生成可发布制品。
+- P10 隔离测试：文件上传安全 **9/9**，文件访问矩阵 **6/6**，四端构建通过。
+- 发布前备份：`/srv/ai-kids-platform/production/backups/20260905T111358Z`，备份状态 `ok`，生产库完整性检查 `ok`。
+- 发布后：四端入口 4/4、`/api/health` 200、安全响应头通过，服务 active/enabled，`NRestarts=0`。
+- 本次未执行生产业务数据写入型 UAT；后续需在明确测试数据和回滚窗口后进行。
