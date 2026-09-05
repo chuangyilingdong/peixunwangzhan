@@ -2012,6 +2012,32 @@ export async function handleOrg(ctx) {
   // /api/org/file-assets 由独立路由处理（含 STUDENT 角色）
   if (pathname.startsWith('/api/org/file-assets')) return null;
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']); const currentOrgId = orgId(auth); const part = pathname.slice('/api/org'.length);
+  if (part === '/teaching/tasks' && method === 'GET') {
+    const classId = String(ctx.search.get('classId') || '').trim(); const where = ['task.org_id=?']; const params = [currentOrgId];
+    if (classId) { where.push('task.class_id=?'); params.push(classId); }
+    const items = rows(`SELECT task.*, class.name AS class_name, lesson.title AS lesson_title FROM learning_tasks task JOIN classes class ON class.id=task.class_id LEFT JOIN course_lessons lesson ON lesson.id=task.lesson_id WHERE ${where.join(' AND ')} ORDER BY COALESCE(task.due_at,'9999') ASC, task.created_at DESC`, params);
+    return { items: items.map((item) => ({ id:item.id, classId:item.class_id, className:item.class_name, lessonId:item.lesson_id, lessonTitle:item.lesson_title, title:item.title, description:item.description, dueAt:item.due_at, status:item.status, createdBy:item.created_by, createdAt:item.created_at, updatedAt:item.updated_at })) };
+  }
+  if (part === '/teaching/tasks' && method === 'POST') {
+    const classId = String(ctx.body?.classId || '').trim(); const title = String(ctx.body?.title || '').trim();
+    if (!classId || !title) throw errors.badRequest('班级和任务标题必填', 'TASK_FIELDS_REQUIRED');
+    const cls = row('SELECT id FROM classes WHERE id=? AND org_id=? AND status != 'ARCHIVED'', [classId, currentOrgId]); if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
+    const now = nowIso(); const taskId = id('task'); q('INSERT INTO learning_tasks(id,org_id,class_id,lesson_id,title,description,due_at,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [taskId,currentOrgId,classId,ctx.body.lessonId||null,title,String(ctx.body.description||''),ctx.body.dueAt||null,'PUBLISHED',auth.user.id,now,now]);
+    audit(ctx,'LEARNING_TASK_CREATE','LEARNING_TASK',taskId,null,{classId,title,dueAt:ctx.body.dueAt||null}); return row('SELECT * FROM learning_tasks WHERE id=?',[taskId]);
+  }
+  const taskMatch = part.match(/^\/teaching\/tasks\/([^/]+)$/);
+  if (taskMatch && method === 'PATCH') {
+    const task = row('SELECT * FROM learning_tasks WHERE id=? AND org_id=?',[taskMatch[1],currentOrgId]); if (!task) throw errors.notFound('任务不存在','TASK_NOT_FOUND');
+    const next = { title: ctx.body?.title === undefined ? task.title : String(ctx.body.title).trim(), description: ctx.body?.description === undefined ? task.description : String(ctx.body.description), dueAt: ctx.body?.dueAt === undefined ? task.due_at : (ctx.body.dueAt || null), status: ctx.body?.status === undefined ? task.status : String(ctx.body.status).toUpperCase() };
+    if (!next.title || !['DRAFT','PUBLISHED','CLOSED'].includes(next.status)) throw errors.badRequest('任务字段无效','INVALID_TASK');
+    q('UPDATE learning_tasks SET title=?,description=?,due_at=?,status=?,updated_at=? WHERE id=?',[next.title,next.description,next.dueAt,next.status,nowIso(),task.id]); audit(ctx,'LEARNING_TASK_UPDATE','LEARNING_TASK',task.id,task,next); return row('SELECT * FROM learning_tasks WHERE id=?',[task.id]);
+  }
+  const progressMatch = part.match(/^\/teaching\/classes\/([^/]+)\/progress$/);
+  if (progressMatch && method === 'GET') {
+    const cls = row('SELECT id,name FROM classes WHERE id=? AND org_id=?',[progressMatch[1],currentOrgId]); if (!cls) throw errors.notFound('班级不存在','CLASS_NOT_FOUND');
+    const students = rows(`SELECT user.id,user.display_name,user.login, COUNT(DISTINCT curriculum.lesson_id) assigned_count, COUNT(DISTINCT CASE WHEN progress.status='COMPLETED' THEN progress.lesson_id END) completed_count, MAX(progress.last_accessed_at) last_accessed_at FROM class_members member JOIN users user ON user.id=member.user_id LEFT JOIN class_curriculum_items curriculum ON curriculum.class_id=member.class_id LEFT JOIN student_lesson_progress progress ON progress.student_id=user.id AND progress.org_id=? AND progress.lesson_id=curriculum.lesson_id WHERE member.class_id=? AND member.removed_at IS NULL GROUP BY user.id ORDER BY user.display_name`, [currentOrgId,cls.id]);
+    return { class: cls, items: students.map((item)=>({studentId:item.id,displayName:item.display_name,login:item.login,assignedCount:Number(item.assigned_count||0),completedCount:Number(item.completed_count||0),completionRate:item.assigned_count?Math.round(Number(item.completed_count||0)*100/Number(item.assigned_count)):0,lastAccessedAt:item.last_accessed_at||null})) };
+  }
   if (part === '/work-data' && method === 'GET') {
     return buildWorkData(ctx, auth, currentOrgId);
   }

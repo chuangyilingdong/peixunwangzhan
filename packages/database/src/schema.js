@@ -363,6 +363,25 @@ CREATE INDEX IF NOT EXISTS idx_projects_student_deleted ON student_projects(stud
 CREATE INDEX IF NOT EXISTS idx_projects_org_updated ON student_projects(org_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_work_data_scope ON student_projects(org_id, class_id, course_lesson_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS learning_tasks (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  class_id TEXT NOT NULL,
+  lesson_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  due_at TEXT,
+  status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT','PUBLISHED','CLOSED')),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_learning_tasks_class_due ON learning_tasks(class_id, status, due_at);
+
 CREATE TABLE IF NOT EXISTS student_lesson_progress (
   id TEXT PRIMARY KEY,
   student_id TEXT NOT NULL,
