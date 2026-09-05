@@ -296,3 +296,16 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - 最近 60 分钟服务 journal 无 warning/emerg。Nginx 中发现的 405/401/400 为外部扫描或未登录请求，未发现 5xx。
 - `verify-production-entrypoints.mjs --mode public` 未完成，原因是服务器缺少脚本所需的 `C:\Program Files\Google\Chrome\Application\chrome.exe`；这属于验收工具依赖缺失，不代表生产入口失败。已用 HTTP 状态和安全冒烟完成只读替代检查。
 - 结论：本次只读稳定观察通过；当前无须重启、回滚或重新发布。
+
+## 2026-09-05 P6-A01 供应商目录、预算与学生外发策略发布记录
+
+- 发布 commit：`2770bbb`（供应商目录、平台 / 机构 AI 预算策略、学生内容外发策略）。
+- 当前生产 release：`/srv/ai-kids-platform/production/releases/20260905T143653Z`；当前软链接：`/srv/ai-kids-platform/production/current`。
+- 发布前备份：`/srv/ai-kids-platform/production/backups/20260905T143653Z`。
+- 供应商目录：`local-mock`、`openai-compatible`、`aliyun-bailian`、`volcengine`、`zhipu`、`custom`；平台端可维护供应商 / 模型 / Endpoint / 平台单次与每日预算，机构端可维护本机构单次与每日预算。
+- 学生创作内容外发策略：已由平台管理员开启；机构端只读查看当前状态。开启策略不等于已产生外部请求。
+- 生产 AI 配置仍为 `AI_PROVIDER=local-mock`；真实 provider adapter 尚未接入，不能对外宣称已经接入真实 AI。未配置完整的真实 provider 时，生成请求明确失败，不回退为假成功。
+- 真实 API key 仅允许配置在服务器受限环境文件 `/etc/ai-kids-platform/production.env` 的 `AI_PROVIDER_API_KEY` 中，不写入 Git、数据库、前端构建产物、日志或聊天记录。
+- 回归验证：P6-A01 provider 契约 `8/8`、供应商目录与隔离 `13/13`、策略 E2E `23/23`；P4-O12 队列恢复、P4-O13 失败重试、P4-O15 任务取消均通过；四端 production build 通过；`git diff --check` 通过。
+- 发布后只读状态：`learning-platform-production` 为 `active/running`、`enabled`，`NRestarts=0`；健康检查通过。此次文档更新不产生新的生产发布。
+- 配置入口：平台端 `/admin/` → 平台管理 → 计费与用量 → AI 供应商与预算；机构端 `/org/` → 机构管理 → 账户与计费 → AI 预算。
