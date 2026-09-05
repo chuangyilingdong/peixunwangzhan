@@ -7,6 +7,7 @@ import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
 import { scheduleReminder } from './communication.js';
 import { assertKnownState, assertTransition } from '../services/domainState.js';
+import { handleTeachingTasks } from '../services/teachingTasks.js';
 
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
@@ -2012,6 +2013,10 @@ export async function handleOrg(ctx) {
   // /api/org/file-assets 由独立路由处理（含 STUDENT 角色）
   if (pathname.startsWith('/api/org/file-assets')) return null;
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']); const currentOrgId = orgId(auth); const part = pathname.slice('/api/org'.length);
+  if (part === '/teaching/tasks' || part.startsWith('/teaching/tasks/') || part === '/teaching/summary' || part.startsWith('/teaching/classes/')) {
+    const delegated = handleTeachingTasks(ctx, part);
+    if (delegated !== null) return delegated;
+  }
   if (part === '/teaching/tasks' && method === 'GET') {
     const classId = String(ctx.search.get('classId') || '').trim(); const where = ['task.org_id=?']; const params = [currentOrgId];
     if (classId) { where.push('task.class_id=?'); params.push(classId); }

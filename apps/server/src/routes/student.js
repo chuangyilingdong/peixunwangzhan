@@ -34,6 +34,7 @@ import {
   resolveStudentLessonContext,
 } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
+import { handleStudentTasks } from '../services/teachingTasks.js';
 
 const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
 
@@ -482,6 +483,11 @@ export async function handleStudent(ctx) {
   if (!pathname.startsWith('/api/student')) return null;
   const auth = requireRole(ctx, ['STUDENT']);
   const part = pathname.slice('/api/student'.length);
+
+  if (part === '/learning/tasks' || part.startsWith('/learning/tasks/')) {
+    const delegated = handleStudentTasks(ctx, part);
+    if (delegated !== null) return delegated;
+  }
 
   if (part === '/dashboard' && method === 'GET') return buildStudentDashboard(auth.rawUser);
   if (part === '/learning/overview' && method === 'GET') {

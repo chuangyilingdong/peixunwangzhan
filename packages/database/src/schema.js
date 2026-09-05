@@ -400,6 +400,31 @@ CREATE INDEX IF NOT EXISTS idx_learning_tasks_class_due ON learning_tasks(class_
   );
   CREATE INDEX IF NOT EXISTS idx_learning_task_progress_student ON learning_task_progress(student_id, org_id, updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_learning_task_progress_task ON learning_task_progress(task_id, status);
+  CREATE TABLE IF NOT EXISTS learning_task_submissions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    project_id TEXT,
+    project_snapshot TEXT,
+    student_note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK (status IN ('SUBMITTED','APPROVED','REJECTED')),
+    score INTEGER CHECK (score IS NULL OR (score BETWEEN 0 AND 100)),
+    feedback TEXT NOT NULL DEFAULT '',
+    viewed_at TEXT,
+    viewed_by TEXT,
+    reviewed_at TEXT,
+    reviewed_by TEXT,
+    submitted_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES learning_tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE SET NULL,
+    UNIQUE(task_id, student_id, round)
+  );
+  CREATE INDEX IF NOT EXISTS idx_learning_task_submissions_task_status ON learning_task_submissions(task_id, status, submitted_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_learning_task_submissions_student ON learning_task_submissions(student_id, submitted_at DESC);
 
 CREATE TABLE IF NOT EXISTS student_lesson_progress (
   id TEXT PRIMARY KEY,
@@ -1006,6 +1031,17 @@ CREATE TABLE IF NOT EXISTS platform_config_change_logs (
 `;
 
 db.exec(SCHEMA);
+
+// AI generation queue hardening fields; safe for existing production databases.
+for (const statement of [
+  "ALTER TABLE generation_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE generation_jobs ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 2",
+  "ALTER TABLE generation_jobs ADD COLUMN next_attempt_at TEXT",
+  "ALTER TABLE generation_jobs ADD COLUMN last_error_at TEXT",
+  "ALTER TABLE generation_jobs ADD COLUMN cancelled_at TEXT",
+  "ALTER TABLE generation_jobs ADD COLUMN worker_id TEXT",
+]) { try { db.exec(statement); } catch (_) {} }
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_queue ON generation_jobs(status, next_attempt_at, created_at)'); } catch (_) {}
 
 // P5-W01 website CMS tables (safe for existing local databases)
 try { db.exec(`CREATE TABLE IF NOT EXISTS website_contents (

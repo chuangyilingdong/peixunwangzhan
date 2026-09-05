@@ -16,6 +16,8 @@ const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DI
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
+const ASYNC_GENERATION_TIMEOUT_MS = 120000;
+const ASYNC_GENERATION_MAX_RETRIES = 2;
 export const AI_MODALITIES = [...MODALITIES];
 
 function modalityOf(value) {
@@ -67,7 +69,7 @@ function normalizeJob(value, { assets = [] } = {}) {
     className: value.class_name || null, modality: value.modality,
     modalityLabel: MODALITY_LABELS[value.modality] || value.modality,
     provider: value.provider, model: value.model, prompt: value.prompt, status: value.status,
-    creditsCharged: Number(value.credits_charged || 0), retryOfJobId: value.retry_of_job_id || null,
+    creditsCharged: Number(value.credits_charged || 0), retryOfJobId: value.retry_of_job_id || null, retryCount: Number(value.retry_count || 0), maxRetries: Number(value.max_retries ?? ASYNC_GENERATION_MAX_RETRIES),
     errorCode: value.error_code || null, errorMessage: value.error_message || null,
     createdAt: value.created_at, startedAt: value.started_at || null, completedAt: value.completed_at || null,
     assets,
@@ -204,13 +206,23 @@ async function processAsyncGeneration(item) {
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [nowIso(), jobId]);
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id });
+    const generated = await Promise.race([
+      provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id }),
+      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('AI 生成超时，请稍后重试'), { code: 'GENERATION_TIMEOUT' })), ASYNC_GENERATION_TIMEOUT_MS)),
+    ]);
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
   } catch (error) {
-    markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
+    const current = row('SELECT retry_count,max_retries,status FROM generation_jobs WHERE id=?', [jobId]);
+    if (current?.status === 'RUNNING' && Number(current.retry_count || 0) < Number(current.max_retries ?? ASYNC_GENERATION_MAX_RETRIES)) {
+      const retryCount = Number(current.retry_count || 0) + 1; const nextAttempt = new Date(Date.now() + retryCount * 5000).toISOString();
+      q("UPDATE generation_jobs SET status='QUEUED',retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=?", [retryCount, nextAttempt, nowIso(), error?.code || 'GENERATION_FAILED', String(error?.message || '生成失败'), jobId]);
+      setTimeout(() => { const pending = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]); if (pending?.status === 'QUEUED') { asyncGenerationQueue.push(item); drainAsyncGenerationQueue(); } }, retryCount * 5000);
+    } else {
+      markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
+    }
   }
 }
 
