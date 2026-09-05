@@ -207,7 +207,7 @@ function Classes({ api, user }) {
 
 function Members({ api, user }) {
   const isAdmin = user.role === 'ORG_ADMIN';
-  const members = useData(() => api.get('org/users'), [api]);
+  const members = useData(() => api.get(user.role === 'TEACHER' ? 'org/users?role=STUDENT' : 'org/users'), [api, user.role]);
   const classes = useData(() => api.get('org/classes'), [api]);
   const [roleFilter, setRoleFilter] = useState('');
   const [search, setSearch] = useState('');
