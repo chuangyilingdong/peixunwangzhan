@@ -477,11 +477,17 @@ function CanvasWorkspace({ api }) {
     if (!editable) return;
     setGenerating(true);
     try {
-      const result = await api.post('ai/generations', { projectId: project.data.id, ...generationForm });
+      const queued = await api.post('ai/generations/async', { projectId: project.data.id, ...generationForm });
+      let result = queued.job;
+      for (let attempt = 0; attempt < 30 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        result = await api.get(`ai/generations/history/${encodeURIComponent(result.id)}`);
+      }
+      if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || 'AI 生成失败');
       const asset = result.assets?.[0];
       if (asset) addGeneratedAsset(asset, generationForm.prompt, generationForm.modality);
       setGenerationForm((current) => ({ ...current, prompt: '', title: '' }));
-      setMessage(`已生成 ${result.job.modality} 模拟素材，并已添加到未保存画布。`);
+      setMessage(`已完成 ${result.modality} 素材生成，并已添加到未保存画布。`);
       generations.refresh();
     } catch (err) { setMessage(err.message); }
     finally { setGenerating(false); }
