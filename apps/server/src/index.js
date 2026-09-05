@@ -5,7 +5,7 @@ import { handleAuth } from './routes/auth.js';
 import { handleAdmin, handleOrg } from './routes/adminOrg.js';
 import { handleStudent } from './routes/student.js';
 import { handleAi } from './routes/ai.js';
-import { handleAiGeneration } from './routes/aiGeneration.js';
+import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets } from './routes/fileAssets.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
@@ -127,6 +127,8 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, apiError.status || 500, apiError.toResponse(), req, ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {});
   }
 });
+
+initializeAsyncGenerationQueue();
 
 server.listen(PORT, API_HOST, () => {
   console.log(`AI Kids Platform API listening on http://${API_HOST}:${PORT}`);

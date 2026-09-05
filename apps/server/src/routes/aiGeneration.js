@@ -1,4 +1,4 @@
-import { ApiError, audit, count, errors, id, json, nowIso, q, requireRole, row, rows, transaction } from '../lib.js';
+import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, q, requireRole, row, rows, transaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
@@ -18,6 +18,8 @@ const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
 const ASYNC_GENERATION_TIMEOUT_MS = 120000;
 const ASYNC_GENERATION_MAX_RETRIES = 2;
+const ASYNC_WORKER_ID = `ai-worker-${process.pid}-${id('w').slice(-8)}`;
+const ASYNC_RUNNING_LEASE_MS = ASYNC_GENERATION_TIMEOUT_MS + 30000;
 export const AI_MODALITIES = [...MODALITIES];
 
 function modalityOf(value) {
@@ -110,13 +112,47 @@ function createJobRecord({ auth, project, modality, provider, prompt, retryOfJob
   return jobId;
 }
 
+function queueItemFromJob(jobId) {
+  const job = row('SELECT * FROM generation_jobs WHERE id=?', [jobId]);
+  if (!job) return null;
+  const user = row("SELECT * FROM users WHERE id=? AND org_id=? AND status='ACTIVE'", [job.user_id, job.org_id]);
+  if (!user) return null;
+  const auth = { user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org: row('SELECT * FROM organizations WHERE id=?', [job.org_id]) };
+  const project = ownProject(auth, job.project_id);
+  if (!project) return null;
+  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, requestContext: null };
+}
+
+function enqueuePersistedJob(jobId, delayMs = 0) {
+  const enqueue = () => {
+    const item = queueItemFromJob(jobId);
+    if (!item) return;
+    const current = row('SELECT status,next_attempt_at FROM generation_jobs WHERE id=?', [jobId]);
+    if (current?.status !== 'QUEUED') return;
+    if (current.next_attempt_at && Date.parse(current.next_attempt_at) > Date.now()) {
+      enqueuePersistedJob(jobId, Date.parse(current.next_attempt_at) - Date.now());
+      return;
+    }
+    asyncGenerationQueue.push(item);
+    drainAsyncGenerationQueue();
+  };
+  if (delayMs > 0) { const timer = setTimeout(enqueue, delayMs); timer.unref?.(); } else enqueue();
+}
+
+export function initializeAsyncGenerationQueue() {
+  const now = nowIso();
+  q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,next_attempt_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
+  rows("SELECT id FROM generation_jobs WHERE status='QUEUED' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at", [now])
+    .forEach(({ id: jobId }) => enqueuePersistedJob(jobId));
+}
+
 function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error, requestContext = null }) {
   const failCode = error?.code || 'GENERATION_FAILED';
   const failAt = nowIso();
   transaction(() => {
     const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (currentJob) assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
-    q("UPDATE generation_jobs SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",
+    q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE id=?",
       [failCode, String(error?.message || '素材生成失败').slice(0, 1000), failAt, jobId]);
     q(`INSERT INTO usage_records(
          id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at
@@ -163,7 +199,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     });
     const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     assertTransition(auditContext(auth, requestContext), 'generationJob', currentJob?.status, 'SUCCEEDED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { modality } });
-    q("UPDATE generation_jobs SET status='SUCCEEDED',credits_charged=1,completed_at=? WHERE id=?", [nowIso(), jobId]);
+    q("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,credits_charged=1,completed_at=? WHERE id=?", [nowIso(), jobId]);
   });
 }
 
@@ -205,7 +241,7 @@ async function processAsyncGeneration(item) {
   try {
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
-    q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [nowIso(), jobId]);
+    q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
     const generated = await Promise.race([
       provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id }),
       new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('AI 生成超时，请稍后重试'), { code: 'GENERATION_TIMEOUT' })), ASYNC_GENERATION_TIMEOUT_MS)),
@@ -218,8 +254,8 @@ async function processAsyncGeneration(item) {
     const current = row('SELECT retry_count,max_retries,status FROM generation_jobs WHERE id=?', [jobId]);
     if (current?.status === 'RUNNING' && Number(current.retry_count || 0) < Number(current.max_retries ?? ASYNC_GENERATION_MAX_RETRIES)) {
       const retryCount = Number(current.retry_count || 0) + 1; const nextAttempt = new Date(Date.now() + retryCount * 5000).toISOString();
-      q("UPDATE generation_jobs SET status='QUEUED',retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=?", [retryCount, nextAttempt, nowIso(), error?.code || 'GENERATION_FAILED', String(error?.message || '生成失败'), jobId]);
-      setTimeout(() => { const pending = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]); if (pending?.status === 'QUEUED') { asyncGenerationQueue.push(item); drainAsyncGenerationQueue(); } }, retryCount * 5000);
+      q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=? AND status='RUNNING' AND worker_id=?", [retryCount, nextAttempt, nowIso(), error?.code || 'GENERATION_FAILED', String(error?.message || '生成失败'), jobId, ASYNC_WORKER_ID]);
+      enqueuePersistedJob(jobId, retryCount * 5000);
     } else {
       markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
     }
@@ -426,7 +462,7 @@ export async function handleAiGeneration(ctx) {
     const project = ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const provider = getGenerationProvider(); const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false });
-    asyncGenerationQueue.push({ auth, project, modality, prompt, title, jobId, requestContext: null }); drainAsyncGenerationQueue();
+    enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }
   const cancelMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)\/cancel$/);
@@ -434,7 +470,7 @@ export async function handleAiGeneration(ctx) {
     const jobId = decodeURIComponent(cancelMatch[1]); const job = row('SELECT * FROM generation_jobs WHERE id=? AND user_id=? AND org_id=?', [jobId, auth.user.id, auth.user.orgId]);
     if (!job) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
     if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
-    q("UPDATE generation_jobs SET status='FAILED',error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), jobId]);
+    q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);
     return jobDetail(jobId, { requireAuth: auth });
   }
   if (pathname === '/api/ai/generations/history' && method === 'GET') return generationHistory(auth, ctx.search);
