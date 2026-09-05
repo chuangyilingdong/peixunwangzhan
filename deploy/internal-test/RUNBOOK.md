@@ -81,6 +81,34 @@ ssh -i $key -o IdentitiesOnly=yes root@39.106.183.200 "cd /srv/ai-kids-platform/
 - 快速通道只降低登录成本，不降低发布闸门：仍需确认 commit、构建元数据、隔离数据库备份、健康检查、入口回归和日志无新增 P0/P1 错误。
 - 复杂远程操作继续采用“本地写 shell 脚本 → 转 LF → `scp` 上传 → `ssh bash /tmp/...`”，避免 Windows CRLF 与 PowerShell 转义问题。
 
+## 生产发布流程（使用同一长期 SSH 通道）
+
+生产发布前先确认本地最新 commit 已推送到 `origin/main`，再在服务器执行以下受控流程。不得直接覆盖生产数据库；切换前必须保留当前 release 和数据库备份。
+
+```powershell
+$key = 'C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519'
+$host = 'root@39.106.183.200'
+ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && git fetch origin main && git reset --hard origin/main && git clean -fd && PATH=/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin:`$PATH VITE_DEPLOYMENT_MODE=public bash deploy/production/build-production.sh"
+ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && bash deploy/production/backup-production.sh"
+ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && bash deploy/production/rollback-production.sh --release /srv/ai-kids-platform/production/releases/<new-release>"
+ssh -i $key -o IdentitiesOnly=yes $host "systemctl is-active learning-platform-production; curl -fsS --retry 10 --retry-delay 2 --retry-connrefused --max-time 10 http://127.0.0.1:8789/health"
+```
+
+生产发布完成后，在本机执行公网验收：
+
+```powershell
+$env:CHROME_PATH = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+& 'C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' scripts/verify-production-entrypoints.mjs --mode public
+```
+
+同时执行服务器安全冒烟：
+
+```powershell
+ssh -i $key -o IdentitiesOnly=yes $host "cd /srv/ai-kids-platform/internal-test/source && PATH=/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin:`$PATH node scripts/p9-live-security-smoke.mjs"
+```
+
+发布记录至少保存：release 时间戳、commit、生产数据库备份路径、健康检查、四端入口验收、回滚 release。当前生产固定检测账号密码见仓库外文件 `D:\学习平台\生产检测账号-20260905.md`，不得写入本仓库。
+
 ## 2026-09-04 内测发布记录：20260904T113559Z
 
 - 发布来源：已推送 commit `aad396d0dd9ee63b56dc01bbb4c7518e7a228b41`（含低余额字段修复 `6849e49` 与服务优雅退出修复）。

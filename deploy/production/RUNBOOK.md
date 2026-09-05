@@ -109,6 +109,25 @@ sudo systemctl start learning-platform-internal-test
 
 若 production 已产生写入，按切换前内测库快照处理数据回滚；原内测库不再覆盖生产库。
 
+## 固定生产检测账号（2026-09-05）
+
+生产环境已保留 4 个检测账号，其他账号已停用并软删除，历史审计与业务关联不物理删除：
+
+| 端 | 登录名 | 角色 | 入口 |
+|---|---|---|---|
+| 平台端 | `root` | `SUPER_ADMIN` | `/admin/` |
+| 机构端 | `org-admin` | `ORG_ADMIN` | `/org/` |
+| 教师端 | `teacher-1` | `TEACHER` | `/org/` |
+| 学生端 | `student-1` | `STUDENT` | `/student/` |
+
+密码保存在仓库外的本机受限 Markdown 文件：
+
+```text
+D:\学习平台\生产检测账号-20260905.md
+```
+
+禁止把密码写入仓库、服务器源码、日志或聊天记录。账号变更后，必须更新该本机文件并执行四角色登录与 `/api/me` 验证。
+
 ## 事故边界
 
 - 不在日志、文档或对话中输出 `.env`、密码、token。

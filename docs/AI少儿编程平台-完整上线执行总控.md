@@ -1675,11 +1675,21 @@ node .\p3-api-integration.mjs
 
 - [x] 03:00 CST 每日备份 timer 已成功执行；最新状态 `ok`，保留 14 天。
 - [x] 最新备份恢复演练通过：隔离端口 `127.0.0.1:18789` 健康，`active_users=7`，演练端口释放，生产服务持续 active。
-- [x] 账号安全复核：`owner` 为唯一 `SUPER_ADMIN/ACTIVE`；6 个种子账号均 `DISABLED`，活跃会话为 0；未输出任何真实凭据。
+- [x] 账号安全复核（历史记录）：当时 `owner` 为唯一 `SUPER_ADMIN/ACTIVE`；随后于 2026-09-05 13:00 CST 已按固定检测账号方案切换为 `root`、`org-admin`、`teacher-1`、`student-1` 四个 ACTIVE 账号，详见“生产发布与固定检测账号记录”。
 - [x] 最小告警复核：API、磁盘 14%、证书剩余 86 天、备份新鲜度均正常；`NRestarts=0`，观察窗口内无 API 错误或 Nginx 5xx。
 - [x] P9-D05 服务器侧完成：敏感路径全部 404，`/api/health` 200，安全头检查通过；internal-test 回滚资产保留。
 - [ ] P9-D02 24 小时观察仍进行中，截止时间为 **2026-09-05 20:24:38 CST**；未提前宣称观察完成。外部告警通知和值班升级不属于当前范围；正式 Secret 管理器仍作为规模扩大或接入真实第三方服务前的后续事项。
 
+
+
+### 2026-09-05 生产发布与固定检测账号记录
+
+- [x] 使用已授权长期 SSH 通道完成生产发布：服务器 `39.106.183.200`，新 release `20260905T045348Z`，运行 commit `73e1420eae3e809a270da68e541a49305096eb06`，服务 `learning-platform-production` 保持 `active`，`/health` 返回 `status=ok`。
+- [x] 发布前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T045410Z/platform.db`；账号整理后追加备份：`/srv/ai-kids-platform/production/backups/20260905T050123Z/platform.db`；原生产 release `/srv/ai-kids-platform/production/releases/20260904T122323Z` 保留可回滚。
+- [x] 生产公网四端验收通过：官网 `/`、平台 `/admin/`、机构 `/org/`、学生 `/student/` 均 HTTP 200，生产资源前缀和安全头通过；敏感路径安全冒烟通过。
+- [x] 已固定 4 个生产检测账号：`root`（平台）、`org-admin`（机构）、`teacher-1`（教师）、`student-1`（学生）；四角色登录与 `/api/me` 均 HTTP 200。其他无用账号已停用并软删除，历史关联保留。
+- [x] 密码记录在仓库外本机文件 `D:\学习平台\生产检测账号-20260905.md`；不写入 Git、服务器源码、日志或聊天记录。
+- [x] 后续每次发布遵循 `deploy/internal-test/RUNBOOK.md` 的“生产发布流程”，发布前备份、构建元数据校验、原子切换、健康检查、四端验收和回滚资产保留均不可省略。
 
 ### 2026-09-05 线下机构交付范围决策
 
