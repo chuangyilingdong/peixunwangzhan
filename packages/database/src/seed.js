@@ -290,8 +290,8 @@ export function seedDatabase() {
     const organization = ensureOrganization(now);
     const pkg = ensurePackage(organization.id, now);
     ensureUser({ login: 'org-admin', orgId: organization.id, displayName: '机构管理员', role: 'ORG_ADMIN', password: 'org123' }, now);
-    const teacher1 = ensureUser({ login: 'teacher-1', orgId: organization.id, displayName: '王老师', role: 'TEACHER', password: 'teach123', permissions: ['MANAGE_CLASSES'] }, now);
-    ensureUser({ login: 'teacher-2', orgId: organization.id, displayName: '李老师', role: 'TEACHER', password: 'teach123', permissions: ['MANAGE_CLASSES', 'MANAGE_MEMBERS'] }, now);
+    const teacher1 = ensureUser({ login: 'teacher-1', orgId: organization.id, displayName: '王老师', role: 'TEACHER', password: 'teach123', permissions: [] }, now);
+    ensureUser({ login: 'teacher-2', orgId: organization.id, displayName: '李老师', role: 'TEACHER', password: 'teach123', permissions: [] }, now);
     const student1 = ensureUser({
       login: 'student-1', orgId: organization.id, displayName: '小明', role: 'STUDENT', password: 'study123',
       extras: { studentUsageScope: 'FOLLOW_CLASS', billingPackageId: pkg.id, monthlyCreditAllowance: 100, monthlyBonusCredits: 20, magicStones: 120 },

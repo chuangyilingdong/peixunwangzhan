@@ -29,11 +29,6 @@ function classInOrg(auth, classId) {
   if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
   return cls;
 }
-function assertClassManager(auth, cls, permission = 'MANAGE_CLASSES') {
-  if (auth.user.role === 'ORG_ADMIN') return;
-  if (auth.user.role === 'TEACHER' && teacherCanAccessClass(auth, cls) && hasPermission(auth, permission)) return;
-  throw errors.forbidden('无班级管理权限', 'CLASS_PERMISSION_DENIED');
-}
 // 班级的日常教务由教师负责，不要求机构管理员额外授予账号管理权限。
 // 仍然沿用 teacherCanAccessClass，确保教师只能操作本人负责或被授权的班级。
 function assertTeachingClassManager(auth, cls) {
@@ -2633,7 +2628,7 @@ export async function handleOrg(ctx) {
   if (classMatch && ['GET','PUT','DELETE'].includes(method)) {
     const cls = classInOrg(auth, classMatch[1]);
     if (method === 'GET') { if (!teacherCanAccessClass(auth, cls)) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND'); return classDetail(auth, cls); }
-    assertClassManager(auth, cls);
+    assertTeachingClassManager(auth, cls);
     if (method === 'DELETE') {
       assertTransition(ctx, 'class', cls.status, 'ARCHIVED', { targetType: 'CLASS', targetId: cls.id, before: normalizeClass(cls), code: 'INVALID_CLASS_TRANSITION', message: '已归档班级不能重复归档' });
       transaction(() => { const active = row("SELECT * FROM class_sessions WHERE class_id=? AND status='ACTIVE'", [cls.id]); if (active) q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason='CLASS_ARCHIVED' WHERE id=?", [nowIso(), auth.user.id, active.id]); q("UPDATE classes SET status='ARCHIVED',archived_at=?,current_session_id=NULL,updated_at=? WHERE id=? AND org_id=?", [nowIso(), nowIso(), cls.id, currentOrgId]); });
@@ -2675,7 +2670,7 @@ export async function handleOrg(ctx) {
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/(start|makeup)$/);
   if (classMatch && method === 'POST') {
-    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); if (cls.status !== 'ACTIVE') throw errors.conflict('已归档班级不能开课', 'CLASS_ARCHIVED'); const lessonId = String(ctx.body?.lessonId || '').trim();
+    const cls = classInOrg(auth, classMatch[1]); assertTeachingClassManager(auth, cls); if (cls.status !== 'ACTIVE') throw errors.conflict('已归档班级不能开课', 'CLASS_ARCHIVED'); const lessonId = String(ctx.body?.lessonId || '').trim();
     if (!lessonId) throw errors.badRequest('开课必须指定课时', 'LESSON_REQUIRED');
     if (!row('SELECT id FROM class_curriculum_items WHERE class_id=? AND lesson_id=?', [cls.id, lessonId]) || !accessibleLesson(currentOrgId, lessonId)) throw errors.badRequest('课时不在本班已授权课单中', 'LESSON_NOT_ASSIGNED');
     if (row("SELECT id FROM class_sessions WHERE class_id=? AND status='ACTIVE'", [cls.id])) throw errors.conflict('当前班级已有进行中的课堂', 'CLASS_SESSION_ACTIVE');
@@ -2685,7 +2680,7 @@ export async function handleOrg(ctx) {
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/cancel$/);
   if (classMatch && method === 'POST') {
-    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]);
+    const cls = classInOrg(auth, classMatch[1]); assertTeachingClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]);
     if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND');
     if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束，不能重复取消', 'CLASS_SESSION_ENDED');
     const now = nowIso(); transaction(() => { q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason='CANCELED' WHERE id=? AND class_id=? AND status='ACTIVE'", [now, auth.user.id, session.id, cls.id]); q('UPDATE classes SET current_session_id=NULL,updated_at=? WHERE id=? AND org_id=? AND current_session_id=?', [now, cls.id, currentOrgId, session.id]); });
@@ -2693,7 +2688,7 @@ export async function handleOrg(ctx) {
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/ai-controls$/);
   if (classMatch && method === 'PUT') {
-    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]);
+    const cls = classInOrg(auth, classMatch[1]); assertTeachingClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]);
     if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND');
     if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束', 'CLASS_SESSION_ENDED');
     const body = ctx.body || {}; const capabilities = body.capabilities || {};
@@ -2707,7 +2702,7 @@ export async function handleOrg(ctx) {
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/(end|credit-cap|capabilities)$/);
   if (classMatch && method === 'POST') {
-    const cls = classInOrg(auth, classMatch[1]); assertClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]); if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND'); const action = classMatch[3];
+    const cls = classInOrg(auth, classMatch[1]); assertTeachingClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]); if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND'); const action = classMatch[3];
     if (action === 'end') assertTransition(ctx, 'classSession', session.status, 'ENDED', { targetType: 'CLASS_SESSION', targetId: session.id, before: normalizeSession(session), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '课堂已结束，不能重复结束' });
     else if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束', 'CLASS_SESSION_ENDED');
     if (action === 'end') transaction(() => { q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason=? WHERE id=? AND class_id=? AND status='ACTIVE'", [nowIso(), auth.user.id, String(ctx.body?.reason || 'MANUAL').slice(0, 100), session.id, cls.id]); q('UPDATE classes SET current_session_id=NULL,updated_at=? WHERE id=? AND org_id=? AND current_session_id=?', [nowIso(), cls.id, currentOrgId, session.id]); });
