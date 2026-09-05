@@ -187,3 +187,12 @@ D:\学习平台\生产检测账号-20260905.md
 - [x] 清理收口：本轮 5 个临时账号已通过机构管理员接口软删除；临时验收班级已归档；没有遗留进行中的课堂。已提交作品和项目按状态机保留为历史验收数据，未直接删除生产关联记录。
 - [x] 页面级验收时间：2026-09-05 13:49 CST；未修改生产源码、配置或固定检测账号密码。
 - [x] 本轮页面功能检查：**12/12 通过**（账号创建、导入预览、导入提交、重置密码、停用、班级创建、加入学生、配置课程、开课、项目创建 / 画布保存、作品提交、结束并归档）。
+
+## 2026-09-05 首页视频加载兜底修复发布记录
+
+- 发布 commit：`1cae22d`（`fix(website): prevent homepage video loader from hanging`）。
+- 新 release：`/srv/ai-kids-platform/production/releases/20260905T074802Z`；旧 release `/srv/ai-kids-platform/production/releases/20260905T070953Z` 保留可回滚。
+- 切换前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T074822Z/platform.db`。
+- 修复内容：首页外部视频加载失败、超时、加载中断或错过媒体事件时，加载遮罩最多 5 秒自动退出；视频不可用时保留首页色块、文案和交互，不再永久停留在 `LOADING SCROLL STREAM...`。
+- 发布后：`learning-platform-production` active；`/health` 返回 `status=ok`；四端公网入口验证 **4/4** 通过。
+- 首页生产验证：视频资源未及时就绪时两个加载遮罩均自动隐藏，首页不再被加载提示阻塞。
