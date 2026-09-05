@@ -1786,6 +1786,7 @@ node .\p3-api-integration.mjs
 - [x] 教师任务闭环：发布、学生开始 / 提交、教师查看、标记已查看、评分、通过 / 驳回、驳回后重新提交；服务端按机构、班级、教师负责关系、学生成员关系执行访问控制。
 - [x] 本地专项验收：`scripts/p4-o10-teacher-class-duty.mjs` **9/9**；`scripts/p4-o11-teaching-task-loop.mjs` **10/10**；四端生产构建通过；服务端语法检查通过。
 - [x] AI 异步队列：任务状态持久化、服务重启恢复 `QUEUED` 和过期 `RUNNING`、worker 标识、重试退避、超时回收、取消后清理 worker；生产仍为 `local-mock` provider。
+- [x] 队列专项测试：`scripts/p4-o12-ai-generation-queue.mjs` 验证服务启动恢复持久化任务、最终 `SUCCEEDED`、只扣 1 次积分、只产生 1 条成功用量记录、worker 释放。
 - [x] 生产发布：commit `f05823b`，release `20260905T102834Z`，发布前备份 `20260905T102834Z`；服务 active，内外 health 正常，四端公网 **4/4**，P9 安全冒烟 **14/14**，SQLite 完整性检查 `ok`。
 - [x] 备份恢复演练：使用 `/srv/ai-kids-platform/production/backups/20260905T102834Z` 在隔离目录完成 `restore-drill=passed`，健康检查通过，未触碰生产服务。
 - [~] 后续仍需统一执行真实账号 UAT、AI 重试 / 超时 / 取消的 provider 级测试；这些属于上线收口，不提前宣称全部完成。
