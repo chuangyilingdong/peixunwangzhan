@@ -1869,3 +1869,13 @@ node .\p3-api-integration.mjs
 - 验证：P6-A01 provider 契约、目录隔离、真实 adapter 本地 HTTP 隔离测试、策略 E2E、P4-O12 / O13 / O15 和四端 production build 全部通过；未产生外部 AI 请求或费用。
 - 当前生产口径：生产仍使用 `AI_PROVIDER=local-mock`，学生外发策略已开启，但这不代表真实 AI 已在生产运行。
 - 下一步：用户在 `/admin/` 填写供应商、模型、Endpoint 和平台预算，在服务器 `/etc/ai-kids-platform/production.env` 填写服务端 API key；完成隔离真实账号测试后，单独执行生产 provider 切换与发布验收。
+
+## P6-A01 真实 AI adapter 生产代码发布记录（2026-09-05）
+
+- 状态：`[-]`（真实 adapter 代码已发布；等待平台管理员填写供应商 / 模型 / Endpoint / 预算，并由运维在服务器受限环境配置 API key 后再切换运行时 provider）。
+- 发布 commit：`b8469b6`（完整提交：`b8469b685d19c7f05606b3d5d2be91eecf6485a4`）。
+- 新生产 release：`/srv/ai-kids-platform/production/releases/20260905T155255Z`；当前软链接已切换至该 release。
+- 发布前数据库备份：`/srv/ai-kids-platform/production/backups/20260905T155255Z/platform.db`；未重新 seed、未修改生产业务数据。
+- 发布后验证：本地 `/health`、公网 `/api/health` 成功；`/`、`/admin/`、`/org/`、`/student/` 均 HTTP 200；`learning-platform-production` 为 `active/running`、`NRestarts=0`、`ExecMainStatus=0`；adapter 文件已存在于生产 release。
+- 生产当前仍为 `AI_PROVIDER=local-mock`，因此本次发布**没有真实外部 AI 请求，也没有外部 AI 费用**；学生外发策略虽已开启，但只有完成真实 provider 配置和显式切换后才会调用外部 AI。
+- 后续配置完成后，必须先执行受控 `TEXT` 隔离真实调用，确认预算、错误映射、积分和日志脱敏，再将生产 `AI_PROVIDER` 切换为 `openai-compatible` 或 `custom`。
