@@ -1,5 +1,13 @@
-import { rows } from './packages/database/src/schema.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p3-schema-'));
+process.env.PLATFORM_DATA_DIR = tempDir;
+process.env.PLATFORM_DB_PATH = path.join(tempDir, 'platform.db');
+const { rows } = await import('./packages/database/src/schema.js');
 const required = ['work_annotations', 'generation_jobs', 'media_assets'];
 const found = new Set(rows("SELECT name FROM sqlite_master WHERE type='table'").map((item) => item.name));
 for (const table of required) if (!found.has(table)) throw new Error(`missing ${table}`);
+if (path.resolve(process.env.PLATFORM_DB_PATH) === path.resolve(path.join(process.cwd(), 'packages/data/platform.db'))) throw new Error('default database selected');
 console.log(`PASS P3 schema tables: ${required.join(', ')}`);
+console.log(`PASS temporary database: ${process.env.PLATFORM_DB_PATH}`);

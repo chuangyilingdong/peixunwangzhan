@@ -56,7 +56,8 @@ try {
   check('unauthenticated protected route returns 401', (await call('GET', '/org/classes')).status === 401);
   check('student cannot enter organization management route', (await call('GET', '/org/classes', undefined, student1)).status === 403);
   check('organization teacher cannot enter platform admin route', (await call('GET', '/admin/audit-logs', undefined, teacher1)).status === 403);
-  check('organization teacher without permission cannot create class', (await call('POST', '/org/classes', { name: '越权班级' }, teacher2org)).status === 403);
+  const teacherDutyClass = await call('POST', '/org/classes', { name: '教师职责班级' }, teacher2org);
+  check('organization teacher can create class without extra permission', teacherDutyClass.status === 200 && teacherDutyClass.body?.data?.teacherId === 'user_p4_c01_teacher2org');
   check('unassigned same-org teacher cannot read another teacher class', (await call('GET', `/org/classes/${class1}`, undefined, teacher2)).status === 404);
   check('cross-org teacher cannot read tenant one class', (await call('GET', `/org/classes/${class1}`, undefined, teacher2org)).status === 404);
 

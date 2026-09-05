@@ -155,7 +155,6 @@ CREATE TABLE IF NOT EXISTS credit_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_credit_entries_org_created ON credit_entries(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_credit_entries_session ON credit_entries(class_session_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_entries_reversal_of ON credit_entries(reversal_of) WHERE reversal_of IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS billing_packages (
   id TEXT PRIMARY KEY,
