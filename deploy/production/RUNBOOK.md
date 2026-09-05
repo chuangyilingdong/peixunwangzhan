@@ -251,3 +251,16 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 在生产环境文件中设置 `FILE_UPLOAD_SCANNER=/usr/bin/clamscan` 后重启服务。未配置、不可执行、扫描失败或命中恶意文件时，API 会拒绝上传，不会把文件元数据写入数据库；若数据库写入失败，已落盘文件会清理。Nginx 的 `client_max_body_size` 应与服务端默认 25 MB 限制保持为 26 MB，禁止为 `/srv/ai-kids-platform/production/uploads` 增加静态目录映射。
 
 上传限流与配额：FILE_UPLOAD_USER_PER_HOUR、FILE_UPLOAD_ORG_PER_HOUR、FILE_UPLOAD_MAX_CONCURRENT、FILE_UPLOAD_USER_QUOTA_BYTES、FILE_UPLOAD_ORG_QUOTA_BYTES 分别控制用户/机构小时频率、并发数和容量。生产环境应显式配置，修改后重启服务。
+
+
+## 2026-09-05 生产环境五项收口记录
+
+- 当前生产 release：/srv/ai-kids-platform/production/releases/20260905T092036Z。
+- 当前发布 commit：4255b88cb789a483b5d9e6341d90cc278ea9be0。
+- 发布前数据库备份：/srv/ai-kids-platform/production/backups/20260905T092032Z/platform.db。
+- 在线 UAT：平台管理员、机构管理员、教师、学生账号登录均通过；平台管理员和机构管理员真实上传均返回 HTTP 200；教师上传入口隐藏；学生端登录与工作台通过。
+- 上传安全：生产已安装 ClamAV，/usr/bin/clamscan 可由服务账号执行；安全上传返回 scanner PASSED；上传目录位于 Web 根目录之外并由服务账号持有。
+- 文件管理：生产已启用文件列表、元数据、状态启停、审核状态、机构授权、删除/移除及受控下载接口；跨机构授权由服务端校验。
+- 监控：learning-platform-production、i-kids-platform-healthcheck.timer、i-kids-platform-production-daily-backup.timer 均为 enabled；磁盘使用率 15%；公网 /api/health 正常。
+- 公网入口与安全冒烟：四端入口 4/4 通过；敏感路径、HSTS、CSP、nosniff、frame/referrer 策略检查通过。
+- 结论：本次生产环境运维 1—5 项已完成并收口；后续转入日常监控、备份校验和按需迭代。
