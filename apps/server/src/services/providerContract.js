@@ -4,11 +4,11 @@ const PROVIDER_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export const GENERATION_PROVIDER_CATALOG = Object.freeze([
   Object.freeze({ id: 'local-mock', label: '本地模拟（当前生产默认）', kind: 'MOCK', adapterAvailable: true, externalContentAllowed: false, endpointRequired: true, modelRequired: true }),
-  Object.freeze({ id: 'openai-compatible', label: 'OpenAI-compatible 通用接口', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
+  Object.freeze({ id: 'openai-compatible', label: 'OpenAI-compatible 通用接口（文本）', kind: 'GENERIC', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'aliyun-bailian', label: '阿里云百炼', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'volcengine', label: '火山引擎', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
   Object.freeze({ id: 'zhipu', label: '智谱', kind: 'GENERIC', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
-  Object.freeze({ id: 'custom', label: '自定义供应商', kind: 'CUSTOM', adapterAvailable: false, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
+  Object.freeze({ id: 'custom', label: '自定义供应商（OpenAI-compatible 文本接口）', kind: 'CUSTOM', adapterAvailable: true, externalContentAllowed: true, endpointRequired: true, modelRequired: true }),
 ]);
 export const GENERATION_PROVIDER_IDS = new Set(GENERATION_PROVIDER_CATALOG.map((item) => item.id));
 export function providerDefinition(id) { return GENERATION_PROVIDER_CATALOG.find((item) => item.id === id) || null; }
@@ -21,6 +21,7 @@ export const PROVIDER_ERROR_CODES = Object.freeze({
   UPSTREAM: 'GENERATION_PROVIDER_UPSTREAM_ERROR',
   SAFETY_REJECTED: 'GENERATION_PROVIDER_SAFETY_REJECTED',
   RESPONSE_INVALID: 'GENERATION_PROVIDER_RESPONSE_INVALID',
+  MODALITY_UNSUPPORTED: 'GENERATION_PROVIDER_MODALITY_UNSUPPORTED',
 });
 
 export function isMockProvider(name) {
@@ -61,12 +62,20 @@ export function normalizeProviderError(error, { status } = {}) {
   if (httpStatus >= 500 || code.includes('UPSTREAM')) return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: true, message: 'AI 服务暂时不可用' };
   if (code === PROVIDER_ERROR_CODES.CONFIG_INVALID) return { code, retryable: false, message: 'AI 供应商配置不完整' };
   if (code === PROVIDER_ERROR_CODES.RESPONSE_INVALID) return { code, retryable: false, message: 'AI 供应商响应格式无效' };
+  if (code === PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED) return { code, retryable: false, message: '当前真实 AI 适配器暂不支持该素材类型' };
   return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: false, message: 'AI 供应商调用失败' };
 }
 
 export function assertExternalAiAllowed({ mode, allowStudentExternalContent = false } = {}) {
   if (mode !== 'mock' && !allowStudentExternalContent) {
     throw errors.forbidden('学生项目生成内容不允许发送到外部 AI 服务。', 'STUDENT_EXTERNAL_AI_BLOCKED');
+  }
+}
+
+export function assertProviderCapability(provider, modality) {
+  const capabilities = Array.isArray(provider?.capabilities) ? provider.capabilities : [];
+  if (!capabilities.includes(String(modality || '').toUpperCase())) {
+    throw errors.badRequest('当前真实 AI 适配器暂不支持该素材类型。', PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED);
   }
 }
 

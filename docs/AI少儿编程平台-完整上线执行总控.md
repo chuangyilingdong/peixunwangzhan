@@ -1859,3 +1859,13 @@ node .\p3-api-integration.mjs
 - 平台端配置位置：`/admin/` → 平台管理 → 计费与用量 → AI 供应商与预算。机构端预算位置：`/org/` → 机构管理 → 账户与计费 → AI 预算。
 - 用户自行填写供应商、模型、Endpoint、平台 / 机构单次与每日预算；API key 不进入数据库、前端或文档，只放生产服务器受限环境变量 / Secret。
 - 本次代码发布仅开启策略和配置界面；真实 provider adapter 尚未接入，生产仍为 `AI_PROVIDER=local-mock`，不得宣称已接入真实 AI。
+
+
+## P6-A01 真实 AI 适配器实施记录（2026-09-05）
+
+- 状态：`[-]`（真实 adapter 代码已完成，生产切换等待用户填写并验收供应商、模型、Endpoint、API key 和预算）。
+- 实现：新增 OpenAI-compatible Chat Completions 文本 adapter；`custom` 供应商复用该协议；服务端统一处理超时、429、5xx、安全拒绝和无效响应；首期只支持 `TEXT`，其他模态明确拒绝，不生成假资产。
+- 影响文件 / 接口：`apps/server/src/services/openaiCompatibleProvider.js`、`generationProvider.js`、`providerContract.js`、`aiGeneration.js`、平台 / 学生端 AI 提示、`.env.example`；新增 `scripts/p6-a01-openai-compatible-adapter.mjs`。
+- 验证：P6-A01 provider 契约、目录隔离、真实 adapter 本地 HTTP 隔离测试、策略 E2E、P4-O12 / O13 / O15 和四端 production build 全部通过；未产生外部 AI 请求或费用。
+- 当前生产口径：生产仍使用 `AI_PROVIDER=local-mock`，学生外发策略已开启，但这不代表真实 AI 已在生产运行。
+- 下一步：用户在 `/admin/` 填写供应商、模型、Endpoint 和平台预算，在服务器 `/etc/ai-kids-platform/production.env` 填写服务端 API key；完成隔离真实账号测试后，单独执行生产 provider 切换与发布验收。

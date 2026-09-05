@@ -1,5 +1,6 @@
 import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY } from '../config.js';
-import { isMockProvider, unavailableProvider, validateProviderConfig } from './providerContract.js';
+import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
+import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 
 function svgDataUrl(title, subtitle, hue) {
   const escape = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -20,5 +21,26 @@ export function providerConfig(selection = {}) {
   const selected = providerSelection(selection);
   return validateProviderConfig({ ...selected, apiKey: AI_PROVIDER_API_KEY });
 }
-export function generationProviderInfo(selection = {}) { const config = providerConfig(selection); return { provider: config.provider, model: config.model, mode: isMockProvider(config.provider) ? 'mock' : 'adapter-required', configured: config.valid, endpointConfigured: Boolean(config.endpoint), configError: config.reasons.length ? 'AI_PROVIDER_CONFIG_INVALID' : null }; }
-export function getGenerationProvider(selection = {}) { const config = providerConfig(selection); if (isMockProvider(config.provider)) return mockProvider(); return unavailableProvider({ name: config.provider, model: config.model, config }); }
+export function generationProviderInfo(selection = {}) {
+  const config = providerConfig(selection);
+  const definition = providerDefinition(config.provider);
+  const adapterAvailable = isMockProvider(config.provider) || Boolean(definition?.adapterAvailable);
+  const capabilities = isMockProvider(config.provider) ? ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'] : (adapterAvailable ? ['TEXT'] : []);
+  return {
+    provider: config.provider,
+    model: config.model,
+    mode: isMockProvider(config.provider) ? 'mock' : adapterAvailable ? 'external-adapter' : 'adapter-required',
+    configured: config.valid,
+    adapterAvailable,
+    capabilities,
+    endpointConfigured: Boolean(config.endpoint),
+    configError: config.reasons.length ? 'AI_PROVIDER_CONFIG_INVALID' : null,
+  };
+}
+export function getGenerationProvider(selection = {}) {
+  const config = providerConfig(selection);
+  if (isMockProvider(config.provider)) return mockProvider();
+  const definition = providerDefinition(config.provider);
+  if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: AI_PROVIDER_API_KEY });
+}

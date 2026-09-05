@@ -1,7 +1,7 @@
 import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, q, requireRole, row, rows, transaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
-import { assertExternalAiAllowed, normalizeProviderError } from '../services/providerContract.js';
+import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError } from '../services/providerContract.js';
 import { assertAiBudgets, assertOrgAiBudget, getAiProviderPolicy, getOrgAiBudget } from './billingConfig.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
@@ -221,6 +221,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const provider = getGenerationProvider(providerSelection);
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
+  if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
   const orgBudget = getOrgAiBudget(auth.user.orgId);
   const usedCredits = 1;
   const platformDailyUsed = Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE status='SUCCEEDED' AND date(created_at)=date('now')")?.n || 0);
@@ -258,6 +259,7 @@ async function processAsyncGeneration(item) {
   const provider = getGenerationProvider(providerSelection); const info = generationProviderInfo(providerSelection);
   const context = resolveProjectUsageContext(auth.rawUser, project);
   try {
+    if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
@@ -484,6 +486,7 @@ export async function handleAiGeneration(ctx) {
     const provider = getGenerationProvider(providerSelection);
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
+    if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const orgBudget = getOrgAiBudget(auth.user.orgId);
     assertAiBudgets(policy, 1, { dailyUsed: Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE status='SUCCEEDED' AND date(created_at)=date('now')")?.n || 0) });
     assertOrgAiBudget(orgBudget, 1, { dailyUsed: Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE org_id=? AND status='SUCCEEDED' AND date(created_at)=date('now')", [auth.user.orgId])?.n || 0) });

@@ -309,3 +309,12 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - 回归验证：P6-A01 provider 契约 `8/8`、供应商目录与隔离 `13/13`、策略 E2E `23/23`；P4-O12 队列恢复、P4-O13 失败重试、P4-O15 任务取消均通过；四端 production build 通过；`git diff --check` 通过。
 - 发布后只读状态：`learning-platform-production` 为 `active/running`、`enabled`，`NRestarts=0`；健康检查通过。此次文档更新不产生新的生产发布。
 - 配置入口：平台端 `/admin/` → 平台管理 → 计费与用量 → AI 供应商与预算；机构端 `/org/` → 机构管理 → 账户与计费 → AI 预算。
+
+
+## 2026-09-05 P6-A01 真实 provider adapter 代码接入记录
+
+- 新增 `openai-compatible` 通用 Chat Completions 文本 adapter；`custom` 供应商复用该协议。当前首期支持 `TEXT`，其他模态必须等待对应 adapter，不会伪造生成结果。
+- adapter 支持服务端 Bearer key、超时中止、429 / 5xx / 安全拒绝 / 无效响应映射；API key 仍只能来自 `/etc/ai-kids-platform/production.env`，请求参数不得传入密钥。
+- 用户配置真实供应商后，必须同时填写平台端模型 / Endpoint 和服务器端 `AI_PROVIDER_API_KEY`，并将 `AI_PROVIDER` 切换为 `openai-compatible` 或 `custom`；仅填写网页配置不会自动产生真实请求。
+- 本次代码接入尚未切换生产 provider，生产继续保持 `AI_PROVIDER=local-mock`；此次发布不产生外部 AI 费用。
+- 隔离验证：`p6-a01-openai-compatible-adapter` `12/12`；P6-A01 目录 / 策略测试、P4-O12 / O13 / O15 与四端构建通过。
