@@ -1346,3 +1346,24 @@ try { db.exec('ALTER TABLE feature_flags ADD COLUMN enabled INTEGER NOT NULL DEF
 // P6-A01 member AI credit caps; NULL means unlimited subject to organization balance.
 try { db.exec('ALTER TABLE users ADD COLUMN ai_credit_limit INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN ai_credits_used INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+// P6-A02 personal credit balance (for free-canvas and free-coding); uses magic_stones as the balance field.
+try { db.exec('ALTER TABLE users ADD COLUMN personal_credits INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE users ADD COLUMN magic_stones INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+
+// Personal credit ledger (tracks personal credit changes separately from org ledger)
+db.exec(`CREATE TABLE IF NOT EXISTS personal_credit_ledger (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('IN','OUT')),
+  type TEXT NOT NULL,
+  credits INTEGER NOT NULL CHECK (credits > 0),
+  balance_after INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'FREE_CANVAS',
+  project_id TEXT,
+  work_id TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_pcl_user ON personal_credit_ledger(user_id, created_at DESC)'); } catch (_) {}
+

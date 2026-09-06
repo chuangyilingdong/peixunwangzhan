@@ -346,6 +346,7 @@ export function normalizeUser(value, { includeAuthMeta = false } = {}) {
     periodStartAt: value.period_start_at || null,
     periodResetAt: value.period_reset_at || null,
     magicStones: Number(value.magic_stones || 0),
+    personalCredits: Number(value.personal_credits || 0),
     aiCreditLimit: value.ai_credit_limit == null ? null : Number(value.ai_credit_limit),
     aiCreditsUsed: Number(value.ai_credits_used || 0),
     aiCreditsRemaining: value.ai_credit_limit == null ? null : Math.max(0, Number(value.ai_credit_limit) - Number(value.ai_credits_used || 0)),
