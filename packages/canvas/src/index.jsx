@@ -207,59 +207,17 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
-  const [templateId, setTemplateId] = useState(CANVAS_TEMPLATE_OPTIONS[0].id);
-  const { fitView, getViewport } = useReactFlow();
-  const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
+  const { getViewport } = useReactFlow();
 
   const updateNode = useCallback((nodeId, changes) => {
     if (readOnly) return;
     setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, ...changes } } : node));
   }, [readOnly, setNodes]);
 
-  const addNode = useCallback((type) => {
-    if (readOnly) return;
-    if (type === 'prompt' && !enabledCapabilities.has('text')) return;
-    if (type === 'image' && !enabledCapabilities.has('image')) return;
-    if (type === 'video' && !enabledCapabilities.has('video')) return;
-    const offset = nodes.length * 36;
-    const templates = {
-      prompt: { title: '魔法提示词', text: '' },
-      image: { title: '画面灵感', emoji: '✨', caption: '' },
-      character: { title: '故事角色', emoji: '🧒', name: '', trait: '' },
-      scene: { title: '故事场景', emoji: '🌲', place: '', mood: '' },
-      video: { title: '故事短片', text: '' },
-      note: { title: '创作便签', text: '' },
-    };
-    setNodes((current) => [...current, { id: id(type), type, position: { x: 180 + (offset % 300), y: 160 + (offset % 220) }, data: templates[type] }]);
-  }, [enabledCapabilities, nodes.length, readOnly, setNodes]);
-
   const onConnect = useCallback((connection) => {
     if (readOnly) return;
     setEdges((current) => addEdge({ ...connection, id: id('edge'), markerEnd: { type: MarkerType.ArrowClosed }, animated: true }, current));
   }, [readOnly, setEdges]);
-
-  const applyTemplate = useCallback(() => {
-    if (readOnly) return;
-    const next = createCanvasTemplate(templateId);
-    setNodes(next.nodes);
-    setEdges(next.edges);
-    setViewport(next.viewport);
-    window.setTimeout(() => fitView({ padding: 0.18, duration: 250 }), 0);
-  }, [fitView, readOnly, setEdges, setNodes, templateId]);
-
-  const autoLayout = useCallback(() => {
-    if (readOnly) return;
-    const next = autoLayoutSnapshot({ nodes, edges, viewport });
-    setNodes(next.nodes);
-    setViewport(next.viewport);
-    window.setTimeout(() => fitView({ padding: 0.18, duration: 250 }), 0);
-  }, [edges, fitView, nodes, readOnly, viewport, setNodes]);
-
-  const deleteSelected = useCallback(() => {
-    if (readOnly) return;
-    setNodes((current) => current.filter((node) => !node.selected));
-    setEdges((current) => current.filter((edge) => !edge.selected));
-  }, [readOnly, setEdges, setNodes]);
 
   useEffect(() => {
     onChange?.({ nodes, edges, viewport: getViewport() });
@@ -267,18 +225,6 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
 
   return <CanvasActionsContext.Provider value={{ updateNode }}>
     <div className="learning-canvas">
-      <div className="learning-canvas__toolbar" role="toolbar" aria-label="添加创作节点">
-        <span>添加魔法卡片</span>
-        <select className="learning-canvas__template-select" value={templateId} onChange={(event) => setTemplateId(event.target.value)} disabled={readOnly} aria-label="画布模板">{CANVAS_TEMPLATE_OPTIONS.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select>
-        <button type="button" onClick={applyTemplate} disabled={readOnly}>套用模板</button>
-        {enabledCapabilities.has('text') && <button type="button" onClick={() => addNode('prompt')} disabled={readOnly}>✎ 提示词</button>}
-        {enabledCapabilities.has('image') && <button type="button" onClick={() => addNode('image')} disabled={readOnly}>✦ 画面</button>}
-        <button type="button" onClick={() => addNode('character')} disabled={readOnly}>♙ 角色</button>
-        <button type="button" onClick={() => addNode('scene')} disabled={readOnly}>⌂ 场景</button>
-        {enabledCapabilities.has('video') && <button type="button" onClick={() => addNode('video')} disabled={readOnly}>▶ 故事</button>}
-        <button type="button" onClick={() => addNode('note')} disabled={readOnly}>☼ 便签</button>
-        <button type="button" className="learning-canvas__delete" onClick={deleteSelected} disabled={readOnly}>删除选中</button>
-      </div>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -302,7 +248,6 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
         <Controls showInteractive={false} />
       </ReactFlow>
       <div className="learning-canvas__tip">拖动卡片、从圆点连线；双击空白处可平移和缩放画布。</div>
-      <div className="learning-canvas__actions"><button type="button" onClick={autoLayout} disabled={readOnly}>⇢ 自动排版</button><button type="button" onClick={() => fitView({ padding: 0.22, duration: 250 })}>⌗ 整理视图</button></div>
     </div>
   </CanvasActionsContext.Provider>;
 }
