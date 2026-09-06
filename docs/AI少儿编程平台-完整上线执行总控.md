@@ -2038,3 +2038,12 @@ rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260
 - 浏览器访问 https://iicili.cyou/：React 应用正常挂载，显示 Inner Circle 首页、预约演示、查看课程、滚动提示及官网内容；无 console/page error。
 - scripts/verify-production-entrypoints.mjs --mode public：4/4 PASS。
 - scripts/p9-live-security-smoke.mjs：PASS。
+
+
+## 官网首页导航与登录入口修正（2026-09-06）
+
+- 需求修正：学生、老师、机构管理员登录后不自动进入 /learn；登录成功后回到官网首页 /。
+- 官网首页顶部导航固定显示：首页、学习上课、作品广场、自由画布、自由对话；点击学习上课后才进入 /learn。
+- 未登录首页右上角显示“登录”；登录后显示用户身份和“退出”。移动端登录入口放入菜单。
+- 实现 Commit：462a789。生产 Release：20260906T091153Z。
+- 验收：浏览器确认首页导航 href 为 /、/learn、/works、/free-canvas、/free-chat，登录按钮存在；公网四端入口 4/4 通过。
