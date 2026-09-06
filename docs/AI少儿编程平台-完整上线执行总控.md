@@ -2018,3 +2018,23 @@ rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260
 ### 生产安全冒烟（2026-09-06）
 - scripts/p9-live-security-smoke.mjs：全部通过。
 - 敏感路径均返回 404；/api/health 返回 200；HSTS、CSP、nosniff、X-Frame-Options、Referrer-Policy 全部存在。
+
+
+---
+
+## 官网启动白屏修复与热发布（2026-09-06）
+
+### 问题
+- 官网首页只显示 index.html 内置的粉色启动占位页，React 官网应用没有挂载。
+- 根因：apps/website/src/main.jsx 末尾缺少 createRoot(...).render(...) 入口调用；构建本身仍可成功，因此原有构建检查未发现。
+
+### 修复与发布
+- 修复 Commit：c4639ac（fix(website): mount React application entrypoint）
+- Release：20260906T085907Z
+- 发布前数据库备份：/srv/ai-kids-platform/production/backups/20260906T085939Z/platform.db
+- 服务重启后状态：active；/health：PASS
+
+### 验收
+- 浏览器访问 https://iicili.cyou/：React 应用正常挂载，显示 Inner Circle 首页、预约演示、查看课程、滚动提示及官网内容；无 console/page error。
+- scripts/verify-production-entrypoints.mjs --mode public：4/4 PASS。
+- scripts/p9-live-security-smoke.mjs：PASS。
