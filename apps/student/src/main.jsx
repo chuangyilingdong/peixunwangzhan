@@ -39,6 +39,7 @@ function Dashboard({ api }) {
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   const taskAction = (task) => {
+    if (task.deliveryMode === 'VIBECODING') return { label: 'VibeCoding 尚未接入', to: null, reason: 'VibeCoding 课堂尚未接入，暂不能进入。' };
     if (!task.canStart) return { label: '等待老师开课', to: null, reason: task.blockReason };
     if (task.continueProject) return { label: '继续创作', to: `/projects/${task.continueProject.id}/canvas`, reason: null };
     return { label: '开始创作', to: `/projects?lessonId=${task.lessonId}`, reason: null };
@@ -48,7 +49,7 @@ function Dashboard({ api }) {
     <div className="metrics"><MetricCard label="待完成课时" value={data.summary.pendingTaskCount} hint={`${data.summary.assignedLessonCount} 个课时中`} /><MetricCard label="进行中课堂" value={data.summary.activeLessonCount} hint={data.activeTasks.map((item) => item.lessonTitle).join('、') || '当前没有课堂'} tone="teal" /><MetricCard label="未读老师通知" value={data.summary.unreadNoticeCount} hint={`最近 ${data.notifications.length} 条消息`} tone="orange" /><MetricCard label="可继续草稿" value={data.summary.draftProjectCount} hint="按最近保存排序" tone="pink" /></div>
     {!data.canUseNow && <Notice tone="warning">{data.blockReason}</Notice>}
     <div className="split">
-      <Panel title="当前课堂">{data.activeTasks.length ? <div className="card-list">{data.activeTasks.map((task) => <article className="item-card" key={task.lessonId}><div className="row-actions"><Status value={task.status} /><span className="status success">进行中</span></div><h3>{task.lessonTitle}</h3><p>{task.courseTitle} · {task.className || '未分配班级'} · {task.teacherName || '待分配老师'}</p><p className="muted">开课时间：{formatDate(task.session?.startedAt)} · 支持能力：{Object.entries(task.session?.capabilities || {}).filter(([, enabled]) => enabled).map(([key]) => key.replace('allow', '').toUpperCase()).join(' / ') || '未开放'}</p><div className="row-actions">{(() => { const action = taskAction(task); return action.to ? <button className="primary-button" onClick={() => navigate(action.to)}>{action.label}</button> : <span className="muted">{action.reason}</span>; })()}</div></article>)}</div> : <Empty title="当前没有进行中的课堂" body={data.canUseNow ? '你的账号支持自主练习，可以从下方任务开始创作。' : '老师开启课堂后，这里会显示本节课的任务与可用能力。'} />}</Panel>
+      <Panel title="当前课堂">{data.activeTasks.length ? <div className="card-list">{data.activeTasks.map((task) => <article className="item-card" key={task.lessonId}><div className="row-actions"><Status value={task.status} /><span className="status success">进行中</span></div><h3>{task.lessonTitle}</h3><p>{task.courseTitle} · {task.className || '未分配班级'} · {task.teacherName || '待分配老师'}</p><p className="muted">课堂入口：{task.deliveryMode === 'VIBECODING' ? 'VibeCoding 课堂（尚未接入）' : '画布课堂'} · 开课时间：{formatDate(task.session?.startedAt)} · 支持能力：{Object.entries(task.session?.capabilities || {}).filter(([, enabled]) => enabled).map(([key]) => key.replace('allow', '').toUpperCase()).join(' / ') || '未开放'}</p><div className="row-actions">{(() => { const action = taskAction(task); return action.to ? <button className="primary-button" onClick={() => navigate(action.to)}>{action.label}</button> : <span className="muted">{action.reason}</span>; })()}</div></article>)}</div> : <Empty title="当前没有进行中的课堂" body={data.canUseNow ? '你的账号支持自主练习，可以从下方任务开始创作。' : '老师开启课堂后，这里会显示本节课的任务与可用能力。'} />}</Panel>
       <Panel title="学习进度">{learning.loading ? <Loading label="正在读取学习进度…" /> : learning.error ? <ErrorState error={learning.error} onRetry={learning.refresh} /> : <><div className="metrics"><MetricCard label="已完成课时" value={learning.data.summary.completed} hint={`共 ${learning.data.summary.total} 个课时`} tone="teal" /><MetricCard label="学习中" value={learning.data.summary.inProgress} hint="最近访问的课时" tone="orange" /><MetricCard label="待完成" value={learning.data.summary.pending} hint="完成后会自动记录" tone="pink" /></div>{learning.data.items.filter((item) => item.status !== 'COMPLETED').slice(0, 4).map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={item.status} /><span className="muted">{item.courseTitle}</span></div><h3>{item.title}</h3><p className="muted">{item.status === 'IN_PROGRESS' ? '继续学习本课时' : '尚未开始'}</p><button className="secondary-button" onClick={async () => { await api.post(`student/learning/lessons/${item.id}/start`); learning.refresh(); }}>开始学习</button></article>)}</>}</Panel>
             <Panel title="老师通知">{data.notifications.length ? <div className="card-list">{data.notifications.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={item.kind} />{item.pinned ? <span className="status warning">置顶</span> : null}{item.read ? <span className="muted">已读</span> : <span className="status success">未读</span>}</div><h3>{item.title}</h3><p>{item.body}</p><div className="row-actions"><span className="muted">{item.senderName} · {formatDate(item.publishedAt)}</span>{item.targetUrl ? <a className="secondary-button" href={item.targetUrl}>查看详情</a> : null}</div></article>)}</div> : <Empty title="暂无老师通知" body="老师或平台发布通知后，会出现在这里。" />}</Panel>
     </div>
@@ -66,16 +67,25 @@ function StudentClassroom({ api }) {
   const [busy, setBusy] = useState(null); const [message, setMessage] = useState('');
   if (classroom.loading) return <Loading label="正在读取今日课堂…" />;
   if (classroom.error) return <ErrorState error={classroom.error} onRetry={classroom.refresh} />;
-  const tasks = (classroom.data?.learningTasks || []).filter((item) => item.today !== false || item.canStart || item.status === 'ACTIVE');
-  async function enter(task) {
-    if (!task.canStart) return;
-    setBusy(task.lessonId); setMessage('');
+  const courses = classroom.data?.classroomCourses || [];
+  async function enter(lesson) {
+    if (lesson.deliveryMode === 'VIBECODING') { setMessage('VibeCoding 课堂尚未接入，暂不能进入。'); return; }
+    if (!lesson.canStart) return;
+    setBusy(lesson.id); setMessage('');
     try {
-      if (task.continueProject) navigate(`/projects/${task.continueProject.id}/canvas`);
-      else { const project = await api.post('student/projects', { title: `${task.lessonTitle || '今日课堂'} · 我的创作`, courseLessonId: task.lessonId, canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } } }); navigate(`/projects/${project.id}/canvas`); }
+      if (lesson.continueProject) navigate(`/projects/${lesson.continueProject.id}/canvas`);
+      else {
+        const project = await api.post('student/projects', {
+          title: `${lesson.title || '今日课堂'} · 我的创作`,
+          courseLessonId: lesson.id,
+          classId: lesson.classId,
+          canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
+        });
+        navigate(`/projects/${project.id}/canvas`);
+      }
     } catch (error) { setMessage(error.message || '进入课堂失败'); } finally { setBusy(null); }
   }
-  return <><PageHeader eyebrow="学生课堂" title="今日课堂" description="老师开始上课后，你就可以点击立即学习进入画布。" actions={<button className="secondary-button" onClick={classroom.refresh}>刷新课堂</button>} />{message && <Notice tone="danger">{message}</Notice>}<Panel title="今日课程">{tasks.length ? <div className="card-list">{tasks.map((task) => <article className="item-card" key={task.lessonId}><div className="row-actions"><h3>{task.lessonTitle || '今日课程'}</h3>{task.canStart ? <span className="status success">已开课</span> : <span className="status warning">等待老师开课</span>}</div><p>{task.courseTitle || '课程'} · {task.className || '我的班级'}</p><p className="muted">{task.canStart ? '老师已开始上课，现在可以进入画布学习。' : '老师点击开始上课后，这里会自动变为可点击状态。'}</p><button className={task.canStart ? 'primary-button' : 'secondary-button'} disabled={!task.canStart || busy === task.lessonId} onClick={() => enter(task)}>{busy === task.lessonId ? '正在进入…' : task.canStart ? '立即学习' : '等待老师开课'}</button></article>)}</div> : <Empty title="今天暂无课程" body="老师配置课程并开始课堂后，这里会显示今日学习内容。" />}</Panel></>;
+  return <><PageHeader eyebrow="学生课堂" title="今日课堂" description="所有课程包和课时都在这里，老师开启哪一节，就进入哪一节画布。" actions={<button className="secondary-button" onClick={classroom.refresh}>刷新课堂</button>} />{message && <Notice tone="danger">{message}</Notice>}<Panel title="课程包">{courses.length ? <div className="card-list">{courses.map((course) => <article className="item-card" key={course.id}><div className="row-actions"><h3>{course.title}</h3><span className={course.canStart ? 'status success' : 'status warning'}>{course.canStart ? '已开课' : '等待老师配置'}</span></div><p className="muted">{course.description || '课程包内的课时会在老师开启后进入画布课堂。'}</p><div className="card-list">{course.lessons.map((lesson) => { const isVibeCoding = lesson.deliveryMode === 'VIBECODING'; const buttonDisabled = !lesson.canStart || isVibeCoding || busy === lesson.id; return <article className="item-card" key={lesson.id}><div className="row-actions"><h3>第 {lesson.sort} 节 · {lesson.title}</h3>{isVibeCoding ? <span className="status warning">尚未接入</span> : lesson.canStart ? <span className="status success">已开课</span> : <span className="status warning">等待老师开课</span>}</div><p>{lesson.className || '未配置班级'} · {lesson.teacherName || '待分配老师'}</p><p className="muted">{lesson.blockReason || (lesson.canStart ? '画布课堂已开始，现在可以进入创作。' : '等待老师开始上课。')}{lesson.projectCount ? ` · 已有 ${lesson.projectCount} 个项目` : ''}{lesson.workCount ? ` · 已提交 ${lesson.workCount} 次` : ''}</p><button className={lesson.canStart && !isVibeCoding ? 'primary-button' : 'secondary-button'} disabled={buttonDisabled} onClick={() => enter(lesson)}>{busy === lesson.id ? '正在进入…' : isVibeCoding ? 'VibeCoding 尚未接入' : lesson.canStart ? '进入画布课堂' : '等待老师开课'}</button></article>; })}</div></article>)}</div> : <Empty title="暂无可用课程包" body="平台发布课程包后，这里会显示全部课程和课时。" />}</Panel></>;
 }
 
 function StudentTasks({ api }) {
@@ -328,6 +338,10 @@ function snapshotDiff(fromSnapshot, toSnapshot) {
   };
 }
 
+function canvasContentSignature(snapshot) {
+  return JSON.stringify({ nodes: snapshot?.nodes || [], edges: snapshot?.edges || [] });
+}
+
 function ChangeList({ title, items }) {
   if (!items?.length) return null;
   return <div className="item-card"><strong>{title}（{items.length}）</strong><ul className="course-lessons">{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul></div>;
@@ -368,7 +382,7 @@ function CanvasWorkspace({ api }) {
     setCanvasSnapshot(snapshot);
     setCanvasVersion(project.data.latestVersion);
     setDraft(snapshot);
-    setSavedSignature(JSON.stringify(snapshot));
+    setSavedSignature(canvasContentSignature(snapshot));
   }, [project.data?.id, project.data?.latestVersion]);
 
   useEffect(() => {
@@ -383,7 +397,7 @@ function CanvasWorkspace({ api }) {
   if (project.loading) return <Loading label="正在打开魔法画布…" />;
   if (project.error) return <ErrorState error={project.error} onRetry={project.refresh} />;
   const editable = project.data.status === 'DRAFT';
-  const changed = draft && JSON.stringify(draft) !== savedSignature;
+  const changed = draft && canvasContentSignature(draft) !== savedSignature;
   const historyItems = history.data?.items || [];
 
   async function save() {
@@ -394,7 +408,7 @@ function CanvasWorkspace({ api }) {
       const saved = await api.put(`student/projects/${project.data.id}`, { canvasSnapshot: draft, label });
       setCanvasSnapshot(saved.canvasSnapshot);
       setCanvasVersion(saved.latestVersion);
-      setSavedSignature(JSON.stringify(saved.canvasSnapshot));
+      setSavedSignature(canvasContentSignature(saved.canvasSnapshot));
       setDraft(saved.canvasSnapshot);
       setSaveLabel('画布编辑');
       setMessage(`已保存为版本 ${saved.latestVersion}：${label}。`);
@@ -415,7 +429,7 @@ function CanvasWorkspace({ api }) {
       });
       setCanvasSnapshot(saved.canvasSnapshot);
       setCanvasVersion(saved.latestVersion);
-      setSavedSignature(JSON.stringify(saved.canvasSnapshot));
+      setSavedSignature(canvasContentSignature(saved.canvasSnapshot));
       setDraft(saved.canvasSnapshot);
       setMessage(`已将版本 ${version} 恢复为新的版本 ${saved.latestVersion}。`);
       history.refresh();

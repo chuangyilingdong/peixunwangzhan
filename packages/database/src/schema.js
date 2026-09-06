@@ -321,6 +321,7 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   class_id TEXT NOT NULL,
   lesson_id TEXT,
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','ENDED')),
+  delivery_mode TEXT NOT NULL DEFAULT 'CANVAS',
   session_credit_cap INTEGER,
   consumed_credits_total INTEGER NOT NULL DEFAULT 0,
   ai_paused INTEGER NOT NULL DEFAULT 0,
@@ -1169,8 +1170,16 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_user_created ON generati
 
 // Lightweight forward-compatible migration for the class scheduling domain. Existing
 // local databases may have been created before makeup sessions were introduced.
-try { db.exec("ALTER TABLE class_sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT 'REGULAR'"); }
-catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try {
+  db.exec("ALTER TABLE class_sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT 'REGULAR'");
+} catch (error) {
+  if (!String(error?.message || '').includes('duplicate column name')) throw error;
+}
+try {
+  db.exec("ALTER TABLE class_sessions ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'CANVAS'");
+} catch (error) {
+  if (!String(error?.message || '').includes('duplicate column name')) throw error;
+}
 try { db.exec('ALTER TABLE billing_packages ADD COLUMN student_seats INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // Lightweight forward-compatible migration for credit accounting.

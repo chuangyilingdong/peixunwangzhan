@@ -101,8 +101,9 @@ export function getStudentCourses(user) {
       seriesById.set(item.id, series);
     }
     if (!series.classIds.includes(item.curriculum_class_id)) series.classIds.push(item.curriculum_class_id);
-    if (!series.lessons.some((lesson) => lesson.id === item.lesson_id)) {
-      series.lessons.push(normalizeLesson({
+    let lesson = series.lessons.find((candidate) => candidate.id === item.lesson_id);
+    if (!lesson) {
+      lesson = normalizeLesson({
         id: item.lesson_id,
         series_id: item.id,
         title: item.lesson_title,
@@ -115,8 +116,11 @@ export function getStudentCourses(user) {
         lesson_content: item.lesson_lesson_content,
         created_at: item.lesson_created_at,
         updated_at: item.lesson_updated_at,
-      }));
+      });
+      lesson.classIds = [];
+      series.lessons.push(lesson);
     }
+    if (!lesson.classIds.includes(item.curriculum_class_id)) lesson.classIds.push(item.curriculum_class_id);
   }
   return [...seriesById.values()];
 }
@@ -213,6 +217,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
         series.sort AS series_sort, series.status AS series_status,
         session.id AS active_session_id, session.class_id AS active_session_class_id,
         session.lesson_id AS active_session_lesson_id, session.status AS active_session_status,
+        session.delivery_mode AS active_session_delivery_mode,
         session.session_credit_cap AS active_session_credit_cap,
         session.consumed_credits_total AS active_session_consumed_credits_total,
         session.ai_paused AS active_session_ai_paused,
@@ -270,6 +275,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
   const activeSession = data.active_session_id ? normalizeSession({
     id: data.active_session_id, class_id: data.active_session_class_id,
     lesson_id: data.active_session_lesson_id, status: data.active_session_status,
+    delivery_mode: data.active_session_delivery_mode,
     session_credit_cap: data.active_session_credit_cap,
     consumed_credits_total: data.active_session_consumed_credits_total,
     ai_paused: data.active_session_ai_paused,
@@ -283,7 +289,8 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
     lesson_title: lesson.title,
   }) : null;
   const scope = rawValue(user, 'student_usage_scope', 'studentUsageScope');
-  const canUseNow = scope === 'HOME_PRACTICE' || Boolean(activeSession);
+  const isVibeCodingSession = activeSession?.deliveryMode === 'VIBECODING';
+  const canUseNow = scope === 'HOME_PRACTICE' || (Boolean(activeSession) && !isVibeCodingSession);
 
   return {
     class: normalizeClass(rawClass), rawClass, lesson,
@@ -294,8 +301,8 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
       sort: data.series_sort, status: data.series_status,
     }, { orgId }),
     activeSession, canUseNow,
-    blockCode: canUseNow ? null : 'CLASS_SESSION_REQUIRED',
-    blockReason: canUseNow ? null : '跟随课堂账号需要由教师先开启对应课时的课堂',
+    blockCode: canUseNow ? null : (isVibeCodingSession ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'CLASS_SESSION_REQUIRED'),
+    blockReason: canUseNow ? null : (isVibeCodingSession ? 'VibeCoding 课堂尚未接入，暂不能创建画布项目' : '跟随课堂账号需要由教师先开启对应课时的课堂'),
   };
 }
 
@@ -364,6 +371,7 @@ function studentLessonProgressMap(user) {
       item.draftProjects.push({
         id: project.id,
         title: project.title,
+        classId: project.class_id,
         status: project.status,
         latestVersion: Number(project.latest_version || 0),
         lastSavedAt: project.last_saved_at,
@@ -467,27 +475,37 @@ export function buildStudentDashboard(user) {
         projectCount: 0, draftProjects: [], workCount: 0, works: [], bestWorkStatus: null,
         feedbackCount: 0, unreadFeedbackCount: 0, unreadAnnotationCount: 0, overallUnreadCount: 0, lastActivityAt: null,
       };
-      const sessionClass = assignedClasses.find((item) => activeSessionByKey.has(`${item.id}:${lesson.id}`));
-      const session = sessionClass ? activeSessionByKey.get(`${sessionClass.id}:${lesson.id}`) : null;
+      const activeCandidates = assignedClasses
+        .map((item) => activeSessionByKey.get(`${item.id}:${lesson.id}`))
+        .filter(Boolean);
+      const session = activeCandidates.find((item) => item.deliveryMode === 'CANVAS') || activeCandidates[0] || null;
+      const sessionClass = session ? classById.get(session.classId) : null;
       const isToday = Boolean(session) || assignedClasses.some((item) => todayTaskKeys.has(`${item.id}:${lesson.id}`));
+      const canStart = session?.deliveryMode === 'CANVAS';
       const task = {
         lessonId: lesson.id,
         lessonTitle: lesson.title,
         lessonSummary: lesson.summary || '',
         courseId: course.id,
         courseTitle: course.title,
-        classId: primaryClass?.id || null,
-        className: primaryClass?.name || null,
-        teacherName: primaryClass?.teacherName || null,
+        classId: sessionClass?.id || primaryClass?.id || null,
+        className: sessionClass?.name || primaryClass?.name || null,
+        teacherName: sessionClass?.teacherName || primaryClass?.teacherName || null,
         status: progress.bestWorkStatus || (progress.projectCount > 0 ? 'IN_PROGRESS' : 'NOT_STARTED'),
         today: isToday,
         activeNow: Boolean(session),
-        canStart: Boolean(session),
-        blockReason: session ? null : '等待老师开始上课',
+        canStart,
+        deliveryMode: session?.deliveryMode || null,
+        blockReason: canStart
+          ? null
+          : session?.deliveryMode === 'VIBECODING'
+            ? 'VibeCoding 课堂尚未接入'
+            : '等待老师开始上课',
         session: session ? {
           id: session.id,
           classId: session.classId,
           startedAt: session.startedAt,
+          deliveryMode: session.deliveryMode,
           capabilities: session.capabilities,
         } : null,
         progress: {
@@ -530,6 +548,81 @@ export function buildStudentDashboard(user) {
     };
   });
 
+  const assignedLessonById = new Map();
+  for (const course of context.courses) {
+    for (const lesson of course.lessons || []) {
+      const existing = assignedLessonById.get(lesson.id);
+      if (!existing) assignedLessonById.set(lesson.id, lesson);
+      else {
+        existing.classIds = [...new Set([...(existing.classIds || []), ...(lesson.classIds || [])])];
+      }
+    }
+  }
+  const classroomCourses = getStudentAccessibleCourses(user).map((course) => {
+    const lessons = (course.lessons || []).map((lesson) => {
+      const assignedLesson = assignedLessonById.get(lesson.id);
+      const assignedClasses = (assignedLesson?.classIds || [])
+        .map((classId) => classById.get(classId))
+        .filter(Boolean);
+      const activeCandidates = assignedClasses
+        .map((classItem) => activeSessionByKey.get(`${classItem.id}:${lesson.id}`))
+        .filter(Boolean);
+      const session = activeCandidates.find((item) => item.deliveryMode === 'CANVAS') || activeCandidates[0] || null;
+      const sessionClass = session ? classById.get(session.classId) : null;
+      const progress = progressByLesson.get(lesson.id) || {
+        projectCount: 0,
+        draftProjects: [],
+        workCount: 0,
+        works: [],
+        bestWorkStatus: null,
+        unreadFeedbackCount: 0,
+        lastActivityAt: null,
+      };
+      const canStart = session?.deliveryMode === 'CANVAS';
+      const classId = sessionClass?.id || assignedClasses[0]?.id || null;
+      const continueProject = progress.draftProjects.find((project) => project.classId === classId)
+        || progress.draftProjects[0]
+        || null;
+      return {
+        ...lesson,
+        classId,
+        className: sessionClass?.name || assignedClasses[0]?.name || null,
+        teacherName: sessionClass?.teacherName || assignedClasses[0]?.teacherName || null,
+        assigned: assignedClasses.length > 0,
+        activeNow: Boolean(session),
+        canStart,
+        deliveryMode: session?.deliveryMode || null,
+        blockReason: canStart
+          ? null
+          : session?.deliveryMode === 'VIBECODING'
+            ? 'VibeCoding 课堂尚未接入'
+            : assignedClasses.length
+              ? '等待老师开始上课'
+              : '老师尚未把本课时加入你的班级课程表',
+        session: session ? {
+          id: session.id,
+          classId: session.classId,
+          startedAt: session.startedAt,
+          deliveryMode: session.deliveryMode,
+          capabilities: session.capabilities,
+        } : null,
+        status: progress.bestWorkStatus || (progress.projectCount > 0 ? 'IN_PROGRESS' : 'NOT_STARTED'),
+        projectCount: progress.projectCount,
+        draftCount: progress.draftProjects.length,
+        workCount: progress.workCount,
+        workStatus: progress.bestWorkStatus,
+        lastActivityAt: progress.lastActivityAt,
+        continueProject,
+      };
+    });
+    return {
+      ...course,
+      classroomAvailable: lessons.some((lesson) => lesson.canStart),
+      canStart: lessons.some((lesson) => lesson.canStart),
+      lessons,
+    };
+  });
+
   const unfinishedTasks = allLessonTasks.filter((item) => item.status !== 'PUBLISHED' && item.status !== 'APPROVED');
   const pendingFeedbackTasks = allLessonTasks.filter((item) => item.progress.unreadFeedbackCount > 0);
   const taskPriority = { REJECTED: 0, IN_PROGRESS: 1, NOT_STARTED: 2, PENDING: 3 };
@@ -568,9 +661,13 @@ export function buildStudentDashboard(user) {
   return {
     ...context,
     courses,
+    classroomCourses,
     summary: {
       classCount: context.classes.length,
       courseCount: courses.length,
+      classroomCourseCount: classroomCourses.length,
+      classroomLessonCount: classroomCourses.reduce((total, course) => total + course.lessons.length, 0),
+      classroomAvailableLessonCount: classroomCourses.reduce((total, course) => total + course.lessons.filter((lesson) => lesson.canStart).length, 0),
       assignedLessonCount: allLessonTasks.length,
       activeLessonCount: allLessonTasks.filter((item) => item.activeNow).length,
       startedLessonCount: allLessonTasks.filter((item) => item.progress.projectCount > 0).length,
