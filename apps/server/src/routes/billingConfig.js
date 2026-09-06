@@ -37,8 +37,6 @@ function normalizeProviderPolicy(value) {
     model,
     displayName,
     allowStudentExternalContent,
-    platformPerCallBudget: Number(parsed.platformPerCallBudget ?? 0),
-    platformDailyBudget: Number(parsed.platformDailyBudget ?? 0),
     updatedAt: value?.updated_at || null,
   };
 }
@@ -52,31 +50,11 @@ export function getAiProviderPolicy() {
 }
 
 export function getOrgAiBudget(orgId) {
-  const value = orgId ? row('SELECT * FROM org_ai_budgets WHERE org_id=?', [orgId]) : null;
-  return {
-    orgId: orgId || null,
-    perCallBudget: Number(value?.per_call_budget || 0),
-    dailyBudget: Number(value?.daily_budget || 0),
-    reason: value?.reason || '',
-    updatedBy: value?.updated_by || value?.created_by || null,
-    createdAt: value?.created_at || null,
-    updatedAt: value?.updated_at || null,
-  };
+  const account = orgId ? row('SELECT * FROM org_billing_accounts WHERE org_id=?', [orgId]) : null;
+  return { orgId: orgId || null, creditBalance: Number(account?.credit_balance || 0), totalCreditsIn: Number(account?.total_credits_in || 0), totalCreditsSpent: Number(account?.total_credits_spent || 0) };
 }
-
-export function assertOrgAiBudget(budget, usedCredits, { dailyUsed = 0 } = {}) {
-  const perCall = Number(budget?.perCallBudget || budget?.per_call_budget || 0);
-  const daily = Number(budget?.dailyBudget || budget?.daily_budget || 0);
-  if (perCall > 0 && usedCredits > perCall) throw errors.forbidden('单次 AI 调用超过机构预算上限', 'AI_ORG_PER_CALL_BUDGET_EXCEEDED');
-  if (daily > 0 && Number(dailyUsed) + usedCredits > daily) throw errors.forbidden('累计 AI 调用超过机构每日预算上限', 'AI_ORG_DAILY_BUDGET_EXCEEDED');
-}
-
-export function assertAiBudgets(policy, usedCredits, { dailyUsed = 0 } = {}) {
-  const perCall = Number(policy.platformPerCallBudget || 0);
-  const daily = Number(policy.platformDailyBudget || 0);
-  if (perCall > 0 && usedCredits > perCall) throw errors.forbidden('单次 AI 调用超过平台预算上限', 'AI_PLATFORM_PER_CALL_BUDGET_EXCEEDED');
-  if (daily > 0 && Number(dailyUsed) + usedCredits > daily) throw errors.forbidden('累计 AI 调用超过平台每日预算上限', 'AI_PLATFORM_DAILY_BUDGET_EXCEEDED');
-}
+export function assertOrgAiBudget() {}
+export function assertAiBudgets() {}
 
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -281,15 +259,11 @@ export async function handleAdminBillingConfig(ctx) {
     const registration = validateProviderRegistration({ provider, model, endpoint });
     if (!registration.valid) throw errors.badRequest('AI 供应商配置不完整：' + registration.reasons.join('；'), 'AI_PROVIDER_CONFIG_INVALID');
     if (providerDefinition(provider)?.kind === 'CUSTOM' && displayName.length < 2) throw errors.badRequest('自定义供应商名称必填', 'CUSTOM_PROVIDER_NAME_REQUIRED');
-    const platformPerCallBudget = body.platformPerCallBudget === undefined ? before.platformPerCallBudget : integer(body.platformPerCallBudget, '平台单次预算', { min: 0, max: BUDGET_MAX });
-    const platformDailyBudget = body.platformDailyBudget === undefined ? before.platformDailyBudget : integer(body.platformDailyBudget, '平台每日预算', { min: 0, max: BUDGET_MAX });
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
-    if (platformDailyBudget > 0 && platformPerCallBudget > platformDailyBudget) throw errors.badRequest('平台单次预算不能超过每日预算', 'AI_BUDGET_RANGE_INVALID');
     const after = {
       provider, model, endpoint,
       displayName: provider === 'custom' ? displayName : '',
       allowStudentExternalContent,
-      platformPerCallBudget, platformDailyBudget,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });
     q('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify(after), nowIso()]);
@@ -445,31 +419,9 @@ export async function handleOrgBillingConfig(ctx) {
     return { items: getOrgOverrides(auth.user.orgId) };
   }
   if (part === '/billing-config/ai-budget' && method === 'GET') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看 AI 预算', 'ORG_ADMIN_REQUIRED');
-    const platformPolicy = getAiProviderPolicy();
-    return { item: getOrgAiBudget(auth.user.orgId), platformPolicy: { provider: platformPolicy.provider, allowStudentExternalContent: platformPolicy.allowStudentExternalContent } };
-  }
-  if (part === '/billing-config/ai-budget' && method === 'PUT') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可设置 AI 预算', 'ORG_ADMIN_REQUIRED');
-    const body = ctx.body || {};
-    const before = getOrgAiBudget(auth.user.orgId);
-    const perCall = body.perCallBudget === undefined ? before.perCallBudget : integer(body.perCallBudget, '机构单次预算', { min: 0, max: BUDGET_MAX });
-    const daily = body.dailyBudget === undefined ? before.dailyBudget : integer(body.dailyBudget, '机构每日预算', { min: 0, max: BUDGET_MAX });
-    if (daily > 0 && perCall > daily) throw errors.badRequest('机构单次预算不能超过每日预算', 'AI_BUDGET_RANGE_INVALID');
-    const reason = String(body.reason || '').trim().slice(0, 500);
-    const now = nowIso();
-    const existing = row('SELECT id FROM org_ai_budgets WHERE org_id=?', [auth.user.orgId]);
-    if (existing) {
-      if (perCall !== before.perCallBudget || daily !== before.dailyBudget) logChange('AI_PROVIDER_POLICY', existing.id, 'orgAiBudget', JSON.stringify(before), JSON.stringify({ perCallBudget: perCall, dailyBudget: daily }), auth.user.id, reason);
-      q('UPDATE org_ai_budgets SET per_call_budget=?,daily_budget=?,reason=?,updated_by=?,updated_at=? WHERE org_id=?', [perCall, daily, reason, auth.user.id, now, auth.user.orgId]);
-      audit(ctx, 'ORG_AI_BUDGET_UPDATE', 'ORG_AI_BUDGET', auth.user.orgId, { before }, { perCallBudget: perCall, dailyBudget: daily }, { orgId: auth.user.orgId, reason });
-    } else {
-      const recordId = `orgaibudget_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
-      q('INSERT INTO org_ai_budgets(id,org_id,per_call_budget,daily_budget,reason,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [recordId, auth.user.orgId, perCall, daily, reason, auth.user.id, now, now]);
-      logChange('AI_PROVIDER_POLICY', recordId, 'orgAiBudget', '', JSON.stringify({ perCallBudget: perCall, dailyBudget: daily }), auth.user.id, reason);
-      audit(ctx, 'ORG_AI_BUDGET_CREATE', 'ORG_AI_BUDGET', recordId, null, { perCallBudget: perCall, dailyBudget: daily }, { orgId: auth.user.orgId, reason });
-    }
-    return { item: getOrgAiBudget(auth.user.orgId) };
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看机构积分', 'ORG_ADMIN_REQUIRED');
+    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [auth.user.orgId]);
+    return { item: { orgId: auth.user.orgId, creditBalance: Number(account?.credit_balance || 0), totalCreditsIn: Number(account?.total_credits_in || 0), totalCreditsSpent: Number(account?.total_credits_spent || 0) } };
   }
   if (part === '/billing-config/org-overrides' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可设置能力覆盖', 'ORG_ADMIN_REQUIRED');

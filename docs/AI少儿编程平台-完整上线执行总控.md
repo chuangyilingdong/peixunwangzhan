@@ -1895,3 +1895,10 @@ node .\p3-api-integration.mjs
 - 发布前备份：`/srv/ai-kids-platform/production/backups/20260905T163239Z/platform.db`；未重新 seed，未修改生产业务数据。
 - 验证：生产 `/health` 和公网 `/`、`/admin/`、`/org/`、`/student/`、`/api/health` 均成功；`learning-platform-production` 为 `active/running`，`NRestarts=0`，`ExecMainStatus=0`。
 - 生产 `AI_PROVIDER=local-mock` 未改变；真实 adapter 已发布但没有外部 AI 请求或费用。待用户在 `/admin/` 完成策略、在服务器 `/etc/ai-kids-platform/production.env` 完成真实配置并重启后，才会实际调用外部 AI。
+
+## 2026-09-06 用户决策变更：机构充值积分与成员 AI 上限
+
+- 平台预算、机构单次预算、机构每日预算不再作为 AI 生成前置条件；历史实现保留在旧库结构中但不再读写、不再展示。
+- AI 生成统一消耗 `org_billing_accounts.credit_balance`。余额不足时机构内所有账号均无法生成；成功才扣积分，失败/取消不扣。
+- 教师与学生支持 `users.ai_credit_limit` / `users.ai_credits_used`：留空为不限，0 为禁止，正数为累计上限；机构管理员可在成员管理配置。
+- 本次变更不切换生产 AI，生产仍保持 `AI_PROVIDER=local-mock`，真实供应商需另行配置服务器密钥并受控切换。

@@ -335,3 +335,7 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 - `TEXT`、`IMAGE`、`DUBBING` 使用常见兼容路径；`MUSIC`、`VIDEO`、`PODCAST` 的接口没有统一标准，供应商实际路径必须通过服务器环境变量 `AI_PROVIDER_MODALITY_ENDPOINTS` 配置。未配置或供应商不提供对应接口时，调用明确失败，不回退 `local-mock`，不创建假资产。
 - 真实配置位置：`/etc/ai-kids-platform/production.env`。填写 `AI_PROVIDER=openai-compatible` 或 `custom`、`AI_PROVIDER_MODEL`、`AI_PROVIDER_ENDPOINT`、`AI_PROVIDER_API_KEY`；必要时填写模态 endpoint map、`AI_PROVIDER_VOICE` 和轮询间隔，保存后重启服务。
 - 验证：`p6-a01-openai-compatible-adapter` `23/23`；四端生产构建通过。当前生产仍保持 `AI_PROVIDER=local-mock`，本次代码发布不产生外部 AI 费用。
+
+## 2026-09-06 计费口径更新
+
+AI 不再使用平台预算或机构预算。机构充值后获得共享积分，AI 成功调用从机构积分账户原子扣减；余额为 0 时机构、教师、学生均不能生成。机构管理员可在成员管理中为教师和学生设置累计 AI 积分上限，留空表示不限。API Key 仍只能放服务器受限环境变量，不得填写网页。

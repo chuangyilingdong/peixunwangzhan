@@ -1333,3 +1333,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS feature_flags (
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_feature_flags_updated ON feature_flags(updated_at DESC)');
 try { db.exec('ALTER TABLE feature_flags ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1'); } catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// P6-A01 member AI credit caps; NULL means unlimited subject to organization balance.
+try { db.exec('ALTER TABLE users ADD COLUMN ai_credit_limit INTEGER'); } catch (_) {}
+try { db.exec('ALTER TABLE users ADD COLUMN ai_credits_used INTEGER NOT NULL DEFAULT 0'); } catch (_) {}

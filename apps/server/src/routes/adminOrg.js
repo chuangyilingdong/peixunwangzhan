@@ -280,6 +280,7 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
   const phone = String(item.phone || '').trim();
   const errorsForRow = [];
   let monthlyCreditAllowance = 0;
+  let aiCreditLimit = null;
   if (!ORG_MEMBER_ROLES.has(role)) errorsForRow.push('角色必须是 TEACHER 或 STUDENT');
   if (!login) errorsForRow.push('登录名不能为空');
   if (login.length > 100) errorsForRow.push('登录名不能超过 100 个字符');
@@ -295,6 +296,7 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
   }
   if (role === 'STUDENT' && item.studentUsageScope !== undefined && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(item.studentUsageScope)) errorsForRow.push('学员额度范围无效');
   if (role === 'STUDENT') { try { monthlyCreditAllowance = integer(item.monthlyCreditAllowance, '月度积分'); } catch (error) { errorsForRow.push(error.message); } }
+  if (item.aiCreditLimit !== undefined && item.aiCreditLimit !== null && item.aiCreditLimit !== '') { try { aiCreditLimit = integer(item.aiCreditLimit, 'AI 积分上限', { max: 100000000 }); } catch (error) { errorsForRow.push(error.message); } }
   if (item.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [item.billingPackageId, currentOrgId])) errorsForRow.push('套餐不属于当前机构');
   if (Array.isArray(item.classIds)) {
     item.classIds.map(String).filter((classId, position, values) => values.indexOf(classId) === position).forEach((classId) => {
@@ -314,6 +316,7 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
       studentUsageScope: role === 'STUDENT' ? (item.studentUsageScope || 'HOME_PRACTICE') : null,
       billingPackageId: role === 'STUDENT' ? (item.billingPackageId || null) : null,
       monthlyCreditAllowance,
+      aiCreditLimit,
       classIds: Array.isArray(item.classIds) ? [...new Set(item.classIds.map(String))] : [],
     },
   };
@@ -331,7 +334,7 @@ function previewImport(body, currentOrgId) {
 
 function createMember(currentOrgId, value) {
   const now = nowIso(); const userId = id('user');
-  q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,monthly_credit_allowance,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, value.monthlyCreditAllowance, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
+  q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,monthly_credit_allowance,ai_credit_limit,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, value.monthlyCreditAllowance, value.aiCreditLimit, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
   value.classIds.forEach((classId) => {
     const cls = row('SELECT id FROM classes WHERE id=? AND org_id=? AND status=\'ACTIVE\'', [classId, currentOrgId]);
     if (!cls) throw errors.badRequest(`第 ${value.login} 条记录包含不存在或已归档班级`, 'INVALID_CLASS');
@@ -2177,6 +2180,7 @@ export async function handleOrg(ctx) {
       studentUsageScope: role === 'STUDENT' ? (body.studentUsageScope || 'HOME_PRACTICE') : null,
       billingPackageId: role === 'STUDENT' ? (body.billingPackageId || null) : null,
       monthlyCreditAllowance: role === 'STUDENT' ? integer(body.monthlyCreditAllowance, '月度积分') : 0,
+      aiCreditLimit: body.aiCreditLimit === undefined || body.aiCreditLimit === null || body.aiCreditLimit === '' ? null : integer(body.aiCreditLimit, 'AI 积分上限', { max: 100000000 }),
       classIds,
     }));
     audit(ctx, 'USER_CREATE', 'USER', created.id, null, { role, login, classIds });
@@ -2201,7 +2205,7 @@ export async function handleOrg(ctx) {
     const usageScope = body.studentUsageScope === undefined ? target.student_usage_scope : body.studentUsageScope; if (usageScope && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(usageScope)) throw errors.badRequest('学员额度范围无效', 'INVALID_USAGE_SCOPE');
     const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);
     const now = nowIso();
-    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,student_usage_scope=?,billing_package_id=?,monthly_credit_allowance=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, usageScope, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, body.monthlyCreditAllowance === undefined ? target.monthly_credit_allowance : integer(body.monthlyCreditAllowance, '月度积分'), now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
+    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,student_usage_scope=?,billing_package_id=?,monthly_credit_allowance=?,ai_credit_limit=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, usageScope, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, body.monthlyCreditAllowance === undefined ? target.monthly_credit_allowance : integer(body.monthlyCreditAllowance, '月度积分'), body.aiCreditLimit === undefined || body.aiCreditLimit === null || body.aiCreditLimit === '' ? target.ai_credit_limit : integer(body.aiCreditLimit, 'AI 积分上限', { max: 100000000 }), now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
     audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), { ...body, status: nextStatus }); return orgMemberRow(row('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
   }
   let memberClassesMatch = part.match(/^\/users\/([^/]+)\/classes$/);

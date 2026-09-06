@@ -2,7 +2,7 @@ import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, q, req
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError } from '../services/providerContract.js';
-import { assertAiBudgets, assertOrgAiBudget, getAiProviderPolicy, getOrgAiBudget } from './billingConfig.js';
+import { getAiProviderPolicy } from './billingConfig.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { assertTransition } from '../services/domainState.js';
@@ -176,13 +176,15 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     const pkg = packageForUser(user, auth.user.orgId);
     assertCapability(modality, freshContext.activeSession, pkg);
     assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: auth.user.orgId, userId: auth.user.id, credits: 1 });
+    const aiLimit = user.ai_credit_limit == null ? null : Number(user.ai_credit_limit);
+    if (aiLimit !== null && Number(user.ai_credits_used || 0) + 1 > aiLimit) throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
     const allowance = Number(user.monthly_credit_allowance || 0) + Number(user.monthly_bonus_credits || 0) + Number(user.month_period_boost_credits || 0);
     if (Number(user.used_credits_this_period || 0) + 1 > allowance) throw errors.forbidden('个人额度不足', 'STUDENT_CREDIT_LIMIT');
     chargeCreditsInTransaction({
       orgId: auth.user.orgId, credits: 1, type: `AI_GENERATE_${modality}`, modality, model: provider.model,
       userId: auth.user.id, sessionId: freshContext.activeSession?.id || null, projectId: project.id,
     });
-    q('UPDATE users SET used_credits_this_period=used_credits_this_period+1,magic_stones=MAX(0,magic_stones-1),updated_at=? WHERE id=? AND org_id=?',
+    q('UPDATE users SET used_credits_this_period=used_credits_this_period+1,ai_credits_used=ai_credits_used+1,magic_stones=MAX(0,magic_stones-1),updated_at=? WHERE id=? AND org_id=?',
       [nowIso(), auth.user.id, auth.user.orgId]);
     q(`INSERT INTO usage_records(
          id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,pricing_snapshot,created_at
@@ -222,12 +224,6 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-  const orgBudget = getOrgAiBudget(auth.user.orgId);
-  const usedCredits = 1;
-  const platformDailyUsed = Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE status='SUCCEEDED' AND date(created_at)=date('now')")?.n || 0);
-  const orgDailyUsed = Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE org_id=? AND status='SUCCEEDED' AND date(created_at)=date('now')", [auth.user.orgId])?.n || 0);
-  assertAiBudgets(policy, usedCredits, { dailyUsed: platformDailyUsed });
-  assertOrgAiBudget(orgBudget, usedCredits, { dailyUsed: orgDailyUsed });
   const context = resolveProjectUsageContext(auth.rawUser, project);
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext });
@@ -487,9 +483,6 @@ export async function handleAiGeneration(ctx) {
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    const orgBudget = getOrgAiBudget(auth.user.orgId);
-    assertAiBudgets(policy, 1, { dailyUsed: Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE status='SUCCEEDED' AND date(created_at)=date('now')")?.n || 0) });
-    assertOrgAiBudget(orgBudget, 1, { dailyUsed: Number(row("SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE org_id=? AND status='SUCCEEDED' AND date(created_at)=date('now')", [auth.user.orgId])?.n || 0) });
     const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false });
     enqueuePersistedJob(jobId);

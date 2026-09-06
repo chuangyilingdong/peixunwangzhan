@@ -137,6 +137,11 @@ export async function handleAi(ctx) {
       assertCapability(modality, currentSession, pkg);
       assertSessionAiControls({ modality, session: currentSession, orgId, userId, credits });
 
+      const aiLimit = currentUser.ai_credit_limit == null ? null : Number(currentUser.ai_credit_limit);
+      if (aiLimit !== null && Number(currentUser.ai_credits_used || 0) + credits > aiLimit) {
+        throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
+      }
+
       const allowance = Number(currentUser.monthly_credit_allowance || 0)
         + Number(currentUser.monthly_bonus_credits || 0)
         + Number(currentUser.month_period_boost_credits || 0);
@@ -163,9 +168,9 @@ export async function handleAi(ctx) {
       }
       q(
         `UPDATE users
-         SET used_credits_this_period=used_credits_this_period+?, magic_stones=MAX(0, magic_stones-?), updated_at=?
+         SET used_credits_this_period=used_credits_this_period+?, ai_credits_used=ai_credits_used+?, magic_stones=MAX(0, magic_stones-?), updated_at=?
          WHERE id=? AND org_id=?`,
-        [credits, credits, nowIso(), userId, orgId],
+        [credits, credits, credits, nowIso(), userId, orgId],
       );
       recordUsage({ orgId, userId, projectId, sessionId: currentSession?.id || null, modality, credits, status: 'SUCCESS' });
     });

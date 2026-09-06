@@ -228,7 +228,7 @@ function Members({ api, user }) {
   const classes = useData(() => api.get('org/classes'), [api]);
   const [roleFilter, setRoleFilter] = useState('');
   const [search, setSearch] = useState('');
-  const [form, setForm] = useState({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' });
+  const [form, setForm] = useState({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '', aiCreditLimit: '' });
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState(null);
   const [editing, setEditing] = useState('');
@@ -255,11 +255,11 @@ function Members({ api, user }) {
   }
   async function create(event) {
     event.preventDefault(); setBusy(true); setMessage('');
-    try { await api.post('org/users', form); setForm({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' }); setMessage('账号已创建'); await members.refresh(); }
+    try { await api.post('org/users', form); setForm({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '', aiCreditLimit: '' }); setMessage('账号已创建'); await members.refresh(); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
   function startEdit(item) {
-    setEditing(item.id); setEditDraft({ id: item.id, displayName: item.displayName, phone: item.phone || '', status: item.status, permissions: item.permissions || [] });
+    setEditing(item.id); setEditDraft({ id: item.id, displayName: item.displayName, phone: item.phone || '', status: item.status, permissions: item.permissions || [], aiCreditLimit: item.aiCreditLimit ?? '' });
   }
   async function saveEdit(event) {
     event.preventDefault(); setBusy(true); setMessage('');
@@ -309,6 +309,7 @@ function Members({ api, user }) {
           <label>姓名<input value={form.displayName} required onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
           <label>初始密码<input type="password" minLength="6" value={form.password} required onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
           <label>手机号（可选）<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
+          <label>AI 积分使用上限（留空不限）<input type="number" min="0" value={form.aiCreditLimit} onChange={(event) => setForm({ ...form, aiCreditLimit: event.target.value })} /></label>
           <button className="primary-button" disabled={busy}>创建账号</button>
         </form>
       </Panel>
@@ -325,9 +326,9 @@ function Members({ api, user }) {
         const draft = editing === item.id ? editDraft : null;
         const assignedIds = (item.classes || []).filter((entry) => entry.role === item.role).map((entry) => entry.id);
         return <tr key={item.id}>
-          <td>{draft ? <input value={draft.displayName} onChange={(event) => setEditDraft({ ...draft, displayName: event.target.value })} /> : item.displayName}</td>
+          <td>{draft ? <><input value={draft.displayName} onChange={(event) => setEditDraft({ ...draft, displayName: event.target.value })} /><input type="number" min="0" placeholder="AI上限" value={draft.aiCreditLimit} onChange={(event) => setEditDraft({ ...draft, aiCreditLimit: event.target.value })} /></> : item.displayName}</td>
           <td>{item.role}</td><td>{item.login}</td><td>{item.classes?.map((entry) => entry.name).join('、') || '未分配'}</td>
-          <td>{item.role === 'STUDENT' ? formatCredits(item.creditsRemaining) : '—'}</td>
+          <td>{item.role === 'STUDENT' ? formatCredits(item.creditsRemaining) : '—'}<div className="muted">AI：{item.aiCreditLimit == null ? '不限' : `${item.aiCreditsUsed || 0}/${item.aiCreditLimit}`}</div></td>
           <td>{draft ? <select value={draft.status} onChange={(event) => setEditDraft({ ...draft, status: event.target.value })}><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select> : <Status value={item.status} />}</td>
           <td><div className="row-actions">{isAdmin && <>{draft ? <><button className="text-button" disabled={busy} onClick={saveEdit}>保存</button><button className="text-button" onClick={() => { setEditing(''); setEditDraft(null); }}>取消</button></> : <button className="text-button" onClick={() => startEdit(item)}>编辑</button>}<button className="text-button" disabled={busy} onClick={() => setStatus(item, item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE')}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button><button className="text-button" disabled={busy} onClick={() => resetPassword(item)}>重置密码</button>{item.role === 'TEACHER' && <label className="muted">授权班级<select multiple value={assignedIds} onChange={(event) => saveClasses(item, [...event.target.selectedOptions].map((option) => option.value))}>{classItems.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>}{item.role === 'STUDENT' && <label className="muted">调班<select multiple value={assignedIds} onChange={(event) => saveClasses(item, [...event.target.selectedOptions].map((option) => option.value))}>{classItems.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>}</>}</div></td>
         </tr>;
@@ -786,28 +787,12 @@ function billingCsvValue(value) {
 }
 function AiBudgetPanel({ api }) {
   const config = useData(() => api.get('org/billing-config/ai-budget'), [api]);
-  const [form, setForm] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
-  const item = config.data?.item;
-  useEffect(() => {
-    if (item) setForm({ perCallBudget: String(item.perCallBudget || 0), dailyBudget: String(item.dailyBudget || 0), reason: '' });
-  }, [item]);
-  async function save(event) {
-    event.preventDefault(); setBusy(true); setMessage('');
-    try { await api.put('org/billing-config/ai-budget', form); setMessage('机构 AI 预算已保存。学生内容外发由平台端统一控制。'); config.refresh(); }
-    catch (error) { setMessage(error.message || '保存失败'); } finally { setBusy(false); }
-  }
-  if (config.loading) return <Panel title="AI 预算"><Loading label="正在读取机构 AI 预算…" /></Panel>;
-  if (config.error) return <Panel title="AI 预算"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
-  if (!form) return null;
-  return <Panel title="AI 预算">
-    <Notice tone="warning">学生创作内容外发由平台端统一控制，当前状态：{config.data?.platformPolicy?.allowStudentExternalContent ? '已开启' : '已关闭'}。0 表示不启用对应上限；真实调用前还必须满足平台预算。</Notice>
-    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
-    <form onSubmit={save} className="form-grid">
-      <label>机构单次预算<input type="number" min="0" step="1" value={form.perCallBudget} onChange={(event) => setForm({ ...form, perCallBudget: event.target.value })} required /></label>
-      <label>机构每日预算<input type="number" min="0" step="1" value={form.dailyBudget} onChange={(event) => setForm({ ...form, dailyBudget: event.target.value })} required /></label>
-      <label>变更原因<input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} maxLength={500} placeholder="记录业务依据" /></label>
-      <div className="row-actions"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存机构预算'}</button></div>
-    </form>
+  if (config.loading) return <Panel title="机构 AI 积分"><Loading label="正在读取机构积分…" /></Panel>;
+  if (config.error) return <Panel title="机构 AI 积分"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
+  const item = config.data?.item || {};
+  return <Panel title="机构 AI 积分">
+    <Notice tone={Number(item.creditBalance || 0) > 0 ? 'info' : 'warning'}>机构通过充值获得积分。当前可用积分：<strong>{Number(item.creditBalance || 0)}</strong>；余额为 0 时，机构、教师和学生均不能生成 AI 内容。教师和学生的个人 AI 使用上限请在成员管理中设置。</Notice>
+    <div className="muted">累计充值：{Number(item.totalCreditsIn || 0)}　累计消耗：{Number(item.totalCreditsSpent || 0)}</div>
   </Panel>;
 }
 
