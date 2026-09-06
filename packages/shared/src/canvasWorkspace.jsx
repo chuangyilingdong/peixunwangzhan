@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
+import { formatDate } from './auth.js';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 
 // Signatures and helpers (copied from apps/student/src/main.jsx)
@@ -310,3 +311,4 @@ export function CanvasWorkspace({ api, ...props }) {
     {editable && <Notice>提示：恢复不会覆盖旧版本，而是会将选中的历史画布另存为一个新版本。保存画布后，再回到“我的项目”提交作品；作品会使用最新保存的画布版本。</Notice>}
   </>;
 }
+
