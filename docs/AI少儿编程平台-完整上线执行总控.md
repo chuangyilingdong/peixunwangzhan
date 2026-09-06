@@ -1902,3 +1902,10 @@ node .\p3-api-integration.mjs
 - AI 生成统一消耗 `org_billing_accounts.credit_balance`。余额不足时机构内所有账号均无法生成；成功才扣积分，失败/取消不扣。
 - 教师与学生支持 `users.ai_credit_limit` / `users.ai_credits_used`：留空为不限，0 为禁止，正数为累计上限；机构管理员可在成员管理配置。
 - 本次变更不切换生产 AI，生产仍保持 `AI_PROVIDER=local-mock`，真实供应商需另行配置服务器密钥并受控切换。
+
+## 2026-09-06 P6-A01 供应商配置增强
+
+- 平台端供应商配置新增备注、官网链接、Base URL / 完整 URL 模式、上游协议（Chat / Responses / Anthropic Messages）及模型映射数据结构。
+- 新增 `POST /api/admin/billing-config/ai-provider/models`：由服务端使用受限环境变量中的 `AI_PROVIDER_API_KEY` 请求上游 `/models`，仅返回模型 ID、显示名、归属方和上下文窗口等安全字段；不会返回或记录 API Key。
+- 管理员可在供应商配置页面从上游获取模型列表并选择默认模型，也可手动填写模型 ID。
+- 当前已完成的是通用 OpenAI-compatible / custom 的模型发现与配置界面；阿里云、火山、智谱仍需按其官方协议分别接入原生 adapter，不能以通用接口冒充原生完成。
