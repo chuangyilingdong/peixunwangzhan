@@ -356,9 +356,6 @@ function App(){
     removeUserSession();
     setSession(null);
   }
-  if (loc.pathname.startsWith('/learn') && !session) {
-    return <Navigate to='/login' replace />;
-  }
   useEffect(() => {
     const titles = {
       '/': 'AI魔法学院 · AI 创作课堂 Inner Circle',
@@ -392,6 +389,9 @@ function App(){
     if (ogUrl) ogUrl.setAttribute('content', window.location.origin + (loc.pathname === '/' ? '' : loc.pathname));
     if (analyticsConsent === true) trackAnalytics('page_view', { title });
   }, [loc.pathname, analyticsConsent]);
+  if (loc.pathname.startsWith('/learn') && !session) {
+    return <Navigate to='/login' replace />;
+  }
   function decide(value) { setAnalyticsConsent(value); setAnalyticsConsentState(value); if (value) trackAnalytics('analytics_consent_granted'); }
   const roleBadge = { STUDENT: '小小创作者', TEACHER: '教师', ORG_ADMIN: '机构管理员', SUPER_ADMIN: '平台管理员', PLATFORM_ADMIN: '平台管理员' };
   const userBadge = session ? (
