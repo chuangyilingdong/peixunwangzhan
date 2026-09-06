@@ -349,6 +349,7 @@ function LearnProjectPage({ api }) {
 }
 function App(){
   const loc = useLocation();
+  const navigate = useNavigate();
   const [session, setSession] = useState(readUserSession);
   const [analyticsConsent, setAnalyticsConsentState] = useState(getAnalyticsConsent());
   const api = useMemo(() => createApiClient({ getToken: () => session?.token || null, onUnauthorized: () => { removeUserSession(); setSession(null); } }), [session]);
@@ -422,7 +423,7 @@ function App(){
         <Route path='/terms' element={<LegalPage type='terms'/>}/>
         <Route path='/privacy' element={<LegalPage type='privacy'/>}/>
         <Route path='/minors' element={<LegalPage type='minors'/>}/>
-        <Route path='/learn' element={<LearnPageInner api={api} navigate={useNavigate()}/>}/>
+        <Route path='/learn' element={<LearnPageInner api={api} navigate={navigate}/>}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/learn/vibecoding' element={<Notice tone='warning'>VibeCoding 上课即将上线，敬请期待。</Notice>}/>
