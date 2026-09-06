@@ -10,17 +10,18 @@ function svgDataUrl(title, subtitle, hue) {
 }
 function mockProvider() { return { name: 'local-mock', model: AI_PROVIDER_MODEL, capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'], async generate({ modality, prompt, title }) { const labels = { TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材', VIDEO: '短片素材', PODCAST: '播客素材', DUBBING: '配音素材' }; const label = title || labels[modality] || '创作素材'; const hue = [...String(prompt)].reduce((total, char) => total + char.charCodeAt(0), 0) % 360; return { assets: [{ label, mimeType: modality === 'IMAGE' ? 'image/svg+xml' : 'application/x-ai-kids-mock', assetUrl: `mock://generation/${Date.now().toString(36)}`, previewUrl: svgDataUrl(label, prompt, hue), metadata: { mock: true, modality, prompt } }] }; } }; }
 
-function providerSelection({ provider, model, endpoint } = {}) {
+function providerSelection({ provider, model, endpoint, channelId } = {}) {
   return {
     provider: String(provider || AI_PROVIDER).trim(),
     model: String(model || AI_PROVIDER_MODEL).trim(),
     endpoint: String(endpoint || AI_PROVIDER_ENDPOINT).trim(),
+    channelId: String(channelId || 'default').trim(),
   };
 }
 
 export function providerConfig(selection = {}) {
   const selected = providerSelection(selection);
-  return validateProviderConfig({ ...selected, apiKey: getProviderApiKey() || AI_PROVIDER_API_KEY });
+  return validateProviderConfig({ ...selected, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY });
 }
 export function generationProviderInfo(selection = {}) {
   const config = providerConfig(selection);
@@ -43,5 +44,5 @@ export function getGenerationProvider(selection = {}) {
   if (isMockProvider(config.provider)) return mockProvider();
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(config.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE });
 }

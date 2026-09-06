@@ -1012,44 +1012,32 @@ function PlatformWorks({ api }) {
 
 function ProviderPolicyPanel({ api }) {
   const config = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
-  const [form, setForm] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [open, setOpen] = useState('IMAGE');
+  const modalities = [['TEXT','文本'],['IMAGE','图片'],['MUSIC','音乐'],['VIDEO','视频'],['PODCAST','播客'],['DUBBING','配音']];
   const policy = config.data?.policy; const catalog = config.data?.catalog || [];
-  const definition = catalog.find((item) => item.id === form?.provider);
-  useEffect(() => {
-    if (policy) setForm({
-      provider: policy.provider, model: policy.model || '', endpoint: policy.endpoint || '',
-      displayName: policy.displayName || '', note: policy.note || '', websiteUrl: policy.websiteUrl || '', endpointMode: policy.endpointMode || 'BASE', protocol: policy.protocol || 'CHAT', modelMappings: policy.modelMappings || [], apiKey: '', allowStudentExternalContent: Boolean(policy.allowStudentExternalContent), reason: '',
-    });
-  }, [policy]);
-  async function fetchModels() { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', { endpoint: form.endpoint }); setForm({ ...form, modelMappings: result.items || [], model: result.items?.[0]?.id || form.model }); setMessage(`已从上游获取 ${result.items?.length || 0} 个模型`); } catch (error) { setMessage(error.message || '获取模型失败'); } finally { setBusy(false); } }
-  async function save(event) {
-    event.preventDefault(); setBusy(true); setMessage('');
-    try {
-      await api.put('admin/billing-config/ai-provider', form);
-      setMessage(`AI 供应商策略已保存。学生内容外发已${form.allowStudentExternalContent ? '开启' : '关闭'}；OpenAI-compatible / 自定义供应商的 6 类真实 adapter 已就绪，配置服务器密钥并切换生产 provider 后才会真实调用。`);
-      config.refresh();
-    } catch (error) { setMessage(error.message || '保存失败'); } finally { setBusy(false); }
-  }
-  if (config.loading) return <Panel title="AI 供应商配置"><Loading label="正在读取供应商策略…" /></Panel>;
-  if (config.error) return <Panel title="AI 供应商配置"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
-  if (!form) return null;
-  return <Panel title="AI 供应商配置">
-    <Notice tone="warning">学生创作内容外发由平台端统一控制。OpenAI-compatible / 自定义供应商当前支持 TEXT、IMAGE、MUSIC、VIDEO、PODCAST、DUBBING 六类真实调用；密钥仍只通过服务器受限环境变量提供，完成服务器配置并切换 provider 后才会产生真实外部请求。机构通过充值积分控制总消耗，不再设置平台预算。六类能力会真实发起服务器端 HTTP 请求；视频、音乐、播客等非统一标准接口必须在服务器端按模态配置 Endpoint。</Notice>
-    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
-    <form onSubmit={save} className="form-grid">
-      <label>供应商<select value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value })}>{catalog.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-      {form.provider === 'custom' ? <label>自定义供应商名称<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} maxLength={120} required /></label> : null}
-      <label>默认模型<select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}><option value="">手动输入模型 ID</option>{(form.modelMappings || []).map((item) => <option key={item.id || item.model} value={item.id || item.model}>{item.displayName || item.id || item.model}</option>)}</select><input value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder={definition?.adapterAvailable ? '例如：模型名称或模型 ID' : '该目录项的原生 adapter 尚未接入'} required={definition?.modelRequired} /></label>
-      <label>API Key（仅提交到服务器加密存储，不回显）<input type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder={config.data?.security?.apiKeyConfigured ? '已配置，留空保持不变' : '请输入供应商 API Key'} autoComplete="new-password" /></label>
-      <label>备注<input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} maxLength={500} /></label>
-      <label>官网链接<input type="url" value={form.websiteUrl} onChange={(event) => setForm({ ...form, websiteUrl: event.target.value })} /></label>
-      <label>上游协议<select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}><option value="CHAT">Chat Completions</option><option value="RESPONSES">Responses</option><option value="ANTHROPIC">Anthropic Messages</option></select></label>
-      <label>地址模式<select value={form.endpointMode} onChange={(event) => setForm({ ...form, endpointMode: event.target.value })}><option value="BASE">Base URL</option><option value="FULL">完整 URL</option></select></label>
-      <label>Endpoint<input value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value })} placeholder="https://..." required={definition?.endpointRequired} /></label>
-      <div className="row-actions"><button type="button" className="secondary-button" disabled={busy} onClick={fetchModels}>从上游获取模型列表</button><span className="muted">服务器端读取加密密钥，不会回显明文。</span></div>
-      <label className="checkbox-label"><input type="checkbox" checked={form.allowStudentExternalContent} onChange={(event) => setForm({ ...form, allowStudentExternalContent: event.target.checked })} />允许学生创作内容发送到外部 AI 服务</label>
-      <label>变更原因<input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} maxLength={500} placeholder="记录授权与业务依据" /></label>
-      <div className="row-actions"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存供应商策略'}</button></div>
+  useEffect(() => { if (policy) setForm({ ...policy, apiKey:'', reason:'', channels: policy.channels || [], modalityChannels: policy.modalityChannels || {} }); }, [policy]);
+  function updateChannel(index, patch) { setForm({ ...form, channels: form.channels.map((item,i) => i===index ? { ...item, ...patch } : item) }); }
+  function addChannel() { const id = `channel-${Date.now().toString(36)}`; setForm({ ...form, channels: [...form.channels, { id, name:`新渠道 ${form.channels.length+1}`, provider:'custom', model:'', endpoint:'', protocol:'CHAT', modalities:[] }] }); setOpen(id); }
+  function removeChannel(index) { const id=form.channels[index].id; setForm({ ...form, channels: form.channels.filter((_,i)=>i!==index), modalityChannels:Object.fromEntries(Object.entries(form.modalityChannels).filter(([,v])=>v!==id)) }); }
+  async function testChannel(channel) { setBusy(true); setMessage(''); try { const result=await api.post('admin/billing-config/ai-provider/test',{ endpoint:channel.endpoint, channelId:channel.id }); setMessage(`${channel.name}：${result.message || '连接成功'}`); } catch(e) { setMessage(`${channel.name}：${e.message || '连接失败'}`); } finally { setBusy(false); } }
+  async function fetchModels(channel,index) { setBusy(true); setMessage(''); try { const result=await api.post('admin/billing-config/ai-provider/models',{ endpoint:channel.endpoint, channelId:channel.id }); updateChannel(index,{ model:result.items?.[0]?.id || channel.model, modelMappings:result.items||[] }); setMessage(`${channel.name}：已读取 ${result.items?.length||0} 个模型`); } catch(e) { setMessage(e.message || '获取模型失败'); } finally { setBusy(false); } }
+  async function save(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.put('admin/billing-config/ai-provider',form); setMessage('渠道配置已保存'); config.refresh(); } catch(e) { setMessage(e.message || '保存失败'); } finally { setBusy(false); } }
+  if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
+  if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
+  return <Panel title="AI 渠道配置">
+    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口，不会生成内容、不扣积分。</Notice>
+    {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
+    <form onSubmit={save}>
+      <div className="row-actions"><strong>渠道列表</strong><button type="button" className="secondary-button" onClick={addChannel}>＋添加渠道</button></div>
+      {!form.channels.length ? <div className="muted top-gap">还没有渠道，请先添加一个。</div> : form.channels.map((channel,index) => <div className="card top-gap" key={channel.id}>
+        <div className="row-actions"><button type="button" className="link-button" onClick={() => setOpen(open===channel.id ? '' : channel.id)}>{open===channel.id ? '收起' : '展开'}　{channel.name || '未命名渠道'}</button><button type="button" className="danger-button" onClick={() => removeChannel(index)}>删除</button></div>
+        {open===channel.id ? <div className="form-grid top-gap"><label>渠道名称<input value={channel.name||''} onChange={e=>updateChannel(index,{name:e.target.value})} placeholder="例如：图片-供应商A" required /></label><label>协议<select value={channel.protocol||'CHAT'} onChange={e=>updateChannel(index,{protocol:e.target.value})}><option value="CHAT">Chat Completions</option><option value="RESPONSES">Responses</option><option value="ANTHROPIC">Anthropic Messages</option></select></label><label>Endpoint<input value={channel.endpoint||''} onChange={e=>updateChannel(index,{endpoint:e.target.value})} placeholder="https://.../v1" required /></label><label>模型 ID<input value={channel.model||''} onChange={e=>updateChannel(index,{model:e.target.value})} placeholder="上游模型 ID" required /></label><label>API Key<input type="password" value={channel.apiKey||''} onChange={e=>updateChannel(index,{apiKey:e.target.value})} placeholder="留空保持原密钥" autoComplete="new-password" /></label><label>负责能力<select multiple value={channel.modalities||[]} onChange={e=>updateChannel(index,{modalities:[...e.target.selectedOptions].map(o=>o.value)})}>{modalities.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label><div className="row-actions"><button type="button" className="secondary-button" disabled={busy} onClick={()=>testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={()=>fetchModels(channel,index)}>读取模型</button></div></div> : null}
+      </div>)}
+      <div className="top-gap"><strong>能力路由</strong><div className="muted">选择每种能力实际使用的渠道。</div></div>
+      <div className="form-grid top-gap">{modalities.map(([id,name])=><label key={id}>{name}<select value={form.modalityChannels[id]||''} onChange={e=>setForm({...form,modalityChannels:{...form.modalityChannels,[id]:e.target.value}})}><option value="">使用默认渠道</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>)}</div>
+      <details className="top-gap"><summary>兼容旧配置 / 默认渠道</summary><div className="form-grid top-gap"><label>默认模型<input value={form.model||''} onChange={e=>setForm({...form,model:e.target.value})} /></label><label>默认 Endpoint<input value={form.endpoint||''} onChange={e=>setForm({...form,endpoint:e.target.value})} /></label><label>API Key<input type="password" value={form.apiKey||''} onChange={e=>setForm({...form,apiKey:e.target.value})} placeholder="留空保持不变" /></label></div></details>
+      <label className="checkbox-label top-gap"><input type="checkbox" checked={Boolean(form.allowStudentExternalContent)} onChange={e=>setForm({...form,allowStudentExternalContent:e.target.checked})} />允许学生创作内容发送到外部 AI 服务</label>
+      <div className="row-actions top-gap"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部渠道配置'}</button></div>
     </form>
   </Panel>;
 }

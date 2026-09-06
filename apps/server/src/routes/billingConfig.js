@@ -35,6 +35,8 @@ function normalizeProviderPolicy(value) {
   const endpointMode = ['BASE','FULL'].includes(String(parsed.endpointMode || '').toUpperCase()) ? String(parsed.endpointMode).toUpperCase() : 'BASE';
   const protocol = ['CHAT','RESPONSES','ANTHROPIC'].includes(String(parsed.protocol || '').toUpperCase()) ? String(parsed.protocol).toUpperCase() : 'CHAT';
   const modelMappings = Array.isArray(parsed.modelMappings) ? parsed.modelMappings.filter((item) => item && item.model).map((item) => ({ displayName: String(item.displayName || item.model).slice(0,120), model: String(item.model).slice(0,200), contextWindow: Number(item.contextWindow || 0) || null, thinkingLevel: String(item.thinkingLevel || '').slice(0,30) })).slice(0,100) : [];
+  const channels = Array.isArray(parsed.channels) ? parsed.channels.filter((item) => item && item.id).slice(0, 30).map((item) => ({ id: String(item.id).slice(0,64), name: String(item.name || item.id).slice(0,120), provider: GENERATION_PROVIDER_IDS.has(String(item.provider || '').toLowerCase()) ? String(item.provider).toLowerCase() : 'custom', model: String(item.model || '').slice(0,200), endpoint: String(item.endpoint || '').slice(0,500), protocol: ['CHAT','RESPONSES','ANTHROPIC'].includes(String(item.protocol || '').toUpperCase()) ? String(item.protocol).toUpperCase() : 'CHAT', modalities: Array.isArray(item.modalities) ? item.modalities.filter((m) => VALID_MODALITIES.has(String(m).toUpperCase())) : [] })) : [];
+  const modalityChannels = parsed.modalityChannels && typeof parsed.modalityChannels === 'object' ? Object.fromEntries(Object.entries(parsed.modalityChannels).filter(([k,v]) => VALID_MODALITIES.has(k) && typeof v === 'string').map(([k,v]) => [k, String(v).slice(0,64)])) : {};
   const allowStudentExternalContent = parsed.allowStudentExternalContent === undefined
     ? true
     : !(parsed.allowStudentExternalContent === false || parsed.allowStudentExternalContent === 0 || String(parsed.allowStudentExternalContent).toLowerCase() === 'false');
@@ -42,7 +44,7 @@ function normalizeProviderPolicy(value) {
     provider: GENERATION_PROVIDER_IDS.has(provider) ? provider : 'local-mock',
     endpoint,
     model,
-    displayName, note, websiteUrl, endpointMode, protocol, modelMappings,
+    displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels,
     allowStudentExternalContent,
     updatedAt: value?.updated_at || null,
   };
@@ -254,6 +256,13 @@ export async function handleAdminBillingConfig(ctx) {
       security: { allowStudentExternalContent: policy.allowStudentExternalContent, externalStudentRequestsBlocked: !policy.allowStudentExternalContent, apiKeyConfigured: hasProviderApiKey() || Boolean(AI_PROVIDER_API_KEY) },
     };
   }
+  if (part === '/billing-config/ai-provider/test' && method === 'POST') {
+    requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const endpoint = String(body.endpoint || '').trim(); const apiKey = getProviderApiKey(String(body.channelId || 'default')) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+    if (!apiKey) throw errors.badRequest('尚未配置该渠道 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED'); if (!endpoint) throw errors.badRequest('请先填写 Endpoint', 'AI_PROVIDER_ENDPOINT_REQUIRED');
+    let url; try { const parsed = new URL(endpoint); parsed.pathname = parsed.pathname.replace(/\/(chat\/completions|responses|messages|models)\/?$/, '') + '/models'; parsed.search=''; url=parsed.toString(); } catch { throw errors.badRequest('Endpoint 无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
+    const controller = new AbortController(); const timer=setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
+    try { const response=await fetch(url,{headers:{Authorization:`Bearer ${apiKey}`,Accept:'application/json'},signal:controller.signal}); if(!response.ok) throw errors.badRequest(`连接失败（HTTP ${response.status}）`, response.status===429?'GENERATION_PROVIDER_RATE_LIMITED':'GENERATION_PROVIDER_UPSTREAM_ERROR'); return { ok:true, message:'连接成功' }; } catch (error) { if(error?.code) throw error; throw errors.badRequest(error?.name==='AbortError'?'连接超时':'连接失败','GENERATION_PROVIDER_UPSTREAM_ERROR'); } finally { clearTimeout(timer); }
+  }
   if (part === '/billing-config/ai-provider/models' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const policy = getAiProviderPolicy();
@@ -284,13 +293,16 @@ export async function handleAdminBillingConfig(ctx) {
     const endpointMode = body.endpointMode === undefined ? before.endpointMode : String(body.endpointMode || 'BASE').toUpperCase();
     const protocol = body.protocol === undefined ? before.protocol : String(body.protocol || 'CHAT').toUpperCase();
     const modelMappings = body.modelMappings === undefined ? before.modelMappings : (Array.isArray(body.modelMappings) ? body.modelMappings : []);
+    const channels = body.channels === undefined ? before.channels : (Array.isArray(body.channels) ? body.channels : []);
+    const modalityChannels = body.modalityChannels === undefined ? before.modalityChannels : (body.modalityChannels || {});
     const registration = validateProviderRegistration({ provider, model, endpoint });
     if (!registration.valid) throw errors.badRequest('AI 供应商配置不完整：' + registration.reasons.join('；'), 'AI_PROVIDER_CONFIG_INVALID');
     if (providerDefinition(provider)?.kind === 'CUSTOM' && displayName.length < 2) throw errors.badRequest('自定义供应商名称必填', 'CUSTOM_PROVIDER_NAME_REQUIRED');
-    if (body.apiKey !== undefined && String(body.apiKey || '').trim()) setProviderApiKey(body.apiKey);
+    if (body.apiKey !== undefined && String(body.apiKey || '').trim()) setProviderApiKey(body.apiKey, String(body.channelId || 'default'));
+    if (Array.isArray(body.channels)) body.channels.forEach((channel) => { if (channel?.id && String(channel.apiKey || '').trim()) setProviderApiKey(channel.apiKey, String(channel.id)); });
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     const after = {
-      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings,
+      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels,
       allowStudentExternalContent,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });

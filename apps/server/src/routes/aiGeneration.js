@@ -207,6 +207,12 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
   });
 }
 
+function providerSelectionForModality(policy, modality) {
+  const channelId = policy?.modalityChannels?.[String(modality || '').toUpperCase()];
+  const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
+  return channel ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id } : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default' };
+}
+
 function auditContext(auth, ctx = null) {
   return {
     auth,
@@ -219,7 +225,7 @@ function auditContext(auth, ctx = null) {
 export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = getAiProviderPolicy();
-  const providerSelection = { provider: policy.provider, model: policy.model, endpoint: policy.endpoint };
+  const providerSelection = providerSelectionForModality(policy, modality);
   const provider = getGenerationProvider(providerSelection);
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
@@ -478,7 +484,7 @@ export async function handleAiGeneration(ctx) {
     if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
     const project = ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const policy = getAiProviderPolicy();
-    const providerSelection = { provider: policy.provider, model: policy.model, endpoint: policy.endpoint };
+    const providerSelection = providerSelectionForModality(policy, modality);
     const provider = getGenerationProvider(providerSelection);
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
