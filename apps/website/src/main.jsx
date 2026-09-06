@@ -28,7 +28,6 @@ function removeUserSession() {
 }
 
 function LoginPage() {
-  const navigate = useNavigate();
   async function handleLogin({ login, password }) {
     const response = await fetch(API_BASE + '/auth/login', {
       method: 'POST',
@@ -39,9 +38,8 @@ function LoginPage() {
     if (!response.ok) throw new Error(payload.error?.message || payload.message || '登录失败');
     const session = saveUserSession(payload.data || payload);
     const role = session.user?.role;
-    if (role === 'STUDENT' || role === 'TEACHER' || role === 'ORG_ADMIN') { navigate('/'); }
-    else if (role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN') { navigate('/admin/'); }
-    else { navigate('/learn'); }
+    const target = role === 'STUDENT' || role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/learn';
+    window.location.assign(target);
   }
   return <div className='website-login'><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title='登录' description='使用机构分配的账号进入你的工作台。' onLogin={handleLogin} demos={[]} /></div>;
 }
