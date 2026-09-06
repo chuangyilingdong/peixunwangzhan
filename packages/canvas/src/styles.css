@@ -1,14 +1,6 @@
 .learning-canvas { position: relative; height: min(72vh, 720px); min-height: 520px; overflow: hidden; border: 1px solid rgba(116, 101, 222, .4); border-radius: 22px; background: radial-gradient(circle at 22% 8%, rgba(77, 186, 255, .22), transparent 32%), radial-gradient(circle at 85% 6%, rgba(154, 82, 255, .2), transparent 34%), linear-gradient(140deg, #081333, #101446 58%, #1b1345); box-shadow: 0 18px 44px rgba(38, 25, 98, .18); }
 .learning-canvas .react-flow { background: radial-gradient(rgba(148, 178, 255, .22) 1px, transparent 1px); background-size: 24px 24px; }
-.learning-canvas__toolbar { position: absolute; z-index: 8; top: 16px; left: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: calc(100% - 32px); padding: 9px; border: 1px solid rgba(178, 197, 255, .25); border-radius: 14px; color: #e9eeff; background: rgba(7, 17, 53, .82); box-shadow: 0 8px 24px rgba(0, 0, 0, .2); backdrop-filter: blur(12px); }
-.learning-canvas__toolbar span { margin: 0 4px; font-size: 12px; font-weight: 800; }
-.learning-canvas__toolbar button,.learning-canvas__actions button,.learning-canvas__template-select { border: 1px solid rgba(183, 196, 255, .26); border-radius: 9px; padding: 7px 9px; color: #eaf0ff; background: rgba(123, 117, 241, .16); font-size: 12px; font-weight: 700; }
-.learning-canvas__toolbar button:hover,.learning-canvas__actions button:hover { background: rgba(130, 123, 255, .38); }
-.learning-canvas__toolbar button:disabled,.learning-canvas__template-select:disabled,.learning-canvas__actions button:disabled { cursor: not-allowed; opacity: .5; }
-.learning-canvas__toolbar .learning-canvas__delete { background: rgba(255, 103, 145, .14); }
 .learning-canvas__tip { position: absolute; z-index: 5; bottom: 16px; left: 16px; padding: 8px 11px; border-radius: 10px; color: #c2cff8; background: rgba(6, 15, 45, .72); font-size: 12px; backdrop-filter: blur(8px); pointer-events: none; }
-.learning-canvas__actions { position: absolute; z-index: 5; right: 14px; top: 164px; display: grid; gap: 7px; }
-.learning-canvas__actions button { background: rgba(5, 14, 44, .8); }
 .learning-canvas .react-flow__controls { overflow: hidden; border: 1px solid rgba(183, 196, 255, .25); border-radius: 11px; box-shadow: 0 8px 18px rgba(0,0,0,.2); }
 .learning-canvas .react-flow__controls-button { border-color: rgba(183, 196, 255, .18); color: #dce5ff; fill: #dce5ff; background: rgba(7, 18, 52, .9); }
 .learning-canvas .react-flow__controls-button:hover { background: #343782; }
@@ -40,4 +32,4 @@
 .learning-node__video-preview { display: grid; place-items: center; align-content: center; gap: 6px; height: 105px; margin: 12px 12px 0; border-radius: 12px; background: linear-gradient(135deg, #8554e5, #df70c8); color: white; }
 .learning-node__video-preview span { display: grid; place-items: center; width: 44px; height: 44px; border: 2px solid rgba(255,255,255,.8); border-radius: 50%; padding-left: 3px; }
 .learning-node__video-preview small { font-size: 11px; opacity: .88; }
-@media (max-width: 700px) { .learning-canvas { min-height: 590px; height: 72vh; } .learning-canvas__toolbar { right: 12px; } .learning-canvas__toolbar span { width: 100%; } .learning-canvas__actions { top: 270px; } .learning-canvas__tip { max-width: 230px; } }
+@media (max-width: 700px) { .learning-canvas { min-height: 590px; height: 72vh; } .learning-canvas__tip { max-width: 230px; } }
