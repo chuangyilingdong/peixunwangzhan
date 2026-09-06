@@ -343,6 +343,25 @@ function Organizations({ api }) {
     ) : <Panel title="机构详情"><Empty title="选择机构查看详情" body="点击机构列表中的名称或“详情”按钮，可查看合同、管理员、套餐、配额和审计。" /></Panel>}
   </>;
 }
+const LESSON_CAPABILITY_OPTIONS = [
+  ['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'],
+  ['music', 'AI 音乐'], ['podcast', 'AI 播客'], ['dubbing', 'AI 配音'],
+];
+function LessonCanvasConfigEditor({ lesson, edit, onChange }) {
+  const capabilities = edit.capabilities ?? lesson.capabilities ?? ['text'];
+  const groups = edit.materialGroups ?? lesson.materialGroups ?? [];
+  const update = (patch) => onChange({ ...edit, ...patch });
+  function updateGroup(index, patch) { update({ materialGroups: groups.map((group, i) => i === index ? { ...group, ...patch } : group) }); }
+  function updateMaterial(groupIndex, materialIndex, patch) { update({ materialGroups: groups.map((group, i) => i !== groupIndex ? group : { ...group, materials: (group.materials || []).map((item, j) => j === materialIndex ? { ...item, ...patch } : item) }) }); }
+  return <div className="lesson-canvas-config-editor">
+    <div className="lesson-capability-checks"><strong>本课开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => update({ capabilities: event.target.checked ? [...new Set([...capabilities, value])] : capabilities.filter((item) => item !== value) })} />{label}</label>)}</div>
+    <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>课堂素材</strong><button type="button" className="text-button" onClick={() => update({ materialGroups: [...groups, { title: `素材${groups.length + 1}`, materials: [] }] })}>＋素材组</button></div>
+      {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={`${group.id || 'new'}-${groupIndex}`}><div className="lesson-config-row"><input value={group.title || ''} placeholder={`素材${groupIndex + 1}`} onChange={(event) => updateGroup(groupIndex, { title: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => update({ materialGroups: groups.filter((_, i) => i !== groupIndex) })}>删除组</button></div>{(group.materials || []).map((material, materialIndex) => <div className="lesson-material-item-editor" key={`${material.id || 'new'}-${materialIndex}`}><input value={material.title || ''} placeholder="素材标题" onChange={(event) => updateMaterial(groupIndex, materialIndex, { title: event.target.value })} /><input value={material.description || ''} placeholder="给学生看的说明（可选）" onChange={(event) => updateMaterial(groupIndex, materialIndex, { description: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => updateGroup(groupIndex, { materials: (group.materials || []).filter((_, i) => i !== materialIndex) })}>×</button></div>)}<button type="button" className="text-button" onClick={() => updateGroup(groupIndex, { materials: [...(group.materials || []), { title: `素材${(group.materials || []).length + 1}`, description: '', materialType: 'NOTE', snapshot: {} }] })}>＋素材</button></div>)}
+      {!groups.length && <p className="muted">还没有素材组。建议按“素材1、素材2”组织本课需要的课堂材料。</p>}
+    </div>
+  </div>;
+}
+
 function Courses({ api }) {
   const [filters, setFilters] = useState({ search: '', status: '', visibility: '' });
   const [page, setPage] = useState(1);
@@ -415,7 +434,7 @@ function Courses({ api }) {
   }
   async function saveLesson(lesson) {
     const edit = lessonEdits[lesson.id] || {};
-    await run(`admin/course-lessons/${lesson.id}`, 'PUT', { title: edit.title ?? lesson.title, summary: edit.summary ?? lesson.summary, durationMinutes: Number(edit.durationMinutes ?? lesson.durationMinutes), status: edit.status ?? lesson.status, lessonContent: edit.lessonContent ?? lesson.lessonContent ?? '' }, `课时「${edit.title ?? lesson.title}」已保存。`);
+    await run(`admin/course-lessons/${lesson.id}`, 'PUT', { title: edit.title ?? lesson.title, summary: edit.summary ?? lesson.summary, durationMinutes: Number(edit.durationMinutes ?? lesson.durationMinutes), status: edit.status ?? lesson.status, lessonContent: edit.lessonContent ?? lesson.lessonContent ?? '', capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'], materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [] }, `课时「${edit.title ?? lesson.title}」已保存。`);
   }
   async function deleteLesson(lesson) {
     await run(`admin/course-lessons/${lesson.id}`, 'DELETE', undefined, `课时「${lesson.title}」已删除，剩余课时已重新排序。`, `确认删除课时「${lesson.title}」？已被班级课单或课堂引用的课时无法删除。`);
@@ -498,12 +517,13 @@ function Courses({ api }) {
             <label>简介<input value={lessonDraft.summary} onChange={(e) => setLessonDraft({ ...lessonDraft, summary: e.target.value })} /></label>
             <button className="primary-button" disabled={busy}>添加课时</button>
           </form>
-          {series.lessons.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>状态</th><th>正文/教学指引</th><th>操作</th></tr></thead><tbody>{series.lessons.map((lesson) => { const edit = lessonEdits[lesson.id] || {}; return <tr key={lesson.id}>
+          {series.lessons.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>状态</th><th>正文/教学指引</th><th>课堂能力与素材</th><th>操作</th></tr></thead><tbody>{series.lessons.map((lesson) => { const edit = lessonEdits[lesson.id] || {}; return <tr key={lesson.id}>
             <td>{lesson.sort}</td>
             <td><input value={edit.title ?? lesson.title} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, title: e.target.value } })} /></td>
             <td><input type="number" min="1" max="1440" style={{ width: '5rem' }} value={edit.durationMinutes ?? lesson.durationMinutes} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, durationMinutes: e.target.value } })} /></td>
             <td><select value={edit.status ?? lesson.status} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, status: e.target.value } })}><option value="PUBLISHED">已发布</option><option value="DRAFT">草稿</option><option value="ARCHIVED">已归档</option></select></td>
             <td><textarea rows={2} placeholder="课时正文/教学指引（≤50000字）" value={edit.lessonContent ?? lesson.lessonContent ?? ''} onChange={(e) => setLessonEdits({ ...lessonEdits, [lesson.id]: { ...edit, lessonContent: e.target.value } })} /></td>
+            <td><LessonCanvasConfigEditor lesson={lesson} edit={edit} onChange={(next) => setLessonEdits({ ...lessonEdits, [lesson.id]: next })} /></td>
             <td><div className="row-actions">
               <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, -1)}>上移</button>
               <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, 1)}>下移</button>

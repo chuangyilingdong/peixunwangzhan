@@ -199,7 +199,7 @@ function NoteNode({ id, data, selected }) {
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !readOnly }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !readOnly, capabilities = ['text'] }) {
   const initial = useMemo(() => {
     const restored = safeSnapshot(initialSnapshot);
     return restored.nodes.length || !showStarter ? restored : createStarterSnapshot();
@@ -209,6 +209,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
   const [viewport, setViewport] = useState(initial.viewport);
   const [templateId, setTemplateId] = useState(CANVAS_TEMPLATE_OPTIONS[0].id);
   const { fitView, getViewport } = useReactFlow();
+  const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
 
   const updateNode = useCallback((nodeId, changes) => {
     if (readOnly) return;
@@ -217,6 +218,9 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
 
   const addNode = useCallback((type) => {
     if (readOnly) return;
+    if (type === 'prompt' && !enabledCapabilities.has('text')) return;
+    if (type === 'image' && !enabledCapabilities.has('image')) return;
+    if (type === 'video' && !enabledCapabilities.has('video')) return;
     const offset = nodes.length * 36;
     const templates = {
       prompt: { title: '魔法提示词', text: '' },
@@ -227,7 +231,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
       note: { title: '创作便签', text: '' },
     };
     setNodes((current) => [...current, { id: id(type), type, position: { x: 180 + (offset % 300), y: 160 + (offset % 220) }, data: templates[type] }]);
-  }, [nodes.length, readOnly, setNodes]);
+  }, [enabledCapabilities, nodes.length, readOnly, setNodes]);
 
   const onConnect = useCallback((connection) => {
     if (readOnly) return;
@@ -267,11 +271,11 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
         <span>添加魔法卡片</span>
         <select className="learning-canvas__template-select" value={templateId} onChange={(event) => setTemplateId(event.target.value)} disabled={readOnly} aria-label="画布模板">{CANVAS_TEMPLATE_OPTIONS.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select>
         <button type="button" onClick={applyTemplate} disabled={readOnly}>套用模板</button>
-        <button type="button" onClick={() => addNode('prompt')} disabled={readOnly}>✎ 提示词</button>
-        <button type="button" onClick={() => addNode('image')} disabled={readOnly}>✦ 画面</button>
+        {enabledCapabilities.has('text') && <button type="button" onClick={() => addNode('prompt')} disabled={readOnly}>✎ 提示词</button>}
+        {enabledCapabilities.has('image') && <button type="button" onClick={() => addNode('image')} disabled={readOnly}>✦ 画面</button>}
         <button type="button" onClick={() => addNode('character')} disabled={readOnly}>♙ 角色</button>
         <button type="button" onClick={() => addNode('scene')} disabled={readOnly}>⌂ 场景</button>
-        <button type="button" onClick={() => addNode('video')} disabled={readOnly}>▶ 故事</button>
+        {enabledCapabilities.has('video') && <button type="button" onClick={() => addNode('video')} disabled={readOnly}>▶ 故事</button>}
         <button type="button" onClick={() => addNode('note')} disabled={readOnly}>☼ 便签</button>
         <button type="button" className="learning-canvas__delete" onClick={deleteSelected} disabled={readOnly}>删除选中</button>
       </div>

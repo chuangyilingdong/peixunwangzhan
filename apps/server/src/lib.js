@@ -426,9 +426,21 @@ export function normalizeLesson(value) {
     promptPackAssetId: value.prompt_pack_asset_id || null,
     outcomePackAssetId: value.outcome_pack_asset_id || null,
     lessonContent: value.lesson_content || '',   // P5-W05
+    ...lessonCanvasConfig(value.id),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
+}
+
+export function lessonCanvasConfig(lessonId) {
+  if (!lessonId) return { capabilities: ['text'], materialGroups: [] };
+  const capabilities = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=? ORDER BY capability', [lessonId]).map((item) => item.capability);
+  const groups = rows('SELECT * FROM course_lesson_material_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
+    id: group.id, title: group.title, sort: Number(group.sort || 0), materials: rows('SELECT * FROM course_lesson_materials WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
+      id: item.id, title: item.title, description: item.description || '', materialType: item.material_type || 'NOTE', assetUrl: item.asset_url || null, snapshot: parseJson(item.snapshot, {}), sort: Number(item.sort || 0),
+    })),
+  }));
+  return { capabilities: capabilities.length ? capabilities : ['text'], materialGroups: groups };
 }
 
 export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true } = {}) {
@@ -561,6 +573,7 @@ export function normalizeProject(value, { includeSnapshot = false } = {}) {
     workId: value.work_id || null,
     workStatus: value.work_status || null,
     workSubmittedAt: value.work_submitted_at || null,
+    ...lessonCanvasConfig(value.course_lesson_id),
   };
   if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   return result;

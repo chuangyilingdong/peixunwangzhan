@@ -262,6 +262,40 @@ CREATE TABLE IF NOT EXISTS course_lessons (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_lessons_series_sort ON course_lessons(series_id, sort);
 
+CREATE TABLE IF NOT EXISTS course_lesson_material_groups (
+  id TEXT PRIMARY KEY,
+  lesson_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_material_groups_lesson ON course_lesson_material_groups(lesson_id, sort);
+
+CREATE TABLE IF NOT EXISTS course_lesson_materials (
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  material_type TEXT NOT NULL DEFAULT 'NOTE',
+  asset_url TEXT,
+  snapshot TEXT NOT NULL DEFAULT '{}',
+  sort INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (group_id) REFERENCES course_lesson_material_groups(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_materials_group ON course_lesson_materials(group_id, sort);
+
+CREATE TABLE IF NOT EXISTS course_lesson_capabilities (
+  lesson_id TEXT NOT NULL,
+  capability TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (lesson_id, capability),
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS course_assignments (
   id TEXT PRIMARY KEY,
   series_id TEXT NOT NULL,

@@ -110,6 +110,7 @@ export function CanvasWorkspace({ api, ...props }) {
   const [message, setMessage] = useState('');
   const [generationForm, setGenerationForm] = useState({ modality: 'IMAGE', prompt: '', title: '' });
   const [generating, setGenerating] = useState(false);
+  const [toolPanel, setToolPanel] = useState(null);
 
   useEffect(() => {
     if (!project.data) return;
@@ -313,24 +314,53 @@ export function CanvasWorkspace({ api, ...props }) {
     setMessage('已放入一份创作底稿，完成后请保存。');
   }
 
+  function addLessonMaterialToCanvas(material) {
+    if (!editable || !material) return;
+    const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
+    const sourceData = snapshot.data || snapshot.props || {};
+    const materialType = String(material.materialType || snapshot.type || 'NOTE').toUpperCase();
+    const type = snapshot.type || (materialType === 'IMAGE' ? 'image' : materialType === 'VIDEO' ? 'video' : materialType === 'CHARACTER' ? 'character' : materialType === 'SCENE' ? 'scene' : materialType === 'TEXT' || materialType === 'PROMPT' ? 'prompt' : 'note');
+    const fallbackData = type === 'image'
+      ? { title: material.title, emoji: '✨', caption: material.description || '' }
+      : type === 'video'
+        ? { title: material.title, text: material.description || '' }
+        : type === 'character'
+          ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' }
+          : type === 'scene'
+            ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' }
+            : { title: material.title, text: material.description || '' };
+    const node = {
+      id: `lesson-material-${material.id}-${Date.now().toString(36)}`,
+      type,
+      position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 },
+      data: { ...fallbackData, ...sourceData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true },
+    };
+    const next = { ...current, nodes: [...(current.nodes || []), node] };
+    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
+    setMessage(`已将“${material.title || '课堂素材'}”加入画布。`);
+  }
+
   const lessonTitle = project.data.courseLessonTitle || 'AI 创作课堂';
+  const materialGroups = Array.isArray(project.data.materialGroups) ? project.data.materialGroups : [];
+  const capabilities = Array.isArray(project.data.capabilities) && project.data.capabilities.length ? project.data.capabilities : ['text'];
   const hasNodes = Boolean((draft || canvasSnapshot)?.nodes?.length);
 
   return <main className="student-canvas-shell">
     <header className="student-canvas-topbar">
       <div className="student-canvas-brand"><span className="student-canvas-brand-mark">✦</span><div><strong>AI 魔法学院</strong><small>学生创作画布</small></div></div>
       <div className="student-canvas-top-title"><span>正在上课</span><strong>{lessonTitle}</strong></div>
-      <div className="student-canvas-actions"><button className="ghost-canvas-button" onClick={() => navigate('/learn/canvas')}>课程大厅</button><button className="ghost-canvas-button" onClick={() => navigate('/learn/canvas')}>教学演示</button><button className="primary-canvas-button" disabled={busy || !changed} onClick={save}>{busy ? '保存中…' : '保存并退出'}</button></div>
+      <div className="student-canvas-actions"><button className="ghost-canvas-button" onClick={() => navigate('/learn/canvas')}>课程大厅</button><button className="primary-canvas-button" disabled={busy || !changed} onClick={save}>{busy ? '保存中…' : '保存并退出'}</button></div>
     </header>
     <section className="student-canvas-layout">
-      <aside className="student-lesson-panel">
-        <div className="student-lesson-hero"><span className="student-lesson-icon">🎨</span><div><small>正在学习</small><h1>{lessonTitle}</h1></div></div>
-        <div className="student-progress"><div className="student-progress-label"><span>课堂进度</span><strong>第 1 / 5 节</strong></div><div className="student-progress-track"><i style={{ width: '20%' }} /></div><div className="student-stars">★★★★☆ <span>完成本节课可获得星星</span></div></div>
-        <div className="student-teacher-note"><div className="student-panel-heading">老师寄语 <span>✎</span></div><p>先大胆表达你的想法，再用画布把它变成作品。每一次尝试都值得被看见！</p></div>
-        <div className="student-materials"><div className="student-panel-heading">准备好的素材 <span className="student-count">2</span></div><div className="student-material-card"><span>📜</span><div><strong>古诗主题提示词</strong><small>点击后加入画布</small></div><button onClick={useTemplate}>＋</button></div><div className="student-material-card"><span>🌄</span><div><strong>创作灵感底稿</strong><small>角色 · 场景 · 故事</small></div><button onClick={useTemplate}>＋</button></div></div>
-        <div className="student-tasks"><div className="student-panel-heading">今日任务</div><label><input type="checkbox" checked={hasNodes} readOnly /> 在画布中放入创作卡片</label><label><input type="checkbox" checked={Boolean((draft || canvasSnapshot)?.edges?.length)} readOnly /> 把卡片连成创作流程</label><label><input type="checkbox" checked={false} readOnly /> 保存并提交你的作品</label></div>
+      <aside className={`student-tool-rail ${toolPanel ? 'is-open' : ''}`}>
+        <button className="student-tool-rail__toggle" type="button" onClick={() => setToolPanel((value) => value ? null : 'materials')} aria-expanded={Boolean(toolPanel)}>☰ <span>工具</span></button>
+        <button className={`student-tool-button ${toolPanel === 'materials' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'materials' ? null : 'materials')}><span>▦</span><small>素材</small></button>
+        <button className={`student-tool-button ${toolPanel === 'capabilities' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'capabilities' ? null : 'capabilities')}><span>✦</span><small>能力</small></button>
+        {toolPanel === 'materials' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>课堂素材</strong><small>点击素材加入画布</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div>{materialGroups.length ? materialGroups.map((group) => <div className="student-material-group" key={group.id || group.title}><h3>{group.title}</h3>{(group.materials || []).map((material) => <button className="student-material-item" key={material.id || material.title} type="button" onClick={() => addLessonMaterialToCanvas(material)}><span className="student-material-item__icon">{material.materialType === 'IMAGE' ? '▧' : material.materialType === 'VIDEO' ? '▶' : '✎'}</span><span><strong>{material.title}</strong><small>{material.description || '点击后加入画布'}</small></span><b>＋</b></button>)}</div>) : <p className="student-tool-empty">老师还没有为本节课配置素材。</p>}</div>}
+        {toolPanel === 'capabilities' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><div className="student-capability-list">{[['text','AI 文字'],['image','AI 生图'],['video','AI 生视频'],['music','AI 音乐'],['podcast','AI 播客'],['dubbing','AI 配音']].map(([key,label]) => <span className={capabilities.includes(key) ? 'is-enabled' : ''} key={key}>{capabilities.includes(key) ? '✓' : '—'} {label}</span>)}</div></div>}
       </aside>
-      <div className="student-canvas-main"><div className="student-canvas-heading"><div><span className="student-kicker">我的课堂画布</span><h2>{project.data.title}</h2></div><span className={`student-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? '有未保存修改' : '已保存'}</span></div><div className="student-canvas-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} readOnly={!editable} onChange={setDraft} /></div></div>
+      <div className="student-canvas-main"><div className="student-canvas-heading"><div><span className="student-kicker">我的课堂画布</span><h2>{project.data.title}</h2></div><span className={`student-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? '有未保存修改' : '已保存'}</span></div><div className="student-canvas-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} onChange={setDraft} /></div></div>
     </section>
     <div className="student-canvas-submitbar"><div><strong>完成作品后记得提交</strong><span>老师会根据你的画布内容进行点评</span></div><div className="student-submit-actions"><button className="secondary-button" onClick={() => navigate('/learn/canvas')}>退出课堂</button><button className="primary-canvas-button student-submit-button" disabled={!editable || busy || !draft || !hasNodes} onClick={submitWork}>{busy ? '提交中…' : '提交作品 ✨'}</button></div></div>
     {message && <div className={`student-canvas-toast ${message.includes('失败') || message.includes('错误') ? 'error' : ''}`}>{message}</div>}
