@@ -113,3 +113,8 @@
   color: #aaa;
 }
 
+
+
+/* Homepage uses the Inner Circle header, while keeping the same authenticated entry points as the rest of the site. */
+.ic-nav a{padding:9px 14px;border-radius:999px;color:#fff;font:600 12px/1 Manrope,"Microsoft YaHei",sans-serif;letter-spacing:.08em;transition:.3s;white-space:nowrap}.ic-nav a:hover,.ic-nav a.active{background:#fff;color:#11010a}.ic-auth{display:flex;align-items:center;flex:0 0 auto}.ic-auth>.top-button{padding:9px 15px;border-radius:999px;background:#fff;color:#11010a;font:700 12px/1 Manrope,"Microsoft YaHei",sans-serif}.ic-auth .header-user{font-size:11px;padding:4px 8px}.ic-auth .header-user .role-tag{font-size:10px}.ic-auth .header-user .text-button{font-size:11px}.ic-menu-login{display:none}.ic-menu-items a{display:flex;justify-content:space-between;width:100%;padding:18px 4px;border:0;border-bottom:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;text-align:left;cursor:pointer;font:400 19px/1 Michroma,Manrope,sans-serif;letter-spacing:.08em}.ic-menu-items a.active{color:#ff005e}
+@media(max-width:700px){.ic-auth{display:none}.ic-menu-login{display:block;margin-top:28px}.ic-menu-login .top-button{display:inline-flex;padding:12px 18px;border-radius:999px;background:#fff;color:#11010a;font-weight:800}.ic-menu-login .header-user{display:flex;width:max-content;color:#fff}}
