@@ -9,9 +9,9 @@ const server = createServer(async (req, res) => {
   for await (const chunk of req) raw += chunk;
   const body = raw ? JSON.parse(raw) : {};
   requests.push({ method: req.method, url: req.url, authorization: req.headers.authorization, body });
-  if (req.method === 'GET' && req.url === '/v1/videos/generations/video-1') {
+  if (req.method === 'GET' && req.url === '/v1/videos/video-1') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'video-1', status: 'succeeded', output: { url: 'https://media.example/video.mp4' } }));
+    res.end(JSON.stringify({ id: 'video-1', status: 'completed', metadata: { url: 'https://media.example/video.mp4' } }));
     return;
   }
   const prompt = body.messages?.find((item) => item.role === 'user')?.content || body.prompt || body.input || '';
@@ -51,7 +51,7 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({ output: { b64_json: Buffer.from('music-bytes').toString('base64'), mime_type: 'audio/mpeg' } }));
     return;
   }
-  if (req.url === '/v1/videos/generations') {
+  if (req.url === '/v1/videos') {
     res.writeHead(202, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ id: 'video-1', status: 'processing' }));
     return;
@@ -101,8 +101,8 @@ try {
   assert.equal(imageRequest.body.response_format, 'url');
   const dubbingRequest = requests.find((item) => item.url === '/v1/audio/speech');
   assert.equal(dubbingRequest.body.response_format, 'mp3');
-  assert.equal(requests.find((item) => item.url === '/v1/videos/generations').method, 'POST');
-  assert.equal(requests.find((item) => item.url === '/v1/videos/generations/video-1').method, 'GET');
+  assert.equal(requests.find((item) => item.url === '/v1/videos').method, 'POST');
+  assert.equal(requests.find((item) => item.url === '/v1/videos/video-1').method, 'GET');
 
   await assert.rejects(() => provider.generate({ modality: 'TEXT', prompt: 'rate-limit' }), (error) => normalizeProviderError(error).code === PROVIDER_ERROR_CODES.RATE_LIMITED);
   await assert.rejects(() => provider.generate({ modality: 'TEXT', prompt: 'safety' }), (error) => normalizeProviderError(error).code === PROVIDER_ERROR_CODES.SAFETY_REJECTED);

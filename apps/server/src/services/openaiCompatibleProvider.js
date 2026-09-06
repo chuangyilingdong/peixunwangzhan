@@ -8,7 +8,7 @@ const DEFAULT_MODALITY_PATHS = Object.freeze({
   TEXT: '/chat/completions',
   IMAGE: '/images/generations',
   MUSIC: '/music/generations',
-  VIDEO: '/videos/generations',
+  VIDEO: '/videos',
   PODCAST: '/podcasts/generations',
   DUBBING: '/audio/speech',
 });
@@ -47,7 +47,7 @@ function modalityEndpoint(endpoint, modality, modalityEndpoints = {}) {
   const value = normalizeEndpoint(endpoint);
   const path = DEFAULT_MODALITY_PATHS[normalizedModality];
   if (!path) return value;
-  if (/\/v1\/(?:chat\/completions|images\/generations|music\/generations|videos?\/generations|podcasts?\/generations|audio\/(?:speech|dubbing))$/i.test(value)) {
+  if (/\/v1\/(?:chat\/completions|images\/generations|music\/generations|videos?(?:\/generations)?|podcasts?\/generations|audio\/(?:speech|dubbing))$/i.test(value)) {
     return value.replace(/\/v1\/.*$/i, `/v1${path}`);
   }
   if (/\/v1$/i.test(value)) return `${value}${path}`;
@@ -111,7 +111,7 @@ function mediaCandidate(node, modality, inheritedMime = '') {
     const assetUrl = base64DataUrl(node[key], mimeType);
     if (assetUrl) return { assetUrl, mimeType };
   }
-  for (const key of ['data', 'output', 'result', 'file', 'artifact', 'media', 'content']) {
+  for (const key of ['data', 'output', 'result', 'file', 'artifact', 'media', 'content', 'metadata']) {
     const found = mediaCandidate(node[key], modality, mimeType);
     if (found) return found;
   }

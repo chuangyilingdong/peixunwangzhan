@@ -70,6 +70,26 @@
   ```
   开发验证优先使用临时 SQLite 数据库、迁移备份和可回滚脚本。
 
+### 0.5.1 已授权发布通道（新对话必须优先使用）
+
+本项目已由项目负责人授权使用以下 ECS SSH 通道执行受控内测发布。后续新对话不得因为没有当前聊天上下文而默认判断“没有凭据”；开始发布前先按本节信息核查连接状态。
+
+```powershell
+$key = 'C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519'
+$host = 'root@39.106.183.200'
+ssh -i $key -o IdentitiesOnly=yes $host
+```
+
+- SSH 用户：`root`
+- 服务器：`39.106.183.200`
+- 私钥路径：`C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519`
+- 服务器用途：仅维护隔离内测目录 `/srv/ai-kids-platform/internal-test/`；正式生产切换必须遵守生产发布闸门并保留备份与回滚点。
+- 公钥注释：`codex-temporary-ai-kids-platform-20260904`
+- 本机私钥只允许从上述路径读取；**不得把私钥内容写入 Git、Markdown、日志、命令输出或聊天消息**。
+- SSH 超时处理：通常是本机公网出口 IP 发生变化。只需在阿里云安全组将 TCP `22` 来源更新为当前出口 IP；不得把 `22` 端口放开到 `0.0.0.0/0`，也不需要重新配置服务器。
+
+受控内测发布的标准顺序：确认提交已推送到 `origin/main`，服务器 `git fetch/reset`，执行 `deploy/internal-test/build-internal-test.sh`，执行内测数据库备份，原子切换 release，重启 `learning-platform-internal-test`，检查 `127.0.0.1:8788/health`，最后做公网入口回归。详细命令见 `deploy/internal-test/RUNBOOK.md`。
+
 ---
 
 ### 0.6 用户当前范围决策（2026-09-04）

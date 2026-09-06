@@ -283,6 +283,9 @@ export async function handleAdminBillingConfig(ctx) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const body = ctx.body || {};
     const before = getAiProviderPolicy();
+    const platformPerCallBudget = body.platformPerCallBudget === undefined ? Number(before.platformPerCallBudget || 0) : integer(body.platformPerCallBudget, '平台单次预算', { min: 0, max: 1000000 });
+    const platformDailyBudget = body.platformDailyBudget === undefined ? Number(before.platformDailyBudget || 0) : integer(body.platformDailyBudget, '平台每日预算', { min: 0, max: 100000000 });
+    if (platformPerCallBudget > platformDailyBudget) throw errors.badRequest('平台单次预算不能高于平台每日预算', 'AI_BUDGET_RANGE_INVALID');
     const provider = String(body.provider || before.provider || 'local-mock').trim().toLowerCase();
     if (!GENERATION_PROVIDER_IDS.has(provider)) throw errors.badRequest('供应商必须来自已批准目录', 'AI_PROVIDER_NOT_APPROVED');
     const model = body.model === undefined ? before.model : String(body.model || '').trim();
