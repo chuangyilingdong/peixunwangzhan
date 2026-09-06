@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addEdge,
   Background,
@@ -226,16 +226,26 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
   const { getViewport, screenToFlowPosition } = useReactFlow();
+  const historyRef = useRef({ past: [], future: [] });
+  const clipboardRef = useRef([]);
+  const restoringHistoryRef = useRef(false);
+
+  const pushHistory = useCallback((snapshot) => {
+    if (readOnly || restoringHistoryRef.current) return;
+    historyRef.current = { past: [...historyRef.current.past.slice(-49), safeSnapshot(snapshot)], future: [] };
+  }, [readOnly]);
 
   const updateNode = useCallback((nodeId, changes) => {
     if (readOnly) return;
+    pushHistory({ nodes, edges, viewport });
     setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, ...changes } } : node));
-  }, [readOnly, setNodes]);
+  }, [edges, nodes, pushHistory, readOnly, setNodes, viewport]);
 
   const onConnect = useCallback((connection) => {
     if (readOnly) return;
+    pushHistory({ nodes, edges, viewport });
     setEdges((current) => addEdge({ ...connection, id: id('edge'), markerEnd: { type: MarkerType.ArrowClosed }, animated: true }, current));
-  }, [readOnly, setEdges]);
+  }, [edges, nodes, pushHistory, readOnly, setEdges, viewport]);
 
   const onDrop = useCallback((event) => {
     event.preventDefault();
@@ -249,10 +259,63 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
     const materialType = String(material?.materialType || snapshot.type || 'NOTE').toUpperCase();
     const type = snapshot.type || ({ IMAGE: 'image', VIDEO: 'video', AUDIO: 'audio', MUSIC: 'audio', PODCAST: 'audio', DUBBING: 'audio', ANIMATION: 'animation', CHARACTER: 'character', SCENE: 'scene', TEXT: 'prompt', PROMPT: 'prompt' }[materialType] || 'note');
     const fallbackData = type === 'image' ? { title: material.title, emoji: '✨', caption: material.description || '' } : type === 'video' ? { title: material.title, text: material.description || '' } : type === 'audio' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'animation' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'character' ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' } : type === 'scene' ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' } : { title: material.title, text: material.description || '' };
+    pushHistory({ nodes, edges, viewport });
     const bounds = event.currentTarget.getBoundingClientRect();
     const position = screenToFlowPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
     setNodes((current) => [...current, { id: `material-${Date.now().toString(36)}`, type, position, data: { ...fallbackData, ...sourceData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true } }]);
-  }, [readOnly, screenToFlowPosition, setNodes]);
+  }, [edges, nodes, pushHistory, readOnly, screenToFlowPosition, setNodes, viewport]);
+
+  const handleNodesChange = useCallback((changes) => {
+    if (!readOnly && changes.some((change) => change.type !== 'select')) pushHistory({ nodes, edges, viewport });
+    onNodesChange(changes);
+  }, [edges, nodes, onNodesChange, pushHistory, readOnly, viewport]);
+
+  const handleEdgesChange = useCallback((changes) => {
+    if (!readOnly && changes.some((change) => change.type !== 'select')) pushHistory({ nodes, edges, viewport });
+    onEdgesChange(changes);
+  }, [edges, nodes, onEdgesChange, pushHistory, readOnly, viewport]);
+
+  const undo = useCallback(() => {
+    const past = historyRef.current.past;
+    if (readOnly || !past.length) return;
+    const previous = past[past.length - 1];
+    historyRef.current = { past: past.slice(0, -1), future: [safeSnapshot({ nodes, edges, viewport }), ...historyRef.current.future].slice(0, 50) };
+    restoringHistoryRef.current = true;
+    setNodes(previous.nodes); setEdges(previous.edges); setViewport(previous.viewport);
+    window.setTimeout(() => { restoringHistoryRef.current = false; }, 0);
+  }, [edges, nodes, readOnly, setEdges, setNodes, viewport]);
+
+  const redo = useCallback(() => {
+    const future = historyRef.current.future;
+    if (readOnly || !future.length) return;
+    const next = future[0];
+    historyRef.current = { past: [...historyRef.current.past, safeSnapshot({ nodes, edges, viewport })].slice(-50), future: future.slice(1) };
+    restoringHistoryRef.current = true;
+    setNodes(next.nodes); setEdges(next.edges); setViewport(next.viewport);
+    window.setTimeout(() => { restoringHistoryRef.current = false; }, 0);
+  }, [edges, nodes, readOnly, setEdges, setNodes, viewport]);
+
+  useEffect(() => {
+    if (readOnly) return undefined;
+    const handleKeyDown = (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); return; }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
+        const selected = nodes.filter((node) => node.selected);
+        if (selected.length) { clipboardRef.current = selected.map((node) => ({ ...node, selected: false, data: { ...node.data } })); event.preventDefault(); }
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v' && clipboardRef.current.length) {
+        event.preventDefault(); pushHistory({ nodes, edges, viewport });
+        const pasted = clipboardRef.current.map((node, index) => ({ ...node, id: id(node.type), position: { x: node.position.x + 40 + index * 18, y: node.position.y + 40 + index * 18 }, selected: false, data: { ...node.data } }));
+        setNodes((current) => [...current.map((node) => ({ ...node, selected: false })), ...pasted]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [edges, nodes, pushHistory, readOnly, redo, setNodes, undo, viewport]);
 
   useEffect(() => {
     onChange?.({ nodes, edges, viewport: getViewport() });
@@ -264,8 +327,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        onNodesChange={readOnly ? undefined : onNodesChange}
-        onEdgesChange={readOnly ? undefined : onEdgesChange}
+        onNodesChange={readOnly ? undefined : handleNodesChange}
+        onEdgesChange={readOnly ? undefined : handleEdgesChange}
         onConnect={onConnect}
         onDrop={onDrop}
         onDragOver={(event) => event.preventDefault()}
