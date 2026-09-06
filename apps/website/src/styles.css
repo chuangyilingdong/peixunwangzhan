@@ -118,3 +118,52 @@
 /* Homepage uses the Inner Circle header, while keeping the same authenticated entry points as the rest of the site. */
 .ic-nav a{padding:9px 14px;border-radius:999px;color:#fff;font:600 12px/1 Manrope,"Microsoft YaHei",sans-serif;letter-spacing:.08em;transition:.3s;white-space:nowrap}.ic-nav a:hover,.ic-nav a.active{background:#fff;color:#11010a}.ic-auth{display:flex;align-items:center;flex:0 0 auto}.ic-auth>.top-button{padding:9px 15px;border-radius:999px;background:#fff;color:#11010a;font:700 12px/1 Manrope,"Microsoft YaHei",sans-serif}.ic-auth .header-user{font-size:11px;padding:4px 8px}.ic-auth .header-user .role-tag{font-size:10px}.ic-auth .header-user .text-button{font-size:11px}.ic-menu-login{display:none}.ic-menu-items a{display:flex;justify-content:space-between;width:100%;padding:18px 4px;border:0;border-bottom:1px solid rgba(255,255,255,.1);background:transparent;color:#fff;text-align:left;cursor:pointer;font:400 19px/1 Michroma,Manrope,sans-serif;letter-spacing:.08em}.ic-menu-items a.active{color:#ff005e}
 @media(max-width:700px){.ic-auth{display:none}.ic-menu-login{display:block;margin-top:28px}.ic-menu-login .top-button{display:inline-flex;padding:12px 18px;border-radius:999px;background:#fff;color:#11010a;font-weight:800}.ic-menu-login .header-user{display:flex;width:max-content;color:#fff}}
+
+/* 官网登录页：与 AI 魔法学院首页保持一致的品牌化入口 */
+.website-login {
+  min-height: 100vh;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(255, 224, 151, .22), transparent 26%),
+    radial-gradient(circle at 88% 78%, rgba(154, 125, 255, .27), transparent 32%),
+    linear-gradient(135deg, #32235f 0%, #553494 47%, #8c63d8 100%);
+}
+.website-login::before,.website-login::after { content: ""; position: absolute; pointer-events: none; border: 1px solid rgba(255,255,255,.18); border-radius: 50%; transform: rotate(-22deg); }
+.website-login::before { width: 72vw; height: 33vw; left: -20vw; top: -13vw; }
+.website-login::after { width: 58vw; height: 25vw; right: -14vw; bottom: -8vw; border-color: rgba(255,218,118,.28); transform: rotate(25deg); }
+.website-login .login-page { width: min(1180px,100%); min-height: 100vh; margin: 0 auto; padding: 72px 42px 50px; display: grid; grid-template-columns: minmax(0,1.05fr) minmax(380px,.75fr); align-items: center; gap: clamp(50px,8vw,120px); position: relative; z-index: 1; }
+.login-back { position: absolute; z-index: 3; top: 28px; left: max(28px,calc(50% - 548px)); display: inline-flex; align-items: center; gap: 7px; color: rgba(255,255,255,.78); font-size: 13px; font-weight: 700; transition: color .2s ease,transform .2s ease; }
+.login-back:hover { color: #fff; transform: translateX(-3px); }
+.website-login .login-intro { min-height: 520px; position: relative; display: flex; justify-content: center; flex-direction: column; color: #fff; padding: 34px 0; }
+.website-login .login-intro > .brand { position: absolute; top: 0; left: 0; display: inline-flex; align-items: center; gap: 11px; color: #fff; font-size: 18px; font-weight: 900; letter-spacing: -.5px; }
+.website-login .login-intro .brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 13px; color: #473184; background: linear-gradient(135deg,#ffe798,#b89cff); box-shadow: 0 10px 25px rgba(23,10,62,.25); }
+.website-login .login-copy { position: relative; z-index: 1; max-width: 570px; }
+.website-login .login-eyebrow { margin: 0 0 18px; color: #ffe798; font-size: 12px; font-weight: 900; letter-spacing: 1.5px; }
+.website-login .login-copy h1 { max-width: 480px; margin: 0 0 22px; color: #fff; font-size: clamp(48px,6vw,78px); line-height: 1.04; letter-spacing: -4px; }
+.website-login .login-copy > p:not(.login-eyebrow) { max-width: 430px; margin: 0; color: rgba(255,255,255,.76); font-size: 16px; line-height: 1.85; }
+.website-login .login-points { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
+.website-login .login-points span { padding: 9px 13px; border: 1px solid rgba(255,255,255,.2); border-radius: 99px; color: rgba(255,255,255,.88); background: rgba(255,255,255,.09); font-size: 12px; font-weight: 800; backdrop-filter: blur(8px); }
+.website-login .login-orbit { position: absolute; border: 1px solid rgba(255,255,255,.17); border-radius: 50%; pointer-events: none; }
+.website-login .login-orbit.a { width: 470px; height: 190px; left: -92px; bottom: 13px; transform: rotate(-19deg); }
+.website-login .login-orbit.b { width: 300px; height: 460px; right: -110px; top: 82px; border-color: rgba(255,218,118,.22); transform: rotate(33deg); }
+.website-login .login-orbit.a::after,.website-login .login-orbit.b::after { content: "✦"; position: absolute; color: #ffda76; font-size: 22px; }
+.website-login .login-orbit.a::after { right: 20px; top: 8px; }
+.website-login .login-orbit.b::after { left: 28px; bottom: 24px; color: #ffad87; }
+.website-login .login-side { display: flex; align-items: center; flex-direction: column; justify-content: center; }
+.website-login .login-card { width: 100%; max-width: 430px; padding: 38px 38px 34px; border: 1px solid rgba(255,255,255,.7); border-radius: 26px; background: rgba(255,255,255,.96); box-shadow: 0 28px 80px rgba(25,11,67,.3),0 2px 0 rgba(255,255,255,.35) inset; }
+.website-login .login-card-kicker { margin: 0 0 11px; color: #7058d5; font-size: 12px; font-weight: 900; letter-spacing: 1.2px; }
+.website-login .login-card h2 { margin: 0; color: #2a2540; font-size: 29px; letter-spacing: -1.5px; }
+.website-login .login-card > .muted { margin: 10px 0 28px; color: #817a92; font-size: 13px; line-height: 1.7; }
+.website-login .login-card form { display: grid; gap: 17px; }
+.website-login .login-card label { display: grid; gap: 8px; color: #514a66; font-size: 12px; font-weight: 800; }
+.website-login .login-card input { width: 100%; min-height: 50px; padding: 0 15px; border: 1px solid #e4dfef; border-radius: 12px; outline: none; color: #2a2540; background: #fbfaff; transition: border-color .2s ease,box-shadow .2s ease,background .2s ease; }
+.website-login .login-card input:hover { border-color: #cfc3ee; }
+.website-login .login-card input:focus { border-color: #7058d5; background: #fff; box-shadow: 0 0 0 4px rgba(112,88,213,.12); }
+.website-login .login-card .notice { margin: 0; font-size: 12px; line-height: 1.6; }
+.website-login .primary-button { width: 100%; min-height: 52px; margin-top: 5px; border: 0; border-radius: 13px; color: #fff; background: linear-gradient(135deg,#755bd8,#503a9d); box-shadow: 0 13px 25px rgba(91,65,171,.25); font-size: 14px; font-weight: 900; cursor: pointer; transition: transform .2s ease,box-shadow .2s ease,filter .2s ease; }
+.website-login .primary-button:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.05); box-shadow: 0 17px 29px rgba(91,65,171,.34); }
+.website-login .primary-button span { margin-left: 8px; color: #ffe798; font-size: 17px; }
+.website-login .login-legal { margin-top: 18px; color: rgba(255,255,255,.58); font-size: 11px; }
+@media (max-width: 800px) { .website-login .login-page { grid-template-columns: 1fr; gap: 26px; padding: 86px 24px 40px; } .website-login .login-intro { min-height: auto; padding: 38px 0 0; } .website-login .login-copy h1 { font-size: clamp(44px,12vw,64px); } .website-login .login-copy > p:not(.login-eyebrow) { font-size: 14px; } .website-login .login-orbit.b { right: -190px; top: 20px; } .website-login .login-side { align-items: stretch; } .website-login .login-card { max-width: none; } .login-back { left: 24px; } }
+@media (max-width: 440px) { .website-login .login-page { padding-left: 18px; padding-right: 18px; } .website-login .login-card { padding: 29px 22px 25px; border-radius: 20px; } .website-login .login-card h2 { font-size: 25px; } .website-login .login-intro > .brand { font-size: 16px; } .website-login .login-points { margin-top: 24px; } .login-back { left: 18px; } }

@@ -43,7 +43,7 @@ function LoginPage() {
     else if (role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN') { navigate('/admin/'); }
     else { navigate('/learn'); }
   }
-  return <LoginPanel title='登录' description='使用机构分配的账号进入你的工作台。' onLogin={handleLogin} demos={[]} />;
+  return <div className='website-login'><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title='登录' description='使用机构分配的账号进入你的工作台。' onLogin={handleLogin} demos={[]} /></div>;
 }
 
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
