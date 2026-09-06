@@ -1,9 +1,51 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
+import { LoginPanel } from '@platform/shared';
+
+const SESSION_KEY = 'ai-kids-platform.session.v1';
+const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE ? String(import.meta.env.VITE_API_BASE).replace(/\/$/, '') : '/api');
+
+function readUserSession() {
+  try {
+    const stored = window.localStorage.getItem(SESSION_KEY);
+    const session = stored ? JSON.parse(stored) : null;
+    return session?.token ? session : null;
+  } catch { return null; }
+}
+
+function saveUserSession(value) {
+  const session = { token: value.token, expiresAt: value.expiresAt, user: value.user, organization: value.organization || null };
+  window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  return session;
+}
+
+function removeUserSession() {
+  try { window.localStorage.removeItem(SESSION_KEY); } catch { /* storage is optional */ }
+}
+
+function LoginPage() {
+  const navigate = useNavigate();
+  async function handleLogin({ login, password }) {
+    const response = await fetch(API_BASE + '/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ login, password }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error?.message || payload.message || '登录失败');
+    const session = saveUserSession(payload);
+    const role = session.user?.role;
+    if (role === 'STUDENT') { navigate('/student/'); }
+    else if (role === 'TEACHER' || role === 'ORG_ADMIN') { navigate('/org/'); }
+    else if (role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN') { navigate('/admin/'); }
+    else { navigate('/student/'); }
+  }
+  return <LoginPanel title='登录' description='使用机构分配的账号进入你的工作台。' onLogin={handleLogin} demos={[]} />;
+}
 
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
 const INTERNAL_TEST = import.meta.env?.VITE_DEPLOYMENT_MODE === 'internal-test';
@@ -24,7 +66,11 @@ const courses=[
 const FALLBACK_WORKS=[['🫧','点泡泡','小游戏','30 秒内点爆所有泡泡，节奏轻快的点击小游戏。'],['🍂','山行 · 杜牧','语文互动','朗读、探索与闯关结合，把古诗学成可玩的互动课。'],['🧩','C++ 代码大冒险','编程启蒙','积木拼程序，边玩边看 3D 执行过程与代码。'],['🧱','我的世界 · 简化版','沙盒创意','浏览器里搭方块世界，保存自己的创意地图。']];
 
 function Logo(){return <Link className="logo" to="/"><i>✦</i>AI魔法学院</Link>}
-function Header(){const loc=useLocation();const nav=[['/','首页'],['/marketplace','课程广场'],['/courses','课程体系'],['/org','机构方案'],['/works','学员作品'],['/handbook','产品手册'],['/compare','选型对比']];return <header><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="download" to="/download">下载客户端</Link><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link></div></div></header>}
+function Header({ user, userBadge }){
+  const loc=useLocation();
+  const nav=[['/','首页'],['/marketplace','课程广场'],['/courses','课程体系'],['/org','机构方案'],['/works','学员作品'],['/handbook','产品手册'],['/compare','选型对比']];
+  return <header><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="download" to="/download">下载客户端</Link><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div></div></header>;
+}
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><Link to="/download">下载客户端</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · Mac / Windows</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link onClick={()=>trackAnalytics('cta_click',{target:to})} to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
@@ -106,7 +152,6 @@ function Works(){
 function Handbook(){return <><Title eyebrow="产品手册 · 2026" title={<>一站式 AI 创作<br/><em>开课方案</em></>} desc="让每个孩子用 AI 做出自己的作品。面向教培机构、学校与青少年科创营。"/><main className="inner"><section className="cover"><div><b>AI魔法学院</b><h2>让每个孩子<br/>用 AI 做出<br/><em>自己的作品</em></h2><p>青少年 AI 编程创作平台<br/>游戏 · 动画 · 开源硬件</p><small>五格殿下 · 机构合作手册 · 2026</small></div><aside><i>✦</i><span>创作<br/>课程<br/>账号<br/>计费<br/>作品</span></aside></section><section className="points">{[['01','统一平台','创作、课程、账号、计费、作品，一个入口完成。'],['02','机构即可开班','标准课包 + 魔法石管控，老师专心带课。'],['03','政策窗口对齐','素养课好落地，生成式 AI 可用可管。']].map(x=><div key={x[0]}><b>{x[0]}</b><strong>{x[1]}</strong><p>{x[2]}</p></div>)}</section><End title="下载完整机构合作手册" text="先预约演示，我们会把最新版本、课件示例与合作说明发给你。"/></main></>}
 function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','原生桌面端一体：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构魔法石池，按用量记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>AI魔法学院</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>预约机构演示</Button></section></main></>}
 const DOWNLOAD_PLATFORMS=[['MACOS_APPLE','⌘','macOS 版','适用于 Apple 芯片 Mac 电脑'],['WINDOWS_X64','⊞','Windows 版','适用于 Windows 10 / 11 64 位']];
-const API_BASE=(import.meta.env&&import.meta.env.VITE_API_BASE?String(import.meta.env.VITE_API_BASE).replace(/\/$/,''):'/api');
 const CMS_FALLBACK = { HOME: { heroKicker: '教培机构青少年 AI 开课平台', heroTitle: '给机构一套', heroAccent: '能落地的青少年 AI 课', heroDescription: 'AI魔法学院把课程、桌面客户端、机构账号、魔法石计费与作品展厅放在一个平台里。', trustTitle: '响应教育部「做中学」领航行动', trustDescription: '真实问题 · 项目式探究 · 每节课都有作品' } };
 function useWebsiteContent(key) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
@@ -292,5 +337,16 @@ function MarketplaceDetail(){
 }
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
 function AnalyticsConsentBanner({ onDecision }) { return <aside className="analytics-consent" role="dialog" aria-label="统计分析选择"><div><strong>帮助我们改进官网体验</strong><p>我们只在你选择同意后记录匿名页面访问与转化事件，不记录 IP、姓名、电话或完整查询参数；数据最多保留 90 天。详见<Link to="/privacy">隐私政策</Link>。</p></div><div className="analytics-consent-actions"><button type="button" className="consent-muted" onClick={() => onDecision(false)}>仅使用必要功能</button><button type="button" className="button" onClick={() => onDecision(true)}>同意匿名分析</button></div></aside> }
-function App(){const loc=useLocation();const [analyticsConsent,setAnalyticsConsentState]=useState(getAnalyticsConsent());useEffect(()=>{const titles={'/':'AI魔法学院 · AI 创作课堂 Inner Circle','/marketplace':'课程广场 · AI魔法学院','/courses':'课程体系 · AI魔法学院','/org':'机构方案 · AI魔法学院','/works':'学员作品 · AI魔法学院','/handbook':'产品手册 · AI魔法学院','/compare':'选型对比 · AI魔法学院','/download':'下载说明 · AI魔法学院','/demo':'预约演示 · AI魔法学院','/terms':'用户协议 · AI魔法学院','/privacy':'隐私政策 · AI魔法学院','/minors':'儿童 / 未成年人说明 · AI魔法学院'};const title=titles[loc.pathname]||titles['/'];document.title=title;const robots=document.querySelector('meta[name=robots]');if(robots)robots.setAttribute('content',INTERNAL_TEST?'noindex, nofollow, noarchive':'index,follow');const description=document.querySelector('meta[name=description]');if(description)description.setAttribute('content','AI魔法学院：面向教培机构与学校的青少年 AI 创作课堂，用中文对话、VibeCoding 与项目式学习，让孩子从灵感进入作品。');const canonical=document.querySelector('link[rel=canonical]');if(canonical)canonical.setAttribute('href',window.location.origin+(loc.pathname==='/'?'':loc.pathname));const ogTitle=document.querySelector('meta[property="og:title"]');if(ogTitle)ogTitle.setAttribute('content',title);const ogUrl=document.querySelector('meta[property="og:url"]');if(ogUrl)ogUrl.setAttribute('content',window.location.origin+(loc.pathname==='/'?'':loc.pathname));if(analyticsConsent===true)trackAnalytics('page_view',{title});},[loc.pathname,analyticsConsent]);function decide(value){setAnalyticsConsent(value);setAnalyticsConsentState(value);if(value)trackAnalytics('analytics_consent_granted');}return <div className="site">{INTERNAL_TEST&&<div className="internal-test-banner" role="status">内部测试环境 · 不代表正式服务</div>}{loc.pathname !== "/" && <Header/>}<Routes><Route path="/" element={<Home/>}/><Route path="/marketplace" element={<Marketplace/>}/><Route path="/marketplace/:id" element={<MarketplaceDetail/>}/><Route path="/courses" element={<Courses/>}/><Route path="/org" element={<Org/>}/><Route path="/works" element={<Works/>}/><Route path="/handbook" element={<Handbook/>}/><Route path="/compare" element={<Compare/>}/><Route path="/download" element={<Download/>}/><Route path="/demo" element={<Demo/>}/><Route path="/terms" element={<LegalPage type="terms"/>}/><Route path="/privacy" element={<LegalPage type="privacy"/>}/><Route path="/minors" element={<LegalPage type="minors"/>}/><Route path="*" element={<Home/>}/></Routes>{loc.pathname !== "/" && <Footer/>}{analyticsConsent===null&&<AnalyticsConsentBanner onDecision={decide}/>}</div>};
+function App(){
+  const loc=useLocation();
+  const [session,setSession]=useState(readUserSession);
+  const [analyticsConsent,setAnalyticsConsentState]=useState(getAnalyticsConsent());
+
+  function logout() {
+    removeUserSession();
+    setSession(null);
+  }useEffect(()=>{const titles={'/':'AI魔法学院 · AI 创作课堂 Inner Circle','/marketplace':'课程广场 · AI魔法学院','/courses':'课程体系 · AI魔法学院','/org':'机构方案 · AI魔法学院','/works':'学员作品 · AI魔法学院','/handbook':'产品手册 · AI魔法学院','/compare':'选型对比 · AI魔法学院','/download':'下载说明 · AI魔法学院','/demo':'预约演示 · AI魔法学院','/terms':'用户协议 · AI魔法学院','/privacy':'隐私政策 · AI魔法学院','/minors':'儿童 / 未成年人说明 · AI魔法学院'};const title=titles[loc.pathname]||titles['/'];document.title=title;const robots=document.querySelector('meta[name=robots]');if(robots)robots.setAttribute('content',INTERNAL_TEST?'noindex, nofollow, noarchive':'index,follow');const description=document.querySelector('meta[name=description]');if(description)description.setAttribute('content','AI魔法学院：面向教培机构与学校的青少年 AI 创作课堂，用中文对话、VibeCoding 与项目式学习，让孩子从灵感进入作品。');const canonical=document.querySelector('link[rel=canonical]');if(canonical)canonical.setAttribute('href',window.location.origin+(loc.pathname==='/'?'':loc.pathname));const ogTitle=document.querySelector('meta[property="og:title"]');if(ogTitle)ogTitle.setAttribute('content',title);const ogUrl=document.querySelector('meta[property="og:url"]');if(ogUrl)ogUrl.setAttribute('content',window.location.origin+(loc.pathname==='/'?'':loc.pathname));if(analyticsConsent===true)trackAnalytics('page_view',{title});},[loc.pathname,analyticsConsent]);function decide(value){setAnalyticsConsent(value);setAnalyticsConsentState(value);if(value)trackAnalytics('analytics_consent_granted');}const roleBadge = {'STUDENT':'小小创作者','TEACHER':'教师','ORG_ADMIN':'机构管理员','SUPER_ADMIN':'平台管理员','PLATFORM_ADMIN':'平台管理员'};
+const userBadge = session ? <span className="header-user"><span>{session.user?.displayName || session.user?.login || '用户'}</span><span className="role-tag">{roleBadge[session.user?.role] || session.user?.role}</span><button className="text-button" onClick={logout}>退出</button></span> : <Link className="top-button" to="/login">登录</Link>;
+if (loc.pathname === '/login') return <LoginPage/>;
+return <div className="site">{INTERNAL_TEST&&<div className="internal-test-banner" role="status">内部测试环境 · 不代表正式服务</div>}{loc.pathname !== "/" && <Header user={session ? { displayName: session.user?.displayName, role: session.user?.role } : null} userBadge={userBadge} logout={logout} />}<Routes><Route path="/" element={<Home/>}/><Route path="/login" element={<LoginPage/>}/><Route path="/marketplace" element={<Marketplace/>}/><Route path="/marketplace/:id" element={<MarketplaceDetail/>}/><Route path="/courses" element={<Courses/>}/><Route path="/org" element={<Org/>}/><Route path="/works" element={<Works/>}/><Route path="/handbook" element={<Handbook/>}/><Route path="/compare" element={<Compare/>}/><Route path="/download" element={<Download/>}/><Route path="/demo" element={<Demo/>}/><Route path="/terms" element={<LegalPage type="terms"/>}/><Route path="/privacy" element={<LegalPage type="privacy"/>}/><Route path="/minors" element={<LegalPage type="minors"/>}/><Route path="*" element={<Home/>}/></Routes>{loc.pathname !== "/" && <Footer/>}{analyticsConsent===null&&<AnalyticsConsentBanner onDecision={decide}/>}</div>};
 createRoot(document.getElementById('root')).render(<BrowserRouter><App/></BrowserRouter>);

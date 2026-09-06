@@ -62,3 +62,54 @@
 .ic-video-poster + .ic-scrub-video{z-index:3}
 
 .ic-video-poster{opacity:1;transition:opacity .25s ease}.ic-video-poster.is-hidden{opacity:0}
+
+/* ── Unified login header ────────────────────────────────── */
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 20px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.85);
+}
+
+.header-user .role-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 10px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.9);
+  white-space: nowrap;
+}
+
+.header-user .text-button {
+  font-size: 12px;
+  padding: 2px 6px;
+  color: rgba(255,255,255,0.6);
+}
+
+.header-user .text-button:hover {
+  color: #fff;
+}
+
+/* ── Login page tweaks for website context ─────────────── */
+.login-page {
+  min-height: 100vh;
+}
+
+.login-side {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.login-legal {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: #aaa;
+}
+
