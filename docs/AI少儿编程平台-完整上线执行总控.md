@@ -121,6 +121,7 @@ ssh -i $key -o IdentitiesOnly=yes $host
 - [x] `learning-platform-production` 为 `active`，`http://127.0.0.1:8789/health` 返回 `status=ok`；Nginx 回环验证 `/`、`/admin/`、`/org/`、`/student/` 和 `/api/health` 均 HTTP 200；证书 `CN=iicili.cyou` 有效期至 2026-11-30。
 - [x] 本次线上代码包含飞彩兼容：视频默认接口 `/v1/videos`、异步状态 `completed`、`metadata.url` 媒体地址；图片继续使用 `/v1/images/generations`。
 - [ ] 本机公网 HTTPS 探测受当前网络环境影响出现 SSL connection reset；服务器本机 Nginx HTTPS + Host 回环验证已通过。真实飞彩 API Key 尚未写入服务器配置，需在后台配置渠道后再做真实生图 / 生视频验收。
+- [x] 2026-09-06 追加修复已发布：提交 `6ea4f339133d391463c47457bfebfd5736e2125e`，production release `20260906T152014Z`。模型读取现在按 `channelId` 使用当前渠道密钥，并将 `/v1/models`、`/v1/videos`、`/v1/images/generations` 等 Endpoint 统一归一化为模型列表地址；服务健康与四端入口复核通过。
 
 - [x] **P9-D01 生产部署与切换（2026-09-04）。**
   - 生产模板：`.env`、systemd、Nginx public、构建、备份、回滚、监控、README / RUNBOOK 已入库；入口回归支持 `--mode public`。
