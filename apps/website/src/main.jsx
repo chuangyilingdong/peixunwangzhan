@@ -433,3 +433,5 @@ function App(){
     </div>
   );
 }
+
+createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>);
