@@ -197,7 +197,25 @@ function NoteNode({ id, data, selected }) {
   </NodeFrame>;
 }
 
-const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode };
+function AudioNode({ id, data, selected }) {
+  const { updateNode } = useCanvasActions();
+  return <NodeFrame icon="♫" tone="audio" title={data.title || '音频素材'}>
+    {data.assetUrl || data.previewUrl ? <audio className="learning-node__audio" controls src={data.previewUrl || data.assetUrl} /> : <div className="learning-node__audio-placeholder">♫ 音频素材</div>}
+    <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="音频说明" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
+    {selected && <span className="learning-node__hint">可播放课程音频、音乐或配音素材</span>}
+  </NodeFrame>;
+}
+
+function AnimationNode({ id, data, selected }) {
+  const { updateNode } = useCanvasActions();
+  return <NodeFrame icon="✧" tone="animation" title={data.title || '动画素材'}>
+    {data.previewUrl || data.assetUrl ? <video className="learning-node__media" controls muted loop src={data.previewUrl || data.assetUrl} /> : <div className="learning-node__animation-placeholder">✧ 动画素材</div>}
+    <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="动画说明" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
+    {selected && <span className="learning-node__hint">用于展示动态画面或动画生成结果</span>}
+  </NodeFrame>;
+}
+
+const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
 function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !readOnly, capabilities = ['text'] }) {
   const initial = useMemo(() => {
@@ -207,7 +225,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
-  const { getViewport } = useReactFlow();
+  const { getViewport, screenToFlowPosition } = useReactFlow();
 
   const updateNode = useCallback((nodeId, changes) => {
     if (readOnly) return;
@@ -218,6 +236,23 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
     if (readOnly) return;
     setEdges((current) => addEdge({ ...connection, id: id('edge'), markerEnd: { type: MarkerType.ArrowClosed }, animated: true }, current));
   }, [readOnly, setEdges]);
+
+  const onDrop = useCallback((event) => {
+    event.preventDefault();
+    if (readOnly) return;
+    const raw = event.dataTransfer.getData('application/x-learning-material');
+    if (!raw) return;
+    let material;
+    try { material = JSON.parse(raw); } catch { return; }
+    const snapshot = material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
+    const sourceData = snapshot.data || snapshot.props || {};
+    const materialType = String(material?.materialType || snapshot.type || 'NOTE').toUpperCase();
+    const type = snapshot.type || ({ IMAGE: 'image', VIDEO: 'video', AUDIO: 'audio', MUSIC: 'audio', PODCAST: 'audio', DUBBING: 'audio', ANIMATION: 'animation', CHARACTER: 'character', SCENE: 'scene', TEXT: 'prompt', PROMPT: 'prompt' }[materialType] || 'note');
+    const fallbackData = type === 'image' ? { title: material.title, emoji: '✨', caption: material.description || '' } : type === 'video' ? { title: material.title, text: material.description || '' } : type === 'audio' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'animation' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'character' ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' } : type === 'scene' ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' } : { title: material.title, text: material.description || '' };
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const position = screenToFlowPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+    setNodes((current) => [...current, { id: `material-${Date.now().toString(36)}`, type, position, data: { ...fallbackData, ...sourceData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true } }]);
+  }, [readOnly, screenToFlowPosition, setNodes]);
 
   useEffect(() => {
     onChange?.({ nodes, edges, viewport: getViewport() });
@@ -232,6 +267,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
         onNodesChange={readOnly ? undefined : onNodesChange}
         onEdgesChange={readOnly ? undefined : onEdgesChange}
         onConnect={onConnect}
+        onDrop={onDrop}
+        onDragOver={(event) => event.preventDefault()}
         onMoveEnd={() => setViewport(getViewport())}
         fitView
         fitViewOptions={{ padding: 0.22 }}

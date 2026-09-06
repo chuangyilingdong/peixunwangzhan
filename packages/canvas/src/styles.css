@@ -33,3 +33,9 @@
 .learning-node__video-preview span { display: grid; place-items: center; width: 44px; height: 44px; border: 2px solid rgba(255,255,255,.8); border-radius: 50%; padding-left: 3px; }
 .learning-node__video-preview small { font-size: 11px; opacity: .88; }
 @media (max-width: 700px) { .learning-canvas { min-height: 590px; height: 72vh; } .learning-canvas__tip { max-width: 230px; } }
+
+.learning-node--audio .learning-node__heading span { color: #fff; background: #39b5d8; }
+.learning-node--animation .learning-node__heading span { color: #40245c; background: #f0a4ff; }
+.learning-node__audio,.learning-node__media { display: block; width: calc(100% - 24px); margin: 12px; border-radius: 10px; }
+.learning-node__audio-placeholder,.learning-node__animation-placeholder { display: grid; place-items: center; height: 105px; margin: 12px; border-radius: 12px; color: #f7f8ff; font-size: 18px; background: linear-gradient(135deg, #247eab, #5d4fca); }
+.learning-node__animation-placeholder { background: linear-gradient(135deg, #9b58d4, #df6b9f); }

@@ -509,7 +509,7 @@ function CanvasWorkspace({ api }) {
   }
 
   function addGeneratedAsset(asset, prompt, modality) {
-    const type = modality === 'IMAGE' ? 'image' : modality === 'VIDEO' ? 'video' : modality === 'TEXT' ? 'prompt' : 'note';
+    const type = modality === 'IMAGE' ? 'image' : modality === 'VIDEO' ? 'video' : modality === 'TEXT' ? 'prompt' : ['MUSIC', 'PODCAST', 'DUBBING'].includes(modality) ? 'audio' : 'note';
     const nodeId = `${type}-asset-${Date.now().toString(36)}`;
     const generatedText = asset.metadata?.text || prompt;
     const data = type === 'image'
@@ -518,7 +518,9 @@ function CanvasWorkspace({ api }) {
         ? { title: asset.label || 'AI 故事短片', text: generatedText, assetUrl: asset.assetUrl, previewUrl: asset.previewUrl }
         : type === 'prompt'
           ? { title: asset.label || 'AI 灵感提示词', text: generatedText, assetUrl: asset.assetUrl }
-          : { title: asset.label || 'AI 创作素材', text: `${modality}：${generatedText}`, assetUrl: asset.assetUrl, previewUrl: asset.previewUrl };
+          : type === 'audio'
+            ? { title: asset.label || 'AI 音频素材', text: `${modality}：${generatedText}`, assetUrl: asset.assetUrl, previewUrl: asset.previewUrl }
+            : { title: asset.label || 'AI 创作素材', text: `${modality}：${generatedText}`, assetUrl: asset.assetUrl, previewUrl: asset.previewUrl };
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
     const next = { ...current, nodes: [...(current.nodes || []), { id: nodeId, type, position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 }, data }] };
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
@@ -559,14 +561,19 @@ function CanvasWorkspace({ api }) {
     finally { setComparing(false); }
   }
 
+  function dragLessonMaterial(event, material) {
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('application/x-learning-material', JSON.stringify(material));
+  }
+
   function addLessonMaterialToCanvas(material) {
     if (!editable || !material) return;
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
     const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
     const sourceData = snapshot.data || snapshot.props || {};
     const materialType = String(material.materialType || snapshot.type || 'NOTE').toUpperCase();
-    const type = snapshot.type || (materialType === 'IMAGE' ? 'image' : materialType === 'VIDEO' ? 'video' : materialType === 'CHARACTER' ? 'character' : materialType === 'SCENE' ? 'scene' : materialType === 'TEXT' || materialType === 'PROMPT' ? 'prompt' : 'note');
-    const fallbackData = type === 'image' ? { title: material.title, emoji: '✨', caption: material.description || '' } : type === 'video' ? { title: material.title, text: material.description || '' } : type === 'character' ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' } : type === 'scene' ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' } : { title: material.title, text: material.description || '' };
+    const type = snapshot.type || ({ IMAGE: 'image', VIDEO: 'video', AUDIO: 'audio', MUSIC: 'audio', PODCAST: 'audio', DUBBING: 'audio', ANIMATION: 'animation', CHARACTER: 'character', SCENE: 'scene', TEXT: 'prompt', PROMPT: 'prompt' }[materialType] || 'note');
+    const fallbackData = type === 'image' ? { title: material.title, emoji: '✨', caption: material.description || '' } : type === 'video' ? { title: material.title, text: material.description || '' } : type === 'audio' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'animation' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'character' ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' } : type === 'scene' ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' } : { title: material.title, text: material.description || '' };
     const node = { id: `lesson-material-${material.id}-${Date.now().toString(36)}`, type, position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 }, data: { ...fallbackData, ...sourceData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true } };
     const next = { ...current, nodes: [...(current.nodes || []), node] };
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1); setMessage(`已将“${material.title || '课堂素材'}”加入画布。`);
@@ -589,7 +596,7 @@ function CanvasWorkspace({ api }) {
         <button className={`student-tool-button ${toolPanel === 'materials' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'materials' ? null : 'materials')}><span>▦</span><small>素材</small></button>
         <button className={`student-tool-button ${toolPanel === 'generate' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'generate' ? null : 'generate')}><span>✦</span><small>AI生成</small></button>
         <button className={`student-tool-button ${toolPanel === 'capabilities' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'capabilities' ? null : 'capabilities')}><span>⚙</span><small>能力</small></button>
-        {toolPanel === 'materials' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>课堂素材</strong><small>点击素材加入画布</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div>{materialGroups.length ? materialGroups.map((group) => <div className="student-material-group" key={group.id || group.title}><h3>{group.title}</h3>{(group.materials || []).map((material) => <button className="student-material-item" key={material.id || material.title} type="button" onClick={() => addLessonMaterialToCanvas(material)}><span className="student-material-item__icon">{material.materialType === 'IMAGE' ? '▧' : material.materialType === 'VIDEO' ? '▶' : '✎'}</span><span><strong>{material.title}</strong><small>{material.description || '点击后加入画布'}</small></span><b>＋</b></button>)}</div>) : <p className="student-tool-empty">老师还没有为本节课配置素材。</p>}</div>}
+        {toolPanel === 'materials' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>课堂素材</strong><small>点击加入画布，也可拖入画布</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div>{materialGroups.length ? materialGroups.map((group) => <div className="student-material-group" key={group.id || group.title}><h3>{group.title}</h3>{(group.materials || []).map((material) => <button className="student-material-item" key={material.id || material.title} type="button" draggable="true" onDragStart={(event) => dragLessonMaterial(event, material)} onClick={() => addLessonMaterialToCanvas(material)}><span className="student-material-item__icon">{material.materialType === 'IMAGE' ? '▧' : material.materialType === 'VIDEO' ? '▶' : ['AUDIO', 'MUSIC', 'PODCAST', 'DUBBING'].includes(material.materialType) ? '♫' : material.materialType === 'ANIMATION' ? '✧' : '✎'}</span><span><strong>{material.title}</strong><small>{material.description || '点击后加入画布'}</small></span><b>＋</b></button>)}</div>) : <p className="student-tool-empty">老师还没有为本节课配置素材。</p>}</div>}
         {toolPanel === 'generate' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>AI 素材工坊</strong><small>只显示本课已开放的能力</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><form onSubmit={generateMaterial}><label>素材类型<select value={generationForm.modality} onChange={(event) => setGenerationForm((current) => ({ ...current, modality: event.target.value }))}>{[['IMAGE','image','画面素材'],['VIDEO','video','故事短片'],['MUSIC','music','音乐素材'],['PODCAST','podcast','播客素材'],['DUBBING','dubbing','配音素材'],['TEXT','text','灵感提示词']].filter(([,key]) => capabilities.includes(key)).map(([value,,label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>素材名称<input value={generationForm.title} maxLength={100} onChange={(event) => setGenerationForm((current) => ({ ...current, title: event.target.value }))} /></label><label>描述你的素材<textarea value={generationForm.prompt} required maxLength={2000} onChange={(event) => setGenerationForm((current) => ({ ...current, prompt: event.target.value }))} /></label><button className="primary-button" disabled={generating || !capabilities.includes(String(generationForm.modality).toLowerCase())}>{generating ? '生成中…' : '生成并加入画布'}</button></form></div>}
         {toolPanel === 'capabilities' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>本课开放能力</strong><small>未勾选的能力不会出现</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><div className="student-capability-list">{[['text','AI 文字'],['image','AI 生图'],['video','AI 生视频'],['music','AI 音乐'],['podcast','AI 播客'],['dubbing','AI 配音']].map(([key,label]) => <span className={capabilities.includes(key) ? 'is-enabled' : ''} key={key}>{capabilities.includes(key) ? '✓' : '—'} {label}</span>)}</div></div>}
       </aside>
