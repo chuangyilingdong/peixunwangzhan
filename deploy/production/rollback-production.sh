@@ -46,6 +46,10 @@ sudo systemctl stop "$SERVICE"
 SERVICE_STOPPED=1
 if [[ -n "$DB_BACKUP" ]]; then
   mkdir -p "$DATA_DIR"
+  # The database service is stopped, so any WAL/SHM files belong to the old
+  # database image. Keeping them beside a restored backup can replay stale
+  # pages into the new image and make SQLite report a malformed schema.
+  rm -f "$DB_PATH-wal" "$DB_PATH-shm"
   install -o ai-kids-prod -g ai-kids-prod -m 0640 "$DB_BACKUP" "$DB_PATH.rollback.tmp"
   mv -f "$DB_PATH.rollback.tmp" "$DB_PATH"
 fi
