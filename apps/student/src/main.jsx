@@ -7,7 +7,7 @@ import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/student').replace(/\/$/, '');
 
-const navigation = [{ to: '/dashboard', icon: '◈', label: '我的学习' }, { to: '/tasks', icon: '✓', label: '课堂任务' }, { to: '/projects', icon: '✦', label: '我的项目' }, { to: '/works', icon: '▣', label: '我的作品' }, { to: '/showcase', icon: '✧', label: '作品墙' }, { to: '/inbox', icon: '✉', label: '消息中心' }, { to: '/help', icon: '?', label: '帮助与下载' }];
+const navigation = [{ to: '/dashboard', icon: '◈', label: '我的学习' }, { to: '/classroom', icon: '▤', label: '学生课堂' }, { to: '/tasks', icon: '✓', label: '课堂任务' }, { to: '/projects', icon: '✦', label: '我的项目' }, { to: '/works', icon: '▣', label: '我的作品' }, { to: '/showcase', icon: '✧', label: '作品墙' }, { to: '/inbox', icon: '✉', label: '消息中心' }, { to: '/help', icon: '?', label: '帮助与下载' }];
 const demos = [{ label: '跟随课堂学生', login: 'student-1', password: 'study123' }, { label: '自主练习学生', login: 'student-2', password: 'study123' }];
 
 function AssetPreview({ asset, compact = false }) {
@@ -60,6 +60,24 @@ function Dashboard({ api }) {
     <Panel title="课程进度总览">{data.courses.length ? <div className="card-list">{data.courses.map((course) => <article className="item-card" key={course.id}><div className="row-actions"><h3>{course.title}</h3><span className="status success">{course.progress.submittedPercent}%</span></div><p>{course.description || '准备好用创意完成这门课吧。'}</p><p className="muted">课时 {course.progress.submittedLessonCount}/{course.progress.lessonCount} · 已开始 {course.progress.startedLessonCount} · 已发布 {course.progress.publishedLessonCount}</p><div className="row-actions"><button className="text-button" onClick={() => navigate('/courses')}>查看课时明细</button></div></article>)}</div> : <Empty title="暂无可用课程" body="加入班级并由老师配置课程后，这里会显示学习进度。" />}</Panel>
   </>;
 }
+function StudentClassroom({ api }) {
+  const navigate = useNavigate();
+  const classroom = useData(() => api.get('student/dashboard'), [api]);
+  const [busy, setBusy] = useState(null); const [message, setMessage] = useState('');
+  if (classroom.loading) return <Loading label="正在读取今日课堂…" />;
+  if (classroom.error) return <ErrorState error={classroom.error} onRetry={classroom.refresh} />;
+  const tasks = (classroom.data?.learningTasks || []).filter((item) => item.today !== false || item.canStart || item.status === 'ACTIVE');
+  async function enter(task) {
+    if (!task.canStart) return;
+    setBusy(task.lessonId); setMessage('');
+    try {
+      if (task.continueProject) navigate(`/projects/${task.continueProject.id}/canvas`);
+      else { const project = await api.post('student/projects', { title: `${task.lessonTitle || '今日课堂'} · 我的创作`, courseLessonId: task.lessonId, canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } } }); navigate(`/projects/${project.id}/canvas`); }
+    } catch (error) { setMessage(error.message || '进入课堂失败'); } finally { setBusy(null); }
+  }
+  return <><PageHeader eyebrow="学生课堂" title="今日课堂" description="老师开始上课后，你就可以点击立即学习进入画布。" actions={<button className="secondary-button" onClick={classroom.refresh}>刷新课堂</button>} />{message && <Notice tone="danger">{message}</Notice>}<Panel title="今日课程">{tasks.length ? <div className="card-list">{tasks.map((task) => <article className="item-card" key={task.lessonId}><div className="row-actions"><h3>{task.lessonTitle || '今日课程'}</h3>{task.canStart ? <span className="status success">已开课</span> : <span className="status warning">等待老师开课</span>}</div><p>{task.courseTitle || '课程'} · {task.className || '我的班级'}</p><p className="muted">{task.canStart ? '老师已开始上课，现在可以进入画布学习。' : '老师点击开始上课后，这里会自动变为可点击状态。'}</p><button className={task.canStart ? 'primary-button' : 'secondary-button'} disabled={!task.canStart || busy === task.lessonId} onClick={() => enter(task)}>{busy === task.lessonId ? '正在进入…' : task.canStart ? '立即学习' : '等待老师开课'}</button></article>)}</div> : <Empty title="今天暂无课程" body="老师配置课程并开始课堂后，这里会显示今日学习内容。" />}</Panel></>;
+}
+
 function StudentTasks({ api }) {
   const tasks = useData(() => api.get('student/learning/tasks'), [api]);
   const [message, setMessage] = useState('');
@@ -1054,7 +1072,7 @@ function App() {
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="学生创作空间" description="在 AI 魔法学院中学习、创作并分享你的作品。" clientType="student" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'STUDENT') return <LoginPanel title="学生创作空间" description="当前会话没有学生创作权限。" clientType="student" demos={demos} onLogin={login} />;
-  return <AppShell product="AI 魔法学院" roleLabel="小小创作者" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/tasks" element={<StudentTasks api={api} />} /><Route path="/projects" element={<Projects api={api} />} /><Route path="/projects/:projectId/canvas" element={<CanvasWorkspace api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/showcase" element={<Showcase api={api} user={session.user} />} /><Route path="/inbox" element={<StudentInbox api={api} />} /><Route path="/courses" element={<StudentCourses api={api} />} /><Route path="/courses/:seriesId" element={<StudentCourses api={api} />} /><Route path="/credits" element={<StudentCredits api={api} />} /><Route path="/account" element={<StudentAccount api={api} onRelogin={() => { clearSession(); setSession(null); navigate('/login'); }} />} /><Route path="/help" element={<HelpCenter api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel="小小创作者" user={session.user} navigation={navigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classroom" element={<StudentClassroom api={api} />} /><Route path="/tasks" element={<StudentTasks api={api} />} /><Route path="/projects" element={<Projects api={api} />} /><Route path="/projects/:projectId/canvas" element={<CanvasWorkspace api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/showcase" element={<Showcase api={api} user={session.user} />} /><Route path="/inbox" element={<StudentInbox api={api} />} /><Route path="/courses" element={<StudentCourses api={api} />} /><Route path="/courses/:seriesId" element={<StudentCourses api={api} />} /><Route path="/credits" element={<StudentCredits api={api} />} /><Route path="/account" element={<StudentAccount api={api} onRelogin={() => { clearSession(); setSession(null); navigate('/login'); }} />} /><Route path="/help" element={<HelpCenter api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

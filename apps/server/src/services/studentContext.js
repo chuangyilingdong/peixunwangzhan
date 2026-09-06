@@ -441,7 +441,23 @@ export function buildStudentDashboard(user) {
   const { id: userId, orgId } = studentIdentity(user);
   const progressByLesson = studentLessonProgressMap(user);
   const classById = new Map(context.classes.map((item) => [item.id, item]));
-  const activeSessionByLesson = new Map(context.activeSessions.filter((item) => item.lessonId).map((item) => [item.lessonId, item]));
+  const activeSessionByKey = new Map(context.activeSessions.filter((item) => item.lessonId).map((item) => [`${item.classId}:${item.lessonId}`, item]));
+  // A classroom item is scheduled for today when a teacher-published learning
+  // task is due today. An already-started session is also shown, even if the
+  // teacher did not set a due date, so the student can enter it immediately.
+  const todayTaskRows = rows(
+    `SELECT DISTINCT task.class_id, task.lesson_id
+     FROM learning_tasks task
+     JOIN class_members member ON member.class_id = task.class_id
+     WHERE member.user_id = ?
+       AND member.removed_at IS NULL
+       AND task.org_id = ?
+       AND task.status = 'PUBLISHED'
+       AND task.due_at IS NOT NULL
+       AND date(task.due_at) = date('now','localtime')`,
+    [userId, orgId],
+  );
+  const todayTaskKeys = new Set(todayTaskRows.map((item) => `${item.class_id}:${item.lesson_id}`));
   const allLessonTasks = [];
   const courses = context.courses.map((course) => {
     const assignedClasses = (course.classIds || []).map((classId) => classById.get(classId)).filter(Boolean);
@@ -451,7 +467,9 @@ export function buildStudentDashboard(user) {
         projectCount: 0, draftProjects: [], workCount: 0, works: [], bestWorkStatus: null,
         feedbackCount: 0, unreadFeedbackCount: 0, unreadAnnotationCount: 0, overallUnreadCount: 0, lastActivityAt: null,
       };
-      const session = activeSessionByLesson.get(lesson.id) || null;
+      const sessionClass = assignedClasses.find((item) => activeSessionByKey.has(`${item.id}:${lesson.id}`));
+      const session = sessionClass ? activeSessionByKey.get(`${sessionClass.id}:${lesson.id}`) : null;
+      const isToday = Boolean(session) || assignedClasses.some((item) => todayTaskKeys.has(`${item.id}:${lesson.id}`));
       const task = {
         lessonId: lesson.id,
         lessonTitle: lesson.title,
@@ -462,9 +480,10 @@ export function buildStudentDashboard(user) {
         className: primaryClass?.name || null,
         teacherName: primaryClass?.teacherName || null,
         status: progress.bestWorkStatus || (progress.projectCount > 0 ? 'IN_PROGRESS' : 'NOT_STARTED'),
+        today: isToday,
         activeNow: Boolean(session),
-        canStart: context.canUseNow,
-        blockReason: context.canUseNow ? null : context.blockReason,
+        canStart: Boolean(session),
+        blockReason: session ? null : '等待老师开始上课',
         session: session ? {
           id: session.id,
           classId: session.classId,
@@ -488,6 +507,7 @@ export function buildStudentDashboard(user) {
         courseTitle: course.title,
         classId: task.classId,
         className: task.className,
+        today: task.today,
         activeNow: task.activeNow,
         status: task.status,
         projectCount: progress.projectCount,
@@ -514,6 +534,7 @@ export function buildStudentDashboard(user) {
   const pendingFeedbackTasks = allLessonTasks.filter((item) => item.progress.unreadFeedbackCount > 0);
   const taskPriority = { REJECTED: 0, IN_PROGRESS: 1, NOT_STARTED: 2, PENDING: 3 };
   const learningTasks = [...unfinishedTasks]
+    .filter((item) => item.today)
     .sort((a, b) => (taskPriority[a.status] ?? 9) - (taskPriority[b.status] ?? 9)
       || String(b.progress.lastActivityAt || '').localeCompare(String(a.progress.lastActivityAt || '')))
     .slice(0, 8);
