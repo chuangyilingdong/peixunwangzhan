@@ -1919,3 +1919,60 @@ node .\p3-api-integration.mjs
 - 新增 `POST /api/admin/billing-config/ai-provider/models`：由服务端使用受限环境变量中的 `AI_PROVIDER_API_KEY` 请求上游 `/models`，仅返回模型 ID、显示名、归属方和上下文窗口等安全字段；不会返回或记录 API Key。
 - 管理员可在供应商配置页面从上游获取模型列表并选择默认模型，也可手动填写模型 ID。
 - 当前已完成的是通用 OpenAI-compatible / custom 的模型发现与配置界面；阿里云、火山、智谱仍需按其官方协议分别接入原生 adapter，不能以通用接口冒充原生完成。
+
+## 2026-09-06 课堂入口类型接入记录
+
+- 状态：`[-]`（课堂入口选择、服务端数据链路和阻断验收已完成；真实 VibeCoding 页面、runtime 与后端集成尚未完成）。
+- 机构管理员 / 教师在开始普通课堂或补课时可选择 `CANVAS`（画布课堂）或 `VIBECODING`（VibeCoding 课堂）；缺省入口类型保持为 `CANVAS`，非法值由服务端以 `INVALID_DELIVERY_MODE` 拒绝。
+- `CANVAS` 课堂继续使用现有学生 Canvas 项目创建链路。活动 `VIBECODING` 课堂不会被学生端伪装成 Canvas；学生端明确显示“VibeCoding 尚未接入”，服务端同时禁止创建 Canvas 项目并返回 `VIBECODING_CLASSROOM_UNAVAILABLE`。
+- 学生 dashboard / 课堂上下文会返回当前课堂的 `deliveryMode`，便于后续接入独立 VibeCoding 页面和 runtime；当前尚不存在可用的 VibeCoding 页面、runtime 或后端执行链路。
+- 验证脚本：`scripts/p6-classroom-delivery-mode-e2e.mjs`，覆盖未开课阻断、默认 `CANVAS` 持久化、Canvas 创建项目、结束课堂后的阻断、`VIBECODING` 持久化与学生端阻断、非法入口类型拒绝。
+- 本次变更未修改 `packages/canvas`，E2E 使用临时 SQLite 数据库，不触碰 `D:\学习平台\platform-v2\packages\data\platform.db`。
+- 生产仍使用 `AI_PROVIDER=local-mock`；本次课堂入口类型接入不代表真实 AI 供应商或 VibeCoding runtime 已上线。
+
+---
+
+## P6 画布课堂链路验证（2026-09-06 15:20 浏览器回归）
+
+### 已验证场景（临时数据库 .tmp/canvas-browser-smoke-20260906/platform.db）
+
+#### 场景 1：教师开启第 2 课 → 学生仅第 2 课解锁
+- 教师在"三年级AI创作一班"选择"第 2 课：设计诗词主角与场景" → 开始课堂（deliveryMode=CANVAS）
+- 学生刷新 /student/classroom：
+  - 课程包：AI古诗词创意营（徽章：已开课）
+  - 第 1、3、4、5 节：置灰 + disabled + "等待老师开课"（5 个）
+  - 第 2 节：**已开课** + 可点击「进入画布课堂」
+- 学生点击「进入画布课堂」→ URL 导航到 /student/canvas/[projectId]/canvas
+- Canvas 完整加载：标题、第 2 课、工具栏、Control Panel、版本历史（版本 1、2）
+
+#### 场景 2：教师结束课堂 → 全部课时置灰
+- 教师点击"结束课堂"
+- 学生刷新课程树：全部 5 个课时置灰 disabled + "等待老师开课"（open=0）
+
+#### 场景 3：教师开启第 1 课 → 仅第 1 课解锁
+- 教师下拉选择"第 1 课 · 第1课：认识古诗与创作主题" → 开始课堂
+- 学生刷新：第 1 节已开课（进入） + 第 2/3/4/5 节置灰 disabled
+
+#### 场景 4：再次结束 → 全部置灰（反向验证）
+- 教师结束 → 学生端全部 5 节 disabled
+
+#### 场景 5：教师开启第 3 课 → 仅第 3 课解锁
+- 教师下拉选择"第 3 课 · 第3课：生成画面与故事分镜" → 开始课堂
+- 学生刷新：open=2（课程包+第3课已开课）、disabled=4
+- 学生点击进入 → URL 导航到 /student/canvas/[projectId]/canvas（第 3 课项目）
+
+### 服务端口
+- API：8787（PID 2484768，已关闭）
+- 机构端：5175（PID 2480620，已关闭）
+- 学生端：5174（PID 2482924，已关闭）
+
+### 账号
+- 教师：teacher-1 / teach123
+- 学生：student-1 / study123
+
+### 结论
+画布课堂链路（教师开课 → 学生解锁 → 进入 Canvas → 保存）全部验证通过，无阻断性 bug。
+
+### 待做
+- VibeCoding 后续接入（当前已在教师端配置 UI 中选择，但创建后学生端阻断明确）
+- 是否临时隐藏教师端的 VibeCoding 选项（可选，视产品策略而定）
