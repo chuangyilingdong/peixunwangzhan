@@ -346,3 +346,11 @@ AI 不再使用平台预算或机构预算。机构充值后获得共享积分�
 - 备份：`/srv/ai-kids-platform/production/backups/20260906T154718Z`。
 - 修复内容：AI 渠道测试 / 读取模型支持当前表单临时 Key；渠道 `apiKey` 不再写入普通策略 JSON，只保存到服务器受限密钥存储。
 - 验证：服务 active，health 通过，Nginx 回环五个入口均 HTTP 200。
+
+## 2026-09-06 课程 AI 创作开通记录
+
+- 课程：`AI古诗词创意营`，已发布、`ALL_ORGS`，已授权测试机构。
+- 课时能力：5 个已发布课时均已开启 `text`、`image`、`video`。
+- 测试班：`三年级AI创作一班`；当前有效会话 `csession_9a324227086a4eb59c85` 的 `allow_video=1`。
+- 生产变更前备份：`/srv/ai-kids-platform/production/backups/20260906T161959Z/platform.db`。
+- 学生测试入口：`https://iicili.cyou/student/` -> “AI古诗词创意营” -> 课时 -> “进入课堂画布” -> “AI生成” -> “故事短片”。

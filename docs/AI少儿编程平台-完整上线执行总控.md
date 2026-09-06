@@ -2116,3 +2116,12 @@ rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260
 - 发布前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T154718Z`。
 - 发布后验证：`learning-platform-production` active；`127.0.0.1:8789/health` 返回 `status=ok`；经 Nginx 回环验证 `/`、`/admin/`、`/org/`、`/student/`、`/api/health` 均 HTTP 200；`nginx -t` 通过。
 - 使用方式：打开最新 `/admin/` 后，在“生视频”渠道重新填写真实飞彩 Key，确认 Endpoint 为 `https://feicai123.top/v1`、协议为 `Chat Completions`，可先直接“测试连接 / 读取模型”，成功后点击“保存全部渠道配置”，再把“视频”能力路由到该渠道。
+
+## 2026-09-06 生产课程 AI 创作能力开通
+
+- 已选用已发布、所有机构可见并已授权测试机构的课程：`AI古诗词创意营`（series `series_922fb58c918149c49da0`）。未新建课程，避免产生重复测试数据。
+- 该课程的 5 个已发布课时均已开通 `text`、`image`、`video` 三项课堂画布能力；其中包含“第3课：生成画面与故事分镜”，学生测试账号已有该课时的课堂项目。
+- 测试班：`三年级AI创作一班`（class `class_e28e6d72597a4bb58537`）；当前有效课堂会话 `csession_9a324227086a4eb59c85` 已开启视频能力（`allow_video=1`）。
+- 变更前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T161959Z/platform.db`。
+- 变更方式：在生产 SQLite 数据库事务内写入课时能力，并开启当前课堂会话视频权限；变更后重新查询确认能力与会话开关生效。没有修改 API Key、私钥或普通代码文件。
+- 学生测试路径：登录 `https://iicili.cyou/student/`，进入“AI古诗词创意营”对应课时，点击“进入课堂画布”，左侧点击“AI生成”，选择“故事短片”。
