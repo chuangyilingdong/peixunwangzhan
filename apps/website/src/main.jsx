@@ -37,7 +37,7 @@ function LoginPage() {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error?.message || payload.message || '登录失败');
-    const session = saveUserSession(payload);
+    const session = saveUserSession(payload.data || payload);
     const role = session.user?.role;
     if (role === 'STUDENT' || role === 'TEACHER' || role === 'ORG_ADMIN') { navigate('/'); }
     else if (role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN') { navigate('/admin/'); }
