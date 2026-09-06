@@ -338,7 +338,7 @@ function MarketplaceDetail(){
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
 function AnalyticsConsentBanner({ onDecision }) { return <aside className="analytics-consent" role="dialog" aria-label="统计分析选择"><div><strong>帮助我们改进官网体验</strong><p>我们只在你选择同意后记录匿名页面访问与转化事件，不记录 IP、姓名、电话或完整查询参数；数据最多保留 90 天。详见<Link to="/privacy">隐私政策</Link>。</p></div><div className="analytics-consent-actions"><button type="button" className="consent-muted" onClick={() => onDecision(false)}>仅使用必要功能</button><button type="button" className="button" onClick={() => onDecision(true)}>同意匿名分析</button></div></aside> }
 function LearnPageInner({ api, navigate }) {
-  return <LearnEntry role="STUDENT" onSelectCanvas={() => navigate('/learn/canvas')} onSelectVibeCoding={() => navigate('/learn/vibecoding')} />;
+  return <main className='learn-page-shell'><LearnEntry role="STUDENT" onSelectCanvas={() => navigate('/learn/canvas')} onSelectVibeCoding={() => navigate('/learn/vibecoding')} /></main>;
 }
 function LearnCanvasPage({ api }) {
   return <CanvasClassroom api={api} onEnterProject={(id) => { window.location.assign('/learn/canvas/' + id); }} />;
