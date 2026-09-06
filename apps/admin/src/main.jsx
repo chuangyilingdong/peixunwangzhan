@@ -591,7 +591,6 @@ function PlatformAdmins({ api, currentUser }) {
     try { await api.put(`admin/platform-admins/${target.id}`, payload); setMessage(successMessage); admins.refresh(); if (editing?.id === target.id) setEditing(null); }
     catch (err) { setMessage(err.message); }
   }
-  async function fetchModels() { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', { endpoint: form.endpoint }); setForm({ ...form, modelMappings: result.items || [], model: result.items?.[0]?.id || form.model }); setMessage(`已从上游获取 ${result.items?.length || 0} 个模型`); } catch (error) { setMessage(error.message || '获取模型失败'); } finally { setBusy(false); } }
   async function save(event) {
     event.preventDefault(); setSaving(true); setMessage('');
     try { await api.put(`admin/platform-admins/${editing.id}`, { displayName: form.displayName, permissions: form.permissions }); setMessage('平台管理员已更新。'); setEditing(null); admins.refresh(); }
@@ -1022,6 +1021,7 @@ function ProviderPolicyPanel({ api }) {
       displayName: policy.displayName || '', note: policy.note || '', websiteUrl: policy.websiteUrl || '', endpointMode: policy.endpointMode || 'BASE', protocol: policy.protocol || 'CHAT', modelMappings: policy.modelMappings || [], apiKey: '', allowStudentExternalContent: Boolean(policy.allowStudentExternalContent), reason: '',
     });
   }, [policy]);
+  async function fetchModels() { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', { endpoint: form.endpoint }); setForm({ ...form, modelMappings: result.items || [], model: result.items?.[0]?.id || form.model }); setMessage(`已从上游获取 ${result.items?.length || 0} 个模型`); } catch (error) { setMessage(error.message || '获取模型失败'); } finally { setBusy(false); } }
   async function save(event) {
     event.preventDefault(); setBusy(true); setMessage('');
     try {
