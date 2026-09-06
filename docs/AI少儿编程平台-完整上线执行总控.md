@@ -2125,3 +2125,12 @@ rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260
 - 变更前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T161959Z/platform.db`。
 - 变更方式：在生产 SQLite 数据库事务内写入课时能力，并开启当前课堂会话视频权限；变更后重新查询确认能力与会话开关生效。没有修改 API Key、私钥或普通代码文件。
 - 学生测试路径：登录 `https://iicili.cyou/student/`，进入“AI古诗词创意营”对应课时，点击“进入课堂画布”，左侧点击“AI生成”，选择“故事短片”。
+
+## 2026-09-06 官网课堂画布 AI 生成入口发布
+
+- 修复 Commit：`bc57de1`（`feat: expose ai generation panel in web classroom canvas`）。
+- 官网共享画布 `/learn/canvas` 原先仅有素材、能力和纯画布节点，虽已有生成 API 逻辑但缺少生成表单；现已补上“AI生成”工具栏和“AI 素材工坊”，按课时能力提供“画面素材”“故事短片”等生成类型，并将生成结果加入当前画布。
+- 生产 release：`/srv/ai-kids-platform/production/releases/20260906T170059Z`。
+- 发布前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T170118Z`。
+- 发布后验证：生产服务 active，`/api` 健康检查通过，官网静态包包含 `AI生成` 与 `AI 素材工坊`。
+- 实际测试：打开 `https://iicili.cyou/learn/canvas/`，登录后进入“AI古诗词创意营”第 3 课“生成画面与故事分镜”，左侧点击“AI生成”，选择“故事短片”，填写描述后点击“生成并加入画布”。旧页面缓存时执行 `Ctrl + F5`。

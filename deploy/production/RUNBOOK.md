@@ -354,3 +354,12 @@ AI 不再使用平台预算或机构预算。机构充值后获得共享积分�
 - 测试班：`三年级AI创作一班`；当前有效会话 `csession_9a324227086a4eb59c85` 的 `allow_video=1`。
 - 生产变更前备份：`/srv/ai-kids-platform/production/backups/20260906T161959Z/platform.db`。
 - 学生测试入口：`https://iicili.cyou/student/` -> “AI古诗词创意营” -> 课时 -> “进入课堂画布” -> “AI生成” -> “故事短片”。
+
+## 2026-09-06 官网课堂画布 AI 生成入口发布记录
+
+- 修复 Commit：`bc57de1`（`feat: expose ai generation panel in web classroom canvas`）。
+- 修复内容：官网 `/learn/canvas` 共享课堂画布补充“AI生成”工具栏和“AI 素材工坊”，按当前课时能力显示画面素材、故事短片等类型；生成完成后自动加入未保存画布。
+- 生产 release：`/srv/ai-kids-platform/production/releases/20260906T170059Z`。
+- 发布前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T170118Z`。
+- 发布后验证：`learning-platform-production` 为 `active`；`127.0.0.1:8789/health` 返回 `status=ok`；当前 release 静态包已包含 `AI生成`、`AI 素材工坊`。
+- 测试入口：`https://iicili.cyou/learn/canvas/`；若旧页面仍缓存，请执行 `Ctrl + F5` 后重新进入课堂画布。
