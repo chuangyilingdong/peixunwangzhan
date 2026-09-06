@@ -65,6 +65,15 @@ export function getOrgAiBudget(orgId) {
 export function assertOrgAiBudget() {}
 export function assertAiBudgets() {}
 
+function providerModelsEndpoint(value) {
+  const parsed = new URL(String(value || '').trim());
+  parsed.pathname = parsed.pathname
+    .replace(/\/(?:chat\/completions|responses|messages|images\/generations|videos(?:\/generations)?|music\/generations|podcasts?\/generations|audio\/(?:speech|dubbing)|models)\/?$/i, '')
+    .replace(/\/$/, '') + '/models';
+  parsed.search = '';
+  return parsed.toString();
+}
+
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
   if (value === undefined || value === null || value === '') return fallback;
   const n = Number(value);
@@ -259,18 +268,18 @@ export async function handleAdminBillingConfig(ctx) {
   if (part === '/billing-config/ai-provider/test' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const endpoint = String(body.endpoint || '').trim(); const apiKey = getProviderApiKey(String(body.channelId || 'default')) || getProviderApiKey() || AI_PROVIDER_API_KEY;
     if (!apiKey) throw errors.badRequest('尚未配置该渠道 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED'); if (!endpoint) throw errors.badRequest('请先填写 Endpoint', 'AI_PROVIDER_ENDPOINT_REQUIRED');
-    let url; try { const parsed = new URL(endpoint); parsed.pathname = parsed.pathname.replace(/\/(chat\/completions|responses|messages|models)\/?$/, '') + '/models'; parsed.search=''; url=parsed.toString(); } catch { throw errors.badRequest('Endpoint 无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
+    let url; try { url = providerModelsEndpoint(endpoint); } catch { throw errors.badRequest('Endpoint 无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
     const controller = new AbortController(); const timer=setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
     try { const response=await fetch(url,{headers:{Authorization:`Bearer ${apiKey}`,Accept:'application/json'},signal:controller.signal}); if(!response.ok) throw errors.badRequest(`连接失败（HTTP ${response.status}）`, response.status===429?'GENERATION_PROVIDER_RATE_LIMITED':'GENERATION_PROVIDER_UPSTREAM_ERROR'); return { ok:true, message:'连接成功' }; } catch (error) { if(error?.code) throw error; throw errors.badRequest(error?.name==='AbortError'?'连接超时':'连接失败','GENERATION_PROVIDER_UPSTREAM_ERROR'); } finally { clearTimeout(timer); }
   }
   if (part === '/billing-config/ai-provider/models' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const policy = getAiProviderPolicy();
-    const apiKey = getProviderApiKey() || AI_PROVIDER_API_KEY;
+    const apiKey = getProviderApiKey(String(ctx.body?.channelId || 'default')) || getProviderApiKey() || AI_PROVIDER_API_KEY;
     if (!apiKey) throw errors.badRequest('尚未配置 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED');
     let url = String(ctx.body?.endpoint || policy.endpoint || '').trim();
     if (!url) throw errors.badRequest('请先配置 API 请求地址', 'AI_PROVIDER_ENDPOINT_REQUIRED');
-    try { const parsed = new URL(url); parsed.pathname = parsed.pathname.replace(/\/(chat\/completions|responses|messages)\/?$/, '') + '/models'; parsed.search = ''; url = parsed.toString(); } catch { throw errors.badRequest('API 请求地址无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
+    try { url = providerModelsEndpoint(url); } catch { throw errors.badRequest('API 请求地址无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
     try {
       const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }, signal: controller.signal });
