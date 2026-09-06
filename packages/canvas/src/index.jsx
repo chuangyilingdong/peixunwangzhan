@@ -225,7 +225,9 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
+  const [contextMenu, setContextMenu] = useState(null);
   const { getViewport, screenToFlowPosition } = useReactFlow();
+  const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
   const historyRef = useRef({ past: [], future: [] });
   const clipboardRef = useRef([]);
   const restoringHistoryRef = useRef(false);
@@ -240,6 +242,31 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
     pushHistory({ nodes, edges, viewport });
     setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, ...changes } } : node));
   }, [edges, nodes, pushHistory, readOnly, setNodes, viewport]);
+
+  const addNodeAt = useCallback((type, position) => {
+    if (readOnly) return;
+    const capabilityByType = { prompt: 'text', image: 'image', video: 'video' };
+    const requiredCapability = capabilityByType[type];
+    const audioEnabled = ['music', 'podcast', 'dubbing'].some((key) => enabledCapabilities.has(key));
+    if ((requiredCapability && !enabledCapabilities.has(requiredCapability)) || (type === 'audio' && !audioEnabled)) return;
+    const templates = {
+      prompt: { title: 'AI 文字提示词', text: '' },
+      image: { title: 'AI 生图', emoji: '✨', caption: '' },
+      video: { title: 'AI 生视频', text: '' },
+      audio: { title: 'AI 音频', text: '' },
+      character: { title: '故事角色', emoji: '🧒', name: '', trait: '' },
+      scene: { title: '故事场景', emoji: '🌲', place: '', mood: '' },
+    };
+    pushHistory({ nodes, edges, viewport });
+    setNodes((current) => [...current, { id: id(type), type, position, data: templates[type] || { title: '画布节点', text: '' } }]);
+    setContextMenu(null);
+  }, [edges, enabledCapabilities, nodes, pushHistory, readOnly, setNodes, viewport]);
+
+  const handlePaneContextMenu = useCallback((event) => {
+    if (readOnly) return;
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY, position: screenToFlowPosition({ x: event.clientX, y: event.clientY }) });
+  }, [readOnly, screenToFlowPosition]);
 
   const onConnect = useCallback((connection) => {
     if (readOnly) return;
@@ -318,6 +345,14 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
   }, [edges, nodes, pushHistory, readOnly, redo, setNodes, undo, viewport]);
 
   useEffect(() => {
+    if (!contextMenu) return undefined;
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', close);
+    return () => { window.removeEventListener('click', close); window.removeEventListener('keydown', close); };
+  }, [contextMenu]);
+
+  useEffect(() => {
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
@@ -331,6 +366,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
         onEdgesChange={readOnly ? undefined : handleEdgesChange}
         onConnect={onConnect}
         onDrop={onDrop}
+        onPaneContextMenu={handlePaneContextMenu}
+        onPaneClick={() => setContextMenu(null)}
         onDragOver={(event) => event.preventDefault()}
         onMoveEnd={() => setViewport(getViewport())}
         fitView
@@ -347,7 +384,16 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, showStarter = !rea
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      <div className="learning-canvas__tip">拖动卡片、从圆点连线；双击空白处可平移和缩放画布。</div>
+      <div className="learning-canvas__tip">拖动卡片、从圆点连线；右键空白处可创建节点。</div>
+      {contextMenu && <div className="learning-canvas__context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
+        <strong>创建节点</strong>
+        <button type="button" onClick={() => addNodeAt('prompt', contextMenu.position)} disabled={!enabledCapabilities.has('text')}>✎ AI 文字</button>
+        <button type="button" onClick={() => addNodeAt('image', contextMenu.position)} disabled={!enabledCapabilities.has('image')}>✦ AI 生图{!enabledCapabilities.has('image') && <small>本课未开放</small>}</button>
+        <button type="button" onClick={() => addNodeAt('video', contextMenu.position)} disabled={!enabledCapabilities.has('video')}>▶ AI 生视频{!enabledCapabilities.has('video') && <small>本课未开放</small>}</button>
+        <button type="button" onClick={() => addNodeAt('audio', contextMenu.position)} disabled={!(['music', 'podcast', 'dubbing'].some((key) => enabledCapabilities.has(key)))}>♫ AI 音频{!(['music', 'podcast', 'dubbing'].some((key) => enabledCapabilities.has(key))) && <small>本课未开放</small>}</button>
+        <button type="button" onClick={() => addNodeAt('character', contextMenu.position)}>♙ 角色节点</button>
+        <button type="button" onClick={() => addNodeAt('scene', contextMenu.position)}>⌂ 场景节点</button>
+      </div>}
     </div>
   </CanvasActionsContext.Provider>;
 }

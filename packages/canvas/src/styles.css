@@ -39,3 +39,11 @@
 .learning-node__audio,.learning-node__media { display: block; width: calc(100% - 24px); margin: 12px; border-radius: 10px; }
 .learning-node__audio-placeholder,.learning-node__animation-placeholder { display: grid; place-items: center; height: 105px; margin: 12px; border-radius: 12px; color: #f7f8ff; font-size: 18px; background: linear-gradient(135deg, #247eab, #5d4fca); }
 .learning-node__animation-placeholder { background: linear-gradient(135deg, #9b58d4, #df6b9f); }
+
+
+.learning-canvas__context-menu { position: fixed; z-index: 20; min-width: 190px; padding: 8px; border: 1px solid #e5defb; border-radius: 12px; background: #fff; box-shadow: 0 12px 32px rgba(64, 47, 125, .18); }
+.learning-canvas__context-menu strong { display: block; padding: 5px 8px 7px; color: #554b7a; font-size: 12px; }
+.learning-canvas__context-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 8px; border: 0; border-radius: 8px; color: #554b7a; background: transparent; text-align: left; font-size: 12px; cursor: pointer; }
+.learning-canvas__context-menu button:hover:not(:disabled) { background: #f3efff; }
+.learning-canvas__context-menu button:disabled { color: #b5aec8; cursor: not-allowed; }
+.learning-canvas__context-menu small { color: #aaa2bb; font-size: 9px; }
