@@ -1976,3 +1976,45 @@ node .\p3-api-integration.mjs
 ### 待做
 - VibeCoding 后续接入（当前已在教师端配置 UI 中选择，但创建后学生端阻断明确）
 - 是否临时隐藏教师端的 VibeCoding 选项（可选，视产品策略而定）
+
+---
+
+## P6 学习上课入口 + 生产发布（2026-09-06 16:33）
+
+### 变更内容
+- **Commit**: ea11cb3（P6 学习上课入口 + 个人积分账本）
+- 新增 /learn 系列路由（官网统一入口，学生/老师均跳此，不再跳转子应用）
+- Header 导航：[首页, 学习上课, 作品广场, 自由画布, 自由对话]
+- personal_credits / magic_stones 列 + personal_credit_ledger 复式账本（FK ON DELETE CASCADE）
+- 机构端侧边栏增加"进入学习上课"外部链接
+- CanvasWorkspace 整体迁移到 packages/shared（与 student 子应用共用）
+- VibeCoding 当前显示"即将开放"占位，未接入运行时
+
+### Schema 变更（启动时自动 ALTER）
+- users 表：新增 personal_credits（INTEGER DEFAULT 0）、magic_stones（INTEGER DEFAULT 0）
+- 新建 personal_credit_ledger 表（IN/OUT 复式账本，含索引）
+
+### 生产发布记录
+| 项目 | 值 |
+|------|-----|
+| Release | 20260906T083111Z |
+| Commit | ea11cb3 |
+| 发布时间 | 2026-09-06T08:31:11Z |
+| 备份路径 | /srv/ai-kids-platform/production/backups/20260906T083231Z/platform.db |
+| 上次 Release（回滚目标） | 20260906T041535Z |
+| 切换方式 | rollback-production.sh --release |
+| 服务状态 | active |
+| 健康检查 | PASS |
+| 入口回归 | 4/4 PASS（/, /admin/, /org/, /student/） |
+
+### 回滚命令（如需）
+rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260906T041535Z --db-backup /srv/ai-kids-platform/production/backups/20260906T083231Z
+
+### 待推进
+- VibeCoding 运行时接入（画布冻结解除后）
+- 自由画布 / 自由编程消耗个人积分接入
+
+
+### 生产安全冒烟（2026-09-06）
+- scripts/p9-live-security-smoke.mjs：全部通过。
+- 敏感路径均返回 404；/api/health 返回 200；HSTS、CSP、nosniff、X-Frame-Options、Referrer-Policy 全部存在。
