@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CanvasEditor } from '@platform/canvas';
+import { CanvasEditor, createCanvasTemplate } from '@platform/canvas';
 import { formatDate } from './auth.js';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 
@@ -293,22 +293,48 @@ export function CanvasWorkspace({ api, ...props }) {
     finally { setComparing(false); }
   }
 
-  return <>
-    <PageHeader eyebrow="魔法画布" title={project.data.title} description={editable ? '把提示词、画面和故事卡片连起来，完成属于你的创作流程。' : '项目已提交，当前以只读方式展示画布内容。'} actions={<><button className="secondary-button" onClick={() => navigate('/projects')}>返回项目</button>{editable && <button className="primary-button" onClick={save} disabled={busy || !draft || !changed}>{busy ? '保存中…' : changed ? '保存画布' : '已保存'}</button>}</>} />
-    <div className="row-actions canvas-meta"><Status value={project.data.status} /><span className="muted">关联课时：{project.data.courseLessonTitle || '—'}</span><span className="muted">当前版本：{project.data.latestVersion}</span><span className="muted">{changed ? '画布有未保存修改' : '所有修改已保存'}</span></div>
-    {message && <Notice tone={message.includes('已保存') || message.includes('已将') || message.includes('已重命名') || message.includes('已导出') || message.includes('已导入') || message.includes('已生成') ? 'success' : 'danger'}>{message}</Notice>}
-    {editable && <Panel title="导入画布快照"><label>选择已导出的 JSON 文件<input type="file" accept="application/json,.json" disabled={importingCanvas} onChange={importCanvas} /></label><Notice>仅支持本平台导出的画布 JSON，最大 1MB。导入只会替换当前未保存草稿；确认后点击“保存画布”才会创建当前项目的新版本。</Notice></Panel>}
-    {editable && <Panel title="下一次保存的版本名称"><label>版本名称<input value={saveLabel} maxLength={100} onChange={(event) => setSaveLabel(event.target.value)} placeholder="例如：完成小狐狸分镜" /></label><Notice>保存时会使用这个名称创建一个新版本；不填写时默认标记为“画布编辑”。</Notice></Panel>}
-    {editable && <Panel title="AI 素材工坊"><form onSubmit={generateMaterial}><label>素材类型<select value={generationForm.modality} onChange={(event) => setGenerationForm((current) => ({ ...current, modality: event.target.value }))}><option value="IMAGE">画面素材</option><option value="VIDEO">故事短片</option><option value="MUSIC">音乐素材</option><option value="PODCAST">播客素材</option><option value="DUBBING">配音素材</option><option value="TEXT">灵感提示词</option></select></label><label>素材名称（可选）<input value={generationForm.title} maxLength={100} placeholder="例如：星光森林封面" onChange={(event) => setGenerationForm((current) => ({ ...current, title: event.target.value }))} /></label><label>描述你的素材<textarea value={generationForm.prompt} required maxLength={2000} placeholder="例如：夜晚的星光森林里，小狐狸举着发光的种子。" onChange={(event) => setGenerationForm((current) => ({ ...current, prompt: event.target.value }))} /></label><button className="primary-button" disabled={generating}>{generating ? '生成中…' : '生成并加入画布（1 积分）'}</button></form><Notice tone="warning">当前供应商：{generations.data?.provider?.provider || 'local-mock'}。真实供应商 adapter 当前支持 TEXT、IMAGE、MUSIC、VIDEO、PODCAST、DUBBING 六类调用；若平台尚未配置真实 provider、对应 Endpoint 或服务器密钥，系统会明确提示，不会伪造成功。</Notice>{generations.data?.items?.length ? <div className="card-list">{generations.data.items.slice(0, 3).map((job) => <article className="item-card" key={job.id}><div className="row-actions"><strong>{job.modality} · {job.prompt.slice(0, 40)}</strong><Status value={job.status === 'SUCCEEDED' ? 'APPROVED' : job.status === 'FAILED' ? 'REJECTED' : 'PENDING'} /></div>{job.assets?.[0] && <AssetPreview asset={job.assets[0]} />}<p className="muted">{job.provider} · {formatDate(job.createdAt)} · {job.creditsCharged} 积分</p></article>)}</div> : null}</Panel>}
-    <CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} readOnly={!editable} onChange={setDraft} />
-    <div className="split">
-      <Panel title="版本历史" actions={<button className="secondary-button" onClick={history.refresh}>刷新历史</button>}>
-        {history.loading ? <Loading label="正在读取版本历史…" /> : history.error ? <ErrorState error={history.error} onRetry={history.refresh} /> : historyItems.length ? <div className="card-list">{historyItems.map((snapshot) => <article className="item-card" key={snapshot.id}><div className="row-actions"><strong>版本 {snapshot.version}</strong><span className="muted">{formatDate(snapshot.createdAt)}</span></div>{renamingVersion === snapshot.version ? <div className="row-actions"><input value={renameLabel} maxLength={100} onChange={(event) => setRenameLabel(event.target.value)} aria-label={`版本 ${snapshot.version} 名称`} /><button className="primary-button" disabled={savingRenameVersion === snapshot.version} onClick={() => renameVersion(snapshot.version)}>{savingRenameVersion === snapshot.version ? '保存中…' : '保存名称'}</button><button className="secondary-button" onClick={() => { setRenamingVersion(null); setRenameLabel(''); }}>取消</button></div> : <p>{snapshot.label || `版本 ${snapshot.version}`} {snapshot.actorName ? `· 保存人：${snapshot.actorName}` : ''}</p>}<div className="row-actions"><button className="text-button" disabled={previewingVersion === snapshot.version} onClick={() => previewVersion(snapshot.version)}>{previewingVersion === snapshot.version ? '打开中…' : '预览'}</button><button className="text-button" disabled={exportingVersion === snapshot.version} onClick={() => exportVersion(snapshot.version)}>{exportingVersion === snapshot.version ? '导出中…' : '导出 JSON'}</button>{editable && <><button className="text-button" onClick={() => { setRenamingVersion(snapshot.version); setRenameLabel(snapshot.label || `版本 ${snapshot.version}`); }}>改名</button><button className="secondary-button" disabled={Boolean(restoringVersion)} onClick={() => restore(snapshot.version)}>{restoringVersion === snapshot.version ? '恢复中…' : '恢复为新版本'}</button></>}</div></article>)}</div> : <Empty title="还没有历史版本" body="保存画布后，这里会出现可恢复的版本。" />}
-      </Panel>
-      <Panel title="版本差异概览"><p className="muted">选择两个历史版本，快速查看卡片和连线的增加、删除与修改情况。</p>{historyItems.length > 1 ? <><label>起始版本<select value={compareFrom} onChange={(event) => setCompareFrom(event.target.value)}>{historyItems.map((item) => <option key={`from-${item.id}`} value={item.version}>版本 {item.version} · {item.label || '未命名'}</option>)}</select></label><label>目标版本<select value={compareTo} onChange={(event) => setCompareTo(event.target.value)}>{historyItems.map((item) => <option key={`to-${item.id}`} value={item.version}>版本 {item.version} · {item.label || '未命名'}</option>)}</select></label><button className="secondary-button" disabled={comparing} onClick={compareVersions}>{comparing ? '比较中…' : '比较版本'}</button>{comparison && <><p><strong>版本 {comparison.from.version}</strong> → <strong>版本 {comparison.to.version}</strong></p><div className="metrics"><MetricCard label="新增卡片" value={comparison.diff.nodes.added} hint={`新增连线 ${comparison.diff.edges.added}`} /><MetricCard label="删除卡片" value={comparison.diff.nodes.removed} hint={`删除连线 ${comparison.diff.edges.removed}`} tone="orange" /><MetricCard label="修改卡片" value={comparison.diff.nodes.changed} hint={`修改连线 ${comparison.diff.edges.changed}`} tone="teal" /><MetricCard label="目标内容" value={snapshotSummary(comparison.to.canvasSnapshot).nodeCount} hint={`${snapshotSummary(comparison.to.canvasSnapshot).edgeCount} 条连线`} tone="pink" /></div><details><summary>查看逐项变更详情</summary><div className="card-list"><ChangeList title="新增卡片" items={comparison.diff.nodes.addedItems} /><ChangeList title="删除卡片" items={comparison.diff.nodes.removedItems} /><ChangeList title="修改卡片" items={comparison.diff.nodes.changedItems} /><ChangeList title="新增连线" items={comparison.diff.edges.addedItems} /><ChangeList title="删除连线" items={comparison.diff.edges.removedItems} /><ChangeList title="修改连线" items={comparison.diff.edges.changedItems} />{!comparison.diff.nodes.added && !comparison.diff.nodes.removed && !comparison.diff.nodes.changed && !comparison.diff.edges.added && !comparison.diff.edges.removed && !comparison.diff.edges.changed && <p className="muted">两个版本的画布内容相同。</p>}</div></details></>}</> : <Empty title="至少保存两个版本后才能比较" />}</Panel>
-    </div>
-    {preview && <Panel title={`版本 ${preview.version} 只读预览`} actions={<button className="secondary-button" onClick={() => setPreview(null)}>关闭预览</button>}><div className="row-actions canvas-meta"><span className="muted">{preview.label || `版本 ${preview.version}`}</span><span className="muted">{formatDate(preview.createdAt)}</span></div><CanvasEditor key={`preview-${preview.id}`} initialSnapshot={preview.canvasSnapshot} readOnly /></Panel>}
-    {editable && <Notice>提示：恢复不会覆盖旧版本，而是会将选中的历史画布另存为一个新版本。保存画布后，再回到“我的项目”提交作品；作品会使用最新保存的画布版本。</Notice>}
-  </>;
+  async function submitWork() {
+    if (!editable || !draft) return;
+    setBusy(true);
+    try {
+      const result = await api.post(`student/projects/${project.data.id}/submit`, { canvasSnapshot: draft, description: `完成${project.data.courseLessonTitle || '本节课堂'}作品` });
+      setCanvasSnapshot(result.project.canvasSnapshot);
+      setDraft(result.project.canvasSnapshot);
+      setSavedSignature(canvasContentSignature(result.project.canvasSnapshot));
+      setMessage('作品已提交，老师可以看到你的课堂作品了。');
+      project.refresh();
+    } catch (err) { setMessage(err.message); }
+    finally { setBusy(false); }
+  }
+
+  function useTemplate() {
+    const template = createCanvasTemplate('adventure');
+    setCanvasSnapshot(template); setDraft(template); setCanvasRevision((value) => value + 1);
+    setMessage('已放入一份创作底稿，完成后请保存。');
+  }
+
+  const lessonTitle = project.data.courseLessonTitle || 'AI 创作课堂';
+  const hasNodes = Boolean((draft || canvasSnapshot)?.nodes?.length);
+
+  return <main className="student-canvas-shell">
+    <header className="student-canvas-topbar">
+      <div className="student-canvas-brand"><span className="student-canvas-brand-mark">✦</span><div><strong>AI 魔法学院</strong><small>学生创作画布</small></div></div>
+      <div className="student-canvas-top-title"><span>正在上课</span><strong>{lessonTitle}</strong></div>
+      <div className="student-canvas-actions"><button className="ghost-canvas-button" onClick={() => navigate('/learn/canvas')}>课程大厅</button><button className="ghost-canvas-button" onClick={() => navigate('/learn/canvas')}>教学演示</button><button className="primary-canvas-button" disabled={busy || !changed} onClick={save}>{busy ? '保存中…' : '保存并退出'}</button></div>
+    </header>
+    <section className="student-canvas-layout">
+      <aside className="student-lesson-panel">
+        <div className="student-lesson-hero"><span className="student-lesson-icon">🎨</span><div><small>正在学习</small><h1>{lessonTitle}</h1></div></div>
+        <div className="student-progress"><div className="student-progress-label"><span>课堂进度</span><strong>第 1 / 5 节</strong></div><div className="student-progress-track"><i style={{ width: '20%' }} /></div><div className="student-stars">★★★★☆ <span>完成本节课可获得星星</span></div></div>
+        <div className="student-teacher-note"><div className="student-panel-heading">老师寄语 <span>✎</span></div><p>先大胆表达你的想法，再用画布把它变成作品。每一次尝试都值得被看见！</p></div>
+        <div className="student-materials"><div className="student-panel-heading">准备好的素材 <span className="student-count">2</span></div><div className="student-material-card"><span>📜</span><div><strong>古诗主题提示词</strong><small>点击后加入画布</small></div><button onClick={useTemplate}>＋</button></div><div className="student-material-card"><span>🌄</span><div><strong>创作灵感底稿</strong><small>角色 · 场景 · 故事</small></div><button onClick={useTemplate}>＋</button></div></div>
+        <div className="student-tasks"><div className="student-panel-heading">今日任务</div><label><input type="checkbox" checked={hasNodes} readOnly /> 在画布中放入创作卡片</label><label><input type="checkbox" checked={Boolean((draft || canvasSnapshot)?.edges?.length)} readOnly /> 把卡片连成创作流程</label><label><input type="checkbox" checked={false} readOnly /> 保存并提交你的作品</label></div>
+      </aside>
+      <div className="student-canvas-main"><div className="student-canvas-heading"><div><span className="student-kicker">我的课堂画布</span><h2>{project.data.title}</h2></div><span className={`student-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? '有未保存修改' : '已保存'}</span></div><div className="student-canvas-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} readOnly={!editable} onChange={setDraft} /></div></div>
+    </section>
+    <div className="student-canvas-submitbar"><div><strong>完成作品后记得提交</strong><span>老师会根据你的画布内容进行点评</span></div><div className="student-submit-actions"><button className="secondary-button" onClick={() => navigate('/learn/canvas')}>退出课堂</button><button className="primary-canvas-button student-submit-button" disabled={!editable || busy || !draft || !hasNodes} onClick={submitWork}>{busy ? '提交中…' : '提交作品 ✨'}</button></div></div>
+    {message && <div className={`student-canvas-toast ${message.includes('失败') || message.includes('错误') ? 'error' : ''}`}>{message}</div>}
+  </main>;
+
 }
 
