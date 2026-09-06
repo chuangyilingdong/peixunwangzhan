@@ -2047,3 +2047,33 @@ rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260
 - 未登录首页右上角显示“登录”；登录后显示用户身份和“退出”。移动端登录入口放入菜单。
 - 实现 Commit：462a789。生产 Release：20260906T091153Z。
 - 验收：浏览器确认首页导航 href 为 /、/learn、/works、/free-canvas、/free-chat，登录按钮存在；公网四端入口 4/4 通过。
+
+## 官网登录界面品牌化设计与生产发布（2026-09-06）
+
+### 变更内容
+- 官网 `/login` 改为与首页 Inner Circle 风格一致的品牌化登录页：深紫渐变背景、轨道装饰、品牌介绍区、玻璃质感登录卡片和移动端适配。
+- 登录卡片保留登录名、密码、错误提示与加载状态，并增加“返回官网首页”入口。
+- 学生、老师、机构管理员登录后的既有落点保持为官网首页 `/`；平台管理员保持进入 `/admin/`。
+- 修复生产回滚脚本在恢复 SQLite 数据库时未清理旧 WAL/SHM sidecar 的问题，避免旧事务文件与恢复后的数据库混用。
+
+### 生产发布记录
+| 项目 | 值 |
+|------|-----|
+| 登录页 Commit | 3f2feb9 |
+| 生产 Release | 20260906T093832Z |
+| 发布时间 | 2026-09-06 17:38:32（Asia/Shanghai） |
+| 发布前数据库备份 | /srv/ai-kids-platform/production/backups/20260906T093933Z/platform.db |
+| 服务状态 | active |
+| 健康检查 | PASS |
+| 入口回归 | 4/4 PASS（/, /admin/, /org/, /student/） |
+
+### 发布过程记录
+- 首次执行带 `--db-backup` 的切换时发现回滚脚本未清理旧 `platform.db-wal` / `platform.db-shm`，导致 SQLite 报 `database disk image is malformed`；旧 release 自动恢复但服务仍受旧 sidecar 影响。
+- 已停止服务并将旧 WAL/SHM 移入 `/srv/ai-kids-platform/production/data/recovery-20260906T0942Z/`，验证恢复数据库 `PRAGMA integrity_check` 为 `ok`，服务恢复正常。
+- 随后不重复恢复数据库，仅原子切换到新静态 release，服务健康检查通过。
+- 修复 Commit：88a5e12（`fix(deploy): clear stale sqlite sidecars on restore`），已推送到 `origin/main`，后续恢复数据库会先清理旧 WAL/SHM。
+
+### 官网登录页验收
+- `/login`：200，品牌化双栏布局、输入框、登录按钮与返回首页入口均正常显示。
+- 移动端 390px：无横向溢出，登录卡片宽度正常。
+- 公网四端入口与安全头：通过。
