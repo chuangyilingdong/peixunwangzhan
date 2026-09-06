@@ -149,12 +149,12 @@ function PromptNode({ id, data, selected }) {
 }
 
 function ImageNode({ id, data, selected }) {
-  const { updateNode, generateNode } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate } = useCanvasActions();
   return <NodeFrame icon="✦" tone="image" title={data.title || '画面灵感'}>
     {data.previewUrl || data.assetUrl ? <img className="learning-node__media" src={data.previewUrl || data.assetUrl} alt={data.caption || 'AI生成画面'} /> : <div className="learning-node__art">{data.emoji || '🌈'}</div>}
     <input className="learning-node__input nodrag" value={data.caption || ''} placeholder="给画面取个名字" onChange={(event) => updateNode(id, { caption: event.target.value })} />
     <input className="learning-node__emoji nodrag" value={data.emoji || ''} aria-label="画面表情" maxLength={2} onChange={(event) => updateNode(id, { emoji: event.target.value })} />
-    {!data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '' })}>✦ {data.previewUrl || data.assetUrl ? '重新生成画面' : '生成画面'}</button>}
+    {canGenerate && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '' })}>✦ {data.previewUrl || data.assetUrl ? '重新生成画面' : '生成画面'}</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">用描述生成画面，也可以继续编辑灵感</span>}
   </NodeFrame>;
@@ -182,13 +182,13 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, generateNode } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate } = useCanvasActions();
   return <NodeFrame icon="▶" tone="video" title={data.title || '故事短片'}>
     {data.previewUrl || data.assetUrl
       ? <video className="learning-node__media" controls playsInline src={data.previewUrl || data.assetUrl} />
       : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <input className="learning-node__input nodrag" value={data.text || ''} placeholder="这一段发生了什么？" onChange={(event) => updateNode(id, { text: event.target.value })} />
-    {!data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '' })}>▶ {data.previewUrl || data.assetUrl ? '重新生成短片' : '生成故事短片'}</button>}
+    {canGenerate && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '' })}>▶ {data.previewUrl || data.assetUrl ? '重新生成短片' : '生成故事短片'}</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">连接提示词或画面，组织故事顺序</span>}
   </NodeFrame>;
@@ -371,7 +371,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode) }}>
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}
