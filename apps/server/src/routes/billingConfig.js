@@ -74,6 +74,24 @@ function providerModelsEndpoint(value) {
   return parsed.toString();
 }
 
+function providerApiKeyForRequest(body = {}) {
+  const transientKey = String(body.apiKey || '').trim();
+  return transientKey
+    || getProviderApiKey(String(body.channelId || 'default'))
+    || getProviderApiKey()
+    || AI_PROVIDER_API_KEY;
+}
+
+function sanitizeProviderChannels(channels) {
+  return Array.isArray(channels)
+    ? channels.map((channel) => {
+      if (!channel || typeof channel !== 'object') return channel;
+      const { apiKey: _apiKey, ...safeChannel } = channel;
+      return safeChannel;
+    })
+    : channels;
+}
+
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
   if (value === undefined || value === null || value === '') return fallback;
   const n = Number(value);
@@ -266,7 +284,7 @@ export async function handleAdminBillingConfig(ctx) {
     };
   }
   if (part === '/billing-config/ai-provider/test' && method === 'POST') {
-    requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const endpoint = String(body.endpoint || '').trim(); const apiKey = getProviderApiKey(String(body.channelId || 'default')) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+    requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const endpoint = String(body.endpoint || '').trim(); const apiKey = providerApiKeyForRequest(body);
     if (!apiKey) throw errors.badRequest('尚未配置该渠道 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED'); if (!endpoint) throw errors.badRequest('请先填写 Endpoint', 'AI_PROVIDER_ENDPOINT_REQUIRED');
     let url; try { url = providerModelsEndpoint(endpoint); } catch { throw errors.badRequest('Endpoint 无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
     const controller = new AbortController(); const timer=setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
@@ -275,7 +293,7 @@ export async function handleAdminBillingConfig(ctx) {
   if (part === '/billing-config/ai-provider/models' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const policy = getAiProviderPolicy();
-    const apiKey = getProviderApiKey(String(ctx.body?.channelId || 'default')) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+    const apiKey = providerApiKeyForRequest(ctx.body || {});
     if (!apiKey) throw errors.badRequest('尚未配置 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED');
     let url = String(ctx.body?.endpoint || policy.endpoint || '').trim();
     if (!url) throw errors.badRequest('请先配置 API 请求地址', 'AI_PROVIDER_ENDPOINT_REQUIRED');
@@ -314,7 +332,7 @@ export async function handleAdminBillingConfig(ctx) {
     if (Array.isArray(body.channels)) body.channels.forEach((channel) => { if (channel?.id && String(channel.apiKey || '').trim()) setProviderApiKey(channel.apiKey, String(channel.id)); });
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     const after = {
-      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels,
+      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels,
       allowStudentExternalContent,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });
