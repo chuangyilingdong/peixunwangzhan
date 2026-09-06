@@ -183,7 +183,9 @@ function SceneNode({ id, data, selected }) {
 function VideoNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   return <NodeFrame icon="▶" tone="video" title={data.title || '故事短片'}>
-    <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>
+    {data.previewUrl || data.assetUrl
+      ? <video className="learning-node__media" controls playsInline src={data.previewUrl || data.assetUrl} />
+      : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <input className="learning-node__input nodrag" value={data.text || ''} placeholder="这一段发生了什么？" onChange={(event) => updateNode(id, { text: event.target.value })} />
     {selected && <span className="learning-node__hint">连接提示词或画面，组织故事顺序</span>}
   </NodeFrame>;
