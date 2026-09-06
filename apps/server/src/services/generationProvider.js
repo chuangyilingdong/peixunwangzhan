@@ -1,6 +1,7 @@
 import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE } from '../config.js';
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
+import { getProviderApiKey } from './providerSecret.js';
 
 function svgDataUrl(title, subtitle, hue) {
   const escape = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -19,7 +20,7 @@ function providerSelection({ provider, model, endpoint } = {}) {
 
 export function providerConfig(selection = {}) {
   const selected = providerSelection(selection);
-  return validateProviderConfig({ ...selected, apiKey: AI_PROVIDER_API_KEY });
+  return validateProviderConfig({ ...selected, apiKey: getProviderApiKey() || AI_PROVIDER_API_KEY });
 }
 export function generationProviderInfo(selection = {}) {
   const config = providerConfig(selection);
@@ -42,5 +43,5 @@ export function getGenerationProvider(selection = {}) {
   if (isMockProvider(config.provider)) return mockProvider();
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE });
 }

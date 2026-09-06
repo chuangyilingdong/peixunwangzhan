@@ -15,6 +15,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { GENERATION_PROVIDER_CATALOG, GENERATION_PROVIDER_IDS, providerDefinition, validateProviderRegistration } from '../services/providerContract.js';
 import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
+import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
 
 const VALID_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING', 'CANVAS']);
 const VALID_QUOTA_SCOPES = new Set(['GLOBAL', 'STUDENT', 'TEACHER']);
@@ -250,19 +251,20 @@ export async function handleAdminBillingConfig(ctx) {
     return {
       catalog: GENERATION_PROVIDER_CATALOG,
       policy,
-      security: { allowStudentExternalContent: policy.allowStudentExternalContent, externalStudentRequestsBlocked: !policy.allowStudentExternalContent },
+      security: { allowStudentExternalContent: policy.allowStudentExternalContent, externalStudentRequestsBlocked: !policy.allowStudentExternalContent, apiKeyConfigured: hasProviderApiKey() || Boolean(AI_PROVIDER_API_KEY) },
     };
   }
   if (part === '/billing-config/ai-provider/models' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const policy = getAiProviderPolicy();
-    if (!AI_PROVIDER_API_KEY) throw errors.badRequest('服务器尚未配置 AI_PROVIDER_API_KEY', 'AI_PROVIDER_KEY_NOT_CONFIGURED');
+    const apiKey = getProviderApiKey() || AI_PROVIDER_API_KEY;
+    if (!apiKey) throw errors.badRequest('尚未配置 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED');
     let url = String(ctx.body?.endpoint || policy.endpoint || '').trim();
     if (!url) throw errors.badRequest('请先配置 API 请求地址', 'AI_PROVIDER_ENDPOINT_REQUIRED');
     try { const parsed = new URL(url); parsed.pathname = parsed.pathname.replace(/\/(chat\/completions|responses|messages)\/?$/, '') + '/models'; parsed.search = ''; url = parsed.toString(); } catch { throw errors.badRequest('API 请求地址无效', 'AI_PROVIDER_ENDPOINT_INVALID'); }
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
     try {
-      const response = await fetch(url, { headers: { Authorization: `Bearer ${AI_PROVIDER_API_KEY}`, Accept: 'application/json' }, signal: controller.signal });
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }, signal: controller.signal });
       if (!response.ok) throw errors.badRequest(`上游模型列表请求失败（HTTP ${response.status}）`, response.status === 429 ? 'GENERATION_PROVIDER_RATE_LIMITED' : 'GENERATION_PROVIDER_UPSTREAM_ERROR');
       const payload = await response.json(); const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
       return { items: list.slice(0, 500).map((item) => ({ id: String(item.id || item.name || ''), displayName: String(item.display_name || item.name || item.id || ''), ownedBy: item.owned_by || null, contextWindow: item.context_window || item.context_length || null })).filter((item) => item.id) };
@@ -285,6 +287,7 @@ export async function handleAdminBillingConfig(ctx) {
     const registration = validateProviderRegistration({ provider, model, endpoint });
     if (!registration.valid) throw errors.badRequest('AI 供应商配置不完整：' + registration.reasons.join('；'), 'AI_PROVIDER_CONFIG_INVALID');
     if (providerDefinition(provider)?.kind === 'CUSTOM' && displayName.length < 2) throw errors.badRequest('自定义供应商名称必填', 'CUSTOM_PROVIDER_NAME_REQUIRED');
+    if (body.apiKey !== undefined && String(body.apiKey || '').trim()) setProviderApiKey(body.apiKey);
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     const after = {
       provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings,

@@ -1019,7 +1019,7 @@ function ProviderPolicyPanel({ api }) {
   useEffect(() => {
     if (policy) setForm({
       provider: policy.provider, model: policy.model || '', endpoint: policy.endpoint || '',
-      displayName: policy.displayName || '', note: policy.note || '', websiteUrl: policy.websiteUrl || '', endpointMode: policy.endpointMode || 'BASE', protocol: policy.protocol || 'CHAT', modelMappings: policy.modelMappings || [], allowStudentExternalContent: Boolean(policy.allowStudentExternalContent), reason: '',
+      displayName: policy.displayName || '', note: policy.note || '', websiteUrl: policy.websiteUrl || '', endpointMode: policy.endpointMode || 'BASE', protocol: policy.protocol || 'CHAT', modelMappings: policy.modelMappings || [], apiKey: '', allowStudentExternalContent: Boolean(policy.allowStudentExternalContent), reason: '',
     });
   }, [policy]);
   async function save(event) {
@@ -1040,12 +1040,13 @@ function ProviderPolicyPanel({ api }) {
       <label>供应商<select value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value })}>{catalog.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
       {form.provider === 'custom' ? <label>自定义供应商名称<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} maxLength={120} required /></label> : null}
       <label>默认模型<select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}><option value="">手动输入模型 ID</option>{(form.modelMappings || []).map((item) => <option key={item.id || item.model} value={item.id || item.model}>{item.displayName || item.id || item.model}</option>)}</select><input value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} placeholder={definition?.adapterAvailable ? '例如：模型名称或模型 ID' : '该目录项的原生 adapter 尚未接入'} required={definition?.modelRequired} /></label>
+      <label>API Key（仅提交到服务器加密存储，不回显）<input type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder={config.data?.security?.apiKeyConfigured ? '已配置，留空保持不变' : '请输入供应商 API Key'} autoComplete="new-password" /></label>
       <label>备注<input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} maxLength={500} /></label>
       <label>官网链接<input type="url" value={form.websiteUrl} onChange={(event) => setForm({ ...form, websiteUrl: event.target.value })} /></label>
       <label>上游协议<select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}><option value="CHAT">Chat Completions</option><option value="RESPONSES">Responses</option><option value="ANTHROPIC">Anthropic Messages</option></select></label>
       <label>地址模式<select value={form.endpointMode} onChange={(event) => setForm({ ...form, endpointMode: event.target.value })}><option value="BASE">Base URL</option><option value="FULL">完整 URL</option></select></label>
       <label>Endpoint<input value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value })} placeholder="https://..." required={definition?.endpointRequired} /></label>
-      <div className="row-actions"><button type="button" className="secondary-button" disabled={busy} onClick={fetchModels}>从上游获取模型列表</button><span className="muted">服务器端读取 API Key，不会返回或保存密钥。</span></div>
+      <div className="row-actions"><button type="button" className="secondary-button" disabled={busy} onClick={fetchModels}>从上游获取模型列表</button><span className="muted">服务器端读取加密密钥，不会回显明文。</span></div>
       <label className="checkbox-label"><input type="checkbox" checked={form.allowStudentExternalContent} onChange={(event) => setForm({ ...form, allowStudentExternalContent: event.target.checked })} />允许学生创作内容发送到外部 AI 服务</label>
       <label>变更原因<input value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} maxLength={500} placeholder="记录授权与业务依据" /></label>
       <div className="row-actions"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存供应商策略'}</button></div>
