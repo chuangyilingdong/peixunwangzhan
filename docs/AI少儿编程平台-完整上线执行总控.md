@@ -744,16 +744,16 @@ D:\学习平台\platform-v2\apps\server\src\routes\aiGeneration.js
     - [x] 学生端 `/dashboard` 已展示当前课堂与课堂能力、待完成课时、未读老师通知、继续创作、待处理反馈、课程进度总览和各类真实空态；“开始创作”可携带课时参数进入创建项目，`/projects` 会预选该课时。
     - [x] 验证：临时 SQLite P4-S01 API `53 pass / 0 fail`，覆盖未登录 401、教师 403、开课前 / 开课中 / 结课后、自主练习账号、项目创建保存、通知、提交、驳回反馈、跨学生隔离和真实空态；P3 回归 `48 pass / 0 fail`；后端模块导入检查、学生端与四端生产构建、`git diff --check` 均通过。
     - [x] 本批未修改 `packages/canvas`，未触碰真实 `platform.db`，未部署线上环境。
-- [-] **P4-S04 学生课堂入口与教师开课后进入画布**
+- [x] **P4-S04 学生课堂入口与教师开课后进入画布**
   - 优先级：P0
   - 页面：学生端“学生课堂”导航与今日课堂。
   - 实现范围：展示教师发布且安排在当天的教学任务；教师未点击“开始上课”时“立即学习”不可用；对应课堂进入 ACTIVE 后按钮可用，学生创建 / 继续本人草稿并进入现有 `/projects/:projectId/canvas` 画布。
   - 实现文件：`apps/student/src/main.jsx`、`apps/server/src/services/studentContext.js`；复用 `class_sessions.status='ACTIVE'`、`classes.current_session_id` 和现有项目 / 画布接口；未修改 `packages/canvas`。
   - 完成记录（2026-09-06）：
-    - 状态：`[-]`
+    - 状态：`[x]`
     - 实现：新增学生端 `/classroom` 入口；后端 `student/dashboard.learningTasks` 增加 `today`，今日判断使用教师发布任务的 `due_at` 本地日期或已开始课堂；`canStart` 严格绑定对应课时的 ACTIVE 课堂，不再使用“任意课堂进行中”作为放行条件。
-    - 验证：学生端与四端 Vite 生产构建通过；`git diff --check` 通过。待使用隔离账号完成教师开课前 / 开课后页面验收并部署生产。
-    - 遗留风险或下一步：部署后验证学生课堂列表、按钮禁用 / 启用、创建 / 继续项目及画布加载；不向生产数据库重新 seed。
+    - 验证：学生端与四端 Vite 生产构建通过；`git diff --check` 通过；生产备份 `/srv/ai-kids-platform/production/backups/20260906T041534Z`；发布 release `/srv/ai-kids-platform/production/releases/20260906T041535Z`；`learning-platform-production` active、`NRestarts=0`、`/health` 200；官网 `/`、`/admin/`、`/org/`、`/student/`、`/api/health` 均 HTTP 200。
+    - 遗留风险或下一步：需用真实教师 / 学生账号在页面完成开课前禁用、开课后启用、创建 / 继续项目及画布加载的人工验收；不向生产数据库重新 seed。
 - [x] **P4-S02 我的项目管理（画布外层）**
   - 优先级：P0
   - 页面：我的项目。
