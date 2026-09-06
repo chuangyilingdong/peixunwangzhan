@@ -339,3 +339,10 @@ sudo -u ai-kids-platform /usr/bin/clamscan --no-summary /srv/ai-kids-platform/pr
 ## 2026-09-06 计费口径更新
 
 AI 不再使用平台预算或机构预算。机构充值后获得共享积分，AI 成功调用从机构积分账户原子扣减；余额为 0 时机构、教师、学生均不能生成。机构管理员可在成员管理中为教师和学生设置累计 AI 积分上限，留空表示不限。API Key 仍只能放服务器受限环境变量，不得填写网页。
+
+## 2026-09-06 AI 渠道 401 修复发布
+
+- Commit：`6ac323e`；release：`/srv/ai-kids-platform/production/releases/20260906T154630Z`。
+- 备份：`/srv/ai-kids-platform/production/backups/20260906T154718Z`。
+- 修复内容：AI 渠道测试 / 读取模型支持当前表单临时 Key；渠道 `apiKey` 不再写入普通策略 JSON，只保存到服务器受限密钥存储。
+- 验证：服务 active，health 通过，Nginx 回环五个入口均 HTTP 200。
