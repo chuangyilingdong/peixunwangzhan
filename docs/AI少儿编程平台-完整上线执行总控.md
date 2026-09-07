@@ -2134,3 +2134,16 @@ rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260
 - 发布前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T170118Z`。
 - 发布后验证：生产服务 active，`/api` 健康检查通过，官网静态包包含 `AI生成` 与 `AI 素材工坊`。
 - 实际测试：打开 `https://iicili.cyou/learn/canvas/`，登录后进入“AI古诗词创意营”第 3 课“生成画面与故事分镜”，左侧点击“AI生成”，选择“故事短片”，填写描述后点击“生成并加入画布”。旧页面缓存时执行 `Ctrl + F5`。
+
+## 2026-09-07 Seedance 画布兼容修复与生产发布
+
+- 参考实现：`D:\画布\创易灵动学习画布\src\services\ai\providers\standardImage.ts` 与 `seedanceModelManifest.ts`；确认 Seedance 图片提交路径为 `/v1/image/generations`，视频提交路径为 `/v1/videos`。
+- 修复 Commit：`149467b`（`fix: wait for Seedance async media jobs`）。
+- 代码修复：图片请求补充 Seedance 兼容的 `size` 参数；异步状态优先读取 `data.status`；增加 `FAILURE` / `failed` 等失败状态解析；图片与视频生成等待上限由 120 秒提升至 300 秒，避免视频正常排队时被平台提前判定超时。
+- 生产 Release：`/srv/ai-kids-platform/production/releases/20260907T053839Z`。
+- 发布前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260907T053920Z/platform.db`。
+- 发布后状态：`learning-platform-production` 为 `active`；当前 release 指向 `20260907T053839Z`；`127.0.0.1:8789/health` 返回 `status=ok`；公网 `/api/health` 返回 HTTP 200。
+- 安全验收：`scripts/p9-live-security-smoke.mjs` 通过；源码、配置、依赖、`.git` 等敏感路径均 HTTP 404，根路径安全响应头通过。
+- 上游脱敏验证：生产服务器读取到图片、视频渠道密钥且均已配置；直接调用 Seedance `/v1/models` 返回 HTTP 200；图片提交返回 HTTP 200 并成功取得真实图片 URL；视频提交返回 HTTP 200 并进入 `in_progress`，不再是认证失败。
+- 浏览器入口脚本未执行：服务器不存在 `C:/Program Files/Google/Chrome/Application/chrome.exe`，脚本在启动 Chromium 前退出；这属于验收机缺少浏览器，不是生产站点或服务健康失败。已用公网健康、安全冒烟和静态入口检查替代验证。
+- 说明：本次发布使用既有总控记录的长期 SSH 通道和私钥路径完成；未读取、输出或修改任何 API Key、私钥内容。
