@@ -326,11 +326,16 @@ function MarketplaceDetail(){
         {(d.tags||[]).length>0&&<div className="mkt-detail-row"><span className="mkt-label2">标签</span><div className="mkt-chips">{(d.tags||[]).map(t=><span key={t} className="mkt-tag">{t}</span>)}</div></div>}
         {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">版本</span><span>{d.version}</span></div>}
         <div className="mkt-detail-row"><span className="mkt-label2">课时</span><span>{d.lessonCount||0} 节</span></div>
+        {d.priceFen>0&&<div className="mkt-detail-row"><span className="mkt-label2">参考价格</span><span className="mkt-price">¥ {(d.priceFen/100).toFixed(2)} <span className="mkt-price-note">（线下购买）</span></span></div>}
+        {d.estimatedCreditsPerPerson>0&&<div className="mkt-detail-row"><span className="mkt-label2">预估消耗</span><span className="mkt-credits">{d.estimatedCreditsPerPerson} 积分/人</span></div>}
         {d.marketplaceRewardCredits>0&&<div className="mkt-detail-row"><span className="mkt-label2">奖励</span><span className="mkt-credits">奖励 {d.marketplaceRewardCredits} 积分</span></div>}
       </div>
     </div>
     {(d.lessons||[]).length>0&&<div className="mkt-lessons"><h2>课程内容</h2>{(d.lessons||[]).map((l,i)=><div key={l.id} className="mkt-lesson"><div className="mkt-lesson-num">{String(i+1).padStart(2,'0')}</div><div className="mkt-lesson-body"><h3>{l.title}</h3>{l.summary&&<p className="mkt-lesson-summary">{l.summary}</p>}{l.lessonContent&&<p className="mkt-lesson-content">{String(l.lessonContent).slice(0,300)}{l.lessonContent&&l.lessonContent.length>300?'…':''}</p>}</div></div>)}</div>}
-    <div className="mkt-cta"><button className="button mkt-start" onClick={startLearning}>开始学习</button></div>
+    <div className="mkt-cta">
+      <button className="button mkt-start" onClick={startLearning}>开始学习</button>
+      {d.priceFen>0&&<p className="mkt-contact-note">如需购买课程包，请联系客服办理</p>}
+    </div>
   </main></>;
 }
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
