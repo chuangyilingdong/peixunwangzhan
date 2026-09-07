@@ -3520,5 +3520,93 @@ export async function handleOrg(ctx) {
     };
   }
   
+  // 官网 - 学生积分汇总
+  if (part === '/website/my-credits/summary' && method === 'GET') {
+    const auth = requireRole(ctx, ['STUDENT']);
+    const userId = auth.user.id;
+    const orgId = auth.user.orgId;
+    
+    const user = row('SELECT ai_credits, ai_credits_used FROM users WHERE id = ? AND org_id = ?', [userId, orgId]);
+    if (!user) throw errors.notFound('用户不存在', 'USER_NOT_FOUND');
+    
+    const totalAllocated = Number(user.ai_credits);
+    const totalUsed = Number(user.ai_credits_used);
+    const balance = totalAllocated - totalUsed;
+    
+    return {
+      totalAllocated,
+      totalUsed,
+      balance
+    };
+  }
+  
+  // 官网 - 学生使用记录
+  if (part === '/website/my-credits/usage' && method === 'GET') {
+    const auth = requireRole(ctx, ['STUDENT']);
+    const userId = auth.user.id;
+    const orgId = auth.user.orgId;
+    
+    const limit = Math.min(100, Math.max(1, Number(ctx.search?.limit || 20)));
+    
+    const items = rows(
+      `SELECT ur.id, ur.modality, ur.credits_charged AS credits, ur.created_at,
+              p.title AS project_title
+       FROM usage_records ur
+       LEFT JOIN student_projects p ON ur.project_id = p.id
+       WHERE ur.user_id = ? AND ur.org_id = ? AND ur.status = 'SUCCESS'
+       ORDER BY ur.created_at DESC
+       LIMIT ?`,
+      [userId, orgId, limit]
+    );
+    
+    // 计算余额（逐条累减）
+    const user = row('SELECT ai_credits, ai_credits_used FROM users WHERE id = ?', [userId]);
+    let currentBalance = Number(user.ai_credits) - Number(user.ai_credits_used);
+    
+    const itemsWithBalance = items.map(item => {
+      const result = {
+        id: item.id,
+        modality: item.modality,
+        credits: item.credits,
+        balanceAfter: currentBalance,
+        projectTitle: item.project_title,
+        createdAt: item.created_at
+      };
+      currentBalance += item.credits; // 往前推算余额
+      return result;
+    }).reverse(); // 反转回正序
+    
+    return { items: itemsWithBalance.reverse() };
+  }
+  
+  // 官网 - 学生配额变更记录
+  if (part === '/website/my-credits/allocations' && method === 'GET') {
+    const auth = requireRole(ctx, ['STUDENT']);
+    const userId = auth.user.id;
+    const orgId = auth.user.orgId;
+    
+    const limit = Math.min(100, Math.max(1, Number(ctx.search?.limit || 20)));
+    
+    const items = rows(
+      `SELECT id, credits_change AS credits, credits_after AS balance_after, reason, adjustment_type AS type, created_at
+       FROM user_credit_adjustments
+       WHERE user_id = ? AND org_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [userId, orgId, limit]
+    );
+    
+    return {
+      items: items.map(item => ({
+        id: item.id,
+        type: item.type,
+        credits: item.credits,
+        balanceAfter: item.balance_after,
+        reason: item.reason,
+        createdAt: item.created_at
+      }))
+    };
+  }
+  
   return null;
 }

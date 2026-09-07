@@ -6,6 +6,7 @@ import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
 import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, createApiClient } from '@platform/shared';
+import { MyCreditsPage } from './pages/MyCredits.jsx';
 
 const SESSION_KEY = 'ai-kids-platform.session.v1';
 const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE ? String(import.meta.env.VITE_API_BASE).replace(/\/$/, '') : '/api');
@@ -397,12 +398,48 @@ function App(){
   }
   function decide(value) { setAnalyticsConsent(value); setAnalyticsConsentState(value); if (value) trackAnalytics('analytics_consent_granted'); }
   const roleBadge = { STUDENT: '小小创作者', TEACHER: '教师', ORG_ADMIN: '机构管理员', SUPER_ADMIN: '平台管理员', PLATFORM_ADMIN: '平台管理员' };
+  
+  // 学生用户下拉菜单
+  const [showStudentMenu, setShowStudentMenu] = useState(false);
+  const studentMenuItems = [
+    { to: '/learn', icon: '🎨', label: '进入学习' },
+    { to: '/my-works', icon: '✧', label: '我的作品' },
+    { to: '/my-credits', icon: '◆', label: '我的积分' },
+    { to: '/my-courses', icon: '◇', label: '我的课程' },
+    { to: '/my-stats', icon: '◈', label: '学习统计' },
+  ];
+  
   const userBadge = session ? (
-    <span className='header-user'>
-      <span>{session.user?.displayName || session.user?.login || '用户'}</span>
-      <span className='role-tag'>{roleBadge[session.user?.role] || session.user?.role}</span>
-      <button className='text-button' onClick={logout}>退出</button>
-    </span>
+    session.user?.role === 'STUDENT' ? (
+      <div className='header-user-menu'>
+        <button className='header-user' onClick={() => setShowStudentMenu(!showStudentMenu)}>
+          <span>{session.user?.displayName || session.user?.login || '用户'}</span>
+          <span className='role-tag'>{roleBadge[session.user?.role]}</span>
+          <span className='dropdown-arrow'>{showStudentMenu ? '▲' : '▼'}</span>
+        </button>
+        {showStudentMenu && (
+          <div className='student-dropdown-menu'>
+            {studentMenuItems.map(item => (
+              <Link key={item.to} to={item.to} className='menu-item' onClick={() => setShowStudentMenu(false)}>
+                <span className='menu-icon'>{item.icon}</span>
+                <span className='menu-label'>{item.label}</span>
+              </Link>
+            ))}
+            <div className='menu-divider'></div>
+            <button className='menu-item logout-item' onClick={() => { setShowStudentMenu(false); logout(); }}>
+              <span className='menu-icon'>🚪</span>
+              <span className='menu-label'>退出登录</span>
+            </button>
+          </div>
+        )}
+      </div>
+    ) : (
+      <span className='header-user'>
+        <span>{session.user?.displayName || session.user?.login || '用户'}</span>
+        <span className='role-tag'>{roleBadge[session.user?.role] || session.user?.role}</span>
+        <button className='text-button' onClick={logout}>退出</button>
+      </span>
+    )
   ) : <Link className='top-button' to='/login'>登录</Link>;
   if (loc.pathname === '/login') return <LoginPage/>;
   const isFullPage = loc.pathname.startsWith('/learn') || loc.pathname.startsWith('/free-canvas') || loc.pathname.startsWith('/free-chat');
@@ -429,6 +466,10 @@ function App(){
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/learn/vibecoding' element={<Notice tone='warning'>VibeCoding 上课即将上线，敬请期待。</Notice>}/>
+        <Route path='/my-credits' element={session ? <MyCreditsPage api={api} /> : <Navigate to='/login' replace />}/>
+        <Route path='/my-works' element={<Notice tone='info'>我的作品功能开发中。</Notice>}/>
+        <Route path='/my-courses' element={<Notice tone='info'>我的课程功能开发中。</Notice>}/>
+        <Route path='/my-stats' element={<Notice tone='info'>学习统计功能开发中。</Notice>}/>
         <Route path='/free-canvas' element={<Notice tone='info'>自由画布即将上线。</Notice>}/>
         <Route path='/free-chat' element={<Notice tone='info'>自由对话即将上线。</Notice>}/>
         <Route path='*' element={<Home/>}/>
