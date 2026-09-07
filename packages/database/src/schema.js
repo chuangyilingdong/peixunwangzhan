@@ -226,6 +226,10 @@ CREATE TABLE IF NOT EXISTS course_series (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   cover_image_url TEXT,
+  price_fen INTEGER NOT NULL DEFAULT 0,
+  validity_days INTEGER NOT NULL DEFAULT 365,
+  estimated_credits_per_person INTEGER NOT NULL DEFAULT 0,
+  grade_range TEXT NOT NULL DEFAULT '',
   owner_type TEXT NOT NULL DEFAULT 'PLATFORM' CHECK (owner_type IN ('PLATFORM','ORG')),
   org_id TEXT,
   visibility TEXT NOT NULL DEFAULT 'ALL_ORGS' CHECK (visibility IN ('ALL_ORGS','ASSIGNED_ORGS','PRIVATE')),
@@ -256,6 +260,8 @@ CREATE TABLE IF NOT EXISTS course_lessons (
   prompt_pack_asset_id TEXT,
   outcome_pack_asset_id TEXT,
   lesson_content TEXT NOT NULL DEFAULT '',
+  delivery_mode TEXT NOT NULL DEFAULT 'CANVAS' CHECK (delivery_mode IN ('CANVAS','VIBECODING')),
+  classroom_config TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
@@ -1349,9 +1355,15 @@ try { db.exec('ALTER TABLE course_series ADD COLUMN age_range_max INTEGER'); } c
 try { db.exec("ALTER TABLE course_series ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"); } catch (_) {}
 try { db.exec('ALTER TABLE course_series ADD CONSTRAINT chk_difficulty CHECK (difficulty_level IS NULL OR difficulty_level BETWEEN 1 AND 5)'); } catch (_) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_difficulty ON course_series(difficulty_level)'); } catch (_) {}
+try { db.exec('ALTER TABLE course_series ADD COLUMN price_fen INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE course_series ADD COLUMN validity_days INTEGER NOT NULL DEFAULT 365'); } catch (_) {}
+try { db.exec('ALTER TABLE course_series ADD COLUMN estimated_credits_per_person INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec("ALTER TABLE course_series ADD COLUMN grade_range TEXT NOT NULL DEFAULT ''"); } catch (_) {}
 
 // P5-W05 course_lessons 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
 try { db.exec("ALTER TABLE course_lessons ADD COLUMN lesson_content TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+try { db.exec("ALTER TABLE course_lessons ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'CANVAS'"); } catch (_) {}
+try { db.exec("ALTER TABLE course_lessons ADD COLUMN classroom_config TEXT NOT NULL DEFAULT '{}'"); } catch (_) {}
 
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }
@@ -1383,6 +1395,10 @@ try { db.exec('ALTER TABLE users ADD COLUMN ai_credits_used INTEGER NOT NULL DEF
 // P6-A02 personal credit balance (for free-canvas and free-coding); uses magic_stones as the balance field.
 try { db.exec('ALTER TABLE users ADD COLUMN personal_credits INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN magic_stones INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+
+// P9-R03 course_series cover_asset_id: link course cover to file_assets for PUBLIC_PLATFORM access
+try { db.exec('ALTER TABLE course_series ADD COLUMN cover_asset_id TEXT'); } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_cover_asset ON course_series(cover_asset_id) WHERE cover_asset_id IS NOT NULL'); } catch (_) {}
 
 // Personal credit ledger (tracks personal credit changes separately from org ledger)
 db.exec(`CREATE TABLE IF NOT EXISTS personal_credit_ledger (

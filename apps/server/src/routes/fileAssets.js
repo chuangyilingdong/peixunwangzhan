@@ -630,3 +630,35 @@ export async function handleStudentFileAssets(ctx) {
   if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
   return null;
 }
+
+export async function handlePublicFileAssets(ctx) {
+  const { pathname, method } = ctx;
+  if (!pathname.startsWith('/api/public/file-assets')) return null;
+  const part = pathname.slice('/api/public'.length);
+
+  const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
+  if (idMatch && method === 'GET') {
+    const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') {
+      throw errors.forbidden('文件不是公开资源', 'FILE_NOT_PUBLIC');
+    }
+    return normalizeFileAsset(file);
+  }
+
+  const downloadMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
+  if (downloadMatch && method === 'GET') {
+    const file = row('SELECT * FROM file_assets WHERE id=?', [downloadMatch[1]]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') {
+      throw errors.forbidden('文件不是公开资源', 'FILE_NOT_PUBLIC');
+    }
+    return prepareFileDownload(ctx, file);
+  }
+
+  return null;
+}

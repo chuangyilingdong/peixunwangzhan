@@ -1,6 +1,6 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
-  normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, nonEmptyString, nowIso, parseJson,
+  normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { hashPassword } from '@platform/database';
@@ -15,6 +15,34 @@ function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
   const n = Number(value);
   if (!Number.isInteger(n) || n < min || n > max) throw errors.badRequest(label + '必须是有效整数', 'VALIDATION_ERROR');
   return n;
+}
+function normalizeDeliveryMode(value) {
+  const mode = String(value || 'CANVAS').trim().toUpperCase();
+  if (!['CANVAS', 'VIBECODING'].includes(mode)) throw errors.badRequest('课堂类型只能是画布课堂或 VibeCoding 课堂', 'INVALID_DELIVERY_MODE');
+  return mode;
+}
+function normalizeClassroomConfig(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  const source = input.generationSlots && typeof input.generationSlots === 'object' ? input.generationSlots : {};
+  const normalizeSlot = (key, defaults) => {
+    const raw = source[key] && typeof source[key] === 'object' ? source[key] : {};
+    const count = integer(raw.count, `${key} 生成框体数量`, { min: 0, max: 20, fallback: defaults.count });
+    const aspectRatio = String(raw.aspectRatio || defaults.aspectRatio).trim().slice(0, 30);
+    if (!/^\d+(?::\d+)?$/.test(aspectRatio)) throw errors.badRequest(`${key} 生成比例格式无效`, 'INVALID_GENERATION_CONFIG');
+    const size = String(raw.size || defaults.size).trim().slice(0, 40);
+    const durationSeconds = key === 'video' ? integer(raw.durationSeconds, '视频时长', { min: 1, max: 120, fallback: defaults.durationSeconds }) : undefined;
+    const model = String(raw.model || '').trim().slice(0, 120) || null;
+    return { count, aspectRatio, size, ...(durationSeconds === undefined ? {} : { durationSeconds }), model };
+  };
+  const result = {
+    version: 1,
+    generationSlots: {
+      image: normalizeSlot('image', { count: 0, aspectRatio: '16:9', size: '1024x576' }),
+      video: normalizeSlot('video', { count: 0, aspectRatio: '16:9', size: '1920x1080', durationSeconds: 5 }),
+    },
+  };
+  if (input.vibeCoding && typeof input.vibeCoding === 'object') result.vibeCoding = input.vibeCoding;
+  return result;
 }
 function orgId(auth) { if (!auth.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED'); return auth.user.orgId; }
 function orgUser(auth, userId) {
@@ -43,7 +71,7 @@ function accessibleLesson(currentOrgId, lessonId) {
     [currentOrgId, lessonId, currentOrgId],
   );
 }
-function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities) {
+function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}) {
   const groups = Array.isArray(materialGroups) ? materialGroups.slice(0, 50) : [];
   const caps = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value).trim().toLowerCase()).filter((value) => ['text', 'image', 'video', 'music', 'podcast', 'dubbing'].includes(value)))] : ['text'];
   const now = nowIso();
@@ -62,9 +90,32 @@ function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities) {
         q('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [materialId, groupId, String(material?.title || `素材${materialIndex + 1}`).trim().slice(0, 160), String(material?.description || '').slice(0, 1000), String(material?.materialType || 'NOTE').toUpperCase().slice(0, 30), material?.assetUrl ? String(material.assetUrl).slice(0, 2000) : null, json(material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {}), materialIndex + 1, now, now]);
       });
     });
+    q('UPDATE course_lessons SET delivery_mode=?,classroom_config=?,updated_at=? WHERE id=?', [normalizeDeliveryMode(deliveryMode), json(normalizeClassroomConfig(classroomConfig)), now, lessonId]);
   });
 }
 
+function validateSeriesForPublishing(seriesId) {
+  const lessons = rows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]);
+  const activeLessons = lessons.filter((lesson) => lesson.status !== 'ARCHIVED');
+  if (!activeLessons.length) throw errors.badRequest('课包至少需要一个未归档课时才能发布', 'COURSE_LESSONS_REQUIRED');
+  const unfinished = activeLessons.filter((lesson) => lesson.status !== 'PUBLISHED');
+  if (unfinished.length) throw errors.badRequest(`还有 ${unfinished.length} 个课时未发布，请先完成课时配置并发布课时`, 'COURSE_LESSONS_UNPUBLISHED');
+  activeLessons.forEach((lesson) => {
+    const mode = normalizeDeliveryMode(lesson.delivery_mode);
+    if (mode === 'VIBECODING') throw errors.conflict('VibeCoding 课堂运行时尚未完成，暂不能发布包含 VibeCoding 课时的课包', 'VIBECODING_RUNTIME_NOT_READY');
+    const config = normalizeClassroomConfig(parseJson(lesson.classroom_config, {}));
+    const canvas = lessonCanvasConfig(lesson.id);
+    const imageCount = config.generationSlots.image.count;
+    const videoCount = config.generationSlots.video.count;
+    canvas.materialGroups.forEach((group) => (group.materials || []).forEach((material) => {
+      const action = material.snapshot?.insertAction;
+      if (!action || !action.targetNodeType) return;
+      const limit = action.targetNodeType === 'image' ? imageCount : action.targetNodeType === 'video' ? videoCount : 1;
+      const index = Number(action.targetIndex || 0);
+      if (!Number.isInteger(index) || index < 0 || index >= limit) throw errors.badRequest(`课时「${lesson.title}」存在未绑定到有效框体的素材「${material.title}」`, 'INVALID_MATERIAL_BINDING');
+    }));
+  });
+}
 function accessibleSeries(currentOrgId, seriesId) {
   return row(
     "SELECT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND assignment.status='ACTIVE' WHERE series.id=? AND series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?))",
@@ -1258,7 +1309,15 @@ export async function handleAdmin(ctx) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const title = String(body.title || '').trim();
     if (!title) throw errors.badRequest('课包标题不能为空', 'COURSE_TITLE_REQUIRED');
     if (title.length > 200) throw errors.badRequest('课包标题不能超过200个字符', 'VALIDATION_ERROR');
-    const visibility = body.visibility || 'ALL_ORGS'; const status = body.status || 'PUBLISHED';
+    const visibility = body.visibility || 'ALL_ORGS'; const status = body.status || 'DRAFT';
+     const priceFen = integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000, fallback: 0 });
+     const validityDays = integer(body.validityDays, '课程包有效期（天）', { min: 1, max: 3650, fallback: 365 });
+     const estimatedCreditsPerPerson = integer(body.estimatedCreditsPerPerson, '预估积分/人', { min: 0, max: 1000000000, fallback: 0 });
+     const gradeRange = String(body.gradeRange || '').trim().slice(0, 100);
+     const coverImageUrl = body.coverImageUrl ? String(body.coverImageUrl).trim().slice(0, 2000) : null;
+     if (coverImageUrl && !/^https:\/\//.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接', 'INVALID_COVER_URL');
+     const coverAssetId = body.coverAssetId ? String(body.coverAssetId).trim() : null;
+     if (coverAssetId && !coverAssetId.startsWith('file_')) throw errors.badRequest('封面资源 ID 格式无效', 'INVALID_COVER_ASSET_ID');
     if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
     if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) throw errors.badRequest('课包状态无效', 'INVALID_COURSE_STATUS');
     const lessons = body.lessons === undefined ? [] : body.lessons;
@@ -1279,18 +1338,23 @@ export async function handleAdmin(ctx) {
       tags = body.tags.split(',').map((t) => t.trim()).filter((t) => t.length > 0 && t.length <= 50).slice(0, 20);
     }
     if (row("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
-    const seriesId = id('series'); const now = nowIso();
+    const seriesId = id('series');
+    const now = nowIso();
+    const createdLessonIds = [];
     transaction(() => {
-      q('INSERT INTO course_series(id,title,description,cover_image_url,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), body.coverImageUrl ? String(body.coverImageUrl).slice(0, 2000) : null, 'PLATFORM', null, visibility, String(body.version || '1.0').slice(0, 100), integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), now, now]);
+      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,validity_days,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, String(body.version || '1.0').slice(0, 100), integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), now, now]);
       lessons.forEach((lesson, index) => {
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle) throw errors.badRequest(`第${index + 1}课标题不能为空`, 'LESSON_TITLE_REQUIRED');
         if (lessonTitle.length > 200) throw errors.badRequest(`第${index + 1}课标题不能超过200个字符`, 'VALIDATION_ERROR');
-        const lessonStatus = status === 'ARCHIVED' ? 'ARCHIVED' : (lesson.status || 'PUBLISHED');
+        const lessonStatus = status === 'ARCHIVED' ? 'ARCHIVED' : (lesson.status || 'DRAFT');
         if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(lessonStatus)) throw errors.badRequest(`第${index + 1}课状态无效`, 'INVALID_LESSON_STATUS');
-        q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('lesson'), seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), now, now]);
+         const lessonId = id('lesson'); const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode); const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
+         q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
+         createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, classroomConfig });
       });
     });
+     createdLessonIds.forEach((lesson) => replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig));
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true });
   }
@@ -1321,6 +1385,12 @@ export async function handleAdmin(ctx) {
     const description = body.description === undefined ? series.description : String(body.description).slice(0, 10000);
     const coverImageUrl = body.coverImageUrl === undefined ? series.cover_image_url : (body.coverImageUrl ? String(body.coverImageUrl).slice(0, 2000) : null);
     if (coverImageUrl && !/^https:\/\//.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接', 'INVALID_COVER_URL');
+    const coverAssetId = body.coverAssetId === undefined ? series.cover_asset_id : (body.coverAssetId ? String(body.coverAssetId).trim() : null);
+    if (coverAssetId && !coverAssetId.startsWith('file_')) throw errors.badRequest('封面资源 ID 格式无效', 'INVALID_COVER_ASSET_ID');
+     const priceFen = body.priceFen === undefined ? Number(series.price_fen || 0) : integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000 });
+     const validityDays = body.validityDays === undefined ? Number(series.validity_days || 365) : integer(body.validityDays, '课程包有效期（天）', { min: 1, max: 3650 });
+     const estimatedCreditsPerPerson = body.estimatedCreditsPerPerson === undefined ? Number(series.estimated_credits_per_person || 0) : integer(body.estimatedCreditsPerPerson, '预估积分/人', { min: 0, max: 1000000000 });
+     const gradeRange = body.gradeRange === undefined ? (series.grade_range || '') : String(body.gradeRange || '').trim().slice(0, 100);
     const visibility = body.visibility === undefined ? series.visibility : body.visibility;
     if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
     const sort = body.sort === undefined ? series.sort : integer(body.sort, '课包排序', { min: 0, max: 100000 });
@@ -1345,7 +1415,7 @@ export async function handleAdmin(ctx) {
       }
     }
     const before = normalizeSeries(series);
-    q('UPDATE course_series SET title=?,description=?,cover_image_url=?,visibility=?,sort=?,version=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, visibility, sort, version, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, nowIso(), series.id]);
+     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,validity_days=?,estimated_credits_per_person=?,grade_range=?,visibility=?,sort=?,version=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, visibility, sort, version, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, nowIso(), series.id]);
     const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true });
@@ -1368,7 +1438,7 @@ export async function handleAdmin(ctx) {
       allowedFrom: transition.from, code: 'INVALID_COURSE_STATUS_TRANSITION',
       message: '当前状态 ' + series.status + ' 不允许执行 ' + action, details: { action },
     });
-    if (transition.requireLessons && !row('SELECT id FROM course_lessons WHERE series_id=?', [series.id])) throw errors.badRequest('课包至少需要一个课时才能发布', 'COURSE_LESSONS_REQUIRED');
+    if (transition.requireLessons) validateSeriesForPublishing(series.id);
     const before = normalizeSeries(series);
     q('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, nowIso(), series.id]);
     const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
@@ -1384,17 +1454,22 @@ export async function handleAdmin(ctx) {
     const lessons = ctx.body?.lessons;
     if (!Array.isArray(lessons) || lessons.length === 0 || lessons.length > 100) throw errors.badRequest('请提交 1-100 个课时', 'INVALID_LESSONS');
     const maxSort = Number(row('SELECT MAX(sort) m FROM course_lessons WHERE series_id=?', [series.id])?.m || 0);
-    const now = nowIso();
+    const now = nowIso(); const replaceQueue = [];
     transaction(() => {
       lessons.forEach((lesson, index) => {
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle || lessonTitle.length > 200) throw errors.badRequest('第' + (index + 1) + '课标题不能为空且不超过200字', 'LESSON_TITLE_REQUIRED');
-        const lessonStatus = lesson.status || 'PUBLISHED';
+        const lessonStatus = lesson.status || 'DRAFT';
         if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(lessonStatus)) throw errors.badRequest('第' + (index + 1) + '课状态无效', 'INVALID_LESSON_STATUS');
-        q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('lesson'), series.id, lessonTitle, String(lesson.summary || '').slice(0, 10000), maxSort + index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), now, now]);
+        const lessonId = id('lesson');
+        const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode);
+        const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
+        q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, series.id, lessonTitle, String(lesson.summary || '').slice(0, 10000), maxSort + index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
+        replaceQueue.push({ id: lessonId, lesson, deliveryMode, classroomConfig });
       });
       q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(series.version), now, series.id]);
     });
+    replaceQueue.forEach((item) => replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig));
     audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true });
   }
@@ -1455,8 +1530,13 @@ export async function handleAdmin(ctx) {
       code: 'INVALID_LESSON_STATUS_TRANSITION', message: '当前课时状态不允许转换', details: { requestedStatus: status },
     });
     const lessonContent = body.lessonContent === undefined ? lesson.lesson_content : String(body.lessonContent).slice(0, 50000);
-    q('UPDATE course_lessons SET title=?,summary=?,duration_minutes=?,status=?,lesson_content=?,updated_at=? WHERE id=?', [title, summary, durationMinutes, status, lessonContent, nowIso(), lesson.id]);
-    if (body.materialGroups !== undefined || body.capabilities !== undefined) replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? [], body.capabilities ?? ['text']);
+     const deliveryMode = body.deliveryMode === undefined ? (lesson.delivery_mode || 'CANVAS') : normalizeDeliveryMode(body.deliveryMode);
+     const classroomConfig = body.classroomConfig === undefined ? parseJson(lesson.classroom_config, {}) : normalizeClassroomConfig(body.classroomConfig);
+    q('UPDATE course_lessons SET title=?,summary=?,duration_minutes=?,status=?,lesson_content=?,delivery_mode=?,classroom_config=?,updated_at=? WHERE id=?', [title, summary, durationMinutes, status, lessonContent, deliveryMode, json(classroomConfig), nowIso(), lesson.id]);
+    if (body.materialGroups !== undefined || body.capabilities !== undefined || body.deliveryMode !== undefined || body.classroomConfig !== undefined) {
+      const currentCanvas = lessonCanvasConfig(lesson.id);
+      replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig);
+    }
     q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(row('SELECT version FROM course_series WHERE id=?', [lesson.series_id]).version), nowIso(), lesson.series_id]);
     audit(ctx, 'COURSE_LESSON_UPDATE', 'COURSE_LESSON', lesson.id, { title: lesson.title, status: lesson.status, durationMinutes: lesson.duration_minutes }, { title, status, durationMinutes, lessonContentChanged: body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content }, {});
     if (body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content) {

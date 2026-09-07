@@ -529,6 +529,27 @@ function CanvasWorkspace({ api }) {
   async function generateMaterial(event) {
     event.preventDefault();
     if (!editable) return;
+    const modality = generationForm.modality;
+    const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    const existingNodes = current.nodes || [];
+
+    // 检查框体数量限制
+    if (modality === 'IMAGE') {
+      const imageCount = existingNodes.filter(n => n.type === 'image').length;
+      const maxImages = generationSlots.image?.count || 0;
+      if (maxImages > 0 && imageCount >= maxImages) {
+        setMessage(`本课画布最多支持 ${maxImages} 个生图框体，已达上限。`);
+        return;
+      }
+    } else if (modality === 'VIDEO') {
+      const videoCount = existingNodes.filter(n => n.type === 'video').length;
+      const maxVideos = generationSlots.video?.count || 0;
+      if (maxVideos > 0 && videoCount >= maxVideos) {
+        setMessage(`本课画布最多支持 ${maxVideos} 个生视频框体，已达上限。`);
+        return;
+      }
+    }
+
     setGenerating(true);
     try {
       const queued = await api.post('ai/generations/async', { projectId: project.data.id, ...generationForm });
@@ -570,18 +591,50 @@ function CanvasWorkspace({ api }) {
     if (!editable || !material) return;
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
     const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
+    const insertAction = snapshot.insertAction || {};
     const sourceData = snapshot.data || snapshot.props || {};
     const materialType = String(material.materialType || snapshot.type || 'NOTE').toUpperCase();
     const type = snapshot.type || ({ IMAGE: 'image', VIDEO: 'video', AUDIO: 'audio', MUSIC: 'audio', PODCAST: 'audio', DUBBING: 'audio', ANIMATION: 'animation', CHARACTER: 'character', SCENE: 'scene', TEXT: 'prompt', PROMPT: 'prompt' }[materialType] || 'note');
-    const fallbackData = type === 'image' ? { title: material.title, emoji: '✨', caption: material.description || '' } : type === 'video' ? { title: material.title, text: material.description || '' } : type === 'audio' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'animation' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'character' ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' } : type === 'scene' ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' } : { title: material.title, text: material.description || '' };
+
+    // 如果素材绑定了目标框体，尝试插入到指定框体
+    if (insertAction.targetNodeType && insertAction.targetIndex != null) {
+      const targetType = insertAction.targetNodeType;
+      const targetIndex = Number(insertAction.targetIndex);
+      const targetField = insertAction.targetField || (materialType === 'IMAGE' ? 'referenceImage' : 'prompt');
+      const existingNodes = current.nodes || [];
+      const targetNodes = existingNodes.filter(n => n.type === targetType);
+
+      if (targetNodes[targetIndex]) {
+        const targetNode = targetNodes[targetIndex];
+        const updatedNode = { ...targetNode, data: { ...targetNode.data } };
+
+        if (targetField === 'referenceImage' && materialType === 'IMAGE') {
+          updatedNode.data.referenceImage = material.assetUrl || '';
+        } else if (targetField === 'prompt' && (materialType === 'PROMPT' || materialType === 'NOTE')) {
+          const promptText = snapshot.content || material.description || '';
+          updatedNode.data.prompt = promptText;
+        }
+
+        const updatedNodes = existingNodes.map(n => n.id === targetNode.id ? updatedNode : n);
+        const next = { ...current, nodes: updatedNodes };
+        setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
+        setMessage(`已将”${material.title}”的内容插入到第 ${targetIndex + 1} 个${targetType === 'image' ? '生图' : targetType === 'video' ? '生视频' : '文字'}框体。`);
+        return;
+      }
+    }
+
+    // 否则作为独立节点添加
+    const fallbackData = type === 'image' ? { title: material.title, emoji: '✨', caption: material.description || '' } : type === 'video' ? { title: material.title, text: material.description || '' } : type === 'audio' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'animation' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'character' ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' } : type === 'scene' ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' } : { title: material.title, text: snapshot.content || material.description || '' };
     const node = { id: `lesson-material-${material.id}-${Date.now().toString(36)}`, type, position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 }, data: { ...fallbackData, ...sourceData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true } };
     const next = { ...current, nodes: [...(current.nodes || []), node] };
-    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1); setMessage(`已将“${material.title || '课堂素材'}”加入画布。`);
+    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1); setMessage(`已将”${material.title || '课堂素材'}”加入画布。`);
   }
 
   const lessonTitle = project.data.courseLessonTitle || 'AI 创作课堂';
   const materialGroups = Array.isArray(project.data.materialGroups) ? project.data.materialGroups : [];
   const capabilities = Array.isArray(project.data.capabilities) && project.data.capabilities.length ? project.data.capabilities : ['text'];
+  const classroomConfig = project.data.classroomConfig || {};
+  const generationSlots = classroomConfig.generationSlots || { image: { count: 0 }, video: { count: 0 } };
   const hasNodes = Boolean((draft || canvasSnapshot)?.nodes?.length);
 
   return <main className="student-canvas-shell">
@@ -597,7 +650,7 @@ function CanvasWorkspace({ api }) {
         <button className={`student-tool-button ${toolPanel === 'generate' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'generate' ? null : 'generate')}><span>✦</span><small>AI生成</small></button>
         <button className={`student-tool-button ${toolPanel === 'capabilities' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'capabilities' ? null : 'capabilities')}><span>⚙</span><small>能力</small></button>
         {toolPanel === 'materials' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>课堂素材</strong><small>点击加入画布，也可拖入画布</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div>{materialGroups.length ? materialGroups.map((group) => <div className="student-material-group" key={group.id || group.title}><h3>{group.title}</h3>{(group.materials || []).map((material) => <button className="student-material-item" key={material.id || material.title} type="button" draggable="true" onDragStart={(event) => dragLessonMaterial(event, material)} onClick={() => addLessonMaterialToCanvas(material)}><span className="student-material-item__icon">{material.materialType === 'IMAGE' ? '▧' : material.materialType === 'VIDEO' ? '▶' : ['AUDIO', 'MUSIC', 'PODCAST', 'DUBBING'].includes(material.materialType) ? '♫' : material.materialType === 'ANIMATION' ? '✧' : '✎'}</span><span><strong>{material.title}</strong><small>{material.description || '点击后加入画布'}</small></span><b>＋</b></button>)}</div>) : <p className="student-tool-empty">老师还没有为本节课配置素材。</p>}</div>}
-        {toolPanel === 'generate' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>AI 素材工坊</strong><small>只显示本课已开放的能力</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><form onSubmit={generateMaterial}><label>素材类型<select value={generationForm.modality} onChange={(event) => setGenerationForm((current) => ({ ...current, modality: event.target.value }))}>{[['IMAGE','image','画面素材'],['VIDEO','video','故事短片'],['MUSIC','music','音乐素材'],['PODCAST','podcast','播客素材'],['DUBBING','dubbing','配音素材'],['TEXT','text','灵感提示词']].filter(([,key]) => capabilities.includes(key)).map(([value,,label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>素材名称<input value={generationForm.title} maxLength={100} onChange={(event) => setGenerationForm((current) => ({ ...current, title: event.target.value }))} /></label><label>描述你的素材<textarea value={generationForm.prompt} required maxLength={2000} onChange={(event) => setGenerationForm((current) => ({ ...current, prompt: event.target.value }))} /></label><button className="primary-button" disabled={generating || !capabilities.includes(String(generationForm.modality).toLowerCase())}>{generating ? '生成中…' : '生成并加入画布'}</button></form></div>}
+        {toolPanel === 'generate' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>AI 素材工坊</strong><small>只显示本课已开放的能力</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><form onSubmit={generateMaterial}><label>素材类型<select value={generationForm.modality} onChange={(event) => setGenerationForm((current) => ({ ...current, modality: event.target.value }))}>{[['IMAGE','image','画面素材'],['VIDEO','video','故事短片'],['MUSIC','music','音乐素材'],['PODCAST','podcast','播客素材'],['DUBBING','dubbing','配音素材'],['TEXT','text','灵感提示词']].filter(([,key]) => capabilities.includes(key)).map(([value,,label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>素材名称<input value={generationForm.title} maxLength={100} onChange={(event) => setGenerationForm((current) => ({ ...current, title: event.target.value }))} /></label><label>描述你的素材<textarea value={generationForm.prompt} required maxLength={2000} onChange={(event) => setGenerationForm((current) => ({ ...current, prompt: event.target.value }))} /></label>{(() => { const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [] }; const imageCount = (current.nodes || []).filter(n => n.type === 'image').length; const videoCount = (current.nodes || []).filter(n => n.type === 'video').length; const maxImages = generationSlots.image?.count || 0; const maxVideos = generationSlots.video?.count || 0; const showImageLimit = generationForm.modality === 'IMAGE' && maxImages > 0; const showVideoLimit = generationForm.modality === 'VIDEO' && maxVideos > 0; return (showImageLimit || showVideoLimit) ? <p className="muted">{showImageLimit ? `生图框体：${imageCount} / ${maxImages}` : `生视频框体：${videoCount} / ${maxVideos}`}</p> : null; })()}<button className="primary-button" disabled={generating || !capabilities.includes(String(generationForm.modality).toLowerCase())}>{generating ? '生成中…' : '生成并加入画布'}</button></form></div>}
         {toolPanel === 'capabilities' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>本课开放能力</strong><small>未勾选的能力不会出现</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><div className="student-capability-list">{[['text','AI 文字'],['image','AI 生图'],['video','AI 生视频'],['music','AI 音乐'],['podcast','AI 播客'],['dubbing','AI 配音']].map(([key,label]) => <span className={capabilities.includes(key) ? 'is-enabled' : ''} key={key}>{capabilities.includes(key) ? '✓' : '—'} {label}</span>)}</div></div>}
       </aside>
       <div className="student-canvas-main"><div className="student-canvas-heading"><div><span className="student-kicker">我的课堂画布</span><h2>{project.data.title}</h2></div><span className={`student-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? '有未保存修改' : '已保存'}</span></div><div className="student-canvas-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} onChange={setDraft} /></div></div>

@@ -7,7 +7,7 @@ import { handleStudent } from './routes/student.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
-import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets } from './routes/fileAssets.js';
+import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, handlePublicFileAssets } from './routes/fileAssets.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 import { domainStateContract } from './services/domainState.js';
@@ -96,6 +96,7 @@ const server = http.createServer(async (req, res) => {
       ?? await handlePublicAnalytics(ctx)
       ?? await handleAdminAnalytics(ctx)
       ?? await handlePublicCommunication(ctx)
+      ?? await handlePublicFileAssets(ctx)
       ?? await handleAuth(ctx)
       ?? await handleAdmin(ctx)
       ?? await handleAdminCommunication(ctx)
