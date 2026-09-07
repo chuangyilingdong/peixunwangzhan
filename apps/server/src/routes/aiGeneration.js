@@ -18,7 +18,10 @@ const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DI
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
-const ASYNC_GENERATION_TIMEOUT_MS = 120000;
+// Seedance video tasks can remain queued for several minutes before the
+// provider exposes the final URL. Keep the job alive long enough for normal
+// queue latency instead of reporting a false generation failure at 120s.
+const ASYNC_GENERATION_TIMEOUT_MS = 300000;
 const ASYNC_GENERATION_MAX_RETRIES = 2;
 const ASYNC_WORKER_ID = `ai-worker-${process.pid}-${id('w').slice(-8)}`;
 const ASYNC_RUNNING_LEASE_MS = ASYNC_GENERATION_TIMEOUT_MS + 30000;

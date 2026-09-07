@@ -119,8 +119,23 @@ function mediaCandidate(node, modality, inheritedMime = '') {
 }
 
 function pendingPayload(payload) {
-  const status = String(payload?.status || payload?.state || payload?.data?.status || '').toLowerCase();
+  const status = String(payload?.data?.status || payload?.status || payload?.state || '').trim().toLowerCase();
   return Boolean((payload?.id || payload?.task_id || payload?.data?.task_id) && ['queued', 'pending', 'processing', 'running', 'in_progress', 'in-progress', 'not_start', 'submitted'].includes(status));
+}
+
+function failedPayload(payload) {
+  const status = String(payload?.data?.status || payload?.status || payload?.state || '').trim().toLowerCase();
+  return ['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(status);
+}
+
+function providerFailureMessage(payload) {
+  return String(
+    payload?.data?.fail_reason
+      || payload?.data?.error?.message
+      || payload?.error?.message
+      || payload?.error
+      || 'AI 供应商生成失败',
+  ).slice(0, 500);
 }
 
 function pollUrlFromPayload(payload, requestUrl) {
@@ -166,7 +181,7 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy' }) {
       ],
     };
   }
-  if (normalizedModality === 'IMAGE') return { model, prompt: String(prompt || ''), n: 1, metadata: { resolution: '1k', output_format: 'png' } };
+  if (normalizedModality === 'IMAGE') return { model, prompt: String(prompt || ''), n: 1, size: '1:1', metadata: { resolution: '1k', output_format: 'png' } };
   if (normalizedModality === 'DUBBING') return { model, input: String(prompt || ''), voice, response_format: 'mp3' };
   return { model, prompt: String(prompt || ''), seconds: '5', metadata: { resolution: '480p' } };
 }
@@ -242,6 +257,9 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, time
     const next = await parseResponse(response, modality);
     if (!response.ok) throw providerHttpError(response, next);
     payload = next;
+  }
+  if (failedPayload(payload)) {
+    throw providerError(providerFailureMessage(payload), PROVIDER_ERROR_CODES.UPSTREAM);
   }
   return assetFromResponse({ payload, modality, title, providerName, model });
 }
