@@ -1263,6 +1263,25 @@ for (const statement of [
 }
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
 
+// Lightweight forward-compatible migration for user credit adjustment tracking.
+db.exec(`CREATE TABLE IF NOT EXISTS user_credit_adjustments (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  credits_before INTEGER NOT NULL,
+  credits_after INTEGER NOT NULL,
+  credits_change INTEGER NOT NULL,
+  reason TEXT,
+  adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('ALLOCATION','ADJUSTMENT','RECLAIM')),
+  actor_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (actor_id) REFERENCES users(id)
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_user_credit_adjustments_user ON user_credit_adjustments(user_id, created_at DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_user_credit_adjustments_org ON user_credit_adjustments(org_id, created_at DESC)');
+
 export function q(sql, params = []) { return db.prepare(sql).run(...params); }
 export function rows(sql, params = []) { return db.prepare(sql).all(...params); }
 export function row(sql, params = []) { return db.prepare(sql).get(...params); }
