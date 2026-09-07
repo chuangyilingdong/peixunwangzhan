@@ -42,10 +42,9 @@ export VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-https://iicili.cyou}"
 export VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-https://iicili.cyou/org}"
 node_modules/.bin/vite build apps/admin --config apps/admin/vite.config.mjs
 node_modules/.bin/vite build apps/org --config apps/org/vite.config.mjs
-node_modules/.bin/vite build apps/student --config apps/student/vite.config.mjs
 node_modules/.bin/vite build apps/website --config apps/website/vite.config.mjs
 
-for app in admin org student website; do
+for app in admin org website; do
   test -f "apps/${app}/dist/index.html"
   mkdir -p "$RELEASE_DIR/apps/${app}"
   cp -a "apps/${app}/dist/." "$RELEASE_DIR/apps/${app}/"
