@@ -6,7 +6,7 @@ const MAX_ASSET_URL_CHARS = 20000000;
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_MODALITY_PATHS = Object.freeze({
   TEXT: '/chat/completions',
-  IMAGE: '/images/generations',
+  IMAGE: '/image/generations',
   MUSIC: '/music/generations',
   VIDEO: '/videos',
   PODCAST: '/podcasts/generations',
@@ -102,7 +102,7 @@ function mediaCandidate(node, modality, inheritedMime = '') {
     return null;
   }
   if (typeof node !== 'object') return null;
-  const urlKeys = ['asset_url', 'assetUrl', 'url', 'image_url', 'audio_url', 'video_url', 'download_url', 'output_url', 'file_url'];
+  const urlKeys = ['asset_url', 'assetUrl', 'url', 'image_url', 'audio_url', 'video_url', 'download_url', 'output_url', 'result_url', 'file_url'];
   for (const key of urlKeys) {
     if (looksLikeUrl(node[key])) return { assetUrl: node[key], mimeType };
   }
@@ -120,14 +120,15 @@ function mediaCandidate(node, modality, inheritedMime = '') {
 
 function pendingPayload(payload) {
   const status = String(payload?.status || payload?.state || payload?.data?.status || '').toLowerCase();
-  return Boolean(payload?.id && ['queued', 'pending', 'processing', 'running', 'in_progress', 'in-progress'].includes(status));
+  return Boolean((payload?.id || payload?.task_id || payload?.data?.task_id) && ['queued', 'pending', 'processing', 'running', 'in_progress', 'in-progress', 'not_start', 'submitted'].includes(status));
 }
 
 function pollUrlFromPayload(payload, requestUrl) {
   const explicit = payload?.poll_url || payload?.pollUrl || payload?.status_url || payload?.statusUrl || payload?.url;
   if (typeof explicit === 'string' && /^https?:\/\//i.test(explicit)) return explicit;
-  if (!payload?.id) return '';
-  return `${normalizeEndpoint(requestUrl)}/${encodeURIComponent(String(payload.id))}`;
+  const taskId = payload?.id || payload?.task_id || payload?.data?.task_id;
+  if (!taskId) return '';
+  return `${normalizeEndpoint(requestUrl)}/${encodeURIComponent(String(taskId))}`;
 }
 
 function responseContentType(response, modality) {
@@ -165,9 +166,9 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy' }) {
       ],
     };
   }
-  if (normalizedModality === 'IMAGE') return { model, prompt: String(prompt || ''), n: 1, response_format: 'url' };
+  if (normalizedModality === 'IMAGE') return { model, prompt: String(prompt || ''), n: 1, metadata: { resolution: '1k', output_format: 'png' } };
   if (normalizedModality === 'DUBBING') return { model, input: String(prompt || ''), voice, response_format: 'mp3' };
-  return { model, prompt: String(prompt || ''), title: String(title || '').slice(0, 120), modality: normalizedModality, response_format: 'url' };
+  return { model, prompt: String(prompt || ''), seconds: '5', metadata: { resolution: '480p' } };
 }
 
 async function fetchWithTimeout(url, { method = 'POST', body, apiKey, timeout, modality } = {}) {
