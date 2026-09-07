@@ -279,7 +279,7 @@ function Marketplace(){
      error?<div className="note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
      items.length===0?<div className="note">✦ <div><b>暂无课程，敬请期待</b><p>课程广场将陆续上线优质 AI 编程课程。</p></div></div>:
      <><div className="mkt-grid">{items.map(item=><Link key={item.id} to={'/marketplace/'+item.id} className="mkt-card">
-       <div className="mkt-cover" style={item.coverImageUrl?{backgroundImage:'url('+item.coverImageUrl+')'}:{}}>{!item.coverImageUrl&&<span>{item.title?.charAt(0)||'课'}</span>}</div>
+       <div className="mkt-cover" style={(item.coverAssetId || item.coverImageUrl)?{backgroundImage:'url('+(item.coverAssetId ? '/api/public/file-assets/'+item.coverAssetId+'/download' : item.coverImageUrl)+')'}:{}}>{!item.coverAssetId && !item.coverImageUrl&&<span>{item.title?.charAt(0)||'课'}</span>}</div>
        <div className="mkt-body"><h3>{item.title}</h3>
          <div className="mkt-meta"><DifficultyStars level={item.difficultyLevel}/>{ageLabel(item.ageRangeMin,item.ageRangeMax)?<span className="mkt-age">{ageLabel(item.ageRangeMin,item.ageRangeMax)}</span>:null}</div>
          {(item.tags||[]).slice(0,3).map(t=><span key={t} className="mkt-tag">{t}</span>)}
@@ -319,7 +319,7 @@ function MarketplaceDetail(){
   <main className="inner">
     <Link to="/marketplace" className="back-link">← 返回课程广场</Link>
     <div className="mkt-detail">
-      {d.coverImageUrl&&<div className="mkt-detail-cover" role="img" aria-label={`${d.title || '课程'}封面`} style={{backgroundImage:'url('+d.coverImageUrl+')'}}/>}
+      {(d.coverAssetId || d.coverImageUrl)&&<div className="mkt-detail-cover" role="img" aria-label={`${d.title || '课程'}封面`} style={{backgroundImage:'url('+(d.coverAssetId ? '/api/public/file-assets/'+d.coverAssetId+'/download' : d.coverImageUrl)+')'}}/>}
       <div className="mkt-detail-info">
         <div className="mkt-detail-row"><span className="mkt-label2">难度</span><DifficultyStars level={d.difficultyLevel}/></div>
         <div className="mkt-detail-row"><span className="mkt-label2">适学年龄</span><span>{ageLabel(d.ageRangeMin,d.ageRangeMax)||'未设置'}</span></div>
