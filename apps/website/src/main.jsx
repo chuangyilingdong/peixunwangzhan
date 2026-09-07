@@ -40,7 +40,8 @@ function LoginPage() {
     if (!response.ok) throw new Error(payload.error?.message || payload.message || '登录失败');
     const session = saveUserSession(payload.data || payload);
     const role = session.user?.role;
-    const target = role === 'STUDENT' ? '/learn' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/learn';
+    // 学生登录后返回官网首页，不再跳转到 /learn
+    const target = role === 'STUDENT' ? '/' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/';
     window.location.assign(target);
   }
   return <div className='website-login'><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title='登录' description='使用机构分配的账号进入你的工作台。' onLogin={handleLogin} demos={[]} /></div>;
