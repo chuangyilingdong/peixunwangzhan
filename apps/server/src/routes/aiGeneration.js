@@ -257,8 +257,9 @@ async function processAsyncGeneration(item) {
   const policy = getAiProviderPolicy();
   const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
+  const routedSelection = providerSelectionForModality(policy, modality);
   const providerSelection = persistedJob?.provider && persistedJob.provider !== 'local-mock'
-    ? { provider: persistedJob.provider, model: persistedJob.model, endpoint: policy.endpoint }
+    ? { provider: persistedJob.provider, model: persistedJob.model, endpoint: routedSelection.endpoint, channelId: routedSelection.channelId }
     : {};
   const provider = getGenerationProvider(providerSelection); const info = generationProviderInfo(providerSelection);
   const context = resolveProjectUsageContext(auth.rawUser, project);
