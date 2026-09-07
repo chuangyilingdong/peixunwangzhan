@@ -93,10 +93,56 @@ function easeInOutCubic(value) { return value < 0.5 ? 4 * value * value * value 
 function updateInnerSection(progress) { if (progress < 0.18) return 'hero'; if (progress < 0.45) return 'projects'; if (progress < 0.68) return 'expertise'; if (progress < 1.15) return 'about'; return 'contact'; }
 function InnerCircleLogo({ onClick }) { return <button type="button" className="ic-logo" onClick={onClick} aria-label="回到首页"><span className="ic-logo-mark">✦</span><span><b>AI 魔法学院</b><small>INNER CIRCLE / 创作课堂</small></span></button>; }
 const WEBSITE_NAV = [['/', '首页'], ['/learn', '学习上课'], ['/works', '作品广场'], ['/free-canvas', '自由画布'], ['/free-chat', '自由对话']];
-function InnerCircleHeader({ userBadge }) {
+function InnerCircleHeader({ userBadge, session, logout }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = () => setMenuOpen(false);
-  return <><header className="ic-header"><InnerCircleLogo onClick={closeMenu} /><p className="ic-subtitle">Full Workflow for Kids.<br />We Make Everything. You<br />Unwind.</p><nav className="ic-nav" aria-label="主导航">{WEBSITE_NAV.map(([to, label]) => <Link key={to} to={to} className={to === '/' ? 'active' : ''}>{label}</Link>)}</nav><div className="ic-auth">{userBadge}</div><button type="button" className="ic-menu-trigger" aria-label={menuOpen ? '关闭菜单' : '打开菜单'} aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}>{menuOpen ? '×' : '☰'}</button></header>{menuOpen && <div className="ic-menu-overlay"><div className="ic-menu-head"><span>AI MAGIC CIRCLE</span><button type="button" onClick={closeMenu}>关闭 ×</button></div><div className="ic-menu-items">{WEBSITE_NAV.map(([to, label]) => <Link key={to} to={to} className={to === '/' ? 'active' : ''} onClick={closeMenu}>{label}<span>↗</span></Link>)}</div><div className="ic-menu-login">{userBadge}</div><p>让孩子从灵感进入作品<br />让机构拥有一套能落地的 AI 课</p></div>}</>;
+  
+  // 学生用户下拉菜单（在 InnerCircle 首页也需要）
+  const [showStudentMenu, setShowStudentMenu] = useState(false);
+  const studentMenuItems = [
+    { to: '/learn', icon: '🎨', label: '进入学习' },
+    { to: '/my-works', icon: '✧', label: '我的作品' },
+    { to: '/my-credits', icon: '◆', label: '我的积分' },
+    { to: '/my-courses', icon: '◇', label: '我的课程' },
+    { to: '/my-stats', icon: '◈', label: '学习统计' },
+  ];
+  
+  const roleBadge = { STUDENT: '小小创作者', TEACHER: '教师', ORG_ADMIN: '机构管理员', SUPER_ADMIN: '平台管理员', PLATFORM_ADMIN: '平台管理员' };
+  
+  const finalUserBadge = session ? (
+    session.user?.role === 'STUDENT' ? (
+      <div className='header-user-menu'>
+        <button className='header-user' onClick={() => setShowStudentMenu(!showStudentMenu)}>
+          <span>{session.user?.displayName || session.user?.login || '用户'}</span>
+          <span className='role-tag'>{roleBadge[session.user?.role]}</span>
+          <span className='dropdown-arrow'>{showStudentMenu ? '▲' : '▼'}</span>
+        </button>
+        {showStudentMenu && (
+          <div className='student-dropdown-menu'>
+            {studentMenuItems.map(item => (
+              <Link key={item.to} to={item.to} className='menu-item' onClick={() => setShowStudentMenu(false)}>
+                <span className='menu-icon'>{item.icon}</span>
+                <span className='menu-label'>{item.label}</span>
+              </Link>
+            ))}
+            <div className='menu-divider'></div>
+            <button className='menu-item logout-item' onClick={() => { setShowStudentMenu(false); logout(); }}>
+              <span className='menu-icon'>🚪</span>
+              <span className='menu-label'>退出登录</span>
+            </button>
+          </div>
+        )}
+      </div>
+    ) : (
+      <span className='header-user'>
+        <span>{session.user?.displayName || session.user?.login || '用户'}</span>
+        <span className='role-tag'>{roleBadge[session.user?.role] || session.user?.role}</span>
+        <button className='text-button' onClick={logout}>退出</button>
+      </span>
+    )
+  ) : <Link className='top-button' to='/login'>登录</Link>;
+  
+  return <><header className="ic-header"><InnerCircleLogo onClick={closeMenu} /><p className="ic-subtitle">Full Workflow for Kids.<br />We Make Everything. You<br />Unwind.</p><nav className="ic-nav" aria-label="主导航">{WEBSITE_NAV.map(([to, label]) => <Link key={to} to={to} className={to === '/' ? 'active' : ''}>{label}</Link>)}</nav><div className="ic-auth">{finalUserBadge}</div><button type="button" className="ic-menu-trigger" aria-label={menuOpen ? '关闭菜单' : '打开菜单'} aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}>{menuOpen ? '×' : '☰'}</button></header>{menuOpen && <div className="ic-menu-overlay"><div className="ic-menu-head"><span>AI MAGIC CIRCLE</span><button type="button" onClick={closeMenu}>关闭 ×</button></div><div className="ic-menu-items">{WEBSITE_NAV.map(([to, label]) => <Link key={to} to={to} className={to === '/' ? 'active' : ''} onClick={closeMenu}>{label}<span>↗</span></Link>)}</div><div className="ic-menu-login">{finalUserBadge}</div><p>让孩子从灵感进入作品<br />让机构拥有一套能落地的 AI 课</p></div>}</>;
 }
 function ScrubVideo({ src, progress, variant = 'hero', poster, autoplay = false }) {
   const videoRef = useRef(null); const currentTimeRef = useRef(0); const durationRef = useRef(4.2); const [status, setStatus] = useState('loading');
@@ -127,14 +173,14 @@ function SoapTiles({ progress }) {
 function parseDrumLine(line) { if (!line) return [{ text: '\u00a0', highlight: false }]; const parts = []; let cursor = 0; const pattern = /\[([^\]]+)\]/g; let match; while ((match = pattern.exec(line))) { if (match.index > cursor) parts.push({ text: line.slice(cursor, match.index), highlight: false }); parts.push({ text: match[1], highlight: true }); cursor = match.index + match[0].length; } if (cursor < line.length) parts.push({ text: line.slice(cursor), highlight: false }); return parts; }
 function CylindricalDrum({ progress }) { const targetIndex = clamp01((progress - 1.45) / 2.05) * (DRUM_LINES.length - 1); return <div className="ic-drum"><div className="ic-drum-inner">{DRUM_LINES.map((line, index) => { const diff = index - targetIndex; const translateY = diff * 32; const angle = translateY / 380; const z = Math.cos(angle) * 380 - 380; const scale = 0.78 + Math.cos(angle) * 0.22; const opacity = Math.max(0, (Math.cos(angle) - 0.2) / 0.8); const blur = Math.min(8, Math.max(0, (Math.abs(diff) - 1.5) * 0.75)); return <p key={index} style={{ transform: 'translateY(' + translateY + 'px) translateZ(' + z + 'px) rotateX(' + (-angle * 180 / Math.PI * 0.8) + 'deg) scale(' + scale + ')' , opacity: line ? opacity : opacity * 0.3, filter: blur > 0.1 ? 'blur(' + blur + 'px)' : 'none' }}>{parseDrumLine(line).map((part, partIndex) => <span key={partIndex} className={part.highlight ? 'highlight' : ''}>{part.text}</span>)}</p>; })}</div></div>; }
 function LogoMarquee() { const marks = ['AI MAGIC ACADEMY', 'VIBECODING', '阿飞 AI', 'PROJECT CLASSROOM', '作品展厅', '机构工作台']; const track = <div className="ic-marquee-track">{[...marks, ...marks].map((mark, index) => <span key={index}>{mark}</span>)}</div>; return <div className="ic-marquee"><div className="ic-marquee-line" /><div className="ic-marquee-window"><div className="ic-marquee-moving">{track}{track}</div></div></div>; }
-function InnerCircleHome({ userBadge }) {
+function InnerCircleHome({ session, logout }) {
   const [scrollProgress, setScrollProgress] = useState(0); const [lerpedProgress, setLerpedProgress] = useState(0); const [activeSection, setActiveSection] = useState('hero'); const targetRef = useRef(0); const animationRef = useRef(null); const touchYRef = useRef(null); const parallaxRef = useRef(null);
   useEffect(() => { const root = document.documentElement; const body = document.body; const oldRootOverflow = root.style.overflow; const oldBodyOverflow = body.style.overflow; root.style.overflow = 'hidden'; body.style.overflow = 'hidden'; let running = true; let current = 0; let frame; const tick = () => { if (!running) return; current += (targetRef.current - current) * 0.08; if (Math.abs(targetRef.current - current) < 0.0001) current = targetRef.current; setLerpedProgress(current); setActiveSection(updateInnerSection(current)); frame = requestAnimationFrame(tick); }; const stopAnimation = () => { if (animationRef.current) { cancelAnimationFrame(animationRef.current); animationRef.current = null; } }; const onWheel = event => { event.preventDefault(); stopAnimation(); targetRef.current = Math.max(0, Math.min(3.5, targetRef.current + event.deltaY * 0.0006)); setScrollProgress(targetRef.current); }; const onTouchStart = event => { stopAnimation(); touchYRef.current = event.touches[0]?.clientY ?? null; }; const onTouchMove = event => { if (touchYRef.current == null) return; event.preventDefault(); const currentY = event.touches[0]?.clientY ?? touchYRef.current; targetRef.current = Math.max(0, Math.min(3.5, targetRef.current + (touchYRef.current - currentY) * 0.0015)); touchYRef.current = currentY; setScrollProgress(targetRef.current); }; const onTouchEnd = () => { touchYRef.current = null; }; const onMouseMove = event => { const mx = event.clientX / window.innerWidth - 0.5; const my = event.clientY / window.innerHeight - 0.5; if (parallaxRef.current) parallaxRef.current.style.transform = 'translate(' + (-mx * 40) + 'px, ' + (-my * 40) + 'px) scale(1.05)'; }; frame = requestAnimationFrame(tick); window.addEventListener('wheel', onWheel, { passive: false }); window.addEventListener('touchstart', onTouchStart, { passive: false }); window.addEventListener('touchmove', onTouchMove, { passive: false }); window.addEventListener('touchend', onTouchEnd); window.addEventListener('mousemove', onMouseMove); return () => { running = false; if (frame) cancelAnimationFrame(frame); stopAnimation(); window.removeEventListener('wheel', onWheel); window.removeEventListener('touchstart', onTouchStart); window.removeEventListener('touchmove', onTouchMove); window.removeEventListener('touchend', onTouchEnd); window.removeEventListener('mousemove', onMouseMove); root.style.overflow = oldRootOverflow; body.style.overflow = oldBodyOverflow; }; }, []);
   const navigate = item => { if (animationRef.current) cancelAnimationFrame(animationRef.current); const from = targetRef.current; const started = performance.now(); const run = now => { const p = Math.min(1, (now - started) / 1200); targetRef.current = from + (item.progress - from) * easeInOutCubic(p); setScrollProgress(targetRef.current); if (p < 1) animationRef.current = requestAnimationFrame(run); else animationRef.current = null; }; animationRef.current = requestAnimationFrame(run); };
   const secondProgress = clamp01((lerpedProgress - 1.15) / 0.5); const rising = 1 - Math.pow(1 - secondProgress, 3); const blur = Math.sin(secondProgress * Math.PI / 2) * 64;
-  return <main className="ic-home"><div className="ic-stage"><div className="ic-first-screen" style={{ filter: secondProgress > 0 ? 'blur(' + blur + 'px)' : 'none' }}><div ref={parallaxRef} className="ic-hero-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={Math.min(1, lerpedProgress)} variant="hero" autoplay /></div><div className="ic-hero-wash" /><div className="ic-hero-copy"><span className="ic-eyebrow">青少年 AI 创作开课平台</span><strong>从灵感进入作品</strong><p>AI 对话、VibeCoding 与项目式课程<br />让孩子当堂做出游戏、动画和智能硬件。</p><div className="ic-hero-actions"><a href="/demo" onClick={() => trackAnalytics('cta_click', { target: '/demo' })}>预约演示 <b>↗</b></a><a href="/courses">查看课程 <b>↗</b></a></div></div><div className="ic-title-wrap"><ScrollExitTitle progress={lerpedProgress} /></div><SoapTiles progress={lerpedProgress} /><div className="ic-progress-hint"><span>SCROLL / DRAG</span><i>{String(Math.round(lerpedProgress / 3.5 * 100)).padStart(2, '0')}</i></div></div><InnerCircleHeader userBadge={userBadge} /><div className="ic-second-screen" style={{ transform: 'translateY(' + ((1 - rising) * 100) + '%)', visibility: secondProgress > 0 ? 'visible' : 'hidden' }}><div className="ic-grab" /><div className="ic-second-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={clamp01((lerpedProgress - 1.45) / 2.05)} variant="second" /></div><div className="ic-second-wash" /><CylindricalDrum progress={lerpedProgress} /><LogoMarquee /><div className="ic-second-caption"><span>02 / MANIFESTO</span><h2>把复杂技术<br /><em>变成孩子的表达。</em></h2><a href="/demo">和我们聊聊你的课堂 ↗</a></div></div></div></main>;
+  return <main className="ic-home"><div className="ic-stage"><div className="ic-first-screen" style={{ filter: secondProgress > 0 ? 'blur(' + blur + 'px)' : 'none' }}><div ref={parallaxRef} className="ic-hero-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={Math.min(1, lerpedProgress)} variant="hero" autoplay /></div><div className="ic-hero-wash" /><div className="ic-hero-copy"><span className="ic-eyebrow">青少年 AI 创作开课平台</span><strong>从灵感进入作品</strong><p>AI 对话、VibeCoding 与项目式课程<br />让孩子当堂做出游戏、动画和智能硬件。</p><div className="ic-hero-actions"><a href="/demo" onClick={() => trackAnalytics('cta_click', { target: '/demo' })}>预约演示 <b>↗</b></a><a href="/courses">查看课程 <b>↗</b></a></div></div><div className="ic-title-wrap"><ScrollExitTitle progress={lerpedProgress} /></div><SoapTiles progress={lerpedProgress} /><div className="ic-progress-hint"><span>SCROLL / DRAG</span><i>{String(Math.round(lerpedProgress / 3.5 * 100)).padStart(2, '0')}</i></div></div><InnerCircleHeader session={session} logout={logout} /><div className="ic-second-screen" style={{ transform: 'translateY(' + ((1 - rising) * 100) + '%)', visibility: secondProgress > 0 ? 'visible' : 'hidden' }}><div className="ic-grab" /><div className="ic-second-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={clamp01((lerpedProgress - 1.45) / 2.05)} variant="second" /></div><div className="ic-second-wash" /><CylindricalDrum progress={lerpedProgress} /><LogoMarquee /><div className="ic-second-caption"><span>02 / MANIFESTO</span><h2>把复杂技术<br /><em>变成孩子的表达。</em></h2><a href="/demo">和我们聊聊你的课堂 ↗</a></div></div></div></main>;
 }
-function Home({ userBadge }){ return <InnerCircleHome userBadge={userBadge} />; }
+function Home({ session, logout }){ return <InnerCircleHome session={session} logout={logout} />; }
 function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号、试用魔法石额度与示范课包清单。</p></div><Button>预约产品演示</Button></section>}
 
 function Courses(){return <><Title eyebrow="课程体系" title={<>标准课包，<em>马上开课</em></>} desc="给教培机构和学校用的课包清单，不是面向个人家长的选课商城。共 11 门、87 节，建议每节 90 分钟，适学 8–16 岁。"/><main className="inner"><div className="stats">{[['11','门系统课程'],['87','节精品课时'],['8–16','岁适学年龄'],['90′','每节课时长']].map(x=><div key={x[1]}><b>{x[0]}</b><span>{x[1]}</span></div>)}</div><div className="courses">{courses.map((c,i)=><article key={c[1]}><div className="course-head"><small>{String(i+1).padStart(2,'0')}</small><i>{c[0]}</i><div><span>{c[2]}</span><h2>{c[1]}</h2><p>{c[5]}</p></div><b>{c[3]}<small>节课</small><br/>90<small>分钟</small></b></div><div className="lessons">{['认识 AI 魔法师','创意与提示词','角色与场景设计','让画面动起来','代码魔法实践','作品打磨与发布','同伴分享与互评','结课展示与颁奖'].slice(0,Math.min(c[3],8)).map((x,n)=><span key={x}>{String(n+1).padStart(2,'0')} · {x}</span>)}</div></article>)}</div><End title="想看完整课包与课件示例？" text="预约演示，获取课程清单、客户端安装包与试用账号。"/></main></>}
@@ -449,7 +495,7 @@ function App(){
       {INTERNAL_TEST && <div className='internal-test-banner' role='status'>内部测试环境 · 不代表正式服务</div>}
       {!isFullPage && loc.pathname !== '/' && <Header user={session ? { displayName: session.user?.displayName, role: session.user?.role } : null} userBadge={userBadge} logout={logout} />}
       <Routes>
-        <Route path='/' element={<Home userBadge={userBadge}/>}/>
+        <Route path='/' element={<Home session={session} logout={logout}/>}/>
         <Route path='/login' element={<LoginPage/>}/>
         <Route path='/marketplace' element={<Marketplace/>}/>
         <Route path='/marketplace/:id' element={<MarketplaceDetail/>}/>
@@ -473,7 +519,7 @@ function App(){
         <Route path='/my-stats' element={<Notice tone='info'>学习统计功能开发中。</Notice>}/>
         <Route path='/free-canvas' element={<Notice tone='info'>自由画布即将上线。</Notice>}/>
         <Route path='/free-chat' element={<Notice tone='info'>自由对话即将上线。</Notice>}/>
-        <Route path='*' element={<Home/>}/>
+        <Route path='*' element={<Home session={session} logout={logout}/>}/>
       </Routes>
       {!isFullPage && loc.pathname !== '/' && <Footer/>}
       {analyticsConsent === null && <AnalyticsConsentBanner onDecision={decide}/>}
