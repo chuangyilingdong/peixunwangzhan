@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, readSession, Status, writeSession } from '@platform/shared';
+import { OrgRechargeDialog, RechargeHistoryPanel } from './components/CreditManagement.jsx';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
@@ -152,11 +153,14 @@ function Organizations({ api }) {
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
+  const [showRechargeDialog, setShowRechargeDialog] = useState(false);
+  const [showRechargeHistory, setShowRechargeHistory] = useState(false);
   const selected = detail.data?.organization || null;
 
   function selectOrg(item) {
     setSelectedId(item.id);
     setMessage('');
+    setShowRechargeHistory(false);
     const contact = item.contact || {};
     setEditForm({
       name: item.name,
@@ -277,9 +281,54 @@ function Organizations({ api }) {
         <div className="metrics">
           <MetricCard label="服务状态" value={selected.serviceAvailable ? '可用' : '不可用'} hint={selected.status} tone={selected.serviceAvailable ? 'teal' : 'pink'} />
           <MetricCard label="合同剩余天数" value={selected.daysUntilContractExpires ?? '—'} hint={selected.contractExpiringSoon ? '30 天内到期，需提醒续约' : '按合同到期时间计算'} tone={selected.contractExpiringSoon ? 'orange' : undefined} />
-          <MetricCard label="积分余额" value={formatCredits(detail.data.billing.balance)} hint={`冻结 ${formatCredits(detail.data.billing.frozenCredits)} · 累计消耗 ${formatCredits(detail.data.billing.totalCreditsSpent)}`} />
-          <MetricCard label="教师席位" value={`${selected.teacherUsedSeats} / ${selected.teacherSeats}`} hint={`基础 ${selected.baseTeacherSeats} + 增购 ${selected.purchasedTeacherSeats}`} tone="orange" />
+          <MetricCard 
+            label="积分余额" 
+            value={formatCredits(detail.data.billing.balance)} 
+            hint={`冻结 ${formatCredits(detail.data.billing.frozenCredits)} · 累计消耗 ${formatCredits(detail.data.billing.totalCreditsSpent)}`}
+            action={<button className="metric-action-button" onClick={() => setShowRechargeDialog(true)}>充值</button>}
+          />
+          <MetricCard label="教师席位" value={`${selected.teacherUsedSeats} / ${selected.totalTeacherSeats}`} hint={`基础 ${selected.baseTeacherSeats} + 购买 ${selected.purchasedTeacherSeats}`} tone={selected.totalTeacherSeats - selected.teacherUsedSeats < 3 ? 'orange' : undefined} />
         </div>
+        
+        {showRechargeDialog && (
+          <OrgRechargeDialog
+            api={api}
+            orgId={selectedId}
+            orgName={selected.name}
+            onClose={() => setShowRechargeDialog(false)}
+            onSuccess={() => {
+              detail.refresh();
+              organizations.refresh();
+            }}
+          />
+        )}
+        
+        <Panel title="积分账户管理" actions={
+          <button className="secondary-button" onClick={() => setShowRechargeHistory(!showRechargeHistory)}>
+            {showRechargeHistory ? '隐藏' : '查看'}充值历史
+          </button>
+        }>
+          <div className="billing-info">
+            <div className="billing-row">
+              <span className="billing-label">可用余额：</span>
+              <span className="billing-value">{formatCredits(detail.data.billing.balance)} 积分</span>
+            </div>
+            <div className="billing-row">
+              <span className="billing-label">累计充值：</span>
+              <span className="billing-value">{formatCredits(detail.data.billing.totalCreditsIn)} 积分</span>
+            </div>
+            <div className="billing-row">
+              <span className="billing-label">累计消耗：</span>
+              <span className="billing-value">{formatCredits(detail.data.billing.totalCreditsSpent)} 积分</span>
+            </div>
+            <div className="billing-row">
+              <span className="billing-label">累计付款：</span>
+              <span className="billing-value">¥{(detail.data.billing.currencyPaidTotalFen / 100).toFixed(2)}</span>
+            </div>
+          </div>
+          
+          {showRechargeHistory && <RechargeHistoryPanel api={api} orgId={selectedId} />}
+        </Panel>
         {selected.contractExpiringSoon ? <Notice tone="warning">该机构合同将在 {selected.daysUntilContractExpires} 天内到期，请尽快联系续约。</Notice> : null}
         <div className="split">
           <Panel title="编辑机构资料">{editForm ? <form onSubmit={saveEdit}>
