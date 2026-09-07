@@ -149,13 +149,15 @@ export function initializeAsyncGenerationQueue() {
 }
 
 function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error, requestContext = null }) {
-  const failCode = error?.code || 'GENERATION_FAILED';
+  const normalized = normalizeProviderError(error);
+  const failCode = normalized.code || error?.code || 'GENERATION_FAILED';
+  const failMessage = normalized.message || error?.message || '素材生成失败';
   const failAt = nowIso();
   transaction(() => {
     const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (currentJob) assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE id=?",
-      [failCode, String(error?.message || '素材生成失败').slice(0, 1000), failAt, jobId]);
+      [failCode, String(failMessage).slice(0, 1000), failAt, jobId]);
     q(`INSERT INTO usage_records(
          id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at
        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -277,7 +279,8 @@ async function processAsyncGeneration(item) {
     const current = row('SELECT retry_count,max_retries,status FROM generation_jobs WHERE id=?', [jobId]);
     if (current?.status === 'RUNNING' && Number(current.retry_count || 0) < Number(current.max_retries ?? ASYNC_GENERATION_MAX_RETRIES)) {
       const retryCount = Number(current.retry_count || 0) + 1; const nextAttempt = new Date(Date.now() + retryCount * 5000).toISOString();
-      q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=? AND status='RUNNING' AND worker_id=?", [retryCount, nextAttempt, nowIso(), error?.code || 'GENERATION_FAILED', String(error?.message || '生成失败'), jobId, ASYNC_WORKER_ID]);
+      const normalized = normalizeProviderError(error);
+      q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=? AND status='RUNNING' AND worker_id=?", [retryCount, nextAttempt, nowIso(), normalized.code || error?.code || 'GENERATION_FAILED', String(normalized.message || error?.message || '生成失败'), jobId, ASYNC_WORKER_ID]);
       enqueuePersistedJob(jobId, retryCount * 5000);
     } else {
       markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
