@@ -39,7 +39,7 @@ function LoginPage() {
     if (!response.ok) throw new Error(payload.error?.message || payload.message || '登录失败');
     const session = saveUserSession(payload.data || payload);
     const role = session.user?.role;
-    const target = role === 'STUDENT' || role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/learn';
+    const target = role === 'STUDENT' ? '/learn' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/learn';
     window.location.assign(target);
   }
   return <div className='website-login'><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title='登录' description='使用机构分配的账号进入你的工作台。' onLogin={handleLogin} demos={[]} /></div>;
@@ -300,11 +300,9 @@ function MarketplaceDetail(){
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState(null);
   function startLearning(){
-    const user=localStorage.getItem('user');
-    if(!user){window.location.href='/student/login';return;}
-    let u=null;
-    try{u=JSON.parse(user);}catch(e){window.location.href='/student/login';return;}
-    if(u&&u.role==='STUDENT') window.location.href='/student/';
+    const session=readUserSession();
+    if(!session){window.location.href='/login';return;}
+    if(session.user?.role==='STUDENT') window.location.href='/learn';
     else window.location.href='/demo';
   }
   useEffect(()=>{let live=true;

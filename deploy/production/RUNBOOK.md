@@ -118,7 +118,7 @@ sudo systemctl start learning-platform-internal-test
 | 平台端 | `root` | `SUPER_ADMIN` | `/admin/` |
 | 机构端 | `org-admin` | `ORG_ADMIN` | `/org/` |
 | 教师端 | `teacher-1` | `TEACHER` | `/org/` |
-| 学生端 | `student-1` | `STUDENT` | `/student/` |
+| 学生账号 | `student-1` | `STUDENT` | `/login` -> `/learn` |
 
 密码保存在仓库外的本机受限 Markdown 文件：
 
@@ -353,7 +353,7 @@ AI 不再使用平台预算或机构预算。机构充值后获得共享积分�
 - 课时能力：5 个已发布课时均已开启 `text`、`image`、`video`。
 - 测试班：`三年级AI创作一班`；当前有效会话 `csession_9a324227086a4eb59c85` 的 `allow_video=1`。
 - 生产变更前备份：`/srv/ai-kids-platform/production/backups/20260906T161959Z/platform.db`。
-- 学生测试入口：`https://iicili.cyou/student/` -> “AI古诗词创意营” -> 课时 -> “进入课堂画布” -> “AI生成” -> “故事短片”。
+- 学生测试入口：访问 `https://iicili.cyou/login` 登录后进入 `https://iicili.cyou/learn`，选择“AI古诗词创意营” -> 课时 -> “进入课堂画布” -> “AI生成” -> “故事短片”。当前不再使用独立 `/student/` 学生后台。
 
 ## 2026-09-06 官网课堂画布 AI 生成入口发布记录
 

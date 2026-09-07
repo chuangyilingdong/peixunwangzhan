@@ -2124,7 +2124,7 @@ rollback-production.sh --release /srv/ai-kids-platform/production/releases/20260
 - 测试班：`三年级AI创作一班`（class `class_e28e6d72597a4bb58537`）；当前有效课堂会话 `csession_9a324227086a4eb59c85` 已开启视频能力（`allow_video=1`）。
 - 变更前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T161959Z/platform.db`。
 - 变更方式：在生产 SQLite 数据库事务内写入课时能力，并开启当前课堂会话视频权限；变更后重新查询确认能力与会话开关生效。没有修改 API Key、私钥或普通代码文件。
-- 学生测试路径：登录 `https://iicili.cyou/student/`，进入“AI古诗词创意营”对应课时，点击“进入课堂画布”，左侧点击“AI生成”，选择“故事短片”。
+- 学生测试路径：访问 `https://iicili.cyou/login` 登录，学生账号登录后进入统一学习入口 `https://iicili.cyou/learn`，选择“AI古诗词创意营”对应课时，点击“进入课堂画布”，再点击“AI生成”并选择“故事短片”。当前不再使用独立 `/student/` 学生后台。
 
 ## 2026-09-06 官网课堂画布 AI 生成入口发布
 
