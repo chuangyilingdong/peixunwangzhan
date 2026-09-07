@@ -196,6 +196,9 @@ async function fetchWithTimeout(url, { method = 'POST', body, apiKey, timeout, m
 function providerHttpError(response, payload) {
   const detail = JSON.stringify(payload || '').slice(0, 2000);
   const safety = response.status === 400 && /safety|moderation|content.?policy|policy.?violation|拒绝|违规/i.test(detail);
+  if (response.status === 401 || response.status === 403) {
+    return providerError(`AI渠道认证失败（HTTP ${response.status}）。请在管理后台重新填写并保存该渠道 API Key。`, PROVIDER_ERROR_CODES.AUTH_FAILED, response.status);
+  }
   return providerError(safety ? '内容未通过 AI 服务安全策略' : 'AI 供应商调用失败', safety ? PROVIDER_ERROR_CODES.SAFETY_REJECTED : 'GENERATION_PROVIDER_HTTP_ERROR', response.status);
 }
 
