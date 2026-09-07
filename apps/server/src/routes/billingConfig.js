@@ -68,7 +68,7 @@ export function assertAiBudgets() {}
 function providerModelsEndpoint(value) {
   const parsed = new URL(String(value || '').trim());
   parsed.pathname = parsed.pathname
-    .replace(/\/(?:chat\/completions|responses|messages|images\/generations|videos(?:\/generations)?|music\/generations|podcasts?\/generations|audio\/(?:speech|dubbing)|models)\/?$/i, '')
+    .replace(/\/(?:chat\/completions|responses|messages|images?\/generations|videos(?:\/generations)?|music\/generations|podcasts?\/generations|audio\/(?:speech|dubbing)|models)\/?$/i, '')
     .replace(/\/$/, '') + '/models';
   parsed.search = '';
   return parsed.toString();
