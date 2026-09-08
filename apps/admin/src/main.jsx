@@ -15,9 +15,7 @@ const navigation = [
   { to: '/users', icon: '◉', label: '平台用户', permission: 'ADMIN_ORGANIZATIONS' },
   { heading: '内容与活动' },
   { to: '/courses', icon: '▦', label: '平台课程', permission: 'ADMIN_COURSES' },
-  { to: '/marketplace', icon: '✦', label: '课程广场', permission: 'ADMIN_COURSES' },
-  { to: '/works', icon: '◇', label: '作品库', permission: 'ADMIN_WORKS' },
-  { to: '/hackathon', icon: '⚑', label: '黑客松', permission: 'ADMIN_CONTENT' },
+  { to: '/works', icon: '◇', label: '平台作品库', permission: 'ADMIN_WORKS' },
   { heading: '计费与设置' },
   { to: '/billing', icon: '◌', label: '计费与模型', permission: 'ADMIN_BILLING' },
   { to: '/feature-flags', icon: '⚗', label: '灰度开关', permission: 'ADMIN_FEATURE_FLAGS' },
@@ -25,9 +23,7 @@ const navigation = [
   { to: '/website-content', icon: '✎', label: '官网内容', permission: 'ADMIN_CONTENT' },
   { to: '/analytics', icon: '⌁', label: '转化分析', permission: 'ADMIN_ANALYTICS' },
   { to: '/notifications', icon: '✉', label: '通知事件', permission: 'ADMIN_CONTENT' },
-  { to: '/client-releases', icon: '⤓', label: '客户端版本', permission: 'ADMIN_CONTENT' },
   { to: '/inbox', icon: '✉', label: '站内信', permission: 'ADMIN_CONTENT' },
-  { to: '/leads', icon: '◔', label: '商机管理', permission: 'ADMIN_CONTENT' },
   { to: '/admins', icon: '⚙', label: '平台管理员', permission: 'ADMIN_AUDIT' },
   { to: '/audit', icon: '☉', label: '操作审计', permission: 'ADMIN_AUDIT' },
 ];
@@ -808,13 +804,14 @@ function PlatformWorks({ api }) {
   const reviewStatusLabels = { PENDING: '待审核', APPROVED: '已通过', REJECTED: '已驳回', PUBLISHED: '已发布' };
   async function unpublish() { if (!action) return; setSaving(true); setMessage(''); try { await api.put(`admin/works/${action.id}/unpublish`, { reason }); setMessage(`已下架《${action.title}》。`); setAction(null); setReason(''); works.refresh(); reports.refresh(); if (detailId === action.id) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
   async function toggleFeature(item) { setSaving(true); setMessage(''); try { await api.put(`admin/works/${item.id}/feature`, { featured: !item.featured, reason: !item.featured ? '平台精选推荐' : '' }); setMessage(item.featured ? `已取消《${item.title}》的精选。` : `已将《${item.title}》设为精选。`); works.refresh(); if (detailId === item.id) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
+  async function togglePlaza(item) { setSaving(true); setMessage(''); try { await api.put(`admin/works/${item.id}/plaza`, { published: !item.plazaPublished }); setMessage(item.plazaPublished ? `已将《${item.title}》从学生作品广场移除。` : `已将《${item.title}》发布到学生作品广场。`); works.refresh(); if (detailId === item.id) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
   async function handleReport() { if (!reportAction) return; setReportBusy(true); setMessage(''); try { await api.put(`admin/work-reports/${reportAction.id}`, reportForm); setMessage(`举报《${reportAction.workTitle}》已处理。`); setReportAction(null); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); reports.refresh(); works.refresh(); if (detailId === reportAction.workId) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setReportBusy(false); } }
   function openDetail(item) { setDetailId(item.id); setDetailTab('basic'); setDetailFeatureReason(item.featuredReason || ''); }
   function closeDetail() { setDetailId(null); }
   return <>
-    <PageHeader eyebrow="内容治理" title="平台作品库" description="聚合各机构作品；精选只允许已发布作品。举报 / 违规治理按当前决策暂缓，历史记录仅作只读留存。" actions={<button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); if (detailId) detail.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="内容治理" title="平台作品库" description="学生提交的作业会汇总到这里；机构审核通过后，由平台选择「发布到作品广场」的作品才会出现在官网学生作品广场。" actions={<button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); if (detailId) detail.refresh(); }}>刷新</button>} />
     <Panel title="筛选条件"><div className="form-grid"><label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>机构<select value={filters.orgId} onChange={(e) => { setFilters({ ...filters, orgId: e.target.value }); setPage(1); }}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label><label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label><label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="featured">精选 / 提交时间</option><option value="submitted">最近提交</option><option value="title">作品名称</option></select></label><label>每页条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10</option><option value="20">20</option><option value="50">50</option></select></label></div>{message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
-    <Panel title={`作品列表（${works.data?.total ?? 0} 条）`}>{works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <><ListResultSummary total={works.data.total} page={works.data.page} totalPages={works.data.totalPages} label="件作品" /><div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>状态与授权</th><th>举报（暂缓）</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><button className="text-button" onClick={() => openDetail(item)}><strong>{item.title}</strong></button><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td><Status value={item.status} />{item.featured && <span className="status success">精选</span>}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{item.status === 'PUBLISHED' && <><button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button><button className="text-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button></>}</div></td></tr>)}</tbody></table></div><Pagination page={works.data.page} totalPages={works.data.totalPages} onChange={setPage} disabled={works.loading} /></> : <Empty title="没有符合条件的作品" />}</Panel>
+    <Panel title={`作品列表（${works.data?.total ?? 0} 条）`}>{works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <><ListResultSummary total={works.data.total} page={works.data.page} totalPages={works.data.totalPages} label="件作品" /><div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>状态与授权</th><th>举报（暂缓）</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><button className="text-button" onClick={() => openDetail(item)}><strong>{item.title}</strong></button><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td><Status value={item.status} />{item.featured && <span className="status success">精选</span>}{item.plazaPublished ? <span className="status success">作品广场</span> : null}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{['APPROVED', 'PUBLISHED'].includes(item.status) ? <button className="text-button" disabled={saving} onClick={() => togglePlaza(item)}>{item.plazaPublished ? '从作品广场移除' : '发布到作品广场'}</button> : null}{item.status === 'PUBLISHED' && <><button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button><button className="text-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button></>}</div></td></tr>)}</tbody></table></div><Pagination page={works.data.page} totalPages={works.data.totalPages} onChange={setPage} disabled={works.loading} /></> : <Empty title="没有符合条件的作品" />}</Panel>
     <Panel title={`举报记录（当前暂缓，仅保留历史只读） · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作（暂缓）</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" disabled title="举报治理按当前决策暂缓">暂缓</button></td></tr>)}</tbody></table></div> : <Empty title="暂无待处理举报" />}</Panel>
     {detailId ? <Panel title={`作品详情 · ${detail.data?.title || ''}`} actions={<button className="secondary-button" onClick={closeDetail}>关闭</button>}>{detail.loading ? <Loading /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data ? <>
       <div className="metric-row" style={{ marginBottom: 12 }}>
@@ -1072,85 +1069,7 @@ function AdminMaterials({ api }) {
 const CLIENT_PLATFORM_LABELS = { MACOS_APPLE: 'macOS（Apple 芯片）', WINDOWS_X64: 'Windows（64 位）' };
 const CLIENT_CHANNEL_LABELS = { STABLE: '正式版', BETA: '测试版', INTERNAL: '内测版' };
 
-function ClientReleases({ api }) {
-  const releases = useData(() => api.get('admin/client-releases'), [api]);
-  const [form, setForm] = useState({ platform: 'WINDOWS_X64', channel: 'STABLE', version: '', downloadUrl: '', releaseNotes: '', publishNow: false });
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  async function createRelease(event) {
-    event.preventDefault(); setBusy('create');
-    try { await api.post('admin/client-releases', form); setMessage('客户端版本配置已保存。只有发布后才会在官网和学生帮助中心展示。'); setForm({ ...form, version: '', downloadUrl: '', releaseNotes: '', publishNow: false }); releases.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(''); }
-  }
-  async function toggleRelease(item, action) {
-    setBusy(item.id);
-    try { await api.put(`admin/client-releases/${item.id}`, { action }); setMessage(action === 'PUBLISH' ? '版本已发布，官网和学生帮助中心开始展示真实下载地址。' : '版本已下架，所有下载入口不再展示。'); releases.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(''); }
-  }
-  const items = releases.data?.items || [];
-  return <>
-    <PageHeader eyebrow="AI 魔法学院 · 平台控制台" title="客户端版本管理" description="只登记真实安装包的 HTTPS 下载地址和版本元数据，不做文件上传，也不生成虚假客户端。" actions={<button className="secondary-button" onClick={releases.refresh}>刷新</button>} />
-    <div className="metrics"><MetricCard label="版本配置" value={items.length} hint="平台登记的全部版本" /><MetricCard label="已发布" value={items.filter((item) => item.publishedAt).length} hint="官网与学生帮助中心可见" tone="teal" /><MetricCard label="未发布" value={items.filter((item) => !item.publishedAt).length} hint="仅平台内部可见" tone="orange" /></div>
-    {message ? <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice> : null}
-    <Panel title="新增客户端版本">
-      <Notice tone="warning">请仅在真实安装包可公开访问后登记。下载地址必须是 HTTPS；未发布版本不会出现在官网和学生帮助中心。</Notice>
-      <form onSubmit={createRelease}>
-        <div className="form-grid">
-          <label>平台<select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}>{Object.entries(CLIENT_PLATFORM_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label>通道<select value={form.channel} onChange={(event) => setForm({ ...form, channel: event.target.value })}>{Object.entries(CLIENT_CHANNEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label>版本号<input value={form.version} required maxLength={60} placeholder="例如：1.0.0" onChange={(event) => setForm({ ...form, version: event.target.value })} /></label>
-          <label>HTTPS 下载地址<input value={form.downloadUrl} required maxLength={1000} placeholder="https://cdn.example.com/ai-magic-school-1.0.0.dmg" onChange={(event) => setForm({ ...form, downloadUrl: event.target.value })} /></label>
-        </div>
-        <label>版本说明<textarea value={form.releaseNotes} required maxLength={4000} placeholder="写明真实更新内容、兼容系统和已知问题。" onChange={(event) => setForm({ ...form, releaseNotes: event.target.value })} /></label>
-        <label className="checkbox"><input type="checkbox" checked={form.publishNow} onChange={(event) => setForm({ ...form, publishNow: event.target.checked })} />保存后立即发布到下载页</label>
-        <button className="primary-button" type="submit" disabled={busy === 'create'}>{busy === 'create' ? '保存中…' : '保存版本配置'}</button>
-      </form>
-    </Panel>
-    <Panel title="版本列表">
-      {releases.loading ? <Loading /> : releases.error ? <ErrorState error={releases.error} onRetry={releases.refresh} /> : items.length ? <div className="table-wrap"><table><thead><tr><th>平台 / 通道</th><th>版本</th><th>下载地址</th><th>状态</th><th>时间</th><th>操作</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{CLIENT_PLATFORM_LABELS[item.platform] || item.platform}<div className="muted">{CLIENT_CHANNEL_LABELS[item.channel] || item.channel}</div></td><td><strong>v{item.version}</strong><div className="muted">{item.releaseNotes}</div></td><td><a href={item.downloadUrl} target="_blank" rel="noreferrer">查看地址</a></td><td>{item.publishedAt ? <span className="status success">已发布</span> : <span className="status warning">未发布</span>}</td><td><div className="muted">创建：{formatDate(item.createdAt)}</div><div className="muted">发布：{item.publishedAt ? formatDate(item.publishedAt) : '—'}</div></td><td><button className="text-button" disabled={busy === item.id} onClick={() => toggleRelease(item, item.publishedAt ? 'UNPUBLISH' : 'PUBLISH')}>{item.publishedAt ? '下架' : '发布'}</button></td></tr>)}</tbody></table></div> : <Empty title="尚未登记客户端版本" body="官网与学生帮助中心会明确显示“暂无真实安装包”，不会提供虚假下载。" />}
-    </Panel>
-  </>;
-}
 
-function LeadsPanel({ api }) {
-  const [filters, setFilters] = useState({ status: '' });
-  const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ status: 'CONTACTED', adminNotes: '', assignedTo: '' });
-  const [message, setMessage] = useState('');
-  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, v]) => v)), [filters]);
-  const leads = useData(() => api.get(`admin/leads?${query.toString()}`), [api, query.toString()]);
-  const statusLabels = { NEW: '新建', CONTACTED: '已联系', DEMO_SCHEDULED: '已排演示', CONVERTED: '已转化', CLOSED: '已关闭' };
-  const validTransitions = {
-    NEW: ['CONTACTED', 'CLOSED'],
-    CONTACTED: ['DEMO_SCHEDULED', 'CLOSED'],
-    DEMO_SCHEDULED: ['CONVERTED', 'CONTACTED', 'CLOSED'],
-    CONVERTED: ['CLOSED'],
-    CLOSED: ['CONTACTED'],
-  };
-  async function update() {
-    if (!editing) return;
-    setMessage('');
-    try {
-      await api.put(`admin/leads/${editing.id}`, { status: form.status, adminNotes: form.adminNotes, assignedTo: form.assignedTo || null });
-      setMessage(`商机《${editing.orgName}》已更新。`);
-      setEditing(null);
-      leads.refresh();
-    } catch (err) { setMessage(err.message); }
-  }
-  return <>
-    <PageHeader eyebrow="线索与商机" title="演示预约管理" description="来自官网 /demo 的预约线索。" actions={<button className="secondary-button" onClick={leads.refresh}>刷新</button>} />
-    <Panel title="筛选条件"><div className="form-grid"><label>状态<select value={filters.status} onChange={(e) => setFilters({ status: e.target.value })}><option value="">全部</option>{Object.entries(statusLabels).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label></div>{message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
-    <Panel title={`商机列表 · ${leads.data?.total || 0} 条`}>
-      {leads.loading ? <Loading /> : leads.error ? <ErrorState error={leads.error} onRetry={leads.refresh} />
-       : leads.data?.items?.length ? <div className="table-wrap"><table><thead><tr><th>提交时间</th><th>机构 / 联系人</th><th>手机号</th><th>合作方向</th><th>状态</th><th>分配</th><th>操作</th></tr></thead><tbody>
-        {leads.data.items.map((item) => <tr key={item.id}><td><div className="muted">{formatDate(item.createdAt)}</div></td><td><strong>{item.orgName}</strong><div className="muted">{item.contactName}</div></td><td><a href={`tel:${item.contactPhone}`}>{item.contactPhone}</a></td><td>{item.intent || <span className="muted">—</span>}</td><td><Status value={item.status} /></td><td><div className="muted">{item.assignedTo || '—'}</div></td><td><button className="text-button" onClick={() => { setEditing(item); setForm({ status: validTransitions[item.status]?.[0] || item.status, adminNotes: item.adminNotes || '', assignedTo: item.assignedTo || '' }); }}>处理</button></td></tr>)}
-       </tbody></table></div> : <Empty title="无商机" desc="等待官网 /demo 提交。" />}
-    </Panel>
-    {editing ? <Panel title={`处理《${editing.orgName}》`}><div className="form-grid"><label>状态<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{[editing.status, ...(validTransitions[editing.status] || [])].filter((v, i, a) => a.indexOf(v) === i).map((v) => <option key={v} value={v}>{statusLabels[v] || v}</option>)}</select></label><label>分配给<input value={form.assignedTo} onChange={(e) => setForm({ ...form, assignedTo: e.target.value })} placeholder="如：张经理" /></label></div><label>处理备注<textarea value={form.adminNotes} maxLength={2000} onChange={(e) => setForm({ ...form, adminNotes: e.target.value })} placeholder="联系情况、跟进要点…" /></label><div className="row-actions top-gap"><button className="primary-button" onClick={update}>保存</button><button className="secondary-button" onClick={() => setEditing(null)}>取消</button></div></Panel> : null}
-  </>;
-}
-
-const WEBSITE_CONTENT_LABELS = { HOME: '首页', FAQ: '常见问题', BRAND: '品牌信息', ORG: '机构方案', HANDBOOK: '产品手册', COMPARE: '选型对比' };
 
 function parseWebsiteDraft(value) {
   try { return JSON.parse(value || '{}'); } catch { return null; }
@@ -1253,224 +1172,6 @@ function WebsiteContent({ api }) {
     </div>
   </>;
 }
-function PlatformPage({ kind }) {
-  const pages = {
-    hackathon: ['黑客松', '配置赛季、作品征集、审核与奖励，帮助机构把课堂作品延展为创作活动。', [['赛季管理', '创建主题、时间范围与参与机构'], ['作品审核', '待审、入选、驳回与撤回统一记录']]],
-  };
-  const [title, desc, cards] = pages[kind];
-  const [hint, setHint] = useState('');
-  return <><PageHeader eyebrow="AI魔法学院 · 平台控制台" title={title} description={desc} actions={<button className="primary-button" onClick={() => setHint('赛季配置功能开发中，接入服务端 API 后开放。')}>新建 / 配置</button>} />{hint && <Notice tone="info">{hint}</Notice>}<div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待配置' : '准备就绪'} hint={item[1]} tone={['violet', 'teal'][index]} />)}</div><Panel title="建设说明"><Notice tone="info">此页面已按 AI魔法学院的信息架构接入平台端导航与视觉壳层；需要服务端数据的筛选、编辑和审批操作将在对应 API 完成后接入，不会伪造业务数据。</Notice></Panel></>;
-}
-
-function CourseMarketplace({ api }) {
-  const [filters, setFilters] = useState({ status: '', search: '' });
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [selectedCourse, setSelectedCourse] = useState(null);
-  const [rewardInput, setRewardInput] = useState({});
-  const [showRewardModal, setShowRewardModal] = useState(null);
-
-  const query = useMemo(() => {
-    const params = new URLSearchParams();
-    if (filters.status) params.set('marketplaceStatus', filters.status);
-    if (filters.search) params.set('search', filters.search);
-    params.set('page', String(page));
-    params.set('limit', String(limit));
-    return params.toString();
-  }, [filters, page, limit]);
-
-  const courses = useData(() => api.get(`admin/course-marketplace?${query}`), [api, query]);
-
-  const statusOptions = [
-    { value: '', label: '全部' },
-    { value: 'PENDING', label: '待审核' },
-    { value: 'APPROVED', label: '已上线' },
-    { value: 'REJECTED', label: '已拒绝' },
-    { value: 'NONE', label: '未上架' },
-  ];
-
-  const statusLabels = {
-    PENDING: { text: '待审核', color: 'bg-yellow-100 text-yellow-800' },
-    APPROVED: { text: '已上线', color: 'bg-green-100 text-green-800' },
-    REJECTED: { text: '已拒绝', color: 'bg-red-100 text-red-800' },
-    NONE: { text: '未上架', color: 'bg-gray-100 text-gray-500' },
-  };
-
-  function renderStatusBadge(status) {
-    const s = statusLabels[status] || statusLabels.NONE;
-    return <span className={`px-2 py-0.5 rounded text-xs font-medium ${s.color}`}>{s.text}</span>;
-  }
-
-  function renderDifficulty(level) {
-    if (!level) return <span className="muted">—</span>;
-    const filled = Math.min(Math.max(1, level), 5);
-    return <span>{'⭐'.repeat(filled)}</span>;
-  }
-
-  function renderCover(url) {
-    if (url) {
-      return <img src={url} alt="封面" style={{ width: 60, height: 40, objectFit: 'cover', borderRadius: 4 }} />;
-    }
-    return <div style={{ width: 60, height: 40, background: '#e2e8f0', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: '#94a3b8' }}>无图</div>;
-  }
-
-  function renderTags(tags) {
-    if (!Array.isArray(tags) || tags.length === 0) return <span className="muted">—</span>;
-    return <span className="tag-list">{tags.slice(0, 3).map((t) => <span key={t} className="tag">{t}</span>)}</span>;
-  }
-
-  async function approveCourse(course) {
-    if (!window.confirm(`确认上架「${course.title}」？`)) return;
-    setBusy(true); setMessage('');
-    try {
-      await api.put(`admin/course-marketplace/${course.id}`, { marketplaceStatus: 'APPROVED' });
-      setMessage(`「${course.title}」已上线。`);
-      courses.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setBusy(false); }
-  }
-
-  async function rejectCourse(course) {
-    if (!window.confirm(`确认下架「${course.title}」？`)) return;
-    setBusy(true); setMessage('');
-    try {
-      await api.put(`admin/course-marketplace/${course.id}`, { marketplaceStatus: 'REJECTED' });
-      setMessage(`「${course.title}」已下架。`);
-      courses.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setBusy(false); }
-  }
-
-  async function saveReward(course) {
-    const credits = Number(rewardInput[course.id]);
-    if (isNaN(credits) || credits < 0) {
-      setMessage('请输入有效的积分数值。');
-      return;
-    }
-    setBusy(true); setMessage('');
-    try {
-      await api.put(`admin/course-marketplace/${course.id}/rewards`, { marketplaceRewardCredits: credits });
-      setMessage(`「${course.title}」奖励积分已更新为 ${credits}。`);
-      setShowRewardModal(null);
-      courses.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setBusy(false); }
-  }
-
-  function openRewardModal(course) {
-    setShowRewardModal(course);
-    setRewardInput({ ...rewardInput, [course.id]: course.marketplaceRewardCredits ?? 0 });
-  }
-
-  function openDetail(course) {
-    setSelectedCourse(course);
-  }
-
-  const totalPages = courses.data?.totalPages || 1;
-  const currentPage = courses.data?.page || page;
-
-  return <>
-    <PageHeader eyebrow="内容运营" title="课程广场管理" description="审核、上架、下架课程到课程广场，设置奖励积分。" actions={<button className="secondary-button" onClick={() => { courses.refresh(); }}>刷新</button>} />
-
-    <Panel title="筛选条件">
-      <div className="form-grid">
-        <label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}>
-          {statusOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-        </select></label>
-        <label>课程名称<input value={filters.search} placeholder="搜索课程名称…" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label>
-        <label>每页条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}>
-          <option value="10">10</option>
-          <option value="20">20</option>
-          <option value="50">50</option>
-        </select></label>
-      </div>
-      {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
-    </Panel>
-
-    <Panel title="课程列表">
-      {courses.loading ? <Loading label="正在读取课程列表…" /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data?.items?.length ? (
-        <>
-          <ListResultSummary total={courses.data.total} page={courses.data.page} totalPages={courses.data.totalPages} label="门课程" />
-          <div className="table-wrap"><table><thead><tr>
-            <th>封面</th>
-            <th>课程名称</th>
-            <th>难度</th>
-            <th>适学年龄</th>
-            <th>标签</th>
-            <th>奖励积分</th>
-            <th>状态</th>
-            <th>操作</th>
-          </tr></thead><tbody>
-            {courses.data.items.map((course) => <tr key={course.id}>
-              <td>{renderCover(course.coverImageUrl)}</td>
-              <td><button className="text-button" onClick={() => openDetail(course)}><strong>{course.title}</strong></button></td>
-              <td>{renderDifficulty(course.difficultyLevel)}</td>
-              <td>{course.ageRangeMin || course.ageRangeMax ? `${course.ageRangeMin ?? '?'}-${course.ageRangeMax ?? '?'}岁` : '—'}</td>
-              <td>{renderTags(course.tags)}</td>
-              <td>{course.marketplaceRewardCredits != null ? course.marketplaceRewardCredits : '—'}</td>
-              <td>{renderStatusBadge(course.marketplaceStatus)}</td>
-              <td><div className="row-actions">
-                {course.marketplaceStatus === 'APPROVED' ? (
-                  <button className="text-button" disabled={busy} onClick={() => rejectCourse(course)}>下架</button>
-                ) : (
-                  <button className="text-button" disabled={busy} onClick={() => approveCourse(course)}>上架</button>
-                )}
-                <button className="text-button" onClick={() => openRewardModal(course)}>设置积分</button>
-              </div></td>
-            </tr>)}</tbody></table></div>
-          <Pagination page={currentPage} totalPages={totalPages} onChange={setPage} disabled={courses.loading} />
-        </>
-      ) : <Empty title="暂无符合条件的课程" body="可以调整上架状态、课程名称或每页数量后重试。" />}
-    </Panel>
-
-    {showRewardModal ? (
-      <Panel title={`设置积分 · ${showRewardModal.title}`} actions={<button className="secondary-button" onClick={() => setShowRewardModal(null)}>关闭</button>}>
-        <div className="form-grid">
-          <label>奖励积分（学完可获）<input type="number" min="0" value={rewardInput[showRewardModal.id] ?? 0} onChange={(e) => setRewardInput({ ...rewardInput, [showRewardModal.id]: e.target.value })} /></label>
-          <button className="primary-button" disabled={busy} onClick={() => saveReward(showRewardModal)}>{busy ? '保存中…' : '保存'}</button>
-        </div>
-        <p className="muted" style={{ marginTop: 8 }}>学员完成课程后可获得的奖励积分。设为 0 则不赠送积分。</p>
-      </Panel>
-    ) : null}
-
-    {selectedCourse ? (
-      <Panel title={`课程详情 · ${selectedCourse.title}`} actions={<button className="secondary-button" onClick={() => setSelectedCourse(null)}>关闭</button>}>
-        <div className="split">
-          <div>
-            <p><strong>课程名称：</strong>{selectedCourse.title}</p>
-            <p><strong>课程描述：</strong>{selectedCourse.description || '暂无描述'}</p>
-            <p><strong>难度：</strong>{renderDifficulty(selectedCourse.difficultyLevel)}</p>
-            <p><strong>适学年龄：</strong>{selectedCourse.ageRangeMin || selectedCourse.ageRangeMax ? `${selectedCourse.ageRangeMin ?? '?'}-${selectedCourse.ageRangeMax ?? '?'}岁` : '—'}</p>
-          </div>
-          <div>
-            <p><strong>标签：</strong>{renderTags(selectedCourse.tags)}</p>
-            <p><strong>课时数：</strong>{selectedCourse.lessonCount ?? '—'}</p>
-            <p><strong>当前状态：</strong>{renderStatusBadge(selectedCourse.marketplaceStatus)}</p>
-            <p><strong>当前奖励积分：</strong>{selectedCourse.marketplaceRewardCredits != null ? selectedCourse.marketplaceRewardCredits : '未设置'}</p>
-          </div>
-        </div>
-        <div style={{ marginTop: 16 }}>
-          <p><strong>封面图：</strong></p>
-          {selectedCourse.coverImageUrl ? (
-            <img src={selectedCourse.coverImageUrl} alt="封面" style={{ maxWidth: 300, maxHeight: 200, objectFit: 'contain', borderRadius: 8 }} />
-          ) : (
-            <div style={{ width: 300, height: 200, background: '#e2e8f0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无封面图</div>
-          )}
-        </div>
-        <div className="row-actions" style={{ marginTop: 16 }}>
-          {selectedCourse.marketplaceStatus === 'APPROVED' ? (
-            <button className="primary-button" disabled={busy} onClick={() => { rejectCourse(selectedCourse); setSelectedCourse(null); }}>下架</button>
-          ) : (
-            <button className="primary-button" disabled={busy} onClick={() => { approveCourse(selectedCourse); setSelectedCourse(null); }}>上架</button>
-          )}
-          <button className="secondary-button" disabled={busy} onClick={() => { openRewardModal(selectedCourse); }}>设置积分</button>
-        </div>
-      </Panel>
-    ) : null}
-  </>;
-}
 
 function Analytics({ api }) {
   const [filters, setFilters] = useState({ from: '', to: '' });
@@ -1556,17 +1257,13 @@ function App() {
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
     <Route path="/courses" element={page('ADMIN_COURSES', <Courses api={api} />)} />
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
-    <Route path="/marketplace" element={page('ADMIN_COURSES', <CourseMarketplace api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
-    <Route path="/hackathon" element={page('ADMIN_CONTENT', <PlatformPage kind="hackathon" />)} />
     <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
     <Route path="/feature-flags" element={page('ADMIN_FEATURE_FLAGS', <FeatureFlags api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />
     <Route path="/analytics" element={page('ADMIN_ANALYTICS', <Analytics api={api} />)} />
-    <Route path="/client-releases" element={page('ADMIN_CONTENT', <ClientReleases api={api} />)} />
     <Route path="/inbox" element={page('ADMIN_CONTENT', <AdminInbox api={api} />)} />
-    <Route path="/leads" element={page('ADMIN_CONTENT', <LeadsPanel api={api} />)} />
     <Route path="/admins" element={page('ADMIN_AUDIT', <PlatformAdmins api={api} currentUser={session.user} />)} />
     <Route path="/audit" element={page('ADMIN_AUDIT', <PlatformAudit api={api} />)} />
     <Route path="/notifications" element={page('ADMIN_CONTENT', <PlatformNotifications api={api} />)} />

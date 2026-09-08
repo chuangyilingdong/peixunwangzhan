@@ -914,19 +914,22 @@ export function handlePublicCommunication(ctx) {
     return detail;
   }
 
-  // P5-M02: Public marketplace listing
+  // 课程广场：所有已发布（PUBLISHED）且对所有机构可见的平台课包自动出现，
+  // 按课堂类型分为「画布课程」与「VibeCoding 课程」两类，不再需要人工上架。
   if (pathname === '/api/public/marketplace' && method === 'GET') {
     const difficulty = ctx.search.get('difficulty');
     const ageMin = ctx.search.get('ageMin');
     const ageMax = ctx.search.get('ageMax');
     const tag = ctx.search.get('tag');
     const search = ctx.search.get('search');
+    const category = String(ctx.search.get('category') || '').trim().toUpperCase();
     const sort = ctx.search.get('sort') || 'popular';
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
     const offset = (page - 1) * limit;
-    const wheres = ["series.status='PUBLISHED'", "series.marketplace_status='APPROVED'", "series.visibility='ALL_ORGS'"];
+    const wheres = ["series.status='PUBLISHED'", "series.visibility='ALL_ORGS'"];
     const params = [];
+    if (['CANVAS', 'VIBECODING'].includes(category)) { wheres.push('series.delivery_mode=?'); params.push(category); }
     if (difficulty != null) { wheres.push('series.difficulty_level=?'); params.push(Number(difficulty)); }
     if (ageMin != null) { wheres.push('series.age_range_max IS NOT NULL AND series.age_range_max>=?'); params.push(Number(ageMin)); }
     if (ageMax != null) { wheres.push('series.age_range_min IS NOT NULL AND series.age_range_min<=?'); params.push(Number(ageMax)); }
@@ -934,7 +937,7 @@ export function handlePublicCommunication(ctx) {
     if (search) { wheres.push('series.title LIKE ?'); params.push('%' + String(search) + '%'); }
     const where = wheres.join(' AND ');
     const total = Number(row('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params)?.n || 0);
-    const orderBy = sort === 'recent' ? 'series.created_at DESC' : 'series.marketplace_reward_credits DESC';
+    const orderBy = sort === 'recent' ? 'series.created_at DESC' : 'series.sort ASC, series.title COLLATE NOCASE ASC';
     const items = rows(
       `SELECT series.*, (SELECT COUNT(*) FROM course_lessons lesson WHERE lesson.series_id=series.id AND lesson.status='PUBLISHED') lesson_count
        FROM course_series series WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
@@ -952,6 +955,7 @@ export function handlePublicCommunication(ctx) {
         ageRangeMax: item.age_range_max != null ? Number(item.age_range_max) : null,
         tags,
         lessonCount: Number(item.lesson_count || 0),
+        deliveryMode: item.delivery_mode || 'CANVAS',
         marketplaceRewardCredits: Number(item.marketplace_reward_credits || 0),
       };
     });

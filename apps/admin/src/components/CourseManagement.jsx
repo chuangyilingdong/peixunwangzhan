@@ -278,7 +278,7 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
           <label>课时简介<textarea rows={2} value={summary} onChange={(event) => update({ summary: event.target.value })} /></label>
           <div className="form-grid">
             <label>时长（分钟）<input type="number" min="1" max="1440" value={durationMinutes} onChange={(event) => update({ durationMinutes: event.target.value })} /></label>
-            <label>状态<select value={status} onChange={(event) => update({ status: event.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已归档</option></select></label>
+            <label>状态<select value={status} onChange={(event) => update({ status: event.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已下架</option></select></label>
           </div>
           <label>课时正文 / 教学指引<textarea rows={4} placeholder="≤50000 字" value={lessonContent} onChange={(event) => update({ lessonContent: event.target.value })} /></label>
         </section>
@@ -297,17 +297,21 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
 
 /* ---------------------------------------------------------------- 新建课包 */
 
+const CREATE_STEPS = ['基本信息', '课时编排', '更多设置', '完成'];
+
 function CreateCourseModal({ api, onClose, onCreated }) {
+  const [step, setStep] = useState(0);
   const [form, setForm] = useState(emptyCourseForm);
   const [lessons, setLessons] = useState(['']);
-  const [showMore, setShowMore] = useState(false);
+  const [publishNow, setPublishNow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
+  const lessonTitles = lessons.map((title) => String(title).trim()).filter(Boolean);
+  const canNext = step === 0 ? Boolean(String(form.title).trim()) : step === 1 ? lessonTitles.length > 0 : true;
   function updateLesson(index, value) { setLessons((current) => current.map((item, i) => i === index ? value : item)); }
 
-  async function submit(event) {
-    event.preventDefault();
+  async function submit() {
     setBusy(true); setMessage('');
     try {
       const priceText = String(form.priceYuan || '0').trim();
@@ -318,77 +322,102 @@ function CreateCourseModal({ api, onClose, onCreated }) {
         priceFen: Math.round(Number(priceText) * 100), version: form.version || '1.0',
         estimatedCreditsPerPerson: Number(form.estimatedCreditsPerPerson || 0), gradeRange: form.gradeRange, visibility: form.visibility,
         deliveryMode: form.deliveryMode || 'CANVAS',
-        lessons: lessons.map((title) => String(title).trim()).filter(Boolean).map((title) => ({ title })),
+        // 选择「立即发布」时课时一并置为已发布，否则保持草稿、等待逐节配置后再发布。
+        lessons: lessonTitles.map((title) => ({ title, status: publishNow ? 'PUBLISHED' : 'DRAFT' })),
       };
       if (form.difficultyLevel !== '' && form.difficultyLevel != null) payload.difficultyLevel = Number(form.difficultyLevel);
       if (form.ageRangeMin !== '' && form.ageRangeMin != null) payload.ageRangeMin = Number(form.ageRangeMin);
       if (form.ageRangeMax !== '' && form.ageRangeMax != null) payload.ageRangeMax = Number(form.ageRangeMax);
       if (form.tags) payload.tags = String(form.tags).split(',').map((t) => t.trim()).filter(Boolean);
       const created = await api.post('admin/course-series', payload);
-      onCreated?.(created);
+      let published = false; let publishError = '';
+      if (publishNow && created?.id) {
+        try { await api.request(`admin/course-series/${created.id}/status`, { method: 'POST', body: { action: 'publish' } }); published = true; }
+        catch (error) { publishError = error.message; }
+      }
+      onCreated?.(created, { published, publishError });
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
   return <div className="modal-overlay" onClick={onClose}>
     <div className="modal-content modal-large" onClick={(event) => event.stopPropagation()}>
       <div className="modal-header"><div><span className="eyebrow">课程资产</span><h2>新建平台课包</h2></div><button className="modal-close" onClick={onClose}>×</button></div>
-      <form onSubmit={submit}>
-        <div className="modal-body">
-          {message && <Notice tone="danger">{message}</Notice>}
-          <label>课包标题 *<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="例如：AI绘本创作大师营" required /></label>
+      <div className="modal-body">
+        {message && <Notice tone="danger">{message}</Notice>}
+        <ol className="wizard-steps">{CREATE_STEPS.map((label, index) => <li key={label} className={index === step ? 'is-active' : index < step ? 'is-done' : ''}><span>{index + 1}</span>{label}</li>)}</ol>
+
+        {step === 0 ? <>
+          <label>课包标题 *<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="例如：AI绘本创作大师营" /></label>
           <label>课程简介<textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="一句话说明这门课教什么" /></label>
           <div className="form-grid">
             <label>可见范围<select value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
             <label>课堂类型<select value={form.deliveryMode} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂（预留）</option></select></label>
             <label>版本号<input value={form.version} onChange={(event) => setForm({ ...form, version: event.target.value })} placeholder="1.0" /></label>
           </div>
-          <div className="course-lesson-draft">
-            <div className="lesson-config-heading"><strong>课时</strong><button type="button" className="text-button" onClick={() => setLessons((current) => [...current, ''])}>＋添加课时</button></div>
-            {lessons.map((value, index) => <div className="lesson-config-row" key={index}>
-              <span className="course-lesson-draft__no">{index + 1}</span>
-              <input value={value} placeholder={`第 ${index + 1} 课标题`} onChange={(event) => updateLesson(index, event.target.value)} />
-              <button type="button" className="text-button danger-text" onClick={() => setLessons((current) => current.length <= 1 ? [''] : current.filter((_, i) => i !== index))}>删除</button>
-            </div>)}
-            <p className="muted">可以先只填标题，创建后在「课时编排」里配置能力、素材、生成框体和默认画布。</p>
+          <p className="muted">「所有机构」的已发布课包会自动出现在官网课程广场。</p>
+        </> : null}
+
+        {step === 1 ? <div className="course-lesson-draft">
+          <div className="lesson-config-heading"><strong>课时</strong><button type="button" className="text-button" onClick={() => setLessons((current) => [...current, ''])}>＋添加课时</button></div>
+          {lessons.map((value, index) => <div className="lesson-config-row" key={index}>
+            <span className="course-lesson-draft__no">{index + 1}</span>
+            <input value={value} placeholder={`第 ${index + 1} 课标题`} onChange={(event) => updateLesson(index, event.target.value)} />
+            <button type="button" className="text-button danger-text" onClick={() => setLessons((current) => current.length <= 1 ? [''] : current.filter((_, i) => i !== index))}>删除</button>
+          </div>)}
+          <p className="muted">这里只填标题；创建后在「课时编排」里配置能力、素材、生成框体和默认画布。</p>
+        </div> : null}
+
+        {step === 2 ? <div className="course-more-settings">
+          <label>封面图<span className="muted">（可上传或填写 HTTPS 地址）</span></label>
+          <div className="form-grid">
+            <input value={form.coverImageUrl} placeholder="https://… 或上传后自动填充" onChange={(event) => setForm({ ...form, coverImageUrl: event.target.value })} />
+            <label className="inline-file-upload">上传封面<input type="file" accept="image/*" onChange={async (event) => {
+              const file = event.target.files?.[0]; event.target.value = '';
+              if (!file) return;
+              try {
+                const asset = await api.upload('admin/file-assets/upload', file, { category: 'PROMO_COVER', visibility: 'PUBLIC_PLATFORM' });
+                if (!asset?.id) throw new Error('上传成功但未返回文件标识');
+                setForm((current) => ({ ...current, coverAssetId: asset.id, coverImageUrl: `/api/public/file-assets/${asset.id}/download` }));
+              } catch (error) { setMessage(error.message); }
+            }} /></label>
           </div>
-          <button type="button" className="text-button" onClick={() => setShowMore((value) => !value)}>{showMore ? '收起更多设置 ▲' : '展开更多设置 ▼'}</button>
-          {showMore && <div className="course-more-settings">
-            <label>封面图<span className="muted">（可上传或填写 HTTPS 地址）</span></label>
-            <div className="form-grid">
-              <input value={form.coverImageUrl} placeholder="https://… 或上传后自动填充" onChange={(event) => setForm({ ...form, coverImageUrl: event.target.value })} />
-              <label className="inline-file-upload">上传封面<input type="file" accept="image/*" onChange={async (event) => {
-                const file = event.target.files?.[0]; event.target.value = '';
-                if (!file) return;
-                try {
-                  const asset = await api.upload('admin/file-assets/upload', file, { category: 'PROMO_COVER', visibility: 'PUBLIC_PLATFORM' });
-                  if (!asset?.id) throw new Error('上传成功但未返回文件标识');
-                  setForm((current) => ({ ...current, coverAssetId: asset.id, coverImageUrl: `/api/public/file-assets/${asset.id}/download` }));
-                } catch (error) { setMessage(error.message); }
-              }} /></label>
-            </div>
-            <div className="form-grid">
-              <label>价格（元）<input inputMode="decimal" value={form.priceYuan} placeholder="如 199.00" onChange={(event) => setForm({ ...form, priceYuan: event.target.value })} /></label>
-              <label>预估积分/人<input type="number" min="0" value={form.estimatedCreditsPerPerson} onChange={(event) => setForm({ ...form, estimatedCreditsPerPerson: event.target.value })} /></label>
-              <label>适合年级<input value={form.gradeRange} placeholder="如 3-6 年级" onChange={(event) => setForm({ ...form, gradeRange: event.target.value })} /></label>
-              <label>难度（1-5）<input type="number" min="1" max="5" value={form.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setForm({ ...form, difficultyLevel: event.target.value })} /></label>
-              <label>适学年龄下限<input type="number" min="3" max="99" value={form.ageRangeMin} placeholder="如 8" onChange={(event) => setForm({ ...form, ageRangeMin: event.target.value })} /></label>
-              <label>适学年龄上限<input type="number" min="3" max="99" value={form.ageRangeMax} placeholder="如 16" onChange={(event) => setForm({ ...form, ageRangeMax: event.target.value })} /></label>
-              <label>标签（英文逗号分隔）<input value={form.tags} placeholder="古诗, 创作, 动画" onChange={(event) => setForm({ ...form, tags: event.target.value })} /></label>
-            </div>
-          </div>}
-        </div>
-        <div className="modal-footer">
-          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
-          <button type="submit" className="primary-button" disabled={busy}>{busy ? '创建中…' : '创建课包'}</button>
-        </div>
-      </form>
+          <div className="form-grid">
+            <label>价格（元）<input inputMode="decimal" value={form.priceYuan} placeholder="如 199.00" onChange={(event) => setForm({ ...form, priceYuan: event.target.value })} /></label>
+            <label>预估积分/人<input type="number" min="0" value={form.estimatedCreditsPerPerson} onChange={(event) => setForm({ ...form, estimatedCreditsPerPerson: event.target.value })} /></label>
+            <label>适合年级<input value={form.gradeRange} placeholder="如 3-6 年级" onChange={(event) => setForm({ ...form, gradeRange: event.target.value })} /></label>
+            <label>难度（1-5）<input type="number" min="1" max="5" value={form.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setForm({ ...form, difficultyLevel: event.target.value })} /></label>
+            <label>适学年龄下限<input type="number" min="3" max="99" value={form.ageRangeMin} placeholder="如 8" onChange={(event) => setForm({ ...form, ageRangeMin: event.target.value })} /></label>
+            <label>适学年龄上限<input type="number" min="3" max="99" value={form.ageRangeMax} placeholder="如 16" onChange={(event) => setForm({ ...form, ageRangeMax: event.target.value })} /></label>
+            <label>标签（英文逗号分隔）<input value={form.tags} placeholder="古诗, 创作, 动画" onChange={(event) => setForm({ ...form, tags: event.target.value })} /></label>
+          </div>
+          <p className="muted">这一步可以跳过，创建后在课包详情里继续补充。</p>
+        </div> : null}
+
+        {step === 3 ? <div className="course-create-summary">
+          <div className="publish-checklist">
+            <div className="publish-check is-ok"><strong>✓</strong><span>课包标题：{form.title}</span></div>
+            <div className="publish-check is-ok"><strong>✓</strong><span>课时：{lessonTitles.length} 节</span></div>
+            <div className="publish-check is-ok"><strong>✓</strong><span>可见范围：{VISIBILITY_LABELS[form.visibility]}</span></div>
+            <div className="publish-check is-ok"><strong>✓</strong><span>课堂类型：{form.deliveryMode === 'VIBECODING' ? 'VibeCoding 课堂' : '画布课堂'}</span></div>
+          </div>
+          <label className="checkbox-label top-gap"><input type="checkbox" checked={publishNow} onChange={(event) => setPublishNow(event.target.checked)} />创建后立即发布课包</label>
+          <p className="muted">勾选后课时会一并标记为已发布，课包直接上线；不勾选则先存为草稿，配置好课时后再发布。VibeCoding 课堂运行时未完成，含此类课时无法发布。</p>
+        </div> : null}
+      </div>
+      <div className="modal-footer">
+        <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+        {step > 0 ? <button type="button" className="secondary-button" disabled={busy} onClick={() => setStep((value) => value - 1)}>上一步</button> : null}
+        {step < CREATE_STEPS.length - 1
+          ? <button type="button" className="primary-button" disabled={!canNext} onClick={() => setStep((value) => value + 1)}>下一步</button>
+          : <button type="button" className="primary-button" disabled={busy} onClick={submit}>{busy ? '创建中…' : (publishNow ? '创建并发布' : '完成创建')}</button>}
+      </div>
     </div>
   </div>;
 }
 
 /* ---------------------------------------------------------------- 课包列表 */
 
-function CourseCard({ course, onOpen, onStatus, busy }) {
+function CourseCard({ course, onOpen, onStatus, onDelete, busy }) {
   const cover = coverUrlOf(course);
   return <article className="course-card">
     <div className="course-card__cover" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>{!cover && <span>✦</span>}</div>
@@ -407,8 +436,9 @@ function CourseCard({ course, onOpen, onStatus, busy }) {
         <span className="muted">{formatDate(course.updatedAt)}</span>
         <div className="row-actions">
           <button className="primary-button" onClick={onOpen}>进入编排</button>
-          {course.status === 'PUBLISHED' || course.status === 'DRAFT' ? <button className="secondary-button" disabled={busy} onClick={() => onStatus(course, 'archive')}>归档</button> : null}
+          {course.status === 'PUBLISHED' ? <button className="secondary-button" disabled={busy} onClick={() => onStatus(course, 'archive')}>下架</button> : null}
           {course.status !== 'PUBLISHED' ? <button className="secondary-button" disabled={busy} onClick={() => onStatus(course, 'publish')}>发布</button> : null}
+          <button className="text-button danger-text" disabled={busy} onClick={() => onDelete(course)}>删除</button>
         </div>
       </div>
     </div>
@@ -432,15 +462,22 @@ function CourseList({ api, onOpen }) {
 
   async function changeStatus(course, action) {
     const text = action === 'archive'
-      ? `确认归档「${course.title}」？归档后机构端不再可见该课包，历史班级数据保留，可随时重新发布。`
-      : `确认发布「${course.title}」？发布后按可见范围对机构生效。`;
+      ? `确认下架「${course.title}」？下架后机构端不再可见该课包，数据保留，可随时重新发布。`
+      : `确认发布「${course.title}」？发布后按可见范围对机构生效，并出现在官网课程广场。`;
     if (!window.confirm(text)) return;
     setBusy(true); setMessage('');
     try {
       await api.request(`admin/course-series/${course.id}/status`, { method: 'POST', body: { action } });
-      setMessage(action === 'archive' ? '课包已归档。' : '课包已发布。');
+      setMessage(action === 'archive' ? '课包已下架。' : '课包已发布。');
       courses.refresh();
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function deleteCourse(course) {
+    if (!window.confirm(`确认删除课包「${course.title}」？删除后课包与课时配置不可恢复；已被班级课单或课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
+    setBusy(true); setMessage('');
+    try { await api.request(`admin/course-series/${course.id}`, { method: 'DELETE' }); setMessage(`课包「${course.title}」已删除。`); courses.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
   return <>
@@ -450,7 +487,7 @@ function CourseList({ api, onOpen }) {
     <Panel title="筛选">
       <div className="form-grid">
         <label>关键词<input value={filters.search} placeholder="课包名称 / ID" onChange={(event) => { setFilters({ ...filters, search: event.target.value }); setPage(1); }} /></label>
-        <label>状态<select value={filters.status} onChange={(event) => { setFilters({ ...filters, status: event.target.value }); setPage(1); }}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已归档</option></select></label>
+        <label>状态<select value={filters.status} onChange={(event) => { setFilters({ ...filters, status: event.target.value }); setPage(1); }}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已下架</option></select></label>
         <label>可见范围<select value={filters.visibility} onChange={(event) => { setFilters({ ...filters, visibility: event.target.value }); setPage(1); }}><option value="">全部范围</option><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
         <label>排序<select value={sort} onChange={(event) => { setSort(event.target.value); setPage(1); }}><option value="manual">手动顺序</option><option value="created">创建时间</option><option value="updated">更新时间</option><option value="title">课包名称</option></select></label>
         <label>每页<select value={limit} onChange={(event) => { setLimit(Number(event.target.value)); setPage(1); }}><option value="12">12 个</option><option value="24">24 个</option><option value="48">48 个</option></select></label>
@@ -458,10 +495,10 @@ function CourseList({ api, onOpen }) {
     </Panel>
     {courses.loading ? <Loading /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data?.items?.length ? <>
       <ListResultSummary total={courses.data.total} page={courses.data.page} totalPages={courses.data.totalPages} label="个课包" />
-      <div className="course-grid">{courses.data.items.map((course) => <CourseCard key={course.id} course={course} busy={busy} onStatus={changeStatus} onOpen={() => onOpen(course)} />)}</div>
+      <div className="course-grid">{courses.data.items.map((course) => <CourseCard key={course.id} course={course} busy={busy} onStatus={changeStatus} onDelete={deleteCourse} onOpen={() => onOpen(course)} />)}</div>
       <Pagination page={courses.data.page} totalPages={courses.data.totalPages} onChange={setPage} disabled={courses.loading} />
     </> : <Empty title="没有符合条件的课包" body="可以调整关键词、状态或可见范围，或新建一个课包。" />}
-    {showCreate && <CreateCourseModal api={api} onClose={() => setShowCreate(false)} onCreated={(course) => { setShowCreate(false); courses.refresh(); if (course?.id) onOpen(course); }} />}
+    {showCreate && <CreateCourseModal api={api} onClose={() => setShowCreate(false)} onCreated={(course, extra) => { setShowCreate(false); courses.refresh(); if (extra?.publishError) window.alert(`课包已创建，但立即发布失败：${extra.publishError}\n可在课包详情里补充配置后再发布。`); if (course?.id) onOpen(course); }} />}
   </>;
 }
 
@@ -527,9 +564,16 @@ function CourseDetail({ api, course, onBack }) {
 
   async function changeStatus(action) {
     const text = action === 'archive'
-      ? `确认归档「${series.title}」？归档后机构端不再可见该课包，历史班级数据保留，可随时重新发布。`
-      : `确认发布「${series.title}」？发布后按可见范围对机构生效。`;
-    await run(`admin/course-series/${course.id}/status`, 'POST', { action }, action === 'archive' ? '课包已归档。' : '课包已发布。', text);
+      ? `确认下架「${series.title}」？下架后机构端不再可见该课包，数据保留，可随时重新发布。`
+      : `确认发布「${series.title}」？发布后按可见范围对机构生效，并出现在官网课程广场。`;
+    await run(`admin/course-series/${course.id}/status`, 'POST', { action }, action === 'archive' ? '课包已下架。' : '课包已发布。', text);
+  }
+
+  async function deleteCourse() {
+    if (!window.confirm(`确认删除课包「${series.title}」？删除后课包与课时配置不可恢复；已被班级课单或课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
+    setBusy(true); setMessage('');
+    try { await api.request(`admin/course-series/${course.id}`, { method: 'DELETE' }); onBack(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
   async function addLesson(event) {
@@ -581,7 +625,7 @@ function CourseDetail({ api, course, onBack }) {
   return <>
     <PageHeader eyebrow="课程资产 · 课包编排" title={series ? series.title : course.title}
       description={series ? `状态 ${series.status} · 版本 v${series.version} · 共 ${series.lessons.length} 个课时` : '正在读取课包详情…'}
-      actions={<><button className="secondary-button" onClick={onBack}>← 返回课包列表</button>{series ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>归档</button> : null}{series && series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : null}</>} />
+      actions={<><button className="secondary-button" onClick={onBack}>← 返回课包列表</button>{series ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>下架</button> : null}{series ? <button className="text-button danger-text" disabled={busy} onClick={deleteCourse}>删除</button> : null}{series && series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : null}</>} />
     {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
     {detail.loading ? <Loading label="正在读取课包详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : !series ? <Empty title="课包不存在" /> : <>
       <div className="metrics">
@@ -624,7 +668,7 @@ function CourseDetail({ api, course, onBack }) {
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
           {saveState ? <Notice tone={saveState.tone}>{saveState.text}</Notice> : null}
-          <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用右上角发布 / 归档。平台课包本身不设有效期，有效期在「机构授权」里按机构单独设置。</p>
+          <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用右上角发布 / 下架。平台课包本身不设有效期，有效期在「机构授权」里按机构单独设置。</p>
         </form> : null}
       </Panel> : null}
 
@@ -677,7 +721,7 @@ function CourseDetail({ api, course, onBack }) {
         </div>
         <div className="row-actions top-gap">
           {series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : <span className="status success">课包已发布</span>}
-          {series.status !== 'ARCHIVED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>归档课包</button> : null}
+          {series.status !== 'ARCHIVED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>下架课包</button> : null}
         </div>
         <p className="muted">发布前请确认课时均已发布、无 VibeCoding 课时；「仅已授权机构」课包需完成授权。发布后按可见范围对机构生效。</p>
       </Panel> : null}

@@ -660,6 +660,9 @@ export function normalizeWork(value, { includeSnapshot = false } = {}) {
     featuredAt: value.featured_at || null,
     featuredBy: value.featured_by || null,
     featuredReason: value.featured_reason || null,
+    // 是否已由平台发布到「学生作品广场」
+    plazaPublished: Number(value.is_public || 0) === 1,
+    shareToken: value.share_token || null,
   };
   if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   return result;

@@ -4,6 +4,7 @@ import {
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { hashPassword } from '@platform/database';
+import { randomUUID } from 'node:crypto';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
 import { scheduleReminder } from './communication.js';
 import { assertKnownState, assertTransition } from '../services/domainState.js';
@@ -1508,6 +1509,30 @@ export async function handleAdmin(ctx) {
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
+  // 删除平台课包：仅当没有任何班级/课单/课堂/作品引用时才允许，否则引导改用「下架」。
+  if (seriesEditMatch && method === 'DELETE') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesEditMatch[1]]);
+    if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
+    const refs = {
+      classes: count('SELECT COUNT(*) AS n FROM classes WHERE default_series_id=?', [series.id]),
+      curriculumItems: count('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE source_series_id=?', [series.id]),
+      sessions: count('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
+      works: count('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
+    };
+    const blocked = refs.classes || refs.curriculumItems || refs.sessions || refs.works;
+    if (blocked) {
+      throw errors.badRequest(`该课包已被引用（班级 ${refs.classes} 处、课单 ${refs.curriculumItems} 处、课堂 ${refs.sessions} 场、作品 ${refs.works} 件），不能删除；请改用「下架」`, 'COURSE_SERIES_IN_USE');
+    }
+    const before = normalizeSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    transaction(() => {
+      q('DELETE FROM course_assignments WHERE series_id=?', [series.id]);
+      q('DELETE FROM course_series WHERE id=?', [series.id]);
+    });
+    audit(ctx, 'COURSE_SERIES_DELETE', 'COURSE_SERIES', series.id, before, { deleted: true }, {});
+    return { deleted: true, id: series.id };
+  }
+
   let seriesStatusMatch = part.match(/^\/course-series\/([^/]+)\/status$/);
   if (seriesStatusMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
@@ -2082,6 +2107,35 @@ export async function handleAdmin(ctx) {
     const reason = featured ? String(ctx.body?.reason || '').trim().slice(0, 500) : null;
     q('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=?', [featured ? nowIso() : null, featured ? auth.user.id : null, reason || null, work.id]);
     audit(ctx, featured ? 'PLATFORM_WORK_FEATURE' : 'PLATFORM_WORK_UNFEATURE', 'WORK', work.id, normalizeWork(work), { featured, reason: reason || null }, { orgId: work.org_id });
+    return normalizeWork(row('SELECT * FROM works WHERE id=?', [work.id]));
+  }
+  // 平台决定哪些作品进入「学生作品广场」：发布需要机构审核通过 + 学生已确认展示授权。
+  platformWorkMatch = part.match(/^\/works\/([^/]+)\/plaza$/);
+  if (platformWorkMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    if (!Object.hasOwn(ctx.body || {}, 'published') || typeof ctx.body.published !== 'boolean') throw errors.badRequest('请选择是否发布到作品广场', 'WORK_PLAZA_FLAG_REQUIRED');
+    const published = ctx.body.published;
+    const now = nowIso();
+    if (published) {
+      if (!['APPROVED', 'PUBLISHED'].includes(work.status)) throw errors.conflict('仅机构审核通过的作品可以发布到作品广场', 'WORK_NOT_APPROVED');
+      if (!work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+      let shareToken = work.share_token;
+      if (!shareToken) {
+        shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
+        while (row('SELECT id FROM works WHERE share_token=?', [shareToken])) shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
+      }
+      transaction(() => {
+        if (work.status !== 'PUBLISHED') {
+          assertTransition(ctx, 'work', work.status, 'PUBLISHED', { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), code: 'INVALID_WORK_TRANSITION', message: '当前状态不能发布到作品广场' });
+        }
+        q("UPDATE works SET status='PUBLISHED',is_public=1,share_token=?,reviewed_by=?,reviewed_at=? WHERE id=?", [shareToken, auth.user.id, now, work.id]);
+      });
+    } else {
+      q('UPDATE works SET is_public=0,share_token=NULL WHERE id=?', [work.id]);
+    }
+    audit(ctx, published ? 'PLATFORM_WORK_PLAZA_PUBLISH' : 'PLATFORM_WORK_PLAZA_UNPUBLISH', 'WORK', work.id, { status: work.status, plazaPublished: Boolean(work.is_public) }, { status: published ? 'PUBLISHED' : work.status, plazaPublished: published }, { orgId: work.org_id });
     return normalizeWork(row('SELECT * FROM works WHERE id=?', [work.id]));
   }
   if (part === '/work-reports' && method === 'GET') {

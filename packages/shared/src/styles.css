@@ -66,6 +66,14 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .lesson-row { cursor:pointer; }
 .lesson-row:hover { background:#faf8ff; }
 .publish-checklist { display:grid; gap:10px; margin-bottom:16px; }
+.wizard-steps { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 18px; padding:0; list-style:none; }
+.wizard-steps li { display:flex; align-items:center; gap:7px; padding:7px 13px; border:1px solid var(--line); border-radius:999px; color:#8b83a3; background:#fff; font-size:12px; font-weight:700; }
+.wizard-steps li span { display:grid; place-items:center; width:19px; height:19px; border-radius:50%; color:#fff; background:#c9c2de; font-size:11px; }
+.wizard-steps li.is-done { color:var(--deep); border-color:#d9d0f5; background:#f7f4ff; }
+.wizard-steps li.is-done span { background:#8b6ff0; }
+.wizard-steps li.is-active { color:#fff; border-color:var(--purple); background:var(--purple); }
+.wizard-steps li.is-active span { color:var(--purple); background:#fff; }
+.course-create-summary { padding:4px 0; }
 .publish-check { display:flex; align-items:center; gap:11px; padding:12px 14px; border:1px solid var(--line); border-radius:11px; background:#fbfaff; font-size:13px; }
 .publish-check strong { display:grid; place-items:center; width:22px; height:22px; border-radius:50%; color:#fff; font-size:12px; background:#c9c2de; }
 .publish-check.is-ok { border-color:#c9ecdb; background:#f3fcf7; }

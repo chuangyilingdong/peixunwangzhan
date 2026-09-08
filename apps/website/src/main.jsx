@@ -286,7 +286,7 @@ function Marketplace(){
   const [page,setPage]=useState(1);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState(null);
-  const [filters,setFilters]=useState({difficulty:'',ageMin:'',ageMax:'',tag:'',search:'',sort:'popular'});
+  const [filters,setFilters]=useState({difficulty:'',ageMin:'',ageMax:'',tag:'',search:'',sort:'popular',category:''});
   const limit=20;
   const difficultyOptions=[{label:'全部',value:''},{label:'1-2',value:'1'},{label:'3',value:'3'},{label:'4-5',value:'4'}];
   const ageOptions=[{label:'全部',value:'',ageMin:'',ageMax:''},{label:'6-8岁',value:'age6-8',ageMin:'6',ageMax:'8'},{label:'9-12岁',value:'age9-12',ageMin:'9',ageMax:'12'},{label:'13+岁',value:'age13plus',ageMin:'13',ageMax:''}];
@@ -298,6 +298,7 @@ function Marketplace(){
     const ageOpt=ageOptions.find(o=>o.value===activeAge);
     if(ageOpt){if(ageOpt.ageMin) p.set('ageMin',ageOpt.ageMin);if(ageOpt.ageMax) p.set('ageMax',ageOpt.ageMax);}
     if(filters.tag) p.set('tag',filters.tag);
+    if(filters.category) p.set('category',filters.category);
     if(filters.search) p.set('search',filters.search);
     p.set('sort',filters.sort);
     p.set('page',page);
@@ -313,8 +314,9 @@ function Marketplace(){
     return()=>{live=false};
   },[filters,page]);
   const totalPages=Math.ceil(total/limit)||1;
-  return <><Title eyebrow="课程广场" title={<>发现优质<em>AI 编程课程</em></>} desc="精选平台优质课程，涵盖 AI 创作、游戏设计、绘本故事与智能硬件，适合 6–16 岁青少年。"/><main className="inner">
+  return <><Title eyebrow="课程广场" title={<>发现优质<em>AI 编程课程</em></>} desc="平台已发布的课程都会自动出现在这里，分为画布课程与 VibeCoding 课程两类，涵盖 AI 创作、游戏设计与互动故事。"/><main className="inner">
     <div className="mkt-filters">
+      <div className="mkt-row"><span className="mkt-label">课程类型</span><div className="mkt-chips">{[{label:'全部课程',value:''},{label:'画布课程',value:'CANVAS'},{label:'VibeCoding 课程',value:'VIBECODING'}].map(o=><button type="button" key={o.value||'all'} aria-pressed={filters.category===o.value} className={'mkt-chip'+(filters.category===o.value?' on':'')} onClick={()=>{setFilters(f=>({...f,category:o.value}));setPage(1);}}>{o.label}</button>)}</div></div>
       <div className="mkt-row"><span className="mkt-label">难度</span><div className="mkt-chips">{difficultyOptions.map(o=><button type="button" key={o.value} aria-pressed={filters.difficulty===o.value} className={'mkt-chip'+(filters.difficulty===o.value?' on':'')} onClick={()=>{setFilters(f=>({...f,difficulty:o.value}));setPage(1);}}>{o.label}</button>)}</div></div>
       <div className="mkt-row"><span className="mkt-label">适学年龄</span><div className="mkt-chips">{ageOptions.map(o=><button type="button" key={o.value} aria-pressed={activeAge===o.value} className={'mkt-chip'+(activeAge===o.value?' on':'')} onClick={()=>{setActiveAge(activeAge===o.value?'':o.value);setPage(1);}}>{o.label}</button>)}</div></div>
       {allTags.length>0&&<div className="mkt-row"><span className="mkt-label">标签</span><div className="mkt-chips">{allTags.slice(0,12).map(t=><button type="button" key={t} aria-pressed={filters.tag===t} className={'mkt-chip small'+(filters.tag===t?' on':'')} onClick={()=>{setFilters(f=>({...f,tag:f.tag===t?'':t}));setPage(1);}}>{t}</button>)}</div></div>}
@@ -327,6 +329,7 @@ function Marketplace(){
      <><div className="mkt-grid">{items.map(item=><Link key={item.id} to={'/marketplace/'+item.id} className="mkt-card">
        <div className="mkt-cover" style={(item.coverAssetId || item.coverImageUrl)?{backgroundImage:'url('+(item.coverAssetId ? '/api/public/file-assets/'+item.coverAssetId+'/download' : item.coverImageUrl)+')'}:{}}>{!item.coverAssetId && !item.coverImageUrl&&<span>{item.title?.charAt(0)||'课'}</span>}</div>
        <div className="mkt-body"><h3>{item.title}</h3>
+         <span className="mkt-tag">{item.deliveryMode==='VIBECODING'?'VibeCoding 课程':'画布课程'}</span>
          <div className="mkt-meta"><DifficultyStars level={item.difficultyLevel}/>{ageLabel(item.ageRangeMin,item.ageRangeMax)?<span className="mkt-age">{ageLabel(item.ageRangeMin,item.ageRangeMax)}</span>:null}</div>
          {(item.tags||[]).slice(0,3).map(t=><span key={t} className="mkt-tag">{t}</span>)}
          {(item.tags||[]).length>3&&<span className="mkt-tag-more">+{item.tags.length-3}</span>}
