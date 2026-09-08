@@ -243,11 +243,13 @@ function AnimationNode({ id, data, selected }) {
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, showStarter = !readOnly, capabilities = ['text'], allowNodeCreation = true }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, showStarter, capabilities = ['text'], allowNodeCreation = true }) {
+  // 受控课堂画布（allowNodeCreation=false）默认不使用固定起始底稿，避免空画布每次刷新被自动填充。
+  const shouldShowStarter = showStarter === undefined ? (!readOnly && allowNodeCreation) : showStarter;
   const initial = useMemo(() => {
     const restored = safeSnapshot(initialSnapshot);
-    return restored.nodes.length || !showStarter ? restored : createStarterSnapshot();
-  }, [initialSnapshot]);
+    return restored.nodes.length || !shouldShowStarter ? restored : createStarterSnapshot();
+  }, [initialSnapshot, shouldShowStarter]);
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
