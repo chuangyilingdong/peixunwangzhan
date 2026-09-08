@@ -66,14 +66,14 @@ try {
   const persisted = row("SELECT source_asset_url FROM generation_jobs WHERE id=?", [queued?.job?.id || '']);
   check(persisted?.source_asset_url === 'mock://asset1', `首帧来源应落库，实际 ${persisted?.source_asset_url}`);
 
-  // 默认 i2v 模板把首帧放在顶层 firstFrameUrl（上游实测字段名），且保留 metadata。
+  // 默认 i2v 模板把首帧放在顶层 image 字段（上游实测接受的键名，尽管其报错文案写的是 firstFrameUrl），且保留 metadata。
   const { requestTemplateFor, renderRequestTemplate } = await import('../apps/server/src/services/modelCapabilities.js');
   const template = requestTemplateFor({ requestTemplates: {} }, 'VIDEO', { requiresFirstFrame: true });
-  const body = renderRequestTemplate(template, { model: 'hailuo-h3-i2v', prompt: '夜色江面', durationSeconds: 5, resolution: '480p', aspectRatio: '16:9', audio: false, firstFrameUrl: 'mock://asset1' });
-  check(body.firstFrameUrl === 'mock://asset1', 'i2v 默认模板应把首帧写进顶层 firstFrameUrl');
+  const body = renderRequestTemplate(template, { model: 'hailuo-h3-i2v', prompt: '夜色江面', durationSeconds: 5, resolution: '768P', aspectRatio: '16:9', audio: false, firstFrameUrl: 'mock://asset1' });
+  check(body.image === 'mock://asset1', 'i2v 默认模板应把首帧写进顶层 image');
   check(body.metadata?.aspect_ratio === '16:9', 'i2v 默认模板应保留 metadata 里的比例');
   const t2v = renderRequestTemplate(requestTemplateFor({ requestTemplates: {} }, 'VIDEO'), { model: 'seedance-2.0-global-mini-t2v', prompt: '夜色', durationSeconds: 5, resolution: '480p', aspectRatio: '16:9', audio: false });
-  check(!('firstFrameUrl' in t2v), '文生视频默认模板不应带上 firstFrameUrl');
+  check(!('image' in t2v), '文生视频默认模板不应带上首帧字段');
 
   if (failures.length) throw new Error(failures.join('; '));
   console.log('P11 video first-frame guard passed');

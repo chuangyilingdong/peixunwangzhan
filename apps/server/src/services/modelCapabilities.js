@@ -133,8 +133,9 @@ export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 
 export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   IMAGE: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}', metadata: { resolution: '{{resolution}}', output_format: 'png' } }),
   VIDEO: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
-  // 图生视频：上游要求顶层 firstFrameUrl（实测 api.seedance.nz 的 i2v 模型缺该字段会 400）。
-  VIDEO_I2V: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', firstFrameUrl: '{{firstFrameUrl}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
+  // 图生视频：上游要的是顶层 image 字段。注意 api.seedance.nz 的报错文案写的是
+  // "firstFrameUrl is required"，但实测真正被接受的键是 image（传 firstFrameUrl 反而 400）。
+  VIDEO_I2V: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', image: '{{firstFrameUrl}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
   TEXT: Object.freeze({ model: '{{model}}', messages: [{ role: 'system', content: '你是少儿编程学习平台的创作助手。请用适合儿童理解的方式回答，避免危险或不适龄内容。' }, { role: 'user', content: '{{prompt}}' }] }),
   DUBBING: Object.freeze({ model: '{{model}}', input: '{{prompt}}', voice: '{{voice}}', response_format: 'mp3' }),
 });
