@@ -6,6 +6,17 @@
 .modal{width:min(430px,100%);padding:24px;border-radius:16px;background:#fff;box-shadow:0 25px 60px #2e23555c}
 .modal h3{margin:0 0 6px}
 .modal .row-actions{justify-content:flex-end;margin-top:16px}
+/* 通用弹窗：创建课包等关键流程使用的大弹窗（此前缺样式，会退化成页面内联块） */
+.modal-overlay{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(24,16,48,.5);overflow:auto}
+.modal-content{display:flex;flex-direction:column;width:min(560px,100%);max-height:88vh;border-radius:18px;background:#fff;box-shadow:0 28px 70px rgba(40,28,90,.34)}
+.modal-large{width:min(1040px,100%)}
+.modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 26px;border-bottom:1px solid var(--line)}
+.modal-header h2{margin:4px 0 0;font-size:20px}
+.modal-close{width:34px;height:34px;border:1px solid #e2dcf2;border-radius:50%;color:#7d7691;background:#fff;font-size:20px;line-height:1;cursor:pointer}
+.modal-close:hover{color:var(--deep);border-color:#cbbff0}
+.modal-body{flex:1;overflow:auto;padding:20px 26px 26px}
+.modal-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:16px 26px;border-top:1px solid var(--line);background:#fcfbff;border-radius:0 0 18px 18px}
+@media(max-width:720px){.modal-overlay{padding:10px}.modal-content{max-height:94vh}.modal-body{padding:16px 18px 20px}.modal-header,.modal-footer{padding-left:18px;padding-right:18px}}
 .danger-text{color:#aa3d50}
 @media(max-width:900px){.filter-form{grid-template-columns:1fr 1fr}}
 @media(max-width:540px){.filter-form{grid-template-columns:1fr}}
