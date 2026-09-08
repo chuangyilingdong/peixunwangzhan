@@ -1,5 +1,5 @@
 // 积分管理相关组件
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ErrorState, Loading, Notice, formatCredits, formatDate } from '@platform/shared';
 
 // 机构充值对话框（平台管理员使用）
@@ -154,7 +154,7 @@ export function RechargeHistoryPanel({ api, orgId }) {
     }
   }
 
-  useState(() => {
+  useEffect(() => {
     loadData();
   }, [api, orgId, page]);
 

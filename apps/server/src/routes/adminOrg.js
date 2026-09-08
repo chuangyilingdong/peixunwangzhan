@@ -1062,6 +1062,7 @@ function buildOrganizationDetail(orgId) {
       frozenCredits: Number(account?.frozen_credits || 0),
       totalCreditsIn: Number(account?.total_credits_in || 0),
       totalCreditsSpent: Number(account?.total_credits_spent || 0),
+      currencyPaidTotalFen: Number(account?.currency_paid_total_fen || 0),
     },
     packages,
     courseAssignments,
@@ -2126,6 +2127,54 @@ export async function handleAdmin(ctx) {
       reports,
       latestPublishRequest: latestPublishRequest ? normalizeWorkPublishRequest(latestPublishRequest) : null,
     };
+  }
+  return null;
+}
+
+export async function handleAdminCreditManagement(ctx) {
+  const { pathname, method } = ctx;
+  if (!pathname.startsWith('/api/admin/')) return null;
+  const auth = requireRole(ctx, ['SUPER_ADMIN']);
+  let match = pathname.match(/^\/api\/admin\/organizations\/([^/]+)\/credit-adjustments$/);
+  if (match && method === 'POST') {
+    const organization = row('SELECT id FROM organizations WHERE id=?', [match[1]]);
+    if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
+    const body = ctx.body || {};
+    const credits = integer(body.credits, '充值积分', { min: 1, max: 1000000000 });
+    ensureOrgBilling(organization.id);
+    const amountFen = body.amountFen == null ? null : integer(body.amountFen, '付款金额（分）', { min: 0, max: 100000000000 });
+    const paymentMethod = body.paymentMethod ? String(body.paymentMethod).slice(0, 50) : null;
+    const paymentReference = body.paymentReference ? String(body.paymentReference).slice(0, 100) : null;
+    const reason = String(body.reason || '线下充值').slice(0, 300);
+    const result = transaction(() => {
+      const account = row('SELECT credit_balance FROM org_billing_accounts WHERE org_id=?', [organization.id]);
+      const balanceAfter = Number(account.credit_balance || 0) + credits;
+      const detail = [reason, paymentMethod && `方式：${paymentMethod}`, paymentReference && `凭证：${paymentReference}`].filter(Boolean).join('，');
+      q('UPDATE org_billing_accounts SET credit_balance=?,total_credits_in=total_credits_in+?,currency_paid_total_fen=currency_paid_total_fen+?,updated_version=updated_version+1 WHERE org_id=?', [balanceAfter, credits, amountFen || 0, organization.id]);
+      const entryId = id('credit');
+      q('INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,status,reason,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [entryId, organization.id, 'IN', 'PLATFORM_ADJUSTMENT', credits, balanceAfter, 'EFFECTIVE', detail, auth.user.id, nowIso()]);
+      return { balanceAfter, entryId };
+    });
+    audit(ctx, 'ORG_CREDIT_ADJUST', 'ORG', organization.id, null, { ...body, balanceAfter: result.balanceAfter });
+    return { balanceAfter: result.balanceAfter, entryId: result.entryId };
+  }
+  match = pathname.match(/^\/api\/admin\/organizations\/([^/]+)\/billing\/account$/);
+  if (match && method === 'GET') {
+    const organization = row('SELECT id,name FROM organizations WHERE id=?', [match[1]]);
+    if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
+    ensureOrgBilling(organization.id);
+    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
+    const last = row("SELECT credits,created_at FROM credit_entries WHERE org_id=? AND direction='IN' ORDER BY created_at DESC LIMIT 1", [organization.id]);
+    return { orgId: organization.id, orgName: organization.name, creditBalance: Number(account.credit_balance || 0), frozenCredits: Number(account.frozen_credits || 0), totalCreditsIn: Number(account.total_credits_in || 0), totalCreditsSpent: Number(account.total_credits_spent || 0), currencyPaidTotalFen: Number(account.currency_paid_total_fen || 0), lastRechargeAt: last?.created_at || null, lastRechargeCredits: Number(last?.credits || 0) };
+  }
+  match = pathname.match(/^\/api\/admin\/organizations\/([^/]+)\/billing\/recharge-history$/);
+  if (match && method === 'GET') {
+    const organization = row('SELECT id FROM organizations WHERE id=?', [match[1]]);
+    if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
+    const page = Math.max(1, Number(ctx.search.get('page') || 1)); const limit = Math.min(100, Math.max(1, Number(ctx.search.get('limit') || 20))); const offset = (page - 1) * limit;
+    const items = rows("SELECT ce.*,u.display_name actor_name FROM credit_entries ce LEFT JOIN users u ON u.id=ce.actor_id WHERE ce.org_id=? AND ce.direction='IN' ORDER BY ce.created_at DESC LIMIT ? OFFSET ?", [organization.id, limit, offset]);
+    const total = count("SELECT COUNT(*) n FROM credit_entries WHERE org_id=? AND direction='IN'", [organization.id]);
+    return { items: items.map(item => ({ id:item.id, credits:Number(item.credits), balanceAfter:Number(item.balance_after), reason:item.reason, actorName:item.actor_name, createdAt:item.created_at })), total, page, totalPages: Math.ceil(total / limit) };
   }
   return null;
 }
@@ -3214,8 +3263,8 @@ export async function handleOrg(ctx) {
   }
   
   // P1: 机构端 - 查看成员配额列表
-  if (part === '/org/members/credits' && method === 'GET') {
-    const auth = requireOrgStaff(ctx);
+  if (part === '/members/credits' && method === 'GET') {
+    const auth = requireRole(ctx, ['ORG_ADMIN']);
     const currentOrgId = auth.user.orgId;
     const role = ctx.search?.role || 'STUDENT';
     if (!['STUDENT', 'TEACHER'].includes(role)) throw errors.badRequest('角色必须是 STUDENT 或 TEACHER', 'INVALID_ROLE');
@@ -3225,7 +3274,7 @@ export async function handleOrg(ctx) {
     const offset = (page - 1) * limit;
     
     const items = rows(
-      `SELECT u.id AS user_id, u.display_name, u.role, u.ai_credits, u.ai_credits_used,
+      `SELECT u.id AS user_id, u.display_name, u.role, u.ai_credit_limit, u.ai_credits_used,
               (SELECT MAX(created_at) FROM usage_records WHERE user_id = u.id) AS last_used_at,
               (SELECT MAX(created_at) FROM user_credit_adjustments WHERE user_id = u.id AND adjustment_type = 'ALLOCATION') AS last_allocated_at
        FROM users u
@@ -3245,9 +3294,9 @@ export async function handleOrg(ctx) {
         userId: item.user_id,
         displayName: item.display_name,
         role: item.role,
-        aiCredits: Number(item.ai_credits),
+        aiCredits: Number(item.ai_credit_limit || 0),
         aiCreditsUsed: Number(item.ai_credits_used),
-        aiCreditsAvailable: Number(item.ai_credits) - Number(item.ai_credits_used),
+        aiCreditsAvailable: Number(item.ai_credit_limit || 0) - Number(item.ai_credits_used),
         lastUsedAt: item.last_used_at,
         lastAllocatedAt: item.last_allocated_at
       })),
@@ -3257,9 +3306,9 @@ export async function handleOrg(ctx) {
   }
   
   // P1: 机构端 - 调整单个用户配额
-  match = part.match(/^\/org\/members\/([^/]+)\/credits\/adjust$/);
+  match = part.match(/^\/members\/([^/]+)\/credits\/adjust$/);
   if (match && method === 'POST') {
-    const auth = requireOrgStaff(ctx);
+    const auth = requireRole(ctx, ['ORG_ADMIN']);
     const currentOrgId = auth.user.orgId;
     const userId = match[1];
     
@@ -3274,7 +3323,7 @@ export async function handleOrg(ctx) {
     const adjustmentType = creditsChange > 0 ? 'ALLOCATION' : 'ADJUSTMENT';
     
     const result = transaction(() => {
-      const creditsBefore = Number(user.ai_credits);
+      const creditsBefore = Number(user.ai_credit_limit || 0);
       const creditsAfter = creditsBefore + creditsChange;
       
       if (creditsAfter < 0) throw errors.badRequest('调整后配额不能为负数', 'INSUFFICIENT_CREDITS');
@@ -3296,7 +3345,7 @@ export async function handleOrg(ctx) {
       }
       
       // 更新用户配额
-      q('UPDATE users SET ai_credits = ?, updated_at = ? WHERE id = ?', [creditsAfter, nowIso(), userId]);
+      q('UPDATE users SET ai_credit_limit = ?, updated_at = ? WHERE id = ?', [creditsAfter, nowIso(), userId]);
       
       // 记录配额调整历史
       q('INSERT INTO user_credit_adjustments(id,org_id,user_id,credits_before,credits_after,credits_change,reason,adjustment_type,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -3321,8 +3370,8 @@ export async function handleOrg(ctx) {
   }
   
   // P1: 机构端 - 批量分配配额
-  if (part === '/org/members/credits/batch-allocate' && method === 'POST') {
-    const auth = requireOrgStaff(ctx);
+  if (part === '/members/credits/batch-allocate' && method === 'POST') {
+    const auth = requireRole(ctx, ['ORG_ADMIN']);
     const currentOrgId = auth.user.orgId;
     
     const userIds = ctx.body?.userIds;
@@ -3335,7 +3384,7 @@ export async function handleOrg(ctx) {
     
     // 验证用户存在且属于当前机构
     const users = rows(
-      `SELECT id, display_name, role, ai_credits FROM users WHERE id IN (${userIds.map(() => '?').join(',')}) AND org_id = ? AND deleted_at IS NULL`,
+      `SELECT id, display_name, role, ai_credit_limit, ai_credits_used FROM users WHERE id IN (${userIds.map(() => '?').join(',')}) AND org_id = ? AND deleted_at IS NULL`,
       [...userIds, currentOrgId]
     );
     
@@ -3356,10 +3405,10 @@ export async function handleOrg(ctx) {
       
       // 为每个用户分配配额
       for (const user of users) {
-        const creditsBefore = Number(user.ai_credits);
+        const creditsBefore = Number(user.ai_credit_limit || 0);
         const creditsAfter = creditsBefore + creditsPerUser;
         
-        q('UPDATE users SET ai_credits = ?, updated_at = ? WHERE id = ?', [creditsAfter, now, user.id]);
+        q('UPDATE users SET ai_credit_limit = ?, updated_at = ? WHERE id = ?', [creditsAfter, now, user.id]);
         
         q('INSERT INTO user_credit_adjustments(id,org_id,user_id,credits_before,credits_after,credits_change,reason,adjustment_type,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
           [id('adjustment'), currentOrgId, user.id, creditsBefore, creditsAfter, creditsPerUser, reason, 'ALLOCATION', auth.user.id, now]
@@ -3387,9 +3436,9 @@ export async function handleOrg(ctx) {
   }
   
   // P1: 机构端 - 查看用户配额调整历史
-  match = part.match(/^\/org\/members\/([^/]+)\/credits\/history$/);
+  match = part.match(/^\/members\/([^/]+)\/credits\/history$/);
   if (match && method === 'GET') {
-    const auth = requireOrgStaff(ctx);
+    const auth = requireRole(ctx, ['ORG_ADMIN']);
     const currentOrgId = auth.user.orgId;
     const userId = match[1];
     
@@ -3432,8 +3481,8 @@ export async function handleOrg(ctx) {
   }
   
   // P1: 机构端 - 查询积分流水
-  if (part === '/org/billing/transactions' && method === 'GET') {
-    const auth = requireOrgStaff(ctx);
+  if (part === '/billing/transactions' && method === 'GET') {
+    const auth = requireRole(ctx, ['ORG_ADMIN']);
     const currentOrgId = auth.user.orgId;
     
     const page = Math.max(1, Number(ctx.search?.page || 1));
@@ -3520,16 +3569,16 @@ export async function handleOrg(ctx) {
     };
   }
   
-  // 官网 - 学生积分汇总
-  if (part === '/website/my-credits/summary' && method === 'GET') {
+  // 兼容旧入口：学生积分接口改由 website handler 处理
+  if (false && part === '/website/my-credits/summary' && method === 'GET') {
     const auth = requireRole(ctx, ['STUDENT']);
     const userId = auth.user.id;
     const orgId = auth.user.orgId;
     
-    const user = row('SELECT ai_credits, ai_credits_used FROM users WHERE id = ? AND org_id = ?', [userId, orgId]);
+    const user = row('SELECT ai_credit_limit, ai_credits_used FROM users WHERE id = ? AND org_id = ?', [userId, orgId]);
     if (!user) throw errors.notFound('用户不存在', 'USER_NOT_FOUND');
     
-    const totalAllocated = Number(user.ai_credits);
+    const totalAllocated = Number(user.ai_credit_limit || 0);
     const totalUsed = Number(user.ai_credits_used);
     const balance = totalAllocated - totalUsed;
     
@@ -3560,8 +3609,8 @@ export async function handleOrg(ctx) {
     );
     
     // 计算余额（逐条累减）
-    const user = row('SELECT ai_credits, ai_credits_used FROM users WHERE id = ?', [userId]);
-    let currentBalance = Number(user.ai_credits) - Number(user.ai_credits_used);
+    const user = row('SELECT ai_credit_limit, ai_credits_used FROM users WHERE id = ?', [userId]);
+    let currentBalance = Number(user.ai_credit_limit || 0) - Number(user.ai_credits_used);
     
     const itemsWithBalance = items.map(item => {
       const result = {

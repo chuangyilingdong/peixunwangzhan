@@ -8,6 +8,8 @@ import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, handlePublicFileAssets } from './routes/fileAssets.js';
+import { handleAdminCreditManagement } from './routes/adminOrg.js';
+import { handleWebsiteCredits } from './routes/websiteCredits.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 import { domainStateContract } from './services/domainState.js';
@@ -97,8 +99,10 @@ const server = http.createServer(async (req, res) => {
       ?? await handleAdminAnalytics(ctx)
       ?? await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)
+      ?? await handleWebsiteCredits(ctx)
       ?? await handleAuth(ctx)
       ?? await handleAdmin(ctx)
+      ?? await handleAdminCreditManagement(ctx)
       ?? await handleAdminCommunication(ctx)
       ?? await handleAdminFileAssets(ctx)
       ?? await handleAdminBillingConfig(ctx)

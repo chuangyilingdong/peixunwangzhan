@@ -281,12 +281,11 @@ function Organizations({ api }) {
         <div className="metrics">
           <MetricCard label="服务状态" value={selected.serviceAvailable ? '可用' : '不可用'} hint={selected.status} tone={selected.serviceAvailable ? 'teal' : 'pink'} />
           <MetricCard label="合同剩余天数" value={selected.daysUntilContractExpires ?? '—'} hint={selected.contractExpiringSoon ? '30 天内到期，需提醒续约' : '按合同到期时间计算'} tone={selected.contractExpiringSoon ? 'orange' : undefined} />
-          <MetricCard 
-            label="积分余额" 
-            value={formatCredits(detail.data.billing.balance)} 
-            hint={`冻结 ${formatCredits(detail.data.billing.frozenCredits)} · 累计消耗 ${formatCredits(detail.data.billing.totalCreditsSpent)}`}
-            action={<button className="metric-action-button" onClick={() => setShowRechargeDialog(true)}>充值</button>}
-          />
+          <div className="metric-card violet credit-balance-card">
+            <span className="metric-symbol">✦</span><p>积分余额</p><strong>{formatCredits(detail.data.billing.balance)}</strong>
+            <small>冻结 {formatCredits(detail.data.billing.frozenCredits)} · 累计消耗 {formatCredits(detail.data.billing.totalCreditsSpent)}</small>
+            <button type="button" className="metric-action-button" onClick={() => setShowRechargeDialog(true)}>充值</button>
+          </div>
           <MetricCard label="教师席位" value={`${selected.teacherUsedSeats} / ${selected.totalTeacherSeats}`} hint={`基础 ${selected.baseTeacherSeats} + 购买 ${selected.purchasedTeacherSeats}`} tone={selected.totalTeacherSeats - selected.teacherUsedSeats < 3 ? 'orange' : undefined} />
         </div>
         
