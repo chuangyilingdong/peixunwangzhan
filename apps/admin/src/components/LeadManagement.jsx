@@ -106,7 +106,7 @@ export function LeadManagement({ api }) {
             <td>{item.assignedTo || <span className="muted">未分配</span>}</td>
             <td><button className="secondary-button" onClick={() => open(item)}>跟进</button></td>
           </tr>)}
-          {!visible.length ? <tr><td colSpan="7"><Empty title="暂无线索" description="官网提交「预约演示」后会出现在这里。" /></td></tr> : null}
+          {!visible.length ? <tr><td colSpan="7"><Empty title="暂无线索" body="官网提交「预约演示」后会出现在这里。" /></td></tr> : null}
         </tbody>
       </table></div>
     </Panel> : null}

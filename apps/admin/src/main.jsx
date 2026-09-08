@@ -5,6 +5,7 @@ import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, f
 import { OrgRechargeDialog, RechargeHistoryPanel } from './components/CreditManagement.jsx';
 import { Courses } from './components/CourseManagement.jsx';
 import { LeadManagement } from './components/LeadManagement.jsx';
+import { BillingSettings } from './components/BillingSettings.jsx';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
@@ -945,6 +946,7 @@ function PlatformBilling({ api }) {
       <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
     </div>
     <ProviderPolicyPanel api={api} />
+    <BillingSettings api={api} />
 
     <Panel title="计费明细筛选">
       <div className="form-grid">
@@ -1189,7 +1191,7 @@ function Analytics({ api }) {
     {report.loading ? <Loading label="正在读取匿名分析…" /> : report.error ? <ErrorState error={report.error} onRetry={report.refresh} /> : <>
       <div className="metric-grid"><MetricCard label="匿名访客" value={data.totals?.visitors || 0} hint="按匿名访问标识去重" /><MetricCard label="事件总量" value={data.totals?.events || 0} hint="只统计已同意记录" /><MetricCard label="预约提交" value={data.funnel?.find((item) => item.eventName === 'demo_submitted')?.visitors || 0} hint="不含预约表单内容" /></div>
       <Panel title="转化漏斗"><div className="table-wrap"><table><thead><tr><th>步骤</th><th>匿名访客</th><th>事件数</th><th>较上一步</th></tr></thead><tbody>{(data.funnel || []).map((item) => <tr key={item.eventName}><td><strong>{item.label}</strong><div className="muted">{item.eventName}</div></td><td>{item.visitors}</td><td>{item.events}</td><td>{item.rateFromPrevious == null ? '—' : `${item.rateFromPrevious}%`}</td></tr>)}</tbody></table></div></Panel>
-      <Panel title="事件明细"><div className="table-wrap"><table><thead><tr><th>事件</th><th>匿名访客</th><th>次数</th></tr></thead><tbody>{(data.byEvent || []).map((item) => <tr key={item.eventName}><td>{item.eventName}</td><td>{item.visitors}</td><td>{item.events}</td></tr>)}{!(data.byEvent || []).length && <tr><td colSpan="3"><Empty title="暂无已同意的分析事件" description="访客选择同意匿名分析后，这里才会出现汇总数据。" /></td></tr>}</tbody></table></div></Panel>
+      <Panel title="事件明细"><div className="table-wrap"><table><thead><tr><th>事件</th><th>匿名访客</th><th>次数</th></tr></thead><tbody>{(data.byEvent || []).map((item) => <tr key={item.eventName}><td>{item.eventName}</td><td>{item.visitors}</td><td>{item.events}</td></tr>)}{!(data.byEvent || []).length && <tr><td colSpan="3"><Empty title="暂无已同意的分析事件" body="访客选择同意匿名分析后，这里才会出现汇总数据。" /></td></tr>}</tbody></table></div></Panel>
       <Notice>统计工具：平台内置第一方存储，不接入第三方广告或跨站跟踪。事件字段采用白名单，页面路径会去掉查询参数。</Notice>
     </>}
   </>;
