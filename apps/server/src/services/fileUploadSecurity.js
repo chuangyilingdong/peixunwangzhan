@@ -20,6 +20,15 @@ const MIME_EXTENSIONS = new Map([
   ['text/plain', ['.txt']],
   ['text/csv', ['.csv']],
   ['application/zip', ['.zip']],
+  ['application/vnd.openxmlformats-officedocument.presentationml.presentation', ['.pptx']],
+  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', ['.docx']],
+  ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ['.xlsx']],
+]);
+// OOXML（pptx/docx/xlsx）本质是 zip 容器，签名只能嗅探到 application/zip。
+const OOXML_MIMES = new Set([
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
 const BLOCKED_EXTENSIONS = new Set(['.ade', '.apk', '.app', '.bat', '.cmd', '.com', '.cpl', '.dll', '.dmg', '.exe', '.hta', '.jar', '.js', '.jse', '.msi', '.msp', '.php', '.ps1', '.scr', '.sh', '.svg', '.vbs', '.vbe', '.wsf', '.xll', '.xlsm', '.docm']);
 
@@ -74,7 +83,9 @@ function validateMimeAndExtension(fileName, declaredMime, buffer) {
   if (!MIME_EXTENSIONS.get(mimeType).includes(extension)) throw errors.badRequest('MIME 类型与扩展名不匹配', 'MIME_EXTENSION_MISMATCH');
   const detectedMime = sniffMime(buffer);
   if (detectedMime === 'image/svg+xml' || detectedMime === 'application/x-msdownload') throw errors.badRequest('检测到高风险文件内容', 'MALICIOUS_FILE_BLOCKED');
-  if (detectedMime && detectedMime !== mimeType && !(detectedMime === 'audio/wav' && mimeType === 'audio/x-wav')) throw errors.badRequest('文件内容与 MIME 类型不匹配', 'FILE_SIGNATURE_MISMATCH');
+  const isOoxml = OOXML_MIMES.has(mimeType);
+  if (isOoxml && detectedMime !== 'application/zip') throw errors.badRequest('无法验证文件内容', 'FILE_SIGNATURE_UNKNOWN');
+  if (detectedMime && detectedMime !== mimeType && !(detectedMime === 'audio/wav' && mimeType === 'audio/x-wav') && !(isOoxml && detectedMime === 'application/zip')) throw errors.badRequest('文件内容与 MIME 类型不匹配', 'FILE_SIGNATURE_MISMATCH');
   if (['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/ogg', 'application/zip'].includes(mimeType) && !detectedMime) throw errors.badRequest('无法验证文件内容', 'FILE_SIGNATURE_UNKNOWN');
   return { mimeType, detectedMime, extension };
 }

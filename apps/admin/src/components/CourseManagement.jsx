@@ -11,7 +11,10 @@ const LESSON_CAPABILITY_OPTIONS = [
   ['music', 'AI 音乐'], ['podcast', 'AI 播客'], ['dubbing', 'AI 配音'],
 ];
 const MATERIAL_TYPE_OPTIONS = [
-  ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['PDF', 'PDF'], ['PPT', 'PPT'], ['NOTE', '文字说明'], ['PROMPT', '提示词'],
+  ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['NOTE', '文字说明'], ['PROMPT', '提示词'],
+];
+const TEACHING_TYPE_OPTIONS = [
+  ['VIDEO', '视频'], ['PPT', 'PPT'], ['PDF', 'PDF'], ['WORD', 'Word'], ['EXCEL', 'Excel'], ['FILE', '其他文件'],
 ];
 const defaultClassroomConfig = {
   version: 1,
@@ -46,6 +49,39 @@ function coverUrlOf(course) {
 }
 
 /* ---------------------------------------------------------------- 课时画布配置 */
+
+// 教学素材（教师备课资料，学生不可见）
+function LessonTeachingEditor({ api, lesson, edit, onChange }) {
+  const groups = edit.teachingGroups ?? lesson.teachingGroups ?? [];
+  const update = (patch) => onChange({ ...edit, ...patch });
+  function updateGroup(index, patch) { update({ teachingGroups: groups.map((group, i) => i === index ? { ...group, ...patch } : group) }); }
+  function updateAsset(groupIndex, assetIndex, patch) { update({ teachingGroups: groups.map((group, i) => i !== groupIndex ? group : { ...group, assets: (group.assets || []).map((item, j) => j === assetIndex ? { ...item, ...patch } : item) }) }); }
+  const [uploading, setUploading] = useState('');
+  async function uploadAsset(groupIndex, assetIndex, file) {
+    if (!file) return;
+    const key = `${groupIndex}:${assetIndex}`; setUploading(key);
+    try {
+      const asset = await api.upload('admin/file-assets/upload', file, { category: 'TEACHING_ASSET', visibility: 'PUBLIC_PLATFORM' });
+      if (!asset?.id) throw new Error('上传成功但未返回文件标识');
+      updateAsset(groupIndex, assetIndex, { assetUrl: `/api/public/file-assets/${asset.id}/download`, fileAssetId: asset.id });
+    } catch (error) { window.alert(error.message); } finally { setUploading(''); }
+  }
+  function addAsset(groupIndex) { const current = groups[groupIndex]?.assets || []; updateGroup(groupIndex, { assets: [...current, { title: `素材${current.length + 1}`, description: '', assetType: 'FILE', assetUrl: '' }] }); }
+  return <div className="lesson-teaching-materials">
+    <div className="lesson-config-heading"><strong>教学素材（教师备课资料，学生不可见）</strong><button type="button" className="text-button" onClick={() => update({ teachingGroups: [...groups, { title: `教学素材${groups.length + 1}`, assets: [] }] })}>＋素材组</button></div>
+    {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={`${group.id || 'new'}-${groupIndex}`}>
+      <div className="lesson-config-row"><input value={group.title || ''} placeholder={`教学素材${groupIndex + 1}`} onChange={(event) => updateGroup(groupIndex, { title: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => update({ teachingGroups: groups.filter((_, i) => i !== groupIndex) })}>删除组</button></div>
+      {(group.assets || []).map((asset, assetIndex) => <div className="lesson-material-item-editor" key={`${asset.id || 'new'}-${assetIndex}`}>
+        <div className="lesson-config-row"><input value={asset.title || ''} placeholder="素材名称" onChange={(event) => updateAsset(groupIndex, assetIndex, { title: event.target.value })} /><select value={asset.assetType || 'FILE'} onChange={(event) => updateAsset(groupIndex, assetIndex, { assetType: event.target.value })}>{TEACHING_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="text-button danger-text" onClick={() => updateGroup(groupIndex, { assets: (group.assets || []).filter((_, i) => i !== assetIndex) })}>删除</button></div>
+        <input value={asset.description || ''} placeholder="给老师看的说明（可选）" onChange={(event) => updateAsset(groupIndex, assetIndex, { description: event.target.value })} />
+        <input value={asset.assetUrl || ''} placeholder="文件地址（可上传）" onChange={(event) => updateAsset(groupIndex, assetIndex, { assetUrl: event.target.value })} />
+        <label className="inline-file-upload">{uploading === `${groupIndex}:${assetIndex}` ? '上传中…' : '上传文件'}<input type="file" accept="video/*,application/pdf,.pptx,.docx,.xlsx,.zip,.txt" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadAsset(groupIndex, assetIndex, file); }} /></label>
+      </div>)}
+      <button type="button" className="text-button" onClick={() => addAsset(groupIndex)}>＋素材</button>
+    </div>)}
+    {!groups.length && <p className="muted">还没有教学素材。上传课件、视频等备课资料后，机构端教师可在课时详情查看下载。</p>}
+  </div>;
+}
 
 function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   const providerConfig = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
@@ -82,24 +118,24 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
     <label>课堂类型<select value={deliveryMode} onChange={(event) => update({ deliveryMode: event.target.value })}><option value="CANVAS">课堂画布</option><option value="VIBECODING">VibeCoding 课堂</option></select></label>
     {deliveryMode === 'VIBECODING' ? <Notice>VibeCoding 课堂的运行时尚在建设中。本课可以先完成课程配置，但发布前不要让学生进入空白课堂。</Notice> : <>
       <div className="lesson-capability-checks"><strong>本课开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => update({ capabilities: event.target.checked ? [...new Set([...capabilities, value])] : capabilities.filter((item) => item !== value) })} />{label}</label>)}</div>
-      <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>课堂素材（一级菜单）</strong><button type="button" className="text-button" onClick={() => update({ materialGroups: [...groups, { title: `素材${groups.length + 1}`, materials: [] }] })}>＋素材组</button></div>
+      <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={() => update({ materialGroups: [...groups, { title: `素材${groups.length + 1}`, materials: [] }] })}>＋素材组</button></div>
         {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={`${group.id || 'new'}-${groupIndex}`}>
           <div className="lesson-config-row"><input value={group.title || ''} placeholder={`素材${groupIndex + 1}`} onChange={(event) => updateGroup(groupIndex, { title: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => update({ materialGroups: groups.filter((_, i) => i !== groupIndex) })}>删除组</button></div>
-          {(group.materials || []).map((material, materialIndex) => { const snapshot = material.snapshot || {}; const insertAction = snapshot.insertAction || {}; const isText = ['NOTE', 'PROMPT'].includes(material.materialType); return <div className="lesson-material-item-editor" key={`${material.id || 'new'}-${materialIndex}`}>
+          {(group.materials || []).map((material, materialIndex) => { const snapshot = material.snapshot || {}; const isText = ['NOTE', 'PROMPT'].includes(material.materialType); return <div className="lesson-material-item-editor" key={`${material.id || 'new'}-${materialIndex}`}>
             <div className="lesson-config-row"><input value={material.title || ''} placeholder="素材标题" onChange={(event) => updateMaterial(groupIndex, materialIndex, { title: event.target.value })} /><select value={material.materialType || 'NOTE'} onChange={(event) => updateMaterial(groupIndex, materialIndex, { materialType: event.target.value })}>{MATERIAL_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="text-button danger-text" onClick={() => updateGroup(groupIndex, { materials: (group.materials || []).filter((_, i) => i !== materialIndex) })}>删除</button></div>
             <input value={material.description || ''} placeholder="给学生看的说明（可选）" onChange={(event) => updateMaterial(groupIndex, materialIndex, { description: event.target.value })} />
-            {isText ? <textarea rows={2} value={snapshot.content || ''} placeholder={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'} onChange={(event) => updateMaterial(groupIndex, materialIndex, { snapshot: { ...snapshot, content: event.target.value } })} /> : <><input value={material.assetUrl || ''} placeholder="资源地址（可粘贴 HTTPS，也可上传文件）" onChange={(event) => updateMaterial(groupIndex, materialIndex, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传文件'}<input type="file" accept="image/*,video/*,audio/*,.pdf,.ppt,.pptx" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label></>}
-            {material.materialType === 'PROMPT' || material.materialType === 'IMAGE' ? <div className="form-grid"><label>点击后添加到<select value={insertAction.targetNodeType || ''} onChange={(event) => updateMaterial(groupIndex, materialIndex, { snapshot: { ...snapshot, insertAction: { ...insertAction, targetNodeType: event.target.value || undefined } } })}><option value="">不绑定</option><option value="image">生图框体</option><option value="video">生视频框体</option><option value="text">文字框体</option></select></label><label>第几个框体<input type="number" min="1" max="20" value={insertAction.targetIndex == null ? '' : Number(insertAction.targetIndex) + 1} onChange={(event) => updateMaterial(groupIndex, materialIndex, { snapshot: { ...snapshot, insertAction: { ...insertAction, targetIndex: Math.max(0, Number(event.target.value || 1) - 1), targetField: material.materialType === 'IMAGE' ? 'referenceImage' : 'prompt' } } })} /></label></div> : null}
+            {isText ? <textarea rows={2} value={snapshot.content || ''} placeholder={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'} onChange={(event) => updateMaterial(groupIndex, materialIndex, { snapshot: { ...snapshot, content: event.target.value } })} /> : <><input value={material.assetUrl || ''} placeholder="资源地址（可粘贴 HTTPS，也可上传文件）" onChange={(event) => updateMaterial(groupIndex, materialIndex, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传文件'}<input type="file" accept="image/*,video/*,audio/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label></>}
           </div>; })}
           <button type="button" className="text-button" onClick={() => addMaterial(groupIndex)}>＋素材</button>
         </div>)}
-        {!groups.length && <p className="muted">还没有素材组。一级菜单会显示在学生课堂画布的素材区，点击后打开对应材料。</p>}
+        {!groups.length && <p className="muted">还没有画布素材。学生进入课时后，可在左侧素材面板点击加入画布；提示词素材点击时会让学生选择插入哪个框体。</p>}
       </div>
       <div className="lesson-generation-slots"><div className="lesson-config-heading"><strong>本课生成框体限制</strong><span className="muted">学生只能使用这里配置的数量、比例、尺寸、时长和模型</span></div>
         <div className="form-grid"><label>生图框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.image.count} onChange={(event) => updateSlot('image', { count: event.target.value })} /></label><label>生图比例<input value={classroomConfig.generationSlots.image.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('image', { aspectRatio: event.target.value })} /></label><label>生图尺寸<input value={classroomConfig.generationSlots.image.size} placeholder="1024x576" onChange={(event) => updateSlot('image', { size: event.target.value })} /></label><label>生图模型{channelModels('IMAGE').length ? <select value={classroomConfig.generationSlots.image.model || ''} onChange={(event) => updateSlot('image', { model: event.target.value })}><option value="">使用渠道默认模型</option>{channelModels('IMAGE').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={classroomConfig.generationSlots.image.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => updateSlot('image', { model: event.target.value })} />}</label></div>
         <div className="form-grid"><label>生视频框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.video.count} onChange={(event) => updateSlot('video', { count: event.target.value })} /></label><label>生视频比例<input value={classroomConfig.generationSlots.video.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('video', { aspectRatio: event.target.value })} /></label><label>生视频尺寸<input value={classroomConfig.generationSlots.video.size} placeholder="1920x1080" onChange={(event) => updateSlot('video', { size: event.target.value })} /></label><label>单个视频时长（秒）<input type="number" min="1" max="120" value={classroomConfig.generationSlots.video.durationSeconds} onChange={(event) => updateSlot('video', { durationSeconds: event.target.value })} /></label><label>生视频模型{channelModels('VIDEO').length ? <select value={classroomConfig.generationSlots.video.model || ''} onChange={(event) => updateSlot('video', { model: event.target.value })}><option value="">使用渠道默认模型</option>{channelModels('VIDEO').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={classroomConfig.generationSlots.video.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => updateSlot('video', { model: event.target.value })} />}</label></div>
       </div>
     </>}
+    <LessonTeachingEditor api={api} lesson={lesson} edit={edit} onChange={onChange} />
   </div>;
 }
 
@@ -125,6 +161,7 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
         classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {},
         capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'],
         materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [],
+        teachingGroups: edit.teachingGroups ?? lesson.teachingGroups ?? [],
       };
       if (status !== lesson.status) body.status = status;
       await api.request(`admin/course-lessons/${lesson.id}`, { method: 'PUT', body });

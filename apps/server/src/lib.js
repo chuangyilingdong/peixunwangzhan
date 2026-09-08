@@ -430,6 +430,7 @@ export function normalizeLesson(value) {
     classroomConfig: parseJson(value.classroom_config, {}),
     canvasTemplateSnapshot: parseJson(value.canvas_template_snapshot, {}),
     ...lessonCanvasConfig(value.id),
+    ...lessonTeachingMaterials(value.id),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -456,6 +457,19 @@ export function lessonCanvasConfig(lessonId) {
       video: { count: Number(videoSlot.count || 0), aspectRatio: videoSlot.aspectRatio || '16:9', size: videoSlot.size || '1920x1080', durationSeconds: Number(videoSlot.durationSeconds || 5), model: videoSlot.model || '' },
     },
   };
+}
+
+// 教学素材：教师备课资料，学生端不可见、不进入画布。
+export function lessonTeachingMaterials(lessonId) {
+  if (!lessonId) return { teachingGroups: [] };
+  const groups = rows('SELECT * FROM course_lesson_teaching_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
+    id: group.id, title: group.title, sort: Number(group.sort || 0),
+    assets: rows('SELECT * FROM course_lesson_teaching_assets WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
+      id: item.id, title: item.title, description: item.description || '', assetType: item.asset_type || 'FILE',
+      assetUrl: item.asset_url || null, fileAssetId: item.file_asset_id || null, sort: Number(item.sort || 0),
+    })),
+  }));
+  return { teachingGroups: groups };
 }
 
 export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true } = {}) {

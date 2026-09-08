@@ -572,6 +572,7 @@ function OrgCourses({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/course-series'), [api]);
   const detail = useData(() => seriesId ? api.get('org/course-series/' + encodeURIComponent(seriesId)) : Promise.resolve(null), [api, seriesId]);
   const [expanded, setExpanded] = useState('');
+  const [lessonDetail, setLessonDetail] = useState(null);
   if (seriesId) {
     if (detail.loading) return <Loading />;
     if (detail.error) return <ErrorState error={detail.error} onRetry={detail.refresh} />;
@@ -587,8 +588,32 @@ function OrgCourses({ api }) {
       </div>
       {Array.isArray(c.tags) && c.tags.length ? <div className="tag-list"><span className="muted">标签：</span>{c.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
       <Panel title="课时列表">
-        {c.lessons?.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>正文</th></tr></thead><tbody>{c.lessons.map((lesson) => <tr key={lesson.id}><td>{lesson.sort}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td>{lesson.durationMinutes} 分钟</td><td><div style={{ whiteSpace: 'pre-wrap', maxWidth: 480 }}>{lesson.lessonContent || '—'}</div></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
+        {c.lessons?.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>正文</th><th>教学素材</th><th>操作</th></tr></thead><tbody>{c.lessons.map((lesson) => <tr key={lesson.id} className="lesson-row" onClick={() => setLessonDetail(lesson)}><td>{lesson.sort}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td>{lesson.durationMinutes} 分钟</td><td><div style={{ whiteSpace: 'pre-wrap', maxWidth: 360 }}>{lesson.lessonContent || '—'}</div></td><td>{(lesson.teachingGroups || []).reduce((total, group) => total + (group.assets || []).length, 0)} 个</td><td><button className="secondary-button" onClick={(event) => { event.stopPropagation(); setLessonDetail(lesson); }}>查看</button></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
       </Panel>
+      {lessonDetail ? <div className="drawer-overlay" onClick={() => setLessonDetail(null)}>
+        <div className="drawer-panel" onClick={(event) => event.stopPropagation()}>
+          <header className="drawer-head"><div><span className="eyebrow">课时详情</span><h2>{lessonDetail.title}</h2></div><button type="button" className="drawer-close" onClick={() => setLessonDetail(null)}>×</button></header>
+          <div className="drawer-body">
+            <section className="drawer-section">
+              <h3>课时信息</h3>
+              <p className="muted">{lessonDetail.summary || '暂无简介'}</p>
+              <p>时长：{lessonDetail.durationMinutes} 分钟</p>
+              {lessonDetail.lessonContent ? <div style={{ whiteSpace: 'pre-wrap' }}>{lessonDetail.lessonContent}</div> : null}
+            </section>
+            <section className="drawer-section">
+              <h3>教学素材（备课资料）</h3>
+              {(lessonDetail.teachingGroups || []).length ? lessonDetail.teachingGroups.map((group) => <div className="lesson-material-group-editor" key={group.id}>
+                <strong>{group.title}</strong>
+                {(group.assets || []).map((asset) => <div className="teaching-asset-row" key={asset.id}>
+                  <span><strong>{asset.title}</strong>{asset.description ? <small className="muted">{asset.description}</small> : null}</span>
+                  {asset.assetUrl ? <a className="secondary-button" href={asset.assetUrl} target="_blank" rel="noreferrer">下载</a> : <span className="muted">未上传文件</span>}
+                </div>)}
+              </div>) : <Empty title="暂无教学素材" body="平台还没有为这节课配置备课资料。" />}
+            </section>
+          </div>
+          <footer className="drawer-foot"><button className="secondary-button" onClick={() => setLessonDetail(null)}>关闭</button></footer>
+        </div>
+      </div> : null}
     </>;
   }
   if (loading) return <Loading />;

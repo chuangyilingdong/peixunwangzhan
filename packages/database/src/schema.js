@@ -304,6 +304,33 @@ CREATE TABLE IF NOT EXISTS course_lesson_capabilities (
   FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
 );
 
+-- 教学素材（教师备课资料，不进入学生画布）
+CREATE TABLE IF NOT EXISTS course_lesson_teaching_groups (
+  id TEXT PRIMARY KEY,
+  lesson_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_teaching_groups_lesson ON course_lesson_teaching_groups(lesson_id, sort);
+
+CREATE TABLE IF NOT EXISTS course_lesson_teaching_assets (
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  asset_type TEXT NOT NULL DEFAULT 'FILE',
+  asset_url TEXT,
+  file_asset_id TEXT,
+  sort INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (group_id) REFERENCES course_lesson_teaching_groups(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_teaching_assets_group ON course_lesson_teaching_assets(group_id, sort);
+
 CREATE TABLE IF NOT EXISTS course_assignments (
   id TEXT PRIMARY KEY,
   series_id TEXT NOT NULL,

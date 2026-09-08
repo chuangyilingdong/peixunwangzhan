@@ -104,6 +104,31 @@ function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliv
   });
 }
 
+// 教学素材（教师备课资料）：整组替换，不影响学生画布素材。
+function replaceLessonTeachingMaterials(lessonId, groups) {
+  const list = Array.isArray(groups) ? groups.slice(0, 50) : [];
+  const now = nowIso();
+  transaction(() => {
+    q('DELETE FROM course_lesson_teaching_assets WHERE group_id IN (SELECT id FROM course_lesson_teaching_groups WHERE lesson_id=?)', [lessonId]);
+    q('DELETE FROM course_lesson_teaching_groups WHERE lesson_id=?', [lessonId]);
+    list.forEach((group, groupIndex) => {
+      const groupId = id('teaching-group');
+      const title = String(group?.title || `教学素材${groupIndex + 1}`).trim().slice(0, 100) || `教学素材${groupIndex + 1}`;
+      q('INSERT INTO course_lesson_teaching_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)', [groupId, lessonId, title, groupIndex + 1, now, now]);
+      const assets = Array.isArray(group?.assets) ? group.assets.slice(0, 100) : [];
+      assets.forEach((asset, assetIndex) => {
+        const assetId = id('teaching-asset');
+        q('INSERT INTO course_lesson_teaching_assets(id,group_id,title,description,asset_type,asset_url,file_asset_id,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [
+          assetId, groupId, String(asset?.title || `素材${assetIndex + 1}`).trim().slice(0, 160),
+          String(asset?.description || '').slice(0, 1000), String(asset?.assetType || 'FILE').toUpperCase().slice(0, 30),
+          asset?.assetUrl ? String(asset.assetUrl).slice(0, 2000) : null, asset?.fileAssetId ? String(asset.fileAssetId).slice(0, 100) : null,
+          assetIndex + 1, now, now,
+        ]);
+      });
+    });
+  });
+}
+
 function validateSeriesForPublishing(seriesId) {
   const lessons = rows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]);
   const activeLessons = lessons.filter((lesson) => lesson.status !== 'ARCHIVED');
@@ -1568,6 +1593,7 @@ export async function handleAdmin(ctx) {
       const currentCanvas = lessonCanvasConfig(lesson.id);
       replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig, body.canvasTemplateSnapshot ?? parseJson(lesson.canvas_template_snapshot, {}));
     }
+    if (body.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, body.teachingGroups);
     q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(row('SELECT version FROM course_series WHERE id=?', [lesson.series_id]).version), nowIso(), lesson.series_id]);
     audit(ctx, 'COURSE_LESSON_UPDATE', 'COURSE_LESSON', lesson.id, { title: lesson.title, status: lesson.status, durationMinutes: lesson.duration_minutes }, { title, status, durationMinutes, lessonContentChanged: body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content }, {});
     if (body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content) {
