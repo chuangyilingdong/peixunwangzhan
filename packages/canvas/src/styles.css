@@ -60,3 +60,7 @@
 .learning-node__generate:hover { filter: brightness(1.08); }
 .learning-node__generation-state { display: block; margin: 0 12px 10px; padding: 7px 9px; border-radius: 8px; color: #d7e2ff; background: rgba(78, 95, 181, .38); font-size: 11px; }
 .learning-node__generation-state.is-error { color: #ffd3d3; background: rgba(168, 55, 86, .45); }
+
+/* 音频节点可能同时开放音乐/播客/配音，生成按钮并排显示 */
+.learning-node__generate-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 12px 10px; }
+.learning-node__generate-row .learning-node__generate { width: auto; flex: 1 1 auto; margin: 0; }

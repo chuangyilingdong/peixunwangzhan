@@ -225,21 +225,31 @@ function NoteNode({ id, data, selected }) {
   </NodeFrame>;
 }
 
+// 音频节点按本课开放的音频能力提供生成入口（音乐 / 播客 / 配音）。
+const AUDIO_MODALITIES = [['MUSIC', '生成音乐'], ['PODCAST', '生成播客'], ['DUBBING', '生成配音']];
+
 function AudioNode({ id, data, selected }) {
-  const { updateNode } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
+  const audioUrl = data.previewUrl || data.assetUrl;
+  const available = AUDIO_MODALITIES.filter(([modality]) => enabledCapabilities?.has(modality.toLowerCase()));
   return <NodeFrame icon="♫" tone="audio" title={data.title || '音频素材'} selected={selected}>
-    {data.assetUrl || data.previewUrl ? <audio className="learning-node__audio" controls src={data.previewUrl || data.assetUrl} /> : <div className="learning-node__audio-placeholder">♫ 音频素材</div>}
-    <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="音频说明" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
-    {selected && <span className="learning-node__hint">可播放课程音频、音乐或配音素材</span>}
+    {audioUrl ? <audio className="learning-node__audio" controls src={audioUrl} /> : <div className="learning-node__audio-placeholder">♫ 音频素材</div>}
+    <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="音频说明 / 提示词" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
+    {canGenerate && available.length && !data.generationStatus ? <div className="learning-node__generate-row">{available.map(([modality, label]) => <button key={modality} className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, modality, { title: data.title || '音频素材', prompt: data.text || data.caption || '' })}>{audioUrl ? `重新${label}` : label}</button>)}</div> : null}
+    {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
+    {selected && <span className="learning-node__hint">可播放课程音频、音乐或配音素材；本课开放哪几种音频能力，就出现哪几个生成按钮</span>}
   </NodeFrame>;
 }
 
 function AnimationNode({ id, data, selected }) {
-  const { updateNode } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
+  const videoUrl = data.previewUrl || data.assetUrl;
   return <NodeFrame icon="✧" tone="animation" title={data.title || '动画素材'} selected={selected}>
-    {data.previewUrl || data.assetUrl ? <video className="learning-node__media" controls muted loop src={data.previewUrl || data.assetUrl} /> : <div className="learning-node__animation-placeholder">✧ 动画素材</div>}
-    <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="动画说明" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
-    {selected && <span className="learning-node__hint">用于展示动态画面或动画生成结果</span>}
+    {videoUrl ? <video className="learning-node__media" controls muted loop src={videoUrl} /> : <div className="learning-node__animation-placeholder">✧ 动画素材</div>}
+    <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="动画说明 / 提示词" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
+    {canGenerate && enabledCapabilities?.has('video') && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'VIDEO', { title: data.title || '动画素材', prompt: data.text || data.caption || '' })}>✧ {videoUrl ? '重新生成动画' : '生成动画'}</button>}
+    {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
+    {selected && <span className="learning-node__hint">动画按视频能力生成；本课未开放 AI 生视频时不能生成</span>}
   </NodeFrame>;
 }
 
@@ -397,7 +407,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities }}>
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}

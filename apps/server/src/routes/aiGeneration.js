@@ -61,6 +61,21 @@ function assertCapability(modality, session, pkg) {
   if (!pkg || pkg.status !== 'ACTIVE' || !pkg[packageColumn]) throw errors.forbidden('当前套餐未开通该 AI 能力', 'PACKAGE_CAPABILITY_DISABLED');
 }
 
+/**
+ * 调用上游之前的预检：课时能力 / 课堂管控 / 套餐能力任一不满足就直接拒绝。
+ * 否则会先花钱调一次上游、再在结算时失败并进入重试，重复消耗额度。
+ * 结算时仍会再校验一次（异步任务等待期间状态可能变化）。
+ */
+function assertGenerationPreflight({ user, orgId, context, modality }) {
+  const pkg = packageForUser(user, orgId);
+  assertCapability(modality, context.activeSession, pkg);
+  assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
+  const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
+  if (lessonCapability && !(context.lesson?.capabilities || []).includes(lessonCapability)) {
+    throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
+  }
+}
+
 function normalizeAsset(value) {
   let metadata = {};
   try { metadata = JSON.parse(value.metadata || '{}'); } catch { metadata = {}; }
@@ -155,7 +170,11 @@ export function initializeAsyncGenerationQueue() {
 }
 
 function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error, requestContext = null }) {
-  const normalized = normalizeProviderError(error);
+  // 业务侧拦截（课时能力 / 套餐能力 / 课堂管控 / 额度）保留原始错误码与文案；
+  // 只有真正的上游调用失败才走供应商错误归一化，否则会被误报成「API Key 无效」。
+  const normalized = error instanceof ApiError
+    ? { code: error.code, message: error.message }
+    : normalizeProviderError(error);
   const failCode = normalized.code || error?.code || 'GENERATION_FAILED';
   const failMessage = normalized.message || error?.message || '素材生成失败';
   const failAt = nowIso();
@@ -283,6 +302,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
+  assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality });
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext });
   try {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options: generationOptionsFor({ context, modality, policy, selection: providerSelection }) });
@@ -314,6 +334,7 @@ async function processAsyncGeneration(item) {
   const context = resolveProjectUsageContext(auth.rawUser, project);
   try {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
+    assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
@@ -326,7 +347,8 @@ async function processAsyncGeneration(item) {
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
   } catch (error) {
-    const current = row('SELECT retry_count,max_retries,status FROM generation_jobs WHERE id=?', [jobId]);
+    // 业务侧拦截（能力/套餐/管控/额度）重试没有意义，直接判失败。
+    const current = error instanceof ApiError ? null : row('SELECT retry_count,max_retries,status FROM generation_jobs WHERE id=?', [jobId]);
     if (current?.status === 'RUNNING' && Number(current.retry_count || 0) < Number(current.max_retries ?? ASYNC_GENERATION_MAX_RETRIES)) {
       const retryCount = Number(current.retry_count || 0) + 1; const nextAttempt = new Date(Date.now() + retryCount * 5000).toISOString();
       const normalized = normalizeProviderError(error);
