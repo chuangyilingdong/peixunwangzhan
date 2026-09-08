@@ -297,19 +297,38 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
 
 /* ---------------------------------------------------------------- 新建课包 */
 
-const CREATE_STEPS = ['基本信息', '课时编排', '更多设置', '完成'];
+const CREATE_STEPS = ['基本信息', '课时与课堂配置', '更多设置', '完成并发布'];
+
+function emptyLessonDraft() {
+  return { title: '', capabilities: ['text'], materialGroups: [], teachingGroups: [], classroomConfig: {} };
+}
 
 function CreateCourseModal({ api, onClose, onCreated }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(emptyCourseForm);
-  const [lessons, setLessons] = useState(['']);
+  const [lessons, setLessons] = useState([emptyLessonDraft()]);
+  const [expandedLesson, setExpandedLesson] = useState(0);
   const [publishNow, setPublishNow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
-  const lessonTitles = lessons.map((title) => String(title).trim()).filter(Boolean);
-  const canNext = step === 0 ? Boolean(String(form.title).trim()) : step === 1 ? lessonTitles.length > 0 : true;
-  function updateLesson(index, value) { setLessons((current) => current.map((item, i) => i === index ? value : item)); }
+  const lessonTitles = lessons.map((lesson) => String(lesson.title).trim());
+  const filledLessons = lessonTitles.filter(Boolean);
+  const canNext = step === 0 ? Boolean(String(form.title).trim()) : step === 1 ? lessons.length > 0 && filledLessons.length === lessons.length : true;
+  function updateLessonTitle(index, value) { setLessons((current) => current.map((item, i) => i === index ? { ...item, title: value } : item)); }
+  // 课时配置编辑器内部用函数式更新，这里把它合并回该课时的草稿对象。
+  function updateLessonDraft(index, updater) {
+    setLessons((current) => current.map((item, i) => {
+      if (i !== index) return item;
+      const patch = typeof updater === 'function' ? updater(item) : updater;
+      return { ...item, ...patch };
+    }));
+  }
+  function addLesson() { setLessons((current) => { setExpandedLesson(current.length); return [...current, emptyLessonDraft()]; }); }
+  function removeLesson(index) {
+    setLessons((current) => current.length <= 1 ? [emptyLessonDraft()] : current.filter((_, i) => i !== index));
+    setExpandedLesson(0);
+  }
 
   async function submit() {
     setBusy(true); setMessage('');
@@ -322,8 +341,12 @@ function CreateCourseModal({ api, onClose, onCreated }) {
         priceFen: Math.round(Number(priceText) * 100), version: form.version || '1.0',
         estimatedCreditsPerPerson: Number(form.estimatedCreditsPerPerson || 0), gradeRange: form.gradeRange, visibility: form.visibility,
         deliveryMode: form.deliveryMode || 'CANVAS',
-        // 选择「立即发布」时课时一并置为已发布，否则保持草稿、等待逐节配置后再发布。
-        lessons: lessonTitles.map((title) => ({ title, status: publishNow ? 'PUBLISHED' : 'DRAFT' })),
+        // 选择「立即发布」时课时一并置为已发布，否则保持草稿、等待后续再发布。
+        lessons: lessons.map((lesson) => ({
+          title: String(lesson.title).trim(), status: publishNow ? 'PUBLISHED' : 'DRAFT',
+          capabilities: lesson.capabilities, materialGroups: lesson.materialGroups,
+          teachingGroups: lesson.teachingGroups, classroomConfig: lesson.classroomConfig,
+        })),
       };
       if (form.difficultyLevel !== '' && form.difficultyLevel != null) payload.difficultyLevel = Number(form.difficultyLevel);
       if (form.ageRangeMin !== '' && form.ageRangeMin != null) payload.ageRangeMin = Number(form.ageRangeMin);
@@ -357,15 +380,21 @@ function CreateCourseModal({ api, onClose, onCreated }) {
           <p className="muted">「所有机构」的已发布课包会自动出现在官网课程广场。</p>
         </> : null}
 
-        {step === 1 ? <div className="course-lesson-draft">
-          <div className="lesson-config-heading"><strong>课时</strong><button type="button" className="text-button" onClick={() => setLessons((current) => [...current, ''])}>＋添加课时</button></div>
-          {lessons.map((value, index) => <div className="lesson-config-row" key={index}>
-            <span className="course-lesson-draft__no">{index + 1}</span>
-            <input value={value} placeholder={`第 ${index + 1} 课标题`} onChange={(event) => updateLesson(index, event.target.value)} />
-            <button type="button" className="text-button danger-text" onClick={() => setLessons((current) => current.length <= 1 ? [''] : current.filter((_, i) => i !== index))}>删除</button>
+        {step === 1 ? <>
+          <div className="lesson-config-heading"><strong>课时与课堂配置</strong><button type="button" className="text-button" onClick={addLesson}>＋添加课时</button></div>
+          <p className="muted">每节课在这里一次性配好：标题、开放能力、画布素材、生成框体与教学素材。之后仍可在「课时编排」里调整。</p>
+          {lessons.map((lesson, index) => <div className="course-lesson-draft" key={index}>
+            <div className="lesson-config-row">
+              <span className="course-lesson-draft__no">{index + 1}</span>
+              <input value={lesson.title} placeholder={`第 ${index + 1} 课标题`} onChange={(event) => updateLessonTitle(index, event.target.value)} />
+              <button type="button" className="secondary-button" onClick={() => setExpandedLesson(expandedLesson === index ? -1 : index)}>{expandedLesson === index ? '收起配置' : '配置本节课'}</button>
+              <button type="button" className="text-button danger-text" onClick={() => removeLesson(index)}>删除</button>
+            </div>
+            {expandedLesson === index ? <div className="lesson-draft-config">
+              <LessonCanvasConfigEditor api={api} lesson={lesson} edit={{}} onChange={(updater) => updateLessonDraft(index, updater)} />
+            </div> : null}
           </div>)}
-          <p className="muted">这里只填标题；创建后在「课时编排」里配置能力、素材、生成框体和默认画布。</p>
-        </div> : null}
+        </> : null}
 
         {step === 2 ? <div className="course-more-settings">
           <label>封面图<span className="muted">（可上传或填写 HTTPS 地址）</span></label>
@@ -396,7 +425,7 @@ function CreateCourseModal({ api, onClose, onCreated }) {
         {step === 3 ? <div className="course-create-summary">
           <div className="publish-checklist">
             <div className="publish-check is-ok"><strong>✓</strong><span>课包标题：{form.title}</span></div>
-            <div className="publish-check is-ok"><strong>✓</strong><span>课时：{lessonTitles.length} 节</span></div>
+            <div className="publish-check is-ok"><strong>✓</strong><span>课时：{filledLessons.length} 节（含能力 / 素材 / 框体配置）</span></div>
             <div className="publish-check is-ok"><strong>✓</strong><span>可见范围：{VISIBILITY_LABELS[form.visibility]}</span></div>
             <div className="publish-check is-ok"><strong>✓</strong><span>课堂类型：{form.deliveryMode === 'VIBECODING' ? 'VibeCoding 课堂' : '画布课堂'}</span></div>
           </div>

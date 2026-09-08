@@ -32,11 +32,13 @@ function classroomCapabilities(modality, modelId) {
   const model = String(modelId || '').trim() || String(channel?.model || '').trim();
   return effectiveCapabilities(channel, modality, model);
 }
-function pickCapability(value, allowed, label, fallback) {
+function pickCapability(value, allowed, label, fallback, { lenient = false } = {}) {
   const text = String(value ?? '').trim();
   if (!text) return fallback;
-  if (allowed.length && !allowed.includes(text)) throw errors.badRequest(`${label}「${text}」不在当前模型支持范围内（可用：${allowed.join('、')}）`, 'INVALID_GENERATION_CONFIG');
-  return text;
+  if (!allowed.length || allowed.includes(text)) return text;
+  // 该框体没被使用（数量为 0）时不因为历史默认值报错，直接落到模型支持的取值。
+  if (lenient) return allowed[0];
+  throw errors.badRequest(`${label}「${text}」不在当前模型支持范围内（可用：${allowed.join('、')}）`, 'INVALID_GENERATION_CONFIG');
 }
 function normalizeClassroomConfig(value) {
   const input = value && typeof value === 'object' ? value : {};
@@ -46,20 +48,23 @@ function normalizeClassroomConfig(value) {
     const count = integer(raw.count, `${key} 生成框体数量`, { min: 0, max: 20, fallback: defaults.count });
     const model = String(raw.model || '').trim().slice(0, 120) || null;
     const capabilities = classroomCapabilities(modality, model);
+    // 数量为 0 的框体按宽松模式处理：只做兜底，不因历史默认值（如 480p）报错。
+    const lenient = count === 0;
     // 留空时回落到该模型支持的第一个取值，避免默认值恰好不被该模型支持。
     const submittedRatio = normalizeAspectRatio(raw.aspectRatio);
     const aspectRatio = submittedRatio
-      ? pickCapability(submittedRatio, capabilities.aspectRatios, `${key} 生成比例`, submittedRatio)
+      ? pickCapability(submittedRatio, capabilities.aspectRatios, `${key} 生成比例`, submittedRatio, { lenient })
       : (capabilities.aspectRatios[0] || defaults.aspectRatio);
     const submittedResolution = String(raw.resolution ?? '').trim();
     const resolution = submittedResolution
-      ? pickCapability(submittedResolution, capabilities.resolutions, `${key} 清晰度`, submittedResolution)
+      ? pickCapability(submittedResolution, capabilities.resolutions, `${key} 清晰度`, submittedResolution, { lenient })
       : (capabilities.resolutions[0] || defaults.resolution);
     if (key === 'video') {
       const submittedDuration = raw.durationSeconds === undefined || raw.durationSeconds === '' ? null : integer(raw.durationSeconds, '视频时长', { min: 1, max: 600 });
-      const durationSeconds = submittedDuration === null ? (capabilities.durations[0] || defaults.durationSeconds) : submittedDuration;
+      let durationSeconds = submittedDuration === null ? (capabilities.durations[0] || defaults.durationSeconds) : submittedDuration;
       if (capabilities.durations.length && !capabilities.durations.includes(durationSeconds)) {
-        throw errors.badRequest(`视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`, 'INVALID_GENERATION_CONFIG');
+        if (lenient) durationSeconds = capabilities.durations[0];
+        else throw errors.badRequest(`视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`, 'INVALID_GENERATION_CONFIG');
       }
       // 模型不支持生成音频时，勾选也按关闭处理。
       return { count, aspectRatio, resolution, durationSeconds, model, audio: raw.audio === true && capabilities.audio === true };
@@ -1438,10 +1443,13 @@ export async function handleAdmin(ctx) {
         if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(lessonStatus)) throw errors.badRequest(`第${index + 1}课状态无效`, 'INVALID_LESSON_STATUS');
          const lessonId = id('lesson'); const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode || seriesDeliveryMode); const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
          q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
-         createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, classroomConfig, canvasTemplateSnapshot: lesson.canvasTemplateSnapshot });
+         createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, classroomConfig, canvasTemplateSnapshot: lesson.canvasTemplateSnapshot, teachingGroups: lesson.teachingGroups });
       });
     });
-     createdLessonIds.forEach((lesson) => replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot));
+     createdLessonIds.forEach((lesson) => {
+       replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot);
+       if (lesson.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, lesson.teachingGroups);
+     });
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }

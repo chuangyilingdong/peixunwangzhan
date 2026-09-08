@@ -85,6 +85,7 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .wizard-steps li.is-active { color:#fff; border-color:var(--purple); background:var(--purple); }
 .wizard-steps li.is-active span { color:var(--purple); background:#fff; }
 .course-create-summary { padding:4px 0; }
+.lesson-draft-config { margin-top:12px; padding:16px; border:1px solid #ece7f8; border-radius:12px; background:#fff; }
 .publish-check { display:flex; align-items:center; gap:11px; padding:12px 14px; border:1px solid var(--line); border-radius:11px; background:#fbfaff; font-size:13px; }
 .publish-check strong { display:grid; place-items:center; width:22px; height:22px; border-radius:50%; color:#fff; font-size:12px; background:#c9c2de; }
 .publish-check.is-ok { border-color:#c9ecdb; background:#f3fcf7; }
