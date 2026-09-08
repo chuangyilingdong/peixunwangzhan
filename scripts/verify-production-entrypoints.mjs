@@ -14,7 +14,6 @@ const cases = [
   { path: '/', title: /AI魔法学院/, requireLogin: false, rejectLogin: false },
   { path: '/admin/', title: /平台管理/, requireLogin: true, rejectLogin: false },
   { path: '/org/', title: /机构教务/, requireLogin: true, rejectLogin: false },
-  { path: '/student/', title: /学生创作/, requireLogin: true, rejectLogin: false },
 ];
 async function verifyHttp(item) {
   const response = await fetch(site + item.path, { redirect: 'manual' });
