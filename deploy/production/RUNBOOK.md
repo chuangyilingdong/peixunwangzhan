@@ -6,7 +6,7 @@
 - 服务：`learning-platform-production`
 - API：`127.0.0.1:8789`，仅回环；生产 env 必须设置 `API_HOST=127.0.0.1`
 - 数据库：`/srv/ai-kids-platform/production/data/platform.db`
-- 回滚路径：`learning-platform-internal-test`（8788，切换后停止并禁用，不删除）
+- 回滚路径：切换 `production/current` 软链到上一 release（`deploy/production/rollback-production.sh`）后重启服务；原内测服务 `learning-platform-internal-test` 已下线（2026-09-08 复核为 not-found），见 `docs/operations/交接说明.md`
 
 ## 启停与健康检查
 
@@ -108,15 +108,20 @@ node scripts/p9-live-security-smoke.mjs
 
 所有敏感路径均为 404 后，才可将 P9-D05 从 `[-]` 更新为 `[x]`。
 
-## 回滚到内测
+## 回滚到内测（已失效，2026-09-08）
 
-生产切换失败且需要回到切换前版本时：
+> ⚠️ 内测服务 `learning-platform-internal-test` 已删除（`systemctl` 报 not-found），下面这套回滚**不可再执行**，仅作历史记录。
+> 现在回滚走 release 软链：`bash deploy/production/rollback-production.sh --release /srv/ai-kids-platform/production/releases/<known-good>`，
+> 或直接切 `production/current` 软链后 `systemctl restart learning-platform-production`。
+> 详见 `docs/operations/交接说明.md` 第六节。
+
+生产切换失败且需要回到切换前版本时（历史做法）：
 
 ```bash
 sudo cp /etc/nginx/backups/iicili.cyou.before-production-switch.<stamp> /etc/nginx/sites-enabled/iicili.cyou
 sudo nginx -t && sudo systemctl reload nginx
 sudo systemctl stop learning-platform-production
-sudo systemctl start learning-platform-internal-test
+sudo systemctl start learning-platform-internal-test   # 该单元已不存在
 ```
 
 若 production 已产生写入，按切换前内测库快照处理数据回滚；原内测库不再覆盖生产库。
