@@ -262,6 +262,7 @@ CREATE TABLE IF NOT EXISTS course_lessons (
   lesson_content TEXT NOT NULL DEFAULT '',
   delivery_mode TEXT NOT NULL DEFAULT 'CANVAS' CHECK (delivery_mode IN ('CANVAS','VIBECODING')),
   classroom_config TEXT NOT NULL DEFAULT '{}',
+  canvas_template_snapshot TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
@@ -1383,6 +1384,7 @@ try { db.exec("ALTER TABLE course_series ADD COLUMN grade_range TEXT NOT NULL DE
 try { db.exec("ALTER TABLE course_lessons ADD COLUMN lesson_content TEXT NOT NULL DEFAULT ''"); } catch (_) {}
 try { db.exec("ALTER TABLE course_lessons ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'CANVAS'"); } catch (_) {}
 try { db.exec("ALTER TABLE course_lessons ADD COLUMN classroom_config TEXT NOT NULL DEFAULT '{}'"); } catch (_) {}
+try { db.exec("ALTER TABLE course_lessons ADD COLUMN canvas_template_snapshot TEXT NOT NULL DEFAULT '{}'"); } catch (_) {}
 
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }

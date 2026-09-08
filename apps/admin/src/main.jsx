@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, readSession, Status, useData, writeSession } from '@platform/shared';
 import { OrgRechargeDialog, RechargeHistoryPanel } from './components/CreditManagement.jsx';
+import { CanvasEditor } from '@platform/canvas';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
@@ -412,6 +413,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   const capabilities = edit.capabilities ?? lesson.capabilities ?? ['text'];
   const groups = edit.materialGroups ?? lesson.materialGroups ?? [];
   const classroomConfig = classroomConfigFor(lesson, edit);
+  const canvasTemplateSnapshot = edit.canvasTemplateSnapshot ?? lesson.canvasTemplateSnapshot ?? {};
   const update = (patch) => onChange({ ...edit, ...patch });
   function updateGroup(index, patch) { update({ materialGroups: groups.map((group, i) => i === index ? { ...group, ...patch } : group) }); }
   function updateMaterial(groupIndex, materialIndex, patch) { update({ materialGroups: groups.map((group, i) => i !== groupIndex ? group : { ...group, materials: (group.materials || []).map((item, j) => j === materialIndex ? { ...item, ...patch } : item) }) }); }
@@ -448,6 +450,10 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
       <div className="lesson-generation-slots"><div className="lesson-config-heading"><strong>本课生成框体限制</strong><span className="muted">学生只能使用这里配置的数量、比例、尺寸、时长和模型</span></div>
         <div className="form-grid"><label>生图框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.image.count} onChange={(event) => updateSlot('image', { count: event.target.value })} /></label><label>生图比例<input value={classroomConfig.generationSlots.image.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('image', { aspectRatio: event.target.value })} /></label><label>生图尺寸<input value={classroomConfig.generationSlots.image.size} placeholder="1024x576" onChange={(event) => updateSlot('image', { size: event.target.value })} /></label><label>生图模型<input value={classroomConfig.generationSlots.image.model || ''} placeholder="模型标识（可选）" onChange={(event) => updateSlot('image', { model: event.target.value })} /></label></div>
         <div className="form-grid"><label>生视频框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.video.count} onChange={(event) => updateSlot('video', { count: event.target.value })} /></label><label>生视频比例<input value={classroomConfig.generationSlots.video.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('video', { aspectRatio: event.target.value })} /></label><label>生视频尺寸<input value={classroomConfig.generationSlots.video.size} placeholder="1920x1080" onChange={(event) => updateSlot('video', { size: event.target.value })} /></label><label>单个视频时长（秒）<input type="number" min="1" max="120" value={classroomConfig.generationSlots.video.durationSeconds} onChange={(event) => updateSlot('video', { durationSeconds: event.target.value })} /></label><label>生视频模型<input value={classroomConfig.generationSlots.video.model || ''} placeholder="模型标识（可选）" onChange={(event) => updateSlot('video', { model: event.target.value })} /></label></div>
+      </div>
+      <div className="lesson-canvas-template">
+        <div className="lesson-config-heading"><strong>默认画布模板</strong><span className="muted">学生进入本课时时将看到该初始画布（可留空，则使用标准入门底稿）</span></div>
+        <CanvasEditor initialSnapshot={canvasTemplateSnapshot} onChange={(snapshot) => update({ canvasTemplateSnapshot: snapshot })} showStarter={false} capabilities={['text', 'image', 'video', 'music', 'podcast', 'dubbing']} />
       </div>
     </>}
   </div>;
@@ -531,7 +537,7 @@ function Courses({ api }) {
   }
   async function saveLesson(lesson) {
     const edit = lessonEdits[lesson.id] || {};
-    await run(`admin/course-lessons/${lesson.id}`, 'PUT', { title: edit.title ?? lesson.title, summary: edit.summary ?? lesson.summary, durationMinutes: Number(edit.durationMinutes ?? lesson.durationMinutes), status: edit.status ?? lesson.status, lessonContent: edit.lessonContent ?? lesson.lessonContent ?? '', deliveryMode: edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS', classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {}, capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'], materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [] }, `课时「${edit.title ?? lesson.title}」已保存。`);
+    await run(`admin/course-lessons/${lesson.id}`, 'PUT', { title: edit.title ?? lesson.title, summary: edit.summary ?? lesson.summary, durationMinutes: Number(edit.durationMinutes ?? lesson.durationMinutes), status: edit.status ?? lesson.status, lessonContent: edit.lessonContent ?? lesson.lessonContent ?? '', deliveryMode: edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS', classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {}, capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'], materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [], canvasTemplateSnapshot: edit.canvasTemplateSnapshot ?? lesson.canvasTemplateSnapshot ?? {} }, `课时「${edit.title ?? lesson.title}」已保存。`);
   }
   async function deleteLesson(lesson) {
     await run(`admin/course-lessons/${lesson.id}`, 'DELETE', undefined, `课时「${lesson.title}」已删除，剩余课时已重新排序。`, `确认删除课时「${lesson.title}」？已被班级课单或课堂引用的课时无法删除。`);

@@ -733,7 +733,10 @@ export async function handleStudent(ctx) {
     const title = ctx.body?.title === undefined || String(ctx.body.title).trim() === ''
       ? `${lessonContext.lesson.title}作品`
       : nonEmptyString(ctx.body.title, '项目名称', { max: 100 });
-    const snapshot = normalizeCanvasSnapshot(ctx.body?.canvasSnapshot);
+    const template = lessonContext.lesson?.canvasTemplateSnapshot;
+    const snapshot = normalizeCanvasSnapshot(
+      template && Array.isArray(template.nodes) && template.nodes.length > 0 ? template : ctx.body?.canvasSnapshot,
+    );
     transaction(() => {
       q(
         `INSERT INTO student_projects(

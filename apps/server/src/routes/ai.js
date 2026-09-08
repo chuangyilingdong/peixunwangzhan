@@ -18,6 +18,10 @@ const PACKAGE_CAPABILITY_BY_MODALITY = {
   IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video',
   PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing',
 };
+const LESSON_CAPABILITY_BY_MODALITY = {
+  TEXT: 'text', IMAGE: 'image', VIDEO: 'video',
+  MUSIC: 'music', PODCAST: 'podcast', DUBBING: 'dubbing',
+};
 
 function normalizedModality(value) {
   const modality = String(value ?? 'TEXT').trim().toUpperCase();
@@ -125,6 +129,17 @@ export async function handleAi(ctx) {
         : null;
       assertCapability(modality, currentSession, pkg);
       assertSessionAiControls({ modality, session: currentSession, orgId, userId, credits });
+
+      const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
+      if (lessonCapability && !(currentContext.lesson?.capabilities || []).includes(lessonCapability)) {
+        throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
+      }
+      const generationSlots = currentContext.lesson?.classroomConfig?.generationSlots || {};
+      const slotLimit = modality === 'IMAGE' ? Number(generationSlots.image?.count || 0) : modality === 'VIDEO' ? Number(generationSlots.video?.count || 0) : 0;
+      if (slotLimit > 0) {
+        const generatedCount = Number(row('SELECT COUNT(*) AS n FROM media_assets WHERE project_id=? AND modality=?', [projectId, modality])?.n || 0);
+        if (generatedCount >= slotLimit) throw errors.forbidden('本课已生成素材数量达到上限', 'LESSON_GENERATION_SLOT_LIMIT');
+      }
 
       const aiLimit = currentUser.ai_credit_limit == null ? null : Number(currentUser.ai_credit_limit);
       if (aiLimit !== null && Number(currentUser.ai_credits_used || 0) + credits > aiLimit) {

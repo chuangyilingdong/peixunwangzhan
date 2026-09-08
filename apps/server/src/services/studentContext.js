@@ -210,6 +210,10 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
         lesson.duration_minutes AS lesson_duration_minutes,
         lesson.prompt_pack_asset_id AS lesson_prompt_pack_asset_id,
         lesson.outcome_pack_asset_id AS lesson_outcome_pack_asset_id,
+        lesson.lesson_content AS lesson_lesson_content,
+        lesson.delivery_mode AS lesson_delivery_mode,
+        lesson.classroom_config AS lesson_classroom_config,
+        lesson.canvas_template_snapshot AS lesson_canvas_template_snapshot,
         lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at,
         series.id AS series_id, series.title AS series_title, series.description AS series_description,
         series.owner_type AS series_owner_type, series.org_id AS series_org_id,
@@ -270,6 +274,10 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
     duration_minutes: data.lesson_duration_minutes,
     prompt_pack_asset_id: data.lesson_prompt_pack_asset_id,
     outcome_pack_asset_id: data.lesson_outcome_pack_asset_id,
+    lesson_content: data.lesson_lesson_content,
+    delivery_mode: data.lesson_delivery_mode,
+    classroom_config: data.lesson_classroom_config,
+    canvas_template_snapshot: data.lesson_canvas_template_snapshot,
     created_at: data.lesson_created_at, updated_at: data.lesson_updated_at,
   });
   const activeSession = data.active_session_id ? normalizeSession({

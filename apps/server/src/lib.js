@@ -428,6 +428,7 @@ export function normalizeLesson(value) {
     lessonContent: value.lesson_content || '',   // P5-W05
     deliveryMode: value.delivery_mode || 'CANVAS',
     classroomConfig: parseJson(value.classroom_config, {}),
+    canvasTemplateSnapshot: parseJson(value.canvas_template_snapshot, {}),
     ...lessonCanvasConfig(value.id),
     createdAt: value.created_at,
     updatedAt: value.updated_at,

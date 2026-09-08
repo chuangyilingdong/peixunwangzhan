@@ -15,6 +15,7 @@ const MODALITY_LABELS = {
 };
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo', PODCAST: 'allowPodcast', DUBBING: 'allowDubbing' };
 const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video', PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing' };
+const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music', PODCAST: 'podcast', DUBBING: 'dubbing' };
 const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
@@ -182,6 +183,16 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     const pkg = packageForUser(user, auth.user.orgId);
     assertCapability(modality, freshContext.activeSession, pkg);
     assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: auth.user.orgId, userId: auth.user.id, credits: 1 });
+    const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
+    if (lessonCapability && !(freshContext.lesson?.capabilities || []).includes(lessonCapability)) {
+      throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
+    }
+    const generationSlots = freshContext.lesson?.classroomConfig?.generationSlots || {};
+    const slotLimit = modality === 'IMAGE' ? Number(generationSlots.image?.count || 0) : modality === 'VIDEO' ? Number(generationSlots.video?.count || 0) : 0;
+    if (slotLimit > 0) {
+      const generatedCount = Number(count('SELECT COUNT(*) AS n FROM media_assets WHERE project_id=? AND modality=?', [project.id, modality]) || 0);
+      if (generatedCount >= slotLimit) throw errors.forbidden('本课已生成素材数量达到上限', 'LESSON_GENERATION_SLOT_LIMIT');
+    }
     const aiLimit = user.ai_credit_limit == null ? null : Number(user.ai_credit_limit);
     if (aiLimit !== null && Number(user.ai_credits_used || 0) + 1 > aiLimit) throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
     const allowance = Number(user.monthly_credit_allowance || 0) + Number(user.monthly_bonus_credits || 0) + Number(user.month_period_boost_credits || 0);

@@ -71,7 +71,17 @@ function accessibleLesson(currentOrgId, lessonId) {
     [currentOrgId, lessonId, currentOrgId],
   );
 }
-function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}) {
+function normalizeCanvasTemplateSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return {};
+  const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes.slice(0, 50) : [];
+  const edges = Array.isArray(snapshot.edges) ? snapshot.edges.slice(0, 100) : [];
+  const viewport = snapshot.viewport && typeof snapshot.viewport === 'object'
+    ? { x: Number(snapshot.viewport.x) || 0, y: Number(snapshot.viewport.y) || 0, zoom: Number(snapshot.viewport.zoom) || 1 }
+    : { x: 0, y: 0, zoom: 1 };
+  return { nodes, edges, viewport };
+}
+
+function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}) {
   const groups = Array.isArray(materialGroups) ? materialGroups.slice(0, 50) : [];
   const caps = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value).trim().toLowerCase()).filter((value) => ['text', 'image', 'video', 'music', 'podcast', 'dubbing'].includes(value)))] : ['text'];
   const now = nowIso();
@@ -90,7 +100,7 @@ function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliv
         q('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [materialId, groupId, String(material?.title || `素材${materialIndex + 1}`).trim().slice(0, 160), String(material?.description || '').slice(0, 1000), String(material?.materialType || 'NOTE').toUpperCase().slice(0, 30), material?.assetUrl ? String(material.assetUrl).slice(0, 2000) : null, json(material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {}), materialIndex + 1, now, now]);
       });
     });
-    q('UPDATE course_lessons SET delivery_mode=?,classroom_config=?,updated_at=? WHERE id=?', [normalizeDeliveryMode(deliveryMode), json(normalizeClassroomConfig(classroomConfig)), now, lessonId]);
+    q('UPDATE course_lessons SET delivery_mode=?,classroom_config=?,canvas_template_snapshot=?,updated_at=? WHERE id=?', [normalizeDeliveryMode(deliveryMode), json(normalizeClassroomConfig(classroomConfig)), json(normalizeCanvasTemplateSnapshot(canvasTemplateSnapshot)), now, lessonId]);
   });
 }
 
@@ -1369,10 +1379,10 @@ export async function handleAdmin(ctx) {
         if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(lessonStatus)) throw errors.badRequest(`第${index + 1}课状态无效`, 'INVALID_LESSON_STATUS');
          const lessonId = id('lesson'); const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode); const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
          q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
-         createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, classroomConfig });
+         createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, classroomConfig, canvasTemplateSnapshot: lesson.canvasTemplateSnapshot });
       });
     });
-     createdLessonIds.forEach((lesson) => replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig));
+     createdLessonIds.forEach((lesson) => replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot));
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true });
   }
@@ -1487,7 +1497,7 @@ export async function handleAdmin(ctx) {
       });
       q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(series.version), now, series.id]);
     });
-    replaceQueue.forEach((item) => replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig));
+    replaceQueue.forEach((item) => replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig, item.lesson.canvasTemplateSnapshot));
     audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true });
   }
@@ -1551,9 +1561,9 @@ export async function handleAdmin(ctx) {
      const deliveryMode = body.deliveryMode === undefined ? (lesson.delivery_mode || 'CANVAS') : normalizeDeliveryMode(body.deliveryMode);
      const classroomConfig = body.classroomConfig === undefined ? parseJson(lesson.classroom_config, {}) : normalizeClassroomConfig(body.classroomConfig);
     q('UPDATE course_lessons SET title=?,summary=?,duration_minutes=?,status=?,lesson_content=?,delivery_mode=?,classroom_config=?,updated_at=? WHERE id=?', [title, summary, durationMinutes, status, lessonContent, deliveryMode, json(classroomConfig), nowIso(), lesson.id]);
-    if (body.materialGroups !== undefined || body.capabilities !== undefined || body.deliveryMode !== undefined || body.classroomConfig !== undefined) {
+    if (body.materialGroups !== undefined || body.capabilities !== undefined || body.deliveryMode !== undefined || body.classroomConfig !== undefined || body.canvasTemplateSnapshot !== undefined) {
       const currentCanvas = lessonCanvasConfig(lesson.id);
-      replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig);
+      replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig, body.canvasTemplateSnapshot ?? parseJson(lesson.canvas_template_snapshot, {}));
     }
     q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(row('SELECT version FROM course_series WHERE id=?', [lesson.series_id]).version), nowIso(), lesson.series_id]);
     audit(ctx, 'COURSE_LESSON_UPDATE', 'COURSE_LESSON', lesson.id, { title: lesson.title, status: lesson.status, durationMinutes: lesson.duration_minutes }, { title, status, durationMinutes, lessonContentChanged: body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content }, {});

@@ -45,3 +45,7 @@ Thumbs.db
 
 # 内部测试发布目录由构建脚本生成，不纳入 Git
 deploy/releases/
+
+# ZCode 客户端本地目录与 GUI 回归截图
+.zcode/
+gui-test-screenshots/
