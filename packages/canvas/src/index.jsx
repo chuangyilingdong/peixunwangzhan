@@ -132,8 +132,10 @@ function useCanvasActions() {
 }
 
 function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140 }) {
+  const actions = useContext(CanvasActionsContext);
+  const readOnly = Boolean(actions?.readOnly);
   return <div className={`learning-node learning-node--${tone}`}>
-    <NodeResizer isVisible={Boolean(selected)} minWidth={minWidth} minHeight={minHeight} lineClassName="learning-node__resize-line" handleClassName="learning-node__resize-handle" />
+    <NodeResizer isVisible={Boolean(selected) && !readOnly} minWidth={minWidth} minHeight={minHeight} lineClassName="learning-node__resize-line" handleClassName="learning-node__resize-handle" />
     <Handle type="target" position={Position.Left} className="learning-node__handle" />
     <div className="learning-node__heading"><span>{icon}</span><strong>{title}</strong></div>
     {children}
@@ -391,7 +393,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly }}>
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}
