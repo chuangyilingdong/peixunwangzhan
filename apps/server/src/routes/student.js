@@ -1034,6 +1034,11 @@ export async function handleStudent(ctx) {
           [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now, auth.user.id, now],
         );
       }
+      // 用量报表按 work_id 关联作品（works.project_id 唯一）；生成发生在提交之前，只能在这里回填
+      q(
+        'UPDATE usage_records SET work_id=? WHERE project_id=? AND org_id=? AND user_id=?',
+        [workId, fresh.id, auth.user.orgId, auth.user.id],
+      );
       q(
         `INSERT INTO work_submissions(
           id,work_id,project_id,student_id,org_id,round,title,description,canvas_snapshot,snapshot_version,submitted_at,created_at,updated_at

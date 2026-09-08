@@ -545,7 +545,7 @@ export async function handleOrg(ctx) {
       lessonId: item.session_lesson_id || item.project_lesson_id || null, lessonTitle: item.lesson_title || null,
       projectId: item.project_id || null, projectTitle: item.project_title || null, generationJobId: item.generation_job_id || null,
       modality: item.modality, model: item.model || item.job_model || null, provider: item.job_provider || null,
-      credits: Number(item.credits_charged || 0), inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
+      credits: Number(item.credits_charged || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total: items.length, filters: { days, modality: modality || null, status: status || null, classId: classId || null, sessionId: sessionId || null, studentId: studentId || null } };
@@ -568,7 +568,7 @@ export async function handleOrg(ctx) {
       classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
       lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
       workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
-      credits: Number(item.credits_charged || 0), inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
+      credits: Number(item.credits_charged || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total: items.length };
@@ -672,8 +672,7 @@ export async function handleOrg(ctx) {
       totalBalance: Number(account.credit_balance || 0) + Number(account.frozen_credits || 0),
       totalCreditsIn: Number(account.total_credits_in || 0), totalCreditsSpent: Number(account.total_credits_spent || 0),
       paidTotalFen: Number(account.currency_paid_total_fen || 0), reconciliation,
-      pendingOrderCount: orders.filter((order) => order.status === 'PENDING').length,
-      paidOrderCount: orders.filter((order) => order.status === 'PAID').length,
+      // recharge_orders 未接入在线支付，当前恒为空：只返回订单列表供页面渲染空态，不再返回恒为 0 的订单计数
       orders, entries,
       policy: {
         onlinePayment: false, paymentCallback: false, autoRenew: false,

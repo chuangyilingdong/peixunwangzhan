@@ -664,6 +664,7 @@ CREATE TABLE IF NOT EXISTS usage_records (
   modality TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT 'local-p0',
   credits_charged INTEGER NOT NULL CHECK (credits_charged >= 0),
+  -- input/output_tokens 未采集：上游图片/视频接口不返回 token 用量，报表已不再读取这两个字段
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'SUCCESS' CHECK (status IN ('SUCCESS','FAILED','BLOCKED')),
@@ -1218,6 +1219,12 @@ for (const statement of [
 db.exec('CREATE INDEX IF NOT EXISTS idx_works_org_featured ON works(org_id, featured_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_usage_session_user_created ON usage_records(class_session_id, user_id, created_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_usage_generation_job ON usage_records(generation_job_id)');
+// usage_records.work_id 此前从未写入过（works.project_id 唯一，一个项目对应一个作品）。
+// 这里一次性回填历史用量，之后由学生提交作品的流程实时维护（见 student.js 的 /projects/:id/submit）。
+db.exec(`UPDATE usage_records
+         SET work_id=(SELECT works.id FROM works WHERE works.project_id=usage_records.project_id)
+         WHERE work_id IS NULL AND project_id IS NOT NULL
+           AND EXISTS (SELECT 1 FROM works WHERE works.project_id=usage_records.project_id)`);
 // Lightweight forward-compatible migration for AI generation retries.
 try { db.exec('ALTER TABLE generation_jobs ADD COLUMN retry_of_job_id TEXT'); }
 catch (error) { if (String(error?.message || '').includes('duplicate column name')) { /* column already exists */ } else throw error; }

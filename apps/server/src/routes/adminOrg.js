@@ -2060,7 +2060,7 @@ export async function handleAdmin(ctx) {
       classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
       lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
       workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
-      credits: Number(item.credits_charged || 0), inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
+      credits: Number(item.credits_charged || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
