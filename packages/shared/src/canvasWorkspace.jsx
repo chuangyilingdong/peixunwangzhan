@@ -252,11 +252,11 @@ export function CanvasWorkspace({ api, ...props }) {
     if (!editable) throw new Error('当前作品不可编辑');
     const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title });
     let result = queued.job;
-    for (let attempt = 0; attempt < 30 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+    for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       result = await api.get(`ai/generations/history/${encodeURIComponent(result.id)}`);
     }
-    if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || 'AI 生成失败');
+    if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || '生成仍在进行中，请稍后刷新查看');
     const asset = result.assets?.[0];
     if (!asset) throw new Error('AI 未返回可用素材');
     generations.refresh();
@@ -269,11 +269,11 @@ export function CanvasWorkspace({ api, ...props }) {
     try {
       const queued = await api.post('ai/generations/async', { projectId: project.data.id, ...generationForm });
       let result = queued.job;
-      for (let attempt = 0; attempt < 30 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+      for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         result = await api.get(`ai/generations/history/${encodeURIComponent(result.id)}`);
       }
-      if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || 'AI 生成失败');
+      if (result.status !== 'SUCCEEDED') throw new Error(result.errorMessage || '生成仍在进行中，请稍后刷新查看');
       const asset = result.assets?.[0];
       if (asset) addGeneratedAsset(asset, generationForm.prompt, generationForm.modality);
       setGenerationForm((current) => ({ ...current, prompt: '', title: '' }));
