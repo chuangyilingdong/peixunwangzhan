@@ -4,7 +4,6 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-route
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, readSession, Status, useData, writeSession } from '@platform/shared';
 import { OrgRechargeDialog, RechargeHistoryPanel } from './components/CreditManagement.jsx';
 import { Courses } from './components/CourseManagement.jsx';
-import { LeadManagement } from './components/LeadManagement.jsx';
 import { BillingSettings } from './components/BillingSettings.jsx';
 import '@platform/shared/styles.css';
 
@@ -15,7 +14,6 @@ const navigation = [
   { to: '/dashboard', icon: '◈', label: '平台概览', permission: 'ADMIN_ANALYTICS' },
   { to: '/organizations', icon: '♙', label: '机构管理', permission: 'ADMIN_ORGANIZATIONS' },
   { to: '/users', icon: '◉', label: '平台用户', permission: 'ADMIN_ORGANIZATIONS' },
-  { to: '/leads', icon: '✉', label: '预约线索', permission: 'ADMIN_ANALYTICS' },
   { heading: '内容与活动' },
   { to: '/courses', icon: '▦', label: '平台课程', permission: 'ADMIN_COURSES' },
   { to: '/works', icon: '◇', label: '平台作品库', permission: 'ADMIN_WORKS' },
@@ -1211,7 +1209,6 @@ function App() {
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
     <Route path="/courses" element={page('ADMIN_COURSES', <Courses api={api} />)} />
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
-    <Route path="/leads" element={page('ADMIN_ANALYTICS', <LeadManagement api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
     <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />

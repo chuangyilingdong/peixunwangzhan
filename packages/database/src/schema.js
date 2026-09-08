@@ -970,22 +970,6 @@ CREATE TABLE IF NOT EXISTS help_feedback (
 CREATE INDEX IF NOT EXISTS idx_help_feedback_org_status ON help_feedback(org_id, status, submitted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_help_feedback_user ON help_feedback(user_id, submitted_at DESC);
 
-CREATE TABLE IF NOT EXISTS client_download_releases (
-  id TEXT PRIMARY KEY,
-  platform TEXT NOT NULL CHECK (platform IN ('MACOS_APPLE','WINDOWS_X64')),
-  version TEXT NOT NULL,
-  channel TEXT NOT NULL DEFAULT 'STABLE' CHECK (channel IN ('STABLE','BETA','INTERNAL')),
-  download_url TEXT NOT NULL,
-  file_size INTEGER,
-  sha256 TEXT,
-  release_notes TEXT NOT NULL DEFAULT '',
-  published_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(platform, version, channel)
-);
-CREATE INDEX IF NOT EXISTS idx_client_downloads_platform ON client_download_releases(platform, channel, published_at DESC);
-
 -- 统一文件元数据与访问授权（P4-C04）
 CREATE TABLE IF NOT EXISTS file_assets (
   id TEXT PRIMARY KEY,

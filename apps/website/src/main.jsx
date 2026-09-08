@@ -74,9 +74,9 @@ function Logo(){return <Link className="logo" to="/"><i>✦</i>AI魔法学院</L
 function Header({ user, userBadge }){
   const loc=useLocation();
   const nav=[['/','首页'],['/learn','学习上课'],['/works','作品广场'],['/free-canvas','自由画布'],['/free-chat','自由对话']];
-  return <header><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="download" to="/download">下载客户端</Link><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div></div></header>;
+  return <header><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div></div></header>;
 }
-function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><Link to="/download">下载客户端</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · Mac / Windows</span></div></footer>}
+function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · Mac / Windows</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link onClick={()=>trackAnalytics('cta_click',{target:to})} to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';return <article className={'work w'+index%6}><div className="art"><span>{emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url){trackAnalytics('work_view',{resourceType:'work'});navigate(url);}}}>打开体验 <b>↗</b></button></div></article>}
@@ -204,7 +204,6 @@ function Works(){
 }
 function Handbook(){return <><Title eyebrow="产品手册 · 2026" title={<>一站式 AI 创作<br/><em>开课方案</em></>} desc="让每个孩子用 AI 做出自己的作品。面向教培机构、学校与青少年科创营。"/><main className="inner"><section className="cover"><div><b>AI魔法学院</b><h2>让每个孩子<br/>用 AI 做出<br/><em>自己的作品</em></h2><p>青少年 AI 编程创作平台<br/>游戏 · 动画 · 开源硬件</p><small>五格殿下 · 机构合作手册 · 2026</small></div><aside><i>✦</i><span>创作<br/>课程<br/>账号<br/>计费<br/>作品</span></aside></section><section className="points">{[['01','统一平台','创作、课程、账号、计费、作品，一个入口完成。'],['02','机构即可开班','标准课包 + 魔法石管控，老师专心带课。'],['03','政策窗口对齐','素养课好落地，生成式 AI 可用可管。']].map(x=><div key={x[0]}><b>{x[0]}</b><strong>{x[1]}</strong><p>{x[2]}</p></div>)}</section><End title="下载完整机构合作手册" text="先预约演示，我们会把最新版本、课件示例与合作说明发给你。"/></main></>}
 function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','原生桌面端一体：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构魔法石池，按用量记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>AI魔法学院</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>预约机构演示</Button></section></main></>}
-const DOWNLOAD_PLATFORMS=[['MACOS_APPLE','⌘','macOS 版','适用于 Apple 芯片 Mac 电脑'],['WINDOWS_X64','⊞','Windows 版','适用于 Windows 10 / 11 64 位']];
 const CMS_FALLBACK = { HOME: { heroKicker: '教培机构青少年 AI 开课平台', heroTitle: '给机构一套', heroAccent: '能落地的青少年 AI 课', heroDescription: 'AI魔法学院把课程、桌面客户端、机构账号、魔法石计费与作品展厅放在一个平台里。', trustTitle: '响应教育部「做中学」领航行动', trustDescription: '真实问题 · 项目式探究 · 每节课都有作品' } };
 function useWebsiteContent(key) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
@@ -212,39 +211,6 @@ function useWebsiteContent(key) {
   return { ...state, data: state.data || CMS_FALLBACK[key] || null };
 }
 
-function Download(){
-  const [state,setState]=useState({loading:true,error:null,data:null});
-  useEffect(()=>{
-    let live=true;
-    publicApi.get('public/downloads')
-      .then((body)=>{if(live)setState({loading:false,error:null,data:body||null});})
-      .catch((error)=>{if(live)setState({loading:false,error:error.message,data:null});});
-    return()=>{live=false};
-  },[]);
-  const platforms=DOWNLOAD_PLATFORMS.map(([key,icon,title,desc])=>({key,icon,title,desc,release:state.data?.byPlatform?.[key]||null}));
-  const releaseState=(platform)=>{
-    if(state.loading)return <small className="download-state">正在读取版本状态…</small>;
-    if(platform.release)return <>
-      <a className="button" href={platform.release.downloadUrl}>下载 v{platform.release.version} <b>↗</b></a>
-      <small>{platform.release.channel==='STABLE'?'正式版':platform.release.channel==='BETA'?'测试版':'内测版'} · {platform.release.releaseNotes}</small>
-    </>;
-    return <>
-      <button className="button" disabled>暂无真实安装包</button>
-      <small>平台尚未配置该平台安装包，不提供虚假下载；可先使用浏览器访问 Web 版。</small>
-    </>;
-  };
-  return <>
-    <Title eyebrow="下载客户端" title={<>安装一次，<em>课堂开箱即用</em></>} desc={state.loading?'正在读取平台真实发布状态…':'支持 macOS（Apple 芯片）与 Windows 64 位。仅当平台配置真实安装包后才提供下载。'}/>
-    <main className="inner">
-      <section className="downloads">{platforms.map((platform)=>(
-        <article key={platform.key}><i>{platform.icon}</i><h2>{platform.title}</h2><p>{platform.desc}</p>{releaseState(platform)}</article>
-      ))}</section>
-      {state.error?<div className="note">⚠ <div><b>下载状态读取失败</b><p>{state.error} 请稍后刷新，或联系平台管理员确认客户端发布状态。</p></div></div>:null}
-      {state.data?.status==='NOT_CONFIGURED'?<div className="note">✦ <div><b>当前尚未发布桌面客户端</b><p>{state.data.statement} 课堂可先使用现代浏览器访问 Web 版完成创作。</p></div></div>:null}
-      <div className="note">✦ <div><b>第一次使用？</b><p>机构学员使用管理员提供的账号登录。课堂依赖在线服务，建议提前检查机房网络。</p></div><Link to="/org">查看机构开课方案 ↗</Link></div>
-    </main>
-  </>;
-}
 function LegalPage({ type }){
   const document = LEGAL_DOCUMENTS[type] || LEGAL_DOCUMENTS.privacy;
   return <><Title eyebrow="协议与隐私" title={<>{document.title}</>} desc={document.intro}/><main className="inner legal-page"><div className="legal-meta"><span className="status-pill">{LEGAL_STATUS}</span><span>版本 {LEGAL_VERSION}</span><span>生效日期 {LEGAL_EFFECTIVE_DATE}</span><span>主体：{LEGAL_OWNER}</span></div><div className="legal-notice">本页面是上线准备稿。正式对外服务前，运营主体、备案信息和法务审核结果应由业务方确认并替换；如与正式发布版本不一致，以正式发布版本为准。</div>{document.sections.map(([heading,body])=><section className="legal-section" key={heading}><h2>{heading}</h2><p>{body}</p></section>)}<div className="legal-links"><b>相关入口</b><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><Link to="/demo">预约演示</Link></div></main></>;
@@ -420,7 +386,6 @@ function App(){
       '/works': '作品广场 · AI魔法学院',
       '/handbook': '产品手册 · AI魔法学院',
       '/compare': '选型对比 · AI魔法学院',
-      '/download': '下载说明 · AI魔法学院',
       '/demo': '预约演示 · AI魔法学院',
       '/terms': '用户协议 · AI魔法学院',
       '/privacy': '隐私政策 · AI魔法学院',
@@ -510,7 +475,6 @@ function App(){
         <Route path='/works/:token' element={<WorkDetailPage api={publicApi}/>}/>
         <Route path='/handbook' element={<Handbook/>}/>
         <Route path='/compare' element={<Compare/>}/>
-        <Route path='/download' element={<Download/>}/>
         <Route path='/demo' element={<Demo/>}/>
         <Route path='/terms' element={<LegalPage type='terms'/>}/>
         <Route path='/privacy' element={<LegalPage type='privacy'/>}/>

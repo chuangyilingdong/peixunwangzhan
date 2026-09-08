@@ -791,18 +791,6 @@ export function handlePublicCommunication(ctx) {
     return normalizeWebsiteContent(item);
   }
 
-  if (pathname === '/api/public/downloads' && method === 'GET') {
-    const releases = latestDownloadReleases();
-    return {
-      generatedAt: nowIso(),
-      status: releases.length ? 'PARTIAL' : 'NOT_CONFIGURED',
-      statement: releases.length ? '以下仅展示平台已配置的真实客户端版本。' : '平台尚未配置真实客户端安装包，不提供虚假下载链接。',
-      items: releases,
-      byPlatform: Object.fromEntries(releases.map((item) => [item.platform, item])),
-      webCompatibility: ['Chrome / Edge 最新两个稳定版本', 'Safari 17+（macOS）', '课堂依赖稳定网络；建议机构机房提前检查'],
-    };
-  }
-
   // P5-W08: 公开协议元数据；正文由官网静态页展示，版本由业务 / 法务确认后替换。
   if (pathname === '/api/public/legal' && method === 'GET') {
     return { version: LEGAL_POLICY_VERSION, effectiveDate: '2026-09-03', status: 'DRAFT_PENDING_LEGAL_CONFIRMATION', documents: [{ type: 'TERMS', path: '/terms' }, { type: 'PRIVACY', path: '/privacy' }, { type: 'MINORS', path: '/minors' }] };
@@ -1219,11 +1207,6 @@ export async function handleAdminCommunication(ctx) {
     audit(ctx, 'PROMO_MATERIAL_UPDATE', 'PROMO_MATERIAL', target.id, { status: target.status }, { status, visibility: material.visibility });
     return normalizeMaterial(row('SELECT * FROM promo_materials WHERE id=?', [target.id]));
   }
-  if (part === '/client-releases' && method === 'GET') {
-    requireRole(ctx, ['SUPER_ADMIN']);
-    const items = rows('SELECT * FROM client_download_releases ORDER BY platform, channel, published_at DESC, created_at DESC').map(normalizeDownloadRelease);
-    return { items, total: items.length };
-  }
   // P5-W02: 商机管理（leads）
   if (part === '/leads' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -1235,41 +1218,6 @@ export async function handleAdminCommunication(ctx) {
     }
     const items = rows(`SELECT * FROM leads WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`, [...params, limit]).map((row) => normalizeLead(row));
     return { items, total: items.length };
-  }
-  if (part === '/client-releases' && method === 'POST') {
-    requireRole(ctx, ['SUPER_ADMIN']);
-    const platform = String(ctx.body?.platform || '').toUpperCase();
-    if (!['MACOS_APPLE','WINDOWS_X64'].includes(platform)) throw errors.badRequest('下载平台无效', 'INVALID_DOWNLOAD_PLATFORM');
-    const channel = String(ctx.body?.channel || 'STABLE').toUpperCase();
-    if (!['STABLE','BETA','INTERNAL'].includes(channel)) throw errors.badRequest('下载通道无效', 'INVALID_DOWNLOAD_CHANNEL');
-    const version = nonEmptyString(ctx.body?.version, '版本号', { max: 60 });
-    if (!/^[0-9]+(\.[0-9]+){0,3}(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?(\+[A-Za-z0-9][A-Za-z0-9.-]*)?$/.test(version)) throw errors.badRequest('版本号格式无效', 'INVALID_DOWNLOAD_VERSION');
-    const downloadUrl = nonEmptyString(ctx.body?.downloadUrl, '下载地址', { max: 1000 });
-    if (!/^https:\/\//i.test(downloadUrl)) throw errors.badRequest('下载地址必须为 HTTPS', 'DOWNLOAD_URL_NOT_HTTPS');
-    const releaseNotes = nonEmptyString(ctx.body?.releaseNotes, '版本说明', { max: 4000 });
-    const publishNow = bool(ctx.body?.publishNow, false);
-    const duplicate = row('SELECT id FROM client_download_releases WHERE platform=? AND version=? AND channel=?', [platform, version, channel]);
-    if (duplicate) throw errors.conflict('该平台、版本和通道的客户端已存在', 'CLIENT_RELEASE_ALREADY_EXISTS');
-    const now = nowIso();
-    const releaseId = id('clientrelease');
-    q(
-      'INSERT INTO client_download_releases(id,platform,version,channel,download_url,file_size,sha256,release_notes,published_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-      [releaseId, platform, version, channel, downloadUrl, null, null, releaseNotes, publishNow ? now : null, now, now],
-    );
-    audit(ctx, 'PLATFORM_CLIENT_RELEASE_CREATE', 'CLIENT_DOWNLOAD_RELEASE', releaseId, null, { platform, version, channel, published: publishNow });
-    return normalizeDownloadRelease(row('SELECT * FROM client_download_releases WHERE id=?', [releaseId]));
-  }
-  let releaseMatch = part.match(/^\/client-releases\/([^/]+)(?:\/(publish|unpublish))?$/);
-  if (releaseMatch && method === 'PUT') {
-    requireRole(ctx, ['SUPER_ADMIN']);
-    const release = row('SELECT * FROM client_download_releases WHERE id=?', [releaseMatch[1]]);
-    if (!release) throw errors.notFound('客户端版本不存在', 'CLIENT_RELEASE_NOT_FOUND');
-    const action = String(releaseMatch[2] || ctx.body?.action || '').toUpperCase();
-    if (action !== 'PUBLISH' && action !== 'UNPUBLISH') throw errors.badRequest('客户端发布操作无效', 'INVALID_CLIENT_RELEASE_ACTION');
-    const now = nowIso();
-    q('UPDATE client_download_releases SET published_at=?,updated_at=? WHERE id=?', [action === 'PUBLISH' ? now : null, now, release.id]);
-    audit(ctx, action === 'PUBLISH' ? 'PLATFORM_CLIENT_RELEASE_PUBLISH' : 'PLATFORM_CLIENT_RELEASE_UNPUBLISH', 'CLIENT_DOWNLOAD_RELEASE', release.id, normalizeDownloadRelease(release), { published: action === 'PUBLISH' }, { orgId: null });
-    return normalizeDownloadRelease(row('SELECT * FROM client_download_releases WHERE id=?', [release.id]));
   }
   // P5-W02: 商机详情 + 状态更新
   let leadMatch = part.match(/^\/leads\/([^/]+)$/);
@@ -1568,49 +1516,7 @@ function helpFeedbackRows(where, params) {
   ).map((item) => normalizeHelpFeedback(item, { includeUser: true }));
 }
 
-function normalizeDownloadRelease(value) {
-  if (!value) return null;
-  return {
-    id: value.id,
-    platform: value.platform,
-    version: value.version,
-    channel: value.channel,
-    downloadUrl: value.download_url,
-    fileSize: value.file_size == null ? null : Number(value.file_size),
-    sha256: value.sha256 || null,
-    releaseNotes: value.release_notes || '',
-    publishedAt: value.published_at || null,
-    available: Boolean(value.published_at && value.download_url),
-  };
-}
-
-function latestDownloadReleases(platform = null) {
-  const params = [];
-  let where = "published_at IS NOT NULL AND download_url <> ''";
-  if (platform) {
-    if (!['MACOS_APPLE', 'WINDOWS_X64'].includes(platform)) throw errors.badRequest('下载平台无效', 'INVALID_DOWNLOAD_PLATFORM');
-    where += ' AND platform=?';
-    params.push(platform);
-  }
-  const result = rows(
-    `SELECT release.* FROM client_download_releases release
-     JOIN (
-       SELECT platform, channel, MAX(published_at) AS latest_published_at
-       FROM client_download_releases
-       WHERE published_at IS NOT NULL AND download_url <> ''
-       GROUP BY platform, channel
-     ) latest ON latest.platform=release.platform AND latest.channel=release.channel AND latest.latest_published_at=release.published_at
-     WHERE ${where}
-     ORDER BY platform, channel`,
-    params,
-  ).map(normalizeDownloadRelease);
-  if (platform) return result[0] || null;
-  return result;
-}
-
 function helpCenterPayload() {
-  const releases = latestDownloadReleases();
-  const byPlatform = Object.fromEntries(releases.map((item) => [item.platform, item]));
   return {
     version: HELP_CENTER_VERSION,
     generatedAt: nowIso(),
@@ -1622,13 +1528,6 @@ function helpCenterPayload() {
     ],
     compatibility: {
       web: ['Chrome / Edge 最新两个稳定版本', 'Safari 17+（macOS）', '课堂依赖稳定网络；建议机构机房提前检查'],
-      client: ['桌面端配置由机构或平台管理员分发', '未配置真实安装包时不提供下载', '如遇安装失败请联系老师反馈'],
-    },
-    downloads: {
-      status: releases.length ? 'PARTIAL' : 'NOT_CONFIGURED',
-      statement: releases.length ? '以下仅展示平台已配置的真实客户端版本。' : '平台尚未配置真实客户端安装包，不提供虚假下载链接。',
-      items: releases,
-      byPlatform,
     },
     feedback: {
       categories: [...HELP_FEEDBACK_CATEGORIES],
