@@ -10,6 +10,7 @@ import { MyCreditsPage } from './pages/MyCredits.jsx';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
+import { WorkDetailPage } from './pages/WorkDetail.jsx';
 
 const SESSION_KEY = 'ai-kids-platform.session.v1';
 
@@ -78,7 +79,7 @@ function Header({ user, userBadge }){
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><Link to="/download">下载客户端</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · Mac / Windows</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link onClick={()=>trackAnalytics('cta_click',{target:to})} to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
-function Work({work,index=0}){const[url,setUrl]=useState(null);useEffect(()=>{if(work.publicUrl) setUrl(work.publicUrl);else if(work.id&&work.title){const tok=work.shareToken||work.id;setUrl('/works/shared/'+tok);}},[work]);const emoji=work.canvasSnapshot?.nodes?.[0]?.props?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';return <article className={'work w'+index%6}><div className="art"><span>{emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url){trackAnalytics('work_view',{resourceType:'work'});window.location.href=url;}}}>打开体验 <b>↗</b></button></div></article>}
+function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';return <article className={'work w'+index%6}><div className="art"><span>{emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url){trackAnalytics('work_view',{resourceType:'work'});navigate(url);}}}>打开体验 <b>↗</b></button></div></article>}
 function Title({eyebrow,title,desc}){return <section className="page-title"><div><Kicker>{eyebrow}</Kicker><h1>{title}</h1><p>{desc}</p></div></section>}
 
 
@@ -505,6 +506,8 @@ function App(){
         <Route path='/courses' element={<Courses/>}/>
         <Route path='/org' element={<Org/>}/>
         <Route path='/works' element={<Works/>}/>
+        <Route path='/works/shared/:token' element={<WorkDetailPage api={publicApi}/>}/>
+        <Route path='/works/:token' element={<WorkDetailPage api={publicApi}/>}/>
         <Route path='/handbook' element={<Handbook/>}/>
         <Route path='/compare' element={<Compare/>}/>
         <Route path='/download' element={<Download/>}/>

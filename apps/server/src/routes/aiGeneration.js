@@ -2,7 +2,7 @@ import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, q, req
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError } from '../services/providerContract.js';
-import { getAiProviderPolicy } from './billingConfig.js';
+import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { effectiveCapabilities } from '../services/modelCapabilities.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
@@ -17,7 +17,7 @@ const MODALITY_LABELS = {
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo', PODCAST: 'allowPodcast', DUBBING: 'allowDubbing' };
 const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video', PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing' };
 const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music', PODCAST: 'podcast', DUBBING: 'dubbing' };
-const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP', 'GENERATION_FIRST_FRAME_REQUIRED']);
+const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
@@ -70,6 +70,8 @@ function assertGenerationPreflight({ user, orgId, context, modality, requiresFir
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
+  // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
+  if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
   if (lessonCapability && !(context.lesson?.capabilities || []).includes(lessonCapability)) {
     throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
@@ -587,7 +589,8 @@ export async function handleAiGeneration(ctx) {
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    // 首帧缺失是业务问题，入队前就拦掉，别让任务跑一遍上游再失败。
+    // 平台模态开关（机构覆盖优先）与首帧缺失都是业务问题，入队前就拦掉，别让任务跑一遍上游再失败。
+    if (!isModalityEnabled(auth.user.orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
     const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim()) });
     if (options.inputFrame === 'FIRST' && !options.firstFrameUrl) {
       throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');

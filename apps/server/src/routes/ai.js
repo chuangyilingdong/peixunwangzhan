@@ -8,6 +8,7 @@ import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
+import { isModalityEnabled } from './billingConfig.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
 const SESSION_CAPABILITY_BY_MODALITY = {
@@ -129,6 +130,9 @@ export async function handleAi(ctx) {
         : null;
       assertCapability(modality, currentSession, pkg);
       assertSessionAiControls({ modality, session: currentSession, orgId, userId, credits });
+
+      // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
+      if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
 
       const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
       if (lessonCapability && !(currentContext.lesson?.capabilities || []).includes(lessonCapability)) {

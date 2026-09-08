@@ -836,7 +836,7 @@ export function handlePublicCommunication(ctx) {
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 60, fallback: 20 });
     const items = rows(`
       SELECT work.id, work.title, work.description, work.canvas_snapshot,
-             work.featured_at, work.submitted_at,
+             work.featured_at, work.submitted_at, work.share_token,
              user.display_name AS student_name,
              user.privacy_showcase_anonymous AS student_anon,
              organization.name AS org_name

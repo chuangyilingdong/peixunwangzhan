@@ -11,7 +11,7 @@ function canvasContentSignature(snapshot) {
   const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
   const edges = Array.isArray(snapshot.edges) ? snapshot.edges : [];
   return JSON.stringify({
-    nodes: nodes.map((node) => ({ id: node.id, type: node.type, props: node.props || {} })),
+    nodes: nodes.map((node) => ({ id: node.id, type: node.type, data: node.data || node.props || {} })),
     edges: edges.map((edge) => ({ source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle, targetHandle: edge.targetHandle })),
     viewport: snapshot.viewport || null,
   });
@@ -26,7 +26,7 @@ function snapshotDiff(fromSnapshot, toSnapshot) {
   for (const [id, node] of toNodes.entries()) {
     const prev = fromNodes.get(id);
     if (!prev) continue;
-    if (JSON.stringify(prev.props || {}) !== JSON.stringify(node.props || {})) changed.push(node);
+    if (JSON.stringify(prev.data || prev.props || {}) !== JSON.stringify(node.data || node.props || {})) changed.push(node);
   }
   const fromEdges = new Set((fromSnapshot?.edges || []).map((e) => JSON.stringify({ s: e.source, t: e.target, sh: e.sourceHandle, th: e.targetHandle })));
   const toEdges = new Set((toSnapshot?.edges || []).map((e) => JSON.stringify({ s: e.source, t: e.target, sh: e.sourceHandle, th: e.targetHandle })));
@@ -39,7 +39,8 @@ function snapshotDiff(fromSnapshot, toSnapshot) {
 function nodeDescription(snapshot, nodeId) {
   const node = (snapshot?.nodes || []).find((n) => n.id === nodeId);
   if (!node) return '节点';
-  const label = node.props?.label || node.props?.title || node.props?.text || node.props?.name || '';
+  const source = node.data || node.props || {};
+  const label = source.title || source.text || source.caption || source.name || source.label || '';
   return (label || node.id || '').slice(0, 40);
 }
 

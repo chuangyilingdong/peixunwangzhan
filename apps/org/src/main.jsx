@@ -555,6 +555,7 @@ function HelpFeedbackPage({ api }) {
 }
 
 function OrgCourses({ api }) {
+  const navigate = useNavigate();
   const detailMatch = (window.location.pathname || '').match(/\/courses\/([^/]+)$/);
   const seriesId = detailMatch ? detailMatch[1] : null;
   const { loading, error, data, refresh } = useData(() => api.get('org/course-series'), [api]);

@@ -28,6 +28,8 @@ const navigation = [
   { to: '/audit', icon: '☉', label: '操作审计', permission: 'ADMIN_AUDIT' },
 ];
 const demos = [{ label: '平台超管', login: 'root', password: 'admin123' }];
+// 官网内容区块的中文名（对应后端 website_contents.key）
+const WEBSITE_CONTENT_LABELS = { HOME: '首页', FAQ: '常见问题', BRAND: '品牌信息', ORG: '机构方案', HANDBOOK: '产品手册', COMPARE: '选型对比' };
 const ADMIN_PERMISSION_LABELS = {
   ADMIN_ORGANIZATIONS: '机构与平台用户',
   ADMIN_COURSES: '课程与课程广场',

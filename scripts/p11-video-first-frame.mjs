@@ -75,6 +75,13 @@ try {
   const t2v = renderRequestTemplate(requestTemplateFor({ requestTemplates: {} }, 'VIDEO'), { model: 'seedance-2.0-global-mini-t2v', prompt: '夜色', durationSeconds: 5, resolution: '480p', aspectRatio: '16:9', audio: false });
   check(!('image' in t2v), '文生视频默认模板不应带上首帧字段');
 
+  // 场景 4：平台模态开关关闭时，生成必须在入队前被拦（机构覆盖优先于平台开关）
+  q("UPDATE platform_modality_settings SET enabled=0 WHERE modality='VIDEO'");
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'platform modality off');
+  q("UPDATE platform_modality_settings SET enabled=1 WHERE modality='VIDEO'");
+  q("INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES ('ovr1','org1','VIDEO',0,'测试覆盖','stu1',?,?)", [now, now]);
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'org override off');
+
   if (failures.length) throw new Error(failures.join('; '));
   console.log('P11 video first-frame guard passed');
 } finally {
