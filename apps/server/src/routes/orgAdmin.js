@@ -954,13 +954,23 @@ export async function handleOrg(ctx) {
   let workMatch = part.match(/^\/works\/([^/]+)\/review$/);
   if (workMatch && method === 'PUT') {
     const work = workInReviewScope(auth, currentOrgId, workMatch[1]);
-    const status = String(ctx.body?.status || '').toUpperCase();
+    const comment = String(ctx.body?.teacherComment || '').trim(); if (comment.length > 2000) throw errors.badRequest('老师点评不能超过 2000 个字符', 'WORK_COMMENT_TOO_LONG');
+    const now = nowIso();
+    // 只保存点评（不改状态）：机构不再需要审核作品，是否上作品广场由平台决定。
+    if (!String(ctx.body?.status || '').trim()) {
+      transaction(() => {
+        q('UPDATE works SET teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [comment, auth.user.id, now, work.id, currentOrgId]);
+        const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
+        if (latestSubmission) q('UPDATE work_submissions SET review_comment=?,reviewed_at=?,updated_at=? WHERE id=?', [comment, now, now, latestSubmission.id]);
+      });
+      audit(ctx, 'WORK_COMMENT', 'WORK', work.id, normalizeWork(work), { teacherComment: comment || null }, { orgId: currentOrgId });
+      return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
+    }
+    const status = String(ctx.body.status).toUpperCase();
     assertKnownState('work', status, { field: '作品状态' });
     if (status === 'PENDING') throw errors.badRequest('作品状态无效', 'INVALID_WORK_STATUS');
     assertTransition(ctx, 'work', work.status, status, { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), code: 'INVALID_WORK_TRANSITION', message: '当前作品状态不允许执行该操作' });
     if (status === 'PUBLISHED' && !work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
-    const comment = String(ctx.body?.teacherComment || '').trim(); if (comment.length > 2000) throw errors.badRequest('老师点评不能超过 2000 个字符', 'WORK_COMMENT_TOO_LONG');
-    const now = nowIso();
     transaction(() => {
       q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [status, comment, auth.user.id, now, work.id, currentOrgId]);
       const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);

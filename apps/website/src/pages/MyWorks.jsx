@@ -1,0 +1,63 @@
+// 官网 - 我的作品
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+
+const WORK_STATUS_LABELS = { PENDING: '已提交', APPROVED: '已通过', PUBLISHED: '已发布到作品广场', REJECTED: '已下架' };
+
+function formatDate(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+export function MyWorksPage({ api }) {
+  const [state, setState] = useState({ loading: true, error: null, items: [] });
+
+  useEffect(() => {
+    let live = true;
+    setState((current) => ({ ...current, loading: true, error: null }));
+    api.get('student/works')
+      .then((payload) => { if (live) setState({ loading: false, error: null, items: payload?.items || [] }); })
+      .catch((error) => { if (live) setState({ loading: false, error: error.message, items: [] }); });
+    return () => { live = false; };
+  }, [api]);
+
+  const items = state.items;
+  const published = items.filter((item) => item.plazaPublished).length;
+  const withFeedback = items.filter((item) => item.teacherComment).length;
+
+  return <div className="student-page">
+    <header className="student-page-head">
+      <h1>我的作品</h1>
+      <p>这里是你提交过的课堂作品，以及老师的点评。</p>
+    </header>
+
+    <div className="student-summary">
+      <div className="student-summary-card"><span>作品总数</span><strong>{items.length}</strong></div>
+      <div className="student-summary-card"><span>已上作品广场</span><strong>{published}</strong></div>
+      <div className="student-summary-card"><span>收到点评</span><strong>{withFeedback}</strong></div>
+    </div>
+
+    {state.loading ? <div className="student-page-state">正在加载作品…</div> : null}
+    {state.error ? <div className="student-page-state is-error">⚠ {state.error}<button type="button" onClick={() => setState((current) => ({ ...current, error: null }))}>知道了</button></div> : null}
+
+    {!state.loading && !state.error && items.length === 0 ? <div className="student-page-state">
+      ✦ 还没有提交过作品。<br />进入学习，完成一节课后把作品提交上来吧。
+      <div className="student-page-actions"><Link className="button" to="/learn">进入学习 <b>↗</b></Link></div>
+    </div> : null}
+
+    {items.length ? <div className="student-card-grid">{items.map((work) => <article className="student-card" key={work.id}>
+      <div className="student-card__head">
+        <h3>{work.title}</h3>
+        <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{WORK_STATUS_LABELS[work.status] || work.status}</span>
+      </div>
+      <p className="student-card__meta">{work.courseLessonTitle || '未绑定课时'} · {work.className || '未绑定班级'}</p>
+      {work.description ? <p className="student-card__desc">{work.description}</p> : null}
+      {work.teacherComment ? <div className="student-card__feedback"><b>老师点评</b><p>{work.teacherComment}</p></div> : null}
+      {work.unreadFeedbackCount ? <p className="student-card__unread">✦ 有 {work.unreadFeedbackCount} 条新点评待查看</p> : null}
+      <p className="student-card__foot">提交于 {formatDate(work.submittedAt)}</p>
+    </article>)}</div> : null}
+
+    {items.length ? <div className="student-page-actions"><Link className="button soft" to="/works">去作品广场看看 <b>↗</b></Link></div> : null}
+  </div>;
+}

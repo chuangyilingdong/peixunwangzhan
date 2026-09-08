@@ -7,6 +7,9 @@ import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
 import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, createApiClient } from '@platform/shared';
 import { MyCreditsPage } from './pages/MyCredits.jsx';
+import { MyWorksPage } from './pages/MyWorks.jsx';
+import { MyCoursesPage } from './pages/MyCourses.jsx';
+import { MyStatsPage } from './pages/MyStats.jsx';
 
 const SESSION_KEY = 'ai-kids-platform.session.v1';
 
@@ -514,9 +517,9 @@ function App(){
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/learn/vibecoding' element={<Notice tone='warning'>VibeCoding 上课即将上线，敬请期待。</Notice>}/>
         <Route path='/my-credits' element={session ? <MyCreditsPage api={api} /> : <Navigate to='/login' replace />}/>
-        <Route path='/my-works' element={<Notice tone='info'>我的作品功能开发中。</Notice>}/>
-        <Route path='/my-courses' element={<Notice tone='info'>我的课程功能开发中。</Notice>}/>
-        <Route path='/my-stats' element={<Notice tone='info'>学习统计功能开发中。</Notice>}/>
+        <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>
+        <Route path='/my-courses' element={session ? <MyCoursesPage api={api} /> : <Navigate to='/login' replace />}/>
+        <Route path='/my-stats' element={session ? <MyStatsPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/free-canvas' element={<Notice tone='info'>自由画布即将上线。</Notice>}/>
         <Route path='/free-chat' element={<Notice tone='info'>自由对话即将上线。</Notice>}/>
         <Route path='*' element={<Home session={session} logout={logout}/>}/>

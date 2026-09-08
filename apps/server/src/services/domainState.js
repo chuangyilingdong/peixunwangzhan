@@ -60,7 +60,8 @@ export const DOMAIN_TRANSITIONS = Object.freeze({
   class: Object.freeze({ ACTIVE: Object.freeze(['ARCHIVED']), ARCHIVED: Object.freeze([]) }),
   classSession: Object.freeze({ ACTIVE: Object.freeze(['ENDED']), ENDED: Object.freeze([]) }),
   studentProject: Object.freeze({ DRAFT: Object.freeze(['SUBMITTED', 'ARCHIVED']), SUBMITTED: Object.freeze(['GRADED', 'DRAFT', 'ARCHIVED']), GRADED: Object.freeze(['ARCHIVED']), ARCHIVED: Object.freeze(['DRAFT']) }),
-  work: Object.freeze({ PENDING: Object.freeze(['APPROVED', 'REJECTED']), APPROVED: Object.freeze(['PUBLISHED', 'PENDING', 'REJECTED']), REJECTED: Object.freeze(['PENDING']), PUBLISHED: Object.freeze(['REJECTED']) }),
+  // 学生提交（PENDING）后由平台决定是否发布到作品广场，机构审核不再是必经环节。
+  work: Object.freeze({ PENDING: Object.freeze(['APPROVED', 'REJECTED', 'PUBLISHED']), APPROVED: Object.freeze(['PUBLISHED', 'PENDING', 'REJECTED']), REJECTED: Object.freeze(['PENDING']), PUBLISHED: Object.freeze(['REJECTED']) }),
   workPublishRequest: Object.freeze({ PENDING: Object.freeze(['APPROVED', 'REJECTED', 'WITHDRAWN']), APPROVED: Object.freeze([]), REJECTED: Object.freeze([]), WITHDRAWN: Object.freeze([]) }),
   usage: Object.freeze({ SUCCESS: Object.freeze([]), FAILED: Object.freeze([]), BLOCKED: Object.freeze([]) }),
   generationJob: Object.freeze({ QUEUED: Object.freeze(['RUNNING', 'FAILED']), RUNNING: Object.freeze(['SUCCEEDED', 'FAILED']), SUCCEEDED: Object.freeze([]), FAILED: Object.freeze([]) }),

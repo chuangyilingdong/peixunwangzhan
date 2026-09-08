@@ -2127,7 +2127,7 @@ export async function handleAdmin(ctx) {
     const published = ctx.body.published;
     const now = nowIso();
     if (published) {
-      if (!['APPROVED', 'PUBLISHED'].includes(work.status)) throw errors.conflict('仅机构审核通过的作品可以发布到作品广场', 'WORK_NOT_APPROVED');
+      if (!['PENDING', 'APPROVED', 'PUBLISHED'].includes(work.status)) throw errors.conflict('仅学生已提交的作品可以发布到作品广场（被驳回的作品需学生重新提交）', 'WORK_NOT_SUBMITTED');
       if (!work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
       let shareToken = work.share_token;
       if (!shareToken) {

@@ -286,3 +286,50 @@
 .student-material-group { padding:14px 0 4px; }.student-material-group h3 { margin:0 0 8px; color:#7768e8; font-size:12px; }.student-material-item { display:grid; grid-template-columns:30px 1fr 22px; align-items:center; gap:8px; width:100%; margin:7px 0; padding:9px; border:1px solid #eeebff; border-radius:12px; text-align:left; background:#fbfaff; cursor:pointer; }.student-material-item:hover { border-color:#bdb3ff; background:#f5f2ff; }.student-material-item__icon { display:grid; width:28px; height:28px; place-items:center; border-radius:9px; color:#7768e8; background:#eeeaff; }.student-material-item strong,.student-material-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.student-material-item strong { color:#514878; font-size:11px; }.student-material-item small { margin-top:3px; color:#a49bbd; font-size:9px; }.student-material-item b { color:#7768e8; font-size:17px; }.student-tool-empty { color:#9b93bd; font-size:11px; line-height:1.6; }.student-capability-list { display:grid; gap:8px; padding-top:14px; }.student-capability-list span { padding:9px 10px; border-radius:10px; color:#aaa3bf; background:#f7f5fc; font-size:11px; }.student-capability-list span.is-enabled { color:#3d8a74; background:#eaf9f3; }
 .student-canvas-main { min-height: calc(100vh - 150px); }.student-canvas-viewport,.student-canvas-viewport .learning-canvas { min-height: calc(100vh - 220px); height: calc(100vh - 220px); }
 @media (max-width:900px) { .student-canvas-layout { grid-template-columns: 50px minmax(0,1fr); padding:10px; }.student-tool-drawer { left:58px; width:min(300px, calc(100vw - 82px)); }.student-canvas-viewport,.student-canvas-viewport .learning-canvas { min-height:540px; height:540px; } }
+
+/* 学员个人页（我的作品 / 我的课程 / 学习统计 / 我的积分） */
+.student-page,.my-credits-page{width:min(1180px,100%);margin:0 auto;padding:56px clamp(20px,4vw,56px) 80px}
+.student-page-head,.page-header{display:block;margin-bottom:26px}
+.student-page-head h1,.my-credits-page .page-header h1{margin:0;font-size:clamp(30px,4vw,46px);letter-spacing:-1.8px;color:var(--ink)}
+.student-page-head p,.my-credits-page .page-header p{margin:10px 0 0;color:var(--muted);font-size:14px;line-height:1.7}
+.student-summary,.credits-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:0 0 22px}
+.student-summary-card,.summary-card{padding:18px 20px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 20px #40307106}
+.student-summary-card span,.summary-card .summary-label{display:block;color:#8b85a0;font-size:12px}
+.student-summary-card strong,.summary-card .summary-value{display:block;margin-top:10px;color:var(--deep);font-size:28px;letter-spacing:-1px}
+.summary-card.highlight{border-color:#d9d0f5;background:#faf8ff}
+.summary-card .summary-value.used{color:var(--orange)}
+.student-card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.student-card{display:flex;flex-direction:column;gap:9px;padding:18px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 20px #40307106}
+.student-card__head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.student-card__head h3{margin:0;font-size:16px;color:var(--ink)}
+.student-badge{flex:none;padding:4px 9px;border-radius:99px;color:#7a7390;background:#f1eef8;font-size:11px;font-weight:800}
+.student-badge.is-ok{color:#208257;background:#ddf6ea}
+.student-card__meta{margin:0;color:#8b85a0;font-size:12px;line-height:1.6}
+.student-card__desc{margin:0;color:#5f5975;font-size:13px;line-height:1.7}
+.student-card__feedback{padding:10px 12px;border-left:3px solid #c9bdf5;border-radius:0 10px 10px 0;background:#faf8ff}
+.student-card__feedback b{display:block;margin-bottom:5px;color:var(--purple);font-size:11px}
+.student-card__feedback p{margin:0;color:#5f5975;font-size:13px;line-height:1.7}
+.student-card__unread{margin:0;color:#b0691f;font-size:12px}
+.student-card__foot{margin:auto 0 0;color:#a49dba;font-size:11px}
+.student-progress-bar{height:8px;border-radius:99px;background:#f0edf8;overflow:hidden}
+.student-progress-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8f78ea,#5ab8c4)}
+.student-panel{margin:0 0 18px;padding:20px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 20px #40307106}
+.student-panel h2{margin:0 0 14px;font-size:15px;color:var(--deep)}
+.student-table{width:100%;border-collapse:collapse;font-size:13px}
+.student-table th{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);color:#8b85a0;font-size:11px}
+.student-table td{padding:11px 8px;border-bottom:1px solid #f2eff8;color:#4f4a63;vertical-align:top}
+.student-table tr:last-child td{border-bottom:0}
+.student-page-state{margin:18px 0;padding:30px 20px;border:1px dashed #ddd5f0;border-radius:15px;color:#8b85a0;font-size:13px;line-height:1.9;text-align:center}
+.student-page-state.is-error{color:#aa3d50;border-color:#f3cdd6;background:#fff7f8}
+.student-page-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px}
+.credits-tabs{display:flex;gap:8px;margin:0 0 16px}
+.credits-tabs .tab{padding:9px 16px;border:1px solid var(--line);border-radius:99px;color:#6a6378;background:#fff;font-size:12px;font-family:inherit;cursor:pointer}
+.credits-tabs .tab.active{color:#fff;border-color:var(--purple);background:var(--purple)}
+.credits-history,.empty-state,.loading,.error-state{margin:0 0 18px;padding:20px;border:1px solid var(--line);border-radius:15px;background:#fff}
+.history-table{width:100%;border-collapse:collapse;font-size:13px}
+.history-table th{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);color:#8b85a0;font-size:11px}
+.history-table td{padding:11px 8px;border-bottom:1px solid #f2eff8;color:#4f4a63}
+.empty-state,.loading{color:#8b85a0;text-align:center}
+.error-state{color:#aa3d50;background:#fff7f8;border-color:#f3cdd6;text-align:center}
+.error-state button{margin-top:10px;padding:8px 14px;border:0;border-radius:9px;color:#fff;background:var(--purple);font-family:inherit;cursor:pointer}
+@media (max-width:720px){.student-page,.my-credits-page{padding:34px 18px 60px}}
