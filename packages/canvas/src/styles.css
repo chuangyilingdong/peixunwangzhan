@@ -7,8 +7,17 @@
 .learning-canvas .react-flow__minimap { border: 1px solid rgba(183, 196, 255, .25); border-radius: 10px; background: rgba(7, 18, 52, .82); overflow: hidden; }
 .learning-canvas .react-flow__edge-path { stroke: #93a9ff; stroke-width: 2.5; }
 .learning-canvas .react-flow__handle { width: 13px; height: 13px; border: 3px solid #dce5ff; background: #766cf0; }
-.learning-node { position: relative; width: 250px; overflow: hidden; border: 1px solid rgba(202, 212, 255, .34); border-radius: 17px; color: #f2f5ff; background: rgba(12, 25, 70, .96); box-shadow: 0 12px 26px rgba(0, 0, 0, .28); }
+.react-flow__node { min-width: 250px; }
+.learning-node { position: relative; width: 100%; min-height: 120px; overflow: hidden; border: 1px solid rgba(202, 212, 255, .34); border-radius: 17px; color: #f2f5ff; background: rgba(12, 25, 70, .96); box-shadow: 0 12px 26px rgba(0, 0, 0, .28); }
 .learning-node.selected { outline: 2px solid #a8b8ff; outline-offset: 3px; }
+.learning-node__resize-line { border-color: #a8b8ff; }
+.learning-node__resize-handle { width: 10px; height: 10px; border: 2px solid #0b1738; border-radius: 3px; background: #a8b8ff; }
+.learning-node__media--zoomable { cursor: zoom-in; }
+.learning-node__textarea--compact { height: 68px; }
+.learning-node__slot-params { display: block; margin: -4px 14px 10px; color: #8f9fd4; font-size: 10px; letter-spacing: .2px; }
+.learning-canvas__lightbox { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(3, 8, 26, .82); backdrop-filter: blur(4px); }
+.learning-canvas__lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
+.learning-canvas__lightbox-close { position: absolute; top: 16px; right: 18px; width: 34px; height: 34px; border: 1px solid rgba(200, 212, 255, .4); border-radius: 50%; color: #e8edff; background: rgba(10, 20, 50, .8); font-size: 18px; cursor: pointer; }
 .learning-node__heading { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid rgba(208, 219, 255, .15); font-size: 13px; }
 .learning-node__heading span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; font-weight: 900; }
 .learning-node--prompt .learning-node__heading span { color: #3b285f; background: #ffd878; }

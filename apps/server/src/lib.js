@@ -436,14 +436,26 @@ export function normalizeLesson(value) {
 }
 
 export function lessonCanvasConfig(lessonId) {
-  if (!lessonId) return { capabilities: ['text'], materialGroups: [] };
+  if (!lessonId) return { capabilities: ['text'], materialGroups: [], generationSlots: { image: { count: 0 }, video: { count: 0 } } };
   const capabilities = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=? ORDER BY capability', [lessonId]).map((item) => item.capability);
   const groups = rows('SELECT * FROM course_lesson_material_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
     id: group.id, title: group.title, sort: Number(group.sort || 0), materials: rows('SELECT * FROM course_lesson_materials WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
       id: item.id, title: item.title, description: item.description || '', materialType: item.material_type || 'NOTE', assetUrl: item.asset_url || null, snapshot: parseJson(item.snapshot, {}), sort: Number(item.sort || 0),
     })),
   }));
-  return { capabilities: capabilities.length ? capabilities : ['text'], materialGroups: groups };
+  const lesson = row('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId]);
+  const config = parseJson(lesson?.classroom_config, {});
+  const slots = config.generationSlots || {};
+  const imageSlot = slots.image || {};
+  const videoSlot = slots.video || {};
+  return {
+    capabilities: capabilities.length ? capabilities : ['text'],
+    materialGroups: groups,
+    generationSlots: {
+      image: { count: Number(imageSlot.count || 0), aspectRatio: imageSlot.aspectRatio || '16:9', size: imageSlot.size || '1024x576', model: imageSlot.model || '' },
+      video: { count: Number(videoSlot.count || 0), aspectRatio: videoSlot.aspectRatio || '16:9', size: videoSlot.size || '1920x1080', durationSeconds: Number(videoSlot.durationSeconds || 5), model: videoSlot.model || '' },
+    },
+  };
 }
 
 export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true } = {}) {
