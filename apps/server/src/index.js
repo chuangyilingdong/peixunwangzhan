@@ -14,7 +14,6 @@ import { handleWebsiteCredits } from './routes/websiteCredits.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 import { domainStateContract } from './services/domainState.js';
-import { handleFeatureFlags } from './routes/featureFlags.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -95,8 +94,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const data = await handleFeatureFlags(ctx)
-      ?? await handlePublicAnalytics(ctx)
+    const data = await handlePublicAnalytics(ctx)
       ?? await handleAdminAnalytics(ctx)
       ?? await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)

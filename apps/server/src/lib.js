@@ -14,7 +14,6 @@ export const PLATFORM_ADMIN_PERMISSIONS = Object.freeze([
   'ADMIN_BILLING',
   'ADMIN_CONTENT',
   'ADMIN_ANALYTICS',
-  'ADMIN_FEATURE_FLAGS',
   'ADMIN_AUDIT',
 ]);
 const PLATFORM_ADMIN_PERMISSION_SET = new Set(PLATFORM_ADMIN_PERMISSIONS);
@@ -39,10 +38,10 @@ export function platformPermissionForPathname(pathname) {
   const value = String(pathname || '');
   if (!value.startsWith('/api/admin/')) return null;
   const routes = [
-    ['/api/admin/feature-flags', 'ADMIN_FEATURE_FLAGS'],
     ['/api/admin/audit-logs', 'ADMIN_AUDIT'],
     ['/api/admin/platform-admins', 'ADMIN_AUDIT'],
     ['/api/admin/analytics', 'ADMIN_ANALYTICS'],
+    ['/api/admin/leads', 'ADMIN_ANALYTICS'],
     ['/api/admin/dashboard', 'ADMIN_ANALYTICS'],
     ['/api/admin/overview', 'ADMIN_ANALYTICS'],
     ['/api/admin/ai-usage', 'ADMIN_ANALYTICS'],

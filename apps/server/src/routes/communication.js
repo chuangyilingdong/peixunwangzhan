@@ -214,7 +214,8 @@ function dispatchRecipientEvent({ userId, notificationId, eventKey, maxRetries }
 
 // ---------- 自动提醒模块 ----------
 /**
- * 向指定用户投递一条通知提醒（内部实现：立即创建 PUBLISHED 通知，写 recipients → DELIVERED）。
+ * 向指定用户投递一条站内信（内部实现：立即创建 PUBLISHED 通知，写 recipients → DELIVERED）。
+ * 这里的 DELIVERED 只表示「已进入应用内收件箱」，没有邮件/短信/微信外发通道。
  * eventKey 用于去重，同一 userId + eventKey 在 24h 内不重复投递。
  * @param {object} opts
  * @param {string} opts.title        - 通知标题

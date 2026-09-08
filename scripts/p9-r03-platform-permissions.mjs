@@ -33,7 +33,6 @@ try {
     row,
   } = await import('../apps/server/src/lib.js');
   const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
-  const { handleFeatureFlags } = await import('../apps/server/src/routes/featureFlags.js');
 
   const root = auth('root', []);
   const domains = [
@@ -43,7 +42,6 @@ try {
     ['ADMIN_BILLING', '/api/admin/billing/usage-overview'],
     ['ADMIN_CONTENT', '/api/admin/inbox'],
     ['ADMIN_ANALYTICS', '/api/admin/analytics/overview'],
-    ['ADMIN_FEATURE_FLAGS', '/api/admin/feature-flags'],
     ['ADMIN_AUDIT', '/api/admin/audit-logs'],
   ];
   for (const [permission, pathname] of domains) {
@@ -51,7 +49,7 @@ try {
     requirePlatformPermission(ctx(pathname, auth('operator', [permission])), permission);
     await expectError(() => requirePlatformPermission(ctx(pathname, auth('limited', [])), permission), 'PERMISSION_DENIED', `${permission} deny`);
   }
-  check(PLATFORM_ADMIN_PERMISSIONS.length === 8, 'permission catalog must contain 8 domains');
+  check(PLATFORM_ADMIN_PERMISSIONS.length === 7, 'permission catalog must contain 7 domains');
   check(platformPermissionForPathname('/api/admin/unregistered') === 'ADMIN_CONTENT', 'unknown admin API must default to content domain');
   await expectError(() => requirePlatformPermission(ctx('/api/admin/unregistered', auth('limited', [])), 'ADMIN_CONTENT'), 'PERMISSION_DENIED', 'unknown admin API deny');
   requirePlatformPermission(ctx('/api/admin/organizations', root), 'ADMIN_ORGANIZATIONS');
@@ -63,9 +61,6 @@ try {
   const allowedOrganizations = await handleAdmin(ctx('/api/admin/organizations', auth('operator', ['ADMIN_ORGANIZATIONS'])));
   check(Array.isArray(allowedOrganizations.items), 'organization domain allow matrix failed');
   await expectError(() => handleAdmin(ctx('/api/admin/organizations', auth('operator', ['ADMIN_COURSES']))), 'PERMISSION_DENIED', 'cross-domain organization access');
-  const flags = handleFeatureFlags(ctx('/api/admin/feature-flags', auth('operator', ['ADMIN_FEATURE_FLAGS'])));
-  check(flags && Array.isArray(flags.items), 'feature flag allow matrix failed');
-  await expectError(() => handleFeatureFlags(ctx('/api/admin/feature-flags', auth('operator', ['ADMIN_WORKS']))), 'PERMISSION_DENIED', 'cross-domain feature flag access');
 
   await handleAdmin(ctx('/api/admin/platform-admins/operator', root, 'PUT', { status: 'DISABLED' }));
   await handleAdmin(ctx('/api/admin/platform-admins/root', auth('solo', [...PLATFORM_ADMIN_PERMISSIONS]), 'PUT', { status: 'DISABLED' }));
@@ -77,7 +72,7 @@ try {
   check(String(audit?.after_data || '').includes('permissions'), 'platform admin audit does not include permission data');
 
   if (failures.length) throw new Error(failures.join('; '));
-  console.log('P9-R03 platform permission matrix: 8 domain allow + 8 domain deny + cross-domain + admin guards + audit passed');
+  console.log('P9-R03 platform permission matrix: 7 domain allow + 7 domain deny + cross-domain + admin guards + audit passed');
 } finally {
   // Temporary directory is intentionally left for OS cleanup; no project or production data is touched.
 }

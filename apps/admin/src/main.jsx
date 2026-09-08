@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-route
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, readSession, Status, useData, writeSession } from '@platform/shared';
 import { OrgRechargeDialog, RechargeHistoryPanel } from './components/CreditManagement.jsx';
 import { Courses } from './components/CourseManagement.jsx';
+import { LeadManagement } from './components/LeadManagement.jsx';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
@@ -13,12 +14,12 @@ const navigation = [
   { to: '/dashboard', icon: '◈', label: '平台概览', permission: 'ADMIN_ANALYTICS' },
   { to: '/organizations', icon: '♙', label: '机构管理', permission: 'ADMIN_ORGANIZATIONS' },
   { to: '/users', icon: '◉', label: '平台用户', permission: 'ADMIN_ORGANIZATIONS' },
+  { to: '/leads', icon: '✉', label: '预约线索', permission: 'ADMIN_ANALYTICS' },
   { heading: '内容与活动' },
   { to: '/courses', icon: '▦', label: '平台课程', permission: 'ADMIN_COURSES' },
   { to: '/works', icon: '◇', label: '平台作品库', permission: 'ADMIN_WORKS' },
   { heading: '计费与设置' },
   { to: '/billing', icon: '◌', label: '计费与模型', permission: 'ADMIN_BILLING' },
-  { to: '/feature-flags', icon: '⚗', label: '灰度开关', permission: 'ADMIN_FEATURE_FLAGS' },
   { to: '/materials', icon: '▤', label: '素材与物料', permission: 'ADMIN_CONTENT' },
   { to: '/website-content', icon: '✎', label: '官网内容', permission: 'ADMIN_CONTENT' },
   { to: '/analytics', icon: '⌁', label: '转化分析', permission: 'ADMIN_ANALYTICS' },
@@ -37,7 +38,6 @@ const ADMIN_PERMISSION_LABELS = {
   ADMIN_BILLING: '计费与模型',
   ADMIN_CONTENT: '通知、物料与官网内容',
   ADMIN_ANALYTICS: '平台概览与转化分析',
-  ADMIN_FEATURE_FLAGS: 'Feature Flag 灰度开关',
   ADMIN_AUDIT: '平台管理员与操作审计',
 };
 function hasAdminPermission(user, permission) {
@@ -436,7 +436,7 @@ function PlatformAdmins({ api, currentUser }) {
     return params;
   }, [search, statusFilter, page, limit, sort]);
   const admins = useData(() => api.get(`admin/platform-admins?${adminQuery.toString()}`), [api, adminQuery]);
-  const permissionOptions = ['ADMIN_ORGANIZATIONS', 'ADMIN_COURSES', 'ADMIN_WORKS', 'ADMIN_BILLING', 'ADMIN_CONTENT', 'ADMIN_ANALYTICS', 'ADMIN_FEATURE_FLAGS', 'ADMIN_AUDIT'];
+  const permissionOptions = ['ADMIN_ORGANIZATIONS', 'ADMIN_COURSES', 'ADMIN_WORKS', 'ADMIN_BILLING', 'ADMIN_CONTENT', 'ADMIN_ANALYTICS', 'ADMIN_AUDIT'];
   const [form, setForm] = useState({ login: '', displayName: '', password: '', permissions: [] });
   const [editing, setEditing] = useState(null);
   const [message, setMessage] = useState('');
@@ -680,7 +680,7 @@ function PlatformNotifications({ api }) {
     } catch (err) { setMessage(err.message); } finally { setBusy(false); }
   }
   return <>
-    <PageHeader eyebrow="平台系统" title="通知事件与失败运营" description="按 eventKey 投递事件并自动抑制重复投递；查看、批量重试和忽略失败投递。" actions={<button className="secondary-button" onClick={() => { summary.refresh(); events.refresh(); failures.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="平台系统" title="通知事件与失败运营" description="站内信（应用内）投递：按 eventKey 投递事件并自动抑制重复；查看、批量重试和忽略投递失败的接收人。当前没有邮件/短信/微信外发通道（按路线图冻结），「失败」指接收人账号已停用或删除，不是外发失败。" actions={<button className="secondary-button" onClick={() => { summary.refresh(); events.refresh(); failures.refresh(); }}>刷新</button>} />
     <Panel title="概要指标">
       {summary.loading ? <Loading /> : summary.error ? <ErrorState error={summary.error} onRetry={summary.refresh} /> : summary.data ? <div className="metrics">
         <MetricCard label="事件总数" value={summary.data.total} hint="已记录的事件源" />
@@ -1195,56 +1195,6 @@ function Analytics({ api }) {
   </>;
 }
 
-
-function FeatureFlags({ api }) {
-  const list = useData(() => api.get('admin/feature-flags'), [api]);
-  const [form, setForm] = useState({ key: '', name: '', description: '', enabled: true, defaultEnabled: false, rolloutPercent: 0, enabledOrgIds: '', enabledUserIds: '' });
-  const [editing, setEditing] = useState('');
-  const [message, setMessage] = useState('');
-  const [saving, setSaving] = useState(false);
-  const splitIds = (value) => String(value || '').split(/[\n,，]/).map((item) => item.trim()).filter(Boolean);
-  const toForm = (item) => ({ key: item.key, name: item.name, description: item.description || '', enabled: item.enabled, defaultEnabled: item.defaultEnabled, rolloutPercent: item.rolloutPercent, enabledOrgIds: item.enabledOrgIds.join('\n'), enabledUserIds: item.enabledUserIds.join('\n') });
-  function reset() { setEditing(''); setForm({ key: '', name: '', description: '', enabled: true, defaultEnabled: false, rolloutPercent: 0, enabledOrgIds: '', enabledUserIds: '' }); }
-  async function save(event) {
-    event.preventDefault(); setSaving(true); setMessage('');
-    const payload = { name: form.name, description: form.description, enabled: form.enabled, defaultEnabled: form.defaultEnabled, rolloutPercent: Number(form.rolloutPercent), enabledOrgIds: splitIds(form.enabledOrgIds), enabledUserIds: splitIds(form.enabledUserIds) };
-    try {
-      if (editing) await api.patch(`admin/feature-flags/${encodeURIComponent(editing)}`, payload);
-      else await api.post('admin/feature-flags', { ...payload, key: form.key.trim() });
-      setMessage(editing ? 'Feature Flag 已更新。' : 'Feature Flag 已创建。'); reset(); list.refresh();
-    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
-  }
-  async function remove(item) {
-    if (!window.confirm(`确认删除 Feature Flag「${item.key}」？`)) return;
-    try { await api.delete(`admin/feature-flags/${encodeURIComponent(item.key)}`); setMessage('Feature Flag 已删除。'); list.refresh(); } catch (err) { setMessage(err.message); }
-  }
-  return <>
-    <PageHeader eyebrow="平台系统" title="Feature Flag 灰度中心" description="按默认开关、机构白名单、用户白名单和稳定灰度比例控制新功能；服务端统一判定，变更写入操作审计。" actions={<button className="secondary-button" onClick={list.refresh}>刷新</button>} />
-    <Panel title={editing ? `编辑 ${editing}` : '新建 Feature Flag'}>
-      <form onSubmit={save}>
-        <div className="form-grid">
-          <label>Key{editing ? <input value={form.key} disabled /> : <input required pattern="[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*" maxLength="80" value={form.key} placeholder="例如 real-ai-generation" onChange={(e) => setForm({ ...form, key: e.target.value })} />}</label>
-          <label>名称<input required maxLength="120" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-          <label>灰度比例（%）<input type="number" min="0" max="100" step="1" value={form.rolloutPercent} onChange={(e) => setForm({ ...form, rolloutPercent: e.target.value })} /></label>
-          <label className="checkbox-label"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />总开关开启</label><label className="checkbox-label"><input type="checkbox" checked={form.defaultEnabled} onChange={(e) => setForm({ ...form, defaultEnabled: e.target.checked })} />默认开启</label>
-          <label>机构白名单（每行一个 ID）<textarea rows="3" value={form.enabledOrgIds} placeholder="org_…" onChange={(e) => setForm({ ...form, enabledOrgIds: e.target.value })} /></label>
-          <label>用户白名单（每行一个 ID）<textarea rows="3" value={form.enabledUserIds} placeholder="user_…" onChange={(e) => setForm({ ...form, enabledUserIds: e.target.value })} /></label>
-          <label className="wide-field">说明<textarea rows="2" maxLength="500" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
-        </div>
-        <div className="row-actions"><button className="primary-button" disabled={saving}>{saving ? '保存中…' : editing ? '保存修改' : '创建 Flag'}</button>{editing && <button type="button" className="secondary-button" onClick={reset}>取消编辑</button>}</div>
-      </form>
-      {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
-    </Panel>
-    {list.loading ? <Loading label="正在读取 Feature Flags…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : <Panel title={`已配置（${list.data?.total || 0}）`}>
-      <div className="table-wrap"><table><thead><tr><th>Key</th><th>状态策略</th><th>白名单</th><th>更新时间</th><th>操作</th></tr></thead><tbody>
-        {(list.data?.items || []).map((item) => <tr key={item.key}><td><strong>{item.key}</strong><div className="muted">{item.name}<br />{item.description}</div></td><td>{item.enabled ? '总开关开' : '总开关关'} · {item.defaultEnabled ? '默认开启' : `灰度 ${item.rolloutPercent}%`}</td><td>机构 {item.enabledOrgIds.length} · 用户 {item.enabledUserIds.length}</td><td>{formatDate(item.updatedAt)}</td><td><button className="secondary-button" onClick={() => { setEditing(item.key); setForm(toForm(item)); }}>编辑</button>{' '}<button className="danger-button" onClick={() => remove(item)}>删除</button></td></tr>)}
-        {!(list.data?.items || []).length && <tr><td colSpan="5"><Empty title="暂无 Feature Flag" description="创建后可在服务端通过 GET /api/feature-flags 获取当前账号的判定结果。" /></td></tr>}
-      </tbody></table></div>
-    </Panel>}
-    <Notice tone="info">判定优先级：用户白名单 → 机构白名单 → 默认开关 → 稳定灰度；关闭默认开关且灰度为 0 时，只有白名单账号启用。当前仅配置能力，不会自动替任何业务开启真实 AI、支付或公开功能。</Notice>
-  </>;
-}
-
 function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
@@ -1259,9 +1209,9 @@ function App() {
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
     <Route path="/courses" element={page('ADMIN_COURSES', <Courses api={api} />)} />
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
+    <Route path="/leads" element={page('ADMIN_ANALYTICS', <LeadManagement api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
     <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
-    <Route path="/feature-flags" element={page('ADMIN_FEATURE_FLAGS', <FeatureFlags api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />
     <Route path="/analytics" element={page('ADMIN_ANALYTICS', <Analytics api={api} />)} />
