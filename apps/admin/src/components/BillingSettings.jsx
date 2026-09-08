@@ -6,6 +6,7 @@ import { Empty, ErrorState, Loading, Notice, Panel, formatDate, useData } from '
 const PERIOD_LABELS = { DAY: '每日', MONTH: '每月' };
 const SCOPE_LABELS = { GLOBAL: '全平台', STUDENT: '学生', TEACHER: '教师' };
 const ALERT_LABELS = { BALANCE_LOW: '余额不足', CONSUMPTION_SPIKE: '消耗激增', QUOTA_EXCEEDED: '配额超限' };
+const ENDPOINT_BY_KIND = { modality: 'modalities', quota: 'quotas', alert: 'alerts' };
 
 export function BillingSettings({ api }) {
   const modalities = useData(() => api.get('admin/billing-config/modalities'), [api]);
@@ -24,7 +25,7 @@ export function BillingSettings({ api }) {
     setBusy(true);
     setMessage('');
     try {
-      const path = 'admin/billing-config/' + edit.kind + 's/' + encodeURIComponent(edit.key);
+      const path = 'admin/billing-config/' + (ENDPOINT_BY_KIND[edit.kind] || edit.kind) + '/' + encodeURIComponent(edit.key);
       await api.put(path, { ...edit.form, reason });
       setMessage(`已保存：${edit.key}`);
       setEdit(null);
