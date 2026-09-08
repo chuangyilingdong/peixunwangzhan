@@ -14,7 +14,7 @@ export function defaultInputFrame(modelId) {
 export const MODALITY_CAPABILITY_DEFAULTS = Object.freeze({
   // 默认值刻意保持与改造前硬编码一致（图片 1k、视频 480p / 5 秒），避免升级即改变线上请求。
   IMAGE: Object.freeze({ aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1k', '2k', '4k'], durations: [], audio: false }),
-  VIDEO: Object.freeze({ aspectRatios: ['16:9', '9:16', '1:1'], resolutions: ['480p', '720p', '1080p', '2k', '4k'], durations: [5, 10], audio: false, inputFrame: 'NONE' }),
+  VIDEO: Object.freeze({ aspectRatios: ['16:9', '9:16', '1:1'], resolutions: ['480p', '720p', '1080p', '2k', '4k'], durations: [5, 10], audio: false }),
 });
 
 // 比例归一化：接受 9:16 / 9：16 / 9/16 / 9x16 等写法。
