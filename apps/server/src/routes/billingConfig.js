@@ -14,6 +14,10 @@ import {
 } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { GENERATION_PROVIDER_CATALOG, GENERATION_PROVIDER_IDS, providerDefinition, validateProviderRegistration } from '../services/providerContract.js';
+import {
+  DEFAULT_REQUEST_TEMPLATES, MODALITY_CAPABILITY_DEFAULTS, TEMPLATE_PLACEHOLDERS,
+  normalizeChannelModelCapabilities, parseRequestTemplate,
+} from '../services/modelCapabilities.js';
 import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
 
@@ -23,6 +27,17 @@ const VALID_PERIODS = new Set(['DAY', 'MONTH']);
 const VALID_ALERT_TYPES = new Set(['BALANCE_LOW', 'CONSUMPTION_SPIKE', 'QUOTA_EXCEEDED']);
 const CONFIG_TYPES = new Set(['MODALITY_SETTING', 'CREDIT_QUOTA', 'ALERT_THRESHOLD', 'ORG_OVERRIDE', 'AI_PROVIDER_POLICY']);
 const BUDGET_MAX = 100000000;
+
+// 管理员可为每个模态覆盖请求体模板；只接受 JSON 对象，非法模板直接丢弃（回落到默认模板）。
+function normalizeRequestTemplates(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  const out = {};
+  for (const modality of ['IMAGE', 'VIDEO', 'TEXT', 'DUBBING']) {
+    const parsed = parseRequestTemplate(input[modality]);
+    if (parsed.valid && parsed.template) out[modality] = parsed.template;
+  }
+  return out;
+}
 
 function normalizeProviderPolicy(value) {
   const parsed = (() => { try { return JSON.parse(value?.ai_provider_policy || value || '{}') || {}; } catch { return {}; } })();
@@ -35,8 +50,24 @@ function normalizeProviderPolicy(value) {
   const endpointMode = ['BASE','FULL'].includes(String(parsed.endpointMode || '').toUpperCase()) ? String(parsed.endpointMode).toUpperCase() : 'BASE';
   const protocol = ['CHAT','RESPONSES','ANTHROPIC'].includes(String(parsed.protocol || '').toUpperCase()) ? String(parsed.protocol).toUpperCase() : 'CHAT';
   const modelMappings = Array.isArray(parsed.modelMappings) ? parsed.modelMappings.filter((item) => item && item.model).map((item) => ({ displayName: String(item.displayName || item.model).slice(0,120), model: String(item.model).slice(0,200), contextWindow: Number(item.contextWindow || 0) || null, thinkingLevel: String(item.thinkingLevel || '').slice(0,30) })).slice(0,100) : [];
-  const channels = Array.isArray(parsed.channels) ? parsed.channels.filter((item) => item && item.id).slice(0, 30).map((item) => ({ id: String(item.id).slice(0,64), name: String(item.name || item.id).slice(0,120), provider: GENERATION_PROVIDER_IDS.has(String(item.provider || '').toLowerCase()) ? String(item.provider).toLowerCase() : 'custom', model: String(item.model || '').slice(0,200), models: Array.isArray(item.models) ? [...new Set(item.models.map((m) => String(m || '').trim()).filter(Boolean))].slice(0, 50) : (item.model ? [String(item.model).slice(0, 200)] : []), endpoint: String(item.endpoint || '').slice(0,500), protocol: ['CHAT','RESPONSES','ANTHROPIC'].includes(String(item.protocol || '').toUpperCase()) ? String(item.protocol).toUpperCase() : 'CHAT', modelMappings: Array.isArray(item.modelMappings) ? item.modelMappings.filter((m) => m && (m.id || m.model)).slice(0,500).map((m) => ({ id: String(m.id || m.model).slice(0,200), displayName: String(m.displayName || m.id || m.model).slice(0,120), contextWindow: Number(m.contextWindow || 0) || null })) : [], modalities: [] })) : [];
   const modalityChannels = parsed.modalityChannels && typeof parsed.modalityChannels === 'object' ? Object.fromEntries(Object.entries(parsed.modalityChannels).filter(([k,v]) => VALID_MODALITIES.has(k) && typeof v === 'string').map(([k,v]) => [k, String(v).slice(0,64)])) : {};
+  const modalityOfChannel = (channelId) => Object.entries(modalityChannels).find(([, id]) => id === channelId)?.[0] || '';
+  const channels = Array.isArray(parsed.channels) ? parsed.channels.filter((item) => item && item.id).slice(0, 30).map((item) => {
+    const channelId = String(item.id).slice(0,64);
+    return {
+      id: channelId, name: String(item.name || item.id).slice(0,120),
+      provider: GENERATION_PROVIDER_IDS.has(String(item.provider || '').toLowerCase()) ? String(item.provider).toLowerCase() : 'custom',
+      model: String(item.model || '').slice(0,200),
+      models: Array.isArray(item.models) ? [...new Set(item.models.map((m) => String(m || '').trim()).filter(Boolean))].slice(0, 50) : (item.model ? [String(item.model).slice(0, 200)] : []),
+      endpoint: String(item.endpoint || '').slice(0,500),
+      protocol: ['CHAT','RESPONSES','ANTHROPIC'].includes(String(item.protocol || '').toUpperCase()) ? String(item.protocol).toUpperCase() : 'CHAT',
+      modelMappings: Array.isArray(item.modelMappings) ? item.modelMappings.filter((m) => m && (m.id || m.model)).slice(0,500).map((m) => ({ id: String(m.id || m.model).slice(0,200), displayName: String(m.displayName || m.id || m.model).slice(0,120), contextWindow: Number(m.contextWindow || 0) || null })) : [],
+      // 逐模型能力清单（比例/清晰度/时长/音频）与可选的请求体模板
+      modelCapabilities: normalizeChannelModelCapabilities(item.modelCapabilities, modalityOfChannel(channelId)),
+      requestTemplates: normalizeRequestTemplates(item.requestTemplates),
+      modalities: [],
+    };
+  }) : [];
   const allowStudentExternalContent = parsed.allowStudentExternalContent === undefined
     ? true
     : !(parsed.allowStudentExternalContent === false || parsed.allowStudentExternalContent === 0 || String(parsed.allowStudentExternalContent).toLowerCase() === 'false');
@@ -47,6 +78,15 @@ function normalizeProviderPolicy(value) {
     displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels,
     allowStudentExternalContent,
     updatedAt: value?.updated_at || null,
+  };
+}
+
+/** 供管理端渲染用的能力/模板元数据（只读常量，不落库）。 */
+function capabilityMetadata() {
+  return {
+    capabilityDefaults: MODALITY_CAPABILITY_DEFAULTS,
+    templatePlaceholders: TEMPLATE_PLACEHOLDERS,
+    defaultRequestTemplates: DEFAULT_REQUEST_TEMPLATES,
   };
 }
 
@@ -280,6 +320,7 @@ export async function handleAdminBillingConfig(ctx) {
     return {
       catalog: GENERATION_PROVIDER_CATALOG,
       policy,
+      ...capabilityMetadata(),
       security: { allowStudentExternalContent: policy.allowStudentExternalContent, externalStudentRequestsBlocked: !policy.allowStudentExternalContent, apiKeyConfigured: hasProviderApiKey() || Boolean(AI_PROVIDER_API_KEY) },
     };
   }
@@ -303,7 +344,21 @@ export async function handleAdminBillingConfig(ctx) {
       const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }, signal: controller.signal });
       if (!response.ok) throw errors.badRequest(`上游模型列表请求失败（HTTP ${response.status}）`, response.status === 429 ? 'GENERATION_PROVIDER_RATE_LIMITED' : 'GENERATION_PROVIDER_UPSTREAM_ERROR');
       const payload = await response.json(); const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-      return { items: list.slice(0, 500).map((item) => ({ id: String(item.id || item.name || ''), displayName: String(item.display_name || item.name || item.id || ''), ownedBy: item.owned_by || null, contextWindow: item.context_window || item.context_length || null })).filter((item) => item.id) };
+      // 上游若返回能力信息就顺手带出（不同供应商字段名不一），带不出则由管理员手工配置。
+      const capabilityHints = (item) => {
+        const pick = (...keys) => keys.map((key) => item?.[key]).find((value) => value !== undefined);
+        const hints = {};
+        const ratios = pick('aspectRatios', 'aspect_ratios', 'ratios', 'supported_aspect_ratios');
+        if (Array.isArray(ratios)) hints.aspectRatios = ratios;
+        const resolutions = pick('resolutions', 'supported_resolutions', 'quality', 'sizes');
+        if (Array.isArray(resolutions)) hints.resolutions = resolutions;
+        const durations = pick('durations', 'supported_durations', 'seconds');
+        if (Array.isArray(durations)) hints.durations = durations;
+        const audio = pick('audio', 'supportsAudio', 'supports_audio', 'with_audio');
+        if (audio !== undefined) hints.audio = audio === true || audio === 1 || String(audio).toLowerCase() === 'true';
+        return Object.keys(hints).length ? hints : null;
+      };
+      return { items: list.slice(0, 500).map((item) => ({ id: String(item.id || item.name || ''), displayName: String(item.display_name || item.name || item.id || ''), ownedBy: item.owned_by || null, contextWindow: item.context_window || item.context_length || null, capabilities: capabilityHints(item) })).filter((item) => item.id) };
     } catch (error) { if (error?.code) throw error; throw errors.badRequest(error?.name === 'AbortError' ? '上游模型列表请求超时' : '上游模型列表响应无效', error?.name === 'AbortError' ? 'GENERATION_PROVIDER_TIMEOUT' : 'GENERATION_PROVIDER_RESPONSE_INVALID'); } finally { clearTimeout(timer); }
   }
   if (part === '/billing-config/ai-provider' && method === 'PUT') {
@@ -324,6 +379,15 @@ export async function handleAdminBillingConfig(ctx) {
     const protocol = body.protocol === undefined ? before.protocol : String(body.protocol || 'CHAT').toUpperCase();
     const modelMappings = body.modelMappings === undefined ? before.modelMappings : (Array.isArray(body.modelMappings) ? body.modelMappings : []);
     const channels = body.channels === undefined ? before.channels : (Array.isArray(body.channels) ? body.channels : []);
+    // 请求模板保存前校验，避免存进去一个跑不通的 JSON。
+    for (const channel of channels) {
+      const templates = channel?.requestTemplates;
+      if (!templates || typeof templates !== 'object') continue;
+      for (const [modality, text] of Object.entries(templates)) {
+        const parsed = parseRequestTemplate(text);
+        if (!parsed.valid) throw errors.badRequest(`${channel.name || channel.id || '渠道'} 的 ${modality} 请求模板无效：${parsed.error}`, 'AI_PROVIDER_TEMPLATE_INVALID');
+      }
+    }
     const modalityChannels = body.modalityChannels === undefined ? before.modalityChannels : (body.modalityChannels || {});
     const registration = validateProviderRegistration({ provider, model, endpoint });
     if (!registration.valid) throw errors.badRequest('AI 供应商配置不完整：' + registration.reasons.join('；'), 'AI_PROVIDER_CONFIG_INVALID');
@@ -342,7 +406,7 @@ export async function handleAdminBillingConfig(ctx) {
       audit(ctx, 'BILLING_CONFIG_AI_PROVIDER_UPDATE', 'PLATFORM_SETTINGS', '1', { before: { ...before, updatedAt: undefined }, after }, { reason: body.reason || '' });
     }
     const savedPolicy = getAiProviderPolicy();
-    return { catalog: GENERATION_PROVIDER_CATALOG, policy: savedPolicy, security: { allowStudentExternalContent: savedPolicy.allowStudentExternalContent, externalStudentRequestsBlocked: !savedPolicy.allowStudentExternalContent } };
+    return { catalog: GENERATION_PROVIDER_CATALOG, policy: savedPolicy, ...capabilityMetadata(), security: { allowStudentExternalContent: savedPolicy.allowStudentExternalContent, externalStudentRequestsBlocked: !savedPolicy.allowStudentExternalContent } };
   }
 
   // 积分限额

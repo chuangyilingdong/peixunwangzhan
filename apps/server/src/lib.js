@@ -466,8 +466,11 @@ export function lessonCanvasConfig(lessonId) {
     capabilities: capabilities.length ? capabilities : ['text'],
     materialGroups: groups,
     generationSlots: {
-      image: { count: Number(imageSlot.count || 0), aspectRatio: imageSlot.aspectRatio || '16:9', size: imageSlot.size || '1024x576', model: imageSlot.model || '' },
-      video: { count: Number(videoSlot.count || 0), aspectRatio: videoSlot.aspectRatio || '16:9', size: videoSlot.size || '1920x1080', durationSeconds: Number(videoSlot.durationSeconds || 5), model: videoSlot.model || '' },
+      image: { count: Number(imageSlot.count || 0), aspectRatio: imageSlot.aspectRatio || '16:9', resolution: imageSlot.resolution || '1k', model: imageSlot.model || '' },
+      video: {
+        count: Number(videoSlot.count || 0), aspectRatio: videoSlot.aspectRatio || '16:9', resolution: videoSlot.resolution || '480p',
+        durationSeconds: Number(videoSlot.durationSeconds || 5), model: videoSlot.model || '', audio: videoSlot.audio === true,
+      },
     },
   };
 }

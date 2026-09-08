@@ -21,6 +21,8 @@ const DEFAULT_MIME_TYPES = Object.freeze({
   DUBBING: 'audio/mpeg',
 });
 
+import { renderRequestTemplate, requestTemplateFor } from './modelCapabilities.js';
+
 function providerError(message, code, status = 0) {
   const error = new Error(message);
   error.code = code;
@@ -170,19 +172,25 @@ async function parseResponse(response, modality) {
   }
 }
 
-function requestBody({ modality, model, prompt, title, voice = 'alloy' }) {
+// 请求体由渠道模板生成：模板里的 {{aspectRatio}} / {{resolution}} / {{durationSeconds}} / {{audio}}
+// 会被课时配置的取值替换，不再由代码写死。
+function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {} }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
-  if (normalizedModality === 'TEXT') {
-    return {
+  const template = requestTemplateFor({ requestTemplates }, normalizedModality);
+  if (template) {
+    return renderRequestTemplate(template, {
       model,
-      messages: [
-        { role: 'system', content: '你是少儿编程学习平台的创作助手。请用适合儿童理解的方式回答，避免危险或不适龄内容。' },
-        { role: 'user', content: String(prompt || '') },
-      ],
-    };
+      prompt: String(prompt || ''),
+      title: String(title || ''),
+      voice,
+      aspectRatio: String(options.aspectRatio || '').trim(),
+      resolution: String(options.resolution || '').trim(),
+      durationSeconds: Number(options.durationSeconds) || 5,
+      audio: options.audio === true,
+      n: 1,
+    });
   }
-  if (normalizedModality === 'IMAGE') return { model, prompt: String(prompt || ''), n: 1, size: '1:1', metadata: { resolution: '1k', output_format: 'png' } };
-  if (normalizedModality === 'DUBBING') return { model, input: String(prompt || ''), voice, response_format: 'mp3' };
+  // 没有模板的模态（音乐/播客）保持改造前的请求体形状。
   return { model, prompt: String(prompt || ''), seconds: '5', metadata: { resolution: '480p' } };
 }
 
@@ -264,7 +272,7 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, time
   return assetFromResponse({ payload, modality, title, providerName, model });
 }
 
-export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
+export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {} } = {}) {
   const providerName = String(name || 'openai-compatible').trim();
   const providerModel = String(model || '').trim();
   const timeout = Math.max(1000, Math.min(300000, Number(timeoutMs) || AI_PROVIDER_TIMEOUT_MS));
@@ -274,14 +282,14 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     name: providerName,
     model: providerModel,
     capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'],
-    async generate({ modality, prompt, title } = {}) {
+    async generate({ modality, prompt, title, options } = {}) {
       const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
       if (!Object.prototype.hasOwnProperty.call(DEFAULT_MODALITY_PATHS, normalizedModality)) {
         throw providerError('当前真实 AI 适配器暂不支持该素材类型。', PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED);
       }
       const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints);
       const response = await fetchWithTimeout(url, {
-        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice }),
+        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, requestTemplates }),
         apiKey,
         timeout,
         modality: normalizedModality,

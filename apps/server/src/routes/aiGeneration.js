@@ -3,6 +3,7 @@ import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError } from '../services/providerContract.js';
 import { getAiProviderPolicy } from './billingConfig.js';
+import { effectiveCapabilities } from '../services/modelCapabilities.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
@@ -235,9 +236,32 @@ function providerSelectionForModality(policy, modality, modelOverride = '') {
   const channelId = policy?.modalityChannels?.[String(modality || '').toUpperCase()];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
-    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id }
-    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default' };
+    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, requestTemplates: channel.requestTemplates || {} }
+    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {} };
   return modelOverride ? { ...base, model: modelOverride } : base;
+}
+
+/**
+ * 生成参数只以「课时配置」为准：比例/清晰度/时长/音频由教师在课时里选定，
+ * 客户端提交的取值一律不采信，避免绕过课时限制。课时没配时回落到该模型能力的第一项。
+ */
+export function generationOptionsFor({ context, modality, policy, selection }) {
+  const key = String(modality || '').toUpperCase();
+  const slotKey = key === 'IMAGE' ? 'image' : key === 'VIDEO' ? 'video' : null;
+  if (!slotKey) return {};
+  const slot = (context?.lesson?.classroomConfig?.generationSlots || {})[slotKey] || {};
+  const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;
+  const capabilities = effectiveCapabilities(channel, key, selection?.model);
+  const options = {
+    aspectRatio: String(slot.aspectRatio || '').trim() || capabilities.aspectRatios[0] || '',
+    resolution: String(slot.resolution || '').trim() || capabilities.resolutions[0] || '',
+  };
+  if (slotKey === 'video') {
+    options.durationSeconds = Number(slot.durationSeconds) || capabilities.durations[0] || 5;
+    // 模型不支持生成音频时，即使课时勾选了也不发送。
+    options.audio = slot.audio === true && capabilities.audio === true;
+  }
+  return options;
 }
 
 function auditContext(auth, ctx = null) {
@@ -261,7 +285,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext });
   try {
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id });
+    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options: generationOptionsFor({ context, modality, policy, selection: providerSelection }) });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
@@ -294,7 +318,7 @@ async function processAsyncGeneration(item) {
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
     const generated = await Promise.race([
-      provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id }),
+      provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options: generationOptionsFor({ context, modality, policy, selection: providerSelection }) }),
       new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('AI 生成超时，请稍后重试'), { code: 'GENERATION_TIMEOUT' })), ASYNC_GENERATION_TIMEOUT_MS)),
     ]);
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];

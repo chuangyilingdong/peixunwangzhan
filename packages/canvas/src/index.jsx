@@ -156,8 +156,10 @@ function SlotParams({ data }) {
   if (!data.slotType) return null;
   const params = [];
   if (data.aspectRatio) params.push(data.aspectRatio);
-  if (data.size) params.push(data.size);
+  const quality = data.resolution || data.size;
+  if (quality) params.push(quality);
   if (data.durationSeconds) params.push(`${data.durationSeconds}秒`);
+  if (data.audio) params.push('含音频');
   if (data.model) params.push(data.model);
   if (!params.length) return null;
   return <span className="learning-node__slot-params">{params.join(' · ')}</span>;
