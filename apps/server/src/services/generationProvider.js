@@ -40,9 +40,10 @@ export function generationProviderInfo(selection = {}) {
   };
 }
 export function getGenerationProvider(selection = {}) {
-  const config = providerConfig(selection);
+  const selected = providerSelection(selection);
+  const config = providerConfig(selected);
   if (isMockProvider(config.provider)) return mockProvider();
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(config.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE });
 }
