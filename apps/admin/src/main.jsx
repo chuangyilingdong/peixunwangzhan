@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, readSession, Status, writeSession } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, readSession, Status, useData, writeSession } from '@platform/shared';
 import { OrgRechargeDialog, RechargeHistoryPanel } from './components/CreditManagement.jsx';
 import '@platform/shared/styles.css';
 
@@ -59,17 +59,6 @@ function visibleNavigation(user) {
 function AdminPermissionGate({ user, permission, children }) {
   if (hasAdminPermission(user, permission)) return children;
   return <><PageHeader eyebrow="平台权限" title="暂无访问权限" description="当前账号没有该业务域的访问权限。" /><Notice tone="danger">需要权限码：<strong>{permission}</strong>（{ADMIN_PERMISSION_LABELS[permission] || permission}）。如需访问，请联系平台管理员授权。</Notice></>;
-}
-
-function useData(load, deps = []) {
-  const [state, setState] = useState({ loading: true, error: null, data: null });
-  const refresh = async () => {
-    setState((old) => ({ ...old, loading: true, error: null }));
-    try { setState({ loading: false, error: null, data: await load() }); }
-    catch (error) { setState({ loading: false, error, data: null }); }
-  };
-  useEffect(() => { refresh(); }, deps); // eslint-disable-line react-hooks/exhaustive-deps
-  return { ...state, refresh };
 }
 
 function Dashboard({ api }) {
@@ -1545,15 +1534,11 @@ function WebsiteContent({ api }) {
 }
 function PlatformPage({ kind }) {
   const pages = {
-    users: ['平台用户', '统一查看机构管理员、教师与学员的账号状态，支持后续接入筛选、启停和变更记录。', [['机构账号', '按机构归属查看管理者、教师和学员'], ['账号安全', '登录状态、有效期与权限将统一在此管理']]],
-    marketplace: ['课程广场', '集中浏览可下发的主题课包、课时与示范素材，支持机构授权和版本管理。', [['标准课包', '11 门系统课程、87 节课时'], ['授课资源', 'PPT、HTML 互动课件与课堂备注']]],
-    works: ['平台作品库', '聚合机构作品展厅的公开成果，便于审核、运营和沉淀优质案例。', [['作品审核', '查看发布状态与机构归属'], ['精选推荐', '后续可配置推荐位与展示专题']]],
     hackathon: ['黑客松', '配置赛季、作品征集、审核与奖励，帮助机构把课堂作品延展为创作活动。', [['赛季管理', '创建主题、时间范围与参与机构'], ['作品审核', '待审、入选、驳回与撤回统一记录']]],
-    billing: ['计费与模型', '统一维护机构积分池、能力开关、模型矩阵和用量规则，让课堂 AI 可用可管。', [['魔法石用量', '机构充值、按调用扣减、余额提醒'], ['模型能力', '文本、图像、音频与视频按权限配置']]],
-    admins: ['平台管理员', '管理平台运营账号与权限码，重要业务权限由后端继续校验。', [['角色权限', '按运营、课程、计费等域配置访问范围'], ['账号安全', '启停、重置密码与操作记录']]],
   };
   const [title, desc, cards] = pages[kind];
-  return <><PageHeader eyebrow="AI魔法学院 · 平台控制台" title={title} description={desc} actions={<button className="primary-button">新建 / 配置</button>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待配置' : '准备就绪'} hint={item[1]} tone={['violet', 'teal'][index]} />)}</div><Panel title="建设说明"><Notice tone="info">此页面已按 AI魔法学院的信息架构接入平台端导航与视觉壳层；需要服务端数据的筛选、编辑和审批操作将在对应 API 完成后接入，不会伪造业务数据。</Notice></Panel></>;
+  const [hint, setHint] = useState('');
+  return <><PageHeader eyebrow="AI魔法学院 · 平台控制台" title={title} description={desc} actions={<button className="primary-button" onClick={() => setHint('赛季配置功能开发中，接入服务端 API 后开放。')}>新建 / 配置</button>} />{hint && <Notice tone="info">{hint}</Notice>}<div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待配置' : '准备就绪'} hint={item[1]} tone={['violet', 'teal'][index]} />)}</div><Panel title="建设说明"><Notice tone="info">此页面已按 AI魔法学院的信息架构接入平台端导航与视觉壳层；需要服务端数据的筛选、编辑和审批操作将在对应 API 完成后接入，不会伪造业务数据。</Notice></Panel></>;
 }
 
 function CourseMarketplace({ api }) {

@@ -5,6 +5,7 @@ import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderErr
 import { getAiProviderPolicy } from './billingConfig.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
+import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
@@ -161,12 +162,12 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
     if (currentJob) assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE id=?",
       [failCode, String(failMessage).slice(0, 1000), failAt, jobId]);
-    q(`INSERT INTO usage_records(
-         id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id('usage'), orgId, userId, session?.id || null, project.id, jobId, modality, provider.model, 0,
-        BLOCKED_ERROR_CODES.has(failCode) ? 'BLOCKED' : 'FAILED', failCode,
-        json({ source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: BLOCKED_ERROR_CODES.has(failCode) }), failAt]);
+    recordAiUsage({
+      orgId, userId, projectId: project.id, sessionId: session?.id || null, generationJobId: jobId,
+      modality, model: provider.model, credits: 0,
+      status: BLOCKED_ERROR_CODES.has(failCode) ? 'BLOCKED' : 'FAILED', failCode,
+      pricing: { source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: BLOCKED_ERROR_CODES.has(failCode) },
+    });
   });
 }
 
@@ -189,13 +190,13 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
       orgId: auth.user.orgId, credits: 1, type: `AI_GENERATE_${modality}`, modality, model: provider.model,
       userId: auth.user.id, sessionId: freshContext.activeSession?.id || null, projectId: project.id,
     });
-    q('UPDATE users SET used_credits_this_period=used_credits_this_period+1,ai_credits_used=ai_credits_used+1,magic_stones=MAX(0,magic_stones-1),updated_at=? WHERE id=? AND org_id=?',
-      [nowIso(), auth.user.id, auth.user.orgId]);
-    q(`INSERT INTO usage_records(
-         id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,pricing_snapshot,created_at
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id('usage'), auth.user.orgId, auth.user.id, freshContext.activeSession?.id || null, project.id, jobId, modality, provider.model, 1, 'SUCCESS',
-        json({ source: 'generation', provider: provider.name, mode: info.mode }), nowIso()]);
+    debitUserAiCredits({ userId: auth.user.id, orgId: auth.user.orgId, credits: 1 });
+    recordAiUsage({
+      orgId: auth.user.orgId, userId: auth.user.id, projectId: project.id,
+      sessionId: freshContext.activeSession?.id || null, generationJobId: jobId,
+      modality, model: provider.model, credits: 1, status: 'SUCCESS',
+      pricing: { source: 'generation', provider: provider.name, mode: info.mode },
+    });
     assetPayloads.forEach((asset, index) => {
       const assetId = id('asset');
       q(`INSERT INTO media_assets(

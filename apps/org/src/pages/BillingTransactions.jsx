@@ -1,20 +1,6 @@
 // 机构端 - 积分流水查询页面
-import { useState, useEffect } from 'react';
-import { Loading, ErrorState, Empty, Notice, Panel, PageHeader, formatCredits, formatDate } from '@platform/shared';
-
-function useData(load, deps = []) {
-  const [state, setState] = useState({ loading: true, error: null, data: null });
-  const refresh = async () => { 
-    setState((old) => ({ ...old, loading: true, error: null })); 
-    try { 
-      setState({ loading: false, error: null, data: await load() }); 
-    } catch (error) { 
-      setState({ loading: false, error, data: null }); 
-    } 
-  };
-  useEffect(() => { refresh(); }, deps); // eslint-disable-line react-hooks/exhaustive-deps
-  return { ...state, refresh };
-}
+import { useState } from 'react';
+import { useData, Loading, ErrorState, Empty, Panel, PageHeader, formatCredits, formatDate } from '@platform/shared';
 
 export function BillingTransactionsPage({ api }) {
   const [filters, setFilters] = useState({

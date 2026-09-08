@@ -11,7 +11,7 @@
 - 测试数据库：`/srv/ai-kids-platform/internal-test/data/platform.db`
 - 环境变量：`/etc/ai-kids-platform/internal-test.env`
 - API 服务：systemd `learning-platform-internal-test`，仅监听 `127.0.0.1:8788`
-- 前端：Nginx 在 `iicili.cyou` 下按 `/`、`/admin/`、`/org/`、`/student/` 提供四端
+- 前端：Nginx 在 `iicili.cyou` 下按 `/`、`/admin/`、`/org/` 提供三端；学生功能已并入官网 `/`
 
 ## 本地 / CI 构建
 

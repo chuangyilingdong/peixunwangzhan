@@ -2,7 +2,6 @@ export const DEPLOYMENT_MODE = ['development', 'internal-test', 'public'].includ
 export const PORT = Number(process.env.PORT || 8787);
 export const PUBLIC_SITE_URL = process.env.PUBLIC_SITE_URL || 'http://localhost:5176';
 export const ADMIN_APP_ORIGIN = process.env.ADMIN_APP_ORIGIN || 'http://localhost:5173';
-export const STUDENT_APP_ORIGIN = process.env.STUDENT_APP_ORIGIN || 'http://localhost:5174';
 export const ORG_APP_ORIGIN = process.env.ORG_APP_ORIGIN || 'http://localhost:5175';
 
 export const AI_PROVIDER = String(process.env.AI_PROVIDER || 'local-mock').trim();
@@ -27,4 +26,4 @@ function parseEndpointMap(value) {
 // Optional per-modality endpoints for providers whose image/audio/video APIs are not all mounted below one base URL.
 export const AI_PROVIDER_MODALITY_ENDPOINTS = parseEndpointMap(process.env.AI_PROVIDER_MODALITY_ENDPOINTS);
 
-export const CORS_ALLOWED_ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || [PUBLIC_SITE_URL, ADMIN_APP_ORIGIN, STUDENT_APP_ORIGIN, ORG_APP_ORIGIN].filter(Boolean).join(',')).split(',').map((value) => value.trim()).filter(Boolean);
+export const CORS_ALLOWED_ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || [PUBLIC_SITE_URL, ADMIN_APP_ORIGIN, ORG_APP_ORIGIN].filter(Boolean).join(',')).split(',').map((value) => value.trim()).filter(Boolean);

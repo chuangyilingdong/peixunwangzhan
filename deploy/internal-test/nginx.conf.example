@@ -49,12 +49,6 @@ server {
         try_files $uri $uri/ /org/index.html;
     }
 
-    location = /student { return 301 /student/; }
-    location /student/ {
-        root /srv/ai-kids-platform/internal-test/current/apps;
-        try_files $uri $uri/ /student/index.html;
-    }
-
     location / {
         root /srv/ai-kids-platform/internal-test/current/apps/website;
         index index.html;

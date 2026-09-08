@@ -3,8 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { CanvasEditor, createCanvasTemplate } from '@platform/canvas';
 import { formatDate } from './auth.js';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
+import { useData } from './classroom.jsx';
 
-// Signatures and helpers (copied from apps/student/src/main.jsx)
+// Signatures and helpers (原独立学生端逻辑，已并入官网学习页)
 function canvasContentSignature(snapshot) {
   if (!snapshot) return '';
   const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
@@ -68,18 +69,6 @@ function ChangeList({ diff }) {
     {diff.addedEdges ? <li>新增 {diff.addedEdges} 条连接</li> : null}
     {diff.removedEdges ? <li>移除 {diff.removedEdges} 条连接</li> : null}
   </ul>;
-}
-
-// Embedded useData hook (also exported separately in classroom.jsx)
-function useData(load, deps = []) {
-  const [state, setState] = useState({ loading: true, error: null, data: null });
-  const refresh = async () => {
-    setState((old) => ({ ...old, loading: true, error: null }));
-    try { setState({ loading: false, error: null, data: await load() }); }
-    catch (error) { setState({ loading: false, error, data: null }); }
-  };
-  useEffect(() => { refresh(); }, deps); // eslint-disable-line react-hooks/exhaustive-deps
-  return { ...state, refresh };
 }
 
 export function CanvasWorkspace({ api, ...props }) {

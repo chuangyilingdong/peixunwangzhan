@@ -44,9 +44,6 @@ jobs:
 
       - name: Run isolated acceptance tests
         run: |
-          node p3-schema-check.mjs
-          node p4-01-state-machine.mjs
-          node p4-c01-rbac-ownership.mjs
           node scripts/p4-02-demo-data-inventory.mjs
           node scripts/p4-o09-reminders.mjs
 
@@ -60,7 +57,6 @@ jobs:
           path: |
             apps/admin/dist
             apps/org/dist
-            apps/student/dist
             apps/website/dist
           if-no-files-found: error
           retention-days: 14

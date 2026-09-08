@@ -1,9 +1,5 @@
 import {
   errors,
-  id,
-  json,
-  nowIso,
-  q,
   requireRole,
   row,
   transaction,
@@ -11,6 +7,7 @@ import {
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
+import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
 const SESSION_CAPABILITY_BY_MODALITY = {
@@ -37,15 +34,7 @@ function creditsFor(value) {
 }
 
 function recordUsage({ orgId, userId, projectId = null, sessionId = null, generationJobId = null, modality, credits, status, failCode = null }) {
-  q(
-    `INSERT INTO usage_records(
-      id,org_id,user_id,class_session_id,project_id,generation_job_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,created_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [
-      id('usage'), orgId, userId, sessionId, projectId, generationJobId, modality, 'local-p0', credits,
-      status, failCode, json({ modality, credits, status, failCode, generationJobId }), nowIso(),
-    ],
-  );
+  recordAiUsage({ orgId, userId, projectId, sessionId, generationJobId, modality, credits, status, failCode });
 }
 
 function rejectWithUsage({ orgId, userId, projectId, sessionId = null, modality, credits, error }) {
@@ -166,12 +155,7 @@ export async function handleAi(ctx) {
       if (currentSession) {
         q('UPDATE class_sessions SET consumed_credits_total=consumed_credits_total+? WHERE id=? AND status=?', [credits, currentSession.id, 'ACTIVE']);
       }
-      q(
-        `UPDATE users
-         SET used_credits_this_period=used_credits_this_period+?, ai_credits_used=ai_credits_used+?, magic_stones=MAX(0, magic_stones-?), updated_at=?
-         WHERE id=? AND org_id=?`,
-        [credits, credits, credits, nowIso(), userId, orgId],
-      );
+      debitUserAiCredits({ userId, orgId, credits });
       recordUsage({ orgId, userId, projectId, sessionId: currentSession?.id || null, modality, credits, status: 'SUCCESS' });
     });
   } catch (error) {

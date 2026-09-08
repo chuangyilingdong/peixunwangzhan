@@ -11,8 +11,7 @@
     "server": "node apps/server/src/index.js",
     "dev:admin": "vite apps/admin --config apps/admin/vite.config.mjs",
     "dev:org": "vite apps/org --config apps/org/vite.config.mjs",
-    "dev:student": "vite apps/student --config apps/student/vite.config.mjs",
-    "build": "vite build apps/admin --config apps/admin/vite.config.mjs && vite build apps/org --config apps/org/vite.config.mjs && vite build apps/student --config apps/student/vite.config.mjs && vite build apps/website --config apps/website/vite.config.mjs",
+    "build": "vite build apps/admin --config apps/admin/vite.config.mjs && vite build apps/org --config apps/org/vite.config.mjs && vite build apps/website --config apps/website/vite.config.mjs",
     "dev:website": "vite apps/website --config apps/website/vite.config.mjs"
   },
   "dependencies": {

@@ -40,7 +40,7 @@ try {
   & $PnpmCommand run build
   if ($LASTEXITCODE -ne 0) { throw "pnpm build failed with exit code $LASTEXITCODE" }
 
-  foreach ($app in @('admin', 'org', 'student', 'website')) {
+  foreach ($app in @('admin', 'org', 'website')) {
     $dist = Join-Path $repoRoot "apps\$app\dist"
     if (-not (Test-Path -LiteralPath (Join-Path $dist 'index.html') -PathType Leaf)) {
       throw "Missing build output: $(Join-Path $dist 'index.html')"

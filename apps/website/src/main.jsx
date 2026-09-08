@@ -9,7 +9,9 @@ import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, creat
 import { MyCreditsPage } from './pages/MyCredits.jsx';
 
 const SESSION_KEY = 'ai-kids-platform.session.v1';
-const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE ? String(import.meta.env.VITE_API_BASE).replace(/\/$/, '') : '/api');
+
+// 官网公开页面统一走共享 API client，保持错误解析与鉴权行为一致
+const publicApi = createApiClient();
 
 function readUserSession() {
   try {
@@ -31,14 +33,13 @@ function removeUserSession() {
 
 function LoginPage() {
   async function handleLogin({ login, password }) {
-    const response = await fetch(API_BASE + '/auth/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ login, password }),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error?.message || payload.message || '登录失败');
-    const session = saveUserSession(payload.data || payload);
+    let session;
+    try {
+      const data = await publicApi.post('auth/login', { login, password });
+      session = saveUserSession(data);
+    } catch (err) {
+      throw new Error(err.message || '登录失败');
+    }
     const role = session.user?.role;
     // 学生登录后返回官网首页，不再跳转到 /learn
     const target = role === 'STUDENT' ? '/' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/';
@@ -190,8 +191,8 @@ function Works(){
   const [loaded,setLoaded]=useState(false);
   const [error,setError]=useState(null);
   useEffect(()=>{
-    fetch(API_BASE+'/public/works').then(r=>r.json()).then(j=>{
-      if(Array.isArray(j.data?.items)&&j.data.items.length) setItems(j.data.items);
+    publicApi.get('public/works').then(j=>{
+      if(Array.isArray(j?.items)&&j.items.length) setItems(j.items);
       setLoaded(true);
     }).catch(e=>{setError(e.message);setLoaded(true);});
   },[]);
@@ -203,7 +204,7 @@ const DOWNLOAD_PLATFORMS=[['MACOS_APPLE','⌘','macOS 版','适用于 Apple 芯�
 const CMS_FALLBACK = { HOME: { heroKicker: '教培机构青少年 AI 开课平台', heroTitle: '给机构一套', heroAccent: '能落地的青少年 AI 课', heroDescription: 'AI魔法学院把课程、桌面客户端、机构账号、魔法石计费与作品展厅放在一个平台里。', trustTitle: '响应教育部「做中学」领航行动', trustDescription: '真实问题 · 项目式探究 · 每节课都有作品' } };
 function useWebsiteContent(key) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
-  useEffect(() => { let live = true; fetch(API_BASE + '/public/website-content/' + encodeURIComponent(key)).then((response) => response.ok ? response.json() : Promise.reject(new Error('内容暂不可用'))).then((payload) => { if (live) setState({ loading: false, data: payload.data || payload, error: null }); }).catch((error) => { if (live) setState({ loading: false, data: CMS_FALLBACK[key] || null, error }); }); return () => { live = false; }; }, [key]);
+  useEffect(() => { let live = true; publicApi.get('public/website-content/' + encodeURIComponent(key)).then((payload) => { if (live) setState({ loading: false, data: payload || null, error: null }); }).catch((error) => { if (live) setState({ loading: false, data: CMS_FALLBACK[key] || null, error }); }); return () => { live = false; }; }, [key]);
   return { ...state, data: state.data || CMS_FALLBACK[key] || null };
 }
 
@@ -211,9 +212,8 @@ function Download(){
   const [state,setState]=useState({loading:true,error:null,data:null});
   useEffect(()=>{
     let live=true;
-    fetch(API_BASE+'/public/downloads')
-      .then((response)=>response.ok?response.json():Promise.reject(new Error('暂时无法读取下载配置')))
-      .then((body)=>{if(live)setState({loading:false,error:null,data:body.data});})
+    publicApi.get('public/downloads')
+      .then((body)=>{if(live)setState({loading:false,error:null,data:body||null});})
       .catch((error)=>{if(live)setState({loading:false,error:error.message,data:null});});
     return()=>{live=false};
   },[]);
@@ -261,8 +261,7 @@ function Demo(){
     if(!/^1[3-9]\d{9}$/.test(contactPhone)){setError('请输入正确的手机号');return;}
     setState('loading');setError('');
     try{
-      const res=await fetch(API_BASE+'/public/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orgName,contactName,contactPhone,intent:form.intent.value,notes:form.notes.value,legalConsentVersion:LEGAL_VERSION,legalConsentAt:new Date().toISOString()})});
-      if(!res.ok){const d=await res.json();throw new Error(d.error?.message||'提交失败');}
+      await publicApi.post('public/contact',{orgName,contactName,contactPhone,intent:form.intent.value,notes:form.notes.value,legalConsentVersion:LEGAL_VERSION,legalConsentAt:new Date().toISOString()});
       trackAnalytics('demo_submitted');setState('success');
     }catch(err){setError(err.message);setState('error');}
   }
@@ -306,9 +305,8 @@ function Marketplace(){
     return p;
   };
   useEffect(()=>{let live=true;setLoading(true);setError(null);
-    fetch(API_BASE+'/public/marketplace?'+buildParams())
-      .then(r=>r.ok?r.json():Promise.reject(new Error('加载失败')))
-      .then(j=>{if(live){const d=j.data||j;setItems(d.items||[]);setTotal(d.total||0);setLoading(false);
+    publicApi.get('public/marketplace?'+buildParams())
+      .then((j)=>{if(live){const d=j||{};setItems(d.items||[]);setTotal(d.total||0);setLoading(false);
         if(d.items){const tags=new Set();d.items.forEach(item=>{(item.tags||[]).forEach(t=>tags.add(t));});setAllTags(Array.from(tags));trackAnalytics('marketplace_view',{resultCount:d.total||0,sort:filters.sort});}
       }})
       .catch(e=>{if(live){setError(e.message);setLoading(false);}});
@@ -354,9 +352,8 @@ function MarketplaceDetail(){
     else window.location.href='/demo';
   }
   useEffect(()=>{let live=true;
-    fetch(API_BASE+'/public/marketplace/'+id)
-      .then(r=>r.ok?r.json():Promise.reject(new Error('课程不存在')))
-      .then(j=>{if(live){setData(j.data||j);setLoading(false);trackAnalytics('marketplace_detail_view',{resourceType:'course',resourceId:id});}})
+    publicApi.get('public/marketplace/'+id)
+      .then((j)=>{if(live){setData(j||null);setLoading(false);trackAnalytics('marketplace_detail_view',{resourceType:'course',resourceId:id});}})
       .catch(e=>{if(live){setError(e.message);setLoading(false);}});
     return()=>{live=false};
   },[id]);

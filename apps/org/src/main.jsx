@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, writeSession } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, Loading, LoginPanel, MetricCard, Notice, PageHeader, Panel, readSession, Status, useData, writeSession } from '@platform/shared';
 import { MemberCreditsPage } from './pages/MemberCredits.jsx';
 import { BillingTransactionsPage } from './pages/BillingTransactions.jsx';
 import '@platform/shared/styles.css';
@@ -28,13 +28,6 @@ const navigation = [
   { to: '/help-feedback', icon: '◎', label: '问题反馈', adminOnly: true }
 ];
 const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
-
-function useData(load, deps = []) {
-  const [state, setState] = useState({ loading: true, error: null, data: null });
-  const refresh = async () => { setState((old) => ({ ...old, loading: true, error: null })); try { setState({ loading: false, error: null, data: await load() }); } catch (error) { setState({ loading: false, error, data: null }); } };
-  useEffect(() => { refresh(); }, deps); // eslint-disable-line react-hooks/exhaustive-deps
-  return { ...state, refresh };
-}
 
 function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/overview'), [api]);
