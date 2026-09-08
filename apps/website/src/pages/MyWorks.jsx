@@ -1,6 +1,7 @@
 // 官网 - 我的作品
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Pagination } from '@platform/shared';
 
 const WORK_STATUS_LABELS = { PENDING: '已提交', APPROVED: '已通过', PUBLISHED: '已发布到作品广场', REJECTED: '已下架' };
 
@@ -11,20 +12,20 @@ function formatDate(value) {
 }
 
 export function MyWorksPage({ api }) {
-  const [state, setState] = useState({ loading: true, error: null, items: [] });
+  const [page, setPage] = useState(1);
+  const [state, setState] = useState({ loading: true, error: null, items: [], summary: null, page: 1, totalPages: 1 });
 
   useEffect(() => {
     let live = true;
     setState((current) => ({ ...current, loading: true, error: null }));
-    api.get('student/works')
-      .then((payload) => { if (live) setState({ loading: false, error: null, items: payload?.items || [] }); })
-      .catch((error) => { if (live) setState({ loading: false, error: error.message, items: [] }); });
+    api.get(`student/works?page=${page}`)
+      .then((payload) => { if (live) setState({ loading: false, error: null, items: payload?.items || [], summary: payload?.summary || null, page: payload?.page || 1, totalPages: payload?.totalPages || 1 }); })
+      .catch((error) => { if (live) setState({ loading: false, error: error.message, items: [], summary: null, page: 1, totalPages: 1 }); });
     return () => { live = false; };
-  }, [api]);
+  }, [api, page]);
 
   const items = state.items;
-  const published = items.filter((item) => item.plazaPublished).length;
-  const withFeedback = items.filter((item) => item.teacherComment).length;
+  const summary = state.summary || { total: items.length, published: items.filter((item) => item.plazaPublished).length, withFeedback: items.filter((item) => item.teacherComment).length };
 
   return <div className="student-page">
     <header className="student-page-head">
@@ -33,9 +34,9 @@ export function MyWorksPage({ api }) {
     </header>
 
     <div className="student-summary">
-      <div className="student-summary-card"><span>作品总数</span><strong>{items.length}</strong></div>
-      <div className="student-summary-card"><span>已上作品广场</span><strong>{published}</strong></div>
-      <div className="student-summary-card"><span>收到点评</span><strong>{withFeedback}</strong></div>
+      <div className="student-summary-card"><span>作品总数</span><strong>{summary.total}</strong></div>
+      <div className="student-summary-card"><span>已上作品广场</span><strong>{summary.published}</strong></div>
+      <div className="student-summary-card"><span>收到点评</span><strong>{summary.withFeedback}</strong></div>
     </div>
 
     {state.loading ? <div className="student-page-state">正在加载作品…</div> : null}
@@ -57,6 +58,8 @@ export function MyWorksPage({ api }) {
       {work.unreadFeedbackCount ? <p className="student-card__unread">✦ 有 {work.unreadFeedbackCount} 条新点评待查看</p> : null}
       <p className="student-card__foot">提交于 {formatDate(work.submittedAt)}</p>
     </article>)}</div> : null}
+
+    <Pagination page={state.page} totalPages={state.totalPages} onChange={setPage} disabled={state.loading} />
 
     {items.length ? <div className="student-page-actions"><Link className="button soft" to="/works">去作品广场看看 <b>↗</b></Link></div> : null}
   </div>;

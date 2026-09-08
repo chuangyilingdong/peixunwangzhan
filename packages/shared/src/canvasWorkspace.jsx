@@ -76,7 +76,7 @@ export function CanvasWorkspace({ api, ...props }) {
   const navigate = useNavigate();
   const paramsFromUrl = useParams(); const projectId = props?.params?.projectId || paramsFromUrl?.projectId;
   const project = useData(() => api.get(`student/projects/${projectId}`), [api, projectId]);
-  const history = useData(() => api.get(`student/projects/${projectId}/snapshots`), [api, projectId]);
+  const history = useData(() => api.get(`student/projects/${projectId}/snapshots?limit=200`), [api, projectId]);
   const generations = useData(() => api.get(`ai/generations?projectId=${encodeURIComponent(projectId)}`), [api, projectId]);
   const [draft, setDraft] = useState(null);
   const [canvasSnapshot, setCanvasSnapshot] = useState(null);

@@ -1,7 +1,7 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
+  assignmentActiveSql, pageParams, pageResult, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
@@ -606,13 +606,21 @@ export async function handleOrg(ctx) {
     if (modality) { conditions.push('entry.modality=?'); params.push(modality); }
     return { conditions, params };
   }
-  function orgCreditEntries(limit = 200) {
-    const normalizedLimit = integer(limit, '流水条数', { min: 1, max: 1000, fallback: 200 });
+  function orgCreditEntryQuery() {
     const { conditions, params } = creditEntryFilters();
+    return { where: conditions.join(' AND '), params };
+  }
+  function orgCreditEntries(limit = 200, offset = 0) {
+    const normalizedLimit = integer(limit, '流水条数', { min: 1, max: 1000, fallback: 200 });
+    const { where, params } = orgCreditEntryQuery();
     return rows(
-      'SELECT entry.*,session.class_id,class.name class_name FROM credit_entries entry LEFT JOIN class_sessions session ON session.id=entry.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + conditions.join(' AND ') + ' ORDER BY entry.created_at DESC,entry.id DESC LIMIT ' + normalizedLimit,
-      params,
+      'SELECT entry.*,session.class_id,class.name class_name FROM credit_entries entry LEFT JOIN class_sessions session ON session.id=entry.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + where + ' ORDER BY entry.created_at DESC,entry.id DESC LIMIT ? OFFSET ?',
+      [...params, normalizedLimit, Math.max(0, Number(offset) || 0)],
     ).map((entry) => ({ ...normalizeEntry(entry), className: entry.class_name || null }));
+  }
+  function orgCreditEntryCount() {
+    const { where, params } = orgCreditEntryQuery();
+    return Number(row('SELECT COUNT(*) n FROM credit_entries entry LEFT JOIN class_sessions session ON session.id=entry.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + where, params)?.n || 0);
   }
   function normalizedRechargeOrders(limit = 100) {
     return rows('SELECT * FROM recharge_orders WHERE org_id=? ORDER BY created_at DESC LIMIT ' + integer(limit, '订单条数', { min: 1, max: 1000, fallback: 100 }), [currentOrgId]).map((order) => ({
@@ -683,8 +691,8 @@ export async function handleOrg(ctx) {
   }
   if (part === '/billing/credit-entries' && method === 'GET') {
     requireOrgBillingAdmin();
-    const items = orgCreditEntries(ctx.search.get('limit'));
-    return { items, total: items.length };
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50, maxLimit: 1000 });
+    return pageResult(orgCreditEntries(limit, offset), { page, limit, total: orgCreditEntryCount() });
   }
   if (part === '/billing/credit-adjustments' && method === 'POST') {
     requireOrgBillingAdmin(); const body = ctx.body || {};
@@ -718,8 +726,11 @@ export async function handleOrg(ctx) {
   }
 
   if (part === '/course-series' && method === 'GET') {
-    const items = rows(`SELECT DISTINCT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?)) ORDER BY series.sort,series.title`, [currentOrgId, currentOrgId]).map((series) => normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true }));
-    return { items };
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
+    const fromWhere = `FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?))`;
+    const total = Number(row(`SELECT COUNT(DISTINCT series.id) n ${fromWhere}`, [currentOrgId, currentOrgId])?.n || 0);
+    const items = rows(`SELECT DISTINCT series.* ${fromWhere} ORDER BY series.sort,series.title LIMIT ? OFFSET ?`, [currentOrgId, currentOrgId, limit, offset]).map((series) => normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true }));
+    return pageResult(items, { page, limit, total });
   }
   let orgCourseDetailMatch = part.match(/^\/course-series\/([^/]+)$/);
   if (orgCourseDetailMatch && method === 'GET') {
@@ -869,15 +880,20 @@ export async function handleOrg(ctx) {
     const params = [currentOrgId]; let where = 'report.org_id=?';
     if (auth.user.role === 'TEACHER') { where += " AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))"; params.push(auth.user.id, auth.user.id); }
     const status = ctx.search.get('status'); if (['PENDING', 'RESOLVED', 'DISMISSED'].includes(status)) { where += ' AND report.status=?'; params.push(status); }
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
+    const fromWhere = `FROM work_reports report JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id WHERE ${where}`;
+    const total = Number(row(`SELECT COUNT(*) n ${fromWhere}`, params)?.n || 0);
+    // pending 是筛选范围内的待处理总数（不是本页条数），页头徽标要一直准确
+    const pending = Number(row(`SELECT COUNT(*) n ${fromWhere} AND report.status='PENDING'`, params)?.n || 0);
     const items = rows(
       `SELECT report.*, work.title AS work_title, work.status AS work_status, reporter.display_name AS reporter_name, handler.display_name AS handler_name
        FROM work_reports report JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
        JOIN users reporter ON reporter.id=report.reporter_id LEFT JOIN users handler ON handler.id=report.handled_by
        WHERE ${where}
-       ORDER BY CASE report.status WHEN 'PENDING' THEN 0 ELSE 1 END, report.created_at DESC`, params,
+       ORDER BY CASE report.status WHEN 'PENDING' THEN 0 ELSE 1 END, report.created_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset],
     ).map((report) => normalizeWorkReport(report, { includeReporter: true }));
-    return { items, total: items.length, pending: items.filter((item) => item.status === 'PENDING').length };
+    return { ...pageResult(items, { page, limit, total }), pending };
   }
   let orgReportMatch = part.match(/^\/work-reports\/([^/]+)$/);
   if (orgReportMatch && method === 'PUT') {

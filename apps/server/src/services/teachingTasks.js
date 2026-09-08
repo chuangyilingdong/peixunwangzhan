@@ -1,4 +1,4 @@
-import { audit, errors, id, json, nowIso, parseJson, q, requireRole, row, rows, transaction, assignmentActiveSql } from '../lib.js';
+import { audit, errors, id, json, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, assignmentActiveSql } from '../lib.js';
 
 // Every read and write uses the same class scope, including explicitly supplied IDs.
 function scopedClass(auth, classId, { student = false, active = false } = {}) {
@@ -78,7 +78,7 @@ function summarize(items) {
     completed: items.filter(i => i.progressStatus === 'COMPLETED').length, overdue: items.filter(i => i.overdue).length,
     unviewed: items.filter(i => i.progressStatus === 'SUBMITTED' && !i.latestSubmission?.viewedAt).length };
 }
-function tasksInScope(auth, student, classId) {
+function taskScopeWhere(auth, student, classId) {
   if (classId) scopedClass(auth, classId, { student });
   let scope = ''; const params = [auth.user.orgId];
   if (classId) { scope += ' AND task.class_id=?'; params.push(classId); }
@@ -89,9 +89,21 @@ function tasksInScope(auth, student, classId) {
     scope += ` AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members member WHERE member.class_id=task.class_id AND member.user_id=? AND member.role='TEACHER' AND member.removed_at IS NULL))`;
     params.push(auth.user.id, auth.user.id);
   }
+  return { scope, params };
+}
+function tasksInScope(auth, student, classId, { limit = null, offset = 0 } = {}) {
+  const { scope, params } = taskScopeWhere(auth, student, classId);
+  const pagination = limit === null ? '' : ' LIMIT ? OFFSET ?';
+  const queryParams = limit === null ? params : [...params, limit, Math.max(0, Number(offset) || 0)];
   return rows(`SELECT task.*,class.name class_name,lesson.title lesson_title FROM learning_tasks task
     JOIN classes class ON class.id=task.class_id AND class.org_id=task.org_id LEFT JOIN course_lessons lesson ON lesson.id=task.lesson_id
-    WHERE task.org_id=?${scope} ORDER BY task.created_at DESC,task.id DESC`, params);
+    WHERE task.org_id=?${scope} ORDER BY task.created_at DESC,task.id DESC${pagination}`, queryParams);
+}
+function tasksInScopeCount(auth, student, classId) {
+  const { scope, params } = taskScopeWhere(auth, student, classId);
+  return Number(row(`SELECT COUNT(*) n FROM learning_tasks task
+    JOIN classes class ON class.id=task.class_id AND class.org_id=task.org_id
+    WHERE task.org_id=?${scope}`, params)?.n || 0);
 }
 
 export function handleStudentTasks(ctx, part) {
@@ -138,8 +150,11 @@ export function handleStudentTasks(ctx, part) {
 export function handleTeachingTasks(ctx, part) {
   const auth = requireRole(ctx, ['TEACHER', 'ORG_ADMIN']); const { method, body = {} } = ctx;
   if (part === '/teaching/tasks' && method === 'GET') {
-    const items = tasksInScope(auth, false, ctx.search.get('classId') || '').map(task => ({ ...normalizeTask(task), summary: summarize(taskRoster(task)) }));
-    return { items };
+    const classId = ctx.search.get('classId') || '';
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
+    const total = tasksInScopeCount(auth, false, classId);
+    const items = tasksInScope(auth, false, classId, { limit, offset }).map(task => ({ ...normalizeTask(task), summary: summarize(taskRoster(task)) }));
+    return pageResult(items, { page, limit, total });
   }
   if (part === '/teaching/summary' && method === 'GET') {
     const tasks = tasksInScope(auth, false, ''); const totals = { tasks: tasks.length, published: 0, submitted: 0, overdue: 0, unviewed: 0, completed: 0 };

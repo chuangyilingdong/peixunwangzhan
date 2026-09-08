@@ -13,6 +13,8 @@ import {
   normalizeWork,
   normalizeWorkReport,
   nowIso,
+  pageParams,
+  pageResult,
   parseJson,
   q,
   requireRole,
@@ -170,7 +172,7 @@ function annotationRowsForStudent(workId, studentId, orgId) {
      LEFT JOIN work_feedback_reads read_record ON read_record.annotation_id = annotation.id
        AND read_record.student_id = ?
      WHERE annotation.work_id=? AND annotation.org_id=?
-     ORDER BY annotation.created_at DESC`,
+     ORDER BY annotation.created_at DESC LIMIT 500`,
     [studentId, workId, orgId],
   ).map((annotation) => ({
     id: annotation.id,
@@ -708,21 +710,24 @@ export async function handleStudent(ctx) {
     const lessonId = ctx.search.get('lessonId');
     if (lessonId) { where += ' AND project.course_lesson_id = ?'; params.push(lessonId); }
 
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
+    const fromWhere = `FROM student_projects project
+       LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
+       LEFT JOIN course_series series ON series.id = lesson.series_id
+       LEFT JOIN classes class ON class.id = project.class_id
+       LEFT JOIN works work ON work.project_id = project.id
+       WHERE ${where}`;
+    const total = Number(row(`SELECT COUNT(DISTINCT project.id) n ${fromWhere}`, params)?.n || 0);
     const items = rows(
       `SELECT project.*, lesson.title AS lesson_title,
               series.id AS series_id, series.title AS series_title,
               class.name AS class_name,
               work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
-       FROM student_projects project
-       LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
-       LEFT JOIN course_series series ON series.id = lesson.series_id
-       LEFT JOIN classes class ON class.id = project.class_id
-       LEFT JOIN works work ON work.project_id = project.id
-       WHERE ${where}
-       ORDER BY project.updated_at DESC LIMIT 200`,
-      params,
+       ${fromWhere}
+       ORDER BY project.updated_at DESC LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
     ).map((project) => normalizeProject(project));
-    return { items, view };
+    return { ...pageResult(items, { page, limit, total }), view };
   }
   if (part === '/projects' && method === 'POST') {
     const courseLessonId = nonEmptyString(ctx.body?.courseLessonId, '课时', { max: 100 });
@@ -874,26 +879,26 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/projects\/([^/]+)\/snapshots$/);
   if (match && method === 'GET') {
     const project = getOwnProject(ctx, match[1]);
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
+    const total = Number(row('SELECT COUNT(*) n FROM project_snapshots WHERE project_id = ?', [project.id])?.n || 0);
     const items = rows(
       `SELECT snapshot.id, snapshot.project_id, snapshot.version, snapshot.label,
               snapshot.actor_id, snapshot.created_at, actor.display_name AS actor_name
        FROM project_snapshots snapshot
        LEFT JOIN users actor ON actor.id = snapshot.actor_id
        WHERE snapshot.project_id = ?
-       ORDER BY snapshot.version DESC`,
-      [project.id],
+       ORDER BY snapshot.version DESC LIMIT ? OFFSET ?`,
+      [project.id, limit, offset],
     );
-    return {
-      items: items.map((snapshot) => ({
-        id: snapshot.id,
-        projectId: snapshot.project_id,
-        version: Number(snapshot.version),
-        label: snapshot.label || null,
-        actorId: snapshot.actor_id,
-        actorName: snapshot.actor_name || null,
-        createdAt: snapshot.created_at,
-      })),
-    };
+    return pageResult(items.map((snapshot) => ({
+      id: snapshot.id,
+      projectId: snapshot.project_id,
+      version: Number(snapshot.version),
+      label: snapshot.label || null,
+      actorId: snapshot.actor_id,
+      actorName: snapshot.actor_name || null,
+      createdAt: snapshot.created_at,
+    })), { page, limit, total });
   }
 
   match = part.match(/^\/projects\/([^/]+)\/snapshots\/(\d+)$/);
@@ -1207,7 +1212,7 @@ export async function handleStudent(ctx) {
        JOIN users author ON author.id=annotation.author_id
        LEFT JOIN users resolver ON resolver.id=annotation.resolved_by
        WHERE annotation.work_id=? AND annotation.org_id=?
-       ORDER BY annotation.created_at DESC`,
+       ORDER BY annotation.created_at DESC LIMIT 500`,
       [work.id, auth.user.orgId],
     ).map((annotation) => ({
       id: annotation.id, workId: annotation.work_id, nodeId: annotation.node_id || null, content: annotation.content,
@@ -1379,6 +1384,14 @@ export async function handleStudent(ctx) {
   }
 
   if (part === '/works' && method === 'GET') {
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
+    const total = Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId])?.n || 0);
+    // 汇总口径跨页，不能从当前页 items 推导
+    const summary = {
+      total,
+      published: Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId])?.n || 0),
+      withFeedback: Number(row("SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND teacher_comment IS NOT NULL AND teacher_comment <> ''", [auth.user.id, auth.user.orgId])?.n || 0),
+    };
     const rawItems = rows(
       `SELECT work.*, class.name AS class_name, lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
        FROM works work
@@ -1386,8 +1399,8 @@ export async function handleStudent(ctx) {
        LEFT JOIN course_lessons lesson ON lesson.id = work.course_lesson_id
        LEFT JOIN users reviewer ON reviewer.id = work.reviewed_by
        WHERE work.student_id = ? AND work.org_id = ?
-       ORDER BY work.submitted_at DESC LIMIT 200`,
-      [auth.user.id, auth.user.orgId],
+       ORDER BY work.submitted_at DESC LIMIT ? OFFSET ?`,
+      [auth.user.id, auth.user.orgId, limit, offset],
     );
     const submissionsByWork = workSubmissionRows(rawItems.map((work) => work.id));
     const items = rawItems.map((work) => {
@@ -1433,7 +1446,7 @@ export async function handleStudent(ctx) {
         })(),
       };
     });
-    return { items };
+    return { ...pageResult(items, { page, limit, total }), summary };
   }
 
   return null;

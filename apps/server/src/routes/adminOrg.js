@@ -707,7 +707,7 @@ function annotationRows(workId) {
      JOIN users author ON author.id=annotation.author_id
      LEFT JOIN users resolver ON resolver.id=annotation.resolved_by
      WHERE annotation.work_id=?
-     ORDER BY annotation.created_at DESC`,
+     ORDER BY annotation.created_at DESC LIMIT 500`,
     [workId],
   ).map((annotation) => ({
     id: annotation.id, workId: annotation.work_id, nodeId: annotation.node_id || null,

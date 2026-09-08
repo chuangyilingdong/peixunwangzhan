@@ -309,6 +309,19 @@ export function asPositiveInteger(value, field, { min = 1, max = Number.MAX_SAFE
   return numeric;
 }
 
+// 列表分页参数：page/limit 从查询串解析，limit 始终有上限，避免无界查询
+export function pageParams(search, { defaultLimit = 50, maxLimit = 200 } = {}) {
+  const page = asPositiveInteger(search?.get?.('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+  const limit = asPositiveInteger(search?.get?.('limit'), '每页数量', { min: 1, max: maxLimit, fallback: defaultLimit });
+  return { page, limit, offset: (page - 1) * limit };
+}
+
+// 统一分页响应：total 是筛选后的总条数，不是本页条数
+export function pageResult(items, { page, limit, total }) {
+  const safeTotal = Math.max(0, Number(total) || 0);
+  return { items, total: safeTotal, page, limit, totalPages: Math.max(1, Math.ceil(safeTotal / limit)) };
+}
+
 export function nonEmptyString(value, field, { max = 500, fallback = undefined } = {}) {
   if ((value === undefined || value === null) && fallback !== undefined) return fallback;
   const text = String(value ?? '').trim();
