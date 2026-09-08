@@ -923,11 +923,12 @@ export async function handleStudent(ctx) {
 
   if (match && method === 'GET') {
     const project = getOwnProject(ctx, match[1]);
-    const snapshot = row('SELECT * FROM project_snapshots WHERE project_id = ? AND version = ?', [project.id, Number(match[2])]);
+    const snapshot = row('SELECT snapshot.*, actor.display_name AS actor_name FROM project_snapshots snapshot LEFT JOIN users actor ON actor.id = snapshot.actor_id WHERE snapshot.project_id = ? AND snapshot.version = ?', [project.id, Number(match[2])]);
     if (!snapshot) throw errors.notFound('项目版本不存在', 'PROJECT_SNAPSHOT_NOT_FOUND');
     return {
       id: snapshot.id, projectId: snapshot.project_id, version: Number(snapshot.version), label: snapshot.label || null,
-      canvasSnapshot: JSON.parse(snapshot.canvas_snapshot), actorId: snapshot.actor_id, createdAt: snapshot.created_at,
+      canvasSnapshot: JSON.parse(snapshot.canvas_snapshot), actorId: snapshot.actor_id, actorName: snapshot.actor_name || null,
+      createdAt: snapshot.created_at,
     };
   }
 
