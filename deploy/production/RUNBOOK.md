@@ -67,6 +67,18 @@ node scripts/p9-live-security-smoke.mjs
 ```
 
 `/server.js`、`/package.json`、`/apps/`、`/packages/`、`/node_modules/`、`/scripts/`、`/deploy/`、`/.env` 等必须返回 404；`/api/health` 必须返回 200，入口安全头必须存在。若任一路径返回 200，先不要标记 P9-D05 完成，按 Nginx 变更窗口处理并保留变更前配置备份。
+## 发布记录（2026-09-08）
+
+- 本次实际公网域名由 Nginx 指向 `/srv/ai-kids-platform/production/current`，不是 `internal-test/current`。
+- 生产发布版本：`20260908T051403Z`。
+- 对应提交：`b6020c1`。
+- 发布前备份：`/srv/ai-kids-platform/production/backups/before-20260908T051403Z.db`。
+- 本次修复了管理端机构充值入口、机构端配额/流水路由、官网学生积分接口，并移除生产构建脚本对已删除 `apps/student` 的依赖。
+- 生产服务：`learning-platform-production`，API 回环端口 `8789`；健康检查已通过。
+- 以后发布必须构建并切换 `production/releases/<stamp>`，不要只切换 `internal-test/releases`；切换后重启 `learning-platform-production`，再检查 `curl -fsS http://127.0.0.1:8789/health`。
+- 服务器运行时 Node 路径为 `/srv/ai-kids-platform/runtime/node/bin/node`；源码构建可使用 `/opt/nodejs/node-v24.20.0-linux-x64/bin` 加入 `PATH`。
+- 构建脚本的 `pnpm` 元数据仅供记录；若服务器 PATH 没有 pnpm，不能因此跳过构建产物和健康检查。
+
 ## 公网验收
 
 在服务器 Node 24 环境执行：
