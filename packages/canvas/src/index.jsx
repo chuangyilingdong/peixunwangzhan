@@ -203,17 +203,22 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate, getIncomingImageAssetUrl } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
+  // 图生视频模型（i2v）需要首帧图：只有从图片节点连过来才能生成。
+  const requiresFirstFrame = data.slotType === 'video' && data.requiresFirstFrame === true;
+  const sourceAssetUrl = requiresFirstFrame ? getIncomingImageAssetUrl(id) : '';
+  const missingFirstFrame = requiresFirstFrame && !sourceAssetUrl;
   return <NodeFrame icon="▶" tone="video" title={data.title || '故事短片'} selected={selected}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
       : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
-    {canGenerate && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '' })}>▶ {videoUrl ? '重新生成短片' : '生成故事短片'}</button>}
+    {canGenerate && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" disabled={missingFirstFrame} title={missingFirstFrame ? '该模型需要先连接一张画面（首帧）' : undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl })}>▶ {videoUrl ? '重新生成短片' : '生成故事短片'}</button>}
+    {missingFirstFrame && !data.generationStatus && <span className="learning-node__generation-state is-error">该模型需要先连接一张画面（首帧）</span>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
-    {selected && <span className="learning-node__hint">连接提示词或画面，组织故事顺序</span>}
+    {selected && <span className="learning-node__hint">{missingFirstFrame ? '从图片节点的圆点连到本卡片，才能生成' : '连接提示词或画面，组织故事顺序'}</span>}
   </NodeFrame>;
 }
 
@@ -294,6 +299,13 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
       updateNode(nodeId, { generationStatus: 'FAILED', generationError: error instanceof Error ? error.message : 'AI生成失败' });
     }
   }, [onGenerateNode, readOnly, updateNode]);
+
+  // 取连到该节点的图片素材地址，供图生视频当首帧。
+  const getIncomingImageAssetUrl = useCallback((nodeId) => {
+    const sourceIds = new Set((edges || []).filter((edge) => edge.target === nodeId).map((edge) => edge.source));
+    const imageNode = (nodes || []).find((node) => sourceIds.has(node.id) && node.type === 'image');
+    return String(imageNode?.data?.assetUrl || imageNode?.data?.previewUrl || '');
+  }, [edges, nodes]);
   const addNodeAt = useCallback((type, position) => {
     if (readOnly || !allowNodeCreation) return;
     const capabilityByType = { prompt: 'text', image: 'image', video: 'video' };
@@ -407,7 +419,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities, getIncomingImageAssetUrl }}>
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}

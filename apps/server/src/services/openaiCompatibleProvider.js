@@ -176,7 +176,8 @@ async function parseResponse(response, modality) {
 // 会被课时配置的取值替换，不再由代码写死。
 function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {} }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
-  const template = requestTemplateFor({ requestTemplates }, normalizedModality);
+  const requiresFirstFrame = String(options.inputFrame || '').toUpperCase() === 'FIRST';
+  const template = requestTemplateFor({ requestTemplates }, normalizedModality, { requiresFirstFrame });
   if (template) {
     return renderRequestTemplate(template, {
       model,
@@ -187,6 +188,7 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       resolution: String(options.resolution || '').trim(),
       durationSeconds: Number(options.durationSeconds) || 5,
       audio: options.audio === true,
+      firstFrameUrl: String(options.firstFrameUrl || '').trim(),
       n: 1,
     });
   }

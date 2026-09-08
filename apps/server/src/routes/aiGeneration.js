@@ -17,7 +17,7 @@ const MODALITY_LABELS = {
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo', PODCAST: 'allowPodcast', DUBBING: 'allowDubbing' };
 const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video', PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing' };
 const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music', PODCAST: 'podcast', DUBBING: 'dubbing' };
-const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP']);
+const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP', 'GENERATION_FIRST_FRAME_REQUIRED']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
@@ -66,13 +66,17 @@ function assertCapability(modality, session, pkg) {
  * 否则会先花钱调一次上游、再在结算时失败并进入重试，重复消耗额度。
  * 结算时仍会再校验一次（异步任务等待期间状态可能变化）。
  */
-function assertGenerationPreflight({ user, orgId, context, modality }) {
+function assertGenerationPreflight({ user, orgId, context, modality, requiresFirstFrame = false, firstFrameUrl = '' }) {
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
   const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
   if (lessonCapability && !(context.lesson?.capabilities || []).includes(lessonCapability)) {
     throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
+  }
+  // 图生视频模型缺首帧图时上游必然拒绝：提前拦截，避免白调一次上游再失败。
+  if (requiresFirstFrame && !firstFrameUrl) {
+    throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
   }
 }
 
@@ -121,13 +125,24 @@ function jobDetail(jobId, { requireAuth = null } = {}) {
   return normalizeJob(job, { assets: assetsFor(job.id) });
 }
 
-function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true }) {
+/**
+ * 图生视频模型的首帧来源：只认本项目已有的图片素材。
+ * 客户端传的是 assetUrl，这里回查 media_assets 确认归属，避免任意外部 URL 被送进上游。
+ */
+function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
+  const url = String(sourceAssetUrl || '').trim();
+  if (!url || url.length > 2000) return '';
+  const asset = row("SELECT asset_url FROM media_assets WHERE project_id = ? AND modality = 'IMAGE' AND asset_url = ?", [projectId, url]);
+  return asset ? String(asset.asset_url) : '';
+}
+
+function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null }) {
   const jobId = id('generation');
   const now = nowIso();
   transaction(() => q(`INSERT INTO generation_jobs(
-       id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null]));
+       id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl]));
     if (startImmediately) {
       assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
       q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
@@ -143,7 +158,7 @@ function queueItemFromJob(jobId) {
   const auth = { user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org: row('SELECT * FROM organizations WHERE id=?', [job.org_id]) };
   const project = ownProject(auth, job.project_id);
   if (!project) return null;
-  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, requestContext: null };
+  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', requestContext: null };
 }
 
 function enqueuePersistedJob(jobId, delayMs = 0) {
@@ -245,10 +260,13 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
 }
 
 // 课时可为每个模态指定具体模型；未指定时用渠道默认模型。
+// 注意：generationSlots 的键是小写的 image / video，不能用模态名直接取。
 function lessonModelFor(context, modality) {
+  const key = String(modality || '').toUpperCase();
+  const slotKey = key === 'IMAGE' ? 'image' : key === 'VIDEO' ? 'video' : null;
+  if (!slotKey) return '';
   const slots = context?.lesson?.classroomConfig?.generationSlots || {};
-  const slot = slots[String(modality || '').toUpperCase()] || {};
-  return String(slot.model || '').trim();
+  return String((slots[slotKey] || {}).model || '').trim();
 }
 
 function providerSelectionForModality(policy, modality, modelOverride = '') {
@@ -264,7 +282,7 @@ function providerSelectionForModality(policy, modality, modelOverride = '') {
  * 生成参数只以「课时配置」为准：比例/清晰度/时长/音频由教师在课时里选定，
  * 客户端提交的取值一律不采信，避免绕过课时限制。课时没配时回落到该模型能力的第一项。
  */
-export function generationOptionsFor({ context, modality, policy, selection }) {
+export function generationOptionsFor({ context, modality, policy, selection, firstFrameUrl = '' }) {
   const key = String(modality || '').toUpperCase();
   const slotKey = key === 'IMAGE' ? 'image' : key === 'VIDEO' ? 'video' : null;
   if (!slotKey) return {};
@@ -279,6 +297,8 @@ export function generationOptionsFor({ context, modality, policy, selection }) {
     options.durationSeconds = Number(slot.durationSeconds) || capabilities.durations[0] || 5;
     // 模型不支持生成音频时，即使课时勾选了也不发送。
     options.audio = slot.audio === true && capabilities.audio === true;
+    options.inputFrame = capabilities.inputFrame || 'NONE';
+    if (options.inputFrame === 'FIRST' && firstFrameUrl) options.firstFrameUrl = firstFrameUrl;
   }
   return options;
 }
@@ -292,7 +312,7 @@ function auditContext(auth, ctx = null) {
   };
 }
 
-export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null }) {
+export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '' }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = getAiProviderPolicy();
   const context = resolveProjectUsageContext(auth.rawUser, project);
@@ -302,10 +322,11 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-  assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality });
-  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext });
+  const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
+  assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality, requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '' });
+  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null });
   try {
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options: generationOptionsFor({ context, modality, policy, selection: providerSelection }) });
+    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
@@ -322,7 +343,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
 
 
 async function processAsyncGeneration(item) {
-  const { auth, project, modality, prompt, title, jobId, requestContext } = item;
+  const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '' } = item;
   const policy = getAiProviderPolicy();
   const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
@@ -334,12 +355,13 @@ async function processAsyncGeneration(item) {
   const context = resolveProjectUsageContext(auth.rawUser, project);
   try {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality });
+    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
+    assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality, requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '' });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
     const generated = await Promise.race([
-      provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options: generationOptionsFor({ context, modality, policy, selection: providerSelection }) }),
+      provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options }),
       new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('AI 生成超时，请稍后重试'), { code: 'GENERATION_TIMEOUT' })), ASYNC_GENERATION_TIMEOUT_MS)),
     ]);
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
@@ -565,7 +587,12 @@ export async function handleAiGeneration(ctx) {
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false });
+    // 首帧缺失是业务问题，入队前就拦掉，别让任务跑一遍上游再失败。
+    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim()) });
+    if (options.inputFrame === 'FIRST' && !options.firstFrameUrl) {
+      throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
+    }
+    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }
@@ -589,6 +616,7 @@ export async function handleAiGeneration(ctx) {
     return runGenerationJob({
       auth, project, modality: modalityOf(source.modality), prompt: source.prompt,
       retryOfJobId: source.id, action: 'AI_GENERATION_RETRY', requestContext: ctx,
+      sourceAssetUrl: source.source_asset_url || '',
     });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);

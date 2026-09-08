@@ -3,10 +3,18 @@
 // 未声明的模型回落到模态默认值。这些值是「发给模型的原始取值」，所以按原样存、按原样发。
 const MAX_LIST = 24;
 
+// 视频模型是否需要输入画面（首帧）：i2v（图生视频）类模型必须带首帧图，
+// 上游会直接拒绝纯文本请求。默认按模型 id 里的 i2v 后缀推断，管理员可在渠道里覆盖。
+export const INPUT_FRAME_VALUES = Object.freeze(['NONE', 'FIRST']);
+
+export function defaultInputFrame(modelId) {
+  return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '').trim()) ? 'FIRST' : 'NONE';
+}
+
 export const MODALITY_CAPABILITY_DEFAULTS = Object.freeze({
   // 默认值刻意保持与改造前硬编码一致（图片 1k、视频 480p / 5 秒），避免升级即改变线上请求。
   IMAGE: Object.freeze({ aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1k', '2k', '4k'], durations: [], audio: false }),
-  VIDEO: Object.freeze({ aspectRatios: ['16:9', '9:16', '1:1'], resolutions: ['480p', '720p', '1080p', '2k', '4k'], durations: [5, 10], audio: false }),
+  VIDEO: Object.freeze({ aspectRatios: ['16:9', '9:16', '1:1'], resolutions: ['480p', '720p', '1080p', '2k', '4k'], durations: [5, 10], audio: false, inputFrame: 'NONE' }),
 });
 
 // 比例归一化：接受 9:16 / 9：16 / 9/16 / 9x16 等写法。
@@ -49,7 +57,7 @@ function durationList(value) {
 }
 
 /** 归一化单个模型的能力声明；模态不支持的能力项会被清空。 */
-export function normalizeModelCapabilities(value, modality) {
+export function normalizeModelCapabilities(value, modality, modelId = '') {
   const key = String(modality || '').toUpperCase();
   const input = value && typeof value === 'object' ? value : {};
   const result = {
@@ -57,8 +65,15 @@ export function normalizeModelCapabilities(value, modality) {
     resolutions: stringList(input.resolutions),
     durations: key === 'VIDEO' ? durationList(input.durations) : [],
     audio: key === 'VIDEO' ? input.audio === true || input.audio === 1 || String(input.audio).toLowerCase() === 'true' : false,
+    inputFrame: key === 'VIDEO' ? normalizeInputFrame(input.inputFrame, modelId) : 'NONE',
   };
   return result;
+}
+
+function normalizeInputFrame(value, modelId) {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (INPUT_FRAME_VALUES.includes(raw)) return raw;
+  return defaultInputFrame(modelId);
 }
 
 /** 渠道级 modelCapabilities 归一化：{ [modelId]: {...} } */
@@ -68,22 +83,24 @@ export function normalizeChannelModelCapabilities(value, modality) {
   for (const [modelId, capabilities] of Object.entries(input).slice(0, 200)) {
     const id = String(modelId || '').trim().slice(0, 200);
     if (!id) continue;
-    out[id] = normalizeModelCapabilities(capabilities, modality);
+    out[id] = normalizeModelCapabilities(capabilities, modality, id);
   }
   return out;
 }
 
-export function defaultCapabilities(modality) {
+export function defaultCapabilities(modality, modelId = '') {
   const key = String(modality || '').toUpperCase();
-  return MODALITY_CAPABILITY_DEFAULTS[key] || { aspectRatios: [], resolutions: [], durations: [], audio: false };
+  const base = MODALITY_CAPABILITY_DEFAULTS[key] || { aspectRatios: [], resolutions: [], durations: [], audio: false, inputFrame: 'NONE' };
+  return key === 'VIDEO' ? { ...base, inputFrame: defaultInputFrame(modelId) } : { ...base };
 }
 
-/** 取某模型的有效能力：模型级配置优先，其次模态默认值。 */
+/** 取某模型的有效能力：模型级配置优先，其次模态默认值（含 i2v 推断）。 */
 export function effectiveCapabilities(channel, modality, modelId) {
   const key = String(modality || '').toUpperCase();
-  const configured = channel?.modelCapabilities?.[String(modelId || '').trim()];
-  if (configured) return configured;
-  return defaultCapabilities(key);
+  const id = String(modelId || '').trim();
+  const configured = channel?.modelCapabilities?.[id];
+  if (configured && typeof configured === 'object') return normalizeModelCapabilities(configured, key, id);
+  return defaultCapabilities(key, id);
 }
 
 /**
@@ -108,7 +125,7 @@ export function listChannelModels(policy, modality) {
 }
 
 /** 生成请求模板的可用占位符。 */
-export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'audio', 'voice', 'n']);
+export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'audio', 'voice', 'n', 'firstFrameUrl']);
 
 // 默认请求模板刻意与改造前的请求体同形，只把写死的值换成占位符：
 // 管理员没改模板时，线上请求形状不变。视频的比例与音频放在 metadata 里（该字段原本就是透传袋），
@@ -116,6 +133,8 @@ export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 
 export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   IMAGE: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}', metadata: { resolution: '{{resolution}}', output_format: 'png' } }),
   VIDEO: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
+  // 图生视频：上游要求顶层 firstFrameUrl（实测 api.seedance.nz 的 i2v 模型缺该字段会 400）。
+  VIDEO_I2V: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', firstFrameUrl: '{{firstFrameUrl}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
   TEXT: Object.freeze({ model: '{{model}}', messages: [{ role: 'system', content: '你是少儿编程学习平台的创作助手。请用适合儿童理解的方式回答，避免危险或不适龄内容。' }, { role: 'user', content: '{{prompt}}' }] }),
   DUBBING: Object.freeze({ model: '{{model}}', input: '{{prompt}}', voice: '{{voice}}', response_format: 'mp3' }),
 });
@@ -158,9 +177,17 @@ export function parseRequestTemplate(text) {
   }
 }
 
-export function requestTemplateFor(channel, modality) {
+export function requestTemplateFor(channel, modality, { requiresFirstFrame = false } = {}) {
   const key = String(modality || '').toUpperCase();
   const custom = channel?.requestTemplates?.[key];
   if (custom && typeof custom === 'object') return custom;
+  if (key === 'VIDEO' && requiresFirstFrame) return DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V;
   return DEFAULT_REQUEST_TEMPLATES[key] || null;
+}
+
+/** 取某模态当前生效的渠道（能力路由里配置的那个）。 */
+export function modalityChannel(policy, modality) {
+  const key = String(modality || '').toUpperCase();
+  const channelId = policy?.modalityChannels?.[key];
+  return Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) || null : null;
 }

@@ -249,10 +249,10 @@ export function CanvasWorkspace({ api, ...props }) {
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
   }
 
-  async function generateCanvasNode({ modality, prompt, title }) {
+  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '' }) {
     if (!editable) throw new Error('当前作品不可编辑');
-    // 比例/清晰度/时长/音频由服务端按课时配置取值，这里只提交内容。
-    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title });
+    // 比例/清晰度/时长/音频由服务端按课时配置取值，这里只提交内容与首帧来源。
+    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl });
     let result = queued.job;
     for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -371,7 +371,7 @@ export function CanvasWorkspace({ api, ...props }) {
       data: {
         title: label, slotType,
         aspectRatio: slot.aspectRatio || '', resolution: slot.resolution || slot.size || '', model: slot.model || '',
-        ...(slotType === 'video' ? { durationSeconds: slot.durationSeconds || 5, audio: slot.audio === true } : {}),
+        ...(slotType === 'video' ? { durationSeconds: slot.durationSeconds || 5, audio: slot.audio === true, requiresFirstFrame: slot.requiresFirstFrame === true } : {}),
         caption: '', text: '',
       },
     };

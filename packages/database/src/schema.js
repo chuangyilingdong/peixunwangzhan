@@ -1142,6 +1142,8 @@ for (const statement of [
   "ALTER TABLE generation_jobs ADD COLUMN last_error_at TEXT",
   "ALTER TABLE generation_jobs ADD COLUMN cancelled_at TEXT",
   "ALTER TABLE generation_jobs ADD COLUMN worker_id TEXT",
+  // 图生视频的首帧来源（本项目图片素材的 asset_url），重试与异步 worker 复用。
+  "ALTER TABLE generation_jobs ADD COLUMN source_asset_url TEXT",
 ]) { try { db.exec(statement); } catch (_) {} }
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_queue ON generation_jobs(status, next_attempt_at, created_at)'); } catch (_) {}
 

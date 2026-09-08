@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 import { CORS_ALLOWED_ORIGINS } from './config.js';
+import { effectiveCapabilities, modalityChannel } from './services/modelCapabilities.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -462,6 +463,11 @@ export function lessonCanvasConfig(lessonId) {
   const slots = config.generationSlots || {};
   const imageSlot = slots.image || {};
   const videoSlot = slots.video || {};
+  // 图生视频模型（i2v）必须带首帧图：课时里没选模型时按能力路由的渠道默认模型判断。
+  const videoPolicy = parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
+  const videoChannel = modalityChannel(videoPolicy, 'VIDEO');
+  const videoModel = String(videoSlot.model || '').trim() || String(videoChannel?.model || '').trim();
+  const videoInputFrame = effectiveCapabilities(videoChannel, 'VIDEO', videoModel).inputFrame || 'NONE';
   return {
     capabilities: capabilities.length ? capabilities : ['text'],
     materialGroups: groups,
@@ -470,6 +476,7 @@ export function lessonCanvasConfig(lessonId) {
       video: {
         count: Number(videoSlot.count || 0), aspectRatio: videoSlot.aspectRatio || '16:9', resolution: videoSlot.resolution || '480p',
         durationSeconds: Number(videoSlot.durationSeconds || 5), model: videoSlot.model || '', audio: videoSlot.audio === true,
+        requiresFirstFrame: videoInputFrame === 'FIRST',
       },
     },
   };
