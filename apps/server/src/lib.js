@@ -492,6 +492,7 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     ageRangeMin: value.age_range_min != null ? Number(value.age_range_min) : null,
     ageRangeMax: value.age_range_max != null ? Number(value.age_range_max) : null,
     tags,
+    deliveryMode: value.delivery_mode || 'CANVAS',
     lessonCount: count(`SELECT COUNT(*) AS n FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"}`, [value.id]),
     createdAt: value.created_at,
     updatedAt: value.updated_at,

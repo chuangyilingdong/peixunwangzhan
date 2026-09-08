@@ -1368,16 +1368,17 @@ export async function handleAdmin(ctx) {
     if (row("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
     const seriesId = id('series');
     const now = nowIso();
+    const seriesDeliveryMode = normalizeDeliveryMode(body.deliveryMode);
     const createdLessonIds = [];
     transaction(() => {
-      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,validity_days,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, String(body.version || '1.0').slice(0, 100), integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), now, now]);
+      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,validity_days,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, String(body.version || '1.0').slice(0, 100), integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, now, now]);
       lessons.forEach((lesson, index) => {
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle) throw errors.badRequest(`第${index + 1}课标题不能为空`, 'LESSON_TITLE_REQUIRED');
         if (lessonTitle.length > 200) throw errors.badRequest(`第${index + 1}课标题不能超过200个字符`, 'VALIDATION_ERROR');
         const lessonStatus = status === 'ARCHIVED' ? 'ARCHIVED' : (lesson.status || 'DRAFT');
         if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(lessonStatus)) throw errors.badRequest(`第${index + 1}课状态无效`, 'INVALID_LESSON_STATUS');
-         const lessonId = id('lesson'); const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode); const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
+         const lessonId = id('lesson'); const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode || seriesDeliveryMode); const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
          q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
          createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, classroomConfig, canvasTemplateSnapshot: lesson.canvasTemplateSnapshot });
       });
@@ -1443,7 +1444,8 @@ export async function handleAdmin(ctx) {
       }
     }
     const before = normalizeSeries(series);
-     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,validity_days=?,estimated_credits_per_person=?,grade_range=?,visibility=?,sort=?,version=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, visibility, sort, version, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, nowIso(), series.id]);
+    const deliveryMode = body.deliveryMode === undefined ? undefined : normalizeDeliveryMode(body.deliveryMode);
+     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,validity_days=?,estimated_credits_per_person=?,grade_range=?,visibility=?,sort=?,version=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, visibility, sort, version, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
     const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true });
@@ -1490,7 +1492,7 @@ export async function handleAdmin(ctx) {
         const lessonStatus = lesson.status || 'DRAFT';
         if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(lessonStatus)) throw errors.badRequest('第' + (index + 1) + '课状态无效', 'INVALID_LESSON_STATUS');
         const lessonId = id('lesson');
-        const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode);
+        const deliveryMode = normalizeDeliveryMode(lesson.deliveryMode || series.delivery_mode);
         const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
         q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, series.id, lessonTitle, String(lesson.summary || '').slice(0, 10000), maxSort + index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
         replaceQueue.push({ id: lessonId, lesson, deliveryMode, classroomConfig });
@@ -1556,6 +1558,7 @@ export async function handleAdmin(ctx) {
     if (body.status !== undefined) assertTransition(ctx, 'courseLesson', lesson.status, status, {
       targetType: 'COURSE_LESSON', targetId: lesson.id, before: { status: lesson.status, title: lesson.title },
       code: 'INVALID_LESSON_STATUS_TRANSITION', message: '当前课时状态不允许转换', details: { requestedStatus: status },
+      allowSameState: true,
     });
     const lessonContent = body.lessonContent === undefined ? lesson.lesson_content : String(body.lessonContent).slice(0, 50000);
      const deliveryMode = body.deliveryMode === undefined ? (lesson.delivery_mode || 'CANVAS') : normalizeDeliveryMode(body.deliveryMode);

@@ -1,6 +1,5 @@
 // 平台课包管理：列表视图 + 课包详情（标签页）+ 课时编辑抽屉
 import { useEffect, useMemo, useState } from 'react';
-import { CanvasEditor } from '@platform/canvas';
 import {
   Empty, ErrorState, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Panel,
   Pagination, Status, formatDate, useData,
@@ -23,7 +22,7 @@ const defaultClassroomConfig = {
 };
 const emptyCourseForm = {
   title: '', description: '', coverImageUrl: '', coverAssetId: '', priceYuan: '', version: '1.0',
-  validityDays: '365', estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'ALL_ORGS',
+  validityDays: '365', estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'ALL_ORGS', deliveryMode: 'CANVAS',
   difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '',
 };
 
@@ -49,11 +48,19 @@ function coverUrlOf(course) {
 /* ---------------------------------------------------------------- 课时画布配置 */
 
 function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
+  const providerConfig = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
+  const providerPolicy = providerConfig.data?.policy;
+  function channelModels(modality) {
+    const channelId = providerPolicy?.modalityChannels?.[modality];
+    const channel = (providerPolicy?.channels || []).find((item) => item.id === channelId);
+    if (!channel) return [];
+    if (Array.isArray(channel.models) && channel.models.length) return channel.models;
+    return channel.model ? [channel.model] : [];
+  }
   const deliveryMode = edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS';
   const capabilities = edit.capabilities ?? lesson.capabilities ?? ['text'];
   const groups = edit.materialGroups ?? lesson.materialGroups ?? [];
   const classroomConfig = classroomConfigFor(lesson, edit);
-  const canvasTemplateSnapshot = edit.canvasTemplateSnapshot ?? lesson.canvasTemplateSnapshot ?? {};
   const update = (patch) => onChange({ ...edit, ...patch });
   function updateGroup(index, patch) { update({ materialGroups: groups.map((group, i) => i === index ? { ...group, ...patch } : group) }); }
   function updateMaterial(groupIndex, materialIndex, patch) { update({ materialGroups: groups.map((group, i) => i !== groupIndex ? group : { ...group, materials: (group.materials || []).map((item, j) => j === materialIndex ? { ...item, ...patch } : item) }) }); }
@@ -89,12 +96,8 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
         {!groups.length && <p className="muted">还没有素材组。一级菜单会显示在学生课堂画布的素材区，点击后打开对应材料。</p>}
       </div>
       <div className="lesson-generation-slots"><div className="lesson-config-heading"><strong>本课生成框体限制</strong><span className="muted">学生只能使用这里配置的数量、比例、尺寸、时长和模型</span></div>
-        <div className="form-grid"><label>生图框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.image.count} onChange={(event) => updateSlot('image', { count: event.target.value })} /></label><label>生图比例<input value={classroomConfig.generationSlots.image.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('image', { aspectRatio: event.target.value })} /></label><label>生图尺寸<input value={classroomConfig.generationSlots.image.size} placeholder="1024x576" onChange={(event) => updateSlot('image', { size: event.target.value })} /></label><label>生图模型<input value={classroomConfig.generationSlots.image.model || ''} placeholder="模型标识（可选）" onChange={(event) => updateSlot('image', { model: event.target.value })} /></label></div>
-        <div className="form-grid"><label>生视频框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.video.count} onChange={(event) => updateSlot('video', { count: event.target.value })} /></label><label>生视频比例<input value={classroomConfig.generationSlots.video.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('video', { aspectRatio: event.target.value })} /></label><label>生视频尺寸<input value={classroomConfig.generationSlots.video.size} placeholder="1920x1080" onChange={(event) => updateSlot('video', { size: event.target.value })} /></label><label>单个视频时长（秒）<input type="number" min="1" max="120" value={classroomConfig.generationSlots.video.durationSeconds} onChange={(event) => updateSlot('video', { durationSeconds: event.target.value })} /></label><label>生视频模型<input value={classroomConfig.generationSlots.video.model || ''} placeholder="模型标识（可选）" onChange={(event) => updateSlot('video', { model: event.target.value })} /></label></div>
-      </div>
-      <div className="lesson-canvas-template">
-        <div className="lesson-config-heading"><strong>默认画布模板</strong><span className="muted">学生进入本课时时将看到该初始画布（可留空，则使用标准入门底稿）</span></div>
-        <CanvasEditor initialSnapshot={canvasTemplateSnapshot} onChange={(snapshot) => update({ canvasTemplateSnapshot: snapshot })} showStarter={false} capabilities={['text', 'image', 'video', 'music', 'podcast', 'dubbing']} />
+        <div className="form-grid"><label>生图框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.image.count} onChange={(event) => updateSlot('image', { count: event.target.value })} /></label><label>生图比例<input value={classroomConfig.generationSlots.image.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('image', { aspectRatio: event.target.value })} /></label><label>生图尺寸<input value={classroomConfig.generationSlots.image.size} placeholder="1024x576" onChange={(event) => updateSlot('image', { size: event.target.value })} /></label><label>生图模型{channelModels('IMAGE').length ? <select value={classroomConfig.generationSlots.image.model || ''} onChange={(event) => updateSlot('image', { model: event.target.value })}><option value="">使用渠道默认模型</option>{channelModels('IMAGE').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={classroomConfig.generationSlots.image.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => updateSlot('image', { model: event.target.value })} />}</label></div>
+        <div className="form-grid"><label>生视频框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.video.count} onChange={(event) => updateSlot('video', { count: event.target.value })} /></label><label>生视频比例<input value={classroomConfig.generationSlots.video.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('video', { aspectRatio: event.target.value })} /></label><label>生视频尺寸<input value={classroomConfig.generationSlots.video.size} placeholder="1920x1080" onChange={(event) => updateSlot('video', { size: event.target.value })} /></label><label>单个视频时长（秒）<input type="number" min="1" max="120" value={classroomConfig.generationSlots.video.durationSeconds} onChange={(event) => updateSlot('video', { durationSeconds: event.target.value })} /></label><label>生视频模型{channelModels('VIDEO').length ? <select value={classroomConfig.generationSlots.video.model || ''} onChange={(event) => updateSlot('video', { model: event.target.value })}><option value="">使用渠道默认模型</option>{channelModels('VIDEO').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={classroomConfig.generationSlots.video.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => updateSlot('video', { model: event.target.value })} />}</label></div>
       </div>
     </>}
   </div>;
@@ -116,17 +119,15 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
   async function save() {
     setBusy(true); setMessage('');
     try {
-      await api.request(`admin/course-lessons/${lesson.id}`, {
-        method: 'PUT',
-        body: {
-          title, summary, durationMinutes: Number(durationMinutes), status, lessonContent,
-          deliveryMode: edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS',
-          classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {},
-          capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'],
-          materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [],
-          canvasTemplateSnapshot: edit.canvasTemplateSnapshot ?? lesson.canvasTemplateSnapshot ?? {},
-        },
-      });
+      const body = {
+        title, summary, durationMinutes: Number(durationMinutes), lessonContent,
+        deliveryMode: edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS',
+        classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {},
+        capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'],
+        materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [],
+      };
+      if (status !== lesson.status) body.status = status;
+      await api.request(`admin/course-lessons/${lesson.id}`, { method: 'PUT', body });
       onSaved?.(`课时「${title}」已保存。`);
       onClose();
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
@@ -185,6 +186,7 @@ function CreateCourseModal({ api, onClose, onCreated }) {
         title: form.title, description: form.description, coverImageUrl: form.coverImageUrl || null, coverAssetId: form.coverAssetId || null,
         priceFen: Math.round(Number(priceText) * 100), version: form.version || '1.0', validityDays: Number(form.validityDays || 365),
         estimatedCreditsPerPerson: Number(form.estimatedCreditsPerPerson || 0), gradeRange: form.gradeRange, visibility: form.visibility,
+        deliveryMode: form.deliveryMode || 'CANVAS',
         lessons: lessons.map((title) => String(title).trim()).filter(Boolean).map((title) => ({ title })),
       };
       if (form.difficultyLevel !== '' && form.difficultyLevel != null) payload.difficultyLevel = Number(form.difficultyLevel);
@@ -206,6 +208,7 @@ function CreateCourseModal({ api, onClose, onCreated }) {
           <label>课程简介<textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="一句话说明这门课教什么" /></label>
           <div className="form-grid">
             <label>可见范围<select value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+            <label>课堂类型<select value={form.deliveryMode} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂（预留）</option></select></label>
             <label>版本号<input value={form.version} onChange={(event) => setForm({ ...form, version: event.target.value })} placeholder="1.0" /></label>
           </div>
           <div className="course-lesson-draft">
@@ -354,7 +357,7 @@ function CourseDetail({ api, course, onBack }) {
       priceYuan: ((Number(series.priceFen || 0) / 100).toFixed(2)).replace(/\.00$/, ''), version: series.version || '1.0',
       validityDays: series.validityDays || 365, estimatedCreditsPerPerson: series.estimatedCreditsPerPerson || '', gradeRange: series.gradeRange || '',
       visibility: series.visibility, sort: series.sort, difficultyLevel: series.difficultyLevel ?? '', ageRangeMin: series.ageRangeMin ?? '',
-      ageRangeMax: series.ageRangeMax ?? '', tags: (series.tags || []).join(','),
+      ageRangeMax: series.ageRangeMax ?? '', tags: (series.tags || []).join(','), deliveryMode: series.deliveryMode || 'CANVAS',
     });
   }, [series?.id]);
 
@@ -374,7 +377,7 @@ function CourseDetail({ api, course, onBack }) {
         title: editForm.title, description: editForm.description, coverImageUrl: editForm.coverImageUrl || null, coverAssetId: editForm.coverAssetId || null,
         priceFen: Math.round(Number(priceText) * 100), validityDays: Number(editForm.validityDays || 365),
         estimatedCreditsPerPerson: Number(editForm.estimatedCreditsPerPerson || 0), gradeRange: editForm.gradeRange || '',
-        visibility: editForm.visibility, sort: Number(editForm.sort),
+        visibility: editForm.visibility, sort: Number(editForm.sort), deliveryMode: editForm.deliveryMode || 'CANVAS',
       };
       if (body.coverImageUrl && !/^https:\/\//.test(body.coverImageUrl)) throw new Error('封面地址必须是 HTTPS 链接');
       body.difficultyLevel = editForm.difficultyLevel !== '' && editForm.difficultyLevel != null ? Number(editForm.difficultyLevel) : null;
@@ -395,7 +398,7 @@ function CourseDetail({ api, course, onBack }) {
   async function addLesson(event) {
     event.preventDefault();
     if (!lessonDraft.title.trim()) return;
-    await run(`admin/course-series/${course.id}/lessons`, 'POST', { lessons: [{ title: lessonDraft.title.trim(), durationMinutes: Number(lessonDraft.durationMinutes || 45), status: 'DRAFT' }] }, `已添加课时「${lessonDraft.title.trim()}」。`);
+    await run(`admin/course-series/${course.id}/lessons`, 'POST', { lessons: [{ title: lessonDraft.title.trim(), durationMinutes: Number(lessonDraft.durationMinutes || 45), deliveryMode: series?.deliveryMode || 'CANVAS', status: 'DRAFT' }] }, `已添加课时「${lessonDraft.title.trim()}」。`);
     setLessonDraft({ title: '', durationMinutes: 45 });
   }
 
@@ -476,6 +479,7 @@ function CourseDetail({ api, course, onBack }) {
           <h3 className="form-section-title">可见范围与排序</h3>
           <div className="form-grid">
             <label>可见范围<select value={editForm.visibility} onChange={(event) => setEditForm({ ...editForm, visibility: event.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+            <label>默认课堂类型<select value={editForm.deliveryMode} onChange={(event) => setEditForm({ ...editForm, deliveryMode: event.target.value })}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂（预留）</option></select></label>
             <label>排序<input type="number" min="0" value={editForm.sort} onChange={(event) => setEditForm({ ...editForm, sort: event.target.value })} /></label>
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>

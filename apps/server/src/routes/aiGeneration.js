@@ -224,10 +224,20 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
   });
 }
 
-function providerSelectionForModality(policy, modality) {
+// 课时可为每个模态指定具体模型；未指定时用渠道默认模型。
+function lessonModelFor(context, modality) {
+  const slots = context?.lesson?.classroomConfig?.generationSlots || {};
+  const slot = slots[String(modality || '').toUpperCase()] || {};
+  return String(slot.model || '').trim();
+}
+
+function providerSelectionForModality(policy, modality, modelOverride = '') {
   const channelId = policy?.modalityChannels?.[String(modality || '').toUpperCase()];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
-  return channel ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id } : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default' };
+  const base = channel
+    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id }
+    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default' };
+  return modelOverride ? { ...base, model: modelOverride } : base;
 }
 
 function auditContext(auth, ctx = null) {
@@ -242,13 +252,13 @@ function auditContext(auth, ctx = null) {
 export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = getAiProviderPolicy();
-  const providerSelection = providerSelectionForModality(policy, modality);
+  const context = resolveProjectUsageContext(auth.rawUser, project);
+  if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
+  const providerSelection = providerSelectionForModality(policy, modality, lessonModelFor(context, modality));
   const provider = getGenerationProvider(providerSelection);
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-  const context = resolveProjectUsageContext(auth.rawUser, project);
-  if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext });
   try {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id });
@@ -503,12 +513,12 @@ export async function handleAiGeneration(ctx) {
     if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
     const project = ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const policy = getAiProviderPolicy();
-    const providerSelection = providerSelectionForModality(policy, modality);
+    const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
+    const providerSelection = providerSelectionForModality(policy, modality, lessonModelFor(context, modality));
     const provider = getGenerationProvider(providerSelection);
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };

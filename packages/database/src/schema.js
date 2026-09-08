@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS course_series (
   age_range_min INTEGER,
   age_range_max INTEGER,
   tags TEXT NOT NULL DEFAULT '[]',
+  delivery_mode TEXT NOT NULL DEFAULT 'CANVAS' CHECK (delivery_mode IN ('CANVAS','VIBECODING')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
@@ -1379,6 +1380,7 @@ try { db.exec('ALTER TABLE course_series ADD COLUMN price_fen INTEGER NOT NULL D
 try { db.exec('ALTER TABLE course_series ADD COLUMN validity_days INTEGER NOT NULL DEFAULT 365'); } catch (_) {}
 try { db.exec('ALTER TABLE course_series ADD COLUMN estimated_credits_per_person INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec("ALTER TABLE course_series ADD COLUMN grade_range TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+try { db.exec("ALTER TABLE course_series ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'CANVAS'"); } catch (_) {}
 
 // P5-W05 course_lessons 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
 try { db.exec("ALTER TABLE course_lessons ADD COLUMN lesson_content TEXT NOT NULL DEFAULT ''"); } catch (_) {}
