@@ -1,0 +1,549 @@
+// 平台课包管理：列表视图 + 课包详情（标签页）+ 课时编辑抽屉
+import { useEffect, useMemo, useState } from 'react';
+import { CanvasEditor } from '@platform/canvas';
+import {
+  Empty, ErrorState, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Panel,
+  Pagination, Status, formatDate, useData,
+} from '@platform/shared';
+
+const VISIBILITY_LABELS = { ALL_ORGS: '所有机构', ASSIGNED_ORGS: '仅已授权机构', PRIVATE: '私有' };
+const LESSON_CAPABILITY_OPTIONS = [
+  ['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'],
+  ['music', 'AI 音乐'], ['podcast', 'AI 播客'], ['dubbing', 'AI 配音'],
+];
+const MATERIAL_TYPE_OPTIONS = [
+  ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['PDF', 'PDF'], ['PPT', 'PPT'], ['NOTE', '文字说明'], ['PROMPT', '提示词'],
+];
+const defaultClassroomConfig = {
+  version: 1,
+  generationSlots: {
+    image: { count: 0, aspectRatio: '16:9', size: '1024x576', model: '' },
+    video: { count: 0, aspectRatio: '16:9', size: '1920x1080', durationSeconds: 5, model: '' },
+  },
+};
+const emptyCourseForm = {
+  title: '', description: '', coverImageUrl: '', coverAssetId: '', priceYuan: '', version: '1.0',
+  validityDays: '365', estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'ALL_ORGS',
+  difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '',
+};
+
+function classroomConfigFor(lesson, edit) {
+  const value = edit.classroomConfig ?? lesson.classroomConfig ?? {};
+  return {
+    ...defaultClassroomConfig,
+    ...value,
+    generationSlots: {
+      ...defaultClassroomConfig.generationSlots,
+      ...(value.generationSlots || {}),
+      image: { ...defaultClassroomConfig.generationSlots.image, ...(value.generationSlots?.image || {}) },
+      video: { ...defaultClassroomConfig.generationSlots.video, ...(value.generationSlots?.video || {}) },
+    },
+  };
+}
+
+function coverUrlOf(course) {
+  if (course.coverAssetId) return `/api/public/file-assets/${course.coverAssetId}/download`;
+  return course.coverImageUrl || '';
+}
+
+/* ---------------------------------------------------------------- 课时画布配置 */
+
+function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
+  const deliveryMode = edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS';
+  const capabilities = edit.capabilities ?? lesson.capabilities ?? ['text'];
+  const groups = edit.materialGroups ?? lesson.materialGroups ?? [];
+  const classroomConfig = classroomConfigFor(lesson, edit);
+  const canvasTemplateSnapshot = edit.canvasTemplateSnapshot ?? lesson.canvasTemplateSnapshot ?? {};
+  const update = (patch) => onChange({ ...edit, ...patch });
+  function updateGroup(index, patch) { update({ materialGroups: groups.map((group, i) => i === index ? { ...group, ...patch } : group) }); }
+  function updateMaterial(groupIndex, materialIndex, patch) { update({ materialGroups: groups.map((group, i) => i !== groupIndex ? group : { ...group, materials: (group.materials || []).map((item, j) => j === materialIndex ? { ...item, ...patch } : item) }) }); }
+  function updateSlot(type, patch) { update({ classroomConfig: { ...classroomConfig, generationSlots: { ...classroomConfig.generationSlots, [type]: { ...classroomConfig.generationSlots[type], ...patch } } } }); }
+  const [uploading, setUploading] = useState('');
+  async function uploadMaterial(groupIndex, materialIndex, file) {
+    if (!file) return;
+    const key = `${groupIndex}:${materialIndex}`; setUploading(key);
+    try {
+      const asset = await api.upload('admin/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' });
+      const assetUrl = asset?.id ? `/api/student/file-assets/${asset.id}/download` : '';
+      if (!assetUrl) throw new Error('上传成功但未返回文件标识');
+      updateMaterial(groupIndex, materialIndex, { assetUrl, snapshot: { ...(groups[groupIndex]?.materials?.[materialIndex]?.snapshot || {}), assetId: asset.id } });
+    } catch (error) { window.alert(error.message); } finally { setUploading(''); }
+  }
+  function addMaterial(groupIndex) { const current = groups[groupIndex]?.materials || []; updateGroup(groupIndex, { materials: [...current, { title: `素材${current.length + 1}`, description: '', materialType: 'NOTE', assetUrl: '', snapshot: {} }] }); }
+
+  return <div className="lesson-canvas-config-editor">
+    <label>课堂类型<select value={deliveryMode} onChange={(event) => update({ deliveryMode: event.target.value })}><option value="CANVAS">课堂画布</option><option value="VIBECODING">VibeCoding 课堂</option></select></label>
+    {deliveryMode === 'VIBECODING' ? <Notice>VibeCoding 课堂的运行时尚在建设中。本课可以先完成课程配置，但发布前不要让学生进入空白课堂。</Notice> : <>
+      <div className="lesson-capability-checks"><strong>本课开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => update({ capabilities: event.target.checked ? [...new Set([...capabilities, value])] : capabilities.filter((item) => item !== value) })} />{label}</label>)}</div>
+      <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>课堂素材（一级菜单）</strong><button type="button" className="text-button" onClick={() => update({ materialGroups: [...groups, { title: `素材${groups.length + 1}`, materials: [] }] })}>＋素材组</button></div>
+        {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={`${group.id || 'new'}-${groupIndex}`}>
+          <div className="lesson-config-row"><input value={group.title || ''} placeholder={`素材${groupIndex + 1}`} onChange={(event) => updateGroup(groupIndex, { title: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => update({ materialGroups: groups.filter((_, i) => i !== groupIndex) })}>删除组</button></div>
+          {(group.materials || []).map((material, materialIndex) => { const snapshot = material.snapshot || {}; const insertAction = snapshot.insertAction || {}; const isText = ['NOTE', 'PROMPT'].includes(material.materialType); return <div className="lesson-material-item-editor" key={`${material.id || 'new'}-${materialIndex}`}>
+            <div className="lesson-config-row"><input value={material.title || ''} placeholder="素材标题" onChange={(event) => updateMaterial(groupIndex, materialIndex, { title: event.target.value })} /><select value={material.materialType || 'NOTE'} onChange={(event) => updateMaterial(groupIndex, materialIndex, { materialType: event.target.value })}>{MATERIAL_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="text-button danger-text" onClick={() => updateGroup(groupIndex, { materials: (group.materials || []).filter((_, i) => i !== materialIndex) })}>删除</button></div>
+            <input value={material.description || ''} placeholder="给学生看的说明（可选）" onChange={(event) => updateMaterial(groupIndex, materialIndex, { description: event.target.value })} />
+            {isText ? <textarea rows={2} value={snapshot.content || ''} placeholder={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'} onChange={(event) => updateMaterial(groupIndex, materialIndex, { snapshot: { ...snapshot, content: event.target.value } })} /> : <><input value={material.assetUrl || ''} placeholder="资源地址（可粘贴 HTTPS，也可上传文件）" onChange={(event) => updateMaterial(groupIndex, materialIndex, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传文件'}<input type="file" accept="image/*,video/*,audio/*,.pdf,.ppt,.pptx" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label></>}
+            {material.materialType === 'PROMPT' || material.materialType === 'IMAGE' ? <div className="form-grid"><label>点击后添加到<select value={insertAction.targetNodeType || ''} onChange={(event) => updateMaterial(groupIndex, materialIndex, { snapshot: { ...snapshot, insertAction: { ...insertAction, targetNodeType: event.target.value || undefined } } })}><option value="">不绑定</option><option value="image">生图框体</option><option value="video">生视频框体</option><option value="text">文字框体</option></select></label><label>第几个框体<input type="number" min="1" max="20" value={insertAction.targetIndex == null ? '' : Number(insertAction.targetIndex) + 1} onChange={(event) => updateMaterial(groupIndex, materialIndex, { snapshot: { ...snapshot, insertAction: { ...insertAction, targetIndex: Math.max(0, Number(event.target.value || 1) - 1), targetField: material.materialType === 'IMAGE' ? 'referenceImage' : 'prompt' } } })} /></label></div> : null}
+          </div>; })}
+          <button type="button" className="text-button" onClick={() => addMaterial(groupIndex)}>＋素材</button>
+        </div>)}
+        {!groups.length && <p className="muted">还没有素材组。一级菜单会显示在学生课堂画布的素材区，点击后打开对应材料。</p>}
+      </div>
+      <div className="lesson-generation-slots"><div className="lesson-config-heading"><strong>本课生成框体限制</strong><span className="muted">学生只能使用这里配置的数量、比例、尺寸、时长和模型</span></div>
+        <div className="form-grid"><label>生图框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.image.count} onChange={(event) => updateSlot('image', { count: event.target.value })} /></label><label>生图比例<input value={classroomConfig.generationSlots.image.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('image', { aspectRatio: event.target.value })} /></label><label>生图尺寸<input value={classroomConfig.generationSlots.image.size} placeholder="1024x576" onChange={(event) => updateSlot('image', { size: event.target.value })} /></label><label>生图模型<input value={classroomConfig.generationSlots.image.model || ''} placeholder="模型标识（可选）" onChange={(event) => updateSlot('image', { model: event.target.value })} /></label></div>
+        <div className="form-grid"><label>生视频框体数量<input type="number" min="0" max="20" value={classroomConfig.generationSlots.video.count} onChange={(event) => updateSlot('video', { count: event.target.value })} /></label><label>生视频比例<input value={classroomConfig.generationSlots.video.aspectRatio} placeholder="16:9" onChange={(event) => updateSlot('video', { aspectRatio: event.target.value })} /></label><label>生视频尺寸<input value={classroomConfig.generationSlots.video.size} placeholder="1920x1080" onChange={(event) => updateSlot('video', { size: event.target.value })} /></label><label>单个视频时长（秒）<input type="number" min="1" max="120" value={classroomConfig.generationSlots.video.durationSeconds} onChange={(event) => updateSlot('video', { durationSeconds: event.target.value })} /></label><label>生视频模型<input value={classroomConfig.generationSlots.video.model || ''} placeholder="模型标识（可选）" onChange={(event) => updateSlot('video', { model: event.target.value })} /></label></div>
+      </div>
+      <div className="lesson-canvas-template">
+        <div className="lesson-config-heading"><strong>默认画布模板</strong><span className="muted">学生进入本课时时将看到该初始画布（可留空，则使用标准入门底稿）</span></div>
+        <CanvasEditor initialSnapshot={canvasTemplateSnapshot} onChange={(snapshot) => update({ canvasTemplateSnapshot: snapshot })} showStarter={false} capabilities={['text', 'image', 'video', 'music', 'podcast', 'dubbing']} />
+      </div>
+    </>}
+  </div>;
+}
+
+/* ---------------------------------------------------------------- 课时编辑抽屉 */
+
+function LessonDrawer({ api, lesson, onClose, onSaved }) {
+  const [edit, setEdit] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const title = edit.title ?? lesson.title;
+  const summary = edit.summary ?? lesson.summary ?? '';
+  const durationMinutes = edit.durationMinutes ?? lesson.durationMinutes ?? 45;
+  const status = edit.status ?? lesson.status;
+  const lessonContent = edit.lessonContent ?? lesson.lessonContent ?? '';
+  const update = (patch) => setEdit((current) => ({ ...current, ...patch }));
+
+  async function save() {
+    setBusy(true); setMessage('');
+    try {
+      await api.request(`admin/course-lessons/${lesson.id}`, {
+        method: 'PUT',
+        body: {
+          title, summary, durationMinutes: Number(durationMinutes), status, lessonContent,
+          deliveryMode: edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS',
+          classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {},
+          capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'],
+          materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [],
+          canvasTemplateSnapshot: edit.canvasTemplateSnapshot ?? lesson.canvasTemplateSnapshot ?? {},
+        },
+      });
+      onSaved?.(`课时「${title}」已保存。`);
+      onClose();
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  return <div className="drawer-overlay" onClick={onClose}>
+    <div className="drawer-panel" onClick={(event) => event.stopPropagation()}>
+      <header className="drawer-head">
+        <div><span className="eyebrow">课时配置</span><h2>{title || '未命名课时'}</h2></div>
+        <button type="button" className="drawer-close" onClick={onClose}>×</button>
+      </header>
+      <div className="drawer-body">
+        {message && <Notice tone="danger">{message}</Notice>}
+        <section className="drawer-section">
+          <h3>基本信息</h3>
+          <label>课时标题<input value={title} onChange={(event) => update({ title: event.target.value })} required /></label>
+          <label>课时简介<textarea rows={2} value={summary} onChange={(event) => update({ summary: event.target.value })} /></label>
+          <div className="form-grid">
+            <label>时长（分钟）<input type="number" min="1" max="1440" value={durationMinutes} onChange={(event) => update({ durationMinutes: event.target.value })} /></label>
+            <label>状态<select value={status} onChange={(event) => update({ status: event.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已归档</option></select></label>
+          </div>
+          <label>课时正文 / 教学指引<textarea rows={4} placeholder="≤50000 字" value={lessonContent} onChange={(event) => update({ lessonContent: event.target.value })} /></label>
+        </section>
+        <section className="drawer-section">
+          <h3>课堂配置</h3>
+          <LessonCanvasConfigEditor api={api} lesson={lesson} edit={edit} onChange={setEdit} />
+        </section>
+      </div>
+      <footer className="drawer-foot">
+        <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+        <button type="button" className="primary-button" onClick={save} disabled={busy}>{busy ? '保存中…' : '保存课时'}</button>
+      </footer>
+    </div>
+  </div>;
+}
+
+/* ---------------------------------------------------------------- 新建课包 */
+
+function CreateCourseModal({ api, onClose, onCreated }) {
+  const [form, setForm] = useState(emptyCourseForm);
+  const [lessons, setLessons] = useState(['']);
+  const [showMore, setShowMore] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  function updateLesson(index, value) { setLessons((current) => current.map((item, i) => i === index ? value : item)); }
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true); setMessage('');
+    try {
+      const priceText = String(form.priceYuan || '0').trim();
+      if (!/^\d+(?:\.\d{1,2})?$/.test(priceText)) throw new Error('课包价格必须是有效的元金额，最多两位小数');
+      if (form.coverImageUrl && !/^https:\/\//.test(form.coverImageUrl)) throw new Error('封面地址必须是 HTTPS 链接');
+      const payload = {
+        title: form.title, description: form.description, coverImageUrl: form.coverImageUrl || null, coverAssetId: form.coverAssetId || null,
+        priceFen: Math.round(Number(priceText) * 100), version: form.version || '1.0', validityDays: Number(form.validityDays || 365),
+        estimatedCreditsPerPerson: Number(form.estimatedCreditsPerPerson || 0), gradeRange: form.gradeRange, visibility: form.visibility,
+        lessons: lessons.map((title) => String(title).trim()).filter(Boolean).map((title) => ({ title })),
+      };
+      if (form.difficultyLevel !== '' && form.difficultyLevel != null) payload.difficultyLevel = Number(form.difficultyLevel);
+      if (form.ageRangeMin !== '' && form.ageRangeMin != null) payload.ageRangeMin = Number(form.ageRangeMin);
+      if (form.ageRangeMax !== '' && form.ageRangeMax != null) payload.ageRangeMax = Number(form.ageRangeMax);
+      if (form.tags) payload.tags = String(form.tags).split(',').map((t) => t.trim()).filter(Boolean);
+      const created = await api.post('admin/course-series', payload);
+      onCreated?.(created);
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  return <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-content modal-large" onClick={(event) => event.stopPropagation()}>
+      <div className="modal-header"><div><span className="eyebrow">课程资产</span><h2>新建平台课包</h2></div><button className="modal-close" onClick={onClose}>×</button></div>
+      <form onSubmit={submit}>
+        <div className="modal-body">
+          {message && <Notice tone="danger">{message}</Notice>}
+          <label>课包标题 *<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="例如：AI绘本创作大师营" required /></label>
+          <label>课程简介<textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="一句话说明这门课教什么" /></label>
+          <div className="form-grid">
+            <label>可见范围<select value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+            <label>版本号<input value={form.version} onChange={(event) => setForm({ ...form, version: event.target.value })} placeholder="1.0" /></label>
+          </div>
+          <div className="course-lesson-draft">
+            <div className="lesson-config-heading"><strong>课时</strong><button type="button" className="text-button" onClick={() => setLessons((current) => [...current, ''])}>＋添加课时</button></div>
+            {lessons.map((value, index) => <div className="lesson-config-row" key={index}>
+              <span className="course-lesson-draft__no">{index + 1}</span>
+              <input value={value} placeholder={`第 ${index + 1} 课标题`} onChange={(event) => updateLesson(index, event.target.value)} />
+              <button type="button" className="text-button danger-text" onClick={() => setLessons((current) => current.length <= 1 ? [''] : current.filter((_, i) => i !== index))}>删除</button>
+            </div>)}
+            <p className="muted">可以先只填标题，创建后在「课时编排」里配置能力、素材、生成框体和默认画布。</p>
+          </div>
+          <button type="button" className="text-button" onClick={() => setShowMore((value) => !value)}>{showMore ? '收起更多设置 ▲' : '展开更多设置 ▼'}</button>
+          {showMore && <div className="course-more-settings">
+            <label>封面图<span className="muted">（可上传或填写 HTTPS 地址）</span></label>
+            <div className="form-grid">
+              <input value={form.coverImageUrl} placeholder="https://… 或上传后自动填充" onChange={(event) => setForm({ ...form, coverImageUrl: event.target.value })} />
+              <label className="inline-file-upload">上传封面<input type="file" accept="image/*" onChange={async (event) => {
+                const file = event.target.files?.[0]; event.target.value = '';
+                if (!file) return;
+                try {
+                  const asset = await api.upload('admin/file-assets/upload', file, { category: 'PROMO_COVER', visibility: 'PUBLIC_PLATFORM' });
+                  if (!asset?.id) throw new Error('上传成功但未返回文件标识');
+                  setForm((current) => ({ ...current, coverAssetId: asset.id, coverImageUrl: `/api/public/file-assets/${asset.id}/download` }));
+                } catch (error) { setMessage(error.message); }
+              }} /></label>
+            </div>
+            <div className="form-grid">
+              <label>价格（元）<input inputMode="decimal" value={form.priceYuan} placeholder="如 199.00" onChange={(event) => setForm({ ...form, priceYuan: event.target.value })} /></label>
+              <label>有效期（天）<input type="number" min="1" max="3650" value={form.validityDays} onChange={(event) => setForm({ ...form, validityDays: event.target.value })} /></label>
+              <label>预估积分/人<input type="number" min="0" value={form.estimatedCreditsPerPerson} onChange={(event) => setForm({ ...form, estimatedCreditsPerPerson: event.target.value })} /></label>
+              <label>适合年级<input value={form.gradeRange} placeholder="如 3-6 年级" onChange={(event) => setForm({ ...form, gradeRange: event.target.value })} /></label>
+              <label>难度（1-5）<input type="number" min="1" max="5" value={form.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setForm({ ...form, difficultyLevel: event.target.value })} /></label>
+              <label>适学年龄下限<input type="number" min="3" max="99" value={form.ageRangeMin} placeholder="如 8" onChange={(event) => setForm({ ...form, ageRangeMin: event.target.value })} /></label>
+              <label>适学年龄上限<input type="number" min="3" max="99" value={form.ageRangeMax} placeholder="如 16" onChange={(event) => setForm({ ...form, ageRangeMax: event.target.value })} /></label>
+              <label>标签（英文逗号分隔）<input value={form.tags} placeholder="古诗, 创作, 动画" onChange={(event) => setForm({ ...form, tags: event.target.value })} /></label>
+            </div>
+          </div>}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>取消</button>
+          <button type="submit" className="primary-button" disabled={busy}>{busy ? '创建中…' : '创建课包'}</button>
+        </div>
+      </form>
+    </div>
+  </div>;
+}
+
+/* ---------------------------------------------------------------- 课包列表 */
+
+function CourseCard({ course, onOpen, onStatus, busy }) {
+  const cover = coverUrlOf(course);
+  return <article className="course-card">
+    <div className="course-card__cover" style={cover ? { backgroundImage: `url(${cover})` } : undefined}>{!cover && <span>✦</span>}</div>
+    <div className="course-card__body">
+      <div className="course-card__head"><h3>{course.title}</h3><Status value={course.status} /></div>
+      <p className="course-card__desc">{course.description || '暂无简介'}</p>
+      <div className="course-card__meta">
+        <span>课时 <strong>{course.lessonCount}</strong></span>
+        <span>{VISIBILITY_LABELS[course.visibility] || course.visibility}</span>
+        <span>v{course.version}</span>
+        {course.difficultyLevel ? <span>难度 {course.difficultyLevel}/5</span> : null}
+        {course.ageRangeMin || course.ageRangeMax ? <span>{course.ageRangeMin ?? '?'}-{course.ageRangeMax ?? '?'} 岁</span> : null}
+      </div>
+      {Array.isArray(course.tags) && course.tags.length ? <div className="tag-list">{course.tags.slice(0, 5).map((tag) => <span key={tag} className="tag">{tag}</span>)}</div> : null}
+      <div className="course-card__foot">
+        <span className="muted">{formatDate(course.updatedAt)}</span>
+        <div className="row-actions">
+          <button className="primary-button" onClick={onOpen}>进入编排</button>
+          {course.status === 'PUBLISHED' || course.status === 'DRAFT' ? <button className="secondary-button" disabled={busy} onClick={() => onStatus(course, 'archive')}>归档</button> : null}
+          {course.status !== 'PUBLISHED' ? <button className="secondary-button" disabled={busy} onClick={() => onStatus(course, 'publish')}>发布</button> : null}
+        </div>
+      </div>
+    </div>
+  </article>;
+}
+
+function CourseList({ api, onOpen }) {
+  const [filters, setFilters] = useState({ search: '', status: '', visibility: '' });
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(12);
+  const [sort, setSort] = useState('manual');
+  const [showCreate, setShowCreate] = useState(false);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const query = useMemo(() => {
+    const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+    params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
+    return params.toString();
+  }, [filters, page, limit, sort]);
+  const courses = useData(() => api.get(`admin/course-series?${query}`), [api, query]);
+
+  async function changeStatus(course, action) {
+    const text = action === 'archive'
+      ? `确认归档「${course.title}」？归档后机构端不再可见该课包，历史班级数据保留，可随时重新发布。`
+      : `确认发布「${course.title}」？发布后按可见范围对机构生效。`;
+    if (!window.confirm(text)) return;
+    setBusy(true); setMessage('');
+    try {
+      await api.request(`admin/course-series/${course.id}/status`, { method: 'POST', body: { action } });
+      setMessage(action === 'archive' ? '课包已归档。' : '课包已发布。');
+      courses.refresh();
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  return <>
+    <PageHeader eyebrow="课程资产" title="平台课包" description="维护平台级课程资料、课时编排、发布状态与机构授权；内容变更自动递增版本号。"
+      actions={<button className="primary-button" onClick={() => setShowCreate(true)}>＋ 新建课包</button>} />
+    {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+    <Panel title="筛选">
+      <div className="form-grid">
+        <label>关键词<input value={filters.search} placeholder="课包名称 / ID" onChange={(event) => { setFilters({ ...filters, search: event.target.value }); setPage(1); }} /></label>
+        <label>状态<select value={filters.status} onChange={(event) => { setFilters({ ...filters, status: event.target.value }); setPage(1); }}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已归档</option></select></label>
+        <label>可见范围<select value={filters.visibility} onChange={(event) => { setFilters({ ...filters, visibility: event.target.value }); setPage(1); }}><option value="">全部范围</option><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+        <label>排序<select value={sort} onChange={(event) => { setSort(event.target.value); setPage(1); }}><option value="manual">手动顺序</option><option value="created">创建时间</option><option value="updated">更新时间</option><option value="title">课包名称</option></select></label>
+        <label>每页<select value={limit} onChange={(event) => { setLimit(Number(event.target.value)); setPage(1); }}><option value="12">12 个</option><option value="24">24 个</option><option value="48">48 个</option></select></label>
+      </div>
+    </Panel>
+    {courses.loading ? <Loading /> : courses.error ? <ErrorState error={courses.error} onRetry={courses.refresh} /> : courses.data?.items?.length ? <>
+      <ListResultSummary total={courses.data.total} page={courses.data.page} totalPages={courses.data.totalPages} label="个课包" />
+      <div className="course-grid">{courses.data.items.map((course) => <CourseCard key={course.id} course={course} busy={busy} onStatus={changeStatus} onOpen={() => onOpen(course)} />)}</div>
+      <Pagination page={courses.data.page} totalPages={courses.data.totalPages} onChange={setPage} disabled={courses.loading} />
+    </> : <Empty title="没有符合条件的课包" body="可以调整关键词、状态或可见范围，或新建一个课包。" />}
+    {showCreate && <CreateCourseModal api={api} onClose={() => setShowCreate(false)} onCreated={(course) => { setShowCreate(false); courses.refresh(); if (course?.id) onOpen(course); }} />}
+  </>;
+}
+
+/* ---------------------------------------------------------------- 课包详情 */
+
+function CourseDetail({ api, course, onBack }) {
+  const [activeTab, setActiveTab] = useState('basic');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [editForm, setEditForm] = useState(null);
+  const [assignOrgId, setAssignOrgId] = useState('');
+  const [lessonDraft, setLessonDraft] = useState({ title: '', durationMinutes: 45 });
+  const [editingLesson, setEditingLesson] = useState(null);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const detail = useData(() => api.get(`admin/course-series/${course.id}/detail`), [api, course.id]);
+  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const series = detail.data?.series || null;
+
+  useEffect(() => {
+    if (!series) return;
+    setEditForm({
+      title: series.title, description: series.description || '', coverImageUrl: series.coverImageUrl || '', coverAssetId: series.coverAssetId || '',
+      priceYuan: ((Number(series.priceFen || 0) / 100).toFixed(2)).replace(/\.00$/, ''), version: series.version || '1.0',
+      validityDays: series.validityDays || 365, estimatedCreditsPerPerson: series.estimatedCreditsPerPerson || '', gradeRange: series.gradeRange || '',
+      visibility: series.visibility, sort: series.sort, difficultyLevel: series.difficultyLevel ?? '', ageRangeMin: series.ageRangeMin ?? '',
+      ageRangeMax: series.ageRangeMax ?? '', tags: (series.tags || []).join(','),
+    });
+  }, [series?.id]);
+
+  async function run(path, method, body, successMessage, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(true); setMessage('');
+    try { await api.request(path, { method, body }); setMessage(successMessage); detail.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function saveEdit(event) {
+    event.preventDefault(); if (!editForm) return;
+    try {
+      const priceText = String(editForm.priceYuan || '0').trim();
+      if (!/^\d+(?:\.\d{1,2})?$/.test(priceText)) throw new Error('课包价格必须是有效的元金额，最多两位小数');
+      const body = {
+        title: editForm.title, description: editForm.description, coverImageUrl: editForm.coverImageUrl || null, coverAssetId: editForm.coverAssetId || null,
+        priceFen: Math.round(Number(priceText) * 100), validityDays: Number(editForm.validityDays || 365),
+        estimatedCreditsPerPerson: Number(editForm.estimatedCreditsPerPerson || 0), gradeRange: editForm.gradeRange || '',
+        visibility: editForm.visibility, sort: Number(editForm.sort),
+      };
+      if (body.coverImageUrl && !/^https:\/\//.test(body.coverImageUrl)) throw new Error('封面地址必须是 HTTPS 链接');
+      body.difficultyLevel = editForm.difficultyLevel !== '' && editForm.difficultyLevel != null ? Number(editForm.difficultyLevel) : null;
+      body.ageRangeMin = editForm.ageRangeMin !== '' && editForm.ageRangeMin != null ? Number(editForm.ageRangeMin) : null;
+      body.ageRangeMax = editForm.ageRangeMax !== '' && editForm.ageRangeMax != null ? Number(editForm.ageRangeMax) : null;
+      body.tags = String(editForm.tags || '').split(',').map((t) => t.trim()).filter(Boolean);
+      await run(`admin/course-series/${course.id}`, 'PUT', body, '课包资料已保存，版本号已递增。');
+    } catch (error) { setMessage(error.message); }
+  }
+
+  async function changeStatus(action) {
+    const text = action === 'archive'
+      ? `确认归档「${series.title}」？归档后机构端不再可见该课包，历史班级数据保留，可随时重新发布。`
+      : `确认发布「${series.title}」？发布后按可见范围对机构生效。`;
+    await run(`admin/course-series/${course.id}/status`, 'POST', { action }, action === 'archive' ? '课包已归档。' : '课包已发布。', text);
+  }
+
+  async function addLesson(event) {
+    event.preventDefault();
+    if (!lessonDraft.title.trim()) return;
+    await run(`admin/course-series/${course.id}/lessons`, 'POST', { lessons: [{ title: lessonDraft.title.trim(), durationMinutes: Number(lessonDraft.durationMinutes || 45), status: 'DRAFT' }] }, `已添加课时「${lessonDraft.title.trim()}」。`);
+    setLessonDraft({ title: '', durationMinutes: 45 });
+  }
+
+  async function deleteLesson(lesson) {
+    await run(`admin/course-lessons/${lesson.id}`, 'DELETE', undefined, `课时「${lesson.title}」已删除，剩余课时已重新排序。`, `确认删除课时「${lesson.title}」？已被班级课单或课堂引用的课时无法删除。`);
+  }
+
+  async function moveLesson(lesson, direction) {
+    if (!series) return;
+    const ids = series.lessons.map((item) => item.id);
+    const index = ids.indexOf(lesson.id);
+    const target = index + direction;
+    if (target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    await run(`admin/course-series/${course.id}/lessons/reorder`, 'PUT', { lessonIds: ids }, '课时顺序已更新。');
+  }
+
+  async function assign() {
+    if (!assignOrgId) return;
+    setBusy(true); setMessage('');
+    try { await api.post(`admin/course-series/${course.id}/assignments`, { orgIds: [assignOrgId] }); setMessage('课包授权成功。'); setAssignOrgId(''); detail.refresh(); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function uploadEditCover(file) {
+    if (!file) return;
+    setUploadingCover(true);
+    try {
+      const asset = await api.upload('admin/file-assets/upload', file, { category: 'PROMO_COVER', visibility: 'PUBLIC_PLATFORM' });
+      if (!asset?.id) throw new Error('上传成功但未返回文件标识');
+      setEditForm((current) => ({ ...current, coverAssetId: asset.id, coverImageUrl: `/api/public/file-assets/${asset.id}/download` }));
+      setMessage('封面上传成功。');
+    } catch (error) { setMessage(error.message); } finally { setUploadingCover(false); }
+  }
+
+  const publishedLessons = (series?.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED').length;
+  const vibecodingLessons = (series?.lessons || []).filter((lesson) => lesson.deliveryMode === 'VIBECODING').length;
+
+  return <>
+    <PageHeader eyebrow="课程资产 · 课包编排" title={series ? series.title : course.title}
+      description={series ? `状态 ${series.status} · 版本 v${series.version} · 共 ${series.lessons.length} 个课时` : '正在读取课包详情…'}
+      actions={<><button className="secondary-button" onClick={onBack}>← 返回课包列表</button>{series ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>归档</button> : null}{series && series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : null}</>} />
+    {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+    {detail.loading ? <Loading label="正在读取课包详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : !series ? <Empty title="课包不存在" /> : <>
+      <div className="metrics">
+        <MetricCard label="引用班级" value={detail.data.usage.classesUsingSeries} hint="以该课包为默认课程的班级数" />
+        <MetricCard label="班级课单项" value={detail.data.usage.curriculumItems} hint="班级课单引用的课时条目数" tone="teal" />
+        <MetricCard label="关联课堂" value={detail.data.usage.classSessions} hint="使用该课包课时的课堂场次" tone="orange" />
+        <MetricCard label="学生作品" value={detail.data.usage.studentWorks} hint="基于该课包课时提交的作品数" tone="pink" />
+      </div>
+      <nav className="tabs" role="tablist">
+        {[['basic', '基本信息'], ['lessons', `课时编排（${series.lessons.length}）`], ['assign', `机构授权（${detail.data.assignedOrgs.length}）`], ['publish', '发布检查']].map(([key, label]) =>
+          <button key={key} type="button" role="tab" aria-selected={activeTab === key} className={`tab ${activeTab === key ? 'is-active' : ''}`} onClick={() => setActiveTab(key)}>{label}</button>)}
+      </nav>
+
+      {activeTab === 'basic' ? <Panel title="课包资料">
+        {editForm ? <form onSubmit={saveEdit}>
+          <h3 className="form-section-title">展示信息</h3>
+          <label>课包标题<input value={editForm.title} onChange={(event) => setEditForm({ ...editForm, title: event.target.value })} required /></label>
+          <label>课程简介<textarea rows={3} value={editForm.description} onChange={(event) => setEditForm({ ...editForm, description: event.target.value })} /></label>
+          <label>封面图<span className="muted">（可上传或填写 HTTPS 地址）</span></label>
+          <div className="form-grid">
+            <input value={editForm.coverImageUrl} placeholder="https://… 或上传后自动填充" onChange={(event) => setEditForm({ ...editForm, coverImageUrl: event.target.value })} />
+            <label className="inline-file-upload">{uploadingCover ? '上传中…' : '上传封面'}<input type="file" accept="image/*" disabled={uploadingCover} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadEditCover(file); }} /></label>
+          </div>
+          <h3 className="form-section-title">计费与属性</h3>
+          <div className="form-grid">
+            <label>价格（元）<input inputMode="decimal" value={editForm.priceYuan} onChange={(event) => setEditForm({ ...editForm, priceYuan: event.target.value })} /></label>
+            <label>版本号<input value={editForm.version} disabled title="编辑资料时版本号由系统自动递增" /></label>
+            <label>有效期（天）<input type="number" min="1" max="3650" value={editForm.validityDays} onChange={(event) => setEditForm({ ...editForm, validityDays: event.target.value })} /></label>
+            <label>预估积分/人<input type="number" min="0" value={editForm.estimatedCreditsPerPerson} onChange={(event) => setEditForm({ ...editForm, estimatedCreditsPerPerson: event.target.value })} /></label>
+            <label>适合年级<input value={editForm.gradeRange} placeholder="如 3-6 年级" onChange={(event) => setEditForm({ ...editForm, gradeRange: event.target.value })} /></label>
+            <label>难度（1-5）<input type="number" min="1" max="5" value={editForm.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setEditForm({ ...editForm, difficultyLevel: event.target.value })} /></label>
+            <label>适学年龄下限<input type="number" min="3" max="99" value={editForm.ageRangeMin} placeholder="如 8" onChange={(event) => setEditForm({ ...editForm, ageRangeMin: event.target.value })} /></label>
+            <label>适学年龄上限<input type="number" min="3" max="99" value={editForm.ageRangeMax} placeholder="如 16" onChange={(event) => setEditForm({ ...editForm, ageRangeMax: event.target.value })} /></label>
+          </div>
+          <label>标签（英文逗号分隔）<input value={editForm.tags} placeholder="古诗, 创作, 动画" onChange={(event) => setEditForm({ ...editForm, tags: event.target.value })} /></label>
+          <h3 className="form-section-title">可见范围与排序</h3>
+          <div className="form-grid">
+            <label>可见范围<select value={editForm.visibility} onChange={(event) => setEditForm({ ...editForm, visibility: event.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+            <label>排序<input type="number" min="0" value={editForm.sort} onChange={(event) => setEditForm({ ...editForm, sort: event.target.value })} /></label>
+          </div>
+          <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
+          <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用右上角发布 / 归档。</p>
+        </form> : null}
+      </Panel> : null}
+
+      {activeTab === 'lessons' ? <>
+        <Panel title="添加课时">
+          <form onSubmit={addLesson} className="form-grid">
+            <label>课时标题<input value={lessonDraft.title} onChange={(event) => setLessonDraft({ ...lessonDraft, title: event.target.value })} placeholder="例如：第 1 课 认识 AI 魔法师" required /></label>
+            <label>时长（分钟）<input type="number" min="1" max="1440" value={lessonDraft.durationMinutes} onChange={(event) => setLessonDraft({ ...lessonDraft, durationMinutes: event.target.value })} /></label>
+            <div><button className="primary-button" disabled={busy}>添加课时</button></div>
+          </form>
+          <p className="muted">添加后点击课时行，在右侧抽屉里配置课堂类型、能力、素材、生成框体与默认画布。</p>
+        </Panel>
+        <Panel title={`课时列表（${series.lessons.length}）`}>
+          {series.lessons.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>课堂类型</th><th>状态</th><th>开放能力</th><th>素材/框体</th><th>操作</th></tr></thead><tbody>
+            {series.lessons.map((lesson) => <tr key={lesson.id} className="lesson-row" onClick={() => setEditingLesson(lesson)}>
+              <td>{lesson.sort}</td>
+              <td><strong>{lesson.title}</strong>{lesson.summary ? <div className="muted">{lesson.summary}</div> : null}</td>
+              <td>{lesson.durationMinutes} 分钟</td>
+              <td>{lesson.deliveryMode === 'VIBECODING' ? <span className="status warning">VibeCoding</span> : '课堂画布'}</td>
+              <td><Status value={lesson.status} /></td>
+              <td><span className="tag-list">{(lesson.capabilities || []).map((cap) => <span key={cap} className="tag">{cap}</span>)}</span></td>
+              <td className="muted">{(lesson.materialGroups || []).length} 组 · 图 {lesson.generationSlots?.image?.count || 0} / 视频 {lesson.generationSlots?.video?.count || 0}</td>
+              <td><div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, -1)}>上移</button>
+                <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, 1)}>下移</button>
+                <button className="secondary-button" onClick={() => setEditingLesson(lesson)}>配置</button>
+                <button className="text-button danger-text" disabled={busy} onClick={() => deleteLesson(lesson)}>删除</button>
+              </div></td>
+            </tr>)}
+          </tbody></table></div> : <Empty title="暂无课时" body="课包至少需要一个课时才能发布。" />}
+        </Panel>
+      </> : null}
+
+      {activeTab === 'assign' ? <Panel title={`机构授权（${detail.data.assignedOrgs.length}）`}>
+        <div className="form-grid">
+          <label>授权给机构<select value={assignOrgId} onChange={(event) => setAssignOrgId(event.target.value)}><option value="">选择机构</option>{organizations.data?.items?.map((org) => <option key={org.id} value={org.id}>{org.name}</option>) || null}</select></label>
+          <div><button type="button" className="secondary-button" disabled={!assignOrgId || busy} onClick={assign}>授权</button></div>
+        </div>
+        {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${course.id}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="「仅已授权机构」课包需完成授权后机构端才可见。" />}
+      </Panel> : null}
+
+      {activeTab === 'publish' ? <Panel title="发布检查">
+        <div className="publish-checklist">
+          <div className={`publish-check ${series.lessons.length ? 'is-ok' : 'is-warn'}`}><strong>{series.lessons.length ? '✓' : '!'}</strong><span>课时数量：共 {series.lessons.length} 个</span></div>
+          <div className={`publish-check ${series.lessons.length && publishedLessons === series.lessons.length ? 'is-ok' : 'is-warn'}`}><strong>{series.lessons.length && publishedLessons === series.lessons.length ? '✓' : '!'}</strong><span>已发布课时：{publishedLessons} / {series.lessons.length}（未发布的课时无法随课包上线）</span></div>
+          <div className={`publish-check ${vibecodingLessons ? 'is-warn' : 'is-ok'}`}><strong>{vibecodingLessons ? '!' : '✓'}</strong><span>VibeCoding 课时：{vibecodingLessons} 个（运行时尚未完成，含此类课时无法发布）</span></div>
+          <div className={`publish-check ${series.visibility === 'ASSIGNED_ORGS' && !detail.data.assignedOrgs.length ? 'is-warn' : 'is-ok'}`}><strong>{series.visibility === 'ASSIGNED_ORGS' && !detail.data.assignedOrgs.length ? '!' : '✓'}</strong><span>可见范围：{VISIBILITY_LABELS[series.visibility]}（{series.visibility === 'ASSIGNED_ORGS' ? `已授权 ${detail.data.assignedOrgs.length} 个机构` : '无需额外授权'}）</span></div>
+        </div>
+        <div className="row-actions top-gap">
+          {series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : <span className="status success">课包已发布</span>}
+          {series.status !== 'ARCHIVED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>归档课包</button> : null}
+        </div>
+        <p className="muted">发布前请确认课时均已发布、无 VibeCoding 课时；「仅已授权机构」课包需完成授权。发布后按可见范围对机构生效。</p>
+      </Panel> : null}
+
+      {editingLesson ? <LessonDrawer api={api} lesson={editingLesson} onClose={() => setEditingLesson(null)} onSaved={(text) => { setMessage(text); detail.refresh(); }} /> : null}
+    </>}
+  </>;
+}
+
+/* ---------------------------------------------------------------- 顶层容器 */
+
+export function Courses({ api }) {
+  const [selected, setSelected] = useState(null);
+  if (selected) return <CourseDetail api={api} course={selected} onBack={() => setSelected(null)} />;
+  return <CourseList api={api} onOpen={setSelected} />;
+}
