@@ -1421,7 +1421,8 @@ export function nowIso() { return new Date().toISOString(); }
 // P6-A01 member AI credit caps; NULL means unlimited subject to organization balance.
 try { db.exec('ALTER TABLE users ADD COLUMN ai_credit_limit INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN ai_credits_used INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
-// P6-A02 personal credit balance (for free-canvas and free-coding); uses magic_stones as the balance field.
+// P6-A02 personal credit balance（供 VibeCoding 等个人创作使用）；magic_stones 作为余额字段。
+// 自由画布 / 自由对话 已按产品决定删除，本表保留给未开始的 VibeCoding。
 try { db.exec('ALTER TABLE users ADD COLUMN personal_credits INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 try { db.exec('ALTER TABLE users ADD COLUMN magic_stones INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 

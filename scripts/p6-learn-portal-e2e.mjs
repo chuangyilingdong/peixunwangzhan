@@ -101,11 +101,9 @@ try {
   check('website main.jsx redirects STUDENT to /learn', () => assert.ok(websiteSrc.includes("navigate('/learn')"), 'LoginPage should call navigate("/learn")'));
   check('website has /learn route', () => assert.ok(websiteSrc.includes("path='/learn'"), 'Website should declare /learn route'));
 
-  // 5. Header navigation has new items
+  // 5. Header navigation has new items（自由画布/自由对话 已按产品决定删除，不再断言）
   check('Header nav has 学习上课', () => assert.ok(websiteSrc.includes('学习上课')));
   check('Header nav has 作品广场', () => assert.ok(websiteSrc.includes('作品广场')));
-  check('Header nav has 自由画布', () => assert.ok(websiteSrc.includes('自由画布')));
-  check('Header nav has 自由对话', () => assert.ok(websiteSrc.includes('自由对话')));
 
   // 6. Shared package exports classroom components
   const sharedIndex = fs.readFileSync(path.join(root, 'packages/shared/src/index.js'), 'utf8');
