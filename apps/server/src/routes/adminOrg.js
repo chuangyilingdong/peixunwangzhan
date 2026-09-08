@@ -1230,6 +1230,14 @@ export async function handleAdmin(ctx) {
     audit(ctx, 'ORG_CREATE', 'ORG', organizationId, null, { name });
     return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organizationId]));
   }
+  // 下拉/筛选专用：只返回 id/name/status，上限 500 并带 total，避免前端用分页接口当选项源而静默丢机构
+  if (part === '/organizations/options' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const total = Number(row('SELECT COUNT(*) n FROM organizations')?.n || 0);
+    const items = rows('SELECT id,name,status FROM organizations ORDER BY name COLLATE NOCASE,id LIMIT 500')
+      .map((item) => ({ id: item.id, name: item.name, status: item.status }));
+    return { items, total, limit: 500 };
+  }
   let match = part.match(/^\/organizations\/([^/]+)$/);
   if (match && ['GET', 'PUT'].includes(method)) {
     requireRole(ctx, ['SUPER_ADMIN']); const organization = organizationRow(match[1]);

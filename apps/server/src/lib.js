@@ -17,6 +17,8 @@ export const PLATFORM_ADMIN_PERMISSIONS = Object.freeze([
   'ADMIN_AUDIT',
 ]);
 const PLATFORM_ADMIN_PERMISSION_SET = new Set(PLATFORM_ADMIN_PERMISSIONS);
+// 未登记的 /api/admin/* 用这个标记：默认拒绝，避免新增端点静默落到某个业务域
+export const UNREGISTERED_PLATFORM_PERMISSION = 'ADMIN_UNREGISTERED';
 
 export function isRootPlatformAdmin(auth) {
   return auth?.user?.role === 'SUPER_ADMIN'
@@ -27,6 +29,10 @@ export function isRootPlatformAdmin(auth) {
 
 export function requirePlatformPermission(ctx, permission) {
   const auth = requireRole(ctx, ['SUPER_ADMIN']);
+  if (permission === UNREGISTERED_PLATFORM_PERMISSION) {
+    if (isRootPlatformAdmin(auth)) return auth;
+    throw errors.forbidden('该平台端点尚未登记权限域，默认拒绝访问', 'PLATFORM_ENDPOINT_UNREGISTERED');
+  }
   if (!PLATFORM_ADMIN_PERMISSION_SET.has(permission)) throw new Error(`Unknown platform permission: ${permission}`);
   if (!isRootPlatformAdmin(auth) && !(auth.user.permissions || []).includes(permission)) {
     throw errors.forbidden('当前账号没有该业务域权限', 'PERMISSION_DENIED', { permission });
@@ -56,8 +62,16 @@ export function platformPermissionForPathname(pathname) {
     ['/api/admin/billing-config', 'ADMIN_BILLING'],
     ['/api/admin/file-assets', 'ADMIN_CONTENT'],
     ['/api/admin/website-content', 'ADMIN_CONTENT'],
+    // 通知 / 物料 / 线索：此前靠兜底落到 ADMIN_CONTENT，这里显式登记
+    ['/api/admin/inbox', 'ADMIN_CONTENT'],
+    ['/api/admin/materials', 'ADMIN_CONTENT'],
+    ['/api/admin/notification-templates', 'ADMIN_CONTENT'],
+    ['/api/admin/notification-events', 'ADMIN_CONTENT'],
+    ['/api/admin/notification-failures', 'ADMIN_CONTENT'],
+    ['/api/admin/notification-queue', 'ADMIN_CONTENT'],
+    ['/api/admin/leads', 'ADMIN_ORGANIZATIONS'],
   ];
-  return routes.find(([prefix]) => value === prefix || value.startsWith(prefix + '/'))?.[1] || 'ADMIN_CONTENT';
+  return routes.find(([prefix]) => value === prefix || value.startsWith(prefix + '/'))?.[1] || UNREGISTERED_PLATFORM_PERMISSION;
 }
 
 export function id(prefix) {

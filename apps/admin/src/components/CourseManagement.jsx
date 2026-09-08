@@ -545,7 +545,7 @@ function CourseDetail({ api, course, onBack }) {
   const [editingLesson, setEditingLesson] = useState(null);
   const [uploadingCover, setUploadingCover] = useState(false);
   const detail = useData(() => api.get(`admin/course-series/${course.id}/detail`), [api, course.id]);
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const series = detail.data?.series || null;
 
   useEffect(() => {

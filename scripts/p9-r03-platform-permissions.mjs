@@ -27,6 +27,7 @@ function ctx(pathname, currentAuth, method = 'GET', body = {}) {
 try {
   const {
     PLATFORM_ADMIN_PERMISSIONS,
+    UNREGISTERED_PLATFORM_PERMISSION,
     platformPermissionForPathname,
     requirePlatformPermission,
     q,
@@ -50,8 +51,10 @@ try {
     await expectError(() => requirePlatformPermission(ctx(pathname, auth('limited', [])), permission), 'PERMISSION_DENIED', `${permission} deny`);
   }
   check(PLATFORM_ADMIN_PERMISSIONS.length === 7, 'permission catalog must contain 7 domains');
-  check(platformPermissionForPathname('/api/admin/unregistered') === 'ADMIN_CONTENT', 'unknown admin API must default to content domain');
-  await expectError(() => requirePlatformPermission(ctx('/api/admin/unregistered', auth('limited', [])), 'ADMIN_CONTENT'), 'PERMISSION_DENIED', 'unknown admin API deny');
+  check(platformPermissionForPathname('/api/admin/unregistered') === UNREGISTERED_PLATFORM_PERMISSION, 'unregistered admin API must not fall back to a business domain');
+  await expectError(() => requirePlatformPermission(ctx('/api/admin/unregistered', auth('limited', [])), UNREGISTERED_PLATFORM_PERMISSION), 'PLATFORM_ENDPOINT_UNREGISTERED', 'unregistered admin API deny');
+  requirePlatformPermission(ctx('/api/admin/unregistered', root), UNREGISTERED_PLATFORM_PERMISSION);
+  check(platformPermissionForPathname('/api/admin/notification-queue/summary') === 'ADMIN_CONTENT', 'notification endpoints must be explicitly registered');
   requirePlatformPermission(ctx('/api/admin/organizations', root), 'ADMIN_ORGANIZATIONS');
 
   q("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('root','root','Root','SUPER_ADMIN','[]','x','ACTIVE',datetime('now'),datetime('now'))");
@@ -61,6 +64,11 @@ try {
   const allowedOrganizations = await handleAdmin(ctx('/api/admin/organizations', auth('operator', ['ADMIN_ORGANIZATIONS'])));
   check(Array.isArray(allowedOrganizations.items), 'organization domain allow matrix failed');
   await expectError(() => handleAdmin(ctx('/api/admin/organizations', auth('operator', ['ADMIN_COURSES']))), 'PERMISSION_DENIED', 'cross-domain organization access');
+
+  const orgOptions = await handleAdmin(ctx('/api/admin/organizations/options', auth('operator', ['ADMIN_ORGANIZATIONS'])));
+  check(Array.isArray(orgOptions.items) && orgOptions.items.every((item) => item.id && item.name && item.status), 'organization options should return compact id/name/status rows');
+  check(Number(orgOptions.total) >= orgOptions.items.length, 'organization options should expose total for truncation awareness');
+  await expectError(() => handleAdmin(ctx('/api/admin/organizations/options', auth('operator', ['ADMIN_COURSES']))), 'PERMISSION_DENIED', 'organization options cross-domain access');
 
   await handleAdmin(ctx('/api/admin/platform-admins/operator', root, 'PUT', { status: 'DISABLED' }));
   await handleAdmin(ctx('/api/admin/platform-admins/root', auth('solo', [...PLATFORM_ADMIN_PERMISSIONS]), 'PUT', { status: 'DISABLED' }));

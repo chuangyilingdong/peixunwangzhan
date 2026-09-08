@@ -60,7 +60,7 @@ function AdminPermissionGate({ user, permission, children }) {
 }
 
 function Dashboard({ api }) {
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const [filters, setFilters] = useState({ orgId: '', from: '', to: '' });
   const query = useMemo(() => {
     const params = new URLSearchParams();
@@ -381,7 +381,7 @@ function Organizations({ api }) {
 
 
 function PlatformUsers({ api }) {
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const [filters, setFilters] = useState({ role: '', orgId: '', search: '' });
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
@@ -525,7 +525,7 @@ function PlatformAudit({ api }) {
   useEffect(() => { if (list.data?.totalPages && page > list.data.totalPages) setPage(list.data.totalPages); }, [list.data, page]);
   useEffect(() => { setPage(1); }, [filters, actionFilter, limit]);
   const [exporting, setExporting] = useState(false);
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   function reset() { setFilters({ action: '', actorId: '', targetType: '', targetId: '', requestPath: '', from: '', to: '', orgId: '' }); setActionFilter(''); setPage(1); setMessage(''); }
   async function exportCsv() {
     setExporting(true); setMessage('');
@@ -608,7 +608,7 @@ function PlatformNotifications({ api }) {
     params.set('limit', '50');
     return params.toString();
   }, [failFilters]);
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const summary = useData(() => api.get('admin/notification-events/summary'), [api]);
   const queueSummary = useData(() => api.get('admin/notification-queue/summary'), [api]);
   const deadLetters = useData(() => api.get('admin/notification-queue/dead-letters?limit=50'), [api]);
@@ -785,7 +785,7 @@ function PlatformNotifications({ api }) {
 }
 
 function PlatformWorks({ api }) {
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const [filters, setFilters] = useState({ status: '', orgId: '', search: '' });
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
@@ -924,7 +924,7 @@ function ProviderPolicyPanel({ api }) {
 }
 
 function PlatformBilling({ api }) {
-  const organizations = useData(() => api.get('admin/organizations?limit=200'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const overview = useData(() => api.get('admin/billing/usage-overview'), [api]);
   const [filters, setFilters] = useState({ days: '30', orgId: '', modality: '', status: '', search: '', startDate: '', endDate: '' });
   const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
@@ -974,7 +974,7 @@ function AdminInbox({ api }) {
   const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
   const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
   const inbox = useData(() => api.get(`admin/inbox?${query.toString()}`), [api, query]);
-  const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const templates = useData(() => api.get('admin/notification-templates'), [api]);
   const emptyForm = { title: '', body: '', kind: 'NOTICE', scope: 'ALL_ORGS', orgIds: [], roles: ['ORG_ADMIN', 'TEACHER', 'STUDENT'], targetUrl: '', pinned: false, status: 'DRAFT', publishAt: '' };
   const [form, setForm] = useState(emptyForm);
@@ -1041,7 +1041,7 @@ function AdminMaterials({ api }) {
   const [filters, setFilters] = useState({ search: '', status: '', category: '', visibility: '' });
   const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
   const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
-  const materials = useData(() => api.get(`admin/materials?${query.toString()}`), [api, query]); const organizations = useData(() => api.get('admin/organizations'), [api]);
+  const materials = useData(() => api.get(`admin/materials?${query.toString()}`), [api, query]); const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const [form, setForm] = useState({ title: '', description: '', category: 'GENERAL', visibility: 'ALL_ORGS', orgIds: [], mimeType: '', resourceUrl: '', coverUrl: '' });
   const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false); const [stats, setStats] = useState({ loading: false, data: null, error: null });
   async function create(event) {
