@@ -587,6 +587,7 @@ function OrgCourses({ api }) {
         <MetricCard label="版本" value={c.version} hint={'归属 ' + (c.assignedToCurrentOrg ? '本机构' : '平台公开')} tone="orange" />
       </div>
       {Array.isArray(c.tags) && c.tags.length ? <div className="tag-list"><span className="muted">标签：</span>{c.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
+      {c.assignmentExpiresAt ? <Notice>本课包对贵机构的授权有效期至 {formatDate(c.assignmentExpiresAt)}，到期后将从课程中心移除，如需继续使用请联系平台续期。</Notice> : null}
       <Panel title="课时列表">
         {c.lessons?.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>正文</th><th>教学素材</th><th>操作</th></tr></thead><tbody>{c.lessons.map((lesson) => <tr key={lesson.id} className="lesson-row" onClick={() => setLessonDetail(lesson)}><td>{lesson.sort}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td>{lesson.durationMinutes} 分钟</td><td><div style={{ whiteSpace: 'pre-wrap', maxWidth: 360 }}>{lesson.lessonContent || '—'}</div></td><td>{(lesson.teachingGroups || []).reduce((total, group) => total + (group.assets || []).length, 0)} 个</td><td><button className="secondary-button" onClick={(event) => { event.stopPropagation(); setLessonDetail(lesson); }}>查看</button></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
       </Panel>

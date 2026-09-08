@@ -1,4 +1,4 @@
-import { audit, errors, id, json, nowIso, parseJson, q, requireRole, row, rows, transaction } from '../lib.js';
+import { audit, errors, id, json, nowIso, parseJson, q, requireRole, row, rows, transaction, assignmentActiveSql } from '../lib.js';
 
 // Every read and write uses the same class scope, including explicitly supplied IDs.
 function scopedClass(auth, classId, { student = false, active = false } = {}) {
@@ -38,7 +38,7 @@ function assignedLesson(auth, classId, lessonId) {
     JOIN class_curriculum_items curriculum ON curriculum.lesson_id=lesson.id AND curriculum.class_id=?
     WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND
     ((series.owner_type='ORG' AND series.org_id=?) OR (series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR EXISTS
-    (SELECT 1 FROM course_assignments assignment WHERE assignment.series_id=series.id AND assignment.org_id=? AND assignment.status='ACTIVE'))))`,
+    (SELECT 1 FROM course_assignments assignment WHERE assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()}))))`,
   [classId, lessonId, auth.user.orgId, auth.user.orgId]);
   if (!lesson) throw errors.badRequest('课时不在班级已授权课单内', 'LESSON_NOT_ASSIGNED');
   return lesson.id;

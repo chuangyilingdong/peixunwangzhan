@@ -368,7 +368,7 @@ function Organizations({ api }) {
             <h3>套餐（{detail.data.packages.length}）</h3>
             {detail.data.packages.length ? <div className="table-wrap"><table><thead><tr><th>套餐</th><th>月度积分</th><th>学员席位</th><th>状态</th></tr></thead><tbody>{detail.data.packages.map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatCredits(item.monthlyCredits)}</td><td>{item.studentSeats}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty title="暂无机构套餐" />}
             <h3>课程授权（{detail.data.courseAssignments.length}）</h3>
-            {detail.data.courseAssignments.length ? <div className="table-wrap"><table><thead><tr><th>课包</th><th>状态</th><th>授权时间</th></tr></thead><tbody>{detail.data.courseAssignments.map((item) => <tr key={item.id}><td>{item.title}</td><td><Status value={item.status} /></td><td>{formatDate(item.assignedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无课程授权" />}
+            {detail.data.courseAssignments.length ? <div className="table-wrap"><table><thead><tr><th>课包</th><th>状态</th><th>授权时间</th><th>有效期至</th></tr></thead><tbody>{detail.data.courseAssignments.map((item) => <tr key={item.id}><td>{item.title}</td><td><Status value={item.status} /></td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期）' : ''}</span> : '永久有效'}</td></tr>)}</tbody></table></div> : <Empty title="暂无课程授权" />}
           </Panel>
         </div>
         <Panel title="最近审计记录">

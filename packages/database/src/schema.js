@@ -338,6 +338,7 @@ CREATE TABLE IF NOT EXISTS course_assignments (
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','REVOKED')),
   assigned_by TEXT,
   assigned_at TEXT NOT NULL,
+  expires_at TEXT,
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
@@ -1415,6 +1416,11 @@ try { db.exec("ALTER TABLE course_lessons ADD COLUMN delivery_mode TEXT NOT NULL
 try { db.exec("ALTER TABLE course_lessons ADD COLUMN classroom_config TEXT NOT NULL DEFAULT '{}'"); } catch (_) {}
 try { db.exec("ALTER TABLE course_lessons ADD COLUMN canvas_template_snapshot TEXT NOT NULL DEFAULT '{}'"); } catch (_) {}
 
+// 课包授权有效期：有效期挂在「课包 → 机构」的授权上，平台课包本身不设有效期。
+// NULL 表示永久有效；到期后该机构不再看到此课包。
+try { db.exec('ALTER TABLE course_assignments ADD COLUMN expires_at TEXT'); } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_course_assignments_org_expires ON course_assignments(org_id, expires_at)'); } catch (_) {}
+
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }
 
@@ -1466,4 +1472,57 @@ db.exec(`CREATE TABLE IF NOT EXISTS personal_credit_ledger (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 )`);
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_pcl_user ON personal_credit_ledger(user_id, created_at DESC)'); } catch (_) {}
+
+// 教学素材分类（TEACHING_ASSET）此前只加进了服务端白名单，没进 file_assets 的 CHECK 约束，
+// 导致上传备课资料时触发 CHECK 失败。SQLite 不能直接改 CHECK，按官方推荐重建一次表。
+// 幂等：只在旧约束里缺少该分类时执行；PRAGMA foreign_keys 必须在事务外切换，
+// 否则 DROP TABLE 会按 ON DELETE CASCADE 连带清空 file_access_grants。
+const fileAssetsDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='file_assets'").get()?.sql || '');
+if (fileAssetsDdl && !fileAssetsDdl.includes("'TEACHING_ASSET'")) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`CREATE TABLE file_assets_migrated (
+      id TEXT PRIMARY KEY,
+      owner_type TEXT NOT NULL CHECK (owner_type IN ('PLATFORM','ORG','USER','SYSTEM')),
+      owner_org_id TEXT,
+      owner_user_id TEXT,
+      storage_kind TEXT NOT NULL DEFAULT 'EXTERNAL_URL' CHECK (storage_kind IN ('EXTERNAL_URL','INTERNAL_PROXY','PENDING')),
+      storage_url TEXT,
+      storage_key TEXT,
+      proxy_route TEXT,
+      public_path TEXT,
+      file_name TEXT NOT NULL,
+      mime_type TEXT,
+      file_size INTEGER,
+      checksum TEXT,
+      category TEXT NOT NULL DEFAULT 'GENERAL' CHECK (category IN ('PROMO_MATERIAL','PROMO_COVER','CLIENT_INSTALLER','MEDIA_ASSET','TEACHING_ASSET','GENERAL')),
+      visibility TEXT NOT NULL DEFAULT 'PRIVATE' CHECK (visibility IN ('PRIVATE','ORG','ASSIGNED_ORGS','PUBLIC_PLATFORM','PUBLIC_RELEASE')),
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','DISABLED','REMOVED')),
+      review_status TEXT NOT NULL DEFAULT 'NOT_REQUIRED' CHECK (review_status IN ('NOT_REQUIRED','PENDING','APPROVED','REJECTED')),
+      expires_at TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (owner_org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    )`);
+    db.exec('INSERT INTO file_assets_migrated SELECT id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at FROM file_assets');
+    db.exec('DROP TABLE file_assets');
+    db.exec('ALTER TABLE file_assets_migrated RENAME TO file_assets');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_file_assets_owner ON file_assets(owner_type, owner_org_id, owner_user_id, status)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_file_assets_category_status ON file_assets(category, status, created_at DESC)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_file_assets_visibility ON file_assets(visibility, status)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_file_assets_storage_url ON file_assets(storage_url)');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_file_assets_storage_key ON file_assets(storage_key) WHERE storage_key IS NOT NULL');
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
 

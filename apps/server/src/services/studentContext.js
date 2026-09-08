@@ -8,6 +8,7 @@ import {
   nowIso,
   row,
   rows,
+  assignmentActiveSql,
 } from '../lib.js';
 
 function rawValue(user, snake, camel) {
@@ -83,7 +84,7 @@ export function getStudentCourses(user) {
      JOIN course_lessons lesson ON lesson.id = curriculum.lesson_id AND lesson.status = 'PUBLISHED'
      JOIN course_series series ON series.id = lesson.series_id AND series.status = 'PUBLISHED'
      LEFT JOIN course_assignments assignment
-       ON assignment.series_id = series.id AND assignment.org_id = ? AND assignment.status = 'ACTIVE'
+       ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
      WHERE member.user_id = ?
        AND member.removed_at IS NULL
        AND ${orgCourseAccessSql()}
@@ -161,7 +162,7 @@ export function getStudentAccessibleCourses(user, filters = {}) {
   const items = rows(
     `SELECT series.* FROM course_series series
      LEFT JOIN course_assignments assignment
-       ON assignment.series_id = series.id AND assignment.org_id = ? AND assignment.status = 'ACTIVE'
+       ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
      WHERE ${wheres.join(' AND ')}
      ORDER BY series.sort, series.title`,
     params,
@@ -177,7 +178,7 @@ export function getStudentCourseDetail(user, seriesId) {
   const series = row(
     `SELECT series.* FROM course_series series
      LEFT JOIN course_assignments assignment
-       ON assignment.series_id = series.id AND assignment.org_id = ? AND assignment.status = 'ACTIVE'
+       ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
      WHERE series.id = ? AND series.status = 'PUBLISHED'
        AND ( (series.owner_type = 'PLATFORM' AND (series.visibility = 'ALL_ORGS' OR assignment.id IS NOT NULL))
              OR (series.owner_type = 'ORG' AND series.org_id = ?) )`,
@@ -243,7 +244,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
      JOIN course_lessons lesson ON lesson.id = curriculum.lesson_id AND lesson.status = 'PUBLISHED'
      JOIN course_series series ON series.id = lesson.series_id AND series.status = 'PUBLISHED'
      LEFT JOIN course_assignments assignment
-       ON assignment.series_id = series.id AND assignment.org_id = ? AND assignment.status = 'ACTIVE'
+       ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
      LEFT JOIN class_sessions session
        ON session.id = class.current_session_id
        AND session.class_id = class.id

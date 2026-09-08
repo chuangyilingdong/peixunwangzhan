@@ -16,6 +16,7 @@ import {
   requireRole,
   row,
   rows,
+  assignmentActiveSql,
 } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
@@ -131,6 +132,25 @@ function validateAudienceOrgIds(orgIds) {
 }
 
 /**
+ * 教学素材（教师备课资料）的访问判定：必须挂在某个课时上，且该课时的课包
+ * 对本机构有效授权（含未过期）。学生端不适用此函数。
+ */
+function teachingAssetVisibleToOrg(fileId, orgId) {
+  if (!orgId) return false;
+  return !!row(
+    `SELECT 1 FROM course_lesson_teaching_assets asset
+     JOIN course_lesson_teaching_groups grp ON grp.id = asset.group_id
+     JOIN course_lessons lesson ON lesson.id = grp.lesson_id
+     JOIN course_series series ON series.id = lesson.series_id
+     LEFT JOIN course_assignments assignment ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql()}
+     WHERE asset.file_asset_id = ? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'
+       AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id = ?))
+     LIMIT 1`,
+    [orgId, fileId, orgId],
+  );
+}
+
+/**
  * 校验当前用户对指定 file_id 是否有 permission 权限（READ/DOWNLOAD）。
  * @param {Object} ctx - 路由上下文
  * @param {string} fileId
@@ -151,12 +171,18 @@ export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
   const orgId = user.orgId || null;
   // 1. 平台超管：完全访问
   if (role === 'SUPER_ADMIN') return file;
-  // 2. 公开可见
+  // 2. 教学素材是教师备课资料：学生一律不可访问，机构用户要求课包对本机构有效授权。
+  if (file.category === 'TEACHING_ASSET') {
+    if (role === 'STUDENT') throw errors.forbidden('教学素材仅教师可见', 'TEACHING_ASSET_FORBIDDEN');
+    if ((role === 'ORG_ADMIN' || role === 'TEACHER') && teachingAssetVisibleToOrg(file.id, orgId)) return file;
+    throw errors.forbidden('当前账号无权访问此教学素材', 'FILE_ACCESS_DENIED');
+  }
+  // 3. 公开可见
   if (file.visibility === 'PUBLIC_PLATFORM' || file.visibility === 'PUBLIC_RELEASE') return file;
-  // 3. 所有者
+  // 4. 所有者
   if (file.owner_type === 'USER' && file.owner_user_id === user.id) return file;
   if (file.owner_type === 'ORG' && file.owner_org_id === orgId) return file;
-  // 4. 授权表匹配
+  // 5. 授权表匹配
   const grants = rows('SELECT * FROM file_access_grants WHERE file_id=?', [fileId]);
   const now = Date.now();
   for (const g of grants) {
@@ -493,7 +519,7 @@ export async function handleOrgFileAssets(ctx) {
       "OR owner_org_id=?",
       "OR visibility='PUBLIC_PLATFORM'",
     ];
-    const where = `WHERE (${conditions.join(' ')}) ${category ? 'AND category=?' : ''}`;
+    const where = `WHERE (${conditions.join(' ')}) AND category<>'TEACHING_ASSET' ${category ? 'AND category=?' : ''}`;
     const params = [currentOrgId, currentOrgId, currentOrgId];
     if (category) params.push(category);
     const items = rows(`SELECT DISTINCT file_assets.* FROM file_assets ${where} ORDER BY created_at DESC LIMIT ${limit}`, params).map(normalizeFileAsset);
@@ -613,10 +639,11 @@ export async function handleStudentFileAssets(ctx) {
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
     const items = rows(
       `SELECT DISTINCT file_assets.* FROM file_assets
-       WHERE (visibility='ASSIGNED_ORGS' AND EXISTS (SELECT 1 FROM file_access_grants g WHERE g.file_id=file_assets.id AND g.org_id=? AND g.grant_type='ORG'))
+       WHERE ((visibility='ASSIGNED_ORGS' AND EXISTS (SELECT 1 FROM file_access_grants g WHERE g.file_id=file_assets.id AND g.org_id=? AND g.grant_type='ORG'))
           OR (visibility='ORG' AND owner_org_id=?)
           OR (visibility='PRIVATE' AND owner_user_id=?)
-          OR visibility='PUBLIC_PLATFORM'
+          OR visibility='PUBLIC_PLATFORM')
+         AND category<>'TEACHING_ASSET'
        ORDER BY created_at DESC LIMIT ${limit}`,
       [currentOrgId, currentOrgId, auth.user.id],
     ).map(normalizeFileAsset);
@@ -642,6 +669,7 @@ export async function handlePublicFileAssets(ctx) {
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    if (file.category === 'TEACHING_ASSET') throw errors.forbidden('教学素材不是公开资源', 'FILE_NOT_PUBLIC');
     if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') {
       throw errors.forbidden('文件不是公开资源', 'FILE_NOT_PUBLIC');
     }
@@ -654,6 +682,7 @@ export async function handlePublicFileAssets(ctx) {
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    if (file.category === 'TEACHING_ASSET') throw errors.forbidden('教学素材不是公开资源', 'FILE_NOT_PUBLIC');
     if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') {
       throw errors.forbidden('文件不是公开资源', 'FILE_NOT_PUBLIC');
     }

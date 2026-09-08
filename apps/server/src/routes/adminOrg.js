@@ -1,7 +1,7 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
@@ -21,15 +21,32 @@ function normalizeDeliveryMode(value) {
   if (!['CANVAS', 'VIBECODING'].includes(mode)) throw errors.badRequest('课堂类型只能是画布课堂或 VibeCoding 课堂', 'INVALID_DELIVERY_MODE');
   return mode;
 }
+// 生成比例：前端改为下拉，这里仍做归一化以兼容历史数据与直接调接口的情况。
+// 接受 9:16 / 9：16 / 9/16 / 9x16 / 9×16 等写法，统一为「宽:高」。
+const ASPECT_RATIO_SIZE = {
+  image: { '1:1': '1024x1024', '4:3': '1024x768', '3:4': '768x1024', '16:9': '1024x576', '9:16': '576x1024', '3:2': '1024x683', '2:3': '683x1024', '21:9': '1280x548' },
+  video: { '1:1': '1080x1080', '4:3': '1440x1080', '3:4': '1080x1440', '16:9': '1920x1080', '9:16': '1080x1920', '3:2': '1620x1080', '2:3': '1080x1620' },
+};
+function normalizeAspectRatio(value, fallback, label) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return fallback;
+  const cleaned = raw.replace(/\s+/g, '').replace(/[：]/g, ':').replace(/[×xX*／/]/g, ':');
+  const match = cleaned.match(/^(\d{1,4}):(\d{1,4})$/);
+  const width = match ? Number(match[1]) : 0;
+  const height = match ? Number(match[2]) : 0;
+  if (!width || !height) throw errors.badRequest(`${label} 生成比例格式无效（示例 16:9）`, 'INVALID_GENERATION_CONFIG');
+  return `${width}:${height}`;
+}
 function normalizeClassroomConfig(value) {
   const input = value && typeof value === 'object' ? value : {};
   const source = input.generationSlots && typeof input.generationSlots === 'object' ? input.generationSlots : {};
   const normalizeSlot = (key, defaults) => {
     const raw = source[key] && typeof source[key] === 'object' ? source[key] : {};
     const count = integer(raw.count, `${key} 生成框体数量`, { min: 0, max: 20, fallback: defaults.count });
-    const aspectRatio = String(raw.aspectRatio || defaults.aspectRatio).trim().slice(0, 30);
-    if (!/^\d+(?::\d+)?$/.test(aspectRatio)) throw errors.badRequest(`${key} 生成比例格式无效`, 'INVALID_GENERATION_CONFIG');
-    const size = String(raw.size || defaults.size).trim().slice(0, 40);
+    const aspectRatio = normalizeAspectRatio(raw.aspectRatio, defaults.aspectRatio, key);
+    // 比例已决定尺寸：已知比例统一按映射取尺寸，避免出现「16:9 + 1024x1024」这类冲突组合。
+    const derivedSize = ASPECT_RATIO_SIZE[key]?.[aspectRatio];
+    const size = (derivedSize || String(raw.size || defaults.size).trim()).slice(0, 40);
     const durationSeconds = key === 'video' ? integer(raw.durationSeconds, '视频时长', { min: 1, max: 120, fallback: defaults.durationSeconds }) : undefined;
     const model = String(raw.model || '').trim().slice(0, 120) || null;
     return { count, aspectRatio, size, ...(durationSeconds === undefined ? {} : { durationSeconds }), model };
@@ -67,7 +84,7 @@ function assertTeachingClassManager(auth, cls) {
 }
 function accessibleLesson(currentOrgId, lessonId) {
   return row(
-    "SELECT lesson.* FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND assignment.status='ACTIVE' WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?))",
+    `SELECT lesson.* FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?))`,
     [currentOrgId, lessonId, currentOrgId],
   );
 }
@@ -153,7 +170,7 @@ function validateSeriesForPublishing(seriesId) {
 }
 function accessibleSeries(currentOrgId, seriesId) {
   return row(
-    "SELECT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND assignment.status='ACTIVE' WHERE series.id=? AND series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?))",
+    `SELECT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.id=? AND series.status='PUBLISHED' AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id=?))`,
     [currentOrgId, seriesId, currentOrgId],
   );
 }
@@ -1071,10 +1088,11 @@ function buildOrganizationDetail(orgId) {
   const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
   const admins = orgAdminRows(organization.id);
   const packages = rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id]).map(normalizePackage);
-  const courseAssignments = rows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, series.title AS series_title
+  const courseAssignments = rows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, series.title AS series_title
     FROM course_assignments assignment JOIN course_series series ON series.id=assignment.series_id
     WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]).map((item) => ({
     id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at,
+    expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(),
   }));
   const summary = {
     teachers: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [organization.id]),
@@ -1364,11 +1382,11 @@ export async function handleAdmin(ctx) {
     if (title.length > 200) throw errors.badRequest('课包标题不能超过200个字符', 'VALIDATION_ERROR');
     const visibility = body.visibility || 'ALL_ORGS'; const status = body.status || 'DRAFT';
      const priceFen = integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000, fallback: 0 });
-     const validityDays = integer(body.validityDays, '课程包有效期（天）', { min: 1, max: 3650, fallback: 365 });
      const estimatedCreditsPerPerson = integer(body.estimatedCreditsPerPerson, '预估积分/人', { min: 0, max: 1000000000, fallback: 0 });
      const gradeRange = String(body.gradeRange || '').trim().slice(0, 100);
      const coverImageUrl = body.coverImageUrl ? String(body.coverImageUrl).trim().slice(0, 2000) : null;
-     if (coverImageUrl && !/^https:\/\//.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接', 'INVALID_COVER_URL');
+     // 封面可以是外链 HTTPS，也可以是平台自己上传后返回的 /api/... 相对地址。
+     if (coverImageUrl && !/^(https:\/\/|\/api\/)/.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接或平台上传地址', 'INVALID_COVER_URL');
      const coverAssetId = body.coverAssetId ? String(body.coverAssetId).trim() : null;
      if (coverAssetId && !coverAssetId.startsWith('file_')) throw errors.badRequest('封面资源 ID 格式无效', 'INVALID_COVER_ASSET_ID');
     if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
@@ -1396,7 +1414,7 @@ export async function handleAdmin(ctx) {
     const seriesDeliveryMode = normalizeDeliveryMode(body.deliveryMode);
     const createdLessonIds = [];
     transaction(() => {
-      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,validity_days,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, String(body.version || '1.0').slice(0, 100), integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, now, now]);
+      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, String(body.version || '1.0').slice(0, 100), integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, now, now]);
       lessons.forEach((lesson, index) => {
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle) throw errors.badRequest(`第${index + 1}课标题不能为空`, 'LESSON_TITLE_REQUIRED');
@@ -1410,21 +1428,21 @@ export async function handleAdmin(ctx) {
     });
      createdLessonIds.forEach((lesson) => replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot));
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true });
+    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
   let seriesDetailMatch = part.match(/^\/course-series\/([^/]+)\/detail$/);
   if (seriesDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesDetailMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    const assignedOrgs = rows('SELECT assignment.id, assignment.org_id, assignment.assigned_at, organization.name org_name FROM course_assignments assignment JOIN organizations organization ON organization.id=assignment.org_id WHERE assignment.series_id=? AND assignment.status=\'ACTIVE\' ORDER BY assignment.assigned_at DESC', [series.id]).map((item) => ({ id: item.id, orgId: item.org_id, orgName: item.org_name, assignedAt: item.assigned_at }));
+    const assignedOrgs = rows('SELECT assignment.id, assignment.org_id, assignment.assigned_at, assignment.expires_at, organization.name org_name FROM course_assignments assignment JOIN organizations organization ON organization.id=assignment.org_id WHERE assignment.series_id=? AND assignment.status=\'ACTIVE\' ORDER BY assignment.assigned_at DESC', [series.id]).map((item) => ({ id: item.id, orgId: item.org_id, orgName: item.org_name, assignedAt: item.assigned_at, expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now() }));
     const usage = {
       classesUsingSeries: count('SELECT COUNT(*) AS n FROM classes WHERE default_series_id=?', [series.id]),
       curriculumItems: count('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE source_series_id=?', [series.id]),
       classSessions: count('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
       studentWorks: count('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
     };
-    return { series: normalizeSeries(series, { includeLessons: true, includeAllLessons: true }), assignedOrgs, usage };
+    return { series: normalizeSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage };
   }
 
   let seriesEditMatch = part.match(/^\/course-series\/([^/]+)$/);
@@ -1438,11 +1456,10 @@ export async function handleAdmin(ctx) {
     if (title !== series.title && row("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
     const description = body.description === undefined ? series.description : String(body.description).slice(0, 10000);
     const coverImageUrl = body.coverImageUrl === undefined ? series.cover_image_url : (body.coverImageUrl ? String(body.coverImageUrl).slice(0, 2000) : null);
-    if (coverImageUrl && !/^https:\/\//.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接', 'INVALID_COVER_URL');
+    if (coverImageUrl && !/^(https:\/\/|\/api\/)/.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接或平台上传地址', 'INVALID_COVER_URL');
     const coverAssetId = body.coverAssetId === undefined ? series.cover_asset_id : (body.coverAssetId ? String(body.coverAssetId).trim() : null);
     if (coverAssetId && !coverAssetId.startsWith('file_')) throw errors.badRequest('封面资源 ID 格式无效', 'INVALID_COVER_ASSET_ID');
      const priceFen = body.priceFen === undefined ? Number(series.price_fen || 0) : integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000 });
-     const validityDays = body.validityDays === undefined ? Number(series.validity_days || 365) : integer(body.validityDays, '课程包有效期（天）', { min: 1, max: 3650 });
      const estimatedCreditsPerPerson = body.estimatedCreditsPerPerson === undefined ? Number(series.estimated_credits_per_person || 0) : integer(body.estimatedCreditsPerPerson, '预估积分/人', { min: 0, max: 1000000000 });
      const gradeRange = body.gradeRange === undefined ? (series.grade_range || '') : String(body.gradeRange || '').trim().slice(0, 100);
     const visibility = body.visibility === undefined ? series.visibility : body.visibility;
@@ -1455,9 +1472,10 @@ export async function handleAdmin(ctx) {
       const dl = Number(difficultyLevel);
       if (!Number.isInteger(dl) || dl < 1 || dl > 5) throw errors.badRequest('难度等级必须是 1-5 的整数', 'INVALID_DIFFICULTY');
     }
-    const ageRangeMin = body.ageRangeMin === null ? null : (body.ageRangeMin !== undefined ? integer(body.ageRangeMin, '适学年龄下限', { min: 3, max: 99 }) : undefined);
-    const ageRangeMax = body.ageRangeMax === null ? null : (body.ageRangeMax !== undefined ? integer(body.ageRangeMax, '适学年龄上限', { min: 3, max: 99 }) : undefined);
-    if (ageRangeMin !== undefined && ageRangeMax !== undefined && ageRangeMin > ageRangeMax) throw errors.badRequest('年龄下限不能大于年龄上限', 'INVALID_AGE_RANGE');
+    // 未提交的字段回落到库里现值，避免 undefined 直接绑定到 SQLite 参数。
+    const ageRangeMin = body.ageRangeMin === null ? null : (body.ageRangeMin !== undefined ? integer(body.ageRangeMin, '适学年龄下限', { min: 3, max: 99 }) : (series.age_range_min ?? null));
+    const ageRangeMax = body.ageRangeMax === null ? null : (body.ageRangeMax !== undefined ? integer(body.ageRangeMax, '适学年龄上限', { min: 3, max: 99 }) : (series.age_range_max ?? null));
+    if (ageRangeMin !== null && ageRangeMax !== null && ageRangeMin > ageRangeMax) throw errors.badRequest('年龄下限不能大于年龄上限', 'INVALID_AGE_RANGE');
     let tags;
     if (body.tags !== undefined) {
       if (Array.isArray(body.tags)) {
@@ -1470,10 +1488,10 @@ export async function handleAdmin(ctx) {
     }
     const before = normalizeSeries(series);
     const deliveryMode = body.deliveryMode === undefined ? undefined : normalizeDeliveryMode(body.deliveryMode);
-     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,validity_days=?,estimated_credits_per_person=?,grade_range=?,visibility=?,sort=?,version=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, validityDays, estimatedCreditsPerPerson, gradeRange, visibility, sort, version, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
+     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,visibility=?,sort=?,version=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, visibility, sort, version, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
     const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true });
+    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   let seriesStatusMatch = part.match(/^\/course-series\/([^/]+)\/status$/);
@@ -1526,7 +1544,7 @@ export async function handleAdmin(ctx) {
     });
     replaceQueue.forEach((item) => replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig, item.lesson.canvasTemplateSnapshot));
     audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true });
+    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   let seriesReorderMatch = part.match(/^\/course-series\/([^/]+)\/lessons\/reorder$/);
@@ -1552,7 +1570,7 @@ export async function handleAdmin(ctx) {
       q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(series.version), now, series.id]);
     });
     audit(ctx, 'COURSE_LESSON_REORDER', 'COURSE_SERIES', series.id, null, { lessonIds: requested });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true });
+    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   let seriesRevokeMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/revoke$/);
@@ -1599,7 +1617,7 @@ export async function handleAdmin(ctx) {
     if (body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content) {
       audit(ctx, 'COURSE_LESSON_CONTENT_UPDATE', 'COURSE_LESSON', lesson.id, { lessonContent: lesson.lesson_content }, { lessonContent });
     }
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true });
+    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   if (lessonEditMatch && method === 'DELETE') {
@@ -1619,7 +1637,7 @@ export async function handleAdmin(ctx) {
       q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(lesson.series_version), now, lesson.series_id]);
     });
     audit(ctx, 'COURSE_LESSON_DELETE', 'COURSE_LESSON', lesson.id, { title: lesson.title }, { deleted: true, resequenced: true }, {});
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true });
+    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
   match = part.match(/^\/course-series\/([^/]+)\/assignments$/);
   if (match && method === 'POST') {
@@ -1632,18 +1650,21 @@ export async function handleAdmin(ctx) {
     const placeholders = assignmentOrgIds.map(() => '?').join(','); const existingOrgs = rows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, assignmentOrgIds);
     if (existingOrgs.length !== assignmentOrgIds.length) throw errors.badRequest('存在不存在的机构', 'ORG_NOT_FOUND');
     const now = nowIso();
+    // 有效期挂在「课包 → 机构」的授权上：平台课包本身不设有效期。
+    const validityDays = integer(ctx.body?.validityDays, '授权有效期（天）', { min: 1, max: 3650, fallback: 365 });
+    const expiresAt = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString();
     transaction(() => {
       assignmentOrgIds.forEach((assignmentOrgId) => {
         const existing = row('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, assignmentOrgId]);
         if (existing) {
           assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, before: { status: existing.status, orgId: assignmentOrgId }, allowSameState: true, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能启用' });
-          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=? WHERE id=?", [auth.user.id, now, existing.id]);
+          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=? WHERE id=?", [auth.user.id, now, expiresAt, existing.id]);
         }
-        else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at) VALUES (?,?,?,?,?,?)", [id('assign'), series.id, assignmentOrgId, 'ACTIVE', auth.user.id, now]);
+        else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at) VALUES (?,?,?,?,?,?,?)", [id('assign'), series.id, assignmentOrgId, 'ACTIVE', auth.user.id, now, expiresAt]);
       });
     });
-    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds });
-    return { assignedCount: assignmentOrgIds.length };
+    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds, validityDays, expiresAt });
+    return { assignedCount: assignmentOrgIds.length, validityDays, expiresAt };
   }
 
   // P5-M01: Marketplace management endpoints
@@ -1691,7 +1712,7 @@ export async function handleAdmin(ctx) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
     if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    const detail = normalizeSeries(series, { includeLessons: true, includeAllLessons: true, parseTags: true });
+    const detail = normalizeSeries(series, { includeLessons: true, includeAllLessons: true, parseTags: true, includeTeaching: true });
     return {
       ...detail,
       marketplaceStatus: detail.marketplaceStatus,
@@ -1898,7 +1919,7 @@ export async function handleAdmin(ctx) {
     const admins = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='ORG_ADMIN' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
     const classes = singleNumber(`SELECT COUNT(*) n FROM classes WHERE (?='' OR org_id=?) AND status='ACTIVE'`, [orgFilter, orgFilter]);
     const publishedCourses = singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED'`);
-    const activeAssignments = singleNumber(`SELECT COUNT(*) n FROM course_assignments WHERE status='ACTIVE' AND (?='' OR org_id=?)`, [orgFilter, orgFilter]);
+    const activeAssignments = singleNumber(`SELECT COUNT(*) n FROM course_assignments assignment WHERE ${assignmentActiveSql()} AND (?='' OR org_id=?)`, [orgFilter, orgFilter]);
     const marketplaceCourses = singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND marketplace_status='APPROVED'`);
     const classSessions = singleNumber(`SELECT COUNT(*) n FROM class_sessions session JOIN classes class ON class.id=session.class_id WHERE (LENGTH(?)=0 OR class.org_id=?) AND session.started_at>=? AND session.started_at<?`, [orgFilter, orgFilter, since, until]);
     const projects = singleNumber(`SELECT COUNT(*) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?`, [orgFilter, orgFilter, since, until]);

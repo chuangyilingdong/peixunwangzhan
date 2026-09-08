@@ -413,7 +413,19 @@ export function normalizePackage(value) {
   };
 }
 
-export function normalizeLesson(value) {
+// 课包授权的有效条件：状态为 ACTIVE 且未过期（expires_at 为空表示永久有效）。
+// 用 SQLite 的 ISO 时间戳与 nowIso() 同格式比较，避免各调用点手工拼参数。
+export const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+export function assignmentActiveSql(alias = 'assignment') {
+  return `(${alias}.status='ACTIVE' AND (${alias}.expires_at IS NULL OR ${alias}.expires_at > ${NOW_SQL}))`;
+}
+export function assignmentIsActive(value) {
+  if (!value || value.status !== 'ACTIVE') return false;
+  if (!value.expires_at) return true;
+  return new Date(value.expires_at).getTime() > Date.now();
+}
+
+export function normalizeLesson(value, { includeTeaching = false } = {}) {
   if (!value) return null;
   return {
     id: value.id,
@@ -430,7 +442,8 @@ export function normalizeLesson(value) {
     classroomConfig: parseJson(value.classroom_config, {}),
     canvasTemplateSnapshot: parseJson(value.canvas_template_snapshot, {}),
     ...lessonCanvasConfig(value.id),
-    ...lessonTeachingMaterials(value.id),
+    // 教学素材是教师备课资料：只有机构端/平台端显式要求时才下发，学生端与公开接口一律不带。
+    ...(includeTeaching ? lessonTeachingMaterials(value.id) : {}),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -472,7 +485,7 @@ export function lessonTeachingMaterials(lessonId) {
   return { teachingGroups: groups };
 }
 
-export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true } = {}) {
+export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false } = {}) {
   if (!value) return null;
   let tags = [];
   if (parseTags) {
@@ -511,9 +524,13 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
-  if (orgId) result.assignedToCurrentOrg = !!row("SELECT id FROM course_assignments WHERE series_id = ? AND org_id = ? AND status = 'ACTIVE'", [value.id, orgId]);
+  if (orgId) {
+    const assignment = row("SELECT status, expires_at FROM course_assignments WHERE series_id = ? AND org_id = ?", [value.id, orgId]);
+    result.assignedToCurrentOrg = assignmentIsActive(assignment);
+    result.assignmentExpiresAt = assignment?.expires_at || null;
+  }
   if (includeLessons) {
-    result.lessons = rows(`SELECT * FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"} ORDER BY sort, created_at`, [value.id]).map(normalizeLesson);
+    result.lessons = rows(`SELECT * FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"} ORDER BY sort, created_at`, [value.id]).map((lesson) => normalizeLesson(lesson, { includeTeaching }));
   }
   return result;
 }
