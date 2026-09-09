@@ -1,11 +1,11 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
-import { CORS_ALLOWED_ORIGINS } from './config.js';
+import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
 import { effectiveCapabilities, modalityChannel } from './services/modelCapabilities.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
-const PEPPER = process.env.AUTH_PEPPER || 'p0-local-pepper';
+const PEPPER = AUTH_PEPPER;
 
 export const PLATFORM_ADMIN_PERMISSIONS = Object.freeze([
   'ADMIN_ORGANIZATIONS',

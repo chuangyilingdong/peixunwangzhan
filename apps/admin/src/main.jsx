@@ -39,6 +39,8 @@ const navigation = [
   { to: '/inbox', icon: '✉', label: '站内信', permission: 'ADMIN_CONTENT' },
   { to: '/admins', icon: '⚙', label: '平台管理员', permission: 'ADMIN_AUDIT' },
   { to: '/audit', icon: '☉', label: '操作审计', permission: 'ADMIN_AUDIT' },
+  { heading: '我的账号' },
+  { to: '/security', icon: '🔑', label: '账号安全', permission: null },
 ];
 const demos = [{ label: '平台超管', login: 'root', password: 'admin123' }];
 // 官网内容区块的中文名（对应后端 website_contents.key）
@@ -53,6 +55,7 @@ const ADMIN_PERMISSION_LABELS = {
   ADMIN_AUDIT: '平台管理员与操作审计',
 };
 function hasAdminPermission(user, permission) {
+  if (!permission) return true;
   const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
   return user?.login === 'root' || permissions.includes('*') || permissions.includes(permission)
     || Object.keys(ADMIN_PERMISSION_LABELS).every((item) => permissions.includes(item));
@@ -555,7 +558,7 @@ function PlatformAdmins({ api, currentUser }) {
       </div>
     </Panel>
     <Panel title="管理员列表">
-      {admins.loading ? <Loading /> : admins.error ? <ErrorState error={admins.error} onRetry={admins.refresh} /> : admins.data?.items?.length ? <><ListResultSummary total={admins.data.total} page={admins.data.page} totalPages={admins.data.totalPages} label="名管理员" /><div className="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>权限码</th><th>最近登录</th><th>活跃会话</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{admins.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div>{item.id === currentUser?.id && <span className="muted">当前账号</span>}</td><td><Status value={item.status} /></td><td>{item.permissions.length ? item.permissions.join(', ') : '全量（本地基线）'}</td><td>{formatDate(item.lastLoginAt) || '从未登录'}</td><td>{item.activeSessions}</td><td>{formatDate(item.updatedAt)}</td><td><div className="row-actions"><button className="text-button" onClick={() => { setEditing(item); setForm({ login: '', displayName: item.displayName, password: '', permissions: item.permissions }); setLogs(null); }}>编辑</button><button className="text-button" onClick={() => { const password = window.prompt('请输入至少 6 位新密码'); if (password) update(item, { password }, '管理员密码已重置，该账号全部会话已失效。'); }}>重置密码</button>{item.status === 'ACTIVE' ? <button className="text-button" onClick={() => update(item, { status: 'DISABLED' }, '管理员已停用，该账号全部会话已失效。', `确认停用管理员「${item.displayName}」？停用后该账号现有登录会话立即失效。`)}>停用</button> : <button className="text-button" onClick={() => update(item, { status: 'ACTIVE' }, '管理员已启用。')}>启用</button>}<button className="text-button" disabled={logsLoading} onClick={() => showLogs(item)}>操作日志</button></div></td></tr>)}</tbody></table></div><Pagination page={admins.data.page} totalPages={admins.data.totalPages} onChange={setPage} disabled={admins.loading} /></> : <Empty title="没有符合条件的平台管理员" body="可以调整关键词或状态筛选条件。" />}
+      {admins.loading ? <Loading /> : admins.error ? <ErrorState error={admins.error} onRetry={admins.refresh} /> : admins.data?.items?.length ? <><ListResultSummary total={admins.data.total} page={admins.data.page} totalPages={admins.data.totalPages} label="名管理员" /><div className="table-wrap"><table><thead><tr><th>账号</th><th>状态</th><th>二次验证</th><th>权限码</th><th>最近登录</th><th>活跃会话</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{admins.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}</div>{item.id === currentUser?.id && <span className="muted">当前账号</span>}</td><td><Status value={item.status} /></td><td>{item.mfaEnabled ? <span className="status success">已开启</span> : <span className="status">未开启</span>}</td><td>{item.permissions.length ? item.permissions.join(', ') : '全量（本地基线）'}</td><td>{formatDate(item.lastLoginAt) || '从未登录'}</td><td>{item.activeSessions}</td><td>{formatDate(item.updatedAt)}</td><td><div className="row-actions"><button className="text-button" onClick={() => { setEditing(item); setForm({ login: '', displayName: item.displayName, password: '', permissions: item.permissions }); setLogs(null); }}>编辑</button><button className="text-button" onClick={() => { const password = window.prompt('请输入至少 6 位新密码'); if (password) update(item, { password }, '管理员密码已重置，该账号全部会话已失效。'); }}>重置密码</button>{item.status === 'ACTIVE' ? <button className="text-button" onClick={() => update(item, { status: 'DISABLED' }, '管理员已停用，该账号全部会话已失效。', `确认停用管理员「${item.displayName}」？停用后该账号现有登录会话立即失效。`)}>停用</button> : <button className="text-button" onClick={() => update(item, { status: 'ACTIVE' }, '管理员已启用。')}>启用</button>}<button className="text-button" disabled={logsLoading} onClick={() => showLogs(item)}>操作日志</button></div></td></tr>)}</tbody></table></div><Pagination page={admins.data.page} totalPages={admins.data.totalPages} onChange={setPage} disabled={admins.loading} /></> : <Empty title="没有符合条件的平台管理员" body="可以调整关键词或状态筛选条件。" />}
     </Panel>
     {logs ? (
       <Panel title={`操作日志：${logs.admin.displayName}（最近 ${logs.items.length} 条）`}>
@@ -1270,17 +1273,49 @@ function Analytics({ api }) {
   </>;
 }
 
-function App() {
-  const [session, setSession] = useState(readSession); const navigate = useNavigate();
-  const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
-  useEffect(() => { if (!session?.token) return; api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);
-  async function login(credentials) { const data = await api.login(credentials); if (data.user.role !== 'SUPER_ADMIN') throw new ApiError('该账号没有平台管理权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
-  async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
-  const [passwordOpen, setPasswordOpen] = useState(false);
+function Security({ api, onSignedOut }) {
+  const status = useData(() => api.get('admin/me/mfa'), [api]);
+  const [setup, setSetup] = useState(null);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirm: '' });
-  const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState('');
-  function openPassword() { setPasswordForm({ currentPassword: '', newPassword: '', confirm: '' }); setPasswordMessage(''); setPasswordOpen(true); }
+  const [passwordBusy, setPasswordBusy] = useState(false);
+
+  async function run(action, successMessage) {
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await action();
+      if (successMessage) setNotice(successMessage);
+      return result;
+    } catch (err) {
+      setError(err.message || '操作失败，请稍后重试');
+      return null;
+    } finally { setBusy(false); }
+  }
+  async function beginSetup() {
+    const data = await run(() => api.post('admin/me/mfa/setup', {}));
+    if (data) { setSetup(data); setRecoveryCodes([]); setCode(''); status.refresh(); }
+  }
+  async function confirmEnable(event) {
+    event.preventDefault();
+    const data = await run(() => api.post('admin/me/mfa/enable', { code }));
+    if (data) { setSetup(null); setCode(''); setRecoveryCodes(data.recoveryCodes || []); setNotice('二次验证已开启，请立即保存下面的恢复码。'); status.refresh(); }
+  }
+  async function regenerate(event) {
+    event.preventDefault();
+    const data = await run(() => api.post('admin/me/mfa/recovery-codes', { password, code }));
+    if (data) { setRecoveryCodes(data.recoveryCodes || []); setCode(''); setPassword(''); setNotice('恢复码已重新生成，旧的恢复码全部作废。'); status.refresh(); }
+  }
+  async function disable(event) {
+    event.preventDefault();
+    const data = await run(() => api.post('admin/me/mfa/disable', { password, code }));
+    if (data) { setRecoveryCodes([]); setCode(''); setPassword(''); setNotice('二次验证已关闭。'); status.refresh(); }
+  }
   async function changePassword(event) {
     event.preventDefault();
     if (passwordForm.newPassword.length < 6) { setPasswordMessage('新密码至少 6 位'); return; }
@@ -1289,13 +1324,70 @@ function App() {
     try {
       await api.put('admin/me/password', { currentPassword: passwordForm.currentPassword, newPassword: passwordForm.newPassword });
       window.alert('密码已修改，请用新密码重新登录。');
-      clearSession(); setSession(null); setPasswordOpen(false); navigate('/login');
-    } catch (error) { setPasswordMessage(error.message || '修改失败'); } finally { setPasswordBusy(false); }
+      onSignedOut();
+    } catch (err) { setPasswordMessage(err.message || '修改失败'); } finally { setPasswordBusy(false); }
   }
+
+  const enabled = !!status.data?.enabled;
+  return <>
+    <PageHeader eyebrow="我的账号" title="账号安全" description="维护登录密码，并为平台管理员账号开启二次验证（TOTP 动态码 + 一次性恢复码）。" />
+    {error ? <Notice tone="danger">{error}</Notice> : null}
+    {notice ? <Notice tone="success">{notice}</Notice> : null}
+    <Panel title="登录密码">
+      {passwordMessage ? <Notice tone="danger">{passwordMessage}</Notice> : null}
+      <form onSubmit={changePassword}>
+        <div className="form-grid">
+          <label>当前密码<input type="password" value={passwordForm.currentPassword} required onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} /></label>
+          <label>新密码（至少 6 位）<input type="password" value={passwordForm.newPassword} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} /></label>
+          <label>确认新密码<input type="password" value={passwordForm.confirm} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, confirm: event.target.value })} /></label>
+        </div>
+        <p className="muted">改密后所有登录会话（含当前会话）都会失效，需要用新密码重新登录。</p>
+        <button className="primary-button" disabled={passwordBusy}>{passwordBusy ? '提交中…' : '确认修改'}</button>
+      </form>
+    </Panel>
+    <Panel title="二次验证（TOTP）" actions={<button className="secondary-button" onClick={status.refresh}>刷新</button>}>
+      {status.loading ? <Loading /> : status.error ? <ErrorState error={status.error} onRetry={status.refresh} /> : <>
+        <p>当前状态：<strong>{enabled ? '已开启' : (status.data?.setupPending ? '已生成密钥，等待验证' : '未开启')}</strong>
+          {enabled ? ` · 恢复码剩余 ${status.data.recoveryCodesRemaining} 枚 · 绑定于 ${formatDate(status.data.enabledAt) || '—'}` : ''}
+        </p>
+        {!enabled && !setup && <button className="primary-button" disabled={busy} onClick={beginSetup}>{busy ? '生成中…' : '生成绑定密钥'}</button>}
+        {!enabled && setup && <form onSubmit={confirmEnable}>
+          <Notice>① 打开验证器 App（Google Authenticator / Microsoft Authenticator / 1Password 等），选择「手动输入密钥」。<br />② 输入下面的密钥，账户名填你的登录名，类型选「基于时间」。<br />③ 把验证器当前显示的 6 位动态码填到下面确认。</Notice>
+          <label>密钥（手动录入）<input readOnly value={setup.secret} onFocus={(event) => event.target.select()} className="mono-input" /></label>
+          <label>otpauth 链接（可导入）<input readOnly value={setup.otpauthUri} onFocus={(event) => event.target.select()} /></label>
+          <label>验证器当前显示的 6 位动态码<input value={code} onChange={(event) => setCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" required /></label>
+          <div className="row-actions top-gap"><button className="primary-button" disabled={busy}>{busy ? '校验中…' : '确认开启'}</button><button type="button" className="secondary-button" disabled={busy} onClick={() => { setSetup(null); setCode(''); }}>取消</button></div>
+        </form>}
+        {enabled && <form onSubmit={regenerate}>
+          <div className="form-grid">
+            <label>当前密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+            <label>动态验证码 / 恢复码<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="6 位动态码，或 XXXX-XXXXX 恢复码" required /></label>
+          </div>
+          <div className="row-actions top-gap"><button className="secondary-button" disabled={busy}>{busy ? '处理中…' : '重新生成恢复码'}</button><button type="button" className="text-button danger-text" disabled={busy} onClick={disable}>关闭二次验证</button></div>
+        </form>}
+        {recoveryCodes.length > 0 && <div className="top-gap">
+          <Notice tone="warning">恢复码只显示这一次：每枚只能使用一次，请离线保存（打印或存进密码管理器）。</Notice>
+          <div className="recovery-codes">{recoveryCodes.map((item) => <code key={item}>{item}</code>)}</div>
+          <button className="secondary-button" onClick={() => { navigator.clipboard?.writeText(recoveryCodes.join('\n')); setNotice('恢复码已复制到剪贴板。'); }}>复制全部</button>
+        </div>}
+      </>}
+    </Panel>
+    <Panel title="安全说明">
+      <Notice>二次验证对平台管理员账号自愿开启：开启后登录必须再输入一次动态码或恢复码。密钥只保存在平台数据库，不发送到任何外部服务；验证器与服务器时间相差超过 30 秒会校验失败，请保持手机时间自动同步。</Notice>
+    </Panel>
+  </>;
+}
+
+function App() {
+  const [session, setSession] = useState(readSession); const navigate = useNavigate();
+  const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
+  useEffect(() => { if (!session?.token) return; api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);
+  async function login(credentials) { const data = await api.login(credentials); if (data.user.role !== 'SUPER_ADMIN') throw new ApiError('该账号没有平台管理权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
+  async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
   const page = (permission, element) => <AdminPermissionGate user={session.user} permission={permission}>{element}</AdminPermissionGate>;
-  return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={openPassword}><Routes>
+  return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
     <Route path="/courses" element={page('ADMIN_COURSES', <Courses api={api} />)} />
@@ -1309,21 +1401,9 @@ function App() {
     <Route path="/admins" element={page('ADMIN_AUDIT', <PlatformAdmins api={api} currentUser={session.user} />)} />
     <Route path="/audit" element={page('ADMIN_AUDIT', <PlatformAudit api={api} />)} />
     <Route path="/notifications" element={page('ADMIN_CONTENT', <PlatformNotifications api={api} />)} />
+    <Route path="/security" element={<Security api={api} onSignedOut={() => { clearSession(); setSession(null); navigate('/login'); }} />} />
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Routes>
-  {passwordOpen ? <div className="modal-overlay" role="dialog" aria-modal="true">
-    <form className="modal-content" onSubmit={changePassword}>
-      <div className="modal-header"><h2>修改我的密码</h2><button type="button" className="icon-button" onClick={() => setPasswordOpen(false)}>×</button></div>
-      <div className="modal-body">
-        {passwordMessage ? <Notice tone="danger">{passwordMessage}</Notice> : null}
-        <label>当前密码<input type="password" value={passwordForm.currentPassword} required onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} /></label>
-        <label>新密码（至少 6 位）<input type="password" value={passwordForm.newPassword} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} /></label>
-        <label>确认新密码<input type="password" value={passwordForm.confirm} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, confirm: event.target.value })} /></label>
-        <p className="muted">改密后所有登录会话（含当前会话）都会失效，需要用新密码重新登录。</p>
-      </div>
-      <div className="modal-footer"><button type="button" className="secondary-button" onClick={() => setPasswordOpen(false)}>取消</button><button className="primary-button" disabled={passwordBusy}>{passwordBusy ? '提交中…' : '确认修改'}</button></div>
-    </form>
-  </div> : null}
   </AppShell>;
 }
 

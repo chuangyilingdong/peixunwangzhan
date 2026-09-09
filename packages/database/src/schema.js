@@ -1584,3 +1584,18 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_su
 try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN entry_file TEXT NOT NULL DEFAULT 'index.html'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
+
+// ── 平台管理员二次验证（TOTP + 恢复码）────────────────────────────────────────
+// secret 为 base32 明文（与平台现有密钥存储口径一致，不放数据库加密）；恢复码只存 sha256 哈希。
+db.exec(`CREATE TABLE IF NOT EXISTS user_mfa_credentials (
+  user_id TEXT PRIMARY KEY,
+  secret TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ENABLED')),
+  recovery_codes TEXT NOT NULL DEFAULT '[]',
+  last_totp_counter INTEGER,
+  enabled_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_user_mfa_status ON user_mfa_credentials(status)');

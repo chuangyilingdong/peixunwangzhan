@@ -17,6 +17,7 @@ import {
   id,
   assertUserAccountAvailable,
 } from '../lib.js';
+import { mfaEnabledFor, verifyMfaChallenge } from '../services/mfa.js';
 
 const CLIENT_TYPES = new Set(['web', 'admin', 'org', 'student']);
 const LOGIN_RATE_LIMIT = { windowMs: 15 * 60 * 1000, maxAttempts: 10 };
@@ -79,9 +80,24 @@ export async function handleAuth(ctx) {
       recordLoginFailure(ctx, login);
       throw errors.unauthorized('登录名或密码错误', 'INVALID_CREDENTIALS');
     }
-    clearLoginFailures(ctx, login);
     const org = user.org_id ? row('SELECT * FROM organizations WHERE id = ?', [user.org_id]) : null;
     assertUserAccountAvailable(user, org);
+
+    // 二次验证：密码通过后再校验动态码 / 恢复码；失败同样计入登录限速
+    let mfaMethod = null;
+    if (mfaEnabledFor(user.id)) {
+      const suppliedCode = String(ctx.body?.mfaCode || '').trim();
+      if (!suppliedCode) {
+        throw errors.unauthorized('该账号已开启二次验证，请输入动态验证码或恢复码', 'MFA_REQUIRED');
+      }
+      const challenge = verifyMfaChallenge(user.id, suppliedCode);
+      if (!challenge.ok) {
+        recordLoginFailure(ctx, login);
+        throw errors.unauthorized('动态验证码或恢复码不正确', 'MFA_INVALID_CODE');
+      }
+      mfaMethod = challenge.method;
+    }
+    clearLoginFailures(ctx, login);
 
     const now = nowIso();
     const token = randomBytes(32).toString('base64url');
@@ -95,12 +111,13 @@ export async function handleAuth(ctx) {
       [id('session'), tokenHash(token), user.id, user.role, user.org_id || null, clientType, now, expiresAt],
     );
     ctx.setCookie = setAuthCookie(token);
-    audit(loginAuditContext(ctx, user), 'AUTH_LOGIN', 'USER', user.id, null, { clientType });
+    audit(loginAuditContext(ctx, user), 'AUTH_LOGIN', 'USER', user.id, null, { clientType, mfa: mfaMethod });
     return {
       token,
       expiresAt,
       user: normalizeUser(user, { includeAuthMeta: true }),
       organization: normalizeOrg(org),
+      mfa: mfaMethod,
     };
   }
 

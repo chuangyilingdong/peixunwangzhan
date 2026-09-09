@@ -11,8 +11,21 @@ import { assertKnownState, assertTransition } from '../services/domainState.js';
 import { handleTeachingTasks } from '../services/teachingTasks.js';
 import { getAiProviderPolicy } from './billingConfig.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../services/modelCapabilities.js';
+import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../services/mfa.js';
 
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
+function platformIssuerName() {
+  const settings = row('SELECT platform_name FROM platform_settings WHERE id=1');
+  return String(settings?.platform_name || '').trim() || 'AI魔法学院';
+}
+// 二次验证的敏感操作（关闭 / 重发恢复码）要求再输一次登录密码
+function assertSelfPassword(ctx, auth, action) {
+  const password = String(ctx.body?.password || '');
+  if (!password) throw errors.badRequest('请输入当前密码', 'CURRENT_PASSWORD_REQUIRED');
+  const me = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
+  if (!me) throw errors.notFound('账号不存在', 'USER_NOT_FOUND');
+  if (!verifyPassword(password, me.password_hash)) throw errors.forbidden(`当前密码不正确，无法${action}`, 'CURRENT_PASSWORD_INVALID');
+}
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
   if (value === undefined || value === null || value === '') return fallback;
   const n = Number(value);
@@ -1224,6 +1237,46 @@ export async function handleAdmin(ctx) {
     });
     return { passwordChanged: true, reauthRequired: true };
   }
+  if (part === '/me/mfa' && method === 'GET') {
+    // 二次验证自助端点：登录中的平台管理员即可查看自己的绑定状态
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    return mfaSummary(auth.user.id);
+  }
+  if (part === '/me/mfa/setup' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const setup = startMfaSetup(auth.user.id, { account: auth.user.login, issuer: platformIssuerName() });
+    audit(ctx, 'PLATFORM_MFA_SETUP', 'USER', auth.user.id, null, { account: auth.user.login });
+    return setup;
+  }
+  if (part === '/me/mfa/enable' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const code = String(ctx.body?.code || '').trim();
+    return transaction(() => {
+      const result = enableMfa(auth.user.id, code);
+      audit(ctx, 'PLATFORM_MFA_ENABLE', 'USER', auth.user.id, null, { account: auth.user.login, recoveryCodes: result.recoveryCodes.length });
+      return result;
+    });
+  }
+  if (part === '/me/mfa/disable' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    assertSelfPassword(ctx, auth, '关闭二次验证');
+    const code = String(ctx.body?.code || '').trim();
+    return transaction(() => {
+      const result = disableMfa(auth.user.id, code);
+      audit(ctx, 'PLATFORM_MFA_DISABLE', 'USER', auth.user.id, { account: auth.user.login }, { enabled: false });
+      return result;
+    });
+  }
+  if (part === '/me/mfa/recovery-codes' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    assertSelfPassword(ctx, auth, '重新生成恢复码');
+    const code = String(ctx.body?.code || '').trim();
+    return transaction(() => {
+      const result = regenerateRecoveryCodes(auth.user.id, code);
+      audit(ctx, 'PLATFORM_MFA_RECOVERY_REGENERATE', 'USER', auth.user.id, null, { account: auth.user.login, recoveryCodes: result.recoveryCodes.length });
+      return result;
+    });
+  }
   if (part === '/audit-logs' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const q = auditQuery(ctx);
@@ -1990,7 +2043,11 @@ export async function handleAdmin(ctx) {
     const total = Number(row('SELECT COUNT(*) n FROM users user WHERE ' + where, params)?.n || 0);
     const adminUsers = rows('SELECT user.* FROM users user WHERE ' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]);
     const meta = userLoginMeta(adminUsers.map((item) => item.id));
-    const items = adminUsers.map((item) => ({ ...normalizeUser(item, { includeAuthMeta: true }), lastLoginAt: meta.get(item.id)?.lastLoginAt || null, activeSessions: meta.get(item.id)?.activeSessions || 0 }));
+    const mfaRows = adminUsers.length
+      ? rows(`SELECT user_id, status FROM user_mfa_credentials WHERE user_id IN (${adminUsers.map(() => '?').join(',')})`, adminUsers.map((item) => item.id))
+      : [];
+    const mfaMap = new Map(mfaRows.map((item) => [item.user_id, item.status === 'ENABLED']));
+    const items = adminUsers.map((item) => ({ ...normalizeUser(item, { includeAuthMeta: true }), lastLoginAt: meta.get(item.id)?.lastLoginAt || null, activeSessions: meta.get(item.id)?.activeSessions || 0, mfaEnabled: mfaMap.get(item.id) || false }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/platform-admins' && method === 'POST') {
