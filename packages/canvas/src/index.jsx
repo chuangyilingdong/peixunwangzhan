@@ -144,11 +144,16 @@ function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minH
 }
 
 function PromptNode({ id, data, selected }) {
-  const { updateNode } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate } = useCanvasActions();
+  const generated = String(data.generatedText || '');
   return <NodeFrame icon="✎" tone="prompt" title={data.title || '魔法提示词'} selected={selected}>
-    <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder="写下你的故事或画面描述…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
+    <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder={data.slotType === 'text' ? '写下你想让 AI 生成什么…' : '写下你的故事或画面描述…'} maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <span className="learning-node__count">{(data.text || '').length}/300</span>
-    {selected && <span className="learning-node__hint">可以拖动卡片或从两侧圆点连线</span>}
+    <SlotParams data={data} />
+    {canGenerate && data.slotType === 'text' && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'TEXT', { title: data.title || 'AI 文字', prompt: data.text || '' })}>✎ {generated ? '重新生成文字' : '生成文字'}</button>}
+    {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
+    {generated ? <div className="learning-node__text-result nodrag">{generated}</div> : null}
+    {selected && <span className="learning-node__hint">写下提示词后点「生成文字」，AI 帮你写；也可以直接手动编辑。</span>}
   </NodeFrame>;
 }
 
@@ -294,7 +299,12 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     updateNode(nodeId, { generationStatus: 'PENDING', generationError: '' });
     try {
       const asset = await onGenerateNode({ nodeId, modality, ...input });
-      updateNode(nodeId, { assetUrl: asset.assetUrl, previewUrl: asset.previewUrl, generationStatus: null, generationError: '' });
+      if (String(modality).toUpperCase() === 'TEXT') {
+        // 文字结果写进 generatedText，保留学生自己写的提示词
+        updateNode(nodeId, { generatedText: String(asset?.metadata?.text || asset?.text || ''), generationStatus: null, generationError: '' });
+      } else {
+        updateNode(nodeId, { assetUrl: asset.assetUrl, previewUrl: asset.previewUrl, generationStatus: null, generationError: '' });
+      }
     } catch (error) {
       updateNode(nodeId, { generationStatus: 'FAILED', generationError: error instanceof Error ? error.message : 'AI生成失败' });
     }

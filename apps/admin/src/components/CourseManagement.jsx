@@ -27,6 +27,7 @@ function nextUid() { uidSeed += 1; return `tmp-${Date.now().toString(36)}-${uidS
 const defaultClassroomConfig = {
   version: 1,
   generationSlots: {
+    text: { count: 0, model: '' },
     image: { count: 0, aspectRatio: '16:9', resolution: '1k', model: '' },
     video: { count: 0, aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, model: '', audio: false },
   },
@@ -45,6 +46,7 @@ function classroomConfigFor(lesson, edit) {
     generationSlots: {
       ...defaultClassroomConfig.generationSlots,
       ...(value.generationSlots || {}),
+      text: { ...defaultClassroomConfig.generationSlots.text, ...(value.generationSlots?.text || {}) },
       image: { ...defaultClassroomConfig.generationSlots.image, ...(value.generationSlots?.image || {}) },
       video: { ...defaultClassroomConfig.generationSlots.video, ...(value.generationSlots?.video || {}) },
     },
@@ -156,6 +158,8 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   }
   // 换模型后，把新模型不支持的比例/清晰度/时长重置为它的第一个可选项。
   function changeModel(type, model) {
+    // 文字框体没有比例/清晰度/时长，换模型只改模型本身
+    if (type === 'text') { updateSlot('text', { model }); return; }
     const caps = capabilitiesFor(type === 'image' ? 'IMAGE' : 'VIDEO', model);
     const slot = classroomConfig.generationSlots[type];
     const patch = { model };
@@ -177,6 +181,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
       const slots = { ...config.generationSlots };
       if (!next.includes('image')) slots.image = { ...slots.image, count: 0 };
       if (!next.includes('video')) slots.video = { ...slots.video, count: 0 };
+      if (!next.includes('text')) slots.text = { ...slots.text, count: 0 };
       return { ...current, capabilities: next, classroomConfig: { ...config, generationSlots: slots } };
     });
   }
@@ -198,10 +203,12 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   }));
   const addGroup = () => updateGroups((list) => [...list, { uid: nextUid(), title: `素材${list.length + 1}`, materials: [] }]);
 
+  const textSlot = classroomConfig.generationSlots.text;
   const imageSlot = classroomConfig.generationSlots.image;
   const videoSlot = classroomConfig.generationSlots.video;
   const imageCapabilities = capabilitiesFor('IMAGE', imageSlot.model);
   const videoCapabilities = capabilitiesFor('VIDEO', videoSlot.model);
+  const showText = capabilities.includes('text');
   const showImage = capabilities.includes('image');
   const showVideo = capabilities.includes('video');
 
@@ -222,11 +229,12 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
         {!groups.length && <p className="muted">还没有画布素材。学生进入课时后，可在左侧素材面板点击加入画布；提示词素材点击时会让学生选择插入哪个框体。</p>}
       </div>
       <div className="lesson-generation-slots"><div className="lesson-config-heading"><strong>本课生成框体限制</strong><span className="muted">选项来自「计费与模型」里所选模型的能力配置；只显示已开放的能力</span></div>
+        {showText ? <div className="form-grid"><label>文字框体数量<input type="number" min="0" max="20" value={textSlot.count} onChange={(event) => updateSlot('text', { count: event.target.value })} /></label><label>文字模型{channelModels('TEXT').length ? <select value={textSlot.model || ''} onChange={(event) => changeModel('text', event.target.value)}><option value="">使用渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={textSlot.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeModel('text', event.target.value)} />}</label></div> : null}
         {showImage ? <div className="form-grid"><label>生图框体数量<input type="number" min="0" max="20" value={imageSlot.count} onChange={(event) => updateSlot('image', { count: event.target.value })} /></label><label>生图比例<select value={imageSlot.aspectRatio} onChange={(event) => updateSlot('image', { aspectRatio: event.target.value })}>{valueOptionsFor(imageCapabilities.aspectRatios, imageSlot.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>生图清晰度<select value={imageSlot.resolution} onChange={(event) => updateSlot('image', { resolution: event.target.value })}>{valueOptionsFor(imageCapabilities.resolutions, imageSlot.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>生图模型{channelModels('IMAGE').length ? <select value={imageSlot.model || ''} onChange={(event) => changeModel('image', event.target.value)}><option value="">使用渠道默认模型</option>{channelModels('IMAGE').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={imageSlot.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeModel('image', event.target.value)} />}</label></div> : null}
         {showImage && !imageCapabilities.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「计费与模型」里填写。</p> : null}
         {showVideo ? <div className="form-grid"><label>生视频框体数量<input type="number" min="0" max="20" value={videoSlot.count} onChange={(event) => updateSlot('video', { count: event.target.value })} /></label><label>生视频比例<select value={videoSlot.aspectRatio} onChange={(event) => updateSlot('video', { aspectRatio: event.target.value })}>{valueOptionsFor(videoCapabilities.aspectRatios, videoSlot.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>生视频清晰度<select value={videoSlot.resolution} onChange={(event) => updateSlot('video', { resolution: event.target.value })}>{valueOptionsFor(videoCapabilities.resolutions, videoSlot.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>单个视频时长（秒）<select value={String(videoSlot.durationSeconds)} onChange={(event) => updateSlot('video', { durationSeconds: Number(event.target.value) })}>{valueOptionsFor(videoCapabilities.durations.map(String), String(videoSlot.durationSeconds)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label><label>生视频模型{channelModels('VIDEO').length ? <select value={videoSlot.model || ''} onChange={(event) => changeModel('video', event.target.value)}><option value="">使用渠道默认模型</option>{channelModels('VIDEO').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={videoSlot.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeModel('video', event.target.value)} />}</label><label className="checkbox-label"><input type="checkbox" checked={videoSlot.audio === true} disabled={!videoCapabilities.audio} onChange={(event) => updateSlot('video', { audio: event.target.checked })} />生成音频{videoCapabilities.audio ? '' : '（当前模型不支持）'}</label></div> : null}
         {showVideo && !videoCapabilities.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「计费与模型」里填写。</p> : null}
-        {!showImage && !showVideo ? <p className="muted">当前未开放 AI 生图 / AI 生视频，学生端不会出现生成框体。勾选上方的能力后即可配置数量、比例、清晰度、时长和模型。</p> : null}
+        {!showText && !showImage && !showVideo ? <p className="muted">当前未开放 AI 文字 / 生图 / 生视频，学生端不会出现生成框体。勾选上方的能力后即可配置数量、比例、清晰度、时长和模型。</p> : null}
       </div>
     </>}
     <LessonTeachingEditor api={api} lesson={lesson} edit={edit} onChange={onChange} />

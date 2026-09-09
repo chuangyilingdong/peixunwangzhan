@@ -71,9 +71,17 @@ function normalizeClassroomConfig(value) {
     }
     return { count, aspectRatio, resolution, model };
   };
+  const normalizeTextSlot = () => {
+    const raw = source.text && typeof source.text === 'object' ? source.text : {};
+    return {
+      count: integer(raw.count, 'text 生成框体数量', { min: 0, max: 20, fallback: 0 }),
+      model: String(raw.model || '').trim().slice(0, 120) || null,
+    };
+  };
   const result = {
     version: 1,
     generationSlots: {
+      text: normalizeTextSlot(),
       image: normalizeSlot('image', 'IMAGE', { count: 0, aspectRatio: '16:9', resolution: '1k' }),
       video: normalizeSlot('video', 'VIDEO', { count: 0, aspectRatio: '16:9', resolution: '480p', durationSeconds: 5 }),
     },

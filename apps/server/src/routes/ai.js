@@ -139,7 +139,7 @@ export async function handleAi(ctx) {
         throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
       }
       const generationSlots = currentContext.lesson?.classroomConfig?.generationSlots || {};
-      const slotLimit = modality === 'IMAGE' ? Number(generationSlots.image?.count || 0) : modality === 'VIDEO' ? Number(generationSlots.video?.count || 0) : 0;
+      const slotLimit = modality === 'TEXT' ? Number(generationSlots.text?.count || 0) : modality === 'IMAGE' ? Number(generationSlots.image?.count || 0) : modality === 'VIDEO' ? Number(generationSlots.video?.count || 0) : 0;
       if (slotLimit > 0) {
         const generatedCount = Number(row('SELECT COUNT(*) AS n FROM media_assets WHERE project_id=? AND modality=?', [projectId, modality])?.n || 0);
         if (generatedCount >= slotLimit) throw errors.forbidden('本课已生成素材数量达到上限', 'LESSON_GENERATION_SLOT_LIMIT');

@@ -66,7 +66,7 @@ function assertCapability(modality, session, pkg) {
  * 否则会先花钱调一次上游、再在结算时失败并进入重试，重复消耗额度。
  * 结算时仍会再校验一次（异步任务等待期间状态可能变化）。
  */
-function assertGenerationPreflight({ user, orgId, context, modality, requiresFirstFrame = false, firstFrameUrl = '' }) {
+function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, requiresFirstFrame = false, firstFrameUrl = '' }) {
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
@@ -79,6 +79,15 @@ function assertGenerationPreflight({ user, orgId, context, modality, requiresFir
   // 图生视频模型缺首帧图时上游必然拒绝：提前拦截，避免白调一次上游再失败。
   if (requiresFirstFrame && !firstFrameUrl) {
     throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
+  }
+  // 框体数量上限同样属于业务拦截：入队前就能判断，不必等结算
+  if (projectId) {
+    const slotKey = String(modality || '').toUpperCase() === 'TEXT' ? 'text' : String(modality || '').toUpperCase() === 'IMAGE' ? 'image' : String(modality || '').toUpperCase() === 'VIDEO' ? 'video' : null;
+    const slotLimit = slotKey ? Number(context.lesson?.classroomConfig?.generationSlots?.[slotKey]?.count || 0) : 0;
+    if (slotLimit > 0) {
+      const generatedCount = Number(count('SELECT COUNT(*) AS n FROM media_assets WHERE project_id=? AND modality=?', [projectId, modality]) || 0);
+      if (generatedCount >= slotLimit) throw errors.forbidden('本课已生成素材数量达到上限', 'LESSON_GENERATION_SLOT_LIMIT');
+    }
   }
 }
 
@@ -225,7 +234,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
       throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
     }
     const generationSlots = freshContext.lesson?.classroomConfig?.generationSlots || {};
-    const slotLimit = modality === 'IMAGE' ? Number(generationSlots.image?.count || 0) : modality === 'VIDEO' ? Number(generationSlots.video?.count || 0) : 0;
+    const slotLimit = modality === 'TEXT' ? Number(generationSlots.text?.count || 0) : modality === 'IMAGE' ? Number(generationSlots.image?.count || 0) : modality === 'VIDEO' ? Number(generationSlots.video?.count || 0) : 0;
     if (slotLimit > 0) {
       const generatedCount = Number(count('SELECT COUNT(*) AS n FROM media_assets WHERE project_id=? AND modality=?', [project.id, modality]) || 0);
       if (generatedCount >= slotLimit) throw errors.forbidden('本课已生成素材数量达到上限', 'LESSON_GENERATION_SLOT_LIMIT');
@@ -262,10 +271,10 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
 }
 
 // 课时可为每个模态指定具体模型；未指定时用渠道默认模型。
-// 注意：generationSlots 的键是小写的 image / video，不能用模态名直接取。
+// 注意：generationSlots 的键是小写的 text / image / video，不能用模态名直接取。
 function lessonModelFor(context, modality) {
   const key = String(modality || '').toUpperCase();
-  const slotKey = key === 'IMAGE' ? 'image' : key === 'VIDEO' ? 'video' : null;
+  const slotKey = key === 'TEXT' ? 'text' : key === 'IMAGE' ? 'image' : key === 'VIDEO' ? 'video' : null;
   if (!slotKey) return '';
   const slots = context?.lesson?.classroomConfig?.generationSlots || {};
   return String((slots[slotKey] || {}).model || '').trim();
@@ -358,7 +367,7 @@ async function processAsyncGeneration(item) {
   try {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
-    assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality, requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '' });
+    assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '' });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
@@ -589,12 +598,13 @@ export async function handleAiGeneration(ctx) {
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    // 平台模态开关（机构覆盖优先）与首帧缺失都是业务问题，入队前就拦掉，别让任务跑一遍上游再失败。
-    if (!isModalityEnabled(auth.user.orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
+    // 业务预检（平台模态开关 / 课时能力 / 课堂管控 / 框体上限 / 首帧）在入队前拦掉，
+    // 别让任务跑一遍上游再失败——与同步路径保持同一套判断。
     const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim()) });
-    if (options.inputFrame === 'FIRST' && !options.firstFrameUrl) {
-      throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
-    }
+    assertGenerationPreflight({
+      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
+      requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '',
+    });
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };

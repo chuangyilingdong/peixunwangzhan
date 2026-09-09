@@ -480,7 +480,7 @@ export function normalizeLesson(value, { includeTeaching = false } = {}) {
 }
 
 export function lessonCanvasConfig(lessonId) {
-  if (!lessonId) return { capabilities: ['text'], materialGroups: [], generationSlots: { image: { count: 0 }, video: { count: 0 } } };
+  if (!lessonId) return { capabilities: ['text'], materialGroups: [], generationSlots: { text: { count: 0 }, image: { count: 0 }, video: { count: 0 } } };
   const capabilities = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=? ORDER BY capability', [lessonId]).map((item) => item.capability);
   const groups = rows('SELECT * FROM course_lesson_material_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
     id: group.id, title: group.title, sort: Number(group.sort || 0), materials: rows('SELECT * FROM course_lesson_materials WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
@@ -490,6 +490,7 @@ export function lessonCanvasConfig(lessonId) {
   const lesson = row('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId]);
   const config = parseJson(lesson?.classroom_config, {});
   const slots = config.generationSlots || {};
+  const textSlot = slots.text || {};
   const imageSlot = slots.image || {};
   const videoSlot = slots.video || {};
   // 图生视频模型（i2v）必须带首帧图：课时里没选模型时按能力路由的渠道默认模型判断。
@@ -501,6 +502,8 @@ export function lessonCanvasConfig(lessonId) {
     capabilities: capabilities.length ? capabilities : ['text'],
     materialGroups: groups,
     generationSlots: {
+      // 文字框体只有数量与模型：TEXT 生成没有比例/清晰度/时长这些参数
+      text: { count: Number(textSlot.count || 0), model: textSlot.model || '' },
       image: { count: Number(imageSlot.count || 0), aspectRatio: imageSlot.aspectRatio || '16:9', resolution: imageSlot.resolution || '1k', model: imageSlot.model || '' },
       video: {
         count: Number(videoSlot.count || 0), aspectRatio: videoSlot.aspectRatio || '16:9', resolution: videoSlot.resolution || '480p',

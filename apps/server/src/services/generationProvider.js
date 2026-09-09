@@ -8,12 +8,13 @@ function svgDataUrl(title, subtitle, hue) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="hsl(${hue} 75% 52%)"/><stop offset="1" stop-color="hsl(${(hue + 58) % 360} 78% 66%)"/></linearGradient></defs><rect width="960" height="540" fill="url(#g)"/><circle cx="800" cy="115" r="90" fill="#fff" opacity=".25"/><text x="72" y="240" fill="#fff" font-family="Arial, sans-serif" font-size="56" font-weight="700">${escape(title)}</text><text x="72" y="310" fill="#fff" font-family="Arial, sans-serif" font-size="30">${escape(subtitle).slice(0, 46)}</text><text x="72" y="450" fill="#fff" opacity=".85" font-family="Arial, sans-serif" font-size="22">AI 魔法学院 · 本地模拟素材</text></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
-function mockProvider() {
+function mockProvider(model = AI_PROVIDER_MODEL) {
   const labels = { TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材', VIDEO: '短片素材', PODCAST: '播客素材', DUBBING: '配音素材' };
   const mockText = (prompt) => `这是本地模拟回复。\n\n你说的是：${String(prompt || '').slice(0, 200)}\n\n\`\`\`js\nconsole.log('hello from mock');\n\`\`\`\n`;
   return {
     name: 'local-mock',
-    model: AI_PROVIDER_MODEL,
+    // 如实回报被请求的模型，便于验证「课时指定模型」这类覆盖是否生效
+    model,
     capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'],
     async generate({ modality, prompt, title }) {
       const label = title || labels[modality] || '创作素材';
@@ -77,7 +78,7 @@ export function generationProviderInfo(selection = {}) {
 export function getGenerationProvider(selection = {}) {
   const selected = providerSelection(selection);
   const config = providerConfig(selected);
-  if (isMockProvider(config.provider)) return mockProvider();
+  if (isMockProvider(config.provider)) return mockProvider(config.model);
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
   return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates });
