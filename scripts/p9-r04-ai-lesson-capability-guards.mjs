@@ -4,7 +4,7 @@
  *
  * 覆盖：
  *  1. 课时只开放 image 能力时，TEXT 生成被 LESSON_CAPABILITY_DISABLED 拦截（且不扣费）
- *  2. 生图框体已生成过 1 张时，再次用同一个框体生成被 GENERATION_BOX_USED 拦截
+ *  2. 生图框体素材已生成过 1 张时，再次用同一个框体生成被 GENERATION_BOX_USED 拦截
  */
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
@@ -31,8 +31,11 @@ try {
   q("INSERT INTO organizations(id,name,contract_start_at,contract_expires_at,created_at,updated_at) VALUES ('org1','测试机构',?,?,?,?)", [now, now, now, now]);
   q("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,student_usage_scope,billing_package_id,ai_credit_limit,magic_stones,monthly_credit_allowance,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE','HOME_PRACTICE','pkg1',100,100,100,?,?)", [now, now]);
   q("INSERT INTO course_series(id,title,owner_type,org_id,visibility,version,sort,status,created_at,updated_at) VALUES ('series1','测试课包','PLATFORM',NULL,'ALL_ORGS','1.0',1,'PUBLISHED',?,?)", [now, now]);
-  q("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)", [JSON.stringify({ version: 2, generationBoxes: [{ id: 'box-image-1', title: '素材1', modality: 'IMAGE', aspectRatio: '16:9', resolution: '1k', model: '' }] }), '{}', now, now]);
+  q("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)", [JSON.stringify({ version: 3 }), '{}', now, now]);
   q("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES ('lesson1','image',?)", [now]);
+  // 生成框体就是素材表里 type=GENERATION_BOX 的素材（id 直接当 boxId 用）
+  q("INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES ('mg1','lesson1','生成框体',1,?,?)", [now, now]);
+  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-image-1','mg1','素材1','','GENERATION_BOX',NULL,?,1,?,?)", [JSON.stringify({ box: { modality: 'IMAGE', model: '', aspectRatio: '16:9', resolution: '1k' }, content: '' }), now, now]);
   q("INSERT INTO classes(id,org_id,name,status,current_session_id,created_at,updated_at) VALUES ('class1','org1','测试班级','ACTIVE',NULL,?,?)", [now, now]);
   q("INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES ('m1','class1','stu1','STUDENT',?)", [now]);
   q("INSERT INTO class_curriculum_items(id,class_id,lesson_id,sort,source_series_id,added_at) VALUES ('ci1','class1','lesson1',1,'series1',?)", [now]);

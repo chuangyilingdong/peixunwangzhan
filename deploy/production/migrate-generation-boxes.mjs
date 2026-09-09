@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 /**
- * 一次性数据迁移：classroom_config 的 generationSlots（按模态计数 + 一套参数）
- * → generationBoxes（逐框体配置，2026-09-09 起的新结构）。
+ * 一次性数据迁移：把课时里的生成框体配置搬到素材表（框体就是一种素材）。
  *
- * 为什么需要：新代码不再读 generationSlots，不迁移的话，课时上已配好的生成框体
- * 会在学生端直接消失（生产「AI古诗词创意营 / 第1课」就是这种情况）。
+ * 两跳，幂等：
+ *   A. classroom_config.generationSlots（按模态计数 + 一套参数）→ 等价框体列表（内存里完成）
+ *   B. 框体列表 → course_lesson_material_groups / course_lesson_materials
+ *      （新建「生成框体」素材组，每个框体一条 material_type=GENERATION_BOX 的素材）
+ *   之后 classroom_config 只保留 {version:3, ...其他键}。
  *
- * 幂等：已有 generationBoxes 的课时跳过；只改 course_lessons.classroom_config，不动其他字段。
+ * 为什么要 B：2026-09-09 起「框体也是素材的一部分」，顺序跟素材走，学生端才能做到
+ * 「素材1 → 框体1 → 素材2 → 框体2」这样逐条交叉。
+ *
  * 用法：
- *   node deploy/production/migrate-generation-boxes.mjs --db /srv/ai-kids-platform/production/data/platform.db --dry-run
- *   node deploy/production/migrate-generation-boxes.mjs --db /srv/ai-kids-platform/production/data/platform.db
+ *   node deploy/production/migrate-generation-boxes.mjs --db /path/platform.db --dry-run
+ *   node deploy/production/migrate-generation-boxes.mjs --db /path/platform.db
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -26,12 +30,11 @@ const dryRun = process.argv.includes('--dry-run');
 if (!fs.existsSync(dbPath)) throw new Error(`数据库不存在：${dbPath}`);
 
 const MODALITY_ORDER = [['text', 'TEXT'], ['image', 'IMAGE'], ['video', 'VIDEO']];
+const BOX_GROUP_TITLE = '生成框体';
 
-function boxId() {
-  return `box_${crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`;
-}
+const newId = (prefix) => `${prefix}_${crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`;
 
-// 旧结构按模态存「数量 + 一套参数」，迁移时按 count 展开成等量的同参数框体。
+// 跳 A：旧结构按模态存「数量 + 一套参数」，展开成等量的同参数框体。
 function boxesFromSlots(slots) {
   const boxes = [];
   let index = 0;
@@ -41,7 +44,7 @@ function boxesFromSlots(slots) {
     for (let i = 0; i < count; i += 1) {
       index += 1;
       const box = {
-        id: boxId(),
+        id: newId('box'),
         title: `素材${index}`,
         modality,
         model: String(slot.model || '').trim().slice(0, 120),
@@ -62,9 +65,27 @@ function boxesFromSlots(slots) {
   return boxes;
 }
 
+function boxSnapshot(box) {
+  const snapshot = { box: { modality: String(box.modality || '').toUpperCase(), model: String(box.model || '') } };
+  if (snapshot.box.modality !== 'TEXT') {
+    snapshot.box.aspectRatio = String(box.aspectRatio || '');
+    snapshot.box.resolution = String(box.resolution || '');
+  }
+  if (snapshot.box.modality === 'VIDEO') {
+    snapshot.box.durationSeconds = Number(box.durationSeconds) || 5;
+    snapshot.box.audio = box.audio === true;
+  }
+  snapshot.content = String(box.prompt || '');
+  return snapshot;
+}
+
 const db = new DatabaseSync(dbPath);
 const lessons = db.prepare('SELECT id,title,classroom_config FROM course_lessons ORDER BY sort, created_at').all();
-const update = db.prepare('UPDATE course_lessons SET classroom_config=?, updated_at=? WHERE id=?');
+const boxMaterialCount = db.prepare("SELECT COUNT(*) n FROM course_lesson_materials material JOIN course_lesson_material_groups grp ON grp.id=material.group_id WHERE grp.lesson_id=? AND material.material_type='GENERATION_BOX'");
+const maxGroupSort = db.prepare('SELECT COALESCE(MAX(sort),0) m FROM course_lesson_material_groups WHERE lesson_id=?');
+const insertGroup = db.prepare('INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)');
+const insertMaterial = db.prepare('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+const updateLesson = db.prepare('UPDATE course_lessons SET classroom_config=?, updated_at=? WHERE id=?');
 const now = new Date().toISOString();
 const migrated = [];
 let skipped = 0;
@@ -74,18 +95,41 @@ try {
   for (const lesson of lessons) {
     let config = {};
     try { config = JSON.parse(lesson.classroom_config || '{}') || {}; } catch { config = {}; }
-    const hasLegacy = config.generationSlots && typeof config.generationSlots === 'object';
-    const hasBoxes = Array.isArray(config.generationBoxes) && config.generationBoxes.length > 0;
-    if (!hasLegacy || hasBoxes) { skipped += 1; continue; }
-    const { generationSlots, ...rest } = config;
-    const generationBoxes = boxesFromSlots(generationSlots);
-    const next = { ...rest, version: 2, generationBoxes };
-    if (!dryRun) update.run(JSON.stringify(next), now, lesson.id);
+    const hasSlots = config.generationSlots && typeof config.generationSlots === 'object';
+    const legacyBoxes = Array.isArray(config.generationBoxes) ? config.generationBoxes : [];
+    const existingBoxMaterials = Number(boxMaterialCount.get(lesson.id)?.n || 0);
+    if (!hasSlots && !legacyBoxes.length && !existingBoxMaterials) { skipped += 1; continue; }
+    if (!hasSlots && !legacyBoxes.length) { skipped += 1; continue; }
+
+    const boxes = legacyBoxes.length ? legacyBoxes : boxesFromSlots(config.generationSlots);
+    const { generationSlots, generationBoxes, ...rest } = config;
+    const nextConfig = { ...rest, version: 3 };
+
+    if (boxes.length) {
+      const groupId = newId('material-group');
+      const groupSort = Number(maxGroupSort.get(lesson.id)?.m || 0) + 1;
+      if (!dryRun) {
+        insertGroup.run(groupId, lesson.id, BOX_GROUP_TITLE, groupSort, now, now);
+        boxes.forEach((box, index) => {
+          insertMaterial.run(
+            newId('material'), groupId,
+            String(box.title || `素材${index + 1}`).trim().slice(0, 160), '',
+            'GENERATION_BOX',
+            box.assetUrl ? String(box.assetUrl).slice(0, 2000) : null,
+            JSON.stringify(boxSnapshot(box)),
+            index + 1, now, now,
+          );
+        });
+      }
+    }
+    if (!dryRun) updateLesson.run(JSON.stringify(nextConfig), now, lesson.id);
     migrated.push({
       lesson: lesson.title,
-      from: MODALITY_ORDER.map(([key, modality]) => `${modality}:${Number(generationSlots[key]?.count || 0)}`).join(' '),
-      to: generationBoxes.length,
-      boxes: generationBoxes.map((box) => `${box.title}(${box.modality}${box.aspectRatio ? ' ' + box.aspectRatio : ''}${box.resolution ? ' ' + box.resolution : ''}${box.durationSeconds ? ' ' + box.durationSeconds + 's' : ''}${box.model ? ' ' + box.model : ''})`),
+      from: hasSlots
+        ? MODALITY_ORDER.map(([key, modality]) => `${modality}:${Number(config.generationSlots[key]?.count || 0)}`).join(' ')
+        : `旧 generationBoxes:${legacyBoxes.length}`,
+      to: boxes.length,
+      boxes: boxes.map((box) => `${box.title}(${box.modality}${box.aspectRatio ? ' ' + box.aspectRatio : ''}${box.resolution ? ' ' + box.resolution : ''}${box.durationSeconds ? ' ' + box.durationSeconds + 's' : ''}${box.model ? ' ' + box.model : ''})`),
     });
   }
   if (dryRun) db.exec('ROLLBACK'); else db.exec('COMMIT');
@@ -97,8 +141,8 @@ try {
 }
 
 console.log(`${dryRun ? '[dry-run] ' : ''}数据库：${dbPath}`);
-console.log(`${dryRun ? '[dry-run] ' : ''}扫描课时 ${lessons.length} 个：迁移 ${migrated.length} 个，跳过（无旧结构/已有框体）${skipped} 个`);
+console.log(`${dryRun ? '[dry-run] ' : ''}扫描课时 ${lessons.length} 个：迁移 ${migrated.length} 个，跳过（已迁移/无框体）${skipped} 个`);
 for (const item of migrated) {
-  console.log(`  - ${item.lesson}：${item.from} → ${item.to} 个框体`);
+  console.log(`  - ${item.lesson}：${item.from} → 「${BOX_GROUP_TITLE}」组 ${item.to} 条框体素材`);
   for (const box of item.boxes) console.log(`      ${box}`);
 }

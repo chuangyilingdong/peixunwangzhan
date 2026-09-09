@@ -482,6 +482,8 @@ export function normalizeLesson(value, { includeTeaching = false } = {}) {
 
 const GENERATION_BOX_MODALITIES = Object.freeze(['TEXT', 'IMAGE', 'VIDEO']);
 const MAX_GENERATION_BOXES = 20;
+// 生成框体在素材表里的类型：框体就是一种素材，和图片/视频/提示词一起排在同一条顺序里。
+export const GENERATION_BOX_MATERIAL_TYPE = 'GENERATION_BOX';
 
 function aiProviderPolicy() {
   return parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
@@ -505,67 +507,88 @@ function uniqueBoxId(value, seen) {
 }
 
 /**
- * 生成框体归一化：每个框体单独配模型与生成参数，学生端按顺序逐个生成、每个框体只生成一次。
+ * 单个生成框体归一化：每个框体单独配模型与生成参数，学生端按顺序逐个生成、每个框体只生成一次。
  * strict=true 用于管理员保存：非法取值当场抛错（错误码 INVALID_GENERATION_CONFIG），不再静默丢弃；
  * strict=false 用于下发：非法取值回落到该模型支持的第一个取值，坏数据不下发到学生端。
  */
+export function normalizeGenerationBox(raw, { strict = false, policy = null, index = 0, id: fallbackId = '' } = {}) {
+  if (!raw || typeof raw !== 'object') return null;
+  const providerPolicy = policy || aiProviderPolicy();
+  const modality = String(raw.modality || '').trim().toUpperCase();
+  const invalid = (message) => { if (strict) throw Object.assign(new Error(message), { code: 'INVALID_GENERATION_CONFIG' }); };
+  if (!GENERATION_BOX_MODALITIES.includes(modality)) { invalid(`第 ${index + 1} 个生成框体的类型无效`); return null; }
+  const model = String(raw.model || '').trim().slice(0, 120);
+  const capabilities = generationBoxCapabilities(modality, model, providerPolicy);
+  const box = {
+    id: String(fallbackId || '').trim() || uniqueBoxId(raw.id, new Set()),
+    title: String(raw.title || '').trim().slice(0, 60) || `素材${index + 1}`,
+    modality,
+    model,
+    prompt: String(raw.prompt || '').slice(0, 2000),
+    assetUrl: String(raw.assetUrl || '').trim().slice(0, 2000),
+  };
+  if (modality !== 'TEXT') {
+    const rawRatio = String(raw.aspectRatio ?? '').trim();
+    const submittedRatio = normalizeAspectRatio(rawRatio);
+    // 写了但解析不出来的比例属于填错，不能静默换成别的值。
+    if (rawRatio && !submittedRatio) invalid(`框体「${box.title}」的生成比例「${rawRatio.slice(0, 20)}」格式不对（示例：16:9、9:16）`);
+    if (submittedRatio && capabilities.aspectRatios.length && !capabilities.aspectRatios.includes(submittedRatio)) {
+      invalid(`框体「${box.title}」的生成比例「${submittedRatio}」不在当前模型支持范围内（可用：${capabilities.aspectRatios.join('、')}）`);
+      box.aspectRatio = capabilities.aspectRatios[0];
+    } else {
+      box.aspectRatio = submittedRatio || capabilities.aspectRatios[0] || '16:9';
+    }
+    const submittedResolution = String(raw.resolution ?? '').trim();
+    if (submittedResolution && capabilities.resolutions.length && !capabilities.resolutions.includes(submittedResolution)) {
+      invalid(`框体「${box.title}」的清晰度「${submittedResolution}」不在当前模型支持范围内（可用：${capabilities.resolutions.join('、')}）`);
+      box.resolution = capabilities.resolutions[0];
+    } else {
+      box.resolution = submittedResolution || capabilities.resolutions[0] || '1k';
+    }
+  }
+  if (modality === 'VIDEO') {
+    const submitted = raw.durationSeconds === undefined || raw.durationSeconds === null || raw.durationSeconds === '' ? null : Number(raw.durationSeconds);
+    let durationSeconds = submitted === null ? (capabilities.durations[0] || 5) : submitted;
+    if (!Number.isInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 600) {
+      invalid(`框体「${box.title}」的视频时长「${String(raw.durationSeconds ?? '').slice(0, 20)}」必须是 1–600 的整数秒`);
+      durationSeconds = capabilities.durations[0] || 5;
+    } else if (capabilities.durations.length && !capabilities.durations.includes(durationSeconds)) {
+      invalid(`框体「${box.title}」的视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`);
+      durationSeconds = capabilities.durations[0];
+    }
+    box.durationSeconds = durationSeconds;
+    box.audio = raw.audio === true && capabilities.audio === true;
+    // 图生视频模型必须带首帧：学生端据此决定要不要先连一张画面。
+    box.requiresFirstFrame = capabilities.inputFrame === 'FIRST';
+  }
+  return box;
+}
+
 export function normalizeGenerationBoxes(value, { strict = false, policy = null } = {}) {
   const list = Array.isArray(value) ? value.slice(0, MAX_GENERATION_BOXES) : [];
   const providerPolicy = policy || aiProviderPolicy();
   const seen = new Set();
-  const boxes = [];
-  list.forEach((raw, index) => {
-    if (!raw || typeof raw !== 'object') return;
-    const modality = String(raw.modality || '').trim().toUpperCase();
-    const invalid = (message) => { if (strict) throw Object.assign(new Error(message), { code: 'INVALID_GENERATION_CONFIG' }); };
-    if (!GENERATION_BOX_MODALITIES.includes(modality)) { invalid(`第 ${index + 1} 个生成框体的类型无效`); return; }
-    const model = String(raw.model || '').trim().slice(0, 120);
-    const capabilities = generationBoxCapabilities(modality, model, providerPolicy);
-    const box = {
-      id: uniqueBoxId(raw.id, seen),
-      title: String(raw.title || '').trim().slice(0, 60) || `素材${index + 1}`,
-      modality,
-      model,
-      prompt: String(raw.prompt || '').slice(0, 2000),
-      assetUrl: String(raw.assetUrl || '').trim().slice(0, 2000),
-    };
-    if (modality !== 'TEXT') {
-      const rawRatio = String(raw.aspectRatio ?? '').trim();
-      const submittedRatio = normalizeAspectRatio(rawRatio);
-      // 写了但解析不出来的比例属于填错，不能静默换成别的值。
-      if (rawRatio && !submittedRatio) invalid(`框体「${box.title}」的生成比例「${rawRatio.slice(0, 20)}」格式不对（示例：16:9、9:16）`);
-      if (submittedRatio && capabilities.aspectRatios.length && !capabilities.aspectRatios.includes(submittedRatio)) {
-        invalid(`框体「${box.title}」的生成比例「${submittedRatio}」不在当前模型支持范围内（可用：${capabilities.aspectRatios.join('、')}）`);
-        box.aspectRatio = capabilities.aspectRatios[0];
-      } else {
-        box.aspectRatio = submittedRatio || capabilities.aspectRatios[0] || '16:9';
-      }
-      const submittedResolution = String(raw.resolution ?? '').trim();
-      if (submittedResolution && capabilities.resolutions.length && !capabilities.resolutions.includes(submittedResolution)) {
-        invalid(`框体「${box.title}」的清晰度「${submittedResolution}」不在当前模型支持范围内（可用：${capabilities.resolutions.join('、')}）`);
-        box.resolution = capabilities.resolutions[0];
-      } else {
-        box.resolution = submittedResolution || capabilities.resolutions[0] || '1k';
-      }
-    }
-    if (modality === 'VIDEO') {
-      const submitted = raw.durationSeconds === undefined || raw.durationSeconds === null || raw.durationSeconds === '' ? null : Number(raw.durationSeconds);
-      let durationSeconds = submitted === null ? (capabilities.durations[0] || 5) : submitted;
-      if (!Number.isInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 600) {
-        invalid(`框体「${box.title}」的视频时长「${String(raw.durationSeconds ?? '').slice(0, 20)}」必须是 1–600 的整数秒`);
-        durationSeconds = capabilities.durations[0] || 5;
-      } else if (capabilities.durations.length && !capabilities.durations.includes(durationSeconds)) {
-        invalid(`框体「${box.title}」的视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`);
-        durationSeconds = capabilities.durations[0];
-      }
-      box.durationSeconds = durationSeconds;
-      box.audio = raw.audio === true && capabilities.audio === true;
-      // 图生视频模型必须带首帧：学生端据此决定要不要先连一张画面。
-      box.requiresFirstFrame = capabilities.inputFrame === 'FIRST';
-    }
-    boxes.push(box);
-  });
-  return boxes;
+  return list.map((raw, index) => {
+    const box = normalizeGenerationBox(raw, { strict, policy: providerPolicy, index });
+    if (!box) return null;
+    if (seen.has(box.id)) box.id = uniqueBoxId('', seen);
+    else seen.add(box.id);
+    return box;
+  }).filter(Boolean);
+}
+
+// 框体在素材表里存的是 snapshot.box（模型与参数）+ snapshot.content（预填提示词）。
+export function boxFromMaterial(material, index = 0) {
+  if (!material || String(material.materialType || material.material_type || '').toUpperCase() !== GENERATION_BOX_MATERIAL_TYPE) return null;
+  const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
+  const raw = snapshot.box && typeof snapshot.box === 'object' ? snapshot.box : {};
+  const box = normalizeGenerationBox(raw, { index, id: material.id });
+  if (!box) return null;
+  box.id = material.id;
+  box.title = String(material.title || box.title).trim().slice(0, 60) || box.title;
+  box.prompt = String(snapshot.content || '').slice(0, 2000);
+  box.assetUrl = String(material.assetUrl || material.asset_url || '').trim().slice(0, 2000);
+  return box;
 }
 
 export function lessonCanvasConfig(lessonId) {
@@ -576,12 +599,19 @@ export function lessonCanvasConfig(lessonId) {
       id: item.id, title: item.title, description: item.description || '', materialType: item.material_type || 'NOTE', assetUrl: item.asset_url || null, snapshot: parseJson(item.snapshot, {}), sort: Number(item.sort || 0),
     })),
   }));
-  const lesson = row('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId]);
-  const config = parseJson(lesson?.classroom_config, {});
+  // 生成框体就是素材表里 type=GENERATION_BOX 的素材：顺序跟着素材走，
+  // 这里摊平成一条列表供生成链路（按框体取模型/参数、每框体一次）使用。
+  const generationBoxes = [];
+  groups.forEach((group) => {
+    (group.materials || []).forEach((material) => {
+      const box = boxFromMaterial(material, generationBoxes.length);
+      if (box) generationBoxes.push({ ...box, groupId: group.id, groupTitle: group.title });
+    });
+  });
   return {
     capabilities: capabilities.length ? capabilities : ['text'],
     materialGroups: groups,
-    generationBoxes: normalizeGenerationBoxes(config.generationBoxes),
+    generationBoxes,
   };
 }
 

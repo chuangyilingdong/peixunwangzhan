@@ -146,11 +146,12 @@ function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minH
 function PromptNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate } = useCanvasActions();
   const generated = String(data.generatedText || '');
+  const missingPrompt = !String(data.text || '').trim();
   return <NodeFrame icon="✎" tone="prompt" title={data.title || '魔法提示词'} selected={selected}>
     <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder={data.slotType === 'text' ? '写下你想让 AI 生成什么…' : '写下你的故事或画面描述…'} maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <span className="learning-node__count">{(data.text || '').length}/300</span>
     <SlotParams data={data} />
-    {canGenerate && data.slotType === 'text' && (!data.generationStatus || data.generationStatus === 'FAILED') && !generated && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'TEXT', { title: data.title || 'AI 文字', prompt: data.text || '' })}>✎ 生成文字</button>}
+    {canGenerate && data.slotType === 'text' && (!data.generationStatus || data.generationStatus === 'FAILED') && !generated && <button className="learning-node__generate nodrag" type="button" disabled={missingPrompt} title={missingPrompt ? '先写下你想让 AI 写什么' : undefined} onClick={() => generateNode(id, 'TEXT', { title: data.title || 'AI 文字', prompt: data.text || '' })}>✎ 生成文字</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {generated ? <div className="learning-node__text-result nodrag">{generated}</div> : null}
     {selected && <span className="learning-node__hint">写下提示词后点「生成文字」，AI 帮你写；也可以直接手动编辑。</span>}
@@ -173,6 +174,7 @@ function SlotParams({ data }) {
 function ImageNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate, openPreview } = useCanvasActions();
   const imageUrl = data.previewUrl || data.assetUrl;
+  const missingPrompt = !String(data.caption || '').trim();
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
   const referenceUrl = !imageUrl ? String(data.referenceUrl || '') : '';
   return <NodeFrame icon="✦" tone="image" title={data.title || '画面灵感'} selected={selected}>
@@ -184,7 +186,7 @@ function ImageNode({ id, data, selected }) {
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.caption || ''} placeholder="写下画面描述 / 提示词…" maxLength={300} onChange={(event) => updateNode(id, { caption: event.target.value })} />
     <input className="learning-node__emoji nodrag" value={data.emoji || ''} aria-label="画面表情" maxLength={2} onChange={(event) => updateNode(id, { emoji: event.target.value })} />
     <SlotParams data={data} />
-    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !imageUrl && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '' })}>✦ 生成画面</button>}
+    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !imageUrl && <button className="learning-node__generate nodrag" type="button" disabled={missingPrompt} title={missingPrompt ? '先写下画面描述，再生成' : undefined} onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '' })}>✦ 生成画面</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">用描述生成画面，也可以继续编辑灵感</span>}
   </NodeFrame>;
@@ -216,6 +218,7 @@ function VideoNode({ id, data, selected }) {
   const videoUrl = data.previewUrl || data.assetUrl;
   // 图生视频模型（i2v）需要首帧图：优先用连过来的图片，其次用框体预置素材。
   const requiresFirstFrame = data.slotType === 'video' && data.requiresFirstFrame === true;
+  const missingPrompt = !String(data.text || '').trim();
   const referenceUrl = !videoUrl ? String(data.referenceUrl || '') : '';
   const sourceAssetUrl = requiresFirstFrame ? (getIncomingImageAssetUrl(id) || referenceUrl) : '';
   const missingFirstFrame = requiresFirstFrame && !sourceAssetUrl;
@@ -227,7 +230,7 @@ function VideoNode({ id, data, selected }) {
         : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
-    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={missingFirstFrame} title={missingFirstFrame ? '该模型需要先连接一张画面（首帧）' : undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl })}>▶ 生成故事短片</button>}
+    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={missingFirstFrame || missingPrompt} title={missingFirstFrame ? '该模型需要先连接一张画面（首帧）' : (missingPrompt ? '先写下这一段的提示词，再生成' : undefined)} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl })}>▶ 生成故事短片</button>}
     {missingFirstFrame && !data.generationStatus && <span className="learning-node__generation-state is-error">该模型需要先连接一张画面（首帧）</span>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">{missingFirstFrame ? '从图片节点的圆点连到本卡片，才能生成' : '连接提示词或画面，组织故事顺序'}</span>}

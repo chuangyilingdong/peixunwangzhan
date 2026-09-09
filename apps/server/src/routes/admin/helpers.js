@@ -2,7 +2,7 @@ import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
-  normalizeGenerationBoxes,
+  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -37,17 +37,11 @@ function normalizeDeliveryMode(value) {
   if (!['CANVAS', 'VIBECODING'].includes(mode)) throw errors.badRequest('课堂类型只能是画布课堂或 VibeCoding 课堂', 'INVALID_DELIVERY_MODE');
   return mode;
 }
-// 生成框体：每个框体单独配模型与参数（比例/清晰度/时长/音频），校验口径与下发共用 lib.js 的归一化。
+// 生成框体现在是素材表里的一种素材（material_type=GENERATION_BOX），顺序跟着素材走；
+// classroom_config 只留版本号与 VibeCoding 配置。
 function normalizeClassroomConfig(value) {
   const input = value && typeof value === 'object' ? value : {};
-  let generationBoxes;
-  try {
-    generationBoxes = normalizeGenerationBoxes(input.generationBoxes, { strict: true });
-  } catch (error) {
-    if (error?.code === 'INVALID_GENERATION_CONFIG') throw errors.badRequest(error.message, 'INVALID_GENERATION_CONFIG');
-    throw error;
-  }
-  const result = { version: 2, generationBoxes };
+  const result = { version: 3 };
   if (input.vibeCoding && typeof input.vibeCoding === 'object') result.vibeCoding = input.vibeCoding;
   return result;
 }
@@ -88,23 +82,67 @@ function normalizeCanvasTemplateSnapshot(snapshot) {
   return { nodes, edges, viewport };
 }
 
+// 生成框体素材：把「素材行的字段 + snapshot.content」当成一个框体来严格校验，
+// 通过后写回 snapshot.box（模型与参数）与 snapshot.content（预填提示词）。
+function normalizeBoxMaterial(material, materialIndex, title) {
+  const snapshot = material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
+  const raw = snapshot.box && typeof snapshot.box === 'object' ? snapshot.box : {};
+  let box;
+  try {
+    box = normalizeGenerationBox({
+      ...raw,
+      title,
+      assetUrl: material?.assetUrl,
+      prompt: snapshot.content,
+    }, { strict: true, index: materialIndex });
+  } catch (error) {
+    if (error?.code === 'INVALID_GENERATION_CONFIG') throw errors.badRequest(error.message, 'INVALID_GENERATION_CONFIG');
+    throw error;
+  }
+  if (!box) throw errors.badRequest(`第 ${materialIndex + 1} 个生成框体的类型无效`, 'INVALID_GENERATION_CONFIG');
+  const boxSnapshot = { modality: box.modality, model: box.model };
+  if (box.modality !== 'TEXT') { boxSnapshot.aspectRatio = box.aspectRatio; boxSnapshot.resolution = box.resolution; }
+  if (box.modality === 'VIDEO') { boxSnapshot.durationSeconds = box.durationSeconds; boxSnapshot.audio = box.audio; }
+  return { ...snapshot, box: boxSnapshot, content: box.prompt };
+}
+
 function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}) {
   const groups = Array.isArray(materialGroups) ? materialGroups.slice(0, 50) : [];
   const caps = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value).trim().toLowerCase()).filter((value) => ['text', 'image', 'video', 'music', 'podcast', 'dubbing'].includes(value)))] : ['text'];
   const now = nowIso();
+  // 素材/素材组的 id 保持不变：学生画布节点和 generation_jobs.box_id 都按 id 指回来，
+  // 每次保存换新 id 会让「这个框体已经生成过」失效、学生端节点也认不出来。
+  const existingGroupIds = new Set(rows('SELECT id FROM course_lesson_material_groups WHERE lesson_id=?', [lessonId]).map((item) => item.id));
+  const existingMaterialIds = new Set(rows('SELECT id FROM course_lesson_materials WHERE group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)', [lessonId]).map((item) => item.id));
+  // 先整体校验再落库：框体素材的非法取值要在这里当场拒绝，避免写了一半。
+  const prepared = groups.map((group, groupIndex) => ({
+    id: existingGroupIds.has(String(group?.id || '')) ? String(group.id) : id('material-group'),
+    title: String(group?.title || `素材${groupIndex + 1}`).trim().slice(0, 100) || `素材${groupIndex + 1}`,
+    materials: (Array.isArray(group?.materials) ? group.materials.slice(0, 100) : []).map((material, materialIndex) => {
+      const title = String(material?.title || `素材${materialIndex + 1}`).trim().slice(0, 160);
+      const materialType = String(material?.materialType || 'NOTE').toUpperCase().slice(0, 30);
+      const snapshot = materialType === GENERATION_BOX_MATERIAL_TYPE
+        ? normalizeBoxMaterial(material, materialIndex, title)
+        : (material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {});
+      return {
+        id: existingMaterialIds.has(String(material?.id || '')) ? String(material.id) : id('material'),
+        title,
+        description: String(material?.description || '').slice(0, 1000),
+        materialType,
+        assetUrl: material?.assetUrl ? String(material.assetUrl).slice(0, 2000) : null,
+        snapshot,
+      };
+    }),
+  }));
   transaction(() => {
     q('DELETE FROM course_lesson_capabilities WHERE lesson_id=?', [lessonId]);
     caps.forEach((capability) => q('INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,?,?)', [lessonId, capability, now]));
     q('DELETE FROM course_lesson_materials WHERE group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)', [lessonId]);
     q('DELETE FROM course_lesson_material_groups WHERE lesson_id=?', [lessonId]);
-    groups.forEach((group, groupIndex) => {
-      const groupId = id('material-group');
-      const title = String(group?.title || `素材${groupIndex + 1}`).trim().slice(0, 100) || `素材${groupIndex + 1}`;
-      q('INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)', [groupId, lessonId, title, groupIndex + 1, now, now]);
-      const materials = Array.isArray(group?.materials) ? group.materials.slice(0, 100) : [];
-      materials.forEach((material, materialIndex) => {
-        const materialId = id('material');
-        q('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [materialId, groupId, String(material?.title || `素材${materialIndex + 1}`).trim().slice(0, 160), String(material?.description || '').slice(0, 1000), String(material?.materialType || 'NOTE').toUpperCase().slice(0, 30), material?.assetUrl ? String(material.assetUrl).slice(0, 2000) : null, json(material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {}), materialIndex + 1, now, now]);
+    prepared.forEach((group, groupIndex) => {
+      q('INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)', [group.id, lessonId, group.title, groupIndex + 1, now, now]);
+      group.materials.forEach((material, materialIndex) => {
+        q('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [material.id, group.id, material.title, material.description, material.materialType, material.assetUrl, json(material.snapshot), materialIndex + 1, now, now]);
       });
     });
     q('UPDATE course_lessons SET delivery_mode=?,classroom_config=?,canvas_template_snapshot=?,updated_at=? WHERE id=?', [normalizeDeliveryMode(deliveryMode), json(normalizeClassroomConfig(classroomConfig)), json(normalizeCanvasTemplateSnapshot(canvasTemplateSnapshot)), now, lessonId]);
@@ -150,13 +188,15 @@ function validateSeriesForPublishing(seriesId) {
       if (!capabilities.includes('text')) throw errors.badRequest(`VibeCoding 课时「${lesson.title}」需要开放 AI 文字能力，否则学生进入课堂后无法对话`, 'VIBECODING_TEXT_CAPABILITY_REQUIRED');
       return;
     }
-    const config = normalizeClassroomConfig(parseJson(lesson.classroom_config, {}));
-    // 框体配置必须落在本课开放的能力里，否则学生端看不到入口、配了也没用。
-    const capabilities = lessonCanvasConfig(lesson.id).capabilities || [];
-    config.generationBoxes.forEach((box) => {
-      const capability = String(box.modality || '').toLowerCase();
-      if (!capabilities.includes(capability)) throw errors.badRequest(`课时「${lesson.title}」的生成框体「${box.title}」类型是 ${box.modality}，但本课没有开放该能力`, 'GENERATION_BOX_CAPABILITY_MISMATCH');
-    });
+    // 生成框体（素材表里 type=GENERATION_BOX 的素材）必须落在本课开放的能力里，
+    // 否则学生端看不到入口、配了也没用。
+    const canvas = lessonCanvasConfig(lesson.id);
+    const capabilities = canvas.capabilities || [];
+    canvas.materialGroups.forEach((group) => (group.materials || []).forEach((material) => {
+      if (material.materialType !== GENERATION_BOX_MATERIAL_TYPE) return;
+      const modality = String(material.snapshot?.box?.modality || '').toUpperCase();
+      if (!capabilities.includes(modality.toLowerCase())) throw errors.badRequest(`课时「${lesson.title}」的生成框体「${material.title}」类型是 ${modality}，但本课没有开放该能力`, 'GENERATION_BOX_CAPABILITY_MISMATCH');
+    }));
   });
 }
 function accessibleSeries(currentOrgId, seriesId) {

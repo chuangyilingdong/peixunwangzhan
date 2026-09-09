@@ -38,10 +38,16 @@ const seedDb = new DatabaseSync(dbPath);
 const lessons = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 2').all();
 assert.equal(lessons.length, 2, '种子数据应至少有两个课时');
 const [textLesson, noCapLesson] = lessons;
-const slotConfig = (model) => JSON.stringify({ version: 2, generationBoxes: [{ id: 'box-text-1', title: '素材1', modality: 'TEXT', model, prompt: '用一句话描写春天' }] });
-seedDb.prepare("UPDATE course_lessons SET delivery_mode='CANVAS', classroom_config=? WHERE id=?").run(slotConfig('mock-text-model'), textLesson.id);
+// 生成框体是素材表里 type=GENERATION_BOX 的素材（id 直接当 boxId 用）
+const seedTextBox = (lessonId, model, boxId) => {
+  seedDb.prepare("UPDATE course_lessons SET delivery_mode='CANVAS', classroom_config=? WHERE id=?").run(JSON.stringify({ version: 3 }), lessonId);
+  seedDb.prepare("INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,1,datetime('now'),datetime('now'))").run(`mg-${lessonId}`, lessonId, '生成框体');
+  seedDb.prepare("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,'GENERATION_BOX',NULL,?,1,datetime('now'),datetime('now'))")
+    .run(boxId, `mg-${lessonId}`, '素材1', '', JSON.stringify({ box: { modality: 'TEXT', model }, content: '用一句话描写春天' }));
+};
+seedTextBox(textLesson.id, 'mock-text-model', 'box-text-1');
 seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,'text',datetime('now'))").run(textLesson.id);
-seedDb.prepare("UPDATE course_lessons SET delivery_mode='CANVAS', classroom_config=? WHERE id=?").run(slotConfig(''), noCapLesson.id);
+seedTextBox(noCapLesson.id, '', 'box-text-2');
 seedDb.prepare('DELETE FROM course_lesson_capabilities WHERE lesson_id=?').run(noCapLesson.id);
 // 只开生图、不开文字：验证能力位仍然拦住 TEXT 生成（空能力位会回落成 ['text']，不能作为反例）
 seedDb.prepare("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,'image',datetime('now'))").run(noCapLesson.id);
@@ -115,7 +121,7 @@ try {
   const noCapProject = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: noCapLesson.id, title: 'P20 未开放文字' } });
   assert.equal(noCapProject.status, 200, `第二个项目创建失败: ${JSON.stringify(noCapProject.data)}`);
   assert.equal(noCapProject.data.generationBoxes?.length, 1, '未开放能力也应能读到框体配置');
-  const blocked = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: noCapProject.data.id, boxId: 'box-text-1', modality: 'TEXT', prompt: '不该成功' } });
+  const blocked = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: noCapProject.data.id, boxId: 'box-text-2', modality: 'TEXT', prompt: '不该成功' } });
   assert.equal(blocked.status, 403, `未开放 AI 文字时应被拒，实际 ${blocked.status}`);
   assert.equal(blocked.data?.error?.code, 'LESSON_CAPABILITY_DISABLED', `错误码应为 LESSON_CAPABILITY_DISABLED，实际 ${blocked.data?.error?.code}`);
 
