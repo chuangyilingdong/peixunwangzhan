@@ -17,6 +17,8 @@ const navigation = [
   { to: '/members', icon: '♙', label: '成员管理' }, 
   { to: '/member-credits', icon: '◆', label: '配额管理', adminOnly: true },
   { to: '/billing-transactions', icon: '▤', label: '积分流水', adminOnly: true },
+  { to: '/recharge', icon: '◆', label: '积分账务', adminOnly: true },
+  { to: '/usage', icon: '▦', label: '积分用量' },
   { to: '/works', icon: '✧', label: '作品点评' }, 
   { to: '/vibecoding', icon: '💻', label: 'VibeCoding 点评' }, 
   { to: '/inbox', icon: '✉', label: '站内信' }, 
@@ -137,6 +139,15 @@ function Classes({ api, user }) {
     try { await api.post(`org/classes/${classId}/sessions/${sessionId}/${cancel ? 'cancel' : 'end'}`, { reason: cancel ? 'CANCELED' : 'MANUAL' }); setMessage(cancel ? '课堂已取消。' : '课堂已结束。'); await classes.refresh(); await loadDetail(classId, true); }
     catch (error) { setMessage(error.message); }
   }
+  async function archiveClass(item) {
+    if (!window.confirm(`确认归档班级「${item.name}」？归档后班级不能再修改，进行中的课堂会一并结束。`)) return;
+    setBusy(true); setMessage('');
+    try {
+      await api.delete(`org/classes/${item.id}`);
+      setMessage(`班级「${item.name}」已归档。`);
+      await classes.refresh();
+    } catch (error) { setMessage(error.message || '归档失败'); } finally { setBusy(false); }
+  }
   async function updateControls(classId, session, patch) {
     try {
       await api.put(`org/classes/${classId}/sessions/${session.id}/ai-controls`, { ...patch, capabilities: { ...session.capabilities, ...(patch.capabilities || {}) } });
@@ -212,6 +223,7 @@ function Classes({ api, user }) {
             <p>使用模式：{item.usageMode}　教师：{item.teacherName || (item.teacherId === user.id ? user.displayName : '未设置')}</p>
             <div className="row-actions">
               <button className="secondary-button" onClick={() => toggleDetail(item.id)}>{expanded === item.id ? '收起详情' : '班级详情 / 课程计划'}</button>
+              {user.role === 'ORG_ADMIN' && item.status === 'ACTIVE' ? <button className="text-button" disabled={busy} onClick={() => archiveClass(item)}>归档班级</button> : null}
               {item.currentSessionId ? <><button className="primary-button" onClick={() => end(item.id, item.currentSessionId)}>结束课堂</button><button className="text-button" onClick={() => end(item.id, item.currentSessionId, true)}>取消课堂</button></> : curriculum.loading ? <span className="muted">正在加载本班课单…</span> : lessons.length ? <><select value={selected[item.id] || ''} onChange={(event) => setSelected({ ...selected, [item.id]: event.target.value })}><option value="">选择课时</option>{lessons.map((lesson) => <option key={lesson.lessonId} value={lesson.lessonId}>第 {lesson.sort} 课 · {lesson.title}</option>)}</select><label>课堂入口<select value={sessionModes[item.id] || 'CANVAS'} onChange={(event) => setSessionModes((current) => ({ ...current, [item.id]: event.target.value }))}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂</option></select></label><button className="primary-button" onClick={() => start(item.id)}>开始课堂</button><button className="secondary-button" onClick={() => start(item.id, true)}>开始补课</button></> : <span className="muted">尚未配置课单，请先在详情中设置课程计划。</span>}
             </div>
             {expanded === item.id && <div className="stacked-panels">
