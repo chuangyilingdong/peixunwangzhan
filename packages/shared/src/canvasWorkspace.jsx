@@ -261,10 +261,10 @@ export function CanvasWorkspace({ api, ...props }) {
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
   }
 
-  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '' }) {
+  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', boxId = '' }) {
     if (!editable) throw new Error('当前作品不可编辑');
-    // 比例/清晰度/时长/音频由服务端按课时配置取值，这里只提交内容与首帧来源。
-    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl });
+    // 比例/清晰度/时长/音频由服务端按框体配置取值，这里只提交内容、来源框体与首帧来源。
+    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, boxId });
     let result = queued.job;
     for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -359,43 +359,59 @@ export function CanvasWorkspace({ api, ...props }) {
     setMessage(`已将“${material.title || '课堂素材'}”加入画布。`);
   }
 
-  const generationSlots = project.data.generationSlots || { text: { count: 0 }, image: { count: 0 }, video: { count: 0 } };
+  const generationBoxes = Array.isArray(project.data.generationBoxes) ? project.data.generationBoxes : [];
 
-  function slotNodesOfType(slotType) {
+  function boxNodes() {
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [] };
-    return (current.nodes || []).filter((node) => node.data?.slotType === slotType);
+    return (current.nodes || []).filter((node) => node.data?.boxId);
   }
 
-  function addSlotToCanvas(slotType) {
+  function boxUsed(boxId) {
+    return boxNodes().some((node) => node.data.boxId === boxId);
+  }
+
+  // 素材面板每行要让学生看清这个框体自己的参数（不同框体可以不一样）。
+  function boxParamsLabel(box) {
+    const slotType = String(box.modality || '').toLowerCase();
+    if (slotType === 'text') return box.model || '写提示词让 AI 生成文字';
+    const params = [box.aspectRatio, box.resolution];
+    if (slotType === 'video') { params.push(`${box.durationSeconds}秒`); if (box.audio) params.push('含音频'); }
+    if (box.model) params.push(box.model);
+    return params.filter(Boolean).join(' · ');
+  }
+
+  function addBoxToCanvas(box) {
     if (!editable) return;
+    const slotType = String(box.modality || '').toLowerCase();
     // 能力未开放时也不允许加框体，避免出现学生无法生成的空框体。
     if (!(Array.isArray(project.data.capabilities) ? project.data.capabilities : ['text']).includes(slotType)) { setMessage('本课未开放该 AI 能力。'); return; }
-    const slot = generationSlots[slotType] || {};
-    const limit = Number(slot.count || 0);
-    const used = slotNodesOfType(slotType).length;
-    const label = slotType === 'image' ? '生图框体' : slotType === 'video' ? '生视频框体' : '文字框体';
-    if (limit <= 0) { setMessage(`本课未配置「${label}」。`); return; }
-    if (used >= limit) { setMessage(`本课「${label}」最多 ${limit} 个。`); return; }
+    if (boxUsed(box.id)) { setMessage(`「${box.title}」已经生成过了。`); return; }
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    const promptText = String(box.prompt || '');
     const node = {
-      id: `${slotType}-slot-${Date.now().toString(36)}`,
+      // 一个框体在画布上只对应一个节点：id 由框体 id 派生，重复点击不会多出第二个。
+      id: `box-${box.id}`,
       type: slotType === 'text' ? 'prompt' : slotType,
       position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 },
       data: {
-        title: label, slotType,
-        aspectRatio: slot.aspectRatio || '', resolution: slot.resolution || slot.size || '', model: slot.model || '',
-        ...(slotType === 'video' ? { durationSeconds: slot.durationSeconds || 5, audio: slot.audio === true, requiresFirstFrame: slot.requiresFirstFrame === true } : {}),
-        caption: '', text: '', ...(slotType === 'text' ? { generatedText: '' } : {}),
+        title: box.title, slotType, boxId: box.id,
+        aspectRatio: box.aspectRatio || '', resolution: box.resolution || '', model: box.model || '',
+        referenceUrl: box.assetUrl || '',
+        // 平台预填的提示词直接写进框体，学生可以改。
+        text: slotType === 'image' ? '' : promptText,
+        caption: slotType === 'image' ? promptText : '',
+        ...(slotType === 'video' ? { durationSeconds: box.durationSeconds || 5, audio: box.audio === true, requiresFirstFrame: box.requiresFirstFrame === true } : {}),
+        ...(slotType === 'text' ? { generatedText: '' } : {}),
       },
     };
     const next = { ...current, nodes: [...(current.nodes || []), node] };
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
-    setMessage(`已添加「${label}」，请填写提示词或从素材插入。`);
+    setMessage(`已添加「${box.title}」，请填写提示词或从素材插入。`);
   }
 
   function openPromptInsert(material) {
     if (!editable) return;
-    const targets = [...slotNodesOfType('image'), ...slotNodesOfType('video')];
+    const targets = boxNodes().filter((node) => ['text', 'image', 'video'].includes(node.data?.slotType));
     if (!targets.length) { setMessage('画布上还没有框体，请先从「生成框体」添加。'); return; }
     setPromptTarget({ material, targets });
   }
@@ -408,7 +424,7 @@ export function CanvasWorkspace({ api, ...props }) {
     if (!current) return;
     const next = { ...current, nodes: (current.nodes || []).map((node) => {
       if (node.id !== nodeId) return node;
-      const field = node.type === 'video' ? 'text' : 'caption';
+      const field = node.data?.slotType === 'image' ? 'caption' : 'text';
       return { ...node, data: { ...node.data, [field]: text } };
     }) };
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
@@ -431,7 +447,7 @@ export function CanvasWorkspace({ api, ...props }) {
       <aside className={`student-tool-rail ${toolPanel ? 'is-open' : ''}`}>
         <button className="student-tool-rail__toggle" type="button" onClick={() => setToolPanel((value) => value ? null : 'materials')} aria-expanded={Boolean(toolPanel)}>☰ <span>工具</span></button>
         <button className={`student-tool-button ${toolPanel === 'materials' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'materials' ? null : 'materials')}><span>▦</span><small>素材</small></button><button className={`student-tool-button ${toolPanel === 'capabilities' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'capabilities' ? null : 'capabilities')}><span>⚙</span><small>能力</small></button><button className={`student-tool-button ${toolPanel === 'versions' ? 'is-active' : ''}`} type="button" onClick={() => setToolPanel((value) => value === 'versions' ? null : 'versions')}><span>⟲</span><small>版本</small></button>
-        {toolPanel === 'materials' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>课堂素材</strong><small>点击框体或素材加入画布</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div>{((capabilities.includes('text') && generationSlots.text?.count > 0) || (capabilities.includes('image') && generationSlots.image.count > 0) || (capabilities.includes('video') && generationSlots.video.count > 0)) && <div className="student-material-group"><h3>生成框体</h3>{capabilities.includes('text') && generationSlots.text?.count > 0 && <button className="student-material-item" type="button" disabled={!editable || slotNodesOfType('text').length >= generationSlots.text.count} onClick={() => addSlotToCanvas('text')}><span className="student-material-item__icon">✎</span><span><strong>文字框体</strong><small>{generationSlots.text.model ? generationSlots.text.model + ' · ' : ''}写提示词让 AI 生成文字 · 已用 {slotNodesOfType('text').length}/{generationSlots.text.count}</small></span><b>＋</b></button>}{capabilities.includes('image') && generationSlots.image.count > 0 && <button className="student-material-item" type="button" disabled={!editable || slotNodesOfType('image').length >= generationSlots.image.count} onClick={() => addSlotToCanvas('image')}><span className="student-material-item__icon">▧</span><span><strong>生图框体</strong><small>{generationSlots.image.aspectRatio} · {generationSlots.image.resolution || generationSlots.image.size}{generationSlots.image.model ? ' · ' + generationSlots.image.model : ''} · 已用 {slotNodesOfType('image').length}/{generationSlots.image.count}</small></span><b>＋</b></button>}{capabilities.includes('video') && generationSlots.video.count > 0 && <button className="student-material-item" type="button" disabled={!editable || slotNodesOfType('video').length >= generationSlots.video.count} onClick={() => addSlotToCanvas('video')}><span className="student-material-item__icon">▶</span><span><strong>生视频框体</strong><small>{generationSlots.video.aspectRatio} · {generationSlots.video.resolution || generationSlots.video.size} · {generationSlots.video.durationSeconds}秒{generationSlots.video.audio ? ' · 含音频' : ''}{generationSlots.video.model ? ' · ' + generationSlots.video.model : ''} · 已用 {slotNodesOfType('video').length}/{generationSlots.video.count}</small></span><b>＋</b></button>}</div>}{materialGroups.length ? materialGroups.map((group) => <div className="student-material-group" key={group.id || group.title}><h3>{group.title}</h3>{(group.materials || []).map((material) => <button className="student-material-item" key={material.id || material.title} type="button" onClick={() => material.materialType === 'PROMPT' ? openPromptInsert(material) : addLessonMaterialToCanvas(material)}><span className="student-material-item__icon">{material.materialType === 'IMAGE' ? '▧' : material.materialType === 'VIDEO' ? '▶' : '✎'}</span><span><strong>{material.title}</strong><small>{material.materialType === 'PROMPT' ? '点击后选择插入到哪个框体' : (material.description || '点击后加入画布')}</small></span><b>＋</b></button>)}</div>) : <p className="student-tool-empty">老师还没有为本节课配置素材。</p>}</div>}{toolPanel === 'capabilities' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><div className="student-capability-list">{[['text','AI 文字'],['image','AI 生图'],['video','AI 生视频'],['music','AI 音乐'],['podcast','AI 播客'],['dubbing','AI 配音']].map(([key,label]) => <span className={capabilities.includes(key) ? 'is-enabled' : ''} key={key}>{capabilities.includes(key) ? '✓' : '—'} {label}</span>)}</div></div>}{toolPanel === 'versions' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>版本管理</strong><small>预览 / 恢复 / 重命名 / 导出 / 对比 / 导入</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><div className="student-material-group"><h3>导入快照</h3><label className="student-material-item"><span className="student-material-item__icon">⇪</span><span><strong>{importingCanvas ? '导入中…' : '选择 JSON 文件'}</strong><small>仅支持本平台导出的画布快照，最大 1MB</small></span><b>＋</b><input type="file" accept="application/json,.json" disabled={!editable || importingCanvas} onChange={importCanvas} style={{ display: 'none' }} /></label></div><div className="student-material-group"><h3>版本对比</h3><div className="student-version-compare"><select value={compareFrom} aria-label="对比起始版本" onChange={(event) => setCompareFrom(event.target.value)}>{historyItems.map((item) => <option key={item.id} value={String(item.version)}>v{item.version}{item.label ? ' · ' + item.label : ''}</option>)}</select><span>→</span><select value={compareTo} aria-label="对比目标版本" onChange={(event) => setCompareTo(event.target.value)}>{historyItems.map((item) => <option key={item.id} value={String(item.version)}>v{item.version}{item.label ? ' · ' + item.label : ''}</option>)}</select><button type="button" className="secondary-button" disabled={comparing || historyItems.length < 2} onClick={compareVersions}>{comparing ? '比较中…' : '比较'}</button></div>{comparison ? <div className="student-version-diff"><p className="muted">{collectionChanges(comparison.diff) || '没有结构性变化。'}</p><ChangeList diff={comparison.diff} fromSnapshot={comparison.from.canvasSnapshot} toSnapshot={comparison.to.canvasSnapshot} /></div> : null}</div><div className="student-material-group"><h3>历史版本（{historyItems.length}）</h3>{historyItems.length ? <ul className="student-version-list">{historyItems.map((item) => <li key={item.id}><div className="student-version-meta"><strong>v{item.version}</strong>{item.label ? <span>{item.label}</span> : null}<small>{formatDate(item.createdAt)}{item.actorName ? ' · ' + item.actorName : ''}</small></div>{renamingVersion === item.version ? <div className="student-version-rename"><input value={renameLabel} maxLength={100} placeholder="版本名称" aria-label="版本名称" onChange={(event) => setRenameLabel(event.target.value)} /><button type="button" className="secondary-button" disabled={savingRenameVersion === item.version} onClick={() => renameVersion(item.version)}>{savingRenameVersion === item.version ? '保存中…' : '保存'}</button><button type="button" className="secondary-button" onClick={() => { setRenamingVersion(null); setRenameLabel(''); }}>取消</button></div> : <div className="row-actions"><button type="button" className="text-button" disabled={previewingVersion === item.version} onClick={() => previewVersion(item.version)}>{previewingVersion === item.version ? '打开中…' : '预览'}</button><button type="button" className="text-button" disabled={!editable || restoringVersion === item.version} onClick={() => restore(item.version)}>{restoringVersion === item.version ? '恢复中…' : '恢复'}</button><button type="button" className="text-button" disabled={!editable} onClick={() => { setRenamingVersion(item.version); setRenameLabel(item.label || ''); }}>重命名</button><button type="button" className="text-button" disabled={exportingVersion === item.version} onClick={() => exportVersion(item.version)}>{exportingVersion === item.version ? '导出中…' : '导出'}</button></div>}</li>)}</ul> : <p className="student-tool-empty">还没有历史版本，保存画布后会自动生成。</p>}</div></div>}
+        {toolPanel === 'materials' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>课堂素材</strong><small>点击框体或素材加入画布</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div>{generationBoxes.length ? <div className="student-material-group"><h3>生成框体</h3>{generationBoxes.map((box) => { const slotType = String(box.modality || '').toLowerCase(); const enabled = capabilities.includes(slotType); const used = boxUsed(box.id); const label = slotType === 'image' ? '生图' : slotType === 'video' ? '生视频' : '文字'; const icon = slotType === 'image' ? '▧' : slotType === 'video' ? '▶' : '✎'; return <button className="student-material-item" key={box.id} type="button" disabled={!editable || !enabled || used} title={enabled ? undefined : '本课未开放该 AI 能力'} onClick={() => addBoxToCanvas(box)}><span className="student-material-item__icon">{icon}</span><span><strong>{box.title}</strong><small>{label} · {boxParamsLabel(box)} · {used ? '已生成' : '未生成'}</small></span><b>＋</b></button>; })}</div> : null}{materialGroups.length ? materialGroups.map((group) => <div className="student-material-group" key={group.id || group.title}><h3>{group.title}</h3>{(group.materials || []).map((material) => <button className="student-material-item" key={material.id || material.title} type="button" onClick={() => material.materialType === 'PROMPT' ? openPromptInsert(material) : addLessonMaterialToCanvas(material)}><span className="student-material-item__icon">{material.materialType === 'IMAGE' ? '▧' : material.materialType === 'VIDEO' ? '▶' : '✎'}</span><span><strong>{material.title}</strong><small>{material.materialType === 'PROMPT' ? '点击后选择插入到哪个框体' : (material.description || '点击后加入画布')}</small></span><b>＋</b></button>)}</div>) : <p className="student-tool-empty">老师还没有为本节课配置素材。</p>}</div>}{toolPanel === 'capabilities' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><div className="student-capability-list">{[['text','AI 文字'],['image','AI 生图'],['video','AI 生视频'],['music','AI 音乐'],['podcast','AI 播客'],['dubbing','AI 配音']].map(([key,label]) => <span className={capabilities.includes(key) ? 'is-enabled' : ''} key={key}>{capabilities.includes(key) ? '✓' : '—'} {label}</span>)}</div></div>}{toolPanel === 'versions' && <div className="student-tool-drawer"><div className="student-tool-drawer__header"><div><strong>版本管理</strong><small>预览 / 恢复 / 重命名 / 导出 / 对比 / 导入</small></div><button type="button" onClick={() => setToolPanel(null)}>×</button></div><div className="student-material-group"><h3>导入快照</h3><label className="student-material-item"><span className="student-material-item__icon">⇪</span><span><strong>{importingCanvas ? '导入中…' : '选择 JSON 文件'}</strong><small>仅支持本平台导出的画布快照，最大 1MB</small></span><b>＋</b><input type="file" accept="application/json,.json" disabled={!editable || importingCanvas} onChange={importCanvas} style={{ display: 'none' }} /></label></div><div className="student-material-group"><h3>版本对比</h3><div className="student-version-compare"><select value={compareFrom} aria-label="对比起始版本" onChange={(event) => setCompareFrom(event.target.value)}>{historyItems.map((item) => <option key={item.id} value={String(item.version)}>v{item.version}{item.label ? ' · ' + item.label : ''}</option>)}</select><span>→</span><select value={compareTo} aria-label="对比目标版本" onChange={(event) => setCompareTo(event.target.value)}>{historyItems.map((item) => <option key={item.id} value={String(item.version)}>v{item.version}{item.label ? ' · ' + item.label : ''}</option>)}</select><button type="button" className="secondary-button" disabled={comparing || historyItems.length < 2} onClick={compareVersions}>{comparing ? '比较中…' : '比较'}</button></div>{comparison ? <div className="student-version-diff"><p className="muted">{collectionChanges(comparison.diff) || '没有结构性变化。'}</p><ChangeList diff={comparison.diff} fromSnapshot={comparison.from.canvasSnapshot} toSnapshot={comparison.to.canvasSnapshot} /></div> : null}</div><div className="student-material-group"><h3>历史版本（{historyItems.length}）</h3>{historyItems.length ? <ul className="student-version-list">{historyItems.map((item) => <li key={item.id}><div className="student-version-meta"><strong>v{item.version}</strong>{item.label ? <span>{item.label}</span> : null}<small>{formatDate(item.createdAt)}{item.actorName ? ' · ' + item.actorName : ''}</small></div>{renamingVersion === item.version ? <div className="student-version-rename"><input value={renameLabel} maxLength={100} placeholder="版本名称" aria-label="版本名称" onChange={(event) => setRenameLabel(event.target.value)} /><button type="button" className="secondary-button" disabled={savingRenameVersion === item.version} onClick={() => renameVersion(item.version)}>{savingRenameVersion === item.version ? '保存中…' : '保存'}</button><button type="button" className="secondary-button" onClick={() => { setRenamingVersion(null); setRenameLabel(''); }}>取消</button></div> : <div className="row-actions"><button type="button" className="text-button" disabled={previewingVersion === item.version} onClick={() => previewVersion(item.version)}>{previewingVersion === item.version ? '打开中…' : '预览'}</button><button type="button" className="text-button" disabled={!editable || restoringVersion === item.version} onClick={() => restore(item.version)}>{restoringVersion === item.version ? '恢复中…' : '恢复'}</button><button type="button" className="text-button" disabled={!editable} onClick={() => { setRenamingVersion(item.version); setRenameLabel(item.label || ''); }}>重命名</button><button type="button" className="text-button" disabled={exportingVersion === item.version} onClick={() => exportVersion(item.version)}>{exportingVersion === item.version ? '导出中…' : '导出'}</button></div>}</li>)}</ul> : <p className="student-tool-empty">还没有历史版本，保存画布后会自动生成。</p>}</div></div>}
       </aside>
       <div className="student-canvas-main"><div className="student-canvas-heading"><div><span className="student-kicker">我的课堂画布</span><h2>{project.data.title}</h2></div><span className={`student-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? '有未保存修改' : '已保存'}</span></div><div className="student-canvas-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onChange={setDraft} /></div></div>
     </section>

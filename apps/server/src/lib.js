@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
-import { effectiveCapabilities, modalityChannel } from './services/modelCapabilities.js';
+import { effectiveCapabilities, modalityChannel, normalizeAspectRatio } from './services/modelCapabilities.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -480,8 +480,96 @@ export function normalizeLesson(value, { includeTeaching = false } = {}) {
   };
 }
 
+const GENERATION_BOX_MODALITIES = Object.freeze(['TEXT', 'IMAGE', 'VIDEO']);
+const MAX_GENERATION_BOXES = 20;
+
+function aiProviderPolicy() {
+  return parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
+}
+
+/** 某模态 + 某模型的有效能力（比例/清晰度/时长/音频/首帧）；框体保存校验与下发共用同一套取值。 */
+export function generationBoxCapabilities(modality, modelId, policy = null) {
+  const key = String(modality || '').toUpperCase();
+  const channel = modalityChannel(policy || aiProviderPolicy(), key);
+  const model = String(modelId || '').trim() || String(channel?.model || '').trim();
+  return effectiveCapabilities(channel, key, model);
+}
+
+function uniqueBoxId(value, seen) {
+  const candidate = String(value || '').trim();
+  if (/^[A-Za-z0-9_-]{1,64}$/.test(candidate) && !seen.has(candidate)) { seen.add(candidate); return candidate; }
+  let next = id('box');
+  while (seen.has(next)) next = id('box');
+  seen.add(next);
+  return next;
+}
+
+/**
+ * 生成框体归一化：每个框体单独配模型与生成参数，学生端按顺序逐个生成、每个框体只生成一次。
+ * strict=true 用于管理员保存：非法取值当场抛错（错误码 INVALID_GENERATION_CONFIG），不再静默丢弃；
+ * strict=false 用于下发：非法取值回落到该模型支持的第一个取值，坏数据不下发到学生端。
+ */
+export function normalizeGenerationBoxes(value, { strict = false, policy = null } = {}) {
+  const list = Array.isArray(value) ? value.slice(0, MAX_GENERATION_BOXES) : [];
+  const providerPolicy = policy || aiProviderPolicy();
+  const seen = new Set();
+  const boxes = [];
+  list.forEach((raw, index) => {
+    if (!raw || typeof raw !== 'object') return;
+    const modality = String(raw.modality || '').trim().toUpperCase();
+    const invalid = (message) => { if (strict) throw Object.assign(new Error(message), { code: 'INVALID_GENERATION_CONFIG' }); };
+    if (!GENERATION_BOX_MODALITIES.includes(modality)) { invalid(`第 ${index + 1} 个生成框体的类型无效`); return; }
+    const model = String(raw.model || '').trim().slice(0, 120);
+    const capabilities = generationBoxCapabilities(modality, model, providerPolicy);
+    const box = {
+      id: uniqueBoxId(raw.id, seen),
+      title: String(raw.title || '').trim().slice(0, 60) || `素材${index + 1}`,
+      modality,
+      model,
+      prompt: String(raw.prompt || '').slice(0, 2000),
+      assetUrl: String(raw.assetUrl || '').trim().slice(0, 2000),
+    };
+    if (modality !== 'TEXT') {
+      const rawRatio = String(raw.aspectRatio ?? '').trim();
+      const submittedRatio = normalizeAspectRatio(rawRatio);
+      // 写了但解析不出来的比例属于填错，不能静默换成别的值。
+      if (rawRatio && !submittedRatio) invalid(`框体「${box.title}」的生成比例「${rawRatio.slice(0, 20)}」格式不对（示例：16:9、9:16）`);
+      if (submittedRatio && capabilities.aspectRatios.length && !capabilities.aspectRatios.includes(submittedRatio)) {
+        invalid(`框体「${box.title}」的生成比例「${submittedRatio}」不在当前模型支持范围内（可用：${capabilities.aspectRatios.join('、')}）`);
+        box.aspectRatio = capabilities.aspectRatios[0];
+      } else {
+        box.aspectRatio = submittedRatio || capabilities.aspectRatios[0] || '16:9';
+      }
+      const submittedResolution = String(raw.resolution ?? '').trim();
+      if (submittedResolution && capabilities.resolutions.length && !capabilities.resolutions.includes(submittedResolution)) {
+        invalid(`框体「${box.title}」的清晰度「${submittedResolution}」不在当前模型支持范围内（可用：${capabilities.resolutions.join('、')}）`);
+        box.resolution = capabilities.resolutions[0];
+      } else {
+        box.resolution = submittedResolution || capabilities.resolutions[0] || '1k';
+      }
+    }
+    if (modality === 'VIDEO') {
+      const submitted = raw.durationSeconds === undefined || raw.durationSeconds === null || raw.durationSeconds === '' ? null : Number(raw.durationSeconds);
+      let durationSeconds = submitted === null ? (capabilities.durations[0] || 5) : submitted;
+      if (!Number.isInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 600) {
+        invalid(`框体「${box.title}」的视频时长「${String(raw.durationSeconds ?? '').slice(0, 20)}」必须是 1–600 的整数秒`);
+        durationSeconds = capabilities.durations[0] || 5;
+      } else if (capabilities.durations.length && !capabilities.durations.includes(durationSeconds)) {
+        invalid(`框体「${box.title}」的视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`);
+        durationSeconds = capabilities.durations[0];
+      }
+      box.durationSeconds = durationSeconds;
+      box.audio = raw.audio === true && capabilities.audio === true;
+      // 图生视频模型必须带首帧：学生端据此决定要不要先连一张画面。
+      box.requiresFirstFrame = capabilities.inputFrame === 'FIRST';
+    }
+    boxes.push(box);
+  });
+  return boxes;
+}
+
 export function lessonCanvasConfig(lessonId) {
-  if (!lessonId) return { capabilities: ['text'], materialGroups: [], generationSlots: { text: { count: 0 }, image: { count: 0 }, video: { count: 0 } } };
+  if (!lessonId) return { capabilities: ['text'], materialGroups: [], generationBoxes: [] };
   const capabilities = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=? ORDER BY capability', [lessonId]).map((item) => item.capability);
   const groups = rows('SELECT * FROM course_lesson_material_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
     id: group.id, title: group.title, sort: Number(group.sort || 0), materials: rows('SELECT * FROM course_lesson_materials WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
@@ -490,28 +578,10 @@ export function lessonCanvasConfig(lessonId) {
   }));
   const lesson = row('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId]);
   const config = parseJson(lesson?.classroom_config, {});
-  const slots = config.generationSlots || {};
-  const textSlot = slots.text || {};
-  const imageSlot = slots.image || {};
-  const videoSlot = slots.video || {};
-  // 图生视频模型（i2v）必须带首帧图：课时里没选模型时按能力路由的渠道默认模型判断。
-  const videoPolicy = parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
-  const videoChannel = modalityChannel(videoPolicy, 'VIDEO');
-  const videoModel = String(videoSlot.model || '').trim() || String(videoChannel?.model || '').trim();
-  const videoInputFrame = effectiveCapabilities(videoChannel, 'VIDEO', videoModel).inputFrame || 'NONE';
   return {
     capabilities: capabilities.length ? capabilities : ['text'],
     materialGroups: groups,
-    generationSlots: {
-      // 文字框体只有数量与模型：TEXT 生成没有比例/清晰度/时长这些参数
-      text: { count: Number(textSlot.count || 0), model: textSlot.model || '' },
-      image: { count: Number(imageSlot.count || 0), aspectRatio: imageSlot.aspectRatio || '16:9', resolution: imageSlot.resolution || '1k', model: imageSlot.model || '' },
-      video: {
-        count: Number(videoSlot.count || 0), aspectRatio: videoSlot.aspectRatio || '16:9', resolution: videoSlot.resolution || '480p',
-        durationSeconds: Number(videoSlot.durationSeconds || 5), model: videoSlot.model || '', audio: videoSlot.audio === true,
-        requiresFirstFrame: videoInputFrame === 'FIRST',
-      },
-    },
+    generationBoxes: normalizeGenerationBoxes(config.generationBoxes),
   };
 }
 

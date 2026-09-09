@@ -35,7 +35,7 @@ try {
   q("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,student_usage_scope,billing_package_id,ai_credit_limit,magic_stones,monthly_credit_allowance,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE','HOME_PRACTICE','pkg1',100,100,100,?,?)", [now, now]);
   q("INSERT INTO course_series(id,title,owner_type,org_id,visibility,version,sort,status,created_at,updated_at) VALUES ('series1','测试课包','PLATFORM',NULL,'ALL_ORGS','1.0',1,'PUBLISHED',?,?)", [now, now]);
   q("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)",
-    [JSON.stringify({ version: 1, generationSlots: { image: { count: 0 }, video: { count: 1, aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, model: 'hailuo-h3-i2v', audio: false } } }), '{}', now, now]);
+    [JSON.stringify({ version: 2, generationBoxes: [{ id: 'box-video-1', title: '素材1', modality: 'VIDEO', model: 'hailuo-h3-i2v', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }] }), '{}', now, now]);
   q("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES ('lesson1','video',?)", [now]);
   q("INSERT INTO classes(id,org_id,name,status,current_session_id,created_at,updated_at) VALUES ('class1','org1','测试班级','ACTIVE',NULL,?,?)", [now, now]);
   q("INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES ('m1','class1','stu1','STUDENT',?)", [now]);
@@ -50,17 +50,17 @@ try {
   const aiCtx = (body) => ({ pathname: '/api/ai/generations/async', method: 'POST', auth, body, search: new URLSearchParams(), req: { socket: { remoteAddress: '127.0.0.1' } } });
 
   // 场景 1：i2v 模型缺首帧图，应在入队前被业务拦截
-  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', modality: 'VIDEO', prompt: '夜色江面' })), 'GENERATION_FIRST_FRAME_REQUIRED', 'missing first frame');
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面' })), 'GENERATION_FIRST_FRAME_REQUIRED', 'missing first frame');
 
   // 场景 2：传外部地址不算首帧（只认本项目图片素材）
-  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'https://evil.example/x.png' })), 'GENERATION_FIRST_FRAME_REQUIRED', 'foreign first frame');
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'https://evil.example/x.png' })), 'GENERATION_FIRST_FRAME_REQUIRED', 'foreign first frame');
 
   // 拦截不产生任何扣费流水
   const spendEntries = row("SELECT COUNT(*) AS n FROM credit_entries WHERE direction='OUT'");
   check(Number(spendEntries?.n || 0) === 0, `拦截路径不应产生支出流水，实际 ${spendEntries?.n || 0} 条`);
 
   // 场景 3：本项目图片素材可以当首帧，任务正常入队
-  const queued = await handleAiGeneration(aiCtx({ projectId: 'proj1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' }));
+  const queued = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' }));
   check(queued?.queued === true, '合法首帧应返回 queued=true');
   check(Boolean(queued?.job?.id), '合法首帧应创建任务');
   const persisted = row("SELECT source_asset_url FROM generation_jobs WHERE id=?", [queued?.job?.id || '']);
@@ -77,10 +77,10 @@ try {
 
   // 场景 4：平台模态开关关闭时，生成必须在入队前被拦（机构覆盖优先于平台开关）
   q("UPDATE platform_modality_settings SET enabled=0 WHERE modality='VIDEO'");
-  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'platform modality off');
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'platform modality off');
   q("UPDATE platform_modality_settings SET enabled=1 WHERE modality='VIDEO'");
   q("INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES ('ovr1','org1','VIDEO',0,'测试覆盖','stu1',?,?)", [now, now]);
-  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'org override off');
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'org override off');
 
   if (failures.length) throw new Error(failures.join('; '));
   console.log('P11 video first-frame guard passed');

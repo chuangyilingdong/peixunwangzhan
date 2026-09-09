@@ -13,6 +13,9 @@
 .learning-node__resize-line { border-color: #a8b8ff; }
 .learning-node__resize-handle { width: 10px; height: 10px; border: 2px solid #0b1738; border-radius: 3px; background: #a8b8ff; }
 .learning-node__media--zoomable { cursor: zoom-in; }
+.learning-node__reference { margin: 12px; }
+.learning-node__reference img { display: block; width: 100%; border-radius: 10px; cursor: zoom-in; }
+.learning-node__reference figcaption { margin-top: 6px; color: #8f9fd4; font-size: 10px; letter-spacing: .2px; }
 .learning-node__textarea--compact { height: 68px; }
 .learning-node__slot-params { display: block; margin: -4px 14px 10px; color: #8f9fd4; font-size: 10px; letter-spacing: .2px; }
 .learning-canvas__lightbox { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(3, 8, 26, .82); backdrop-filter: blur(4px); }

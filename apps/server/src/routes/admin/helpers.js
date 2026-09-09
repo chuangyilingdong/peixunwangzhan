@@ -2,6 +2,7 @@ import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
+  normalizeGenerationBoxes,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -9,8 +10,6 @@ import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, 
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { handleTeachingTasks } from '../../services/teachingTasks.js';
-import { getAiProviderPolicy } from '../billingConfig.js';
-import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
 
@@ -38,68 +37,17 @@ function normalizeDeliveryMode(value) {
   if (!['CANVAS', 'VIBECODING'].includes(mode)) throw errors.badRequest('课堂类型只能是画布课堂或 VibeCoding 课堂', 'INVALID_DELIVERY_MODE');
   return mode;
 }
-// 生成参数：比例 / 清晰度 / 时长 / 音频，取值必须落在该模型声明（或模态默认）的能力范围内。
-function classroomCapabilities(modality, modelId) {
-  const policy = getAiProviderPolicy();
-  const channelId = policy?.modalityChannels?.[modality];
-  const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
-  const model = String(modelId || '').trim() || String(channel?.model || '').trim();
-  return effectiveCapabilities(channel, modality, model);
-}
-function pickCapability(value, allowed, label, fallback, { lenient = false } = {}) {
-  const text = String(value ?? '').trim();
-  if (!text) return fallback;
-  if (!allowed.length || allowed.includes(text)) return text;
-  // 该框体没被使用（数量为 0）时不因为历史默认值报错，直接落到模型支持的取值。
-  if (lenient) return allowed[0];
-  throw errors.badRequest(`${label}「${text}」不在当前模型支持范围内（可用：${allowed.join('、')}）`, 'INVALID_GENERATION_CONFIG');
-}
+// 生成框体：每个框体单独配模型与参数（比例/清晰度/时长/音频），校验口径与下发共用 lib.js 的归一化。
 function normalizeClassroomConfig(value) {
   const input = value && typeof value === 'object' ? value : {};
-  const source = input.generationSlots && typeof input.generationSlots === 'object' ? input.generationSlots : {};
-  const normalizeSlot = (key, modality, defaults) => {
-    const raw = source[key] && typeof source[key] === 'object' ? source[key] : {};
-    const count = integer(raw.count, `${key} 生成框体数量`, { min: 0, max: 20, fallback: defaults.count });
-    const model = String(raw.model || '').trim().slice(0, 120) || null;
-    const capabilities = classroomCapabilities(modality, model);
-    // 数量为 0 的框体按宽松模式处理：只做兜底，不因历史默认值（如 480p）报错。
-    const lenient = count === 0;
-    // 留空时回落到该模型支持的第一个取值，避免默认值恰好不被该模型支持。
-    const submittedRatio = normalizeAspectRatio(raw.aspectRatio);
-    const aspectRatio = submittedRatio
-      ? pickCapability(submittedRatio, capabilities.aspectRatios, `${key} 生成比例`, submittedRatio, { lenient })
-      : (capabilities.aspectRatios[0] || defaults.aspectRatio);
-    const submittedResolution = String(raw.resolution ?? '').trim();
-    const resolution = submittedResolution
-      ? pickCapability(submittedResolution, capabilities.resolutions, `${key} 清晰度`, submittedResolution, { lenient })
-      : (capabilities.resolutions[0] || defaults.resolution);
-    if (key === 'video') {
-      const submittedDuration = raw.durationSeconds === undefined || raw.durationSeconds === '' ? null : integer(raw.durationSeconds, '视频时长', { min: 1, max: 600 });
-      let durationSeconds = submittedDuration === null ? (capabilities.durations[0] || defaults.durationSeconds) : submittedDuration;
-      if (capabilities.durations.length && !capabilities.durations.includes(durationSeconds)) {
-        if (lenient) durationSeconds = capabilities.durations[0];
-        else throw errors.badRequest(`视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`, 'INVALID_GENERATION_CONFIG');
-      }
-      // 模型不支持生成音频时，勾选也按关闭处理。
-      return { count, aspectRatio, resolution, durationSeconds, model, audio: raw.audio === true && capabilities.audio === true };
-    }
-    return { count, aspectRatio, resolution, model };
-  };
-  const normalizeTextSlot = () => {
-    const raw = source.text && typeof source.text === 'object' ? source.text : {};
-    return {
-      count: integer(raw.count, 'text 生成框体数量', { min: 0, max: 20, fallback: 0 }),
-      model: String(raw.model || '').trim().slice(0, 120) || null,
-    };
-  };
-  const result = {
-    version: 1,
-    generationSlots: {
-      text: normalizeTextSlot(),
-      image: normalizeSlot('image', 'IMAGE', { count: 0, aspectRatio: '16:9', resolution: '1k' }),
-      video: normalizeSlot('video', 'VIDEO', { count: 0, aspectRatio: '16:9', resolution: '480p', durationSeconds: 5 }),
-    },
-  };
+  let generationBoxes;
+  try {
+    generationBoxes = normalizeGenerationBoxes(input.generationBoxes, { strict: true });
+  } catch (error) {
+    if (error?.code === 'INVALID_GENERATION_CONFIG') throw errors.badRequest(error.message, 'INVALID_GENERATION_CONFIG');
+    throw error;
+  }
+  const result = { version: 2, generationBoxes };
   if (input.vibeCoding && typeof input.vibeCoding === 'object') result.vibeCoding = input.vibeCoding;
   return result;
 }
@@ -203,16 +151,12 @@ function validateSeriesForPublishing(seriesId) {
       return;
     }
     const config = normalizeClassroomConfig(parseJson(lesson.classroom_config, {}));
-    const canvas = lessonCanvasConfig(lesson.id);
-    const imageCount = config.generationSlots.image.count;
-    const videoCount = config.generationSlots.video.count;
-    canvas.materialGroups.forEach((group) => (group.materials || []).forEach((material) => {
-      const action = material.snapshot?.insertAction;
-      if (!action || !action.targetNodeType) return;
-      const limit = action.targetNodeType === 'image' ? imageCount : action.targetNodeType === 'video' ? videoCount : 1;
-      const index = Number(action.targetIndex || 0);
-      if (!Number.isInteger(index) || index < 0 || index >= limit) throw errors.badRequest(`课时「${lesson.title}」存在未绑定到有效框体的素材「${material.title}」`, 'INVALID_MATERIAL_BINDING');
-    }));
+    // 框体配置必须落在本课开放的能力里，否则学生端看不到入口、配了也没用。
+    const capabilities = lessonCanvasConfig(lesson.id).capabilities || [];
+    config.generationBoxes.forEach((box) => {
+      const capability = String(box.modality || '').toLowerCase();
+      if (!capabilities.includes(capability)) throw errors.badRequest(`课时「${lesson.title}」的生成框体「${box.title}」类型是 ${box.modality}，但本课没有开放该能力`, 'GENERATION_BOX_CAPABILITY_MISMATCH');
+    });
   });
 }
 function accessibleSeries(currentOrgId, seriesId) {
@@ -1241,7 +1185,6 @@ export {
   classMemberships,
   classProgressRows,
   classSessionRows,
-  classroomCapabilities,
   contactPayload,
   createMember,
   csvDocument,
@@ -1278,7 +1221,6 @@ export {
   organizationRow,
   packageSnapshot,
   packageWithSeatUsage,
-  pickCapability,
   platformAdminPermissions,
   platformIssuerName,
   platformUserFilters,

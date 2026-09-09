@@ -99,13 +99,13 @@ try {
   const lesson = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
   db.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
   db.close();
-  const badLesson = await api(`/api/admin/course-lessons/${lesson.id}`, { method: 'PUT', token: rootToken, body: { deliveryMode: 'CANVAS', capabilities: ['video'], classroomConfig: { version: 1, generationSlots: { video: { count: 1, model: 'minimax-h3-i2v', aspectRatio: '16:9', resolution: '1080P', durationSeconds: 20 } } } } });
+  const badLesson = await api(`/api/admin/course-lessons/${lesson.id}`, { method: 'PUT', token: rootToken, body: { deliveryMode: 'CANVAS', capabilities: ['video'], classroomConfig: { version: 2, generationBoxes: [{ id: 'box-video-1', title: '素材1', modality: 'VIDEO', model: 'minimax-h3-i2v', aspectRatio: '16:9', resolution: '1080P', durationSeconds: 20 }] } } });
   assert.equal(badLesson.status, 400, `1080P 不在已声明清晰度里，应被拒，实际 ${badLesson.status}`);
   assert.equal(badLesson.data?.error?.code, 'INVALID_GENERATION_CONFIG', '错误码应为 INVALID_GENERATION_CONFIG');
 
-  const goodLesson = await api(`/api/admin/course-lessons/${lesson.id}`, { method: 'PUT', token: rootToken, body: { deliveryMode: 'CANVAS', capabilities: ['video'], classroomConfig: { version: 1, generationSlots: { video: { count: 1, model: 'minimax-h3-i2v', aspectRatio: '16:9', resolution: '768P', durationSeconds: 15 } } } } });
+  const goodLesson = await api(`/api/admin/course-lessons/${lesson.id}`, { method: 'PUT', token: rootToken, body: { deliveryMode: 'CANVAS', capabilities: ['video'], classroomConfig: { version: 2, generationBoxes: [{ id: 'box-video-1', title: '素材1', modality: 'VIDEO', model: 'minimax-h3-i2v', aspectRatio: '16:9', resolution: '768P', durationSeconds: 15 }] } } });
   assert.equal(goodLesson.status, 200, `声明范围内的取值应能保存: ${JSON.stringify(goodLesson.data)}`);
-  const lessonSlot = goodLesson.data.lessons.find((item) => item.id === lesson.id).classroomConfig.generationSlots.video;
+  const lessonSlot = goodLesson.data.lessons.find((item) => item.id === lesson.id).classroomConfig.generationBoxes[0];
   assert.equal(lessonSlot.resolution, '768P', '课时应保存所选的清晰度');
   assert.equal(lessonSlot.durationSeconds, 15, '课时应保存所选的时长');
 

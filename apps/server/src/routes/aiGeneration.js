@@ -62,11 +62,44 @@ function assertCapability(modality, session, pkg) {
 }
 
 /**
+ * 课时生成框体：每个框体单独配模型与生成参数，学生端按顺序逐个生成、每个框体只能生成一次。
+ * 本课该模态没有配框体时不限制（未配置=不限制），配了就必须从框体发起，否则参数与计数都无从对应。
+ */
+export function resolveLessonGenerationBox(context, modality, boxId) {
+  const key = String(modality || '').toUpperCase();
+  const boxes = Array.isArray(context?.lesson?.generationBoxes) ? context.lesson.generationBoxes : [];
+  const wanted = String(boxId || '').trim();
+  if (wanted) {
+    const box = boxes.find((item) => item.id === wanted);
+    if (!box) throw errors.badRequest('生成框体不存在或已不属于本课', 'GENERATION_BOX_NOT_FOUND');
+    if (box.modality !== key) throw errors.badRequest('生成框体类型与请求的素材类型不一致', 'GENERATION_BOX_MODALITY_MISMATCH');
+    return box;
+  }
+  if (!boxes.some((box) => box.modality === key)) return null;
+  throw errors.forbidden('请从课时配置的生成框体发起生成', 'GENERATION_BOX_REQUIRED');
+}
+
+// 每个框体只能成功生成一次；同一框体的在途任务也算占用（并发点击不会重复扣费）。
+function assertBoxNotGenerated({ projectId, boxId, excludeJobId = '' }) {
+  if (!projectId || !boxId) return;
+  const inflight = count("SELECT COUNT(*) n FROM generation_jobs WHERE project_id=? AND box_id=? AND status IN ('QUEUED','RUNNING') AND id != ?", [projectId, boxId, excludeJobId || '']);
+  const generated = count('SELECT COUNT(*) n FROM media_assets asset JOIN generation_jobs job ON job.id=asset.job_id WHERE asset.project_id=? AND job.box_id=?', [projectId, boxId]);
+  if (Number(inflight || 0) + Number(generated || 0) > 0) throw errors.forbidden('该生成框体已经生成过了', 'GENERATION_BOX_USED');
+}
+
+/** 框体占用守卫：供生成链路与扣费类端点共用，保证同一套判断。 */
+export function assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId = '' }) {
+  const box = resolveLessonGenerationBox(context, modality, boxId);
+  if (box) assertBoxNotGenerated({ projectId, boxId: box.id, excludeJobId });
+  return box;
+}
+
+/**
  * 调用上游之前的预检：课时能力 / 课堂管控 / 套餐能力任一不满足就直接拒绝。
  * 否则会先花钱调一次上游、再在结算时失败并进入重试，重复消耗额度。
  * 结算时仍会再校验一次（异步任务等待期间状态可能变化）。
  */
-function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, requiresFirstFrame = false, firstFrameUrl = '' }) {
+function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', requiresFirstFrame = false, firstFrameUrl = '' }) {
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
@@ -80,15 +113,8 @@ function assertGenerationPreflight({ user, orgId, context, modality, projectId =
   if (requiresFirstFrame && !firstFrameUrl) {
     throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
   }
-  // 框体数量上限同样属于业务拦截：入队前就能判断，不必等结算
-  if (projectId) {
-    const slotKey = String(modality || '').toUpperCase() === 'TEXT' ? 'text' : String(modality || '').toUpperCase() === 'IMAGE' ? 'image' : String(modality || '').toUpperCase() === 'VIDEO' ? 'video' : null;
-    const slotLimit = slotKey ? Number(context.lesson?.classroomConfig?.generationSlots?.[slotKey]?.count || 0) : 0;
-    if (slotLimit > 0) {
-      const generatedCount = Number(count('SELECT COUNT(*) AS n FROM media_assets WHERE project_id=? AND modality=?', [projectId, modality]) || 0);
-      if (generatedCount >= slotLimit) throw errors.forbidden('本课已生成素材数量达到上限', 'LESSON_GENERATION_SLOT_LIMIT');
-    }
-  }
+  // 框体占用同样属于业务拦截：入队前就能判断，不必等结算
+  if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
 }
 
 function normalizeAsset(value) {
@@ -107,6 +133,7 @@ function normalizeJob(value, { assets = [] } = {}) {
     id: value.id, projectId: value.project_id, projectTitle: value.project_title || null,
     courseLessonId: value.course_lesson_id || null, courseLessonTitle: value.lesson_title || null,
     className: value.class_name || null, modality: value.modality,
+    boxId: value.box_id || null,
     modalityLabel: MODALITY_LABELS[value.modality] || value.modality,
     provider: value.provider, model: value.model, prompt: value.prompt, status: value.status,
     creditsCharged: Number(value.credits_charged || 0), retryOfJobId: value.retry_of_job_id || null, retryCount: Number(value.retry_count || 0), maxRetries: Number(value.max_retries ?? ASYNC_GENERATION_MAX_RETRIES),
@@ -147,13 +174,13 @@ function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   return asset ? String(asset.asset_url) : '';
 }
 
-function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null }) {
+function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, boxId = '' }) {
   const jobId = id('generation');
   const now = nowIso();
   transaction(() => q(`INSERT INTO generation_jobs(
-       id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl]));
+       id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url,box_id
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl, boxId || null]));
     if (startImmediately) {
       assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
       q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
@@ -169,7 +196,7 @@ function queueItemFromJob(jobId) {
   const auth = { user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org: row('SELECT * FROM organizations WHERE id=?', [job.org_id]) };
   const project = ownProject(auth, job.project_id);
   if (!project) return null;
-  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', requestContext: null };
+  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', boxId: job.box_id || '', requestContext: null };
 }
 
 function enqueuePersistedJob(jobId, delayMs = 0) {
@@ -233,12 +260,9 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     if (lessonCapability && !(freshContext.lesson?.capabilities || []).includes(lessonCapability)) {
       throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
     }
-    const generationSlots = freshContext.lesson?.classroomConfig?.generationSlots || {};
-    const slotLimit = modality === 'TEXT' ? Number(generationSlots.text?.count || 0) : modality === 'IMAGE' ? Number(generationSlots.image?.count || 0) : modality === 'VIDEO' ? Number(generationSlots.video?.count || 0) : 0;
-    if (slotLimit > 0) {
-      const generatedCount = Number(count('SELECT COUNT(*) AS n FROM media_assets WHERE project_id=? AND modality=?', [project.id, modality]) || 0);
-      if (generatedCount >= slotLimit) throw errors.forbidden('本课已生成素材数量达到上限', 'LESSON_GENERATION_SLOT_LIMIT');
-    }
+    // 框体占用在结算时再校验一次：等待期间同一框体可能已被另一次生成占用。
+    const settledBoxId = row('SELECT box_id FROM generation_jobs WHERE id=?', [jobId])?.box_id || '';
+    if (settledBoxId) assertBoxNotGenerated({ projectId: project.id, boxId: settledBoxId, excludeJobId: jobId });
     const aiLimit = user.ai_credit_limit == null ? null : Number(user.ai_credit_limit);
     if (aiLimit !== null && Number(user.ai_credits_used || 0) + 1 > aiLimit) throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
     const allowance = Number(user.monthly_credit_allowance || 0) + Number(user.monthly_bonus_credits || 0) + Number(user.month_period_boost_credits || 0);
@@ -270,16 +294,6 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
   });
 }
 
-// 课时可为每个模态指定具体模型；未指定时用渠道默认模型。
-// 注意：generationSlots 的键是小写的 text / image / video，不能用模态名直接取。
-function lessonModelFor(context, modality) {
-  const key = String(modality || '').toUpperCase();
-  const slotKey = key === 'TEXT' ? 'text' : key === 'IMAGE' ? 'image' : key === 'VIDEO' ? 'video' : null;
-  if (!slotKey) return '';
-  const slots = context?.lesson?.classroomConfig?.generationSlots || {};
-  return String((slots[slotKey] || {}).model || '').trim();
-}
-
 export function providerSelectionForModality(policy, modality, modelOverride = '') {
   const channelId = policy?.modalityChannels?.[String(modality || '').toUpperCase()];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
@@ -290,26 +304,27 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
 }
 
 /**
- * 生成参数只以「课时配置」为准：比例/清晰度/时长/音频由教师在课时里选定，
- * 客户端提交的取值一律不采信，避免绕过课时限制。课时没配时回落到该模型能力的第一项。
+ * 生成参数只以「课时配置的生成框体」为准：比例/清晰度/时长/音频由教师逐框体选定，
+ * 客户端提交的取值一律不采信，避免绕过课时限制。框体没配（或本课没配该模态框体）时回落到该模型能力的第一项。
+ * 图生视频：框体挂了预置素材就直接当首帧，学生不必自己再连一张图。
  */
-export function generationOptionsFor({ context, modality, policy, selection, firstFrameUrl = '' }) {
+export function generationOptionsFor({ context, modality, policy, selection, box = null, firstFrameUrl = '' }) {
   const key = String(modality || '').toUpperCase();
-  const slotKey = key === 'IMAGE' ? 'image' : key === 'VIDEO' ? 'video' : null;
-  if (!slotKey) return {};
-  const slot = (context?.lesson?.classroomConfig?.generationSlots || {})[slotKey] || {};
+  if (key !== 'IMAGE' && key !== 'VIDEO') return {};
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;
   const capabilities = effectiveCapabilities(channel, key, selection?.model);
+  const target = box || resolveLessonGenerationBox(context, key, '');
   const options = {
-    aspectRatio: String(slot.aspectRatio || '').trim() || capabilities.aspectRatios[0] || '',
-    resolution: String(slot.resolution || '').trim() || capabilities.resolutions[0] || '',
+    aspectRatio: String(target?.aspectRatio || '').trim() || capabilities.aspectRatios[0] || '',
+    resolution: String(target?.resolution || '').trim() || capabilities.resolutions[0] || '',
   };
-  if (slotKey === 'video') {
-    options.durationSeconds = Number(slot.durationSeconds) || capabilities.durations[0] || 5;
-    // 模型不支持生成音频时，即使课时勾选了也不发送。
-    options.audio = slot.audio === true && capabilities.audio === true;
+  if (key === 'VIDEO') {
+    options.durationSeconds = Number(target?.durationSeconds) || capabilities.durations[0] || 5;
+    // 模型不支持生成音频时，即使框体勾选了也不发送。
+    options.audio = target?.audio === true && capabilities.audio === true;
     options.inputFrame = capabilities.inputFrame || 'NONE';
-    if (options.inputFrame === 'FIRST' && firstFrameUrl) options.firstFrameUrl = firstFrameUrl;
+    const presetFirstFrame = options.inputFrame === 'FIRST' ? String(target?.assetUrl || '').trim() : '';
+    if (options.inputFrame === 'FIRST' && (firstFrameUrl || presetFirstFrame)) options.firstFrameUrl = firstFrameUrl || presetFirstFrame;
   }
   return options;
 }
@@ -323,19 +338,23 @@ function auditContext(auth, ctx = null) {
   };
 }
 
-export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '' }) {
+export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', boxId = '' }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = getAiProviderPolicy();
   const context = resolveProjectUsageContext(auth.rawUser, project);
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
-  const providerSelection = providerSelectionForModality(policy, modality, lessonModelFor(context, modality));
+  const box = resolveLessonGenerationBox(context, modality, boxId);
+  const providerSelection = providerSelectionForModality(policy, modality, box?.model || '');
   const provider = getGenerationProvider(providerSelection);
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-  const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
-  assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality, requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '' });
-  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null });
+  const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, box, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
+  assertGenerationPreflight({
+    user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
+    boxId: box?.id || '', requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '',
+  });
+  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, boxId: box?.id || '' });
   try {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
@@ -354,7 +373,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
 
 
 async function processAsyncGeneration(item) {
-  const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '' } = item;
+  const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '', boxId = '' } = item;
   const policy = getAiProviderPolicy();
   const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
@@ -366,8 +385,12 @@ async function processAsyncGeneration(item) {
   const context = resolveProjectUsageContext(auth.rawUser, project);
   try {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
-    assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '' });
+    const box = resolveLessonGenerationBox(context, modality, boxId);
+    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, box, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
+    assertGenerationPreflight({
+      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId,
+      requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '',
+    });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
@@ -588,24 +611,25 @@ export async function handleAiGeneration(ctx) {
 
   if (pathname === '/api/ai/center' && method === 'GET') return studentAiCenter(ctx);
   if (pathname === '/api/ai/generations/async' && method === 'POST') {
-    const body = ctx.body || {}; const projectId = String(body.projectId || '').trim(); const prompt = String(body.prompt || '').trim(); const title = String(body.title || '').trim().slice(0, 100); const modality = modalityOf(body.modality);
+    const body = ctx.body || {}; const projectId = String(body.projectId || '').trim(); const prompt = String(body.prompt || '').trim(); const title = String(body.title || '').trim().slice(0, 100); const modality = modalityOf(body.modality); const boxId = String(body.boxId || '').trim().slice(0, 64);
     if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
     const project = ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const policy = getAiProviderPolicy();
     const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
-    const providerSelection = providerSelectionForModality(policy, modality, lessonModelFor(context, modality));
+    const box = resolveLessonGenerationBox(context, modality, boxId);
+    const providerSelection = providerSelectionForModality(policy, modality, box?.model || '');
     const provider = getGenerationProvider(providerSelection);
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-    // 业务预检（平台模态开关 / 课时能力 / 课堂管控 / 框体上限 / 首帧）在入队前拦掉，
+    // 业务预检（平台模态开关 / 课时能力 / 课堂管控 / 框体占用 / 首帧）在入队前拦掉，
     // 别让任务跑一遍上游再失败——与同步路径保持同一套判断。
-    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, firstFrameUrl: resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim()) });
+    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, box, firstFrameUrl: resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim()) });
     assertGenerationPreflight({
-      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
+      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '',
       requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '',
     });
-    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null });
+    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, boxId: box?.id || '' });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }
@@ -629,7 +653,7 @@ export async function handleAiGeneration(ctx) {
     return runGenerationJob({
       auth, project, modality: modalityOf(source.modality), prompt: source.prompt,
       retryOfJobId: source.id, action: 'AI_GENERATION_RETRY', requestContext: ctx,
-      sourceAssetUrl: source.source_asset_url || '',
+      sourceAssetUrl: source.source_asset_url || '', boxId: source.box_id || '',
     });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);
@@ -651,10 +675,11 @@ export async function handleAiGeneration(ctx) {
   const prompt = String(body.prompt || '').trim();
   const title = String(body.title || '').trim().slice(0, 100);
   const modality = modalityOf(body.modality);
+  const boxId = String(body.boxId || '').trim().slice(0, 64);
   if (!projectId || projectId.length > 100) throw errors.badRequest('projectId 必填', 'PROJECT_REQUIRED');
   if (!prompt) throw errors.badRequest('请先写下素材描述', 'GENERATION_PROMPT_REQUIRED');
   if (prompt.length > 2000) throw errors.badRequest('素材描述不能超过 2000 个字符', 'GENERATION_PROMPT_TOO_LONG');
   const project = ownProject(auth, projectId);
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
-  return runGenerationJob({ auth, project, modality, prompt, title, action: 'AI_GENERATION_CREATE', requestContext: ctx });
+  return runGenerationJob({ auth, project, modality, prompt, title, action: 'AI_GENERATION_CREATE', requestContext: ctx, boxId });
 }

@@ -4,7 +4,7 @@
  *
  * 覆盖：
  *  1. 课时只开放 image 能力时，TEXT 生成被 LESSON_CAPABILITY_DISABLED 拦截（且不扣费）
- *  2. 生图框体 count=1 且已生成 1 张时，再次 IMAGE 生成被 LESSON_GENERATION_SLOT_LIMIT 拦截
+ *  2. 生图框体已生成过 1 张时，再次用同一个框体生成被 GENERATION_BOX_USED 拦截
  */
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
@@ -31,14 +31,14 @@ try {
   q("INSERT INTO organizations(id,name,contract_start_at,contract_expires_at,created_at,updated_at) VALUES ('org1','测试机构',?,?,?,?)", [now, now, now, now]);
   q("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,student_usage_scope,billing_package_id,ai_credit_limit,magic_stones,monthly_credit_allowance,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE','HOME_PRACTICE','pkg1',100,100,100,?,?)", [now, now]);
   q("INSERT INTO course_series(id,title,owner_type,org_id,visibility,version,sort,status,created_at,updated_at) VALUES ('series1','测试课包','PLATFORM',NULL,'ALL_ORGS','1.0',1,'PUBLISHED',?,?)", [now, now]);
-  q("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)", [JSON.stringify({ version: 1, generationSlots: { image: { count: 1, aspectRatio: '16:9', size: '1024x576', model: '' }, video: { count: 0, aspectRatio: '16:9', size: '1920x1080', durationSeconds: 5, model: '' } } }), '{}', now, now]);
+  q("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)", [JSON.stringify({ version: 2, generationBoxes: [{ id: 'box-image-1', title: '素材1', modality: 'IMAGE', aspectRatio: '16:9', resolution: '1k', model: '' }] }), '{}', now, now]);
   q("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES ('lesson1','image',?)", [now]);
   q("INSERT INTO classes(id,org_id,name,status,current_session_id,created_at,updated_at) VALUES ('class1','org1','测试班级','ACTIVE',NULL,?,?)", [now, now]);
   q("INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES ('m1','class1','stu1','STUDENT',?)", [now]);
   q("INSERT INTO class_curriculum_items(id,class_id,lesson_id,sort,source_series_id,added_at) VALUES ('ci1','class1','lesson1',1,'series1',?)", [now]);
   q("INSERT INTO student_projects(id,student_id,org_id,class_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES ('proj1','stu1','org1','class1','lesson1','项目','DRAFT',?,?,?)", [now, now, now]);
   q("INSERT INTO billing_packages(id,org_id,name,allow_image,status,created_at,updated_at) VALUES ('pkg1','org1','套餐',1,'ACTIVE',?,?)", [now, now]);
-  q("INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,credits_charged,created_at) VALUES ('job1','org1','stu1','proj1','IMAGE','local-mock','canvas-mock-v1','测试','SUCCEEDED',1,?)", [now]);
+  q("INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,credits_charged,created_at,box_id) VALUES ('job1','org1','stu1','proj1','IMAGE','local-mock','canvas-mock-v1','测试','SUCCEEDED',1,?,'box-image-1')", [now]);
   q("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset1','job1','org1','stu1','proj1','IMAGE','素材','mock://asset',?)", [now]);
 
   const dbUser = row("SELECT * FROM users WHERE id='stu1'");
@@ -48,8 +48,10 @@ try {
   // 场景 1：课时只开放 image，TEXT 生成应被课时能力拦截
   await expectError(() => handleAi(aiCtx({ projectId: 'proj1', modality: 'TEXT', credits: 1 })), 'LESSON_CAPABILITY_DISABLED', 'lesson capability guard');
 
-  // 场景 2：image 框体 count=1 且已生成 1 张，再次生成应被框体上限拦截
-  await expectError(() => handleAi(aiCtx({ projectId: 'proj1', modality: 'IMAGE', credits: 1 })), 'LESSON_GENERATION_SLOT_LIMIT', 'generation slot limit');
+  // 场景 2：同一个生图框体已生成过 1 张，再次生成应被框体占用拦截
+  await expectError(() => handleAi(aiCtx({ projectId: 'proj1', boxId: 'box-image-1', modality: 'IMAGE', credits: 1 })), 'GENERATION_BOX_USED', 'generation box used');
+  // 没带框体 id 时同样拦截：本课配了框体就必须从框体发起
+  await expectError(() => handleAi(aiCtx({ projectId: 'proj1', modality: 'IMAGE', credits: 1 })), 'GENERATION_BOX_REQUIRED', 'generation box required');
 
   // 拦截不产生任何扣费流水（能力/框体拦截均发生在 chargeCreditsInTransaction 之前）
   const spendEntries = row("SELECT COUNT(*) AS n FROM credit_entries WHERE direction='OUT'");

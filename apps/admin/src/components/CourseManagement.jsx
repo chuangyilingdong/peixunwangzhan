@@ -13,6 +13,8 @@ const LESSON_CAPABILITY_OPTIONS = [
 const MATERIAL_TYPE_OPTIONS = [
   ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['NOTE', '文字说明'], ['PROMPT', '提示词'],
 ];
+// 生成框体只支持这三种模态；每个框体单独选模型与参数。
+const GENERATION_BOX_MODALITY_OPTIONS = [['TEXT', 'AI 文字'], ['IMAGE', 'AI 生图'], ['VIDEO', 'AI 生视频']];
 const TEACHING_TYPE_OPTIONS = [
   ['VIDEO', '视频'], ['PPT', 'PPT'], ['PDF', 'PDF'], ['WORD', 'Word'], ['EXCEL', 'Excel'], ['FILE', '其他文件'],
 ];
@@ -24,32 +26,33 @@ function valueOptionsFor(options, current) {
 }
 let uidSeed = 0;
 function nextUid() { uidSeed += 1; return `tmp-${Date.now().toString(36)}-${uidSeed}`; }
-const defaultClassroomConfig = {
-  version: 1,
-  generationSlots: {
-    text: { count: 0, model: '' },
-    image: { count: 0, aspectRatio: '16:9', resolution: '1k', model: '' },
-    video: { count: 0, aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, model: '', audio: false },
-  },
-};
+const defaultClassroomConfig = { version: 2, generationBoxes: [] };
 const emptyCourseForm = {
   title: '', description: '', coverImageUrl: '', coverAssetId: '', priceYuan: '', version: '1.0',
   estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'ALL_ORGS', deliveryMode: 'CANVAS',
   difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '',
 };
 
+// 框体按顺序保存：每个框体自己的模型与参数，学生端就按这个顺序逐个生成。
 function classroomConfigFor(lesson, edit) {
   const value = edit.classroomConfig ?? lesson.classroomConfig ?? {};
+  const boxes = Array.isArray(value.generationBoxes) ? value.generationBoxes : [];
   return {
     ...defaultClassroomConfig,
     ...value,
-    generationSlots: {
-      ...defaultClassroomConfig.generationSlots,
-      ...(value.generationSlots || {}),
-      text: { ...defaultClassroomConfig.generationSlots.text, ...(value.generationSlots?.text || {}) },
-      image: { ...defaultClassroomConfig.generationSlots.image, ...(value.generationSlots?.image || {}) },
-      video: { ...defaultClassroomConfig.generationSlots.video, ...(value.generationSlots?.video || {}) },
-    },
+    generationBoxes: boxes.map((box, index) => ({
+      uid: box.uid || box.id || `existing-${index}`,
+      id: box.id || '',
+      title: box.title || `素材${index + 1}`,
+      modality: String(box.modality || 'TEXT').toUpperCase(),
+      model: box.model || '',
+      aspectRatio: box.aspectRatio || '',
+      resolution: box.resolution || '',
+      durationSeconds: box.durationSeconds ?? 5,
+      audio: box.audio === true,
+      prompt: box.prompt || '',
+      assetUrl: box.assetUrl || '',
+    })),
   };
 }
 
@@ -150,39 +153,73 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
     }));
   }
   const removeMaterial = (groupIndex, materialIndex) => updateGroups((list) => list.map((group, i) => i !== groupIndex ? group : { ...group, materials: (group.materials || []).filter((_, j) => j !== materialIndex) }));
-  function updateSlot(type, patch) {
+  // 生成框体：按顺序保存，每个框体单独配模型与参数。
+  function updateBoxes(mapper) {
     onChange((current) => {
       const config = classroomConfigFor(lesson, current);
-      return { ...current, classroomConfig: { ...config, generationSlots: { ...config.generationSlots, [type]: { ...config.generationSlots[type], ...patch } } } };
+      return { ...current, classroomConfig: { ...config, generationBoxes: mapper(config.generationBoxes) } };
+    });
+  }
+  const updateBox = (index, patch) => updateBoxes((boxes) => boxes.map((box, i) => i === index ? { ...box, ...patch } : box));
+  const removeBox = (index) => updateBoxes((boxes) => boxes.filter((_, i) => i !== index));
+  const moveBox = (index, delta) => updateBoxes((boxes) => {
+    const target = index + delta;
+    if (target < 0 || target >= boxes.length) return boxes;
+    const next = [...boxes];
+    const [moved] = next.splice(index, 1);
+    next.splice(target, 0, moved);
+    return next;
+  });
+  function addBox() {
+    const modality = capabilities.includes('image') ? 'IMAGE' : capabilities.includes('video') ? 'VIDEO' : 'TEXT';
+    const caps = capabilitiesFor(modality, '');
+    updateBoxes((boxes) => [...boxes, {
+      uid: nextUid(), id: '', title: `素材${boxes.length + 1}`, modality, model: '',
+      aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '',
+      durationSeconds: caps.durations[0] || 5, audio: false, prompt: '', assetUrl: '',
+    }]);
+  }
+  // 换模态后，把该模态不支持的参数重置为该模型能力的第一项。
+  function changeBoxModality(index, modality) {
+    const caps = capabilitiesFor(modality, '');
+    updateBox(index, {
+      modality, model: '',
+      aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '',
+      durationSeconds: caps.durations[0] || 5, audio: false,
     });
   }
   // 换模型后，把新模型不支持的比例/清晰度/时长重置为它的第一个可选项。
-  function changeModel(type, model) {
-    // 文字框体没有比例/清晰度/时长，换模型只改模型本身
-    if (type === 'text') { updateSlot('text', { model }); return; }
-    const caps = capabilitiesFor(type === 'image' ? 'IMAGE' : 'VIDEO', model);
-    const slot = classroomConfig.generationSlots[type];
+  function changeBoxModel(index, model) {
+    const box = classroomConfig.generationBoxes[index];
+    if (!box) return;
+    const modality = box.modality;
+    if (modality === 'TEXT') { updateBox(index, { model }); return; }
+    const caps = capabilitiesFor(modality, model);
     const patch = { model };
-    if (!caps.aspectRatios.includes(slot.aspectRatio)) patch.aspectRatio = caps.aspectRatios[0] || slot.aspectRatio;
-    if (!caps.resolutions.includes(slot.resolution)) patch.resolution = caps.resolutions[0] || slot.resolution;
-    if (type === 'video') {
-      if (!caps.durations.includes(Number(slot.durationSeconds))) patch.durationSeconds = caps.durations[0] || slot.durationSeconds;
+    if (!caps.aspectRatios.includes(box.aspectRatio)) patch.aspectRatio = caps.aspectRatios[0] || box.aspectRatio;
+    if (!caps.resolutions.includes(box.resolution)) patch.resolution = caps.resolutions[0] || box.resolution;
+    if (modality === 'VIDEO') {
+      if (!caps.durations.includes(Number(box.durationSeconds))) patch.durationSeconds = caps.durations[0] || box.durationSeconds;
       if (!caps.audio) patch.audio = false;
     }
-    updateSlot(type, patch);
+    updateBox(index, patch);
   }
-  // 能力与框体联动：取消勾选 AI 生图 / AI 生视频时把对应框体数量清零，
-  // 否则学生端仍会看到无法生成的框体。
+  async function uploadBoxAsset(index, file) {
+    if (!file) return;
+    const key = `box:${index}`; setUploading(key);
+    try {
+      const asset = await api.upload('admin/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' });
+      const assetUrl = asset?.id ? `/api/student/file-assets/${asset.id}/download` : '';
+      if (!assetUrl) throw new Error('上传成功但未返回文件标识');
+      updateBox(index, { assetUrl });
+    } catch (error) { window.alert(error.message); } finally { setUploading(''); }
+  }
+  // 能力与框体联动：取消勾选能力时不再清空框体（避免误删配置），框体列表里会标注「学生看不到」。
   function toggleCapability(value, checked) {
     onChange((current) => {
       const caps = current.capabilities ?? lesson.capabilities ?? ['text'];
       const next = checked ? [...new Set([...caps, value])] : caps.filter((item) => item !== value);
-      const config = classroomConfigFor(lesson, current);
-      const slots = { ...config.generationSlots };
-      if (!next.includes('image')) slots.image = { ...slots.image, count: 0 };
-      if (!next.includes('video')) slots.video = { ...slots.video, count: 0 };
-      if (!next.includes('text')) slots.text = { ...slots.text, count: 0 };
-      return { ...current, capabilities: next, classroomConfig: { ...config, generationSlots: slots } };
+      return { ...current, capabilities: next };
     });
   }
   async function uploadMaterial(groupIndex, materialIndex, file) {
@@ -203,14 +240,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   }));
   const addGroup = () => updateGroups((list) => [...list, { uid: nextUid(), title: `素材${list.length + 1}`, materials: [] }]);
 
-  const textSlot = classroomConfig.generationSlots.text;
-  const imageSlot = classroomConfig.generationSlots.image;
-  const videoSlot = classroomConfig.generationSlots.video;
-  const imageCapabilities = capabilitiesFor('IMAGE', imageSlot.model);
-  const videoCapabilities = capabilitiesFor('VIDEO', videoSlot.model);
-  const showText = capabilities.includes('text');
-  const showImage = capabilities.includes('image');
-  const showVideo = capabilities.includes('video');
+  const boxes = classroomConfig.generationBoxes;
 
   return <div className="lesson-canvas-config-editor">
     <label>课堂类型<select value={deliveryMode} onChange={(event) => update({ deliveryMode: event.target.value })}><option value="CANVAS">课堂画布</option><option value="VIBECODING">VibeCoding 课堂</option></select></label>
@@ -228,13 +258,20 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
         </div>)}
         {!groups.length && <p className="muted">还没有画布素材。学生进入课时后，可在左侧素材面板点击加入画布；提示词素材点击时会让学生选择插入哪个框体。</p>}
       </div>
-      <div className="lesson-generation-slots"><div className="lesson-config-heading"><strong>本课生成框体限制</strong><span className="muted">选项来自「计费与模型」里所选模型的能力配置；只显示已开放的能力</span></div>
-        {showText ? <div className="form-grid"><label>文字框体数量<input type="number" min="0" max="20" value={textSlot.count} onChange={(event) => updateSlot('text', { count: event.target.value })} /></label><label>文字模型{channelModels('TEXT').length ? <select value={textSlot.model || ''} onChange={(event) => changeModel('text', event.target.value)}><option value="">使用渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={textSlot.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeModel('text', event.target.value)} />}</label></div> : null}
-        {showImage ? <div className="form-grid"><label>生图框体数量<input type="number" min="0" max="20" value={imageSlot.count} onChange={(event) => updateSlot('image', { count: event.target.value })} /></label><label>生图比例<select value={imageSlot.aspectRatio} onChange={(event) => updateSlot('image', { aspectRatio: event.target.value })}>{valueOptionsFor(imageCapabilities.aspectRatios, imageSlot.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>生图清晰度<select value={imageSlot.resolution} onChange={(event) => updateSlot('image', { resolution: event.target.value })}>{valueOptionsFor(imageCapabilities.resolutions, imageSlot.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>生图模型{channelModels('IMAGE').length ? <select value={imageSlot.model || ''} onChange={(event) => changeModel('image', event.target.value)}><option value="">使用渠道默认模型</option>{channelModels('IMAGE').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={imageSlot.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeModel('image', event.target.value)} />}</label></div> : null}
-        {showImage && !imageCapabilities.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「计费与模型」里填写。</p> : null}
-        {showVideo ? <div className="form-grid"><label>生视频框体数量<input type="number" min="0" max="20" value={videoSlot.count} onChange={(event) => updateSlot('video', { count: event.target.value })} /></label><label>生视频比例<select value={videoSlot.aspectRatio} onChange={(event) => updateSlot('video', { aspectRatio: event.target.value })}>{valueOptionsFor(videoCapabilities.aspectRatios, videoSlot.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>生视频清晰度<select value={videoSlot.resolution} onChange={(event) => updateSlot('video', { resolution: event.target.value })}>{valueOptionsFor(videoCapabilities.resolutions, videoSlot.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>单个视频时长（秒）<select value={String(videoSlot.durationSeconds)} onChange={(event) => updateSlot('video', { durationSeconds: Number(event.target.value) })}>{valueOptionsFor(videoCapabilities.durations.map(String), String(videoSlot.durationSeconds)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label><label>生视频模型{channelModels('VIDEO').length ? <select value={videoSlot.model || ''} onChange={(event) => changeModel('video', event.target.value)}><option value="">使用渠道默认模型</option>{channelModels('VIDEO').map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={videoSlot.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeModel('video', event.target.value)} />}</label><label className="checkbox-label"><input type="checkbox" checked={videoSlot.audio === true} disabled={!videoCapabilities.audio} onChange={(event) => updateSlot('video', { audio: event.target.checked })} />生成音频{videoCapabilities.audio ? '' : '（当前模型不支持）'}</label></div> : null}
-        {showVideo && !videoCapabilities.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「计费与模型」里填写。</p> : null}
-        {!showText && !showImage && !showVideo ? <p className="muted">当前未开放 AI 文字 / 生图 / 生视频，学生端不会出现生成框体。勾选上方的能力后即可配置数量、比例、清晰度、时长和模型。</p> : null}
+      <div className="lesson-generation-slots"><div className="lesson-config-heading"><strong>本课生成框体</strong><button type="button" className="text-button" onClick={addBox}>＋框体</button><span className="muted">每个框体单独选模型与参数，学生端按顺序生成、每个框体只能生成一次</span></div>
+        {boxes.map((box, index) => { const modality = box.modality; const slotType = String(modality || '').toLowerCase(); const capabilityLabel = slotType === 'image' ? 'AI 生图' : slotType === 'video' ? 'AI 生视频' : 'AI 文字'; const caps = capabilitiesFor(modality, box.model); const uploadingKey = `box:${index}`; return <div className="lesson-material-item-editor" key={box.uid || box.id || `box-${index}`}>
+          <div className="lesson-config-row"><input value={box.title || ''} placeholder={`素材${index + 1}`} onChange={(event) => updateBox(index, { title: event.target.value })} /><select value={modality} onChange={(event) => changeBoxModality(index, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="text-button" disabled={index === 0} onClick={() => moveBox(index, -1)}>上移</button><button type="button" className="text-button" disabled={index === boxes.length - 1} onClick={() => moveBox(index, 1)}>下移</button><button type="button" className="text-button danger-text" onClick={() => removeBox(index)}>删除</button></div>
+          {capabilities.includes(slotType) ? null : <p className="muted">本课没有开放「{capabilityLabel}」能力，学生看不到这个框体；勾选上方能力后才会出现。</p>}
+          <div className="form-grid">
+            <label>模型{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(index, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(index, event.target.value)} />}</label>
+            {modality !== 'TEXT' ? <><label>比例<select value={box.aspectRatio} onChange={(event) => updateBox(index, { aspectRatio: event.target.value })}>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>清晰度<select value={box.resolution} onChange={(event) => updateBox(index, { resolution: event.target.value })}>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label></> : null}
+            {modality === 'VIDEO' ? <><label>时长（秒）<select value={String(box.durationSeconds)} onChange={(event) => updateBox(index, { durationSeconds: Number(event.target.value) })}>{valueOptionsFor(caps.durations.map(String), String(box.durationSeconds)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label><label className="checkbox-label"><input type="checkbox" checked={box.audio === true} disabled={!caps.audio} onChange={(event) => updateBox(index, { audio: event.target.checked })} />生成音频{caps.audio ? '' : '（当前模型不支持）'}</label></> : null}
+          </div>
+          {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「计费与模型」里填写。</p> : null}
+          <textarea rows={2} value={box.prompt || ''} placeholder="平台预填提示词（学生加入画布时会自动填进框体，可以改）" onChange={(event) => updateBox(index, { prompt: event.target.value })} />
+          <div className="lesson-config-row"><input value={box.assetUrl || ''} placeholder={modality === 'VIDEO' ? '预置首帧图地址（图生视频模型直接用）' : '预置素材地址（可选）'} onChange={(event) => updateBox(index, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === uploadingKey ? '上传中…' : '上传素材'}<input type="file" accept="image/*" disabled={uploading === uploadingKey} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadBoxAsset(index, file); }} /></label></div>
+        </div>; })}
+        {!boxes.length ? <p className="muted">还没有生成框体。学生端「素材」面板会按这里的顺序逐个列出：点击后加入画布生成，每个框体只能生成一次。</p> : null}
       </div>
     </>}
     <LessonTeachingEditor api={api} lesson={lesson} edit={edit} onChange={onChange} />
@@ -728,7 +765,7 @@ function CourseDetail({ api, course, onBack }) {
               <td>{lesson.deliveryMode === 'VIBECODING' ? <span className="status warning">VibeCoding</span> : '课堂画布'}</td>
               <td><Status value={lesson.status} /></td>
               <td><span className="tag-list">{(lesson.capabilities || []).map((cap) => <span key={cap} className="tag">{cap}</span>)}</span></td>
-              <td className="muted">{(lesson.materialGroups || []).length} 组 · 图 {lesson.generationSlots?.image?.count || 0} / 视频 {lesson.generationSlots?.video?.count || 0}</td>
+              <td className="muted">{(lesson.materialGroups || []).length} 组 · 框体 {(lesson.generationBoxes || []).length} 个</td>
               <td><div className="row-actions" onClick={(event) => event.stopPropagation()}>
                 <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, -1)}>上移</button>
                 <button className="text-button" disabled={busy} onClick={() => moveLesson(lesson, 1)}>下移</button>
