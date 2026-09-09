@@ -18,7 +18,7 @@ import {
 } from '../../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../../services/domainState.js';
-import { WEBSITE_CONTENT_DEFAULTS, WEBSITE_CONTENT_KEYS, websiteContentDefault } from '../../services/websiteContentDefaults.js';
+import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import {
   LEGAL_POLICY_VERSION,
   MATERIAL_CATEGORIES,
@@ -71,7 +71,6 @@ import {
   validateMaterialBody,
   validateRoles,
   validateTemplateBody,
-  websiteContentDefaultEntry,
   websiteContentKey,
   websiteContentRevisions,
   websiteContentValue,
@@ -85,26 +84,13 @@ export async function handleAdminCommunication(ctx) {
   const websiteAction = pathname.match(/^\/api\/admin\/website-content\/([A-Za-z0-9_]+)\/(publish|rollback)$/);
   if (pathname === '/api/admin/website-content' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const items = rows('SELECT * FROM website_contents ORDER BY content_key').map((item) => normalizeWebsiteContent(item, true));
-    // 有内置默认、但库里还没行的区块（如 COURSES）也要出现在列表里，运营才点得进去
-    const existing = new Set(items.map((item) => item.key));
-    for (const key of Object.keys(WEBSITE_CONTENT_DEFAULTS)) {
-      if (existing.has(key)) continue;
-      const fallback = websiteContentDefaultEntry(key);
-      if (fallback) items.push(fallback);
-    }
-    items.sort((left, right) => left.key.localeCompare(right.key));
-    return { items };
+    return { items: rows('SELECT * FROM website_contents ORDER BY content_key').map((item) => normalizeWebsiteContent(item, true)) };
   }
   if (websiteDraft && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const key = websiteContentKey(websiteDraft[1]);
     const item = row('SELECT * FROM website_contents WHERE content_key=?', [key]);
-    if (!item) {
-      const fallback = websiteContentDefaultEntry(key);
-      if (fallback) return { ...fallback, publishedContent: null, revisions: [] };
-      throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
-    }
+    if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
     return { ...normalizeWebsiteContent(item, true), publishedContent: parseJson(item.published_content, null), revisions: websiteContentRevisions(key) };
   }
   if (websiteDraft && method === 'PUT') {

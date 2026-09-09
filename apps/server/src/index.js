@@ -22,7 +22,7 @@ const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const PUBLIC_SITE_URL = String(process.env.PUBLIC_SITE_URL || 'http://localhost:5176').replace(/\/$/, '');
 const INTERNAL_TEST = DEPLOYMENT_MODE === 'internal-test';
 const API_HOST = INTERNAL_TEST ? '127.0.0.1' : String(process.env.API_HOST || '0.0.0.0');
-const PUBLIC_ROUTES = ['/', '/marketplace', '/courses', '/org', '/works', '/handbook', '/compare', '/download', '/demo', '/terms', '/privacy', '/minors'];
+const PUBLIC_ROUTES = ['/', '/marketplace', '/org', '/works', '/handbook', '/compare', '/download', '/demo', '/terms', '/privacy', '/minors'];
 
 function sendFileResponse(res, fileResponse, req) {
   const headers = { ...corsHeaders(req, fileResponse.headers || {}) };

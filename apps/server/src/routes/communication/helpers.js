@@ -17,7 +17,7 @@ import {
 } from '../../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../../services/domainState.js';
-import { WEBSITE_CONTENT_DEFAULTS, WEBSITE_CONTENT_KEYS, websiteContentDefault } from '../../services/websiteContentDefaults.js';
+import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 const NOTIFICATION_ROLES = new Set(['ORG_ADMIN', 'TEACHER', 'STUDENT']);
 const NOTIFICATION_KINDS = new Set(['NOTICE', 'ANNOUNCEMENT', 'REMINDER']);
 const NOTIFICATION_SCOPES = new Set(['ALL_ORGS', 'ORG_IDS']);
@@ -775,15 +775,6 @@ function websiteContentRevisions(contentKey) {
     changedBy: item.changed_by || null, reason: item.reason || '', createdAt: item.created_at,
   }));
 }
-// 库里还没有该区块时的兜底：内容来自内置默认，管理端可据此预填并保存成草稿
-function websiteContentDefaultEntry(contentKey) {
-  const content = websiteContentDefault(contentKey);
-  if (!content) return null;
-  return {
-    key: contentKey, content, version: 0, status: 'DEFAULT', draftVersion: 0, publishedVersion: null,
-    updatedBy: null, publishedBy: null, createdAt: null, updatedAt: null, publishedAt: null, isDefault: true,
-  };
-}
 
 export {
   LEGAL_POLICY_VERSION,
@@ -827,7 +818,6 @@ export {
   validateMaterialBody,
   validateRoles,
   validateTemplateBody,
-  websiteContentDefaultEntry,
   websiteContentKey,
   websiteContentRevisions,
   websiteContentValue,

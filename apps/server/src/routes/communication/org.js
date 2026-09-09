@@ -18,7 +18,7 @@ import {
 } from '../../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../../services/domainState.js';
-import { WEBSITE_CONTENT_DEFAULTS, WEBSITE_CONTENT_KEYS, websiteContentDefault } from '../../services/websiteContentDefaults.js';
+import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import {
   LEGAL_POLICY_VERSION,
   MATERIAL_CATEGORIES,
@@ -71,7 +71,6 @@ import {
   validateMaterialBody,
   validateRoles,
   validateTemplateBody,
-  websiteContentDefaultEntry,
   websiteContentKey,
   websiteContentRevisions,
   websiteContentValue,

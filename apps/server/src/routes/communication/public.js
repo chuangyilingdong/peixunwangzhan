@@ -18,7 +18,7 @@ import {
 } from '../../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../../services/domainState.js';
-import { WEBSITE_CONTENT_DEFAULTS, WEBSITE_CONTENT_KEYS, websiteContentDefault } from '../../services/websiteContentDefaults.js';
+import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import {
   LEGAL_POLICY_VERSION,
   MATERIAL_CATEGORIES,
@@ -71,7 +71,6 @@ import {
   validateMaterialBody,
   validateRoles,
   validateTemplateBody,
-  websiteContentDefaultEntry,
   websiteContentKey,
   websiteContentRevisions,
   websiteContentValue,
@@ -90,11 +89,8 @@ export function handlePublicCommunication(ctx) {
   if (publicWebsiteKey && method === 'GET') {
     const key = websiteContentKey(publicWebsiteKey[1]);
     const item = row('SELECT * FROM website_contents WHERE content_key=? AND published_content IS NOT NULL', [key]);
-    if (item) return normalizeWebsiteContent(item);
-    // 尚未发布过该区块：回落到内置默认内容，官网不空窗（目前只有 COURSES 走这条）
-    const fallback = websiteContentDefaultEntry(key);
-    if (fallback) return fallback;
-    throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
+    if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
+    return normalizeWebsiteContent(item);
   }
 
   // P5-W08: 公开协议元数据；正文由官网静态页展示，版本由业务 / 法务确认后替换。

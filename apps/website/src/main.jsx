@@ -55,35 +55,8 @@ function LoginPage() {
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
 const INTERNAL_TEST = import.meta.env?.VITE_DEPLOYMENT_MODE === 'internal-test';
 
-const courses=[
-['🪄','小创作家养成计划','AI 创作启蒙',14,'8–16 岁','从认识 AI 魔法师开始，完成绘画、故事、视频、编程与 AI 素养的第一份作品集。'],
-['📖','AI绘本创作大师营','故事与绘本',8,'8–16 岁','从故事种子到新书发布会，做一本属于自己的绘本。'],
-['📜','AI古诗词创意营','语文跨学科',8,'8–16 岁','让古诗活起来：用 AI 画诗、诵诗、做动画。'],
-['🎉','AI节日创意工坊','主题创作',8,'8–16 岁','围绕节日文化做海报、故事、小游戏与祝福视频。'],
-['🚪','选择之门','互动故事',5,'10–16 岁','设计分叉剧情、统一画风与互动选择，完成能玩的故事书。'],
-['🎮','AI游戏设计师训练营','游戏创作',8,'10–16 岁','从游戏策划、角色场景到核心玩法，做出真正可以玩的小游戏。'],
-['🔬','AI科学探险家','科学探究',8,'8–16 岁','探索太空、海洋、恐龙、人体与气象，产出 AI 科学百科。'],
-['🎤','AI小记者训练营','表达与传播',8,'8–16 岁','从选题采访到新闻发布会，完成一份完整的 AI 新闻作品。'],
-['🎬','AI微电影导演训练营','视频创作',8,'10–16 岁','从剧本、分镜到配音、特效，拍出一部属于自己的 AI 微电影。'],
-['🔧','AI智能硬件发明营','Arduino',8,'10–12 岁','用对话写代码，做出会发光、会响、会动、会感知的小发明。'],
-['📟','AI Micro:bit 发明营','MicroPython',8,'10–13 岁','板载超能力加金手指外接，用说话写出 MicroPython。']
-];
 const FALLBACK_WORKS=[['🫧','点泡泡','小游戏','30 秒内点爆所有泡泡，节奏轻快的点击小游戏。'],['🍂','山行 · 杜牧','语文互动','朗读、探索与闯关结合，把古诗学成可玩的互动课。'],['🧩','C++ 代码大冒险','编程启蒙','积木拼程序，边玩边看 3D 执行过程与代码。'],['🧱','我的世界 · 简化版','沙盒创意','浏览器里搭方块世界，保存自己的创意地图。']];
 
-// 课程体系页离线兜底：与 apps/server/src/services/websiteContentDefaults.js 的 COURSES 默认内容保持一致。
-// 正常情况读 CMS（/api/public/website-content/COURSES），接口异常时用这份，保证页面不空窗。
-const COURSE_LESSON_NAMES=['认识 AI 魔法师','创意与提示词','角色与场景设计','让画面动起来','代码魔法实践','作品打磨与发布','同伴分享与互评','结课展示与颁奖'];
-const COURSES_FALLBACK={
-  eyebrow:'课程体系',
-  title:'标准课包，',
-  titleAccent:'马上开课',
-  description:'给教培机构和学校用的课包清单，不是面向个人家长的选课商城。共 11 门、87 节，建议每节 90 分钟，适学 8–16 岁。',
-  durationMinutes:90,
-  stats:[{value:'11',label:'门系统课程'},{value:'87',label:'节精品课时'},{value:'8–16',label:'岁适学年龄'},{value:'90′',label:'每节课时长'}],
-  courses:courses.map(([icon,title,category,lessonCount,ageRange,summary])=>({icon,title,category,lessonCount,ageRange,summary,lessons:COURSE_LESSON_NAMES.slice(0,Math.min(lessonCount,COURSE_LESSON_NAMES.length))})),
-  ctaTitle:'想看完整课包与课件示例？',
-  ctaText:'预约演示，获取课程清单与试用账号。'
-};
 
 function Logo(){return <Link className="logo" to="/"><i>✦</i>AI魔法学院</Link>}
 function Header({ user, userBadge }){
@@ -91,7 +64,7 @@ function Header({ user, userBadge }){
   const nav=[['/','首页'],['/learn','学习上课'],['/marketplace','课程广场'],['/works','作品广场']];
   return <header><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div></div></header>;
 }
-function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/marketplace">课程广场</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
+function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">课程广场</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link onClick={()=>trackAnalytics('cta_click',{target:to})} to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';const isVibe=work.type==='VIBECODING';return <article className={'work w'+index%6}><div className="art"><span>{isVibe?'🎮':emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}{isVibe?' · 可在线玩':''}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url){trackAnalytics('work_view',{resourceType:'work'});navigate(url);}}}>打开体验 <b>↗</b></button></div></article>}
@@ -198,18 +171,11 @@ function InnerCircleHome({ session, logout }) {
   useEffect(() => { const root = document.documentElement; const body = document.body; const oldRootOverflow = root.style.overflow; const oldBodyOverflow = body.style.overflow; root.style.overflow = 'hidden'; body.style.overflow = 'hidden'; let running = true; let current = 0; let frame; const tick = () => { if (!running) return; current += (targetRef.current - current) * 0.08; if (Math.abs(targetRef.current - current) < 0.0001) current = targetRef.current; setLerpedProgress(current); setActiveSection(updateInnerSection(current)); frame = requestAnimationFrame(tick); }; const stopAnimation = () => { if (animationRef.current) { cancelAnimationFrame(animationRef.current); animationRef.current = null; } }; const onWheel = event => { event.preventDefault(); stopAnimation(); targetRef.current = Math.max(0, Math.min(3.5, targetRef.current + event.deltaY * 0.0006)); setScrollProgress(targetRef.current); }; const onTouchStart = event => { stopAnimation(); touchYRef.current = event.touches[0]?.clientY ?? null; }; const onTouchMove = event => { if (touchYRef.current == null) return; event.preventDefault(); const currentY = event.touches[0]?.clientY ?? touchYRef.current; targetRef.current = Math.max(0, Math.min(3.5, targetRef.current + (touchYRef.current - currentY) * 0.0015)); touchYRef.current = currentY; setScrollProgress(targetRef.current); }; const onTouchEnd = () => { touchYRef.current = null; }; const onMouseMove = event => { const mx = event.clientX / window.innerWidth - 0.5; const my = event.clientY / window.innerHeight - 0.5; if (parallaxRef.current) parallaxRef.current.style.transform = 'translate(' + (-mx * 40) + 'px, ' + (-my * 40) + 'px) scale(1.05)'; }; frame = requestAnimationFrame(tick); window.addEventListener('wheel', onWheel, { passive: false }); window.addEventListener('touchstart', onTouchStart, { passive: false }); window.addEventListener('touchmove', onTouchMove, { passive: false }); window.addEventListener('touchend', onTouchEnd); window.addEventListener('mousemove', onMouseMove); return () => { running = false; if (frame) cancelAnimationFrame(frame); stopAnimation(); window.removeEventListener('wheel', onWheel); window.removeEventListener('touchstart', onTouchStart); window.removeEventListener('touchmove', onTouchMove); window.removeEventListener('touchend', onTouchEnd); window.removeEventListener('mousemove', onMouseMove); root.style.overflow = oldRootOverflow; body.style.overflow = oldBodyOverflow; }; }, []);
   const navigate = item => { if (animationRef.current) cancelAnimationFrame(animationRef.current); const from = targetRef.current; const started = performance.now(); const run = now => { const p = Math.min(1, (now - started) / 1200); targetRef.current = from + (item.progress - from) * easeInOutCubic(p); setScrollProgress(targetRef.current); if (p < 1) animationRef.current = requestAnimationFrame(run); else animationRef.current = null; }; animationRef.current = requestAnimationFrame(run); };
   const secondProgress = clamp01((lerpedProgress - 1.15) / 0.5); const rising = 1 - Math.pow(1 - secondProgress, 3); const blur = Math.sin(secondProgress * Math.PI / 2) * 64;
-  return <main className="ic-home"><div className="ic-stage"><div className="ic-first-screen" style={{ filter: secondProgress > 0 ? 'blur(' + blur + 'px)' : 'none' }}><div ref={parallaxRef} className="ic-hero-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={Math.min(1, lerpedProgress)} variant="hero" autoplay /></div><div className="ic-hero-wash" /><div className="ic-hero-copy"><span className="ic-eyebrow">青少年 AI 创作开课平台</span><strong>从灵感进入作品</strong><p>AI 对话、VibeCoding 与项目式课程<br />让孩子当堂做出游戏、动画和智能硬件。</p><div className="ic-hero-actions"><a href="/demo" onClick={() => trackAnalytics('cta_click', { target: '/demo' })}>预约演示 <b>↗</b></a><a href="/courses">查看课程 <b>↗</b></a></div></div><div className="ic-title-wrap"><ScrollExitTitle progress={lerpedProgress} /></div><SoapTiles progress={lerpedProgress} /><div className="ic-progress-hint"><span>SCROLL / DRAG</span><i>{String(Math.round(lerpedProgress / 3.5 * 100)).padStart(2, '0')}</i></div></div><InnerCircleHeader session={session} logout={logout} /><div className="ic-second-screen" style={{ transform: 'translateY(' + ((1 - rising) * 100) + '%)', visibility: secondProgress > 0 ? 'visible' : 'hidden' }}><div className="ic-grab" /><div className="ic-second-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={clamp01((lerpedProgress - 1.45) / 2.05)} variant="second" /></div><div className="ic-second-wash" /><CylindricalDrum progress={lerpedProgress} /><LogoMarquee /><div className="ic-second-caption"><span>02 / MANIFESTO</span><h2>把复杂技术<br /><em>变成孩子的表达。</em></h2><a href="/demo">和我们聊聊你的课堂 ↗</a></div></div></div></main>;
+  return <main className="ic-home"><div className="ic-stage"><div className="ic-first-screen" style={{ filter: secondProgress > 0 ? 'blur(' + blur + 'px)' : 'none' }}><div ref={parallaxRef} className="ic-hero-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={Math.min(1, lerpedProgress)} variant="hero" autoplay /></div><div className="ic-hero-wash" /><div className="ic-hero-copy"><span className="ic-eyebrow">青少年 AI 创作开课平台</span><strong>从灵感进入作品</strong><p>AI 对话、VibeCoding 与项目式课程<br />让孩子当堂做出游戏、动画和智能硬件。</p><div className="ic-hero-actions"><a href="/demo" onClick={() => trackAnalytics('cta_click', { target: '/demo' })}>预约演示 <b>↗</b></a><a href="/marketplace">查看课程 <b>↗</b></a></div></div><div className="ic-title-wrap"><ScrollExitTitle progress={lerpedProgress} /></div><SoapTiles progress={lerpedProgress} /><div className="ic-progress-hint"><span>SCROLL / DRAG</span><i>{String(Math.round(lerpedProgress / 3.5 * 100)).padStart(2, '0')}</i></div></div><InnerCircleHeader session={session} logout={logout} /><div className="ic-second-screen" style={{ transform: 'translateY(' + ((1 - rising) * 100) + '%)', visibility: secondProgress > 0 ? 'visible' : 'hidden' }}><div className="ic-grab" /><div className="ic-second-video"><ScrubVideo src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" progress={clamp01((lerpedProgress - 1.45) / 2.05)} variant="second" /></div><div className="ic-second-wash" /><CylindricalDrum progress={lerpedProgress} /><LogoMarquee /><div className="ic-second-caption"><span>02 / MANIFESTO</span><h2>把复杂技术<br /><em>变成孩子的表达。</em></h2><a href="/demo">和我们聊聊你的课堂 ↗</a></div></div></div></main>;
 }
 function Home({ session, logout }){ return <InnerCircleHome session={session} logout={logout} />; }
 function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号、试用魔法石额度与示范课包清单。</p></div><Button>预约产品演示</Button></section>}
 
-function Courses(){
-  const cms=useWebsiteContent('COURSES');
-  const content={...COURSES_FALLBACK,...(cms.data||{})};
-  const stats=Array.isArray(content.stats)&&content.stats.length?content.stats:COURSES_FALLBACK.stats;
-  const list=Array.isArray(content.courses)&&content.courses.length?content.courses:COURSES_FALLBACK.courses;
-  const duration=Number(content.durationMinutes)>0?Number(content.durationMinutes):COURSES_FALLBACK.durationMinutes;
-  return <><Title eyebrow={content.eyebrow||COURSES_FALLBACK.eyebrow} title={<>{content.title||COURSES_FALLBACK.title}<em>{content.titleAccent||COURSES_FALLBACK.titleAccent}</em></>} desc={content.description||COURSES_FALLBACK.description}/><main className="inner"><div className="stats">{stats.map((item,index)=><div key={`${item.label||'stat'}-${index}`}><b>{item.value}</b><span>{item.label}</span></div>)}</div><div className="courses">{list.map((course,index)=>{const lessons=Array.isArray(course.lessons)&&course.lessons.length?course.lessons:COURSE_LESSON_NAMES.slice(0,Math.min(Number(course.lessonCount)||COURSE_LESSON_NAMES.length,COURSE_LESSON_NAMES.length));return <article key={`${course.title||'course'}-${index}`}><div className="course-head"><small>{String(index+1).padStart(2,'0')}</small><i>{course.icon}</i><div><span>{course.category}</span><h2>{course.title}</h2><p>{course.summary}</p></div><b>{course.lessonCount}<small>节课</small><br/>{duration}<small>分钟</small></b></div><div className="lessons">{lessons.map((name,lessonIndex)=><span key={`${name}-${lessonIndex}`}>{String(lessonIndex+1).padStart(2,'0')} · {name}</span>)}</div></article>;})}</div><End title={content.ctaTitle||COURSES_FALLBACK.ctaTitle} text={content.ctaText||COURSES_FALLBACK.ctaText}/></main></>}
 function Org(){const faqCms=useWebsiteContent('FAQ');const modules=[['机构账号','管理员、教师、学员分级；学员无需自备 API Key','课堂零配置，避免密钥泄露'],['魔法石积分','按机构充值、按用量扣减；余额不足友好提示','成本可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];return <><Title eyebrow="机构方案" title={<>教培机构如何开<br/><em>青少年 AI 通识课</em></>} desc="平台提供课程、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。"/><main className="inner"><section className="org-intro"><div><i>“</i><h2>不是再找一个聊天网站，<br/>而是一套<span>可管、可教、可展示</span>的课堂产品。</h2><p>学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的游戏、动画、互动故事和硬件作品。</p></div><div className="steps">{[['01','平台开通机构','配置席位、赠送魔法石、发布课包权限。'],['02','老师创建学员账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']].map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section><section className="faq"><div><Kicker>常见问题</Kicker><h2>{faqCms.data?.title||'开课前，你可能想知道'}</h2></div><div>{(faqCms.data?.items||[['需要学员自备 API Key 或对话平台账号？','不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用魔法石管理课堂用量。'],['机房和教室的电脑都能用吗？','可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。'],['能否做 Arduino 和 micro:bit 硬件课？','支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。']].map((item)=>({question:item[0],answer:item[1]}))).map((item,i)=><details key={item.question} open={i===0}><summary>{item.question}</summary><p>{item.answer}</p></details>)}</div></section><End title="让你的校区拥有一门可复制的 AI 课" text="预约演示，获取试用账号、魔法石体验额度与示范课包清单。"/></main></>}
 function Works(){
   const [items,setItems]=useState(FALLBACK_WORKS.map(w=>({title:w[1],description:w[3],studentName:'小创作者',emoji:w[0]})));
@@ -415,7 +381,6 @@ function App(){
     const titles = {
       '/': 'AI魔法学院 · AI 创作课堂 Inner Circle',
       '/marketplace': '课程广场 · AI魔法学院',
-      '/courses': '课程体系 · AI魔法学院',
       '/org': '机构方案 · AI魔法学院',
       '/works': '作品广场 · AI魔法学院',
       '/handbook': '产品手册 · AI魔法学院',
@@ -501,7 +466,7 @@ function App(){
         <Route path='/login' element={<LoginPage/>}/>
         <Route path='/marketplace' element={<Marketplace/>}/>
         <Route path='/marketplace/:id' element={<MarketplaceDetail/>}/>
-        <Route path='/courses' element={<Courses/>}/>
+        <Route path='/courses' element={<Navigate to='/marketplace' replace/>}/>
         <Route path='/org' element={<Org/>}/>
         <Route path='/works' element={<Works/>}/>
         <Route path='/works/shared/:token' element={<WorkDetailPage api={publicApi}/>}/>
