@@ -557,7 +557,7 @@ export function VibeCodingWorkspace({ api }) {
             <input ref={uploadInputRef} className="vb-file-input" type="file" accept=".html,.htm,.css,.js,.mjs,.json,.txt,.md,.svg" onChange={uploadFile} aria-label="上传文件到工程" />
           </div>
         </div>
-        <iframe key={previewKey} className="vb-preview" title="预览" sandbox="allow-scripts" srcDoc={previewDocument} />
+        <VibePreviewFrame key={previewKey} className="vb-preview" html={previewDocument} />
         <div className="vb-console">
           <div className="vb-console__head"><span>控制台</span><button type="button" className="text-button" onClick={() => setConsoleLines([])} disabled={!consoleLines.length}>清空</button></div>
           <div className="vb-console__body">
@@ -569,4 +569,25 @@ export function VibeCodingWorkspace({ api }) {
 
     {message && <div className="student-canvas-toast">{message}</div>}
   </main>;
+}
+
+// ── 学生代码预览外壳 ────────────────────────────────────────────────────────
+// 直接 srcdoc 会被主站 CSP（script-src 'self'）拦掉内联脚本，所以把学生页面
+// postMessage 给 /vibe-preview.html（nginx 单独给它的宽松 CSP），由它写进内层 sandbox iframe。
+export function VibePreviewFrame({ html, className = '', title = '预览' }) {
+  const frameRef = useRef(null);
+  const [ready, setReady] = useState(0);
+  useEffect(() => {
+    function onMessage(event) {
+      if (event.data && event.data.source === 'vibecoding-preview-ready') setReady((value) => value + 1);
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || !frame.contentWindow) return;
+    frame.contentWindow.postMessage({ source: 'vibecoding-preview', html: String(html || '') }, '*');
+  }, [html, ready]);
+  return <iframe ref={frameRef} className={className} title={title} sandbox="allow-scripts" src="/vibe-preview.html" />;
 }

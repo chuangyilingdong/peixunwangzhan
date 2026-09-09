@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument } from '@platform/shared';
+import { buildPreviewDocument, VibePreviewFrame } from '@platform/shared';
 
 function formatDate(value) {
   if (!value) return '';
@@ -47,7 +47,7 @@ export function WorkDetailPage({ api }) {
         </p>
       </header>
       {isVibeCoding
-        ? <div className="work-detail__play"><iframe title={work.title} sandbox="allow-scripts" srcDoc={buildPreviewDocument(work.files, work.entryFile)} /></div>
+        ? <div className="work-detail__play"><VibePreviewFrame html={buildPreviewDocument(work.files, work.entryFile)} title={work.title} /></div>
         : <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} /></div>}
       <div className="work-detail__foot"><Link className="button soft" to="/works">看看更多作品</Link></div>
     </> : null}

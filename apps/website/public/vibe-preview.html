@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>作品预览</title>
+  <style>html,body{margin:0;height:100%;background:#fff}iframe{display:block;width:100%;height:100%;border:0}</style>
+</head>
+<body>
+<!--
+  学生代码的运行外壳。
+  为什么需要它：主站 CSP 是 script-src 'self'，而 srcdoc/blob 文档会继承父页 CSP，
+  学生代码里的内联脚本会被直接拦掉。这里用一张独立静态页（nginx 单独给它宽松 CSP）
+  承载学生页面，再把学生代码 postMessage 进来写进内层 sandbox iframe，脚本就能跑。
+  外壳本身不含任何业务数据，只做转发；内层 iframe 不带 allow-same-origin，学生代码碰不到主站。
+-->
+<iframe id="stage" sandbox="allow-scripts allow-modals allow-forms allow-popups" title="学生作品"></iframe>
+<script>
+  (function () {
+    var stage = document.getElementById('stage');
+    window.addEventListener('message', function (event) {
+      var payload = event.data;
+      if (!payload || typeof payload !== 'object') return;
+      // 学生页面里的 console 桥是发给本外壳的，这里转交给主站控制台面板
+      if (payload.source === 'vibecoding-console') {
+        try { parent.postMessage(payload, '*'); } catch (error) { /* 忽略 */ }
+        return;
+      }
+      if (payload.source === 'vibecoding-preview' && typeof payload.html === 'string') {
+        stage.srcdoc = payload.html;
+      }
+    });
+    parent.postMessage({ source: 'vibecoding-preview-ready' }, '*');
+  })();
+</script>
+</body>
+</html>
