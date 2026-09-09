@@ -1581,4 +1581,6 @@ db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_submissions (
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_org ON vibecoding_submissions(org_id, status, submitted_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_submissions(student_id, submitted_at DESC)');
+try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN entry_file TEXT NOT NULL DEFAULT 'index.html'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 

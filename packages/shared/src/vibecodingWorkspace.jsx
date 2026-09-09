@@ -11,6 +11,14 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 }
 
+// 预览文档里注入控制台桥：沙箱 iframe 不能同源读 DOM，但可以 postMessage 给父页面。
+const CONSOLE_BRIDGE = `<script>(function(){
+  var send=function(level,args){try{parent.postMessage({source:'vibecoding-console',level:level,text:args.map(function(item){try{return typeof item==='string'?item:JSON.stringify(item);}catch(e){return String(item);}}).join(' ')},'*');}catch(e){}};
+  ['log','info','warn','error'].forEach(function(level){var original=console[level]?console[level].bind(console):function(){};console[level]=function(){var args=[].slice.call(arguments);send(level,args);original.apply(null,args);};});
+  window.addEventListener('error',function(event){send('error',[event.message+'（第 '+event.lineno+' 行）']);});
+  window.addEventListener('unhandledrejection',function(event){send('error',['未处理的异步错误：'+(event.reason&&event.reason.message?event.reason.message:event.reason)]);});
+})();</script>`;
+
 // 把入口 HTML 里引用的本地 css/js 内联进预览文档；外链保持原样（sandbox 内没有同源权限）。
 function buildPreviewDocument(files, entryFile) {
   const entry = files?.[entryFile];
@@ -20,9 +28,13 @@ function buildPreviewDocument(files, entryFile) {
     const clean = String(name || '').replace(/^\.\//, '');
     return files[clean] !== undefined ? files[clean] : files[name];
   };
-  return String(entry)
+  const html = String(entry)
     .replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => (resolve(href) !== undefined ? `<style>${resolve(href)}</style>` : match))
     .replace(/<script[^>]*src=["']([^"']+)["'][^>]*>\s*<\/script>/gi, (match, src) => (resolve(src) !== undefined ? `<script>${resolve(src)}</script>` : match));
+  // 桥必须装在学生脚本之前，否则早期 console 调用抓不到：优先塞进 head。
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${CONSOLE_BRIDGE}</head>`);
+  if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, (match) => `${match}${CONSOLE_BRIDGE}`);
+  return CONSOLE_BRIDGE + html;
 }
 
 function normalizeFiles(value) {
@@ -105,9 +117,26 @@ export function VibeCodingWorkspace({ api }) {
   const [activeFile, setActiveFile] = useState('');
   const [dirty, setDirty] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
+  const [consoleLines, setConsoleLines] = useState([]);
+  const [runBusy, setRunBusy] = useState(false);
+  const [sandbox, setSandbox] = useState(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const messageEndRef = useRef(null);
+
+  const sandboxInfo = useData(() => api.get('student/vibecoding/sandbox'), [api]);
+  useEffect(() => { setSandbox(sandboxInfo.data || null); }, [sandboxInfo.data]);
+
+  // 预览 iframe 的控制台输出：只能通过 postMessage 桥接出来
+  useEffect(() => {
+    function onMessage(event) {
+      const payload = event?.data;
+      if (!payload || payload.source !== 'vibecoding-console') return;
+      setConsoleLines((current) => [...current.slice(-199), { level: payload.level || 'log', text: String(payload.text || ''), source: '浏览器' }]);
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
 
   useEffect(() => {
     if (!conversation.data) return;
@@ -202,6 +231,16 @@ export function VibeCodingWorkspace({ api }) {
     setActiveFile(clean);
   }
 
+  async function submitWork() {
+    if (!window.confirm('提交这个作品给老师点评？提交后需要等老师处理才能继续修改。')) return;
+    setBusy(true); setMessage('');
+    try {
+      await api.post(`student/vibecoding/conversations/${conversationId}/submit`, {});
+      setMessage('作品已提交，等待老师点评。');
+      conversation.refresh(); list.refresh();
+    } catch (error) { setMessage(error.message || '提交失败'); } finally { setBusy(false); }
+  }
+
   async function renameConversation() {
     const title = window.prompt('会话名称', data.title || '');
     if (title === null) return;
@@ -222,6 +261,32 @@ export function VibeCodingWorkspace({ api }) {
     } catch (error) { setMessage(error.message || '新建失败'); }
   }
 
+  function runPreview() {
+    setConsoleLines([]);
+    setPreviewKey((value) => value + 1);
+  }
+
+  async function runOnServer() {
+    setRunBusy(true); setMessage('');
+    try {
+      const result = await api.post(`student/vibecoding/conversations/${conversationId}/runs`, {});
+      const run = result.run;
+      const lines = [];
+      if (run.stdout) lines.push({ level: 'log', text: run.stdout.trimEnd(), source: '服务端' });
+      if (run.stderr) lines.push({ level: 'error', text: run.stderr.trimEnd(), source: '服务端' });
+      lines.push({
+        level: run.status === 'SUCCEEDED' ? 'info' : 'error',
+        text: run.status === 'SUCCEEDED'
+          ? `运行成功（退出码 ${run.exitCode}，${run.durationMs}ms）`
+          : run.status === 'TIMEOUT'
+            ? `运行超时（超过 ${Math.round((run.durationMs || 0) / 1000)} 秒已终止）`
+            : `运行失败（退出码 ${run.exitCode}，${run.errorCode || '未知原因'}）`,
+        source: '服务端',
+      });
+      setConsoleLines((current) => [...current, ...lines]);
+    } catch (error) { setMessage(error.message || '运行失败'); } finally { setRunBusy(false); }
+  }
+
   const fileNames = Object.keys(files).sort((a, b) => (a === entryFile ? -1 : b === entryFile ? 1 : a.localeCompare(b)));
 
   return <main className="vb-shell">
@@ -231,8 +296,15 @@ export function VibeCodingWorkspace({ api }) {
       <div className="vb-topbar__actions">
         <button className="ghost-canvas-button" type="button" onClick={() => navigate('/learn/vibecoding')}>课程大厅</button>
         <button className="secondary-button" type="button" disabled={busy || !dirty} onClick={saveFiles}>{busy ? '保存中…' : dirty ? '保存代码' : '已保存'}</button>
+        <button className="primary-canvas-button" type="button" disabled={!editable || busy || !messages.length} onClick={submitWork}>{editable ? '提交作品 ✨' : '已提交'}</button>
       </div>
     </header>
+
+    {data.submission ? <div className={`vb-submission is-${data.submission.status.toLowerCase()}`}>
+      <strong>{data.submission.status === 'PENDING' ? '已提交，等待老师点评' : data.submission.status === 'APPROVED' ? '老师已通过这个作品' : '老师驳回了这个作品，可以继续修改后重新提交'}</strong>
+      {data.submission.teacherComment ? <p>老师点评：{data.submission.teacherComment}</p> : null}
+      <small>第 {data.submission.round} 次提交 · {formatDate(data.submission.submittedAt)}</small>
+    </div> : null}
 
     <section className="vb-layout">
       <aside className="vb-sidebar">
@@ -290,9 +362,20 @@ export function VibeCodingWorkspace({ api }) {
               {fileNames.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>
-          <button className="secondary-button" type="button" onClick={() => setPreviewKey((value) => value + 1)}>刷新预览</button>
+          <div className="row-actions">
+            <button className="secondary-button" type="button" onClick={runPreview}>运行 / 刷新预览</button>
+            <button className="secondary-button" type="button" disabled={runBusy || sandbox?.available === false}
+              title={sandbox?.available === false ? (sandbox.reason || '服务端沙箱不可用') : '在服务器隔离沙箱里运行入口 JS 文件'}
+              onClick={runOnServer}>{runBusy ? '运行中…' : '服务端运行'}</button>
+          </div>
         </div>
         <iframe key={previewKey} className="vb-preview" title="预览" sandbox="allow-scripts" srcDoc={previewDocument} />
+        <div className="vb-console">
+          <div className="vb-console__head"><span>控制台</span><button type="button" className="text-button" onClick={() => setConsoleLines([])} disabled={!consoleLines.length}>清空</button></div>
+          <div className="vb-console__body">
+            {consoleLines.length ? consoleLines.map((line, index) => <div key={index} className={`vb-console__line is-${line.level}`}><span>{line.source}</span>{line.text}</div>) : <p className="muted">运行后这里会显示输出。{sandbox && sandbox.available === false ? '服务端运行当前不可用。' : ''}</p>}
+          </div>
+        </div>
       </aside>
     </section>
 

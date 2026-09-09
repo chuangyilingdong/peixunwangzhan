@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, ListResultSummary, Loading, LoginPanel, MarkdownView, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession } from '@platform/shared';
 import { MemberCreditsPage } from './pages/MemberCredits.jsx';
 import { BillingTransactionsPage } from './pages/BillingTransactions.jsx';
 import '@platform/shared/styles.css';
@@ -18,6 +18,7 @@ const navigation = [
   { to: '/member-credits', icon: '◆', label: '配额管理', adminOnly: true },
   { to: '/billing-transactions', icon: '▤', label: '积分流水', adminOnly: true },
   { to: '/works', icon: '✧', label: '作品点评' }, 
+  { to: '/vibecoding', icon: '💻', label: 'VibeCoding 点评' }, 
   { to: '/inbox', icon: '✉', label: '站内信' }, 
   { to: '/courses', icon: '◇', label: '课程中心' }, 
   { to: '/work-data', icon: '▥', label: '作品数据中心', adminOnly: true }, 
@@ -984,6 +985,89 @@ function OrgPage({ kind, user }) {
   return <><PageHeader eyebrow={teacher ? 'AI魔法学院 · 教学首页' : 'AI魔法学院 · 机构运营'} title={title} description={description} actions={<button className="primary-button">配置 / 新建</button>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待接入' : '准备就绪'} hint={item[1]} tone={index ? 'teal' : 'violet'} />)}</div><Panel title="功能接入说明"><Notice tone="info">页面已按 AI魔法学院机构端的信息架构建立。计费、通知、开通和数据中心需要相应后端接口后才会写入真实业务数据；当前不会使用模拟记录冒充真实数据。</Notice></Panel></>;
 }
 
+function VibeCodingSubmissionDetail({ submission, form, setForm, busy, onReview }) {
+  const [active, setActive] = useState('');
+  const files = submission?.files || {};
+  const transcript = Array.isArray(submission?.transcript) ? submission.transcript : [];
+  const names = Object.keys(files).sort((a, b) => (a === submission?.entryFile ? -1 : b === submission?.entryFile ? 1 : a.localeCompare(b)));
+  const current = active || submission?.entryFile || names[0] || '';
+  if (!submission) return <Loading />;
+  return <>
+    <div className="vb-review-meta"><span>学生：{submission.studentName || submission.studentLogin || submission.studentId}</span><span>课时：{submission.lessonTitle || '—'}</span><span>第 {submission.round} 次提交 · {formatDate(submission.submittedAt)}</span></div>
+    <div className="split">
+      <div>
+        <div className="vb-code__tabs">{names.map((name) => <button key={name} type="button" className={name === current ? 'is-active' : ''} onClick={() => setActive(name)}>{name}</button>)}</div>
+        <pre className="vb-review-code">{files[current] || ''}</pre>
+      </div>
+      <div>
+        <h3 className="vb-review-heading">创作对话（{transcript.length} 条）</h3>
+        <div className="vb-review-transcript">
+          {transcript.length ? transcript.map((message, index) => <div className={`vb-message vb-message--${message.role}`} key={index}>
+            <div className="vb-message__avatar">{message.role === 'user' ? '生' : 'AI'}</div>
+            <div className="vb-message__body">{message.role === 'assistant' ? <MarkdownView content={message.content} /> : <p>{message.content}</p>}</div>
+          </div>) : <p className="muted">没有对话记录。</p>}
+        </div>
+      </div>
+    </div>
+    {submission.status === 'PENDING' ? <div className="form-grid top-gap">
+      <label>点评结果<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="APPROVED">通过</option><option value="REJECTED">驳回</option></select></label>
+      <label>点评意见<textarea value={form.comment} maxLength={2000} placeholder="驳回时必须写明原因，学生改完可以重新提交" onChange={(event) => setForm({ ...form, comment: event.target.value })} /></label>
+      <div><button className="primary-button" disabled={busy || (form.status === 'REJECTED' && !form.comment.trim())} onClick={onReview}>{busy ? '提交中…' : '提交点评'}</button></div>
+    </div> : <Notice tone={submission.status === 'APPROVED' ? 'success' : 'warning'}>已点评（{formatDate(submission.reviewedAt)}）：{submission.teacherComment || '（无意见）'}</Notice>}
+  </>;
+}
+
+function VibeCodingReview({ api }) {
+  const [filters, setFilters] = useState({ status: 'PENDING' });
+  const [page, setPage] = useState(1);
+  const query = useMemo(() => { const value = new URLSearchParams(); if (filters.status) value.set('status', filters.status); value.set('page', String(page)); return value.toString(); }, [filters, page]);
+  const list = useData(() => api.get('org/vibecoding/submissions?' + query), [api, query]);
+  const [selected, setSelected] = useState(null);
+  const detail = useData(() => selected ? api.get(`org/vibecoding/submissions/${selected.id}`) : Promise.resolve(null), [api, selected?.id]);
+  const [form, setForm] = useState({ status: 'APPROVED', comment: '' });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  async function review() {
+    if (!selected) return;
+    setBusy(true); setMessage('');
+    try {
+      await api.put(`org/vibecoding/submissions/${selected.id}`, form);
+      setMessage(form.status === 'APPROVED' ? '已通过该作品。' : '已驳回，学生可以继续修改后重新提交。');
+      setSelected(null); setForm({ status: 'APPROVED', comment: '' });
+      list.refresh();
+    } catch (error) { setMessage(error.message || '点评失败'); } finally { setBusy(false); }
+  }
+
+  return <>
+    <PageHeader eyebrow="教学点评" title="VibeCoding 作品点评" description="查看学生的创作对话与代码，给出通过或驳回意见。" actions={<button className="secondary-button" onClick={list.refresh}>刷新</button>} />
+    {message && <Notice tone="info">{message}</Notice>}
+    <Panel title={`提交列表 · ${list.data?.pending ?? 0} 条待处理`}>
+      <div className="form-grid">
+        <label>状态<select value={filters.status} onChange={(event) => { setFilters({ status: event.target.value }); setPage(1); }}>
+          <option value="">全部</option><option value="PENDING">待处理</option><option value="APPROVED">已通过</option><option value="REJECTED">已驳回</option>
+        </select></label>
+      </div>
+      {list.loading ? <Loading /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : list.data.items.length ? <>
+        <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>课时</th><th>轮次</th><th>状态</th><th>提交时间</th><th>操作</th></tr></thead>
+          <tbody>{list.data.items.map((item) => <tr key={item.id}>
+            <td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'}</div></td>
+            <td>{item.studentName || item.studentLogin || item.studentId}<div className="muted">{item.className || '未绑定班级'}</div></td>
+            <td>{item.lessonTitle || '—'}</td>
+            <td>第 {item.round} 次</td>
+            <td><Status value={item.status} /></td>
+            <td>{formatDate(item.submittedAt)}</td>
+            <td><button className="text-button" onClick={() => { setSelected(item); setForm({ status: 'APPROVED', comment: '' }); }}>{item.status === 'PENDING' ? '查看与点评' : '查看'}</button></td>
+          </tr>)}</tbody></table></div>
+        <Pagination page={list.data.page} totalPages={list.data.totalPages} onChange={setPage} disabled={list.loading} />
+      </> : <Empty title="暂无提交" body="学生提交 VibeCoding 作品后会出现在这里。" />}
+    </Panel>
+    {selected ? <Panel title={`作品详情 · ${selected.title}`} actions={<button className="secondary-button" onClick={() => setSelected(null)}>关闭</button>}>
+      {detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.loading || !detail.data ? <Loading /> : <VibeCodingSubmissionDetail submission={detail.data} form={form} setForm={setForm} busy={busy} onReview={review} />}
+    </Panel> : null}
+  </>;
+}
+
 function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
@@ -993,6 +1077,6 @@ function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/tasks" element={<TeachingTasks api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/member-credits" element={<MemberCreditsPage api={api} />} /><Route path="/billing-transactions" element={<BillingTransactionsPage api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/tasks" element={<TeachingTasks api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/member-credits" element={<MemberCreditsPage api={api} />} /><Route path="/billing-transactions" element={<BillingTransactionsPage api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/vibecoding" element={<VibeCodingReview api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

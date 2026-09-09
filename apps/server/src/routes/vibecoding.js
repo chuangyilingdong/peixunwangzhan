@@ -11,6 +11,7 @@ import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { providerSelectionForModality } from './aiGeneration.js';
+import { runJavaScript, sandboxCapability } from '../services/vibecodingRunner.js';
 
 const DEFAULT_TITLE = '新的创作对话';
 const MAX_FILES = 12;
@@ -67,6 +68,24 @@ function normalizeConversation(value, { includeFiles = false } = {}) {
     lastMessageAt: value.last_message_at || null,
     createdAt: value.created_at, updatedAt: value.updated_at,
   };
+}
+
+function normalizeRun(value) {
+  return {
+    id: value.id, conversationId: value.conversation_id, language: value.language, entryFile: value.entry_file,
+    status: value.status, exitCode: value.exit_code == null ? null : Number(value.exit_code),
+    stdout: value.stdout || '', stderr: value.stderr || '',
+    durationMs: value.duration_ms == null ? null : Number(value.duration_ms),
+    errorCode: value.error_code || null, createdAt: value.created_at, finishedAt: value.finished_at || null,
+  };
+}
+
+// 运行串行化：生产机内存紧张，同时只允许一个沙箱进程
+let runChain = Promise.resolve();
+function serializeRun(task) {
+  const next = runChain.then(task, task);
+  runChain = next.catch(() => {});
+  return next;
 }
 
 function normalizeMessage(value) {
@@ -141,6 +160,40 @@ function recordFailedMessage(conversationId, model, content, errorCode) {
   return messageId;
 }
 
+function normalizeSubmission(value, { includeContent = false } = {}) {
+  if (!value) return null;
+  return {
+    id: value.id, conversationId: value.conversation_id, studentId: value.student_id,
+    studentName: value.student_name || null, studentLogin: value.student_login || null,
+    classId: value.class_id || null, className: value.class_name || null,
+    lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
+    title: value.title, description: value.description || '', round: Number(value.round || 1),
+    entryFile: value.entry_file || 'index.html',
+    status: value.status, teacherComment: value.teacher_comment || null,
+    reviewedBy: value.reviewed_by || null, reviewerName: value.reviewer_name || null,
+    reviewedAt: value.reviewed_at || null, submittedAt: value.submitted_at,
+    ...(includeContent ? { files: parseFiles(value.files, { fallback: {} }), transcript: JSON.parse(value.transcript || '[]') } : {}),
+  };
+}
+
+function submissionSelect() {
+  return `SELECT submission.*, student.display_name AS student_name, student.login AS student_login,
+                 class.name AS class_name, lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
+          FROM vibecoding_submissions submission
+          LEFT JOIN users student ON student.id = submission.student_id
+          LEFT JOIN classes class ON class.id = submission.class_id
+          LEFT JOIN course_lessons lesson ON lesson.id = submission.lesson_id
+          LEFT JOIN users reviewer ON reviewer.id = submission.reviewed_by`;
+}
+
+function teacherSubmissionScope(auth) {
+  if (auth.user.role !== 'TEACHER') return { sql: '', params: [] };
+  return {
+    sql: ` AND (class.teacher_id = ? OR EXISTS (SELECT 1 FROM class_members member WHERE member.class_id = submission.class_id AND member.user_id = ? AND member.role='TEACHER' AND member.removed_at IS NULL))`,
+    params: [auth.user.id, auth.user.id],
+  };
+}
+
 async function handleStudentVibeCoding(ctx, auth, part) {
   const { method, body = {} } = ctx;
 
@@ -204,7 +257,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       `SELECT * FROM vibecoding_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
       [conversation.id, limit, offset],
     ).reverse().map(normalizeMessage);
-    return { ...normalizeConversation(conversation, { includeFiles: true }), messages, messagesTotal: total, messagesPage: page };
+    const submission = row(submissionSelect() + ' WHERE submission.conversation_id = ?', [conversation.id]);
+    return { ...normalizeConversation(conversation, { includeFiles: true }), messages, messagesTotal: total, messagesPage: page, submission: normalizeSubmission(submission) };
   }
 
   if (conversationMatch && method === 'PUT') {
@@ -304,14 +358,155 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     return { __streamed: true };
   }
 
+  const runMatch = part.match(/^\/conversations\/([^/]+)\/runs$/);
+  if (runMatch && method === 'POST') {
+    const { auth: ownerAuth, conversation } = ownConversation(ctx, runMatch[1]);
+    if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能继续运行代码', 'VIBECODING_CONVERSATION_LOCKED');
+    const user = activeStudent(ownerAuth);
+    vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
+    const capability = sandboxCapability();
+    if (!capability.available) throw errors.serviceUnavailable(capability.reason || '代码运行沙箱当前不可用', 'VIBECODING_SANDBOX_UNAVAILABLE');
+    const files = filesOf(conversation);
+    const entryFile = /\.(m?js)$/i.test(conversation.entry_file)
+      ? conversation.entry_file
+      : Object.keys(files).find((name) => /\.(m?js)$/i.test(name));
+    if (!entryFile) throw errors.badRequest('没有可运行的 JavaScript 文件；HTML 项目请用右侧预览查看效果', 'VIBECODING_RUN_ENTRY_NOT_JAVASCRIPT');
+
+    const runId = id('viberun');
+    const now = nowIso();
+    q(`INSERT INTO vibecoding_runs(id,conversation_id,org_id,user_id,language,entry_file,status,created_at) VALUES (?,?,?,?,?,?,?,?)`,
+      [runId, conversation.id, ownerAuth.user.orgId, ownerAuth.user.id, 'javascript', entryFile, 'QUEUED', now]);
+    const result = await serializeRun(() => runJavaScript({ files, entryFile }));
+    q(`UPDATE vibecoding_runs SET status=?,exit_code=?,stdout=?,stderr=?,duration_ms=?,error_code=?,finished_at=? WHERE id=?`,
+      [result.status, result.exitCode, result.stdout, result.stderr, result.durationMs, result.errorCode, nowIso(), runId]);
+    audit(ctx, 'VIBECODING_RUN', 'VIBECODING_CONVERSATION', conversation.id, null, { runId, status: result.status, durationMs: result.durationMs });
+    return { run: normalizeRun(row('SELECT * FROM vibecoding_runs WHERE id=?', [runId])), sandbox: capability };
+  }
+
+  if (runMatch && method === 'GET') {
+    const { conversation } = ownConversation(ctx, runMatch[1]);
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 10 });
+    const total = Number(count('SELECT COUNT(*) n FROM vibecoding_runs WHERE conversation_id = ?', [conversation.id]) || 0);
+    const items = rows('SELECT * FROM vibecoding_runs WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?', [conversation.id, limit, offset]).map(normalizeRun);
+    return { ...pageResult(items, { page, limit, total }), sandbox: sandboxCapability() };
+  }
+
+  if (part === '/sandbox' && method === 'GET') {
+    return sandboxCapability();
+  }
+
+  const submitMatch = part.match(/^\/conversations\/([^/]+)\/submit$/);
+  if (submitMatch && method === 'POST') {
+    const { auth: ownerAuth, conversation } = ownConversation(ctx, submitMatch[1]);
+    const user = activeStudent(ownerAuth);
+    vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
+    const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ?', [conversation.id]);
+    if (existing && existing.status === 'PENDING') throw errors.conflict('作品已提交，等待老师点评', 'VIBECODING_ALREADY_SUBMITTED');
+    const files = filesOf(conversation);
+    const transcript = rows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id])
+      .map((message) => ({ role: message.role, content: message.content, createdAt: message.created_at }));
+    const title = body.title === undefined || String(body.title).trim() === '' ? conversation.title : nonEmptyString(body.title, '作品标题', { max: 60 });
+    const description = String(body.description || '').slice(0, 1000);
+    const now = nowIso();
+    const submissionId = existing?.id || id('vibesub');
+    transaction(() => {
+      if (existing) {
+        q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
+             teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=? WHERE id=?`,
+          [title, description, json(files), json(transcript), conversation.entry_file || 'index.html', now, now, submissionId]);
+      } else {
+        q(`INSERT INTO vibecoding_submissions(
+             id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,transcript,entry_file,round,status,submitted_at,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [submissionId, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId, conversation.class_id, conversation.lesson_id,
+            title, description, json(files), json(transcript), conversation.entry_file || 'index.html', 1, 'PENDING', now, now, now]);
+      }
+      q("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
+      audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id, existing ? { round: existing.round } : null, { title, round: Number(existing?.round || 0) + 1 });
+    });
+    return normalizeSubmission(row(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
+  }
+
+  if (part === '/submissions' && method === 'GET') {
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
+    const total = Number(count('SELECT COUNT(*) n FROM vibecoding_submissions submission WHERE submission.student_id = ?', [auth.user.id]) || 0);
+    const items = rows(submissionSelect() + ' WHERE submission.student_id = ? ORDER BY submission.submitted_at DESC LIMIT ? OFFSET ?', [auth.user.id, limit, offset])
+      .map((item) => normalizeSubmission(item));
+    return pageResult(items, { page, limit, total });
+  }
+
+  return null;
+}
+
+async function handleOrgVibeCoding(ctx, auth, part) {
+  const { method } = ctx;
+  if (part === '/submissions' && method === 'GET') {
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
+    const conditions = ['submission.org_id = ?'];
+    const params = [auth.user.orgId];
+    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
+    if (['PENDING', 'APPROVED', 'REJECTED'].includes(status)) { conditions.push('submission.status = ?'); params.push(status); }
+    const scope = teacherSubmissionScope(auth);
+    const where = conditions.join(' AND ') + scope.sql;
+    const scopeParams = [...params, ...scope.params];
+    const total = Number(count(`SELECT COUNT(*) n FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE ${where}`, scopeParams) || 0);
+    const items = rows(
+      submissionSelect() + ` WHERE ${where} ORDER BY CASE submission.status WHEN 'PENDING' THEN 0 ELSE 1 END, submission.submitted_at DESC LIMIT ? OFFSET ?`,
+      [...scopeParams, limit, offset],
+    ).map((item) => normalizeSubmission(item));
+    return { ...pageResult(items, { page, limit, total }), pending: Number(count(`SELECT COUNT(*) n FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE ${where} AND submission.status='PENDING'`, scopeParams) || 0) };
+  }
+
+  const reviewMatch = part.match(/^\/submissions\/([^/]+)$/);
+  if (reviewMatch && method === 'GET') {
+    const submission = row(submissionSelect() + ' WHERE submission.id = ? AND submission.org_id = ?', [reviewMatch[1], auth.user.orgId]);
+    if (!submission) throw errors.notFound('提交不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    if (auth.user.role === 'TEACHER') {
+      const scope = teacherSubmissionScope(auth);
+      const scoped = row(`SELECT submission.id FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE submission.id = ?${scope.sql}`, [reviewMatch[1], ...scope.params]);
+      if (!scoped) throw errors.forbidden('该学生不在你的班级里', 'VIBECODING_SUBMISSION_FORBIDDEN');
+    }
+    return normalizeSubmission(submission, { includeContent: true });
+  }
+
+  if (reviewMatch && method === 'PUT') {
+    const submission = row(submissionSelect() + ' WHERE submission.id = ? AND submission.org_id = ?', [reviewMatch[1], auth.user.orgId]);
+    if (!submission) throw errors.notFound('提交不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    if (auth.user.role === 'TEACHER') {
+      const scope = teacherSubmissionScope(auth);
+      const scoped = row(`SELECT submission.id FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE submission.id = ?${scope.sql}`, [reviewMatch[1], ...scope.params]);
+      if (!scoped) throw errors.forbidden('该学生不在你的班级里', 'VIBECODING_SUBMISSION_FORBIDDEN');
+    }
+    if (submission.status !== 'PENDING') throw errors.conflict('该提交已处理，不能重复点评', 'VIBECODING_SUBMISSION_ALREADY_REVIEWED');
+    const status = String(ctx.body?.status || '').trim().toUpperCase();
+    if (!['APPROVED', 'REJECTED'].includes(status)) throw errors.badRequest('点评结果无效', 'INVALID_VIBECODING_REVIEW_STATUS');
+    const comment = String(ctx.body?.comment || '').trim().slice(0, 2000);
+    if (status === 'REJECTED' && !comment) throw errors.badRequest('驳回时请写明原因', 'VIBECODING_REVIEW_COMMENT_REQUIRED');
+    const now = nowIso();
+    transaction(() => {
+      q('UPDATE vibecoding_submissions SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,updated_at=? WHERE id=?',
+        [status, comment, auth.user.id, now, now, submission.id]);
+      // 驳回后放开继续创作，学生改完可以再提交
+      if (status === 'REJECTED') q("UPDATE vibecoding_conversations SET status='DRAFT',updated_at=? WHERE id=?", [now, submission.conversation_id]);
+      audit(ctx, 'VIBECODING_REVIEW', 'VIBECODING_SUBMISSION', submission.id, { status: submission.status }, { status, comment });
+    });
+    return normalizeSubmission(row(submissionSelect() + ' WHERE submission.id = ?', [submission.id]), { includeContent: true });
+  }
+
   return null;
 }
 
 export async function handleVibeCoding(ctx) {
-  const { pathname, method } = ctx;
+  const { pathname } = ctx;
+  if (pathname.startsWith('/api/org/vibecoding')) {
+    if (!ctx.auth) throw errors.unauthorized('请先登录', 'UNAUTHORIZED');
+    const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']);
+    const part = pathname.slice('/api/org/vibecoding'.length) || '/';
+    return handleOrgVibeCoding(ctx, auth, part);
+  }
   if (!pathname.startsWith('/api/student/vibecoding')) return null;
   if (!ctx.auth) throw errors.unauthorized('请先登录', 'UNAUTHORIZED');
   const auth = requireRole(ctx, ['STUDENT']);
   const part = pathname.slice('/api/student/vibecoding'.length) || '/';
-  return handleStudentVibeCoding(ctx, auth, part, method);
+  return handleStudentVibeCoding(ctx, auth, part);
 }
