@@ -6,6 +6,7 @@ import { ErrorState, Loading, Notice, Empty, PageHeader } from './ui.jsx';
 import { useData } from './classroom.jsx';
 import { MarkdownView } from './markdown.jsx';
 import { formatDate } from './auth.js';
+import { buildProjectBundle, parseProjectBundle, projectFileBase } from './vibecodingProject.js';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -40,6 +41,19 @@ function buildPreviewDocument(files, entryFile) {
 function normalizeFiles(value) {
   if (!value || typeof value !== 'object') return {};
   return Object.fromEntries(Object.entries(value).map(([key, content]) => [key, String(content ?? '')]));
+}
+
+// ── 工程导入导出 ────────────────────────────────────────────────────────────
+function downloadProject(filename, content) {
+  const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 // ── 课程入口 ────────────────────────────────────────────────────────────────
@@ -123,6 +137,7 @@ export function VibeCodingWorkspace({ api }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const messageEndRef = useRef(null);
+  const importInputRef = useRef(null);
 
   const sandboxInfo = useData(() => api.get('student/vibecoding/sandbox'), [api]);
   useEffect(() => { setSandbox(sandboxInfo.data || null); }, [sandboxInfo.data]);
@@ -261,6 +276,31 @@ export function VibeCodingWorkspace({ api }) {
     } catch (error) { setMessage(error.message || '新建失败'); }
   }
 
+  function exportProject() {
+    const bundle = buildProjectBundle({ title: data.title, entryFile, files });
+    downloadProject(`${projectFileBase(data.title)}.vibecoding.json`, JSON.stringify(bundle, null, 2));
+    setMessage('工程文件已导出。');
+  }
+
+  async function importProject(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const parsed = parseProjectBundle(await file.text());
+      if (Object.keys(files).length && !window.confirm('导入会覆盖当前会话的代码（未保存的修改会丢失），继续？')) return;
+      setFiles(parsed.files);
+      setEntryFile(parsed.entryFile);
+      setActiveFile(parsed.entryFile);
+      setDirty(true);
+      setConsoleLines([]);
+      setPreviewKey((value) => value + 1);
+      setMessage('工程已导入，点「保存代码」写入这个会话。');
+    } catch (error) {
+      setMessage(error.message || '导入失败');
+    }
+  }
+
   function runPreview() {
     setConsoleLines([]);
     setPreviewKey((value) => value + 1);
@@ -367,6 +407,9 @@ export function VibeCodingWorkspace({ api }) {
             <button className="secondary-button" type="button" disabled={runBusy || sandbox?.available === false}
               title={sandbox?.available === false ? (sandbox.reason || '服务端沙箱不可用') : '在服务器隔离沙箱里运行入口 JS 文件'}
               onClick={runOnServer}>{runBusy ? '运行中…' : '服务端运行'}</button>
+            <button className="secondary-button" type="button" onClick={exportProject}>导出工程</button>
+            <button className="secondary-button" type="button" disabled={!editable} onClick={() => importInputRef.current?.click()}>导入工程</button>
+            <input ref={importInputRef} className="vb-file-input" type="file" accept=".json,application/json" onChange={importProject} aria-label="导入工程文件" />
           </div>
         </div>
         <iframe key={previewKey} className="vb-preview" title="预览" sandbox="allow-scripts" srcDoc={previewDocument} />
