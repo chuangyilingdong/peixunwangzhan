@@ -174,12 +174,12 @@ async function parseResponse(response, modality) {
 
 // 请求体由渠道模板生成：模板里的 {{aspectRatio}} / {{resolution}} / {{durationSeconds}} / {{audio}}
 // 会被课时配置的取值替换，不再由代码写死。
-function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {} }) {
+function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {}, messages = null, stream = false }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
   const requiresFirstFrame = String(options.inputFrame || '').toUpperCase() === 'FIRST';
   const template = requestTemplateFor({ requestTemplates }, normalizedModality, { requiresFirstFrame });
   if (template) {
-    return renderRequestTemplate(template, {
+    const rendered = renderRequestTemplate(template, {
       model,
       prompt: String(prompt || ''),
       title: String(title || ''),
@@ -190,7 +190,15 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       audio: options.audio === true,
       firstFrameUrl: String(options.firstFrameUrl || '').trim(),
       n: 1,
+      messages: Array.isArray(messages) ? messages : undefined,
     });
+    // 多轮对话：模板里没有显式写 {{messages}} 时，用完整历史替换模板自带的单轮 messages，
+    // 这样管理员为 TEXT 配置的 system 提示词仍然生效。
+    if (Array.isArray(messages) && messages.length && !JSON.stringify(template).includes('{{messages}}')) {
+      if (Array.isArray(rendered?.messages)) rendered.messages = messages;
+    }
+    if (stream) rendered.stream = true;
+    return rendered;
   }
   // 没有模板的模态（音乐/播客）保持改造前的请求体形状。
   return { model, prompt: String(prompt || ''), seconds: '5', metadata: { resolution: '480p' } };
@@ -228,18 +236,22 @@ function providerHttpError(response, payload) {
   return providerError(safety ? '内容未通过 AI 服务安全策略' : 'AI 供应商调用失败', safety ? PROVIDER_ERROR_CODES.SAFETY_REJECTED : 'GENERATION_PROVIDER_HTTP_ERROR', response.status);
 }
 
+function textAsset({ text, title, providerName, model }) {
+  const boundedText = String(text || '').slice(0, MAX_TEXT_RESULT_CHARS);
+  return {
+    label: String(title || 'AI 灵感提示词').trim().slice(0, 120) || 'AI 灵感提示词',
+    mimeType: 'text/plain; charset=utf-8',
+    assetUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(boundedText)}`,
+    metadata: { provider: providerName, model, modality: 'TEXT', external: true, text: boundedText },
+  };
+}
+
 function assetFromResponse({ payload, binary, contentType, modality, title, providerName, model }) {
   const normalizedModality = String(modality || '').trim().toUpperCase();
   if (normalizedModality === 'TEXT') {
     const text = responseText(payload);
     if (!text) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
-    const boundedText = text.slice(0, MAX_TEXT_RESULT_CHARS);
-    return {
-      label: String(title || 'AI 灵感提示词').trim().slice(0, 120) || 'AI 灵感提示词',
-      mimeType: 'text/plain; charset=utf-8',
-      assetUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(boundedText)}`,
-      metadata: { provider: providerName, model, modality: normalizedModality, external: true, text: boundedText },
-    };
+    return textAsset({ text, title, providerName, model });
   }
   const mimeType = String(contentType || defaultMimeType(normalizedModality)).split(';')[0] || defaultMimeType(normalizedModality);
   let candidate = binary?.length ? { assetUrl: `data:${mimeType};base64,${binary.toString('base64')}`, mimeType } : mediaCandidate(payload, normalizedModality, mimeType);
@@ -302,6 +314,68 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel })] };
       }
       return { assets: [assetFromResponse({ payload: parsed, binary: parsed?.binary, contentType: parsed?.contentType, modality: normalizedModality, title, providerName, model: providerModel })] };
+    },
+    // 多轮对话流式生成：上游返回 text/event-stream 时逐块回调；上游不支持流式则退化为整段返回。
+    async generateStream({ messages, prompt = '', title, options, onDelta } = {}) {
+      const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints);
+      const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, messages, stream: true });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      timer.unref?.();
+      try {
+        let response;
+        try {
+          response = await fetch(url, {
+            method: 'POST',
+            headers: { accept: 'text/event-stream', 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+        } catch (error) {
+          if (error?.name === 'AbortError') throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
+          throw error;
+        }
+        const contentType = String(response.headers.get('content-type') || '');
+        if (!response.ok) {
+          const parsed = await parseResponse(response, 'TEXT').catch(() => ({}));
+          throw providerHttpError(response, parsed);
+        }
+        if (!/text\/event-stream/i.test(contentType) || !response.body) {
+          const parsed = await parseResponse(response, 'TEXT');
+          const text = responseText(parsed);
+          if (!text) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
+          if (typeof onDelta === 'function') onDelta(text, text);
+          return { assets: [textAsset({ text, title, providerName, model: providerModel })], streamed: false };
+        }
+        let full = '';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const data = trimmed.slice(5).trim();
+            if (!data || data === '[DONE]') continue;
+            let chunk;
+            try { chunk = JSON.parse(data); } catch { continue; }
+            const choice = chunk?.choices?.[0];
+            const delta = choice?.delta?.content ?? choice?.message?.content ?? chunk?.output_text ?? '';
+            if (!delta) continue;
+            full += delta;
+            if (typeof onDelta === 'function') onDelta(delta, full);
+          }
+        }
+        if (!full.trim()) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
+        return { assets: [textAsset({ text: full, title, providerName, model: providerModel })], streamed: true };
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }

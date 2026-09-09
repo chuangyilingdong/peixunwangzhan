@@ -298,8 +298,14 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
     lesson_title: lesson.title,
   }) : null;
   const scope = rawValue(user, 'student_usage_scope', 'studentUsageScope');
-  const isVibeCodingSession = activeSession?.deliveryMode === 'VIBECODING';
-  const canUseNow = scope === 'HOME_PRACTICE' || (Boolean(activeSession) && !isVibeCodingSession);
+  const homePractice = scope === 'HOME_PRACTICE';
+  const sessionMode = activeSession?.deliveryMode || null;
+  const lessonMode = lesson?.deliveryMode || 'CANVAS';
+  const effectiveMode = sessionMode || lessonMode;
+  // 画布课堂与 VibeCoding 课堂互斥：画布路径继续只认 CANVAS（保持既有行为），
+  // VibeCoding 路径单独放行，避免学生在 VibeCoding 课堂里误建画布项目。
+  const canUseNow = homePractice ? lessonMode !== 'VIBECODING' : (Boolean(activeSession) && effectiveMode === 'CANVAS');
+  const canUseVibeCodingNow = homePractice ? lessonMode === 'VIBECODING' : (Boolean(activeSession) && effectiveMode === 'VIBECODING');
 
   return {
     class: normalizeClass(rawClass), rawClass, lesson,
@@ -309,9 +315,11 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
       visibility: data.series_visibility, version: data.series_version,
       sort: data.series_sort, status: data.series_status,
     }, { orgId }),
-    activeSession, canUseNow,
-    blockCode: canUseNow ? null : (isVibeCodingSession ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'CLASS_SESSION_REQUIRED'),
-    blockReason: canUseNow ? null : (isVibeCodingSession ? 'VibeCoding 课堂尚未接入，暂不能创建画布项目' : '跟随课堂账号需要由教师先开启对应课时的课堂'),
+    activeSession, canUseNow, canUseVibeCodingNow,
+    blockCode: canUseNow ? null : (effectiveMode === 'VIBECODING' ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'CLASS_SESSION_REQUIRED'),
+    blockReason: canUseNow ? null : (effectiveMode === 'VIBECODING' ? '该课时是 VibeCoding 课堂，请从 VibeCoding 入口进入' : '跟随课堂账号需要由教师先开启对应课时的课堂'),
+    vibeCodingBlockCode: canUseVibeCodingNow ? null : (effectiveMode === 'VIBECODING' ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'VIBECODING_CLASS_NOT_ACTIVE'),
+    vibeCodingBlockReason: canUseVibeCodingNow ? null : (effectiveMode === 'VIBECODING' ? 'VibeCoding 课堂未开启，请让老师先开始课堂' : '当前课时不是 VibeCoding 课堂'),
   };
 }
 
@@ -490,7 +498,11 @@ export function buildStudentDashboard(user) {
       const session = activeCandidates.find((item) => item.deliveryMode === 'CANVAS') || activeCandidates[0] || null;
       const sessionClass = session ? classById.get(session.classId) : null;
       const isToday = Boolean(session) || assignedClasses.some((item) => todayTaskKeys.has(`${item.id}:${lesson.id}`));
-      const canStart = session?.deliveryMode === 'CANVAS';
+      const lessonMode = lesson.deliveryMode || 'CANVAS';
+      const sessionMode = session?.deliveryMode || null;
+      const homePractice = rawValue(user, 'student_usage_scope', 'studentUsageScope') === 'HOME_PRACTICE';
+      const canStart = sessionMode === 'CANVAS';
+      const canStartVibeCoding = sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING');
       const task = {
         lessonId: lesson.id,
         lessonTitle: lesson.title,
@@ -504,12 +516,18 @@ export function buildStudentDashboard(user) {
         today: isToday,
         activeNow: Boolean(session),
         canStart,
-        deliveryMode: session?.deliveryMode || null,
+        canStartVibeCoding,
+        deliveryMode: sessionMode || lessonMode,
         blockReason: canStart
           ? null
-          : session?.deliveryMode === 'VIBECODING'
-            ? 'VibeCoding 课堂尚未接入'
+          : sessionMode === 'VIBECODING'
+            ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
             : '等待老师开始上课',
+        vibeCodingBlockReason: canStartVibeCoding
+          ? null
+          : sessionMode === 'CANVAS'
+            ? '老师开启的是画布课堂，本课时不走 VibeCoding'
+            : '等待老师开始 VibeCoding 课堂',
         session: session ? {
           id: session.id,
           classId: session.classId,
@@ -576,6 +594,7 @@ export function buildStudentDashboard(user) {
       const activeCandidates = assignedClasses
         .map((classItem) => activeSessionByKey.get(`${classItem.id}:${lesson.id}`))
         .filter(Boolean);
+      const lessonMode = lesson.deliveryMode || 'CANVAS';
       const session = activeCandidates.find((item) => item.deliveryMode === 'CANVAS') || activeCandidates[0] || null;
       const sessionClass = session ? classById.get(session.classId) : null;
       const progress = progressByLesson.get(lesson.id) || {
@@ -587,7 +606,10 @@ export function buildStudentDashboard(user) {
         unreadFeedbackCount: 0,
         lastActivityAt: null,
       };
-      const canStart = session?.deliveryMode === 'CANVAS';
+      const sessionMode = session?.deliveryMode || null;
+      const homePractice = rawValue(user, 'student_usage_scope', 'studentUsageScope') === 'HOME_PRACTICE';
+      const canStart = sessionMode === 'CANVAS';
+      const canStartVibeCoding = sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING');
       const classId = sessionClass?.id || assignedClasses[0]?.id || null;
       const continueProject = progress.draftProjects.find((project) => project.classId === classId)
         || progress.draftProjects[0]
@@ -600,14 +622,20 @@ export function buildStudentDashboard(user) {
         assigned: assignedClasses.length > 0,
         activeNow: Boolean(session),
         canStart,
-        deliveryMode: session?.deliveryMode || null,
+        canStartVibeCoding,
+        deliveryMode: sessionMode || lessonMode,
         blockReason: canStart
           ? null
-          : session?.deliveryMode === 'VIBECODING'
-            ? 'VibeCoding 课堂尚未接入'
+          : sessionMode === 'VIBECODING'
+            ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
             : assignedClasses.length
               ? '等待老师开始上课'
               : '老师尚未把本课时加入你的班级课程表',
+        vibeCodingBlockReason: canStartVibeCoding
+          ? null
+          : sessionMode === 'CANVAS'
+            ? '老师开启的是画布课堂，本课时不走 VibeCoding'
+            : '等待老师开始 VibeCoding 课堂',
         session: session ? {
           id: session.id,
           classId: session.classId,

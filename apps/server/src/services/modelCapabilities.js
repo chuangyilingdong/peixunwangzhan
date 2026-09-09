@@ -125,7 +125,7 @@ export function listChannelModels(policy, modality) {
 }
 
 /** 生成请求模板的可用占位符。 */
-export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'audio', 'voice', 'n', 'firstFrameUrl']);
+export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'audio', 'voice', 'n', 'firstFrameUrl', 'messages']);
 
 // 默认请求模板刻意与改造前的请求体同形，只把写死的值换成占位符：
 // 管理员没改模板时，线上请求形状不变。视频的比例与音频放在 metadata 里（该字段原本就是透传袋），
@@ -146,6 +146,8 @@ function templateValue(key, context) {
   if (key === 'durationSeconds') return String(Number(value) || 0);
   if (key === 'n') return Number(value) || 0;
   if (key === 'audio') return value === true;
+  // 多轮对话：整串就是 {{messages}} 时返回数组本身（供 chat 类模板使用）。
+  if (key === 'messages') return Array.isArray(value) && value.length ? value : '';
   return value === undefined || value === null ? '' : String(value);
 }
 

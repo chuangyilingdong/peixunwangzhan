@@ -22,11 +22,12 @@ export function CanvasClassroom({ api, onEnterProject }) {
   const [selectedCourseId, setSelectedCourseId] = useState(null);
   if (classroom.loading) return <Loading label="正在读取课程中心…" />;
   if (classroom.error) return <ErrorState error={classroom.error} onRetry={classroom.refresh} />;
-  const courses = classroom.data?.classroomCourses || [];
+  const courses = (classroom.data?.classroomCourses || [])
+    .map((course) => ({ ...course, lessons: (course.lessons || []).filter((lesson) => lesson.deliveryMode !== 'VIBECODING') }))
+    .filter((course) => course.lessons.length);
   const selectedCourse = courses.find((course) => course.id === selectedCourseId) || null;
 
   async function enter(lesson) {
-    if (lesson.deliveryMode === 'VIBECODING') { setMessage('VibeCoding 课堂尚未接入，暂不能进入。'); return; }
     if (!lesson.canStart) return;
     setBusy(lesson.id); setMessage('');
     try {
@@ -60,26 +61,25 @@ export function CanvasClassroom({ api, onEnterProject }) {
           <span className="muted">共 {selectedCourse.lessons.length} 节课</span>
         </div>
         {selectedCourse.lessons.length ? selectedCourse.lessons.map((lesson) => {
-          const isVibeCoding = lesson.deliveryMode === 'VIBECODING';
-          const buttonDisabled = !lesson.canStart || isVibeCoding || busy === lesson.id;
+          const buttonDisabled = !lesson.canStart || busy === lesson.id;
           return <article className={`lesson-detail-card ${buttonDisabled ? 'is-locked' : 'is-open'}`} key={lesson.id}>
             <div className="lesson-number">{String(lesson.sort).padStart(2, '0')}</div>
             <div className="lesson-detail-main">
               <div className="lesson-detail-title-row">
                 <div><span className="lesson-kicker">第 {lesson.sort} 节</span><h3>{lesson.title}</h3></div>
-                {isVibeCoding ? <span className="status warning">尚未接入</span> : lesson.canStart ? <span className="status success">已开课</span> : <span className="status warning">未开课</span>}
+                {lesson.canStart ? <span className="status success">已开课</span> : <span className="status warning">未开课</span>}
               </div>
               <p>{lesson.summary || '本节课的创作任务与课堂说明将在这里展示。'}</p>
               <div className="lesson-meta">{lesson.className || '未配置班级'} · {lesson.teacherName || '待分配老师'}{lesson.projectCount ? ` · 已有 ${lesson.projectCount} 个项目` : ''}{lesson.workCount ? ` · 已提交 ${lesson.workCount} 次` : ''}</div>
             </div>
             <div className="lesson-detail-action">
               <span className="lesson-block-reason">{lesson.blockReason || (lesson.canStart ? '画布课堂已开始，现在可以进入创作。' : '等待老师开始上课。')}</span>
-              <button className={lesson.canStart && !isVibeCoding ? 'primary-button' : 'secondary-button'} disabled={buttonDisabled} onClick={() => enter(lesson)}>
-                {busy === lesson.id ? '正在进入…' : isVibeCoding ? '尚未接入' : lesson.canStart ? '进入课堂' : '等待开课'}
+              <button className={lesson.canStart ? 'primary-button' : 'secondary-button'} disabled={buttonDisabled} onClick={() => enter(lesson)}>
+                {busy === lesson.id ? '正在进入…' : lesson.canStart ? '进入课堂' : '等待开课'}
               </button>
             </div>
           </article>;
-        }) : <Empty title="暂无课时" body="该课程包暂时没有已发布的课时。" />}
+        }) : <Empty title="暂无课时" body="该课程包暂时没有已发布的画布课时。" />}
       </section>
     </main>;
   }
@@ -122,14 +122,14 @@ export function LearnEntry({ onSelectCanvas, onSelectVibeCoding, role = 'STUDENT
         <button className="primary-button" onClick={onSelectCanvas}>进入画布上课</button>
       </article>
       <article className="item-card learn-entry-vibecoding">
-        <div className="row-actions"><h3>💻 VibeCoding 上课</h3><span className="status warning">即将上线</span></div>
+        <div className="row-actions"><h3>💻 VibeCoding 上课</h3><span className="status success">已上线</span></div>
         <p>用中文对话写代码、跑程序、做应用。</p>
         <ul className="muted">
-          <li>同样按课程包 + 课时结构组织</li>
+          <li>和 AI 多轮对话，边聊边写代码</li>
+          <li>右侧代码面板与实时预览</li>
           <li>老师开启课堂后，对应课时才亮</li>
-          <li>运行时正在准备中，敬请期待</li>
         </ul>
-        <button className="secondary-button" disabled title="VibeCoding 课堂尚未接入">即将开放</button>
+        <button className="primary-button" onClick={onSelectVibeCoding}>进入 VibeCoding 上课</button>
       </article>
     </div>
   </>;

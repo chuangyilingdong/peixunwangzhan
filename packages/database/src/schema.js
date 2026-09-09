@@ -1500,3 +1500,85 @@ if (fileAssetsDdl && !fileAssetsDdl.includes("'TEACHING_ASSET'")) {
   }
 }
 
+// ── VibeCoding 课堂运行时（对话式代码创作 + 受限运行 + 提交点评）────────────────
+db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_conversations (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  class_id TEXT,
+  lesson_id TEXT,
+  class_session_id TEXT,
+  title TEXT NOT NULL DEFAULT '新的创作对话',
+  model TEXT,
+  files TEXT NOT NULL DEFAULT '{}',
+  entry_file TEXT NOT NULL DEFAULT 'index.html',
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','SUBMITTED','ARCHIVED')),
+  last_message_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_conv_student ON vibecoding_conversations(student_id, last_message_at DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_conv_scope ON vibecoding_conversations(org_id, lesson_id, class_session_id)');
+
+db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
+  content TEXT NOT NULL DEFAULT '',
+  model TEXT,
+  status TEXT NOT NULL DEFAULT 'SUCCEEDED' CHECK (status IN ('SUCCEEDED','FAILED','BLOCKED')),
+  error_code TEXT,
+  credits_charged INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES vibecoding_conversations(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_msg_conversation ON vibecoding_messages(conversation_id, created_at)');
+
+db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_runs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'javascript' CHECK (language IN ('javascript','html')),
+  entry_file TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'QUEUED' CHECK (status IN ('QUEUED','RUNNING','SUCCEEDED','FAILED','TIMEOUT')),
+  exit_code INTEGER,
+  stdout TEXT NOT NULL DEFAULT '',
+  stderr TEXT NOT NULL DEFAULT '',
+  duration_ms INTEGER,
+  error_code TEXT,
+  created_at TEXT NOT NULL,
+  finished_at TEXT,
+  FOREIGN KEY (conversation_id) REFERENCES vibecoding_conversations(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_run_conversation ON vibecoding_runs(conversation_id, created_at DESC)');
+
+// 提交与点评：works 是画布/作品广场专用的（project_id NOT NULL + UNIQUE 且 FK 到 student_projects），
+// VibeCoding 会话没有画布项目，所以单独建表，避免把画布链路改出兼容性问题。
+db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_submissions (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL UNIQUE,
+  student_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  class_id TEXT,
+  lesson_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  files TEXT NOT NULL DEFAULT '{}',
+  transcript TEXT NOT NULL DEFAULT '[]',
+  round INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED')),
+  teacher_comment TEXT,
+  reviewed_by TEXT,
+  reviewed_at TEXT,
+  submitted_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES vibecoding_conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_org ON vibecoding_submissions(org_id, status, submitted_at DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_submissions(student_id, submitted_at DESC)');
+

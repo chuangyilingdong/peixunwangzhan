@@ -12,6 +12,7 @@ import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, ha
 import { handleAdminCreditManagement } from './routes/adminCredits.js';
 import { handleWebsiteCredits } from './routes/websiteCredits.js';
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
+import { handleVibeCoding } from './routes/vibecoding.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
@@ -112,6 +113,7 @@ const server = http.createServer(async (req, res) => {
       ?? await handleStudentCommunication(ctx)
       ?? await handleStudentFileAssets(ctx)
       ?? await handleStudentBillingConfig(ctx)
+      ?? await handleVibeCoding(ctx)
       ?? await handleStudent(ctx)
       ?? await handleAi(ctx)
       ?? await handleAiGeneration(ctx);
@@ -121,6 +123,8 @@ const server = http.createServer(async (req, res) => {
       sendFileResponse(res, data, req);
       return;
     }
+    // SSE 等自行写响应的处理器：响应已结束，不能再套 JSON 信封
+    if (data && data.__streamed) return;
     const extraHeaders = ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {};
     sendJson(res, 200, envelope(data), req, extraHeaders);
   } catch (error) {

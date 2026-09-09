@@ -271,7 +271,7 @@ function lessonModelFor(context, modality) {
   return String((slots[slotKey] || {}).model || '').trim();
 }
 
-function providerSelectionForModality(policy, modality, modelOverride = '') {
+export function providerSelectionForModality(policy, modality, modelOverride = '') {
   const channelId = policy?.modalityChannels?.[String(modality || '').toUpperCase()];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel

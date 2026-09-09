@@ -174,7 +174,12 @@ function validateSeriesForPublishing(seriesId) {
   if (unfinished.length) throw errors.badRequest(`还有 ${unfinished.length} 个课时未发布，请先完成课时配置并发布课时`, 'COURSE_LESSONS_UNPUBLISHED');
   activeLessons.forEach((lesson) => {
     const mode = normalizeDeliveryMode(lesson.delivery_mode);
-    if (mode === 'VIBECODING') throw errors.conflict('VibeCoding 课堂运行时尚未完成，暂不能发布包含 VibeCoding 课时的课包', 'VIBECODING_RUNTIME_NOT_READY');
+    if (mode === 'VIBECODING') {
+      // VibeCoding 课时没有画布框体/素材绑定，改为校验学生进课堂后能真的对话
+      const capabilities = lessonCanvasConfig(lesson.id).capabilities || [];
+      if (!capabilities.includes('text')) throw errors.badRequest(`VibeCoding 课时「${lesson.title}」需要开放 AI 文字能力，否则学生进入课堂后无法对话`, 'VIBECODING_TEXT_CAPABILITY_REQUIRED');
+      return;
+    }
     const config = normalizeClassroomConfig(parseJson(lesson.classroom_config, {}));
     const canvas = lessonCanvasConfig(lesson.id);
     const imageCount = config.generationSlots.image.count;

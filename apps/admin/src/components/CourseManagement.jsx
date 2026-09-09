@@ -207,7 +207,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
 
   return <div className="lesson-canvas-config-editor">
     <label>课堂类型<select value={deliveryMode} onChange={(event) => update({ deliveryMode: event.target.value })}><option value="CANVAS">课堂画布</option><option value="VIBECODING">VibeCoding 课堂</option></select></label>
-    {deliveryMode === 'VIBECODING' ? <Notice>VibeCoding 课堂的运行时尚在建设中。本课可以先完成课程配置，但发布前不要让学生进入空白课堂。</Notice> : <>
+    {deliveryMode === 'VIBECODING' ? <Notice>VibeCoding 课堂已上线：学生进入后与 AI 对话写代码。发布前请为本课时勾选「AI 文字」能力，否则发布会被拦下。</Notice> : <>
       <div className="lesson-capability-checks"><strong>本课开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => toggleCapability(value, event.target.checked)} />{label}</label>)}</div>
       <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={addGroup}>＋素材组</button></div>
         {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={group.id || group.uid || `new-${groupIndex}`}>
@@ -430,7 +430,7 @@ function CreateCourseModal({ api, onClose, onCreated }) {
             <div className="publish-check is-ok"><strong>✓</strong><span>课堂类型：{form.deliveryMode === 'VIBECODING' ? 'VibeCoding 课堂' : '画布课堂'}</span></div>
           </div>
           <label className="checkbox-label top-gap"><input type="checkbox" checked={publishNow} onChange={(event) => setPublishNow(event.target.checked)} />创建后立即发布课包</label>
-          <p className="muted">勾选后课时会一并标记为已发布，课包直接上线；不勾选则先存为草稿，配置好课时后再发布。VibeCoding 课堂运行时未完成，含此类课时无法发布。</p>
+          <p className="muted">勾选后课时会一并标记为已发布，课包直接上线；不勾选则先存为草稿，配置好课时后再发布。VibeCoding 课时需要先开放「AI 文字」能力才能发布。</p>
         </div> : null}
       </div>
       <div className="modal-footer">
@@ -650,6 +650,7 @@ function CourseDetail({ api, course, onBack }) {
 
   const publishedLessons = (series?.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED').length;
   const vibecodingLessons = (series?.lessons || []).filter((lesson) => lesson.deliveryMode === 'VIBECODING').length;
+  const vibecodingWithoutText = (series?.lessons || []).filter((lesson) => lesson.deliveryMode === 'VIBECODING' && !(lesson.capabilities || []).includes('text')).length;
 
   return <>
     <PageHeader eyebrow="课程资产 · 课包编排" title={series ? series.title : course.title}
@@ -745,14 +746,14 @@ function CourseDetail({ api, course, onBack }) {
         <div className="publish-checklist">
           <div className={`publish-check ${series.lessons.length ? 'is-ok' : 'is-warn'}`}><strong>{series.lessons.length ? '✓' : '!'}</strong><span>课时数量：共 {series.lessons.length} 个</span></div>
           <div className={`publish-check ${series.lessons.length && publishedLessons === series.lessons.length ? 'is-ok' : 'is-warn'}`}><strong>{series.lessons.length && publishedLessons === series.lessons.length ? '✓' : '!'}</strong><span>已发布课时：{publishedLessons} / {series.lessons.length}（未发布的课时无法随课包上线）</span></div>
-          <div className={`publish-check ${vibecodingLessons ? 'is-warn' : 'is-ok'}`}><strong>{vibecodingLessons ? '!' : '✓'}</strong><span>VibeCoding 课时：{vibecodingLessons} 个（运行时尚未完成，含此类课时无法发布）</span></div>
+          <div className={`publish-check ${vibecodingWithoutText ? 'is-warn' : 'is-ok'}`}><strong>{vibecodingWithoutText ? '!' : '✓'}</strong><span>VibeCoding 课时：{vibecodingLessons} 个{vibecodingWithoutText ? `（其中 ${vibecodingWithoutText} 个未开放 AI 文字能力，无法发布）` : '（均已开放 AI 文字能力）'}</span></div>
           <div className={`publish-check ${series.visibility === 'ASSIGNED_ORGS' && !detail.data.assignedOrgs.length ? 'is-warn' : 'is-ok'}`}><strong>{series.visibility === 'ASSIGNED_ORGS' && !detail.data.assignedOrgs.length ? '!' : '✓'}</strong><span>可见范围：{VISIBILITY_LABELS[series.visibility]}（{series.visibility === 'ASSIGNED_ORGS' ? `已授权 ${detail.data.assignedOrgs.length} 个机构` : '无需额外授权'}）</span></div>
         </div>
         <div className="row-actions top-gap">
           {series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : <span className="status success">课包已发布</span>}
           {series.status !== 'ARCHIVED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>下架课包</button> : null}
         </div>
-        <p className="muted">发布前请确认课时均已发布、无 VibeCoding 课时；「仅已授权机构」课包需完成授权。发布后按可见范围对机构生效。</p>
+        <p className="muted">发布前请确认课时均已发布、VibeCoding 课时已开放 AI 文字能力；「仅已授权机构」课包需完成授权。发布后按可见范围对机构生效。</p>
       </Panel> : null}
 
       {editingLesson ? <LessonDrawer api={api} lesson={editingLesson} onClose={() => setEditingLesson(null)} onSaved={(text) => { setMessage(text); detail.refresh(); }} /> : null}

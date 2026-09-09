@@ -63,6 +63,34 @@ export function createApiClient({ baseUrl = apiBase(), getToken = () => null, on
     request,
     get: (path, options = {}) => request(path, { ...options, method: 'GET' }),
     post: (path, body, options = {}) => request(path, { ...options, method: 'POST', body }),
+    // SSE：返回原始 Response 交给调用方逐块读取（EventSource 不能带 Authorization 头）
+    stream: async (path, { method = 'POST', body, headers = {}, signal } = {}) => {
+      const token = getToken();
+      const response = await fetch(requestUrl(baseUrl, path), {
+        method,
+        signal,
+        credentials: 'include',
+        headers: {
+          accept: 'text/event-stream',
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(token ? { authorization: 'Bearer ' + token } : {}),
+          ...headers,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        let payload = null;
+        try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+        const error = payload?.error || {};
+        const apiError = new ApiError(error.message || fallbackMessage(response.status, '请求未能完成，请稍后重试'), {
+          status: response.status, code: error.code || 'REQUEST_FAILED', details: error.details || null,
+        });
+        if (response.status === 401 || apiError.code === 'UNAUTHORIZED') onUnauthorized(apiError);
+        throw apiError;
+      }
+      return response;
+    },
     upload: async (path, file, fields = {}, { onProgress } = {}) => {
       const form = new FormData();
       Object.entries(fields).forEach(([key, value]) => { if (value !== undefined && value !== null) form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value)); });

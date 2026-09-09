@@ -5,7 +5,7 @@ import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
-import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, createApiClient } from '@platform/shared';
+import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient } from '@platform/shared';
 import { MyCreditsPage } from './pages/MyCredits.jsx';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
@@ -367,6 +367,12 @@ function LearnCanvasPage({ api }) {
 function LearnProjectPage({ api }) {
   return <CanvasWorkspace api={api} />;
 }
+function LearnVibeCodingPage({ api }) {
+  return <VibeCodingClassroom api={api} onEnterConversation={(id) => { window.location.assign('/learn/vibecoding/' + id); }} />;
+}
+function LearnVibeCodingConversationPage({ api }) {
+  return <VibeCodingWorkspace api={api} />;
+}
 function App(){
   const loc = useLocation();
   const navigate = useNavigate();
@@ -392,6 +398,7 @@ function App(){
       '/minors': '儿童 / 未成年人说明 · AI魔法学院',
       '/learn': '学习上课 · AI魔法学院',
       '/learn/canvas': '画布上课 · AI魔法学院',
+      '/learn/vibecoding': 'VibeCoding 上课 · AI魔法学院',
     };
     const title = titles[loc.pathname] || titles['/'];
     document.title = title;
@@ -480,7 +487,8 @@ function App(){
         <Route path='/learn' element={<LearnPageInner api={api} navigate={navigate}/>}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
-        <Route path='/learn/vibecoding' element={<Notice tone='warning'>VibeCoding 上课即将上线，敬请期待。</Notice>}/>
+        <Route path='/learn/vibecoding' element={<LearnVibeCodingPage api={api}/>}/>
+        <Route path='/learn/vibecoding/:conversationId' element={<LearnVibeCodingConversationPage api={api}/>}/>
         <Route path='/my-credits' element={session ? <MyCreditsPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-courses' element={session ? <MyCoursesPage api={api} /> : <Navigate to='/login' replace />}/>

@@ -172,9 +172,12 @@ try {
     || dashboard.data?.tasks?.find((task) => task.lessonId === lessonId);
   assert.ok(vibeTask, `dashboard 未找到活动 VibeCoding 课时任务: ${JSON.stringify(dashboard.raw)}`);
   assert.equal(vibeTask.deliveryMode, 'VIBECODING');
-  assert.equal(vibeTask.blockReason, 'VibeCoding 课堂尚未接入');
+  assert.equal(vibeTask.canStart, false, 'VibeCoding 课堂里画布入口不应点亮');
+  assert.equal(vibeTask.canStartVibeCoding, true, 'VibeCoding 课堂已开启，VibeCoding 入口应点亮');
+  assert.equal(vibeTask.vibeCodingBlockReason, null);
   assert.equal(vibeTask.activeNow, true);
 
+  // 画布与 VibeCoding 互斥：VibeCoding 课堂里不能创建画布项目（入口走 /learn/vibecoding）
   const vibeProject = await api('/api/student/projects', {
     method: 'POST',
     token: student,

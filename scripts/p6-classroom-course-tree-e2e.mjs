@@ -225,8 +225,9 @@ try {
   assertStatus(afterVibe, 200, '学生读取 VibeCoding 状态失败');
   const vibeLesson = findLessonEntry(afterVibe, targetLessonId)?.lesson;
   assert.equal(vibeLesson?.activeNow, true);
-  assert.equal(vibeLesson?.canStart, false);
-  assert.equal(vibeLesson?.blockReason, 'VibeCoding 课堂尚未接入');
+  assert.equal(vibeLesson?.canStart, false, 'VibeCoding 课堂里画布入口不应点亮');
+  assert.equal(vibeLesson?.canStartVibeCoding, true, 'VibeCoding 入口应点亮');
+  assert.equal(vibeLesson?.vibeCodingBlockReason, null);
   const vibeProject = await api('/api/student/projects', {
     method: 'POST', token: student, body: { courseLessonId: targetLessonId, classId: classItem.id, title: 'VibeCoding 应阻断' },
   });
