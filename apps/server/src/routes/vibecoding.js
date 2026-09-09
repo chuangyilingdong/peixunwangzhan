@@ -268,8 +268,9 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
     sseSend(ctx, 'done', { message, creditsCharged: 1, balanceAfter, streamed: result?.streamed !== false });
   } catch (error) {
     const code = error?.code || 'VIBECODING_CHAT_FAILED';
-    if (code === PROVIDER_ERROR_CODES.ABORTED) {
-      // 学生主动停止：不扣费、不落助手消息，前端据此把气泡标成「已停止」
+    // 学生主动停止时连接先断，抛出的可能是底层 socket 错误而不是我们自己的 ABORTED，
+    // 所以以 abortController 状态为准：不落失败消息、不扣费。
+    if (abortController.signal.aborted || code === PROVIDER_ERROR_CODES.ABORTED) {
       sseSend(ctx, 'aborted', { code: 'VIBECODING_ABORTED' });
     } else {
       recordFailedMessage(conversation.id, selection.model, streamedText, code);
