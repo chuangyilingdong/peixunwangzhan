@@ -150,7 +150,7 @@ function PromptNode({ id, data, selected }) {
     <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder={data.slotType === 'text' ? '写下你想让 AI 生成什么…' : '写下你的故事或画面描述…'} maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <span className="learning-node__count">{(data.text || '').length}/300</span>
     <SlotParams data={data} />
-    {canGenerate && data.slotType === 'text' && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'TEXT', { title: data.title || 'AI 文字', prompt: data.text || '' })}>✎ {generated ? '重新生成文字' : '生成文字'}</button>}
+    {canGenerate && data.slotType === 'text' && !data.generationStatus && !generated && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'TEXT', { title: data.title || 'AI 文字', prompt: data.text || '' })}>✎ 生成文字</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {generated ? <div className="learning-node__text-result nodrag">{generated}</div> : null}
     {selected && <span className="learning-node__hint">写下提示词后点「生成文字」，AI 帮你写；也可以直接手动编辑。</span>}
@@ -180,7 +180,7 @@ function ImageNode({ id, data, selected }) {
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.caption || ''} placeholder="写下画面描述 / 提示词…" maxLength={300} onChange={(event) => updateNode(id, { caption: event.target.value })} />
     <input className="learning-node__emoji nodrag" value={data.emoji || ''} aria-label="画面表情" maxLength={2} onChange={(event) => updateNode(id, { emoji: event.target.value })} />
     <SlotParams data={data} />
-    {canGenerate && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '' })}>✦ {imageUrl ? '重新生成画面' : '生成画面'}</button>}
+    {canGenerate && !data.generationStatus && !imageUrl && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '' })}>✦ 生成画面</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">用描述生成画面，也可以继续编辑灵感</span>}
   </NodeFrame>;
@@ -220,7 +220,7 @@ function VideoNode({ id, data, selected }) {
       : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
-    {canGenerate && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" disabled={missingFirstFrame} title={missingFirstFrame ? '该模型需要先连接一张画面（首帧）' : undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl })}>▶ {videoUrl ? '重新生成短片' : '生成故事短片'}</button>}
+    {canGenerate && !data.generationStatus && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={missingFirstFrame} title={missingFirstFrame ? '该模型需要先连接一张画面（首帧）' : undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl })}>▶ 生成故事短片</button>}
     {missingFirstFrame && !data.generationStatus && <span className="learning-node__generation-state is-error">该模型需要先连接一张画面（首帧）</span>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">{missingFirstFrame ? '从图片节点的圆点连到本卡片，才能生成' : '连接提示词或画面，组织故事顺序'}</span>}
@@ -449,6 +449,15 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
         deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+        // 框体是课时配额的生成入口，删掉后素材面板无法补回，所以禁止删除框体；其他节点照常可删。
+        onBeforeDelete={readOnly ? undefined : async ({ nodes: deletingNodes, edges: deletingEdges }) => {
+          const protectedIds = new Set((deletingNodes || []).filter((node) => node.data?.slotType).map((node) => node.id));
+          if (!protectedIds.size) return true;
+          return {
+            nodes: (deletingNodes || []).filter((node) => !protectedIds.has(node.id)),
+            edges: (deletingEdges || []).filter((edge) => !protectedIds.has(edge.source) && !protectedIds.has(edge.target)),
+          };
+        }}
         minZoom={0.35}
         maxZoom={1.8}
         defaultViewport={initial.viewport}
@@ -457,7 +466,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片、从圆点连线；右键空白处可创建节点。' : '从左侧「素材」面板添加框体与素材，拖动卡片、从圆点连线。'}</div>
+      <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片、从圆点连线；右键空白处可创建节点。' : '从左侧「素材」面板添加框体与素材，拖动卡片、从圆点连线。一个框体只能生成一次，框体加入画布后不能删除。'}</div>
       {previewImage && <div className="learning-canvas__lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}><img src={previewImage} alt="素材预览" onClick={(event) => event.stopPropagation()} /><button type="button" className="learning-canvas__lightbox-close" onClick={() => setPreviewImage(null)}>×</button></div>}
       {contextMenu && allowNodeCreation && <div className="learning-canvas__context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
         <strong>创建节点</strong>
