@@ -40,6 +40,8 @@ export VITE_DEPLOYMENT_MODE="$BUILD_MODE"
 export VITE_API_BASE="${VITE_API_BASE:-/api}"
 export VITE_PUBLIC_SITE_URL="${VITE_PUBLIC_SITE_URL:-https://iicili.cyou}"
 export VITE_ORG_APP_URL="${VITE_ORG_APP_URL:-https://iicili.cyou/org}"
+# 前端依赖可能有新增（如 marked / highlight.js）：按 lockfile 同步一次，避免构建时找不到模块
+"$PNPM_COMMAND" install --frozen-lockfile --reporter=silent
 node_modules/.bin/vite build apps/admin --config apps/admin/vite.config.mjs
 node_modules/.bin/vite build apps/org --config apps/org/vite.config.mjs
 node_modules/.bin/vite build apps/website --config apps/website/vite.config.mjs
