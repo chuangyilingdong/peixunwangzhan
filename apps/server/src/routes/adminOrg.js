@@ -1,7 +1,7 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction,
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
 } from '../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -1155,6 +1155,26 @@ export async function handleAdmin(ctx) {
   const platformPermission = platformPermissionForPathname(pathname);
   if (platformPermission) requirePlatformPermission(ctx, platformPermission);
   const part = pathname.slice('/api/admin'.length) || '/';
+  if (part === '/me/password' && method === 'PUT') {
+    // 自助改密：任何登录中的平台管理员都能改自己的密码，不需要业务域权限
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const currentPassword = String(ctx.body?.currentPassword || '');
+    const newPassword = String(ctx.body?.newPassword || '');
+    if (!currentPassword) throw errors.badRequest('请输入当前密码', 'CURRENT_PASSWORD_REQUIRED');
+    if (newPassword.length < 6) throw errors.badRequest('新密码至少6位', 'USER_PASSWORD_REQUIRED');
+    if (newPassword === currentPassword) throw errors.badRequest('新密码不能与当前密码相同', 'PASSWORD_UNCHANGED');
+    const me = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
+    if (!me) throw errors.notFound('账号不存在', 'USER_NOT_FOUND');
+    if (!verifyPassword(currentPassword, me.password_hash)) throw errors.forbidden('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
+    const now = nowIso();
+    transaction(() => {
+      q('UPDATE users SET password_hash=?,updated_at=? WHERE id=?', [hashPassword(newPassword), now, me.id]);
+      // 改密后所有会话失效（含当前会话），前端据此重新登录
+      q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id]);
+      audit(ctx, 'PLATFORM_SELF_PASSWORD_UPDATE', 'USER', me.id, { login: me.login }, { passwordChanged: true }, { orgId: me.org_id || null });
+    });
+    return { passwordChanged: true, reauthRequired: true };
+  }
   if (part === '/audit-logs' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const q = auditQuery(ctx);
@@ -1836,13 +1856,32 @@ export async function handleAdmin(ctx) {
     ).map(platformUserRow);
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
-  const platformUserMatch = part.match(/^\/platform-users\/([^/]+)\/(status|password|phone)$/);
+  const platformUserDetailMatch = part.match(/^\/platform-users\/([^/]+)$/);
+  if (platformUserDetailMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const target = row('SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE user.id=? AND user.deleted_at IS NULL', [platformUserDetailMatch[1]]);
+    if (!target) throw errors.notFound('用户不存在', 'USER_NOT_FOUND');
+    return platformUserRow(target);
+  }
+  const platformUserMatch = part.match(/^\/platform-users\/([^/]+)\/(status|password|phone|role)$/);
   if (platformUserMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const target = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [platformUserMatch[1]]);
     if (!target) throw errors.notFound('用户不存在', 'USER_NOT_FOUND');
     const body = ctx.body || {}; const now = nowIso();
     const targetWithJoins = 'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE user.id=?';
+    if (platformUserMatch[2] === 'role') {
+      // 平台侧只调整机构内角色；平台管理员角色在「平台管理员」页单独管理，避免这里成为提权入口
+      const role = String(body.role || '').trim().toUpperCase();
+      if (!['STUDENT', 'TEACHER', 'ORG_ADMIN'].includes(role)) throw errors.badRequest('只能调整为学生 / 教师 / 机构管理员', 'INVALID_USER_ROLE');
+      if (target.role === 'SUPER_ADMIN') throw errors.forbidden('平台管理员角色请在「平台管理员」页管理', 'PLATFORM_ADMIN_ROLE_IMMUTABLE');
+      if (target.role === role) return platformUserRow(row(targetWithJoins, [target.id]));
+      if (!target.org_id) throw errors.badRequest('该用户没有所属机构，不能调整机构内角色', 'USER_ORG_REQUIRED');
+      q('UPDATE users SET role=?,updated_at=? WHERE id=?', [role, now, target.id]);
+      q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, target.id]);
+      audit(ctx, 'PLATFORM_USER_ROLE', 'USER', target.id, { login: target.login, role: target.role }, { role }, { orgId: target.org_id || null });
+      return platformUserRow(row(targetWithJoins, [target.id]));
+    }
     if (platformUserMatch[2] === 'status') {
       const status = body.status;
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('用户状态无效', 'INVALID_USER_STATUS');

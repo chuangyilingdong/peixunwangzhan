@@ -33,6 +33,8 @@ export function requirePlatformPermission(ctx, permission) {
     if (isRootPlatformAdmin(auth)) return auth;
     throw errors.forbidden('该平台端点尚未登记权限域，默认拒绝访问', 'PLATFORM_ENDPOINT_UNREGISTERED');
   }
+  // 自助类端点（如改自己的密码）不挂业务域权限，登录即可
+  if (permission === 'ADMIN_SELF') return auth;
   if (!PLATFORM_ADMIN_PERMISSION_SET.has(permission)) throw new Error(`Unknown platform permission: ${permission}`);
   if (!isRootPlatformAdmin(auth) && !(auth.user.permissions || []).includes(permission)) {
     throw errors.forbidden('当前账号没有该业务域权限', 'PERMISSION_DENIED', { permission });
@@ -70,6 +72,8 @@ export function platformPermissionForPathname(pathname) {
     ['/api/admin/notification-failures', 'ADMIN_CONTENT'],
     ['/api/admin/notification-queue', 'ADMIN_CONTENT'],
     ['/api/admin/leads', 'ADMIN_ORGANIZATIONS'],
+    // 自助操作（改自己的密码等）：只要登录了平台管理员就能用，不挂业务域权限
+    ['/api/admin/me', 'ADMIN_SELF'],
   ];
   return routes.find(([prefix]) => value === prefix || value.startsWith(prefix + '/'))?.[1] || UNREGISTERED_PLATFORM_PERMISSION;
 }

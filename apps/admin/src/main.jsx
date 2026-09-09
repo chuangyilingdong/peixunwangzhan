@@ -391,6 +391,9 @@ function PlatformUsers({ api }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [passwordInput, setPasswordInput] = useState({});
+  const [detailId, setDetailId] = useState('');
+  const [roleDraft, setRoleDraft] = useState('');
+  const detail = useData(() => detailId ? api.get(`admin/platform-users/${detailId}`) : Promise.resolve(null), [api, detailId]);
   const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学员' };
   async function run(target, action, body, successMessage, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -412,6 +415,7 @@ function PlatformUsers({ api }) {
     </Panel>
     <Panel title="用户列表">
       {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <><ListResultSummary total={users.data.total} page={users.data.page} totalPages={users.data.totalPages} label="名用户" /><div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>套餐</th><th>状态</th><th>有效期至</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td>{item.role === 'STUDENT' ? (item.billingPackageName || '未绑定') : '—'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td><td><div className="row-actions">
+        <button className="text-button" onClick={() => { setDetailId(item.id); setRoleDraft(item.role); setMessage(''); }}>详情</button>
         {item.status === 'ACTIVE'
           ? <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'DISABLED' }, `已停用 ${item.displayName}，该账号现有登录会话立即失效。`, `确认停用「${item.displayName}」？停用后该账号现有登录会话立即失效，将无法登录和使用平台功能。`)}>停用</button>
           : <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'ACTIVE' }, `已启用 ${item.displayName}。`)}>启用</button>}
@@ -420,6 +424,34 @@ function PlatformUsers({ api }) {
         {item.phone ? <button className="text-button" disabled={busy} onClick={() => run(item, 'phone', { phone: '' }, `已解绑 ${item.displayName} 的手机号。`, `确认解绑「${item.displayName}」的手机号 ${item.phone}？`)}>解绑手机</button> : null}
       </div></td></tr>)}</tbody></table></div><Pagination page={users.data.page} totalPages={users.data.totalPages} onChange={setPage} disabled={users.loading} /></> : <Empty title="没有符合条件的用户" body="可以调整角色、机构、关键词、排序或每页数量。" />}
     </Panel>
+    {detailId ? <Panel title="用户详情" actions={<button className="secondary-button" onClick={() => setDetailId('')}>关闭</button>}>
+      {detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.loading || !detail.data ? <Loading /> : <>
+        <div className="metrics-row">
+          <div className="metric-item"><span className="metric-label">账号</span><span className="metric-value">{detail.data.displayName || detail.data.login}</span></div>
+          <div className="metric-item"><span className="metric-label">登录名</span><span className="metric-value">{detail.data.login}</span></div>
+          <div className="metric-item"><span className="metric-label">角色</span><span className="metric-value">{roleLabels[detail.data.role] || detail.data.role}</span></div>
+          <div className="metric-item"><span className="metric-label">机构</span><span className="metric-value">{detail.data.organizationName || '平台'}</span></div>
+          <div className="metric-item"><span className="metric-label">状态</span><span className="metric-value"><Status value={detail.data.status} /></span></div>
+          <div className="metric-item"><span className="metric-label">活跃会话</span><span className="metric-value">{detail.data.activeSessions ?? 0}</span></div>
+        </div>
+        <div className="muted">最近登录：{formatDate(detail.data.lastLoginAt) || '从未登录'} · 创建于 {formatDate(detail.data.createdAt)} · 更新于 {formatDate(detail.data.updatedAt)}</div>
+        <div className="form-grid top-gap">
+          <label>调整角色<select value={roleDraft} onChange={(e) => setRoleDraft(e.target.value)} disabled={detail.data.role === 'SUPER_ADMIN'}>
+            {['STUDENT', 'TEACHER', 'ORG_ADMIN'].map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}
+          </select></label>
+          <div><button className="primary-button" disabled={busy || detail.data.role === 'SUPER_ADMIN' || roleDraft === detail.data.role}
+            onClick={async () => {
+              setBusy(true); setMessage('');
+              try {
+                await api.put(`admin/platform-users/${detail.data.id}/role`, { role: roleDraft });
+                setMessage(`已把 ${detail.data.displayName} 的角色改为${roleLabels[roleDraft]}，该账号全部会话已失效。`);
+                users.refresh(); detail.refresh();
+              } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+            }}>保存角色</button></div>
+        </div>
+        {detail.data.role === 'SUPER_ADMIN' ? <Notice tone="info">平台管理员角色在「平台管理员」页管理，这里不提供修改。</Notice> : null}
+      </>}
+    </Panel> : null}
   </>;
 }
 
@@ -1201,10 +1233,26 @@ function App() {
   useEffect(() => { if (!session?.token) return; api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);
   async function login(credentials) { const data = await api.login(credentials); if (data.user.role !== 'SUPER_ADMIN') throw new ApiError('该账号没有平台管理权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirm: '' });
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState('');
+  function openPassword() { setPasswordForm({ currentPassword: '', newPassword: '', confirm: '' }); setPasswordMessage(''); setPasswordOpen(true); }
+  async function changePassword(event) {
+    event.preventDefault();
+    if (passwordForm.newPassword.length < 6) { setPasswordMessage('新密码至少 6 位'); return; }
+    if (passwordForm.newPassword !== passwordForm.confirm) { setPasswordMessage('两次输入的新密码不一致'); return; }
+    setPasswordBusy(true); setPasswordMessage('');
+    try {
+      await api.put('admin/me/password', { currentPassword: passwordForm.currentPassword, newPassword: passwordForm.newPassword });
+      window.alert('密码已修改，请用新密码重新登录。');
+      clearSession(); setSession(null); setPasswordOpen(false); navigate('/login');
+    } catch (error) { setPasswordMessage(error.message || '修改失败'); } finally { setPasswordBusy(false); }
+  }
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
   const page = (permission, element) => <AdminPermissionGate user={session.user} permission={permission}>{element}</AdminPermissionGate>;
-  return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout}><Routes>
+  return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={openPassword}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
     <Route path="/courses" element={page('ADMIN_COURSES', <Courses api={api} />)} />
@@ -1219,7 +1267,21 @@ function App() {
     <Route path="/audit" element={page('ADMIN_AUDIT', <PlatformAudit api={api} />)} />
     <Route path="/notifications" element={page('ADMIN_CONTENT', <PlatformNotifications api={api} />)} />
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
-  </Routes></AppShell>;
+  </Routes>
+  {passwordOpen ? <div className="modal-overlay" role="dialog" aria-modal="true">
+    <form className="modal-content" onSubmit={changePassword}>
+      <div className="modal-header"><h2>修改我的密码</h2><button type="button" className="icon-button" onClick={() => setPasswordOpen(false)}>×</button></div>
+      <div className="modal-body">
+        {passwordMessage ? <Notice tone="danger">{passwordMessage}</Notice> : null}
+        <label>当前密码<input type="password" value={passwordForm.currentPassword} required onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} /></label>
+        <label>新密码（至少 6 位）<input type="password" value={passwordForm.newPassword} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} /></label>
+        <label>确认新密码<input type="password" value={passwordForm.confirm} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, confirm: event.target.value })} /></label>
+        <p className="muted">改密后所有登录会话（含当前会话）都会失效，需要用新密码重新登录。</p>
+      </div>
+      <div className="modal-footer"><button type="button" className="secondary-button" onClick={() => setPasswordOpen(false)}>取消</button><button className="primary-button" disabled={passwordBusy}>{passwordBusy ? '提交中…' : '确认修改'}</button></div>
+    </form>
+  </div> : null}
+  </AppShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);
