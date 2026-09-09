@@ -88,6 +88,36 @@ export function normalizeChannelModelCapabilities(value, modality) {
   return out;
 }
 
+/**
+ * 保存渠道配置前校验「模型能力」的填写：非法写法当场报错，避免静默丢弃或把错值发给上游。
+ * 只校验格式，不校验该模型是否真的支持（平台无法知道）。
+ */
+export function validateModelCapabilitiesInput(value, modality, modelId = '') {
+  const key = String(modality || '').toUpperCase();
+  const input = value && typeof value === 'object' ? value : {};
+  const errors = [];
+  const asList = (item) => (Array.isArray(item) ? item : item === undefined || item === null || item === '' ? [] : [item]);
+  for (const item of asList(input.aspectRatios)) {
+    if (!normalizeAspectRatio(item)) errors.push(`比例「${String(item ?? '').slice(0, 20)}」格式不对（示例：16:9、9:16）`);
+  }
+  for (const item of asList(input.resolutions)) {
+    const text = String(item ?? '').trim();
+    if (!text) { errors.push('清晰度不能为空'); continue; }
+    if (text.length > 24 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(text)) errors.push(`清晰度「${text.slice(0, 20)}」含有不支持的字符（只允许字母/数字/点/横线，示例：480p、768P、2K）`);
+  }
+  if (key === 'VIDEO') {
+    for (const item of asList(input.durations)) {
+      const n = Number(item);
+      if (!Number.isInteger(n) || n < 1 || n > 600) errors.push(`时长「${String(item ?? '').slice(0, 20)}」必须是 1–600 的整数秒（示例：5、10、15）`);
+    }
+    const frame = input.inputFrame;
+    if (frame !== undefined && frame !== null && frame !== '' && !INPUT_FRAME_VALUES.includes(String(frame).trim().toUpperCase())) errors.push('「需要输入画面」只能选 需要首帧图 / 不需要');
+    const audio = input.audio;
+    if (audio !== undefined && typeof audio !== 'boolean' && audio !== 1 && audio !== 0) errors.push('「支持生成音频」只能是勾选或不勾选');
+  }
+  return errors;
+}
+
 export function defaultCapabilities(modality, modelId = '') {
   const key = String(modality || '').toUpperCase();
   const base = MODALITY_CAPABILITY_DEFAULTS[key] || { aspectRatios: [], resolutions: [], durations: [], audio: false, inputFrame: 'NONE' };

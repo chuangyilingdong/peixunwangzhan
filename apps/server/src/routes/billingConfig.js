@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { GENERATION_PROVIDER_CATALOG, GENERATION_PROVIDER_IDS, providerDefinition, validateProviderRegistration } from '../services/providerContract.js';
 import {
   DEFAULT_REQUEST_TEMPLATES, MODALITY_CAPABILITY_DEFAULTS, TEMPLATE_PLACEHOLDERS,
-  normalizeChannelModelCapabilities, parseRequestTemplate,
+  normalizeChannelModelCapabilities, parseRequestTemplate, validateModelCapabilitiesInput,
 } from '../services/modelCapabilities.js';
 import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
@@ -386,6 +386,17 @@ export async function handleAdminBillingConfig(ctx) {
       for (const [modality, text] of Object.entries(templates)) {
         const parsed = parseRequestTemplate(text);
         if (!parsed.valid) throw errors.badRequest(`${channel.name || channel.id || '渠道'} 的 ${modality} 请求模板无效：${parsed.error}`, 'AI_PROVIDER_TEMPLATE_INVALID');
+      }
+    }
+    // 模型能力填写校验：非法写法当场报错，避免静默丢弃、或把错值原样发给上游
+    const capabilityModalityMap = body.modalityChannels === undefined ? before.modalityChannels : (body.modalityChannels || {});
+    for (const channel of channels) {
+      const capabilities = channel?.modelCapabilities;
+      if (!capabilities || typeof capabilities !== 'object') continue;
+      const channelModality = Object.entries(capabilityModalityMap || {}).find(([, id]) => id === channel?.id)?.[0] || '';
+      for (const [modelId, value] of Object.entries(capabilities)) {
+        const problems = validateModelCapabilitiesInput(value, channelModality, modelId);
+        if (problems.length) throw errors.badRequest(`${channel.name || channel.id || '渠道'} · ${modelId} 的模型能力填写有误：${problems.join('；')}`, 'AI_PROVIDER_CAPABILITY_INVALID');
       }
     }
     const modalityChannels = body.modalityChannels === undefined ? before.modalityChannels : (body.modalityChannels || {});
