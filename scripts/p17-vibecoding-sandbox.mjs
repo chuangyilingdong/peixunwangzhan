@@ -81,6 +81,19 @@ try {
   assert.equal(capability.data.backend, 'local-subprocess', `后端应为 local-subprocess，实际 ${capability.data.backend}`);
   assert.equal(capability.data.isolated, false, '子进程后端不得声称隔离');
 
+  // 生产必须 fail-closed：public 模式（生产实际值）不得启用无隔离的子进程后端
+  const productionProbe = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', "const m=await import('./apps/server/src/services/vibecodingRunner.js');console.log(JSON.stringify(m.sandboxCapability()));"], {
+      cwd: root, env: { ...baseEnv, DEPLOYMENT_MODE: 'public' }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = ''; let err = '';
+    child.stdout.on('data', (x) => { out += x; });
+    child.stderr.on('data', (x) => { err += x; });
+    child.on('close', (code) => (code ? reject(new Error(err || out)) : resolve(JSON.parse(out.trim()))));
+  });
+  assert.equal(productionProbe.available, false, '生产模式（public）下沙箱必须不可用，不能启用无隔离子进程');
+  assert.equal(productionProbe.backend, null, '生产模式不得回落到任何执行后端');
+
   const created = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId: lesson.id } });
   assert.equal(created.status, 200, `新建会话失败: ${JSON.stringify(created.data)}`);
   const conversationId = created.data.id;

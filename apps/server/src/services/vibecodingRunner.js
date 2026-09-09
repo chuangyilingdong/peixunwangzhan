@@ -18,7 +18,13 @@ const CPU_QUOTA_PERCENT = 50;
 const MAX_TASKS = 64;
 const NODE_BIN = String(process.env.VIBECODING_NODE_BIN || process.execPath);
 const SYSTEMD_RUN = String(process.env.VIBECODING_SYSTEMD_RUN || '/usr/bin/systemd-run');
-const IS_PRODUCTION = DEPLOYMENT_MODE === 'production';
+
+// 只有明确的开发模式才允许用「受控子进程」跑学生代码——它没有隔离，在生产等同把服务器交给学生。
+// 生产环境必须显式开启 systemd 隔离后端（VIBECODING_SYSTEMD_RUNNER=1，且调用 systemd-run 的权限已配好），
+// 否则一律报不可用。注意 DEPLOYMENT_MODE 会被 config.js 归一化成 development / internal-test / public，
+// 生产的实际值是 'public'，不在白名单里。
+const ALLOW_LOCAL_RUNNER = DEPLOYMENT_MODE === 'development' || process.env.VIBECODING_ALLOW_LOCAL_RUNNER === '1';
+const SYSTEMD_RUNNER_ENABLED = process.env.VIBECODING_SYSTEMD_RUNNER === '1';
 
 let capabilityCache = null;
 
@@ -59,14 +65,18 @@ function runCommand(command, args, { cwd, timeoutMs }) {
 /** 探测当前主机能不能真正隔离运行代码。结果缓存，避免每次运行都探测。 */
 export function sandboxCapability() {
   if (capabilityCache) return capabilityCache;
-  if (!IS_PRODUCTION) {
-    capabilityCache = { available: true, backend: 'local-subprocess', isolated: false, reason: '非生产环境使用受控子进程，仅用于本地验证，不等同于隔离沙箱' };
+  if (ALLOW_LOCAL_RUNNER) {
+    capabilityCache = { available: true, backend: 'local-subprocess', isolated: false, reason: '开发/测试模式使用受控子进程，不等同于隔离沙箱' };
     return capabilityCache;
   }
-  const exists = fs.existsSync(SYSTEMD_RUN);
-  capabilityCache = exists
-    ? { available: true, backend: 'systemd-run', isolated: true, reason: '' }
-    : { available: false, backend: null, isolated: false, reason: '服务器上没有 systemd-run，无法启动隔离运行环境' };
+  if (SYSTEMD_RUNNER_ENABLED && fs.existsSync(SYSTEMD_RUN)) {
+    capabilityCache = { available: true, backend: 'systemd-run', isolated: true, reason: '' };
+    return capabilityCache;
+  }
+  capabilityCache = {
+    available: false, backend: null, isolated: false,
+    reason: '服务器尚未启用代码沙箱：需要先配置隔离运行环境（systemd 受限单元 + 调用权限）并设置 VIBECODING_SYSTEMD_RUNNER=1',
+  };
   return capabilityCache;
 }
 
