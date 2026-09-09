@@ -70,6 +70,21 @@ const courses=[
 ];
 const FALLBACK_WORKS=[['🫧','点泡泡','小游戏','30 秒内点爆所有泡泡，节奏轻快的点击小游戏。'],['🍂','山行 · 杜牧','语文互动','朗读、探索与闯关结合，把古诗学成可玩的互动课。'],['🧩','C++ 代码大冒险','编程启蒙','积木拼程序，边玩边看 3D 执行过程与代码。'],['🧱','我的世界 · 简化版','沙盒创意','浏览器里搭方块世界，保存自己的创意地图。']];
 
+// 课程体系页离线兜底：与 apps/server/src/services/websiteContentDefaults.js 的 COURSES 默认内容保持一致。
+// 正常情况读 CMS（/api/public/website-content/COURSES），接口异常时用这份，保证页面不空窗。
+const COURSE_LESSON_NAMES=['认识 AI 魔法师','创意与提示词','角色与场景设计','让画面动起来','代码魔法实践','作品打磨与发布','同伴分享与互评','结课展示与颁奖'];
+const COURSES_FALLBACK={
+  eyebrow:'课程体系',
+  title:'标准课包，',
+  titleAccent:'马上开课',
+  description:'给教培机构和学校用的课包清单，不是面向个人家长的选课商城。共 11 门、87 节，建议每节 90 分钟，适学 8–16 岁。',
+  durationMinutes:90,
+  stats:[{value:'11',label:'门系统课程'},{value:'87',label:'节精品课时'},{value:'8–16',label:'岁适学年龄'},{value:'90′',label:'每节课时长'}],
+  courses:courses.map(([icon,title,category,lessonCount,ageRange,summary])=>({icon,title,category,lessonCount,ageRange,summary,lessons:COURSE_LESSON_NAMES.slice(0,Math.min(lessonCount,COURSE_LESSON_NAMES.length))})),
+  ctaTitle:'想看完整课包与课件示例？',
+  ctaText:'预约演示，获取课程清单与试用账号。'
+};
+
 function Logo(){return <Link className="logo" to="/"><i>✦</i>AI魔法学院</Link>}
 function Header({ user, userBadge }){
   const loc=useLocation();
@@ -188,7 +203,13 @@ function InnerCircleHome({ session, logout }) {
 function Home({ session, logout }){ return <InnerCircleHome session={session} logout={logout} />; }
 function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号、试用魔法石额度与示范课包清单。</p></div><Button>预约产品演示</Button></section>}
 
-function Courses(){return <><Title eyebrow="课程体系" title={<>标准课包，<em>马上开课</em></>} desc="给教培机构和学校用的课包清单，不是面向个人家长的选课商城。共 11 门、87 节，建议每节 90 分钟，适学 8–16 岁。"/><main className="inner"><div className="stats">{[['11','门系统课程'],['87','节精品课时'],['8–16','岁适学年龄'],['90′','每节课时长']].map(x=><div key={x[1]}><b>{x[0]}</b><span>{x[1]}</span></div>)}</div><div className="courses">{courses.map((c,i)=><article key={c[1]}><div className="course-head"><small>{String(i+1).padStart(2,'0')}</small><i>{c[0]}</i><div><span>{c[2]}</span><h2>{c[1]}</h2><p>{c[5]}</p></div><b>{c[3]}<small>节课</small><br/>90<small>分钟</small></b></div><div className="lessons">{['认识 AI 魔法师','创意与提示词','角色与场景设计','让画面动起来','代码魔法实践','作品打磨与发布','同伴分享与互评','结课展示与颁奖'].slice(0,Math.min(c[3],8)).map((x,n)=><span key={x}>{String(n+1).padStart(2,'0')} · {x}</span>)}</div></article>)}</div><End title="想看完整课包与课件示例？" text="预约演示，获取课程清单与试用账号。"/></main></>}
+function Courses(){
+  const cms=useWebsiteContent('COURSES');
+  const content={...COURSES_FALLBACK,...(cms.data||{})};
+  const stats=Array.isArray(content.stats)&&content.stats.length?content.stats:COURSES_FALLBACK.stats;
+  const list=Array.isArray(content.courses)&&content.courses.length?content.courses:COURSES_FALLBACK.courses;
+  const duration=Number(content.durationMinutes)>0?Number(content.durationMinutes):COURSES_FALLBACK.durationMinutes;
+  return <><Title eyebrow={content.eyebrow||COURSES_FALLBACK.eyebrow} title={<>{content.title||COURSES_FALLBACK.title}<em>{content.titleAccent||COURSES_FALLBACK.titleAccent}</em></>} desc={content.description||COURSES_FALLBACK.description}/><main className="inner"><div className="stats">{stats.map((item,index)=><div key={`${item.label||'stat'}-${index}`}><b>{item.value}</b><span>{item.label}</span></div>)}</div><div className="courses">{list.map((course,index)=>{const lessons=Array.isArray(course.lessons)&&course.lessons.length?course.lessons:COURSE_LESSON_NAMES.slice(0,Math.min(Number(course.lessonCount)||COURSE_LESSON_NAMES.length,COURSE_LESSON_NAMES.length));return <article key={`${course.title||'course'}-${index}`}><div className="course-head"><small>{String(index+1).padStart(2,'0')}</small><i>{course.icon}</i><div><span>{course.category}</span><h2>{course.title}</h2><p>{course.summary}</p></div><b>{course.lessonCount}<small>节课</small><br/>{duration}<small>分钟</small></b></div><div className="lessons">{lessons.map((name,lessonIndex)=><span key={`${name}-${lessonIndex}`}>{String(lessonIndex+1).padStart(2,'0')} · {name}</span>)}</div></article>;})}</div><End title={content.ctaTitle||COURSES_FALLBACK.ctaTitle} text={content.ctaText||COURSES_FALLBACK.ctaText}/></main></>}
 function Org(){const faqCms=useWebsiteContent('FAQ');const modules=[['机构账号','管理员、教师、学员分级；学员无需自备 API Key','课堂零配置，避免密钥泄露'],['魔法石积分','按机构充值、按用量扣减；余额不足友好提示','成本可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];return <><Title eyebrow="机构方案" title={<>教培机构如何开<br/><em>青少年 AI 通识课</em></>} desc="平台提供课程、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。"/><main className="inner"><section className="org-intro"><div><i>“</i><h2>不是再找一个聊天网站，<br/>而是一套<span>可管、可教、可展示</span>的课堂产品。</h2><p>学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的游戏、动画、互动故事和硬件作品。</p></div><div className="steps">{[['01','平台开通机构','配置席位、赠送魔法石、发布课包权限。'],['02','老师创建学员账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']].map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section><section className="faq"><div><Kicker>常见问题</Kicker><h2>{faqCms.data?.title||'开课前，你可能想知道'}</h2></div><div>{(faqCms.data?.items||[['需要学员自备 API Key 或对话平台账号？','不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用魔法石管理课堂用量。'],['机房和教室的电脑都能用吗？','可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。'],['能否做 Arduino 和 micro:bit 硬件课？','支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。']].map((item)=>({question:item[0],answer:item[1]}))).map((item,i)=><details key={item.question} open={i===0}><summary>{item.question}</summary><p>{item.answer}</p></details>)}</div></section><End title="让你的校区拥有一门可复制的 AI 课" text="预约演示，获取试用账号、魔法石体验额度与示范课包清单。"/></main></>}
 function Works(){
   const [items,setItems]=useState(FALLBACK_WORKS.map(w=>({title:w[1],description:w[3],studentName:'小创作者',emoji:w[0]})));
@@ -207,7 +228,9 @@ function Compare(){const rows=[['工具形态','多个网站 / App 来回切换'
 const CMS_FALLBACK = { HOME: { heroKicker: '教培机构青少年 AI 开课平台', heroTitle: '给机构一套', heroAccent: '能落地的青少年 AI 课', heroDescription: 'AI魔法学院把课程、机构账号、魔法石计费与作品展厅放在一个平台里。', trustTitle: '响应教育部「做中学」领航行动', trustDescription: '真实问题 · 项目式探究 · 每节课都有作品' } };
 function useWebsiteContent(key) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
-  useEffect(() => { let live = true; publicApi.get('public/website-content/' + encodeURIComponent(key)).then((payload) => { if (live) setState({ loading: false, data: payload || null, error: null }); }).catch((error) => { if (live) setState({ loading: false, data: CMS_FALLBACK[key] || null, error }); }); return () => { live = false; }; }, [key]);
+  // 接口返回的是 { key, content, version, status } 包装体，这里统一解包成 content，
+  // 调用方直接用字段（此前的写法把包装体当内容用，导致 CMS 内容一直没生效）。
+  useEffect(() => { let live = true; publicApi.get('public/website-content/' + encodeURIComponent(key)).then((payload) => { if (live) setState({ loading: false, data: payload?.content ?? payload ?? null, error: null }); }).catch((error) => { if (live) setState({ loading: false, data: CMS_FALLBACK[key] || null, error }); }); return () => { live = false; }; }, [key]);
   return { ...state, data: state.data || CMS_FALLBACK[key] || null };
 }
 

@@ -17,6 +17,7 @@ import {
 } from '../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../services/domainState.js';
+import { WEBSITE_CONTENT_DEFAULTS, WEBSITE_CONTENT_KEYS, websiteContentDefault } from '../services/websiteContentDefaults.js';
 
 const NOTIFICATION_ROLES = new Set(['ORG_ADMIN', 'TEACHER', 'STUDENT']);
 const NOTIFICATION_KINDS = new Set(['NOTICE', 'ANNOUNCEMENT', 'REMINDER']);
@@ -741,7 +742,6 @@ function validateMaterialBody(body, existing = null) {
 }
 
 
-const WEBSITE_CONTENT_KEYS = new Set(['HOME', 'ORG', 'HANDBOOK', 'COMPARE', 'FAQ', 'BRAND']);
 function websiteContentKey(value) {
   const key = String(value || '').trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9_]{1,63}$/.test(key) || !WEBSITE_CONTENT_KEYS.has(key)) throw errors.badRequest('官网内容 key 无效', 'INVALID_WEBSITE_CONTENT_KEY');
@@ -776,6 +776,15 @@ function websiteContentRevisions(contentKey) {
     changedBy: item.changed_by || null, reason: item.reason || '', createdAt: item.created_at,
   }));
 }
+// 库里还没有该区块时的兜底：内容来自内置默认，管理端可据此预填并保存成草稿
+function websiteContentDefaultEntry(contentKey) {
+  const content = websiteContentDefault(contentKey);
+  if (!content) return null;
+  return {
+    key: contentKey, content, version: 0, status: 'DEFAULT', draftVersion: 0, publishedVersion: null,
+    updatedBy: null, publishedBy: null, createdAt: null, updatedAt: null, publishedAt: null, isDefault: true,
+  };
+}
 
 export function handlePublicCommunication(ctx) {
   const { pathname, method } = ctx;
@@ -786,9 +795,13 @@ export function handlePublicCommunication(ctx) {
 
   const publicWebsiteKey = pathname.match(/^\/api\/public\/website-content\/([A-Za-z0-9_]+)$/);
   if (publicWebsiteKey && method === 'GET') {
-    const item = row('SELECT * FROM website_contents WHERE content_key=? AND published_content IS NOT NULL', [websiteContentKey(publicWebsiteKey[1])]);
-    if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
-    return normalizeWebsiteContent(item);
+    const key = websiteContentKey(publicWebsiteKey[1]);
+    const item = row('SELECT * FROM website_contents WHERE content_key=? AND published_content IS NOT NULL', [key]);
+    if (item) return normalizeWebsiteContent(item);
+    // 尚未发布过该区块：回落到内置默认内容，官网不空窗（目前只有 COURSES 走这条）
+    const fallback = websiteContentDefaultEntry(key);
+    if (fallback) return fallback;
+    throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
   }
 
   // P5-W08: 公开协议元数据；正文由官网静态页展示，版本由业务 / 法务确认后替换。
@@ -1028,13 +1041,26 @@ export async function handleAdminCommunication(ctx) {
   const websiteAction = pathname.match(/^\/api\/admin\/website-content\/([A-Za-z0-9_]+)\/(publish|rollback)$/);
   if (pathname === '/api/admin/website-content' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    return { items: rows('SELECT * FROM website_contents ORDER BY content_key').map((item) => normalizeWebsiteContent(item, true)) };
+    const items = rows('SELECT * FROM website_contents ORDER BY content_key').map((item) => normalizeWebsiteContent(item, true));
+    // 有内置默认、但库里还没行的区块（如 COURSES）也要出现在列表里，运营才点得进去
+    const existing = new Set(items.map((item) => item.key));
+    for (const key of Object.keys(WEBSITE_CONTENT_DEFAULTS)) {
+      if (existing.has(key)) continue;
+      const fallback = websiteContentDefaultEntry(key);
+      if (fallback) items.push(fallback);
+    }
+    items.sort((left, right) => left.key.localeCompare(right.key));
+    return { items };
   }
   if (websiteDraft && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const key = websiteContentKey(websiteDraft[1]);
     const item = row('SELECT * FROM website_contents WHERE content_key=?', [key]);
-    if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
+    if (!item) {
+      const fallback = websiteContentDefaultEntry(key);
+      if (fallback) return { ...fallback, publishedContent: null, revisions: [] };
+      throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
+    }
     return { ...normalizeWebsiteContent(item, true), publishedContent: parseJson(item.published_content, null), revisions: websiteContentRevisions(key) };
   }
   if (websiteDraft && method === 'PUT') {
