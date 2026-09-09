@@ -9,6 +9,19 @@ import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
 
+// 服务端返回 { filename, content }，这里统一触发浏览器下载
+function downloadCsv(filename, content) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename || 'export.csv';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 const navigation = [
   { heading: '运营中心' },
   { to: '/dashboard', icon: '◈', label: '平台概览', permission: 'ADMIN_ANALYTICS' },
@@ -139,6 +152,16 @@ function Organizations({ api }) {
   const [passwordForm, setPasswordForm] = useState({});
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  async function exportOrganizations() {
+    setExporting(true); setMessage('');
+    try {
+      const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+      const result = await api.get(`admin/organizations/export?${params.toString()}`);
+      downloadCsv(result.filename, result.content);
+      setMessage(`已导出 ${result.count} 家机构。`);
+    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
+  }
   const [detailBusy, setDetailBusy] = useState(false);
   const [showRechargeDialog, setShowRechargeDialog] = useState(false);
   const [showRechargeHistory, setShowRechargeHistory] = useState(false);
@@ -224,7 +247,7 @@ function Organizations({ api }) {
   }
 
   return <>
-    <PageHeader eyebrow="平台教务" title="机构管理" description="创建和维护机构资料、服务状态、管理员、配额、套餐与审计记录。" actions={<button className="secondary-button" onClick={() => { organizations.refresh(); if (selectedId) detail.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="平台教务" title="机构管理" description="创建和维护机构资料、服务状态、管理员、配额、套餐与审计记录。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportOrganizations}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { organizations.refresh(); if (selectedId) detail.refresh(); }}>刷新</button></>} />
     <div className="split">
       <Panel title="新建机构"><form onSubmit={create}>
         <label>机构名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label>
@@ -394,6 +417,16 @@ function PlatformUsers({ api }) {
   const [detailId, setDetailId] = useState('');
   const [roleDraft, setRoleDraft] = useState('');
   const detail = useData(() => detailId ? api.get(`admin/platform-users/${detailId}`) : Promise.resolve(null), [api, detailId]);
+  const [exporting, setExporting] = useState(false);
+  async function exportUsers() {
+    setExporting(true); setMessage('');
+    try {
+      const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+      const result = await api.get(`admin/platform-users/export?${params.toString()}`);
+      downloadCsv(result.filename, result.content);
+      setMessage(`已导出 ${result.count} 名用户。`);
+    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
+  }
   const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学员' };
   async function run(target, action, body, successMessage, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -402,7 +435,7 @@ function PlatformUsers({ api }) {
     catch (err) { setMessage(err.message); } finally { setBusy(false); }
   }
   return <>
-    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态，并可执行启停、重置密码与解绑手机。" actions={<button className="secondary-button" onClick={users.refresh}>刷新</button>} />
+    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态，并可执行启停、重置密码与解绑手机。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportUsers}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={users.refresh}>刷新</button></>} />
     <Panel title="筛选条件">
       <div className="form-grid">
         <label>角色<select value={filters.role} onChange={(e) => { setFilters({ ...filters, role: e.target.value }); setPage(1); }}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -827,6 +860,16 @@ function PlatformWorks({ api }) {
   const [reportAction, setReportAction] = useState(null); const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); const [reportBusy, setReportBusy] = useState(false);
   const [detailId, setDetailId] = useState(null);
   const detail = useData(() => detailId ? api.get(`admin/works/${detailId}/detail`) : Promise.resolve(null), [api, detailId]);
+  const [exporting, setExporting] = useState(false);
+  async function exportWorks() {
+    setExporting(true); setMessage('');
+    try {
+      const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+      const result = await api.get(`admin/works/export?${params.toString()}`);
+      downloadCsv(result.filename, result.content);
+      setMessage(`已导出 ${result.count} 件作品。`);
+    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
+  }
   const [detailTab, setDetailTab] = useState('basic');
   const [detailFeatureReason, setDetailFeatureReason] = useState('');
   const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
@@ -842,7 +885,7 @@ function PlatformWorks({ api }) {
   function openDetail(item) { setDetailId(item.id); setDetailTab('basic'); setDetailFeatureReason(item.featuredReason || ''); }
   function closeDetail() { setDetailId(null); }
   return <>
-    <PageHeader eyebrow="内容治理" title="平台作品库" description="学生提交的作业会汇总到这里；机构审核通过后，由平台选择「发布到作品广场」的作品才会出现在官网学生作品广场。" actions={<button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); if (detailId) detail.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="内容治理" title="平台作品库" description="学生提交的作业会汇总到这里；机构审核通过后，由平台选择「发布到作品广场」的作品才会出现在官网学生作品广场。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportWorks}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); if (detailId) detail.refresh(); }}>刷新</button></>} />
     <Panel title="筛选条件"><div className="form-grid"><label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>机构<select value={filters.orgId} onChange={(e) => { setFilters({ ...filters, orgId: e.target.value }); setPage(1); }}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label><label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label><label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="featured">精选 / 提交时间</option><option value="submitted">最近提交</option><option value="title">作品名称</option></select></label><label>每页条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10</option><option value="20">20</option><option value="50">50</option></select></label></div>{message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
     <Panel title={`作品列表（${works.data?.total ?? 0} 条）`}>{works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <><ListResultSummary total={works.data.total} page={works.data.page} totalPages={works.data.totalPages} label="件作品" /><div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>状态与授权</th><th>举报（暂缓）</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><button className="text-button" onClick={() => openDetail(item)}><strong>{item.title}</strong></button><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td><Status value={item.status} />{item.featured && <span className="status success">精选</span>}{item.plazaPublished ? <span className="status success">作品广场</span> : null}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{['PENDING', 'APPROVED', 'PUBLISHED'].includes(item.status) ? <button className="text-button" disabled={saving} onClick={() => togglePlaza(item)}>{item.plazaPublished ? '从作品广场移除' : '发布到作品广场'}</button> : null}{item.status === 'PUBLISHED' && <><button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button><button className="text-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button></>}</div></td></tr>)}</tbody></table></div><Pagination page={works.data.page} totalPages={works.data.totalPages} onChange={setPage} disabled={works.loading} /></> : <Empty title="没有符合条件的作品" />}</Panel>
     <Panel title={`举报记录（当前暂缓，仅保留历史只读） · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作（暂缓）</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" disabled title="举报治理按当前决策暂缓">暂缓</button></td></tr>)}</tbody></table></div> : <Empty title="暂无待处理举报" />}</Panel>

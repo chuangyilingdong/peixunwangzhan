@@ -1113,6 +1113,47 @@ function escapeCsv(v) {
   const t = String(v);
   return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
 }
+function csvDocument(header, dataRows) {
+  const lines = [header.map(escapeCsv).join(',')];
+  for (const row of dataRows) lines.push(row.map(escapeCsv).join(','));
+  return '\ufeff' + lines.join('\r\n') + '\r\n';
+}
+function csvFileName(prefix) {
+  return prefix + '-' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv';
+}
+// 列表与导出共用同一套筛选，避免「看到的和导出的不一致」
+function platformUserFilters(ctx) {
+  const role = ctx.search.get('role'); const orgIdFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
+  const params = []; const conditions = ['user.deleted_at IS NULL'];
+  if (['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER', 'STUDENT'].includes(role)) { conditions.push('user.role=?'); params.push(role); }
+  if (orgIdFilter) { conditions.push('user.org_id=?'); params.push(orgIdFilter); }
+  if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR user.phone LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
+  return { where: conditions.join(' AND '), params };
+}
+function organizationFilters(ctx) {
+  const search = String(ctx.search.get('search') || '').trim();
+  const statusFilter = String(ctx.search.get('status') || '').trim();
+  const conditions = []; const params = [];
+  if (search) {
+    conditions.push('(organization.name LIKE ? OR organization.id LIKE ?)');
+    const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+    params.push(keyword, keyword);
+  }
+  if (['TRIAL', 'ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('organization.status=?'); params.push(statusFilter); }
+  return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params };
+}
+function platformWorkFilters(ctx) {
+  const status = ctx.search.get('status'); const orgFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
+  const conditions = []; const params = [];
+  if (['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED'].includes(status)) { conditions.push('work.status=?'); params.push(status); }
+  if (orgFilter) { conditions.push('work.org_id=?'); params.push(orgFilter); }
+  if (search) {
+    conditions.push('(work.title LIKE ? OR student.display_name LIKE ? OR organization.name LIKE ?)');
+    const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+    params.push(keyword, keyword, keyword);
+  }
+  return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params };
+}
 
 function buildOrganizationDetail(orgId) {
   const organization = organizationRow(orgId);
@@ -1227,8 +1268,6 @@ export async function handleAdmin(ctx) {
 
   if (part === '/organizations' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const search = String(ctx.search.get('search') || '').trim();
-    const statusFilter = String(ctx.search.get('status') || '').trim();
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 100 });
     const sortKey = String(ctx.search.get('sort') || 'created').trim();
@@ -1238,17 +1277,21 @@ export async function handleAdmin(ctx) {
       name: 'organization.name COLLATE NOCASE ASC, organization.id DESC',
       expires: 'organization.contract_expires_at ASC, organization.id DESC',
     }[sort];
-    const conditions = []; const params = [];
-    if (search) {
-      conditions.push('(organization.name LIKE ? OR organization.id LIKE ?)');
-      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
-      params.push(keyword, keyword);
-    }
-    if (['TRIAL', 'ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('organization.status=?'); params.push(statusFilter); }
-    const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const { where, params } = organizationFilters(ctx);
     const total = Number(row('SELECT COUNT(*) n FROM organizations organization' + where, params)?.n || 0);
     const items = rows('SELECT organization.* FROM organizations organization' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map(normalizeOrg);
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
+  }
+  if (part === '/organizations/export' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const { where, params } = organizationFilters(ctx);
+    const items = rows('SELECT organization.* FROM organizations organization' + where + ' ORDER BY organization.created_at DESC, organization.id DESC LIMIT 2000', params);
+    const content = csvDocument(
+      ['机构名称', '机构ID', '状态', '试用', '合同开始', '合同到期', '基础教师席位', '购买教师席位', '创建时间'],
+      items.map((org) => [org.name, org.id, org.status, org.is_trial ? '是' : '否', org.contract_start_at || '', org.contract_expires_at || '', org.base_teacher_seats, org.purchased_teacher_seats, org.created_at]),
+    );
+    audit(ctx, 'PLATFORM_ORG_EXPORT', 'ORGANIZATION', null, null, { count: items.length, filters: { status: ctx.search.get('status') || null, search: ctx.search.get('search') || null } });
+    return { filename: csvFileName('organizations'), content, count: items.length };
   }
   if (part === '/organizations' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const name = String(body.name || '').trim();
@@ -1852,17 +1895,27 @@ export async function handleAdmin(ctx) {
       name: 'user.display_name COLLATE NOCASE ASC, user.id DESC',
       status: 'user.status ASC, user.created_at DESC, user.id DESC',
     }[sort];
-    const params = []; const conditions = ['user.deleted_at IS NULL'];
-    if (['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER', 'STUDENT'].includes(role)) { conditions.push('user.role=?'); params.push(role); }
-    if (orgIdFilter) { conditions.push('user.org_id=?'); params.push(orgIdFilter); }
-    if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR user.phone LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
-    const where = conditions.join(' AND ');
+    const { where, params } = platformUserFilters(ctx);
     const total = Number(row('SELECT COUNT(*) n FROM users user WHERE ' + where, params)?.n || 0);
     const items = rows(
       'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE ' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?',
       [...params, limit, (page - 1) * limit],
     ).map(platformUserRow);
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
+  }
+  if (part === '/platform-users/export' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const { where, params } = platformUserFilters(ctx);
+    const items = rows(
+      'SELECT user.*, organization.name organization_name, billing_package.name billing_package_name FROM users user LEFT JOIN organizations organization ON organization.id=user.org_id LEFT JOIN billing_packages billing_package ON billing_package.id=user.billing_package_id WHERE ' + where + ' ORDER BY user.created_at DESC, user.id DESC LIMIT 5000',
+      params,
+    );
+    const content = csvDocument(
+      ['登录名', '姓名', '角色', '机构', '状态', '手机号', '套餐', '有效期至', '创建时间'],
+      items.map((user) => [user.login, user.display_name, user.role, user.organization_name || '平台', user.status, user.phone || '', user.billing_package_name || '', user.expires_at || '', user.created_at]),
+    );
+    audit(ctx, 'PLATFORM_USER_EXPORT', 'USER', null, null, { count: items.length, filters: { role: ctx.search.get('role') || null, orgId: ctx.search.get('orgId') || null, search: ctx.search.get('search') || null } });
+    return { filename: csvFileName('platform-users'), content, count: items.length };
   }
   const platformUserDetailMatch = part.match(/^\/platform-users\/([^/]+)$/);
   if (platformUserDetailMatch && method === 'GET') {
@@ -2133,21 +2186,32 @@ export async function handleAdmin(ctx) {
     const sortKey = String(ctx.search.get('sort') || 'featured').trim();
     const sort = Object.hasOwn({ featured: true, submitted: true, title: true }, sortKey) ? sortKey : 'featured';
     const sortSql = { featured: 'work.featured_at DESC, work.submitted_at DESC, work.id DESC', submitted: 'work.submitted_at DESC, work.id DESC', title: 'work.title COLLATE NOCASE ASC, work.id DESC' }[sort];
-    const conditions = []; const params = [];
-    if (['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED'].includes(status)) { conditions.push('work.status=?'); params.push(status); }
-    if (orgFilter) { conditions.push('work.org_id=?'); params.push(orgFilter); }
-    if (search) {
-      conditions.push('(work.title LIKE ? OR student.display_name LIKE ? OR organization.name LIKE ?)');
-      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
-      params.push(keyword, keyword, keyword);
-    }
-    const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const { where, params } = platformWorkFilters(ctx);
     const total = Number(row('SELECT COUNT(*) n FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id' + where, params)?.n || 0);
     const items = rows(
       `SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by${where} ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
       [...params, limit, (page - 1) * limit],
     ).map((work) => ({ ...normalizeWork(work), organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
+  }
+  if (part === '/works/export' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const { where, params } = platformWorkFilters(ctx);
+    const items = rows(
+      `SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title
+       FROM works work JOIN users student ON student.id=work.student_id
+       LEFT JOIN organizations organization ON organization.id=work.org_id
+       LEFT JOIN classes class ON class.id=work.class_id
+       LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id${where}
+       ORDER BY work.submitted_at DESC, work.id DESC LIMIT 5000`,
+      params,
+    );
+    const content = csvDocument(
+      ['作品标题', '学员', '机构', '班级', '课时', '状态', '已上作品广场', '精选', '提交时间'],
+      items.map((work) => [work.title, work.student_name || '', work.organization_name || '', work.class_name || '', work.lesson_title || '', work.status, Number(work.is_public || 0) === 1 ? '是' : '否', work.featured_at ? '是' : '否', work.submitted_at]),
+    );
+    audit(ctx, 'PLATFORM_WORK_EXPORT', 'WORK', null, null, { count: items.length, filters: { status: ctx.search.get('status') || null, orgId: ctx.search.get('orgId') || null, search: ctx.search.get('search') || null } });
+    return { filename: csvFileName('works'), content, count: items.length };
   }
   let platformWorkMatch = part.match(/^\/works\/([^/]+)\/unpublish$/);
   if (platformWorkMatch && method === 'PUT') {

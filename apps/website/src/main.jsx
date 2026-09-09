@@ -73,10 +73,10 @@ const FALLBACK_WORKS=[['🫧','点泡泡','小游戏','30 秒内点爆所有泡�
 function Logo(){return <Link className="logo" to="/"><i>✦</i>AI魔法学院</Link>}
 function Header({ user, userBadge }){
   const loc=useLocation();
-  const nav=[['/','首页'],['/learn','学习上课'],['/works','作品广场']];
+  const nav=[['/','首页'],['/learn','学习上课'],['/marketplace','课程广场'],['/works','作品广场']];
   return <header><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div></div></header>;
 }
-function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
+function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/marketplace">课程广场</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link onClick={()=>trackAnalytics('cta_click',{target:to})} to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';return <article className={'work w'+index%6}><div className="art"><span>{emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url){trackAnalytics('work_view',{resourceType:'work'});navigate(url);}}}>打开体验 <b>↗</b></button></div></article>}
@@ -97,7 +97,7 @@ function clamp01(value) { return Math.max(0, Math.min(1, value)); }
 function easeInOutCubic(value) { return value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2; }
 function updateInnerSection(progress) { if (progress < 0.18) return 'hero'; if (progress < 0.45) return 'projects'; if (progress < 0.68) return 'expertise'; if (progress < 1.15) return 'about'; return 'contact'; }
 function InnerCircleLogo({ onClick }) { return <button type="button" className="ic-logo" onClick={onClick} aria-label="回到首页"><span className="ic-logo-mark">✦</span><span><b>AI 魔法学院</b><small>INNER CIRCLE / 创作课堂</small></span></button>; }
-const WEBSITE_NAV = [['/', '首页'], ['/learn', '学习上课'], ['/works', '作品广场']];
+const WEBSITE_NAV = [['/', '首页'], ['/learn', '学习上课'], ['/marketplace', '课程广场'], ['/works', '作品广场']];
 function InnerCircleHeader({ userBadge, session, logout }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = () => setMenuOpen(false);
