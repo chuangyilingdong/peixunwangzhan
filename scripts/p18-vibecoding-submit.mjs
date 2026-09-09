@@ -84,7 +84,7 @@ try {
   await stream.text();
 
   // 提交
-  const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { description: '第一个网页作品' } });
+  const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { description: '第一个网页作品', copyrightConfirmed: true } });
   assert.equal(submitted.status, 200, `提交失败: ${JSON.stringify(submitted.data)}`);
   assert.equal(submitted.data.status, 'PENDING', '提交后应为待点评');
   assert.equal(submitted.data.round, 1, '首次提交轮次应为 1');
@@ -95,7 +95,7 @@ try {
   const afterSubmit = await api(`/api/student/vibecoding/conversations/${conversationId}/messages`, { method: 'POST', token: student, body: { content: '还能聊吗' } });
   assert.equal(afterSubmit.status, 409, `提交后应锁定会话，实际 ${afterSubmit.status}`);
   assert.equal(afterSubmit.data?.error?.code, 'VIBECODING_CONVERSATION_LOCKED', '锁定错误码应为 VIBECODING_CONVERSATION_LOCKED');
-  const duplicate = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: {} });
+  const duplicate = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
   assert.equal(duplicate.status, 409, '待点评期间重复提交应被拒');
   assert.equal(duplicate.data?.error?.code, 'VIBECODING_ALREADY_SUBMITTED', '重复提交错误码应为 VIBECODING_ALREADY_SUBMITTED');
 
@@ -131,7 +131,7 @@ try {
   assert.equal(reopened.data.submission.status, 'REJECTED', '学生应能看到驳回意见');
   assert.match(reopened.data.submission.teacherComment, /标题/, '驳回意见应可见');
 
-  const resubmit = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: {} });
+  const resubmit = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
   assert.equal(resubmit.status, 200, `二次提交失败: ${JSON.stringify(resubmit.data)}`);
   assert.equal(resubmit.data.round, 2, `二次提交轮次应为 2，实际 ${resubmit.data.round}`);
 

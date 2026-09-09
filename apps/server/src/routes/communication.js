@@ -871,6 +871,41 @@ export function handlePublicCommunication(ctx) {
     return publicWorkRow(work);
   }
 
+  // 公开 VibeCoding 作品（平台把老师已通过的作品发布到作品广场后，官网可点开直接玩）
+  if (pathname === '/api/public/vibecoding-works' && method === 'GET') {
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 60, fallback: 20 });
+    const items = rows(`
+      SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files,
+             submission.featured_at, submission.submitted_at, submission.share_token,
+             user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
+             organization.name AS org_name
+      FROM vibecoding_submissions submission
+      JOIN users user ON user.id=submission.student_id
+      LEFT JOIN organizations organization ON organization.id=submission.org_id
+      WHERE submission.is_public=1 AND submission.status='APPROVED' AND submission.share_token IS NOT NULL
+        AND submission.copyright_confirmed_at IS NOT NULL
+      ORDER BY submission.featured_at DESC NULLS LAST, submission.submitted_at DESC
+      LIMIT ?
+    `, [limit]).map((item) => publicVibeCodingWorkRow(item));
+    return { items, total: items.length };
+  }
+  const publicVibeCodingWorkMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)$/);
+  if (publicVibeCodingWorkMatch && method === 'GET') {
+    const work = row(`
+      SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files,
+             submission.featured_at, submission.submitted_at, submission.share_token,
+             user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
+             organization.name AS org_name
+      FROM vibecoding_submissions submission
+      JOIN users user ON user.id=submission.student_id
+      LEFT JOIN organizations organization ON organization.id=submission.org_id
+      WHERE submission.share_token=? AND submission.is_public=1 AND submission.status='APPROVED'
+        AND submission.copyright_confirmed_at IS NOT NULL
+    `, [publicVibeCodingWorkMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
+    return publicVibeCodingWorkRow(work, { includeFiles: true });
+  }
+
   // P5-W05: 公开课包列表（无需登录，只返回 PUBLISHED 且可见范围合规的课包）
   if (pathname === '/api/public/course-series' && method === 'GET') {
     const params = [];
@@ -1032,6 +1067,30 @@ function publicWorkRow(row) {
     publicUrl: row.share_token ? `/works/${row.share_token}` : null,
     orgName: row.org_name || null,
     studentName,
+  };
+}
+
+// VibeCoding 作品：官网详情页用 files + entryFile 在 sandbox iframe 里直接运行
+function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
+  let studentName = '小创作者';
+  if (!row.student_anon && row.student_name) {
+    const trimmed = String(row.student_name).trim();
+    if (trimmed) studentName = trimmed.charAt(0) + '同学';
+  }
+  const files = parseJson(row.files, {});
+  return {
+    id: row.id,
+    type: 'VIBECODING',
+    title: row.title,
+    description: row.description || '',
+    entryFile: row.entry_file || 'index.html',
+    fileCount: Object.keys(files).length,
+    featured: Boolean(row.featured_at),
+    submittedAt: row.submitted_at,
+    publicUrl: row.share_token ? `/works/${row.share_token}` : null,
+    orgName: row.org_name || null,
+    studentName,
+    ...(includeFiles ? { files } : {}),
   };
 }
 

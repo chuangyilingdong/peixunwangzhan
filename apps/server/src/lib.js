@@ -58,6 +58,7 @@ export function platformPermissionForPathname(pathname) {
     ['/api/admin/course-lessons', 'ADMIN_COURSES'],
     ['/api/admin/course-marketplace', 'ADMIN_COURSES'],
     ['/api/admin/works', 'ADMIN_WORKS'],
+    ['/api/admin/vibecoding-works', 'ADMIN_WORKS'],
     ['/api/admin/work-reports', 'ADMIN_WORKS'],
     ['/api/admin/work-data', 'ADMIN_WORKS'],
     ['/api/admin/billing', 'ADMIN_BILLING'],

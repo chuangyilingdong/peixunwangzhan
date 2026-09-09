@@ -313,9 +313,10 @@ export function CanvasWorkspace({ api, ...props }) {
 
   async function submitWork() {
     if (!editable || !draft) return;
+    if (!window.confirm('提交给老师前请确认：这是你自己的作品，并同意平台在作品广场展示。')) return;
     setBusy(true);
     try {
-      const result = await api.post(`student/projects/${project.data.id}/submit`, { canvasSnapshot: draft, description: `完成${project.data.courseLessonTitle || '本节课堂'}作品` });
+      const result = await api.post(`student/projects/${project.data.id}/submit`, { canvasSnapshot: draft, description: `完成${project.data.courseLessonTitle || '本节课堂'}作品`, copyrightConfirmed: true });
       setCanvasSnapshot(result.project.canvasSnapshot);
       setDraft(result.project.canvasSnapshot);
       setSavedSignature(canvasContentSignature(result.project.canvasSnapshot));

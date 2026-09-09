@@ -12,6 +12,7 @@ import { handleTeachingTasks } from '../services/teachingTasks.js';
 import { getAiProviderPolicy } from './billingConfig.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../services/mfa.js';
+import { normalizeSubmission } from './vibecoding.js';
 
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
 function platformIssuerName() {
@@ -2444,6 +2445,68 @@ export async function handleAdmin(ctx) {
       reports,
       latestPublishRequest: latestPublishRequest ? normalizeWorkPublishRequest(latestPublishRequest) : null,
     };
+  }
+
+  // ── VibeCoding 作品（老师点评通过后，平台决定是否发布到作品广场）───────────────
+  if (part === '/vibecoding-works' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
+    const orgFilter = String(ctx.search.get('orgId') || '').trim();
+    const publishedFilter = String(ctx.search.get('published') || '').trim();
+    const search = String(ctx.search.get('search') || '').trim();
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
+    const conditions = ['1=1']; const params = [];
+    if (['PENDING', 'APPROVED', 'REJECTED'].includes(status)) { conditions.push('submission.status=?'); params.push(status); }
+    if (orgFilter) { conditions.push('submission.org_id=?'); params.push(orgFilter); }
+    if (publishedFilter === '1' || publishedFilter === '0') { conditions.push('submission.is_public=?'); params.push(Number(publishedFilter)); }
+    if (search) { conditions.push('(submission.title LIKE ? OR student.display_name LIKE ? OR student.login LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
+    const where = ' WHERE ' + conditions.join(' AND ');
+    const joins = ` FROM vibecoding_submissions submission
+      LEFT JOIN users student ON student.id=submission.student_id
+      LEFT JOIN organizations organization ON organization.id=submission.org_id
+      LEFT JOIN classes class ON class.id=submission.class_id
+      LEFT JOIN course_lessons lesson ON lesson.id=submission.lesson_id`;
+    const total = Number(row('SELECT COUNT(*) n' + joins + where, params)?.n || 0);
+    const items = rows(
+      `SELECT submission.*, student.display_name student_name, student.login student_login, organization.name organization_name, class.name class_name, lesson.title lesson_title` + joins + where +
+      ' ORDER BY submission.submitted_at DESC, submission.id DESC LIMIT ? OFFSET ?',
+      [...params, limit, (page - 1) * limit],
+    ).map((item) => ({ ...normalizeSubmission(item), organizationName: item.organization_name || null }));
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort: 'submitted' };
+  }
+  const vibeWorkPlazaMatch = part.match(/^\/vibecoding-works\/([^/]+)\/plaza$/);
+  if (vibeWorkPlazaMatch && method === 'PUT') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeWorkPlazaMatch[1]]);
+    if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    if (!Object.hasOwn(ctx.body || {}, 'published') || typeof ctx.body.published !== 'boolean') throw errors.badRequest('请选择是否发布到作品广场', 'WORK_PLAZA_FLAG_REQUIRED');
+    const now = nowIso();
+    if (ctx.body.published) {
+      if (submission.status !== 'APPROVED') throw errors.conflict('仅老师已通过的作品可以发布到作品广场', 'VIBECODING_WORK_NOT_APPROVED');
+      if (!submission.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+      let shareToken = submission.share_token;
+      if (!shareToken) {
+        shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);
+        while (row('SELECT id FROM vibecoding_submissions WHERE share_token=?', [shareToken])) shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);
+      }
+      q('UPDATE vibecoding_submissions SET is_public=1,share_token=?,published_at=?,published_by=?,updated_at=? WHERE id=?', [shareToken, now, auth.user.id, now, submission.id]);
+      audit(ctx, 'PLATFORM_VIBECODING_WORK_PUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: Number(submission.is_public || 0) === 1 }, { isPublic: true, shareToken }, { orgId: submission.org_id });
+    } else {
+      q('UPDATE vibecoding_submissions SET is_public=0,published_at=NULL,published_by=NULL,updated_at=? WHERE id=?', [now, submission.id]);
+      audit(ctx, 'PLATFORM_VIBECODING_WORK_UNPUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: true }, { isPublic: false }, { orgId: submission.org_id });
+    }
+    const updated = row(
+      `SELECT submission.*, student.display_name student_name, student.login student_login, organization.name organization_name, class.name class_name, lesson.title lesson_title
+       FROM vibecoding_submissions submission
+       LEFT JOIN users student ON student.id=submission.student_id
+       LEFT JOIN organizations organization ON organization.id=submission.org_id
+       LEFT JOIN classes class ON class.id=submission.class_id
+       LEFT JOIN course_lessons lesson ON lesson.id=submission.lesson_id
+       WHERE submission.id=?`,
+      [submission.id],
+    );
+    return { ...normalizeSubmission(updated), organizationName: updated.organization_name || null };
   }
   return null;
 }

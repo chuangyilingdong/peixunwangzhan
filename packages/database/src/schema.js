@@ -1599,3 +1599,22 @@ db.exec(`CREATE TABLE IF NOT EXISTS user_mfa_credentials (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_user_mfa_status ON user_mfa_credentials(status)');
+
+// ── VibeCoding 作品发布到作品广场 ─────────────────────────────────────────────
+// 学生提交时确认版权与展示授权；平台在「平台作品库」决定是否发布到作品广场（share_token 前缀 vbt_）。
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN copyright_confirmed_at TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN copyright_confirmed_by TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN share_token TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN published_at TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN published_by TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN featured_at TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_share_token ON vibecoding_submissions(share_token) WHERE share_token IS NOT NULL'); }
+catch (error) { if (!String(error?.message || '').includes('already exists')) throw error; }

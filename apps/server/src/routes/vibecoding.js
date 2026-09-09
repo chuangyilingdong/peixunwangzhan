@@ -160,7 +160,7 @@ function recordFailedMessage(conversationId, model, content, errorCode) {
   return messageId;
 }
 
-function normalizeSubmission(value, { includeContent = false } = {}) {
+export function normalizeSubmission(value, { includeContent = false } = {}) {
   if (!value) return null;
   return {
     id: value.id, conversationId: value.conversation_id, studentId: value.student_id,
@@ -172,6 +172,11 @@ function normalizeSubmission(value, { includeContent = false } = {}) {
     status: value.status, teacherComment: value.teacher_comment || null,
     reviewedBy: value.reviewed_by || null, reviewerName: value.reviewer_name || null,
     reviewedAt: value.reviewed_at || null, submittedAt: value.submitted_at,
+    copyrightConfirmedAt: value.copyright_confirmed_at || null,
+    isPublic: Number(value.is_public || 0) === 1,
+    shareToken: value.share_token || null,
+    featured: Boolean(value.featured_at),
+    publishedAt: value.published_at || null,
     ...(includeContent ? { files: parseFiles(value.files, { fallback: {} }), transcript: JSON.parse(value.transcript || '[]') } : {}),
   };
 }
@@ -402,6 +407,10 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
     const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ?', [conversation.id]);
     if (existing && existing.status === 'PENDING') throw errors.conflict('作品已提交，等待老师点评', 'VIBECODING_ALREADY_SUBMITTED');
+    // 与画布作品一致：提交即确认版权与展示授权，平台后续才可发布到作品广场
+    if (ctx.body?.copyrightConfirmed !== true) {
+      throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+    }
     const files = filesOf(conversation);
     const transcript = rows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id])
       .map((message) => ({ role: message.role, content: message.content, createdAt: message.created_at }));
@@ -412,14 +421,16 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     transaction(() => {
       if (existing) {
         q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
-             teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=? WHERE id=?`,
-          [title, description, json(files), json(transcript), conversation.entry_file || 'index.html', now, now, submissionId]);
+             teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
+             copyright_confirmed_at=?,copyright_confirmed_by=? WHERE id=?`,
+          [title, description, json(files), json(transcript), conversation.entry_file || 'index.html', now, now, now, ownerAuth.user.id, submissionId]);
       } else {
         q(`INSERT INTO vibecoding_submissions(
-             id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,transcript,entry_file,round,status,submitted_at,created_at,updated_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+             id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
+             copyright_confirmed_at,copyright_confirmed_by
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [submissionId, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId, conversation.class_id, conversation.lesson_id,
-            title, description, json(files), json(transcript), conversation.entry_file || 'index.html', 1, 'PENDING', now, now, now]);
+            title, description, json(files), json(transcript), conversation.entry_file || 'index.html', 1, 'PENDING', now, now, now, now, ownerAuth.user.id]);
       }
       q("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
       audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id, existing ? { round: existing.round } : null, { title, round: Number(existing?.round || 0) + 1 });

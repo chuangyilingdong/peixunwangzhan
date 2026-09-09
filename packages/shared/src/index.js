@@ -6,3 +6,4 @@ export * from './creditDialogs.jsx';
 export * from './canvasWorkspace.jsx';
 export * from './markdown.jsx';
 export * from './vibecodingWorkspace.jsx';
+export * from './vibecodingProject.js';

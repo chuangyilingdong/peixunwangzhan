@@ -94,7 +94,7 @@ function Header({ user, userBadge }){
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/courses">课程体系</Link><Link to="/marketplace">课程广场</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link onClick={()=>trackAnalytics('cta_click',{target:to})} to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
-function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';return <article className={'work w'+index%6}><div className="art"><span>{emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url){trackAnalytics('work_view',{resourceType:'work'});navigate(url);}}}>打开体验 <b>↗</b></button></div></article>}
+function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';const isVibe=work.type==='VIBECODING';return <article className={'work w'+index%6}><div className="art"><span>{isVibe?'🎮':emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}{isVibe?' · 可在线玩':''}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url){trackAnalytics('work_view',{resourceType:'work'});navigate(url);}}}>打开体验 <b>↗</b></button></div></article>}
 function Title({eyebrow,title,desc}){return <section className="page-title"><div><Kicker>{eyebrow}</Kicker><h1>{title}</h1><p>{desc}</p></div></section>}
 
 
@@ -216,10 +216,15 @@ function Works(){
   const [loaded,setLoaded]=useState(false);
   const [error,setError]=useState(null);
   useEffect(()=>{
-    publicApi.get('public/works').then(j=>{
-      if(Array.isArray(j?.items)&&j.items.length) setItems(j.items);
+    // 作品广场同时展示画布作品（public/works）与平台已发布的 VibeCoding 作品（public/vibecoding-works）
+    Promise.allSettled([publicApi.get('public/works'), publicApi.get('public/vibecoding-works')]).then(([canvas, vibe])=>{
+      const canvasItems = canvas.status === 'fulfilled' && Array.isArray(canvas.value?.items) ? canvas.value.items : [];
+      const vibeItems = vibe.status === 'fulfilled' && Array.isArray(vibe.value?.items) ? vibe.value.items : [];
+      const merged = [...vibeItems, ...canvasItems].sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured)));
+      if (merged.length) setItems(merged);
+      else if (canvas.status === 'rejected' && vibe.status === 'rejected') setError(canvas.reason?.message || '作品加载失败');
       setLoaded(true);
-    }).catch(e=>{setError(e.message);setLoaded(true);});
+    });
   },[]);
   return <><Title eyebrow="学员作品" title={<>孩子们的灵感，<em>正在发光</em></>} desc="来自课堂与作品社区的真实 HTML 创作。点击卡片即可打开体验，游戏、古诗、3D、单词闯关都能在浏览器里直接玩。"/><main className="inner"><div className="filters"><b>全部作品</b><span>小游戏</span><span>互动故事</span><span>AI 绘本</span><span>智能硬件</span></div><div className="works all">{items.map((w,i)=><Work key={w.id||w.title} work={w} index={i}/>)}</div>{!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}{loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}<div className="note">✦ <div><b>作品来自真实课堂</b><p>每一份作品都记录着孩子从想法、对话到实现的创作过程。机构开通后，可拥有自己的校区作品展厅。</p></div><Button soft to="/org">了解机构作品展厅</Button></div></main></>;
 }

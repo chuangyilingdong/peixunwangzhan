@@ -342,3 +342,4 @@
 .work-detail__meta{margin:0;color:#918b9e;font-size:13px}
 .work-detail__canvas{margin:20px 0}
 .work-detail__foot{margin:18px 0 48px}
+.work-detail__play{margin:20px 0;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fff;box-shadow:0 10px 30px #46318414}.work-detail__play iframe{display:block;width:100%;height:min(72vh,640px);border:0;background:#fff}

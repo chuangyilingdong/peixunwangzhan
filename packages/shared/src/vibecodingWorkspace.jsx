@@ -6,37 +6,7 @@ import { ErrorState, Loading, Notice, Empty, PageHeader } from './ui.jsx';
 import { useData } from './classroom.jsx';
 import { MarkdownView } from './markdown.jsx';
 import { formatDate } from './auth.js';
-import { buildProjectBundle, parseProjectBundle, projectFileBase } from './vibecodingProject.js';
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-}
-
-// 预览文档里注入控制台桥：沙箱 iframe 不能同源读 DOM，但可以 postMessage 给父页面。
-const CONSOLE_BRIDGE = `<script>(function(){
-  var send=function(level,args){try{parent.postMessage({source:'vibecoding-console',level:level,text:args.map(function(item){try{return typeof item==='string'?item:JSON.stringify(item);}catch(e){return String(item);}}).join(' ')},'*');}catch(e){}};
-  ['log','info','warn','error'].forEach(function(level){var original=console[level]?console[level].bind(console):function(){};console[level]=function(){var args=[].slice.call(arguments);send(level,args);original.apply(null,args);};});
-  window.addEventListener('error',function(event){send('error',[event.message+'（第 '+event.lineno+' 行）']);});
-  window.addEventListener('unhandledrejection',function(event){send('error',['未处理的异步错误：'+(event.reason&&event.reason.message?event.reason.message:event.reason)]);});
-})();</script>`;
-
-// 把入口 HTML 里引用的本地 css/js 内联进预览文档；外链保持原样（sandbox 内没有同源权限）。
-function buildPreviewDocument(files, entryFile) {
-  const entry = files?.[entryFile];
-  if (entry === undefined) return '<!doctype html><html><body style="font-family:sans-serif;padding:16px">入口文件不存在</body></html>';
-  if (!/\.html?$/i.test(entryFile)) return `<!doctype html><html><body><pre style="font-family:monospace;padding:12px">${escapeHtml(entry)}</pre></body></html>`;
-  const resolve = (name) => {
-    const clean = String(name || '').replace(/^\.\//, '');
-    return files[clean] !== undefined ? files[clean] : files[name];
-  };
-  const html = String(entry)
-    .replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => (resolve(href) !== undefined ? `<style>${resolve(href)}</style>` : match))
-    .replace(/<script[^>]*src=["']([^"']+)["'][^>]*>\s*<\/script>/gi, (match, src) => (resolve(src) !== undefined ? `<script>${resolve(src)}</script>` : match));
-  // 桥必须装在学生脚本之前，否则早期 console 调用抓不到：优先塞进 head。
-  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${CONSOLE_BRIDGE}</head>`);
-  if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, (match) => `${match}${CONSOLE_BRIDGE}`);
-  return CONSOLE_BRIDGE + html;
-}
+import { buildProjectBundle, buildPreviewDocument, parseProjectBundle, projectFileBase } from './vibecodingProject.js';
 
 function normalizeFiles(value) {
   if (!value || typeof value !== 'object') return {};
@@ -247,10 +217,10 @@ export function VibeCodingWorkspace({ api }) {
   }
 
   async function submitWork() {
-    if (!window.confirm('提交这个作品给老师点评？提交后需要等老师处理才能继续修改。')) return;
+    if (!window.confirm('提交给老师点评前请确认：这是你自己的作品，并同意平台在作品广场展示。\n提交后需要等老师处理才能继续修改。')) return;
     setBusy(true); setMessage('');
     try {
-      await api.post(`student/vibecoding/conversations/${conversationId}/submit`, {});
+      await api.post(`student/vibecoding/conversations/${conversationId}/submit`, { copyrightConfirmed: true });
       setMessage('作品已提交，等待老师点评。');
       conversation.refresh(); list.refresh();
     } catch (error) { setMessage(error.message || '提交失败'); } finally { setBusy(false); }
