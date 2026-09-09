@@ -1618,3 +1618,7 @@ try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN featured_at TEXT');
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_share_token ON vibecoding_submissions(share_token) WHERE share_token IS NOT NULL'); }
 catch (error) { if (!String(error?.message || '').includes('already exists')) throw error; }
+
+// ── VibeCoding 会话置顶（侧栏排序用）─────────────────────────────────────────
+try { db.exec('ALTER TABLE vibecoding_conversations ADD COLUMN pinned_at TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }

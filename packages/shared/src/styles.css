@@ -136,3 +136,16 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .mono-input{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.5px}
 @media(min-width:901px){.app-nav{min-height:0;overflow-y:auto;scrollbar-width:thin}}
 .vb-file-input { display:none; }
+.vb-sidebar__search{margin:8px 0 4px;padding:8px 10px;border:1px solid #e8e2ff;border-radius:10px;background:#fff;color:#4a3f74;font-size:12px}
+.vb-conversation-list li{position:relative}
+.vb-conversation-list__pin{position:absolute;right:6px;top:8px;border:0;background:transparent;color:#c9baff;font-size:13px;cursor:pointer;padding:2px 4px}
+.vb-conversation-list__pin:hover{color:#ffda78}
+.vb-model{display:flex;align-items:center;gap:6px;color:#9b93bd;font-size:11px}
+.vb-model select{padding:5px 7px;border:1px solid #e8e2ff;border-radius:9px;background:#faf9ff;color:#4a3f74;font-size:11px;max-width:180px}
+.vb-thinking{margin-top:6px;padding:6px 9px;border-radius:8px;background:#f4f1ff;color:#6f63a8;font-size:11px}
+.vb-message__actions{display:flex;gap:10px;margin-top:6px}
+.vb-message__actions .text-button{font-size:11px;color:#8d84b2}
+.vb-message__actions .text-button:hover{color:#6d5ce0}
+.vb-message__edit{display:grid;gap:8px}
+.vb-message__edit textarea{width:100%;padding:9px 10px;border:1px solid #ded8e8;border-radius:9px;font-size:13px;resize:vertical}
+.md-code__actions{display:flex;gap:6px}

@@ -12,6 +12,30 @@ export function projectFileBase(title) {
   return safe || 'vibecoding-project';
 }
 
+/** 浏览器下载一段文本（工程包 / 对话记录都用它） */
+export function downloadTextFile(filename, content, mime = 'application/json;charset=utf-8') {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * 解析围栏代码块的 info 串，识别「```语言 文件名」写法（AI 被要求这样输出）。
+ * 返回 { lang, filename }，filename 为空表示这个代码块不能一键写入文件。
+ */
+export function parseFenceInfo(raw) {
+  const parts = String(raw || '').trim().split(/\s+/).filter(Boolean);
+  const lang = parts[0] || '';
+  const filename = parts.slice(1).find((part) => FILE_NAME_PATTERN.test(part) && !part.includes('..') && part.includes('.')) || '';
+  return { lang, filename };
+}
+
 export function buildProjectBundle({ title, entryFile, files }) {
   return {
     format: PROJECT_FORMAT,

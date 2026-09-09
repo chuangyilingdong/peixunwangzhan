@@ -316,10 +316,18 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
       return { assets: [assetFromResponse({ payload: parsed, binary: parsed?.binary, contentType: parsed?.contentType, modality: normalizedModality, title, providerName, model: providerModel })] };
     },
     // 多轮对话流式生成：上游返回 text/event-stream 时逐块回调；上游不支持流式则退化为整段返回。
-    async generateStream({ messages, prompt = '', title, options, onDelta } = {}) {
+    // signal：调用方中断（学生点「停止」或连接断开）时中止上游请求；onReasoning：推理型模型
+    // 的思考增量（reasoning_content），用于给学生显示「正在思考」的进度。
+    async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, signal } = {}) {
       const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints);
       const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, messages, stream: true });
       const controller = new AbortController();
+      let callerAborted = false;
+      const abortFromCaller = () => { callerAborted = true; controller.abort(); };
+      if (signal) {
+        if (signal.aborted) abortFromCaller();
+        else signal.addEventListener('abort', abortFromCaller, { once: true });
+      }
       const timer = setTimeout(() => controller.abort(), timeout);
       timer.unref?.();
       try {
@@ -332,7 +340,10 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
             signal: controller.signal,
           });
         } catch (error) {
-          if (error?.name === 'AbortError') throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
+          if (error?.name === 'AbortError') {
+            if (callerAborted) throw providerError('已停止生成', PROVIDER_ERROR_CODES.ABORTED);
+            throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
+          }
           throw error;
         }
         const contentType = String(response.headers.get('content-type') || '');
@@ -365,6 +376,8 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
             let chunk;
             try { chunk = JSON.parse(data); } catch { continue; }
             const choice = chunk?.choices?.[0];
+            const reasoning = choice?.delta?.reasoning_content ?? '';
+            if (reasoning && typeof onReasoning === 'function') onReasoning(reasoning);
             const delta = choice?.delta?.content ?? choice?.message?.content ?? chunk?.output_text ?? '';
             if (!delta) continue;
             full += delta;
@@ -375,6 +388,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         return { assets: [textAsset({ text: full, title, providerName, model: providerModel })], streamed: true };
       } finally {
         clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', abortFromCaller);
       }
     },
   };

@@ -1,6 +1,7 @@
 // Markdown 渲染：走 marked 的词法分析 + 自己渲染 React 元素，
 // 不注入原始 HTML（模板里的 html token 一律转义成文本），代码块用 highlight.js 高亮。
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { parseFenceInfo } from './vibecodingProject.js';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -22,7 +23,7 @@ function languageOf(raw) {
   return LANGUAGE_ALIASES[value] || (hljs.getLanguage(value) ? value : '');
 }
 
-function CodeBlock({ code, lang }) {
+function CodeBlock({ code, lang, filename, onApply }) {
   const codeRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const language = languageOf(lang);
@@ -44,7 +45,10 @@ function CodeBlock({ code, lang }) {
     } catch { /* 剪贴板不可用时保持静默 */ }
   }
   return <div className="md-code">
-    <div className="md-code__bar"><span>{language || 'code'}</span><button type="button" onClick={copy}>{copied ? '已复制' : '复制'}</button></div>
+    <div className="md-code__bar"><span>{filename || language || 'code'}</span><div className="md-code__actions">
+      {filename && onApply ? <button type="button" onClick={() => onApply(filename, code)}>写入 {filename}</button> : null}
+      <button type="button" onClick={copy}>{copied ? '已复制' : '复制'}</button>
+    </div></div>
     <pre><code ref={codeRef} className="hljs" /></pre>
   </div>;
 }
@@ -66,7 +70,7 @@ function InlineNodes({ tokens }) {
   });
 }
 
-function BlockNodes({ tokens }) {
+function BlockNodes({ tokens, onApplyFile }) {
   return (tokens || []).map((token, index) => {
     const key = `${token.type}-${index}`;
     switch (token.type) {
@@ -75,13 +79,13 @@ function BlockNodes({ tokens }) {
         return <Tag key={key} className="md-heading"><InlineNodes tokens={token.tokens} /></Tag>;
       }
       case 'paragraph': return <p key={key}><InlineNodes tokens={token.tokens} /></p>;
-      case 'code': return <CodeBlock key={key} code={token.text} lang={token.lang} />;
-      case 'blockquote': return <blockquote key={key}><BlockNodes tokens={token.tokens} /></blockquote>;
+      case 'code': { const fence = parseFenceInfo(token.lang); return <CodeBlock key={key} code={token.text} lang={fence.lang} filename={fence.filename} onApply={onApplyFile} />; }
+      case 'blockquote': return <blockquote key={key}><BlockNodes tokens={token.tokens} onApplyFile={onApplyFile} /></blockquote>;
       case 'hr': return <hr key={key} />;
       case 'space': return null;
       case 'list': {
         const Tag = token.ordered ? 'ol' : 'ul';
-        return <Tag key={key}>{token.items.map((item, itemIndex) => <li key={itemIndex}><BlockNodes tokens={item.tokens} /></li>)}</Tag>;
+        return <Tag key={key}>{token.items.map((item, itemIndex) => <li key={itemIndex}><BlockNodes tokens={item.tokens} onApplyFile={onApplyFile} /></li>)}</Tag>;
       }
       case 'table': return <div className="md-table-wrap" key={key}><table>
         <thead><tr>{token.header.map((cell, cellIndex) => <th key={cellIndex}><InlineNodes tokens={cell.tokens} /></th>)}</tr></thead>
@@ -93,9 +97,9 @@ function BlockNodes({ tokens }) {
   });
 }
 
-export function MarkdownView({ content = '', className = '' }) {
+export function MarkdownView({ content = '', className = '', onApplyFile = null }) {
   const tokens = useMemo(() => {
     try { return marked.lexer(String(content || '')); } catch { return []; }
   }, [content]);
-  return <div className={`md-view ${className}`.trim()}><BlockNodes tokens={tokens} /></div>;
+  return <div className={`md-view ${className}`.trim()}><BlockNodes tokens={tokens} onApplyFile={onApplyFile} /></div>;
 }

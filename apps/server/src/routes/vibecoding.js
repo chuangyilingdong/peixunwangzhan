@@ -10,8 +10,10 @@ import { getGenerationProvider } from '../services/generationProvider.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
+import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { runJavaScript, sandboxCapability } from '../services/vibecodingRunner.js';
+import { PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 
 const DEFAULT_TITLE = '新的创作对话';
 const MAX_FILES = 12;
@@ -64,6 +66,7 @@ function normalizeConversation(value, { includeFiles = false } = {}) {
     classId: value.class_id || null, className: value.class_name || null,
     classSessionId: value.class_session_id || null,
     entryFile: value.entry_file || 'index.html',
+    pinnedAt: value.pinned_at || null,
     ...(includeFiles ? { files: filesOf(value) } : {}),
     lastMessageAt: value.last_message_at || null,
     createdAt: value.created_at, updatedAt: value.updated_at,
@@ -160,6 +163,131 @@ function recordFailedMessage(conversationId, model, content, errorCode) {
   return messageId;
 }
 
+function assertConversationEditable(conversation) {
+  if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能继续对话', 'VIBECODING_CONVERSATION_LOCKED');
+}
+
+/**
+ * 课时上下文：多轮 history 会覆盖渠道模板里的 system 提示词，所以这里自己拼一条，
+ * 既把本节课的正文/教学指引告诉模型，也保留儿童友好的安全约束与代码块约定
+ * （「```语言 文件名」便于学生一键写入文件）。
+ */
+export function lessonSystemMessage(conversation) {
+  const lesson = row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id]);
+  const parts = [
+    '你是少儿编程学习平台的创作助手「阿飞」，面向 8–16 岁的学生。请用适合儿童理解的中文回答，语气友好，避免任何危险或不适龄内容。',
+    '给出完整代码文件时，请用「```语言 文件名」的代码块（例如 ```html index.html），学生可以一键写入文件；说明尽量简短，不要重复整段代码。',
+  ];
+  if (lesson) {
+    if (lesson.title) parts.push(`本节 VibeCoding 课时：${lesson.title}`);
+    if (lesson.summary) parts.push(`课时简介：${String(lesson.summary).slice(0, 600)}`);
+    if (lesson.lesson_content) parts.push(`课时正文与教学指引：\n${String(lesson.lesson_content).slice(0, 4000)}`);
+  }
+  return { role: 'system', content: parts.join('\n\n') };
+}
+
+function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
+  return rows(
+    "SELECT role, content FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at DESC, rowid DESC LIMIT ?",
+    [conversationId, limit],
+  ).reverse().map((message) => ({ role: message.role, content: message.content }));
+}
+
+// 当前 TEXT 渠道可选的模型（供学生每个会话自己挑，默认沿用渠道默认模型）
+function textModelOptions() {
+  const channel = modalityChannel(getAiProviderPolicy(), 'TEXT');
+  if (!channel) return [];
+  const mappings = Array.isArray(channel.modelMappings) ? channel.modelMappings : [];
+  const ids = new Set();
+  if (channel.model) ids.add(String(channel.model));
+  (Array.isArray(channel.models) ? channel.models : []).forEach((item) => ids.add(String(typeof item === 'string' ? item : item?.id || item?.name || '')));
+  mappings.forEach((item) => { if (item?.id) ids.add(String(item.id)); });
+  return [...ids].filter(Boolean).map((id) => ({ id, displayName: mappings.find((item) => item?.id === id)?.displayName || id }));
+}
+
+/**
+ * 跑一轮助手回复：SSE 保活 + 中止透传 + 思考进度 + 成功才扣费。
+ * 发送 / 重新生成 / 编辑重发三个入口共用，避免三份实现走偏。
+ */
+async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) {
+  const policy = getAiProviderPolicy();
+  const selection = providerSelectionForModality(policy, 'TEXT', conversation.model || '');
+  const provider = getGenerationProvider(selection);
+  if (typeof provider.generateStream !== 'function') throw errors.conflict('当前 AI 渠道不支持流式对话', 'VIBECODING_STREAM_UNAVAILABLE');
+
+  const history = [lessonSystemMessage(conversation), ...conversationHistory(conversation.id)];
+  sseOpen(ctx);
+  sseSend(ctx, 'start', { userMessageId, conversationId: conversation.id, model: selection.model, provider: provider.name });
+  // 推理型模型可能先思考几十秒才吐第一个可见字，期间没有任何 data 事件；
+  // 定期写 SSE 注释（: ping）避免 nginx 等中间层按 proxy_read_timeout 掐断连接。
+  const heartbeat = setInterval(() => {
+    if (ctx.res.writableEnded || ctx.res.destroyed) return;
+    ctx.res.write(': ping\n\n');
+  }, 15000);
+  heartbeat.unref?.();
+  // 学生点「停止」或关掉页面时前端会断开连接：同步中止上游请求，避免继续等、继续计费
+  const abortController = new AbortController();
+  const onClientGone = () => { if (!ctx.res.writableEnded) abortController.abort(); };
+  ctx.res.on('close', onClientGone);
+
+  let streamedText = '';
+  let reasoningChars = 0;
+  try {
+    const result = await provider.generateStream({
+      messages: history,
+      signal: abortController.signal,
+      onReasoning: (delta) => {
+        reasoningChars += String(delta || '').length;
+        sseSend(ctx, 'thinking', { chars: reasoningChars });
+      },
+      onDelta: (delta, full) => { streamedText = full; sseSend(ctx, 'delta', { delta }); },
+    });
+    const text = String(result?.assets?.[0]?.metadata?.text || streamedText || '').trim();
+    if (!text) throw errors.conflict('AI 没有返回内容', 'GENERATION_EMPTY_RESULT');
+    const assistantMessageId = id('vibemsg');
+    let balanceAfter = 0;
+    transaction(() => {
+      const fresh = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]);
+      if (!fresh) throw errors.notFound('创作会话不存在', 'VIBECODING_CONVERSATION_NOT_FOUND');
+      const charged = chargeCreditsInTransaction({
+        orgId: auth.user.orgId, credits: 1, type: 'AI_VIBECODING_CHAT', modality: 'TEXT', model: selection.model,
+        userId: auth.user.id, sessionId: fresh.class_session_id || null,
+      });
+      debitUserAiCredits({ userId: auth.user.id, orgId: auth.user.orgId, credits: 1 });
+      recordAiUsage({
+        orgId: auth.user.orgId, userId: auth.user.id, sessionId: fresh.class_session_id || null,
+        modality: 'TEXT', model: selection.model, credits: 1, status: 'SUCCESS',
+        pricing: { source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },
+      });
+      q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
+        [assistantMessageId, fresh.id, 'assistant', text, selection.model, 'SUCCEEDED', 1, nowIso()]);
+      q('UPDATE vibecoding_conversations SET model=?,last_message_at=?,updated_at=? WHERE id=?', [selection.model, nowIso(), nowIso(), fresh.id]);
+      balanceAfter = Number(charged?.balanceAfter || 0);
+    });
+    const message = normalizeMessage(row('SELECT * FROM vibecoding_messages WHERE id=?', [assistantMessageId]));
+    sseSend(ctx, 'done', { message, creditsCharged: 1, balanceAfter, streamed: result?.streamed !== false });
+  } catch (error) {
+    const code = error?.code || 'VIBECODING_CHAT_FAILED';
+    if (code === PROVIDER_ERROR_CODES.ABORTED) {
+      // 学生主动停止：不扣费、不落助手消息，前端据此把气泡标成「已停止」
+      sseSend(ctx, 'aborted', { code: 'VIBECODING_ABORTED' });
+    } else {
+      recordFailedMessage(conversation.id, selection.model, streamedText, code);
+      recordAiUsage({
+        orgId: auth.user.orgId, userId: auth.user.id, sessionId: conversation.class_session_id || null,
+        modality: 'TEXT', model: selection.model, credits: 0, status: 'FAILED', failCode: code,
+        pricing: { source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
+      });
+      sseSend(ctx, 'error', { code, message: error?.message || 'AI 回复失败' });
+    }
+  } finally {
+    clearInterval(heartbeat);
+    ctx.res.off?.('close', onClientGone);
+    if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();
+  }
+  return { __streamed: true };
+}
+
 export function normalizeSubmission(value, { includeContent = false } = {}) {
   if (!value) return null;
   return {
@@ -212,6 +340,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     if (classId) { conditions.push('conversation.class_id = ?'); params.push(classId); }
     const status = String(ctx.search.get('status') || '').trim().toUpperCase();
     if (['DRAFT', 'SUBMITTED', 'ARCHIVED'].includes(status)) { conditions.push('conversation.status = ?'); params.push(status); }
+    const search = String(ctx.search.get('search') || '').trim();
+    if (search) { conditions.push('conversation.title LIKE ?'); params.push('%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'); }
     const where = conditions.join(' AND ');
     const total = Number(count(`SELECT COUNT(*) n FROM vibecoding_conversations conversation WHERE ${where}`, params) || 0);
     const items = rows(
@@ -220,7 +350,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
        LEFT JOIN course_lessons lesson ON lesson.id = conversation.lesson_id
        LEFT JOIN classes class ON class.id = conversation.class_id
        WHERE ${where}
-       ORDER BY COALESCE(conversation.last_message_at, conversation.created_at) DESC, conversation.id DESC
+       ORDER BY CASE WHEN conversation.pinned_at IS NULL THEN 1 ELSE 0 END,
+                COALESCE(conversation.last_message_at, conversation.created_at) DESC, conversation.id DESC
        LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     ).map((item) => normalizeConversation(item));
@@ -263,7 +394,17 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       [conversation.id, limit, offset],
     ).reverse().map(normalizeMessage);
     const submission = row(submissionSelect() + ' WHERE submission.conversation_id = ?', [conversation.id]);
-    return { ...normalizeConversation(conversation, { includeFiles: true }), messages, messagesTotal: total, messagesPage: page, submission: normalizeSubmission(submission) };
+    return { ...normalizeConversation(conversation, { includeFiles: true }), messages, messagesTotal: total, messagesPage: page, submission: normalizeSubmission(submission), modelOptions: textModelOptions() };
+  }
+
+  // 置顶 / 取消置顶（只影响自己侧栏排序）
+  const pinMatch = part.match(/^\/conversations\/([^/]+)\/pin$/);
+  if (pinMatch && method === 'PUT') {
+    const { auth: ownerAuth, conversation } = ownConversation(ctx, pinMatch[1]);
+    if (!Object.hasOwn(body, 'pinned') || typeof body.pinned !== 'boolean') throw errors.badRequest('请选择是否置顶', 'VIBECODING_PIN_FLAG_REQUIRED');
+    q('UPDATE vibecoding_conversations SET pinned_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
+      [body.pinned ? nowIso() : null, nowIso(), conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
+    return normalizeConversation(row('SELECT * FROM vibecoding_conversations WHERE id=?', [conversation.id]));
   }
 
   if (conversationMatch && method === 'PUT') {
@@ -275,8 +416,15 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const entryFile = body.entryFile === undefined ? conversation.entry_file : nonEmptyString(body.entryFile, '入口文件', { max: 64 });
     const nextFiles = files || filesOf(conversation);
     if (!nextFiles[entryFile]) throw errors.badRequest('入口文件必须存在', 'VIBECODING_ENTRY_FILE_MISSING');
-    q('UPDATE vibecoding_conversations SET title=?,files=?,entry_file=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
-      [title, json(nextFiles), entryFile, now, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
+    let nextModel = conversation.model || null;
+    if (body.model !== undefined) {
+      const requested = String(body.model || '').trim();
+      if (!requested) nextModel = null;
+      else if (!textModelOptions().some((item) => item.id === requested)) throw errors.badRequest('该模型不在当前 AI 渠道的可选范围内', 'VIBECODING_MODEL_NOT_AVAILABLE');
+      else nextModel = requested;
+    }
+    q('UPDATE vibecoding_conversations SET title=?,files=?,entry_file=?,model=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
+      [title, json(nextFiles), entryFile, nextModel, now, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
     const updated = row('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversation.id]);
     return normalizeConversation(updated, { includeFiles: true });
   }
@@ -293,82 +441,72 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   const messageMatch = part.match(/^\/conversations\/([^/]+)\/messages$/);
   if (messageMatch && method === 'POST') {
     const { auth: ownerAuth, conversation } = ownConversation(ctx, messageMatch[1]);
-    if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能继续对话', 'VIBECODING_CONVERSATION_LOCKED');
+    assertConversationEditable(conversation);
     const content = nonEmptyString(body.content, '消息内容', { max: MAX_MESSAGE_CHARS });
     const user = activeStudent(ownerAuth);
     const context = vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
     assertChatPreflight({ user, orgId: ownerAuth.user.orgId, context });
-    const policy = getAiProviderPolicy();
-    const selection = providerSelectionForModality(policy, 'TEXT', conversation.model || '');
-    const provider = getGenerationProvider(selection);
-    if (typeof provider.generateStream !== 'function') throw errors.conflict('当前 AI 渠道不支持流式对话', 'VIBECODING_STREAM_UNAVAILABLE');
 
     const userMessageId = id('vibemsg');
     const now = nowIso();
     q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,created_at) VALUES (?,?,?,?,?,?,?)',
-      [userMessageId, conversation.id, 'user', content, selection.model, 'SUCCEEDED', now]);
+      [userMessageId, conversation.id, 'user', content, conversation.model || null, 'SUCCEEDED', now]);
     const autoTitle = !conversation.title || conversation.title === DEFAULT_TITLE;
     q('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [now, now, conversation.id]);
     if (autoTitle) q('UPDATE vibecoding_conversations SET title=? WHERE id=?', [content.slice(0, 24), conversation.id]);
+    return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId });
+  }
+  if (messageMatch && method === 'DELETE') {
+    // 清空对话（保留会话本身与代码文件）
+    const { conversation } = ownConversation(ctx, messageMatch[1]);
+    assertConversationEditable(conversation);
+    const removed = Number(count('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]) || 0);
+    q('DELETE FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]);
+    audit(ctx, 'VIBECODING_MESSAGES_CLEAR', 'VIBECODING_CONVERSATION', conversation.id, { count: removed }, { count: 0 });
+    return { cleared: true, removed };
+  }
 
-    const history = rows(
-      "SELECT role, content FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at DESC, rowid DESC LIMIT ?",
-      [conversation.id, HISTORY_MESSAGES],
-    ).reverse().map((message) => ({ role: message.role, content: message.content }));
+  // 重新生成：清掉最后一条用户消息之后的回答，重新问一次（失败重试也走这里）
+  const regenerateMatch = part.match(/^\/conversations\/([^/]+)\/messages\/regenerate$/);
+  if (regenerateMatch && method === 'POST') {
+    const { auth: ownerAuth, conversation } = ownConversation(ctx, regenerateMatch[1]);
+    assertConversationEditable(conversation);
+    const lastUser = row("SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
+    if (!lastUser) throw errors.badRequest('还没有可以重新生成的消息', 'VIBECODING_NO_MESSAGE');
+    q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
+      [conversation.id, lastUser.created_at, lastUser.created_at, lastUser.message_rowid]);
+    return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId: lastUser.id });
+  }
 
-    sseOpen(ctx);
-    sseSend(ctx, 'start', { userMessageId, conversationId: conversation.id, model: selection.model, provider: provider.name });
-    // 推理型模型可能先思考几十秒才吐第一个可见字，期间没有任何 data 事件；
-    // 定期写 SSE 注释（: ping）避免 nginx 等中间层按 proxy_read_timeout 掐断连接。
-    const heartbeat = setInterval(() => {
-      if (ctx.res.writableEnded || ctx.res.destroyed) return;
-      ctx.res.write(': ping\n\n');
-    }, 15000);
-    heartbeat.unref?.();
-    let streamedText = '';
-    try {
-      const result = await provider.generateStream({
-        messages: history,
-        onDelta: (delta, full) => { streamedText = full; sseSend(ctx, 'delta', { delta }); },
-      });
-      const text = String(result?.assets?.[0]?.metadata?.text || streamedText || '').trim();
-      if (!text) throw errors.conflict('AI 没有返回内容', 'GENERATION_EMPTY_RESULT');
-      const assistantMessageId = id('vibemsg');
-      let balanceAfter = 0;
-      transaction(() => {
-        const fresh = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, ownerAuth.user.id]);
-        if (!fresh) throw errors.notFound('创作会话不存在', 'VIBECODING_CONVERSATION_NOT_FOUND');
-        const charged = chargeCreditsInTransaction({
-          orgId: ownerAuth.user.orgId, credits: 1, type: 'AI_VIBECODING_CHAT', modality: 'TEXT', model: selection.model,
-          userId: ownerAuth.user.id, sessionId: fresh.class_session_id || null,
-        });
-        debitUserAiCredits({ userId: ownerAuth.user.id, orgId: ownerAuth.user.orgId, credits: 1 });
-        recordAiUsage({
-          orgId: ownerAuth.user.orgId, userId: ownerAuth.user.id, sessionId: fresh.class_session_id || null,
-          modality: 'TEXT', model: selection.model, credits: 1, status: 'SUCCESS',
-          pricing: { source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },
-        });
-        q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
-          [assistantMessageId, fresh.id, 'assistant', text, selection.model, 'SUCCEEDED', 1, nowIso()]);
-        q('UPDATE vibecoding_conversations SET model=?,last_message_at=?,updated_at=? WHERE id=?', [selection.model, nowIso(), nowIso(), fresh.id]);
-        balanceAfter = Number(charged?.balanceAfter || 0);
-      });
-      const message = normalizeMessage(row('SELECT * FROM vibecoding_messages WHERE id=?', [assistantMessageId]));
-      sseSend(ctx, 'done', { message, creditsCharged: 1, balanceAfter, streamed: result?.streamed !== false });
-    } catch (error) {
-      const code = error?.code || 'VIBECODING_CHAT_FAILED';
-      recordFailedMessage(conversation.id, selection.model, streamedText, code);
-      recordAiUsage({
-        orgId: ownerAuth.user.orgId, userId: ownerAuth.user.id, sessionId: conversation.class_session_id || null,
-        modality: 'TEXT', model: selection.model, credits: 0, status: 'FAILED', failCode: code,
-        pricing: { source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
-      });
-      sseSend(ctx, 'error', { code, message: error?.message || 'AI 回复失败' });
-    } finally {
-      clearInterval(heartbeat);
-      if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();
-    }
-    return { __streamed: true };
+  // 编辑并重发：只允许改最后一条用户消息，改完连同后续回答一起重来
+  const messageEditMatch = part.match(/^\/conversations\/([^/]+)\/messages\/([^/]+)\/edit$/);
+  if (messageEditMatch && method === 'POST') {
+    const { auth: ownerAuth, conversation } = ownConversation(ctx, messageEditMatch[1]);
+    assertConversationEditable(conversation);
+    const message = row('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageEditMatch[2], conversation.id]);
+    if (!message) throw errors.notFound('消息不存在', 'VIBECODING_MESSAGE_NOT_FOUND');
+    if (message.role !== 'user') throw errors.badRequest('只能编辑自己发出的消息', 'VIBECODING_MESSAGE_NOT_EDITABLE');
+    const lastUser = row("SELECT id FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
+    if (lastUser?.id !== message.id) throw errors.badRequest('只能编辑最后一条消息', 'VIBECODING_MESSAGE_NOT_LAST');
+    const content = nonEmptyString(body.content, '消息内容', { max: MAX_MESSAGE_CHARS });
+    q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
+      [conversation.id, message.created_at, message.created_at, message.message_rowid]);
+    q('UPDATE vibecoding_messages SET content=? WHERE id=?', [content, message.id]);
+    q('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [nowIso(), nowIso(), conversation.id]);
+    return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId: message.id });
+  }
+
+  // 删除单条消息：连同它之后的回答一起删，避免留下孤立的回复
+  const messageDeleteMatch = part.match(/^\/conversations\/([^/]+)\/messages\/([^/]+)$/);
+  if (messageDeleteMatch && method === 'DELETE') {
+    const { conversation } = ownConversation(ctx, messageDeleteMatch[1]);
+    assertConversationEditable(conversation);
+    const message = row('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageDeleteMatch[2], conversation.id]);
+    if (!message) throw errors.notFound('消息不存在', 'VIBECODING_MESSAGE_NOT_FOUND');
+    q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid >= ?))',
+      [conversation.id, message.created_at, message.created_at, message.message_rowid]);
+    audit(ctx, 'VIBECODING_MESSAGE_DELETE', 'VIBECODING_CONVERSATION', conversation.id, { messageId: message.id, role: message.role }, null);
+    return { deleted: true, id: message.id };
   }
 
   const runMatch = part.match(/^\/conversations\/([^/]+)\/runs$/);
