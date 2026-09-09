@@ -1,0 +1,102 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ApiError, Empty, ErrorState, formatCredits, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
+import { BillingSettings } from '../components/BillingSettings.jsx';
+
+export function ProviderPolicyPanel({ api }) {
+  const config = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
+  const [form, setForm] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false); const [open, setOpen] = useState('IMAGE');
+  const modalities = [['TEXT','文本'],['IMAGE','图片'],['MUSIC','音乐'],['VIDEO','视频'],['PODCAST','播客'],['DUBBING','配音']];
+  const policy = config.data?.policy; const catalog = config.data?.catalog || [];
+  useEffect(() => { if (policy) setForm({ ...policy, apiKey:'', reason:'', channels: policy.channels || [], modalityChannels: policy.modalityChannels || {} }); }, [policy]);
+  function updateChannel(index, patch) { setForm({ ...form, channels: form.channels.map((item,i) => i===index ? { ...item, ...patch } : item) }); }
+  function addChannel() { const id = `channel-${Date.now().toString(36)}`; setForm({ ...form, channels: [...form.channels, { id, name:`新渠道 ${form.channels.length+1}`, provider:'custom', model:'', models:[], endpoint:'', protocol:'CHAT', modalities:[] }] }); setOpen(id); }
+  function removeChannel(index) { const id=form.channels[index].id; setForm({ ...form, channels: form.channels.filter((_,i)=>i!==index), modalityChannels:Object.fromEntries(Object.entries(form.modalityChannels).filter(([,v])=>v!==id)) }); }
+  function channelRequest(channel) { return { endpoint: channel.endpoint, channelId: channel.id, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) }; }
+  // 渠道按「能力路由」确定模态，模型能力按模态归一化。
+  function channelModality(channelId) { return Object.entries(form?.modalityChannels || {}).find(([, id]) => id === channelId)?.[0] || ''; }
+  function capabilityText(value) { return Array.isArray(value) ? value.join(', ') : ''; }
+  function parseCapabilityText(text) { return String(text || '').split(/[,，\s]+/).map((value) => value.trim()).filter(Boolean); }
+  function updateModelCapability(index, modelId, patch) {
+    const channel = form.channels[index];
+    const modality = channelModality(channel.id);
+    const current = channel.modelCapabilities?.[modelId] || config.data?.capabilityDefaults?.[modality] || {};
+    updateChannel(index, { modelCapabilities: { ...(channel.modelCapabilities || {}), [modelId]: { ...current, ...patch } } });
+  }
+  function channelTemplateText(channel) {
+    const modality = channelModality(channel.id);
+    const custom = channel.requestTemplates?.[modality];
+    if (typeof custom === 'string') return custom;
+    if (custom && typeof custom === 'object') return JSON.stringify(custom, null, 2);
+    const fallback = config.data?.defaultRequestTemplates?.[modality];
+    return fallback ? JSON.stringify(fallback, null, 2) : '';
+  }
+  async function testChannel(channel) { setBusy(true); setMessage(''); try { const result=await api.post('admin/billing-config/ai-provider/test',channelRequest(channel)); setMessage(`${channel.name}：${result.message || '连接成功'}`); } catch(e) { setMessage(`${channel.name}：${e.message || '连接失败'}`); } finally { setBusy(false); } }
+  async function fetchModels(channel,index) { setBusy(true); setMessage(''); try { const result=await api.post('admin/billing-config/ai-provider/models',channelRequest(channel)); updateChannel(index,{ modelMappings:result.items||[] }); setMessage(`${channel.name}：已读取 ${result.items?.length||0} 个模型，请勾选本渠道可用模型`); } catch(e) { setMessage(e.message || '获取模型失败'); } finally { setBusy(false); } }
+  async function save(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.put('admin/billing-config/ai-provider',form); setMessage('渠道配置已保存'); config.refresh(); } catch(e) { setMessage(e.message || '保存失败'); } finally { setBusy(false); } }
+  if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
+  if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
+  return <Panel title="AI 渠道配置">
+    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口，不会生成内容、不扣积分。</Notice>
+    {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
+    <form onSubmit={save}>
+      <div className="muted">渠道只负责保存供应商、模型和密钥；具体用哪个渠道，请在下面“能力路由”中切换。</div><div className="row-actions top-gap"><strong>渠道列表</strong><button type="button" className="secondary-button" onClick={addChannel}>＋添加渠道</button></div>
+      {!form.channels.length ? <div className="muted top-gap">还没有渠道，请先添加一个。</div> : form.channels.map((channel,index) => <div className="card top-gap" key={channel.id}>
+        <div className="row-actions"><button type="button" className="link-button" onClick={() => setOpen(open===channel.id ? '' : channel.id)}>{open===channel.id ? '收起' : '展开'}　{channel.name || '未命名渠道'}</button><button type="button" className="danger-button" onClick={() => removeChannel(index)}>删除</button></div>
+        {open===channel.id ? <div className="form-grid top-gap"><label>渠道名称<input value={channel.name||''} onChange={e=>updateChannel(index,{name:e.target.value})} placeholder="例如：图片-供应商A" required /></label><label>协议<select value={channel.protocol||'CHAT'} onChange={e=>updateChannel(index,{protocol:e.target.value})}><option value="CHAT">Chat Completions</option><option value="RESPONSES">Responses</option><option value="ANTHROPIC">Anthropic Messages</option></select></label><label>Endpoint<input value={channel.endpoint||''} onChange={e=>updateChannel(index,{endpoint:e.target.value})} placeholder="https://.../v1" required /></label><label>可用模型（勾选本渠道提供的模型）</label><div className="channel-model-list">{(channel.modelMappings||[]).map(m=>{const mid=m.id||m.model;const checked=(channel.models||[]).includes(mid);return <label key={mid}><input type="checkbox" checked={checked} onChange={e=>updateChannel(index,{models:e.target.checked?[...new Set([...(channel.models||[]),mid])]:(channel.models||[]).filter(x=>x!==mid)})} />{m.displayName||mid}</label>;})}{!(channel.modelMappings||[]).length?<small className="muted">点下方「读取模型」获取候选，或手动添加模型 ID</small>:null}</div><label>手动添加模型 ID<input onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();const v=e.target.value.trim();if(v){updateChannel(index,{models:[...new Set([...(channel.models||[]),v])]});e.target.value='';}}}} placeholder="输入后回车添加" /></label><label>默认模型{(channel.models||[]).length?<select value={channel.model||''} onChange={e=>updateChannel(index,{model:e.target.value})} required><option value="">请选择默认模型</option>{(channel.models||[]).map(m=><option key={m} value={m}>{m}</option>)}</select>:<input value={channel.model||''} onChange={e=>updateChannel(index,{model:e.target.value})} placeholder="模型 ID" required />}</label><label>API Key<input type="password" value={channel.apiKey||''} onChange={e=>updateChannel(index,{apiKey:e.target.value})} placeholder="留空保持原密钥" autoComplete="new-password" /></label><div className="channel-capability-editor top-gap"><strong>模型能力（决定课时里能选什么）</strong><div className="muted">比例 / 清晰度 / 时长按该模型实际支持填写，多个用逗号分隔；留空则用模态默认值。音频只对视频有效，不支持时课时里的勾选会置灰。图生视频模型（模型名带 -i2v）默认按「需要首帧图」处理，学生端要先从图片节点连一张画面才能生成。</div>{(channel.models||[]).map(mid=>{const modality=channelModality(channel.id);const caps=channel.modelCapabilities?.[mid]||config.data?.capabilityDefaults?.[modality]||{};const isVideo=modality==='VIDEO';const hint=(channel.modelMappings||[]).find(m=>String(m.id||m.model)===mid)?.capabilities;return <div className="form-grid top-gap" key={mid}><label>{mid} · 比例<input value={capabilityText(caps.aspectRatios)} placeholder="16:9, 9:16" onChange={e=>updateModelCapability(index,mid,{aspectRatios:parseCapabilityText(e.target.value)})} /></label><label>{mid} · 清晰度<input value={capabilityText(caps.resolutions)} placeholder={isVideo?'480p, 720p, 1080p':'1k, 2k, 4k'} onChange={e=>updateModelCapability(index,mid,{resolutions:parseCapabilityText(e.target.value)})} /></label>{isVideo?<label>{mid} · 时长（秒）<input value={capabilityText(caps.durations)} placeholder="5, 10" onChange={e=>updateModelCapability(index,mid,{durations:parseCapabilityText(e.target.value)})} /></label>:null}{isVideo?<label className="checkbox-label">{mid} · 支持生成音频<input type="checkbox" checked={caps.audio===true} onChange={e=>updateModelCapability(index,mid,{audio:e.target.checked})} /></label>:null}{isVideo?<label>{mid} · 需要输入画面<select value={caps.inputFrame||(/(^|[-_/])i2v($|[-_/])/i.test(mid)?'FIRST':'NONE')} onChange={e=>updateModelCapability(index,mid,{inputFrame:e.target.value})}><option value="NONE">不需要（文生视频）</option><option value="FIRST">需要首帧图（图生视频）</option></select></label>:null}{hint?<div><button type="button" className="text-link-button" onClick={()=>updateModelCapability(index,mid,hint)}>用上游返回的能力填充</button></div>:null}</div>;})}{!(channel.models||[]).length?<div className="muted top-gap">先勾选可用模型，再填写每个模型的能力。</div>:null}{channelModality(channel.id)?<details className="top-gap"><summary>请求模板（可选，高级）</summary><div className="muted">占位符：{'{'}model{'}'} {'{'}prompt{'}'} {'{'}aspectRatio{'}'} {'{'}resolution{'}'} {'{'}durationSeconds{'}'} {'{'}audio{'}'} {'{'}voice{'}'} {'{'}firstFrameUrl{'}'}。留空使用默认模板；若某家模型要求比例/音频放在顶层，把占位符挪到顶层即可。</div><textarea rows={6} value={channelTemplateText(channel)} onChange={e=>updateChannel(index,{requestTemplates:{...(channel.requestTemplates||{}),[channelModality(channel.id)]:e.target.value}})} /></details>:null}</div><div className="row-actions"><button type="button" className="secondary-button" disabled={busy} onClick={()=>testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={()=>fetchModels(channel,index)}>读取模型</button></div></div> : null}
+      </div>)}
+      <div className="top-gap"><strong>能力路由（切换渠道）</strong><div className="muted">这里才是最终生效的选择。同一渠道可以被多个能力使用，也可以随时切换到备用渠道。</div></div>
+      <div className="form-grid top-gap">{modalities.map(([id,name])=><label key={id}>{name}<select value={form.modalityChannels[id]||''} onChange={e=>setForm({...form,modalityChannels:{...form.modalityChannels,[id]:e.target.value}})}><option value="">使用默认渠道</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>)}</div>
+      <label className="checkbox-label top-gap"><input type="checkbox" checked={Boolean(form.allowStudentExternalContent)} onChange={e=>setForm({...form,allowStudentExternalContent:e.target.checked})} />允许学生创作内容发送到外部 AI 服务</label>
+      <div className="row-actions top-gap"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部渠道配置'}</button></div>
+    </form>
+  </Panel>;
+}
+
+export function PlatformBilling({ api }) {
+  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
+  const overview = useData(() => api.get('admin/billing/usage-overview'), [api]);
+  const [filters, setFilters] = useState({ days: '30', orgId: '', modality: '', status: '', search: '', startDate: '', endDate: '' });
+  const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
+  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
+  const records = useData(() => api.get(`admin/billing/usage-records?${query.toString()}`), [api, query]);
+  function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value })); setPage(1); }
+  return <>
+    <PageHeader eyebrow="平台计费" title="计费与用量" description="查看全平台魔法石余额、能力消耗、机构排名和用量明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
+    <div className="metrics">
+      <MetricCard label="机构余额合计" value={formatCredits(overview.data?.totalCredits || 0)} hint="所有机构当前余额合计" />
+      <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
+      <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `累计消耗 ${formatCredits(overview.data.topOrgs[0].credits)}` : '暂无消耗'} tone="orange" />
+      <MetricCard label="当前明细" value={records.data?.total ?? 0} hint="当前筛选条件命中的记录数" tone="pink" />
+    </div>
+    <div className="split">
+      <Panel title="能力消耗"><table><thead><tr><th>能力</th><th>调用次数</th><th>积分</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
+    </div>
+    <ProviderPolicyPanel api={api} />
+    <BillingSettings api={api} />
+
+    <Panel title="计费明细筛选">
+      <div className="form-grid">
+        <label>时间范围<select value={filters.days} onChange={(e) => updateFilter('days', e.target.value)}><option value="1">今日</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="365">近一年</option></select></label>
+        <label>开始日期<input type="date" value={filters.startDate} onChange={(e) => updateFilter('startDate', e.target.value)} /></label>
+        <label>结束日期<input type="date" value={filters.endDate} onChange={(e) => updateFilter('endDate', e.target.value)} /></label>
+        <label>机构<select value={filters.orgId} onChange={(e) => updateFilter('orgId', e.target.value)}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
+        <label>能力<select value={filters.modality} onChange={(e) => updateFilter('modality', e.target.value)}><option value="">全部能力</option><option value="TEXT">TEXT</option><option value="IMAGE">IMAGE</option><option value="MUSIC">MUSIC</option><option value="VIDEO">VIDEO</option></select></label>
+        <label>状态<select value={filters.status} onChange={(e) => updateFilter('status', e.target.value)}><option value="">全部状态</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">拦截</option></select></label>
+        <label>关键词<input value={filters.search} placeholder="机构 / 用户 / 项目 / 作品" onChange={(e) => updateFilter('search', e.target.value)} /></label>
+        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="credits">积分</option></select></label>
+        <label>每页数量<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value={10}>10 条/页</option><option value={20}>20 条/页</option><option value={50}>50 条/页</option></select></label>
+      </div>
+    </Panel>
+    <Panel title="计费明细">
+      {overview.loading || records.loading || organizations.loading ? <Loading label="正在读取计费数据。" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data?.items?.length ? <>
+        <ListResultSummary total={records.data.total} page={records.data.page} totalPages={records.data.totalPages} label="条记录" />
+        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>积分</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div>
+        <Pagination page={records.data.page} totalPages={records.data.totalPages} onChange={setPage} disabled={records.loading} />
+      </> : <Empty title="当前筛选条件下无计费记录" body="可以调整时间范围、机构、能力、状态或关键词。" />}
+    </Panel>
+  </>;
+}
+
