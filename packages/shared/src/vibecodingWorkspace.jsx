@@ -118,6 +118,8 @@ export function VibeCodingWorkspace({ api }) {
   const importInputRef = useRef(null);
   const uploadInputRef = useRef(null);
   const abortRef = useRef(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef(null);
 
   const sandboxInfo = useData(() => api.get('student/vibecoding/sandbox'), [api]);
   useEffect(() => { setSandbox(sandboxInfo.data || null); }, [sandboxInfo.data]);
@@ -127,6 +129,14 @@ export function VibeCodingWorkspace({ api }) {
     const timer = window.setTimeout(() => setSearch(searchInput.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [searchInput]);
+
+  // 「更多」菜单：点外面收起
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event) => { if (moreRef.current && !moreRef.current.contains(event.target)) setMoreOpen(false); };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [moreOpen]);
 
   // 预览 iframe 的控制台输出：只能通过 postMessage 桥接出来
   useEffect(() => {
@@ -529,15 +539,20 @@ export function VibeCodingWorkspace({ api }) {
               {fileNames.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>
-          <div className="row-actions">
-            <button className="secondary-button" type="button" onClick={runPreview}>运行 / 刷新预览</button>
-            <button className="secondary-button" type="button" disabled={runBusy || sandbox?.available === false}
-              title={sandbox?.available === false ? (sandbox.reason || '服务端沙箱不可用') : '在服务器隔离沙箱里运行入口 JS 文件'}
-              onClick={runOnServer}>{runBusy ? '运行中…' : '服务端运行'}</button>
-            <button className="secondary-button" type="button" onClick={exportProject}>导出工程</button>
-            <button className="secondary-button" type="button" disabled={!editable} onClick={() => importInputRef.current?.click()}>导入工程</button>
-            <button className="secondary-button" type="button" disabled={!editable} onClick={() => uploadInputRef.current?.click()}>上传文件</button>
-            <button className="secondary-button" type="button" onClick={exportTranscript} disabled={!messages.length}>导出对话</button>
+          <div className="row-actions vb-code__primary">
+            <button className="secondary-button" type="button" onClick={runPreview}>重新运行</button>
+            {sandbox?.available ? <button className="secondary-button" type="button" disabled={runBusy}
+              title="在服务器隔离沙箱里运行入口 JS 文件"
+              onClick={runOnServer}>{runBusy ? '运行中…' : '服务端运行'}</button> : null}
+            <div className="vb-more" ref={moreRef}>
+              <button className="secondary-button" type="button" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((value) => !value)}>⋯ 更多</button>
+              {moreOpen ? <div className="vb-more__menu" role="menu">
+                <button type="button" role="menuitem" disabled={!editable} onClick={() => { setMoreOpen(false); uploadInputRef.current?.click(); }}>上传文件到工程</button>
+                <button type="button" role="menuitem" disabled={!editable} onClick={() => { setMoreOpen(false); importInputRef.current?.click(); }}>导入工程（JSON）</button>
+                <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); exportProject(); }}>导出工程</button>
+                <button type="button" role="menuitem" disabled={!messages.length} onClick={() => { setMoreOpen(false); exportTranscript(); }}>导出对话记录</button>
+              </div> : null}
+            </div>
             <input ref={importInputRef} className="vb-file-input" type="file" accept=".json,application/json" onChange={importProject} aria-label="导入工程文件" />
             <input ref={uploadInputRef} className="vb-file-input" type="file" accept=".html,.htm,.css,.js,.mjs,.json,.txt,.md,.svg" onChange={uploadFile} aria-label="上传文件到工程" />
           </div>
