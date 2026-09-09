@@ -318,6 +318,13 @@ async function handleStudentVibeCoding(ctx, auth, part) {
 
     sseOpen(ctx);
     sseSend(ctx, 'start', { userMessageId, conversationId: conversation.id, model: selection.model, provider: provider.name });
+    // 推理型模型可能先思考几十秒才吐第一个可见字，期间没有任何 data 事件；
+    // 定期写 SSE 注释（: ping）避免 nginx 等中间层按 proxy_read_timeout 掐断连接。
+    const heartbeat = setInterval(() => {
+      if (ctx.res.writableEnded || ctx.res.destroyed) return;
+      ctx.res.write(': ping\n\n');
+    }, 15000);
+    heartbeat.unref?.();
     let streamedText = '';
     try {
       const result = await provider.generateStream({
@@ -358,6 +365,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       });
       sseSend(ctx, 'error', { code, message: error?.message || 'AI 回复失败' });
     } finally {
+      clearInterval(heartbeat);
       if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();
     }
     return { __streamed: true };
