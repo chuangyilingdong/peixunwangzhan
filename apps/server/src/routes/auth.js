@@ -10,6 +10,7 @@ import {
   q,
   requireAuth,
   row,
+  rows,
   setAuthCookie,
   tokenExpiresAt,
   tokenHash,
@@ -21,6 +22,9 @@ import { mfaEnabledFor, verifyMfaChallenge } from '../services/mfa.js';
 
 const CLIENT_TYPES = new Set(['web', 'admin', 'org', 'student']);
 const LOGIN_RATE_LIMIT = { windowMs: 15 * 60 * 1000, maxAttempts: 10 };
+// 同一账号允许多设备同时在线（学生家里、机房、平板都可能登着）；这里只做上限保护，
+// 超过就把最老的会话顶下线，避免会话无限增长。想彻底踢掉全部设备用「账号安全」里的退出其他设备。
+const MAX_ACTIVE_SESSIONS = 10;
 const loginAttempts = new Map();
 
 function loginRateKey(ctx, login) {
@@ -102,9 +106,11 @@ export async function handleAuth(ctx) {
     const now = nowIso();
     const token = randomBytes(32).toString('base64url');
     const expiresAt = tokenExpiresAt();
-    // P0 uses a single active session per account so a later login deterministically
-    // supersedes any previous browser/client session.
-    q('UPDATE sessions SET superseded_at = ? WHERE user_id = ? AND superseded_at IS NULL', [now, user.id]);
+    // 多设备同时在线：登录不再顶掉既有会话（学生家里、机房、平板上可以同时登着），
+    // 只在超过 MAX_ACTIVE_SESSIONS 时把最老的会话顶下线，避免会话无限增长。
+    const activeSessions = rows('SELECT id FROM sessions WHERE user_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [user.id, now]);
+    const staleSessions = activeSessions.slice(MAX_ACTIVE_SESSIONS - 1).map((item) => item.id);
+    if (staleSessions.length) q('UPDATE sessions SET superseded_at = ? WHERE id IN (' + staleSessions.map(() => '?').join(',') + ')', [now, ...staleSessions]);
     q(
       `INSERT INTO sessions(id,token_hash,user_id,role,org_id,client_type,created_at,expires_at)
        VALUES (?,?,?,?,?,?,?,?)`,
