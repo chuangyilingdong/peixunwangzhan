@@ -205,7 +205,7 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
   // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES。
   const firstFrameUrl = String(options.firstFrameUrl || '').trim();
   const lastFrameUrl = String(options.lastFrameUrl || '').trim();
-  const musicContext = musicRequestContext({ prompt, mode: options.mode, lyrics: options.lyrics });
+  const musicContext = musicRequestContext({ prompt, mode: options.mode, lyrics: options.lyrics, defaultStyle: options.defaultStyle });
   const template = requestTemplateFor({ requestTemplates, modelRequestTemplates }, normalizedModality, { model, requiresFirstFrame: Boolean(firstFrameUrl), withLastFrame: Boolean(lastFrameUrl) });
   if (template) {
     const rendered = renderRequestTemplate(template, {

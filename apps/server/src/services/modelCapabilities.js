@@ -39,6 +39,9 @@ export function defaultInputModes(modelId) {
 
 // 音乐的生成模式：歌词生音乐（学生直接写词）/ 描述生音乐（平台先用文本模型把描述写成歌词）
 export const MUSIC_MODES = Object.freeze(['LYRICS', 'DESCRIPTION']);
+// 上游要求 prompt（曲风）必填，而歌词模式下学生只写词，所以平台给一个默认曲风；
+// 按模型可覆盖（模型能力的「默认曲风」，见 normalizeModelCapabilities 的 defaultStyle）。
+export const DEFAULT_MUSIC_STYLE = '适合儿童的中文流行歌曲，旋律明亮温暖，节奏轻快';
 
 export const MODALITY_CAPABILITY_DEFAULTS = Object.freeze({
   // 默认值刻意保持与改造前硬编码一致（图片 1k、视频 480p / 5 秒），避免升级即改变线上请求。
@@ -97,6 +100,7 @@ export function normalizeModelCapabilities(value, modality, modelId = '') {
     audio: key === 'VIDEO' ? input.audio === true || input.audio === 1 || String(input.audio).toLowerCase() === 'true' : false,
     inputModes: key === 'VIDEO' ? normalizeInputModes(input.inputModes ?? input.inputFrame, modelId) : [],
     modes: key === 'MUSIC' ? normalizeMusicModes(input.modes) : [],
+    defaultStyle: key === 'MUSIC' ? String(input.defaultStyle || '').trim().slice(0, 200) : '',
   };
   return result;
 }
@@ -180,6 +184,7 @@ export function validateModelCapabilitiesInput(value, modality, modelId = '') {
     const audio = input.audio;
     if (audio !== undefined && typeof audio !== 'boolean' && audio !== 1 && audio !== 0) errors.push('「支持生成音频」只能是勾选或不勾选');
   }
+  if (key === 'MUSIC' && input.defaultStyle !== undefined && typeof input.defaultStyle !== 'string') errors.push('「默认曲风」应该是文字');
   if (key === 'MUSIC' && input.modes !== undefined && input.modes !== null) {
     const list = Array.isArray(input.modes) ? input.modes : [input.modes];
     const invalid = list.map((item) => String(item ?? '').trim().toUpperCase()).filter((item) => item && !MUSIC_MODES.includes(item));
@@ -192,12 +197,14 @@ export function validateModelCapabilitiesInput(value, modality, modelId = '') {
  * 音乐的请求上下文：歌词模式下学生的输入就是要唱的词；描述模式下学生的输入是曲风/描述，
  * 歌词由平台代写后传进来。模板与适配器共用这一个函数，避免两边算法不一致。
  */
-export function musicRequestContext({ prompt = '', mode = '', lyrics = '' } = {}) {
+export function musicRequestContext({ prompt = '', mode = '', lyrics = '', defaultStyle = '' } = {}) {
   const normalizedMode = String(mode || '').trim().toUpperCase();
   const written = String(lyrics || '').trim();
   const input = String(prompt || '').trim();
-  if (normalizedMode === 'DESCRIPTION') return { lyrics: written, style: input };
-  return { lyrics: written || input, style: '' };
+  const fallbackStyle = String(defaultStyle || '').trim() || DEFAULT_MUSIC_STYLE;
+  if (normalizedMode === 'DESCRIPTION') return { lyrics: written, style: input || fallbackStyle };
+  // 歌词模式：学生的输入是歌词，曲风用平台默认（上游必填）
+  return { lyrics: written || input, style: fallbackStyle };
 }
 
 export function defaultCapabilities(modality, modelId = '') {

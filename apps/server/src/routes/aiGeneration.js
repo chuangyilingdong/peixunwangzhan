@@ -422,9 +422,11 @@ export function generationOptionsFor({ context, modality, policy, selection, box
   if (key === 'MUSIC') {
     const target = box || resolveLessonGenerationBox(context, key, '');
     const mode = String(target?.mode || '').trim().toUpperCase() === 'DESCRIPTION' ? 'DESCRIPTION' : 'LYRICS';
-    // 歌词模式：学生的输入就是要唱的词，lyrics 留空＝用学生的输入。
+    const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;
+    const capabilities = effectiveCapabilities(channel, key, selection?.model);
+    // 歌词模式：学生的输入就是要唱的词，lyrics 留空＝用学生的输入；曲风用模型的默认曲风（上游必填）。
     // 描述模式：学生写的是描述（当曲风），歌词由平台代写后经 lyrics 传进来。
-    return { mode, lyrics: mode === 'DESCRIPTION' ? String(lyrics || '').trim() : '' };
+    return { mode, lyrics: mode === 'DESCRIPTION' ? String(lyrics || '').trim() : '', defaultStyle: String(capabilities.defaultStyle || '').trim() };
   }
   if (key !== 'IMAGE' && key !== 'VIDEO') return {};
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;

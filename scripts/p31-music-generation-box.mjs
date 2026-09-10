@@ -138,7 +138,8 @@ try {
   const lyricsContext = musicRequestContext({ prompt: LYRICS, mode: lyricsOptions.mode, lyrics: lyricsOptions.lyrics });
   const lyricsBody = renderRequestTemplate(template, { model: 'mureka-v9-song', prompt: LYRICS, ...lyricsContext });
   assert.equal(lyricsBody.metadata?.lyrics, LYRICS, `歌词模式的 lyrics 应是学生输入，实际 ${JSON.stringify(lyricsBody.metadata)}`);
-  assert.equal(lyricsBody.prompt, '', `歌词模式的曲风应为空，实际 ${JSON.stringify(lyricsBody.prompt)}`);
+  assert.ok(String(lyricsBody.prompt).length > 0, `歌词模式的曲风要用平台默认（上游必填），实际 ${JSON.stringify(lyricsBody.prompt)}`);
+  assert.ok(lyricsBody.prompt.includes('儿童'), `默认曲风应适合儿童，实际 ${lyricsBody.prompt}`);
 
   // 5) 歌词模式真实生成一次
   const lyricsJobQueued = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: project.data.id, boxId: boxes[0].id, modality: 'MUSIC', prompt: LYRICS } });
