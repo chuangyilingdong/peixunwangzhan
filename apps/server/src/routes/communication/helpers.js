@@ -776,6 +776,58 @@ function websiteContentRevisions(contentKey) {
   }));
 }
 
+const HELP_CENTER_VERSION = 'P4-S07';
+const HELP_FEEDBACK_CATEGORIES = new Set(['ACCOUNT', 'CANVAS', 'AI', 'COURSE', 'CLIENT', 'DATA', 'OTHER']);
+const HELP_FAQ = [
+  { category: 'ACCOUNT', question: '忘记密码或登录不上怎么办？', answer: '请联系你的老师或机构管理员重置密码。密码重置后，老师会把新账号信息交给你，首次登录可在个人账号中修改。' },
+  { category: 'CANVAS', question: '作品还没做完可以保存吗？', answer: '可以。进入项目后保存画布，作品会保留在“我的项目”。已提交或已发布的作品需按老师反馈修改后重新提交。' },
+  { category: 'AI', question: '为什么 AI 现在不能使用？', answer: '请先查看 AI / 魔法石中心。老师可能关闭了本节课的某类 AI 能力，或课堂积分、调用次数已达到上限。' },
+  { category: 'COURSE', question: '如何知道这节课要做什么？', answer: '在学习首页查看“我的学习任务”，再按课时进入创作。课堂开始后，老师设置的课堂要求也会显示在首页。' },
+  { category: 'CLIENT', question: '可以在家里的电脑使用吗？', answer: 'Web 端可使用现代浏览器访问；桌面安装包需由机构或平台配置真实下载地址后才提供下载。未配置时页面不会提供安装包。' },
+  { category: 'DATA', question: '我的头像和监护人信息会被收集吗？', answer: '平台仅保存昵称、平台预设头像键、必要监护人联系信息和隐私开关，不收集住址、身份证号和社交账号。可在个人账号中查看或清空。' },
+  { category: 'OTHER', question: '遇到页面错误或内容异常怎么办？', answer: '请在帮助与下载页提交问题反馈，选择对应分类并写清楚出现步骤。老师或机构管理员会跟进处理。' },
+];
+
+// 问题反馈：学生端（自己提交的）与机构端（本机构所有的）共用同一套读取与字段归一。
+// 之前这两个函数只在 student.js 内部定义，机构端直接调用 → ReferenceError，接口 500。
+function normalizeHelpFeedback(value, { includeUser = false } = {}) {
+  if (!value) return null;
+  const item = {
+    id: value.id,
+    userId: value.user_id,
+    orgId: value.org_id || null,
+    category: value.category,
+    subject: value.subject,
+    body: value.body,
+    contact: value.contact || null,
+    status: value.status,
+    submittedAt: value.submitted_at,
+    handledAt: value.handled_at || null,
+    resolvedAt: value.handled_at || null,
+    handledBy: value.handled_by || null,
+    handlerName: value.handler_name || null,
+    resolution: value.resolution || null,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+  if (includeUser) {
+    item.userName = value.user_name || null;
+    item.userLogin = value.user_login || null;
+  }
+  return item;
+}
+
+function helpFeedbackRows(where, params) {
+  return rows(
+    `SELECT feedback.*, student.display_name AS user_name, student.login AS user_login, handler.display_name AS handler_name
+     FROM help_feedback feedback
+     JOIN users student ON student.id=feedback.user_id
+     LEFT JOIN users handler ON handler.id=feedback.handled_by
+     WHERE ${where}`,
+    params,
+  ).map((item) => normalizeHelpFeedback(item, { includeUser: true }));
+}
+
 export {
   LEGAL_POLICY_VERSION,
   MATERIAL_CATEGORIES,
@@ -795,8 +847,13 @@ export {
   markJobSucceeded,
   markNotificationRead,
   markRecipientFailed,
+  HELP_CENTER_VERSION,
+  HELP_FAQ,
+  HELP_FEEDBACK_CATEGORIES,
+  helpFeedbackRows,
   materialRows,
   materialStats,
+  normalizeHelpFeedback,
   normalizeLead,
   normalizeMaterial,
   normalizeNotification,

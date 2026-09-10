@@ -26,6 +26,9 @@ import {
   NOTIFICATION_ROLES,
   NOTIFICATION_SCOPES,
   WORKER_ID,
+  HELP_CENTER_VERSION,
+  HELP_FAQ,
+  HELP_FEEDBACK_CATEGORIES,
   backoffSeconds,
   bool,
   claimDispatchJobs,
@@ -33,6 +36,7 @@ import {
   dispatchRecipientEvent,
   effectiveNotificationStatus,
   enqueueDispatchJob,
+  helpFeedbackRows,
   integer,
   listDeadLetters,
   markAllNotificationsRead,
@@ -42,6 +46,7 @@ import {
   markRecipientFailed,
   materialRows,
   materialStats,
+  normalizeHelpFeedback,
   normalizeLead,
   normalizeMaterial,
   normalizeNotification,
@@ -77,44 +82,6 @@ import {
   workerInterval,
   workerStarted,
 } from './helpers.js';
-
-function normalizeHelpFeedback(value, { includeUser = false } = {}) {
-  if (!value) return null;
-  const item = {
-    id: value.id,
-    userId: value.user_id,
-    orgId: value.org_id || null,
-    category: value.category,
-    subject: value.subject,
-    body: value.body,
-    contact: value.contact || null,
-    status: value.status,
-    submittedAt: value.submitted_at,
-    handledAt: value.handled_at || null,
-    resolvedAt: value.handled_at || null,
-    handledBy: value.handled_by || null,
-    handlerName: value.handler_name || null,
-    resolution: value.resolution || null,
-    createdAt: value.created_at,
-    updatedAt: value.updated_at,
-  };
-  if (includeUser) {
-    item.userName = value.user_name || null;
-    item.userLogin = value.user_login || null;
-  }
-  return item;
-}
-
-function helpFeedbackRows(where, params) {
-  return rows(
-    `SELECT feedback.*, student.display_name AS user_name, student.login AS user_login, handler.display_name AS handler_name
-     FROM help_feedback feedback
-     JOIN users student ON student.id=feedback.user_id
-     LEFT JOIN users handler ON handler.id=feedback.handled_by
-     WHERE ${where}`,
-    params,
-  ).map((item) => normalizeHelpFeedback(item, { includeUser: true }));
-}
 
 function helpCenterPayload() {
   return {
