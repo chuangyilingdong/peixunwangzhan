@@ -101,8 +101,15 @@ function normalizeBoxMaterial(material, materialIndex, title) {
   }
   if (!box) throw errors.badRequest(`第 ${materialIndex + 1} 个生成框体的类型无效`, 'INVALID_GENERATION_CONFIG');
   const boxSnapshot = { modality: box.modality, model: box.model };
-  if (box.modality === 'IMAGE' || box.modality === 'VIDEO') { boxSnapshot.aspectRatio = box.aspectRatio; boxSnapshot.resolution = box.resolution; }
-  if (box.modality === 'VIDEO') { boxSnapshot.durationSeconds = box.durationSeconds; boxSnapshot.audio = box.audio; }
+  // 只存平台真的选了的项：空着＝不指定，学生在画布课堂里自己选（写死默认值学生就没得选了）。
+  if (box.modality === 'IMAGE' || box.modality === 'VIDEO') {
+    if (box.aspectRatio) boxSnapshot.aspectRatio = box.aspectRatio;
+    if (box.resolution) boxSnapshot.resolution = box.resolution;
+  }
+  if (box.modality === 'VIDEO') {
+    if (Number.isInteger(box.durationSeconds)) boxSnapshot.durationSeconds = box.durationSeconds;
+    if (box.audio === true || box.audio === false) boxSnapshot.audio = box.audio;
+  }
   // 音乐：记下生成模式（歌词生音乐 / 描述生音乐）
   if (box.modality === 'MUSIC') { boxSnapshot.mode = box.mode; }
   return { ...snapshot, box: boxSnapshot, content: box.prompt };

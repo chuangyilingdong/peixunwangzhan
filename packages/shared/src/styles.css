@@ -76,6 +76,10 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .student-slot-picker__list small { color:#a49bbd; font-size:10px; }
 .student-canvas-main { min-height: calc(100vh - 150px); }.student-canvas-viewport,.student-canvas-viewport .learning-canvas { min-height: calc(100vh - 220px); height: calc(100vh - 220px); }
 @media (max-width:900px) { .student-canvas-layout { grid-template-columns: 50px minmax(0,1fr); padding:10px; }.student-tool-drawer { left:58px; width:min(300px, calc(100vw - 82px)); }.student-canvas-viewport,.student-canvas-viewport .learning-canvas { min-height:540px; height:540px; } }
+/* 官网的匿名统计同意条固定悬浮在底部（z-index:30），会盖住画布最下面一条，
+   画布节点底部的缩放手柄因此点不到。同意条在的时候把画布按它的高度缩短（点掉同意条后自动恢复）。 */
+body:has(.analytics-consent) .student-canvas-viewport,
+body:has(.analytics-consent) .student-canvas-viewport .learning-canvas { height: calc(100vh - 330px); min-height: 430px; flex: 0 0 auto; }
 
 /* 平台课包：列表卡片 / 标签页 / 抽屉 */
 .course-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; margin-bottom:18px; }

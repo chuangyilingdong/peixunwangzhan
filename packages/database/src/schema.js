@@ -1135,6 +1135,9 @@ for (const statement of [
   "ALTER TABLE generation_jobs ADD COLUMN last_frame_asset_url TEXT",
   // 全能参考（多素材参考）用到的图片素材地址，JSON 数组，重试与异步 worker 复用。
   "ALTER TABLE generation_jobs ADD COLUMN reference_asset_urls TEXT",
+  // 平台没指定、由学生在画布课堂里自选的生成参数（比例/清晰度/时长/含音频），JSON。
+  // 异步 worker 会按框体重新解析一次参数，所以必须落库，否则学生的选择会被重算掉。
+  "ALTER TABLE generation_jobs ADD COLUMN request_options TEXT",
 ]) { try { db.exec(statement); } catch (_) {} }
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_queue ON generation_jobs(status, next_attempt_at, created_at)'); } catch (_) {}
 

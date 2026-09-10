@@ -537,15 +537,18 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
       invalid(`框体「${box.title}」的生成比例「${submittedRatio}」不在当前模型支持范围内（可用：${capabilities.aspectRatios.join('、')}）`);
       box.aspectRatio = capabilities.aspectRatios[0];
     } else {
-      box.aspectRatio = submittedRatio || capabilities.aspectRatios[0] || '16:9';
+      // 平台不填＝不指定：留给学生在画布课堂里自己选；生成时按学生选的值发，服务端仍按模型能力校验。
+      box.aspectRatio = submittedRatio || '';
     }
     const submittedResolution = String(raw.resolution ?? '').trim();
     if (submittedResolution && capabilities.resolutions.length && !capabilities.resolutions.includes(submittedResolution)) {
       invalid(`框体「${box.title}」的清晰度「${submittedResolution}」不在当前模型支持范围内（可用：${capabilities.resolutions.join('、')}）`);
       box.resolution = capabilities.resolutions[0];
     } else {
-      box.resolution = submittedResolution || capabilities.resolutions[0] || '1k';
+      box.resolution = submittedResolution || '';
     }
+    // 学生端要按模型能力渲染「自己选参数」的下拉框，可选值随框体一起下发。
+    box.paramOptions = { aspectRatios: [...capabilities.aspectRatios], resolutions: [...capabilities.resolutions] };
   }
   if (modality === 'MUSIC') {
     // 音乐只有「生成模式」：歌词生音乐（学生直接写词）/ 描述生音乐（平台代写词）。
@@ -559,19 +562,24 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
   }
   if (modality === 'VIDEO') {
     const submitted = raw.durationSeconds === undefined || raw.durationSeconds === null || raw.durationSeconds === '' ? null : Number(raw.durationSeconds);
-    let durationSeconds = submitted === null ? (capabilities.durations[0] || 5) : submitted;
-    if (!Number.isInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 600) {
-      invalid(`框体「${box.title}」的视频时长「${String(raw.durationSeconds ?? '').slice(0, 20)}」必须是 1–600 的整数秒`);
-      durationSeconds = capabilities.durations[0] || 5;
-    } else if (capabilities.durations.length && !capabilities.durations.includes(durationSeconds)) {
-      invalid(`框体「${box.title}」的视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`);
-      durationSeconds = capabilities.durations[0];
+    // 平台不填＝不指定，留给学生自己选时长。
+    let durationSeconds = submitted;
+    if (submitted !== null) {
+      if (!Number.isInteger(durationSeconds) || durationSeconds < 1 || durationSeconds > 600) {
+        invalid(`框体「${box.title}」的视频时长「${String(raw.durationSeconds ?? '').slice(0, 20)}」必须是 1–600 的整数秒`);
+        durationSeconds = capabilities.durations[0] || 5;
+      } else if (capabilities.durations.length && !capabilities.durations.includes(durationSeconds)) {
+        invalid(`框体「${box.title}」的视频时长「${durationSeconds}秒」不在当前模型支持范围内（可用：${capabilities.durations.join('、')}秒）`);
+        durationSeconds = capabilities.durations[0];
+      }
     }
     box.durationSeconds = durationSeconds;
-    box.audio = raw.audio === true && capabilities.audio === true;
+    // 含音频三态：null＝学生自选，true/false＝平台定了（模型不支持音频时只能是不带音频）。
+    box.audio = raw.audio === undefined || raw.audio === null ? null : (raw.audio === true && capabilities.audio === true);
     // 输入画面支持方式（可多选）：只能图生（不支持纯文本）时才要求必须给首帧。
     box.inputModes = Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT'];
     box.requiresFirstFrame = requiresFirstFrameFor(box.inputModes);
+    box.paramOptions = { ...(box.paramOptions || {}), durations: [...capabilities.durations], audio: capabilities.audio === true };
   }
   return box;
 }

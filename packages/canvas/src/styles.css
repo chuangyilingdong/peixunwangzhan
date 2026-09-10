@@ -8,16 +8,26 @@
 .learning-canvas .react-flow__edge-path { stroke: #93a9ff; stroke-width: 2.5; }
 .learning-canvas .react-flow__handle { width: 13px; height: 13px; border: 3px solid #dce5ff; background: #766cf0; }
 .react-flow__node { min-width: 250px; }
-.learning-node { position: relative; width: 100%; min-height: 120px; overflow: hidden; border: 1px solid rgba(202, 212, 255, .34); border-radius: 17px; color: #f2f5ff; background: rgba(12, 25, 70, .96); box-shadow: 0 12px 26px rgba(0, 0, 0, .28); }
+/* 节点铺满外层容器：拖拽把手改过尺寸后，内容（图片/视频/文字区）跟着一起变，而不是留一片空白。
+   未拖过尺寸时外层是内容高度，height:100% 等价于 auto，不影响原有布局。 */
+.learning-node { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 120px; overflow: hidden; border: 1px solid rgba(202, 212, 255, .34); border-radius: 17px; color: #f2f5ff; background: rgba(12, 25, 70, .96); box-shadow: 0 12px 26px rgba(0, 0, 0, .28); }
 .learning-node.selected { outline: 2px solid #a8b8ff; outline-offset: 3px; }
-.learning-node__resize-line { border-color: #a8b8ff; }
-.learning-node__resize-handle { width: 10px; height: 10px; border: 2px solid #0b1738; border-radius: 3px; background: #a8b8ff; }
+/* 缩放手感：把手做大做亮（原来 10px 太难点，而且被 React Flow 自带的
+   .react-flow__resize-control.handle{width:5px} 按选择器优先级压掉了，所以要写足三层）。 */
+.learning-node__resize-line { border-color: rgba(168, 184, 255, .8); border-width: 1.5px; }
+.learning-canvas .react-flow__resize-control.learning-node__resize-handle { width: 16px; height: 16px; border: 2px solid #0b1738; border-radius: 5px; background: #cdd7ff; box-shadow: 0 0 0 2px rgba(168, 184, 255, .45); }
+.learning-canvas .react-flow__resize-control.learning-node__resize-handle:hover { background: #fff; }
 .learning-node__media--zoomable { cursor: zoom-in; }
 .learning-node__reference { margin: 12px; }
 .learning-node__reference img { display: block; width: 100%; border-radius: 10px; cursor: zoom-in; }
 .learning-node__reference figcaption { margin-top: 6px; color: #8f9fd4; font-size: 10px; letter-spacing: .2px; }
 .learning-node__textarea--compact { height: 68px; }
 .learning-node__slot-params { display: block; margin: -4px 14px 10px; color: #8f9fd4; font-size: 10px; letter-spacing: .2px; }
+/* 平台没定参数时，学生在框体里自己选比例/清晰度/时长/音频 */
+.learning-node__param-pickers { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 12px 10px; }
+.learning-node__param-pickers label { display: flex; flex-direction: column; gap: 3px; color: #9eaddb; font-size: 10px; }
+.learning-node__param-pickers select { padding: 5px 6px; border: 1px solid rgba(196, 208, 255, .22); border-radius: 8px; color: #f2f5ff; background: rgba(4, 13, 43, .72); font-size: 11px; }
+.learning-node__param-pickers small { flex-basis: 100%; color: #8f9fd4; font-size: 10px; }
 .learning-canvas__lightbox { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(3, 8, 26, .82); backdrop-filter: blur(4px); }
 .learning-canvas__lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
 .learning-canvas__lightbox-close { position: absolute; top: 16px; right: 18px; width: 34px; height: 34px; border: 1px solid rgba(200, 212, 255, .4); border-radius: 50%; color: #e8edff; background: rgba(10, 20, 50, .8); font-size: 18px; cursor: pointer; }
@@ -49,6 +59,9 @@
 .learning-node--audio .learning-node__heading span { color: #fff; background: #39b5d8; }
 .learning-node--animation .learning-node__heading span { color: #40245c; background: #f0a4ff; }
 .learning-node__audio,.learning-node__media { display: block; width: calc(100% - 24px); margin: 12px; border-radius: 10px; }
+/* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
+.learning-node > * { flex-shrink: 0; }
+.learning-node__media { flex: 1 1 auto; min-height: 80px; object-fit: contain; background: rgba(4, 13, 43, .5); }
 .learning-node__audio-placeholder,.learning-node__animation-placeholder { display: grid; place-items: center; height: 105px; margin: 12px; border-radius: 12px; color: #f7f8ff; font-size: 18px; background: linear-gradient(135deg, #247eab, #5d4fca); }
 .learning-node__animation-placeholder { background: linear-gradient(135deg, #9b58d4, #df6b9f); }
 

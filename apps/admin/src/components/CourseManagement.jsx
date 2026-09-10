@@ -25,6 +25,9 @@ function valueOptionsFor(options, current) {
   if (current !== undefined && current !== null && current !== '' && !list.includes(current)) return [current, ...list];
   return list;
 }
+// 平台留空＝不指定，学生在画布课堂里自己选；填了＝学生在课堂里只能看、不能改。
+const STUDENT_CHOICE = '';
+function paramLabel(value, suffix = '') { return value === '' || value === undefined || value === null ? '学生自选' : `${value}${suffix}`; }
 let uidSeed = 0;
 function nextUid() { uidSeed += 1; return `tmp-${Date.now().toString(36)}-${uidSeed}`; }
 const defaultClassroomConfig = { version: 3 };
@@ -171,33 +174,29 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
           ...snapshot,
           box: snapshot.box || (modality === 'MUSIC'
             ? { modality, model: '', mode: 'LYRICS' }
-            : { modality, model: '', aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '', durationSeconds: caps.durations[0] || 5, audio: false }),
+            // 参数默认留空＝学生自己在课堂里选（平台想固定再填）。
+            : { modality, model: '', aspectRatio: '', resolution: '', durationSeconds: null, audio: null }),
         },
       };
     });
   }
-  // 换模态后，把该模态不支持的参数重置为该模型能力的第一项。
+  // 换模态后重置参数：默认留空＝学生自选（平台想固定再填）。
   function changeBoxModality(groupIndex, materialIndex, uid, modality) {
-    const caps = capabilitiesFor(modality, '');
     patchBox(groupIndex, materialIndex, uid, () => (modality === 'MUSIC'
       ? { modality, model: '', mode: 'LYRICS' }
-      : {
-        modality, model: '',
-        aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '',
-        durationSeconds: caps.durations[0] || 5, audio: false,
-      }));
+      : { modality, model: '', aspectRatio: '', resolution: '', durationSeconds: null, audio: null }));
   }
-  // 换模型后，把新模型不支持的比例/清晰度/时长重置为它的第一个可选项。
+  // 换模型后：学生自选的保持自选，平台定过的值如果新模型不支持就退回「学生自选」。
   function changeBoxModel(groupIndex, materialIndex, uid, model) {
     patchBox(groupIndex, materialIndex, uid, (box) => {
       const modality = String(box.modality || 'TEXT').toUpperCase();
       if (modality === 'TEXT' || modality === 'MUSIC') return { ...box, model };
       const caps = capabilitiesFor(modality, model);
       const next = { ...box, model };
-      if (!caps.aspectRatios.includes(next.aspectRatio)) next.aspectRatio = caps.aspectRatios[0] || next.aspectRatio;
-      if (!caps.resolutions.includes(next.resolution)) next.resolution = caps.resolutions[0] || next.resolution;
+      if (next.aspectRatio && !caps.aspectRatios.includes(next.aspectRatio)) next.aspectRatio = '';
+      if (next.resolution && !caps.resolutions.includes(next.resolution)) next.resolution = '';
       if (modality === 'VIDEO') {
-        if (!caps.durations.includes(Number(next.durationSeconds))) next.durationSeconds = caps.durations[0] || next.durationSeconds;
+        if (Number(next.durationSeconds) && !caps.durations.includes(Number(next.durationSeconds))) next.durationSeconds = null;
         if (!caps.audio) next.audio = false;
       }
       return next;
@@ -248,8 +247,14 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                 <label>模态<select value={modality} onChange={(event) => changeBoxModality(groupIndex, materialIndex, material.uid, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                 <label>模型{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</label>
                 {modality === 'MUSIC' ? <label>生成模式<select value={box.mode || 'LYRICS'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, mode: event.target.value }))}>{MUSIC_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}
-                {modality === 'IMAGE' || modality === 'VIDEO' ? <><label>比例<select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>清晰度<select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label></> : null}
-                {modality === 'VIDEO' ? <><label>时长（秒）<select value={String(box.durationSeconds ?? 5)} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, durationSeconds: Number(event.target.value) }))}>{valueOptionsFor(caps.durations.map(String), String(box.durationSeconds ?? 5)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label><label className="checkbox-label"><input type="checkbox" checked={box.audio === true} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.checked }))} />生成音频{caps.audio ? '' : '（当前模型不支持）'}</label></> : null}
+                {modality === 'IMAGE' || modality === 'VIDEO' ? <>
+                  <label>比例<select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                  <label>清晰度<select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                </> : null}
+                {modality === 'VIDEO' ? <>
+                  <label>时长（秒）<select value={box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, durationSeconds: event.target.value === '' ? null : Number(event.target.value) }))}><option value="">学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.durations.map(String), box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label>
+                  <label>生成音频<select value={box.audio === true ? 'YES' : box.audio === false ? 'NO' : ''} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.value === '' ? null : event.target.value === 'YES' }))}><option value="">学生自选（课堂里由学生挑）</option><option value="YES">带音频</option><option value="NO">不带音频</option></select>{caps.audio ? '' : <small className="muted">当前模型不支持生成音频</small>}</label>
+                </> : null}
               </div>
               {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「计费与模型」里填写。</p> : null}
               <textarea rows={3} value={snapshot.content || ''} placeholder={(box?.mode === 'DESCRIPTION' ? '平台预填描述（学生加入画布时会自动填进框体，可以改）：例如「关于春天放风筝的欢快儿歌」' : '平台预填歌词（学生加入画布时会自动填进框体，可以改）：例如 [Verse] 小星星眨眨眼')} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} />

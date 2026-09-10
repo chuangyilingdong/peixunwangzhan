@@ -134,13 +134,17 @@ function useCanvasActions() {
 function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140 }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
-  return <div className={`learning-node learning-node--${tone}`}>
+  // 缩放把手放在圆角容器外面：.learning-node 有 overflow:hidden（为了裁掉溢出内容），
+  // 把手是贴在节点四角、探出边缘的，放里面会被裁掉一半甚至整个点不到。
+  return <>
     <NodeResizer isVisible={Boolean(selected) && !readOnly} minWidth={minWidth} minHeight={minHeight} lineClassName="learning-node__resize-line" handleClassName="learning-node__resize-handle" />
-    <Handle type="target" position={Position.Left} className="learning-node__handle" />
-    <div className="learning-node__heading"><span>{icon}</span><strong>{title}</strong></div>
-    {children}
-    <Handle type="source" position={Position.Right} className="learning-node__handle" />
-  </div>;
+    <div className={`learning-node learning-node--${tone}`}>
+      <Handle type="target" position={Position.Left} className="learning-node__handle" />
+      <div className="learning-node__heading"><span>{icon}</span><strong>{title}</strong></div>
+      {children}
+      <Handle type="source" position={Position.Right} className="learning-node__handle" />
+    </div>
+  </>;
 }
 
 function PromptNode({ id, data, selected }) {
@@ -171,6 +175,43 @@ function SlotParams({ data }) {
   return <span className="learning-node__slot-params">{params.join(' · ')}</span>;
 }
 
+// 平台没给框体定参数时，学生在画布上自己挑（平台定了的项学生看不到下拉，只能按平台配置生成）。
+function SlotParamPickers({ id, data }) {
+  const { updateNode, readOnly } = useCanvasActions();
+  const options = data.paramOptions;
+  if (readOnly || !data.slotType || !options) return null;
+  const student = data.studentParams || {};
+  const fields = [];
+  if (!data.aspectRatio && Array.isArray(options.aspectRatios) && options.aspectRatios.length) fields.push({ key: 'aspectRatio', label: '比例', values: options.aspectRatios.map((value) => ({ value, label: value })) });
+  if (!data.resolution && Array.isArray(options.resolutions) && options.resolutions.length) fields.push({ key: 'resolution', label: '清晰度', values: options.resolutions.map((value) => ({ value, label: value })) });
+  const durationOpen = data.slotType === 'video' && (data.durationSeconds === null || data.durationSeconds === undefined);
+  if (durationOpen && Array.isArray(options.durations) && options.durations.length) fields.push({ key: 'durationSeconds', label: '时长', values: options.durations.map((value) => ({ value: String(value), label: `${value} 秒` })) });
+  const audioOpen = data.slotType === 'video' && data.audio !== true && data.audio !== false && options.audio === true;
+  if (!fields.length && !audioOpen) return null;
+  const update = (key, value) => updateNode(id, { studentParams: { ...student, [key]: value } });
+  return <div className="learning-node__param-pickers nodrag">
+    {fields.map((field) => <label key={field.key}><span>{field.label}</span><select aria-label={`${data.title || '框体'}${field.label}`} value={String(student[field.key] ?? field.values[0].value)} onChange={(event) => update(field.key, event.target.value)}>{field.values.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>)}
+    {audioOpen ? <label><span>音频</span><select aria-label={`${data.title || '框体'}音频`} value={student.audio === true ? 'YES' : 'NO'} onChange={(event) => update('audio', event.target.value === 'YES')}><option value="NO">不带音频</option><option value="YES">带音频</option></select></label> : null}
+    <small>这个框体的参数由你自己选</small>
+  </div>;
+}
+
+// 组装这次生成要用的参数：平台定过的用平台的，没定的用学生选的（没选就取第一个可选项）。
+function resolveSlotParams(data) {
+  const options = data.paramOptions || {};
+  const student = data.studentParams || {};
+  const params = {
+    aspectRatio: data.aspectRatio || student.aspectRatio || options.aspectRatios?.[0] || '',
+    resolution: data.resolution || student.resolution || options.resolutions?.[0] || '',
+  };
+  if (data.slotType === 'video') {
+    const duration = Number(data.durationSeconds) || Number(student.durationSeconds) || options.durations?.[0] || 0;
+    if (duration) params.durationSeconds = duration;
+    params.audio = (data.audio === true || data.audio === false ? data.audio : student.audio === true) && options.audio === true;
+  }
+  return params;
+}
+
 function ImageNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate, openPreview } = useCanvasActions();
   const imageUrl = data.previewUrl || data.assetUrl;
@@ -186,7 +227,8 @@ function ImageNode({ id, data, selected }) {
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.caption || ''} placeholder="写下画面描述 / 提示词…" maxLength={300} onChange={(event) => updateNode(id, { caption: event.target.value })} />
     <input className="learning-node__emoji nodrag" value={data.emoji || ''} aria-label="画面表情" maxLength={2} onChange={(event) => updateNode(id, { emoji: event.target.value })} />
     <SlotParams data={data} />
-    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !imageUrl && <button className="learning-node__generate nodrag" type="button" disabled={missingPrompt} title={missingPrompt ? '先写下画面描述，再生成' : undefined} onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '' })}>✦ 生成画面</button>}
+    <SlotParamPickers id={id} data={data} />
+    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !imageUrl && <button className="learning-node__generate nodrag" type="button" disabled={missingPrompt} title={missingPrompt ? '先写下画面描述，再生成' : undefined} onClick={() => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '', params: resolveSlotParams(data) })}>✦ 生成画面</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">用描述生成画面，也可以继续编辑灵感</span>}
   </NodeFrame>;
@@ -249,6 +291,7 @@ function VideoNode({ id, data, selected }) {
         : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
+    <SlotParamPickers id={id} data={data} />
     {(sourceAssetUrl || lastFrameAssetUrl || referenceAssets.length) ? <div className="learning-node__frames nodrag">
       {sourceAssetUrl ? <figure><img src={sourceAssetUrl} alt="首帧" /><figcaption>首帧</figcaption></figure> : null}
       {lastFrameAssetUrl ? <figure><img src={lastFrameAssetUrl} alt="尾帧" /><figcaption>尾帧</figcaption></figure> : null}
@@ -256,7 +299,7 @@ function VideoNode({ id, data, selected }) {
         ? <figure key={`${asset.url}-${index}`}><img src={asset.url} alt={`参考${index + 1}`} /><figcaption>参考{index + 1}</figcaption></figure>
         : <figure key={`${asset.url}-${index}`}><span className="learning-node__ref-chip">{asset.type === 'VIDEO' ? '▶ 视频' : '♫ 音频'}</span><figcaption>参考{index + 1}</figcaption></figure>)}
     </div> : null}
-    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={Boolean(blockedReason)} title={blockedReason || undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssets })}>▶ 生成故事短片</button>}
+    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={Boolean(blockedReason)} title={blockedReason || undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssets, params: resolveSlotParams(data) })}>▶ 生成故事短片</button>}
     {blockedReason && !data.generationStatus ? <span className="learning-node__generation-state is-error">{blockedReason}</span> : null}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">{frameHint}</span>}
@@ -309,7 +352,7 @@ const NODE_ASSET_KIND = Object.freeze({ image: 'IMAGE', video: 'VIDEO', animatio
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, showStarter, capabilities = ['text'], allowNodeCreation = true }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null }) {
   // 受控课堂画布（allowNodeCreation=false）默认不使用固定起始底稿，避免空画布每次刷新被自动填充。
   const shouldShowStarter = showStarter === undefined ? (!readOnly && allowNodeCreation) : showStarter;
   const initial = useMemo(() => {
@@ -321,7 +364,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
   const [viewport, setViewport] = useState(initial.viewport);
   const [contextMenu, setContextMenu] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
-  const { getViewport, screenToFlowPosition } = useReactFlow();
+  const { getViewport, screenToFlowPosition, setCenter } = useReactFlow();
   const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
   const historyRef = useRef({ past: [], future: [] });
   const clipboardRef = useRef([]);
@@ -487,6 +530,18 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     window.addEventListener('keydown', close);
     return () => { window.removeEventListener('click', close); window.removeEventListener('keydown', close); };
   }, [contextMenu]);
+
+  // 素材面板点「已在画布上」的框体时，把对应节点选中并移到视野中央（点了要看得见反应）。
+  useEffect(() => {
+    if (!focusRequest?.id) return;
+    const node = nodes.find((item) => item.id === focusRequest.id);
+    if (!node) return;
+    const width = node.measured?.width || node.width || 250;
+    const height = node.measured?.height || node.height || 160;
+    setNodes((current) => current.map((item) => ({ ...item, selected: item.id === focusRequest.id })));
+    setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: Math.max(getViewport().zoom || 1, 0.8), duration: 400 });
+    // 只在每次新的定位请求（token 变化）时执行
+  }, [focusRequest?.token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     onChange?.({ nodes, edges, viewport: getViewport() });
