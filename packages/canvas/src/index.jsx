@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   addEdge,
   Background,
   BaseEdge,
+  ConnectionMode,
   EdgeLabelRenderer,
   Controls,
   Handle,
@@ -16,6 +17,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStore,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
@@ -134,6 +136,23 @@ function useCanvasActions() {
   return actions;
 }
 
+// 框体两侧的连接点（复刻参考节点两侧的小圆 ＋）：从这里拖出连线，松手落在另一个框体的圆点上就建立连接。
+// 注意两点：① React Flow 的 Handle 必须在 .learning-node 外面渲染——卡片有 overflow:hidden，
+// 放里面贴边的圆点会被裁掉半个；② 两侧都声明成 source，配合 ReactFlow 的 Loose 模式，
+// 任意一个圆点既能起线也能接收，学生从左边往右拉、从右边往左拉都行（不做自动连接，连哪由学生拖出来）。
+function NodePort({ side }) {
+  return <Handle
+    id={side}
+    type="source"
+    position={side === 'left' ? Position.Left : Position.Right}
+    className={`learning-node__port is-${side}`}
+    title="拖动这里连线到另一个框体"
+    aria-label={side === 'left' ? '从左侧拖出连线' : '从右侧拖出连线'}
+  >
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+  </Handle>;
+}
+
 function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140, processing = false, onRename = null, renameDisabled = false }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
@@ -141,8 +160,8 @@ function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minH
   // 把手是贴在节点四角、探出边缘的，放里面会被裁掉一半甚至整个点不到。
   return <>
     <NodeResizer isVisible={Boolean(selected) && !readOnly} minWidth={minWidth} minHeight={minHeight} lineClassName="learning-node__resize-line" handleClassName="learning-node__resize-handle" />
+    <NodePort side="left" />
     <div className={`learning-node learning-node--${tone}${processing ? ' is-processing' : ''}`}>
-      <Handle type="target" position={Position.Left} className="learning-node__handle" />
       <div className="learning-node__heading">
         <span>{icon}</span>
         {onRename
@@ -150,8 +169,8 @@ function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minH
           : <strong>{title}</strong>}
       </div>
       {children}
-      <Handle type="source" position={Position.Right} className="learning-node__handle" />
     </div>
+    <NodePort side="right" />
   </>;
 }
 
@@ -470,6 +489,101 @@ function NodeEditPanel({ node, onRequestMaterials }) {
   </div>;
 }
 
+// 连线两端到底接在哪个圆点上：老快照里的连线没有 handle 字段，按左右位置补上。
+// 渲染（displayEdges）和查重（onConnect）共用这一套规则，否则一条老连线能从反方向再连一次。
+function resolvePortSides(edge, nodeById) {
+  const centerX = (node) => (node?.position?.x || 0) + (node?.measured?.width || node?.width || 250) / 2;
+  const source = nodeById.get(edge.source);
+  const target = nodeById.get(edge.target);
+  const forward = !source || !target || centerX(source) <= centerX(target);
+  return {
+    sourceHandle: edge.sourceHandle || (forward ? 'right' : 'left'),
+    targetHandle: edge.targetHandle || (forward ? 'left' : 'right'),
+  };
+}
+
+// 一条连线只看「哪两个圆点被连上」，方向不算差异：同一对圆点只允许一条线。
+function edgePortPairKey(sourceNodeId, sourceHandle, targetNodeId, targetHandle) {
+  return [`${sourceNodeId}#${sourceHandle}`, `${targetNodeId}#${targetHandle}`].sort().join('|');
+}
+
+const DOCK_WIDTH = 660;
+const DOCK_MARGIN = 14;
+const DOCK_GAP = 14;
+
+// 这些字段是「边打字边改」的，连续编辑同一条框体的同一批字段只记一条撤销记录。
+const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait', 'place', 'mood', 'emoji', 'studentParams', 'audio']);
+
+// 底部输入面板：贴在当前选中框体的正下方，跟着框体一起动（复刻参考的行为）。
+// 「丝滑」的关键是别让它慢半拍：位置用 transform 直接算、不加 CSS 过渡，
+// 画布平移缩放从 React Flow 内部 store 订阅，框体拖动则由上层 nodes 状态驱动，两条路都是当帧更新。
+function CanvasDockPanel({ node, containerRef, onRequestMaterials }) {
+  const transform = useStore((state) => state.transform);
+  const panelRef = useRef(null);
+  const [panelHeight, setPanelHeight] = useState(0);
+  const [box, setBox] = useState({ width: 0, height: 0 });
+
+  // 面板高度随内容变（分段参数出现/消失、提示词换行），量出来才能判断放得下放不下。
+  useLayoutEffect(() => {
+    const element = panelRef.current;
+    if (!element) return undefined;
+    const sync = () => {
+      const next = element.offsetHeight;
+      setPanelHeight((current) => (Math.abs(current - next) < 0.5 ? current : next));
+    };
+    sync();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(sync);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const element = containerRef.current;
+    if (!element) return undefined;
+    const sync = () => {
+      const rect = element.getBoundingClientRect();
+      setBox((current) => (Math.abs(current.width - rect.width) < 0.5 && Math.abs(current.height - rect.height) < 0.5 ? current : { width: rect.width, height: rect.height }));
+    };
+    sync();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', sync);
+      return () => window.removeEventListener('resize', sync);
+    }
+    const observer = new ResizeObserver(sync);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [containerRef]);
+
+  const zoom = transform[2] || 1;
+  const nodeWidth = (node.measured?.width || node.width || 250) * zoom;
+  const nodeHeight = (node.measured?.height || node.height || 160) * zoom;
+  const nodeLeft = node.position.x * zoom + transform[0];
+  const nodeTop = node.position.y * zoom + transform[1];
+  const panelWidth = Math.max(280, Math.min(DOCK_WIDTH, box.width - DOCK_MARGIN * 2));
+  let x = nodeLeft + nodeWidth / 2 - panelWidth / 2;
+  x = Math.min(Math.max(DOCK_MARGIN, x), Math.max(DOCK_MARGIN, box.width - panelWidth - DOCK_MARGIN));
+  // 默认贴在框体下方；下面放不下就翻到框体上方，上下都放不下才贴住底边（保证面板永远看得见）。
+  let y = nodeTop + nodeHeight + DOCK_GAP;
+  if (panelHeight && y + panelHeight > box.height - DOCK_MARGIN) {
+    const above = nodeTop - panelHeight - DOCK_GAP;
+    y = above >= DOCK_MARGIN ? above : Math.max(DOCK_MARGIN, box.height - panelHeight - DOCK_MARGIN);
+  }
+  // 首帧还没量到容器尺寸时先别画，免得面板在左上角闪一下。
+  const ready = box.width > 0;
+
+  return <div
+    ref={panelRef}
+    className="learning-canvas__panel"
+    style={{ width: panelWidth, transform: `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`, visibility: ready ? undefined : 'hidden' }}
+  >
+    <div className="learning-canvas__beam is-active">
+      <NodeEditPanel node={node} onRequestMaterials={onRequestMaterials} />
+      <span className="learning-canvas__beam-bloom" aria-hidden="true" />
+    </div>
+  </div>;
+}
+
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
 function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null }) {
@@ -491,9 +605,15 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   useEffect(() => { if (selectedNodeId) setActiveNodeId(selectedNodeId); }, [selectedNodeId]);
   const activeNode = nodes.find((item) => item.id === activeNodeId) || null;
   const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
+  const canvasRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
   const clipboardRef = useRef([]);
   const restoringHistoryRef = useRef(false);
+  // 拖框体/拖缩放手柄是连续事件（每帧都来一次），只有整段手势记一条历史，
+  // 否则一次拖动会攒下几十条记录，撤销只能一点点往回退。
+  const gestureRef = useRef(null);
+  // 连续输入同一段文字合并成一条历史（键名列表见 COALESCED_EDIT_KEYS）。
+  const lastEditRef = useRef({ nodeId: null, at: 0 });
 
   const pushHistory = useCallback((snapshot) => {
     if (readOnly || restoringHistoryRef.current) return;
@@ -502,7 +622,12 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
 
   const updateNode = useCallback((nodeId, changes) => {
     if (readOnly) return;
-    pushHistory({ nodes, edges, viewport });
+    const keys = Object.keys(changes);
+    const now = Date.now();
+    const typing = keys.length > 0 && keys.every((key) => COALESCED_EDIT_KEYS.has(key));
+    const merge = typing && lastEditRef.current.nodeId === nodeId && now - lastEditRef.current.at < 700;
+    if (!merge) pushHistory({ nodes, edges, viewport });
+    lastEditRef.current = { nodeId, at: now };
     setNodes((current) => current.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, ...changes } } : node));
   }, [edges, nodes, pushHistory, readOnly, setNodes, viewport]);
 
@@ -579,10 +704,21 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     setEdges((current) => current.filter((edge) => edge.id !== edgeId));
   }, [edges, nodes, pushHistory, readOnly, setEdges, viewport]);
 
+  // 学生从框体两侧的圆点拖一条线到另一个框体：落点是哪个圆点就记哪个，
+  // 这样反向连（从右边的框体往左连）也能连出正确的走向。
   const onConnect = useCallback((connection) => {
     if (readOnly) return;
+    const sourceHandle = connection.sourceHandle || 'right';
+    const targetHandle = connection.targetHandle || 'left';
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const wanted = edgePortPairKey(connection.source, sourceHandle, connection.target, targetHandle);
+    const duplicated = edges.some((edge) => {
+      const sides = resolvePortSides(edge, nodeById);
+      return edgePortPairKey(edge.source, sides.sourceHandle, edge.target, sides.targetHandle) === wanted;
+    });
+    if (duplicated) return;
     pushHistory({ nodes, edges, viewport });
-    setEdges((current) => addEdge({ ...connection, id: id('edge'), markerEnd: { type: MarkerType.ArrowClosed }, animated: true }, current));
+    setEdges((current) => addEdge({ ...connection, id: id('edge'), sourceHandle, targetHandle }, current));
   }, [edges, nodes, pushHistory, readOnly, setEdges, viewport]);
 
   const onDrop = useCallback((event) => {
@@ -608,7 +744,19 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   }, [edges, nodes, onUploadFiles, pushHistory, readOnly, allowNodeCreation, screenToFlowPosition, setNodes, viewport]);
 
   const handleNodesChange = useCallback((changes) => {
-    if (!readOnly && changes.some((change) => change.type !== 'select')) pushHistory({ nodes, edges, viewport });
+    if (!readOnly && changes.some((change) => change.type !== 'select')) {
+      if (changes.some((change) => change.type === 'position' || change.type === 'dimensions')) {
+        // 拖动/缩放：手势开始时留一份底稿，手一松开才记一条历史。
+        if (changes.some((change) => change.dragging || change.resizing)) {
+          if (!gestureRef.current) gestureRef.current = safeSnapshot({ nodes, edges, viewport });
+        } else if (gestureRef.current) {
+          pushHistory(gestureRef.current);
+          gestureRef.current = null;
+        }
+      } else {
+        pushHistory({ nodes, edges, viewport });
+      }
+    }
     onNodesChange(changes);
   }, [edges, nodes, onNodesChange, pushHistory, readOnly, viewport]);
 
@@ -622,6 +770,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     if (readOnly || !past.length) return;
     const previous = past[past.length - 1];
     historyRef.current = { past: past.slice(0, -1), future: [safeSnapshot({ nodes, edges, viewport }), ...historyRef.current.future].slice(0, 50) };
+    lastEditRef.current = { nodeId: null, at: 0 };
     restoringHistoryRef.current = true;
     setNodes(previous.nodes); setEdges(previous.edges); setViewport(previous.viewport);
     window.setTimeout(() => { restoringHistoryRef.current = false; }, 0);
@@ -632,6 +781,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     if (readOnly || !future.length) return;
     const next = future[0];
     historyRef.current = { past: [...historyRef.current.past, safeSnapshot({ nodes, edges, viewport })].slice(-50), future: future.slice(1) };
+    lastEditRef.current = { nodeId: null, at: 0 };
     restoringHistoryRef.current = true;
     setNodes(next.nodes); setEdges(next.edges); setViewport(next.viewport);
     window.setTimeout(() => { restoringHistoryRef.current = false; }, 0);
@@ -683,16 +833,34 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
+  // 两侧连接点上线后，连线必须指明从哪一个圆点出入。历史快照里的连线没有 handle 字段，
+  // 这里按左右位置补上（只影响渲染，不写回数据，免得把老画布白白标记成「有未保存改动」）。
+  const displayEdges = useMemo(() => {
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    return edges.map((edge) => {
+      const base = edge.markerEnd ? { ...edge, markerEnd: undefined } : edge;
+      if (base.sourceHandle && base.targetHandle) return base;
+      return { ...base, ...resolvePortSides(edge, nodeById) };
+    });
+  }, [edges, nodes]);
+
   return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, removeEdge, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
-    <div className="learning-canvas">
+    <div className={`learning-canvas${readOnly ? ' is-readonly' : ''}`} ref={canvasRef}>
       <ReactFlow
         nodes={nodes}
-        edges={edges.map((edge) => (edge.markerEnd ? { ...edge, markerEnd: undefined } : edge))}
+        edges={displayEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={readOnly ? undefined : handleNodesChange}
         onEdgesChange={readOnly ? undefined : handleEdgesChange}
         onConnect={onConnect}
+        // Loose 模式：两个圆点既能起线也能接收，学生从哪一侧拖都能连上（不会自动连接）
+        connectionMode={ConnectionMode.Loose}
+        connectionRadius={28}
+        // 只认「按住圆点拖到另一个圆点」，单击不会起线（避免学生误点就多一条连线）
+        connectOnClick={false}
+        connectionLineStyle={{ stroke: 'var(--cv-primary)', strokeWidth: 2.2, strokeLinecap: 'round' }}
+        isValidConnection={readOnly ? undefined : (connection) => connection.source !== connection.target}
         onDrop={onDrop}
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={() => setContextMenu(null)}
@@ -721,14 +889,14 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {!readOnly && activeNode ? <div className="learning-canvas__panel"><NodeEditPanel node={activeNode} onRequestMaterials={onRequestMaterials} /></div> : null}
+      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} onRequestMaterials={onRequestMaterials} /> : null}
       {!readOnly && <div className="learning-canvas__toolbar">
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
         <span className="learning-canvas__toolbar-sep" />
         <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: 0.22, duration: 320 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
       </div>}
-      <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片、从圆点连线；右键空白处可创建节点。' : '从左侧「素材」面板添加框体，写好提示词就能生成；也可以把图片/视频直接拖进画布。'}</div>
+      <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片排布；从卡片两侧的 ＋ 拖一条线连到另一个框体。' : '从左侧「素材」面板添加框体，写好提示词就能生成；从卡片两侧的 ＋ 拖线连接框体，也可以把图片/视频直接拖进画布。'}</div>
       {previewImage && <div className="learning-canvas__lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}><img src={previewImage} alt="素材预览" onClick={(event) => event.stopPropagation()} /><button type="button" className="learning-canvas__lightbox-close" onClick={() => setPreviewImage(null)}>×</button></div>}
       {contextMenu && allowNodeCreation && <div className="learning-canvas__context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
         <strong>创建节点</strong>

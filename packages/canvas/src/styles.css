@@ -35,9 +35,34 @@
 .learning-canvas .react-flow__edge.selected .react-flow__edge-path, .learning-canvas .react-flow__edge:hover .react-flow__edge-path { stroke: var(--cv-primary); }
 .learning-canvas .react-flow__attribution { display: none; }
 
-/* 连接点 */
-.learning-canvas .react-flow__handle { width: 10px; height: 10px; border: 2px solid #151515; background: #5a5a63; transition: background var(--cv-motion) ease-out, transform var(--cv-motion) ease-out; }
-.learning-canvas .react-flow__handle:hover { background: var(--cv-primary); transform: scale(1.15); }
+/* ── 连接点：框体两侧的主色圆 ＋（复刻参考节点两侧的小圆加号） ──
+   从它拖一条线落到对方框体的圆点上就建立连接（只认拖拽，不做点击自动连接）。
+   学生从左侧往右拉、从右侧往左拉都成立——ReactFlow 开的是 Loose 模式（见 index.jsx）。
+   圆点探出卡片边缘，所以它和缩放手柄一样必须渲染在 .learning-node 外面。
+   注意：ReactFlow 会给所有可连的 handle 都加 .connectionindicator，所以这里不能靠它区分
+   「正在拖线」，静止态就按常亮处理——学生一眼能看到哪儿能拉线，比藏起来更好用。 */
+.learning-canvas .react-flow__handle.learning-node__port {
+  top: 50%; display: grid; place-items: center; width: 22px; min-width: 0; height: 22px; min-height: 0;
+  border: 1px solid rgb(163 254 68 / 34%); border-radius: 999px;
+  color: var(--cv-primary); background: rgb(18 18 20 / 94%); box-shadow: 0 6px 18px rgb(0 0 0 / 40%);
+  opacity: .4; pointer-events: all;
+  transition: opacity var(--cv-motion) ease-out, background var(--cv-motion) ease-out, color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out, border-color var(--cv-motion) ease-out;
+}
+.learning-canvas .react-flow__handle.learning-node__port.is-left { left: 0; right: auto; transform: translate(-50%, -50%) translateX(-26px); }
+.learning-canvas .react-flow__handle.learning-node__port.is-right { right: 0; left: auto; transform: translate(50%, -50%) translateX(26px); }
+/* 只读（作品已提交）：圆点仍在 DOM 里但完全隐身——删掉的话 ReactFlow 找不到 handle，原连线会一起消失 */
+.learning-canvas.is-readonly .react-flow__handle.learning-node__port { opacity: 0; pointer-events: none; }
+.learning-canvas:not(.is-readonly) .react-flow__node.selected .react-flow__handle.learning-node__port,
+.learning-canvas:not(.is-readonly) .react-flow__node:hover .react-flow__handle.learning-node__port,
+.learning-canvas:not(.is-readonly) .react-flow__handle.learning-node__port:hover,
+.learning-canvas:not(.is-readonly) .react-flow__handle.learning-node__port.connectingfrom,
+.learning-canvas:not(.is-readonly) .react-flow__handle.learning-node__port.valid { opacity: 1; }
+.learning-canvas .react-flow__handle.learning-node__port:hover,
+.learning-canvas .react-flow__handle.learning-node__port.valid { color: var(--cv-primary-fg); border-color: transparent; background: var(--cv-primary); box-shadow: 0 0 0 4px rgb(163 254 68 / 18%); }
+
+/* 拖动中的连线：主色虚线 + 外发光（参考的拖线手感） */
+.learning-canvas .react-flow__connection-path { stroke-dasharray: 7 6; filter: drop-shadow(0 0 6px rgb(163 254 68 / 65%)); }
+.learning-canvas .react-flow__connectionline { z-index: 6; }
 
 .react-flow__node { min-width: 250px; }
 /* 节点铺满外层容器：拖拽把手改过尺寸后，内容跟着一起变；未拖过尺寸时等价于 auto。 */
@@ -174,9 +199,15 @@
 /* 行内提示（例如「该模型需要先连接一张画面（首帧）」） */
 .learning-node__generation-state { display: block; margin: 0; padding: 6px 10px; border: 1px solid rgb(255 107 107 / 35%); border-radius: 8px; color: #ffb4b4; background: rgb(255 107 107 / 10%); font-size: 10.5px; line-height: 1.5; }
 
-/* ── 画布底部独立面板（复刻参考：展示与输入分离，卡片只展示、面板负责输入） ── */
-.learning-canvas__panel { position: absolute; z-index: 8; left: 50%; bottom: 16px; width: min(760px, calc(100% - 28px)); padding: 12px; border: 1px solid var(--cv-border-strong); border-radius: 16px; background: rgb(21 21 21 / 96%); box-shadow: 0 20px 52px rgb(0 0 0 / 46%); backdrop-filter: blur(14px); transform: translateX(-50%); }
-.learning-canvas__panel-inner { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+/* ── 画布底部输入面板（复刻参考：展示与输入分离，卡片只展示、面板负责输入） ──
+   面板贴在当前选中框体的正下方，位置由 CanvasDockPanel 每帧用 transform 直接算（不加 CSS 过渡，
+   否则会慢半拍）；也去掉了 backdrop-filter——大块毛玻璃每帧重采样会让跟随明显掉帧。 */
+/* 内边距交给 .learning-canvas__panel-inner：光束层要贴着面板外沿走，
+   而遮罩是按元素自己的 content-box 挖圆环的，面板上留 12px padding 会把光圈推进去 12px。 */
+.learning-canvas__panel { position: absolute; z-index: 8; left: 0; top: 0; padding: 0; border: 1px solid var(--cv-border-strong); border-radius: 16px; background: rgb(19 19 21 / 98%); box-shadow: 0 16px 44px rgb(0 0 0 / 46%); will-change: transform; animation: cv-panel-in 200ms ease-out; }
+@keyframes cv-panel-in { from { opacity: 0; } to { opacity: 1; } }
+.learning-canvas__panel-inner { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 12px; animation: cv-panel-rise 240ms cubic-bezier(.2, .8, .2, 1); }
+@keyframes cv-panel-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .learning-canvas__panel .learning-node__textarea, .learning-canvas__panel .learning-node__input { width: 100%; height: 74px; margin: 0; font-size: 13px; }
 .learning-canvas__panel .learning-node__seg-rows { width: 100%; margin: 0; }
 .learning-canvas__panel .learning-node__ref-row { width: 100%; }
@@ -186,6 +217,54 @@
 .learning-canvas__config-chip:hover { background: rgb(163 254 68 / 18%); }
 .learning-canvas__plus { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-dim); background: transparent; font-size: 15px; cursor: pointer; transition: background var(--cv-motion) ease-out, color var(--cv-motion) ease-out; }
 .learning-canvas__plus:hover { color: #fff; background: rgb(255 255 255 / 8%); }
+
+/* ── 输入面板边缘的流光（移植 border-beam 的 md 旋转档；MIT © Jakub Antalik，
+   把多彩配色换成我们的主色：白热的高光弧沿边框跑一圈，慢速色相微移 + 外发光晕）。 ── */
+@property --cv-beam-angle { syntax: '<angle>'; initial-value: 0deg; inherits: true; }
+@property --cv-beam-opacity { syntax: '<number>'; initial-value: 0; inherits: true; }
+
+/* 面板去掉 padding 后，光束层正好贴在外沿（面板内圆角 16-1=15px） */
+.learning-canvas__panel { --cv-beam-radius: 15px; --cv-beam-duration: 2.6s; --cv-beam-strength: 1; }
+.learning-canvas__beam { position: relative; overflow: hidden; border-radius: var(--cv-beam-radius); }
+.learning-canvas__beam.is-active { animation: cv-beam-spin var(--cv-beam-duration) linear infinite, cv-beam-fade-in .6s ease forwards; }
+.learning-canvas__beam.is-active::after { content: ''; position: absolute; inset: 0; border-radius: calc(var(--cv-beam-radius) - 1px); clip-path: inset(0 round var(--cv-beam-radius)); pointer-events: none; }
+/* 走在边框上的高光：主色锥形渐变 ∩ 白色亮弧 ∩ 1px 边框圈。
+   参考实现在圈内还有一层内壁辉光，但它是按 683×110 的窄条面板调的；我们这块面板更宽更矮，
+   同一个锥形铺进来会糊成一大块光斑，所以这里只保留贴边的流光 + 外发光晕。 */
+.learning-canvas__beam.is-active::after {
+  padding: 1px; z-index: 2;
+  background: conic-gradient(from var(--cv-beam-angle),
+    transparent 0%, transparent 52%,
+    rgb(163 254 68 / 25%) 58%, rgb(163 254 68 / 65%) 62%, rgb(226 255 199 / 90%) 65%,
+    #fff 67%,
+    rgb(226 255 199 / 90%) 69%, rgb(163 254 68 / 65%) 72%, rgb(163 254 68 / 25%) 76%,
+    transparent 82%, transparent 100%);
+  -webkit-mask: conic-gradient(from var(--cv-beam-angle),
+      transparent 0%, transparent 26%, rgb(255 255 255 / 12%) 34%, rgb(255 255 255 / 38%) 44%,
+      #fff 52%, #fff 84%, rgb(255 255 255 / 38%) 90%, rgb(255 255 255 / 12%) 96%, transparent 100%),
+    linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: source-in, xor;
+  mask: conic-gradient(from var(--cv-beam-angle),
+      transparent 0%, transparent 26%, rgb(255 255 255 / 12%) 34%, rgb(255 255 255 / 38%) 44%,
+      #fff 52%, #fff 84%, rgb(255 255 255 / 38%) 90%, rgb(255 255 255 / 12%) 96%, transparent 100%),
+    linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: intersect, exclude;
+  opacity: calc(var(--cv-beam-opacity) * var(--cv-beam-strength));
+  animation: cv-beam-hue 12s ease-in-out infinite;
+}
+.learning-canvas__beam-bloom { display: none; position: absolute; inset: 0; z-index: 3; padding: 1px; border-radius: calc(var(--cv-beam-radius) - 1px); clip-path: inset(0 round var(--cv-beam-radius)); pointer-events: none; background: conic-gradient(from var(--cv-beam-angle), transparent 0%, transparent 54%, rgb(163 254 68 / 12%) 60%, rgb(163 254 68 / 40%) 66%, rgb(226 255 199 / 80%) 70%, rgb(163 254 68 / 40%) 74%, rgb(163 254 68 / 12%) 80%, transparent 86%); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask-composite: exclude; filter: blur(8px) brightness(1.3) saturate(1.2); }
+.learning-canvas__beam.is-active .learning-canvas__beam-bloom { display: block; opacity: calc(var(--cv-beam-opacity) * .8 * var(--cv-beam-strength)); animation: cv-beam-hue 12s ease-in-out infinite; }
+@keyframes cv-beam-spin { to { --cv-beam-angle: 360deg; } }
+@keyframes cv-beam-fade-in { to { --cv-beam-opacity: 1; } }
+@keyframes cv-beam-hue {
+  0%, 100% { filter: hue-rotate(-16deg) brightness(1.12) saturate(1.15); }
+  50% { filter: hue-rotate(14deg) brightness(1.22) saturate(1.25); }
+}
+/* 用户要求减少动效时不转圈，留一层静态描边辉光 */
+@media (prefers-reduced-motion: reduce) {
+  .learning-canvas__beam.is-active { animation: cv-beam-fade-in .3s ease forwards; }
+  .learning-canvas__beam.is-active::after, .learning-canvas__beam.is-active .learning-canvas__beam-bloom { animation: none; }
+}
 
 /* 工具栏挪到右上角，给底部面板让位 */
 .learning-canvas__toolbar { left: auto; right: 14px; top: 14px; bottom: auto; transform: none; }
@@ -204,9 +283,7 @@
 .learning-canvas .learning-edge__delete { position: absolute; z-index: 10; display: grid; place-items: center; width: 26px; height: 26px; padding: 0 0 2px; border: 1px solid rgb(255 107 107 / 45%); border-radius: 999px; color: #ffb4b4; background: rgb(28 28 33 / 96%); font-size: 16px; line-height: 1; cursor: pointer; pointer-events: all; box-shadow: 0 8px 18px rgb(0 0 0 / 45%); transition: background var(--cv-motion) ease-out, color var(--cv-motion) ease-out; }
 .learning-canvas .learning-edge__delete:hover { color: #fff; background: rgb(255 107 107 / 88%); }
 
-/* ── 底部面板：出现与切换的动效 ── */
-.learning-canvas__panel { animation: cv-panel-in 220ms cubic-bezier(.2, .8, .2, 1); }
-@keyframes cv-panel-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+/* （面板的出现动效与位置见上方 .learning-canvas__panel / .learning-canvas__panel-inner） */
 .learning-canvas__panel-spacer { flex: 1 1 auto; }
 
 /* ── 节点交互反馈：悬停 / 按下 / 拖动 ── */
