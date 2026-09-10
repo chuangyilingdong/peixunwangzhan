@@ -132,11 +132,22 @@ export function CanvasWorkspace({ api, ...props }) {
     setCompareTo((current) => items.some((item) => String(item.version) === current) ? current : latest);
   }, [history.data?.items]);
 
-  if (project.loading) return <Loading label="正在打开魔法画布…" />;
-  if (project.error) return <ErrorState error={project.error} onRetry={project.refresh} />;
-  const editable = project.data.status === 'DRAFT';
+  // ⚠️ 提前 return 之前不能再出现 hook：加载态与就绪态渲染的 hook 数量必须一致，
+  // 否则 React 抛 #310 整页白屏（本轮自动保存 hook 曾放在 return 之后，画布课堂直接打不开）。
+  const editable = Boolean(project.data) && project.data.status === 'DRAFT';
   const changed = draft && canvasContentSignature(draft) !== savedSignature;
   const historyItems = history.data?.items || [];
+
+  // 服务端任务（刷新后仍在）：每个框体最多保留最新一条。恢复逻辑与素材面板都要用，所以一并放在 hook 之前。
+  const generationJobs = Array.isArray(generations.data?.items) ? generations.data.items : [];
+  const jobByBox = new Map();
+  for (const job of generationJobs) {
+    const boxId = String(job?.boxId || '');
+    if (boxId && !jobByBox.has(boxId)) jobByBox.set(boxId, job);
+  }
+  const boxSucceeded = (boxId) => String(jobByBox.get(boxId)?.status || '') === 'SUCCEEDED';
+  const boxRunning = (boxId) => ['QUEUED', 'RUNNING'].includes(String(jobByBox.get(boxId)?.status || ''));
+  const runningCount = [...jobByBox.values()].filter((job) => ['QUEUED', 'RUNNING'].includes(String(job.status))).length;
 
   // 自动保存：改动停下来 1.2 秒就写回服务器（不递增版本号），刷新/断网不至于把画布丢光。
   const [autoSaving, setAutoSaving] = useState(false);
@@ -178,12 +189,17 @@ export function CanvasWorkspace({ api, ...props }) {
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
   }, [canvasSnapshot, draft, editable, generations.data, project.data]);
 
-  // 还有任务在跑就轮询，跑完的结果会自动补到画布上
+  // 还有任务在跑就轮询，跑完的结果会自动补到画布上。
+  // 依赖只留 runningCount：useData 每次渲染返回新对象，放进 deps 会让 5 秒定时器被反复重置。
   useEffect(() => {
     if (!runningCount) return undefined;
     const timer = setInterval(() => generations.refresh(), 5000);
     return () => clearInterval(timer);
-  }, [generations, runningCount]);
+  }, [runningCount]);
+
+  // 到这里 hook 全部调用完毕，才可以提前返回。
+  if (project.loading) return <Loading label="正在打开魔法画布…" />;
+  if (project.error) return <ErrorState error={project.error} onRetry={project.refresh} />;
 
   async function save() {
     if (!editable || !draft) return;
@@ -419,17 +435,7 @@ export function CanvasWorkspace({ api, ...props }) {
     return (current.nodes || []).filter((node) => node.data?.boxId);
   }
 
-  // 服务端任务（刷新后仍在）：每个框体最多保留最新一条
-  const generationJobs = Array.isArray(generations.data?.items) ? generations.data.items : [];
-  const jobByBox = new Map();
-  for (const job of generationJobs) {
-    const boxId = String(job?.boxId || '');
-    if (boxId && !jobByBox.has(boxId)) jobByBox.set(boxId, job);
-  }
-  const boxSucceeded = (boxId) => String(jobByBox.get(boxId)?.status || '') === 'SUCCEEDED';
-  const boxRunning = (boxId) => ['QUEUED', 'RUNNING'].includes(String(jobByBox.get(boxId)?.status || ''));
-  const runningCount = [...jobByBox.values()].filter((job) => ['QUEUED', 'RUNNING'].includes(String(job.status))).length;
-
+  // 服务端任务（刷新后仍在）的整理见上方 hook 之前，这里只做框体使用状态判断。
   function boxUsed(boxId) {
     return boxNodes().some((node) => node.data.boxId === boxId) || boxSucceeded(boxId);
   }
