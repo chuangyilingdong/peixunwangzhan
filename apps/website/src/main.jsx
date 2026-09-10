@@ -5,35 +5,15 @@ import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
-import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient } from '@platform/shared';
+import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyCreditsPage } from './pages/MyCredits.jsx';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 
-const SESSION_KEY = 'ai-kids-platform.session.v1';
-
 // 官网公开页面统一走共享 API client，保持错误解析与鉴权行为一致
 const publicApi = createApiClient();
-
-function readUserSession() {
-  try {
-    const stored = window.localStorage.getItem(SESSION_KEY);
-    const session = stored ? JSON.parse(stored) : null;
-    return session?.token ? session : null;
-  } catch { return null; }
-}
-
-function saveUserSession(value) {
-  const session = { token: value.token, expiresAt: value.expiresAt, user: value.user, organization: value.organization || null };
-  window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  return session;
-}
-
-function removeUserSession() {
-  try { window.localStorage.removeItem(SESSION_KEY); } catch { /* storage is optional */ }
-}
 
 function LoginPage() {
   async function handleLogin({ login, password }) {
