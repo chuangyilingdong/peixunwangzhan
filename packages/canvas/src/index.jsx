@@ -156,6 +156,11 @@ function NodePort({ side }) {
 function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140, processing = false, onRename = null, renameDisabled = false }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
+  // 标题默认是纯文本、双击才变输入框：单击就能编辑的话，学生想拖卡片往往点进输入框里，
+  // 拖不动还以为卡了（输入框是 nodrag 的）。改名的输入框也只占标题栏一小段，剩下的地方留给拖动。
+  const [renaming, setRenaming] = useState(false);
+  const canRename = Boolean(onRename) && !readOnly && !renameDisabled;
+  const closeRename = () => setRenaming(false);
   // 缩放把手放在圆角容器外面：.learning-node 有 overflow:hidden（为了裁掉溢出内容），
   // 把手是贴在节点四角、探出边缘的，放里面会被裁掉一半甚至整个点不到。
   return <>
@@ -164,9 +169,24 @@ function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minH
     <div className={`learning-node learning-node--${tone}${processing ? ' is-processing' : ''}`}>
       <div className="learning-node__heading">
         <span>{icon}</span>
-        {onRename
-          ? <input className="learning-node__title nodrag" value={title || ''} placeholder="给这个框体取个名字" maxLength={40} disabled={renameDisabled} aria-label="框体名称" onChange={(event) => onRename(event.target.value)} />
-          : <strong>{title}</strong>}
+        {canRename && renaming
+          ? <input
+            className="learning-node__title nodrag"
+            value={title || ''}
+            placeholder="给这个框体取个名字"
+            maxLength={40}
+            autoFocus
+            aria-label="框体名称"
+            onChange={(event) => onRename(event.target.value)}
+            onBlur={closeRename}
+            onDoubleClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => { if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
+          />
+          : <strong
+            className="learning-node__title-text"
+            title={canRename ? '双击改名' : undefined}
+            onDoubleClick={(event) => { if (!canRename) return; event.stopPropagation(); setRenaming(true); }}
+          >{title || (canRename ? '未命名框体' : '')}</strong>}
       </div>
       {children}
     </div>
@@ -561,13 +581,18 @@ function CanvasDockPanel({ node, containerRef, onRequestMaterials }) {
   const nodeLeft = node.position.x * zoom + transform[0];
   const nodeTop = node.position.y * zoom + transform[1];
   const panelWidth = Math.max(280, Math.min(DOCK_WIDTH, box.width - DOCK_MARGIN * 2));
+  // 水平：优先居中于框体。居中会越出画布时改成**与框体的左/右边对齐**——
+  // 参考实现是「居中后硬夹住」，框体靠边时面板会被推到离框体很远的地方，看着就是错位。
+  const maxX = Math.max(DOCK_MARGIN, box.width - panelWidth - DOCK_MARGIN);
   let x = nodeLeft + nodeWidth / 2 - panelWidth / 2;
-  x = Math.min(Math.max(DOCK_MARGIN, x), Math.max(DOCK_MARGIN, box.width - panelWidth - DOCK_MARGIN));
-  // 默认贴在框体下方；下面放不下就翻到框体上方，上下都放不下才贴住底边（保证面板永远看得见）。
+  if (x + panelWidth > box.width - DOCK_MARGIN) x = nodeLeft + nodeWidth - panelWidth;
+  if (x < DOCK_MARGIN) x = nodeLeft;
+  x = Math.min(Math.max(DOCK_MARGIN, x), maxX);
+  // 面板**永远**贴在框体下方（参考实现也是永远在下方：y = 框体底边 + 14）。
+  // 只在面板会越出画布底边时把它贴住底边，绝不翻到框体上方——翻上去学生就找不着输入框了。
   let y = nodeTop + nodeHeight + DOCK_GAP;
   if (panelHeight && y + panelHeight > box.height - DOCK_MARGIN) {
-    const above = nodeTop - panelHeight - DOCK_GAP;
-    y = above >= DOCK_MARGIN ? above : Math.max(DOCK_MARGIN, box.height - panelHeight - DOCK_MARGIN);
+    y = Math.max(DOCK_MARGIN, box.height - panelHeight - DOCK_MARGIN);
   }
   // 首帧还没量到容器尺寸时先别画，免得面板在左上角闪一下。
   const ready = box.width > 0;
@@ -867,7 +892,9 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         onDragOver={(event) => event.preventDefault()}
         onMoveEnd={() => setViewport(getViewport())}
         fitView
-        fitViewOptions={{ padding: 0.22 }}
+        // 初始视野别贴太近：maxZoom 1.8 时两三个框体就把画布铺满，
+        // 框体贴着底边后输入面板没地方放（只能压住框体）。压到 1.2 后下面留得出面板的位置。
+        fitViewOptions={{ padding: 0.22, maxZoom: 1.2 }}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
@@ -894,7 +921,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
         <span className="learning-canvas__toolbar-sep" />
-        <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: 0.22, duration: 320 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
+        <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: 0.22, duration: 320, maxZoom: 1.2 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
       </div>}
       <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片排布；从卡片两侧的 ＋ 拖一条线连到另一个框体。' : '从左侧「素材」面板添加框体，写好提示词就能生成；从卡片两侧的 ＋ 拖线连接框体，也可以把图片/视频直接拖进画布。'}</div>
       {previewImage && <div className="learning-canvas__lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}><img src={previewImage} alt="素材预览" onClick={(event) => event.stopPropagation()} /><button type="button" className="learning-canvas__lightbox-close" onClick={() => setPreviewImage(null)}>×</button></div>}
