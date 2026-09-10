@@ -49,8 +49,6 @@ function ensurePlatformSettings(now) {
         IMAGE: { enabled: true },
         MUSIC: { enabled: true },
         VIDEO: { enabled: true },
-        PODCAST: { enabled: false },
-        DUBBING: { enabled: false },
       }),
       json({ currency: 'CNY', defaultSessionCreditCap: 200 }),
       now,

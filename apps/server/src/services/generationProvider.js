@@ -9,13 +9,13 @@ function svgDataUrl(title, subtitle, hue) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 function mockProvider(model = AI_PROVIDER_MODEL) {
-  const labels = { TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材', VIDEO: '短片素材', PODCAST: '播客素材', DUBBING: '配音素材' };
+  const labels = { TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材', VIDEO: '短片素材' };
   const mockText = (prompt) => `这是本地模拟回复。\n\n你说的是：${String(prompt || '').slice(0, 200)}\n\n\`\`\`js\nconsole.log('hello from mock');\n\`\`\`\n`;
   return {
     name: 'local-mock',
     // 如实回报被请求的模型，便于验证「课时指定模型」这类覆盖是否生效
     model,
-    capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'],
+    capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'],
     async generate({ modality, prompt, title }) {
       const label = title || labels[modality] || '创作素材';
       const hue = [...String(prompt)].reduce((total, char) => total + char.charCodeAt(0), 0) % 360;
@@ -66,7 +66,7 @@ export function generationProviderInfo(selection = {}) {
   const config = providerConfig(selection);
   const definition = providerDefinition(config.provider);
   const adapterAvailable = isMockProvider(config.provider) || Boolean(definition?.adapterAvailable);
-  const capabilities = isMockProvider(config.provider) ? ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'] : (adapterAvailable ? ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'] : []);
+  const capabilities = isMockProvider(config.provider) || adapterAvailable ? ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'] : [];
   return {
     provider: config.provider,
     model: config.model,

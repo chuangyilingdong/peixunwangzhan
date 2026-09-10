@@ -27,7 +27,8 @@ export function ProviderPolicyPanel({ api }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState('IMAGE');
-  const modalities = [['TEXT', '文本'], ['IMAGE', '图片'], ['MUSIC', '音乐'], ['VIDEO', '视频'], ['PODCAST', '播客'], ['DUBBING', '配音']];
+  // 播客 / 配音已下线，不再出现在配置里
+  const modalities = [['TEXT', '文本'], ['IMAGE', '图片'], ['MUSIC', '音乐'], ['VIDEO', '视频']];
   const policy = config.data?.policy;
   const catalog = config.data?.catalog || [];
   useEffect(() => {

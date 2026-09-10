@@ -10,14 +10,14 @@ import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 
-const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
+const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const MODALITY_LABELS = {
   TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材',
-  VIDEO: '故事短片', PODCAST: '播客素材', DUBBING: '配音素材',
+  VIDEO: '故事短片',
 };
-const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo', PODCAST: 'allowPodcast', DUBBING: 'allowDubbing' };
-const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video', PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing' };
-const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music', PODCAST: 'podcast', DUBBING: 'dubbing' };
+const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo' };
+const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video' };
+const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music' };
 const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
@@ -219,7 +219,7 @@ function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
 // 全能参考的素材：只认本项目对应模态的素材（和首帧同一套白名单思路）。
 // 上游限制：图片 ≤9、视频 ≤3、音频 ≤3。
 const REFERENCE_LIMITS = Object.freeze({ IMAGE: 9, VIDEO: 3, AUDIO: 3 });
-const REFERENCE_MODALITIES = Object.freeze({ IMAGE: ['IMAGE'], VIDEO: ['VIDEO'], AUDIO: ['MUSIC', 'PODCAST', 'DUBBING'] });
+const REFERENCE_MODALITIES = Object.freeze({ IMAGE: ['IMAGE'], VIDEO: ['VIDEO'], AUDIO: ['MUSIC'] });
 
 function normalizeReferenceType(value) {
   const text = String(value || '').trim().toUpperCase();

@@ -21,7 +21,7 @@ import {
 import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
 
-const VALID_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING', 'CANVAS']);
+const VALID_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'CANVAS']);
 const VALID_QUOTA_SCOPES = new Set(['GLOBAL', 'STUDENT', 'TEACHER']);
 const VALID_PERIODS = new Set(['DAY', 'MONTH']);
 const VALID_ALERT_TYPES = new Set(['BALANCE_LOW', 'CONSUMPTION_SPIKE', 'QUOTA_EXCEEDED']);
@@ -37,7 +37,7 @@ function parseTemplateValue(value) {
 function normalizeRequestTemplates(value) {
   const input = value && typeof value === 'object' ? value : {};
   const out = {};
-  for (const modality of ['IMAGE', 'VIDEO', 'TEXT', 'DUBBING']) {
+  for (const modality of ['IMAGE', 'VIDEO', 'TEXT', 'MUSIC']) {
     const parsed = parseRequestTemplate(input[modality]);
     if (parsed.valid && parsed.template) out[modality] = parsed.template;
   }
@@ -48,7 +48,7 @@ function normalizeRequestTemplates(value) {
 function normalizePathMap(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const out = {};
-  for (const modality of ['IMAGE', 'VIDEO', 'TEXT', 'MUSIC', 'DUBBING']) {
+  for (const modality of ['IMAGE', 'VIDEO', 'TEXT', 'MUSIC']) {
     const path = String(input[modality] || '').trim().slice(0, 500);
     if (path) out[modality] = path;
   }

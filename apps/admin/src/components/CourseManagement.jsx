@@ -7,8 +7,7 @@ import {
 
 const VISIBILITY_LABELS = { ALL_ORGS: '所有机构', ASSIGNED_ORGS: '仅已授权机构', PRIVATE: '私有' };
 const LESSON_CAPABILITY_OPTIONS = [
-  ['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'],
-  ['music', 'AI 音乐'], ['podcast', 'AI 播客'], ['dubbing', 'AI 配音'],
+  ['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'], ['music', 'AI 音乐'],
 ];
 const MATERIAL_TYPE_OPTIONS = [
   ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['NOTE', '文字说明'], ['PROMPT', '提示词'], ['GENERATION_BOX', '生成框体'],

@@ -5,8 +5,6 @@ const SESSION_CAPABILITY_BY_MODALITY = {
   IMAGE: 'allowImage',
   MUSIC: 'allowMusic',
   VIDEO: 'allowVideo',
-  PODCAST: 'allowPodcast',
-  DUBBING: 'allowDubbing',
 };
 
 /**

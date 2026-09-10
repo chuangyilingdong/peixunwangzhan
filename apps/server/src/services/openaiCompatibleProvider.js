@@ -9,16 +9,12 @@ const DEFAULT_MODALITY_PATHS = Object.freeze({
   IMAGE: '/image/generations',
   MUSIC: '/music/generations',
   VIDEO: '/videos',
-  PODCAST: '/podcasts/generations',
-  DUBBING: '/audio/speech',
 });
 const DEFAULT_MIME_TYPES = Object.freeze({
   TEXT: 'text/plain; charset=utf-8',
   IMAGE: 'image/png',
   MUSIC: 'audio/mpeg',
   VIDEO: 'video/mp4',
-  PODCAST: 'audio/mpeg',
-  DUBBING: 'audio/mpeg',
 });
 
 import { renderRequestTemplate, requestTemplateFor } from './modelCapabilities.js';
@@ -302,7 +298,7 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
   const mimeType = String(contentType || defaultMimeType(normalizedModality)).split(';')[0] || defaultMimeType(normalizedModality);
   let candidate = binary?.length ? { assetUrl: `data:${mimeType};base64,${binary.toString('base64')}`, mimeType } : mediaCandidate(payload, normalizedModality, mimeType);
   if (!candidate?.assetUrl || candidate.assetUrl.length > MAX_ASSET_URL_CHARS) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
-  const labelDefaults = { IMAGE: 'AI 画面素材', MUSIC: 'AI 音乐素材', VIDEO: 'AI 故事短片', PODCAST: 'AI 播客素材', DUBBING: 'AI 配音素材' };
+  const labelDefaults = { IMAGE: 'AI 画面素材', MUSIC: 'AI 音乐素材', VIDEO: 'AI 故事短片' };
   return {
     label: String(title || labelDefaults[normalizedModality] || 'AI 素材').trim().slice(0, 120) || 'AI 素材',
     mimeType: candidate.mimeType || mimeType,
@@ -341,7 +337,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
   return {
     name: providerName,
     model: providerModel,
-    capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'],
+    capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'],
     async generate({ modality, prompt, title, options } = {}) {
       const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
       if (!Object.prototype.hasOwnProperty.call(DEFAULT_MODALITY_PATHS, normalizedModality)) {

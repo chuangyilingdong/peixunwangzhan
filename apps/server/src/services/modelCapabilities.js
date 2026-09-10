@@ -223,7 +223,6 @@ export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   // 首尾帧：尾帧的字段名各家不同（这里按 last_frame 发），不对就到渠道的请求模板里改键名。
   VIDEO_I2V_FRAMES: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', image: '{{firstFrameUrl}}', last_frame: '{{lastFrameUrl}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
   TEXT: Object.freeze({ model: '{{model}}', messages: [{ role: 'system', content: '你是少儿编程学习平台的创作助手。请用适合儿童理解的方式回答，避免危险或不适龄内容。' }, { role: 'user', content: '{{prompt}}' }] }),
-  DUBBING: Object.freeze({ model: '{{model}}', input: '{{prompt}}', voice: '{{voice}}', response_format: 'mp3' }),
 });
 
 // 整串占位符的取值：durationSecondsNumber / n 给数字、audio 给布尔，其余沿用字符串形态

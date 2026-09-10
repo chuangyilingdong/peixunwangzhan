@@ -1152,6 +1152,9 @@ try { db.exec(`CREATE TABLE IF NOT EXISTS website_content_revisions (
 )`); } catch (_) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_website_content_revisions_key_created ON website_content_revisions(content_key, created_at DESC)'); } catch (_) {}
 
+// 播客 / 配音已下线（用户决定不做）：清掉历史开关行，代码里也不再认这两种模态。
+try { db.exec("DELETE FROM platform_modality_settings WHERE modality IN ('PODCAST','DUBBING')"); } catch (_) {}
+
 // Seed default platform modality settings if empty
 {
   const now = new Date().toISOString();
@@ -1162,9 +1165,7 @@ try { db.exec('CREATE INDEX IF NOT EXISTS idx_website_content_revisions_key_crea
       ['pmod_image',   'IMAGE',   1, 1, '图像创作', '', 2, now, now],
       ['pmod_music',   'MUSIC',   1, 1, '音乐创作', '', 3, now, now],
       ['pmod_video',   'VIDEO',   1, 2, '视频生成', '', 4, now, now],
-      ['pmod_podcast', 'PODCAST', 0, 1, '播客',     '', 5, now, now],
-      ['pmod_dubbing', 'DUBBING', 0, 1, '配音',     '', 6, now, now],
-      ['pmod_canvas',  'CANVAS',  1, 0, '画布编辑', '', 7, now, now],
+      ['pmod_canvas',  'CANVAS',  1, 0, '画布编辑', '', 5, now, now],
     ];
     for (const d of defaults) {
       q(

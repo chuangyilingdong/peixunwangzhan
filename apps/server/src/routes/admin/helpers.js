@@ -108,7 +108,7 @@ function normalizeBoxMaterial(material, materialIndex, title) {
 
 function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}) {
   const groups = Array.isArray(materialGroups) ? materialGroups.slice(0, 50) : [];
-  const caps = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value).trim().toLowerCase()).filter((value) => ['text', 'image', 'video', 'music', 'podcast', 'dubbing'].includes(value)))] : ['text'];
+  const caps = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value).trim().toLowerCase()).filter((value) => ['text', 'image', 'video', 'music'].includes(value)))] : ['text'];
   const now = nowIso();
   // 素材/素材组的 id 保持不变：学生画布节点和 generation_jobs.box_id 都按 id 指回来，
   // 每次保存换新 id 会让「这个框体已经生成过」失效、学生端节点也认不出来。

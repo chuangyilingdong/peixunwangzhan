@@ -272,7 +272,7 @@ function NoteNode({ id, data, selected }) {
 }
 
 // 音频节点按本课开放的音频能力提供生成入口（音乐 / 播客 / 配音）。
-const AUDIO_MODALITIES = [['MUSIC', '生成音乐'], ['PODCAST', '生成播客'], ['DUBBING', '生成配音']];
+const AUDIO_MODALITIES = [['MUSIC', '生成音乐']];
 
 function AudioNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
@@ -378,7 +378,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     if (readOnly || !allowNodeCreation) return;
     const capabilityByType = { prompt: 'text', image: 'image', video: 'video' };
     const requiredCapability = capabilityByType[type];
-    const audioEnabled = ['music', 'podcast', 'dubbing'].some((key) => enabledCapabilities.has(key));
+    const audioEnabled = enabledCapabilities.has('music');
     if ((requiredCapability && !enabledCapabilities.has(requiredCapability)) || (type === 'audio' && !audioEnabled)) return;
     const templates = {
       prompt: { title: 'AI 文字提示词', text: '' },
@@ -415,7 +415,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     const snapshot = material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
     const sourceData = snapshot.data || snapshot.props || {};
     const materialType = String(material?.materialType || snapshot.type || 'NOTE').toUpperCase();
-    const type = snapshot.type || ({ IMAGE: 'image', VIDEO: 'video', AUDIO: 'audio', MUSIC: 'audio', PODCAST: 'audio', DUBBING: 'audio', ANIMATION: 'animation', CHARACTER: 'character', SCENE: 'scene', TEXT: 'prompt', PROMPT: 'prompt' }[materialType] || 'note');
+    const type = snapshot.type || ({ IMAGE: 'image', VIDEO: 'video', AUDIO: 'audio', MUSIC: 'audio', ANIMATION: 'animation', CHARACTER: 'character', SCENE: 'scene', TEXT: 'prompt', PROMPT: 'prompt' }[materialType] || 'note');
     const fallbackData = type === 'image' ? { title: material.title, emoji: '✨', caption: material.description || '' } : type === 'video' ? { title: material.title, text: material.description || '' } : type === 'audio' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'animation' ? { title: material.title, text: material.description || '', assetUrl: material.assetUrl, previewUrl: material.previewUrl } : type === 'character' ? { title: material.title, emoji: '🧒', name: '', trait: material.description || '' } : type === 'scene' ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' } : { title: material.title, text: material.description || '' };
     pushHistory({ nodes, edges, viewport });
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -531,7 +531,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
         <button type="button" onClick={() => addNodeAt('prompt', contextMenu.position)} disabled={!enabledCapabilities.has('text')}>✎ AI 文字</button>
         <button type="button" onClick={() => addNodeAt('image', contextMenu.position)} disabled={!enabledCapabilities.has('image')}>✦ AI 生图{!enabledCapabilities.has('image') && <small>本课未开放</small>}</button>
         <button type="button" onClick={() => addNodeAt('video', contextMenu.position)} disabled={!enabledCapabilities.has('video')}>▶ AI 生视频{!enabledCapabilities.has('video') && <small>本课未开放</small>}</button>
-        <button type="button" onClick={() => addNodeAt('audio', contextMenu.position)} disabled={!(['music', 'podcast', 'dubbing'].some((key) => enabledCapabilities.has(key)))}>♫ AI 音频{!(['music', 'podcast', 'dubbing'].some((key) => enabledCapabilities.has(key))) && <small>本课未开放</small>}</button>
+        <button type="button" onClick={() => addNodeAt('audio', contextMenu.position)} disabled={!(enabledCapabilities.has('music'))}>♫ AI 音频{!(enabledCapabilities.has('music')) && <small>本课未开放</small>}</button>
         <button type="button" onClick={() => addNodeAt('character', contextMenu.position)}>♙ 角色节点</button>
         <button type="button" onClick={() => addNodeAt('scene', contextMenu.position)}>⌂ 场景节点</button>
       </div>}

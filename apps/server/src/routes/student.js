@@ -257,7 +257,7 @@ function assertProjectUsable(ctx, project) {
 }
 
 
-const USAGE_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
+const USAGE_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const USAGE_STATUSES = new Set(['SUCCESS', 'FAILED', 'BLOCKED']);
 const WORK_STATUS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
 

@@ -41,7 +41,7 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({ choices: [{ message: { content: [{ type: 'text', text: '真实接口返回的文本' }] } }] }));
     return;
   }
-  if (req.url === '/v1/images/generations') {
+  if (req.url === '/v1/image/generations') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ data: [{ url: 'https://media.example/image.png' }] }));
     return;
@@ -74,7 +74,7 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const { port } = server.address();
 const endpoint = `http://127.0.0.1:${port}/v1`;
 assert.equal(chatCompletionsEndpoint(endpoint), `${endpoint}/chat/completions`);
-assert.equal(modalityEndpoint(endpoint, 'IMAGE'), `${endpoint}/images/generations`);
+assert.equal(modalityEndpoint(endpoint, 'IMAGE'), `${endpoint}/image/generations`);
 
 try {
   const provider = openAiCompatibleProvider({ name: 'openai-compatible', model: 'test-model', endpoint, apiKey: 'secret-test-key', pollIntervalMs: 10 });
@@ -83,8 +83,6 @@ try {
     ['IMAGE', 'image', 'image/png', /^https:\/\/media\.example\/image\.png$/],
     ['MUSIC', 'music', 'audio/mpeg', /^data:audio\/mpeg;base64,/],
     ['VIDEO', 'video', 'video/mp4', /^https:\/\/media\.example\/video\.mp4$/],
-    ['PODCAST', 'podcast', 'audio/mpeg', /^https:\/\/media\.example\/podcast\.mp3$/],
-    ['DUBBING', 'dubbing', 'audio/mpeg', /^data:audio\/mpeg;base64,/],
   ];
   for (const [modality, prompt, mimeType, urlPattern] of modalities) {
     const result = await provider.generate({ modality, prompt, title: `${modality} 测试` });
@@ -97,10 +95,10 @@ try {
   assert.equal(requests[0].authorization, 'Bearer secret-test-key');
   assert.equal(requests[0].body.model, 'test-model');
   assert.equal(requests[0].body.messages.at(-1).content, 'hello');
-  const imageRequest = requests.find((item) => item.url === '/v1/images/generations');
-  assert.equal(imageRequest.body.response_format, 'url');
-  const dubbingRequest = requests.find((item) => item.url === '/v1/audio/speech');
-  assert.equal(dubbingRequest.body.response_format, 'mp3');
+  const imageRequest = requests.find((item) => item.url === '/v1/image/generations');
+  // 图片请求体由渠道模板决定（默认 n=1 + size=比例 + metadata.resolution）
+  assert.equal(imageRequest.body.n, 1);
+  assert.ok('size' in imageRequest.body, '图片请求应带 size');
   assert.equal(requests.find((item) => item.url === '/v1/videos').method, 'POST');
   assert.equal(requests.find((item) => item.url === '/v1/videos/video-1').method, 'GET');
 

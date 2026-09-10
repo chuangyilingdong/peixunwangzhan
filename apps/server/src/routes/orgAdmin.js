@@ -516,7 +516,7 @@ export async function handleOrg(ctx) {
     const sessionId = String(ctx.search.get('sessionId') || '').trim();
     const studentId = String(ctx.search.get('studentId') || '').trim();
     const search = String(ctx.search.get('search') || '').trim();
-    if (modality && !['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING'].includes(modality)) throw errors.badRequest('不支持的素材类型', 'UNSUPPORTED_MODALITY');
+    if (modality && !['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'].includes(modality)) throw errors.badRequest('不支持的素材类型', 'UNSUPPORTED_MODALITY');
     if (status && !['SUCCESS', 'FAILED', 'BLOCKED'].includes(status)) throw errors.badRequest('无效的用量状态', 'INVALID_USAGE_STATUS');
     const params = [currentOrgId, since]; const conditions = ['usage.org_id=?', 'usage.created_at>=?'];
     if (modality) { conditions.push('usage.modality=?'); params.push(modality); }

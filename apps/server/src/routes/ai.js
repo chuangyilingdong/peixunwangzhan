@@ -11,18 +11,16 @@ import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { isModalityEnabled } from './billingConfig.js';
 import { assertLessonGenerationBox } from './aiGeneration.js';
 
-const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'PODCAST', 'DUBBING']);
+// 播客 / 配音已下线（用户决定不做），只保留文本、图片、音乐、视频四类。
+const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const SESSION_CAPABILITY_BY_MODALITY = {
   IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo',
-  PODCAST: 'allowPodcast', DUBBING: 'allowDubbing',
 };
 const PACKAGE_CAPABILITY_BY_MODALITY = {
   IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video',
-  PODCAST: 'allow_podcast', DUBBING: 'allow_dubbing',
 };
 const LESSON_CAPABILITY_BY_MODALITY = {
-  TEXT: 'text', IMAGE: 'image', VIDEO: 'video',
-  MUSIC: 'music', PODCAST: 'podcast', DUBBING: 'dubbing',
+  TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music',
 };
 
 function normalizedModality(value) {
