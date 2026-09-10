@@ -22,7 +22,7 @@ const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p38-student-upload-'));
 const dbPath = path.join(temp, 'platform.db');
 // 本机跑不要求病毒扫描器（生产上 NODE_ENV=production 才强制，见 fileUploadSecurity.scannerRequired）
-const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock', FILE_UPLOAD_REQUIRE_SCANNER: 'false' };
+const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, FILE_UPLOAD_ROOT: path.join(temp, 'uploads'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock', FILE_UPLOAD_REQUIRE_SCANNER: 'false' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = '';

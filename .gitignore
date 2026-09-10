@@ -49,3 +49,6 @@ deploy/releases/
 # ZCode 客户端本地目录与 GUI 回归截图
 .zcode/
 gui-test-screenshots/
+
+# 本地上传目录（运行时产生的文件，不进仓库；测试跑冒烟会往这里写）
+var/uploads/
