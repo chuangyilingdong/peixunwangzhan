@@ -24,6 +24,12 @@ const baseEnv = {
   DEPLOYMENT_MODE: 'local-mock',
   AI_PROVIDER: 'local-mock',
 };
+// 本脚本也会直接调用服务端函数（generationOptionsFor），它们按 PLATFORM_DB_PATH 连库，
+// 所以测试进程自己也要指向同一个临时库。
+process.env.PLATFORM_DATA_DIR = temp;
+process.env.PLATFORM_DB_PATH = dbPath;
+process.env.DEPLOYMENT_MODE = 'local-mock';
+
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = '';
@@ -104,9 +110,12 @@ try {
 
   const { DatabaseSync } = await import('node:sqlite');
   const seedDb = new DatabaseSync(dbPath);
+  const seedDb2 = seedDb;
   const lesson = seedDb.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
-  seedDb.close();
   assert.ok(lesson?.id, '种子数据应至少有一个课时');
+
+  // 预置素材要能被解析成上游可抓的公开地址，所以库里得真有这条公开文件
+  seedDb2.prepare("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('asset-seed','PLATFORM','INTERNAL_PROXY','seed.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)").run(new Date().toISOString(), new Date().toISOString());
 
   // 1) 管理端保存：框体作为素材一起提交，顺序原样保留
   const saved = await api(`/api/admin/course-lessons/${lesson.id}`, {
@@ -178,7 +187,7 @@ try {
   // 框体挂了预置素材且模型要首帧（i2v）时，直接用预置素材当首帧
   assert.ok(longClip.inputModes.includes('FIRST_FRAME'), `hailuo-h3-i2v 应支持首帧输入，实际 ${JSON.stringify(longClip.inputModes)}`);
   assert.ok(!longClip.inputModes.includes('TEXT'), 'hailuo-h3-i2v 不支持纯文生，应要求首帧');
-  assert.equal(longClip.firstFrameUrl, PRESET_FIRST_FRAME, '预置素材应直接当首帧');
+  assert.ok(String(longClip.firstFrameUrl || '').includes('/api/public/file-assets/asset-seed/download'), `预置素材应升级成公开绝对地址当首帧，实际 ${longClip.firstFrameUrl}`);
 
   // 6) 逐个框体生成：素材1 的框体成功 → 再来被拒 → 素材2 的框体仍可生成
   const first = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: project.data.id, boxId: savedBoxIds[0], modality: 'IMAGE', prompt: '画一只会飞的小猫' } });
