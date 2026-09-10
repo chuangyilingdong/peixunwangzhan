@@ -415,7 +415,8 @@ export function CanvasWorkspace({ api, ...props }) {
     const node = {
       // 一个框体在画布上只对应一个节点：id 由框体 id 派生，重复点击不会多出第二个。
       id: `box-${box.id}`,
-      type: slotType === 'text' ? 'prompt' : slotType,
+      // 画布节点类型：文字用 prompt，音乐用 audio，其余与模态同名
+      type: slotType === 'text' ? 'prompt' : slotType === 'music' ? 'audio' : slotType,
       position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 },
       data: {
         title: box.title, slotType, boxId: box.id,
