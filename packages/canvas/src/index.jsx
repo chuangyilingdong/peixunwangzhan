@@ -512,22 +512,9 @@ function NodeEditPanel({ node, onRequestMaterials }) {
   if (!supportsPrompt) {
     return <div className="learning-canvas__panel-inner"><span className="learning-node__seg-label">{data.title || node.type}</span><span className="cv-muted">这个节点直接在卡片上编辑，没有生成参数。</span></div>;
   }
-  // 面板上方的参考图预览条：连线引过来的首帧/尾帧/参考素材（参考实现在面板上方也有一条预览）
-  const refPreview = (slotType === 'video' || slotType === 'animation')
-    ? (() => {
-      const inputModes = Array.isArray(data.inputModes) ? data.inputModes : [];
-      if (inputModes.includes('OMNI_REFERENCE')) {
-        return getIncomingAssetRefs(id).filter((asset) => asset.type === 'IMAGE').slice(0, 6).map((asset, index) => ({ url: asset.url, label: `参考${index + 1}` }));
-      }
-      const incoming = getIncomingImageAssetUrls(id).filter(Boolean);
-      const items = [];
-      if (incoming[0] || data.referenceUrl) items.push({ url: incoming[0] || String(data.referenceUrl), label: '首帧' });
-      if (incoming[1] && inputModes.includes('LAST_FRAME')) items.push({ url: incoming[1], label: '尾帧' });
-      return items;
-    })()
-    : [];
+  // 面板上不再重复放「连线引用中」的缩略图条：框体自己就显示着那张画面，下面「参考」那行也写了连接情况。
+  // 这一条占 80px 上下，面板一高就更容易压住框体（用户反馈「输入框应该一直在框体下方」）。
   return <div className="learning-canvas__panel-inner">
-    {refPreview.length ? <div className="learning-node__ref-preview">{refPreview.map((item, index) => <figure key={`${item.url}-${index}`}><img src={item.url} alt={item.label} /><figcaption><strong>{item.label}</strong>连线引用中</figcaption></figure>)}</div> : null}
     <textarea className="learning-node__textarea nodrag" value={promptValue} placeholder={placeholder} maxLength={isBox ? 3000 : 300} disabled={readOnly} onChange={(event) => setPrompt(event.target.value)} />
     {slotType === 'video' || slotType === 'animation' ? <FrameRefRows
       incoming={getIncomingImageAssetUrls(id)}
@@ -584,7 +571,7 @@ const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait'
 //    和框体彻底分家（第九轮用户反馈的「选中素材 + 空格拖画布后面板跑一边去」）。
 //  - 拖动框体 / 换选中框体时同样重新锚定。
 // 位置用 transform 直接算、不加 CSS 过渡（加了跟随就慢半拍）。
-function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, onRequestMaterials }) {
+function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, onRequestRoom, onRequestMaterials }) {
   const store = useStoreApi();
   const panelRef = useRef(null);
   const [anchor, setAnchor] = useState(null);
@@ -647,10 +634,22 @@ function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, onRequestMater
   x = Math.min(Math.max(DOCK_MARGIN, x), maxX);
   // 面板**永远**贴在框体下方（参考实现也是永远在下方：y = 框体底边 + 14）。
   // 只在面板会越出画布底边时把它贴住底边，绝不翻到框体上方——翻上去学生就找不着输入框了。
-  let y = nodeTop + nodeHeight + DOCK_GAP;
-  if (panelHeight && y + panelHeight > box.height - DOCK_MARGIN) {
-    y = Math.max(DOCK_MARGIN, box.height - panelHeight - DOCK_MARGIN);
-  }
+  const idealY = nodeTop + nodeHeight + DOCK_GAP;
+  // 越出多少（= 需要把画布上移多少才能让面板完整落在框体下方）
+  const overflow = panelHeight ? Math.max(0, idealY + panelHeight - (box.height - DOCK_MARGIN)) : 0;
+  let y = idealY;
+  if (overflow > 0) y = Math.max(DOCK_MARGIN, idealY - overflow);
+  // 面板在框体下方放不下时（继续夹着就会压住框体）：请求把画布上移把位置让出来。
+  // 用户前后反馈了三次「输入框应该一直在框体下方」，光夹到底边做不到这一点，只能动画布。
+  // 用 260ms 去抖：拖框体/拖画布时会连续变化，停下来才请求一次，避免边拖边弹视图。
+  const requestRoomRef = useRef(onRequestRoom);
+  requestRoomRef.current = onRequestRoom;
+  useEffect(() => {
+    if (!requestRoomRef.current || overflow < 8) return undefined;
+    const timer = window.setTimeout(() => requestRoomRef.current(overflow), 260);
+    return () => window.clearTimeout(timer);
+  }, [overflow]);
+
   // 首帧还没量到容器尺寸时先别画，免得面板在左上角闪一下。
   const ready = box.width > 0;
 
@@ -683,7 +682,16 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const [contextMenu, setContextMenu] = useState(null);
   // 底部面板要编辑哪个框体：优先当前选中的，取消选中后沿用上一次（面板不会突然消失）
   const [activeNodeId, setActiveNodeId] = useState(null);
-  const { getViewport, screenToFlowPosition, setCenter, fitView } = useReactFlow();
+  // setFlowViewport 是 ReactFlow 的命令式视口设置；本组件自己还有一个同名 state（viewport），故改名区分
+  const { getViewport, setViewport: setFlowViewport, screenToFlowPosition, setCenter, fitView } = useReactFlow();
+  // 面板在框体下方放不下时，把它需要的空间量（像素）换成一个画布上移：内容上移 → 下面腾出位置。
+  // ⚠️ 这段必须放在 useReactFlow() 解构**之后**：依赖数组里的 getViewport 是立即求值的，
+  // 放前面会踩 TDZ（ReferenceError → 整页白屏；本轮踩过一次）。
+  const requestRoom = useCallback((deficit) => {
+    const { x, y, zoom } = getViewport();
+    setFlowViewport({ x, y: y - Math.min(deficit, 400), zoom });
+    setViewportEpoch((n) => n + 1);
+  }, [getViewport]);
   const selectedNodeId = (nodes.find((item) => item.selected) || {}).id || null;
   useEffect(() => { if (selectedNodeId) setActiveNodeId(selectedNodeId); }, [selectedNodeId]);
   const activeNode = nodes.find((item) => item.id === activeNodeId) || null;
@@ -976,7 +984,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportEpoch={viewportEpoch} onRequestMaterials={onRequestMaterials} /> : null}
+      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportEpoch={viewportEpoch} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} /> : null}
       {!readOnly && <div className="learning-canvas__toolbar">
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
