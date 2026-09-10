@@ -649,6 +649,11 @@ export async function handleStudentFileAssets(ctx) {
     ).map(normalizeFileAsset);
     return { items, total: items.length, limit };
   }
+  if (part === '/file-assets/upload' && method === 'POST') {
+    // 学生把桌面上的图片/视频/音频拖进画布时上传：归属本人、仅自己可见（PRIVATE）。
+    // 扩展名/魔术字节/大小/频次校验复用与管理端同一套 persistSecureUpload + reserveUpload。
+    return createUploadedFileAsset(ctx, { auth, ownerType: 'USER', ownerOrgId: currentOrgId, scope: 'student', defaultVisibility: 'PRIVATE' });
+  }
   const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
   if (idMatch && method === 'GET') {
     return normalizeFileAsset(authorizeFileAccess(ctx, idMatch[1], 'READ'));

@@ -439,6 +439,43 @@ export function CanvasWorkspace({ api, ...props }) {
     setMessage('已放入一份创作底稿，完成后请保存。');
   }
 
+  // 从桌面拖进来的图片/视频/音频：先上传到平台（只自己可见），再落成画布节点。
+  // 落下来的节点可以连线给视频框体当首帧 / 全能参考素材，所以不需要额外的上传控件。
+  async function uploadFiles(files, position) {
+    if (!editable) { setMessage('作品已提交，画布不能再修改。'); return; }
+    let current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    let placed = 0;
+    for (const file of [...files]) {
+      const mime = String(file.type || '');
+      const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : '';
+      if (!kind) { setMessage(`「${file.name}」不是图片/视频/音频，已跳过（支持 jpg/png/webp/gif、mp4/webm、mp3/wav/ogg）。`); continue; }
+      try {
+        setMessage(`正在上传「${file.name}」…`);
+        const asset = await api.upload('student/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PRIVATE' });
+        const url = String(asset?.proxyRoute || asset?.storageUrl || '');
+        if (!url) throw new Error('上传后没有拿到文件地址');
+        const node = {
+          id: `upload-${asset.id || Date.now().toString(36)}`,
+          type: kind,
+          position: { x: (position?.x || 200) + placed * 40, y: (position?.y || 160) + placed * 30 },
+          data: {
+            title: file.name, caption: '', text: '',
+            assetUrl: url, previewUrl: url,
+            uploaded: true, fileAssetId: asset.id || null, mimeType: asset.mimeType || mime,
+          },
+        };
+        current = { ...current, nodes: [...(current.nodes || []), node] };
+        placed += 1;
+      } catch (error) {
+        setMessage(`「${file.name}」上传失败：${error.message}`);
+      }
+    }
+    if (placed) {
+      setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
+      setMessage(`已把 ${placed} 个文件放进画布，和视频框体连线就能当首帧 / 参考素材。`);
+    }
+  }
+
   function addLessonMaterialToCanvas(material) {
     if (!editable || !material) return;
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
@@ -686,7 +723,7 @@ export function CanvasWorkspace({ api, ...props }) {
           <div className="cv-heading__title"><span>我的课堂画布</span><h2>{project.data.title}</h2></div>
           <span className={`cv-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
         </div>
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onChange={setDraft} focusRequest={focusRequest} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${message.includes('失败') || message.includes('错误') ? 'is-error' : ''}`}>{message}</div>}

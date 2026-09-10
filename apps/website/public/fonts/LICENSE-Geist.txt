@@ -1,0 +1,5 @@
+Geist Sans
+Copyright (c) 2023 Vercel, Inc. (https://vercel.com)
+Licensed under the SIL Open Font License, Version 1.1.
+Source: https://github.com/vercel/geist-font
+Files: Geist-Regular.woff2 / Geist-Medium.woff2 / Geist-SemiBold.woff2

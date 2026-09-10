@@ -18,7 +18,7 @@
   --cv-motion: 200ms;
 }
 
-.learning-canvas { position: relative; height: min(72vh, 720px); min-height: 520px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 20px; background: #171719; box-shadow: 0 24px 60px rgb(0 0 0 / 34%); }
+.learning-canvas { font-family: var(--cv-font, ui-sans-serif, system-ui, sans-serif); font-variant-numeric: tabular-nums; position: relative; height: min(72vh, 720px); min-height: 520px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 20px; background: #171719; box-shadow: 0 24px 60px rgb(0 0 0 / 34%); }
 /* 点阵底：参考的 canvas-idle-dot-grid（#171719 底 + 细点） */
 .learning-canvas .react-flow { background-color: #171719; background-image: radial-gradient(rgb(255 255 255 / 7%) 1px, transparent 1px); background-size: 22px 22px; }
 .learning-canvas__tip { position: absolute; z-index: 5; top: 14px; left: 14px; padding: 7px 12px; border: 1px solid rgb(255 255 255 / 6%); border-radius: 999px; color: var(--cv-text-dim); background: rgb(21 21 21 / 92%); font-size: 12px; backdrop-filter: blur(12px); pointer-events: none; }
@@ -41,7 +41,7 @@
 
 .react-flow__node { min-width: 250px; }
 /* 节点铺满外层容器：拖拽把手改过尺寸后，内容跟着一起变；未拖过尺寸时等价于 auto。 */
-.learning-node { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 120px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 14px; color: var(--cv-text); background: var(--cv-card); box-shadow: 0 12px 30px rgb(0 0 0 / 32%); transition: border-color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out; }
+.learning-node { font-family: inherit; position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 120px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 14px; color: var(--cv-text); background: var(--cv-card); box-shadow: 0 12px 30px rgb(0 0 0 / 32%); transition: border-color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out; }
 .learning-node:hover { border-color: #3a3a44; }
 .react-flow__node.selected .learning-node { border-color: var(--cv-primary); box-shadow: 0 0 0 1px var(--cv-primary), 0 16px 40px rgb(0 0 0 / 40%); }
 
@@ -106,20 +106,10 @@
 .learning-canvas__context-menu small { color: var(--cv-text-faint); font-size: 9px; }
 
 /* 生成按钮：主色实心胶囊（参考的 primary 按钮） */
-.learning-node__generate { display: block; width: calc(100% - 24px); margin: 0 12px 10px; padding: 9px 12px; border: 0; border-radius: 999px; color: var(--cv-primary-fg); background: var(--cv-primary); font-size: 12px; font-weight: 700; cursor: pointer; transition: filter var(--cv-motion) ease-out, opacity var(--cv-motion) ease-out; }
-.learning-node__generate:hover:not(:disabled) { filter: brightness(1.08); }
-.learning-node__generate:disabled { opacity: .35; cursor: not-allowed; }
-.learning-node__generation-state { display: block; margin: 0 12px 10px; padding: 7px 11px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-primary); background: rgb(163 254 68 / 8%); font-size: 11px; }
 .learning-node__generation-state.is-error { color: #ffb4b4; border-color: rgb(255 107 107 / 35%); background: rgb(255 107 107 / 12%); }
 .learning-node__text-result { max-height: 160px; margin: 0 12px 10px; padding: 9px 11px; overflow: auto; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); color: var(--cv-text-dim); background: var(--cv-surface-2); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 
 /* 音频节点可能同时开放音乐/播客/配音，生成按钮并排显示 */
-.learning-node__generate-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 12px 10px; }
-.learning-node__generate-row .learning-node__generate { width: auto; flex: 1 1 auto; margin: 0; }
-.learning-node__frames { display: flex; gap: 8px; margin: 8px 12px 0; }
-.learning-node__frames figure { flex: 1; margin: 0; min-width: 0; }
-.learning-node__frames img { display: block; width: 100%; border-radius: 8px; }
-.learning-node__frames figcaption { margin-top: 4px; color: var(--cv-text-faint); font-size: 10px; }
 .learning-node__ref-chip { display: grid; place-items: center; min-height: 46px; border: 1px dashed var(--cv-border-strong); border-radius: 8px; color: var(--cv-text-dim); background: var(--cv-surface-2); font-size: 12px; }
 
 /* 画布底部居中工具栏：撤销 / 重做 / 适配视图（参考的主工具栏位置） */
@@ -155,3 +145,31 @@
 .learning-node__art small, .learning-node__video-preview small, .learning-node__audio-placeholder small, .learning-node__animation-placeholder small { max-width: 180px; color: var(--cv-text-faint); font-size: 10.5px; line-height: 1.5; }
 .learning-node__video-preview span { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgb(163 254 68 / 45%); border-radius: 999px; padding-left: 2px; color: var(--cv-primary); font-size: 12px; }
 .learning-node__audio-placeholder span, .learning-node__animation-placeholder span { font-size: 26px; color: var(--cv-primary); }
+
+/* ── 节点底部面板（复刻参考的底部面板：提示词 / 画面连线 / 分段参数 / 页脚） ── */
+.learning-node__panel { display: flex; flex-direction: column; gap: 8px; margin: 10px 12px 12px; padding: 10px; border: 1px solid var(--cv-border); border-radius: 12px; background: #1b1b21; }
+.learning-node__panel .learning-node__textarea, .learning-node__panel .learning-node__input { width: 100%; margin: 0; }
+.learning-node__panel .learning-node__count { margin: -4px 0 0; }
+.learning-node__panel .learning-node__seg-rows { margin: 0; }
+.learning-node__panel .learning-node__text-result { margin: 0; }
+.learning-node__panel .learning-node__emoji { position: static; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 999px; padding: 0; }
+.learning-node__panel-footer { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid rgb(255 255 255 / 6%); }
+.learning-node__status-chip { display: inline-flex; align-items: center; padding: 5px 11px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-faint); background: transparent; font-size: 11px; white-space: nowrap; }
+.learning-node__status-chip.is-done { color: var(--cv-primary); border-color: rgb(163 254 68 / 35%); background: rgb(163 254 68 / 10%); }
+.learning-node__status-chip.is-running { color: var(--cv-text-dim); background: rgb(255 255 255 / 5%); }
+.learning-node__status-chip.is-error { color: #ffb4b4; border-color: rgb(255 107 107 / 40%); background: rgb(255 107 107 / 10%); }
+.learning-node__submit { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 8px 14px; border: 0; border-radius: 999px; color: var(--cv-primary-fg); background: var(--cv-primary); font-size: 12px; font-weight: 700; cursor: pointer; transition: filter var(--cv-motion) ease-out, opacity var(--cv-motion) ease-out; }
+.learning-node__submit:hover:not(:disabled) { filter: brightness(1.07); }
+.learning-node__submit:disabled { opacity: .35; cursor: not-allowed; }
+
+/* 画面来源行：首帧 / 尾帧 / 参考素材（靠连线引入，不支持上传） */
+.learning-node__ref-row { display: flex; align-items: flex-start; gap: 8px; }
+.learning-node__frame-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.learning-node__frame-chip { display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 9px 3px 3px; border: 1px solid rgb(163 254 68 / 30%); border-radius: 999px; }
+.learning-node__frame-chip img { width: 24px; height: 24px; border-radius: 999px; object-fit: cover; }
+.learning-node__frame-chip figcaption { color: var(--cv-text-dim); font-size: 10px; }
+.learning-node__ref-empty { padding: 5px 10px; border: 1px dashed var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-faint); font-size: 10px; }
+.learning-node__ref-chip.is-on { padding: 5px 10px; border: 1px solid rgb(163 254 68 / 35%); border-radius: 999px; color: var(--cv-primary); background: rgb(163 254 68 / 10%); font-size: 10px; }
+
+/* 行内提示（例如「该模型需要先连接一张画面（首帧）」） */
+.learning-node__generation-state { display: block; margin: 0; padding: 6px 10px; border: 1px solid rgb(255 107 107 / 35%); border-radius: 8px; color: #ffb4b4; background: rgb(255 107 107 / 10%); font-size: 10.5px; line-height: 1.5; }
