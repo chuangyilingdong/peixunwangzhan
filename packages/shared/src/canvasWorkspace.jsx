@@ -72,43 +72,18 @@ function ChangeList({ diff, fromSnapshot, toSnapshot }) {
 const MAX_CANVAS_IMPORT_BYTES = 1024 * 1024;
 
 // 校验 exportVersion 产出的 JSON：{format, formatVersion, project, canvasSnapshot}
-function readImportedCanvas(parsed) {
-  if (!parsed || typeof parsed !== 'object') throw new Error('导入文件不是有效的 JSON 对象。');
-  if (parsed.format !== 'ai-kids-canvas-snapshot') throw new Error('导入文件不是本平台导出的画布快照。');
-  if (Number(parsed.formatVersion) !== 1) throw new Error('导入文件的格式版本不受支持。');
-  const snapshot = parsed.canvasSnapshot;
-  if (!snapshot || !Array.isArray(snapshot.nodes) || !Array.isArray(snapshot.edges)) throw new Error('导入文件缺少画布节点或连线。');
-  return {
-    canvasSnapshot: snapshot,
-    source: { title: parsed.project?.title || '', version: Number(parsed.project?.version) },
-  };
-}
 
 export function CanvasWorkspace({ api, ...props }) {
   const navigate = useNavigate();
   const paramsFromUrl = useParams(); const projectId = props?.params?.projectId || paramsFromUrl?.projectId;
   const project = useData(() => api.get(`student/projects/${projectId}`), [api, projectId]);
-  const history = useData(() => api.get(`student/projects/${projectId}/snapshots?limit=200`), [api, projectId]);
   const generations = useData(() => api.get(`ai/generations?projectId=${encodeURIComponent(projectId)}`), [api, projectId]);
   const [draft, setDraft] = useState(null);
   const [canvasSnapshot, setCanvasSnapshot] = useState(null);
   const [canvasVersion, setCanvasVersion] = useState(0);
   const [savedSignature, setSavedSignature] = useState('');
-  const [saveLabel, setSaveLabel] = useState('画布编辑');
   const [busy, setBusy] = useState(false);
-  const [restoringVersion, setRestoringVersion] = useState(null);
-  const [renamingVersion, setRenamingVersion] = useState(null);
-  const [savingRenameVersion, setSavingRenameVersion] = useState(null);
-  const [renameLabel, setRenameLabel] = useState('');
-  const [preview, setPreview] = useState(null);
-  const [previewingVersion, setPreviewingVersion] = useState(null);
-  const [exportingVersion, setExportingVersion] = useState(null);
-  const [importingCanvas, setImportingCanvas] = useState(false);
   const [canvasRevision, setCanvasRevision] = useState(0);
-  const [compareFrom, setCompareFrom] = useState('');
-  const [compareTo, setCompareTo] = useState('');
-  const [comparison, setComparison] = useState(null);
-  const [comparing, setComparing] = useState(false);
   const [message, setMessage] = useState('');
   const [generationForm, setGenerationForm] = useState({ modality: 'IMAGE', prompt: '', title: '' });
   const [generating, setGenerating] = useState(false);
@@ -128,20 +103,12 @@ export function CanvasWorkspace({ api, ...props }) {
     setSavedSignature(canvasContentSignature(snapshot));
   }, [project.data?.id, project.data?.latestVersion]);
 
-  useEffect(() => {
-    const items = history.data?.items || [];
-    if (!items.length) return;
-    const latest = String(items[0].version);
-    const previous = String(items[1]?.version || items[0].version);
-    setCompareFrom((current) => items.some((item) => String(item.version) === current) ? current : previous);
-    setCompareTo((current) => items.some((item) => String(item.version) === current) ? current : latest);
-  }, [history.data?.items]);
+
 
   // ⚠️ 提前 return 之前不能再出现 hook：加载态与就绪态渲染的 hook 数量必须一致，
   // 否则 React 抛 #310 整页白屏（本轮自动保存 hook 曾放在 return 之后，画布课堂直接打不开）。
   const editable = Boolean(project.data) && project.data.status === 'DRAFT';
   const changed = draft && canvasContentSignature(draft) !== savedSignature;
-  const historyItems = history.data?.items || [];
 
   // 服务端任务（刷新后仍在）：每个框体最多保留最新一条。恢复逻辑与素材面板都要用，所以一并放在 hook 之前。
   const generationJobs = Array.isArray(generations.data?.items) ? generations.data.items : [];
@@ -242,112 +209,11 @@ export function CanvasWorkspace({ api, ...props }) {
   if (project.loading) return <Loading label="正在打开魔法画布…" />;
   if (project.error) return <ErrorState error={project.error} onRetry={project.refresh} />;
 
-  async function save() {
-    if (!editable || !draft) return;
-    setBusy(true);
-    try {
-      const label = saveLabel.trim() || '画布编辑';
-      const saved = await api.put(`student/projects/${project.data.id}`, { canvasSnapshot: draft, label });
-      setCanvasSnapshot(saved.canvasSnapshot);
-      setCanvasVersion(saved.latestVersion);
-      setSavedSignature(canvasContentSignature(saved.canvasSnapshot));
-      setDraft(saved.canvasSnapshot);
-      setSaveLabel('画布编辑');
-      setMessage(`已保存为版本 ${saved.latestVersion}：${label}。`);
-      history.refresh();
-      project.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setBusy(false); }
-  }
 
-  async function restore(version) {
-    if (!editable) return;
-    setRestoringVersion(version);
-    try {
-      const snapshot = await api.get(`student/projects/${project.data.id}/snapshots/${version}`);
-      const saved = await api.put(`student/projects/${project.data.id}`, {
-        canvasSnapshot: snapshot.canvasSnapshot,
-        label: `恢复版本 ${version}`,
-      });
-      setCanvasSnapshot(saved.canvasSnapshot);
-      setCanvasVersion(saved.latestVersion);
-      setSavedSignature(canvasContentSignature(saved.canvasSnapshot));
-      setDraft(saved.canvasSnapshot);
-      setMessage(`已将版本 ${version} 恢复为新的版本 ${saved.latestVersion}。`);
-      history.refresh();
-      project.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setRestoringVersion(null); }
-  }
 
-  async function previewVersion(version) {
-    setPreviewingVersion(version);
-    try {
-      const snapshot = await api.get(`student/projects/${project.data.id}/snapshots/${version}`);
-      setPreview(snapshot);
-    } catch (err) { setMessage(err.message); }
-    finally { setPreviewingVersion(null); }
-  }
 
-  async function renameVersion(version) {
-    const label = renameLabel.trim();
-    if (!label) { setMessage('请填写版本名称。'); return; }
-    setSavingRenameVersion(version);
-    try {
-      await api.put(`student/projects/${project.data.id}/snapshots/${version}`, { label });
-      setMessage(`版本 ${version} 已重命名。`);
-      setRenamingVersion(null);
-      setRenameLabel('');
-      history.refresh();
-    } catch (err) { setMessage(err.message); }
-    finally { setSavingRenameVersion(null); }
-  }
 
-  async function exportVersion(version) {
-    setExportingVersion(version);
-    try {
-      const snapshot = await api.get(`student/projects/${project.data.id}/snapshots/${version}`);
-      const payload = {
-        format: 'ai-kids-canvas-snapshot',
-        formatVersion: 1,
-        exportedAt: new Date().toISOString(),
-        project: { id: project.data.id, title: project.data.title, version: snapshot.version, label: snapshot.label || null },
-        canvasSnapshot: snapshot.canvasSnapshot,
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      const safeTitle = String(project.data.title || 'canvas').replace(/[\\/:*?"<>|]/g, '_');
-      link.href = url;
-      link.download = `${safeTitle}-v${snapshot.version}.json`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
-      setMessage(`版本 ${version} 已导出为 JSON 文件。`);
-    } catch (err) { setMessage(err.message); }
-    finally { setExportingVersion(null); }
-  }
 
-  async function importCanvas(event) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file || !editable) return;
-    if (file.size > MAX_CANVAS_IMPORT_BYTES) { setMessage('导入文件不能超过 1MB。'); return; }
-    setImportingCanvas(true);
-    try {
-      const imported = readImportedCanvas(JSON.parse(await file.text()));
-      setCanvasSnapshot(imported.canvasSnapshot);
-      setDraft(imported.canvasSnapshot);
-      setCanvasRevision((value) => value + 1);
-      const sourceTitle = String(imported.source.title || '').trim();
-      const sourceVersion = Number(imported.source.version);
-      const suggestedLabel = sourceTitle ? `导入：${sourceTitle}${Number.isFinite(sourceVersion) ? ` v${sourceVersion}` : ''}`.slice(0, 100) : '导入画布快照';
-      setSaveLabel(suggestedLabel);
-      setMessage('已导入画布快照；请确认内容后保存为当前项目的新版本。');
-    } catch (err) { setMessage(err instanceof Error ? err.message : '导入画布失败，请检查 JSON 文件。'); }
-    finally { setImportingCanvas(false); }
-  }
 
   function addGeneratedAsset(asset, prompt, modality) {
     const type = modality === 'IMAGE' ? 'image' : modality === 'VIDEO' ? 'video' : modality === 'TEXT' ? 'prompt' : 'note';
@@ -402,19 +268,6 @@ export function CanvasWorkspace({ api, ...props }) {
     finally { setGenerating(false); }
   }
 
-  async function compareVersions() {
-    if (!compareFrom || !compareTo) { setMessage('请选择两个版本后再比较。'); return; }
-    if (compareFrom === compareTo) { setMessage('请选择两个不同的版本进行比较。'); return; }
-    setComparing(true);
-    try {
-      const [fromSnapshot, toSnapshot] = await Promise.all([
-        api.get(`student/projects/${project.data.id}/snapshots/${compareFrom}`),
-        api.get(`student/projects/${project.data.id}/snapshots/${compareTo}`),
-      ]);
-      setComparison({ from: fromSnapshot, to: toSnapshot, diff: snapshotDiff(fromSnapshot.canvasSnapshot, toSnapshot.canvasSnapshot) });
-    } catch (err) { setMessage(err.message); }
-    finally { setComparing(false); }
-  }
 
   async function submitWork() {
     if (!editable || !draft) return;
@@ -433,11 +286,6 @@ export function CanvasWorkspace({ api, ...props }) {
     finally { setBusy(false); }
   }
 
-  function useTemplate() {
-    const template = createCanvasTemplate('adventure');
-    setCanvasSnapshot(template); setDraft(template); setCanvasRevision((value) => value + 1);
-    setMessage('已放入一份创作底稿，完成后请保存。');
-  }
 
   // 从桌面拖进来的图片/视频/音频：先上传到平台（只自己可见），再落成画布节点。
   // 落下来的节点可以连线给视频框体当首帧 / 全能参考素材，所以不需要额外的上传控件。
@@ -656,7 +504,7 @@ export function CanvasWorkspace({ api, ...props }) {
           <button type="button" className="cv-sidebar__toggle" aria-label={sidebarCollapsed ? '展开工具' : '收起工具'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开工具' : '收起工具'} onClick={() => setSidebarCollapsed((value) => !value)}><Icon name="sidebar" size={15} /></button>
         </div>
         <div className="cv-nav">
-          {[['materials', 'grid', '素材'], ['capabilities', 'sliders', '能力'], ['versions', 'history', '版本']].map(([key, icon, label]) => <button key={key} type="button" className={`cv-nav-item ${toolPanel === key ? 'is-active' : ''}`} title={label} onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === key ? null : key)); }}><i><Icon name={icon} size={15} /></i><span>{label}</span></button>)}
+          {[['materials', 'grid', '素材'], ['capabilities', 'sliders', '能力']].map(([key, icon, label]) => <button key={key} type="button" className={`cv-nav-item ${toolPanel === key ? 'is-active' : ''}`} title={label} onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === key ? null : key)); }}><i><Icon name={icon} size={15} /></i><span>{label}</span></button>)}
         </div>
         {toolPanel && !sidebarCollapsed ? <div className="cv-panel">
           {toolPanel === 'materials' ? <>
@@ -689,33 +537,7 @@ export function CanvasWorkspace({ api, ...props }) {
             <div className="cv-panel__head"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
             <div className="cv-chips">{[['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'], ['music', 'AI 音乐']].map(([key, label]) => <span className={`cv-chip ${capabilities.includes(key) ? 'is-on' : ''}`} key={key}>{capabilities.includes(key) ? '✓' : '—'} {label}</span>)}</div>
           </> : null}
-          {toolPanel === 'versions' ? <>
-            <div className="cv-panel__head"><div><strong>版本管理</strong><small>保存 / 预览 / 恢复 / 重命名 / 导出 / 对比 / 导入</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
-            <div className="cv-group"><h4>保存当前画布为版本</h4>
-              <label className="cv-field"><span>版本名称（可选）</span><input className="cv-input" value={saveLabel === '画布编辑' ? '' : saveLabel} maxLength={100} placeholder="例如：第一版分镜" onChange={(event) => setSaveLabel(event.target.value)} /></label>
-              <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft} onClick={save}>{busy ? '保存中…' : '保存为版本'}</button>
-              <p className="cv-muted">改动画布会自动保存，想要留一个可回退的版本时点这里。</p>
-            </div>
-            <div className="cv-group"><h4>导入快照</h4>
-              <label className="cv-item"><span className="cv-item__icon">⇪</span><span className="cv-item__text"><strong>{importingCanvas ? '导入中…' : '选择 JSON 文件'}</strong><small>仅支持本平台导出的画布快照，最大 1MB</small></span><b className="cv-item__plus">＋</b><input type="file" accept="application/json,.json" disabled={!editable || importingCanvas} onChange={importCanvas} style={{ display: 'none' }} /></label>
-            </div>
-            <div className="cv-group"><h4>版本对比</h4>
-              <div className="cv-compare">
-                <select className="cv-select" value={compareFrom} aria-label="对比起始版本" onChange={(event) => setCompareFrom(event.target.value)}>{historyItems.map((item) => <option key={item.id} value={String(item.version)}>v{item.version}{item.label ? ' · ' + item.label : ''}</option>)}</select>
-                <span className="cv-muted">→</span>
-                <select className="cv-select" value={compareTo} aria-label="对比目标版本" onChange={(event) => setCompareTo(event.target.value)}>{historyItems.map((item) => <option key={item.id} value={String(item.version)}>v{item.version}{item.label ? ' · ' + item.label : ''}</option>)}</select>
-              </div>
-              <button type="button" className="cv-text-btn" disabled={comparing || historyItems.length < 2} onClick={compareVersions}>{comparing ? '比较中…' : '比较'}</button>
-              {comparison ? <div className="cv-diff"><p className="cv-muted">{collectionChanges(comparison.diff) || '没有结构性变化。'}</p><ChangeList diff={comparison.diff} fromSnapshot={comparison.from.canvasSnapshot} toSnapshot={comparison.to.canvasSnapshot} /></div> : null}
-            </div>
-            <div className="cv-group"><h4>历史版本（{historyItems.length}）</h4>
-              {historyItems.length ? <ul className="cv-history">{historyItems.map((item) => <li key={item.id}>
-                <div className="cv-history__meta"><strong>v{item.version}</strong>{item.label ? <span>{item.label}</span> : null}<small>{formatDate(item.createdAt)}{item.actorName ? ' · ' + item.actorName : ''}</small></div>
-                {renamingVersion === item.version ? <div className="cv-row-actions"><input className="cv-input" value={renameLabel} maxLength={100} placeholder="版本名称" aria-label="版本名称" onChange={(event) => setRenameLabel(event.target.value)} /><button type="button" className="cv-text-btn" disabled={savingRenameVersion === item.version} onClick={() => renameVersion(item.version)}>{savingRenameVersion === item.version ? '保存中…' : '保存'}</button><button type="button" className="cv-text-btn" onClick={() => { setRenamingVersion(null); setRenameLabel(''); }}>取消</button></div>
-                  : <div className="cv-row-actions"><button type="button" className="cv-text-btn" disabled={previewingVersion === item.version} onClick={() => previewVersion(item.version)}>{previewingVersion === item.version ? '打开中…' : '预览'}</button><button type="button" className="cv-text-btn" disabled={!editable || restoringVersion === item.version} onClick={() => restore(item.version)}>{restoringVersion === item.version ? '恢复中…' : '恢复'}</button><button type="button" className="cv-text-btn" disabled={!editable} onClick={() => { setRenamingVersion(item.version); setRenameLabel(item.label || ''); }}>重命名</button><button type="button" className="cv-text-btn" disabled={exportingVersion === item.version} onClick={() => exportVersion(item.version)}>{exportingVersion === item.version ? '导出中…' : '导出'}</button></div>}
-              </li>)}</ul> : <p className="cv-empty">还没有历史版本，保存画布后会自动生成。</p>}
-            </div>
-          </> : null}
+          
         </div> : null}
       </aside>
       <div className="cv-main">
@@ -723,12 +545,11 @@ export function CanvasWorkspace({ api, ...props }) {
           <div className="cv-heading__title"><span>我的课堂画布</span><h2>{project.data.title}</h2></div>
           <span className={`cv-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
         </div>
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} onChange={setDraft} focusRequest={focusRequest} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} onRequestMaterials={() => { setSidebarCollapsed(false); setToolPanel('materials'); }} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${message.includes('失败') || message.includes('错误') ? 'is-error' : ''}`}>{message}</div>}
     {promptTarget && <div className="cv-dialog" role="dialog" aria-modal="true"><div className="cv-dialog__panel"><strong>把「{promptTarget.material.title}」插入到哪个框体？</strong><div className="cv-dialog__list">{promptTarget.targets.map((node) => <button key={node.id} type="button" onClick={() => insertPromptToSlot(node.id)}>{node.data?.title || node.type}<small>{node.type === 'video' ? '生视频' : '生图'}{node.data?.aspectRatio ? ' · ' + node.data.aspectRatio : ''}</small></button>)}</div><button type="button" className="cv-text-btn" onClick={() => setPromptTarget(null)}>取消</button></div></div>}
-    {preview && <div className="cv-dialog" role="dialog" aria-modal="true"><div className="cv-dialog__panel"><strong>版本 {preview.version} 预览</strong><p className="cv-muted">{preview.label || '未命名版本'} · {formatDate(preview.createdAt)}{preview.actorName ? ' · ' + preview.actorName : ''}</p><div className="cv-dialog__preview"><CanvasEditor key={`preview-${preview.version}`} initialSnapshot={preview.canvasSnapshot} capabilities={capabilities} readOnly allowNodeCreation={false} showStarter={false} /></div><button type="button" className="cv-text-btn" onClick={() => setPreview(null)}>关闭预览</button></div></div>}
   </main>;
 
 }

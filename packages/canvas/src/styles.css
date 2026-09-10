@@ -173,3 +173,26 @@
 
 /* 行内提示（例如「该模型需要先连接一张画面（首帧）」） */
 .learning-node__generation-state { display: block; margin: 0; padding: 6px 10px; border: 1px solid rgb(255 107 107 / 35%); border-radius: 8px; color: #ffb4b4; background: rgb(255 107 107 / 10%); font-size: 10.5px; line-height: 1.5; }
+
+/* ── 画布底部独立面板（复刻参考：展示与输入分离，卡片只展示、面板负责输入） ── */
+.learning-canvas__panel { position: absolute; z-index: 8; left: 50%; bottom: 16px; width: min(760px, calc(100% - 28px)); padding: 12px; border: 1px solid var(--cv-border-strong); border-radius: 16px; background: rgb(21 21 21 / 96%); box-shadow: 0 20px 52px rgb(0 0 0 / 46%); backdrop-filter: blur(14px); transform: translateX(-50%); }
+.learning-canvas__panel-inner { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.learning-canvas__panel .learning-node__textarea, .learning-canvas__panel .learning-node__input { width: 100%; height: 74px; margin: 0; font-size: 13px; }
+.learning-canvas__panel .learning-node__seg-rows { width: 100%; margin: 0; }
+.learning-canvas__panel .learning-node__ref-row { width: 100%; }
+.learning-canvas__panel .learning-node__panel-footer { width: 100%; }
+.learning-canvas__panel .learning-node__status-chip { flex: 0 0 auto; }
+.learning-canvas__config-chip { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 5px 11px; border: 1px solid rgb(163 254 68 / 35%); border-radius: 999px; color: var(--cv-primary); background: rgb(163 254 68 / 10%); font-size: 11px; cursor: pointer; transition: background var(--cv-motion) ease-out; }
+.learning-canvas__config-chip:hover { background: rgb(163 254 68 / 18%); }
+.learning-canvas__plus { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-dim); background: transparent; font-size: 15px; cursor: pointer; transition: background var(--cv-motion) ease-out, color var(--cv-motion) ease-out; }
+.learning-canvas__plus:hover { color: #fff; background: rgb(255 255 255 / 8%); }
+
+/* 工具栏挪到右上角，给底部面板让位 */
+.learning-canvas__toolbar { left: auto; right: 14px; top: 14px; bottom: auto; transform: none; }
+
+/* 卡片标题可以直接改名 */
+.learning-node__title { flex: 1; min-width: 0; padding: 2px 6px; border: 1px solid transparent; border-radius: 7px; color: var(--cv-text); background: transparent; font-size: 13px; font-weight: 600; }
+.learning-node__title::placeholder { color: var(--cv-text-faint); font-weight: 400; }
+.learning-node__title:hover:not(:disabled) { border-color: var(--cv-border-strong); }
+.learning-node__title:focus { outline: none; border-color: var(--cv-primary); background: rgb(0 0 0 / 25%); }
+.learning-node__title:disabled { color: var(--cv-text); cursor: default; }

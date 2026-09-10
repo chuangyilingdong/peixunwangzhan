@@ -133,7 +133,7 @@ function useCanvasActions() {
   return actions;
 }
 
-function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140, processing = false }) {
+function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140, processing = false, onRename = null, renameDisabled = false }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
   // 缩放把手放在圆角容器外面：.learning-node 有 overflow:hidden（为了裁掉溢出内容），
@@ -142,7 +142,12 @@ function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minH
     <NodeResizer isVisible={Boolean(selected) && !readOnly} minWidth={minWidth} minHeight={minHeight} lineClassName="learning-node__resize-line" handleClassName="learning-node__resize-handle" />
     <div className={`learning-node learning-node--${tone}${processing ? ' is-processing' : ''}`}>
       <Handle type="target" position={Position.Left} className="learning-node__handle" />
-      <div className="learning-node__heading"><span>{icon}</span><strong>{title}</strong></div>
+      <div className="learning-node__heading">
+        <span>{icon}</span>
+        {onRename
+          ? <input className="learning-node__title nodrag" value={title || ''} placeholder="给这个框体取个名字" maxLength={40} disabled={renameDisabled} aria-label="框体名称" onChange={(event) => onRename(event.target.value)} />
+          : <strong>{title}</strong>}
+      </div>
       {children}
       <Handle type="source" position={Position.Right} className="learning-node__handle" />
     </div>
@@ -181,27 +186,14 @@ function FrameRefRows({ incoming, referenceUrl, omni, referenceAssets, supportsF
   </div>;
 }
 
+// 文字框体：卡片只负责展示（标题 + 生成结果），提示词与生成按钮都在画布底部面板里。
 function PromptNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate } = useCanvasActions();
+  const { updateNode } = useCanvasActions();
   const generated = String(data.generatedText || '');
-  const missingPrompt = !String(data.text || '').trim();
-  const isTextSlot = data.slotType === 'text';
-  return <NodeFrame icon="✎" tone="prompt" processing={data.generationStatus === 'PENDING'} title={data.title || '魔法提示词'} selected={selected}>
-    <div className="learning-node__panel">
-      <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder={isTextSlot ? '写下你想让 AI 生成什么…' : '写下你的故事或画面描述…'} maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
-      <span className="learning-node__count">{(data.text || '').length}/300</span>
-      <SlotParams data={data} />
-      {generated ? <div className="learning-node__text-result nodrag">{generated}</div> : null}
-      <PanelFooter
-        state={data.generationStatus === 'PENDING' ? 'running' : data.generationStatus === 'FAILED' ? 'failed' : generated ? 'done' : 'empty'}
-        error={data.generationError}
-        label={generated ? '重新生成' : '生成文字'}
-        disabled={missingPrompt}
-        hint={missingPrompt ? '先写下你想让 AI 写什么' : '让 AI 帮你写'}
-        onGenerate={canGenerate && isTextSlot ? () => generateNode(id, 'TEXT', { title: data.title || 'AI 文字', prompt: data.text || '' }) : null}
-      />
-    </div>
-    {selected && <span className="learning-node__hint">写下提示词后点右下角生成，AI 帮你写；也可以直接手动编辑。</span>}
+  return <NodeFrame icon="✎" tone="prompt" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+    {generated
+      ? <div className="learning-node__text-result nodrag">{generated}</div>
+      : <div className="learning-node__art"><span>✎</span><small>{data.slotType === 'text' ? '在底部面板写提示词，生成文字' : '在底部面板写下内容'}</small></div>}
   </NodeFrame>;
 }
 
@@ -268,32 +260,16 @@ function resolveSlotParams(data) {
 }
 
 function ImageNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate, openPreview } = useCanvasActions();
+  const { updateNode, openPreview } = useCanvasActions();
   const imageUrl = data.previewUrl || data.assetUrl;
-  const missingPrompt = !String(data.caption || '').trim();
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
   const referenceUrl = !imageUrl ? String(data.referenceUrl || '') : '';
-  return <NodeFrame icon="✦" tone="image" processing={data.generationStatus === 'PENDING'} title={data.title || '画面灵感'} selected={selected}>
+  return <NodeFrame icon="✦" tone="image" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {imageUrl
       ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={imageUrl} alt={data.caption || 'AI生成画面'} onClick={() => openPreview(imageUrl)} title="点击放大查看" />
       : referenceUrl
         ? <figure className="learning-node__reference nodrag"><img src={referenceUrl} alt="框体预置素材" title="点击放大查看" onClick={() => openPreview(referenceUrl)} /><figcaption>框体预置素材</figcaption></figure>
-        : <div className="learning-node__art"><span>{data.emoji || '🌈'}</span><small>写画面描述，点右下角生成画面</small></div>}
-    <div className="learning-node__panel">
-      <textarea className="learning-node__textarea nodrag" value={data.caption || ''} placeholder="描述画面要画什么…" maxLength={300} onChange={(event) => updateNode(id, { caption: event.target.value })} />
-      <SlotParams data={data} />
-      <SlotParamPickers id={id} data={data} />
-      <PanelFooter
-        state={data.generationStatus === 'PENDING' ? 'running' : data.generationStatus === 'FAILED' ? 'failed' : data.uploaded && imageUrl ? 'asset' : imageUrl ? 'done' : 'empty'}
-        error={data.generationError}
-        label={imageUrl ? '重新生成' : '生成画面'}
-        disabled={missingPrompt}
-        hint={missingPrompt ? '先写下画面描述，再生成' : '按描述生成画面'}
-        onGenerate={canGenerate && !imageUrl ? () => generateNode(id, 'IMAGE', { title: data.title || '画面灵感', prompt: data.caption || '', params: resolveSlotParams(data) }) : null}
-        extra={<input className="learning-node__emoji nodrag" value={data.emoji || ''} aria-label="画面表情" maxLength={2} onChange={(event) => updateNode(id, { emoji: event.target.value })} />}
-      />
-    </div>
-    {selected && <span className="learning-node__hint">用描述生成画面，也可以继续编辑灵感</span>}
+        : <div className="learning-node__art"><span>{data.emoji || '🌈'}</span><small>在底部面板写画面描述，生成画面</small></div>}
   </NodeFrame>;
 }
 function CharacterNode({ id, data, selected }) {
@@ -319,55 +295,20 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate, getIncomingImageAssetUrls, getIncomingAssetRefs } = useCanvasActions();
+  const { updateNode, getIncomingImageAssetUrls } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
-  // 输入画面按模型声明的方式给（可多选）：支持文生就可以不带图；支持首帧才用连过来的图/框体预置素材；
-  // 支持尾帧才用第二张连过来的图。不支持的方式一律不送，服务端也会再拦一次。
   const inputModes = Array.isArray(data.inputModes) && data.inputModes.length
     ? data.inputModes
     : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
   const supportsFirstFrame = inputModes.includes('FIRST_FRAME');
-  const supportsLastFrame = inputModes.includes('LAST_FRAME');
-  const supportsText = inputModes.includes('TEXT');
-  const missingPrompt = !String(data.text || '').trim();
   const referenceUrl = !videoUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
   const incoming = getIncomingImageAssetUrls(id);
-  const omni = inputModes.includes('OMNI_REFERENCE');
-  // 全能参考与首/尾帧互斥（上游不允许混用）：声明了全能参考就按参考素材发，否则按首/尾帧发。
-  const referenceAssets = omni ? getIncomingAssetRefs(id) : [];
-  const sourceAssetUrl = !omni && supportsFirstFrame ? (incoming[0] || referenceUrl) : '';
-  const lastFrameAssetUrl = !omni && supportsFirstFrame && supportsLastFrame ? String(incoming[1] || '') : '';
-  const missingFirstFrame = supportsFirstFrame && !supportsText && !sourceAssetUrl;
-  const blockedReason = missingFirstFrame
-    ? '该模型需要先连接一张画面（首帧）'
-    : (missingPrompt ? '先写下这一段的提示词，再生成' : '');
-  const frameHint = omni
-    ? '把图片/视频/音频节点连过来当参考素材（图 ≤9、视频 ≤3、音频 ≤3）'
-    : (supportsFirstFrame && supportsLastFrame
-      ? '按连线顺序：第一条图片连线当首帧，第二条当尾帧'
-      : (supportsFirstFrame ? '从图片节点的圆点连过来当首帧' : '该模型只吃文本提示词'));
-  return <NodeFrame icon="▶" tone="video" processing={data.generationStatus === 'PENDING'} title={data.title || '故事短片'} selected={selected}>
+  return <NodeFrame icon="▶" tone="video" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
-      : referenceUrl
-        ? <figure className="learning-node__reference nodrag"><img src={referenceUrl} alt="框体预置首帧" /><figcaption>框体预置首帧</figcaption></figure>
-        : <div className="learning-node__video-preview"><span>▶</span><small>写提示词，点右下角生成短片</small></div>}
-    <div className="learning-node__panel">
-      <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder="描述画面要如何运动…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
-      <FrameRefRows incoming={incoming} referenceUrl={referenceUrl} omni={omni} referenceAssets={referenceAssets} supportsFirstFrame={supportsFirstFrame} supportsLastFrame={supportsLastFrame} />
-      <SlotParams data={data} />
-      <SlotParamPickers id={id} data={data} />
-      <PanelFooter
-        state={data.generationStatus === 'PENDING' ? 'running' : data.generationStatus === 'FAILED' ? 'failed' : data.uploaded && videoUrl ? 'asset' : videoUrl ? 'done' : 'empty'}
-        error={data.generationError}
-        label={videoUrl ? '重新生成' : '生成短片'}
-        disabled={Boolean(blockedReason) && !videoUrl}
-        hint={blockedReason || '按提示词生成短片'}
-        onGenerate={canGenerate ? () => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssets, params: resolveSlotParams(data) }) : null}
-      />
-      {blockedReason && !data.generationStatus && !videoUrl ? <span className="learning-node__generation-state is-error">{blockedReason}</span> : null}
-    </div>
-    {selected && <span className="learning-node__hint">{frameHint}</span>}
+      : (referenceUrl || incoming[0])
+        ? <figure className="learning-node__reference nodrag"><img src={referenceUrl || incoming[0]} alt="画面来源" /><figcaption>画面来源（首帧）</figcaption></figure>
+        : <div className="learning-node__video-preview"><span>▶</span><small>在底部面板写提示词，生成短片</small></div>}
   </NodeFrame>;
 }
 
@@ -383,51 +324,22 @@ function NoteNode({ id, data, selected }) {
 const AUDIO_MODALITIES = [['MUSIC', '生成音乐']];
 
 function AudioNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
+  const { updateNode } = useCanvasActions();
   const audioUrl = data.previewUrl || data.assetUrl;
-  const isBoxNode = Boolean(data.boxId);
-  const musicMode = data.mode === 'DESCRIPTION' ? 'DESCRIPTION' : 'LYRICS';
-  const missingPrompt = !String(data.text || data.caption || '').trim();
-  const available = AUDIO_MODALITIES.filter(([modality]) => enabledCapabilities?.has(modality.toLowerCase()));
-  const buttons = isBoxNode ? [['MUSIC', audioUrl ? '重新生成' : '生成音乐']] : available.map(([modality, label]) => [modality, label]);
-  const canRun = isBoxNode ? enabledCapabilities?.has('music') : available.length > 0;
-  const hint = musicMode === 'DESCRIPTION' ? '先写下你想要的音乐是什么样子' : '先写下要唱的歌词';
-  return <NodeFrame icon="♫" tone="audio" processing={data.generationStatus === 'PENDING'} title={data.title || '音频素材'} selected={selected}>
-    {audioUrl ? <audio className="learning-node__audio" controls src={audioUrl} /> : <div className="learning-node__audio-placeholder"><span>♫</span><small>写歌词或描述，点右下角生成音乐</small></div>}
-    <div className="learning-node__panel">
-      <textarea className="learning-node__textarea nodrag" value={data.text || data.caption || ''} placeholder={isBoxNode && musicMode === 'DESCRIPTION' ? '描述你想要的音乐是什么样子…' : (isBoxNode ? '写下要唱的歌词…' : '音频说明 / 提示词')} maxLength={isBoxNode ? 3000 : 180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
-      {isBoxNode ? <SlotParams data={{ slotType: 'music', model: data.model, resolution: musicMode === 'DESCRIPTION' ? '描述生音乐（平台代写词）' : '歌词生音乐' }} /> : null}
-      <PanelFooter
-        state={data.generationStatus === 'PENDING' ? 'running' : data.generationStatus === 'FAILED' ? 'failed' : data.uploaded && audioUrl ? 'asset' : audioUrl ? 'done' : 'empty'}
-        error={data.generationError}
-        label={buttons[0]?.[1] || '生成音乐'}
-        disabled={missingPrompt || !canRun}
-        hint={missingPrompt ? hint : '按歌词/描述生成音乐'}
-        onGenerate={canGenerate && buttons.length ? () => generateNode(id, buttons[0][0], { title: data.title || '音频素材', prompt: data.text || data.caption || '', boxId: data.boxId || '' }) : null}
-      />
-      {missingPrompt && !data.generationStatus && isBoxNode ? <span className="learning-node__generation-state is-error">{hint}</span> : null}
-    </div>
-    {selected && <span className="learning-node__hint">可播放课程音频或音乐；本课开放哪几种音频能力，就能生成哪几种</span>}
+  return <NodeFrame icon="♫" tone="audio" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+    {audioUrl
+      ? <audio className="learning-node__audio" controls src={audioUrl} />
+      : <div className="learning-node__audio-placeholder"><span>♫</span><small>在底部面板写歌词或描述，生成音乐</small></div>}
   </NodeFrame>;
 }
 
 function AnimationNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
+  const { updateNode } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
-  return <NodeFrame icon="✧" tone="animation" processing={data.generationStatus === 'PENDING'} title={data.title || '动画素材'} selected={selected}>
-    {videoUrl ? <video className="learning-node__media" controls muted loop src={videoUrl} /> : <div className="learning-node__animation-placeholder"><span>✧</span><small>写提示词，点右下角生成动画</small></div>}
-    <div className="learning-node__panel">
-      <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="动画说明 / 提示词" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
-      <PanelFooter
-        state={data.generationStatus === 'PENDING' ? 'running' : data.generationStatus === 'FAILED' ? 'failed' : videoUrl ? 'done' : 'empty'}
-        error={data.generationError}
-        label={videoUrl ? '重新生成' : '生成动画'}
-        disabled={!enabledCapabilities?.has('video')}
-        hint={enabledCapabilities?.has('video') ? '按说明生成动画' : '本课未开放 AI 生视频'}
-        onGenerate={canGenerate && enabledCapabilities?.has('video') ? () => generateNode(id, 'VIDEO', { title: data.title || '动画素材', prompt: data.text || data.caption || '' }) : null}
-      />
-    </div>
-    {selected && <span className="learning-node__hint">动画按视频能力生成；本课未开放 AI 生视频时不能生成</span>}
+  return <NodeFrame icon="✧" tone="animation" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+    {videoUrl
+      ? <video className="learning-node__media" controls muted loop src={videoUrl} />
+      : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}
   </NodeFrame>;
 }
 
@@ -444,9 +356,95 @@ function GlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targ
 }
 const edgeTypes = { default: GlowEdge };
 
+// 画布底部面板（复刻参考的独立底部面板）：编辑当前选中的框体——
+// 提示词 / 画面来源行 / 画幅·清晰度·时长分段胶囊 / 页脚（状态胶囊 + 配置 + ＋ + 生成 ↑）。
+function NodeEditPanel({ node, onRequestMaterials }) {
+  const { updateNode, generateNode, canGenerate, readOnly, enabledCapabilities, getIncomingImageAssetUrls, getIncomingAssetRefs } = useCanvasActions();
+  if (!node) return null;
+  const id = node.id;
+  const data = node.data || {};
+  const slotType = String(data.slotType || node.type || '').toLowerCase();
+  const isBox = Boolean(data.boxId);
+  const configLabel = (() => {
+    const kind = slotType === 'image' ? '生图' : slotType === 'video' ? '生视频' : slotType === 'audio' || slotType === 'music' ? '音乐' : slotType === 'text' || slotType === 'prompt' ? '文字' : '';
+    if (!kind) return '未配置';
+    const params = [data.aspectRatio, data.resolution].filter(Boolean);
+    if (data.model) params.push(data.model);
+    if (data.uploaded) return '本地素材';
+    return params.length ? `${kind} · ${params.join(' · ')}` : kind;
+  })();
+  const promptValue = data.slotType === 'image' ? (data.caption || '') : (data.text || data.caption || '');
+  const setPrompt = (value) => (data.slotType === 'image' ? updateNode(id, { caption: value }) : updateNode(id, { text: value, caption: value }));
+  const placeholder = slotType === 'image' ? '描述画面要画什么…'
+    : slotType === 'video' ? '描述画面要如何运动…'
+      : slotType === 'music' || slotType === 'audio' ? (data.mode === 'DESCRIPTION' ? '描述你想要的音乐是什么样子…' : '写下要唱的歌词…')
+        : slotType === 'animation' ? '动画说明 / 提示词…'
+          : '写下你想让 AI 生成什么…';
+  const missingPrompt = !String(promptValue).trim();
+  const state = data.generationStatus === 'PENDING' ? 'running'
+    : data.generationStatus === 'FAILED' ? 'failed'
+      : data.uploaded ? 'asset'
+        : (data.assetUrl || data.generatedText) ? 'done' : 'empty';
+  const generate = (() => {
+    if (slotType === 'image') return { modality: 'IMAGE', label: data.assetUrl ? '重新生成' : '生成画面', payload: { title: data.title || '画面灵感', prompt: data.caption || '', params: resolveSlotParams(data) }, blocked: missingPrompt ? '先写下画面描述，再生成' : '' };
+    if (slotType === 'video' || slotType === 'animation') {
+      const inputModes = Array.isArray(data.inputModes) && data.inputModes.length ? data.inputModes : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
+      const supportsText = inputModes.includes('TEXT');
+      const supportsFirstFrame = inputModes.includes('FIRST_FRAME');
+      const supportsLastFrame = inputModes.includes('LAST_FRAME');
+      const omni = inputModes.includes('OMNI_REFERENCE');
+      const incoming = getIncomingImageAssetUrls(id);
+      const referenceAssets = omni ? getIncomingAssetRefs(id) : [];
+      const sourceAssetUrl = !omni && supportsFirstFrame ? (incoming[0] || String(data.referenceUrl || '')) : '';
+      const lastFrameAssetUrl = !omni && supportsFirstFrame && supportsLastFrame ? String(incoming[1] || '') : '';
+      const needFrame = supportsFirstFrame && !supportsText && !sourceAssetUrl;
+      return {
+        modality: 'VIDEO', label: data.assetUrl ? '重新生成' : '生成短片',
+        payload: { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssets, params: resolveSlotParams(data) },
+        blocked: needFrame ? '该模型需要先连接一张画面（首帧）' : (missingPrompt ? '先写下这一段的提示词，再生成' : ''),
+      };
+    }
+    if (slotType === 'music' || slotType === 'audio') {
+      const enabled = enabledCapabilities?.has('music');
+      return {
+        modality: 'MUSIC', label: data.assetUrl ? '重新生成' : '生成音乐',
+        payload: { title: data.title || '音频素材', prompt: promptValue, boxId: data.boxId || '' },
+        blocked: !enabled ? '本课未开放 AI 音乐' : (missingPrompt ? (data.mode === 'DESCRIPTION' ? '先描述你想要的音乐' : '先写下要唱的歌词') : ''),
+      };
+    }
+    if (slotType === 'text' || slotType === 'prompt') {
+      return { modality: 'TEXT', label: data.generatedText ? '重新生成' : '生成文字', payload: { title: data.title || 'AI 文字', prompt: promptValue }, blocked: missingPrompt ? '先写下你想让 AI 写什么' : '' };
+    }
+    return null;
+  })();
+  const supportsPrompt = ['text', 'prompt', 'image', 'video', 'audio', 'music', 'animation'].includes(slotType);
+  if (!supportsPrompt) {
+    return <div className="learning-canvas__panel-inner"><span className="learning-node__seg-label">{data.title || node.type}</span><span className="cv-muted">这个节点直接在卡片上编辑，没有生成参数。</span></div>;
+  }
+  return <div className="learning-canvas__panel-inner">
+    <textarea className="learning-node__textarea nodrag" value={promptValue} placeholder={placeholder} maxLength={isBox ? 3000 : 300} disabled={readOnly} onChange={(event) => setPrompt(event.target.value)} />
+    {slotType === 'video' || slotType === 'animation' ? <FrameRefRows
+      incoming={getIncomingImageAssetUrls(id)}
+      referenceUrl={String(data.referenceUrl || '')}
+      omni={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('OMNI_REFERENCE')}
+      referenceAssets={getIncomingAssetRefs(id)}
+      supportsFirstFrame={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('FIRST_FRAME')}
+      supportsLastFrame={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('LAST_FRAME')}
+    /> : null}
+    <SlotParamPickers id={id} data={data} />
+    <div className="learning-node__panel-footer nodrag">
+      <span className={`learning-node__status-chip${state === 'running' ? ' is-running' : state === 'failed' ? ' is-error' : (state === 'done' || state === 'asset') ? ' is-done' : ''}`}>{state === 'running' ? '生成中…' : state === 'failed' ? (data.generationError || '生成失败') : state === 'done' ? '已生成' : state === 'asset' ? '素材' : '未生成'}</span>
+      <button type="button" className="learning-canvas__config-chip" title="本框体的生成配置来自课时设置" onClick={() => onRequestMaterials?.()}>✦ {configLabel}</button>
+      <button type="button" className="learning-canvas__plus" title="打开左侧素材面板" aria-label="打开素材面板" onClick={() => onRequestMaterials?.()}>＋</button>
+      {canGenerate && generate && state !== 'running' ? <button type="button" className="learning-node__submit" disabled={readOnly || Boolean(generate.blocked)} title={generate.blocked || generate.label} onClick={() => generateNode(id, generate.modality, generate.payload)}>{generate.label}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg></button> : null}
+    </div>
+    {generate?.blocked ? <span className="learning-node__generation-state is-error">{generate.blocked}</span> : null}
+  </div>;
+}
+
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null }) {
   // 受控课堂画布（allowNodeCreation=false）默认不使用固定起始底稿，避免空画布每次刷新被自动填充。
   const shouldShowStarter = showStarter === undefined ? (!readOnly && allowNodeCreation) : showStarter;
   const initial = useMemo(() => {
@@ -458,7 +456,12 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const [viewport, setViewport] = useState(initial.viewport);
   const [contextMenu, setContextMenu] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
+  // 底部面板要编辑哪个框体：优先当前选中的，取消选中后沿用上一次（面板不会突然消失）
+  const [activeNodeId, setActiveNodeId] = useState(null);
   const { getViewport, screenToFlowPosition, setCenter, fitView } = useReactFlow();
+  const selectedNodeId = (nodes.find((item) => item.selected) || {}).id || null;
+  useEffect(() => { if (selectedNodeId) setActiveNodeId(selectedNodeId); }, [selectedNodeId]);
+  const activeNode = nodes.find((item) => item.id === activeNodeId) || null;
   const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
   const historyRef = useRef({ past: [], future: [] });
   const clipboardRef = useRef([]);
@@ -683,6 +686,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
+      {!readOnly && activeNode ? <div className="learning-canvas__panel"><NodeEditPanel node={activeNode} onRequestMaterials={onRequestMaterials} /></div> : null}
       {!readOnly && <div className="learning-canvas__toolbar">
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
