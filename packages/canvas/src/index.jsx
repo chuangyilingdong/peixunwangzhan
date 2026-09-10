@@ -131,14 +131,14 @@ function useCanvasActions() {
   return actions;
 }
 
-function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140 }) {
+function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140, processing = false }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
   // 缩放把手放在圆角容器外面：.learning-node 有 overflow:hidden（为了裁掉溢出内容），
   // 把手是贴在节点四角、探出边缘的，放里面会被裁掉一半甚至整个点不到。
   return <>
     <NodeResizer isVisible={Boolean(selected) && !readOnly} minWidth={minWidth} minHeight={minHeight} lineClassName="learning-node__resize-line" handleClassName="learning-node__resize-handle" />
-    <div className={`learning-node learning-node--${tone}`}>
+    <div className={`learning-node learning-node--${tone}${processing ? ' is-processing' : ''}`}>
       <Handle type="target" position={Position.Left} className="learning-node__handle" />
       <div className="learning-node__heading"><span>{icon}</span><strong>{title}</strong></div>
       {children}
@@ -151,7 +151,7 @@ function PromptNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate } = useCanvasActions();
   const generated = String(data.generatedText || '');
   const missingPrompt = !String(data.text || '').trim();
-  return <NodeFrame icon="✎" tone="prompt" title={data.title || '魔法提示词'} selected={selected}>
+  return <NodeFrame icon="✎" tone="prompt" processing={data.generationStatus === 'PENDING'} title={data.title || '魔法提示词'} selected={selected}>
     <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder={data.slotType === 'text' ? '写下你想让 AI 生成什么…' : '写下你的故事或画面描述…'} maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <span className="learning-node__count">{(data.text || '').length}/300</span>
     <SlotParams data={data} />
@@ -218,7 +218,7 @@ function ImageNode({ id, data, selected }) {
   const missingPrompt = !String(data.caption || '').trim();
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
   const referenceUrl = !imageUrl ? String(data.referenceUrl || '') : '';
-  return <NodeFrame icon="✦" tone="image" title={data.title || '画面灵感'} selected={selected}>
+  return <NodeFrame icon="✦" tone="image" processing={data.generationStatus === 'PENDING'} title={data.title || '画面灵感'} selected={selected}>
     {imageUrl
       ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={imageUrl} alt={data.caption || 'AI生成画面'} onClick={() => openPreview(imageUrl)} title="点击放大查看" />
       : referenceUrl
@@ -235,7 +235,7 @@ function ImageNode({ id, data, selected }) {
 }
 function CharacterNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="♙" tone="character" title={data.title || '故事角色'} selected={selected}>
+  return <NodeFrame icon="♙" tone="character" processing={data.generationStatus === 'PENDING'} title={data.title || '故事角色'} selected={selected}>
     <div className="learning-node__character-art">{data.emoji || '🧒'}</div>
     <input className="learning-node__input nodrag" value={data.name || ''} placeholder="角色名字" maxLength={40} onChange={(event) => updateNode(id, { name: event.target.value })} />
     <input className="learning-node__input learning-node__input--compact nodrag" value={data.trait || ''} placeholder="性格、能力或目标" maxLength={80} onChange={(event) => updateNode(id, { trait: event.target.value })} />
@@ -246,7 +246,7 @@ function CharacterNode({ id, data, selected }) {
 
 function SceneNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="⌂" tone="scene" title={data.title || '故事场景'} selected={selected}>
+  return <NodeFrame icon="⌂" tone="scene" processing={data.generationStatus === 'PENDING'} title={data.title || '故事场景'} selected={selected}>
     <div className="learning-node__scene-art"><span>{data.emoji || '🌲'}</span><small>{data.mood || '神秘氛围'}</small></div>
     <input className="learning-node__input nodrag" value={data.place || ''} placeholder="场景地点" maxLength={60} onChange={(event) => updateNode(id, { place: event.target.value })} />
     <input className="learning-node__input learning-node__input--compact nodrag" value={data.mood || ''} placeholder="氛围，例如：温暖、紧张" maxLength={80} onChange={(event) => updateNode(id, { mood: event.target.value })} />
@@ -283,7 +283,7 @@ function VideoNode({ id, data, selected }) {
     : (supportsFirstFrame && supportsLastFrame
       ? '按连线顺序：第一条图片连线当首帧，第二条当尾帧'
       : (supportsFirstFrame ? '从图片节点的圆点连过来，当首帧' : '该模型只吃文本提示词'));
-  return <NodeFrame icon="▶" tone="video" title={data.title || '故事短片'} selected={selected}>
+  return <NodeFrame icon="▶" tone="video" processing={data.generationStatus === 'PENDING'} title={data.title || '故事短片'} selected={selected}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
       : referenceUrl
@@ -308,7 +308,7 @@ function VideoNode({ id, data, selected }) {
 
 function NoteNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="☼" tone="note" title={data.title || '创作便签'} selected={selected}>
+  return <NodeFrame icon="☼" tone="note" processing={data.generationStatus === 'PENDING'} title={data.title || '创作便签'} selected={selected}>
     <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder="记录一个创作想法…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     {selected && <span className="learning-node__hint">便签可以保存你的灵感</span>}
   </NodeFrame>;
@@ -324,7 +324,7 @@ function AudioNode({ id, data, selected }) {
   const musicMode = data.mode === 'DESCRIPTION' ? 'DESCRIPTION' : 'LYRICS';
   const missingPrompt = !String(data.text || data.caption || '').trim();
   const available = AUDIO_MODALITIES.filter(([modality]) => enabledCapabilities?.has(modality.toLowerCase()));
-  return <NodeFrame icon="♫" tone="audio" title={data.title || '音频素材'} selected={selected}>
+  return <NodeFrame icon="♫" tone="audio" processing={data.generationStatus === 'PENDING'} title={data.title || '音频素材'} selected={selected}>
     {audioUrl ? <audio className="learning-node__audio" controls src={audioUrl} /> : <div className="learning-node__audio-placeholder">♫ 音频素材</div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || data.caption || ''} placeholder={isBoxNode && musicMode === 'DESCRIPTION' ? '写下你想要的音乐是什么样子…' : (isBoxNode ? '写下要唱的歌词…' : '音频说明 / 提示词')} maxLength={isBoxNode ? 3000 : 180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
     {isBoxNode && !data.generationStatus ? <SlotParams data={{ slotType: 'music', model: data.model, resolution: musicMode === 'DESCRIPTION' ? '描述生音乐（平台代写词）' : '歌词生音乐' }} /> : null}
@@ -338,7 +338,7 @@ function AudioNode({ id, data, selected }) {
 function AnimationNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
-  return <NodeFrame icon="✧" tone="animation" title={data.title || '动画素材'} selected={selected}>
+  return <NodeFrame icon="✧" tone="animation" processing={data.generationStatus === 'PENDING'} title={data.title || '动画素材'} selected={selected}>
     {videoUrl ? <video className="learning-node__media" controls muted loop src={videoUrl} /> : <div className="learning-node__animation-placeholder">✧ 动画素材</div>}
     <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="动画说明 / 提示词" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
     {canGenerate && enabledCapabilities?.has('video') && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'VIDEO', { title: data.title || '动画素材', prompt: data.text || data.caption || '' })}>✧ {videoUrl ? '重新生成动画' : '生成动画'}</button>}
@@ -364,7 +364,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
   const [viewport, setViewport] = useState(initial.viewport);
   const [contextMenu, setContextMenu] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
-  const { getViewport, screenToFlowPosition, setCenter } = useReactFlow();
+  const { getViewport, screenToFlowPosition, setCenter, fitView } = useReactFlow();
   const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
   const historyRef = useRef({ past: [], future: [] });
   const clipboardRef = useRef([]);
@@ -584,7 +584,13 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片、从圆点连线；右键空白处可创建节点。' : '从左侧「素材」面板添加框体与素材，拖动卡片、从圆点连线。一个框体只能生成一次，框体加入画布后不能删除。'}</div>
+      {!readOnly && <div className="learning-canvas__toolbar">
+        <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}>⟲</button>
+        <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}>⟳</button>
+        <span className="learning-canvas__toolbar-sep" />
+        <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: 0.22, duration: 320 })}>⤢</button>
+      </div>}
+      <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片、从圆点连线；右键空白处可创建节点。' : '从左侧「素材」面板添加框体，写好提示词就能生成。'}</div>
       {previewImage && <div className="learning-canvas__lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}><img src={previewImage} alt="素材预览" onClick={(event) => event.stopPropagation()} /><button type="button" className="learning-canvas__lightbox-close" onClick={() => setPreviewImage(null)}>×</button></div>}
       {contextMenu && allowNodeCreation && <div className="learning-canvas__context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
         <strong>创建节点</strong>
