@@ -321,8 +321,8 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
   const channelId = policy?.modalityChannels?.[String(modality || '').toUpperCase()];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
-    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {} }
-    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {} };
+    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {} }
+    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {} };
   return modelOverride ? { ...base, model: modelOverride } : base;
 }
 

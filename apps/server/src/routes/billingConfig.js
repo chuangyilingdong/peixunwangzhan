@@ -44,6 +44,17 @@ function normalizeRequestTemplates(value) {
   return out;
 }
 
+// 请求路径 / 查询路径：按模态配，值是路径（/v2/video_generation）或完整 URL。
+function normalizePathMap(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const out = {};
+  for (const modality of ['IMAGE', 'VIDEO', 'TEXT', 'MUSIC', 'DUBBING']) {
+    const path = String(input[modality] || '').trim().slice(0, 500);
+    if (path) out[modality] = path;
+  }
+  return out;
+}
+
 function normalizeModelRequestTemplates(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const out = {};
@@ -84,6 +95,8 @@ function normalizeProviderPolicy(value) {
       requestTemplates: normalizeRequestTemplates(item.requestTemplates),
       // 模型级请求模板：只对该模型生效，优先于渠道级模板
       modelRequestTemplates: normalizeModelRequestTemplates(item.modelRequestTemplates),
+      requestPaths: normalizePathMap(item.requestPaths),
+      pollPaths: normalizePathMap(item.pollPaths),
       modalities: [],
     };
   }) : [];

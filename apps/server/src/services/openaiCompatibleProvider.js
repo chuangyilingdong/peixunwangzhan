@@ -41,8 +41,22 @@ function chatCompletionsEndpoint(endpoint) {
   return `${value}/v1/chat/completions`;
 }
 
-function modalityEndpoint(endpoint, modality, modalityEndpoints = {}) {
+// 有些上游不走 /v1 的固定路径（例如 MiniMax V2 是 /v2/video_generation），
+// 允许渠道按模态配完整请求路径；配了就用它（相对路径拼到 host，完整 URL 直接用）。
+function absoluteEndpoint(base, path) {
+  const value = String(path || '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return normalizeEndpoint(value);
+  const normalizedBase = normalizeEndpoint(base);
+  let origin = normalizedBase;
+  try { origin = new URL(normalizedBase).origin; } catch { /* 不是完整 URL 就按原样拼 */ }
+  return `${origin}${value.startsWith('/') ? value : `/${value}`}`;
+}
+
+function modalityEndpoint(endpoint, modality, modalityEndpoints = {}, requestPaths = {}) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
+  const customPath = absoluteEndpoint(endpoint, requestPaths?.[normalizedModality] || requestPaths?.[normalizedModality.toLowerCase()]);
+  if (customPath) return customPath;
   const configured = modalityEndpoints?.[normalizedModality] || modalityEndpoints?.[normalizedModality.toLowerCase()];
   if (configured) return normalizeEndpoint(configured);
   if (normalizedModality === 'TEXT') return chatCompletionsEndpoint(endpoint);
@@ -113,21 +127,35 @@ function mediaCandidate(node, modality, inheritedMime = '') {
     const assetUrl = base64DataUrl(node[key], mimeType);
     if (assetUrl) return { assetUrl, mimeType };
   }
-  for (const key of ['data', 'output', 'result', 'file', 'artifact', 'media', 'content', 'metadata']) {
+  for (const key of ['data', 'output', 'result', 'file', 'artifact', 'media', 'content', 'metadata', 'task', 'tasks', 'outputs']) {
     const found = mediaCandidate(node[key], modality, mimeType);
     if (found) return found;
   }
   return null;
 }
 
+// 异步任务判定：只要有任务 id 且不是终态就算「还在跑」。
+// 注意 MiniMax V2 的提交响应只有 {task_id}，不带 status，所以不能只认状态白名单。
+// MiniMax V2 把状态与结果都包在 task 里（{ task: { status, content: { url } } }），
+// 这里统一往下取一层。
+function taskNode(payload) {
+  return payload?.task && typeof payload.task === 'object' ? payload.task : null;
+}
+function payloadStatus(payload) {
+  return String(taskNode(payload)?.status || payload?.data?.status || payload?.status || payload?.state || '').trim().toLowerCase();
+}
+function payloadTaskId(payload) {
+  const inner = taskNode(payload);
+  return payload?.id || payload?.task_id || payload?.data?.task_id || inner?.id || inner?.task_id || '';
+}
 function pendingPayload(payload) {
-  const status = String(payload?.data?.status || payload?.status || payload?.state || '').trim().toLowerCase();
-  return Boolean((payload?.id || payload?.task_id || payload?.data?.task_id) && ['queued', 'pending', 'processing', 'running', 'in_progress', 'in-progress', 'not_start', 'submitted'].includes(status));
+  const status = payloadStatus(payload);
+  if (['failed', 'failure', 'error', 'cancelled', 'canceled', 'succeeded', 'success', 'completed', 'done', 'finished'].includes(status)) return false;
+  return Boolean(payloadTaskId(payload));
 }
 
 function failedPayload(payload) {
-  const status = String(payload?.data?.status || payload?.status || payload?.state || '').trim().toLowerCase();
-  return ['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(status);
+  return ['failed', 'failure', 'error', 'cancelled', 'canceled'].includes(payloadStatus(payload));
 }
 
 function providerFailureMessage(payload) {
@@ -140,11 +168,13 @@ function providerFailureMessage(payload) {
   ).slice(0, 500);
 }
 
-function pollUrlFromPayload(payload, requestUrl) {
+function pollUrlFromPayload(payload, requestUrl, pollPath = '') {
   const explicit = payload?.poll_url || payload?.pollUrl || payload?.status_url || payload?.statusUrl || payload?.url;
   if (typeof explicit === 'string' && /^https?:\/\//i.test(explicit)) return explicit;
-  const taskId = payload?.id || payload?.task_id || payload?.data?.task_id;
+  const taskId = payloadTaskId(payload);
   if (!taskId) return '';
+  // 渠道配了查询路径模板（如 /v2/query/video_generation/{id}）就按它拼。
+  if (pollPath) return absoluteEndpoint(requestUrl, pollPath).replace(/\{(?:id|task_id)\}/g, encodeURIComponent(String(taskId)));
   return `${normalizeEndpoint(requestUrl)}/${encodeURIComponent(String(taskId))}`;
 }
 
@@ -282,11 +312,11 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
   };
 }
 
-async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, timeout, pollIntervalMs, title, providerName, model }) {
+async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, timeout, pollIntervalMs, title, providerName, model, pollPath = '' }) {
   let payload = initialPayload;
   const deadline = Date.now() + timeout;
-  while (pendingPayload(payload)) {
-    const pollUrl = pollUrlFromPayload(payload, requestUrl);
+  while (pendingPayload(payload) && !mediaCandidate(payload, modality)) {
+    const pollUrl = pollUrlFromPayload(payload, requestUrl, pollPath);
     if (!pollUrl) break;
     const wait = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
     if (wait <= 0) throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
@@ -302,7 +332,7 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, time
   return assetFromResponse({ payload, modality, title, providerName, model });
 }
 
-export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {} } = {}) {
+export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {}, requestPaths = {}, pollPaths = {} } = {}) {
   const providerName = String(name || 'openai-compatible').trim();
   const providerModel = String(model || '').trim();
   const timeout = Math.max(1000, Math.min(300000, Number(timeoutMs) || AI_PROVIDER_TIMEOUT_MS));
@@ -317,7 +347,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
       if (!Object.prototype.hasOwnProperty.call(DEFAULT_MODALITY_PATHS, normalizedModality)) {
         throw providerError('当前真实 AI 适配器暂不支持该素材类型。', PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED);
       }
-      const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints);
+      const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints, requestPaths);
       const response = await fetchWithTimeout(url, {
         body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates }),
         apiKey,
@@ -327,7 +357,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
       const parsed = await parseResponse(response, normalizedModality);
       if (!response.ok) throw providerHttpError(response, parsed);
       if (normalizedModality !== 'TEXT' && !parsed?.binary && pendingPayload(parsed)) {
-        return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel })] };
+        return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '' })] };
       }
       return { assets: [assetFromResponse({ payload: parsed, binary: parsed?.binary, contentType: parsed?.contentType, modality: normalizedModality, title, providerName, model: providerModel })] };
     },
@@ -335,7 +365,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     // signal：调用方中断（学生点「停止」或连接断开）时中止上游请求；onReasoning：推理型模型
     // 的思考增量（reasoning_content），用于给学生显示「正在思考」的进度。
     async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, signal } = {}) {
-      const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints);
+      const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints, requestPaths);
       const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates, messages, stream: true });
       const controller = new AbortController();
       let callerAborted = false;
