@@ -71,7 +71,6 @@ function InnerCircleHeader({ userBadge, session, logout }) {
   const closeMenu = () => setMenuOpen(false);
   
   // 学生用户下拉菜单（在 InnerCircle 首页也需要）
-  const [showStudentMenu, setShowStudentMenu] = useState(false);
   const studentMenuItems = [
     { to: '/learn', icon: '🎨', label: '进入学习' },
     { to: '/my-works', icon: '✧', label: '我的作品' },
@@ -387,14 +386,15 @@ function App(){
     if (ogUrl) ogUrl.setAttribute('content', window.location.origin + (loc.pathname === '/' ? '' : loc.pathname));
     if (analyticsConsent === true) trackAnalytics('page_view', { title });
   }, [loc.pathname, analyticsConsent]);
+  // ⚠️ hook 必须全部写在下面的提前 return 之前：学生会话过期时 App 会在这里提前返回，
+  // 若 hook 在其后，同一次渲染里 hook 数从 7 变 6，React 抛 #300 直接白屏（而不是跳登录页）。
+  const [showStudentMenu, setShowStudentMenu] = useState(false);
   if (loc.pathname.startsWith('/learn') && !session) {
     return <Navigate to='/login' replace />;
   }
   function decide(value) { setAnalyticsConsent(value); setAnalyticsConsentState(value); if (value) trackAnalytics('analytics_consent_granted'); }
   const roleBadge = { STUDENT: '小小创作者', TEACHER: '教师', ORG_ADMIN: '机构管理员', SUPER_ADMIN: '平台管理员', PLATFORM_ADMIN: '平台管理员' };
-  
-  // 学生用户下拉菜单
-  const [showStudentMenu, setShowStudentMenu] = useState(false);
+  // 学生用户下拉菜单（showStudentMenu 这个 state 在上面统一声明，必须在提前 return 之前）
   const studentMenuItems = [
     { to: '/learn', icon: '🎨', label: '进入学习' },
     { to: '/my-works', icon: '✧', label: '我的作品' },

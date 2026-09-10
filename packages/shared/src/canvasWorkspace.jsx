@@ -172,23 +172,59 @@ export function CanvasWorkspace({ api, ...props }) {
     return () => clearTimeout(timer);
   }, [api, changed, draft, editable, project.data?.id]);
 
-  // 刷新后恢复生成状态：服务端已有任务的框体，把节点补回画布（生成中的显示「AI生成中…」）。
+  // 把服务端任务产出的素材挂到节点数据上：文字挂文本，图片/视频/音乐挂地址。
+  function assetNodeData(nodeData, asset) {
+    if (!asset) return {};
+    if (String(nodeData?.slotType || '') === 'text') return { generatedText: String(asset.metadata?.text || asset.text || '') };
+    const url = String(asset.assetUrl || '');
+    return url ? { assetUrl: url, previewUrl: String(asset.previewUrl || '') || url } : {};
+  }
+
+  // 对齐生成状态：服务端任务有结果的框体，既要把缺失的节点补回画布，
+  // 也要**就地更新已经在画布上的节点**——生成期间刷新过页面的话，节点会停在「AI生成中…」，
+  // 之前只补节点不更新，任务早就成功了节点也永远不变（学生反馈：等了十多分钟还在「AI生成中」）。
   useEffect(() => {
-    if (!editable || !project.data || !generations.data) return;
+    if (!editable || !project.data || !generations.data) return undefined;
     const boxes = Array.isArray(project.data.generationBoxes) ? project.data.generationBoxes : [];
-    if (!boxes.length) return;
+    if (!boxes.length) return undefined;
     const current = draft || canvasSnapshot || project.data.canvasSnapshot;
-    if (!current) return;
-    const existing = new Set((current.nodes || []).filter((node) => node.data?.boxId).map((node) => node.data.boxId));
-    const missing = boxes.filter((box) => jobByBox.has(box.id) && !existing.has(box.id));
-    if (!missing.length) return;
-    let next = current;
+    if (!current) return undefined;
+    const boxIds = new Set(boxes.map((box) => box.id));
+    const onCanvas = new Set();
+    let touched = false;
+    const nodes = (current.nodes || []).map((node) => {
+      const boxId = String(node.data?.boxId || '');
+      if (!boxId || !boxIds.has(boxId)) return node;
+      onCanvas.add(boxId);
+      const job = jobByBox.get(boxId);
+      if (!job) return node;
+      const status = String(job.status || '');
+      const asset = Array.isArray(job.assets) ? job.assets[0] : null;
+      // 已完成：把结果挂上去（已经有结果的节点不覆盖，避免把学生后来生成的成果换掉）
+      if (status === 'SUCCEEDED' && asset && !node.data.assetUrl && !node.data.generatedText) {
+        touched = true;
+        return { ...node, data: { ...node.data, ...assetNodeData(node.data, asset), generationStatus: null, generationError: '' } };
+      }
+      // 已失败：把「生成中」翻成失败并带上原因
+      if (status === 'FAILED' && node.data.generationStatus === 'PENDING') {
+        touched = true;
+        return { ...node, data: { ...node.data, generationStatus: 'FAILED', generationError: job.errorMessage || '生成失败' } };
+      }
+      return node;
+    });
+    const missing = boxes.filter((box) => jobByBox.has(box.id) && !onCanvas.has(box.id));
+    let next = touched ? { ...current, nodes } : current;
     for (const box of missing) {
       const job = jobByBox.get(box.id);
       const succeeded = String(job.status) === 'SUCCEEDED';
       next = { ...next, nodes: [...(next.nodes || []), buildBoxNode(box, next, { asset: succeeded ? job.assets?.[0] : null, pending: !succeeded })] };
     }
-    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
+    if (!touched && !missing.length) return undefined;
+    setCanvasSnapshot(next); setDraft(next);
+    // 画布组件内部自己维护节点状态，只有重挂（key 变化）才会读到改过的快照——
+    // 补节点和就地更新都要递增 canvasRevision，否则库里已经是「已完成」，界面还停在「AI生成中」。
+    setCanvasRevision((value) => value + 1);
+    return undefined;
   }, [canvasSnapshot, draft, editable, generations.data, project.data]);
 
   // 还有任务在跑就轮询，跑完的结果会自动补到画布上。
