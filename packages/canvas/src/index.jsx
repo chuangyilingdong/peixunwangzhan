@@ -179,7 +179,7 @@ function NodePort({ side }) {
   </Handle>;
 }
 
-function NodeFrame({ icon, tone, title, children, selected, aspectRatio = '', processing = false, onRename = null, renameDisabled = false }) {
+function NodeFrame({ icon, tone, title, children, selected, aspectRatio = '', variant = 'card', processing = false, onRename = null, renameDisabled = false }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
   // 标题默认是纯文本、双击才变输入框：单击就能编辑的话，学生想拖卡片往往点进输入框里，
@@ -188,33 +188,46 @@ function NodeFrame({ icon, tone, title, children, selected, aspectRatio = '', pr
   const canRename = Boolean(onRename) && !readOnly && !renameDisabled;
   const closeRename = () => setRenaming(false);
   // 卡片尺寸由「内容 + 素材画幅」决定，没有缩放手柄（拖动框体只挪位置，改大小用画布缩放）。
+  // 标题：默认纯文本、双击才进编辑；素材类框体（下方 variant="media"）把它当图片上方的说明文字用
+  const titleNode = canRename && renaming
+    ? <input
+      className="learning-node__title nodrag"
+      value={title || ''}
+      placeholder="给这个框体取个名字"
+      maxLength={40}
+      autoFocus
+      aria-label="框体名称"
+      onChange={(event) => onRename(event.target.value)}
+      onBlur={closeRename}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
+    />
+    : <strong
+      className="learning-node__title-text"
+      title={canRename ? '双击改名' : undefined}
+      onDoubleClick={(event) => { if (!canRename) return; event.stopPropagation(); setRenaming(true); }}
+    >{title || (canRename ? '未命名框体' : '')}</strong>;
+  const ports = <><NodePort side="left" /><NodePort side="right" /></>;
+  // 素材类框体（图片/视频/动画）用参考那种展示方式（用户反馈「图3 很难看，像图2那样设计」）：
+  // 标题缩成画面左上方的一行小字，画面本体就是卡片本身——不套深色卡片、不套深色内框。
+  if (variant === 'media') {
+    return <>
+      {ports}
+      <div className={`learning-node learning-node--${tone} learning-node--media${processing ? ' is-processing' : ''}`} style={aspectRatioVars(aspectRatio)}>
+        <div className="learning-node__caption"><span className="learning-node__caption-icon">{icon}</span>{titleNode}</div>
+        {children}
+      </div>
+    </>;
+  }
   return <>
-    <NodePort side="left" />
+    {ports}
     <div className={`learning-node learning-node--${tone}${processing ? ' is-processing' : ''}`} style={aspectRatioVars(aspectRatio)}>
       <div className="learning-node__heading">
         <span>{icon}</span>
-        {canRename && renaming
-          ? <input
-            className="learning-node__title nodrag"
-            value={title || ''}
-            placeholder="给这个框体取个名字"
-            maxLength={40}
-            autoFocus
-            aria-label="框体名称"
-            onChange={(event) => onRename(event.target.value)}
-            onBlur={closeRename}
-            onDoubleClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => { if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
-          />
-          : <strong
-            className="learning-node__title-text"
-            title={canRename ? '双击改名' : undefined}
-            onDoubleClick={(event) => { if (!canRename) return; event.stopPropagation(); setRenaming(true); }}
-          >{title || (canRename ? '未命名框体' : '')}</strong>}
+        {titleNode}
       </div>
       {children}
     </div>
-    <NodePort side="right" />
   </>;
 }
 
@@ -328,11 +341,12 @@ function ImageNode({ id, data, selected }) {
   const imageUrl = data.previewUrl || data.assetUrl;
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
   const referenceUrl = !imageUrl ? String(data.referenceUrl || '') : '';
-  return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {imageUrl
       ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={imageUrl} alt={data.caption || 'AI生成画面'} onClick={() => openPreview(imageUrl)} title="点击放大查看" />
       : referenceUrl
-        ? <figure className="learning-node__reference nodrag"><img src={referenceUrl} alt="框体预置素材" title="点击放大查看" onClick={() => openPreview(referenceUrl)} /><figcaption>框体预置素材</figcaption></figure>
+        // 画面本体就是卡片：不再套 figure +「框体预置素材」那行说明（底部面板里已经写了来源）
+        ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={referenceUrl} alt="框体预置素材" title="点击放大查看" onClick={() => openPreview(referenceUrl)} />
         : <div className="learning-node__art"><span>{data.emoji || '🌈'}</span><small>在底部面板写画面描述，生成画面</small></div>}
   </NodeFrame>;
 }
@@ -368,12 +382,12 @@ function VideoNode({ id, data, selected }) {
   const referenceUrl = !videoUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
   const incoming = getIncomingImageAssetUrls(id);
   const sourceUrl = referenceUrl || incoming[0] || '';
-  return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
       : sourceUrl
-        // 画面的预览按高度上限缩过了，点一下放大才能看清细节（和图片框体一致）
-        ? <figure className="learning-node__reference nodrag"><img src={sourceUrl} alt="画面来源" title="点击放大查看" onClick={() => openPreview(sourceUrl)} /><figcaption>画面来源（首帧）</figcaption></figure>
+        // 画面本体就是卡片；点一下放大看细节（缩略图按素材比例显示）
+        ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={sourceUrl} alt="画面来源" title="点击放大查看" onClick={() => openPreview(sourceUrl)} />
         : <div className="learning-node__video-preview"><span>▶</span><small>在底部面板写提示词，生成短片</small></div>}
   </NodeFrame>;
 }
@@ -402,7 +416,7 @@ function AudioNode({ id, data, selected }) {
 function AnimationNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
-  return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {videoUrl
       ? <video className="learning-node__media" controls muted loop src={videoUrl} />
       : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}
@@ -563,26 +577,25 @@ const CANVAS_FIT_PADDING = { top: '24px', right: '40px', bottom: '320px', left: 
 // 这些字段是「边打字边改」的，连续编辑同一条框体的同一批字段只记一条撤销记录。
 const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait', 'place', 'mood', 'emoji', 'studentParams', 'audio']);
 
-// 底部输入面板：贴在当前选中框体的正下方。
-// 「丝滑」的关键是别让它慢半拍：位置用 transform 直接算、不加 CSS 过渡。
-//
-// 锚点策略（用户反馈「平移画布时输入框不该跟着动，只有拖框体时才动」）：
-// **只在框体动了（拖动/换选中框体）时重新取一次画布 transform**，画布平移/缩放不重新取。
-// 之前是实时订阅 transform，于是平移画布时面板会跟着追框体、追到画布边缘又被夹住，
-// 看起来就是「既不跟着框体、也没停在原地」——现在平移时它原地不动，
-// 想把它叫回来点一下任意框体（选中变化会重新锚定）即可。
-function CanvasDockPanel({ node, containerRef, onRequestMaterials }) {
+// 锚点策略（两轮反馈合起来的口径）：
+//  - 平移/缩放**进行中**面板不动：实时订阅 transform 会让它一路追着框体跑、追到画布边缘又被夹住，
+//    看着像乱动（第七轮用户反馈）；
+//  - 松手（onMoveEnd）后重新锚定一次，让面板回到框体下方：否则平移完面板会丢在一边、
+//    和框体彻底分家（第九轮用户反馈的「选中素材 + 空格拖画布后面板跑一边去」）。
+//  - 拖动框体 / 换选中框体时同样重新锚定。
+// 位置用 transform 直接算、不加 CSS 过渡（加了跟随就慢半拍）。
+function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, onRequestMaterials }) {
   const store = useStoreApi();
   const panelRef = useRef(null);
   const [anchor, setAnchor] = useState(null);
   const [panelHeight, setPanelHeight] = useState(0);
   const [box, setBox] = useState({ width: 0, height: 0 });
 
-  // 锚点：只在「框体位置变了 / 换了框体」时重新取画布 transform（见上面的锚点策略）。
+  // 锚点：框体位置变了 / 换了框体 / 画布平移缩放结束（viewportEpoch）时重新取画布 transform
   useLayoutEffect(() => {
     const [x, y, zoom] = store.getState().transform;
     setAnchor((current) => (current && current.x === x && current.y === y && current.zoom === zoom ? current : { x, y, zoom }));
-  }, [store, node.id, node.position.x, node.position.y]);
+  }, [store, node.id, node.position.x, node.position.y, viewportEpoch]);
 
   // 面板高度随内容变（分段参数出现/消失、提示词换行），量出来才能判断放得下放不下。
   useLayoutEffect(() => {
@@ -665,6 +678,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
+  // 画布平移/缩放「结束」的计数：面板靠它在那之后重新锚定一次（过程中不动，见 CanvasDockPanel 注释）
+  const [viewportEpoch, setViewportEpoch] = useState(0);
   const [contextMenu, setContextMenu] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
   // 底部面板要编辑哪个框体：优先当前选中的，取消选中后沿用上一次（面板不会突然消失）
@@ -934,7 +949,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={() => setContextMenu(null)}
         onDragOver={(event) => event.preventDefault()}
-        onMoveEnd={() => setViewport(getViewport())}
+        onMoveEnd={() => { setViewport(getViewport()); setViewportEpoch((n) => n + 1); }}
         fitView
         // 初始视野：内容靠上、下面留出输入面板的位置。
         // fitView 默认把内容**垂直居中**，而面板贴在被选中框体下方、高 160~320px，
@@ -962,7 +977,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} onRequestMaterials={onRequestMaterials} /> : null}
+      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportEpoch={viewportEpoch} onRequestMaterials={onRequestMaterials} /> : null}
       {!readOnly && <div className="learning-canvas__toolbar">
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>

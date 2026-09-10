@@ -87,6 +87,33 @@
    原来这套把手/把手线的样式已随 NodeResizer 一起删掉。 */
 
 .learning-node__media--zoomable { cursor: zoom-in; }
+
+/* ── 素材类框体（图片/视频/动画）：标题是画面左上方一行小字，画面本体就是卡片 ──
+   用户拿着参考（图2：图片上方一行小字说明 + 图片本身铺满）反馈「图3 很难看」：
+   原来是我们给画面套了一层深色卡片 + 深色内框，图在里面被缩成一张小图。
+   现在素材类框体不画卡片外壳，画面自己就是卡片（圆角 + 细边框 + 选中时主色描边）。 */
+.learning-node--media { min-width: 0; border: 0; border-radius: 0; overflow: visible; background: transparent; box-shadow: none; }
+.learning-node--media:hover { border-color: transparent; }
+.react-flow__node.selected .learning-node--media { border-color: transparent; box-shadow: none; }
+.learning-node__caption { display: flex; align-items: center; gap: 6px; max-width: var(--cv-media-max-w); padding: 0 2px 8px; color: var(--cv-text-dim); }
+.learning-node__caption-icon { display: grid; place-items: center; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 6px; color: var(--cv-primary); background: rgb(163 254 68 / 12%); font-size: 11px; font-weight: 900; }
+.learning-node__caption .learning-node__title-text { font-size: 12.5px; font-weight: 600; color: var(--cv-text-dim); }
+.learning-node__caption .learning-node__title { width: min(180px, 100%); font-size: 12.5px; padding: 1px 5px; }
+/* 画面：按自身比例铺满（不再有深色内框和内边距），高度上限只用来挡竖图 */
+.learning-node--media .learning-node__media,
+.learning-node--media .learning-node__reference img {
+  display: block; width: auto; max-width: var(--cv-media-max-w); max-height: var(--cv-media-max-h);
+  margin: 0; object-fit: contain; border: 1px solid var(--cv-border); border-radius: 12px; background: #141419;
+}
+.learning-node--media .learning-node__reference { margin: 0; }
+.react-flow__node.selected .learning-node--media .learning-node__media,
+.react-flow__node.selected .learning-node--media .learning-node__reference img { border-color: var(--cv-primary); box-shadow: 0 0 0 1px var(--cv-primary), 0 16px 40px rgb(0 0 0 / 40%); }
+/* 还没生成时的占位板：按槽位画幅（参考里「空的图片节点」也是一块竖/横的板） */
+.learning-node--media .learning-node__art,
+.learning-node--media .learning-node__video-preview,
+.learning-node--media .learning-node__animation-placeholder { margin: 0; }
+.learning-node--media .learning-node__media { flex: 0 0 auto; align-self: flex-start; }
+
 .learning-node__reference { margin: 12px; }
 /* 9:16 这类竖图**不能按卡片宽度铺开**：宽度撑满时高度 = 宽度 / 0.5625，卡片会长到比画布还高，
    输入面板在下面就没地方放，只能压住卡片（用户反馈「9:16 的图太长了，应该适配屏幕」）。
