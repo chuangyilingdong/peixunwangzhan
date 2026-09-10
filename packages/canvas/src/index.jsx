@@ -3,6 +3,7 @@ import {
   addEdge,
   Background,
   BaseEdge,
+  EdgeLabelRenderer,
   Controls,
   Handle,
   MarkerType,
@@ -347,11 +348,22 @@ function AnimationNode({ id, data, selected }) {
 const NODE_ASSET_KIND = Object.freeze({ image: 'IMAGE', video: 'VIDEO', animation: 'VIDEO', audio: 'AUDIO' });
 
 // 连线：干净贝塞尔曲线 + 一段沿路径游走的主色高光（复刻参考的发光连线，方向由光带表达）。
-function GlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected }) {
-  const [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+function GlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected, source, target }) {
+  const { removeEdge } = useCanvasActions();
+  const [path, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   return <>
     <BaseEdge id={id} path={path} className={`learning-edge${selected ? ' is-selected' : ''}`} />
     <path d={path} className="learning-edge__glow" />
+    {selected && removeEdge ? <EdgeLabelRenderer>
+      <button
+        type="button"
+        className="learning-edge__delete nodrag nopan"
+        style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+        title="删除这条连接"
+        aria-label="删除这条连接"
+        onClick={(event) => { event.stopPropagation(); removeEdge(id); }}
+      >×</button>
+    </EdgeLabelRenderer> : null}
   </>;
 }
 const edgeTypes = { default: GlowEdge };
@@ -421,7 +433,22 @@ function NodeEditPanel({ node, onRequestMaterials }) {
   if (!supportsPrompt) {
     return <div className="learning-canvas__panel-inner"><span className="learning-node__seg-label">{data.title || node.type}</span><span className="cv-muted">这个节点直接在卡片上编辑，没有生成参数。</span></div>;
   }
+  // 面板上方的参考图预览条：连线引过来的首帧/尾帧/参考素材（参考实现在面板上方也有一条预览）
+  const refPreview = (slotType === 'video' || slotType === 'animation')
+    ? (() => {
+      const inputModes = Array.isArray(data.inputModes) ? data.inputModes : [];
+      if (inputModes.includes('OMNI_REFERENCE')) {
+        return getIncomingAssetRefs(id).filter((asset) => asset.type === 'IMAGE').slice(0, 6).map((asset, index) => ({ url: asset.url, label: `参考${index + 1}` }));
+      }
+      const incoming = getIncomingImageAssetUrls(id).filter(Boolean);
+      const items = [];
+      if (incoming[0] || data.referenceUrl) items.push({ url: incoming[0] || String(data.referenceUrl), label: '首帧' });
+      if (incoming[1] && inputModes.includes('LAST_FRAME')) items.push({ url: incoming[1], label: '尾帧' });
+      return items;
+    })()
+    : [];
   return <div className="learning-canvas__panel-inner">
+    {refPreview.length ? <div className="learning-node__ref-preview">{refPreview.map((item, index) => <figure key={`${item.url}-${index}`}><img src={item.url} alt={item.label} /><figcaption><strong>{item.label}</strong>连线引用中</figcaption></figure>)}</div> : null}
     <textarea className="learning-node__textarea nodrag" value={promptValue} placeholder={placeholder} maxLength={isBox ? 3000 : 300} disabled={readOnly} onChange={(event) => setPrompt(event.target.value)} />
     {slotType === 'video' || slotType === 'animation' ? <FrameRefRows
       incoming={getIncomingImageAssetUrls(id)}
@@ -433,9 +460,10 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     /> : null}
     <SlotParamPickers id={id} data={data} />
     <div className="learning-node__panel-footer nodrag">
-      <span className={`learning-node__status-chip${state === 'running' ? ' is-running' : state === 'failed' ? ' is-error' : (state === 'done' || state === 'asset') ? ' is-done' : ''}`}>{state === 'running' ? '生成中…' : state === 'failed' ? (data.generationError || '生成失败') : state === 'done' ? '已生成' : state === 'asset' ? '素材' : '未生成'}</span>
-      <button type="button" className="learning-canvas__config-chip" title="本框体的生成配置来自课时设置" onClick={() => onRequestMaterials?.()}>✦ {configLabel}</button>
       <button type="button" className="learning-canvas__plus" title="打开左侧素材面板" aria-label="打开素材面板" onClick={() => onRequestMaterials?.()}>＋</button>
+      <button type="button" className="learning-canvas__config-chip" title="本框体的生成配置来自课时设置" onClick={() => onRequestMaterials?.()}>✦ {configLabel}</button>
+      <span className="learning-canvas__panel-spacer" />
+      <span className={`learning-node__status-chip${state === 'running' ? ' is-running' : state === 'failed' ? ' is-error' : (state === 'done' || state === 'asset') ? ' is-done' : ''}`}>{state === 'running' ? '生成中…' : state === 'failed' ? (data.generationError || '生成失败') : state === 'done' ? '已生成' : state === 'asset' ? '素材' : '未生成'}</span>
       {canGenerate && generate && state !== 'running' ? <button type="button" className="learning-node__submit" disabled={readOnly || Boolean(generate.blocked)} title={generate.blocked || generate.label} onClick={() => generateNode(id, generate.modality, generate.payload)}>{generate.label}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg></button> : null}
     </div>
     {generate?.blocked ? <span className="learning-node__generation-state is-error">{generate.blocked}</span> : null}
@@ -544,6 +572,13 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     setContextMenu({ x: event.clientX, y: event.clientY, position: screenToFlowPosition({ x: event.clientX, y: event.clientY }) });
   }, [readOnly, allowNodeCreation, screenToFlowPosition]);
 
+  // 删掉一条连线（学生连错了能自己取消，不会定死）
+  const removeEdge = useCallback((edgeId) => {
+    if (readOnly) return;
+    pushHistory({ nodes, edges, viewport });
+    setEdges((current) => current.filter((edge) => edge.id !== edgeId));
+  }, [edges, nodes, pushHistory, readOnly, setEdges, viewport]);
+
   const onConnect = useCallback((connection) => {
     if (readOnly) return;
     pushHistory({ nodes, edges, viewport });
@@ -648,7 +683,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, removeEdge, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}

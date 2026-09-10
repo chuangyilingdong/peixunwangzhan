@@ -196,3 +196,28 @@
 .learning-node__title:hover:not(:disabled) { border-color: var(--cv-border-strong); }
 .learning-node__title:focus { outline: none; border-color: var(--cv-primary); background: rgb(0 0 0 / 25%); }
 .learning-node__title:disabled { color: var(--cv-text); cursor: default; }
+
+/* ── 连线交互：悬停/选中反馈 + 选中时中点出现删除按钮（连错了能取消，不会定死） ── */
+.learning-canvas .react-flow__edge { cursor: pointer; }
+.learning-canvas .react-flow__edge:hover .learning-edge { stroke: #8f8f9a; stroke-width: 2.4; }
+.learning-canvas .learning-edge.is-selected { stroke: var(--cv-primary); stroke-width: 2.6; }
+.learning-canvas .learning-edge__delete { position: absolute; z-index: 10; display: grid; place-items: center; width: 26px; height: 26px; padding: 0 0 2px; border: 1px solid rgb(255 107 107 / 45%); border-radius: 999px; color: #ffb4b4; background: rgb(28 28 33 / 96%); font-size: 16px; line-height: 1; cursor: pointer; pointer-events: all; box-shadow: 0 8px 18px rgb(0 0 0 / 45%); transition: background var(--cv-motion) ease-out, color var(--cv-motion) ease-out; }
+.learning-canvas .learning-edge__delete:hover { color: #fff; background: rgb(255 107 107 / 88%); }
+
+/* ── 底部面板：出现与切换的动效 ── */
+.learning-canvas__panel { animation: cv-panel-in 220ms cubic-bezier(.2, .8, .2, 1); }
+@keyframes cv-panel-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.learning-canvas__panel-spacer { flex: 1 1 auto; }
+
+/* ── 节点交互反馈：悬停 / 按下 / 拖动 ── */
+.learning-node { transition: border-color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out, transform 160ms ease-out; }
+.react-flow__node.dragging .learning-node { box-shadow: 0 26px 64px rgb(0 0 0 / 55%); transform: scale(1.012); }
+.react-flow__node:active .learning-node { transform: scale(.996); }
+.react-flow__node.dragging, .react-flow__node:active { cursor: grabbing; }
+
+/* 面板里的「画面来源」预览条（连线连过来的参考图，参考实现在面板上方有一条预览） */
+.learning-node__ref-preview { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.learning-node__ref-preview figure { display: flex; align-items: center; gap: 8px; margin: 0; padding: 6px 10px 6px 6px; border: 1px solid var(--cv-border-strong); border-radius: 12px; }
+.learning-node__ref-preview img { width: 46px; height: 46px; border-radius: 8px; object-fit: cover; }
+.learning-node__ref-preview figcaption { color: var(--cv-text-dim); font-size: 10.5px; line-height: 1.5; }
+.learning-node__ref-preview figcaption strong { display: block; color: var(--cv-text); font-size: 11px; }
