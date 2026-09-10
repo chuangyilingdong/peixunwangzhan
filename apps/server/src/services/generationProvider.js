@@ -45,13 +45,14 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
   };
 }
 
-function providerSelection({ provider, model, endpoint, channelId, requestTemplates } = {}) {
+function providerSelection({ provider, model, endpoint, channelId, requestTemplates, modelRequestTemplates } = {}) {
   return {
     provider: String(provider || AI_PROVIDER).trim(),
     model: String(model || AI_PROVIDER_MODEL).trim(),
     endpoint: String(endpoint || AI_PROVIDER_ENDPOINT).trim(),
     channelId: String(channelId || 'default').trim(),
     requestTemplates: requestTemplates && typeof requestTemplates === 'object' ? requestTemplates : {},
+    modelRequestTemplates: modelRequestTemplates && typeof modelRequestTemplates === 'object' ? modelRequestTemplates : {},
   };
 }
 
@@ -81,5 +82,5 @@ export function getGenerationProvider(selection = {}) {
   if (isMockProvider(config.provider)) return mockProvider(config.model);
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates });
 }

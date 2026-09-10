@@ -29,12 +29,29 @@ const CONFIG_TYPES = new Set(['MODALITY_SETTING', 'CREDIT_QUOTA', 'ALERT_THRESHO
 const BUDGET_MAX = 100000000;
 
 // 管理员可为每个模态覆盖请求体模板；只接受 JSON 对象，非法模板直接丢弃（回落到默认模板）。
+// 模板可以按模态给（渠道级），也可以按模型给（模型级优先）：同渠道里不同模型请求体可能完全不同。
+function parseTemplateValue(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return { valid: true, template: value };
+  return parseRequestTemplate(value);
+}
 function normalizeRequestTemplates(value) {
   const input = value && typeof value === 'object' ? value : {};
   const out = {};
   for (const modality of ['IMAGE', 'VIDEO', 'TEXT', 'DUBBING']) {
     const parsed = parseRequestTemplate(input[modality]);
     if (parsed.valid && parsed.template) out[modality] = parsed.template;
+  }
+  return out;
+}
+
+function normalizeModelRequestTemplates(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const out = {};
+  for (const [modelId, template] of Object.entries(input).slice(0, 100)) {
+    const id = String(modelId || '').trim().slice(0, 200);
+    if (!id) continue;
+    const parsed = parseTemplateValue(template);
+    if (parsed.valid && parsed.template) out[id] = parsed.template;
   }
   return out;
 }
@@ -65,6 +82,8 @@ function normalizeProviderPolicy(value) {
       // 逐模型能力清单（比例/清晰度/时长/音频）与可选的请求体模板
       modelCapabilities: normalizeChannelModelCapabilities(item.modelCapabilities, modalityOfChannel(channelId)),
       requestTemplates: normalizeRequestTemplates(item.requestTemplates),
+      // 模型级请求模板：只对该模型生效，优先于渠道级模板
+      modelRequestTemplates: normalizeModelRequestTemplates(item.modelRequestTemplates),
       modalities: [],
     };
   }) : [];

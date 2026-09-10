@@ -3,18 +3,35 @@
 // 未声明的模型回落到模态默认值。这些值是「发给模型的原始取值」，所以按原样存、按原样发。
 const MAX_LIST = 24;
 
-// 视频模型的「输入画面」支持方式，可多选：一个模型可以既支持文生、也支持图生/首尾帧
-// （MiniMax-H3 就是这种），所以这里是能力集合，不是二选一。
-//   TEXT        文生视频（可以只给文本）
-//   FIRST_FRAME 图生视频（可以给一张首帧图）
-//   LAST_FRAME  首尾帧（可以再给一张尾帧图，前提是有首帧）
-export const INPUT_MODES = Object.freeze(['TEXT', 'FIRST_FRAME', 'LAST_FRAME']);
+// 视频模型的「输入画面」支持方式，可多选：一个模型可以同时支持多种
+// （MiniMax-H3 就是文生/图生/首尾帧/多素材参考都支持），所以这里是能力集合，不是二选一。
+//   TEXT               文生视频（可以只给文本）
+//   FIRST_FRAME        图生视频（可以给一张首帧图）
+//   FIRST_LAST_FRAME   首尾帧参考（首帧 + 尾帧）
+//   OMNI_REFERENCE     全能参考（多张图片 / 多段视频 / 多段音频混合参考）
+export const INPUT_MODES = Object.freeze(['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE']);
 
 export const INPUT_MODE_LABELS = Object.freeze({
   TEXT: '文生视频（纯文本）',
   FIRST_FRAME: '图生视频（首帧图）',
-  LAST_FRAME: '首尾帧（尾帧图）',
+  FIRST_LAST_FRAME: '首尾帧参考（首帧+尾帧）',
+  OMNI_REFERENCE: '全能参考（多图/多视频/多音频）',
 });
+
+// 旧写法（含 2026-09-10 上线的三态版本）统一映射到新枚举。
+const INPUT_MODE_ALIASES = Object.freeze({
+  NONE: 'TEXT',
+  FIRST: 'FIRST_FRAME',
+  LAST: 'FIRST_LAST_FRAME',
+  LAST_FRAME: 'FIRST_LAST_FRAME',
+  OMNI: 'OMNI_REFERENCE',
+  REFERENCE: 'OMNI_REFERENCE',
+});
+
+export function normalizeInputModeValue(value) {
+  const text = String(value ?? '').trim().toUpperCase();
+  return INPUT_MODE_ALIASES[text] || text;
+}
 
 export function defaultInputModes(modelId) {
   return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '').trim()) ? ['FIRST_FRAME'] : ['TEXT'];
@@ -83,21 +100,27 @@ export function normalizeModelCapabilities(value, modality, modelId = '') {
 function normalizeInputModes(value, modelId) {
   if (!Array.isArray(value) && (value === undefined || value === null || value === '')) return defaultInputModes(modelId);
   const raw = Array.isArray(value) ? value : [value];
-  const mapped = raw.map((item) => {
-    const text = String(item ?? '').trim().toUpperCase();
-    if (text === 'NONE') return 'TEXT';
-    if (text === 'FIRST') return 'FIRST_FRAME';
-    if (text === 'LAST') return 'LAST_FRAME';
-    return text;
-  }).filter((item) => INPUT_MODES.includes(item));
+  const mapped = raw.map((item) => normalizeInputModeValue(item)).filter((item) => INPUT_MODES.includes(item));
   const modes = [...new Set(mapped)];
   return modes.length ? modes : defaultInputModes(modelId);
 }
 
-/** 该模型是否只能靠图片输入（不支持纯文本）：不支持文生就必须给首帧。 */
+/** 该模型是否只能靠画面输入（不支持纯文本）：不支持文生就必须给首帧。 */
 export function requiresFirstFrameFor(inputModes) {
   const modes = Array.isArray(inputModes) ? inputModes : [];
   return modes.length > 0 && !modes.includes('TEXT');
+}
+
+/** 该模型是否接受首帧图（图生 / 首尾帧 / 全能参考都算）。 */
+export function acceptsFirstFrame(inputModes) {
+  const modes = Array.isArray(inputModes) ? inputModes : [];
+  return modes.includes('FIRST_FRAME') || modes.includes('FIRST_LAST_FRAME') || modes.includes('OMNI_REFERENCE');
+}
+
+/** 该模型是否接受尾帧图（首尾帧 / 全能参考）。 */
+export function acceptsLastFrame(inputModes) {
+  const modes = Array.isArray(inputModes) ? inputModes : [];
+  return modes.includes('FIRST_LAST_FRAME') || modes.includes('OMNI_REFERENCE');
 }
 
 /** 渠道级 modelCapabilities 归一化：{ [modelId]: {...} } */
@@ -137,16 +160,10 @@ export function validateModelCapabilitiesInput(value, modality, modelId = '') {
     const modesValue = input.inputModes ?? input.inputFrame;
     if (modesValue !== undefined && modesValue !== null && modesValue !== '') {
       const raw = Array.isArray(modesValue) ? modesValue : [modesValue];
-      const mapped = raw.map((item) => {
-        const text = String(item ?? '').trim().toUpperCase();
-        if (text === 'NONE') return 'TEXT';
-        if (text === 'FIRST') return 'FIRST_FRAME';
-        if (text === 'LAST') return 'LAST_FRAME';
-        return text;
-      });
+      const mapped = raw.map((item) => normalizeInputModeValue(item));
       const invalid = mapped.filter((item) => !INPUT_MODES.includes(item));
       // 空数组＝未声明，跟留空一样按模型名自动判断，不算错。
-      if (invalid.length) errors.push(`「输入画面」只支持 文生视频 / 图生视频（首帧）/ 首尾帧（尾帧），不认识：${invalid.join('、')}`);
+      if (invalid.length) errors.push(`「输入画面」只支持 文生视频 / 图生视频（首帧）/ 首尾帧参考 / 全能参考，不认识：${invalid.join('、')}`);
     }
     const audio = input.audio;
     if (audio !== undefined && typeof audio !== 'boolean' && audio !== 1 && audio !== 0) errors.push('「支持生成音频」只能是勾选或不勾选');
@@ -191,7 +208,8 @@ export function listChannelModels(policy, modality) {
 }
 
 /** 生成请求模板的可用占位符。 */
-export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'audio', 'voice', 'n', 'firstFrameUrl', 'lastFrameUrl', 'messages']);
+// durationSeconds 保持改造前的字符串形态（seconds: '5'），需要数字的上游用 durationSecondsNumber。
+export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'durationSecondsNumber', 'audio', 'voice', 'n', 'firstFrameUrl', 'lastFrameUrl', 'frameItems', 'referenceItems', 'messages']);
 
 // 默认请求模板刻意与改造前的请求体同形，只把写死的值换成占位符：
 // 管理员没改模板时，线上请求形状不变。视频的比例与音频放在 metadata 里（该字段原本就是透传袋），
@@ -208,10 +226,32 @@ export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   DUBBING: Object.freeze({ model: '{{model}}', input: '{{prompt}}', voice: '{{voice}}', response_format: 'mp3' }),
 });
 
+// 整串占位符的取值：durationSecondsNumber / n 给数字、audio 给布尔，其余沿用字符串形态
+// （老模板里的 seconds: '{{durationSeconds}}' 必须还是 '5'，不能变成数字）。
+function typedTemplateValue(key, context) {
+  // 上下文里只有 durationSeconds，这个是它的数字形态。
+  if (key === 'durationSecondsNumber') return Number(context.durationSeconds) || 0;
+  // MiniMax V2 风格的 content 项：有哪张就给哪项，没有就不加（避免发出空 url）。
+  if (key === 'frameItems') {
+    const items = [];
+    const first = String(context.firstFrameUrl || '').trim();
+    const last = String(context.lastFrameUrl || '').trim();
+    if (first) items.push({ type: 'image_url', image_url: { url: first }, role: 'first_frame' });
+    if (last) items.push({ type: 'image_url', image_url: { url: last }, role: 'last_frame' });
+    return items;
+  }
+  if (key === 'referenceItems') {
+    const urls = Array.isArray(context.referenceUrls) ? context.referenceUrls : [];
+    return urls.filter(Boolean).slice(0, 9).map((url) => ({ type: 'image_url', image_url: { url: String(url) }, role: 'reference_image' }));
+  }
+  return templateValue(key, context);
+}
+
 function templateValue(key, context) {
   const value = context[key];
   // 视频时长沿用改造前的字符串形态（seconds: '5'），避免改动线上请求类型。
   if (key === 'durationSeconds') return String(Number(value) || 0);
+  if (key === 'durationSecondsNumber') return Number(context.durationSeconds) || 0;
   if (key === 'n') return Number(value) || 0;
   if (key === 'audio') return value === true;
   // 多轮对话：整串就是 {{messages}} 时返回数组本身（供 chat 类模板使用）。
@@ -225,11 +265,17 @@ function templateValue(key, context) {
  */
 export function renderRequestTemplate(template, context) {
   const walk = (node) => {
-    if (Array.isArray(node)) return node.map(walk);
+    // 数组里如果放了会展开成数组的占位符（如 {{frameItems}}），摊平一层，
+    // 这样模板可以写成 content: [ {text 项}, "{{frameItems}}" ]。
+    if (Array.isArray(node)) return node.flatMap((item) => {
+      const walked = walk(item);
+      return Array.isArray(walked) ? walked : [walked];
+    });
     if (node && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, walk(v)]));
     if (typeof node !== 'string') return node;
+    // 整串就是一个占位符时保留类型：上游要的是数字/布尔，不能变成字符串。
     const exact = node.match(/^\{\{(\w+)\}\}$/);
-    if (exact && TEMPLATE_PLACEHOLDERS.includes(exact[1])) return templateValue(exact[1], context);
+    if (exact && TEMPLATE_PLACEHOLDERS.includes(exact[1])) return typedTemplateValue(exact[1], context);
     return node.replace(/\{\{(\w+)\}\}/g, (match, key) => (TEMPLATE_PLACEHOLDERS.includes(key) ? String(templateValue(key, context)) : match));
   };
   return walk(template);
@@ -248,8 +294,12 @@ export function parseRequestTemplate(text) {
   }
 }
 
-export function requestTemplateFor(channel, modality, { requiresFirstFrame = false, withLastFrame = false } = {}) {
+export function requestTemplateFor(channel, modality, { model = '', requiresFirstFrame = false, withLastFrame = false } = {}) {
   const key = String(modality || '').toUpperCase();
+  // 同一个渠道里的模型请求体可能完全不同（hailuo 要顶层 image，MiniMax-H3 V2 要 content[]），
+  // 所以模型级模板优先于渠道级。
+  const modelTemplate = model ? channel?.modelRequestTemplates?.[String(model).trim()] : null;
+  if (modelTemplate && typeof modelTemplate === 'object') return modelTemplate;
   const custom = channel?.requestTemplates?.[key];
   if (custom && typeof custom === 'object') return custom;
   if (key === 'VIDEO' && requiresFirstFrame) {

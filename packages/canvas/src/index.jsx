@@ -227,15 +227,20 @@ function VideoNode({ id, data, selected }) {
   const missingPrompt = !String(data.text || '').trim();
   const referenceUrl = !videoUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
   const incoming = getIncomingImageAssetUrls(id);
-  const sourceAssetUrl = supportsFirstFrame ? (incoming[0] || referenceUrl) : '';
-  const lastFrameAssetUrl = supportsFirstFrame && supportsLastFrame ? String(incoming[1] || '') : '';
+  const omni = inputModes.includes('OMNI_REFERENCE');
+  // 全能参考与首/尾帧互斥（上游不允许混用）：声明了全能参考就按参考素材发，否则按首/尾帧发。
+  const referenceAssetUrls = omni ? incoming.slice(0, 9) : [];
+  const sourceAssetUrl = !omni && supportsFirstFrame ? (incoming[0] || referenceUrl) : '';
+  const lastFrameAssetUrl = !omni && supportsFirstFrame && supportsLastFrame ? String(incoming[1] || '') : '';
   const missingFirstFrame = supportsFirstFrame && !supportsText && !sourceAssetUrl;
   const blockedReason = missingFirstFrame
     ? '该模型需要先连接一张画面（首帧）'
     : (missingPrompt ? '先写下这一段的提示词，再生成' : '');
-  const frameHint = supportsFirstFrame && supportsLastFrame
-    ? '按连线顺序：第一条图片连线当首帧，第二条当尾帧'
-    : (supportsFirstFrame ? '从图片节点的圆点连过来，当首帧' : '该模型只吃文本提示词');
+  const frameHint = omni
+    ? `从图片节点连过来的画面都当参考素材（已连 ${referenceAssetUrls.length} 张，最多 9 张）`
+    : (supportsFirstFrame && supportsLastFrame
+      ? '按连线顺序：第一条图片连线当首帧，第二条当尾帧'
+      : (supportsFirstFrame ? '从图片节点的圆点连过来，当首帧' : '该模型只吃文本提示词'));
   return <NodeFrame icon="▶" tone="video" title={data.title || '故事短片'} selected={selected}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
@@ -244,11 +249,12 @@ function VideoNode({ id, data, selected }) {
         : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
-    {(sourceAssetUrl || lastFrameAssetUrl) ? <div className="learning-node__frames nodrag">
+    {(sourceAssetUrl || lastFrameAssetUrl || referenceAssetUrls.length) ? <div className="learning-node__frames nodrag">
       {sourceAssetUrl ? <figure><img src={sourceAssetUrl} alt="首帧" /><figcaption>首帧</figcaption></figure> : null}
       {lastFrameAssetUrl ? <figure><img src={lastFrameAssetUrl} alt="尾帧" /><figcaption>尾帧</figcaption></figure> : null}
+      {referenceAssetUrls.map((url, index) => <figure key={`${url}-${index}`}><img src={url} alt={`参考${index + 1}`} /><figcaption>参考{index + 1}</figcaption></figure>)}
     </div> : null}
-    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={Boolean(blockedReason)} title={blockedReason || undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl })}>▶ 生成故事短片</button>}
+    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={Boolean(blockedReason)} title={blockedReason || undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssetUrls })}>▶ 生成故事短片</button>}
     {blockedReason && !data.generationStatus ? <span className="learning-node__generation-state is-error">{blockedReason}</span> : null}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">{frameHint}</span>}

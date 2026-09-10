@@ -84,10 +84,11 @@ try {
   const policy = {
     provider: 'local-mock', model: 'canvas-mock-v1',
     channels: [{
-      id: 'ch-video', name: '生视频', provider: 'local-mock', model: 'canvas-mock-v1', models: ['omni-video', 't2v-only'],
+      id: 'ch-video', name: '生视频', provider: 'local-mock', model: 'canvas-mock-v1', models: ['omni-video', 't2v-only', 'reference-only'],
       endpoint: 'https://api.example.com/v1', protocol: 'CHAT', requestTemplates: {}, modelMappings: [],
       modelCapabilities: {
-        'omni-video': { inputModes: ['TEXT', 'FIRST_FRAME', 'LAST_FRAME'] },
+        'omni-video': { inputModes: ['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE'] },
+        'reference-only': { inputModes: ['OMNI_REFERENCE'] },
         't2v-only': { inputModes: ['TEXT'] },
       },
     }],
@@ -129,6 +130,28 @@ try {
   const framesTemplate = requestTemplateFor({ requestTemplates: {} }, 'VIDEO', { requiresFirstFrame: true, withLastFrame: true });
   const framesBody2 = renderRequestTemplate(framesTemplate, { model: 'omni-video', prompt: '夜色', durationSeconds: 5, resolution: '480p', aspectRatio: '16:9', audio: false, firstFrameUrl: 'mock://asset1', lastFrameUrl: 'mock://asset2' });
   check(framesBody2.image === 'mock://asset1' && framesBody2.last_frame === 'mock://asset2', `首尾帧模板应同时带两张图，实际 ${JSON.stringify(framesBody2).slice(0, 160)}`);
+
+  // 5.7 只声明「全能参考」的模型：给首帧也算受支持（不该报 FIRST_FRAME_UNSUPPORTED）
+  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-ref','mg1','只全能参考','','GENERATION_BOX',NULL,?,4,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'reference-only', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  const refOnly = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', sourceAssetUrl: 'mock://asset1' }));
+  check(refOnly?.queued === true, '只声明全能参考的模型给首帧也应能生成');
+
+  // 5.8 全能参考：多张参考图能生成并落库；与首/尾帧不能混用
+  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref','mg1','全能参考','','GENERATION_BOX',NULL,?,5,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', sourceAssetUrl: 'mock://asset1', referenceAssetUrls: ['mock://asset2'] })), 'GENERATION_MIXED_INPUT_MODES', 'frames + references');
+  const omniRefs = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssetUrls: ['mock://asset1', 'mock://asset2'] }));
+  check(omniRefs?.queued === true, '全能参考给多张参考图应能生成');
+  const refsJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [omniRefs?.job?.id || '']);
+  check(String(refsJob?.reference_asset_urls || '').includes('mock://asset1') && String(refsJob?.reference_asset_urls || '').includes('mock://asset2'), `参考素材应落库，实际 ${refsJob?.reference_asset_urls}`);
+
+  // 5.9 全能参考的请求体：content 里按角色展开参考图
+  const refTemplate = { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'], duration: '{{durationSecondsNumber}}' };
+  const refBody = renderRequestTemplate(refTemplate, { model: 'MiniMax-H3', prompt: '夜色', durationSeconds: 5, referenceUrls: ['mock://asset1'] });
+  check(refBody.content?.[1]?.role === 'reference_image' && refBody.content[1].image_url.url === 'mock://asset1', `全能参考应展开成 reference_image 项，实际 ${JSON.stringify(refBody).slice(0, 160)}`);
+  const frameTemplate = { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{frameItems}}'], duration: '{{durationSecondsNumber}}' };
+  const frameBody = renderRequestTemplate(frameTemplate, { model: 'MiniMax-H3', prompt: '夜色', durationSeconds: 5, firstFrameUrl: 'u1' });
+  check(frameBody.content?.length === 2 && frameBody.content[1].role === 'first_frame', `只有首帧时应只加首帧项，实际 ${JSON.stringify(frameBody)}`);
+  check(typeof frameBody.duration === 'number', 'duration 应是数字（durationSecondsNumber）');
 
   // 场景 4：平台模态开关关闭时，生成必须在入队前被拦（机构覆盖优先于平台开关）
   q("UPDATE platform_modality_settings SET enabled=0 WHERE modality='VIDEO'");

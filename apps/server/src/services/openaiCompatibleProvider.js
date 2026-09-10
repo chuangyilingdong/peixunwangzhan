@@ -174,12 +174,12 @@ async function parseResponse(response, modality) {
 
 // 请求体由渠道模板生成：模板里的 {{aspectRatio}} / {{resolution}} / {{durationSeconds}} / {{audio}}
 // 会被课时配置的取值替换，不再由代码写死。
-function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {}, messages = null, stream = false }) {
+function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {}, modelRequestTemplates = {}, messages = null, stream = false }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
   // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES。
   const firstFrameUrl = String(options.firstFrameUrl || '').trim();
   const lastFrameUrl = String(options.lastFrameUrl || '').trim();
-  const template = requestTemplateFor({ requestTemplates }, normalizedModality, { requiresFirstFrame: Boolean(firstFrameUrl), withLastFrame: Boolean(lastFrameUrl) });
+  const template = requestTemplateFor({ requestTemplates, modelRequestTemplates }, normalizedModality, { model, requiresFirstFrame: Boolean(firstFrameUrl), withLastFrame: Boolean(lastFrameUrl) });
   if (template) {
     const rendered = renderRequestTemplate(template, {
       model,
@@ -302,7 +302,7 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, time
   return assetFromResponse({ payload, modality, title, providerName, model });
 }
 
-export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {} } = {}) {
+export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {} } = {}) {
   const providerName = String(name || 'openai-compatible').trim();
   const providerModel = String(model || '').trim();
   const timeout = Math.max(1000, Math.min(300000, Number(timeoutMs) || AI_PROVIDER_TIMEOUT_MS));
@@ -319,7 +319,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
       }
       const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints);
       const response = await fetchWithTimeout(url, {
-        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, requestTemplates }),
+        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates }),
         apiKey,
         timeout,
         modality: normalizedModality,
@@ -336,7 +336,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     // 的思考增量（reasoning_content），用于给学生显示「正在思考」的进度。
     async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, signal } = {}) {
       const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints);
-      const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, messages, stream: true });
+      const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates, messages, stream: true });
       const controller = new AbortController();
       let callerAborted = false;
       const abortFromCaller = () => { callerAborted = true; controller.abort(); };

@@ -261,10 +261,10 @@ export function CanvasWorkspace({ api, ...props }) {
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
   }
 
-  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', lastFrameAssetUrl = '', boxId = '' }) {
+  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssetUrls = [], boxId = '' }) {
     if (!editable) throw new Error('当前作品不可编辑');
     // 比例/清晰度/时长/音频由服务端按框体配置取值，这里只提交内容、来源框体与画面来源（首帧/尾帧）。
-    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, lastFrameAssetUrl, boxId });
+    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, lastFrameAssetUrl, referenceAssetUrls, boxId });
     let result = queued.job;
     for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));

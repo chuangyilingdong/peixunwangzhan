@@ -63,9 +63,9 @@ try {
   const rootToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   assert.ok(rootToken, 'root 登录失败');
   const current = (await api('/api/admin/billing-config/ai-provider', { token: rootToken })).data.policy;
-  const withChannel = (capabilities, model = 'minimax-h3-i2v') => ({
+  const withChannel = (capabilities, model = 'minimax-h3-i2v', modelRequestTemplates = {}) => ({
     ...current,
-    channels: [{ id: 'ch-video', name: '视频-测试', provider: 'custom', model, models: [model], endpoint: 'https://api.example.com/v1', protocol: 'CHAT', modelCapabilities: { [model]: capabilities } }],
+    channels: [{ id: 'ch-video', name: '视频-测试', provider: 'custom', model, models: [model], endpoint: 'https://api.example.com/v1', protocol: 'CHAT', modelCapabilities: { [model]: capabilities }, modelRequestTemplates }],
     modalityChannels: { ...(current.modalityChannels || {}), VIDEO: 'ch-video' },
   });
 
@@ -83,7 +83,7 @@ try {
   // 2) 合法配置保存成功，且存下来的就是填写的值（比例归一化、时长整数升序）
   const saved = await api('/api/admin/billing-config/ai-provider', {
     method: 'PUT', token: rootToken,
-    body: withChannel({ aspectRatios: ['9：16', '16:9'], resolutions: ['768P', '480P'], durations: [15, 5, 10], audio: true, inputModes: ['FIRST_FRAME', 'LAST_FRAME'] }),
+    body: withChannel({ aspectRatios: ['9：16', '16:9'], resolutions: ['768P', '480P'], durations: [15, 5, 10], audio: true, inputModes: ['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE'] }, 'minimax-h3-i2v', { 'minimax-h3-i2v': { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }], duration: '{{durationSecondsNumber}}', ratio: '{{aspectRatio}}' } }),
   });
   assert.equal(saved.status, 200, `合法配置应保存成功: ${JSON.stringify(saved.data)}`);
   const stored = saved.data.policy.channels.find((channel) => channel.id === 'ch-video').modelCapabilities['minimax-h3-i2v'];
@@ -91,7 +91,10 @@ try {
   assert.deepEqual(stored.resolutions, ['768P', '480P'], `清晰度应原样保留（含大小写），实际 ${JSON.stringify(stored.resolutions)}`);
   assert.deepEqual(stored.durations, [5, 10, 15], `时长应为升序整数，实际 ${JSON.stringify(stored.durations)}`);
   assert.equal(stored.audio, true, '音频标记应保留');
-  assert.deepEqual(stored.inputModes, ['FIRST_FRAME', 'LAST_FRAME'], `输入画面方式应保留，实际 ${JSON.stringify(stored.inputModes)}`);
+  assert.deepEqual(stored.inputModes, ['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE'], `输入画面方式应保留，实际 ${JSON.stringify(stored.inputModes)}`);
+  // 模型级请求模板原样保留（同渠道里不同模型的请求体可以完全不同）
+  const storedTemplate = saved.data.policy.channels.find((channel) => channel.id === 'ch-video').modelRequestTemplates['minimax-h3-i2v'];
+  assert.equal(storedTemplate?.content?.[0]?.text, '{{prompt}}', `模型级模板应原样保留，实际 ${JSON.stringify(storedTemplate)}`);
 
   // 2.2 不认识的输入方式一律 400，不再静默丢弃
   const badMode = await api('/api/admin/billing-config/ai-provider', { method: 'PUT', token: rootToken, body: withChannel({ resolutions: ['480P'], inputModes: ['FIRST_FRAME', 'HOLOGRAM'] }) });

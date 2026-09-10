@@ -5,7 +5,7 @@ import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateIn
 import { BillingSettings } from '../components/BillingSettings.jsx';
 
 // 视频模型的输入画面支持方式（可多选）：一个模型可以既支持文生、也支持图生/首尾帧。
-const INPUT_MODE_OPTIONS = [['TEXT', '文生视频（纯文本）'], ['FIRST_FRAME', '图生视频（首帧）'], ['LAST_FRAME', '首尾帧（尾帧）']];
+const INPUT_MODE_OPTIONS = [['TEXT', '文生视频（纯文本）'], ['FIRST_FRAME', '图生视频（首帧图）'], ['FIRST_LAST_FRAME', '首尾帧参考（首帧+尾帧）'], ['OMNI_REFERENCE', '全能参考（多图/多视频/多音频）']];
 
 // 读回已声明的方式：既认新的多选数组，也认旧的单值 inputFrame（NONE/FIRST/LAST）。
 function inputModesOf(declared, modelId) {
@@ -13,12 +13,10 @@ function inputModesOf(declared, modelId) {
   if (value === undefined || value === null || value === '') {
     return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '')) ? ['FIRST_FRAME'] : ['TEXT'];
   }
+  const aliases = { NONE: 'TEXT', FIRST: 'FIRST_FRAME', LAST: 'FIRST_LAST_FRAME', LAST_FRAME: 'FIRST_LAST_FRAME', OMNI: 'OMNI_REFERENCE', REFERENCE: 'OMNI_REFERENCE' };
   const mapped = (Array.isArray(value) ? value : [value]).map((item) => {
     const text = String(item ?? '').trim().toUpperCase();
-    if (text === 'NONE') return 'TEXT';
-    if (text === 'FIRST') return 'FIRST_FRAME';
-    if (text === 'LAST') return 'LAST_FRAME';
-    return text;
+    return aliases[text] || text;
   }).filter((item) => INPUT_MODE_OPTIONS.some(([key]) => key === item));
   return mapped.length ? [...new Set(mapped)] : ['TEXT'];
 }
@@ -75,6 +73,26 @@ export function ProviderPolicyPanel({ api }) {
     const prefix = `${index}:${modelId}:`;
     setCapabilityDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(prefix))));
   }
+  // 每个模型可以有自己的请求模板（同渠道里不同模型的请求体可能完全不同）
+  const [templateEditor, setTemplateEditor] = useState('');
+  function modelTemplateText(channel, modelId) {
+    const template = channel?.modelRequestTemplates?.[modelId];
+    return template && typeof template === 'object' ? JSON.stringify(template, null, 2) : '';
+  }
+  function updateModelTemplate(index, modelId, text) {
+    const channel = form.channels[index];
+    const next = { ...(channel.modelRequestTemplates || {}) };
+    const trimmed = String(text || '').trim();
+    if (!trimmed) delete next[modelId];
+    else {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+        next[modelId] = parsed;
+      } catch { return; }
+    }
+    updateChannel(index, { modelRequestTemplates: next });
+  }
   function channelTemplateText(channel) {
     const modality = channelModality(channel.id);
     const custom = channel.requestTemplates?.[modality];
@@ -119,12 +137,14 @@ export function ProviderPolicyPanel({ api }) {
             {hasDeclared ? <span className="status success">已声明</span> : <span className="status">未声明（用默认值）</span>}
             {hasDeclared ? <button type="button" className="text-button" onClick={() => clearModelCapability(index, modelId)}>清空声明</button> : null}
             {hint ? <button type="button" className="text-link-button" onClick={() => { clearCapabilityDrafts(index, modelId); updateModelCapability(index, modelId, hint); }}>用上游返回的能力填充</button> : null}
+            <button type="button" className="text-link-button" onClick={() => setTemplateEditor(templateEditor === `${index}:${modelId}` ? '' : `${index}:${modelId}`)}>{templateEditor === `${index}:${modelId}` ? '收起请求模板' : '该模型的请求模板'}</button>
           </div>
           <div className="form-grid">
             {field(modelId, '比例', 'aspectRatios', '16:9, 9:16')}
             {field(modelId, '清晰度', 'resolutions', isVideo ? '480p, 720p' : '1k, 2k')}
             {isVideo ? field(modelId, '时长（秒）', 'durations', '5, 10') : null}
             {isVideo ? <label className="checkbox-label">{modelId} · 支持生成音频<input type="checkbox" checked={declared.audio === true} onChange={(event) => updateModelCapability(index, modelId, { audio: event.target.checked })} /></label> : null}
+            {templateEditor === `${index}:${modelId}` ? <label className="capability-template">{modelId} · 该模型的请求模板（只对这个模型生效，优先于渠道模板）<span className="muted">占位符：{'{'}model{'}'} {'{'}prompt{'}'} {'{'}aspectRatio{'}'} {'{'}resolution{'}'} {'{'}durationSeconds{'}'} {'{'}durationSecondsNumber{'}'} {'{'}audio{'}'} {'{'}firstFrameUrl{'}'} {'{'}lastFrameUrl{'}'}。留空＝用渠道/默认模板。整串写 {'{'}durationSecondsNumber{'}'} 会替换成数字，{'{{'}durationSeconds{'}}'} 是字符串。</span><textarea rows={8} value={modelTemplateText(channel, modelId)} placeholder="留空＝用渠道/默认模板" onChange={(event) => updateModelTemplate(index, modelId, event.target.value)} /></label> : null}
             {isVideo ? <label>{modelId} · 输入画面（可多选，不选＝按模型名自动判断）<span className="capability-modes">{INPUT_MODE_OPTIONS.map(([value, label]) => <span key={value}><input type="checkbox" checked={inputModesOf(declared, modelId).includes(value)} onChange={(event) => { const current = inputModesOf(declared, modelId); const next = event.target.checked ? [...new Set([...current, value])] : current.filter((item) => item !== value); updateModelCapability(index, modelId, { inputModes: next, inputFrame: undefined }); }} />{label}</span>)}</span></label> : null}
           </div>
         </div>;
