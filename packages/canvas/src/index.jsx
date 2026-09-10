@@ -337,16 +337,16 @@ function resolveSlotParams(data) {
 }
 
 function ImageNode({ id, data, selected }) {
-  const { updateNode, openPreview } = useCanvasActions();
+  const { updateNode } = useCanvasActions();
   const imageUrl = data.previewUrl || data.assetUrl;
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
   const referenceUrl = !imageUrl ? String(data.referenceUrl || '') : '';
   return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {imageUrl
-      ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={imageUrl} alt={data.caption || 'AI生成画面'} onClick={() => openPreview(imageUrl)} title="点击放大查看" />
+      ? <img className="learning-node__media" src={imageUrl} alt={data.caption || 'AI生成画面'} />
       : referenceUrl
         // 画面本体就是卡片：不再套 figure +「框体预置素材」那行说明（底部面板里已经写了来源）
-        ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={referenceUrl} alt="框体预置素材" title="点击放大查看" onClick={() => openPreview(referenceUrl)} />
+        ? <img className="learning-node__media" src={referenceUrl} alt="框体预置素材" />
         : <div className="learning-node__art"><span>{data.emoji || '🌈'}</span><small>在底部面板写画面描述，生成画面</small></div>}
   </NodeFrame>;
 }
@@ -373,7 +373,7 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, getIncomingImageAssetUrls, openPreview } = useCanvasActions();
+  const { updateNode, getIncomingImageAssetUrls } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
   const inputModes = Array.isArray(data.inputModes) && data.inputModes.length
     ? data.inputModes
@@ -386,8 +386,8 @@ function VideoNode({ id, data, selected }) {
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
       : sourceUrl
-        // 画面本体就是卡片；点一下放大看细节（缩略图按素材比例显示）
-        ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={sourceUrl} alt="画面来源" title="点击放大查看" onClick={() => openPreview(sourceUrl)} />
+        // 画面本体就是卡片，按素材自身比例铺满；画面也可以直接拖着走（不再有「点图放大」）
+        ? <img className="learning-node__media" src={sourceUrl} alt="画面来源" />
         : <div className="learning-node__video-preview"><span>▶</span><small>在底部面板写提示词，生成短片</small></div>}
   </NodeFrame>;
 }
@@ -681,7 +681,6 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   // 画布平移/缩放「结束」的计数：面板靠它在那之后重新锚定一次（过程中不动，见 CanvasDockPanel 注释）
   const [viewportEpoch, setViewportEpoch] = useState(0);
   const [contextMenu, setContextMenu] = useState(null);
-  const [previewImage, setPreviewImage] = useState(null);
   // 底部面板要编辑哪个框体：优先当前选中的，取消选中后沿用上一次（面板不会突然消失）
   const [activeNodeId, setActiveNodeId] = useState(null);
   const { getViewport, screenToFlowPosition, setCenter, fitView } = useReactFlow();
@@ -928,7 +927,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     });
   }, [edges, nodes]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, removeEdge, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
     <div className={`learning-canvas${readOnly ? ' is-readonly' : ''}`} ref={canvasRef}>
       <ReactFlow
         nodes={nodes}
@@ -985,7 +984,6 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: CANVAS_FIT_PADDING, duration: 320, maxZoom: 1.2 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
       </div>}
       <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片排布；从卡片两侧的 ＋ 拖一条线连到另一个框体。' : '从左侧「素材」面板添加框体，写好提示词就能生成；从卡片两侧的 ＋ 拖线连接框体，也可以把图片/视频直接拖进画布。'}</div>
-      {previewImage && <div className="learning-canvas__lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}><img src={previewImage} alt="素材预览" onClick={(event) => event.stopPropagation()} /><button type="button" className="learning-canvas__lightbox-close" onClick={() => setPreviewImage(null)}>×</button></div>}
       {contextMenu && allowNodeCreation && <div className="learning-canvas__context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
         <strong>创建节点</strong>
         <button type="button" onClick={() => addNodeAt('prompt', contextMenu.position)} disabled={!enabledCapabilities.has('text')}>✎ AI 文字</button>

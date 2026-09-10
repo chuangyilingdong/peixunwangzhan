@@ -86,7 +86,6 @@
 /* 卡片尺寸由内容决定，没有缩放手柄（用户要求：框体不支持手动缩放，要放大就用画布缩放）。
    原来这套把手/把手线的样式已随 NodeResizer 一起删掉。 */
 
-.learning-node__media--zoomable { cursor: zoom-in; }
 
 /* ── 素材类框体（图片/视频/动画）：标题是画面左上方一行小字，画面本体就是卡片 ──
    用户拿着参考（图2：图片上方一行小字说明 + 图片本身铺满）反馈「图3 很难看」：
@@ -100,41 +99,15 @@
 .learning-node__caption .learning-node__title-text { font-size: 12.5px; font-weight: 600; color: var(--cv-text-dim); }
 .learning-node__caption .learning-node__title { width: min(180px, 100%); font-size: 12.5px; padding: 1px 5px; }
 /* 画面：按自身比例铺满（不再有深色内框和内边距），高度上限只用来挡竖图 */
-.learning-node--media .learning-node__media,
-.learning-node--media .learning-node__reference img {
-  display: block; width: auto; max-width: var(--cv-media-max-w); max-height: var(--cv-media-max-h);
-  margin: 0; object-fit: contain; border: 1px solid var(--cv-border); border-radius: 12px; background: #141419;
-}
-.learning-node--media .learning-node__reference { margin: 0; }
-.react-flow__node.selected .learning-node--media .learning-node__media,
-.react-flow__node.selected .learning-node--media .learning-node__reference img { border-color: var(--cv-primary); box-shadow: 0 0 0 1px var(--cv-primary), 0 16px 40px rgb(0 0 0 / 40%); }
+.react-flow__node.selected .learning-node--media .learning-node__media { border-color: var(--cv-primary); box-shadow: 0 0 0 1px var(--cv-primary), 0 16px 40px rgb(0 0 0 / 40%); }
 /* 还没生成时的占位板：按槽位画幅（参考里「空的图片节点」也是一块竖/横的板） */
 .learning-node--media .learning-node__art,
 .learning-node--media .learning-node__video-preview,
 .learning-node--media .learning-node__animation-placeholder { margin: 0; }
 .learning-node--media .learning-node__media { flex: 0 0 auto; align-self: flex-start; }
-
-.learning-node__reference { margin: 12px; }
-/* 9:16 这类竖图**不能按卡片宽度铺开**：宽度撑满时高度 = 宽度 / 0.5625，卡片会长到比画布还高，
-   输入面板在下面就没地方放，只能压住卡片（用户反馈「9:16 的图太长了，应该适配屏幕」）。
-   改成「按槽位画幅 + 上下限」定尺寸：竖图得到一张竖卡、横图得到一张横卡，比例都准。
-   注意别改成 `width: auto` 靠图片自身宽高去撑：图片的原始宽度会参与卡片的 shrink-to-fit，
-   卡片会被撑到 500+ 宽（实测）。点图可放大看原图。 */
-.learning-node__reference img {
-  display: block;
-  width: min(var(--cv-media-max-w), calc(var(--cv-media-max-h) * var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1)));
-  aspect-ratio: var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1);
-  max-height: var(--cv-media-max-h);
-  margin: 0 auto; object-fit: contain; border-radius: 10px; cursor: zoom-in;
-}
-.learning-node__reference figcaption { margin-top: 6px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
 .learning-node__textarea--compact { height: 68px; }
 .learning-node__slot-params { display: block; margin: -4px 14px 10px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
 
-.learning-canvas__lightbox { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 82%); backdrop-filter: blur(6px); }
-.learning-canvas__lightbox img { max-width: 100%; max-height: 100%; border-radius: 14px; box-shadow: 0 24px 70px rgb(0 0 0 / 60%); }
-.learning-canvas__lightbox-close { position: absolute; top: 16px; right: 18px; width: 36px; height: 36px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text); background: rgb(21 21 21 / 90%); font-size: 18px; cursor: pointer; transition: background var(--cv-motion) ease-out; }
-.learning-canvas__lightbox-close:hover { background: rgb(255 255 255 / 10%); }
 
 .learning-node__heading { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid rgb(255 255 255 / 6%); font-size: 13px; font-weight: 600; }
 .learning-node__heading span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--cv-primary); background: rgb(163 254 68 / 12%); font-weight: 900; }
@@ -161,15 +134,18 @@
 .learning-node__scene-art small { max-width: 190px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
 @media (max-width: 700px) { .learning-canvas { min-height: 590px; height: 72vh; } .learning-canvas__tip { max-width: 230px; } }
 
-.learning-node__audio,.learning-node__media { display: block; width: calc(100% - 24px); margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
+.learning-node__audio { display: block; width: calc(100% - 24px); margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
 .learning-node > * { flex-shrink: 0; }
-/* 生成结果：宽度同理按素材画幅定，高度上限压住竖版成图（原因见 .learning-node__reference img 那段注释） */
+/* 画面（图片/视频）：**按素材自身比例**自适应，只受宽高上限约束 ——
+   这里绝不能再写 aspect-ratio: var(--cv-ratio-*)，那是「槽位画幅」；两者不一致时会把画面框拉成扁的、
+   竖图两侧出现黑边（用户反馈「别的平台是自适应站满整个框体，我们的没法自适应」）。
+   注意也别用 aspect-ratio: auto 之外的固定比例，画面比例只能由素材自己决定。 */
 .learning-node__media {
-  flex: 0 0 auto;
-  width: min(var(--cv-media-max-w), calc(var(--cv-media-max-h) * var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1)));
-  aspect-ratio: var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1);
-  min-height: 0; margin: 12px; align-self: center; object-fit: contain; background: #141419;
+  display: block; flex: 0 0 auto; align-self: flex-start;
+  width: auto; height: auto; aspect-ratio: auto;
+  max-width: var(--cv-media-max-w); max-height: var(--cv-media-max-h);
+  margin: 0; object-fit: contain; border: 1px solid var(--cv-border); border-radius: 12px; background: #141419;
 }
 
 /* 右键菜单（管理端预览画布用） */
