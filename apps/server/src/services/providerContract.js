@@ -55,18 +55,35 @@ export function validateProviderConfig({ provider, model, endpoint = '', apiKey 
   return result;
 }
 
+// 保留上游/适配器给的具体原因：只说「AI 供应商调用失败」用户无从下手。
+// 我们自己的通用文案不再重复套一层。
+function providerDetail(error) {
+  const raw = String(error?.message || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  if (/AI 供应商调用失败（上游：/.test(raw)) return raw.slice(0, 240);
+  if (/^AI (供应商|服务)[^（]{0,20}$/.test(raw)) return '';
+  return raw.length > 160 ? `${raw.slice(0, 160)}…` : raw;
+}
+
 export function normalizeProviderError(error, { status } = {}) {
   const code = String(error?.code || '').toUpperCase();
   const httpStatus = Number(status || error?.status || error?.response?.status || 0);
-  if (code === PROVIDER_ERROR_CODES.AUTH_FAILED || httpStatus === 401 || httpStatus === 403) return { code: PROVIDER_ERROR_CODES.AUTH_FAILED, retryable: false, message: `AI渠道认证失败（HTTP ${httpStatus || 401}）。请在管理后台重新填写并保存该渠道 API Key。` };
+  const detail = providerDetail(error);
+  // 适配器可能已经拼过同样的前缀（例如「AI 供应商调用失败（上游：…）」），别套第二层。
+  const withDetail = (message) => {
+    if (!detail) return message;
+    if (detail.startsWith(message)) return detail;
+    return `${message}（${detail}）`;
+  };
+  if (code === PROVIDER_ERROR_CODES.AUTH_FAILED || httpStatus === 401 || httpStatus === 403) return { code: PROVIDER_ERROR_CODES.AUTH_FAILED, retryable: false, message: withDetail(`AI渠道认证失败（HTTP ${httpStatus || 401}）。请在管理后台重新填写并保存该渠道 API Key。`) };
   if (code.includes('SAFETY') || code.includes('CONTENT') || httpStatus === 400 && /safety|moderation|policy/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.SAFETY_REJECTED, retryable: false, message: '内容未通过 AI 服务安全策略' };
   if (code === 'ABORT_ERR' || code === 'ETIMEDOUT' || code === 'GENERATION_TIMEOUT' || code === PROVIDER_ERROR_CODES.TIMEOUT || error?.name === 'AbortError' || /timeout|超时/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.TIMEOUT, retryable: true, message: 'AI 服务响应超时' };
-  if (httpStatus === 429 || code.includes('RATE')) return { code: PROVIDER_ERROR_CODES.RATE_LIMITED, retryable: true, message: 'AI 服务请求频率受限' };
-  if (httpStatus >= 500 || code.includes('UPSTREAM')) return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: true, message: 'AI 服务暂时不可用' };
+  if (httpStatus === 429 || code.includes('RATE')) return { code: PROVIDER_ERROR_CODES.RATE_LIMITED, retryable: true, message: withDetail('AI 服务请求频率受限') };
+  if (httpStatus >= 500 || code.includes('UPSTREAM')) return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: true, message: withDetail('AI 服务暂时不可用') };
   if (code === PROVIDER_ERROR_CODES.CONFIG_INVALID) return { code, retryable: false, message: 'AI 供应商配置不完整' };
   if (code === PROVIDER_ERROR_CODES.RESPONSE_INVALID) return { code, retryable: false, message: 'AI 供应商响应格式无效' };
   if (code === PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED) return { code, retryable: false, message: '当前真实 AI 适配器暂不支持该素材类型' };
-  return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: false, message: 'AI 供应商调用失败' };
+  return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: false, message: withDetail('AI 供应商调用失败') };
 }
 
 export function assertExternalAiAllowed({ mode, allowStudentExternalContent = false } = {}) {

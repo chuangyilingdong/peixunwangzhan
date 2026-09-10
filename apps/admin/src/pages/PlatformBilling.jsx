@@ -42,7 +42,19 @@ export function ProviderPolicyPanel({ api }) {
     const channel = form.channels[index];
     const next = { ...(channel.modelCapabilities || {}) };
     delete next[modelId];
+    clearCapabilityDrafts(index, modelId);
     updateChannel(index, { modelCapabilities: next });
+  }
+  // 输入框要能一边打字一边留住逗号/空格：直接拿解析后的数组回填，逗号会被立刻吃掉，
+  // 表现成「只能填一个值」。所以编辑期间先存草稿文本，失焦后再回到规范化后的显示。
+  const [capabilityDrafts, setCapabilityDrafts] = useState({});
+  const capabilityDraftKey = (index, modelId, key) => `${index}:${modelId}:${key}`;
+  function setCapabilityDraft(index, modelId, key, text) {
+    setCapabilityDrafts((current) => ({ ...current, [capabilityDraftKey(index, modelId, key)]: text }));
+  }
+  function clearCapabilityDrafts(index, modelId) {
+    const prefix = `${index}:${modelId}:`;
+    setCapabilityDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(prefix))));
   }
   function channelTemplateText(channel) {
     const modality = channelModality(channel.id);
@@ -63,7 +75,17 @@ export function ProviderPolicyPanel({ api }) {
     const isVideo = modality === 'VIDEO';
     const field = (modelId, label, key, placeholder) => {
       const declared = channel.modelCapabilities?.[modelId] || {};
-      return <label>{modelId} · {label}<input value={capabilityText(declared[key])} placeholder={'默认：' + (capabilityText(defaults[key]) || placeholder || '—')} onChange={(event) => updateModelCapability(index, modelId, { [key]: parseCapabilityText(event.target.value) })} /></label>;
+      const draft = capabilityDrafts[capabilityDraftKey(index, modelId, key)];
+      return <label>{modelId} · {label}<input
+        value={draft === undefined ? capabilityText(declared[key]) : draft}
+        placeholder={'默认：' + (capabilityText(defaults[key]) || placeholder || '—')}
+        onChange={(event) => {
+          const text = event.target.value;
+          setCapabilityDraft(index, modelId, key, text);
+          updateModelCapability(index, modelId, { [key]: parseCapabilityText(text) });
+        }}
+        onBlur={() => clearCapabilityDrafts(index, modelId)}
+      /></label>;
     };
     return <div className="channel-capability-editor top-gap">
       <strong>模型能力（决定课时里能选什么）</strong>
@@ -77,7 +99,7 @@ export function ProviderPolicyPanel({ api }) {
             <strong>{modelId}</strong>
             {hasDeclared ? <span className="status success">已声明</span> : <span className="status">未声明（用默认值）</span>}
             {hasDeclared ? <button type="button" className="text-button" onClick={() => clearModelCapability(index, modelId)}>清空声明</button> : null}
-            {hint ? <button type="button" className="text-link-button" onClick={() => updateModelCapability(index, modelId, hint)}>用上游返回的能力填充</button> : null}
+            {hint ? <button type="button" className="text-link-button" onClick={() => { clearCapabilityDrafts(index, modelId); updateModelCapability(index, modelId, hint); }}>用上游返回的能力填充</button> : null}
           </div>
           <div className="form-grid">
             {field(modelId, '比例', 'aspectRatios', '16:9, 9:16')}

@@ -348,11 +348,17 @@ export function CanvasWorkspace({ api, ...props }) {
           : type === 'scene'
             ? { title: material.title, emoji: '🌲', place: material.description || '', mood: '' }
             : { title: material.title, text: material.description || '' };
+    // 上传的图片/视频/音频素材要带着文件进画布，否则节点是个空壳，
+    // 看起来就跟没配参数的框体一样。
+    const mediaUrl = String(material.assetUrl || '').trim();
+    const mediaData = mediaUrl && ['image', 'video', 'audio', 'animation'].includes(type)
+      ? { assetUrl: mediaUrl, previewUrl: String(snapshot.previewUrl || snapshot.preview_url || '').trim() || mediaUrl }
+      : {};
     const node = {
       id: `lesson-material-${material.id}-${Date.now().toString(36)}`,
       type,
       position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 },
-      data: { ...fallbackData, ...sourceData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true },
+      data: { ...fallbackData, ...sourceData, ...mediaData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true },
     };
     const next = { ...current, nodes: [...(current.nodes || []), node] };
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
