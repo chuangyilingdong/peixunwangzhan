@@ -101,8 +101,10 @@ function normalizeBoxMaterial(material, materialIndex, title) {
   }
   if (!box) throw errors.badRequest(`第 ${materialIndex + 1} 个生成框体的类型无效`, 'INVALID_GENERATION_CONFIG');
   const boxSnapshot = { modality: box.modality, model: box.model };
-  if (box.modality !== 'TEXT') { boxSnapshot.aspectRatio = box.aspectRatio; boxSnapshot.resolution = box.resolution; }
+  if (box.modality === 'IMAGE' || box.modality === 'VIDEO') { boxSnapshot.aspectRatio = box.aspectRatio; boxSnapshot.resolution = box.resolution; }
   if (box.modality === 'VIDEO') { boxSnapshot.durationSeconds = box.durationSeconds; boxSnapshot.audio = box.audio; }
+  // 音乐：记下生成模式（歌词生音乐 / 描述生音乐）
+  if (box.modality === 'MUSIC') { boxSnapshot.mode = box.mode; }
   return { ...snapshot, box: boxSnapshot, content: box.prompt };
 }
 

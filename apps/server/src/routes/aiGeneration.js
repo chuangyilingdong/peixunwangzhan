@@ -216,6 +216,38 @@ function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   return publicFileAssetUrl(url);
 }
 
+// 描述生音乐：平台先用文本模型把学生的描述写成歌词，再交给音乐模型。
+// 这一步不额外扣积分（用户口径：积分模式还没做），失败就让任务失败并说明原因。
+const LYRICS_SYSTEM_PROMPT = [
+  '你是少儿音乐平台的作词助手。把用户的一句话描述写成适合儿童演唱的中文歌词。',
+  '要求：语言简单、正向、有画面感；不要出现暴力、恐怖、成人或广告内容。',
+  '只输出歌词本身，不要解释、不要 markdown；用 [Verse] / [Chorus] 标注段落，控制在 3000 字以内。',
+].join('');
+
+async function writeLyricsForMusic({ prompt, policy, requestContext = null, auth = null }) {
+  const description = String(prompt || '').trim();
+  if (!description) throw errors.badRequest('请先写下你想要的音乐是什么样子', 'GENERATION_PROMPT_REQUIRED');
+  const selection = providerSelectionForModality(policy, 'TEXT');
+  const provider = getGenerationProvider(selection);
+  try {
+    const generated = await provider.generate({
+      modality: 'TEXT',
+      prompt: description,
+      title: '歌词',
+      messages: [
+        { role: 'system', content: LYRICS_SYSTEM_PROMPT },
+        { role: 'user', content: `请根据这个描述写一段歌词：${description}` },
+      ],
+    });
+    const text = String(generated?.assets?.[0]?.metadata?.text || '').trim();
+    if (!text) throw Object.assign(new Error('作词没有返回内容'), { code: 'GENERATION_EMPTY_RESULT' });
+    return text.slice(0, 3000);
+  } catch (error) {
+    const normalized = normalizeProviderError(error);
+    throw errors.badRequest(`平台作词失败：${normalized.message}`, normalized.code || 'LYRICS_GENERATION_FAILED');
+  }
+}
+
 // 全能参考的素材：只认本项目对应模态的素材（和首帧同一套白名单思路）。
 // 上游限制：图片 ≤9、视频 ≤3、音频 ≤3。
 const REFERENCE_LIMITS = Object.freeze({ IMAGE: 9, VIDEO: 3, AUDIO: 3 });
@@ -385,8 +417,15 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
  * 输入画面：按该模型声明的方式给 —— 支持文生就可以不带图，支持首帧才用连过来的图/框体预置素材，
  * 支持尾帧才带上尾帧。学生给了模型不支持的画面会被 assertVideoFrames 拦下。
  */
-export function generationOptionsFor({ context, modality, policy, selection, box = null, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [] }) {
+export function generationOptionsFor({ context, modality, policy, selection, box = null, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [], lyrics = '' }) {
   const key = String(modality || '').toUpperCase();
+  if (key === 'MUSIC') {
+    const target = box || resolveLessonGenerationBox(context, key, '');
+    const mode = String(target?.mode || '').trim().toUpperCase() === 'DESCRIPTION' ? 'DESCRIPTION' : 'LYRICS';
+    // 歌词模式：学生的输入就是要唱的词，lyrics 留空＝用学生的输入。
+    // 描述模式：学生写的是描述（当曲风），歌词由平台代写后经 lyrics 传进来。
+    return { mode, lyrics: mode === 'DESCRIPTION' ? String(lyrics || '').trim() : '' };
+  }
   if (key !== 'IMAGE' && key !== 'VIDEO') return {};
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;
   const capabilities = effectiveCapabilities(channel, key, selection?.model);
@@ -440,11 +479,15 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const resolvedReferences = resolveReferenceAssets(project.id, referenceAssets);
   const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
   const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
+  const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
+    ? await writeLyricsForMusic({ prompt, policy, requestContext, auth })
+    : '';
   const options = generationOptionsFor({
     context, modality, policy, selection: providerSelection, box,
     firstFrameUrl: requestedFirstFrame,
     lastFrameUrl: requestedLastFrame,
     referenceAssets: resolvedReferences,
+    lyrics: writtenLyrics,
   });
   assertGenerationPreflight({
     user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
@@ -485,11 +528,15 @@ async function processAsyncGeneration(item) {
     const box = resolveLessonGenerationBox(context, modality, boxId);
     const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
     const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
+    const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
+      ? await writeLyricsForMusic({ prompt, policy, requestContext })
+      : '';
     const options = generationOptionsFor({
       context, modality, policy, selection: providerSelection, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
       referenceAssets: resolveReferenceAssets(project.id, referenceAssets),
+      lyrics: writtenLyrics,
     });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId,
@@ -730,11 +777,15 @@ export async function handleAiGeneration(ctx) {
     // 别让任务跑一遍上游再失败——与同步路径保持同一套判断。
     const requestedFirstFrame = resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim());
     const requestedLastFrame = resolveFirstFrameUrl(project.id, String(body.lastFrameAssetUrl || '').trim());
+    const writtenLyrics = modality === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
+      ? await writeLyricsForMusic({ prompt, policy, requestContext: ctx, auth })
+      : '';
     const options = generationOptionsFor({
       context, modality, policy, selection: providerSelection, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
       referenceAssets: resolveReferenceAssets(project.id, body.referenceAssets ?? body.referenceAssetUrls),
+      lyrics: writtenLyrics,
     });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '',

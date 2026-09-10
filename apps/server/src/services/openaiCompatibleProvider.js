@@ -17,7 +17,7 @@ const DEFAULT_MIME_TYPES = Object.freeze({
   VIDEO: 'video/mp4',
 });
 
-import { renderRequestTemplate, requestTemplateFor } from './modelCapabilities.js';
+import { musicRequestContext, renderRequestTemplate, requestTemplateFor } from './modelCapabilities.js';
 
 function providerError(message, code, status = 0) {
   const error = new Error(message);
@@ -205,6 +205,7 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
   // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES。
   const firstFrameUrl = String(options.firstFrameUrl || '').trim();
   const lastFrameUrl = String(options.lastFrameUrl || '').trim();
+  const musicContext = musicRequestContext({ prompt, mode: options.mode, lyrics: options.lyrics });
   const template = requestTemplateFor({ requestTemplates, modelRequestTemplates }, normalizedModality, { model, requiresFirstFrame: Boolean(firstFrameUrl), withLastFrame: Boolean(lastFrameUrl) });
   if (template) {
     const rendered = renderRequestTemplate(template, {
@@ -218,6 +219,9 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       audio: options.audio === true,
       firstFrameUrl,
       lastFrameUrl,
+      // 音乐：歌词模式用学生的输入当歌词；描述模式用平台代写的词，学生的输入当曲风。
+      lyrics: musicContext.lyrics,
+      style: musicContext.style,
       n: 1,
       messages: Array.isArray(messages) ? messages : undefined,
     });

@@ -6,6 +6,8 @@ import { BillingSettings } from '../components/BillingSettings.jsx';
 
 // 视频模型的输入画面支持方式（可多选）：一个模型可以既支持文生、也支持图生/首尾帧。
 const INPUT_MODE_OPTIONS = [['TEXT', '文生视频（纯文本）'], ['FIRST_FRAME', '图生视频（首帧图）'], ['FIRST_LAST_FRAME', '首尾帧参考（首帧+尾帧）'], ['OMNI_REFERENCE', '全能参考（多图/多视频/多音频）']];
+// 音乐的生成模式（可多选）：歌词生音乐 / 描述生音乐（描述模式由平台先用文本模型代写歌词）
+const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描述生音乐']];
 
 // 读回已声明的方式：既认新的多选数组，也认旧的单值 inputFrame（NONE/FIRST/LAST）。
 function inputModesOf(declared, modelId) {
@@ -94,6 +96,12 @@ export function ProviderPolicyPanel({ api }) {
     }
     updateChannel(index, { modelRequestTemplates: next });
   }
+  // 音乐的生成模式：留空＝两种都支持
+  function musicModesOf(declared) {
+    const value = declared?.modes;
+    if (!Array.isArray(value) || !value.length) return ['LYRICS', 'DESCRIPTION'];
+    return value.map((item) => String(item ?? '').trim().toUpperCase()).filter((item) => MUSIC_MODE_OPTIONS.some(([key]) => key === item));
+  }
   function channelTemplateText(channel) {
     const modality = channelModality(channel.id);
     const custom = channel.requestTemplates?.[modality];
@@ -111,6 +119,7 @@ export function ProviderPolicyPanel({ api }) {
     const defaults = config.data?.capabilityDefaults?.[modality] || {};
     const supportsParams = modality === 'IMAGE' || modality === 'VIDEO';
     const isVideo = modality === 'VIDEO';
+    const isMusic = modality === 'MUSIC';
     const field = (modelId, label, key, placeholder) => {
       const declared = channel.modelCapabilities?.[modelId] || {};
       const draft = capabilityDrafts[capabilityDraftKey(index, modelId, key)];
@@ -146,10 +155,11 @@ export function ProviderPolicyPanel({ api }) {
             {isVideo ? field(modelId, '时长（秒）', 'durations', '5, 10') : null}
             {isVideo ? <label className="checkbox-label">{modelId} · 支持生成音频<input type="checkbox" checked={declared.audio === true} onChange={(event) => updateModelCapability(index, modelId, { audio: event.target.checked })} /></label> : null}
             {templateEditor === `${index}:${modelId}` ? <label className="capability-template">{modelId} · 该模型的请求模板（只对这个模型生效，优先于渠道模板）<span className="muted">占位符：{'{'}model{'}'} {'{'}prompt{'}'} {'{'}aspectRatio{'}'} {'{'}resolution{'}'} {'{'}durationSeconds{'}'} {'{'}durationSecondsNumber{'}'} {'{'}audio{'}'} {'{'}firstFrameUrl{'}'} {'{'}lastFrameUrl{'}'}。留空＝用渠道/默认模板。整串写 {'{'}durationSecondsNumber{'}'} 会替换成数字，{'{{'}durationSeconds{'}}'} 是字符串。</span><textarea rows={8} value={modelTemplateText(channel, modelId)} placeholder="留空＝用渠道/默认模板" onChange={(event) => updateModelTemplate(index, modelId, event.target.value)} /></label> : null}
+            {isMusic ? <label>{modelId} · 生成模式（不选＝两种都支持）<span className="capability-modes">{MUSIC_MODE_OPTIONS.map(([value, label]) => <span key={value}><input type="checkbox" checked={musicModesOf(declared).includes(value)} onChange={(event) => { const current = musicModesOf(declared); const next = event.target.checked ? [...new Set([...current, value])] : current.filter((item) => item !== value); updateModelCapability(index, modelId, { modes: next }); }} />{label}</span>)}</span></label> : null}
             {isVideo ? <label>{modelId} · 输入画面（可多选，不选＝按模型名自动判断）<span className="capability-modes">{INPUT_MODE_OPTIONS.map(([value, label]) => <span key={value}><input type="checkbox" checked={inputModesOf(declared, modelId).includes(value)} onChange={(event) => { const current = inputModesOf(declared, modelId); const next = event.target.checked ? [...new Set([...current, value])] : current.filter((item) => item !== value); updateModelCapability(index, modelId, { inputModes: next, inputFrame: undefined }); }} />{label}</span>)}</span></label> : null}
           </div>
         </div>;
-      }) : <div className="muted top-gap">当前渠道是「{modalities.find(([id]) => id === modality)?.[1] || modality}」模态，没有比例 / 清晰度 / 时长这类参数，无需配置。</div>}
+      }) : <div className="muted top-gap">{isMusic ? '音乐渠道：每个模型可以声明支持的生成模式（歌词生音乐 / 描述生音乐）。' : `当前渠道是「${modalities.find(([id]) => id === modality)?.[1] || modality}」模态，没有比例 / 清晰度 / 时长这类参数，无需配置。`}</div>}
       {supportsParams && !(channel.models || []).length ? <div className="muted top-gap">先勾选可用模型，再填写每个模型的能力。</div> : null}
     </div>;
   }

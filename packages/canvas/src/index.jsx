@@ -277,11 +277,16 @@ const AUDIO_MODALITIES = [['MUSIC', '生成音乐']];
 function AudioNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
   const audioUrl = data.previewUrl || data.assetUrl;
+  const isBoxNode = Boolean(data.boxId);
+  const musicMode = data.mode === 'DESCRIPTION' ? 'DESCRIPTION' : 'LYRICS';
+  const missingPrompt = !String(data.text || data.caption || '').trim();
   const available = AUDIO_MODALITIES.filter(([modality]) => enabledCapabilities?.has(modality.toLowerCase()));
   return <NodeFrame icon="♫" tone="audio" title={data.title || '音频素材'} selected={selected}>
     {audioUrl ? <audio className="learning-node__audio" controls src={audioUrl} /> : <div className="learning-node__audio-placeholder">♫ 音频素材</div>}
-    <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="音频说明 / 提示词" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
-    {canGenerate && available.length && !data.generationStatus ? <div className="learning-node__generate-row">{available.map(([modality, label]) => <button key={modality} className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, modality, { title: data.title || '音频素材', prompt: data.text || data.caption || '' })}>{audioUrl ? `重新${label}` : label}</button>)}</div> : null}
+    <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || data.caption || ''} placeholder={isBoxNode && musicMode === 'DESCRIPTION' ? '写下你想要的音乐是什么样子…' : (isBoxNode ? '写下要唱的歌词…' : '音频说明 / 提示词')} maxLength={isBoxNode ? 3000 : 180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
+    {isBoxNode && !data.generationStatus ? <SlotParams data={{ slotType: 'music', model: data.model, resolution: musicMode === 'DESCRIPTION' ? '描述生音乐（平台代写词）' : '歌词生音乐' }} /> : null}
+    {canGenerate && (isBoxNode || available.length) && !data.generationStatus ? <div className="learning-node__generate-row">{(isBoxNode && enabledCapabilities?.has('music') ? [['MUSIC', audioUrl ? '重新生成音乐' : '生成音乐']] : available).map(([modality, label]) => <button key={modality} className="learning-node__generate nodrag" type="button" disabled={missingPrompt} title={missingPrompt ? (musicMode === 'DESCRIPTION' ? '先写下你想要的音乐是什么样子' : '先写下要唱的歌词') : undefined} onClick={() => generateNode(id, modality, { title: data.title || '音频素材', prompt: data.text || data.caption || '', boxId: data.boxId || '' })}>{label}</button>)}</div> : null}
+    {isBoxNode && missingPrompt && !data.generationStatus ? <span className="learning-node__generation-state is-error">{musicMode === 'DESCRIPTION' ? '先写下你想要的音乐是什么样子' : '先写下要唱的歌词'}</span> : null}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">可播放课程音频、音乐或配音素材；本课开放哪几种音频能力，就出现哪几个生成按钮</span>}
   </NodeFrame>;

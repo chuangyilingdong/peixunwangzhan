@@ -37,10 +37,14 @@ export function defaultInputModes(modelId) {
   return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '').trim()) ? ['FIRST_FRAME'] : ['TEXT'];
 }
 
+// 音乐的生成模式：歌词生音乐（学生直接写词）/ 描述生音乐（平台先用文本模型把描述写成歌词）
+export const MUSIC_MODES = Object.freeze(['LYRICS', 'DESCRIPTION']);
+
 export const MODALITY_CAPABILITY_DEFAULTS = Object.freeze({
   // 默认值刻意保持与改造前硬编码一致（图片 1k、视频 480p / 5 秒），避免升级即改变线上请求。
   IMAGE: Object.freeze({ aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1k', '2k', '4k'], durations: [], audio: false }),
   VIDEO: Object.freeze({ aspectRatios: ['16:9', '9:16', '1:1'], resolutions: ['480p', '720p', '1080p', '2k', '4k'], durations: [5, 10], audio: false }),
+  MUSIC: Object.freeze({ modes: ['LYRICS', 'DESCRIPTION'] }),
 });
 
 // 比例归一化：接受 9:16 / 9：16 / 9/16 / 9x16 等写法。
@@ -92,11 +96,19 @@ export function normalizeModelCapabilities(value, modality, modelId = '') {
     durations: key === 'VIDEO' ? durationList(input.durations) : [],
     audio: key === 'VIDEO' ? input.audio === true || input.audio === 1 || String(input.audio).toLowerCase() === 'true' : false,
     inputModes: key === 'VIDEO' ? normalizeInputModes(input.inputModes ?? input.inputFrame, modelId) : [],
+    modes: key === 'MUSIC' ? normalizeMusicModes(input.modes) : [],
   };
   return result;
 }
 
 // 接受新的多选数组，也接受旧版单值 inputFrame（NONE/FIRST/LAST），未声明时按模型名推断。
+// 音乐的生成模式：留空＝两种都支持（与上游一致）。
+function normalizeMusicModes(value) {
+  if (!Array.isArray(value)) return [...MUSIC_MODES];
+  const modes = [...new Set(value.map((item) => String(item ?? '').trim().toUpperCase()).filter((item) => MUSIC_MODES.includes(item)))];
+  return modes.length ? modes : [...MUSIC_MODES];
+}
+
 function normalizeInputModes(value, modelId) {
   if (!Array.isArray(value) && (value === undefined || value === null || value === '')) return defaultInputModes(modelId);
   const raw = Array.isArray(value) ? value : [value];
@@ -168,7 +180,24 @@ export function validateModelCapabilitiesInput(value, modality, modelId = '') {
     const audio = input.audio;
     if (audio !== undefined && typeof audio !== 'boolean' && audio !== 1 && audio !== 0) errors.push('「支持生成音频」只能是勾选或不勾选');
   }
+  if (key === 'MUSIC' && input.modes !== undefined && input.modes !== null) {
+    const list = Array.isArray(input.modes) ? input.modes : [input.modes];
+    const invalid = list.map((item) => String(item ?? '').trim().toUpperCase()).filter((item) => item && !MUSIC_MODES.includes(item));
+    if (invalid.length) errors.push(`音乐的生成模式只支持 歌词生音乐 / 描述生音乐，不认识：${invalid.join('、')}`);
+  }
   return errors;
+}
+
+/**
+ * 音乐的请求上下文：歌词模式下学生的输入就是要唱的词；描述模式下学生的输入是曲风/描述，
+ * 歌词由平台代写后传进来。模板与适配器共用这一个函数，避免两边算法不一致。
+ */
+export function musicRequestContext({ prompt = '', mode = '', lyrics = '' } = {}) {
+  const normalizedMode = String(mode || '').trim().toUpperCase();
+  const written = String(lyrics || '').trim();
+  const input = String(prompt || '').trim();
+  if (normalizedMode === 'DESCRIPTION') return { lyrics: written, style: input };
+  return { lyrics: written || input, style: '' };
 }
 
 export function defaultCapabilities(modality, modelId = '') {
@@ -209,13 +238,16 @@ export function listChannelModels(policy, modality) {
 
 /** 生成请求模板的可用占位符。 */
 // durationSeconds 保持改造前的字符串形态（seconds: '5'），需要数字的上游用 durationSecondsNumber。
-export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'durationSecondsNumber', 'audio', 'voice', 'n', 'firstFrameUrl', 'lastFrameUrl', 'frameItems', 'referenceItems', 'messages']);
+export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'durationSecondsNumber', 'audio', 'voice', 'n', 'firstFrameUrl', 'lastFrameUrl', 'frameItems', 'referenceItems', 'lyrics', 'style', 'messages']);
 
 // 默认请求模板刻意与改造前的请求体同形，只把写死的值换成占位符：
 // 管理员没改模板时，线上请求形状不变。视频的比例与音频放在 metadata 里（该字段原本就是透传袋），
 // 若某家模型要求在顶层，管理员在「计费与模型」里把占位符挪到顶层即可。
 export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   IMAGE: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}', metadata: { resolution: '{{resolution}}', output_format: 'png' } }),
+  // 音乐：上游（Mureka）要求 metadata.lyrics 必填；描述模式下 {{lyrics}} 是平台代写的词，
+  // {{style}} 是学生写的描述（当曲风提示词用）。
+  MUSIC: Object.freeze({ model: '{{model}}', prompt: '{{style}}', metadata: { lyrics: '{{lyrics}}', n: 1, stream: false } }),
   VIDEO: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
   // 图生视频：上游要的是顶层 image 字段。注意 api.seedance.nz 的报错文案写的是
   // "firstFrameUrl is required"，但实测真正被接受的键是 image（传 firstFrameUrl 反而 400）。

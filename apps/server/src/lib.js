@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
-import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, requiresFirstFrameFor } from './services/modelCapabilities.js';
+import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -480,7 +480,7 @@ export function normalizeLesson(value, { includeTeaching = false } = {}) {
   };
 }
 
-const GENERATION_BOX_MODALITIES = Object.freeze(['TEXT', 'IMAGE', 'VIDEO']);
+const GENERATION_BOX_MODALITIES = Object.freeze(['TEXT', 'IMAGE', 'VIDEO', 'MUSIC']);
 const MAX_GENERATION_BOXES = 20;
 // 生成框体在素材表里的类型：框体就是一种素材，和图片/视频/提示词一起排在同一条顺序里。
 export const GENERATION_BOX_MATERIAL_TYPE = 'GENERATION_BOX';
@@ -527,7 +527,8 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
     prompt: String(raw.prompt || '').slice(0, 2000),
     assetUrl: String(raw.assetUrl || '').trim().slice(0, 2000),
   };
-  if (modality !== 'TEXT') {
+  // 比例 / 清晰度只对图片与视频有意义（音乐只有生成模式，能力里也没有这些字段）
+  if (modality === 'IMAGE' || modality === 'VIDEO') {
     const rawRatio = String(raw.aspectRatio ?? '').trim();
     const submittedRatio = normalizeAspectRatio(rawRatio);
     // 写了但解析不出来的比例属于填错，不能静默换成别的值。
@@ -545,6 +546,16 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
     } else {
       box.resolution = submittedResolution || capabilities.resolutions[0] || '1k';
     }
+  }
+  if (modality === 'MUSIC') {
+    // 音乐只有「生成模式」：歌词生音乐（学生直接写词）/ 描述生音乐（平台代写词）。
+    // 时长由模型决定，上游不接受时长参数，所以这里不提供该字段。
+    const mode = String(raw.mode || '').trim().toUpperCase();
+    box.mode = MUSIC_MODES.includes(mode) ? mode : MUSIC_MODES[0];
+    // 模型声明里如果只支持一种模式，就跟着模型走，避免配出模型做不了的组合。
+    const supported = Array.isArray(capabilities.modes) && capabilities.modes.length ? capabilities.modes : [...MUSIC_MODES];
+    if (!supported.includes(box.mode)) box.mode = supported[0];
+    return box;
   }
   if (modality === 'VIDEO') {
     const submitted = raw.durationSeconds === undefined || raw.durationSeconds === null || raw.durationSeconds === '' ? null : Number(raw.durationSeconds);

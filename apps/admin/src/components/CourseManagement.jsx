@@ -12,8 +12,10 @@ const LESSON_CAPABILITY_OPTIONS = [
 const MATERIAL_TYPE_OPTIONS = [
   ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['NOTE', '文字说明'], ['PROMPT', '提示词'], ['GENERATION_BOX', '生成框体'],
 ];
-// 生成框体只支持这三种模态；每个框体单独选模型与参数。
-const GENERATION_BOX_MODALITY_OPTIONS = [['TEXT', 'AI 文字'], ['IMAGE', 'AI 生图'], ['VIDEO', 'AI 生视频']];
+// 生成框体支持的模态；每个框体单独选模型与参数。
+const GENERATION_BOX_MODALITY_OPTIONS = [['TEXT', 'AI 文字'], ['IMAGE', 'AI 生图'], ['VIDEO', 'AI 生视频'], ['MUSIC', 'AI 音乐']];
+// 音乐的生成模式：歌词生音乐（学生写词）/ 描述生音乐（平台代写词）
+const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描述生音乐（平台代写词）']];
 const TEACHING_TYPE_OPTIONS = [
   ['VIDEO', '视频'], ['PPT', 'PPT'], ['PDF', 'PDF'], ['WORD', 'Word'], ['EXCEL', 'Excel'], ['FILE', '其他文件'],
 ];
@@ -167,7 +169,9 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
         materialType,
         snapshot: {
           ...snapshot,
-          box: snapshot.box || { modality, model: '', aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '', durationSeconds: caps.durations[0] || 5, audio: false },
+          box: snapshot.box || (modality === 'MUSIC'
+            ? { modality, model: '', mode: 'LYRICS' }
+            : { modality, model: '', aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '', durationSeconds: caps.durations[0] || 5, audio: false }),
         },
       };
     });
@@ -175,17 +179,19 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   // 换模态后，把该模态不支持的参数重置为该模型能力的第一项。
   function changeBoxModality(groupIndex, materialIndex, uid, modality) {
     const caps = capabilitiesFor(modality, '');
-    patchBox(groupIndex, materialIndex, uid, () => ({
-      modality, model: '',
-      aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '',
-      durationSeconds: caps.durations[0] || 5, audio: false,
-    }));
+    patchBox(groupIndex, materialIndex, uid, () => (modality === 'MUSIC'
+      ? { modality, model: '', mode: 'LYRICS' }
+      : {
+        modality, model: '',
+        aspectRatio: caps.aspectRatios[0] || '', resolution: caps.resolutions[0] || '',
+        durationSeconds: caps.durations[0] || 5, audio: false,
+      }));
   }
   // 换模型后，把新模型不支持的比例/清晰度/时长重置为它的第一个可选项。
   function changeBoxModel(groupIndex, materialIndex, uid, model) {
     patchBox(groupIndex, materialIndex, uid, (box) => {
       const modality = String(box.modality || 'TEXT').toUpperCase();
-      if (modality === 'TEXT') return { ...box, model };
+      if (modality === 'TEXT' || modality === 'MUSIC') return { ...box, model };
       const caps = capabilitiesFor(modality, model);
       const next = { ...box, model };
       if (!caps.aspectRatios.includes(next.aspectRatio)) next.aspectRatio = caps.aspectRatios[0] || next.aspectRatio;
@@ -234,18 +240,19 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
       <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={addGroup}>＋素材组</button></div>
         {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={group.id || group.uid || `new-${groupIndex}`}>
           <div className="lesson-config-row"><input value={group.title || ''} placeholder={`素材${groupIndex + 1}`} onChange={(event) => updateGroup(groupIndex, { title: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => updateGroups((list) => list.filter((_, i) => i !== groupIndex))}>删除组</button></div>
-          {(group.materials || []).map((material, materialIndex) => { const snapshot = material.snapshot || {}; const isBox = material.materialType === 'GENERATION_BOX'; const isText = ['NOTE', 'PROMPT'].includes(material.materialType); const box = isBox ? (snapshot.box || {}) : null; const modality = String(box?.modality || 'TEXT').toUpperCase(); const caps = isBox ? capabilitiesFor(modality, box.model) : null; const capabilityLabel = String(modality).toLowerCase() === 'image' ? 'AI 生图' : String(modality).toLowerCase() === 'video' ? 'AI 生视频' : 'AI 文字'; return <div className="lesson-material-item-editor" key={material.id || material.uid || `new-${materialIndex}`}>
+          {(group.materials || []).map((material, materialIndex) => { const snapshot = material.snapshot || {}; const isBox = material.materialType === 'GENERATION_BOX'; const isText = ['NOTE', 'PROMPT'].includes(material.materialType); const box = isBox ? (snapshot.box || {}) : null; const modality = String(box?.modality || 'TEXT').toUpperCase(); const caps = isBox ? capabilitiesFor(modality, box.model) : null; const capabilityLabel = String(modality).toLowerCase() === 'image' ? 'AI 生图' : String(modality).toLowerCase() === 'video' ? 'AI 生视频' : String(modality).toLowerCase() === 'music' ? 'AI 音乐' : 'AI 文字'; return <div className="lesson-material-item-editor" key={material.id || material.uid || `new-${materialIndex}`}>
             <div className="lesson-config-row"><input value={material.title || ''} placeholder="素材标题" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { title: event.target.value })} /><select value={material.materialType || 'NOTE'} onChange={(event) => changeMaterialType(groupIndex, materialIndex, material.uid, event.target.value)}>{MATERIAL_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="text-button danger-text" onClick={() => removeMaterial(groupIndex, materialIndex)}>删除</button></div>
             {isBox ? <>
               {capabilities.includes(String(modality).toLowerCase()) ? null : <p className="muted">本课没有开放「{capabilityLabel}」能力，学生看不到这个框体；勾选上方能力后才会出现。</p>}
               <div className="form-grid">
                 <label>模态<select value={modality} onChange={(event) => changeBoxModality(groupIndex, materialIndex, material.uid, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                 <label>模型{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</label>
-                {modality !== 'TEXT' ? <><label>比例<select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>清晰度<select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label></> : null}
+                {modality === 'MUSIC' ? <label>生成模式<select value={box.mode || 'LYRICS'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, mode: event.target.value }))}>{MUSIC_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}
+                {modality === 'IMAGE' || modality === 'VIDEO' ? <><label>比例<select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>清晰度<select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label></> : null}
                 {modality === 'VIDEO' ? <><label>时长（秒）<select value={String(box.durationSeconds ?? 5)} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, durationSeconds: Number(event.target.value) }))}>{valueOptionsFor(caps.durations.map(String), String(box.durationSeconds ?? 5)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label><label className="checkbox-label"><input type="checkbox" checked={box.audio === true} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.checked }))} />生成音频{caps.audio ? '' : '（当前模型不支持）'}</label></> : null}
               </div>
               {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「计费与模型」里填写。</p> : null}
-              <textarea rows={2} value={snapshot.content || ''} placeholder="平台预填提示词（学生加入画布时会自动填进框体，可以改）" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} />
+              <textarea rows={3} value={snapshot.content || ''} placeholder={(box?.mode === 'DESCRIPTION' ? '平台预填描述（学生加入画布时会自动填进框体，可以改）：例如「关于春天放风筝的欢快儿歌」' : '平台预填歌词（学生加入画布时会自动填进框体，可以改）：例如 [Verse] 小星星眨眨眼')} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} />
               <div className="lesson-config-row"><input value={material.assetUrl || ''} placeholder={modality === 'VIDEO' ? '预置首帧图地址（图生视频模型直接用）' : '预置素材地址（可选）'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传素材'}<input type="file" accept="image/*" disabled={uploading === `${groupIndex}:${materialIndex}`} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label></div>
             </> : <>
               <input value={material.description || ''} placeholder="给学生看的说明（可选）" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { description: event.target.value })} />
