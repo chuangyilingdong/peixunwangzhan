@@ -16,6 +16,10 @@
   --cv-danger: #ff6b6b;
   --cv-radius: 10px;
   --cv-motion: 200ms;
+  /* 素材区（画面/占位）的尺寸上限：宽度上限 = 默认卡片的内容宽，高度上限用来压住竖图。
+     实际尺寸 = min(宽上限, 高上限 × 槽位画幅)，所以 9:16 得到一张竖卡、16:9 得到一张横卡。 */
+  --cv-media-max-w: 226px;
+  --cv-media-max-h: 300px;
 }
 
 .learning-canvas { font-family: var(--cv-font, ui-sans-serif, system-ui, sans-serif); font-variant-numeric: tabular-nums; position: relative; height: min(72vh, 720px); min-height: 520px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 20px; background: #171719; box-shadow: 0 24px 60px rgb(0 0 0 / 34%); }
@@ -64,9 +68,14 @@
 .learning-canvas .react-flow__connection-path { stroke-dasharray: 7 6; filter: drop-shadow(0 0 6px rgb(163 254 68 / 65%)); }
 .learning-canvas .react-flow__connectionline { z-index: 6; }
 
-.react-flow__node { min-width: 250px; }
-/* 节点铺满外层容器：拖拽把手改过尺寸后，内容跟着一起变；未拖过尺寸时等价于 auto。 */
-.learning-node { font-family: inherit; position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 120px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 14px; color: var(--cv-text); background: var(--cv-card); box-shadow: 0 12px 30px rgb(0 0 0 / 32%); transition: border-color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out; }
+/* 卡片宽度：文字/便签类保持 250；带素材的框体（图片/视频/音频/动画）按素材画幅收窄，
+   9:16 就是一张竖卡、16:9 就是横卡——和参考的节点比例一致。要看大用画布缩放（右下角/滚轮）。
+   min-width 放在卡片上而不是 .react-flow__node 上，卡片才能被素材比例带窄。 */
+.react-flow__node { min-width: 0; }
+/* 节点铺满外层容器（外层宽度由内容撑出）；要有素材的框体按素材比例决定宽度。 */
+.learning-node { font-family: inherit; position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 250px; min-height: 120px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 14px; color: var(--cv-text); background: var(--cv-card); box-shadow: 0 12px 30px rgb(0 0 0 / 32%); transition: border-color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out; }
+/* 带素材的框体不设最小宽度：素材区多宽，卡片就多宽（9:16 的槽位就是一张竖卡） */
+.learning-node--image, .learning-node--video, .learning-node--audio, .learning-node--animation { min-width: 0; }
 .learning-node:hover { border-color: #3a3a44; }
 .react-flow__node.selected .learning-node { border-color: var(--cv-primary); box-shadow: 0 0 0 1px var(--cv-primary), 0 16px 40px rgb(0 0 0 / 40%); }
 
@@ -74,21 +83,23 @@
 .learning-node.is-processing::after { content: ''; position: absolute; inset: 0; z-index: 6; pointer-events: none; background: linear-gradient(100deg, transparent 20%, rgb(163 254 68 / 10%) 45%, rgb(255 255 255 / 14%) 50%, rgb(163 254 68 / 10%) 55%, transparent 80%); transform: translateX(-100%) skewX(-18deg); animation: cv-processing-scan 1.9s ease-in-out infinite; }
 @keyframes cv-processing-scan { 0% { transform: translateX(-100%) skewX(-18deg); opacity: 0; } 25% { opacity: 1; } 100% { transform: translateX(100%) skewX(-18deg); opacity: 0; } }
 
-/* 缩放手感：把手做大做亮（React Flow 自带的 .react-flow__resize-control.handle{width:5px}
-   选择器更具体，所以要写足三层才压得住）。 */
-.learning-node__resize-line { border-color: rgb(163 254 68 / 70%); border-width: 1.5px; }
-.learning-canvas .react-flow__resize-control.learning-node__resize-handle { width: 14px; height: 14px; border: 2px solid #151515; border-radius: 5px; background: var(--cv-primary); box-shadow: 0 0 0 2px rgb(163 254 68 / 28%); }
-.learning-canvas .react-flow__resize-control.learning-node__resize-handle:hover { background: #fff; }
+/* 卡片尺寸由内容决定，没有缩放手柄（用户要求：框体不支持手动缩放，要放大就用画布缩放）。
+   原来这套把手/把手线的样式已随 NodeResizer 一起删掉。 */
 
 .learning-node__media--zoomable { cursor: zoom-in; }
 .learning-node__reference { margin: 12px; }
 /* 9:16 这类竖图**不能按卡片宽度铺开**：宽度撑满时高度 = 宽度 / 0.5625，卡片会长到比画布还高，
    输入面板在下面就没地方放，只能压住卡片（用户反馈「9:16 的图太长了，应该适配屏幕」）。
-   做法：宽度照旧占满（width:100% 不会把图片的原始宽度漏进卡片的尺寸计算），
-   高度给上限 + object-fit: contain —— 竖图会按比例缩到限高、左右居中，横图行为完全不变。
-   注意别改成 `width: auto`：那样图片的原始宽度（比如 1280）会参与卡片的 shrink-to-fit，
-   卡片会被撑到 500+ 宽（实测）。点图仍可放大看原图。 */
-.learning-node__reference img { display: block; width: 100%; max-height: 300px; object-fit: contain; border-radius: 10px; cursor: zoom-in; }
+   改成「按槽位画幅 + 上下限」定尺寸：竖图得到一张竖卡、横图得到一张横卡，比例都准。
+   注意别改成 `width: auto` 靠图片自身宽高去撑：图片的原始宽度会参与卡片的 shrink-to-fit，
+   卡片会被撑到 500+ 宽（实测）。点图可放大看原图。 */
+.learning-node__reference img {
+  display: block;
+  width: min(var(--cv-media-max-w), calc(var(--cv-media-max-h) * var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1)));
+  aspect-ratio: var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1);
+  max-height: var(--cv-media-max-h);
+  margin: 0 auto; object-fit: contain; border-radius: 10px; cursor: zoom-in;
+}
 .learning-node__reference figcaption { margin-top: 6px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
 .learning-node__textarea--compact { height: 68px; }
 .learning-node__slot-params { display: block; margin: -4px 14px 10px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
@@ -126,8 +137,13 @@
 .learning-node__audio,.learning-node__media { display: block; width: calc(100% - 24px); margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
 .learning-node > * { flex-shrink: 0; }
-/* 生成结果同理限高：竖版成图不能把卡片撑成一根长条（原因见 .learning-node__reference img 那段注释） */
-.learning-node__media { flex: 1 1 auto; min-height: 80px; max-height: 300px; object-fit: contain; background: #141419; }
+/* 生成结果：宽度同理按素材画幅定，高度上限压住竖版成图（原因见 .learning-node__reference img 那段注释） */
+.learning-node__media {
+  flex: 0 0 auto;
+  width: min(var(--cv-media-max-w), calc(var(--cv-media-max-h) * var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1)));
+  aspect-ratio: var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1);
+  min-height: 0; margin: 12px; align-self: center; object-fit: contain; background: #141419;
+}
 
 /* 右键菜单（管理端预览画布用） */
 .learning-canvas__context-menu { position: fixed; z-index: 20; min-width: 190px; padding: 6px; border: 1px solid var(--cv-border-strong); border-radius: 12px; background: var(--cv-surface); box-shadow: 0 16px 40px rgb(0 0 0 / 40%); }
@@ -167,9 +183,17 @@
 .learning-node__seg button:hover { color: #fff; background: rgb(255 255 255 / 8%); }
 .learning-node__seg button.is-on { color: var(--cv-primary-fg); background: var(--cv-primary); font-weight: 700; }
 
-/* ── 占位区：点阵底 + 居中图标与提示（复刻参考的「在底部面板输入 Prompt 生成视频」） ── */
+/* ── 占位区：点阵底 + 居中图标与提示（复刻参考的「在底部面板输入 Prompt 生成视频」） ──
+   尺寸跟着槽位画幅走：`--cv-ratio-w/h` 由 NodeFrame 从框体的 aspectRatio 注入，
+   9:16 的占位区就是一块竖向的板（参考里的空图片节点也是竖的）；没有画幅时退回 2:1 的板。 */
 .learning-node__art, .learning-node__video-preview, .learning-node__audio-placeholder, .learning-node__animation-placeholder {
-  display: grid; place-items: center; align-content: center; gap: 7px; height: 118px; margin: 12px 12px 0;
+  display: grid; place-items: center; align-content: center; gap: 7px;
+  width: min(var(--cv-media-max-w), calc(var(--cv-media-max-h) * var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1)));
+  aspect-ratio: var(--cv-ratio-w, 2) / var(--cv-ratio-h, 1);
+  height: auto;
+  /* 用固定 12px 外边距 + align-self 居中（别用 margin:auto：auto 外边距不参与卡片的宽度计算，
+     会让带素材的卡片比同类卡片窄 24px）；外层是 flex 列，交叉轴对齐即水平居中 */
+  margin: 12px 12px 0; align-self: center;
   border: 1px solid var(--cv-border); border-radius: 12px; color: var(--cv-text-dim); text-align: center;
   background-color: #1b1b21; background-image: radial-gradient(rgb(255 255 255 / 6%) 1px, transparent 1px); background-size: 14px 14px;
 }

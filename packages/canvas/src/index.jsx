@@ -9,7 +9,6 @@ import {
   Handle,
   MarkerType,
   MiniMap,
-  NodeResizer,
   getBezierPath,
   Position,
   ReactFlow,
@@ -17,7 +16,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
-  useStore,
+  useStoreApi,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
@@ -32,10 +31,37 @@ function id(prefix) {
 function safeSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return { nodes: [], edges: [], viewport: EMPTY_VIEWPORT };
   return {
-    nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
+    // 框体尺寸既不落库也不恢复：卡片多大由内容（素材画幅）决定，学生不能手动缩放卡片
+    // （见第四节画布约定第 16 条）。历史快照里存过的 width/height 在这里一并丢掉。
+    nodes: (Array.isArray(snapshot.nodes) ? snapshot.nodes : []).map(dropNodeSize),
     edges: Array.isArray(snapshot.edges) ? snapshot.edges : [],
     viewport: { ...EMPTY_VIEWPORT, ...(snapshot.viewport || {}) },
   };
+}
+
+function dropNodeSize(node) {
+  if (!node || (!node.width && !node.height && !node.style)) return node;
+  const next = { ...node };
+  delete next.width;
+  delete next.height;
+  if (next.style) {
+    const style = { ...next.style };
+    delete style.width;
+    delete style.height;
+    next.style = Object.keys(style).length ? style : undefined;
+  }
+  return next;
+}
+
+// 素材画幅（9:16 / 16:9 / 1:1 …）→ CSS 变量，决定卡片里素材区的大小与比例：
+// 9:16 的槽位就该是一张竖卡（参考的节点也是各自按素材比例），要看大用画布缩放。
+function aspectRatioVars(value) {
+  const matched = String(value || '').match(/^\s*(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)\s*$/i);
+  if (!matched) return undefined;
+  const width = Number(matched[1]);
+  const height = Number(matched[2]);
+  if (!(width > 0) || !(height > 0)) return undefined;
+  return { '--cv-ratio-w': String(width), '--cv-ratio-h': String(height) };
 }
 
 export const CANVAS_TEMPLATE_OPTIONS = [
@@ -153,7 +179,7 @@ function NodePort({ side }) {
   </Handle>;
 }
 
-function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minHeight = 140, processing = false, onRename = null, renameDisabled = false }) {
+function NodeFrame({ icon, tone, title, children, selected, aspectRatio = '', processing = false, onRename = null, renameDisabled = false }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
   // 标题默认是纯文本、双击才变输入框：单击就能编辑的话，学生想拖卡片往往点进输入框里，
@@ -161,12 +187,10 @@ function NodeFrame({ icon, tone, title, children, selected, minWidth = 220, minH
   const [renaming, setRenaming] = useState(false);
   const canRename = Boolean(onRename) && !readOnly && !renameDisabled;
   const closeRename = () => setRenaming(false);
-  // 缩放把手放在圆角容器外面：.learning-node 有 overflow:hidden（为了裁掉溢出内容），
-  // 把手是贴在节点四角、探出边缘的，放里面会被裁掉一半甚至整个点不到。
+  // 卡片尺寸由「内容 + 素材画幅」决定，没有缩放手柄（拖动框体只挪位置，改大小用画布缩放）。
   return <>
-    <NodeResizer isVisible={Boolean(selected) && !readOnly} minWidth={minWidth} minHeight={minHeight} lineClassName="learning-node__resize-line" handleClassName="learning-node__resize-handle" />
     <NodePort side="left" />
-    <div className={`learning-node learning-node--${tone}${processing ? ' is-processing' : ''}`}>
+    <div className={`learning-node learning-node--${tone}${processing ? ' is-processing' : ''}`} style={aspectRatioVars(aspectRatio)}>
       <div className="learning-node__heading">
         <span>{icon}</span>
         {canRename && renaming
@@ -230,7 +254,7 @@ function FrameRefRows({ incoming, referenceUrl, omni, referenceAssets, supportsF
 function PromptNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const generated = String(data.generatedText || '');
-  return <NodeFrame icon="✎" tone="prompt" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✎" tone="prompt" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {generated
       ? <div className="learning-node__text-result nodrag">{generated}</div>
       : <div className="learning-node__art"><span>✎</span><small>{data.slotType === 'text' ? '在底部面板写提示词，生成文字' : '在底部面板写下内容'}</small></div>}
@@ -304,7 +328,7 @@ function ImageNode({ id, data, selected }) {
   const imageUrl = data.previewUrl || data.assetUrl;
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
   const referenceUrl = !imageUrl ? String(data.referenceUrl || '') : '';
-  return <NodeFrame icon="✦" tone="image" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {imageUrl
       ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={imageUrl} alt={data.caption || 'AI生成画面'} onClick={() => openPreview(imageUrl)} title="点击放大查看" />
       : referenceUrl
@@ -314,7 +338,7 @@ function ImageNode({ id, data, selected }) {
 }
 function CharacterNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="♙" tone="character" processing={data.generationStatus === 'PENDING'} title={data.title || '故事角色'} selected={selected}>
+  return <NodeFrame icon="♙" tone="character" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title || '故事角色'} selected={selected}>
     <div className="learning-node__character-art">{data.emoji || '🧒'}</div>
     <input className="learning-node__input nodrag" value={data.name || ''} placeholder="角色名字" maxLength={40} onChange={(event) => updateNode(id, { name: event.target.value })} />
     <input className="learning-node__input learning-node__input--compact nodrag" value={data.trait || ''} placeholder="性格、能力或目标" maxLength={80} onChange={(event) => updateNode(id, { trait: event.target.value })} />
@@ -325,7 +349,7 @@ function CharacterNode({ id, data, selected }) {
 
 function SceneNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="⌂" tone="scene" processing={data.generationStatus === 'PENDING'} title={data.title || '故事场景'} selected={selected}>
+  return <NodeFrame icon="⌂" tone="scene" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title || '故事场景'} selected={selected}>
     <div className="learning-node__scene-art"><span>{data.emoji || '🌲'}</span><small>{data.mood || '神秘氛围'}</small></div>
     <input className="learning-node__input nodrag" value={data.place || ''} placeholder="场景地点" maxLength={60} onChange={(event) => updateNode(id, { place: event.target.value })} />
     <input className="learning-node__input learning-node__input--compact nodrag" value={data.mood || ''} placeholder="氛围，例如：温暖、紧张" maxLength={80} onChange={(event) => updateNode(id, { mood: event.target.value })} />
@@ -344,7 +368,7 @@ function VideoNode({ id, data, selected }) {
   const referenceUrl = !videoUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
   const incoming = getIncomingImageAssetUrls(id);
   const sourceUrl = referenceUrl || incoming[0] || '';
-  return <NodeFrame icon="▶" tone="video" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
       : sourceUrl
@@ -356,7 +380,7 @@ function VideoNode({ id, data, selected }) {
 
 function NoteNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="☼" tone="note" processing={data.generationStatus === 'PENDING'} title={data.title || '创作便签'} selected={selected}>
+  return <NodeFrame icon="☼" tone="note" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title || '创作便签'} selected={selected}>
     <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder="记录一个创作想法…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     {selected && <span className="learning-node__hint">便签可以保存你的灵感</span>}
   </NodeFrame>;
@@ -368,7 +392,7 @@ const AUDIO_MODALITIES = [['MUSIC', '生成音乐']];
 function AudioNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const audioUrl = data.previewUrl || data.assetUrl;
-  return <NodeFrame icon="♫" tone="audio" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="♫" tone="audio" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {audioUrl
       ? <audio className="learning-node__audio" controls src={audioUrl} />
       : <div className="learning-node__audio-placeholder"><span>♫</span><small>在底部面板写歌词或描述，生成音乐</small></div>}
@@ -378,7 +402,7 @@ function AudioNode({ id, data, selected }) {
 function AnimationNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
-  return <NodeFrame icon="✧" tone="animation" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {videoUrl
       ? <video className="learning-node__media" controls muted loop src={videoUrl} />
       : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}
@@ -539,14 +563,26 @@ const CANVAS_FIT_PADDING = { top: '24px', right: '40px', bottom: '320px', left: 
 // 这些字段是「边打字边改」的，连续编辑同一条框体的同一批字段只记一条撤销记录。
 const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait', 'place', 'mood', 'emoji', 'studentParams', 'audio']);
 
-// 底部输入面板：贴在当前选中框体的正下方，跟着框体一起动（复刻参考的行为）。
-// 「丝滑」的关键是别让它慢半拍：位置用 transform 直接算、不加 CSS 过渡，
-// 画布平移缩放从 React Flow 内部 store 订阅，框体拖动则由上层 nodes 状态驱动，两条路都是当帧更新。
+// 底部输入面板：贴在当前选中框体的正下方。
+// 「丝滑」的关键是别让它慢半拍：位置用 transform 直接算、不加 CSS 过渡。
+//
+// 锚点策略（用户反馈「平移画布时输入框不该跟着动，只有拖框体时才动」）：
+// **只在框体动了（拖动/换选中框体）时重新取一次画布 transform**，画布平移/缩放不重新取。
+// 之前是实时订阅 transform，于是平移画布时面板会跟着追框体、追到画布边缘又被夹住，
+// 看起来就是「既不跟着框体、也没停在原地」——现在平移时它原地不动，
+// 想把它叫回来点一下任意框体（选中变化会重新锚定）即可。
 function CanvasDockPanel({ node, containerRef, onRequestMaterials }) {
-  const transform = useStore((state) => state.transform);
+  const store = useStoreApi();
   const panelRef = useRef(null);
+  const [anchor, setAnchor] = useState(null);
   const [panelHeight, setPanelHeight] = useState(0);
   const [box, setBox] = useState({ width: 0, height: 0 });
+
+  // 锚点：只在「框体位置变了 / 换了框体」时重新取画布 transform（见上面的锚点策略）。
+  useLayoutEffect(() => {
+    const [x, y, zoom] = store.getState().transform;
+    setAnchor((current) => (current && current.x === x && current.y === y && current.zoom === zoom ? current : { x, y, zoom }));
+  }, [store, node.id, node.position.x, node.position.y]);
 
   // 面板高度随内容变（分段参数出现/消失、提示词换行），量出来才能判断放得下放不下。
   useLayoutEffect(() => {
@@ -580,11 +616,14 @@ function CanvasDockPanel({ node, containerRef, onRequestMaterials }) {
     return () => observer.disconnect();
   }, [containerRef]);
 
-  const zoom = transform[2] || 1;
+  // 首帧还没量到锚点/容器时先用当前画布 transform 兜底，useLayoutEffect 会在绘制前补上
+  const [fallbackX, fallbackY, fallbackZoom] = store.getState().transform;
+  const transform = anchor || { x: fallbackX, y: fallbackY, zoom: fallbackZoom };
+  const zoom = transform.zoom || 1;
   const nodeWidth = (node.measured?.width || node.width || 250) * zoom;
   const nodeHeight = (node.measured?.height || node.height || 160) * zoom;
-  const nodeLeft = node.position.x * zoom + transform[0];
-  const nodeTop = node.position.y * zoom + transform[1];
+  const nodeLeft = node.position.x * zoom + transform.x;
+  const nodeTop = node.position.y * zoom + transform.y;
   const panelWidth = Math.max(280, Math.min(DOCK_WIDTH, box.width - DOCK_MARGIN * 2));
   // 水平：优先居中于框体。居中会越出画布时改成**与框体的左/右边对齐**——
   // 参考实现是「居中后硬夹住」，框体靠边时面板会被推到离框体很远的地方，看着就是错位。
