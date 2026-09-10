@@ -152,6 +152,17 @@ try {
   const filteredJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [filtered?.job?.id || '']);
   check(!filteredJob?.reference_asset_urls, `不该有参考素材落库，实际 ${filteredJob?.reference_asset_urls}`);
 
+  // 5.11b 老师上传的「画布素材」（公开可见）可以当参考：相对地址会升级成上游可抓的绝对地址
+  q("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('file_pub1','PLATFORM','INTERNAL_PROXY','ref.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)", [now, now]);
+  q("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('file_priv1','USER','INTERNAL_PROXY','private.png','image/png','MEDIA_ASSET','PRIVATE','ACTIVE',?,?)", [now, now]);
+  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref3','mg1','上传素材参考','','GENERATION_BOX',NULL,?,7,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  const uploadRef = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref3', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: '/api/student/file-assets/file_pub1/download' }, { type: 'IMAGE', url: '/api/student/file-assets/file_priv1/download' }] }));
+  check(uploadRef?.queued === true, '上传素材作参考应能生成');
+  const uploadJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [uploadRef?.job?.id || '']);
+  const uploadRefs = String(uploadJob?.reference_asset_urls || '');
+  check(uploadRefs.includes('/api/public/file-assets/file_pub1/download'), `公开素材应升级成公开绝对地址，实际 ${uploadRefs}`);
+  check(!uploadRefs.includes('file_priv1'), `非公开素材不该被采用，实际 ${uploadRefs}`);
+
   // 5.11 视频/音频参考按各自类型展开（MiniMax V2 的 content 项）
   const typedBody = renderRequestTemplate({ model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'] }, { model: 'MiniMax-H3', prompt: '晨光', referenceAssets: [{ type: 'IMAGE', url: 'i1' }, { type: 'VIDEO', url: 'v1' }, { type: 'AUDIO', url: 'a1' }] });
   const roles = (typedBody.content || []).slice(1).map((item) => item.role);

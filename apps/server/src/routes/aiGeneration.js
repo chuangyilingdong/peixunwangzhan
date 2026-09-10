@@ -4,6 +4,7 @@ import { generationProviderInfo, getGenerationProvider } from '../services/gener
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame } from '../services/modelCapabilities.js';
+import { PUBLIC_SITE_URL } from '../config.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
@@ -184,11 +185,35 @@ function jobDetail(jobId, { requireAuth = null } = {}) {
  * 图生视频模型的首帧来源：只认本项目已有的图片素材。
  * 客户端传的是 assetUrl，这里回查 media_assets 确认归属，避免任意外部 URL 被送进上游。
  */
+// 站内相对地址（老师上传的素材是 /api/student/file-assets/<id>/download）上游抓不到，
+// 只要这个文件是「公开可见」的，就换成绝对地址的公开下载链接再发；不可公开的一律拒绝。
+function publicFileAssetUrl(value) {
+  const url = String(value || '').trim();
+  const match = url.match(/^\/api\/(?:student|public)\/file-assets\/([^/]+)\/download$/);
+  if (!match) return '';
+  const file = row('SELECT id,status,visibility,category,expires_at FROM file_assets WHERE id=?', [match[1]]);
+  if (!file || file.status !== 'ACTIVE') return '';
+  if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) return '';
+  if (file.category === 'TEACHING_ASSET') return '';
+  if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') return '';
+  return `${String(PUBLIC_SITE_URL || '').replace(/\/+$/, '')}/api/public/file-assets/${file.id}/download`;
+}
+
+// 生成用的画面/参考来源：已是绝对地址（生成素材、data URL、本地 mock）直接用，
+// 否则尝试升级成公开绝对地址（老师上传的素材走这条）。
+function resolvableAssetUrl(value) {
+  const url = String(value || '').trim();
+  if (!url || url.length > 2000) return '';
+  if (/^(https?:\/\/|data:|mock:\/\/)/i.test(url)) return url;
+  return publicFileAssetUrl(url);
+}
+
 function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   const url = String(sourceAssetUrl || '').trim();
   if (!url || url.length > 2000) return '';
   const asset = row("SELECT asset_url FROM media_assets WHERE project_id = ? AND modality = 'IMAGE' AND asset_url = ?", [projectId, url]);
-  return asset ? String(asset.asset_url) : '';
+  if (asset) return String(asset.asset_url);
+  return publicFileAssetUrl(url);
 }
 
 // 全能参考的素材：只认本项目对应模态的素材（和首帧同一套白名单思路）。
@@ -217,9 +242,10 @@ function resolveReferenceAssets(projectId, value) {
       `SELECT asset_url FROM media_assets WHERE project_id=? AND asset_url=? AND modality IN (${REFERENCE_MODALITIES[type].map(() => '?').join(',')})`,
       [projectId, url, ...REFERENCE_MODALITIES[type]],
     );
-    if (!allowed) continue;
+    const resolved = allowed ? String(allowed.asset_url) : publicFileAssetUrl(url);
+    if (!resolved) continue;
     counts[type] += 1;
-    out.push({ type, url: String(allowed.asset_url) });
+    out.push({ type, url: resolved });
   }
   return out;
 }
@@ -378,10 +404,11 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     const presetAsset = String(target?.assetUrl || '').trim();
     if (options.inputModes.includes('OMNI_REFERENCE') && (references.length || presetAsset)) {
       // 全能参考：这些素材当参考发，不当首/尾帧（上游不允许混用）；框体预置素材也算一张图片参考。
-      options.referenceAssets = references.length ? references : [{ type: 'IMAGE', url: presetAsset }];
+      const presetResolved = resolvableAssetUrl(presetAsset);
+      options.referenceAssets = references.length ? references : (presetResolved ? [{ type: 'IMAGE', url: presetResolved }] : []);
     } else {
       // 框体挂了预置素材时，它就是首帧（学生不必自己再连一张）。
-      const presetFirstFrame = acceptsFirstFrame(options.inputModes) ? presetAsset : '';
+      const presetFirstFrame = acceptsFirstFrame(options.inputModes) ? resolvableAssetUrl(presetAsset) : '';
       const resolvedFirstFrame = String(firstFrameUrl || '').trim() || presetFirstFrame;
       if (resolvedFirstFrame) options.firstFrameUrl = resolvedFirstFrame;
       if (lastFrameUrl) options.lastFrameUrl = String(lastFrameUrl).trim();
