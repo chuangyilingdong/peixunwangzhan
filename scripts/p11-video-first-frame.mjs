@@ -138,15 +138,28 @@ try {
 
   // 5.8 全能参考：多张参考图能生成并落库；与首/尾帧不能混用
   q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref','mg1','全能参考','','GENERATION_BOX',NULL,?,5,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
-  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', sourceAssetUrl: 'mock://asset1', referenceAssetUrls: ['mock://asset2'] })), 'GENERATION_MIXED_INPUT_MODES', 'frames + references');
-  const omniRefs = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssetUrls: ['mock://asset1', 'mock://asset2'] }));
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', sourceAssetUrl: 'mock://asset1', referenceAssets: [{ type: 'IMAGE', url: 'mock://asset2' }] })), 'GENERATION_MIXED_INPUT_MODES', 'frames + references');
+  const omniRefs = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: 'mock://asset1' }, { type: 'IMAGE', url: 'mock://asset2' }] }));
   check(omniRefs?.queued === true, '全能参考给多张参考图应能生成');
   const refsJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [omniRefs?.job?.id || '']);
   check(String(refsJob?.reference_asset_urls || '').includes('mock://asset1') && String(refsJob?.reference_asset_urls || '').includes('mock://asset2'), `参考素材应落库，实际 ${refsJob?.reference_asset_urls}`);
+  check(String(refsJob?.reference_asset_urls || '').includes('"type":"IMAGE"'), `参考素材应带类型，实际 ${refsJob?.reference_asset_urls}`);
+
+  // 5.10 参考素材只认本项目对应模态的素材：外站地址 / 不存在的视频素材都会被丢掉
+  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref2','mg1','全能参考2','','GENERATION_BOX',NULL,?,6,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  const filtered = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref2', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: 'https://evil.example/x.png' }, { type: 'VIDEO', url: 'mock://asset1' }] }));
+  check(filtered?.queued === true, '外站/类型不匹配的参考应被过滤掉，但请求本身仍可生成');
+  const filteredJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [filtered?.job?.id || '']);
+  check(!filteredJob?.reference_asset_urls, `不该有参考素材落库，实际 ${filteredJob?.reference_asset_urls}`);
+
+  // 5.11 视频/音频参考按各自类型展开（MiniMax V2 的 content 项）
+  const typedBody = renderRequestTemplate({ model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'] }, { model: 'MiniMax-H3', prompt: '晨光', referenceAssets: [{ type: 'IMAGE', url: 'i1' }, { type: 'VIDEO', url: 'v1' }, { type: 'AUDIO', url: 'a1' }] });
+  const roles = (typedBody.content || []).slice(1).map((item) => item.role);
+  check(roles.includes('reference_image') && roles.includes('reference_video') && roles.includes('reference_audio'), `三种参考角色都应展开，实际 ${JSON.stringify(roles)}`);
 
   // 5.9 全能参考的请求体：content 里按角色展开参考图
   const refTemplate = { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'], duration: '{{durationSecondsNumber}}' };
-  const refBody = renderRequestTemplate(refTemplate, { model: 'MiniMax-H3', prompt: '夜色', durationSeconds: 5, referenceUrls: ['mock://asset1'] });
+  const refBody = renderRequestTemplate(refTemplate, { model: 'MiniMax-H3', prompt: '夜色', durationSeconds: 5, referenceAssets: [{ type: 'IMAGE', url: 'mock://asset1' }] });
   check(refBody.content?.[1]?.role === 'reference_image' && refBody.content[1].image_url.url === 'mock://asset1', `全能参考应展开成 reference_image 项，实际 ${JSON.stringify(refBody).slice(0, 160)}`);
   const frameTemplate = { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{frameItems}}'], duration: '{{durationSecondsNumber}}' };
   const frameBody = renderRequestTemplate(frameTemplate, { model: 'MiniMax-H3', prompt: '夜色', durationSeconds: 5, firstFrameUrl: 'u1' });

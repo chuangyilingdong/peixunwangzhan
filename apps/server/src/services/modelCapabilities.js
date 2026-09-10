@@ -241,8 +241,21 @@ function typedTemplateValue(key, context) {
     return items;
   }
   if (key === 'referenceItems') {
-    const urls = Array.isArray(context.referenceUrls) ? context.referenceUrls : [];
-    return urls.filter(Boolean).slice(0, 9).map((url) => ({ type: 'image_url', image_url: { url: String(url) }, role: 'reference_image' }));
+    // 全能参考：按类型展开成 MiniMax V2 的 content 项（图片 ≤9 / 视频 ≤3 / 音频 ≤3，由服务端限制）
+    const assets = Array.isArray(context.referenceAssets) ? context.referenceAssets : [];
+    const limits = { IMAGE: 9, VIDEO: 3, AUDIO: 3 };
+    const counts = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
+    const items = [];
+    for (const asset of assets) {
+      const type = String(asset?.type || 'IMAGE').toUpperCase();
+      const url = String(asset?.url || '').trim();
+      if (!url || !limits[type] || counts[type] >= limits[type]) continue;
+      counts[type] += 1;
+      if (type === 'IMAGE') items.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
+      else if (type === 'VIDEO') items.push({ type: 'video_url', video_url: { url }, role: 'reference_video' });
+      else items.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' });
+    }
+    return items;
   }
   return templateValue(key, context);
 }

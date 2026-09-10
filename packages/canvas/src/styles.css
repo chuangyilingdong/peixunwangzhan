@@ -72,3 +72,4 @@
 .learning-node__frames figure { flex: 1; margin: 0; min-width: 0; }
 .learning-node__frames img { display: block; width: 100%; border-radius: 8px; }
 .learning-node__frames figcaption { margin-top: 4px; color: #8f9fd4; font-size: 10px; }
+.learning-node__ref-chip { display: grid; place-items: center; min-height: 46px; border-radius: 8px; border: 1px dashed rgba(200,212,255,.35); color: #cdd8ff; background: rgba(6,16,48,.5); font-size: 12px; }

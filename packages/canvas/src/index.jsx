@@ -214,7 +214,7 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate, getIncomingImageAssetUrl, getIncomingImageAssetUrls } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate, getIncomingImageAssetUrls, getIncomingAssetRefs } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
   // 输入画面按模型声明的方式给（可多选）：支持文生就可以不带图；支持首帧才用连过来的图/框体预置素材；
   // 支持尾帧才用第二张连过来的图。不支持的方式一律不送，服务端也会再拦一次。
@@ -229,7 +229,7 @@ function VideoNode({ id, data, selected }) {
   const incoming = getIncomingImageAssetUrls(id);
   const omni = inputModes.includes('OMNI_REFERENCE');
   // 全能参考与首/尾帧互斥（上游不允许混用）：声明了全能参考就按参考素材发，否则按首/尾帧发。
-  const referenceAssetUrls = omni ? incoming.slice(0, 9) : [];
+  const referenceAssets = omni ? getIncomingAssetRefs(id) : [];
   const sourceAssetUrl = !omni && supportsFirstFrame ? (incoming[0] || referenceUrl) : '';
   const lastFrameAssetUrl = !omni && supportsFirstFrame && supportsLastFrame ? String(incoming[1] || '') : '';
   const missingFirstFrame = supportsFirstFrame && !supportsText && !sourceAssetUrl;
@@ -237,7 +237,7 @@ function VideoNode({ id, data, selected }) {
     ? '该模型需要先连接一张画面（首帧）'
     : (missingPrompt ? '先写下这一段的提示词，再生成' : '');
   const frameHint = omni
-    ? `从图片节点连过来的画面都当参考素材（已连 ${referenceAssetUrls.length} 张，最多 9 张）`
+    ? `连过来的图片/视频/音频都当参考素材（已连 ${referenceAssets.length} 个：图 ≤9、视频 ≤3、音频 ≤3）`
     : (supportsFirstFrame && supportsLastFrame
       ? '按连线顺序：第一条图片连线当首帧，第二条当尾帧'
       : (supportsFirstFrame ? '从图片节点的圆点连过来，当首帧' : '该模型只吃文本提示词'));
@@ -249,12 +249,14 @@ function VideoNode({ id, data, selected }) {
         : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
-    {(sourceAssetUrl || lastFrameAssetUrl || referenceAssetUrls.length) ? <div className="learning-node__frames nodrag">
+    {(sourceAssetUrl || lastFrameAssetUrl || referenceAssets.length) ? <div className="learning-node__frames nodrag">
       {sourceAssetUrl ? <figure><img src={sourceAssetUrl} alt="首帧" /><figcaption>首帧</figcaption></figure> : null}
       {lastFrameAssetUrl ? <figure><img src={lastFrameAssetUrl} alt="尾帧" /><figcaption>尾帧</figcaption></figure> : null}
-      {referenceAssetUrls.map((url, index) => <figure key={`${url}-${index}`}><img src={url} alt={`参考${index + 1}`} /><figcaption>参考{index + 1}</figcaption></figure>)}
+      {referenceAssets.map((asset, index) => asset.type === 'IMAGE'
+        ? <figure key={`${asset.url}-${index}`}><img src={asset.url} alt={`参考${index + 1}`} /><figcaption>参考{index + 1}</figcaption></figure>
+        : <figure key={`${asset.url}-${index}`}><span className="learning-node__ref-chip">{asset.type === 'VIDEO' ? '▶ 视频' : '♫ 音频'}</span><figcaption>参考{index + 1}</figcaption></figure>)}
     </div> : null}
-    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={Boolean(blockedReason)} title={blockedReason || undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssetUrls })}>▶ 生成故事短片</button>}
+    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={Boolean(blockedReason)} title={blockedReason || undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssets })}>▶ 生成故事短片</button>}
     {blockedReason && !data.generationStatus ? <span className="learning-node__generation-state is-error">{blockedReason}</span> : null}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
     {selected && <span className="learning-node__hint">{frameHint}</span>}
@@ -296,6 +298,9 @@ function AnimationNode({ id, data, selected }) {
     {selected && <span className="learning-node__hint">动画按视频能力生成；本课未开放 AI 生视频时不能生成</span>}
   </NodeFrame>;
 }
+
+// 连到视频节点上的素材按节点类型归类（全能参考用）
+const NODE_ASSET_KIND = Object.freeze({ image: 'IMAGE', video: 'VIDEO', animation: 'VIDEO', audio: 'AUDIO' });
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
@@ -356,6 +361,19 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
       .filter(Boolean);
   }, [edges, nodes]);
   const getIncomingImageAssetUrl = useCallback((nodeId) => getIncomingImageAssetUrls(nodeId)[0] || '', [getIncomingImageAssetUrls]);
+
+  // 全能参考要按类型区分：图片/视频/音频节点连过来的素材各算一类。
+  const getIncomingAssetRefs = useCallback((nodeId) => {
+    const sourceIds = (edges || []).filter((edge) => edge.target === nodeId).map((edge) => edge.source);
+    return sourceIds
+      .map((sourceId) => (nodes || []).find((node) => node.id === sourceId))
+      .map((node) => {
+        const type = NODE_ASSET_KIND[node?.type] || '';
+        const url = String(node?.data?.assetUrl || node?.data?.previewUrl || '').trim();
+        return type && url ? { type, url } : null;
+      })
+      .filter(Boolean);
+  }, [edges, nodes]);
   const addNodeAt = useCallback((type, position) => {
     if (readOnly || !allowNodeCreation) return;
     const capabilityByType = { prompt: 'text', image: 'image', video: 'video' };
@@ -469,7 +487,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}

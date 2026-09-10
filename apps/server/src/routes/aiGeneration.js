@@ -98,11 +98,11 @@ export function assertLessonGenerationBox({ context, modality, projectId, boxId,
  * 视频的「输入画面」按模型声明的方式放行：模型支持多种方式时，学生给什么就用什么，
  * 不再二选一强制（MiniMax-H3 这类文生/图生/首尾帧都支持的模型，以前只能二选一）。
  */
-function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', referenceUrls = [], requestedFrames = false }) {
+function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [], requestedFrames = false }) {
   const list = Array.isArray(modes) && modes.length ? modes : ['TEXT'];
   const hasFirst = Boolean(String(firstFrameUrl || '').trim());
   const hasLast = Boolean(String(lastFrameUrl || '').trim());
-  const references = (Array.isArray(referenceUrls) ? referenceUrls : []).filter(Boolean);
+  const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
   const acceptsOmni = list.includes('OMNI_REFERENCE');
   // 上游 MiniMax V2：图生（首/尾帧）与多素材参考互斥，不能混用。
   if (references.length && (hasFirst || hasLast || requestedFrames)) throw errors.badRequest('图生视频与全能参考不能混用：请只选一种输入方式', 'GENERATION_MIXED_INPUT_MODES');
@@ -191,10 +191,37 @@ function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   return asset ? String(asset.asset_url) : '';
 }
 
-// 全能参考的素材：只认本项目的图片素材（与首帧同一套白名单校验）。
-function resolveFrameUrls(projectId, value) {
+// 全能参考的素材：只认本项目对应模态的素材（和首帧同一套白名单思路）。
+// 上游限制：图片 ≤9、视频 ≤3、音频 ≤3。
+const REFERENCE_LIMITS = Object.freeze({ IMAGE: 9, VIDEO: 3, AUDIO: 3 });
+const REFERENCE_MODALITIES = Object.freeze({ IMAGE: ['IMAGE'], VIDEO: ['VIDEO'], AUDIO: ['MUSIC', 'PODCAST', 'DUBBING'] });
+
+function normalizeReferenceType(value) {
+  const text = String(value || '').trim().toUpperCase();
+  if (text === 'IMAGE' || text === 'VIDEO' || text === 'AUDIO') return text;
+  return '';
+}
+
+function resolveReferenceAssets(projectId, value) {
+  // 新格式 [{ type, url }]；老格式（字符串数组）按图片处理。
   const list = Array.isArray(value) ? value : [];
-  return list.map((url) => resolveFirstFrameUrl(projectId, String(url || '').trim())).filter(Boolean).slice(0, 9);
+  const counts = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
+  const out = [];
+  for (const item of list) {
+    const raw = typeof item === 'string' ? { type: 'IMAGE', url: item } : (item && typeof item === 'object' ? item : null);
+    if (!raw) continue;
+    const type = normalizeReferenceType(raw.type) || 'IMAGE';
+    const url = String(raw.url || '').trim();
+    if (!url || counts[type] >= REFERENCE_LIMITS[type]) continue;
+    const allowed = row(
+      `SELECT asset_url FROM media_assets WHERE project_id=? AND asset_url=? AND modality IN (${REFERENCE_MODALITIES[type].map(() => '?').join(',')})`,
+      [projectId, url, ...REFERENCE_MODALITIES[type]],
+    );
+    if (!allowed) continue;
+    counts[type] += 1;
+    out.push({ type, url: String(allowed.asset_url) });
+  }
+  return out;
 }
 
 function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, referenceAssetUrls = null, boxId = '' }) {
@@ -219,7 +246,7 @@ function queueItemFromJob(jobId) {
   const auth = { user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org: row('SELECT * FROM organizations WHERE id=?', [job.org_id]) };
   const project = ownProject(auth, job.project_id);
   if (!project) return null;
-  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', lastFrameAssetUrl: job.last_frame_asset_url || '', referenceAssetUrls: parseJson(job.reference_asset_urls, []) || [], boxId: job.box_id || '', requestContext: null };
+  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', lastFrameAssetUrl: job.last_frame_asset_url || '', referenceAssets: parseJson(job.reference_asset_urls, []) || [], boxId: job.box_id || '', requestContext: null };
 }
 
 function enqueuePersistedJob(jobId, delayMs = 0) {
@@ -332,7 +359,7 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
  * 输入画面：按该模型声明的方式给 —— 支持文生就可以不带图，支持首帧才用连过来的图/框体预置素材，
  * 支持尾帧才带上尾帧。学生给了模型不支持的画面会被 assertVideoFrames 拦下。
  */
-export function generationOptionsFor({ context, modality, policy, selection, box = null, firstFrameUrl = '', lastFrameUrl = '', referenceUrls = [] }) {
+export function generationOptionsFor({ context, modality, policy, selection, box = null, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [] }) {
   const key = String(modality || '').toUpperCase();
   if (key !== 'IMAGE' && key !== 'VIDEO') return {};
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;
@@ -347,11 +374,11 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     // 模型不支持生成音频时，即使框体勾选了也不发送。
     options.audio = target?.audio === true && capabilities.audio === true;
     options.inputModes = Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT'];
-    const references = (Array.isArray(referenceUrls) ? referenceUrls : []).map((url) => String(url || '').trim()).filter(Boolean).slice(0, 9);
+    const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
     const presetAsset = String(target?.assetUrl || '').trim();
     if (options.inputModes.includes('OMNI_REFERENCE') && (references.length || presetAsset)) {
-      // 全能参考：这些图当参考素材发，不当首/尾帧（上游不允许混用）；框体预置素材也算一张参考。
-      options.referenceUrls = references.length ? references : [presetAsset];
+      // 全能参考：这些素材当参考发，不当首/尾帧（上游不允许混用）；框体预置素材也算一张图片参考。
+      options.referenceAssets = references.length ? references : [{ type: 'IMAGE', url: presetAsset }];
     } else {
       // 框体挂了预置素材时，它就是首帧（学生不必自己再连一张）。
       const presetFirstFrame = acceptsFirstFrame(options.inputModes) ? presetAsset : '';
@@ -372,7 +399,7 @@ function auditContext(auth, ctx = null) {
   };
 }
 
-export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssetUrls = [], boxId = '' }) {
+export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '' }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = getAiProviderPolicy();
   const context = resolveProjectUsageContext(auth.rawUser, project);
@@ -383,21 +410,21 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-  const referenceUrls = resolveFrameUrls(project.id, referenceAssetUrls);
+  const resolvedReferences = resolveReferenceAssets(project.id, referenceAssets);
   const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
   const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
   const options = generationOptionsFor({
     context, modality, policy, selection: providerSelection, box,
     firstFrameUrl: requestedFirstFrame,
     lastFrameUrl: requestedLastFrame,
-    referenceUrls,
+    referenceAssets: resolvedReferences,
   });
   assertGenerationPreflight({
     user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
     boxId: box?.id || '',
-    frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceUrls: options.referenceUrls || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
+    frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
   });
-  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceUrls || null, boxId: box?.id || '' });
+  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '' });
   try {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
@@ -416,7 +443,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
 
 
 async function processAsyncGeneration(item) {
-  const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssetUrls = [], boxId = '' } = item;
+  const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '' } = item;
   const policy = getAiProviderPolicy();
   const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
@@ -435,11 +462,11 @@ async function processAsyncGeneration(item) {
       context, modality, policy, selection: providerSelection, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
-      referenceUrls: resolveFrameUrls(project.id, referenceAssetUrls),
+      referenceAssets: resolveReferenceAssets(project.id, referenceAssets),
     });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId,
-      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceUrls: options.referenceUrls || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
+      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
@@ -680,13 +707,13 @@ export async function handleAiGeneration(ctx) {
       context, modality, policy, selection: providerSelection, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
-      referenceUrls: resolveFrameUrls(project.id, body.referenceAssetUrls),
+      referenceAssets: resolveReferenceAssets(project.id, body.referenceAssets ?? body.referenceAssetUrls),
     });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '',
-      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceUrls: options.referenceUrls || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
+      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
-    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceUrls || null, boxId: box?.id || '' });
+    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '' });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }
@@ -710,7 +737,7 @@ export async function handleAiGeneration(ctx) {
     return runGenerationJob({
       auth, project, modality: modalityOf(source.modality), prompt: source.prompt,
       retryOfJobId: source.id, action: 'AI_GENERATION_RETRY', requestContext: ctx,
-      sourceAssetUrl: source.source_asset_url || '', lastFrameAssetUrl: source.last_frame_asset_url || '', referenceAssetUrls: parseJson(source.reference_asset_urls, []) || [], boxId: source.box_id || '',
+      sourceAssetUrl: source.source_asset_url || '', lastFrameAssetUrl: source.last_frame_asset_url || '', referenceAssets: parseJson(source.reference_asset_urls, []) || [], boxId: source.box_id || '',
     });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);

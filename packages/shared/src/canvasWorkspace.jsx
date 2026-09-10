@@ -261,10 +261,10 @@ export function CanvasWorkspace({ api, ...props }) {
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
   }
 
-  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssetUrls = [], boxId = '' }) {
+  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '' }) {
     if (!editable) throw new Error('当前作品不可编辑');
     // 比例/清晰度/时长/音频由服务端按框体配置取值，这里只提交内容、来源框体与画面来源（首帧/尾帧）。
-    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, lastFrameAssetUrl, referenceAssetUrls, boxId });
+    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, lastFrameAssetUrl, referenceAssets, boxId });
     let result = queued.job;
     for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -338,7 +338,7 @@ export function CanvasWorkspace({ api, ...props }) {
     const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
     const sourceData = snapshot.data || snapshot.props || {};
     const materialType = String(material.materialType || snapshot.type || 'NOTE').toUpperCase();
-    const type = snapshot.type || (materialType === 'IMAGE' ? 'image' : materialType === 'VIDEO' ? 'video' : materialType === 'CHARACTER' ? 'character' : materialType === 'SCENE' ? 'scene' : materialType === 'TEXT' || materialType === 'PROMPT' ? 'prompt' : 'note');
+    const type = snapshot.type || (materialType === 'IMAGE' ? 'image' : materialType === 'VIDEO' ? 'video' : materialType === 'AUDIO' ? 'audio' : materialType === 'CHARACTER' ? 'character' : materialType === 'SCENE' ? 'scene' : materialType === 'TEXT' || materialType === 'PROMPT' ? 'prompt' : 'note');
     const fallbackData = type === 'image'
       ? { title: material.title, emoji: '✨', caption: material.description || '' }
       : type === 'video'
