@@ -254,7 +254,8 @@ export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   IMAGE: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}', metadata: { resolution: '{{resolution}}', output_format: 'png' } }),
   // 音乐：上游（Mureka）要求 metadata.lyrics 必填；描述模式下 {{lyrics}} 是平台代写的词，
   // {{style}} 是学生写的描述（当曲风提示词用）。
-  MUSIC: Object.freeze({ model: '{{model}}', prompt: '{{style}}', metadata: { lyrics: '{{lyrics}}', n: 1, stream: false } }),
+  // version 是该中继要求的 API 版本（不带会报 version is required），需要的话在渠道模板里改。
+  MUSIC: Object.freeze({ model: '{{model}}', prompt: '{{style}}', metadata: { version: 'v9', lyrics: '{{lyrics}}', n: 1, stream: false } }),
   VIDEO: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
   // 图生视频：上游要的是顶层 image 字段。注意 api.seedance.nz 的报错文案写的是
   // "firstFrameUrl is required"，但实测真正被接受的键是 image（传 firstFrameUrl 反而 400）。
