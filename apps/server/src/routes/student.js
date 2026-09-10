@@ -773,11 +773,19 @@ export async function handleStudent(ctx) {
     const now = nowIso();
     const title = body.title === undefined ? project.title : nonEmptyString(body.title, '项目名称', { max: 100 });
     const snapshot = body.canvasSnapshot === undefined ? null : normalizeCanvasSnapshot(body.canvasSnapshot);
+    // 自动保存：只写当前画布，不递增版本号也不生成版本记录，避免刷新/连续改动把版本历史灌满。
+    const autoSave = body.autoSave === true;
     let nextVersion = Number(project.latest_version || 1);
     transaction(() => {
       const fresh = getOwnProject(ctx, project.id);
       assertProjectUsable(ctx, fresh);
-      if (snapshot) {
+      if (snapshot && autoSave) {
+        q(
+          `UPDATE student_projects SET title=?,canvas_snapshot=?,last_saved_at=?,updated_at=?
+           WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
+          [title, json(snapshot), now, now, fresh.id, auth.user.id, auth.user.orgId],
+        );
+      } else if (snapshot) {
         nextVersion = Number(fresh.latest_version || 1) + 1;
         q(
           `UPDATE student_projects SET title=?,canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?
