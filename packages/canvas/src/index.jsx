@@ -335,7 +335,7 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, getIncomingImageAssetUrls } = useCanvasActions();
+  const { updateNode, getIncomingImageAssetUrls, openPreview } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
   const inputModes = Array.isArray(data.inputModes) && data.inputModes.length
     ? data.inputModes
@@ -343,11 +343,13 @@ function VideoNode({ id, data, selected }) {
   const supportsFirstFrame = inputModes.includes('FIRST_FRAME');
   const referenceUrl = !videoUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
   const incoming = getIncomingImageAssetUrls(id);
+  const sourceUrl = referenceUrl || incoming[0] || '';
   return <NodeFrame icon="▶" tone="video" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
-      : (referenceUrl || incoming[0])
-        ? <figure className="learning-node__reference nodrag"><img src={referenceUrl || incoming[0]} alt="画面来源" /><figcaption>画面来源（首帧）</figcaption></figure>
+      : sourceUrl
+        // 画面的预览按高度上限缩过了，点一下放大才能看清细节（和图片框体一致）
+        ? <figure className="learning-node__reference nodrag"><img src={sourceUrl} alt="画面来源" title="点击放大查看" onClick={() => openPreview(sourceUrl)} /><figcaption>画面来源（首帧）</figcaption></figure>
         : <div className="learning-node__video-preview"><span>▶</span><small>在底部面板写提示词，生成短片</small></div>}
   </NodeFrame>;
 }
@@ -530,6 +532,9 @@ function edgePortPairKey(sourceNodeId, sourceHandle, targetNodeId, targetHandle)
 const DOCK_WIDTH = 660;
 const DOCK_MARGIN = 14;
 const DOCK_GAP = 14;
+// 初始视野 / 「适配视图」用的分边留白：下边固定留出面板的位置（面板最高约 320px），
+// 其余三边给一点点边距。必须写成 px——ReactFlow 把数字当「比例」解析，不是像素。
+const CANVAS_FIT_PADDING = { top: '24px', right: '40px', bottom: '320px', left: '40px' };
 
 // 这些字段是「边打字边改」的，连续编辑同一条框体的同一批字段只记一条撤销记录。
 const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait', 'place', 'mood', 'emoji', 'studentParams', 'audio']);
@@ -892,9 +897,11 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         onDragOver={(event) => event.preventDefault()}
         onMoveEnd={() => setViewport(getViewport())}
         fitView
-        // 初始视野别贴太近：maxZoom 1.8 时两三个框体就把画布铺满，
-        // 框体贴着底边后输入面板没地方放（只能压住框体）。压到 1.2 后下面留得出面板的位置。
-        fitViewOptions={{ padding: 0.22, maxZoom: 1.2 }}
+        // 初始视野：内容靠上、下面留出输入面板的位置。
+        // fitView 默认把内容**垂直居中**，而面板贴在被选中框体下方、高 160~320px，
+        // 居中时框体下面最多只有 (画布高 - 框体高)/2 的空间——框体长一点面板就必然压住它。
+        // 分边 padding 用 px（数字会被当成比例，不是像素），下边固定留 320px。
+        fitViewOptions={{ padding: CANVAS_FIT_PADDING, maxZoom: 1.2 }}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
@@ -921,7 +928,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
         <span className="learning-canvas__toolbar-sep" />
-        <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: 0.22, duration: 320, maxZoom: 1.2 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
+        <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: CANVAS_FIT_PADDING, duration: 320, maxZoom: 1.2 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
       </div>}
       <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片排布；从卡片两侧的 ＋ 拖一条线连到另一个框体。' : '从左侧「素材」面板添加框体，写好提示词就能生成；从卡片两侧的 ＋ 拖线连接框体，也可以把图片/视频直接拖进画布。'}</div>
       {previewImage && <div className="learning-canvas__lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}><img src={previewImage} alt="素材预览" onClick={(event) => event.stopPropagation()} /><button type="button" className="learning-canvas__lightbox-close" onClick={() => setPreviewImage(null)}>×</button></div>}

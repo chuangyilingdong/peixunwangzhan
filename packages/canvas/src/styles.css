@@ -82,7 +82,13 @@
 
 .learning-node__media--zoomable { cursor: zoom-in; }
 .learning-node__reference { margin: 12px; }
-.learning-node__reference img { display: block; width: 100%; border-radius: 10px; cursor: zoom-in; }
+/* 9:16 这类竖图**不能按卡片宽度铺开**：宽度撑满时高度 = 宽度 / 0.5625，卡片会长到比画布还高，
+   输入面板在下面就没地方放，只能压住卡片（用户反馈「9:16 的图太长了，应该适配屏幕」）。
+   做法：宽度照旧占满（width:100% 不会把图片的原始宽度漏进卡片的尺寸计算），
+   高度给上限 + object-fit: contain —— 竖图会按比例缩到限高、左右居中，横图行为完全不变。
+   注意别改成 `width: auto`：那样图片的原始宽度（比如 1280）会参与卡片的 shrink-to-fit，
+   卡片会被撑到 500+ 宽（实测）。点图仍可放大看原图。 */
+.learning-node__reference img { display: block; width: 100%; max-height: 300px; object-fit: contain; border-radius: 10px; cursor: zoom-in; }
 .learning-node__reference figcaption { margin-top: 6px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
 .learning-node__textarea--compact { height: 68px; }
 .learning-node__slot-params { display: block; margin: -4px 14px 10px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
@@ -120,7 +126,8 @@
 .learning-node__audio,.learning-node__media { display: block; width: calc(100% - 24px); margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
 .learning-node > * { flex-shrink: 0; }
-.learning-node__media { flex: 1 1 auto; min-height: 80px; object-fit: contain; background: #141419; }
+/* 生成结果同理限高：竖版成图不能把卡片撑成一根长条（原因见 .learning-node__reference img 那段注释） */
+.learning-node__media { flex: 1 1 auto; min-height: 80px; max-height: 300px; object-fit: contain; background: #141419; }
 
 /* 右键菜单（管理端预览画布用） */
 .learning-canvas__context-menu { position: fixed; z-index: 20; min-width: 190px; padding: 6px; border: 1px solid var(--cv-border-strong); border-radius: 12px; background: var(--cv-surface); box-shadow: 0 16px 40px rgb(0 0 0 / 40%); }
