@@ -33,8 +33,6 @@
 /* 连线：默认细灰，选中/激活用主色；视频节点用虚线流动（参考 video-node-link-flow） */
 .learning-canvas .react-flow__edge-path { stroke: #4a4a52; stroke-width: 1.8; transition: stroke var(--cv-motion) ease-out; }
 .learning-canvas .react-flow__edge.selected .react-flow__edge-path, .learning-canvas .react-flow__edge:hover .react-flow__edge-path { stroke: var(--cv-primary); }
-.learning-canvas .react-flow__edge.animated .react-flow__edge-path { stroke: var(--cv-primary); stroke-dasharray: 6 6; animation: cv-edge-flow 1.1s linear infinite; }
-@keyframes cv-edge-flow { to { stroke-dashoffset: -24; } }
 .learning-canvas .react-flow__attribution { display: none; }
 
 /* 连接点 */
@@ -63,12 +61,6 @@
 .learning-node__reference figcaption { margin-top: 6px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
 .learning-node__textarea--compact { height: 68px; }
 .learning-node__slot-params { display: block; margin: -4px 14px 10px; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .2px; }
-/* 平台没定参数时，学生在框体里自己选比例/清晰度/时长/音频 */
-.learning-node__param-pickers { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 12px 10px; }
-.learning-node__param-pickers label { display: flex; flex-direction: column; gap: 3px; color: var(--cv-text-faint); font-size: 10px; }
-.learning-node__param-pickers select { padding: 5px 6px; border: 1px solid var(--cv-border-strong); border-radius: 8px; color: var(--cv-text); background: var(--cv-surface-2); font-size: 11px; transition: border-color var(--cv-motion) ease-out; }
-.learning-node__param-pickers select:hover { border-color: #4a4952; }
-.learning-node__param-pickers small { flex-basis: 100%; color: var(--cv-text-faint); font-size: 10px; }
 
 .learning-canvas__lightbox { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 82%); backdrop-filter: blur(6px); }
 .learning-canvas__lightbox img { max-width: 100%; max-height: 100%; border-radius: 14px; box-shadow: 0 24px 70px rgb(0 0 0 / 60%); }
@@ -92,23 +84,18 @@
 .learning-node__textarea:focus,.learning-node__input:focus,.learning-node__emoji:focus { outline: none; border-color: var(--cv-primary); box-shadow: 0 0 0 2px rgb(163 254 68 / 22%); }
 .learning-node__count { display: block; margin: -7px 14px 10px; color: var(--cv-text-faint); font-size: 10px; text-align: right; }
 .learning-node__hint { display: block; padding: 0 12px 11px; color: var(--cv-text-faint); font-size: 10px; }
-.learning-node__art { display: grid; place-items: center; height: 105px; margin: 12px 12px 0; border: 1px solid var(--cv-border); border-radius: 12px; background: #191920; font-size: 58px; }
 .learning-node__emoji { position: absolute; width: 36px; top: 52px; right: 20px; border: 1px solid var(--cv-border-strong); border-radius: 999px; padding: 5px; text-align: center; background: var(--cv-surface-2); }
 .learning-node__input--compact { margin-top: -3px; }
 .learning-node__character-art { display: grid; place-items: center; height: 105px; margin: 12px 12px 0; border: 1px solid var(--cv-border); border-radius: 12px; background: #191920; font-size: 52px; }
 .learning-node__scene-art { display: grid; place-items: center; align-content: center; gap: 5px; height: 105px; margin: 12px 12px 0; border: 1px solid var(--cv-border); border-radius: 12px; background: #191920; color: var(--cv-text); }
 .learning-node__scene-art span { font-size: 42px; }
 .learning-node__scene-art small { max-width: 190px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
-.learning-node__video-preview { display: grid; place-items: center; align-content: center; gap: 6px; height: 105px; margin: 12px 12px 0; border: 1px solid var(--cv-border); border-radius: 12px; background: #191920; color: var(--cv-text-dim); }
-.learning-node__video-preview span { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--cv-border-strong); border-radius: 999px; padding-left: 3px; color: var(--cv-primary); }
-.learning-node__video-preview small { font-size: 11px; opacity: .88; }
 @media (max-width: 700px) { .learning-canvas { min-height: 590px; height: 72vh; } .learning-canvas__tip { max-width: 230px; } }
 
 .learning-node__audio,.learning-node__media { display: block; width: calc(100% - 24px); margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
 .learning-node > * { flex-shrink: 0; }
 .learning-node__media { flex: 1 1 auto; min-height: 80px; object-fit: contain; background: #141419; }
-.learning-node__audio-placeholder,.learning-node__animation-placeholder { display: grid; place-items: center; height: 105px; margin: 12px; border: 1px solid var(--cv-border); border-radius: 12px; color: var(--cv-text-dim); background: #191920; font-size: 16px; letter-spacing: .4px; }
 
 /* 右键菜单（管理端预览画布用） */
 .learning-canvas__context-menu { position: fixed; z-index: 20; min-width: 190px; padding: 6px; border: 1px solid var(--cv-border-strong); border-radius: 12px; background: var(--cv-surface); box-shadow: 0 16px 40px rgb(0 0 0 / 40%); }
@@ -140,3 +127,31 @@
 .learning-canvas__toolbar-btn { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 999px; color: var(--cv-text-dim); background: transparent; font-size: 16px; cursor: pointer; transition: background var(--cv-motion) ease-out, color var(--cv-motion) ease-out; }
 .learning-canvas__toolbar-btn:hover { color: #fff; background: rgb(255 255 255 / 7%); }
 .learning-canvas__toolbar-sep { width: 1px; height: 26px; margin: 0 4px; background: var(--cv-border-strong); }
+
+/* ── 连线：干净贝塞尔曲线 + 沿路径游走的主色高光（复刻参考的发光连线） ── */
+.learning-canvas .react-flow__edge:hover .react-flow__edge-path { stroke: #6b6b75; }
+.learning-canvas .learning-edge.is-selected { stroke: var(--cv-primary); stroke-width: 2.2; }
+.learning-canvas .learning-edge__glow { fill: none; stroke: var(--cv-primary); stroke-width: 3.6; stroke-linecap: round; stroke-dasharray: 30 120; filter: drop-shadow(0 0 7px rgb(163 254 68 / 90%)); pointer-events: none; animation: cv-edge-glow 2.2s linear infinite; }
+@keyframes cv-edge-glow { from { stroke-dashoffset: 150; } to { stroke-dashoffset: 0; } }
+/* 历史连线数据里带的箭头不再渲染（方向由光带表达） */
+.learning-canvas .react-flow__arrowhead, .learning-canvas marker { display: none; }
+
+/* ── 节点内参数：标签 + 分段胶囊（选中＝主色实心），复刻参考底部分段控件 ── */
+.learning-node__seg-rows { display: flex; flex-direction: column; gap: 5px; margin: 0 12px 8px; }
+.learning-node__seg-row { display: flex; align-items: center; gap: 8px; }
+.learning-node__seg-label { flex: 0 0 auto; width: 42px; color: var(--cv-text-faint); font-size: 10px; }
+.learning-node__seg { display: flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
+.learning-node__seg button { padding: 4px 9px; border: 0; border-radius: 999px; color: var(--cv-text-dim); background: transparent; font-size: 11px; cursor: pointer; transition: background var(--cv-motion) ease-out, color var(--cv-motion) ease-out; }
+.learning-node__seg button:hover { color: #fff; background: rgb(255 255 255 / 8%); }
+.learning-node__seg button.is-on { color: var(--cv-primary-fg); background: var(--cv-primary); font-weight: 700; }
+
+/* ── 占位区：点阵底 + 居中图标与提示（复刻参考的「在底部面板输入 Prompt 生成视频」） ── */
+.learning-node__art, .learning-node__video-preview, .learning-node__audio-placeholder, .learning-node__animation-placeholder {
+  display: grid; place-items: center; align-content: center; gap: 7px; height: 118px; margin: 12px 12px 0;
+  border: 1px solid var(--cv-border); border-radius: 12px; color: var(--cv-text-dim); text-align: center;
+  background-color: #1b1b21; background-image: radial-gradient(rgb(255 255 255 / 6%) 1px, transparent 1px); background-size: 14px 14px;
+}
+.learning-node__art span { font-size: 40px; line-height: 1; }
+.learning-node__art small, .learning-node__video-preview small, .learning-node__audio-placeholder small, .learning-node__animation-placeholder small { max-width: 180px; color: var(--cv-text-faint); font-size: 10.5px; line-height: 1.5; }
+.learning-node__video-preview span { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgb(163 254 68 / 45%); border-radius: 999px; padding-left: 2px; color: var(--cv-primary); font-size: 12px; }
+.learning-node__audio-placeholder span, .learning-node__animation-placeholder span { font-size: 26px; color: var(--cv-primary); }

@@ -2,11 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   addEdge,
   Background,
+  BaseEdge,
   Controls,
   Handle,
   MarkerType,
   MiniMap,
   NodeResizer,
+  getBezierPath,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -175,24 +177,36 @@ function SlotParams({ data }) {
   return <span className="learning-node__slot-params">{params.join(' · ')}</span>;
 }
 
-// 平台没给框体定参数时，学生在画布上自己挑（平台定了的项学生看不到下拉，只能按平台配置生成）。
+// 平台没给框体定参数时，学生在画布上自己挑。用参考那套「标签 + 分段胶囊」排版：
+// 选中项是主色实心胶囊，其余是暗色文字、悬停提亮；「自动」= 不下发该参数、用模型默认值。
 function SlotParamPickers({ id, data }) {
   const { updateNode, readOnly } = useCanvasActions();
   const options = data.paramOptions;
   if (readOnly || !data.slotType || !options) return null;
   const student = data.studentParams || {};
-  const fields = [];
-  if (!data.aspectRatio && Array.isArray(options.aspectRatios) && options.aspectRatios.length) fields.push({ key: 'aspectRatio', label: '比例', values: options.aspectRatios.map((value) => ({ value, label: value })) });
-  if (!data.resolution && Array.isArray(options.resolutions) && options.resolutions.length) fields.push({ key: 'resolution', label: '清晰度', values: options.resolutions.map((value) => ({ value, label: value })) });
+  const rows = [];
+  if (!data.aspectRatio && Array.isArray(options.aspectRatios) && options.aspectRatios.length) rows.push({ key: 'aspectRatio', label: '画幅', items: options.aspectRatios.map((value) => ({ value, label: value })) });
+  if (!data.resolution && Array.isArray(options.resolutions) && options.resolutions.length) rows.push({ key: 'resolution', label: '清晰度', items: options.resolutions.map((value) => ({ value, label: value })) });
   const durationOpen = data.slotType === 'video' && (data.durationSeconds === null || data.durationSeconds === undefined);
-  if (durationOpen && Array.isArray(options.durations) && options.durations.length) fields.push({ key: 'durationSeconds', label: '时长', values: options.durations.map((value) => ({ value: String(value), label: `${value} 秒` })) });
+  if (durationOpen && Array.isArray(options.durations) && options.durations.length) rows.push({ key: 'durationSeconds', label: '时长', items: options.durations.map((value) => ({ value: String(value), label: `${value} 秒` })) });
   const audioOpen = data.slotType === 'video' && data.audio !== true && data.audio !== false && options.audio === true;
-  if (!fields.length && !audioOpen) return null;
+  if (!rows.length && !audioOpen) return null;
   const update = (key, value) => updateNode(id, { studentParams: { ...student, [key]: value } });
-  return <div className="learning-node__param-pickers nodrag">
-    {fields.map((field) => <label key={field.key}><span>{field.label}</span><select aria-label={`${data.title || '框体'}${field.label}`} value={String(student[field.key] ?? field.values[0].value)} onChange={(event) => update(field.key, event.target.value)}>{field.values.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>)}
-    {audioOpen ? <label><span>音频</span><select aria-label={`${data.title || '框体'}音频`} value={student.audio === true ? 'YES' : 'NO'} onChange={(event) => update('audio', event.target.value === 'YES')}><option value="NO">不带音频</option><option value="YES">带音频</option></select></label> : null}
-    <small>这个框体的参数由你自己选</small>
+  return <div className="learning-node__seg-rows nodrag">
+    {rows.map((row) => <div className="learning-node__seg-row" key={row.key}>
+      <span className="learning-node__seg-label">{row.label}</span>
+      <div className="learning-node__seg" role="group" aria-label={`${data.title || '框体'}${row.label}`}>
+        <button type="button" className={student[row.key] ? '' : 'is-on'} title={`按课程默认（${row.items[0].label}）`} onClick={() => update(row.key, '')}>自动</button>
+        {row.items.map((item) => <button type="button" key={item.value} className={String(student[row.key]) === item.value ? 'is-on' : ''} onClick={() => update(row.key, item.value)}>{item.label}</button>)}
+      </div>
+    </div>)}
+    {audioOpen ? <div className="learning-node__seg-row">
+      <span className="learning-node__seg-label">音频</span>
+      <div className="learning-node__seg" role="group" aria-label={`${data.title || '框体'}音频`}>
+        <button type="button" className={student.audio === true ? '' : 'is-on'} onClick={() => update('audio', false)}>不带音频</button>
+        <button type="button" className={student.audio === true ? 'is-on' : ''} onClick={() => update('audio', true)}>带音频</button>
+      </div>
+    </div> : null}
   </div>;
 }
 
@@ -223,7 +237,7 @@ function ImageNode({ id, data, selected }) {
       ? <img className="learning-node__media learning-node__media--zoomable nodrag" src={imageUrl} alt={data.caption || 'AI生成画面'} onClick={() => openPreview(imageUrl)} title="点击放大查看" />
       : referenceUrl
         ? <figure className="learning-node__reference nodrag"><img src={referenceUrl} alt="框体预置素材" title="点击放大查看" onClick={() => openPreview(referenceUrl)} /><figcaption>框体预置素材</figcaption></figure>
-        : <div className="learning-node__art">{data.emoji || '🌈'}</div>}
+        : <div className="learning-node__art"><span>{data.emoji || '🌈'}</span><small>写画面描述，点下面生成画面</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.caption || ''} placeholder="写下画面描述 / 提示词…" maxLength={300} onChange={(event) => updateNode(id, { caption: event.target.value })} />
     <input className="learning-node__emoji nodrag" value={data.emoji || ''} aria-label="画面表情" maxLength={2} onChange={(event) => updateNode(id, { emoji: event.target.value })} />
     <SlotParams data={data} />
@@ -288,7 +302,7 @@ function VideoNode({ id, data, selected }) {
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
       : referenceUrl
         ? <figure className="learning-node__reference nodrag"><img src={referenceUrl} alt="框体预置首帧" /><figcaption>框体预置首帧</figcaption></figure>
-        : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
+        : <div className="learning-node__video-preview"><span>▶</span><small>写提示词，点下面生成短片</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
     <SlotParamPickers id={id} data={data} />
@@ -325,7 +339,7 @@ function AudioNode({ id, data, selected }) {
   const missingPrompt = !String(data.text || data.caption || '').trim();
   const available = AUDIO_MODALITIES.filter(([modality]) => enabledCapabilities?.has(modality.toLowerCase()));
   return <NodeFrame icon="♫" tone="audio" processing={data.generationStatus === 'PENDING'} title={data.title || '音频素材'} selected={selected}>
-    {audioUrl ? <audio className="learning-node__audio" controls src={audioUrl} /> : <div className="learning-node__audio-placeholder">♫ 音频素材</div>}
+    {audioUrl ? <audio className="learning-node__audio" controls src={audioUrl} /> : <div className="learning-node__audio-placeholder"><span>♫</span><small>写歌词或描述，点下面生成音乐</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || data.caption || ''} placeholder={isBoxNode && musicMode === 'DESCRIPTION' ? '写下你想要的音乐是什么样子…' : (isBoxNode ? '写下要唱的歌词…' : '音频说明 / 提示词')} maxLength={isBoxNode ? 3000 : 180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
     {isBoxNode && !data.generationStatus ? <SlotParams data={{ slotType: 'music', model: data.model, resolution: musicMode === 'DESCRIPTION' ? '描述生音乐（平台代写词）' : '歌词生音乐' }} /> : null}
     {canGenerate && (isBoxNode || available.length) && !data.generationStatus ? <div className="learning-node__generate-row">{(isBoxNode && enabledCapabilities?.has('music') ? [['MUSIC', audioUrl ? '重新生成音乐' : '生成音乐']] : available).map(([modality, label]) => <button key={modality} className="learning-node__generate nodrag" type="button" disabled={missingPrompt} title={missingPrompt ? (musicMode === 'DESCRIPTION' ? '先写下你想要的音乐是什么样子' : '先写下要唱的歌词') : undefined} onClick={() => generateNode(id, modality, { title: data.title || '音频素材', prompt: data.text || data.caption || '', boxId: data.boxId || '' })}>{label}</button>)}</div> : null}
@@ -339,7 +353,7 @@ function AnimationNode({ id, data, selected }) {
   const { updateNode, generateNode, canGenerate, enabledCapabilities } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
   return <NodeFrame icon="✧" tone="animation" processing={data.generationStatus === 'PENDING'} title={data.title || '动画素材'} selected={selected}>
-    {videoUrl ? <video className="learning-node__media" controls muted loop src={videoUrl} /> : <div className="learning-node__animation-placeholder">✧ 动画素材</div>}
+    {videoUrl ? <video className="learning-node__media" controls muted loop src={videoUrl} /> : <div className="learning-node__animation-placeholder"><span>✧</span><small>写提示词，点下面生成动画</small></div>}
     <input className="learning-node__input nodrag" value={data.text || data.caption || ''} placeholder="动画说明 / 提示词" maxLength={180} onChange={(event) => updateNode(id, { text: event.target.value, caption: event.target.value })} />
     {canGenerate && enabledCapabilities?.has('video') && !data.generationStatus && <button className="learning-node__generate nodrag" type="button" onClick={() => generateNode(id, 'VIDEO', { title: data.title || '动画素材', prompt: data.text || data.caption || '' })}>✧ {videoUrl ? '重新生成动画' : '生成动画'}</button>}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
@@ -349,6 +363,16 @@ function AnimationNode({ id, data, selected }) {
 
 // 连到视频节点上的素材按节点类型归类（全能参考用）
 const NODE_ASSET_KIND = Object.freeze({ image: 'IMAGE', video: 'VIDEO', animation: 'VIDEO', audio: 'AUDIO' });
+
+// 连线：干净贝塞尔曲线 + 一段沿路径游走的主色高光（复刻参考的发光连线，方向由光带表达）。
+function GlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected }) {
+  const [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+  return <>
+    <BaseEdge id={id} path={path} className={`learning-edge${selected ? ' is-selected' : ''}`} />
+    <path d={path} className="learning-edge__glow" />
+  </>;
+}
+const edgeTypes = { default: GlowEdge };
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
@@ -551,8 +575,9 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={edges.map((edge) => (edge.markerEnd ? { ...edge, markerEnd: undefined } : edge))}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={readOnly ? undefined : handleNodesChange}
         onEdgesChange={readOnly ? undefined : handleEdgesChange}
         onConnect={onConnect}
@@ -585,10 +610,10 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
         <Controls showInteractive={false} />
       </ReactFlow>
       {!readOnly && <div className="learning-canvas__toolbar">
-        <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}>⟲</button>
-        <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}>⟳</button>
+        <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
+        <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
         <span className="learning-canvas__toolbar-sep" />
-        <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: 0.22, duration: 320 })}>⤢</button>
+        <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: 0.22, duration: 320 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
       </div>}
       <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片、从圆点连线；右键空白处可创建节点。' : '从左侧「素材」面板添加框体，写好提示词就能生成。'}</div>
       {previewImage && <div className="learning-canvas__lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImage(null)}><img src={previewImage} alt="素材预览" onClick={(event) => event.stopPropagation()} /><button type="button" className="learning-canvas__lightbox-close" onClick={() => setPreviewImage(null)}>×</button></div>}

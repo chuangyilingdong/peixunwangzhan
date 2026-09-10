@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CanvasEditor, createCanvasTemplate } from '@platform/canvas';
 import { formatDate } from './auth.js';
+import { Icon } from './icons.jsx';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 import { useData } from './classroom.jsx';
 
@@ -614,15 +615,15 @@ export function CanvasWorkspace({ api, ...props }) {
     <section className="cv-layout">
       <aside className={`cv-sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
         <div className="cv-sidebar__head">
-          <div className="cv-sidebar__title"><i>☰</i><strong>工具</strong></div>
-          <button type="button" className="cv-sidebar__toggle" aria-label={sidebarCollapsed ? '展开工具' : '收起工具'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开工具' : '收起工具'} onClick={() => setSidebarCollapsed((value) => !value)}>{sidebarCollapsed ? '»' : '«'}</button>
+          <div className="cv-sidebar__title"><i><Icon name="menu" size={13} /></i><strong>工具</strong></div>
+          <button type="button" className="cv-sidebar__toggle" aria-label={sidebarCollapsed ? '展开工具' : '收起工具'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开工具' : '收起工具'} onClick={() => setSidebarCollapsed((value) => !value)}><Icon name="sidebar" size={15} /></button>
         </div>
         <div className="cv-nav">
-          {[['materials', '▦', '素材'], ['capabilities', '⚙', '能力'], ['versions', '⟲', '版本']].map(([key, icon, label]) => <button key={key} type="button" className={`cv-nav-item ${toolPanel === key ? 'is-active' : ''}`} title={label} onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === key ? null : key)); }}><i>{icon}</i><span>{label}</span></button>)}
+          {[['materials', 'grid', '素材'], ['capabilities', 'sliders', '能力'], ['versions', 'history', '版本']].map(([key, icon, label]) => <button key={key} type="button" className={`cv-nav-item ${toolPanel === key ? 'is-active' : ''}`} title={label} onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === key ? null : key)); }}><i><Icon name={icon} size={15} /></i><span>{label}</span></button>)}
         </div>
         {toolPanel && !sidebarCollapsed ? <div className="cv-panel">
           {toolPanel === 'materials' ? <>
-            <div className="cv-panel__head"><div><strong>课堂素材</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}>×</button></div>
+            <div className="cv-panel__head"><div><strong>课堂素材</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
             {materialGroups.length ? materialGroups.map((group) => <div className="cv-group" key={group.id || group.title}><h4>{group.title}</h4>{(group.materials || []).map((material) => {
               const box = material.materialType === 'GENERATION_BOX' ? boxForMaterial(material) : null;
               if (box) {
@@ -648,11 +649,11 @@ export function CanvasWorkspace({ api, ...props }) {
             })}</div>) : <p className="cv-empty">老师还没有为本节课配置素材。</p>}
           </> : null}
           {toolPanel === 'capabilities' ? <>
-            <div className="cv-panel__head"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}>×</button></div>
+            <div className="cv-panel__head"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
             <div className="cv-chips">{[['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'], ['music', 'AI 音乐']].map(([key, label]) => <span className={`cv-chip ${capabilities.includes(key) ? 'is-on' : ''}`} key={key}>{capabilities.includes(key) ? '✓' : '—'} {label}</span>)}</div>
           </> : null}
           {toolPanel === 'versions' ? <>
-            <div className="cv-panel__head"><div><strong>版本管理</strong><small>保存 / 预览 / 恢复 / 重命名 / 导出 / 对比 / 导入</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}>×</button></div>
+            <div className="cv-panel__head"><div><strong>版本管理</strong><small>保存 / 预览 / 恢复 / 重命名 / 导出 / 对比 / 导入</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
             <div className="cv-group"><h4>保存当前画布为版本</h4>
               <label className="cv-field"><span>版本名称（可选）</span><input className="cv-input" value={saveLabel === '画布编辑' ? '' : saveLabel} maxLength={100} placeholder="例如：第一版分镜" onChange={(event) => setSaveLabel(event.target.value)} /></label>
               <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft} onClick={save}>{busy ? '保存中…' : '保存为版本'}</button>
