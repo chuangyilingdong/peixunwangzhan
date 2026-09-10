@@ -261,10 +261,10 @@ export function CanvasWorkspace({ api, ...props }) {
     setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
   }
 
-  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', boxId = '' }) {
+  async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', lastFrameAssetUrl = '', boxId = '' }) {
     if (!editable) throw new Error('当前作品不可编辑');
-    // 比例/清晰度/时长/音频由服务端按框体配置取值，这里只提交内容、来源框体与首帧来源。
-    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, boxId });
+    // 比例/清晰度/时长/音频由服务端按框体配置取值，这里只提交内容、来源框体与画面来源（首帧/尾帧）。
+    const queued = await api.post('ai/generations/async', { projectId: project.data.id, modality, prompt, title, sourceAssetUrl, lastFrameAssetUrl, boxId });
     let result = queued.job;
     for (let attempt = 0; attempt < 150 && !['SUCCEEDED', 'FAILED'].includes(result.status); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -420,7 +420,13 @@ export function CanvasWorkspace({ api, ...props }) {
         // 平台预填的提示词直接写进框体，学生可以改。
         text: slotType === 'image' ? '' : promptText,
         caption: slotType === 'image' ? promptText : '',
-        ...(slotType === 'video' ? { durationSeconds: box.durationSeconds || 5, audio: box.audio === true, requiresFirstFrame: box.requiresFirstFrame === true } : {}),
+        ...(slotType === 'video' ? {
+          durationSeconds: box.durationSeconds || 5,
+          audio: box.audio === true,
+          requiresFirstFrame: box.requiresFirstFrame === true,
+          // 模型支持的输入画面方式（可多选）：文生 / 首帧 / 尾帧
+          inputModes: Array.isArray(box.inputModes) ? box.inputModes : (box.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']),
+        } : {}),
         ...(slotType === 'text' ? { generatedText: '' } : {}),
       },
     };

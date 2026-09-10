@@ -4,6 +4,25 @@ import { ApiError, Empty, ErrorState, formatCredits, formatDate, Loading, Metric
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 import { BillingSettings } from '../components/BillingSettings.jsx';
 
+// 视频模型的输入画面支持方式（可多选）：一个模型可以既支持文生、也支持图生/首尾帧。
+const INPUT_MODE_OPTIONS = [['TEXT', '文生视频（纯文本）'], ['FIRST_FRAME', '图生视频（首帧）'], ['LAST_FRAME', '首尾帧（尾帧）']];
+
+// 读回已声明的方式：既认新的多选数组，也认旧的单值 inputFrame（NONE/FIRST/LAST）。
+function inputModesOf(declared, modelId) {
+  const value = declared?.inputModes ?? declared?.inputFrame;
+  if (value === undefined || value === null || value === '') {
+    return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '')) ? ['FIRST_FRAME'] : ['TEXT'];
+  }
+  const mapped = (Array.isArray(value) ? value : [value]).map((item) => {
+    const text = String(item ?? '').trim().toUpperCase();
+    if (text === 'NONE') return 'TEXT';
+    if (text === 'FIRST') return 'FIRST_FRAME';
+    if (text === 'LAST') return 'LAST_FRAME';
+    return text;
+  }).filter((item) => INPUT_MODE_OPTIONS.some(([key]) => key === item));
+  return mapped.length ? [...new Set(mapped)] : ['TEXT'];
+}
+
 export function ProviderPolicyPanel({ api }) {
   const config = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
   const [form, setForm] = useState(null);
@@ -106,7 +125,7 @@ export function ProviderPolicyPanel({ api }) {
             {field(modelId, '清晰度', 'resolutions', isVideo ? '480p, 720p' : '1k, 2k')}
             {isVideo ? field(modelId, '时长（秒）', 'durations', '5, 10') : null}
             {isVideo ? <label className="checkbox-label">{modelId} · 支持生成音频<input type="checkbox" checked={declared.audio === true} onChange={(event) => updateModelCapability(index, modelId, { audio: event.target.checked })} /></label> : null}
-            {isVideo ? <label>{modelId} · 需要输入画面<select value={declared.inputFrame || (/(^|[-_/])i2v($|[-_/])/i.test(modelId) ? 'FIRST' : 'NONE')} onChange={(event) => updateModelCapability(index, modelId, { inputFrame: event.target.value })}><option value="NONE">不需要（文生视频）</option><option value="FIRST">需要首帧图（图生视频）</option></select></label> : null}
+            {isVideo ? <label>{modelId} · 输入画面（可多选，不选＝按模型名自动判断）<span className="capability-modes">{INPUT_MODE_OPTIONS.map(([value, label]) => <span key={value}><input type="checkbox" checked={inputModesOf(declared, modelId).includes(value)} onChange={(event) => { const current = inputModesOf(declared, modelId); const next = event.target.checked ? [...new Set([...current, value])] : current.filter((item) => item !== value); updateModelCapability(index, modelId, { inputModes: next, inputFrame: undefined }); }} />{label}</span>)}</span></label> : null}
           </div>
         </div>;
       }) : <div className="muted top-gap">当前渠道是「{modalities.find(([id]) => id === modality)?.[1] || modality}」模态，没有比例 / 清晰度 / 时长这类参数，无需配置。</div>}

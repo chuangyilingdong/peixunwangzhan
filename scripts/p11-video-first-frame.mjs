@@ -1,12 +1,14 @@
 /**
- * P11 图生视频（i2v）首帧守卫测试。
+ * P11 视频「输入画面」守卫测试：按模型声明的支持方式放行（文生 / 图生-首帧 / 首尾帧，可多选）。
  * 使用临时 SQLite，不读取或修改默认 / 生产数据库。
  *
  * 覆盖：
- *  1. 课时视频模型是 i2v（模型名带 -i2v）时，未连接图片的生成请求被
- *     GENERATION_FIRST_FRAME_REQUIRED 拦截，且不产生扣费流水
- *  2. 传了不属于本项目的图片地址，同样被拦截
- *  3. 传本项目图片素材地址时通过守卫，任务被入队
+ *  1. 模型只支持图生（i2v 类）时，未连接图片的生成请求被 GENERATION_FIRST_FRAME_REQUIRED 拦截，
+ *     且不产生扣费流水；传了不属于本项目的图片地址同样被拦
+ *  2. 传本项目图片素材地址时通过守卫，任务被入队，首帧来源落库
+ *  3. 模型同时支持文生/图生/首尾帧时：不给图能生成、给图能生成、只给尾帧被拦、
+ *     首帧+尾帧能生成且尾帧落库
+ *  4. 模型只支持文生时，给图会被 GENERATION_FIRST_FRAME_UNSUPPORTED 拦下
  */
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
@@ -77,6 +79,56 @@ try {
   check(body.metadata?.aspect_ratio === '16:9', 'i2v 默认模板应保留 metadata 里的比例');
   const t2v = renderRequestTemplate(requestTemplateFor({ requestTemplates: {} }, 'VIDEO'), { model: 'seedance-2.0-global-mini-t2v', prompt: '夜色', durationSeconds: 5, resolution: '480p', aspectRatio: '16:9', audio: false });
   check(!('image' in t2v), '文生视频默认模板不应带上首帧字段');
+
+  // 场景 5：模型声明「文生 + 图生 + 首尾帧」时，给什么用什么，不再二选一强制
+  const policy = {
+    provider: 'local-mock', model: 'canvas-mock-v1',
+    channels: [{
+      id: 'ch-video', name: '生视频', provider: 'local-mock', model: 'canvas-mock-v1', models: ['omni-video', 't2v-only'],
+      endpoint: 'https://api.example.com/v1', protocol: 'CHAT', requestTemplates: {}, modelMappings: [],
+      modelCapabilities: {
+        'omni-video': { inputModes: ['TEXT', 'FIRST_FRAME', 'LAST_FRAME'] },
+        't2v-only': { inputModes: ['TEXT'] },
+      },
+    }],
+    modalityChannels: { VIDEO: 'ch-video' },
+  };
+  q("UPDATE platform_settings SET ai_provider_policy=? WHERE id=1", [JSON.stringify(policy)]);
+  // 每个框体只能成功生成一次，所以给每种输入方式各配一个框体
+  for (const [index, boxId] of ['box-omni-text', 'box-omni-first', 'box-omni-last', 'box-omni-frames'].entries()) {
+    q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?, 'mg1', ?, '', 'GENERATION_BOX', NULL, ?, ?, ?, ?)", [boxId, `全能模型${index + 1}`, JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), index + 2, now, now]);
+  }
+  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-t2v','mg1','只文生','','GENERATION_BOX',NULL,?,3,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 't2v-only', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  q("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset2','job1','org1','stu1','proj1','IMAGE','尾帧素材','mock://asset2',?)", [now]);
+
+  const omniCtx = (boxId, extra) => aiCtx({ projectId: 'proj1', boxId, modality: 'VIDEO', prompt: '夜色江面缓缓推移', ...extra });
+
+  // 5.1 全能模型不给图：走文生，不再被强制要首帧
+  const omniText = await handleAiGeneration(omniCtx('box-omni-text', {}));
+  check(omniText?.queued === true, '支持文生的模型不给图也应能生成');
+  check(!row("SELECT source_asset_url FROM generation_jobs WHERE id=?", [omniText?.job?.id || ''])?.source_asset_url, '文生任务不应带首帧来源');
+
+  // 5.2 全能模型给首帧：走图生模板
+  const omniFirst = await handleAiGeneration(omniCtx('box-omni-first', { sourceAssetUrl: 'mock://asset1' }));
+  check(omniFirst?.queued === true, '全能模型给首帧应能生成');
+  check(row("SELECT source_asset_url FROM generation_jobs WHERE id=?", [omniFirst?.job?.id || ''])?.source_asset_url === 'mock://asset1', '图生任务应记下首帧来源');
+
+  // 5.3 只给尾帧：尾帧必须配合首帧
+  await expectError(() => handleAiGeneration(omniCtx('box-omni-last', { lastFrameAssetUrl: 'mock://asset2' })), 'GENERATION_LAST_FRAME_WITHOUT_FIRST', 'last frame without first');
+
+  // 5.4 首帧 + 尾帧：任务入队，两份来源都落库
+  const omniFrames = await handleAiGeneration(omniCtx('box-omni-frames', { sourceAssetUrl: 'mock://asset1', lastFrameAssetUrl: 'mock://asset2' }));
+  check(omniFrames?.queued === true, '首尾帧应能生成');
+  const framesJob = row("SELECT source_asset_url,last_frame_asset_url FROM generation_jobs WHERE id=?", [omniFrames?.job?.id || '']);
+  check(framesJob?.source_asset_url === 'mock://asset1' && framesJob?.last_frame_asset_url === 'mock://asset2', `首尾帧来源都应落库，实际 ${JSON.stringify(framesJob)}`);
+
+  // 5.5 只支持文生的模型：给图要被拦
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-t2v', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'GENERATION_FIRST_FRAME_UNSUPPORTED', 'text-only model with frame');
+
+  // 5.6 首尾帧模板：首帧放 image、尾帧放 last_frame
+  const framesTemplate = requestTemplateFor({ requestTemplates: {} }, 'VIDEO', { requiresFirstFrame: true, withLastFrame: true });
+  const framesBody2 = renderRequestTemplate(framesTemplate, { model: 'omni-video', prompt: '夜色', durationSeconds: 5, resolution: '480p', aspectRatio: '16:9', audio: false, firstFrameUrl: 'mock://asset1', lastFrameUrl: 'mock://asset2' });
+  check(framesBody2.image === 'mock://asset1' && framesBody2.last_frame === 'mock://asset2', `首尾帧模板应同时带两张图，实际 ${JSON.stringify(framesBody2).slice(0, 160)}`);
 
   // 场景 4：平台模态开关关闭时，生成必须在入队前被拦（机构覆盖优先于平台开关）
   q("UPDATE platform_modality_settings SET enabled=0 WHERE modality='VIDEO'");

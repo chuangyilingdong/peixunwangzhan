@@ -68,3 +68,7 @@
 /* 音频节点可能同时开放音乐/播客/配音，生成按钮并排显示 */
 .learning-node__generate-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 12px 10px; }
 .learning-node__generate-row .learning-node__generate { width: auto; flex: 1 1 auto; margin: 0; }
+.learning-node__frames { display: flex; gap: 8px; margin: 8px 12px 0; }
+.learning-node__frames figure { flex: 1; margin: 0; min-width: 0; }
+.learning-node__frames img { display: block; width: 100%; border-radius: 8px; }
+.learning-node__frames figcaption { margin-top: 4px; color: #8f9fd4; font-size: 10px; }

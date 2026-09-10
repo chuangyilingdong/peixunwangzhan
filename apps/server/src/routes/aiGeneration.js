@@ -95,11 +95,26 @@ export function assertLessonGenerationBox({ context, modality, projectId, boxId,
 }
 
 /**
+ * 视频的「输入画面」按模型声明的方式放行：模型支持多种方式时，学生给什么就用什么，
+ * 不再二选一强制（MiniMax-H3 这类文生/图生/首尾帧都支持的模型，以前只能二选一）。
+ */
+function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '' }) {
+  const list = Array.isArray(modes) && modes.length ? modes : ['TEXT'];
+  const hasFirst = Boolean(String(firstFrameUrl || '').trim());
+  const hasLast = Boolean(String(lastFrameUrl || '').trim());
+  if (hasLast && !hasFirst) throw errors.badRequest('尾帧要配合首帧一起用：请先连接一张首帧图', 'GENERATION_LAST_FRAME_WITHOUT_FIRST');
+  if (hasFirst && !list.includes('FIRST_FRAME')) throw errors.forbidden('当前视频模型不支持图片输入，请去掉连接/预置的画面', 'GENERATION_FIRST_FRAME_UNSUPPORTED');
+  if (hasLast && !list.includes('LAST_FRAME')) throw errors.forbidden('当前视频模型不支持首尾帧（尾帧）', 'GENERATION_LAST_FRAME_UNSUPPORTED');
+  // 模型不支持纯文本（i2v 类）时必须给首帧，否则上游必然拒绝。
+  if (!hasFirst && !list.includes('TEXT')) throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
+}
+
+/**
  * 调用上游之前的预检：课时能力 / 课堂管控 / 套餐能力任一不满足就直接拒绝。
  * 否则会先花钱调一次上游、再在结算时失败并进入重试，重复消耗额度。
  * 结算时仍会再校验一次（异步任务等待期间状态可能变化）。
  */
-function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', requiresFirstFrame = false, firstFrameUrl = '' }) {
+function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null }) {
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
@@ -109,10 +124,7 @@ function assertGenerationPreflight({ user, orgId, context, modality, projectId =
   if (lessonCapability && !(context.lesson?.capabilities || []).includes(lessonCapability)) {
     throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
   }
-  // 图生视频模型缺首帧图时上游必然拒绝：提前拦截，避免白调一次上游再失败。
-  if (requiresFirstFrame && !firstFrameUrl) {
-    throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
-  }
+  if (frameCheck) assertVideoFrames(frameCheck);
   // 框体占用同样属于业务拦截：入队前就能判断，不必等结算
   if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
 }
@@ -174,13 +186,13 @@ function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   return asset ? String(asset.asset_url) : '';
 }
 
-function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, boxId = '' }) {
+function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, boxId = '' }) {
   const jobId = id('generation');
   const now = nowIso();
   transaction(() => q(`INSERT INTO generation_jobs(
-       id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url,box_id
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl, boxId || null]));
+       id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url,last_frame_asset_url,box_id
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl, lastFrameAssetUrl, boxId || null]));
     if (startImmediately) {
       assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
       q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
@@ -196,7 +208,7 @@ function queueItemFromJob(jobId) {
   const auth = { user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org: row('SELECT * FROM organizations WHERE id=?', [job.org_id]) };
   const project = ownProject(auth, job.project_id);
   if (!project) return null;
-  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', boxId: job.box_id || '', requestContext: null };
+  return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', lastFrameAssetUrl: job.last_frame_asset_url || '', boxId: job.box_id || '', requestContext: null };
 }
 
 function enqueuePersistedJob(jobId, delayMs = 0) {
@@ -306,9 +318,10 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
 /**
  * 生成参数只以「课时配置的生成框体」为准：比例/清晰度/时长/音频由教师逐框体选定，
  * 客户端提交的取值一律不采信，避免绕过课时限制。框体没配（或本课没配该模态框体）时回落到该模型能力的第一项。
- * 图生视频：框体挂了预置素材就直接当首帧，学生不必自己再连一张图。
+ * 输入画面：按该模型声明的方式给 —— 支持文生就可以不带图，支持首帧才用连过来的图/框体预置素材，
+ * 支持尾帧才带上尾帧。学生给了模型不支持的画面会被 assertVideoFrames 拦下。
  */
-export function generationOptionsFor({ context, modality, policy, selection, box = null, firstFrameUrl = '' }) {
+export function generationOptionsFor({ context, modality, policy, selection, box = null, firstFrameUrl = '', lastFrameUrl = '' }) {
   const key = String(modality || '').toUpperCase();
   if (key !== 'IMAGE' && key !== 'VIDEO') return {};
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;
@@ -322,9 +335,12 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     options.durationSeconds = Number(target?.durationSeconds) || capabilities.durations[0] || 5;
     // 模型不支持生成音频时，即使框体勾选了也不发送。
     options.audio = target?.audio === true && capabilities.audio === true;
-    options.inputFrame = capabilities.inputFrame || 'NONE';
-    const presetFirstFrame = options.inputFrame === 'FIRST' ? String(target?.assetUrl || '').trim() : '';
-    if (options.inputFrame === 'FIRST' && (firstFrameUrl || presetFirstFrame)) options.firstFrameUrl = firstFrameUrl || presetFirstFrame;
+    options.inputModes = Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT'];
+    // 框体挂了预置素材时，它就是首帧（学生不必自己再连一张）。
+    const presetFirstFrame = options.inputModes.includes('FIRST_FRAME') ? String(target?.assetUrl || '').trim() : '';
+    const resolvedFirstFrame = String(firstFrameUrl || '').trim() || presetFirstFrame;
+    if (resolvedFirstFrame) options.firstFrameUrl = resolvedFirstFrame;
+    if (lastFrameUrl) options.lastFrameUrl = String(lastFrameUrl).trim();
   }
   return options;
 }
@@ -338,7 +354,7 @@ function auditContext(auth, ctx = null) {
   };
 }
 
-export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', boxId = '' }) {
+export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', lastFrameAssetUrl = '', boxId = '' }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   const policy = getAiProviderPolicy();
   const context = resolveProjectUsageContext(auth.rawUser, project);
@@ -349,10 +365,15 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-  const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, box, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
+  const options = generationOptionsFor({
+    context, modality, policy, selection: providerSelection, box,
+    firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl),
+    lastFrameUrl: resolveFirstFrameUrl(project.id, lastFrameAssetUrl),
+  });
   assertGenerationPreflight({
     user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
-    boxId: box?.id || '', requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '',
+    boxId: box?.id || '',
+    frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '' },
   });
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, boxId: box?.id || '' });
   try {
@@ -373,7 +394,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
 
 
 async function processAsyncGeneration(item) {
-  const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '', boxId = '' } = item;
+  const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '', lastFrameAssetUrl = '', boxId = '' } = item;
   const policy = getAiProviderPolicy();
   const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
@@ -386,10 +407,14 @@ async function processAsyncGeneration(item) {
   try {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const box = resolveLessonGenerationBox(context, modality, boxId);
-    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, box, firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl) });
+    const options = generationOptionsFor({
+      context, modality, policy, selection: providerSelection, box,
+      firstFrameUrl: resolveFirstFrameUrl(project.id, sourceAssetUrl),
+      lastFrameUrl: resolveFirstFrameUrl(project.id, lastFrameAssetUrl),
+    });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId,
-      requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '',
+      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '' },
     });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
@@ -624,12 +649,16 @@ export async function handleAiGeneration(ctx) {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     // 业务预检（平台模态开关 / 课时能力 / 课堂管控 / 框体占用 / 首帧）在入队前拦掉，
     // 别让任务跑一遍上游再失败——与同步路径保持同一套判断。
-    const options = generationOptionsFor({ context, modality, policy, selection: providerSelection, box, firstFrameUrl: resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim()) });
+    const options = generationOptionsFor({
+      context, modality, policy, selection: providerSelection, box,
+      firstFrameUrl: resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim()),
+      lastFrameUrl: resolveFirstFrameUrl(project.id, String(body.lastFrameAssetUrl || '').trim()),
+    });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '',
-      requiresFirstFrame: options.inputFrame === 'FIRST', firstFrameUrl: options.firstFrameUrl || '',
+      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '' },
     });
-    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, boxId: box?.id || '' });
+    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, boxId: box?.id || '' });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }
@@ -653,7 +682,7 @@ export async function handleAiGeneration(ctx) {
     return runGenerationJob({
       auth, project, modality: modalityOf(source.modality), prompt: source.prompt,
       retryOfJobId: source.id, action: 'AI_GENERATION_RETRY', requestContext: ctx,
-      sourceAssetUrl: source.source_asset_url || '', boxId: source.box_id || '',
+      sourceAssetUrl: source.source_asset_url || '', lastFrameAssetUrl: source.last_frame_asset_url || '', boxId: source.box_id || '',
     });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);

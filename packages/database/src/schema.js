@@ -1131,6 +1131,8 @@ for (const statement of [
   "ALTER TABLE generation_jobs ADD COLUMN source_asset_url TEXT",
   // 该次生成属于课时里的哪个生成框体（generationBoxes[].id）：每框体只能生成一次，重试沿用。
   "ALTER TABLE generation_jobs ADD COLUMN box_id TEXT",
+  // 首尾帧生成时的尾帧来源（本项目图片素材的 asset_url），重试与异步 worker 复用。
+  "ALTER TABLE generation_jobs ADD COLUMN last_frame_asset_url TEXT",
 ]) { try { db.exec(statement); } catch (_) {} }
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_generation_jobs_queue ON generation_jobs(status, next_attempt_at, created_at)'); } catch (_) {}
 

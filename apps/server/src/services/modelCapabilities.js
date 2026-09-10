@@ -3,12 +3,21 @@
 // 未声明的模型回落到模态默认值。这些值是「发给模型的原始取值」，所以按原样存、按原样发。
 const MAX_LIST = 24;
 
-// 视频模型是否需要输入画面（首帧）：i2v（图生视频）类模型必须带首帧图，
-// 上游会直接拒绝纯文本请求。默认按模型 id 里的 i2v 后缀推断，管理员可在渠道里覆盖。
-export const INPUT_FRAME_VALUES = Object.freeze(['NONE', 'FIRST']);
+// 视频模型的「输入画面」支持方式，可多选：一个模型可以既支持文生、也支持图生/首尾帧
+// （MiniMax-H3 就是这种），所以这里是能力集合，不是二选一。
+//   TEXT        文生视频（可以只给文本）
+//   FIRST_FRAME 图生视频（可以给一张首帧图）
+//   LAST_FRAME  首尾帧（可以再给一张尾帧图，前提是有首帧）
+export const INPUT_MODES = Object.freeze(['TEXT', 'FIRST_FRAME', 'LAST_FRAME']);
 
-export function defaultInputFrame(modelId) {
-  return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '').trim()) ? 'FIRST' : 'NONE';
+export const INPUT_MODE_LABELS = Object.freeze({
+  TEXT: '文生视频（纯文本）',
+  FIRST_FRAME: '图生视频（首帧图）',
+  LAST_FRAME: '首尾帧（尾帧图）',
+});
+
+export function defaultInputModes(modelId) {
+  return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '').trim()) ? ['FIRST_FRAME'] : ['TEXT'];
 }
 
 export const MODALITY_CAPABILITY_DEFAULTS = Object.freeze({
@@ -65,15 +74,30 @@ export function normalizeModelCapabilities(value, modality, modelId = '') {
     resolutions: stringList(input.resolutions),
     durations: key === 'VIDEO' ? durationList(input.durations) : [],
     audio: key === 'VIDEO' ? input.audio === true || input.audio === 1 || String(input.audio).toLowerCase() === 'true' : false,
-    inputFrame: key === 'VIDEO' ? normalizeInputFrame(input.inputFrame, modelId) : 'NONE',
+    inputModes: key === 'VIDEO' ? normalizeInputModes(input.inputModes ?? input.inputFrame, modelId) : [],
   };
   return result;
 }
 
-function normalizeInputFrame(value, modelId) {
-  const raw = String(value ?? '').trim().toUpperCase();
-  if (INPUT_FRAME_VALUES.includes(raw)) return raw;
-  return defaultInputFrame(modelId);
+// 接受新的多选数组，也接受旧版单值 inputFrame（NONE/FIRST/LAST），未声明时按模型名推断。
+function normalizeInputModes(value, modelId) {
+  if (!Array.isArray(value) && (value === undefined || value === null || value === '')) return defaultInputModes(modelId);
+  const raw = Array.isArray(value) ? value : [value];
+  const mapped = raw.map((item) => {
+    const text = String(item ?? '').trim().toUpperCase();
+    if (text === 'NONE') return 'TEXT';
+    if (text === 'FIRST') return 'FIRST_FRAME';
+    if (text === 'LAST') return 'LAST_FRAME';
+    return text;
+  }).filter((item) => INPUT_MODES.includes(item));
+  const modes = [...new Set(mapped)];
+  return modes.length ? modes : defaultInputModes(modelId);
+}
+
+/** 该模型是否只能靠图片输入（不支持纯文本）：不支持文生就必须给首帧。 */
+export function requiresFirstFrameFor(inputModes) {
+  const modes = Array.isArray(inputModes) ? inputModes : [];
+  return modes.length > 0 && !modes.includes('TEXT');
 }
 
 /** 渠道级 modelCapabilities 归一化：{ [modelId]: {...} } */
@@ -110,8 +134,20 @@ export function validateModelCapabilitiesInput(value, modality, modelId = '') {
       const n = Number(item);
       if (!Number.isInteger(n) || n < 1 || n > 600) errors.push(`时长「${String(item ?? '').slice(0, 20)}」必须是 1–600 的整数秒（示例：5、10、15）`);
     }
-    const frame = input.inputFrame;
-    if (frame !== undefined && frame !== null && frame !== '' && !INPUT_FRAME_VALUES.includes(String(frame).trim().toUpperCase())) errors.push('「需要输入画面」只能选 需要首帧图 / 不需要');
+    const modesValue = input.inputModes ?? input.inputFrame;
+    if (modesValue !== undefined && modesValue !== null && modesValue !== '') {
+      const raw = Array.isArray(modesValue) ? modesValue : [modesValue];
+      const mapped = raw.map((item) => {
+        const text = String(item ?? '').trim().toUpperCase();
+        if (text === 'NONE') return 'TEXT';
+        if (text === 'FIRST') return 'FIRST_FRAME';
+        if (text === 'LAST') return 'LAST_FRAME';
+        return text;
+      });
+      const invalid = mapped.filter((item) => !INPUT_MODES.includes(item));
+      // 空数组＝未声明，跟留空一样按模型名自动判断，不算错。
+      if (invalid.length) errors.push(`「输入画面」只支持 文生视频 / 图生视频（首帧）/ 首尾帧（尾帧），不认识：${invalid.join('、')}`);
+    }
     const audio = input.audio;
     if (audio !== undefined && typeof audio !== 'boolean' && audio !== 1 && audio !== 0) errors.push('「支持生成音频」只能是勾选或不勾选');
   }
@@ -120,8 +156,8 @@ export function validateModelCapabilitiesInput(value, modality, modelId = '') {
 
 export function defaultCapabilities(modality, modelId = '') {
   const key = String(modality || '').toUpperCase();
-  const base = MODALITY_CAPABILITY_DEFAULTS[key] || { aspectRatios: [], resolutions: [], durations: [], audio: false, inputFrame: 'NONE' };
-  return key === 'VIDEO' ? { ...base, inputFrame: defaultInputFrame(modelId) } : { ...base };
+  const base = MODALITY_CAPABILITY_DEFAULTS[key] || { aspectRatios: [], resolutions: [], durations: [], audio: false };
+  return key === 'VIDEO' ? { ...base, inputModes: defaultInputModes(modelId) } : { ...base };
 }
 
 /** 取某模型的有效能力：模型级配置优先，其次模态默认值（含 i2v 推断）。 */
@@ -155,7 +191,7 @@ export function listChannelModels(policy, modality) {
 }
 
 /** 生成请求模板的可用占位符。 */
-export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'audio', 'voice', 'n', 'firstFrameUrl', 'messages']);
+export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'audio', 'voice', 'n', 'firstFrameUrl', 'lastFrameUrl', 'messages']);
 
 // 默认请求模板刻意与改造前的请求体同形，只把写死的值换成占位符：
 // 管理员没改模板时，线上请求形状不变。视频的比例与音频放在 metadata 里（该字段原本就是透传袋），
@@ -166,6 +202,8 @@ export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   // 图生视频：上游要的是顶层 image 字段。注意 api.seedance.nz 的报错文案写的是
   // "firstFrameUrl is required"，但实测真正被接受的键是 image（传 firstFrameUrl 反而 400）。
   VIDEO_I2V: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', image: '{{firstFrameUrl}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
+  // 首尾帧：尾帧的字段名各家不同（这里按 last_frame 发），不对就到渠道的请求模板里改键名。
+  VIDEO_I2V_FRAMES: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', image: '{{firstFrameUrl}}', last_frame: '{{lastFrameUrl}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
   TEXT: Object.freeze({ model: '{{model}}', messages: [{ role: 'system', content: '你是少儿编程学习平台的创作助手。请用适合儿童理解的方式回答，避免危险或不适龄内容。' }, { role: 'user', content: '{{prompt}}' }] }),
   DUBBING: Object.freeze({ model: '{{model}}', input: '{{prompt}}', voice: '{{voice}}', response_format: 'mp3' }),
 });
@@ -210,11 +248,13 @@ export function parseRequestTemplate(text) {
   }
 }
 
-export function requestTemplateFor(channel, modality, { requiresFirstFrame = false } = {}) {
+export function requestTemplateFor(channel, modality, { requiresFirstFrame = false, withLastFrame = false } = {}) {
   const key = String(modality || '').toUpperCase();
   const custom = channel?.requestTemplates?.[key];
   if (custom && typeof custom === 'object') return custom;
-  if (key === 'VIDEO' && requiresFirstFrame) return DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V;
+  if (key === 'VIDEO' && requiresFirstFrame) {
+    return withLastFrame ? DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V_FRAMES : DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V;
+  }
   return DEFAULT_REQUEST_TEMPLATES[key] || null;
 }
 

@@ -83,7 +83,7 @@ try {
   // 2) 合法配置保存成功，且存下来的就是填写的值（比例归一化、时长整数升序）
   const saved = await api('/api/admin/billing-config/ai-provider', {
     method: 'PUT', token: rootToken,
-    body: withChannel({ aspectRatios: ['9：16', '16:9'], resolutions: ['768P', '480P'], durations: [15, 5, 10], audio: true, inputFrame: 'FIRST' }),
+    body: withChannel({ aspectRatios: ['9：16', '16:9'], resolutions: ['768P', '480P'], durations: [15, 5, 10], audio: true, inputModes: ['FIRST_FRAME', 'LAST_FRAME'] }),
   });
   assert.equal(saved.status, 200, `合法配置应保存成功: ${JSON.stringify(saved.data)}`);
   const stored = saved.data.policy.channels.find((channel) => channel.id === 'ch-video').modelCapabilities['minimax-h3-i2v'];
@@ -91,7 +91,12 @@ try {
   assert.deepEqual(stored.resolutions, ['768P', '480P'], `清晰度应原样保留（含大小写），实际 ${JSON.stringify(stored.resolutions)}`);
   assert.deepEqual(stored.durations, [5, 10, 15], `时长应为升序整数，实际 ${JSON.stringify(stored.durations)}`);
   assert.equal(stored.audio, true, '音频标记应保留');
-  assert.equal(stored.inputFrame, 'FIRST', '首帧要求应保留');
+  assert.deepEqual(stored.inputModes, ['FIRST_FRAME', 'LAST_FRAME'], `输入画面方式应保留，实际 ${JSON.stringify(stored.inputModes)}`);
+
+  // 2.2 不认识的输入方式一律 400，不再静默丢弃
+  const badMode = await api('/api/admin/billing-config/ai-provider', { method: 'PUT', token: rootToken, body: withChannel({ resolutions: ['480P'], inputModes: ['FIRST_FRAME', 'HOLOGRAM'] }) });
+  assert.equal(badMode.status, 400, `不认识的输入方式应被拒，实际 ${badMode.status}`);
+  assert.ok(String(badMode.data.error.message).includes('HOLOGRAM'), '错误信息应指出具体非法值');
 
   // 3) 课时保存时按这个列表校验：不在列表里的取值会被拒
   const { DatabaseSync } = await import('node:sqlite');
@@ -114,7 +119,7 @@ try {
   console.log(JSON.stringify({
     name: 'provider-capability-validation', pass: true,
     rejected: { durationWithUnit: 400, badRatio: 400, resolutionWithSpace: 400 },
-    stored: { aspectRatios: stored.aspectRatios, resolutions: stored.resolutions, durations: stored.durations, audio: stored.audio, inputFrame: stored.inputFrame },
+    stored: { aspectRatios: stored.aspectRatios, resolutions: stored.resolutions, durations: stored.durations, audio: stored.audio, inputModes: stored.inputModes },
     lessonValidation: { outOfRangeRejected: true, inRangeSaved: { resolution: lessonSlot.resolution, durationSeconds: lessonSlot.durationSeconds } },
   }, null, 2));
 } catch (error) {

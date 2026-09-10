@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
-import { effectiveCapabilities, modalityChannel, normalizeAspectRatio } from './services/modelCapabilities.js';
+import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, requiresFirstFrameFor } from './services/modelCapabilities.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -558,8 +558,9 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
     }
     box.durationSeconds = durationSeconds;
     box.audio = raw.audio === true && capabilities.audio === true;
-    // 图生视频模型必须带首帧：学生端据此决定要不要先连一张画面。
-    box.requiresFirstFrame = capabilities.inputFrame === 'FIRST';
+    // 输入画面支持方式（可多选）：只能图生（不支持纯文本）时才要求必须给首帧。
+    box.inputModes = Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT'];
+    box.requiresFirstFrame = requiresFirstFrameFor(box.inputModes);
   }
   return box;
 }

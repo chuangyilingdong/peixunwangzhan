@@ -214,14 +214,28 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, generateNode, canGenerate, getIncomingImageAssetUrl } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate, getIncomingImageAssetUrl, getIncomingImageAssetUrls } = useCanvasActions();
   const videoUrl = data.previewUrl || data.assetUrl;
-  // 图生视频模型（i2v）需要首帧图：优先用连过来的图片，其次用框体预置素材。
-  const requiresFirstFrame = data.slotType === 'video' && data.requiresFirstFrame === true;
+  // 输入画面按模型声明的方式给（可多选）：支持文生就可以不带图；支持首帧才用连过来的图/框体预置素材；
+  // 支持尾帧才用第二张连过来的图。不支持的方式一律不送，服务端也会再拦一次。
+  const inputModes = Array.isArray(data.inputModes) && data.inputModes.length
+    ? data.inputModes
+    : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
+  const supportsFirstFrame = inputModes.includes('FIRST_FRAME');
+  const supportsLastFrame = inputModes.includes('LAST_FRAME');
+  const supportsText = inputModes.includes('TEXT');
   const missingPrompt = !String(data.text || '').trim();
-  const referenceUrl = !videoUrl ? String(data.referenceUrl || '') : '';
-  const sourceAssetUrl = requiresFirstFrame ? (getIncomingImageAssetUrl(id) || referenceUrl) : '';
-  const missingFirstFrame = requiresFirstFrame && !sourceAssetUrl;
+  const referenceUrl = !videoUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
+  const incoming = getIncomingImageAssetUrls(id);
+  const sourceAssetUrl = supportsFirstFrame ? (incoming[0] || referenceUrl) : '';
+  const lastFrameAssetUrl = supportsFirstFrame && supportsLastFrame ? String(incoming[1] || '') : '';
+  const missingFirstFrame = supportsFirstFrame && !supportsText && !sourceAssetUrl;
+  const blockedReason = missingFirstFrame
+    ? '该模型需要先连接一张画面（首帧）'
+    : (missingPrompt ? '先写下这一段的提示词，再生成' : '');
+  const frameHint = supportsFirstFrame && supportsLastFrame
+    ? '按连线顺序：第一条图片连线当首帧，第二条当尾帧'
+    : (supportsFirstFrame ? '从图片节点的圆点连过来，当首帧' : '该模型只吃文本提示词');
   return <NodeFrame icon="▶" tone="video" title={data.title || '故事短片'} selected={selected}>
     {videoUrl
       ? <video className="learning-node__media" controls playsInline src={videoUrl} />
@@ -230,10 +244,14 @@ function VideoNode({ id, data, selected }) {
         : <div className="learning-node__video-preview"><span>▶</span><small>作品片段</small></div>}
     <textarea className="learning-node__textarea learning-node__textarea--compact nodrag" value={data.text || ''} placeholder="写下这一段的提示词…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     <SlotParams data={data} />
-    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={missingFirstFrame || missingPrompt} title={missingFirstFrame ? '该模型需要先连接一张画面（首帧）' : (missingPrompt ? '先写下这一段的提示词，再生成' : undefined)} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl })}>▶ 生成故事短片</button>}
-    {missingFirstFrame && !data.generationStatus && <span className="learning-node__generation-state is-error">该模型需要先连接一张画面（首帧）</span>}
+    {(sourceAssetUrl || lastFrameAssetUrl) ? <div className="learning-node__frames nodrag">
+      {sourceAssetUrl ? <figure><img src={sourceAssetUrl} alt="首帧" /><figcaption>首帧</figcaption></figure> : null}
+      {lastFrameAssetUrl ? <figure><img src={lastFrameAssetUrl} alt="尾帧" /><figcaption>尾帧</figcaption></figure> : null}
+    </div> : null}
+    {canGenerate && (!data.generationStatus || data.generationStatus === 'FAILED') && !videoUrl && <button className="learning-node__generate nodrag" type="button" disabled={Boolean(blockedReason)} title={blockedReason || undefined} onClick={() => generateNode(id, 'VIDEO', { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl })}>▶ 生成故事短片</button>}
+    {blockedReason && !data.generationStatus ? <span className="learning-node__generation-state is-error">{blockedReason}</span> : null}
     {data.generationStatus && <span className={`learning-node__generation-state ${data.generationStatus === 'FAILED' ? 'is-error' : ''}`}>{data.generationStatus === 'FAILED' ? (data.generationError || '生成失败') : 'AI生成中…'}</span>}
-    {selected && <span className="learning-node__hint">{missingFirstFrame ? '从图片节点的圆点连到本卡片，才能生成' : '连接提示词或画面，组织故事顺序'}</span>}
+    {selected && <span className="learning-node__hint">{frameHint}</span>}
   </NodeFrame>;
 }
 
@@ -323,11 +341,15 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
   }, [nodes, onGenerateNode, readOnly, updateNode]);
 
   // 取连到该节点的图片素材地址，供图生视频当首帧。
-  const getIncomingImageAssetUrl = useCallback((nodeId) => {
-    const sourceIds = new Set((edges || []).filter((edge) => edge.target === nodeId).map((edge) => edge.source));
-    const imageNode = (nodes || []).find((node) => sourceIds.has(node.id) && node.type === 'image');
-    return String(imageNode?.data?.assetUrl || imageNode?.data?.previewUrl || '');
+  // 按连线顺序取连到该节点的图片素材地址：第一条当首帧，第二条当尾帧（首尾帧模型用）。
+  const getIncomingImageAssetUrls = useCallback((nodeId) => {
+    const sourceIds = (edges || []).filter((edge) => edge.target === nodeId).map((edge) => edge.source);
+    return sourceIds
+      .map((sourceId) => (nodes || []).find((node) => node.id === sourceId && node.type === 'image'))
+      .map((imageNode) => String(imageNode?.data?.assetUrl || imageNode?.data?.previewUrl || '').trim())
+      .filter(Boolean);
   }, [edges, nodes]);
+  const getIncomingImageAssetUrl = useCallback((nodeId) => getIncomingImageAssetUrls(nodeId)[0] || '', [getIncomingImageAssetUrls]);
   const addNodeAt = useCallback((type, position) => {
     if (readOnly || !allowNodeCreation) return;
     const capabilityByType = { prompt: 'text', image: 'image', video: 'video' };
@@ -441,7 +463,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, sh
     onChange?.({ nodes, edges, viewport: getViewport() });
   }, [edges, getViewport, nodes, onChange, viewport]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities, getIncomingImageAssetUrl }}>
+  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), openPreview: setPreviewImage, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls }}>
     <div className="learning-canvas">
       <ReactFlow
         nodes={nodes}

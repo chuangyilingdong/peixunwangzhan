@@ -176,7 +176,8 @@ try {
   assert.equal(shortClip.durationSeconds, 5, `先 5 秒，实际 ${shortClip.durationSeconds}`);
   assert.equal(longClip.durationSeconds, 10, `再 10 秒，实际 ${longClip.durationSeconds}`);
   // 框体挂了预置素材且模型要首帧（i2v）时，直接用预置素材当首帧
-  assert.equal(longClip.inputFrame, 'FIRST', 'hailuo-h3-i2v 应判定为需要首帧');
+  assert.ok(longClip.inputModes.includes('FIRST_FRAME'), `hailuo-h3-i2v 应支持首帧输入，实际 ${JSON.stringify(longClip.inputModes)}`);
+  assert.ok(!longClip.inputModes.includes('TEXT'), 'hailuo-h3-i2v 不支持纯文生，应要求首帧');
   assert.equal(longClip.firstFrameUrl, PRESET_FIRST_FRAME, '预置素材应直接当首帧');
 
   // 6) 逐个框体生成：素材1 的框体成功 → 再来被拒 → 素材2 的框体仍可生成

@@ -176,8 +176,10 @@ async function parseResponse(response, modality) {
 // 会被课时配置的取值替换，不再由代码写死。
 function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {}, messages = null, stream = false }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
-  const requiresFirstFrame = String(options.inputFrame || '').toUpperCase() === 'FIRST';
-  const template = requestTemplateFor({ requestTemplates }, normalizedModality, { requiresFirstFrame });
+  // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES。
+  const firstFrameUrl = String(options.firstFrameUrl || '').trim();
+  const lastFrameUrl = String(options.lastFrameUrl || '').trim();
+  const template = requestTemplateFor({ requestTemplates }, normalizedModality, { requiresFirstFrame: Boolean(firstFrameUrl), withLastFrame: Boolean(lastFrameUrl) });
   if (template) {
     const rendered = renderRequestTemplate(template, {
       model,
@@ -188,7 +190,8 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       resolution: String(options.resolution || '').trim(),
       durationSeconds: Number(options.durationSeconds) || 5,
       audio: options.audio === true,
-      firstFrameUrl: String(options.firstFrameUrl || '').trim(),
+      firstFrameUrl,
+      lastFrameUrl,
       n: 1,
       messages: Array.isArray(messages) ? messages : undefined,
     });
