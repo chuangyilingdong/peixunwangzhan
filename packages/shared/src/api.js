@@ -102,6 +102,17 @@ export function createApiClient({ baseUrl = apiBase(), getToken = () => null, on
       if (!response.ok || payload?.success === false) { const error = payload?.error || {}; throw new ApiError(error.message || fallbackMessage(response.status, '上传未能完成，请稍后重试'), { status: response.status, code: error.code || 'UPLOAD_FAILED', details: error.details || null }); }
       return payload?.data ?? payload;
     },
+    // 把「需要鉴权才能读」的素材取回来、转成 blob: 地址。
+    // `<img>` / `<video>` / `<audio>` 的请求带不了 Authorization 头，把 /api/** 直接塞进 src 必然 401、
+    // 图永远出不来（学生拖进来的本地素材、老师给框体配的预置素材都是这种地址）。
+    fetchBlobUrl: async (path) => {
+      // 传进来的往往是根路径（快照里存的就是 /api/...）：这种直接用，别再拼一次 baseUrl（会变成 /api/api/...）
+      const target = String(path || '');
+      const token = getToken();
+      const response = await fetch(target.startsWith('/') ? target : requestUrl(baseUrl, target), { credentials: 'include', headers: { ...(token ? { authorization: 'Bearer ' + token } : {}) } });
+      if (!response.ok) throw new ApiError(fallbackMessage(response.status, '素材读取失败'), { status: response.status, code: 'ASSET_FETCH_FAILED', details: null });
+      return URL.createObjectURL(await response.blob());
+    },
     put: (path, body, options = {}) => request(path, { ...options, method: 'PUT', body }),
     patch: (path, body, options = {}) => request(path, { ...options, method: 'PATCH', body }),
     delete: (path, options = {}) => request(path, { ...options, method: 'DELETE' }),

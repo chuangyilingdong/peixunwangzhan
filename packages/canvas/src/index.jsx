@@ -22,7 +22,42 @@ import '@xyflow/react/dist/style.css';
 import './styles.css';
 
 const CanvasActionsContext = createContext(null);
+// 受鉴权保护的素材地址（/api/**）不能直接塞进 <img>/<video>/<audio> 的 src：那些请求带不了
+// Authorization 头，必然 401、图永远出不来。宿主通过 resolveAssetUrl 把它换成能显示的地址
+// （官网学习页是「带 token 取回二进制 → blob:」，见 packages/shared/src/api.js 的 fetchBlobUrl）。
+const AssetUrlContext = createContext(null);
 const EMPTY_VIEWPORT = { x: 0, y: 0, zoom: 1 };
+
+// 拖进来的文件在「上传中 / 上传失败」时的框体内容（四个媒体节点共用，只是外层类名不同）
+function UploadState({ className, data }) {
+  if (data.uploading === true) return <div className={`${className} is-uploading`}><span>⏳</span><small>上传中…</small></div>;
+  if (data.uploadError) return <div className={`${className} is-upload-error`}><span>⚠</span><small>上传失败：{data.uploadError}</small></div>;
+  return null;
+}
+
+function mediaKindOf(mimeType) {
+  const mime = String(mimeType || '');
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  return '';
+}
+
+// 把素材地址解析成「能直接显示」的地址。非 /api/ 地址（生成结果的外链等）原样返回。
+function useDisplayUrl(raw) {
+  const resolve = useContext(AssetUrlContext);
+  const url = String(raw || '');
+  const needsResolve = Boolean(resolve) && url.startsWith('/api/');
+  // 需要解析的地址**先别渲染**：浏览器会拿原始 /api/... 去请求、带不了 token，白挨一个 401。
+  const [shown, setShown] = useState(() => (needsResolve ? '' : url));
+  useEffect(() => {
+    if (!needsResolve) { setShown(url); return undefined; }
+    let active = true;
+    Promise.resolve(resolve(url)).then((next) => { if (active) setShown(next || ''); }).catch(() => { if (active) setShown(''); });
+    return () => { active = false; };
+  }, [url, needsResolve, resolve]);
+  return shown;
+}
 
 function id(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -245,14 +280,21 @@ function PanelFooter({ state, error, label = '生成', disabled = false, hint, o
 // 参考素材缩略图（复刻参考的展示）：小图 + 序号角标 + 名称胶囊；
 // 鼠标移上去在**面板内部**向上展开一张大图（用绝对定位，不改变布局、也不会被面板的裁切切掉）。
 function RefThumb({ url, label, index }) {
+  const shown = useDisplayUrl(url);
   return <figure className="learning-node__ref-thumb" tabIndex={0}>
     <span className="learning-node__ref-thumb-pic">
-      {url ? <img src={url} alt={label} /> : <i>?</i>}
+      {shown ? <img src={shown} alt={label} /> : <i>?</i>}
       {index ? <b className="learning-node__ref-thumb-index">{index}</b> : null}
     </span>
     <figcaption className="learning-node__ref-thumb-label">{label}</figcaption>
-    {url ? <span className="learning-node__ref-thumb-pop"><img src={url} alt={`${label} 预览`} /></span> : null}
+    {shown ? <span className="learning-node__ref-thumb-pop"><img src={shown} alt={`${label} 预览`} /></span> : null}
   </figure>;
+}
+
+// @ 引用候选里的缩略图（同样要过 useDisplayUrl，见文件顶部的说明）
+function MentionThumb({ url, label }) {
+  const shown = useDisplayUrl(url);
+  return <span className="learning-node__mention-thumb">{shown ? <img src={shown} alt={label} /> : null}</span>;
 }
 
 // 已连接素材按类型编号（图片 1 / 视频 1 / 音频 1…），@ 引用和缩略图胶囊共用这套名字
@@ -364,15 +406,13 @@ function resolveSlotParams(data) {
 
 function ImageNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  const imageUrl = data.previewUrl || data.assetUrl;
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
-  const referenceUrl = !imageUrl ? String(data.referenceUrl || '') : '';
-  return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
-    {imageUrl
-      ? <img className="learning-node__media" src={imageUrl} alt={data.caption || 'AI生成画面'} />
-      : referenceUrl
-        // 画面本体就是卡片：不再套 figure +「框体预置素材」那行说明（底部面板里已经写了来源）
-        ? <img className="learning-node__media" src={referenceUrl} alt="框体预置素材" />
+  const referenceUrl = !data.previewUrl && !data.assetUrl ? String(data.referenceUrl || '') : '';
+  const imageUrl = useDisplayUrl(data.previewUrl || data.assetUrl || referenceUrl);
+  return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+    {data.uploading === true || data.uploadError ? <UploadState className="learning-node__art" data={data} />
+      : imageUrl
+        ? <img className="learning-node__media" src={imageUrl} alt={data.caption || 'AI生成画面'} />
         : <div className="learning-node__art"><span>{data.emoji || '🌈'}</span><small>在底部面板写画面描述，生成画面</small></div>}
   </NodeFrame>;
 }
@@ -400,21 +440,22 @@ function SceneNode({ id, data, selected }) {
 
 function VideoNode({ id, data, selected }) {
   const { updateNode, getIncomingImageAssetUrls } = useCanvasActions();
-  const videoUrl = data.previewUrl || data.assetUrl;
   const inputModes = Array.isArray(data.inputModes) && data.inputModes.length
     ? data.inputModes
     : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
   const supportsFirstFrame = inputModes.includes('FIRST_FRAME');
-  const referenceUrl = !videoUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
+  const referenceUrl = !data.previewUrl && !data.assetUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
   const incoming = getIncomingImageAssetUrls(id);
-  const sourceUrl = referenceUrl || incoming[0] || '';
-  return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
-    {videoUrl
-      ? <video className="learning-node__media" controls playsInline src={videoUrl} />
-      : sourceUrl
-        // 画面本体就是卡片，按素材自身比例铺满；画面也可以直接拖着走（不再有「点图放大」）
-        ? <img className="learning-node__media" src={sourceUrl} alt="画面来源" />
-        : <div className="learning-node__video-preview"><span>▶</span><small>在底部面板写提示词，生成短片</small></div>}
+  const videoUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
+  const sourceUrl = useDisplayUrl(referenceUrl || incoming[0] || '');
+  return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+    {data.uploading === true || data.uploadError ? <UploadState className="learning-node__video-preview" data={data} />
+      : videoUrl
+        ? <video className="learning-node__media" controls playsInline src={videoUrl} />
+        : sourceUrl
+          // 画面本体就是卡片，按素材自身比例铺满；画面也可以直接拖着走（不再有「点图放大」）
+          ? <img className="learning-node__media" src={sourceUrl} alt="画面来源" />
+          : <div className="learning-node__video-preview"><span>▶</span><small>在底部面板写提示词，生成短片</small></div>}
   </NodeFrame>;
 }
 
@@ -431,21 +472,23 @@ const AUDIO_MODALITIES = [['MUSIC', '生成音乐']];
 
 function AudioNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  const audioUrl = data.previewUrl || data.assetUrl;
-  return <NodeFrame icon="♫" tone="audio" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
-    {audioUrl
-      ? <audio className="learning-node__audio" controls src={audioUrl} />
-      : <div className="learning-node__audio-placeholder"><span>♫</span><small>在底部面板写歌词或描述，生成音乐</small></div>}
+  const audioUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
+  return <NodeFrame icon="♫" tone="audio" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+    {data.uploading === true || data.uploadError ? <UploadState className="learning-node__audio-placeholder" data={data} />
+      : audioUrl
+        ? <audio className="learning-node__audio" controls src={audioUrl} />
+        : <div className="learning-node__audio-placeholder"><span>♫</span><small>在底部面板写歌词或描述，生成音乐</small></div>}
   </NodeFrame>;
 }
 
 function AnimationNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  const videoUrl = data.previewUrl || data.assetUrl;
-  return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
-    {videoUrl
-      ? <video className="learning-node__media" controls muted loop src={videoUrl} />
-      : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}
+  const videoUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
+  return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+    {data.uploading === true || data.uploadError ? <UploadState className="learning-node__animation-placeholder" data={data} />
+      : videoUrl
+        ? <video className="learning-node__media" controls muted loop src={videoUrl} />
+        : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}
   </NodeFrame>;
 }
 
@@ -594,7 +637,7 @@ function NodeEditPanel({ node, onRequestMaterials }) {
           className="learning-node__mention-item"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => insertMention(item)}
-        ><span className="learning-node__mention-thumb">{item.url ? <img src={item.url} alt={item.label} /> : null}</span>{item.label}<small>{item.hint}</small></button>)}
+        ><MentionThumb url={item.url} label={item.label} />{item.label}<small>{item.hint}</small></button>)}
       </div> : null}
     </div>
     {slotType === 'video' || slotType === 'animation' ? <FrameRefRows
@@ -607,7 +650,6 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     /> : null}
     <SlotParamPickers id={id} data={data} />
     <div className="learning-node__panel-footer nodrag">
-      <button type="button" className="learning-canvas__plus" title="打开左侧素材面板" aria-label="打开素材面板" onClick={() => onRequestMaterials?.()}>＋</button>
       <button type="button" className="learning-canvas__config-chip" title="本框体的生成配置来自课时设置" onClick={() => onRequestMaterials?.()}>✦ {configLabel}</button>
       <span className="learning-canvas__panel-spacer" />
       <span className={`learning-node__status-chip${state === 'running' ? ' is-running' : state === 'failed' ? ' is-error' : (state === 'done' || state === 'asset') ? ' is-done' : ''}`}>{state === 'running' ? '生成中…' : state === 'failed' ? (data.generationError || '生成失败') : state === 'done' ? '已生成' : state === 'asset' ? '素材' : '未生成'}</span>
@@ -772,7 +814,7 @@ function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRo
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, resolveAssetUrl = null, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null }) {
   // 受控课堂画布（allowNodeCreation=false）默认不使用固定起始底稿，避免空画布每次刷新被自动填充。
   const shouldShowStarter = showStarter === undefined ? (!readOnly && allowNodeCreation) : showStarter;
   const initial = useMemo(() => {
@@ -930,7 +972,10 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     if (readOnly) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const position = screenToFlowPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
-    // 从桌面拖进来的图片/视频/音频：交给上层上传后再落成节点（学生画布也允许，不受 allowNodeCreation 限制）
+    // 从桌面拖进来的图片/视频/音频：交给上层（它持有快照，负责先落「上传中」的框体、再上传、
+    // 再把同一个节点补成真素材 —— 见 canvasWorkspace.uploadFiles）。
+    // ⚠️ 不要在这里 setNodes 落占位框体：那是本组件的局部状态，上层不知道，快照一刷新就把它冲掉了。
+    // 学生画布也允许，不受 allowNodeCreation 限制。
     const files = [...(event.dataTransfer?.files || [])];
     if (files.length && onUploadFiles) { onUploadFiles(files, position); return; }
     if (!allowNodeCreation) return;
@@ -1048,7 +1093,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     });
   }, [edges, nodes]);
 
-  return <CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
+  return <AssetUrlContext.Provider value={resolveAssetUrl}><CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
     <div className={`learning-canvas${readOnly ? ' is-readonly' : ''}`} ref={canvasRef}>
       <ReactFlow
         nodes={nodes}
@@ -1118,7 +1163,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <button type="button" onClick={() => addNodeAt('scene', contextMenu.position)}>⌂ 场景节点</button>
       </div>}
     </div>
-  </CanvasActionsContext.Provider>;
+  </CanvasActionsContext.Provider></AssetUrlContext.Provider>;
 }
 
 export function CanvasEditor(props) {

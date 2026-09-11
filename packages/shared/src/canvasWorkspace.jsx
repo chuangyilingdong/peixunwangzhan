@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CanvasEditor, createCanvasTemplate } from '@platform/canvas';
 import { formatDate } from './auth.js';
@@ -81,6 +81,14 @@ const MAX_CANVAS_IMPORT_BYTES = 1024 * 1024;
 
 // 校验 exportVersion 产出的 JSON：{format, formatVersion, project, canvasSnapshot}
 
+function mediaKindOfFile(file) {
+  const mime = String(file?.type || '');
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  return '';
+}
+
 export function CanvasWorkspace({ api, ...props }) {
   const navigate = useNavigate();
   const paramsFromUrl = useParams(); const projectId = props?.params?.projectId || paramsFromUrl?.projectId;
@@ -97,6 +105,18 @@ export function CanvasWorkspace({ api, ...props }) {
   const [generating, setGenerating] = useState(false);
   const [toolPanel, setToolPanel] = useState(null);
   const [promptTarget, setPromptTarget] = useState(null);
+  // 受鉴权保护的素材（/api/**）要带 token 取回来转成 blob: 才能给 <img>/<video> 用
+  // （那两个标签发不出 Authorization 头）。同一个地址只取一次。
+  // ⚠️ 必须放在所有提前 return 之前（p34 守卫盯着这条：hook 写在 return 之后会整页白屏）。
+  const assetBlobCache = useRef(new Map());
+  const resolveAssetUrl = useCallback((url) => {
+    const target = String(url || '');
+    if (!target.startsWith('/api/')) return Promise.resolve(target);
+    if (assetBlobCache.current.has(target)) return assetBlobCache.current.get(target);
+    const pending = api.fetchBlobUrl(target).catch(() => '');
+    assetBlobCache.current.set(target, pending);
+    return pending;
+  }, [api]);
   // 素材面板点「已在画布上」的框体时，让画布把对应节点选中并居中（见 CanvasEditor 的 focusRequest）
   const [focusRequest, setFocusRequest] = useState(null);
   // 左侧工具栏面板是否收起（参考 ASUI Canvas 的可收起侧栏）
@@ -301,41 +321,58 @@ export function CanvasWorkspace({ api, ...props }) {
   }
 
 
-  // 从桌面拖进来的图片/视频/音频：先上传到平台（只自己可见），再落成画布节点。
-  // 落下来的节点可以连线给视频框体当首帧 / 全能参考素材，所以不需要额外的上传控件。
+  // 从桌面拖进来的图片/视频/音频。
+  // ⚠️ 占位框体必须由**这一层**落：画布组件里的 setNodes 只是它自己的局部状态，快照里没有，
+  //    上传完一刷新快照就被冲掉（第一版就是这么错的，拖进去什么都没发生）。
+  // 流程：① 立刻把「上传中」的框体写进快照（用户要的是拖进去马上看得见）；
+  //      ② 逐个上传，把**同一个节点**补成真素材（地址 + uploaded 标记）；
+  //      ③ 这些文件同时出现在左侧「本地素材」里，可以连线给视频框体当首帧 / 全能参考素材。
+  const patchNode = (snapshot, nodeId, data) => ({
+    ...snapshot,
+    nodes: (snapshot.nodes || []).map((node) => (node.id === nodeId ? { ...node, data: { ...node.data, ...data } } : node)),
+  });
   async function uploadFiles(files, position) {
     if (!editable) { setMessage('作品已提交，画布不能再修改。'); return; }
-    let current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    const seed = Date.now().toString(36);
+    const items = [...(files || [])].map((file, index) => ({ file, id: `upload-${seed}-${index}` }));
+    const base = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
+    // ① 先落占位框体（只有能识别的类型才落，别的交给下面逐个提示「已跳过」）
+    const placeholders = items
+      .map((item, index) => ({ ...item, kind: mediaKindOfFile(item.file), index }))
+      .filter((item) => item.kind);
+    let current = { ...base, nodes: [...(base.nodes || []), ...placeholders.map((item) => ({
+      id: item.id,
+      type: item.kind,
+      position: { x: (position?.x || 200) + item.index * 40, y: (position?.y || 160) + item.index * 30 },
+      data: { title: item.file.name, uploading: true, caption: '', text: '' },
+    }))] };
+    setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
+    setMessage(placeholders.length ? `正在上传 ${placeholders.length} 个文件…` : '这些文件不是图片/视频/音频，已跳过（支持 jpg/png/webp/gif、mp4/webm、mp3/wav/ogg）。');
+    // ② 逐个上传
     let placed = 0;
-    for (const file of [...files]) {
-      const mime = String(file.type || '');
-      const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : '';
-      if (!kind) { setMessage(`「${file.name}」不是图片/视频/音频，已跳过（支持 jpg/png/webp/gif、mp4/webm、mp3/wav/ogg）。`); continue; }
+    for (const item of items) {
+      if (!mediaKindOfFile(item.file)) { setMessage(`「${item.file.name}」不是图片/视频/音频，已跳过（支持 jpg/png/webp/gif、mp4/webm、mp3/wav/ogg）。`); continue; }
       try {
-        setMessage(`正在上传「${file.name}」…`);
-        const asset = await api.upload('student/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PRIVATE' });
+        setMessage(`正在上传「${item.file.name}」…`);
+        const asset = await api.upload('student/file-assets/upload', item.file, { category: 'MEDIA_ASSET', visibility: 'PRIVATE' });
         const url = String(asset?.proxyRoute || asset?.storageUrl || '');
         if (!url) throw new Error('上传后没有拿到文件地址');
-        const node = {
-          id: `upload-${asset.id || Date.now().toString(36)}`,
-          type: kind,
-          position: { x: (position?.x || 200) + placed * 40, y: (position?.y || 160) + placed * 30 },
-          data: {
-            title: file.name, caption: '', text: '',
-            assetUrl: url, previewUrl: url,
-            uploaded: true, fileAssetId: asset.id || null, mimeType: asset.mimeType || mime,
-          },
-        };
-        current = { ...current, nodes: [...(current.nodes || []), node] };
+        current = patchNode(current, item.id, {
+          title: item.file.name, caption: '', text: '',
+          assetUrl: url, previewUrl: url, uploading: false,
+          uploaded: true, fileAssetId: asset.id || null, mimeType: asset.mimeType || String(item.file.type || ''),
+        });
         placed += 1;
+        // 每传完一个就写回去，学生能一个个看着落地
+        setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
       } catch (error) {
-        setMessage(`「${file.name}」上传失败：${error.message}`);
+        // 上传失败：撤掉「上传中」并在框体上写明原因（不让它一直转、也不静默吞掉）
+        current = patchNode(current, item.id, { uploading: false, uploadError: error.message });
+        setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
+        setMessage(`「${item.file.name}」上传失败：${error.message}`);
       }
     }
-    if (placed) {
-      setCanvasSnapshot(current); setDraft(current); setCanvasRevision((value) => value + 1);
-      setMessage(`已把 ${placed} 个文件放进画布，和视频框体连线就能当首帧 / 参考素材。`);
-    }
+    if (placed) setMessage(`已把 ${placed} 个文件放进画布，左侧「本地素材」里也能找到它们。`);
   }
 
   function addLessonMaterialToCanvas(material) {
@@ -499,6 +536,17 @@ export function CanvasWorkspace({ api, ...props }) {
 
   const lessonTitle = project.data.courseLessonTitle || 'AI 创作课堂';
   const materialGroups = Array.isArray(project.data.materialGroups) ? project.data.materialGroups : [];
+  // 本地素材 = 学生从桌面拖进画布的那些文件（画布节点上带 uploaded 标记）。
+  // 直接从快照派生：拖进去的框体一出现（哪怕还在「上传中」）这里就有一份，不需要额外的服务端状态。
+  const localMaterials = ((draft || canvasSnapshot || project.data.canvasSnapshot)?.nodes || [])
+    .filter((node) => node.data?.uploaded === true || node.data?.uploading === true)
+    .map((node) => ({
+      id: node.id,
+      title: node.data?.title || '本地素材',
+      kind: node.type === 'video' ? '视频' : node.type === 'audio' ? '音频' : '图片',
+      uploading: node.data?.uploading === true,
+      fileAssetId: node.data?.fileAssetId || null,
+    }));
   const capabilities = Array.isArray(project.data.capabilities) && project.data.capabilities.length ? project.data.capabilities : ['text'];
   const hasNodes = Boolean((draft || canvasSnapshot)?.nodes?.length);
 
@@ -523,6 +571,11 @@ export function CanvasWorkspace({ api, ...props }) {
         {toolPanel && !sidebarCollapsed ? <div className="cv-panel">
           {toolPanel === 'materials' ? <>
             <div className="cv-panel__head"><div><strong>课堂素材</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
+            {localMaterials.length ? <div className="cv-group"><h4>本地素材</h4>{localMaterials.map((item) => <button className="cv-item" key={item.id} type="button" disabled={!editable} title={editable ? '定位到画布上的这个框体' : '作品已提交，画布不能再修改'} onClick={() => setFocusRequest({ id: item.id, token: Date.now() })}>
+              <span className="cv-item__icon">{item.kind === '视频' ? '▶' : item.kind === '音频' ? '♫' : '▧'}</span>
+              <span className="cv-item__text"><strong>{item.title}</strong><small>{item.kind} · {item.uploading ? '上传中…' : '本地素材 · 已在画布上'}</small></span>
+              <b className="cv-item__plus">◎</b>
+            </button>)}</div> : null}
             {materialGroups.length ? materialGroups.map((group) => <div className="cv-group" key={group.id || group.title}><h4>{group.title}</h4>{(group.materials || []).map((material) => {
               const box = material.materialType === 'GENERATION_BOX' ? boxForMaterial(material) : null;
               if (box) {
@@ -545,7 +598,7 @@ export function CanvasWorkspace({ api, ...props }) {
                 <span className="cv-item__text"><strong>{material.title}</strong><small>{editable ? (material.materialType === 'PROMPT' ? '点击后选择插入到哪个框体' : (material.description || '点击后加入画布')) : '作品已提交，画布不能再修改'}</small></span>
                 <b className="cv-item__plus">＋</b>
               </button>;
-            })}</div>) : <p className="cv-empty">老师还没有为本节课配置素材。</p>}
+            })}</div>) : (localMaterials.length ? null : <p className="cv-empty">老师还没有为本节课配置素材；把电脑里的图片/视频/音频直接拖进画布，也会出现在这里。</p>)}
           </> : null}
           {toolPanel === 'capabilities' ? <>
             <div className="cv-panel__head"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
@@ -562,7 +615,7 @@ export function CanvasWorkspace({ api, ...props }) {
             title={saveError ? `保存失败：${saveError}（改动还没写进服务器，先别刷新；请把这条信息发给老师）` : undefined}
           >{saveError ? `保存失败：${saveError}` : changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
         </div>
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} onRequestMaterials={() => { setSidebarCollapsed(false); setToolPanel('materials'); }} onChange={setDraft} focusRequest={focusRequest} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={() => { setSidebarCollapsed(false); setToolPanel('materials'); }} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${message.includes('失败') || message.includes('错误') ? 'is-error' : ''}`}>{message}</div>}
