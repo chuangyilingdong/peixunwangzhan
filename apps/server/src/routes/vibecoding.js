@@ -90,6 +90,8 @@ function normalizeMessage(value) {
 
 // 每条消息最多带几张图（够用，也挡住刷量）
 const MAX_ATTACHMENTS = 4;
+// 内联给模型的图上限（base64 后的字符数）；超过就只保留外链、不进模型请求
+const MAX_INLINE_CHARS = 1.5 * 1024 * 1024;
 
 /** 消息上的附件（[{id,name,url}]）。字段是 JSON，坏数据一律当空，不让它打断对话。 */
 function parseAttachments(value) {
@@ -98,7 +100,7 @@ function parseAttachments(value) {
     const parsed = typeof value === 'string' ? JSON.parse(value) : value;
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .map((item) => ({ id: String(item?.id || ''), name: String(item?.name || ''), url: String(item?.url || '') }))
+      .map((item) => ({ id: String(item?.id || ''), name: String(item?.name || ''), url: String(item?.url || ''), inline: String(item?.inline || '') }))
       .filter((item) => item.id && item.url);
   } catch { return []; }
 }
@@ -135,9 +137,10 @@ function ownConversation(ctx, conversationId) {
  * 只接受**本人上传的图片**：别人的素材、非图片、没公开的，一律拒掉并说明原因。
  */
 function resolveAttachments(auth, rawList) {
-  const ids = (Array.isArray(rawList) ? rawList : [])
-    .map((item) => String(typeof item === 'string' ? item : item?.id || '').trim())
-    .filter(Boolean);
+  const entries = (Array.isArray(rawList) ? rawList : [])
+    .map((item) => ({ id: String(typeof item === 'string' ? item : item?.id || '').trim(), inline: String(typeof item === 'string' ? '' : item?.inline || '') }))
+    .filter((item) => item.id);
+  const ids = entries.map((item) => item.id);
   if (!ids.length) return [];
   if (ids.length > MAX_ATTACHMENTS) throw errors.badRequest(`一次最多带 ${MAX_ATTACHMENTS} 个附件`, 'VIBECODING_TOO_MANY_ATTACHMENTS');
   const resolved = [];
@@ -149,7 +152,10 @@ function resolveAttachments(auth, rawList) {
     if (asset.visibility !== 'PUBLIC_PLATFORM' && asset.visibility !== 'PUBLIC_RELEASE') {
       throw errors.badRequest('附件需要是公开素材（外联给模型和页面用）', 'VIBECODING_ATTACHMENT_NOT_PUBLIC');
     }
-    resolved.push({ id: asset.id, name: String(asset.file_name || '图片'), url: publicAssetUrl(asset.id) });
+    // inline 只接受图片 data URL，且限长（超限就不带，模型看不到但页面能用外链）
+    const raw = entries.find((item) => item.id === assetId)?.inline || '';
+    const inline = raw.startsWith('data:image/') && raw.length <= MAX_INLINE_CHARS ? raw : '';
+    resolved.push({ id: asset.id, name: String(asset.file_name || '图片'), url: publicAssetUrl(asset.id), inline });
   }
   return resolved;
 }
@@ -232,20 +238,25 @@ export function lessonSystemMessage(conversation) {
   return { role: 'system', content: parts.join('\n\n') };
 }
 
-function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
+export function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
   return rows(
     "SELECT role, content, attachments FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at DESC, rowid DESC LIMIT ?",
     [conversationId, limit],
   ).reverse().map((message) => {
     const attachments = parseAttachments(message.attachments);
     // 带图的用户消息必须发成**内容块**：只发纯文本的话，模型完全看不到图
-    // （这是实测过的：同样的问题，纯文本会回「未看到图片」）。
-    if (message.role !== 'user' || !attachments.length) return { role: message.role, content: message.content };
+    //（实测过：同样的问题，纯文本回「未看到图片」）。
+    //
+    // ⚠️ 只能用 **inline**（base64）不能用外链：上游**不会去抓我们的公网地址**，
+    // 给它 https://iicili.cyou/... 会直接报错（实测：data URL 答出「红 蓝」，外链 HTTP 报错）。
+    // 没有 inline 的（图太大）就不放进请求——宁可不带，也不能让整轮对话失败。
+    const usable = attachments.filter((item) => item.inline);
+    if (message.role !== 'user' || !usable.length) return { role: message.role, content: message.content };
     return {
       role: 'user',
       content: [
         { type: 'text', text: message.content },
-        ...attachments.map((item) => ({ type: 'image_url', image_url: { url: item.url }, role: 'reference_image' })),
+        ...usable.map((item) => ({ type: 'image_url', image_url: { url: item.inline }, role: 'reference_image' })),
       ],
     };
   });

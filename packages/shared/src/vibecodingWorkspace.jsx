@@ -24,6 +24,8 @@ const REASONING_TAIL_CHARS = 4000;
 // 图片附件：一次最多几张、单张多大（与服务端的 MAX_ATTACHMENTS 对齐）
 const MAX_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+// 能"内联给模型看"的上限：再大的图 base64 之后太大，只能放在页面里、AI 看不到
+const MAX_INLINE_BYTES = 1024 * 1024;
 
 function filesFromArtifacts(artifacts) {
   return Object.fromEntries((artifacts || []).map((item) => [item.name, String(item.content ?? '')]));
@@ -292,9 +294,21 @@ function WorkspaceView({ api }) {
       for (const file of files) {
         if (file.size > MAX_IMAGE_BYTES) { toast.error(`${file.name} 超过 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)}MB，换一张小点的`); continue; }
         const asset = await api.upload('student/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' });
+        // 上游不抓公网地址，模型要「看见」图只能内联；超限就不带 inline（并如实告诉学生）
+        let inline = '';
+        if (file.size <= MAX_INLINE_BYTES) {
+          inline = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => resolve('');
+            reader.readAsDataURL(file);
+          });
+        } else {
+          toast.toast(`${file.name} 超过 ${Math.round(MAX_INLINE_BYTES / 1024 / 1024)}MB，AI 看不到它，但页面里可以用`);
+        }
         setAttachments((current) => (current.length >= MAX_ATTACHMENTS
           ? current
-          : [...current, { id: asset.id, name: asset.fileName || file.name, url: `/api/public/file-assets/${asset.id}/download` }]));
+          : [...current, { id: asset.id, name: asset.fileName || file.name, url: `/api/public/file-assets/${asset.id}/download`, inline }]));
       }
     } catch (error) {
       toast.error(error.message || '图片上传失败');
@@ -311,7 +325,7 @@ function WorkspaceView({ api }) {
     const pending = attachments;
     setDraft('');
     setAttachments([]);
-    streamReply('messages', { content, attachments: pending.map((item) => item.id) }, {
+    streamReply('messages', { content, attachments: pending.map((item) => ({ id: item.id, inline: item.inline || '' })) }, {
       optimistic: [{
         id: `local-user-${Date.now()}`, role: 'user', content: content || '（图片）', status: 'SUCCEEDED',
         createdAt: new Date().toISOString(), attachments: pending,
