@@ -7,12 +7,20 @@ import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from '.
 import { useData } from './classroom.jsx';
 
 // Signatures and helpers (原独立学生端逻辑，已并入官网学习页)
+// 快照的「内容」用于判断有没有未保存改动。**必须包含节点位置**：
+// 漏掉位置时，学生把框体挪来挪去不会算成改动 → 不触发自动保存 → 一刷新位置全复原（用户反馈过）。
+// 只取会变且需要落库的字段：id/type/data/position；selected、measured 这类运行时状态不算改动。
 function canvasContentSignature(snapshot) {
   if (!snapshot) return '';
   const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
   const edges = Array.isArray(snapshot.edges) ? snapshot.edges : [];
   return JSON.stringify({
-    nodes: nodes.map((node) => ({ id: node.id, type: node.type, data: node.data || node.props || {} })),
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      data: node.data || node.props || {},
+      position: { x: Math.round(Number(node.position?.x) || 0), y: Math.round(Number(node.position?.y) || 0) },
+    })),
     edges: edges.map((edge) => ({ source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle, targetHandle: edge.targetHandle })),
     viewport: snapshot.viewport || null,
   });

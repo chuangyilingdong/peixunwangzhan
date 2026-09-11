@@ -674,6 +674,13 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     const restored = safeSnapshot(initialSnapshot);
     return restored.nodes.length || !shouldShowStarter ? restored : createStarterSnapshot();
   }, [initialSnapshot, shouldShowStarter]);
+  // 这份快照里有没有存过视角：有就照它显示，没有（新画布）才自动适配一次。
+  // 起始底稿（createStarterSnapshot）自带视角，也算存过。
+  const hasStoredViewport = useMemo(() => {
+    const source = Array.isArray(initialSnapshot?.nodes) && initialSnapshot.nodes.length ? initialSnapshot : initial;
+    const zoom = Number(source?.viewport?.zoom);
+    return Number.isFinite(zoom) && zoom > 0;
+  }, [initial, initialSnapshot]);
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
@@ -957,7 +964,9 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         onPaneClick={() => setContextMenu(null)}
         onDragOver={(event) => event.preventDefault()}
         onMoveEnd={() => { setViewport(getViewport()); setViewportEpoch((n) => n + 1); }}
-        fitView
+        // 只有「这份快照还没存过视角」时才自动适配视野；存过就用存下来的视角。
+        // 原来无条件写 fitView，于是每次刷新都会重新适配 —— 学生平移/缩放后的视角全丢（用户反馈「刷新全复原」）。
+        fitView={!hasStoredViewport}
         // 初始视野：内容靠上、下面留出输入面板的位置。
         // fitView 默认把内容**垂直居中**，而面板贴在被选中框体下方、高 160~320px，
         // 居中时框体下面最多只有 (画布高 - 框体高)/2 的空间——框体长一点面板就必然压住它。
