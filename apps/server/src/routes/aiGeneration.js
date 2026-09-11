@@ -572,8 +572,14 @@ async function processAsyncGeneration(item) {
   const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
   const routedSelection = providerSelectionForModality(policy, modality);
+  // ⚠️ 必须把 routedSelection **整份**带上（只覆盖 provider/model）。异步 worker 原来只挑了
+  //   provider / model / endpoint / channelId 四个字段，把渠道的 **modelRequestTemplates /
+  //   requestTemplates / requestPaths / pollPaths 全丢了** → provider 退回内置默认请求体与默认路径 →
+  //   MiniMax-H3 被上游拒（"requires the native V2 request in metadata.h3_request"）、
+  //   mureka 被拒（"version is required"）；图片恰好因为默认模板就能用，所以只有视频/音乐坏。
+  //   2026-09-11 用生产配置实跑复现并修掉（见交接说明第三节）。
   const providerSelection = persistedJob?.provider && persistedJob.provider !== 'local-mock'
-    ? { provider: persistedJob.provider, model: persistedJob.model, endpoint: routedSelection.endpoint, channelId: routedSelection.channelId }
+    ? { ...routedSelection, provider: persistedJob.provider, model: persistedJob.model }
     : {};
   const provider = getGenerationProvider(providerSelection); const info = generationProviderInfo(providerSelection);
   const context = resolveProjectUsageContext(auth.rawUser, project);
