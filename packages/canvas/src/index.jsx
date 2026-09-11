@@ -279,12 +279,20 @@ function PanelFooter({ state, error, label = '生成', disabled = false, hint, o
 
 // 参考素材缩略图（复刻参考的展示）：小图 + 序号角标 + 名称胶囊；
 // 鼠标移上去在**面板内部**向上展开一张大图（用绝对定位，不改变布局、也不会被面板的裁切切掉）。
-function RefThumb({ url, label, index }) {
+// onRemove：悬停时右上角出现 × —— 连过来的参考删掉那条连线，框体自己的预置素材则清掉配置。
+function RefThumb({ url, label, index, onRemove = null }) {
   const shown = useDisplayUrl(url);
   return <figure className="learning-node__ref-thumb" tabIndex={0}>
     <span className="learning-node__ref-thumb-pic">
       {shown ? <img src={shown} alt={label} /> : <i>?</i>}
       {index ? <b className="learning-node__ref-thumb-index">{index}</b> : null}
+      {onRemove ? <button
+        type="button"
+        className="learning-node__ref-thumb-remove nodrag"
+        title="删除这个参考"
+        aria-label={`删除参考 ${label}`}
+        onClick={(event) => { event.stopPropagation(); onRemove(); }}
+      >×</button> : null}
     </span>
     <figcaption className="learning-node__ref-thumb-label">{label}</figcaption>
     {shown ? <span className="learning-node__ref-thumb-pop"><img src={shown} alt={`${label} 预览`} /></span> : null}
@@ -309,25 +317,35 @@ function referenceAssetLabels(assets) {
 }
 
 // 视频框体的「首帧 / 尾帧 / 参考素材」行：素材靠连线引进来（学生可从桌面拖文件进来再连线），未连时给明确提示
-function FrameRefRows({ incoming, referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame }) {
+function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame }) {
+  const { updateNode, removeIncomingRef } = useCanvasActions();
+  // 悬停右上角的 ×：连过来的删连线，框体自己的预置素材清配置
+  const removePreset = () => updateNode(nodeId, { referenceUrl: '' });
   if (omni) {
     const named = referenceAssetLabels(referenceAssets);
     return <div className="learning-node__ref-row">
       <span className="learning-node__seg-label">参考</span>
       {named.length
-        ? <div className="learning-node__frame-chips">{named.slice(0, 6).map((asset, index) => <RefThumb key={`${asset.url}-${index}`} url={asset.url} label={asset.label} index={index + 1} />)}</div>
+        ? <div className="learning-node__frame-chips">{named.slice(0, 6).map((asset, index) => <RefThumb
+          key={`${asset.url}-${index}`}
+          url={asset.url}
+          label={asset.label}
+          index={index + 1}
+          onRemove={asset.nodeId ? () => removeIncomingRef(nodeId, asset.nodeId) : null}
+        />)}</div>
         : <span className="learning-node__ref-empty">未连接（图片/视频/音频连过来即可）</span>}
     </div>;
   }
   if (!supportsFirstFrame && !supportsLastFrame) return null;
-  const first = incoming[0] || referenceUrl || '';
-  const last = supportsLastFrame ? String(incoming[1] || '') : '';
-  const chip = (url, name) => url
-    ? <RefThumb url={url} label={`${name} · 已连接`} />
+  const firstRef = incomingRefs[0] || null;
+  const lastRef = supportsLastFrame ? (incomingRefs[1] || null) : null;
+  const first = firstRef?.url || referenceUrl || '';
+  const chip = (url, name, sourceNodeId) => url
+    ? <RefThumb url={url} label={`${name} · 已连接`} onRemove={sourceNodeId ? () => removeIncomingRef(nodeId, sourceNodeId) : removePreset} />
     : <span className="learning-node__ref-empty">{name}未连接（从图片节点连过来）</span>;
   return <div className="learning-node__ref-row">
     <span className="learning-node__seg-label">画面</span>
-    <div className="learning-node__frame-chips">{chip(first, '首帧')}{supportsLastFrame ? chip(last, '尾帧') : null}</div>
+    <div className="learning-node__frame-chips">{chip(first, '首帧', firstRef?.nodeId)}{chip(lastRef?.url || '', '尾帧', lastRef?.nodeId)}</div>
   </div>;
 }
 
@@ -439,15 +457,17 @@ function SceneNode({ id, data, selected }) {
 }
 
 function VideoNode({ id, data, selected }) {
-  const { updateNode, getIncomingImageAssetUrls } = useCanvasActions();
+  const { updateNode } = useCanvasActions();
   const inputModes = Array.isArray(data.inputModes) && data.inputModes.length
     ? data.inputModes
     : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
   const supportsFirstFrame = inputModes.includes('FIRST_FRAME');
   const referenceUrl = !data.previewUrl && !data.assetUrl && supportsFirstFrame ? String(data.referenceUrl || '') : '';
-  const incoming = getIncomingImageAssetUrls(id);
   const videoUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
-  const sourceUrl = useDisplayUrl(referenceUrl || incoming[0] || '');
+  // ⚠️ **连过来的素材不算框体的画面**（用户 2026-09-11：「连线不会影响框体变化，应该一直是默认框体，
+  // 只有生成出来的图/视频/音频才会出现在框体内」）。所以这里只看框体自己的预置素材和自己的生成结果；
+  // 连线素材只在底部面板的「参考/首帧」行里出现，生成时再一起提交。
+  const sourceUrl = useDisplayUrl(referenceUrl);
   return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__video-preview" data={data} />
       : videoUrl
@@ -519,7 +539,7 @@ const edgeTypes = { default: GlowEdge };
 // 画布底部面板（复刻参考的独立底部面板）：编辑当前选中的框体——
 // 提示词 / 画面来源行 / 画幅·清晰度·时长分段胶囊 / 页脚（状态胶囊 + 配置 + ＋ + 生成 ↑）。
 function NodeEditPanel({ node, onRequestMaterials }) {
-  const { updateNode, generateNode, canGenerate, readOnly, enabledCapabilities, getIncomingImageAssetUrls, getIncomingAssetRefs } = useCanvasActions();
+  const { updateNode, generateNode, canGenerate, readOnly, enabledCapabilities, getIncomingImageAssetUrls, getIncomingImageRefs, getIncomingAssetRefs } = useCanvasActions();
   // 输入框里的 @ 引用：@ 打开候选（连线连过来的素材 + 框体预置素材），选中就把「图片 1」这样的名字插进提示词。
   // hook 必须放在下面所有提前 return 之前（提前 return 之后再加 hook 会白屏，p34 守卫盯着这条）。
   const promptRef = useRef(null);
@@ -641,7 +661,8 @@ function NodeEditPanel({ node, onRequestMaterials }) {
       </div> : null}
     </div>
     {slotType === 'video' || slotType === 'animation' ? <FrameRefRows
-      incoming={getIncomingImageAssetUrls(id)}
+      nodeId={id}
+      incomingRefs={getIncomingImageRefs(id)}
       referenceUrl={String(data.referenceUrl || '')}
       omni={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('OMNI_REFERENCE')}
       referenceAssets={getIncomingAssetRefs(id)}
@@ -655,7 +676,9 @@ function NodeEditPanel({ node, onRequestMaterials }) {
       <span className={`learning-node__status-chip${state === 'running' ? ' is-running' : state === 'failed' ? ' is-error' : (state === 'done' || state === 'asset') ? ' is-done' : ''}`}>{state === 'running' ? '生成中…' : state === 'failed' ? (data.generationError || '生成失败') : state === 'done' ? '已生成' : state === 'asset' ? '素材' : '未生成'}</span>
       {canGenerate && generate && state !== 'running' ? <button type="button" className="learning-node__submit" disabled={readOnly || Boolean(generate.blocked)} title={generate.blocked || generate.label} onClick={() => generateNode(id, generate.modality, generate.payload)}>{generate.label}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg></button> : null}
     </div>
-    {generate?.blocked ? <span className="learning-node__generation-state is-error">{generate.blocked}</span> : null}
+    {/* ⚠️ 这里原来会把 generate.blocked（「先写下画面描述，再生成」这类前置提示）渲染成一条红色提示。
+        用户要求「图4 这种提示要全部删除」——按下了就把按钮置灰 + title 提示即可，不再在面板里刷红字。
+        注意：**生成失败**仍然要看得见（那是真出错了，见第五节第 33 条），失败信息在状态胶囊里，不动。 */}
   </div>;
 }
 
@@ -907,6 +930,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const getIncomingImageAssetUrl = useCallback((nodeId) => getIncomingImageAssetUrls(nodeId)[0] || '', [getIncomingImageAssetUrls]);
 
   // 全能参考要按类型区分：图片/视频/音频节点连过来的素材各算一类。
+  // nodeId = 素材来自哪个节点 —— 面板上的「× 删除这个参考」要靠它找到那条连线。
   const getIncomingAssetRefs = useCallback((nodeId) => {
     const sourceIds = (edges || []).filter((edge) => edge.target === nodeId).map((edge) => edge.source);
     return sourceIds
@@ -914,10 +938,13 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
       .map((node) => {
         const type = NODE_ASSET_KIND[node?.type] || '';
         const url = String(node?.data?.assetUrl || node?.data?.previewUrl || '').trim();
-        return type && url ? { type, url } : null;
+        return type && url ? { type, url, nodeId: node.id } : null;
       })
       .filter(Boolean);
   }, [edges, nodes]);
+  const getIncomingImageRefs = useCallback((nodeId) => getIncomingAssetRefs(nodeId).filter((asset) => asset.type === 'IMAGE'), [getIncomingAssetRefs]);
+  // ⚠️ removeIncomingRef 必须定义在 removeEdge 之后：deps 数组是立即求值的，写前面会踩 TDZ
+  //    （ReferenceError → 整页白屏；本轮又踩了一次，见第五节第 31 条）。
   const addNodeAt = useCallback((type, position) => {
     if (readOnly || !allowNodeCreation) return;
     const capabilityByType = { prompt: 'text', image: 'image', video: 'video' };
@@ -949,6 +976,13 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     pushHistory({ nodes, edges, viewport });
     setEdges((current) => current.filter((edge) => edge.id !== edgeId));
   }, [edges, nodes, pushHistory, readOnly, setEdges, viewport]);
+
+  // 面板上点参考缩略图右上角的 ×：删掉「素材节点 → 本框体」的那条连线
+  const removeIncomingRef = useCallback((nodeId, sourceNodeId) => {
+    if (readOnly) return;
+    const edge = (edges || []).find((item) => item.target === nodeId && item.source === sourceNodeId);
+    if (edge) removeEdge(edge.id);
+  }, [edges, readOnly, removeEdge]);
 
   // 学生从框体两侧的圆点拖一条线到另一个框体：落点是哪个圆点就记哪个，
   // 这样反向连（从右边的框体往左连）也能连出正确的走向。
@@ -1093,7 +1127,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     });
   }, [edges, nodes]);
 
-  return <AssetUrlContext.Provider value={resolveAssetUrl}><CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingAssetRefs }}>
+  return <AssetUrlContext.Provider value={resolveAssetUrl}><CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, removeIncomingRef, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingImageRefs, getIncomingAssetRefs }}>
     <div className={`learning-canvas${readOnly ? ' is-readonly' : ''}`} ref={canvasRef}>
       <ReactFlow
         nodes={nodes}
