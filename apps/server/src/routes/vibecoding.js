@@ -206,16 +206,26 @@ function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
   ).reverse().map((message) => ({ role: message.role, content: message.content }));
 }
 
-// 当前 TEXT 渠道可选的模型（供学生每个会话自己挑，默认沿用渠道默认模型）
+/**
+ * 当前 TEXT 渠道**实际启用**的模型（供学生每个会话自己挑，默认沿用渠道默认模型）。
+ *
+ * ⚠️ 只给 `models`（管理员在后台勾选/录入的启用项）+ 渠道默认模型，
+ * **不要把 `modelMappings` 一起放进来**——那是「读取模型」返回的候选清单，是给管理员
+ * 挑选用的大列表（几百条，跨供应商），下发给学生就会冒出 gpt 之类的无关模型。
+ */
 function textModelOptions() {
   const channel = modalityChannel(getAiProviderPolicy(), 'TEXT');
   if (!channel) return [];
   const mappings = Array.isArray(channel.modelMappings) ? channel.modelMappings : [];
+  const displayNameOf = (id) => mappings.find((item) => item?.id === id)?.displayName || id;
   const ids = new Set();
+  for (const item of (Array.isArray(channel.models) ? channel.models : [])) {
+    const id = String(typeof item === 'string' ? item : item?.id || item?.name || '').trim();
+    if (id) ids.add(id);
+  }
+  // 默认模型即使没被勾进 models，也应该在列表里（否则前端选不中当前默认值）
   if (channel.model) ids.add(String(channel.model));
-  (Array.isArray(channel.models) ? channel.models : []).forEach((item) => ids.add(String(typeof item === 'string' ? item : item?.id || item?.name || '')));
-  mappings.forEach((item) => { if (item?.id) ids.add(String(item.id)); });
-  return [...ids].filter(Boolean).map((id) => ({ id, displayName: mappings.find((item) => item?.id === id)?.displayName || id }));
+  return [...ids].filter(Boolean).map((id) => ({ id, displayName: displayNameOf(id) }));
 }
 
 /**

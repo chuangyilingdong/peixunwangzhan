@@ -16,33 +16,25 @@
 [data-console] *::before,
 [data-console] *::after { box-sizing: border-box; }
 
-[data-console] button,
-[data-console] input,
-[data-console] select,
-[data-console] textarea {
+/* ⚠️ 这里的元素重置**必须用 :where() 归零元素名的特异性**，只留 [data-console] 的 (0,1,0)：
+   它要压过浅色站点的元素规则（0,0,1），但**不能压过控制台自己的类规则**（同为 0,1,0、
+   且加载在后）。写成 `[data-console] button { padding: 0 }` 是 (0,1,1)，
+   会把 .c-btn / .c-session-item / .c-nav-item … 的 padding 全部清零——
+   按钮看着只是"有点挤"，而侧栏选中行的文字会直接顶到左边缘、被橙色竖条盖住。 */
+[data-console] :where(button, input, select, textarea) {
   font: inherit;
   color: inherit;
   letter-spacing: inherit;
   margin: 0;
 }
-[data-console] button { border: 0; background: none; cursor: pointer; padding: 0; }
-[data-console] button:disabled { cursor: not-allowed; }
-[data-console] p,
-[data-console] h1,
-[data-console] h2,
-[data-console] h3,
-[data-console] h4,
-[data-console] ul,
-[data-console] ol,
-[data-console] figure,
-[data-console] blockquote { margin: 0; padding: 0; }
-[data-console] ul,
-[data-console] ol { list-style: none; }
-[data-console] a { color: inherit; text-decoration: none; }
-[data-console] pre,
-[data-console] code { font-family: var(--font-mono); }
-[data-console] svg { display: block; flex: none; }
-[data-console] ::selection {
+[data-console] :where(button) { border: 0; background: none; cursor: pointer; padding: 0; }
+[data-console] :where(button:disabled) { cursor: not-allowed; }
+[data-console] :where(p, h1, h2, h3, h4, ul, ol, figure, blockquote) { margin: 0; padding: 0; }
+[data-console] :where(ul, ol) { list-style: none; }
+[data-console] :where(a) { color: inherit; text-decoration: none; }
+[data-console] :where(pre, code) { font-family: var(--font-mono); }
+[data-console] :where(svg) { display: block; flex: none; }
+[data-console] :where(::selection) {
   background: color-mix(in srgb, var(--accent) 34%, transparent);
 }
 

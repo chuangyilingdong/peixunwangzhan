@@ -99,7 +99,11 @@ function BlockNodes({ tokens, onApplyFile, streaming }) {
         <tbody>{token.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><InlineNodes tokens={cell.tokens} /></td>)}</tr>)}</tbody>
       </table></div>;
       case 'html': return <p key={key}>{token.text}</p>;
-      default: return token.text ? <p key={key}>{token.text}</p> : null;
+      // 兜底：列表项里的裸文本、以及 marked 产出的 `text` 块，都带着内联 token。
+      // 之前这里直接输出 token.text（**原文**），于是 `**点击换色**` 会原样显示成星号。
+      default:
+        if (token.tokens?.length) return <p key={key}><InlineNodes tokens={token.tokens} /></p>;
+        return token.text ? <p key={key}>{token.text}</p> : null;
     }
   });
 }

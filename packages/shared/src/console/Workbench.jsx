@@ -175,18 +175,27 @@ export function Workbench({
   mode = 'split', width, maxWidth, onPreviewWidth, onCommitWidth, onCancelWidth,
   artifacts = [], previewHtml = '', consoleLines = [], onClearConsole, onRefresh, onClose,
   activeTab, onTabChange, activeArtifactName, onSelectArtifact, running = false, emptyHint,
+  tabs: allowedTabs,
 }) {
   const [innerTab, setInnerTab] = useState('preview');
   const tab = activeTab ?? innerTab;
   const setTab = onTabChange ?? setInnerTab;
   const [reloadKey, setReloadKey] = useState(0);
   const [sourceName, setSourceName] = useState(null);
+  // 学生端只给「预览」：代码与日志属于教师/调试视角，不是学生要看的东西
+  const available = useMemo(
+    () => (allowedTabs ? TABS.filter((item) => allowedTabs.includes(item.id)) : TABS),
+    [allowedTabs],
+  );
 
   const sourceArtifact = useMemo(() => {
     if (!artifacts.length) return null;
     const wanted = sourceName || activeArtifactName;
     return artifacts.find((item) => item.name === wanted) || artifacts[0];
   }, [artifacts, sourceName, activeArtifactName]);
+
+  // 父级可能请求了一个被禁用的页签（例如学生端没有源码页），这时退回第一个可用页签
+  const currentTab = available.some((item) => item.id === tab) ? tab : (available[0]?.id || 'preview');
 
   const previewable = artifacts.some((item) => /^html?$/i.test(String(item.kind)) || /\.html?$/i.test(item.name));
 
@@ -212,27 +221,34 @@ export function Workbench({
       ) : null}
 
       <div className="c-workbench__chrome">
-        <div className="c-workbench__tabs" role="tablist">
-          {TABS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === item.id}
-              className={`c-workbench__tab${tab === item.id ? ' is-active' : ''}`}
-              onClick={() => setTab(item.id)}
-            >
-              <ConsoleIcon name={item.icon} size={14} />
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>
+        {/* 只有一个页签时不摆页签条，直接显示标题（参考也是这么处理的） */}
+        {available.length > 1 ? (
+          <div className="c-workbench__tabs" role="tablist">
+            {available.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === item.id}
+                className={`c-workbench__tab${tab === item.id ? ' is-active' : ''}`}
+                onClick={() => setTab(item.id)}
+              >
+                <ConsoleIcon name={item.icon} size={14} />
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="c-workbench__tabs">
+            <span className="c-workbench__title">{available[0]?.label || '预览'}</span>
+          </div>
+        )}
         {/* 刷新动作在各自面板里（预览有「重新运行」），这里不重复放一个同名按钮 */}
         <IconButton icon="close" size={15} label="关闭工作台" onClick={onClose} small />
       </div>
 
       <div className="c-workbench__surface">
-        <div className="c-workbench__layer" role="tabpanel" hidden={tab !== 'preview'}>
+        <div className="c-workbench__layer" role="tabpanel" hidden={currentTab !== 'preview'}>
           {previewable ? (
             <>
               <div className="c-preview__toolbar">
@@ -267,7 +283,7 @@ export function Workbench({
           )}
         </div>
 
-        <div className="c-workbench__layer" role="tabpanel" hidden={tab !== 'source'}>
+        <div className="c-workbench__layer" role="tabpanel" hidden={currentTab !== 'source'}>
           {artifacts.length ? (
             <>
               <div className="c-file-tabs">
@@ -302,7 +318,7 @@ export function Workbench({
           )}
         </div>
 
-        <div className="c-workbench__layer" role="tabpanel" hidden={tab !== 'console'}>
+        <div className="c-workbench__layer" role="tabpanel" hidden={currentTab !== 'console'}>
           <div className="c-source__bar">
             <span className="c-source__name"><ConsoleIcon name="terminal" size={13} /> 控制台</span>
             <button type="button" className="c-btn c-btn--ghost c-btn--sm" onClick={onClearConsole} disabled={!consoleLines.length}>清空</button>

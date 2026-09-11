@@ -190,6 +190,30 @@ export function ProviderPolicyPanel({ api }) {
               {(channel.modelMappings || []).map((m) => { const mid = m.id || m.model; const checked = (channel.models || []).includes(mid); return <label key={mid}><input type="checkbox" checked={checked} onChange={(e) => updateChannel(index, { models: e.target.checked ? [...new Set([...(channel.models || []), mid])] : (channel.models || []).filter((x) => x !== mid) })} />{m.displayName || mid}</label>; })}
               {!(channel.modelMappings || []).length ? <small className="muted">点下方「读取模型」获取候选，或手动添加模型 ID</small> : null}
             </div>
+            {/* 上面那组勾选框只渲染「候选清单」，所以已启用但不在候选里的模型在这里完全看不见，
+                只会在下面的「默认模型」下拉里冒出来（典型是把别家供应商的模型名填了进来）。
+                把这种漂移显式暴露出来，并给一键移除——否则它在学生端就是一个必然失败的选项。 */}
+            {(() => {
+              const candidates = (channel.modelMappings || []).map((m) => m.id || m.model);
+              const orphans = (channel.models || []).filter((m) => !candidates.includes(m));
+              if (!orphans.length) return null;
+              return <div className="notice warning span-2">
+                <strong>⚠ 已启用、但不在候选清单里的模型</strong>
+                <div className="row-actions" style={{ margin: '8px 0' }}>
+                  {orphans.map((model) => <button
+                    type="button"
+                    className="secondary-button"
+                    key={model}
+                    title="从本渠道的启用模型里移除"
+                    onClick={() => updateChannel(index, {
+                      models: (channel.models || []).filter((x) => x !== model),
+                      model: channel.model === model ? '' : channel.model,
+                    })}
+                  >移除 {model}</button>)}
+                </div>
+                <small className="muted">通常来自别的供应商或手动输入有误，在当前 Endpoint 上大概率调不通，学生选中就会失败。</small>
+              </div>;
+            })()}
             <label>手动添加模型 ID<input onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (v) { updateChannel(index, { models: [...new Set([...(channel.models || []), v])] }); e.target.value = ''; } } }} placeholder="输入后回车添加" /></label>
             <label>默认模型{(channel.models || []).length ? <select value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} required><option value="">请选择默认模型</option>{(channel.models || []).map((m) => <option key={m} value={m}>{m}</option>)}</select> : <input value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} placeholder="模型 ID" required />}</label>
             <label>API Key<input type="password" value={channel.apiKey || ''} onChange={(e) => updateChannel(index, { apiKey: e.target.value })} placeholder="留空保持原密钥" autoComplete="new-password" /></label>

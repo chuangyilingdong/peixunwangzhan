@@ -40,7 +40,7 @@ seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capa
 // 给 TEXT 渠道配上可选模型，验证「每会话选模型」
 seedDb.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({
   modalityChannels: { TEXT: 'channel-test-text' },
-  channels: [{ id: 'channel-test-text', provider: 'local-mock', model: 'mock-model-a', models: ['mock-model-a', 'mock-model-b'], modelMappings: [{ id: 'mock-model-a', displayName: '模拟模型 A' }] }],
+  channels: [{ id: 'channel-test-text', provider: 'local-mock', model: 'mock-model-a', models: ['mock-model-a', 'mock-model-b'], modelMappings: [{ id: 'mock-model-a', displayName: '模拟模型 A' }, { id: 'mock-model-z', displayName: '候选但未启用' }] }],
 }));
 seedDb.close();
 
@@ -141,6 +141,13 @@ try {
 
   // 5) 每会话选模型
   assert.ok(Array.isArray(detail.modelOptions) && detail.modelOptions.length, '会话详情应带可选模型');
+  // 只下发「实际启用」的模型：候选清单（modelMappings）里有但没启用的不能出现，
+  // 否则学生端会冒出别的供应商的模型名（2026-09-11 线上就是 gpt-6-astra）
+  {
+    const ids = detail.modelOptions.map((m) => m.id);
+    assert.equal(ids.includes('mock-model-z'), false, '候选但未启用的模型不应下发给学生');
+    assert.deepEqual([...ids].sort(), ['mock-model-a', 'mock-model-b'], '应只包含渠道实际启用的模型');
+  }
   const bogus = await api(`/api/student/vibecoding/conversations/${conversationId}`, { method: 'PUT', token: student, body: { model: 'not-a-real-model' } });
   assert.equal(bogus.status, 400, `不存在的模型应 400，实际 ${bogus.status}`);
   assert.equal(bogus.data?.error?.code, 'VIBECODING_MODEL_NOT_AVAILABLE', '错误码应为 VIBECODING_MODEL_NOT_AVAILABLE');

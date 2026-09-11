@@ -151,7 +151,6 @@ function WorkspaceView({ api }) {
   const [artifacts, setArtifacts] = useState([]);
   const [draft, setDraft] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [consoleLines, setConsoleLines] = useState([]);
   const [tab, setTab] = useState('preview');
   const [workbenchOpen, setWorkbenchOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 720));
   const [editing, setEditing] = useState(null);
@@ -179,7 +178,6 @@ function WorkspaceView({ api }) {
       artifacts: message.role === 'assistant' ? loaded.filter((item) => item.messageId === message.id) : [],
       activity: [],
     })));
-    setConsoleLines([]);
   }, [conversation.data?.id, conversation.data?.updatedAt]);
 
   const editable = conversation.data?.status === 'DRAFT';
@@ -407,25 +405,6 @@ function WorkspaceView({ api }) {
     });
   }
 
-  async function runOnServer() {
-    try {
-      const result = await api.post(`student/vibecoding/conversations/${conversationId}/runs`, {});
-      const run = result.run;
-      const lines = [];
-      if (run.stdout) lines.push({ level: 'log', text: run.stdout.trimEnd(), source: '服务端' });
-      if (run.stderr) lines.push({ level: 'error', text: run.stderr.trimEnd(), source: '服务端' });
-      lines.push({
-        level: run.status === 'SUCCEEDED' ? 'info' : 'error',
-        text: run.status === 'SUCCEEDED'
-          ? `运行成功（退出码 ${run.exitCode}，${run.durationMs}ms）`
-          : run.status === 'TIMEOUT'
-            ? `运行超时（超过 ${Math.round((run.durationMs || 0) / 1000)} 秒已终止）`
-            : `运行失败（退出码 ${run.exitCode}，${run.errorCode || '未知原因'}）`,
-        source: '服务端',
-      });
-      setConsoleLines((current) => [...current, ...lines]);
-    } catch (error) { toast.error(error.message || '运行失败'); }
-  }
 
   const items = list.data?.items || [];
   const pinned = items.filter((item) => item.pinnedAt);
@@ -433,7 +412,6 @@ function WorkspaceView({ api }) {
   const modelOptions = data.modelOptions || [];
   const submission = data.submission;
   const lastUserMessageId = [...messages].reverse().find((item) => item.role === 'user' && !String(item.id).startsWith('local-'))?.id || null;
-  const sandboxAvailable = Boolean(data.sandbox?.available);
 
   const sidebarZones = [
     ...(pinned.length ? [{
@@ -460,7 +438,7 @@ function WorkspaceView({ api }) {
       onNew={createConversation}
       navItems={[
         { id: 'hall', label: '返回课程', icon: 'bookOpen', onClick: () => navigate('/learn/vibecoding') },
-        ...(sandboxAvailable ? [] : [{ id: 'sandbox', label: '代码沙箱未启用', icon: 'shield', title: data.sandbox?.reason || '服务端代码运行当前不可用（用右侧预览看效果）' }]),
+
       ]}
       zones={sidebarZones}
       activeId={conversationId}
@@ -521,7 +499,7 @@ function WorkspaceView({ api }) {
           onRegenerate={regenerate}
           onEditMessage={(message) => setEditing({ id: message.id, content: message.content })}
           onDeleteMessage={deleteMessage}
-          onOpenArtifact={(artifact) => { setWorkbenchOpen(true); setTab('source'); setMenu(null); }}
+          onOpenArtifact={() => { setWorkbenchOpen(true); setTab('preview'); setMenu(null); }}
           onDownloadArtifact={(artifact) => { downloadArtifact(artifact); toast.ok(`已下载 ${artifact.name}`); }}
           emptyState={(
             <div className="c-landing">
@@ -566,17 +544,16 @@ function WorkspaceView({ api }) {
         maxWidth={workbench.maxWidth}
         onPreviewWidth={workbench.preview}
         onCommitWidth={workbench.commit}
+        tabs={['preview']}
         artifacts={artifacts}
         previewHtml={previewHtml}
-        consoleLines={consoleLines}
         running={streaming}
-        onClearConsole={() => setConsoleLines([])}
-        onRefresh={() => { setConsoleLines([]); toast.toast('已重新载入预览'); }}
+        onRefresh={() => toast.toast('已重新载入预览')}
         onClose={() => setWorkbenchOpen(false)}
         activeTab={tab}
         onTabChange={setTab}
         activeArtifactName={entryFile}
-        onSelectArtifact={() => setTab('source')}
+        onSelectArtifact={() => setTab('preview')}
       /> : null}
 
       {editing ? (

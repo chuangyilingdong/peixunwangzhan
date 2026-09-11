@@ -305,6 +305,17 @@
   /* 刻意不建层叠上下文：让面板里的弹出层能盖过其它浮动元素 */
   pointer-events: none;
 }
+/* 渐隐遮罩：滚动区的 padding 只在「滚到底」时保证最后一条停在输入框上方，
+   滚到中途内容仍然会从面板周围的空隙里透出来——看起来就像内容跑到了输入框下面。
+   用一层从透明渐到画布底色的遮罩把它压下去（面板本身是不透明的，所以只影响四周）。 */
+.c-composer-dock::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent, var(--sidebar-bg) 38%);
+  pointer-events: none;
+}
+.c-composer-dock > * { position: relative; }
 .c-composer {
   width: min(100%, calc(var(--chat-col) + 3rem));
   margin: 0 auto;

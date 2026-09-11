@@ -155,6 +155,7 @@
   margin: 1px var(--sp-1);
 }
 .c-session-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -184,10 +185,12 @@
   color: var(--sidebar-text-strong);
   font-weight: 560;
 }
+/* 选中态的橙色竖条：基准必须是**行本身**（.c-session-item 已 position:relative）。
+   之前它相对的是外层 .c-session-row，左边距叠了两次 4px，竖条直接贴到文字上。 */
 .c-session-item.is-current::before {
   content: "";
   position: absolute;
-  left: calc(var(--sp-1) + 3px);
+  left: 3px;
   top: 50%;
   width: 3px;
   height: 18px;
