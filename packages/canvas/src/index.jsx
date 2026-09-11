@@ -35,6 +35,182 @@ function UploadState({ className, data }) {
   return null;
 }
 
+const useAssetResolver = () => useContext(AssetUrlContext);
+
+// ── 提示词编辑器：富文本 + 内联「引用芯片」 ─────────────────────────────────────────────
+// 为什么不用 textarea：芯片必须**插在句子里**（参考那种「[图片 1] 是主角人物」），
+// 而 textarea 只能放纯文本，没法在文字中间放缩略图；分成「芯片一行 + 文字一行」又会出现
+// 一份重复的 `@图片 1`（用户 2026-09-11 报的就是这个）。
+//
+// 与 React 的边界：**这个 div 的子节点由我们自己的 DOM 操作维护，React 不渲染它的 children**
+// （JSX 里写成空标签）—— 否则每次重渲染都会把用户的光标位置冲掉。
+// 值仍然是纯文本：芯片序列化成 `@图片 N`，模型收到的提示词与以前完全一致。
+function PromptEditor({ value, refs = [], readOnly = false, placeholder = '', onChange, insertRef = null }) {
+  const boxRef = useRef(null);
+  const composingRef = useRef(false);
+  const resolveAsset = useAssetResolver();
+  const refsRef = useRef(refs);
+  refsRef.current = refs;
+
+  const labelOf = (element) => String(element?.getAttribute?.('data-label') || '');
+
+  // DOM → 纯文本：芯片还原成 `@图片 N`
+  const serialize = useCallback((root) => {
+    if (!root) return '';
+    let text = '';
+    const walk = (node) => {
+      if (node.nodeType === 3) { text += node.nodeValue; return; }
+      if (node.nodeType !== 1) return;
+      if (node.classList?.contains('learning-node__citation')) { text += `@${labelOf(node)}`; return; }
+      if (node.tagName === 'BR') { text += '\n'; return; }
+      node.childNodes.forEach(walk);
+    };
+    root.childNodes.forEach(walk);
+    return text;
+  }, []);
+
+  // 纯文本 → DOM：把 `@图片 N` 换成芯片；其它文本原样（按换行拆 <br>）
+  const build = useCallback((text) => {
+    const fragment = document.createDocumentFragment();
+    const pattern = /@(图片|视频|音频)\s?(\d+)/g;
+    let cursor = 0;
+    const pushText = (chunk) => {
+      const lines = String(chunk).split('\n');
+      lines.forEach((line, index) => {
+        if (index) fragment.appendChild(document.createElement('br'));
+        if (line) fragment.appendChild(document.createTextNode(line));
+      });
+    };
+    for (const match of String(text || '').matchAll(pattern)) {
+      pushText(text.slice(cursor, match.index));
+      fragment.appendChild(makeCitation(`${match[1]} ${match[2]}`));
+      cursor = match.index + match[0].length;
+    }
+    pushText(String(text || '').slice(cursor));
+    return fragment;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function makeCitation(label) {
+    const known = refsRef.current.find((item) => item.label === label);
+    const chip = document.createElement('span');
+    chip.className = `learning-node__citation${known ? '' : ' is-stale'}`;
+    chip.setAttribute('contenteditable', 'false');
+    chip.setAttribute('data-label', label);
+    chip.title = known ? `${label}（引用中）` : `${label} 已失效：先把素材连到这个框体再引用`;
+    const thumb = document.createElement('i');
+    thumb.className = 'learning-node__citation-thumb';
+    const url = String(known?.url || '');
+    if (url) {
+      // 受鉴权保护的地址要先解析成能显示的（blob:），解析器带缓存
+      Promise.resolve(resolveAsset ? resolveAsset(url) : url)
+        .then((shown) => { if (shown) thumb.style.backgroundImage = `url("${shown}")`; })
+        .catch(() => {});
+    }
+    const name = document.createElement('b');
+    name.textContent = label;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'learning-node__citation-remove nodrag';
+    remove.setAttribute('contenteditable', 'false');
+    remove.title = '删除这个引用';
+    remove.textContent = '×';
+    remove.addEventListener('mousedown', (event) => {
+      event.preventDefault(); event.stopPropagation();
+      // 芯片后面跟着的那个空格一起带走，别在句子里留出双空格
+      const next = chip.nextSibling;
+      if (next?.nodeType === 3) next.nodeValue = String(next.nodeValue).replace(/^[\s\u00a0]/, '');
+      chip.remove();
+      sync();
+    });
+    chip.append(thumb, name, remove);
+    return chip;
+  }
+
+  const sync = () => {
+    if (composingRef.current) return;
+    const element = boxRef.current;
+    const next = serialize(element);
+    // 顺带报出「光标之前的纯文本」：@ 候选靠它判断（富文本里拿不到 selectionStart）
+    let before = '';
+    const selection = window.getSelection();
+    if (element && selection?.rangeCount && element.contains(selection.anchorNode)) {
+      const probe = selection.getRangeAt(0).cloneRange();
+      probe.setStart(element, 0);
+      before = probe.toString();
+    }
+    onChange?.(next, before);
+  };
+
+  // 外部值变了（换框体 / 撤销）：整体重画。正在输入时不碰 DOM，免得光标乱跳。
+  useLayoutEffect(() => {
+    const element = boxRef.current;
+    if (!element) return;
+    if (document.activeElement === element) return;
+    if (serialize(element) === String(value || '')) return;
+    element.replaceChildren(build(String(value || '')));
+  }, [value, build, serialize]);
+
+  // 在光标处插入一颗引用芯片（@ 候选点选时调用）：先把没写完的「@查询」删掉，再插芯片 + 空格
+  const insertCitation = (label) => {
+    const element = boxRef.current;
+    if (!element) return;
+    element.focus();
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount || !element.contains(selection.anchorNode)) return;
+    const probe = selection.getRangeAt(0).cloneRange();
+    probe.setStart(element, 0);
+    const typedBefore = probe.toString();
+    const at = typedBefore.lastIndexOf('@');
+    const pending = at >= 0 && !/\s/.test(typedBefore.slice(at + 1)) && typedBefore.length - at <= 12;
+    if (pending && typeof selection.modify === 'function') {
+      for (let i = 0; i < typedBefore.length - at; i += 1) selection.modify('extend', 'backward', 'character');
+      selection.deleteFromDocument();
+    }
+    const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+    if (!range) return;
+    const chip = makeCitation(label);
+    range.insertNode(chip);
+    const space = document.createTextNode('\u00a0');
+    chip.after(space);
+    const after = document.createRange();
+    after.setStartAfter(space); after.collapse(true);
+    selection.removeAllRanges(); selection.addRange(after);
+    sync();
+  };
+  useEffect(() => { if (insertRef) insertRef.current = insertCitation; return () => { if (insertRef) insertRef.current = null; }; });
+
+  // 连线的增删会改变引用是否有效：只更新芯片的样式，不重建 DOM（保住光标）
+  useEffect(() => {
+    const element = boxRef.current;
+    if (!element) return;
+    element.querySelectorAll('.learning-node__citation').forEach((chip) => {
+      const known = refs.some((item) => item.label === chip.getAttribute('data-label'));
+      chip.classList.toggle('is-stale', !known);
+    });
+  }, [refs]);
+
+  return <div
+    ref={boxRef}
+    className={`learning-node__inputbox learning-node__prompt nodrag${readOnly ? ' is-readonly' : ''}`}
+    contentEditable={!readOnly}
+    suppressContentEditableWarning
+    role="textbox"
+    aria-multiline="true"
+    aria-label={placeholder || '提示词'}
+    data-placeholder={placeholder}
+    onInput={sync}
+    onCompositionStart={() => { composingRef.current = true; boxRef.current?.classList.add('is-composing'); }}
+    onCompositionEnd={() => { composingRef.current = false; boxRef.current?.classList.remove('is-composing'); sync(); }}
+    onBlur={sync}
+    onPaste={(event) => {
+      // 只收纯文本：粘贴带格式的内容会往编辑器里塞一堆 HTML
+      event.preventDefault();
+      const text = String(event.clipboardData?.getData('text/plain') || '').replace(/\s+$/g, ' ');
+      document.execCommand('insertText', false, text);
+    }}
+  />;
+}
+
 function mediaKindOf(mimeType) {
   const mime = String(mimeType || '');
   if (mime.startsWith('image/')) return 'image';
@@ -546,7 +722,7 @@ function NodeEditPanel({ node, onRequestMaterials }) {
   const { updateNode, generateNode, canGenerate, readOnly, enabledCapabilities, getIncomingImageAssetUrls, getIncomingImageRefs, getIncomingAssetRefs } = useCanvasActions();
   // 输入框里的 @ 引用：@ 打开候选（连线连过来的素材 + 框体预置素材），选中就把「图片 1」这样的名字插进提示词。
   // hook 必须放在下面所有提前 return 之前（提前 return 之后再加 hook 会白屏，p34 守卫盯着这条）。
-  const promptRef = useRef(null);
+  const citationInsertRef = useRef(null);   // 由 PromptEditor 填进来：在光标处插引用芯片
   const [mention, setMention] = useState(null);
   if (!node) return null;
   const id = node.id;
@@ -618,37 +794,17 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     ...(data.referenceUrl ? [{ url: String(data.referenceUrl), label: '框体素材', hint: '框体预置' }] : []),
   ];
   const filteredNames = mention?.query ? referenceNames.filter((item) => item.label.includes(mention.query)) : referenceNames;
-  // 已引用（用户要的「有图有文字、可整体删除」的芯片）：
-  // 提示词里出现 `@图片 1` 这类名字时，在输入框里渲染成一颗带缩略图的芯片。
-  // 有效性**绑定真实连线**：连线还在才是一颗正常芯片；连线没了就把芯片标成「已失效」，
-  // 点 × 一次性把文本里那处引用删掉 —— 这样「引用」永远是真的，不会只剩一行字。
-  const citedRefs = Array.from(String(promptValue).matchAll(/@(图片|视频|音频)\s?(\d+)/g)).map((match) => {
-    const label = `${match[1]} ${match[2]}`;
-    const known = referenceNames.find((item) => item.label === label);
-    return { label, token: match[0], url: known?.url || '', valid: Boolean(known) };
-  });
-  const dropCitation = (token) => {
-    const next = String(promptValue).split(token).join('').replace(/\s{2,}/g, ' ').trim();
-    setPrompt(next);
-    setMention(null);
-  };
+  // 选中候选：在光标处插一颗引用芯片（编辑器负责 DOM 插入与光标落点），不再往文本里塞一行字
   const insertMention = (item) => {
-    const element = promptRef.current;
-    const caret = element ? element.selectionStart : promptValue.length;
-    const before = promptValue.slice(0, caret);
-    const at = before.lastIndexOf('@');
-    const next = at >= 0
-      ? `${promptValue.slice(0, at)}@${item.label} ${promptValue.slice(caret)}`
-      : `${promptValue}@${item.label} `;
-    setPrompt(next);
     setMention(null);
-    if (element) window.requestAnimationFrame(() => { element.focus(); const pos = next.length; element.setSelectionRange(pos, pos); });
+    citationInsertRef.current?.(item.label);
   };
-  // 光标前刚打出一个「@」（后面还没跟空格）就把候选打开；再打字就当查询过滤
-  const syncMention = (value, caret) => {
-    const before = String(value).slice(0, caret ?? String(value).length);
+  // 光标前刚打出一个「@」（后面还没跟空格）就把候选打开；再打字就当查询过滤。
+  // 富文本编辑器给的是「光标之前的纯文本」，正好用来判断。
+  const syncMention = (beforeCaret) => {
+    const before = String(beforeCaret ?? '');
     const at = before.lastIndexOf('@');
-    if (at < 0 || /\s/.test(before.slice(at + 1)) || caret - at > 12) { setMention(null); return; }
+    if (at < 0 || /\s/.test(before.slice(at + 1)) || before.length - at > 12) { setMention(null); return; }
     setMention({ query: before.slice(at + 1) });
   };
   // 面板上不再重复放「连线引用中」的缩略图条：框体自己就显示着那张画面，下面「参考」那行也写了连接情况。
@@ -657,32 +813,18 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     {/* 明写正在编辑哪个框体：面板会贴到「被选中」的框体下方，而学生可能在看着另一个框体（用户误读成面板跑偏过） */}
     <div className="learning-canvas__panel-target"><span className="learning-node__seg-label">正在编辑</span><strong>{data.title || node.type}</strong>{referenceNames.length ? <span className="cv-muted">输入 @ 可引用：{referenceNames.map((item) => item.label).join('、')}</span> : null}</div>
     <div className="learning-node__textarea-wrap">
-      {/* 输入框整体：外框画在这里，芯片和文本都落在框内（参考那种「有图有文字」的样子） */}
-      <div className={`learning-node__inputbox${readOnly ? ' is-readonly' : ''}`}>
-        {citedRefs.length ? <div className="learning-node__citations">
-          {citedRefs.map((item) => <span key={item.token} className={`learning-node__citation${item.valid ? '' : ' is-stale'}`} title={item.valid ? `${item.label}（连线引用中）` : `${item.label} 已失效：先把素材连到这个框体再引用`}>
-            <MentionThumb url={item.url} label={item.label} />
-            <b>{item.label}</b>
-            {item.valid ? null : <i>已失效</i>}
-            <button type="button" className="learning-node__citation-remove nodrag" title="删除这个引用" aria-label={`删除引用 ${item.label}`} disabled={readOnly} onClick={(event) => { event.stopPropagation(); dropCitation(item.token); }}>×</button>
-          </span>)}
-        </div> : null}
-        <textarea
-          ref={promptRef}
-          className="learning-node__textarea nodrag"
-          value={promptValue}
-          placeholder={placeholder}
-          maxLength={isBox ? 3000 : 300}
-          disabled={readOnly}
-          onChange={(event) => { setPrompt(event.target.value); syncMention(event.target.value, event.target.selectionStart); }}
-          onKeyDown={(event) => { if (mention && (event.key === 'Escape' || event.key === 'ArrowLeft')) setMention(null); }}
-          onBlur={() => setMention(null)}
-        />
-      </div>
+      <PromptEditor
+        value={promptValue}
+        refs={referenceNames}
+        readOnly={readOnly}
+        placeholder={placeholder}
+        onChange={(next, beforeCaret) => { setPrompt(next); syncMention(beforeCaret); }}
+        insertRef={citationInsertRef}
+      />
       {mention && filteredNames.length ? <div className="learning-node__mention" role="listbox" aria-label="插入引用">
         {filteredNames.slice(0, 8).map((item, index) => <button
           type="button"
-          key={`${item.url}-${index}`}
+          key={`${item.url}-${item.label}-${index}`}
           className="learning-node__mention-item"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => insertMention(item)}
