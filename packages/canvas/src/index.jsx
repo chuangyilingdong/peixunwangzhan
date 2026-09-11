@@ -16,7 +16,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
-  useStoreApi,
+  useStore,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
@@ -645,25 +645,19 @@ const CANVAS_FIT_PADDING = { top: '24px', right: '40px', bottom: '320px', left: 
 // 这些字段是「边打字边改」的，连续编辑同一条框体的同一批字段只记一条撤销记录。
 const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait', 'place', 'mood', 'emoji', 'studentParams', 'audio']);
 
-// 锚点策略（两轮反馈合起来的口径）：
-//  - 平移/缩放**进行中**面板不动：实时订阅 transform 会让它一路追着框体跑、追到画布边缘又被夹住，
-//    看着像乱动（第七轮用户反馈）；
-//  - 松手（onMoveEnd）后重新锚定一次，让面板回到框体下方：否则平移完面板会丢在一边、
-//    和框体彻底分家（第九轮用户反馈的「选中素材 + 空格拖画布后面板跑一边去」）。
-//  - 拖动框体 / 换选中框体时同样重新锚定。
-// 位置用 transform 直接算、不加 CSS 过渡（加了跟随就慢半拍）。
-function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, viewportBusy = false, onRequestRoom, onRequestMaterials }) {
-  const store = useStoreApi();
+// 锚点策略（第十六轮定稿，前后改过三种口径）：
+//  面板锚在**画布坐标系**里 —— 它和框体是同一个坐标系里的两个东西，画布怎么动它们就一起怎么动。
+//  - 拖框体：框体自己的 position 变 → 面板跟着走（本来就是这样）。
+//  - 平移/缩放画布：transform 变 → 面板必须跟着框体一起在屏幕上走。
+// 只认一条规则，别再退回「手势中不动、松手后归位」：那样面板是钉在**屏幕**上的，
+// 一拖画布就和框体分家（用户第十六轮原话：「我移动画布，输入框就保持跟框体一起」）。
+// 位置每帧用 transform 直接算、不加 CSS 过渡（加了跟随就慢半拍）。
+function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRoom, onRequestMaterials }) {
   const panelRef = useRef(null);
-  const [anchor, setAnchor] = useState(null);
   const [panelHeight, setPanelHeight] = useState(0);
   const [box, setBox] = useState({ width: 0, height: 0 });
-
-  // 锚点：框体位置变了 / 换了框体 / 画布平移缩放结束（viewportEpoch）时重新取画布 transform
-  useLayoutEffect(() => {
-    const [x, y, zoom] = store.getState().transform;
-    setAnchor((current) => (current && current.x === x && current.y === y && current.zoom === zoom ? current : { x, y, zoom }));
-  }, [store, node.id, node.position.x, node.position.y, viewportEpoch]);
+  // 直接订阅 ReactFlow 的视口 transform：平移/缩放时每帧重算，面板天然与框体同步。
+  const transform = useStore((state) => state.transform);
 
   // 面板高度随内容变（分段参数出现/消失、提示词换行），量出来才能判断放得下放不下。
   useLayoutEffect(() => {
@@ -697,14 +691,12 @@ function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, viewportBusy =
     return () => observer.disconnect();
   }, [containerRef]);
 
-  // 首帧还没量到锚点/容器时先用当前画布 transform 兜底，useLayoutEffect 会在绘制前补上
-  const [fallbackX, fallbackY, fallbackZoom] = store.getState().transform;
-  const transform = anchor || { x: fallbackX, y: fallbackY, zoom: fallbackZoom };
-  const zoom = transform.zoom || 1;
+  const [tx = 0, ty = 0, scale = 1] = Array.isArray(transform) ? transform : [];
+  const zoom = scale || 1;
   const nodeWidth = (node.measured?.width || node.width || 250) * zoom;
   const nodeHeight = (node.measured?.height || node.height || 160) * zoom;
-  const nodeLeft = node.position.x * zoom + transform.x;
-  const nodeTop = node.position.y * zoom + transform.y;
+  const nodeLeft = node.position.x * zoom + tx;
+  const nodeTop = node.position.y * zoom + ty;
   const panelWidth = Math.max(280, Math.min(DOCK_WIDTH, box.width - DOCK_MARGIN * 2));
   // 水平：优先居中于框体。居中会越出画布时改成**与框体的左/右边对齐**——
   // 参考实现是「居中后硬夹住」，框体靠边时面板会被推到离框体很远的地方，看着就是错位。
@@ -712,21 +704,25 @@ function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, viewportBusy =
   let x = nodeLeft + nodeWidth / 2 - panelWidth / 2;
   if (x + panelWidth > box.width - DOCK_MARGIN) x = nodeLeft + nodeWidth - panelWidth;
   if (x < DOCK_MARGIN) x = nodeLeft;
-  x = Math.min(Math.max(DOCK_MARGIN, x), maxX);
   // 面板**永远**贴在框体下方（参考实现也是永远在下方：y = 框体底边 + 14）。
   // 只在面板会越出画布底边时把它贴住底边，绝不翻到框体上方——翻上去学生就找不着输入框了。
   const idealY = nodeTop + nodeHeight + DOCK_GAP;
   // 越出多少（= 需要把画布上移多少才能让面板完整落在框体下方）
   const overflow = panelHeight ? Math.max(0, idealY + panelHeight - (box.height - DOCK_MARGIN)) : 0;
   let y = idealY;
-  if (overflow > 0) y = Math.max(DOCK_MARGIN, idealY - overflow);
+  // 用户正在平移/缩放画布时不夹取：手势中面板必须是框体的刚体，夹一下就会「停住不动」，
+  // 看着又变成和框体分家（第十六轮反馈）。松手后下面的夹取与「让位」再把它落到位。
+  if (!viewportBusy) {
+    x = Math.min(Math.max(DOCK_MARGIN, x), maxX);
+    if (overflow > 0) y = Math.max(DOCK_MARGIN, idealY - overflow);
+  }
   // 面板在框体下方放不下时（继续夹着就会压住框体）：请求把画布上移把位置让出来。
   // 用户前后反馈了三次「输入框应该一直在框体下方」，光夹到底边做不到这一点，只能动画布。
   //
-  // ⚠️ 两条必须守住（本轮踩过）：
+  // ⚠️ 两条必须守住（第十五轮踩过）：
   //   ① **用户正在平移/缩放画布时绝不发** —— 否则拖画布的过程中视图会被顶一下
   //      （用户反馈「移动画布时输入框乱动」就是这个）。用 viewportBusy 挡掉
-  //      （CanvasSurface 在 onMoveStart/onMoveEnd 之间置真）；手势结束后面板重新锚定，
+  //      （CanvasSurface 在 onMoveStart/onMoveEnd 之间置真）；松手后这里会重算，
   //      届时若仍放不下才补一次让位。
   //   ② **同一个缺口只请求一次** —— 否则放不下时会每 260ms 再请求一次、画布来回弹。
   const requestRoomRef = useRef(onRequestRoom);
@@ -777,9 +773,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [viewport, setViewport] = useState(initial.viewport);
-  // 画布平移/缩放「结束」的计数：面板靠它在那之后重新锚定一次（过程中不动，见 CanvasDockPanel 注释）
-  const [viewportEpoch, setViewportEpoch] = useState(0);
-  // 用户是否正在平移/缩放画布：这段时间里面板的「让位」请求必须停手（否则拖画布时会被顶一下）
+  // 用户是否正在平移/缩放画布：① 面板在这段时间里不夹取、严格跟随框体；
+  // ② 这段时间里面板的「让位」请求必须停手（否则拖画布时会被顶一下）
   const [viewportBusy, setViewportBusy] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   // 底部面板要编辑哪个框体：优先当前选中的，取消选中后沿用上一次（面板不会突然消失）
@@ -792,7 +787,6 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const requestRoom = useCallback((deficit) => {
     const { x, y, zoom } = getViewport();
     setFlowViewport({ x, y: y - Math.min(deficit, 400), zoom });
-    setViewportEpoch((n) => n + 1);
   }, [getViewport]);
   const selectedNodeId = (nodes.find((item) => item.selected) || {}).id || null;
   useEffect(() => { if (selectedNodeId) setActiveNodeId(selectedNodeId); }, [selectedNodeId]);
@@ -1059,7 +1053,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         onPaneClick={() => setContextMenu(null)}
         onDragOver={(event) => event.preventDefault()}
         onMoveStart={() => setViewportBusy(true)}
-        onMoveEnd={() => { setViewport(getViewport()); setViewportEpoch((n) => n + 1); setViewportBusy(false); }}
+        onMoveEnd={() => { setViewport(getViewport()); setViewportBusy(false); }}
         // 只有「这份快照还没存过视角」时才自动适配视野；存过就用存下来的视角。
         // 原来无条件写 fitView，于是每次刷新都会重新适配 —— 学生平移/缩放后的视角全丢（用户反馈「刷新全复原」）。
         fitView={!hasStoredViewport}
@@ -1089,7 +1083,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportEpoch={viewportEpoch} viewportBusy={viewportBusy} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} /> : null}
+      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportBusy={viewportBusy} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} /> : null}
       {!readOnly && <div className="learning-canvas__toolbar">
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
