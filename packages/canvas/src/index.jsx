@@ -703,8 +703,7 @@ function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRo
   // ⚠️ 这里**不做任何夹取/左右对齐**（第十六轮之后用户又反馈一次「为什么还是跟着画布跑」）：
   //   只要出现「越界就夹住」或「越界就改成与框体左/右边对齐」，面板就会在框体贴到画布边缘时
   //   停在画布边上、和框体分家 —— 用户看到的就是「画布上一个框体都没有，左下角却杵着个输入框」。
-  //   代价：框体贴着画布左右边缘时，面板会有一部分被画布裁掉（容器是 overflow:hidden）；
-  //   宁可裁掉也不能分家，要看全就把框体往画布中间挪一点（这条取舍已和用户确认过）。
+  //   越界的问题改用下面的「动画布让位」解决，所以框体在画布里时面板永远是完整可见的。
   //   参考实现是「居中后硬夹住」，我们**故意不跟**。
   const x = nodeLeft + nodeWidth / 2 - panelWidth / 2;
   const idealY = nodeTop + nodeHeight + DOCK_GAP;
