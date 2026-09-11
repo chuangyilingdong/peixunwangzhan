@@ -121,6 +121,10 @@
 .c-replay__thread { max-height: 62vh; overflow-y: auto; padding: var(--sp-3) 0; }
 .c-replay__frame { height: 62vh; border: 0; background: #fff; display: block; }
 .c-replay__files { max-height: 62vh; overflow: auto; padding: var(--sp-3); }
+/* 公开作品页的预览台：产物不止一份时上面摆一条切换条（网页 / PPT / Word / Excel）。
+   文档预览在工作台里是「固定高度的滚动区」，这里改成跟着页面滚 —— 别再套一层滚动条。 */
+.c-replay__stage { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+.c-replay__stage .c-preview__doc { flex: none; overflow: visible; }
 .c-replay__file + .c-replay__file { margin-top: var(--sp-3); }
 .c-replay__file-name {
   display: flex;

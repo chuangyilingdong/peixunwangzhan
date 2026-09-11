@@ -1,11 +1,12 @@
 /**
- * P25 VibeCoding 作品全链路：学生对话创作 → 提交 → 老师点评 → 平台发布到作品广场 → 官网可玩。
+ * P25 VibeCoding 作品全链路：学生对话创作 → 提交（交给平台）→ 平台发布到作品广场 → 官网可玩。
  * 使用临时 SQLite，不读取或修改默认 / 生产数据库。
  *
- * 覆盖：提交必须带版权确认（否则 400）→ 老师通过 → 平台列表可见 →
- * 未通过/无授权时发布被拒 → 发布生成 vbt_ 分享码 → 公开列表/详情可读 →
+ * 覆盖：提交必须带版权确认（否则 400）→ 机构端点评接口必须已删除（404）→ 平台列表可见 →
+ * 无授权时发布被拒 → 发布生成 vbt_ 分享码 → 公开列表/详情可读 →
  * 预览文档把学生 JS 内联（官网详情页据此在 sandbox iframe 里直接跑）→
  * 下架后公开端消失、直链 404 → 审计落库。
+ * 文档产物（PPT/Word/Excel）在广场那一侧另有一条守卫：scripts/p51-public-document-work.mjs。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -172,7 +173,7 @@ try {
   console.log(JSON.stringify({
     name: 'vibecoding-works-plaza', pass: true,
     student: { chat: 'sse', consentRequired: true, submitted: true },
-    review: { approved: true },
+    review: { endpointGone: true },
     platform: { listed: true, published: true, shareToken: shareToken.slice(0, 8) + '…' },
     public: { card: true, detailFiles: Object.keys(publicDetail.data.files).length, playable: true },
     unpublish: { hiddenFromList: true, detail404: true },

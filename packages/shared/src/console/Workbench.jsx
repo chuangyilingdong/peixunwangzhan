@@ -6,6 +6,7 @@ import { IconButton } from './primitives.jsx';
 import { PreviewFrame } from './PreviewFrame.jsx';
 import { artifactGroup, fileSize } from './format.js';
 import { DocumentPreview } from './DocumentPreview.jsx';
+import { ReplayDocument } from './Replay.jsx';
 import { isDocumentArtifact } from './attachments.js';
 
 export const WORKBENCH_DEFAULT_WIDTH = 520;
@@ -267,26 +268,13 @@ export function Workbench({
       <div className="c-workbench__surface">
         <div className="c-workbench__layer" role="tabpanel" hidden={currentTab !== 'preview'}>
           {documentArtifact ? (
-            <>
-              {/* 文档产物：先在这里预览，再决定下载（用户明确要的顺序） */}
-              <div className="c-preview__toolbar">
-                <span className="c-preview__url" title={documentArtifact.name}>
-                  <ConsoleIcon name={artifactGroup(documentArtifact.kind).icon} size={13} />
-                  {documentArtifact.name}
-                </span>
-                <button
-                  type="button"
-                  className="c-btn c-btn--primary c-btn--sm"
-                  onClick={() => onDownloadArtifact?.(documentArtifact)}
-                >
-                  <ConsoleIcon name="download" size={14} />
-                  <span>下载</span>
-                </button>
-              </div>
-              <div className="c-preview__doc">
-                <DocumentPreview artifact={documentArtifact} resolveImage={(slide, slideIndex) => resolveAttachment?.(documentArtifact, { slide, slideIndex })} />
-              </div>
-            </>
+            // 文档产物：先在这里预览，再决定下载（用户明确要的顺序）。
+            // 这一块与官网公开作品页共用 ReplayDocument —— 「预览长什么样」只有一份实现。
+            <ReplayDocument
+              artifact={documentArtifact}
+              resolveImage={(slide, slideIndex) => resolveAttachment?.(documentArtifact, { slide, slideIndex })}
+              onDownload={() => onDownloadArtifact?.(documentArtifact)}
+            />
           ) : previewable ? (
             <>
               <div className="c-preview__toolbar">

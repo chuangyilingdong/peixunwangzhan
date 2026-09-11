@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ConsoleIcon } from './icons.jsx';
 import { Empty, IconButton } from './primitives.jsx';
 import { PreviewFrame } from './PreviewFrame.jsx';
+import { DocumentPreview } from './DocumentPreview.jsx';
 import { MarkdownView } from '../markdown.jsx';
 import { artifactGroup, byteLength, fileSize, relativeTime } from './format.js';
 
@@ -55,6 +56,31 @@ export function ReplayPreview({ html, title = '作品预览', height = '62vh' })
     >
       <PreviewFrame className="c-replay__frame" html={html} reloadKey={reloadKey} title={title} />
     </ReplayPanel>
+  );
+}
+
+/** 文档产物（PPT / Word / Excel）：先预览，再下载。
+ *  学生端工作台与官网公开作品页共用这一份——「预览长什么样」不该两边各写一遍。
+ *  onDownload 由调用方决定：学生端要带鉴权取 blob，广场是公开地址直接下载。 */
+export function ReplayDocument({ artifact, resolveImage, onDownload, downloadLabel = '下载' }) {
+  return (
+    <>
+      <div className="c-preview__toolbar">
+        <span className="c-preview__url" title={artifact?.name}>
+          <ConsoleIcon name={artifactGroup(artifact?.kind).icon} size={13} />
+          {artifact?.name}
+        </span>
+        {onDownload ? (
+          <button type="button" className="c-btn c-btn--primary c-btn--sm" onClick={onDownload}>
+            <ConsoleIcon name="download" size={14} />
+            <span>{downloadLabel}</span>
+          </button>
+        ) : null}
+      </div>
+      <div className="c-preview__doc">
+        <DocumentPreview artifact={artifact} resolveImage={resolveImage} />
+      </div>
+    </>
   );
 }
 

@@ -1650,6 +1650,12 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_org ON vibecoding_submis
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_submissions(student_id, submitted_at DESC)');
 try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN entry_file TEXT NOT NULL DEFAULT 'index.html'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 提交那一刻的产物清单（[{name,kind,bytes,revision,updatedAt,generatedImages,attachmentImages}]）。
+// 作品广场要回答两个问题：「学生交上来的到底是哪一份产物」（种子 index.html 一直躺在里面，
+// 按文件名优先挑就会把作品显示成起始页）和「那份文档的配图在哪」。正文仍走 files 快照，
+// 这里只存元信息与图片引用（fileId），所以这一列很小。
+try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 
 // ── 平台管理员二次验证（TOTP + 恢复码）────────────────────────────────────────

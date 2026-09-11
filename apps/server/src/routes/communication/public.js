@@ -17,8 +17,16 @@ import {
   transaction,
 } from '../../lib.js';
 import { hostname } from 'node:os';
+import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
+import { prepareFileDownload } from '../fileAssets.js';
+import {
+  publicArtifactCatalog,
+  renderSnapshotDocument,
+  snapshotImageFileIds,
+  submissionPreview,
+} from '../vibecoding.js';
 import {
   LEGAL_POLICY_VERSION,
   MATERIAL_CATEGORIES,
@@ -164,7 +172,7 @@ export function handlePublicCommunication(ctx) {
   if (pathname === '/api/public/vibecoding-works' && method === 'GET') {
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 60, fallback: 20 });
     const items = rows(`
-      SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files,
+      SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
              submission.featured_at, submission.submitted_at, submission.share_token,
              user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
              organization.name AS org_name
@@ -181,7 +189,7 @@ export function handlePublicCommunication(ctx) {
   const publicVibeCodingWorkMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)$/);
   if (publicVibeCodingWorkMatch && method === 'GET') {
     const work = row(`
-      SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files,
+      SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
              submission.featured_at, submission.submitted_at, submission.share_token,
              user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
              organization.name AS org_name
@@ -193,6 +201,49 @@ export function handlePublicCommunication(ctx) {
     `, [publicVibeCodingWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
     return publicVibeCodingWorkRow(work, { includeFiles: true });
+  }
+
+  // 已发布作品里的文档产物（PPT / Word / Excel）：当场从**提交快照**渲染成真文件发出去。
+  // 为什么必须从快照渲染：产物里存的是规格文本，真文件是渲染出来的；而学生提交后还能接着改，
+  // 广场要给的必须是交上来的那一版。文件名允许中文，所以要 decode。
+  const publicDocumentMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)\/files\/(.+)\/download$/);
+  if (publicDocumentMatch && method === 'GET') {
+    const submission = publicSubmission(publicDocumentMatch[1]);
+    let name = '';
+    try { name = decodeURIComponent(publicDocumentMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
+    if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_VIBECODING_FILE_NAME');
+    const rendered = renderSnapshotDocument(submission, name);
+    if (rendered.error) throw errors.notFound(rendered.error, 'PUBLIC_VIBECODING_FILE_NOT_FOUND');
+    const safeName = String(rendered.filename || name || 'download').replace(/[\r\n"\\/]/g, '_');
+    return {
+      __fileResponse: true,
+      status: 200,
+      headers: {
+        'content-type': rendered.mime,
+        'content-length': String(rendered.buffer.length),
+        'content-disposition': `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'public, max-age=300',
+      },
+      stream: Readable.from(rendered.buffer),
+    };
+  }
+
+  // 作品里用到的学生上传图（PPT 规格里的 {"attachment": N}）。
+  // 学生传的图不是公开素材，所以这里**只认出现在这份已发布作品快照里的 fileId**：
+  // 广场页要显示、下载出来的 pptx 里也嵌着它，不代理就只能显示空页。
+  // 准入名单来自提交快照，未发布的提交拿不到 token，也就无从枚举。
+  const publicWorkImageMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)\/images\/([\w-]+)$/);
+  if (publicWorkImageMatch && method === 'GET') {
+    const submission = publicSubmission(publicWorkImageMatch[1]);
+    if (!snapshotImageFileIds(submission).has(publicWorkImageMatch[2])) {
+      throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_VIBECODING_IMAGE_NOT_FOUND');
+    }
+    const file = row('SELECT * FROM file_assets WHERE id=?', [publicWorkImageMatch[2]]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    return prepareFileDownload(ctx, file);
   }
 
   // P5-W05: 公开课包列表（无需登录）。公开口径 = 平台自有的 PUBLISHED 且「上架课程广场」的课包
@@ -363,7 +414,10 @@ function publicWorkRow(row) {
   };
 }
 
-// VibeCoding 作品：官网详情页用 files + entryFile 在 sandbox iframe 里直接运行
+// VibeCoding 作品：官网详情页用 files + entryFile 在 sandbox iframe 里直接运行；
+// 文档产物（PPT/Word/Excel）另给一份清单：能不能下载、配图在哪（见 publicArtifactCatalog）。
+// ⚠️ 「显示哪一份产物」由 preview 说了算（最近产出的那份），**不是** entryFile——
+// 种子 index.html 永远在，按它拼预览会把作品显示成「你好，AI 魔法学院」起始页。
 function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
   let studentName = '小创作者';
   if (!row.student_anon && row.student_name) {
@@ -383,6 +437,20 @@ function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
     publicUrl: row.share_token ? `/works/${row.share_token}` : null,
     orgName: row.org_name || null,
     studentName,
-    ...(includeFiles ? { files } : {}),
+    preview: submissionPreview(row),
+    ...(includeFiles ? { files, artifacts: publicArtifactCatalog(row) } : {}),
   };
+}
+
+/**
+ * 公开取一份已发布的 VibeCoding 作品（按分享码）。
+ * 发布口径与列表/详情一致：is_public=1 且学生确认过展示授权。
+ */
+function publicSubmission(token) {
+  const submission = row(
+    'SELECT * FROM vibecoding_submissions WHERE share_token=? AND is_public=1 AND copyright_confirmed_at IS NOT NULL',
+    [token],
+  );
+  if (!submission) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
+  return submission;
 }

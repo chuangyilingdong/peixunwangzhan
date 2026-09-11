@@ -5,7 +5,7 @@
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
   audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso,
-  pageParams, pageResult, q, requireRole, row, rows, transaction,
+  pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { Readable } from 'node:stream';
 import { PUBLIC_SITE_URL } from '../config.js';
@@ -19,7 +19,7 @@ import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import {
-  artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact,
+  artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact, kindForName,
   listArtifacts, pickEntryArtifact, seedDefaultArtifacts, setArtifactGeneratedImages, upsertArtifact, upsertArtifacts,
 } from '../services/vibecodingArtifacts.js';
 import { MAX_ILLUSTRATIONS_PER_DECK, collectIllustrationTargets, generateIllustrationsForArtifacts } from '../services/vibecodingIllustrations.js';
@@ -32,37 +32,10 @@ const DEFAULT_TITLE = '新的创作对话';
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_MESSAGES = 20;
 
-// 提交与作品广场仍沿用 files JSON 快照（点评页与广场那边按文件名取内容），
-// 所以这里保留一份路径校验；产物侧的配额在 vibecodingArtifacts.js 里。
-const MAX_FILES = 24;
-const MAX_FILE_BYTES = 256 * 1024;
-const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
-
-function parseFiles(value, { fallback = null } = {}) {
-  if (value === undefined || value === null || value === '') return fallback;
-  let parsed = value;
-  if (typeof parsed === 'string') {
-    try { parsed = JSON.parse(parsed); } catch { throw errors.badRequest('代码文件格式无效', 'INVALID_VIBECODING_FILES'); }
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw errors.badRequest('代码文件必须是对象', 'INVALID_VIBECODING_FILES');
-  const entries = Object.entries(parsed);
-  if (entries.length > MAX_FILES) throw errors.badRequest(`最多 ${MAX_FILES} 个文件`, 'VIBECODING_TOO_MANY_FILES');
-  const files = {}; let total = 0;
-  for (const [rawPath, rawContent] of entries) {
-    const path = String(rawPath || '').trim();
-    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/.test(path) || path.includes('..')) {
-      throw errors.badRequest('文件路径不合法', 'INVALID_VIBECODING_FILE_PATH');
-    }
-    const content = String(rawContent ?? '');
-    const bytes = Buffer.byteLength(content);
-    if (bytes > MAX_FILE_BYTES) throw errors.badRequest(`单个文件不能超过 ${Math.round(MAX_FILE_BYTES / 1024)}KB`, 'VIBECODING_FILE_TOO_LARGE');
-    total += bytes;
-    if (total > MAX_TOTAL_BYTES) throw errors.badRequest(`代码总量不能超过 ${Math.round(MAX_TOTAL_BYTES / 1024)}KB`, 'VIBECODING_FILES_TOO_LARGE');
-    files[path] = content;
-  }
-  if (!Object.keys(files).length) throw errors.badRequest('至少需要一个文件', 'VIBECODING_FILES_REQUIRED');
-  return files;
-}
+// 提交与作品广场沿用 files JSON 快照（按文件名取内容）。
+// ⚠️ 这份快照**只读**：写入口是产物表（配额在 vibecodingArtifacts.js），
+// 学生也不能再直接改文件（PUT 会拒掉 files/entryFile）——所以这里不再留写侧校验。
+// 读侧刻意宽松（见 parseSnapshotFiles）：产物名允许中文，写侧的 ASCII 路径校验用在这里会误伤。
 
 function normalizeConversation(value, { includeArtifacts = false, artifacts: provided = null } = {}) {
   if (!value) return null;
@@ -274,15 +247,16 @@ function readAssetBytes(fileId) {
 }
 
 /**
- * 产物记着的生成插画（幻灯片下标 → 图片字节）。
- * ⚠️ **-1 是封面**（见 pptx.js 的 COVER_IMAGE_KEY），别当成非法下标丢掉 ——
- * 那样封面永远是纯色版、而且不报错。失败项与读不到的素材照样跳过。
+ * 「图片引用清单 → 幻灯片下标/序号 → 图片字节」的公共实现。
+ * 两个来源（平台插画、学生上传的图）在这里合流，**读取端只有这一份**：
+ * 活会话（学生自己下载）与提交快照（作品广场下载）走同一条路，
+ * 免得「学生下载的 PPT 有图、广场下载的没图」这种两边都察觉不到的漂移。
  */
-function generatedImageMap(artifact) {
+function imageMapFrom(items, indexOf) {
   const images = new Map();
-  for (const item of Array.isArray(artifact?.generatedImages) ? artifact.generatedImages : []) {
+  for (const item of Array.isArray(items) ? items : []) {
     if (!item?.fileId || item.error) continue;
-    const index = Number(item.slideIndex);
+    const index = indexOf(item);
     if (!Number.isInteger(index) || index < -1) continue;
     const buffer = readAssetBytes(item.fileId);
     if (buffer) images.set(index, buffer);
@@ -291,18 +265,34 @@ function generatedImageMap(artifact) {
 }
 
 /**
+ * 产物记着的生成插画（幻灯片下标 → 图片字节）。
+ * ⚠️ **-1 是封面**（见 pptx.js 的 COVER_IMAGE_KEY），别当成非法下标丢掉 ——
+ * 那样封面永远是纯色版、而且不报错。失败项与读不到的素材照样跳过。
+ */
+function generatedImageMap(artifact) {
+  return imageMapFrom(artifact?.generatedImages, (item) => Number(item.slideIndex));
+}
+
+/**
  * 附件序号（1 起） → 图片字节。取不到的序号直接不进 Map，渲染时那一页就不放图。
  * 导出是为了给 p47 做守卫：这条链路连着「产物 messageId」「附件里的 mime」「磁盘上的素材」
  * 三处，任何一处断掉都**不报错**、只是 PPT 里没图 —— 必须能被自动化盯住。
  */
 export function attachmentImageMap(conversationId, artifact) {
-  const images = new Map();
   const sources = triggeringImageAttachments(conversationId, artifact);
-  sources.forEach((source, index) => {
-    const buffer = readAssetBytes(source.id);
-    if (buffer) images.set(index + 1, buffer);
-  });
-  return images;
+  return imageMapFrom(sources.map((source, index) => ({ fileId: source.id, index: index + 1 })), (item) => Number(item.index));
+}
+
+/**
+ * 提交快照里的配图（同一口径，只是数据来自快照而不是活会话）：
+ *   · generatedImages：[{slideIndex, fileId}]，-1 是封面
+ *   · attachmentImages：[{index, fileId}]，index 从 1 起（对应规格里的 {"attachment": N}）
+ */
+export function snapshotImageMaps(artifact) {
+  return {
+    generatedImages: imageMapFrom(artifact?.generatedImages, (item) => Number(item.slideIndex)),
+    attachmentImages: imageMapFrom(artifact?.attachmentImages, (item) => Number(item.index)),
+  };
 }
 
 /**
@@ -598,6 +588,126 @@ async function illustrateTurn(ctx, auth, conversation, artifactIds) {
   }
 }
 
+// ── 提交快照（作品广场与公开下载都读它）──────────────────────────────────────
+//
+// 为什么要有快照：删掉老师点评之后提交不再锁创作（学生可以接着改、反复交），
+// 而作品广场要显示的是「交上来的那一版」。所以提交时把**产物清单**（含配图引用）定格一份，
+// 正文继续走 files 快照 —— 广场与下载都不去读活会话。
+
+/**
+ * 提交那一刻的产物清单。只存元信息与图片引用（fileId），不存正文，所以这一列很小。
+ * ⚠️ 配图引用必须一起定格：只存正文的话，广场渲染出来的 PPT 会**静默**丢掉所有图
+ * （学生自己下载的那份有图、广场那份没有，而两边都不报错）。
+ */
+export function snapshotArtifacts(conversationId) {
+  return listArtifacts(conversationId, { includeContent: true }).map((artifact) => ({
+    name: artifact.name,
+    kind: artifact.kind || kindForName(artifact.name),
+    bytes: Number(artifact.bytes || 0),
+    revision: Number(artifact.revision || 1),
+    updatedAt: artifact.updatedAt || artifact.createdAt || null,
+    // 平台生成的插画：按幻灯片下标（-1 是封面）
+    generatedImages: (Array.isArray(artifact.generatedImages) ? artifact.generatedImages : [])
+      .filter((item) => item?.fileId && !item.error)
+      .map((item) => ({ slideIndex: Number(item.slideIndex), fileId: String(item.fileId) })),
+    // 学生传的图：规格里 {"attachment": N} 指的是**产出这一轮**里的第 N 张
+    attachmentImages: triggeringImageAttachments(conversationId, artifact)
+      .map((source, index) => ({ index: index + 1, fileId: source.id })),
+  }));
+}
+
+/** 读回快照里的产物清单：坏数据一律当空，别让一条脏记录把广场打挂 */
+export function parseSnapshotArtifacts(submission) {
+  const parsed = parseJson(submission?.artifacts, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((item) => item && typeof item.name === 'string' && item.name)
+    .map((item) => ({
+      name: item.name,
+      kind: item.kind || kindForName(item.name),
+      bytes: Number(item.bytes || 0),
+      revision: Number(item.revision || 1),
+      updatedAt: item.updatedAt || null,
+      generatedImages: (Array.isArray(item.generatedImages) ? item.generatedImages : []).filter((image) => image?.fileId),
+      attachmentImages: (Array.isArray(item.attachmentImages) ? item.attachmentImages : []).filter((image) => image?.fileId && Number(image.index) > 0),
+    }));
+}
+
+/**
+ * 读回提交里的文件正文。
+ * **不能**用 parseFiles：它的路径校验只允许 ASCII，而产物名允许中文，
+ * 于是「去新疆旅游.pptx」这种名字会在读回时抛错 —— 提交已经落库了，学生却收到 400
+ * （写入口的校验照旧保留，那是对客户端的约束）。
+ */
+function parseSnapshotFiles(value) {
+  const parsed = parseJson(value, {});
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+/**
+ * 「这次交上来的主产物」＝**最近产出的那一份**。
+ * 为什么不是「优先 index.html」：种子产物 index.html 会一直躺在会话里，学生做的是 PPT 时它也在，
+ * 按文件名优先挑就会把作品显示成「你好，AI 魔法学院」起始页 —— 这正是作品广场此前显示错东西的原因。
+ * 学生侧预览区是同一个口径（Workbench 的 documentArtifact），改要一起改。
+ */
+export function submissionPreview(submission) {
+  const artifacts = parseSnapshotArtifacts(submission);
+  if (!artifacts.length) return null;
+  const newest = artifacts
+    .slice()
+    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0];
+  return { name: newest.name, kind: newest.kind, document: isDocumentKind(newest.kind) };
+}
+
+/**
+ * 作品广场的产物清单：每个文件是什么、能不能下载、配图在哪。
+ * 图片地址在这一层拼好（前端不再自己定规则），附件图走**限定在本作品快照内**的代理地址：
+ * 学生传的图不是公开素材，只有出现在这份已发布作品里的那几张才允许被公开取到。
+ */
+export function publicArtifactCatalog(submission) {
+  const files = parseSnapshotFiles(submission?.files);
+  const byName = new Map(parseSnapshotArtifacts(submission).map((item) => [item.name, item]));
+  const base = `/api/public/vibecoding-works/${submission.share_token}`;
+  return Object.keys(files).sort().map((name) => {
+    const meta = byName.get(name) || {};
+    const kind = meta.kind || kindForName(name);
+    const item = { name, kind, document: isDocumentKind(kind), updatedAt: meta.updatedAt || null };
+    if (!item.document) return item;
+    return {
+      ...item,
+      downloadUrl: `${base}/files/${encodeURIComponent(name)}/download`,
+      images: {
+        generated: Object.fromEntries((meta.generatedImages || [])
+          .map((image) => [String(image.slideIndex), `/api/public/file-assets/${image.fileId}/download`])),
+        attachment: Object.fromEntries((meta.attachmentImages || [])
+          .map((image) => [String(image.index), `${base}/images/${image.fileId}`])),
+      },
+    };
+  });
+}
+
+/** 从提交快照渲染一份真文件（广场的下载口用它；学生自己下载走的是活会话那条） */
+export function renderSnapshotDocument(submission, name) {
+  const files = parseSnapshotFiles(submission?.files);
+  if (!Object.hasOwn(files, name)) return { error: '作品里没有这个文件' };
+  const meta = parseSnapshotArtifacts(submission).find((item) => item.name === name);
+  const kind = meta?.kind || kindForName(name);
+  if (!isDocumentKind(kind)) return { error: '这个文件不是可下载的文档' };
+  return renderDocument(
+    { name, kind, content: String(files[name] ?? '') },
+    snapshotImageMaps(meta || {}),
+  );
+}
+
+/** 快照里出现过的图片 id（公开取图的准入名单，见 public.js 的 /images/:fileId） */
+export function snapshotImageFileIds(submission) {
+  const ids = new Set();
+  for (const item of parseSnapshotArtifacts(submission)) {
+    for (const image of [...item.generatedImages, ...item.attachmentImages]) ids.add(String(image.fileId));
+  }
+  return ids;
+}
+
 export function normalizeSubmission(value, { includeContent = false } = {}) {
   if (!value) return null;
   return {
@@ -613,7 +723,10 @@ export function normalizeSubmission(value, { includeContent = false } = {}) {
     shareToken: value.share_token || null,
     featured: Boolean(value.featured_at),
     publishedAt: value.published_at || null,
-    ...(includeContent ? { files: parseFiles(value.files, { fallback: {} }), transcript: JSON.parse(value.transcript || '[]') } : {}),
+    // 「这次交上来的主产物」把产物清单里最近产出的那份挑出来（老记录没有快照 → null，
+    // 平台列表回退到只显示 entryFile）
+    preview: submissionPreview(value),
+    ...(includeContent ? { files: parseSnapshotFiles(value.files), transcript: JSON.parse(value.transcript || '[]'), artifacts: parseSnapshotArtifacts(value) } : {}),
   };
 }
 
@@ -882,6 +995,9 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
     const files = artifactsAsFiles(conversation.id);
+    // 产物清单也要一起定格：作品广场靠它判断「这次交上来的到底是哪份产物」（见 submissionPreview），
+    // 以及那份文档的配图在哪。只在提交这一刻取，之后学生再改也不会影响广场那一版。
+    const artifacts = snapshotArtifacts(conversation.id);
     const transcript = rows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id])
       .map((message) => ({ role: message.role, content: message.content, createdAt: message.created_at }));
     const title = body.title === undefined || String(body.title).trim() === '' ? conversation.title : nonEmptyString(body.title, '作品标题', { max: 60 });
@@ -890,17 +1006,17 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const submissionId = existing?.id || id('vibesub');
     transaction(() => {
       if (existing) {
-        q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
+        q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
              teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
              copyright_confirmed_at=?,copyright_confirmed_by=? WHERE id=?`,
-          [title, description, json(files), json(transcript), conversation.entry_file || 'index.html', now, now, now, ownerAuth.user.id, submissionId]);
+          [title, description, json(files), json(artifacts), json(transcript), conversation.entry_file || 'index.html', now, now, now, ownerAuth.user.id, submissionId]);
       } else {
         q(`INSERT INTO vibecoding_submissions(
-             id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
+             id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
              copyright_confirmed_at,copyright_confirmed_by
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [submissionId, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId, conversation.class_id, conversation.lesson_id,
-            title, description, json(files), json(transcript), conversation.entry_file || 'index.html', 1, 'PENDING', now, now, now, now, ownerAuth.user.id]);
+            title, description, json(files), json(artifacts), json(transcript), conversation.entry_file || 'index.html', 1, 'PENDING', now, now, now, now, ownerAuth.user.id]);
       }
       q("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
       audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id, existing ? { round: existing.round } : null, { title, round: Number(existing?.round || 0) + 1 });

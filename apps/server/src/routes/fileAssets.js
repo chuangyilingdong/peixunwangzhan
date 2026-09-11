@@ -201,7 +201,10 @@ export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
  * 同步把 file_assets 行链接到业务对象（写入 metadata）并把 visibility 投射到 grants。
  * 由其他业务表在创建/更新文件元数据时调用。
  */
-async function prepareFileDownload(ctx, file) {
+// 导出给「作品广场」的附件图代理用（见 routes/communication/public.js）：
+// 那边的准入判断是「这个 fileId 必须出现在这份已发布作品的提交快照里」，
+// 通过之后走的就是这里同一套落盘读取与 Range 处理，不另写一份。
+export async function prepareFileDownload(ctx, file) {
   if (file.storage_kind !== 'INTERNAL_PROXY') {
     audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, external: true });
     return {
