@@ -15,7 +15,6 @@ import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
-import { runJavaScript, sandboxCapability } from '../services/vibecodingRunner.js';
 import { PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import {
   artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact,
@@ -78,23 +77,6 @@ function normalizeConversation(value, { includeArtifacts = false, artifacts: pro
   };
 }
 
-function normalizeRun(value) {
-  return {
-    id: value.id, conversationId: value.conversation_id, language: value.language, entryFile: value.entry_file,
-    status: value.status, exitCode: value.exit_code == null ? null : Number(value.exit_code),
-    stdout: value.stdout || '', stderr: value.stderr || '',
-    durationMs: value.duration_ms == null ? null : Number(value.duration_ms),
-    errorCode: value.error_code || null, createdAt: value.created_at, finishedAt: value.finished_at || null,
-  };
-}
-
-// 运行串行化：生产机内存紧张，同时只允许一个沙箱进程
-let runChain = Promise.resolve();
-function serializeRun(task) {
-  const next = runChain.then(task, task);
-  runChain = next.catch(() => {});
-  return next;
-}
 
 function normalizeMessage(value) {
   return {
@@ -285,8 +267,11 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       messages: history,
       signal: abortController.signal,
       onReasoning: (delta) => {
-        reasoningChars += String(delta || '').length;
-        sseSend(ctx, 'status', { phase: 'thinking', chars: reasoningChars });
+        const piece = String(delta || '');
+        reasoningChars += piece.length;
+        // 只推**增量**而不是累积全文：推理可能几万字，每来一小段就重发整段是 O(n²) 的流量。
+        // 前端自己累积（见 vibecodingWorkspace 的 onStatus）。
+        sseSend(ctx, 'status', { phase: 'thinking', chars: reasoningChars, delta: piece });
       },
       onDelta: (delta, full) => {
         streamedText = full;
@@ -485,7 +470,6 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       messages, messagesTotal: total, messagesPage: page,
       submission: normalizeSubmission(submission),
       modelOptions: textModelOptions(),
-      sandbox: sandboxCapability(),
     };
   }
 
@@ -608,43 +592,6 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       [conversation.id, message.created_at, message.created_at, message.message_rowid]);
     audit(ctx, 'VIBECODING_MESSAGE_DELETE', 'VIBECODING_CONVERSATION', conversation.id, { messageId: message.id, role: message.role }, null);
     return { deleted: true, id: message.id };
-  }
-
-  const runMatch = part.match(/^\/conversations\/([^/]+)\/runs$/);
-  if (runMatch && method === 'POST') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, runMatch[1]);
-    if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能继续运行代码', 'VIBECODING_CONVERSATION_LOCKED');
-    const user = activeStudent(ownerAuth);
-    vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
-    const capability = sandboxCapability();
-    if (!capability.available) throw errors.serviceUnavailable(capability.reason || '代码运行沙箱当前不可用', 'VIBECODING_SANDBOX_UNAVAILABLE');
-    const files = artifactsAsFiles(conversation.id);
-    const entryFile = /\.(m?js)$/i.test(conversation.entry_file)
-      ? conversation.entry_file
-      : Object.keys(files).find((name) => /\.(m?js)$/i.test(name));
-    if (!entryFile) throw errors.badRequest('没有可运行的 JavaScript 文件；HTML 项目请用右侧预览查看效果', 'VIBECODING_RUN_ENTRY_NOT_JAVASCRIPT');
-
-    const runId = id('viberun');
-    const now = nowIso();
-    q(`INSERT INTO vibecoding_runs(id,conversation_id,org_id,user_id,language,entry_file,status,created_at) VALUES (?,?,?,?,?,?,?,?)`,
-      [runId, conversation.id, ownerAuth.user.orgId, ownerAuth.user.id, 'javascript', entryFile, 'QUEUED', now]);
-    const result = await serializeRun(() => runJavaScript({ files, entryFile }));
-    q(`UPDATE vibecoding_runs SET status=?,exit_code=?,stdout=?,stderr=?,duration_ms=?,error_code=?,finished_at=? WHERE id=?`,
-      [result.status, result.exitCode, result.stdout, result.stderr, result.durationMs, result.errorCode, nowIso(), runId]);
-    audit(ctx, 'VIBECODING_RUN', 'VIBECODING_CONVERSATION', conversation.id, null, { runId, status: result.status, durationMs: result.durationMs });
-    return { run: normalizeRun(row('SELECT * FROM vibecoding_runs WHERE id=?', [runId])), sandbox: capability };
-  }
-
-  if (runMatch && method === 'GET') {
-    const { conversation } = ownConversation(ctx, runMatch[1]);
-    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 10 });
-    const total = Number(count('SELECT COUNT(*) n FROM vibecoding_runs WHERE conversation_id = ?', [conversation.id]) || 0);
-    const items = rows('SELECT * FROM vibecoding_runs WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?', [conversation.id, limit, offset]).map(normalizeRun);
-    return { ...pageResult(items, { page, limit, total }), sandbox: sandboxCapability() };
-  }
-
-  if (part === '/sandbox' && method === 'GET') {
-    return sandboxCapability();
   }
 
   const submitMatch = part.match(/^\/conversations\/([^/]+)\/submit$/);

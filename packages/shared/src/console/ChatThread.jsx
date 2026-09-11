@@ -16,12 +16,16 @@ const LIVE_VERBS = ['正在规划下一步', '正在读取上下文', '正在准
 const THINKING_DELAY_MS = 400;
 const VERB_DWELL_MS = 2500;
 
-/** 从 startedAt 起每秒走一格；active 为 false 时停住，避免终态还在跑定时器 */
+/** 从 startedAt 起每秒走一格；active 为 false 时停住，避免终态还在跑定时器
+ *  ⚠️ startedAt 是 ISO 字符串，必须先转成时间戳再相减——直接减会得到 NaN，
+ *  显示层再兜一层就成了永远「0s」（线上就是这样：跑了两分钟还显示 0s）。 */
 function useElapsedSeconds(startedAt, active) {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
     if (!active) return undefined;
-    const tick = () => setSeconds(Math.max(0, Math.round((Date.now() - (startedAt || Date.now())) / 1000)));
+    const base = startedAt ? new Date(startedAt).getTime() : Date.now();
+    if (!Number.isFinite(base)) return undefined;
+    const tick = () => setSeconds(Math.max(0, Math.round((Date.now() - base) / 1000)));
     tick();
     const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
@@ -93,7 +97,11 @@ function ActivityDisclosure({ steps, live, startedAt, elapsedMs }) {
               style={{ animationDelay: `${Math.min(index, 3) * 30}ms` }}
             >
               <b>{step.label}</b>
-              {step.detail ? <p>{step.detail}</p> : null}
+              {/* 思考过程是长文本：单独给一个限高可滚动的块，
+                  不然几千字的推理会把整个折叠区撑得没法看 */}
+              {step.detail ? (step.reasoning
+                ? <p className="c-activity__reasoning">{step.detail}</p>
+                : <p>{step.detail}</p>) : null}
               {step.at ? <time>{relativeTime(step.at)}</time> : null}
             </div>
           ))}

@@ -167,6 +167,21 @@
 .c-activity__step p { min-width: 0; overflow-wrap: anywhere; }
 .c-activity__step time { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; }
 
+/* 思考过程：长文本限高可滚动，读起来像一段「日志」，而不是把版面撑开 */
+.c-activity__reasoning {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  scrollbar-gutter: stable;
+}
+
 /* ── 流式态 ─────────────────────────────────────────────────────────────
    实时行 = 脉冲点 + 动词 + 等宽计时。400ms 延迟出现是刻意的：
    短请求不该闪一下状态行。 */

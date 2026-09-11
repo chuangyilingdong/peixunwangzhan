@@ -19,6 +19,8 @@ import { relativeTime } from './console/format.js';
 export const VibePreviewFrame = PreviewFrame;
 
 const DEFAULT_TITLE = '新的创作对话';
+// 思考过程在界面上最多展示这么多字符（只保留尾部）——长推理没必要全塞进 DOM
+const REASONING_TAIL_CHARS = 4000;
 
 function filesFromArtifacts(artifacts) {
   return Object.fromEntries((artifacts || []).map((item) => [item.name, String(item.content ?? '')]));
@@ -79,7 +81,7 @@ function ClassroomView({ api, onEnterConversation }) {
         <div>
           <p className="c-eyebrow">VibeCoding 上课</p>
           <h1>选一节课，和 AI 一起做东西</h1>
-          <p className="c-page__sub">你用说话描述想要什么，AI 把页面写出来，右边立刻能玩。</p>
+          <p className="c-page__sub">用一句话说清你要什么，AI 边想边做；它做出来的文件会放到右边，能预览的直接就能玩。</p>
         </div>
         <div className="c-page__actions">
           <Button variant="ghost" icon="refresh" onClick={() => { dashboard.refresh(); conversations.refresh(); }}>刷新</Button>
@@ -157,6 +159,8 @@ function WorkspaceView({ api }) {
   const [menu, setMenu] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const abortRef = useRef(null);
+  // 模型推理是流式推下来的增量，这里累积成可展示的文本；只留尾部，避免长推理把内存和界面撑爆
+  const reasoningRef = useRef('');
 
   const workbench = useWorkbenchWidth();
   const dock = useDockHeight();
@@ -205,6 +209,7 @@ function WorkspaceView({ api }) {
    */
   async function streamReply(route, body, { optimistic = [] } = {}) {
     setStreaming(true);
+    reasoningRef.current = '';
     const localId = `local-assistant-${Date.now()}`;
     const startedAt = new Date().toISOString();
     setMessages((current) => [...current, ...optimistic,
@@ -217,7 +222,11 @@ function WorkspaceView({ api }) {
     try {
       const response = await api.stream(`student/vibecoding/conversations/${conversationId}/${route}`, { body, signal: controller.signal });
       await consumeVibeCodingStream(response, {
-        onStatus: ({ chars }) => pushActivity(localId, { id: 'think', label: '推理中', detail: `已推理 ${chars} 字` }),
+        onStatus: ({ chars, delta }) => {
+          if (delta) reasoningRef.current = (reasoningRef.current + delta).slice(-REASONING_TAIL_CHARS);
+          const text = reasoningRef.current;
+          pushActivity(localId, { id: 'think', label: text ? '思考过程' : '推理中', detail: text || `已推理 ${chars} 字`, reasoning: true });
+        },
         onDelta: (_payload, full) => {
           answered = true;
           setMessages((current) => current.map((item) => (item.id === localId ? { ...item, content: full } : item)));
@@ -505,9 +514,9 @@ function WorkspaceView({ api }) {
             <div className="c-landing">
               <span className="c-landing__mark"><ConsoleIcon name="wand" size={24} /></span>
               <h2>和 AI 一起做东西</h2>
-              <p>用一句话说清你想要什么，AI 会把页面写出来，右边立刻能玩。改主意了就直接说，它会接着改。</p>
+              <p>想做什么直接说，AI 会一边想一边做，做出来的东西放在右边随时看。改主意了就接着聊，它会跟着改。</p>
               <div className="c-landing__prompts">
-                {['做一个点击按钮会变色的网页', '写一个猜数字的小游戏', '做一个会跳动的爱心动画', '做一个能记录心情的小本子'].map((prompt) => (
+                {['做一个点击按钮会变色的网页', '写一个猜数字的小游戏', '帮我看看这段代码哪里错了', '做一个能记录心情的小本子'].map((prompt) => (
                   <button key={prompt} type="button" className="c-landing__prompt" onClick={() => { setDraft(prompt); setTimeout(() => send(prompt), 0); }}>
                     {prompt}
                   </button>
