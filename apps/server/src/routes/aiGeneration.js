@@ -120,7 +120,14 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
  * 否则会先花钱调一次上游、再在结算时失败并进入重试，重复消耗额度。
  * 结算时仍会再校验一次（异步任务等待期间状态可能变化）。
  */
-function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null }) {
+/**
+ * 生成前的门禁：课时能力 / 课堂开关 / 平台模态开关。
+ *
+ * 导出是**故意**的：VibeCoding 的文档插画（services/vibecodingIllustrations.js）也要走同一套 ——
+ * 复制一份迟早会漏掉某条检查，那就等于给文档产物开了一条绕过能力开关的后门。
+ * `projectId` 可省：省掉就跳过「框体占用」那条纯画布规则。
+ */
+export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null }) {
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });

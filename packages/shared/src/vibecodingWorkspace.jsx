@@ -252,7 +252,19 @@ function WorkspaceView({ api }) {
     try {
       const response = await api.stream(`student/vibecoding/conversations/${conversationId}/${route}`, { body, signal: controller.signal });
       await consumeVibeCodingStream(response, {
-        onStatus: ({ chars, delta }) => {
+        onStatus: (payload) => {
+          // 插画生成走同一条 status 通道，但用 phase 区分开：
+          // 它不是「模型在思考」，而是「平台在收集素材」，学生看到的应当是后者。
+          if (payload?.phase === 'image') {
+            const { done = 0, total = 0, error } = payload;
+            pushActivity(localId, {
+              id: 'illustration',
+              label: error ? '插画没做成' : '正在配图',
+              detail: error ? String(error) : (total ? `第 ${Math.min(done + 1, total)} / ${total} 张` : '准备中'),
+            });
+            return;
+          }
+          const { chars, delta } = payload || {};
           if (delta) reasoningRef.current = (reasoningRef.current + delta).slice(-REASONING_TAIL_CHARS);
           const text = reasoningRef.current;
           pushActivity(localId, { id: 'think', label: text ? '思考过程' : '推理中', detail: text || `已推理 ${chars} 字`, reasoning: true });
@@ -359,21 +371,25 @@ function WorkspaceView({ api }) {
   }
 
   /**
-   * 预览用：把文档规格里的 `{"attachment": N}` 翻成图片地址。
+   * 预览用：把文档规格里的配图翻成图片地址。
    *
-   * 口径必须和服务端一致（见 routes/vibecoding.js 的 triggeringImageAttachments）：
-   * **产出那一轮**里学生传的图片，按顺序编号、非图片附件不占号。
+   * 两种来源，与服务端（routes/vibecoding.js 的 attachmentImageMap / generatedImageMap）同一口径：
+   *   · 平台生成的插画 → 产物自带 generatedImages（按幻灯片下标）；
+   *   · {"attachment": N} → **产出那一轮**里学生传的第 N 张图（按顺序编号、非图片附件不占号）。
    * 服务端才是权威（下载出来的文件以它为准），这里只是让预览里也能看见图。
    */
-  function resolveAttachmentImage(artifact, ordinal) {
+  function resolveAttachmentImage(artifact, { slide, slideIndex }) {
+    const generated = (artifact?.generatedImages || []).find((item) => Number(item.slideIndex) === slideIndex && item.url && !item.error);
+    if (generated) return generated.url;
+    const ordinal = Number(slide?.image?.attachment ?? slide?.imageAttachment);
+    if (!ordinal) return null;
     const index = messages.findIndex((item) => item.id === artifact?.messageId);
     const before = index >= 0 ? messages.slice(0, index) : messages;
     for (let cursor = before.length - 1; cursor >= 0; cursor -= 1) {
       const message = before[cursor];
       if (message.role !== 'user' || !message.attachments?.length) continue;
       const images = message.attachments.filter((item) => String(item.mime || '').startsWith('image/'));
-      const target = images[Number(ordinal) - 1];
-      return target?.url || null;
+      return images[ordinal - 1]?.url || null;
     }
     return null;
   }

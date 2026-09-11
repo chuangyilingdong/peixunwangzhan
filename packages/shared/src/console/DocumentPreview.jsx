@@ -32,7 +32,8 @@ export function parseDeckPreview(content) {
 }
 
 function SlideCard({ slide, index, resolveImage }) {
-  const image = slide?.image?.attachment ? resolveImage?.(Number(slide.image.attachment)) : null;
+  // 生成出来的插画优先（它就是按这一页的提示词做的），其次才是学生自己传的图
+  const image = resolveImage?.(slide, index - 1) || null;
   const bullets = Array.isArray(slide?.bullets) ? slide.bullets : [];
   return (
     <section className="c-doc-slide">
@@ -96,8 +97,8 @@ function SheetPreview({ content }) {
 }
 
 /**
- * @param artifact { kind, content, name }
- * @param resolveImage (附件序号) => 图片地址 or null
+ * @param artifact { kind, content, name, generatedImages }
+ * @param resolveImage (slide, slideIndex) => 图片地址 or null
  */
 export function DocumentPreview({ artifact, resolveImage }) {
   const kind = String(artifact?.kind || '').toLowerCase();

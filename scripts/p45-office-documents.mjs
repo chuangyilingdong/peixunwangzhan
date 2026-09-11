@@ -14,7 +14,7 @@ import { inflateRawSync } from 'node:zlib';
 import { renderPptx } from '../apps/server/src/services/ooxml/pptx.js';
 import { renderDocx } from '../apps/server/src/services/ooxml/docx.js';
 import { renderXlsx } from '../apps/server/src/services/ooxml/xlsx.js';
-import { renderDocument, parseDeckSpec } from '../apps/server/src/services/ooxml/documents.js';
+import { renderDocument, parseDeckSpec, deckIllustrationRequests } from '../apps/server/src/services/ooxml/documents.js';
 
 /* ── 极小的 ZIP 读取器（与写入器是两套代码，能互相印证） ── */
 function readZip(buffer) {
@@ -205,7 +205,7 @@ for (const [kind, content, name] of [['pptx', JSON.stringify(DECK), '去新疆�
   };
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
   const rendered = renderDocument({ kind: 'pptx', content: JSON.stringify(withImage), name: '带图.pptx' }, {
-    images: new Map([[1, png], [2, png]]),
+    attachmentImages: new Map([[1, png], [2, png]]),
   });
   assert.ok(!rendered.error, `带图的 PPT 渲染失败：${rendered.error}`);
   const entries = assertOoxmlPackage(rendered.buffer, { label: 'pptx-with-image' });
@@ -221,6 +221,30 @@ for (const [kind, content, name] of [['pptx', JSON.stringify(DECK), '去新疆�
   assert.ok(!entries.get('ppt/slides/slide4.xml').toString('utf8').includes('<p:pic>'), '第 3 页引用了不存在的图，不该有图片形状');
   assert.ok(entries.get('ppt/slides/_rels/slide2.xml.rels').toString('utf8').includes('image'), '第 1 页缺少图片关系');
   assert.ok(!entries.get('ppt/slides/_rels/slide4.xml.rels').toString('utf8').includes('image'), '第 3 页不该有图片关系');
+  // 平台**生成**的插画：按幻灯片下标给图，优先于学生传的图
+  {
+    const deck = {
+      title: '带插画的 PPT',
+      slides: [
+        { title: '第一页', bullets: ['要有插画'], imagePrompt: '雪山与湖泊，写实插画' },
+        { title: '第二页', bullets: ['没有插画'] },
+      ],
+    };
+    const spec = parseDeckSpec(JSON.stringify(deck));
+    assert.equal(spec.slides[0].imagePrompt, '雪山与湖泊，写实插画', 'imagePrompt 解析丢了');
+    assert.equal(deckIllustrationRequests(spec).length, 1, '只该识别出 1 个生成请求');
+    assert.deepEqual(deckIllustrationRequests(spec)[0], { slideIndex: 0, prompt: '雪山与湖泊，写实插画' });
+    const rendered = renderDocument({ kind: 'pptx', content: JSON.stringify(deck), name: '插画.pptx' }, { generatedImages: new Map([[0, png]]) });
+    assert.ok(!rendered.error, '带生成插画的 PPT 渲染失败：' + rendered.error);
+    const entries = assertOoxmlPackage(rendered.buffer, { label: 'pptx-generated-image' });
+    assert.equal([...entries.keys()].filter((n) => n.startsWith('ppt/media/')).length, 1, '生成插画没进包');
+    assert.ok(entries.get('ppt/slides/slide2.xml').toString('utf8').includes('<p:pic>'), '第 1 页没有插画');
+    assert.ok(!entries.get('ppt/slides/slide3.xml').toString('utf8').includes('<p:pic>'), '第 2 页没要求插画，不该有图');
+    // 生成失败（比如渠道挂了）：那一页不放图，但整份仍然能下载
+    const failed = renderDocument({ kind: 'pptx', content: JSON.stringify(deck), name: '插画.pptx' }, { generatedImages: new Map() });
+    assert.ok(!failed.error && failed.buffer.length > 0, '生成失败时也该能出文件（只是没有图）');
+  }
+
   // 序列化回 JSON 的结构要能读回来（供 p46 复用同一份规格）
   assert.equal(parseDeckSpec(JSON.stringify(withImage)).slides[0].imageAttachment, 1, 'imageAttachment 解析丢了');
 }

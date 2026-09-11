@@ -233,20 +233,22 @@ function coverShapes(deck) {
 }
 
 /**
- * @param {object} deck { title, subtitle, author, slides: [{ title, bullets, imageAttachment }] }
- * @param {Map<number, Buffer>} imagesByAttachment 附件序号 → 图片字节（学生在这一轮里传的第 N 张图）
+ * @param {object} deck { title, subtitle, author, slides: [{ title, bullets, imageAttachment, imagePrompt }] }
+ * @param {{attachmentImages?: Map<number, Buffer>, generatedImages?: Map<number, Buffer>}} options
+ *        attachmentImages：附件序号 → 图片字节（学生这一轮传的第 N 张图）
+ *        generatedImages：幻灯片下标 → 平台生成的插画字节
  */
-export function renderPptx(deck, imagesByAttachment = new Map()) {
+export function renderPptx(deck, { attachmentImages = new Map(), generatedImages = new Map() } = {}) {
   const slides = Array.isArray(deck?.slides) ? deck.slides : [];
   const slideParts = [];
 
   // 封面
   slideParts.push({ xml: slideXml(coverShapes(deck)), image: null });
-  // 内容页
-  slides.forEach((slide) => {
-    const buffer = slide.imageAttachment ? imagesByAttachment.get(slide.imageAttachment) : null;
+  // 内容页：优先用平台生成的插画，其次用学生自己传的图
+  slides.forEach((slide, index) => {
+    const buffer = generatedImages.get(index) || (slide.imageAttachment ? attachmentImages.get(slide.imageAttachment) : null);
     const type = buffer ? imageType(buffer) : null;
-    // 引用越界、素材读不到、格式不是图片 —— 都只是**这一页不放图**，不让整份 PPT 失败
+    // 生成失败、引用越界、素材读不到、格式不是图片 —— 都只是**这一页不放图**，不让整份 PPT 失败
     if (!type) {
       slideParts.push({ xml: slideXml(contentShapes(slide, 2, false)), image: null });
       return;

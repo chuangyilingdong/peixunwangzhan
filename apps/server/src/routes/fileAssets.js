@@ -338,6 +338,28 @@ async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null
     throw error;
   }
 }
+/**
+ * 把一段**平台自己产出**的字节存成公开素材（AI 生成的插画走这条路）。
+ *
+ * 与「学生上传」的区别：没有 multipart、不占上传频次配额（这不是学生在刷卡），
+ * 但**复用同一套校验与存储布局**（persistSecureUpload 会验扩展名/魔术字节/大小），
+ * 于是生成出来的图和学生传的图共用同一条公开下载地址，产物渲染与页面显示都不用特殊处理。
+ */
+export async function storeGeneratedAsset({ buffer, mimeType, fileName, ownerUserId = null, ownerOrgId = null, category = 'MEDIA_ASSET', visibility = 'PUBLIC_PLATFORM', metadata = {} }) {
+  const stored = await persistSecureUpload({ fileName, mimeType, buffer });
+  const fileId = id('file');
+  const now = nowIso();
+  q(
+    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [fileId, ownerUserId ? 'USER' : 'PLATFORM', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, stored.storageKey,
+      `/api/public/file-assets/${fileId}/download`, null, stored.fileName, stored.mimeType, stored.fileSize,
+      stored.checksum, category, visibility, 'ACTIVE', 'NOT_REQUIRED', null,
+      json({ ...metadata, generated: true, security: stored.security }), ownerUserId, now, now],
+  );
+  const created = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  return { id: fileId, url: `/api/public/file-assets/${fileId}/download`, fileName: stored.fileName, mimeType: stored.mimeType, bytes: stored.fileSize, row: created };
+}
+
 export async function handleAdminFileAssets(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/file-assets')) return null;

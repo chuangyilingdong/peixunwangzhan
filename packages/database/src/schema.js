@@ -1564,6 +1564,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_artifacts (
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_artifact_conversation ON vibecoding_artifacts(conversation_id, updated_at DESC)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_artifact_name ON vibecoding_artifacts(conversation_id, name)');
+// ── 文档产物的生成插画（PPT 每页配图，2026-09-11）────────────────────────────
+// 存 [{slideIndex,prompt,fileId,url}]（失败项带 error）。放在这一列而不是重写 content：
+// content 是模型写的规格原文（学生能在「源码」里看懂），不该被平台改写。
+try { db.exec('ALTER TABLE vibecoding_artifacts ADD COLUMN generated_images TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // 启动迁移：把旧的 conversations.files JSON 展开成产物行。
 // 幂等——已经有产物的会话跳过；旧列保留不读，出问题可以回滚。

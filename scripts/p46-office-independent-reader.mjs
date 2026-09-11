@@ -74,7 +74,7 @@ const DECK_WITH_IMAGE = {
     { title: '只有图的一页', bullets: [], imageAttachment: 2 },
   ],
 };
-writeFileSync(imageDeckPath, renderPptx(DECK_WITH_IMAGE, new Map([[1, PIXEL_PNG], [2, PIXEL_PNG]])).buffer);
+writeFileSync(imageDeckPath, renderPptx(DECK_WITH_IMAGE, { attachmentImages: new Map([[1, PIXEL_PNG], [2, PIXEL_PNG]]) }).buffer);
 
 const script = `
 import json, sys, hashlib

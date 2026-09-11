@@ -284,7 +284,7 @@ export function Workbench({
                 </button>
               </div>
               <div className="c-preview__doc">
-                <DocumentPreview artifact={documentArtifact} resolveImage={(ordinal) => resolveAttachment?.(documentArtifact, ordinal)} />
+                <DocumentPreview artifact={documentArtifact} resolveImage={(slide, slideIndex) => resolveAttachment?.(documentArtifact, { slide, slideIndex })} />
               </div>
             </>
           ) : previewable ? (

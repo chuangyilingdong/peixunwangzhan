@@ -20,8 +20,9 @@ import { providerSelectionForModality } from './aiGeneration.js';
 import { PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import {
   artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact,
-  listArtifacts, pickEntryArtifact, seedDefaultArtifacts, upsertArtifact, upsertArtifacts,
+  listArtifacts, pickEntryArtifact, seedDefaultArtifacts, setArtifactGeneratedImages, upsertArtifact, upsertArtifacts,
 } from '../services/vibecodingArtifacts.js';
+import { MAX_ILLUSTRATIONS_PER_DECK, collectIllustrationTargets, generateIllustrationsForArtifacts } from '../services/vibecodingIllustrations.js';
 import { isDocumentKind, renderDocument } from '../services/ooxml/documents.js';
 import { uploadRoot } from '../services/fileUploadSecurity.js';
 import { readFileSync } from 'node:fs';
@@ -271,6 +272,21 @@ function readAssetBytes(fileId) {
 }
 
 /**
+ * 产物记着的生成插画（幻灯片下标 → 图片字节）。失败项、读不到的素材都跳过 —— 那一页就不放图。
+ */
+function generatedImageMap(artifact) {
+  const images = new Map();
+  for (const item of Array.isArray(artifact?.generatedImages) ? artifact.generatedImages : []) {
+    if (!item?.fileId || item.error) continue;
+    const index = Number(item.slideIndex);
+    if (!Number.isInteger(index) || index < 0) continue;
+    const buffer = readAssetBytes(item.fileId);
+    if (buffer) images.set(index, buffer);
+  }
+  return images;
+}
+
+/**
  * 附件序号（1 起） → 图片字节。取不到的序号直接不进 Map，渲染时那一页就不放图。
  * 导出是为了给 p47 做守卫：这条链路连着「产物 messageId」「附件里的 mime」「磁盘上的素材」
  * 三处，任何一处断掉都**不报错**、只是 PPT 里没图 —— 必须能被自动化盯住。
@@ -295,7 +311,11 @@ export function attachmentImageMap(conversationId, artifact) {
 const DOCUMENT_GUIDE = [
   '除了网页，你也可以直接产出 Office 文档：用一个带扩展名的代码块写**内容**，平台会渲染成真正的文件，学生下载后能用 PowerPoint / Word / Excel / WPS 打开。',
   '· PPT：```pptx 文件名.pptx ```，内容是一段 JSON —— {"title":"标题","subtitle":"副标题","author":"署名","slides":[{"title":"这一页的标题","bullets":["要点一","要点二"]}]}。每页 3~6 条要点、单条不超过 40 字，页数按需要；不要只做一页，也不要把整段话塞进一条要点。',
-  '  要配图的那一页再加一个 image 字段：{"title":"赛里木湖","bullets":["湖水蓝得像宝石"],"image":{"attachment":1}} —— attachment 是**学生这条消息里第几张图**（平台会告诉你有几张、怎么编号）。学生传了图又做了 PPT 时，就该把图用上，别浪费。',
+  '  **配图**（很影响成品像不像样，值得用）：那一页再加一个 image 字段，两种写法 ——',
+  '  ① 让平台生成插画：{"title":"赛里木湖","bullets":["湖水蓝得像宝石"],"image":{"prompt":"新疆赛里木湖的夏天，写实插画风格，蓝天、雪山倒影、湖边草地，横构图"}}。'
+    + `提示词要具体（画什么、什么风格、什么构图），全篇最多 ${MAX_ILLUSTRATIONS_PER_DECK} 张，用在封面页和最有画面感的那几页，**不要每页都配**。`,
+  '  ② 用学生自己传的图：{"image":{"attachment":1}} —— attachment 是**学生这条消息里第几张图**（平台会告诉你有几张、怎么编号）。学生传了图又做 PPT 时，就该把图用上，别浪费。',
+  '  配图是**可选**的：拿不准风格、或内容本身就是表格/流程时，不配图反而更好。',
   '· Word：```docx 文件名.docx ```，内容是 Markdown —— # 一级标题、- 无序列表、1. 有序列表、| 表格 |、**粗体**。',
   '· Excel：```xlsx 文件名.xlsx ```，内容是 CSV，**第一行是表头**。',
   '学生要文档时就直接给对应的代码块，不要用文字描述一遍内容来代替。',
@@ -495,6 +515,14 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       balanceAfter = Number(charged?.balanceAfter || 0);
     });
     const message = normalizeMessage(row('SELECT * FROM vibecoding_messages WHERE id=?', [assistantMessageId]));
+    // 文档产物要配的插画，在这一轮**消息落库之后**才生成：这时产物已认领到这条消息上，
+    // 也才有「产出那一轮」可回溯。生成期间照常推 status 事件，学生能看到「正在生成插画」，
+    // 而不是干等（参考实现里那一步「正在收集 PPT 素材」就是这个位置）。
+    // ⚠️ 注意：fresh 是在上面的 transaction 回调里声明的，出了回调就没了 ——
+    // 在这里直接用它会在求值实参时抛 ReferenceError，被本层的 catch 吞掉，
+    // 表现成「插画静默不生成」（我踩过）。所以在外面重新取一次。
+    const freshConversation = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]) || conversation;
+    await illustrateTurn(ctx, auth, freshConversation, emittedArtifactIds);
     sseSend(ctx, 'done', {
       message,
       // 权威产物清单：前端拿它跟流式期间收到的卡片对账
@@ -525,6 +553,43 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
     if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();
   }
   return { __streamed: true };
+}
+
+/**
+ * 给这一轮产出的文档（PPT）生成插画。
+ *
+ * 三条不可省的规矩：
+ *   · **门禁不通过就一张都不生成**（课时没开 image、课堂不允许、平台关了该模态）——
+ *     文档产物不能变成绕过能力开关的后门；这时候只推一条说明，不报错、不打断这轮对话。
+ *   · **单张失败只影响那一页**，其余照常。
+ *   · 生成完把更新后的产物**再推一次**（前端按 id 覆盖），预览里就会换上带插画的版本。
+ */
+async function illustrateTurn(ctx, auth, conversation, artifactIds) {
+  if (!artifactIds?.size) return;
+  const artifacts = listArtifacts(conversation.id, { includeContent: true }).filter((item) => artifactIds.has(item.id));
+  if (!collectIllustrationTargets(artifacts).length) return;
+  try {
+    const user = activeStudent(auth);
+    const context = resolveStudentLessonContext(user, conversation.lesson_id, conversation.class_id);
+    const results = await generateIllustrationsForArtifacts({
+      auth: { ...auth, rawUser: user },
+      context,
+      artifacts,
+      onProgress: (info) => sseSend(ctx, 'status', info),
+    });
+    for (const [artifactId, images] of results) {
+      setArtifactGeneratedImages(artifactId, images);
+      const updated = getArtifact(conversation.id, artifactId);
+      if (updated) sseSend(ctx, 'artifact', { artifact: updated, created: false });
+    }
+  } catch (error) {
+    // 最常见的两种：能力没开、生成渠道不可用。如实告诉学生「这次没配图」，而不是默默不给。
+    sseSend(ctx, 'status', {
+      phase: 'image', done: 0, total: 0,
+      error: String(error?.message || error).slice(0, 160),
+      code: error?.code || 'ILLUSTRATION_FAILED',
+    });
+  }
 }
 
 export function normalizeSubmission(value, { includeContent = false } = {}) {
@@ -669,9 +734,14 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const artifact = getArtifact(conversation.id, documentMatch[2]);
     if (!artifact) throw errors.notFound('产物不存在', 'VIBECODING_ARTIFACT_NOT_FOUND');
     if (!isDocumentKind(artifact.kind)) throw errors.badRequest('这个产物不是可下载的文档', 'VIBECODING_ARTIFACT_NOT_DOCUMENT');
-    // 配图：规格里的 {"attachment": N} 指的是**产出这一轮里学生传的第 N 张图**，
-    // 这里把它翻成真实字节交给渲染器（越界/读不到就不放图，不让整份下载失败）
-    const rendered = renderDocument(artifact, { images: attachmentImageMap(conversation.id, artifact) });
+    // 配图两个来源都要喂给渲染器：
+    //   · 平台生成的插画（按幻灯片下标）
+    //   · 规格里 {"attachment": N} 指的是**产出这一轮里学生传的第 N 张图**，按序号取
+    // 越界/读不到就不放图，不让整份下载失败。
+    const rendered = renderDocument(artifact, {
+      attachmentImages: attachmentImageMap(conversation.id, artifact),
+      generatedImages: generatedImageMap(artifact),
+    });
     if (rendered.error) throw errors.badRequest(rendered.error, 'VIBECODING_DOCUMENT_RENDER_FAILED');
     const safeName = String(rendered.filename || 'download').replace(/[\r\n"\\/]/g, '_');
     audit(ctx, 'VIBECODING_ARTIFACT_DOWNLOAD', 'VIBECODING_ARTIFACT', artifact.id, null, { kind: artifact.kind, bytes: rendered.buffer.length });

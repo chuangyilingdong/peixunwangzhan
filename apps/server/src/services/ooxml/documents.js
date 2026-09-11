@@ -61,17 +61,28 @@ export function parseDeckSpec(content) {
         title: cleanText(slide?.title || '').slice(0, 200),
         bullets: (Array.isArray(slide?.bullets) ? slide.bullets : [])
           .map((item) => cleanText(item).slice(0, 500)).filter((item) => item.trim()).slice(0, 12),
-        // 配图：模型不掌握我们托管的地址，所以按**序号**引用触发那一轮里学生自己传的图片。
-        // 序号从 1 开始、只数图片（非图片附件不占号）。越界或取不到时那一页就不放图，不整份失败。
+        // 配图有两个来源：
+        //   ① {"attachment": N} —— 学生这一轮自己传的第 N 张图；
+        //   ② {"prompt": "..."} —— 让**平台生成**一张插画（图由 AI 渠道出，见 vibecodingIllustrations）。
+        // 都不给或取不到时那一页就不放图，不整份失败。
         imageAttachment: (() => {
           const raw = slide?.image?.attachment ?? slide?.imageAttachment;
           const value = Number(raw);
           return Number.isInteger(value) && value >= 1 && value <= 20 ? value : null;
         })(),
-      })).filter((slide) => slide.title || slide.bullets.length || slide.imageAttachment),
+        imagePrompt: cleanText(slide?.image?.prompt || slide?.imagePrompt || '').trim().slice(0, 300) || null,
+      })).filter((slide) => slide.title || slide.bullets.length || slide.imageAttachment || slide.imagePrompt),
     };
   }
   return null;
+}
+
+/** 一份 deck 里要求「生成」的插画（按页序），给生成流程用 */
+export function deckIllustrationRequests(deck) {
+  const slides = Array.isArray(deck?.slides) ? deck.slides : [];
+  return slides
+    .map((slide, index) => ({ slideIndex: index, prompt: String(slide?.imagePrompt || '').trim() }))
+    .filter((item) => item.prompt);
 }
 
 export const MAX_SLIDES = 40;
@@ -79,10 +90,11 @@ export const MAX_SLIDES = 40;
 /**
  * 渲染一份文档产物。
  * @param {object} artifact { kind, content, name }
- * @param {{images?: Map<number, Buffer>}} options images = 附件序号 → 图片字节（学生这一轮传的第 N 张图）
+ * @param {{attachmentImages?: Map<number, Buffer>, generatedImages?: Map<number, Buffer>}} options
+ *        attachmentImages = 附件序号 → 图片字节；generatedImages = 幻灯片下标 → 生成出来的插画字节
  * @returns {{buffer: Buffer, mime: string, filename: string} | {error: string}}
  */
-export function renderDocument(artifact, { images = new Map() } = {}) {
+export function renderDocument(artifact, { attachmentImages = new Map(), generatedImages = new Map() } = {}) {
   const kind = String(artifact?.kind || '').toLowerCase();
   const content = String(artifact?.content ?? '');
   if (!isDocumentKind(kind)) return { error: '不是可渲染的文档产物' };
@@ -90,7 +102,7 @@ export function renderDocument(artifact, { images = new Map() } = {}) {
     if (kind === 'pptx') {
       const deck = parseDeckSpec(content);
       if (!deck) return { error: '这份 PPT 的内容不是可识别的规格（需要 JSON，且至少有一页 slides）' };
-      const { buffer } = renderPptx(deck, images);
+      const { buffer } = renderPptx(deck, { attachmentImages, generatedImages });
       return { buffer, mime: MIME.pptx, filename: artifact.name };
     }
     if (kind === 'docx') {

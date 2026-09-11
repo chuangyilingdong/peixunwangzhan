@@ -15,7 +15,7 @@
 //
 // 关键能力是**流式增量解析**：模型还在吐字时，每有一个围栏闭合就立刻落库并推事件，
 // 学生才能看到产物卡片一个个出现，而不是等整轮结束才一次性冒出来。
-import { count, id, nowIso, q, row, rows } from '../lib.js';
+import { count, id, json, nowIso, parseJson, q, row, rows } from '../lib.js';
 import { parseCsv } from './ooxml/xlsx.js';
 import { parseDeckSpec } from './ooxml/documents.js';
 
@@ -206,9 +206,21 @@ export function normalizeArtifact(value) {
     revision: Number(value.revision || 1),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
+    // 平台为这份文档生成出来的插画（[{slideIndex, prompt, fileId, url}] 或失败项的 error）。
+    // 存成 JSON 一列，因为它只属于这份产物、且总是整份读写。
+    ...(value.generated_images ? { generatedImages: parseJson(value.generated_images, []) } : {}),
     // 列表接口默认不带正文：产物卡片只需要元信息，正文按需取
     ...(value.content === undefined ? {} : { content: value.content }),
   };
+}
+
+/**
+ * 记下这份文档产物的生成插画。
+ * ⚠️ 产物**换了一版**（revision 变化）时必须清空：新的 deck 引用的页和提示词都变了，
+ * 留着旧图会让「第 2 页配图」配上上一版的图 —— 而且不报错。
+ */
+export function setArtifactGeneratedImages(artifactId, images) {
+  q('UPDATE vibecoding_artifacts SET generated_images=?, updated_at=? WHERE id=?', [json(images || []), nowIso(), artifactId]);
 }
 
 export function listArtifacts(conversationId, { includeContent = false } = {}) {
@@ -250,7 +262,8 @@ export function upsertArtifact({ conversationId, messageId = null, name, content
   if (existing) {
     // 内容没变就不动修订号（模型常把同一个文件原样再写一遍）
     if (existing.content === text) return normalizeArtifact(existing);
-    q('UPDATE vibecoding_artifacts SET content=?,bytes=?,kind=?,revision=revision+1,message_id=?,updated_at=? WHERE id=?',
+    // 内容变了就是新一版：把上一版的生成插画一起清掉（否则新 deck 的第 2 页会配上旧图，且不报错）
+    q('UPDATE vibecoding_artifacts SET content=?,bytes=?,kind=?,revision=revision+1,message_id=?,generated_images=NULL,updated_at=? WHERE id=?',
       [text, bytes, kindForName(cleanName), messageId, timestamp, existing.id]);
     return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=?', [existing.id]));
   }
