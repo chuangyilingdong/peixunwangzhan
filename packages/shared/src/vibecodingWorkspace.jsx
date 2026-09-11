@@ -21,6 +21,9 @@ export const VibePreviewFrame = PreviewFrame;
 const DEFAULT_TITLE = '新的创作对话';
 // 思考过程在界面上最多展示这么多字符（只保留尾部）——长推理没必要全塞进 DOM
 const REASONING_TAIL_CHARS = 4000;
+// 图片附件：一次最多几张、单张多大（与服务端的 MAX_ATTACHMENTS 对齐）
+const MAX_ATTACHMENTS = 4;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
 function filesFromArtifacts(artifacts) {
   return Object.fromEntries((artifacts || []).map((item) => [item.name, String(item.content ?? '')]));
@@ -152,6 +155,11 @@ function WorkspaceView({ api }) {
   const [messages, setMessages] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
   const [draft, setDraft] = useState('');
+  // 待发送的图片附件（上传后是 {id,name,url}，url 是公开地址，外联给模型和页面用）
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const attachInputRef = useRef(null);
   const [streaming, setStreaming] = useState(false);
   const [tab, setTab] = useState('preview');
   const [workbenchOpen, setWorkbenchOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 720));
@@ -272,12 +280,42 @@ function WorkspaceView({ api }) {
     }
   }
 
+  /** 上传图片：存成**公开**素材（外联），再把公开地址交给模型与预览页面 */
+  async function uploadImages(fileList) {
+    const files = [...(fileList || [])].filter((file) => String(file?.type || '').startsWith('image/'));
+    if (!files.length) {
+      if (fileList?.length) toast.error('目前只支持图片');
+      return;
+    }
+    setUploading(true);
+    try {
+      for (const file of files) {
+        if (file.size > MAX_IMAGE_BYTES) { toast.error(`${file.name} 超过 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)}MB，换一张小点的`); continue; }
+        const asset = await api.upload('student/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' });
+        setAttachments((current) => (current.length >= MAX_ATTACHMENTS
+          ? current
+          : [...current, { id: asset.id, name: asset.fileName || file.name, url: `/api/public/file-assets/${asset.id}/download` }]));
+      }
+    } catch (error) {
+      toast.error(error.message || '图片上传失败');
+    } finally {
+      setUploading(false);
+    }
+  }
+
   function send(text) {
     const content = String(text ?? draft).trim();
-    if (!content || streaming || !editable) return;
+    if (streaming || !editable) return;
+    // 只发图不打字是允许的（服务端也这么认）
+    if (!content && !attachments.length) return;
+    const pending = attachments;
     setDraft('');
-    streamReply('messages', { content }, {
-      optimistic: [{ id: `local-user-${Date.now()}`, role: 'user', content, status: 'SUCCEEDED', createdAt: new Date().toISOString() }],
+    setAttachments([]);
+    streamReply('messages', { content, attachments: pending.map((item) => item.id) }, {
+      optimistic: [{
+        id: `local-user-${Date.now()}`, role: 'user', content: content || '（图片）', status: 'SUCCEEDED',
+        createdAt: new Date().toISOString(), attachments: pending,
+      }],
     });
   }
 
@@ -497,7 +535,39 @@ function WorkspaceView({ api }) {
         </>
       )}
     >
-      <div className="c-content">
+      <div
+        className="c-content"
+        onDragOver={(event) => {
+          if (!editable) return;
+          event.preventDefault();
+          if (!dragging) setDragging(true);
+        }}
+        onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          if (!editable) return;
+          // 从系统里把图拖进来就自动上传，不用先点按钮
+          uploadImages(event.dataTransfer?.files);
+        }}
+      >
+        <input
+          ref={attachInputRef}
+          className="c-file-input"
+          type="file"
+          accept="image/*"
+          multiple
+          aria-label="上传图片"
+          onChange={(event) => { uploadImages(event.target.files); event.target.value = ''; }}
+        />
+        {dragging ? (
+          <div className="c-drop-overlay">
+            <div className="c-drop-overlay__box">
+              <ConsoleIcon name="image" size={22} />
+              松手就上传这张图
+            </div>
+          </div>
+        ) : null}
         <ChatThread
           threadRef={follow.ref}
           messages={messages}
@@ -537,6 +607,10 @@ function WorkspaceView({ api }) {
             value={draft}
             onChange={setDraft}
             onSubmit={send}
+            attachments={attachments}
+            uploading={uploading}
+            onAttach={() => attachInputRef.current?.click()}
+            onRemoveAttachment={(item) => setAttachments((current) => current.filter((entry) => entry.id !== item.id))}
             streaming={streaming}
             disabled={!editable}
             blockedReason={editable ? '' : '作品已提交，等老师点评后才能继续创作。'}

@@ -156,6 +156,16 @@ function UserMessage({ message, editable, onEdit, onDelete, canEdit }) {
   return (
     <article className="c-msg-user">
       <div className="c-msg-user__stack">
+        {/* 附件是叠在气泡**上方**的独立对象，不塞进气泡里（与参考的「容器语法」一致） */}
+        {message.attachments?.length ? (
+          <div className="c-msg-user__attachments">
+            {message.attachments.map((item) => (
+              <a className="c-msg-attachment" key={item.id} href={item.url} target="_blank" rel="noreferrer noopener" title={item.name}>
+                <img src={item.url} alt={item.name} loading="lazy" />
+              </a>
+            ))}
+          </div>
+        ) : null}
         <div className="c-msg-user__bubble">{message.content}</div>
       </div>
       <div className="c-msg-actions">

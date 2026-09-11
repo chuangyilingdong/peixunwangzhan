@@ -1681,6 +1681,11 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_share_token ON vibecoding_submissions(share_token) WHERE share_token IS NOT NULL'); }
 catch (error) { if (!String(error?.message || '').includes('already exists')) throw error; }
 
+// ── VibeCoding 聊天附件（学生上传的图片，让模型「看图」）──────────────────────
+// 存 [{id,name,url}]：url 是公开下载地址（外联），模型与生成出来的页面都能取到。
+try { db.exec('ALTER TABLE vibecoding_messages ADD COLUMN attachments TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
 // ── VibeCoding 会话置顶（侧栏排序用）─────────────────────────────────────────
 try { db.exec('ALTER TABLE vibecoding_conversations ADD COLUMN pinned_at TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }

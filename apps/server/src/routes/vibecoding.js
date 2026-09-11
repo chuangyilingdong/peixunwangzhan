@@ -83,7 +83,28 @@ function normalizeMessage(value) {
     id: value.id, role: value.role, content: value.content, model: value.model || null,
     status: value.status, errorCode: value.error_code || null,
     creditsCharged: Number(value.credits_charged || 0), createdAt: value.created_at,
+    attachments: parseAttachments(value.attachments),
   };
+}
+
+// 每条消息最多带几张图（够用，也挡住刷量）
+const MAX_ATTACHMENTS = 4;
+
+/** 消息上的附件（[{id,name,url}]）。字段是 JSON，坏数据一律当空，不让它打断对话。 */
+function parseAttachments(value) {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({ id: String(item?.id || ''), name: String(item?.name || ''), url: String(item?.url || '') }))
+      .filter((item) => item.id && item.url);
+  } catch { return []; }
+}
+
+/** 公开下载地址：**外联**用（模型能抓、生成出来的页面也能显示） */
+function publicAssetUrl(assetId) {
+  return `/api/public/file-assets/${assetId}/download`;
 }
 
 function conversationScopeSql(alias = 'conversation') {
@@ -102,6 +123,30 @@ function ownConversation(ctx, conversationId) {
   );
   if (!conversation) throw errors.notFound('创作会话不存在', 'VIBECODING_CONVERSATION_NOT_FOUND');
   return { auth, conversation };
+}
+
+/**
+ * 把学生传来的附件 id 列表校验成可落库的 [{id,name,url}]。
+ * 只接受**本人上传的图片**：别人的素材、非图片、没公开的，一律拒掉并说明原因。
+ */
+function resolveAttachments(auth, rawList) {
+  const ids = (Array.isArray(rawList) ? rawList : [])
+    .map((item) => String(typeof item === 'string' ? item : item?.id || '').trim())
+    .filter(Boolean);
+  if (!ids.length) return [];
+  if (ids.length > MAX_ATTACHMENTS) throw errors.badRequest(`一次最多带 ${MAX_ATTACHMENTS} 个附件`, 'VIBECODING_TOO_MANY_ATTACHMENTS');
+  const resolved = [];
+  for (const assetId of ids) {
+    const asset = row('SELECT * FROM file_assets WHERE id=?', [assetId]);
+    if (!asset || asset.status !== 'ACTIVE') throw errors.badRequest('附件不存在或已失效', 'VIBECODING_ATTACHMENT_NOT_FOUND');
+    if (asset.owner_user_id !== auth.user.id) throw errors.forbidden('只能引用自己上传的图片', 'VIBECODING_ATTACHMENT_NOT_OWNED');
+    if (!String(asset.mime_type || '').startsWith('image/')) throw errors.badRequest('目前只支持上传图片', 'VIBECODING_ATTACHMENT_NOT_IMAGE');
+    if (asset.visibility !== 'PUBLIC_PLATFORM' && asset.visibility !== 'PUBLIC_RELEASE') {
+      throw errors.badRequest('附件需要是公开素材（外联给模型和页面用）', 'VIBECODING_ATTACHMENT_NOT_PUBLIC');
+    }
+    resolved.push({ id: asset.id, name: String(asset.file_name || '图片'), url: publicAssetUrl(asset.id) });
+  }
+  return resolved;
 }
 
 function activeStudent(auth) {
@@ -184,9 +229,21 @@ export function lessonSystemMessage(conversation) {
 
 function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
   return rows(
-    "SELECT role, content FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at DESC, rowid DESC LIMIT ?",
+    "SELECT role, content, attachments FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at DESC, rowid DESC LIMIT ?",
     [conversationId, limit],
-  ).reverse().map((message) => ({ role: message.role, content: message.content }));
+  ).reverse().map((message) => {
+    const attachments = parseAttachments(message.attachments);
+    // 带图的用户消息必须发成**内容块**：只发纯文本的话，模型完全看不到图
+    // （这是实测过的：同样的问题，纯文本会回「未看到图片」）。
+    if (message.role !== 'user' || !attachments.length) return { role: message.role, content: message.content };
+    return {
+      role: 'user',
+      content: [
+        { type: 'text', text: message.content },
+        ...attachments.map((item) => ({ type: 'image_url', image_url: { url: item.url }, role: 'reference_image' })),
+      ],
+    };
+  });
 }
 
 /**
@@ -527,15 +584,19 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   if (messageMatch && method === 'POST') {
     const { auth: ownerAuth, conversation } = ownConversation(ctx, messageMatch[1]);
     assertConversationEditable(conversation);
-    const content = nonEmptyString(body.content, '消息内容', { max: MAX_MESSAGE_CHARS });
     const user = activeStudent(ownerAuth);
     const context = vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
     assertChatPreflight({ user, orgId: ownerAuth.user.orgId, context });
+    // 附件先校验，再决定正文是否可以为空（只发图不发字是允许的）
+    const attachments = resolveAttachments(ownerAuth, body.attachments);
+    const rawContent = String(body.content ?? '').trim();
+    if (!rawContent && !attachments.length) throw errors.badRequest('消息内容不能为空', 'VALIDATION_REQUIRED');
+    const content = nonEmptyString(rawContent || '看看这张图', '消息内容', { max: MAX_MESSAGE_CHARS });
 
     const userMessageId = id('vibemsg');
     const now = nowIso();
-    q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,created_at) VALUES (?,?,?,?,?,?,?)',
-      [userMessageId, conversation.id, 'user', content, conversation.model || null, 'SUCCEEDED', now]);
+    q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,attachments,created_at) VALUES (?,?,?,?,?,?,?,?)',
+      [userMessageId, conversation.id, 'user', content, conversation.model || null, 'SUCCEEDED', json(attachments), now]);
     const autoTitle = !conversation.title || conversation.title === DEFAULT_TITLE;
     q('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [now, now, conversation.id]);
     if (autoTitle) q('UPDATE vibecoding_conversations SET title=? WHERE id=?', [content.slice(0, 24), conversation.id]);
