@@ -17,13 +17,20 @@
 
 [data-console] {
   /* ── 字体 ────────────────────────────────────────────────────────────────
-     参考自带 Space Grotesk / IBM Plex 的 woff2（独立 OFL 授权），本项目不引入，
-     改用系统字体栈 + 中文回退，避免字体授权与体积问题。 */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
-    "PingFang SC", "Hiragino Sans", "Microsoft YaHei", "Yu Gothic", sans-serif;
+     与画布课堂用**同一套**字体栈（见 packages/shared/src/styles.css 的 `--cv-font`）：
+     Geist 管拉丁字符（自托管，只声明拉丁 unicode-range），中文落到思源黑体 Noto Sans SC
+     （自托管、按 unicode-range 分片，浏览器只下用到的分片）。
+     字体文件在 apps/website/public/fonts，由域名根提供，所以学生端（官网）与机构端
+     （点评页，同源）都取得到；任何一端取不到就按这个栈自然回退，不会报错。
+     说明：OpenSquilla 自带的 Space Grotesk / IBM Plex 仍然没有引入（那是另一套授权），
+     这里用的是平台自己的两套 OFL 字体。 */
+  --font-sans: 'Geist', 'Noto Sans SC', ui-sans-serif, -apple-system,
+    'Segoe UI Variable Text', 'Segoe UI', system-ui, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   --font-display: var(--font-sans);
-  --font-mono: "SFMono-Regular", ui-monospace, "Cascadia Code", Menlo, Consolas,
-    "PingFang SC", "Microsoft YaHei", monospace;
+  /* 等宽：与画布的等宽栈一致，另留中文回退（代码注释里的中文不至于跳到别的字体） */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, 'Noto Sans SC',
+    'PingFang SC', 'Microsoft YaHei', monospace;
 
   --fs-xs: 0.8125rem;   /* 13px */
   --fs-sm: 0.875rem;    /* 14px */
