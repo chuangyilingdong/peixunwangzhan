@@ -1,0 +1,438 @@
+/* ============================================================================
+   VibeCoding Console — 外壳层
+   三栏骨架：侧边栏（fixed，可拖拽调宽） + 主区（顶栏 + 对话/工作台分栏）。
+   尺寸常量照抄参考，不自己发明（见各段注释里的出处数值）。
+   ========================================================================== */
+
+.c-shell {
+  --sidebar-width: 260px;
+  --workbench-width: 0px;
+  display: flex;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ── 侧边栏 ───────────────────────────────────────────────────────────────
+   收起不是「变窄的图标栏」，而是整条 off-canvas 平移出去（参考的做法）：
+   宽度变量与用户偏好都原样保留，展开时不会丢失。 */
+.c-sidebar {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-width);
+  overflow: hidden;
+  border-right: 1px solid var(--sidebar-border);
+  background: var(--sidebar-bg);
+  transform: translateX(-100%);
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.c-sidebar.is-docked { transform: none; }
+
+/* 品牌行 */
+.c-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 52px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--sidebar-border);
+}
+.c-sidebar__mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.c-sidebar__brand-text { min-width: 0; flex: 1; }
+.c-sidebar__brand-text strong {
+  display: block;
+  overflow: hidden;
+  color: var(--sidebar-text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-sidebar__brand-text small {
+  display: block;
+  overflow: hidden;
+  color: var(--sidebar-text-soft);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 导航索引区：不滚动时按内容高，超了才滚 */
+.c-sidebar__core {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-2) 0;
+}
+
+/* 「新建对话」刻意做成一行、而不是一个盒子按钮——与下面的导航行共享几何 */
+.c-new-session {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: calc(100% - var(--sp-4));
+  min-height: 42px;
+  margin: 0 var(--sp-2);
+  padding: 10px 11px;
+  border-radius: var(--radius-md);
+  color: var(--sidebar-text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.c-new-session:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.c-new-session:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.c-new-session span { flex: 1; }
+.c-new-session:disabled { opacity: var(--state-disabled-opacity); }
+
+.c-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: calc(100% - var(--sp-4));
+  min-height: 42px;
+  margin: 0 var(--sp-2);
+  padding: 10px 11px;
+  border-radius: var(--radius-md);
+  color: var(--sidebar-text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.c-nav-item:hover { background: var(--sidebar-item-hover); color: var(--sidebar-text-strong); }
+.c-nav-item.is-active { background: var(--sidebar-item-active); color: var(--sidebar-text-strong); }
+.c-nav-item:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.c-nav-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 会话历史区：侧边栏里唯一的弹性滚动区 */
+.c-sidebar__history {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 120px;
+  overflow: hidden;
+  border-top: 1px solid var(--sidebar-border);
+}
+.c-sidebar__search { padding: var(--sp-2) var(--sp-3); }
+.c-sidebar__zones { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: var(--sp-2); }
+
+.c-zone-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  color: var(--sidebar-text-soft);
+  font-size: 11px;
+  font-weight: var(--fw-eyebrow);
+  letter-spacing: var(--eyebrow-track);
+  text-transform: uppercase;
+}
+.c-zone-heading small { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* 会话行：hover 时右侧操作按钮淡入，同时状态点让位（参考里很讲究的一处） */
+.c-session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 1px var(--sp-1);
+}
+.c-session-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 11px;
+  border-radius: var(--radius-md);
+  color: var(--sidebar-text);
+  font-size: 13.25px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.c-session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-session-item:hover { background: var(--sidebar-item-hover); color: var(--sidebar-text-strong); }
+.c-session-item:focus-visible { outline: none; box-shadow: var(--focus-ring-inset); }
+
+/* 选中态：整条最「重」的强调——橙色竖条 + 辉光 + 渐入底色 */
+.c-session-item.is-current {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 9%, var(--sidebar-item-active)),
+    var(--sidebar-item-active) 42%
+  );
+  color: var(--sidebar-text-strong);
+  font-weight: 560;
+}
+.c-session-item.is-current::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--sp-1) + 3px);
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 44%, transparent);
+  transform: translateY(-50%);
+}
+.c-session-row__pin { margin-left: auto; color: var(--accent); opacity: 0.82; }
+
+.c-session-row__menu {
+  position: absolute;
+  right: 6px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+.c-session-row:hover .c-session-row__menu,
+.c-session-row:focus-within .c-session-row__menu,
+.c-session-row__menu[aria-expanded="true"] { opacity: 1; }
+/* 操作按钮出现时，置顶星让位，避免两个图标挤在一起 */
+.c-session-row:hover .c-session-row__pin { opacity: 0; }
+
+/* 悬停卡片：零延迟、零动效是参考的刻意选择（避免扫过列表时乱闪） */
+.c-hover-card {
+  position: fixed;
+  z-index: 320;
+  width: 272px;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--elev-3);
+  pointer-events: none;
+}
+.c-hover-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  overflow-wrap: anywhere;
+}
+.c-hover-card__head time { margin-left: auto; flex: none; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.c-hover-card__meta { margin-top: var(--sp-2); color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.6; }
+
+.c-sidebar__empty { padding: var(--sp-3) var(--sp-3) var(--sp-4); color: var(--sidebar-text-soft); font-size: var(--fs-xs); }
+
+/* 侧边栏底部：用户与账号 */
+.c-sidebar__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding: var(--sp-3);
+  border-top: 1px solid var(--sidebar-border);
+}
+.c-avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.c-sidebar__foot-text { min-width: 0; flex: 1; }
+.c-sidebar__foot-text strong { display: block; overflow: hidden; color: var(--sidebar-text-strong); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.c-sidebar__foot-text small { display: block; color: var(--sidebar-text-soft); font-size: 11px; }
+
+/* ── 拖拽调宽手柄 ───────────────────────────────────────────────────────
+   命中区 10px，可见的只有 1px 线；hover/拖拽变 2px 橙色，拖到折叠阈值变
+   3px 琥珀色（三档反馈）。 */
+.c-sidebar-resizer {
+  position: fixed;
+  inset-block: 0;
+  left: var(--sidebar-width);
+  z-index: 205;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+  background: none;
+}
+.c-sidebar-resizer::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 1px;
+  background: var(--border);
+  transition: width var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+.c-sidebar-resizer:hover::before,
+.c-sidebar-resizer:focus-visible::before,
+.c-sidebar-resizer.is-dragging::before { width: 2px; background: var(--accent); }
+.c-sidebar-resizer.is-armed::before { width: 3px; background: var(--warn-fill); }
+.c-sidebar-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+
+/* 拖拽期间全局锁光标与选中（参考的做法，避免拖出行时文字被选中） */
+html.is-console-resizing,
+html.is-console-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* 折叠提示药丸：拖到阈值时出现在手柄右侧 */
+.c-collapse-hint {
+  position: fixed;
+  inset-block-start: 50%;
+  z-index: 206;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px 11px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  box-shadow: var(--elev-2);
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/* ── 主区 ─────────────────────────────────────────────────────────────── */
+.c-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--sidebar-bg);
+}
+.c-shell.is-docked .c-main { margin-left: var(--sidebar-width); }
+
+.c-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 49px;
+  height: 49px;
+  margin: var(--sp-1) 0 0 var(--sp-1);
+  padding: 0 20px 0 12px;
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: var(--radius-lg) 0 0 0;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+}
+.c-topbar__title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.c-topbar__title strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-topbar__title span { flex: none; color: var(--text-dim); font-size: var(--fs-xs); }
+.c-topbar__right { display: flex; align-items: center; gap: var(--sp-2); }
+
+.c-workspace {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 对话列容器：overflow:hidden，滚动交给里面的 .c-thread */
+.c-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 0 var(--sp-1) var(--sp-1);
+}
+
+/* ── 遮罩（抽屉模式） ─────────────────────────────────────────────────── */
+.c-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: var(--scrim);
+  animation: c-scrim-in var(--dur-base) var(--ease-out) both;
+}
+@keyframes c-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── 移动端（≤768px）：侧边栏变抽屉，底部出现 tabbar ─────────────────── */
+.c-tabbar { display: none; }
+@media (max-width: 768px) {
+  .c-sidebar { width: min(280px, calc(100vw - 24px)); }
+  .c-shell.is-docked .c-main { margin-left: 0; }
+  .c-main { padding-bottom: calc(var(--mobile-tabbar-h) + env(safe-area-inset-bottom)); }
+  .c-topbar {
+    height: 56px;
+    flex-basis: 56px;
+    margin: var(--sp-1) var(--sp-1) 0 var(--sp-1);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding: 0 var(--sp-3);
+  }
+  /* 防 iOS 聚焦缩放：移动端输入一律 16px */
+  [data-console] input,
+  [data-console] textarea,
+  [data-console] select { font-size: 16px; }
+  /* 触控靶提到 44px */
+  .c-icon-btn { width: 44px; height: 44px; min-width: 44px; }
+  .c-session-item,
+  .c-nav-item,
+  .c-new-session { min-height: 44px; }
+  .c-sidebar-resizer { display: none; }
+
+  .c-tabbar {
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 60;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    height: calc(var(--mobile-tabbar-h) + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+    border-top: 1px solid var(--border);
+    background: var(--bg-surface);
+  }
+  .c-tabbar button {
+    display: grid;
+    place-items: center;
+    gap: 2px;
+    color: var(--text-dim);
+    font-size: 10px;
+  }
+  .c-tabbar button.is-active { color: var(--accent); }
+}
+
+/* 矮屏（≤760px 高）：侧边栏整体压缩，别让导航区吃掉历史区 */
+@media (max-height: 760px) {
+  .c-sidebar__core { padding-block: var(--sp-1); }
+  .c-new-session,
+  .c-nav-item { min-height: 34px; padding-block: 6px; }
+  .c-session-item { min-height: 34px; padding-block: 6px; }
+}

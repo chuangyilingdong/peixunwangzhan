@@ -98,9 +98,25 @@ try {
   assert.equal(created.status, 200, `新建会话失败: ${JSON.stringify(created.data)}`);
   const conversationId = created.data.id;
 
+  // 学生不能手写代码了，所以「先有这些文件」这个前置由测试自己写进产物表。
+  // 这里验的是沙箱执行，不是产物的来源。
+  const kindOf = (name) => (/\.html?$/i.test(name) ? 'html' : /\.css$/i.test(name) ? 'css' : /\.json$/i.test(name) ? 'json' : 'js');
+  function seedArtifacts(files, entryFile) {
+    const driver = new DatabaseSync(dbPath);
+    const now = new Date().toISOString();
+    // 先清空：与旧接口「整体替换」的语义保持一致，
+    // 否则「只留 HTML 时找不到 JS 入口」这类断言会因为残留文件而失效。
+    driver.prepare('DELETE FROM vibecoding_artifacts WHERE conversation_id=?').run(conversationId);
+    for (const [name, content] of Object.entries(files)) {
+      driver.prepare('INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+        .run(`vibeart_test_${name.replace(/[^a-z0-9]/gi, '')}`, conversationId, null, name, kindOf(name), content, Buffer.byteLength(content), 1, now, now);
+    }
+    if (entryFile) driver.prepare('UPDATE vibecoding_conversations SET entry_file=? WHERE id=?').run(entryFile, conversationId);
+    driver.close();
+  }
+
   async function saveAndRun(files, entryFile) {
-    const saved = await api(`/api/student/vibecoding/conversations/${conversationId}`, { method: 'PUT', token: student, body: { files, entryFile } });
-    assert.equal(saved.status, 200, `保存代码失败: ${JSON.stringify(saved.data)}`);
+    seedArtifacts(files, entryFile);
     return api(`/api/student/vibecoding/conversations/${conversationId}/runs`, { method: 'POST', token: student, body: {} });
   }
 

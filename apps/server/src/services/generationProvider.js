@@ -10,7 +10,9 @@ function svgDataUrl(title, subtitle, hue) {
 }
 function mockProvider(model = AI_PROVIDER_MODEL) {
   const labels = { TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材', VIDEO: '短片素材' };
-  const mockText = (prompt) => `这是本地模拟回复。\n\n你说的是：${String(prompt || '').slice(0, 200)}\n\n\`\`\`js\nconsole.log('hello from mock');\n\`\`\`\n`;
+  // 模拟回复按当前 VibeCoding 的产物约定来写：带文件名的围栏（```语言 文件名）。
+  // 这样本地 mock 也能真实走通「流式解析产物 → 落库 → 前端产物卡片」整条链路。
+  const mockText = (prompt) => `这是本地模拟回复。\n\n你说的是：${String(prompt || '').slice(0, 200)}\n\n\`\`\`html index.html\n<!doctype html>\n<html lang="zh-CN">\n<head>\n  <meta charset="utf-8" />\n  <title>本地模拟页面</title>\n</head>\n<body>\n  <h1>本地模拟页面</h1>\n  <script src="script.js"></script>\n</body>\n</html>\n\`\`\`\n\n\`\`\`js script.js\nconsole.log('hello from mock');\n\`\`\`\n`;
   return {
     name: 'local-mock',
     // 如实回报被请求的模型，便于验证「课时指定模型」这类覆盖是否生效

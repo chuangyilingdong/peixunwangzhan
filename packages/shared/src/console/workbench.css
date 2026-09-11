@@ -1,0 +1,346 @@
+/* ============================================================================
+   VibeCoding Console — 工作台层
+   右侧分栏（可拖拽调宽）+ 页签 + 预览/源码/控制台三个面板 + 对话里的产物卡片。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.c-workbench {
+  position: relative;
+  display: flex;
+  flex: 0 0 var(--workbench-width);
+  flex-direction: column;
+  width: var(--workbench-width);
+  min-width: 0;
+  overflow: hidden;
+  border-inline-start: 1px solid var(--border);
+  background: var(--bg-surface);
+  container-type: inline-size;
+}
+/* 分栏模式下放开 overflow，让拖拽手柄的命中区能伸到对话侧 */
+.c-workbench.is-split { overflow: visible; }
+
+/* 浮层（720~960px）：浮在对话内容之上，宽度仍是可用宽的 50% 封顶 */
+.c-workbench[data-mode="overlay"] {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 220;
+  width: min(var(--workbench-width), calc(100vw - 24px));
+  box-shadow: var(--elev-3);
+}
+
+/* 全屏（≤720px）：整块盖上，配 role=dialog */
+.c-workbench[data-mode="mobile"] {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  width: 100%;
+  height: 100dvh;
+}
+
+/* ── 拖拽调宽手柄 ───────────────────────────────────────────────────────
+   命中区 16px、一半压在对话侧：工作台自己 overflow:hidden，而预览是原生网页
+   表面会吃掉指针事件，把手必须能从相邻面板够到。
+   视觉线只有 2px，hover 只换色不加粗——拖拽时线不会跳一下。 */
+.c-workbench-resizer {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: -8px;
+  width: 16px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+  background: none;
+}
+.c-workbench-resizer::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 8px;
+  width: 2px;
+  background: var(--border-strong);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+.c-workbench-resizer:hover::before,
+.c-workbench-resizer:focus-visible::before,
+.c-workbench-resizer.is-dragging::before { background: var(--accent); }
+.c-workbench-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+
+html.is-workbench-resizing,
+html.is-workbench-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* ── 顶部条（48px）+ 页签 ─────────────────────────────────────────────── */
+.c-workbench__chrome {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 48px;
+  min-height: 48px;
+  padding: 0 var(--sp-3);
+  border-block-end: 1px solid var(--border);
+}
+.c-workbench__tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.c-workbench__tabs::-webkit-scrollbar { display: none; }
+.c-workbench__tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+  max-width: 220px;
+  padding: 0 var(--sp-2);
+  height: 46px;
+  border-block-end: 2px solid transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  transition: color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.c-workbench__tab span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-workbench__tab:hover { color: var(--text-muted); }
+.c-workbench__tab.is-active { border-block-end-color: var(--text-dim); color: var(--text); }
+.c-workbench__tab:focus-visible { outline: none; box-shadow: var(--focus-ring-inset); }
+.c-workbench__title { color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+
+.c-workbench__surface { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.c-workbench__layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+/* 必须显式关掉未激活的页签面板：display:flex 会盖过 UA 的 [hidden]{display:none}，
+   否则三个面板会叠在一起同时渲染。 */
+.c-workbench__layer[hidden] { display: none; }
+
+/* 窄屏：三个页签均分宽度，避免 120px 最小宽把标签截成「控制…」 */
+@media (max-width: 768px) {
+  .c-workbench__tab { flex: 1; min-width: 0; justify-content: center; padding: 0 var(--sp-1); }
+}
+
+/* ── 预览面板 ─────────────────────────────────────────────────────────────
+   地址栏只作展示（如果rame 里的学生作品），保留刷新与「在新窗口打开」。 */
+.c-preview__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 46px;
+  min-height: 46px;
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+.c-preview__url {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-preview__frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; display: block; }
+.c-preview__status {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+/* 载入中的细线：54×2px 的轨道 + 一条扫过的橙线 */
+.c-progress-line {
+  position: relative;
+  height: 2px;
+  width: 54px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+}
+@keyframes c-progress-sweep {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(210%); }
+}
+.c-progress-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 50%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  animation: c-progress-sweep 1.4s ease-in-out infinite;
+}
+
+/* ── 源码面板（只读） ─────────────────────────────────────────────────── */
+.c-source__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 46px;
+  min-height: 46px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.c-source__name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-source__code {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--sp-3);
+  overflow: auto;
+  scrollbar-gutter: stable;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre;
+}
+
+/* 文件选择条（多个产物时） */
+.c-file-tabs { display: flex; gap: var(--sp-2); overflow-x: auto; padding: var(--sp-2) var(--sp-3) 0; scrollbar-width: none; }
+.c-file-tabs::-webkit-scrollbar { display: none; }
+.c-file-tab {
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.c-file-tab:hover { background: var(--bg-hover); color: var(--text-muted); }
+.c-file-tab.is-active { background: var(--bg-hover); border-color: var(--border-strong); color: var(--text); }
+
+/* ── 控制台面板 ───────────────────────────────────────────────────────── */
+.c-console-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.c-console-line {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 1px 0;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.c-console-line__src { flex: none; color: var(--text-dim); }
+.c-console-line.is-error { color: var(--danger); }
+.c-console-line.is-warn { color: var(--warn); }
+.c-console-line.is-info { color: var(--ok); }
+
+/* ── 空态 ─────────────────────────────────────────────────────────────── */
+.c-workbench__empty {
+  display: grid;
+  place-items: center;
+  gap: var(--sp-2);
+  min-height: 100%;
+  padding: var(--sp-5);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   对话里的产物卡片
+   规矩：「主体 = 主动作」。能预览才给 Open，不能预览就只给下载，
+   绝不出现「点了 Open 其实在下载」。
+   ══════════════════════════════════════════════════════════════════════════ */
+.c-artifacts { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-3) 0 0; }
+.c-artifact-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard);
+}
+.c-artifact-chip:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
+.c-artifact-chip__body {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  text-align: left;
+}
+.c-artifact-chip__icon {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius-md);
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 10%, var(--bg-surface));
+}
+.c-artifact-chip__icon[data-kind="data"] { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--bg-surface)); }
+.c-artifact-chip__icon[data-kind="code"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface)); }
+.c-artifact-chip__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-artifact-chip__meta { display: flex; align-items: center; gap: var(--sp-2); margin-top: 3px; color: var(--text-dim); font-size: var(--fs-xs); }
+.c-artifact-chip__actions { display: flex; align-items: center; gap: var(--sp-1); }
+.c-artifact-chip__open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--sp-8);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  transition: background-color var(--dur-fast) var(--ease-standard);
+}
+.c-artifact-chip__open:hover { background: var(--bg-hover); }
+.c-artifact-chip__open:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+@media (max-width: 768px) {
+  .c-artifact-chip__body { grid-template-columns: 2.25rem minmax(0, 1fr); gap: var(--sp-2); }
+  .c-artifact-chip__icon { width: 2.25rem; height: 2.25rem; }
+  .c-artifact-chip__open { width: 44px; height: 44px; padding: 0; justify-content: center; }
+  .c-artifact-chip__open span { display: none; }
+}

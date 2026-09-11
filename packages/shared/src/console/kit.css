@@ -1,0 +1,432 @@
+/* ============================================================================
+   VibeCoding Console — 原语层
+   元素重置 + 控件/卡片/状态标记。类名统一 `c-` 前缀，与平台浅色页面零冲突；
+   元素级重置一律挂在 [data-console] 下，不出控制台子树。
+   来源：OpenSquilla（Apache-2.0）control-visual-system.css + apple-modern.css
+   的最终生效值（该项目有两层覆盖，这里只取最终结果）。
+   ========================================================================== */
+
+/* ── 元素重置 ─────────────────────────────────────────────────────────────
+   这些标签在平台全局样式里都有浅色定义，必须逐个压回中性。 */
+/* 只承载 [data-console] 令牌的包装层：display:contents 让它不产生盒子，
+   但自定义属性照常往下继承——Toast 宿主要挂在控制台子树里才拿得到令牌。 */
+.c-root { display: contents; }
+
+[data-console] *,
+[data-console] *::before,
+[data-console] *::after { box-sizing: border-box; }
+
+[data-console] button,
+[data-console] input,
+[data-console] select,
+[data-console] textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  margin: 0;
+}
+[data-console] button { border: 0; background: none; cursor: pointer; padding: 0; }
+[data-console] button:disabled { cursor: not-allowed; }
+[data-console] p,
+[data-console] h1,
+[data-console] h2,
+[data-console] h3,
+[data-console] h4,
+[data-console] ul,
+[data-console] ol,
+[data-console] figure,
+[data-console] blockquote { margin: 0; padding: 0; }
+[data-console] ul,
+[data-console] ol { list-style: none; }
+[data-console] a { color: inherit; text-decoration: none; }
+[data-console] pre,
+[data-console] code { font-family: var(--font-mono); }
+[data-console] svg { display: block; flex: none; }
+[data-console] ::selection {
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* 滚动条：细、低对比，悬停才提亮。 */
+[data-console] ::-webkit-scrollbar { width: 10px; height: 10px; }
+[data-console] ::-webkit-scrollbar-track { background: transparent; }
+[data-console] ::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+[data-console] ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); background-clip: content-box; }
+
+/* ── 按钮 ─────────────────────────────────────────────────────────────────
+   控件一律「填充面承载层级，描边只留给焦点」——参考里 apple-modern 层把
+   基础层的描边按钮全抹平了，这里直接写最终形态。 */
+.c-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-spring);
+}
+.c-btn:not(:disabled):hover { background: var(--bg-hover); }
+.c-btn:disabled { opacity: var(--state-disabled-opacity); }
+.c-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* 按压：全局统一的动词，回弹用唯一被批准的过冲缓动。 */
+.c-btn:not(:disabled):active { transform: scale(0.975); }
+
+.c-btn--primary {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  box-shadow: 0 5px 16px -9px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.c-btn--primary:not(:disabled):hover { background: var(--accent-hover); }
+
+.c-btn--danger { background: var(--danger); color: #1b0505; }
+
+.c-btn--ghost { background: transparent; }
+.c-btn--ghost:not(:disabled):hover { background: var(--bg-hover); }
+
+.c-btn--sm { min-height: 30px; padding: 5px 10px; font-size: var(--fs-xs); }
+
+/* 图标按钮：圆形，与发送键同一形状语言。 */
+.c-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-dim);
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-spring);
+}
+.c-icon-btn:not(:disabled):hover { background: var(--bg-hover); color: var(--text); }
+.c-icon-btn:disabled { opacity: var(--state-disabled-opacity); }
+.c-icon-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.c-icon-btn:not(:disabled):active { transform: scale(0.94); }
+.c-icon-btn--sm { width: 28px; height: 28px; min-width: 28px; }
+.c-icon-btn--danger { color: var(--danger); }
+.c-icon-btn--accent { color: var(--accent); }
+
+/* ── 输入类控件 ───────────────────────────────────────────────────────── */
+.c-input {
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  outline: none;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard);
+}
+.c-input::placeholder { color: var(--text-dim); }
+/* 焦点态要连 border-color 一起接管：平台全局的 `input:focus{border-color:#7d68db}`
+   特异性高于裸类选择器，不写就会在深色面板上留下一条紫色描边。 */
+.c-input:focus {
+  background: var(--bg-surface);
+  border-color: transparent;
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+.c-input:focus-visible { outline: none; }
+.c-input:disabled { opacity: var(--state-disabled-opacity); }
+
+/* ── 标记 / 药丸 ─────────────────────────────────────────────────────────
+   状态一律「低饱和底 + 同色文字」，靠 --*-fill 令牌换算，不写死色值。 */
+.c-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-quiet);
+  white-space: nowrap;
+}
+.c-pill--ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.c-pill--warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.c-pill--danger { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.c-pill--info { color: var(--info); background: color-mix(in srgb, var(--info) 14%, transparent); }
+.c-pill--accent { color: var(--accent-secondary); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* 等宽小标签：类型、ID、状态码这类「读数」用。 */
+.c-tag-mono {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* ── eyebrow：一切小标题的统一写法 ─────────────────────────────────────── */
+.c-eyebrow {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: var(--fw-eyebrow);
+  letter-spacing: var(--eyebrow-track);
+  text-transform: uppercase;
+}
+
+.c-muted { color: var(--text-muted); }
+.c-dim { color: var(--text-dim); }
+.c-num { font-variant-numeric: tabular-nums; }
+
+/* ── 状态点 + 读数行 ─────────────────────────────────────────────────────
+   「复眼」读数：色点 + 等宽标签 + 数值。控制台里所有状态都用它。 */
+.c-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--text-dim);
+}
+.c-dot--ok { background: var(--ok); }
+.c-dot--warn { background: var(--warn-fill); }
+.c-dot--danger { background: var(--danger); }
+.c-dot--info { background: var(--info); }
+.c-dot--queued { background: var(--queued); }
+.c-dot--accent { background: var(--accent); }
+
+/* 全局唯一的环境脉冲：只用 opacity（合成层友好，不触发重绘）。 */
+@keyframes c-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.c-pulse { animation: c-live-pulse var(--dur-pulse) var(--ease-standard) infinite; }
+
+/* 运行中的转圈环：与「脉冲点」区分语义（环=进行中，点=活着）。 */
+@keyframes c-spin { to { transform: rotate(360deg); } }
+.c-ring {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 1.5px solid color-mix(in srgb, var(--text-dim) 48%, transparent);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-full);
+  animation: c-spin var(--dur-pulse) linear infinite;
+}
+
+.c-readout {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+/* ── 卡片 ─────────────────────────────────────────────────────────────────
+   圆角即层级：卡片 14px。进入时统一 fade-up，列表项配 --i 做错峰。 */
+@keyframes c-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.c-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--bg-surface);
+  box-shadow: var(--elev-1);
+  animation: c-fade-up var(--dur-enter) var(--ease-out) both;
+}
+.c-fade-item { animation: c-fade-up var(--dur-enter) var(--ease-out) both; animation-delay: calc(var(--i, 0) * 40ms); }
+
+.c-card--interactive { transition: border-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-out); }
+.c-card--interactive:hover {
+  border-color: var(--border-focus);
+  box-shadow: var(--elev-1-hover);
+  transform: translateY(-1px);
+}
+
+/* ── 空态 ─────────────────────────────────────────────────────────────── */
+.c-empty {
+  display: grid;
+  place-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-6) var(--sp-4);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.c-empty strong { color: var(--text-muted); font-size: var(--fs-md); font-weight: 560; }
+.c-empty p { max-width: 46ch; line-height: 1.6; }
+
+/* ── 载入指示 ─────────────────────────────────────────────────────────── */
+.c-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-full);
+  animation: c-spin 700ms linear infinite;
+}
+
+/* 骨架微光：参考里唯一不走 --dur-pulse 的循环，属特例（1.4s）。 */
+@keyframes c-skeleton {
+  from { background-position: 180% 0; }
+  to { background-position: -80% 0; }
+}
+.c-skeleton {
+  background: linear-gradient(
+    100deg,
+    var(--bg-surface) 30%,
+    var(--bg-hover) 50%,
+    var(--bg-surface) 70%
+  );
+  background-size: 220% 100%;
+  animation: c-skeleton 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* ── 键盘角标 ─────────────────────────────────────────────────────────── */
+.c-kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* ── 弹出菜单 ────────────────────────────────────────────────────────────
+   挂在触发元素旁边；进入用 spring 过冲，退出更快一档。 */
+.c-menu {
+  position: fixed;
+  z-index: 700;
+  min-width: 176px;
+  max-width: 260px;
+  padding: var(--sp-1);
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--elev-3);
+  animation: c-menu-in var(--dur-fast) var(--ease-out) both;
+}
+@keyframes c-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.c-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+.c-menu button:hover:not(:disabled) { background: var(--bg-hover); }
+.c-menu button:disabled { color: var(--text-dim); cursor: not-allowed; }
+.c-menu button.is-danger { color: var(--danger); }
+.c-menu button.is-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.c-menu__sep { height: 1px; margin: var(--sp-1) 4px; background: var(--hairline); }
+.c-menu__label {
+  padding: 6px 10px 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: var(--fw-eyebrow);
+  letter-spacing: var(--eyebrow-track);
+  text-transform: uppercase;
+}
+
+/* ── 对话框 ──────────────────────────────────────────────────────────────
+   原生 prompt/confirm 在深色控制台里太割裂，小操作一律用它。 */
+.c-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  background: var(--scrim);
+  animation: c-scrim-in var(--dur-base) var(--ease-out) both;
+}
+.c-dialog {
+  width: min(420px, 100%);
+  padding: var(--sp-4);
+  display: grid;
+  gap: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-modal);
+  background: var(--bg-surface);
+  box-shadow: var(--elev-3);
+  animation: c-fade-up var(--dur-enter) var(--ease-out) both;
+}
+.c-dialog h3 { color: var(--text); font-size: var(--fs-md); font-weight: 600; }
+.c-dialog p { color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.6; }
+.c-dialog__actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+
+/* ── Toast ───────────────────────────────────────────────────────────────
+   进入 200ms / ease-out，退出 120ms / ease-in（退出比进入快一档）。 */
+.c-toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  pointer-events: none;
+}
+.c-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  max-width: min(380px, calc(100vw - 32px));
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+  box-shadow: var(--elev-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  pointer-events: auto;
+  animation: c-toast-in var(--dur-base) var(--ease-spring) both;
+}
+.c-toast--danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.c-toast--ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+@keyframes c-toast-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .c-toast { background: var(--bg-elevated); }
+}

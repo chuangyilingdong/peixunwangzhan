@@ -1,0 +1,192 @@
+// VibeCoding 产物：AI 产出的每一个文件。
+//
+// 产物从助手回复里的「```语言 文件名」围栏解析出来——沿用平台既有的约定，
+// 不引入工具调用协议，任何模型都能跑。没有文件名的围栏只当示例代码，不算产物。
+//
+// 关键能力是**流式增量解析**：模型还在吐字时，每有一个围栏闭合就立刻落库并推事件，
+// 学生才能看到产物卡片一个个出现，而不是等整轮结束才一次性冒出来。
+import { count, id, nowIso, q, row, rows } from '../lib.js';
+
+export const ARTIFACT_LIMITS = Object.freeze({ maxFiles: 24, maxFileBytes: 256 * 1024, maxTotalBytes: 2 * 1024 * 1024 });
+
+const KIND_BY_EXTENSION = {
+  html: 'html', htm: 'html', css: 'css', js: 'js', mjs: 'js', cjs: 'js',
+  json: 'json', md: 'md', markdown: 'md', svg: 'svg', csv: 'csv', txt: 'text', text: 'text',
+};
+
+export function kindForName(name) {
+  const extension = String(name || '').split('.').pop()?.toLowerCase();
+  return KIND_BY_EXTENSION[extension] || 'text';
+}
+
+// 与 packages/shared/src/vibecodingProject.js 的 parseFenceInfo 同一套规则
+// （服务端不引共享包，所以这里保留一份；两边改要一起改）
+const FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/;
+
+export function parseFenceInfo(raw) {
+  const parts = String(raw || '').trim().split(/\s+/).filter(Boolean);
+  const lang = parts[0] || '';
+  const filename = parts.slice(1).find((part) => FILE_NAME_PATTERN.test(part) && !part.includes('..') && part.includes('.')) || '';
+  return { lang, filename };
+}
+
+// 匹配**已闭合**的围栏块；未闭合的（还在流式中）不会命中，所以不会提前产出半截文件。
+const CLOSED_FENCE_PATTERN = /^[ \t]*```([^\n`]*)\n([\s\S]*?)\n?[ \t]*```[ \t]*$/gm;
+
+/**
+ * 扫描文本里所有已闭合且带文件名的围栏，返回产物候选。
+ * @param from 已经处理过的闭合围栏数量（增量模式用）
+ */
+export function scanArtifacts(text, { from = 0 } = {}) {
+  const source = String(text || '');
+  const found = [];
+  CLOSED_FENCE_PATTERN.lastIndex = 0;
+  let match;
+  let index = 0;
+  while ((match = CLOSED_FENCE_PATTERN.exec(source)) !== null) {
+    index += 1;
+    if (index <= from) continue;
+    const { filename } = parseFenceInfo(match[1]);
+    if (!filename) continue;
+    const content = match[2];
+    found.push({
+      name: filename,
+      kind: kindForName(filename),
+      content,
+      bytes: Buffer.byteLength(content),
+      fenceIndex: index,
+    });
+  }
+  return { artifacts: found, closedFences: index };
+}
+
+/**
+ * 增量扫描器：把流式增量喂进来，每调用一次返回「这次新闭合」的产物。
+ * 状态只有一个数字（已处理的闭合围栏数），用完即弃，不需要清理。
+ */
+export function createArtifactScanner() {
+  let buffer = '';
+  let processed = 0;
+  return {
+    push(delta) {
+      buffer += String(delta || '');
+      const { artifacts, closedFences } = scanArtifacts(buffer, { from: processed });
+      processed = closedFences;
+      return artifacts;
+    },
+    get text() { return buffer; },
+  };
+}
+
+/** 从一段完整文本提取产物（非流式场景：整轮结束后兜底补扫一次） */
+export function extractArtifacts(text) {
+  return scanArtifacts(text).artifacts;
+}
+
+// ── 读写 ────────────────────────────────────────────────────────────────────
+
+export function normalizeArtifact(value) {
+  if (!value) return null;
+  return {
+    id: value.id,
+    conversationId: value.conversation_id,
+    messageId: value.message_id || null,
+    name: value.name,
+    kind: value.kind || kindForName(value.name),
+    bytes: Number(value.bytes || 0),
+    revision: Number(value.revision || 1),
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    // 列表接口默认不带正文：产物卡片只需要元信息，正文按需取
+    ...(value.content === undefined ? {} : { content: value.content }),
+  };
+}
+
+export function listArtifacts(conversationId, { includeContent = false } = {}) {
+  const columns = includeContent ? '*' : 'id,conversation_id,message_id,name,kind,bytes,revision,created_at,updated_at';
+  return rows(
+    `SELECT ${columns} FROM vibecoding_artifacts WHERE conversation_id=? ORDER BY name ASC`,
+    [conversationId],
+  ).map(normalizeArtifact);
+}
+
+export function getArtifact(conversationId, artifactId) {
+  return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=? AND conversation_id=?', [artifactId, conversationId]));
+}
+
+/** 产物 → 文件映射（预览文档拼装、提交快照、作品广场都用它） */
+export function artifactsAsFiles(conversationId) {
+  const result = {};
+  for (const artifact of rows('SELECT name, content FROM vibecoding_artifacts WHERE conversation_id=? ORDER BY name ASC', [conversationId])) {
+    result[artifact.name] = String(artifact.content ?? '');
+  }
+  return result;
+}
+
+/**
+ * 写入/更新一个产物。同名视为同一份产物的新修订（revision +1），
+ * 而不是新建一条——否则模型每次重写都会在聊天里堆出一串重复卡片。
+ */
+export function upsertArtifact({ conversationId, messageId = null, name, content, at = null }) {
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return null;
+  const text = String(content ?? '');
+  const bytes = Buffer.byteLength(text);
+  if (bytes > ARTIFACT_LIMITS.maxFileBytes) return null;
+  const total = Number(count('SELECT COALESCE(SUM(bytes),0) n FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]) || 0);
+  const existing = row('SELECT * FROM vibecoding_artifacts WHERE conversation_id=? AND name=?', [conversationId, cleanName]);
+  if (!existing && total + bytes > ARTIFACT_LIMITS.maxTotalBytes) return null;
+  const timestamp = at || nowIso();
+
+  if (existing) {
+    // 内容没变就不动修订号（模型常把同一个文件原样再写一遍）
+    if (existing.content === text) return normalizeArtifact(existing);
+    q('UPDATE vibecoding_artifacts SET content=?,bytes=?,kind=?,revision=revision+1,message_id=?,updated_at=? WHERE id=?',
+      [text, bytes, kindForName(cleanName), messageId, timestamp, existing.id]);
+    return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=?', [existing.id]));
+  }
+
+  const artifactId = id('vibeart');
+  q(`INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [artifactId, conversationId, messageId, cleanName, kindForName(cleanName), text, bytes, 1, timestamp, timestamp]);
+  return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=?', [artifactId]));
+}
+
+/** 批量写入（整轮结束后的兜底补扫） */
+export function upsertArtifacts(conversationId, artifacts, { messageId = null } = {}) {
+  const written = [];
+  for (const artifact of artifacts) {
+    const saved = upsertArtifact({ conversationId, messageId, name: artifact.name, content: artifact.content });
+    if (saved) written.push(saved);
+  }
+  return written;
+}
+
+/** 预览入口：优先 index.html，否则第一个 HTML 产物，再否则第一个产物 */
+export function pickEntryArtifact(artifacts) {
+  return artifacts.find((item) => item.name === 'index.html')
+    || artifacts.find((item) => item.kind === 'html')
+    || artifacts[0]
+    || null;
+}
+
+// 新建会话时的起始产物：让学生一进课堂就有东西可跑，而不是面对一块空白。
+export const DEFAULT_ARTIFACTS = Object.freeze([
+  {
+    name: 'index.html',
+    content: '<!doctype html>\n<html lang="zh-CN">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>我的第一个网页</title>\n  <link rel="stylesheet" href="style.css" />\n</head>\n<body>\n  <h1>你好，AI 魔法学院！</h1>\n  <p>在这里写下你的第一个网页。</p>\n  <script src="script.js"></script>\n</body>\n</html>\n',
+  },
+  {
+    name: 'style.css',
+    content: 'body {\n  font-family: system-ui, -apple-system, "PingFang SC", sans-serif;\n  padding: 24px;\n  color: #2f2a45;\n}\n',
+  },
+  {
+    name: 'script.js',
+    content: "console.log('你好，VibeCoding！');\n",
+  },
+]);
+
+export function seedDefaultArtifacts(conversationId) {
+  return upsertArtifacts(conversationId, DEFAULT_ARTIFACTS);
+}

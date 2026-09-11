@@ -164,7 +164,7 @@ try {
   assert.equal(cleared.data.removed, 2, `清空应删除 2 条，实际 ${cleared.data.removed}`);
   detail = (await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student })).data;
   assert.equal(detail.messages.length, 0, '清空后应没有消息');
-  assert.ok(Object.keys(detail.files).length, '清空聊天不应删除代码文件');
+  assert.ok((detail.artifacts || []).length, '清空聊天不应删除产物文件');
 
   // 7) 已提交的会话不能编辑
   await stream(`/api/student/vibecoding/conversations/${conversationId}/messages`, { token: student, body: { content: '准备提交' } });

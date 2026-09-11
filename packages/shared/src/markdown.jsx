@@ -23,20 +23,27 @@ function languageOf(raw) {
   return LANGUAGE_ALIASES[value] || (hljs.getLanguage(value) ? value : '');
 }
 
-function CodeBlock({ code, lang, filename, onApply }) {
+// 单个代码块高亮的上限：超过就退化成纯等宽文本，避免一次性高亮几万字符把页面卡住
+const HIGHLIGHT_MAX_CHARS = 30_000;
+
+function CodeBlock({ code, lang, filename, onApply, streaming = false }) {
   const codeRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const language = languageOf(lang);
+  // 流式期间不高亮：每个 delta 都重跑整块高亮会明显掉帧（参考项目也是这么取舍的），
+  // 等这条消息落地后再一次性着色。
+  const skipHighlight = streaming || String(code || '').length > HIGHLIGHT_MAX_CHARS;
   useEffect(() => {
     const element = codeRef.current;
     if (!element) return;
+    if (skipHighlight) { element.textContent = code; return; }
     try {
       // hljs 会对输入做实体转义后再包高亮标签，输出是安全的
       element.innerHTML = language ? hljs.highlight(code, { language }).value : hljs.highlightAuto(code).value;
     } catch {
       element.textContent = code;
     }
-  }, [code, language]);
+  }, [code, language, skipHighlight]);
   async function copy() {
     try {
       await navigator.clipboard.writeText(code);
@@ -70,7 +77,7 @@ function InlineNodes({ tokens }) {
   });
 }
 
-function BlockNodes({ tokens, onApplyFile }) {
+function BlockNodes({ tokens, onApplyFile, streaming }) {
   return (tokens || []).map((token, index) => {
     const key = `${token.type}-${index}`;
     switch (token.type) {
@@ -79,13 +86,13 @@ function BlockNodes({ tokens, onApplyFile }) {
         return <Tag key={key} className="md-heading"><InlineNodes tokens={token.tokens} /></Tag>;
       }
       case 'paragraph': return <p key={key}><InlineNodes tokens={token.tokens} /></p>;
-      case 'code': { const fence = parseFenceInfo(token.lang); return <CodeBlock key={key} code={token.text} lang={fence.lang} filename={fence.filename} onApply={onApplyFile} />; }
-      case 'blockquote': return <blockquote key={key}><BlockNodes tokens={token.tokens} onApplyFile={onApplyFile} /></blockquote>;
+      case 'code': { const fence = parseFenceInfo(token.lang); return <CodeBlock key={key} code={token.text} lang={fence.lang} filename={fence.filename} onApply={onApplyFile} streaming={streaming} />; }
+      case 'blockquote': return <blockquote key={key}><BlockNodes tokens={token.tokens} onApplyFile={onApplyFile} streaming={streaming} /></blockquote>;
       case 'hr': return <hr key={key} />;
       case 'space': return null;
       case 'list': {
         const Tag = token.ordered ? 'ol' : 'ul';
-        return <Tag key={key}>{token.items.map((item, itemIndex) => <li key={itemIndex}><BlockNodes tokens={item.tokens} onApplyFile={onApplyFile} /></li>)}</Tag>;
+        return <Tag key={key}>{token.items.map((item, itemIndex) => <li key={itemIndex}><BlockNodes tokens={item.tokens} onApplyFile={onApplyFile} streaming={streaming} /></li>)}</Tag>;
       }
       case 'table': return <div className="md-table-wrap" key={key}><table>
         <thead><tr>{token.header.map((cell, cellIndex) => <th key={cellIndex}><InlineNodes tokens={cell.tokens} /></th>)}</tr></thead>
@@ -97,9 +104,14 @@ function BlockNodes({ tokens, onApplyFile }) {
   });
 }
 
-export function MarkdownView({ content = '', className = '', onApplyFile = null }) {
+/**
+ * Markdown 渲染。
+ * @param streaming 流式期间传 true：跳过语法高亮（每个 delta 重跑高亮会掉帧），
+ *                  并把代码块当纯文本渲染，落地后在一次性着色。
+ */
+export function MarkdownView({ content = '', className = '', onApplyFile = null, streaming = false }) {
   const tokens = useMemo(() => {
     try { return marked.lexer(String(content || '')); } catch { return []; }
   }, [content]);
-  return <div className={`md-view ${className}`.trim()}><BlockNodes tokens={tokens} onApplyFile={onApplyFile} /></div>;
+  return <div className={`md-view ${className}`.trim()}><BlockNodes tokens={tokens} onApplyFile={onApplyFile} streaming={streaming} /></div>;
 }

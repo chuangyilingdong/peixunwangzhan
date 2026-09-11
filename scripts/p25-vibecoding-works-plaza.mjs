@@ -91,11 +91,20 @@ try {
   assert.match(chat.headers.get('content-type') || '', /text\/event-stream/, 'AI 对话应为 SSE 流式');
 
   const gameScript = "console.log('P25-GAME-MARKER');\ndocument.title = '打地鼠';\n";
-  const saved = await api(`/api/student/vibecoding/conversations/${conversationId}`, {
-    method: 'PUT', token: student,
-    body: { files: { 'index.html': '<!doctype html><html><head><title>打地鼠</title></head><body><h1>打地鼠</h1><script src="game.js"></script></body></html>', 'game.js': gameScript }, entryFile: 'index.html' },
-  });
-  assert.equal(saved.status, 200, `保存代码失败: ${JSON.stringify(saved.data)}`);
+  const gameHtml = '<!doctype html><html><head><title>打地鼠</title></head><body><h1>打地鼠</h1><script src="game.js"></script></body></html>';
+  // 学生不能手写代码了，所以这里直接写产物表来准备作品内容；
+  // 本脚本验的是「提交→点评→发布→公开可玩」这条链路，不是产物怎么来的。
+  {
+    const driver = new DatabaseSync(dbPath);
+    const now = new Date().toISOString();
+    driver.prepare('DELETE FROM vibecoding_artifacts WHERE conversation_id=?').run(conversationId);
+    for (const [name, kind, content] of [['index.html', 'html', gameHtml], ['game.js', 'js', gameScript]]) {
+      driver.prepare('INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+        .run(`vibeart_p25_${kind}`, conversationId, null, name, kind, content, Buffer.byteLength(content), 1, now, now);
+    }
+    driver.prepare('UPDATE vibecoding_conversations SET entry_file=? WHERE id=?').run('index.html', conversationId);
+    driver.close();
+  }
 
   // 2) 提交必须带版权确认
   const noConsent = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: {} });

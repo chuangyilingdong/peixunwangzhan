@@ -94,7 +94,9 @@ try {
   assert.equal(created.status, 200, `新建会话失败: ${JSON.stringify(created.data)}`);
   const conversationId = created.data.id;
   assert.equal(created.data.entryFile, 'index.html', '默认入口文件应为 index.html');
-  assert.deepEqual(Object.keys(created.data.files).sort(), ['index.html', 'script.js', 'style.css'], '默认应带三个文件');
+  assert.equal(created.data.files, undefined, '会话不再下发 files（代码已改成产物模型）');
+  assert.deepEqual((created.data.artifacts || []).map((a) => a.name).sort(), ['index.html', 'script.js', 'style.css'], '起始应带三个产物');
+  assert.equal((created.data.artifacts || []).find((a) => a.name === 'index.html')?.kind, 'html', '产物应推断出类型');
 
   // SSE 流式回复
   const streamResponse = await fetch(`http://127.0.0.1:${port}/api/student/vibecoding/conversations/${conversationId}/messages`, {
@@ -139,18 +141,29 @@ try {
   const list = await api('/api/student/vibecoding/conversations?limit=10', { token: student });
   assert.equal(list.data.total, 1, `会话列表应为 1 条，实际 ${list.data.total}`);
 
-  // 保存代码文件
-  const saved = await api(`/api/student/vibecoding/conversations/${conversationId}`, {
-    method: 'PUT', token: student,
-    body: { files: { 'index.html': '<h1>hi</h1>', 'app.js': 'console.log(1)' }, entryFile: 'index.html' },
+  // 手改代码被明确拒绝：代码只有一个来源——AI 产出
+  const editFiles = await api(`/api/student/vibecoding/conversations/${conversationId}`, {
+    method: 'PUT', token: student, body: { files: { 'index.html': '<h1>hi</h1>' } },
   });
-  assert.equal(saved.status, 200, `保存文件失败: ${JSON.stringify(saved.data)}`);
-  assert.deepEqual(Object.keys(saved.data.files).sort(), ['app.js', 'index.html'], '保存后应只剩两个文件');
+  assert.equal(editFiles.status, 400, `手改代码应被拒，实际 ${editFiles.status}`);
+  assert.equal(editFiles.data?.error?.code, 'VIBECODING_FILES_NOT_EDITABLE', '错误码应为 VIBECODING_FILES_NOT_EDITABLE');
+
+  // AI 产出的产物：mock 会用带文件名的围栏写出 index.html 与 script.js
+  const artifactEvents = events.filter((item) => item.event === 'artifact');
+  assert.ok(artifactEvents.length >= 2, `应收到 artifact 事件，实际 ${artifactEvents.length}，事件序列：${events.map((e) => e.event).join(',')}`);
+  assert.ok(Array.isArray(done.data.artifacts) && done.data.artifacts.length === 3, 'done 应带权威产物清单');
+  const indexArtifact = done.data.artifacts.find((a) => a.name === 'index.html');
+  assert.equal(indexArtifact.kind, 'html', 'index.html 应是 html 产物');
+  assert.ok(Number(indexArtifact.revision) >= 2, '同名文件重写应升修订号而不是新建产物');
+  assert.ok(String(indexArtifact.content).includes('本地模拟页面'), '产物内容应是这一轮 AI 写的版本');
+  const one = await api(`/api/student/vibecoding/conversations/${conversationId}/artifacts/${indexArtifact.id}`, { token: student });
+  assert.equal(one.status, 200, '单个产物接口应 200');
+  assert.ok(String(one.data?.content || '').includes('本地模拟页面'), '单个产物接口应返回完整正文');
 
   console.log(JSON.stringify({
     name: 'vibecoding-chat', pass: true,
     conversationId, deltas: deltas.length, creditsCharged: done.data.creditsCharged,
-    messages: detail.data.messages.length, usageRecords: usageRow.n, ledgerEntries: entryRow.n,
+    messages: detail.data.messages.length, artifacts: detail.data.artifacts.length, usageRecords: usageRow.n, ledgerEntries: entryRow.n,
   }, null, 2));
 } catch (error) {
   console.error(serverLog);

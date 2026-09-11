@@ -1,0 +1,207 @@
+/* ============================================================================
+   VibeCoding Console — 页面层
+   控制台之外的几个「整页」：课程入口、教师点评回放、官网公开作品页。
+   它们共用同一套令牌与卡片语言，只是布局更接近一页文章而不是三栏工作台。
+   ========================================================================== */
+
+.c-page {
+  min-height: 100dvh;
+  padding: var(--sp-6) clamp(20px, 5vw, 72px) var(--sp-8);
+  background: var(--bg);
+  overflow-y: auto;
+}
+.c-page__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  min-height: 60vh;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+/* 嵌在浅色站点里的深色「舞台」：不占满视口高度，只作为一块播放区 */
+.c-page--embed { min-height: 0; padding: var(--sp-6) clamp(20px, 5vw, 72px); }
+
+.c-page__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  max-width: 1180px;
+  margin: 0 auto var(--sp-6);
+}
+.c-page__head h1 {
+  margin: var(--sp-2) 0 var(--sp-2);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 1.1rem + 1.4vw, 2.1rem);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: var(--track-display);
+}
+.c-page__sub { max-width: 62ch; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.7; }
+.c-page__actions { display: flex; gap: var(--sp-2); flex: none; }
+
+.c-page__section { max-width: 1180px; margin: 0 auto var(--sp-6); }
+.c-page__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ── 课时卡片（课程入口） ─────────────────────────────────────────────── */
+.c-lesson-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--sp-4);
+}
+.c-lesson { gap: var(--sp-2); }
+.c-lesson.is-locked { opacity: 0.72; }
+.c-lesson__top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.c-lesson__no {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.c-lesson.is-locked .c-lesson__no { background: var(--bg-hover); color: var(--text-dim); }
+.c-lesson__title { color: var(--text); font-size: var(--fs-md); font-weight: 600; line-height: 1.35; }
+.c-lesson__summary {
+  min-height: 3.2em;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+}
+.c-lesson__meta { color: var(--text-dim); font-size: var(--fs-xs); }
+.c-lesson__foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--hairline);
+}
+.c-lesson__foot > span { max-width: 46%; font-size: var(--fs-xs); line-height: 1.5; }
+
+/* ── 只读回放（教师点评 / 公开作品页共用） ─────────────────────────────── */
+.c-replay { max-width: 1180px; margin: 0 auto; display: grid; gap: var(--sp-5); }
+.c-replay__grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: var(--sp-5); align-items: start; }
+.c-replay__panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.c-replay__panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 48px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.c-replay__panel-head > span:first-of-type { flex: 1; }
+.c-replay__thread { max-height: 62vh; overflow-y: auto; padding: var(--sp-3) 0; }
+.c-replay__frame { height: 62vh; border: 0; background: #fff; display: block; }
+.c-replay__files { max-height: 62vh; overflow: auto; padding: var(--sp-3); }
+.c-replay__file + .c-replay__file { margin-top: var(--sp-3); }
+.c-replay__file-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--sp-2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.c-replay__file pre {
+  margin: 0;
+  padding: var(--sp-3);
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--code-block-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+.c-replay__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.c-replay__comment {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+.c-replay__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.c-replay__form { display: grid; gap: var(--sp-3); }
+.c-replay__label { display: grid; gap: var(--sp-2); color: var(--text-muted); font-size: var(--fs-xs); font-weight: 500; }
+.c-replay__choices { display: flex; gap: var(--sp-2); }
+.c-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.c-choice:hover { border-color: var(--border-strong); color: var(--text); }
+.c-choice.is-on { color: var(--text); }
+.c-choice.is-on.is-ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
+.c-choice.is-on.is-danger { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+
+@media (max-width: 960px) {
+  .c-replay__grid { grid-template-columns: minmax(0, 1fr); }
+  .c-page__head { flex-direction: column; }
+  .c-page__actions { align-self: stretch; }
+}
+
+/* ── 工作区零碎件 ─────────────────────────────────────────────────────── */
+.c-model-select {
+  width: auto;
+  max-width: 190px;
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: var(--fs-xs);
+}
+.c-dialog__textarea {
+  min-height: 96px;
+  padding: var(--sp-3);
+  line-height: 1.6;
+  resize: vertical;
+  font-family: inherit;
+}

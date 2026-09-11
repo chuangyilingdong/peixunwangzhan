@@ -1546,6 +1546,58 @@ db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_messages (
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_msg_conversation ON vibecoding_messages(conversation_id, created_at)');
 
+// 产物（artifact）：AI 产出的每一个文件。改成「产物优先」的模型——产物有身份、类型、
+// 大小、修订号，聊天里才能画产物卡片、工作台才能按类型切视图；旧的 files JSON 只有一个
+// 裸的内容映射，拿不到这些信息。
+db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_artifacts (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  message_id TEXT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text',
+  content TEXT NOT NULL DEFAULT '',
+  bytes INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES vibecoding_conversations(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_artifact_conversation ON vibecoding_artifacts(conversation_id, updated_at DESC)');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_artifact_name ON vibecoding_artifacts(conversation_id, name)');
+
+// 启动迁移：把旧的 conversations.files JSON 展开成产物行。
+// 幂等——已经有产物的会话跳过；旧列保留不读，出问题可以回滚。
+// 只迁移真正有内容的会话（空对象说明是新建后从未产出文件）。
+{
+  const KIND_BY_EXTENSION = { html: 'html', htm: 'html', css: 'css', js: 'js', mjs: 'js', json: 'json', md: 'md', markdown: 'md', svg: 'svg', csv: 'csv', txt: 'text' };
+  const pending = db.prepare(
+    `SELECT conversation.id AS id, conversation.files AS files, conversation.created_at AS created_at, conversation.updated_at AS updated_at
+     FROM vibecoding_conversations conversation
+     WHERE conversation.files IS NOT NULL AND conversation.files != '' AND conversation.files != '{}'
+       AND NOT EXISTS (SELECT 1 FROM vibecoding_artifacts artifact WHERE artifact.conversation_id = conversation.id)`,
+  ).all();
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+  );
+  let migrated = 0;
+  for (const item of pending) {
+    let files;
+    try { files = JSON.parse(item.files); } catch { continue; }
+    if (!files || typeof files !== 'object') continue;
+    for (const [name, content] of Object.entries(files)) {
+      const text = String(content ?? '');
+      const extension = String(name).split('.').pop()?.toLowerCase();
+      insert.run(
+        id('vibeart'), item.id, null, String(name), KIND_BY_EXTENSION[extension] || 'text',
+        text, Buffer.byteLength(text), 1, item.created_at || nowIso(), item.updated_at || nowIso(),
+      );
+      migrated += 1;
+    }
+  }
+  if (migrated) console.log(`[schema] vibecoding: 已把旧工程文件迁移成 ${migrated} 个产物`);
+}
+
 db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_runs (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL,

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, ListResultSummary, Loading, LoginPanel, MarkdownView, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession } from '@platform/shared';
+import { ApiError, AppShell, buildPreviewDocument, Button, clearSession, ConsoleIcon, createApiClient, Empty, ErrorState, formatCredits, formatDate, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, ReplayFiles, ReplayPanel, ReplayPreview, ReplayTranscript, Status, useData, writeSession } from '@platform/shared';
 import { MemberCreditsPage } from './pages/MemberCredits.jsx';
 import { BillingTransactionsPage } from './pages/BillingTransactions.jsx';
 import '@platform/shared/styles.css';
@@ -999,35 +999,80 @@ function OrgPage({ kind, user }) {
 }
 
 function VibeCodingSubmissionDetail({ submission, form, setForm, busy, onReview }) {
-  const [active, setActive] = useState('');
-  const files = submission?.files || {};
-  const transcript = Array.isArray(submission?.transcript) ? submission.transcript : [];
-  const names = Object.keys(files).sort((a, b) => (a === submission?.entryFile ? -1 : b === submission?.entryFile ? 1 : a.localeCompare(b)));
-  const current = active || submission?.entryFile || names[0] || '';
   if (!submission) return <Loading />;
-  return <>
-    <div className="vb-review-meta"><span>学生：{submission.studentName || submission.studentLogin || submission.studentId}</span><span>课时：{submission.lessonTitle || '—'}</span><span>第 {submission.round} 次提交 · {formatDate(submission.submittedAt)}</span></div>
-    <div className="split">
-      <div>
-        <div className="vb-code__tabs">{names.map((name) => <button key={name} type="button" className={name === current ? 'is-active' : ''} onClick={() => setActive(name)}>{name}</button>)}</div>
-        <pre className="vb-review-code">{files[current] || ''}</pre>
+  const files = submission.files || {};
+  const transcript = Array.isArray(submission.transcript) ? submission.transcript : [];
+  const previewHtml = buildPreviewDocument(files, submission.entryFile);
+  const reviewed = submission.status !== 'PENDING';
+  return <div className="c-root" data-console="vibecoding">
+    <div className="c-replay" style={{ maxWidth: 'none', margin: 0 }}>
+      <div className="c-replay__meta">
+        <span>学生：{submission.studentName || submission.studentLogin || submission.studentId}</span>
+        <span>班级：{submission.className || '—'}</span>
+        <span>课时：{submission.lessonTitle || '—'}</span>
+        <span>第 {submission.round} 次提交 · {formatDate(submission.submittedAt)}</span>
       </div>
-      <div>
-        <h3 className="vb-review-heading">创作对话（{transcript.length} 条）</h3>
-        <div className="vb-review-transcript">
-          {transcript.length ? transcript.map((message, index) => <div className={`vb-message vb-message--${message.role}`} key={index}>
-            <div className="vb-message__avatar">{message.role === 'user' ? '生' : 'AI'}</div>
-            <div className="vb-message__body">{message.role === 'assistant' ? <MarkdownView content={message.content} /> : <p>{message.content}</p>}</div>
-          </div>) : <p className="muted">没有对话记录。</p>}
-        </div>
+
+      <div className="c-replay__grid">
+        <ReplayPreview html={previewHtml} title={submission.title || '学生作品'} />
+        <ReplayPanel title={`创作对话（${transcript.length} 条）`} icon="messageSquare">
+          <ReplayTranscript messages={transcript} />
+        </ReplayPanel>
       </div>
+
+      <ReplayPanel title="产物源码" icon="code">
+        <ReplayFiles files={files} entryFile={submission.entryFile} />
+      </ReplayPanel>
+
+      {reviewed ? (
+        <Notice tone={submission.status === 'APPROVED' ? 'success' : 'warning'}>
+          已点评（{formatDate(submission.reviewedAt)}）：{submission.teacherComment || '（无意见）'}
+        </Notice>
+      ) : (
+        <ReplayPanel title="给出点评" icon="edit">
+          <div className="c-replay__form" style={{ padding: 'var(--sp-3)' }}>
+            <label className="c-replay__label">
+              点评结果
+              <div className="c-replay__choices">
+                {[['APPROVED', '通过', 'ok'], ['REJECTED', '驳回', 'danger']].map(([value, label, tone]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`c-choice${form.status === value ? ` is-on is-${tone}` : ''}`}
+                    onClick={() => setForm({ ...form, status: value })}
+                  >
+                    <ConsoleIcon name={value === 'APPROVED' ? 'check' : 'x'} size={14} />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </label>
+            <label className="c-replay__label">
+              点评意见
+              <textarea
+                className="c-input c-dialog__textarea"
+                value={form.comment}
+                maxLength={2000}
+                placeholder="驳回时必须写明原因，学生改完可以重新提交"
+                onChange={(event) => setForm({ ...form, comment: event.target.value })}
+              />
+            </label>
+            <div className="c-replay__actions">
+              <Button
+                variant="primary"
+                icon="check"
+                disabled={busy || (form.status === 'REJECTED' && !form.comment.trim())}
+                onClick={onReview}
+              >
+                {busy ? '提交中…' : '提交点评'}
+              </Button>
+              {form.status === 'REJECTED' && !form.comment.trim() ? <span className="c-dim">驳回必须写明原因</span> : null}
+            </div>
+          </div>
+        </ReplayPanel>
+      )}
     </div>
-    {submission.status === 'PENDING' ? <div className="form-grid top-gap">
-      <label>点评结果<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="APPROVED">通过</option><option value="REJECTED">驳回</option></select></label>
-      <label>点评意见<textarea value={form.comment} maxLength={2000} placeholder="驳回时必须写明原因，学生改完可以重新提交" onChange={(event) => setForm({ ...form, comment: event.target.value })} /></label>
-      <div><button className="primary-button" disabled={busy || (form.status === 'REJECTED' && !form.comment.trim())} onClick={onReview}>{busy ? '提交中…' : '提交点评'}</button></div>
-    </div> : <Notice tone={submission.status === 'APPROVED' ? 'success' : 'warning'}>已点评（{formatDate(submission.reviewedAt)}）：{submission.teacherComment || '（无意见）'}</Notice>}
-  </>;
+  </div>;
 }
 
 function VibeCodingReview({ api }) {

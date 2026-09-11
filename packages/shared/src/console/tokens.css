@@ -1,0 +1,199 @@
+/* ============================================================================
+   VibeCoding Console — 设计令牌
+   ----------------------------------------------------------------------------
+   来源：OpenSquilla（Apache-2.0）的 Web 控制台设计系统，取其 foundation.css 的
+   主题无关层 + themes/dark/tokens.css 的深色层，按本项目需要裁剪。
+   见仓库根 THIRD-PARTY-NOTICES.md。
+
+   全部令牌声明在 [data-console] 上：它们只向控制台子树继承，不可能外泄到
+   官网/后台的浅色页面；反过来浅色页面的令牌也不会干扰这里。
+
+   两条规矩（来自参考，务必遵守）：
+   1. 一切派生色用 color-mix(in srgb, var(--token) N%, var(--surface))，
+      不手写 rgba() 染色（例外只有高程与阴影）。
+   2. 橙色 --accent 严格保留给「动作」：点击、CTA、焦点、运行中。
+      状态一律走六通道光谱（ok/warn/danger/info/queued），橙色永不参与状态表达。
+   ========================================================================== */
+
+[data-console] {
+  /* ── 字体 ────────────────────────────────────────────────────────────────
+     参考自带 Space Grotesk / IBM Plex 的 woff2（独立 OFL 授权），本项目不引入，
+     改用系统字体栈 + 中文回退，避免字体授权与体积问题。 */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "PingFang SC", "Hiragino Sans", "Microsoft YaHei", "Yu Gothic", sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: "SFMono-Regular", ui-monospace, "Cascadia Code", Menlo, Consolas,
+    "PingFang SC", "Microsoft YaHei", monospace;
+
+  --fs-xs: 0.8125rem;   /* 13px */
+  --fs-sm: 0.875rem;    /* 14px */
+  --fs-md: 1rem;        /* 16px */
+  --fs-lg: 1.1875rem;   /* 19px */
+  --fs-xl: 1.625rem;    /* 26px */
+  --fs-2xl: 2rem;
+
+  --track-display: 0;
+  --track-tabular: 0.01em;
+  --eyebrow-track: 0.02em;
+  --fw-eyebrow: 600;
+  --fw-quiet: 500;
+
+  /* ── 地表阶梯 ────────────────────────────────────────────────────────────
+     五级亮度梯（bg < surface < surface-2 < elevated < hover）：
+     层级既靠亮度区分，也靠下面的 --elev-* 机加工阴影。 */
+  --bg: #18181a;
+  --bg-surface: #202022;
+  --bg-surface-2: #28282b;
+  --bg-elevated: #2d2d30;
+  --bg-hover: #353539;
+
+  --text: #f5f5f7;
+  --text-muted: #b0b0b6;
+  --text-dim: #87878e;
+
+  --border: #303034;
+  --border-strong: #444448;
+  --border-focus: #55555b;
+  --hairline: #29292c;
+
+  /* ── 强调色：只给「动作」 ───────────────────────────────────────────────
+     一道克制的橙色。保留给主操作、焦点与运行中状态。 */
+  --accent: #f26a1b;
+  --accent-hover: #ff7a2e;
+  --accent-deep: #d95a11;
+  --accent-secondary: #ff8a4c;
+  --accent-foreground: #160b02;
+
+  /* ── 六通道光谱：只用来编码状态，永不装饰 ─────────────────────────────── */
+  --ok: #39d7a2;
+  --warn: #e8b23a;
+  --warn-fill: #e8b23a;
+  --danger: #ff6b6b;
+  --info: #56c2e6;
+  --queued: #8c7df2;
+
+  --ok-fill: var(--ok);
+  --danger-fill: var(--danger);
+  --info-fill: var(--info);
+  --queued-fill: var(--queued);
+
+  /* ── 语法高亮（对话里的代码块） ───────────────────────────────────────── */
+  --syntax-comment: #8b93a6;
+  --syntax-keyword: #c792ea;
+  --syntax-string: #9ece6a;
+  --syntax-literal: #e5c07b;
+  --syntax-title: #7aa2f7;
+  --syntax-attr: #56b6c2;
+
+  /* ── 消息容器语法 ───────────────────────────────────────────────────────
+     用户气泡比对话画布亮一档；裸媒体与文件 chip 用 1px 对象描边。 */
+  --msg-bubble: color-mix(in srgb, var(--text) 8%, var(--bg-surface));
+  --msg-obj-border: color-mix(in srgb, var(--text) 12%, transparent);
+
+  /* 代码块贴着用户气泡的地表，只用一点极淡的强调色染色，让它读起来是「凹下去的工作面」 */
+  --code-block-bg: color-mix(in srgb, var(--accent) 2%, var(--msg-bubble));
+  --code-block-header-bg: color-mix(in srgb, var(--accent) 3%, var(--msg-bubble));
+  --code-block-border: color-mix(in srgb, var(--accent) 5%, var(--msg-obj-border));
+
+  /* ── 圆角阶梯：圆角即层级 ───────────────────────────────────────────────
+     每一级对应一个角色，让「这个面有多重」一眼可读。 */
+  --radius-none: 0;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+  --radius-full: 999px;
+  --radius-control: var(--radius-md);
+  --radius-card: var(--radius-lg);
+  --radius-panel: var(--radius-xl);
+  --radius-modal: var(--radius-2xl);
+  --radius-pill: var(--radius-full);
+
+  /* ── 间距 ──────────────────────────────────────────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 18px;
+  --sp-5: 24px;
+  --sp-6: 30px;
+  --sp-8: 40px;
+
+  /* ── 动效词表 ────────────────────────────────────────────────────────────
+     全局只有这四个时长、四条缓动。规矩：退出比进入快一档
+     （进入用 base/enter，退出用 fast + ease-in）。 */
+  --dur-fast: 120ms;    /* 悬停、颜色、焦点、按压反馈 */
+  --dur-base: 200ms;    /* 默认过渡、揭示、小幅位移 */
+  --dur-enter: 280ms;   /* 进入、抽屉、模态 */
+  --dur-pulse: 1800ms;  /* 全局唯一的「活着/在工作」环境循环周期 */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition: var(--dur-fast) var(--ease-standard);
+
+  /* ── 机加工高程 ──────────────────────────────────────────────────────────
+     1px 环 + 顶部内高光 + 分层黑影，而不是单纯 drop-shadow。 */
+  --elev-highlight: rgba(255, 255, 255, 0.06);
+  --elev-1: 0 0 0 1px var(--border), inset 0 1px 0 0 var(--elev-highlight),
+    0 1px 2px rgba(0, 0, 0, 0.3), 0 5px 12px -4px rgba(0, 0, 0, 0.34);
+  --elev-1-hover: 0 0 0 1px var(--border-strong),
+    inset 0 1px 0 0 var(--elev-highlight), 0 3px 6px rgba(0, 0, 0, 0.34),
+    0 12px 22px -6px rgba(0, 0, 0, 0.42);
+  --elev-2: 0 0 0 1px var(--border-strong),
+    inset 0 1px 0 0 var(--elev-highlight), 0 6px 16px -4px rgba(0, 0, 0, 0.5);
+  --elev-3: 0 0 0 1px var(--border-strong),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.1), 0 16px 32px -8px rgba(0, 0, 0, 0.5),
+    0 40px 64px -16px rgba(0, 0, 0, 0.55);
+
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --scrim: rgba(0, 0, 0, 0.6);
+
+  /* ── 焦点环与禁用态 ────────────────────────────────────────────────────
+     --focus-ring 给独立控件；--focus-ring-inset 给在 overflow:hidden 容器里
+     的控件（分段控件、表格单元格），外发光会被裁掉。 */
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+  --focus-ring-inset: inset 0 0 0 2px
+    color-mix(in srgb, var(--accent) 55%, transparent);
+  --focus-ring-offset: 2px;
+  --state-disabled-opacity: 0.5;
+
+  /* ── 侧边栏映射 ──────────────────────────────────────────────────────── */
+  --sidebar-bg: var(--bg-surface);
+  --sidebar-control-bg: var(--bg-hover);
+  --sidebar-control-hover: var(--bg-elevated);
+  --sidebar-item-hover: var(--bg-hover);
+  --sidebar-item-active: var(--bg-hover);
+  --sidebar-text-strong: var(--text);
+  --sidebar-text: var(--text-muted);
+  --sidebar-text-soft: var(--text-dim);
+  --sidebar-border: var(--border);
+
+  /* ── 结构尺寸（照抄参考，不自己发明） ───────────────────────────────── */
+  --mobile-tabbar-h: 56px;
+
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  letter-spacing: -0.006em;
+  font-synthesis: none;
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 尊重系统的减弱动效偏好：关掉所有无限循环，把位移压到不可见。 */
+@media (prefers-reduced-motion: reduce) {
+  [data-console] *,
+  [data-console] *::before,
+  [data-console] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

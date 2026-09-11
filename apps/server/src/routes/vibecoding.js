@@ -1,5 +1,8 @@
-// VibeCoding 课堂运行时：对话式代码创作（SSE 流式）+ 受限运行 + 提交点评。
+// VibeCoding 课堂运行时：对话式代码创作（SSE 流式）+ 产物 + 受限运行 + 提交点评。
 // 计费沿用平台既有链路：每轮 AI 回复扣 1 积分（credit_entries / usage_records）。
+//
+// 产物模型的要点：学生不能手写代码，代码只有一个来源——AI 回复里带文件名的围栏。
+// 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
   audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso,
   pageParams, pageResult, q, requireRole, row, rows, transaction,
@@ -14,25 +17,26 @@ import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { runJavaScript, sandboxCapability } from '../services/vibecodingRunner.js';
 import { PROVIDER_ERROR_CODES } from '../services/providerContract.js';
+import {
+  artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact,
+  listArtifacts, pickEntryArtifact, seedDefaultArtifacts, upsertArtifact, upsertArtifacts,
+} from '../services/vibecodingArtifacts.js';
 
 const DEFAULT_TITLE = '新的创作对话';
-const MAX_FILES = 12;
-const MAX_FILE_BYTES = 64 * 1024;
-const MAX_TOTAL_BYTES = 256 * 1024;
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_MESSAGES = 20;
 
-const DEFAULT_FILES = Object.freeze({
-  'index.html': '<!doctype html>\n<html lang="zh-CN">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>我的第一个网页</title>\n  <link rel="stylesheet" href="style.css" />\n</head>\n<body>\n  <h1>你好，AI 魔法学院！</h1>\n  <p>在这里写下你的第一个网页。</p>\n  <script src="script.js"></script>\n</body>\n</html>\n',
-  'style.css': 'body {\n  font-family: system-ui, -apple-system, "PingFang SC", sans-serif;\n  padding: 24px;\n  color: #2f2a45;\n}\n',
-  'script.js': "console.log('你好，VibeCoding！');\n",
-});
+// 提交与作品广场仍沿用 files JSON 快照（点评页与广场那边按文件名取内容），
+// 所以这里保留一份路径校验；产物侧的配额在 vibecodingArtifacts.js 里。
+const MAX_FILES = 24;
+const MAX_FILE_BYTES = 256 * 1024;
+const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
 
 function parseFiles(value, { fallback = null } = {}) {
   if (value === undefined || value === null || value === '') return fallback;
   let parsed = value;
-  if (typeof value === 'string') {
-    try { parsed = JSON.parse(value); } catch { throw errors.badRequest('代码文件格式无效', 'INVALID_VIBECODING_FILES'); }
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch { throw errors.badRequest('代码文件格式无效', 'INVALID_VIBECODING_FILES'); }
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw errors.badRequest('代码文件必须是对象', 'INVALID_VIBECODING_FILES');
   const entries = Object.entries(parsed);
@@ -54,20 +58,21 @@ function parseFiles(value, { fallback = null } = {}) {
   return files;
 }
 
-function filesOf(conversation) {
-  return parseFiles(conversation.files, { fallback: { ...DEFAULT_FILES } }) || { ...DEFAULT_FILES };
-}
-
-function normalizeConversation(value, { includeFiles = false } = {}) {
+function normalizeConversation(value, { includeArtifacts = false } = {}) {
   if (!value) return null;
+  const artifacts = includeArtifacts ? listArtifacts(value.id, { includeContent: true }) : null;
+  const entry = includeArtifacts ? pickEntryArtifact(artifacts) : null;
   return {
     id: value.id, title: value.title, status: value.status, model: value.model || null,
     lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
     classId: value.class_id || null, className: value.class_name || null,
     classSessionId: value.class_session_id || null,
-    entryFile: value.entry_file || 'index.html',
+    // 入口文件由产物推导：index.html 优先，其次第一个 HTML
+    entryFile: value.entry_file || entry?.name || 'index.html',
     pinnedAt: value.pinned_at || null,
-    ...(includeFiles ? { files: filesOf(value) } : {}),
+    ...(includeArtifacts ? { artifacts } : {}),
+    // 列表页只给数量：悬停卡片要显示「3 个文件」，但不值得把正文一起传
+    ...(value.artifact_count == null ? {} : { artifactCount: Number(value.artifact_count) }),
     lastMessageAt: value.last_message_at || null,
     createdAt: value.created_at, updatedAt: value.updated_at,
   };
@@ -169,15 +174,23 @@ function assertConversationEditable(conversation) {
 
 /**
  * 课时上下文：多轮 history 会覆盖渠道模板里的 system 提示词，所以这里自己拼一条，
- * 既把本节课的正文/教学指引告诉模型，也保留儿童友好的安全约束与代码块约定
- * （「```语言 文件名」便于学生一键写入文件）。
+ * 既把本节课的正文/教学指引告诉模型，也讲清「产物」的约定——学生端不做手写代码，
+ * 所以 AI 给出的带文件名代码块就是作品的唯一来源，格式错了页面就打不开。
  */
 export function lessonSystemMessage(conversation) {
   const lesson = row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id]);
   const parts = [
     '你是少儿编程学习平台的创作助手「阿飞」，面向 8–16 岁的学生。请用适合儿童理解的中文回答，语气友好，避免任何危险或不适龄内容。',
-    '给出完整代码文件时，请用「```语言 文件名」的代码块（例如 ```html index.html），学生可以一键写入文件；说明尽量简短，不要重复整段代码。',
+    '学生运行你的作品时会打开 index.html，所以 index.html 必须是完整的 HTML 文档，并用相对路径引用同目录的 style.css / script.js 等文件。',
+    '每个要交给学生的文件，都要用一个**完整的**代码块给出，语言标识后面紧跟文件名，例如 ```html index.html、```css style.css、```js script.js。没有写文件名的代码块只会被当成示例，不会生成文件。改动某个文件时要给出该文件的**完整内容**，不要只给片段。',
+    '说明尽量简短，不要在学生已经有完整代码块的情况下再整段重复代码。',
   ];
+  // 已有产物时把清单告诉模型，避免它把文件重命名或者漏掉之前写好的文件。
+  // 允许不带 id 调用（单测里只验证课时上下文的拼装），这时跳过这一段。
+  const artifacts = conversation.id ? listArtifacts(conversation.id) : [];
+  if (artifacts.length) {
+    parts.push(`当前作品已有的文件（重写时请保持文件名一致，用不到的可以不提）：${artifacts.map((item) => item.name).join('、')}`);
+  }
   if (lesson) {
     if (lesson.title) parts.push(`本节 VibeCoding 课时：${lesson.title}`);
     if (lesson.summary) parts.push(`课时简介：${String(lesson.summary).slice(0, 600)}`);
@@ -206,8 +219,14 @@ function textModelOptions() {
 }
 
 /**
- * 跑一轮助手回复：SSE 保活 + 中止透传 + 思考进度 + 成功才扣费。
+ * 跑一轮助手回复：SSE 保活 + 中止透传 + 产物实时落库 + 成功才扣费。
  * 发送 / 重新生成 / 编辑重发三个入口共用，避免三份实现走偏。
+ *
+ * 事件序列：start → status* → delta* → artifact* → done / aborted / error
+ *
+ * 产物在**围栏闭合的那一刻**就落库并推事件，而不是等整轮结束：
+ * 这样学生看到的是产物卡片一个个出现。中止或失败时已经写入的产物会保留
+ * （代码确实已经「写出来」了），只是不扣费。
  */
 async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) {
   const policy = getAiProviderPolicy();
@@ -216,6 +235,8 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
   if (typeof provider.generateStream !== 'function') throw errors.conflict('当前 AI 渠道不支持流式对话', 'VIBECODING_STREAM_UNAVAILABLE');
 
   const history = [lessonSystemMessage(conversation), ...conversationHistory(conversation.id)];
+  const scanner = createArtifactScanner();
+  const emittedArtifactIds = new Set();
   sseOpen(ctx);
   sseSend(ctx, 'start', { userMessageId, conversationId: conversation.id, model: selection.model, provider: provider.name });
   // 推理型模型可能先思考几十秒才吐第一个可见字，期间没有任何 data 事件；
@@ -232,18 +253,45 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
 
   let streamedText = '';
   let reasoningChars = 0;
+
+  /** 把这次新闭合的围栏写进产物表并推给前端 */
+  function flushArtifacts(deltas) {
+    for (const candidate of deltas) {
+      const saved = upsertArtifact({
+        conversationId: conversation.id,
+        messageId: null, // 助手消息 id 要等整轮成功才有，产物先不挂它
+        name: candidate.name,
+        content: candidate.content,
+      });
+      if (!saved) continue; // 配额或超大文件：静默跳过，不打断对话
+      emittedArtifactIds.add(saved.id);
+      sseSend(ctx, 'artifact', { artifact: saved, created: saved.revision === 1 });
+    }
+  }
+
   try {
     const result = await provider.generateStream({
       messages: history,
       signal: abortController.signal,
       onReasoning: (delta) => {
         reasoningChars += String(delta || '').length;
-        sseSend(ctx, 'thinking', { chars: reasoningChars });
+        sseSend(ctx, 'status', { phase: 'thinking', chars: reasoningChars });
       },
-      onDelta: (delta, full) => { streamedText = full; sseSend(ctx, 'delta', { delta }); },
+      onDelta: (delta, full) => {
+        streamedText = full;
+        sseSend(ctx, 'delta', { delta });
+        // 每来一段就找一遍「这次新闭合」的围栏；未闭合的不会命中，所以不会产出半截文件
+        const closed = scanner.push(delta);
+        if (closed.length) flushArtifacts(closed);
+      },
     });
     const text = String(result?.assets?.[0]?.metadata?.text || streamedText || '').trim();
     if (!text) throw errors.conflict('AI 没有返回内容', 'GENERATION_EMPTY_RESULT');
+
+    // 兜底：万一渠道不是逐 delta 推的（一次性返回），这里再整段扫一遍
+    const remaining = scanner.text === text ? [] : extractArtifacts(text);
+    if (remaining.length) flushArtifacts(remaining);
+
     const assistantMessageId = id('vibemsg');
     let balanceAfter = 0;
     transaction(() => {
@@ -261,17 +309,33 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       });
       q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
         [assistantMessageId, fresh.id, 'assistant', text, selection.model, 'SUCCEEDED', 1, nowIso()]);
-      q('UPDATE vibecoding_conversations SET model=?,last_message_at=?,updated_at=? WHERE id=?', [selection.model, nowIso(), nowIso(), fresh.id]);
+      // 这一轮产出的产物认领到这条消息上，方便聊天里按消息分组
+      if (emittedArtifactIds.size) {
+        const placeholders = [...emittedArtifactIds].map(() => '?').join(',');
+        q(`UPDATE vibecoding_artifacts SET message_id=? WHERE id IN (${placeholders}) AND message_id IS NULL`,
+          [assistantMessageId, ...emittedArtifactIds]);
+      }
+      const entry = pickEntryArtifact(listArtifacts(fresh.id));
+      q('UPDATE vibecoding_conversations SET model=?,entry_file=?,last_message_at=?,updated_at=? WHERE id=?',
+        [selection.model, entry?.name || 'index.html', nowIso(), nowIso(), fresh.id]);
       balanceAfter = Number(charged?.balanceAfter || 0);
     });
     const message = normalizeMessage(row('SELECT * FROM vibecoding_messages WHERE id=?', [assistantMessageId]));
-    sseSend(ctx, 'done', { message, creditsCharged: 1, balanceAfter, streamed: result?.streamed !== false });
+    sseSend(ctx, 'done', {
+      message,
+      // 权威产物清单：前端拿它跟流式期间收到的卡片对账
+      artifacts: listArtifacts(conversation.id, { includeContent: true }),
+      entryFile: pickEntryArtifact(listArtifacts(conversation.id))?.name || 'index.html',
+      creditsCharged: 1,
+      balanceAfter,
+      streamed: result?.streamed !== false,
+    });
   } catch (error) {
     const code = error?.code || 'VIBECODING_CHAT_FAILED';
     // 学生主动停止时连接先断，抛出的可能是底层 socket 错误而不是我们自己的 ABORTED，
     // 所以以 abortController 状态为准：不落失败消息、不扣费。
     if (abortController.signal.aborted || code === PROVIDER_ERROR_CODES.ABORTED) {
-      sseSend(ctx, 'aborted', { code: 'VIBECODING_ABORTED' });
+      sseSend(ctx, 'aborted', { code: 'VIBECODING_ABORTED', artifacts: listArtifacts(conversation.id, { includeContent: true }) });
     } else {
       recordFailedMessage(conversation.id, selection.model, streamedText, code);
       recordAiUsage({
@@ -346,7 +410,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const where = conditions.join(' AND ');
     const total = Number(count(`SELECT COUNT(*) n FROM vibecoding_conversations conversation WHERE ${where}`, params) || 0);
     const items = rows(
-      `SELECT conversation.*, lesson.title AS lesson_title, class.name AS class_name
+      `SELECT conversation.*, lesson.title AS lesson_title, class.name AS class_name,
+              (SELECT COUNT(*) FROM vibecoding_artifacts artifact WHERE artifact.conversation_id = conversation.id) AS artifact_count
        FROM vibecoding_conversations conversation
        LEFT JOIN course_lessons lesson ON lesson.id = conversation.lesson_id
        LEFT JOIN classes class ON class.id = conversation.class_id
@@ -367,13 +432,14 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const now = nowIso();
     const conversationId = id('vibeconv');
     const title = body.title === undefined || String(body.title).trim() === '' ? DEFAULT_TITLE : nonEmptyString(body.title, '会话标题', { max: 60 });
-    const files = parseFiles(body.files, { fallback: { ...DEFAULT_FILES } }) || { ...DEFAULT_FILES };
     transaction(() => {
       q(`INSERT INTO vibecoding_conversations(
            id,org_id,student_id,class_id,lesson_id,class_session_id,title,model,files,entry_file,status,last_message_at,created_at,updated_at
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [conversationId, auth.user.orgId, auth.user.id, context.class?.id || classId, lessonId,
-          context.activeSession?.id || null, title, null, json(files), 'index.html', 'DRAFT', null, now, now]);
+          context.activeSession?.id || null, title, null, '{}', 'index.html', 'DRAFT', null, now, now]);
+      // 起始产物：让学生一进课堂就有东西可跑，而不是面对一块空白
+      seedDefaultArtifacts(conversationId);
       audit(ctx, 'VIBECODING_CONVERSATION_CREATE', 'VIBECODING_CONVERSATION', conversationId, null, { lessonId, title });
     });
     const created = row(
@@ -382,7 +448,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
        LEFT JOIN course_lessons lesson ON lesson.id = conversation.lesson_id
        LEFT JOIN classes class ON class.id = conversation.class_id
        WHERE conversation.id = ?`, [conversationId]);
-    return normalizeConversation(created, { includeFiles: true });
+    return normalizeConversation(created, { includeArtifacts: true });
   }
 
   const conversationMatch = part.match(/^\/conversations\/([^/]+)$/);
@@ -395,7 +461,22 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       [conversation.id, limit, offset],
     ).reverse().map(normalizeMessage);
     const submission = row(submissionSelect() + ' WHERE submission.conversation_id = ?', [conversation.id]);
-    return { ...normalizeConversation(conversation, { includeFiles: true }), messages, messagesTotal: total, messagesPage: page, submission: normalizeSubmission(submission), modelOptions: textModelOptions() };
+    return {
+      ...normalizeConversation(conversation, { includeArtifacts: true }),
+      messages, messagesTotal: total, messagesPage: page,
+      submission: normalizeSubmission(submission),
+      modelOptions: textModelOptions(),
+      sandbox: sandboxCapability(),
+    };
+  }
+
+  // 单个产物的完整内容：产物列表默认不带正文，工作台点开某个文件时才取
+  const artifactMatch = part.match(/^\/conversations\/([^/]+)\/artifacts\/([^/]+)$/);
+  if (artifactMatch && method === 'GET') {
+    const { conversation } = ownConversation(ctx, artifactMatch[1]);
+    const artifact = getArtifact(conversation.id, artifactMatch[2]);
+    if (!artifact) throw errors.notFound('产物不存在', 'VIBECODING_ARTIFACT_NOT_FOUND');
+    return artifact;
   }
 
   // 置顶 / 取消置顶（只影响自己侧栏排序）
@@ -410,24 +491,24 @@ async function handleStudentVibeCoding(ctx, auth, part) {
 
   if (conversationMatch && method === 'PUT') {
     const { auth: ownerAuth, conversation } = ownConversation(ctx, conversationMatch[1]);
-    if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能修改', 'VIBECODING_CONVERSATION_LOCKED');
-    const now = nowIso();
+    // 学生不再手写代码，所以这里只改「会话本身」的属性；代码只有一个来源——AI 产物。
+    // 老客户端如果还在传 files/entryFile，明确拒掉而不是静默忽略，免得以为改成功了。
+    if (body.files !== undefined || body.entryFile !== undefined) {
+      throw errors.badRequest('VibeCoding 的代码由 AI 产出，不能直接编辑文件', 'VIBECODING_FILES_NOT_EDITABLE');
+    }
     const title = body.title === undefined ? conversation.title : nonEmptyString(body.title, '会话标题', { max: 60 });
-    const files = parseFiles(body.files, { fallback: null });
-    const entryFile = body.entryFile === undefined ? conversation.entry_file : nonEmptyString(body.entryFile, '入口文件', { max: 64 });
-    const nextFiles = files || filesOf(conversation);
-    if (!nextFiles[entryFile]) throw errors.badRequest('入口文件必须存在', 'VIBECODING_ENTRY_FILE_MISSING');
     let nextModel = conversation.model || null;
     if (body.model !== undefined) {
+      if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能切换模型', 'VIBECODING_CONVERSATION_LOCKED');
       const requested = String(body.model || '').trim();
       if (!requested) nextModel = null;
       else if (!textModelOptions().some((item) => item.id === requested)) throw errors.badRequest('该模型不在当前 AI 渠道的可选范围内', 'VIBECODING_MODEL_NOT_AVAILABLE');
       else nextModel = requested;
     }
-    q('UPDATE vibecoding_conversations SET title=?,files=?,entry_file=?,model=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
-      [title, json(nextFiles), entryFile, nextModel, now, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
+    q('UPDATE vibecoding_conversations SET title=?,model=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
+      [title, nextModel, nowIso(), conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
     const updated = row('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversation.id]);
-    return normalizeConversation(updated, { includeFiles: true });
+    return normalizeConversation(updated, { includeArtifacts: true });
   }
 
   if (conversationMatch && method === 'DELETE') {
@@ -518,7 +599,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
     const capability = sandboxCapability();
     if (!capability.available) throw errors.serviceUnavailable(capability.reason || '代码运行沙箱当前不可用', 'VIBECODING_SANDBOX_UNAVAILABLE');
-    const files = filesOf(conversation);
+    const files = artifactsAsFiles(conversation.id);
     const entryFile = /\.(m?js)$/i.test(conversation.entry_file)
       ? conversation.entry_file
       : Object.keys(files).find((name) => /\.(m?js)$/i.test(name));
@@ -558,7 +639,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
-    const files = filesOf(conversation);
+    const files = artifactsAsFiles(conversation.id);
     const transcript = rows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id])
       .map((message) => ({ role: message.role, content: message.content, createdAt: message.created_at }));
     const title = body.title === undefined || String(body.title).trim() === '' ? conversation.title : nonEmptyString(body.title, '作品标题', { max: 60 });
