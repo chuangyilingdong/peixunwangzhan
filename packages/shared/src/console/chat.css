@@ -40,6 +40,11 @@
   align-self: stretch;
 }
 /* ── 附件 ─────────────────────────────────────────────────────────────── */
+/* 原生 file input 只当接口用：由「上传图片」按钮 .click() 唤起（按钮带 aria-label，是给读屏的入口）。
+   不隐藏它会在聊天区顶部露出一条浏览器默认的「选择文件 / 未选择任何文件」控件 ——
+   2026-09-11 开浏览器截图才发现（断言全过、可访问性树也看不出来）。 */
+.c-file-input { display: none; }
+
 .c-attachments { display: flex; flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-3) var(--sp-3) 0; }
 .c-attachment {
   display: inline-flex;

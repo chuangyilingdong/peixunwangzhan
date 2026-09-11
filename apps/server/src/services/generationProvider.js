@@ -36,7 +36,11 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
     // 流式：按固定切片逐块回调，让 VibeCoding 的 SSE 链路在本地也能被真实走通。
     async generateStream({ messages, prompt = '', onDelta } = {}) {
       const lastUser = [...(Array.isArray(messages) ? messages : [])].reverse().find((message) => message?.role === 'user');
-      const text = mockText(prompt || lastUser?.content || '');
+      // 带图片附件的用户消息 content 是**内容块数组**，直接 String() 会变成 "[object Object],[object Object]"。
+      const lastUserText = Array.isArray(lastUser?.content)
+        ? lastUser.content.filter((block) => block?.type === 'text').map((block) => String(block.text || '')).join(' ').trim()
+        : String(lastUser?.content || '');
+      const text = mockText(prompt || lastUserText || '');
       let full = '';
       for (const chunk of text.match(/[\s\S]{1,24}/g) || [text]) {
         full += chunk;

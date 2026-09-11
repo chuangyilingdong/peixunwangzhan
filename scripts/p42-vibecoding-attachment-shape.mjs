@@ -50,5 +50,17 @@ check('第二块是图片，且用 inline 而不是外链',
   String(first?.content?.[1]?.image_url?.url).slice(0, 40));
 check('没有 inline 的附件不进请求（保持纯文本）', typeof second?.content === 'string', typeof second?.content);
 
+// 模拟渠道（本地开发的默认）拿到内容块消息时，不能把数组 String() 成 "[object Object]" ——
+// 上一版就是这样：带图发一句，回复里出现 "[object Object],[object Object]"。
+{
+  const { getGenerationProvider } = await import(pathToFileURL(path.join(root, 'apps/server/src/services/generationProvider.js')).href);
+  const mock = getGenerationProvider({ provider: 'local-mock', model: 'canvas-mock-v1' });
+  // 只喂**内容块那条**：模拟渠道取的是"最后一条用户消息"，混着喂会挑到纯文本那条、测不到这个坑。
+  let reply = '';
+  await mock.generateStream({ messages: [history[0]], onDelta: (_delta, full) => { reply = full; } });
+  check('模拟渠道对内容块消息不吐 [object Object]',
+    !reply.includes('[object Object]') && reply.includes('看看这张图'), reply.replace(/\s+/g, ' ').slice(0, 80));
+}
+
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

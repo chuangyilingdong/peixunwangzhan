@@ -90,10 +90,26 @@ function validateMimeAndExtension(fileName, declaredMime, buffer) {
   return { mimeType, detectedMime, extension };
 }
 
+// multipart 的头是按 latin1 读出来的字节串，但浏览器发的中文文件名是 **UTF-8 字节** ——
+// 直接当 latin1 用会变乱码（学生传「截图.png」会显示成「æˆªå›¾.png」）。
+// 这里按 UTF-8 再还原一次；还原不成立（出现替换字符）说明本来就是 latin1，保持原值。
+function decodeHeaderText(value) {
+  if (!value) return value;
+  const utf8 = Buffer.from(value, 'latin1').toString('utf8');
+  return utf8.includes('\uFFFD') ? value : utf8;
+}
+
 function parseDisposition(value) {
   const name = value.match(/(?:^|;)\s*name="([^"]*)"/i)?.[1];
-  const fileName = value.match(/(?:^|;)\s*filename="([^"]*)"/i)?.[1];
-  return { name, fileName };
+  // RFC 5987 的 filename*=UTF-8''%xx 优先：它显式声明了编码，不用猜。
+  const extended = value.match(/(?:^|;)\s*filename\*=UTF-8''([^;]*)/i)?.[1];
+  if (extended !== undefined) {
+    let decoded = extended;
+    try { decoded = decodeURIComponent(extended); } catch { /* 编码坏了就按原样交给 cleanFileName 去拒 */ }
+    return { name, fileName: decoded };
+  }
+  const raw = value.match(/(?:^|;)\s*filename="([^"]*)"/i)?.[1];
+  return { name, fileName: raw === undefined ? undefined : decodeHeaderText(raw) };
 }
 
 export function parseMultipartFormData(body, contentType) {
