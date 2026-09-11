@@ -116,21 +116,15 @@ try {
   assert.equal(submitted.data.status, 'PENDING', '提交后状态应为 PENDING');
   assert.ok(submitted.data.copyrightConfirmedAt, '提交应记录版权确认时间');
 
-  // 3) 未点评通过时不能发布到作品广场
-  const earlyPublish = await api(`/api/admin/vibecoding-works/${submissionId}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: true } });
-  assert.equal(earlyPublish.status, 409, `未通过时应 409，实际 ${earlyPublish.status}`);
-  assert.equal(earlyPublish.data?.error?.code, 'VIBECODING_WORK_NOT_APPROVED', '错误码应为 VIBECODING_WORK_NOT_APPROVED');
+  // 3) 没有老师点评这一环了：机构端点评接口必须已经不存在
+  const reviewGone = await api(`/api/org/vibecoding/submissions/${submissionId}`, { method: 'PUT', token: teacher, body: { status: 'APPROVED', comment: 'x' } });
+  assert.equal(reviewGone.status, 404, `机构端点评接口应当已删除，实际 ${reviewGone.status}`);
 
-  // 4) 老师点评通过
-  const approved = await api(`/api/org/vibecoding/submissions/${submissionId}`, { method: 'PUT', token: teacher, body: { status: 'APPROVED', comment: '玩法完整，可以展示' } });
-  assert.equal(approved.status, 200, `老师点评失败: ${JSON.stringify(approved.data)}`);
-  assert.equal(approved.data.status, 'APPROVED', '点评后状态应为 APPROVED');
-
-  // 5) 平台作品库能看到，并发布到作品广场
-  const list = await api('/api/admin/vibecoding-works?status=APPROVED', { token: rootAdmin });
+  // 4) 平台作品库能看到（学生提交后平台就能挑），并发布到作品广场
+  const list = await api('/api/admin/vibecoding-works', { token: rootAdmin });
   assert.equal(list.status, 200, `平台列表失败: ${JSON.stringify(list.data)}`);
   const listed = (list.data.items || []).find((item) => item.id === submissionId);
-  assert.ok(listed, '平台列表应包含刚通过的作品');
+  assert.ok(listed, '平台列表应包含刚提交的作品');
   assert.equal(listed.isPublic, false, '发布前 isPublic 应为 false');
   assert.ok(listed.copyrightConfirmedAt, '平台列表应带版权确认时间');
 

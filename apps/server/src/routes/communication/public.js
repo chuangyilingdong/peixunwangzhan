@@ -171,7 +171,7 @@ export function handlePublicCommunication(ctx) {
       FROM vibecoding_submissions submission
       JOIN users user ON user.id=submission.student_id
       LEFT JOIN organizations organization ON organization.id=submission.org_id
-      WHERE submission.is_public=1 AND submission.status='APPROVED' AND submission.share_token IS NOT NULL
+      WHERE submission.is_public=1 AND submission.share_token IS NOT NULL
         AND submission.copyright_confirmed_at IS NOT NULL
       ORDER BY submission.featured_at DESC NULLS LAST, submission.submitted_at DESC
       LIMIT ?
@@ -188,7 +188,7 @@ export function handlePublicCommunication(ctx) {
       FROM vibecoding_submissions submission
       JOIN users user ON user.id=submission.student_id
       LEFT JOIN organizations organization ON organization.id=submission.org_id
-      WHERE submission.share_token=? AND submission.is_public=1 AND submission.status='APPROVED'
+      WHERE submission.share_token=? AND submission.is_public=1
         AND submission.copyright_confirmed_at IS NOT NULL
     `, [publicVibeCodingWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');

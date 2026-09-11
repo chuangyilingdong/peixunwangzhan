@@ -221,7 +221,9 @@ function recordFailedMessage(conversationId, model, content, errorCode) {
 }
 
 function assertConversationEditable(conversation) {
-  if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能继续对话', 'VIBECODING_CONVERSATION_LOCKED');
+  // 「提交」现在只是把作品交给平台，**不再锁住创作** —— 学生提交完接着改是常态。
+  // 只有归档会话才拒绝写入（归档是运营动作，不是学生能触发的）。
+  if (conversation.status === 'ARCHIVED') throw errors.conflict('该创作已归档，不能再修改', 'VIBECODING_CONVERSATION_ARCHIVED');
 }
 
 /**
@@ -605,9 +607,7 @@ export function normalizeSubmission(value, { includeContent = false } = {}) {
     lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
     title: value.title, description: value.description || '', round: Number(value.round || 1),
     entryFile: value.entry_file || 'index.html',
-    status: value.status, teacherComment: value.teacher_comment || null,
-    reviewedBy: value.reviewed_by || null, reviewerName: value.reviewer_name || null,
-    reviewedAt: value.reviewed_at || null, submittedAt: value.submitted_at,
+    status: value.status, submittedAt: value.submitted_at,
     copyrightConfirmedAt: value.copyright_confirmed_at || null,
     isPublic: Number(value.is_public || 0) === 1,
     shareToken: value.share_token || null,
@@ -625,14 +625,6 @@ function submissionSelect() {
           LEFT JOIN classes class ON class.id = submission.class_id
           LEFT JOIN course_lessons lesson ON lesson.id = submission.lesson_id
           LEFT JOIN users reviewer ON reviewer.id = submission.reviewed_by`;
-}
-
-function teacherSubmissionScope(auth) {
-  if (auth.user.role !== 'TEACHER') return { sql: '', params: [] };
-  return {
-    sql: ` AND (class.teacher_id = ? OR EXISTS (SELECT 1 FROM class_members member WHERE member.class_id = submission.class_id AND member.user_id = ? AND member.role='TEACHER' AND member.removed_at IS NULL))`,
-    params: [auth.user.id, auth.user.id],
-  };
 }
 
 async function handleStudentVibeCoding(ctx, auth, part) {
@@ -783,7 +775,6 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const title = body.title === undefined ? conversation.title : nonEmptyString(body.title, '会话标题', { max: 60 });
     let nextModel = conversation.model || null;
     if (body.model !== undefined) {
-      if (conversation.status !== 'DRAFT') throw errors.conflict('已提交的会话不能切换模型', 'VIBECODING_CONVERSATION_LOCKED');
       const requested = String(body.model || '').trim();
       if (!requested) nextModel = null;
       else if (!textModelOptions().some((item) => item.id === requested)) throw errors.badRequest('该模型不在当前 AI 渠道的可选范围内', 'VIBECODING_MODEL_NOT_AVAILABLE');
@@ -885,7 +876,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const user = activeStudent(ownerAuth);
     vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
     const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ?', [conversation.id]);
-    if (existing && existing.status === 'PENDING') throw errors.conflict('作品已提交，等待老师点评', 'VIBECODING_ALREADY_SUBMITTED');
+    // 没有老师点评这一环了：提交只是「交给平台」，可以反复提交（round+1），不再挡第二次
     // 与画布作品一致：提交即确认版权与展示授权，平台后续才可发布到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
@@ -928,72 +919,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   return null;
 }
 
-async function handleOrgVibeCoding(ctx, auth, part) {
-  const { method } = ctx;
-  if (part === '/submissions' && method === 'GET') {
-    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
-    const conditions = ['submission.org_id = ?'];
-    const params = [auth.user.orgId];
-    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
-    if (['PENDING', 'APPROVED', 'REJECTED'].includes(status)) { conditions.push('submission.status = ?'); params.push(status); }
-    const scope = teacherSubmissionScope(auth);
-    const where = conditions.join(' AND ') + scope.sql;
-    const scopeParams = [...params, ...scope.params];
-    const total = Number(count(`SELECT COUNT(*) n FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE ${where}`, scopeParams) || 0);
-    const items = rows(
-      submissionSelect() + ` WHERE ${where} ORDER BY CASE submission.status WHEN 'PENDING' THEN 0 ELSE 1 END, submission.submitted_at DESC LIMIT ? OFFSET ?`,
-      [...scopeParams, limit, offset],
-    ).map((item) => normalizeSubmission(item));
-    return { ...pageResult(items, { page, limit, total }), pending: Number(count(`SELECT COUNT(*) n FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE ${where} AND submission.status='PENDING'`, scopeParams) || 0) };
-  }
-
-  const reviewMatch = part.match(/^\/submissions\/([^/]+)$/);
-  if (reviewMatch && method === 'GET') {
-    const submission = row(submissionSelect() + ' WHERE submission.id = ? AND submission.org_id = ?', [reviewMatch[1], auth.user.orgId]);
-    if (!submission) throw errors.notFound('提交不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
-    if (auth.user.role === 'TEACHER') {
-      const scope = teacherSubmissionScope(auth);
-      const scoped = row(`SELECT submission.id FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE submission.id = ?${scope.sql}`, [reviewMatch[1], ...scope.params]);
-      if (!scoped) throw errors.forbidden('该学生不在你的班级里', 'VIBECODING_SUBMISSION_FORBIDDEN');
-    }
-    return normalizeSubmission(submission, { includeContent: true });
-  }
-
-  if (reviewMatch && method === 'PUT') {
-    const submission = row(submissionSelect() + ' WHERE submission.id = ? AND submission.org_id = ?', [reviewMatch[1], auth.user.orgId]);
-    if (!submission) throw errors.notFound('提交不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
-    if (auth.user.role === 'TEACHER') {
-      const scope = teacherSubmissionScope(auth);
-      const scoped = row(`SELECT submission.id FROM vibecoding_submissions submission LEFT JOIN classes class ON class.id = submission.class_id WHERE submission.id = ?${scope.sql}`, [reviewMatch[1], ...scope.params]);
-      if (!scoped) throw errors.forbidden('该学生不在你的班级里', 'VIBECODING_SUBMISSION_FORBIDDEN');
-    }
-    if (submission.status !== 'PENDING') throw errors.conflict('该提交已处理，不能重复点评', 'VIBECODING_SUBMISSION_ALREADY_REVIEWED');
-    const status = String(ctx.body?.status || '').trim().toUpperCase();
-    if (!['APPROVED', 'REJECTED'].includes(status)) throw errors.badRequest('点评结果无效', 'INVALID_VIBECODING_REVIEW_STATUS');
-    const comment = String(ctx.body?.comment || '').trim().slice(0, 2000);
-    if (status === 'REJECTED' && !comment) throw errors.badRequest('驳回时请写明原因', 'VIBECODING_REVIEW_COMMENT_REQUIRED');
-    const now = nowIso();
-    transaction(() => {
-      q('UPDATE vibecoding_submissions SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,updated_at=? WHERE id=?',
-        [status, comment, auth.user.id, now, now, submission.id]);
-      // 驳回后放开继续创作，学生改完可以再提交
-      if (status === 'REJECTED') q("UPDATE vibecoding_conversations SET status='DRAFT',updated_at=? WHERE id=?", [now, submission.conversation_id]);
-      audit(ctx, 'VIBECODING_REVIEW', 'VIBECODING_SUBMISSION', submission.id, { status: submission.status }, { status, comment });
-    });
-    return normalizeSubmission(row(submissionSelect() + ' WHERE submission.id = ?', [submission.id]), { includeContent: true });
-  }
-
-  return null;
-}
-
 export async function handleVibeCoding(ctx) {
   const { pathname } = ctx;
-  if (pathname.startsWith('/api/org/vibecoding')) {
-    if (!ctx.auth) throw errors.unauthorized('请先登录', 'UNAUTHORIZED');
-    const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']);
-    const part = pathname.slice('/api/org/vibecoding'.length) || '/';
-    return handleOrgVibeCoding(ctx, auth, part);
-  }
   if (!pathname.startsWith('/api/student/vibecoding')) return null;
   if (!ctx.auth) throw errors.unauthorized('请先登录', 'UNAUTHORIZED');
   const auth = requireRole(ctx, ['STUDENT']);

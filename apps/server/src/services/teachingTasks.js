@@ -47,10 +47,10 @@ function normalizeTask(task) {
     lessonTitle: task.lesson_title, title: task.title, description: task.description, dueAt: task.due_at,
     status: task.status, createdBy: task.created_by, createdAt: task.created_at, updatedAt: task.updated_at };
 }
+// 没有老师点评这一环了：交没交、什么时候交的才是要看的（分数/反馈/已读都是点评流程的产物）
 function normalizeSubmission(s, snapshot = false) {
   return { id: s.id, round: s.round, projectId: s.project_id, note: s.student_note, status: s.status,
-    score: s.score, feedback: s.feedback, submittedAt: s.submitted_at, reviewedAt: s.reviewed_at,
-    reviewedBy: s.reviewed_by, viewedAt: s.viewed_at, ...(snapshot ? { snapshot: parseJson(s.project_snapshot, null) } : {}) };
+    submittedAt: s.submitted_at, ...(snapshot ? { snapshot: parseJson(s.project_snapshot, null) } : {}) };
 }
 function taskRoster(task, studentId = null) {
   const now = nowIso();
@@ -68,14 +68,13 @@ function taskRoster(task, studentId = null) {
     return { studentId: item.student_id, displayName: item.display_name, login: item.login, progressId: item.progress_id,
       progressStatus: status, overdue, lateSubmission: Boolean(task.due_at && item.submitted_at > task.due_at),
       startedAt: item.started_at, submittedAt: item.submitted_at, completedAt: item.completed_at,
-      teacherFeedback: item.teacher_feedback || '', latestSubmission: latest ? normalizeSubmission(latest) : null };
+      latestSubmission: latest ? normalizeSubmission(latest) : null };
   });
 }
 function summarize(items) {
   return { total: items.length, pending: items.filter(i => !['SUBMITTED', 'COMPLETED'].includes(i.progressStatus)).length,
     submitted: items.filter(i => i.progressStatus === 'SUBMITTED').length,
-    completed: items.filter(i => i.progressStatus === 'COMPLETED').length, overdue: items.filter(i => i.overdue).length,
-    unviewed: items.filter(i => i.progressStatus === 'SUBMITTED' && !i.latestSubmission?.viewedAt).length };
+    completed: items.filter(i => i.progressStatus === 'COMPLETED').length, overdue: items.filter(i => i.overdue).length };
 }
 function taskScopeWhere(auth, student, classId) {
   if (classId) scopedClass(auth, classId, { student });
@@ -156,11 +155,11 @@ export function handleTeachingTasks(ctx, part) {
     return pageResult(items, { page, limit, total });
   }
   if (part === '/teaching/summary' && method === 'GET') {
-    const tasks = tasksInScope(auth, false, ''); const totals = { tasks: tasks.length, published: 0, submitted: 0, overdue: 0, unviewed: 0, completed: 0 };
+    const tasks = tasksInScope(auth, false, ''); const totals = { tasks: tasks.length, published: 0, submitted: 0, overdue: 0, completed: 0 };
     for (const task of tasks) {
       if (task.status !== 'PUBLISHED') continue;
       totals.published++; const summary = summarize(taskRoster(task));
-      for (const key of ['submitted', 'overdue', 'unviewed', 'completed']) totals[key] += summary[key];
+      for (const key of ['submitted', 'overdue', 'completed']) totals[key] += summary[key];
     }
     return totals;
   }
@@ -176,7 +175,9 @@ export function handleTeachingTasks(ctx, part) {
     });
     return normalizeTask(row('SELECT * FROM learning_tasks WHERE id=?', [taskId]));
   }
-  const match = part.match(/^\/teaching\/tasks\/([^/]+)(?:\/(submissions|review|viewed))?$/);
+  // ⚠️ 内层必须是**捕获组**：match[2] 就是那个动作名（去掉 review/viewed 之后只剩 submissions）。
+  // 写成非捕获组 `(?:\/submissions)?` 的话 match[2] 永远是 undefined，整个分支静默不执行 → 404。
+  const match = part.match(/^\/teaching\/tasks\/([^/]+)(?:\/(submissions))?$/);
   if (match) {
     const task = scopedTask(auth, decodeURIComponent(match[1]), false, method === 'PATCH');
     if (!match[2] && method === 'PATCH') {
@@ -193,34 +194,6 @@ export function handleTeachingTasks(ctx, part) {
       const studentId = ctx.search.get('studentId');
       const history = studentId && items.some(i => i.studentId === studentId) ? rows('SELECT * FROM learning_task_submissions WHERE task_id=? AND student_id=? ORDER BY round DESC', [task.id, studentId]).map(s => normalizeSubmission(s, true)) : [];
       return { task: normalizeTask(task), summary: summarize(items), items: items.filter(i => (!status || i.progressStatus === status) && (!overdue || i.overdue)), history };
-    }
-    if (['review','viewed'].includes(match[2]) && method === 'POST') {
-      const ids = body.submissionIds;
-      if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some(v => typeof v !== 'string') || new Set(ids).size !== ids.length) throw errors.badRequest('请选择 1—100 条不同的提交', 'INVALID_SUBMISSION_IDS');
-      const reviewing = match[2] === 'review'; const decision = body.decision;
-      const feedback = reviewing ? text(body.feedback, '反馈', 2000, decision === 'REJECTED') : '';
-      const score = body.score === undefined || body.score === null || body.score === '' ? null : Number(body.score);
-      if (reviewing && (!['APPROVED','REJECTED'].includes(decision) || (score !== null && (!Number.isInteger(score) || score < 0 || score > 100)))) throw errors.badRequest('请选择通过或驳回，分数须为 0—100 整数', 'INVALID_TASK_REVIEW');
-      return transaction(() => {
-        // Prevalidate the whole batch before making changes, preventing partial or cross-class review.
-        const submissions = ids.map(submissionId => {
-          const submission = row('SELECT * FROM learning_task_submissions WHERE id=? AND task_id=? AND org_id=?', [submissionId, task.id, auth.user.orgId]);
-          if (!submission) throw errors.notFound('提交记录不存在', 'TASK_SUBMISSION_NOT_FOUND');
-          const latest = row('SELECT id FROM learning_task_submissions WHERE task_id=? AND student_id=? ORDER BY round DESC LIMIT 1', [task.id, submission.student_id]);
-          if (reviewing && (submission.status !== 'SUBMITTED' || latest?.id !== submission.id)) throw errors.conflict('提交已被处理，请刷新后重试', 'TASK_REVIEW_CONFLICT');
-          return submission;
-        });
-        const now = nowIso();
-        for (const submission of submissions) {
-          q('UPDATE learning_task_submissions SET viewed_at=COALESCE(viewed_at,?),viewed_by=COALESCE(viewed_by,?) WHERE id=?', [now, auth.user.id, submission.id]);
-          if (reviewing) {
-            q('UPDATE learning_task_submissions SET status=?,score=?,feedback=?,reviewed_by=?,reviewed_at=? WHERE id=?', [decision, score, feedback, auth.user.id, now, submission.id]);
-            q('UPDATE learning_task_progress SET status=?,teacher_feedback=?,completed_at=?,updated_at=? WHERE task_id=? AND student_id=? AND org_id=?', [decision === 'APPROVED' ? 'COMPLETED' : 'IN_PROGRESS', feedback, decision === 'APPROVED' ? now : null, now, task.id, submission.student_id, auth.user.orgId]);
-          }
-          audit(ctx, reviewing ? 'LEARNING_TASK_REVIEW' : 'LEARNING_TASK_VIEWED', 'TASK_SUBMISSION', submission.id, { status: submission.status }, reviewing ? { status: decision, score, feedback } : { viewed: true });
-        }
-        return { count: submissions.length };
-      });
     }
   }
   const progressMatch = part.match(/^\/teaching\/classes\/([^/]+)\/progress$/);

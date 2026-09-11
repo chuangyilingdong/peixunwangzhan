@@ -317,7 +317,7 @@ export async function handleWorks(ctx, part, method) {
     };
   }
 
-  // ── VibeCoding 作品（老师点评通过后，平台决定是否发布到作品广场）───────────────
+  // ── VibeCoding 作品（学生提交后，平台决定是否发布到作品广场；没有老师点评这一环了）──
   if (part === '/vibecoding-works' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const status = String(ctx.search.get('status') || '').trim().toUpperCase();
@@ -353,7 +353,6 @@ export async function handleWorks(ctx, part, method) {
     if (!Object.hasOwn(ctx.body || {}, 'published') || typeof ctx.body.published !== 'boolean') throw errors.badRequest('请选择是否发布到作品广场', 'WORK_PLAZA_FLAG_REQUIRED');
     const now = nowIso();
     if (ctx.body.published) {
-      if (submission.status !== 'APPROVED') throw errors.conflict('仅老师已通过的作品可以发布到作品广场', 'VIBECODING_WORK_NOT_APPROVED');
       if (!submission.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
       let shareToken = submission.share_token;
       if (!shareToken) {

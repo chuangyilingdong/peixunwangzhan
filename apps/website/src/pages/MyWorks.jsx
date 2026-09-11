@@ -25,18 +25,17 @@ export function MyWorksPage({ api }) {
   }, [api, page]);
 
   const items = state.items;
-  const summary = state.summary || { total: items.length, published: items.filter((item) => item.plazaPublished).length, withFeedback: items.filter((item) => item.teacherComment).length };
+  const summary = state.summary || { total: items.length, published: items.filter((item) => item.plazaPublished).length };
 
   return <div className="student-page">
     <header className="student-page-head">
       <h1>我的作品</h1>
-      <p>这里是你提交过的课堂作品，以及老师的点评。</p>
+      <p>这里是你提交过的课堂作品。作品由平台挑选发布到作品广场。</p>
     </header>
 
     <div className="student-summary">
       <div className="student-summary-card"><span>作品总数</span><strong>{summary.total}</strong></div>
       <div className="student-summary-card"><span>已上作品广场</span><strong>{summary.published}</strong></div>
-      <div className="student-summary-card"><span>收到点评</span><strong>{summary.withFeedback}</strong></div>
     </div>
 
     {state.loading ? <div className="student-page-state">正在加载作品…</div> : null}
@@ -54,8 +53,6 @@ export function MyWorksPage({ api }) {
       </div>
       <p className="student-card__meta">{work.courseLessonTitle || '未绑定课时'} · {work.className || '未绑定班级'}</p>
       {work.description ? <p className="student-card__desc">{work.description}</p> : null}
-      {work.teacherComment ? <div className="student-card__feedback"><b>老师点评</b><p>{work.teacherComment}</p></div> : null}
-      {work.unreadFeedbackCount ? <p className="student-card__unread">✦ 有 {work.unreadFeedbackCount} 条新点评待查看</p> : null}
       <p className="student-card__foot">提交于 {formatDate(work.submittedAt)}</p>
     </article>)}</div> : null}
 

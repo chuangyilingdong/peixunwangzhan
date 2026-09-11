@@ -15,7 +15,10 @@ let list=await req(student,'/student/learning/tasks');ok(list.status===200&&list
 let st=await req(student,`/student/learning/tasks/${task.id}/start`,{method:'POST',body:'{}'});ok(st.status===200,'start failed');
 let sub=await req(student,`/student/learning/tasks/${task.id}/submit`,{method:'POST',body:JSON.stringify({note:'我已经完成任务'})});ok(sub.status===200,'submit failed');
 let queue=await req(teacher,`/org/teaching/tasks/${task.id}/submissions`);ok(queue.status===200&&queue.data.summary.submitted===1,'teacher queue missing');const sid=queue.data.items.find(x=>x.progressStatus==='SUBMITTED').latestSubmission.id;
-let viewed=await req(teacher,`/org/teaching/tasks/${task.id}/viewed`,{method:'POST',body:JSON.stringify({submissionIds:[sid]})});ok(viewed.status===200,'view failed');
-let review=await req(teacher,`/org/teaching/tasks/${task.id}/review`,{method:'POST',body:JSON.stringify({submissionIds:[sid],decision:'APPROVED',score:95,feedback:'完成得很好'})});ok(review.status===200,'review failed');
-let after=await req(student,'/student/learning/tasks');const done=after.data.items.find(x=>x.id===task.id);ok(done.progressStatus==='COMPLETED'&&done.latestSubmission?.score===95,'student result missing');
-console.log(JSON.stringify({name:'task-loop',passed:10,taskId:task.id,status:done.progressStatus}));}finally{server.kill('SIGTERM')}
+// 老师点评（通过/驳回/打分/标记已查看）已按用户要求整套删除：这三个动作必须都不再应答
+let viewed=await req(teacher,`/org/teaching/tasks/${task.id}/viewed`,{method:'POST',body:JSON.stringify({submissionIds:[sid]})});ok(viewed.status===404,`标记已查看应当已删除，实际 ${viewed.status}`);
+let review=await req(teacher,`/org/teaching/tasks/${task.id}/review`,{method:'POST',body:JSON.stringify({submissionIds:[sid],decision:'APPROVED',score:95,feedback:'完成得很好'})});ok(review.status===404,`点评应当已删除，实际 ${review.status}`);
+// 学生端：任务仍是「已提交」，等平台处理；不再有老师给的分数与反馈
+let after=await req(student,'/student/learning/tasks');const done=after.data.items.find(x=>x.id===task.id);ok(done.progressStatus==='SUBMITTED','student progress should stay SUBMITTED');
+ok(done.latestSubmission && done.latestSubmission.score===undefined,'提交对象不该再有分数');
+console.log(JSON.stringify({name:'task-loop',passed:11,taskId:task.id,status:done.progressStatus,reviewRemoved:true}));}finally{server.kill('SIGTERM')}

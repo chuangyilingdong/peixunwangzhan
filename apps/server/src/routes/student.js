@@ -162,32 +162,6 @@ function workSubmissionRows(workIds) {
   return grouped;
 }
 
-function annotationRowsForStudent(workId, studentId, orgId) {
-  return rows(
-    `SELECT annotation.*, author.display_name AS author_name, resolver.display_name AS resolver_name,
-            read_record.read_at
-     FROM work_annotations annotation
-     JOIN users author ON author.id = annotation.author_id
-     LEFT JOIN users resolver ON resolver.id = annotation.resolved_by
-     LEFT JOIN work_feedback_reads read_record ON read_record.annotation_id = annotation.id
-       AND read_record.student_id = ?
-     WHERE annotation.work_id=? AND annotation.org_id=?
-     ORDER BY annotation.created_at DESC LIMIT 500`,
-    [studentId, workId, orgId],
-  ).map((annotation) => ({
-    id: annotation.id,
-    workId: annotation.work_id,
-    nodeId: annotation.node_id || null,
-    content: annotation.content,
-    authorId: annotation.author_id,
-    authorName: annotation.author_name || '教师',
-    createdAt: annotation.created_at,
-    resolvedAt: annotation.resolved_at || null,
-    resolvedBy: annotation.resolved_by || null,
-    resolverName: annotation.resolver_name || null,
-    readAt: annotation.read_at || null,
-  }));
-}
 
 function normalizeWorkPublishRequest(request) {
   if (!request) return null;
@@ -213,14 +187,7 @@ function decorateWork(work, ctx, { includeSubmissions = false } = {}) {
   if (!work) return work;
   const submissionsByWork = workSubmissionRows(work.id).get(work.id) || [];
   const submissionRound = submissionsByWork[0]?.round || 0;
-  const annotations = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
-  const unreadAnnotationCount = annotations.filter((item) => !item.readAt).length;
-  const overallRead = Boolean(row(
-    'SELECT id FROM work_feedback_reads WHERE work_id=? AND student_id=? AND annotation_id IS NULL AND submission_round=?',
-    [work.id, ctx.auth.user.id, submissionRound],
-  ));
-  const hasOverallFeedback = Boolean(work.teacherComment);
-  const overallUnreadCount = hasOverallFeedback && !overallRead ? 1 : 0;
+  // 没有老师点评这一环了：批注、已读回执这些随之删除（见第三节「取消老师点评」）
   const publishRequests = rows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id]).map(normalizeWorkPublishRequest);
   const pendingPublishRequest = publishRequests.find((item) => item.status === 'PENDING') || null;
   const latestPublishRequest = publishRequests[0] || null;
@@ -229,10 +196,6 @@ function decorateWork(work, ctx, { includeSubmissions = false } = {}) {
     ...work,
     submissionRound,
     submissions: includeSubmissions ? submissionsByWork : undefined,
-    unreadFeedbackCount: unreadAnnotationCount + overallUnreadCount,
-    unreadAnnotationCount,
-    overallUnreadCount,
-    overallFeedbackRead: overallRead,
     publishRequests: includeSubmissions ? publishRequests : undefined,
     pendingPublishRequest,
     latestPublishRequest,
@@ -1073,70 +1036,6 @@ export async function handleStudent(ctx) {
     return { items: workSubmissionRows(work.id).get(work.id) || [], submissionRound: currentSubmissionRound(work.id) };
   }
 
-  match = part.match(/^\/works\/([^/]+)\/annotations$/);
-  if (match && method === 'GET') {
-    const work = getOwnWork(ctx, match[1]);
-    const items = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
-    return {
-      items,
-      unreadCount: items.filter((item) => !item.readAt).length,
-      submissionRound: currentSubmissionRound(work.id),
-    };
-  }
-
-  match = part.match(/^\/works\/([^/]+)\/feedback-read$/);
-  if (match && method === 'POST') {
-    const work = getOwnWork(ctx, match[1]);
-    const bodyIds = Array.isArray(ctx.body?.annotationIds) ? ctx.body.annotationIds : null;
-    let annotationIds = bodyIds ? [...new Set(bodyIds.map((value) => String(value || '').trim()).filter(Boolean))] : null;
-    // 空数组与缺省字段语义一致，都表示读取整体点评；学生端“标记已读”使用空数组。
-    if (annotationIds && annotationIds.length === 0) annotationIds = null;
-    if (annotationIds && annotationIds.length > 100) throw errors.badRequest('单次最多标记 100 条点评已读', 'ANNOTATION_READ_BATCH_TOO_LARGE');
-    const round = currentSubmissionRound(work.id);
-    const now = nowIso();
-    transaction(() => {
-      if (!annotationIds) {
-        q(
-          `INSERT INTO work_feedback_reads(id,work_id,student_id,annotation_id,submission_round,read_at)
-           SELECT ?,?,?,?,?,? FROM works
-           WHERE id=? AND student_id=? AND org_id=?
-             AND teacher_comment IS NOT NULL AND teacher_comment != ''
-             AND NOT EXISTS (
-               SELECT 1 FROM work_feedback_reads existing
-               WHERE existing.work_id=? AND existing.student_id=? AND existing.annotation_id IS NULL
-                 AND existing.submission_round=?
-             )`,
-          [id('read'), work.id, ctx.auth.user.id, null, round, now, work.id, ctx.auth.user.id, ctx.auth.user.orgId, work.id, ctx.auth.user.id, round],
-        );
-      } else {
-        for (const annotationId of annotationIds) {
-          const annotation = row('SELECT id FROM work_annotations WHERE id=? AND work_id=? AND org_id=?', [annotationId, work.id, ctx.auth.user.orgId]);
-          if (!annotation) throw errors.notFound('画布点评不存在', 'ANNOTATION_NOT_FOUND');
-          const existingRead = row(
-            'SELECT id FROM work_feedback_reads WHERE annotation_id=? AND student_id=?',
-            [annotationId, ctx.auth.user.id],
-          );
-          if (existingRead) {
-            q('UPDATE work_feedback_reads SET read_at=?,updated_at=read_at WHERE id=?', [now, existingRead.id]);
-          } else {
-            q(
-              `INSERT INTO work_feedback_reads(id,work_id,student_id,annotation_id,submission_round,read_at)
-               VALUES (?,?,?,?,?,?)`,
-              [id('read'), work.id, ctx.auth.user.id, annotationId, round, now],
-            );
-          }
-        }
-      }
-    });
-    audit(ctx, 'WORK_FEEDBACK_READ', 'WORK', work.id, null, { annotationIds: annotationIds || [], submissionRound: round });
-    const items = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
-    const overallRead = Boolean(row(
-      'SELECT id FROM work_feedback_reads WHERE work_id=? AND student_id=? AND annotation_id IS NULL AND submission_round=?',
-      [work.id, ctx.auth.user.id, round],
-    ));
-    const unreadCount = items.filter((item) => !item.readAt).length + (work.teacher_comment && !overallRead ? 1 : 0);
-    return { ok: true, unreadCount, submissionRound: round, overallRead };
-  }
 
   match = part.match(/^\/works\/([^/]+)\/publish-request\/withdraw$/);
   if (match && method === 'POST') {
@@ -1210,25 +1109,6 @@ export async function handleStudent(ctx) {
       { isPublic: Boolean(work.is_public), shareToken: work.share_token },
       { isPublic: ctx.body.isPublic, shareToken }, { orgId: work.org_id });
     return { id: work.id, isPublic: ctx.body.isPublic, shareToken };
-  }
-  match = part.match(/^\/works\/([^/]+)\/annotations$/);
-  if (match && method === 'GET') {
-    const work = row('SELECT id FROM works WHERE id=? AND student_id=? AND org_id=?', [match[1], auth.user.id, auth.user.orgId]);
-    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-    const items = rows(
-      `SELECT annotation.*, author.display_name AS author_name, resolver.display_name AS resolver_name
-       FROM work_annotations annotation
-       JOIN users author ON author.id=annotation.author_id
-       LEFT JOIN users resolver ON resolver.id=annotation.resolved_by
-       WHERE annotation.work_id=? AND annotation.org_id=?
-       ORDER BY annotation.created_at DESC LIMIT 500`,
-      [work.id, auth.user.orgId],
-    ).map((annotation) => ({
-      id: annotation.id, workId: annotation.work_id, nodeId: annotation.node_id || null, content: annotation.content,
-      authorId: annotation.author_id, authorName: annotation.author_name || '教师', createdAt: annotation.created_at,
-      resolvedAt: annotation.resolved_at || null, resolvedBy: annotation.resolved_by || null, resolverName: annotation.resolver_name || null,
-    }));
-    return { items };
   }
 
   match = part.match(/^\/works\/([^/]+)$/);
@@ -1310,7 +1190,6 @@ export async function handleStudent(ctx) {
         studentName: publicName(work.student_name, !!work.student_anonymous),
         studentId: undefined,
         projectId: undefined,
-        teacherComment: undefined,
         reviewedBy: undefined,
         reviewerName: undefined,
         featuredBy: undefined,
@@ -1369,9 +1248,6 @@ export async function handleStudent(ctx) {
       studentName: work.student_anonymous ? '小创作者' : (String(work.student_name || '').trim().slice(0, 1) + '同学' || '小创作者'),
       studentId: undefined,
       projectId: undefined,
-      teacherComment: undefined,
-      reviewedBy: undefined,
-      reviewerName: undefined,
       featuredBy: undefined,
       canReport: work.student_id !== auth.user.id,
       sharing: (() => {
@@ -1416,13 +1292,6 @@ export async function handleStudent(ctx) {
       const normalized = normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' });
       const submissions = submissionsByWork.get(work.id) || [];
       const submissionRound = submissions[0]?.round || 0;
-      const annotations = annotationRowsForStudent(work.id, ctx.auth.user.id, ctx.auth.user.orgId);
-      const unreadAnnotationCount = annotations.filter((item) => !item.readAt).length;
-      const overallRead = Boolean(row(
-        'SELECT id FROM work_feedback_reads WHERE work_id=? AND student_id=? AND annotation_id IS NULL AND submission_round=?',
-        [work.id, ctx.auth.user.id, submissionRound],
-      ));
-      const overallUnreadCount = work.teacher_comment && !overallRead ? 1 : 0;
       const publishRequests = rows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id]).map(normalizeWorkPublishRequest);
       const pendingPublishRequest = publishRequests.find((item) => item.status === 'PENDING') || null;
       const project = row('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.project_id, ctx.auth.user.id, ctx.auth.user.orgId]);
@@ -1430,10 +1299,6 @@ export async function handleStudent(ctx) {
         ...normalized,
         submissionRound,
         submissions,
-        unreadFeedbackCount: unreadAnnotationCount + overallUnreadCount,
-        unreadAnnotationCount,
-        overallUnreadCount,
-        overallFeedbackRead: overallRead,
         publishRequests,
         pendingPublishRequest,
         latestPublishRequest: publishRequests[0] || null,

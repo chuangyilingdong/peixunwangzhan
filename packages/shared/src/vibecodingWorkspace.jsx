@@ -213,7 +213,9 @@ function WorkspaceView({ api }) {
     })));
   }, [conversation.data?.id, conversation.data?.updatedAt]);
 
-  const editable = conversation.data?.status === 'DRAFT';
+  // 没有「老师点评」这一环了，所以**提交之后也能继续改**（学生想接着优化是常态）。
+  // 只有归档会话才是只读；提交本身不再锁创作。
+  const editable = conversation.data?.status !== 'ARCHIVED';
   const entryFile = useMemo(() => entryOf(artifacts, conversation.data?.entryFile), [artifacts, conversation.data?.entryFile]);
   const previewHtml = useMemo(() => buildPreviewDocument(filesFromArtifacts(artifacts), entryFile), [artifacts, entryFile]);
 
@@ -528,14 +530,14 @@ function WorkspaceView({ api }) {
   function submitWork() {
     if (!messages.length) return;
     setConfirm({
-      title: '提交给老师点评？',
-      body: '请确认这是你自己的作品，并同意平台在作品广场展示。提交后要等老师处理才能继续修改。',
+      title: '把作品交给平台？',
+      body: '请确认这是你自己的作品，并同意平台在作品广场展示。交给平台后不影响你继续修改——平台会从作品里挑选发布到广场。',
       confirmLabel: '确认提交',
       onConfirm: async () => {
         setConfirm(null);
         try {
           await api.post(`student/vibecoding/conversations/${conversationId}/submit`, { copyrightConfirmed: true });
-          toast.ok('作品已提交，等待老师点评');
+          toast.ok('已交给平台');
           conversation.refresh();
           list.refresh();
         } catch (error) { toast.error(error.message || '提交失败'); }
@@ -595,14 +597,10 @@ function WorkspaceView({ api }) {
         </>
       )}
       title={data.title}
-      subtitle={editable ? '正在创作' : '已提交'}
+      subtitle="正在创作"
       actions={(
         <>
-          {submission ? (
-            <Pill tone={submission.status === 'APPROVED' ? 'ok' : submission.status === 'REJECTED' ? 'danger' : 'warn'}>
-              {submission.status === 'APPROVED' ? '老师已通过' : submission.status === 'REJECTED' ? '已驳回' : '等待点评'}
-            </Pill>
-          ) : null}
+          {submission ? <Pill tone="ok">已交给平台</Pill> : null}
           {modelOptions.length ? (
             <select
               className="c-input c-model-select"
@@ -626,7 +624,7 @@ function WorkspaceView({ api }) {
             <Button size="sm" variant="ghost" icon="eye" onClick={() => setWorkbenchOpen(true)}>预览作品</Button>
           )}
           <Button size="sm" variant="primary" icon="check" disabled={!editable || streaming || !messages.length} onClick={submitWork}>
-            {editable ? '提交作品' : '已提交'}
+            {submission ? '重新提交' : '提交作品'}
           </Button>
         </>
       )}
@@ -719,7 +717,7 @@ function WorkspaceView({ api }) {
             onRemoveAttachment={(item) => setAttachments((current) => current.filter((entry) => entry.id !== item.id))}
             streaming={streaming}
             disabled={!editable}
-            blockedReason={editable ? '' : '作品已提交，等老师点评后才能继续创作。'}
+            blockedReason=""
             placeholder={editable ? '说说你想做什么…' : '已提交，暂时不能再对话'}
             history={messages.filter((item) => item.role === 'user').map((item) => item.content).reverse()}
           />

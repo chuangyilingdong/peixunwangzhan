@@ -177,13 +177,12 @@ try {
   assert.equal(detail.messages.length, 0, '清空后应没有消息');
   assert.ok((detail.artifacts || []).length, '清空聊天不应删除产物文件');
 
-  // 7) 已提交的会话不能编辑
+  // 7) 提交只是「交给平台」，**不再锁创作**（老师点评那一环已按用户要求删除）
   await stream(`/api/student/vibecoding/conversations/${conversationId}/messages`, { token: student, body: { content: '准备提交' } });
   const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
   assert.equal(submitted.status, 200, `提交失败: ${JSON.stringify(submitted.data)}`);
-  const locked = await api(`/api/student/vibecoding/conversations/${conversationId}/messages`, { method: 'DELETE', token: student });
-  assert.equal(locked.status, 409, `已提交会话清空应 409，实际 ${locked.status}`);
-  assert.equal(locked.data?.error?.code, 'VIBECODING_CONVERSATION_LOCKED', '错误码应为 VIBECODING_CONVERSATION_LOCKED');
+  const afterSubmitStream = await stream(`/api/student/vibecoding/conversations/${conversationId}/messages`, { token: student, body: { content: '提交后还能聊' } });
+  assert.ok(afterSubmitStream, '提交后应当仍可继续创作（不再锁会话）');
 
   console.log(JSON.stringify({
     name: 'vibecoding-chat-ops', pass: true,

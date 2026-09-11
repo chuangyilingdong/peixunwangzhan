@@ -19,8 +19,7 @@ const navigation = [
   { to: '/billing-transactions', icon: '▤', label: '积分流水', adminOnly: true },
   { to: '/recharge', icon: '◆', label: '积分账务', adminOnly: true },
   { to: '/usage', icon: '▦', label: '积分用量' },
-  { to: '/works', icon: '✧', label: '作品点评' }, 
-  { to: '/vibecoding', icon: '💻', label: 'VibeCoding 点评' }, 
+  { to: '/works', icon: '✧', label: '作品管理' }, 
   { to: '/inbox', icon: '✉', label: '站内信' }, 
   { to: '/courses', icon: '◇', label: '课程中心' }, 
   { to: '/work-data', icon: '▥', label: '作品数据中心', adminOnly: true }, 
@@ -82,9 +81,7 @@ function TeachingTasks({ api }) {
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
   async function create(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.post('org/teaching/tasks', form); setForm({ classId: '', title: '', description: '', dueAt: '' }); setMessage('任务已发布。'); tasks.refresh(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
   async function toggle(item) { try { await api.patch(`org/teaching/tasks/${item.id}`, { status: item.status === 'CLOSED' ? 'PUBLISHED' : 'CLOSED' }); tasks.refresh(); } catch (error) { setMessage(error.message); } }
-  async function markViewed(item) { try { await api.post(`org/teaching/tasks/${selectedTaskId}/viewed`, { submissionIds: [item.latestSubmission.id] }); setMessage('已标记为已查看。'); submissions.refresh(); } catch (error) { setMessage(error.message); } }
-  async function review(item, decision) { const feedback = window.prompt(decision === 'APPROVED' ? '请输入通过反馈（可留空）' : '请输入驳回原因'); if (feedback === null || (decision === 'REJECTED' && !feedback.trim())) return; const scoreText = window.prompt('请输入分数（0-100，可留空）', ''); const score = scoreText?.trim() ? Number(scoreText) : undefined; try { await api.post(`org/teaching/tasks/${selectedTaskId}/review`, { submissionIds: [item.latestSubmission.id], decision, feedback, ...(score === undefined ? {} : { score }) }); setMessage(decision === 'APPROVED' ? '已通过并完成任务。' : '已驳回，学生可修改后重新提交。'); submissions.refresh(); } catch (error) { setMessage(error.message); } }
-  return <><PageHeader eyebrow="课堂教学" title="课堂任务" description="发布任务、查看学生提交、批量点评并查看班级完成情况。" actions={<button className="secondary-button" onClick={tasks.refresh}>刷新</button>} />{message && <Notice tone="info">{message}</Notice>}<div className="split"><Panel title="发布新任务"><form onSubmit={create}><label>班级<select required value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })}><option value="">请选择班级</option>{(classes.data?.items || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>任务标题<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label><label>任务说明<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><label>截止时间<input type="datetime-local" value={form.dueAt ? form.dueAt.slice(0,16) : ''} onChange={(e) => setForm({ ...form, dueAt: e.target.value ? new Date(e.target.value).toISOString() : '' })} /></label><button className="primary-button" disabled={busy}>{busy ? '发布中…' : '发布任务'}</button></form></Panel><Panel title="任务列表">{tasks.loading ? <Loading /> : tasks.error ? <ErrorState error={tasks.error} onRetry={tasks.refresh} /> : tasks.data.items.length ? <><ListResultSummary total={tasks.data.total} page={tasks.data.page} totalPages={tasks.data.totalPages} label="个任务" /><div className="card-list">{tasks.data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={item.status} /><span className="muted">{item.className} · 已提交 {item.summary?.submitted || 0} · 待处理 {item.summary?.unviewed || 0}</span></div><h3>{item.title}</h3><p>{item.description || '暂无说明'}</p><p className="muted">截止：{item.dueAt ? formatDate(item.dueAt) : '未设置'} · {item.lessonTitle || '未绑定课时'}</p><div className="row-actions"><button className="secondary-button" onClick={() => setSelectedTaskId(item.id)}>查看提交</button><button className="text-button" onClick={() => toggle(item)}>{item.status === 'CLOSED' ? '重新发布' : '关闭任务'}</button></div></article>)}</div><Pagination page={tasks.data.page} totalPages={tasks.data.totalPages} onChange={setPage} disabled={tasks.loading} /></> : <Empty title="暂无课堂任务" body="发布第一个任务后会显示在这里。" />}</Panel></div>{selectedTaskId && <Panel title="学生任务提交" actions={<button className="secondary-button" onClick={() => setSelectedTaskId('')}>关闭</button>}>{submissions.loading ? <Loading /> : submissions.error ? <ErrorState error={submissions.error} onRetry={submissions.refresh} /> : submissions.data.items.length ? <div className="table-wrap"><table><thead><tr><th>学生</th><th>状态</th><th>提交时间</th><th>分数</th><th>操作</th></tr></thead><tbody>{submissions.data.items.map((item) => <tr key={item.studentId}><td>{item.displayName}</td><td><Status value={item.progressStatus} />{item.overdue && <span className="muted"> · 逾期</span>}</td><td>{formatDate(item.submittedAt)}</td><td>{item.latestSubmission?.score ?? '—'}</td><td>{item.latestSubmission ? <div className="row-actions">{!item.latestSubmission.viewedAt && <button className="text-button" onClick={() => markViewed(item)}>标记已查看</button>}{item.progressStatus === 'SUBMITTED' && <><button className="secondary-button" onClick={() => review(item, 'APPROVED')}>通过</button><button className="text-button" onClick={() => review(item, 'REJECTED')}>驳回</button></>}</div> : <span className="muted">未提交</span>}</td></tr>)}</tbody></table></div> : <Empty title="暂无提交" body="学生提交后会显示在这里。" />}</Panel>}
+  return <><PageHeader eyebrow="课堂教学" title="课堂任务" description="发布任务、查看学生提交情况与班级学习进度。" actions={<button className="secondary-button" onClick={tasks.refresh}>刷新</button>} />{message && <Notice tone="info">{message}</Notice>}<div className="split"><Panel title="发布新任务"><form onSubmit={create}><label>班级<select required value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })}><option value="">请选择班级</option>{(classes.data?.items || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>任务标题<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label><label>任务说明<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><label>截止时间<input type="datetime-local" value={form.dueAt ? form.dueAt.slice(0,16) : ''} onChange={(e) => setForm({ ...form, dueAt: e.target.value ? new Date(e.target.value).toISOString() : '' })} /></label><button className="primary-button" disabled={busy}>{busy ? '发布中…' : '发布任务'}</button></form></Panel><Panel title="任务列表">{tasks.loading ? <Loading /> : tasks.error ? <ErrorState error={tasks.error} onRetry={tasks.refresh} /> : tasks.data.items.length ? <><ListResultSummary total={tasks.data.total} page={tasks.data.page} totalPages={tasks.data.totalPages} label="个任务" /><div className="card-list">{tasks.data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={item.status} /><span className="muted">{item.className} · 已提交 {item.summary?.submitted || 0}</span></div><h3>{item.title}</h3><p>{item.description || '暂无说明'}</p><p className="muted">截止：{item.dueAt ? formatDate(item.dueAt) : '未设置'} · {item.lessonTitle || '未绑定课时'}</p><div className="row-actions"><button className="secondary-button" onClick={() => setSelectedTaskId(item.id)}>查看提交</button><button className="text-button" onClick={() => toggle(item)}>{item.status === 'CLOSED' ? '重新发布' : '关闭任务'}</button></div></article>)}</div><Pagination page={tasks.data.page} totalPages={tasks.data.totalPages} onChange={setPage} disabled={tasks.loading} /></> : <Empty title="暂无课堂任务" body="发布第一个任务后会显示在这里。" />}</Panel></div>{selectedTaskId && <Panel title="学生任务提交" actions={<button className="secondary-button" onClick={() => setSelectedTaskId('')}>关闭</button>}>{submissions.loading ? <Loading /> : submissions.error ? <ErrorState error={submissions.error} onRetry={submissions.refresh} /> : submissions.data.items.length ? <div className="table-wrap"><table><thead><tr><th>学生</th><th>状态</th><th>提交时间</th><th>备注</th></tr></thead><tbody>{submissions.data.items.map((item) => <tr key={item.studentId}><td>{item.displayName}</td><td><Status value={item.progressStatus} />{item.overdue && <span className="muted"> · 逾期</span>}</td><td>{formatDate(item.submittedAt)}</td><td>{item.latestSubmission?.note || '—'}</td></tr>)}</tbody></table></div> : <Empty title="暂无提交" body="学生提交后会显示在这里。" />}</Panel>}
   <Panel title="班级学习进度"><label>选择班级<select value={selectedClassId} onChange={(e) => setSelectedClassId(e.target.value)}><option value="">请选择班级</option>{(classes.data?.items || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedClassId && (progress.loading ? <Loading /> : progress.error ? <ErrorState error={progress.error} onRetry={progress.refresh} /> : progress.data.items.length ? <div className="table-wrap"><table><thead><tr><th>学生</th><th>完成课时</th><th>进度</th><th>最近学习</th></tr></thead><tbody>{progress.data.items.map((item) => <tr key={item.studentId}><td>{item.displayName}</td><td>{item.completedCount}/{item.assignedCount}</td><td>{item.completionRate}%</td><td>{formatDate(item.lastAccessedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无学生进度" body="该班级还没有学习记录。" />)}</Panel></>;
 }
 
@@ -382,38 +379,15 @@ function Works({ api }) {
   const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' });
   const [reportBusy, setReportBusy] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
-  const [annotations, setAnnotations] = useState([]);
-  const [annotationsLoading, setAnnotationsLoading] = useState(false);
-  const [teacherComment, setTeacherComment] = useState('');
-  const [commentBusy, setCommentBusy] = useState(false);
-  const [annotationContent, setAnnotationContent] = useState('');
-  const [annotationNodeId, setAnnotationNodeId] = useState('');
   const [featureAction, setFeatureAction] = useState(null);
   const [featureForm, setFeatureForm] = useState({ featured: true, reason: '' });
   const [featureBusy, setFeatureBusy] = useState(false);
 
   async function openWork(work) {
     setSelectedWork(work);
-    setTeacherComment(work.teacherComment || '');
-    setAnnotationContent('');
-    setAnnotationNodeId('');
-    setAnnotationsLoading(true);
-    try { setAnnotations((await api.get(`org/works/${work.id}/annotations`)).items || []); }
-    catch (err) { setMessage(err.message); setAnnotations([]); }
-    finally { setAnnotationsLoading(false); }
   }
 
   // 只保存老师点评，不改变作品状态（是否上作品广场由平台决定）。
-  async function saveComment() {
-    if (!selectedWork) return;
-    setCommentBusy(true); setMessage('');
-    try {
-      await api.put(`org/works/${selectedWork.id}/review`, { teacherComment });
-      setMessage(`《${selectedWork.title}》的点评已保存。`);
-      refresh();
-      setSelectedWork((current) => current ? { ...current, teacherComment } : current);
-    } catch (err) { setMessage(err.message); } finally { setCommentBusy(false); }
-  }
 
   async function handleReport() {
     if (!reportAction) return;
@@ -435,45 +409,23 @@ function Works({ api }) {
     } catch (err) { setMessage(err.message); } finally { setFeatureBusy(false); }
   }
 
-  async function addAnnotation(event) {
-    event.preventDefault();
-    if (!selectedWork) return;
-    try {
-      const item = await api.post(`org/works/${selectedWork.id}/annotations`, { content: annotationContent, nodeId: annotationNodeId || null });
-      setAnnotations((items) => [item, ...items]);
-      setAnnotationContent(''); setAnnotationNodeId(''); setMessage('画布点评已发送给学生。');
-    } catch (err) { setMessage(err.message); }
-  }
 
-  async function toggleResolved(annotation) {
-    if (!selectedWork) return;
-    try {
-      const updated = await api.put(`org/works/${selectedWork.id}/annotations/${annotation.id}`, { resolved: !annotation.resolvedAt });
-      setAnnotations((items) => items.map((item) => item.id === updated.id ? updated : item));
-    } catch (err) { setMessage(err.message); }
-  }
 
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   return <>
-    <PageHeader eyebrow="学习成果" title="作品点评" description="查看学生提交的作业、写整体或指定画布卡片的反馈，并把优秀作品标为机构精选。作品是否上作品广场由平台决定。" />
+    <PageHeader eyebrow="学习成果" title="作品管理" description="查看学生提交的作业、处理举报，并把优秀作品标为机构精选。作品是否上作品广场由平台决定。" />
     {message && <Notice tone={message.includes('已') || message.includes('发送') ? 'success' : 'danger'}>{message}</Notice>}
     <Panel title="作品列表" actions={<button className="secondary-button" onClick={() => { refresh(); reports.refresh(); }}>刷新</button>}><div className="form-grid"><label>关键词<input value={filters.search} placeholder="作品、学生或课时" onChange={(event) => setFilters({ ...filters, search: event.target.value })} /></label><label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option><option value="PENDING">已提交</option><option value="APPROVED">已通过</option><option value="PUBLISHED">已发布到作品广场</option><option value="REJECTED">已下架</option></select></label><label>班级<select value={filters.classId} onChange={(event) => setFilters({ ...filters, classId: event.target.value })}><option value="">全部班级</option>{[...new Map(data.items.filter((item) => item.classId).map((item) => [item.classId, item])).values()].map((item) => <option key={item.classId} value={item.classId}>{item.className || item.classId}</option>)}</select></label></div>
-      {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'} · {item.className || '—'} / {item.courseLessonTitle || '—'}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看与点评</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
+      {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'} · {item.className || '—'} / {item.courseLessonTitle || '—'}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看作品</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
     </Panel>
     {featureAction && <Panel title={`机构精选 · ${featureAction.title}`}><Notice tone="info">精选作品会在机构作品墙优先展示；取消精选不会下架作品。</Notice><div className="form-grid"><label>精选状态<select value={featureForm.featured ? 'true' : 'false'} onChange={(event) => setFeatureForm({ ...featureForm, featured: event.target.value === 'true' })}><option value="true">设为机构精选</option><option value="false">取消机构精选</option></select></label></div>{featureForm.featured && <label>精选理由（可选）<input value={featureForm.reason} maxLength={500} placeholder="例如：故事结构完整，画面表达清晰。" onChange={(event) => setFeatureForm({ ...featureForm, reason: event.target.value })} /></label>}<div className="row-actions top-gap"><button className="primary-button" disabled={featureBusy} onClick={handleFeature}>{featureBusy ? '处理中…' : '确认精选设置'}</button><button className="secondary-button" disabled={featureBusy} onClick={() => setFeatureAction(null)}>取消</button></div></Panel>}
     <Panel title={`待处理举报 · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <><div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" onClick={() => { setReportAction(item); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); }}>处理</button></td></tr>)}</tbody></table></div><Pagination page={reports.data.page} totalPages={reports.data.totalPages} onChange={setReportsPage} disabled={reports.loading} /></> : <Empty title="暂无待处理举报" />}</Panel>
     {reportAction && <Panel title={`处理举报 · ${reportAction.workTitle}`}><div className="form-grid"><label>处理结果<select value={reportForm.status} onChange={(event) => setReportForm({ ...reportForm, status: event.target.value })}><option value="RESOLVED">已处理</option><option value="DISMISSED">驳回举报</option></select></label><label>作品动作<select value={reportForm.actionTaken} onChange={(event) => setReportForm({ ...reportForm, actionTaken: event.target.value })}><option value="NONE">保留作品</option><option value="UNPUBLISH">下架作品</option></select></label></div><label>处理说明<textarea value={reportForm.resolution} required maxLength={2000} placeholder="说明处理结论；下架时该说明会作为学生可见的下架原因。" onChange={(event) => setReportForm({ ...reportForm, resolution: event.target.value })} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={reportBusy || !reportForm.resolution.trim()} onClick={handleReport}>{reportBusy ? '处理中…' : '确认处理'}</button><button className="secondary-button" disabled={reportBusy} onClick={() => setReportAction(null)}>取消</button></div></Panel>}
     {selectedWork && <>
-      <Panel title={`画布预览与整体点评 · ${selectedWork.title}`} actions={<button className="secondary-button" onClick={() => setSelectedWork(null)}>关闭预览</button>}>
+      <Panel title={`画布预览 · ${selectedWork.title}`} actions={<button className="secondary-button" onClick={() => setSelectedWork(null)}>关闭预览</button>}>
         <div className="row-actions canvas-meta"><span className="muted">学生：{selectedWork.studentName}</span><span className="muted">提交时间：{formatDate(selectedWork.submittedAt)}</span><Status value={selectedWork.status} /></div>
-        <label>整体点评<textarea value={teacherComment} maxLength={2000} placeholder="告诉学生作品做得好的地方，以及下一步可以怎样改进。" onChange={(event) => setTeacherComment(event.target.value)} /></label>
-        <div className="row-actions"><button className="primary-button" disabled={commentBusy} onClick={saveComment}>{commentBusy ? '保存中…' : '保存点评'}</button><span className="muted">作品是否上作品广场由平台决定</span></div>
         <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly />
-      </Panel>
-      <Panel title="画布卡片批注" description="选择某张卡片可发送针对性建议；不选卡片即为整张作品的补充点评。">
-        <form onSubmit={addAnnotation}><label>关联卡片<select value={annotationNodeId} onChange={(event) => setAnnotationNodeId(event.target.value)}><option value="">整张作品（不关联卡片）</option>{(selectedWork.canvasSnapshot?.nodes || []).map((node) => <option key={node.id} value={node.id}>{nodeLabel(selectedWork.canvasSnapshot, node.id)}</option>)}</select></label><label>批注内容<textarea value={annotationContent} required maxLength={1000} placeholder="例如：这里可以补充角色为什么要这样做。" onChange={(event) => setAnnotationContent(event.target.value)} /></label><button className="primary-button">发送批注</button></form>
-        {annotationsLoading ? <Loading label="正在读取点评…" /> : annotations.length ? <div className="card-list">{annotations.map((annotation) => <article className="item-card" key={annotation.id}><div className="row-actions"><strong>{annotation.nodeId ? `卡片：${nodeLabel(selectedWork.canvasSnapshot, annotation.nodeId)}` : '整体补充点评'}</strong><Status value={annotation.resolvedAt ? 'APPROVED' : 'PENDING'} /></div><p>{annotation.content}</p><p className="muted">{annotation.authorName} · {formatDate(annotation.createdAt)}{annotation.resolvedAt ? ` · 已于 ${formatDate(annotation.resolvedAt)} 完成` : ''}</p><button className="text-button" onClick={() => toggleResolved(annotation)}>{annotation.resolvedAt ? '标记为待跟进' : '标记为已完成'}</button></article>)}</div> : <Empty title="还没有画布批注" body="可以先在上方写一条具体建议。" />}
       </Panel>
     </>}
   </>;
@@ -998,133 +950,6 @@ function OrgPage({ kind, user }) {
   return <><PageHeader eyebrow={teacher ? 'AI魔法学院 · 教学首页' : 'AI魔法学院 · 机构运营'} title={title} description={description} actions={<button className="primary-button">配置 / 新建</button>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待接入' : '准备就绪'} hint={item[1]} tone={index ? 'teal' : 'violet'} />)}</div><Panel title="功能接入说明"><Notice tone="info">页面已按 AI魔法学院机构端的信息架构建立。计费、通知、开通和数据中心需要相应后端接口后才会写入真实业务数据；当前不会使用模拟记录冒充真实数据。</Notice></Panel></>;
 }
 
-function VibeCodingSubmissionDetail({ submission, form, setForm, busy, onReview }) {
-  if (!submission) return <Loading />;
-  const files = submission.files || {};
-  const transcript = Array.isArray(submission.transcript) ? submission.transcript : [];
-  const previewHtml = buildPreviewDocument(files, submission.entryFile);
-  const reviewed = submission.status !== 'PENDING';
-  return <div className="c-root" data-console="vibecoding">
-    <div className="c-replay" style={{ maxWidth: 'none', margin: 0 }}>
-      <div className="c-replay__meta">
-        <span>学生：{submission.studentName || submission.studentLogin || submission.studentId}</span>
-        <span>班级：{submission.className || '—'}</span>
-        <span>课时：{submission.lessonTitle || '—'}</span>
-        <span>第 {submission.round} 次提交 · {formatDate(submission.submittedAt)}</span>
-      </div>
-
-      <div className="c-replay__grid">
-        <ReplayPreview html={previewHtml} title={submission.title || '学生作品'} />
-        <ReplayPanel title={`创作对话（${transcript.length} 条）`} icon="messageSquare">
-          <ReplayTranscript messages={transcript} />
-        </ReplayPanel>
-      </div>
-
-      <ReplayPanel title="产物源码" icon="code">
-        <ReplayFiles files={files} entryFile={submission.entryFile} />
-      </ReplayPanel>
-
-      {reviewed ? (
-        <Notice tone={submission.status === 'APPROVED' ? 'success' : 'warning'}>
-          已点评（{formatDate(submission.reviewedAt)}）：{submission.teacherComment || '（无意见）'}
-        </Notice>
-      ) : (
-        <ReplayPanel title="给出点评" icon="edit">
-          <div className="c-replay__form" style={{ padding: 'var(--sp-3)' }}>
-            <label className="c-replay__label">
-              点评结果
-              <div className="c-replay__choices">
-                {[['APPROVED', '通过', 'ok'], ['REJECTED', '驳回', 'danger']].map(([value, label, tone]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={`c-choice${form.status === value ? ` is-on is-${tone}` : ''}`}
-                    onClick={() => setForm({ ...form, status: value })}
-                  >
-                    <ConsoleIcon name={value === 'APPROVED' ? 'check' : 'x'} size={14} />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </label>
-            <label className="c-replay__label">
-              点评意见
-              <textarea
-                className="c-input c-dialog__textarea"
-                value={form.comment}
-                maxLength={2000}
-                placeholder="驳回时必须写明原因，学生改完可以重新提交"
-                onChange={(event) => setForm({ ...form, comment: event.target.value })}
-              />
-            </label>
-            <div className="c-replay__actions">
-              <Button
-                variant="primary"
-                icon="check"
-                disabled={busy || (form.status === 'REJECTED' && !form.comment.trim())}
-                onClick={onReview}
-              >
-                {busy ? '提交中…' : '提交点评'}
-              </Button>
-              {form.status === 'REJECTED' && !form.comment.trim() ? <span className="c-dim">驳回必须写明原因</span> : null}
-            </div>
-          </div>
-        </ReplayPanel>
-      )}
-    </div>
-  </div>;
-}
-
-function VibeCodingReview({ api }) {
-  const [filters, setFilters] = useState({ status: 'PENDING' });
-  const [page, setPage] = useState(1);
-  const query = useMemo(() => { const value = new URLSearchParams(); if (filters.status) value.set('status', filters.status); value.set('page', String(page)); return value.toString(); }, [filters, page]);
-  const list = useData(() => api.get('org/vibecoding/submissions?' + query), [api, query]);
-  const [selected, setSelected] = useState(null);
-  const detail = useData(() => selected ? api.get(`org/vibecoding/submissions/${selected.id}`) : Promise.resolve(null), [api, selected?.id]);
-  const [form, setForm] = useState({ status: 'APPROVED', comment: '' });
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-
-  async function review() {
-    if (!selected) return;
-    setBusy(true); setMessage('');
-    try {
-      await api.put(`org/vibecoding/submissions/${selected.id}`, form);
-      setMessage(form.status === 'APPROVED' ? '已通过该作品。' : '已驳回，学生可以继续修改后重新提交。');
-      setSelected(null); setForm({ status: 'APPROVED', comment: '' });
-      list.refresh();
-    } catch (error) { setMessage(error.message || '点评失败'); } finally { setBusy(false); }
-  }
-
-  return <>
-    <PageHeader eyebrow="教学点评" title="VibeCoding 作品点评" description="查看学生的创作对话与代码，给出通过或驳回意见。" actions={<button className="secondary-button" onClick={list.refresh}>刷新</button>} />
-    {message && <Notice tone="info">{message}</Notice>}
-    <Panel title={`提交列表 · ${list.data?.pending ?? 0} 条待处理`}>
-      <div className="form-grid">
-        <label>状态<select value={filters.status} onChange={(event) => { setFilters({ status: event.target.value }); setPage(1); }}>
-          <option value="">全部</option><option value="PENDING">待处理</option><option value="APPROVED">已通过</option><option value="REJECTED">已驳回</option>
-        </select></label>
-      </div>
-      {list.loading ? <Loading /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : list.data.items.length ? <>
-        <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>课时</th><th>轮次</th><th>状态</th><th>提交时间</th><th>操作</th></tr></thead>
-          <tbody>{list.data.items.map((item) => <tr key={item.id}>
-            <td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'}</div></td>
-            <td>{item.studentName || item.studentLogin || item.studentId}<div className="muted">{item.className || '未绑定班级'}</div></td>
-            <td>{item.lessonTitle || '—'}</td>
-            <td>第 {item.round} 次</td>
-            <td><Status value={item.status} /></td>
-            <td>{formatDate(item.submittedAt)}</td>
-            <td><button className="text-button" onClick={() => { setSelected(item); setForm({ status: 'APPROVED', comment: '' }); }}>{item.status === 'PENDING' ? '查看与点评' : '查看'}</button></td>
-          </tr>)}</tbody></table></div>
-        <Pagination page={list.data.page} totalPages={list.data.totalPages} onChange={setPage} disabled={list.loading} />
-      </> : <Empty title="暂无提交" body="学生提交 VibeCoding 作品后会出现在这里。" />}
-    </Panel>
-    {selected ? <Panel title={`作品详情 · ${selected.title}`} actions={<button className="secondary-button" onClick={() => setSelected(null)}>关闭</button>}>
-      {detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.loading || !detail.data ? <Loading /> : <VibeCodingSubmissionDetail submission={detail.data} form={form} setForm={setForm} busy={busy} onReview={review} />}
-    </Panel> : null}
-  </>;
-}
 
 function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
@@ -1135,6 +960,6 @@ function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/tasks" element={<TeachingTasks api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/member-credits" element={<MemberCreditsPage api={api} />} /><Route path="/billing-transactions" element={<BillingTransactionsPage api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/vibecoding" element={<VibeCodingReview api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/tasks" element={<TeachingTasks api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/member-credits" element={<MemberCreditsPage api={api} />} /><Route path="/billing-transactions" element={<BillingTransactionsPage api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

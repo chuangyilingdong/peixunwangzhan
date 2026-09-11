@@ -843,42 +843,6 @@ export async function handleOrg(ctx) {
     if (action === 'capabilities') { const capability = ctx.body?.capabilities || {}; q("UPDATE class_sessions SET allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=? WHERE id=? AND class_id=? AND status='ACTIVE'", [capability.allowText === undefined ? session.allow_text : (capability.allowText ? 1 : 0), capability.allowImage === undefined ? session.allow_image : (capability.allowImage ? 1 : 0), capability.allowMusic === undefined ? session.allow_music : (capability.allowMusic ? 1 : 0), capability.allowVideo === undefined ? session.allow_video : (capability.allowVideo ? 1 : 0), capability.allowPodcast === undefined ? session.allow_podcast : (capability.allowPodcast ? 1 : 0), capability.allowDubbing === undefined ? session.allow_dubbing : (capability.allowDubbing ? 1 : 0), session.id, cls.id]); }
     audit(ctx, 'SESSION_' + action.toUpperCase(), 'CLASS_SESSION', session.id, null, ctx.body); return normalizeSession(row('SELECT session.*,lesson.title AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE session.id=? AND session.class_id=?', [session.id, cls.id]));
   }
-  let annotationMatch = part.match(/^\/works\/([^/]+)\/annotations(?:\/([^/]+))?$/);
-  if (annotationMatch && method === 'GET') {
-    const work = workInReviewScope(auth, currentOrgId, annotationMatch[1]);
-    return { items: annotationRows(work.id) };
-  }
-  if (annotationMatch && method === 'POST' && !annotationMatch[2]) {
-    const work = workInReviewScope(auth, currentOrgId, annotationMatch[1]);
-    const content = String(ctx.body?.content || '').trim();
-    if (!content) throw errors.badRequest('点评内容不能为空', 'ANNOTATION_CONTENT_REQUIRED');
-    if (content.length > 1000) throw errors.badRequest('点评内容不能超过 1000 个字符', 'ANNOTATION_CONTENT_TOO_LONG');
-    const nodeId = assertAnnotationNode(work, ctx.body?.nodeId ? String(ctx.body.nodeId).slice(0, 160) : null);
-    const annotationId = id('annotation');
-    q('INSERT INTO work_annotations(id,work_id,org_id,node_id,content,author_id,created_at) VALUES (?,?,?,?,?,?,?)', [annotationId, work.id, currentOrgId, nodeId, content, auth.user.id, nowIso()]);
-    audit(ctx, 'WORK_ANNOTATION_CREATE', 'WORK_ANNOTATION', annotationId, null, { workId: work.id, nodeId });
-    return annotationRows(work.id).find((annotation) => annotation.id === annotationId);
-  }
-  if (annotationMatch && method === 'PUT' && annotationMatch[2]) {
-    const work = workInReviewScope(auth, currentOrgId, annotationMatch[1]);
-    const annotation = row('SELECT * FROM work_annotations WHERE id=? AND work_id=? AND org_id=?', [annotationMatch[2], work.id, currentOrgId]);
-    if (!annotation) throw errors.notFound('画布点评不存在', 'ANNOTATION_NOT_FOUND');
-    const body = ctx.body || {};
-    const hasContent = Object.prototype.hasOwnProperty.call(body, 'content');
-    const hasResolved = Object.prototype.hasOwnProperty.call(body, 'resolved');
-    if (!hasContent && !hasResolved) throw errors.badRequest('请提供需要更新的点评内容或完成状态', 'ANNOTATION_UPDATE_REQUIRED');
-    let content = annotation.content;
-    if (hasContent) {
-      content = String(body.content || '').trim();
-      if (!content) throw errors.badRequest('点评内容不能为空', 'ANNOTATION_CONTENT_REQUIRED');
-      if (content.length > 1000) throw errors.badRequest('点评内容不能超过 1000 个字符', 'ANNOTATION_CONTENT_TOO_LONG');
-    }
-    const resolved = hasResolved ? Boolean(body.resolved) : Boolean(annotation.resolved_at);
-    q('UPDATE work_annotations SET content=?,resolved_at=?,resolved_by=? WHERE id=? AND work_id=? AND org_id=?', [content, resolved ? nowIso() : null, resolved ? auth.user.id : null, annotation.id, work.id, currentOrgId]);
-    audit(ctx, 'WORK_ANNOTATION_UPDATE', 'WORK_ANNOTATION', annotation.id, null, { workId: work.id, resolved });
-    return annotationRows(work.id).find((item) => item.id === annotation.id);
-  }
-
   if (part === '/work-reports' && method === 'GET') {
     const params = [currentOrgId]; let where = 'report.org_id=?';
     if (auth.user.role === 'TEACHER') { where += " AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))"; params.push(auth.user.id, auth.user.id); }
@@ -967,57 +931,6 @@ export async function handleOrg(ctx) {
       q('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=? AND org_id=?', [featured ? now : null, featured ? auth.user.id : null, reason || null, work.id, currentOrgId]);
     });
     audit(ctx, featured ? 'ORG_WORK_FEATURE' : 'ORG_WORK_UNFEATURE', 'WORK', work.id, normalizeWork(work), { featured, reason: reason || null }, { orgId: currentOrgId });
-    return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
-  }
-  let workMatch = part.match(/^\/works\/([^/]+)\/review$/);
-  if (workMatch && method === 'PUT') {
-    const work = workInReviewScope(auth, currentOrgId, workMatch[1]);
-    const comment = String(ctx.body?.teacherComment || '').trim(); if (comment.length > 2000) throw errors.badRequest('老师点评不能超过 2000 个字符', 'WORK_COMMENT_TOO_LONG');
-    const now = nowIso();
-    // 只保存点评（不改状态）：机构不再需要审核作品，是否上作品广场由平台决定。
-    if (!String(ctx.body?.status || '').trim()) {
-      transaction(() => {
-        q('UPDATE works SET teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [comment, auth.user.id, now, work.id, currentOrgId]);
-        const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
-        if (latestSubmission) q('UPDATE work_submissions SET review_comment=?,reviewed_at=?,updated_at=? WHERE id=?', [comment, now, now, latestSubmission.id]);
-      });
-      audit(ctx, 'WORK_COMMENT', 'WORK', work.id, normalizeWork(work), { teacherComment: comment || null }, { orgId: currentOrgId });
-      return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
-    }
-    const status = String(ctx.body.status).toUpperCase();
-    assertKnownState('work', status, { field: '作品状态' });
-    if (status === 'PENDING') throw errors.badRequest('作品状态无效', 'INVALID_WORK_STATUS');
-    assertTransition(ctx, 'work', work.status, status, { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), code: 'INVALID_WORK_TRANSITION', message: '当前作品状态不允许执行该操作' });
-    if (status === 'PUBLISHED' && !work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
-    transaction(() => {
-      q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=? WHERE id=? AND org_id=?', [status, comment, auth.user.id, now, work.id, currentOrgId]);
-      const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
-      if (latestSubmission) {
-        q('UPDATE work_submissions SET review_status=?,review_comment=?,reviewed_at=?,updated_at=? WHERE id=?', [status, comment, now, now, latestSubmission.id]);
-      }
-      if (status === 'REJECTED') {
-        q(
-          "UPDATE student_projects SET status='DRAFT',updated_at=? WHERE id=? AND org_id=? AND status='SUBMITTED' AND deleted_at IS NULL",
-          [now, work.project_id, currentOrgId],
-        );
-      }
-    });
-    audit(ctx, 'WORK_REVIEW', 'WORK', work.id, normalizeWork(work), { status, teacherComment: comment || null, projectReopened: status === 'REJECTED' }, { orgId: currentOrgId });
-    // 自动提醒：作品审核完成 → 通知学生（P4-O09）
-    try {
-      scheduleReminder({
-        title: status === 'REJECTED' ? '作品需要修改' : status === 'PUBLISHED' ? '作品已发布' : '作品已通过',
-        body: status === 'REJECTED'
-          ? `作品《${work.title}》未通过审核：${comment || '请查看详情'}`
-          : status === 'PUBLISHED'
-            ? `作品《${work.title}》已发布到作品墙`
-            : `作品《${work.title}》已通过审核`,
-        targetUserId: work.student_id,
-        targetOrgId: currentOrgId,
-        eventKey: `WORK_REVIEW_COMPLETED:${work.id}:${status}`,
-        targetUrl: '/works',
-      });
-    } catch { /* 提醒失败不影响主流程 */ }
     return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
   }
 

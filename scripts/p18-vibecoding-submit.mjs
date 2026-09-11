@@ -1,9 +1,13 @@
 /**
- * P18 VibeCoding 提交与老师点评闭环。
+ * P18 VibeCoding 提交：把作品交给平台（**没有老师点评这一环**）。
  * 使用临时 SQLite，不读取或修改默认 / 生产数据库。
  *
- * 覆盖：学生提交 → 提交后会话锁定 → 重复提交被拒 → 老师按班级范围看到提交 →
- * 驳回必须写原因 → 驳回后可继续创作并二次提交 → 通过后状态落库 → 非本班老师看不到。
+ * 2026-09-11 用户要求彻底取消老师点评，这个脚本从「点评闭环」改成**删除的守卫**：
+ *   · 提交仍然可用（轮次、入口文件、创作对话快照都要对）
+ *   · 提交后**不再锁创作**，而且可以反复提交（round+1）
+ *   · 未确认版权必须被拒
+ *   · 机构端的点评接口**必须不存在**（列表/详情/点评三个都不能再应答）——
+ *     这是「功能真的删掉了」的那道闸：哪天有人把路由加回来，这里会红
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -48,7 +52,6 @@ const server = spawn(process.execPath, ['apps/server/src/index.js'], {
 });
 let serverLog = '';
 server.stderr.on('data', (x) => { serverLog += x; });
-server.stdout.on('data', (x) => { serverLog += x; });
 
 async function api(pathname, { method = 'GET', token, body } = {}) {
   const response = await fetch(`http://127.0.0.1:${port}${pathname}`, {
@@ -61,103 +64,84 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
 }
 
 try {
-  for (let i = 0; i < 80; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
-    await sleep(100);
+  const deadline = Date.now() + 20000;
+  for (;;) {
+    try { const res = await fetch(`http://127.0.0.1:${port}/health`); if (res.ok) break; } catch { /* 等 */ }
+    if (Date.now() > deadline) throw new Error('后端没起来');
+    await sleep(150);
   }
 
-  const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
-  const teacher = (await api('/api/auth/login', { method: 'POST', body: { login: 'teacher-1', password: 'teach123' } })).data.token;
-  const otherTeacher = (await api('/api/auth/login', { method: 'POST', body: { login: 'teacher-2', password: 'teach123' } })).data.token;
-  assert.ok(student && teacher && otherTeacher, '登录失败');
+  const login = async (l, p) => (await api('/api/auth/login', { method: 'POST', body: { login: l, password: p } })).data.token;
+  const student = await login('student-2', 'study123');
+  const teacher = await login('teacher-1', 'teach123');
 
-  const created = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId: lesson.id, title: 'P18 提交用例' } });
-  assert.equal(created.status, 200, `新建会话失败: ${JSON.stringify(created.data)}`);
+  const created = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId: lesson.id, title: 'P18 提交' } });
+  assert.equal(created.status, 200, `建会话失败: ${JSON.stringify(created.data)}`);
   const conversationId = created.data.id;
-  await api(`/api/student/vibecoding/conversations/${conversationId}`, { method: 'PUT', token: student, body: { files: { 'index.html': '<h1>作品</h1>', 'main.js': "console.log('ok');\n" }, entryFile: 'index.html' } });
 
-  // 先聊一句，让 transcript 有内容
   const stream = await fetch(`http://127.0.0.1:${port}/api/student/vibecoding/conversations/${conversationId}/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${student}` }, body: JSON.stringify({ content: '帮我做一个标题' }),
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${student}` },
+    body: JSON.stringify({ content: '写一个会变色的按钮' }),
   });
-  assert.equal(stream.status, 200, '对话失败');
   await stream.text();
+  await sleep(200);
 
-  // 提交
-  const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { description: '第一个网页作品', copyrightConfirmed: true } });
+  // 未确认版权必须被拒
+  const noConfirm = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: {} });
+  assert.equal(noConfirm.status, 400, '未确认版权应当被拒');
+  assert.equal(noConfirm.data?.error?.code, 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED', '错误码应为版权确认');
+
+  const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
   assert.equal(submitted.status, 200, `提交失败: ${JSON.stringify(submitted.data)}`);
-  assert.equal(submitted.data.status, 'PENDING', '提交后应为待点评');
   assert.equal(submitted.data.round, 1, '首次提交轮次应为 1');
   assert.equal(submitted.data.entryFile, 'index.html', '应记录入口文件');
   assert.ok(submitted.data.transcript.length >= 2, `应保存创作对话，实际 ${submitted.data.transcript.length} 条`);
+  assert.equal(submitted.data.teacherComment, undefined, '提交对象不该再有点评字段');
 
-  // 提交后锁定
-  const afterSubmit = await api(`/api/student/vibecoding/conversations/${conversationId}/messages`, { method: 'POST', token: student, body: { content: '还能聊吗' } });
-  assert.equal(afterSubmit.status, 409, `提交后应锁定会话，实际 ${afterSubmit.status}`);
-  assert.equal(afterSubmit.data?.error?.code, 'VIBECODING_CONVERSATION_LOCKED', '锁定错误码应为 VIBECODING_CONVERSATION_LOCKED');
-  const duplicate = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
-  assert.equal(duplicate.status, 409, '待点评期间重复提交应被拒');
-  assert.equal(duplicate.data?.error?.code, 'VIBECODING_ALREADY_SUBMITTED', '重复提交错误码应为 VIBECODING_ALREADY_SUBMITTED');
+  // 提交后**不再锁创作**（这正是这次改动的核心）
+  const afterSubmit = await fetch(`http://127.0.0.1:${port}/api/student/vibecoding/conversations/${conversationId}/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${student}` },
+    body: JSON.stringify({ content: '提交完还能聊吗' }),
+  });
+  assert.equal(afterSubmit.status, 200, `提交后应当仍可继续创作，实际 ${afterSubmit.status}`);
+  await afterSubmit.text();
+  await sleep(200);
 
-  // 老师视角
-  const teacherList = await api('/api/org/vibecoding/submissions?status=PENDING', { token: teacher });
-  assert.equal(teacherList.status, 200, `老师列表失败: ${JSON.stringify(teacherList.data)}`);
-  assert.equal(teacherList.data.items.length, 1, `本班老师应看到 1 条，实际 ${teacherList.data.items.length}`);
-  const submissionId = teacherList.data.items[0].id;
-  assert.equal(teacherList.data.items[0].studentName, '小红', '应带学生姓名');
-
-  const otherList = await api('/api/org/vibecoding/submissions', { token: otherTeacher });
-  assert.equal(otherList.status, 200, '其他老师列表失败');
-  assert.equal(otherList.data.items.length, 0, `非本班老师不应看到提交，实际 ${otherList.data.items.length}`);
-  const otherDetail = await api(`/api/org/vibecoding/submissions/${submissionId}`, { token: otherTeacher });
-  assert.equal(otherDetail.status, 403, '非本班老师不应看到详情');
-
-  const detail = await api(`/api/org/vibecoding/submissions/${submissionId}`, { token: teacher });
-  assert.equal(detail.status, 200, `详情失败: ${JSON.stringify(detail.data)}`);
-  assert.ok(detail.data.files['index.html'], '详情应带代码文件');
-  assert.ok(detail.data.transcript.length >= 2, '详情应带创作对话');
-
-  // 驳回必须写原因
-  const noReason = await api(`/api/org/vibecoding/submissions/${submissionId}`, { method: 'PUT', token: teacher, body: { status: 'REJECTED' } });
-  assert.equal(noReason.status, 400, '驳回未写原因应被拒');
-  assert.equal(noReason.data?.error?.code, 'VIBECODING_REVIEW_COMMENT_REQUIRED', '错误码应为 VIBECODING_REVIEW_COMMENT_REQUIRED');
-
-  // 驳回 → 学生可继续创作并二次提交
-  const rejected = await api(`/api/org/vibecoding/submissions/${submissionId}`, { method: 'PUT', token: teacher, body: { status: 'REJECTED', comment: '标题太小了，改大一点' } });
-  assert.equal(rejected.status, 200, `驳回失败: ${JSON.stringify(rejected.data)}`);
-  assert.equal(rejected.data.status, 'REJECTED', '状态应为 REJECTED');
-  const reopened = await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student });
-  assert.equal(reopened.data.status, 'DRAFT', '驳回后会话应回到草稿状态');
-  assert.equal(reopened.data.submission.status, 'REJECTED', '学生应能看到驳回意见');
-  assert.match(reopened.data.submission.teacherComment, /标题/, '驳回意见应可见');
-
+  // 可以反复提交（交给平台这件事没有「已处理」状态）
   const resubmit = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
-  assert.equal(resubmit.status, 200, `二次提交失败: ${JSON.stringify(resubmit.data)}`);
-  assert.equal(resubmit.data.round, 2, `二次提交轮次应为 2，实际 ${resubmit.data.round}`);
+  assert.equal(resubmit.status, 200, `再次提交应当可以，实际 ${resubmit.status}`);
+  assert.equal(resubmit.data.round, 2, `再次提交轮次应为 2，实际 ${resubmit.data.round}`);
 
-  // 通过
-  const approved = await api(`/api/org/vibecoding/submissions/${submissionId}`, { method: 'PUT', token: teacher, body: { status: 'APPROVED', comment: '做得好' } });
-  assert.equal(approved.status, 200, `通过失败: ${JSON.stringify(approved.data)}`);
-  assert.equal(approved.data.status, 'APPROVED', '状态应为 APPROVED');
-  const finalState = await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student });
-  assert.equal(finalState.data.status, 'SUBMITTED', '通过后会话应保持已提交');
+  /* ── 机构端的点评接口必须已经不存在 ── */
+  const submissionId = submitted.data.id;
+  const gone = [
+    ['/api/org/vibecoding/submissions?status=PENDING', 'GET', undefined, '点评列表'],
+    [`/api/org/vibecoding/submissions/${submissionId}`, 'GET', undefined, '点评详情'],
+    [`/api/org/vibecoding/submissions/${submissionId}`, 'PUT', { status: 'APPROVED', comment: 'x' }, '点评提交'],
+  ];
+  for (const [pathname, method, body, label] of gone) {
+    const response = await api(pathname, { method, token: teacher, body });
+    assert.equal(response.status, 404, `${label}接口应当已删除，实际 ${response.status}`);
+  }
 
+  /* ── 审计里不该再有点评事件 ── */
   const audit = new DatabaseSync(dbPath);
   const reviewLog = audit.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='VIBECODING_REVIEW'").get();
   const submitLog = audit.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='VIBECODING_SUBMIT'").get();
   audit.close();
-  assert.equal(reviewLog.n, 2, `点评应写 2 条审计，实际 ${reviewLog.n}`);
+  assert.equal(reviewLog.n, 0, `不该再有点评审计，实际 ${reviewLog.n}`);
   assert.equal(submitLog.n, 2, `提交应写 2 条审计，实际 ${submitLog.n}`);
 
   console.log(JSON.stringify({
-    name: 'vibecoding-submit-review', pass: true,
-    rounds: resubmit.data.round, finalStatus: finalState.data.status,
-    teacherVisible: teacherList.data.items.length, otherTeacherVisible: otherList.data.items.length,
+    name: 'vibecoding-submit-handoff', pass: true,
+    rounds: resubmit.data.round,
+    lockedAfterSubmit: false,
+    reviewEndpoints: 'all 404（点评已删除）',
     audit: { reviews: reviewLog.n, submits: submitLog.n },
   }, null, 2));
 } catch (error) {
   console.error(serverLog);
   throw error;
 } finally {
-  server.kill('SIGTERM');
+  server.kill();
 }
