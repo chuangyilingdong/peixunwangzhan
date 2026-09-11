@@ -69,6 +69,28 @@ for (const file of files) {
 // 前面不能是 `.`：`localStorage.setItem` / `video.setAttribute` / `input.setSelectionRange`
 // 这类是方法调用，不是 state setter。也不吃 `setTimeout` / `setInterval` 这类全局定时器。
 const setterUseRe = /(?<![.\w$])set[A-Z][\w$]*/g;
+// 注释里出现的名字不算「用了」：我写「画布组件里的 setNodes 只是它自己的局部状态」这种说明时，
+// 守卫直接把 setNodes 当成未声明的 setter 报了假警（踩过）。所以扫之前先把注释挖掉。
+// 只挖「整行注释 / 块注释 / 不含引号的尾随注释」，避免把 'https://…' 这类字符串里的 // 也切了。
+function stripComments(source) {
+  let inBlock = false;
+  return source.split(/\r?\n/).map((line) => {
+    if (inBlock) {
+      const end = line.indexOf('*/');
+      if (end < 0) return '';
+      inBlock = false;
+      return line.slice(end + 2);
+    }
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('/*')) {
+      const end = line.indexOf('*/', line.indexOf('/*'));
+      if (end < 0) { inBlock = true; return ''; }
+      return line.slice(0, line.indexOf('/*')) + line.slice(end + 2);
+    }
+    if (trimmed.startsWith('//')) return '';
+    return line.replace(/(^|[^:'"\`])\s*\/\/.*$/, '$1');
+  }).join('\n');
+}
 // 后面直接跟 `:` 的是对象字面量的键（`{ setCookie: null }`），不是调用。
 // 不能写进正则的负向断言：`[\w$]*` 会回溯成 `setCooki` 这种被截断的名字（踩过）。
 const isObjectKey = (text, match) => /^\s*:/.test(text.slice(match.index + match[0].length));
@@ -115,7 +137,8 @@ for (const file of files) {
     if (segments.length) segments[segments.length - 1].lines.push(line);
   });
   segments.forEach((segment) => {
-    const text = segment.lines.join('\n');
+    // 注释先挖掉再扫（注释里提到 setNodes 这种字眼会报假警）
+    const text = stripComments(segment.lines.join('\n'));
     const declared = collectDeclared(text, new Set());
     const used = new Set([...text.matchAll(setterUseRe)].filter((match) => !isObjectKey(text, match)).map((match) => match[0]));
     used.forEach((name) => {
