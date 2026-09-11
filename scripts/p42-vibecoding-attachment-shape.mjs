@@ -31,7 +31,10 @@ const inline = 'data:image/png;base64,iVBORw0KGgo=';
 db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m1','c1','user','看看这张图','SUCCEEDED',?,?)")
   .run(JSON.stringify([{ id: 'a1', name: 'x.png', url: 'https://iicili.cyou/api/public/file-assets/a1/download', inline }]), now);
 db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m2','c1','user','这张太大','SUCCEEDED',?,?)")
-  .run(JSON.stringify([{ id: 'a2', name: 'big.png', url: 'https://iicili.cyou/api/public/file-assets/a2/download', inline: '' }]), new Date(Date.now() + 1000).toISOString());
+  .run(JSON.stringify([{ id: 'a2', name: 'big.png', url: 'https://iicili.cyou/api/public/file-assets/a2/download', mime: 'image/png', inline: '' }]), new Date(Date.now() + 1000).toISOString());
+// 非图片附件（2026-09-11 起支持文档/音视频）：同样不能变成 image_url，但必须如实告诉模型"看不到"
+db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m3','c1','user','帮我看看这篇','SUCCEEDED',?,?)")
+  .run(JSON.stringify([{ id: 'a3', name: '作文.pdf', url: 'https://iicili.cyou/api/public/file-assets/a3/download', mime: 'application/pdf', inline: '' }]), new Date(Date.now() + 2000).toISOString());
 db.close();
 
 const { conversationHistory } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
@@ -43,12 +46,21 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 console.log('拼出来的历史：', JSON.stringify(history).slice(0, 260));
 const first = history[0];
 const second = history[1];
+const third = history[2];
 check('带内联附件的消息是「内容块」（array）', Array.isArray(first?.content), typeof first?.content);
 check('第一块是文本', first?.content?.[0]?.type === 'text');
 check('第二块是图片，且用 inline 而不是外链',
   first?.content?.[1]?.image_url?.url === inline,
   String(first?.content?.[1]?.image_url?.url).slice(0, 40));
-check('没有 inline 的附件不进请求（保持纯文本）', typeof second?.content === 'string', typeof second?.content);
+
+const noImage = (message) => Array.isArray(message?.content) && message.content.every((block) => block.type !== 'image_url');
+const noteOf = (message) => (message?.content || []).filter((block) => block.type === 'text').map((block) => block.text).join(' ');
+check('没有 inline 的图不产生 image_url（模型看不到它）', noImage(second), JSON.stringify(second?.content));
+check('并且如实告诉模型「这个文件你看不到」',
+  noteOf(second).includes('big.png') && noteOf(second).includes('读不到'), noteOf(second).slice(0, 80));
+check('非图片附件（pdf）同样不产生 image_url', noImage(third), JSON.stringify(third?.content));
+check('pdf 也被如实告知（学生原文保留在第一块）',
+  third?.content?.[0]?.text === '帮我看看这篇' && noteOf(third).includes('作文.pdf'), JSON.stringify(third?.content).slice(0, 140));
 
 // 模拟渠道（本地开发的默认）拿到内容块消息时，不能把数组 String() 成 "[object Object]" ——
 // 上一版就是这样：带图发一句，回复里出现 "[object Object],[object Object]"。

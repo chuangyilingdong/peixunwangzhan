@@ -133,8 +133,9 @@ function ownConversation(ctx, conversationId) {
 }
 
 /**
- * 把学生传来的附件 id 列表校验成可落库的 [{id,name,url}]。
- * 只接受**本人上传的图片**：别人的素材、非图片、没公开的，一律拒掉并说明原因。
+ * 把学生传来的附件 id 列表校验成可落库的 [{id,name,url,mime,inline}]。
+ * 只接受**本人上传的、公开的**文件：别人的素材、没公开的一律拒掉并说明原因。
+ * 类型不设限（以服务端上传白名单为准）；**能不能让模型看见**由 mime 决定，见 conversationHistory。
  */
 function resolveAttachments(auth, rawList) {
   const entries = (Array.isArray(rawList) ? rawList : [])
@@ -147,15 +148,17 @@ function resolveAttachments(auth, rawList) {
   for (const assetId of ids) {
     const asset = row('SELECT * FROM file_assets WHERE id=?', [assetId]);
     if (!asset || asset.status !== 'ACTIVE') throw errors.badRequest('附件不存在或已失效', 'VIBECODING_ATTACHMENT_NOT_FOUND');
-    if (asset.owner_user_id !== auth.user.id) throw errors.forbidden('只能引用自己上传的图片', 'VIBECODING_ATTACHMENT_NOT_OWNED');
-    if (!String(asset.mime_type || '').startsWith('image/')) throw errors.badRequest('目前只支持上传图片', 'VIBECODING_ATTACHMENT_NOT_IMAGE');
+    if (asset.owner_user_id !== auth.user.id) throw errors.forbidden('只能引用自己上传的附件', 'VIBECODING_ATTACHMENT_NOT_OWNED');
     if (asset.visibility !== 'PUBLIC_PLATFORM' && asset.visibility !== 'PUBLIC_RELEASE') {
       throw errors.badRequest('附件需要是公开素材（外联给模型和页面用）', 'VIBECODING_ATTACHMENT_NOT_PUBLIC');
     }
-    // inline 只接受图片 data URL，且限长（超限就不带，模型看不到但页面能用外链）
+    // inline 只接受图片 data URL，且限长（超限/非图片就不带，模型看不到但页面能用外链）
     const raw = entries.find((item) => item.id === assetId)?.inline || '';
     const inline = raw.startsWith('data:image/') && raw.length <= MAX_INLINE_CHARS ? raw : '';
-    resolved.push({ id: asset.id, name: String(asset.file_name || '图片'), url: publicAssetUrl(asset.id), inline });
+    resolved.push({
+      id: asset.id, name: String(asset.file_name || '附件'), url: publicAssetUrl(asset.id),
+      mime: String(asset.mime_type || ''), inline,
+    });
   }
   return resolved;
 }
@@ -249,16 +252,22 @@ export function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
     //
     // ⚠️ 只能用 **inline**（base64）不能用外链：上游**不会去抓我们的公网地址**，
     // 给它 https://iicili.cyou/... 会直接报错（实测：data URL 答出「红 蓝」，外链 HTTP 报错）。
-    // 没有 inline 的（图太大）就不放进请求——宁可不带，也不能让整轮对话失败。
+    // 没有 inline 的就不放进请求——宁可不带，也不能让整轮对话失败。
     const usable = attachments.filter((item) => item.inline);
-    if (message.role !== 'user' || !usable.length) return { role: message.role, content: message.content };
-    return {
-      role: 'user',
-      content: [
-        { type: 'text', text: message.content },
-        ...usable.map((item) => ({ type: 'image_url', image_url: { url: item.inline }, role: 'reference_image' })),
-      ],
-    };
+    // 有附件却进不了请求的（图太大 / 非图片文件）：**如实告诉模型它看不到**。
+    // 不然学生传一篇 PDF 问「帮我看看」，模型会当作没这回事、直接编一段内容出来。
+    const invisible = attachments.filter((item) => !item.inline);
+    if (message.role !== 'user' || !attachments.length) return { role: message.role, content: message.content };
+    const blocks = [{ type: 'text', text: message.content }];
+    if (invisible.length) {
+      blocks.push({
+        type: 'text',
+        text: `［平台提示］这条消息还附了 ${invisible.length} 个文件：${invisible.map((item) => item.name).join('、')}。`
+          + '你读不到它们的内容（图片以外、或体积超限的文件不会传给你）。如果学生需要你看内容，请让他把文字贴进对话。',
+      });
+    }
+    blocks.push(...usable.map((item) => ({ type: 'image_url', image_url: { url: item.inline }, role: 'reference_image' })));
+    return { role: 'user', content: blocks };
   });
 }
 
@@ -282,6 +291,17 @@ function textModelOptions() {
   // 默认模型即使没被勾进 models，也应该在列表里（否则前端选不中当前默认值）
   if (channel.model) ids.add(String(channel.model));
   return [...ids].filter(Boolean).map((id) => ({ id, displayName: displayNameOf(id) }));
+}
+
+/**
+ * 当前 TEXT 渠道的**默认模型**（后台配的那个）。
+ *
+ * 会话表里的 model 留空 = 「跟随渠道默认」——所以学生一进来下拉要显示的是**这个值**，
+ * 而不是一个空的「渠道默认模型」。留空存储、显示默认，是为了后台改了默认之后
+ * 没自己选过模型的老会话能跟着走。
+ */
+function textDefaultModel() {
+  return String(modalityChannel(getAiProviderPolicy(), 'TEXT')?.model || '').trim();
 }
 
 /**
@@ -517,7 +537,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
        LEFT JOIN course_lessons lesson ON lesson.id = conversation.lesson_id
        LEFT JOIN classes class ON class.id = conversation.class_id
        WHERE conversation.id = ?`, [conversationId]);
-    return normalizeConversation(created, { includeArtifacts: true });
+    return { ...normalizeConversation(created, { includeArtifacts: true }), modelOptions: textModelOptions(), defaultModel: textDefaultModel() };
   }
 
   const conversationMatch = part.match(/^\/conversations\/([^/]+)$/);
@@ -543,6 +563,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       messages, messagesTotal: total, messagesPage: page,
       submission: normalizeSubmission(submission),
       modelOptions: textModelOptions(),
+      defaultModel: textDefaultModel(),
     };
   }
 

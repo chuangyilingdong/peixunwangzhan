@@ -9,6 +9,7 @@ import { ConsoleIcon } from './icons.jsx';
 import { CopyButton, IconButton, Dot, Empty } from './primitives.jsx';
 import { MarkdownView } from '../markdown.jsx';
 import { artifactGroup, absoluteTime, duration, fileSize, isPreviewable, relativeTime } from './format.js';
+import { attachmentName, isImageAttachment } from './attachments.js';
 
 // ── 流式状态行 ──────────────────────────────────────────────────────────────
 // 400ms 延迟才出现：短请求不该闪一下状态行。动词每 2.5s 轮换一次。
@@ -156,14 +157,21 @@ function UserMessage({ message, editable, onEdit, onDelete, canEdit }) {
   return (
     <article className="c-msg-user">
       <div className="c-msg-user__stack">
-        {/* 附件是叠在气泡**上方**的独立对象，不塞进气泡里（与参考的「容器语法」一致） */}
+        {/* 附件是叠在气泡**上方**的独立对象，不塞进气泡里（与参考的「容器语法」一致）。
+            图片给一张缩略图、点开看原图；其他文件给一张「文件卡」，点开就是下载它。 */}
         {message.attachments?.length ? (
           <div className="c-msg-user__attachments">
-            {message.attachments.map((item) => (
+            {message.attachments.map((item) => (isImageAttachment(item) ? (
               <a className="c-msg-attachment" key={item.id} href={item.url} target="_blank" rel="noreferrer noopener" title={item.name}>
                 <img src={item.url} alt={item.name} loading="lazy" />
               </a>
-            ))}
+            ) : (
+              <a className="c-msg-file" key={item.id} href={item.url} target="_blank" rel="noreferrer noopener" title={`下载 ${item.name}`}>
+                <span className="c-msg-file__icon"><ConsoleIcon name="file" size={16} /></span>
+                <span className="c-msg-file__name">{attachmentName(item)}</span>
+                <ConsoleIcon name="download" size={13} />
+              </a>
+            )))}
           </div>
         ) : null}
         <div className="c-msg-user__bubble">{message.content}</div>

@@ -10,6 +10,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ConsoleIcon } from './icons.jsx';
 import { Kbd } from './primitives.jsx';
+import { isImageAttachment } from './attachments.js';
 
 const MAX_TEXTAREA_HEIGHT = 160;
 const MIN_TEXTAREA_HEIGHT = 68;
@@ -77,12 +78,14 @@ export const Composer = forwardRef(function Composer({
     <div className="c-composer">
       {blockedReason ? <div className="c-send-block">{blockedReason}</div> : null}
       <div className="c-composer__panel">
-        {/* 已选附件：缩略图 + 文件名 + 可单独删 */}
+        {/* 已选附件：图片给缩略图、其他给文件图标，都能单独删 */}
         {attachments.length ? (
           <div className="c-attachments">
             {attachments.map((item) => (
               <span className="c-attachment" key={item.id}>
-                {item.url ? <img className="c-attachment__thumb" src={item.url} alt="" /> : <ConsoleIcon name="file" size={14} />}
+                {isImageAttachment(item)
+                  ? <img className="c-attachment__thumb" src={item.url} alt="" />
+                  : <span className="c-attachment__file"><ConsoleIcon name="file" size={14} /></span>}
                 <span className="c-attachment__name">{item.name}</span>
                 {onRemoveAttachment ? (
                   <button type="button" className="c-attachment__remove" aria-label={`移除 ${item.name}`} onClick={() => onRemoveAttachment(item)}>
@@ -111,12 +114,12 @@ export const Composer = forwardRef(function Composer({
               <button
                 type="button"
                 className="c-icon-btn c-icon-btn--sm"
-                aria-label="上传图片"
-                title="上传图片（也可以把图片直接拖进聊天区）"
+                aria-label="上传附件"
+                title="上传附件（也可以把文件直接拖进聊天区）"
                 disabled={disabled || uploading}
                 onClick={onAttach}
               >
-                <ConsoleIcon name={uploading ? 'loader' : 'image'} size={15} />
+                <ConsoleIcon name={uploading ? 'loader' : 'upload'} size={15} />
               </button>
             ) : null}
             <span className="c-dim" style={{ fontSize: 'var(--fs-xs)', fontVariantNumeric: 'tabular-nums' }}>

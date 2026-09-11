@@ -17,6 +17,7 @@ export {
 } from './primitives.jsx';
 export { Empty as ConsoleEmpty } from './primitives.jsx';
 export * from './format.js';
+export * from './attachments.js';
 export * from './PreviewFrame.jsx';
 export * from './ConsoleShell.jsx';
 export * from './ChatThread.jsx';

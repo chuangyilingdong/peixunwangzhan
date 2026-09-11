@@ -37,6 +37,14 @@ export function maxUploadBytes() {
   return Number.isInteger(configured) && configured > 0 ? Math.min(configured, 100 * 1024 * 1024) : DEFAULT_MAX_BYTES;
 }
 
+/**
+ * 允许上传的扩展名全集。**这份才是权威**：前端文件选择器的 accept 只是提示，
+ * 写宽了会被这里拒掉。`scripts/p44-attachment-accept-parity.mjs` 拿它对一遍前后端，防止漂移。
+ */
+export function allowedUploadExtensions() {
+  return [...new Set([...MIME_EXTENSIONS.values()].flat())].sort();
+}
+
 export function uploadRoot() {
   return path.resolve(process.env.FILE_UPLOAD_ROOT || path.join(process.cwd(), 'var', 'uploads'));
 }

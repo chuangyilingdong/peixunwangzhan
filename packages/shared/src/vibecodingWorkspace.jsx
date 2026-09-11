@@ -14,6 +14,10 @@ import { useData } from './classroom.jsx';
 import { buildPreviewDocument, downloadTextFile } from './vibecodingProject.js';
 import { consumeVibeCodingStream } from './vibecodingStream.js';
 import { relativeTime } from './console/format.js';
+import {
+  ATTACHMENT_ACCEPT, MAX_ATTACHMENTS, MAX_INLINE_BYTES,
+  attachmentSizeLimit, attachmentSizeMessage,
+} from './console/attachments.js';
 
 // 兼容旧引用：官网作品页此前直接从本文件取 VibePreviewFrame
 export const VibePreviewFrame = PreviewFrame;
@@ -21,11 +25,7 @@ export const VibePreviewFrame = PreviewFrame;
 const DEFAULT_TITLE = '新的创作对话';
 // 思考过程在界面上最多展示这么多字符（只保留尾部）——长推理没必要全塞进 DOM
 const REASONING_TAIL_CHARS = 4000;
-// 图片附件：一次最多几张、单张多大（与服务端的 MAX_ATTACHMENTS 对齐）
-const MAX_ATTACHMENTS = 4;
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-// 能"内联给模型看"的上限：再大的图 base64 之后太大，只能放在页面里、AI 看不到
-const MAX_INLINE_BYTES = 1024 * 1024;
+// 附件的类型 / 张数 / 大小上限都在 console/attachments.js（与服务端白名单对齐，有 p44 盯着）
 
 function filesFromArtifacts(artifacts) {
   return Object.fromEntries((artifacts || []).map((item) => [item.name, String(item.content ?? '')]));
@@ -282,36 +282,50 @@ function WorkspaceView({ api }) {
     }
   }
 
-  /** 上传图片：存成**公开**素材（外联），再把公开地址交给模型与预览页面 */
-  async function uploadImages(fileList) {
-    const files = [...(fileList || [])].filter((file) => String(file?.type || '').startsWith('image/'));
-    if (!files.length) {
-      if (fileList?.length) toast.error('目前只支持图片');
-      return;
-    }
+  /**
+   * 上传附件：存成**公开**素材（外联），再把公开地址交给页面（图片另外内联一份给模型）。
+   *
+   * 什么都能传（图片/音视频/文档，以服务端的白名单为准），但**只有图片能被模型看见** ——
+   * 上游只认 image_url，PDF/视频没有内联这条路，服务端会如实告诉模型「这些文件你看不到」。
+   */
+  async function uploadFiles(fileList) {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
     setUploading(true);
     try {
       for (const file of files) {
-        if (file.size > MAX_IMAGE_BYTES) { toast.error(`${file.name} 超过 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)}MB，换一张小点的`); continue; }
+        if (attachments.length >= MAX_ATTACHMENTS) { toast.error(`一次最多传 ${MAX_ATTACHMENTS} 个附件`); break; }
+        const isImage = String(file.type || '').startsWith('image/');
+        const probe = { name: file.name, mime: file.type, inline: isImage ? 'data:image/' : '' };
+        const limit = attachmentSizeLimit(probe);
+        if (file.size > limit) { toast.error(attachmentSizeMessage(file.name, limit)); continue; }
         const asset = await api.upload('student/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' });
         // 上游不抓公网地址，模型要「看见」图只能内联；超限就不带 inline（并如实告诉学生）
         let inline = '';
-        if (file.size <= MAX_INLINE_BYTES) {
-          inline = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || ''));
-            reader.onerror = () => resolve('');
-            reader.readAsDataURL(file);
-          });
+        if (isImage) {
+          if (file.size <= MAX_INLINE_BYTES) {
+            inline = await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result || ''));
+              reader.onerror = () => resolve('');
+              reader.readAsDataURL(file);
+            });
+          } else {
+            toast.toast(`${file.name} 超过 ${Math.round(MAX_INLINE_BYTES / 1024 / 1024)}MB，AI 看不到它，但页面里可以用`);
+          }
         } else {
-          toast.toast(`${file.name} 超过 ${Math.round(MAX_INLINE_BYTES / 1024 / 1024)}MB，AI 看不到它，但页面里可以用`);
+          toast.toast(`${file.name} 已附上；AI 看不到它的内容，页面里可以下载`);
         }
         setAttachments((current) => (current.length >= MAX_ATTACHMENTS
           ? current
-          : [...current, { id: asset.id, name: asset.fileName || file.name, url: `/api/public/file-assets/${asset.id}/download`, inline }]));
+          : [...current, {
+            id: asset.id, name: asset.fileName || file.name,
+            url: `/api/public/file-assets/${asset.id}/download`,
+            mime: asset.mimeType || file.type || '', inline,
+          }]));
       }
     } catch (error) {
-      toast.error(error.message || '图片上传失败');
+      toast.error(error.message || '附件上传失败');
     } finally {
       setUploading(false);
     }
@@ -327,7 +341,7 @@ function WorkspaceView({ api }) {
     setAttachments([]);
     streamReply('messages', { content, attachments: pending.map((item) => ({ id: item.id, inline: item.inline || '' })) }, {
       optimistic: [{
-        id: `local-user-${Date.now()}`, role: 'user', content: content || '（图片）', status: 'SUCCEEDED',
+        id: `local-user-${Date.now()}`, role: 'user', content: content || '（附件）', status: 'SUCCEEDED',
         createdAt: new Date().toISOString(), attachments: pending,
       }],
     });
@@ -529,14 +543,19 @@ function WorkspaceView({ api }) {
           {modelOptions.length ? (
             <select
               className="c-input c-model-select"
-              value={data.model || ''}
+              // 会话里没存模型（学生没自己选过）= 跟随渠道默认；这里要**显示成那个默认模型**，
+              // 而不是一个空的「渠道默认模型」，否则学生看不出实际在用哪个。
+              value={data.model || data.defaultModel || ''}
               disabled={!editable || streaming}
               aria-label="选择模型"
-              title="本会话使用的模型"
+              title={data.model ? '本会话使用的模型' : '本会话跟随渠道默认模型'}
               onChange={(event) => changeModel(event.target.value)}
             >
-              <option value="">渠道默认模型</option>
-              {modelOptions.map((option) => <option key={option.id} value={option.id}>{option.displayName}</option>)}
+              {modelOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.displayName}{option.id === data.defaultModel ? '（默认）' : ''}
+                </option>
+              ))}
             </select>
           ) : null}
           <Button size="sm" variant="ghost" icon="refresh" disabled={streaming || !messages.length || !editable} onClick={regenerate}>重新生成</Button>
@@ -561,24 +580,24 @@ function WorkspaceView({ api }) {
           event.preventDefault();
           setDragging(false);
           if (!editable) return;
-          // 从系统里把图拖进来就自动上传，不用先点按钮
-          uploadImages(event.dataTransfer?.files);
+          // 从系统里把文件拖进来就自动上传，不用先点按钮
+          uploadFiles(event.dataTransfer?.files);
         }}
       >
         <input
           ref={attachInputRef}
           className="c-file-input"
           type="file"
-          accept="image/*"
+          accept={ATTACHMENT_ACCEPT}
           multiple
-          aria-label="上传图片"
-          onChange={(event) => { uploadImages(event.target.files); event.target.value = ''; }}
+          aria-label="上传附件"
+          onChange={(event) => { uploadFiles(event.target.files); event.target.value = ''; }}
         />
         {dragging ? (
           <div className="c-drop-overlay">
             <div className="c-drop-overlay__box">
-              <ConsoleIcon name="image" size={22} />
-              松手就上传这张图
+              <ConsoleIcon name="upload" size={22} />
+              松手就上传
             </div>
           </div>
         ) : null}
