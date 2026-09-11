@@ -652,7 +652,7 @@ const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait'
 //    和框体彻底分家（第九轮用户反馈的「选中素材 + 空格拖画布后面板跑一边去」）。
 //  - 拖动框体 / 换选中框体时同样重新锚定。
 // 位置用 transform 直接算、不加 CSS 过渡（加了跟随就慢半拍）。
-function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, onRequestRoom, onRequestMaterials }) {
+function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, viewportBusy = false, onRequestRoom, onRequestMaterials }) {
   const store = useStoreApi();
   const panelRef = useRef(null);
   const [anchor, setAnchor] = useState(null);
@@ -722,14 +722,26 @@ function CanvasDockPanel({ node, containerRef, viewportEpoch = 0, onRequestRoom,
   if (overflow > 0) y = Math.max(DOCK_MARGIN, idealY - overflow);
   // 面板在框体下方放不下时（继续夹着就会压住框体）：请求把画布上移把位置让出来。
   // 用户前后反馈了三次「输入框应该一直在框体下方」，光夹到底边做不到这一点，只能动画布。
-  // 用 260ms 去抖：拖框体/拖画布时会连续变化，停下来才请求一次，避免边拖边弹视图。
+  //
+  // ⚠️ 两条必须守住（本轮踩过）：
+  //   ① **用户正在平移/缩放画布时绝不发** —— 否则拖画布的过程中视图会被顶一下
+  //      （用户反馈「移动画布时输入框乱动」就是这个）。用 viewportBusy 挡掉
+  //      （CanvasSurface 在 onMoveStart/onMoveEnd 之间置真）；手势结束后面板重新锚定，
+  //      届时若仍放不下才补一次让位。
+  //   ② **同一个缺口只请求一次** —— 否则放不下时会每 260ms 再请求一次、画布来回弹。
   const requestRoomRef = useRef(onRequestRoom);
   requestRoomRef.current = onRequestRoom;
+  const requestedOverflowRef = useRef(0);
   useEffect(() => {
-    if (!requestRoomRef.current || overflow < 8) return undefined;
-    const timer = window.setTimeout(() => requestRoomRef.current(overflow), 260);
+    if (!requestRoomRef.current || overflow < 8) { requestedOverflowRef.current = 0; return undefined; }
+    if (viewportBusy) return undefined;
+    if (Math.abs(requestedOverflowRef.current - overflow) < 4) return undefined;
+    const timer = window.setTimeout(() => {
+      requestedOverflowRef.current = overflow;
+      requestRoomRef.current(overflow);
+    }, 260);
     return () => window.clearTimeout(timer);
-  }, [overflow]);
+  }, [overflow, viewportBusy]);
 
   // 首帧还没量到容器尺寸时先别画，免得面板在左上角闪一下。
   const ready = box.width > 0;
@@ -767,6 +779,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const [viewport, setViewport] = useState(initial.viewport);
   // 画布平移/缩放「结束」的计数：面板靠它在那之后重新锚定一次（过程中不动，见 CanvasDockPanel 注释）
   const [viewportEpoch, setViewportEpoch] = useState(0);
+  // 用户是否正在平移/缩放画布：这段时间里面板的「让位」请求必须停手（否则拖画布时会被顶一下）
+  const [viewportBusy, setViewportBusy] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   // 底部面板要编辑哪个框体：优先当前选中的，取消选中后沿用上一次（面板不会突然消失）
   const [activeNodeId, setActiveNodeId] = useState(null);
@@ -1044,7 +1058,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={() => setContextMenu(null)}
         onDragOver={(event) => event.preventDefault()}
-        onMoveEnd={() => { setViewport(getViewport()); setViewportEpoch((n) => n + 1); }}
+        onMoveStart={() => setViewportBusy(true)}
+        onMoveEnd={() => { setViewport(getViewport()); setViewportEpoch((n) => n + 1); setViewportBusy(false); }}
         // 只有「这份快照还没存过视角」时才自动适配视野；存过就用存下来的视角。
         // 原来无条件写 fitView，于是每次刷新都会重新适配 —— 学生平移/缩放后的视角全丢（用户反馈「刷新全复原」）。
         fitView={!hasStoredViewport}
@@ -1074,7 +1089,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportEpoch={viewportEpoch} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} /> : null}
+      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportEpoch={viewportEpoch} viewportBusy={viewportBusy} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} /> : null}
       {!readOnly && <div className="learning-canvas__toolbar">
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
