@@ -1094,6 +1094,10 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .course-more-settings { margin-top:12px; padding:14px; border:1px dashed #e2dcf2; border-radius:12px; background:#fcfbff; }
 .channel-model-list { display:flex; flex-wrap:wrap; gap:8px 14px; padding:10px 12px; border:1px solid #eeebff; border-radius:10px; background:#fbfaff; }
 .channel-model-list label { display:flex; gap:6px; align-items:center; margin:0; font-weight:400; cursor:pointer; font-size:12px; }
+/* 已启用、但不在候选清单里的模型：在勾选框里也要显示出来（标个记号），
+   否则它在界面上看不见、却仍会被表单保存回去（2026-09-11 踩过）。 */
+.channel-model-list .channel-model-extra { color:#b45309; }
+.channel-model-list .channel-model-extra em { font-style:normal; font-size:11px; opacity:.8; }
 .lesson-teaching-materials { margin-top:12px; padding-top:10px; border-top:1px solid #eeeaf8; }
 .teaching-asset-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:8px; padding:10px 12px; border:1px solid #eeebff; border-radius:10px; background:#fbfaff; font-size:12px; }
 .teaching-asset-row strong, .teaching-asset-row small { display:block; }

@@ -173,24 +173,25 @@ function assertConversationEditable(conversation) {
 }
 
 /**
- * 课时上下文：多轮 history 会覆盖渠道模板里的 system 提示词，所以这里自己拼一条，
- * 既把本节课的正文/教学指引告诉模型，也讲清「产物」的约定——学生端不做手写代码，
- * 所以 AI 给出的带文件名代码块就是作品的唯一来源，格式错了页面就打不开。
+ * 课时上下文：多轮 history 会覆盖渠道模板里的 system 提示词，所以这里自己拼一条。
+ *
+ * 2026-09-11 用户要求：**不再注入人设与产物约定**（原来那条「阿飞」人设、
+ * 「带文件名的围栏才算产物」的约定、以及给模型的产物清单，都已删除）。
+ * 现在只保留两块：
+ *   ① 面向未成年人的一句安全底线（不属于"人设"，是平台底线；要一并删掉说一声）；
+ *   ② 本节课的课时内容（标题/简介/正文），从 course_lessons 读。
+ *
+ * ⚠️ 删掉产物约定后的后果：产物仍然只从「带文件名的围栏」解析（服务端规则没变），
+ * 所以模型需要**自己**用 ```语言 文件名 的写法，预览才会更新。如果要约定回来，
+ * 可以写进渠道配置的「请求模板」，不必改服务端代码。
  */
 export function lessonSystemMessage(conversation) {
   const lesson = row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id]);
   const parts = [
-    '你是少儿编程学习平台的创作助手「阿飞」，面向 8–16 岁的学生。请用适合儿童理解的中文回答，语气友好，避免任何危险或不适龄内容。',
-    '学生运行你的作品时会打开 index.html，所以 index.html 必须是完整的 HTML 文档，并用相对路径引用同目录的 style.css / script.js 等文件。',
-    '每个要交给学生的文件，都要用一个**完整的**代码块给出，语言标识后面紧跟文件名，例如 ```html index.html、```css style.css、```js script.js。没有写文件名的代码块只会被当成示例，不会生成文件。改动某个文件时要给出该文件的**完整内容**，不要只给片段。',
-    '说明尽量简短，不要在学生已经有完整代码块的情况下再整段重复代码。',
+    '请用适合 8–16 岁学生理解的中文回答，避免任何危险或不适龄内容。',
   ];
-  // 已有产物时把清单告诉模型，避免它把文件重命名或者漏掉之前写好的文件。
-  // 允许不带 id 调用（单测里只验证课时上下文的拼装），这时跳过这一段。
-  const artifacts = conversation.id ? listArtifacts(conversation.id) : [];
-  if (artifacts.length) {
-    parts.push(`当前作品已有的文件（重写时请保持文件名一致，用不到的可以不提）：${artifacts.map((item) => item.name).join('、')}`);
-  }
+  // 产物清单原来是为了配合「产物约定」——约定删了，这段也随之删掉。
+  // 允许不带 id 调用（单测里只验证课时上下文的拼装）。
   if (lesson) {
     if (lesson.title) parts.push(`本节 VibeCoding 课时：${lesson.title}`);
     if (lesson.summary) parts.push(`课时简介：${String(lesson.summary).slice(0, 600)}`);

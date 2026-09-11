@@ -187,32 +187,39 @@ export function ProviderPolicyPanel({ api }) {
             <label>Endpoint<input value={channel.endpoint || ''} onChange={(e) => updateChannel(index, { endpoint: e.target.value })} placeholder="https://.../v1" required /></label>
             <label>可用模型（勾选本渠道提供的模型）</label>
             <div className="channel-model-list">
-              {(channel.modelMappings || []).map((m) => { const mid = m.id || m.model; const checked = (channel.models || []).includes(mid); return <label key={mid}><input type="checkbox" checked={checked} onChange={(e) => updateChannel(index, { models: e.target.checked ? [...new Set([...(channel.models || []), mid])] : (channel.models || []).filter((x) => x !== mid) })} />{m.displayName || mid}</label>; })}
-              {!(channel.modelMappings || []).length ? <small className="muted">点下方「读取模型」获取候选，或手动添加模型 ID</small> : null}
+              {/* ⚠️ 这里必须把「候选清单」和「已启用」两个来源合并渲染。
+                  只渲染候选的话，不在候选里的已启用模型在界面上看不见，但**仍然在表单状态里**，
+                  一保存就会被写回去——2026-09-11 用户就踩了这个：他在库里删掉过 gpt-6-astra，
+                  但那个标签页的表单还带着旧值，勾选新模型保存后旧值又被恢复。
+                  现在每个已启用项都有勾选框：看得见的，才控制得住。 */}
+              {(() => {
+                const candidates = (channel.modelMappings || []).map((m) => ({ id: m.id || m.model, label: m.displayName || m.id || m.model, extra: false }));
+                const known = new Set(candidates.map((item) => item.id));
+                const extras = (channel.models || []).filter((id) => !known.has(id)).map((id) => ({ id, label: id, extra: true }));
+                const all = [...candidates, ...extras];
+                if (!all.length) return <small className="muted">点下方「读取模型」获取候选，或手动添加模型 ID</small>;
+                return all.map((item) => (
+                  <label key={item.id} className={item.extra ? 'channel-model-extra' : undefined}>
+                    <input
+                      type="checkbox"
+                      checked={(channel.models || []).includes(item.id)}
+                      onChange={(e) => updateChannel(index, { models: e.target.checked ? [...new Set([...(channel.models || []), item.id])] : (channel.models || []).filter((x) => x !== item.id) })} />
+                    {item.label}{item.extra ? <em>（不在候选清单）</em> : null}
+                  </label>
+                ));
+              })()}
             </div>
-            {/* 上面那组勾选框只渲染「候选清单」，所以已启用但不在候选里的模型在这里完全看不见，
-                只会在下面的「默认模型」下拉里冒出来（典型是把别家供应商的模型名填了进来）。
-                把这种漂移显式暴露出来，并给一键移除——否则它在学生端就是一个必然失败的选项。 */}
+            {/* 提示：勾选框里标着「不在候选清单」的那些通常是别家供应商的模型（或手动输入有误）。
+                它们会出现在学生端的模型下拉里，学生选中就以当前 Endpoint 去调用——大概率失败。
+                要清理直接在上面取消勾选即可（没有移除按钮是刻意的：勾选框本身就是控制面）。 */}
             {(() => {
               const candidates = (channel.modelMappings || []).map((m) => m.id || m.model);
               // 默认模型是在下面那个下拉里特意选的，不算漂移（它常常不在候选清单里）
               const orphans = (channel.models || []).filter((m) => !candidates.includes(m) && m !== channel.model);
               if (!orphans.length) return null;
               return <div className="notice warning span-2">
-                <strong>⚠ 已启用、但不在候选清单里的模型</strong>
-                <div className="row-actions" style={{ margin: '8px 0' }}>
-                  {orphans.map((model) => <button
-                    type="button"
-                    className="secondary-button"
-                    key={model}
-                    title="从本渠道的启用模型里移除"
-                    onClick={() => updateChannel(index, {
-                      models: (channel.models || []).filter((x) => x !== model),
-                      model: channel.model === model ? '' : channel.model,
-                    })}
-                  >移除 {model}</button>)}
-                </div>
-                <small className="muted">通常是别的供应商的模型（或手动输入有误）。它们出现在学生端的模型下拉里，选中就会以当前 Endpoint 去调用，大概率失败。</small>
+                <strong>⚠ 有 {orphans.length} 个已启用的模型不在候选清单里：{orphans.join("、")}</strong>
+                <small className="muted">它们会出现在学生端的模型下拉里，选中就以当前 Endpoint 去调用，大概率失败。要清掉就在上面取消勾选。</small>
               </div>;
             })()}
             <label>手动添加模型 ID<input onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (v) { updateChannel(index, { models: [...new Set([...(channel.models || []), v])] }); e.target.value = ''; } } }} placeholder="输入后回车添加" /></label>

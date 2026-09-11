@@ -53,7 +53,11 @@ assert.equal(systemMessage.role, 'system', '应生成 system 消息');
 assert.ok(systemMessage.content.includes(lesson.title), 'system 上下文应含课时标题');
 assert.ok(systemMessage.content.includes('本课目标：用 AI 做出一个会动的小网页。'), 'system 上下文应含课时正文');
 assert.ok(systemMessage.content.includes('8–16 岁'), 'system 上下文应含儿童安全约束');
-assert.ok(systemMessage.content.includes('index.html'), 'system 上下文应含代码块文件名约定');
+// 2026-09-11 用户要求删掉「人设与产物约定」。这里反过来断言它们**不在**：
+// 谁把它们加回来，这条就会报错（比只断言「课时内容还在」更能守住这次的决定）。
+assert.equal(systemMessage.content.includes('阿飞'), false, 'system 上下文不应再含人设');
+assert.equal(systemMessage.content.includes('不会生成文件'), false, 'system 上下文不应再含产物约定');
+assert.equal(systemMessage.content.includes('每个要交给学生的文件'), false, 'system 上下文不应再含产物约定');
 
 const port = 18901;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
