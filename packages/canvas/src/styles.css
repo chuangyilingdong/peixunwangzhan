@@ -238,6 +238,8 @@
 
 /* ── 参考素材缩略图（复刻参考的展示）：小图 + 序号角标 + 名称胶囊；hover 在面板内向上展开大图 ── */
 .learning-node__ref-thumb { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; cursor: zoom-in; }
+/* 只负责给 × 当定位锚点：**不能有 overflow**，否则 × 的溢出部分会被裁掉 */
+.learning-node__ref-thumb-box { position: relative; display: block; }
 .learning-node__ref-thumb-pic { position: relative; display: block; width: 44px; height: 44px; overflow: hidden; border: 1px solid var(--cv-border-strong); border-radius: 10px; background: var(--cv-surface-2); }
 .learning-node__ref-thumb-pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .learning-node__ref-thumb-pic i { display: grid; place-items: center; height: 100%; color: var(--cv-text-faint); font-size: 14px; font-style: normal; }
@@ -306,7 +308,11 @@
 
 /* 面板去掉 padding 后，光束层正好贴在外沿（面板内圆角 16-1=15px） */
 .learning-canvas__panel { --cv-beam-radius: 15px; --cv-beam-duration: 1.96s; --cv-beam-strength: .67; }
-.learning-canvas__beam { position: relative; overflow: hidden; border-radius: var(--cv-beam-radius); }
+/* ⚠️ 这里**不能写 overflow: hidden**：光束层包着整个面板内容，一裁就把面板里的浮层
+   （参考大图预览、@ 引用候选）一起裁掉/困住 —— 用户 2026-09-11 报的「hover 预览被遮挡」
+   「@ 里只能看到第二个候选」都是它。三束光（::after / ::before / bloom）各自都带
+   clip-path: inset(0 round 半径)，圆角处的裁切本来就不依赖父级 overflow。 */
+.learning-canvas__beam { position: relative; border-radius: var(--cv-beam-radius); }
 .learning-canvas__beam.is-active { animation: cv-beam-spin var(--cv-beam-duration) linear infinite, cv-beam-fade-in .6s ease forwards; }
 .learning-canvas__beam.is-active::after,
 .learning-canvas__beam.is-active::before { content: ''; position: absolute; inset: 0; pointer-events: none; }

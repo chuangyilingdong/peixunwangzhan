@@ -283,9 +283,13 @@ function PanelFooter({ state, error, label = '生成', disabled = false, hint, o
 function RefThumb({ url, label, index, onRemove = null }) {
   const shown = useDisplayUrl(url);
   return <figure className="learning-node__ref-thumb" tabIndex={0}>
-    <span className="learning-node__ref-thumb-pic">
-      {shown ? <img src={shown} alt={label} /> : <i>?</i>}
-      {index ? <b className="learning-node__ref-thumb-index">{index}</b> : null}
+    {/* × 要放在「不裁剪」的外层：缩略图本体是 overflow:hidden（圆角裁图），
+        把 × 塞在里面会被裁掉一半（用户 2026-09-11 报的就是这个） */}
+    <span className="learning-node__ref-thumb-box">
+      <span className="learning-node__ref-thumb-pic">
+        {shown ? <img src={shown} alt={label} /> : <i>?</i>}
+        {index ? <b className="learning-node__ref-thumb-index">{index}</b> : null}
+      </span>
       {onRemove ? <button
         type="button"
         className="learning-node__ref-thumb-remove nodrag"
