@@ -453,6 +453,7 @@
 [data-console] .md-view hr { margin: var(--sp-4) 0; border: 0; border-top: 1px solid var(--hairline); }
 [data-console] .md-view strong { color: var(--text); font-weight: 600; }
 [data-console] .md-inline-code {
+  font-family: var(--font-mono);
   padding: 2px 5px;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
@@ -506,6 +507,7 @@
 }
 [data-console] .md-code code.hljs {
   display: block;
+  font-family: var(--font-mono);
   padding: 0;
   background: transparent;
   color: var(--text);
