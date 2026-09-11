@@ -40,7 +40,26 @@ function entryOf(artifacts, preferred) {
     || 'index.html';
 }
 
-function downloadArtifact(artifact) {
+/** 文档产物（PPT / Word / Excel）在产物里存的是规格文本，下载要回到服务端渲染成真文件 */
+const DOCUMENT_KINDS = ['pptx', 'docx', 'xlsx'];
+export function isDocumentArtifact(kind) {
+  return DOCUMENT_KINDS.includes(String(kind || '').toLowerCase());
+}
+
+/** 触发一次「保存到本地」；documents 走服务端渲染接口，其余仍在前端直接落盘 */
+async function saveArtifact({ api, conversationId, artifact }) {
+  if (isDocumentArtifact(artifact.kind)) {
+    // 走 fetchBlobUrl 是为了带上 Authorization（<a href> 带不了），拿到 blob: 再触发下载
+    const url = await api.fetchBlobUrl(`student/vibecoding/conversations/${conversationId}/artifacts/${artifact.id}/download`);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = artifact.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return;
+  }
   downloadTextFile(
     artifact.name,
     String(artifact.content ?? ''),
@@ -612,14 +631,18 @@ function WorkspaceView({ api }) {
           onEditMessage={(message) => setEditing({ id: message.id, content: message.content })}
           onDeleteMessage={deleteMessage}
           onOpenArtifact={() => { setWorkbenchOpen(true); setTab('preview'); setMenu(null); }}
-          onDownloadArtifact={(artifact) => { downloadArtifact(artifact); toast.ok(`已下载 ${artifact.name}`); }}
+          onDownloadArtifact={(artifact) => {
+            saveArtifact({ api, conversationId, artifact })
+              .then(() => toast.ok(`已下载 ${artifact.name}`))
+              .catch((error) => toast.error(error?.message || '下载失败'));
+          }}
           emptyState={(
             <div className="c-landing">
               <span className="c-landing__mark"><ConsoleIcon name="wand" size={24} /></span>
               <h2>和 AI 一起做东西</h2>
               <p>想做什么直接说，AI 会一边想一边做，做出来的东西放在右边随时看。改主意了就接着聊，它会跟着改。</p>
               <div className="c-landing__prompts">
-                {['做一个点击按钮会变色的网页', '写一个猜数字的小游戏', '帮我看看这段代码哪里错了', '做一个能记录心情的小本子'].map((prompt) => (
+                {['做一个点击按钮会变色的网页', '写一个猜数字的小游戏', '做一份去新疆旅游的 PPT', '做一张记录心情的 Excel 表格'].map((prompt) => (
                   <button key={prompt} type="button" className="c-landing__prompt" onClick={() => { setDraft(prompt); setTimeout(() => send(prompt), 0); }}>
                     {prompt}
                   </button>
@@ -671,6 +694,11 @@ function WorkspaceView({ api }) {
         onTabChange={setTab}
         activeArtifactName={entryFile}
         onSelectArtifact={() => setTab('preview')}
+        // 只做出了 PPT / Word / Excel 时预览区点不亮：那是要下载下来用 Office 打开的文件，
+        // 不是网页。这里如实说明，别让学生对着空白区以为是坏了。
+        emptyHint={artifacts.some((item) => isDocumentArtifact(item.kind))
+          ? '这些是 PPT / Word / Excel 文件，点右边的「下载」用 PowerPoint / WPS 打开。'
+          : undefined}
       /> : null}
 
       {editing ? (

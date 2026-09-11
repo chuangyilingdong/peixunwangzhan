@@ -7,6 +7,7 @@ import {
   audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso,
   pageParams, pageResult, q, requireRole, row, rows, transaction,
 } from '../lib.js';
+import { Readable } from 'node:stream';
 import { PUBLIC_SITE_URL } from '../config.js';
 import { resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
@@ -21,6 +22,7 @@ import {
   artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact,
   listArtifacts, pickEntryArtifact, seedDefaultArtifacts, upsertArtifact, upsertArtifacts,
 } from '../services/vibecodingArtifacts.js';
+import { isDocumentKind, renderDocument } from '../services/ooxml/documents.js';
 
 const DEFAULT_TITLE = '新的创作对话';
 const MAX_MESSAGE_CHARS = 4000;
@@ -226,10 +228,26 @@ function assertConversationEditable(conversation) {
  * 所以模型需要**自己**用 ```语言 文件名 的写法，预览才会更新。如果要约定回来，
  * 可以写进渠道配置的「请求模板」，不必改服务端代码。
  */
+/**
+ * 能产出哪些**文档**、分别怎么写。
+ *
+ * ⚠️ 这不是「人设」，也不是 2026-09-11 删掉的那种「产物约定」（当时删的是人设 + 要求模型自己起文件名）。
+ * 这是三种文件格式的**写法说明**——模型不可能凭空猜出我们的规格长什么样，不给它，这个能力就等于不存在。
+ * 反过来，这里也只说格式，不规定它必须产生产物、不规定话术。
+ */
+const DOCUMENT_GUIDE = [
+  '除了网页，你也可以直接产出 Office 文档：用一个带扩展名的代码块写**内容**，平台会渲染成真正的文件，学生下载后能用 PowerPoint / Word / Excel / WPS 打开。',
+  '· PPT：```pptx 文件名.pptx ```，内容是一段 JSON —— {"title":"标题","subtitle":"副标题","author":"署名","slides":[{"title":"这一页的标题","bullets":["要点一","要点二"]}]}。每页 3~6 条要点、单条不超过 40 字，页数按需要；不要只做一页，也不要把整段话塞进一条要点。',
+  '· Word：```docx 文件名.docx ```，内容是 Markdown —— # 一级标题、- 无序列表、1. 有序列表、| 表格 |、**粗体**。',
+  '· Excel：```xlsx 文件名.xlsx ```，内容是 CSV，**第一行是表头**。',
+  '学生要文档时就直接给对应的代码块，不要用文字描述一遍内容来代替。',
+].join('\n');
+
 export function lessonSystemMessage(conversation) {
   const lesson = row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id]);
   const parts = [
     '请用适合 8–16 岁学生理解的中文回答，避免任何危险或不适龄内容。',
+    DOCUMENT_GUIDE,
   ];
   // 产物清单原来是为了配合「产物约定」——约定删了，这段也随之删掉。
   // 允许不带 id 调用（单测里只验证课时上下文的拼装）。
@@ -574,6 +592,32 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const artifact = getArtifact(conversation.id, artifactMatch[2]);
     if (!artifact) throw errors.notFound('产物不存在', 'VIBECODING_ARTIFACT_NOT_FOUND');
     return artifact;
+  }
+
+  // 文档产物的下载：产物里存的是**规格文本**（JSON/Markdown/CSV），这里当场渲染成真正的
+  // .pptx / .docx / .xlsx 再发出去。见 services/ooxml/documents.js 里的取舍说明。
+  const documentMatch = part.match(/^\/conversations\/([^/]+)\/artifacts\/([^/]+)\/download$/);
+  if (documentMatch && method === 'GET') {
+    const { conversation } = ownConversation(ctx, documentMatch[1]);
+    const artifact = getArtifact(conversation.id, documentMatch[2]);
+    if (!artifact) throw errors.notFound('产物不存在', 'VIBECODING_ARTIFACT_NOT_FOUND');
+    if (!isDocumentKind(artifact.kind)) throw errors.badRequest('这个产物不是可下载的文档', 'VIBECODING_ARTIFACT_NOT_DOCUMENT');
+    const rendered = renderDocument(artifact);
+    if (rendered.error) throw errors.badRequest(rendered.error, 'VIBECODING_DOCUMENT_RENDER_FAILED');
+    const safeName = String(rendered.filename || 'download').replace(/[\r\n"\\/]/g, '_');
+    audit(ctx, 'VIBECODING_ARTIFACT_DOWNLOAD', 'VIBECODING_ARTIFACT', artifact.id, null, { kind: artifact.kind, bytes: rendered.buffer.length });
+    return {
+      __fileResponse: true,
+      status: 200,
+      headers: {
+        'content-type': rendered.mime,
+        'content-length': String(rendered.buffer.length),
+        'content-disposition': `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'private, no-store',
+      },
+      stream: Readable.from(rendered.buffer),
+    };
   }
 
   // 置顶 / 取消置顶（只影响自己侧栏排序）

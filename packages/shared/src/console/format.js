@@ -58,6 +58,10 @@ export function artifactGroup(kind) {
   if (value === 'json' || value === 'csv') return { icon: 'brackets', tone: 'data', label: '数据' };
   if (value === 'md' || value === 'markdown' || value === 'txt') return { icon: 'file', tone: 'data', label: '文档' };
   if (value === 'svg' || value === 'png' || value === 'jpg' || value === 'jpeg' || value === 'webp') return { icon: 'image', tone: 'preview', label: '图片' };
+  // 文档产物：产物里存的是规格文本，点下载时由服务端渲染成真正的 Office 文件
+  if (value === 'pptx') return { icon: 'list', tone: 'doc', label: 'PPT' };
+  if (value === 'docx') return { icon: 'file', tone: 'doc', label: 'Word' };
+  if (value === 'xlsx') return { icon: 'brackets', tone: 'doc', label: 'Excel' };
   return { icon: 'file', tone: 'code', label: '文件' };
 }
 

@@ -16,12 +16,17 @@
 // 关键能力是**流式增量解析**：模型还在吐字时，每有一个围栏闭合就立刻落库并推事件，
 // 学生才能看到产物卡片一个个出现，而不是等整轮结束才一次性冒出来。
 import { count, id, nowIso, q, row, rows } from '../lib.js';
+import { parseCsv } from './ooxml/xlsx.js';
+import { parseDeckSpec } from './ooxml/documents.js';
 
 export const ARTIFACT_LIMITS = Object.freeze({ maxFiles: 24, maxFileBytes: 256 * 1024, maxTotalBytes: 2 * 1024 * 1024 });
 
 const KIND_BY_EXTENSION = {
   html: 'html', htm: 'html', css: 'css', js: 'js', mjs: 'js', cjs: 'js',
   json: 'json', md: 'md', markdown: 'md', svg: 'svg', csv: 'csv', txt: 'text', text: 'text',
+  // 文档产物：围栏里写的不是文件本身，而是**规格文本**（pptx=JSON 提纲、docx=Markdown、xlsx=CSV），
+  // 下载时才由 services/ooxml 渲染成真正的 Office 文件。见那个目录里的说明。
+  pptx: 'pptx', docx: 'docx', xlsx: 'xlsx',
 };
 
 export function kindForName(name) {
@@ -31,7 +36,9 @@ export function kindForName(name) {
 
 // 与 packages/shared/src/vibecodingProject.js 的 parseFenceInfo 同一套规则
 // （服务端不引共享包，所以这里保留一份；两边改要一起改）
-const FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/;
+// 允许中日韩文字：学生做的是中文作品，模型会起「去新疆旅游.pptx」这种名字；
+// 但仍禁掉路径分隔符与空白（文件名在围栏信息里是以空格分界的一个词）。
+const FILE_NAME_PATTERN = /^[A-Za-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af][A-Za-z0-9._\-\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{0,63}$/;
 
 export function parseFenceInfo(raw) {
   const parts = String(raw || '').trim().split(/\s+/).filter(Boolean);
@@ -50,7 +57,12 @@ const DEFAULT_NAME_BY_LANG = {
   js: 'script.js', javascript: 'script.js', mjs: 'script.mjs', cjs: 'script.cjs',
   ts: 'script.ts', typescript: 'script.ts', jsx: 'app.jsx', tsx: 'app.tsx',
   json: 'data.json', md: 'notes.md', markdown: 'notes.md', txt: 'notes.txt', text: 'notes.txt',
+  // 文档产物：语言标签就是格式，没写文件名时给一个中文默认名（这个名字会直接显示给学生）
+  pptx: '演示文稿.pptx', docx: '文档.docx', xlsx: '表格.xlsx',
 };
+
+// 段落/文档类产物的语言别名：模型常把文档写成 ```markdown / ```md，或直接按格式写 ```ppt
+const DOCUMENT_ALIASES = { ppt: 'pptx', powerpoint: 'pptx', slides: 'pptx', deck: 'pptx', word: 'docx', excel: 'xlsx', sheet: 'xlsx', spreadsheet: 'xlsx' };
 
 // 语言别名（模型常写 js / html / javascript 之类）
 const LANG_ALIASES = { js: 'javascript', ts: 'typescript', htm: 'html', sh: 'shell' };
@@ -100,6 +112,25 @@ function looksLikeCompleteFile(content, lang) {
     try { const value = JSON.parse(trimmed); return typeof value === 'object' && value !== null; } catch { return false; }
   }
 
+  // ── 文档产物（pptx / docx / xlsx）─────────────────────────────────────────
+  // 这三类的判据比代码更保守：它们的内容是**规格文本**，一段示例也会「看着像」，
+  // 所以要求出现真实的文档结构信号，否则宁可不落库（漏认只是少一个产物，错认会污染学生的作品列表）。
+  if (language === 'pptx') {
+    const deck = parseDeckSpec(text);
+    return Boolean(deck && deck.slides.length >= 2);
+  }
+  if (language === 'docx') {
+    const lines = trimmed.split('\n').filter((line) => line.trim());
+    if (lines.length < 3) return false;
+    // 有标题、或有无序/有序列表、或有表格，才当文档
+    return /^#{1,4}\s/m.test(trimmed) || /^\s*[-*+]\s/m.test(trimmed) || /^\s*\d+[.)]\s/m.test(trimmed) || /^\s*\|.*\|\s*$/m.test(trimmed);
+  }
+  if (language === 'xlsx') {
+    const rows = parseCsv(text).filter((row) => row.some((value) => String(value).trim() !== ''));
+    // 表格至少要有表头 + 一行数据，且列数 ≥ 2（一列的「表格」多半是随手写的清单）
+    return rows.length >= 2 && Math.max(...rows.map((row) => row.length)) >= 2;
+  }
+
   // 其余语言（md/txt/未知）：不猜，避免把说明文字写成文件
   return false;
 }
@@ -122,8 +153,9 @@ export function scanArtifacts(text, { from = 0 } = {}) {
     const lowerLang = String(lang || '').toLowerCase();
     let name = filename;
     if (!name) {
-      const fallback = DEFAULT_NAME_BY_LANG[lowerLang];
-      if (!fallback || !looksLikeCompleteFile(content, lowerLang)) continue;
+      // 先过文档别名（```ppt / ```slides / ```word 这些模型也常写）
+      const fallback = DEFAULT_NAME_BY_LANG[DOCUMENT_ALIASES[lowerLang] || lowerLang];
+      if (!fallback || !looksLikeCompleteFile(content, DOCUMENT_ALIASES[lowerLang] || lowerLang)) continue;
       name = fallback;
     }
     found.push({

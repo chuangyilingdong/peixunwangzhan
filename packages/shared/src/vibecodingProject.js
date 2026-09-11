@@ -2,7 +2,10 @@
  * VibeCoding 产物与预览的纯函数：不依赖浏览器 API，便于单测与复用。
  * 学生不再手写代码，所以这里只剩「把产物拼成可运行的预览文档」和「解析围栏信息」两件事。
  */
-export const FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/;
+// 产物文件名：允许中日韩文字（学生做的是中文作品，模型自然会起「去新疆旅游.pptx」这种名字），
+// 但仍然禁掉路径分隔符与空白——文件名在围栏信息里是一个以空格分界的词。
+// 服务端 services/vibecodingArtifacts.js 有一份同样的规则，改要一起改。
+export const FILE_NAME_PATTERN = /^[A-Za-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af][A-Za-z0-9._\-\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{0,63}$/;
 
 /** 浏览器下载一段文本（工程包 / 对话记录都用它） */
 export function downloadTextFile(filename, content, mime = 'application/json;charset=utf-8') {

@@ -310,6 +310,8 @@ html.is-workbench-resizing * { cursor: col-resize !important; user-select: none 
 }
 .c-artifact-chip__icon[data-kind="data"] { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--bg-surface)); }
 .c-artifact-chip__icon[data-kind="code"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface)); }
+/* 文档产物（PPT / Word / Excel）：能下载成真正的 Office 文件，给一个自成一类的颜色 */
+.c-artifact-chip__icon[data-kind="doc"] { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, var(--bg-surface)); }
 .c-artifact-chip__name {
   min-width: 0;
   overflow: hidden;
