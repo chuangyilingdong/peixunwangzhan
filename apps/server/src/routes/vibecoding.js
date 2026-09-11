@@ -7,6 +7,7 @@ import {
   audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso,
   pageParams, pageResult, q, requireRole, row, rows, transaction,
 } from '../lib.js';
+import { PUBLIC_SITE_URL } from '../config.js';
 import { resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { getGenerationProvider } from '../services/generationProvider.js';
@@ -102,9 +103,13 @@ function parseAttachments(value) {
   } catch { return []; }
 }
 
-/** 公开下载地址：**外联**用（模型能抓、生成出来的页面也能显示） */
+/**
+ * 公开下载地址（**绝对** URL）：外联给模型与生成出来的页面用。
+ * ⚠️ 必须是绝对地址——上游模型在外部，站内相对路径它抓不到
+ *（画布那边踩过同一个坑，见 aiGeneration.js 的 publicFileAssetUrl）。
+ */
 function publicAssetUrl(assetId) {
-  return `/api/public/file-assets/${assetId}/download`;
+  return `${String(PUBLIC_SITE_URL || '').replace(/\/+$/, '')}/api/public/file-assets/${assetId}/download`;
 }
 
 function conversationScopeSql(alias = 'conversation') {
