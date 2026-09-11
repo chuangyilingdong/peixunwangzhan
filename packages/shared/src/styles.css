@@ -1253,6 +1253,8 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .cv-heading__title h2 { margin: 3px 0 0; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .cv-save-state { flex: 0 0 auto; padding: 5px 11px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-dim); background: rgb(255 255 255 / 4%); font-size: 11px; }
 .cv-save-state.is-dirty { color: var(--cv-primary); border-color: rgb(163 254 68 / 30%); background: rgb(163 254 68 / 10%); }
+/* 自动保存失败要显眼：学生得知道「刚才的改动没写进去」（线上出现过课包被归档 → 保存接口一直 404） */
+.cv-save-state.is-error { max-width: 48ch; overflow: hidden; color: #ffb4b4; border-color: rgb(255 107 107 / 45%); background: rgb(255 107 107 / 12%); text-overflow: ellipsis; white-space: nowrap; }
 .cv-viewport { flex: 1; min-height: 0; overflow: hidden; border-radius: 20px; }
 .cv-viewport .learning-canvas { height: 100%; min-height: 0; border-radius: 20px; }
 /* 官网匿名统计同意条固定悬浮在底部，别让它压住画布底部（含缩放手柄） */

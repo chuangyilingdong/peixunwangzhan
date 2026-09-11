@@ -242,20 +242,46 @@ function PanelFooter({ state, error, label = '生成', disabled = false, hint, o
   </div>;
 }
 
+// 参考素材缩略图（复刻参考的展示）：小图 + 序号角标 + 名称胶囊；
+// 鼠标移上去在**面板内部**向上展开一张大图（用绝对定位，不改变布局、也不会被面板的裁切切掉）。
+function RefThumb({ url, label, index }) {
+  return <figure className="learning-node__ref-thumb" tabIndex={0}>
+    <span className="learning-node__ref-thumb-pic">
+      {url ? <img src={url} alt={label} /> : <i>?</i>}
+      {index ? <b className="learning-node__ref-thumb-index">{index}</b> : null}
+    </span>
+    <figcaption className="learning-node__ref-thumb-label">{label}</figcaption>
+    {url ? <span className="learning-node__ref-thumb-pop"><img src={url} alt={`${label} 预览`} /></span> : null}
+  </figure>;
+}
+
+// 已连接素材按类型编号（图片 1 / 视频 1 / 音频 1…），@ 引用和缩略图胶囊共用这套名字
+function referenceAssetLabels(assets) {
+  const counters = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
+  const names = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频' };
+  return (assets || []).map((asset) => {
+    const type = counters[asset.type] === undefined ? 'IMAGE' : asset.type;
+    counters[type] += 1;
+    return { ...asset, label: `${names[type]} ${counters[type]}` };
+  });
+}
+
 // 视频框体的「首帧 / 尾帧 / 参考素材」行：素材靠连线引进来（学生可从桌面拖文件进来再连线），未连时给明确提示
 function FrameRefRows({ incoming, referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame }) {
   if (omni) {
-    const count = (referenceAssets || []).length;
+    const named = referenceAssetLabels(referenceAssets);
     return <div className="learning-node__ref-row">
       <span className="learning-node__seg-label">参考</span>
-      {count ? <span className="learning-node__ref-chip is-on">已连接 {count} 个素材</span> : <span className="learning-node__ref-empty">未连接（图片/视频/音频连过来即可）</span>}
+      {named.length
+        ? <div className="learning-node__frame-chips">{named.slice(0, 6).map((asset, index) => <RefThumb key={`${asset.url}-${index}`} url={asset.url} label={asset.label} index={index + 1} />)}</div>
+        : <span className="learning-node__ref-empty">未连接（图片/视频/音频连过来即可）</span>}
     </div>;
   }
   if (!supportsFirstFrame && !supportsLastFrame) return null;
   const first = incoming[0] || referenceUrl || '';
   const last = supportsLastFrame ? String(incoming[1] || '') : '';
   const chip = (url, name) => url
-    ? <figure className="learning-node__frame-chip"><img src={url} alt={name} /><figcaption>{name} · 已连接</figcaption></figure>
+    ? <RefThumb url={url} label={`${name} · 已连接`} />
     : <span className="learning-node__ref-empty">{name}未连接（从图片节点连过来）</span>;
   return <div className="learning-node__ref-row">
     <span className="learning-node__seg-label">画面</span>
@@ -451,6 +477,10 @@ const edgeTypes = { default: GlowEdge };
 // 提示词 / 画面来源行 / 画幅·清晰度·时长分段胶囊 / 页脚（状态胶囊 + 配置 + ＋ + 生成 ↑）。
 function NodeEditPanel({ node, onRequestMaterials }) {
   const { updateNode, generateNode, canGenerate, readOnly, enabledCapabilities, getIncomingImageAssetUrls, getIncomingAssetRefs } = useCanvasActions();
+  // 输入框里的 @ 引用：@ 打开候选（连线连过来的素材 + 框体预置素材），选中就把「图片 1」这样的名字插进提示词。
+  // hook 必须放在下面所有提前 return 之前（提前 return 之后再加 hook 会白屏，p34 守卫盯着这条）。
+  const promptRef = useRef(null);
+  const [mention, setMention] = useState(null);
   if (!node) return null;
   const id = node.id;
   const data = node.data || {};
@@ -512,10 +542,61 @@ function NodeEditPanel({ node, onRequestMaterials }) {
   if (!supportsPrompt) {
     return <div className="learning-canvas__panel-inner"><span className="learning-node__seg-label">{data.title || node.type}</span><span className="cv-muted">这个节点直接在卡片上编辑，没有生成参数。</span></div>;
   }
+  // @ 引用的候选：连线连过来的素材（按类型编号）+ 框体自带的预置素材
+  const referenceNames = [
+    ...referenceAssetLabels(getIncomingAssetRefs(id)).map((asset) => ({
+      ...asset,
+      hint: asset.type === 'IMAGE' ? '连线引用' : asset.type === 'VIDEO' ? '连线引用（视频）' : '连线引用（音频）',
+    })),
+    ...(data.referenceUrl ? [{ url: String(data.referenceUrl), label: '框体素材', hint: '框体预置' }] : []),
+  ];
+  const filteredNames = mention?.query ? referenceNames.filter((item) => item.label.includes(mention.query)) : referenceNames;
+  const insertMention = (item) => {
+    const element = promptRef.current;
+    const caret = element ? element.selectionStart : promptValue.length;
+    const before = promptValue.slice(0, caret);
+    const at = before.lastIndexOf('@');
+    const next = at >= 0
+      ? `${promptValue.slice(0, at)}@${item.label} ${promptValue.slice(caret)}`
+      : `${promptValue}@${item.label} `;
+    setPrompt(next);
+    setMention(null);
+    if (element) window.requestAnimationFrame(() => { element.focus(); const pos = next.length; element.setSelectionRange(pos, pos); });
+  };
+  // 光标前刚打出一个「@」（后面还没跟空格）就把候选打开；再打字就当查询过滤
+  const syncMention = (value, caret) => {
+    const before = String(value).slice(0, caret ?? String(value).length);
+    const at = before.lastIndexOf('@');
+    if (at < 0 || /\s/.test(before.slice(at + 1)) || caret - at > 12) { setMention(null); return; }
+    setMention({ query: before.slice(at + 1) });
+  };
   // 面板上不再重复放「连线引用中」的缩略图条：框体自己就显示着那张画面，下面「参考」那行也写了连接情况。
   // 这一条占 80px 上下，面板一高就更容易压住框体（用户反馈「输入框应该一直在框体下方」）。
   return <div className="learning-canvas__panel-inner">
-    <textarea className="learning-node__textarea nodrag" value={promptValue} placeholder={placeholder} maxLength={isBox ? 3000 : 300} disabled={readOnly} onChange={(event) => setPrompt(event.target.value)} />
+    {/* 明写正在编辑哪个框体：面板会贴到「被选中」的框体下方，而学生可能在看着另一个框体（用户误读成面板跑偏过） */}
+    <div className="learning-canvas__panel-target"><span className="learning-node__seg-label">正在编辑</span><strong>{data.title || node.type}</strong>{referenceNames.length ? <span className="cv-muted">输入 @ 可引用：{referenceNames.map((item) => item.label).join('、')}</span> : null}</div>
+    <div className="learning-node__textarea-wrap">
+      <textarea
+        ref={promptRef}
+        className="learning-node__textarea nodrag"
+        value={promptValue}
+        placeholder={placeholder}
+        maxLength={isBox ? 3000 : 300}
+        disabled={readOnly}
+        onChange={(event) => { setPrompt(event.target.value); syncMention(event.target.value, event.target.selectionStart); }}
+        onKeyDown={(event) => { if (mention && (event.key === 'Escape' || event.key === 'ArrowLeft')) setMention(null); }}
+        onBlur={() => setMention(null)}
+      />
+      {mention && filteredNames.length ? <div className="learning-node__mention" role="listbox" aria-label="插入引用">
+        {filteredNames.slice(0, 8).map((item, index) => <button
+          type="button"
+          key={`${item.url}-${index}`}
+          className="learning-node__mention-item"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => insertMention(item)}
+        ><span className="learning-node__mention-thumb">{item.url ? <img src={item.url} alt={item.label} /> : null}</span>{item.label}<small>{item.hint}</small></button>)}
+      </div> : null}
+    </div>
     {slotType === 'video' || slotType === 'animation' ? <FrameRefRows
       incoming={getIncomingImageAssetUrls(id)}
       referenceUrl={String(data.referenceUrl || '')}

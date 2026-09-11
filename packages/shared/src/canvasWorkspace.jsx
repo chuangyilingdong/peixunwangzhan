@@ -131,6 +131,9 @@ export function CanvasWorkspace({ api, ...props }) {
 
   // 自动保存：改动停下来 1.2 秒就写回服务器（不递增版本号），刷新/断网不至于把画布丢光。
   const [autoSaving, setAutoSaving] = useState(false);
+  // 自动保存失败必须让学生看见。之前这里是静默 catch（「不打扰学生」），结果线上出现过：
+  // 作品所属课包被归档 → 保存接口一直 404 → 界面还显示「已保存」→ 刷新全丢。
+  const [saveError, setSaveError] = useState('');
   const autoSaveRef = useRef({ signature: '', busy: false });
   useEffect(() => {
     if (!editable || !draft || !changed) return undefined;
@@ -144,7 +147,10 @@ export function CanvasWorkspace({ api, ...props }) {
         autoSaveRef.current.signature = canvasContentSignature(saved.canvasSnapshot);
         setCanvasSnapshot(saved.canvasSnapshot);
         setSavedSignature(canvasContentSignature(saved.canvasSnapshot));
-      } catch { /* 自动保存失败不打扰学生：手工保存/提交时还会再写一次 */ }
+        setSaveError('');
+      } catch (error) {
+        setSaveError(error?.message || '保存失败，请稍后重试');
+      }
       finally { autoSaveRef.current.busy = false; setAutoSaving(false); }
     }, 1200);
     return () => clearTimeout(timer);
@@ -551,7 +557,10 @@ export function CanvasWorkspace({ api, ...props }) {
       <div className="cv-main">
         <div className="cv-heading">
           <div className="cv-heading__title"><span>我的课堂画布</span><h2>{project.data.title}</h2></div>
-          <span className={`cv-save-state ${changed ? 'is-dirty' : ''}`}>{changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
+          <span
+            className={`cv-save-state ${saveError ? 'is-error' : changed ? 'is-dirty' : ''}`}
+            title={saveError ? `保存失败：${saveError}（改动还没写进服务器，先别刷新；请把这条信息发给老师）` : undefined}
+          >{saveError ? `保存失败：${saveError}` : changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
         </div>
         <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} onRequestMaterials={() => { setSidebarCollapsed(false); setToolPanel('materials'); }} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>

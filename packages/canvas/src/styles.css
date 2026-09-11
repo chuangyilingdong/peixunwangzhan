@@ -223,11 +223,38 @@
 
 /* 画面来源行：首帧 / 尾帧 / 参考素材（靠连线引入，不支持上传） */
 .learning-node__ref-row { display: flex; align-items: flex-start; gap: 8px; }
-.learning-node__frame-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.learning-node__frame-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; min-width: 0; }
 .learning-node__frame-chip { display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 9px 3px 3px; border: 1px solid rgb(163 254 68 / 30%); border-radius: 999px; }
 .learning-node__frame-chip img { width: 24px; height: 24px; border-radius: 999px; object-fit: cover; }
 .learning-node__frame-chip figcaption { color: var(--cv-text-dim); font-size: 10px; }
 .learning-node__ref-empty { padding: 5px 10px; border: 1px dashed var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-faint); font-size: 10px; }
+
+/* ── 参考素材缩略图（复刻参考的展示）：小图 + 序号角标 + 名称胶囊；hover 在面板内向上展开大图 ── */
+.learning-node__ref-thumb { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; cursor: zoom-in; }
+.learning-node__ref-thumb-pic { position: relative; display: block; width: 44px; height: 44px; overflow: hidden; border: 1px solid var(--cv-border-strong); border-radius: 10px; background: var(--cv-surface-2); }
+.learning-node__ref-thumb-pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.learning-node__ref-thumb-pic i { display: grid; place-items: center; height: 100%; color: var(--cv-text-faint); font-size: 14px; font-style: normal; }
+.learning-node__ref-thumb-index { position: absolute; top: 2px; left: 2px; display: grid; place-items: center; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px; color: var(--cv-primary-fg); background: var(--cv-primary); font-size: 9px; font-weight: 700; }
+.learning-node__ref-thumb-label { max-width: 60px; overflow: hidden; color: var(--cv-text-dim); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+/* 展开的大图：绝对定位向上盖在面板内部（不改面板高度，也不会被面板的 overflow 裁掉） */
+.learning-node__ref-thumb-pop { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 30; display: none; width: 180px; padding: 6px; border: 1px solid var(--cv-border-strong); border-radius: 12px; background: rgb(16 16 18 / 98%); box-shadow: 0 18px 44px rgb(0 0 0 / 55%); transform: translateX(-50%); }
+.learning-node__ref-thumb-pop img { display: block; width: 100%; max-height: 220px; border-radius: 8px; object-fit: contain; }
+.learning-node__ref-thumb:hover .learning-node__ref-thumb-pop, .learning-node__ref-thumb:focus .learning-node__ref-thumb-pop { display: block; }
+.learning-node__ref-thumb:hover .learning-node__ref-thumb-pic { border-color: var(--cv-primary); }
+
+/* ── 面板顶部：正在编辑哪个框体 + @ 引用提示 ── */
+.learning-canvas__panel-target { display: flex; align-items: baseline; gap: 8px; width: 100%; min-width: 0; }
+.learning-canvas__panel-target strong { overflow: hidden; color: var(--cv-text); font-size: 12.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.learning-canvas__panel-target .cv-muted { overflow: hidden; color: var(--cv-text-faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 输入框里的 @ 引用候选 ── */
+.learning-node__textarea-wrap { position: relative; width: 100%; }
+.learning-node__mention { position: absolute; left: 8px; bottom: calc(100% + 6px); z-index: 30; display: flex; flex-direction: column; gap: 2px; min-width: 190px; max-height: 220px; overflow-y: auto; padding: 6px; border: 1px solid var(--cv-border-strong); border-radius: 12px; background: rgb(16 16 18 / 98%); box-shadow: 0 18px 44px rgb(0 0 0 / 55%); }
+.learning-node__mention-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 0; border-radius: 8px; color: var(--cv-text); background: transparent; font-size: 11.5px; cursor: pointer; text-align: left; }
+.learning-node__mention-item:hover { background: rgb(163 254 68 / 14%); }
+.learning-node__mention-item small { margin-left: auto; color: var(--cv-text-faint); font-size: 10px; }
+.learning-node__mention-thumb { display: block; width: 22px; height: 22px; flex: 0 0 auto; overflow: hidden; border-radius: 6px; background: var(--cv-surface-2); }
+.learning-node__mention-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .learning-node__ref-chip.is-on { padding: 5px 10px; border: 1px solid rgb(163 254 68 / 35%); border-radius: 999px; color: var(--cv-primary); background: rgb(163 254 68 / 10%); font-size: 10px; }
 
 /* 行内提示（例如「该模型需要先连接一张画面（首帧）」） */
