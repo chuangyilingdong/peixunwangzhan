@@ -9,6 +9,7 @@ import {
   row,
   rows,
   assignmentActiveSql,
+  orgSeriesAccessSql,
 } from '../lib.js';
 
 function rawValue(user, snake, camel) {
@@ -22,11 +23,9 @@ function studentIdentity(user) {
   return { id, orgId };
 }
 
+// 机构可访问课包 = 平台授权（ACTIVE 且未过期）或机构自有；与平台端同一份定义。
 function orgCourseAccessSql() {
-  return `(
-    (series.owner_type = 'PLATFORM' AND (series.visibility = 'ALL_ORGS' OR assignment.id IS NOT NULL))
-    OR (series.owner_type = 'ORG' AND series.org_id = ?)
-  )`;
+  return orgSeriesAccessSql();
 }
 
 export function getStudentMemberships(user) {
@@ -180,8 +179,7 @@ export function getStudentCourseDetail(user, seriesId) {
      LEFT JOIN course_assignments assignment
        ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
      WHERE series.id = ? AND series.status = 'PUBLISHED'
-       AND ( (series.owner_type = 'PLATFORM' AND (series.visibility = 'ALL_ORGS' OR assignment.id IS NOT NULL))
-             OR (series.owner_type = 'ORG' AND series.org_id = ?) )`,
+       AND ${orgCourseAccessSql()}`,
     [orgId, seriesId, orgId],
   );
   if (!series) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');

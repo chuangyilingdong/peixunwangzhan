@@ -590,7 +590,7 @@ function OrgCourses({ api }) {
         <MetricCard label="难度" value={c.difficultyLevel ? `${c.difficultyLevel}/5` : '—'} hint="课程难度" />
         <MetricCard label="适学年龄" value={c.ageRangeMin || c.ageRangeMax ? `${c.ageRangeMin ?? '?'}-${c.ageRangeMax ?? '?'}岁` : '—'} hint="适学年龄范围" />
         <MetricCard label="课时数" value={c.lessonCount} hint={'共 ' + (c.lessons?.length || 0) + ' 节已发布'} tone="teal" />
-        <MetricCard label="版本" value={c.version} hint={'归属 ' + (c.assignedToCurrentOrg ? '本机构' : '平台公开')} tone="orange" />
+        <MetricCard label="版本" value={c.version} hint={'归属 ' + (c.ownerType === 'ORG' ? '本机构' : '平台授权')} tone="orange" />
       </div>
       {Array.isArray(c.tags) && c.tags.length ? <div className="tag-list"><span className="muted">标签：</span>{c.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
       {c.assignmentExpiresAt ? <Notice>本课包对贵机构的授权有效期至 {formatDate(c.assignmentExpiresAt)}，到期后将从课程中心移除，如需继续使用请联系平台续期。</Notice> : null}
@@ -625,14 +625,15 @@ function OrgCourses({ api }) {
   }
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
+  // 机构端不展示课包的「可见范围」：那是平台内部的上架设置，与本机构能不能用无关
+  // ——本机构能不能用，只看有没有一条在有效期内的授权（见下方「平台已授权」与有效期提示）。
   const sourceLabels = { PLATFORM: '平台课包', ORG: '机构自有' };
-  const visibilityLabels = { ALL_ORGS: '全部机构可见', ASSIGNED_ORGS: '平台授权', PRIVATE: '私有' };
   return <>
     <PageHeader eyebrow="教学资源" title="课程中心" description="查看本机构已开通的平台课包、机构课包与课时安排。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
     <div className="metrics"><MetricCard label="可用课包" value={data.items.length} hint="仅统计当前已发布课程" /><MetricCard label="平台授权课包" value={data.items.filter((item) => item.ownerType === 'PLATFORM' && item.assignedToCurrentOrg).length} hint="平台单独授权后可见" tone="teal" /><MetricCard label="总课时" value={data.items.reduce((sum, item) => sum + item.lessonCount, 0)} hint="已发布课时" tone="orange" /></div>
     <Panel title="课程列表">
       {data.items.length ? <><ListResultSummary total={data.total} page={data.page} totalPages={data.totalPages} label="个课包" /><div className="card-list">{data.items.map((course) => <article className="item-card" key={course.id}>
-        <div className="row-actions"><h3><button className="text-button" onClick={() => navigate('/courses/' + course.id)}>{course.title}</button></h3><Status value={course.status} /><span className="muted">{sourceLabels[course.ownerType] || course.ownerType}</span><span className="muted">{visibilityLabels[course.visibility] || course.visibility}</span><span className="muted">v{course.version}</span></div>
+        <div className="row-actions"><h3><button className="text-button" onClick={() => navigate('/courses/' + course.id)}>{course.title}</button></h3><Status value={course.status} /><span className="muted">{sourceLabels[course.ownerType] || course.ownerType}</span>{course.ownerType === 'PLATFORM' && course.assignedToCurrentOrg ? <span className="muted">平台已授权</span> : null}<span className="muted">v{course.version}</span></div>
         <p>{course.description || '暂无课程说明'}</p>
         <p className="muted">{course.difficultyLevel ? `难度 ${course.difficultyLevel}/5 · ` : ''}{course.ageRangeMin || course.ageRangeMax ? `适学 ${course.ageRangeMin ?? '?'}-${course.ageRangeMax ?? '?'}岁 · ` : ''}{course.lessonCount} 节课时{course.ownerType === 'PLATFORM' && course.assignedToCurrentOrg ? ' · 平台已授权' : ''}</p>
         {Array.isArray(course.tags) && course.tags.length ? <div className="tag-list">{course.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}

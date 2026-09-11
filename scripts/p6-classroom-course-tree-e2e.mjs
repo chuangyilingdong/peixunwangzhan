@@ -42,6 +42,8 @@ await run(['packages/database/src/seed.js']);
 
 // Keep one published platform course outside the class curriculum so the
 // dashboard must prove that visible does not mean classroom-ready.
+// 它必须对该机构有生效授权：平台课包「发布」只上课程广场，机构能看到的前提是授权
+// （见交接说明第四节；否则这个课包在校端根本不会出现，就测不到「可见但未开课」了）。
 {
   const db = new DatabaseSync(dbPath);
   const now = new Date().toISOString();
@@ -59,6 +61,12 @@ await run(['packages/database/src/seed.js']);
   ) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
     lessonId, seriesId, '第1课：未配置课时', '未加入学生班级课单的测试课时。',
     1, 'PUBLISHED', 45, '', now, now,
+  );
+  const studentOrg = db.prepare("SELECT org_id AS id FROM users WHERE login='student-1'").get();
+  db.prepare(`INSERT INTO course_assignments(
+    id,series_id,org_id,status,assigned_by,assigned_at,expires_at
+  ) VALUES (?,?,?,?,?,?,?)`).run(
+    `assign_${randomUUID().replaceAll('-', '').slice(0, 20)}`, seriesId, studentOrg.id, 'ACTIVE', null, now, null,
   );
   db.close();
 }

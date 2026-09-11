@@ -5,7 +5,20 @@ import {
   Pagination, Status, formatDate, useData,
 } from '@platform/shared';
 
-const VISIBILITY_LABELS = { ALL_ORGS: '所有机构', ASSIGNED_ORGS: '仅已授权机构', PRIVATE: '私有' };
+// 可见范围只决定「上不上官网课程广场」。机构能不能看到/使用平台课包，与这里无关：
+// 只看「机构授权」那一栏有没有给该机构一条在有效期内的授权（发布 ≠ 授权）。
+const VISIBILITY_LABELS = { ALL_ORGS: '上架课程广场', ASSIGNED_ORGS: '不上架（仅授权机构）', PRIVATE: '私有（不上架）' };
+const VISIBILITY_OPTIONS = [
+  ['ALL_ORGS', '上架课程广场（全站公开可见）'],
+  ['ASSIGNED_ORGS', '不上架（只给已授权机构）'],
+  ['PRIVATE', '私有（不上架、不对外）'],
+];
+// 授权有效期的常用档位：平台口径是按年授权（1 年 / 2 年），也允许自定义天数。
+const VALIDITY_PRESETS = [['365', '1 年'], ['730', '2 年'], ['1095', '3 年'], ['custom', '自定义天数']];
+function validityDaysOf(choice, customDays) {
+  if (choice === 'custom') return Math.max(1, Math.min(3650, Number(customDays) || 365));
+  return Number(choice) || 365;
+}
 const LESSON_CAPABILITY_OPTIONS = [
   ['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'], ['music', 'AI 音乐'],
 ];
@@ -413,11 +426,11 @@ function CreateCourseModal({ api, onClose, onCreated }) {
           <label>课包标题 *<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="例如：AI绘本创作大师营" /></label>
           <label>课程简介<textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="一句话说明这门课教什么" /></label>
           <div className="form-grid">
-            <label>可见范围<select value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+            <label>可见范围<select value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value })}>{VISIBILITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <label>课堂类型<select value={form.deliveryMode} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂（预留）</option></select></label>
             <label>版本号<input value={form.version} onChange={(event) => setForm({ ...form, version: event.target.value })} placeholder="1.0" /></label>
           </div>
-          <p className="muted">「所有机构」的已发布课包会自动出现在官网课程广场。</p>
+          <p className="muted">发布后课包会出现在官网课程广场；<strong>机构后台不会自动看到</strong>，要在课包详情的「机构授权」里逐家授权（可设 1 年 / 2 年等有效期），授权期内机构才能使用。</p>
         </> : null}
 
         {step === 1 ? <>
@@ -557,7 +570,7 @@ function CourseList({ api, onOpen }) {
       <div className="form-grid">
         <label>关键词<input value={filters.search} placeholder="课包名称 / ID" onChange={(event) => { setFilters({ ...filters, search: event.target.value }); setPage(1); }} /></label>
         <label>状态<select value={filters.status} onChange={(event) => { setFilters({ ...filters, status: event.target.value }); setPage(1); }}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已下架</option></select></label>
-        <label>可见范围<select value={filters.visibility} onChange={(event) => { setFilters({ ...filters, visibility: event.target.value }); setPage(1); }}><option value="">全部范围</option><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+        <label>可见范围<select value={filters.visibility} onChange={(event) => { setFilters({ ...filters, visibility: event.target.value }); setPage(1); }}><option value="">全部范围</option>{VISIBILITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>排序<select value={sort} onChange={(event) => { setSort(event.target.value); setPage(1); }}><option value="manual">手动顺序</option><option value="created">创建时间</option><option value="updated">更新时间</option><option value="title">课包名称</option></select></label>
         <label>每页<select value={limit} onChange={(event) => { setLimit(Number(event.target.value)); setPage(1); }}><option value="12">12 个</option><option value="24">24 个</option><option value="48">48 个</option></select></label>
       </div>
@@ -580,7 +593,8 @@ function CourseDetail({ api, course, onBack }) {
   const [busy, setBusy] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [assignOrgId, setAssignOrgId] = useState('');
-  const [assignValidityDays, setAssignValidityDays] = useState('365');
+  const [assignValidity, setAssignValidity] = useState('365');
+  const [assignCustomDays, setAssignCustomDays] = useState('365');
   const [lessonDraft, setLessonDraft] = useState({ title: '', durationMinutes: 45 });
   const [editingLesson, setEditingLesson] = useState(null);
   const [uploadingCover, setUploadingCover] = useState(false);
@@ -634,7 +648,7 @@ function CourseDetail({ api, course, onBack }) {
   async function changeStatus(action) {
     const text = action === 'archive'
       ? `确认下架「${series.title}」？下架后机构端不再可见该课包，数据保留，可随时重新发布。`
-      : `确认发布「${series.title}」？发布后按可见范围对机构生效，并出现在官网课程广场。`;
+      : `确认发布「${series.title}」？发布后课包会出现在官网课程广场（${VISIBILITY_LABELS[series.visibility] || series.visibility}）供大家浏览；机构后台仍然看不到，要到「机构授权」里逐家授权后该机构才能看到并使用。`;
     await run(`admin/course-series/${course.id}/status`, 'POST', { action }, action === 'archive' ? '课包已下架。' : '课包已发布。', text);
   }
 
@@ -670,8 +684,8 @@ function CourseDetail({ api, course, onBack }) {
     if (!assignOrgId) return;
     setBusy(true); setMessage('');
     try {
-      const result = await api.post(`admin/course-series/${course.id}/assignments`, { orgIds: [assignOrgId], validityDays: Number(assignValidityDays || 365) });
-      setMessage(`课包授权成功，有效期至 ${formatDate(result?.expiresAt) || '—'}。`);
+      const result = await api.post(`admin/course-series/${course.id}/assignments`, { orgIds: [assignOrgId], validityDays: assignDays });
+      setMessage(`已授权该机构使用本课包，有效期至 ${formatDate(result?.expiresAt) || '—'}。`);
       setAssignOrgId(''); detail.refresh();
     }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
@@ -688,6 +702,9 @@ function CourseDetail({ api, course, onBack }) {
     } catch (error) { setMessage(error.message); } finally { setUploadingCover(false); }
   }
 
+  const activeAssignments = (detail.data?.assignedOrgs || []).filter((item) => !item.expired).length;
+  const assignDays = validityDaysOf(assignValidity, assignCustomDays);
+  const assignExpiresAt = new Date(Date.now() + assignDays * 24 * 60 * 60 * 1000).toISOString();
   const publishedLessons = (series?.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED').length;
   const vibecodingLessons = (series?.lessons || []).filter((lesson) => lesson.deliveryMode === 'VIBECODING').length;
   const vibecodingWithoutText = (series?.lessons || []).filter((lesson) => lesson.deliveryMode === 'VIBECODING' && !(lesson.capabilities || []).includes('text')).length;
@@ -732,13 +749,13 @@ function CourseDetail({ api, course, onBack }) {
           <label>标签（英文逗号分隔）<input value={editForm.tags} placeholder="古诗, 创作, 动画" onChange={(event) => setEditForm({ ...editForm, tags: event.target.value })} /></label>
           <h3 className="form-section-title">可见范围与排序</h3>
           <div className="form-grid">
-            <label>可见范围<select value={editForm.visibility} onChange={(event) => setEditForm({ ...editForm, visibility: event.target.value })}><option value="ALL_ORGS">所有机构</option><option value="ASSIGNED_ORGS">仅已授权机构</option><option value="PRIVATE">私有</option></select></label>
+            <label>可见范围<select value={editForm.visibility} onChange={(event) => setEditForm({ ...editForm, visibility: event.target.value })}>{VISIBILITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             <label>默认课堂类型<select value={editForm.deliveryMode} onChange={(event) => setEditForm({ ...editForm, deliveryMode: event.target.value })}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂（预留）</option></select></label>
             <label>排序<input type="number" min="0" value={editForm.sort} onChange={(event) => setEditForm({ ...editForm, sort: event.target.value })} /></label>
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
           {saveState ? <Notice tone={saveState.tone}>{saveState.text}</Notice> : null}
-          <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用右上角发布 / 下架。平台课包本身不设有效期，有效期在「机构授权」里按机构单独设置。</p>
+          <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用右上角发布 / 下架。可见范围只决定「上不上课程广场」；机构看不到课包不是权限问题，是还没在「机构授权」里授权给它。</p>
         </form> : null}
       </Panel> : null}
 
@@ -773,13 +790,15 @@ function CourseDetail({ api, course, onBack }) {
       </> : null}
 
       {activeTab === 'assign' ? <Panel title={`机构授权（${detail.data.assignedOrgs.length}）`}>
-        <p className="muted">平台课包本身不设有效期：有效期在这里按机构单独设置，到期后该机构不再看到此课包，续期时重新授权即可。</p>
+        <p className="muted">平台课包必须在这里逐家授权，机构后台才看得到、用得上（发布本身不对任何机构生效）。有效期按机构单独设置，到期后该机构立即看不到此课包，续期时重新授权即可覆盖原有效期。</p>
         <div className="form-grid">
           <label>授权给机构<select value={assignOrgId} onChange={(event) => setAssignOrgId(event.target.value)}><option value="">选择机构</option>{organizations.data?.items?.map((org) => <option key={org.id} value={org.id}>{org.name}</option>) || null}</select></label>
-          <label>有效期（天）<input type="number" min="1" max="3650" value={assignValidityDays} onChange={(event) => setAssignValidityDays(event.target.value)} /></label>
+          <label>授权时效<select value={assignValidity} onChange={(event) => setAssignValidity(event.target.value)}>{VALIDITY_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          {assignValidity === 'custom' ? <label>有效期（天，≤3650）<input type="number" min="1" max="3650" value={assignCustomDays} onChange={(event) => setAssignCustomDays(event.target.value)} /></label> : null}
           <div><button type="button" className="secondary-button" disabled={!assignOrgId || busy} onClick={assign}>授权</button></div>
         </div>
-        {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>有效期至</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期）' : ''}</span> : '永久有效'}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${course.id}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="「仅已授权机构」课包需完成授权后机构端才可见。" />}
+        <p className="muted">本次授权有效期至 {formatDate(assignExpiresAt)}（共 {assignDays} 天）。</p>
+        {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>有效期至</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期，机构已看不到）' : ''}</span> : '永久有效'}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${course.id}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="平台课包发布后只会上架课程广场；要出现在机构后台，必须在这里授权给对应机构。" />}
       </Panel> : null}
 
       {activeTab === 'publish' ? <Panel title="发布检查">
@@ -787,13 +806,14 @@ function CourseDetail({ api, course, onBack }) {
           <div className={`publish-check ${series.lessons.length ? 'is-ok' : 'is-warn'}`}><strong>{series.lessons.length ? '✓' : '!'}</strong><span>课时数量：共 {series.lessons.length} 个</span></div>
           <div className={`publish-check ${series.lessons.length && publishedLessons === series.lessons.length ? 'is-ok' : 'is-warn'}`}><strong>{series.lessons.length && publishedLessons === series.lessons.length ? '✓' : '!'}</strong><span>已发布课时：{publishedLessons} / {series.lessons.length}（未发布的课时无法随课包上线）</span></div>
           <div className={`publish-check ${vibecodingWithoutText ? 'is-warn' : 'is-ok'}`}><strong>{vibecodingWithoutText ? '!' : '✓'}</strong><span>VibeCoding 课时：{vibecodingLessons} 个{vibecodingWithoutText ? `（其中 ${vibecodingWithoutText} 个未开放 AI 文字能力，无法发布）` : '（均已开放 AI 文字能力）'}</span></div>
-          <div className={`publish-check ${series.visibility === 'ASSIGNED_ORGS' && !detail.data.assignedOrgs.length ? 'is-warn' : 'is-ok'}`}><strong>{series.visibility === 'ASSIGNED_ORGS' && !detail.data.assignedOrgs.length ? '!' : '✓'}</strong><span>可见范围：{VISIBILITY_LABELS[series.visibility]}（{series.visibility === 'ASSIGNED_ORGS' ? `已授权 ${detail.data.assignedOrgs.length} 个机构` : '无需额外授权'}）</span></div>
+          <div className="publish-check is-ok"><strong>✓</strong><span>可见范围：{VISIBILITY_LABELS[series.visibility] || series.visibility}</span></div>
+          <div className={`publish-check ${activeAssignments ? 'is-ok' : 'is-warn'}`}><strong>{activeAssignments ? '✓' : '!'}</strong><span>机构授权：{detail.data.assignedOrgs.length ? `已授权 ${detail.data.assignedOrgs.length} 个机构，其中 ${activeAssignments} 个在有效期内` : '还没有授权任何机构 —— 发布后机构后台看不到这个课包，只会在官网课程广场展示'}</span></div>
         </div>
         <div className="row-actions top-gap">
           {series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : <span className="status success">课包已发布</span>}
           {series.status !== 'ARCHIVED' ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>下架课包</button> : null}
         </div>
-        <p className="muted">发布前请确认课时均已发布、VibeCoding 课时已开放 AI 文字能力；「仅已授权机构」课包需完成授权。发布后按可见范围对机构生效。</p>
+        <p className="muted">发布前请确认课时均已发布、VibeCoding 课时已开放 AI 文字能力。发布只负责「上架官网课程广场」；机构能不能看到和使用完全取决于「机构授权」（可设 1 年 / 2 年等有效期）。</p>
       </Panel> : null}
 
       {editingLesson ? <LessonDrawer api={api} lesson={editingLesson} onClose={() => setEditingLesson(null)} onSaved={(text) => { setMessage(text); detail.refresh(); }} /> : null}

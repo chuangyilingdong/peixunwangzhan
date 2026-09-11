@@ -456,6 +456,21 @@ export function assignmentIsActive(value) {
   return new Date(value.expires_at).getTime() > Date.now();
 }
 
+/**
+ * 「机构能不能看到/使用这个课包」的唯一定义（平台口径，见交接说明第四节）。
+ *
+ * 平台课包**发布 ≠ 授权**：发布只是上架官网课程广场给人看，机构后台一律看不到，
+ * 必须有该机构名下 ACTIVE 且未过期的授权（course_assignments）才行。
+ * 机构自有课包只对本机构可见。
+ *
+ * 用法：调用方 FROM 里须 LEFT JOIN course_assignments（`assignmentActiveSql()` 做条件），
+ * 本片段里的 `?` 就是**当前机构 id**（与既有 SQL 的参数顺序保持一致，不要挪位）。
+ */
+export function orgSeriesAccessSql(seriesAlias = 'series', assignmentAlias = 'assignment') {
+  return `((${seriesAlias}.owner_type='PLATFORM' AND ${assignmentAlias}.id IS NOT NULL)`
+    + ` OR (${seriesAlias}.owner_type='ORG' AND ${seriesAlias}.org_id = ?))`;
+}
+
 export function normalizeLesson(value, { includeTeaching = false } = {}) {
   if (!value) return null;
   return {

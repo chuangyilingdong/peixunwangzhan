@@ -441,7 +441,9 @@ export async function handleCourses(ctx, part, method) {
     const expiresAt = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString();
     transaction(() => {
       assignmentOrgIds.forEach((assignmentOrgId) => {
-        const existing = row('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, assignmentOrgId]);
+        // 必须把 status 一起查出来：续期（对已有授权的机构再次授权）要按 REVOKED → ACTIVE 走状态机，
+        // 只查 id 的话 existing.status 是 undefined，状态机会直接抛「status 无效」（p40 用例盯住这一点）。
+        const existing = row('SELECT id, status FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, assignmentOrgId]);
         if (existing) {
           assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, before: { status: existing.status, orgId: assignmentOrgId }, allowSameState: true, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能启用' });
           q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=? WHERE id=?", [auth.user.id, now, expiresAt, existing.id]);

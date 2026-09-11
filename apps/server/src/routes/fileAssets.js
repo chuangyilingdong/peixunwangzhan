@@ -17,6 +17,7 @@ import {
   row,
   rows,
   assignmentActiveSql,
+  orgSeriesAccessSql,
 } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
@@ -144,7 +145,7 @@ function teachingAssetVisibleToOrg(fileId, orgId) {
      JOIN course_series series ON series.id = lesson.series_id
      LEFT JOIN course_assignments assignment ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql()}
      WHERE asset.file_asset_id = ? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'
-       AND ((series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR assignment.id IS NOT NULL)) OR (series.owner_type='ORG' AND series.org_id = ?))
+       AND ${orgSeriesAccessSql()}
      LIMIT 1`,
     [orgId, fileId, orgId],
   );

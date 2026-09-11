@@ -1,4 +1,4 @@
-import { audit, errors, id, json, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, assignmentActiveSql } from '../lib.js';
+import { audit, errors, id, json, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, assignmentActiveSql, orgSeriesAccessSql } from '../lib.js';
 
 // Every read and write uses the same class scope, including explicitly supplied IDs.
 function scopedClass(auth, classId, { student = false, active = false } = {}) {
@@ -36,10 +36,9 @@ function assignedLesson(auth, classId, lessonId) {
   if (!lessonId) return null;
   const lesson = row(`SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id
     JOIN class_curriculum_items curriculum ON curriculum.lesson_id=lesson.id AND curriculum.class_id=?
-    WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND
-    ((series.owner_type='ORG' AND series.org_id=?) OR (series.owner_type='PLATFORM' AND (series.visibility='ALL_ORGS' OR EXISTS
-    (SELECT 1 FROM course_assignments assignment WHERE assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()}))))`,
-  [classId, lessonId, auth.user.orgId, auth.user.orgId]);
+    LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()}
+    WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`,
+  [classId, auth.user.orgId, lessonId, auth.user.orgId]);
   if (!lesson) throw errors.badRequest('课时不在班级已授权课单内', 'LESSON_NOT_ASSIGNED');
   return lesson.id;
 }
