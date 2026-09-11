@@ -18,7 +18,7 @@ const MIN_TEXTAREA_HEIGHT = 68;
 export const Composer = forwardRef(function Composer({
   value, onChange, onSubmit, onStop, streaming = false, disabled = false,
   blockedReason = '', placeholder = '说说你想做什么…', history = [], maxLength = 4000,
-  attachments = [], onAttach, onRemoveAttachment, uploading = false,
+  attachments = [], onAttach, onRemoveAttachment, onPasteFiles, uploading = false,
 }, ref) {
   const textareaRef = useRef(null);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -107,6 +107,14 @@ export const Composer = forwardRef(function Composer({
           aria-label="输入消息"
           onChange={(event) => onChange?.(event.target.value)}
           onKeyDown={onKeyDown}
+          // 从系统里复制一张图/一个文件，直接在输入框粘贴就上传（和拖进来等价）。
+          // 必须 preventDefault：不然浏览器会把图片当成富文本塞进 textarea，或者什么都不发生。
+          onPaste={(event) => {
+            const files = [...(event.clipboardData?.files || [])];
+            if (!files.length || typeof onPasteFiles !== 'function' || disabled) return;
+            event.preventDefault();
+            onPasteFiles(files);
+          }}
         />
         <div className="c-composer__foot">
           <div className="c-composer__left">
@@ -115,7 +123,7 @@ export const Composer = forwardRef(function Composer({
                 type="button"
                 className="c-icon-btn c-icon-btn--sm"
                 aria-label="上传附件"
-                title="上传附件（也可以把文件直接拖进聊天区）"
+                title="上传附件（也可以把文件拖进聊天区，或直接粘贴）"
                 disabled={disabled || uploading}
                 onClick={onAttach}
               >

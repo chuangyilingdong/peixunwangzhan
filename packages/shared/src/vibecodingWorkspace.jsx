@@ -643,6 +643,7 @@ function WorkspaceView({ api }) {
             attachments={attachments}
             uploading={uploading}
             onAttach={() => attachInputRef.current?.click()}
+            onPasteFiles={uploadFiles}
             onRemoveAttachment={(item) => setAttachments((current) => current.filter((entry) => entry.id !== item.id))}
             streaming={streaming}
             disabled={!editable}
