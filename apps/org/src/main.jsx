@@ -38,14 +38,13 @@ function Dashboard({ api }) {
   const isAdmin = data.scope?.role === 'ORG_ADMIN';
   const alerts = data.alerts || [];
   const recentSessions = data.recentSessions || [];
-  const pendingWorks = data.pendingWorkItems || [];
   const unreadMessages = data.unreadNotificationItems || [];
   return <>
     <PageHeader eyebrow={isAdmin ? '机构经营' : '教师教学'} title={data.org.name} description={data.scope?.description || '实时掌握班级开课、作品和机构积分余额。'} actions={<button className="secondary-button" onClick={refresh}>刷新看板</button>} />
     <div className="metrics">
       <MetricCard label="活跃班级" value={data.activeClasses} hint={`${data.activeSessions} 个课堂正在进行`} />
       <MetricCard label="覆盖学员" value={data.students} hint={isAdmin ? `${data.teachers} 位教师` : `${data.scope?.classCount || 0} 个负责/授权班级`} tone="teal" />
-      <MetricCard label="待点评作品" value={data.pendingWorks} hint={`作品总数 ${data.works} · 可按明细复算`} tone="orange" />
+      <MetricCard label="学生作品" value={data.works} hint="已提交的课堂作品总数" tone="orange" />
       <MetricCard label={isAdmin ? '可用积分' : '近 7 日课堂消耗'} value={isAdmin ? formatCredits(data.creditBalance) : formatCredits(data.usage7)} hint={isAdmin ? `近 7 日消耗 ${formatCredits(data.usage7)}` : '仅统计本人负责/授权班级'} tone="pink" />
     </div>
     <Panel title="统计口径">
@@ -62,9 +61,6 @@ function Dashboard({ api }) {
     </div>
     <Panel title="近期课堂">
       {recentSessions.length ? <div className="table-wrap"><table><thead><tr><th>班级</th><th>课时</th><th>状态</th><th>开始时间</th><th>结束时间</th></tr></thead><tbody>{recentSessions.map((item) => <tr key={item.id}><td>{item.className || '—'}</td><td>{item.lessonTitle || '未关联课时'}</td><td><Status value={item.status} /></td><td>{formatDate(item.startedAt)}</td><td>{formatDate(item.endedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无课堂记录" body="开始课堂后，最近课堂会出现在这里。" />}
-    </Panel>
-    <Panel title={`待点评作品（${data.pendingWorks || 0}）`}>
-      {pendingWorks.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>班级 / 课时</th><th>提交时间</th><th>状态</th></tr></thead><tbody>{pendingWorks.map((item) => <tr key={item.id}><td><strong>{item.title}</strong></td><td>{item.studentName || '—'}</td><td>{item.className || '—'}<div className="muted">{item.courseLessonTitle || '—'}</div></td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty title="暂无待点评作品" body="当前统计范围内没有状态为 PENDING 的作品。" />}
     </Panel>
   </>;
 }
@@ -387,7 +383,6 @@ function Works({ api }) {
     setSelectedWork(work);
   }
 
-  // 只保存老师点评，不改变作品状态（是否上作品广场由平台决定）。
 
   async function handleReport() {
     if (!reportAction) return;
@@ -935,7 +930,7 @@ function OrgMaterials({ api, user }) {
 function OrgPage({ kind, user }) {
   const teacher = user?.role === 'TEACHER';
   const pages = {
-    inbox: ['站内信', '查看平台与机构的教学、运营和系统通知。', ['课堂通知', '开课、结束、作品点评等信息将统一沉淀'], ['运营消息', '课包、充值与平台活动通知统一送达']],
+    inbox: ['站内信', '查看平台与机构的教学、运营和系统通知。', ['课堂通知', '开课、结束、作品提交等信息将统一沉淀'], ['运营消息', '课包、充值与平台活动通知统一送达']],
     courses: ['课程中心', '浏览机构已开通课包、课时与授课资源，老师可从这里进入课堂。', ['标准课包', '平台下发的课程与课时内容'], ['授课资源', 'PPT、HTML 互动课件与课堂备注']],
     'work-data': ['作品数据中心', '从作品数量、发布趋势和热门成果了解校区的教学沉淀。', ['近 7 日趋势', '作品发布与浏览趋势'], ['优秀作品', '按互动与完成度查看校区案例']],
     packages: ['积分套餐', '维护面向学员的套餐、有效期与可使用的 AI 创作能力。', ['套餐配置', '月额度、有效期与能力开关'], ['开通规则', '学员开通单、履约与变更记录']],
