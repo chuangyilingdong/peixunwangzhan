@@ -58,9 +58,9 @@ function parseFiles(value, { fallback = null } = {}) {
   return files;
 }
 
-function normalizeConversation(value, { includeArtifacts = false } = {}) {
+function normalizeConversation(value, { includeArtifacts = false, artifacts: provided = null } = {}) {
   if (!value) return null;
-  const artifacts = includeArtifacts ? listArtifacts(value.id, { includeContent: true }) : null;
+  const artifacts = includeArtifacts ? (provided || listArtifacts(value.id, { includeContent: true })) : null;
   const entry = includeArtifacts ? pickEntryArtifact(artifacts) : null;
   return {
     id: value.id, title: value.title, status: value.status, model: value.model || null,
@@ -461,8 +461,16 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       [conversation.id, limit, offset],
     ).reverse().map(normalizeMessage);
     const submission = row(submissionSelect() + ' WHERE submission.conversation_id = ?', [conversation.id]);
+    // 历史产物（message_id 为空，来自旧 files JSON 的迁移）挂到最后一条助手消息上。
+    // 迁移不可能知道每个文件是哪一轮写出来的，但「这次创作产出了哪些文件」必须看得见——
+    // 否则老会话在聊天里一张产物卡片都没有，看起来像功能没生效。
+    const artifacts = listArtifacts(conversation.id, { includeContent: true });
+    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+    if (lastAssistant) {
+      for (const artifact of artifacts) if (!artifact.messageId) artifact.messageId = lastAssistant.id;
+    }
     return {
-      ...normalizeConversation(conversation, { includeArtifacts: true }),
+      ...normalizeConversation(conversation, { includeArtifacts: true, artifacts }),
       messages, messagesTotal: total, messagesPage: page,
       submission: normalizeSubmission(submission),
       modelOptions: textModelOptions(),

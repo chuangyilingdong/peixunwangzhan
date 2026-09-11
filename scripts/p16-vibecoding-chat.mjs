@@ -160,6 +160,19 @@ try {
   assert.equal(one.status, 200, '单个产物接口应 200');
   assert.ok(String(one.data?.content || '').includes('本地模拟页面'), '单个产物接口应返回完整正文');
 
+
+  // 迁移来的产物（message_id 为空）也必须挂到最后一条助手消息上
+  {
+    const driver = new DatabaseSync(dbPath);
+    driver.prepare('UPDATE vibecoding_artifacts SET message_id=NULL WHERE conversation_id=?').run(conversationId);
+    driver.close();
+    const reread = await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student });
+    assert.equal(reread.status, 200, '重新读取会话失败');
+    const orphans = reread.data.artifacts.filter((a) => !a.messageId);
+    assert.equal(orphans.length, 0, `message_id 为空的产物应被挂到消息上，仍有 ${orphans.length} 条`);
+    const lastAssistant = [...reread.data.messages].reverse().find((m) => m.role === 'assistant');
+    assert.equal(reread.data.artifacts.every((a) => a.messageId === lastAssistant.id), true, '产物应挂在最后一条助手消息上');
+  }
   console.log(JSON.stringify({
     name: 'vibecoding-chat', pass: true,
     conversationId, deltas: deltas.length, creditsCharged: done.data.creditsCharged,
