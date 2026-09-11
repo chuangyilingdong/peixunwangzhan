@@ -195,7 +195,8 @@ export function ProviderPolicyPanel({ api }) {
                 把这种漂移显式暴露出来，并给一键移除——否则它在学生端就是一个必然失败的选项。 */}
             {(() => {
               const candidates = (channel.modelMappings || []).map((m) => m.id || m.model);
-              const orphans = (channel.models || []).filter((m) => !candidates.includes(m));
+              // 默认模型是在下面那个下拉里特意选的，不算漂移（它常常不在候选清单里）
+              const orphans = (channel.models || []).filter((m) => !candidates.includes(m) && m !== channel.model);
               if (!orphans.length) return null;
               return <div className="notice warning span-2">
                 <strong>⚠ 已启用、但不在候选清单里的模型</strong>
@@ -211,7 +212,7 @@ export function ProviderPolicyPanel({ api }) {
                     })}
                   >移除 {model}</button>)}
                 </div>
-                <small className="muted">通常来自别的供应商或手动输入有误，在当前 Endpoint 上大概率调不通，学生选中就会失败。</small>
+                <small className="muted">通常是别的供应商的模型（或手动输入有误）。它们出现在学生端的模型下拉里，选中就会以当前 Endpoint 去调用，大概率失败。</small>
               </div>;
             })()}
             <label>手动添加模型 ID<input onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (v) { updateChannel(index, { models: [...new Set([...(channel.models || []), v])] }); e.target.value = ''; } } }} placeholder="输入后回车添加" /></label>
