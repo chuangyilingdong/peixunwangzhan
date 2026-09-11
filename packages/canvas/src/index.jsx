@@ -698,46 +698,63 @@ function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRo
   const nodeLeft = node.position.x * zoom + tx;
   const nodeTop = node.position.y * zoom + ty;
   const panelWidth = Math.max(280, Math.min(DOCK_WIDTH, box.width - DOCK_MARGIN * 2));
-  // 水平：优先居中于框体。居中会越出画布时改成**与框体的左/右边对齐**——
-  // 参考实现是「居中后硬夹住」，框体靠边时面板会被推到离框体很远的地方，看着就是错位。
-  const maxX = Math.max(DOCK_MARGIN, box.width - panelWidth - DOCK_MARGIN);
-  let x = nodeLeft + nodeWidth / 2 - panelWidth / 2;
-  if (x + panelWidth > box.width - DOCK_MARGIN) x = nodeLeft + nodeWidth - panelWidth;
-  if (x < DOCK_MARGIN) x = nodeLeft;
-  // 面板**永远**贴在框体下方（参考实现也是永远在下方：y = 框体底边 + 14）。
-  // 只在面板会越出画布底边时把它贴住底边，绝不翻到框体上方——翻上去学生就找不着输入框了。
-  const idealY = nodeTop + nodeHeight + DOCK_GAP;
-  // 越出多少（= 需要把画布上移多少才能让面板完整落在框体下方）
-  const overflow = panelHeight ? Math.max(0, idealY + panelHeight - (box.height - DOCK_MARGIN)) : 0;
-  let y = idealY;
-  // 用户正在平移/缩放画布时不夹取：手势中面板必须是框体的刚体，夹一下就会「停住不动」，
-  // 看着又变成和框体分家（第十六轮反馈）。松手后下面的夹取与「让位」再把它落到位。
-  if (!viewportBusy) {
-    x = Math.min(Math.max(DOCK_MARGIN, x), maxX);
-    if (overflow > 0) y = Math.max(DOCK_MARGIN, idealY - overflow);
-  }
-  // 面板在框体下方放不下时（继续夹着就会压住框体）：请求把画布上移把位置让出来。
-  // 用户前后反馈了三次「输入框应该一直在框体下方」，光夹到底边做不到这一点，只能动画布。
+  // 位置只有一条规则：**面板永远居中在框体正下方 14px**（x = 框体中心 − 面板宽/2，y = 框体底边 + 14）。
   //
-  // ⚠️ 两条必须守住（第十五轮踩过）：
+  // ⚠️ 这里**不做任何夹取/左右对齐**（第十六轮之后用户又反馈一次「为什么还是跟着画布跑」）：
+  //   只要出现「越界就夹住」或「越界就改成与框体左/右边对齐」，面板就会在框体贴到画布边缘时
+  //   停在画布边上、和框体分家 —— 用户看到的就是「画布上一个框体都没有，左下角却杵着个输入框」。
+  //   代价：框体贴着画布左右边缘时，面板会有一部分被画布裁掉（容器是 overflow:hidden）；
+  //   宁可裁掉也不能分家，要看全就把框体往画布中间挪一点（这条取舍已和用户确认过）。
+  //   参考实现是「居中后硬夹住」，我们**故意不跟**。
+  const x = nodeLeft + nodeWidth / 2 - panelWidth / 2;
+  const idealY = nodeTop + nodeHeight + DOCK_GAP;
+  const y = idealY;
+  // 面板越出画布多少 —— 不靠夹面板解决，改成把**画布**挪一挪（「让位」），
+  // 这样面板既能一直在框体正下方，又不会被容器 overflow:hidden 裁掉（最多会裁掉生成按钮）。
+  const overflowLeft = Math.max(0, DOCK_MARGIN - x);
+  const overflowRight = Math.max(0, x + panelWidth - (box.width - DOCK_MARGIN));
+  const overflowBottom = panelHeight ? Math.max(0, idealY + panelHeight - (box.height - DOCK_MARGIN)) : 0;
+  // 只有「框体还在画布里」时才让位：用户把框体平移出画布是有意为之，这时候不能去抢他的视图，
+  // 面板照旧贴在框体下方、跟着一起出去（这正是不夹取的意义）。
+  const frameOnScreen = box.width > 0
+    && nodeLeft + nodeWidth > 0 && nodeLeft < box.width
+    && nodeTop + nodeHeight > 0 && nodeTop < box.height;
+  const roomX = !frameOnScreen ? 0 : (overflowLeft > 0 ? Math.ceil(overflowLeft) : (overflowRight > 0 ? -Math.ceil(overflowRight) : 0));
+  const roomY = !frameOnScreen || overflowBottom <= 0 ? 0 : -Math.min(Math.ceil(overflowBottom), 400);
+  // 面板在框体正下方放不下/越出画布时：请求把画布挪一挪，把位置让出来。
+  // 用户前后反馈了四次「输入框必须一直在框体下方」，光夹面板做不到这一点，只能动画布。
+  //
+  // ⚠️ 三条必须守住：
   //   ① **用户正在平移/缩放画布时绝不发** —— 否则拖画布的过程中视图会被顶一下
-  //      （用户反馈「移动画布时输入框乱动」就是这个）。用 viewportBusy 挡掉
-  //      （CanvasSurface 在 onMoveStart/onMoveEnd 之间置真）；松手后这里会重算，
-  //      届时若仍放不下才补一次让位。
-  //   ② **同一个缺口只请求一次** —— 否则放不下时会每 260ms 再请求一次、画布来回弹。
+  //      （第十五轮用户反馈「移动画布时输入框乱动」就是这个）。用 viewportBusy 挡掉
+  //      （CanvasSurface 在 onMoveStart/onMoveEnd 之间置真）；松手后这里会重算，仍越界才补一次。
+  //   ② **同一个缺口只请求一次** —— 否则会每 260ms 再请求一次、画布来回弹。
+  //   ③ **只有「框体自己动了 / 换了选中框体」才请求**（frameKey 变了）—— 用户平移画布是想看别处，
+  //      这时候动画布就是橡皮筋，他往左拖、画布把他拽回来。平移时面板照旧跟着框体走，
+  //      越界就让它越界（框体都出画布了，面板当然也跟着出去）。
+  //   ④ **框体已经不在画布里时不请求**（见上面的 frameOnScreen）—— 同上，别抢用户的视图。
   const requestRoomRef = useRef(onRequestRoom);
   requestRoomRef.current = onRequestRoom;
-  const requestedOverflowRef = useRef(0);
+  const requestedRoomRef = useRef('');
+  const frameKey = `${node.id}:${Math.round(node.position.x)}:${Math.round(node.position.y)}`;
+  const lastFrameKeyRef = useRef(null);
   useEffect(() => {
-    if (!requestRoomRef.current || overflow < 8) { requestedOverflowRef.current = 0; return undefined; }
-    if (viewportBusy) return undefined;
-    if (Math.abs(requestedOverflowRef.current - overflow) < 4) return undefined;
+    if (!requestRoomRef.current || !box.width) return undefined;
+    // 手势中（平移画布 / 拖框体）既不请求、也不消费 frameMoved：等松手后带着新位置再算一次。
+    // 拖框体期间不能动画布，否则框体会在用户手底下被挪走。
+    if (viewportBusy || node.dragging) return undefined;
+    const frameMoved = lastFrameKeyRef.current !== frameKey;
+    lastFrameKeyRef.current = frameKey;
+    if (!roomX && !roomY) { requestedRoomRef.current = ''; return undefined; }
+    if (!frameMoved) return undefined;
+    const key = `${roomX}:${roomY}`;
+    if (requestedRoomRef.current === key) return undefined;
     const timer = window.setTimeout(() => {
-      requestedOverflowRef.current = overflow;
-      requestRoomRef.current(overflow);
+      requestedRoomRef.current = key;
+      requestRoomRef.current({ x: roomX, y: roomY });
     }, 260);
     return () => window.clearTimeout(timer);
-  }, [overflow, viewportBusy]);
+  }, [roomX, roomY, viewportBusy, frameKey, node.dragging, box.width]);
 
   // 首帧还没量到容器尺寸时先别画，免得面板在左上角闪一下。
   const ready = box.width > 0;
@@ -786,7 +803,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   // 放前面会踩 TDZ（ReferenceError → 整页白屏；本轮踩过一次）。
   const requestRoom = useCallback((deficit) => {
     const { x, y, zoom } = getViewport();
-    setFlowViewport({ x, y: y - Math.min(deficit, 400), zoom });
+    // deficit 是「画布要挪多少」（+x 向右、+y 向下），由面板按自身越界量算好。
+    setFlowViewport({ x: x + Number(deficit?.x || 0), y: y + Number(deficit?.y || 0), zoom });
   }, [getViewport]);
   const selectedNodeId = (nodes.find((item) => item.selected) || {}).id || null;
   useEffect(() => { if (selectedNodeId) setActiveNodeId(selectedNodeId); }, [selectedNodeId]);
