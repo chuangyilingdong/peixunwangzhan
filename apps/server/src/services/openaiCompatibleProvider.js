@@ -200,7 +200,7 @@ async function parseResponse(response, modality) {
 
 // 请求体由渠道模板生成：模板里的 {{aspectRatio}} / {{resolution}} / {{durationSeconds}} / {{audio}}
 // 会被课时配置的取值替换，不再由代码写死。
-function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, requestTemplates = {}, modelRequestTemplates = {}, messages = null, stream = false }) {
+function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, referenceAssets = [], requestTemplates = {}, modelRequestTemplates = {}, messages = null, stream = false }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
   // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES。
   const firstFrameUrl = String(options.firstFrameUrl || '').trim();
@@ -222,6 +222,10 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       // 音乐：歌词模式用学生的输入当歌词；描述模式用平台代写的词，学生的输入当曲风。
       lyrics: musicContext.lyrics,
       style: musicContext.style,
+      // 全能参考（连过来的图片/视频/音频）：模板里的 {{referenceItems}} 靠它展开。
+      // ⚠️ 这一项以前**没有传**，于是模板写不写 {{referenceItems}} 都会渲染成空数组 ——
+      // 学生连了参考图、模板里也有占位符，请求体里却一张图都没有（2026-09-11 实测复现并修掉）。
+      referenceAssets: Array.isArray(referenceAssets) ? referenceAssets : [],
       n: 1,
       messages: Array.isArray(messages) ? messages : undefined,
     });
@@ -349,7 +353,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
       }
       const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints, requestPaths);
       const response = await fetchWithTimeout(url, {
-        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates }),
+        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, referenceAssets: options.referenceAssets, requestTemplates, modelRequestTemplates }),
         apiKey,
         timeout,
         modality: normalizedModality,

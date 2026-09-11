@@ -211,6 +211,11 @@ function PromptEditor({ value, refs = [], readOnly = false, placeholder = '', on
   />;
 }
 
+// 生成中：框体里明写「魔法酝酿中」（用户要求：点了生成之后框体要有交代，别让学生干看着占位板）
+function GeneratingState({ className }) {
+  return <div className={`${className} is-generating`}><span>✨</span><small>魔法酝酿中…</small></div>;
+}
+
 function mediaKindOf(mimeType) {
   const mime = String(mimeType || '');
   if (mime.startsWith('image/')) return 'image';
@@ -609,6 +614,7 @@ function ImageNode({ id, data, selected }) {
   const imageUrl = useDisplayUrl(data.previewUrl || data.assetUrl || referenceUrl);
   return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__art" data={data} />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__art" />
       : imageUrl
         ? <img className="learning-node__media" src={imageUrl} alt={data.caption || 'AI生成画面'} />
         : <div className="learning-node__art"><span>{data.emoji || '🌈'}</span><small>在底部面板写画面描述，生成画面</small></div>}
@@ -650,6 +656,7 @@ function VideoNode({ id, data, selected }) {
   const sourceUrl = useDisplayUrl(referenceUrl);
   return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__video-preview" data={data} />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__video-preview" />
       : videoUrl
         ? <video className="learning-node__media" controls playsInline src={videoUrl} />
         : sourceUrl
@@ -675,6 +682,7 @@ function AudioNode({ id, data, selected }) {
   const audioUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
   return <NodeFrame icon="♫" tone="audio" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__audio-placeholder" data={data} />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__audio-placeholder" />
       : audioUrl
         ? <audio className="learning-node__audio" controls src={audioUrl} />
         : <div className="learning-node__audio-placeholder"><span>♫</span><small>在底部面板写歌词或描述，生成音乐</small></div>}
@@ -686,6 +694,7 @@ function AnimationNode({ id, data, selected }) {
   const videoUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
   return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__animation-placeholder" data={data} />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__animation-placeholder" />
       : videoUrl
         ? <video className="learning-node__media" controls muted loop src={videoUrl} />
         : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}

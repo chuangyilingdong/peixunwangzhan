@@ -208,6 +208,10 @@
 .learning-node__art.is-upload-error, .learning-node__video-preview.is-upload-error, .learning-node__audio-placeholder.is-upload-error, .learning-node__animation-placeholder.is-upload-error { border-color: rgb(255 107 107 / 45%); color: #ffb4b4; }
 .is-upload-error small { color: #ffb4b4; }
 .is-uploading span, .is-upload-error span { font-size: 26px; }
+/* 生成中：框体里明写「魔法酝酿中」，光点在呼吸 */
+.is-generating span { font-size: 26px; color: var(--cv-primary); animation: cv-upload-pulse 1.4s ease-in-out infinite; }
+.is-generating small { color: var(--cv-text-dim); }
+.is-generating { border-color: rgb(163 254 68 / 40%); }
 .learning-node__art small, .learning-node__video-preview small, .learning-node__audio-placeholder small, .learning-node__animation-placeholder small { max-width: 180px; color: var(--cv-text-faint); font-size: 10.5px; line-height: 1.5; }
 .learning-node__video-preview span { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgb(163 254 68 / 45%); border-radius: 999px; padding-left: 2px; color: var(--cv-primary); font-size: 12px; }
 .learning-node__audio-placeholder span, .learning-node__animation-placeholder span { font-size: 26px; color: var(--cv-primary); }
