@@ -618,6 +618,20 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     ...(data.referenceUrl ? [{ url: String(data.referenceUrl), label: '框体素材', hint: '框体预置' }] : []),
   ];
   const filteredNames = mention?.query ? referenceNames.filter((item) => item.label.includes(mention.query)) : referenceNames;
+  // 已引用（用户要的「有图有文字、可整体删除」的芯片）：
+  // 提示词里出现 `@图片 1` 这类名字时，在输入框里渲染成一颗带缩略图的芯片。
+  // 有效性**绑定真实连线**：连线还在才是一颗正常芯片；连线没了就把芯片标成「已失效」，
+  // 点 × 一次性把文本里那处引用删掉 —— 这样「引用」永远是真的，不会只剩一行字。
+  const citedRefs = Array.from(String(promptValue).matchAll(/@(图片|视频|音频)\s?(\d+)/g)).map((match) => {
+    const label = `${match[1]} ${match[2]}`;
+    const known = referenceNames.find((item) => item.label === label);
+    return { label, token: match[0], url: known?.url || '', valid: Boolean(known) };
+  });
+  const dropCitation = (token) => {
+    const next = String(promptValue).split(token).join('').replace(/\s{2,}/g, ' ').trim();
+    setPrompt(next);
+    setMention(null);
+  };
   const insertMention = (item) => {
     const element = promptRef.current;
     const caret = element ? element.selectionStart : promptValue.length;
@@ -643,17 +657,28 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     {/* 明写正在编辑哪个框体：面板会贴到「被选中」的框体下方，而学生可能在看着另一个框体（用户误读成面板跑偏过） */}
     <div className="learning-canvas__panel-target"><span className="learning-node__seg-label">正在编辑</span><strong>{data.title || node.type}</strong>{referenceNames.length ? <span className="cv-muted">输入 @ 可引用：{referenceNames.map((item) => item.label).join('、')}</span> : null}</div>
     <div className="learning-node__textarea-wrap">
-      <textarea
-        ref={promptRef}
-        className="learning-node__textarea nodrag"
-        value={promptValue}
-        placeholder={placeholder}
-        maxLength={isBox ? 3000 : 300}
-        disabled={readOnly}
-        onChange={(event) => { setPrompt(event.target.value); syncMention(event.target.value, event.target.selectionStart); }}
-        onKeyDown={(event) => { if (mention && (event.key === 'Escape' || event.key === 'ArrowLeft')) setMention(null); }}
-        onBlur={() => setMention(null)}
-      />
+      {/* 输入框整体：外框画在这里，芯片和文本都落在框内（参考那种「有图有文字」的样子） */}
+      <div className={`learning-node__inputbox${readOnly ? ' is-readonly' : ''}`}>
+        {citedRefs.length ? <div className="learning-node__citations">
+          {citedRefs.map((item) => <span key={item.token} className={`learning-node__citation${item.valid ? '' : ' is-stale'}`} title={item.valid ? `${item.label}（连线引用中）` : `${item.label} 已失效：先把素材连到这个框体再引用`}>
+            <MentionThumb url={item.url} label={item.label} />
+            <b>{item.label}</b>
+            {item.valid ? null : <i>已失效</i>}
+            <button type="button" className="learning-node__citation-remove nodrag" title="删除这个引用" aria-label={`删除引用 ${item.label}`} disabled={readOnly} onClick={(event) => { event.stopPropagation(); dropCitation(item.token); }}>×</button>
+          </span>)}
+        </div> : null}
+        <textarea
+          ref={promptRef}
+          className="learning-node__textarea nodrag"
+          value={promptValue}
+          placeholder={placeholder}
+          maxLength={isBox ? 3000 : 300}
+          disabled={readOnly}
+          onChange={(event) => { setPrompt(event.target.value); syncMention(event.target.value, event.target.selectionStart); }}
+          onKeyDown={(event) => { if (mention && (event.key === 'Escape' || event.key === 'ArrowLeft')) setMention(null); }}
+          onBlur={() => setMention(null)}
+        />
+      </div>
       {mention && filteredNames.length ? <div className="learning-node__mention" role="listbox" aria-label="插入引用">
         {filteredNames.slice(0, 8).map((item, index) => <button
           type="button"
