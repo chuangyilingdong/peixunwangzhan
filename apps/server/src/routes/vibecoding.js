@@ -272,14 +272,16 @@ function readAssetBytes(fileId) {
 }
 
 /**
- * 产物记着的生成插画（幻灯片下标 → 图片字节）。失败项、读不到的素材都跳过 —— 那一页就不放图。
+ * 产物记着的生成插画（幻灯片下标 → 图片字节）。
+ * ⚠️ **-1 是封面**（见 pptx.js 的 COVER_IMAGE_KEY），别当成非法下标丢掉 ——
+ * 那样封面永远是纯色版、而且不报错。失败项与读不到的素材照样跳过。
  */
 function generatedImageMap(artifact) {
   const images = new Map();
   for (const item of Array.isArray(artifact?.generatedImages) ? artifact.generatedImages : []) {
     if (!item?.fileId || item.error) continue;
     const index = Number(item.slideIndex);
-    if (!Number.isInteger(index) || index < 0) continue;
+    if (!Number.isInteger(index) || index < -1) continue;
     const buffer = readAssetBytes(item.fileId);
     if (buffer) images.set(index, buffer);
   }
@@ -310,10 +312,12 @@ export function attachmentImageMap(conversationId, artifact) {
  */
 const DOCUMENT_GUIDE = [
   '除了网页，你也可以直接产出 Office 文档：用一个带扩展名的代码块写**内容**，平台会渲染成真正的文件，学生下载后能用 PowerPoint / Word / Excel / WPS 打开。',
-  '· PPT：```pptx 文件名.pptx ```，内容是一段 JSON —— {"title":"标题","subtitle":"副标题","author":"署名","slides":[{"title":"这一页的标题","bullets":["要点一","要点二"]}]}。每页 3~6 条要点、单条不超过 40 字，页数按需要；不要只做一页，也不要把整段话塞进一条要点。',
-  '  **配图**（很影响成品像不像样，值得用）：那一页再加一个 image 字段，两种写法 ——',
+  '· PPT：```pptx 文件名.pptx ```，内容是一段 JSON —— {"title":"标题","subtitle":"副标题","author":"署名","theme":"ocean","slides":[{"title":"这一页的标题","bullets":["要点一","要点二"]}]}。每页 3~6 条要点、单条不超过 40 字，页数按需要；不要只做一页，也不要把整段话塞进一条要点。',
+  '  · theme 选一个贴合内容的配色：ocean（蓝，风景/科技）、forest（绿，自然/环保）、sunset（橙，美食/热情）、candy（紫，童趣/节日）、ink（默认）。',
+  '  · 版式（可选，写在那一页里）：{"layout":"section","title":"第二部分"} 做**章节分隔页**、{"layout":"quote","title":"一句话"} 做**金句页**、{"layout":"thanks"} 做**结尾页**。一份 8 页以上的 PPT 值得用 1~2 个章节页分段，结尾页收个尾。',
+  '  **配图**（很影响成品像不像样，值得用）：封面写 {"cover":{"prompt":"…"}}，正文页在那一页加 image 字段，两种写法 ——',
   '  ① 让平台生成插画：{"title":"赛里木湖","bullets":["湖水蓝得像宝石"],"image":{"prompt":"新疆赛里木湖的夏天，写实插画风格，蓝天、雪山倒影、湖边草地，横构图"}}。'
-    + `提示词要具体（画什么、什么风格、什么构图），全篇最多 ${MAX_ILLUSTRATIONS_PER_DECK} 张，用在封面页和最有画面感的那几页，**不要每页都配**。`,
+    + `提示词要具体（画什么、什么风格、什么构图），**全篇最多 ${MAX_ILLUSTRATIONS_PER_DECK} 张（含封面）**，优先给封面和最有画面感的那几页，**不要每页都配**。`,
   '  ② 用学生自己传的图：{"image":{"attachment":1}} —— attachment 是**学生这条消息里第几张图**（平台会告诉你有几张、怎么编号）。学生传了图又做 PPT 时，就该把图用上，别浪费。',
   '  配图是**可选**的：拿不准风格、或内容本身就是表格/流程时，不配图反而更好。',
   '· Word：```docx 文件名.docx ```，内容是 Markdown —— # 一级标题、- 无序列表、1. 有序列表、| 表格 |、**粗体**。',

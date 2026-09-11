@@ -405,3 +405,26 @@ html.is-workbench-resizing * { cursor: col-resize !important; user-select: none 
 
 /* 文档预览的滚动容器：内容比面板高，让它在面板里自己滚，不带着整个工作台动 */
 .c-preview__doc { flex: 1; min-height: 0; overflow: auto; background: var(--bg); }
+
+/* 文档预览：主题色与版式跟着规格走（服务端 pptx.js 用同一套色板，p50 校验两者一致） */
+.c-doc-slide { position: relative; background: #ffffff; }
+.c-doc-slide__bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.c-doc-slide__scrim { position: absolute; inset: 0; opacity: 0.58; }
+.c-doc-slide__decor { position: absolute; right: -8%; top: 12%; width: 34%; height: 34%; opacity: 0.16; border-radius: 50%; }
+.c-doc-slide__rule { display: block; width: 48px; height: 4px; border-radius: 2px; }
+.c-doc-slide__rule--center { margin: 0 auto; }
+.c-doc-slide--cover { justify-content: center; }
+.c-doc-slide--cover h3, .c-doc-slide--cover p, .c-doc-slide--cover small,
+.c-doc-slide--thanks h3, .c-doc-slide--thanks p { position: relative; }
+.c-doc-slide--thanks { justify-content: center; align-items: center; text-align: center; }
+.c-doc-slide__section { margin: 0; font-size: var(--fs-xl); }
+.c-doc-slide__sectionno { position: absolute; right: var(--sp-5); bottom: var(--sp-4); font-size: var(--fs-xl); font-weight: 700; opacity: 0.9; }
+.c-doc-slide__quote { margin: auto; font-size: clamp(16px, 1.6vw, 24px); font-weight: 600; line-height: 1.6; text-align: center; }
+.c-doc-slide__caption { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--sp-4) var(--sp-5); color: #fff; }
+.c-doc-slide__caption strong { position: relative; font-size: var(--fs-md); }
+.c-doc-slide__caption { opacity: 0.86; }
+.c-doc-slide__no--light { color: rgba(255, 255, 255, 0.75); }
+.c-doc-slide__title-rule { display: block; width: 48px; height: 3px; margin-top: 6px; border-radius: 2px; }
+.c-doc-slide__foot { position: absolute; left: var(--sp-5); bottom: var(--sp-4); }
+.c-doc-slide__foot i { display: block; width: 26px; height: 3px; border-radius: 2px; }
+.c-doc-slide h4 { margin: 0; }

@@ -11,7 +11,7 @@
 // 独立实现层面的读回验证在 p46（需要 python-pptx / openpyxl / python-docx）。
 import { strict as assert } from 'node:assert';
 import { inflateRawSync } from 'node:zlib';
-import { renderPptx } from '../apps/server/src/services/ooxml/pptx.js';
+import { COVER_IMAGE_KEY, renderPptx } from '../apps/server/src/services/ooxml/pptx.js';
 import { renderDocx } from '../apps/server/src/services/ooxml/docx.js';
 import { renderXlsx } from '../apps/server/src/services/ooxml/xlsx.js';
 import { renderDocument, parseDeckSpec, deckIllustrationRequests } from '../apps/server/src/services/ooxml/documents.js';
@@ -144,6 +144,10 @@ function assertOoxmlPackage(buffer, { label, requiredParts = [] }) {
   return entries;
 }
 
+// 画布尺寸（与 pptx.js 一致：16:9）
+const SLIDE_W = 12192000;
+const SLIDE_H = 6858000;
+
 /* ── 三份样例 ── */
 const DECK = {
   title: '去新疆旅游',
@@ -247,6 +251,80 @@ for (const [kind, content, name] of [['pptx', JSON.stringify(DECK), '去新疆�
 
   // 序列化回 JSON 的结构要能读回来（供 p46 复用同一份规格）
   assert.equal(parseDeckSpec(JSON.stringify(withImage)).slides[0].imageAttachment, 1, 'imageAttachment 解析丢了');
+}
+
+/* ── 版式与几何：看不到 pptx，就把「会不会出画布 / 版式有没有生效」变成断言 ── */
+{
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+  const deck = {
+    title: '大美新疆', subtitle: '旅游全攻略', author: '五年三班', theme: 'ocean',
+    cover: { prompt: '雪山湖泊全景' },
+    slides: [
+      { title: '出行概览', bullets: ['最佳时间 6–9 月', '南北疆怎么安排', '带什么'], imagePrompt: '雪山' },
+      { layout: 'section', title: '必去景点' },
+      { title: '喀纳斯', bullets: ['湖怪传说', '十月金黄'] },
+      { title: '整页图', bullets: [], imagePrompt: '秋色' },
+      { layout: 'quote', title: '不到新疆，不知中国之大。' },
+      { layout: 'thanks' },
+    ],
+  };
+  const rendered = renderDocument(
+    { kind: 'pptx', content: JSON.stringify(deck), name: '大美新疆.pptx' },
+    { generatedImages: new Map([[COVER_IMAGE_KEY, png], [0, png], [3, png]]) },
+  );
+  assert.ok(!rendered.error, `带版式的 PPT 渲染失败：${rendered.error}`);
+  const entries = assertOoxmlPackage(rendered.buffer, { label: 'pptx-layouts' });
+
+  // 每页的形状都要落在画布内：出画布的表现是「内容被裁掉」，而文件本身照样有效
+  const slideNames = [...entries.keys()].filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).sort();
+  assert.equal(slideNames.length, 7, `封面 + 6 页应当有 7 个 slide 部件，实际 ${slideNames.length}`);
+  let shapes = 0;
+  for (const name of slideNames) {
+    const xml = entries.get(name).toString('utf8');
+    for (const match of xml.matchAll(/<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"/g)) {
+      const [x, y, cx, cy] = [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])];
+      shapes += 1;
+      assert.ok(x >= 0 && y >= 0, `${name} 有形状跑到画布左上角之外：x=${x} y=${y}`);
+      assert.ok(x + cx <= SLIDE_W + 1 && y + cy <= SLIDE_H + 1, `${name} 有形状溢出画布：x=${x}+${cx}, y=${y}+${cy}`);
+    }
+  }
+  assert.ok(shapes > 25, `只检查到 ${shapes} 个形状，几何断言的匹配规则可能失效了`);
+
+  // 版式真的落地了
+  const allText = slideNames.map((name) => entries.get(name).toString('utf8')).join('');
+  assert.ok(allText.includes('谢谢观看'), '结尾页没渲染出来');
+  assert.ok(allText.includes('不到新疆'), '金句页没渲染出来');
+  assert.ok(/<a:alpha val="58000"\/>/.test(allText), '封面蒙层（58% 不透明）没渲染出来 —— 白字压在图上是看不清的');
+  // 主题要真的生效：ocean 的强调色在、默认那套橙不在
+  assert.ok(allText.includes('1B7FD4'), 'ocean 主题的强调色没进 XML，主题可能没生效');
+  assert.ok(!allText.includes('FF6B2C'), '默认主题的橙色还在，说明主题没被用上');
+  // 封面用了生成图；带图的正文页有图片关系
+  assert.ok(entries.has('ppt/slides/_rels/slide1.xml.rels') && entries.get('ppt/slides/_rels/slide1.xml.rels').toString('utf8').includes('image'), '封面图没建立关系');
+}
+
+/* ── 文字自适应：长要点自动降字号，不能溢出正文框 ── */
+{
+  const long = '这是一条特别长的要点'.repeat(12);
+  const squeezed = renderDocument({
+    kind: 'pptx',
+    content: JSON.stringify({ title: 't', slides: [{ title: '挤一挤', bullets: Array.from({ length: 12 }, (_, i) => `${long}${i}`) }] }),
+    name: 'x.pptx',
+  });
+  assert.ok(!squeezed.error, `长要点渲染失败：${squeezed.error}`);
+  // 注意：页面上还有标题（3000），所以不能拿「最大字号」判断正文有没有降档
+  const sizes = [...readZip(squeezed.buffer).get('ppt/slides/slide2.xml').toString('utf8').matchAll(/sz="(\d+)"/g)].map((m) => Number(m[1]));
+  const bodySizes = sizes.filter((size) => size <= 2000);
+  assert.ok(bodySizes.length, '没找到正文字号，断言的匹配规则可能失效了');
+  assert.ok(bodySizes.some((size) => size < 1800), `长要点没有触发降字号（正文字号 ${bodySizes.join(',')}）`);
+  assert.ok(Math.min(...bodySizes) >= 1000, `字号降到 ${Math.min(...bodySizes)} 就太小了，学生看不清`);
+
+  const shortDoc = renderDocument({
+    kind: 'pptx',
+    content: JSON.stringify({ title: 't', slides: [{ title: '正常', bullets: ['短要点一', '短要点二'] }] }),
+    name: 'y.pptx',
+  });
+  const shortSizes = [...readZip(shortDoc.buffer).get('ppt/slides/slide2.xml').toString('utf8').matchAll(/sz="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.ok(shortSizes.some((size) => size === 1800), `短要点不该被降档（字号 ${shortSizes.join(',')}）`);
 }
 
 // 坏的规格要**给出可读的错误**，而不是抛栈或产出坏文件

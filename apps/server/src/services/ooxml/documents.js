@@ -6,7 +6,7 @@
 //   · 版本/大小/配额全都沿用产物现有的口径
 //   · 渲染器升级后，老产物重新下载就能受益
 // 代价是每次下载要渲染一次（几毫秒），完全可接受。
-import { renderPptx } from './pptx.js';
+import { COVER_IMAGE_KEY, renderPptx } from './pptx.js';
 import { renderDocx } from './docx.js';
 import { renderXlsx } from './xlsx.js';
 
@@ -57,6 +57,11 @@ export function parseDeckSpec(content) {
       title: cleanText(parsed.title || '').slice(0, 200),
       subtitle: cleanText(parsed.subtitle || '').slice(0, 300),
       author: cleanText(parsed.author || '').slice(0, 120),
+      // 主题：不认识的写法一律回默认（宁可配色不对，也不能让整份 PPT 出错）
+      theme: String(parsed.theme || '').trim().toLowerCase().slice(0, 20) || undefined,
+      // 封面配图：和幻灯片配图走同一条生成流程，用保留下标 -1 表示
+      cover: parsed.cover && typeof parsed.cover === 'object' && String(parsed.cover.prompt || '').trim()
+        ? { prompt: cleanText(parsed.cover.prompt).trim().slice(0, 300) } : undefined,
       slides: slides.slice(0, MAX_SLIDES).map((slide) => ({
         title: cleanText(slide?.title || '').slice(0, 200),
         bullets: (Array.isArray(slide?.bullets) ? slide.bullets : [])
@@ -71,18 +76,26 @@ export function parseDeckSpec(content) {
           return Number.isInteger(value) && value >= 1 && value <= 20 ? value : null;
         })(),
         imagePrompt: cleanText(slide?.image?.prompt || slide?.imagePrompt || '').trim().slice(0, 300) || null,
-      })).filter((slide) => slide.title || slide.bullets.length || slide.imageAttachment || slide.imagePrompt),
+        // 版式：bullets（默认）/ section（章节页）/ quote（金句页）/ thanks（结尾页）
+        layout: ['section', 'quote', 'thanks'].includes(String(slide?.layout || '').toLowerCase())
+          ? String(slide.layout).toLowerCase() : undefined,
+      })).filter((slide) => slide.title || slide.bullets.length || slide.imageAttachment || slide.imagePrompt || slide.layout),
     };
   }
   return null;
 }
 
-/** 一份 deck 里要求「生成」的插画（按页序），给生成流程用 */
+/** 一份 deck 里要求「生成」的插画（封面在前，然后是各页），给生成流程用 */
 export function deckIllustrationRequests(deck) {
   const slides = Array.isArray(deck?.slides) ? deck.slides : [];
-  return slides
-    .map((slide, index) => ({ slideIndex: index, prompt: String(slide?.imagePrompt || '').trim() }))
-    .filter((item) => item.prompt);
+  const requests = [];
+  // 封面用保留下标 -1（与 pptx.js 的 COVER_IMAGE_KEY 一致）
+  if (deck?.cover?.prompt) requests.push({ slideIndex: COVER_IMAGE_KEY, prompt: String(deck.cover.prompt).trim() });
+  slides.forEach((slide, index) => {
+    const prompt = String(slide?.imagePrompt || '').trim();
+    if (prompt) requests.push({ slideIndex: index, prompt });
+  });
+  return requests;
 }
 
 export const MAX_SLIDES = 40;
