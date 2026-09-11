@@ -48,10 +48,16 @@ const first = history[0];
 const second = history[1];
 const third = history[2];
 check('带内联附件的消息是「内容块」（array）', Array.isArray(first?.content), typeof first?.content);
-check('第一块是文本', first?.content?.[0]?.type === 'text');
-check('第二块是图片，且用 inline 而不是外链',
-  first?.content?.[1]?.image_url?.url === inline,
-  String(first?.content?.[1]?.image_url?.url).slice(0, 40));
+check('第一块是学生的原话', first?.content?.[0]?.type === 'text' && first.content[0].text === '看看这张图');
+// 图是按顺序发过去的，模型不知道我们给它们编了号 —— 做 PPT 引用「第几张图」时要靠这条提示
+check('带图的用户消息会告知图片编号（模型才能引用"第 1 张"）',
+  first?.content?.some((block) => block.type === 'text' && block.text.includes('编号为 1')) === true,
+  JSON.stringify(first?.content));
+// 图片块不再固定在下标 1（前面可能有提示块），按类型找，别按位置找
+const imageBlocks = (first?.content || []).filter((block) => block.type === 'image_url');
+check('图片块用 inline 而不是外链',
+  imageBlocks.length === 1 && imageBlocks[0].image_url?.url === inline,
+  String(imageBlocks[0]?.image_url?.url).slice(0, 40));
 
 const noImage = (message) => Array.isArray(message?.content) && message.content.every((block) => block.type !== 'image_url');
 const noteOf = (message) => (message?.content || []).filter((block) => block.type === 'text').map((block) => block.text).join(' ');

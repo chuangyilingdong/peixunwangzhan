@@ -23,6 +23,9 @@ import {
   listArtifacts, pickEntryArtifact, seedDefaultArtifacts, upsertArtifact, upsertArtifacts,
 } from '../services/vibecodingArtifacts.js';
 import { isDocumentKind, renderDocument } from '../services/ooxml/documents.js';
+import { uploadRoot } from '../services/fileUploadSecurity.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 const DEFAULT_TITLE = '新的创作对话';
 const MAX_MESSAGE_CHARS = 4000;
@@ -102,7 +105,12 @@ function parseAttachments(value) {
     const parsed = typeof value === 'string' ? JSON.parse(value) : value;
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .map((item) => ({ id: String(item?.id || ''), name: String(item?.name || ''), url: String(item?.url || ''), inline: String(item?.inline || '') }))
+      // mime 必须带出来：产物配图要按它筛「这一轮有几张图」。只带 id/name/url/inline 的话，
+      // 「有几张图」永远是 0 —— 表现为 PPT 里就是没图，而且**一句错都不报**。
+      .map((item) => ({
+        id: String(item?.id || ''), name: String(item?.name || ''), url: String(item?.url || ''),
+        mime: String(item?.mime || ''), inline: String(item?.inline || ''),
+      }))
       .filter((item) => item.id && item.url);
   } catch { return []; }
 }
@@ -229,6 +237,55 @@ function assertConversationEditable(conversation) {
  * 可以写进渠道配置的「请求模板」，不必改服务端代码。
  */
 /**
+ * 产出这份产物的那一轮里，学生传了哪些图片（按顺序，只数图片、不数非图片附件）。
+ *
+ * 为什么要「那一轮」而不是「最近一轮」：模型写 `{"attachment":1}` 时指的是它当时看到的那几张图，
+ * 学生在之后又聊了几轮的话，用「最近一轮」就会取错图。
+ * 关联是可靠的：助手消息落库后会把 message_id 回填到产物上（见 streamAssistantReply）。
+ */
+function triggeringImageAttachments(conversationId, artifact) {
+  // getArtifact() 返回的是驼峰字段（messageId），别按数据库列名（message_id）去读 —— 读错就永远取不到图，
+  // 而且**不报错**：表现为「PPT 里就是没图」，最难查的那种。
+  const messageId = artifact?.messageId || artifact?.message_id;
+  if (!messageId) return [];
+  const message = row(
+    `SELECT attachments FROM vibecoding_messages
+      WHERE conversation_id=? AND role='user' AND attachments IS NOT NULL AND attachments<>''
+        AND rowid < (SELECT rowid FROM vibecoding_messages WHERE id=?)
+      ORDER BY rowid DESC LIMIT 1`,
+    [conversationId, messageId],
+  );
+  return parseAttachments(message?.attachments).filter((item) => String(item.mime || '').startsWith('image/'));
+}
+
+/** 从本地存储读回一份素材的字节（不给自己的接口发 HTTP 请求，磁盘上就是那份文件） */
+function readAssetBytes(fileId) {
+  const asset = row('SELECT storage_kind, storage_key FROM file_assets WHERE id=?', [fileId]);
+  if (!asset || asset.storage_kind !== 'INTERNAL_PROXY') return null;
+  const key = String(asset.storage_key || '').replaceAll('\\', '/');
+  if (!key || key.startsWith('/') || key.split('/').includes('..')) return null;
+  const root = uploadRoot();
+  const absolute = path.resolve(root, key);
+  if (!absolute.startsWith(root + path.sep)) return null;
+  try { return readFileSync(absolute); } catch { return null; }
+}
+
+/**
+ * 附件序号（1 起） → 图片字节。取不到的序号直接不进 Map，渲染时那一页就不放图。
+ * 导出是为了给 p47 做守卫：这条链路连着「产物 messageId」「附件里的 mime」「磁盘上的素材」
+ * 三处，任何一处断掉都**不报错**、只是 PPT 里没图 —— 必须能被自动化盯住。
+ */
+export function attachmentImageMap(conversationId, artifact) {
+  const images = new Map();
+  const sources = triggeringImageAttachments(conversationId, artifact);
+  sources.forEach((source, index) => {
+    const buffer = readAssetBytes(source.id);
+    if (buffer) images.set(index + 1, buffer);
+  });
+  return images;
+}
+
+/**
  * 能产出哪些**文档**、分别怎么写。
  *
  * ⚠️ 这不是「人设」，也不是 2026-09-11 删掉的那种「产物约定」（当时删的是人设 + 要求模型自己起文件名）。
@@ -238,6 +295,7 @@ function assertConversationEditable(conversation) {
 const DOCUMENT_GUIDE = [
   '除了网页，你也可以直接产出 Office 文档：用一个带扩展名的代码块写**内容**，平台会渲染成真正的文件，学生下载后能用 PowerPoint / Word / Excel / WPS 打开。',
   '· PPT：```pptx 文件名.pptx ```，内容是一段 JSON —— {"title":"标题","subtitle":"副标题","author":"署名","slides":[{"title":"这一页的标题","bullets":["要点一","要点二"]}]}。每页 3~6 条要点、单条不超过 40 字，页数按需要；不要只做一页，也不要把整段话塞进一条要点。',
+  '  要配图的那一页再加一个 image 字段：{"title":"赛里木湖","bullets":["湖水蓝得像宝石"],"image":{"attachment":1}} —— attachment 是**学生这条消息里第几张图**（平台会告诉你有几张、怎么编号）。学生传了图又做了 PPT 时，就该把图用上，别浪费。',
   '· Word：```docx 文件名.docx ```，内容是 Markdown —— # 一级标题、- 无序列表、1. 有序列表、| 表格 |、**粗体**。',
   '· Excel：```xlsx 文件名.xlsx ```，内容是 CSV，**第一行是表头**。',
   '学生要文档时就直接给对应的代码块，不要用文字描述一遍内容来代替。',
@@ -277,6 +335,15 @@ export function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
     const invisible = attachments.filter((item) => !item.inline);
     if (message.role !== 'user' || !attachments.length) return { role: message.role, content: message.content };
     const blocks = [{ type: 'text', text: message.content }];
+    if (usable.length) {
+      // 图是按顺序发过去的，但模型不知道我们给它们编了号 —— 做 PPT 要引用「第几张图」时必须说清楚。
+      blocks.push({
+        type: 'text',
+        text: usable.length === 1
+          ? '［平台提示］这条消息附了 1 张图片，编号为 1。'
+          : `［平台提示］这条消息附了 ${usable.length} 张图片，按上面的先后顺序编号为 1、2…${usable.length}。`,
+      });
+    }
     if (invisible.length) {
       blocks.push({
         type: 'text',
@@ -602,7 +669,9 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const artifact = getArtifact(conversation.id, documentMatch[2]);
     if (!artifact) throw errors.notFound('产物不存在', 'VIBECODING_ARTIFACT_NOT_FOUND');
     if (!isDocumentKind(artifact.kind)) throw errors.badRequest('这个产物不是可下载的文档', 'VIBECODING_ARTIFACT_NOT_DOCUMENT');
-    const rendered = renderDocument(artifact);
+    // 配图：规格里的 {"attachment": N} 指的是**产出这一轮里学生传的第 N 张图**，
+    // 这里把它翻成真实字节交给渲染器（越界/读不到就不放图，不让整份下载失败）
+    const rendered = renderDocument(artifact, { images: attachmentImageMap(conversation.id, artifact) });
     if (rendered.error) throw errors.badRequest(rendered.error, 'VIBECODING_DOCUMENT_RENDER_FAILED');
     const safeName = String(rendered.filename || 'download').replace(/[\r\n"\\/]/g, '_');
     audit(ctx, 'VIBECODING_ARTIFACT_DOWNLOAD', 'VIBECODING_ARTIFACT', artifact.id, null, { kind: artifact.kind, bytes: rendered.buffer.length });

@@ -16,6 +16,10 @@ const SLIDE_H = 6858000;
 const MARGIN = 685800;        // 0.75 英寸
 const CONTENT_W = SLIDE_W - MARGIN * 2;
 
+// 幻灯片里图片关系的固定 id：rId1 被 slideLayout 占着，图片必须是 rId2（写错的话
+// 图片形状会指向版式，python-pptx 报 image unreadable、PowerPoint 说文件需要修复）。
+const IMAGE_REL_ID = 'rId2';
+
 const FONT = 'Microsoft YaHei';
 const COLORS = { ink: '1F2A44', muted: '5A6785', accent: 'FF6B2C', line: 'E4E8F0', cover: '12203F' };
 
@@ -180,6 +184,11 @@ function contentShapes(slide, baseId, hasImage) {
   const bodyY = titleY + 1250000;
   const bodyCy = SLIDE_H - bodyY - MARGIN;
   const bullets = Array.isArray(slide.bullets) ? slide.bullets.filter((item) => String(item ?? '').trim()) : [];
+  if (!bullets.length && hasImage) {
+    // 只有一张图、没有要点：让图占满正文区（配图页），比缩在右半边好看得多
+    shapes.push(picture({ id: baseId + 3, name: 'Picture', x: MARGIN, y: bodyY, cx: CONTENT_W, cy: bodyCy, rId: IMAGE_REL_ID }));
+    return shapes;
+  }
   const textWidth = hasImage ? CONTENT_W * 0.46 : CONTENT_W;
   if (bullets.length) {
     shapes.push(textBox({
@@ -194,7 +203,7 @@ function contentShapes(slide, baseId, hasImage) {
     const imageW = SLIDE_W - MARGIN - imageX;
     const imageH = Math.min(bodyCy, Math.round(imageW * 0.62));
     shapes.push(picture({
-      id: baseId + 3, name: 'Picture', x: imageX, y: bodyY, cx: imageW, cy: imageH, rId: 'rId1',
+      id: baseId + 3, name: 'Picture', x: imageX, y: bodyY, cx: imageW, cy: imageH, rId: IMAGE_REL_ID,
     }));
   }
   return shapes;
@@ -224,42 +233,33 @@ function coverShapes(deck) {
 }
 
 /**
- * @param {object} deck { title, subtitle, author, slides: [{ title, bullets, image }] }
- * @param {Map<number, {buffer: Buffer}>} images 按 slide 下标给的图片（可为空）
+ * @param {object} deck { title, subtitle, author, slides: [{ title, bullets, imageAttachment }] }
+ * @param {Map<number, Buffer>} imagesByAttachment 附件序号 → 图片字节（学生在这一轮里传的第 N 张图）
  */
-export function renderPptx(deck, images = new Map()) {
+export function renderPptx(deck, imagesByAttachment = new Map()) {
   const slides = Array.isArray(deck?.slides) ? deck.slides : [];
-  const total = slides.length + 1;
-  const imageExtensions = new Set();
   const slideParts = [];
-  const presentationIds = [];
 
   // 封面
   slideParts.push({ xml: slideXml(coverShapes(deck)), image: null });
   // 内容页
-  slides.forEach((slide, index) => {
-    const image = images.get(index) || null;
-    let shapes;
-    if (image) {
-      const type = imageType(image.buffer);
-      if (type) {
-        imageExtensions.add(type.extension);
-        shapes = contentShapes(slide, 2, true);
-      } else {
-        shapes = contentShapes(slide, 2, false);
-        slideParts.push({ xml: slideXml(shapes), image: null });
-        return;
-      }
-      slideParts.push({ xml: slideXml(shapes), image: { ...image, ...type } });
+  slides.forEach((slide) => {
+    const buffer = slide.imageAttachment ? imagesByAttachment.get(slide.imageAttachment) : null;
+    const type = buffer ? imageType(buffer) : null;
+    // 引用越界、素材读不到、格式不是图片 —— 都只是**这一页不放图**，不让整份 PPT 失败
+    if (!type) {
+      slideParts.push({ xml: slideXml(contentShapes(slide, 2, false)), image: null });
       return;
     }
-    slideParts.push({ xml: slideXml(contentShapes(slide, 2, false)), image: null });
+    slideParts.push({ xml: slideXml(contentShapes(slide, 2, true)), image: { buffer, ...type } });
   });
 
+  const imageExtensions = new Set(slideParts.filter((part) => part.image).map((part) => part.image.extension));
+
   const entries = [];
-  const overrides = [];;
+  const presentationIds = [];
   // [Content_Types].xml 必须是包里的第一个条目
-  let contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+  const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
     + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
     + '<Default Extension="xml" ContentType="application/xml"/>'
@@ -322,5 +322,5 @@ export function renderPptx(deck, images = new Map()) {
     ]),
   });
 
-  return { buffer: createZip(entries), slideCount: slideParts.length, total };
+  return { buffer: createZip(entries), slideCount: slideParts.length };
 }

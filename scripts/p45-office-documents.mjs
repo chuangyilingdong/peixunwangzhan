@@ -192,6 +192,39 @@ for (const [kind, content, name] of [['pptx', JSON.stringify(DECK), '去新疆�
   assert.ok(rendered.buffer && rendered.buffer.length > 0, `${kind}：renderDocument 没返回字节`);
   assert.ok(rendered.mime.includes('openxmlformats'), `${kind}：MIME 不对（${rendered.mime}）`);
 }
+
+/* ── 配图：{"attachment": N} 指的是「这一轮学生传的第 N 张图」 ── */
+{
+  const withImage = {
+    title: '我的旅行',
+    slides: [
+      { title: '封面页', bullets: ['配一张图'], imageAttachment: 1 },
+      { title: '只有图的一页', bullets: [], imageAttachment: 2 },
+      { title: '不存在的图', bullets: ['第 3 张没传'], imageAttachment: 3 },
+    ],
+  };
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+  const rendered = renderDocument({ kind: 'pptx', content: JSON.stringify(withImage), name: '带图.pptx' }, {
+    images: new Map([[1, png], [2, png]]),
+  });
+  assert.ok(!rendered.error, `带图的 PPT 渲染失败：${rendered.error}`);
+  const entries = assertOoxmlPackage(rendered.buffer, { label: 'pptx-with-image' });
+  const media = [...entries.keys()].filter((name) => name.startsWith('ppt/media/'));
+  assert.equal(media.length, 2, `带图的 PPT 里图片部件数不对：${JSON.stringify(media)}`);
+  for (const name of media) assert.ok(entries.get(name).equals(png), `${name} 的字节与原图不一致`);
+  // png 必须在 [Content_Types].xml 里有 Default 声明，否则 PowerPoint 直接说文件损坏
+  const contentTypes = entries.get('[Content_Types].xml').toString('utf8');
+  assert.ok(/<Default Extension="png"/.test(contentTypes), '配图后 Content_Types 里没有 png 的默认声明');
+  // 有图的那两页要有 <p:pic> 与图片关系；引用不存在的第 3 张时**只是那页不放图**，不整份失败
+  assert.ok(entries.get('ppt/slides/slide2.xml').toString('utf8').includes('<p:pic>'), '第 1 页没有图片形状');
+  assert.ok(entries.get('ppt/slides/slide3.xml').toString('utf8').includes('<p:pic>'), '第 2 页（只有图）没有图片形状');
+  assert.ok(!entries.get('ppt/slides/slide4.xml').toString('utf8').includes('<p:pic>'), '第 3 页引用了不存在的图，不该有图片形状');
+  assert.ok(entries.get('ppt/slides/_rels/slide2.xml.rels').toString('utf8').includes('image'), '第 1 页缺少图片关系');
+  assert.ok(!entries.get('ppt/slides/_rels/slide4.xml.rels').toString('utf8').includes('image'), '第 3 页不该有图片关系');
+  // 序列化回 JSON 的结构要能读回来（供 p46 复用同一份规格）
+  assert.equal(parseDeckSpec(JSON.stringify(withImage)).slides[0].imageAttachment, 1, 'imageAttachment 解析丢了');
+}
+
 // 坏的规格要**给出可读的错误**，而不是抛栈或产出坏文件
 assert.ok(renderDocument({ kind: 'pptx', content: '这不是 JSON', name: 'x.pptx' }).error, 'pptx：坏规格应当返回 error');
 assert.equal(parseDeckSpec('```json\n{"slides":[{"title":"一"}]}\n```')?.slides.length, 1, 'pptx：宽容解析应当能吃下带围栏的 JSON');

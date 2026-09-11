@@ -10,6 +10,7 @@
 // 不静默跳过 —— 静默跳过的守卫等于没有守卫（这个项目已经吃过三次「界面不报错、日志不报错」的亏）。
 import { strict as assert } from 'node:assert';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -56,52 +57,79 @@ const dir = mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p46-'));
 const deckPath = path.join(dir, 'deck.pptx');
 const docPath = path.join(dir, 'plan.docx');
 const sheetPath = path.join(dir, 'cost.xlsx');
+const imageDeckPath = path.join(dir, 'with-image.pptx');
 writeFileSync(deckPath, renderPptx(DECK).buffer);
 writeFileSync(docPath, renderDocx(MARKDOWN, { title: '我的暑假计划' }).buffer);
 writeFileSync(sheetPath, renderXlsx(CSV, { sheetName: '暑假花销' }).buffer);
 
+// 带图的那一份：用一张真的 1×1 PNG（非法图片会被渲染器按「这一页不放图」处理，测不出内嵌）
+const PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+const DECK_WITH_IMAGE = {
+  title: '我的旅行',
+  slides: [
+    { title: '赛里木湖', bullets: ['湖水蓝得像宝石'], imageAttachment: 1 },
+    { title: '只有图的一页', bullets: [], imageAttachment: 2 },
+  ],
+};
+writeFileSync(imageDeckPath, renderPptx(DECK_WITH_IMAGE, new Map([[1, PIXEL_PNG], [2, PIXEL_PNG]])).buffer);
+
 const script = `
-import json, sys
+import json, sys, hashlib
 from pptx import Presentation
 from docx import Document
 import openpyxl
 
-deck = Presentation(sys.argv[1])
-slides = []
-for slide in deck.slides:
-    texts = [sh.text_frame.text for sh in slide.shapes if sh.has_text_frame and sh.text_frame.text.strip()]
-    slides.append(texts)
+def read_deck(path):
+    deck = Presentation(path)
+    slides = []
+    for slide in deck.slides:
+        texts = [sh.text_frame.text for sh in slide.shapes if sh.has_text_frame and sh.text_frame.text.strip()]
+        pictures = []
+        for sh in slide.shapes:
+            if sh.shape_type == 13 or getattr(sh, 'image', None) is not None:
+                try:
+                    pictures.append(hashlib.sha256(sh.image.blob).hexdigest()[:16])
+                except Exception:
+                    pictures.append('unreadable')
+        slides.append({'texts': texts, 'pictures': pictures})
+    return {'slideCount': len(deck.slides), 'slideWidth': deck.slide_width, 'slides': slides}
 
 doc = Document(sys.argv[2])
-paragraphs = [(p.style.name, p.text) for p in doc.paragraphs if p.text.strip()]
-tables = [[cell.text for cell in row.cells] for row in doc.tables[0].rows] if doc.tables else []
-
 wb = openpyxl.load_workbook(sys.argv[3])
 sheet = wb.active
-cells = [[c for c in row] for row in sheet.iter_rows(values_only=True)]
-
 print(json.dumps({
-    'slideCount': len(deck.slides),
-    'slideWidth': deck.slide_width,
-    'slides': slides,
-    'paragraphs': paragraphs,
-    'tables': tables,
+    'deck': read_deck(sys.argv[1]),
+    'imageDeck': read_deck(sys.argv[4]),
+    'paragraphs': [(p.style.name, p.text) for p in doc.paragraphs if p.text.strip()],
+    'tables': [[cell.text for cell in row.cells] for row in doc.tables[0].rows] if doc.tables else [],
     'sheetName': sheet.title,
     'freeze': str(sheet.freeze_panes),
     'headerBold': bool(sheet['A1'].font.bold),
-    'cells': cells,
+    'cells': [[c for c in row] for row in sheet.iter_rows(values_only=True)],
 }, ensure_ascii=False))
 `;
 
-const output = execFileSync(python, ['-c', script, deckPath, docPath, sheetPath], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+const output = execFileSync(python, ['-c', script, deckPath, docPath, sheetPath, imageDeckPath], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
 const result = JSON.parse(output);
 
-assert.equal(result.slideCount, DECK.slides.length + 1, `python-pptx 读出的页数不对：${result.slideCount}`);
-assert.equal(result.slideWidth, 12192000, 'python-pptx 读出的画布宽度不对（16:9 应为 12192000）');
-const allSlideText = result.slides.flat().join('\n');
+const result0 = result.deck;
+assert.equal(result0.slideCount, DECK.slides.length + 1, `python-pptx 读出的页数不对：${result0.slideCount}`);
+assert.equal(result0.slideWidth, 12192000, 'python-pptx 读出的画布宽度不对（16:9 应为 12192000）');
+const allSlideText = result0.slides.flatMap((slide) => slide.texts).join('\n');
 for (const expected of ['去新疆旅游', '从乌鲁木齐到喀什的 8 天', '为什么去新疆', '中国面积最大的省级行政区', '要带什么', '防晒霜、墨镜、帽子']) {
   assert.ok(allSlideText.includes(expected), `python-pptx 没读出「${expected}」`);
 }
+
+// 配图必须是**真的内嵌进了 pptx**，而不是只写了个关系
+const expectedHash = createHash('sha256').update(PIXEL_PNG).digest('hex').slice(0, 16);
+assert.equal(result.imageDeck.slideCount, DECK_WITH_IMAGE.slides.length + 1, '带图 deck 的页数不对');
+assert.deepEqual(result.imageDeck.slides[1].pictures, [expectedHash], `第 1 页的内嵌图与原图不一致：${JSON.stringify(result.imageDeck.slides[1].pictures)}`);
+assert.deepEqual(result.imageDeck.slides[2].pictures, [expectedHash], '第 2 页（只有图）的内嵌图不一致');
+assert.ok(result.imageDeck.slides[2].texts.join('').includes('只有图的一页'), '第 2 页的标题丢了');
+assert.deepEqual(result0.slides[1].pictures, [], '不带图的 deck 里不该有图片');
 
 const paragraphText = result.paragraphs.map(([, text]) => text).join('\n');
 for (const expected of ['我的暑假计划', '这个暑假我想学会 游泳。', '时间安排', '七月上午：游泳课']) {
@@ -118,4 +146,4 @@ assert.deepEqual(result.cells[1], ['2026-07-01', '游泳课', 1200], 'openpyxl �
 assert.equal(typeof result.cells[2][2], 'number', 'openpyxl 读出的金额不是数字（落成了文本）');
 
 rmSync(dir, { recursive: true, force: true });
-console.log(`P46 office documents independent-reader guard passed（${path.basename(python)}：pptx ${result.slideCount} 页 / docx ${result.paragraphs.length} 段 / xlsx ${result.cells.length} 行）`);
+console.log(`P46 office documents independent-reader guard passed（${path.basename(python)}：pptx ${result0.slideCount} 页（含 2 张内嵌图）/ docx ${result.paragraphs.length} 段 / xlsx ${result.cells.length} 行）`);
