@@ -346,3 +346,62 @@ html.is-workbench-resizing * { cursor: col-resize !important; user-select: none 
   .c-artifact-chip__open { width: 44px; height: 44px; padding: 0; justify-content: center; }
   .c-artifact-chip__open span { display: none; }
 }
+
+/* ── 文档产物预览（PPT / Word / Excel）───────────────────────────────────────
+   产物里存的是规格文本，这里把规格渲染成「能看的预览」，真正的文件仍在下载那一刻由服务端渲染。
+   所以语气上要诚实：是预览、版式以下载后的文件为准。 */
+.c-doc-deck { display: grid; gap: var(--sp-3); padding: var(--sp-4); }
+.c-doc-slide {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  color: #1f2a44;
+  overflow: hidden;
+}
+.c-doc-slide--cover { justify-content: center; }
+.c-doc-slide--cover h3 { margin: 0; font-size: clamp(18px, 2.4vw, 30px); letter-spacing: -0.02em; }
+.c-doc-slide--cover p { margin: 0; color: #5a6785; }
+.c-doc-slide--cover small { color: #8790a8; }
+.c-doc-slide__no {
+  position: absolute; top: var(--sp-2); right: var(--sp-3);
+  color: #b6bdcf; font-size: var(--fs-xs); font-variant-numeric: tabular-nums;
+}
+.c-doc-slide h4 { margin: 0; font-size: var(--fs-md); padding-block-end: 6px; }
+.c-doc-slide h4::after { content: ''; display: block; width: 48px; height: 3px; margin-top: 6px; background: #ff6b2c; border-radius: 2px; }
+.c-doc-slide__body { flex: 1; min-height: 0; display: flex; gap: var(--sp-4); align-items: flex-start; }
+.c-doc-slide__body ul { margin: 0; padding-inline-start: 1.1em; color: #5a6785; font-size: var(--fs-sm); line-height: 1.9; }
+.c-doc-slide__body.has-image ul { flex: 1 1 46%; }
+.c-doc-slide__body img { flex: 1 1 54%; width: 54%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); background: #f2f4f8; }
+.c-doc-deck__note { margin: 0; text-align: center; color: var(--text-dim); font-size: var(--fs-xs); }
+
+.c-doc-sheet { padding: var(--sp-4); overflow: auto; }
+.c-doc-sheet table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
+.c-doc-sheet th, .c-doc-sheet td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; white-space: nowrap; }
+.c-doc-sheet th { background: var(--bg-surface-2); color: var(--text); font-weight: 600; }
+.c-doc-sheet td { color: var(--text-muted); }
+.c-doc-sheet__note { margin: var(--sp-3) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+
+/* Word：一张「纸」的观感 */
+.c-doc-paper {
+  margin: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  color: #1f2a44;
+}
+.c-doc-paper .md-view { color: #1f2a44; }
+.c-doc-paper .md-view h1, .c-doc-paper .md-view h2, .c-doc-paper .md-view h3 { color: #1f2a44; }
+.c-doc-paper .md-view p, .c-doc-paper .md-view li { color: #3d4763; }
+.c-doc-paper .md-view table th { background: #f2f4f8; }
+.c-doc-paper .md-view table td, .c-doc-paper .md-view table th { border-color: #dfe4ee; color: #3d4763; }
+
+.c-doc-fallback { display: grid; gap: var(--sp-2); place-items: center; padding: var(--sp-8); color: var(--text-dim); text-align: center; }
+
+/* 文档预览的滚动容器：内容比面板高，让它在面板里自己滚，不带着整个工作台动 */
+.c-preview__doc { flex: 1; min-height: 0; overflow: auto; background: var(--bg); }

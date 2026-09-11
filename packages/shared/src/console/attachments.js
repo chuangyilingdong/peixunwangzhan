@@ -33,6 +33,12 @@ export function attachmentName(item, fallback = '附件') {
   return String(item?.name || '').trim() || fallback;
 }
 
+/** 文档产物（产物里存的是规格文本，下载时由服务端渲染成真正的 Office 文件） */
+const DOCUMENT_KINDS = ['pptx', 'docx', 'xlsx'];
+export function isDocumentArtifact(kind) {
+  return DOCUMENT_KINDS.includes(String(kind || '').toLowerCase());
+}
+
 /** 单张附件的上传上限：图片 4MB，其他跟随平台上限 */
 export function attachmentSizeLimit(item) {
   return isImageAttachment(item) ? MAX_IMAGE_BYTES : MAX_ATTACHMENT_BYTES;
@@ -41,4 +47,33 @@ export function attachmentSizeLimit(item) {
 /** 超限时给学生看的文案 */
 export function attachmentSizeMessage(name, limit) {
   return `${name} 超过 ${Math.round(limit / 1024 / 1024)}MB，换一个小点的`;
+}
+
+/**
+ * 粗略解析 CSV —— **只用于站内预览**（Excel 产物的规格就是 CSV）。
+ * 真正的文件由服务端解析（apps/server/src/services/ooxml/xlsx.js），那边才是权威实现；
+ * 这里跟着同一套引号规则走，够把表格显示对就行。
+ */
+export function parseCsvLoose(text) {
+  const source = String(text ?? '').replaceAll('\r\n', '\n');
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quoted) {
+      if (char === '"') {
+        if (source[index + 1] === '"') { field += '"'; index += 1; }
+        else quoted = false;
+      } else field += char;
+      continue;
+    }
+    if (char === '"' && field === '') { quoted = true; continue; }
+    if (char === ',') { row.push(field); field = ''; continue; }
+    if (char === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+    field += char;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((line) => line.some((value) => String(value).trim() !== ''));
 }

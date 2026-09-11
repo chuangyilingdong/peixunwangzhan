@@ -9,7 +9,7 @@ import { ConsoleIcon } from './icons.jsx';
 import { CopyButton, IconButton, Dot, Empty } from './primitives.jsx';
 import { MarkdownView } from '../markdown.jsx';
 import { artifactGroup, absoluteTime, duration, fileSize, isPreviewable, relativeTime } from './format.js';
-import { attachmentName, isImageAttachment } from './attachments.js';
+import { attachmentName, isDocumentArtifact, isImageAttachment } from './attachments.js';
 
 // ── 流式状态行 ──────────────────────────────────────────────────────────────
 // 400ms 延迟才出现：短请求不该闪一下状态行。动词每 2.5s 轮换一次。
@@ -113,10 +113,13 @@ function ActivityDisclosure({ steps, live, startedAt, elapsedMs }) {
 }
 
 // ── 产物卡片 ────────────────────────────────────────────────────────────────
-// 规矩：主体 = 主动作。能预览才给「打开」，否则只给「下载」。
+// 规矩：主体 = 主动作。能看就给「预览/打开」，否则只给「下载」。
+// 文档产物（PPT/Word/Excel）也算「能看」——工作台里能预览，下载是它的第二个动作
+//（用户明确要的顺序：先预览、再下载）。
 function ArtifactCard({ artifact, onOpen, onDownload }) {
   const group = artifactGroup(artifact.kind);
-  const canOpen = isPreviewable(artifact.kind);
+  const isDocument = isDocumentArtifact(artifact.kind);
+  const canOpen = isPreviewable(artifact.kind) || isDocument;
   const meta = [
     group.label,
     artifact.bytes ? fileSize(artifact.bytes) : null,
@@ -141,9 +144,9 @@ function ArtifactCard({ artifact, onOpen, onDownload }) {
       </button>
       <div className="c-artifact-chip__actions">
         {canOpen ? (
-          <button type="button" className="c-artifact-chip__open" onClick={() => onOpen?.(artifact)} aria-label={`打开 ${artifact.name}`}>
-            <ConsoleIcon name="external" size={14} />
-            <span>打开</span>
+          <button type="button" className="c-artifact-chip__open" onClick={() => onOpen?.(artifact)} aria-label={`${isDocument ? '预览' : '打开'} ${artifact.name}`}>
+            <ConsoleIcon name={isDocument ? 'eye' : 'external'} size={14} />
+            <span>{isDocument ? '预览' : '打开'}</span>
           </button>
         ) : null}
         <IconButton icon="download" size={15} label={`下载 ${artifact.name}`} onClick={() => onDownload?.(artifact)} />

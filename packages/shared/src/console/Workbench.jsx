@@ -5,6 +5,8 @@ import { ConsoleIcon } from './icons.jsx';
 import { IconButton } from './primitives.jsx';
 import { PreviewFrame } from './PreviewFrame.jsx';
 import { artifactGroup, fileSize } from './format.js';
+import { DocumentPreview } from './DocumentPreview.jsx';
+import { isDocumentArtifact } from './attachments.js';
 
 export const WORKBENCH_DEFAULT_WIDTH = 520;
 export const WORKBENCH_MIN_WIDTH = 360;
@@ -175,7 +177,7 @@ export function Workbench({
   mode = 'split', width, maxWidth, onPreviewWidth, onCommitWidth, onCancelWidth,
   artifacts = [], previewHtml = '', consoleLines = [], onClearConsole, onRefresh, onClose,
   activeTab, onTabChange, activeArtifactName, onSelectArtifact, running = false, emptyHint,
-  tabs: allowedTabs,
+  tabs: allowedTabs, resolveAttachment, onDownloadArtifact,
 }) {
   const [innerTab, setInnerTab] = useState('preview');
   const tab = activeTab ?? innerTab;
@@ -198,6 +200,19 @@ export function Workbench({
   const currentTab = available.some((item) => item.id === tab) ? tab : (available[0]?.id || 'preview');
 
   const previewable = artifacts.some((item) => /^html?$/i.test(String(item.kind)) || /\.html?$/i.test(item.name));
+
+  // 预览区看什么：
+  //   · 学生点名看了某个产物（点卡片/点文件页签）→ 就看它；
+  //   · 没点名 → 看**最近产出的那个**；它如果是文档（PPT/Word/Excel）就渲染文档预览，
+  //     否则回到网页预览（用 entryFile 拼整个站点）。
+  // 这样「刚做出一个 PPT」时，预览区出现的就是那份 PPT，而不是被种子产物 index.html 占着。
+  const documentArtifact = useMemo(() => {
+    const wanted = activeArtifactName ? artifacts.find((item) => item.name === activeArtifactName) : null;
+    if (wanted) return isDocumentArtifact(wanted.kind) ? wanted : null;
+    const newest = [...artifacts]
+      .sort((a, b) => String(b.updated || b.createdAt || '').localeCompare(String(a.updated || a.createdAt || '')))[0];
+    return newest && isDocumentArtifact(newest.kind) ? newest : null;
+  }, [artifacts, activeArtifactName]);
 
   const isSplit = mode === 'split';
 
@@ -244,12 +259,35 @@ export function Workbench({
           </div>
         )}
         {/* 刷新动作在各自面板里（预览有「重新运行」），这里不重复放一个同名按钮 */}
-        <IconButton icon="close" size={15} label="关闭工作台" onClick={onClose} small />
+        {/* ⚠️ 图标名必须是控制台图标集里有的：写错会**静默渲染成一个空按钮**（这里原本写 close，
+            而控制台只有 x，于是关闭键肉眼看不见）。p48 现在会静态扫出来，别再靠肉眼。 */}
+        <IconButton icon="x" size={15} label="关闭工作台" onClick={onClose} small />
       </div>
 
       <div className="c-workbench__surface">
         <div className="c-workbench__layer" role="tabpanel" hidden={currentTab !== 'preview'}>
-          {previewable ? (
+          {documentArtifact ? (
+            <>
+              {/* 文档产物：先在这里预览，再决定下载（用户明确要的顺序） */}
+              <div className="c-preview__toolbar">
+                <span className="c-preview__url" title={documentArtifact.name}>
+                  <ConsoleIcon name={artifactGroup(documentArtifact.kind).icon} size={13} />
+                  {documentArtifact.name}
+                </span>
+                <button
+                  type="button"
+                  className="c-btn c-btn--primary c-btn--sm"
+                  onClick={() => onDownloadArtifact?.(documentArtifact)}
+                >
+                  <ConsoleIcon name="download" size={14} />
+                  <span>下载</span>
+                </button>
+              </div>
+              <div className="c-preview__doc">
+                <DocumentPreview artifact={documentArtifact} resolveImage={(ordinal) => resolveAttachment?.(documentArtifact, ordinal)} />
+              </div>
+            </>
+          ) : previewable ? (
             <>
               <div className="c-preview__toolbar">
                 <span className="c-preview__url" title={entryLabel(artifacts)}>

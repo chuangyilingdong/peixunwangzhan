@@ -15,7 +15,7 @@ import { buildPreviewDocument, downloadTextFile } from './vibecodingProject.js';
 import { consumeVibeCodingStream } from './vibecodingStream.js';
 import { relativeTime } from './console/format.js';
 import {
-  ATTACHMENT_ACCEPT, MAX_ATTACHMENTS, MAX_INLINE_BYTES,
+  ATTACHMENT_ACCEPT, MAX_ATTACHMENTS, MAX_INLINE_BYTES, isDocumentArtifact,
   attachmentSizeLimit, attachmentSizeMessage,
 } from './console/attachments.js';
 
@@ -40,13 +40,7 @@ function entryOf(artifacts, preferred) {
     || 'index.html';
 }
 
-/** 文档产物（PPT / Word / Excel）在产物里存的是规格文本，下载要回到服务端渲染成真文件 */
-const DOCUMENT_KINDS = ['pptx', 'docx', 'xlsx'];
-export function isDocumentArtifact(kind) {
-  return DOCUMENT_KINDS.includes(String(kind || '').toLowerCase());
-}
-
-/** 触发一次「保存到本地」；documents 走服务端渲染接口，其余仍在前端直接落盘 */
+/** 触发一次「保存到本地」；文档产物走服务端渲染接口，其余仍在前端直接落盘 */
 async function saveArtifact({ api, conversationId, artifact }) {
   if (isDocumentArtifact(artifact.kind)) {
     // 走 fetchBlobUrl 是为了带上 Authorization（<a href> 带不了），拿到 blob: 再触发下载
@@ -183,11 +177,17 @@ function WorkspaceView({ api }) {
   const attachInputRef = useRef(null);
   const [streaming, setStreaming] = useState(false);
   const [tab, setTab] = useState('preview');
-  const [workbenchOpen, setWorkbenchOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 720));
+  // 工作台**默认收起**：学生上课时对话是主角，右边一直杵着一块预览区很干扰。
+  // 任务真的产出了东西时会自动弹出来（见 streamReply 里的 onArtifact），学生也可以随时手动开。
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  // 预览区当前看的是哪个产物（点产物卡片 / 点文件页签会切）；为空时由 Workbench 自行决定看最新的
+  const [selectedArtifactName, setSelectedArtifactName] = useState(null);
   const [editing, setEditing] = useState(null);
   const [menu, setMenu] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const abortRef = useRef(null);
+  // 每一轮只自动弹一次工作台：学生自己关掉之后，别再被同一轮里的后续产物顶开
+  const autoOpenedRef = useRef(false);
   // 模型推理是流式推下来的增量，这里累积成可展示的文本；只留尾部，避免长推理把内存和界面撑爆
   const reasoningRef = useRef('');
 
@@ -239,6 +239,7 @@ function WorkspaceView({ api }) {
   async function streamReply(route, body, { optimistic = [] } = {}) {
     setStreaming(true);
     reasoningRef.current = '';
+    autoOpenedRef.current = false;
     const localId = `local-assistant-${Date.now()}`;
     const startedAt = new Date().toISOString();
     setMessages((current) => [...current, ...optimistic,
@@ -270,6 +271,13 @@ function WorkspaceView({ api }) {
             : item)));
           pushActivity(localId, { id: `write-${artifact.name}`, label: created ? '新建文件' : '更新文件', detail: artifact.name });
           if (created) toast.ok(`写好了 ${artifact.name}`);
+          // 「跑任务用到工作台」——这一轮第一次产出东西时把它弹出来，并直接看向这个产物。
+          // 只在宽屏这么做：窄屏下工作台会盖住对话，流式过程中把对话挡掉更糟。
+          if (!autoOpenedRef.current) {
+            autoOpenedRef.current = true;
+            setSelectedArtifactName(artifact.name);
+            if (typeof window !== 'undefined' && window.innerWidth > 720) setWorkbenchOpen(true);
+          }
         },
         onDone: ({ message, artifacts: authoritative, elapsedMs }) => {
           setArtifacts(authoritative || []);
@@ -348,6 +356,26 @@ function WorkspaceView({ api }) {
     } finally {
       setUploading(false);
     }
+  }
+
+  /**
+   * 预览用：把文档规格里的 `{"attachment": N}` 翻成图片地址。
+   *
+   * 口径必须和服务端一致（见 routes/vibecoding.js 的 triggeringImageAttachments）：
+   * **产出那一轮**里学生传的图片，按顺序编号、非图片附件不占号。
+   * 服务端才是权威（下载出来的文件以它为准），这里只是让预览里也能看见图。
+   */
+  function resolveAttachmentImage(artifact, ordinal) {
+    const index = messages.findIndex((item) => item.id === artifact?.messageId);
+    const before = index >= 0 ? messages.slice(0, index) : messages;
+    for (let cursor = before.length - 1; cursor >= 0; cursor -= 1) {
+      const message = before[cursor];
+      if (message.role !== 'user' || !message.attachments?.length) continue;
+      const images = message.attachments.filter((item) => String(item.mime || '').startsWith('image/'));
+      const target = images[Number(ordinal) - 1];
+      return target?.url || null;
+    }
+    return null;
   }
 
   function send(text) {
@@ -630,7 +658,12 @@ function WorkspaceView({ api }) {
           onRegenerate={regenerate}
           onEditMessage={(message) => setEditing({ id: message.id, content: message.content })}
           onDeleteMessage={deleteMessage}
-          onOpenArtifact={() => { setWorkbenchOpen(true); setTab('preview'); setMenu(null); }}
+          onOpenArtifact={(artifact) => {
+            setSelectedArtifactName(artifact?.name || null);
+            setWorkbenchOpen(true);
+            setTab('preview');
+            setMenu(null);
+          }}
           onDownloadArtifact={(artifact) => {
             saveArtifact({ api, conversationId, artifact })
               .then(() => toast.ok(`已下载 ${artifact.name}`))
@@ -692,13 +725,14 @@ function WorkspaceView({ api }) {
         onClose={() => setWorkbenchOpen(false)}
         activeTab={tab}
         onTabChange={setTab}
-        activeArtifactName={entryFile}
-        onSelectArtifact={() => setTab('preview')}
-        // 只做出了 PPT / Word / Excel 时预览区点不亮：那是要下载下来用 Office 打开的文件，
-        // 不是网页。这里如实说明，别让学生对着空白区以为是坏了。
-        emptyHint={artifacts.some((item) => isDocumentArtifact(item.kind))
-          ? '这些是 PPT / Word / Excel 文件，点右边的「下载」用 PowerPoint / WPS 打开。'
-          : undefined}
+        activeArtifactName={selectedArtifactName}
+        onSelectArtifact={(artifact) => { setSelectedArtifactName(artifact?.name || null); setTab('preview'); }}
+        resolveAttachment={resolveAttachmentImage}
+        onDownloadArtifact={(artifact) => {
+          saveArtifact({ api, conversationId, artifact })
+            .then(() => toast.ok(`已下载 ${artifact.name}`))
+            .catch((error) => toast.error(error?.message || '下载失败'));
+        }}
       /> : null}
 
       {editing ? (

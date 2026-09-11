@@ -23,5 +23,6 @@ export * from './ConsoleShell.jsx';
 export * from './ChatThread.jsx';
 export * from './Composer.jsx';
 export * from './Workbench.jsx';
+export * from './DocumentPreview.jsx';
 export * from './Replay.jsx';
 export * from './useFollowScroll.js';
