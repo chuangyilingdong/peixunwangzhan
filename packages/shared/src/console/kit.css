@@ -391,6 +391,27 @@
 .c-dialog p { color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.6; }
 .c-dialog__actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
 
+/* 站点全局样式里有**元素级**规则会渗透进来，最典型的是
+   `header{height:76px;position:sticky;background:rgba(255,255,255,.92);backdrop-filter:blur(14px)}`
+   （官网顶部导航）、`nav{display:flex;gap:27px}`、`label{display:grid;gap:6px;margin:12px 0}`、
+   `table{width:100%}`、`th{font-size:10px;letter-spacing:.5px;text-transform:uppercase}`。
+   类选择器的特异性虽然更高，但**只在本组件声明过的属性上才赢**；没声明过的属性（尤其是
+   background）会被它们直接压上来——控制台页面里的 <header> 于是顶着一条白色横带。
+
+   ⚠️ 特异性必须卡在中间：这里外层保留 [data-console]（0-1-0）压过站点的元素规则（0-0-1），
+   而用 :where() 把元素名本身归零，这样**控制台自己的类规则**（同样是 0-1-0、且加载在后）
+   仍然赢——否则 `[data-console] header { height:auto }` 会连 `.c-topbar` 的 49px 一起压掉
+   （顶栏也是 <header>）。
+   **新增用到 <header>/<nav>/<label>/<table> 这类语义标签的部分时，先看这一段。** */
+[data-console] :where(header, footer, nav, aside, main, section, article) {
+  background: transparent;
+  border: 0;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+[data-console] :where(header) { height: auto; position: static; z-index: auto; }
+[data-console] :where(label) { display: block; margin: 0; color: inherit; font-size: inherit; font-weight: inherit; }
+
 /* ── Toast ───────────────────────────────────────────────────────────────
    进入 200ms / ease-out，退出 120ms / ease-in（退出比进入快一档）。 */
 .c-toast-host {

@@ -504,12 +504,17 @@
 }
 
 [data-console] .md-table-wrap { margin: 0 0 var(--sp-3); overflow-x: auto; }
-[data-console] .md-table-wrap table { border-collapse: collapse; font-size: var(--fs-xs); }
+/* width:auto 与下面 th 的字号/字距/大写都要显式写回：站点全局有 table{width:100%} 与
+   th{font-size:10px;letter-spacing:.5px;text-transform:uppercase}，不写就被渗透。 */
+[data-console] .md-table-wrap table { width: auto; border-collapse: collapse; font-size: var(--fs-xs); }
 [data-console] .md-table-wrap th,
 [data-console] .md-table-wrap td {
   padding: var(--sp-1) var(--sp-3);
   border: 1px solid var(--border);
   text-align: left;
+  font-size: var(--fs-xs);
+  letter-spacing: normal;
+  text-transform: none;
 }
 [data-console] .md-table-wrap th { background: var(--bg-elevated); color: var(--text-muted); font-weight: 600; }
 
