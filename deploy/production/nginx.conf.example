@@ -24,7 +24,10 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" always;
+    # ⚠️ img-src 与 media-src 都必须带 blob:：学生拖进画布的本地素材是「带 token 取回二进制 →
+    # blob: 地址」再给 <img>/<video> 用的，CSP 少一个 blob: 就会静默变成破图
+    # （2026-09-11 线上踩过：img-src 漏了 blob:，fetch 明明 200、图片就是不显示）。
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" always;
 
     # Common scanner targets must not fall back to SPA HTML with HTTP 200.
     # Exact and prefix locations win before the SPA regex fallback behavior used by try_files.
