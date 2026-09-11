@@ -1,7 +1,17 @@
 // VibeCoding 产物：AI 产出的每一个文件。
 //
-// 产物从助手回复里的「```语言 文件名」围栏解析出来——沿用平台既有的约定，
-// 不引入工具调用协议，任何模型都能跑。没有文件名的围栏只当示例代码，不算产物。
+// 产物从助手回复里的代码围栏解析出来，不引入工具调用协议，任何模型都能跑。
+//
+// 命名规则（两条，显式优先）：
+//   ① 围栏写了文件名（```html index.html）→ 用它的；
+//   ② 没写文件名 → **按语言推断**一个默认名（html→index.html、css→style.css、js→script.js），
+//      但只在这个围栏看起来像「一个完整文件」时才认（整篇 HTML 文档 / 一条 CSS 规则块 /
+//      一段 JS 代码），否则只当示例，不落库。
+//
+// ②是**兜底**，不是约定：2026-09-11 用户要求删掉注入给模型的产物约定，模型于是经常
+// 只写 ```html 不带文件名——生产上实测「AI 说做好了网页、但预览没更新」。
+// 服务端不能依赖模型遵守一条它没被告知的格式，所以改成自己认。
+// 片段会被挡在外面，避免把解释用的 <h1> 示例写进学生的页面。
 //
 // 关键能力是**流式增量解析**：模型还在吐字时，每有一个围栏闭合就立刻落库并推事件，
 // 学生才能看到产物卡片一个个出现，而不是等整轮结束才一次性冒出来。
@@ -33,8 +43,69 @@ export function parseFenceInfo(raw) {
 // 匹配**已闭合**的围栏块；未闭合的（还在流式中）不会命中，所以不会提前产出半截文件。
 const CLOSED_FENCE_PATTERN = /^[ \t]*```([^\n`]*)\n([\s\S]*?)\n?[ \t]*```[ \t]*$/gm;
 
+// 没写文件名时，按语言给一个默认名（多文件项目里 index.html 是预览入口）
+const DEFAULT_NAME_BY_LANG = {
+  html: 'index.html', htm: 'index.html', xml: 'index.html', svg: 'image.svg',
+  css: 'style.css', scss: 'style.scss', less: 'style.less',
+  js: 'script.js', javascript: 'script.js', mjs: 'script.mjs', cjs: 'script.cjs',
+  ts: 'script.ts', typescript: 'script.ts', jsx: 'app.jsx', tsx: 'app.tsx',
+  json: 'data.json', md: 'notes.md', markdown: 'notes.md', txt: 'notes.txt', text: 'notes.txt',
+};
+
+// 语言别名（模型常写 js / html / javascript 之类）
+const LANG_ALIASES = { js: 'javascript', ts: 'typescript', htm: 'html', sh: 'shell' };
+
 /**
- * 扫描文本里所有已闭合且带文件名的围栏，返回产物候选。
+ * 「这个围栏看起来像不像一个完整文件」——兜底命名必须过这一关。
+ *
+ * 为什么需要：删掉产物约定后，模型经常给个 ```html 的示例片段（解释用法用的
+ * `<h1>标题</h1>`），把这种片段写成 index.html 会把学生的页面覆盖坏。
+ * 宁可漏认，不可错认——错认的代价是学生的作品被一段示例覆盖。
+ */
+function looksLikeCompleteFile(content, lang) {
+  const text = String(content || '');
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const language = LANG_ALIASES[lang] || lang;
+
+  if (language === 'html' || language === 'xml' || language === 'svg') {
+    // 整篇 HTML 文档：有 doctype 或 <html>，并且带上 </html>
+    const hasDoctype = /<!doctype\s+html/i.test(trimmed);
+    const hasRootOpen = /<html[\s>]/i.test(trimmed);
+    const hasRootClose = /<\/html\s*>/i.test(trimmed);
+    if ((hasDoctype || hasRootOpen) && hasRootClose) return true;
+    // 只有 <body>…</body> 也算（模型有时省掉外层）
+    if (/<body[\s>]/i.test(trimmed) && /<\/body\s*>/i.test(trimmed)) return true;
+    // svg 是自成一体的：有 <svg> 且有闭合
+    if (/<svg[\s>]/i.test(trimmed) && /<\/svg\s*>/i.test(trimmed)) return true;
+    return false;
+  }
+
+  if (language === 'css' || language === 'scss' || language === 'less') {
+    // CSS 至少要有「选择器 { 属性: 值 }」的形状，且不是孤零零一两行（那多半是示例）
+    const hasRule = /[^{}]+\{[^{}]*:[^{}]*\}/.test(trimmed);
+    const lineCount = trimmed.split('\n').length;
+    return hasRule && lineCount >= 3;
+  }
+
+  if (language === 'javascript' || language === 'typescript') {
+    // JS 片段太短就不认（console.log('x') 这种通常是在解释）
+    const lineCount = trimmed.split('\n').filter((line) => line.trim()).length;
+    if (lineCount >= 6) return true;
+    // 短但带了「在一个页面里真正干活」的信号也认
+    return /document\.|window\.|addEventListener|getElementById|querySelector|function\s|=>\s*\{|class\s+\w+\s*\{/.test(trimmed);
+  }
+
+  if (language === 'json') {
+    try { const value = JSON.parse(trimmed); return typeof value === 'object' && value !== null; } catch { return false; }
+  }
+
+  // 其余语言（md/txt/未知）：不猜，避免把说明文字写成文件
+  return false;
+}
+
+/**
+ * 扫描文本里的产物候选：带文件名的直接用名字，没名字的按语言推断（要过完整度检查）。
  * @param from 已经处理过的闭合围栏数量（增量模式用）
  */
 export function scanArtifacts(text, { from = 0 } = {}) {
@@ -46,12 +117,18 @@ export function scanArtifacts(text, { from = 0 } = {}) {
   while ((match = CLOSED_FENCE_PATTERN.exec(source)) !== null) {
     index += 1;
     if (index <= from) continue;
-    const { filename } = parseFenceInfo(match[1]);
-    if (!filename) continue;
+    const { lang, filename } = parseFenceInfo(match[1]);
     const content = match[2];
+    const lowerLang = String(lang || '').toLowerCase();
+    let name = filename;
+    if (!name) {
+      const fallback = DEFAULT_NAME_BY_LANG[lowerLang];
+      if (!fallback || !looksLikeCompleteFile(content, lowerLang)) continue;
+      name = fallback;
+    }
     found.push({
-      name: filename,
-      kind: kindForName(filename),
+      name,
+      kind: kindForName(name),
       content,
       bytes: Buffer.byteLength(content),
       fenceIndex: index,
