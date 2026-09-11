@@ -7,6 +7,10 @@
  *
  * 覆盖：分页元数据正确、翻页不重复不遗漏、total 是筛选后的总数（不是本页条数）、
  *       超范围 limit / 非法 page 被拒。
+ *
+ * ⚠️ 2026-09-11 机构端删掉「课堂任务」「积分流水」两个分页口（见交接说明第三节），
+ * 原用例 1、2 改到**保留的**分页口上（机构课包列表由平台端现造数据），
+ * 并顺带断言那两个接口已经不存在 —— 别把「删了功能但用例还绿」当成契约仍在。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -73,34 +77,48 @@ try {
   assert.equal(studentLogin.status, 200, `学生登录失败: ${JSON.stringify(studentLogin.data)}`);
   const student = studentLogin.data.token;
 
-  // 1) 机构任务：造 3 条，limit=2 应分两页且不重复
-  const classes = await api('/api/org/classes', { token: org });
-  const classId = classes.data.items[0].id;
-  for (const title of ['P14 任务一', 'P14 任务二', 'P14 任务三']) {
-    const created = await api('/api/org/teaching/tasks', { method: 'POST', token: org, body: { classId, title, description: '分页用例' } });
-    assert.equal(created.status, 200, `创建任务失败: ${JSON.stringify(created.data)}`);
-  }
-  const tasksPage1 = await api('/api/org/teaching/tasks?limit=2&page=1', { token: org });
-  const tasksPage2 = await api('/api/org/teaching/tasks?limit=2&page=2', { token: org });
-  assert.equal(tasksPage1.data.items.length, 2, '第 1 页应返回 limit 条');
-  assert.equal(tasksPage1.data.limit, 2, 'limit 应回显');
-  assert.equal(tasksPage1.data.total >= 3, true, `total 应为筛选后总数，实际 ${tasksPage1.data.total}`);
-  assert.equal(tasksPage1.data.totalPages, Math.ceil(tasksPage1.data.total / 2), 'totalPages 应与 total/limit 一致');
-  assert.ok(tasksPage2.data.items.length >= 1, '第 2 页应有剩余数据');
-  const taskIds = new Set([...tasksPage1.data.items, ...tasksPage2.data.items].map((item) => item.id));
-  assert.equal(taskIds.size, tasksPage1.data.items.length + tasksPage2.data.items.length, '两页之间不应重复');
-  results.teachingTasks = { total: tasksPage1.data.total, totalPages: tasksPage1.data.totalPages };
+  // 0) 被删掉的两个分页口必须已经不存在（课堂任务 / 积分流水，2026-09-11）
+  const goneTasks = await api('/api/org/teaching/tasks?limit=2&page=1', { token: org });
+  assert.equal(goneTasks.status, 404, `机构端课堂任务应当已删除，实际 ${goneTasks.status}`);
+  const goneEntries = await api('/api/org/billing/credit-entries?limit=2&page=1', { token: org });
+  assert.equal(goneEntries.status, 404, `机构端积分流水应当已删除，实际 ${goneEntries.status}`);
 
-  // 2) 积分流水：3 条人工调整，limit=2 分两页
-  for (let i = 0; i < 3; i += 1) {
-    const adjusted = await api('/api/org/billing/credit-adjustments', { method: 'POST', token: org, body: { type: 'ORG_ADJUSTMENT_IN', credits: 1, reason: `P14 分页用例 ${i + 1}` } });
-    assert.equal(adjusted.status, 200, `积分调整失败: ${JSON.stringify(adjusted.data)}`);
+  // 1) 机构课包列表：平台端现造 2 门已发布课包（种子只有 1 门），limit=1 应分多页且不重复
+  const adminLogin = await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } });
+  assert.equal(adminLogin.status, 200, `平台管理员登录失败: ${JSON.stringify(adminLogin.data)}`);
+  const rootAdmin = adminLogin.data.token;
+  for (const title of ['P14 分页课包一', 'P14 分页课包二']) {
+    // 发布要求至少一个未归档课时（seed 里那门课包也是这么建的）
+    const created = await api('/api/admin/course-series', {
+      method: 'POST', token: rootAdmin,
+      body: { title, description: '分页用例', visibility: 'ALL_ORGS', lessons: [{ title: title + ' 第1课', status: 'PUBLISHED', capabilities: ['text'] }] },
+    });
+    assert.equal(created.status, 200, `创建课包失败: ${JSON.stringify(created.data)}`);
+    const published = await api(`/api/admin/course-series/${created.data.id}/status`, { method: 'POST', token: rootAdmin, body: { action: 'publish' } });
+    assert.equal(published.status, 200, `发布课包失败: ${JSON.stringify(published.data)}`);
+    // 上架广场 ≠ 授权给机构（p40 那条口径）：机构端要看到，必须走授权
+    const assigned = await api(`/api/admin/course-series/${created.data.id}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgLogin.data.organization.id], validityDays: 365 } });
+    assert.equal(assigned.status, 200, `授权课包失败: ${JSON.stringify(assigned.data)}`);
   }
-  const entries = await api('/api/org/billing/credit-entries?limit=2&page=1', { token: org });
-  assert.equal(entries.data.items.length, 2, '积分流水第 1 页应为 2 条');
-  assert.equal(entries.data.total >= 3, true, `积分流水 total 应为总数，实际 ${entries.data.total}`);
-  assert.equal(entries.data.totalPages, Math.ceil(entries.data.total / 2), '积分流水 totalPages 不正确');
-  results.creditEntries = { total: entries.data.total, totalPages: entries.data.totalPages };
+  const seriesPage1 = await api('/api/org/course-series?limit=1&page=1', { token: org });
+  const seriesPage2 = await api('/api/org/course-series?limit=1&page=2', { token: org });
+  assert.equal(seriesPage1.status, 200, `机构课包列表失败: ${JSON.stringify(seriesPage1.data)}`);
+  assert.equal(seriesPage1.data.items.length, 1, '第 1 页应返回 limit 条');
+  assert.equal(seriesPage1.data.limit, 1, 'limit 应回显');
+  assert.equal(seriesPage1.data.total >= 2, true, `total 应为筛选后总数，实际 ${seriesPage1.data.total}`);
+  assert.equal(seriesPage1.data.totalPages, Math.ceil(seriesPage1.data.total / 1), 'totalPages 应与 total/limit 一致');
+  assert.ok(seriesPage2.data.items.length >= 1, '第 2 页应有剩余数据');
+  const seriesIds = new Set([...seriesPage1.data.items, ...seriesPage2.data.items].map((item) => item.id));
+  assert.equal(seriesIds.size, seriesPage1.data.items.length + seriesPage2.data.items.length, '两页之间不应重复');
+  results.orgCourseSeries = { total: seriesPage1.data.total, totalPages: seriesPage1.data.totalPages };
+
+  // 2) 机构举报列表（保留的另一处分页口）：同一套 page/limit/total 元数据
+  const reports = await api('/api/org/work-reports?limit=1&page=1', { token: org });
+  assert.equal(reports.status, 200, `机构举报列表失败: ${JSON.stringify(reports.data)}`);
+  assert.equal(reports.data.limit, 1, '举报列表 limit 应回显');
+  assert.equal(reports.data.page, 1, '举报列表 page 应回显');
+  assert.equal(reports.data.totalPages, Math.ceil(Math.max(1, reports.data.total) / 1), '举报列表 totalPages 不正确');
+  results.orgWorkReports = { total: reports.data.total, totalPages: reports.data.totalPages };
 
   // 3) 学员作品：提交 2 件，limit=1 分页；summary 跨页统计
   const courses = await api('/api/student/courses', { token: student });
@@ -119,11 +137,11 @@ try {
   assert.equal(works.data.summary?.total, works.data.total, 'summary.total 应与分页 total 一致（跨页统计）');
   results.studentWorks = { total: works.data.total, totalPages: works.data.totalPages, summaryTotal: works.data.summary?.total };
 
-  // 4) 非法分页参数被拒（limit 超过上限、page 非法）
-  const tooLarge = await api('/api/org/teaching/tasks?limit=9999', { token: org });
+  // 4) 非法分页参数被拒（limit 超过上限、page 非法）—— 用保留的机构课包口
+  const tooLarge = await api('/api/org/course-series?limit=9999', { token: org });
   assert.equal(tooLarge.status, 400, 'limit 超过上限应 400');
   assert.equal(tooLarge.data?.error?.code, 'VALIDATION_ERROR', `应为 VALIDATION_ERROR，实际 ${tooLarge.data?.error?.code}`);
-  const badPage = await api('/api/org/teaching/tasks?page=0', { token: org });
+  const badPage = await api('/api/org/course-series?page=0', { token: org });
   assert.equal(badPage.status, 400, 'page=0 应 400');
   results.validation = { tooLarge: tooLarge.data?.error?.code, badPage: badPage.data?.error?.code };
 

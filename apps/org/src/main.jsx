@@ -2,30 +2,22 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppShell, buildPreviewDocument, Button, clearSession, ConsoleIcon, createApiClient, Empty, ErrorState, formatCredits, formatDate, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, ReplayFiles, ReplayPanel, ReplayPreview, ReplayTranscript, Status, useData, writeSession } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatCredits, formatDate, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession } from '@platform/shared';
 import { MemberCreditsPage } from './pages/MemberCredits.jsx';
-import { BillingTransactionsPage } from './pages/BillingTransactions.jsx';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/org').replace(/\/$/, '');
 
 const navigation = [
   { to: '/dashboard', icon: '◈', label: '机构总览' }, 
-  { to: '/tasks', icon: '✓', label: '课堂任务' }, 
-  { to: '/learn', icon: '🎨', label: '进入学习上课', external: true }, 
   { to: '/classes', icon: '▦', label: '班级与课堂' }, 
   { to: '/members', icon: '♙', label: '成员管理' }, 
   { to: '/member-credits', icon: '◆', label: '配额管理', adminOnly: true },
-  { to: '/billing-transactions', icon: '▤', label: '积分流水', adminOnly: true },
-  { to: '/recharge', icon: '◆', label: '积分账务', adminOnly: true },
   { to: '/usage', icon: '▦', label: '积分用量' },
   { to: '/works', icon: '✧', label: '作品管理' }, 
   { to: '/inbox', icon: '✉', label: '站内信' }, 
   { to: '/courses', icon: '◇', label: '课程中心' }, 
-  { to: '/work-data', icon: '▥', label: '作品数据中心', adminOnly: true }, 
-  { to: '/packages', icon: '◇', label: '积分套餐', adminOnly: true }, 
   { to: '/enrollment', icon: '♙', label: '学员开通', adminOnly: true }, 
-  { to: '/account-requests', icon: '◉', label: '账号申请', adminOnly: true }, 
   { to: '/materials', icon: '▤', label: '宣传物料' }, 
   { to: '/help-feedback', icon: '◎', label: '问题反馈', adminOnly: true }
 ];
@@ -63,22 +55,6 @@ function Dashboard({ api }) {
       {recentSessions.length ? <div className="table-wrap"><table><thead><tr><th>班级</th><th>课时</th><th>状态</th><th>开始时间</th><th>结束时间</th></tr></thead><tbody>{recentSessions.map((item) => <tr key={item.id}><td>{item.className || '—'}</td><td>{item.lessonTitle || '未关联课时'}</td><td><Status value={item.status} /></td><td>{formatDate(item.startedAt)}</td><td>{formatDate(item.endedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无课堂记录" body="开始课堂后，最近课堂会出现在这里。" />}
     </Panel>
   </>;
-}
-
-function TeachingTasks({ api }) {
-  const [page, setPage] = useState(1);
-  const tasks = useData(() => api.get(`org/teaching/tasks?page=${page}`), [api, page]);
-  const classes = useData(() => api.get('org/classes'), [api]);
-  const [form, setForm] = useState({ classId: '', title: '', description: '', dueAt: '' });
-  const [selectedClassId, setSelectedClassId] = useState('');
-  const [selectedTaskId, setSelectedTaskId] = useState('');
-  const submissions = useData(() => selectedTaskId ? api.get(`org/teaching/tasks/${selectedTaskId}/submissions`) : Promise.resolve(null), [api, selectedTaskId]);
-  const progress = useData(() => selectedClassId ? api.get(`org/teaching/classes/${selectedClassId}/progress`) : Promise.resolve({ items: [] }), [api, selectedClassId]);
-  const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
-  async function create(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.post('org/teaching/tasks', form); setForm({ classId: '', title: '', description: '', dueAt: '' }); setMessage('任务已发布。'); tasks.refresh(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
-  async function toggle(item) { try { await api.patch(`org/teaching/tasks/${item.id}`, { status: item.status === 'CLOSED' ? 'PUBLISHED' : 'CLOSED' }); tasks.refresh(); } catch (error) { setMessage(error.message); } }
-  return <><PageHeader eyebrow="课堂教学" title="课堂任务" description="发布任务、查看学生提交情况与班级学习进度。" actions={<button className="secondary-button" onClick={tasks.refresh}>刷新</button>} />{message && <Notice tone="info">{message}</Notice>}<div className="split"><Panel title="发布新任务"><form onSubmit={create}><label>班级<select required value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })}><option value="">请选择班级</option>{(classes.data?.items || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>任务标题<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label><label>任务说明<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><label>截止时间<input type="datetime-local" value={form.dueAt ? form.dueAt.slice(0,16) : ''} onChange={(e) => setForm({ ...form, dueAt: e.target.value ? new Date(e.target.value).toISOString() : '' })} /></label><button className="primary-button" disabled={busy}>{busy ? '发布中…' : '发布任务'}</button></form></Panel><Panel title="任务列表">{tasks.loading ? <Loading /> : tasks.error ? <ErrorState error={tasks.error} onRetry={tasks.refresh} /> : tasks.data.items.length ? <><ListResultSummary total={tasks.data.total} page={tasks.data.page} totalPages={tasks.data.totalPages} label="个任务" /><div className="card-list">{tasks.data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><Status value={item.status} /><span className="muted">{item.className} · 已提交 {item.summary?.submitted || 0}</span></div><h3>{item.title}</h3><p>{item.description || '暂无说明'}</p><p className="muted">截止：{item.dueAt ? formatDate(item.dueAt) : '未设置'} · {item.lessonTitle || '未绑定课时'}</p><div className="row-actions"><button className="secondary-button" onClick={() => setSelectedTaskId(item.id)}>查看提交</button><button className="text-button" onClick={() => toggle(item)}>{item.status === 'CLOSED' ? '重新发布' : '关闭任务'}</button></div></article>)}</div><Pagination page={tasks.data.page} totalPages={tasks.data.totalPages} onChange={setPage} disabled={tasks.loading} /></> : <Empty title="暂无课堂任务" body="发布第一个任务后会显示在这里。" />}</Panel></div>{selectedTaskId && <Panel title="学生任务提交" actions={<button className="secondary-button" onClick={() => setSelectedTaskId('')}>关闭</button>}>{submissions.loading ? <Loading /> : submissions.error ? <ErrorState error={submissions.error} onRetry={submissions.refresh} /> : submissions.data.items.length ? <div className="table-wrap"><table><thead><tr><th>学生</th><th>状态</th><th>提交时间</th><th>备注</th></tr></thead><tbody>{submissions.data.items.map((item) => <tr key={item.studentId}><td>{item.displayName}</td><td><Status value={item.progressStatus} />{item.overdue && <span className="muted"> · 逾期</span>}</td><td>{formatDate(item.submittedAt)}</td><td>{item.latestSubmission?.note || '—'}</td></tr>)}</tbody></table></div> : <Empty title="暂无提交" body="学生提交后会显示在这里。" />}</Panel>}
-  <Panel title="班级学习进度"><label>选择班级<select value={selectedClassId} onChange={(e) => setSelectedClassId(e.target.value)}><option value="">请选择班级</option>{(classes.data?.items || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedClassId && (progress.loading ? <Loading /> : progress.error ? <ErrorState error={progress.error} onRetry={progress.refresh} /> : progress.data.items.length ? <div className="table-wrap"><table><thead><tr><th>学生</th><th>完成课时</th><th>进度</th><th>最近学习</th></tr></thead><tbody>{progress.data.items.map((item) => <tr key={item.studentId}><td>{item.displayName}</td><td>{item.completedCount}/{item.assignedCount}</td><td>{item.completionRate}%</td><td>{formatDate(item.lastAccessedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无学生进度" body="该班级还没有学习记录。" />)}</Panel></>;
 }
 
 function Classes({ api, user }) {
@@ -426,47 +402,6 @@ function Works({ api }) {
   </>;
 }
 
-function AccountRequests({ api }) {
-  const [filters, setFilters] = useState({ status: 'PENDING', type: '' });
-  const query = useMemo(() => { const value = new URLSearchParams(); if (filters.status) value.set('status', filters.status); if (filters.type) value.set('type', filters.type); return '?' + value.toString(); }, [filters]);
-  const { loading, error, data, refresh } = useData(() => api.get('org/account-requests' + query), [api, query]);
-  const [action, setAction] = useState(null);
-  const [form, setForm] = useState({ status: 'APPROVED', resolution: '' });
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [detail, setDetail] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  async function handle() {
-    if (!action) return;
-    setBusy(true); setMessage('');
-    try {
-      const result = await api.put(`org/account-requests/${action.id}`, form);
-      setMessage(action.type === 'DELETION' && form.status === 'APPROVED'
-        ? `已批准注销申请，${result.studentName || '该学生'} 的账号已停用，学习与审计记录按保留规则保存。`
-        : `《${result.studentName || action.studentName || '账号申请'}》已处理。`);
-      setAction(null); setForm({ status: 'APPROVED', resolution: '' }); refresh();
-    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
-  }
-  async function openDetail(item) {
-    setDetail(item); setDetailLoading(true);
-    try { setDetail(await api.get(`org/account-requests/${item.id}`)); }
-    catch (err) { setMessage(err.message); setDetail(null); }
-    finally { setDetailLoading(false); }
-  }
-  return <>
-    <PageHeader eyebrow="成员合规" title="学生账号申请" description="处理学生提交的账号注销与数据导出申请；批准注销会停用账号、撤销登录并保留必要业务记录。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
-    <Panel title="申请筛选"><div className="form-grid">
-      <label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option><option value="PENDING">待处理</option><option value="APPROVED">已批准</option><option value="REJECTED">已拒绝</option><option value="CANCELLED">学生已撤销</option></select></label>
-      <label>类型<select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })}><option value="">全部类型</option><option value="DELETION">注销账号</option><option value="DATA_EXPORT">数据导出</option></select></label>
-    </div></Panel>
-    <Panel title={`申请记录 · ${data?.pending ?? 0} 条待处理`}>{loading ? <Loading /> : error ? <ErrorState error={error} onRetry={refresh} /> : data?.items?.length ? <div className="table-wrap"><table><thead><tr><th>学生</th><th>类型 / 原因</th><th>状态</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.studentName || item.studentLogin || item.userId}</strong><div className="muted">{item.studentLogin || '—'}</div></td><td>{item.type === 'DELETION' ? '注销账号' : '数据导出'}<div className="muted">{item.reason || '未填写原因'}</div></td><td><Status value={item.status} /><div className="muted">{item.handlerName ? `处理人：${item.handlerName}` : '—'}</div></td><td>{formatDate(item.requestedAt)}</td><td><div className="row-actions">{item.status === 'PENDING' && <button className="text-button" onClick={() => { setAction(item); setForm({ status: 'APPROVED', resolution: '' }); }}>处理</button>}{item.type === 'DATA_EXPORT' && item.status === 'APPROVED' && <button className="text-button" onClick={() => openDetail(item)}>查看导出数据</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="暂无符合条件的账号申请" />}</Panel>
-    {action && <Panel title={`处理申请 · ${action.studentName || action.studentLogin || action.userId}`}><div className="form-grid"><label>处理结果<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="APPROVED">批准</option><option value="REJECTED">拒绝</option></select></label></div><label>处理说明<textarea value={form.resolution} required maxLength={2000} placeholder={action.type === 'DELETION' ? '说明注销结论；批准后账号立即停用，业务记录按保留规则保存。' : '说明数据导出处理结论；批准后学生可在账号中心查看导出内容。'} onChange={(event) => setForm({ ...form, resolution: event.target.value })} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={busy || !form.resolution.trim()} onClick={handle}>{busy ? '处理中…' : '确认处理'}</button><button className="secondary-button" disabled={busy} onClick={() => setAction(null)}>取消</button></div></Panel>}
-    {detailLoading ? <Panel title="正在读取导出数据"><Loading /></Panel> : null}
-    {detail && !detailLoading && <Panel title={`导出数据 · ${detail.studentName || detail.studentLogin || detail.userId}`} actions={<button className="secondary-button" onClick={() => setDetail(null)}>关闭</button>}><p className="muted">以下为当前数据库生成的学生数据概览，不包含密码、会话令牌或内部审计字段。</p><pre className="json-view">{JSON.stringify(detail.exportPayload, null, 2)}</pre></Panel>}
-    {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
-  </>;
-}
-
 const HELP_FEEDBACK_CATEGORY_LABELS = { ACCOUNT: '账号', CANVAS: '画布创作', AI: 'AI 能力', COURSE: '课程学习', CLIENT: '客户端', DATA: '数据与隐私', OTHER: '其他' };
 const HELP_FEEDBACK_STATUS_LABELS = { SUBMITTED: '已提交', IN_PROGRESS: '处理中', RESOLVED: '已解决', CLOSED: '已关闭' };
 
@@ -591,119 +526,6 @@ function OrgCourses({ api }) {
   </>;
 }
 
-const packageCapabilities = [
-  ['allowImage', '生图'], ['allowMusic', '生音乐'], ['allowVideo', '生视频'],
-];
-
-function packageFormFrom(item = {}) {
-  return {
-    name: item.name || '', priceFen: item.priceFen ?? 0, monthlyCredits: item.monthlyCredits ?? 100,
-    bonusCredits: item.bonusCredits ?? 0, durationDays: item.durationDays ?? 30, studentSeats: item.studentSeats ?? 1,
-    capabilities: Object.fromEntries(packageCapabilities.map(([key]) => [key, item.capabilities?.[key] || false])),
-  };
-}
-
-function BillingPackages({ api, user }) {
-  const { loading, error, data, refresh } = useData(() => api.get('org/billing/packages'), [api]);
-  const isAdmin = user?.role === 'ORG_ADMIN';
-  const [form, setForm] = useState(packageFormFrom());
-  const [editingId, setEditingId] = useState('');
-  const [message, setMessage] = useState('');
-  const [saving, setSaving] = useState(false);
-  function setValue(key, value) { setForm((current) => ({ ...current, [key]: value })); }
-  function setCapability(key, value) { setForm((current) => ({ ...current, capabilities: { ...current.capabilities, [key]: value } })); }
-  async function submit(event) {
-    event.preventDefault(); setSaving(true); setMessage('');
-    try {
-      const payload = { ...form, priceFen: Number(form.priceFen), monthlyCredits: Number(form.monthlyCredits), bonusCredits: Number(form.bonusCredits), durationDays: Number(form.durationDays), studentSeats: Number(form.studentSeats) };
-      if (editingId) await api.put('org/billing/packages/' + editingId, payload);
-      else await api.post('org/billing/packages', payload);
-      setEditingId(''); setForm(packageFormFrom()); setMessage('套餐已保存。'); refresh();
-    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
-  }
-  async function toggle(item) {
-    try { await api.put('org/billing/packages/' + item.id, { status: item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); refresh(); }
-    catch (err) { setMessage(err.message); }
-  }
-  return <>
-    <PageHeader eyebrow="积分经营" title="积分套餐" description="维护学员套餐的月度积分、有效期与可使用 AI 能力。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
-    {!isAdmin && <Notice tone="info">当前账号为教师，仅可查看套餐；套餐创建、编辑和启停由机构管理员操作。</Notice>}
-    <div className="split">
-      {isAdmin && <Panel title={editingId ? '编辑套餐' : '新建套餐'}>
-        <form onSubmit={submit}>
-          <label>套餐名称<input value={form.name} onChange={(e) => setValue('name', e.target.value)} required /></label>
-          <div className="form-grid">
-            <label>价格（分）<input type="number" min="0" value={form.priceFen} onChange={(e) => setValue('priceFen', e.target.value)} /></label>
-            <label>月度积分<input type="number" min="0" value={form.monthlyCredits} onChange={(e) => setValue('monthlyCredits', e.target.value)} /></label>
-            <label>赠送积分<input type="number" min="0" value={form.bonusCredits} onChange={(e) => setValue('bonusCredits', e.target.value)} /></label>
-            <label>有效期（天）<input type="number" min="1" max="3650" value={form.durationDays} onChange={(e) => setValue('durationDays', e.target.value)} /></label><label>学员席位<input type="number" min="1" max="100000" value={form.studentSeats} onChange={(e) => setValue('studentSeats', e.target.value)} required /></label>
-          </div>
-          <label>AI 能力</label>
-          <div className="row-actions">{packageCapabilities.map(([key, label]) => <label key={key} className="checkbox-option"><input type="checkbox" checked={form.capabilities[key]} onChange={(e) => setCapability(key, e.target.checked)} />{label}</label>)}</div>
-          {message && <Notice tone={message === '套餐已保存。' ? 'success' : 'danger'}>{message}</Notice>}
-          <div className="row-actions"><button className="primary-button" disabled={saving}>{saving ? '保存中…' : editingId ? '保存修改' : '创建套餐'}</button>{editingId && <button type="button" className="secondary-button" onClick={() => { setEditingId(''); setForm(packageFormFrom()); }}>取消编辑</button>}</div>
-        </form>
-      </Panel>}
-      <Panel title="套餐列表">
-        {loading ? <Loading /> : error ? <ErrorState error={error} onRetry={refresh} /> : data.items.length ? <div className="table-wrap"><table><thead><tr><th>套餐</th><th>价格</th><th>积分</th><th>有效期</th><th>学员席位</th><th>AI 能力</th><th>状态</th>{isAdmin && <th>操作</th>}</tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.name}</strong></td><td>¥{(item.priceFen / 100).toFixed(2)}</td><td>{formatCredits(item.monthlyCredits)} / 月{item.bonusCredits ? <div className="muted">赠送 {formatCredits(item.bonusCredits)}</div> : null}</td><td>{item.durationDays} 天</td><td>{item.occupiedSeats} / {item.studentSeats}<div className="muted">可用 {item.availableSeats}</div></td><td>{packageCapabilities.filter(([key]) => item.capabilities[key]).map(([, label]) => label).join(' / ') || '未开放'}</td><td><Status value={item.status} /></td>{isAdmin && <td><div className="row-actions"><button className="text-button" onClick={() => { setEditingId(item.id); setForm(packageFormFrom(item)); setMessage(''); }}>编辑</button><button className="text-button" onClick={() => toggle(item)}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button></div></td>}</tr>)}</tbody></table></div> : <Empty title="尚未配置套餐" />}
-      </Panel>
-    </div>
-  </>;
-}
-
-function workDataCsvValue(value) {
-  return '"' + String(value ?? '').replace(/"/g, '""') + '"';
-}
-
-function WorkDataTable({ title, items, labelKey, apiKey }) {
-  const nameField = labelKey === '班级' ? 'className' : labelKey === '课时' ? 'lessonTitle' : 'studentName';
-  return <Panel title={title}>
-    {items.length ? <div className="table-wrap"><table><thead><tr><th>{labelKey}</th><th>活跃学员</th><th>活跃项目</th><th>完成项目</th><th>提交</th><th>发布</th><th>反馈</th><th>AI 调用 / 积分</th><th>最近活动</th></tr></thead><tbody>{items.map((item) => <tr key={item[apiKey]}><td><strong>{item[nameField] || '未关联'}</strong></td><td>{item.activeStudentCount}</td><td>{item.activeProjectCount}</td><td>{item.completedProjectCount}</td><td>{item.submittedWorkCount}</td><td>{item.publishedWorkCount}</td><td>{item.feedbackCount}</td><td>{item.aiCallCount} / {formatCredits(item.aiCredits)}</td><td>{formatDate(item.lastActivityAt)}</td></tr>)}</tbody></table></div> : <Empty title="当前筛选范围暂无可汇总的作品数据" />}
-  </Panel>;
-}
-
-function WorkDataPage({ api, user }) {
-  const [filters, setFilters] = useState({ days: '30', classId: '', lessonId: '', studentId: '' });
-  const [exporting, setExporting] = useState(false);
-  const [message, setMessage] = useState('');
-  const query = useMemo(() => new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString(), [filters]);
-  const report = useData(() => api.get('org/work-data?' + query), [api, query]);
-
-  async function exportCsv() {
-    setExporting(true); setMessage('');
-    try {
-      const data = await api.get('org/work-data/export?' + query);
-      const header = (data.columns || []).map((column) => workDataCsvValue(column.label)).join(',');
-      const lines = (data.items || []).map((item) => (data.columns || []).map((column) => workDataCsvValue(item[column.key])).join(','));
-      const blob = new Blob(['\uFEFF' + [header, ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
-      const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = data.fileName || '作品数据中心-脱敏导出.csv';
-      document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(link.href);
-      setMessage(`已导出 ${lines.length} 行脱敏学员汇总，并已记录导出审计。`);
-    } catch (error) { setMessage(error.message || '导出失败'); } finally { setExporting(false); }
-  }
-
-  if (user?.role !== 'ORG_ADMIN') return <><PageHeader eyebrow="机构运营" title="作品数据中心" description="作品数据与脱敏导出仅向机构管理员开放。" /><Panel title="权限说明"><Notice tone="info">授课教师可在班级、作品点评和积分用量中处理日常教学；为保护未成年人创作数据，本中心及其导出功能仅机构管理员可访问。</Notice></Panel></>;
-  if (report.loading) return <Loading label="正在汇总作品数据…" />;
-  if (report.error) return <ErrorState error={report.error} onRetry={report.refresh} />;
-  const data = report.data; const summary = data.summary || {}; const selectors = data.filters || {}; const breakdowns = data.breakdowns || {};
-  return <>
-    <PageHeader eyebrow="机构运营" title="作品数据中心" description={`按班级、课程课时和学员下钻近 ${data.scope.days} 日真实创作数据；不包含访问量、访客或公开分享统计。`} actions={<div className="row-actions"><button className="secondary-button" onClick={report.refresh}>刷新</button><button className="primary-button" onClick={exportCsv} disabled={exporting}>{exporting ? '导出中…' : '导出脱敏汇总'}</button></div>} />
-    <Notice tone="info">导出仅含“张同学”这类脱敏别名及汇总数字，不含学员 ID、登录名、手机号或完整姓名；每次导出都会写入审计记录。</Notice>
-    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
-    <Panel title="统计范围">
-      <div className="row-actions top-gap">{['7', '14', '30'].map((days) => <button type="button" key={days} className={filters.days === days ? 'primary-button' : 'secondary-button'} onClick={() => setFilters({ ...filters, days })}>近 {days} 日</button>)}</div>
-      <div className="form-grid top-gap">
-        <label>班级<select value={filters.classId} onChange={(e) => setFilters({ ...filters, classId: e.target.value })}><option value="">全部班级</option>{(selectors.classes || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <label>课程课时<select value={filters.lessonId} onChange={(e) => setFilters({ ...filters, lessonId: e.target.value })}><option value="">全部课时</option>{(selectors.lessons || []).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-        <label>学员<select value={filters.studentId} onChange={(e) => setFilters({ ...filters, studentId: e.target.value })}><option value="">全部学员</option>{(selectors.students || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      </div>
-    </Panel>
-    <div className="metrics"><MetricCard label="覆盖学员" value={summary.enrolledStudents || 0} hint="当前班级范围的在册学员" /><MetricCard label="活跃学员 / 项目" value={`${summary.activeStudents || 0} / ${summary.activeProjects || 0}`} hint="近周期有保存或状态更新" tone="teal" /><MetricCard label="完成 / 提交" value={`${summary.completedProjects || 0} / ${summary.submittedWorks || 0}`} hint="项目状态与作品提交" tone="orange" /><MetricCard label="发布 / 反馈" value={`${summary.publishedWorks || 0} / ${summary.feedbackCount || 0}`} hint="审核发布与教师新增反馈" tone="pink" /><MetricCard label="成功 AI / 积分" value={`${summary.aiCalls || 0} / ${formatCredits(summary.aiCredits)}`} hint="仅统计成功且关联项目的调用" tone="violet" /></div>
-    <div className="split"><WorkDataTable title="按班级下钻" items={breakdowns.classes || []} labelKey="班级" apiKey="classId" /><WorkDataTable title="按课程课时下钻" items={breakdowns.lessons || []} labelKey="课时" apiKey="lessonId" /></div>
-    <WorkDataTable title="按学员下钻" items={breakdowns.students || []} labelKey="学员" apiKey="studentId" />
-    <Panel title="统计口径"><ul className="muted"><li>活跃：{data.definitions.active}</li><li>完成：{data.definitions.completed}</li><li>发布：{data.definitions.published}</li><li>反馈：{data.definitions.feedback}</li><li>AI：{data.definitions.ai}</li></ul></Panel>
-  </>;
-}
 function EnrollmentPage({ api, user }) {
   const isAdmin = user?.role === 'ORG_ADMIN';
   const { loading, error, data, refresh } = useData(async () => {
@@ -742,7 +564,7 @@ function EnrollmentPage({ api, user }) {
         <label>备注<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} maxLength="2000" placeholder="可记录线下履约说明，不填写敏感支付凭证。" /></label>
         <button className="primary-button" disabled={busy || !activePackages.length}>{busy ? '处理中…' : '创建待开通单'}</button>
       </form></Panel>
-      <Panel title="席位规则"><div className="card-list">{packages.map((item) => <article className="item-card" key={item.id}><strong>{item.name}</strong><p>已占 {item.occupiedSeats} / {item.studentSeats}，可用 {item.availableSeats} 个席位。</p><small>套餐停用前必须先处理全部生效开通单，避免误中断在学学员。</small></article>) || <Empty title="暂无套餐" body="请先在积分套餐页面配置套餐和学员席位。" />}</div></Panel>
+      <Panel title="席位规则"><div className="card-list">{packages.map((item) => <article className="item-card" key={item.id}><strong>{item.name}</strong><p>已占 {item.occupiedSeats} / {item.studentSeats}，可用 {item.availableSeats} 个席位。</p><small>套餐停用前必须先处理全部生效开通单，避免误中断在学学员。</small></article>) || <Empty title="暂无套餐" body="当前机构没有可用套餐，请联系平台管理员配置后再开通学员。" />}</div></Panel>
     </div>
     <Panel title="开通记录"><div className="table-wrap"><table><thead><tr><th>学员 / 套餐</th><th>状态</th><th>线下登记</th><th>有效期</th><th>留痕</th><th>操作</th></tr></thead><tbody>{enrollmentData.items.length ? enrollmentData.items.map((item) => <tr key={item.id}><td><strong>{item.studentName}</strong><div className="muted">{item.packageName}</div></td><td><Status value={item.status} /></td><td><Status value={item.paymentStatus} /></td><td>{formatDate(item.startsAt)}<div className="muted">至 {formatDate(item.expiresAt)}</div></td><td>{item.eventCount || 0} 条<div className="muted">{item.lastEventAt ? formatDate(item.lastEventAt) : '—'}</div></td><td><div className="row-actions">{item.status === 'PENDING' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'payment-record', { paymentStatus: 'RECORDED' })}>登记收款</button><button className="text-button" disabled={busy} onClick={() => act(item, 'activate')}>完成开通</button><button className="text-button" disabled={busy} onClick={() => act(item, 'void')}>作废</button></>}{item.status === 'ACTIVE' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'suspend')}>停用</button><button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费</button></>}{item.status === 'SUSPENDED' && <><button className="text-button" disabled={busy} onClick={() => act(item, 'resume')}>恢复</button><button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费</button><button className="text-button" disabled={busy} onClick={() => act(item, 'void')}>作废</button></>}{item.status === 'EXPIRED' && <button className="text-button" disabled={busy} onClick={() => act(item, 'renew')}>续费并开通</button>}</div></td></tr>) : <tr><td colSpan="6"><Empty title="暂无开通记录" body="创建开通单后会在这里沉淀状态、有效期与完整操作留痕。" /></td></tr>}</tbody></table></div></Panel>
   </>;
@@ -770,120 +592,6 @@ function UsagePage({ api }) {
         <label>关键词<input value={filters.search} placeholder="用户 / 项目 / 作品" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
       </div>
       {records.loading ? <Loading label="正在读取用量明细…" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>能力 / 模型</th><th>上下文</th><th>积分</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.userName || item.userLogin || item.userId}</td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.lessonTitle ? <div className="muted">课时：{item.lessonTitle}</div> : null}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} />{item.failCode ? <div className="muted">{item.failCode}</div> : null}</td></tr>)}</tbody></table></div> : <Empty title="所选范围内暂无用量记录" />}
-    </Panel>
-  </>;
-}
-
-function billingCsvValue(value) {
-  return '"' + String(value ?? '').replace(/"/g, '""') + '"';
-}
-function AiBudgetPanel({ api }) {
-  const config = useData(() => api.get('org/billing-config/ai-budget'), [api]);
-  if (config.loading) return <Panel title="机构 AI 积分"><Loading label="正在读取机构积分…" /></Panel>;
-  if (config.error) return <Panel title="机构 AI 积分"><ErrorState error={config.error} onRetry={config.refresh} /></Panel>;
-  const item = config.data?.item || {};
-  return <Panel title="机构 AI 积分">
-    <Notice tone={Number(item.creditBalance || 0) > 0 ? 'info' : 'warning'}>机构通过充值获得积分。当前可用积分：<strong>{Number(item.creditBalance || 0)}</strong>；余额为 0 时，机构、教师和学生均不能生成 AI 内容。教师和学生的个人 AI 使用上限请在成员管理中设置。</Notice>
-    <div className="muted">累计充值：{Number(item.totalCreditsIn || 0)}　累计消耗：{Number(item.totalCreditsSpent || 0)}</div>
-  </Panel>;
-}
-
-function BillingAccountPage({ api, user }) {
-  const overview = useData(() => api.get('org/billing/account-overview'), [api]);
-  const [filters, setFilters] = useState({ direction: '', type: '', status: '', startDate: '', endDate: '' });
-  const [form, setForm] = useState({ type: 'ORG_ADJUSTMENT_IN', credits: '', reason: '' });
-  const [frozenForm, setFrozenForm] = useState({ frozenCredits: '', reason: '' });
-  const [busy, setBusy] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [message, setMessage] = useState('');
-  const [entriesPage, setEntriesPage] = useState(1);
-  const query = useMemo(() => { const value = new URLSearchParams(Object.entries(filters).filter(([, v]) => v)); value.set('page', String(entriesPage)); return value.toString(); }, [filters, entriesPage]);
-  const entries = useData(() => api.get('org/billing/credit-entries?' + query), [api, query]);
-  if (user?.role === 'TEACHER') return <>
-    <PageHeader eyebrow="机构运营" title="积分账务" description="查看机构共享魔法石余额、充值订单与积分流水。" />
-    <Panel title="权限说明"><Notice tone="info">账务工作台仅机构管理员可见。授课教师可在“积分用量”查看本机构用量汇总。</Notice></Panel>
-  </>;
-  async function refreshAll() { await Promise.all([overview.refresh(), entries.refresh()]); }
-  async function submitAdjustment(event) {
-    event.preventDefault(); setBusy(true); setMessage('');
-    try {
-      const result = await api.post('org/billing/credit-adjustments', form);
-      setMessage('人工账务调整已完成，记账后可用余额 ' + formatCredits(result.balanceAfter) + '。');
-      setForm({ type: 'ORG_ADJUSTMENT_IN', credits: '', reason: '' });
-      await refreshAll();
-    } catch (error) { setMessage(error.message || '人工调整失败'); } finally { setBusy(false); }
-  }
-  async function submitFrozen(event) {
-    event.preventDefault(); setBusy(true); setMessage('');
-    try {
-      const result = await api.put('org/billing/frozen-credits', frozenForm);
-      setMessage('冻结积分已更新为 ' + formatCredits(result.frozenCredits) + '，可用余额 ' + formatCredits(result.availableBalance) + '。');
-      setFrozenForm({ frozenCredits: '', reason: '' }); await refreshAll();
-    } catch (error) { setMessage(error.message || '冻结设置失败'); } finally { setBusy(false); }
-  }
-  async function reverseEntry(item, action) {
-    const reason = window.prompt(action === 'refund' ? '请输入退款 / 退回原因' : '请输入冲正原因', '');
-    if (reason === null) return;
-    if (!reason.trim()) return setMessage('处理原因必填。');
-    setBusy(true); setMessage('');
-    try {
-      const result = await api.post(`org/billing/credit-entries/${item.id}/${action}`, { reason });
-      setMessage((action === 'refund' ? '退款处理已完成' : '冲正处理已完成') + '，记账后可用余额 ' + formatCredits(result.balanceAfter) + '。');
-      await refreshAll();
-    } catch (error) { setMessage(error.message || '账务处理失败'); } finally { setBusy(false); }
-  }
-  async function exportCsv() {
-    setExporting(true); setMessage('');
-    try {
-      const data = await api.get('org/billing/reconciliation/export');
-      const header = (data.columns || []).map((column) => billingCsvValue(column.label)).join(',');
-      const lines = (data.items || []).map((item) => (data.columns || []).map((column) => billingCsvValue(item[column.key])).join(','));
-      const blob = new Blob(['\uFEFF' + [header, ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
-      const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = data.fileName || '机构积分对账.csv';
-      document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(link.href);
-      setMessage('已导出 ' + lines.length + ' 条积分流水，导出动作已写入审计。');
-    } catch (error) { setMessage(error.message || '对账导出失败'); } finally { setExporting(false); }
-  }
-  if (overview.loading) return <Loading label="正在读取机构账务…" />;
-  if (overview.error) return <ErrorState error={overview.error} onRetry={overview.refresh} />;
-  const data = overview.data || {}; const reconciliation = data.reconciliation || {};
-  return <>
-    <PageHeader eyebrow="机构运营" title="积分账务" description="管理共享魔法石余额、冻结、人工调整、退款冲正和流水对账。" actions={<div className="row-actions"><button className="secondary-button" onClick={overview.refresh}>刷新</button><button className="primary-button" onClick={exportCsv} disabled={exporting}>{exporting ? '导出中…' : '导出对账 CSV'}</button></div>} />
-    <Notice tone="info">当前未接入在线支付、支付回调或自动续费；充值订单仅展示真实订单。AI 任务成功后才扣积分，策略拦截和 provider 失败均记录 0 积分审计，不产生扣费，也无需自动退款。冻结只是账务控制，不代表收款能力。</Notice>
-    {message ? <Notice tone={message.includes('失败') || message.includes('必填') ? 'danger' : 'success'}>{message}</Notice> : null}
-    <div className="metrics">
-      <MetricCard label="可用余额" value={formatCredits(data.availableBalance || 0)} hint="当前可消耗积分" />
-      <MetricCard label="冻结积分" value={formatCredits(data.frozenCredits || 0)} hint="仅锁定，不计收支" tone="orange" />
-      <MetricCard label="总余额" value={formatCredits(data.totalBalance || 0)} hint="可用 + 冻结" tone="teal" />
-      <MetricCard label="对账状态" value={reconciliation.balanced ? '一致' : '不一致'} hint={reconciliation.balanced ? '流水复算与账面一致' : '差异 ' + formatCredits(reconciliation.difference || 0)} tone={reconciliation.balanced ? 'teal' : 'pink'} />
-    </div>
-    <AiBudgetPanel api={api} />
-    <div className="split">
-      <Panel title="人工调整"><form onSubmit={submitAdjustment}>
-        <label>调整方向<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="ORG_ADJUSTMENT_IN">人工补入</option><option value="ORG_ADJUSTMENT_OUT">人工扣减</option></select></label>
-        <label>积分<input type="number" min="1" step="1" value={form.credits} onChange={(event) => setForm({ ...form, credits: event.target.value })} required /></label>
-        <label>原因<textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} maxLength="500" placeholder="必须记录线下业务依据，不得虚构充值。" required /></label>
-        <button className="primary-button" disabled={busy}>{busy ? '处理中…' : '提交人工调整'}</button>
-      </form></Panel>
-      <Panel title="冻结控制"><form onSubmit={submitFrozen}>
-        <label>目标冻结积分<input type="number" min="0" step="1" value={frozenForm.frozenCredits} onChange={(event) => setFrozenForm({ ...frozenForm, frozenCredits: event.target.value })} placeholder={'当前冻结 ' + formatCredits(data.frozenCredits || 0)} required /></label>
-        <label>原因<textarea value={frozenForm.reason} onChange={(event) => setFrozenForm({ ...frozenForm, reason: event.target.value })} maxLength="500" placeholder="填写冻结或解冻的业务原因。" required /></label>
-        <button className="primary-button" disabled={busy}>{busy ? '处理中…' : '更新冻结积分'}</button>
-      </form><div className="muted">可用余额 + 冻结积分 = 流水复算总余额；冻结流水只留痕，不计入收入或消耗。</div></Panel>
-    </div>
-    <div className="split">
-      <Panel title="充值订单">{(data.orders || []).length ? <table><thead><tr><th>订单号</th><th>金额</th><th>魔法石</th><th>状态</th><th>创建时间</th></tr></thead><tbody>{data.orders.map((item) => <tr key={item.id}><td>{item.orderNo}</td><td>¥{(item.amountFen / 100).toFixed(2)}</td><td>{formatCredits(item.credits)}{item.bonusCredits ? <div className="muted">赠 {formatCredits(item.bonusCredits)}</div> : null}</td><td><Status value={item.status} /></td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table> : <Empty title="暂无充值订单" body="当前未接入在线支付，机构积分由平台人工调整补入；每次调整都会记入下方积分流水。" />}</Panel>
-      <Panel title="对账摘要"><table><tbody><tr><td>累计收入</td><td>{formatCredits(data.totalCreditsIn || 0)}</td></tr><tr><td>累计消耗</td><td>{formatCredits(data.totalCreditsSpent || 0)}</td></tr><tr><td>流水收入合计</td><td>{formatCredits(reconciliation.ledgerCreditsIn || 0)}</td></tr><tr><td>流水消耗合计</td><td>{formatCredits(reconciliation.ledgerCreditsOut || 0)}</td></tr><tr><td>流水条数</td><td>{reconciliation.entryCount || 0}</td></tr><tr><td>最近流水</td><td>{reconciliation.latestEntryAt ? formatDate(reconciliation.latestEntryAt) : '暂无'}</td></tr></tbody></table><div className="muted">{reconciliation.rule}</div></Panel>
-    </div>
-    <Panel title="积分流水">
-      <div className="form-grid">
-        <label>方向<select value={filters.direction} onChange={(event) => setFilters({ ...filters, direction: event.target.value })}><option value="">全部</option><option value="IN">收入</option><option value="OUT">支出</option></select></label>
-        <label>类型<input value={filters.type} placeholder="ORG_ADJUSTMENT_IN / AI_TEXT" onChange={(event) => setFilters({ ...filters, type: event.target.value })} /></label>
-        <label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部</option><option value="EFFECTIVE">有效</option><option value="VOIDED">已处理</option></select></label>
-        <label>开始日期<input type="date" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} /></label>
-        <label>结束日期<input type="date" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} /></label>
-      </div>
-      {entries.loading ? <Loading label="正在读取积分流水…" /> : entries.error ? <ErrorState error={entries.error} onRetry={entries.refresh} /> : (entries.data?.items || []).length ? <><ListResultSummary total={entries.data.total} page={entries.data.page} totalPages={entries.data.totalPages} label="条流水" /><div className="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>方向 / 积分</th><th>余额</th><th>状态</th><th>操作</th></tr></thead><tbody>{entries.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.type}{item.reversalOf ? <div className="muted">源：{item.reversalOf}</div> : null}<div className="muted">{item.reason || item.modality || '—'}</div></td><td>{item.direction === 'IN' ? '+' : '-'}{formatCredits(item.credits)}</td><td>{formatCredits(item.balanceAfter)}</td><td><Status value={item.status} /></td><td><div className="row-actions"><button className="text-button" disabled={busy || item.status !== 'EFFECTIVE' || ['FROZEN_HOLD','FROZEN_RELEASE'].includes(item.type)} onClick={() => reverseEntry(item, 'refund')}>退款</button><button className="text-button" disabled={busy || item.status !== 'EFFECTIVE' || ['FROZEN_HOLD','FROZEN_RELEASE'].includes(item.type)} onClick={() => reverseEntry(item, 'reverse')}>冲正</button></div></td></tr>)}</tbody></table></div><Pagination page={entries.data.page} totalPages={entries.data.totalPages} onChange={setEntriesPage} disabled={entries.loading} /></> : <Empty title="当前筛选范围暂无积分流水" />}
     </Panel>
   </>;
 }
@@ -932,10 +640,7 @@ function OrgPage({ kind, user }) {
   const pages = {
     inbox: ['站内信', '查看平台与机构的教学、运营和系统通知。', ['课堂通知', '开课、结束、作品提交等信息将统一沉淀'], ['运营消息', '课包、充值与平台活动通知统一送达']],
     courses: ['课程中心', '浏览机构已开通课包、课时与授课资源，老师可从这里进入课堂。', ['标准课包', '平台下发的课程与课时内容'], ['授课资源', 'PPT、HTML 互动课件与课堂备注']],
-    'work-data': ['作品数据中心', '从作品数量、发布趋势和热门成果了解校区的教学沉淀。', ['近 7 日趋势', '作品发布与浏览趋势'], ['优秀作品', '按互动与完成度查看校区案例']],
-    packages: ['积分套餐', '维护面向学员的套餐、有效期与可使用的 AI 创作能力。', ['套餐配置', '月额度、有效期与能力开关'], ['开通规则', '学员开通单、履约与变更记录']],
     enrollment: ['学员开通', '登记学员套餐、实收状态与履约进度，把线下收款过程沉淀为机构记录。', ['开通单', '选择学员、商品和有效期'], ['履约记录', '支持标记收款、完成与作废']],
-    recharge: ['积分充值', '为机构共享魔法石池充值，保持课堂 AI 用量稳定可控。', ['机构余额', '按机构统一充值与余额提醒'], ['发票申请', '充值订单与申请发票统一管理']],
     usage: ['积分用量', '查看余额、今日 / 近 7 日 / 近 30 日用量以及高频使用者。', ['用量概览', '按能力类型与时间范围汇总'], ['明细记录', '查看用户、项目与课堂上下文']],
     materials: ['宣传物料', '下载平台配置的招生海报、课程介绍与活动物料包。', ['课程介绍', '用于咨询、试听与招生沟通'], ['活动素材', '机构可下载并按校区使用']],
     hackathon: ['黑客松', '查看平台赛季、机构可见开关和可推送的学员作品。', ['赛季活动', '主题、时间与奖励信息'], ['作品推送', '从校区优秀作品中选择参赛成果']],
@@ -955,6 +660,6 @@ function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/tasks" element={<TeachingTasks api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/member-credits" element={<MemberCreditsPage api={api} />} /><Route path="/billing-transactions" element={<BillingTransactionsPage api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/work-data" element={<WorkDataPage api={api} user={session.user} />} /><Route path="/packages" element={<BillingPackages api={api} user={session.user} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/account-requests" element={<AccountRequests api={api} />} /><Route path="/recharge" element={<BillingAccountPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/member-credits" element={<MemberCreditsPage api={api} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

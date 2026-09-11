@@ -465,22 +465,8 @@ export function buildStudentDashboard(user) {
   const progressByLesson = studentLessonProgressMap(user);
   const classById = new Map(context.classes.map((item) => [item.id, item]));
   const activeSessionByKey = new Map(context.activeSessions.filter((item) => item.lessonId).map((item) => [`${item.classId}:${item.lessonId}`, item]));
-  // A classroom item is scheduled for today when a teacher-published learning
-  // task is due today. An already-started session is also shown, even if the
-  // teacher did not set a due date, so the student can enter it immediately.
-  const todayTaskRows = rows(
-    `SELECT DISTINCT task.class_id, task.lesson_id
-     FROM learning_tasks task
-     JOIN class_members member ON member.class_id = task.class_id
-     WHERE member.user_id = ?
-       AND member.removed_at IS NULL
-       AND task.org_id = ?
-       AND task.status = 'PUBLISHED'
-       AND task.due_at IS NOT NULL
-       AND date(task.due_at) = date('now','localtime')`,
-    [userId, orgId],
-  );
-  const todayTaskKeys = new Set(todayTaskRows.map((item) => `${item.class_id}:${item.lesson_id}`));
+  // 「今天」只由**正在进行的课堂**决定（2026-09-11 删掉课堂任务后不再有「今天到期的任务」这个来源；
+  // learning_tasks 表保留历史数据，代码不再读写）。
   const allLessonTasks = [];
   const courses = context.courses.map((course) => {
     const assignedClasses = (course.classIds || []).map((classId) => classById.get(classId)).filter(Boolean);
@@ -495,7 +481,7 @@ export function buildStudentDashboard(user) {
         .filter(Boolean);
       const session = activeCandidates.find((item) => item.deliveryMode === 'CANVAS') || activeCandidates[0] || null;
       const sessionClass = session ? classById.get(session.classId) : null;
-      const isToday = Boolean(session) || assignedClasses.some((item) => todayTaskKeys.has(`${item.id}:${lesson.id}`));
+      const isToday = Boolean(session);
       const lessonMode = lesson.deliveryMode || 'CANVAS';
       const sessionMode = session?.deliveryMode || null;
       const homePractice = rawValue(user, 'student_usage_scope', 'studentUsageScope') === 'HOME_PRACTICE';

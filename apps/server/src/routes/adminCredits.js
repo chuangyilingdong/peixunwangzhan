@@ -7,7 +7,6 @@ import { hashPassword } from '@platform/database';
 import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../services/creditLedger.js';
 import { scheduleReminder } from './communication.js';
 import { assertKnownState, assertTransition } from '../services/domainState.js';
-import { handleTeachingTasks } from '../services/teachingTasks.js';
 
 import {
   ensureOrgBilling,

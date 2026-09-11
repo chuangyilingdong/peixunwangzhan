@@ -54,11 +54,11 @@ async function login(loginName, password) {
   return r.data;
 }
 
-// New expected mapping: STUDENT/TEACHER/ORG_ADMIN → /learn; SUPER_ADMIN/PLATFORM_ADMIN → /admin/
+// 角色 → 落地路径：学生/教师/机构都回官网首页，平台管理员进 /admin/
+// （2026-09-11 复核：登录不再统一跳 /learn；这条断言此前一直按旧设计写，已过期）
 function expectedPath(role) {
-  if (role === 'STUDENT' || role === 'TEACHER' || role === 'ORG_ADMIN') return '/learn';
   if (role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN') return '/admin/';
-  return '/learn';
+  return '/';
 }
 
 const checks = [];
@@ -91,14 +91,17 @@ try {
   const meOrg = await api('/api/me', { token: orgAdmin.token });
   check('me returns personalCredits for org-admin', () => assert.equal(typeof meOrg.data.personalCredits, 'number'));
 
-  // 3. Role → /learn mapping matches new website behavior
-  check('STUDENT → /learn', () => assert.equal(expectedPath(student.user.role), '/learn'));
-  check('TEACHER → /learn', () => assert.equal(expectedPath(teacher.user.role), '/learn'));
-  check('ORG_ADMIN → /learn', () => assert.equal(expectedPath(orgAdmin.user.role), '/learn'));
+  // 3. Role → 落地路径（学生/教师/机构回首页，平台管理员进 /admin/）
+  check('STUDENT → /', () => assert.equal(expectedPath(student.user.role), '/'));
+  check('TEACHER → /', () => assert.equal(expectedPath(teacher.user.role), '/'));
+  check('ORG_ADMIN → /', () => assert.equal(expectedPath(orgAdmin.user.role), '/'));
+  check('SUPER_ADMIN → /admin/', () => assert.equal(expectedPath('SUPER_ADMIN'), '/admin/'));
 
-  // 4. LoginPage in apps/website uses /learn redirect
+  // 4. 官网 LoginPage 按角色分流（`window.location.assign`，不再是 navigate('/learn')）
   const websiteSrc = fs.readFileSync(path.join(root, 'apps/website/src/main.jsx'), 'utf8');
-  check('website main.jsx redirects STUDENT to /learn', () => assert.ok(websiteSrc.includes("navigate('/learn')"), 'LoginPage should call navigate("/learn")'));
+  check('website LoginPage 按角色分流并 assign', () => assert.ok(websiteSrc.includes('window.location.assign(target)'), 'LoginPage should assign by role'));
+  check('website LoginPage 学生回首页', () => assert.ok(websiteSrc.includes("role === 'STUDENT' ? '/'"), 'STUDENT should land on /'));
+  check('website LoginPage 平台管理员进 /admin/', () => assert.ok(websiteSrc.includes("'/admin/'"), 'PLATFORM admin should land on /admin/'));
   check('website has /learn route', () => assert.ok(websiteSrc.includes("path='/learn'"), 'Website should declare /learn route'));
 
   // 5. Header navigation has new items（自由画布/自由对话 已按产品决定删除，不再断言）
@@ -117,13 +120,19 @@ try {
   const cwJsx = fs.readFileSync(path.join(root, 'packages/shared/src/canvasWorkspace.jsx'), 'utf8');
   check('CanvasWorkspace exported', () => assert.ok(cwJsx.includes('export function CanvasWorkspace')));
 
-  // 7. /org app has external "进入学习上课" nav item
+  // 7. /org app：这些机构端入口已按用户要求删除（2026-09-11），别再冒出来。
+  // 按「导航条目 + 路由」查，而不是查整页文案 —— 保留页面里出现「套餐」这类词是正常的。
   const orgSrc = fs.readFileSync(path.join(root, 'apps/org/src/main.jsx'), 'utf8');
-  check('org app has 进入学习上课 entry', () => assert.ok(orgSrc.includes('进入学习上课'), 'org navigation should include learning entry'));
+  for (const label of ['进入学习上课', '课堂任务', '积分流水', '积分账务', '作品数据中心', '积分套餐', '账号申请']) {
+    check(`org app 导航不再有「${label}」`, () => assert.ok(!orgSrc.includes(`label: '${label}'`), `机构端导航不该再有「${label}」`));
+  }
+  for (const route of ['/tasks', '/billing-transactions', '/work-data', '/packages', '/account-requests', '/recharge']) {
+    check(`org app 不再挂路由 ${route}`, () => assert.ok(!orgSrc.includes(`path="${route}"`), `机构端不该再挂 ${route}`));
+  }
 
-  // 8. AppShell supports external links
+  // 8. AppShell 的 external 导航分支随之删除（它只服务「进入学习上课」那一条）
   const uiJsx = fs.readFileSync(path.join(root, 'packages/shared/src/ui.jsx'), 'utf8');
-  check('AppShell handles item.external', () => assert.ok(uiJsx.includes('item.external'), 'AppShell should handle external nav items'));
+  check('AppShell 不再有 item.external 分支', () => assert.ok(!uiJsx.includes('item.external'), 'external 分支已随该入口删除'));
 
   // 9. Personal credit ledger is writable + indexed
   const db2 = new DatabaseSync(dbPath);
