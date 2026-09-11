@@ -68,6 +68,9 @@ function InnerCircleLogo({ onClick }) { return <button type="button" className="
 const WEBSITE_NAV = [['/', '首页'], ['/learn', '学习上课'], ['/marketplace', '课程广场'], ['/works', '作品广场']];
 function InnerCircleHeader({ userBadge, session, logout }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  // 学生下拉菜单的开关必须在这里声明：下面 finalUserBadge 的「学生分支」要用它，
+  // 漏了这行 → 学生登录状态打开首页时 ReferenceError: showStudentMenu is not defined → 整页白屏。
+  const [showStudentMenu, setShowStudentMenu] = useState(false);
   const closeMenu = () => setMenuOpen(false);
   
   // 学生用户下拉菜单（在 InnerCircle 首页也需要）
