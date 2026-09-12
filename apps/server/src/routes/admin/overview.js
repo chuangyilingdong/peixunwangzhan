@@ -1,4 +1,5 @@
 // 平台管理端「overview」域路由：从 adminOrg.js 拆出，行为不变。
+import { createGatewayToken, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
@@ -105,6 +106,41 @@ import {
 } from './helpers.js';
 
 export async function handleOverview(ctx, part, method) {
+  // ── 算力网关（new-api）：配置 / 测连 / 渠道 / 令牌分发 ──────────────────────
+  if (part === '/compute-gateway' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return { config: getComputeGatewayConfig() };
+  }
+  if (part === '/compute-gateway' && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const config = saveComputeGatewayConfig(ctx.body || {}, { password: ctx.body?.password });
+    audit(ctx, 'COMPUTE_GATEWAY_UPDATE', 'PLATFORM_SETTING', 'compute_gateway', null, { baseUrl: config.baseUrl, username: config.username, enabled: config.enabled, passwordChanged: Boolean(ctx.body?.password) });
+    return { config };
+  }
+  if (part === '/compute-gateway/test' && method === 'POST') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return testComputeGateway();
+  }
+  if (part === '/compute-gateway/channels' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return { items: await listGatewayChannels() };
+  }
+  if (part === '/compute-gateway/tokens' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return { items: await listGatewayTokens() };
+  }
+  if (part === '/compute-gateway/tokens' && method === 'POST') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const result = await createGatewayToken({
+      name: ctx.body?.name,
+      budgetFen: integer(ctx.body?.budgetFen, '额度（分）', { min: 0, max: 1000000000, fallback: 0 }),
+      models: String(ctx.body?.models || '').trim(),
+      unlimited: ctx.body?.unlimited === true,
+    });
+    audit(ctx, 'COMPUTE_GATEWAY_TOKEN_CREATE', 'PLATFORM_SETTING', 'compute_gateway', null, { name: String(ctx.body?.name || ''), budgetFen: Number(ctx.body?.budgetFen || 0), unlimited: ctx.body?.unlimited === true });
+    return result;
+  }
+
   if (part === '/dashboard/overview' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const orgFilter = String(ctx.search.get('orgId') || '').trim();

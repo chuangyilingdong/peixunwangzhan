@@ -1177,6 +1177,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS class_lesson_students (
 // P6-A01 AI provider policy and org budget migrations; safe for existing databases.
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN ai_provider_policy TEXT NOT NULL DEFAULT '{}'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 算力网关（new-api）：地址与管理员账号；管理员密码走加密密钥文件（providerSecret.js），不落库。
+try { db.exec("ALTER TABLE platform_settings ADD COLUMN compute_gateway TEXT NOT NULL DEFAULT '{}'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 db.exec(`CREATE TABLE IF NOT EXISTS org_ai_budgets (
   id TEXT NOT NULL PRIMARY KEY,
   org_id TEXT NOT NULL,
