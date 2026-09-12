@@ -136,7 +136,25 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
     return channel?.modelCapabilities?.[model] || capabilityDefaults[modality] || { aspectRatios: [], resolutions: [], durations: [], audio: false };
   }
   const deliveryMode = edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS';
+  // 上课类型改成可多选（画布 + VibeCoding，学生端两个入口并列）。老数据只有单值 → 读成单元素数组。
+  const deliveryModes = edit.deliveryModes ?? lesson.deliveryModes ?? [deliveryMode];
   const capabilities = edit.capabilities ?? lesson.capabilities ?? ['text'];
+  const offersCanvas = deliveryModes.includes('CANVAS');
+  const offersVibe = deliveryModes.includes('VIBECODING');
+  /** 勾/取消一种上课类型。两条规则：至少保留一种（否则这节课学生进不去）；勾了 VibeCoding 就把
+   *  「AI 文字」一起勾上 —— 发布校验要求 VibeCoding 课时必须开放 text，不自动勾上会被拦下来。 */
+  function toggleDeliveryMode(value) {
+    const next = deliveryModes.includes(value) ? deliveryModes.filter((item) => item !== value) : [...deliveryModes, value];
+    if (!next.length) return;
+    onChange((current) => {
+      const patch = { deliveryModes: next };
+      if (next.includes('VIBECODING')) {
+        const caps = current.capabilities ?? capabilities;
+        if (!caps.includes('text')) patch.capabilities = [...caps, 'text'];
+      }
+      return patch;
+    });
+  }
   const groups = edit.materialGroups ?? lesson.materialGroups ?? [];
   const classroomConfig = classroomConfigFor(lesson, edit);
   const [uploading, setUploading] = useState('');
@@ -247,8 +265,22 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
 
 
   return <div className="lesson-canvas-config-editor">
-    {deliveryMode === 'VIBECODING' ? <Notice>VibeCoding 课堂已上线：学生进入后与 AI 对话写代码。发布前请为本课时勾选「AI 文字」能力，否则发布会被拦下。</Notice> : <>
-      <div className="lesson-capability-checks"><strong>本课开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => toggleCapability(value, event.target.checked)} />{label}</label>)}</div>
+    <div className="lesson-delivery-modes">
+      {/* 复用「本课开放能力」那套类：flex + 复选框与文字同行（checkbox-option 是机构端的类，平台端没样式，
+          用它会让文字掉到复选框下面） */}
+      <div className="lesson-capability-checks"><strong>上课类型（可多选，学生端两个入口并列）</strong>
+        {[['CANVAS', '画布课堂'], ['VIBECODING', 'VibeCoding 课堂']].map(([value, label]) => (
+          <label key={value}><input type="checkbox" checked={deliveryModes.includes(value)} onChange={() => toggleDeliveryMode(value)} />{label}</label>
+        ))}
+      </div>
+      <p className="muted">{offersCanvas && offersVibe
+        ? '两种都开：学生在这节课可以选「画布创作」或「VibeCoding」进入，各自记进度与作品。'
+        : offersVibe
+          ? '只开 VibeCoding：学生进入后与 AI 对话写代码（已自动勾上「AI 文字」）。'
+          : '只开画布：学生进来后在画布里创作；下面按需要开放生图 / 生视频 / 音乐能力。'}</p>
+    </div>
+    <div className="lesson-capability-checks"><strong>本课开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => toggleCapability(value, event.target.checked)} />{label}</label>)}</div>
+    {offersVibe && !offersCanvas ? null : <>
       <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={addGroup}>＋素材组</button></div>
         {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={group.id || group.uid || `new-${groupIndex}`}>
           <div className="lesson-config-row"><input value={group.title || ''} placeholder={`素材${groupIndex + 1}`} onChange={(event) => updateGroup(groupIndex, { title: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => updateGroups((list) => list.filter((_, i) => i !== groupIndex))}>删除组</button></div>
@@ -301,11 +333,6 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
   // 上课类型改为可多选（画布 + VibeCoding 可同时开，学生端两个入口并列）。
   // 老数据只有单值 deliveryMode，这里统一读成数组再编辑。
   const deliveryModes = edit.deliveryModes ?? lesson.deliveryModes ?? [lesson.deliveryMode || 'CANVAS'];
-  function toggleDeliveryMode(mode) {
-    const next = deliveryModes.includes(mode) ? deliveryModes.filter((item) => item !== mode) : [...deliveryModes, mode];
-    if (!next.length) { setMessage('至少保留一种上课类型'); return; }
-    update({ deliveryModes: next });
-  }
 
   async function save() {
     setBusy(true); setMessage('');
@@ -345,14 +372,7 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
         </section>
         <section className="drawer-section">
           <h3>上课类型与算力预算</h3>
-          <label>上课类型（可多选，学生端两个入口并列）</label>
-          <div className="row-actions">
-            {[['CANVAS', '画布课堂'], ['VIBECODING', 'VibeCoding 课堂']].map(([value, label]) => (
-              <label key={value} className="checkbox-option">
-                <input type="checkbox" checked={deliveryModes.includes(value)} onChange={() => toggleDeliveryMode(value)} />{label}
-              </label>
-            ))}
-          </div>
+          <p className="muted">上课类型在下面的「课堂配置」里勾（可多选，学生端两个入口并列）。</p>
           <p className="muted">算力上限已经挪到**课包**上（一个学生在一个课包上就一个池子，对话 / 图片 / 视频 / 音乐四种调用共用它）—— 到课包详情的「每学生算力上限（元）」里填。</p>
         </section>
         <section className="drawer-section">
@@ -373,7 +393,8 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
 const CREATE_STEPS = ['基本信息', '课时与课堂配置', '更多设置', '完成并发布'];
 
 function emptyLessonDraft() {
-  return { title: '', capabilities: ['text'], materialGroups: [], teachingGroups: [], classroomConfig: {} };
+  // 默认「画布课堂」（与改造前一致，不会让既有习惯的人建出不一样的东西）
+  return { title: '', deliveryModes: ['CANVAS'], capabilities: ['text'], materialGroups: [], teachingGroups: [], classroomConfig: {} };
 }
 
 function CreateCourseModal({ api, onClose, onCreated }) {
@@ -416,10 +437,15 @@ function CreateCourseModal({ api, onClose, onCreated }) {
         stockTotal: Number(form.stockTotal || 0),
         // 算力池：每学生在这个课包上的总预算（元 → 分）；留空 = 不限制、只记账
         perStudentBudgetFen: String(form.perStudentBudgetYuan || '').trim() === '' ? null : Math.round(Number(form.perStudentBudgetYuan) * 100),
-        deliveryMode: form.deliveryMode || 'CANVAS',
+        // 课包层的课堂类型只是「新课时的默认值」：取第一节的第一种，别用一个写死的常量
+        // （否则课包默认值和你在课时里选的实际类型会打架）。
+        deliveryMode: (lessons[0]?.deliveryModes || ['CANVAS'])[0] || 'CANVAS',
         // 选择「立即发布」时课时一并置为已发布，否则保持草稿、等待后续再发布。
         lessons: lessons.map((lesson) => ({
           title: String(lesson.title).trim(), status: publishNow ? 'PUBLISHED' : 'DRAFT',
+          // ⚠️ 每节课的上课类型必须带上：向导以前**根本没发这个字段**，于是所有课时都被建成画布课堂，
+          //    勾的「AI 文字」配在画布课上、学生又进不了 VibeCoding —— 能力选择看着就没意义。
+          deliveryModes: lesson.deliveryModes && lesson.deliveryModes.length ? lesson.deliveryModes : ['CANVAS'],
           capabilities: lesson.capabilities, materialGroups: lesson.materialGroups,
           teachingGroups: lesson.teachingGroups, classroomConfig: lesson.classroomConfig,
         })),

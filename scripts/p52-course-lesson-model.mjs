@@ -81,6 +81,10 @@ try {
         lesson('只画布课时', { deliveryMode: 'CANVAS' }),
         lesson('只 Vibe 课时', { deliveryMode: 'VIBECODING' }),
         lesson('待改类型课时', { deliveryMode: 'CANVAS' }),
+        // ⚠️ 只传 deliveryModes（数组）、不传老字段 —— 这正是平台端「新建课包向导」发的形状。
+        //    以前这种形状会让老列 delivery_mode 停在默认的 CANVAS（向导建出来的 VibeCoding 课时
+        //    在按老列读的地方会显示成画布课堂），2026-09-12 修掉并在这里钉住。
+        lesson('只 Vibe 用数组课时', { deliveryModes: ['VIBECODING'] }),
       ],
     },
   });
@@ -100,6 +104,9 @@ try {
   check('只画布课时读回单元素数组', JSON.stringify(canvasOnly.deliveryModes) === '["CANVAS"]', JSON.stringify(canvasOnly.deliveryModes));
   check('只 Vibe 课时读回单元素数组', JSON.stringify(vibeOnly.deliveryModes) === '["VIBECODING"]', JSON.stringify(vibeOnly.deliveryModes));
   check('没配预算的课时读回 null（不拦，只记账）', canvasOnly.perStudentBudgetFen === null, String(canvasOnly.perStudentBudgetFen));
+  const arrayOnly = byTitle(lessons, '只 Vibe 用数组课时');
+  check('只传数组也能读回单元素类型', JSON.stringify(arrayOnly.deliveryModes) === '["VIBECODING"]', JSON.stringify(arrayOnly.deliveryModes));
+  check('★ 只传数组时老字段同步成数组第一种（向导发的就是这种形状）', arrayOnly.deliveryMode === 'VIBECODING', String(arrayOnly.deliveryMode));
 
   // ③ 编辑：把「只画布」改成两种都开
   const updated = await api(`/api/admin/course-lessons/${toChange.id}`, { method: 'PUT', token: rootAdmin, body: { deliveryModes: ['VIBECODING', 'CANVAS'] } });
