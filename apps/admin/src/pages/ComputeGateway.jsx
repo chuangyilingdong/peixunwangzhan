@@ -150,6 +150,21 @@ export function ComputeGateway({ api }) {
                 </tbody></table></div> : <p className="muted">这段时间里没有可归集到{unit}的消耗。</p>}
               </div>
             ))}
+            {usage.byLessonBudget?.length ? <>
+              <h4 className="top-gap">课时预算对照（实际消耗 ÷ 这节课的总预算）</h4>
+              <p className="muted">总预算 = 每学生上限 × 参与学生数（排课名单人数），加人会自动放大。视频与音乐目前不走网关，不在这张表里。</p>
+              <div className="table-wrap"><table><thead><tr><th>课时</th><th>每学生上限</th><th>参与学生数</th><th>这节课总预算</th><th>实际消耗</th><th>使用率</th></tr></thead><tbody>
+                {usage.byLessonBudget.map((item) => <tr key={item.lessonId}>
+                  <td><strong>{item.lessonTitle || item.lessonId}</strong><div className="muted">{item.lessonId}</div></td>
+                  <td>{yuan(item.perStudentYuan)}</td>
+                  <td>{item.studentCount}</td>
+                  <td>{yuan(item.budgetYuan)}</td>
+                  <td><strong>{yuan(item.usedYuan)}</strong><div className="muted">{item.calls} 次调用</div></td>
+                  <td>{item.usagePercent == null ? <span className="muted">还没排学生</span>
+                    : <span className={item.usagePercent >= 100 ? 'status danger' : item.usagePercent >= 80 ? 'status warn' : ''}>{item.usagePercent}%</span>}</td>
+                </tr>)}
+              </tbody></table></div>
+            </> : null}
             {usage.unattributed?.length ? <>
               <h4 className="top-gap">未归属（令牌名没按「机构:编号 / 学生:编号 / 课时:编号」命名）</h4>
               <p className="muted">这些消耗金额已算进「合计」，但还原不到具体机构/学员/课时。改掉令牌名或按约定重新分发即可归位。</p>

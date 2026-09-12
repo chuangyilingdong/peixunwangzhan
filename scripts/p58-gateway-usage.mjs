@@ -17,6 +17,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p58-gateway-usage-'));
@@ -39,14 +40,33 @@ await run(['packages/database/src/seed.js']);
 // 归集口径的一部分直接断言被测函数。⚠️ 必须先设好库路径再动态导入 ——
 // computeGateway 会连带加载 lib.js 并把库打开，静态 import 会碰到本地开发库。
 Object.assign(process.env, { PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' });
-const { aggregateUsage } = await import('../apps/server/src/services/computeGateway.js');
+const { aggregateUsage, lessonBudgetOverview } = await import('../apps/server/src/services/computeGateway.js');
+
+// 「课时预算对照」要的种子数据：两节课有每学生预算（50 元 / 20 元），排课名单里分别 3 人 / 2 人；
+// 再有一节没有任何预算（不该出现在对照表里）。直接改库，趁服务还没起。
+const seededLessons = { budgeted: '', halfBudgeted: '', noBudget: '', rosterCount: 0 };
+{
+  const db = new DatabaseSync(dbPath);
+  const lessons = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 3').all().map((item) => item.id);
+  [seededLessons.budgeted, seededLessons.halfBudgeted, seededLessons.noBudget] = lessons;
+  db.prepare('UPDATE course_lessons SET per_student_budget_fen=NULL').run();
+  db.prepare('UPDATE course_lessons SET per_student_budget_fen=5000 WHERE id=?').run(seededLessons.budgeted);
+  db.prepare('UPDATE course_lessons SET per_student_budget_fen=2000 WHERE id=?').run(seededLessons.halfBudgeted);
+  // ⚠️ 人数从库里读出来当期望值，别写死（种子库里的学生数是会变的 —— 本轮第一次就写死了 3 人）
+  const students = db.prepare("SELECT id FROM users WHERE role='STUDENT' LIMIT 3").all().map((item) => item.id);
+  seededLessons.rosterCount = students.length;
+  const klass = db.prepare('SELECT id FROM classes LIMIT 1').get()?.id || null;
+  const roster = db.prepare("INSERT OR IGNORE INTO class_lesson_students(class_id,lesson_id,student_id,added_at) VALUES (?,?,?,datetime('now'))");
+  for (const student of students) roster.run(klass, seededLessons.budgeted, student);
+  db.close();
+}
 
 // 假网关：登录 + 用量日志。第一页刻意凑成**满页 100 条**（真实网关一页 100 条），
 // 于是「不认 p 参数」时第二页会原样重复 —— 这才是能触发重复累加的真实形状。
 const LOG_ROWS = [
   { id: 101, token_name: '机构:org_demo', quota: 2500000, model_name: 'gpt-x' },
   { id: 102, token_name: '学生:user_demo', quota: 500000, model_name: 'gpt-x' },
-  { id: 103, token_name: '课时:lesson_demo', quota: 1000000, model_name: 'gpt-x' },
+  { id: 103, token_name: `课时:${seededLessons.budgeted}`, quota: 1000000, model_name: 'gpt-x' },
   { id: 104, token_name: '学生:user_demo', quota: 500000, model_name: 'gpt-x' },
   { id: 105, token_name: '随手建的令牌', quota: 100000, model_name: 'gpt-x' },
   // 95 条填充（额度和名字都刻意做成不影响金额断言）：只为把这一页撑满
@@ -84,7 +104,7 @@ try {
   check('能读网关用量并归集', usage.status === 200 && usage.data.calls === 100, JSON.stringify(usage.data).slice(0, 160));
   check('按机构归集（5 元）', usage.data.byOrg?.[0]?.key === 'org_demo' && usage.data.byOrg[0].yuan === 5, JSON.stringify(usage.data.byOrg));
   check('按学员归集（同一学员两次合计 2 元 / 2 次）', usage.data.byStudent?.[0]?.key === 'user_demo' && usage.data.byStudent[0].yuan === 2 && usage.data.byStudent[0].calls === 2, JSON.stringify(usage.data.byStudent));
-  check('按课时归集（2 元）', usage.data.byLesson?.[0]?.key === 'lesson_demo' && usage.data.byLesson[0].yuan === 2, JSON.stringify(usage.data.byLesson));
+  check('按课时归集（2 元）', usage.data.byLesson?.[0]?.key === seededLessons.budgeted && usage.data.byLesson[0].yuan === 2, JSON.stringify(usage.data.byLesson));
   check('没按约定命名的令牌单列「未归属」', usage.data.unattributed?.length === 1 && usage.data.unattributed[0].key === '随手建的令牌', JSON.stringify(usage.data.unattributed));
   check('合计元数 = 各维度之和（9.2）', usage.data.totalYuan === 9.2, String(usage.data.totalYuan));
   check('额度换算单位随配置返回（默认 500000 = 1 元）', usage.data.quotaPerUnit === 500000, String(usage.data.quotaPerUnit));
@@ -101,6 +121,19 @@ try {
     && multi.byOrg[0].yuan === 3 && multi.byStudent[0].yuan === 3 && multi.byLesson[0].yuan === 3,
     JSON.stringify({ org: multi.byOrg, student: multi.byStudent, lesson: multi.byLesson }));
   check('多段令牌名不算「未归属」', multi.unattributed.length === 0, JSON.stringify(multi.unattributed));
+
+  // 课时预算对照：总预算 = 每学生上限 × 参与学生数（加人自动放大），实际 = 网关按课时归集的合计
+  const comparison = lessonBudgetOverview({ byLesson: usage.data.byLesson });
+  const budgeted = comparison.find((item) => item.lessonId === seededLessons.budgeted);
+  const halfBudgeted = comparison.find((item) => item.lessonId === seededLessons.halfBudgeted);
+  const people = seededLessons.rosterCount;
+  check(`预算对照：总预算 = 每学生 50 元 × ${people} 人 = ${50 * people} 元`,
+    budgeted?.budgetYuan === 50 * people && budgeted?.studentCount === people, JSON.stringify(budgeted));
+  check('预算对照：实际消耗挂上网关日志（2 元 / 1 次）', budgeted?.usedYuan === 2 && budgeted?.calls === 1, JSON.stringify(budgeted));
+  check(`预算对照：使用率 = 2 ÷ ${50 * people} = ${Number(((2 / (50 * people)) * 100).toFixed(1))}%`,
+    budgeted?.usagePercent === Number(((2 / (50 * people)) * 100).toFixed(1)), String(budgeted?.usagePercent));
+  check('预算对照：没排学生的课时不给百分比（避免出现除零/∞%）', halfBudgeted?.usagePercent === null && halfBudgeted?.studentCount === 0, JSON.stringify(halfBudgeted));
+  check('预算对照：没填预算的课时不出现', !comparison.some((item) => item.lessonId === seededLessons.noBudget), JSON.stringify(comparison.map((item) => item.lessonId)));
 
   console.log(JSON.stringify({ name: 'gateway-usage', pass: failures === 0, failures }, null, 2));
 } catch (error) {

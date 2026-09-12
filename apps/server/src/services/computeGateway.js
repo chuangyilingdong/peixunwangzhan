@@ -8,7 +8,7 @@
 //     用量日志按令牌名解析即可还原「哪个机构/哪个学生/哪节课花了多少」，不需要动它一行代码。
 import { errors } from '../lib.js';
 import { getProviderApiKey, setProviderApiKey } from './providerSecret.js';
-import { row, q, nowIso, parseJson, json } from '../lib.js';
+import { row, rows, q, nowIso, parseJson, json } from '../lib.js';
 
 const ADMIN_SECRET_KEY = 'compute-gateway-admin';
 
@@ -243,12 +243,56 @@ export function aggregateUsage(rowsInput, { quotaPerUnit = 500000 } = {}) {
   };
 }
 
+/**
+ * 课时预算对照：把网关的实际消耗挂回「这节课的总预算」上。
+ *
+ * 口径（2026-09-11 用户答复）：预算**按学生算** —— 每学生 50 元，机构加 5 个学生，这节课就是 250 元。
+ * 所以总预算 = 每学生上限 × 参与学生数（排课名单 `class_lesson_students` 里的去重人数），
+ * 加人会**自动放大**预算；实际消耗取网关日志按「课时」维度的合计（同一张令牌名里的课时段）。
+ *
+ * ⚠️ 两个已知边界（写在这里免得被当成 bug）：
+ *   ① 用量日志里那张令牌是 `…/课时:<id>`，所以实际消耗能按课时归集 —— 与预算同源，口径一致；
+ *   ② 视频/音乐目前不走网关（异步任务要写 new-api 插件，见 7.2.3），**它们的花费不在这一列里**。
+ */
+export function lessonBudgetOverview({ byLesson = [] } = {}) {
+  const budgetRows = rows(
+    `SELECT lesson.id AS lesson_id, lesson.title AS lesson_title,
+            lesson.per_student_budget_fen AS per_student_fen,
+            (SELECT COUNT(DISTINCT roster.student_id)
+               FROM class_lesson_students roster
+              WHERE roster.lesson_id = lesson.id) AS student_count
+       FROM course_lessons lesson
+      WHERE lesson.per_student_budget_fen IS NOT NULL AND lesson.per_student_budget_fen > 0`,
+  );
+  const toYuan = (fen) => Number((Number(fen || 0) / 100).toFixed(2));
+  const actualOf = new Map((Array.isArray(byLesson) ? byLesson : []).map((item) => [String(item.key), item]));
+  return budgetRows.map((item) => {
+    const perStudentFen = Number(item.per_student_fen || 0);
+    const studentCount = Number(item.student_count || 0);
+    const budgetFen = perStudentFen * studentCount;
+    const used = actualOf.get(String(item.lesson_id)) || { calls: 0, yuan: 0 };
+    const usedFen = Math.round(Number(used.yuan || 0) * 100);
+    return {
+      lessonId: item.lesson_id, lessonTitle: item.lesson_title,
+      perStudentYuan: toYuan(perStudentFen), studentCount,
+      budgetYuan: toYuan(budgetFen),
+      usedYuan: Number(Number(used.yuan || 0).toFixed(2)),
+      calls: Number(used.calls || 0),
+      // 没有学生参与时预算为 0：不给百分比（否则会出现除零或「∞%」这种看不懂的数）
+      usagePercent: budgetFen > 0 ? Number(((usedFen / budgetFen) * 100).toFixed(1)) : null,
+    };
+  }).sort((a, b) => Number(b.usedYuan || 0) - Number(a.usedYuan || 0));
+}
+
 /** 平台端用：读日志并归集（默认近 7 天） */
 export async function gatewayUsageOverview({ days = 7 } = {}) {
   const config = getComputeGatewayConfig();
   const rowsOut = await listGatewayLogs({ days });
   const summary = aggregateUsage(rowsOut, { quotaPerUnit: config.quotaPerUnit || 500000 });
-  return { days, quotaPerUnit: config.quotaPerUnit || 500000, ...summary };
+  return {
+    days, quotaPerUnit: config.quotaPerUnit || 500000, ...summary,
+    byLessonBudget: lessonBudgetOverview({ byLesson: summary.byLesson }),
+  };
 }
 
 /* ───────────────────────── 令牌路由：把 AI 调用真的接到网关 ─────────────────────────
