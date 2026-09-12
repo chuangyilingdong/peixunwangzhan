@@ -1,9 +1,9 @@
 // 官网 - 我的作品
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pagination } from '@platform/shared';
+import { Pagination, workPlazaLabel } from '@platform/shared';
 
-const WORK_STATUS_LABELS = { PENDING: '已提交', APPROVED: '已通过', PUBLISHED: '已发布到作品广场', REJECTED: '已下架' };
+// 状态话术统一走 @platform/shared 的 worksState（两条链路一套词，这里不再自己维护一份）
 
 function formatDate(value) {
   if (!value) return '—';
@@ -49,7 +49,7 @@ export function MyWorksPage({ api }) {
     {items.length ? <div className="student-card-grid">{items.map((work) => <article className="student-card" key={work.id}>
       <div className="student-card__head">
         <h3>{work.title}</h3>
-        <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{WORK_STATUS_LABELS[work.status] || work.status}</span>
+        <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{workPlazaLabel(work)}</span>
       </div>
       <p className="student-card__meta">{work.courseLessonTitle || '未绑定课时'} · {work.className || '未绑定班级'}</p>
       {work.description ? <p className="student-card__desc">{work.description}</p> : null}

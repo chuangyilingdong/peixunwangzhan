@@ -5,7 +5,7 @@ import { scheduleReminder } from './communication.js';
 import { assertTransition } from '../services/domainState.js';
 import { computePoolSummary } from '../services/computePool.js';
 
-import { ensureOrgBilling, integer, orgId, orgUser, hasPermission, classInOrg, assertTeachingClassManager, accessibleLesson, accessibleSeries, ORG_MEMBER_ROLES, validateMemberPhone, validateMemberPermissions, classMemberships, orgMemberRow, ENROLLMENT_STATUSES, PAYMENT_STATUSES, packageSnapshot, enrollmentDate, enrollmentRow, normalizeEnrollment, appendEnrollmentEvent, expireDueEnrollments, occupiedStudentSeats, assertEnrollmentSeat, setStudentEnrollmentAccess, packageWithSeatUsage, teacherCanAccessClass, teacherScope, classSessionRows, classProgressRows, classDetail, previewImport, createMember, validateTeacher, curriculumItem, workInReviewScope, workReportRows, workReportInReviewScope, reportResolution, normalizeWorkPublishRequest, orgWorkPublishRequestRow, orgWorkPublishRequestRows } from './adminOrg.js';
+import { ensureOrgBilling, integer, orgId, orgUser, hasPermission, classInOrg, assertTeachingClassManager, accessibleLesson, accessibleSeries, ORG_MEMBER_ROLES, validateMemberPhone, validateMemberPermissions, classMemberships, orgMemberRow, ENROLLMENT_STATUSES, PAYMENT_STATUSES, packageSnapshot, enrollmentDate, enrollmentRow, normalizeEnrollment, appendEnrollmentEvent, expireDueEnrollments, occupiedStudentSeats, assertEnrollmentSeat, setStudentEnrollmentAccess, packageWithSeatUsage, teacherCanAccessClass, teacherScope, classSessionRows, classProgressRows, classDetail, previewImport, createMember, validateTeacher, curriculumItem, workInReviewScope, workReportRows, workReportInReviewScope, reportResolution, normalizeWorkPublishRequest } from './adminOrg.js';
 export async function handleOrg(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/')) return null;
@@ -643,66 +643,6 @@ export async function handleOrg(ctx) {
     });
     audit(ctx, featured ? 'ORG_WORK_FEATURE' : 'ORG_WORK_UNFEATURE', 'WORK', work.id, normalizeWork(work), { featured, reason: reason || null }, { orgId: currentOrgId });
     return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
-  }
-
-  if (part === '/work-publish-requests' && method === 'GET') {
-    const params = [currentOrgId]; let where = 'request.org_id=?';
-    if (auth.user.role === 'TEACHER') {
-      where += ` AND (class.teacher_id=? OR EXISTS (
-        SELECT 1 FROM class_members scoped_member
-        WHERE scoped_member.class_id=class.id AND scoped_member.user_id=?
-          AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL
-      ))`;
-      params.push(auth.user.id, auth.user.id);
-    }
-    const status = ctx.search.get('status');
-    if (['PENDING','APPROVED','REJECTED','WITHDRAWN'].includes(status)) { where += ' AND request.status=?'; params.push(status); }
-    const items = rows(
-      `SELECT request.*, work.title AS work_title, work.status AS work_status, work.class_id AS work_class_id,
-              student.display_name AS student_name, handler.display_name AS handler_name
-       FROM work_publish_requests request
-       JOIN works work ON work.id=request.work_id AND work.org_id=request.org_id
-       JOIN users student ON student.id=request.student_id AND student.org_id=request.org_id
-       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
-       LEFT JOIN users handler ON handler.id=request.resolved_by
-       WHERE ${where}
-       ORDER BY CASE request.status WHEN 'PENDING' THEN 0 ELSE 1 END, request.requested_at DESC`,
-      params,
-    ).map(orgWorkPublishRequestRow);
-    return { items, total: items.length, pending: items.filter((item) => item.status === 'PENDING').length };
-  }
-
-  let publishRequestMatch = part.match(/^\/work-publish-requests\/([^/]+)$/);
-  if (publishRequestMatch && method === 'PUT') {
-    const requestRow = row('SELECT * FROM work_publish_requests WHERE id=? AND org_id=?', [publishRequestMatch[1], currentOrgId]);
-    if (!requestRow) throw errors.notFound('发布申请不存在', 'WORK_PUBLISH_REQUEST_NOT_FOUND');
-    const work = workInReviewScope(auth, currentOrgId, requestRow.work_id);
-    if (requestRow.status !== 'PENDING') throw errors.conflict('发布申请已处理，不能重复处理', 'WORK_PUBLISH_REQUEST_ALREADY_HANDLED');
-    const status = String(ctx.body?.status || '').toUpperCase();
-    if (!['APPROVED','REJECTED'].includes(status)) throw errors.badRequest('发布申请处理状态无效', 'INVALID_WORK_PUBLISH_REQUEST_STATUS');
-    assertTransition(ctx, 'workPublishRequest', requestRow.status, status, { targetType: 'WORK_PUBLISH_REQUEST', targetId: requestRow.id, before: normalizeWorkPublishRequest(requestRow), code: 'INVALID_WORK_PUBLISH_REQUEST_TRANSITION', message: '发布申请当前状态不允许处理' });
-    const resolution = String(ctx.body?.resolution || '').trim();
-    if (resolution.length > 2000) throw errors.badRequest('处理说明不能超过 2000 个字符', 'WORK_PUBLISH_RESOLUTION_TOO_LONG');
-    if (status === 'APPROVED' && work.status !== 'APPROVED') throw errors.conflict('仅审核通过的作品可以批准发布', 'WORK_NOT_APPROVED');
-    if (status === 'APPROVED' && !work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
-    const now = nowIso();
-    transaction(() => {
-      q(
-        'UPDATE work_publish_requests SET status=?,resolved_at=?,resolved_by=?,resolution=?,updated_at=? WHERE id=? AND org_id=? AND status=?',
-        [status, now, auth.user.id, resolution, now, requestRow.id, currentOrgId, 'PENDING'],
-      );
-      if (status === 'APPROVED') {
-        q(
-          `UPDATE works SET status='PUBLISHED',reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL
-           WHERE id=? AND org_id=? AND status='APPROVED'`,
-          [auth.user.id, now, work.id, currentOrgId],
-        );
-        const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
-        if (latestSubmission) q('UPDATE work_submissions SET review_status=?,reviewed_at=?,updated_at=? WHERE id=?', ['PUBLISHED', now, now, latestSubmission.id]);
-      }
-    });
-    audit(ctx, status === 'APPROVED' ? 'WORK_PUBLISH_REQUEST_APPROVE' : 'WORK_PUBLISH_REQUEST_REJECT', 'WORK_PUBLISH_REQUEST', requestRow.id, normalizeWorkPublishRequest(requestRow), { status, resolution, workId: work.id }, { orgId: currentOrgId });
-    return orgWorkPublishRequestRows('request.id=?', [requestRow.id])[0];
   }
 
   // 排课候选：这节课谁能上。规则（用户口径）——有该课包许可，且**没上过这节课**（以是否提交过作品判定，跨班级跨课堂）。

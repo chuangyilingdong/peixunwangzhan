@@ -852,31 +852,6 @@ function normalizeWorkPublishRequest(request) {
   };
 }
 
-function orgWorkPublishRequestRow(request) {
-  return {
-    ...normalizeWorkPublishRequest(request),
-    workTitle: request.work_title || null,
-    workStatus: request.work_status || null,
-    studentName: request.student_name || null,
-    handlerName: request.handler_name || null,
-  };
-}
-
-function orgWorkPublishRequestRows(where = '1=1', params = []) {
-  return rows(
-    `SELECT request.*, work.title AS work_title, work.status AS work_status, work.class_id AS work_class_id,
-            student.display_name AS student_name, handler.display_name AS handler_name
-     FROM work_publish_requests request
-     JOIN works work ON work.id=request.work_id AND work.org_id=request.org_id
-     JOIN users student ON student.id=request.student_id AND student.org_id=request.org_id
-     LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
-     LEFT JOIN users handler ON handler.id=request.resolved_by
-     WHERE ${where}
-     ORDER BY CASE request.status WHEN 'PENDING' THEN 0 ELSE 1 END, request.requested_at DESC`,
-    params,
-  ).map(orgWorkPublishRequestRow);
-}
-
 
 function organizationRow(orgId) {
   const organization = row('SELECT * FROM organizations WHERE id=?', [orgId]);
@@ -1120,8 +1095,6 @@ export {
   orgId,
   orgMemberRow,
   orgUser,
-  orgWorkPublishRequestRow,
-  orgWorkPublishRequestRows,
   organizationFilters,
   organizationRow,
   packageSnapshot,

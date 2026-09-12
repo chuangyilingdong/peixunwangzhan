@@ -990,48 +990,6 @@ export async function handleStudent(ctx) {
   }
 
 
-  match = part.match(/^\/works\/([^/]+)\/publish-request\/withdraw$/);
-  if (match && method === 'POST') {
-    const work = getOwnWork(ctx, match[1]);
-    const requestRow = row("SELECT * FROM work_publish_requests WHERE work_id=? AND student_id=? AND org_id=? AND status='PENDING' ORDER BY requested_at DESC LIMIT 1", [work.id, ctx.auth.user.id, work.org_id]);
-    if (!requestRow) throw errors.notFound('没有可撤回的发布申请', 'WORK_PUBLISH_REQUEST_NOT_FOUND');
-    assertTransition(ctx, 'workPublishRequest', requestRow.status, 'WITHDRAWN', {
-      targetType: 'WORK_PUBLISH_REQUEST', targetId: requestRow.id, before: normalizeWorkPublishRequest(requestRow),
-      code: 'INVALID_WORK_PUBLISH_REQUEST_TRANSITION', message: '发布申请当前状态不允许撤回', details: { action: 'withdraw' },
-    });
-    const now = nowIso();
-    q(
-      "UPDATE work_publish_requests SET status='WITHDRAWN',resolved_at=?,resolved_by=?,resolution='学生撤回',updated_at=? WHERE id=? AND status='PENDING'",
-      [now, ctx.auth.user.id, now, requestRow.id],
-    );
-    audit(ctx, 'WORK_PUBLISH_REQUEST_WITHDRAW', 'WORK_PUBLISH_REQUEST', requestRow.id, normalizeWorkPublishRequest(requestRow), null);
-    return normalizeWorkPublishRequest(row('SELECT * FROM work_publish_requests WHERE id=?', [requestRow.id]));
-  }
-
-  match = part.match(/^\/works\/([^/]+)\/publish-request$/);
-  if (match && method === 'POST') {
-    const work = getOwnWork(ctx, match[1]);
-    if (work.status !== 'APPROVED') {
-      throw errors.conflict('作品通过审核后才能申请发布', 'WORK_NOT_APPROVED_FOR_PUBLISH_REQUEST');
-    }
-    if (!work.copyright_confirmed_at) throw errors.conflict('请先确认作品版权与机构内展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
-    const pending = row("SELECT id FROM work_publish_requests WHERE work_id=? AND status='PENDING'", [work.id]);
-    if (pending) throw errors.conflict('该作品已有待处理的发布申请', 'WORK_PUBLISH_REQUEST_ALREADY_PENDING');
-    const reason = String(ctx.body?.reason || '').trim();
-    if (reason.length > 1000) throw errors.badRequest('申请说明不能超过 1000 个字符', 'WORK_PUBLISH_REQUEST_REASON_TOO_LONG');
-    const round = currentSubmissionRound(work.id);
-    const requestId = id('publish_request');
-    const now = nowIso();
-    q(
-      `INSERT INTO work_publish_requests(
-        id,work_id,project_id,student_id,org_id,round,status,reason,requested_at,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      [requestId, work.id, work.project_id, ctx.auth.user.id, work.org_id, round, 'PENDING', reason, now, now, now],
-    );
-    audit(ctx, 'WORK_PUBLISH_REQUEST_CREATE', 'WORK_PUBLISH_REQUEST', requestId, null, { workId: work.id, round, reason });
-    return normalizeWorkPublishRequest(row('SELECT * FROM work_publish_requests WHERE id=?', [requestId]));
-  }
-  // P5-W04: 学员端作品公开分享开关
   match = part.match(/^\/works\/([^/]+)\/public$/);
   if (match && method === 'PUT') {
     const work = getOwnWork(ctx, match[1]);
