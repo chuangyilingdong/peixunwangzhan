@@ -14,6 +14,7 @@ import { effectiveCapabilities, normalizeAspectRatio } from '../../services/mode
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
 import {
+  capturePublishedContent,
   ENROLLMENT_STATUSES,
   ORG_MEMBER_ROLES,
   ORG_TEACHER_PERMISSIONS,
@@ -216,7 +217,10 @@ export async function handleCourses(ctx, part, method) {
       q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [version, now, series.id]);
       audit(ctx, 'COURSE_SERIES_VERSION_PUBLISH', 'COURSE_SERIES', series.id, { version: series.version }, { version, note });
     });
-    return { id: versionId, version, note, publishedAt: now };
+    // 草稿隔离的落点：把当前内容定格成「已发布内容」，机构端/学生端/官网从这一刻起读到的就是它
+    // （放在事务外：capturePublishedContent 自己会开一个事务，嵌套会抛错）
+    const captured = capturePublishedContent(series.id, now);
+    return { id: versionId, version, note, publishedAt: now, capturedLessons: captured.lessons };
   }
 
   let seriesDetailMatch = part.match(/^\/course-series\/([^/]+)\/detail$/);
@@ -334,6 +338,7 @@ export async function handleCourses(ctx, part, method) {
     if (transition.requireLessons) validateSeriesForPublishing(series.id);
     const before = normalizeSeries(series);
     q('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, nowIso(), series.id]);
+    if (transition.to === 'PUBLISHED') capturePublishedContent(series.id);
     const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, transition.auditAction, 'COURSE_SERIES', series.id, { status: before.status }, { action, status: after.status });
     return after;

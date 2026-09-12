@@ -38,7 +38,7 @@ const PROJECT_DELETE_RESTORE_DAYS = 30;
 
 function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted = false } = {}) {
   const project = row(
-    `SELECT project.*, lesson.title AS lesson_title,
+    `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
             series.id AS series_id, series.title AS series_title,
             class.name AS class_name,
             work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
@@ -57,7 +57,7 @@ function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted
 }
 function fetchProject(ctx, projectId, { includeDeleted = false } = {}) {
   return row(
-    `SELECT project.*, lesson.title AS lesson_title,
+    `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
             series.id AS series_id, series.title AS series_title,
             class.name AS class_name,
             work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
@@ -74,7 +74,7 @@ function fetchProject(ctx, projectId, { includeDeleted = false } = {}) {
 function fetchWork(ctx, workId) {
   return row(
     `SELECT work.*, student.display_name AS student_name, class.name AS class_name,
-            lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
+            COALESCE(lesson.published_title, lesson.title) AS lesson_title, reviewer.display_name AS reviewer_name
      FROM works work
      JOIN users student ON student.id = work.student_id AND student.org_id = work.org_id
      LEFT JOIN classes class ON class.id = work.class_id AND class.org_id = work.org_id
@@ -265,7 +265,7 @@ function studentUsageOverview(ctx) {
   const params = [ctx.auth.user.id, ctx.auth.user.orgId, since];
   if (modality) { filters.push('usage.modality = ?'); params.push(modality); }
   if (status) { filters.push('usage.status = ?'); params.push(status); }
-  const records = rows('SELECT usage.*, project.title AS project_title, project.course_lesson_id AS project_lesson_id, lesson.title AS lesson_title, class.name AS class_name FROM usage_records usage LEFT JOIN student_projects project ON project.id = usage.project_id AND project.student_id = usage.user_id AND project.org_id = usage.org_id LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id LEFT JOIN class_sessions session ON session.id = usage.class_session_id LEFT JOIN classes class ON class.id = session.class_id WHERE ' + filters.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200', params);
+  const records = rows('SELECT usage.*, project.title AS project_title, project.course_lesson_id AS project_lesson_id, COALESCE(lesson.published_title, lesson.title) AS lesson_title, class.name AS class_name FROM usage_records usage LEFT JOIN student_projects project ON project.id = usage.project_id AND project.student_id = usage.user_id AND project.org_id = usage.org_id LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id LEFT JOIN class_sessions session ON session.id = usage.class_session_id LEFT JOIN classes class ON class.id = session.class_id WHERE ' + filters.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200', params);
   const byModality = new Map();
   for (const record of records) {
     const summary = byModality.get(record.modality) || { modality: record.modality, totalCredits: 0, recordCount: 0 };
@@ -419,7 +419,7 @@ export async function handleStudent(ctx) {
   if (part === '/learning/overview' && method === 'GET') {
     const courses = getStudentAccessibleCourses(auth.rawUser);
     const lessons = courses.flatMap((course) => (course.lessons || []).map((lesson) => ({ ...lesson, courseId: course.id, courseTitle: course.title })));
-    const progress = rows(`SELECT progress.*, lesson.title AS lesson_title, series.title AS series_title
+    const progress = rows(`SELECT progress.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title, series.title AS series_title
       FROM student_lesson_progress progress
       JOIN course_lessons lesson ON lesson.id=progress.lesson_id
       JOIN course_series series ON series.id=lesson.series_id
@@ -623,7 +623,7 @@ export async function handleStudent(ctx) {
        WHERE ${where}`;
     const total = Number(row(`SELECT COUNT(DISTINCT project.id) n ${fromWhere}`, params)?.n || 0);
     const items = rows(
-      `SELECT project.*, lesson.title AS lesson_title,
+      `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
               series.id AS series_id, series.title AS series_title,
               class.name AS class_name,
               work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
@@ -1055,7 +1055,7 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/works\/([^/]+)$/);
   if (match && method === 'GET') {
     const work = row(
-      `SELECT work.*, class.name AS class_name, lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
+      `SELECT work.*, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title, reviewer.display_name AS reviewer_name
        FROM works work
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
        LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
@@ -1090,7 +1090,7 @@ export async function handleStudent(ctx) {
     const where = conditions.join(' AND ');
     const total = Number(row(`SELECT COUNT(1) AS total FROM works work LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE ${where}`, params).total || 0);
     const filterOptions = rows(
-      `SELECT class.id AS class_id, class.name AS class_name, lesson.id AS lesson_id, lesson.title AS lesson_title, lesson.sort AS lesson_sort, COUNT(work.id) AS work_count
+      `SELECT class.id AS class_id, class.name AS class_name, lesson.id AS lesson_id, COALESCE(lesson.published_title, lesson.title) AS lesson_title, lesson.sort AS lesson_sort, COUNT(work.id) AS work_count
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
@@ -1116,7 +1116,7 @@ export async function handleStudent(ctx) {
         return accumulator;
       }, []);
     const items = rows(
-      `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, lesson.title AS lesson_title
+      `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
@@ -1174,7 +1174,7 @@ export async function handleStudent(ctx) {
   match = part.match(/^\/showcase\/([^/]+)$/);
   if (match && method === 'GET') {
     const work = row(
-      `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, lesson.title AS lesson_title
+      `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
@@ -1219,7 +1219,7 @@ export async function handleStudent(ctx) {
       withFeedback: Number(row("SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND teacher_comment IS NOT NULL AND teacher_comment <> ''", [auth.user.id, auth.user.orgId])?.n || 0),
     };
     const rawItems = rows(
-      `SELECT work.*, class.name AS class_name, lesson.title AS lesson_title, reviewer.display_name AS reviewer_name
+      `SELECT work.*, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title, reviewer.display_name AS reviewer_name
        FROM works work
        LEFT JOIN classes class ON class.id = work.class_id AND class.org_id = work.org_id
        LEFT JOIN course_lessons lesson ON lesson.id = work.course_lesson_id

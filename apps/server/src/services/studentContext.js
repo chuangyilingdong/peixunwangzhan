@@ -103,7 +103,7 @@ export function getStudentCourses(user) {
     if (!series.classIds.includes(item.curriculum_class_id)) series.classIds.push(item.curriculum_class_id);
     let lesson = series.lessons.find((candidate) => candidate.id === item.lesson_id);
     if (!lesson) {
-      lesson = normalizeLesson({
+      lesson = normalizeLesson({ /* 学生读已发布快照 */ 
         id: item.lesson_id,
         series_id: item.id,
         title: item.lesson_title,
@@ -211,6 +211,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
         lesson.outcome_pack_asset_id AS lesson_outcome_pack_asset_id,
         lesson.lesson_content AS lesson_lesson_content,
         lesson.delivery_mode AS lesson_delivery_mode,
+        lesson.published_content AS lesson_published_content,
         lesson.delivery_modes AS lesson_delivery_modes,
         lesson.per_student_budget_fen AS lesson_per_student_budget_fen,
         lesson.classroom_config AS lesson_classroom_config,
@@ -269,7 +270,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
     status: data.class_status, current_session_id: data.class_current_session_id,
     created_at: data.class_created_at, updated_at: data.class_updated_at, archived_at: data.class_archived_at,
   };
-  const lesson = normalizeLesson({
+  const lesson = normalizeLesson({ /* 学生读已发布快照 */  /* 学生读已发布快照 */ 
     id: data.lesson_id, series_id: data.lesson_series_id, title: data.lesson_title,
     summary: data.lesson_summary, sort: data.lesson_sort, status: data.lesson_status,
     duration_minutes: data.lesson_duration_minutes,
@@ -280,11 +281,12 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
     // ⚠️ 逐列 SELECT 很容易漏掉新字段（这一处就漏过一次）：多类型与算力预算必须一起带出来，
     // 否则「双入口课时」在这里会被看成只开画布，学生进不了 VibeCoding。
     delivery_modes: data.lesson_delivery_modes,
+    published_content: data.lesson_published_content,
     per_student_budget_fen: data.lesson_per_student_budget_fen,
     classroom_config: data.lesson_classroom_config,
     canvas_template_snapshot: data.lesson_canvas_template_snapshot,
     created_at: data.lesson_created_at, updated_at: data.lesson_updated_at,
-  });
+  }, { asPublished: true });
   const activeSession = data.active_session_id ? normalizeSession({
     id: data.active_session_id, class_id: data.active_session_class_id,
     lesson_id: data.active_session_lesson_id, status: data.active_session_status,

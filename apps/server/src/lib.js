@@ -487,35 +487,48 @@ function deliveryModesOf(value) {
   return unique.length ? unique : [value?.delivery_mode || 'CANVAS'];
 }
 
-export function normalizeLesson(value, { includeTeaching = false } = {}) {
+export function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
   if (!value) return null;
+  // 平台端读实时数据（编辑用）；机构端/学生端/官网读「最近一次更新发布」定格的快照。
+  // 老数据没有快照 → 回退实时数据，行为与之前一致。
+  const snapshot = asPublished ? publishedSnapshotOf(value) : null;
+  const liveCanvas = lessonCanvasConfig(value.id);
+  const merged = snapshot
+    ? {
+      ...snapshot,
+      capabilities: Array.isArray(snapshot.capabilities) && snapshot.capabilities.length ? snapshot.capabilities : liveCanvas.capabilities,
+      materialGroups: Array.isArray(snapshot.materialGroups) ? snapshot.materialGroups : liveCanvas.materialGroups,
+      generationBoxes: Array.isArray(snapshot.generationBoxes) ? snapshot.generationBoxes : liveCanvas.generationBoxes,
+    }
+    : null;
+  const pick = (key, fallback) => (merged && merged[key] !== undefined ? merged[key] : fallback);
   return {
     id: value.id,
     seriesId: value.series_id,
-    title: value.title,
-    summary: value.summary || '',
+    title: pick('title', value.title),
+    summary: pick('summary', value.summary) || '',
     sort: Number(value.sort || 0),
     status: value.status,
-    durationMinutes: Number(value.duration_minutes || 0),
+    durationMinutes: Number(pick('durationMinutes', value.duration_minutes) || 0),
     promptPackAssetId: value.prompt_pack_asset_id || null,
     outcomePackAssetId: value.outcome_pack_asset_id || null,
-    lessonContent: value.lesson_content || '',   // P5-W05
+    lessonContent: pick('lessonContent', value.lesson_content) || '',   // P5-W05
     // 老字段（第一种类型）保留给既有读取方；新代码一律读 deliveryModes
-    deliveryMode: value.delivery_mode || 'CANVAS',
-    deliveryModes: deliveryModesOf(value),
+    deliveryMode: pick('deliveryMode', value.delivery_mode || 'CANVAS'),
+    deliveryModes: pick('deliveryModes', deliveryModesOf(value)),
     // 每个学生的算力上限（分）；null = 平台没配（不拦，只记账）
-    perStudentBudgetFen: value.per_student_budget_fen === null || value.per_student_budget_fen === undefined
-      ? null : Number(value.per_student_budget_fen),
-    classroomConfig: parseJson(value.classroom_config, {}),
-    canvasTemplateSnapshot: parseJson(value.canvas_template_snapshot, {}),
-    ...lessonCanvasConfig(value.id),
+    perStudentBudgetFen: (() => { const raw = pick('perStudentBudgetFen', value.per_student_budget_fen); return raw === null || raw === undefined ? null : Number(raw); })(),
+    classroomConfig: pick('classroomConfig', parseJson(value.classroom_config, {})) || {},
+    canvasTemplateSnapshot: pick('canvasTemplateSnapshot', parseJson(value.canvas_template_snapshot, {})) || {},
+    capabilities: merged ? merged.capabilities : liveCanvas.capabilities,
+    materialGroups: merged ? merged.materialGroups : liveCanvas.materialGroups,
+    generationBoxes: merged ? merged.generationBoxes : liveCanvas.generationBoxes,
     // 教学素材是教师备课资料：只有机构端/平台端显式要求时才下发，学生端与公开接口一律不带。
     ...(includeTeaching ? lessonTeachingMaterials(value.id) : {}),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
 }
-
 const GENERATION_BOX_MODALITIES = Object.freeze(['TEXT', 'IMAGE', 'VIDEO', 'MUSIC']);
 const MAX_GENERATION_BOXES = 20;
 // 生成框体在素材表里的类型：框体就是一种素材，和图片/视频/提示词一起排在同一条顺序里。
@@ -647,7 +660,27 @@ export function boxFromMaterial(material, index = 0) {
   return box;
 }
 
-export function lessonCanvasConfig(lessonId) {
+/**
+ * 已发布内容快照：平台端编辑的是实时数据，机构端/学生端/官网读的是最近一次「更新发布」定格的这份。
+ * 老数据没有快照 → 回退实时数据（行为不变）。
+ */
+function publishedSnapshotOf(value) {
+  const parsed = parseJson(value?.published_content, null);
+  return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
+export function lessonCanvasConfig(lessonId, override = null) {
+  if (override && Array.isArray(override.materialGroups)) {
+    const groups = override.materialGroups;
+    const generationBoxes = [];
+    groups.forEach((group) => {
+      (group.materials || []).forEach((material) => {
+        const box = boxFromMaterial(material, generationBoxes.length);
+        if (box) generationBoxes.push({ ...box, groupId: group.id, groupTitle: group.title });
+      });
+    });
+    return { capabilities: override.capabilities?.length ? override.capabilities : ['text'], materialGroups: groups, generationBoxes };
+  }
   if (!lessonId) return { capabilities: ['text'], materialGroups: [], generationBoxes: [] };
   const capabilities = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=? ORDER BY capability', [lessonId]).map((item) => item.capability);
   const groups = rows('SELECT * FROM course_lesson_material_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
@@ -684,7 +717,10 @@ export function lessonTeachingMaterials(lessonId) {
   return { teachingGroups: groups };
 }
 
-export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false } = {}) {
+export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false } = {}) {
+  // 课包字段同样支持草稿隔离：机构端/学生端/官网读「更新发布」时的快照
+  const seriesSnapshot = asPublished ? publishedSnapshotOf(value) : null;
+  const snapPick = (key, fallback) => (seriesSnapshot && seriesSnapshot[key] !== undefined ? seriesSnapshot[key] : fallback);
   if (!value) return null;
   let tags = [];
   if (parseTags) {
@@ -697,11 +733,11 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
   }
   const result = {
     id: value.id,
-    title: value.title,
-    description: value.description || '',
-    coverImageUrl: value.cover_image_url || null,
-    coverAssetId: value.cover_asset_id || null,
-    priceFen: Number(value.price_fen || 0),
+    title: snapPick('title', value.title),
+    description: snapPick('description', value.description || ''),
+    coverImageUrl: snapPick('coverImageUrl', value.cover_image_url || null),
+    coverAssetId: snapPick('coverAssetId', value.cover_asset_id || null),
+    priceFen: Number(snapPick('priceFen', value.price_fen) || 0),
     validityDays: Number(value.validity_days || 0),
     estimatedCreditsPerPerson: Number(value.estimated_credits_per_person || 0),
     gradeRange: value.grade_range || '',
@@ -710,13 +746,13 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     visibility: value.visibility,
     version: value.version,
     // 平台课包库存（可授权出去的次数池）；机构能拿到多少由 course_assignments.quota_total 决定
-    stockTotal: Number(value.stock_total || 0),
+    stockTotal: Number(snapPick('stockTotal', value.stock_total) || 0),
     sort: Number(value.sort || 0),
     status: value.status,
     marketplaceStatus: value.marketplace_status,
     marketplaceRewardCredits: Number(value.marketplace_reward_credits || 0),
     // P5-W05 课程资料核验字段
-    difficultyLevel: value.difficulty_level != null ? Number(value.difficulty_level) : null,
+    difficultyLevel: snapPick('difficultyLevel', value.difficulty_level != null ? Number(value.difficulty_level) : null),
     ageRangeMin: value.age_range_min != null ? Number(value.age_range_min) : null,
     ageRangeMax: value.age_range_max != null ? Number(value.age_range_max) : null,
     tags,
@@ -731,7 +767,7 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     result.assignmentExpiresAt = assignment?.expires_at || null;
   }
   if (includeLessons) {
-    result.lessons = rows(`SELECT * FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"} ORDER BY sort, created_at`, [value.id]).map((lesson) => normalizeLesson(lesson, { includeTeaching }));
+    result.lessons = rows(`SELECT * FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"} ORDER BY sort, created_at`, [value.id]).map((lesson) => normalizeLesson(lesson, { includeTeaching, asPublished }));
   }
   return result;
 }

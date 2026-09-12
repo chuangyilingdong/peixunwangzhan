@@ -1,6 +1,6 @@
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
-  normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
+  normalizeLesson, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
   normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE,
 } from '../../lib.js';
@@ -129,6 +129,36 @@ function normalizeBoxMaterial(material, materialIndex, title) {
   // 音乐：记下生成模式（歌词生音乐 / 描述生音乐）
   if (box.modality === 'MUSIC') { boxSnapshot.mode = box.mode; }
   return { ...snapshot, box: boxSnapshot, content: box.prompt };
+}
+
+/**
+ * 把课包与课时的**当前内容**定格成「已发布内容」快照（草稿隔离的落点）。
+ * 平台端之后继续编辑的是实时数据；机构端/学生端/官网读的是这份快照，
+ * 所以「改了但没点更新发布」时它们看不到改动。
+ */
+function capturePublishedContent(seriesId, at = nowIso()) {
+  const series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
+  if (!series) return { lessons: 0 };
+  const lessons = rows('SELECT * FROM course_lessons WHERE series_id=?', [seriesId]);
+  transaction(() => {
+    q('UPDATE course_series SET published_content=? WHERE id=?', [json({
+      title: series.title, description: series.description || '', coverImageUrl: series.cover_image_url || null,
+      coverAssetId: series.cover_asset_id || null, priceFen: Number(series.price_fen || 0), stockTotal: Number(series.stock_total || 0),
+      difficultyLevel: series.difficulty_level == null ? null : Number(series.difficulty_level),
+      visibility: series.visibility, gradeRange: series.grade_range || '', tags: parseJson(series.tags, []),
+      estimatedCreditsPerPerson: Number(series.estimated_credits_per_person || 0),
+    }), seriesId]);
+    lessons.forEach((lessonRow) => {
+      const live = normalizeLesson(lessonRow);
+      q('UPDATE course_lessons SET published_content=?,published_title=? WHERE id=?', [json({
+        title: live.title, summary: live.summary, durationMinutes: live.durationMinutes, lessonContent: live.lessonContent,
+        deliveryMode: live.deliveryMode, deliveryModes: live.deliveryModes, perStudentBudgetFen: live.perStudentBudgetFen,
+        classroomConfig: live.classroomConfig, canvasTemplateSnapshot: live.canvasTemplateSnapshot,
+        capabilities: live.capabilities, materialGroups: live.materialGroups, generationBoxes: live.generationBoxes,
+      }), live.title, lessonRow.id]);
+    });
+  });
+  return { lessons: lessons.length, at };
 }
 
 function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}, extra = {}) {
@@ -1296,6 +1326,7 @@ export {
   platformUserRow,
   platformWorkFilters,
   previewImport,
+  capturePublishedContent,
   replaceLessonCanvasConfig,
   replaceLessonTeachingMaterials,
   reportResolution,

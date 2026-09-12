@@ -282,7 +282,7 @@ export function handlePublicCommunication(ctx) {
       [publicCourseDetailMatch[1]],
     );
     if (!series) throw errors.notFound('课包不存在或不可公开访问', 'COURSE_SERIES_NOT_FOUND');
-    const detail = normalizeSeries(series, { includeLessons: true, parseTags: true });
+    const detail = normalizeSeries(series, { includeLessons: true, parseTags: true, asPublished: true });
     detail.lessons = (detail.lessons || []).filter((l) => l.status === 'PUBLISHED');
     // lessonContent 截断到 2000 字
     detail.lessons = detail.lessons.map((l) => ({

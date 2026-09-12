@@ -1134,6 +1134,15 @@ db.exec(`CREATE TABLE IF NOT EXISTS course_series_versions (
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_versions ON course_series_versions(series_id, created_at DESC)');
 
+// 已发布内容快照（草稿隔离）：平台端编辑的是实时数据，「更新发布」时把内容定格进这两列；
+// 机构端 / 学生端 / 官网读快照 —— 不点「更新发布」它们看不到改动。老数据为空 → 回退实时数据。
+try { db.exec('ALTER TABLE course_lessons ADD COLUMN published_content TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE course_lessons ADD COLUMN published_title TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE course_series ADD COLUMN published_content TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
 // 课包授权给机构的「次数」（板块二）：授权时填 quota_total，机构分给学生时累加 quota_used
 try { db.exec('ALTER TABLE course_assignments ADD COLUMN quota_total INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
