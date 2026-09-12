@@ -20,6 +20,7 @@ export function getComputeGatewayConfig() {
     enabled: value.enabled === true,
     // 只回显「配没配密码」，不回显密码本身
     passwordConfigured: Boolean(getProviderApiKey(ADMIN_SECRET_KEY)),
+    quotaPerUnit: Number(value.quotaPerUnit || 500000),
     updatedAt: value.updatedAt || null,
   };
 }
@@ -30,6 +31,7 @@ export function saveComputeGatewayConfig(patch, { password } = {}) {
     baseUrl: patch.baseUrl === undefined ? String(current.baseUrl || '') : String(patch.baseUrl || '').trim().replace(/\/+$/, ''),
     username: patch.username === undefined ? String(current.username || 'root') : String(patch.username || '').trim() || 'root',
     enabled: patch.enabled === undefined ? current.enabled === true : patch.enabled === true,
+    quotaPerUnit: patch.quotaPerUnit === undefined ? Number(current.quotaPerUnit || 500000) : Number(patch.quotaPerUnit || 500000),
     updatedAt: nowIso(),
   };
   if (next.baseUrl && !/^https?:\/\//.test(next.baseUrl)) throw errors.badRequest('网关地址必须带 http(s)://', 'INVALID_GATEWAY_URL');
@@ -112,4 +114,57 @@ export async function createGatewayToken({ name, budgetFen, models = '', unlimit
   const tokens = await listGatewayTokens();
   const created = tokens.find((item) => item.name === cleanName) || null;
   return { token: created, budgetFen: Number(budgetFen || 0), unlimited };
+}
+
+/** 读网关的用量日志（分页拉，最多 maxRows 条，够看一个周期即可） */
+export async function listGatewayLogs({ days = 7, maxRows = 2000 } = {}) {
+  const since = Math.floor((Date.now() - Number(days) * 24 * 60 * 60 * 1000) / 1000);
+  const rowsOut = [];
+  const pageSize = 100;
+  for (let page = 1; page <= Math.ceil(maxRows / pageSize); page += 1) {
+    const data = await gatewayRequest(`/api/log/?p=${page}&page_size=${pageSize}&type=0&start_timestamp=${since}`);
+    const items = data?.items || [];
+    if (!items.length) break;
+    rowsOut.push(...items);
+    if (rowsOut.length >= maxRows) break;
+  }
+  return rowsOut.slice(0, maxRows);
+}
+
+/**
+ * 按令牌名归集消耗：令牌名约定成 `机构:<id>` / `学生:<id>` / `课时:<id>`，
+ * 所以「哪个机构/哪个学员/哪节课花了多少」不需要改网关一行代码就能还原。
+ * 没按约定命名的令牌进 `unattributed`（写清楚是「未归属」，不要混进任何一个维度）。
+ */
+export function aggregateUsage(rowsInput, { quotaPerUnit = 500000 } = {}) {
+  const toYuan = (quota) => Number(((Number(quota || 0) / quotaPerUnit)).toFixed(4));
+  const buckets = { org: new Map(), student: new Map(), lesson: new Map(), token: new Map() };
+  let calls = 0; let totalQuota = 0;
+  for (const row of Array.isArray(rowsInput) ? rowsInput : []) {
+    const quota = Number(row.quota || 0);
+    calls += 1; totalQuota += quota;
+    const name = String(row.token_name || '(未命名令牌)');
+    const token = buckets.token.get(name) || { key: name, calls: 0, quota: 0 };
+    token.calls += 1; token.quota += quota; buckets.token.set(name, token);
+    const match = name.match(/^(机构|学生|课时):\s*(.+)$/);
+    if (!match) continue;
+    const kind = match[1] === '机构' ? 'org' : (match[1] === '学生' ? 'student' : 'lesson');
+    const key = match[2].trim();
+    const bucket = buckets[kind].get(key) || { key, calls: 0, quota: 0 };
+    bucket.calls += 1; bucket.quota += quota; buckets[kind].set(key, bucket);
+  }
+  const shape = (map) => [...map.values()].sort((a, b) => b.quota - a.quota).map((item) => ({ ...item, yuan: toYuan(item.quota) }));
+  return {
+    calls, totalQuota, totalYuan: toYuan(totalQuota),
+    byOrg: shape(buckets.org), byStudent: shape(buckets.student), byLesson: shape(buckets.lesson), byToken: shape(buckets.token),
+    unattributed: [...buckets.token.values()].filter((item) => !/^(机构|学生|课时):/.test(item.key)).map((item) => ({ ...item, yuan: toYuan(item.quota) })),
+  };
+}
+
+/** 平台端用：读日志并归集（默认近 7 天） */
+export async function gatewayUsageOverview({ days = 7 } = {}) {
+  const config = getComputeGatewayConfig();
+  const rowsOut = await listGatewayLogs({ days });
+  const summary = aggregateUsage(rowsOut, { quotaPerUnit: config.quotaPerUnit || 500000 });
+  return { days, quotaPerUnit: config.quotaPerUnit || 500000, ...summary };
 }

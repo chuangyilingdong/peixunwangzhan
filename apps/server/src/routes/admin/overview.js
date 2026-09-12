@@ -1,5 +1,5 @@
 // 平台管理端「overview」域路由：从 adminOrg.js 拆出，行为不变。
-import { createGatewayToken, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
+import { createGatewayToken, gatewayUsageOverview, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
@@ -120,6 +120,11 @@ export async function handleOverview(ctx, part, method) {
   if (part === '/compute-gateway/test' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
     return testComputeGateway();
+  }
+  if (part === '/compute-gateway/usage' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const days = integer(ctx.search.get('days'), '统计天数', { min: 1, max: 90, fallback: 7 });
+    return gatewayUsageOverview({ days });
   }
   if (part === '/compute-gateway/channels' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
