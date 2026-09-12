@@ -16,6 +16,7 @@ import { errors } from '../lib.js';
 import { getAiProviderPolicy } from '../routes/billingConfig.js';
 import { providerSelectionForModality, assertGenerationPreflight } from '../routes/aiGeneration.js';
 import { getGenerationProvider } from './generationProvider.js';
+import { applyGatewayRoute } from './computeGateway.js';
 import { storeGeneratedAsset } from '../routes/fileAssets.js';
 import { isDocumentKind, parseDeckSpec, deckIllustrationRequests } from './ooxml/documents.js';
 
@@ -80,7 +81,10 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
   assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality: 'IMAGE' });
 
   const policy = getAiProviderPolicy();
-  const selection = providerSelectionForModality(policy, 'IMAGE', '');
+  // 插画也是这个学生在花算力，同样按他的令牌走网关。
+  const selection = await applyGatewayRoute(providerSelectionForModality(policy, 'IMAGE', ''), {
+    orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context?.lesson?.id || '', modality: 'IMAGE',
+  });
   const provider = getGenerationProvider(selection);
 
   for (const target of targets) {

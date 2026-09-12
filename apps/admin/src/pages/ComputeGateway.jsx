@@ -6,6 +6,9 @@
 import { useEffect, useState } from 'react';
 import { Empty, ErrorState, Loading, Notice, PageHeader, Panel, Status, formatCredits, formatDate, useData } from '@platform/shared';
 
+/** 金额（元）显示：归集结果里已经是元，别再套积分格式。 */
+const yuan = (value) => `¥${Number(value || 0).toFixed(2)}`;
+
 export function ComputeGateway({ api }) {
   const config = useData(() => api.get('admin/compute-gateway'), [api]);
   const [form, setForm] = useState({ baseUrl: '', username: 'root', password: '', enabled: false });
@@ -16,6 +19,8 @@ export function ComputeGateway({ api }) {
   const [channels, setChannels] = useState(null);
   const [tokens, setTokens] = useState(null);
   const [tokenForm, setTokenForm] = useState({ name: '', budgetYuan: '', models: '', unlimited: false });
+  const [usageDays, setUsageDays] = useState(7);
+  const [usage, setUsage] = useState(null);
 
   // 配置读回来才填表单：密码永不回显，留空表示「不改」
   useEffect(() => {
@@ -54,6 +59,12 @@ export function ComputeGateway({ api }) {
   async function loadTokens({ keepMessage = false } = {}) {
     setBusy(true); if (!keepMessage) setMessage('');
     try { setTokens((await api.get('admin/compute-gateway/tokens')).items || []); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function loadUsage(days = usageDays) {
+    setBusy(true); setMessage('');
+    try { setUsage(await api.get(`admin/compute-gateway/usage?days=${days}`)); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
@@ -117,6 +128,36 @@ export function ComputeGateway({ api }) {
       {tokens ? (tokens.length ? <div className="table-wrap top-gap"><table><thead><tr><th>令牌</th><th>剩余额度</th><th>已用</th><th>模型</th><th>状态</th></tr></thead><tbody>
         {tokens.map((item) => <tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.unlimited ? '不限' : formatCredits(item.remainQuota)}</td><td>{formatCredits(item.usedQuota)}</td><td className="muted">{item.models || '不限'}</td><td>{item.status === 1 ? <Status value="ACTIVE" /> : <span className="status danger">已停用</span>}</td></tr>)}
       </tbody></table></div> : <Empty title="还没有令牌" body="给机构/学员/课时分发令牌后，这里会显示它们的额度与消耗。" />) : <p className="muted top-gap">点「刷新列表」读取网关上的令牌（含在 new-api 后台手工建的那些）。</p>}
+    </Panel>
+
+    <Panel
+      title="用量归集"
+      actions={<button className="secondary-button" disabled={busy || !enabled} onClick={() => loadUsage()}>读取用量</button>}
+    >
+      {!enabled ? <Empty title="先启用网关" body="启用后这里会按令牌名把网关的消耗还原到机构 / 学员 / 课时。" />
+        : !usage ? <Empty title="还没有读取" body="点右上角「读取用量」，看这段时间里哪个机构、哪个学员、哪节课花了多少算力。" />
+          : <>
+            <div className="row-actions">
+              <select value={String(usageDays)} onChange={(event) => { const days = Number(event.target.value); setUsageDays(days); loadUsage(days); }}><option value="1">近 1 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
+              <span className="muted">共 <strong>{usage.calls}</strong> 次调用，合计 <strong>{yuan(usage.totalYuan)}</strong></span>
+              {usage.unattributed?.length ? <span className="muted">· 未归属 {usage.unattributed.length} 张令牌（没按约定命名，不计入下面三个维度）</span> : null}
+            </div>
+            {[['按机构', usage.byOrg, '机构'], ['按学员', usage.byStudent, '学员'], ['按课时', usage.byLesson, '课时']].map(([label, list, unit]) => (
+              <div className="top-gap" key={label}>
+                <h4>{label}</h4>
+                {list?.length ? <div className="table-wrap"><table><thead><tr><th>{unit}</th><th>调用次数</th><th>消耗</th></tr></thead><tbody>
+                  {list.map((item) => <tr key={item.key}><td className="muted">{item.key}</td><td>{item.calls}</td><td><strong>{yuan(item.yuan)}</strong></td></tr>)}
+                </tbody></table></div> : <p className="muted">这段时间里没有可归集到{unit}的消耗。</p>}
+              </div>
+            ))}
+            {usage.unattributed?.length ? <>
+              <h4 className="top-gap">未归属（令牌名没按「机构:编号 / 学生:编号 / 课时:编号」命名）</h4>
+              <p className="muted">这些消耗金额已算进「合计」，但还原不到具体机构/学员/课时。改掉令牌名或按约定重新分发即可归位。</p>
+              <div className="table-wrap"><table><thead><tr><th>令牌</th><th>调用次数</th><th>消耗</th></tr></thead><tbody>
+                {usage.unattributed.map((item) => <tr key={item.key}><td className="muted">{item.key}</td><td>{item.calls}</td><td>{yuan(item.yuan)}</td></tr>)}
+              </tbody></table></div>
+            </> : null}
+          </>}
     </Panel>
   </>;
 }

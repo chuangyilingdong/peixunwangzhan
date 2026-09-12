@@ -12,6 +12,20 @@ import { row, q, nowIso, parseJson, json } from '../lib.js';
 
 const ADMIN_SECRET_KEY = 'compute-gateway-admin';
 
+/**
+ * 走网关的模态白名单：只放**同步 OpenAI 兼容**的两类（对话 / 图片）。
+ * 音乐与视频在我们的上游是「自定义路径 + 提交后轮询」的异步任务，new-api 要用它的任务插件才能接
+ * （写了插件就受 AGPL 约束，见梳理文档 7.2.1）→ 这两类继续走我们自己的出口，只把用量记进我们自己的表。
+ * 换句话说：**网关拦的是对话与图片的额度**，视频/音乐目前不受令牌额度约束（这是已知缺口，别当成已完成）。
+ */
+const GATEWAY_MODALITIES = new Set(['TEXT', 'IMAGE']);
+
+/** 路由解析结果的进程内短缓存：省掉每次生成都登录网关 + 列一遍令牌。令牌 key 不变，缓存是安全的。 */
+const ROUTE_CACHE_TTL_MS = 60000;
+const routeCache = new Map();
+/** 正在自动发令牌的名字：并发的第一次调用不该发两张同名令牌。 */
+const provisioning = new Set();
+
 export function getComputeGatewayConfig() {
   const value = parseJson(row('SELECT compute_gateway FROM platform_settings WHERE id=1')?.compute_gateway, {});
   return {
@@ -82,21 +96,75 @@ export async function testComputeGateway() {
   return { ok: true, gatewayUser: self?.username || self?.display_name || null, latencyMs: Date.now() - started, baseUrl: getComputeGatewayConfig().baseUrl };
 }
 
+/**
+ * 分页读网关的列表接口。
+ *
+ * ⚠️ 这里有一处**静默失败**要防：网关若不认 `p` 参数（或分页失效），会反复返回同一页，
+ * 我们的循环就会把同一批数据重复累加（实测把 9.2 元算成 184 元），而且**不报错**。
+ * 所以按「本页首条记录的标识是否与上一页相同」提前停止 —— 宁可少读，不可重复计数。
+ */
+async function pagedItems(pathname, { pageSize = 100, maxPages = 20 } = {}) {
+  // 有 id 用 id；老网关/假网关可能不带 id，退化成「整条记录的 JSON」当标识。
+  const signatureOf = (item) => {
+    if (item === null || item === undefined) return '';
+    const id = item.id;
+    if (id !== undefined && id !== null && String(id) !== '') return `id:${String(id)}`;
+    try { return `json:${JSON.stringify(item)}`; } catch { return ''; }
+  };
+  const out = [];
+  const seen = new Set();
+  let previousFirst = '';
+  for (let page = 1; page <= maxPages; page += 1) {
+    const data = await gatewayRequest(`${pathname}${pathname.includes('?') ? '&' : '?'}p=${page}&page_size=${pageSize}`);
+    const items = Array.isArray(data?.items) ? data.items : [];
+    if (!items.length) break;
+    const first = signatureOf(items[0]);
+    if (first && first === previousFirst) break; // 同一页被重复返回：停，绝不重复累加
+    previousFirst = first;
+    let fresh = 0;
+    for (const item of items) {
+      const key = signatureOf(item);
+      if (key) { if (seen.has(key)) continue; seen.add(key); }
+      out.push(item); fresh += 1;
+    }
+    if (!fresh) break; // 整页都是重复的
+    if (items.length < pageSize) break; // 最后一页
+  }
+  return out;
+}
+
 export async function listGatewayChannels() {
-  const data = await gatewayRequest('/api/channel/?p=1&page_size=100');
-  return (data?.items || []).map((item) => ({
+  const items = await pagedItems('/api/channel/');
+  return items.map((item) => ({
     id: item.id, name: item.name, type: item.type, baseUrl: item.base_url || null, models: item.models || '',
     status: Number(item.status || 0), group: item.group || null,
   }));
 }
 
 export async function listGatewayTokens() {
-  const data = await gatewayRequest('/api/token/?p=1&page_size=100');
-  return (data?.items || []).map((item) => ({
+  const items = await pagedItems('/api/token/');
+  return items.map((item) => ({
     id: item.id, name: item.name, status: Number(item.status || 0),
     remainQuota: Number(item.remain_quota || 0), usedQuota: Number(item.used_quota || 0),
     unlimited: item.unlimited_quota === true, models: item.model_limits || '',
   }));
+}
+
+/**
+ * 按名字找令牌，**连 key 一起**取回（key 是调用上游时要带的凭证，只在发请求时用，
+ * 不进列表接口的返回 —— 平台端界面上不该能看到别人的 key）。
+ */
+async function findGatewayTokenByName(name) {
+  const wanted = String(name || '').trim();
+  if (!wanted) return null;
+  const items = await pagedItems('/api/token/');
+  const item = items.find((entry) => String(entry?.name || '').trim() === wanted) || null;
+  if (!item) return null;
+  return {
+    id: item.id, name: item.name, key: String(item.key || '').trim(),
+    remainQuota: Number(item.remain_quota || 0), usedQuota: Number(item.used_quota || 0),
+    unlimited: item.unlimited_quota === true, status: Number(item.status || 0),
+  };
 }
 
 /**
@@ -105,37 +173,48 @@ export async function listGatewayTokens() {
  */
 export async function createGatewayToken({ name, budgetFen, models = '', unlimited = false, quotaPerUnit = 500000 }) {
   const cleanName = String(name || '').trim();
-  if (!cleanName) throw errors.badRequest('令牌名称必填（约定：机构:<id> / 学生:<id> / 课时:<id>）', 'GATEWAY_TOKEN_NAME_REQUIRED');
+  if (!cleanName) throw errors.badRequest('令牌名称必填（约定：机构:<id>/学生:<id>/课时:<id>）', 'GATEWAY_TOKEN_NAME_REQUIRED');
   const remainQuota = unlimited ? 0 : Math.max(1, Math.round((Number(budgetFen || 0) / 100) * quotaPerUnit));
   await gatewayRequest('/api/token/', {
     method: 'POST',
     body: { name: cleanName, remain_quota: remainQuota, unlimited_quota: unlimited, expired_time: -1, model_limits_enabled: Boolean(models), model_limits: String(models || ''), group: 'default', allow_ips: '' },
   });
-  const tokens = await listGatewayTokens();
-  const created = tokens.find((item) => item.name === cleanName) || null;
-  return { token: created, budgetFen: Number(budgetFen || 0), unlimited };
+  const created = await findGatewayTokenByName(cleanName);
+  return { token: created ? { id: created.id, name: created.name, remainQuota: created.remainQuota, unlimited: created.unlimited } : null, budgetFen: Number(budgetFen || 0), unlimited };
 }
 
 /** 读网关的用量日志（分页拉，最多 maxRows 条，够看一个周期即可） */
 export async function listGatewayLogs({ days = 7, maxRows = 2000 } = {}) {
   const since = Math.floor((Date.now() - Number(days) * 24 * 60 * 60 * 1000) / 1000);
-  const rowsOut = [];
-  const pageSize = 100;
-  for (let page = 1; page <= Math.ceil(maxRows / pageSize); page += 1) {
-    const data = await gatewayRequest(`/api/log/?p=${page}&page_size=${pageSize}&type=0&start_timestamp=${since}`);
-    const items = data?.items || [];
-    if (!items.length) break;
-    rowsOut.push(...items);
-    if (rowsOut.length >= maxRows) break;
-  }
-  return rowsOut.slice(0, maxRows);
+  const items = await pagedItems(`/api/log/?type=0&start_timestamp=${since}`, { maxPages: Math.max(1, Math.ceil(maxRows / 100)) });
+  return items.slice(0, maxRows);
 }
 
 /**
- * 按令牌名归集消耗：令牌名约定成 `机构:<id>` / `学生:<id>` / `课时:<id>`，
- * 所以「哪个机构/哪个学员/哪节课花了多少」不需要改网关一行代码就能还原。
- * 没按约定命名的令牌进 `unattributed`（写清楚是「未归属」，不要混进任何一个维度）。
+ * 按令牌名归集消耗。
+ *
+ * 令牌名约定成**多段**：`机构:<id>/学生:<id>/课时:<id>`（能带几段就带几段），
+ * 用量日志按名字逐段解析 —— 「哪个机构/哪个学员/哪节课花了多少」不需要改网关一行代码就能还原。
+ * 一段都没有的令牌进 `unattributed`（写清楚是「未归属」，绝不混进任何一个维度，
+ * 否则报表会莫名其妙多出钱）。单段的老名字（`学生:<id>`）继续能用。
  */
+const TOKEN_SEGMENT_PATTERN = /(机构|学生|课时)\s*[:：]\s*([^/]+)/g;
+
+/** 令牌名里能解析出的归集维度；解析不出任何一段时返回空数组。 */
+export function parseTokenSegments(name) {
+  const text = String(name || '');
+  const out = [];
+  TOKEN_SEGMENT_PATTERN.lastIndex = 0;
+  let match = TOKEN_SEGMENT_PATTERN.exec(text);
+  while (match) {
+    const kind = match[1] === '机构' ? 'org' : (match[1] === '学生' ? 'student' : 'lesson');
+    const key = String(match[2] || '').trim();
+    if (key) out.push({ kind, key });
+    match = TOKEN_SEGMENT_PATTERN.exec(text);
+  }
+  return out;
+}
+
 export function aggregateUsage(rowsInput, { quotaPerUnit = 500000 } = {}) {
   const toYuan = (quota) => Number(((Number(quota || 0) / quotaPerUnit)).toFixed(4));
   const buckets = { org: new Map(), student: new Map(), lesson: new Map(), token: new Map() };
@@ -146,18 +225,21 @@ export function aggregateUsage(rowsInput, { quotaPerUnit = 500000 } = {}) {
     const name = String(row.token_name || '(未命名令牌)');
     const token = buckets.token.get(name) || { key: name, calls: 0, quota: 0 };
     token.calls += 1; token.quota += quota; buckets.token.set(name, token);
-    const match = name.match(/^(机构|学生|课时):\s*(.+)$/);
-    if (!match) continue;
-    const kind = match[1] === '机构' ? 'org' : (match[1] === '学生' ? 'student' : 'lesson');
-    const key = match[2].trim();
-    const bucket = buckets[kind].get(key) || { key, calls: 0, quota: 0 };
-    bucket.calls += 1; bucket.quota += quota; buckets[kind].set(key, bucket);
+    // 一次调用只加一次：同一个名字里重复写了同一段（例如 `学生:1/学生:1`）也只算一次。
+    const seen = new Set();
+    for (const segment of parseTokenSegments(name)) {
+      const dedupeKey = `${segment.kind}:${segment.key}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const bucket = buckets[segment.kind].get(segment.key) || { key: segment.key, calls: 0, quota: 0 };
+      bucket.calls += 1; bucket.quota += quota; buckets[segment.kind].set(segment.key, bucket);
+    }
   }
   const shape = (map) => [...map.values()].sort((a, b) => b.quota - a.quota).map((item) => ({ ...item, yuan: toYuan(item.quota) }));
   return {
     calls, totalQuota, totalYuan: toYuan(totalQuota),
     byOrg: shape(buckets.org), byStudent: shape(buckets.student), byLesson: shape(buckets.lesson), byToken: shape(buckets.token),
-    unattributed: [...buckets.token.values()].filter((item) => !/^(机构|学生|课时):/.test(item.key)).map((item) => ({ ...item, yuan: toYuan(item.quota) })),
+    unattributed: [...buckets.token.values()].filter((item) => !parseTokenSegments(item.key).length).map((item) => ({ ...item, yuan: toYuan(item.quota) })),
   };
 }
 
@@ -167,4 +249,132 @@ export async function gatewayUsageOverview({ days = 7 } = {}) {
   const rowsOut = await listGatewayLogs({ days });
   const summary = aggregateUsage(rowsOut, { quotaPerUnit: config.quotaPerUnit || 500000 });
   return { days, quotaPerUnit: config.quotaPerUnit || 500000, ...summary };
+}
+
+/* ───────────────────────── 令牌路由：把 AI 调用真的接到网关 ─────────────────────────
+ *
+ * 上面那些是「看得见消耗」，这一段才是「拦得住」：学生的 AI 调用带着**自己的令牌**打到网关，
+ * 令牌额度用尽网关就拒服务 → 「1 个学生 50 元」是硬闸，而不是我们自己算出来的一个数。
+ *
+ * 令牌名的解析顺序是**最具体优先**：
+ *   机构:X/学生:Y/课时:Z  →  学生:Y/课时:Z  →  机构:X/学生:Y  →  学生:Y
+ * 这样平台管理员手动分发的令牌（老约定，单段）和我们按课时预算自动发的令牌都能被用上。
+ */
+
+/** 令牌名（多段）：机构:<id>/学生:<id>/课时:<id>，能给几段给几段。 */
+export function gatewayTokenName({ orgId, studentId, lessonId } = {}) {
+  const parts = [];
+  if (orgId) parts.push(`机构:${orgId}`);
+  if (studentId) parts.push(`学生:${studentId}`);
+  if (lessonId) parts.push(`课时:${lessonId}`);
+  return parts.join('/');
+}
+
+function tokenNameCandidates({ orgId, studentId, lessonId } = {}) {
+  const org = orgId ? `机构:${orgId}` : '';
+  const student = studentId ? `学生:${studentId}` : '';
+  const lesson = lessonId ? `课时:${lessonId}` : '';
+  const out = [];
+  for (const parts of [[org, student, lesson], [student, lesson], [org, student], [student]]) {
+    const name = parts.filter(Boolean).join('/');
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/** 课时的「每学生算力上限」（元）。没填 = 不按课时自动发令牌（只记账，不拦）。 */
+function lessonBudgetFen(lessonId) {
+  if (!lessonId) return 0;
+  const value = row('SELECT per_student_budget_fen FROM course_lessons WHERE id=?', [lessonId])?.per_student_budget_fen;
+  const fen = Number(value);
+  return Number.isFinite(fen) && fen > 0 ? Math.round(fen) : 0;
+}
+
+/** 发一张令牌；同一名字并发时只发一张（不然两个并发的首次调用会各发一张）。 */
+async function ensureGatewayToken({ name, budgetFen, models }) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (provisioning.has(name)) {
+      // 别人正在发：等它发完再找一次，别自己再发一张同名的
+      for (let wait = 0; wait < 20; wait += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const token = await findGatewayTokenByName(name);
+        if (token?.key) return { ...token, created: false };
+      }
+      return null;
+    }
+    provisioning.add(name);
+    try {
+      const existing = await findGatewayTokenByName(name);
+      if (existing?.key) return { ...existing, created: false };
+      if (existing && !existing.key) return null; // 有令牌但取不到 key：网关没暴露，别当成可用
+      await createGatewayToken({ name, budgetFen, models, quotaPerUnit: getComputeGatewayConfig().quotaPerUnit });
+      const created = await findGatewayTokenByName(name);
+      return created?.key ? { ...created, created: true } : null;
+    } finally {
+      provisioning.delete(name);
+    }
+  }
+  return null;
+}
+
+async function resolveRouteUncached({ orgId, studentId, lessonId, configured, models }) {
+  let sawTokenWithoutKey = false;
+  for (const name of tokenNameCandidates({ orgId, studentId, lessonId })) {
+    const token = await findGatewayTokenByName(name);
+    if (!token) continue;
+    if (!token.key) { sawTokenWithoutKey = true; continue; }
+    return { mode: 'gateway', endpoint: configured.baseUrl, apiKey: token.key, tokenName: name, reason: 'EXISTING_TOKEN', created: false };
+  }
+  // 没有现成令牌：这节课填了「每学生算力上限」就按它自动发一张 ——
+  // 于是「1 个学生 50 元」不需要管理员先手动分发，本身就是硬闸。
+  const budgetFen = lessonBudgetFen(lessonId);
+  if (budgetFen > 0) {
+    const name = gatewayTokenName({ orgId, studentId, lessonId });
+    const token = await ensureGatewayToken({ name, budgetFen, models });
+    if (token?.key) {
+      return { mode: 'gateway', endpoint: configured.baseUrl, apiKey: token.key, tokenName: name, reason: token.created ? 'AUTO_PROVISIONED' : 'EXISTING_TOKEN', budgetFen, created: token.created === true };
+    }
+    return { mode: 'direct', reason: 'PROVISION_FAILED' };
+  }
+  return { mode: 'direct', reason: sawTokenWithoutKey ? 'TOKEN_WITHOUT_KEY' : 'NO_TOKEN', tokenName: gatewayTokenName({ orgId, studentId, lessonId }) };
+}
+
+/**
+ * 解析这次调用该走哪儿。**任何解析失败都不拦学生**（回退直连），但会大声记一笔 ——
+ * 因为回退意味着这一次既没有额度闸也没有归集，属于必须被看见的状态。
+ */
+export async function resolveGenerationRoute({ orgId = '', studentId = '', lessonId = '', modality = 'TEXT', models = '' } = {}) {
+  const configured = getComputeGatewayConfig();
+  if (!configured.enabled || !configured.baseUrl) return { mode: 'direct', reason: 'GATEWAY_DISABLED' };
+  if (!GATEWAY_MODALITIES.has(String(modality || '').toUpperCase())) return { mode: 'direct', reason: 'MODALITY_NOT_ON_GATEWAY' };
+  if (!studentId) return { mode: 'direct', reason: 'NO_STUDENT' };
+  const cacheKey = [configured.baseUrl, orgId, studentId, lessonId || ''].join('|');
+  const cached = routeCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < ROUTE_CACHE_TTL_MS) return cached.route;
+  try {
+    const route = await resolveRouteUncached({ orgId, studentId, lessonId, configured, models });
+    routeCache.set(cacheKey, { at: Date.now(), route });
+    if (route.mode === 'direct' && route.reason !== 'NO_TOKEN') {
+      console.warn(`[compute-gateway] 未能走上网关（${route.reason}），本次回退直连：额度与归集都断这一次`);
+    }
+    return route;
+  } catch (error) {
+    console.error('[compute-gateway] 解析令牌失败，本次回退直连（额度与归集都会断）:', String(error?.message || error));
+    return { mode: 'direct', reason: 'GATEWAY_UNREACHABLE', detail: String(error?.message || error) };
+  }
+}
+
+/** 清掉路由缓存（改了网关配置或令牌后调用，免得 60 秒内还在用旧结果）。 */
+export function clearGatewayRouteCache() {
+  routeCache.clear();
+}
+
+/**
+ * 把一个 provider selection 改写成「走网关」的 selection。
+ * 解析不出来就原样返回（直连），调用方不需要为网关写分支。
+ */
+export async function applyGatewayRoute(selection, { orgId = '', studentId = '', lessonId = '', modality = 'TEXT', model = '' } = {}) {
+  const route = await resolveGenerationRoute({ orgId, studentId, lessonId, modality, models: model || selection?.model || '' });
+  if (route.mode !== 'gateway') return selection;
+  return { ...selection, gateway: { endpoint: route.endpoint, apiKey: route.apiKey, tokenName: route.tokenName } };
 }

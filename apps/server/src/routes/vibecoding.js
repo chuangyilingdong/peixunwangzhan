@@ -4,7 +4,7 @@
 // 产物模型的要点：学生不能手写代码，代码只有一个来源——AI 回复里带文件名的围栏。
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
-  audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso,
+  ApiError, audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso,
   pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { Readable } from 'node:stream';
@@ -17,7 +17,8 @@ import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
-import { PROVIDER_ERROR_CODES } from '../services/providerContract.js';
+import { applyGatewayRoute } from '../services/computeGateway.js';
+import { normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import {
   artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact, kindForName,
   listArtifacts, pickEntryArtifact, seedDefaultArtifacts, setArtifactGeneratedImages, upsertArtifact, upsertArtifacts,
@@ -417,7 +418,11 @@ function textDefaultModel() {
  */
 async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) {
   const policy = getAiProviderPolicy();
-  const selection = providerSelectionForModality(policy, 'TEXT', conversation.model || '');
+  // 学生在哪个课时里创作，就用他在那个课时的令牌走网关（额度用尽网关直接拒服务）。
+  const selection = await applyGatewayRoute(
+    providerSelectionForModality(policy, 'TEXT', conversation.model || ''),
+    { orgId: auth.user.orgId, studentId: auth.user.id, lessonId: conversation.lesson_id || '', modality: 'TEXT' },
+  );
   const provider = getGenerationProvider(selection);
   if (typeof provider.generateStream !== 'function') throw errors.conflict('当前 AI 渠道不支持流式对话', 'VIBECODING_STREAM_UNAVAILABLE');
 
@@ -529,19 +534,24 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       streamed: result?.streamed !== false,
     });
   } catch (error) {
-    const code = error?.code || 'VIBECODING_CHAT_FAILED';
+    const rawCode = error?.code || 'VIBECODING_CHAT_FAILED';
     // 学生主动停止时连接先断，抛出的可能是底层 socket 错误而不是我们自己的 ABORTED，
     // 所以以 abortController 状态为准：不落失败消息、不扣费。
-    if (abortController.signal.aborted || code === PROVIDER_ERROR_CODES.ABORTED) {
+    if (abortController.signal.aborted || rawCode === PROVIDER_ERROR_CODES.ABORTED) {
       sseSend(ctx, 'aborted', { code: 'VIBECODING_ABORTED', artifacts: listArtifacts(conversation.id, { includeContent: true }) });
     } else {
+      // ⚠️ 这里必须**归一化后再给学生看**：网关「额度用尽」在 HTTP 上是 403，
+      // 直接透原始文案就会把「请在管理后台重新填写并保存该渠道 API Key」这种给运维看的话
+      // 甩给一个十来岁的学生（而且真正的原因是他这节课的钱花完了）。
+      const normalized = normalizeProviderError(error);
+      const code = normalized.code || rawCode;
       recordFailedMessage(conversation.id, selection.model, streamedText, code);
       recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: conversation.class_session_id || null,
         modality: 'TEXT', model: selection.model, credits: 0, status: 'FAILED', failCode: code,
         pricing: { source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
       });
-      sseSend(ctx, 'error', { code, message: error?.message || 'AI 回复失败' });
+      sseSend(ctx, 'error', { code, message: normalized.message || error?.message || 'AI 回复失败' });
     }
   } finally {
     clearInterval(heartbeat);
@@ -579,11 +589,13 @@ async function illustrateTurn(ctx, auth, conversation, artifactIds) {
       if (updated) sseSend(ctx, 'artifact', { artifact: updated, created: false });
     }
   } catch (error) {
-    // 最常见的两种：能力没开、生成渠道不可用。如实告诉学生「这次没配图」，而不是默默不给。
+    // 最常见的几种：能力没开、生成渠道不可用、这节课的算力额度用尽。
+    // 如实告诉学生「这次没配图」，而不是默默不给 —— 且同样先归一化，别把运维文案透给学生。
+    const normalizedImage = error instanceof ApiError ? { code: error.code, message: error.message } : normalizeProviderError(error);
     sseSend(ctx, 'status', {
       phase: 'image', done: 0, total: 0,
-      error: String(error?.message || error).slice(0, 160),
-      code: error?.code || 'ILLUSTRATION_FAILED',
+      error: String(normalizedImage.message || error?.message || error).slice(0, 160),
+      code: normalizedImage.code || error?.code || 'ILLUSTRATION_FAILED',
     });
   }
 }

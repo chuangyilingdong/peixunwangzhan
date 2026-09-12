@@ -24,6 +24,8 @@ export const PROVIDER_ERROR_CODES = Object.freeze({
   RESPONSE_INVALID: 'GENERATION_PROVIDER_RESPONSE_INVALID',
   MODALITY_UNSUPPORTED: 'GENERATION_PROVIDER_MODALITY_UNSUPPORTED',
   ABORTED: 'GENERATION_PROVIDER_ABORTED',
+  // 算力网关说「额度用尽」：这不是故障，是本学生在这节课的钱花完了，重试没有任何意义。
+  QUOTA_EXHAUSTED: 'COMPUTE_QUOTA_EXHAUSTED',
 });
 
 export function isMockProvider(name) {
@@ -75,6 +77,14 @@ export function normalizeProviderError(error, { status } = {}) {
     if (detail.startsWith(message)) return detail;
     return `${message}（${detail}）`;
   };
+  // 额度用尽必须排在「认证失败」前面判：网关（new-api）额度耗尽也是 402/403，
+  // 但那不是 key 填错了，提示学生「让老师充算力」比提示管理员「重填 key」有用得多。
+  // ⚠️ 这一条**不带上游原文**（withDetail）：原文是「请在管理后台重新填写并保存该渠道 API Key」，
+  //    拼上去正好把最误导人的那句话又还给了学生（守卫 p59 ⑥ 专门钉这一条）。
+  if (code === PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED || httpStatus === 402
+    || (httpStatus === 403 && /quota|额度|余额|balance|insufficient|用尽/i.test(String(error?.message || '')))) {
+    return { code: PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED, retryable: false, message: '本节课的算力额度已用尽，请联系老师为本节课增加额度。' };
+  }
   if (code === PROVIDER_ERROR_CODES.AUTH_FAILED || httpStatus === 401 || httpStatus === 403) return { code: PROVIDER_ERROR_CODES.AUTH_FAILED, retryable: false, message: withDetail(`AI渠道认证失败（HTTP ${httpStatus || 401}）。请在管理后台重新填写并保存该渠道 API Key。`) };
   if (code.includes('SAFETY') || code.includes('CONTENT') || httpStatus === 400 && /safety|moderation|policy/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.SAFETY_REJECTED, retryable: false, message: '内容未通过 AI 服务安全策略' };
   if (code === 'ABORT_ERR' || code === 'ETIMEDOUT' || code === 'GENERATION_TIMEOUT' || code === PROVIDER_ERROR_CODES.TIMEOUT || error?.name === 'AbortError' || /timeout|超时/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.TIMEOUT, retryable: true, message: 'AI 服务响应超时' };

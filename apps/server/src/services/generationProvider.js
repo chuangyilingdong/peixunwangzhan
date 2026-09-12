@@ -51,7 +51,7 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
   };
 }
 
-function providerSelection({ provider, model, endpoint, channelId, requestTemplates, modelRequestTemplates, requestPaths, pollPaths } = {}) {
+function providerSelection({ provider, model, endpoint, channelId, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway } = {}) {
   return {
     provider: String(provider || AI_PROVIDER).trim(),
     model: String(model || AI_PROVIDER_MODEL).trim(),
@@ -61,12 +61,17 @@ function providerSelection({ provider, model, endpoint, channelId, requestTempla
     modelRequestTemplates: modelRequestTemplates && typeof modelRequestTemplates === 'object' ? modelRequestTemplates : {},
     requestPaths: requestPaths && typeof requestPaths === 'object' ? requestPaths : {},
     pollPaths: pollPaths && typeof pollPaths === 'object' ? pollPaths : {},
+    // 算力网关出口（由 services/computeGateway.js 的 applyGatewayRoute 挂上）：
+    // 有它就用网关的地址 + 该学生的令牌 key 发请求，否则直连上游。
+    gateway: gateway && gateway.endpoint && gateway.apiKey ? { endpoint: String(gateway.endpoint), apiKey: String(gateway.apiKey), tokenName: String(gateway.tokenName || '') } : null,
   };
 }
 
 export function providerConfig(selection = {}) {
   const selected = providerSelection(selection);
-  return validateProviderConfig({ ...selected, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY });
+  // 走网关时凭证是网关令牌，不需要本地再存一份上游 key（key 在网关那一侧）。
+  const apiKey = selected.gateway?.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+  return validateProviderConfig({ ...selected, apiKey });
 }
 export function generationProviderInfo(selection = {}) {
   const config = providerConfig(selection);
@@ -81,6 +86,8 @@ export function generationProviderInfo(selection = {}) {
     adapterAvailable,
     capabilities,
     endpointConfigured: Boolean(config.endpoint),
+    // 这次调用实际走的是网关还是直连上游，界面/日志能看见，免得「以为在网关里被拦着」
+    routedVia: providerSelection(selection).gateway ? 'gateway' : 'direct',
     configError: config.reasons.length ? 'AI_PROVIDER_CONFIG_INVALID' : null,
   };
 }
@@ -90,5 +97,17 @@ export function getGenerationProvider(selection = {}) {
   if (isMockProvider(config.provider)) return mockProvider(config.model);
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
+  if (selected.gateway) {
+    // 走网关：new-api 提供的是 OpenAI 那套接口，所以**不套**我们自己上游的请求模板/路径
+    // （那些是给 MiniMax/Mureka 的私有路径与私有请求体用的，网关不认）→ 用内置的 OpenAI 形状模板。
+    // ⚠️ 图片路径要显式给成 **复数** `/v1/images/generations`：new-api 只有复数这一条
+    //    （router/relay-router.go 实测），而我们自己的默认路径是单数 `/image/generations` ——
+    //    不覆盖的话图片这条会打到网关上不存在的路径（404），且看起来像「网关不支持图片」。
+    return openAiCompatibleProvider({
+      name: config.provider, model: config.model, endpoint: selected.gateway.endpoint, apiKey: selected.gateway.apiKey,
+      modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE,
+      requestTemplates: {}, modelRequestTemplates: {}, requestPaths: { IMAGE: '/v1/images/generations' }, pollPaths: {},
+    });
+  }
   return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates, requestPaths: selected.requestPaths, pollPaths: selected.pollPaths });
 }

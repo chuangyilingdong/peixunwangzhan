@@ -1,7 +1,7 @@
 import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, parseJson, q, requireRole, row, rows, transaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
-import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError } from '../services/providerContract.js';
+import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame } from '../services/modelCapabilities.js';
 import { PUBLIC_SITE_URL } from '../config.js';
@@ -9,12 +9,15 @@ import { assertSessionAiControls } from '../services/aiControls.js';
 import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
+import { applyGatewayRoute } from '../services/computeGateway.js';
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const MODALITY_LABELS = {
   TEXT: '灵感提示词', IMAGE: '画面素材', MUSIC: '音乐素材',
   VIDEO: '故事短片',
 };
+/** 网关说「额度用尽」：这是本学生在这节课的钱花完了，不是故障，重试没有意义。 */
+const isQuotaExhausted = (code) => String(code || '') === PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED;
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo' };
 const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video' };
 const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music' };
@@ -231,10 +234,14 @@ const LYRICS_SYSTEM_PROMPT = [
   '只输出歌词本身，不要解释、不要 markdown；用 [Verse] / [Chorus] 标注段落，控制在 3000 字以内。',
 ].join('');
 
-async function writeLyricsForMusic({ prompt, policy, requestContext = null, auth = null }) {
+async function writeLyricsForMusic({ prompt, policy, requestContext = null, auth = null, lessonId = '' }) {
   const description = String(prompt || '').trim();
   if (!description) throw errors.badRequest('请先写下你想要的音乐是什么样子', 'GENERATION_PROMPT_REQUIRED');
-  const selection = providerSelectionForModality(policy, 'TEXT');
+  // 作词这一步也是学生在花算力，所以同样按他的令牌走网关（没有 auth 的调用点保持直连）。
+  const baseSelection = providerSelectionForModality(policy, 'TEXT');
+  const selection = auth
+    ? await applyGatewayRoute(baseSelection, { orgId: auth.user.orgId, studentId: auth.user.id, lessonId, modality: 'TEXT' })
+    : baseSelection;
   const provider = getGenerationProvider(selection);
   try {
     const generated = await provider.generate({
@@ -531,7 +538,10 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const context = resolveProjectUsageContext(auth.rawUser, project);
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
   const box = resolveLessonGenerationBox(context, modality, boxId);
-  const providerSelection = providerSelectionForModality(policy, modality, box?.model || '');
+  // 走网关的话，这里换成「该学生在这节课的令牌」出口；解析不出来就原样直连。
+  const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || ''), {
+    orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
+  });
   const provider = getGenerationProvider(providerSelection);
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
@@ -540,7 +550,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
   const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
   const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
-    ? await writeLyricsForMusic({ prompt, policy, requestContext, auth })
+    ? await writeLyricsForMusic({ prompt, policy, requestContext, auth, lessonId: context.lesson?.id || '' })
     : '';
   const options = generationOptionsFor({
     context, modality, policy, selection: providerSelection, box,
@@ -588,18 +598,23 @@ async function processAsyncGeneration(item) {
   const providerSelection = persistedJob?.provider && persistedJob.provider !== 'local-mock'
     ? { ...routedSelection, provider: persistedJob.provider, model: persistedJob.model }
     : {};
-  const provider = getGenerationProvider(providerSelection); const info = generationProviderInfo(providerSelection);
   const context = resolveProjectUsageContext(auth.rawUser, project);
+  // 异步任务在 worker 里才真正打上游，所以网关出口也必须在这里解析一次
+  // （不把令牌 key 持久化进任务表 —— 每次现解析，令牌轮换/额度调整都立刻生效）。
+  const routedByGateway = await applyGatewayRoute(providerSelection, {
+    orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
+  });
+  const provider = getGenerationProvider(routedByGateway); const info = generationProviderInfo(routedByGateway);
   try {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const box = resolveLessonGenerationBox(context, modality, boxId);
     const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
     const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
     const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
-      ? await writeLyricsForMusic({ prompt, policy, requestContext })
+      ? await writeLyricsForMusic({ prompt, policy, requestContext, auth, lessonId: context.lesson?.id || '' })
       : '';
     const options = generationOptionsFor({
-      context, modality, policy, selection: providerSelection, box,
+      context, modality, policy, selection: routedByGateway, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
       referenceAssets: resolveReferenceAssets(project.id, referenceAssets),
@@ -623,11 +638,12 @@ async function processAsyncGeneration(item) {
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
   } catch (error) {
     // 业务侧拦截（能力/套餐/管控/额度）重试没有意义，直接判失败。
+    const normalizedOnce = normalizeProviderError(error);
     const current = error instanceof ApiError ? null : row('SELECT retry_count,max_retries,status FROM generation_jobs WHERE id=?', [jobId]);
-    if (current?.status === 'RUNNING' && Number(current.retry_count || 0) < Number(current.max_retries ?? ASYNC_GENERATION_MAX_RETRIES)) {
+    // 算力额度用尽属于「钱花完了」：重试只会再被网关拒一次（还多打两次网关），直接判失败。
+    if (!isQuotaExhausted(normalizedOnce.code) && current?.status === 'RUNNING' && Number(current.retry_count || 0) < Number(current.max_retries ?? ASYNC_GENERATION_MAX_RETRIES)) {
       const retryCount = Number(current.retry_count || 0) + 1; const nextAttempt = new Date(Date.now() + retryCount * 5000).toISOString();
-      const normalized = normalizeProviderError(error);
-      q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=? AND status='RUNNING' AND worker_id=?", [retryCount, nextAttempt, nowIso(), normalized.code || error?.code || 'GENERATION_FAILED', String(normalized.message || error?.message || '生成失败'), jobId, ASYNC_WORKER_ID]);
+      q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=? AND status='RUNNING' AND worker_id=?", [retryCount, nextAttempt, nowIso(), normalizedOnce.code || error?.code || 'GENERATION_FAILED', String(normalizedOnce.message || error?.message || '生成失败'), jobId, ASYNC_WORKER_ID]);
       enqueuePersistedJob(jobId, retryCount * 5000);
     } else {
       markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
@@ -836,7 +852,9 @@ export async function handleAiGeneration(ctx) {
     const policy = getAiProviderPolicy();
     const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const box = resolveLessonGenerationBox(context, modality, boxId);
-    const providerSelection = providerSelectionForModality(policy, modality, box?.model || '');
+    const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || ''), {
+      orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
+    });
     const provider = getGenerationProvider(providerSelection);
     const info = generationProviderInfo(providerSelection);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
@@ -846,7 +864,7 @@ export async function handleAiGeneration(ctx) {
     const requestedFirstFrame = resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim());
     const requestedLastFrame = resolveFirstFrameUrl(project.id, String(body.lastFrameAssetUrl || '').trim());
     const writtenLyrics = modality === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
-      ? await writeLyricsForMusic({ prompt, policy, requestContext: ctx, auth })
+      ? await writeLyricsForMusic({ prompt, policy, requestContext: ctx, auth, lessonId: context.lesson?.id || '' })
       : '';
     // 平台把框体的比例/清晰度/时长留空时，采纳学生在画布上自选的值（仍按模型能力白名单校验）。
     const studentOptions = studentParamOptionsFrom(body);

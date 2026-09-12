@@ -346,7 +346,11 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     name: providerName,
     model: providerModel,
     capabilities: ['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'],
-    async generate({ modality, prompt, title, options } = {}) {
+    // ⚠️ `options = {}` 这个默认值不能省：下面要读 `options.referenceAssets`，
+    // 而**不是每个调用方都传 options**（作词那一步就没传）→ 少了它就是
+    // 「TypeError: Cannot read properties of undefined (reading 'referenceAssets')」，
+    // 表现为「平台作词失败」→ 描述模式生音乐整条链路直接崩（2026-09-11 引入、09-12 守卫照出来）。
+    async generate({ modality, prompt, title, options = {} } = {}) {
       const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
       if (!Object.prototype.hasOwnProperty.call(DEFAULT_MODALITY_PATHS, normalizedModality)) {
         throw providerError('当前真实 AI 适配器暂不支持该素材类型。', PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED);

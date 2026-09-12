@@ -1,5 +1,5 @@
 // 平台管理端「overview」域路由：从 adminOrg.js 拆出，行为不变。
-import { createGatewayToken, gatewayUsageOverview, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
+import { clearGatewayRouteCache, createGatewayToken, gatewayUsageOverview, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
@@ -114,6 +114,9 @@ export async function handleOverview(ctx, part, method) {
   if (part === '/compute-gateway' && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const config = saveComputeGatewayConfig(ctx.body || {}, { password: ctx.body?.password });
+    // 路由缓存里存着「哪个学生用哪张令牌」，改完配置立刻失效 ——
+    // 否则 60 秒内还在用旧地址/旧令牌，表现就是「改了没生效」。
+    clearGatewayRouteCache();
     audit(ctx, 'COMPUTE_GATEWAY_UPDATE', 'PLATFORM_SETTING', 'compute_gateway', null, { baseUrl: config.baseUrl, username: config.username, enabled: config.enabled, passwordChanged: Boolean(ctx.body?.password) });
     return { config };
   }
@@ -142,6 +145,8 @@ export async function handleOverview(ctx, part, method) {
       models: String(ctx.body?.models || '').trim(),
       unlimited: ctx.body?.unlimited === true,
     });
+    // 刚发的令牌要能立刻被学生用上，别等 60 秒缓存过期。
+    clearGatewayRouteCache();
     audit(ctx, 'COMPUTE_GATEWAY_TOKEN_CREATE', 'PLATFORM_SETTING', 'compute_gateway', null, { name: String(ctx.body?.name || ''), budgetFen: Number(ctx.body?.budgetFen || 0), unlimited: ctx.body?.unlimited === true });
     return result;
   }
