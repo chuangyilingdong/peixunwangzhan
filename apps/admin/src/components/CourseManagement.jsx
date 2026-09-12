@@ -1,5 +1,6 @@
 // 平台课包管理：列表视图 + 课包详情（标签页）+ 课时编辑抽屉
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   Empty, ErrorState, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Panel,
   Pagination, Status, formatDate, useData,
@@ -47,7 +48,7 @@ const defaultClassroomConfig = { version: 3 };
 const emptyCourseForm = {
   title: '', description: '', coverImageUrl: '', coverAssetId: '', priceYuan: '', version: '1.0',
   estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'ALL_ORGS', deliveryMode: 'CANVAS',
-  difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '',
+  difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '', stockTotal: '',
 };
 
 // 生成框体是素材表里的一种素材（material_type=GENERATION_BOX），顺序跟着素材走；
@@ -246,7 +247,6 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
 
 
   return <div className="lesson-canvas-config-editor">
-    <label>课堂类型<select value={deliveryMode} onChange={(event) => update({ deliveryMode: event.target.value })}><option value="CANVAS">课堂画布</option><option value="VIBECODING">VibeCoding 课堂</option></select></label>
     {deliveryMode === 'VIBECODING' ? <Notice>VibeCoding 课堂已上线：学生进入后与 AI 对话写代码。发布前请为本课时勾选「AI 文字」能力，否则发布会被拦下。</Notice> : <>
       <div className="lesson-capability-checks"><strong>本课开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => toggleCapability(value, event.target.checked)} />{label}</label>)}</div>
       <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={addGroup}>＋素材组</button></div>
@@ -298,13 +298,28 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
   const status = edit.status ?? lesson.status;
   const lessonContent = edit.lessonContent ?? lesson.lessonContent ?? '';
   const update = (patch) => setEdit((current) => ({ ...current, ...patch }));
+  // 上课类型改为可多选（画布 + VibeCoding 可同时开，学生端两个入口并列）。
+  // 老数据只有单值 deliveryMode，这里统一读成数组再编辑。
+  const deliveryModes = edit.deliveryModes ?? lesson.deliveryModes ?? [lesson.deliveryMode || 'CANVAS'];
+  const perStudentBudgetYuan = edit.perStudentBudgetFen === undefined
+    ? (lesson.perStudentBudgetFen == null ? '' : String(lesson.perStudentBudgetFen / 100))
+    : edit.perStudentBudgetYuan;
+  function toggleDeliveryMode(mode) {
+    const next = deliveryModes.includes(mode) ? deliveryModes.filter((item) => item !== mode) : [...deliveryModes, mode];
+    if (!next.length) { setMessage('至少保留一种上课类型'); return; }
+    update({ deliveryModes: next });
+  }
 
   async function save() {
     setBusy(true); setMessage('');
     try {
+      const budgetText = String(perStudentBudgetYuan ?? '').trim();
+      if (budgetText && !/^\d+(?:\.\d{1,2})?$/.test(budgetText)) throw new Error('每学生算力上限必须是有效的元金额，最多两位小数');
       const body = {
         title, summary, durationMinutes: Number(durationMinutes), lessonContent,
-        deliveryMode: edit.deliveryMode ?? lesson.deliveryMode ?? 'CANVAS',
+        deliveryModes,
+        // 每学生算力上限（元 → 分）；留空 = 不拦，只记账
+        perStudentBudgetFen: budgetText === '' ? null : Math.round(Number(budgetText) * 100),
         classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {},
         capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'],
         materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [],
@@ -334,6 +349,19 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
             <label>状态<select value={status} onChange={(event) => update({ status: event.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已下架</option></select></label>
           </div>
           <label>课时正文 / 教学指引<textarea rows={4} placeholder="≤50000 字" value={lessonContent} onChange={(event) => update({ lessonContent: event.target.value })} /></label>
+        </section>
+        <section className="drawer-section">
+          <h3>上课类型与算力预算</h3>
+          <label>上课类型（可多选，学生端两个入口并列）</label>
+          <div className="row-actions">
+            {[['CANVAS', '画布课堂'], ['VIBECODING', 'VibeCoding 课堂']].map(([value, label]) => (
+              <label key={value} className="checkbox-option">
+                <input type="checkbox" checked={deliveryModes.includes(value)} onChange={() => toggleDeliveryMode(value)} />{label}
+              </label>
+            ))}
+          </div>
+          <label>每学生算力上限（元）<input type="number" min="0" step="0.01" placeholder="留空 = 不限制，只记账" value={perStudentBudgetYuan} onChange={(event) => update({ perStudentBudgetFen: undefined, perStudentBudgetYuan: event.target.value })} /></label>
+          <p className="muted">这节课的算力总额度 = 本值 × 参与学生数（例：50 元 × 5 人 = 250 元）；实际消耗在算力总控里按学生归集。</p>
         </section>
         <section className="drawer-section">
           <h3>课堂配置</h3>
@@ -393,6 +421,7 @@ function CreateCourseModal({ api, onClose, onCreated }) {
         title: form.title, description: form.description, coverImageUrl: form.coverImageUrl || null, coverAssetId: form.coverAssetId || null,
         priceFen: Math.round(Number(priceText) * 100), version: form.version || '1.0',
         estimatedCreditsPerPerson: Number(form.estimatedCreditsPerPerson || 0), gradeRange: form.gradeRange, visibility: form.visibility,
+        stockTotal: Number(form.stockTotal || 0),
         deliveryMode: form.deliveryMode || 'CANVAS',
         // 选择「立即发布」时课时一并置为已发布，否则保持草稿、等待后续再发布。
         lessons: lessons.map((lesson) => ({
@@ -427,7 +456,6 @@ function CreateCourseModal({ api, onClose, onCreated }) {
           <label>课程简介<textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="一句话说明这门课教什么" /></label>
           <div className="form-grid">
             <label>可见范围<select value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value })}>{VISIBILITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label>课堂类型<select value={form.deliveryMode} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂（预留）</option></select></label>
             <label>版本号<input value={form.version} onChange={(event) => setForm({ ...form, version: event.target.value })} placeholder="1.0" /></label>
           </div>
           <p className="muted">发布后课包会出现在官网课程广场；<strong>机构后台不会自动看到</strong>，要在课包详情的「机构授权」里逐家授权（可设 1 年 / 2 年等有效期），授权期内机构才能使用。</p>
@@ -465,12 +493,8 @@ function CreateCourseModal({ api, onClose, onCreated }) {
           </div>
           <div className="form-grid">
             <label>价格（元）<input inputMode="decimal" value={form.priceYuan} placeholder="如 199.00" onChange={(event) => setForm({ ...form, priceYuan: event.target.value })} /></label>
-            <label>预估积分/人<input type="number" min="0" value={form.estimatedCreditsPerPerson} onChange={(event) => setForm({ ...form, estimatedCreditsPerPerson: event.target.value })} /></label>
-            <label>适合年级<input value={form.gradeRange} placeholder="如 3-6 年级" onChange={(event) => setForm({ ...form, gradeRange: event.target.value })} /></label>
+            <label>库存（可授权次数）<input type="number" min="0" value={form.stockTotal} placeholder="如 10000" onChange={(event) => setForm({ ...form, stockTotal: event.target.value })} /></label>
             <label>难度（1-5）<input type="number" min="1" max="5" value={form.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setForm({ ...form, difficultyLevel: event.target.value })} /></label>
-            <label>适学年龄下限<input type="number" min="3" max="99" value={form.ageRangeMin} placeholder="如 8" onChange={(event) => setForm({ ...form, ageRangeMin: event.target.value })} /></label>
-            <label>适学年龄上限<input type="number" min="3" max="99" value={form.ageRangeMax} placeholder="如 16" onChange={(event) => setForm({ ...form, ageRangeMax: event.target.value })} /></label>
-            <label>标签（英文逗号分隔）<input value={form.tags} placeholder="古诗, 创作, 动画" onChange={(event) => setForm({ ...form, tags: event.target.value })} /></label>
           </div>
           <p className="muted">这一步可以跳过，创建后在课包详情里继续补充。</p>
         </div> : null}
@@ -510,6 +534,7 @@ function CourseCard({ course, onOpen, onStatus, onDelete, busy }) {
         <span>课时 <strong>{course.lessonCount}</strong></span>
         <span>{VISIBILITY_LABELS[course.visibility] || course.visibility}</span>
         <span>v{course.version}</span>
+        <span>库存 {course.stockTotal || 0} 次</span>
         {course.difficultyLevel ? <span>难度 {course.difficultyLevel}/5</span> : null}
         {course.ageRangeMin || course.ageRangeMax ? <span>{course.ageRangeMin ?? '?'}-{course.ageRangeMax ?? '?'} 岁</span> : null}
       </div>
@@ -549,7 +574,7 @@ function CourseList({ api, onOpen }) {
     if (!window.confirm(text)) return;
     setBusy(true); setMessage('');
     try {
-      await api.request(`admin/course-series/${course.id}/status`, { method: 'POST', body: { action } });
+      await api.request(`admin/course-series/${courseId}/status`, { method: 'POST', body: { action } });
       setMessage(action === 'archive' ? '课包已下架。' : '课包已发布。');
       courses.refresh();
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
@@ -558,7 +583,7 @@ function CourseList({ api, onOpen }) {
   async function deleteCourse(course) {
     if (!window.confirm(`确认删除课包「${course.title}」？删除后课包与课时配置不可恢复；已被班级课单或课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
     setBusy(true); setMessage('');
-    try { await api.request(`admin/course-series/${course.id}`, { method: 'DELETE' }); setMessage(`课包「${course.title}」已删除。`); courses.refresh(); }
+    try { await api.request(`admin/course-series/${courseId}`, { method: 'DELETE' }); setMessage(`课包「${course.title}」已删除。`); courses.refresh(); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
@@ -586,7 +611,7 @@ function CourseList({ api, onOpen }) {
 
 /* ---------------------------------------------------------------- 课包详情 */
 
-function CourseDetail({ api, course, onBack }) {
+function CourseDetail({ api, courseId, onBack }) {
   const [activeTab, setActiveTab] = useState('basic');
   const [message, setMessage] = useState('');
   const [saveState, setSaveState] = useState(null);
@@ -598,7 +623,7 @@ function CourseDetail({ api, course, onBack }) {
   const [lessonDraft, setLessonDraft] = useState({ title: '', durationMinutes: 45 });
   const [editingLesson, setEditingLesson] = useState(null);
   const [uploadingCover, setUploadingCover] = useState(false);
-  const detail = useData(() => api.get(`admin/course-series/${course.id}/detail`), [api, course.id]);
+  const detail = useData(() => api.get(`admin/course-series/${courseId}/detail`), [api, courseId]);
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const series = detail.data?.series || null;
 
@@ -610,6 +635,7 @@ function CourseDetail({ api, course, onBack }) {
       estimatedCreditsPerPerson: series.estimatedCreditsPerPerson || '', gradeRange: series.gradeRange || '',
       visibility: series.visibility, sort: series.sort, difficultyLevel: series.difficultyLevel ?? '', ageRangeMin: series.ageRangeMin ?? '',
       ageRangeMax: series.ageRangeMax ?? '', tags: (series.tags || []).join(','), deliveryMode: series.deliveryMode || 'CANVAS',
+      stockTotal: String(series.stockTotal ?? ''),
     });
   }, [series?.id]);
 
@@ -630,6 +656,7 @@ function CourseDetail({ api, course, onBack }) {
         title: editForm.title, description: editForm.description, coverImageUrl: editForm.coverImageUrl || null, coverAssetId: editForm.coverAssetId || null,
         priceFen: Math.round(Number(priceText) * 100),
         estimatedCreditsPerPerson: Number(editForm.estimatedCreditsPerPerson || 0), gradeRange: editForm.gradeRange || '',
+        stockTotal: Number(editForm.stockTotal || 0),
         visibility: editForm.visibility, sort: Number(editForm.sort), deliveryMode: editForm.deliveryMode || 'CANVAS',
       };
       if (body.coverImageUrl && !/^(https:\/\/|\/api\/)/.test(body.coverImageUrl)) throw new Error('封面地址必须是 HTTPS 链接或平台上传地址');
@@ -637,7 +664,7 @@ function CourseDetail({ api, course, onBack }) {
       body.ageRangeMin = editForm.ageRangeMin !== '' && editForm.ageRangeMin != null ? Number(editForm.ageRangeMin) : null;
       body.ageRangeMax = editForm.ageRangeMax !== '' && editForm.ageRangeMax != null ? Number(editForm.ageRangeMax) : null;
       body.tags = String(editForm.tags || '').split(',').map((t) => t.trim()).filter(Boolean);
-      await api.request(`admin/course-series/${course.id}`, { method: 'PUT', body });
+      await api.request(`admin/course-series/${courseId}`, { method: 'PUT', body });
       setMessage('课包资料已保存，版本号已递增。');
       setSaveState({ tone: 'success', text: '已保存，版本号已递增。' });
       detail.refresh();
@@ -649,20 +676,20 @@ function CourseDetail({ api, course, onBack }) {
     const text = action === 'archive'
       ? `确认下架「${series.title}」？下架后机构端不再可见该课包，数据保留，可随时重新发布。`
       : `确认发布「${series.title}」？发布后课包会出现在官网课程广场（${VISIBILITY_LABELS[series.visibility] || series.visibility}）供大家浏览；机构后台仍然看不到，要到「机构授权」里逐家授权后该机构才能看到并使用。`;
-    await run(`admin/course-series/${course.id}/status`, 'POST', { action }, action === 'archive' ? '课包已下架。' : '课包已发布。', text);
+    await run(`admin/course-series/${courseId}/status`, 'POST', { action }, action === 'archive' ? '课包已下架。' : '课包已发布。', text);
   }
 
   async function deleteCourse() {
     if (!window.confirm(`确认删除课包「${series.title}」？删除后课包与课时配置不可恢复；已被班级课单或课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
     setBusy(true); setMessage('');
-    try { await api.request(`admin/course-series/${course.id}`, { method: 'DELETE' }); onBack(); }
+    try { await api.request(`admin/course-series/${courseId}`, { method: 'DELETE' }); onBack(); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
   async function addLesson(event) {
     event.preventDefault();
     if (!lessonDraft.title.trim()) return;
-    await run(`admin/course-series/${course.id}/lessons`, 'POST', { lessons: [{ title: lessonDraft.title.trim(), durationMinutes: Number(lessonDraft.durationMinutes || 45), deliveryMode: series?.deliveryMode || 'CANVAS', status: 'DRAFT' }] }, `已添加课时「${lessonDraft.title.trim()}」。`);
+    await run(`admin/course-series/${courseId}/lessons`, 'POST', { lessons: [{ title: lessonDraft.title.trim(), durationMinutes: Number(lessonDraft.durationMinutes || 45), deliveryMode: series?.deliveryMode || 'CANVAS', status: 'DRAFT' }] }, `已添加课时「${lessonDraft.title.trim()}」。`);
     setLessonDraft({ title: '', durationMinutes: 45 });
   }
 
@@ -677,14 +704,14 @@ function CourseDetail({ api, course, onBack }) {
     const target = index + direction;
     if (target < 0 || target >= ids.length) return;
     [ids[index], ids[target]] = [ids[target], ids[index]];
-    await run(`admin/course-series/${course.id}/lessons/reorder`, 'PUT', { lessonIds: ids }, '课时顺序已更新。');
+    await run(`admin/course-series/${courseId}/lessons/reorder`, 'PUT', { lessonIds: ids }, '课时顺序已更新。');
   }
 
   async function assign() {
     if (!assignOrgId) return;
     setBusy(true); setMessage('');
     try {
-      const result = await api.post(`admin/course-series/${course.id}/assignments`, { orgIds: [assignOrgId], validityDays: assignDays });
+      const result = await api.post(`admin/course-series/${courseId}/assignments`, { orgIds: [assignOrgId], validityDays: assignDays });
       setMessage(`已授权该机构使用本课包，有效期至 ${formatDate(result?.expiresAt) || '—'}。`);
       setAssignOrgId(''); detail.refresh();
     }
@@ -710,7 +737,7 @@ function CourseDetail({ api, course, onBack }) {
   const vibecodingWithoutText = (series?.lessons || []).filter((lesson) => lesson.deliveryMode === 'VIBECODING' && !(lesson.capabilities || []).includes('text')).length;
 
   return <>
-    <PageHeader eyebrow="课程资产 · 课包编排" title={series ? series.title : course.title}
+    <PageHeader eyebrow="课程资产 · 课包编排" title={series ? series.title : '课包详情'}
       description={series ? `状态 ${series.status} · 版本 v${series.version} · 共 ${series.lessons.length} 个课时` : '正在读取课包详情…'}
       actions={<><button className="secondary-button" onClick={onBack}>← 返回课包列表</button>{series ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>下架</button> : null}{series ? <button className="text-button danger-text" disabled={busy} onClick={deleteCourse}>删除</button> : null}{series && series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : null}</>} />
     {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
@@ -739,18 +766,13 @@ function CourseDetail({ api, course, onBack }) {
           <h3 className="form-section-title">计费与属性</h3>
           <div className="form-grid">
             <label>价格（元）<input inputMode="decimal" value={editForm.priceYuan} onChange={(event) => setEditForm({ ...editForm, priceYuan: event.target.value })} /></label>
+            <label>库存（可授权次数）<input type="number" min="0" value={editForm.stockTotal} onChange={(event) => setEditForm({ ...editForm, stockTotal: event.target.value })} /></label>
             <label>版本号<input value={editForm.version} disabled title="编辑资料时版本号由系统自动递增" /></label>
-            <label>预估积分/人<input type="number" min="0" value={editForm.estimatedCreditsPerPerson} onChange={(event) => setEditForm({ ...editForm, estimatedCreditsPerPerson: event.target.value })} /></label>
-            <label>适合年级<input value={editForm.gradeRange} placeholder="如 3-6 年级" onChange={(event) => setEditForm({ ...editForm, gradeRange: event.target.value })} /></label>
             <label>难度（1-5）<input type="number" min="1" max="5" value={editForm.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setEditForm({ ...editForm, difficultyLevel: event.target.value })} /></label>
-            <label>适学年龄下限<input type="number" min="3" max="99" value={editForm.ageRangeMin} placeholder="如 8" onChange={(event) => setEditForm({ ...editForm, ageRangeMin: event.target.value })} /></label>
-            <label>适学年龄上限<input type="number" min="3" max="99" value={editForm.ageRangeMax} placeholder="如 16" onChange={(event) => setEditForm({ ...editForm, ageRangeMax: event.target.value })} /></label>
           </div>
-          <label>标签（英文逗号分隔）<input value={editForm.tags} placeholder="古诗, 创作, 动画" onChange={(event) => setEditForm({ ...editForm, tags: event.target.value })} /></label>
           <h3 className="form-section-title">可见范围与排序</h3>
           <div className="form-grid">
             <label>可见范围<select value={editForm.visibility} onChange={(event) => setEditForm({ ...editForm, visibility: event.target.value })}>{VISIBILITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label>默认课堂类型<select value={editForm.deliveryMode} onChange={(event) => setEditForm({ ...editForm, deliveryMode: event.target.value })}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂（预留）</option></select></label>
             <label>排序<input type="number" min="0" value={editForm.sort} onChange={(event) => setEditForm({ ...editForm, sort: event.target.value })} /></label>
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
@@ -798,7 +820,7 @@ function CourseDetail({ api, course, onBack }) {
           <div><button type="button" className="secondary-button" disabled={!assignOrgId || busy} onClick={assign}>授权</button></div>
         </div>
         <p className="muted">本次授权有效期至 {formatDate(assignExpiresAt)}（共 {assignDays} 天）。</p>
-        {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>有效期至</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期，机构已看不到）' : ''}</span> : '永久有效'}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${course.id}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="平台课包发布后只会上架课程广场；要出现在机构后台，必须在这里授权给对应机构。" />}
+        {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>有效期至</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期，机构已看不到）' : ''}</span> : '永久有效'}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${courseId}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="平台课包发布后只会上架课程广场；要出现在机构后台，必须在这里授权给对应机构。" />}
       </Panel> : null}
 
       {activeTab === 'publish' ? <Panel title="发布检查">
@@ -823,8 +845,16 @@ function CourseDetail({ api, course, onBack }) {
 
 /* ---------------------------------------------------------------- 顶层容器 */
 
-export function Courses({ api }) {
-  const [selected, setSelected] = useState(null);
-  if (selected) return <CourseDetail api={api} course={selected} onBack={() => setSelected(null)} />;
-  return <CourseList api={api} onOpen={setSelected} />;
+/** 列表页（路由 /courses）：点卡片进详情页，不再在一个路由里用 useState 切换 */
+export function CourseSeriesListPage({ api }) {
+  const navigate = useNavigate();
+  return <CourseList api={api} onOpen={(course) => navigate(`/courses/${course.id}`)} />;
+}
+
+/** 详情页（路由 /courses/:seriesId）：可深链、可刷新、可后退 */
+export function CourseSeriesDetailPage({ api }) {
+  const { seriesId } = useParams();
+  const navigate = useNavigate();
+  if (!seriesId) return <Empty title="课包不存在" body="请从课包列表进入。" />;
+  return <CourseDetail api={api} courseId={seriesId} onBack={() => navigate('/courses')} />;
 }

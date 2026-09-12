@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { AppShell, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
-import { Courses } from './components/CourseManagement.jsx';
+import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/CourseManagement.jsx';
 import { AdminPermissionGate, demos, visibleNavigation } from './shared.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { Organizations } from './pages/Organizations.jsx';
@@ -33,7 +33,9 @@ function App() {
   return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
-    <Route path="/courses" element={page('ADMIN_COURSES', <Courses api={api} />)} />
+    {/* 课包拆成两条路由：列表与详情各有自己的地址（可深链、可刷新、可后退） */}
+    <Route path="/courses" element={page('ADMIN_COURSES', <CourseSeriesListPage api={api} />)} />
+    <Route path="/courses/:seriesId" element={page('ADMIN_COURSES', <CourseSeriesDetailPage api={api} />)} />
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
     <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
