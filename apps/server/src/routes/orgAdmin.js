@@ -1,4 +1,4 @@
-import { audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
+import { audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
 import { hashPassword } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
@@ -700,6 +700,60 @@ export async function handleOrg(ctx) {
     });
     audit(ctx, status === 'APPROVED' ? 'WORK_PUBLISH_REQUEST_APPROVE' : 'WORK_PUBLISH_REQUEST_REJECT', 'WORK_PUBLISH_REQUEST', requestRow.id, normalizeWorkPublishRequest(requestRow), { status, resolution, workId: work.id }, { orgId: currentOrgId });
     return orgWorkPublishRequestRows('request.id=?', [requestRow.id])[0];
+  }
+
+  // 机构端：把课包的「可用次数」分给学生（用掉 1 次；同一学生同一课包只能一次；机构侧不可撤销）
+  if (part === '/course-grants' && method === 'GET') {
+    const seriesFilter = String(ctx.search.get('seriesId') || '').trim();
+    const params = [currentOrgId];
+    let where = 'grant.org_id=?';
+    if (seriesFilter) { where += ' AND grant.series_id=?'; params.push(seriesFilter); }
+    const items = rows(`SELECT grant.id, grant.student_id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
+        student.display_name student_name, student.login student_login, series.title series_title
+      FROM student_course_grants grant
+      JOIN users student ON student.id=grant.student_id
+      JOIN course_series series ON series.id=grant.series_id
+      WHERE ${where} ORDER BY grant.granted_at DESC LIMIT 500`, params).map((item) => ({
+      id: item.id, studentId: item.student_id, studentName: item.student_name || null, studentLogin: item.student_login || null,
+      seriesId: item.series_id, seriesTitle: item.series_title || null, grantedAt: item.granted_at,
+      revokedAt: item.revoked_at || null, revokeReason: item.revoke_reason || null,
+    }));
+    return { items, total: items.length };
+  }
+  if (part === '/course-grants' && method === 'POST') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以给学员授权课包', 'ORG_ADMIN_REQUIRED');
+    const seriesId = nonEmptyString(ctx.body?.seriesId, '课包', { max: 100 });
+    const requested = Array.isArray(ctx.body?.studentIds) ? ctx.body.studentIds : [];
+    const studentIds = [...new Set(requested.map((value) => String(value || '').trim()).filter(Boolean))];
+    if (!studentIds.length || studentIds.length > 200) throw errors.badRequest('请选择 1-200 名学员', 'INVALID_STUDENT_IDS');
+    const assignment = row("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [seriesId, currentOrgId, nowIso()]);
+    if (!assignment) throw errors.forbidden('该课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
+    const placeholders = studentIds.map(() => '?').join(',');
+    const students = rows(`SELECT id, display_name, login FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
+    if (students.length !== studentIds.length) throw errors.badRequest('存在不属于本机构的学员', 'STUDENT_NOT_FOUND');
+    // 已授权过的跳过（不重复扣次数）：同一机构 + 同一学生 + 同一课包只允许一条有效记录
+    const already = new Set(rows(`SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL AND student_id IN (${placeholders})`, [currentOrgId, seriesId, ...studentIds]).map((item) => item.student_id));
+    const fresh = studentIds.filter((studentId) => !already.has(studentId));
+    const quotaTotal = Number(assignment.quota_total || 0);
+    const quotaUsed = Number(assignment.quota_used || 0);
+    if (quotaTotal > 0 && quotaUsed + fresh.length > quotaTotal) {
+      throw errors.conflict(`可用次数不足：授权 ${quotaTotal} 次，已用 ${quotaUsed} 次，本次需要 ${fresh.length} 次`, 'COURSE_QUOTA_EXHAUSTED');
+    }
+    const now = nowIso();
+    transaction(() => {
+      fresh.forEach((studentId) => {
+        const existing = row('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
+        if (existing) {
+          // 撤销过的那条沿用（谁什么时候被授权过留痕），并把它重新置为有效
+          q('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, auth.user.id, assignment.id, existing.id]);
+        } else {
+          q('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at) VALUES (?,?,?,?,?,?,?)', [id('coursegrant'), currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now]);
+        }
+      });
+      if (fresh.length) q('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
+    });
+    audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length }, { orgId: currentOrgId });
+    return { granted: fresh.length, skipped: studentIds.length - fresh.length, quotaTotal, quotaUsed: quotaUsed + fresh.length };
   }
 
   // P1: 机构端 - 查看成员配额列表

@@ -228,7 +228,7 @@ export async function handleCourses(ctx, part, method) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesDetailMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    const assignedOrgs = rows('SELECT assignment.id, assignment.org_id, assignment.assigned_at, assignment.expires_at, organization.name org_name FROM course_assignments assignment JOIN organizations organization ON organization.id=assignment.org_id WHERE assignment.series_id=? AND assignment.status=\'ACTIVE\' ORDER BY assignment.assigned_at DESC', [series.id]).map((item) => ({ id: item.id, orgId: item.org_id, orgName: item.org_name, assignedAt: item.assigned_at, expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now() }));
+    const assignedOrgs = rows('SELECT assignment.id, assignment.org_id, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, organization.name org_name FROM course_assignments assignment JOIN organizations organization ON organization.id=assignment.org_id WHERE assignment.series_id=? AND assignment.status=\'ACTIVE\' ORDER BY assignment.assigned_at DESC', [series.id]).map((item) => ({ id: item.id, orgId: item.org_id, orgName: item.org_name, assignedAt: item.assigned_at, expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(), quotaTotal: Number(item.quota_total || 0), quotaUsed: Number(item.quota_used || 0) }));
     const usage = {
       classesUsingSeries: count('SELECT COUNT(*) AS n FROM classes WHERE default_series_id=?', [series.id]),
       curriculumItems: count('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE source_series_id=?', [series.id]),
@@ -477,6 +477,15 @@ export async function handleCourses(ctx, part, method) {
     const now = nowIso();
     // 有效期挂在「课包 → 机构」的授权上：平台课包本身不设有效期。
     const validityDays = integer(ctx.body?.validityDays, '授权有效期（天）', { min: 1, max: 3650, fallback: 365 });
+    // 授权次数（许可轴）：0 = 不限次数（老行为）；> 0 时受课包库存约束
+    const quotaTotal = integer(ctx.body?.quotaTotal, '授权次数', { min: 0, max: 100000000, fallback: 0 });
+    if (quotaTotal > 0) {
+      const stockTotal = Number(series.stock_total || 0);
+      const grantedTotal = Number(row("SELECT COALESCE(SUM(quota_total),0) n FROM course_assignments WHERE series_id=? AND status='ACTIVE'", [series.id])?.n || 0);
+      if (stockTotal > 0 && grantedTotal + quotaTotal > stockTotal) {
+        throw errors.conflict(`课包库存不足：库存 ${stockTotal} 次，已授权 ${grantedTotal} 次，本次申请 ${quotaTotal} 次`, 'COURSE_QUOTA_EXCEEDS_STOCK');
+      }
+    }
     const expiresAt = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString();
     transaction(() => {
       assignmentOrgIds.forEach((assignmentOrgId) => {
@@ -485,13 +494,41 @@ export async function handleCourses(ctx, part, method) {
         const existing = row('SELECT id, status FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, assignmentOrgId]);
         if (existing) {
           assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, before: { status: existing.status, orgId: assignmentOrgId }, allowSameState: true, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能启用' });
-          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=? WHERE id=?", [auth.user.id, now, expiresAt, existing.id]);
+          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal > 0 ? quotaTotal : Number(existing.quota_total || 0), existing.id]);
         }
-        else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at) VALUES (?,?,?,?,?,?,?)", [id('assign'), series.id, assignmentOrgId, 'ACTIVE', auth.user.id, now, expiresAt]);
+        else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, assignmentOrgId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
       });
     });
-    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds, validityDays, expiresAt });
-    return { assignedCount: assignmentOrgIds.length, validityDays, expiresAt };
+    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds, validityDays, expiresAt, quotaTotal });
+    return { assignedCount: assignmentOrgIds.length, validityDays, expiresAt, quotaTotal };
+  }
+
+  // 平台兜底撤销：机构侧不可撤销（次数已消耗不可逆），出问题时由平台处理并写审计。
+  // 次数退回规则：该学生还没提交过该课包任何一节课的作品 → 退回 1 次；已经上过 → 不退。
+  const grantRevokeMatch = part.match(/^\/course-grants\/([^/]+)\/revoke$/);
+  if (grantRevokeMatch && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const grant = row('SELECT * FROM student_course_grants WHERE id=?', [grantRevokeMatch[1]]);
+    if (!grant) throw errors.notFound('授权记录不存在', 'COURSE_GRANT_NOT_FOUND');
+    if (grant.revoked_at) throw errors.conflict('这次授权已经撤销过了', 'COURSE_GRANT_ALREADY_REVOKED');
+    const reason = nonEmptyString(ctx.body?.reason, '撤销原因', { max: 500 });
+    const submitted = Number(row(
+      `SELECT
+         (SELECT COUNT(*) FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
+           WHERE lesson.series_id=? AND work.student_id=?) +
+         (SELECT COUNT(*) FROM vibecoding_submissions submission JOIN course_lessons lesson ON lesson.id=submission.lesson_id
+           WHERE lesson.series_id=? AND submission.student_id=?) AS n`,
+      [grant.series_id, grant.student_id, grant.series_id, grant.student_id],
+    )?.n || 0);
+    const now = nowIso();
+    transaction(() => {
+      q('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=? WHERE id=?', [now, auth.user.id, reason, grant.id]);
+      if (!submitted && grant.source_assignment_id) {
+        q('UPDATE course_assignments SET quota_used=MAX(quota_used-1,0) WHERE id=?', [grant.source_assignment_id]);
+      }
+    });
+    audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null }, { revokedAt: now, reason, quotaRefunded: !submitted }, { orgId: grant.org_id });
+    return { id: grant.id, revokedAt: now, quotaRefunded: !submitted, submittedLessonCount: submitted };
   }
 
   // P5-M01: Marketplace management endpoints
