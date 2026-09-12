@@ -65,6 +65,8 @@ function Classes({ api, user }) {
   const teachers = useData(() => user.role === 'ORG_ADMIN' ? api.get('org/users?role=TEACHER') : Promise.resolve({ items: [] }), [api, user.role]);
   const students = useData(() => api.get('org/users?role=STUDENT'), [api]);
   const [curriculum, setCurriculum] = useState({ loading: false, error: null, byClass: {} });
+  // 排课名单：这节课谁来上（有该课包许可 + 没上过这节课的人才可选）
+  const [roster, setRoster] = useState(null);
   const [details, setDetails] = useState({});
   const [expanded, setExpanded] = useState('');
   const [selected, setSelected] = useState({});
@@ -97,6 +99,30 @@ function Classes({ api, user }) {
     try { const detail = await api.get(`org/classes/${classId}`); setDetails((current) => ({ ...current, [classId]: detail })); setDrafts((current) => ({ ...current, [classId]: (detail.curriculum || []).map((item) => item.lessonId) })); return detail; }
     catch (error) { setMessage(error.message); return null; } finally { setBusy(false); }
   }
+  /** 打开排课名单：拉这节课的候选学员（服务端会给出「可选 / 不可选 + 原因」） */
+  async function openRoster(classId, lessonId) {
+    setRoster({ classId, lessonId, loading: true, items: [], picked: [], message: '' });
+    try {
+      const data = await api.get('org/classes/' + classId + '/lesson-candidates?lessonId=' + encodeURIComponent(lessonId));
+      const items = data.items || [];
+      setRoster({ classId, lessonId, loading: false, items, picked: items.filter((item) => item.selected).map((item) => item.studentId), message: '' });
+    } catch (error) {
+      setRoster({ classId, lessonId, loading: false, items: [], picked: [], message: error.message });
+    }
+  }
+
+  /** 保存排课名单：不可选的学员由服务端拒掉（这里也会先提示一遍） */
+  async function saveRoster() {
+    if (!roster) return;
+    setRoster({ ...roster, message: '' });
+    try {
+      await api.put('org/classes/' + roster.classId + '/lesson-students', { lessonId: roster.lessonId, studentIds: roster.picked });
+      setRoster({ ...roster, message: '排课名单已保存。' });
+    } catch (error) {
+      setRoster({ ...roster, message: error.message });
+    }
+  }
+
   async function toggleDetail(classId) { if (expanded === classId) return setExpanded(''); await loadDetail(classId); setExpanded(classId); }
   async function start(classId, makeup = false) {
     const lessons = curriculum.byClass[classId] || [];
@@ -196,8 +222,20 @@ function Classes({ api, user }) {
             <div className="row-actions">
               <button className="secondary-button" onClick={() => toggleDetail(item.id)}>{expanded === item.id ? '收起详情' : '班级详情 / 课程计划'}</button>
               {user.role === 'ORG_ADMIN' && item.status === 'ACTIVE' ? <button className="text-button" disabled={busy} onClick={() => archiveClass(item)}>归档班级</button> : null}
-              {item.currentSessionId ? <><button className="primary-button" onClick={() => end(item.id, item.currentSessionId)}>结束课堂</button><button className="text-button" onClick={() => end(item.id, item.currentSessionId, true)}>取消课堂</button></> : curriculum.loading ? <span className="muted">正在加载本班课单…</span> : lessons.length ? <><select value={selected[item.id] || ''} onChange={(event) => setSelected({ ...selected, [item.id]: event.target.value })}><option value="">选择课时</option>{lessons.map((lesson) => <option key={lesson.lessonId} value={lesson.lessonId}>第 {lesson.sort} 课 · {lesson.title}</option>)}</select><label>课堂入口<select value={sessionModes[item.id] || 'CANVAS'} onChange={(event) => setSessionModes((current) => ({ ...current, [item.id]: event.target.value }))}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂</option></select></label><button className="primary-button" onClick={() => start(item.id)}>开始课堂</button><button className="secondary-button" onClick={() => start(item.id, true)}>开始补课</button></> : <span className="muted">尚未配置课单，请先在详情中设置课程计划。</span>}
+              {item.currentSessionId ? <><button className="primary-button" onClick={() => end(item.id, item.currentSessionId)}>结束课堂</button><button className="text-button" onClick={() => end(item.id, item.currentSessionId, true)}>取消课堂</button></> : curriculum.loading ? <span className="muted">正在加载本班课单…</span> : lessons.length ? <><select value={selected[item.id] || ''} onChange={(event) => setSelected({ ...selected, [item.id]: event.target.value })}><option value="">选择课时</option>{lessons.map((lesson) => <option key={lesson.lessonId} value={lesson.lessonId}>第 {lesson.sort} 课 · {lesson.title}</option>)}</select><label>课堂入口<select value={sessionModes[item.id] || 'CANVAS'} onChange={(event) => setSessionModes((current) => ({ ...current, [item.id]: event.target.value }))}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂</option></select></label><button className="primary-button" onClick={() => start(item.id)}>开始课堂</button><button className="secondary-button" onClick={() => start(item.id, true)}>开始补课</button><button className="secondary-button" disabled={!selected[item.id]} title={selected[item.id] ? '' : '先选一个课时'} onClick={() => openRoster(item.id, selected[item.id])}>排课名单</button></> : <span className="muted">尚未配置课单，请先在详情中设置课程计划。</span>}
             </div>
+            {roster && roster.classId === item.id ? <Panel title="排课名单" actions={<button className="secondary-button" onClick={() => setRoster(null)}>关闭</button>}>
+              {roster.loading ? <Loading /> : <>
+                {roster.message ? <Notice tone={roster.message.includes('已保存') ? 'success' : 'danger'}>{roster.message}</Notice> : null}
+                <p className="muted">只有「有该课包许可」且「还没上过这节课」的学员才能排进来；已经上过（提交过作品）的学员会被标出来且不能勾选。</p>
+                {roster.items.length ? <div className="card-list">{roster.items.map((student) => <label key={student.studentId} className="checkbox-option">
+                  <input type="checkbox" disabled={!student.selectable} checked={roster.picked.includes(student.studentId)} onChange={(event) => setRoster({ ...roster, picked: event.target.checked ? [...roster.picked, student.studentId] : roster.picked.filter((value) => value !== student.studentId) })} />
+                  {student.studentName || student.studentLogin}
+                  {student.selectable ? null : <span className="muted">（不可选：{student.reason}）</span>}
+                </label>)}</div> : <Empty title="这个班还没有学员" body="先在「成员管理」里把学员加进班级。" />}
+                <div className="row-actions top-gap"><button className="primary-button" disabled={!roster.items.length || Boolean(roster.message && roster.message.includes('已保存'))} onClick={saveRoster}>保存名单（{roster.picked.length} 人）</button></div>
+              </>}
+            </Panel> : null}
             {expanded === item.id && <div className="stacked-panels">
               {!detail ? <Loading label="正在读取班级详情…" /> : <>
                 <Panel title="班级成员" description="成员变更会立即影响学生可见的班级课程内容。">
