@@ -153,7 +153,7 @@ try {
   assert.ok(previewDoc.includes('P25-GAME-MARKER'), '官网详情页用的预览文档应内联学生代码（可玩）');
 
   // 7) 下架后公开端消失、直链 404
-  const unpublished = await api(`/api/admin/vibecoding-works/${submissionId}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: false } });
+  const unpublished = await api(`/api/admin/vibecoding-works/${submissionId}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: false, reason: 'P25 下架测试：验证公开端消失（下架必须给原因，学生会看到）' } });
   assert.equal(unpublished.status, 200, `下架失败: ${JSON.stringify(unpublished.data)}`);
   assert.equal(unpublished.data.isPublic, false, '下架后 isPublic 应为 false');
   const afterList = await api('/api/public/vibecoding-works');

@@ -1749,6 +1749,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_submissions (
   FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_org ON vibecoding_submissions(org_id, status, submitted_at DESC)');
+// VibeCoding 提交的「下架原因」：画布链路有 works.teacher_comment（老师点评功能删除后，它只被
+// 下架/驳回写入），而 VibeCoding 这条链路**原本一个字都不记** → 学生不知道作品为什么被撤下来。
+// 用户口径（梳理文档第 5 节）：下架原因要**学生可见**。
+try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN unpublish_reason TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_submissions(student_id, submitted_at DESC)');
 try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN entry_file TEXT NOT NULL DEFAULT 'index.html'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }

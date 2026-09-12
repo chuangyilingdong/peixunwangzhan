@@ -603,7 +603,9 @@ function WorkspaceView({ api }) {
           {pool ? <Pill tone={pool.unlimited || Number(pool.remainYuan || 0) > 0 ? 'ok' : 'warn'}>
             {pool.unlimited ? '本课包算力不限' : `本课包算力 剩 ¥${Number(pool.remainYuan || 0).toFixed(2)} / 上限 ¥${Number(pool.capYuan || 0).toFixed(2)}`}
           </Pill> : null}
-          {submission ? <Pill tone="ok">已交给平台</Pill> : null}
+          {submission ? <Pill tone={submission.unpublishReason ? 'warn' : 'ok'} title={submission.unpublishReason || ''}>
+            {submission.unpublishReason ? `作品广场已下架：${submission.unpublishReason}` : '已交给平台'}
+          </Pill> : null}
           {modelOptions.length ? (
             <select
               className="c-input c-model-select"

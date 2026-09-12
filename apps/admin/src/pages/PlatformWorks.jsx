@@ -30,10 +30,16 @@ export function PlatformWorks({ api }) {
   const works = useData(() => api.get(`admin/works?${query.toString()}`), [api, query]);
   const vibeWorks = useData(() => api.get('admin/vibecoding-works?limit=20'), [api]);
   async function toggleVibePlaza(item) {
+    // 移除时必须填原因：这条链路以前一个字都不记，学生不知道作品为什么被撤下来（原因学生可见）
+    let reason = '';
+    if (item.isPublic) {
+      reason = String(window.prompt(`把《${item.title}》从作品广场移除。请写下原因（学生会看到）：`, '') || '').trim();
+      if (!reason) return;
+    }
     setSaving(true); setMessage('');
     try {
-      await api.put(`admin/vibecoding-works/${item.id}/plaza`, { published: !item.isPublic });
-      setMessage(item.isPublic ? `已将《${item.title}》从作品广场移除。` : `已将《${item.title}》发布到作品广场，官网可点开直接玩。`);
+      await api.put(`admin/vibecoding-works/${item.id}/plaza`, { published: !item.isPublic, reason });
+      setMessage(item.isPublic ? `已将《${item.title}》从作品广场移除（原因已记下，学生会看到）。` : `已将《${item.title}》发布到作品广场，官网可点开直接玩。`);
       vibeWorks.refresh();
     } catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }

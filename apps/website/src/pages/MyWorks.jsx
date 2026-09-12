@@ -53,6 +53,7 @@ export function MyWorksPage({ api }) {
       </div>
       <p className="student-card__meta">{work.courseLessonTitle || '未绑定课时'} · {work.className || '未绑定班级'}</p>
       {work.description ? <p className="student-card__desc">{work.description}</p> : null}
+      {work.status === 'REJECTED' && work.unpublishReason ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
       <p className="student-card__foot">提交于 {formatDate(work.submittedAt)}</p>
     </article>)}</div> : null}
 

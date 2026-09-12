@@ -255,7 +255,7 @@ try {
   check('不在快照里的 fileId 一律 404（不能拿作品链接当素材探针）', notMine.status === 404, `status=${notMine.status}`);
 
   // 7) 下架后三样一起消失（列表 / 详情 / 下载 / 配图）
-  await api(`/api/admin/vibecoding-works/${submissionId}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: false } });
+  await api(`/api/admin/vibecoding-works/${submissionId}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: false, reason: 'P51 下架测试：清理测试作品（下架必须给原因）' } });
   const afterDownload = await fetch(`http://127.0.0.1:${port}${deck.downloadUrl}`);
   check('下架后下载地址 404', afterDownload.status === 404, `status=${afterDownload.status}`);
   const afterImage = await fetch(`http://127.0.0.1:${port}/api/public/vibecoding-works/${shareToken}/images/${PHOTO_ID}`);

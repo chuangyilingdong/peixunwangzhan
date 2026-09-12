@@ -350,11 +350,16 @@ export async function handleWorks(ctx, part, method) {
         shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);
         while (row('SELECT id FROM vibecoding_submissions WHERE share_token=?', [shareToken])) shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);
       }
-      q('UPDATE vibecoding_submissions SET is_public=1,share_token=?,published_at=?,published_by=?,updated_at=? WHERE id=?', [shareToken, now, auth.user.id, now, submission.id]);
+      // 重新发布时清掉上一次的下架原因（否则学生会看到一条早就过期的说明）
+      q('UPDATE vibecoding_submissions SET is_public=1,share_token=?,published_at=?,published_by=?,unpublish_reason=NULL,updated_at=? WHERE id=?', [shareToken, now, auth.user.id, now, submission.id]);
       audit(ctx, 'PLATFORM_VIBECODING_WORK_PUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: Number(submission.is_public || 0) === 1 }, { isPublic: true, shareToken }, { orgId: submission.org_id });
     } else {
-      q('UPDATE vibecoding_submissions SET is_public=0,published_at=NULL,published_by=NULL,updated_at=? WHERE id=?', [now, submission.id]);
-      audit(ctx, 'PLATFORM_VIBECODING_WORK_UNPUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: true }, { isPublic: false }, { orgId: submission.org_id });
+      // 下架必须写原因，且**学生能看到**（与画布链路同口径：作品被撤下来要给学生一个说法）
+      const reason = String(ctx.body?.reason || '').trim();
+      if (!reason) throw errors.badRequest('请填写下架原因（学生会看到）', 'WORK_UNPUBLISH_REASON_REQUIRED');
+      if (reason.length > 2000) throw errors.badRequest('下架原因不能超过 2000 个字符', 'WORK_UNPUBLISH_REASON_TOO_LONG');
+      q('UPDATE vibecoding_submissions SET is_public=0,published_at=NULL,published_by=NULL,unpublish_reason=?,updated_at=? WHERE id=?', [reason, now, submission.id]);
+      audit(ctx, 'PLATFORM_VIBECODING_WORK_UNPUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: true }, { isPublic: false, reason }, { orgId: submission.org_id });
     }
     const updated = row(
       `SELECT submission.*, student.display_name student_name, student.login student_login, organization.name organization_name, class.name class_name, lesson.title lesson_title

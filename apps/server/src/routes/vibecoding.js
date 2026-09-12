@@ -744,6 +744,8 @@ export function normalizeSubmission(value, { includeContent = false } = {}) {
     status: value.status, submittedAt: value.submitted_at,
     copyrightConfirmedAt: value.copyright_confirmed_at || null,
     isPublic: Number(value.is_public || 0) === 1,
+    // 被平台从作品广场撤下来时给学生的说明（没有就是 null）
+    unpublishReason: value.unpublish_reason || null,
     shareToken: value.share_token || null,
     featured: Boolean(value.featured_at),
     publishedAt: value.published_at || null,

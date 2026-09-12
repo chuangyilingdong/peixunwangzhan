@@ -890,6 +890,9 @@ export function normalizeWork(value, { includeSnapshot = false } = {}) {
     description: value.description || '',
     status: value.status,
     teacherComment: value.teacher_comment || null,
+    // 下架/驳回原因给学生看：老师点评功能删除后，teacher_comment 只由「下架/驳回」写入，
+    // 所以这里给一个语义明确的名字（原来的 teacherComment 保留，兼容既有读取方）
+    unpublishReason: value.teacher_comment || null,
     reviewedBy: value.reviewed_by || null,
     reviewerName: value.reviewer_name || null,
     submittedAt: value.submitted_at,
