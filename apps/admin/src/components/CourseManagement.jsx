@@ -618,6 +618,7 @@ function CourseDetail({ api, courseId, onBack }) {
   const [busy, setBusy] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [assignOrgId, setAssignOrgId] = useState('');
+  const [assignQuota, setAssignQuota] = useState('');
   const [assignValidity, setAssignValidity] = useState('365');
   const [assignCustomDays, setAssignCustomDays] = useState('365');
   const [lessonDraft, setLessonDraft] = useState({ title: '', durationMinutes: 45 });
@@ -726,9 +727,9 @@ function CourseDetail({ api, courseId, onBack }) {
     if (!assignOrgId) return;
     setBusy(true); setMessage('');
     try {
-      const result = await api.post(`admin/course-series/${courseId}/assignments`, { orgIds: [assignOrgId], validityDays: assignDays });
+      const result = await api.post(`admin/course-series/${courseId}/assignments`, { orgIds: [assignOrgId], validityDays: assignDays, quotaTotal: Number(String(assignQuota || "").trim() || 0) });
       setMessage(`已授权该机构使用本课包，有效期至 ${formatDate(result?.expiresAt) || '—'}。`);
-      setAssignOrgId(''); detail.refresh();
+      setAssignOrgId(''); setAssignQuota(''); detail.refresh();
     }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
@@ -840,13 +841,13 @@ function CourseDetail({ api, courseId, onBack }) {
       {activeTab === 'assign' ? <Panel title={`机构授权（${detail.data.assignedOrgs.length}）`}>
         <p className="muted">平台课包必须在这里逐家授权，机构后台才看得到、用得上（发布本身不对任何机构生效）。有效期按机构单独设置，到期后该机构立即看不到此课包，续期时重新授权即可覆盖原有效期。</p>
         <div className="form-grid">
-          <label>授权给机构<select value={assignOrgId} onChange={(event) => setAssignOrgId(event.target.value)}><option value="">选择机构</option>{organizations.data?.items?.map((org) => <option key={org.id} value={org.id}>{org.name}</option>) || null}</select></label>
+          <label>授权次数<input type="number" min="0" placeholder="留空 = 不限次数" value={assignQuota} onChange={(event) => setAssignQuota(event.target.value)} /></label><label>授权给机构<select value={assignOrgId} onChange={(event) => setAssignOrgId(event.target.value)}><option value="">选择机构</option>{organizations.data?.items?.map((org) => <option key={org.id} value={org.id}>{org.name}</option>) || null}</select></label>
           <label>授权时效<select value={assignValidity} onChange={(event) => setAssignValidity(event.target.value)}>{VALIDITY_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           {assignValidity === 'custom' ? <label>有效期（天，≤3650）<input type="number" min="1" max="3650" value={assignCustomDays} onChange={(event) => setAssignCustomDays(event.target.value)} /></label> : null}
           <div><button type="button" className="secondary-button" disabled={!assignOrgId || busy} onClick={assign}>授权</button></div>
         </div>
         <p className="muted">本次授权有效期至 {formatDate(assignExpiresAt)}（共 {assignDays} 天）。</p>
-        {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>有效期至</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期，机构已看不到）' : ''}</span> : '永久有效'}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${courseId}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="平台课包发布后只会上架课程广场；要出现在机构后台，必须在这里授权给对应机构。" />}
+        {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>有效期至</th><th>次数（已用/授权）</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期，机构已看不到）' : ''}</span> : '永久有效'}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${courseId}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="平台课包发布后只会上架课程广场；要出现在机构后台，必须在这里授权给对应机构。" />}
       </Panel> : null}
 
       {activeTab === 'publish' ? <Panel title="发布检查">
