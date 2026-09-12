@@ -25,6 +25,8 @@ export function ComputeGateway({ api }) {
   const [pools, setPools] = useState(null);
   const [pricing, setPricing] = useState(null);
   const [pricingBusy, setPricingBusy] = useState(false);
+  const [reconcile, setReconcile] = useState(null);
+  const [reconcileDays, setReconcileDays] = useState(7);
 
   // 配置读回来才填表单：密码永不回显，留空表示「不改」
   useEffect(() => {
@@ -86,6 +88,12 @@ export function ComputeGateway({ api }) {
       const result = await api.put('admin/compute-pricing', { perCall: pricing.perCall, models: pricing.models });
       setPricing(result.pricing); setMessage('单价已保存（按「每次调用」折算，立即生效）。');
     } catch (error) { setMessage(error.message); } finally { setPricingBusy(false); }
+  }
+
+  async function loadReconcile(days = reconcileDays) {
+    setBusy(true); setMessage('');
+    try { setReconcile(await api.get(`admin/compute-pools/reconciliation?days=${days}`)); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
   async function createToken() {
@@ -228,6 +236,43 @@ export function ComputeGateway({ api }) {
           {pricing.updatedAt ? <span className="muted">上次修改：{formatDate(pricing.updatedAt)}</span> : null}
         </div>
       </> : null}
+    </Panel>
+
+    <Panel
+      title="两本账对账"
+      actions={<>
+        <select value={String(reconcileDays)} onChange={(event) => { const days = Number(event.target.value); setReconcileDays(days); loadReconcile(days); }}><option value="1">近 1 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
+        <button className="secondary-button" disabled={busy} onClick={() => loadReconcile()}>开始对账</button>
+      </>}
+    >
+      {!reconcile ? <Empty title="还没有对账" body="点右上角「开始对账」：两本账并排看 —— 池子账（四种模态、按单价折算）与网关账（精确，只含对话/图片）。" />
+        : <>
+          <p className="muted">
+            只拿<strong>重叠模态</strong>（对话 / 图片）比：两边都有，差额就是<strong>单价折算误差</strong>（改单价看这一列）。
+            视频与音乐单列一列 —— 网关看不见它们，所以这部分天然对不上，不是错。
+          </p>
+          {!reconcile.gatewayEnabled ? <Notice tone="danger">算力网关没启用：网关账这一段必然为空，下面所有行都标成「网关无数据」，无法对账。</Notice> : null}
+          <div className="row-actions">
+            <span className="muted">池子（对话+图片）<strong>{yuan(reconcile.totals.poolTextImageYuan)}</strong></span>
+            <span className="muted">· 网关（精确）<strong>{yuan(reconcile.totals.gatewayYuan)}</strong></span>
+            <span className="muted">· 差额<strong>{yuan(reconcile.totals.diffYuan)}</strong></span>
+            <span className="muted">· 视频+音乐（网关看不见）<strong>{yuan(reconcile.totals.poolOtherYuan)}</strong></span>
+            {reconcile.totals.unmappedGatewayYuan ? <span className="muted">· 网关有 {yuan(reconcile.totals.unmappedGatewayYuan)} 归不到课包（令牌名缺课时段）</span> : null}
+          </div>
+          {reconcile.items.length ? <div className="table-wrap top-gap"><table><thead><tr><th>学员</th><th>课包</th><th>池子（对话+图片）</th><th>网关（精确）</th><th>差额</th><th>误差率</th><th>视频+音乐</th><th>状态</th></tr></thead><tbody>
+            {reconcile.items.map((item) => <tr key={`${item.userId}-${item.seriesId || 'none'}`}>
+              <td><strong>{item.studentName}</strong><div className="muted">{item.orgName}</div></td>
+              <td className="muted">{item.seriesTitle}</td>
+              <td>{yuan(item.poolTextImageYuan)}<div className="muted">{item.poolCalls} 次调用</div></td>
+              <td>{yuan(item.gatewayYuan)}<div className="muted">{item.gatewayCalls} 条网关日志</div></td>
+              <td><strong>{yuan(item.diffYuan)}</strong></td>
+              <td>{item.diffPercent == null ? <span className="muted">—</span>
+                : <span className={Math.abs(item.diffPercent) >= 30 ? 'status warn' : ''}>{item.diffPercent}%</span>}</td>
+              <td>{yuan(item.poolOtherYuan)}</td>
+              <td>{item.state === 'COMPARABLE' ? <Status value="ACTIVE" /> : <span className="muted">网关无数据</span>}</td>
+            </tr>)}
+          </tbody></table></div> : <Empty title="这段时间没有可对账的消耗" body="池子里还没有成功调用（或这段时间没有调用）。" />}
+        </>}
     </Panel>
   </>;
 }
