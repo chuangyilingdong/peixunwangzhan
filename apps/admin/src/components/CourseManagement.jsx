@@ -588,7 +588,7 @@ function CourseList({ api, onOpen }) {
   }
 
   return <>
-    <PageHeader eyebrow="课程资产" title="平台课包" description="维护平台级课程资料、课时编排、发布状态与机构授权；内容变更自动递增版本号。"
+    <PageHeader eyebrow="课程资产" title="平台课包" description="维护平台级课程资料、课时编排、发布状态与机构授权；改完点「更新发布」填新版本号。"
       actions={<button className="primary-button" onClick={() => setShowCreate(true)}>＋ 新建课包</button>} />
     {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
     <Panel title="筛选">
@@ -638,6 +638,21 @@ function CourseDetail({ api, courseId, onBack }) {
       stockTotal: String(series.stockTotal ?? ''),
     });
   }, [series?.id]);
+
+  /** 更新发布：版本号由人填（不再自动 +0.1），变更说明记进版本历史 */
+  async function publishVersion() {
+    const suggested = String(series?.version || '1.0');
+    const version = window.prompt('新版本号（必填，且不能与当前版本相同）', suggested);
+    if (version === null) return;
+    if (!String(version).trim()) { setMessage('版本号不能为空'); return; }
+    const note = window.prompt('本次变更说明（可选，会记进版本历史）', '') ?? '';
+    setBusy(true); setMessage('');
+    try {
+      await api.request(`admin/course-series/${courseId}/versions`, { method: 'POST', body: { version: String(version).trim(), note } });
+      setMessage(`已更新发布 v${String(version).trim()}，机构端与官网同步生效。`);
+      detail.refresh();
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
 
   async function run(path, method, body, successMessage, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -748,6 +763,17 @@ function CourseDetail({ api, courseId, onBack }) {
         <MetricCard label="关联课堂" value={detail.data.usage.classSessions} hint="使用该课包课时的课堂场次" tone="orange" />
         <MetricCard label="学生作品" value={detail.data.usage.studentWorks} hint="基于该课包课时提交的作品数" tone="pink" />
       </div>
+      <Panel title="版本与发布">
+        <div className="row-actions">
+          <span>当前版本 <strong>v{series?.version}</strong></span>
+          {detail.data.hasUnpublishedChanges
+            ? <span className="status warning">有未发布的改动</span>
+            : <span className="status success">已是最新发布</span>}
+          <button className="primary-button" disabled={busy} onClick={publishVersion}>{busy ? '处理中…' : '更新发布'}</button>
+        </div>
+        <p className="muted">改课时、改素材都不会自动改版本号；点「更新发布」时填写新版本号与变更说明，发布后已授权机构与官网一起更新。</p>
+        {detail.data.versions?.length ? <div className="table-wrap"><table><thead><tr><th>版本</th><th>变更说明</th><th>发布时间</th></tr></thead><tbody>{detail.data.versions.slice(0, 5).map((item) => <tr key={item.id}><td>v{item.version}</td><td>{item.note || '—'}</td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></div> : null}
+      </Panel>
       <nav className="tabs" role="tablist">
         {[['basic', '基本信息'], ['lessons', `课时编排（${series.lessons.length}）`], ['assign', `机构授权（${detail.data.assignedOrgs.length}）`], ['publish', '发布检查']].map(([key, label]) =>
           <button key={key} type="button" role="tab" aria-selected={activeTab === key} className={`tab ${activeTab === key ? 'is-active' : ''}`} onClick={() => setActiveTab(key)}>{label}</button>)}
@@ -767,7 +793,7 @@ function CourseDetail({ api, courseId, onBack }) {
           <div className="form-grid">
             <label>价格（元）<input inputMode="decimal" value={editForm.priceYuan} onChange={(event) => setEditForm({ ...editForm, priceYuan: event.target.value })} /></label>
             <label>库存（可授权次数）<input type="number" min="0" value={editForm.stockTotal} onChange={(event) => setEditForm({ ...editForm, stockTotal: event.target.value })} /></label>
-            <label>版本号<input value={editForm.version} disabled title="编辑资料时版本号由系统自动递增" /></label>
+            <label>版本号<input value={editForm.version} disabled title="版本号由「更新发布」推进，这里只读" /></label>
             <label>难度（1-5）<input type="number" min="1" max="5" value={editForm.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setEditForm({ ...editForm, difficultyLevel: event.target.value })} /></label>
           </div>
           <h3 className="form-section-title">可见范围与排序</h3>
@@ -777,7 +803,7 @@ function CourseDetail({ api, courseId, onBack }) {
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
           {saveState ? <Notice tone={saveState.tone}>{saveState.text}</Notice> : null}
-          <p className="muted">当前版本 {series.version}；保存后版本号自动递增。状态变更请使用右上角发布 / 下架。可见范围只决定「上不上课程广场」；机构看不到课包不是权限问题，是还没在「机构授权」里授权给它。</p>
+          <p className="muted">当前版本只读：改完点上方「更新发布」填写新版本号。状态变更请使用右上角发布 / 下架。可见范围只决定「上不上课程广场」；机构看不到课包不是权限问题，是还没在「机构授权」里授权给它。</p>
         </form> : null}
       </Panel> : null}
 

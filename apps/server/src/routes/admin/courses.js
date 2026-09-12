@@ -190,9 +190,35 @@ export async function handleCourses(ctx, part, method) {
        replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot, { deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen });
        if (lesson.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, lesson.teachingGroups);
      });
+    // 初始版本也记一条：版本历史从「初始版本」开始，之后重复用过的版本号一律拒绝
+    q('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
+      [id('seriesver'), seriesId, String(body.version || '1.0').slice(0, 100), '初始版本', 'PUBLISHED', null, now, status === 'PUBLISHED' ? now : null]);
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
+  // 更新发布：版本号由人填（不再自动 +0.1），同时记一条版本历史。
+  // 读模型仍是「当前内容」，所以发布后已授权机构与官网自然一起更新。
+  const seriesVersionMatch = part.match(/^\/course-series\/([^/]+)\/versions$/);
+  if (seriesVersionMatch && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesVersionMatch[1]]);
+    if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
+    const version = nonEmptyString(ctx.body?.version, '版本号', { max: 100 });
+    const note = String(ctx.body?.note || '').trim().slice(0, 500);
+    if (version === series.version) throw errors.badRequest('版本号与当前版本相同，请填写新的版本号', 'VERSION_UNCHANGED');
+    if (row('SELECT id FROM course_series_versions WHERE series_id=? AND version=?', [series.id, version])) throw errors.conflict('该版本号已经用过，请换一个', 'VERSION_EXISTS');
+    const now = nowIso();
+    const versionId = id('seriesver');
+    transaction(() => {
+      q('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
+        [versionId, series.id, version, note, 'PUBLISHED', auth.user.id, now, now]);
+      // updated_at 与版本记录取同一时间：这样「有未发布改动」的判定立刻归零
+      q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [version, now, series.id]);
+      audit(ctx, 'COURSE_SERIES_VERSION_PUBLISH', 'COURSE_SERIES', series.id, { version: series.version }, { version, note });
+    });
+    return { id: versionId, version, note, publishedAt: now };
+  }
+
   let seriesDetailMatch = part.match(/^\/course-series\/([^/]+)\/detail$/);
   if (seriesDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -205,7 +231,14 @@ export async function handleCourses(ctx, part, method) {
       classSessions: count('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
       studentWorks: count('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
     };
-    return { series: normalizeSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage };
+    const versions = rows('SELECT * FROM course_series_versions WHERE series_id=? ORDER BY created_at DESC LIMIT 20', [series.id])
+      .map((item) => ({ id: item.id, version: item.version, note: item.note || '', status: item.status, createdBy: item.created_by, createdAt: item.created_at, publishedAt: item.published_at }));
+    // 「有未发布的改动」= 课包或课时最后修改时间晚于最近一次版本记录
+    const lastVersionAt = versions[0]?.createdAt || null;
+    const lastLessonAt = row('SELECT MAX(updated_at) AS t FROM course_lessons WHERE series_id=?', [series.id])?.t || null;
+    const lastChangeAt = [series.updated_at, lastLessonAt].filter(Boolean).sort().pop() || series.updated_at;
+    const hasUnpublishedChanges = lastVersionAt ? String(lastChangeAt) > String(lastVersionAt) : Boolean(versions.length === 0);
+    return { series: normalizeSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage, versions, hasUnpublishedChanges, lastChangeAt, lastVersionAt };
   }
 
   let seriesEditMatch = part.match(/^\/course-series\/([^/]+)$/);
@@ -229,7 +262,6 @@ export async function handleCourses(ctx, part, method) {
     const visibility = body.visibility === undefined ? series.visibility : body.visibility;
     if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
     const sort = body.sort === undefined ? series.sort : integer(body.sort, '课包排序', { min: 0, max: 100000 });
-    const version = bumpSeriesVersion(series.version);
     // P5-W05: 课程资料核验字段
     const difficultyLevel = body.difficultyLevel;
     if (difficultyLevel !== undefined && difficultyLevel !== null) {
@@ -252,7 +284,7 @@ export async function handleCourses(ctx, part, method) {
     }
     const before = normalizeSeries(series);
     const deliveryMode = body.deliveryMode === undefined ? undefined : normalizeDeliveryMode(body.deliveryMode);
-     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,visibility=?,sort=?,version=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, visibility, sort, version, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
+     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
     const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
@@ -328,7 +360,7 @@ export async function handleCourses(ctx, part, method) {
         q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, series.id, lessonTitle, String(lesson.summary || '').slice(0, 10000), maxSort + index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
         replaceQueue.push({ id: lessonId, lesson, deliveryMode, classroomConfig });
       });
-      q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(series.version), now, series.id]);
+      q('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
     });
     replaceQueue.forEach((item) => replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig, item.lesson.canvasTemplateSnapshot, { deliveryModes: item.lesson.deliveryModes, perStudentBudgetFen: item.lesson.perStudentBudgetFen }));
     audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
@@ -355,7 +387,7 @@ export async function handleCourses(ctx, part, method) {
       requested.forEach((lessonId, index) => {
         q('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [index + 1, now, lessonId]);
       });
-      q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(series.version), now, series.id]);
+      q('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
     });
     audit(ctx, 'COURSE_LESSON_REORDER', 'COURSE_SERIES', series.id, null, { lessonIds: requested });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
@@ -400,7 +432,7 @@ export async function handleCourses(ctx, part, method) {
       replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig, body.canvasTemplateSnapshot ?? parseJson(lesson.canvas_template_snapshot, {}), { deliveryModes: body.deliveryModes, perStudentBudgetFen: body.perStudentBudgetFen });
     }
     if (body.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, body.teachingGroups);
-    q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(row('SELECT version FROM course_series WHERE id=?', [lesson.series_id]).version), nowIso(), lesson.series_id]);
+    q('UPDATE course_series SET updated_at=? WHERE id=?', [nowIso(), lesson.series_id]);
     audit(ctx, 'COURSE_LESSON_UPDATE', 'COURSE_LESSON', lesson.id, { title: lesson.title, status: lesson.status, durationMinutes: lesson.duration_minutes }, { title, status, durationMinutes, lessonContentChanged: body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content }, {});
     if (body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content) {
       audit(ctx, 'COURSE_LESSON_CONTENT_UPDATE', 'COURSE_LESSON', lesson.id, { lessonContent: lesson.lesson_content }, { lessonContent });
@@ -422,7 +454,7 @@ export async function handleCourses(ctx, part, method) {
       remaining.forEach((item, index) => {
         q('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [index + 1, now, item.id]);
       });
-      q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [bumpSeriesVersion(lesson.series_version), now, lesson.series_id]);
+      q('UPDATE course_series SET updated_at=? WHERE id=?', [now, lesson.series_id]);
     });
     audit(ctx, 'COURSE_LESSON_DELETE', 'COURSE_LESSON', lesson.id, { title: lesson.title }, { deleted: true, resequenced: true }, {});
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });

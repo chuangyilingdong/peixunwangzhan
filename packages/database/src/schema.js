@@ -1117,6 +1117,53 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 try { db.exec('ALTER TABLE course_series ADD COLUMN stock_total INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
+// ── 课包版本与发布记录（2026-09-12，平台侧重做梳理 P1 第三刀）──────────────────
+// 版本号由人填写（不再「改一次自动 +0.1」）：每次「更新发布」写一条，记录版本号 / 变更说明 / 谁 / 何时。
+// 读模型仍是「当前内容」，所以发布后已授权机构与官网自然一起更新；
+// 「有没有未发布的改动」用「最近一次版本记录时间 vs 课包与课时的最后修改时间」比较得出，不额外存标记。
+db.exec(`CREATE TABLE IF NOT EXISTS course_series_versions (
+  id TEXT PRIMARY KEY,
+  series_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('PUBLISHED','ARCHIVED')),
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  published_at TEXT,
+  FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_versions ON course_series_versions(series_id, created_at DESC)');
+
+// 课包授权给机构的「次数」（板块二）：授权时填 quota_total，机构分给学生时累加 quota_used
+try { db.exec('ALTER TABLE course_assignments ADD COLUMN quota_total INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE course_assignments ADD COLUMN quota_used INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 机构把课包分给学生的许可（唯一约束：同机构同学生同课包只有一条；撤销只清 revoked_at，留痕）
+db.exec(`CREATE TABLE IF NOT EXISTS student_course_grants (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  series_id TEXT NOT NULL,
+  source_assignment_id TEXT,
+  granted_by TEXT,
+  granted_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revoked_by TEXT,
+  revoke_reason TEXT,
+  FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_student_course_grants_unique ON student_course_grants(org_id, student_id, series_id)');
+// 排课名单：这一节课谁来上（现状没有这层 —— 学生进班就自动算能上课）
+db.exec(`CREATE TABLE IF NOT EXISTS class_lesson_students (
+  class_id TEXT NOT NULL,
+  lesson_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  added_by TEXT,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (class_id, lesson_id, student_id)
+)`);
+
 
 // P6-A01 AI provider policy and org budget migrations; safe for existing databases.
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN ai_provider_policy TEXT NOT NULL DEFAULT '{}'"); }
