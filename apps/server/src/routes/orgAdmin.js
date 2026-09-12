@@ -437,7 +437,9 @@ export async function handleOrg(ctx) {
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
     const fromWhere = `FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`;
     const total = Number(row(`SELECT COUNT(DISTINCT series.id) n ${fromWhere}`, [currentOrgId, currentOrgId])?.n || 0);
-    const items = rows(`SELECT DISTINCT series.* ${fromWhere} ORDER BY series.sort,series.title LIMIT ? OFFSET ?`, [currentOrgId, currentOrgId, limit, offset]).map((series) => normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true, asPublished: true }));
+    // 平台给本机构的授权次数（页面要显示「还剩几次」）：单独查一次，别动上面那条 DISTINCT 查询
+    const quotaBySeries = new Map(rows("SELECT series_id, quota_total, quota_used FROM course_assignments WHERE org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [currentOrgId, nowIso()]).map((item) => [item.series_id, { quotaTotal: Number(item.quota_total || 0), quotaUsed: Number(item.quota_used || 0) }]));
+    const items = rows(`SELECT DISTINCT series.* ${fromWhere} ORDER BY series.sort,series.title LIMIT ? OFFSET ?`, [currentOrgId, currentOrgId, limit, offset]).map((series) => ({ ...normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true, asPublished: true }), assignments: [quotaBySeries.get(series.id) || { quotaTotal: 0, quotaUsed: 0 }] }));
     return pageResult(items, { page, limit, total });
   }
   let orgCourseDetailMatch = part.match(/^\/course-series\/([^/]+)$/);
@@ -700,6 +702,63 @@ export async function handleOrg(ctx) {
     });
     audit(ctx, status === 'APPROVED' ? 'WORK_PUBLISH_REQUEST_APPROVE' : 'WORK_PUBLISH_REQUEST_REJECT', 'WORK_PUBLISH_REQUEST', requestRow.id, normalizeWorkPublishRequest(requestRow), { status, resolution, workId: work.id }, { orgId: currentOrgId });
     return orgWorkPublishRequestRows('request.id=?', [requestRow.id])[0];
+  }
+
+  // 排课候选：这节课谁能上。规则（用户口径）——有该课包许可，且**没上过这节课**（以是否提交过作品判定，跨班级跨课堂）。
+  const candidateMatch = part.match(/^\/classes\/([^/]+)\/lesson-candidates$/);
+  if (candidateMatch && method === 'GET') {
+    const cls = row('SELECT id, name FROM classes WHERE id=? AND org_id=?', [candidateMatch[1], currentOrgId]);
+    if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
+    const lessonId = nonEmptyString(ctx.search.get('lessonId'), '课时', { max: 100 });
+    const lesson = row('SELECT id, series_id FROM course_lessons WHERE id=?', [lessonId]);
+    if (!lesson) throw errors.notFound('课时不存在', 'LESSON_NOT_FOUND');
+    const students = rows(`SELECT user.id, user.display_name, user.login FROM class_members member JOIN users user ON user.id=member.user_id
+      WHERE member.class_id=? AND member.role='STUDENT' AND member.removed_at IS NULL ORDER BY user.display_name`, [cls.id]);
+    const granted = new Set(rows('SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL', [currentOrgId, lesson.series_id]).map((item) => item.student_id));
+    // 「已经上过这节课」= 提交过作品（画布作品与 VibeCoding 提交都算，跨班级跨课堂）
+    const submitted = new Set(rows(`SELECT work.student_id AS student_id FROM works work WHERE work.course_lesson_id=?
+      UNION SELECT submission.student_id AS student_id FROM vibecoding_submissions submission WHERE submission.lesson_id=?`, [lessonId, lessonId]).map((item) => item.student_id));
+    const chosen = new Set(rows('SELECT student_id FROM class_lesson_students WHERE class_id=? AND lesson_id=?', [cls.id, lessonId]).map((item) => item.student_id));
+    const items = students.map((student) => {
+      const hasGrant = granted.has(student.id);
+      const hasSubmitted = submitted.has(student.id);
+      return {
+        studentId: student.id, studentName: student.display_name || null, studentLogin: student.login || null,
+        hasGrant, hasSubmitted, selected: chosen.has(student.id),
+        selectable: hasGrant && !hasSubmitted,
+        reason: !hasGrant ? '尚未被授权该课包' : (hasSubmitted ? '已经上过这节课（已提交作品）' : null),
+      };
+    });
+    return { class: cls, lessonId, seriesId: lesson.series_id, items, stats: { total: items.length, selectable: items.filter((item) => item.selectable).length, noGrant: items.filter((item) => !item.hasGrant).length, submitted: items.filter((item) => item.hasSubmitted).length } };
+  }
+  const lessonStudentsMatch = part.match(/^\/classes\/([^/]+)\/lesson-students$/);
+  if (lessonStudentsMatch && method === 'PUT') {
+    const cls = row('SELECT id FROM classes WHERE id=? AND org_id=?', [lessonStudentsMatch[1], currentOrgId]);
+    if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
+    const lessonId = nonEmptyString(ctx.body?.lessonId, '课时', { max: 100 });
+    const lesson = row('SELECT id, series_id FROM course_lessons WHERE id=?', [lessonId]);
+    if (!lesson) throw errors.notFound('课时不存在', 'LESSON_NOT_FOUND');
+    const requested = Array.isArray(ctx.body?.studentIds) ? ctx.body.studentIds : [];
+    const studentIds = [...new Set(requested.map((value) => String(value || '').trim()).filter(Boolean))];
+    if (studentIds.length > 200) throw errors.badRequest('一次最多排 200 名学员', 'INVALID_STUDENT_IDS');
+    const granted = new Set(rows('SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL', [currentOrgId, lesson.series_id]).map((item) => item.student_id));
+    const submitted = new Set(rows(`SELECT work.student_id AS student_id FROM works work WHERE work.course_lesson_id=?
+      UNION SELECT submission.student_id AS student_id FROM vibecoding_submissions submission WHERE submission.lesson_id=?`, [lessonId, lessonId]).map((item) => item.student_id));
+    const members = new Set(rows("SELECT user_id FROM class_members WHERE class_id=? AND role='STUDENT' AND removed_at IS NULL", [cls.id]).map((item) => item.user_id));
+    const rejected = [];
+    for (const studentId of studentIds) {
+      if (!members.has(studentId)) rejected.push({ studentId, reason: '不在这个班级里' });
+      else if (!granted.has(studentId)) rejected.push({ studentId, reason: '尚未被授权该课包' });
+      else if (submitted.has(studentId)) rejected.push({ studentId, reason: '已经上过这节课（已提交作品）' });
+    }
+    if (rejected.length) throw errors.badRequest('有学员不能排进这节课', 'LESSON_STUDENT_NOT_SELECTABLE', { rejected });
+    const now = nowIso();
+    transaction(() => {
+      q('DELETE FROM class_lesson_students WHERE class_id=? AND lesson_id=?', [cls.id, lessonId]);
+      studentIds.forEach((studentId) => q('INSERT INTO class_lesson_students(class_id,lesson_id,student_id,added_by,added_at) VALUES (?,?,?,?,?)', [cls.id, lessonId, studentId, auth.user.id, now]));
+    });
+    audit(ctx, 'CLASS_LESSON_STUDENTS_UPDATE', 'CLASS', cls.id, null, { lessonId, studentIds });
+    return { lessonId, studentIds, count: studentIds.length };
   }
 
   // 机构端：把课包的「可用次数」分给学生（用掉 1 次；同一学生同一课包只能一次；机构侧不可撤销）
