@@ -621,7 +621,7 @@ function UsagePage({ api }) {
   if (overview.error) return <ErrorState error={overview.error} onRetry={overview.refresh} />;
   return <>
     <PageHeader eyebrow="积分经营" title="积分用量" description="查看机构余额、能力消耗、高频学员和每一笔真实用量。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
-    <div className="metrics"><MetricCard label="机构余额" value={formatCredits(overview.data.balance)} hint="机构共享魔法石池" /><MetricCard label="累计入账" value={formatCredits(overview.data.totalCreditsIn)} tone="teal" /><MetricCard label="累计消耗" value={formatCredits(overview.data.totalCreditsSpent)} tone="orange" /><MetricCard label="能力类型" value={overview.data.modalities.length} hint={'近 ' + filters.days + ' 日'} tone="pink" /></div>
+    <div className="metrics"><MetricCard label="机构余额" value={formatCredits(overview.data.balance)} hint="机构共享积分池" /><MetricCard label="累计入账" value={formatCredits(overview.data.totalCreditsIn)} tone="teal" /><MetricCard label="累计消耗" value={formatCredits(overview.data.totalCreditsSpent)} tone="orange" /><MetricCard label="能力类型" value={overview.data.modalities.length} hint={'近 ' + filters.days + ' 日'} tone="pink" /></div>
     <div className="split">
       <Panel title="能力汇总"><table><thead><tr><th>能力</th><th>调用</th><th>积分</th></tr></thead><tbody>{overview.data.modalities.map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
       <Panel title="Top 学员"><table><thead><tr><th>学员</th><th>调用</th><th>积分</th></tr></thead><tbody>{overview.data.topUsers.map((item) => <tr key={item.id}><td>{item.studentName}</td><td>{item.calls}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>

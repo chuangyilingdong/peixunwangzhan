@@ -248,7 +248,7 @@ export function PlatformBilling({ api }) {
   const records = useData(() => api.get(`admin/billing/usage-records?${query.toString()}`), [api, query]);
   function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value })); setPage(1); }
   return <>
-    <PageHeader eyebrow="平台计费" title="计费与用量" description="查看全平台魔法石余额、能力消耗、机构排名和用量明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="平台计费" title="计费与用量" description="查看全平台积分余额、能力消耗、机构排名和用量明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
     <div className="metrics">
       <MetricCard label="机构余额合计" value={formatCredits(overview.data?.totalCredits || 0)} hint="所有机构当前余额合计" />
       <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
