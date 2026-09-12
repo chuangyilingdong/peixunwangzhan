@@ -211,6 +211,8 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
         lesson.outcome_pack_asset_id AS lesson_outcome_pack_asset_id,
         lesson.lesson_content AS lesson_lesson_content,
         lesson.delivery_mode AS lesson_delivery_mode,
+        lesson.delivery_modes AS lesson_delivery_modes,
+        lesson.per_student_budget_fen AS lesson_per_student_budget_fen,
         lesson.classroom_config AS lesson_classroom_config,
         lesson.canvas_template_snapshot AS lesson_canvas_template_snapshot,
         lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at,
@@ -275,6 +277,10 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
     outcome_pack_asset_id: data.lesson_outcome_pack_asset_id,
     lesson_content: data.lesson_lesson_content,
     delivery_mode: data.lesson_delivery_mode,
+    // ⚠️ 逐列 SELECT 很容易漏掉新字段（这一处就漏过一次）：多类型与算力预算必须一起带出来，
+    // 否则「双入口课时」在这里会被看成只开画布，学生进不了 VibeCoding。
+    delivery_modes: data.lesson_delivery_modes,
+    per_student_budget_fen: data.lesson_per_student_budget_fen,
     classroom_config: data.lesson_classroom_config,
     canvas_template_snapshot: data.lesson_canvas_template_snapshot,
     created_at: data.lesson_created_at, updated_at: data.lesson_updated_at,
@@ -300,10 +306,14 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
   const sessionMode = activeSession?.deliveryMode || null;
   const lessonMode = lesson?.deliveryMode || 'CANVAS';
   const effectiveMode = sessionMode || lessonMode;
-  // 画布课堂与 VibeCoding 课堂互斥：画布路径继续只认 CANVAS（保持既有行为），
-  // VibeCoding 路径单独放行，避免学生在 VibeCoding 课堂里误建画布项目。
-  const canUseNow = homePractice ? lessonMode !== 'VIBECODING' : (Boolean(activeSession) && effectiveMode === 'CANVAS');
-  const canUseVibeCodingNow = homePractice ? lessonMode === 'VIBECODING' : (Boolean(activeSession) && effectiveMode === 'VIBECODING');
+  // 上课类型改为可多选（画布 + VibeCoding 可同时开），学生端两个入口并列：
+  // 老数据只有单值时，normalizeLesson 已经把它统一成单元素数组，这里直接读数组。
+  const lessonModes = Array.isArray(lesson?.deliveryModes) && lesson.deliveryModes.length ? lesson.deliveryModes : [lessonMode];
+  const canvasOffered = lessonModes.includes('CANVAS');
+  const vibeOffered = lessonModes.includes('VIBECODING');
+  // 在家练习：按课时开放的类型给入口；跟随课堂：以老师开的课堂类型为准（一节课只开一种）。
+  const canUseNow = homePractice ? canvasOffered : (Boolean(activeSession) && effectiveMode === 'CANVAS');
+  const canUseVibeCodingNow = homePractice ? vibeOffered : (Boolean(activeSession) && effectiveMode === 'VIBECODING');
 
   return {
     class: normalizeClass(rawClass), rawClass, lesson,

@@ -36,6 +36,23 @@ function normalizeDeliveryMode(value) {
   if (!['CANVAS', 'VIBECODING'].includes(mode)) throw errors.badRequest('课堂类型只能是画布课堂或 VibeCoding 课堂', 'INVALID_DELIVERY_MODE');
   return mode;
 }
+/**
+ * 一个课时的上课类型（可多选：画布 + VibeCoding 同时开，学生端两个入口并列）。
+ * 传空/非法时回退到 fallbackMode（兼容老客户端只传单值 deliveryMode 的写法）。
+ * 返回值里第一种同时写回老字段 delivery_mode，保证既有读取方不受影响。
+ */
+function normalizeDeliveryModes(value, fallbackMode = 'CANVAS') {
+  const raw = Array.isArray(value) ? value : (value ? [value] : []);
+  const list = [...new Set(raw
+    .map((item) => String(item || '').trim().toUpperCase())
+    .filter((item) => ['CANVAS', 'VIBECODING'].includes(item)))];
+  return list.length ? list : [normalizeDeliveryMode(fallbackMode)];
+}
+/** 每学生算力上限（分）：不填 = null（不拦，只记账）；填了必须是 0~10000000 的整数 */
+function normalizePerStudentBudgetFen(value) {
+  if (value === undefined || value === null || value === '') return null;
+  return integer(value, '每学生算力上限（分）', { min: 0, max: 10000000, fallback: null });
+}
 // 生成框体现在是素材表里的一种素材（material_type=GENERATION_BOX），顺序跟着素材走；
 // classroom_config 只留版本号与 VibeCoding 配置。
 function normalizeClassroomConfig(value) {
@@ -114,7 +131,7 @@ function normalizeBoxMaterial(material, materialIndex, title) {
   return { ...snapshot, box: boxSnapshot, content: box.prompt };
 }
 
-function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}) {
+function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}, extra = {}) {
   const groups = Array.isArray(materialGroups) ? materialGroups.slice(0, 50) : [];
   const caps = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value).trim().toLowerCase()).filter((value) => ['text', 'image', 'video', 'music'].includes(value)))] : ['text'];
   const now = nowIso();
@@ -153,7 +170,11 @@ function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliv
         q('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [material.id, group.id, material.title, material.description, material.materialType, material.assetUrl, json(material.snapshot), materialIndex + 1, now, now]);
       });
     });
-    q('UPDATE course_lessons SET delivery_mode=?,classroom_config=?,canvas_template_snapshot=?,updated_at=? WHERE id=?', [normalizeDeliveryMode(deliveryMode), json(normalizeClassroomConfig(classroomConfig)), json(normalizeCanvasTemplateSnapshot(canvasTemplateSnapshot)), now, lessonId]);
+    // 上课类型可多选：数组进新列，第一种同时写回老列（兼容既有读取方）
+    const modes = normalizeDeliveryModes(extra.deliveryModes, deliveryMode);
+    const budgetFen = normalizePerStudentBudgetFen(extra.perStudentBudgetFen);
+    q('UPDATE course_lessons SET delivery_mode=?,delivery_modes=?,per_student_budget_fen=?,classroom_config=?,canvas_template_snapshot=?,updated_at=? WHERE id=?',
+      [modes[0], json(modes), budgetFen, json(normalizeClassroomConfig(classroomConfig)), json(normalizeCanvasTemplateSnapshot(canvasTemplateSnapshot)), now, lessonId]);
   });
 }
 

@@ -471,6 +471,22 @@ export function orgSeriesAccessSql(seriesAlias = 'series', assignmentAlias = 'as
     + ` OR (${seriesAlias}.owner_type='ORG' AND ${seriesAlias}.org_id = ?))`;
 }
 
+const DELIVERY_MODE_VALUES = ['CANVAS', 'VIBECODING'];
+
+/**
+ * 一个课时支持哪些上课类型。
+ * 新字段 `delivery_modes` 是数组（画布 + VibeCoding 可同时开，学生端两个入口并列）；
+ * 老数据只有单值 `delivery_mode`，这里统一成数组返回，避免每个读取方各写一遍回退逻辑。
+ */
+function deliveryModesOf(value) {
+  const parsed = parseJson(value?.delivery_modes, null);
+  const list = Array.isArray(parsed)
+    ? parsed.map((item) => String(item || '').trim().toUpperCase()).filter((item) => DELIVERY_MODE_VALUES.includes(item))
+    : [];
+  const unique = [...new Set(list)];
+  return unique.length ? unique : [value?.delivery_mode || 'CANVAS'];
+}
+
 export function normalizeLesson(value, { includeTeaching = false } = {}) {
   if (!value) return null;
   return {
@@ -484,7 +500,12 @@ export function normalizeLesson(value, { includeTeaching = false } = {}) {
     promptPackAssetId: value.prompt_pack_asset_id || null,
     outcomePackAssetId: value.outcome_pack_asset_id || null,
     lessonContent: value.lesson_content || '',   // P5-W05
+    // 老字段（第一种类型）保留给既有读取方；新代码一律读 deliveryModes
     deliveryMode: value.delivery_mode || 'CANVAS',
+    deliveryModes: deliveryModesOf(value),
+    // 每个学生的算力上限（分）；null = 平台没配（不拦，只记账）
+    perStudentBudgetFen: value.per_student_budget_fen === null || value.per_student_budget_fen === undefined
+      ? null : Number(value.per_student_budget_fen),
     classroomConfig: parseJson(value.classroom_config, {}),
     canvasTemplateSnapshot: parseJson(value.canvas_template_snapshot, {}),
     ...lessonCanvasConfig(value.id),
@@ -688,6 +709,8 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     orgId: value.org_id || null,
     visibility: value.visibility,
     version: value.version,
+    // 平台课包库存（可授权出去的次数池）；机构能拿到多少由 course_assignments.quota_total 决定
+    stockTotal: Number(value.stock_total || 0),
     sort: Number(value.sort || 0),
     status: value.status,
     marketplaceStatus: value.marketplace_status,

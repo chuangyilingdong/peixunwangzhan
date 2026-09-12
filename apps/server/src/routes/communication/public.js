@@ -288,6 +288,8 @@ export function handlePublicCommunication(ctx) {
     detail.lessons = detail.lessons.map((l) => ({
       ...l,
       lessonContent: l.lessonContent ? String(l.lessonContent).slice(0, 2000) : '',
+      // 算力预算是平台成本口径，不下发到官网公开接口（机构端/平台端才有）
+      perStudentBudgetFen: undefined,
     }));
     return detail;
   }

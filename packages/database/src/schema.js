@@ -344,6 +344,7 @@ CREATE TABLE IF NOT EXISTS course_assignments (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_assignments_unique ON course_assignments(series_id, org_id);
 
+
 CREATE TABLE IF NOT EXISTS classes (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
@@ -1102,6 +1103,20 @@ CREATE TABLE IF NOT EXISTS platform_config_change_logs (
 `;
 
 db.exec(SCHEMA);
+
+// ── 课包/课时的重做字段（2026-09-11，平台侧梳理 P1）────────────────────────────
+// 课时可同时支持多种上课类型（画布 + VibeCoding），学生端两个入口并列。
+// delivery_mode 保留为「第一种」，兼容既有读取方（学生端门禁、公开接口、老数据）。
+try { db.exec('ALTER TABLE course_lessons ADD COLUMN delivery_modes TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 这节课「每个学生」的算力上限（单位：分，50 元 = 5000）。
+// 实际拦截在算力网关（令牌额度）；这里的数字用于「课时合计 = 单价 × 参与学生数」与超支告警。
+try { db.exec('ALTER TABLE course_lessons ADD COLUMN per_student_budget_fen INTEGER'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 平台课包库存（可授权出去的次数池）；授权给机构时从机构授权单上记账（见 course_assignments.quota_*）。
+try { db.exec('ALTER TABLE course_series ADD COLUMN stock_total INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
 
 // P6-A01 AI provider policy and org budget migrations; safe for existing databases.
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN ai_provider_policy TEXT NOT NULL DEFAULT '{}'"); }
