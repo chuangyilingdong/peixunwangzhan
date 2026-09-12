@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { AppShell, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
 import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/CourseManagement.jsx';
+import { ComputeGateway } from './pages/ComputeGateway.jsx';
 import { AdminPermissionGate, demos, visibleNavigation } from './shared.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { Organizations } from './pages/Organizations.jsx';
@@ -38,6 +39,7 @@ function App() {
     <Route path="/courses/:seriesId" element={page('ADMIN_COURSES', <CourseSeriesDetailPage api={api} />)} />
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
+    <Route path="/compute" element={page('ADMIN_BILLING', <ComputeGateway api={api} />)} />
     <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />

@@ -23,6 +23,7 @@ export const navigation = [
   { to: '/courses', icon: '▦', label: '平台课程', permission: 'ADMIN_COURSES' },
   { to: '/works', icon: '◇', label: '平台作品库', permission: 'ADMIN_WORKS' },
   { heading: '计费与设置' },
+  { heading: '算力' }, { to: '/compute', icon: '⚡', label: '算力网关', permission: 'ADMIN_BILLING' },
   { to: '/billing', icon: '◌', label: '计费与模型', permission: 'ADMIN_BILLING' },
   { to: '/materials', icon: '▤', label: '素材与物料', permission: 'ADMIN_CONTENT' },
   { to: '/website-content', icon: '✎', label: '官网内容', permission: 'ADMIN_CONTENT' },
