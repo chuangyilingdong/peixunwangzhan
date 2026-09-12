@@ -16,6 +16,10 @@ export function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get(`admin/dashboard/overview${query ? `?${query}` : ''}`), [api, query]);
   const metrics = data?.metrics || {};
   const definitions = data?.meta?.metricDefinitions || {};
+  // 统计三层：经营（metrics）/ 算力（compute，单位元）/ 内容（content）
+  const compute = data?.compute || { totalYuan: 0, calls: 0, successCalls: 0, byModality: [], pools: { counted: 0, nearLimit: 0, exhausted: 0, unlimited: 0, usedYuan: 0 }, topStudents: [] };
+  const content = data?.content || { lessonHot: [], submittedWorks: 0, onPlaza: 0, featured: 0, unpublished: 0, lessonsPublished: 0 };
+  const yuan = (value) => `¥${Number(value || 0).toFixed(2)}`;
   const definition = (key) => definitions[key] || '';
   return <>
     <PageHeader eyebrow="平台控制台" title="运营总览" description="按机构和时间查看真实经营、课程、作品与模型调用指标。" actions={<button className="secondary-button" onClick={() => { organizations.refresh(); refresh(); }}>刷新</button>} />
@@ -48,13 +52,37 @@ export function Dashboard({ api }) {
         <MetricCard label="提交作品" value={metrics.works ?? 0} hint={definition('works')} tone="teal" />
         <MetricCard label="AI 任务" value={metrics.aiTasks ?? 0} hint={definition('aiTasks')} tone="orange" />
         <MetricCard label="异常调用" value={metrics.abnormalTasks ?? 0} hint={definition('abnormalTasks')} tone="pink" />
-        <MetricCard label="魔法石消耗" value={formatCredits(metrics.creditsSpent ?? 0)} hint={definition('creditsSpent')} />
-        <MetricCard label="机构积分余额" value={formatCredits(metrics.creditBalance ?? 0)} hint={definition('creditBalance')} tone="teal" />
-        <MetricCard label="冻结积分" value={formatCredits(metrics.frozenCredits ?? 0)} hint={definition('frozenCredits')} tone="orange" />
+        <MetricCard label="算力消耗（元）" value={yuan(compute.totalYuan)} hint={definition('compute.totalYuan')} />
+        <MetricCard label="池子接近上限" value={compute.pools.nearLimit} hint={definition('compute.pools')} tone="orange" />
+        <MetricCard label="在广场作品" value={content.onPlaza} hint={definition('content.onPlaza')} tone="teal" />
       </div>
       <div className="split">
-        <Panel title="机构消耗 Top 10"><div className="table-wrap"><table><thead><tr><th>机构</th><th>调用次数</th><th>魔法石</th></tr></thead><tbody>{data.byOrg.length ? data.byOrg.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.calls}</td><td>{formatCredits(item.credits)}</td></tr>) : <tr><td colSpan={3}>所选区间暂无机构消耗</td></tr>}</tbody></table></div></Panel>
-        <Panel title="能力调用"><div className="table-wrap"><table><thead><tr><th>能力</th><th>调用</th><th>成功</th><th>异常</th><th>魔法石</th></tr></thead><tbody>{data.byModality.length ? data.byModality.map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{item.successCalls}</td><td>{item.abnormalCalls}</td><td>{formatCredits(item.credits)}</td></tr>) : <tr><td colSpan={5}>所选区间暂无调用记录</td></tr>}</tbody></table></div></Panel>
+        <Panel title="算力（单位：元，口径与「算力网关」一致）"><div className="muted" style={{ marginBottom: 8 }}>
+          口径：四种模态（对话 / 图片 / 视频 / 音乐）合计 {yuan(compute.totalYuan)}，共 {compute.calls} 次调用（成功 {compute.successCalls} 次）。
+          数据来自算力池账本，与「算力网关」页同一份；单价在「算力网关 → 每次调用单价」里配。
+        </div>
+          <div className="table-wrap"><table><thead><tr><th>模态</th><th>调用</th><th>消耗（元）</th></tr></thead><tbody>
+            {compute.byModality.length ? compute.byModality.map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td><strong>{yuan(item.yuan)}</strong></td></tr>) : <tr><td colSpan={3}>所选区间暂无算力消耗</td></tr>}
+          </tbody></table></div>
+          <div className="muted top-gap">
+            池子健康度（存量）：有消耗的池子 {compute.pools.counted} 个 ·
+            接近上限 {compute.pools.nearLimit} 个 · <strong>已用尽 {compute.pools.exhausted} 个</strong> ·
+            不限预算 {compute.pools.unlimited} 个 · 已用合计 {yuan(compute.pools.usedYuan)} 元
+          </div>
+          <h4 className="top-gap">消耗最多的学员（Top 5）</h4>
+          <div className="table-wrap"><table><thead><tr><th>学员</th><th>机构</th><th>课包</th><th>已用（元）</th><th>使用率</th></tr></thead><tbody>
+            {compute.topStudents.length ? compute.topStudents.map((item, index) => <tr key={`${item.studentName}-${index}`}><td><strong>{item.studentName}</strong></td><td className="muted">{item.orgName}</td><td className="muted">{item.seriesTitle}</td><td>{yuan(item.usedYuan)}</td><td>{item.unlimited ? <span className="muted">不限</span> : <span className={item.usagePercent >= 100 ? 'status danger' : item.usagePercent >= 80 ? 'status warn' : ''}>{item.usagePercent}%</span>}</td></tr>) : <tr><td colSpan={5}>所选区间暂无学员消耗</td></tr>}
+          </tbody></table></div>
+        </Panel>
+        <Panel title="内容（课包与课时的使用热度）">
+          <div className="muted" style={{ marginBottom: 8 }}>
+            已发布课时 {content.lessonsPublished} 节 · 区间内提交作品 {content.submittedWorks} 件 ·
+            在广场 {content.onPlaza} 件 · 精选 {content.featured} 件 · 已下架 {content.unpublished} 件
+          </div>
+          <div className="table-wrap"><table><thead><tr><th>课时（开课最多 Top 5）</th><th>所属课包</th><th>课堂场次</th></tr></thead><tbody>
+            {content.lessonHot.length ? content.lessonHot.map((item) => <tr key={item.id}><td><strong>{item.title}</strong></td><td className="muted">{item.seriesTitle}</td><td>{item.sessions}</td></tr>) : <tr><td colSpan={3}>所选区间内没有开过课堂</td></tr>}
+          </tbody></table></div>
+        </Panel>
       </div>
       <Panel title="统计口径"><div className="table-wrap"><table><thead><tr><th>指标</th><th>口径说明</th></tr></thead><tbody>{Object.entries(definitions).map(([key, text]) => <tr key={key}><td>{key}</td><td>{text}</td></tr>)}</tbody></table></div></Panel>
     </>}

@@ -217,6 +217,47 @@ export async function handleOverview(ctx, part, method) {
       ${orgFilter ? 'WHERE organization.id=?' : ''} GROUP BY organization.id ORDER BY credits DESC,organization.name ASC LIMIT 10`, orgFilter ? [since, until, orgFilter] : [since, until]).map((item) => ({ id: item.id, name: item.name, credits: Number(item.credits || 0), calls: Number(item.calls || 0) }));
     const byModality = rows(`SELECT modality,COUNT(*) calls,COALESCE(SUM(credits_charged),0) credits,COUNT(CASE WHEN status='SUCCESS' THEN 1 END) successCalls,COUNT(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 END) abnormalCalls
       FROM usage_records WHERE ${usage.where} GROUP BY modality ORDER BY credits DESC,modality ASC`, usage.params).map((item) => ({ modality: item.modality, calls: Number(item.calls || 0), credits: Number(item.credits || 0), successCalls: Number(item.success_calls ?? item.successCalls ?? 0), abnormalCalls: Number(item.abnormal_calls ?? item.abnormalCalls ?? 0) }));
+    // ── 统计：算力层（单位是「元」，来自应用侧算力池账本 —— 与「算力网关」页同一份数据）──
+    // 为什么不再用 credits：积分是旧单位、且与真实成本无关（梳理文档 7.5 要删它）；
+    // 这里直接给「花了多少钱、花在哪个模态上、哪个池子快满了」。
+    const computeWhere = `record.created_at>=? AND record.created_at<? AND record.series_id IS NOT NULL${orgFilter ? ' AND record.org_id=?' : ''}`;
+    const computeParams = orgFilter ? [since, until, orgFilter] : [since, until];
+    const computeTotals = row(`SELECT COALESCE(SUM(record.cost_fen),0) fen, COUNT(*) calls,
+        SUM(CASE WHEN record.status='SUCCESS' THEN 1 ELSE 0 END) successCalls
+      FROM usage_records record WHERE ${computeWhere}`, computeParams);
+    const computeByModality = rows(`SELECT record.modality, COALESCE(SUM(record.cost_fen),0) fen, COUNT(*) calls
+      FROM usage_records record WHERE ${computeWhere} GROUP BY record.modality ORDER BY fen DESC`, computeParams);
+    // 池子健康度是**存量口径**（不随筛选时间变化）：有消耗的池子里，多少接近上限、多少已用尽。
+    // 复用算力网关页那份报表（computePoolReport），避免两处各算一套。
+    const poolRows = computePoolReport({ limit: 500 });
+    const pools = {
+      counted: poolRows.length,
+      unlimited: poolRows.filter((item) => item.unlimited).length,
+      nearLimit: poolRows.filter((item) => item.usagePercent != null && item.usagePercent >= 80 && item.usagePercent < 100).length,
+      exhausted: poolRows.filter((item) => item.usagePercent != null && item.usagePercent >= 100).length,
+      usedYuan: Number(poolRows.reduce((total, item) => total + Number(item.usedYuan || 0), 0).toFixed(2)),
+    };
+    const computeTopStudents = poolRows.slice(0, 5).map((item) => ({ studentName: item.studentName, orgName: item.orgName, seriesTitle: item.seriesTitle, usedYuan: item.usedYuan, usagePercent: item.usagePercent, unlimited: item.unlimited }));
+
+    // ── 统计：内容层（课包/课时的使用热度 + 作品发布情况）──
+    const lessonHot = rows(`SELECT lesson.id, lesson.title, series.title AS series_title, COUNT(session.id) AS sessions
+        FROM course_lessons lesson
+        JOIN course_series series ON series.id = lesson.series_id
+        LEFT JOIN class_sessions session ON session.lesson_id = lesson.id AND session.started_at>=? AND session.started_at<?
+       WHERE series.owner_type='PLATFORM'
+       GROUP BY lesson.id HAVING sessions > 0 ORDER BY sessions DESC, lesson.sort ASC LIMIT 5`, [since, until]).map((item) => ({ id: item.id, title: item.title, seriesTitle: item.series_title, sessions: Number(item.sessions || 0) }));
+    // 作品发布：两条链路（画布 works / VibeCoding submissions）合并计数 —— 与用户看到的「一套状态话术」同口径
+    const submittedWorks = singleNumber(`SELECT (SELECT COUNT(*) FROM works WHERE submitted_at>=? AND submitted_at<?) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE submitted_at>=? AND submitted_at<?) n`, [since, until, since, until]);
+    const content = {
+      lessonHot,
+      submittedWorks,
+      // 在广场上 = 两条链路各自的 is_public（与 worksState 的判据一致）
+      onPlaza: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE is_public=1) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=1) n"),
+      featured: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE featured_at IS NOT NULL) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE featured_at IS NOT NULL) n"),
+      unpublished: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE is_public=0 AND teacher_comment IS NOT NULL AND teacher_comment<>'') + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=0 AND unpublish_reason IS NOT NULL AND unpublish_reason<>'') n"),
+      lessonsPublished: singleNumber("SELECT COUNT(*) n FROM course_lessons WHERE status='PUBLISHED'"),
+    };
+
     return {
       metrics: {
         organizations, activeOrganizations, admins, teachers, students,
@@ -225,6 +266,14 @@ export async function handleOverview(ctx, part, method) {
         creditsSpent, creditBalance: account, frozenCredits,
       },
       byOrg, byModality,
+      compute: {
+        totalYuan: Number((Number(computeTotals?.fen || 0) / 100).toFixed(2)),
+        calls: Number(computeTotals?.calls || 0),
+        successCalls: Number(computeTotals?.successCalls || 0),
+        byModality: computeByModality.map((item) => ({ modality: item.modality, yuan: Number((Number(item.fen || 0) / 100).toFixed(2)), calls: Number(item.calls || 0) })),
+        pools, topStudents: computeTopStudents,
+      },
+      content,
       filters: { orgId: orgFilter || null, from: since, to: until },
       meta: {
         generatedAt: nowIso(), timezone: 'UTC', dataSource: 'local SQLite', version: 'P4-A01',
@@ -242,7 +291,11 @@ export async function handleOverview(ctx, part, method) {
           works: '查询时间内提交的作品数。',
           aiTasks: '查询时间内创建的生成任务数。',
           abnormalTasks: '查询时间内 usage_records 中状态为 FAILED 或 BLOCKED 的调用次数。',
-          creditsSpent: '查询时间内 usage_records.credits_charged 求和。',
+          creditsSpent: '查询时间内 usage_records.credits_charged 求和（旧积分单位，界面已不再展示，保留字段兼容）。',
+          'compute.totalYuan': '查询时间内算力池账本的消耗合计（元）：对话/图片/视频/音乐四种模态之和；含视频与音乐。',
+          'compute.pools': '算力池健康度，**存量口径**：有消耗的池子里多少接近上限(≥80%)、多少已用尽(≥100%)；不限预算的池子单列。',
+          'content.lessonHot': '查询时间内开过的课堂场次最多的课时 Top 5。',
+          'content.onPlaza': '当前在作品广场上的作品数（两条链路 is_public 之和）。',
           creditBalance: '机构账面积分余额，含冻结；为筛选范围当前存量。',
           frozenCredits: '机构冻结积分，为筛选范围当前存量。',
         },
