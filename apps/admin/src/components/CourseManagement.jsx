@@ -48,7 +48,7 @@ const defaultClassroomConfig = { version: 3 };
 const emptyCourseForm = {
   title: '', description: '', coverImageUrl: '', coverAssetId: '', priceYuan: '', version: '1.0',
   estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'ALL_ORGS', deliveryMode: 'CANVAS',
-  difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '', stockTotal: '',
+  difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '', stockTotal: '', perStudentBudgetYuan: '',
 };
 
 // 生成框体是素材表里的一种素材（material_type=GENERATION_BOX），顺序跟着素材走；
@@ -301,9 +301,6 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
   // 上课类型改为可多选（画布 + VibeCoding 可同时开，学生端两个入口并列）。
   // 老数据只有单值 deliveryMode，这里统一读成数组再编辑。
   const deliveryModes = edit.deliveryModes ?? lesson.deliveryModes ?? [lesson.deliveryMode || 'CANVAS'];
-  const perStudentBudgetYuan = edit.perStudentBudgetFen === undefined
-    ? (lesson.perStudentBudgetFen == null ? '' : String(lesson.perStudentBudgetFen / 100))
-    : edit.perStudentBudgetYuan;
   function toggleDeliveryMode(mode) {
     const next = deliveryModes.includes(mode) ? deliveryModes.filter((item) => item !== mode) : [...deliveryModes, mode];
     if (!next.length) { setMessage('至少保留一种上课类型'); return; }
@@ -313,13 +310,9 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
   async function save() {
     setBusy(true); setMessage('');
     try {
-      const budgetText = String(perStudentBudgetYuan ?? '').trim();
-      if (budgetText && !/^\d+(?:\.\d{1,2})?$/.test(budgetText)) throw new Error('每学生算力上限必须是有效的元金额，最多两位小数');
       const body = {
         title, summary, durationMinutes: Number(durationMinutes), lessonContent,
         deliveryModes,
-        // 每学生算力上限（元 → 分）；留空 = 不拦，只记账
-        perStudentBudgetFen: budgetText === '' ? null : Math.round(Number(budgetText) * 100),
         classroomConfig: edit.classroomConfig ?? lesson.classroomConfig ?? {},
         capabilities: edit.capabilities ?? lesson.capabilities ?? ['text'],
         materialGroups: edit.materialGroups ?? lesson.materialGroups ?? [],
@@ -360,8 +353,7 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
               </label>
             ))}
           </div>
-          <label>每学生算力上限（元）<input type="number" min="0" step="0.01" placeholder="留空 = 不限制，只记账" value={perStudentBudgetYuan} onChange={(event) => update({ perStudentBudgetFen: undefined, perStudentBudgetYuan: event.target.value })} /></label>
-          <p className="muted">这节课的算力总额度 = 本值 × 参与学生数（例：50 元 × 5 人 = 250 元）；实际消耗在算力总控里按学生归集。</p>
+          <p className="muted">算力上限已经挪到**课包**上（一个学生在一个课包上就一个池子，对话 / 图片 / 视频 / 音乐四种调用共用它）—— 到课包详情的「每学生算力上限（元）」里填。</p>
         </section>
         <section className="drawer-section">
           <h3>课堂配置</h3>
@@ -422,6 +414,8 @@ function CreateCourseModal({ api, onClose, onCreated }) {
         priceFen: Math.round(Number(priceText) * 100), version: form.version || '1.0',
         estimatedCreditsPerPerson: Number(form.estimatedCreditsPerPerson || 0), gradeRange: form.gradeRange, visibility: form.visibility,
         stockTotal: Number(form.stockTotal || 0),
+        // 算力池：每学生在这个课包上的总预算（元 → 分）；留空 = 不限制、只记账
+        perStudentBudgetFen: String(form.perStudentBudgetYuan || '').trim() === '' ? null : Math.round(Number(form.perStudentBudgetYuan) * 100),
         deliveryMode: form.deliveryMode || 'CANVAS',
         // 选择「立即发布」时课时一并置为已发布，否则保持草稿、等待后续再发布。
         lessons: lessons.map((lesson) => ({
@@ -494,6 +488,7 @@ function CreateCourseModal({ api, onClose, onCreated }) {
           <div className="form-grid">
             <label>价格（元）<input inputMode="decimal" value={form.priceYuan} placeholder="如 199.00" onChange={(event) => setForm({ ...form, priceYuan: event.target.value })} /></label>
             <label>库存（可授权次数）<input type="number" min="0" value={form.stockTotal} placeholder="如 10000" onChange={(event) => setForm({ ...form, stockTotal: event.target.value })} /></label>
+            <label>每学生算力上限（元）<input inputMode="decimal" value={form.perStudentBudgetYuan} placeholder="如 200（留空 = 不限制，只记账）" onChange={(event) => setForm({ ...form, perStudentBudgetYuan: event.target.value })} /></label>
             <label>难度（1-5）<input type="number" min="1" max="5" value={form.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setForm({ ...form, difficultyLevel: event.target.value })} /></label>
           </div>
           <p className="muted">这一步可以跳过，创建后在课包详情里继续补充。</p>
@@ -637,6 +632,7 @@ function CourseDetail({ api, courseId, onBack }) {
       visibility: series.visibility, sort: series.sort, difficultyLevel: series.difficultyLevel ?? '', ageRangeMin: series.ageRangeMin ?? '',
       ageRangeMax: series.ageRangeMax ?? '', tags: (series.tags || []).join(','), deliveryMode: series.deliveryMode || 'CANVAS',
       stockTotal: String(series.stockTotal ?? ''),
+      perStudentBudgetYuan: series.perStudentBudgetFen == null ? '' : String(series.perStudentBudgetFen / 100),
     });
   }, [series?.id]);
 
@@ -673,6 +669,7 @@ function CourseDetail({ api, courseId, onBack }) {
         priceFen: Math.round(Number(priceText) * 100),
         estimatedCreditsPerPerson: Number(editForm.estimatedCreditsPerPerson || 0), gradeRange: editForm.gradeRange || '',
         stockTotal: Number(editForm.stockTotal || 0),
+        perStudentBudgetFen: String(editForm.perStudentBudgetYuan || '').trim() === '' ? null : Math.round(Number(editForm.perStudentBudgetYuan) * 100),
         visibility: editForm.visibility, sort: Number(editForm.sort), deliveryMode: editForm.deliveryMode || 'CANVAS',
       };
       if (body.coverImageUrl && !/^(https:\/\/|\/api\/)/.test(body.coverImageUrl)) throw new Error('封面地址必须是 HTTPS 链接或平台上传地址');
@@ -794,6 +791,7 @@ function CourseDetail({ api, courseId, onBack }) {
           <div className="form-grid">
             <label>价格（元）<input inputMode="decimal" value={editForm.priceYuan} onChange={(event) => setEditForm({ ...editForm, priceYuan: event.target.value })} /></label>
             <label>库存（可授权次数）<input type="number" min="0" value={editForm.stockTotal} onChange={(event) => setEditForm({ ...editForm, stockTotal: event.target.value })} /></label>
+            <label>每学生算力上限（元）<input inputMode="decimal" value={editForm.perStudentBudgetYuan} placeholder="留空 = 不限制，只记账" onChange={(event) => setEditForm({ ...editForm, perStudentBudgetYuan: event.target.value })} /></label>
             <label>版本号<input value={editForm.version} disabled title="版本号由「更新发布」推进，这里只读" /></label>
             <label>难度（1-5）<input type="number" min="1" max="5" value={editForm.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setEditForm({ ...editForm, difficultyLevel: event.target.value })} /></label>
           </div>

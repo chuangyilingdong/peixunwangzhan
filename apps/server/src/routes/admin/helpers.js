@@ -1330,6 +1330,7 @@ export {
   replaceLessonCanvasConfig,
   replaceLessonTeachingMaterials,
   reportResolution,
+  normalizePerStudentBudgetFen,
   setStudentEnrollmentAccess,
   softDeleteStudent,
   teacherCanAccessClass,

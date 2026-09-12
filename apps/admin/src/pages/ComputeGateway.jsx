@@ -21,6 +21,10 @@ export function ComputeGateway({ api }) {
   const [tokenForm, setTokenForm] = useState({ name: '', budgetYuan: '', models: '', unlimited: false });
   const [usageDays, setUsageDays] = useState(7);
   const [usage, setUsage] = useState(null);
+  // 算力池（学生 × 课包，四种模态共用一个池子）与折算用的每次调用单价
+  const [pools, setPools] = useState(null);
+  const [pricing, setPricing] = useState(null);
+  const [pricingBusy, setPricingBusy] = useState(false);
 
   // 配置读回来才填表单：密码永不回显，留空表示「不改」
   useEffect(() => {
@@ -66,6 +70,22 @@ export function ComputeGateway({ api }) {
     setBusy(true); setMessage('');
     try { setUsage(await api.get(`admin/compute-gateway/usage?days=${days}`)); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function loadPools() {
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.get('admin/compute-pools?limit=100');
+      setPools(result.items || []); setPricing(result.pricing);
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function savePricing() {
+    setPricingBusy(true); setMessage('');
+    try {
+      const result = await api.put('admin/compute-pricing', { perCall: pricing.perCall, models: pricing.models });
+      setPricing(result.pricing); setMessage('单价已保存（按「每次调用」折算，立即生效）。');
+    } catch (error) { setMessage(error.message); } finally { setPricingBusy(false); }
   }
 
   async function createToken() {
@@ -173,6 +193,41 @@ export function ComputeGateway({ api }) {
               </tbody></table></div>
             </> : null}
           </>}
+    </Panel>
+
+    <Panel
+      title="算力池（每个学员 × 每个课包一个池子，四种调用共用）"
+      actions={<button className="secondary-button" disabled={busy} onClick={loadPools}>读取池子</button>}
+    >
+      {!pools ? <Empty title="还没有读取" body="点右上角「读取池子」：看每个学员在某个课包上花了多少、还剩多少（对话 / 图片 / 视频 / 音乐都算进同一个池子）。" />
+        : pools.length ? <div className="table-wrap"><table><thead><tr><th>学员</th><th>课包</th><th>上限</th><th>已用</th><th>剩余</th><th>使用率</th><th>调用</th></tr></thead><tbody>
+          {pools.map((item) => <tr key={`${item.userId}-${item.seriesId}`}>
+            <td><strong>{item.studentName}</strong><div className="muted">{item.orgName}</div></td>
+            <td className="muted">{item.seriesTitle}</td>
+            <td>{item.unlimited ? <span className="muted">不限</span> : yuan(item.capYuan)}</td>
+            <td><strong>{yuan(item.usedYuan)}</strong></td>
+            <td>{item.remainYuan == null ? '—' : yuan(item.remainYuan)}</td>
+            <td>{item.usagePercent == null ? <span className="muted">—</span>
+              : <span className={item.usagePercent >= 100 ? 'status danger' : item.usagePercent >= 80 ? 'status warn' : ''}>{item.usagePercent}%</span>}</td>
+            <td className="muted">{item.successCalls} 成功 / {item.failedCalls} 失败</td>
+          </tr>)}
+        </tbody></table></div> : <Empty title="还没有池子消耗" body="学员开始用 AI 之后，这里会出现「谁在哪个课包上花了多少」。上限在课包的「每学生算力上限（元）」里填，留空 = 不限制、只记账。" />}
+      {pricing ? <>
+        <h4 className="top-gap">每次调用单价（折算池子用；必须按你的实际渠道价改）</h4>
+        <p className="muted">池子的金额是按这里的单价 × 调用次数折算的，<strong>不是上游账单</strong>；精确账单在网关用量日志里（上面那张表）。</p>
+        <div className="form-grid">
+          {[['TEXT', '对话'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']].map(([key, label]) => (
+            <label key={key}>{label}（元 / 次）
+              <input inputMode="decimal" value={String((pricing.perCall?.[key] ?? 0) / 100)}
+                onChange={(event) => setPricing({ ...pricing, perCall: { ...pricing.perCall, [key]: Math.round(Number(event.target.value || 0) * 100) } })} />
+            </label>
+          ))}
+        </div>
+        <div className="row-actions top-gap">
+          <button className="primary-button" disabled={pricingBusy} onClick={savePricing}>{pricingBusy ? '保存中…' : '保存单价'}</button>
+          {pricing.updatedAt ? <span className="muted">上次修改：{formatDate(pricing.updatedAt)}</span> : null}
+        </div>
+      </> : null}
     </Panel>
   </>;
 }

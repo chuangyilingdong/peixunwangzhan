@@ -18,6 +18,13 @@ import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
+import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
+
+/** 会话归属的课包 id（算力池的键）。会话只存了课时，所以这里回查一次。 */
+function conversationSeriesId(conversation) {
+  if (!conversation?.lesson_id) return null;
+  return row('SELECT series_id FROM course_lessons WHERE id=?', [conversation.lesson_id])?.series_id || null;
+}
 import { normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import {
   artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact, kindForName,
@@ -163,7 +170,7 @@ function vibeCodingContext(user, lessonId, classId) {
 }
 
 // 调上游前的预检：课堂管控 / 平台模态开关 / 课时能力 / 个人额度，任一不满足就不发起调用。
-function assertChatPreflight({ user, orgId, context }) {
+function assertChatPreflight({ user, orgId, context, model = '' }) {
   assertSessionAiControls({ modality: 'TEXT', session: context.activeSession, orgId, userId: user.id, credits: 1 });
   if (!isModalityEnabled(orgId, 'TEXT').enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   if (!(context.lesson?.capabilities || []).includes('text')) throw errors.forbidden('本课时未开放 AI 文字能力', 'LESSON_CAPABILITY_DISABLED');
@@ -171,6 +178,8 @@ function assertChatPreflight({ user, orgId, context }) {
   if (aiLimit !== null && Number(user.ai_credits_used || 0) + 1 > aiLimit) throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
   const allowance = Number(user.monthly_credit_allowance || 0) + Number(user.monthly_bonus_credits || 0) + Number(user.month_period_boost_credits || 0);
   if (Number(user.used_credits_this_period || 0) + 1 > allowance) throw errors.forbidden('个人额度不足', 'STUDENT_CREDIT_LIMIT');
+  // 算力池（学生 × 课包）：对话也从这个池子扣，与画布/视频/音乐共用一个上限
+  assertComputePoolBudget({ userId: user.id, seriesId: context.series?.id || null, modality: 'TEXT', model });
 }
 
 function sseOpen(ctx) {
@@ -500,6 +509,8 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: fresh.class_session_id || null,
         modality: 'TEXT', model: selection.model, credits: 1, status: 'SUCCESS',
+        // 算力池账本：对话也从这个池子扣（与画布/视频/音乐共用一个上限）
+        costFen: priceFenFor({ modality: 'TEXT', model: selection.model }), seriesId: conversationSeriesId(conversation),
         pricing: { source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },
       });
       q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
@@ -549,6 +560,7 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: conversation.class_session_id || null,
         modality: 'TEXT', model: selection.model, credits: 0, status: 'FAILED', failCode: code,
+        costFen: 0, seriesId: conversationSeriesId(conversation),
         pricing: { source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
       });
       sseSend(ctx, 'error', { code, message: normalized.message || error?.message || 'AI 回复失败' });
@@ -926,7 +938,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     assertConversationEditable(conversation);
     const user = activeStudent(ownerAuth);
     const context = vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
-    assertChatPreflight({ user, orgId: ownerAuth.user.orgId, context });
+    assertChatPreflight({ user, orgId: ownerAuth.user.orgId, context, model: conversation.model || '' });
     // 附件先校验，再决定正文是否可以为空（只发图不发字是允许的）
     const attachments = resolveAttachments(ownerAuth, body.attachments);
     const rawContent = String(body.content ?? '').trim();

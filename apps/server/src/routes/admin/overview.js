@@ -1,5 +1,6 @@
 // 平台管理端「overview」域路由：从 adminOrg.js 拆出，行为不变。
 import { clearGatewayRouteCache, createGatewayToken, gatewayUsageOverview, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
+import { computePoolReport, getComputePricing, saveComputePricing } from '../../services/computePool.js';
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
@@ -128,6 +129,22 @@ export async function handleOverview(ctx, part, method) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const days = integer(ctx.search.get('days'), '统计天数', { min: 1, max: 90, fallback: 7 });
     return gatewayUsageOverview({ days });
+  }
+  // 算力单价（每次调用预估单价，用于折算池子消耗）+ 池子（学生 × 课包）的用量报表
+  if (part === '/compute-pricing' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return { pricing: getComputePricing() };
+  }
+  if (part === '/compute-pricing' && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const pricing = saveComputePricing(ctx.body || {});
+    audit(ctx, 'COMPUTE_PRICING_UPDATE', 'PLATFORM_SETTING', 'compute_pricing', null, { perCall: pricing.perCall, modelCount: Object.keys(pricing.models).length });
+    return { pricing };
+  }
+  if (part === '/compute-pools' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 100 });
+    return { items: computePoolReport({ limit }), pricing: getComputePricing() };
   }
   if (part === '/compute-gateway/channels' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);

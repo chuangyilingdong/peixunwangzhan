@@ -1117,6 +1117,30 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 try { db.exec('ALTER TABLE course_series ADD COLUMN stock_total INTEGER NOT NULL DEFAULT 0'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
+// ── 算力池：一个学生在一个课包上就一个池子，四种模态共用（2026-09-12 用户拍板）────────
+// 用户口径：「按学生 × 课包」，并且「视频 / 音乐 / 对话 / 图像 都要算进这个上限里」。
+// 因为视频与音乐走不了网关（异步任务要写 new-api 任务插件，见梳理文档 7.2.3），
+// **只有应用侧能同时看见四种模态** → 池子的权威账本在应用侧（usage_records.cost_fen），
+// 网关的令牌额度退化成宽松兜底。
+try {
+  db.exec('ALTER TABLE course_series ADD COLUMN per_student_budget_fen INTEGER');
+  // 只在「这一次刚加上这一列」时回填一次：把该课包下所有课时的每学生预算**求和**抬到课包上。
+  // 求和而不是取其一，是因为原先的填法（每节课 50 元）本意就是「一个课包 5 节课 = 250 元」。
+  // ⚠️ 回填故意放在 try 里面：它只在建列那一次跑，之后管理员把课包预算清空不会被它又填回来。
+  db.exec(`UPDATE course_series SET per_student_budget_fen = (
+    SELECT SUM(lesson.per_student_budget_fen) FROM course_lessons lesson WHERE lesson.series_id = course_series.id
+  ) WHERE EXISTS (SELECT 1 FROM course_lessons lesson
+                   WHERE lesson.series_id = course_series.id AND lesson.per_student_budget_fen > 0)`);
+} catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 账本：每次调用折算出的金额（分）与它属于哪个课包。池子已用 = SUM(cost_fen) WHERE user_id + series_id。
+// 失败的调用记 0（不算钱）。cost_fen 是按平台「每次调用预估单价」折算的，不是上游账单 ——
+// 精确账单在网关的用量日志里，两者口径差异写在梳理文档 7.4。
+try { db.exec('ALTER TABLE usage_records ADD COLUMN cost_fen INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE usage_records ADD COLUMN series_id TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+db.exec('CREATE INDEX IF NOT EXISTS idx_usage_pool ON usage_records(user_id, series_id, created_at DESC)');
+
 // ── 课包版本与发布记录（2026-09-12，平台侧重做梳理 P1 第三刀）──────────────────
 // 版本号由人填写（不再「改一次自动 +0.1」）：每次「更新发布」写一条，记录版本号 / 变更说明 / 谁 / 何时。
 // 读模型仍是「当前内容」，所以发布后已授权机构与官网自然一起更新；
@@ -1179,6 +1203,10 @@ try { db.exec("ALTER TABLE platform_settings ADD COLUMN ai_provider_policy TEXT 
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // 算力网关（new-api）：地址与管理员账号；管理员密码走加密密钥文件（providerSecret.js），不落库。
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN compute_gateway TEXT NOT NULL DEFAULT '{}'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 算力单价（分）：{ perCall: {TEXT,IMAGE,VIDEO,MUSIC}, models: {<模型名>: 分} }。
+// 这是「每次调用预估单价」，用于折算池子的消耗（不是上游账单）；模型级优先于模态级。
+try { db.exec("ALTER TABLE platform_settings ADD COLUMN compute_pricing TEXT NOT NULL DEFAULT '{}'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 db.exec(`CREATE TABLE IF NOT EXISTS org_ai_budgets (
   id TEXT NOT NULL PRIMARY KEY,

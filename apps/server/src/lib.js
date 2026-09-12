@@ -751,6 +751,12 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     status: value.status,
     marketplaceStatus: value.marketplace_status,
     marketplaceRewardCredits: Number(value.marketplace_reward_credits || 0),
+    // 算力池：**每个学生在这个课包上的总预算**（分，5000 = 50 元）；留空 = 不限制、只记账。
+    // 四种模态（对话 / 图片 / 视频 / 音乐）共用这一个池子，闸门在应用侧（services/computePool.js）。
+    perStudentBudgetFen: (() => {
+      const raw = snapPick('perStudentBudgetFen', value.per_student_budget_fen);
+      return raw === null || raw === undefined ? null : Number(raw);
+    })(),
     // P5-W05 课程资料核验字段
     difficultyLevel: snapPick('difficultyLevel', value.difficulty_level != null ? Number(value.difficulty_level) : null),
     ageRangeMin: value.age_range_min != null ? Number(value.age_range_min) : null,

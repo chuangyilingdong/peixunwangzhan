@@ -10,6 +10,13 @@ import { chargeCreditsInTransaction } from '../services/creditLedger.js';
 import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
+import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
+
+/** 项目归属的课包 id（算力池的键）。失败路径上没有 context，所以这里按课时回查一次。 */
+function seriesIdOf(project) {
+  if (!project?.course_lesson_id) return null;
+  return row('SELECT series_id FROM course_lessons WHERE id=?', [project.course_lesson_id])?.series_id || null;
+}
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const MODALITY_LABELS = {
@@ -129,8 +136,10 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
  * 导出是**故意**的：VibeCoding 的文档插画（services/vibecodingIllustrations.js）也要走同一套 ——
  * 复制一份迟早会漏掉某条检查，那就等于给文档产物开了一条绕过能力开关的后门。
  * `projectId` 可省：省掉就跳过「框体占用」那条纯画布规则。
+ * `model` / `units` 是给算力池算钱用的（单价按模型或模态取；units = 这次要花的次数，
+ * 文档插画一次生成 3 张就是 3）。
  */
-export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null }) {
+export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null, model = '', units = 1 }) {
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
@@ -143,6 +152,9 @@ export function assertGenerationPreflight({ user, orgId, context, modality, proj
   if (frameCheck) assertVideoFrames(frameCheck);
   // 框体占用同样属于业务拦截：入队前就能判断，不必等结算
   if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
+  // 算力池（学生 × 课包，四种模态共用一个池子）—— 这一条对**每一种模态**都生效，
+  // 所以视频/音乐也被它管住（它们走不到网关，只有这里能拦）。
+  assertComputePoolBudget({ userId: user.id, seriesId: context.series?.id || null, modality, model, units });
 }
 
 function normalizeAsset(value) {
@@ -362,6 +374,8 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
       orgId, userId, projectId: project.id, sessionId: session?.id || null, generationJobId: jobId,
       modality, model: provider.model, credits: 0,
       status: BLOCKED_ERROR_CODES.has(failCode) ? 'BLOCKED' : 'FAILED', failCode,
+      // 失败不花学生的钱（cost_fen 记 0 但**仍然记 series_id**，这样池子报表里能看出「有哪些失败调用」）
+      costFen: 0, seriesId: seriesIdOf(project) || null,
       pricing: { source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: BLOCKED_ERROR_CODES.has(failCode) },
     });
   });
@@ -398,7 +412,10 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
       orgId: auth.user.orgId, userId: auth.user.id, projectId: project.id,
       sessionId: freshContext.activeSession?.id || null, generationJobId: jobId,
       modality, model: provider.model, credits: 1, status: 'SUCCESS',
-      pricing: { source: 'generation', provider: provider.name, mode: info.mode },
+      // 算力池账本：成功才花钱，金额 = 本次单价（与调用前预扣用的是同一个函数，所以两边必然一致）
+      costFen: priceFenFor({ modality, model: provider.model }),
+      seriesId: freshContext.series?.id || null,
+      pricing: { source: 'generation', provider: provider.name, mode: info.mode, costFen: priceFenFor({ modality, model: provider.model }) },
     });
     assetPayloads.forEach((asset, index) => {
       const assetId = id('asset');

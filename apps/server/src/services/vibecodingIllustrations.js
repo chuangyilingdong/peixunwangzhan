@@ -17,6 +17,8 @@ import { getAiProviderPolicy } from '../routes/billingConfig.js';
 import { providerSelectionForModality, assertGenerationPreflight } from '../routes/aiGeneration.js';
 import { getGenerationProvider } from './generationProvider.js';
 import { applyGatewayRoute } from './computeGateway.js';
+import { priceFenFor } from './computePool.js';
+import { recordAiUsage } from './creditUsage.js';
 import { storeGeneratedAsset } from '../routes/fileAssets.js';
 import { isDocumentKind, parseDeckSpec, deckIllustrationRequests } from './ooxml/documents.js';
 
@@ -76,9 +78,13 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
   const targets = collectIllustrationTargets(artifacts);
   if (!targets.length) return results;
 
-  // 门禁：和画布生图完全相同的那一套（课时能力 / 课堂开关 / 平台模态开关）。
+  // 门禁：和画布生图完全相同的那一套（课时能力 / 课堂开关 / 平台模态开关 / **算力池**）。
   // 任一条不满足就一张都不生成 —— 抛出去的 code 由调用方决定是提示还是静默。
-  assertGenerationPreflight({ user: auth.rawUser, orgId: auth.user.orgId, context, modality: 'IMAGE' });
+  // units 传「这次一共打算出几张」：池子要按张数预估，不然一次任务算成 1 张会漏掉 2/3 的花费。
+  assertGenerationPreflight({
+    user: auth.rawUser, orgId: auth.user.orgId, context, modality: 'IMAGE',
+    units: targets.reduce((total, target) => total + target.requests.length, 0),
+  });
 
   const policy = getAiProviderPolicy();
   // 插画也是这个学生在花算力，同样按他的令牌走网关。
@@ -86,6 +92,7 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
     orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context?.lesson?.id || '', modality: 'IMAGE',
   });
   const provider = getGenerationProvider(selection);
+  const seriesId = context?.series?.id || null;
 
   for (const target of targets) {
     const images = [];
@@ -114,8 +121,23 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
           metadata: { source: 'vibecoding-illustration', artifactId: target.artifact.id, slideIndex: request.slideIndex, prompt: request.prompt, provider: provider.name, model: selection.model },
         });
         images.push({ slideIndex: request.slideIndex, prompt: request.prompt, fileId: stored.id, url: stored.url });
+        // 插画以前**一条用量记录都不写**（交接说明里的老缺口：VibeCoding 插画完全无记录），
+        // 于是「每节课花了多少」里少了这一块。现在按张记一笔，并计入算力池。
+        recordAiUsage({
+          orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,
+          modality: 'IMAGE', model: selection.model, credits: 1, status: 'SUCCESS',
+          costFen: priceFenFor({ modality: 'IMAGE', model: selection.model }), seriesId,
+          pricing: { source: 'vibecoding-illustration', provider: provider.name, artifactId: target.artifact.id, slideIndex: request.slideIndex },
+        });
       } catch (error) {
-        // 单张失败不打断整体：记下来、这一页就不放图（界面上会说明有几张没做出来）
+        // 单张失败不打断整体：记下来、这一页就不放图（界面上会说明有几张没做出来）。
+        // 失败记 0 成本（不花学生的钱），但留一条记录以便看出「有哪些白花的调用」。
+        recordAiUsage({
+          orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,
+          modality: 'IMAGE', model: selection.model, credits: 0, status: 'FAILED',
+          failCode: error?.code || 'ILLUSTRATION_FAILED', costFen: 0, seriesId,
+          pricing: { source: 'vibecoding-illustration', provider: provider.name, artifactId: target.artifact.id, slideIndex: request.slideIndex },
+        });
         images.push({ slideIndex: request.slideIndex, prompt: request.prompt, error: String(error?.message || error).slice(0, 200) });
       }
     }
