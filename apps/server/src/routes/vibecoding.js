@@ -18,7 +18,7 @@ import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
-import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
+import { assertComputePoolBudget, computePoolSummary, priceFenFor } from '../services/computePool.js';
 
 /** 会话归属的课包 id（算力池的键）。会话只存了课时，所以这里回查一次。 */
 function conversationSeriesId(conversation) {
@@ -847,6 +847,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       submission: normalizeSubmission(submission),
       modelOptions: textModelOptions(),
       defaultModel: textDefaultModel(),
+      // 算力池摘要（本课包还剩多少）随会话详情下发，工作台顶部显示
+      computePool: computePoolSummary({ userId: conversation.student_id, seriesId: conversationSeriesId(conversation) }),
     };
   }
 

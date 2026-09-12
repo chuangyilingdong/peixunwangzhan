@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentCourseDetail, getStudentMemberships, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
+import { computePoolSummary } from '../services/computePool.js';
 
 const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
 
@@ -661,11 +662,19 @@ export async function handleStudent(ctx) {
       );
     });
     audit(ctx, 'PROJECT_CREATE', 'STUDENT_PROJECT', projectId, null, { classId: lessonContext.class.id, courseLessonId, title });
-    return normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+    const createdProject = normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+    // 新建/复制也带上池子摘要：画布拿到项目就能显示「本课包还剩多少」，不必等下一次详情请求
+    createdProject.computePool = computePoolSummary({ userId: auth.user.id, seriesId: createdProject.seriesId, seriesTitle: createdProject.seriesTitle });
+    return createdProject;
   }
 
   let match = part.match(/^\/projects\/([^/]+)$/);
-  if (match && method === 'GET') return normalizeProject(getOwnProject(ctx, match[1]), { includeSnapshot: true });
+  if (match && method === 'GET') {
+    const project = normalizeProject(getOwnProject(ctx, match[1]), { includeSnapshot: true });
+    // 算力池摘要：学生一进课堂就能看到「本课包还剩多少」（与闸门同源，不是另算一个数）
+    project.computePool = computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
+    return project;
+  }
 
   if (match && method === 'PUT') {
     const project = getOwnProject(ctx, match[1]);
@@ -750,7 +759,10 @@ export async function handleStudent(ctx) {
       );
     });
     audit(ctx, 'PROJECT_COPY', 'STUDENT_PROJECT', projectId, null, { sourceProjectId: project.id, sourceVersion: Number(project.latest_version || 0), title });
-    return normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+    const createdProject = normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+    // 新建/复制也带上池子摘要：画布拿到项目就能显示「本课包还剩多少」，不必等下一次详情请求
+    createdProject.computePool = computePoolSummary({ userId: auth.user.id, seriesId: createdProject.seriesId, seriesTitle: createdProject.seriesTitle });
+    return createdProject;
   }
 
   if (match && method === 'DELETE') {

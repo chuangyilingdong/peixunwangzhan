@@ -535,6 +535,8 @@ export function CanvasWorkspace({ api, ...props }) {
   }
 
   const lessonTitle = project.data.courseLessonTitle || 'AI 创作课堂';
+  // 算力池（本课包还剩多少）：服务端随项目详情下发，与闸门同源
+  const computePool = project.data.computePool || null;
   const materialGroups = Array.isArray(project.data.materialGroups) ? project.data.materialGroups : [];
   // 本地素材 = 学生从桌面拖进画布的那些文件（画布节点上带 uploaded 标记）。
   // 直接从快照派生：拖进去的框体一出现（哪怕还在「上传中」）这里就有一份，不需要额外的服务端状态。
@@ -553,7 +555,11 @@ export function CanvasWorkspace({ api, ...props }) {
   return <main className="cv-shell">
     <header className="cv-topbar">
       <div className="cv-brand"><span className="cv-brand__mark">✦</span><div><strong>AI 魔法学院</strong><small>学生创作画布</small></div></div>
-      <div className="cv-toptitle"><span>正在上课</span><strong>{lessonTitle}</strong></div>
+      <div className="cv-toptitle"><span>正在上课</span><strong>{lessonTitle}</strong>
+        {computePool ? <em className={`cv-pool${computePool.unlimited || Number(computePool.remainYuan || 0) > 0 ? '' : ' is-low'}`} title="本课包算力（对话/图片/视频/音乐共用这一个上限）">
+          {computePool.unlimited ? '算力不限' : `算力 剩 ¥${Number(computePool.remainYuan || 0).toFixed(2)} / ¥${Number(computePool.capYuan || 0).toFixed(2)}`}
+        </em> : null}
+      </div>
       <div className="cv-actions">
         <button type="button" className="cv-btn" onClick={() => navigate('/learn/canvas')}>课程大厅</button>
         <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasNodes} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>

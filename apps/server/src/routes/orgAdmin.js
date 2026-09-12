@@ -3,6 +3,7 @@ import { hashPassword } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
 import { assertTransition } from '../services/domainState.js';
+import { computePoolSummary } from '../services/computePool.js';
 
 import { ensureOrgBilling, integer, orgId, orgUser, hasPermission, classInOrg, assertTeachingClassManager, accessibleLesson, accessibleSeries, ORG_MEMBER_ROLES, validateMemberPhone, validateMemberPermissions, classMemberships, orgMemberRow, ENROLLMENT_STATUSES, PAYMENT_STATUSES, packageSnapshot, enrollmentDate, enrollmentRow, normalizeEnrollment, appendEnrollmentEvent, expireDueEnrollments, occupiedStudentSeats, assertEnrollmentSeat, setStudentEnrollmentAccess, packageWithSeatUsage, teacherCanAccessClass, teacherScope, classSessionRows, classProgressRows, classDetail, previewImport, createMember, validateTeacher, curriculumItem, workInReviewScope, workReportRows, workReportInReviewScope, reportResolution, normalizeWorkPublishRequest, orgWorkPublishRequestRow, orgWorkPublishRequestRows } from './adminOrg.js';
 export async function handleOrg(ctx) {
@@ -722,11 +723,14 @@ export async function handleOrg(ctx) {
     const items = students.map((student) => {
       const hasGrant = granted.has(student.id);
       const hasSubmitted = submitted.has(student.id);
+      // 老师排课时要能看出「谁快把算力用完了」——「有许可但没额度」的学生排进去也上不了课
+      const pool = computePoolSummary({ userId: student.id, seriesId: lesson.series_id });
       return {
         studentId: student.id, studentName: student.display_name || null, studentLogin: student.login || null,
         hasGrant, hasSubmitted, selected: chosen.has(student.id),
         selectable: hasGrant && !hasSubmitted,
         reason: !hasGrant ? '尚未被授权该课包' : (hasSubmitted ? '已经上过这节课（已提交作品）' : null),
+        poolUnlimited: pool.unlimited, poolCapYuan: pool.capYuan, poolUsedYuan: pool.usedYuan, poolRemainYuan: pool.remainYuan, poolPercent: pool.usagePercent,
       };
     });
     return { class: cls, lessonId, seriesId: lesson.series_id, items, stats: { total: items.length, selectable: items.filter((item) => item.selectable).length, noGrant: items.filter((item) => !item.hasGrant).length, submitted: items.filter((item) => item.hasSubmitted).length } };

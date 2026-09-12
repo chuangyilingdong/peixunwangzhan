@@ -19,9 +19,6 @@ import {
   attachmentSizeLimit, attachmentSizeMessage,
 } from './console/attachments.js';
 
-// 兼容旧引用：官网作品页此前直接从本文件取 VibePreviewFrame
-export const VibePreviewFrame = PreviewFrame;
-
 const DEFAULT_TITLE = '新的创作对话';
 // 思考过程在界面上最多展示这么多字符（只保留尾部）——长推理没必要全塞进 DOM
 const REASONING_TAIL_CHARS = 4000;
@@ -551,6 +548,8 @@ function WorkspaceView({ api }) {
   const recent = items.filter((item) => !item.pinnedAt);
   const modelOptions = data.modelOptions || [];
   const submission = data.submission;
+  // 算力池摘要（服务端随会话详情下发，与闸门同源；老数据可能没有这个字段）
+  const pool = data.computePool || null;
   const lastUserMessageId = [...messages].reverse().find((item) => item.role === 'user' && !String(item.id).startsWith('local-'))?.id || null;
 
   const sidebarZones = [
@@ -600,6 +599,10 @@ function WorkspaceView({ api }) {
       subtitle="正在创作"
       actions={(
         <>
+          {/* 算力池：本课包还剩多少（与闸门同源）。课包没填预算时显示「不限」——口径是留空=不限制 */}
+          {pool ? <Pill tone={pool.unlimited || Number(pool.remainYuan || 0) > 0 ? 'ok' : 'warn'}>
+            {pool.unlimited ? '本课包算力不限' : `本课包算力 剩 ¥${Number(pool.remainYuan || 0).toFixed(2)} / 上限 ¥${Number(pool.capYuan || 0).toFixed(2)}`}
+          </Pill> : null}
           {submission ? <Pill tone="ok">已交给平台</Pill> : null}
           {modelOptions.length ? (
             <select

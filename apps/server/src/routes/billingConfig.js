@@ -595,11 +595,6 @@ export async function handleOrgBillingConfig(ctx) {
   if (part === '/billing-config/org-overrides' && method === 'GET') {
     return { items: getOrgOverrides(auth.user.orgId) };
   }
-  if (part === '/billing-config/ai-budget' && method === 'GET') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看机构积分', 'ORG_ADMIN_REQUIRED');
-    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [auth.user.orgId]);
-    return { item: { orgId: auth.user.orgId, creditBalance: Number(account?.credit_balance || 0), totalCreditsIn: Number(account?.total_credits_in || 0), totalCreditsSpent: Number(account?.total_credits_spent || 0) } };
-  }
   if (part === '/billing-config/org-overrides' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可设置能力覆盖', 'ORG_ADMIN_REQUIRED');
     const body = ctx.body || {};

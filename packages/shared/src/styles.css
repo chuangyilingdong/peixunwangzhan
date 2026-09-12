@@ -1157,6 +1157,9 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .cv-toptitle { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
 .cv-toptitle span { color: var(--cv-text-faint); font-size: 10px; letter-spacing: .04em; }
 .cv-toptitle strong { max-width: 46vw; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+/* 顶栏的算力池提示：与课时名并列，一眼看到「本课包还剩多少」 */
+.cv-pool { flex: 0 0 auto; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--cv-accent, #6d5efc) 14%, transparent); color: var(--cv-text-soft, #6b6f7b); font-size: 10px; font-style: normal; letter-spacing: .02em; white-space: nowrap; }
+.cv-pool.is-low { background: color-mix(in srgb, #d9534f 16%, transparent); color: #b23b36; }
 .cv-actions { display: flex; align-items: center; gap: 8px; }
 .cv-btn { height: 34px; padding: 0 14px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: #e8e8eb; background: var(--cv-surface-2); font-size: 12px; font-weight: 600; cursor: pointer; transition: background var(--cv-motion) ease-out, color var(--cv-motion) ease-out, filter var(--cv-motion) ease-out, opacity var(--cv-motion) ease-out; }
 .cv-btn:hover:not(:disabled) { background: #26262e; color: #fff; }

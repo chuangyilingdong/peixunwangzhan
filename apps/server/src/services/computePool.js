@@ -262,6 +262,25 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
 }
 
 /**
+ * 界面用的池子摘要（学生端 / 老师端要看的「还剩多少」）。
+ * 挂在已有的负载上（画布项目详情 / VibeCoding 会话详情 / 排课候选），学生与老师不用多打一次接口。
+ * 没有课包上下文或没填预算时 `unlimited: true`（口径：留空 = 不限制，只记账）。
+ */
+export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}) {
+  const status = computePoolStatus({ userId, seriesId });
+  const toYuan = (fen) => (fen === null || fen === undefined ? null : Number((Number(fen) / 100).toFixed(2)));
+  return {
+    seriesId: status.seriesId,
+    seriesTitle: seriesTitle || (seriesId ? (row('SELECT title FROM course_series WHERE id=?', [seriesId])?.title || null) : null),
+    unlimited: status.unlimited,
+    capYuan: toYuan(status.capFen),
+    usedYuan: toYuan(status.usedFen),
+    remainYuan: toYuan(status.remainFen),
+    usagePercent: status.usagePercent,
+  };
+}
+
+/**
  * 调用前的池子门禁。返回本次调用要记的 `{ costFen, seriesId }`（调用方拿它去结算，
  * 这样「拦的时候算的钱」与「记的钱」必然一致 —— 同一个取价函数）。
  *

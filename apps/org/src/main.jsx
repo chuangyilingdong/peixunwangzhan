@@ -232,6 +232,8 @@ function Classes({ api, user }) {
                   <input type="checkbox" disabled={!student.selectable} checked={roster.picked.includes(student.studentId)} onChange={(event) => setRoster({ ...roster, picked: event.target.checked ? [...roster.picked, student.studentId] : roster.picked.filter((value) => value !== student.studentId) })} />
                   {student.studentName || student.studentLogin}
                   {student.selectable ? null : <span className="muted">（不可选：{student.reason}）</span>}
+                  {/* 本课包算力：排课时要能看出「谁快用完了」——有许可但没额度，排进去也上不了课 */}
+                  <span className="muted">{student.poolUnlimited ? ' · 本课包算力不限' : ` · 本课包算力 剩 ¥${Number(student.poolRemainYuan || 0).toFixed(2)}（上限 ¥${Number(student.poolCapYuan || 0).toFixed(2)}，已用 ${student.poolPercent ?? 0}%）`}</span>
                 </label>)}</div> : <Empty title="这个班还没有学员" body="先在「成员管理」里把学员加进班级。" />}
                 <div className="row-actions top-gap"><button className="primary-button" disabled={!roster.items.length || Boolean(roster.message && roster.message.includes('已保存'))} onClick={saveRoster}>保存名单（{roster.picked.length} 人）</button></div>
               </>}

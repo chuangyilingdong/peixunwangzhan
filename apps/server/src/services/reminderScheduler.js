@@ -7,7 +7,6 @@ import { scheduleReminder } from '../routes/communication.js';
 
 const LOW_BALANCE_THRESHOLD = 0; // credits 余额 <= 0 时告警
 const CONTRACT_EXPIRY_DAYS = 7;  // 到期前 7 天内提醒
-const SESSION_REMINDER_HOURS = 24; // 课节开始前 24h 提醒
 
 // ---------- 低余额预警扫赻器（5min） ----------
 /**
@@ -95,67 +94,3 @@ export function scanContractExpiryOrgs() {
   }
   return results;
 }
-
-// ---------- 课节提醒扫赻器（创建时触发，24h 前） ----------
-/**
- * 在 class_sessions 创建时调用：若 session.start_at 在未来 24h 内，发提醒给相关老师+学生
- * @param {string} sessionId - 课节 ID
- */
-export function triggerClassSessionReminder(sessionId) {
-  const session = row(`
-    SELECT cs.id, cs.title, cs.start_at, cs.end_at,
-      cs.class_id, class.name class_name, class.org_id
-    FROM class_sessions cs
-    JOIN classes class ON class.id=cs.class_id
-    WHERE cs.id=?
-  `, [sessionId]);
-  if (!session) return { skipped: true, reason: 'SESSION_NOT_FOUND' };
-
-  const now = Date.now();
-  const reminderWindowMs = SESSION_REMINDER_HOURS * 3600 * 1000;
-  const startMs = new Date(session.start_at).getTime();
-  const hoursUntilStart = (startMs - now) / (3600 * 1000);
-
-  // 只在开始前 24h±5min 窗口内提醒（避免重复触发）
-  if (hoursUntilStart < 0 || hoursUntilStart > SESSION_REMINDER_HOURS + 0.1) {
-    return { skipped: true, reason: 'OUTSIDE_REMINDER_WINDOW', hoursUntilStart };
-  }
-
-  // 查是否已提醒过（eventKey 去重）
-  const existing = row(
-    "SELECT id FROM notification_recipients WHERE event_key=? ORDER BY created_at DESC LIMIT 1",
-    [`SESSION_REMINDER:${session.id}`],
-  );
-  if (existing) return { skipped: true, reason: 'ALREADY_REMINDED' };
-
-  const targets = rows(`
-    SELECT DISTINCT u.id FROM class_members cm
-    JOIN users u ON u.id=cm.user_id AND u.status='ACTIVE' AND u.deleted_at IS NULL
-    WHERE cm.class_id=? AND cm.removed_at IS NULL
-    UNION
-    SELECT teacher_id id FROM classes WHERE id=? AND teacher_id IS NOT NULL
-  `, [session.class_id, session.class_id]);
-
-  const startLocal = new Date(session.start_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-
-  const results = [];
-  for (const target of targets) {
-    try {
-      scheduleReminder({
-        title: '课节即将开始',
-        body: `课节「${session.title || session.class_name}」将于 ${startLocal} 开始，请提前准备。`,
-        kind: 'REMINDER',
-        targetUserId: target.id,
-        targetOrgId: session.org_id,
-        eventKey: `SESSION_REMINDER:${session.id}`,
-        targetUrl: '/schedule',
-      });
-      results.push(target.id);
-    } catch { /* ignore */ }
-  }
-  return { sent: results.length, targets: results };
-}
-
-// ---------- 触发器：在作品审核/举报处理完成后调用的内置提醒 ----------
-// （已直接写入 adminOrg.js — 此处导出仅为文档占位，触发点见 adminOrg.js）
-export { scheduleReminder } from '../routes/communication.js';
