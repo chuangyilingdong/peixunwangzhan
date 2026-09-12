@@ -1,6 +1,6 @@
 // 平台管理端「overview」域路由：从 adminOrg.js 拆出，行为不变。
 import { clearGatewayRouteCache, createGatewayToken, gatewayUsageOverview, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
-import { computePoolReconciliation, computePoolReport, getComputePricing, saveComputePricing } from '../../services/computePool.js';
+import { budgetedSeriesOverview, computePoolReconciliation, computePoolReport, getComputePricing, saveComputePricing } from '../../services/computePool.js';
 import {
   audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
@@ -134,7 +134,7 @@ export async function handleOverview(ctx, part, method) {
   if (part === '/compute-pools' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 100 });
-    return { items: computePoolReport({ limit }), pricing: getComputePricing() };
+    return { items: computePoolReport({ limit }), pricing: getComputePricing(), budgetedSeries: budgetedSeriesOverview({ limit: 50 }) };
   }
   // 对账：池子账（应用侧，四种模态、按单价折算）vs 网关账（精确，只含对话/图片）
   if (part === '/compute-pools/reconciliation' && method === 'GET') {

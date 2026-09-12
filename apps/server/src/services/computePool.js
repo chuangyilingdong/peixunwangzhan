@@ -281,6 +281,29 @@ export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}
 }
 
 /**
+ * 已配置「每学生算力上限」的课包清单。
+ * 池子报表只列**有消耗**的池子，于是刚填完预算的人会以为「填了没生效」（用户 2026-09-12 实操时
+ * 就是这么问的）。这里把「配了预算、但还没人用」的课包也列出来，让「我填上了」在界面上看得见。
+ * ⚠️ 只读我们自己的库（不需要算力网关）—— 没配网关时也要能看到。
+ */
+export function budgetedSeriesOverview({ limit = 50 } = {}) {
+  const toYuan = (fen) => Number((Number(fen || 0) / 100).toFixed(2));
+  return rows(
+    `SELECT series.id, series.title, series.per_student_budget_fen,
+            (SELECT COALESCE(SUM(record.cost_fen),0) FROM usage_records record WHERE record.series_id = series.id) AS used_fen,
+            (SELECT COUNT(*) FROM usage_records record WHERE record.series_id = series.id) AS calls
+       FROM course_series series
+      WHERE series.per_student_budget_fen IS NOT NULL AND series.per_student_budget_fen > 0
+      ORDER BY series.updated_at DESC LIMIT ?`,
+    [Math.max(1, Math.round(Number(limit) || 50))],
+  ).map((item) => ({
+    seriesId: item.id, seriesTitle: item.title,
+    perStudentYuan: toYuan(item.per_student_budget_fen),
+    usedYuan: toYuan(item.used_fen), calls: Number(item.calls || 0),
+  }));
+}
+
+/**
  * 调用前的池子门禁。返回本次调用要记的 `{ costFen, seriesId }`（调用方拿它去结算，
  * 这样「拦的时候算的钱」与「记的钱」必然一致 —— 同一个取价函数）。
  *

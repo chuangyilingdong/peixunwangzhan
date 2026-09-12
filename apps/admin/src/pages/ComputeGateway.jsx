@@ -26,6 +26,7 @@ export function ComputeGateway({ api }) {
   const [pricing, setPricing] = useState(null);
   const [pricingBusy, setPricingBusy] = useState(false);
   const [reconcile, setReconcile] = useState(null);
+  const [budgetedSeries, setBudgetedSeries] = useState([]);
   const [reconcileDays, setReconcileDays] = useState(7);
 
   // 配置读回来才填表单：密码永不回显，留空表示「不改」
@@ -79,6 +80,7 @@ export function ComputeGateway({ api }) {
     try {
       const result = await api.get('admin/compute-pools?limit=100');
       setPools(result.items || []); setPricing(result.pricing);
+      setBudgetedSeries(result.budgetedSeries || []);
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
@@ -207,6 +209,9 @@ export function ComputeGateway({ api }) {
       title="算力池（每个学员 × 每个课包一个池子，四种调用共用）"
       actions={<button className="secondary-button" disabled={busy} onClick={loadPools}>读取池子</button>}
     >
+      {budgetedSeries.length ? <p className="muted">
+        已配置「每学生算力上限」的课包：{budgetedSeries.map((item) => `${item.seriesTitle}（¥${item.perStudentYuan}/学生${item.calls ? `，已用 ¥${item.usedYuan}` : '，暂无消耗'}）`).join(' · ')}
+      </p> : <p className="muted">还没有课包配置「每学生算力上限」—— 没填的课包不拦、只记账（到课包详情里填）。</p>}
       {!pools ? <Empty title="还没有读取" body="点右上角「读取池子」：看每个学员在某个课包上花了多少、还剩多少（对话 / 图片 / 视频 / 音乐都算进同一个池子）。" />
         : pools.length ? <div className="table-wrap"><table><thead><tr><th>学员</th><th>课包</th><th>上限</th><th>已用</th><th>剩余</th><th>使用率</th><th>调用</th></tr></thead><tbody>
           {pools.map((item) => <tr key={`${item.userId}-${item.seriesId}`}>
