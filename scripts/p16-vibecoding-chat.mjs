@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p16-vibecoding-'));
@@ -77,6 +78,10 @@ function parseSse(raw) {
 try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
+  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
+  ensureClassroom(dbPath);
+  // 这条守卫走 VibeCoding 入口 → 把课堂入口类型切成 VIBECODING
+  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
     await sleep(100);
   }
 
@@ -87,7 +92,9 @@ try {
   // 画布课时被拒
   const wrongLesson = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId: canvasLessonId } });
   assert.equal(wrongLesson.status, 403, `画布课时应被拒: ${JSON.stringify(wrongLesson.data)}`);
-  assert.equal(wrongLesson.data?.error?.code, 'VIBECODING_CLASS_NOT_ACTIVE', `错误码应为 VIBECODING_CLASS_NOT_ACTIVE，实际 ${wrongLesson.data?.error?.code}`);
+  // 2026-09-13（批次 B）：门禁重写后，'画布课堂里走 VibeCoding' 报 VIBECODING_CLASSROOM_UNAVAILABLE
+  // （原来的 CLASS_NOT_ACTIVE 语义是「VibeCoding 课堂没开始」，用在画布课堂上不贴切）
+  assert.equal(wrongLesson.data?.error?.code, 'VIBECODING_CLASSROOM_UNAVAILABLE', `错误码应为 VIBECODING_CLASSROOM_UNAVAILABLE，实际 ${wrongLesson.data?.error?.code}`);
 
   // 新建会话：带默认文件
   const created = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId: vibeLessonId } });

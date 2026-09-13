@@ -242,148 +242,132 @@ export function getStudentCourseDetail(user, seriesId) {
  * FOLLOW_CLASS student, the active session must be the class's current session
  * and must be for this exact lesson.
  */
-export function resolveStudentLessonContext(user, courseLessonId, preferredClassId = null) {
+/**
+ * 学生进课的**唯一门禁**（2026-09-13 批次 B 重写：班级退场、课堂成为主对象）。
+ *
+ * 判定顺序（每一步失败都给**准确的原因**，免得学生找错人）：
+ *   ① 课时/课包已发布                  → 否则 LESSON_NOT_ASSIGNED
+ *   ② 机构对这个课包有生效授权          → 否则 COURSE_NOT_ASSIGNED
+ *   ③ 学生持有有效学员许可              → 否则 COURSE_GRANT_REQUIRED（找老师/机构分清课包）
+ *   ④ 这节课上有一条属于他的参与记录    → 否则 NOT_IN_CLASSROOM（还没被老师加进课堂）
+ *   ⑤ 那条记录已「上课中」且课堂正在进行 → 否则 CLASS_SESSION_REQUIRED（等老师开始上课）
+ *   ⑥ 课堂入口类型与他要走的入口一致    → 否则 VIBECODING_CLASSROOM_UNAVAILABLE 等
+ *
+ * ⚠️ 2026-09-13 用户决定：**取消「在家练习」免课堂通道** —— 有许可只代表「能看课包与课时信息」，
+ *    真要进操作环境必须被老师加进某节课的课堂。
+ */
+export function resolveStudentLessonContext(user, courseLessonId, preferredSessionId = null) {
   const { id: userId, orgId } = studentIdentity(user);
   if (!courseLessonId) throw errors.badRequest('请选择课时', 'LESSON_REQUIRED');
+  void preferredSessionId;
 
-  const candidates = rows(
-    `SELECT
-        class.id AS class_id, class.org_id AS class_org_id, class.name AS class_name,
-        class.teacher_id AS class_teacher_id, teacher.display_name AS class_teacher_name,
-        class.usage_mode AS class_usage_mode, class.default_series_id AS class_default_series_id,
-        class.status AS class_status, class.current_session_id AS class_current_session_id,
-        class.created_at AS class_created_at, class.updated_at AS class_updated_at, class.archived_at AS class_archived_at,
-        lesson.id AS lesson_id, lesson.series_id AS lesson_series_id, lesson.title AS lesson_title,
-        lesson.summary AS lesson_summary, lesson.sort AS lesson_sort, lesson.status AS lesson_status,
-        lesson.duration_minutes AS lesson_duration_minutes,
-        lesson.prompt_pack_asset_id AS lesson_prompt_pack_asset_id,
-        lesson.outcome_pack_asset_id AS lesson_outcome_pack_asset_id,
-        lesson.lesson_content AS lesson_lesson_content,
-        lesson.delivery_mode AS lesson_delivery_mode,
-        lesson.published_content AS lesson_published_content,
-        lesson.delivery_modes AS lesson_delivery_modes,
-        lesson.per_student_budget_fen AS lesson_per_student_budget_fen,
-        lesson.classroom_config AS lesson_classroom_config,
-        lesson.canvas_template_snapshot AS lesson_canvas_template_snapshot,
-        lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at,
-        series.id AS series_id, series.title AS series_title, series.description AS series_description,
-        series.owner_type AS series_owner_type, series.org_id AS series_org_id,
-        series.visibility AS series_visibility, series.version AS series_version,
-        series.sort AS series_sort, series.status AS series_status,
-        session.id AS active_session_id, session.class_id AS active_session_class_id,
-        session.lesson_id AS active_session_lesson_id, session.status AS active_session_status,
-        session.delivery_mode AS active_session_delivery_mode,
-        session.ai_paused AS active_session_ai_paused,
-        session.student_call_cap AS active_session_student_call_cap,
-        session.allow_text AS active_session_allow_text,
-        session.allow_image AS active_session_allow_image,
-        session.allow_music AS active_session_allow_music,
-        session.allow_video AS active_session_allow_video,
-        session.allow_podcast AS active_session_allow_podcast,
-        session.allow_dubbing AS active_session_allow_dubbing,
-        session.started_by AS active_session_started_by, session.started_at AS active_session_started_at,
-        session.ended_by AS active_session_ended_by, session.ended_at AS active_session_ended_at,
-        session.ended_reason AS active_session_ended_reason
-     FROM class_members member
-     JOIN classes class ON class.id = member.class_id
-       AND class.status = 'ACTIVE' AND class.org_id = ?
-     LEFT JOIN users teacher ON teacher.id = class.teacher_id AND teacher.org_id = class.org_id
-     JOIN class_curriculum_items curriculum ON curriculum.class_id = class.id AND curriculum.lesson_id = ?
-     JOIN course_lessons lesson ON lesson.id = curriculum.lesson_id AND lesson.status = 'PUBLISHED'
-     JOIN course_series series ON series.id = lesson.series_id AND series.status = 'PUBLISHED'
-     LEFT JOIN course_assignments assignment
-       ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
-     LEFT JOIN class_sessions session
-       ON session.id = class.current_session_id
-       AND session.class_id = class.id
-       AND session.lesson_id = lesson.id
-       AND session.status = 'ACTIVE'
-     WHERE member.user_id = ?
-       AND member.removed_at IS NULL
-       AND ${orgCourseAccessSql()}
-       ${studentGrantSql()}
-       ${preferredClassId ? 'AND class.id = ?' : ''}
-     ORDER BY class.created_at`,
-    preferredClassId
-      ? [orgId, courseLessonId, orgId, userId, orgId, orgId, userId, preferredClassId]
-      : [orgId, courseLessonId, orgId, userId, orgId, orgId, userId],
+  const lesson = row(
+    `SELECT lesson.* FROM course_lessons lesson
+      JOIN course_series series ON series.id = lesson.series_id AND series.status='PUBLISHED'
+      WHERE lesson.id=? AND lesson.status='PUBLISHED'`,
+    [courseLessonId],
   );
-
-  if (!candidates.length) {
-    // 分不清是哪种原因的话，学生会拿到一句误导的提示（「不在你的班级课程表中」），
-    // 于是他会去找老师问课单，而真正的原因是老师还没把课包分给他。
-    if (!lessonInCurriculum(userId, orgId, courseLessonId)) throw errors.notFound('该课时不在你的班级课程表中', 'LESSON_NOT_ASSIGNED');
-    throw errors.forbidden('这个课包还没有授权给你：请老师先把课包分给你，你才能上这节课。', 'COURSE_GRANT_REQUIRED');
+  if (!lesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_ASSIGNED');
+  const series = row("SELECT * FROM course_series series WHERE series.id=? AND series.status='PUBLISHED'", [lesson.series_id]);
+  const orgAccess = row(
+    `SELECT series.id FROM course_series series
+      LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql('assignment')}
+      WHERE series.id=? AND ${orgSeriesAccessSql()}`,
+    [orgId, lesson.series_id, orgId],
+  );
+  if (!series || !orgAccess) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
+  if (!studentHasGrant(userId, orgId, lesson.series_id)) {
+    throw errors.forbidden('这个课包还没有分给你：请老师先把课包分给你，你才能上这节课。', 'COURSE_GRANT_REQUIRED');
   }
-  const data = candidates[0];
-  const rawClass = {
-    id: data.class_id, org_id: data.class_org_id, name: data.class_name,
-    teacher_id: data.class_teacher_id, teacher_name: data.class_teacher_name,
-    usage_mode: data.class_usage_mode, default_series_id: data.class_default_series_id,
-    status: data.class_status, current_session_id: data.class_current_session_id,
-    created_at: data.class_created_at, updated_at: data.class_updated_at, archived_at: data.class_archived_at,
-  };
-  const lesson = normalizeLesson({ /* 学生读已发布快照 */  /* 学生读已发布快照 */ 
-    id: data.lesson_id, series_id: data.lesson_series_id, title: data.lesson_title,
-    summary: data.lesson_summary, sort: data.lesson_sort, status: data.lesson_status,
-    duration_minutes: data.lesson_duration_minutes,
-    prompt_pack_asset_id: data.lesson_prompt_pack_asset_id,
-    outcome_pack_asset_id: data.lesson_outcome_pack_asset_id,
-    lesson_content: data.lesson_lesson_content,
-    delivery_mode: data.lesson_delivery_mode,
-    // ⚠️ 逐列 SELECT 很容易漏掉新字段（这一处就漏过一次）：多类型与算力预算必须一起带出来，
-    // 否则「双入口课时」在这里会被看成只开画布，学生进不了 VibeCoding。
-    delivery_modes: data.lesson_delivery_modes,
-    published_content: data.lesson_published_content,
-    per_student_budget_fen: data.lesson_per_student_budget_fen,
-    classroom_config: data.lesson_classroom_config,
-    canvas_template_snapshot: data.lesson_canvas_template_snapshot,
-    created_at: data.lesson_created_at, updated_at: data.lesson_updated_at,
-  }, { asPublished: true });
-  const activeSession = data.active_session_id ? normalizeSession({
-    id: data.active_session_id, class_id: data.active_session_class_id,
-    lesson_id: data.active_session_lesson_id, status: data.active_session_status,
-    delivery_mode: data.active_session_delivery_mode,
-    ai_paused: data.active_session_ai_paused,
-    student_call_cap: data.active_session_student_call_cap,
-    allow_text: data.active_session_allow_text,
-    allow_image: data.active_session_allow_image, allow_music: data.active_session_allow_music,
-    allow_video: data.active_session_allow_video, allow_podcast: data.active_session_allow_podcast,
-    allow_dubbing: data.active_session_allow_dubbing, started_by: data.active_session_started_by,
-    started_at: data.active_session_started_at, ended_by: data.active_session_ended_by,
-    ended_at: data.active_session_ended_at, ended_reason: data.active_session_ended_reason,
-    lesson_title: lesson.title,
-  }) : null;
-  const scope = rawValue(user, 'student_usage_scope', 'studentUsageScope');
-  const homePractice = scope === 'HOME_PRACTICE';
-  const sessionMode = activeSession?.deliveryMode || null;
-  const lessonMode = lesson?.deliveryMode || 'CANVAS';
-  const effectiveMode = sessionMode || lessonMode;
-  // 上课类型改为可多选（画布 + VibeCoding 可同时开），学生端两个入口并列：
-  // 老数据只有单值时，normalizeLesson 已经把它统一成单元素数组，这里直接读数组。
-  const lessonModes = Array.isArray(lesson?.deliveryModes) && lesson.deliveryModes.length ? lesson.deliveryModes : [lessonMode];
-  const canvasOffered = lessonModes.includes('CANVAS');
-  const vibeOffered = lessonModes.includes('VIBECODING');
-  // 在家练习：按课时开放的类型给入口；跟随课堂：以老师开的课堂类型为准（一节课只开一种）。
-  const canUseNow = homePractice ? canvasOffered : (Boolean(activeSession) && effectiveMode === 'CANVAS');
-  const canUseVibeCodingNow = homePractice ? vibeOffered : (Boolean(activeSession) && effectiveMode === 'VIBECODING');
+
+  // 这节课上属于他的参与记录（被移除的不算）；多条时优先取「上课中」那条
+  const participation = row(
+    `SELECT part.*, session.status session_status, session.delivery_mode session_delivery_mode,
+        session.teacher_id, teacher.display_name teacher_name, session.ai_paused, session.student_call_cap,
+        session.allow_text, session.allow_image, session.allow_music, session.allow_video,
+        session.allow_podcast, session.allow_dubbing,
+        session.started_by, session.started_at, session.ended_by, session.ended_at, session.ended_reason,
+        session.title session_title, session.series_id session_series_id
+      FROM session_students part
+      JOIN class_sessions session ON session.id = part.session_id
+      LEFT JOIN users teacher ON teacher.id = session.teacher_id
+      WHERE part.student_id=? AND part.lesson_id=? AND part.status IN ('PENDING','ACTIVE')
+      ORDER BY CASE part.status WHEN 'ACTIVE' THEN 0 ELSE 1 END, part.added_at DESC LIMIT 1`,
+    [userId, courseLessonId],
+  );
+  if (!participation) {
+    throw errors.forbidden('老师还没有把这节课的课堂安排给你：请让老师把你加进课堂。', 'NOT_IN_CLASSROOM');
+  }
+
+  const normalizedLesson = normalizeLesson({ ...lesson, lesson_id: lesson.id }, { asPublished: true });
+  const activeSession = normalizeSession({
+    id: participation.session_id,
+    title: participation.session_title,
+    series_id: participation.session_series_id,
+    lesson_id: lesson.id,
+    teacher_id: participation.teacher_id,
+    teacher_name: participation.teacher_name,
+    status: participation.session_status,
+    delivery_mode: participation.session_delivery_mode,
+    ai_paused: participation.ai_paused,
+    student_call_cap: participation.student_call_cap,
+    allow_text: participation.allow_text, allow_image: participation.allow_image,
+    allow_music: participation.allow_music, allow_video: participation.allow_video,
+    allow_podcast: participation.allow_podcast, allow_dubbing: participation.allow_dubbing,
+    started_by: participation.started_by, started_at: participation.started_at,
+    ended_by: participation.ended_by, ended_at: participation.ended_at, ended_reason: participation.ended_reason,
+    lesson_title: normalizedLesson.title,
+  });
+  const sessionLive = participation.session_status === 'ACTIVE' && participation.status === 'ACTIVE';
+  const sessionMode = participation.session_delivery_mode || null;
+  const lessonMode = normalizedLesson?.deliveryMode || 'CANVAS';
+  const canUseNow = sessionLive && sessionMode === 'CANVAS';
+  const canUseVibeCodingNow = sessionLive && sessionMode === 'VIBECODING';
+  const waiting = participation.status === 'PENDING' || participation.session_status === 'PENDING';
+  const waitingReason = waiting
+    ? '老师还没开始上课，等老师点「开始上课」就能进'
+    : '这节课的课堂已经结束，请联系老师重新安排';
+  const vibeWaitingReason = waiting
+    ? '老师还没开始 VibeCoding 课堂，等老师点「开始上课」就能进'
+    : '这节课的课堂已经结束，请联系老师重新安排';
+  void lessonMode;
 
   return {
-    class: normalizeClass(rawClass), rawClass, lesson,
-    series: normalizeSeries({
-      id: data.series_id, title: data.series_title, description: data.series_description,
-      owner_type: data.series_owner_type, org_id: data.series_org_id,
-      visibility: data.series_visibility, version: data.series_version,
-      sort: data.series_sort, status: data.series_status,
-    }, { orgId }),
-    activeSession, canUseNow, canUseVibeCodingNow,
-    blockCode: canUseNow ? null : (effectiveMode === 'VIBECODING' ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'CLASS_SESSION_REQUIRED'),
-    blockReason: canUseNow ? null : (effectiveMode === 'VIBECODING' ? '该课时是 VibeCoding 课堂，请从 VibeCoding 入口进入' : '跟随课堂账号需要由教师先开启对应课时的课堂'),
-    vibeCodingBlockCode: canUseVibeCodingNow ? null : (effectiveMode === 'VIBECODING' ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'VIBECODING_CLASS_NOT_ACTIVE'),
-    vibeCodingBlockReason: canUseVibeCodingNow ? null : (effectiveMode === 'VIBECODING' ? 'VibeCoding 课堂未开启，请让老师先开始课堂' : '当前课时不是 VibeCoding 课堂'),
+    // 班级退场：class 恒为 null，课堂信息在 session 上（保留 class 键是为了不炸既有读取方）
+    class: null,
+    rawClass: null,
+    session: activeSession,
+    participation: {
+      id: participation.id,
+      status: participation.status,
+      addedAt: participation.added_at || null,
+      completedAt: participation.completed_at || null,
+      completedCostFen: Number(participation.completed_cost_fen || 0),
+    },
+    lesson: normalizedLesson,
+    series: normalizeSeries(series, { orgId }),
+    activeSession,
+    canUseNow,
+    canUseVibeCodingNow,
+    blockCode: canUseNow ? null : (sessionMode === 'VIBECODING' ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'CLASS_SESSION_REQUIRED'),
+    blockReason: canUseNow ? null : (sessionMode === 'VIBECODING'
+      ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
+      : waitingReason),
+    vibeCodingBlockCode: canUseVibeCodingNow ? null : (sessionMode === 'CANVAS' ? 'VIBECODING_CLASSROOM_UNAVAILABLE' : 'VIBECODING_CLASS_NOT_ACTIVE'),
+    vibeCodingBlockReason: canUseVibeCodingNow ? null : (sessionMode === 'CANVAS'
+      ? '老师开启的是画布课堂，本课时不走 VibeCoding'
+      : vibeWaitingReason),
   };
 }
 
+/** 学生是否持有该课包的有效许可（门禁第③步）。 */
+function studentHasGrant(userId, orgId, seriesId) {
+  if (!seriesId) return false;
+  return Boolean(row(
+    'SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=? AND revoked_at IS NULL LIMIT 1',
+    [orgId, userId, seriesId],
+  ));
+}
 
 const WORK_PROGRESS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
 

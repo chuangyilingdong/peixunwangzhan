@@ -13,7 +13,10 @@ export const DOMAIN_STATES = Object.freeze({
   courseLesson: Object.freeze(['DRAFT', 'PUBLISHED', 'ARCHIVED']),
   courseAssignment: Object.freeze(['ACTIVE', 'REVOKED']),
   class: Object.freeze(['ACTIVE', 'ARCHIVED']),
-  classSession: Object.freeze(['ACTIVE', 'ENDED']),
+  // 2026-09-13（批次 B）：课堂四态 —— 待上课 / 上课中 / 已结束 / 已解散
+  classSession: Object.freeze(['PENDING', 'ACTIVE', 'ENDED', 'DISSOLVED']),
+  // 课堂学员六态（未加入任何课堂 = 没有这一行）
+  sessionStudent: Object.freeze(['PENDING', 'ACTIVE', 'COMPLETED', 'INCOMPLETE', 'REMOVED']),
   studentProject: Object.freeze(['DRAFT', 'SUBMITTED', 'GRADED', 'ARCHIVED']),
   // 2026-09-13（C2）：UNPUBLISHED = 曾发布到广场、后来被撤下来（与「审核不通过」的 REJECTED 分开）
   work: Object.freeze(['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED', 'UNPUBLISHED']),
@@ -59,7 +62,24 @@ export const DOMAIN_TRANSITIONS = Object.freeze({
   courseLesson: Object.freeze({ DRAFT: Object.freeze(['PUBLISHED', 'ARCHIVED']), PUBLISHED: Object.freeze(['ARCHIVED']), ARCHIVED: Object.freeze(['PUBLISHED']) }),
   courseAssignment: Object.freeze({ ACTIVE: Object.freeze(['REVOKED']), REVOKED: Object.freeze(['ACTIVE']) }),
   class: Object.freeze({ ACTIVE: Object.freeze(['ARCHIVED']), ARCHIVED: Object.freeze([]) }),
-  classSession: Object.freeze({ ACTIVE: Object.freeze(['ENDED']), ENDED: Object.freeze([]) }),
+  // 2026-09-13（批次 B）：
+  //   待上课 → 开始上课（ACTIVE）或 解散（DISSOLVED）；上课中 → 结束（ENDED）
+  //   已结束/已解散是终态（要再上一遍这节节课，就新建一个课堂）
+  classSession: Object.freeze({
+    PENDING: Object.freeze(['ACTIVE', 'DISSOLVED']),
+    ACTIVE: Object.freeze(['ENDED']),
+    ENDED: Object.freeze([]),
+    DISSOLVED: Object.freeze([]),
+  }),
+  // 学员参与：待上课 → 上课中（老师开课）/ 被移除（开课前）/ 直接结算（课堂结束）；
+  // 结算成已完课/未完课后不再变；被移除后可以复活（移除＝解锁，其他课堂能再加）
+  sessionStudent: Object.freeze({
+    PENDING: Object.freeze(['ACTIVE', 'REMOVED', 'COMPLETED', 'INCOMPLETE']),
+    ACTIVE: Object.freeze(['COMPLETED', 'INCOMPLETE']),
+    COMPLETED: Object.freeze([]),
+    INCOMPLETE: Object.freeze([]),
+    REMOVED: Object.freeze(['PENDING', 'ACTIVE']),
+  }),
   studentProject: Object.freeze({ DRAFT: Object.freeze(['SUBMITTED', 'ARCHIVED']), SUBMITTED: Object.freeze(['GRADED', 'DRAFT', 'ARCHIVED']), GRADED: Object.freeze(['ARCHIVED']), ARCHIVED: Object.freeze(['DRAFT']) }),
   // 学生提交（PENDING）后由平台决定是否发布到作品广场，机构审核不再是必经环节。
   // 流转（2026-09-13 C2）：

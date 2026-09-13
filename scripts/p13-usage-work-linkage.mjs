@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { ensureClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p13-usage-work-'));
@@ -94,6 +95,8 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
 try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
+  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
+  ensureClassroom(dbPath);
     await sleep(100);
   }
 

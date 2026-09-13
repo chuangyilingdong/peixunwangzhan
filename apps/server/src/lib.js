@@ -806,14 +806,24 @@ export function normalizeClass(value, { detail = false } = {}) {
 
 export function normalizeSession(value) {
   if (!value) return null;
+  const SESSION_STATUS_LABELS = { PENDING: '待上课', ACTIVE: '上课中', ENDED: '已结束', DISSOLVED: '已解散' };
   return {
     id: value.id,
-    classId: value.class_id,
+    title: value.title || null,
+    // 2026-09-13（批次 B）：课堂自带课包与负责老师，班级退场后不再依赖 class_id
+    classId: value.class_id || null,
+    seriesId: value.series_id || null,
+    seriesTitle: value.series_title || null,
+    teacherId: value.teacher_id || null,
+    teacherName: value.teacher_name || null,
     lessonId: value.lesson_id || null,
     lessonTitle: value.lesson_title || null,
+    lessonSort: value.lesson_sort === null || value.lesson_sort === undefined ? null : Number(value.lesson_sort),
     sessionKind: value.session_kind || 'REGULAR',
     deliveryMode: value.delivery_mode || 'CANVAS',
     status: value.status,
+    statusLabel: SESSION_STATUS_LABELS[value.status] || value.status,
+    studentCount: value.student_count === undefined ? undefined : Number(value.student_count || 0),
     // 2026-09-13（P4 删积分）：sessionCreditCap / consumedCreditsTotal 不再对外返回
     aiPaused: !!value.ai_paused,
     studentCallCap: value.student_call_cap === null || value.student_call_cap === undefined ? null : Number(value.student_call_cap),
@@ -825,11 +835,13 @@ export function normalizeSession(value) {
       allowPodcast: !!value.allow_podcast,
       allowDubbing: !!value.allow_dubbing,
     },
-    startedBy: value.started_by,
-    startedAt: value.started_at,
+    startedBy: value.started_by || null,
+    startedAt: value.started_at || null,
     endedBy: value.ended_by || null,
     endedAt: value.ended_at || null,
     endedReason: value.ended_reason || null,
+    createdAt: value.created_at || null,
+    updatedAt: value.updated_at || null,
   };
 }
 
@@ -840,6 +852,8 @@ export function normalizeProject(value, { includeSnapshot = false } = {}) {
     studentId: value.student_id,
     orgId: value.org_id || null,
     classId: value.class_id || null,
+    // 2026-09-13（批次 B）：项目归属的「课堂」（班级退场后它就是上下文）
+    classSessionId: value.class_session_id || null,
     courseLessonId: value.course_lesson_id || null,
     courseLessonTitle: value.lesson_title || null,
     title: value.title,

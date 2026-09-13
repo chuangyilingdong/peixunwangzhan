@@ -102,24 +102,85 @@ try {
     lessonBefore?.canStart === false && /分给你/.test(String(lessonBefore?.blockReason || '')),
     JSON.stringify(lessonBefore || {}).slice(0, 240));
 
-  /* ② 机构把课包分给他 → 立刻能进 */
+  /* ② 有许可还不够：**必须被老师加进这节课的课堂**（2026-09-13 批次 B 取消免课堂通道）
+     → 三层门禁：机构授权 → 学员许可 → 课堂名单；这里验后两层 */
   grantNow();
-  const okProject = await createProject();
-  check('② 分给他之后：画布入口能进', okProject.status === 200, JSON.stringify(okProject).slice(0, 200));
-  const okConversation = await createConversation();
-  check('② 分给他之后：VibeCoding 入口能进', okConversation.status === 200, JSON.stringify(okConversation).slice(0, 200));
+  const blockedNoClassroom = await createProject();
+  check('② 分了课包但没进课堂：仍然进不去（NOT_IN_CLASSROOM）',
+    blockedNoClassroom.error?.code === 'NOT_IN_CLASSROOM', JSON.stringify(blockedNoClassroom).slice(0, 220));
+  check('② 提示指向「让老师把你加进课堂」，而不是笼统的失败',
+    /加进课堂/.test(String(blockedNoClassroom.error?.message || '')), String(blockedNoClassroom.error?.message));
   const listAfter = await api('/api/student/courses', { token: student });
   const seriesAfter = (listAfter.data?.items || []).find((item) => item.id === seeded.seriesId);
-  check('② 分给他之后：列表不再标「未授权」（hasGrant === true）', seriesAfter?.hasGrant === true, JSON.stringify(seriesAfter || {}).slice(0, 240));
+  check('② 分了课包之后：列表不再标「未授权」（hasGrant === true）', seriesAfter?.hasGrant === true, JSON.stringify(seriesAfter || {}).slice(0, 240));
 
-  /* ③ 平台兜底撤销 → 立刻又进不去（不给缓存留缝） */
+  /* ②b 老师建课堂 → 加他进去 → 但还没点「开始上课」：仍进不去（待上课） */
+  const teacher = (await api('/api/auth/login', { method: 'POST', body: { login: 'teacher-1', password: 'teach123' } })).data.token;
+  assert.ok(teacher, '老师登录失败');
+  const created = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonId, title: 'P66 门禁课堂' } });
+  check('②b 老师能创建课堂（待上课）', created.status === 200 && created.data?.status === 'PENDING', JSON.stringify(created).slice(0, 240));
+  const sessionId = created.data?.id;
+  const added = await api(`/api/org/sessions/${sessionId}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } });
+  check('②b 能把学员加进课堂', added.status === 200 && (added.data?.added || []).length === 1, JSON.stringify(added).slice(0, 240));
+  const beforeStart = await createProject();
+  check('②b 待上课（老师没开始）：仍然进不去（CLASS_SESSION_REQUIRED）',
+    beforeStart.error?.code === 'CLASS_SESSION_REQUIRED', JSON.stringify(beforeStart).slice(0, 220));
+
+  /* ②c 名单为空时不能开始上课 —— 用另一个课堂验（这个已经有学员） */
+  const emptySession = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonId, title: 'P66 空课堂' } });
+  const emptyStart = await api(`/api/org/sessions/${emptySession.data.id}/start`, { method: 'POST', token: teacher });
+  check('②c 名单为空时「开始上课」被拒（按钮置灰也是这条口径）',
+    emptyStart.status === 400 && emptyStart.error?.code === 'SESSION_STUDENTS_REQUIRED', JSON.stringify(emptyStart).slice(0, 200));
+
+  /* ②d 开始上课 → 终于能进 */
+  const started = await api(`/api/org/sessions/${sessionId}/start`, { method: 'POST', token: teacher });
+  check('②d 老师开始上课（待上课 → 上课中）', started.status === 200 && started.data?.status === 'ACTIVE', JSON.stringify(started).slice(0, 200));
+  const okProject = await createProject();
+  check('②d 上课中：画布入口能进', okProject.status === 200, JSON.stringify(okProject).slice(0, 200));
+  // 同一节课上「未结束的参与」不能同时被两个课堂占用（用户规则 3.4/3.5）：
+  // 此刻他正在画布课堂里，试着把他加到另一个课堂 → 必须被拒，并说清占用的课堂
+  const otherSession = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonId, title: 'P66 同期另一个课堂' } });
+  const conflictAdd = await api(`/api/org/sessions/${otherSession.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } });
+  check('②d 同一节课不能被两个课堂同时占用（IN_OTHER_SESSION）',
+    (conflictAdd.data?.skipped || [])[0]?.reason === 'IN_OTHER_SESSION', JSON.stringify(conflictAdd).slice(0, 240));
+  const candidates = await api(`/api/org/sessions/${otherSession.data.id}/candidates`, { token: teacher });
+  const blockedRow = (candidates.data?.blocked || []).find((item) => item.id === seeded.studentId);
+  check('②d 候选人列表把「不可加」的原因与占用课堂都列出来（含课堂名/状态/老师）',
+    blockedRow?.reason === 'IN_OTHER_SESSION' && blockedRow?.session?.status === 'ACTIVE' && Boolean(blockedRow?.session?.teacherName),
+    JSON.stringify(blockedRow || {}).slice(0, 260));
+  // 解散这个多余的课堂（待上课 → 已解散），顺带验「解散」这条路径
+  const dissolved = await api(`/api/org/sessions/${otherSession.data.id}/dissolve`, { method: 'POST', token: teacher, body: { reason: 'P66 测试解散' } });
+  check('②d 待上课的课堂可以解散（PENDING → DISSOLVED）', dissolved.status === 200 && dissolved.data?.status === 'DISSOLVED', JSON.stringify(dissolved).slice(0, 200));
+
+  /* ③ 老师结束课堂 → 学员立刻进不去，且状态结算成「未完课」（这次没消耗过算力） */
+  const ended = await api(`/api/org/sessions/${sessionId}/end`, { method: 'POST', token: teacher, body: {} });
+  check('③ 老师结束课堂（上课中 → 已结束）', ended.status === 200 && ended.data?.status === 'ENDED', JSON.stringify(ended).slice(0, 200));
+  const afterEnd = await createProject();
+  check('③ 课堂结束后：立刻进不去', ['CLASS_SESSION_REQUIRED', 'NOT_IN_CLASSROOM'].includes(afterEnd.error?.code), JSON.stringify(afterEnd).slice(0, 220));
+  const detail = await api(`/api/org/sessions/${sessionId}`, { token: teacher });
+  const mine = (detail.data?.students || []).find((item) => item.studentId === seeded.studentId);
+  check('③ 结束后学员状态结算为「未完课」（没消耗过算力）', mine?.status === 'INCOMPLETE', JSON.stringify(mine || {}).slice(0, 240));
+  check('③ 课堂详情带「查看课件」地址（前端新标签打开用）', String(detail.data?.coursewareUrl || '').includes('/org/courses/'), String(detail.data?.coursewareUrl));
+
+  /* ③b 他是「未完课」（这次没消耗算力）→ 可以再上一次这节课：换个 VIBECODING 课堂走完整条链 */
+  const vibeSession = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonId, title: 'P66 VibeCoding 课堂', deliveryMode: 'VIBECODING' } });
+  check('③b 未完课的学员可以被下一个课堂加进去（VibeCoding 课堂）', (await api(`/api/org/sessions/${vibeSession.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } })).data?.added?.length === 1);
+  const vibeStart = await api(`/api/org/sessions/${vibeSession.data.id}/start`, { method: 'POST', token: teacher });
+  check('③b VibeCoding 课堂开始上课', vibeStart.status === 200, JSON.stringify(vibeStart).slice(0, 160));
+  const okConversation = await createConversation();
+  check('③b 上课中：VibeCoding 入口能进', okConversation.status === 200, JSON.stringify(okConversation).slice(0, 200));
+  check('③b 入口类型要对上：VibeCoding 课堂里画布入口进不去',
+    (await createProject()).error?.code === 'VIBECODING_CLASSROOM_UNAVAILABLE');
+  await api(`/api/org/sessions/${vibeSession.data.id}/end`, { method: 'POST', token: teacher, body: {} });
+
+  /* ④ 平台兜底撤销 → 立刻又进不去（不给缓存留缝） */
   revokeNow();
   const revokedProject = await createProject();
-  check('③ 撤销后：立刻进不去（同一个错误码）', revokedProject.error?.code === 'COURSE_GRANT_REQUIRED', JSON.stringify(revokedProject).slice(0, 220));
+  check('④ 撤销后：立刻进不去（COURSE_GRANT_REQUIRED）', revokedProject.error?.code === 'COURSE_GRANT_REQUIRED', JSON.stringify(revokedProject).slice(0, 220));
 
-  /* ④ 没在课单里的课时，仍然报「不在课单」（两种拒绝原因不能被混成一种） */
+  /* ⑤ 课时压根不存在 → 报「课时不存在/未发布」，不与前面几种混为一谈 */
   const notInCurriculum = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: 'lesson_does_not_exist', title: 'P66 不存在' } });
-  check('④ 课时压根不存在/不在课单 → 仍报 LESSON_NOT_ASSIGNED（不与未授权混为一谈）',
+  check('⑤ 课时不存在 → LESSON_NOT_ASSIGNED（拒绝原因不混）',
     ['LESSON_NOT_ASSIGNED', 'LESSON_REQUIRED'].includes(notInCurriculum.error?.code), JSON.stringify(notInCurriculum).slice(0, 220));
 
   console.log(JSON.stringify({ name: 'student-grant-gate', pass: failures === 0, failures }, null, 2));

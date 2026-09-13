@@ -606,10 +606,11 @@ export async function handleStudent(ctx) {
     transaction(() => {
       q(
         `INSERT INTO student_projects(
-          id,student_id,org_id,class_id,course_lesson_id,title,status,canvas_snapshot,
+          id,student_id,org_id,class_id,class_session_id,course_lesson_id,title,status,canvas_snapshot,
           latest_version,last_saved_at,created_at,updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [projectId, auth.user.id, auth.user.orgId, lessonContext.class.id, lessonContext.lesson.id, title, 'DRAFT', json(snapshot), 1, now, now, now],
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        // 2026-09-13（批次 B）：项目归属记「课堂」（class_id 列保留但不再写 —— 班级已退场）
+        [projectId, auth.user.id, auth.user.orgId, null, lessonContext.session?.id || null, lessonContext.lesson.id, title, 'DRAFT', json(snapshot), 1, now, now, now],
       );
       q(
         `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
@@ -617,7 +618,7 @@ export async function handleStudent(ctx) {
         [id('snapshot'), projectId, 1, '初始版本', json(snapshot), auth.user.id, now],
       );
     });
-    audit(ctx, 'PROJECT_CREATE', 'STUDENT_PROJECT', projectId, null, { classId: lessonContext.class.id, courseLessonId, title });
+    audit(ctx, 'PROJECT_CREATE', 'STUDENT_PROJECT', projectId, null, { sessionId: lessonContext.session?.id || null, courseLessonId, title });
     const createdProject = normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
     // 新建/复制也带上池子摘要：画布拿到项目就能显示「本课包还剩多少」，不必等下一次详情请求
     createdProject.computePool = computePoolSummary({ userId: auth.user.id, seriesId: createdProject.seriesId, seriesTitle: createdProject.seriesTitle });

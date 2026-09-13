@@ -275,8 +275,13 @@ function ensureClass({ orgId, teacherId, students, series, lessons }, now) {
       );
     }
   });
+  // 2026-09-13（批次 B）记录一个**试过又回滚**的做法：曾在这里给第一个课时自动开一个「演示课堂」，
+  // 好让演示账号一登录就能进课。但大量守卫依赖「初始状态干净」（断言开课前所有课时都是关的），
+  // 种子一开课它们就集体变红 —— 所以种子只保留**结构性数据**（班级/课单/成员），
+  // 「课堂」由用的人（或测试）按需创建。演示要进课，就让老师建一个课堂、把学生加进去。
   return klass;
 }
+
 
 export function seedDatabase() {
   const now = nowIso();

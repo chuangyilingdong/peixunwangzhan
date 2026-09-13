@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { ensureClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p52-lesson-model-'));
@@ -64,6 +65,8 @@ const login = async (loginName, password) => (await api('/api/auth/login', { met
 
 try {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
+  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
+  ensureClassroom(dbPath);
   const rootAdmin = (await login('root', 'admin123')).token;
   const orgAdmin = await login('org-admin', 'org123');
   const student = await login('student-2', 'study123');

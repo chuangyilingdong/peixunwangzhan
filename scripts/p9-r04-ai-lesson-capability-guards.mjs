@@ -9,6 +9,7 @@
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { ensureClassroom } from './lib/classroomFixture.mjs';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'p9-r04-ai-lesson-guards-'));
 process.env.PLATFORM_DATA_DIR = dir;
@@ -48,6 +49,9 @@ try {
   q("INSERT INTO billing_packages(id,org_id,name,allow_image,status,created_at,updated_at) VALUES ('pkg1','org1','套餐',1,'ACTIVE',?,?)", [now, now]);
   q("INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,credits_charged,created_at,box_id) VALUES ('job1','org1','stu1','proj1','IMAGE','local-mock','canvas-mock-v1','测试','SUCCEEDED',1,?,'box-image-1')", [now]);
   q("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset1','job1','org1','stu1','proj1','IMAGE','素材','mock://asset',?)", [now]);
+
+  // 批次 B：门禁要求「许可 + 课堂名单」——这条守卫是在进程内直接调路由，所以夹具要放在它自己造完数据之后
+  ensureClassroom(path.join(dir, 'platform.db'));
 
   const dbUser = row("SELECT * FROM users WHERE id='stu1'");
   const auth = { user: normalizeUser(dbUser, { includeAuthMeta: true }), rawUser: dbUser, org: row("SELECT * FROM organizations WHERE id='org1'") };

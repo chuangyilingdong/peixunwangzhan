@@ -392,6 +392,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_class_sort ON class_curriculum_
 CREATE TABLE IF NOT EXISTS class_sessions (
   id TEXT PRIMARY KEY,
   title TEXT,
+  org_id TEXT,
   class_id TEXT,
   series_id TEXT,
   lesson_id TEXT,
@@ -1600,6 +1601,7 @@ if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
     db.exec(`CREATE TABLE class_sessions_migrated (
       id TEXT PRIMARY KEY,
       title TEXT,
+      org_id TEXT,
       class_id TEXT,
       series_id TEXT,
       lesson_id TEXT,
@@ -1627,13 +1629,14 @@ if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
       FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE SET NULL
     )`);
     db.exec(`INSERT INTO class_sessions_migrated (
-      id, title, class_id, series_id, lesson_id, teacher_id, status, delivery_mode,
+      id, title, org_id, class_id, series_id, lesson_id, teacher_id, status, delivery_mode,
       session_credit_cap, consumed_credits_total, ai_paused, student_call_cap,
       allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing,
       started_by, started_at, ended_by, ended_at, ended_reason, created_at, updated_at
     ) SELECT
       session.id,
       COALESCE((SELECT lesson.title FROM course_lessons lesson WHERE lesson.id = session.lesson_id), '课堂'),
+      (SELECT owner.org_id FROM users owner WHERE owner.id = COALESCE(session.started_by, (SELECT klass.teacher_id FROM classes klass WHERE klass.id = session.class_id))),
       session.class_id,
       (SELECT lesson.series_id FROM course_lessons lesson WHERE lesson.id = session.lesson_id),
       session.lesson_id,
@@ -1657,6 +1660,11 @@ if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
     db.exec('PRAGMA foreign_keys = ON');
   }
 }
+// org_id：课堂属于机构（列表与权限过滤都用它）。老库（先前重建过、还没有这列）在这里补上并回填。
+try { db.exec('ALTER TABLE class_sessions ADD COLUMN org_id TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('UPDATE class_sessions SET org_id=(SELECT owner.org_id FROM users owner WHERE owner.id = class_sessions.teacher_id) WHERE org_id IS NULL'); } catch (_) {}
+
 // 课堂表的索引统一在这里建：旧库要先重建出 created_at/teacher_id 才能建（写在基础 DDL 里会让老库初始化当场报错）
 db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_status ON class_sessions(status, created_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_teacher ON class_sessions(teacher_id, status)');

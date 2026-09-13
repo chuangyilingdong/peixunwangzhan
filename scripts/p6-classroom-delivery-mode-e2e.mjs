@@ -121,7 +121,8 @@ try {
     body: { courseLessonId: lessonId, title: '未开课应阻断' },
   });
   assertStatus(beforeClass, 403, '未开课时学生创建项目未被阻断');
-  assert.equal(errorCode(beforeClass), 'CLASS_SESSION_REQUIRED');
+  // 2026-09-13（批次 B）：取消免课堂通道后，未开课时学生是「还没被加进课堂」而不是「课堂没开始」
+  assert.equal(errorCode(beforeClass), 'NOT_IN_CLASSROOM');
 
   const canvasSession = await api(`/api/org/classes/${classItem.id}/sessions/start`, {
     method: 'POST',
@@ -138,7 +139,8 @@ try {
     body: { courseLessonId: lessonId, title: 'Canvas 课堂项目' },
   });
   assertStatus(canvasProject, 200, 'Canvas 活动课堂下学生创建项目失败');
-  assert.equal(canvasProject.data?.classId, classItem.id);
+  // 2026-09-13（批次 B）：项目归属记「课堂」而不是班级（班级已退场）
+  assert.equal(canvasProject.data?.classSessionId, canvasSession.data.id);
   assert.equal(canvasProject.data?.courseLessonId, lessonId);
 
   const endCanvas = await api(`/api/org/classes/${classItem.id}/sessions/${canvasSession.data.id}/end`, {
@@ -155,7 +157,7 @@ try {
     body: { courseLessonId: lessonId, title: '结束后应阻断' },
   });
   assertStatus(afterCanvas, 403, '结束课堂后学生仍可创建项目');
-  assert.equal(errorCode(afterCanvas), 'CLASS_SESSION_REQUIRED');
+  assert.equal(errorCode(afterCanvas), 'NOT_IN_CLASSROOM');
 
   const vibeSession = await api(`/api/org/classes/${classItem.id}/sessions/start`, {
     method: 'POST',

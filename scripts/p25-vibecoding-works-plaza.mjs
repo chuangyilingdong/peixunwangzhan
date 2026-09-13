@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p25-vibecoding-plaza-'));
@@ -70,6 +71,10 @@ const login = (loginName, password) => api('/api/auth/login', { method: 'POST', 
 try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
+  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
+  ensureClassroom(dbPath);
+  // 这条守卫走 VibeCoding 入口 → 把课堂入口类型切成 VIBECODING
+  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
     await sleep(100);
   }
 

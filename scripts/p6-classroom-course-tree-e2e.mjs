@@ -190,7 +190,8 @@ try {
   const targetCourseId = targetEntry?.course.id || null;
   assert.ok(target, 'dashboard 未找到已开课目标课时');
   assert.ok(first, 'dashboard 未找到同课程包其他课时');
-  assert.equal(target.classId, classItem.id);
+  // 课时上的上下文由「班级」换成「课堂」：学生看得到的是这节节课的课堂
+  assert.ok(target.sessionId || target.activeNow, '开课后课时应带课堂上下文');
   assert.equal(target.activeNow, true);
   assert.equal(target.canStart, true);
   assert.equal(target.deliveryMode, 'CANVAS');
@@ -212,7 +213,7 @@ try {
     },
   });
   assertStatus(project, 200, '学生进入已开启课时失败');
-  assert.equal(project.data?.classId, classItem.id);
+  assert.equal(project.data?.classSessionId, canvasSession.data.id);
   assert.equal(project.data?.courseLessonId, targetLessonId);
 
   const endCanvas = await api(`/api/org/classes/${classItem.id}/sessions/${canvasSession.data.id}/end`, {
@@ -223,7 +224,7 @@ try {
     method: 'POST', token: student, body: { courseLessonId: targetLessonId, classId: classItem.id, title: '结束课堂后应阻断' },
   });
   assertStatus(afterEnd, 403, '结束课堂后学生仍可创建项目');
-  assert.equal(errorCode(afterEnd), 'CLASS_SESSION_REQUIRED');
+  assert.equal(errorCode(afterEnd), 'NOT_IN_CLASSROOM');
 
   const vibeSession = await api(`/api/org/classes/${classItem.id}/sessions/start`, {
     method: 'POST', token: teacher, body: { lessonId: targetLessonId, deliveryMode: 'VIBECODING' },

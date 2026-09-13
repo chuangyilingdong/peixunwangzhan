@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p63-unpublish-reason-'));
@@ -60,6 +61,8 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
 
 try {
   for (let i = 0; i < 80; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
+  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
+  ensureClassroom(dbPath);
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(admin && student, '登录失败');
@@ -119,15 +122,22 @@ try {
   check('① 历史行兜底：REJECTED + teacher_comment（老数据）仍能看到下架原因',
     legacyMine?.unpublishReason === 'C2 之前的下架原因', JSON.stringify({ status: legacyMine?.status, unpublishReason: legacyMine?.unpublishReason }));
 
+  // 批次 B：一个课堂只有一种入口，画布那条验完了 → 换成 VibeCoding 课堂再验这条链
+  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
+
   /* ── VibeCoding 链路 ── */
   const lessonAll = await api('/api/student/courses', { token: student });
   const lessonIds = (lessonAll.data?.items || []).flatMap((item) => [item.currentLessonId, ...(item.lessons || []).map((l) => l.id), item.lesson?.id, item.id]).filter(Boolean);
   let conversation = null;
+  let lastCreateError = null;
   for (const candidate of [...new Set(lessonIds)]) {
     const created = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId: candidate, title: 'P63 会话' } });
     if (created.status === 200 && created.data?.id) { conversation = created.data; break; }
+    lastCreateError = lastCreateError || [];
+    lastCreateError.push(lessonId + ":" + (created.error?.code || created.status));
   }
-  assert.ok(conversation?.id, '开 VibeCoding 会话失败（该账号没有可用的 VibeCoding 课时？）');
+  // ⚠️ 断言里带上最后一次的失败原因：否则只看到「开不了」，看不出是被哪道闸拦的
+  assert.ok(conversation?.id, `开 VibeCoding 会话失败（该账号没有可用的 VibeCoding 课时？）全部尝试：${JSON.stringify(lastCreateError)}`);
   const vibeSubmit = await api(`/api/student/vibecoding/conversations/${encodeURIComponent(conversation.id)}/submit`, { method: 'POST', token: student, body: { title: 'P63 VibeCoding 作品', description: '下架原因可见性', copyrightConfirmed: true } });
   const submissionId = vibeSubmit.data?.id || vibeSubmit.data?.submission?.id;
   check('② 学生提交 VibeCoding 作品成功', Boolean(submissionId), JSON.stringify(vibeSubmit).slice(0, 240));

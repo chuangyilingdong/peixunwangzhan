@@ -86,7 +86,9 @@ try {
   assert.equal(caps.allowText, true, '课时开了 AI 文字，课堂应默认开');
 
   // 2) 显式关掉仍然生效（老师保留控制权）
-  await api(`/api/org/classes/${cls.id}/sessions/${started.data.id}/end`, { method: 'POST', token: teacher });
+  const endedFirst = await api(`/api/org/classes/${cls.id}/sessions/${started.data.id}/end`, { method: 'POST', token: teacher });
+  // ⚠️ 这里必须断言：不写断言的话「结束课堂静默失败」会让下一句报 CLASS_SESSION_ACTIVE，看不懂是谁的错
+  assert.equal(endedFirst.status, 200, `结束第一次课堂失败: ${JSON.stringify(endedFirst.data)}`);
   const started2 = await api(`/api/org/classes/${cls.id}/sessions/start`, { method: 'POST', token: teacher, body: { lessonId, capabilities: { allowVideo: false } } });
   assert.equal(started2.status, 200, `二次开课失败: ${JSON.stringify(started2.data)}`);
   assert.equal(started2.data.capabilities.allowVideo, false, '显式传 false 时应关掉生视频');
