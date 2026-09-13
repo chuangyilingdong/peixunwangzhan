@@ -127,6 +127,18 @@ export function PricingPanel({ api }) {
   const [pricing, setPricing] = useState(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [manualModel, setManualModel] = useState('');
+  // 模型清单来自**渠道配置**（渠道 → 能力路由 → 该渠道的模型）：直接给真实在用的模型 ID，
+  // 不让用户凭记忆手打；不在清单里的也能手工补一个。
+  const policy = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
+  const routing = policy.data?.policy?.modalityChannels || {};
+  const catalog = [];
+  for (const channel of policy.data?.policy?.channels || []) {
+    const modality = Object.keys(routing).find((key) => routing[key] === channel.id) || '';
+    for (const model of channel.models || []) {
+      if (model && !catalog.some((item) => item.model === model)) catalog.push({ model, modality, channelName: channel.name || channel.id });
+    }
+  }
 
   async function load() {
     setBusy(true); setMessage('');
@@ -147,7 +159,9 @@ export function PricingPanel({ api }) {
   return <Panel title="每次调用单价（卖给学生的计价口；含你的毛利）" actions={<button className="secondary-button" disabled={busy} onClick={load}>读取单价</button>}>
     {message && <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice>}
     {!pricing ? <Empty title="还没有读取" body="点右上角「读取单价」：这四档单价决定算力池怎么扣钱（单价 × 调用次数）。" /> : <>
-      <p className="muted">这是<strong>对学生的计费价</strong>（不是上游成本）：池子按「单价 × 调用次数」扣，所以这个价就是你的毛利口径。上游成本可在步骤④「用量归集」那张表里对（配了网关才有）。⚠️ 只要保证<strong>售价不低于上游成本</strong>；同一模态里成本差异大的档位（如视频的时长/清晰度）建议用<strong>模型级单价</strong>分开定，避免高档位亏本。</p>
+      <p className="muted">这是<strong>对学生的计费价</strong>（不是上游成本）：池子按「单价 × 调用次数」扣，所以这个价就是你的毛利口径。
+        计费<strong>只按次</strong>——没有「按 token 计费」这回事，所以这里就是全部要填的价（上游成本可在步骤④「用量归集」那张表里对，配了网关才有）。
+        只要保证<strong>售价不低于上游成本</strong>即可。</p>
       <div className="form-grid">
         {[['TEXT', '对话'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']].map(([key, label]) => (
           <label key={key}>{label}（元 / 次）
@@ -156,6 +170,42 @@ export function PricingPanel({ api }) {
           </label>
         ))}
       </div>
+
+      <h4 className="top-gap">按模型单独定价（可选）</h4>
+      <p className="muted">上面四档是「按模态」的价，适用于该模态下所有模型。同一模态里成本差异大的档位（例如视频的长时长/高清晰度模型）
+        可以在这里<strong>单独定价</strong>：填了就以模型价为准，没填的模型仍用模态价。平台里当前在用的模型已列在下面，也可以手工补一个。</p>
+      {(() => {
+        const overrides = pricing.models || {};
+        const rows = [...new Set([...catalog.map((item) => item.model), ...Object.keys(overrides)])].sort();
+        const setModelPrice = (model, yuanText) => {
+          const trimmed = String(yuanText || '').trim();
+          const next = { ...overrides };
+          if (!trimmed) delete next[model];
+          else next[model] = Math.round(Number(trimmed || 0) * 100);
+          setPricing({ ...pricing, models: next });
+        };
+        return <>
+          {rows.length ? <div className="table-wrap"><table><thead><tr><th>模型</th><th>所属能力</th><th>渠道</th><th>单独单价（元 / 次，留空＝用模态价）</th></tr></thead><tbody>
+            {rows.map((model) => {
+              const meta = catalog.find((item) => item.model === model) || {};
+              return <tr key={model}>
+                <td><strong>{model}</strong>{Object.hasOwn(overrides, model) ? <div className="muted">已单独定价</div> : null}</td>
+                <td className="muted">{meta.modality || '—'}</td>
+                <td className="muted">{meta.channelName || '—'}</td>
+                <td><input inputMode="decimal" value={Object.hasOwn(overrides, model) ? String(overrides[model] / 100) : ''} placeholder="留空＝用模态价"
+                  onChange={(event) => setModelPrice(model, event.target.value)} /></td>
+              </tr>;
+            })}
+          </tbody></table></div> : <p className="muted">还没有可选的模型：先到步骤① 配好渠道与模型（勾选「可用模型」），这里就会出现。</p>}
+          <div className="row-actions top-gap">
+            <input value={manualModel} placeholder="手工添加模型 ID（回车）" onChange={(event) => setManualModel(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); const value = manualModel.trim(); if (value) { setModelPrice(value, '0.1'); setManualModel(''); } } }} />
+            <button type="button" className="secondary-button" onClick={() => { const value = manualModel.trim(); if (value) { setModelPrice(value, '0.1'); setManualModel(''); } }}>添加模型</button>
+          </div>
+          {Object.keys(overrides).length ? <p className="muted">已单独定价 {Object.keys(overrides).length} 个模型；保存后立即生效，且<strong>不追溯</strong>已记的账。</p> : null}
+        </>;
+      })()}
+
       <div className="row-actions top-gap">
         <button className="primary-button" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存单价'}</button>
         {pricing.updatedAt ? <span className="muted">上次修改：{formatDate(pricing.updatedAt)}</span> : null}
