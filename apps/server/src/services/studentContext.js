@@ -91,9 +91,23 @@ export function getStudentActiveSessions(user) {
   );
 }
 
+/**
+ * 本次调用里学生已获许可的课包（撤销的不算）。列表页要能直接标出「未授权」，
+ * 所以单独查一次挂到结果上 —— 不去动列表 SQL 的 SELECT（历史上往列表 SELECT 里加列
+ * 把接口改崩过两次，见交接说明第 59 条）。
+ */
+function grantedSeriesIds(userId, orgId) {
+  return new Set(rows(
+    `SELECT series_id FROM student_course_grants
+      WHERE org_id = ? AND student_id = ? AND revoked_at IS NULL`,
+    [orgId, userId],
+  ).map((item) => item.series_id));
+}
+
 /** The student only sees published lessons in their own organization's class curriculum. */
 export function getStudentCourses(user) {
   const { id: userId, orgId } = studentIdentity(user);
+  const granted = grantedSeriesIds(userId, orgId);
   const items = rows(
     `SELECT DISTINCT
         series.*,
@@ -127,6 +141,7 @@ export function getStudentCourses(user) {
       series = normalizeSeries(item, { orgId });
       series.lessons = [];
       series.classIds = [];
+      series.hasGrant = granted.has(item.id);
       seriesById.set(item.id, series);
     }
     if (!series.classIds.includes(item.curriculum_class_id)) series.classIds.push(item.curriculum_class_id);
@@ -160,7 +175,8 @@ export function getStudentCourses(user) {
  * 支持 difficulty / ageMin / ageMax / tag / search 筛选。
  */
 export function getStudentAccessibleCourses(user, filters = {}) {
-  const { orgId } = studentIdentity(user);
+  const { id: userId, orgId } = studentIdentity(user);
+  const granted = grantedSeriesIds(userId, orgId);
   const params = [orgId, orgId];
   const wheres = [
     "series.status = 'PUBLISHED'",
@@ -195,7 +211,11 @@ export function getStudentAccessibleCourses(user, filters = {}) {
      ORDER BY series.sort, series.title`,
     params,
   );
-  return items.map((item) => normalizeSeries(item, { orgId, includeLessons: true }));
+  return items.map((item) => {
+    const series = normalizeSeries(item, { orgId, includeLessons: true });
+    series.hasGrant = granted.has(item.id);
+    return series;
+  });
 }
 
 /**
@@ -516,6 +536,7 @@ export function buildStudentDashboard(user) {
   // learning_tasks 表保留历史数据，代码不再读写）。
   const allLessonTasks = [];
   const courses = context.courses.map((course) => {
+    const courseHasGrant = Boolean(course.hasGrant);
     const assignedClasses = (course.classIds || []).map((classId) => classById.get(classId)).filter(Boolean);
     const primaryClass = assignedClasses[0] || null;
     const lessons = (course.lessons || []).map((lesson) => {
@@ -532,8 +553,10 @@ export function buildStudentDashboard(user) {
       const lessonMode = lesson.deliveryMode || 'CANVAS';
       const sessionMode = session?.deliveryMode || null;
       const homePractice = rawValue(user, 'student_usage_scope', 'studentUsageScope') === 'HOME_PRACTICE';
-      const canStart = sessionMode === 'CANVAS';
-      const canStartVibeCoding = sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING');
+      // 没有学员许可就一定进不去（门禁在 resolveStudentLessonContext 里是硬条件），
+      // 列表上不能显示成「已开课」—— 否则学生点进去才吃到 COURSE_GRANT_REQUIRED。
+      const canStart = courseHasGrant && sessionMode === 'CANVAS';
+      const canStartVibeCoding = courseHasGrant && (sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING'));
       const task = {
         lessonId: lesson.id,
         lessonTitle: lesson.title,
@@ -549,16 +572,20 @@ export function buildStudentDashboard(user) {
         canStart,
         canStartVibeCoding,
         deliveryMode: sessionMode || lessonMode,
-        blockReason: canStart
-          ? null
-          : sessionMode === 'VIBECODING'
-            ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
-            : '等待老师开始上课',
-        vibeCodingBlockReason: canStartVibeCoding
-          ? null
-          : sessionMode === 'CANVAS'
-            ? '老师开启的是画布课堂，本课时不走 VibeCoding'
-            : '等待老师开始 VibeCoding 课堂',
+        blockReason: !courseHasGrant
+          ? '老师还没有把这个课包分给你，请联系老师'
+          : canStart
+            ? null
+            : sessionMode === 'VIBECODING'
+              ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
+              : '等待老师开始上课',
+        vibeCodingBlockReason: !courseHasGrant
+          ? '老师还没有把这个课包分给你，请联系老师'
+          : canStartVibeCoding
+            ? null
+            : sessionMode === 'CANVAS'
+              ? '老师开启的是画布课堂，本课时不走 VibeCoding'
+              : '等待老师开始 VibeCoding 课堂',
         session: session ? {
           id: session.id,
           classId: session.classId,
@@ -617,6 +644,7 @@ export function buildStudentDashboard(user) {
     }
   }
   const classroomCourses = getStudentAccessibleCourses(user).map((course) => {
+    const courseHasGrant = Boolean(course.hasGrant);
     const lessons = (course.lessons || []).map((lesson) => {
       const assignedLesson = assignedLessonById.get(lesson.id);
       const assignedClasses = (assignedLesson?.classIds || [])
@@ -639,8 +667,8 @@ export function buildStudentDashboard(user) {
       };
       const sessionMode = session?.deliveryMode || null;
       const homePractice = rawValue(user, 'student_usage_scope', 'studentUsageScope') === 'HOME_PRACTICE';
-      const canStart = sessionMode === 'CANVAS';
-      const canStartVibeCoding = sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING');
+      const canStart = courseHasGrant && sessionMode === 'CANVAS';
+      const canStartVibeCoding = courseHasGrant && (sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING'));
       const classId = sessionClass?.id || assignedClasses[0]?.id || null;
       const continueProject = progress.draftProjects.find((project) => project.classId === classId)
         || progress.draftProjects[0]
@@ -654,19 +682,28 @@ export function buildStudentDashboard(user) {
         activeNow: Boolean(session),
         canStart,
         canStartVibeCoding,
+        hasGrant: courseHasGrant,
         deliveryMode: sessionMode || lessonMode,
         blockReason: canStart
           ? null
           : sessionMode === 'VIBECODING'
             ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
-            : assignedClasses.length
-              ? '等待老师开始上课'
-              : '老师尚未把本课时加入你的班级课程表',
+            : !assignedClasses.length
+              // 顺序跟着门禁走：先在不在课单，再谈有没有许可（否则会把「不在课单」的学生
+              // 误报成「没分课包」，让他去找错人 —— 这两种原因门禁里是分开报的）
+              ? '老师尚未把本课时加入你的班级课程表'
+              : courseHasGrant
+                ? '等待老师开始上课'
+                : '老师还没有把这个课包分给你，请联系老师',
         vibeCodingBlockReason: canStartVibeCoding
           ? null
           : sessionMode === 'CANVAS'
             ? '老师开启的是画布课堂，本课时不走 VibeCoding'
-            : '等待老师开始 VibeCoding 课堂',
+            : !assignedClasses.length
+              ? '老师尚未把本课时加入你的班级课程表'
+              : courseHasGrant
+                ? '等待老师开始 VibeCoding 课堂'
+                : '老师还没有把这个课包分给你，请联系老师',
         session: session ? {
           id: session.id,
           classId: session.classId,

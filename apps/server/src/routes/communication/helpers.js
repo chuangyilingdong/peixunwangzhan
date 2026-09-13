@@ -781,7 +781,7 @@ const HELP_FEEDBACK_CATEGORIES = new Set(['ACCOUNT', 'CANVAS', 'AI', 'COURSE', '
 const HELP_FAQ = [
   { category: 'ACCOUNT', question: '忘记密码或登录不上怎么办？', answer: '请联系你的老师或机构管理员重置密码。密码重置后，老师会把新账号信息交给你，首次登录可在个人账号中修改。' },
   { category: 'CANVAS', question: '作品还没做完可以保存吗？', answer: '可以。进入项目后保存画布，作品会保留在“我的项目”。已提交或已发布的作品需按老师反馈修改后重新提交。' },
-  { category: 'AI', question: '为什么 AI 现在不能使用？', answer: '请先查看 AI / 魔法石中心。老师可能关闭了本节课的某类 AI 能力，或课堂积分、调用次数已达到上限。' },
+  { category: 'AI', question: '为什么 AI 现在不能使用？', answer: '请先查看 AI / 灵动值中心。老师可能关闭了本节课的某类 AI 能力，或课堂算力额度、调用次数已达到上限。' },
   { category: 'COURSE', question: '如何知道这节课要做什么？', answer: '在学习首页查看“我的学习任务”，再按课时进入创作。课堂开始后，老师设置的课堂要求也会显示在首页。' },
   { category: 'CLIENT', question: '可以在家里的电脑使用吗？', answer: 'Web 端可使用现代浏览器访问；桌面安装包需由机构或平台配置真实下载地址后才提供下载。未配置时页面不会提供安装包。' },
   { category: 'DATA', question: '我的头像和监护人信息会被收集吗？', answer: '平台仅保存昵称、平台预设头像键、必要监护人联系信息和隐私开关，不收集住址、身份证号和社交账号。可在个人账号中查看或清空。' },

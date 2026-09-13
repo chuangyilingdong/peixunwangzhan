@@ -122,7 +122,7 @@ function ClassroomView({ api, onEnterConversation }) {
                 >
                   <div className="c-lesson__top">
                     <span className="c-lesson__no">{String(lesson.sort).padStart(2, '0')}</span>
-                    {startable ? <Pill tone="ok">已开课</Pill> : <Pill tone="warn">未开课</Pill>}
+                    {lesson.hasGrant === false ? <Pill tone="warn">未授权</Pill> : startable ? <Pill tone="ok">已开课</Pill> : <Pill tone="warn">未开课</Pill>}
                   </div>
                   <h3 className="c-lesson__title">{lesson.title}</h3>
                   <p className="c-lesson__summary">{lesson.summary || '本节课的创作任务会显示在这里。'}</p>

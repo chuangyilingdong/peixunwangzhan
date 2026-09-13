@@ -39,8 +39,11 @@ export function MyCoursesPage({ api }) {
     {items.length ? <div className="student-card-grid">{items.map((course) => <article className="student-card" key={course.id}>
       <div className="student-card__head">
         <h3>{course.title}</h3>
-        <span className="student-badge">{course.progress?.submittedPercent || 0}%</span>
+        {course.hasGrant === false
+          ? <span className="student-badge is-warn">未授权</span>
+          : <span className="student-badge">{course.progress?.submittedPercent || 0}%</span>}
       </div>
+      {course.hasGrant === false ? <p className="student-card__meta">这个课包还没有分配给你，请联系老师开通后再进入。</p> : null}
       {course.description ? <p className="student-card__desc">{course.description}</p> : null}
       <p className="student-card__meta">共 {course.progress?.lessonCount || 0} 节 · 已开始 {course.progress?.startedLessonCount || 0} 节 · 已提交 {course.progress?.submittedLessonCount || 0} 节</p>
       {course.classes?.length ? <p className="student-card__meta">班级：{course.classes.map((item) => item.name).join('、')}</p> : null}

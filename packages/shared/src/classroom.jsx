@@ -67,7 +67,7 @@ export function CanvasClassroom({ api, onEnterProject }) {
             <div className="lesson-detail-main">
               <div className="lesson-detail-title-row">
                 <div><span className="lesson-kicker">第 {lesson.sort} 节</span><h3>{lesson.title}</h3></div>
-                {lesson.canStart ? <span className="status success">已开课</span> : <span className="status warning">未开课</span>}
+                {lesson.hasGrant === false ? <span className="status warning">未授权</span> : lesson.canStart ? <span className="status success">已开课</span> : <span className="status warning">未开课</span>}
               </div>
               <p>{lesson.summary || '本节课的创作任务与课堂说明将在这里展示。'}</p>
               <div className="lesson-meta">{lesson.className || '未配置班级'} · {lesson.teacherName || '待分配老师'}{lesson.projectCount ? ` · 已有 ${lesson.projectCount} 个项目` : ''}{lesson.workCount ? ` · 已提交 ${lesson.workCount} 次` : ''}</div>
@@ -98,7 +98,7 @@ export function CanvasClassroom({ api, onEnterProject }) {
           <div className="course-package-body">
             <div className="course-package-heading"><h2>{course.title}</h2><span>{course.lessons.length} 节课</span></div>
             <p>{course.description || '围绕真实作品展开的项目式创作课程。'}</p>
-            <div className="course-package-footer"><span>{openCount ? `${openCount} 节课已开课` : '等待老师开课'}</span><button className="primary-button" onClick={() => setSelectedCourseId(course.id)}>查看课程</button></div>
+            <div className="course-package-footer"><span>{course.hasGrant === false ? '未授权 · 请联系老师分配课包' : openCount ? `${openCount} 节课已开课` : '等待老师开课'}</span><button className="primary-button" onClick={() => setSelectedCourseId(course.id)}>查看课程</button></div>
           </div>
         </article>;
       })}

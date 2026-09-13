@@ -9,7 +9,7 @@ function ensureWebsiteContent(now) {
       heroKicker: '教培机构青少年 AI 开课平台',
       heroTitle: '给机构一套',
       heroAccent: '能落地的青少年 AI 课',
-      heroDescription: 'AI魔法学院把课程、桌面客户端、机构账号、魔法石计费与作品展厅放在一个平台里。',
+      heroDescription: 'AI魔法学院把课程、桌面客户端、机构账号、灵动值计费与作品展厅放在一个平台里。',
       trustTitle: '响应教育部「做中学」领航行动',
       trustDescription: '真实问题 · 项目式探究 · 每节课都有作品'
     },

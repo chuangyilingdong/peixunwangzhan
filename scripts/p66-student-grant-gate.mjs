@@ -91,6 +91,16 @@ try {
   const blockedConversation = await createConversation();
   check('① 没许可：VibeCoding 入口同样被拒（同一道门禁）', blockedConversation.error?.code === 'COURSE_GRANT_REQUIRED', JSON.stringify(blockedConversation).slice(0, 220));
   check('① 学生仍然看得到课程列表（只是打不开）', (await api('/api/student/courses', { token: student })).status === 200);
+  // B1（2026-09-13）：列表要**直接标出「未授权」**，不能让学生点进去才吃到门禁。
+  const listBefore = await api('/api/student/courses', { token: student });
+  const seriesBefore = (listBefore.data?.items || []).find((item) => item.id === seeded.seriesId);
+  check('① 课程列表已把该课包标成未授权（items[].hasGrant === false）', seriesBefore?.hasGrant === false, JSON.stringify(seriesBefore || {}).slice(0, 240));
+  const dashboardBefore = await api('/api/student/dashboard', { token: student });
+  const courseBefore = (dashboardBefore.data?.classroomCourses || []).find((item) => item.id === seeded.seriesId);
+  const lessonBefore = (courseBefore?.lessons || [])[0];
+  check('① 课程中心的课时也不能显示成「已开课」（canStart=false + 原因指向分课包）',
+    lessonBefore?.canStart === false && /分给你/.test(String(lessonBefore?.blockReason || '')),
+    JSON.stringify(lessonBefore || {}).slice(0, 240));
 
   /* ② 机构把课包分给他 → 立刻能进 */
   grantNow();
@@ -98,6 +108,9 @@ try {
   check('② 分给他之后：画布入口能进', okProject.status === 200, JSON.stringify(okProject).slice(0, 200));
   const okConversation = await createConversation();
   check('② 分给他之后：VibeCoding 入口能进', okConversation.status === 200, JSON.stringify(okConversation).slice(0, 200));
+  const listAfter = await api('/api/student/courses', { token: student });
+  const seriesAfter = (listAfter.data?.items || []).find((item) => item.id === seeded.seriesId);
+  check('② 分给他之后：列表不再标「未授权」（hasGrant === true）', seriesAfter?.hasGrant === true, JSON.stringify(seriesAfter || {}).slice(0, 240));
 
   /* ③ 平台兜底撤销 → 立刻又进不去（不给缓存留缝） */
   revokeNow();
