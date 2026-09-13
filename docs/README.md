@@ -1,6 +1,6 @@
 # AI 魔法学院学习平台 · 最终文档（唯一入口）
 
-> 版本：2026-09-13　｜　这份文件是**读代码之前先读的那一份**。
+> 版本：2026-09-13　｜　**课堂、课包发布、机构授权、算力预警与三端流程已按本版本定稿实现。**
 > 其它文档都从属于它：结构看 `docs/architecture/代码结构与路由.md`，
 > 设计口径看 `docs/项目重梳理-03-平台侧重做梳理.md`，
 > 操作命令看 `deploy/production/RUNBOOK.md`，
@@ -24,7 +24,7 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch main
-生产：release 20260913T101458Z / commit cefd73a（服务 learning-platform-production @127.0.0.1:8789）
+生产：release 20260913T110418Z / commit 1106f04（服务 learning-platform-production @127.0.0.1:8789）
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 单价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元**每次**（真实售价，含毛利）
 数据：3 个课包（含 2 个演示课包）+ 9 个课堂 + 5 条学员许可 + 2 件学生作品
