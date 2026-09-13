@@ -94,9 +94,15 @@ export function ModelCompute({ api }) {
 
     <div id="step-gateway" className="step-section">
       <Panel title="③ 算力网关（可选）">
-        <p className="muted">不启用也能正常用：学生的每个能力都按上面的单价从算力池扣。
-          启用后，上游调用改成经网关出口，你能拿到<strong>精确账单</strong>（步骤④的「两本账对账」才有的对），
-          也能在网关侧按令牌额度再兜一层。渠道与密钥要在 new-api 那侧维护，这里的「渠道池」是只读的。</p>
+        <p className="muted"><strong>这一整块可以先跳过</strong> —— 不填、不启用，前面两步配好就能正常用：
+          学生的额度闸由「算力池」管，谁花了多少在步骤④也看得到。</p>
+        <p className="muted">「网关」是一道<strong>可选的中间站</strong>（开源项目 new-api）：装上之后，
+          调用路径从「平台 → 上游供应商」变成「平台 → 网关 → 上游」，网关会逐笔记账、也能按额度硬卡住调用。
+          它只多给你两样东西：<strong>① 拿上游的精确账单跟平台账逐笔核对</strong>（步骤④的「两本账对账」才有意义）、
+          <strong>② 在网关侧再兜一层额度</strong>。想要这两样才需要它，否则不用部署、下面留空即可。</p>
+        <p className="muted">⚠️ 下面的地址与账号<strong>不是你平台的账号</strong>，是你自己部署的 new-api 后台的地址与管理员账号
+          —— 没部署就没有可填的，先按 new-api 的文档跑起来（Docker 一条命令），并在它那侧配好渠道与密钥
+          （渠道要两边各配一份，这里的「渠道池」只是只读查看）。</p>
       </Panel>
     </div>
     <GatewayPanel api={api} />

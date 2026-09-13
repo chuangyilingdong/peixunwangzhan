@@ -81,20 +81,20 @@ export function GatewayPanel({ api }) {
   return <>
     {message && <Notice tone={message.includes('已') || message.includes('连上') ? 'success' : 'danger'}>{message}</Notice>}
 
-    <Panel title="网关连接">
+    <Panel title="网关连接（没有网关就跳过这一块）">
       {config.loading ? <Loading /> : config.error ? <ErrorState error={config.error} onRetry={config.refresh} /> : <>
         <div className="form-grid">
-          <label>网关地址<input value={form.baseUrl} placeholder="http://127.0.0.1:3000（new-api 部署地址）" onChange={(event) => { setSaved(false); setForm({ ...form, baseUrl: event.target.value }); }} /></label>
-          <label>管理员账号<input value={form.username} placeholder="root" onChange={(event) => { setSaved(false); setForm({ ...form, username: event.target.value }); }} /></label>
-          <label>管理员密码<input type="password" value={form.password} placeholder={config.data?.config?.passwordConfigured ? '已配置（留空表示不改）' : '首次配置请填写'} onChange={(event) => { setSaved(false); setForm({ ...form, password: event.target.value }); }} /></label>
-          <label>启用<select value={form.enabled ? '1' : '0'} onChange={(event) => { setSaved(false); setForm({ ...form, enabled: event.target.value === '1' }); }}><option value="0">未启用（AI 调用继续走平台自己的出口）</option><option value="1">启用</option></select></label>
+          <label>new-api 的地址<input value={form.baseUrl} placeholder="和平台同一台机器：http://127.0.0.1:3000；独立机器：http://服务器IP:3000" onChange={(event) => { setSaved(false); setForm({ ...form, baseUrl: event.target.value }); }} /></label>
+          <label>new-api 的管理员账号<input value={form.username} placeholder="new-api 后台的账号，默认 root" onChange={(event) => { setSaved(false); setForm({ ...form, username: event.target.value }); }} /></label>
+          <label>new-api 的管理员密码<input type="password" value={form.password} placeholder={config.data?.config?.passwordConfigured ? '已配置（留空表示不改）' : 'new-api 后台的登录密码'} onChange={(event) => { setSaved(false); setForm({ ...form, password: event.target.value }); }} /></label>
+          <label>启用<select value={form.enabled ? '1' : '0'} onChange={(event) => { setSaved(false); setForm({ ...form, enabled: event.target.value === '1' }); }}><option value="0">未启用（保持默认就好：AI 调用直接走上游，额度与归属照样算）</option><option value="1">启用（调用改走网关）</option></select></label>
         </div>
         <div className="row-actions top-gap">
           <button className="primary-button" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存配置'}</button>
           <button className="secondary-button" disabled={busy || !enabled} title={enabled ? '' : '先保存并启用'} onClick={test}>测试连接</button>
           {testResult ? <span className="muted">连上了：网关账号 {testResult.gatewayUser || '—'}，耗时 {testResult.latencyMs} ms</span> : null}
         </div>
-        <p className="muted">密码保存在服务器上的加密密钥文件里（AES-256-GCM），不回显、不落库；换网关或换账号时重新填一次即可。</p>
+        <p className="muted">这里填的是 <strong>new-api 后台的账号</strong>（和你的平台账号无关），密码加密存在服务器的密钥文件里（AES-256-GCM）、不回显、不落库；换网关或换账号时重填一次。没有网关？这一块跳过就行，不影响其他步骤。</p>
       </>}
     </Panel>
 
