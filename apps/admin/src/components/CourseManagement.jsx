@@ -782,9 +782,10 @@ function CourseDetail({ api, courseId, onBack }) {
     {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
     {detail.loading ? <Loading label="正在读取课包详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : !series ? <Empty title="课包不存在" /> : <>
       <div className="metrics">
-        <MetricCard label="引用班级" value={detail.data.usage.classesUsingSeries} hint="以该课包为默认课程的班级数" />
-        <MetricCard label="班级课单项" value={detail.data.usage.curriculumItems} hint="班级课单引用的课时条目数" tone="teal" />
-        <MetricCard label="关联课堂" value={detail.data.usage.classSessions} hint="使用该课包课时的课堂场次" tone="orange" />
+        {/* 批次 D（班级退场）：原来这两张卡是「引用班级」「班级课单项」——班级已退场，数的只是历史表，
+            看的人会以为班级还在用。换成「这个课包开过多少课堂 / 其中几节正在进行」。 */}
+        <MetricCard label="开过的课堂" value={detail.data.usage.sessionsForSeries} hint="使用该课包课时的课堂场次（含已结束）" />
+        <MetricCard label="正在上课" value={detail.data.usage.activeSessionsForSeries} hint="其中状态为「上课中」的课堂" tone="teal" />
         <MetricCard label="学生作品" value={detail.data.usage.studentWorks} hint="基于该课包课时提交的作品数" tone="pink" />
       </div>
       <Panel title="版本与发布">

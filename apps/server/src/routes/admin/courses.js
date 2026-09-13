@@ -1,6 +1,6 @@
 // 平台管理端「courses」域路由：从 adminOrg.js 拆出，行为不变。
 import {
-  audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
+  audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
 } from '../../lib.js';
@@ -27,23 +27,16 @@ import {
   assertEnrollmentSeat,
   assertNotLastOrgAdmin,
   assertSelfPassword,
-  assertTeachingClassManager,
   auditListQuery,
   auditQuery,
   auditRow,
   buildOrganizationDetail,
   buildStudentDataExport,
   bumpSeriesVersion,
-  classDetail,
-  classInOrg,
-  classMemberships,
-  classProgressRows,
-  classSessionRows,
   contactPayload,
   createMember,
   csvDocument,
   csvFileName,
-  curriculumItem,
   enrollmentDate,
   enrollmentRow,
   ensureOrgBilling,
@@ -82,7 +75,6 @@ import {
   reportResolution,
   setStudentEnrollmentAccess,
   softDeleteStudent,
-  teacherCanAccessClass,
   userLoginMeta,
   validateImportItem,
   validateMemberPermissions,
@@ -225,9 +217,11 @@ export async function handleCourses(ctx, part, method) {
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const assignedOrgs = rows('SELECT assignment.id, assignment.org_id, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, organization.name org_name FROM course_assignments assignment JOIN organizations organization ON organization.id=assignment.org_id WHERE assignment.series_id=? AND assignment.status=\'ACTIVE\' ORDER BY assignment.assigned_at DESC', [series.id]).map((item) => ({ id: item.id, orgId: item.org_id, orgName: item.org_name, assignedAt: item.assigned_at, expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(), quotaTotal: Number(item.quota_total || 0), quotaUsed: Number(item.quota_used || 0) }));
     const usage = {
-      classesUsingSeries: count('SELECT COUNT(*) AS n FROM classes WHERE default_series_id=?', [series.id]),
-      curriculumItems: count('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE source_series_id=?', [series.id]),
-      classSessions: count('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
+      // 批次 D（班级退场）：原来这里是 classesUsingSeries（「以该课包为默认课程的班级数」）与
+      // curriculumItems（班级课单引用数）—— 两张都是历史表，数出来只是历史值，读的人会以为班级还在用。
+      // 换成两类**真实在跑**的东西：这个课包开过多少课堂、其中几节正在进行。
+      sessionsForSeries: count('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
+      activeSessionsForSeries: count("SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=? AND session.status='ACTIVE'", [series.id]),
       studentWorks: count('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
     };
     const versions = rows('SELECT * FROM course_series_versions WHERE series_id=? ORDER BY created_at DESC LIMIT 20', [series.id])

@@ -767,42 +767,9 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
   return result;
 }
 
-export function normalizeClass(value, { detail = false } = {}) {
-  if (!value) return null;
-  const result = {
-    id: value.id,
-    orgId: value.org_id,
-    name: value.name,
-    teacherId: value.teacher_id || null,
-    teacherName: value.teacher_name || null,
-    usageMode: value.usage_mode,
-    defaultSeriesId: value.default_series_id || null,
-    status: value.status,
-    currentSessionId: value.current_session_id || null,
-    studentCount: count(`SELECT COUNT(*) AS n FROM class_members cm JOIN users u ON u.id = cm.user_id WHERE cm.class_id = ? AND cm.removed_at IS NULL AND cm.role = 'STUDENT' AND u.deleted_at IS NULL`, [value.id]),
-    createdAt: value.created_at,
-    updatedAt: value.updated_at,
-    archivedAt: value.archived_at || null,
-  };
-  if (detail) {
-    result.curriculum = rows(`SELECT ci.*, l.title, l.summary, l.duration_minutes, l.status AS lesson_status
-      FROM class_curriculum_items ci JOIN course_lessons l ON l.id = ci.lesson_id
-      WHERE ci.class_id = ? ORDER BY ci.sort`, [value.id]).map((item) => ({
-      id: item.id,
-      lessonId: item.lesson_id,
-      title: item.title,
-      summary: item.summary || '',
-      sort: Number(item.sort || 0),
-      durationMinutes: Number(item.duration_minutes || 0),
-      lessonStatus: item.lesson_status,
-      sourceSeriesId: item.source_series_id,
-    }));
-    result.members = rows(`SELECT u.*, cm.role AS class_role FROM class_members cm JOIN users u ON u.id = cm.user_id
-      WHERE cm.class_id = ? AND cm.removed_at IS NULL AND u.deleted_at IS NULL ORDER BY cm.joined_at`, [value.id])
-      .map((member) => ({ ...normalizeUser(member), classRole: member.class_role }));
-  }
-  return result;
-}
+// 2026-09-13 批次 D：`normalizeClass` 已删除 —— 班级退场后它没有调用方了，
+// 而且它内部还查 class_members / class_curriculum_items 这两张历史表，留着会让人以为班级逻辑还活着。
+// 课堂的规范化函数是 normalizeSession（四态）与 normalizeSessionStudent（六态）。
 
 export function normalizeSession(value) {
   if (!value) return null;

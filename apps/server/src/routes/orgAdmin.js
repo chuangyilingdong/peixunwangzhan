@@ -1,4 +1,4 @@
-import { audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
+import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
 import { hashPassword } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
@@ -137,19 +137,18 @@ export async function handleOrg(ctx) {
     const organization = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
     if (role === 'TEACHER' && organization.teacherSeats - organization.teacherUsedSeats <= 0) throw errors.badRequest('教师席位不足', 'TEACHER_SEAT_LIMIT');
     if (body.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
-    const classIds = Array.isArray(body.classIds) ? [...new Set(body.classIds.map(String))] : [];
-    classIds.forEach((classId) => {
-      if (!row("SELECT id FROM classes WHERE id=? AND org_id=? AND status='ACTIVE'", [classId, currentOrgId])) throw errors.badRequest('包含不存在或已归档班级', 'INVALID_CLASS');
-    });
+    // 批次 D：不再接受 classIds（班级退场）—— 学员进课堂改在「课堂」页做。
     const created = transaction(() => createMember(currentOrgId, {
       role, login, displayName, password: String(body.password), phone: phone || null,
       permissions, expiresAt: body.expiresAt || null,
-      studentUsageScope: role === 'STUDENT' ? (body.studentUsageScope || 'HOME_PRACTICE') : null,
+      // 批次 D：student_usage_scope 已退役（取消「在家练习」免课堂通道后它不再决定任何事，
+      // 见 aiGeneration 的 /api/ai/center）。新号统一写 FOLLOW_CLASS 作为**语义正确的历史值**，
+      // 不再默认 HOME_PRACTICE —— 那个默认值会让看库的人以为「这个学生可以不上课堂就创作」。
+      studentUsageScope: role === 'STUDENT' ? 'FOLLOW_CLASS' : null,
       billingPackageId: role === 'STUDENT' ? (body.billingPackageId || null) : null,
       // 2026-09-13（P4 删积分）：不再接受 monthlyCreditAllowance / aiCreditLimit（两道刹车都没了）
-      classIds,
     }));
-    audit(ctx, 'USER_CREATE', 'USER', created.id, null, { role, login, classIds });
+    audit(ctx, 'USER_CREATE', 'USER', created.id, null, { role, login });
     return orgMemberRow(created, currentOrgId);
   }  let match = part.match(/^\/users\/([^/]+)$/);
   if (match && ['GET','PUT','DELETE'].includes(method)) {
@@ -168,10 +167,11 @@ export async function handleOrg(ctx) {
     if (nextStatus === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'SELF_DISABLE_FORBIDDEN');
     const phone = body.phone === undefined ? target.phone : validateMemberPhone(body.phone, target.id);
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim(); if (!displayName) throw errors.badRequest('姓名不能为空', 'DISPLAY_NAME_REQUIRED');
-    const usageScope = body.studentUsageScope === undefined ? target.student_usage_scope : body.studentUsageScope; if (usageScope && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(usageScope)) throw errors.badRequest('学员额度范围无效', 'INVALID_USAGE_SCOPE');
+    // 批次 D：`studentUsageScope` 不再接受修改 —— 字段已退役（不再决定任何门禁）。
+    // 传了就忽略（不报错），列本身保留历史值。要「能不能用 AI」请看算力池与课堂名单。
     const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);
     const now = nowIso();
-    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,student_usage_scope=?,billing_package_id=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, usageScope, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
+    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,billing_package_id=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
     audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), { ...body, status: nextStatus }); return orgMemberRow(row('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
   }
   match = part.match(/^\/users\/([^/]+)\/(password|permissions)$/);

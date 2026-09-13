@@ -1,5 +1,5 @@
 import {
-  audit, count, errors, id, json, normalizeClass, normalizeOrg, normalizePackage,
+  audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeLesson, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
   normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE,
@@ -68,18 +68,6 @@ function orgUser(auth, userId) {
 }
 function hasPermission(auth, permission) {
   return auth.user.role === 'ORG_ADMIN' || (auth.user.role === 'TEACHER' && parseJson(auth.rawUser.permissions, []).includes(permission));
-}
-function classInOrg(auth, classId) {
-  const cls = row('SELECT class.*, teacher.display_name AS teacher_name FROM classes class LEFT JOIN users teacher ON teacher.id=class.teacher_id AND teacher.org_id=class.org_id WHERE class.id=? AND class.org_id=?', [classId, orgId(auth)]);
-  if (!cls) throw errors.notFound('班级不存在', 'CLASS_NOT_FOUND');
-  return cls;
-}
-// 班级的日常教务由教师负责，不要求机构管理员额外授予账号管理权限。
-// 仍然沿用 teacherCanAccessClass，确保教师只能操作本人负责或被授权的班级。
-function assertTeachingClassManager(auth, cls) {
-  if (auth.user.role === 'ORG_ADMIN') return;
-  if (auth.user.role === 'TEACHER' && teacherCanAccessClass(auth, cls)) return;
-  throw errors.forbidden('无班级教务权限', 'CLASS_PERMISSION_DENIED');
 }
 function accessibleLesson(currentOrgId, lessonId) {
   return row(
@@ -282,17 +270,11 @@ function validateMemberPermissions(value, role) {
   return permissions;
 }
 
-function classMemberships(orgIdValue, userId) {
-  return rows(`SELECT class.id,class.name,class.teacher_id,class.status,class_member.role AS member_role
-    FROM class_members class_member JOIN classes class ON class.id=class_member.class_id
-    WHERE class.org_id=? AND class_member.user_id=? AND class_member.removed_at IS NULL
-    ORDER BY class.created_at DESC`, [orgIdValue, userId]).map((item) => ({
-    id: item.id, name: item.name, teacherId: item.teacher_id || null, status: item.status, role: item.member_role,
-  }));
-}
 
 function orgMemberRow(value, currentOrgId) {
-  return { ...normalizeUser(value, { includeAuthMeta: true }), classes: classMemberships(currentOrgId, value.id) };
+  // 批次 D：`classes` 键保留但恒为空（班级退场；成员归属现在看课堂）。
+  void currentOrgId;
+  return { ...normalizeUser(value, { includeAuthMeta: true }), classes: [] };
 }
 
 const ENROLLMENT_STATUSES = new Set(['PENDING', 'ACTIVE', 'SUSPENDED', 'VOIDED', 'EXPIRED']);
@@ -402,12 +384,6 @@ function packageWithSeatUsage(currentOrgId, value) {
   return { ...normalized, occupiedSeats, availableSeats: Math.max(0, Number(value.student_seats || 0) - occupiedSeats) };
 }
 
-function teacherCanAccessClass(auth, cls) {
-  return auth.user.role !== 'TEACHER' || cls.teacher_id === auth.user.id || Boolean(row(
-    "SELECT id FROM class_members WHERE class_id=? AND user_id=? AND role='TEACHER' AND removed_at IS NULL",
-    [cls.id, auth.user.id],
-  ));
-}
 
 /**
  * 教师的**数据范围**（2026-09-13 批次 D：从「班级」改成「课堂」）。
@@ -433,67 +409,8 @@ function sessionOwnedByTeacherExists(column, auth, params, { orgColumn = 'usage.
   return ` AND ${column} IS NOT NULL AND EXISTS (SELECT 1 FROM class_sessions scoped_session WHERE scoped_session.id=${column} AND scoped_session.org_id=${orgColumn} AND scoped_session.teacher_id=?)`;
 }
 
-function classSessionRows(classId) {
-  return rows(`SELECT session.*, lesson.title AS lesson_title,
-      starter.display_name AS started_by_name, ender.display_name AS ended_by_name
-    FROM class_sessions session
-    LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
-    LEFT JOIN users starter ON starter.id=session.started_by
-    LEFT JOIN users ender ON ender.id=session.ended_by
-    WHERE session.class_id=? ORDER BY session.started_at DESC`, [classId]).map((session) => ({
-    ...normalizeSession(session),
-    startedByName: session.started_by_name || null,
-    endedByName: session.ended_by_name || null,
-  }));
-}
 
-function classProgressRows(classId) {
-  return rows(`SELECT item.lesson_id, item.sort, item.source_series_id,
-      lesson.title, lesson.summary, lesson.duration_minutes, lesson.status AS lesson_status,
-      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND student.deleted_at IS NULL THEN member.user_id END) AS student_count,
-      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND project.id IS NOT NULL THEN member.user_id END) AS started_student_count,
-      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND (project.status IN ('SUBMITTED','GRADED') OR work.id IS NOT NULL) THEN member.user_id END) AS submitted_student_count,
-      COUNT(DISTINCT CASE WHEN member.role='STUDENT' AND member.removed_at IS NULL AND work.status IN ('APPROVED','PUBLISHED') THEN member.user_id END) AS published_student_count
-    FROM class_curriculum_items item
-    JOIN course_lessons lesson ON lesson.id=item.lesson_id
-    LEFT JOIN class_members member ON member.class_id=item.class_id
-    LEFT JOIN users student ON student.id=member.user_id AND student.role='STUDENT'
-    LEFT JOIN student_projects project ON project.class_id=item.class_id AND project.course_lesson_id=item.lesson_id AND project.student_id=member.user_id AND project.status!='ARCHIVED'
-    LEFT JOIN works work ON work.class_id=item.class_id AND work.course_lesson_id=item.lesson_id AND work.student_id=member.user_id
-    WHERE item.class_id=? GROUP BY item.lesson_id,item.sort,item.source_series_id,lesson.title,lesson.summary,lesson.duration_minutes,lesson.status
-    ORDER BY item.sort`, [classId]).map((item) => {
-    const studentCount = Number(item.student_count || 0);
-    const startedCount = Number(item.started_student_count || 0);
-    const submittedCount = Number(item.submitted_student_count || 0);
-    const publishedCount = Number(item.published_student_count || 0);
-    return {
-      lessonId: item.lesson_id, sort: Number(item.sort || 0), sourceSeriesId: item.source_series_id,
-      title: item.title, summary: item.summary || '', durationMinutes: Number(item.duration_minutes || 0), lessonStatus: item.lesson_status,
-      studentCount, startedStudentCount: startedCount, submittedStudentCount: submittedCount, publishedStudentCount: publishedCount,
-      startedPercent: studentCount ? Math.round((startedCount / studentCount) * 100) : 0,
-      submittedPercent: studentCount ? Math.round((submittedCount / studentCount) * 100) : 0,
-      publishedPercent: studentCount ? Math.round((publishedCount / studentCount) * 100) : 0,
-    };
-  });
-}
 
-function classDetail(auth, cls) {
-  const detail = normalizeClass(cls, { detail: true });
-  const sessions = classSessionRows(cls.id);
-  const progress = classProgressRows(cls.id);
-  return {
-    ...detail,
-    sessions,
-    progress,
-    summary: {
-      studentCount: detail.studentCount,
-      curriculumCount: progress.length,
-      sessionCount: sessions.length,
-      completedSessionCount: sessions.filter((session) => session.status === 'ENDED' && session.endedReason !== 'CANCELED').length,
-      canceledSessionCount: sessions.filter((session) => session.endedReason === 'CANCELED').length,
-    },
-  };
-}
 
 function importItems(body) {
   const items = Array.isArray(body?.items) ? body.items : Array.isArray(body?.rows) ? body.rows : null;
@@ -525,13 +442,10 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
   if (role === 'TEACHER') {
     try { permissions = validateMemberPermissions(item.permissions, role); } catch (error) { errorsForRow.push(error.message); }
   }
-  if (role === 'STUDENT' && item.studentUsageScope !== undefined && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(item.studentUsageScope)) errorsForRow.push('学员额度范围无效');
+  // 批次 D：studentUsageScope 与 classIds 都不再参与导入 ——
+  // 前者已退役（不再决定门禁），后者对应班级（历史表，进课堂改在机构端「课堂」页做）。
+  // 传了就忽略，不当成校验错误（老客户端还在发也不要 400）。
   if (item.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [item.billingPackageId, currentOrgId])) errorsForRow.push('套餐不属于当前机构');
-  if (Array.isArray(item.classIds)) {
-    item.classIds.map(String).filter((classId, position, values) => values.indexOf(classId) === position).forEach((classId) => {
-      if (!row("SELECT id FROM classes WHERE id=? AND org_id=? AND status='ACTIVE'", [classId, currentOrgId])) errorsForRow.push('包含不存在或已归档班级');
-    });
-  }
   seenLogins.add(login);
   if (phone) seenPhones.add(phone);
   return {
@@ -542,9 +456,10 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
       role, login, displayName, password, phone: phone || null,
       permissions,
       expiresAt: item.expiresAt || null,
-      studentUsageScope: role === 'STUDENT' ? (item.studentUsageScope || 'HOME_PRACTICE') : null,
+      // 批次 D：student_usage_scope 已退役（不再决定任何门禁）→ 不再默认 HOME_PRACTICE；
+      // classIds 也不写了：班级退场后「进哪个班」不再是导入的一部分（选课堂在机构端「课堂」页做）。
+      studentUsageScope: role === 'STUDENT' ? 'FOLLOW_CLASS' : null,
       billingPackageId: role === 'STUDENT' ? (item.billingPackageId || null) : null,
-      classIds: Array.isArray(item.classIds) ? [...new Set(item.classIds.map(String))] : [],
     },
   };
 }
@@ -563,12 +478,8 @@ function createMember(currentOrgId, value) {
   const now = nowIso(); const userId = id('user');
   // 2026-09-13（P4 删积分）：建号不再写 monthly_credit_allowance / ai_credit_limit（积分已废弃）
   q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
-  value.classIds.forEach((classId) => {
-    const cls = row('SELECT id FROM classes WHERE id=? AND org_id=? AND status=\'ACTIVE\'', [classId, currentOrgId]);
-    if (!cls) throw errors.badRequest(`第 ${value.login} 条记录包含不存在或已归档班级`, 'INVALID_CLASS');
-    if (!['TEACHER', 'STUDENT'].includes(value.role)) return;
-    q('INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES (?,?,?,?,?)', [id('member'), cls.id, userId, value.role, now]);
-  });
+  // 批次 D（班级退场）：不再往 class_members 写归属 —— 那是历史表，且「进哪个班」已经没有意义。
+  // 学员进课堂改在机构端「课堂」页做（POST /api/org/sessions/:id/students）。
   return row('SELECT * FROM users WHERE id=?', [userId]);
 }
 
@@ -618,7 +529,6 @@ function userLoginMeta(userIds) {
 }
 
 
-function curriculumItem(value) { return { id: value.id, lessonId: value.lesson_id, title: value.title, summary: value.summary || '', sort: Number(value.sort || 0), durationMinutes: Number(value.duration_minutes || 0), sourceSeriesId: value.source_series_id }; }
 
 function orgAccountRequestRow(value) {
   return {
@@ -825,17 +735,22 @@ function workReportRows(where = '1=1', params = []) {
 }
 
 function workReportInReviewScope(auth, currentOrgId, reportId) {
+  // 批次 D（班级退场）：这条判据原来查 `work.class_id` + `teacherCanAccessClass`。
+  // work.class_id 现在恒为 NULL（新作品只记 class_session_id），于是教师会被一律拒掉 ——
+  // 连**自己课堂里**作品的举报都处理不了。改成按「这节课的课堂是不是我创建的」判，与
+  // workInReviewScope 同一口径。
   const report = row(
-    `SELECT report.*, work.title AS work_title, work.status AS work_status, work.class_id AS class_id, class.teacher_id
+    `SELECT report.*, work.title AS work_title, work.status AS work_status,
+            work.class_session_id AS class_session_id, session.teacher_id AS session_teacher_id
      FROM work_reports report
      JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id
-     LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+     LEFT JOIN class_sessions session ON session.id=work.class_session_id
      WHERE report.id=? AND report.org_id=?`,
     [reportId, currentOrgId],
   );
   if (!report) throw errors.notFound('举报记录不存在', 'WORK_REPORT_NOT_FOUND');
-  if (auth.user.role === 'TEACHER' && !teacherCanAccessClass(auth, { id: report.class_id, teacher_id: report.teacher_id })) {
-    throw errors.forbidden('不能处理未授权班级作品的举报', 'WORK_REPORT_PERMISSION_DENIED');
+  if (auth.user.role === 'TEACHER' && report.session_teacher_id !== auth.user.id) {
+    throw errors.forbidden('不能处理不属于自己课堂作品的举报', 'WORK_REPORT_PERMISSION_DENIED');
   }
   return report;
 }
@@ -1064,23 +979,16 @@ export {
   assertEnrollmentSeat,
   assertNotLastOrgAdmin,
   assertSelfPassword,
-  assertTeachingClassManager,
   auditListQuery,
   auditQuery,
   auditRow,
   buildOrganizationDetail,
   buildStudentDataExport,
   bumpSeriesVersion,
-  classDetail,
-  classInOrg,
-  classMemberships,
-  classProgressRows,
-  classSessionRows,
   contactPayload,
   createMember,
   csvDocument,
   csvFileName,
-  curriculumItem,
   enrollmentDate,
   enrollmentRow,
   ensureOrgBilling,
@@ -1121,7 +1029,6 @@ export {
   normalizePerStudentBudgetFen,
   setStudentEnrollmentAccess,
   softDeleteStudent,
-  teacherCanAccessClass,
   sessionTeacherScope,
   sessionOwnedByTeacherExists,
   userLoginMeta,

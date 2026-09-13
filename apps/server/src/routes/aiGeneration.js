@@ -47,11 +47,13 @@ function modalityOf(value) {
 }
 
 function ownProject(auth, projectId) {
-  const project = row(`SELECT project.*, lesson.title AS lesson_title, series.title AS series_title, class.name AS class_name
+  // 批次 D：原来的 class.name 取自班级表（class_id 现在恒为 NULL，取了也是空）——
+  // 换成**课堂**名（student_projects.class_session_id 指向他进的那个课堂）。
+  const project = row(`SELECT project.*, lesson.title AS lesson_title, series.title AS series_title, session.title AS session_title
      FROM student_projects project
      LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
      LEFT JOIN course_series series ON series.id = lesson.series_id
-     LEFT JOIN classes class ON class.id = project.class_id AND class.org_id = project.org_id
+     LEFT JOIN class_sessions session ON session.id = project.class_session_id
      WHERE project.id = ? AND project.student_id = ? AND project.org_id = ?
        AND project.deleted_at IS NULL AND project.status != 'ARCHIVED'`,
     [projectId, auth.user.id, auth.user.orgId]);
@@ -171,7 +173,8 @@ function normalizeJob(value, { assets = [] } = {}) {
   return {
     id: value.id, projectId: value.project_id, projectTitle: value.project_title || null,
     courseLessonId: value.course_lesson_id || null, courseLessonTitle: value.lesson_title || null,
-    className: value.class_name || null, modality: value.modality,
+    // 批次 D：原来是 className（班级名，恒空）→ 换成他进的那个课堂名
+    sessionTitle: value.session_title || null, modality: value.modality,
     boxId: value.box_id || null,
     modalityLabel: MODALITY_LABELS[value.modality] || value.modality,
     provider: value.provider, model: value.model, prompt: value.prompt, status: value.status,
@@ -188,11 +191,11 @@ function assetsFor(jobId) {
 
 function jobQuery() {
   return `SELECT job.*, project.title AS project_title, project.course_lesson_id,
-                 lesson.title AS lesson_title, class.name AS class_name
+                 lesson.title AS lesson_title, session.title AS session_title
           FROM generation_jobs job
           LEFT JOIN student_projects project ON project.id = job.project_id
           LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
-          LEFT JOIN classes class ON class.id = project.class_id AND class.org_id = project.org_id`;
+          LEFT JOIN class_sessions session ON session.id = project.class_session_id`;
 }
 
 function jobDetail(jobId, { requireAuth = null } = {}) {
@@ -732,14 +735,24 @@ function assetUsageStatus(asset, currentSnapshot, snapshots) {
   return { used: false, source: null, usedInVersion: null, usedAt: null };
 }
 
+/**
+ * 学生**正在进行**的课堂（2026-09-13 批次 D 改成课堂口径）。
+ *
+ * ⚠️ 这里原来走 `classes JOIN class_members` 并要求 `class.current_session_id = session.id`。
+ *    班级退场后新课堂的 class_id 是空的，所以它**恒返回空**，进而让下面那句
+ *    `scopeBlocked = student_usage_scope !== 'HOME_PRACTICE' && !session` 两个方向都错：
+ *      · HOME_PRACTICE 学员 → 恒为 false（等于宣称「不进课堂也能用」，正是被取消的那条通道）；
+ *      · FOLLOW_CLASS 学员 → 恒为 true（哪怕课堂正在上，也一直被告知「等待老师开启课堂」）。
+ *    改成从**课堂名单**取之后两个方向都对了。真实门禁一直在 studentContext（生成时才拦），
+ *    所以这里错了只表现为**展示与口径矛盾**，不是安全洞 —— 但矛盾本身就是 bug。
+ */
 function activeAiSessions(user) {
   return rows(`SELECT session.*, lesson.title AS lesson_title
-     FROM class_sessions session
-     JOIN classes class ON class.id = session.class_id
-     JOIN class_members member ON member.class_id = class.id
+     FROM session_students part
+     JOIN class_sessions session ON session.id = part.session_id
      LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
-     WHERE member.user_id = ? AND member.removed_at IS NULL AND class.org_id = ?
-       AND class.current_session_id = session.id AND session.status = 'ACTIVE'
+     WHERE part.student_id = ? AND part.org_id = ?
+       AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'
      ORDER BY session.started_at DESC`, [user.id, user.org_id]);
 }
 
@@ -780,8 +793,11 @@ function studentAiCenter(ctx) {
     }
     // 2026-09-13（P4 删积分）：不再有「课堂用量上限 / 个人额度」两条拒绝理由 ——
     // 额度看算力池（学生 × 课包），那道闸门在调用前拦，这里不重复报。
-    const scopeBlocked = rawUser.student_usage_scope !== 'HOME_PRACTICE' && !session;
-    if (scopeBlocked) reasons.push(rawUser.student_usage_scope === 'FOLLOW_CLASS' ? '等待老师开启课堂' : '当前账号暂不能使用 AI');
+    // 2026-09-13：取消「在家练习」免课堂通道 —— **有许可只代表能看课包信息**，
+    // 要进操作环境必须被老师加进课堂、且课堂正在进行。所以这里只看有没有进行中的课堂，
+    // 不再看 student_usage_scope（那个字段已退役，见 orgAdmin 建号那段的说明）。
+    const scopeBlocked = !session;
+    if (scopeBlocked) reasons.push('等老师把你加进课堂并点「开始上课」');
     return {
       modality, label: MODALITY_LABELS[modality], packageEnabled, sessionEnabled,
       available: packageEnabled && sessionEnabled && !session?.aiPaused && !scopeBlocked,
@@ -795,11 +811,11 @@ function studentAiCenter(ctx) {
     costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
   };
   const assets = rows(`SELECT asset.*, project.title AS project_title, project.status AS project_status,
-            lesson.title AS lesson_title, class.name AS class_name
+            lesson.title AS lesson_title, session.title AS session_title
      FROM media_assets asset
      LEFT JOIN student_projects project ON project.id = asset.project_id
      LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
-     LEFT JOIN classes class ON class.id = project.class_id AND class.org_id = project.org_id
+     LEFT JOIN class_sessions session ON session.id = project.class_session_id
      WHERE asset.user_id = ? AND asset.org_id = ?
      ORDER BY asset.created_at DESC LIMIT 100`, [auth.user.id, auth.user.orgId]);
   const projects = rows('SELECT id,canvas_snapshot FROM student_projects WHERE student_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]);
@@ -819,14 +835,14 @@ function studentAiCenter(ctx) {
     projectTitle: asset.project_title || null,
     projectStatus: asset.project_status || null,
     courseLessonTitle: asset.lesson_title || null,
-    className: asset.class_name || null,
+    sessionTitle: asset.session_title || null,
     usage: assetUsageStatus(asset, currentByProject.get(asset.project_id), snapshotsByProject.get(asset.project_id) || []),
   }));
   return {
     provider: generationProviderInfo(),
     // 2026-09-13（P4 删积分）：原来的 period（周期额度 allowance/used/remaining）已删除。
     // 学生的剩余额度看**算力池**（按 学生 × 课包 汇总，学生端「学习统计」与课时卡片都能看到）。
-    usageScope: rawUser.student_usage_scope || null,
+    // 批次 D：`usageScope` 不再返回 —— 它对应已退役的 student_usage_scope，读它只会误导。
     activeSessions,
     capabilities,
     jobs,

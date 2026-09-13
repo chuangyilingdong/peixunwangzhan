@@ -106,7 +106,7 @@ function Members({ api, user }) {
     return lines.slice(1).map((line) => {
       const values = line.split(delimiter).map((item) => item.trim());
       const item = Object.fromEntries(headers.map((header, index) => [header, values[index] || '']));
-      item.classIds = String(item.classIds || '').split('|').map((value) => value.trim()).filter(Boolean);
+      // 批次 D：不再解析 classIds（班级退场）—— 学员进课堂改在「课堂」页做。
       return item;
     });
   }
@@ -167,8 +167,8 @@ function Members({ api, user }) {
         </form>
       </Panel>
       <Panel title="批量导入">
-        <p className="muted">粘贴 CSV 或 TSV。列名：<code>login,displayName,role,password,phone,classIds</code>；多个班级 ID 用竖线分隔。系统先预览，提交时整批原子写入，任何错误都会全部回滚。</p>
-        <textarea value={importText} rows="7" placeholder={'login,displayName,role,password,phone,classIds\nstudent-02,小明,STUDENT,student123,13800000001,class_xxx'} onChange={(event) => setImportText(event.target.value)} />
+        <p className="muted">粘贴 CSV 或 TSV。列名：<code>login,displayName,role,password,phone</code>。系统先预览，提交时整批原子写入，任何错误都会全部回滚。学员进哪个课堂请在「课堂」页添加。</p>
+        <textarea value={importText} rows="7" placeholder={'login,displayName,role,password,phone\nstudent-02,小明,STUDENT,student123,13800000001'} onChange={(event) => setImportText(event.target.value)} />
         <div className="row-actions"><button className="secondary-button" type="button" disabled={busy} onClick={previewImport}>预览导入</button>{importPreview?.invalidCount === 0 && <button className="primary-button" type="button" disabled={busy} onClick={commitImport}>确认整批导入</button>}</div>
         {importPreview && <div className="card-list"><Notice tone={importPreview.invalidCount ? 'danger' : 'success'}>共 {importPreview.total} 条，可导入 {importPreview.validCount} 条，失败 {importPreview.invalidCount} 条。</Notice>{importPreview.items.filter((item) => !item.valid).map((item) => <p className="muted" key={item.index}>第 {item.index} 行：{item.errors.join('；')}</p>)}</div>}
       </Panel>
