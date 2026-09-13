@@ -18,35 +18,41 @@ export async function handleOrg(ctx) {
     const isTeacher = auth.user.role === 'TEACHER';
     const orgRecord = row('SELECT * FROM organizations WHERE id=?', [currentOrgId]);
     const normalizedOrg = normalizeOrg(orgRecord);
-    const teacherScope = isTeacher ? ' AND (klass.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=klass.id AND scoped_member.user_id=? AND scoped_member.role=\'TEACHER\' AND scoped_member.removed_at IS NULL))' : '';
-    const teacherParams = isTeacher ? [auth.user.id, auth.user.id] : [];
-    const activeClassParams = [currentOrgId, ...teacherParams];
-    const activeClasses = count('SELECT COUNT(*) n FROM classes klass WHERE klass.org_id=? AND klass.status=\'ACTIVE\'' + teacherScope, activeClassParams);
-    const activeSessions = count('SELECT COUNT(*) n FROM class_sessions session JOIN classes klass ON klass.id=session.class_id WHERE klass.org_id=? AND session.status=\'ACTIVE\'' + teacherScope, activeClassParams);
+    // B3（2026-09-13）：教师数据范围收敛到公共 teacherScope()（admin/helpers.js）。
+    // 这段判定原来在本文件里被抄了 7 遍 —— 抄漏一处，教师就会看到别的班的数据，而且**不报错**。
+    // 参数顺序：teacherScope 在 TEACHER 时 push 两个 id，紧跟在本语句里 org_id=? 之后。
+    const classScopeParams = [];
+    const teacherClassScope = teacherScope('klass', auth, classScopeParams);
+    const activeClassParams = [currentOrgId, ...classScopeParams];
+    const activeClasses = count('SELECT COUNT(*) n FROM classes klass WHERE klass.org_id=? AND klass.status=\'ACTIVE\'' + teacherClassScope, activeClassParams);
+    const activeSessions = count('SELECT COUNT(*) n FROM class_sessions session JOIN classes klass ON klass.id=session.class_id WHERE klass.org_id=? AND session.status=\'ACTIVE\'' + teacherClassScope, activeClassParams);
     const students = count(
-      'SELECT COUNT(DISTINCT member.user_id) n FROM class_members member JOIN classes klass ON klass.id=member.class_id JOIN users student ON student.id=member.user_id WHERE klass.org_id=? AND klass.status=\'ACTIVE\' AND member.role=\'STUDENT\' AND member.removed_at IS NULL AND student.deleted_at IS NULL' + teacherScope,
+      'SELECT COUNT(DISTINCT member.user_id) n FROM class_members member JOIN classes klass ON klass.id=member.class_id JOIN users student ON student.id=member.user_id WHERE klass.org_id=? AND klass.status=\'ACTIVE\' AND member.role=\'STUDENT\' AND member.removed_at IS NULL AND student.deleted_at IS NULL' + teacherClassScope,
       activeClassParams,
     );
     const teachers = isTeacher ? 1 : count("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [currentOrgId]);
-    const worksScope = isTeacher
-      ? 'work.org_id=? AND work.class_id IS NOT NULL AND EXISTS (SELECT 1 FROM classes scoped_class WHERE scoped_class.id=work.class_id AND scoped_class.org_id=work.org_id AND (scoped_class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=scoped_class.id AND scoped_member.user_id=? AND scoped_member.role=\'TEACHER\' AND scoped_member.removed_at IS NULL)))'
-      : 'work.org_id=?';
-    const worksParams = isTeacher ? [currentOrgId, auth.user.id, auth.user.id] : [currentOrgId];
+    // 作品按「它所属的班级是不是我的班」圈定范围（同一段判定，复用 helper）
+    const workScopeParams = [];
+    const workClassScope = teacherScope('scoped_class', auth, workScopeParams);
+    const worksScope = 'work.org_id=? AND work.class_id IS NOT NULL AND EXISTS (SELECT 1 FROM classes scoped_class WHERE scoped_class.id=work.class_id AND scoped_class.org_id=work.org_id' + workClassScope + ')';
+    const worksParams = [currentOrgId, ...workScopeParams];
     const works = count('SELECT COUNT(*) n FROM works work WHERE ' + worksScope, worksParams);
     const pendingWorks = count('SELECT COUNT(*) n FROM works work WHERE ' + worksScope + ' AND work.status=\'PENDING\'', worksParams);
     const workBreakdown = rows('SELECT work.status,COUNT(*) n FROM works work WHERE ' + worksScope + ' GROUP BY work.status', worksParams)
       .reduce((result, item) => ({ ...result, [item.status]: Number(item.n || 0) }), {});
     const since7 = new Date(Date.now() - 7 * 86400000).toISOString();
-    const usageScope = isTeacher
-      ? 'usage.org_id=? AND usage.created_at>=? AND usage.class_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM class_sessions scoped_session JOIN classes scoped_class ON scoped_class.id=scoped_session.class_id WHERE scoped_session.id=usage.class_session_id AND (scoped_class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=scoped_class.id AND scoped_member.user_id=? AND scoped_member.role=\'TEACHER\' AND scoped_member.removed_at IS NULL)))'
-      : 'usage.org_id=? AND usage.created_at>=?';
-    const usageParams = isTeacher ? [currentOrgId, since7, auth.user.id, auth.user.id] : [currentOrgId, since7];
+    // 用量按「它挂在哪节课的课堂、那个班是不是我的班」圈定（同一段判定，复用 helper）
+    const usageScopeParams = [];
+    const usageClassScope = teacherScope('scoped_class', auth, usageScopeParams);
+    const usageScope = 'usage.org_id=? AND usage.created_at>=?'
+      + (usageClassScope ? ' AND usage.class_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM class_sessions scoped_session JOIN classes scoped_class ON scoped_class.id=scoped_session.class_id WHERE scoped_session.id=usage.class_session_id' + usageClassScope + ')' : '');
+    const usageParams = [currentOrgId, since7, ...usageScopeParams];
     // 2026-09-13（P4 删积分）：这里原来统计 SUM(credits_charged)（积分），积分废弃后恒为 0，
     // 改成数调用次数 —— 「近 7 天 AI 调用」这个口径仍然有意义。
     const usage7 = Number(row('SELECT COUNT(*) n FROM usage_records usage WHERE ' + usageScope, usageParams)?.n || 0);
-    const sessionParams = [currentOrgId, ...teacherParams];
+    const sessionParams = [currentOrgId, ...classScopeParams];
     const recentSessions = rows(
-      'SELECT session.id,session.class_id,session.lesson_id,session.status,session.started_at,session.ended_at,klass.name class_name,lesson.title lesson_title,starter.display_name starter_name FROM class_sessions session JOIN classes klass ON klass.id=session.class_id LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id LEFT JOIN users starter ON starter.id=session.started_by WHERE klass.org_id=?' + teacherScope + ' ORDER BY COALESCE(session.started_at,\'\') DESC LIMIT 8',
+      'SELECT session.id,session.class_id,session.lesson_id,session.status,session.started_at,session.ended_at,klass.name class_name,lesson.title lesson_title,starter.display_name starter_name FROM class_sessions session JOIN classes klass ON klass.id=session.class_id LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id LEFT JOIN users starter ON starter.id=session.started_by WHERE klass.org_id=?' + teacherClassScope + ' ORDER BY COALESCE(session.started_at,\'\') DESC LIMIT 8',
       sessionParams,
     ).map((item) => ({
       id: item.id, classId: item.class_id, className: item.class_name, lessonId: item.lesson_id || null, lessonTitle: item.lesson_title || null,
@@ -388,8 +394,11 @@ export async function handleOrg(ctx) {
     if (sessionId) { conditions.push('usage.class_session_id=?'); params.push(sessionId); }
     if (studentId) { conditions.push('usage.user_id=?'); params.push(studentId); }
     if (auth.user.role === 'TEACHER') {
-      conditions.push(`usage.class_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM class_sessions scoped_session JOIN classes scoped_class ON scoped_class.id=scoped_session.class_id WHERE scoped_session.id=usage.class_session_id AND scoped_class.org_id=? AND (scoped_class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=scoped_class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL)))`);
-      params.push(currentOrgId, auth.user.id, auth.user.id);
+      // 同一段范围判定，复用 helper（params 顺序：先 org_id，再 scope 自己的两个 id）
+      const teacherUsageParams = [];
+      const teacherUsageScope = teacherScope('scoped_class', auth, teacherUsageParams);
+      params.push(currentOrgId, ...teacherUsageParams);
+      conditions.push(`usage.class_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM class_sessions scoped_session JOIN classes scoped_class ON scoped_class.id=scoped_session.class_id WHERE scoped_session.id=usage.class_session_id AND scoped_class.org_id=?${teacherUsageScope})`);
     }
     if (search) { const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR class.name LIKE ? OR usage.fail_code LIKE ?)'); params.push(keyword, keyword, keyword, keyword, keyword); }
     const items = rows(`SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
@@ -567,7 +576,7 @@ export async function handleOrg(ctx) {
   }
   if (part === '/work-reports' && method === 'GET') {
     const params = [currentOrgId]; let where = 'report.org_id=?';
-    if (auth.user.role === 'TEACHER') { where += " AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))"; params.push(auth.user.id, auth.user.id); }
+    where += teacherScope('class', auth, params);
     const status = ctx.search.get('status'); if (['PENDING', 'RESOLVED', 'DISMISSED'].includes(status)) { where += ' AND report.status=?'; params.push(status); }
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
     const fromWhere = `FROM work_reports report JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id WHERE ${where}`;
@@ -637,7 +646,7 @@ export async function handleOrg(ctx) {
       where += " AND (work.title LIKE ? ESCAPE '\\' OR student.display_name LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\')";
       params.push(keyword, keyword, keyword);
     }
-    if (auth.user.role === 'TEACHER') { where += " AND (class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=class.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))"; params.push(auth.user.id, auth.user.id); }
+    where += teacherScope('class', auth, params);
     const items = rows(`SELECT work.*,student.display_name student_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.submitted_at DESC LIMIT 200`, params).map((work) => ({ ...normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }), pendingReportCount: Number(work.pending_report_count || 0) })); return { items };
   }
   let orgFeatureMatch = part.match(/^\/works\/([^/]+)\/feature$/);
