@@ -259,11 +259,14 @@ function studentCourseOverview(ctx) {
 }
 
 
-const STUDENT_AVATAR_KEYS = Object.freeze(['star', 'rocket', 'cat', 'fox', 'robot', 'panda', 'owl', 'whale']);
-const GUARDIAN_RELATIONSHIPS = Object.freeze(['PARENT', 'GRANDPARENT', 'OTHER_GUARDIAN']);
-const ACCOUNT_REQUEST_TYPES = Object.freeze(['DELETION', 'DATA_EXPORT']);
+// 2026-09-13：**学员自助合规套件已废掉**（用户决定）—— 学生自己改昵称/头像、填监护人、
+// 改隐私开关、点协议同意、提交账号申请（导出/注销）这些接口与它们的 helper/常量全部删除。
+// 保留且**仍被读取**的东西（删了会连带坏事）：
+//   · users.privacy_showcase_anonymous —— 公开作品广场拿它决定是否匿名展示；
+//   · users.privacy_allow_feature —— 平台「设精选」的门禁在读；
+//   · legal_consents / account_requests 两张表 —— 按本项目惯例「删代码不删表」，数据留着。
+//   · LEGAL_POLICY_VERSION —— /api/public/legal 与预约表单的同意校验还在用。
 const LEGAL_POLICY_VERSION = '2026.09.03';
-const LEGAL_CONSENT_TYPES = Object.freeze(['TERMS', 'PRIVACY', 'MINORS']);
 
 function assertCurrentPassword(ctx, value) {
   if (value === undefined || value === null || String(value).trim() === '') {
@@ -276,78 +279,12 @@ function assertCurrentPassword(ctx, value) {
   return currentPassword;
 }
 
-function normalizeStudentAvatarKey(value) {
-  if (value === undefined || value === null || value === '') return null;
-  const avatarKey = String(value);
-  if (!STUDENT_AVATAR_KEYS.includes(avatarKey)) throw errors.badRequest('请选择平台提供的头像', 'INVALID_AVATAR_KEY');
-  return avatarKey;
-}
-
-function normalizeStudentGuardian(value) {
-  if (value === null) return null;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw errors.badRequest('监护人信息无效', 'INVALID_GUARDIAN');
-  const hasAny = ['name', 'phone', 'relationship', 'consent'].some((key) => Object.hasOwn(value, key));
-  if (!hasAny) throw errors.badRequest('请完整填写监护人信息', 'GUARDIAN_INCOMPLETE');
-  const name = nonEmptyString(value.name, '监护人姓名', { max: 60 });
-  const phone = String(value.phone ?? '').trim();
-  if (!/^[0-9+\-\s]{6,20}$/.test(phone)) throw errors.badRequest('监护人手机号格式无效', 'INVALID_GUARDIAN_PHONE');
-  const relationship = String(value.relationship || '');
-  if (!GUARDIAN_RELATIONSHIPS.includes(relationship)) throw errors.badRequest('请选择监护人与学生的关系', 'INVALID_GUARDIAN_RELATIONSHIP');
-  if (value.consent !== true) throw errors.badRequest('需要监护人确认知晓并同意提供联系信息', 'GUARDIAN_CONSENT_REQUIRED');
-  return { name, phone, relationship };
-}
-
-function accountRequestRow(item) {
-  return {
-    id: item.id,
-    userId: item.user_id,
-    orgId: item.org_id,
-    type: item.type,
-    reason: item.reason || null,
-    status: item.status,
-    requestedAt: item.requested_at,
-    resolvedAt: item.resolved_at || null,
-    resolvedBy: item.resolved_by || null,
-    resolution: item.resolution || null,
-    exportPayload: item.export_payload ? parseJson(item.export_payload, null) : null,
-  };
-}
-
-function studentLegalConsents(userId, orgId) {
-  const items = rows('SELECT consent_type, version, consented_at, source FROM legal_consents WHERE user_id = ? AND org_id = ? ORDER BY consented_at DESC', [userId, orgId]);
-  const latest = Object.fromEntries(LEGAL_CONSENT_TYPES.map((type) => {
-    const match = items.find((item) => item.consent_type === type && item.version === LEGAL_POLICY_VERSION);
-    return [type, match ? { version: match.version, consentedAt: match.consented_at, source: match.source } : null];
-  }));
-  return {
-    version: LEGAL_POLICY_VERSION,
-    effectiveDate: '2026-09-03',
-    status: 'DRAFT_PENDING_LEGAL_CONFIRMATION',
-    items: items.map((item) => ({ type: item.consent_type, version: item.version, consentedAt: item.consented_at, source: item.source })),
-    current: latest,
-  };
-}
-
-function studentAccountRequests(userId, orgId) {
-  const items = rows(
-    'SELECT * FROM account_requests WHERE user_id = ? AND org_id = ? ORDER BY requested_at DESC LIMIT 100',
-    [userId, orgId],
-  ).map(accountRequestRow);
-  return {
-    items,
-    pendingRequests: {
-      deletion: items.some((item) => item.type === 'DELETION' && item.status === 'PENDING'),
-      dataExport: items.some((item) => item.type === 'DATA_EXPORT' && item.status === 'PENDING'),
-    },
-  };
-}
-
 function studentAccountOverview(ctx) {
   const rawUser = row('SELECT * FROM users WHERE id = ? AND org_id = ? AND deleted_at IS NULL', [ctx.auth.user.id, ctx.auth.user.orgId]);
   if (!rawUser) throw errors.notFound('学生账号不存在', 'STUDENT_NOT_FOUND');
   const sessions = rows('SELECT * FROM sessions WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [ctx.auth.user.id, ctx.auth.user.orgId, nowIso()]);
-  const accountRequests = studentAccountRequests(ctx.auth.user.id, ctx.auth.user.orgId);
-  const legalConsents = studentLegalConsents(ctx.auth.user.id, ctx.auth.user.orgId);
+  // 2026-09-13：学员自助合规套件废掉后，这里不再返回 legalConsents / profileOptions / requests
+  // （协议同意留痕、头像与监护人选项、账号申请都在被删的那套接口里，没有读取方了）。
   return {
     user: normalizeUser(rawUser),
     organization: normalizeOrg(ctx.auth.org),
@@ -357,14 +294,6 @@ function studentAccountOverview(ctx) {
     activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: null, lessonId: item.lessonId, lessonTitle: item.lessonTitle, status: item.status, deliveryMode: item.deliveryMode, teacherName: item.teacherName, startedAt: item.startedAt })),
     sessions: sessions.map((item) => ({ id: item.id, clientType: item.client_type, createdAt: item.created_at, expiresAt: item.expires_at, current: item.id === ctx.auth.session.id })),
     currentSessionId: ctx.auth.session.id,
-    legalConsents,
-    profileOptions: {
-      avatarKeys: [...STUDENT_AVATAR_KEYS],
-      guardianRelationships: [...GUARDIAN_RELATIONSHIPS],
-      dataMinimization: '平台只收集学习所需资料；不收集住址、身份证号和社交账号。监护人信息仅用于必要时联系，可随时清空。',
-    },
-    ...accountRequests,
-    requests: accountRequests,
   };
 }
 
@@ -428,90 +357,9 @@ export async function handleStudent(ctx) {
   }
   if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);
 
-  if (part === '/account/profile' && method === 'PUT') {
-    assertCurrentPassword(ctx, ctx.body?.currentPassword);
-    const displayName = nonEmptyString(ctx.body?.displayName, '显示名称', { max: 60 });
-    const avatarKey = normalizeStudentAvatarKey(ctx.body?.avatarKey);
-    const before = { displayName: auth.user.displayName, avatarKey: auth.rawUser.avatar_key || null };
-    q('UPDATE users SET display_name = ?, avatar_key = ?, updated_at = ? WHERE id = ? AND org_id = ?', [displayName, avatarKey, nowIso(), auth.user.id, auth.user.orgId]);
-    audit(ctx, 'STUDENT_PROFILE_UPDATE', 'USER', auth.user.id, before, { displayName, avatarKey });
-    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), updated: true };
-  }
-
-  if (part === '/account/guardian' && method === 'PUT') {
-    assertCurrentPassword(ctx, ctx.body?.currentPassword);
-    const guardian = normalizeStudentGuardian(ctx.body?.guardian);
-    const before = {
-      name: auth.rawUser.guardian_name || null,
-      phone: auth.rawUser.guardian_phone || null,
-      relationship: auth.rawUser.guardian_relationship || null,
-      consentedAt: auth.rawUser.guardian_consented_at || null,
-    };
-    const now = nowIso();
-    q(
-      'UPDATE users SET guardian_name = ?, guardian_phone = ?, guardian_relationship = ?, guardian_consented_at = ?, updated_at = ? WHERE id = ? AND org_id = ?',
-      guardian ? [guardian.name, guardian.phone, guardian.relationship, now, now, auth.user.id, auth.user.orgId] : [null, null, null, null, now, auth.user.id, auth.user.orgId],
-    );
-    audit(ctx, 'STUDENT_GUARDIAN_UPDATE', 'USER', auth.user.id, before, guardian ? { ...guardian, consentedAt: now } : null);
-    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), updated: true };
-  }
-
-  if (part === '/account/privacy' && method === 'PUT') {
-    assertCurrentPassword(ctx, ctx.body?.currentPassword);
-    if (!Object.hasOwn(ctx.body || {}, 'showcaseAnonymous') || typeof ctx.body.showcaseAnonymous !== 'boolean') throw errors.badRequest('作品墙匿名设置必须是布尔值', 'INVALID_PRIVACY_SETTING');
-    if (!Object.hasOwn(ctx.body || {}, 'allowFeature') || typeof ctx.body.allowFeature !== 'boolean') throw errors.badRequest('精选授权设置必须是布尔值', 'INVALID_PRIVACY_SETTING');
-    const before = { showcaseAnonymous: Boolean(auth.rawUser.privacy_showcase_anonymous), allowFeature: Boolean(auth.rawUser.privacy_allow_feature) };
-    q('UPDATE users SET privacy_showcase_anonymous = ?, privacy_allow_feature = ?, updated_at = ? WHERE id = ? AND org_id = ?', [ctx.body.showcaseAnonymous ? 1 : 0, ctx.body.allowFeature ? 1 : 0, nowIso(), auth.user.id, auth.user.orgId]);
-    audit(ctx, 'STUDENT_PRIVACY_UPDATE', 'USER', auth.user.id, before, { showcaseAnonymous: ctx.body.showcaseAnonymous, allowFeature: ctx.body.allowFeature });
-    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), updated: true };
-  }
-
-  if (part === '/account/legal-consents' && method === 'POST') {
-    assertCurrentPassword(ctx, ctx.body?.currentPassword);
-    if (String(ctx.body?.version || '').trim() !== LEGAL_POLICY_VERSION) throw errors.badRequest('协议版本已更新，请刷新后重试', 'LEGAL_VERSION_MISMATCH');
-    if (ctx.body?.confirmed !== true) throw errors.badRequest('请确认已阅读协议与隐私说明', 'LEGAL_CONSENT_CONFIRM_REQUIRED');
-    const types = Array.isArray(ctx.body?.types) ? [...new Set(ctx.body.types.map((item) => String(item).trim().toUpperCase()))] : [];
-    if (!types.length || types.some((type) => !LEGAL_CONSENT_TYPES.includes(type))) throw errors.badRequest('协议同意类型无效', 'INVALID_LEGAL_CONSENT_TYPE');
-    const now = nowIso();
-    transaction(() => {
-      types.forEach((type) => q('INSERT OR IGNORE INTO legal_consents(id,user_id,org_id,consent_type,version,consented_at,source) VALUES (?,?,?,?,?,?,?)', [id('legal_consent'), auth.user.id, auth.user.orgId, type, LEGAL_POLICY_VERSION, now, 'STUDENT_ACCOUNT']));
-    });
-    audit(ctx, 'STUDENT_LEGAL_CONSENT_CREATE', 'USER', auth.user.id, null, { types, version: LEGAL_POLICY_VERSION, consentedAt: now });
-    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), saved: types };
-  }
-
-  if (part === '/account/requests' && method === 'POST') {
-    assertCurrentPassword(ctx, ctx.body?.currentPassword);
-    const type = String(ctx.body?.type || '');
-    if (!ACCOUNT_REQUEST_TYPES.includes(type)) throw errors.badRequest('账号申请类型无效', 'INVALID_ACCOUNT_REQUEST_TYPE');
-    if (ctx.body?.confirmed !== true) throw errors.badRequest('请先确认知晓申请影响', 'ACCOUNT_REQUEST_CONFIRM_REQUIRED');
-    const reason = String(ctx.body?.reason || '').trim();
-    if (reason.length > 1000) throw errors.badRequest('申请原因不能超过 1000 个字符', 'ACCOUNT_REQUEST_REASON_TOO_LONG');
-    const duplicate = row('SELECT id FROM account_requests WHERE user_id = ? AND org_id = ? AND type = ? AND status = ?', [auth.user.id, auth.user.orgId, type, 'PENDING']);
-    if (duplicate) throw errors.conflict('你已提交过同类型的待处理申请', 'ACCOUNT_REQUEST_ALREADY_PENDING');
-    const requestId = id('account_request');
-    q('INSERT INTO account_requests(id,user_id,org_id,type,reason,status,requested_at) VALUES (?,?,?,?,?,?,?)', [requestId, auth.user.id, auth.user.orgId, type, reason || null, 'PENDING', nowIso()]);
-    audit(ctx, 'STUDENT_ACCOUNT_REQUEST_CREATE', 'ACCOUNT_REQUEST', requestId, null, { type, reason: reason || null });
-    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), request: accountRequestRow(row('SELECT * FROM account_requests WHERE id = ?', [requestId])) };
-  }
-
-  let accountRequestMatch = part.match(/^\/account\/requests\/([^/]+)$/);
-  if (accountRequestMatch && method === 'GET') {
-    const request = row('SELECT * FROM account_requests WHERE id = ? AND user_id = ? AND org_id = ?', [accountRequestMatch[1], auth.user.id, auth.user.orgId]);
-    if (!request) throw errors.notFound('账号申请不存在', 'ACCOUNT_REQUEST_NOT_FOUND');
-    return accountRequestRow(request);
-  }
-
-  accountRequestMatch = part.match(/^\/account\/requests\/([^/]+)\/cancel$/);
-  if (accountRequestMatch && method === 'PUT') {
-    assertCurrentPassword(ctx, ctx.body?.currentPassword);
-    const request = row('SELECT * FROM account_requests WHERE id = ? AND user_id = ? AND org_id = ?', [accountRequestMatch[1], auth.user.id, auth.user.orgId]);
-    if (!request) throw errors.notFound('账号申请不存在', 'ACCOUNT_REQUEST_NOT_FOUND');
-    if (request.status !== 'PENDING') throw errors.conflict('申请已处理，不能撤销', 'ACCOUNT_REQUEST_ALREADY_HANDLED');
-    q("UPDATE account_requests SET status = 'CANCELLED', resolved_at = ?, resolved_by = ? WHERE id = ? AND status = 'PENDING'", [nowIso(), auth.user.id, request.id]);
-    audit(ctx, 'STUDENT_ACCOUNT_REQUEST_CANCEL', 'ACCOUNT_REQUEST', request.id, accountRequestRow(request), { status: 'CANCELLED' });
-    return { ...refreshStudentAccount(ctx, auth.user.id, auth.user.orgId), cancelled: true };
-  }
+  // 2026-09-13：学员自助合规套件（改昵称/头像、监护人、隐私开关、协议同意、账号申请）已废掉，
+  // 这些分支与其 helper 一并删除。**保留** /account（概览）、/account/password、
+  // /account/sessions/:id/revoke —— 多设备会话与改密是学生确实要用的，守卫 p37 也钉着。
 
   if (part === '/account/password' && method === 'PUT') {
     const currentPassword = nonEmptyString(ctx.body?.currentPassword, '当前密码', { max: 500 });

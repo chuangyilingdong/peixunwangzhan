@@ -65,8 +65,6 @@ export {
   normalizeEnrollment,
   normalizeWorkPublishRequest,
   occupiedStudentSeats,
-  orgAccountRequestRow,
-  orgAccountRequestRows,
   orgAdminRows,
   orgContractMeta,
   orgId,

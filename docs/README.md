@@ -144,11 +144,20 @@ node scripts/p74-session-scope-columns.mjs # 范围字段必须被写入 + 回�
   `/api/student/billing-config/modalities`、`/api/ai/generations/history`（GET 列表 + POST 重试，
   与 `/api/ai/generations` 返回同一份 payload）。
 
+**已按你的决定废掉的**（2026-09-13）
+- **学员自助合规套件**：`/api/student/account/` 的 profile / guardian / privacy / legal-consents /
+  requests 六个端点与它们的 helper/常量全部删除；`studentAccountOverview` 不再返回
+  `legalConsents` / `profileOptions` / `requests`。
+  ⚠️ **连带影响（要知道）**：`users.privacy_showcase_anonymous` 与 `privacy_allow_feature` 这两个
+  开关**从此没有任何界面能改**（学生自助入口没了），只能按默认值走 —— 默认是**不匿名**、**允许精选**。
+  另：`privacy_showcase_anonymous` 被公开作品广场读取、`privacy_allow_feature` 被「设精选」的门禁读取，
+  **所以这两列与它们的读取都不能删**；`legal_consents` / `account_requests` 两张表按惯例保留数据不删。
+  官网协议/隐私/未成年人说明里那些「可在个人账号查看/清空/申请」的承诺已同步改成实际渠道（联系机构管理员）。
+- **学员站内信**：`/student/inbox`（列表 / 单条已读 / 全部已读）三个分支删除。
+  站内信功能本身没废 —— 机构端与平台端的 inbox 仍在，所以那几个通知 helper 保留（否则会连带删坏）。
+- 顺带删掉平台端 `orgAccountRequestRow(s)`（账号申请那套的残留，只在 import 名单里、没人调用）。
+
 **保留但**建议**你决策的**
-- **学员自助合规套件**（`/api/student/account/` 的 profile / guardian / privacy / legal-consents /
-  requests 六个端点）：功能完整、有数据表（`legal_consents`、`account_requests`、`guardian_*`、`privacy_*`），
-  但**学生端界面没有入口**。对未成年人平台这属于合规能力，我不敢替你删 —— 要么接上界面，要么明确废掉。
-- **学员站内信**（`/api/student/inbox*`）：后端有、学生端无界面（机构端与平台端的站内信是活的）。
 - **`/api/public/legal`**、`/api/me/display-name`：各三五行，零调用方，但都挨着合规/资料编辑，留给你判断。
 - **CSS 有压缩后的整块**（`packages/shared/src/styles.css` 最长行 10522 字符、`apps/website/src/styles.css`
   最长行 10745 字符）：不影响运行，但**没法 diff、没法读**。建议单独做一次「用格式化器重排」的

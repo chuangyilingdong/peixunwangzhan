@@ -530,36 +530,7 @@ function userLoginMeta(userIds) {
 
 
 
-function orgAccountRequestRow(value) {
-  return {
-    id: value.id,
-    userId: value.user_id,
-    orgId: value.org_id || null,
-    studentId: value.user_id,
-    studentName: value.student_name || null,
-    studentLogin: value.student_login || null,
-    type: value.type,
-    reason: value.reason || null,
-    status: value.status,
-    requestedAt: value.requested_at,
-    resolvedAt: value.resolved_at || null,
-    resolvedBy: value.resolved_by || null,
-    handlerName: value.handler_name || null,
-    resolution: value.resolution || null,
-    exportPayload: value.export_payload ? parseJson(value.export_payload, null) : null,
-  };
-}
 
-function orgAccountRequestRows(where, params) {
-  return rows(
-    `SELECT request.*, student.display_name AS student_name, student.login AS student_login, handler.display_name AS handler_name
-     FROM account_requests request
-     JOIN users student ON student.id=request.user_id AND student.org_id=request.org_id
-     LEFT JOIN users handler ON handler.id=request.resolved_by
-     WHERE ${where}`,
-    params,
-  ).map(orgAccountRequestRow);
-}
 
 function buildStudentDataExport(user, org) {
   const classes = rows(
@@ -1005,8 +976,6 @@ export {
   normalizeEnrollment,
   normalizeWorkPublishRequest,
   occupiedStudentSeats,
-  orgAccountRequestRow,
-  orgAccountRequestRows,
   orgAdminRows,
   orgContractMeta,
   orgId,

@@ -32,17 +32,14 @@ import {
   backoffSeconds,
   bool,
   claimDispatchJobs,
-  dispatchDueNotifications,
   dispatchRecipientEvent,
   effectiveNotificationStatus,
   enqueueDispatchJob,
   helpFeedbackRows,
   integer,
   listDeadLetters,
-  markAllNotificationsRead,
   markJobFailed,
   markJobSucceeded,
-  markNotificationRead,
   markRecipientFailed,
   materialRows,
   materialStats,
@@ -53,7 +50,6 @@ import {
   normalizeTemplate,
   normalizeWebsiteContent,
   notificationAdminRows,
-  notificationRecipientRows,
   notificationRecipients,
   orgId,
   releaseWorkerJobs,
@@ -113,14 +109,14 @@ export async function handleStudentCommunication(ctx) {
   const auth = requireRole(ctx, ['STUDENT']);
   const currentOrgId = orgId(auth);
   const part = pathname.slice('/api/student'.length);
-  if (part === '/inbox' && method === 'GET') {
-    dispatchDueNotifications();
-    const items = notificationRecipientRows(currentOrgId, auth.user.id);
-    return { items, unread: items.filter((item) => !item.readAt).length, total: items.length };
-  }
-  let match = part.match(/^\/inbox\/([^/]+)\/read$/);
-  if (match && method === 'PUT') return markNotificationRead(ctx, currentOrgId, match[1], auth.user.id);
-  if (part === '/inbox/read-all' && method === 'PUT') return markAllNotificationsRead(ctx, currentOrgId, auth.user.id);
+  // 2026-09-13：**学员站内信已废掉**（用户决定）—— /student/inbox（列表 / 单条已读 / 全部已读）
+  // 三个分支删除。注意：站内信功能本身没废，机构端与平台端的 inbox 仍在（communication/org.js
+  // 与 admin 侧），所以下面这些 helper 继续被那边用着，不能一起删。
+  //
+  // ⚠️ 这一行 `let match` 原来是跟着被删的 inbox 分支一起声明的（`let match = part.match(/^\/inbox\//)`），
+  //    删分支时把它一起删掉过 —— 下面 /help/feedback/:id 是**赋值**不是声明，于是整个处理函数
+  //    一进来就 ReferenceError（表现为 500 + 大片守卫同时红）。声明必须留着。
+  let match = null;
   if (part === '/help' && method === 'GET') {
     const items = helpFeedbackRows('feedback.user_id=? AND feedback.org_id=?', [auth.user.id, currentOrgId]);
     return {
