@@ -119,11 +119,17 @@ export async function handleOrganizations(ctx, part, method) {
     if (password.length < 6) throw errors.badRequest('请显式设置至少6位的管理员密码', 'ORG_ADMIN_INPUT_REQUIRED');
     if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
     const now = nowIso(); const organizationId = id('org');
+    const purchasedTeacherSeats = integer(body.purchasedTeacherSeats, '购买教师席位');
+    const totalTeacherSeats = body.teacherSeats === undefined ? null : integer(body.teacherSeats, '教师数量上限');
+    if (totalTeacherSeats !== null && totalTeacherSeats < purchasedTeacherSeats) throw errors.badRequest('教师数量上限不能低于已购买教师席位', 'TEACHER_SEATS_BELOW_PURCHASED');
+    const baseTeacherSeats = totalTeacherSeats === null
+      ? integer(body.baseTeacherSeats, '基础教师席位', { fallback: 3 })
+      : totalTeacherSeats - purchasedTeacherSeats;
     const contractStartAt = enrollmentDate(body.contractStartAt, '合同开始时间', now);
     const contractExpiresAt = enrollmentDate(body.contractExpiresAt, '合同到期时间', new Date(Date.now() + 365 * 86400000).toISOString());
     if (contractStartAt >= contractExpiresAt) throw errors.badRequest('合同开始时间必须早于到期时间', 'INVALID_CONTRACT_TIME');
     transaction(() => {
-      q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, body.isTrial ? 'TRIAL' : 'ACTIVE', contractStartAt, contractExpiresAt, body.isTrial ? 1 : 0, integer(body.baseTeacherSeats, '教师数量上限', { fallback: 3 }), integer(body.purchasedTeacherSeats, '购买教师席位'), integer(body.studentSeats, '学生数量上限'), json(contactPayload(body.contact ?? {})), auth.user.id, now, now]);
+      q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, body.isTrial ? 'TRIAL' : 'ACTIVE', contractStartAt, contractExpiresAt, body.isTrial ? 1 : 0, baseTeacherSeats, purchasedTeacherSeats, integer(body.studentSeats, '学生数量上限'), json(contactPayload(body.contact ?? {})), auth.user.id, now, now]);
       ensureOrgBilling(organizationId);
       q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('user'), organizationId, login, String(body.adminDisplayName || login).trim(), 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
     });
@@ -149,8 +155,12 @@ export async function handleOrganizations(ctx, part, method) {
     const contractStartAt = body.contractStartAt === undefined ? organization.contract_start_at : enrollmentDate(body.contractStartAt, '合同开始时间', null);
     const contractExpiresAt = body.contractExpiresAt === undefined ? organization.contract_expires_at : enrollmentDate(body.contractExpiresAt, '合同到期时间', null);
     if (contractStartAt >= contractExpiresAt) throw errors.badRequest('合同开始时间必须早于到期时间', 'INVALID_CONTRACT_TIME');
-    const baseTeacherSeats = body.baseTeacherSeats === undefined ? organization.base_teacher_seats : integer(body.baseTeacherSeats, '基础教师席位');
     const purchasedTeacherSeats = body.purchasedTeacherSeats === undefined ? organization.purchased_teacher_seats : integer(body.purchasedTeacherSeats, '购买教师席位');
+    const totalTeacherSeats = body.teacherSeats === undefined ? null : integer(body.teacherSeats, '教师数量上限');
+    if (totalTeacherSeats !== null && totalTeacherSeats < purchasedTeacherSeats) throw errors.badRequest('教师数量上限不能低于已购买教师席位', 'TEACHER_SEATS_BELOW_PURCHASED');
+    const baseTeacherSeats = totalTeacherSeats === null
+      ? (body.baseTeacherSeats === undefined ? organization.base_teacher_seats : integer(body.baseTeacherSeats, '基础教师席位'))
+      : totalTeacherSeats - purchasedTeacherSeats;
     const studentSeats = body.studentSeats === undefined ? Number(organization.student_seats || 0) : integer(body.studentSeats, '学生数量上限');
     const contact = body.contact === undefined ? parseJson(organization.contact, {}) : contactPayload(body.contact);
     const before = normalizeOrg(organization);

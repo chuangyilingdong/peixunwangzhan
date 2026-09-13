@@ -32,6 +32,7 @@ export function ProviderPolicyPanel({ api }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState('IMAGE');
+  const [routeSearch, setRouteSearch] = useState('');
   // 播客 / 配音已下线，不再出现在配置里
   const modalities = [['TEXT', '文本'], ['IMAGE', '图片'], ['MUSIC', '音乐'], ['VIDEO', '视频']];
   const policy = config.data?.policy;
@@ -78,26 +79,6 @@ export function ProviderPolicyPanel({ api }) {
   function clearCapabilityDrafts(index, modelId) {
     const prefix = `${index}:${modelId}:`;
     setCapabilityDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(prefix))));
-  }
-  // 每个模型可以有自己的请求模板（同渠道里不同模型的请求体可能完全不同）
-  const [templateEditor, setTemplateEditor] = useState('');
-  function modelTemplateText(channel, modelId) {
-    const template = channel?.modelRequestTemplates?.[modelId];
-    return template && typeof template === 'object' ? JSON.stringify(template, null, 2) : '';
-  }
-  function updateModelTemplate(index, modelId, text) {
-    const channel = form.channels[index];
-    const next = { ...(channel.modelRequestTemplates || {}) };
-    const trimmed = String(text || '').trim();
-    if (!trimmed) delete next[modelId];
-    else {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
-        next[modelId] = parsed;
-      } catch { return; }
-    }
-    updateChannel(index, { modelRequestTemplates: next });
   }
   // 音乐的生成模式：留空＝两种都支持
   function musicModesOf(declared) {
@@ -150,14 +131,12 @@ export function ProviderPolicyPanel({ api }) {
             {hasDeclared ? <span className="status success">已声明</span> : <span className="status">未声明（用默认值）</span>}
             {hasDeclared ? <button type="button" className="text-button" onClick={() => clearModelCapability(index, modelId)}>清空声明</button> : null}
             {hint ? <button type="button" className="text-link-button" onClick={() => { clearCapabilityDrafts(index, modelId); updateModelCapability(index, modelId, hint); }}>用上游返回的能力填充</button> : null}
-            <button type="button" className="text-link-button" onClick={() => setTemplateEditor(templateEditor === `${index}:${modelId}` ? '' : `${index}:${modelId}`)}>{templateEditor === `${index}:${modelId}` ? '收起请求模板' : '该模型的请求模板'}</button>
           </div>
           <div className="form-grid">
             {field(modelId, '比例', 'aspectRatios', '16:9, 9:16')}
             {field(modelId, '清晰度', 'resolutions', isVideo ? '480p, 720p' : '1k, 2k')}
             {isVideo ? field(modelId, '时长（秒）', 'durations', '5, 10') : null}
             {isVideo ? <label className="checkbox-label">{modelId} · 支持生成音频<input type="checkbox" checked={declared.audio === true} onChange={(event) => updateModelCapability(index, modelId, { audio: event.target.checked })} /></label> : null}
-            {templateEditor === `${index}:${modelId}` ? <label className="capability-template">{modelId} · 该模型的请求模板（只对这个模型生效，优先于渠道模板）<span className="muted">占位符：{'{'}model{'}'} {'{'}prompt{'}'} {'{'}aspectRatio{'}'} {'{'}resolution{'}'} {'{'}durationSeconds{'}'} {'{'}durationSecondsNumber{'}'} {'{'}audio{'}'} {'{'}firstFrameUrl{'}'} {'{'}lastFrameUrl{'}'}。留空＝用渠道/默认模板。整串写 {'{'}durationSecondsNumber{'}'} 会替换成数字，{'{{'}durationSeconds{'}}'} 是字符串。</span><textarea rows={8} value={modelTemplateText(channel, modelId)} placeholder="留空＝用渠道/默认模板" onChange={(event) => updateModelTemplate(index, modelId, event.target.value)} /></label> : null}
             {isMusic ? <label>{modelId} · 默认曲风（歌词模式下上游要求曲风必填，学生只写词时用这个）<input value={declared.defaultStyle || ''} placeholder="例如：适合儿童的中文流行歌曲，旋律明亮温暖" onChange={(event) => updateModelCapability(index, modelId, { defaultStyle: event.target.value })} /></label> : null}
             {isMusic ? <label>{modelId} · 生成模式（不选＝两种都支持）<span className="capability-modes">{MUSIC_MODE_OPTIONS.map(([value, label]) => <span key={value}><input type="checkbox" checked={musicModesOf(declared).includes(value)} onChange={(event) => { const current = musicModesOf(declared); const next = event.target.checked ? [...new Set([...current, value])] : current.filter((item) => item !== value); updateModelCapability(index, modelId, { modes: next }); }} />{label}</span>)}</span></label> : null}
             {isVideo ? <label>{modelId} · 输入画面（可多选，不选＝按模型名自动判断）<span className="capability-modes">{INPUT_MODE_OPTIONS.map(([value, label]) => <span key={value}><input type="checkbox" checked={inputModesOf(declared, modelId).includes(value)} onChange={(event) => { const current = inputModesOf(declared, modelId); const next = event.target.checked ? [...new Set([...current, value])] : current.filter((item) => item !== value); updateModelCapability(index, modelId, { inputModes: next, inputFrame: undefined }); }} />{label}</span>)}</span></label> : null}
@@ -192,7 +171,7 @@ export function ProviderPolicyPanel({ api }) {
   if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
   if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
   return <Panel title="AI 渠道配置">
-    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口；点“用当前渠道试一次”会按当前参数**真发一次最小请求**（视频 / 音乐可能要跑几分钟），用来确认上游认不认这套参数 —— 真实生成探测可能产生上游费用，但不扣学生额度。</Notice>
+    <Notice tone="warning">平台按下面的路由策略选择渠道和模型。测试连接只检查接口可达；“用当前渠道试一次”会发起真实生成，视频和音乐可能运行数分钟并产生上游费用。页面金额是估算或上游报告，真实结算金额未知，请以供应商账单为准。</Notice>
     {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
     <form onSubmit={save}>
       <div className="muted">渠道只负责保存供应商、模型和密钥；具体用哪个渠道，请在下面“能力路由”中切换。</div>
@@ -205,8 +184,7 @@ export function ProviderPolicyPanel({ api }) {
         {open === channel.id ? <>
           <div className="form-grid top-gap">
             <label>渠道名称<input value={channel.name || ''} onChange={(e) => updateChannel(index, { name: e.target.value })} placeholder="例如：图片-供应商A" required /></label>
-            <label>协议<select value={channel.protocol || 'CHAT'} onChange={(e) => updateChannel(index, { protocol: e.target.value })}><option value="CHAT">Chat Completions</option><option value="RESPONSES">Responses</option><option value="ANTHROPIC">Anthropic Messages</option></select></label>
-            <label>Endpoint<input value={channel.endpoint || ''} onChange={(e) => updateChannel(index, { endpoint: e.target.value })} placeholder="https://.../v1" required /></label>
+            <label>调用地址<input value={channel.endpoint || ''} onChange={(e) => updateChannel(index, { endpoint: e.target.value })} placeholder="https://.../v1" required /></label>
             <label>可用模型（勾选本渠道提供的模型）</label>
             <div className="channel-model-list">
               {/* ⚠️ 这里必须把「候选清单」和「已启用」两个来源合并渲染。
@@ -244,28 +222,40 @@ export function ProviderPolicyPanel({ api }) {
                 <small className="muted">它们会出现在学生端的模型下拉里，选中就以当前 Endpoint 去调用，大概率失败。要清掉就在上面取消勾选。</small>
               </div>;
             })()}
-            <label>手动添加模型 ID<input onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (v) { updateChannel(index, { models: [...new Set([...(channel.models || []), v])] }); e.target.value = ''; } } }} placeholder="输入后回车添加" /></label>
             <label>默认模型{(channel.models || []).length ? <select value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} required><option value="">请选择默认模型</option>{(channel.models || []).map((m) => <option key={m} value={m}>{m}</option>)}</select> : <input value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} placeholder="模型 ID" required />}</label>
             <label>上游估算成本（分 / 次，留空为未知）<input type="number" min="0" step="0.01" value={channel.estimatedCostFen ?? ''} onChange={e => updateChannel(index, { estimatedCostFen: e.target.value === '' ? null : Number(e.target.value) })} /></label><label>API Key<input type="password" value={channel.apiKey || ''} onChange={(e) => updateChannel(index, { apiKey: e.target.value })} placeholder="留空保持原密钥" autoComplete="new-password" /></label>
           </div>
+          <details className="top-gap"><summary>高级配置</summary>
+            <div className="form-grid top-gap">
+              <label>接口协议<select value={channel.protocol || 'CHAT'} onChange={(e) => updateChannel(index, { protocol: e.target.value })}><option value="CHAT">Chat Completions</option><option value="RESPONSES">Responses</option><option value="ANTHROPIC">Anthropic Messages</option></select></label>
+              <label>手动添加模型 ID<input onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (v) { updateChannel(index, { models: [...new Set([...(channel.models || []), v])] }); e.target.value = ''; } } }} placeholder="输入后回车添加" /></label>
+            </div>
+            {channelModality(channel.id) ? <details className="top-gap"><summary>请求模板</summary><div className="muted">仅在供应商要求特殊请求格式时配置；留空使用平台默认模板。</div><textarea rows={6} value={channelTemplateText(channel)} onChange={(e) => updateChannel(index, { requestTemplates: { ...(channel.requestTemplates || {}), [channelModality(channel.id)]: e.target.value } })} /></details> : null}
+          </details>
           <details className="top-gap"><summary>逐模型上游估算成本（分 / 次）</summary>{(channel.models || []).map(model => <label key={model}>{model}<input type="number" min="0" step="0.01" value={channel.modelCosts?.[model] ?? ''} placeholder="留空使用渠道估价" onChange={e => { const costs = {...(channel.modelCosts || {})}; if(e.target.value === '') delete costs[model]; else costs[model] = Number(e.target.value); updateChannel(index,{modelCosts:costs}); }} /></label>)}</details>
           {capabilityEditor(channel, index)}
-          {channelModality(channel.id) ? <details className="top-gap"><summary>请求模板（可选，高级）</summary><div className="muted">占位符：{'{'}model{'}'} {'{'}prompt{'}'} {'{'}aspectRatio{'}'} {'{'}resolution{'}'} {'{'}durationSeconds{'}'} {'{'}audio{'}'} {'{'}voice{'}'} {'{'}firstFrameUrl{'}'}。留空使用默认模板；若某家模型要求比例/音频放在顶层，把占位符挪到顶层即可。</div><textarea rows={6} value={channelTemplateText(channel)} onChange={(e) => updateChannel(index, { requestTemplates: { ...(channel.requestTemplates || {}), [channelModality(channel.id)]: e.target.value } })} /></details> : null}
           <div className="row-actions top-gap"><button type="button" className="secondary-button" disabled={busy} onClick={() => testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={() => probeChannel(channel, channelModality(channel.id) || 'TEXT')}>用当前渠道试一次</button><button type="button" className="secondary-button" disabled={busy} onClick={() => fetchModels(channel, index)}>读取模型</button></div>
         </> : null}
       </div>)}
       <div className="top-gap"><strong>能力路由（切换渠道）</strong><div className="muted">主渠道明确拒绝（认证失败、接口不存在、限流）时尝试备用渠道的默认模型。已输出、已受理或结果未知不自动重试；启用网关时主备由网关管理。</div></div>
       <div className="form-grid top-gap">{modalities.map(([id,name])=><div key={id}><label>{name} · 主渠道<select value={form.modalityChannels[id]||''} onChange={e=>setForm({...form,modalityChannels:{...form.modalityChannels,[id]:e.target.value}})}><option value="">使用默认渠道</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>{name} · 备用渠道<select value={form.modalityBackupChannels?.[id]||''} onChange={e=>setForm({...form,modalityBackupChannels:{...(form.modalityBackupChannels || {}),[id]:e.target.value}})}><option value="">不配置备用渠道</option>{form.channels.filter(c=>c.id!==form.modalityChannels[id]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div>)}</div>
-      <details className="top-gap" open><summary>逐模型主备路由</summary><p className="muted">按能力和主模型匹配，优先于能力默认路由。备用可选择不同渠道或同渠道其他模型；留空备用表示该模型不自动切换。</p>
-        {(form.modelRoutes || []).map((route,index) => { const patch = value => setForm({ ...form, modelRoutes: form.modelRoutes.map((item,i) => i === index ? { ...item,...value } : item) }); const models = id => [...new Set(form.channels.find(c => c.id === id)?.models || [])]; return <div className="form-grid top-gap" key={index}>
+      <details className="top-gap"><summary>平台路由策略</summary>
+        <p className="muted">平台按能力和用户选择的模型决定调用渠道；仅在上游明确拒绝且尚未产出结果时尝试备用。启用 new-api 后，文本和图片的渠道切换由网关管理；视频和音乐仍按这里的直接渠道执行。</p>
+        <label className="top-gap">搜索渠道或模型<input value={routeSearch} onChange={(event) => setRouteSearch(event.target.value)} placeholder="输入名称或模型 ID" /></label>
+        {(form.modelRoutes || []).map((route,index) => {
+          const patch = value => setForm({ ...form, modelRoutes: form.modelRoutes.map((item,i) => i === index ? { ...item,...value } : item) });
+          const matches = (value) => !routeSearch.trim() || String(value || '').toLowerCase().includes(routeSearch.trim().toLowerCase());
+          const channelOptions = (selectedId) => form.channels.filter((channel) => channel.id === selectedId || matches(channel.name) || matches(channel.id) || (channel.models || []).some(matches));
+          const modelOptions = (channelId, selectedModel) => [...new Set(form.channels.find(c => c.id === channelId)?.models || [])].filter((model) => model === selectedModel || matches(model));
+          return <div className="form-grid top-gap" key={index}>
           <label>能力<select value={route.modality} onChange={e => patch({modality:e.target.value})}>{modalities.map(([id,name]) => <option key={id} value={id}>{name}</option>)}</select></label>
-          <label>主渠道<select value={route.channelId} onChange={e => patch({channelId:e.target.value,model:''})}><option value="">选择渠道</option>{form.channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-          <label>主模型<select value={route.model} onChange={e => patch({model:e.target.value})}><option value="">选择模型</option>{models(route.channelId).map(m => <option key={m}>{m}</option>)}</select></label>
-          <label>备用渠道<select value={route.backupChannelId || ''} onChange={e => patch({backupChannelId:e.target.value,backupModel:''})}><option value="">不自动切换</option>{form.channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-          <label>备用模型<select disabled={!route.backupChannelId} value={route.backupModel || ''} onChange={e => patch({backupModel:e.target.value})}><option value="">选择模型</option>{models(route.backupChannelId).map(m => <option key={m}>{m}</option>)}</select></label>
-          <button type="button" className="secondary-button" onClick={() => setForm({...form, modelRoutes:form.modelRoutes.filter((_,i) => i !== index)})}>删除路由</button>
+          <label>调用渠道<select value={route.channelId} onChange={e => patch({channelId:e.target.value,model:''})}><option value="">选择渠道</option>{channelOptions(route.channelId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <label>用户可选模型<select value={route.model} onChange={e => patch({model:e.target.value})}><option value="">选择模型</option>{modelOptions(route.channelId, route.model).map(m => <option key={m}>{m}</option>)}</select></label>
+          <label>故障备用渠道<select value={route.backupChannelId || ''} onChange={e => patch({backupChannelId:e.target.value,backupModel:''})}><option value="">不自动切换</option>{channelOptions(route.backupChannelId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <label>故障备用模型<select disabled={!route.backupChannelId} value={route.backupModel || ''} onChange={e => patch({backupModel:e.target.value})}><option value="">选择模型</option>{modelOptions(route.backupChannelId, route.backupModel).map(m => <option key={m}>{m}</option>)}</select></label>
+          <button type="button" className="secondary-button" onClick={() => setForm({...form, modelRoutes:form.modelRoutes.filter((_,i) => i !== index)})}>删除策略</button>
         </div>; })}
-        <button type="button" className="secondary-button top-gap" onClick={() => setForm({...form,modelRoutes:[...(form.modelRoutes || []),{modality:'TEXT',channelId:'',model:'',backupChannelId:'',backupModel:''}]})}>添加模型路由</button>
+        <button type="button" className="secondary-button top-gap" onClick={() => setForm({...form,modelRoutes:[...(form.modelRoutes || []),{modality:'TEXT',channelId:'',model:'',backupChannelId:'',backupModel:''}]})}>添加路由策略</button>
       </details>
       <label className="checkbox-label top-gap"><input type="checkbox" checked={Boolean(form.allowStudentExternalContent)} onChange={e=>setForm({...form,allowStudentExternalContent:e.target.checked})} />允许学生创作内容发送到外部 AI 服务</label>
       <div className="row-actions top-gap"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部渠道配置'}</button></div>

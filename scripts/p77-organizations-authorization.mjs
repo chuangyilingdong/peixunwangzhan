@@ -26,7 +26,7 @@ await rejects(() => org(a.id,'/users','GET',null,'TEACHER'), 'ORG_ADMIN_REQUIRED
 await rejects(() => org(a.id,'/course-grants','GET',null,'TEACHER'), 'ORG_ADMIN_REQUIRED');
 q("INSERT INTO course_series(id,title,status,owner_type,visibility,stock_total,created_at,updated_at) VALUES ('p77','Inventory','PUBLISHED','PLATFORM','ASSIGNED_ORGS',3,?,?)",[now,now]);
 const assign=(body)=>admin('/course-series/p77/assignments','POST',body);
-await rejects(()=>assign({orgIds:[a.id,b.id],quotaTotal:2}), 'COURSE_QUOTA_EXCEEDS_STOCK');
+await rejects(()=>assign({orgIds:[a.id,b.id],quotaTotal:2}), 'INVALID_ORG_IDS');
 assert.equal(row("SELECT COUNT(*) n FROM course_assignments WHERE series_id='p77'").n,0);
 await assign({orgIds:[a.id],quotaTotal:2});
 await assign({orgIds:[a.id],validityDays:730});

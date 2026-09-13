@@ -25,10 +25,7 @@ export function ModelCompute({ api }) {
     </> : <>
       <ProviderPolicyPanel api={api} />
       <PricingPanel api={api} />
-      <details className="admin-detail"><summary>网关连接与令牌管理（可选）</summary>
-        <Notice>网关是可选的调用出口。启用连接不代表所有调用均经过网关，也不保证网关金额等于供应商最终账单。地址与凭据需来自实际部署的网关。</Notice>
-        <GatewayPanel api={api} />
-      </details>
+      <GatewayPanel api={api} />
       <BillingSettings api={api} />
     </>}
   </>;

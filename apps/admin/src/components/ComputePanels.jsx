@@ -2,26 +2,25 @@
 //
 // 为什么拆：原来「算力网关」和「计费与模型」是两个页面，配一次上游要来回跳（用户反馈理解成本太高）。
 // 现在合并成一页、按步骤走，这里放**算力侧的三个面板**：
-//   GatewayPanel      ③ 算力网关连接 + 渠道池 + 令牌分发（可选的精确计费出口）
+//   GatewayPanel      ③ 可选的 new-api 网关状态与连接配置
 //   PricingPanel      ② 每次调用单价（对学生的售价）
 //   ComputeUsagePanel ④ 用量归集 + 算力池 + 两本账对账
 // 三个面板各自管自己的数据（互不依赖），所以能独立放进步骤里、也能单独刷新。
 import { useEffect, useState } from 'react';
-import { Empty, ErrorState, Loading, Notice, Panel, Status, formatCredits, formatDate, useData } from '@platform/shared';
+import { ErrorState, Loading, Notice, Panel, formatDate, useData } from '@platform/shared';
 
 /** 金额（元）显示：归集结果里已经是元，别再套积分格式。 */
 const yuan = (value) => value == null ? '未知' : `¥${Number(value).toFixed(2)}`;
 
-/* ─────────────── ③ 算力网关：连接 + 渠道池 + 令牌分发 ─────────────── */
+/* ─────────────── ③ 算力网关：可选的统一调用出口 ─────────────── */
 export function GatewayPanel({ api }) {
   const config = useData(() => api.get('admin/compute-gateway'), [api]);
   const [form, setForm] = useState({ baseUrl: '', username: 'root', password: '', enabled: false });
+  const [expanded, setExpanded] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [testResult, setTestResult] = useState(null);
-  const [channels, setChannels] = useState(null);
-  const [tokens, setTokens] = useState(null);
 
   // 配置读回来才填表单：密码永不回显，留空表示「不改」
   useEffect(() => {
@@ -30,7 +29,10 @@ export function GatewayPanel({ api }) {
     setForm({ baseUrl: value.baseUrl || '', username: value.username || 'root', password: '', enabled: value.enabled === true });
   }, [config.data, saved]);
 
-  const enabled = config.data?.config?.enabled === true;
+  const gateway = config.data?.config;
+  const enabled = gateway?.enabled === true;
+  const configured = Boolean(gateway?.baseUrl && gateway?.passwordConfigured);
+  const status = enabled ? (configured ? '已启用' : '配置未完成') : (configured ? '已配置，保持关闭' : '未配置，保持关闭');
 
   async function save() {
     setBusy(true); setMessage('');
@@ -51,51 +53,31 @@ export function GatewayPanel({ api }) {
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
-  async function loadChannels() {
-    setBusy(true); setMessage('');
-    try { setChannels((await api.get('admin/compute-gateway/channels')).items || []); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  }
-
-  async function loadTokens({ keepMessage = false } = {}) {
-    setBusy(true); if (!keepMessage) setMessage('');
-    try { setTokens((await api.get('admin/compute-gateway/tokens')).items || []); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  }
-
-  return <>
-    {message && <Notice tone={message.includes('已') || message.includes('连上') ? 'success' : 'danger'}>{message}</Notice>}
-
-    <Panel title="网关连接（没有网关就跳过这一块）">
-      {config.loading ? <Loading /> : config.error ? <ErrorState error={config.error} onRetry={config.refresh} /> : <>
+  return <Panel
+    title="new-api 网关（可选）"
+    actions={<button type="button" className="secondary-button" disabled={config.loading} onClick={() => setExpanded((value) => !value)}>{expanded ? '收起配置' : '配置连接'}</button>}
+  >
+    {config.loading ? <Loading label="正在读取网关状态…" /> : config.error ? <ErrorState error={config.error} onRetry={config.refresh} /> : <>
+      <div className="row-actions"><span className={`status ${enabled && configured ? 'success' : ''}`}>{status}</span></div>
+      <p>new-api 用于集中管理文本、图片调用出口。未部署或未配置时请保持关闭，平台会继续使用上面的直接渠道，不影响正常生成。</p>
+      <p className="muted">当前网关不接管视频和音乐，这两类仍使用平台直接渠道。网关用量与平台估算都不等于供应商最终账单；真实结算金额未知，请以上游供应商账单为准。</p>
+      {expanded ? <>
+        {message && <Notice tone={message.includes('已') || message.includes('连上') ? 'success' : 'danger'}>{message}</Notice>}
         <div className="form-grid">
-          <label>new-api 的地址<input value={form.baseUrl} placeholder="和平台同一台机器：http://127.0.0.1:3000；独立机器：http://服务器IP:3000" onChange={(event) => { setSaved(false); setForm({ ...form, baseUrl: event.target.value }); }} /></label>
-          <label>new-api 的管理员账号<input value={form.username} placeholder="new-api 后台的账号，默认 root" onChange={(event) => { setSaved(false); setForm({ ...form, username: event.target.value }); }} /></label>
-          <label>new-api 的管理员密码<input type="password" value={form.password} placeholder={config.data?.config?.passwordConfigured ? '已配置（留空表示不改）' : 'new-api 后台的登录密码'} onChange={(event) => { setSaved(false); setForm({ ...form, password: event.target.value }); }} /></label>
-          <label>启用<select value={form.enabled ? '1' : '0'} onChange={(event) => { setSaved(false); setForm({ ...form, enabled: event.target.value === '1' }); }}><option value="0">未启用（保持默认就好：AI 调用直接走上游，额度与归属照样算）</option><option value="1">启用（调用改走网关）</option></select></label>
+          <label>new-api 地址<input value={form.baseUrl} placeholder="例如：http://127.0.0.1:3000" onChange={(event) => { setSaved(false); setForm({ ...form, baseUrl: event.target.value }); }} /></label>
+          <label>管理员账号<input value={form.username} placeholder="默认 root" onChange={(event) => { setSaved(false); setForm({ ...form, username: event.target.value }); }} /></label>
+          <label>管理员密码<input type="password" value={form.password} placeholder={gateway?.passwordConfigured ? '已配置（留空表示不改）' : 'new-api 后台登录密码'} onChange={(event) => { setSaved(false); setForm({ ...form, password: event.target.value }); }} /></label>
+          <label>连接状态<select value={form.enabled ? '1' : '0'} onChange={(event) => { setSaved(false); setForm({ ...form, enabled: event.target.value === '1' }); }}><option value="0">关闭（平台继续使用直接渠道）</option><option value="1">启用网关</option></select></label>
         </div>
         <div className="row-actions top-gap">
-          <button className="primary-button" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存配置'}</button>
-          <button className="secondary-button" disabled={busy || !enabled} title={enabled ? '' : '先保存并启用'} onClick={test}>测试连接</button>
-          {testResult ? <span className="muted">连上了：网关账号 {testResult.gatewayUser || '—'}，耗时 {testResult.latencyMs} ms</span> : null}
+          <button type="button" className="primary-button" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存配置'}</button>
+          <button type="button" className="secondary-button" disabled={busy || !enabled || !configured} title={enabled && configured ? '' : '先保存完整配置并启用'} onClick={test}>测试连接</button>
+          {testResult ? <span className="muted">网关账号 {testResult.gatewayUser || '—'}，耗时 {testResult.latencyMs} ms</span> : null}
         </div>
-        <p className="muted">这里填的是 <strong>new-api 后台的账号</strong>（和你的平台账号无关），密码加密存在服务器的密钥文件里（AES-256-GCM）、不回显、不落库；换网关或换账号时重填一次。没有网关？这一块跳过就行，不影响其他步骤。</p>
-      </>}
-    </Panel>
-
-    <Panel title="渠道池（只读，渠道与密钥在网关上维护）" actions={<button className="secondary-button" disabled={busy || !enabled} onClick={loadChannels}>读取渠道</button>}>
-      {!enabled ? <Empty title="先启用网关" body="启用并测连成功后，这里会显示网关上的渠道（主用/备用）。" />
-        : !channels ? <Empty title="还没有读取" body="点右上角「读取渠道」，或者在渠道出问题时用它确认备用渠道是否还在。" />
-          : channels.length ? <div className="table-wrap"><table><thead><tr><th>渠道</th><th>地址</th><th>模型</th><th>状态</th></tr></thead><tbody>
-            {channels.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><div className="muted">#{item.id} · {item.group || '默认分组'}</div></td><td className="muted">{item.baseUrl || '—'}</td><td className="muted">{item.models || '—'}</td><td>{item.status === 1 ? <Status value="ACTIVE" /> : <span className="status danger">已停用</span>}</td></tr>)}
-          </tbody></table></div> : <Empty title="网关上还没有渠道" body="请先在 new-api 里配置渠道与密钥。" />}
-    </Panel>
-
-    <Panel title="内部调用身份" actions={<button className="secondary-button" disabled={busy || !enabled} onClick={loadTokens}>刷新身份</button>}>
-      <p>机构与学生身份由服务器自动管理，密钥不发送到浏览器。学生调用不限金额；课堂预算仅供平台预警。旧手工令牌的额度不作为学生预算。</p>
-      {tokens?.map(item => <p key={item.id}>{item.name} · {item.status === 1 ? '启用' : '停用'}</p>)}
-    </Panel>
-  </>;
+        <p className="muted">账号与密码来自 new-api 后台，不是平台账号。密码只保存在服务器并且不会回显；保持关闭时不会尝试连接网关。</p>
+      </> : null}
+    </>}
+  </Panel>;
 }
 
 /* ─────────────── ② 每次调用单价 ─────────────── */

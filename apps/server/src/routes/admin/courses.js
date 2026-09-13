@@ -85,6 +85,29 @@ import {
   workReportRows,
 } from './helpers.js';
 
+function singleAssignmentOrgId(body) {
+  const directOrgId = String(body?.orgId || '').trim();
+  if (body?.orgIds !== undefined) {
+    if (!Array.isArray(body.orgIds) || body.orgIds.length !== 1) throw errors.badRequest('一次只能操作一家机构', 'INVALID_ORG_IDS');
+    const legacyOrgId = String(body.orgIds[0] || '').trim();
+    if (!legacyOrgId || (directOrgId && directOrgId !== legacyOrgId)) throw errors.badRequest('机构标识无效', 'INVALID_ORG_IDS');
+    return directOrgId || legacyOrgId;
+  }
+  if (!directOrgId) throw errors.badRequest('请选择有效的机构', 'INVALID_ORG_IDS');
+  return directOrgId;
+}
+
+function assignmentSnapshot(assignment) {
+  if (!assignment) return null;
+  const quotaTotal = Number(assignment.quota_total || 0);
+  const quotaUsed = Number(assignment.quota_used || 0);
+  return {
+    id: assignment.id, orgId: assignment.org_id, status: assignment.status,
+    quotaTotal, quotaUsed, remaining: assignment.status === 'ACTIVE' ? Math.max(0, quotaTotal - quotaUsed) : 0,
+    expiresAt: assignment.expires_at || null,
+  };
+}
+
 export async function handleCourses(ctx, part, method) {
   let match = null; // 课包授权路由沿用原来的 match 变量
   if (part === '/course-series' && method === 'GET') {
@@ -490,41 +513,79 @@ export async function handleCourses(ctx, part, method) {
   if (match && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [match[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    const requestedOrgIds = Array.isArray(ctx.body?.orgIds) ? ctx.body.orgIds : null;
-    if (!requestedOrgIds || requestedOrgIds.length === 0 || requestedOrgIds.length > 500) throw errors.badRequest('请选择有效的机构', 'INVALID_ORG_IDS');
-    const assignmentOrgIds = [...new Set(requestedOrgIds.map((value) => String(value || '').trim()).filter(Boolean))];
-    if (assignmentOrgIds.length !== requestedOrgIds.length) throw errors.badRequest('机构标识无效或重复', 'INVALID_ORG_IDS');
-    const placeholders = assignmentOrgIds.map(() => '?').join(','); const existingOrgs = rows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, assignmentOrgIds);
-    if (existingOrgs.length !== assignmentOrgIds.length) throw errors.badRequest('存在不存在的机构', 'ORG_NOT_FOUND');
+    const organizationId = singleAssignmentOrgId(ctx.body);
+    if (!row('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     const now = nowIso();
-    // 有效期挂在「课包 → 机构」的授权上：平台课包本身不设有效期。
     const validityDays = integer(ctx.body?.validityDays, '授权有效期（天）', { min: 1, max: 3650, fallback: 365 });
     const expiresAt = new Date(Date.now() + validityDays * 86400000).toISOString();
+    let before = null;
     const result = transaction(() => {
       const currentSeries = row('SELECT * FROM course_series WHERE id=?', [series.id]);
       if (currentSeries.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
-      const updates = assignmentOrgIds.map((organizationId) => {
-        const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
-        const quotaTotal = ctx.body?.quotaTotal === undefined && existing
-          ? Number(existing.quota_total) : integer(ctx.body?.quotaTotal, '授权总次数', { min: 1, max: 100000000 });
-        if (quotaTotal < 1) throw errors.badRequest('授权次数必须为正数', 'COURSE_QUOTA_REQUIRED');
-        if (quotaTotal < Number(existing?.quota_used || 0)) throw errors.conflict('授权次数不能低于已使用次数', 'COURSE_QUOTA_BELOW_USED');
-        return { organizationId, existing, quotaTotal };
-      });
-      // 撤销只释放未消耗的额度；已消耗次数仍占库存。过期授权保留余额以便续期。
+      const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
+      before = assignmentSnapshot(existing);
+      const quotaTotal = ctx.body?.quotaTotal === undefined && existing
+        ? Number(existing.quota_total) : integer(ctx.body?.quotaTotal, '授权总次数', { min: 1, max: 100000000 });
+      if (quotaTotal < Number(existing?.quota_used || 0)) throw errors.conflict('授权次数不能低于已使用次数', 'COURSE_QUOTA_BELOW_USED');
       const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
-      const delta = updates.reduce((n, { existing, quotaTotal }) => n + quotaTotal - (existing ? Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used) : 0), 0);
+      const delta = quotaTotal - (existing ? Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used) : 0);
       if (reserved + delta > Number(currentSeries.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
-      updates.forEach(({ organizationId, existing, quotaTotal }) => {
-        if (existing) {
-          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
-          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
-        } else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
-      });
-      return updates.map(({ organizationId, quotaTotal }) => ({ orgId: organizationId, quotaTotal }));
+      if (existing) {
+        assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
+        q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
+      } else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
+      return assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]));
     });
-    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds, validityDays, expiresAt, allocations: result });
-    return { assignedCount: result.length, validityDays, expiresAt, quotaTotal: result[0]?.quotaTotal, allocations: result };
+    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_ASSIGNMENT', result.id, before, result, { orgId: organizationId });
+    return { assignedCount: 1, validityDays, expiresAt, quotaTotal: result.quotaTotal, allocations: [result] };
+  }
+
+  const assignmentAppendMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/append$/);
+  if (assignmentAppendMatch && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const organizationId = singleAssignmentOrgId(ctx.body);
+    const additionalQuota = integer(ctx.body?.additionalQuota, '追加次数', { min: 1, max: 100000000 });
+    if (!row('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    let before = null;
+    const after = transaction(() => {
+      const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [assignmentAppendMatch[1]]);
+      if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
+      if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
+      const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
+      before = assignmentSnapshot(existing);
+      const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+      if (reserved + additionalQuota > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+      if (existing) {
+        assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
+        const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
+        q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [auth.user.id, nowIso(), baseQuota + additionalQuota, existing.id]);
+      } else {
+        const expiresAt = new Date(Date.now() + 365 * 86400000).toISOString();
+        q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, organizationId, 'ACTIVE', auth.user.id, nowIso(), expiresAt, additionalQuota]);
+      }
+      return assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]));
+    });
+    audit(ctx, 'COURSE_ASSIGNMENT_QUOTA_APPEND', 'COURSE_ASSIGNMENT', after.id, before, { ...after, additionalQuota }, { orgId: organizationId });
+    return { assignment: after, additionalQuota };
+  }
+
+  const assignmentValidityMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/validity$/);
+  if (assignmentValidityMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const organizationId = singleAssignmentOrgId(ctx.body);
+    const expiresAtDate = new Date(ctx.body?.expiresAt);
+    if (!ctx.body?.expiresAt || Number.isNaN(expiresAtDate.getTime())) throw errors.badRequest('请选择有效的到期时间', 'INVALID_ASSIGNMENT_EXPIRY');
+    if (expiresAtDate.getTime() <= Date.now()) throw errors.badRequest('到期时间必须晚于当前时间', 'INVALID_ASSIGNMENT_EXPIRY');
+    if (expiresAtDate.getTime() > Date.now() + 3650 * 86400000) throw errors.badRequest('有效期不能超过 3650 天', 'INVALID_ASSIGNMENT_EXPIRY');
+    const expiresAt = expiresAtDate.toISOString();
+    const assignment = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [assignmentValidityMatch[1], organizationId]);
+    if (!assignment) throw errors.notFound('该机构尚未获得此课包授权', 'ASSIGNMENT_NOT_FOUND');
+    if (assignment.status !== 'ACTIVE') throw errors.conflict('请先追加次数恢复授权，再调整有效期', 'ASSIGNMENT_NOT_ACTIVE');
+    const before = assignmentSnapshot(assignment);
+    q('UPDATE course_assignments SET expires_at=? WHERE id=?', [expiresAt, assignment.id]);
+    const after = assignmentSnapshot(row('SELECT * FROM course_assignments WHERE id=?', [assignment.id]));
+    audit(ctx, 'COURSE_ASSIGNMENT_VALIDITY_UPDATE', 'COURSE_ASSIGNMENT', assignment.id, before, after, { orgId: organizationId });
+    return { assignment: after };
   }
 
   if (part === '/authorizations' && method === 'GET') {

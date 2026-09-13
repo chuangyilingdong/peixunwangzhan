@@ -16,7 +16,8 @@
 //   ④ 完课判定＝这个学生在这节课消耗过算力（真实成功调用，不依赖金额），结束课堂时自动结算。
 //   ⑤ 课堂自带入口类型：画布课堂 / VibeCoding 课堂，一个课堂只有一种。
 import { useEffect, useId, useRef, useState } from 'react';
-import { Empty, ErrorState, Loading, MetricCard, Notice, PageHeader, Panel, formatDate, formatYuan, useData } from '@platform/shared';
+import { useNavigate, useParams } from 'react-router-dom';
+import { Empty, ErrorState, Loading, MetricCard, Notice, PageHeader, Panel, SearchSelect, formatDate, formatYuan, useData } from '@platform/shared';
 
 const SESSION_STATE = {
   PENDING: { label: '待上课', tone: 'warning' },
@@ -58,9 +59,11 @@ function Modal({ title, description, children, onClose, footer }) {
 
 export function Classrooms({ api, user }) {
   const isAdmin = user.role === 'ORG_ADMIN';
+  const navigate = useNavigate();
+  const { sessionId = '' } = useParams();
+  const openId = sessionId;
   const [status, setStatus] = useState('');
   const [days, setDays] = useState('90');
-  const [openId, setOpenId] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -94,7 +97,8 @@ export function Classrooms({ api, user }) {
   const teacherItems = teachers.data?.items || [];
   const currentSeries = seriesItems.find((item) => item.id === form.seriesId) || null;
   const lessonOptions = (currentSeries?.lessons || []).filter((item) => item.status === 'PUBLISHED');
-
+  const selectedLesson = lessonOptions.find((lesson) => lesson.id === form.lessonId) || null;
+  const lessonModes = selectedLesson?.deliveryModes || [];
   const current = detail.data || sessions.find((item) => item.id === openId) || null;
   const summary = detail.data?.studentSummary || {};
   const selectable = candidates.data?.selectable || [];
@@ -110,6 +114,18 @@ export function Classrooms({ api, user }) {
     ended: sessions.filter((item) => item.status === 'ENDED').length,
     dissolved: sessions.filter((item) => item.status === 'DISSOLVED').length,
   };
+
+  function openSession(id) {
+    navigate('/classrooms/' + encodeURIComponent(id), { state: { fromClassroomList: true } });
+    setPicked([]);
+    setMessage('');
+    setError('');
+  }
+
+  function closeSession() {
+    if (window.history.state?.usr?.fromClassroomList) navigate(-1);
+    else navigate('/classrooms', { replace: true });
+  }
 
   async function run(action, fallback = '操作完成。') {
     setBusy(true); setError(''); setMessage('');
@@ -128,7 +144,7 @@ export function Classrooms({ api, user }) {
       });
       setCreateOpen(false);
       setForm({ seriesId: '', lessonId: '', title: '', teacherId: '', deliveryMode: 'CANVAS' });
-      setOpenId(created?.id || '');
+      openSession(created?.id || '');
     }, '课堂已创建（待上课）。接下来加学员，然后点「开始上课」。');
   }
 
@@ -168,7 +184,7 @@ export function Classrooms({ api, user }) {
       </>}
     />
 
-    {ongoingSession ? <Notice tone="info">当前课堂：<strong>{ongoingSession.title}</strong> · {SESSION_STATE[ongoingSession.status]?.label}。结束或解散后可创建下一场。<button className="text-button" onClick={() => { setOpenId(ongoingSession.id); setPicked([]); }}>管理当前课堂</button></Notice> : null}
+    {ongoingSession ? <Notice tone="info">当前课堂：<strong>{ongoingSession.title}</strong> · {SESSION_STATE[ongoingSession.status]?.label}。结束或解散后可创建下一场。<button className="text-button" onClick={() => openSession(ongoingSession.id)}>管理当前课堂</button></Notice> : null}
     {message ? <Notice tone="success">{message}</Notice> : null}
     {error ? <Notice tone="danger">{error}</Notice> : null}
 
@@ -194,7 +210,7 @@ export function Classrooms({ api, user }) {
           <td><StateBadge value={item.status} map={SESSION_STATE} /></td>
           <td>{item.studentCount ?? 0}<div className="muted">完课 {item.completedCount ?? 0}</div></td>
           <td className="muted">{formatDate(item.startedAt || item.createdAt)}</td>
-          <td><button type="button" className="text-button" onClick={() => { setOpenId(item.id); setPicked([]); setMessage(''); setError(''); }}>{openId === item.id ? '收起' : '管理'}</button></td>
+          <td><button type="button" className="text-button" onClick={() => openSession(item.id)}>管理</button></td>
         </tr>)}</tbody>
       </table></div> : <Empty title="还没有课堂" body="点右上角「创建课堂」：选课包、选第几节课，然后添加学员。" />}
     </Panel> : null}
@@ -207,7 +223,7 @@ export function Classrooms({ api, user }) {
           <button className="secondary-button" disabled={busy} onClick={() => setConfirm({ kind: 'dissolve' })}>解散课堂</button>
         </> : null}
         {current?.status === 'ACTIVE' ? <button className="primary-button" disabled={busy} onClick={() => setConfirm({ kind: 'end' })}>结束课堂</button> : null}
-        <button className="secondary-button" onClick={() => setOpenId('')}>返回课堂列表</button>
+        <button className="secondary-button" onClick={closeSession}>返回课堂列表</button>
       </div>
     }>
       {detail.loading ? <Loading label="正在读取课堂详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : <>
@@ -286,10 +302,7 @@ export function Classrooms({ api, user }) {
         <button className="primary-button" disabled={busy || !form.lessonId} onClick={createSession}>创建课堂</button>
       </>}
     >
-      <label>课包<select value={form.seriesId} onChange={(event) => setForm({ ...form, seriesId: event.target.value, lessonId: '', deliveryMode: 'CANVAS' })}>
-        <option value="">请选择课包</option>
-        {seriesItems.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
-      </select></label>
+      <label>课包<SearchSelect ariaLabel="搜索课包" value={form.seriesId} options={seriesItems} placeholder="请选择课包" getLabel={(item) => item.title} onChange={(seriesId) => setForm({ ...form, seriesId, lessonId: '', deliveryMode: 'CANVAS' })} /></label>
       {series.loading ? <p className="muted">正在读取可授权的课包…</p> : null}
       {!series.loading && !seriesItems.length ? <Notice tone="warning">本机构还没有被授权任何课包：先让平台把课包授权给本机构（见「课程中心」）。</Notice> : null}
       <label>第几节课<select value={form.lessonId} onChange={(event) => {
@@ -300,14 +313,9 @@ export function Classrooms({ api, user }) {
         {lessonOptions.map((lesson) => <option key={lesson.id} value={lesson.id}>第 {lesson.sort} 节 · {lesson.title}</option>)}
       </select></label>
       {form.seriesId && !series.loading && !lessonOptions.length ? <Notice tone="warning">这个课包还没有已发布的课时，不能开课。</Notice> : null}
-      <label>入口类型<select value={form.deliveryMode} disabled={!form.lessonId} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}>
-        {(lessonOptions.find((lesson) => lesson.id === form.lessonId)?.deliveryModes || []).map((mode) => <option key={mode} value={mode}>{DELIVERY_LABEL[mode]}</option>)}
-      </select></label>
-      <p className="muted">一个课堂只有一种入口类型：画布课堂进画布，VibeCoding 课堂进 VibeCoding 工作区。</p>
-      {isAdmin ? <label>负责老师<select value={form.teacherId} onChange={(event) => setForm({ ...form, teacherId: event.target.value })}>
-        <option value="">挂在我自己名下</option>
-        {teacherItems.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName || teacher.login}</option>)}
-      </select></label> : null}
+      {lessonModes.length > 1 ? <div className="card-list">{lessonModes.map((mode) => <button type="button" key={mode} className={form.deliveryMode === mode ? 'item-card selected' : 'item-card'} onClick={() => setForm({ ...form, deliveryMode: mode })}><strong>{DELIVERY_LABEL[mode]}</strong><span className="muted">按已批准方案提供的工作区</span></button>)}</div> : null}
+      {lessonModes.length > 1 ? <p className="muted">已选工作区：{DELIVERY_LABEL[form.deliveryMode] || form.deliveryMode}</p> : null}
+      {isAdmin ? <label>负责老师<SearchSelect ariaLabel="搜索负责老师" value={form.teacherId} options={teacherItems} placeholder="挂在我自己名下" getLabel={(item) => item.displayName || item.login} onChange={(teacherId) => setForm({ ...form, teacherId })} /></label> : null}
       <label>课堂名称（可留空）<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="留空就自动取「课时名 · 日期」" /></label>
       {!isAdmin ? <p className="muted">教师同一时刻只能有一个待上课或上课中的课堂；请先结束或解散当前课堂再创建。</p> : <p className="muted">你是机构管理员，可以看到并管理本机构的全部课堂。</p>}
     </Modal> : null}
