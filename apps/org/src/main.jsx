@@ -692,7 +692,7 @@ function OrgPage({ kind, user }) {
 }
 
 
-function App() {
+export function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
   useEffect(() => { if (session?.token) api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);

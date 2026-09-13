@@ -352,7 +352,7 @@ function LearnVibeCodingPage({ api }) {
 function LearnVibeCodingConversationPage({ api }) {
   return <VibeCodingWorkspace api={api} />;
 }
-function App(){
+export function App(){
   const loc = useLocation();
   const navigate = useNavigate();
   const [session, setSession] = useState(readUserSession);

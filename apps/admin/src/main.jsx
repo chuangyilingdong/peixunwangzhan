@@ -21,7 +21,7 @@ import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
 
-function App() {
+export function App() {
   const [session, setSession] = useState(readSession); const navigate = useNavigate();
   const api = useMemo(() => createApiClient({ getToken: () => session?.token, onUnauthorized: () => { clearSession(); setSession(null); navigate('/login'); } }), [session?.token, navigate]);
   useEffect(() => { if (!session?.token) return; api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);

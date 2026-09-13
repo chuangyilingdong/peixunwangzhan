@@ -269,7 +269,7 @@ export function PlatformBilling({ api }) {
   return <>
     <PageHeader eyebrow="平台计费" title="计费与用量" description="查看全平台算力消耗、能力分布、机构排名和用量明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
     <div className="metrics">
-      <MetricCard label="算力消耗合计" value={formatYuan(overview.data?.totalFen || 0)} hint={`近 ${days} 日全部机构`} />
+      <MetricCard label="算力消耗合计" value={formatYuan(overview.data?.totalFen || 0)} hint={`近 ${filters.days} 日全部机构`} />
       <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
       <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `累计消耗 ${formatYuan(overview.data.topOrgs[0].costFen)}` : '暂无消耗'} tone="orange" />
       <MetricCard label="当前明细" value={records.data?.total ?? 0} hint="当前筛选条件命中的记录数" tone="pink" />
