@@ -10,7 +10,7 @@ import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiG
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, handlePublicFileAssets } from './routes/fileAssets.js';
 // 2026-09-13（P4 删积分）：adminCredits.js / websiteCredits.js 两个路由文件已删除（积分体系下线）。
-import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
+import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handleVibeCoding } from './routes/vibecoding.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 import { domainStateContract } from './services/domainState.js';
@@ -105,9 +105,7 @@ const server = http.createServer(async (req, res) => {
       ?? await handleAdminBillingConfig(ctx)
       ?? await handleOrg(ctx)
       ?? await handleOrgCommunication(ctx)
-      ?? await handleOrgFileAssets(ctx)
-      ?? await handleOrgBillingConfig(ctx)
-      ?? await handleStudentCommunication(ctx)
+      ?? await handleOrgFileAssets(ctx)      ?? await handleStudentCommunication(ctx)
       ?? await handleStudentFileAssets(ctx)
       ?? await handleStudentBillingConfig(ctx)
       ?? await handleVibeCoding(ctx)

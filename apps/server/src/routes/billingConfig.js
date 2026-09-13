@@ -625,67 +625,16 @@ export async function handleAdminBillingConfig(ctx) {
   return null;
 }
 
-export async function handleOrgBillingConfig(ctx) {
-  const { pathname, method } = ctx;
-  if (!pathname.startsWith('/api/org/billing-config')) return null;
-  const part = pathname.slice('/api/org'.length);
-  const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']);
-  if (!auth.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
-
-  // 机构可读：模态（platform 层级）、本机构覆盖
-  if (part === '/billing-config/modalities' && method === 'GET') {
-    return { items: getModalitySettings() };
-  }
-  if (part === '/billing-config/alerts' && method === 'GET') {
-    return { items: getAlerts() };
-  }
-  if (part === '/billing-config/org-overrides' && method === 'GET') {
-    return { items: getOrgOverrides(auth.user.orgId) };
-  }
-  if (part === '/billing-config/org-overrides' && method === 'POST') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可设置能力覆盖', 'ORG_ADMIN_REQUIRED');
-    const body = ctx.body || {};
-    const modality = String(body.modality || '').toUpperCase();
-    if (!VALID_MODALITIES.has(modality)) throw errors.badRequest('modality 无效', 'INVALID_MODALITY');
-    const enabled = body.enabled === undefined ? 1 : (bool(body.enabled) ? 1 : 0);
-    const reason = String(body.reason || '').trim().slice(0, 500);
-    const existing = row('SELECT * FROM org_capability_overrides WHERE org_id=? AND modality=?', [auth.user.orgId, modality]);
-    const now = nowIso();
-    if (existing) {
-      q("UPDATE org_capability_overrides SET enabled=?, reason=?, updated_at=? WHERE id=?", [enabled, reason, now, existing.id]);
-      logChange('ORG_OVERRIDE', existing.id, 'enabled', existing.enabled, enabled, auth.user.id, reason);
-      audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_UPDATE', 'ORG_CAPABILITY_OVERRIDE', existing.id, { before: existing, after: { enabled, reason } }, { orgId: auth.user.orgId });
-      return normalizeOrgOverride(row('SELECT * FROM org_capability_overrides WHERE id=?', [existing.id]));
-    }
-    const id = `orgov_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
-    q('INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [id, auth.user.orgId, modality, enabled, reason, auth.user.id, now, now]);
-    logChange('ORG_OVERRIDE', id, 'create', '', JSON.stringify({ orgId: auth.user.orgId, modality, enabled }), auth.user.id, reason);
-    audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_CREATE', 'ORG_CAPABILITY_OVERRIDE', id, null, { orgId: auth.user.orgId, modality, enabled, reason });
-    return normalizeOrgOverride(row('SELECT * FROM org_capability_overrides WHERE id=?', [id]));
-  }
-  const ovrDelMatch = part.match(/^\/billing-config\/org-overrides\/([^/]+)$/);
-  if (ovrDelMatch && method === 'DELETE') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可删除能力覆盖', 'ORG_ADMIN_REQUIRED');
-    const target = row('SELECT * FROM org_capability_overrides WHERE id=? AND org_id=?', [ovrDelMatch[1], auth.user.orgId]);
-    if (!target) throw errors.notFound('覆盖不存在', 'ORG_OVERRIDE_NOT_FOUND');
-    q('DELETE FROM org_capability_overrides WHERE id=?', [target.id]);
-    logChange('ORG_OVERRIDE', target.id, 'delete', JSON.stringify({ orgId: target.org_id, modality: target.modality, enabled: target.enabled }), '', auth.user.id, '');
-    audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_DELETE', 'ORG_CAPABILITY_OVERRIDE', target.id, normalizeOrgOverride(target), null, { orgId: auth.user.orgId });
-    return { id: target.id, deleted: true };
-  }
-  return null;
-}
 
 export async function handleStudentBillingConfig(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/student/billing-config')) return null;
   const part = pathname.slice('/api/student'.length);
   const auth = requireRole(ctx, ['STUDENT']);
+  // 注意：这里只保留 /billing-config/effective-capabilities（守卫 p67 在用）——
+  // 学生端的 /billing-config/modalities 与机构端整块已随「零调用方」清理删除。
   if (!auth.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
 
-  if (part === '/billing-config/modalities' && method === 'GET') {
-    return { items: getModalitySettings() };
-  }
   if (part === '/billing-config/effective-capabilities' && method === 'GET') {
     // 暴露给学生：把"机构覆盖 + 平台默认"合并后的真实可用能力
     const modalities = getModalitySettings();

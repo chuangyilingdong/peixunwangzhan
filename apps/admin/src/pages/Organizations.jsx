@@ -128,7 +128,7 @@ export function Organizations({ api }) {
         </div>
         <button className="primary-button" disabled={saving}>{saving ? '创建中…' : '创建机构'}</button>
       </form></Panel>
-      <Panel title="服务规则说明"><Notice tone="info">停用机构后，该机构全部现有登录会话立即失效，无法新建班级、开课堂或调用 AI；恢复服务要求合同未到期，成功后机构用户可重新登录或继续使用未失效会话。所有状态和资料变更都会写入审计。</Notice></Panel>
+      <Panel title="服务规则说明"><Notice tone="info">停用机构后，该机构全部现有登录会话立即失效，无法新建课堂、开课堂或调用 AI；恢复服务要求合同未到期，成功后机构用户可重新登录或继续使用未失效会话。所有状态和资料变更都会写入审计。</Notice></Panel>
     </div>
     {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
     <Panel title="机构列表">
@@ -185,7 +185,7 @@ export function Organizations({ api }) {
           <Panel title="业务汇总"><div className="table-wrap"><table><thead><tr><th>指标</th><th>数量</th></tr></thead><tbody>
             <tr><td>教师</td><td>{detail.data.summary.teachers}</td></tr>
             <tr><td>学生</td><td>{detail.data.summary.students}</td></tr>
-            <tr><td>进行中班级</td><td>{detail.data.summary.activeClasses}</td></tr>
+            <tr><td>进行中课堂</td><td>{detail.data.summary.activeClasses}</td></tr>
             <tr><td>进行中课堂</td><td>{detail.data.summary.activeSessions}</td></tr>
             <tr><td>项目</td><td>{detail.data.summary.projects}</td></tr>
             <tr><td>作品</td><td>{detail.data.summary.works}</td></tr>

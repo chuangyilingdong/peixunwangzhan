@@ -52,3 +52,6 @@ gui-test-screenshots/
 
 # 本地上传目录（运行时产生的文件，不进仓库；测试跑冒烟会往这里写）
 var/uploads/
+
+# 本地构建产物 / 发布目录（服务器上的 release 在 /srv，不进仓库；留着会污染全仓搜索）
+deploy/releases/

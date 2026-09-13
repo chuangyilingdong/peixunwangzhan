@@ -1,5 +1,51 @@
 # 生产环境运行手册
 
+> 本文件只放**运维用的命令与流程**。产品口径、设计约定、踩过的坑见 `docs/README.md`（最终文档）
+> 与 `docs/operations/交接说明.md`。
+> ⚠️ 「发布记录（2026-09-08）」往后的内容是**历史快照**，当时的入口/班级口径已不适用 ——
+> 只当历史看。当前可执行的流程看本文的「发布流程（当前）」一节。
+
+## 发布流程（当前，2026-09-13 起）
+
+服务器上**必须先补 Node 到 PATH**，否则会报 `node: not found`（运行时 Node 在
+`/srv/ai-kids-platform/runtime/node/bin`）。
+
+```bash
+ssh -i ~/.ssh/ai_kids_platform_ecs_temp_ed25519 root@39.106.183.200
+cd /srv/ai-kids-platform/internal-test/source        # 目录名沿用，内测服务已删
+export PATH=/srv/ai-kids-platform/runtime/node/bin:$PATH
+git pull --ff-only                                   # 先确认本地已 push
+cd deploy/production
+bash backup-production.sh                            # 先备份（整库）
+bash build-production.sh                             # 产出 releases/<stamp>
+cd /srv/ai-kids-platform/production
+ln -sfn /srv/ai-kids-platform/production/releases/<stamp> current
+systemctl restart learning-platform-production
+# 核验：BUILD-METADATA 的 commit / is-active / NRestarts=0 / health / 三端入口 200
+```
+
+回滚 = 把 `current` 软链切回上一版 release 目录再重启（所有历史 release 目录都保留）；
+数据库回滚用 `backups/<stamp>/platform.db`。
+
+发布后要在**服务器上**做公网验收（本机出口封 HTTPS）：
+
+```bash
+for u in https://iicili.cyou/ https://iicili.cyou/admin/ https://iicili.cyou/org/ \
+         https://iicili.cyou/student/ https://iicili.cyou/api/health; do
+  printf "%s " "$u"; curl -s -o /dev/null -m 12 -w "%{http_code}\n" "$u"; done
+```
+
+### 长期 SSH 通道（用户已授权保留）
+
+- 服务器 `39.106.183.200`，用户 `root`；本机私钥 `C:/Users/Administrator/.ssh/ai_kids_platform_ecs_temp_ed25519`
+  （文件名保留历史 `temp` 字样，自 2026-09-04 起按用户授权长期保留）。
+- 服务器 `authorized_keys` 里对应公钥注释：`codex-temporary-ai-kids-platform-20260904`，**不得删除**，除非负责人明确撤销。
+- **严禁**在仓库、日志、聊天输出或文档里粘贴私钥内容、口令、token —— 只记路径与公钥注释。
+- 安全组：SSH 只对当前出口 IP 放行 TCP 22，**不要**用 `0.0.0.0/0`；出口 IP 会变，不在文档里写死。
+  SSH 超时先查本机网络，再让用户在云控制台改来源 IP。
+- 复杂远程操作走「本地写脚本 → 转 LF → `scp` 上传 → `ssh bash /tmp/...`」，
+  避开 Windows CRLF 与 PowerShell 转义（`node -e` 里写多行 SQL/JSX 必翻车）。
+
 ## 当前架构
 
 - 域名：`https://iicili.cyou`

@@ -90,7 +90,7 @@ export function PlatformWorks({ api }) {
           <h4>学生与上下文</h4>
           <p><strong>学生：</strong>{detail.data.studentName || '—'}（{detail.data.studentLogin}）</p>
           <p><strong>机构：</strong>{detail.data.organizationName || '未绑定'}</p>
-          <p><strong>班级：</strong>{detail.data.className || '—'}</p>
+          <p><strong>课堂：</strong>{detail.data.sessionTitle || detail.data.className || '—'}</p>
           <p><strong>精选授权：</strong>{detail.data.studentAllowFeature ? '已授权' : '已关闭'}</p>
           <p><strong>作品墙匿名：</strong>{detail.data.studentShowcaseAnonymous ? '是' : '否'}</p>
           <p><strong>批注数量：</strong>{detail.data.annotationCount}（展示最新 {detail.data.annotations.length} 条）</p>

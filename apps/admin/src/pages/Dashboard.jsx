@@ -48,7 +48,7 @@ export function Dashboard({ api }) {
         <MetricCard label="学生" value={metrics.students ?? 0} hint={definition('students')} tone="pink" />
         <MetricCard label="已发布课程" value={metrics.publishedCourses ?? 0} hint={definition('publishedCourses')} />
         <MetricCard label="课程授权" value={metrics.activeAssignments ?? 0} hint={definition('activeAssignments')} tone="teal" />
-        <MetricCard label="进行中班级" value={metrics.activeClasses ?? 0} hint={definition('activeClasses')} tone="orange" />
+        <MetricCard label="课堂场次（查询期）" value={metrics.classSessions ?? 0} hint={definition('classSessions')} tone="orange" />
         <MetricCard label="课堂场次" value={metrics.classSessions ?? 0} hint={definition('classSessions')} tone="pink" />
         <MetricCard label="新增项目" value={metrics.projects ?? 0} hint={definition('projects')} />
         <MetricCard label="提交作品" value={metrics.works ?? 0} hint={definition('works')} tone="teal" />

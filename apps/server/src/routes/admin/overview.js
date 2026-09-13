@@ -293,7 +293,7 @@ export async function handleOverview(ctx, part, method) {
           students: '未删除、未禁用且未过期的机构学生数量。',
           publishedCourses: '平台已发布课程系列数；不受机构筛选影响。',
           activeAssignments: 'ACTIVE 状态课程授权数。',
-          activeClasses: 'ACTIVE 状态班级数，为存量口径。',
+          activeClasses: '历史班级数（存量）。班级已退场，此数不再变化，仅作历史对照 —— 要看课堂看 classSessions。',
           classSessions: '查询时间内启动的课堂场次。',
           projects: '查询时间内创建的项目数。',
           works: '查询时间内提交的作品数。',

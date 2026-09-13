@@ -604,7 +604,7 @@ function WorkspaceView({ api }) {
           <span className="c-avatar"><ConsoleIcon name="bookOpen" size={14} /></span>
           <div className="c-sidebar__foot-text">
             <strong>{data.lessonTitle || 'VibeCoding 课堂'}</strong>
-            <small>{data.className || '未配置班级'}</small>
+            <small>{data.teacherName || '未配置老师'}</small>
           </div>
         </>
       )}

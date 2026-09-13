@@ -384,7 +384,6 @@ export async function handleOrg(ctx) {
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const modality = String(ctx.search.get('modality') || '').trim().toUpperCase();
     const status = String(ctx.search.get('status') || '').trim().toUpperCase();
-    const classId = String(ctx.search.get('classId') || '').trim();
     const sessionId = String(ctx.search.get('sessionId') || '').trim();
     const studentId = String(ctx.search.get('studentId') || '').trim();
     const search = String(ctx.search.get('search') || '').trim();
@@ -393,7 +392,6 @@ export async function handleOrg(ctx) {
     const params = [currentOrgId, since]; const conditions = ['usage.org_id=?', 'usage.created_at>=?'];
     if (modality) { conditions.push('usage.modality=?'); params.push(modality); }
     if (status) { conditions.push('usage.status=?'); params.push(status); }
-    if (classId) { conditions.push('class.id=?'); params.push(classId); }
     if (sessionId) { conditions.push('usage.class_session_id=?'); params.push(sessionId); }
     if (studentId) { conditions.push('usage.user_id=?'); params.push(studentId); }
     if (auth.user.role === 'TEACHER') {
@@ -405,18 +403,17 @@ export async function handleOrg(ctx) {
     }
     if (search) { const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR class.name LIKE ? OR usage.fail_code LIKE ?)'); params.push(keyword, keyword, keyword, keyword, keyword); }
     const items = rows(`SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
-      class.id class_id,class.name class_name,session.lesson_id session_lesson_id,lesson.title lesson_title,
+      session.title session_title,session.lesson_id session_lesson_id,lesson.title lesson_title,
       job.provider job_provider,job.model job_model
       FROM usage_records usage
       LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id
       LEFT JOIN student_projects project ON project.id=usage.project_id AND project.org_id=usage.org_id
       LEFT JOIN class_sessions session ON session.id=usage.class_session_id
-      LEFT JOIN classes class ON class.id=session.class_id AND class.org_id=usage.org_id
       LEFT JOIN course_lessons lesson ON lesson.id=COALESCE(session.lesson_id, project.course_lesson_id)
       LEFT JOIN generation_jobs job ON job.id=usage.generation_job_id AND job.org_id=usage.org_id
       WHERE ${conditions.join(' AND ')} ORDER BY usage.created_at DESC LIMIT ${limit}`, params).map((item) => ({
       id: item.id, userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
-      classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
+      classSessionId: item.class_session_id || null, classId: item.class_id || null, sessionTitle: item.session_title || null,
       lessonId: item.session_lesson_id || item.project_lesson_id || null, lessonTitle: item.lesson_title || null,
       projectId: item.project_id || null, projectTitle: item.project_title || null, generationJobId: item.generation_job_id || null,
       modality: item.modality, model: item.model || item.job_model || null, provider: item.job_provider || null,
@@ -424,7 +421,7 @@ export async function handleOrg(ctx) {
       costFen: Number(item.cost_fen || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
-    return { items, total: items.length, filters: { days, modality: modality || null, status: status || null, classId: classId || null, sessionId: sessionId || null, studentId: studentId || null } };
+    return { items, total: items.length, filters: { days, modality: modality || null, status: status || null, sessionId: sessionId || null, studentId: studentId || null } };
   }
   if (part === '/billing/usage-overview' && method === 'GET') {
     // 2026-09-13（P4 删积分）：机构账单口径从「积分余额」换成「算力消耗（元）」。
@@ -435,25 +432,6 @@ export async function handleOrg(ctx) {
       modalities: rows('SELECT modality,SUM(cost_fen) costFen,COUNT(*) calls FROM usage_records WHERE org_id=? AND created_at>=? GROUP BY modality ORDER BY costFen DESC', [currentOrgId, since]),
       topUsers: rows('SELECT user.id,user.display_name studentName,SUM(usage.cost_fen) costFen,COUNT(*) calls FROM usage_records usage JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id WHERE usage.org_id=? AND usage.created_at>=? GROUP BY user.id ORDER BY costFen DESC LIMIT 10', [currentOrgId, since]),
     };
-  }
-  if (part === '/billing/usage-records' && method === 'GET') {
-    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const modality = ctx.search.get('modality'); const status = ctx.search.get('status'); const search = String(ctx.search.get('search') || '').trim();
-    const since = new Date(Date.now() - days * 86400000).toISOString(); const params = [currentOrgId, since]; const conditions = ['usage.org_id=?', 'usage.created_at>=?'];
-    if (modality) { conditions.push('usage.modality=?'); params.push(modality); }
-    if (['SUCCESS', 'FAILED', 'BLOCKED'].includes(status)) { conditions.push('usage.status=?'); params.push(status); }
-    if (search) { conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR work.title LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword, keyword); }
-    const items = rows(
-      'SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,class.id class_id,class.name class_name FROM usage_records usage LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id LEFT JOIN classes class ON class.id=session.class_id WHERE ' + conditions.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200',
-      params,
-    ).map((item) => ({
-      id: item.id, userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
-      classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
-      lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
-      workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
-      costFen: Number(item.cost_fen || 0),
-      status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
-    }));
-    return { items, total: items.length };
   }
 
   if (part === '/course-series' && method === 'GET') {
@@ -674,7 +652,6 @@ export async function handleOrg(ctx) {
     const items = rows(
       `SELECT report.*, work.title AS work_title, work.status AS work_status, reporter.display_name AS reporter_name, handler.display_name AS handler_name
        FROM work_reports report JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id
-       LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
        JOIN users reporter ON reporter.id=report.reporter_id LEFT JOIN users handler ON handler.id=report.handled_by
        WHERE ${where}
        ORDER BY CASE report.status WHEN 'PENDING' THEN 0 ELSE 1 END, report.created_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset],

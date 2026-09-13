@@ -51,7 +51,7 @@ export function MyWorksPage({ api }) {
         <h3>{work.title}</h3>
         <span className={`student-badge ${work.plazaPublished ? 'is-ok' : ''}`}>{workPlazaLabel(work)}</span>
       </div>
-      <p className="student-card__meta">{work.courseLessonTitle || '未绑定课时'} · {work.className || '未绑定班级'}</p>
+      <p className="student-card__meta">{work.courseLessonTitle || '未绑定课时'} · {work.sessionTitle || work.className || '未绑定课堂'}</p>
       {work.description ? <p className="student-card__desc">{work.description}</p> : null}
       {work.status === 'REJECTED' && work.unpublishReason ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
       <p className="student-card__foot">提交于 {formatDate(work.submittedAt)}</p>

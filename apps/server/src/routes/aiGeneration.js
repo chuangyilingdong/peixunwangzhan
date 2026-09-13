@@ -865,6 +865,9 @@ export async function handleAiGeneration(ctx) {
   requireRole(ctx, ['STUDENT']);
 
   if (pathname === '/api/ai/center' && method === 'GET') return studentAiCenter(ctx);
+  // 说明：原来的 /api/ai/generations/history（GET 列表 / POST 重试）已删除 ——
+  // 它与下方 /api/ai/generations（列表）返回同一份 payload，且没有任何调用方（界面与守卫都没用过）。
+  // 保留的是 /api/ai/generations?projectId=…（列表，画布在用）、/history/:jobId（详情）、/cancel（取消）。
   if (pathname === '/api/ai/generations/async' && method === 'POST') {
     const body = ctx.body || {}; const projectId = String(body.projectId || '').trim(); const prompt = String(body.prompt || '').trim(); const title = String(body.title || '').trim().slice(0, 100); const modality = modalityOf(body.modality); const boxId = String(body.boxId || '').trim().slice(0, 64);
     if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
@@ -911,23 +914,6 @@ export async function handleAiGeneration(ctx) {
     if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);
     return jobDetail(jobId, { requireAuth: auth });
-  }
-  if (pathname === '/api/ai/generations/history' && method === 'GET') return generationHistory(auth, ctx.search);
-  if (pathname === '/api/ai/generations/history' && method === 'POST') {
-    const body = ctx.body || {};
-    const sourceJobId = String(body.jobId || '').trim();
-    if (!sourceJobId || sourceJobId.length > 100) throw errors.badRequest('jobId 必填', 'JOB_REQUIRED');
-    const source = row('SELECT * FROM generation_jobs WHERE id = ?', [sourceJobId]);
-    if (!source || source.org_id !== auth.user.orgId || source.user_id !== auth.user.id) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
-    if (source.status !== 'FAILED') throw errors.conflict('仅失败任务可以重试', 'GENERATION_NOT_RETRYABLE');
-    const project = ownProject(auth, source.project_id);
-    return runGenerationJob({
-      auth, project, modality: modalityOf(source.modality), prompt: source.prompt,
-      retryOfJobId: source.id, action: 'AI_GENERATION_RETRY', requestContext: ctx,
-      sourceAssetUrl: source.source_asset_url || '', lastFrameAssetUrl: source.last_frame_asset_url || '', referenceAssets: parseJson(source.reference_asset_urls, []) || [], boxId: source.box_id || '',
-      // 重试沿用原任务里学生自选的参数，否则会把学生的选择丢回模型默认值。
-      studentOptions: parseJson(source.request_options, null) || null,
-    });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);
   if (detailMatch && method === 'GET') {

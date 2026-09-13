@@ -152,7 +152,7 @@ function Members({ api, user }) {
   return <>
     <PageHeader eyebrow="机构成员" title="教师与学生" description={isAdmin ? '创建、编辑、停用账号。带哪个班、上哪节课改在「课堂」页里安排。' : '仅展示当前权限范围内的机构成员；成员写操作需要机构管理员权限。'} actions={<button className="secondary-button" onClick={members.refresh}>刷新</button>} />
     {/* B3（2026-09-13）：机构端有三套容易混的东西，这里把边界一次说清（界面上的「我该去哪」） */}
-    <p className="muted">这里管的是<strong>账号本身</strong>（角色、班级归属、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「学员许可」。学员看不到课包时，先确认后两处。</p>
+    <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「学员许可」。学员看不到课包时，先确认后两处。</p>
     {message && <Notice tone={message.includes('失败') || message.includes('错误') || message.includes('无权') ? 'danger' : 'success'}>{message}</Notice>}
     {isAdmin && <div className="split">
       <Panel title="新建账号">
@@ -175,7 +175,7 @@ function Members({ api, user }) {
     </div>}
     <Panel title="成员列表">
       <div className="row-actions"><input placeholder="搜索姓名、登录名或手机号" value={search} onChange={(event) => setSearch(event.target.value)} /><select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}><option value="">全部角色</option><option value="TEACHER">教师</option><option value="STUDENT">学生</option></select></div>
-      {visibleItems.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>登录名</th><th>班级</th><th>额度</th><th>状态</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => {
+      {visibleItems.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>登录名</th><th>额度</th><th>状态</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => {
         const draft = editing === item.id ? editDraft : null;
         return <tr key={item.id}>
           <td>{draft ? <><input value={draft.displayName} onChange={(event) => setEditDraft({ ...draft, displayName: event.target.value })} /></> : item.displayName}</td>
@@ -258,7 +258,7 @@ function Works({ api }) {
   </>;
 }
 
-const HELP_FEEDBACK_CATEGORY_LABELS = { ACCOUNT: '账号', CANVAS: '画布创作', AI: 'AI 能力', COURSE: '课程学习', CLIENT: '客户端', DATA: '数据与隐私', OTHER: '其他' };
+const HELP_FEEDBACK_CATEGORY_LABELS = { ACCOUNT: '账号', CANVAS: '画布创作', AI: 'AI 能力', COURSE: '课程学习', DATA: '数据与隐私', OTHER: '其他' };
 const HELP_FEEDBACK_STATUS_LABELS = { SUBMITTED: '已提交', IN_PROGRESS: '处理中', RESOLVED: '已解决', CLOSED: '已关闭' };
 
 function HelpFeedbackPage({ api }) {
@@ -491,20 +491,6 @@ function OrgMaterials({ api, user }) {
   </>;
 }
 
-function OrgPage({ kind, user }) {
-  const teacher = user?.role === 'TEACHER';
-  const pages = {
-    inbox: ['站内信', '查看平台与机构的教学、运营和系统通知。', ['课堂通知', '开课、结束、作品提交等信息将统一沉淀'], ['运营消息', '课包、充值与平台活动通知统一送达']],
-    courses: ['课程中心', '浏览机构已开通课包、课时与授课资源，老师可从这里进入课堂。', ['标准课包', '平台下发的课程与课时内容'], ['授课资源', 'PPT、HTML 互动课件与课堂备注']],
-    enrollment: ['学员开通', '登记学员套餐、实收状态与履约进度，把线下收款过程沉淀为机构记录。', ['开通单', '选择学员、商品和有效期'], ['履约记录', '支持标记收款、完成与作废']],
-    usage: ['算力用量', '查看今日 / 近 7 日 / 近 30 日的算力消耗以及高频使用者。', ['用量概览', '按能力类型与时间范围汇总'], ['明细记录', '查看用户、项目与课堂上下文']],
-    materials: ['宣传物料', '下载平台配置的招生海报、课程介绍与活动物料包。', ['课程介绍', '用于咨询、试听与招生沟通'], ['活动素材', '机构可下载并按校区使用']],
-    hackathon: ['黑客松', '查看平台赛季、机构可见开关和可推送的学员作品。', ['赛季活动', '主题、时间与奖励信息'], ['作品推送', '从校区优秀作品中选择参赛成果']],
-    afee: ['阿飞提醒', '管理机构消息提醒与授权访客通知，让教学运营信息及时送达。', ['提醒开关', '机构管理员可统一管理提醒策略'], ['访客授权', '管理可接收作品来访通知的成员']],
-  };
-  const [title, description, cards] = pages[kind];
-  return <><PageHeader eyebrow={teacher ? 'AI魔法学院 · 教学首页' : 'AI魔法学院 · 机构运营'} title={title} description={description} actions={<button className="primary-button">配置 / 新建</button>} /><div className="metrics">{cards.map((item, index) => <MetricCard key={item[0]} label={item[0]} value={index ? '待接入' : '准备就绪'} hint={item[1]} tone={index ? 'teal' : 'violet'} />)}</div><Panel title="功能接入说明"><Notice tone="info">页面已按 AI魔法学院机构端的信息架构建立。计费、通知、开通和数据中心需要相应后端接口后才会写入真实业务数据；当前不会使用模拟记录冒充真实数据。</Notice></Panel></>;
-}
 
 
 export function App() {
@@ -517,6 +503,6 @@ export function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学员创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={<SeriesOverview api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/grants" element={<StudentGrants api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={<SeriesOverview api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/grants" element={<StudentGrants api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

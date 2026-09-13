@@ -86,9 +86,8 @@ import {
 export async function handleOrgCommunication(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/')) return null;
-  // /api/org/file-assets 与 /api/org/billing-config 由独立路由处理（含 STUDENT 角色）
+  // /api/org/file-assets 由独立路由处理（含 STUDENT 角色）
   if (pathname.startsWith('/api/org/file-assets')) return null;
-  if (pathname.startsWith('/api/org/billing-config')) return null;
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']);
   const currentOrgId = orgId(auth);
   const part = pathname.slice('/api/org'.length);

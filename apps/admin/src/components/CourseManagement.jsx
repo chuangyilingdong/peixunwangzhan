@@ -602,7 +602,7 @@ function CourseList({ api, onOpen }) {
   }
 
   async function deleteCourse(course) {
-    if (!window.confirm(`确认删除课包「${course.title}」？删除后课包与课时配置不可恢复；已被班级课单或课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
+    if (!window.confirm(`确认删除课包「${course.title}」？删除后课包与课时配置不可恢复；已被课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
     setBusy(true); setMessage('');
     try { await api.request(`admin/course-series/${courseId}`, { method: 'DELETE' }); setMessage(`课包「${course.title}」已删除。`); courses.refresh(); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
@@ -719,7 +719,7 @@ function CourseDetail({ api, courseId, onBack }) {
   }
 
   async function deleteCourse() {
-    if (!window.confirm(`确认删除课包「${series.title}」？删除后课包与课时配置不可恢复；已被班级课单或课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
+    if (!window.confirm(`确认删除课包「${series.title}」？删除后课包与课时配置不可恢复；已被课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
     setBusy(true); setMessage('');
     try { await api.request(`admin/course-series/${courseId}`, { method: 'DELETE' }); onBack(); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
@@ -733,7 +733,7 @@ function CourseDetail({ api, courseId, onBack }) {
   }
 
   async function deleteLesson(lesson) {
-    await run(`admin/course-lessons/${lesson.id}`, 'DELETE', undefined, `课时「${lesson.title}」已删除，剩余课时已重新排序。`, `确认删除课时「${lesson.title}」？已被班级课单或课堂引用的课时无法删除。`);
+    await run(`admin/course-lessons/${lesson.id}`, 'DELETE', undefined, `课时「${lesson.title}」已删除，剩余课时已重新排序。`, `确认删除课时「${lesson.title}」？已被课堂引用的课时无法删除。`);
   }
 
   async function moveLesson(lesson, direction) {
