@@ -400,10 +400,13 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     if (settledBoxId) assertBoxNotGenerated({ projectId: project.id, boxId: settledBoxId, excludeJobId: jobId });
     // 2026-09-13（P4 删积分）：成员 AI 上限 / 周期额度两道刹车已删除，且不再扣积分。
     // 额度由算力池管（调用前的 assertComputePoolBudget 已经拦过一次，这里收尾记账）。
+    // C3 前置：上游给了 token 用量就记下来（计费仍是「每次调用 × 单价」，不改口径）
+    const firstAssetTokens = assetPayloads.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
     recordAiUsage({
       orgId: auth.user.orgId, userId: auth.user.id, projectId: project.id,
       sessionId: freshContext.activeSession?.id || null, generationJobId: jobId,
       modality, model: provider.model, status: 'SUCCESS',
+      inputTokens: firstAssetTokens?.inputTokens || 0, outputTokens: firstAssetTokens?.outputTokens || 0,
       // 算力池账本：成功才花钱，金额 = 本次单价（与调用前预扣用的是同一个函数，所以两边必然一致）
       costFen: priceFenFor({ modality, model: provider.model }),
       seriesId: freshContext.series?.id || null,

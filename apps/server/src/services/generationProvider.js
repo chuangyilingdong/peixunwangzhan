@@ -22,7 +22,13 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
       const label = title || labels[modality] || '创作素材';
       const hue = [...String(prompt)].reduce((total, char) => total + char.charCodeAt(0), 0) % 360;
       const metadata = { mock: true, modality, prompt };
-      if (modality === 'TEXT') metadata.text = mockText(prompt);
+      if (modality === 'TEXT') {
+        metadata.text = mockText(prompt);
+        // 本地 mock 按上游形状给一份用量（字数粗算），这样「采集上游用量」这条链在本地也能被守卫跑到
+        const text = metadata.text;
+        metadata.tokens = { inputTokens: Math.max(1, Math.ceil(String(prompt || '').length / 4)), outputTokens: Math.max(1, Math.ceil(text.length / 4)), totalTokens: 0 };
+        metadata.tokens.totalTokens = metadata.tokens.inputTokens + metadata.tokens.outputTokens;
+      }
       return {
         assets: [{
           label,
@@ -46,7 +52,10 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
         full += chunk;
         if (typeof onDelta === 'function') onDelta(chunk, full);
       }
-      return { assets: [{ label: 'AI 回复', mimeType: 'text/plain; charset=utf-8', assetUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`, metadata: { mock: true, modality: 'TEXT', text } }], streamed: true };
+      const inputTokens = Math.max(1, Math.ceil(String(prompt || lastUserText || '').length / 4));
+      const outputTokens = Math.max(1, Math.ceil(text.length / 4));
+      // 按上游形状给 usage（流式那一段上游是最后一帧才给，这里直接一次给全），让采集链路在本地可测
+      return { assets: [{ label: 'AI 回复', mimeType: 'text/plain; charset=utf-8', assetUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`, metadata: { mock: true, modality: 'TEXT', text, tokens: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } } }], usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }, streamed: true };
     },
   };
 }

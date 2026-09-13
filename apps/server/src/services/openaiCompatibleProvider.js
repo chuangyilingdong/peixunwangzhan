@@ -75,6 +75,27 @@ function textFromContent(content) {
     .trim();
 }
 
+/**
+ * 上游返回的 token 用量（C3 前置：先把用量采集下来，计费口径**不变**）。
+ * 各家字段名不一：OpenAI 新老两套都叫 prompt_tokens/completion_tokens，
+ * 也有叫 input_tokens/output_tokens 的（Anthropic 风格、部分网关）。读不到就返回 null。
+ */
+function tokenUsage(payload) {
+  const usage = payload?.usage;
+  if (!usage || typeof usage !== 'object') return null;
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const value = Number(usage[key]);
+      if (Number.isFinite(value) && value >= 0) return Math.round(value);
+    }
+    return null;
+  };
+  const input = pick('prompt_tokens', 'input_tokens');
+  const output = pick('completion_tokens', 'output_tokens');
+  if (input === null && output === null) return null;
+  return { inputTokens: input || 0, outputTokens: output || 0, totalTokens: pick('total_tokens') ?? (input || 0) + (output || 0) };
+}
+
 function responseText(payload) {
   const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
   return textFromContent(choice?.message?.content ?? choice?.text ?? payload?.output_text);
@@ -286,13 +307,13 @@ function providerHttpError(response, payload) {
   return providerError(safety ? '内容未通过 AI 服务安全策略' : `AI 供应商调用失败${suffix}`, safety ? PROVIDER_ERROR_CODES.SAFETY_REJECTED : 'GENERATION_PROVIDER_HTTP_ERROR', response.status);
 }
 
-function textAsset({ text, title, providerName, model }) {
+function textAsset({ text, title, providerName, model, tokens = null }) {
   const boundedText = String(text || '').slice(0, MAX_TEXT_RESULT_CHARS);
   return {
     label: String(title || 'AI 灵感提示词').trim().slice(0, 120) || 'AI 灵感提示词',
     mimeType: 'text/plain; charset=utf-8',
     assetUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(boundedText)}`,
-    metadata: { provider: providerName, model, modality: 'TEXT', external: true, text: boundedText },
+    metadata: { provider: providerName, model, modality: 'TEXT', external: true, text: boundedText, ...(tokens ? { tokens } : {}) },
   };
 }
 
@@ -301,7 +322,7 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
   if (normalizedModality === 'TEXT') {
     const text = responseText(payload);
     if (!text) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
-    return textAsset({ text, title, providerName, model });
+    return textAsset({ text, title, providerName, model, tokens: tokenUsage(payload) });
   }
   const mimeType = String(contentType || defaultMimeType(normalizedModality)).split(';')[0] || defaultMimeType(normalizedModality);
   let candidate = binary?.length ? { assetUrl: `data:${mimeType};base64,${binary.toString('base64')}`, mimeType } : mediaCandidate(payload, normalizedModality, mimeType);

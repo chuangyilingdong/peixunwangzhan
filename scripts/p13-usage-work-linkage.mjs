@@ -137,7 +137,13 @@ try {
   assert.ok(hit, '平台端用量报表应能按作品标题检索到该记录');
   assert.equal(hit.workId, workId, '报表应返回作品 id');
   assert.equal(hit.workTitle, workTitle, '报表应返回作品标题');
-  assert.equal(Object.hasOwn(hit, 'inputTokens'), false, '报表不应再返回恒为 0 的 token 字段');
+  // 2026-09-13（C3 前置）**推翻了这条旧断言**：当时上游从不返回 token 用量，字段恒为 0，
+  // 显示出来只会误导，所以报表干脆不返回它。现在 provider 会把上游的 usage 采集进账本，
+  // 字段不再恒为 0（多模态接口仍可能不返回 → 那种就是 0），所以报表改回透出，并语义明确：
+  // 「上游返回过才有值」。
+  assert.equal(Object.hasOwn(hit, 'inputTokens'), true, '报表应透出 token 用量字段（上游返回过才有值）');
+  assert.equal(typeof hit.inputTokens, 'number');
+  assert.equal(typeof hit.outputTokens, 'number');
 
   console.log(JSON.stringify({
     name: 'usage-work-linkage',

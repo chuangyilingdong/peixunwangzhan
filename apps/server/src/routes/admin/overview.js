@@ -372,6 +372,8 @@ export async function handleOverview(ctx, part, method) {
       lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
       workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
       costFen: Number(item.cost_fen || 0),
+      // C3 前置：上游返回过就带上（多数多模态接口不返回，所以允许为 0）
+      inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };

@@ -130,9 +130,13 @@ try {
   const usageRow = usage.prepare("SELECT COUNT(*) n FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
   const costRow = usage.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
   const assistantRow = usage.prepare("SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=? AND role='assistant'").get(conversationId);
+  // C3 前置：token 用量也要查（必须放在 close 之前，否则 database is not open）
+  const tokenRow = usage.prepare("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1").get();
   usage.close();
   assert.equal(usageRow.n, 1, `应写入 1 条 TEXT 用量记录，实际 ${usageRow.n}`);
   assert.ok(Number(costRow.fen) > 0, `成功回复应在算力池账本记一笔（cost_fen > 0），实际 ${costRow.fen}`);
+  // C3 前置（2026-09-13）：对话那条也要把上游 token 用量落进账本
+  assert.ok(Number(tokenRow?.input_tokens) > 0 && Number(tokenRow?.output_tokens) > 0, `用量记录应带上游 token 数，实际 ${JSON.stringify(tokenRow)}`);
   assert.equal(assistantRow.n, 1, '助手消息应落库');
 
   // 重命名 + 列表

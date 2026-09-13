@@ -116,6 +116,11 @@ try {
   const costFen = Number(costDb.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get()?.fen || 0);
   costDb.close();
   assert.ok(costFen > 0, `成功生成应在算力池账本记一笔（cost_fen > 0），实际 ${costFen}`);
+  // C3 前置（2026-09-13）：上游给的 token 用量要落进账本（计费口径不变，但账本从此有据可查）
+  const tokenDb = new DatabaseSync(dbPath);
+  const tokens = tokenDb.prepare("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1").get();
+  tokenDb.close();
+  assert.ok(Number(tokens?.input_tokens) > 0 && Number(tokens?.output_tokens) > 0, `用量记录应带上游 token 数，实际 ${JSON.stringify(tokens)}`);
 
   // 3) 同一个框体只能生成一次（入队前就拦，不跑上游、不扣费）
   const second = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: project.data.id, boxId: 'box-text-1', modality: 'TEXT', prompt: '再来一句' } });

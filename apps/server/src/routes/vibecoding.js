@@ -485,6 +485,8 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
         if (closed.length) flushArtifacts(closed);
       },
     });
+    // C3 前置：流式上游在最后一帧带 usage 时才有值（默认不比这个）；没有就是 null，不影响任何口径
+    const streamedUsage = result?.usage || result?.assets?.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
     const text = String(result?.assets?.[0]?.metadata?.text || streamedText || '').trim();
     if (!text) throw errors.conflict('AI 没有返回内容', 'GENERATION_EMPTY_RESULT');
 
@@ -497,9 +499,11 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       const fresh = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]);
       if (!fresh) throw errors.notFound('创作会话不存在', 'VIBECODING_CONVERSATION_NOT_FOUND');
       // 2026-09-13（P4 删积分）：不再扣积分（原来这里是 chargeCreditsInTransaction + debitUserAiCredits）。
+      // C3 前置：流式响应里若带 usage（上游支持 include_usage 时）就记下来；不带就是 0，计费口径不变
       recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: fresh.class_session_id || null,
         modality: 'TEXT', model: selection.model, status: 'SUCCESS',
+        inputTokens: streamedUsage?.inputTokens || 0, outputTokens: streamedUsage?.outputTokens || 0,
         // 算力池账本：对话也从这个池子扣（与画布/视频/音乐共用一个上限）
         costFen: priceFenFor({ modality: 'TEXT', model: selection.model }), seriesId: conversationSeriesId(conversation),
         pricing: { source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },

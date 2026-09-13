@@ -11,16 +11,20 @@ export function recordAiUsage({
   orgId, userId, projectId = null, sessionId = null, generationJobId = null,
   modality, model = 'local-p0', status, failCode = null, pricing = null,
   costFen = 0, seriesId = null, workId = null,
+  // C3 前置（2026-09-13）：把上游返回的 token 用量记下来。**计费口径不变**（仍按每次调用 × 单价），
+  // 但账本从此有据可查；将来要改成按 token 计费时，先决条件（采集）已经就位。
+  inputTokens = 0, outputTokens = 0,
 }) {
   q(
     `INSERT INTO usage_records(
-       id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,created_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,input_tokens,output_tokens,created_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       id('usage'), orgId, userId, sessionId, projectId, generationJobId, workId, modality, model, 0,
       status, failCode,
       json(pricing || { modality, status, failCode, generationJobId }),
       Math.max(0, Math.round(Number(costFen) || 0)), seriesId || null,
+      Math.max(0, Math.round(Number(inputTokens) || 0)), Math.max(0, Math.round(Number(outputTokens) || 0)),
       nowIso(),
     ],
   );
