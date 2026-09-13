@@ -134,12 +134,14 @@ export async function handleWorks(ctx, part, method) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-    assertTransition(ctx, 'work', work.status, 'REJECTED', { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), allowedFrom: ['PUBLISHED'], code: 'INVALID_WORK_TRANSITION', message: '仅已发布作品可以下架', details: { action: 'unpublish' } });
+    // C2（2026-09-13）：下架写 UNPUBLISHED + unpublish_reason（**不再复用 REJECTED 与 teacher_comment**），
+    // 「被驳回」与「被下架」在库里从此是两个值、两列原因，账面上也能分开统计。
+    assertTransition(ctx, 'work', work.status, 'UNPUBLISHED', { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), allowedFrom: ['PUBLISHED'], code: 'INVALID_WORK_TRANSITION', message: '仅已发布作品可以下架', details: { action: 'unpublish' } });
     const reason = String(ctx.body?.reason || '').trim();
     if (!reason) throw errors.badRequest('请填写下架原因', 'WORK_UNPUBLISH_REASON_REQUIRED');
     if (reason.length > 2000) throw errors.badRequest('下架原因不能超过 2000 个字符', 'WORK_UNPUBLISH_REASON_TOO_LONG');
-    q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['REJECTED', reason, auth.user.id, nowIso(), work.id]);
-    audit(ctx, 'PLATFORM_WORK_UNPUBLISH', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reason }, { orgId: work.org_id });
+    q('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['UNPUBLISHED', reason, nowIso(), auth.user.id, nowIso(), work.id]);
+    audit(ctx, 'PLATFORM_WORK_UNPUBLISH', 'WORK', work.id, normalizeWork(work), { status: 'UNPUBLISHED', reason }, { orgId: work.org_id });
     const updated = row('SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE work.id=?', [work.id]);
     return { ...normalizeWork(updated), organizationName: updated.organization_name || null };
   }
@@ -167,7 +169,7 @@ export async function handleWorks(ctx, part, method) {
     const published = ctx.body.published;
     const now = nowIso();
     if (published) {
-      if (!['PENDING', 'APPROVED', 'PUBLISHED'].includes(work.status)) throw errors.conflict('仅学生已提交的作品可以发布到作品广场（被驳回的作品需学生重新提交）', 'WORK_NOT_SUBMITTED');
+      if (!['PENDING', 'APPROVED', 'PUBLISHED', 'UNPUBLISHED'].includes(work.status)) throw errors.conflict('仅学生已提交的作品可以发布到作品广场（被驳回的作品需学生重新提交）', 'WORK_NOT_SUBMITTED');
       if (!work.copyright_confirmed_at) throw errors.conflict('学生尚未确认作品版权与展示授权，不能发布到作品广场', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
       let shareToken = work.share_token;
       if (!shareToken) {
@@ -178,7 +180,8 @@ export async function handleWorks(ctx, part, method) {
         if (work.status !== 'PUBLISHED') {
           assertTransition(ctx, 'work', work.status, 'PUBLISHED', { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), code: 'INVALID_WORK_TRANSITION', message: '当前状态不能发布到作品广场' });
         }
-        q("UPDATE works SET status='PUBLISHED',is_public=1,share_token=?,reviewed_by=?,reviewed_at=? WHERE id=?", [shareToken, auth.user.id, now, work.id]);
+        // 重新上架要清掉上一次的下架原因，否则学生会看到一条早就过期的说明（与 VibeCoding 链路同口径）
+        q("UPDATE works SET status='PUBLISHED',is_public=1,share_token=?,reviewed_by=?,reviewed_at=?,unpublish_reason=NULL,unpublished_at=NULL WHERE id=?", [shareToken, auth.user.id, now, work.id]);
       });
     } else {
       q('UPDATE works SET is_public=0,share_token=NULL WHERE id=?', [work.id]);
@@ -210,11 +213,11 @@ export async function handleWorks(ctx, part, method) {
     if (actionTaken === 'UNPUBLISH' && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可因举报下架', 'WORK_NOT_PUBLISHED');
     const now = nowIso();
     transaction(() => {
-      if (actionTaken === 'UNPUBLISH') q('UPDATE works SET status=?,teacher_comment=?,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['REJECTED', resolution, auth.user.id, now, work.id]);
+      if (actionTaken === 'UNPUBLISH') q('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['UNPUBLISHED', resolution, now, auth.user.id, now, work.id]);
       q('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=?', [status, auth.user.id, now, resolution, actionTaken, report.id]);
     });
     audit(ctx, 'PLATFORM_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: report.org_id });
-    if (actionTaken === 'UNPUBLISH') audit(ctx, 'PLATFORM_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWork(work), { status: 'REJECTED', reportId: report.id }, { orgId: work.org_id });
+    if (actionTaken === 'UNPUBLISH') audit(ctx, 'PLATFORM_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWork(work), { status: 'UNPUBLISHED', reportId: report.id }, { orgId: work.org_id });
     return workReportRows('report.id=?', [report.id])[0];
   }
   let workDetailMatch = part.match(/^\/works\/([^/]+)\/detail$/);

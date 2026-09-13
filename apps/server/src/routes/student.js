@@ -907,7 +907,7 @@ export async function handleStudent(ctx) {
         round = Number(latestSubmission?.round || 0) + 1;
         q(
           `UPDATE works SET title=?,description=?,canvas_snapshot=?,status='PENDING',teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,
-             featured_at=NULL,featured_by=NULL,featured_reason=NULL,submitted_at=?
+             featured_at=NULL,featured_by=NULL,featured_reason=NULL,unpublish_reason=NULL,unpublished_at=NULL,submitted_at=?
            WHERE id=? AND project_id=? AND student_id=? AND org_id=?`,
           [fresh.title, description, json(canvasSnapshot), now, existingWork.id, fresh.id, auth.user.id, auth.user.orgId],
         );

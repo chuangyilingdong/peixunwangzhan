@@ -48,6 +48,17 @@ check('**下架优先**：有下架原因且不在广场 → 已下架（哪怕 
   workPlazaState({ status: 'APPROVED', unpublishReason: '含联系方式', plazaPublished: false }) === 'UNPUBLISHED',
   workPlazaState({ status: 'APPROVED', unpublishReason: '含联系方式', plazaPublished: false }));
 check('重新发布后（在广场）不再显示已下架', workPlazaState({ plazaPublished: true, unpublishReason: '旧原因' }) === 'PLAZA');
+
+/* 2026-09-13（C2）：存储层统一之后，两条链路在推导层要能**分开**「被驳回」和「被下架」 */
+check('审核不通过（status=REJECTED，只有审核意见）→ 「未通过」，不是「已下架」',
+  workPlazaState({ status: 'REJECTED', teacherComment: '画面太糊，重做' }) === 'REJECTED' && workPlazaLabel({ status: 'REJECTED', teacherComment: '画面太糊，重做' }) === '未通过',
+  workPlazaLabel({ status: 'REJECTED', teacherComment: '画面太糊，重做' }));
+check('被下架（status=UNPUBLISHED + 下架原因）→ 「已下架」',
+  workPlazaState({ status: 'UNPUBLISHED', unpublishReason: '涉及版权' }) === 'UNPUBLISHED' && workPlazaLabel({ status: 'UNPUBLISHED', unpublishReason: '涉及版权' }) === '已下架');
+check('历史行兜底：老数据是 REJECTED + 下架原因 → 仍按「已下架」显示（话术不变）',
+  workPlazaState({ status: 'REJECTED', unpublishReason: 'C2 之前的下架原因' }) === 'UNPUBLISHED');
+check('在广场永远优先于「未通过 / 已下架」（重新上架后不再显示旧结论）',
+  workPlazaState({ status: 'REJECTED', plazaPublished: true }) === 'PLAZA');
 check('两条链路同一件事同一句话（画布 vs VibeCoding）',
   workPlazaLabel({ plazaPublished: true }) === workPlazaLabel({ isPublic: true }) &&
   workPlazaLabel({ unpublishReason: 'x' }) === workPlazaLabel({ isPublic: false, unpublishReason: 'x' }),

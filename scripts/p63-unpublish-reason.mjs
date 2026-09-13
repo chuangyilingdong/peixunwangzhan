@@ -85,6 +85,40 @@ try {
   const mine = (myWorks.data?.items || []).find((item) => item.id === workId);
   check('① 画布链路：**学生拉自己的作品就能看到下架原因**', mine?.unpublishReason === reasonText, JSON.stringify({ status: mine?.status, unpublishReason: mine?.unpublishReason }));
 
+  /* 2026-09-13（C2）存储层：下架要有**自己的状态和原因列**，不再复用 REJECTED / teacher_comment */
+  const { DatabaseSync } = await import('node:sqlite');
+  const afterUnpublish = new DatabaseSync(dbPath);
+  const rowAfter = afterUnpublish.prepare('SELECT status, unpublish_reason, unpublished_at, is_public, teacher_comment FROM works WHERE id=?').get(workId);
+  afterUnpublish.close();
+  check('① 存储层：下架写的是 UNPUBLISHED，不再是 REJECTED',
+    rowAfter?.status === 'UNPUBLISHED', JSON.stringify({ status: rowAfter?.status }));
+  check('① 存储层：下架原因写进**独立列** unpublish_reason（不再占用 teacher_comment）',
+    rowAfter?.unpublish_reason === reasonText && !rowAfter?.teacher_comment, JSON.stringify({ unpublish_reason: rowAfter?.unpublish_reason, teacher_comment: rowAfter?.teacher_comment }));
+  check('① 存储层：记了下架时间，并且同步撤出广场（is_public=0）',
+    Boolean(rowAfter?.unpublished_at) && Number(rowAfter?.is_public) === 0, JSON.stringify({ unpublished_at: rowAfter?.unpublished_at, is_public: rowAfter?.is_public }));
+  check('① 平台列表按新状态能筛到这条作品（口径真的落到查询上）',
+    ((await api('/api/admin/works?status=UNPUBLISHED&limit=50', { token: admin })).data?.items || []).some((item) => item.id === workId));
+  check('① 旧状态 REJECTED 已经筛不到它（两个状态不再混）',
+    !((await api('/api/admin/works?status=REJECTED&limit=50', { token: admin })).data?.items || []).some((item) => item.id === workId));
+
+  /* 重新上架：状态回到 PUBLISHED，且**旧的下架原因被清掉**（不给学生过期说明） */
+  const republished = await api(`/api/admin/works/${encodeURIComponent(workId)}/plaza`, { method: 'PUT', token: admin, body: { published: true } });
+  check('① 重新上架成功（UNPUBLISHED → PUBLISHED 这条路是通的）', republished.status === 200, JSON.stringify(republished).slice(0, 200));
+  const recheck = new DatabaseSync(dbPath);
+  const rowRepublished = recheck.prepare('SELECT status, unpublish_reason, is_public FROM works WHERE id=?').get(workId);
+  recheck.close();
+  check('① 重新上架后：旧下架原因清空、状态回到 PUBLISHED',
+    rowRepublished?.status === 'PUBLISHED' && !rowRepublished?.unpublish_reason && Number(rowRepublished?.is_public) === 1,
+    JSON.stringify(rowRepublished));
+
+  /* 历史行兜底：C2 之前的行是 REJECTED + teacher_comment，读取时仍要能给学生一句下架说明 */
+  const legacy = new DatabaseSync(dbPath);
+  legacy.prepare("UPDATE works SET status='REJECTED', unpublish_reason=NULL, teacher_comment=?, is_public=0 WHERE id=?").run('C2 之前的下架原因', workId);
+  legacy.close();
+  const legacyMine = ((await api('/api/student/works?limit=20', { token: student })).data?.items || []).find((item) => item.id === workId);
+  check('① 历史行兜底：REJECTED + teacher_comment（老数据）仍能看到下架原因',
+    legacyMine?.unpublishReason === 'C2 之前的下架原因', JSON.stringify({ status: legacyMine?.status, unpublishReason: legacyMine?.unpublishReason }));
+
   /* ── VibeCoding 链路 ── */
   const lessonAll = await api('/api/student/courses', { token: student });
   const lessonIds = (lessonAll.data?.items || []).flatMap((item) => [item.currentLessonId, ...(item.lessons || []).map((l) => l.id), item.lesson?.id, item.id]).filter(Boolean);

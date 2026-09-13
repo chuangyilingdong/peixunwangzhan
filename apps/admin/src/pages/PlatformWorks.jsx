@@ -44,7 +44,7 @@ export function PlatformWorks({ api }) {
     } catch (err) { setMessage(err.message); } finally { setSaving(false); }
   }
   // 筛选的下拉仍按库里的 status（历史数据），但**展示**统一走 WorkPlazaStatus（两条链路一套词）
-  const statusLabels = { PENDING: '已提交待发布', APPROVED: '已通过', REJECTED: '已下架', PUBLISHED: '已发布到作品广场' };
+  const statusLabels = { PENDING: '已提交待发布', APPROVED: '已通过', REJECTED: '未通过', PUBLISHED: '已发布到作品广场', UNPUBLISHED: '已下架' };
   const reportCategoryLabels = { INAPPROPRIATE: '内容不当', COPYRIGHT: '版权', PRIVACY: '隐私', OTHER: '其他' };
   const reportStatusLabels = { PENDING: '待处理', RESOLVED: '已处理', DISMISSED: '已驳回' };
   async function unpublish() { if (!action) return; setSaving(true); setMessage(''); try { await api.put(`admin/works/${action.id}/unpublish`, { reason }); setMessage(`已下架《${action.title}》。`); setAction(null); setReason(''); works.refresh(); reports.refresh(); if (detailId === action.id) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }

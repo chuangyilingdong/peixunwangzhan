@@ -408,7 +408,8 @@ function studentLessonProgressMap(user) {
                     AND annotation_read.student_id=work.student_id
                 )) AS unread_annotation_count,
             CASE
-              WHEN work.teacher_comment IS NULL OR work.teacher_comment='' THEN 0
+              -- 2026-09-13（C2）：teacher_comment（审核意见）与 unpublish_reason（下架原因）都算「有话说」
+              WHEN (work.teacher_comment IS NULL OR work.teacher_comment='') AND (work.unpublish_reason IS NULL OR work.unpublish_reason='') THEN 0
               WHEN EXISTS (
                 SELECT 1 FROM work_feedback_reads overall_read
                 WHERE overall_read.work_id=work.id

@@ -878,9 +878,12 @@ export function normalizeWork(value, { includeSnapshot = false } = {}) {
     description: value.description || '',
     status: value.status,
     teacherComment: value.teacher_comment || null,
-    // 下架/驳回原因给学生看：老师点评功能删除后，teacher_comment 只由「下架/驳回」写入，
-    // 所以这里给一个语义明确的名字（原来的 teacherComment 保留，兼容既有读取方）
-    unpublishReason: value.teacher_comment || null,
+    // 2026-09-13（C2）：下架原因读**独立列** unpublish_reason。
+    // ⚠️ 兜底读 teacher_comment 只为**历史行**：C2 之前下架把原因塞在 teacher_comment 里，
+    //    那些行没法可靠地跟「审核不通过」区分开（没有 published_at 这类痕迹），所以保留原状、读取时兜底，
+    //    界面话术仍然正确。新写入一律走 unpublish_reason。
+    unpublishReason: value.unpublish_reason || value.teacher_comment || null,
+    unpublishedAt: value.unpublished_at || null,
     reviewedBy: value.reviewed_by || null,
     reviewerName: value.reviewer_name || null,
     submittedAt: value.submitted_at,

@@ -1502,6 +1502,83 @@ try { db.exec('ALTER TABLE works ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0
 try { db.exec('ALTER TABLE works ADD COLUMN share_token TEXT'); } catch (_) {}
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_works_share_token ON works(share_token) WHERE share_token IS NOT NULL'); } catch (_) {}
 
+// ── 作品「存储层」状态机统一（C2，2026-09-13）─────────────────────────────────
+// 之前画布作品的「下架」**复用了 REJECTED**（和「审核不通过」同一个值），下架原因也只能塞进
+// teacher_comment（那是审核意见的列）→ 库里分不清「被驳回」与「被下架」，账面上也就分不出来。
+// 现在给下架单独的列 + 单独的 status（UNPUBLISHED，见 services/domainState.js）：
+//   teacher_comment  只放「审核意见」（驳回时）
+//   unpublish_reason 只放「下架原因」（学生能看到的那句）
+// ⚠️ 历史行不做「猜着迁移」：老数据里 REJECTED + teacher_comment 无法可靠区分是驳回还是下架
+//    （没有 published_at 这类痕迹可比对），所以保持原样；normalizeWork 读取时用 teacher_comment 兜底，
+//    这些行的界面话术仍然正确。生产库当前 works 为 0 行，等于没有历史包袱。
+try { db.exec('ALTER TABLE works ADD COLUMN unpublish_reason TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE works ADD COLUMN unpublished_at TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// works.status 的 CHECK 里要能容纳 UNPUBLISHED（C2）。SQLite 不能直接改 CHECK，
+// 按官方推荐重建一次表（与上面 file_assets 那次同一套做法）。
+// 幂等：只在旧约束里没有 UNPUBLISHED 时执行；PRAGMA foreign_keys 必须在事务外切换，
+// 否则 DROP TABLE 会按外键 ON DELETE CASCADE 连带清空 work_reports / work_submissions / 批注等子表。
+// ⚠️ 新表的列必须**把 ALTER 加过的列都写全**（is_public / share_token / unpublish_reason / unpublished_at），
+//    索引也要重建 —— 漏一个就是静默丢数据/丢约束。
+const worksDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='works'").get()?.sql || '');
+if (worksDdl && !worksDdl.includes("'UNPUBLISHED'")) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`CREATE TABLE works_migrated (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      student_id TEXT NOT NULL,
+      org_id TEXT,
+      class_id TEXT,
+      course_lesson_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      canvas_snapshot TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','PUBLISHED','UNPUBLISHED')),
+      teacher_comment TEXT,
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      copyright_confirmed_at TEXT,
+      copyright_confirmed_by TEXT,
+      featured_at TEXT,
+      featured_by TEXT,
+      featured_reason TEXT,
+      submitted_at TEXT NOT NULL,
+      is_public INTEGER NOT NULL DEFAULT 0,
+      share_token TEXT,
+      unpublish_reason TEXT,
+      unpublished_at TEXT,
+      FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
+    )`);
+    db.exec(`INSERT INTO works_migrated (
+      id, project_id, student_id, org_id, class_id, course_lesson_id, title, description, canvas_snapshot,
+      status, teacher_comment, reviewed_by, reviewed_at, copyright_confirmed_at, copyright_confirmed_by,
+      featured_at, featured_by, featured_reason, submitted_at, is_public, share_token, unpublish_reason, unpublished_at
+    ) SELECT
+      id, project_id, student_id, org_id, class_id, course_lesson_id, title, description, canvas_snapshot,
+      status, teacher_comment, reviewed_by, reviewed_at, copyright_confirmed_at, copyright_confirmed_by,
+      featured_at, featured_by, featured_reason, submitted_at,
+      COALESCE(is_public, 0), share_token, unpublish_reason, unpublished_at
+    FROM works`);
+    db.exec('DROP TABLE works');
+    db.exec('ALTER TABLE works_migrated RENAME TO works');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_works_org_submitted ON works(org_id, submitted_at DESC)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_works_work_data_scope ON works(org_id, class_id, course_lesson_id, submitted_at DESC)');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_works_project_unique ON works(project_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_works_org_featured ON works(org_id, featured_at DESC)');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_works_share_token ON works(share_token) WHERE share_token IS NOT NULL');
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 // P5-W05 course_series 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
 try { db.exec('ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE course_series ADD COLUMN age_range_min INTEGER'); } catch (_) {}

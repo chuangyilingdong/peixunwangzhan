@@ -269,7 +269,8 @@ export async function handleOverview(ctx, part, method) {
       // 在广场上 = 两条链路各自的 is_public（与 worksState 的判据一致）
       onPlaza: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE is_public=1) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=1) n"),
       featured: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE featured_at IS NOT NULL) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE featured_at IS NOT NULL) n"),
-      unpublished: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE is_public=0 AND teacher_comment IS NOT NULL AND teacher_comment<>'') + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=0 AND unpublish_reason IS NOT NULL AND unpublish_reason<>'') n"),
+      // 2026-09-13（C2）：画布链路数**独立状态** UNPUBLISHED（以前数 teacher_comment，会把「未通过」也算成已下架）
+      unpublished: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE status='UNPUBLISHED') + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=0 AND unpublish_reason IS NOT NULL AND unpublish_reason<>'') n"),
       lessonsPublished: singleNumber("SELECT COUNT(*) n FROM course_lessons WHERE status='PUBLISHED'"),
     };
 

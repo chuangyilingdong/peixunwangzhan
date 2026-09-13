@@ -15,7 +15,8 @@ export const DOMAIN_STATES = Object.freeze({
   class: Object.freeze(['ACTIVE', 'ARCHIVED']),
   classSession: Object.freeze(['ACTIVE', 'ENDED']),
   studentProject: Object.freeze(['DRAFT', 'SUBMITTED', 'GRADED', 'ARCHIVED']),
-  work: Object.freeze(['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED']),
+  // 2026-09-13（C2）：UNPUBLISHED = 曾发布到广场、后来被撤下来（与「审核不通过」的 REJECTED 分开）
+  work: Object.freeze(['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED', 'UNPUBLISHED']),
   workPublishRequest: Object.freeze(['PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN']),
   usage: Object.freeze(['SUCCESS', 'FAILED', 'BLOCKED']),
   generationJob: Object.freeze(['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED']),
@@ -61,7 +62,17 @@ export const DOMAIN_TRANSITIONS = Object.freeze({
   classSession: Object.freeze({ ACTIVE: Object.freeze(['ENDED']), ENDED: Object.freeze([]) }),
   studentProject: Object.freeze({ DRAFT: Object.freeze(['SUBMITTED', 'ARCHIVED']), SUBMITTED: Object.freeze(['GRADED', 'DRAFT', 'ARCHIVED']), GRADED: Object.freeze(['ARCHIVED']), ARCHIVED: Object.freeze(['DRAFT']) }),
   // 学生提交（PENDING）后由平台决定是否发布到作品广场，机构审核不再是必经环节。
-  work: Object.freeze({ PENDING: Object.freeze(['APPROVED', 'REJECTED', 'PUBLISHED']), APPROVED: Object.freeze(['PUBLISHED', 'PENDING', 'REJECTED']), REJECTED: Object.freeze(['PENDING']), PUBLISHED: Object.freeze(['REJECTED']) }),
+  // 流转（2026-09-13 C2）：
+  //   PUBLISHED → UNPUBLISHED（下架，带原因）或 REJECTED（审核后撤回，保留旧语义兼容）
+  //   UNPUBLISHED → PUBLISHED（重新上架）或 PENDING（学生改完重新提交）
+  //   REJECTED → PENDING（学生改完重新提交）：**被驳回不等于被下架**，两者不互通
+  work: Object.freeze({
+    PENDING: Object.freeze(['APPROVED', 'REJECTED', 'PUBLISHED']),
+    APPROVED: Object.freeze(['PUBLISHED', 'PENDING', 'REJECTED']),
+    REJECTED: Object.freeze(['PENDING']),
+    PUBLISHED: Object.freeze(['UNPUBLISHED', 'REJECTED']),
+    UNPUBLISHED: Object.freeze(['PUBLISHED', 'PENDING']),
+  }),
   workPublishRequest: Object.freeze({ PENDING: Object.freeze(['APPROVED', 'REJECTED', 'WITHDRAWN']), APPROVED: Object.freeze([]), REJECTED: Object.freeze([]), WITHDRAWN: Object.freeze([]) }),
   usage: Object.freeze({ SUCCESS: Object.freeze([]), FAILED: Object.freeze([]), BLOCKED: Object.freeze([]) }),
   generationJob: Object.freeze({ QUEUED: Object.freeze(['RUNNING', 'FAILED']), RUNNING: Object.freeze(['SUCCEEDED', 'FAILED']), SUCCEEDED: Object.freeze([]), FAILED: Object.freeze([]) }),
