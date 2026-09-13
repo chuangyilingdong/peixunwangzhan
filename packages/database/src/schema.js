@@ -1729,7 +1729,11 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 
 // 批次 D 回填（幂等）：老作品的 class_session_id 是空的 —— 提交时曾经只抄了 class_id（班级口径），
 // 而教师的数据范围现在按课堂圈定，不回填的话**教师会静默看不到这些作品**。
-// 只按**证据**回填：作品所属项目上记着的课堂；没有就不硬猜（那种作品只有机构管理员看得到）。
+// 两级、都只按**证据**回填，不硬猜：
+//   ① 项目上记着的课堂（批次 C 之后建的项目都有）；
+//   ② 退一步：这个学生在这节课上的课堂名单记录（session_students）—— 迁移时按「消耗过算力」
+//      回填出来的那些，就是「他当时确实在这节课的某个课堂上」的直接证据。
+// 两级都没有（比如从没进过任何课堂）就留空：那种作品只有机构管理员看得到，不给教师瞎认领。
 try {
   db.exec(`UPDATE works SET class_session_id = (
       SELECT project.class_session_id FROM student_projects project
@@ -1738,7 +1742,26 @@ try {
     WHERE works.class_session_id IS NULL
       AND EXISTS (SELECT 1 FROM student_projects project
                    WHERE project.id = works.project_id AND project.class_session_id IS NOT NULL)`);
-} catch (_) { /* 老库没有这两列时跳过 */ }
+  db.exec(`UPDATE works SET class_session_id = (
+      SELECT part.session_id FROM session_students part
+       WHERE part.student_id = works.student_id AND part.lesson_id = works.course_lesson_id
+       ORDER BY COALESCE(part.completed_at, part.added_at) DESC LIMIT 1
+    )
+    WHERE works.class_session_id IS NULL
+      AND works.course_lesson_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM session_students part
+                   WHERE part.student_id = works.student_id AND part.lesson_id = works.course_lesson_id)`);
+  // 项目同理：老项目没记课堂时，用他在那节课上的名单记录补上（同样只按证据）
+  db.exec(`UPDATE student_projects SET class_session_id = (
+      SELECT part.session_id FROM session_students part
+       WHERE part.student_id = student_projects.student_id AND part.lesson_id = student_projects.course_lesson_id
+       ORDER BY COALESCE(part.completed_at, part.added_at) DESC LIMIT 1
+    )
+    WHERE student_projects.class_session_id IS NULL
+      AND student_projects.course_lesson_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM session_students part
+                   WHERE part.student_id = student_projects.student_id AND part.lesson_id = student_projects.course_lesson_id)`);
+} catch (_) { /* 老库没有这几张表/列时跳过 */ }
 
 // P5-W05 course_series 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
 try { db.exec('ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER'); } catch (_) {}
