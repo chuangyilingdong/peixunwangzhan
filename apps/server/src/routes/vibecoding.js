@@ -469,6 +469,7 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
   try {
     const result = await provider.generateStream({
       messages: history,
+      computeContext: { orgId: auth.user.orgId, userId: auth.user.id },
       signal: abortController.signal,
       onReasoning: (delta) => {
         const piece = String(delta || '');
@@ -505,8 +506,8 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
         modality: 'TEXT', model: selection.model, status: 'SUCCESS',
         inputTokens: streamedUsage?.inputTokens || 0, outputTokens: streamedUsage?.outputTokens || 0,
         // 算力池账本：对话也从这个池子扣（与画布/视频/音乐共用一个上限）
-        costFen: priceFenFor({ modality: 'TEXT', model: selection.model }), seriesId: conversationSeriesId(conversation),
-        pricing: { source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },
+        costFen: provider.compute?.saleSnapshot?.unitFen ?? priceFenFor({ modality: 'TEXT', model: selection.model }), seriesId: conversationSeriesId(conversation),
+        pricing: { compute: provider.compute, source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },
       });
       q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
         [assistantMessageId, fresh.id, 'assistant', text, selection.model, 'SUCCEEDED', 0, nowIso()]);
@@ -553,7 +554,7 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: conversation.class_session_id || null,
         modality: 'TEXT', model: selection.model, status: 'FAILED', failCode: code,
         costFen: 0, seriesId: conversationSeriesId(conversation),
-        pricing: { source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
+        pricing: { compute: provider.compute, source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
       });
       sseSend(ctx, 'error', { code, message: normalized.message || error?.message || 'AI 回复失败' });
     }

@@ -23,6 +23,7 @@ function providerError(message, code, status = 0) {
   const error = new Error(message);
   error.code = code;
   if (status) error.status = status;
+  error.safeToRetry = [401, 404, 429].includes(status);
   return error;
 }
 
@@ -80,6 +81,13 @@ function textFromContent(content) {
  * 各家字段名不一：OpenAI 新老两套都叫 prompt_tokens/completion_tokens，
  * 也有叫 input_tokens/output_tokens 的（Anthropic 风格、部分网关）。读不到就返回 null。
  */
+// Only an explicit amount + CNY currency is usable without guessing units or FX.
+export function reportedCost(payload) {
+  const cost = payload?.usage?.cost;
+  if (!cost || typeof cost !== 'object' || cost.currency !== 'CNY' || typeof cost.amount !== 'number' || !Number.isFinite(cost.amount) || cost.amount < 0) return null;
+  return { source:'REPORTED', currency:'CNY', amount:cost.amount, fen:cost.amount * 100 };
+}
+
 function tokenUsage(payload) {
   const usage = payload?.usage;
   if (!usage || typeof usage !== 'object') return null;
@@ -307,13 +315,13 @@ function providerHttpError(response, payload) {
   return providerError(safety ? '内容未通过 AI 服务安全策略' : `AI 供应商调用失败${suffix}`, safety ? PROVIDER_ERROR_CODES.SAFETY_REJECTED : 'GENERATION_PROVIDER_HTTP_ERROR', response.status);
 }
 
-function textAsset({ text, title, providerName, model, tokens = null }) {
+function textAsset({ text, title, providerName, model, tokens = null, cost = null }) {
   const boundedText = String(text || '').slice(0, MAX_TEXT_RESULT_CHARS);
   return {
     label: String(title || 'AI 灵感提示词').trim().slice(0, 120) || 'AI 灵感提示词',
     mimeType: 'text/plain; charset=utf-8',
     assetUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(boundedText)}`,
-    metadata: { provider: providerName, model, modality: 'TEXT', external: true, text: boundedText, ...(tokens ? { tokens } : {}) },
+    metadata: { provider: providerName, model, modality: 'TEXT', external: true, text: boundedText, reportedCost: cost, ...(tokens ? { tokens } : {}) },
   };
 }
 
@@ -322,7 +330,7 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
   if (normalizedModality === 'TEXT') {
     const text = responseText(payload);
     if (!text) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
-    return textAsset({ text, title, providerName, model, tokens: tokenUsage(payload) });
+    return textAsset({ text, title, providerName, model, tokens: tokenUsage(payload), cost: reportedCost(payload) });
   }
   const mimeType = String(contentType || defaultMimeType(normalizedModality)).split(';')[0] || defaultMimeType(normalizedModality);
   let candidate = binary?.length ? { assetUrl: `data:${mimeType};base64,${binary.toString('base64')}`, mimeType } : mediaCandidate(payload, normalizedModality, mimeType);
@@ -333,7 +341,7 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
     mimeType: candidate.mimeType || mimeType,
     assetUrl: candidate.assetUrl,
     previewUrl: /^image\//i.test(candidate.mimeType || mimeType) ? candidate.assetUrl : null,
-    metadata: { provider: providerName, model, modality: normalizedModality, external: true },
+    metadata: { provider: providerName, model, modality: normalizedModality, external: true, reportedCost: reportedCost(payload) },
   };
 }
 
@@ -371,14 +379,14 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     // 而**不是每个调用方都传 options**（作词那一步就没传）→ 少了它就是
     // 「TypeError: Cannot read properties of undefined (reading 'referenceAssets')」，
     // 表现为「平台作词失败」→ 描述模式生音乐整条链路直接崩（2026-09-11 引入、09-12 守卫照出来）。
-    async generate({ modality, prompt, title, options = {} } = {}) {
+    async generate({ modality, prompt, title, options = {}, messages, onSubmitted } = {}) {
       const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
       if (!Object.prototype.hasOwnProperty.call(DEFAULT_MODALITY_PATHS, normalizedModality)) {
         throw providerError('当前真实 AI 适配器暂不支持该素材类型。', PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED);
       }
       const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints, requestPaths);
       const response = await fetchWithTimeout(url, {
-        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, referenceAssets: options.referenceAssets, requestTemplates, modelRequestTemplates }),
+        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, referenceAssets: options.referenceAssets, requestTemplates, modelRequestTemplates, messages }),
         apiKey,
         timeout,
         modality: normalizedModality,
@@ -386,6 +394,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
       const parsed = await parseResponse(response, normalizedModality);
       if (!response.ok) throw providerHttpError(response, parsed);
       if (normalizedModality !== 'TEXT' && !parsed?.binary && pendingPayload(parsed)) {
+        onSubmitted?.(payloadTaskId(parsed));
         return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '' })] };
       }
       return { assets: [assetFromResponse({ payload: parsed, binary: parsed?.binary, contentType: parsed?.contentType, modality: normalizedModality, title, providerName, model: providerModel })] };
@@ -434,6 +443,8 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
           return { assets: [textAsset({ text, title, providerName, model: providerModel })], streamed: false };
         }
         let full = '';
+        let usage = null;
+        let cost = null;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -450,6 +461,8 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
             if (!data || data === '[DONE]') continue;
             let chunk;
             try { chunk = JSON.parse(data); } catch { continue; }
+            usage = tokenUsage(chunk) || usage;
+            cost = reportedCost(chunk) || cost;
             const choice = chunk?.choices?.[0];
             const reasoning = choice?.delta?.reasoning_content ?? '';
             if (reasoning && typeof onReasoning === 'function') onReasoning(reasoning);
@@ -460,7 +473,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
           }
         }
         if (!full.trim()) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
-        return { assets: [textAsset({ text: full, title, providerName, model: providerModel })], streamed: true };
+        return { assets: [textAsset({ text: full, title, providerName, model: providerModel, tokens: usage, cost })], usage, streamed: true };
       } finally {
         clearTimeout(timer);
         if (signal) signal.removeEventListener('abort', abortFromCaller);

@@ -2,6 +2,8 @@ import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_K
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
+import { id, json, nowIso, q } from '../lib.js';
+import { priceFenFor } from './computePool.js';
 
 function svgDataUrl(title, subtitle, hue) {
   const escape = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -104,6 +106,46 @@ export function generationProviderInfo(selection = {}) {
   };
 }
 export function getGenerationProvider(selection = {}) {
+  const primary = rawGenerationProvider(selection);
+  const wrapper = { ...primary, compute: null };
+  const execute = async (method, args = {}) => {
+    const modality = args.modality || 'TEXT';
+    const snapshot = selection.saleSnapshot || { model: primary.model, modality, unitFen: priceFenFor({ modality, model: primary.model }), capturedAt: nowIso(), basis: 'PER_CALL' };
+    const callId = id('call');
+    wrapper.compute = { callId, saleSnapshot: snapshot };
+    // Gateway owns its routing. Never bypass a student's gateway quota with a direct fallback.
+    const candidates = [selection, ...(!selection.gateway && selection.backup ? [selection.backup] : [])];
+    for (let index = 0; index < candidates.length; index++) {
+      const selected = candidates[index]; const provider = index ? rawGenerationProvider(selected) : primary;
+      const attemptId = id('attempt'); let emitted = false; let submitted = false;
+      const context = args.computeContext || selection.computeContext || {};
+      const estimate = selected.estimatedCostFen;
+      q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [attemptId,callId,index+1,context.orgId || null,context.userId || args.userId || null,args.projectId || null,context.jobId || null,modality,selected.channelId || 'default',provider.name,provider.model,selected.gateway ? 'gateway' : 'direct','RUNNING',json(snapshot),nowIso()]);
+      const output = (callback) => (...values) => { if (values[0]) { emitted = true; q('UPDATE compute_attempts SET output_started=1 WHERE id=?',[attemptId]); } return callback?.(...values); };
+      try {
+        const result = await provider[method]({ ...args,
+          onDelta: output(args.onDelta), onReasoning: output(args.onReasoning),
+          onSubmitted: (taskId) => { submitted = true; q("UPDATE compute_attempts SET status='SUBMITTED',task_id=? WHERE id=?",[String(taskId),attemptId]); args.onSubmitted?.(taskId); },
+        });
+        const reported = !selected.gateway ? result?.assets?.find(asset => asset?.metadata?.reportedCost)?.metadata?.reportedCost : null;
+        const known = provider.name === 'local-mock' || (estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)));
+        q("UPDATE compute_attempts SET status='SUCCESS',cost_source=?,upstream_cost_fen=?,completed_at=? WHERE id=?",[provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : known ? 'ESTIMATED' : 'UNKNOWN',provider.name === 'local-mock' ? 0 : reported ? reported.fen : known ? Number(estimate) : null,nowIso(),attemptId]);
+        wrapper.name = provider.name; wrapper.model = provider.model;
+        return { ...result, compute: wrapper.compute };
+      } catch (error) {
+        q("UPDATE compute_attempts SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",[String(error.code || 'UPSTREAM_ERROR'),String(error.message || '调用失败').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').split(selected.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]').split(selected.gateway?.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]').slice(0,1000),nowIso(),attemptId]);
+        // Only an explicit pre-acceptance rejection is safe. Network ambiguity, accepted jobs and output never retry.
+        if (index + 1 >= candidates.length || emitted || submitted || args.signal?.aborted || error.safeToRetry !== true) throw error;
+      }
+    }
+  };
+  wrapper.generate = (args) => execute('generate', args);
+  if (primary.generateStream) wrapper.generateStream = (args) => execute('generateStream', args);
+  return wrapper;
+}
+
+function rawGenerationProvider(selection = {}) {
   const selected = providerSelection(selection);
   const config = providerConfig(selected);
   if (isMockProvider(config.provider)) return mockProvider(config.model);

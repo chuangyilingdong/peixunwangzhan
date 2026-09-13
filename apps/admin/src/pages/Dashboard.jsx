@@ -39,32 +39,24 @@ export function Dashboard({ api }) {
     </Panel>
     {loading ? <Loading label="正在读取平台指标…" /> : error ? <ErrorState error={error} onRetry={refresh} /> : <>
       <Notice>
-        统计区间：{formatDate(data.filters.from)} 至 {formatDate(data.filters.to)}（UTC，左闭右开）；生成时间 {formatDate(data.meta.generatedAt)}。
+        统计区间：{formatDate(data.filters.from)} 至 {formatDate(data.filters.to)}（本地时间显示，接口按 UTC 左闭右开统计）；生成时间 {formatDate(data.meta.generatedAt)}。
       </Notice>
       <div className="metrics">
-        <MetricCard label="机构总数" value={metrics.organizations ?? 0} hint={definition('organizations')} />
-        <MetricCard label="可用机构" value={metrics.activeOrganizations ?? 0} hint={definition('activeOrganizations')} tone="teal" />
-        <MetricCard label="教师" value={metrics.teachers ?? 0} hint={definition('teachers')} tone="orange" />
-        <MetricCard label="学生" value={metrics.students ?? 0} hint={definition('students')} tone="pink" />
-        <MetricCard label="已发布课程" value={metrics.publishedCourses ?? 0} hint={definition('publishedCourses')} />
-        <MetricCard label="课程授权" value={metrics.activeAssignments ?? 0} hint={definition('activeAssignments')} tone="teal" />
-        <MetricCard label="课堂场次（查询期）" value={metrics.classSessions ?? 0} hint={definition('classSessions')} tone="orange" />
-        <MetricCard label="课堂场次" value={metrics.classSessions ?? 0} hint={definition('classSessions')} tone="pink" />
-        <MetricCard label="新增项目" value={metrics.projects ?? 0} hint={definition('projects')} />
-        <MetricCard label="提交作品" value={metrics.works ?? 0} hint={definition('works')} tone="teal" />
-        <MetricCard label="AI 任务" value={metrics.aiTasks ?? 0} hint={definition('aiTasks')} tone="orange" />
-        <MetricCard label="异常调用" value={metrics.abnormalTasks ?? 0} hint={definition('abnormalTasks')} tone="pink" />
-        <MetricCard label="新增学生" value={metrics.newStudents ?? 0} hint={definition('newStudents')} />
-        <MetricCard label="活跃学生" value={metrics.activeStudents ?? 0} hint={definition('activeStudents')} tone="teal" />
-        <MetricCard label="完成课时" value={metrics.lessonCompletions ?? 0} hint={definition('lessonCompletions')} tone="orange" />
-        <MetricCard label="算力消耗（元）" value={yuan(compute.totalYuan)} hint={definition('compute.totalYuan')} />
-        <MetricCard label="池子接近上限" value={compute.pools.nearLimit} hint={definition('compute.pools')} tone="orange" />
-        <MetricCard label="在广场作品" value={content.onPlaza} hint={definition('content.onPlaza')} tone="teal" />
+        <MetricCard label="活跃学生" value={metrics.activeStudents ?? 0} hint="查询区间内有学习活动的学生" />
+        <MetricCard label="课堂场次（查询期）" value={metrics.classSessions ?? 0} hint="查询区间内的课堂场次" />
+        <MetricCard label="算力池扣费" value={yuan(compute.totalYuan)} hint="来源：算力池账本；不等同上游成本" />
+        <MetricCard label="异常调用" value={metrics.abnormalTasks ?? 0} hint="查询区间内失败或被拦截的调用" />
       </div>
+      <Panel title="运营关注">
+        <div className="row-actions"><span>算力池接近上限 <strong>{compute.pools.nearLimit}</strong></span><span>已用尽 <strong>{compute.pools.exhausted}</strong></span><Link className="text-button" to="/compute/usage">查看用量与成本</Link><Link className="text-button" to="/organizations">管理机构</Link></div>
+      </Panel>
+      <details className="admin-detail"><summary>机构、教学与内容规模</summary><div className="metrics">
+        {[['organizations', '机构总数'], ['activeOrganizations', '可用机构'], ['teachers', '教师'], ['students', '学生'], ['publishedCourses', '已发布课程'], ['activeAssignments', '课程授权'], ['projects', '新增项目'], ['works', '提交作品'], ['aiTasks', 'AI 任务'], ['newStudents', '新增学生'], ['lessonCompletions', '完成课时']].map(([key, label]) => <MetricCard key={key} label={label} value={metrics[key] ?? 0} hint={definition(key)} />)}
+      </div></details>
       <div className="split">
-        <Panel title="算力（单位：元，口径与「模型与算力」页一致）"><div className="muted" style={{ marginBottom: 8 }}>
+        <Panel title="算力池扣费与使用分布"><div className="muted" style={{ marginBottom: 8 }}>
           口径：四种模态（对话 / 图片 / 视频 / 音乐）合计 {yuan(compute.totalYuan)}，共 {compute.calls} 次调用（成功 {compute.successCalls} 次）。
-          数据来自算力池账本（与「模型与算力」页同一份）；单价在「模型与算力 → 步骤② 每次调用单价」里配。
+          数据来自算力池账本（与「模型与算力」页同一份）；单价在「模型与算力 → 渠道与模型配置」维护；上游成本需另行核对账单。
         </div>
           <div className="table-wrap"><table><thead><tr><th>模态</th><th>调用</th><th>消耗（元）</th></tr></thead><tbody>
             {compute.byModality.length ? compute.byModality.map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td><strong>{yuan(item.yuan)}</strong></td></tr>) : <tr><td colSpan={3}>所选区间暂无算力消耗</td></tr>}
@@ -89,7 +81,7 @@ export function Dashboard({ api }) {
           </tbody></table></div>
         </Panel>
       </div>
-      <Panel title="官网转化（第一方匿名埋点，与「转化分析」同源）">
+      <Panel title="官网转化（第一方匿名分析）">
         <div className="muted" style={{ marginBottom: 8 }}>
           区间内匿名事件 {site.totals?.events || 0} 条 · 去重访客 {site.totals?.visitors || 0} 人 ·
           数据保留 {site.retentionDays || 90} 天。访客同意匿名分析后才记录，不含 IP / 姓名 / 电话。
@@ -99,7 +91,7 @@ export function Dashboard({ api }) {
         </tbody></table></div>
         {site.byEvent?.length ? <div className="top-gap"><h4>事件明细</h4><div className="table-wrap"><table><thead><tr><th>事件</th><th>匿名访客</th><th>次数</th></tr></thead><tbody>{site.byEvent.map((item) => <tr key={item.eventName}><td>{item.eventName}</td><td>{item.visitors}</td><td>{item.events}</td></tr>)}</tbody></table></div></div> : null}
       </Panel>
-      <Panel title="统计口径"><div className="table-wrap"><table><thead><tr><th>指标</th><th>口径说明</th></tr></thead><tbody>{Object.entries(definitions).map(([key, text]) => <tr key={key}><td>{key}</td><td>{text}</td></tr>)}</tbody></table></div></Panel>
+      <details className="admin-detail"><summary>查看统计口径</summary><Panel title="统计口径"><div className="table-wrap"><table><thead><tr><th>指标</th><th>口径说明</th></tr></thead><tbody>{Object.entries(definitions).map(([key, text]) => <tr key={key}><td>{key}</td><td>{text}</td></tr>)}</tbody></table></div></Panel></details>
     </>}
   </>;
 }

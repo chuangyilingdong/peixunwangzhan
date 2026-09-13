@@ -1,9 +1,11 @@
+import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function PlatformUsers({ api }) {
+  const [confirm, confirmation] = useAdminConfirm();
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const [filters, setFilters] = useState({ role: '', orgId: '', search: '' });
   const [page, setPage] = useState(1);
@@ -29,12 +31,20 @@ export function PlatformUsers({ api }) {
   }
   const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学员' };
   async function run(target, action, body, successMessage, confirmText) {
-    if (confirmText && !window.confirm(confirmText)) return;
-    setBusy(true); setMessage('');
-    try { await api.put(`admin/platform-users/${target.id}/${action}`, body); setPasswordInput({ ...passwordInput, [target.id]: '' }); setMessage(successMessage); users.refresh(); }
-    catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    const execute = async () => {
+      setBusy(true); setMessage('');
+      try {
+        await api.put(`admin/platform-users/${target.id}/${action}`, body);
+        setPasswordInput((current) => ({ ...current, [target.id]: '' }));
+        setMessage(successMessage); users.refresh(); if (detailId === target.id) detail.refresh();
+      } finally { setBusy(false); }
+    };
+    if (confirmText || action === 'password') {
+      await confirm({ message: confirmText || `确认重置「${target.displayName}」的密码？该账号全部会话将立即失效。`, execute });
+    } else { try { await execute(); } catch (error) { setMessage(error.message); } }
   }
   return <>
+    {confirmation}
     <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态，并可执行启停、重置密码与解绑手机。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportUsers}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={users.refresh}>刷新</button></>} />
     <Panel title="筛选条件">
       <div className="form-grid">
@@ -52,7 +62,7 @@ export function PlatformUsers({ api }) {
         {item.status === 'ACTIVE'
           ? <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'DISABLED' }, `已停用 ${item.displayName}，该账号现有登录会话立即失效。`, `确认停用「${item.displayName}」？停用后该账号现有登录会话立即失效，将无法登录和使用平台功能。`)}>停用</button>
           : <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'ACTIVE' }, `已启用 ${item.displayName}。`)}>启用</button>}
-        <input placeholder="新密码（≥6位）" value={passwordInput[item.id] || ''} onChange={(e) => setPasswordInput({ ...passwordInput, [item.id]: e.target.value })} />
+        <input type="password" autoComplete="new-password" aria-label={`${item.displayName} 的新密码`} placeholder="新密码（≥6位）" value={passwordInput[item.id] || ''} onChange={(e) => setPasswordInput({ ...passwordInput, [item.id]: e.target.value })} />
         <button className="text-button" disabled={busy || (passwordInput[item.id] || '').length < 6} onClick={() => run(item, 'password', { password: passwordInput[item.id] }, `已重置 ${item.displayName} 的密码，该账号全部会话已失效。`)}>重置密码</button>
         {item.phone ? <button className="text-button" disabled={busy} onClick={() => run(item, 'phone', { phone: '' }, `已解绑 ${item.displayName} 的手机号。`, `确认解绑「${item.displayName}」的手机号 ${item.phone}？`)}>解绑手机</button> : null}
       </div></td></tr>)}</tbody></table></div><Pagination page={users.data.page} totalPages={users.data.totalPages} onChange={setPage} disabled={users.loading} /></> : <Empty title="没有符合条件的用户" body="可以调整角色、机构、关键词、排序或每页数量。" />}
@@ -73,14 +83,11 @@ export function PlatformUsers({ api }) {
             {['STUDENT', 'TEACHER', 'ORG_ADMIN'].map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}
           </select></label>
           <div><button className="primary-button" disabled={busy || detail.data.role === 'SUPER_ADMIN' || roleDraft === detail.data.role}
-            onClick={async () => {
-              setBusy(true); setMessage('');
-              try {
-                await api.put(`admin/platform-users/${detail.data.id}/role`, { role: roleDraft });
-                setMessage(`已把 ${detail.data.displayName} 的角色改为${roleLabels[roleDraft]}，该账号全部会话已失效。`);
-                users.refresh(); detail.refresh();
-              } catch (err) { setMessage(err.message); } finally { setBusy(false); }
-            }}>保存角色</button></div>
+            onClick={() => confirm({ title: '调整用户角色', message: `确认将「${detail.data.displayName}」改为${roleLabels[roleDraft]}？该账号全部会话将失效。`, execute: async () => {
+              await api.put(`admin/platform-users/${detail.data.id}/role`, { role: roleDraft });
+              setMessage(`已把 ${detail.data.displayName} 的角色改为${roleLabels[roleDraft]}。`);
+              users.refresh(); detail.refresh();
+            } })}>保存角色</button></div>
         </div>
         {detail.data.role === 'SUPER_ADMIN' ? <Notice tone="info">平台管理员角色在「平台管理员」页管理，这里不提供修改。</Notice> : null}
       </>}

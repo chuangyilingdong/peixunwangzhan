@@ -160,8 +160,8 @@ export function PricingPanel({ api }) {
     {message && <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice>}
     {!pricing ? <Empty title="还没有读取" body="点右上角「读取单价」：这四档单价决定算力池怎么扣钱（单价 × 调用次数）。" /> : <>
       <p className="muted">这是<strong>对学生的计费价</strong>（不是上游成本）：池子按「单价 × 调用次数」扣，所以这个价就是你的毛利口径。
-        计费<strong>只按次</strong>——没有「按 token 计费」这回事，所以这里就是全部要填的价（上游成本可在步骤④「用量归集」那张表里对，配了网关才有）。
-        只要保证<strong>售价不低于上游成本</strong>即可。</p>
+        计费<strong>只按次</strong>——没有「按 token 计费」这回事，所以这里就是全部要填的价（上游成本在调用账单逐次显示；未配置估价且无账单凭据时为未知）。
+        估算成本不等于实际账单；售价独立配置。</p>
       <div className="form-grid">
         {[['TEXT', '对话'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']].map(([key, label]) => (
           <label key={key}>{label}（元 / 次）
@@ -196,7 +196,7 @@ export function PricingPanel({ api }) {
                   onChange={(event) => setModelPrice(model, event.target.value)} /></td>
               </tr>;
             })}
-          </tbody></table></div> : <p className="muted">还没有可选的模型：先到步骤① 配好渠道与模型（勾选「可用模型」），这里就会出现。</p>}
+          </tbody></table></div> : <p className="muted">还没有可选的模型：先到「路由与定价」配好渠道与模型（勾选「可用模型」），这里就会出现。</p>}
           <div className="row-actions top-gap">
             <input value={manualModel} placeholder="手工添加模型 ID（回车）" onChange={(event) => setManualModel(event.target.value)}
               onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); const value = manualModel.trim(); if (value) { setModelPrice(value, '0.1'); setManualModel(''); } } }} />
@@ -216,6 +216,8 @@ export function PricingPanel({ api }) {
 
 /* ─────────────── ④ 用量归集 + 算力池 + 两本账对账 ─────────────── */
 export function ComputeUsagePanel({ api }) {
+  const [attemptDays, setAttemptDays] = useState('30');
+  const attempts = useData(() => api.get(`admin/compute-attempts?days=${attemptDays}`), [api, attemptDays]);
   const config = useData(() => api.get('admin/compute-gateway'), [api]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -249,6 +251,14 @@ export function ComputeUsagePanel({ api }) {
 
   return <>
     {message && <Notice tone="danger">{message}</Notice>}
+
+    <Panel title="上游调用尝试" actions={<><select value={attemptDays} onChange={e => setAttemptDays(e.target.value)}><option value="7">近7天</option><option value="30">近30天</option><option value="90">近90天</option></select><button className="secondary-button" onClick={attempts.refresh}>刷新</button></>}>
+      <p className="muted">包括未结算、探测及失败尝试。展示最近100条；汇总覆盖所选期间全部尝试。真实账单未接入时金额为未知，估算不代表实际付款。</p>
+      {attempts.loading ? <Loading /> : attempts.error ? <ErrorState error={attempts.error} onRetry={attempts.refresh} /> : <>
+        <p>共 {attempts.data?.summary?.calls || 0} 次尝试 · 已知估算 {yuan(Number(attempts.data?.summary?.estimatedFen || 0) / 100)} · 成本未知 {attempts.data?.summary?.unknownCalls || 0} 次</p>
+        <p>可比较调用 {attempts.data?.summary?.comparableCalls || 0} 次 · 对应学生扣费 {yuan(Number(attempts.data?.summary?.comparableSaleFen || 0) / 100)} · 估算价差 {attempts.data?.summary?.estimatedDifferenceFen == null ? '未知' : yuan(attempts.data.summary.estimatedDifferenceFen / 100)} · 价差率 {attempts.data?.summary?.estimatedDifferenceRate == null ? '未知' : `${attempts.data.summary.estimatedDifferenceRate.toFixed(2)}%`}</p><p className="muted">仅比较已结算且所有尝试成本均已知的调用；含未知成本的 {attempts.data?.summary?.unknownLogicalCalls || 0} 次调用排除，不按零成本计算。价差率＝（对应学生扣费－估算成本）÷对应学生扣费，不代表真实毛利。</p><div className="table-wrap"><table><thead><tr><th>时间 / 归属</th><th>渠道 / 模型</th><th>状态 / 原因</th><th>成本来源 / 金额</th></tr></thead><tbody>{attempts.data?.items?.map(item => <tr key={item.id}><td>{formatDate(item.created_at)}<div className="muted">{item.org_name || '平台或未归属'} · {item.student_name || '—'}</div></td><td>{item.channel_id} · #{item.attempt}<div className="muted">{item.model} · {item.routed_via}</div></td><td>{item.status}<div className="muted">{item.error_code} {item.error_message}</div>{item.task_id && <div>任务 {item.task_id}</div>}</td><td>{({ UNKNOWN: '未知', ESTIMATED: '估算', MOCK: '模拟', REPORTED: '上游报告（CNY，未对账）' })[item.cost_source] || item.cost_source}<div>{item.upstream_cost_fen == null ? '未知' : yuan(item.upstream_cost_fen / 100)}</div></td></tr>)}</tbody></table></div>
+      </>}
+    </Panel>
 
     <Panel title="用量归集（网关侧：按令牌名还原到机构 / 学员 / 课时）"
       actions={<button className="secondary-button" disabled={busy || !enabled} onClick={() => loadUsage()}>读取用量</button>}>
@@ -320,18 +330,18 @@ export function ComputeUsagePanel({ api }) {
       {!reconcile ? <Empty title="还没有对账" body="点右上角「开始对账」：两本账并排看 —— 池子账（四种模态、按单价折算）与网关账（精确，只含对话/图片）。" />
         : <>
           <p className="muted">
-            只拿<strong>重叠模态</strong>（对话 / 图片）比：池子按<strong>售价</strong>记、网关按<strong>上游实耗</strong>记，所以差额主要是<strong>你的毛利</strong>（不是误差）。要看的是「差额是否稳定为正」——为负说明这个模态在亏。
+            只拿<strong>重叠模态</strong>（对话 / 图片）比：池子按<strong>售价</strong>记、网关按<strong>额度日志</strong>记，网关金额由额度换算，不能直接认定为真实上游成本或毛利；时间、覆盖模态与费率可能不同。
             视频与音乐单列一列 —— 网关看不见它们，所以这部分天然对不上，不是错。
           </p>
           {!reconcile.gatewayEnabled ? <Notice tone="danger">算力网关没启用：网关账这一段必然为空，下面所有行都标成「网关无数据」，无法对账。</Notice> : null}
           <div className="row-actions">
             <span className="muted">池子（对话+图片）<strong>{yuan(reconcile.totals.poolTextImageYuan)}</strong></span>
-            <span className="muted">· 网关（精确）<strong>{yuan(reconcile.totals.gatewayYuan)}</strong></span>
+            <span className="muted">· 网关（额度换算）<strong>{yuan(reconcile.totals.gatewayYuan)}</strong></span>
             <span className="muted">· 差额<strong>{yuan(reconcile.totals.diffYuan)}</strong></span>
             <span className="muted">· 视频+音乐（网关看不见）<strong>{yuan(reconcile.totals.poolOtherYuan)}</strong></span>
             {reconcile.totals.unmappedGatewayYuan ? <span className="muted">· 网关有 {yuan(reconcile.totals.unmappedGatewayYuan)} 归不到课包（令牌名缺课时段）</span> : null}
           </div>
-          {reconcile.items.length ? <div className="table-wrap top-gap"><table><thead><tr><th>学员</th><th>课包</th><th>池子（对话+图片）</th><th>网关（精确）</th><th>差额</th><th>池子相对网关</th><th>视频+音乐</th><th>状态</th></tr></thead><tbody>
+          {reconcile.items.length ? <div className="table-wrap top-gap"><table><thead><tr><th>学员</th><th>课包</th><th>池子（对话+图片）</th><th>网关（额度换算）</th><th>差额</th><th>池子相对网关</th><th>视频+音乐</th><th>状态</th></tr></thead><tbody>
             {reconcile.items.map((item) => <tr key={`${item.userId}-${item.seriesId || 'none'}`}>
               <td><strong>{item.studentName}</strong><div className="muted">{item.orgName}</div></td>
               <td className="muted">{item.seriesTitle}</td>

@@ -1,0 +1,65 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'compute-routing-'));
+process.env.PLATFORM_DB_PATH = path.join(temp, 'test.db');
+process.env.PLATFORM_DATA_DIR = temp;
+process.env.AI_PROVIDER_API_KEY = 'test-only';
+const load = p => import(pathToFileURL(path.resolve(p)).href);
+const { getGenerationProvider } = await load('apps/server/src/services/generationProvider.js');
+const { rows } = await load('apps/server/src/lib.js');
+const originalFetch = globalThis.fetch;
+const primary = { provider: 'custom', model: 'primary', endpoint: 'https://primary.test/v1', channelId: 'primary', apiKey: 'test-only', backup: { provider: 'custom', model: 'backup', endpoint: 'https://backup.test/v1', channelId: 'backup', apiKey: 'test-only', estimatedCostFen: 12 } };
+const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+try {
+  let calls = [];
+  globalThis.fetch = async url => { calls.push(String(url)); return String(url).includes('primary') ? json({ error: 'rate limited' }, 429) : json({ choices: [{ message: { content: 'ok' } }] }); };
+  let provider = getGenerationProvider(primary);
+  await provider.generate({ modality: 'TEXT' });
+  assert.equal(calls.length, 2); assert.equal(provider.model, 'backup');
+  let attempts = rows('SELECT * FROM compute_attempts WHERE call_id=? ORDER BY attempt', [provider.compute.callId]);
+  assert.deepEqual(attempts.map(x => x.status), ['FAILED', 'SUCCESS']);
+  assert.equal(attempts[0].upstream_cost_fen, null); assert.equal(attempts[1].cost_source, 'ESTIMATED');
+  assert.equal(attempts[1].upstream_cost_fen, 12);
+  assert.equal(provider.compute.saleSnapshot.model, 'primary');
+  calls = [];
+  globalThis.fetch = async url => { calls.push(url); throw new Error('socket closed after request'); };
+  provider = getGenerationProvider(primary);
+  await assert.rejects(provider.generate({ modality: 'TEXT' })); assert.equal(calls.length, 1);
+  calls = [];
+  globalThis.fetch = async (url, opts) => { calls.push(url); return opts.method === 'POST' ? json({ task_id: 'accepted-task' }) : json({ error: 'rate limited' }, 429); };
+  provider = getGenerationProvider(primary);
+  await assert.rejects(provider.generate({ modality: 'VIDEO' })); assert.equal(calls.length, 2);
+  assert.equal(rows('SELECT task_id FROM compute_attempts WHERE call_id=?', [provider.compute.callId])[0].task_id, 'accepted-task');
+  calls = [];
+  globalThis.fetch = async url => { calls.push(url); return new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n', { headers: { 'content-type': 'text/event-stream' } }); };
+  provider = getGenerationProvider(primary);
+  await assert.rejects(provider.generateStream({ onDelta() { throw Object.assign(new Error('consumer failed'), { safeToRetry: true }); } })); assert.equal(calls.length, 1);
+  calls = [];
+  globalThis.fetch = async url => { calls.push(url); return json({ error: 'rate limit' }, 429); };
+  provider = getGenerationProvider({ ...primary, gateway: { endpoint: 'https://gateway.test', apiKey: 'test-only' } });
+  await assert.rejects(provider.generate({ modality: 'TEXT' })); assert.equal(calls.length, 1);
+  assert.ok(!JSON.stringify(rows('SELECT * FROM compute_attempts')).includes('test-only'));
+  const { reportedCost } = await load('apps/server/src/services/openaiCompatibleProvider.js');
+  assert.equal(reportedCost({usage:{cost:3}}),null);
+  assert.equal(reportedCost({usage:{cost:{amount:2,currency:'USD'}}}),null);
+  assert.equal(reportedCost({usage:{cost:{amount:0.25,currency:'CNY'}}}).fen,25);
+  const { providerSelectionForModality } = await load('apps/server/src/routes/aiGeneration.js');
+  const { normalizeAiProviderPolicy } = await load('apps/server/src/routes/billingConfig.js');
+  const policy = normalizeAiProviderPolicy(JSON.stringify({ channels: [
+    { id:'a', provider:'custom', endpoint:'https://primary.test/v1', model:'one', models:['one','two'] },
+    { id:'b', provider:'custom', endpoint:'https://backup.test/v1', model:'default-backup', models:['default-backup','mapped-backup'], modelCosts:{'mapped-backup':9} }
+  ], modalityChannels:{TEXT:'a'}, modelRoutes:[{modality:'TEXT',channelId:'a',model:'two',backupChannelId:'b',backupModel:'mapped-backup'}] }));
+  const selected = providerSelectionForModality(policy,'TEXT','two');
+  assert.equal(selected.model,'two'); assert.equal(selected.backup.model,'mapped-backup'); assert.equal(selected.backup.estimatedCostFen,9);
+  assert.equal(providerSelectionForModality(policy,'TEXT','one').backup,undefined);
+  calls = [];
+  globalThis.fetch = async (url, options) => { calls.push(JSON.parse(options.body).model); return String(url).includes('primary') ? json({error:'limited'},429) : json({choices:[{message:{content:'mapped'}}]}); };
+  provider = getGenerationProvider(selected); await provider.generate({modality:'TEXT'});
+  assert.deepEqual(calls,['two','mapped-backup']);
+  assert.equal(provider.compute.saleSnapshot.model,'two');
+  console.log('PASS: per-model mapping normalization, distinct main models, mapped backup request and per-model cost');
+  console.log('PASS: failover, model and sale snapshot, unknown/estimated cost, network ambiguity, submitted job, stream output, gateway isolation, secret exclusion');
+} finally { globalThis.fetch = originalFetch; }

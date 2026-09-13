@@ -203,6 +203,18 @@ try {
   check('⑤ 单段令牌（老约定）也能用上', gateway.relays.at(-1)?.auth === 'Bearer sk-student-only', String(gateway.relays.at(-1)?.auth));
   check('⑤ 没有课时预算时不自动发牌（只记账，不拦）', gateway.tokenPosts.length === beforePosts, `tokenPosts=${gateway.tokenPosts.length}`);
 
+  const keptTokens = gateway.tokens;
+  gateway.tokens = [];
+  await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username:'root', password:'p59-password', enabled:true });
+  const beforeMissing = upstream.requests.length;
+  const missing = await generate('网关无令牌必须拒绝');
+  check('⑤ 无令牌不得回退直连', missing.error?.code === 'COMPUTE_GATEWAY_UNAVAILABLE' && upstream.requests.length === beforeMissing, JSON.stringify(missing));
+  gateway.tokens = keptTokens;
+  await setGateway(admin, { baseUrl:'http://127.0.0.1:1', username:'root', password:'p59-password', enabled:true });
+  const unreachable = await generate('网关不可达必须拒绝');
+  check('⑤ 网关不可达不得回退直连', unreachable.error?.code === 'COMPUTE_GATEWAY_UNAVAILABLE' && upstream.requests.length === beforeMissing, JSON.stringify(unreachable));
+  await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username:'root', password:'p59-password', enabled:true });
+
   /* ⑥ 网关说「额度用尽」：明确报错，且**绝不**回退直连（否则闸门形同虚设） */
   const upstreamBeforeQuota = upstream.requests.length;
   quotaExhausted.on = true;

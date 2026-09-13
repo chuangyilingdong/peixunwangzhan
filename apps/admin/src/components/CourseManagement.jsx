@@ -301,7 +301,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                   <label>生成音频<select value={box.audio === true ? 'YES' : box.audio === false ? 'NO' : ''} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.value === '' ? null : event.target.value === 'YES' }))}><option value="">学生自选（课堂里由学生挑）</option><option value="YES">带音频</option><option value="NO">不带音频</option></select>{caps.audio ? '' : <small className="muted">当前模型不支持生成音频</small>}</label>
                 </> : null}
               </div>
-              {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 步骤① 上游渠道与模型」里填写。</p> : null}
+              {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 渠道与模型配置」里填写。</p> : null}
               <textarea rows={3} value={snapshot.content || ''} placeholder={(box?.mode === 'DESCRIPTION' ? '平台预填描述（学生加入画布时会自动填进框体，可以改）：例如「关于春天放风筝的欢快儿歌」' : '平台预填歌词（学生加入画布时会自动填进框体，可以改）：例如 [Verse] 小星星眨眨眼')} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} />
               <div className="lesson-config-row"><input value={material.assetUrl || ''} placeholder={modality === 'VIDEO' ? '预置首帧图地址（图生视频模型直接用）' : '预置素材地址（可选）'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传素材'}<input type="file" accept="image/*" disabled={uploading === `${groupIndex}:${materialIndex}`} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label></div>
             </> : <>
@@ -595,7 +595,7 @@ function CourseList({ api, onOpen }) {
     if (!window.confirm(text)) return;
     setBusy(true); setMessage('');
     try {
-      await api.request(`admin/course-series/${courseId}/status`, { method: 'POST', body: { action } });
+      await api.request(`admin/course-series/${course.id}/status`, { method: 'POST', body: { action } });
       setMessage(action === 'archive' ? '课包已下架。' : '课包已发布。');
       courses.refresh();
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
@@ -604,7 +604,7 @@ function CourseList({ api, onOpen }) {
   async function deleteCourse(course) {
     if (!window.confirm(`确认删除课包「${course.title}」？删除后课包与课时配置不可恢复；已被课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
     setBusy(true); setMessage('');
-    try { await api.request(`admin/course-series/${courseId}`, { method: 'DELETE' }); setMessage(`课包「${course.title}」已删除。`); courses.refresh(); }
+    try { await api.request(`admin/course-series/${course.id}`, { method: 'DELETE' }); setMessage(`课包「${course.title}」已删除。`); courses.refresh(); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 

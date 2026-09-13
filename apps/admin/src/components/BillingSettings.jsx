@@ -1,8 +1,8 @@
 // 计费配置：模态开关（平台级总开关） / 预警阈值
 // 后端 /api/admin/billing-config/{modalities,alerts} 早已存在，此前管理端只有 AI 渠道界面。
 // 2026-09-13（P4 删积分）：原 /billing-config/quotas（积分限额，只读不拦）已随积分体系删除。
-// 2026-09-13（页面合并）：本组件作为「模型与算力」页的步骤⑤；原来那列 legacy unitCost（从不参与计算）已去掉，
-//   单价统一由步骤②的 compute_pricing.perCall 负责 —— 两个单价并存正是理解成本高的来源之一。
+// 2026-09-13（页面合并）：本组件位于「模型与算力」配置视图；原来那列 legacy unitCost（从不参与计算）已去掉，
+//   单价统一由 compute_pricing.perCall 负责 —— 两个单价并存正是理解成本高的来源之一。
 import { useState } from 'react';
 import { Empty, ErrorState, Loading, Notice, Panel, formatDate, useData } from '@platform/shared';
 
@@ -41,7 +41,7 @@ export function BillingSettings({ api }) {
     {message ? <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice> : null}
 
     <Panel title="模态开关（平台级总开关）">
-      <p className="muted">关闭某个模态后，学生端生成会被服务端拒绝（MODALITY_DISABLED）。<strong>单价不在这里配</strong> —— 每次调用单价在步骤②（算力池按那个价扣钱）；这里那一列曾经是另一个「单价」字段，从不参与任何计算，已从界面去掉，免得两个单价打架。</p>
+      <p className="muted">关闭模态后，学生将无法使用该能力生成内容。调用单价在本页的单价配置中维护；预警设置见下方。</p>
       {modalities.loading ? <Loading /> : modalities.error ? <ErrorState error={modalities.error} onRetry={modalities.refresh} /> : <div className="table-wrap"><table>
         <thead><tr><th>模态</th><th>显示名</th><th>开关</th><th>更新时间</th><th>操作</th></tr></thead>
         <tbody>

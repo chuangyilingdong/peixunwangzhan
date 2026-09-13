@@ -41,6 +41,10 @@ export function getComputePricing() {
 
 export function saveComputePricing(patch = {}) {
   const current = getComputePricing();
+  for (const map of [patch.perCall, patch.models]) {
+    if (map !== undefined && (!map || typeof map !== 'object' || Array.isArray(map))) throw errors.badRequest('价格必须是对象', 'COMPUTE_PRICE_INVALID');
+    for (const value of Object.values(map || {})) if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 100000000) throw errors.badRequest('售价必须是0至100000000之间的整数分', 'COMPUTE_PRICE_INVALID');
+  }
   const nextPerCall = { ...current.perCall };
   for (const modality of MODALITIES) {
     if (patch?.perCall?.[modality] === undefined) continue;
@@ -103,8 +107,8 @@ export function computePoolStatus({ userId, seriesId }) {
  */
 export function computePoolReport({ limit = 100 } = {}) {
   const list = rows(
-    `SELECT record.user_id AS userId, record.series_id AS seriesId,
-            COALESCE(SUM(record.cost_fen),0) AS usedFen,
+    `SELECT record.org_id AS orgId, record.user_id AS userId, record.series_id AS seriesId,
+            COALESCE(SUM(CASE WHEN record.status='SUCCESS' THEN record.cost_fen ELSE 0 END),0) AS usedFen,
             COUNT(*) AS calls,
             SUM(CASE WHEN record.status='SUCCESS' THEN 1 ELSE 0 END) AS successCalls,
             SUM(CASE WHEN record.status!='SUCCESS' THEN 1 ELSE 0 END) AS failedCalls,
@@ -127,7 +131,7 @@ export function computePoolReport({ limit = 100 } = {}) {
     const capFen = item.capFen === null || item.capFen === undefined ? null : Number(item.capFen);
     const usedFen = Math.max(0, Math.round(Number(item.usedFen) || 0));
     return {
-      userId: item.userId, seriesId: item.seriesId,
+      orgId: item.orgId, userId: item.userId, seriesId: item.seriesId,
       studentName: item.studentName || item.studentLogin || item.userId,
       orgName: item.orgName || '—', seriesTitle: item.seriesTitle || item.seriesId,
       capFen, usedFen,
@@ -290,7 +294,7 @@ export function budgetedSeriesOverview({ limit = 50 } = {}) {
   const toYuan = (fen) => Number((Number(fen || 0) / 100).toFixed(2));
   return rows(
     `SELECT series.id, series.title, series.per_student_budget_fen,
-            (SELECT COALESCE(SUM(record.cost_fen),0) FROM usage_records record WHERE record.series_id = series.id) AS used_fen,
+            (SELECT COALESCE(SUM(CASE WHEN record.status='SUCCESS' THEN record.cost_fen ELSE 0 END),0) FROM usage_records record WHERE record.series_id = series.id) AS used_fen,
             (SELECT COUNT(*) FROM usage_records record WHERE record.series_id = series.id) AS calls
        FROM course_series series
       WHERE series.per_student_budget_fen IS NOT NULL AND series.per_student_budget_fen > 0

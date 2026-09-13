@@ -310,13 +310,15 @@ function resolveReferenceAssets(projectId, value) {
   return out;
 }
 
-function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, referenceAssetUrls = null, boxId = '', requestOptions = null }) {
+function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, referenceAssetUrls = null, boxId = '', requestOptions = null, selection = null }) {
   const jobId = id('generation');
   const now = nowIso();
+  const saleSnapshot = { modality, model: provider.model, unitFen: priceFenFor({ modality, model: provider.model }), capturedAt: now, basis: 'PER_CALL', route: selection ? { ...selection, apiKey: undefined, gateway: undefined, backup: selection.backup ? { ...selection.backup, apiKey: undefined, gateway: undefined } : undefined } : null };
   transaction(() => q(`INSERT INTO generation_jobs(
        id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url,last_frame_asset_url,reference_asset_urls,box_id,request_options
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl, lastFrameAssetUrl, Array.isArray(referenceAssetUrls) && referenceAssetUrls.length ? JSON.stringify(referenceAssetUrls) : null, boxId || null, requestOptions ? JSON.stringify(requestOptions) : null]));
+  q('UPDATE generation_jobs SET compute_snapshot=? WHERE id=?', [json(saleSnapshot), jobId]);
     if (startImmediately) {
       assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
       q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
@@ -353,7 +355,7 @@ function enqueuePersistedJob(jobId, delayMs = 0) {
 
 export function initializeAsyncGenerationQueue() {
   const now = nowIso();
-  q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,next_attempt_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
+  q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code='UPSTREAM_OUTCOME_UNKNOWN',error_message='执行中断，上游结果未知；请核查后人工处理',completed_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
   rows("SELECT id FROM generation_jobs WHERE status='QUEUED' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at", [now])
     .forEach(({ id: jobId }) => enqueuePersistedJob(jobId));
 }
@@ -378,7 +380,7 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
       status: BLOCKED_ERROR_CODES.has(failCode) ? 'BLOCKED' : 'FAILED', failCode,
       // 失败不花学生的钱（cost_fen 记 0 但**仍然记 series_id**，这样池子报表里能看出「有哪些失败调用」）
       costFen: 0, seriesId: seriesIdOf(project) || null,
-      pricing: { source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: BLOCKED_ERROR_CODES.has(failCode) },
+      pricing: { compute: provider.compute, source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: BLOCKED_ERROR_CODES.has(failCode) },
     });
   });
 }
@@ -411,9 +413,9 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
       modality, model: provider.model, status: 'SUCCESS',
       inputTokens: firstAssetTokens?.inputTokens || 0, outputTokens: firstAssetTokens?.outputTokens || 0,
       // 算力池账本：成功才花钱，金额 = 本次单价（与调用前预扣用的是同一个函数，所以两边必然一致）
-      costFen: priceFenFor({ modality, model: provider.model }),
+      costFen: parseJson(row('SELECT compute_snapshot FROM generation_jobs WHERE id=?', [jobId])?.compute_snapshot, {})?.unitFen ?? provider.compute?.saleSnapshot?.unitFen ?? priceFenFor({ modality, model: provider.model }),
       seriesId: freshContext.series?.id || null,
-      pricing: { source: 'generation', provider: provider.name, mode: info.mode, costFen: priceFenFor({ modality, model: provider.model }) },
+      pricing: { compute: provider.compute, source: 'generation', provider: provider.name, mode: info.mode, costFen: priceFenFor({ modality, model: provider.model }) },
     });
     assetPayloads.forEach((asset, index) => {
       const assetId = id('asset');
@@ -432,12 +434,23 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
 }
 
 export function providerSelectionForModality(policy, modality, modelOverride = '') {
-  const channelId = policy?.modalityChannels?.[String(modality || '').toUpperCase()];
+  const key = String(modality || '').toUpperCase();
+  const defaultChannel = policy?.channels?.find(item => item.id === policy?.modalityChannels?.[key]);
+  const requestedModel = modelOverride || defaultChannel?.model || policy?.model;
+  const mapping = policy?.modelRoutes?.find(item => item.modality === key && item.model === requestedModel);
+  const channelId = mapping?.channelId || policy?.modalityChannels?.[key];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
     ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {} }
     : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {} };
-  return modelOverride ? { ...base, model: modelOverride } : base;
+  const selected = mapping ? { ...base, model: mapping.model } : modelOverride ? { ...base, model: modelOverride } : base;
+  selected.estimatedCostFen = channel?.modelCosts?.[selected.model] ?? channel?.estimatedCostFen ?? null;
+  const backup = policy?.channels?.find((item) => item.id === (mapping ? mapping.backupChannelId : policy?.modalityBackupChannels?.[key]));
+  if (backup) {
+    const backupModel = mapping?.backupModel || backup.model;
+    selected.backup = { ...backup, channelId: backup.id, model: backupModel, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
+  }
+  return selected;
 }
 
 /**
@@ -577,12 +590,12 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   });
   assertGenerationPreflight({
     user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
-    boxId: box?.id || '',
+    boxId: box?.id || '', model: provider.model,
     frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
   });
-  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions) });
+  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
   try {
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options });
+    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: auth.user.orgId, userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
@@ -601,9 +614,9 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
 async function processAsyncGeneration(item) {
   const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '', requestOptions = null } = item;
   const policy = getAiProviderPolicy();
-  const persistedJob = row('SELECT provider,model FROM generation_jobs WHERE id=?', [jobId]);
+  const persistedJob = row('SELECT provider,model,compute_snapshot FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
-  const routedSelection = providerSelectionForModality(policy, modality);
+  const routedSelection = parseJson(persistedJob?.compute_snapshot, {})?.route || providerSelectionForModality(policy, modality);
   // ⚠️ 必须把 routedSelection **整份**带上（只覆盖 provider/model）。异步 worker 原来只挑了
   //   provider / model / endpoint / channelId 四个字段，把渠道的 **modelRequestTemplates /
   //   requestTemplates / requestPaths / pollPaths 全丢了** → provider 退回内置默认请求体与默认路径 →
@@ -619,8 +632,10 @@ async function processAsyncGeneration(item) {
   const routedByGateway = await applyGatewayRoute(providerSelection, {
     orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
   });
+  routedByGateway.saleSnapshot = parseJson(persistedJob?.compute_snapshot, null);
   const provider = getGenerationProvider(routedByGateway); const info = generationProviderInfo(routedByGateway);
   try {
+    assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const box = resolveLessonGenerationBox(context, modality, boxId);
     const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
@@ -637,32 +652,19 @@ async function processAsyncGeneration(item) {
       studentOptions: requestOptions,
     });
     assertGenerationPreflight({
-      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId,
+      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId, model: provider.model,
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
-    const generated = await Promise.race([
-      provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options }),
-      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('AI 生成超时，请稍后重试'), { code: 'GENERATION_TIMEOUT' })), ASYNC_GENERATION_TIMEOUT_MS)),
-    ]);
+    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: auth.user.orgId, userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
   } catch (error) {
-    // 业务侧拦截（能力/套餐/管控/额度）重试没有意义，直接判失败。
-    const normalizedOnce = normalizeProviderError(error);
-    const current = error instanceof ApiError ? null : row('SELECT retry_count,max_retries,status FROM generation_jobs WHERE id=?', [jobId]);
-    // 算力额度用尽属于「钱花完了」：重试只会再被网关拒一次（还多打两次网关），直接判失败。
-    if (!isQuotaExhausted(normalizedOnce.code) && current?.status === 'RUNNING' && Number(current.retry_count || 0) < Number(current.max_retries ?? ASYNC_GENERATION_MAX_RETRIES)) {
-      const retryCount = Number(current.retry_count || 0) + 1; const nextAttempt = new Date(Date.now() + retryCount * 5000).toISOString();
-      q("UPDATE generation_jobs SET status='QUEUED',worker_id=NULL,retry_count=?,next_attempt_at=?,last_error_at=?,error_code=?,error_message=? WHERE id=? AND status='RUNNING' AND worker_id=?", [retryCount, nextAttempt, nowIso(), normalizedOnce.code || error?.code || 'GENERATION_FAILED', String(normalizedOnce.message || error?.message || '生成失败'), jobId, ASYNC_WORKER_ID]);
-      enqueuePersistedJob(jobId, retryCount * 5000);
-    } else {
-      markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
-    }
+    markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
   }
 }
 
@@ -900,10 +902,10 @@ export async function handleAiGeneration(ctx) {
       studentOptions,
     });
     assertGenerationPreflight({
-      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '',
+      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', model: provider.model,
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
-    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions) });
+    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }

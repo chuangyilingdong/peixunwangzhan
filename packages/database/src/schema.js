@@ -1234,6 +1234,22 @@ db.exec(`CREATE TABLE IF NOT EXISTS org_ai_budgets (
 )`);
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_org_ai_budgets_org ON org_ai_budgets(org_id)'); } catch (_) {}
 
+// Durable upstream attempts are independent of the student charge ledger.
+db.exec(`CREATE TABLE IF NOT EXISTS compute_attempts (
+  id TEXT PRIMARY KEY, call_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+  org_id TEXT, user_id TEXT, project_id TEXT, generation_job_id TEXT,
+  modality TEXT NOT NULL, channel_id TEXT, provider TEXT, model TEXT, routed_via TEXT,
+  status TEXT NOT NULL, task_id TEXT, output_started INTEGER NOT NULL DEFAULT 0,
+  cost_source TEXT NOT NULL DEFAULT 'UNKNOWN', upstream_cost_fen REAL,
+  sale_snapshot TEXT NOT NULL, error_code TEXT, error_message TEXT,
+  created_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_compute_attempts_call ON compute_attempts(call_id, attempt);
+CREATE INDEX IF NOT EXISTS idx_compute_attempts_org ON compute_attempts(org_id, created_at);`);
+for (const [table, column, type] of [['generation_jobs', 'compute_snapshot', 'TEXT'], ['usage_records', 'compute_call_id', 'TEXT']]) {
+  if (!rows(`PRAGMA table_info(${table})`).some((item) => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
 // AI generation queue hardening fields; safe for existing production databases.
 for (const statement of [
   "ALTER TABLE generation_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",

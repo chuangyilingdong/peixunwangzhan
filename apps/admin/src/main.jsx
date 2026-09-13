@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { AppShell, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
+import { AppShell, ApiError, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
 import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/CourseManagement.jsx';
 import { ModelCompute } from './pages/ModelCompute.jsx';
 import { AdminPermissionGate, demos, visibleNavigation } from './shared.jsx';
@@ -17,6 +17,8 @@ import { AdminMaterials } from './pages/AdminMaterials.jsx';
 import { WebsiteContent } from './pages/WebsiteContent.jsx';
 import { Security } from './pages/Security.jsx';
 import '@platform/shared/styles.css';
+import './admin.css';
+import { AdminShell } from './components/AdminShell.jsx';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/admin').replace(/\/$/, '');
 
@@ -29,7 +31,7 @@ export function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和算力运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
   const page = (permission, element) => <AdminPermissionGate user={session.user} permission={permission}>{element}</AdminPermissionGate>;
-  return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
+  return <AdminShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
     {/* 课包拆成两条路由：列表与详情各有自己的地址（可深链、可刷新、可后退） */}
@@ -38,7 +40,9 @@ export function App() {
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
     {/* 2026-09-13：原「算力网关」与「计费与模型」合并成一页 —— 两个页面让人来回跳，理解成本太高 */}
-    <Route path="/compute" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
+    <Route path="/compute" element={<Navigate to="/compute/config" replace />} />
+    <Route path="/compute/config" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
+    <Route path="/compute/usage" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/billing" element={<Navigate to="/compute" replace />} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />
@@ -49,7 +53,7 @@ export function App() {
     <Route path="/security" element={<Security api={api} onSignedOut={() => { clearSession(); setSession(null); navigate('/login'); }} />} />
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Routes>
-  </AppShell>;
+  </AdminShell>;
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

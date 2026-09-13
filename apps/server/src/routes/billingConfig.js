@@ -79,13 +79,16 @@ function normalizeProviderPolicy(value) {
   const protocol = ['CHAT','RESPONSES','ANTHROPIC'].includes(String(parsed.protocol || '').toUpperCase()) ? String(parsed.protocol).toUpperCase() : 'CHAT';
   const modelMappings = Array.isArray(parsed.modelMappings) ? parsed.modelMappings.filter((item) => item && item.model).map((item) => ({ displayName: String(item.displayName || item.model).slice(0,120), model: String(item.model).slice(0,200), contextWindow: Number(item.contextWindow || 0) || null, thinkingLevel: String(item.thinkingLevel || '').slice(0,30) })).slice(0,100) : [];
   const modalityChannels = parsed.modalityChannels && typeof parsed.modalityChannels === 'object' ? Object.fromEntries(Object.entries(parsed.modalityChannels).filter(([k,v]) => VALID_MODALITIES.has(k) && typeof v === 'string').map(([k,v]) => [k, String(v).slice(0,64)])) : {};
-  const modalityOfChannel = (channelId) => Object.entries(modalityChannels).find(([, id]) => id === channelId)?.[0] || '';
+  const modalityBackupChannels = parsed.modalityBackupChannels || {};
+  const modalityOfChannel = (channelId) => Object.entries({ ...modalityBackupChannels, ...modalityChannels }).find(([, id]) => id === channelId)?.[0] || '';
   const channels = Array.isArray(parsed.channels) ? parsed.channels.filter((item) => item && item.id).slice(0, 30).map((item) => {
     const channelId = String(item.id).slice(0,64);
     return {
       id: channelId, name: String(item.name || item.id).slice(0,120),
       provider: GENERATION_PROVIDER_IDS.has(String(item.provider || '').toLowerCase()) ? String(item.provider).toLowerCase() : 'custom',
       model: String(item.model || '').slice(0,200),
+      modelCosts: item.modelCosts || {},
+      estimatedCostFen: item.estimatedCostFen == null || item.estimatedCostFen === '' ? null : Number(item.estimatedCostFen),
       models: Array.isArray(item.models) ? [...new Set(item.models.map((m) => String(m || '').trim()).filter(Boolean))].slice(0, 50) : (item.model ? [String(item.model).slice(0, 200)] : []),
       endpoint: String(item.endpoint || '').slice(0,500),
       protocol: ['CHAT','RESPONSES','ANTHROPIC'].includes(String(item.protocol || '').toUpperCase()) ? String(item.protocol).toUpperCase() : 'CHAT',
@@ -107,7 +110,7 @@ function normalizeProviderPolicy(value) {
     provider: GENERATION_PROVIDER_IDS.has(provider) ? provider : 'local-mock',
     endpoint,
     model,
-    displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels,
+    displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels, modalityBackupChannels, modelRoutes: parsed.modelRoutes || [],
     allowStudentExternalContent,
     updatedAt: value?.updated_at || null,
   };
@@ -449,10 +452,10 @@ export async function handleAdminBillingConfig(ctx) {
       if (generated?.__probeTimeout) {
         return finish({
           ok: false,
-          accepted: true,
+          accepted: false,
           error: {
             code: 'GENERATION_PROVIDER_PROBE_TIMEOUT',
-            message: `上游已受理，但 ${Math.round(timeoutMs / 1000)} 秒内没跑完（视频 / 音乐很正常）。参数看起来没问题 —— 这一步只验证「上游认不认」`,
+            message: `等待 ${Math.round(timeoutMs / 1000)} 秒后仍未完成；无法确认上游是否受理，请核查任务与账单后再试。`,
           },
         });
       }
@@ -510,6 +513,34 @@ export async function handleAdminBillingConfig(ctx) {
       }
     }
     const modalityChannels = body.modalityChannels === undefined ? before.modalityChannels : (body.modalityChannels || {});
+    const modalityBackupChannels = body.modalityBackupChannels === undefined ? before.modalityBackupChannels : (body.modalityBackupChannels || {});
+    const ids = new Set();
+    for (const channel of channels) {
+      if (!channel?.id || ids.has(channel.id)) throw errors.badRequest('渠道编号必须存在且唯一', 'AI_PROVIDER_CHANNEL_INVALID');
+      ids.add(channel.id);
+      if (channel.estimatedCostFen != null && channel.estimatedCostFen !== '' && (!Number.isFinite(Number(channel.estimatedCostFen)) || Number(channel.estimatedCostFen) < 0)) throw errors.badRequest('上游估算成本必须是非负金额', 'AI_PROVIDER_COST_INVALID');
+      if (channel.models?.length && !channel.models.includes(channel.model)) throw errors.badRequest('默认模型必须在可用模型中', 'AI_PROVIDER_MODEL_INVALID');
+    }
+    for (const modality of VALID_MODALITIES) {
+      const main = modalityChannels[modality]; const backup = modalityBackupChannels[modality];
+      if ((main && !ids.has(main)) || (backup && (!ids.has(backup) || backup === main))) throw errors.badRequest('主备渠道必须存在且不能相同', 'AI_PROVIDER_ROUTE_INVALID');
+    }
+    const modelRoutes = body.modelRoutes === undefined ? (before.modelRoutes || []) : body.modelRoutes;
+    if (!Array.isArray(modelRoutes) || modelRoutes.length > 500) throw errors.badRequest('模型路由必须是最多500条的列表', 'AI_PROVIDER_ROUTE_INVALID');
+    const routeKeys = new Set();
+    for (const route of modelRoutes) {
+      const key = `${route?.modality}:${route?.model}`;
+      if (!VALID_MODALITIES.has(route?.modality) || !route?.model || routeKeys.has(key)) throw errors.badRequest('每种能力的主模型路由必须唯一', 'AI_PROVIDER_ROUTE_INVALID');
+      routeKeys.add(key);
+      for (const [channelId, modelId] of [[route.channelId, route.model], ...(route.backupChannelId ? [[route.backupChannelId, route.backupModel]] : [])]) {
+        const channel = channels.find(item => item.id === channelId);
+        if (!channel || ![...(channel.models || []), channel.model].includes(modelId)) throw errors.badRequest('路由模型必须属于已选择渠道的可用模型', 'AI_PROVIDER_ROUTE_INVALID');
+      }
+      if (route.channelId === route.backupChannelId && route.model === route.backupModel) throw errors.badRequest('主备不能是相同渠道的相同模型', 'AI_PROVIDER_ROUTE_INVALID');
+    }
+    for (const channel of channels) for (const [modelId, amount] of Object.entries(channel.modelCosts || {})) {
+      if (![...(channel.models || []), channel.model].includes(modelId) || typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) throw errors.badRequest('模型成本必须属于可用模型且为非负金额', 'AI_PROVIDER_COST_INVALID');
+    }
     const registration = validateProviderRegistration({ provider, model, endpoint });
     if (!registration.valid) throw errors.badRequest('AI 供应商配置不完整：' + registration.reasons.join('；'), 'AI_PROVIDER_CONFIG_INVALID');
     if (providerDefinition(provider)?.kind === 'CUSTOM' && displayName.length < 2) throw errors.badRequest('自定义供应商名称必填', 'CUSTOM_PROVIDER_NAME_REQUIRED');
@@ -517,7 +548,7 @@ export async function handleAdminBillingConfig(ctx) {
     if (Array.isArray(body.channels)) body.channels.forEach((channel) => { if (channel?.id && String(channel.apiKey || '').trim()) setProviderApiKey(channel.apiKey, String(channel.id)); });
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     const after = {
-      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels,
+      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels, modalityBackupChannels, modelRoutes,
       allowStudentExternalContent,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });

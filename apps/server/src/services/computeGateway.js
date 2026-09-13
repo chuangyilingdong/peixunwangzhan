@@ -6,7 +6,7 @@
 //     管理员密码复用既有的加密密钥文件（providerSecret.js，AES-256-GCM）；
 //   · 令牌名就是归集维度：约定 `机构:<orgId>` / `学生:<studentId>` / `课时:<lessonId>`，
 //     用量日志按令牌名解析即可还原「哪个机构/哪个学生/哪节课花了多少」，不需要动它一行代码。
-import { errors } from '../lib.js';
+import { errors, id } from '../lib.js';
 import { getProviderApiKey, setProviderApiKey } from './providerSecret.js';
 import { row, rows, q, nowIso, parseJson, json } from '../lib.js';
 
@@ -384,27 +384,24 @@ async function resolveRouteUncached({ orgId, studentId, lessonId, configured, mo
 }
 
 /**
- * 解析这次调用该走哪儿。**任何解析失败都不拦学生**（回退直连），但会大声记一笔 ——
- * 因为回退意味着这一次既没有额度闸也没有归集，属于必须被看见的状态。
+ * 解析这次调用该走哪儿。启用的学生文本/图片路由必须成功取得网关令牌；异常直接拒绝，不绕过网关。
  */
 export async function resolveGenerationRoute({ orgId = '', studentId = '', lessonId = '', modality = 'TEXT', models = '' } = {}) {
   const configured = getComputeGatewayConfig();
-  if (!configured.enabled || !configured.baseUrl) return { mode: 'direct', reason: 'GATEWAY_DISABLED' };
+  if (!configured.enabled) return { mode: 'direct', reason: 'GATEWAY_DISABLED' };
   if (!GATEWAY_MODALITIES.has(String(modality || '').toUpperCase())) return { mode: 'direct', reason: 'MODALITY_NOT_ON_GATEWAY' };
   if (!studentId) return { mode: 'direct', reason: 'NO_STUDENT' };
+  if (!configured.baseUrl) throw errors.badRequest('算力网关未配置完成，请联系管理员', 'COMPUTE_GATEWAY_UNAVAILABLE');
   const cacheKey = [configured.baseUrl, orgId, studentId, lessonId || ''].join('|');
   const cached = routeCache.get(cacheKey);
   if (cached && Date.now() - cached.at < ROUTE_CACHE_TTL_MS) return cached.route;
   try {
     const route = await resolveRouteUncached({ orgId, studentId, lessonId, configured, models });
+    if (route.mode !== 'gateway') throw errors.badRequest('无法取得算力网关令牌，请联系管理员', 'COMPUTE_GATEWAY_UNAVAILABLE');
     routeCache.set(cacheKey, { at: Date.now(), route });
-    if (route.mode === 'direct' && route.reason !== 'NO_TOKEN') {
-      console.warn(`[compute-gateway] 未能走上网关（${route.reason}），本次回退直连：额度与归集都断这一次`);
-    }
     return route;
   } catch (error) {
-    console.error('[compute-gateway] 解析令牌失败，本次回退直连（额度与归集都会断）:', String(error?.message || error));
-    return { mode: 'direct', reason: 'GATEWAY_UNREACHABLE', detail: String(error?.message || error) };
+    throw errors.badRequest('算力网关暂不可用，请稍后重试或联系管理员', 'COMPUTE_GATEWAY_UNAVAILABLE');
   }
 }
 
@@ -415,10 +412,16 @@ export function clearGatewayRouteCache() {
 
 /**
  * 把一个 provider selection 改写成「走网关」的 selection。
- * 解析不出来就原样返回（直连），调用方不需要为网关写分支。
+ * 仅明确不使用网关时保持直连；启用但解析失败会抛错。
  */
 export async function applyGatewayRoute(selection, { orgId = '', studentId = '', lessonId = '', modality = 'TEXT', model = '' } = {}) {
-  const route = await resolveGenerationRoute({ orgId, studentId, lessonId, modality, models: model || selection?.model || '' });
+  let route;
+  try { route = await resolveGenerationRoute({ orgId, studentId, lessonId, modality, models: model || selection?.model || '' }); }
+  catch (error) {
+    q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,sale_snapshot,error_code,error_message,created_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id('attempt'),id('call'),1,orgId || null,studentId || null,modality,selection?.channelId || 'default',selection?.provider || '',model || selection?.model || '', 'gateway','BLOCKED',json({ charged:false, reason:'GATEWAY_PREFLIGHT' }),error.code || 'COMPUTE_GATEWAY_UNAVAILABLE','网关路由不可用，请联系管理员',nowIso(),nowIso()]);
+    throw error;
+  }
   if (route.mode !== 'gateway') return selection;
   return { ...selection, gateway: { endpoint: route.endpoint, apiKey: route.apiKey, tokenName: route.tokenName } };
 }

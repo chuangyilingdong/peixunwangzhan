@@ -1,0 +1,567 @@
+/* Platform admin only;
+  shared institution and student styles remain untouched. */
+.admin-console {
+  --muted:#676176;
+  --line:#e5e1ed;
+  color:var(--ink);
+  background:#f7f7fa;
+  min-height:100vh;
+  font-size:14px;
+  line-height:1.55;
+ 
+}
+
+.admin-layout {
+  display:grid;
+  grid-template-columns:224px minmax(0,1fr);
+  min-height:100vh;
+ 
+}
+
+.admin-sidebar {
+  position:sticky;
+  top:0;
+  height:100dvh;
+  display:flex;
+  flex-direction:column;
+  background:#fff;
+  border-right:1px solid var(--line);
+  padding:24px 16px 16px;
+ 
+}
+
+.admin-brand {
+  display:grid;
+  gap:4px;
+  padding:0 12px 20px;
+  border-bottom:1px solid var(--line);
+ 
+}
+
+.admin-brand strong {
+  font-size:18px;
+  color:var(--deep);
+ 
+}
+
+.admin-brand span,.admin-account>span {
+  font-size:12px;
+  color:var(--muted);
+ 
+}
+
+.admin-navigation {
+  flex:1;
+  overflow:auto;
+  padding:8px 0 20px;
+ 
+}
+
+.admin-navigation h2 {
+  margin:20px 12px 6px;
+  font-size:11px;
+  color:var(--muted);
+  font-weight:600;
+ 
+}
+
+.admin-navigation a {
+  display:block;
+  padding:9px 12px;
+  border-radius:7px;
+  margin:2px 0;
+  border-left:3px solid transparent;
+ 
+}
+
+.admin-navigation a:hover {
+  background:#f7f5fc;
+ 
+}
+
+.admin-navigation a.active {
+  color:var(--deep);
+  background:#f0ecff;
+  border-left-color:var(--purple);
+  font-weight:650;
+ 
+}
+
+.admin-account {
+  display:grid;
+  gap:3px;
+  border-top:1px solid var(--line);
+  padding:14px 10px 0;
+ 
+}
+
+.admin-account button {
+  border:0;
+  background:transparent;
+  color:var(--deep);
+  padding:7px 0;
+ 
+}
+
+.admin-account a {
+  font-size:12px;
+ 
+}
+
+.admin-main {
+  min-width:0;
+ 
+}
+
+.admin-topbar {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:16px 28px;
+  background:#fff;
+  border-bottom:1px solid var(--line);
+  font-size:12px;
+  color:var(--muted);
+ 
+}
+
+.admin-console .page-content {
+  max-width:1600px;
+  padding:28px clamp(16px,2.4vw,38px) 56px;
+ 
+}
+
+.admin-console .page-header {
+  gap:24px;
+  margin-bottom:24px;
+ 
+}
+
+.admin-console .page-header h1 {
+  font-size:28px;
+  letter-spacing:-.5px;
+ 
+}
+
+.admin-console .page-description {
+  font-size:13px;
+  max-width:760px;
+  color:var(--muted);
+ 
+}
+
+.admin-console .eyebrow {
+  letter-spacing:.5px;
+  font-weight:600;
+ 
+}
+
+.admin-console .header-actions {
+  flex-wrap:wrap;
+  justify-content:flex-end;
+ 
+}
+
+.admin-console .panel {
+  border-radius:10px;
+  box-shadow:none;
+  padding:20px;
+  min-width:0;
+ 
+}
+
+.admin-console .panel-heading {
+  flex-wrap:wrap;
+  padding-bottom:12px;
+  border-bottom:1px solid var(--line);
+ 
+}
+
+.admin-console .panel h2 {
+  font-size:15px;
+  font-weight:650;
+ 
+}
+
+.admin-console .split {
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  align-items:start;
+ 
+}
+
+.admin-console .form-grid {
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));
+  gap:0 16px;
+  align-items:end;
+ 
+}
+
+.admin-console label {
+  font-weight:600;
+  color:#514b60;
+ 
+}
+
+.admin-console input,.admin-console select,.admin-console textarea {
+  min-height:38px;
+  font-size:13px;
+ 
+}
+
+.admin-console input[type=checkbox],.admin-console input[type=radio] {
+  width:16px;
+  min-height:16px;
+  accent-color:var(--purple);
+  flex-shrink:0;
+ 
+}
+
+.admin-console .checkbox-option,.admin-console .checkbox-label {
+  display:flex;
+  align-items:center;
+  gap:8px;
+ 
+}
+
+.admin-console .filters {
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-bottom:16px;
+ 
+}
+
+.admin-console .filters>* {
+  flex:1 1 150px;
+ 
+}
+
+.admin-console .primary-button,.admin-console .secondary-button {
+  min-height:36px;
+  padding:8px 13px;
+  font-size:13px;
+  font-weight:600;
+  box-shadow:none;
+  border-radius:7px;
+ 
+}
+
+.admin-console .secondary-button {
+  border:1px solid var(--line);
+  background:#fff;
+  color:var(--deep);
+ 
+}
+
+.admin-console .text-button {
+  min-height:32px;
+  padding:5px 3px;
+  font-size:12px;
+  font-weight:600;
+ 
+}
+
+.admin-console button:disabled {
+  opacity:.48;
+  cursor:not-allowed;
+ 
+}
+
+.admin-console :is(button,a,input,select,textarea,summary):focus-visible {
+  outline:3px solid var(--purple);
+  outline-offset:3px;
+  box-shadow:none;
+ 
+}
+
+.admin-console .table-wrap {
+  width:100%;
+  overflow:auto;
+  border:1px solid var(--line);
+  border-radius:8px;
+ 
+}
+
+.admin-console th {
+  background:#f7f6fa;
+  color:#655e76;
+  font-size:12px;
+  font-weight:600;
+  white-space:nowrap;
+  padding:11px 13px;
+  text-transform:none;
+  letter-spacing:0;
+ 
+}
+
+.admin-console td {
+  padding:13px;
+  line-height:1.6;
+  max-width:340px;
+  overflow-wrap:anywhere;
+ 
+}
+
+.admin-console tbody tr:hover {
+  background:#fcfbfe;
+ 
+}
+
+.admin-console td .row-actions {
+  min-width:150px;
+  gap:6px 12px;
+ 
+}
+
+.admin-console td input {
+  min-width:150px;
+ 
+}
+
+.admin-console .muted,.admin-console .metric-card small {
+  color:var(--muted);
+  line-height:1.6;
+ 
+}
+
+.admin-console .metrics {
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));
+ 
+}
+
+.admin-console .metric-card {
+  min-height:110px;
+  padding:17px;
+  border-radius:9px;
+  box-shadow:none;
+  color:var(--ink);
+ 
+}
+
+.admin-console .metric-card:after,.admin-console .metric-symbol {
+  display:none;
+ 
+}
+
+.admin-console .metric-card strong {
+  font-size:27px;
+  margin:10px 0 4px;
+  overflow-wrap:anywhere;
+  font-variant-numeric:tabular-nums;
+ 
+}
+
+.admin-console .metric-card p {
+  color:var(--muted);
+ 
+}
+
+.admin-console .notice {
+  border-radius:7px;
+ 
+}
+
+.admin-console .website-cms {
+  grid-template-columns:230px minmax(0,1fr);
+ 
+}
+
+.admin-console .cms-key.selected {
+  border-color:var(--purple);
+  background:#f6f3ff;
+  box-shadow:none;
+ 
+}
+
+.admin-console .cms-meta {
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  font-size:12px;
+ 
+}
+
+.admin-console .cms-editor {
+  min-height:260px;
+ 
+}
+
+.admin-console .admin-tabs {
+  display:flex;
+  gap:24px;
+  border-bottom:1px solid var(--line);
+  margin-bottom:22px;
+  overflow:auto;
+ 
+}
+
+.admin-tabs a {
+  padding:12px 2px;
+  border-bottom:3px solid transparent;
+  white-space:nowrap;
+ 
+}
+
+.admin-tabs a.active {
+  color:var(--deep);
+  border-bottom-color:var(--purple);
+  font-weight:650;
+ 
+}
+
+.admin-console .admin-detail {
+  margin-bottom:18px;
+ 
+}
+
+.admin-detail>summary {
+  cursor:pointer;
+  padding:12px 0;
+  font-weight:600;
+  color:var(--deep);
+ 
+}
+
+.admin-console .admin-confirm {
+  width:min(480px,calc(100vw - 32px));
+  max-height:85dvh;
+  overflow:auto;
+  padding:26px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  color:var(--ink);
+  box-shadow:0 24px 80px #201b3930;
+ 
+}
+
+.admin-confirm::backdrop {
+  background:#201b3970;
+ 
+}
+
+.admin-confirm h2 {
+  margin:0 0 12px;
+  font-size:20px;
+ 
+}
+
+.admin-confirm p {
+  line-height:1.7;
+ 
+}
+
+.admin-confirm .row-actions {
+  justify-content:flex-end;
+  margin-top:24px;
+ 
+}
+
+.admin-menu {
+  display:none;
+ 
+}
+
+.admin-skip {
+  position:fixed;
+  left:16px;
+  top:-80px;
+  z-index:200;
+  padding:12px;
+  background:#fff;
+ 
+}
+
+.admin-skip:focus {
+  top:10px;
+ 
+}
+
+@media(max-width:1150px) {
+  .admin-console .split {
+  grid-template-columns:1fr;
+ 
+}
+ .admin-console .page-header {
+  flex-wrap:wrap;
+ 
+}
+ .admin-console .header-actions {
+  justify-content:flex-start;
+ 
+}
+
+}
+
+@media(max-width:760px) {
+  .admin-layout {
+  grid-template-columns:minmax(0,1fr);
+ 
+}
+ .admin-sidebar {
+  position:relative;
+  height:auto;
+  padding:16px;
+ 
+}
+ .admin-brand {
+  padding:0 0 12px;
+ 
+}
+ .admin-menu {
+  display:block;
+  margin-top:12px;
+ 
+}
+ .admin-navigation {
+  display:none;
+ 
+}
+ .admin-navigation.is-open {
+  display:block;
+  max-height:55dvh;
+ 
+}
+ .admin-account {
+  margin-top:12px;
+  grid-template-columns:1fr auto;
+ 
+}
+ .admin-account>span {
+  display:none;
+ 
+}
+ .admin-account .row-actions {
+  grid-column:2;
+  grid-row:1;
+ 
+}
+ .admin-topbar {
+  padding:12px 16px;
+ 
+}
+ .admin-console .website-cms {
+  grid-template-columns:1fr;
+ 
+}
+ .admin-console .panel {
+  padding:16px;
+ 
+}
+ .admin-console .page-header h1 {
+  font-size:25px;
+ 
+}
+
+}
+
+@media(prefers-reduced-motion:reduce) {
+  .admin-console * {
+  scroll-behavior:auto!important;
+  transition:none!important;
+  animation:none!important;
+ 
+}
+
+}
+

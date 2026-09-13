@@ -171,6 +171,38 @@ try {
   check('⑥ 没填模型价的模型 → 回落到模态价（60 分）', pool.priceFenFor({ modality: 'TEXT', model: 'p60-unlisted-model' }) === 60);
   check('⑥ 不带模型时也回落到模态价（视频 500 分）', pool.priceFenFor({ modality: 'VIDEO' }) === 500, String(pool.priceFenFor({ modality: 'VIDEO' })));
 
+  // Corrupt historical failed charges must never inflate the student pool or admin summaries.
+  {
+    const db = new DatabaseSync(dbPath);
+    db.prepare("UPDATE usage_records SET cost_fen=99999 WHERE status='FAILED'").run();
+    db.close();
+    check('⑦ FAILED历史非零金额不计入池子', pool.poolUsedFen({ userId: identity.id, seriesId: seeded.seriesId }) === 180);
+    const report = (await poolRows()).find(item => item.seriesId === seeded.seriesId);
+    check('⑦ FAILED历史非零金额不计入池子报表', report?.usedFen === 180);
+    const summary = await api('/api/admin/billing/usage-overview?status=FAILED', { token: admin });
+    check('⑦ 失败筛选汇总金额为0且保留失败调用数', summary.data.totalFen === 0 && summary.data.calls > 0, JSON.stringify(summary.data));
+    const list = await api('/api/admin/billing/usage-records?status=FAILED', { token: admin });
+    check('⑦ 同筛选汇总与明细调用数一致', list.data.total === summary.data.calls && list.data.items.every(item => item.costFen === 0));
+  }
+
+  {
+    const db = new DatabaseSync(dbPath);
+    db.prepare("UPDATE compute_attempts SET cost_source='ESTIMATED',upstream_cost_fen=20 WHERE status='SUCCESS'").run();
+    const summary = (await api('/api/admin/compute-attempts?days=30', { token: admin })).data.summary;
+    check('⑧ 已知成本与对应扣费计算估算价差', summary.comparableCalls > 0 && summary.estimatedDifferenceFen === summary.comparableSaleFen - summary.comparableCostFen && summary.estimatedDifferenceRate === summary.estimatedDifferenceFen / summary.comparableSaleFen * 100, JSON.stringify(summary));
+    db.prepare("UPDATE compute_attempts SET cost_source='UNKNOWN',upstream_cost_fen=NULL").run();
+    const unknown = (await api('/api/admin/compute-attempts?days=30', { token: admin })).data.summary;
+    check('⑧ 全部未知时价差和率为null而非0', unknown.comparableCalls === 0 && unknown.estimatedDifferenceFen === null && unknown.estimatedDifferenceRate === null && unknown.unknownLogicalCalls > 0, JSON.stringify(unknown));
+    db.close();
+    const policy = (await api('/api/admin/billing-config/ai-provider', { token: admin })).data.policy;
+    const channels = [{id:'route-main',name:'main',provider:'custom',model:'m1',models:['m1','m2'],endpoint:'http://127.0.0.1:18970/v1'},{id:'route-backup',name:'backup',provider:'custom',model:'b1',models:['b1','b2'],endpoint:'http://127.0.0.1:18970/v1'}];
+    const modelRoutes = [{modality:'TEXT',channelId:'route-main',model:'m2',backupChannelId:'route-backup',backupModel:'b2'}];
+    const saved = await api('/api/admin/billing-config/ai-provider', { method:'PUT',token:admin,body:{...policy,channels,modelRoutes} });
+    check('⑨ 模型映射保存并读回', saved.status === 200 && saved.data.policy.modelRoutes[0].backupModel === 'b2', JSON.stringify(saved));
+    const invalid = await api('/api/admin/billing-config/ai-provider', { method:'PUT',token:admin,body:{...policy,channels,modelRoutes:[{...modelRoutes[0],backupModel:'not-enabled'}]} });
+    check('⑨ 备用模型不属于渠道时拒绝保存', invalid.error?.code === 'AI_PROVIDER_ROUTE_INVALID', JSON.stringify(invalid));
+  }
+
   console.log(JSON.stringify({ name: 'compute-pool', pass: failures === 0, failures }, null, 2));
 } catch (error) {
   console.error(serverLog.slice(-4000));

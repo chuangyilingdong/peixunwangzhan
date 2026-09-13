@@ -48,7 +48,7 @@ export function ProviderPolicyPanel({ api }) {
   }
   function removeChannel(index) {
     const id = form.channels[index].id;
-    setForm({ ...form, channels: form.channels.filter((_, i) => i !== index), modalityChannels: Object.fromEntries(Object.entries(form.modalityChannels).filter(([, v]) => v !== id)) });
+    setForm({ ...form, channels: form.channels.filter((_, i) => i !== index), modalityChannels: Object.fromEntries(Object.entries(form.modalityChannels).filter(([, v]) => v !== id)), modalityBackupChannels: Object.fromEntries(Object.entries(form.modalityBackupChannels || {}).filter(([, v]) => v !== id)) });
   }
   function channelRequest(channel) { return { endpoint: channel.endpoint, channelId: channel.id, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) }; }
   // 渠道按「能力路由」确定模态，模型能力按模态归一化。
@@ -171,12 +171,12 @@ export function ProviderPolicyPanel({ api }) {
   async function fetchModels(channel, index) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', channelRequest(channel)); updateChannel(index, { modelMappings: result.items || [] }); setMessage(`${channel.name}：已读取 ${result.items?.length || 0} 个模型，请勾选本渠道可用模型`); } catch (e) { setMessage(e.message || '获取模型失败'); } finally { setBusy(false); } }
   /**
    * 「用当前渠道试一次」：把这套（可能还没保存的）渠道配置真发一次最小请求。
-   * 只验证「上游认不认这套参数」，不写用量、不产生费用。
+   * 只验证「上游认不认这套参数」，不扣学生额度，上游可能计费。
    * 刻意**不要求先保存** —— 目的就是在保存前当场知道参数行不行。
    */
   async function probeChannel(channel, modality) {
-    if (modality === 'VIDEO' || modality === 'MUSIC') {
-      if (!window.confirm(`试一次 ${modality} 会真的向上游提交一次最小生成，可能要跑几分钟。继续？`)) return;
+    if (true) {
+      if (!window.confirm(`试一次 ${modality} 会向上游提交真实生成并可能计费，等待时间取决于模态。继续？`)) return;
     }
     setBusy(true); setMessage('');
     try {
@@ -192,7 +192,7 @@ export function ProviderPolicyPanel({ api }) {
   if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
   if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
   return <Panel title="AI 渠道配置">
-    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口；点“用当前渠道试一次”会按当前参数**真发一次最小请求**（视频 / 音乐可能要跑几分钟），用来确认上游认不认这套参数 —— 两者都不写用量、不产生费用。</Notice>
+    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口；点“用当前渠道试一次”会按当前参数**真发一次最小请求**（视频 / 音乐可能要跑几分钟），用来确认上游认不认这套参数 —— 真实生成探测可能产生上游费用，但不扣学生额度。</Notice>
     {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
     <form onSubmit={save}>
       <div className="muted">渠道只负责保存供应商、模型和密钥；具体用哪个渠道，请在下面“能力路由”中切换。</div>
@@ -246,15 +246,27 @@ export function ProviderPolicyPanel({ api }) {
             })()}
             <label>手动添加模型 ID<input onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (v) { updateChannel(index, { models: [...new Set([...(channel.models || []), v])] }); e.target.value = ''; } } }} placeholder="输入后回车添加" /></label>
             <label>默认模型{(channel.models || []).length ? <select value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} required><option value="">请选择默认模型</option>{(channel.models || []).map((m) => <option key={m} value={m}>{m}</option>)}</select> : <input value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} placeholder="模型 ID" required />}</label>
-            <label>API Key<input type="password" value={channel.apiKey || ''} onChange={(e) => updateChannel(index, { apiKey: e.target.value })} placeholder="留空保持原密钥" autoComplete="new-password" /></label>
+            <label>上游估算成本（分 / 次，留空为未知）<input type="number" min="0" step="0.01" value={channel.estimatedCostFen ?? ''} onChange={e => updateChannel(index, { estimatedCostFen: e.target.value === '' ? null : Number(e.target.value) })} /></label><label>API Key<input type="password" value={channel.apiKey || ''} onChange={(e) => updateChannel(index, { apiKey: e.target.value })} placeholder="留空保持原密钥" autoComplete="new-password" /></label>
           </div>
+          <details className="top-gap"><summary>逐模型上游估算成本（分 / 次）</summary>{(channel.models || []).map(model => <label key={model}>{model}<input type="number" min="0" step="0.01" value={channel.modelCosts?.[model] ?? ''} placeholder="留空使用渠道估价" onChange={e => { const costs = {...(channel.modelCosts || {})}; if(e.target.value === '') delete costs[model]; else costs[model] = Number(e.target.value); updateChannel(index,{modelCosts:costs}); }} /></label>)}</details>
           {capabilityEditor(channel, index)}
           {channelModality(channel.id) ? <details className="top-gap"><summary>请求模板（可选，高级）</summary><div className="muted">占位符：{'{'}model{'}'} {'{'}prompt{'}'} {'{'}aspectRatio{'}'} {'{'}resolution{'}'} {'{'}durationSeconds{'}'} {'{'}audio{'}'} {'{'}voice{'}'} {'{'}firstFrameUrl{'}'}。留空使用默认模板；若某家模型要求比例/音频放在顶层，把占位符挪到顶层即可。</div><textarea rows={6} value={channelTemplateText(channel)} onChange={(e) => updateChannel(index, { requestTemplates: { ...(channel.requestTemplates || {}), [channelModality(channel.id)]: e.target.value } })} /></details> : null}
-          <div className="row-actions top-gap"><button type="button" className="secondary-button" disabled={busy} onClick={() => testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={() => probeChannel(channel, modality)}>用当前渠道试一次</button><button type="button" className="secondary-button" disabled={busy} onClick={() => fetchModels(channel, index)}>读取模型</button></div>
+          <div className="row-actions top-gap"><button type="button" className="secondary-button" disabled={busy} onClick={() => testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={() => probeChannel(channel, channelModality(channel.id) || 'TEXT')}>用当前渠道试一次</button><button type="button" className="secondary-button" disabled={busy} onClick={() => fetchModels(channel, index)}>读取模型</button></div>
         </> : null}
       </div>)}
-      <div className="top-gap"><strong>能力路由（切换渠道）</strong><div className="muted">这里才是最终生效的选择。同一渠道可以被多个能力使用，也可以随时切换到备用渠道。</div></div>
-      <div className="form-grid top-gap">{modalities.map(([id,name])=><label key={id}>{name}<select value={form.modalityChannels[id]||''} onChange={e=>setForm({...form,modalityChannels:{...form.modalityChannels,[id]:e.target.value}})}><option value="">使用默认渠道</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>)}</div>
+      <div className="top-gap"><strong>能力路由（切换渠道）</strong><div className="muted">主渠道明确拒绝（认证失败、接口不存在、限流）时尝试备用渠道的默认模型。已输出、已受理或结果未知不自动重试；启用网关时主备由网关管理。</div></div>
+      <div className="form-grid top-gap">{modalities.map(([id,name])=><div key={id}><label>{name} · 主渠道<select value={form.modalityChannels[id]||''} onChange={e=>setForm({...form,modalityChannels:{...form.modalityChannels,[id]:e.target.value}})}><option value="">使用默认渠道</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>{name} · 备用渠道<select value={form.modalityBackupChannels?.[id]||''} onChange={e=>setForm({...form,modalityBackupChannels:{...(form.modalityBackupChannels || {}),[id]:e.target.value}})}><option value="">不配置备用渠道</option>{form.channels.filter(c=>c.id!==form.modalityChannels[id]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div>)}</div>
+      <details className="top-gap" open><summary>逐模型主备路由</summary><p className="muted">按能力和主模型匹配，优先于能力默认路由。备用可选择不同渠道或同渠道其他模型；留空备用表示该模型不自动切换。</p>
+        {(form.modelRoutes || []).map((route,index) => { const patch = value => setForm({ ...form, modelRoutes: form.modelRoutes.map((item,i) => i === index ? { ...item,...value } : item) }); const models = id => [...new Set(form.channels.find(c => c.id === id)?.models || [])]; return <div className="form-grid top-gap" key={index}>
+          <label>能力<select value={route.modality} onChange={e => patch({modality:e.target.value})}>{modalities.map(([id,name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+          <label>主渠道<select value={route.channelId} onChange={e => patch({channelId:e.target.value,model:''})}><option value="">选择渠道</option>{form.channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <label>主模型<select value={route.model} onChange={e => patch({model:e.target.value})}><option value="">选择模型</option>{models(route.channelId).map(m => <option key={m}>{m}</option>)}</select></label>
+          <label>备用渠道<select value={route.backupChannelId || ''} onChange={e => patch({backupChannelId:e.target.value,backupModel:''})}><option value="">不自动切换</option>{form.channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <label>备用模型<select disabled={!route.backupChannelId} value={route.backupModel || ''} onChange={e => patch({backupModel:e.target.value})}><option value="">选择模型</option>{models(route.backupChannelId).map(m => <option key={m}>{m}</option>)}</select></label>
+          <button type="button" className="secondary-button" onClick={() => setForm({...form, modelRoutes:form.modelRoutes.filter((_,i) => i !== index)})}>删除路由</button>
+        </div>; })}
+        <button type="button" className="secondary-button top-gap" onClick={() => setForm({...form,modelRoutes:[...(form.modelRoutes || []),{modality:'TEXT',channelId:'',model:'',backupChannelId:'',backupModel:''}]})}>添加模型路由</button>
+      </details>
       <label className="checkbox-label top-gap"><input type="checkbox" checked={Boolean(form.allowStudentExternalContent)} onChange={e=>setForm({...form,allowStudentExternalContent:e.target.checked})} />允许学生创作内容发送到外部 AI 服务</label>
       <div className="row-actions top-gap"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部渠道配置'}</button></div>
     </form>
@@ -263,15 +275,40 @@ export function ProviderPolicyPanel({ api }) {
 
 export function BillingUsagePanel({ api }) {
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
-  const overview = useData(() => api.get('admin/billing/usage-overview'), [api]);
   const [filters, setFilters] = useState({ days: '30', orgId: '', modality: '', status: '', search: '', startDate: '', endDate: '' });
   const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
+  const [optionSearch, setOptionSearch] = useState('');
+  const filterOptions = useData(() => api.get(`admin/billing/filter-options?orgId=${encodeURIComponent(filters.orgId)}`), [api, filters.orgId]);
+  const filterPolicy = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
+  const channels = filterPolicy.data?.policy?.channels || [];
+  const modelOptions = [...new Set(channels.filter(item => !filters.channelId || item.id === filters.channelId).flatMap(item => [...(item.models || []), item.model].filter(Boolean)))].map(id => ({ id, name:id }));
+  const choices = [
+    ['studentId','学生',(filterOptions.data?.students || []).map(item => ({...item,name:`${item.name || item.login}（${item.login}）`}))],
+    ['channelId','渠道',channels], ['model','模型',modelOptions],
+    ['seriesId','课包',filterOptions.data?.series || []],
+    ['lessonId','课时',(filterOptions.data?.lessons || []).filter(item => !filters.seriesId || item.seriesId === filters.seriesId)],
+  ];
   const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
+  const overview = useData(() => api.get(`admin/billing/usage-overview?${query.toString()}`), [api, query]);
   const records = useData(() => api.get(`admin/billing/usage-records?${query.toString()}`), [api, query]);
-  function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value })); setPage(1); }
+  const [exportingRecords, setExportingRecords] = useState(false);
+  const [exportError, setExportError] = useState('');
+  async function exportRecords() {
+    setExportingRecords(true); setExportError('');
+    try {
+      const params = new URLSearchParams(query); params.set('limit','100');
+      const all = []; let totalPages = 1;
+      for (let next = 1; next <= totalPages; next++) { params.set('page',String(next)); const data = await api.get(`admin/billing/usage-records?${params}`); totalPages = data.totalPages; all.push(...data.items); }
+      const cell = value => { let text = String(value ?? ''); if (/^[\s]*[=+@-]/.test(text)) text = "'" + text; return '"' + text.replaceAll('"','""') + '"'; };
+      const lines = [['时间','机构ID','学生ID','模型','状态','失败原因','学生扣费（分）','上游尝试'].map(cell).join(',')];
+      all.forEach(item => lines.push([item.createdAt,item.orgId,item.userId,item.model,item.status,item.failCode,item.costFen,JSON.stringify(item.attempts || [])].map(cell).join(',')));
+      downloadCsv('compute-usage.csv',lines.join(String.fromCharCode(13,10)));
+    } catch(error) { setExportError(error.message); } finally { setExportingRecords(false); }
+  }
+  function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value, ...(key === 'orgId' ? {studentId:''} : {}), ...(key === 'channelId' ? {model:''} : {}), ...(key === 'seriesId' ? {lessonId:''} : {}) })); setPage(1); }
   return <>
     <div className="metrics">
-      <MetricCard label="算力消耗合计" value={formatYuan(overview.data?.totalFen || 0)} hint={`近 ${filters.days} 日全部机构`} />
+      <MetricCard label="算力消耗合计" value={formatYuan(overview.data?.totalFen || 0)} hint={`当前筛选 · 近 ${filters.days} 日`} />
       <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
       <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `累计消耗 ${formatYuan(overview.data.topOrgs[0].costFen)}` : '暂无消耗'} tone="orange" />
       <MetricCard label="当前明细" value={records.data?.total ?? 0} hint="当前筛选条件命中的记录数" tone="pink" />
@@ -281,7 +318,8 @@ export function BillingUsagePanel({ api }) {
       <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
     </div>
 
-    <Panel title="计费明细筛选">
+    <Panel title="计费明细筛选" actions={<button className="secondary-button" disabled={exportingRecords} onClick={exportRecords}>{exportingRecords ? '导出中…' : '导出筛选明细 CSV'}</button>}>
+      {exportError && <Notice tone="danger">{exportError}</Notice>}
       <div className="form-grid">
         <label>时间范围<select value={filters.days} onChange={(e) => updateFilter('days', e.target.value)}><option value="1">今日</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="365">近一年</option></select></label>
         <label>开始日期<input type="date" value={filters.startDate} onChange={(e) => updateFilter('startDate', e.target.value)} /></label>
@@ -289,6 +327,10 @@ export function BillingUsagePanel({ api }) {
         <label>机构<select value={filters.orgId} onChange={(e) => updateFilter('orgId', e.target.value)}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
         <label>能力<select value={filters.modality} onChange={(e) => updateFilter('modality', e.target.value)}><option value="">全部能力</option><option value="TEXT">TEXT</option><option value="IMAGE">IMAGE</option><option value="MUSIC">MUSIC</option><option value="VIDEO">VIDEO</option></select></label>
         <label>状态<select value={filters.status} onChange={(e) => updateFilter('status', e.target.value)}><option value="">全部状态</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">拦截</option></select></label>
+        <label>搜索筛选选项<input value={optionSearch} placeholder="输入学生、渠道、模型或课程名称" onChange={e => setOptionSearch(e.target.value)} /></label>
+        {choices.map(([key,label,items]) => <label key={key}>{label}<select disabled={key === 'studentId' && filterOptions.loading} value={filters[key] || ''} onChange={e => updateFilter(key,e.target.value)}><option value="">全部{label}</option>{filters[key] && !items.some(item => item.id === filters[key]) && <option value={filters[key]}>已指定（高级筛选）</option>}{items.filter(item => item.id === filters[key] || String(item.name || item.id).toLowerCase().includes(optionSearch.toLowerCase())).map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label>)}
+        {(filterOptions.error || filterPolicy.error) && <Notice tone="danger">筛选选项加载失败，请刷新页面重试；也可展开高级筛选输入编号。</Notice>}
+        <details><summary>高级筛选 · 精确编号</summary>{[['studentId','学生ID'],['channelId','渠道ID'],['model','模型ID'],['seriesId','课包ID'],['lessonId','课时ID']].map(([key,label]) => <label key={key}>{label}<input value={filters[key] || ''} onChange={e => updateFilter(key,e.target.value)} /></label>)}</details>
         <label>关键词<input value={filters.search} placeholder="机构 / 用户 / 项目 / 作品" onChange={(e) => updateFilter('search', e.target.value)} /></label>
         <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="costFen">消耗</option></select></label>
         <label>每页数量<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value={10}>10 条/页</option><option value={20}>20 条/页</option><option value={50}>50 条/页</option></select></label>
@@ -297,7 +339,7 @@ export function BillingUsagePanel({ api }) {
     <Panel title="计费明细">
       {overview.loading || records.loading || organizations.loading ? <Loading label="正在读取计费数据。" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data?.items?.length ? <>
         <ListResultSummary total={records.data.total} page={records.data.page} totalPages={records.data.totalPages} label="条记录" />
-        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>消耗</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatYuan(item.costFen)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>学生扣费 / 售价快照</th><th>上游尝试 / 成本</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatYuan(item.costFen)}<div className="muted">售价：{item.pricingSnapshot?.compute?.saleSnapshot ? formatYuan(item.pricingSnapshot.compute.saleSnapshot.unitFen) : '历史未记录'}</div></td><td>{item.attempts?.length ? item.attempts.map(attempt => <details key={attempt.id}><summary>#{attempt.attempt} {attempt.channelId} · {attempt.model} · {attempt.status}</summary><div>{attempt.costSource === 'ESTIMATED' ? '估算' : attempt.costSource === 'MOCK' ? '模拟' : attempt.costSource === 'REPORTED' ? '上游报告（CNY，未对账）' : '未知'}成本：{attempt.upstreamCostFen == null ? '未知' : formatYuan(attempt.upstreamCostFen)}</div><div>{attempt.errorCode} {attempt.errorMessage}</div>{attempt.taskId && <div>上游任务：{attempt.taskId}</div>}</details>) : <span className="muted">历史未记录，成本未知</span>}</td><td><Status value={item.status} /><div className="muted">{item.failCode}</div></td></tr>)}</tbody></table></div>
         <Pagination page={records.data.page} totalPages={records.data.totalPages} onChange={setPage} disabled={records.loading} />
       </> : <Empty title="当前筛选条件下无计费记录" body="可以调整时间范围、机构、能力、状态或关键词。" />}
     </Panel>
@@ -317,7 +359,7 @@ export function OrgStudentUsagePanel({ api }) {
   const [orgId, setOrgId] = useState('');
   const [message, setMessage] = useState('');
   const [exporting, setExporting] = useState(false);
-  const report = useData(() => api.get(`admin/billing/org-student-usage?days=${days}`), [api, days]);
+  const report = useData(() => api.get(`admin/billing/org-student-usage?days=${days}&orgId=${encodeURIComponent(orgId)}`), [api, days, orgId]);
 
   // 选了机构就把它记下来；机构列表刷新后若原来那家没了，退回「全部」
   const orgs = report.data?.orgs || [];

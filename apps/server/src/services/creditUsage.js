@@ -17,15 +17,15 @@ export function recordAiUsage({
 }) {
   q(
     `INSERT INTO usage_records(
-       id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,input_tokens,output_tokens,created_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,input_tokens,output_tokens,created_at,compute_call_id
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       id('usage'), orgId, userId, sessionId, projectId, generationJobId, workId, modality, model, 0,
       status, failCode,
       json(pricing || { modality, status, failCode, generationJobId }),
-      Math.max(0, Math.round(Number(costFen) || 0)), seriesId || null,
+      status === 'SUCCESS' ? Math.max(0, Math.round(Number(costFen) || 0)) : 0, seriesId || null,
       Math.max(0, Math.round(Number(inputTokens) || 0)), Math.max(0, Math.round(Number(outputTokens) || 0)),
-      nowIso(),
+      nowIso(), pricing?.compute?.callId || null,
     ],
   );
 }

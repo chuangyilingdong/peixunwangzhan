@@ -24,7 +24,7 @@ export function AdminMaterials({ api }) {
   async function loadStats(item) { setStats({ loading: true, data: null, error: null }); try { setStats({ loading: false, data: await api.get(`admin/materials/${item.id}/stats`), error: null }); } catch (error) { setStats({ loading: false, data: null, error }); } }
   return <>
     <PageHeader eyebrow="平台内容" title="素材与宣传物料" description="维护招生海报、课程介绍和活动资料的元数据、授权范围与真实使用统计。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
-    <Notice tone="info">当前只维护文件元数据和外部资源地址，不提供虚假的上传、OSS 或下载能力；未配置真实资源的物料会在机构端明确显示为“资源待配置”。</Notice>
+    <Notice tone="info">上传文件与登记宣传物料分别管理；请为物料填写真实资源地址并设置授权范围。未配置资源的物料会显示“资源待配置”。</Notice>
     <FileUploadPanel api={api} onDone={materials.refresh} />
     <div className="split"><Panel title="新增宣传物料"><form onSubmit={create}>
       <label>名称<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>说明<textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
