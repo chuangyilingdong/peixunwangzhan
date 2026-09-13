@@ -725,6 +725,72 @@ export async function handleOrg(ctx) {
     return { lessonId, studentIds, count: studentIds.length };
   }
 
+  /**
+   * 机构端「课包概览」（2026-09-13，用户要求）：一眼看清每个已授权课包的
+   * 可授权次数 / 已分配 / 剩余 / 已分配学员数 / 涉及老师数 / 课堂情况。
+   *
+   * 口径说明（字段刻意设计成**在班级退场前后都成立**，免得模型一改又要重写）：
+   *   · 次数：quotaTotal 来自平台给本机构的授权单，quotaUsed 是「分给学生」用掉的次数（每人次 1）
+   *   · 已分配学员：student_course_grants 未撤销的去重人数（人次另给 grantedCount）
+   *   · 课堂：按「课时属于哪个课包」归集（课时的 series_id），所以与"课堂挂在班级还是独立"无关
+   *     ⚠️ 进行中/待上课是**存量口径**（现在有多少），已结束按 days 区间（这段时间上完多少）
+   *   · 涉及老师：开过这个课包课堂的老师去重（老师与课包没有直接绑定关系，只有课堂这一条实证）
+   */
+  if (part === '/series-overview' && method === 'GET') {
+    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const until = nowIso();
+    const series = rows(`SELECT series.id, series.title, series.cover_image_url, series.sort,
+        COALESCE(assignment.quota_total, 0) quota_total, COALESCE(assignment.quota_used, 0) quota_used
+      FROM course_series series
+      LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()}
+      WHERE series.status='PUBLISHED' AND ${orgSeriesAccessSql()}
+      ORDER BY series.sort, series.title`, [currentOrgId, currentOrgId]);
+    // 分给学生的许可（未撤销）：人次 + 去重人数
+    const grantBySeries = new Map(rows(`SELECT series_id, COUNT(*) granted, COUNT(DISTINCT student_id) students
+      FROM student_course_grants WHERE org_id=? AND revoked_at IS NULL GROUP BY series_id`, [currentOrgId])
+      .map((item) => [item.series_id, { grantedCount: Number(item.granted || 0), grantedStudents: Number(item.students || 0) }]));
+    // 课堂：存量（待上课/上课中）
+    const liveBySeries = new Map(rows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n
+      FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id
+      WHERE session.status IN ('PENDING','ACTIVE') GROUP BY lesson.series_id, session.status`)
+      .map((item) => [`${item.series_id}:${item.status}`, Number(item.n || 0)]));
+    // 课堂：区间内已结束/已解散 + 涉及老师
+    // ⚠️ 批次 A 阶段课堂还没有 teacher_id（批次 B 才加），所以先用 started_by；
+    //    批次 B 落地后改成 COALESCE(session.teacher_id, session.started_by)（一行改动）。
+    const doneBySeries = new Map(rows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n,
+        COUNT(DISTINCT session.started_by) teachers
+      FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id
+      WHERE session.ended_at IS NOT NULL AND session.ended_at >= ? AND session.ended_at < ?
+      GROUP BY lesson.series_id, session.status`, [since, until])
+      .map((item) => [`${item.series_id}:${item.status}`, { n: Number(item.n || 0), teachers: Number(item.teachers || 0) }]));
+    const items = series.map((row0) => {
+      const grant = grantBySeries.get(row0.id) || { grantedCount: 0, grantedStudents: 0 };
+      const ended = doneBySeries.get(`${row0.id}:ENDED`) || { n: 0, teachers: 0 };
+      const dissolved = doneBySeries.get(`${row0.id}:DISSOLVED`) || { n: 0, teachers: 0 };
+      const quotaTotal = Number(row0.quota_total || 0);
+      const quotaUsed = Number(row0.quota_used || 0);
+      return {
+        seriesId: row0.id, title: row0.title, coverImageUrl: row0.cover_image_url || null,
+        quotaTotal, quotaUsed, remaining: Math.max(0, quotaTotal - quotaUsed),
+        grantedCount: grant.grantedCount, grantedStudents: grant.grantedStudents,
+        pendingSessions: liveBySeries.get(`${row0.id}:PENDING`) || 0,
+        activeSessions: liveBySeries.get(`${row0.id}:ACTIVE`) || 0,
+        endedSessions: ended.n, dissolvedSessions: dissolved.n,
+        teacherCount: Math.max(ended.teachers, dissolved.teachers),
+      };
+    });
+    const sum = (key) => items.reduce((total, item) => total + Number(item[key] || 0), 0);
+    return {
+      days, since, until,
+      totals: {
+        seriesCount: items.length, quotaTotal: sum('quotaTotal'), quotaUsed: sum('quotaUsed'), remaining: sum('remaining'),
+        grantedStudents: sum('grantedStudents'), pendingSessions: sum('pendingSessions'), activeSessions: sum('activeSessions'),
+      },
+      items,
+    };
+  }
+
   // 机构端：把课包的「可用次数」分给学生（用掉 1 次；同一学生同一课包只能一次；机构侧不可撤销）
   if (part === '/course-grants' && method === 'GET') {
     const seriesFilter = String(ctx.search.get('seriesId') || '').trim();

@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } 
 import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
+import { SeriesOverview } from './pages/SeriesOverview.jsx';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/org').replace(/\/$/, '');
@@ -17,6 +18,7 @@ const navigation = [
   { to: '/works', icon: '✧', label: '作品管理' }, 
   { to: '/inbox', icon: '✉', label: '站内信' }, 
   { to: '/courses', icon: '◇', label: '课程中心' }, 
+  { to: '/series-overview', icon: '▦', label: '课包概览' },
   { to: '/enrollment', icon: '♙', label: '学员开通', adminOnly: true }, 
   { to: '/materials', icon: '▤', label: '宣传物料' }, 
   { to: '/help-feedback', icon: '◎', label: '问题反馈', adminOnly: true }
@@ -25,27 +27,45 @@ const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123
 
 function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/overview'), [api]);
+  // 2026-09-13（用户要求）：首页按「课包」看家底 —— 每个课包多少人次、多少学员、多少老师、多少课堂。
+  // ⚠️ 必须和其它 hook 一起放在提前 return 之前（放到 return 之后会变成条件 hook，切页时 React 会崩）。
+  const seriesBox = useData(() => api.get('org/series-overview?days=30'), [api]);
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   const isAdmin = data.scope?.role === 'ORG_ADMIN';
   const alerts = data.alerts || [];
   const recentSessions = data.recentSessions || [];
   const unreadMessages = data.unreadNotificationItems || [];
+  const seriesItems = seriesBox.data?.items || [];
+  const seriesTotals = seriesBox.data?.totals || {};
   return <>
-    <PageHeader eyebrow={isAdmin ? '机构经营' : '教师教学'} title={data.org.name} description={data.scope?.description || '实时掌握班级开课、作品与算力消耗。'} actions={<button className="secondary-button" onClick={refresh}>刷新看板</button>} />
+    <PageHeader eyebrow={isAdmin ? '机构经营' : '教师教学'} title={data.org.name} description={data.scope?.description || '实时掌握课包分配、课堂与算力消耗。'} actions={<button className="secondary-button" onClick={() => { refresh(); seriesBox.refresh(); }}>刷新看板</button>} />
     <div className="metrics">
-      <MetricCard label="活跃班级" value={data.activeClasses} hint={`${data.activeSessions} 个课堂正在进行`} />
-      <MetricCard label="覆盖学员" value={data.students} hint={isAdmin ? `${data.teachers} 位教师` : `${data.scope?.classCount || 0} 个负责/授权班级`} tone="teal" />
-      <MetricCard label="学生作品" value={data.works} hint="已提交的课堂作品总数" tone="orange" />
-      <MetricCard label="近 7 日 AI 调用" value={data.usage7} hint={isAdmin ? '本机构全部班级' : '仅统计本人负责/授权班级'} tone="pink" />
+      <MetricCard label="已授权课包" value={seriesTotals.seriesCount ?? 0} hint="平台授权给本机构、在有效期内的课包" />
+      <MetricCard label="已分配 / 可授权" value={`${seriesTotals.quotaUsed ?? 0} / ${seriesTotals.quotaTotal ?? 0}`} hint={`剩余 ${seriesTotals.remaining ?? 0} 次`} tone="teal" />
+      <MetricCard label="已分配学员" value={seriesTotals.grantedStudents ?? 0} hint={isAdmin ? `本机构 ${data.students} 名学员 · ${data.teachers} 位教师` : '当前持有有效许可的学员'} tone="orange" />
+      <MetricCard label="进行中的课堂" value={seriesTotals.activeSessions ?? 0} hint={`另有 ${seriesTotals.pendingSessions ?? 0} 个课堂待上课 · 学生作品 ${data.works}`} tone="pink" />
     </div>
     <Panel title="统计口径">
       <div className="row-actions"><Status value={data.org.status} /><span className="muted">{data.scope?.description}</span><span className="muted">活跃班级：{data.breakdown?.activeClasses ?? data.activeClasses}</span><span className="muted">活跃课堂：{data.breakdown?.activeSessions ?? data.activeSessions}</span></div>
       <p className="muted">合同到期：{formatDate(data.org.contractExpiresAt)}{isAdmin ? ` · 教师席位：${data.org.teacherUsedSeats} / ${data.org.teacherSeats}` : ' · 经营席位仅机构管理员可见'}</p>
+      <p className="muted">课包口径「已分配 / 可授权」＝平台给本机构的授权次数里已经分给学员的部分（每分给一名学员用掉 1 次）；「进行中的课堂」是当前存量，待上课的课堂还没开始。逐课包的明细见「课包概览」。</p>
     </Panel>
     <div className="split">
       <Panel title={isAdmin ? '经营提醒' : '教学提醒'}>
         {alerts.length ? <div className="card-list">{alerts.map((alert) => <Notice key={alert.code} tone={alert.level || 'info'}><strong>{alert.title}</strong><div>{alert.message}</div>{alert.daysRemaining !== undefined && <small>剩余 {alert.daysRemaining} 天</small>}{alert.used !== undefined && <small>已用 {alert.used} / {alert.total}</small>}</Notice>)}</div> : <Empty title={isAdmin ? '暂无经营预警' : '暂无教学预警'} body={isAdmin ? '合同与教师席位目前没有触发预警。' : '当前范围内没有需要优先处理的系统预警。'} />}
+      </Panel>
+      <Panel title="按课包（近 30 天课堂）">
+        {seriesBox.loading ? <Loading /> : seriesBox.error ? <ErrorState error={seriesBox.error} onRetry={seriesBox.refresh} /> : seriesItems.length ? <div className="table-wrap"><table>
+          <thead><tr><th>课包</th><th>已分配 / 可授权</th><th>学员</th><th>课堂（待 / 中）</th><th>老师</th></tr></thead>
+          <tbody>{seriesItems.map((item) => <tr key={item.seriesId}>
+            <td><strong>{item.title}</strong></td>
+            <td>{item.quotaUsed} / {item.quotaTotal || '不限'}<div className="muted">剩 {item.remaining} 次</div></td>
+            <td>{item.grantedStudents}<div className="muted">{item.grantedCount} 人次</div></td>
+            <td>{item.pendingSessions} / <strong>{item.activeSessions}</strong></td>
+            <td>{item.teacherCount}</td>
+          </tr>)}</tbody>
+        </table></div> : <Empty title="还没有被授权的课包" body="平台把课包授权给本机构后，这里会按课包显示分配与课堂情况。" />}
       </Panel>
       <Panel title={`未读消息摘要（${data.unreadNotifications || 0}）`}>
         {unreadMessages.length ? <div className="card-list">{unreadMessages.map((item) => <article className="item-card" key={item.id}><strong>{item.title}</strong><p>{item.body}</p><span className="muted">{item.senderName || '系统'} · {formatDate(item.publishAt || item.createdAt)}</span></article>)}</div> : <Empty title="暂无未读消息" body="新的平台公告或机构通知会显示在这里。" />}
@@ -701,6 +721,6 @@ export function App() {
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/grants" element={<StudentGrants api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={<SeriesOverview api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/grants" element={<StudentGrants api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);
