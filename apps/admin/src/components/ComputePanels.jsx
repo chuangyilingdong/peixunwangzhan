@@ -1,15 +1,19 @@
-// 平台端 - 算力（P5 第一屏）：算力网关（new-api）的配置、渠道与令牌分发。
+// 平台端「模型与算力」页的面板（2026-09-13：从原 ComputeGateway.jsx 拆出）。
 //
-// 定位（见 docs/项目重梳理-03-平台侧重做梳理.md 第 7 节）：网关那一侧负责渠道密钥、模型与额度，
-// 我们这里只做三件事——配上网关地址与管理员账号、看清渠道池、按「机构 / 学生 / 课时」分发令牌。
-// 令牌名就是归集维度，所以名字用 机构:<id> / 学生:<id> / 课时:<id> 这种约定写法。
+// 为什么拆：原来「算力网关」和「计费与模型」是两个页面，配一次上游要来回跳（用户反馈理解成本太高）。
+// 现在合并成一页、按步骤走，这里放**算力侧的三个面板**：
+//   GatewayPanel      ③ 算力网关连接 + 渠道池 + 令牌分发（可选的精确计费出口）
+//   PricingPanel      ② 每次调用单价（对学生的售价）
+//   ComputeUsagePanel ④ 用量归集 + 算力池 + 两本账对账
+// 三个面板各自管自己的数据（互不依赖），所以能独立放进步骤里、也能单独刷新。
 import { useEffect, useState } from 'react';
-import { Empty, ErrorState, Loading, Notice, PageHeader, Panel, Status, formatCredits, formatDate, useData } from '@platform/shared';
+import { Empty, ErrorState, Loading, Notice, Panel, Status, formatCredits, formatDate, useData } from '@platform/shared';
 
 /** 金额（元）显示：归集结果里已经是元，别再套积分格式。 */
 const yuan = (value) => `¥${Number(value || 0).toFixed(2)}`;
 
-export function ComputeGateway({ api }) {
+/* ─────────────── ③ 算力网关：连接 + 渠道池 + 令牌分发 ─────────────── */
+export function GatewayPanel({ api }) {
   const config = useData(() => api.get('admin/compute-gateway'), [api]);
   const [form, setForm] = useState({ baseUrl: '', username: 'root', password: '', enabled: false });
   const [saved, setSaved] = useState(false);
@@ -19,15 +23,6 @@ export function ComputeGateway({ api }) {
   const [channels, setChannels] = useState(null);
   const [tokens, setTokens] = useState(null);
   const [tokenForm, setTokenForm] = useState({ name: '', budgetYuan: '', models: '', unlimited: false });
-  const [usageDays, setUsageDays] = useState(7);
-  const [usage, setUsage] = useState(null);
-  // 算力池（学生 × 课包，四种模态共用一个池子）与折算用的每次调用单价
-  const [pools, setPools] = useState(null);
-  const [pricing, setPricing] = useState(null);
-  const [pricingBusy, setPricingBusy] = useState(false);
-  const [reconcile, setReconcile] = useState(null);
-  const [budgetedSeries, setBudgetedSeries] = useState([]);
-  const [reconcileDays, setReconcileDays] = useState(7);
 
   // 配置读回来才填表单：密码永不回显，留空表示「不改」
   useEffect(() => {
@@ -69,35 +64,6 @@ export function ComputeGateway({ api }) {
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
 
-  async function loadUsage(days = usageDays) {
-    setBusy(true); setMessage('');
-    try { setUsage(await api.get(`admin/compute-gateway/usage?days=${days}`)); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  }
-
-  async function loadPools() {
-    setBusy(true); setMessage('');
-    try {
-      const result = await api.get('admin/compute-pools?limit=100');
-      setPools(result.items || []); setPricing(result.pricing);
-      setBudgetedSeries(result.budgetedSeries || []);
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  }
-
-  async function savePricing() {
-    setPricingBusy(true); setMessage('');
-    try {
-      const result = await api.put('admin/compute-pricing', { perCall: pricing.perCall, models: pricing.models });
-      setPricing(result.pricing); setMessage('单价已保存（按「每次调用」折算，立即生效）。');
-    } catch (error) { setMessage(error.message); } finally { setPricingBusy(false); }
-  }
-
-  async function loadReconcile(days = reconcileDays) {
-    setBusy(true); setMessage('');
-    try { setReconcile(await api.get(`admin/compute-pools/reconciliation?days=${days}`)); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  }
-
   async function createToken() {
     setBusy(true); setMessage('');
     try {
@@ -113,12 +79,6 @@ export function ComputeGateway({ api }) {
   }
 
   return <>
-    <PageHeader
-      eyebrow="算力总控"
-      title="算力网关"
-      description="渠道与密钥在网关上维护，这里配置连接、看清渠道池，并按机构/学员/课时分发令牌（令牌额度就是这节课的算力上限）。"
-      actions={<button className="secondary-button" onClick={() => config.refresh()}>刷新</button>}
-    />
     {message && <Notice tone={message.includes('已') || message.includes('连上') ? 'success' : 'danger'}>{message}</Notice>}
 
     <Panel title="网关连接">
@@ -159,11 +119,89 @@ export function ComputeGateway({ api }) {
         {tokens.map((item) => <tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.unlimited ? '不限' : formatCredits(item.remainQuota)}</td><td>{formatCredits(item.usedQuota)}</td><td className="muted">{item.models || '不限'}</td><td>{item.status === 1 ? <Status value="ACTIVE" /> : <span className="status danger">已停用</span>}</td></tr>)}
       </tbody></table></div> : <Empty title="还没有令牌" body="给机构/学员/课时分发令牌后，这里会显示它们的额度与消耗。" />) : <p className="muted top-gap">点「刷新列表」读取网关上的令牌（含在 new-api 后台手工建的那些）。</p>}
     </Panel>
+  </>;
+}
 
-    <Panel
-      title="用量归集"
-      actions={<button className="secondary-button" disabled={busy || !enabled} onClick={() => loadUsage()}>读取用量</button>}
-    >
+/* ─────────────── ② 每次调用单价 ─────────────── */
+export function PricingPanel({ api }) {
+  const [pricing, setPricing] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  async function load() {
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.get('admin/compute-pools?limit=1');
+      setPricing(result.pricing);
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function save() {
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.put('admin/compute-pricing', { perCall: pricing.perCall, models: pricing.models });
+      setPricing(result.pricing); setMessage('单价已保存（按「每次调用」折算，立即生效）。');
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  return <Panel title="每次调用单价（卖给学生的计价口；含你的毛利）" actions={<button className="secondary-button" disabled={busy} onClick={load}>读取单价</button>}>
+    {message && <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice>}
+    {!pricing ? <Empty title="还没有读取" body="点右上角「读取单价」：这四档单价决定算力池怎么扣钱（单价 × 调用次数）。" /> : <>
+      <p className="muted">这是<strong>对学生的计费价</strong>（不是上游成本）：池子按「单价 × 调用次数」扣，所以这个价就是你的毛利口径。上游成本可在步骤④「用量归集」那张表里对（配了网关才有）。⚠️ 只要保证<strong>售价不低于上游成本</strong>；同一模态里成本差异大的档位（如视频的时长/清晰度）建议用<strong>模型级单价</strong>分开定，避免高档位亏本。</p>
+      <div className="form-grid">
+        {[['TEXT', '对话'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']].map(([key, label]) => (
+          <label key={key}>{label}（元 / 次）
+            <input inputMode="decimal" value={String((pricing.perCall?.[key] ?? 0) / 100)}
+              onChange={(event) => setPricing({ ...pricing, perCall: { ...pricing.perCall, [key]: Math.round(Number(event.target.value || 0) * 100) } })} />
+          </label>
+        ))}
+      </div>
+      <div className="row-actions top-gap">
+        <button className="primary-button" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存单价'}</button>
+        {pricing.updatedAt ? <span className="muted">上次修改：{formatDate(pricing.updatedAt)}</span> : null}
+      </div>
+    </>}
+  </Panel>;
+}
+
+/* ─────────────── ④ 用量归集 + 算力池 + 两本账对账 ─────────────── */
+export function ComputeUsagePanel({ api }) {
+  const config = useData(() => api.get('admin/compute-gateway'), [api]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [usage, setUsage] = useState(null);
+  const [usageDays, setUsageDays] = useState(7);
+  const [pools, setPools] = useState(null);
+  const [budgetedSeries, setBudgetedSeries] = useState([]);
+  const [reconcile, setReconcile] = useState(null);
+  const [reconcileDays, setReconcileDays] = useState(7);
+  const enabled = config.data?.config?.enabled === true;
+
+  async function loadUsage(days = usageDays) {
+    setBusy(true); setMessage('');
+    try { setUsage(await api.get(`admin/compute-gateway/usage?days=${days}`)); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function loadPools() {
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.get('admin/compute-pools?limit=100');
+      setPools(result.items || []); setBudgetedSeries(result.budgetedSeries || []);
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  async function loadReconcile(days = reconcileDays) {
+    setBusy(true); setMessage('');
+    try { setReconcile(await api.get(`admin/compute-pools/reconciliation?days=${days}`)); }
+    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  return <>
+    {message && <Notice tone="danger">{message}</Notice>}
+
+    <Panel title="用量归集（网关侧：按令牌名还原到机构 / 学员 / 课时）"
+      actions={<button className="secondary-button" disabled={busy || !enabled} onClick={() => loadUsage()}>读取用量</button>}>
       {!enabled ? <Empty title="先启用网关" body="启用后这里会按令牌名把网关的消耗还原到机构 / 学员 / 课时。" />
         : !usage ? <Empty title="还没有读取" body="点右上角「读取用量」，看这段时间里哪个机构、哪个学员、哪节课花了多少算力。" />
           : <>
@@ -205,10 +243,7 @@ export function ComputeGateway({ api }) {
           </>}
     </Panel>
 
-    <Panel
-      title="算力池（每个学员 × 每个课包一个池子，四种调用共用）"
-      actions={<button className="secondary-button" disabled={busy} onClick={loadPools}>读取池子</button>}
-    >
+    <Panel title="算力池（每个学员 × 每个课包一个池子，四种调用共用）" actions={<button className="secondary-button" disabled={busy} onClick={loadPools}>读取池子</button>}>
       {budgetedSeries.length ? <p className="muted">
         已配置「每学生算力上限」的课包：{budgetedSeries.map((item) => `${item.seriesTitle}（¥${item.perStudentYuan}/学生${item.calls ? `，已用 ¥${item.usedYuan}` : '，暂无消耗'}）`).join(' · ')}
       </p> : <p className="muted">还没有课包配置「每学生算力上限」—— 没填的课包不拦、只记账（到课包详情里填）。</p>}
@@ -225,31 +260,13 @@ export function ComputeGateway({ api }) {
             <td className="muted">{item.successCalls} 成功 / {item.failedCalls} 失败</td>
           </tr>)}
         </tbody></table></div> : <Empty title="还没有池子消耗" body="学员开始用 AI 之后，这里会出现「谁在哪个课包上花了多少」。上限在课包的「每学生算力上限（元）」里填，留空 = 不限制、只记账。" />}
-      {pricing ? <>
-        <h4 className="top-gap">每次调用单价（卖给学生的计价口；含你的毛利）</h4>
-        <p className="muted">这是<strong>对学生的计费价</strong>（不是上游成本）：池子按「单价 × 调用次数」扣，所以这个价就是你的毛利口径。上游成本可在「用量归集」那张表里对（配了网关才有）。⚠️ 只要保证<strong>售价不低于上游成本</strong>；同一模态里成本差异大的档位（如视频的时长/清晰度）建议用<strong>模型级单价</strong>分开定，避免高档位亏本。</p>
-        <div className="form-grid">
-          {[['TEXT', '对话'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']].map(([key, label]) => (
-            <label key={key}>{label}（元 / 次）
-              <input inputMode="decimal" value={String((pricing.perCall?.[key] ?? 0) / 100)}
-                onChange={(event) => setPricing({ ...pricing, perCall: { ...pricing.perCall, [key]: Math.round(Number(event.target.value || 0) * 100) } })} />
-            </label>
-          ))}
-        </div>
-        <div className="row-actions top-gap">
-          <button className="primary-button" disabled={pricingBusy} onClick={savePricing}>{pricingBusy ? '保存中…' : '保存单价'}</button>
-          {pricing.updatedAt ? <span className="muted">上次修改：{formatDate(pricing.updatedAt)}</span> : null}
-        </div>
-      </> : null}
     </Panel>
 
-    <Panel
-      title="两本账对账"
+    <Panel title="两本账对账"
       actions={<>
         <select value={String(reconcileDays)} onChange={(event) => { const days = Number(event.target.value); setReconcileDays(days); loadReconcile(days); }}><option value="1">近 1 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
         <button className="secondary-button" disabled={busy} onClick={() => loadReconcile()}>开始对账</button>
-      </>}
-    >
+      </>}>
       {!reconcile ? <Empty title="还没有对账" body="点右上角「开始对账」：两本账并排看 —— 池子账（四种模态、按单价折算）与网关账（精确，只含对话/图片）。" />
         : <>
           <p className="muted">

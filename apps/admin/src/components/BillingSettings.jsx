@@ -1,6 +1,8 @@
-// 计费配置：模态开关与单价 / 平台限额 / 预警阈值
+// 计费配置：模态开关（平台级总开关） / 预警阈值
 // 后端 /api/admin/billing-config/{modalities,alerts} 早已存在，此前管理端只有 AI 渠道界面。
 // 2026-09-13（P4 删积分）：原 /billing-config/quotas（积分限额，只读不拦）已随积分体系删除。
+// 2026-09-13（页面合并）：本组件作为「模型与算力」页的步骤⑤；原来那列 legacy unitCost（从不参与计算）已去掉，
+//   单价统一由步骤②的 compute_pricing.perCall 负责 —— 两个单价并存正是理解成本高的来源之一。
 import { useState } from 'react';
 import { Empty, ErrorState, Loading, Notice, Panel, formatDate, useData } from '@platform/shared';
 
@@ -38,28 +40,27 @@ export function BillingSettings({ api }) {
   return <>
     {message ? <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice> : null}
 
-    <Panel title="模态开关与单价">
-      <p className="muted">关闭某个模态后，学生端生成会被服务端拒绝（MODALITY_DISABLED）；单价是该模态每次调用的**算力计费单价（元）**。</p>
+    <Panel title="模态开关（平台级总开关）">
+      <p className="muted">关闭某个模态后，学生端生成会被服务端拒绝（MODALITY_DISABLED）。<strong>单价不在这里配</strong> —— 每次调用单价在步骤②（算力池按那个价扣钱）；这里那一列曾经是另一个「单价」字段，从不参与任何计算，已从界面去掉，免得两个单价打架。</p>
       {modalities.loading ? <Loading /> : modalities.error ? <ErrorState error={modalities.error} onRetry={modalities.refresh} /> : <div className="table-wrap"><table>
-        <thead><tr><th>模态</th><th>显示名</th><th>单价（元/次）</th><th>开关</th><th>更新时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>模态</th><th>显示名</th><th>开关</th><th>更新时间</th><th>操作</th></tr></thead>
         <tbody>
           {(modalities.data?.items || []).map((item) => {
             const editing = edit?.kind === 'modality' && edit.key === item.modality;
             return <tr key={item.id}>
               <td><strong>{item.modality}</strong></td>
               <td>{editing ? <input value={edit.form.displayName} onChange={(event) => patch({ displayName: event.target.value })} /> : (item.displayName || '—')}</td>
-              <td>{editing ? <input type="number" min="0" max="100" value={edit.form.unitCost} onChange={(event) => patch({ unitCost: event.target.value })} /> : item.unitCost}</td>
               <td>{editing
                 ? <label className="checkbox-label"><input type="checkbox" checked={edit.form.enabled} onChange={(event) => patch({ enabled: event.target.checked })} />启用</label>
                 : <span className={`status ${item.enabled ? 'success' : 'danger'}`}>{item.enabled ? '启用' : '关闭'}</span>}</td>
               <td>{formatDate(item.updatedAt)}</td>
               <td>{editing
                 ? <div className="row-actions"><button className="primary-button" disabled={busy} onClick={save}>保存</button><button className="secondary-button" onClick={() => setEdit(null)}>取消</button></div>
-                : <button className="secondary-button" onClick={() => start('modality', item.modality, { displayName: item.displayName, unitCost: item.unitCost, enabled: item.enabled })}>编辑</button>}</td>
+                : <button className="secondary-button" onClick={() => start('modality', item.modality, { displayName: item.displayName, enabled: item.enabled })}>编辑</button>}</td>
             </tr>;
           })}
-          {!(modalities.data?.items || []).length ? <tr><td colSpan="6"><Empty title="暂无模态配置" /></td></tr> : null}
-          {edit?.kind === 'modality' ? <tr><td colSpan="6">{reasonField}</td></tr> : null}
+          {!(modalities.data?.items || []).length ? <tr><td colSpan="5"><Empty title="暂无模态配置" /></td></tr> : null}
+          {edit?.kind === 'modality' ? <tr><td colSpan="5">{reasonField}</td></tr> : null}
         </tbody>
       </table></div>}
     </Panel>

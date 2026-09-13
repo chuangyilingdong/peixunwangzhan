@@ -1,8 +1,10 @@
+// 平台端「模型与算力」页的面板（2026-09-13：从原 PlatformBilling.jsx 拆出）。
+//
+// ProviderPolicyPanel  ① 上游渠道与模型：多渠道 + 每渠道多模型 + 能力路由 + 每模型能力 + 「用当前渠道试一次」
+// BillingUsagePanel    ④ 用量与账单：全平台算力消耗、能力分布、机构排名、逐条明细
+// 模态开关与预警（BillingSettings）单独作为步骤⑤，由合并页直接引用。
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, formatYuan, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
-import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
-import { BillingSettings } from '../components/BillingSettings.jsx';
+import { Empty, ErrorState, formatDate, formatYuan, Loading, MetricCard, Notice, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 
 // 视频模型的输入画面支持方式（可多选）：一个模型可以既支持文生、也支持图生/首尾帧。
 const INPUT_MODE_OPTIONS = [['TEXT', '文生视频（纯文本）'], ['FIRST_FRAME', '图生视频（首帧图）'], ['FIRST_LAST_FRAME', '首尾帧参考（首帧+尾帧）'], ['OMNI_REFERENCE', '全能参考（多图/多视频/多音频）']];
@@ -258,7 +260,7 @@ export function ProviderPolicyPanel({ api }) {
   </Panel>;
 }
 
-export function PlatformBilling({ api }) {
+export function BillingUsagePanel({ api }) {
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const overview = useData(() => api.get('admin/billing/usage-overview'), [api]);
   const [filters, setFilters] = useState({ days: '30', orgId: '', modality: '', status: '', search: '', startDate: '', endDate: '' });
@@ -267,7 +269,6 @@ export function PlatformBilling({ api }) {
   const records = useData(() => api.get(`admin/billing/usage-records?${query.toString()}`), [api, query]);
   function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value })); setPage(1); }
   return <>
-    <PageHeader eyebrow="平台计费" title="计费与用量" description="查看全平台算力消耗、能力分布、机构排名和用量明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
     <div className="metrics">
       <MetricCard label="算力消耗合计" value={formatYuan(overview.data?.totalFen || 0)} hint={`近 ${filters.days} 日全部机构`} />
       <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
@@ -278,8 +279,6 @@ export function PlatformBilling({ api }) {
       <Panel title="能力消耗"><table><thead><tr><th>能力</th><th>调用次数</th><th>消耗</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
       <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
     </div>
-    <ProviderPolicyPanel api={api} />
-    <BillingSettings api={api} />
 
     <Panel title="计费明细筛选">
       <div className="form-grid">

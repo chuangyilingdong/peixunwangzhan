@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { AppShell, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
 import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/CourseManagement.jsx';
-import { ComputeGateway } from './pages/ComputeGateway.jsx';
+import { ModelCompute } from './pages/ModelCompute.jsx';
 import { AdminPermissionGate, demos, visibleNavigation } from './shared.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { Organizations } from './pages/Organizations.jsx';
@@ -12,7 +12,6 @@ import { PlatformAdmins } from './pages/PlatformAdmins.jsx';
 import { PlatformAudit } from './pages/PlatformAudit.jsx';
 import { PlatformNotifications } from './pages/PlatformNotifications.jsx';
 import { PlatformWorks } from './pages/PlatformWorks.jsx';
-import { PlatformBilling } from './pages/PlatformBilling.jsx';
 import { AdminInbox } from './pages/AdminInbox.jsx';
 import { AdminMaterials } from './pages/AdminMaterials.jsx';
 import { WebsiteContent } from './pages/WebsiteContent.jsx';
@@ -38,8 +37,9 @@ export function App() {
     <Route path="/courses/:seriesId" element={page('ADMIN_COURSES', <CourseSeriesDetailPage api={api} />)} />
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
-    <Route path="/compute" element={page('ADMIN_BILLING', <ComputeGateway api={api} />)} />
-    <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
+    {/* 2026-09-13：原「算力网关」与「计费与模型」合并成一页 —— 两个页面让人来回跳，理解成本太高 */}
+    <Route path="/compute" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
+    <Route path="/billing" element={<Navigate to="/compute" replace />} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />
     <Route path="/inbox" element={page('ADMIN_CONTENT', <AdminInbox api={api} />)} />

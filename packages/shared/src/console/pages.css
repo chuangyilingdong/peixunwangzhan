@@ -209,3 +209,14 @@
   resize: vertical;
   font-family: inherit;
 }
+
+/* 合并页「模型与算力」的步骤条（2026-09-13）：把原来两个页面串成一条可点的流水线 */
+.step-nav { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.step-chip { display: grid; gap: 4px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.03); color: inherit; cursor: pointer; font: inherit; }
+.step-chip:hover { border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.06); }
+.step-chip b { font-size: 13px; }
+.step-chip .step-chip__state { justify-self: start; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; background: rgba(255,255,255,.10); }
+.step-chip .muted { font-size: 12px; line-height: 1.5; }
+.step-chip.is-ok .step-chip__state { background: rgba(34,197,94,.18); color: #7ee2a8; }
+.step-chip.is-warn .step-chip__state { background: rgba(245,158,11,.18); color: #ffd08a; }
+.step-section { scroll-margin-top: 76px; }
