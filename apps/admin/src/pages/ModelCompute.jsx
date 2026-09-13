@@ -11,7 +11,7 @@
 // 步骤条只是**导航**：每一步自己加载自己的数据，点步骤就滚到那一段。
 import { useState } from 'react';
 import { Empty, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
-import { ProviderPolicyPanel, BillingUsagePanel } from '../components/BillingPanels.jsx';
+import { ProviderPolicyPanel, BillingUsagePanel, OrgStudentUsagePanel } from '../components/BillingPanels.jsx';
 import { GatewayPanel, PricingPanel, ComputeUsagePanel } from '../components/ComputePanels.jsx';
 import { BillingSettings } from '../components/BillingSettings.jsx';
 
@@ -81,7 +81,7 @@ export function ModelCompute({ api }) {
 
     <div id="step-channels" className="step-section">
       <Panel title="① 上游渠道与模型">
-        <p className="muted">先加渠道（供应商 / 协议 / 地址 / 密钥），每个渠道用「读取模型」勾出**这个渠道能用的多个模型**；
+        <p className="muted">先加渠道（供应商 / 协议 / 地址 / 密钥），每个渠道用「读取模型」勾出<strong>这个渠道能用的多个模型</strong>；
           再用「能力路由」把 文本 / 图片 / 音乐 / 视频 分别指到某个渠道 —— 路由才是最终生效的选择。
           填完建议点一次「<strong>用当前渠道试一次</strong>」：它会拿当前参数真发一次最小请求，上游不认就直接告诉你原因。</p>
       </Panel>
@@ -95,7 +95,7 @@ export function ModelCompute({ api }) {
     <div id="step-gateway" className="step-section">
       <Panel title="③ 算力网关（可选）">
         <p className="muted">不启用也能正常用：学生的每个能力都按上面的单价从算力池扣。
-          启用后，上游调用改成经网关出口，你能拿到**精确账单**（步骤④的「两本账对账」才有的对），
+          启用后，上游调用改成经网关出口，你能拿到<strong>精确账单</strong>（步骤④的「两本账对账」才有的对），
           也能在网关侧按令牌额度再兜一层。渠道与密钥要在 new-api 那侧维护，这里的「渠道池」是只读的。</p>
       </Panel>
     </div>
@@ -103,10 +103,11 @@ export function ModelCompute({ api }) {
 
     <div id="step-usage" className="step-section">
       <Panel title="④ 用量与账单">
-        <p className="muted">三个角度看同一笔钱：<strong>网关归集</strong>（按令牌名还原到机构 / 学员 / 课时，只有启用网关才有）、
+        <p className="muted">四个角度看同一笔钱：<strong>按机构下钻到学员</strong>（谁花了多少，可导出台账）、<strong>网关归集</strong>（按令牌名还原到机构 / 学员 / 课时，只有启用网关才有）、
           <strong>算力池</strong>（每个学员在每个课包上花了多少、还剩多少）、<strong>两本账对账</strong>（池子按售价、网关按上游实耗，差额就是毛利）。</p>
       </Panel>
     </div>
+    <OrgStudentUsagePanel api={api} />
     <ComputeUsagePanel api={api} />
     <BillingUsagePanel api={api} />
 

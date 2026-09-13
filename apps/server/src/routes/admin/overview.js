@@ -375,5 +375,66 @@ export async function handleOverview(ctx, part, method) {
     }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
+
+  /**
+   * 「机构 → 学生」消耗下钻（2026-09-13，用户要的「平台能看到所有机构和下面学生的消耗」）。
+   *
+   * 归属来自算力池账本 usage_records 的 org_id + user_id —— **不需要给学生发 API key**：
+   * 学生不是拿 key 直连上游，而是经我们的后端调用，后端从登录会话就知道是谁在调。
+   * 所以只要机构/学员存在，归属天然成立（新机构、新学员都不用做任何「分发」动作）。
+   *
+   * 返回两块：orgs（所有机构，含零消耗的，便于一眼看出「谁还没用过」）与
+   * students（**选中机构**下每个学员的汇总）。days 用左闭右开口径，与其他用量口径一致。
+   */
+  const usageRange = (ctx) => {
+    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
+    const until = new Date();
+    const since = new Date(until.getTime() - days * 86400000);
+    return { days, since: since.toISOString(), until: until.toISOString() };
+  };
+  if (part === '/billing/org-student-usage' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const { days, since, until } = usageRange(ctx);
+    const orgId = String(ctx.search.get('orgId') || '').trim();
+    if (orgId && !row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    // 所有机构（含这段时间没有消耗的）：LEFT JOIN 用量，零消耗也列出来
+    const orgs = rows(`SELECT organization.id, organization.name, organization.status,
+        COALESCE(SUM(usage.cost_fen), 0) fen, COUNT(usage.id) calls, COUNT(DISTINCT usage.user_id) studentCount
+      FROM organizations organization
+      LEFT JOIN usage_records usage ON usage.org_id = organization.id AND usage.created_at>=? AND usage.created_at<?
+      GROUP BY organization.id ORDER BY fen DESC, organization.name ASC`, [since, until])
+      .map((item) => ({ id: item.id, name: item.name, status: item.status, costFen: Number(item.fen || 0), calls: Number(item.calls || 0), studentCount: Number(item.studentCount || 0) }));
+    const students = orgId ? rows(`SELECT student.id, student.login, student.display_name,
+        COALESCE(SUM(usage.cost_fen), 0) fen, COUNT(usage.id) calls,
+        COUNT(DISTINCT usage.series_id) seriesCount, MAX(usage.created_at) lastAt
+      FROM usage_records usage JOIN users student ON student.id = usage.user_id
+      WHERE usage.org_id=? AND usage.created_at>=? AND usage.created_at<?
+      GROUP BY student.id ORDER BY fen DESC, student.display_name ASC`, [orgId, since, until])
+      .map((item) => ({ id: item.id, login: item.login, name: item.display_name || item.login, costFen: Number(item.fen || 0), calls: Number(item.calls || 0), seriesCount: Number(item.seriesCount || 0), lastAt: item.last_at || item.lastAt || null })) : [];
+    const totals = { costFen: orgs.reduce((sum, item) => sum + item.costFen, 0), calls: orgs.reduce((sum, item) => sum + item.calls, 0), orgCount: orgs.length, activeOrgCount: orgs.filter((item) => item.calls > 0).length };
+    return { days, since, until, orgId: orgId || null, orgs, students, totals };
+  }
+  if (part === '/billing/org-student-usage/export' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const { days, since, until } = usageRange(ctx);
+    const orgId = String(ctx.search.get('orgId') || '').trim();
+    if (orgId && !row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    // 导出「机构 × 学员」两级的明细（选了机构就只导那家），列与页面一致
+    const items = rows(`SELECT organization.name orgName, organization.id orgId, student.login studentLogin,
+        student.display_name studentName, student.id studentId,
+        COALESCE(SUM(usage.cost_fen), 0) fen, COUNT(usage.id) calls
+      FROM usage_records usage
+      JOIN organizations organization ON organization.id = usage.org_id
+      JOIN users student ON student.id = usage.user_id
+      WHERE usage.created_at>=? AND usage.created_at<?${orgId ? ' AND usage.org_id=?' : ''}
+      GROUP BY organization.id, student.id
+      ORDER BY fen DESC, organization.name ASC, student.display_name ASC`, orgId ? [since, until, orgId] : [since, until]);
+    const content = csvDocument(
+      ['机构', '机构ID', '学员', '学员账号', '学员ID', '调用次数', '消耗（元）'],
+      items.map((item) => [item.orgName, item.orgId, item.studentName || item.studentLogin, item.studentLogin, item.studentId, Number(item.calls || 0), (Number(item.fen || 0) / 100).toFixed(2)]),
+    );
+    audit(ctx, 'PLATFORM_USAGE_EXPORT', 'ORG', orgId || null, null, { count: items.length, days, orgId: orgId || null });
+    return { filename: csvFileName(orgId ? 'student-usage' : 'org-student-usage'), content, count: items.length };
+  }
   return null;
 }

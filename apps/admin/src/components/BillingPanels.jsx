@@ -5,6 +5,7 @@
 // 模态开关与预警（BillingSettings）单独作为步骤⑤，由合并页直接引用。
 import { useEffect, useMemo, useState } from 'react';
 import { Empty, ErrorState, formatDate, formatYuan, Loading, MetricCard, Notice, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { downloadCsv } from '../shared.jsx';
 
 // 视频模型的输入画面支持方式（可多选）：一个模型可以既支持文生、也支持图生/首尾帧。
 const INPUT_MODE_OPTIONS = [['TEXT', '文生视频（纯文本）'], ['FIRST_FRAME', '图生视频（首帧图）'], ['FIRST_LAST_FRAME', '首尾帧参考（首帧+尾帧）'], ['OMNI_REFERENCE', '全能参考（多图/多视频/多音频）']];
@@ -303,3 +304,79 @@ export function BillingUsagePanel({ api }) {
   </>;
 }
 
+
+/* ─────────────── ④ 机构 → 学员 消耗下钻（2026-09-13，用户要的「平台能看到所有机构和下面学生的消耗」）───────────────
+ *
+ * 归属来自算力池账本（org_id + user_id），**不需要给学生发 key** ——
+ * 学生是经我们的后端调用，后端从登录会话就知道是谁，所以新机构/新学员都不用做任何「分发」动作。
+ * 左边列所有机构（含这段时间零消耗的，一眼看出谁还没用过），点一家就在右边看它每个学员的汇总，
+ * 还能把「机构 × 学员」两级导出成 CSV 交给运营。
+ */
+export function OrgStudentUsagePanel({ api }) {
+  const [days, setDays] = useState('30');
+  const [orgId, setOrgId] = useState('');
+  const [message, setMessage] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const report = useData(() => api.get(`admin/billing/org-student-usage?days=${days}`), [api, days]);
+
+  // 选了机构就把它记下来；机构列表刷新后若原来那家没了，退回「全部」
+  const orgs = report.data?.orgs || [];
+  const selected = orgs.find((item) => item.id === orgId) || null;
+  const students = report.data?.students || [];
+
+  async function exportCsv() {
+    setExporting(true); setMessage('');
+    try {
+      const params = new URLSearchParams({ days });
+      if (orgId) params.set('orgId', orgId);
+      const result = await api.get(`admin/billing/org-student-usage/export?${params.toString()}`);
+      downloadCsv(result.filename, result.content);
+      setMessage(`已导出 ${result.count} 行${selected ? `（${selected.name}）` : '（全部机构）'}。`);
+    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
+  }
+
+  return <Panel
+    title="按机构看学员消耗（点机构名下钻）"
+    actions={<>
+      <select value={days} onChange={(event) => setDays(event.target.value)}><option value="1">近 1 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option></select>
+      <button type="button" className="secondary-button" disabled={exporting} onClick={exportCsv}>{exporting ? '导出中…' : '导出台账 CSV'}</button>
+      <button type="button" className="secondary-button" onClick={report.refresh}>刷新</button>
+    </>}
+  >
+    {message ? <Notice tone={message.includes('已导出') ? 'success' : 'danger'}>{message}</Notice> : null}
+    {report.loading ? <Loading label="正在读取机构消耗…" /> : report.error ? <ErrorState error={report.error} onRetry={report.refresh} /> : <>
+      <p className="muted">
+        近 {days} 天：<strong>{report.data?.totals?.orgCount ?? 0}</strong> 家机构里有消耗的{' '}
+        <strong>{report.data?.totals?.activeOrgCount ?? 0}</strong> 家，合计 <strong>{formatYuan(report.data?.totals?.costFen || 0)}</strong>、
+        {report.data?.totals?.calls ?? 0} 次调用。消耗口径与算力池同一份账本；点机构名看它下面每个学员。
+      </p>
+      <div className="split">
+        <div>
+          <h4>机构（近 {days} 天消耗）</h4>
+          <div className="table-wrap"><table><thead><tr><th>机构</th><th>消耗</th><th>学员</th><th>调用</th></tr></thead><tbody>
+            {orgs.length ? orgs.map((item) => <tr key={item.id} className={item.id === orgId ? 'is-selected' : undefined}>
+              <td><button type="button" className="link-button" onClick={() => setOrgId(item.id === orgId ? '' : item.id)}>{item.name}</button>
+                <div className="muted">{item.status}{item.calls ? '' : ' · 这段时间没消耗'}</div></td>
+              <td><strong>{formatYuan(item.costFen)}</strong></td>
+              <td>{item.studentCount}</td>
+              <td className="muted">{item.calls}</td>
+            </tr>) : <tr><td colSpan="4"><Empty title="还没有机构" /></td></tr>}
+          </tbody></table></div>
+        </div>
+        <div>
+          <h4>{selected ? `${selected.name} · 每个学员的消耗` : '选一家机构看学员明细'}</h4>
+          {!selected ? <Empty title="还没有选机构" body="点左边任意一家机构，这里会列出它下面每个学员的消耗、涉及课包数和最近一次调用时间。" />
+            : students.length ? <div className="table-wrap"><table><thead><tr><th>学员</th><th>调用</th><th>消耗</th><th>课包</th><th>最近一次</th></tr></thead><tbody>
+              {students.map((item) => <tr key={item.id}>
+                <td><strong>{item.name}</strong><div className="muted">{item.login}</div></td>
+                <td>{item.calls}</td>
+                <td><strong>{formatYuan(item.costFen)}</strong></td>
+                <td>{item.seriesCount}</td>
+                <td className="muted">{item.lastAt ? formatDate(item.lastAt) : '—'}</td>
+              </tr>)}
+            </tbody></table></div> : <Empty title="这家机构这段时间没有消耗" body="换个时间范围，或确认学员是否已经用上 AI。" />}
+        </div>
+      </div>
+    </>}
+  </Panel>;
+}

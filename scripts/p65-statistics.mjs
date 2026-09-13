@@ -118,6 +118,28 @@ try {
     ['page_view', 'marketplace_view', 'marketplace_detail_view', 'demo_submitted'].every((name) => (site.funnel || []).some((item) => item.eventName === name)),
     JSON.stringify((site.funnel || []).map((item) => item.eventName)));
   check('⑤ 漏斗口径在口径表里写明（含「与统计板块同一个实现」）', Boolean(stats.data?.meta?.metricDefinitions?.['site.funnel']));
+
+  /* ⑥ 2026-09-13：机构 → 学员 消耗下钻（用户要的「平台能看到所有机构和下面学生的消耗」） */
+  const drill = await api('/api/admin/billing/org-student-usage?days=30', { token: admin });
+  check('⑥ 下钻接口可用，且给出机构清单（含零消耗的机构）', drill.status === 200 && Array.isArray(drill.data?.orgs) && drill.data.orgs.length > 0, JSON.stringify(drill).slice(0, 200));
+  const seededOrg = (drill.data?.orgs || []).find((item) => item.calls > 0);
+  check('⑥ 机构行带上「消耗 / 调用 / 学员数」三个数', Boolean(seededOrg) && typeof seededOrg.costFen === 'number' && typeof seededOrg.calls === 'number' && typeof seededOrg.studentCount === 'number', JSON.stringify(seededOrg));
+  const studentsOfOrg = await api(`/api/admin/billing/org-student-usage?days=30&orgId=${seededOrg.id}`, { token: admin });
+  const seededStudent = (studentsOfOrg.data?.students || [])[0];
+  check('⑥ 选中机构后能看到它下面每个学员的消耗（含涉及课包数与最近一次）', Boolean(seededStudent) && Number(seededStudent.costFen) > 0 && Number(seededStudent.seriesCount) >= 1 && Boolean(seededStudent.lastAt), JSON.stringify(seededStudent));
+  check('⑥ 该机构的学员消耗之和 = 机构行上的消耗（同一份账本，不是两套算法）',
+    (studentsOfOrg.data?.students || []).reduce((sum, item) => sum + Number(item.costFen || 0), 0) === Number(seededOrg.costFen),
+    JSON.stringify({ orgFen: seededOrg.costFen, studentsFen: (studentsOfOrg.data?.students || []).map((item) => item.costFen) }));
+  const exportCsv = await api('/api/admin/billing/org-student-usage/export?days=30', { token: admin });
+  check('⑥ 导出台账可用（CSV 带机构与学员两列，含调用次数与消耗元）',
+    exportCsv.status === 200 && typeof exportCsv.data?.content === 'string' && exportCsv.data.content.includes('机构') && exportCsv.data.content.includes('学员') && Number(exportCsv.data?.count) >= 1,
+    JSON.stringify({ count: exportCsv.data?.count, head: String(exportCsv.data?.content || '').split(String.fromCharCode(10))[0] }).slice(0, 200));
+  const foreignOrg = await api('/api/admin/billing/org-student-usage?days=30&orgId=org_does_not_exist', { token: admin });
+  check('⑥ 不存在的机构被拒（不会静默返回空表）', foreignOrg.status === 400, `实际 ${foreignOrg.status}`);
+  const studentToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-1', password: 'study123' } })).data.token;
+  const studentForbidden = await api('/api/admin/billing/org-student-usage?days=30', { token: studentToken });
+  check('⑥ 学生不能看全平台机构的消耗（403）', studentForbidden.status === 403, `实际 ${studentForbidden.status}`);
+
   const funnelEndpoint = await api('/api/admin/analytics/overview', { token: admin });
   check('⑤ 转化分析接口仍可用，且与统计看板同一批步骤',
     funnelEndpoint.status === 200 && JSON.stringify(funnelEndpoint.data?.funnel?.map((item) => item.eventName)) === JSON.stringify((site.funnel || []).map((item) => item.eventName)),
