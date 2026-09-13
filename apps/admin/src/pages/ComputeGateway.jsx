@@ -226,8 +226,8 @@ export function ComputeGateway({ api }) {
           </tr>)}
         </tbody></table></div> : <Empty title="还没有池子消耗" body="学员开始用 AI 之后，这里会出现「谁在哪个课包上花了多少」。上限在课包的「每学生算力上限（元）」里填，留空 = 不限制、只记账。" />}
       {pricing ? <>
-        <h4 className="top-gap">每次调用单价（折算池子用；必须按你的实际渠道价改）</h4>
-        <p className="muted">池子的金额是按这里的单价 × 调用次数折算的，<strong>不是上游账单</strong>；精确账单在网关用量日志里（上面那张表）。</p>
+        <h4 className="top-gap">每次调用单价（卖给学生的计价口；含你的毛利）</h4>
+        <p className="muted">这是<strong>对学生的计费价</strong>（不是上游成本）：池子按「单价 × 调用次数」扣，所以这个价就是你的毛利口径。上游成本可在「用量归集」那张表里对（配了网关才有）。⚠️ 只要保证<strong>售价不低于上游成本</strong>；同一模态里成本差异大的档位（如视频的时长/清晰度）建议用<strong>模型级单价</strong>分开定，避免高档位亏本。</p>
         <div className="form-grid">
           {[['TEXT', '对话'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']].map(([key, label]) => (
             <label key={key}>{label}（元 / 次）
@@ -253,7 +253,7 @@ export function ComputeGateway({ api }) {
       {!reconcile ? <Empty title="还没有对账" body="点右上角「开始对账」：两本账并排看 —— 池子账（四种模态、按单价折算）与网关账（精确，只含对话/图片）。" />
         : <>
           <p className="muted">
-            只拿<strong>重叠模态</strong>（对话 / 图片）比：两边都有，差额就是<strong>单价折算误差</strong>（改单价看这一列）。
+            只拿<strong>重叠模态</strong>（对话 / 图片）比：池子按<strong>售价</strong>记、网关按<strong>上游实耗</strong>记，所以差额主要是<strong>你的毛利</strong>（不是误差）。要看的是「差额是否稳定为正」——为负说明这个模态在亏。
             视频与音乐单列一列 —— 网关看不见它们，所以这部分天然对不上，不是错。
           </p>
           {!reconcile.gatewayEnabled ? <Notice tone="danger">算力网关没启用：网关账这一段必然为空，下面所有行都标成「网关无数据」，无法对账。</Notice> : null}
@@ -264,7 +264,7 @@ export function ComputeGateway({ api }) {
             <span className="muted">· 视频+音乐（网关看不见）<strong>{yuan(reconcile.totals.poolOtherYuan)}</strong></span>
             {reconcile.totals.unmappedGatewayYuan ? <span className="muted">· 网关有 {yuan(reconcile.totals.unmappedGatewayYuan)} 归不到课包（令牌名缺课时段）</span> : null}
           </div>
-          {reconcile.items.length ? <div className="table-wrap top-gap"><table><thead><tr><th>学员</th><th>课包</th><th>池子（对话+图片）</th><th>网关（精确）</th><th>差额</th><th>误差率</th><th>视频+音乐</th><th>状态</th></tr></thead><tbody>
+          {reconcile.items.length ? <div className="table-wrap top-gap"><table><thead><tr><th>学员</th><th>课包</th><th>池子（对话+图片）</th><th>网关（精确）</th><th>差额</th><th>池子相对网关</th><th>视频+音乐</th><th>状态</th></tr></thead><tbody>
             {reconcile.items.map((item) => <tr key={`${item.userId}-${item.seriesId || 'none'}`}>
               <td><strong>{item.studentName}</strong><div className="muted">{item.orgName}</div></td>
               <td className="muted">{item.seriesTitle}</td>
