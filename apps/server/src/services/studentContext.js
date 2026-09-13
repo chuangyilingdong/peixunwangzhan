@@ -28,6 +28,35 @@ function orgCourseAccessSql() {
   return orgSeriesAccessSql();
 }
 
+/**
+ * 叠加口径（梳理文档 4.3「名词解释 B」+ 2026-09-13 用户确认）：学生要能上某节课，**两条都得满足** ——
+ * ① 这节课在 ta 的班级课单里（教什么）；② ta 持有该课包的**有效学员许可**（还剩几次名额）。
+ * 许可由机构在「学员许可」页分发给学员（每次 -1，同一学员同一课包只一次）；一旦被撤销
+ * （revoked_at 非空）就立刻进不来 —— 这条是「机构必须有可用次数才能把课包给学生」的落点。
+ */
+function studentGrantSql() {
+  return `AND EXISTS (SELECT 1 FROM student_course_grants grant
+            WHERE grant.series_id = series.id AND grant.org_id = ? AND grant.student_id = ? AND grant.revoked_at IS NULL)`;
+}
+
+/** 只判断「这节课在不在这个学生的班级课单里」（不带许可条件），用于区分两种拒绝原因。 */
+function lessonInCurriculum(userId, orgId, courseLessonId) {
+  return Boolean(row(
+    `SELECT 1 AS ok FROM class_members member
+       JOIN classes class ON class.id = member.class_id AND class.status = 'ACTIVE' AND class.org_id = ?
+       JOIN class_curriculum_items curriculum ON curriculum.class_id = class.id AND curriculum.lesson_id = ?
+       JOIN course_lessons lesson ON lesson.id = curriculum.lesson_id AND lesson.status = 'PUBLISHED'
+       JOIN course_series series ON series.id = lesson.series_id AND series.status = 'PUBLISHED'
+       -- ⚠️ orgCourseAccessSql() 的 SQL 里引用了 assignment 这个别名：复用它就必须把这条 JOIN 一起带上，
+       --    否则报 "no such column: assignment.id"（我第一版就是这么错的，服务端日志一眼能看出）
+       LEFT JOIN course_assignments assignment
+         ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
+      WHERE member.user_id = ? AND member.removed_at IS NULL AND ${orgCourseAccessSql()}
+      LIMIT 1`,
+    [orgId, courseLessonId, orgId, userId, orgId],
+  ));
+}
+
 export function getStudentMemberships(user) {
   const { id: userId, orgId } = studentIdentity(user);
   return rows(
@@ -254,14 +283,20 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredClass
      WHERE member.user_id = ?
        AND member.removed_at IS NULL
        AND ${orgCourseAccessSql()}
+       ${studentGrantSql()}
        ${preferredClassId ? 'AND class.id = ?' : ''}
      ORDER BY class.created_at`,
     preferredClassId
-      ? [orgId, courseLessonId, orgId, userId, orgId, preferredClassId]
-      : [orgId, courseLessonId, orgId, userId, orgId],
+      ? [orgId, courseLessonId, orgId, userId, orgId, orgId, userId, preferredClassId]
+      : [orgId, courseLessonId, orgId, userId, orgId, orgId, userId],
   );
 
-  if (!candidates.length) throw errors.notFound('该课时不在你的班级课程表中', 'LESSON_NOT_ASSIGNED');
+  if (!candidates.length) {
+    // 分不清是哪种原因的话，学生会拿到一句误导的提示（「不在你的班级课程表中」），
+    // 于是他会去找老师问课单，而真正的原因是老师还没把课包分给他。
+    if (!lessonInCurriculum(userId, orgId, courseLessonId)) throw errors.notFound('该课时不在你的班级课程表中', 'LESSON_NOT_ASSIGNED');
+    throw errors.forbidden('这个课包还没有授权给你：请老师先把课包分给你，你才能上这节课。', 'COURSE_GRANT_REQUIRED');
+  }
   const data = candidates[0];
   const rawClass = {
     id: data.class_id, org_id: data.class_org_id, name: data.class_name,

@@ -306,6 +306,16 @@ export function seedDatabase() {
     } else {
       q(`UPDATE course_assignments SET status='ACTIVE' WHERE id=?`, [assignment.id]);
     }
+    // 完整链路要走到最后一步：平台授权给机构 → **机构把课包分给学员**。
+    // 少了这一步，学员就「有课单、有机构授权，但没有许可」，按叠加口径进不了课
+    // （2026-09-13 补的门禁：学生进课要求有效学员许可）。
+    const assignmentId = row('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [course.series.id, organization.id])?.id || null;
+    [student1, student2].forEach((student) => {
+      const existing = row('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [organization.id, student.id, course.series.id]);
+      if (existing) q('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, null, assignmentId, existing.id]);
+      else q(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at)
+              VALUES (?,?,?,?,?,?,?)`, [id('coursegrant'), organization.id, student.id, course.series.id, assignmentId, null, now]);
+    });
     ensureClass({ orgId: organization.id, teacherId: teacher1.id, students: [student1, student2], ...course }, now);
     return { organizationId: organization.id, courseSeriesId: course.series.id };
   });

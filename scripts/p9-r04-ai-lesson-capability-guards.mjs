@@ -33,6 +33,9 @@ try {
   q("INSERT INTO course_series(id,title,owner_type,org_id,visibility,version,sort,status,created_at,updated_at) VALUES ('series1','测试课包','PLATFORM',NULL,'ALL_ORGS','1.0',1,'PUBLISHED',?,?)", [now, now]);
   // 平台课包「发布」不等于「授权给机构」：机构要看到/使用必须先有一条生效授权（见交接说明第四节）。
   q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at) VALUES ('assign1','series1','org1','ACTIVE',NULL,?,NULL)", [now]);
+  // 2026-09-13 起这条链还有下一环：**机构把课包分给学员**（学生进课要求有效学员许可，叠加口径）。
+  // 少了它，学生就被 COURSE_GRANT_REQUIRED 拦住 —— 这正是「机构必须有可用次数才能把课包给学生」的落点。
+  q("INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_at) VALUES ('grant1','org1','stu1','series1','assign1',?)", [now]);
   q("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)", [JSON.stringify({ version: 3 }), '{}', now, now]);
   q("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES ('lesson1','image',?)", [now]);
   // 生成框体就是素材表里 type=GENERATION_BOX 的素材（id 直接当 boxId 用）

@@ -119,6 +119,11 @@ try {
   check('课包能发布（新字段不挡发布校验）', published.status === 200, JSON.stringify(published.data).slice(0, 160));
   const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365 } });
   check('课包能授权给机构', assigned.status === 200, JSON.stringify(assigned.data).slice(0, 160));
+  // 授权给机构 ≠ 学员能上课：还要机构**把课包分给学员**（学生进课要求有效学员许可，叠加口径）。
+  // 这里走机构端真实接口（与界面上「学员许可」页同一条链路），顺带把这一步也纳进覆盖。
+  const studentId = student.user?.id || student.data?.user?.id;
+  const granted = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin.token, body: { seriesId, studentIds: [studentId] } });
+  check('机构能把课包分给学员（学生进课的前提）', granted.status === 200, JSON.stringify(granted).slice(0, 200));
 
   const classes = await api('/api/org/classes', { token: orgAdmin.token });
   const classWithStudent = (classes.data.items || []).find((item) => Number(item.studentCount || 0) > 0) || (classes.data.items || [])[0];
