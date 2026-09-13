@@ -387,11 +387,16 @@ CREATE TABLE IF NOT EXISTS class_curriculum_items (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_class_lesson ON class_curriculum_items(class_id, lesson_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_class_sort ON class_curriculum_items(class_id, sort);
 
+-- 2026-09-13（课堂成为主对象）：class_sessions 就是「课堂」，自带课包/课时/负责老师，班级退场后它独立存在。
+-- 四态：PENDING（待上课，已创建未开始）/ ACTIVE（上课中）/ ENDED（已结束）/ DISSOLVED（已解散）。
 CREATE TABLE IF NOT EXISTS class_sessions (
   id TEXT PRIMARY KEY,
-  class_id TEXT NOT NULL,
+  title TEXT,
+  class_id TEXT,
+  series_id TEXT,
   lesson_id TEXT,
-  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','ENDED')),
+  teacher_id TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','ENDED','DISSOLVED')),
   delivery_mode TEXT NOT NULL DEFAULT 'CANVAS',
   session_credit_cap INTEGER,
   consumed_credits_total INTEGER NOT NULL DEFAULT 0,
@@ -403,15 +408,16 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   allow_video INTEGER NOT NULL DEFAULT 0,
   allow_podcast INTEGER NOT NULL DEFAULT 0,
   allow_dubbing INTEGER NOT NULL DEFAULT 0,
-  started_by TEXT NOT NULL,
-  started_at TEXT NOT NULL,
+  started_by TEXT,
+  started_at TEXT,
   ended_by TEXT,
   ended_at TEXT,
   ended_reason TEXT,
-  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
-  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE SET NULL
+  created_at TEXT,
+  updated_at TEXT,
+  FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE SET NULL,
+  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE SET NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_class_sessions_active ON class_sessions(class_id) WHERE status = 'ACTIVE';
 
 CREATE TABLE IF NOT EXISTS student_projects (
   id TEXT PRIMARY KEY,
@@ -1578,6 +1584,134 @@ if (worksDdl && !worksDdl.includes("'UNPUBLISHED'")) {
     db.exec('PRAGMA foreign_keys = ON');
   }
 }
+
+// ── 课堂成为主对象（2026-09-13 用户拍板：班级彻底退场，只剩课堂）──────────────────────────
+// class_sessions 的 CHECK 要容纳 PENDING / DISSOLVED，class_id 要可空、started_* 要可空
+// （待上课时还没开始）、并新增 title / series_id / teacher_id / created_at。
+// SQLite 改不了 CHECK 与 NOT NULL，按官方推荐重建表（与 file_assets / works 同一套做法）。
+// 幂等：只在旧约束（没有 PENDING）时执行；PRAGMA foreign_keys 必须在事务外切换。
+// ⚠️ 老行没有 title/series_id/teacher_id：从课时推课包、从 started_by 或班级的负责老师推 teacher_id，
+//    并把 created_at 回填成 started_at（老课堂本来就是"创建即开始"）。
+const sessionDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='class_sessions'").get()?.sql || '');
+if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`CREATE TABLE class_sessions_migrated (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      class_id TEXT,
+      series_id TEXT,
+      lesson_id TEXT,
+      teacher_id TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','ENDED','DISSOLVED')),
+      delivery_mode TEXT NOT NULL DEFAULT 'CANVAS',
+      session_credit_cap INTEGER,
+      consumed_credits_total INTEGER NOT NULL DEFAULT 0,
+      ai_paused INTEGER NOT NULL DEFAULT 0,
+      student_call_cap INTEGER,
+      allow_text INTEGER NOT NULL DEFAULT 1,
+      allow_image INTEGER NOT NULL DEFAULT 1,
+      allow_music INTEGER NOT NULL DEFAULT 1,
+      allow_video INTEGER NOT NULL DEFAULT 0,
+      allow_podcast INTEGER NOT NULL DEFAULT 0,
+      allow_dubbing INTEGER NOT NULL DEFAULT 0,
+      started_by TEXT,
+      started_at TEXT,
+      ended_by TEXT,
+      ended_at TEXT,
+      ended_reason TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE SET NULL,
+      FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE SET NULL
+    )`);
+    db.exec(`INSERT INTO class_sessions_migrated (
+      id, title, class_id, series_id, lesson_id, teacher_id, status, delivery_mode,
+      session_credit_cap, consumed_credits_total, ai_paused, student_call_cap,
+      allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing,
+      started_by, started_at, ended_by, ended_at, ended_reason, created_at, updated_at
+    ) SELECT
+      session.id,
+      COALESCE((SELECT lesson.title FROM course_lessons lesson WHERE lesson.id = session.lesson_id), '课堂'),
+      session.class_id,
+      (SELECT lesson.series_id FROM course_lessons lesson WHERE lesson.id = session.lesson_id),
+      session.lesson_id,
+      COALESCE(session.started_by, (SELECT klass.teacher_id FROM classes klass WHERE klass.id = session.class_id)),
+      session.status, session.delivery_mode,
+      session.session_credit_cap, session.consumed_credits_total, session.ai_paused, session.student_call_cap,
+      session.allow_text, session.allow_image, session.allow_music, session.allow_video, session.allow_podcast, session.allow_dubbing,
+      session.started_by, session.started_at, session.ended_by, session.ended_at, session.ended_reason,
+      session.started_at, COALESCE(session.ended_at, session.started_at)
+    FROM class_sessions session`);
+    db.exec('DROP TABLE class_sessions');
+    db.exec('ALTER TABLE class_sessions_migrated RENAME TO class_sessions');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_status ON class_sessions(status, created_at DESC)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_teacher ON class_sessions(teacher_id, status)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_lesson ON class_sessions(lesson_id, status)');
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+// 课堂表的索引统一在这里建：旧库要先重建出 created_at/teacher_id 才能建（写在基础 DDL 里会让老库初始化当场报错）
+db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_status ON class_sessions(status, created_at DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_teacher ON class_sessions(teacher_id, status)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_lesson ON class_sessions(lesson_id, status)');
+
+// 旧的部分唯一索引（一班一活跃课堂）在新模型里没有意义：同一节课允许多位老师各开一个课堂，
+// 「同一个学生在同一节课不能同时在两个课堂」由 session_students 与服务端事务保证。
+try { db.exec('DROP INDEX IF EXISTS idx_class_sessions_active'); } catch (_) {}
+
+db.exec(`CREATE TABLE IF NOT EXISTS session_students (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  lesson_id TEXT,
+  series_id TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','COMPLETED','INCOMPLETE','REMOVED')),
+  added_by TEXT,
+  added_at TEXT NOT NULL,
+  removed_by TEXT,
+  removed_at TEXT,
+  removed_reason TEXT,
+  completed_at TEXT,
+  completed_cost_fen INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT,
+  FOREIGN KEY (session_id) REFERENCES class_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_students_unique ON session_students(session_id, student_id) WHERE status <> 'REMOVED';
+CREATE INDEX IF NOT EXISTS idx_session_students_student ON session_students(student_id, lesson_id, status);
+CREATE INDEX IF NOT EXISTS idx_session_students_session ON session_students(session_id, status);`);
+
+// 历史课堂的学员回填 —— 只认**证据**：确实在这节课消耗过算力的人判为「已完课」。
+// 不按「今天的班级名单」回填：班级成员是可变的，用今天的名单去还原当时谁在这节课上，等于编数据。
+// 幂等：`NOT EXISTS (同课堂已有学员行)` 保证只回填「新模型之前的老课堂」，跑第二遍什么都不做。
+db.exec(`INSERT OR IGNORE INTO session_students(
+    id, session_id, student_id, org_id, lesson_id, series_id, status, added_at, completed_at, completed_cost_fen, updated_at
+  )
+  SELECT 'ssmig_' || record.class_session_id || '_' || record.user_id,
+         record.class_session_id, record.user_id, record.org_id,
+         session.lesson_id, session.series_id, 'COMPLETED',
+         COALESCE(session.ended_at, session.started_at, record.created_at),
+         session.ended_at, SUM(record.cost_fen), COALESCE(session.ended_at, record.created_at)
+  FROM usage_records record
+  JOIN class_sessions session ON session.id = record.class_session_id
+  WHERE record.status='SUCCESS' AND record.cost_fen > 0
+    AND session.status IN ('ENDED','DISSOLVED')
+    AND NOT EXISTS (SELECT 1 FROM session_students existing WHERE existing.session_id = record.class_session_id)
+  GROUP BY record.class_session_id, record.user_id`);
+
+// 作品/项目归属到课堂（教师数据范围的新落点：教师只看得到自己课堂里的作品）
+try { db.exec('ALTER TABLE works ADD COLUMN class_session_id TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE student_projects ADD COLUMN class_session_id TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // P5-W05 course_series 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
 try { db.exec('ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER'); } catch (_) {}
