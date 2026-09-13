@@ -95,14 +95,21 @@ async function stream(pathname, { token, body } = {}) {
 }
 
 try {
+  let healthy = false;
   for (let i = 0; i < 80; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
+    try {
+      if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) {
+        healthy = true;
+        break;
+      }
+    } catch { /* not up yet */ }
+    await sleep(100);
+  }
+  assert.equal(healthy, true, '服务器启动超时');
   // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
   ensureClassroom(dbPath);
   // 这条守卫走 VibeCoding 入口 → 把课堂入口类型切成 VIBECODING
   switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
-    await sleep(100);
-  }
 
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(student, '学生登录失败');
