@@ -62,9 +62,9 @@ export function Dashboard({ api }) {
         <MetricCard label="在广场作品" value={content.onPlaza} hint={definition('content.onPlaza')} tone="teal" />
       </div>
       <div className="split">
-        <Panel title="算力（单位：元，口径与「算力网关」一致）"><div className="muted" style={{ marginBottom: 8 }}>
+        <Panel title="算力（单位：元，口径与「模型与算力」页一致）"><div className="muted" style={{ marginBottom: 8 }}>
           口径：四种模态（对话 / 图片 / 视频 / 音乐）合计 {yuan(compute.totalYuan)}，共 {compute.calls} 次调用（成功 {compute.successCalls} 次）。
-          数据来自算力池账本，与「算力网关」页同一份；单价在「算力网关 → 每次调用单价」里配。
+          数据来自算力池账本（与「模型与算力」页同一份）；单价在「模型与算力 → 步骤② 每次调用单价」里配。
         </div>
           <div className="table-wrap"><table><thead><tr><th>模态</th><th>调用</th><th>消耗（元）</th></tr></thead><tbody>
             {compute.byModality.length ? compute.byModality.map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td><strong>{yuan(item.yuan)}</strong></td></tr>) : <tr><td colSpan={3}>所选区间暂无算力消耗</td></tr>}
