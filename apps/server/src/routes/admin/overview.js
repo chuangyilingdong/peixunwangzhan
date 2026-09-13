@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
+import { analyticsOverview } from '../analytics.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
@@ -201,6 +202,23 @@ export async function handleOverview(ctx, part, method) {
     const classSessions = singleNumber(`SELECT COUNT(*) n FROM class_sessions session JOIN classes class ON class.id=session.class_id WHERE (LENGTH(?)=0 OR class.org_id=?) AND session.started_at>=? AND session.started_at<?`, [orgFilter, orgFilter, since, until]);
     const projects = singleNumber(`SELECT COUNT(*) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?`, [orgFilter, orgFilter, since, until]);
     const works = singleNumber(`SELECT COUNT(*) n FROM works WHERE (?='' OR org_id=?) AND submitted_at>=? AND submitted_at<?`, [orgFilter, orgFilter, since, until]);
+    // ── B4 统计指标细化：新增口径都写明来源，免得「这个数从哪来的」说不清 ──
+    const newStudents = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND created_at>=? AND created_at<?`, [...usersParams, since, until]);
+    const activeStudents = singleNumber("SELECT COUNT(DISTINCT student_id) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?", [orgFilter, orgFilter, since, until]);
+    const lessonCompletions = singleNumber(`SELECT COUNT(*) n FROM student_lesson_progress progress WHERE (?='' OR progress.org_id=?) AND progress.status='COMPLETED' AND progress.completed_at>=? AND progress.completed_at<?`, [orgFilter, orgFilter, since, until]);
+    // B5 官网转化漏斗并进统计板块：**复用** analyticsOverview（与「转化分析」同一个实现，口径只此一处）
+    // B5 官网转化漏斗并进统计板块：**复用** analyticsOverview（与「转化分析」同一个实现，口径只此一处）。
+    // ⚠️ 它收的是 URLSearchParams（内部用 search.get）：传普通对象会当场 TypeError ——
+    //    所以下面 catch 里必须打日志，静默降级成空漏斗正是交接说明里那类最难查的失败。
+    const siteFunnel = (() => {
+      try {
+        const report = analyticsOverview(new URLSearchParams({ from: since, to: until }));
+        return { totals: report.totals, funnel: report.funnel, byEvent: report.byEvent, retentionDays: report.retentionDays };
+      } catch (error) {
+        console.error('[DASHBOARD SITE FUNNEL] 官网漏斗读取失败，本次按空漏斗返回：', error?.message || error);
+        return { totals: { events: 0, visitors: 0 }, funnel: [], byEvent: [], retentionDays: 0 };
+      }
+    })();
     const usage = scoped('usage_records');
     const usageTotal = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where}`, usage.params);
     const usageSuccess = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='SUCCESS'`, usage.params);
@@ -260,7 +278,9 @@ export async function handleOverview(ctx, part, method) {
         organizations, activeOrganizations, admins, teachers, students,
         publishedCourses, activeAssignments, activeClasses: classes, classSessions, projects, works,
         aiTasks, abnormalTasks, usageCalls: usageTotal, successfulCalls: usageSuccess, failedCalls: usageFailed, blockedCalls: usageBlocked,
+        newStudents, activeStudents, lessonCompletions,
       },
+      site: siteFunnel,
       byOrg, byModality,
       compute: {
         totalYuan: Number((Number(computeTotals?.fen || 0) / 100).toFixed(2)),
@@ -287,6 +307,11 @@ export async function handleOverview(ctx, part, method) {
           works: '查询时间内提交的作品数。',
           aiTasks: '查询时间内创建的生成任务数。',
           abnormalTasks: '查询时间内 usage_records 中状态为 FAILED 或 BLOCKED 的调用次数。',
+          newStudents: '查询时间内新建的学生账号（deleted_at IS NULL，含已停用）。',
+          activeStudents: '查询时间内创建过项目的学生数（按学生去重）。',
+          lessonCompletions: '查询时间内被标记为已完成的课时进度数。',
+          'site.funnel': '官网转化漏斗（第一方匿名埋点，仅在访客同意后记录）：访客 → 课程广场 → 课程详情 → 提交预约；与统计板块同一个实现。',
+          'site.totals': '区间内匿名事件总量与去重访客数。',
           'byOrg': '按机构统计的算力消耗（分）与调用次数 Top 10。',
           'byModality': '按模态统计的算力消耗（分）与调用次数；含视频与音乐。',
           'compute.totalYuan': '查询时间内算力池账本的消耗合计（元）：对话/图片/视频/音乐四种模态之和；含视频与音乐。',

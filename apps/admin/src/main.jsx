@@ -16,7 +16,6 @@ import { PlatformBilling } from './pages/PlatformBilling.jsx';
 import { AdminInbox } from './pages/AdminInbox.jsx';
 import { AdminMaterials } from './pages/AdminMaterials.jsx';
 import { WebsiteContent } from './pages/WebsiteContent.jsx';
-import { Analytics } from './pages/Analytics.jsx';
 import { Security } from './pages/Security.jsx';
 import '@platform/shared/styles.css';
 
@@ -43,7 +42,6 @@ function App() {
     <Route path="/billing" element={page('ADMIN_BILLING', <PlatformBilling api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />
-    <Route path="/analytics" element={page('ADMIN_ANALYTICS', <Analytics api={api} />)} />
     <Route path="/inbox" element={page('ADMIN_CONTENT', <AdminInbox api={api} />)} />
     <Route path="/admins" element={page('ADMIN_AUDIT', <PlatformAdmins api={api} currentUser={session.user} />)} />
     <Route path="/audit" element={page('ADMIN_AUDIT', <PlatformAudit api={api} />)} />

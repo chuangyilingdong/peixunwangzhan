@@ -63,7 +63,8 @@ function dateFilter(search) {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
-function overview(search) {
+/** 统计看板（admin/dashboard/overview）也要用同一份漏斗 —— 导出来，口径只此一处。 */
+export function analyticsOverview(search) {
   cleanOldEvents();
   const filters = dateFilter(search);
   const params = [filters.from, filters.to];
@@ -110,5 +111,5 @@ export function handlePublicAnalytics(ctx) {
 export function handleAdminAnalytics(ctx) {
   if (ctx.pathname !== '/api/admin/analytics/overview' || ctx.method !== 'GET') return null;
   requirePlatformPermission(ctx, 'ADMIN_ANALYTICS');
-  return overview(ctx.search);
+  return analyticsOverview(ctx.search);
 }

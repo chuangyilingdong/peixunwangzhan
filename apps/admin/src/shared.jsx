@@ -27,7 +27,6 @@ export const navigation = [
   { to: '/billing', icon: '◌', label: '计费与模型', permission: 'ADMIN_BILLING' },
   { to: '/materials', icon: '▤', label: '素材与物料', permission: 'ADMIN_CONTENT' },
   { to: '/website-content', icon: '✎', label: '官网内容', permission: 'ADMIN_CONTENT' },
-  { to: '/analytics', icon: '⌁', label: '转化分析', permission: 'ADMIN_ANALYTICS' },
   { to: '/notifications', icon: '✉', label: '通知事件', permission: 'ADMIN_CONTENT' },
   { to: '/inbox', icon: '✉', label: '站内信', permission: 'ADMIN_CONTENT' },
   { to: '/admins', icon: '⚙', label: '平台管理员', permission: 'ADMIN_AUDIT' },
@@ -47,7 +46,7 @@ export const ADMIN_PERMISSION_LABELS = {
   ADMIN_WORKS: '作品与内容审核',
   ADMIN_BILLING: '计费与模型',
   ADMIN_CONTENT: '通知、物料与官网内容',
-  ADMIN_ANALYTICS: '平台概览与转化分析',
+  ADMIN_ANALYTICS: '平台概览（含官网转化）',
   ADMIN_AUDIT: '平台管理员与操作审计',
 };
 

@@ -103,6 +103,25 @@ try {
   check('③ 内容层：已发布课时数给了', Number(content.lessonsPublished) > 0, JSON.stringify(content.lessonsPublished));
   check('③ 内容层：作品发布情况（提交/在广场/精选/已下架）都是数字', ['submittedWorks', 'onPlaza', 'featured', 'unpublished'].every((key) => typeof content[key] === 'number'), JSON.stringify(content));
   check('③ 内容层：课时热度 Top 列表存在（哪怕为空数组）', Array.isArray(content.lessonHot), JSON.stringify(content.lessonHot));
+  /* ④ B4（2026-09-13）：统计指标细化 —— 新增三个经营指标，口径要在接口里能对上 */
+  check('④ 新增学生数给了（数字）', typeof stats.data?.metrics?.newStudents === 'number', JSON.stringify(stats.data?.metrics?.newStudents));
+  check('④ 活跃学生数给了（数字）', typeof stats.data?.metrics?.activeStudents === 'number', JSON.stringify(stats.data?.metrics?.activeStudents));
+  check('④ 完成课时数给了（数字）', typeof stats.data?.metrics?.lessonCompletions === 'number', JSON.stringify(stats.data?.metrics?.lessonCompletions));
+  check('④ 新增指标都有口径说明（免得说不清数从哪来）',
+    ['newStudents', 'activeStudents', 'lessonCompletions'].every((key) => Boolean(stats.data?.meta?.metricDefinitions?.[key])),
+    JSON.stringify(Object.keys(stats.data?.meta?.metricDefinitions || {})));
+
+  /* ⑤ B5（2026-09-13）：官网转化漏斗并入统计板块，且与「转化分析」同源 */
+  const site = stats.data?.site || {};
+  check('⑤ 统计接口里带上了官网漏斗（四步）', Array.isArray(site.funnel) && site.funnel.length === 4, JSON.stringify(site.funnel));
+  check('⑤ 漏斗步骤名与「转化分析」一致（同一份实现）',
+    ['page_view', 'marketplace_view', 'marketplace_detail_view', 'demo_submitted'].every((name) => (site.funnel || []).some((item) => item.eventName === name)),
+    JSON.stringify((site.funnel || []).map((item) => item.eventName)));
+  check('⑤ 漏斗口径在口径表里写明（含「与统计板块同一个实现」）', Boolean(stats.data?.meta?.metricDefinitions?.['site.funnel']));
+  const funnelEndpoint = await api('/api/admin/analytics/overview', { token: admin });
+  check('⑤ 转化分析接口仍可用，且与统计看板同一批步骤',
+    funnelEndpoint.status === 200 && JSON.stringify(funnelEndpoint.data?.funnel?.map((item) => item.eventName)) === JSON.stringify((site.funnel || []).map((item) => item.eventName)),
+    JSON.stringify(funnelEndpoint.data?.funnel?.map((item) => item.eventName)));
 
   console.log(JSON.stringify({ name: 'statistics', pass: failures === 0, failures }, null, 2));
 } catch (error) {
