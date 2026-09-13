@@ -166,11 +166,30 @@ export function ProviderPolicyPanel({ api }) {
   }
   async function testChannel(channel) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/test', channelRequest(channel)); setMessage(`${channel.name}：${result.message || '连接成功'}`); } catch (e) { setMessage(`${channel.name}：${e.message || '连接失败'}`); } finally { setBusy(false); } }
   async function fetchModels(channel, index) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', channelRequest(channel)); updateChannel(index, { modelMappings: result.items || [] }); setMessage(`${channel.name}：已读取 ${result.items?.length || 0} 个模型，请勾选本渠道可用模型`); } catch (e) { setMessage(e.message || '获取模型失败'); } finally { setBusy(false); } }
+  /**
+   * 「用当前渠道试一次」：把这套（可能还没保存的）渠道配置真发一次最小请求。
+   * 只验证「上游认不认这套参数」，不写用量、不产生费用。
+   * 刻意**不要求先保存** —— 目的就是在保存前当场知道参数行不行。
+   */
+  async function probeChannel(channel, modality) {
+    if (modality === 'VIDEO' || modality === 'MUSIC') {
+      if (!window.confirm(`试一次 ${modality} 会真的向上游提交一次最小生成，可能要跑几分钟。继续？`)) return;
+    }
+    setBusy(true); setMessage('');
+    try {
+      const result = await api.post('admin/billing-config/ai-provider/probe', { modality, channelId: channel.id, model: channel.model, channel, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) });
+      const seconds = Math.round((result.elapsedMs || 0) / 1000);
+      if (result.ok) setMessage(`${channel.name} · ${modality}：✓ ${result.message || '上游接受'}（${seconds} 秒）`);
+      else if (result.accepted) setMessage(`${channel.name} · ${modality}：上游已受理（${seconds} 秒）—— ${result.error?.message || ''}`);
+      else setMessage(`${channel.name} · ${modality}：✗ ${result.error?.message || '上游拒绝了这次请求'}${result.error?.code ? '（' + result.error.code + '）' : ''}`);
+    } catch (e) { setMessage(`${channel.name}：${e.message || '探测失败'}`); }
+    finally { setBusy(false); }
+  }
   async function save(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.put('admin/billing-config/ai-provider', form); setMessage('渠道配置已保存'); config.refresh(); } catch (e) { setMessage(e.message || '保存失败'); } finally { setBusy(false); } }
   if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
   if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
   return <Panel title="AI 渠道配置">
-    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口，不会生成内容、不产生费用。</Notice>
+    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口；点“用当前渠道试一次”会按当前参数**真发一次最小请求**（视频 / 音乐可能要跑几分钟），用来确认上游认不认这套参数 —— 两者都不写用量、不产生费用。</Notice>
     {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
     <form onSubmit={save}>
       <div className="muted">渠道只负责保存供应商、模型和密钥；具体用哪个渠道，请在下面“能力路由”中切换。</div>
@@ -228,7 +247,7 @@ export function ProviderPolicyPanel({ api }) {
           </div>
           {capabilityEditor(channel, index)}
           {channelModality(channel.id) ? <details className="top-gap"><summary>请求模板（可选，高级）</summary><div className="muted">占位符：{'{'}model{'}'} {'{'}prompt{'}'} {'{'}aspectRatio{'}'} {'{'}resolution{'}'} {'{'}durationSeconds{'}'} {'{'}audio{'}'} {'{'}voice{'}'} {'{'}firstFrameUrl{'}'}。留空使用默认模板；若某家模型要求比例/音频放在顶层，把占位符挪到顶层即可。</div><textarea rows={6} value={channelTemplateText(channel)} onChange={(e) => updateChannel(index, { requestTemplates: { ...(channel.requestTemplates || {}), [channelModality(channel.id)]: e.target.value } })} /></details> : null}
-          <div className="row-actions top-gap"><button type="button" className="secondary-button" disabled={busy} onClick={() => testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={() => fetchModels(channel, index)}>读取模型</button></div>
+          <div className="row-actions top-gap"><button type="button" className="secondary-button" disabled={busy} onClick={() => testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={() => probeChannel(channel, modality)}>用当前渠道试一次</button><button type="button" className="secondary-button" disabled={busy} onClick={() => fetchModels(channel, index)}>读取模型</button></div>
         </> : null}
       </div>)}
       <div className="top-gap"><strong>能力路由（切换渠道）</strong><div className="muted">这里才是最终生效的选择。同一渠道可以被多个能力使用，也可以随时切换到备用渠道。</div></div>

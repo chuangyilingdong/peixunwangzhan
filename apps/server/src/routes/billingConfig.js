@@ -13,7 +13,8 @@ import {
   transaction,
 } from '../lib.js';
 import { randomUUID } from 'node:crypto';
-import { GENERATION_PROVIDER_CATALOG, GENERATION_PROVIDER_IDS, providerDefinition, validateProviderRegistration } from '../services/providerContract.js';
+import { GENERATION_PROVIDER_CATALOG, GENERATION_PROVIDER_IDS, normalizeProviderError, providerDefinition, validateProviderRegistration } from '../services/providerContract.js';
+import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import {
   DEFAULT_REQUEST_TEMPLATES, MODALITY_CAPABILITY_DEFAULTS, TEMPLATE_PLACEHOLDERS,
   normalizeChannelModelCapabilities, parseRequestTemplate, validateModelCapabilitiesInput,
@@ -149,6 +150,16 @@ function providerApiKeyForRequest(body = {}) {
     || getProviderApiKey()
     || AI_PROVIDER_API_KEY;
 }
+
+// 「用当前渠道试一次」的探测参数：每种模态发一个**最小**请求（省时间和钱），
+// 超时上限按模态给（视频 / 音乐天然慢）。
+const PROBE_TIMEOUT_MS = { TEXT: 60000, IMAGE: 150000, MUSIC: 300000, VIDEO: 300000 };
+const PROBE_PROMPTS = {
+  TEXT: '用一句话说明这是一次渠道连通性探测。',
+  IMAGE: '一只在草地上打滚的小猫，简笔画风格',
+  MUSIC: '轻快的儿童电子音乐，8 秒',
+  VIDEO: '一只小猫在草地上奔跑，3 秒',
+};
 
 function sanitizeProviderChannels(channels) {
   return Array.isArray(channels)
@@ -371,6 +382,94 @@ export async function handleAdminBillingConfig(ctx) {
       };
       return { items: list.slice(0, 500).map((item) => ({ id: String(item.id || item.name || ''), displayName: String(item.display_name || item.name || item.id || ''), ownedBy: item.owned_by || null, contextWindow: item.context_window || item.context_length || null, capabilities: capabilityHints(item) })).filter((item) => item.id) };
     } catch (error) { if (error?.code) throw error; throw errors.badRequest(error?.name === 'AbortError' ? '上游模型列表请求超时' : '上游模型列表响应无效', error?.name === 'AbortError' ? 'GENERATION_PROVIDER_TIMEOUT' : 'GENERATION_PROVIDER_RESPONSE_INVALID'); } finally { clearTimeout(timer); }
+  }
+  /**
+   * 「用当前渠道试一次」（用户要的 B2）：拿这套渠道配置**真发一次最小请求**，上游接受就说明参数可用。
+   *
+   * 为什么需要它：图片 prompt 长度、MiniMax 的路径/协议、Mureka 的 version 必填这三类坑，
+   * 以前都只能在「上线后真机试」时才暴露（交接说明第 57~74 条里占了好几条）；
+   * 有了这个按钮，就从「事后真机试出来」变成「保存时当场知道」。
+   *
+   * 口径（三条都写在这里，免得以后被误改）：
+   *   · **直连上游**探测（不经过算力网关）——要回答的就是「上游认不认这套参数」；
+   *   · **不写 usage_records、不扣任何费用**：探测不是创作；
+   *   · 视频 / 音乐天然要跑几分钟，所以带超时；超时只代表「上游受理了但没在 N 秒内做完」，
+   *     恰恰说明参数被接受了 —— 这时返回 accepted 而不是失败。
+   */
+  if (part === '/billing-config/ai-provider/probe' && method === 'POST') {
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    const body = ctx.body || {};
+    const modality = String(body.modality || 'TEXT').trim().toUpperCase();
+    if (!['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'].includes(modality)) throw errors.badRequest('不支持的素材类型', 'UNSUPPORTED_MODALITY');
+    const policy = getAiProviderPolicy();
+    const channelId = String(body.channelId || policy?.modalityChannels?.[modality] || 'default');
+    const saved = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
+    // body.channel 传进来就优先用它 —— 这样**还没保存**的表单也能先试一次（保存前就知道行不行）。
+    const useInline = Boolean(body.channel && typeof body.channel === 'object');
+    const source = useInline ? body.channel : saved;
+    // 表单传进来就以**表单为准**：它里面空的就当真为空，不偷偷回落到已保存的值 ——
+    // 否则「渠道没填全」会被误判成「配好了」，这个按钮就白做了。
+    const pickString = (sourceValue, policyValue) => {
+      const own = String(sourceValue || '').trim();
+      if (own) return own;
+      return useInline ? '' : String(policyValue || '').trim();
+    };
+    const selection = {
+      provider: pickString(source?.provider, policy?.provider),
+      model: String(body.model || '').trim() || pickString(source?.model, policy?.model),
+      endpoint: pickString(source?.endpoint, policy?.endpoint),
+      channelId,
+      requestTemplates: source?.requestTemplates || {},
+      modelRequestTemplates: source?.modelRequestTemplates || {},
+      requestPaths: source?.requestPaths || {},
+      pollPaths: source?.pollPaths || {},
+      // 表单上刚敲进去、还没保存的 key 也要能试 —— 这正是「保存前当场知道」的一半价值
+      apiKey: providerApiKeyForRequest({ apiKey: source?.apiKey, channelId }),
+    };
+    const info = generationProviderInfo(selection);
+    const started = Date.now();
+    const base = { modality, model: selection.model, channelId, provider: selection.provider, mode: info.mode, routedVia: info.routedVia, configured: info.configured };
+    const finish = (payload) => {
+      audit(ctx, 'AI_PROVIDER_PROBE', 'PLATFORM_SETTINGS', '1', null, {
+        modality, channelId, model: selection.model, ok: Boolean(payload.ok), errorCode: payload.error?.code || null, elapsedMs: Date.now() - started,
+      });
+      return { ...base, elapsedMs: Date.now() - started, ...payload };
+    };
+    if (!info.configured || info.mode === 'adapter-required') {
+      return finish({ ok: false, error: { code: info.configError || 'GENERATION_PROVIDER_UNAVAILABLE', message: '这套配置还没有可用的上游适配器（渠道 / 密钥 / 请求地址不完整）' } });
+    }
+    const provider = getGenerationProvider(selection);
+    const timeoutMs = PROBE_TIMEOUT_MS[modality] || 120000;
+    let timer = null;
+    try {
+      const generated = await Promise.race([
+        provider.generate({ modality, prompt: PROBE_PROMPTS[modality], title: '渠道探测' }),
+        new Promise((resolve) => { timer = setTimeout(() => resolve({ __probeTimeout: true }), timeoutMs); }),
+      ]);
+      if (generated?.__probeTimeout) {
+        return finish({
+          ok: false,
+          accepted: true,
+          error: {
+            code: 'GENERATION_PROVIDER_PROBE_TIMEOUT',
+            message: `上游已受理，但 ${Math.round(timeoutMs / 1000)} 秒内没跑完（视频 / 音乐很正常）。参数看起来没问题 —— 这一步只验证「上游认不认」`,
+          },
+        });
+      }
+      const assets = Array.isArray(generated?.assets) ? generated.assets : [];
+      return finish({
+        ok: true,
+        accepted: true,
+        assetCount: assets.length,
+        assets: assets.slice(0, 3).map((asset) => ({ label: asset.label || null, mimeType: asset.mimeType || null, previewUrl: asset.previewUrl || null })),
+        message: `上游接受并已完成（${assets.length} 个素材）`,
+      });
+    } catch (error) {
+      const normalized = normalizeProviderError(error);
+      return finish({ ok: false, error: { code: normalized.code || 'GENERATION_PROVIDER_UPSTREAM_ERROR', message: normalized.message || '上游拒绝了这次请求' } });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
   if (part === '/billing-config/ai-provider' && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);

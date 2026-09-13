@@ -51,7 +51,7 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
   };
 }
 
-function providerSelection({ provider, model, endpoint, channelId, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway } = {}) {
+export function providerSelection({ provider, model, endpoint, channelId, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway, apiKey } = {}) {
   return {
     provider: String(provider || AI_PROVIDER).trim(),
     model: String(model || AI_PROVIDER_MODEL).trim(),
@@ -61,6 +61,9 @@ function providerSelection({ provider, model, endpoint, channelId, requestTempla
     modelRequestTemplates: modelRequestTemplates && typeof modelRequestTemplates === 'object' ? modelRequestTemplates : {},
     requestPaths: requestPaths && typeof requestPaths === 'object' ? requestPaths : {},
     pollPaths: pollPaths && typeof pollPaths === 'object' ? pollPaths : {},
+    // 调用方可以带一把**临时密钥**（例如平台端「用当前渠道试一次」探测一个还没保存的新 key）：
+    // 有它就用它，不落库、不影响已保存的配置。
+    apiKey: String(apiKey || '').trim(),
     // 算力网关出口（由 services/computeGateway.js 的 applyGatewayRoute 挂上）：
     // 有它就用网关的地址 + 该学生的令牌 key 发请求，否则直连上游。
     gateway: gateway && gateway.endpoint && gateway.apiKey ? { endpoint: String(gateway.endpoint), apiKey: String(gateway.apiKey), tokenName: String(gateway.tokenName || '') } : null,
@@ -70,7 +73,7 @@ function providerSelection({ provider, model, endpoint, channelId, requestTempla
 export function providerConfig(selection = {}) {
   const selected = providerSelection(selection);
   // 走网关时凭证是网关令牌，不需要本地再存一份上游 key（key 在网关那一侧）。
-  const apiKey = selected.gateway?.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+  const apiKey = selected.gateway?.apiKey || selected.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY;
   return validateProviderConfig({ ...selected, apiKey });
 }
 export function generationProviderInfo(selection = {}) {
@@ -109,5 +112,5 @@ export function getGenerationProvider(selection = {}) {
       requestTemplates: {}, modelRequestTemplates: {}, requestPaths: { IMAGE: '/v1/images/generations' }, pollPaths: {},
     });
   }
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates, requestPaths: selected.requestPaths, pollPaths: selected.pollPaths });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: selected.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates, requestPaths: selected.requestPaths, pollPaths: selected.pollPaths });
 }
