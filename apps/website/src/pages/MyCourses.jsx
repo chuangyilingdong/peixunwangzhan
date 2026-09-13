@@ -20,6 +20,8 @@ export function MyCoursesPage({ api }) {
     <header className="student-page-head">
       <h1>我的课程</h1>
       <p>你在本机构可以学习的课程与课时进度。</p>
+      {/* B3/B1：门禁是「机构授权 + 老师分给你」两层叠加，学生得知道「进不去该找谁」 */}
+      <p className="student-page-hint">标着<strong>「未授权」</strong>的课包表示老师还没有把它分给你 —— 找老师说一句就能开通；已经分给你的课包，等老师开课后就能进入。</p>
     </header>
 
     {summary ? <div className="student-summary">

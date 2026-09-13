@@ -336,6 +336,8 @@ function Members({ api, user }) {
 
   return <>
     <PageHeader eyebrow="机构成员" title="教师与学生" description={isAdmin ? '创建、编辑、停用账号，并维护教师授权班级与学员调班记录。' : '仅展示当前权限范围内的机构成员；成员写操作需要机构管理员权限。'} actions={<button className="secondary-button" onClick={members.refresh}>刷新</button>} />
+    {/* B3（2026-09-13）：机构端有三套容易混的东西，这里把边界一次说清（界面上的「我该去哪」） */}
+    <p className="muted">这里管的是<strong>账号本身</strong>（角色、班级归属、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「学员许可」。学员看不到课包时，先确认后两处。</p>
     {message && <Notice tone={message.includes('失败') || message.includes('错误') || message.includes('无权') ? 'danger' : 'success'}>{message}</Notice>}
     {isAdmin && <div className="split">
       <Panel title="新建账号">

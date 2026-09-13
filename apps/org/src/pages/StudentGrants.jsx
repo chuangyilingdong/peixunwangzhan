@@ -48,6 +48,8 @@ export function StudentGrants({ api }) {
       actions={<button className="secondary-button" onClick={() => { courses.refresh(); grants.refresh(); students.refresh(); }}>刷新</button>}
     />
     {message && <Notice tone={message.includes('已授权') ? 'success' : 'danger'}>{message}</Notice>}
+    {/* B3：把「账号 / 席位有效期 / 课包许可」三件事的边界写在页面上，省得老师找错地方 */}
+    <p className="muted">学员账号在「教师与学生」创建，席位与有效期在「学员开通」，<strong>能不能学某个课包就看这里</strong>。</p>
     <Panel title="分发给学员">
       {courses.loading || students.loading ? <Loading /> : <>
         <div className="form-grid">

@@ -276,6 +276,7 @@
 .student-badge{flex:none;padding:4px 9px;border-radius:99px;color:#7a7390;background:#f1eef8;font-size:11px;font-weight:800}
 .student-badge.is-ok{color:#208257;background:#ddf6ea}
 .student-badge.is-warn{color:#9a5b00;background:#fdf0dc}
+.student-page-hint{margin:0 0 14px;padding:10px 12px;border-radius:10px;color:#6b6485;background:#f7f5fc;font-size:13px;line-height:1.7}
 .student-card__meta{margin:0;color:#8b85a0;font-size:12px;line-height:1.6}
 .student-card__desc{margin:0;color:#5f5975;font-size:13px;line-height:1.7}
 .student-card__feedback{padding:10px 12px;border-left:3px solid #c9bdf5;border-radius:0 10px 10px 0;background:#faf8ff}
