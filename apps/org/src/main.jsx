@@ -5,13 +5,16 @@ import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
+import { Classrooms } from './pages/Classrooms.jsx';
 import '@platform/shared/styles.css';
 
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/org').replace(/\/$/, '');
 
 const navigation = [
   { to: '/dashboard', icon: '◈', label: '机构总览' }, 
-  { to: '/classes', icon: '▦', label: '班级与课堂' }, 
+  // 2026-09-13（批次 B-6）：班级退场，导航这一条改成「课堂」（新的 /sessions 接口）。
+  // 旧的「班级与课堂」页仍在 /classes 上（URL 可达、导航里不再露出），留给批次 D 清掉。
+  { to: '/classrooms', icon: '▦', label: '课堂' }, 
   { to: '/members', icon: '♙', label: '成员管理' }, 
   { to: '/usage', icon: '▦', label: '算力用量' },
   { to: '/grants', icon: '✦', label: '学员许可', adminOnly: true },
@@ -47,7 +50,7 @@ function Dashboard({ api }) {
       <MetricCard label="进行中的课堂" value={seriesTotals.activeSessions ?? 0} hint={`另有 ${seriesTotals.pendingSessions ?? 0} 个课堂待上课 · 学生作品 ${data.works}`} tone="pink" />
     </div>
     <Panel title="统计口径">
-      <div className="row-actions"><Status value={data.org.status} /><span className="muted">{data.scope?.description}</span><span className="muted">活跃班级：{data.breakdown?.activeClasses ?? data.activeClasses}</span><span className="muted">活跃课堂：{data.breakdown?.activeSessions ?? data.activeSessions}</span></div>
+      <div className="row-actions"><Status value={data.org.status} /><span className="muted">{data.scope?.description}</span><span className="muted">课堂：待上课 {data.breakdown?.pendingSessions ?? data.pendingSessions ?? 0} · 上课中 {data.breakdown?.activeSessions ?? data.activeSessions}</span></div>
       <p className="muted">合同到期：{formatDate(data.org.contractExpiresAt)}{isAdmin ? ` · 教师席位：${data.org.teacherUsedSeats} / ${data.org.teacherSeats}` : ' · 经营席位仅机构管理员可见'}</p>
       <p className="muted">课包口径「已分配 / 可授权」＝平台给本机构的授权次数里已经分给学员的部分（每分给一名学员用掉 1 次）；「进行中的课堂」是当前存量，待上课的课堂还没开始。逐课包的明细见「课包概览」。</p>
     </Panel>
@@ -72,209 +75,7 @@ function Dashboard({ api }) {
       </Panel>
     </div>
     <Panel title="近期课堂">
-      {recentSessions.length ? <div className="table-wrap"><table><thead><tr><th>班级</th><th>课时</th><th>状态</th><th>开始时间</th><th>结束时间</th></tr></thead><tbody>{recentSessions.map((item) => <tr key={item.id}><td>{item.className || '—'}</td><td>{item.lessonTitle || '未关联课时'}</td><td><Status value={item.status} /></td><td>{formatDate(item.startedAt)}</td><td>{formatDate(item.endedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无课堂记录" body="开始课堂后，最近课堂会出现在这里。" />}
-    </Panel>
-  </>;
-}
-
-function Classes({ api, user }) {
-  const classes = useData(() => api.get('org/classes'), [api]);
-  const courses = useData(() => api.get('org/course-series?limit=200'), [api]);
-  const teachers = useData(() => user.role === 'ORG_ADMIN' ? api.get('org/users?role=TEACHER') : Promise.resolve({ items: [] }), [api, user.role]);
-  const students = useData(() => api.get('org/users?role=STUDENT'), [api]);
-  const [curriculum, setCurriculum] = useState({ loading: false, error: null, byClass: {} });
-  // 排课名单：这节课谁来上（有该课包许可 + 没上过这节课的人才可选）
-  const [roster, setRoster] = useState(null);
-  const [details, setDetails] = useState({});
-  const [expanded, setExpanded] = useState('');
-  const [selected, setSelected] = useState({});
-  const [sessionModes, setSessionModes] = useState({});
-  const [drafts, setDrafts] = useState({});
-  const [newStudent, setNewStudent] = useState({});
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: '', defaultSeriesId: '', usageMode: 'CLASS_ONLY', teacherId: '' });
-
-  useEffect(() => {
-    let cancelled = false;
-    const classItems = classes.data?.items;
-    if (!classItems) return undefined;
-    if (!classItems.length) { setCurriculum({ loading: false, error: null, byClass: {} }); return undefined; }
-    setCurriculum((current) => ({ ...current, loading: true, error: null }));
-    Promise.all(classItems.map(async (item) => [item.id, (await api.get(`org/classes/${item.id}/curriculum`)).items || []]))
-      .then((entries) => { if (!cancelled) setCurriculum({ loading: false, error: null, byClass: Object.fromEntries(entries) }); })
-      .catch((error) => { if (!cancelled) setCurriculum({ loading: false, error, byClass: {} }); });
-    return () => { cancelled = true; };
-  }, [api, classes.data]);
-
-  const availableLessons = useMemo(() => (courses.data?.items || []).flatMap((course) => (course.lessons || []).map((lesson) => ({ ...lesson, seriesTitle: course.title, seriesId: course.id }))), [courses.data]);
-  const teacherItems = teachers.data?.items || [];
-  const studentItems = students.data?.items || [];
-
-  async function loadDetail(classId, force = false) {
-    if (!force && details[classId]) return details[classId];
-    setBusy(true); setMessage('');
-    try { const detail = await api.get(`org/classes/${classId}`); setDetails((current) => ({ ...current, [classId]: detail })); setDrafts((current) => ({ ...current, [classId]: (detail.curriculum || []).map((item) => item.lessonId) })); return detail; }
-    catch (error) { setMessage(error.message); return null; } finally { setBusy(false); }
-  }
-  /** 打开排课名单：拉这节课的候选学员（服务端会给出「可选 / 不可选 + 原因」） */
-  async function openRoster(classId, lessonId) {
-    setRoster({ classId, lessonId, loading: true, items: [], picked: [], message: '' });
-    try {
-      const data = await api.get('org/classes/' + classId + '/lesson-candidates?lessonId=' + encodeURIComponent(lessonId));
-      const items = data.items || [];
-      setRoster({ classId, lessonId, loading: false, items, picked: items.filter((item) => item.selected).map((item) => item.studentId), message: '' });
-    } catch (error) {
-      setRoster({ classId, lessonId, loading: false, items: [], picked: [], message: error.message });
-    }
-  }
-
-  /** 保存排课名单：不可选的学员由服务端拒掉（这里也会先提示一遍） */
-  async function saveRoster() {
-    if (!roster) return;
-    setRoster({ ...roster, message: '' });
-    try {
-      await api.put('org/classes/' + roster.classId + '/lesson-students', { lessonId: roster.lessonId, studentIds: roster.picked });
-      setRoster({ ...roster, message: '排课名单已保存。' });
-    } catch (error) {
-      setRoster({ ...roster, message: error.message });
-    }
-  }
-
-  async function toggleDetail(classId) { if (expanded === classId) return setExpanded(''); await loadDetail(classId); setExpanded(classId); }
-  async function start(classId, makeup = false) {
-    const lessons = curriculum.byClass[classId] || [];
-    const lessonId = selected[classId];
-    if (!lessons.length) return setMessage('该班级尚未配置课单，无法开始课堂。');
-    if (!lessonId) return setMessage('请先选择本班课单中的课时。');
-    // 课堂能力不传，由服务端按该课时开放的能力兜底（老师可在开课后按需调整）
-    try { await api.post(`org/classes/${classId}/sessions/${makeup ? 'makeup' : 'start'}`, { lessonId, sessionKind: makeup ? 'MAKEUP' : 'REGULAR', deliveryMode: sessionModes[classId] || 'CANVAS', capabilities: {} }); setMessage(makeup ? '补课课堂已开始。' : '课堂已开始。'); await classes.refresh(); await loadDetail(classId, true); }
-    catch (error) { setMessage(error.message); }
-  }
-  async function end(classId, sessionId, cancel = false) {
-    try { await api.post(`org/classes/${classId}/sessions/${sessionId}/${cancel ? 'cancel' : 'end'}`, { reason: cancel ? 'CANCELED' : 'MANUAL' }); setMessage(cancel ? '课堂已取消。' : '课堂已结束。'); await classes.refresh(); await loadDetail(classId, true); }
-    catch (error) { setMessage(error.message); }
-  }
-  async function archiveClass(item) {
-    if (!window.confirm(`确认归档班级「${item.name}」？归档后班级不能再修改，进行中的课堂会一并结束。`)) return;
-    setBusy(true); setMessage('');
-    try {
-      await api.delete(`org/classes/${item.id}`);
-      setMessage(`班级「${item.name}」已归档。`);
-      await classes.refresh();
-    } catch (error) { setMessage(error.message || '归档失败'); } finally { setBusy(false); }
-  }
-  async function updateControls(classId, session, patch) {
-    try {
-      await api.put(`org/classes/${classId}/sessions/${session.id}/ai-controls`, { ...patch, capabilities: { ...session.capabilities, ...(patch.capabilities || {}) } });
-      setMessage('课堂 AI 控制已更新。'); await loadDetail(classId, true);
-    } catch (error) { setMessage(error.message); }
-  }
-  async function setSessionLimit(classId, session, field, label) {
-    const current = session.studentCallCap;
-    const value = window.prompt(`${label}（留空表示不限制）`, current == null ? '' : String(current));
-    if (value === null) return;
-    const normalized = value.trim() === '' ? null : Number(value);
-    if (normalized !== null && (!Number.isInteger(normalized) || normalized < 1)) return setMessage(`${label}必须是正整数或留空。`);
-    await updateControls(classId, session, { [field]: normalized });
-  }
-  async function create(event) {
-    event.preventDefault(); setBusy(true); setMessage('');
-    try { await api.post('org/classes', { ...form, defaultSeriesId: form.defaultSeriesId || null, teacherId: user.role === 'ORG_ADMIN' ? (form.teacherId || null) : undefined }); setForm({ name: '', defaultSeriesId: '', usageMode: 'CLASS_ONLY', teacherId: '' }); setMessage('班级已创建。请继续配置该班级课单后再开课。'); await classes.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  }
-  function setDraft(classId, lessonIds) { setDrafts((current) => ({ ...current, [classId]: lessonIds })); }
-  function moveDraft(classId, index, offset) {
-    const current = [...(drafts[classId] || [])]; const target = index + offset;
-    if (target < 0 || target >= current.length) return;
-    [current[index], current[target]] = [current[target], current[index]]; setDraft(classId, current);
-  }
-  async function saveCurriculum(classId) {
-    try { await api.put(`org/classes/${classId}/curriculum`, { lessonIds: drafts[classId] || [] }); setMessage('课程计划和课时排序已保存。'); await classes.refresh(); await loadDetail(classId, true); }
-    catch (error) { setMessage(error.message); }
-  }
-  async function addStudent(classId) {
-    if (!newStudent[classId]) return setMessage('请先选择要加入的学员。');
-    try { await api.post(`org/classes/${classId}/members/${newStudent[classId]}`, {}); setMessage('学员已加入班级。'); setNewStudent((current) => ({ ...current, [classId]: '' })); await loadDetail(classId, true); await classes.refresh(); }
-    catch (error) { setMessage(error.message); }
-  }
-  async function removeStudent(classId, studentId) {
-    try { await api.delete(`org/classes/${classId}/members/${studentId}`); setMessage('学员已移出班级。'); await loadDetail(classId, true); await classes.refresh(); }
-    catch (error) { setMessage(error.message); }
-  }
-  async function assignTeacher(classId, teacherId) {
-    try { await api.put(`org/classes/${classId}`, { teacherId: teacherId || null }); setMessage('负责教师已更新。'); await classes.refresh(); await loadDetail(classId, true); }
-    catch (error) { setMessage(error.message); }
-  }
-
-  const refresh = () => { classes.refresh(); courses.refresh(); teachers.refresh(); students.refresh(); };
-  const isSuccess = /已(开始|结束|取消|创建|保存|加入|移出|更新)/.test(message);
-  return <>
-    <PageHeader eyebrow="教学管理" title="班级与课堂" description="管理班级成员、课程计划、课时排序和课堂生命周期；所有数据均来自当前机构真实业务接口。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
-    <div className="split">
-      <Panel title="新建班级">
-        <form onSubmit={create}>
-          <label>班级名称<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /></label>
-          {user.role === 'ORG_ADMIN' && <label>负责教师<select value={form.teacherId} onChange={(event) => setForm({ ...form, teacherId: event.target.value })}><option value="">暂不指定</option>{teacherItems.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName}（{teacher.login}）</option>)}</select></label>}
-          <label>默认课包<select value={form.defaultSeriesId} onChange={(event) => setForm({ ...form, defaultSeriesId: event.target.value })}><option value="">稍后配置</option>{courses.data?.items?.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}</select></label>
-          <label>使用模式<select value={form.usageMode} onChange={(event) => setForm({ ...form, usageMode: event.target.value })}><option value="CLASS_ONLY">仅跟随课堂</option><option value="ALWAYS_AVAILABLE">始终可用</option></select></label>
-          <button className="primary-button" disabled={busy}>创建班级</button>
-        </form>
-      </Panel>
-      <Panel title="课堂规则">
-        <Notice>教师负责创建班级、加入/移出本机构学生、配置本班课程计划和开展课堂；教师只能管理本人负责或获授权的班级，开课只能选择本班课单中已发布且机构可访问的课时。机构管理员可处理机构级账号和班级授权。</Notice>
-        {message && <Notice tone={isSuccess ? 'success' : 'danger'}>{message}</Notice>}
-      </Panel>
-    </div>
-    <Panel title="可管理班级" actions={<span className="muted">共 {classes.data?.items?.length || 0} 个</span>}>
-      {classes.loading || courses.loading ? <Loading /> : classes.error ? <ErrorState error={classes.error} onRetry={refresh} /> : classes.data.items.length ? <div className="card-list">
-        {curriculum.error && <Notice tone="danger">班级课单加载失败：{curriculum.error.message}</Notice>}
-        {classes.data.items.map((item) => {
-          const lessons = curriculum.byClass[item.id] || []; const detail = details[item.id]; const currentDraft = drafts[item.id] || lessons.map((lesson) => lesson.lessonId);
-          const members = detail?.members || []; const classStudents = members.filter((member) => member.classRole === 'STUDENT');
-          const usedStudentIds = new Set(classStudents.map((member) => member.id));
-          const availableStudents = studentItems.filter((student) => !usedStudentIds.has(student.id) && student.status === 'ACTIVE');
-          return <article className="item-card" key={item.id}>
-            <div className="row-actions"><h3>{item.name}</h3><Status value={item.status} />{item.currentSessionId && <Status value="ACTIVE SESSION" />}<span className="muted">学员 {item.studentCount || 0}</span></div>
-            <p>使用模式：{item.usageMode}　教师：{item.teacherName || (item.teacherId === user.id ? user.displayName : '未设置')}</p>
-            <div className="row-actions">
-              <button className="secondary-button" onClick={() => toggleDetail(item.id)}>{expanded === item.id ? '收起详情' : '班级详情 / 课程计划'}</button>
-              {user.role === 'ORG_ADMIN' && item.status === 'ACTIVE' ? <button className="text-button" disabled={busy} onClick={() => archiveClass(item)}>归档班级</button> : null}
-              {item.currentSessionId ? <><button className="primary-button" onClick={() => end(item.id, item.currentSessionId)}>结束课堂</button><button className="text-button" onClick={() => end(item.id, item.currentSessionId, true)}>取消课堂</button></> : curriculum.loading ? <span className="muted">正在加载本班课单…</span> : lessons.length ? <><select value={selected[item.id] || ''} onChange={(event) => setSelected({ ...selected, [item.id]: event.target.value })}><option value="">选择课时</option>{lessons.map((lesson) => <option key={lesson.lessonId} value={lesson.lessonId}>第 {lesson.sort} 课 · {lesson.title}</option>)}</select><label>课堂入口<select value={sessionModes[item.id] || 'CANVAS'} onChange={(event) => setSessionModes((current) => ({ ...current, [item.id]: event.target.value }))}><option value="CANVAS">画布课堂</option><option value="VIBECODING">VibeCoding 课堂</option></select></label><button className="primary-button" onClick={() => start(item.id)}>开始课堂</button><button className="secondary-button" onClick={() => start(item.id, true)}>开始补课</button><button className="secondary-button" disabled={!selected[item.id]} title={selected[item.id] ? '' : '先选一个课时'} onClick={() => openRoster(item.id, selected[item.id])}>排课名单</button></> : <span className="muted">尚未配置课单，请先在详情中设置课程计划。</span>}
-            </div>
-            {roster && roster.classId === item.id ? <Panel title="排课名单" actions={<button className="secondary-button" onClick={() => setRoster(null)}>关闭</button>}>
-              {roster.loading ? <Loading /> : <>
-                {roster.message ? <Notice tone={roster.message.includes('已保存') ? 'success' : 'danger'}>{roster.message}</Notice> : null}
-                <p className="muted">只有「有该课包许可」且「还没上过这节课」的学员才能排进来；已经上过（提交过作品）的学员会被标出来且不能勾选。</p>
-                {roster.items.length ? <div className="card-list">{roster.items.map((student) => <label key={student.studentId} className="checkbox-option">
-                  <input type="checkbox" disabled={!student.selectable} checked={roster.picked.includes(student.studentId)} onChange={(event) => setRoster({ ...roster, picked: event.target.checked ? [...roster.picked, student.studentId] : roster.picked.filter((value) => value !== student.studentId) })} />
-                  {student.studentName || student.studentLogin}
-                  {student.selectable ? null : <span className="muted">（不可选：{student.reason}）</span>}
-                  {/* 本课包算力：排课时要能看出「谁快用完了」——有许可但没额度，排进去也上不了课 */}
-                  <span className="muted">{student.poolUnlimited ? ' · 本课包算力不限' : ` · 本课包算力 剩 ¥${Number(student.poolRemainYuan || 0).toFixed(2)}（上限 ¥${Number(student.poolCapYuan || 0).toFixed(2)}，已用 ${student.poolPercent ?? 0}%）`}</span>
-                </label>)}</div> : <Empty title="这个班还没有学员" body="先在「成员管理」里把学员加进班级。" />}
-                <div className="row-actions top-gap"><button className="primary-button" disabled={!roster.items.length || Boolean(roster.message && roster.message.includes('已保存'))} onClick={saveRoster}>保存名单（{roster.picked.length} 人）</button></div>
-              </>}
-            </Panel> : null}
-            {expanded === item.id && <div className="stacked-panels">
-              {!detail ? <Loading label="正在读取班级详情…" /> : <>
-                <Panel title="班级成员" description="成员变更会立即影响学生可见的班级课程内容。">
-                  {(user.role === 'ORG_ADMIN' || user.role === 'TEACHER') && <div className="row-actions"><select value={newStudent[item.id] || ''} onChange={(event) => setNewStudent({ ...newStudent, [item.id]: event.target.value })}><option value="">选择学员加入班级</option>{availableStudents.map((student) => <option key={student.id} value={student.id}>{student.displayName}（{student.login}）</option>)}</select><button className="secondary-button" onClick={() => addStudent(item.id)}>加入学员</button></div>}
-                  {user.role === 'ORG_ADMIN' && <label>负责教师<select value={item.teacherId || ''} onChange={(event) => assignTeacher(item.id, event.target.value)}><option value="">暂不指定</option>{teacherItems.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName}</option>)}</select></label>}
-                  {members.length ? <div className="table-wrap"><table><thead><tr><th>成员</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.displayName}<div className="muted">{member.login}</div></td><td>{member.classRole === 'TEACHER' ? '教师' : '学员'}</td><td><Status value={member.status} /></td><td>{member.classRole === 'STUDENT' && (user.role === 'ORG_ADMIN' || user.role === 'TEACHER') ? <button className="text-button" onClick={() => removeStudent(item.id, member.id)}>移出班级</button> : '—'}</td></tr>)}</tbody></table></div> : <Empty title="暂无班级成员" body="可从上方选择学员加入班级。" />}
-                </Panel>
-                <Panel title="课程计划与课时排序" description="保存时服务端会重新编号 sort，确保课时顺序连续且不可重复。">
-                  {availableLessons.length ? <div className="card-list">{currentDraft.map((lessonId, index) => { const lesson = availableLessons.find((candidate) => candidate.id === lessonId) || lessons.find((candidate) => candidate.lessonId === lessonId); return lesson ? <article className="item-card" key={lessonId}><div className="row-actions"><strong>第 {index + 1} 课 · {lesson.title}</strong><span className="muted">{lesson.seriesTitle || '已配置课时'}</span><button className="text-button" onClick={() => moveDraft(item.id, index, -1)} disabled={index === 0}>上移</button><button className="text-button" onClick={() => moveDraft(item.id, index, 1)} disabled={index === currentDraft.length - 1}>下移</button><button className="text-button" onClick={() => setDraft(item.id, currentDraft.filter((value) => value !== lessonId))}>移除</button></div><p className="muted">{lesson.summary || '暂无课时说明'} · {lesson.durationMinutes || 0} 分钟</p></article> : null; })}</div> : <Empty title="暂无可用课时" body="请先由平台或机构配置已发布课程。" />}
-                  <label>添加课时<select value="" onChange={(event) => { if (event.target.value && !currentDraft.includes(event.target.value)) setDraft(item.id, [...currentDraft, event.target.value]); }}><option value="">选择可加入本班的课时</option>{availableLessons.filter((lesson) => !currentDraft.includes(lesson.id)).map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.seriesTitle} · {lesson.title}</option>)}</select></label>
-                  <button className="primary-button" onClick={() => saveCurriculum(item.id)}>保存课程计划</button>
-                </Panel>
-                <div className="split"><Panel title="课程进度"><div className="table-wrap"><table><thead><tr><th>课时</th><th>开始</th><th>提交</th><th>发布</th></tr></thead><tbody>{(detail.progress || []).map((progress) => <tr key={progress.lessonId}><td>{progress.sort}. {progress.title}</td><td>{progress.startedStudentCount}/{progress.studentCount}（{progress.startedPercent}%）</td><td>{progress.submittedStudentCount}/{progress.studentCount}（{progress.submittedPercent}%）</td><td>{progress.publishedStudentCount}/{progress.studentCount}（{progress.publishedPercent}%）</td></tr>)}</tbody></table></div>{!detail.progress?.length && <Empty title="还没有课程计划" />}</Panel>
-                  <Panel title="课堂记录"><div className="card-list">{(detail.sessions || []).map((session) => <article className="item-card" key={session.id}><div className="row-actions"><strong>{session.lessonTitle || '未指定课时'}</strong><Status value={session.status === 'ACTIVE' ? 'ACTIVE SESSION' : session.endedReason === 'CANCELED' ? 'CANCELED' : 'ENDED'} /><span className="muted">{session.sessionKind === 'MAKEUP' ? '补课' : '常规'} · {session.deliveryMode === 'VIBECODING' ? 'VibeCoding 课堂' : '画布课堂'}</span></div><p className="muted">开始：{formatDate(session.startedAt)}{session.endedAt ? ` · 结束：${formatDate(session.endedAt)}` : ''}</p><p className="muted">{session.endedReason ? `结果：${session.endedReason}` : '课堂进行中'}</p>{session.status === 'ACTIVE' && <div className="top-gap"><div className="row-actions"><strong>课堂 AI 控制</strong><button className="secondary-button" onClick={() => updateControls(item.id, session, { aiPaused: !session.aiPaused })}>{session.aiPaused ? '恢复 AI' : '立即暂停 AI'}</button><button className="text-button" onClick={() => setSessionLimit(item.id, session, 'studentCallCap', '单学生调用次数')}>单学生次数：{session.studentCallCap == null ? '不限' : session.studentCallCap}</button></div><div className="row-actions top-gap">{[['allowText','文本'],['allowImage','图片'],['allowMusic','音乐'],['allowVideo','视频']].map(([key, label]) => <label className="checkbox-option" key={key}><input type="checkbox" checked={Boolean(session.capabilities?.[key])} onChange={(event) => updateControls(item.id, session, { capabilities: { [key]: event.target.checked } })} />{label}</label>)}</div><small className="muted">{session.aiPaused ? '当前课堂已暂停全部 AI 请求。' : '服务端会强制执行开关与单学生调用次数。'}</small></div>}</article>)}</div>{!detail.sessions?.length && <Empty title="暂无课堂记录" />}</Panel></div>
-              </>}
-            </div>}
-          </article>;
-        })}
-      </div> : <Empty title="暂无可管理班级" body="请先创建班级，再配置学生和课程。" />}
+      {recentSessions.length ? <div className="table-wrap"><table><thead><tr><th>课堂</th><th>课包 / 课时</th><th>状态</th><th>开始时间</th><th>结束时间</th></tr></thead><tbody>{recentSessions.map((item) => <tr key={item.id}><td><strong>{item.title || item.className || '—'}</strong><div className="muted">{item.seriesTitle || '—'} · {item.lessonTitle || '未关联课时'}</div></td><td><Status value={item.status} /></td><td>{formatDate(item.startedAt)}</td><td>{formatDate(item.endedAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无课堂记录" body="开始课堂后，最近课堂会出现在这里。" />}
     </Panel>
   </>;
 }
@@ -282,7 +83,8 @@ function Classes({ api, user }) {
 function Members({ api, user }) {
   const isAdmin = user.role === 'ORG_ADMIN';
   const members = useData(() => api.get(user.role === 'TEACHER' ? 'org/users?role=STUDENT' : 'org/users'), [api, user.role]);
-  const classes = useData(() => api.get('org/classes'), [api]);
+  // 批次 D：班级退场 —— 成员管理不再有「调班 / 授权班级」（那是班级口径）。
+  // 老师在哪个课堂上带谁，改在「课堂」页里加/移除学员。
   const [roleFilter, setRoleFilter] = useState('');
   const [search, setSearch] = useState('');
   const [form, setForm] = useState({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' });
@@ -293,7 +95,6 @@ function Members({ api, user }) {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const items = members.data?.items || [];
-  const classItems = classes.data?.items || [];
 
   function parseImport() {
     const lines = importText.trim().split(/\r?\n/).filter(Boolean);
@@ -334,11 +135,6 @@ function Members({ api, user }) {
     try { await api.put(`org/users/${item.id}/password`, { password }); setMessage('密码已重置，原有登录会话已失效'); }
     catch (error) { setMessage(error.message); } finally { setBusy(false); }
   }
-  async function saveClasses(item, classIds) {
-    setBusy(true); setMessage('');
-    try { await api.put(`org/users/${item.id}/classes`, { classIds }); setMessage('班级归属已更新'); await members.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
-  }
   async function previewImport() {
     setBusy(true); setMessage('');
     try { const preview = await api.post('org/users/import/preview', { items: parseImport() }); setImportPreview(preview); setMessage(`预览完成：${preview.validCount} 条可导入，${preview.invalidCount} 条失败`); }
@@ -350,12 +146,11 @@ function Members({ api, user }) {
     catch (error) { setMessage(error.message + (error.details?.items ? `（${error.details.invalidCount} 条失败，已全部回滚）` : '')); } finally { setBusy(false); }
   }
   const visibleItems = items.filter((item) => (!roleFilter || item.role === roleFilter) && (!search.trim() || [item.login, item.displayName, item.phone].some((value) => String(value || '').toLowerCase().includes(search.trim().toLowerCase()))));
-  if (members.loading || classes.loading) return <Loading />;
+  if (members.loading) return <Loading />;
   if (members.error) return <ErrorState error={members.error} onRetry={members.refresh} />;
-  if (classes.error && isAdmin) return <ErrorState error={classes.error} onRetry={classes.refresh} />;
 
   return <>
-    <PageHeader eyebrow="机构成员" title="教师与学生" description={isAdmin ? '创建、编辑、停用账号，并维护教师授权班级与学员调班记录。' : '仅展示当前权限范围内的机构成员；成员写操作需要机构管理员权限。'} actions={<button className="secondary-button" onClick={members.refresh}>刷新</button>} />
+    <PageHeader eyebrow="机构成员" title="教师与学生" description={isAdmin ? '创建、编辑、停用账号。带哪个班、上哪节课改在「课堂」页里安排。' : '仅展示当前权限范围内的机构成员；成员写操作需要机构管理员权限。'} actions={<button className="secondary-button" onClick={members.refresh}>刷新</button>} />
     {/* B3（2026-09-13）：机构端有三套容易混的东西，这里把边界一次说清（界面上的「我该去哪」） */}
     <p className="muted">这里管的是<strong>账号本身</strong>（角色、班级归属、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「学员许可」。学员看不到课包时，先确认后两处。</p>
     {message && <Notice tone={message.includes('失败') || message.includes('错误') || message.includes('无权') ? 'danger' : 'success'}>{message}</Notice>}
@@ -382,13 +177,12 @@ function Members({ api, user }) {
       <div className="row-actions"><input placeholder="搜索姓名、登录名或手机号" value={search} onChange={(event) => setSearch(event.target.value)} /><select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}><option value="">全部角色</option><option value="TEACHER">教师</option><option value="STUDENT">学生</option></select></div>
       {visibleItems.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>登录名</th><th>班级</th><th>额度</th><th>状态</th><th>操作</th></tr></thead><tbody>{visibleItems.map((item) => {
         const draft = editing === item.id ? editDraft : null;
-        const assignedIds = (item.classes || []).filter((entry) => entry.role === item.role).map((entry) => entry.id);
         return <tr key={item.id}>
           <td>{draft ? <><input value={draft.displayName} onChange={(event) => setEditDraft({ ...draft, displayName: event.target.value })} /></> : item.displayName}</td>
-          <td>{item.role}</td><td>{item.login}</td><td>{item.classes?.map((entry) => entry.name).join('、') || '未分配'}</td>
+          <td>{item.role}</td><td>{item.login}</td>
           <td>{item.role === 'STUDENT' ? <div className="muted">算力额度按课包计</div> : '—'}</td>
           <td>{draft ? <select value={draft.status} onChange={(event) => setEditDraft({ ...draft, status: event.target.value })}><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select> : <Status value={item.status} />}</td>
-          <td><div className="row-actions">{isAdmin && <>{draft ? <><button className="text-button" disabled={busy} onClick={saveEdit}>保存</button><button className="text-button" onClick={() => { setEditing(''); setEditDraft(null); }}>取消</button></> : <button className="text-button" onClick={() => startEdit(item)}>编辑</button>}<button className="text-button" disabled={busy} onClick={() => setStatus(item, item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE')}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button><button className="text-button" disabled={busy} onClick={() => resetPassword(item)}>重置密码</button>{item.role === 'TEACHER' && <label className="muted">授权班级<select multiple value={assignedIds} onChange={(event) => saveClasses(item, [...event.target.selectedOptions].map((option) => option.value))}>{classItems.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>}{item.role === 'STUDENT' && <label className="muted">调班<select multiple value={assignedIds} onChange={(event) => saveClasses(item, [...event.target.selectedOptions].map((option) => option.value))}>{classItems.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>}</>}</div></td>
+          <td><div className="row-actions">{isAdmin && <>{draft ? <><button className="text-button" disabled={busy} onClick={saveEdit}>保存</button><button className="text-button" onClick={() => { setEditing(''); setEditDraft(null); }}>取消</button></> : <button className="text-button" onClick={() => startEdit(item)}>编辑</button>}<button className="text-button" disabled={busy} onClick={() => setStatus(item, item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE')}>{item.status === 'ACTIVE' ? '停用' : '启用'}</button><button className="text-button" disabled={busy} onClick={() => resetPassword(item)}>重置密码</button></>}</div></td>
         </tr>;
       })}</tbody></table></div> : <Empty title="暂无成员" body="请先创建账号或调整搜索条件。" />}
     </Panel>
@@ -402,8 +196,9 @@ function nodeLabel(snapshot, nodeId) {
 }
 
 function Works({ api }) {
-  const [filters, setFilters] = useState({ search: '', status: '', classId: '' });
-  const query = useMemo(() => { const value = new URLSearchParams(); if (filters.search.trim()) value.set('search', filters.search.trim()); if (filters.status) value.set('status', filters.status); if (filters.classId) value.set('classId', filters.classId); return '?' + value.toString() + '&includeSnapshot=true'; }, [filters]);
+  const [filters, setFilters] = useState({ search: '', status: '', sessionId: '' });
+  // 批次 D：作品筛选从「班级」换成「课堂」（班级退场）
+  const query = useMemo(() => { const value = new URLSearchParams(); if (filters.search.trim()) value.set('search', filters.search.trim()); if (filters.status) value.set('status', filters.status); if (filters.sessionId) value.set('sessionId', filters.sessionId); return '?' + value.toString() + '&includeSnapshot=true'; }, [filters]);
   const { loading, error, data, refresh } = useData(() => api.get('org/works' + query), [api, query]);
   const [reportsPage, setReportsPage] = useState(1);
   const reports = useData(() => api.get(`org/work-reports?status=PENDING&page=${reportsPage}`), [api, reportsPage]);
@@ -448,8 +243,8 @@ function Works({ api }) {
   return <>
     <PageHeader eyebrow="学习成果" title="作品管理" description="查看学生提交的作业、处理举报，并把优秀作品标为机构精选。作品是否上作品广场由平台决定。" />
     {message && <Notice tone={message.includes('已') || message.includes('发送') ? 'success' : 'danger'}>{message}</Notice>}
-    <Panel title="作品列表" actions={<button className="secondary-button" onClick={() => { refresh(); reports.refresh(); }}>刷新</button>}><div className="form-grid"><label>关键词<input value={filters.search} placeholder="作品、学生或课时" onChange={(event) => setFilters({ ...filters, search: event.target.value })} /></label><label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option><option value="PENDING">已提交</option><option value="APPROVED">已通过</option><option value="PUBLISHED">已发布到作品广场</option><option value="REJECTED">未通过</option><option value="UNPUBLISHED">已下架</option></select></label><label>班级<select value={filters.classId} onChange={(event) => setFilters({ ...filters, classId: event.target.value })}><option value="">全部班级</option>{[...new Map(data.items.filter((item) => item.classId).map((item) => [item.classId, item])).values()].map((item) => <option key={item.classId} value={item.classId}>{item.className || item.classId}</option>)}</select></label></div>
-      {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'} · {item.className || '—'} / {item.courseLessonTitle || '—'}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看作品</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
+    <Panel title="作品列表" actions={<button className="secondary-button" onClick={() => { refresh(); reports.refresh(); }}>刷新</button>}><div className="form-grid"><label>关键词<input value={filters.search} placeholder="作品、学生或课时" onChange={(event) => setFilters({ ...filters, search: event.target.value })} /></label><label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option><option value="PENDING">已提交</option><option value="APPROVED">已通过</option><option value="PUBLISHED">已发布到作品广场</option><option value="REJECTED">未通过</option><option value="UNPUBLISHED">已下架</option></select></label></div>
+      {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无说明'} · {item.seriesTitle || '—'} / {item.courseLessonTitle || '—'}{item.sessionTitle ? ' · 课堂：' + item.sessionTitle : ''}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看作品</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
     </Panel>
     {featureAction && <Panel title={`机构精选 · ${featureAction.title}`}><Notice tone="info">精选作品会在机构作品墙优先展示；取消精选不会下架作品。</Notice><div className="form-grid"><label>精选状态<select value={featureForm.featured ? 'true' : 'false'} onChange={(event) => setFeatureForm({ ...featureForm, featured: event.target.value === 'true' })}><option value="true">设为机构精选</option><option value="false">取消机构精选</option></select></label></div>{featureForm.featured && <label>精选理由（可选）<input value={featureForm.reason} maxLength={500} placeholder="例如：故事结构完整，画面表达清晰。" onChange={(event) => setFeatureForm({ ...featureForm, reason: event.target.value })} /></label>}<div className="row-actions top-gap"><button className="primary-button" disabled={featureBusy} onClick={handleFeature}>{featureBusy ? '处理中…' : '确认精选设置'}</button><button className="secondary-button" disabled={featureBusy} onClick={() => setFeatureAction(null)}>取消</button></div></Panel>}
     <Panel title={`待处理举报 · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <><div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" onClick={() => { setReportAction(item); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); }}>处理</button></td></tr>)}</tbody></table></div><Pagination page={reports.data.page} totalPages={reports.data.totalPages} onChange={setReportsPage} disabled={reports.loading} /></> : <Empty title="暂无待处理举报" />}</Panel>
@@ -652,7 +447,7 @@ function UsagePage({ api }) {
         <label>状态<select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">全部</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">拦截</option></select></label>
         <label>关键词<input value={filters.search} placeholder="用户 / 项目 / 作品" onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></label>
       </div>
-      {records.loading ? <Loading label="正在读取用量明细…" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>能力 / 模型</th><th>上下文</th><th>消耗</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.userName || item.userLogin || item.userId}</td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.lessonTitle ? <div className="muted">课时：{item.lessonTitle}</div> : null}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatYuan(item.costFen)}</td><td><Status value={item.status} />{item.failCode ? <div className="muted">{item.failCode}</div> : null}</td></tr>)}</tbody></table></div> : <Empty title="所选范围内暂无用量记录" />}
+      {records.loading ? <Loading label="正在读取用量明细…" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data.items.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>能力 / 模型</th><th>上下文</th><th>消耗</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td>{item.userName || item.userLogin || item.userId}</td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.sessionTitle || '非课堂调用'}{item.lessonTitle ? <div className="muted">课时：{item.lessonTitle}</div> : null}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatYuan(item.costFen)}</td><td><Status value={item.status} />{item.failCode ? <div className="muted">{item.failCode}</div> : null}</td></tr>)}</tbody></table></div> : <Empty title="所选范围内暂无用量记录" />}
     </Panel>
   </>;
 }
@@ -718,9 +513,10 @@ export function App() {
   useEffect(() => { if (session?.token) api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);
   async function login(credentials) { const data = await api.login(credentials); if (!['ORG_ADMIN', 'TEACHER'].includes(data.user.role)) throw new ApiError('该账号没有机构教务权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
-  if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理班级、课堂、成员和学生创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
+  // 2026-09-13（批次 B-6）：班级退场后登录页文案也跟着改，别再说「管理班级」。
+  if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学员创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
   const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classes" element={<Classes api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={<SeriesOverview api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/grants" element={<StudentGrants api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={<SeriesOverview api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/grants" element={<StudentGrants api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="/hackathon" element={<OrgPage kind="hackathon" user={session.user} />} /><Route path="/afee" element={<OrgPage kind="afee" user={session.user} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

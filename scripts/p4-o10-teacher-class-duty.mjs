@@ -55,23 +55,27 @@ try {
   check('教师可读取本机构学生名册', roster.status === 200 && roster.body.data?.items?.some((item) => item.login === 'student-1'));
   const courses = await request(dutyTeacher, '/org/course-series');
   const lesson = courses.body.data.items[0].lessons[0];
-  const createdClass = await request(dutyTeacher, '/org/classes', { method: 'POST', body: JSON.stringify({ name: '教师职责测试班', defaultSeriesId: courses.body.data.items[0].id }) });
-  check('教师可创建班级', createdClass.status === 200 && createdClass.body.data?.teacherId);
+  // 批次 D（班级退场）：这一组「教师职责」从**班级**搬到**课堂** ——
+  // 原来验「教师能建班 / 加学生 / 配课时 / 不能动别人的班」，现在验同一套职责落在课堂接口上。
+  const createdClass = await request(dutyTeacher, '/org/sessions', { method: 'POST', body: JSON.stringify({ lessonId: lesson.id, title: '教师职责测试课堂' }) });
+  check('教师可创建课堂（挂在自己名下）', createdClass.status === 200 && Boolean(createdClass.body.data?.teacherId), JSON.stringify(createdClass.body.data).slice(0, 160));
   const classId = createdClass.body.data.id;
-  const added = await request(dutyTeacher, `/org/classes/${classId}/members/${roster.body.data.items.find((item) => item.login === 'student-1').id}`, { method: 'POST', body: '{}' });
-  check('教师可将本机构学生加入自己的班级', added.status === 200 && added.body.data?.ok === true);
-  const curriculum = await request(dutyTeacher, `/org/classes/${classId}/curriculum`, { method: 'PUT', body: JSON.stringify({ lessonIds: [lesson.id] }) });
-  check('教师可为自己的班级分配已授权课时', curriculum.status === 200 && curriculum.body.data?.curriculum?.length === 1);
-  const adminClass = await request(admin, '/org/classes', { method: 'POST', body: JSON.stringify({ name: '其他教师班', teacherId: 'user_missing' }) });
-  check('非法教师分配被拒绝', adminClass.status === 400);
+  const added = await request(dutyTeacher, `/org/sessions/${classId}/students`, { method: 'POST', body: JSON.stringify({ studentIds: [roster.body.data.items.find((item) => item.login === 'student-1').id] }) });
+  check('教师可把本机构学生加进自己的课堂', added.status === 200 && (added.body.data?.added || []).length === 1, JSON.stringify(added.body.data).slice(0, 160));
+  const started = await request(dutyTeacher, `/org/sessions/${classId}/start`, { method: 'POST', body: '{}' });
+  check('教师可开始自己的课堂（名单非空）', started.status === 200, `${started.status} ${JSON.stringify(started.body.data || {}).slice(0, 120)}`);
+  const adminClass = await request(admin, '/org/sessions', { method: 'POST', body: JSON.stringify({ lessonId: lesson.id, teacherId: 'user_missing' }) });
+  check('非法教师分配被拒绝', adminClass.status === 400, `${adminClass.status}`);
   const teacherRoster = await request(admin, '/org/users?role=TEACHER');
   const teacher2Id = teacherRoster.body.data.items.find((item) => item.login === 'teacher-2').id;
-  const classForTeacher2 = await request(admin, '/org/classes', { method: 'POST', body: JSON.stringify({ name: '李老师职责班', teacherId: teacher2Id }) });
-  check('机构管理员可创建并指定其他教师班级', classForTeacher2.status === 200);
-  const forbiddenCurriculum = await request(dutyTeacher, `/org/classes/${classForTeacher2.body.data.id}/curriculum`, { method: 'PUT', body: JSON.stringify({ lessonIds: [lesson.id] }) });
-  check('教师不能修改其他教师班级', forbiddenCurriculum.status === 403 || forbiddenCurriculum.status === 404);
-  const studentClasses = await request(student, '/org/classes');
-  check('学生不能调用机构班级接口', studentClasses.status === 403);
+  const classForTeacher2 = await request(admin, '/org/sessions', { method: 'POST', body: JSON.stringify({ lessonId: lesson.id, title: '李老师职责课堂', teacherId: teacher2Id }) });
+  check('机构管理员可创建课堂并指定其他教师', classForTeacher2.status === 200, JSON.stringify(classForTeacher2.body.data).slice(0, 160));
+  const foreign = await request(dutyTeacher, `/org/sessions/${classForTeacher2.body.data.id}`);
+  check('教师不能读其他教师的课堂', foreign.status === 403 || foreign.status === 404, `${foreign.status}`);
+  const forbiddenEnd = await request(dutyTeacher, `/org/sessions/${classForTeacher2.body.data.id}/end`, { method: 'POST', body: '{}' });
+  check('教师不能结束其他教师的课堂', forbiddenEnd.status === 403 || forbiddenEnd.status === 404, `${forbiddenEnd.status}`);
+  const studentClasses = await request(student, '/org/sessions');
+  check('学生不能调用机构课堂接口', studentClasses.status === 403, `${studentClasses.status}`);
   console.log(JSON.stringify({ total: checks.length, passed: checks.filter((item) => item.pass).length, failed: checks.filter((item) => !item.pass).length, checks }, null, 2));
 } finally {
   server.kill();

@@ -16,7 +16,10 @@ try{await wait(); const admin=(await login('org-admin','org123')).cookie; const 
  const old=await login('p4-o14-student','oldpass1'); check('停用后旧密码不能登录',old.status===401);
  r=await req(admin,`/org/users/${id}/password`,'PUT',{password:'newpass1'}); check('管理员重置密码',r.status===200);
  r=await req(admin,`/org/users/${id}`,'PUT',{status:'ACTIVE'}); check('管理员重新启用账号',r.status===200&&r.body.data.status==='ACTIVE'); const fresh=await login('p4-o14-student','newpass1'); check('重置后新密码可登录',fresh.status===200);
- r=await req(admin,'/org/classes'); const classId=r.body.data.items[0]?.id; r=await req(admin,`/org/users/${id}/classes`,'PUT',{classIds:classId?[classId]:[]}); check('管理员维护成员班级归属',r.status===200);
+ // 批次 D（班级退场）：原来这里走「查班级列表 → PUT /users/:id/classes 调班」。
+ // 班级与调班都已下线，改钉两件事：旧接口确实没了（防回退），成员资料仍可读。
+ r=await req(admin,`/org/users/${id}/classes`,'PUT',{classIds:[]}); check('旧的「调班」接口已随班级退场下线（404）',r.status===404);
+ r=await req(admin,`/org/users/${id}`); check('成员资料仍可读（下线调班没影响账号管理）',r.status===200&&r.body.data?.id===id);
  r=await req(admin,'/org/users/import/preview','POST',{items:[{login:'p4-o14-import',displayName:'导入测试学生',role:'STUDENT',password:'import1'}]}); check('批量导入预览',r.status===200&&r.body.data?.items?.length===1);
  r=await req(admin,'/org/users/import/commit','POST',{items:[{login:'p4-o14-import',displayName:'导入测试学生',role:'STUDENT',password:'import1'}]}); check('批量导入提交',r.status===200&&r.body.data?.total===1);
  console.log(JSON.stringify({total:checks.length,passed:checks.filter(x=>x.pass).length,failed:checks.filter(x=>!x.pass).length,checks},null,2));}finally{server.kill()}

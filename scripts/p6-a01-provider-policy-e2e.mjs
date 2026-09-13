@@ -56,13 +56,13 @@ const expect = (condition, message, details) => {
 
 try {
   for (let i = 0; i < 80; i++) {
-    try {
-      if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break;
-  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
-    } catch {}
+    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ }
     await sleep(100);
   }
+  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂。
+  // ⚠️ 必须在健康检查**之后**、发请求**之前**调用。早于服务启动它读不到表；而塞进上面那个重试
+  //    循环里则永远轮不到执行（`break` 先走）—— 这里踩过一次，症状就是 NOT_IN_CLASSROOM。
+  ensureClassroom(dbPath);
 
   const adminLogin = await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } });
   expect(adminLogin.status === 200 && adminLogin.data?.token, '管理员登录失败', adminLogin);

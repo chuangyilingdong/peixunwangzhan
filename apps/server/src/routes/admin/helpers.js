@@ -409,10 +409,28 @@ function teacherCanAccessClass(auth, cls) {
   ));
 }
 
-function teacherScope(alias, auth, params) {
+/**
+ * 教师的**数据范围**（2026-09-13 批次 D：从「班级」改成「课堂」）。
+ *
+ * 口径（用户确认）：**教师只看得到自己创建的课堂**；课包库全机构可见；机构管理员看全部。
+ * 落点统一在 `class_sessions.teacher_id` —— 作品范围靠 `works.class_session_id`、
+ * 用量范围靠 `usage_records.class_session_id`，两边都接到课堂上。
+ *
+ * ⚠️ 这是**安全相关**的一处：scope 写错的表现是「教师静默看到全机构数据」（不报错、日志也没有）。
+ *    改动前先看 scripts/p69-teacher-data-scope.mjs —— 它把每一处范围都钉成了可执行期望。
+ *    历史教训：这里原来叫 teacherScope 且按**班级**圈定，班级退场后那个口径已经不成立。
+ */
+function sessionTeacherScope(alias, auth, params) {
   if (auth.user.role !== 'TEACHER') return '';
-  params.push(auth.user.id, auth.user.id);
-  return ` AND (${alias}.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=${alias}.id AND scoped_member.user_id=? AND scoped_member.role='TEACHER' AND scoped_member.removed_at IS NULL))`;
+  params.push(auth.user.id);
+  return ` AND ${alias}.teacher_id=?`;
+}
+
+/** 用量/作品这类「挂在某节课的课堂上」的资源：把它们圈到「课堂是我创建的」。 */
+function sessionOwnedByTeacherExists(column, auth, params, { orgColumn = 'usage.org_id' } = {}) {
+  if (auth.user.role !== 'TEACHER') return '';
+  params.push(auth.user.id);
+  return ` AND ${column} IS NOT NULL AND EXISTS (SELECT 1 FROM class_sessions scoped_session WHERE scoped_session.id=${column} AND scoped_session.org_id=${orgColumn} AND scoped_session.teacher_id=?)`;
 }
 
 function classSessionRows(classId) {
@@ -751,17 +769,19 @@ function softDeleteStudent(ctx, user, now) {
 }
 
 function workInReviewScope(auth, currentOrgId, workId) {
+  // 批次 D（班级退场）：作品的归属从「班级」换成「课堂」——判据是这节课的课堂是不是我创建的。
   const work = row(
-    `SELECT work.*, student.privacy_allow_feature AS student_allow_feature, class.teacher_id
+    `SELECT work.*, student.privacy_allow_feature AS student_allow_feature,
+            session.teacher_id AS session_teacher_id
      FROM works work
      JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
-     LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
+     LEFT JOIN class_sessions session ON session.id=work.class_session_id
      WHERE work.id=? AND work.org_id=?`,
     [workId, currentOrgId],
   );
   if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-  if (auth.user.role === 'TEACHER' && !teacherCanAccessClass(auth, { id: work.class_id, teacher_id: work.teacher_id })) {
-    throw errors.forbidden('不能点评未授权班级的作品', 'WORK_PERMISSION_DENIED');
+  if (auth.user.role === 'TEACHER' && work.session_teacher_id !== auth.user.id) {
+    throw errors.forbidden('不能处理不属于自己课堂的作品', 'WORK_PERMISSION_DENIED');
   }
   return work;
 }
@@ -1102,7 +1122,8 @@ export {
   setStudentEnrollmentAccess,
   softDeleteStudent,
   teacherCanAccessClass,
-  teacherScope,
+  sessionTeacherScope,
+  sessionOwnedByTeacherExists,
   userLoginMeta,
   validateImportItem,
   validateMemberPermissions,

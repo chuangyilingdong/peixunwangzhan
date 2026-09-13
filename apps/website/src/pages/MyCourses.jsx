@@ -20,8 +20,13 @@ export function MyCoursesPage({ api }) {
     <header className="student-page-head">
       <h1>我的课程</h1>
       <p>你在本机构可以学习的课程与课时进度。</p>
-      {/* B3/B1：门禁是「机构授权 + 老师分给你」两层叠加，学生得知道「进不去该找谁」 */}
-      <p className="student-page-hint">标着<strong>「未授权」</strong>的课包表示老师还没有把它分给你 —— 找老师说一句就能开通；已经分给你的课包，等老师开课后就能进入。</p>
+      {/* 批次 C（班级退场）：门禁是「机构授权 + 老师分课包 + 老师把你加进课堂」三层叠加，
+          学生得知道「进不去该找谁」——所以这里把三步都写出来 */}
+      <p className="student-page-hint">
+        进操作环境要三步：① 课包标着<strong>「未授权」</strong>＝老师还没把课包分给你，找老师说一句就能开通；
+        ② 已经分给你的课包，还要<strong>等老师把你加进这一节课的课堂</strong>；
+        ③ 老师点「开始上课」后这节课才能进。课上完标记<strong>已完课</strong>，没消耗过算力的算<strong>未完课</strong>，可以重新排进课堂再上。
+      </p>
     </header>
 
     {summary ? <div className="student-summary">
@@ -35,7 +40,7 @@ export function MyCoursesPage({ api }) {
     {state.error ? <div className="student-page-state is-error">⚠ {state.error}</div> : null}
 
     {!state.loading && !state.error && items.length === 0 ? <div className="student-page-state">
-      ✦ 还没有可学习的课程。<br />请联系机构老师把你加入班级，或为你开通课包。
+      ✦ 还没有可学习的课程。<br />请联系老师为你的机构开通课包，并把课包分给你。
     </div> : null}
 
     {items.length ? <div className="student-card-grid">{items.map((course) => <article className="student-card" key={course.id}>
@@ -48,7 +53,6 @@ export function MyCoursesPage({ api }) {
       {course.hasGrant === false ? <p className="student-card__meta">这个课包还没有分配给你，请联系老师开通后再进入。</p> : null}
       {course.description ? <p className="student-card__desc">{course.description}</p> : null}
       <p className="student-card__meta">共 {course.progress?.lessonCount || 0} 节 · 已开始 {course.progress?.startedLessonCount || 0} 节 · 已提交 {course.progress?.submittedLessonCount || 0} 节</p>
-      {course.classes?.length ? <p className="student-card__meta">班级：{course.classes.map((item) => item.name).join('、')}</p> : null}
       <div className="student-progress-bar"><i style={{ width: `${course.progress?.submittedPercent || 0}%` }} /></div>
     </article>)}</div> : null}
 

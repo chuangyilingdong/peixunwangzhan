@@ -345,6 +345,12 @@ CREATE TABLE IF NOT EXISTS course_assignments (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_assignments_unique ON course_assignments(series_id, org_id);
 
 
+-- ⚠️ 历史表（2026-09-13 批次 D：班级彻底退场，只剩课堂）。
+-- classes / class_members / class_curriculum_items 这三张表保留但不再被业务读写：
+--   · 建表语句留着，是为了老库能平滑打开、历史数据可查（用户口径：删代码不删表）；
+--   · 「教什么、谁来上、谁在名单里」现在全部落在 class_sessions + session_students 上；
+--   · 旧 /api/org/classes/* 接口已下线，教师数据范围也从班级改成了课堂（见 p69 守卫）。
+-- 别在这些表上再加逻辑 —— 加了也不会有任何数据写进来。
 CREATE TABLE IF NOT EXISTS classes (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
@@ -1720,6 +1726,19 @@ try { db.exec('ALTER TABLE works ADD COLUMN class_session_id TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec('ALTER TABLE student_projects ADD COLUMN class_session_id TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// 批次 D 回填（幂等）：老作品的 class_session_id 是空的 —— 提交时曾经只抄了 class_id（班级口径），
+// 而教师的数据范围现在按课堂圈定，不回填的话**教师会静默看不到这些作品**。
+// 只按**证据**回填：作品所属项目上记着的课堂；没有就不硬猜（那种作品只有机构管理员看得到）。
+try {
+  db.exec(`UPDATE works SET class_session_id = (
+      SELECT project.class_session_id FROM student_projects project
+       WHERE project.id = works.project_id AND project.class_session_id IS NOT NULL
+    )
+    WHERE works.class_session_id IS NULL
+      AND EXISTS (SELECT 1 FROM student_projects project
+                   WHERE project.id = works.project_id AND project.class_session_id IS NOT NULL)`);
+} catch (_) { /* 老库没有这两列时跳过 */ }
 
 // P5-W05 course_series 新字段（仅旧库迁移；新库已在 CREATE TABLE 中定义）
 try { db.exec('ALTER TABLE course_series ADD COLUMN difficulty_level INTEGER'); } catch (_) {}

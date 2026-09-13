@@ -1,7 +1,7 @@
 import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
-import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentCourseDetail, getStudentMemberships, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
+import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
 import { computePoolSummary } from '../services/computePool.js';
 
@@ -196,6 +196,9 @@ function studentCourseOverview(ctx) {
   const projects = rows(`SELECT id, course_lesson_id, class_id, title, status, updated_at FROM student_projects WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`, [ctx.auth.user.id, ctx.auth.user.orgId]);
   const works = rows('SELECT id, project_id, course_lesson_id, class_id, title, status, submitted_at FROM works WHERE student_id = ? AND org_id = ?', [ctx.auth.user.id, ctx.auth.user.orgId]);
   const classById = new Map(context.classes.map((item) => [item.id, item]));
+  // 批次 C：班级退场后 `course.classes` 恒为空（键留着不炸既有读取方）；
+  // 「这节课我上着哪个课堂」改由每个课时的 `participation*` / `classroomCount` 表达。
+  void classById;
   const activeLessonIds = new Set(context.activeSessions.map((item) => item.lessonId).filter(Boolean));
   const projectGroups = new Map();
   const workGroups = new Map();
@@ -228,7 +231,8 @@ function studentCourseOverview(ctx) {
     const submittedLessonCount = lessons.filter((item) => item.workCount > 0).length;
     return {
       ...course,
-      classes: [...new Set(course.classIds || [])].map((classId) => classById.get(classId)).filter(Boolean).map((item) => ({ id: item.id, name: item.name, teacherName: item.teacherName, usageMode: item.usageMode, status: item.status })),
+      // 批次 C：班级退场 —— 这个键保留但恒为空（学生端「我的课程」不再显示班级）。
+      classes: [],
       lessons,
       progress: {
         lessonCount: lessons.length,
@@ -347,8 +351,10 @@ function studentAccountOverview(ctx) {
   return {
     user: normalizeUser(rawUser),
     organization: normalizeOrg(ctx.auth.org),
-    classes: getStudentMemberships(rawUser).map((item) => ({ id: item.id, name: item.name, teacherName: item.teacher_name || null, usageMode: item.usage_mode, status: item.status, createdAt: item.created_at })),
-    activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: item.class_id, lessonId: item.lesson_id, lessonTitle: item.lesson_title, status: item.status, startedAt: item.started_at })),
+    // 批次 C：`classes` 恒为空（学生不再属于班级）；学生自己的课堂在 `classrooms`（含六态）。
+    classes: [],
+    classrooms: getStudentClassrooms(rawUser),
+    activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: null, lessonId: item.lessonId, lessonTitle: item.lessonTitle, status: item.status, deliveryMode: item.deliveryMode, teacherName: item.teacherName, startedAt: item.startedAt })),
     sessions: sessions.map((item) => ({ id: item.id, clientType: item.client_type, createdAt: item.created_at, expiresAt: item.expires_at, current: item.id === ctx.auth.session.id })),
     currentSessionId: ctx.auth.session.id,
     legalConsents,
@@ -915,10 +921,13 @@ export async function handleStudent(ctx) {
         workId = existingWork.id;
       } else {
         q(
+          // 批次 D：作品也要带上**课堂**（class_session_id）—— 教师的作品数据范围现在按
+          // 「这个作品挂在我创建的哪节课的课堂上」圈定（班级退场后不再有 work.class_id 这一层）。
+          // 忘了带这一列的表现是「教师静默看不到任何作品」，所以提交时就从项目上抄一份。
           `INSERT INTO works(
-            id,project_id,student_id,org_id,class_id,course_lesson_id,title,description,canvas_snapshot,status,copyright_confirmed_at,copyright_confirmed_by,submitted_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now, auth.user.id, now],
+            id,project_id,student_id,org_id,class_id,class_session_id,course_lesson_id,title,description,canvas_snapshot,status,copyright_confirmed_at,copyright_confirmed_by,submitted_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [workId, fresh.id, auth.user.id, fresh.org_id, fresh.class_id, fresh.class_session_id || null, fresh.course_lesson_id, fresh.title, description, json(canvasSnapshot), 'PENDING', now, auth.user.id, now],
         );
       }
       // 用量报表按 work_id 关联作品（works.project_id 唯一）；生成发生在提交之前，只能在这里回填

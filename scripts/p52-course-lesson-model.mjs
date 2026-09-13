@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p52-lesson-model-'));
@@ -127,25 +127,28 @@ try {
   const studentId = student.user?.id || student.data?.user?.id;
   const granted = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin.token, body: { seriesId, studentIds: [studentId] } });
   check('机构能把课包分给学员（学生进课的前提）', granted.status === 200, JSON.stringify(granted).slice(0, 200));
+  // 批次 B：许可只是第①②步，进课还要「老师在某个**进行中的课堂**里把他加进名单」。
+  // ⚠️ 必须在**发许可之后**再跑夹具 —— 它只对已有许可的课包建课堂，早跑等于没跑
+  //    （启动时那次是给种子课包建的，覆盖不到这里刚建的课包）。
+  ensureClassroom(dbPath);
 
-  const classes = await api('/api/org/classes', { token: orgAdmin.token });
-  const classWithStudent = (classes.data.items || []).find((item) => Number(item.studentCount || 0) > 0) || (classes.data.items || [])[0];
-  assert.ok(classWithStudent, '机构下没有班级');
-  const curriculum = await api(`/api/org/classes/${classWithStudent.id}/curriculum`, { token: orgAdmin.token });
-  const existing = (curriculum.data.items || curriculum.data.curriculum || []).map((item) => item.lessonId || item.id).filter(Boolean);
-  const nextLessonIds = [...new Set([...existing, dual.id, canvasOnly.id, vibeOnly.id, toChange.id])];
-  const saved = await api(`/api/org/classes/${classWithStudent.id}/curriculum`, { method: 'PUT', token: orgAdmin.token, body: { lessonIds: nextLessonIds } });
-  check('三个课时能排进班级课单', saved.status === 200, JSON.stringify(saved.data).slice(0, 160));
-  check('学生在该班级里', true, `班级 ${classWithStudent.name}`);
+  // 批次 D（班级退场）：原来这里「把三个课时排进班级课单」——课单已退场，
+  // 「学生能进哪节课」现在只由**课堂名单**决定，所以这一步换成「确认夹具已经把他排进了课堂」。
+  const classroomList = await api('/api/org/sessions?days=365', { token: orgAdmin.token });
+  const myClassrooms = (classroomList.data?.items || []).filter((item) => Number(item.studentCount || 0) > 0);
+  check('学生已被排进课堂（夹具搭好的前提）', myClassrooms.length > 0, JSON.stringify((classroomList.data?.items || []).slice(0, 2)));
 
-  // ⑤ 学生端：两个入口并列（学生-2 是 HOME_PRACTICE，按课时开放的类型给入口）
+  // ⑤ 学生端：两个入口并列（按**这节课的课堂**开放的类型给入口）
   const canvasEntry = await api('/api/student/projects', { method: 'POST', token: student.token, body: { courseLessonId: dual.id, title: 'P52 画布入口' } });
   check('双类型课时：画布入口可用', canvasEntry.status === 200, `${canvasEntry.status} ${canvasEntry.error?.code || ''}`);
-  const vibeEntry = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student.token, body: { lessonId: dual.id, classId: classWithStudent.id, title: 'P52 Vibe 入口' } });
+  // 批次 B：一个课堂只带**一种**入口类型（既定设计），所以「双类型课时两个入口并列」现在的含义是
+  // 「两个入口各自在对应类型的课堂下放行」。验第二半之前先把入口类型切成 VIBECODING。
+  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
+  const vibeEntry = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student.token, body: { lessonId: dual.id, title: 'P52 Vibe 入口' } });
   check('双类型课时：VibeCoding 入口也可用（并列）', vibeEntry.status === 200, `${vibeEntry.status} ${vibeEntry.error?.code || ''}`);
   const vibeOnlyCanvas = await api('/api/student/projects', { method: 'POST', token: student.token, body: { courseLessonId: vibeOnly.id, title: '不该成功' } });
   check('只 Vibe 的课时：画布入口被拦', vibeOnlyCanvas.status === 403, `${vibeOnlyCanvas.status} ${vibeOnlyCanvas.error?.code || ''}`);
-  const canvasOnlyVibe = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student.token, body: { lessonId: canvasOnly.id, classId: classWithStudent.id, title: '不该成功' } });
+  const canvasOnlyVibe = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student.token, body: { lessonId: canvasOnly.id, title: '不该成功' } });
   check('只画布的课时：Vibe 入口被拦', canvasOnlyVibe.status === 403, `${canvasOnlyVibe.status} ${canvasOnlyVibe.error?.code || ''}`);
 
   console.log(JSON.stringify({ name: 'course-lesson-model', pass: failures === 0, seriesId, failures }, null, 2));

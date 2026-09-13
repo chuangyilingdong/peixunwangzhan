@@ -17,6 +17,27 @@ const teacherOf = (db, orgId) => db.prepare(
   "SELECT id FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
 ).get(orgId)?.id || null;
 
+/**
+ * 课堂的 AI 能力开关（class_sessions.allow_*）。
+ * 课时**声明过**的能力就在课堂上打开 —— 真实开课流程就是这么算的（orgAdmin 里的 `capabilityDefault`
+ * 按 `course_lesson_capabilities` 取值）。没声明的沿用列默认值（text/image/music=1、video/…=0）。
+ *
+ * ⚠️ 刻意**不**严格照抄 `capabilityDefault`（它「没声明就是 0」）：种子里那些课时根本没有
+ *    `course_lesson_capabilities` 行，照抄会把它们的 TEXT/IMAGE 全关掉，连带把一批只验生成链路的守卫
+ *    搞红 —— 而那并不是它们要验的东西。（p11 是反例：它插了 'video'，所以这里必须真的打开 allow_video，
+ *    否则 `assertCapability` 直接报 SESSION_CAPABILITY_DISABLED。）
+ */
+const DEFAULT_SESSION_CAPABILITY = { text: 1, image: 1, music: 1, video: 0, podcast: 0, dubbing: 0 };
+const sessionCapabilityFlags = (db, lessonId) => {
+  let declared = new Set();
+  try {
+    declared = new Set(db.prepare('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=?').all(lessonId).map((row) => row.capability));
+  } catch { /* 老库/自造库可能没有这张表 —— 那就按默认值来 */ }
+  const flags = {};
+  for (const [key, fallback] of Object.entries(DEFAULT_SESSION_CAPABILITY)) flags[key] = declared.has(key) ? 1 : fallback;
+  return flags;
+};
+
 /** 每个有许可的学生 × 该课包的每节已发布课时 → 一个 ACTIVE 课堂 + 他在名单里。幂等。 */
 export function ensureClassroom(dbPath) {
   const db = new DatabaseSync(dbPath);
@@ -44,11 +65,15 @@ export function ensureClassroom(dbPath) {
         let session = db.prepare("SELECT id FROM class_sessions WHERE lesson_id=? AND status='ACTIVE' LIMIT 1").get(lesson.id);
         if (!session) {
           const sessionId = 'csession_fixture_' + Math.random().toString(36).slice(2, 10);
+          const caps = sessionCapabilityFlags(db, lesson.id);
           db.prepare(
-            "INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) " +
-            "VALUES (?,?,?,?,?,?, 'ACTIVE', ?, ?, ?, ?, ?)",
+            "INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode," +
+            "allow_text,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at,created_at,updated_at) " +
+            "VALUES (?,?,?,?,?,?, 'ACTIVE', ?, ?,?,?,?,?,?, ?, ?, ?, ?)",
           ).run(sessionId, (lesson.title || '课时') + ' · 守卫夹具课堂', grant.org_id, grant.series_id, lesson.id,
-            teacherId, lesson.delivery_mode || 'CANVAS', teacherId, now, now, now);
+            teacherId, lesson.delivery_mode || 'CANVAS',
+            caps.text, caps.image, caps.music, caps.video, caps.podcast, caps.dubbing,
+            teacherId, now, now, now);
           session = { id: sessionId };
           created.push(sessionId);
         }
@@ -73,7 +98,7 @@ export function ensureClassroom(dbPath) {
  * 做法：先结束他当前那个 ACTIVE 课堂（学员结算成未完课 → 不挡重新加入），再按新模式建一个。
  * 该课包下**每节已发布课时**都切一遍（守卫常会遍历候选课时）。
  */
-export function switchClassroom(dbPath, { deliveryMode = 'VIBECODING' } = {}) {
+export function switchClassroom(dbPath, { deliveryMode = 'VIBECODING', requireSupports = true } = {}) {
   const db = new DatabaseSync(dbPath);
   const switched = [];
   try {
@@ -87,11 +112,13 @@ export function switchClassroom(dbPath, { deliveryMode = 'VIBECODING' } = {}) {
     if (!grants.length) return switched;
     const now = new Date().toISOString();
     for (const grant of grants) {
-      // ⚠️ 只切**支持 VibeCoding** 的课时：把只开画布的课时也切成 VibeCoding 课堂，
+      // ⚠️ 只切**支持 VibeCoding** 的课时（默认）：把只开画布的课时也切成 VibeCoding 课堂，
       // 会让「画布课时走 VibeCoding 应被拒」这类断言失效（p16 就是这么被我搞红的）。
+      // 需要切**回**画布（守卫要先后走两条链、或走的是画布链路）时传 `requireSupports:false`。
       const lessons = db.prepare(
         "SELECT id, title, delivery_mode, delivery_modes FROM course_lessons WHERE series_id=? AND status='PUBLISHED'",
       ).all(grant.series_id).filter((lesson) => {
+        if (!requireSupports) return true;
         const modes = Array.isArray(lesson.delivery_modes)
           ? lesson.delivery_modes
           : (() => { try { return JSON.parse(lesson.delivery_modes || '[]'); } catch { return []; } })();
@@ -108,11 +135,15 @@ export function switchClassroom(dbPath, { deliveryMode = 'VIBECODING' } = {}) {
           db.prepare("UPDATE session_students SET status='INCOMPLETE', completed_at=?, updated_at=? WHERE session_id=? AND status IN ('PENDING','ACTIVE')").run(now, now, current.id);
         }
         const sessionId = 'csession_fixture_switch_' + Math.random().toString(36).slice(2, 8);
+        const caps = sessionCapabilityFlags(db, lesson.id);
         db.prepare(
-          "INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,started_by,started_at,created_at,updated_at) " +
-          "VALUES (?,?,?,?,?,?, 'ACTIVE', ?, ?, ?, ?, ?)",
+          "INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode," +
+          "allow_text,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at,created_at,updated_at) " +
+          "VALUES (?,?,?,?,?,?, 'ACTIVE', ?, ?,?,?,?,?,?, ?, ?, ?, ?)",
         ).run(sessionId, (lesson.title || '课时') + ' · ' + deliveryMode + ' 夹具课堂', grant.org_id, grant.series_id,
-          lesson.id, teacherId, deliveryMode, teacherId, now, now, now);
+          lesson.id, teacherId, deliveryMode,
+          caps.text, caps.image, caps.music, caps.video, caps.podcast, caps.dubbing,
+          teacherId, now, now, now);
         db.prepare(
           "INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
           "VALUES (?,?,?,?,?,?,'ACTIVE',?,?,?)",

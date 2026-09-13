@@ -126,7 +126,11 @@ try {
   // 3) 学员作品：提交 2 件，limit=1 分页；summary 跨页统计
   const courses = await api('/api/student/courses', { token: student });
   const courseItems = courses.data?.items || courses.data?.courses || [];
-  const lessonId = courseItems?.[0]?.currentLessonId || courseItems?.[0]?.lessons?.[0]?.id || courseItems?.[0]?.lesson?.id || courseItems?.[0]?.id;
+  // ⚠️ 批次 C：`student/courses` 现在的范围是「有许可课包下的**全部**已发布课时」，
+  //    并且**故意包含还没分给这个学生的课包**（列表要能标「未授权」，学生才知道该找老师要什么）。
+  //    所以这里必须挑一个 hasGrant 为真的课包，否则会吃到 COURSE_GRANT_REQUIRED。
+  const grantedCourse = courseItems.find((course) => course.hasGrant !== false) || courseItems[0];
+  const lessonId = grantedCourse?.currentLessonId || grantedCourse?.lessons?.[0]?.id || grantedCourse?.lesson?.id || grantedCourse?.id;
   assert.ok(lessonId, `未获取到课时 ID: ${JSON.stringify(courses.data)}`);
   for (const title of ['P14 作品一', 'P14 作品二']) {
     const created = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lessonId, title } });

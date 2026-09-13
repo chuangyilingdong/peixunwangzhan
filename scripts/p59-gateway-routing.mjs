@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p59-gateway-routing-'));
@@ -214,6 +214,9 @@ try {
   /* ⑥b VibeCoding 对话（SSE，另一条代码路径）也要把「额度用尽」讲成学生听得懂的话 ——
         不归一化的话这里透出去的是「AI渠道认证失败…请在管理后台重新填写并保存该渠道 API Key」，
         那是给运维看的，而真正的原因是这个学生这节课的钱花完了。 */
+  // 批次 B：一个课堂只带一种入口类型，VibeCoding 那条链需要 VIBECODING 课堂。
+  // 种子课时是**只画布**的，所以这里要 `requireSupports:false` 强制切过去。
+  switchClassroom(dbPath, { deliveryMode: 'VIBECODING', requireSupports: false });
   const conversation = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId, title: 'P59 额度耗尽' } });
   check('⑥ 能开一个 VibeCoding 会话', conversation.status === 200 && Boolean(conversation.data?.id), JSON.stringify(conversation).slice(0, 200));
   const chatResponse = await fetch(`http://127.0.0.1:${port}/api/student/vibecoding/conversations/${encodeURIComponent(conversation.data.id)}/messages`, {
@@ -228,6 +231,8 @@ try {
   /* ⑦ 异步任务（worker 是**另一条代码路径**：任务先入队、稍后才在 worker 里真正打上游，
         所以网关出口必须在 worker 里重新解析一遍 —— 靠创建任务时的 selection 是不够的。
         这里把网关上的令牌清空，只有 worker 真的解析过才会又出现一张令牌） */
+  // ⑦ 走的是**画布**链路（异步任务），所以先把课堂入口类型切回 CANVAS。
+  switchClassroom(dbPath, { deliveryMode: 'CANVAS', requireSupports: false });
   { const db = new DatabaseSync(dbPath); db.prepare('UPDATE course_lessons SET per_student_budget_fen=?').run(5000); db.close(); }
   gateway.tokens = [];
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });

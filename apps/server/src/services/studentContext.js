@@ -1,6 +1,5 @@
 import {
   errors,
-  normalizeClass,
   normalizeLesson,
   normalizeSeries,
   normalizeSession,
@@ -29,66 +28,122 @@ function orgCourseAccessSql() {
 }
 
 /**
- * 叠加口径（梳理文档 4.3「名词解释 B」+ 2026-09-13 用户确认）：学生要能上某节课，**两条都得满足** ——
- * ① 这节课在 ta 的班级课单里（教什么）；② ta 持有该课包的**有效学员许可**（还剩几次名额）。
- * 许可由机构在「学员许可」页分发给学员（每次 -1，同一学员同一课包只一次）；一旦被撤销
- * （revoked_at 非空）就立刻进不来 —— 这条是「机构必须有可用次数才能把课包给学生」的落点。
+ * 学生在**课堂名单**里的参与记录（2026-09-13 批次 C）。
+ *
+ * 班级退场之后，「这个学生被排进了哪些课」只剩这一个来源：`session_students`。
+ * 六态：PENDING 待上课 / ACTIVE 上课中 / COMPLETED 已完课 / INCOMPLETE 未完课 / REMOVED 被移除；
+ * **没有任何记录 = 「未加入任何课堂」**（第六种情形，学生端要能看出「等老师把我加进去」）。
+ *
+ * ⚠️ 这里刻意**不**按班级课单过滤 —— 课单概念已退场（用户确认：学生可见课时 = 有许可课包下的
+ *    全部已发布课时），能不能进操作环境由课堂名单决定。
  */
-function studentGrantSql() {
-  return `AND EXISTS (SELECT 1 FROM student_course_grants grant
-            WHERE grant.series_id = series.id AND grant.org_id = ? AND grant.student_id = ? AND grant.revoked_at IS NULL)`;
-}
+export const SESSION_STUDENT_STATE_LABELS = {
+  PENDING: '待上课', ACTIVE: '上课中', COMPLETED: '已完课', INCOMPLETE: '未完课', REMOVED: '被移除',
+};
 
-/** 只判断「这节课在不在这个学生的班级课单里」（不带许可条件），用于区分两种拒绝原因。 */
-function lessonInCurriculum(userId, orgId, courseLessonId) {
-  return Boolean(row(
-    `SELECT 1 AS ok FROM class_members member
-       JOIN classes class ON class.id = member.class_id AND class.status = 'ACTIVE' AND class.org_id = ?
-       JOIN class_curriculum_items curriculum ON curriculum.class_id = class.id AND curriculum.lesson_id = ?
-       JOIN course_lessons lesson ON lesson.id = curriculum.lesson_id AND lesson.status = 'PUBLISHED'
-       JOIN course_series series ON series.id = lesson.series_id AND series.status = 'PUBLISHED'
-       -- ⚠️ orgCourseAccessSql() 的 SQL 里引用了 assignment 这个别名：复用它就必须把这条 JOIN 一起带上，
-       --    否则报 "no such column: assignment.id"（我第一版就是这么错的，服务端日志一眼能看出）
-       LEFT JOIN course_assignments assignment
-         ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
-      WHERE member.user_id = ? AND member.removed_at IS NULL AND ${orgCourseAccessSql()}
-      LIMIT 1`,
-    [orgId, courseLessonId, orgId, userId, orgId],
-  ));
-}
-
-export function getStudentMemberships(user) {
+export function getStudentLessonParticipations(user) {
   const { id: userId, orgId } = studentIdentity(user);
   return rows(
-    `SELECT class.*, teacher.display_name AS teacher_name
-     FROM class_members member
-     JOIN classes class ON class.id = member.class_id
-     LEFT JOIN users teacher ON teacher.id = class.teacher_id AND teacher.org_id = class.org_id
-     WHERE member.user_id = ?
-       AND member.removed_at IS NULL
-       AND class.org_id = ?
-       AND class.status = 'ACTIVE'
-     ORDER BY class.created_at`,
+    `SELECT part.*, session.title session_title, session.status session_status,
+            session.delivery_mode session_delivery_mode, session.started_at session_started_at,
+            session.ended_at session_ended_at, session.ended_reason session_ended_reason,
+            session.ai_paused, session.student_call_cap,
+            session.allow_text, session.allow_image, session.allow_music, session.allow_video,
+            session.allow_podcast, session.allow_dubbing,
+            teacher.display_name teacher_name
+       FROM session_students part
+       JOIN class_sessions session ON session.id = part.session_id
+       LEFT JOIN users teacher ON teacher.id = session.teacher_id
+      WHERE part.student_id = ? AND part.org_id = ?
+      ORDER BY part.added_at DESC`,
     [userId, orgId],
   );
 }
 
+// 同一节课上可能有多条参与记录（上过、被移除、又排进新课堂）：给学生看「最该看的那条」。
+const PARTICIPATION_RANK = { ACTIVE: 0, PENDING: 1, COMPLETED: 2, INCOMPLETE: 3, REMOVED: 4 };
+
+/** 按课时取最佳参与记录（进行中 > 待上课 > 已完课 > 未完课 > 被移除）。 */
+export function participationMapByLesson(participations) {
+  const map = new Map();
+  for (const part of participations) {
+    const current = map.get(part.lesson_id);
+    if (!current) { map.set(part.lesson_id, part); continue; }
+    const next = PARTICIPATION_RANK[part.status] ?? 9;
+    const best = PARTICIPATION_RANK[current.status] ?? 9;
+    if (next < best || (next === best && String(part.added_at || '') > String(current.added_at || ''))) map.set(part.lesson_id, part);
+  }
+  return map;
+}
+
+/** 学生自己的课堂（含六态），给「我的课堂」用。 */
+export function getStudentClassrooms(user) {
+  const { id: userId, orgId } = studentIdentity(user);
+  return rows(
+    `SELECT session.id, session.title, session.status, session.delivery_mode,
+            session.lesson_id, session.series_id, session.started_at, session.ended_at, session.created_at,
+            part.status part_status, part.completed_at, part.completed_cost_fen, part.removed_reason,
+            lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title,
+            teacher.display_name teacher_name
+       FROM session_students part
+       JOIN class_sessions session ON session.id = part.session_id
+       LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
+       LEFT JOIN course_series series ON series.id = session.series_id
+       LEFT JOIN users teacher ON teacher.id = session.teacher_id
+      WHERE part.student_id = ? AND part.org_id = ? AND session.status <> 'DISSOLVED'
+      ORDER BY COALESCE(session.started_at, session.created_at) DESC`,
+    [userId, orgId],
+  ).map((item) => ({
+    id: item.id,
+    title: item.title,
+    status: item.status,
+    deliveryMode: item.delivery_mode || 'CANVAS',
+    lessonId: item.lesson_id,
+    lessonTitle: item.lesson_title || null,
+    lessonSort: item.lesson_sort === null || item.lesson_sort === undefined ? null : Number(item.lesson_sort),
+    seriesId: item.series_id,
+    seriesTitle: item.series_title || null,
+    teacherName: item.teacher_name || null,
+    startedAt: item.started_at || null,
+    endedAt: item.ended_at || null,
+    createdAt: item.created_at || null,
+    // 我在这节课上的状态（六态）
+    studentState: item.part_status,
+    studentStateLabel: SESSION_STUDENT_STATE_LABELS[item.part_status] || item.part_status,
+    completedAt: item.completed_at || null,
+    completedCostFen: Number(item.completed_cost_fen || 0),
+    removedReason: item.removed_reason || null,
+  }));
+}
+
+/**
+ * ⚠️ 2026-09-13 批次 C：原来这里是「班级成员」（`class_members JOIN classes`）。
+ * 班级退场后学生不再有班级，**空数组**是如实的结果；要看「我上着哪些课」请用
+ * `getStudentClassrooms`（课堂）或 dashboard 的 `classroomCourses`。
+ * 保留这个函数只为不炸既有读取方（键还在，值不再有内容）。
+ */
+export function getStudentMemberships() {
+  return [];
+}
+
+/** 学生**正在进行**的课堂（批次 C：从课堂名单取，不再经班级）。 */
 export function getStudentActiveSessions(user) {
   const { id: userId, orgId } = studentIdentity(user);
-  return rows(
-    `SELECT session.*, lesson.title AS lesson_title
-     FROM class_sessions session
-     JOIN classes class ON class.id = session.class_id
-     JOIN class_members member ON member.class_id = class.id
-     LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
-     WHERE member.user_id = ?
-       AND member.removed_at IS NULL
-       AND class.org_id = ?
-       AND class.current_session_id = session.id
-       AND session.status = 'ACTIVE'
-     ORDER BY session.started_at DESC`,
-    [userId, orgId],
-  );
+  const participations = getStudentLessonParticipations(user);
+  return participations
+    .filter((part) => part.session_status === 'ACTIVE' && part.status === 'ACTIVE')
+    .map((part) => ({
+      id: part.session_id,
+      title: part.session_title,
+      classId: null,
+      lessonId: part.lesson_id,
+      lessonTitle: part.session_title || null,
+      status: part.session_status,
+      deliveryMode: part.session_delivery_mode || 'CANVAS',
+      teacherName: part.teacher_name || null,
+      startedAt: part.session_started_at,
+      studentState: part.status,
+    }));
 }
 
 /**
@@ -104,12 +159,21 @@ function grantedSeriesIds(userId, orgId) {
   ).map((item) => item.series_id));
 }
 
-/** The student only sees published lessons in their own organization's class curriculum. */
+/**
+ * 学生可见的「课包 → 已发布课时」清单（2026-09-13 批次 C：**课单概念退场**）。
+ *
+ * 用户确认的新口径：**学生可见课时 = 有许可课包下的全部已发布课时**。
+ * 旧口径是「班级课单 ∩ 有效许可」，课单退场后那条 JOIN 整体去掉了 ——
+ * 「能不能真的进操作环境」不再由这里决定，而由**课堂名单**决定（见 resolveStudentLessonContext）。
+ *
+ * ⚠️ 这里的范围是「本机构可访问的已发布课包」——**含还没有分给该学生的**，
+ *    配上 `hasGrant` 让列表能标「未授权」（B1 口径：学生得知道自己该找老师要什么）。
+ */
 export function getStudentCourses(user) {
   const { id: userId, orgId } = studentIdentity(user);
   const granted = grantedSeriesIds(userId, orgId);
   const items = rows(
-    `SELECT DISTINCT
+    `SELECT
         series.*,
         lesson.id AS lesson_id, lesson.title AS lesson_title,
         lesson.summary AS lesson_summary, lesson.sort AS lesson_sort,
@@ -117,21 +181,15 @@ export function getStudentCourses(user) {
         lesson.prompt_pack_asset_id AS lesson_prompt_pack_asset_id,
         lesson.outcome_pack_asset_id AS lesson_outcome_pack_asset_id,
         lesson.lesson_content AS lesson_lesson_content,
-        lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at,
-        curriculum.class_id AS curriculum_class_id, curriculum.sort AS curriculum_sort
-     FROM class_members member
-     JOIN classes class ON class.id = member.class_id
-       AND class.status = 'ACTIVE' AND class.org_id = ?
-     JOIN class_curriculum_items curriculum ON curriculum.class_id = class.id
-     JOIN course_lessons lesson ON lesson.id = curriculum.lesson_id AND lesson.status = 'PUBLISHED'
-     JOIN course_series series ON series.id = lesson.series_id AND series.status = 'PUBLISHED'
+        lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at
+     FROM course_series series
+     JOIN course_lessons lesson ON lesson.series_id = series.id AND lesson.status = 'PUBLISHED'
      LEFT JOIN course_assignments assignment
        ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
-     WHERE member.user_id = ?
-       AND member.removed_at IS NULL
+     WHERE series.status = 'PUBLISHED'
        AND ${orgCourseAccessSql()}
-     ORDER BY series.sort, series.title, lesson.sort, curriculum.sort`,
-    [orgId, orgId, userId, orgId],
+     ORDER BY series.sort, series.title, lesson.sort`,
+    [orgId, orgId],
   );
 
   const seriesById = new Map();
@@ -144,7 +202,6 @@ export function getStudentCourses(user) {
       series.hasGrant = granted.has(item.id);
       seriesById.set(item.id, series);
     }
-    if (!series.classIds.includes(item.curriculum_class_id)) series.classIds.push(item.curriculum_class_id);
     let lesson = series.lessons.find((candidate) => candidate.id === item.lesson_id);
     if (!lesson) {
       lesson = normalizeLesson({ /* 学生读已发布快照 */ 
@@ -161,10 +218,11 @@ export function getStudentCourses(user) {
         created_at: item.lesson_created_at,
         updated_at: item.lesson_updated_at,
       });
+      // 课单退场后不再有「这节课属于哪些班级」这回事；两个键都留着但恒为空，
+      // 免得既有读取方（学生端卡片）拿到 undefined。真正决定能不能进的是**课堂名单**。
       lesson.classIds = [];
       series.lessons.push(lesson);
     }
-    if (!lesson.classIds.includes(item.curriculum_class_id)) lesson.classIds.push(item.curriculum_class_id);
   }
   return [...seriesById.values()];
 }
@@ -475,6 +533,14 @@ function studentLessonProgressMap(user) {
   return progress;
 }
 
+/** 每个课时的草稿按「最近改动」倒序 —— 「关闭再进入」要复用**同一份**创作，取最近那份才符合直觉。 */
+function sortDraftsByRecency(progressByLesson) {
+  for (const entry of progressByLesson.values()) {
+    entry.draftProjects = [...entry.draftProjects].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  }
+  return progressByLesson;
+}
+
 function studentLatestNotifications(user, limit = 5) {
   const { id: userId, orgId } = studentIdentity(user);
   return rows(
@@ -507,73 +573,142 @@ function studentLatestNotifications(user, limit = 5) {
   }));
 }
 
+/**
+ * 「这节课现在对这名学生是什么状态」—— 学生端**唯一**的可用性算法（2026-09-13 批次 C）。
+ *
+ * 为什么必须只有一处：dashboard 里有**两份**课时清单（`courses` 给学习任务、`classroomCourses`
+ * 给课程中心），它们原来各写一遍判断，改一处漏一处就会出现「卡片上写着能进、点进去被拒」。
+ *
+ * 判定顺序**必须与门禁 resolveStudentLessonContext 一致**（许可 → 课堂名单 → 课堂进行中 → 入口类型），
+ * 否则报的原因会指向错误的人（学生拿「没分课包」去问老师，而真实原因是没排进课堂）。
+ *
+ * 四种情形 + 六态：
+ *   ① 没有效许可                → 未分配（找老师/机构分课包）
+ *   ② 没有效课堂名单记录/被移除   → 未加入任何课堂（等老师把你加进课堂）
+ *   ③ 记录是 PENDING / 课堂没开始 → 已加入未开始（等老师点开始上课）
+ *   ④ 记录 ACTIVE 且课堂 ACTIVE  → 已加入已开始（按课堂入口类型放行）
+ *   ⑤ COMPLETED                 → 已完课（这节课上完了）
+ *   ⑥ INCOMPLETE                → 未完课（没消耗过算力，可以重新排进课堂再上）
+ */
+function lessonAvailability({ lesson, hasGrant, participation }) {
+  const lessonMode = lesson.deliveryMode || 'CANVAS';
+  const partStatus = participation?.status || null;
+  const sessionStatus = participation?.session_status || null;
+  const sessionMode = participation?.session_delivery_mode || null;
+  const inRoster = Boolean(partStatus) && partStatus !== 'REMOVED';
+  const sessionLive = inRoster && partStatus === 'ACTIVE' && sessionStatus === 'ACTIVE';
+  const canStart = Boolean(hasGrant) && sessionLive && sessionMode === 'CANVAS';
+  const canStartVibeCoding = Boolean(hasGrant) && sessionLive && sessionMode === 'VIBECODING';
+
+  // 原因：先许可、再课堂名单、再课堂是否开始、最后入口类型 —— 与门禁同序
+  const reason = !hasGrant
+    ? '老师还没有把这个课包分给你，请联系老师'
+    : partStatus === 'REMOVED'
+      ? '老师已经把你移出了这个课堂：等老师重新把你加进课堂'
+      : !inRoster
+        ? '老师还没有把这节课的课堂安排给你：请让老师把你加进课堂'
+        : partStatus === 'COMPLETED'
+          ? '这节课你已经完课了：可以上这个课包的其他课时'
+          : partStatus === 'INCOMPLETE'
+            ? '这节课没上完（没消耗过算力）：等老师把你重新排进课堂就能再上'
+            : sessionStatus === 'PENDING' || partStatus === 'PENDING'
+              ? '老师还没开始上课，等老师点「开始上课」就能进'
+              : sessionMode === 'VIBECODING'
+                ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
+                : '这节课的课堂已经结束，请联系老师重新安排';
+  const vibeReason = !hasGrant
+    ? '老师还没有把这个课包分给你，请联系老师'
+    : partStatus === 'REMOVED'
+      ? '老师已经把你移出了这个课堂：等老师重新把你加进课堂'
+      : !inRoster
+        ? '老师还没有把这节课的课堂安排给你：请让老师把你加进课堂'
+        : partStatus === 'COMPLETED'
+          ? '这节课你已经完课了：可以上这个课包的其他课时'
+          : partStatus === 'INCOMPLETE'
+            ? '这节课没上完（没消耗过算力）：等老师把你重新排进课堂就能再上'
+            : sessionStatus === 'PENDING' || partStatus === 'PENDING'
+              ? '老师还没开始 VibeCoding 课堂，等老师点「开始上课」就能进'
+              : sessionMode === 'CANVAS'
+                ? '老师开启的是画布课堂，本课时不走 VibeCoding'
+                : '这节课的课堂已经结束，请联系老师重新安排';
+
+  return {
+    lessonMode,
+    sessionMode: sessionMode || null,
+    participationStatus: partStatus,
+    participationLabel: partStatus ? (SESSION_STUDENT_STATE_LABELS[partStatus] || partStatus) : '未加入课堂',
+    // 「现在能上」= 有许可 + 在名单里 + 课堂进行中；入口类型决定走哪条路
+    activeNow: sessionLive,
+    inRoster,
+    canStart,
+    canStartVibeCoding,
+    completedAt: participation?.completed_at || null,
+    completedCostFen: Number(participation?.completed_cost_fen || 0),
+    teacherName: participation?.teacher_name || null,
+    sessionTitle: participation?.session_title || null,
+    blockReason: canStart ? null : reason,
+    vibeCodingBlockReason: canStartVibeCoding ? null : vibeReason,
+    session: participation && sessionLive ? {
+      id: participation.session_id,
+      classId: null,
+      teacherName: participation.teacher_name || null,
+      startedAt: participation.session_started_at || null,
+      deliveryMode: sessionMode,
+      capabilities: {
+        allowText: participation.allow_text === undefined ? true : Boolean(participation.allow_text),
+        allowImage: Boolean(participation.allow_image),
+        allowMusic: Boolean(participation.allow_music),
+        allowVideo: Boolean(participation.allow_video),
+        allowPodcast: Boolean(participation.allow_podcast),
+        allowDubbing: Boolean(participation.allow_dubbing),
+      },
+    } : null,
+  };
+}
+
 export function buildStudentDashboard(user) {
   const context = buildStudentContext(user);
   const { id: userId, orgId } = studentIdentity(user);
-  const progressByLesson = studentLessonProgressMap(user);
-  const classById = new Map(context.classes.map((item) => [item.id, item]));
-  const activeSessionByKey = new Map(context.activeSessions.filter((item) => item.lessonId).map((item) => [`${item.classId}:${item.lessonId}`, item]));
+  const progressByLesson = sortDraftsByRecency(studentLessonProgressMap(user));
+  // 批次 C：这节课对学生「是什么状态」全部由**课堂名单**决定（班级退场，没有 class 这一层了）
+  const participationByLesson = participationMapByLesson(getStudentLessonParticipations(user));
   // 「今天」只由**正在进行的课堂**决定（2026-09-11 删掉课堂任务后不再有「今天到期的任务」这个来源；
   // learning_tasks 表保留历史数据，代码不再读写）。
   const allLessonTasks = [];
   const courses = context.courses.map((course) => {
     const courseHasGrant = Boolean(course.hasGrant);
-    const assignedClasses = (course.classIds || []).map((classId) => classById.get(classId)).filter(Boolean);
-    const primaryClass = assignedClasses[0] || null;
     const lessons = (course.lessons || []).map((lesson) => {
       const progress = progressByLesson.get(lesson.id) || {
         projectCount: 0, draftProjects: [], workCount: 0, works: [], bestWorkStatus: null,
         feedbackCount: 0, unreadFeedbackCount: 0, unreadAnnotationCount: 0, overallUnreadCount: 0, lastActivityAt: null,
       };
-      const activeCandidates = assignedClasses
-        .map((item) => activeSessionByKey.get(`${item.id}:${lesson.id}`))
-        .filter(Boolean);
-      const session = activeCandidates.find((item) => item.deliveryMode === 'CANVAS') || activeCandidates[0] || null;
-      const sessionClass = session ? classById.get(session.classId) : null;
-      const isToday = Boolean(session);
-      const lessonMode = lesson.deliveryMode || 'CANVAS';
-      const sessionMode = session?.deliveryMode || null;
-      const homePractice = rawValue(user, 'student_usage_scope', 'studentUsageScope') === 'HOME_PRACTICE';
-      // 没有学员许可就一定进不去（门禁在 resolveStudentLessonContext 里是硬条件），
-      // 列表上不能显示成「已开课」—— 否则学生点进去才吃到 COURSE_GRANT_REQUIRED。
-      const canStart = courseHasGrant && sessionMode === 'CANVAS';
-      const canStartVibeCoding = courseHasGrant && (sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING'));
+      const state = lessonAvailability({ lesson, hasGrant: courseHasGrant, participation: participationByLesson.get(lesson.id) });
+      const isToday = state.activeNow;
+      const { canStart, canStartVibeCoding } = state;
       const task = {
         lessonId: lesson.id,
         lessonTitle: lesson.title,
         lessonSummary: lesson.summary || '',
         courseId: course.id,
         courseTitle: course.title,
-        classId: sessionClass?.id || primaryClass?.id || null,
-        className: sessionClass?.name || primaryClass?.name || null,
-        teacherName: sessionClass?.teacherName || primaryClass?.teacherName || null,
+        // 班级退场：classId/className 恒为 null，只有「负责老师」还有意义
+        classId: null,
+        className: null,
+        teacherName: state.teacherName,
         status: progress.bestWorkStatus || (progress.projectCount > 0 ? 'IN_PROGRESS' : 'NOT_STARTED'),
         today: isToday,
-        activeNow: Boolean(session),
+        activeNow: state.activeNow,
         canStart,
         canStartVibeCoding,
-        deliveryMode: sessionMode || lessonMode,
-        blockReason: !courseHasGrant
-          ? '老师还没有把这个课包分给你，请联系老师'
-          : canStart
-            ? null
-            : sessionMode === 'VIBECODING'
-              ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
-              : '等待老师开始上课',
-        vibeCodingBlockReason: !courseHasGrant
-          ? '老师还没有把这个课包分给你，请联系老师'
-          : canStartVibeCoding
-            ? null
-            : sessionMode === 'CANVAS'
-              ? '老师开启的是画布课堂，本课时不走 VibeCoding'
-              : '等待老师开始 VibeCoding 课堂',
-        session: session ? {
-          id: session.id,
-          classId: session.classId,
-          startedAt: session.startedAt,
-          deliveryMode: session.deliveryMode,
-          capabilities: session.capabilities,
-        } : null,
+        deliveryMode: state.sessionMode || state.lessonMode,
+        participationStatus: state.participationStatus,
+        participationLabel: state.participationLabel,
+        completedAt: state.completedAt,
+        completedCostFen: state.completedCostFen,
+        sessionTitle: state.sessionTitle,
+        blockReason: state.blockReason,
+        vibeCodingBlockReason: state.vibeCodingBlockReason,
+        session: state.session,
         progress: {
           projectCount: progress.projectCount,
           draftCount: progress.draftProjects.length,
@@ -589,8 +724,10 @@ export function buildStudentDashboard(user) {
       return {
         ...lesson,
         courseTitle: course.title,
-        classId: task.classId,
-        className: task.className,
+        classId: null,
+        className: null,
+        participationStatus: state.participationStatus,
+        participationLabel: state.participationLabel,
         today: task.today,
         activeNow: task.activeNow,
         status: task.status,
@@ -614,29 +751,11 @@ export function buildStudentDashboard(user) {
     };
   });
 
-  const assignedLessonById = new Map();
-  for (const course of context.courses) {
-    for (const lesson of course.lessons || []) {
-      const existing = assignedLessonById.get(lesson.id);
-      if (!existing) assignedLessonById.set(lesson.id, lesson);
-      else {
-        existing.classIds = [...new Set([...(existing.classIds || []), ...(lesson.classIds || [])])];
-      }
-    }
-  }
+  // 课程中心那份清单（学生端「课程中心」渲染的就是它）。范围＝本机构可访问的已发布课包，
+  // 所以在「我的课程」里能看到自己还没被分配的课包（标「未授权」，学生知道该找老师要什么）。
   const classroomCourses = getStudentAccessibleCourses(user).map((course) => {
     const courseHasGrant = Boolean(course.hasGrant);
     const lessons = (course.lessons || []).map((lesson) => {
-      const assignedLesson = assignedLessonById.get(lesson.id);
-      const assignedClasses = (assignedLesson?.classIds || [])
-        .map((classId) => classById.get(classId))
-        .filter(Boolean);
-      const activeCandidates = assignedClasses
-        .map((classItem) => activeSessionByKey.get(`${classItem.id}:${lesson.id}`))
-        .filter(Boolean);
-      const lessonMode = lesson.deliveryMode || 'CANVAS';
-      const session = activeCandidates.find((item) => item.deliveryMode === 'CANVAS') || activeCandidates[0] || null;
-      const sessionClass = session ? classById.get(session.classId) : null;
       const progress = progressByLesson.get(lesson.id) || {
         projectCount: 0,
         draftProjects: [],
@@ -646,52 +765,30 @@ export function buildStudentDashboard(user) {
         unreadFeedbackCount: 0,
         lastActivityAt: null,
       };
-      const sessionMode = session?.deliveryMode || null;
-      const homePractice = rawValue(user, 'student_usage_scope', 'studentUsageScope') === 'HOME_PRACTICE';
-      const canStart = courseHasGrant && sessionMode === 'CANVAS';
-      const canStartVibeCoding = courseHasGrant && (sessionMode === 'VIBECODING' || (!sessionMode && homePractice && lessonMode === 'VIBECODING'));
-      const classId = sessionClass?.id || assignedClasses[0]?.id || null;
-      const continueProject = progress.draftProjects.find((project) => project.classId === classId)
-        || progress.draftProjects[0]
-        || null;
+      const state = lessonAvailability({ lesson, hasGrant: courseHasGrant, participation: participationByLesson.get(lesson.id) });
+      // 「关闭再进入复用同一份创作」：progressByLesson 就是按课时分的，draftProjects 已按最近改动倒序，
+      // 所以取第一篇即「这节课最近在做的那个草稿」—— 绝不因为 classId 对不上而新开一个项目。
+      const continueProject = progress.draftProjects[0] || null;
       return {
         ...lesson,
-        classId,
-        className: sessionClass?.name || assignedClasses[0]?.name || null,
-        teacherName: sessionClass?.teacherName || assignedClasses[0]?.teacherName || null,
-        assigned: assignedClasses.length > 0,
-        activeNow: Boolean(session),
-        canStart,
-        canStartVibeCoding,
+        classId: null,
+        className: null,
+        teacherName: state.teacherName,
+        assigned: state.inRoster,
+        activeNow: state.activeNow,
+        canStart: state.canStart,
+        canStartVibeCoding: state.canStartVibeCoding,
         hasGrant: courseHasGrant,
-        deliveryMode: sessionMode || lessonMode,
-        blockReason: canStart
-          ? null
-          : sessionMode === 'VIBECODING'
-            ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
-            : !assignedClasses.length
-              // 顺序跟着门禁走：先在不在课单，再谈有没有许可（否则会把「不在课单」的学生
-              // 误报成「没分课包」，让他去找错人 —— 这两种原因门禁里是分开报的）
-              ? '老师尚未把本课时加入你的班级课程表'
-              : courseHasGrant
-                ? '等待老师开始上课'
-                : '老师还没有把这个课包分给你，请联系老师',
-        vibeCodingBlockReason: canStartVibeCoding
-          ? null
-          : sessionMode === 'CANVAS'
-            ? '老师开启的是画布课堂，本课时不走 VibeCoding'
-            : !assignedClasses.length
-              ? '老师尚未把本课时加入你的班级课程表'
-              : courseHasGrant
-                ? '等待老师开始 VibeCoding 课堂'
-                : '老师还没有把这个课包分给你，请联系老师',
-        session: session ? {
-          id: session.id,
-          classId: session.classId,
-          startedAt: session.startedAt,
-          deliveryMode: session.deliveryMode,
-          capabilities: session.capabilities,
-        } : null,
+        deliveryMode: state.sessionMode || state.lessonMode,
+        // 六态 + 完课/未完课要落到学生侧（用户口径）：这些字段就是「四种情形」在界面上的落点
+        participationStatus: state.participationStatus,
+        participationLabel: state.participationLabel,
+        sessionTitle: state.sessionTitle,
+        completedAt: state.completedAt,
+        completedCostFen: state.completedCostFen,
+        blockReason: state.blockReason,
+        vibeCodingBlockReason: state.vibeCodingBlockReason,
+        session: state.session,
         status: progress.bestWorkStatus || (progress.projectCount > 0 ? 'IN_PROGRESS' : 'NOT_STARTED'),
         projectCount: progress.projectCount,
         draftCount: progress.draftProjects.length,
@@ -749,7 +846,9 @@ export function buildStudentDashboard(user) {
     courses,
     classroomCourses,
     summary: {
-      classCount: context.classes.length,
+      // 班级退场：classCount 恒为 0（键留着不炸既有读取方）；课堂口径看 classroomCount
+      classCount: 0,
+      classroomCount: (context.classrooms || []).length,
       courseCount: courses.length,
       classroomCourseCount: classroomCourses.length,
       classroomLessonCount: classroomCourses.reduce((total, course) => total + course.lessons.length, 0),
@@ -783,14 +882,22 @@ export function resolveProjectUsageContext(user, project) {
   return resolveStudentLessonContext(user, project.course_lesson_id, project.class_id);
 }
 
+/**
+ * 学生这块的「上下文」（班级退场后的口径，2026-09-13 批次 C）：
+ *   · `classes` 恒为空数组 —— 学生不再属于任何班级（键留着不炸既有读取方）。
+ *   · `classrooms` 是新的那道菜：他名下的课堂 + 六态。
+ *   · `activeSessions` 是**正在进行**的课堂（从课堂名单取，不再经班级）。
+ *   · `canUseNow` 只看「有没有正在进行的课堂」—— **不再有「在家练习免课堂」这条通道**
+ *     （用户 2026-09-13 决定取消：有许可只代表能看课包与课时信息）。
+ */
 export function buildStudentContext(user) {
-  const classes = getStudentMemberships(user);
   const activeSessions = getStudentActiveSessions(user);
-  const scope = rawValue(user, 'student_usage_scope', 'studentUsageScope');
-  const canUseNow = scope === 'HOME_PRACTICE' || activeSessions.length > 0;
+  const classrooms = getStudentClassrooms(user);
+  const canUseNow = activeSessions.length > 0;
   return {
     user: normalizeUser(user, { includeAuthMeta: true }),
-    classes: classes.map((item) => normalizeClass(item, { detail: true })),
+    classes: [],
+    classrooms,
     activeSessions: activeSessions.map(normalizeSession),
     courses: getStudentCourses(user),
     canUseNow,

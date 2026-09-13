@@ -10,6 +10,7 @@
 //   ② 未结束的参与（待上课/上课中）也不允许被别的课堂同时占用；
 //   ③ 被移除 = 解锁（可以再被其他课堂加）。
 import { errors, id, nowIso, q, row, rows, transaction } from '../lib.js';
+import { computePoolSummary } from './computePool.js';
 
 /** 教师只能碰自己创建的课堂；机构管理员可以碰本机构所有课堂。 */
 export function assertSessionManager(auth, session) {
@@ -92,7 +93,13 @@ export function sessionCandidates(session) {
   const blocked = [];
   const alreadyIn = [];
   for (const student of students) {
-    const base = { id: student.id, login: student.login, name: student.display_name || student.login, accountStatus: student.status };
+    // 算力池摘要挂在**每一条**候选上（可加 / 不可加 / 已在这节课上）——
+    // 老师挑人时要能看出「谁快用完了」，而这个人可能正好因为别的原因暂时不可加。
+    // 口径与学生端同一个 computePoolSummary（不是另算一个数）。
+    const base = {
+      id: student.id, login: student.login, name: student.display_name || student.login, accountStatus: student.status,
+      ...candidatePool(student.id, session.series_id, session.series_title),
+    };
     const own = row(
       'SELECT status FROM session_students WHERE session_id=? AND student_id=? AND status<>\'REMOVED\'',
       [session.id, student.id],
@@ -120,6 +127,18 @@ export function sessionCandidates(session) {
     selectable.push(base);
   }
   return { selectable, blocked, alreadyIn };
+}
+
+/** 候选人的算力池摘要（老师端口径）。没有课包/没填预算 → unlimited。 */
+function candidatePool(studentId, seriesId, seriesTitle) {
+  if (!seriesId) return { poolUnlimited: true, poolCapYuan: null, poolRemainYuan: null, poolPercent: null };
+  const pool = computePoolSummary({ userId: studentId, seriesId, seriesTitle });
+  return {
+    poolUnlimited: pool.unlimited,
+    poolCapYuan: pool.capYuan,
+    poolRemainYuan: pool.remainYuan,
+    poolPercent: pool.usagePercent,
+  };
 }
 
 /**

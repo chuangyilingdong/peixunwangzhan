@@ -14,7 +14,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
+import { createClassroom } from './lib/classroomApi.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p62-pool-visible-'));
@@ -38,11 +39,14 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const seeded = { seriesId: '', lessonId: '', classId: '' };
+const seeded = { seriesId: '', lessonId: '', lessonSecondId: '', classId: '' };
 {
   const db = new DatabaseSync(dbPath);
   const lesson = db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get();
   seeded.lessonId = lesson.id; seeded.seriesId = lesson.series_id;
+  // 候选池那条要用**另一节课**：夹具已经把这节课开成课堂了，同一节课上他会被判「已在别的课堂」。
+  // 池子是**按课包**算的，所以换一节课不影响口径。
+  seeded.lessonSecondId = db.prepare('SELECT id FROM course_lessons WHERE series_id=? AND id<>? ORDER BY sort LIMIT 1').get(lesson.series_id, lesson.id)?.id || lesson.id;
   seeded.classId = db.prepare('SELECT id FROM classes LIMIT 1').get()?.id || '';
   // 课时开 text 能力 + VibeCoding 类型（画布与对话两条路都要能进）
   db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
@@ -104,7 +108,11 @@ try {
   check('② 带上课包名字（学生知道这是哪门课的额度）', Boolean(pool.seriesTitle), JSON.stringify({ seriesTitle: pool.seriesTitle }));
 
   /* ③ VibeCoding 会话详情也带同一份（学生另一个创作入口） */
-  const conversation = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId, classId: seeded.classId, title: 'P62 会话' } });
+  // 批次 B：一个课堂只带一种入口类型，VibeCoding 那条链需要 VIBECODING 课堂。
+  // 种子课时是**只画布**的，所以这里要 `requireSupports:false` 强制切过去。
+  // （③ 之后只读项目详情/排课候选，都不要求画布入口，所以不必切回来。）
+  switchClassroom(dbPath, { deliveryMode: 'VIBECODING', requireSupports: false });
+  const conversation = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId, title: 'P62 会话' } });
   check('③ 能开会话', conversation.status === 200 && Boolean(conversation.data?.id), JSON.stringify(conversation).slice(0, 200));
   const conversationDetail = await api(`/api/student/vibecoding/conversations/${encodeURIComponent(conversation.data.id)}`, { token: student });
   check('③ VibeCoding 会话详情带同一份算力池摘要（与画布同源）',
@@ -112,8 +120,10 @@ try {
     JSON.stringify(conversationDetail.data?.computePool));
 
   /* ④ 机构端排课候选：每个学员带他在这个课包的剩余（老师能看出谁快用完了） */
-  const candidates = await api(`/api/org/classes/${encodeURIComponent(seeded.classId)}/lesson-candidates?lessonId=${encodeURIComponent(lessonId)}`, { token: org });
-  const me = candidates.data?.items?.find((item) => item.studentId === identity.id);
+  // 批次 D：排课候选从「班级 + 课时」换成**课堂候选人**（同一份算力池口径挂在可加名单上）
+  const openSession = await createClassroom(api, org, { lessonId: seeded.lessonSecondId, title: 'P62 候选池课堂' });
+  const candidates = await api(`/api/org/sessions/${encodeURIComponent(openSession)}/candidates`, { token: org });
+  const me = candidates.data?.selectable?.concat(candidates.data?.blocked || [], candidates.data?.alreadyIn || []).find((item) => item.id === identity.id);
   check('④ 排课候选项带算力池字段', Boolean(me) && 'poolRemainYuan' in me && 'poolUnlimited' in me, JSON.stringify(me));
   check('④ 该学员剩余 150 元 / 已用 25%（与闸门、学生端三处一致）',
     me?.poolRemainYuan === 150 && me?.poolPercent === 25 && me?.poolCapYuan === 200, JSON.stringify(me));
@@ -121,8 +131,8 @@ try {
   /* ⑤ 三处同源：把消耗改成 180 元，三处一起变（不是各自算各自的） */
   addSpend(identity.id, identity.org_id, 13000); // 再花 130 → 合计 180
   const studentAgain = await api(`/api/student/projects/${encodeURIComponent(project.data.id)}`, { token: student });
-  const candidatesAgain = await api(`/api/org/classes/${encodeURIComponent(seeded.classId)}/lesson-candidates?lessonId=${encodeURIComponent(lessonId)}`, { token: org });
-  const meAgain = candidatesAgain.data?.items?.find((item) => item.studentId === identity.id);
+  const candidatesAgain = await api(`/api/org/sessions/${encodeURIComponent(openSession)}/candidates`, { token: org });
+  const meAgain = candidatesAgain.data?.selectable?.concat(candidatesAgain.data?.blocked || [], candidatesAgain.data?.alreadyIn || []).find((item) => item.id === identity.id);
   check('⑤ 消耗更新后：学生端剩余 20 元 / 90%', studentAgain.data?.computePool?.remainYuan === 20 && studentAgain.data?.computePool?.usagePercent === 90, JSON.stringify(studentAgain.data?.computePool));
   check('⑤ 消耗更新后：老师端同一格也变成 20 元 / 90%（同源）', meAgain?.poolRemainYuan === 20 && meAgain?.poolPercent === 90, JSON.stringify(meAgain));
 

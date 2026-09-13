@@ -55,7 +55,9 @@ try {
 
   // ② 保留的接口必须还活着（比 ① 更要紧：删多了就是这时候照出来）
   await alive('机构总览', admin, '/org/overview');
-  await alive('机构班级列表', admin, '/org/classes');
+  // 批次 D：班级退场 —— /org/classes 已下线，保留的「课」入口换成课堂列表
+  await alive('机构课堂列表', admin, '/org/sessions');
+  await gone('旧机构班级列表（已随班级退场下线）', admin, '/org/classes');
   await alive('机构成员列表', admin, '/org/users');
   await alive('机构作品列表', admin, '/org/works');
   await alive('机构举报列表', admin, '/org/work-reports');

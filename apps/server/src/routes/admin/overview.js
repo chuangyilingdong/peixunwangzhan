@@ -84,7 +84,6 @@ import {
   setStudentEnrollmentAccess,
   softDeleteStudent,
   teacherCanAccessClass,
-  teacherScope,
   userLoginMeta,
   validateImportItem,
   validateMemberPermissions,

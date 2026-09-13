@@ -55,6 +55,12 @@ try {
   q("INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,credits_charged,created_at) VALUES ('job1','org1','stu1','proj1','IMAGE','local-mock','canvas-mock-v1','测试','SUCCEEDED',1,?)", [now]);
   q("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset1','job1','org1','stu1','proj1','IMAGE','素材','mock://asset1',?)", [now]);
 
+  // 批次 B：门禁第②③步要求「老师把学生排进某个**进行中的课堂**」—— 这条守卫是**进程内**跑的
+  // （不起 HTTP 服务），所以直接对同一个库跑夹具补齐这一环；少了它，handleAiGeneration 会在
+  // resolveStudentLessonContext 里抛 NOT_IN_CLASSROOM。夹具只认已有许可，不自己造许可。
+  const { ensureClassroom } = await import('./lib/classroomFixture.mjs');
+  ensureClassroom(process.env.PLATFORM_DB_PATH);
+
   const dbUser = row("SELECT * FROM users WHERE id='stu1'");
   const auth = { user: normalizeUser(dbUser, { includeAuthMeta: true }), rawUser: dbUser, org: row("SELECT * FROM organizations WHERE id='org1'") };
   const aiCtx = (body) => ({ pathname: '/api/ai/generations/async', method: 'POST', auth, body, search: new URLSearchParams(), req: { socket: { remoteAddress: '127.0.0.1' } } });
@@ -194,3 +200,6 @@ try {
 } finally {
   // 临时目录留给 OS 清理；不触碰任何项目/生产数据。
 }
+// ⚠️ 必须显式退出：这条守卫在**进程内**直接调服务端模块（不起 HTTP 服务），生成 worker / 定时器
+//    会把事件循环留在打开状态 —— 用例跑完、日志也打过了，进程却不自己结束（冒烟里表现为 180s 超时）。
+process.exit(0);

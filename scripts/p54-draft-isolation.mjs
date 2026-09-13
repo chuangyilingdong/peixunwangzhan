@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { openClassroom } from './lib/classroomApi.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p54-draft-'));
@@ -54,14 +55,13 @@ try {
   const seriesId = created.data.id;
   const lessonId = created.data.lessons[0].id;
 
-  // 首次发布 + 授权 + 排进班级（学生能读到）
+  // 首次发布 + 授权 + **发许可 + 建课堂把学生排进去**（学生才能进这节课）
+  // 批次 D：原来走「建班级 → 配课单」，班级退场后改成直接建课堂（scripts/lib/classroomApi.mjs）
   await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
   await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365 } });
-  const classes = await api('/api/org/classes', { token: orgAdmin.token });
-  const classRow = (classes.data.items || []).find((c) => Number(c.studentCount || 0) > 0) || (classes.data.items || [])[0];
-  const curriculum = await api(`/api/org/classes/${classRow.id}/curriculum`, { token: orgAdmin.token });
-  const existing = (curriculum.data.items || []).map((i) => i.lessonId || i.id).filter(Boolean);
-  await api(`/api/org/classes/${classRow.id}/curriculum`, { method: 'PUT', token: orgAdmin.token, body: { lessonIds: [...new Set([...existing, lessonId])] } });
+  const studentId = student.user?.id || student.data?.user?.id;
+  await api('/api/org/course-grants', { method: 'POST', token: orgAdmin.token, body: { seriesId, studentIds: [studentId] } });
+  await openClassroom(api, orgAdmin.token, { lessonId, title: 'P54 课堂', studentIds: [studentId] });
 
   const orgRead = async () => JSON.stringify((await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token })).data);
   const studentRead = async () => JSON.stringify((await api(`/api/student/projects`, { method: 'POST', token: student.token, body: { courseLessonId: lessonId, title: 'P54' } })).data);

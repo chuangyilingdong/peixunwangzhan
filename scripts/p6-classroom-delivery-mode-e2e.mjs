@@ -103,17 +103,15 @@ try {
 
   const teacher = await login('teacher-1', 'teach123');
   const student = await login('student-1', 'study123');
+  const studentId = (await api('/api/me', { token: student })).data?.user?.id || (await api('/api/me', { token: student })).data?.id;
 
-  const classes = await api('/api/org/classes', { token: teacher });
-  assertStatus(classes, 200, '教师读取班级失败');
-  const classItem = classes.data?.items?.find((item) => item.status === 'ACTIVE') || classes.data?.items?.[0];
-  assert.ok(classItem?.id, `没有可用班级: ${JSON.stringify(classes.raw)}`);
-
-  const curriculum = await api(`/api/org/classes/${classItem.id}/curriculum`, { token: teacher });
-  assertStatus(curriculum, 200, '教师读取课单失败');
-  const lessonItem = curriculum.data?.items?.[0];
-  const lessonId = lessonItem?.lessonId || lessonItem?.lesson_id || lessonItem?.id;
-  assert.ok(lessonId, `没有可用课时: ${JSON.stringify(curriculum.raw)}`);
+  // 批次 D（班级退场）：课时来源从「班级课单」换成**机构已授权的课包**（课单已退场）
+  const courses = await api('/api/org/course-series?limit=200', { token: teacher });
+  assertStatus(courses, 200, '教师读取课包失败');
+  const studentCourses = await api('/api/student/courses', { token: student });
+  const grantedCourse = (studentCourses.data?.items || []).find((course) => course.hasGrant !== false);
+  const lessonId = (grantedCourse?.lessons || []).find((lesson) => lesson.status === 'PUBLISHED')?.id;
+  assert.ok(lessonId, `没有可用课时: ${JSON.stringify(courses.raw).slice(0, 200)}`);
 
   const beforeClass = await api('/api/student/projects', {
     method: 'POST',
@@ -124,7 +122,7 @@ try {
   // 2026-09-13（批次 B）：取消免课堂通道后，未开课时学生是「还没被加进课堂」而不是「课堂没开始」
   assert.equal(errorCode(beforeClass), 'NOT_IN_CLASSROOM');
 
-  const canvasSession = await api(`/api/org/classes/${classItem.id}/sessions/start`, {
+  const canvasSession = await api(`/api/org/sessions`, {
     method: 'POST',
     token: teacher,
     body: { lessonId },
@@ -132,6 +130,11 @@ try {
   assertStatus(canvasSession, 200, '默认 Canvas 课堂开课失败');
   assert.equal(canvasSession.data?.deliveryMode, 'CANVAS');
   assert.equal(readDeliveryMode(canvasSession.data.id), 'CANVAS');
+  // 批次 B：有许可 ≠ 能进 —— 还得被老师排进这节课的课堂，并且老师点了开始上课
+  const roster = await api(`/api/org/sessions/${canvasSession.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [studentId] } });
+  assertStatus(roster, 200, '把学生排进 Canvas 课堂失败');
+  const startedCanvas = await api(`/api/org/sessions/${canvasSession.data.id}/start`, { method: 'POST', token: teacher, body: {} });
+  assertStatus(startedCanvas, 200, '开始 Canvas 课堂失败');
 
   const canvasProject = await api('/api/student/projects', {
     method: 'POST',
@@ -143,7 +146,7 @@ try {
   assert.equal(canvasProject.data?.classSessionId, canvasSession.data.id);
   assert.equal(canvasProject.data?.courseLessonId, lessonId);
 
-  const endCanvas = await api(`/api/org/classes/${classItem.id}/sessions/${canvasSession.data.id}/end`, {
+  const endCanvas = await api(`/api/org/sessions/${canvasSession.data.id}/end`, {
     method: 'POST',
     token: teacher,
     body: { reason: 'DELIVERY_MODE_E2E_CANVAS_DONE' },
@@ -159,7 +162,7 @@ try {
   assertStatus(afterCanvas, 403, '结束课堂后学生仍可创建项目');
   assert.equal(errorCode(afterCanvas), 'NOT_IN_CLASSROOM');
 
-  const vibeSession = await api(`/api/org/classes/${classItem.id}/sessions/start`, {
+  const vibeSession = await api(`/api/org/sessions`, {
     method: 'POST',
     token: teacher,
     body: { lessonId, deliveryMode: 'VIBECODING' },
@@ -167,6 +170,10 @@ try {
   assertStatus(vibeSession, 200, 'VibeCoding 课堂开课失败');
   assert.equal(vibeSession.data?.deliveryMode, 'VIBECODING');
   assert.equal(readDeliveryMode(vibeSession.data.id), 'VIBECODING');
+  const vibeRoster = await api(`/api/org/sessions/${vibeSession.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [studentId] } });
+  assertStatus(vibeRoster, 200, '把学生排进 VibeCoding 课堂失败');
+  const startedVibe = await api(`/api/org/sessions/${vibeSession.data.id}/start`, { method: 'POST', token: teacher, body: {} });
+  assertStatus(startedVibe, 200, '开始 VibeCoding 课堂失败');
 
   const dashboard = await api('/api/student/dashboard', { token: student });
   assertStatus(dashboard, 200, '学生 dashboard 读取失败');
@@ -188,7 +195,7 @@ try {
   assertStatus(vibeProject, 403, 'VibeCoding 活动课堂错误地创建了 Canvas 项目');
   assert.equal(errorCode(vibeProject), 'VIBECODING_CLASSROOM_UNAVAILABLE');
 
-  const endVibe = await api(`/api/org/classes/${classItem.id}/sessions/${vibeSession.data.id}/end`, {
+  const endVibe = await api(`/api/org/sessions/${vibeSession.data.id}/end`, {
     method: 'POST',
     token: teacher,
     body: { reason: 'DELIVERY_MODE_E2E_VIBECODING_DONE' },
@@ -196,7 +203,7 @@ try {
   assertStatus(endVibe, 200, '结束 VibeCoding 课堂失败');
   assert.equal(endVibe.data?.status, 'ENDED');
 
-  const invalidMode = await api(`/api/org/classes/${classItem.id}/sessions/start`, {
+  const invalidMode = await api(`/api/org/sessions`, {
     method: 'POST',
     token: teacher,
     body: { lessonId, deliveryMode: 'NOT_A_CLASSROOM' },
@@ -207,7 +214,7 @@ try {
   console.log(JSON.stringify({
     name: 'p6-classroom-delivery-mode-e2e',
     pass: true,
-    classId: classItem.id,
+    
     lessonId,
     canvasSessionId: canvasSession.data.id,
     vibeSessionId: vibeSession.data.id,

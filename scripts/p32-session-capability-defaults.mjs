@@ -55,19 +55,11 @@ try {
   const teacher = (await api('/api/auth/login', { method: 'POST', body: { login: 'teacher-1', password: 'teach123' } })).data.token;
   assert.ok(rootToken && teacher, '登录失败');
 
-  const classes = (await api('/api/org/classes', { token: teacher })).data.items;
-  const cls = classes[0];
-  const curriculum = (await api(`/api/org/classes/${cls.id}/curriculum`, { token: teacher })).data.items;
-  const lessonId = curriculum[0].lessonId || curriculum[0].lesson_id;
-  assert.ok(lessonId, '班级应有课单课时');
-
-  // 关掉正在进行的课堂，保证能重新开课
-  await api(`/api/org/classes/${cls.id}/sessions/${cls.currentSessionId || 'none'}/end`, { method: 'POST', token: teacher }).catch(() => {});
-  const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
-  db.prepare("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE class_id=? AND status='ACTIVE'").run(new Date().toISOString(), cls.id);
-  db.prepare('UPDATE classes SET current_session_id=NULL WHERE id=?').run(cls.id);
-  db.close();
+  // 批次 D（班级退场）：搭场景从「建班级 → 配课单 → 班级开课」改成**直接建课堂**；
+  // 能力默认值也在**建课堂**这一刻算（新接口没有单独改能力的端点）。
+  const series = (await api('/api/org/course-series?limit=200', { token: teacher })).data.items;
+  const lessonId = (series[0]?.lessons || [])[0]?.id;
+  assert.ok(lessonId, `机构应有可开课的课时: ${JSON.stringify(series).slice(0, 200)}`);
 
   // 课时开放 image / video / music
   const saved = await api(`/api/admin/course-lessons/${lessonId}`, {
@@ -76,9 +68,9 @@ try {
   });
   assert.equal(saved.status, 200, `课时能力保存失败: ${JSON.stringify(saved.data)}`);
 
-  // 1) 不传 capabilities 开课：默认跟随课时
-  const started = await api(`/api/org/classes/${cls.id}/sessions/start`, { method: 'POST', token: teacher, body: { lessonId, capabilities: {} } });
-  assert.equal(started.status, 200, `开课失败: ${JSON.stringify(started.data)}`);
+  // 1) 不传 capabilities 建课堂：默认跟随课时
+  const started = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId, capabilities: {} } });
+  assert.equal(started.status, 200, `建课堂失败: ${JSON.stringify(started.data)}`);
   const caps = started.data.capabilities || {};
   assert.equal(caps.allowVideo, true, `课时开了生视频，课堂应默认开（实际 ${JSON.stringify(caps)}）`);
   assert.equal(caps.allowImage, true, '课时开了生图，课堂应默认开');
@@ -86,11 +78,8 @@ try {
   assert.equal(caps.allowText, true, '课时开了 AI 文字，课堂应默认开');
 
   // 2) 显式关掉仍然生效（老师保留控制权）
-  const endedFirst = await api(`/api/org/classes/${cls.id}/sessions/${started.data.id}/end`, { method: 'POST', token: teacher });
-  // ⚠️ 这里必须断言：不写断言的话「结束课堂静默失败」会让下一句报 CLASS_SESSION_ACTIVE，看不懂是谁的错
-  assert.equal(endedFirst.status, 200, `结束第一次课堂失败: ${JSON.stringify(endedFirst.data)}`);
-  const started2 = await api(`/api/org/classes/${cls.id}/sessions/start`, { method: 'POST', token: teacher, body: { lessonId, capabilities: { allowVideo: false } } });
-  assert.equal(started2.status, 200, `二次开课失败: ${JSON.stringify(started2.data)}`);
+  const started2 = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId, capabilities: { allowVideo: false } } });
+  assert.equal(started2.status, 200, `二次建课堂失败: ${JSON.stringify(started2.data)}`);
   assert.equal(started2.data.capabilities.allowVideo, false, '显式传 false 时应关掉生视频');
 
   console.log(JSON.stringify({

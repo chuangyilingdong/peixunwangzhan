@@ -95,7 +95,10 @@ export {
   setStudentEnrollmentAccess,
   softDeleteStudent,
   teacherCanAccessClass,
-  teacherScope,
+  // 批次 D：教师数据范围的新落点（课堂口径）。原来这里导出的是按**班级**圈定的 teacherScope，
+  // 班级退场后它已删除 —— 教师范围统一走这两个。
+  sessionTeacherScope,
+  sessionOwnedByTeacherExists,
   userLoginMeta,
   validateImportItem,
   validateMemberPermissions,

@@ -82,7 +82,7 @@ function ClassroomView({ api, onEnterConversation }) {
       const existing = byLesson.get(lesson.id);
       if (existing) { target(existing.id); return; }
       const created = await api.post('student/vibecoding/conversations', {
-        lessonId: lesson.id, classId: lesson.classId, title: `${lesson.title || '今日课堂'} · 创作对话`,
+        lessonId: lesson.id, title: `${lesson.title || '今日课堂'} · 创作对话`,
       });
       target(created.id);
     } catch (error) {
@@ -122,12 +122,25 @@ function ClassroomView({ api, onEnterConversation }) {
                 >
                   <div className="c-lesson__top">
                     <span className="c-lesson__no">{String(lesson.sort).padStart(2, '0')}</span>
-                    {lesson.hasGrant === false ? <Pill tone="warn">未授权</Pill> : startable ? <Pill tone="ok">已开课</Pill> : <Pill tone="warn">未开课</Pill>}
+                    {lesson.hasGrant === false
+                      ? <Pill tone="warn">未授权</Pill>
+                      : startable
+                        ? <Pill tone="ok">上课中</Pill>
+                        : lesson.participationStatus === 'COMPLETED'
+                          ? <Pill tone="ok">已完课</Pill>
+                          : lesson.participationStatus === 'PENDING'
+                            ? <Pill tone="warn">待上课</Pill>
+                            : lesson.participationStatus === 'INCOMPLETE'
+                              ? <Pill tone="warn">未完课</Pill>
+                              : lesson.participationStatus === 'REMOVED'
+                                ? <Pill tone="warn">已被移出课堂</Pill>
+                                : <Pill tone="warn">未加入课堂</Pill>}
                   </div>
                   <h3 className="c-lesson__title">{lesson.title}</h3>
                   <p className="c-lesson__summary">{lesson.summary || '本节课的创作任务会显示在这里。'}</p>
                   <div className="c-lesson__meta">
-                    {lesson.className || '未配置班级'} · {lesson.teacherName || '待分配老师'}
+                    {lesson.teacherName ? `授课老师：${lesson.teacherName}` : '授课老师：待分配'}
+                    {lesson.sessionTitle ? ` · 课堂：${lesson.sessionTitle}` : ''}
                     {existing ? ` · 已有 ${existing.artifactCount || 0} 个文件` : ''}
                   </div>
                   <div className="c-lesson__foot">
