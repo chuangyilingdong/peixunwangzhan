@@ -24,7 +24,7 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch main
-生产：release 20260913T081417Z / commit 586152a（服务 learning-platform-production @127.0.0.1:8789）
+生产：release 20260913T101458Z / commit cefd73a（服务 learning-platform-production @127.0.0.1:8789）
 账号：平台 root/liuyuchi123　机构 org-admin/OrgTest@2026!
       教师 teacher-1/TeacherTest@2026!　学生 student-1/StudentTest@2026!
 单价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元**每次**（真实售价，含毛利）
@@ -79,7 +79,7 @@ PLATFORM_DATA_DIR=.tmp/x PLATFORM_DB_PATH=.tmp/x/platform.db PORT=18888 node app
 **改完必跑**（守卫是这份代码的「别踩这里」）：
 
 ```bash
-node .tmp/smoke-run.mjs                    # 全量 84 个守卫（别用 bash 的 timeout，Windows 上杀不掉子进程）
+node .tmp/smoke-run.mjs                    # 全量 85 个守卫（别用 bash 的 timeout，Windows 上杀不掉子进程）
 node scripts/p70-pages-render.mjs          # 三端页面真渲染 —— 改前端之后必跑（能拦白屏）
 node scripts/p66-student-grant-gate.mjs    # 进课三层门禁
 node scripts/p69-teacher-data-scope.mjs    # 教师数据范围（安全相关改动）
