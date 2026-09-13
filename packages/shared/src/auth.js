@@ -41,3 +41,11 @@ export function formatDate(value) {
 export function formatCredits(value) {
   return new Intl.NumberFormat('zh-CN').format(Number(value || 0));
 }
+
+/**
+ * 算力口径的金额格式化：入参是**分**（算力池账本 cost_fen 就是分），输出「¥x.xx」。
+ * 2026-09-13（P4 删积分）：积分单位废弃后，机构端/平台端的消耗一律用「元」显示。
+ */
+export function formatYuan(fen) {
+  return `¥${(Number(fen || 0) / 100).toFixed(2)}`;
+}

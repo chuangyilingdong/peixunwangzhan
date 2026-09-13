@@ -503,8 +503,9 @@ export function startNotificationWorker() {
 // 顶层副作用：模块加载即启动 worker
 startNotificationWorker();
 
-// P4-O09 自动提醒扫赻器：低余额 + 合同到期（每 5 分钟）
-import { scanLowBalanceOrgs, scanContractExpiryOrgs } from '../../services/reminderScheduler.js';
+// P4-O09 自动提醒扫描器：合同到期（每 5 分钟）
+// 2026-09-13（P4 删积分）：低余额预警随积分体系一起去掉了。
+import { scanContractExpiryOrgs } from '../../services/reminderScheduler.js';
 
 let reminderInterval = null;
 let reminderStarted = false;
@@ -514,10 +515,9 @@ export function startReminderScheduler() {
   reminderStarted = true;
   reminderInterval = setInterval(() => {
     try {
-      const low = scanLowBalanceOrgs();
       const exp = scanContractExpiryOrgs();
-      if (low.length || exp.length) {
-        console.log(`[REMINDER SCAN] low=${low.length} contract_expiry=${exp.length}`);
+      if (exp.length) {
+        console.log(`[REMINDER SCAN] contract_expiry=${exp.length}`);
       }
     } catch (error) { console.error('[REMINDER SCAN ERROR]', error); }
   }, 5 * 60 * 1000);

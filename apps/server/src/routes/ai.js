@@ -6,8 +6,7 @@ import {
 } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
-import { chargeCreditsInTransaction } from '../services/creditLedger.js';
-import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
+import { recordAiUsage } from '../services/creditUsage.js';
 import { isModalityEnabled } from './billingConfig.js';
 import { assertLessonGenerationBox } from './aiGeneration.js';
 
@@ -29,21 +28,15 @@ function normalizedModality(value) {
   return modality;
 }
 
-function creditsFor(value) {
-  const credits = Number(value ?? 1);
-  if (!Number.isFinite(credits) || !Number.isInteger(credits) || credits < 0 || credits > 10000) {
-    throw errors.badRequest('积分必须是 0 到 10000 的整数', 'INVALID_CREDITS');
-  }
-  return credits;
+// 积分已废弃（2026-09-13 P4）：这个端点不再接受 / 扣减积分，只写 usage_records。
+// 端点本身保留（客户端的调用形状不变），钱由生成链路按单价记 cost_fen（算力池账本）。
+function recordUsage({ orgId, userId, projectId = null, sessionId = null, generationJobId = null, modality, status, failCode = null }) {
+  recordAiUsage({ orgId, userId, projectId, sessionId, generationJobId, modality, status, failCode });
 }
 
-function recordUsage({ orgId, userId, projectId = null, sessionId = null, generationJobId = null, modality, credits, status, failCode = null }) {
-  recordAiUsage({ orgId, userId, projectId, sessionId, generationJobId, modality, credits, status, failCode });
-}
-
-function rejectWithUsage({ orgId, userId, projectId, sessionId = null, modality, credits, error }) {
+function rejectWithUsage({ orgId, userId, projectId, sessionId = null, modality, error }) {
   transaction(() => recordUsage({
-    orgId, userId, projectId, sessionId, modality, credits, status: 'BLOCKED', failCode: error.code || 'BLOCKED',
+    orgId, userId, projectId, sessionId, modality, status: 'BLOCKED', failCode: error.code || 'BLOCKED',
   }));
   throw error;
 }
@@ -70,17 +63,15 @@ export async function handleAi(ctx) {
   const userId = auth.user.id;
   const body = ctx.body || {};
   let modality = 'TEXT';
-  let credits = 0;
   let projectId = typeof body.projectId === 'string' ? body.projectId.trim() : '';
 
   try {
     modality = normalizedModality(body.modality);
-    credits = creditsFor(body.credits);
     if (!projectId || projectId.length > 100) {
       throw errors.badRequest('projectId 必填', 'PROJECT_REQUIRED');
     }
   } catch (error) {
-    if (error?.code) return rejectWithUsage({ orgId, userId, projectId: projectId || null, modality, credits, error });
+    if (error?.code) return rejectWithUsage({ orgId, userId, projectId: projectId || null, modality, error });
     throw error;
   }
 
@@ -91,13 +82,13 @@ export async function handleAi(ctx) {
   );
   if (!project) {
     return rejectWithUsage({
-      orgId, userId, projectId, modality, credits,
+      orgId, userId, projectId, modality,
       error: errors.notFound('项目不存在', 'PROJECT_NOT_FOUND'),
     });
   }
   if (project.status !== 'DRAFT') {
     return rejectWithUsage({
-      orgId, userId, projectId, modality, credits,
+      orgId, userId, projectId, modality,
       error: errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE'),
     });
   }
@@ -109,7 +100,7 @@ export async function handleAi(ctx) {
       throw errors.forbidden(lessonContext.blockReason, lessonContext.blockCode);
     }
   } catch (error) {
-    if (error?.code) return rejectWithUsage({ orgId, userId, projectId, modality, credits, error });
+    if (error?.code) return rejectWithUsage({ orgId, userId, projectId, modality, error });
     throw error;
   }
 
@@ -128,7 +119,7 @@ export async function handleAi(ctx) {
         ? row('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [currentUser.billing_package_id, orgId])
         : null;
       assertCapability(modality, currentSession, pkg);
-      assertSessionAiControls({ modality, session: currentSession, orgId, userId, credits });
+      assertSessionAiControls({ modality, session: currentSession, orgId, userId });
 
       // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
       if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
@@ -140,43 +131,18 @@ export async function handleAi(ctx) {
       // 生成框体：每框体只能生成一次；本课该模态没配框体时不限制（与生成链路同一套判断）
       assertLessonGenerationBox({ context: currentContext, modality, projectId, boxId: String(body.boxId || '').trim().slice(0, 64) });
 
-      const aiLimit = currentUser.ai_credit_limit == null ? null : Number(currentUser.ai_credit_limit);
-      if (aiLimit !== null && Number(currentUser.ai_credits_used || 0) + credits > aiLimit) {
-        throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
-      }
-
-      const allowance = Number(currentUser.monthly_credit_allowance || 0)
-        + Number(currentUser.monthly_bonus_credits || 0)
-        + Number(currentUser.month_period_boost_credits || 0);
-      if (Number(currentUser.used_credits_this_period || 0) + credits > allowance) {
-        throw errors.forbidden('个人额度不足', 'STUDENT_CREDIT_LIMIT');
-      }
-      if (currentSession?.sessionCreditCap != null
-        && Number(currentSession.consumedCreditsTotal || 0) + credits > Number(currentSession.sessionCreditCap)) {
-        throw errors.forbidden('课堂用量已达上限', 'SESSION_CREDIT_CAP');
-      }
-
-      // Atomic conditional spend prevents concurrent AI calls from overdrawing the pool.
-      chargeCreditsInTransaction({
-        orgId,
-        credits,
-        type: `AI_${modality}`,
-        modality,
-        userId,
-        sessionId: currentSession?.id || null,
-        projectId,
-      });
-      if (currentSession) {
-        q('UPDATE class_sessions SET consumed_credits_total=consumed_credits_total+? WHERE id=? AND status=?', [credits, currentSession.id, 'ACTIVE']);
-      }
-      debitUserAiCredits({ userId, orgId, credits });
-      recordUsage({ orgId, userId, projectId, sessionId: currentSession?.id || null, modality, credits, status: 'SUCCESS' });
+      // 2026-09-13（P4 删积分）：这里原有的三道「积分刹车」已删除 ——
+      //   ① 成员 AI 上限（ai_credit_limit/ai_credits_used）
+      //   ② 周期额度（monthly_credit_allowance + bonus + boost − used_credits_this_period）
+      //   ③ 课堂用量上限（session_credit_cap/consumed_credits_total）
+      // 额度统一由**算力池**管：学生 × 课包、四种模态共用一个上限（services/computePool.js）。
+      // 这道端点只记 usage_records（不扣钱）—— 真正花钱的是生成链路，那里按单价记 cost_fen。
+      recordUsage({ orgId, userId, projectId, sessionId: currentSession?.id || null, modality, status: 'SUCCESS' });
     });
   } catch (error) {
-    if (error?.code) return rejectWithUsage({ orgId, userId, projectId, modality, credits, sessionId, error });
+    if (error?.code) return rejectWithUsage({ orgId, userId, projectId, modality, sessionId, error });
     throw error;
   }
 
-  const account = row('SELECT credit_balance FROM org_billing_accounts WHERE org_id=?', [orgId]);
-  return { charged: credits, balanceAfter: Number(account?.credit_balance || 0), sessionId };
+  return { charged: 0, balanceAfter: null, sessionId };
 }

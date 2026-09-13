@@ -6,7 +6,6 @@ import {
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
-import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../../services/creditLedger.js';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
@@ -303,8 +302,6 @@ function packageSnapshot(pkg) {
   return {
     name: pkg.name,
     priceFen: Number(pkg.price_fen || 0),
-    monthlyCredits: Number(pkg.monthly_credits || 0),
-    bonusCredits: Number(pkg.bonus_credits || 0),
     durationDays: Number(pkg.duration_days || 0),
     capabilities: {
       allowImage: !!pkg.allow_image, allowMusic: !!pkg.allow_music, allowVideo: !!pkg.allow_video,
@@ -362,7 +359,7 @@ function expireDueEnrollments(currentOrgId) {
   const due = rows("SELECT * FROM student_enrollments WHERE org_id=? AND status='ACTIVE' AND expires_at<=?", [currentOrgId, now]);
   due.forEach((enrollment) => {
     q("UPDATE student_enrollments SET status='EXPIRED',updated_at=? WHERE id=?", [now, enrollment.id]);
-    q("UPDATE users SET status='DISABLED',billing_package_id=NULL,monthly_credit_allowance=0,monthly_bonus_credits=0,month_period_boost_credits=0,updated_at=? WHERE id=? AND org_id=? AND billing_package_id=?", [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
+    q("UPDATE users SET status='DISABLED',billing_package_id=NULL,updated_at=? WHERE id=? AND org_id=? AND billing_package_id=?", [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
     q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
     appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: 'EXPIRE', beforeStatus: 'ACTIVE', afterStatus: 'EXPIRED', data: { reason: '有效期届满' } });
   });
@@ -388,10 +385,12 @@ function setStudentEnrollmentAccess(currentOrgId, enrollment, status) {
   const snapshot = parseJson(enrollment.package_snapshot, {});
   const now = nowIso();
   if (status === 'ACTIVE') {
-    q(`UPDATE users SET status='ACTIVE',expires_at=?,billing_package_id=?,monthly_credit_allowance=?,monthly_bonus_credits=?,month_period_boost_credits=0,used_credits_this_period=0,period_start_at=?,period_reset_at=?,updated_at=?
-      WHERE id=? AND org_id=? AND role='STUDENT'`, [enrollment.expires_at, enrollment.package_id, Number(snapshot.monthlyCredits || 0), Number(snapshot.bonusCredits || 0), enrollment.starts_at, enrollment.expires_at, now, enrollment.student_id, currentOrgId]);
+    // 2026-09-13（P4 删积分）：开通学员只给「有效期 + 套餐绑定」，
+    // 不再把套餐的月度/赠送积分写进 users（那两列是积分时代的产物）。
+    q(`UPDATE users SET status='ACTIVE',expires_at=?,billing_package_id=?,updated_at=?
+      WHERE id=? AND org_id=? AND role='STUDENT'`, [enrollment.expires_at, enrollment.package_id, now, enrollment.student_id, currentOrgId]);
   } else {
-    q(`UPDATE users SET status='DISABLED',billing_package_id=NULL,monthly_credit_allowance=0,monthly_bonus_credits=0,month_period_boost_credits=0,updated_at=?
+    q(`UPDATE users SET status='DISABLED',billing_package_id=NULL,updated_at=?
       WHERE id=? AND org_id=? AND role='STUDENT' AND billing_package_id=?`, [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
     q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
   }
@@ -494,8 +493,7 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
   const password = String(item.password || '');
   const phone = String(item.phone || '').trim();
   const errorsForRow = [];
-  let monthlyCreditAllowance = 0;
-  let aiCreditLimit = null;
+  // 2026-09-13（P4 删积分）：批量导入不再处理 monthlyCreditAllowance / aiCreditLimit。
   if (!ORG_MEMBER_ROLES.has(role)) errorsForRow.push('角色必须是 TEACHER 或 STUDENT');
   if (!login) errorsForRow.push('登录名不能为空');
   if (login.length > 100) errorsForRow.push('登录名不能超过 100 个字符');
@@ -510,8 +508,6 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
     try { permissions = validateMemberPermissions(item.permissions, role); } catch (error) { errorsForRow.push(error.message); }
   }
   if (role === 'STUDENT' && item.studentUsageScope !== undefined && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(item.studentUsageScope)) errorsForRow.push('学员额度范围无效');
-  if (role === 'STUDENT') { try { monthlyCreditAllowance = integer(item.monthlyCreditAllowance, '月度积分'); } catch (error) { errorsForRow.push(error.message); } }
-  if (item.aiCreditLimit !== undefined && item.aiCreditLimit !== null && item.aiCreditLimit !== '') { try { aiCreditLimit = integer(item.aiCreditLimit, 'AI 积分上限', { max: 100000000 }); } catch (error) { errorsForRow.push(error.message); } }
   if (item.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [item.billingPackageId, currentOrgId])) errorsForRow.push('套餐不属于当前机构');
   if (Array.isArray(item.classIds)) {
     item.classIds.map(String).filter((classId, position, values) => values.indexOf(classId) === position).forEach((classId) => {
@@ -530,8 +526,6 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
       expiresAt: item.expiresAt || null,
       studentUsageScope: role === 'STUDENT' ? (item.studentUsageScope || 'HOME_PRACTICE') : null,
       billingPackageId: role === 'STUDENT' ? (item.billingPackageId || null) : null,
-      monthlyCreditAllowance,
-      aiCreditLimit,
       classIds: Array.isArray(item.classIds) ? [...new Set(item.classIds.map(String))] : [],
     },
   };
@@ -549,7 +543,8 @@ function previewImport(body, currentOrgId) {
 
 function createMember(currentOrgId, value) {
   const now = nowIso(); const userId = id('user');
-  q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,monthly_credit_allowance,ai_credit_limit,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, value.monthlyCreditAllowance, value.aiCreditLimit, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
+  // 2026-09-13（P4 删积分）：建号不再写 monthly_credit_allowance / ai_credit_limit（积分已废弃）
+  q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
   value.classIds.forEach((classId) => {
     const cls = row('SELECT id FROM classes WHERE id=? AND org_id=? AND status=\'ACTIVE\'', [classId, currentOrgId]);
     if (!cls) throw errors.badRequest(`第 ${value.login} 条记录包含不存在或已归档班级`, 'INVALID_CLASS');
@@ -728,16 +723,16 @@ function buildStudentDataExport(user, org) {
       total: generationJobs.length,
       items: generationJobs.map((item) => ({
         id: item.id, modality: item.modality, provider: item.provider, model: item.model,
-        status: item.status, creditsCharged: Number(item.credits_charged || 0),
+        status: item.status, costFen: Number(item.cost_fen || 0),
         projectTitle: item.project_title || null, createdAt: item.created_at, completedAt: item.completed_at || null,
       })),
     },
     usageRecords: {
       total: usageRecords.length,
-      totalCredits: usageRecords.reduce((total, item) => total + Number(item.credits_charged || 0), 0),
+      totalFen: usageRecords.reduce((total, item) => total + Number(item.cost_fen || 0), 0),
       items: usageRecords.map((item) => ({
         id: item.id, modality: item.modality, model: item.model,
-        credits: Number(item.credits_charged || 0), status: item.status,
+        costFen: Number(item.cost_fen || 0), status: item.status,
         projectTitle: item.project_title || null, createdAt: item.created_at,
       })),
     },
@@ -1027,13 +1022,7 @@ function buildOrganizationDetail(orgId) {
   return {
     organization: org,
     admins,
-    billing: {
-      balance: Number(account?.credit_balance || 0),
-      frozenCredits: Number(account?.frozen_credits || 0),
-      totalCreditsIn: Number(account?.total_credits_in || 0),
-      totalCreditsSpent: Number(account?.total_credits_spent || 0),
-      currencyPaidTotalFen: Number(account?.currency_paid_total_fen || 0),
-    },
+    // 2026-09-13（P4 删积分）：原来这里返回机构积分账户（余额/冻结/累计进出/实收），积分废弃后删除。
     packages,
     courseAssignments,
     summary,

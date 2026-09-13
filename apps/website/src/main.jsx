@@ -6,7 +6,6 @@ import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
 import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
-import { MyCreditsPage } from './pages/MyCredits.jsx';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
@@ -82,7 +81,6 @@ function InnerCircleHeader({ userBadge, session, logout }) {
   const studentMenuItems = [
     { to: '/learn', icon: '🎨', label: '进入学习' },
     { to: '/my-works', icon: '✧', label: '我的作品' },
-    { to: '/my-credits', icon: '◆', label: '我的积分' },
     { to: '/my-courses', icon: '◇', label: '我的课程' },
     { to: '/my-stats', icon: '◈', label: '学习统计' },
   ];
@@ -284,7 +282,7 @@ function Marketplace(){
          <div className="mkt-meta"><DifficultyStars level={item.difficultyLevel}/>{ageLabel(item.ageRangeMin,item.ageRangeMax)?<span className="mkt-age">{ageLabel(item.ageRangeMin,item.ageRangeMax)}</span>:null}</div>
          {(item.tags||[]).slice(0,3).map(t=><span key={t} className="mkt-tag">{t}</span>)}
          {(item.tags||[]).length>3&&<span className="mkt-tag-more">+{item.tags.length-3}</span>}
-         {item.marketplaceRewardCredits>0&&<span className="mkt-credits">奖励 {item.marketplaceRewardCredits} 积分</span>}
+         {item.marketplaceRewardCredits>0&&<span className="mkt-credits">奖励 {item.marketplaceRewardCredits} 灵动值</span>}
        </div>
      </Link>)}</div>
      {totalPages>1&&<div className="mkt-pages"><button type="button" disabled={page<=1} aria-label="上一页" onClick={()=>setPage(p=>p-1)}>上一页</button><span>{page} / {totalPages}</span><button type="button" disabled={page>=totalPages} aria-label="下一页" onClick={()=>setPage(p=>p+1)}>下一页</button></div>}
@@ -326,8 +324,8 @@ function MarketplaceDetail(){
         {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">版本</span><span>{d.version}</span></div>}
         <div className="mkt-detail-row"><span className="mkt-label2">课时</span><span>{d.lessonCount||0} 节</span></div>
         {d.priceFen>0&&<div className="mkt-detail-row"><span className="mkt-label2">参考价格</span><span className="mkt-price">¥ {(d.priceFen/100).toFixed(2)} <span className="mkt-price-note">（线下购买）</span></span></div>}
-        {d.estimatedCreditsPerPerson>0&&<div className="mkt-detail-row"><span className="mkt-label2">预估消耗</span><span className="mkt-credits">{d.estimatedCreditsPerPerson} 积分/人</span></div>}
-        {d.marketplaceRewardCredits>0&&<div className="mkt-detail-row"><span className="mkt-label2">奖励</span><span className="mkt-credits">奖励 {d.marketplaceRewardCredits} 积分</span></div>}
+        {d.estimatedCreditsPerPerson>0&&<div className="mkt-detail-row"><span className="mkt-label2">预估消耗</span><span className="mkt-credits">{d.estimatedCreditsPerPerson} 灵动值/人</span></div>}
+        {d.marketplaceRewardCredits>0&&<div className="mkt-detail-row"><span className="mkt-label2">奖励</span><span className="mkt-credits">奖励 {d.marketplaceRewardCredits} 灵动值</span></div>}
       </div>
     </div>
     {(d.lessons||[]).length>0&&<div className="mkt-lessons"><h2>课程内容</h2>{(d.lessons||[]).map((l,i)=><div key={l.id} className="mkt-lesson"><div className="mkt-lesson-num">{String(i+1).padStart(2,'0')}</div><div className="mkt-lesson-body"><h3>{l.title}</h3>{l.summary&&<p className="mkt-lesson-summary">{l.summary}</p>}{l.lessonContent&&<p className="mkt-lesson-content">{String(l.lessonContent).slice(0,300)}{l.lessonContent&&l.lessonContent.length>300?'…':''}</p>}</div></div>)}</div>}
@@ -406,7 +404,6 @@ function App(){
   const studentMenuItems = [
     { to: '/learn', icon: '🎨', label: '进入学习' },
     { to: '/my-works', icon: '✧', label: '我的作品' },
-    { to: '/my-credits', icon: '◆', label: '我的积分' },
     { to: '/my-courses', icon: '◇', label: '我的课程' },
     { to: '/my-stats', icon: '◈', label: '学习统计' },
   ];
@@ -470,7 +467,6 @@ function App(){
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/learn/vibecoding' element={<LearnVibeCodingPage api={api}/>}/>
         <Route path='/learn/vibecoding/:conversationId' element={<LearnVibeCodingConversationPage api={api}/>}/>
-        <Route path='/my-credits' element={session ? <MyCreditsPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-courses' element={session ? <MyCoursesPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-stats' element={session ? <MyStatsPage api={api} /> : <Navigate to='/login' replace />}/>

@@ -22,7 +22,6 @@ import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
 
 const VALID_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'CANVAS']);
-const VALID_QUOTA_SCOPES = new Set(['GLOBAL', 'STUDENT', 'TEACHER']);
 const VALID_PERIODS = new Set(['DAY', 'MONTH']);
 const VALID_ALERT_TYPES = new Set(['BALANCE_LOW', 'CONSUMPTION_SPIKE', 'QUOTA_EXCEEDED']);
 const CONFIG_TYPES = new Set(['MODALITY_SETTING', 'CREDIT_QUOTA', 'ALERT_THRESHOLD', 'ORG_OVERRIDE', 'AI_PROVIDER_POLICY']);
@@ -130,12 +129,9 @@ export function getAiProviderPolicy() {
   return normalizeProviderPolicy(row('SELECT ai_provider_policy,updated_at FROM platform_settings WHERE id=1'));
 }
 
-export function getOrgAiBudget(orgId) {
-  const account = orgId ? row('SELECT * FROM org_billing_accounts WHERE org_id=?', [orgId]) : null;
-  return { orgId: orgId || null, creditBalance: Number(account?.credit_balance || 0), totalCreditsIn: Number(account?.total_credits_in || 0), totalCreditsSpent: Number(account?.total_credits_spent || 0) };
-}
-export function assertOrgAiBudget() {}
-export function assertAiBudgets() {}
+// 2026-09-13（P4 删积分）：getOrgAiBudget / assertOrgAiBudget / assertAiBudgets 三个已删除。
+// 后两个本来就是**空函数**（从不抛错、也从不拦任何调用），删掉是为了不再假装有这道预算刹车。
+// 平台/机构级的日额度如果需要，应该接在算力池那一侧（services/computePool.js）。
 
 function providerModelsEndpoint(value) {
   const parsed = new URL(String(value || '').trim());
@@ -207,19 +203,6 @@ function normalizeModality(value) {
   };
 }
 
-function normalizeQuota(value) {
-  if (!value) return null;
-  return {
-    id: value.id,
-    scope: value.scope,
-    period: value.period,
-    dailyLimit: Number(value.daily_limit),
-    monthlyLimit: Number(value.monthly_limit),
-    note: value.note || '',
-    createdAt: value.created_at,
-    updatedAt: value.updated_at,
-  };
-}
 
 function normalizeAlert(value) {
   if (!value) return null;
@@ -275,10 +258,6 @@ export function getModalitySetting(modality) {
   const m = String(modality || '').toUpperCase();
   if (!VALID_MODALITIES.has(m)) return null;
   return normalizeModality(row('SELECT * FROM platform_modality_settings WHERE modality=?', [m]));
-}
-
-export function getQuotas() {
-  return rows('SELECT * FROM platform_credit_quotas ORDER BY scope ASC').map(normalizeQuota);
 }
 
 export function getAlerts() {
@@ -453,35 +432,7 @@ export async function handleAdminBillingConfig(ctx) {
   }
 
   // 积分限额
-  if (part === '/billing-config/quotas' && method === 'GET') {
-    requireRole(ctx, ['SUPER_ADMIN']);
-    return { items: getQuotas() };
-  }
-  const quotaMatch = part.match(/^\/billing-config\/quotas\/([^/]+)$/);
-  if (quotaMatch && method === 'PUT') {
-    const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const scope = String(quotaMatch[1]).toUpperCase();
-    if (!VALID_QUOTA_SCOPES.has(scope)) throw errors.badRequest('scope 无效', 'INVALID_QUOTA_SCOPE');
-    const existing = row('SELECT * FROM platform_credit_quotas WHERE scope=?', [scope]);
-    if (!existing) throw errors.notFound('限额不存在', 'QUOTA_NOT_FOUND');
-    const body = ctx.body || {};
-    const period = body.period === undefined ? existing.period : String(body.period).toUpperCase();
-    if (!VALID_PERIODS.has(period)) throw errors.badRequest('period 无效', 'INVALID_PERIOD');
-    const dailyLimit = body.dailyLimit === undefined ? Number(existing.daily_limit) : integer(body.dailyLimit, 'dailyLimit', { min: -1, max: 100000000 });
-    const monthlyLimit = body.monthlyLimit === undefined ? Number(existing.monthly_limit) : integer(body.monthlyLimit, 'monthlyLimit', { min: -1, max: 100000000 });
-    const note = body.note === undefined ? existing.note : String(body.note || '').slice(0, 500);
-    const reason = body.reason ? String(body.reason).trim().slice(0, 500) : '';
-    const updates = [];
-    if (period !== existing.period) { logChange('CREDIT_QUOTA', existing.id, 'period', existing.period, period, auth.user.id, reason); updates.push(['period', period]); }
-    if (dailyLimit !== Number(existing.daily_limit)) { logChange('CREDIT_QUOTA', existing.id, 'dailyLimit', existing.daily_limit, dailyLimit, auth.user.id, reason); updates.push(['daily_limit', dailyLimit]); }
-    if (monthlyLimit !== Number(existing.monthly_limit)) { logChange('CREDIT_QUOTA', existing.id, 'monthlyLimit', existing.monthly_limit, monthlyLimit, auth.user.id, reason); updates.push(['monthly_limit', monthlyLimit]); }
-    if (note !== existing.note) { logChange('CREDIT_QUOTA', existing.id, 'note', existing.note, note, auth.user.id, reason); updates.push(['note', note]); }
-    if (!updates.length) return normalizeQuota(existing);
-    const setClauses = updates.map(([k]) => `${k}=?`).join(', ');
-    q(`UPDATE platform_credit_quotas SET ${setClauses}, updated_at=? WHERE id=?`, [...updates.map(([, v]) => v), nowIso(), existing.id]);
-    audit(ctx, 'BILLING_CONFIG_QUOTA_UPDATE', 'PLATFORM_CREDIT_QUOTA', existing.id, { scope, before: existing, after: { period, dailyLimit, monthlyLimit, note } }, { reason });
-    return normalizeQuota(row('SELECT * FROM platform_credit_quotas WHERE id=?', [existing.id]));
-  }
+  // 2026-09-13（P4 删积分）：/billing-config/quotas 的 GET/PUT 已删除（积分限额废弃）。
 
   // 预警阈值
   if (part === '/billing-config/alerts' && method === 'GET') {
@@ -582,12 +533,9 @@ export async function handleOrgBillingConfig(ctx) {
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']);
   if (!auth.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
 
-  // 机构可读：模态、限额（platform 层级）、本机构覆盖
+  // 机构可读：模态（platform 层级）、本机构覆盖
   if (part === '/billing-config/modalities' && method === 'GET') {
     return { items: getModalitySettings() };
-  }
-  if (part === '/billing-config/quotas' && method === 'GET') {
-    return { items: getQuotas() };
   }
   if (part === '/billing-config/alerts' && method === 'GET') {
     return { items: getAlerts() };
@@ -638,9 +586,6 @@ export async function handleStudentBillingConfig(ctx) {
 
   if (part === '/billing-config/modalities' && method === 'GET') {
     return { items: getModalitySettings() };
-  }
-  if (part === '/billing-config/quotas' && method === 'GET') {
-    return { items: getQuotas() };
   }
   if (part === '/billing-config/effective-capabilities' && method === 'GET') {
     // 暴露给学生：把"机构覆盖 + 平台默认"合并后的真实可用能力

@@ -9,8 +9,7 @@ import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, handlePublicFileAssets } from './routes/fileAssets.js';
-import { handleAdminCreditManagement } from './routes/adminCredits.js';
-import { handleWebsiteCredits } from './routes/websiteCredits.js';
+// 2026-09-13（P4 删积分）：adminCredits.js / websiteCredits.js 两个路由文件已删除（积分体系下线）。
 import { handleAdminBillingConfig, handleOrgBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handleVibeCoding } from './routes/vibecoding.js';
 import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
@@ -99,10 +98,8 @@ const server = http.createServer(async (req, res) => {
       ?? await handleAdminAnalytics(ctx)
       ?? await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)
-      ?? await handleWebsiteCredits(ctx)
       ?? await handleAuth(ctx)
       ?? await handleAdmin(ctx)
-      ?? await handleAdminCreditManagement(ctx)
       ?? await handleAdminCommunication(ctx)
       ?? await handleAdminFileAssets(ctx)
       ?? await handleAdminBillingConfig(ctx)

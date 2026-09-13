@@ -28,7 +28,7 @@ function App() {
   useEffect(() => { if (!session?.token) return; api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);
   async function login(credentials) { const data = await api.login(credentials); if (data.user.role !== 'SUPER_ADMIN') throw new ApiError('该账号没有平台管理权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
-  if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和积分运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
+  if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和算力运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
   if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
   const page = (permission, element) => <AdminPermissionGate user={session.user} permission={permission}>{element}</AdminPermissionGate>;
   return <AppShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>

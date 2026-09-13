@@ -125,7 +125,7 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
         // 于是「每节课花了多少」里少了这一块。现在按张记一笔，并计入算力池。
         recordAiUsage({
           orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,
-          modality: 'IMAGE', model: selection.model, credits: 1, status: 'SUCCESS',
+          modality: 'IMAGE', model: selection.model, status: 'SUCCESS',
           costFen: priceFenFor({ modality: 'IMAGE', model: selection.model }), seriesId,
           pricing: { source: 'vibecoding-illustration', provider: provider.name, artifactId: target.artifact.id, slideIndex: request.slideIndex },
         });
@@ -134,7 +134,7 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
         // 失败记 0 成本（不花学生的钱），但留一条记录以便看出「有哪些白花的调用」。
         recordAiUsage({
           orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,
-          modality: 'IMAGE', model: selection.model, credits: 0, status: 'FAILED',
+          modality: 'IMAGE', model: selection.model, status: 'FAILED',
           failCode: error?.code || 'ILLUSTRATION_FAILED', costFen: 0, seriesId,
           pricing: { source: 'vibecoding-illustration', provider: provider.name, artifactId: target.artifact.id, slideIndex: request.slideIndex },
         });

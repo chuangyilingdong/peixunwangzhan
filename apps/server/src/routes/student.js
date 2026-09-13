@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizePackage, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentCourseDetail, getStudentMemberships, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -254,49 +254,6 @@ function studentCourseOverview(ctx) {
   };
 }
 
-function studentUsageOverview(ctx) {
-  const days = asPositiveInteger(ctx.search.get('days'), '统计天数', { min: 1, max: 365, fallback: 30 });
-  const modalityInput = ctx.search.get('modality');
-  const modality = modalityInput ? String(modalityInput).trim().toUpperCase() : null;
-  if (modality && !USAGE_MODALITIES.has(modality)) throw errors.badRequest('不支持的素材类型', 'UNSUPPORTED_MODALITY');
-  const status = ctx.search.get('status');
-  if (status && !USAGE_STATUSES.has(status)) throw errors.badRequest('无效的用量状态', 'INVALID_USAGE_STATUS');
-  const since = new Date(Date.now() - days * 86400_000).toISOString();
-  const filters = ['usage.user_id = ?', 'usage.org_id = ?', 'usage.created_at >= ?'];
-  const params = [ctx.auth.user.id, ctx.auth.user.orgId, since];
-  if (modality) { filters.push('usage.modality = ?'); params.push(modality); }
-  if (status) { filters.push('usage.status = ?'); params.push(status); }
-  const records = rows('SELECT usage.*, project.title AS project_title, project.course_lesson_id AS project_lesson_id, COALESCE(lesson.published_title, lesson.title) AS lesson_title, class.name AS class_name FROM usage_records usage LEFT JOIN student_projects project ON project.id = usage.project_id AND project.student_id = usage.user_id AND project.org_id = usage.org_id LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id LEFT JOIN class_sessions session ON session.id = usage.class_session_id LEFT JOIN classes class ON class.id = session.class_id WHERE ' + filters.join(' AND ') + ' ORDER BY usage.created_at DESC LIMIT 200', params);
-  const byModality = new Map();
-  for (const record of records) {
-    const summary = byModality.get(record.modality) || { modality: record.modality, totalCredits: 0, recordCount: 0 };
-    summary.totalCredits += Number(record.credits_charged || 0);
-    summary.recordCount += 1;
-    byModality.set(record.modality, summary);
-  }
-  const rawUser = ctx.auth.rawUser;
-  const allowance = Number(rawUser.monthly_credit_allowance || 0) + Number(rawUser.monthly_bonus_credits || 0) + Number(rawUser.month_period_boost_credits || 0);
-  const used = Number(rawUser.used_credits_this_period || 0);
-  const pkg = rawUser.billing_package_id ? row('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [rawUser.billing_package_id, ctx.auth.user.orgId]) : null;
-  return {
-    user: normalizeUser(rawUser),
-    package: normalizePackage(pkg),
-    period: { allowance, used, remaining: Math.max(0, allowance - used), bonus: Number(rawUser.monthly_bonus_credits || 0), boost: Number(rawUser.month_period_boost_credits || 0), start: rawUser.period_start_at || null, reset: rawUser.period_reset_at || null, expired: Boolean(rawUser.period_reset_at && rawUser.period_reset_at <= nowIso()) },
-    usageScope: rawUser.student_usage_scope || null,
-    magicStones: Number(rawUser.magic_stones || 0),
-    activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: item.class_id, lessonId: item.lesson_id, lessonTitle: item.lesson_title, status: item.status, startedAt: item.started_at })),
-    usage: {
-      days, since,
-      totalCredits: records.reduce((total, item) => total + Number(item.credits_charged || 0), 0),
-      recordCount: records.length,
-      successCount: records.filter((item) => item.status === 'SUCCESS').length,
-      failedCount: records.filter((item) => item.status === 'FAILED').length,
-      blockedCount: records.filter((item) => item.status === 'BLOCKED').length,
-      byModality: [...byModality.values()].sort((a, b) => b.totalCredits - a.totalCredits),
-      items: records.map((record) => ({ id: record.id, projectId: record.project_id || null, projectTitle: record.project_title || null, courseLessonId: record.project_lesson_id || null, courseLessonTitle: record.lesson_title || null, classSessionId: record.class_session_id || null, className: record.class_name || null, modality: record.modality, model: record.model, credits: Number(record.credits_charged || 0), status: record.status, failCode: record.fail_code || null, createdAt: record.created_at })),
-    },
-  };
-}
 
 const STUDENT_AVATAR_KEYS = Object.freeze(['star', 'rocket', 'cat', 'fox', 'robot', 'panda', 'owl', 'whale']);
 const GUARDIAN_RELATIONSHIPS = Object.freeze(['PARENT', 'GRANDPARENT', 'OTHER_GUARDIAN']);
@@ -463,7 +420,6 @@ export async function handleStudent(ctx) {
     const detail = getStudentCourseDetail(ctx.auth.rawUser, courseDetailMatch[1]);
     return detail;
   }
-  if (part === '/credits' && method === 'GET') return studentUsageOverview(ctx);
   if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);
 
   if (part === '/account/profile' && method === 'PUT') {

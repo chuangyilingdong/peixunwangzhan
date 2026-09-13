@@ -1,5 +1,6 @@
 // VibeCoding 课堂运行时：对话式代码创作（SSE 流式）+ 产物 + 受限运行 + 提交点评。
-// 计费沿用平台既有链路：每轮 AI 回复扣 1 积分（credit_entries / usage_records）。
+// 2026-09-13（P4 删积分）：每一轮 AI 回复不再扣积分；费用由**算力池**按单价记 cost_fen
+// （学生 × 课包，四种模态共用一个上限，见 services/computePool.js）。
 //
 // 产物模型的要点：学生不能手写代码，代码只有一个来源——AI 回复里带文件名的围栏。
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
@@ -12,8 +13,7 @@ import { PUBLIC_SITE_URL } from '../config.js';
 import { resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { getGenerationProvider } from '../services/generationProvider.js';
-import { chargeCreditsInTransaction } from '../services/creditLedger.js';
-import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
+import { recordAiUsage } from '../services/creditUsage.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
@@ -70,7 +70,7 @@ function normalizeMessage(value) {
   return {
     id: value.id, role: value.role, content: value.content, model: value.model || null,
     status: value.status, errorCode: value.error_code || null,
-    creditsCharged: Number(value.credits_charged || 0), createdAt: value.created_at,
+    createdAt: value.created_at,
     attachments: parseAttachments(value.attachments),
   };
 }
@@ -171,13 +171,10 @@ function vibeCodingContext(user, lessonId, classId) {
 
 // 调上游前的预检：课堂管控 / 平台模态开关 / 课时能力 / 个人额度，任一不满足就不发起调用。
 function assertChatPreflight({ user, orgId, context, model = '' }) {
-  assertSessionAiControls({ modality: 'TEXT', session: context.activeSession, orgId, userId: user.id, credits: 1 });
+  assertSessionAiControls({ modality: 'TEXT', session: context.activeSession, orgId, userId: user.id });
   if (!isModalityEnabled(orgId, 'TEXT').enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   if (!(context.lesson?.capabilities || []).includes('text')) throw errors.forbidden('本课时未开放 AI 文字能力', 'LESSON_CAPABILITY_DISABLED');
-  const aiLimit = user.ai_credit_limit == null ? null : Number(user.ai_credit_limit);
-  if (aiLimit !== null && Number(user.ai_credits_used || 0) + 1 > aiLimit) throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
-  const allowance = Number(user.monthly_credit_allowance || 0) + Number(user.monthly_bonus_credits || 0) + Number(user.month_period_boost_credits || 0);
-  if (Number(user.used_credits_this_period || 0) + 1 > allowance) throw errors.forbidden('个人额度不足', 'STUDENT_CREDIT_LIMIT');
+  // 2026-09-13（P4 删积分）：成员 AI 上限 / 周期额度两道刹车已删除（额度看算力池）。
   // 算力池（学生 × 课包）：对话也从这个池子扣，与画布/视频/音乐共用一个上限
   assertComputePoolBudget({ userId: user.id, seriesId: context.series?.id || null, modality: 'TEXT', model });
 }
@@ -199,8 +196,7 @@ function sseSend(ctx, event, payload) {
 function recordFailedMessage(conversationId, model, content, errorCode) {
   const messageId = id('vibemsg');
   q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,error_code,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    [messageId, conversationId, 'assistant', content, model, 'FAILED', errorCode || 'VIBECODING_CHAT_FAILED', 0, nowIso()]);
-  return messageId;
+    [messageId, conversationId, 'assistant', content, model, 'FAILED', errorCode || 'VIBECODING_CHAT_FAILED', 0, nowIso()]);  return messageId;
 }
 
 function assertConversationEditable(conversation) {
@@ -497,24 +493,19 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
     if (remaining.length) flushArtifacts(remaining);
 
     const assistantMessageId = id('vibemsg');
-    let balanceAfter = 0;
     transaction(() => {
       const fresh = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]);
       if (!fresh) throw errors.notFound('创作会话不存在', 'VIBECODING_CONVERSATION_NOT_FOUND');
-      const charged = chargeCreditsInTransaction({
-        orgId: auth.user.orgId, credits: 1, type: 'AI_VIBECODING_CHAT', modality: 'TEXT', model: selection.model,
-        userId: auth.user.id, sessionId: fresh.class_session_id || null,
-      });
-      debitUserAiCredits({ userId: auth.user.id, orgId: auth.user.orgId, credits: 1 });
+      // 2026-09-13（P4 删积分）：不再扣积分（原来这里是 chargeCreditsInTransaction + debitUserAiCredits）。
       recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: fresh.class_session_id || null,
-        modality: 'TEXT', model: selection.model, credits: 1, status: 'SUCCESS',
+        modality: 'TEXT', model: selection.model, status: 'SUCCESS',
         // 算力池账本：对话也从这个池子扣（与画布/视频/音乐共用一个上限）
         costFen: priceFenFor({ modality: 'TEXT', model: selection.model }), seriesId: conversationSeriesId(conversation),
         pricing: { source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },
       });
       q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
-        [assistantMessageId, fresh.id, 'assistant', text, selection.model, 'SUCCEEDED', 1, nowIso()]);
+        [assistantMessageId, fresh.id, 'assistant', text, selection.model, 'SUCCEEDED', 0, nowIso()]);
       // 这一轮产出的产物认领到这条消息上，方便聊天里按消息分组
       if (emittedArtifactIds.size) {
         const placeholders = [...emittedArtifactIds].map(() => '?').join(',');
@@ -524,7 +515,6 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       const entry = pickEntryArtifact(listArtifacts(fresh.id));
       q('UPDATE vibecoding_conversations SET model=?,entry_file=?,last_message_at=?,updated_at=? WHERE id=?',
         [selection.model, entry?.name || 'index.html', nowIso(), nowIso(), fresh.id]);
-      balanceAfter = Number(charged?.balanceAfter || 0);
     });
     const message = normalizeMessage(row('SELECT * FROM vibecoding_messages WHERE id=?', [assistantMessageId]));
     // 文档产物要配的插画，在这一轮**消息落库之后**才生成：这时产物已认领到这条消息上，
@@ -540,8 +530,6 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       // 权威产物清单：前端拿它跟流式期间收到的卡片对账
       artifacts: listArtifacts(conversation.id, { includeContent: true }),
       entryFile: pickEntryArtifact(listArtifacts(conversation.id))?.name || 'index.html',
-      creditsCharged: 1,
-      balanceAfter,
       streamed: result?.streamed !== false,
     });
   } catch (error) {
@@ -559,7 +547,7 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
       recordFailedMessage(conversation.id, selection.model, streamedText, code);
       recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: conversation.class_session_id || null,
-        modality: 'TEXT', model: selection.model, credits: 0, status: 'FAILED', failCode: code,
+        modality: 'TEXT', model: selection.model, status: 'FAILED', failCode: code,
         costFen: 0, seriesId: conversationSeriesId(conversation),
         pricing: { source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
       });

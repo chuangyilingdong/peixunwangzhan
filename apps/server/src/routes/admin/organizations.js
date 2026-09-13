@@ -6,7 +6,6 @@ import {
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
-import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../../services/creditLedger.js';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
@@ -164,42 +163,13 @@ export async function handleOrganizations(ctx, part, method) {
     audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, before, { name: after.name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, contact }, { orgId: organization.id });
     return after;
   }
-  match = part.match(/^\/organizations\/([^/]+)\/(credit-adjustments|seat-adjustments)$/);
+  match = part.match(/^\/organizations\/([^/]+)\/seat-adjustments$/);
   if (match && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const organization = row('SELECT * FROM organizations WHERE id=?', [match[1]]);
     if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
-    if (match[2] === 'seat-adjustments') {
-      q('UPDATE organizations SET purchased_teacher_seats=?,updated_at=? WHERE id=?', [integer(ctx.body?.purchasedTeacherSeats, '购买教师席位'), nowIso(), organization.id]);
-      audit(ctx, 'ORG_SEAT_ADJUST', 'ORG', organization.id, null, ctx.body); return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
-    }
-    const credits = Number(ctx.body?.credits);
-    if (!Number.isInteger(credits) || !Number.isFinite(credits) || credits === 0) throw errors.badRequest('积分必须是非零整数', 'INVALID_CREDITS');
-    const amountFen = ctx.body?.amountFen !== undefined ? integer(ctx.body.amountFen, '付款金额（分）', { min: 0, max: 1000000000 }) : null;
-    const paymentMethod = ctx.body?.paymentMethod ? String(ctx.body.paymentMethod).trim().slice(0, 50) : null;
-    const paymentReference = ctx.body?.paymentReference ? String(ctx.body.paymentReference).trim().slice(0, 100) : null;
-    let reasonText = String(ctx.body?.reason || '平台调整').slice(0, 300);
-    if (credits > 0 && (amountFen || paymentMethod || paymentReference)) {
-      const parts = ['线下充值'];
-      if (amountFen) parts.push(`金额：¥${(amountFen / 100).toFixed(2)}`);
-      if (paymentMethod) parts.push(`方式：${paymentMethod}`);
-      if (paymentReference) parts.push(`订单号：${paymentReference}`);
-      if (ctx.body?.reason) parts.push(`备注：${ctx.body.reason}`);
-      reasonText = parts.join('，');
-    }
-    ensureOrgBilling(organization.id);
-    const balanceAfter = transaction(() => {
-      const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]); const balance = Number(account.credit_balance) + credits;
-      if (balance < 0) throw errors.badRequest('机构积分余额不足', 'INSUFFICIENT_CREDITS');
-      const updateCreditsIn = credits > 0 ? Math.abs(credits) : 0;
-      if (credits > 0 && amountFen) {
-        q('UPDATE org_billing_accounts SET credit_balance=?,total_credits_in=total_credits_in+?,currency_paid_total_fen=currency_paid_total_fen+?,updated_version=updated_version+1 WHERE org_id=?', [balance, updateCreditsIn, amountFen, organization.id]);
-      } else {
-        q('UPDATE org_billing_accounts SET credit_balance=?,total_credits_in=total_credits_in+?,updated_version=updated_version+1 WHERE org_id=?', [balance, updateCreditsIn, organization.id]);
-      }
-      q('INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,status,reason,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('credit'), organization.id, credits > 0 ? 'IN' : 'OUT', 'PLATFORM_ADJUSTMENT', Math.abs(credits), balance, 'EFFECTIVE', reasonText, auth.user.id, nowIso()]);
-      return balance;
-    });
-    audit(ctx, 'ORG_CREDIT_ADJUST', 'ORG', organization.id, null, ctx.body); return { balanceAfter };
+    // 2026-09-13（P4 删积分）：原来的 credit-adjustments（平台给机构充值/调整积分）已删除。
+    q('UPDATE organizations SET purchased_teacher_seats=?,updated_at=? WHERE id=?', [integer(ctx.body?.purchasedTeacherSeats, '购买教师席位'), nowIso(), organization.id]);
+    audit(ctx, 'ORG_SEAT_ADJUST', 'ORG', organization.id, null, ctx.body); return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
   }
   let orgDetailMatch = part.match(/^\/organizations\/([^/]+)\/detail$/);
   if (orgDetailMatch && method === 'GET') {

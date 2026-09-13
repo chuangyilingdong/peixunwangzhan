@@ -63,9 +63,10 @@ try {
   await alive('机构审计日志', admin, '/org/audit-logs');
   await alive('学员开通单', admin, '/org/billing/enrollments');
   await alive('学员套餐列表（学员开通要用）', admin, '/org/billing/packages');
-  await alive('积分用量概览', admin, '/org/billing/usage-overview');
+  // 2026-09-13（P4 删积分）：这条接口**保留但换了口径**（积分余额 → 算力消耗），所以仍判可用
+  await alive('机构算力用量概览（口径已换成算力）', admin, '/org/billing/usage-overview');
   await alive('AI 用量明细', admin, '/org/ai-usage');
-  await alive('成员配额列表', admin, '/org/members/credits');
+  await gone('成员配额列表', admin, '/org/members/credits');
   await alive('问题反馈列表', admin, '/org/help-feedback');
   await alive('学生看板（学生端仍可用）', student, '/student/dashboard');
   await alive('学生学习总览', student, '/student/learning/overview');

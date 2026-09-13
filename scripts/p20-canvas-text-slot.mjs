@@ -110,7 +110,12 @@ try {
   const text = String(job.assets?.[0]?.metadata?.text || '');
   assert.ok(text.length > 0, '生成的文字素材应带 metadata.text');
   assert.match(text, /本地模拟回复/, `文字内容应可读，实际 ${JSON.stringify(text.slice(0, 60))}`);
-  assert.equal(job.creditsCharged, 1, '成功生成应扣 1 积分');
+  // 2026-09-13（P4 删积分）：任务详情不再带积分字段；扣费看算力池账本（cost_fen）
+  assert.equal(job.creditsCharged, undefined, '任务详情不该再有积分字段');
+  const costDb = new DatabaseSync(dbPath);
+  const costFen = Number(costDb.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get()?.fen || 0);
+  costDb.close();
+  assert.ok(costFen > 0, `成功生成应在算力池账本记一笔（cost_fen > 0），实际 ${costFen}`);
 
   // 3) 同一个框体只能生成一次（入队前就拦，不跑上游、不扣费）
   const second = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: project.data.id, boxId: 'box-text-1', modality: 'TEXT', prompt: '再来一句' } });
@@ -128,7 +133,7 @@ try {
   console.log(JSON.stringify({
     name: 'canvas-text-slot', pass: true,
     box: { count: project.data.generationBoxes.length, model: project.data.generationBoxes[0].model },
-    generated: { model: job.model, chars: text.length, creditsCharged: job.creditsCharged },
+    generated: { model: job.model, chars: text.length, costFen },
     guards: { boxUsed: second.data?.error?.code, capability: blocked.data?.error?.code },
   }, null, 2));
 } catch (error) {

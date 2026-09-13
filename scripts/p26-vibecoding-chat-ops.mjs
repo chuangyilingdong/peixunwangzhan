@@ -115,7 +115,7 @@ try {
   let detail = (await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student })).data;
   assert.equal(detail.messages.length, 2, `发送后应有 2 条消息，实际 ${detail.messages.length}`);
   assert.equal(detail.messages[1].role, 'assistant', '第二条应为助手消息');
-  assert.equal(detail.messages[1].creditsCharged, 1, '成功回复应扣 1 积分');
+  assert.equal(detail.messages[1].creditsCharged, undefined, '消息里不该再有积分字段（P4 删积分）');
 
   // 2) 重新生成：消息数不变，助手内容重写
   const regen = await stream(`/api/student/vibecoding/conversations/${conversationId}/messages/regenerate`, { token: student });

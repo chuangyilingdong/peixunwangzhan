@@ -8,7 +8,6 @@ import {
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
-import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../../services/creditLedger.js';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
@@ -208,17 +207,15 @@ export async function handleOverview(ctx, part, method) {
     const usageFailed = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='FAILED'`, usage.params);
     const usageBlocked = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='BLOCKED'`, usage.params);
     const abnormalTasks = usageFailed + usageBlocked;
-    const creditsSpent = singleNumber(`SELECT COALESCE(SUM(credits_charged),0) n FROM usage_records WHERE ${usage.where}`, usage.params);
     const aiTasks = singleNumber(`SELECT COUNT(*) n FROM generation_jobs WHERE ${scoped('generation_jobs').where}`, scoped('generation_jobs').params);
-    const account = orgIds.length ? singleNumber(`SELECT COALESCE(SUM(credit_balance),0) n FROM org_billing_accounts WHERE org_id IN (${orgIds.map(() => '?').join(',')})`, orgIds) : 0;
-    const frozenCredits = orgIds.length ? singleNumber(`SELECT COALESCE(SUM(frozen_credits),0) n FROM org_billing_accounts WHERE org_id IN (${orgIds.map(() => '?').join(',')})`, orgIds) : 0;
-    const byOrg = rows(`SELECT organization.id,organization.name,COALESCE(SUM(usage.credits_charged),0) credits,COUNT(usage.id) calls
+    // 2026-09-13（P4 删积分）：byOrg / byModality 从「积分」改成算力金额（分）——与算力层同一份账本。
+    const byOrg = rows(`SELECT organization.id,organization.name,COALESCE(SUM(usage.cost_fen),0) fen,COUNT(usage.id) calls
       FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id AND usage.created_at>=? AND usage.created_at<?
-      ${orgFilter ? 'WHERE organization.id=?' : ''} GROUP BY organization.id ORDER BY credits DESC,organization.name ASC LIMIT 10`, orgFilter ? [since, until, orgFilter] : [since, until]).map((item) => ({ id: item.id, name: item.name, credits: Number(item.credits || 0), calls: Number(item.calls || 0) }));
-    const byModality = rows(`SELECT modality,COUNT(*) calls,COALESCE(SUM(credits_charged),0) credits,COUNT(CASE WHEN status='SUCCESS' THEN 1 END) successCalls,COUNT(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 END) abnormalCalls
-      FROM usage_records WHERE ${usage.where} GROUP BY modality ORDER BY credits DESC,modality ASC`, usage.params).map((item) => ({ modality: item.modality, calls: Number(item.calls || 0), credits: Number(item.credits || 0), successCalls: Number(item.success_calls ?? item.successCalls ?? 0), abnormalCalls: Number(item.abnormal_calls ?? item.abnormalCalls ?? 0) }));
+      ${orgFilter ? 'WHERE organization.id=?' : ''} GROUP BY organization.id ORDER BY fen DESC,organization.name ASC LIMIT 10`, orgFilter ? [since, until, orgFilter] : [since, until]).map((item) => ({ id: item.id, name: item.name, costFen: Number(item.fen || 0), calls: Number(item.calls || 0) }));
+    const byModality = rows(`SELECT modality,COUNT(*) calls,COALESCE(SUM(cost_fen),0) fen,COUNT(CASE WHEN status='SUCCESS' THEN 1 END) successCalls,COUNT(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 END) abnormalCalls
+      FROM usage_records WHERE ${usage.where} GROUP BY modality ORDER BY fen DESC,modality ASC`, usage.params).map((item) => ({ modality: item.modality, calls: Number(item.calls || 0), costFen: Number(item.fen || 0), successCalls: Number(item.success_calls ?? item.successCalls ?? 0), abnormalCalls: Number(item.abnormal_calls ?? item.abnormalCalls ?? 0) }));
     // ── 统计：算力层（单位是「元」，来自应用侧算力池账本 —— 与「算力网关」页同一份数据）──
-    // 为什么不再用 credits：积分是旧单位、且与真实成本无关（梳理文档 7.5 要删它）；
+    // 为什么不再用 credits：积分已废弃（2026-09-13 P4），钱一律看算力池账本 cost_fen。
     // 这里直接给「花了多少钱、花在哪个模态上、哪个池子快满了」。
     const computeWhere = `record.created_at>=? AND record.created_at<? AND record.series_id IS NOT NULL${orgFilter ? ' AND record.org_id=?' : ''}`;
     const computeParams = orgFilter ? [since, until, orgFilter] : [since, until];
@@ -263,7 +260,6 @@ export async function handleOverview(ctx, part, method) {
         organizations, activeOrganizations, admins, teachers, students,
         publishedCourses, activeAssignments, activeClasses: classes, classSessions, projects, works,
         aiTasks, abnormalTasks, usageCalls: usageTotal, successfulCalls: usageSuccess, failedCalls: usageFailed, blockedCalls: usageBlocked,
-        creditsSpent, creditBalance: account, frozenCredits,
       },
       byOrg, byModality,
       compute: {
@@ -291,13 +287,12 @@ export async function handleOverview(ctx, part, method) {
           works: '查询时间内提交的作品数。',
           aiTasks: '查询时间内创建的生成任务数。',
           abnormalTasks: '查询时间内 usage_records 中状态为 FAILED 或 BLOCKED 的调用次数。',
-          creditsSpent: '查询时间内 usage_records.credits_charged 求和（旧积分单位，界面已不再展示，保留字段兼容）。',
+          'byOrg': '按机构统计的算力消耗（分）与调用次数 Top 10。',
+          'byModality': '按模态统计的算力消耗（分）与调用次数；含视频与音乐。',
           'compute.totalYuan': '查询时间内算力池账本的消耗合计（元）：对话/图片/视频/音乐四种模态之和；含视频与音乐。',
           'compute.pools': '算力池健康度，**存量口径**：有消耗的池子里多少接近上限(≥80%)、多少已用尽(≥100%)；不限预算的池子单列。',
           'content.lessonHot': '查询时间内开过的课堂场次最多的课时 Top 5。',
           'content.onPlaza': '当前在作品广场上的作品数（两条链路 is_public 之和）。',
-          creditBalance: '机构账面积分余额，含冻结；为筛选范围当前存量。',
-          frozenCredits: '机构冻结积分，为筛选范围当前存量。',
         },
         boundary: 'from/to 均为左闭右开 UTC ISO 时间；未传时默认最近 30 天；机构与用户统计不按时间过滤。',
       },
@@ -305,7 +300,13 @@ export async function handleOverview(ctx, part, method) {
   }
   if (part === '/billing/usage-overview' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    return { totalCredits: Number(row('SELECT COALESCE(SUM(credit_balance),0) n FROM org_billing_accounts').n || 0), usage: rows('SELECT modality,SUM(credits_charged) credits,COUNT(*) calls FROM usage_records GROUP BY modality'), topOrgs: rows('SELECT organization.id,organization.name,COALESCE(SUM(usage.credits_charged),0) credits FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id GROUP BY organization.id ORDER BY credits DESC LIMIT 10') };
+    // 2026-09-13（P4 删积分）：从「机构积分余额」换成「平台算力消耗（元）」。
+    const totals = row('SELECT COALESCE(SUM(cost_fen),0) fen, COUNT(*) calls FROM usage_records');
+    return {
+      totalFen: Number(totals?.fen || 0), calls: Number(totals?.calls || 0),
+      usage: rows('SELECT modality,SUM(cost_fen) costFen,COUNT(*) calls FROM usage_records GROUP BY modality ORDER BY costFen DESC'),
+      topOrgs: rows('SELECT organization.id,organization.name,COALESCE(SUM(usage.cost_fen),0) costFen FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id GROUP BY organization.id ORDER BY costFen DESC LIMIT 10'),
+    };
   }
   if (part === '/billing/usage-records' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -329,8 +330,8 @@ export async function handleOverview(ctx, part, method) {
       params.push(keyword, keyword, keyword, keyword, keyword);
     }
     const sortKey = String(ctx.search.get('sort') || 'created').trim();
-    const sort = Object.hasOwn({ created: true, credits: true }, sortKey) ? sortKey : 'created';
-    const orderBy = sort === 'credits' ? 'usage.credits_charged DESC,usage.created_at DESC,usage.id DESC' : 'usage.created_at DESC,usage.id DESC';
+    const sort = Object.hasOwn({ created: true, costFen: true }, sortKey) ? sortKey : 'created';
+    const orderBy = sort === 'costFen' ? 'usage.cost_fen DESC,usage.created_at DESC,usage.id DESC' : 'usage.created_at DESC,usage.id DESC';
     const where = conditions.join(' AND ');
     const countFromWhere = `FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id ${where ? 'WHERE ' + where : ''}`;
     const total = Number(row(`SELECT COUNT(*) n ${countFromWhere}`, params)?.n || 0);
@@ -344,7 +345,7 @@ export async function handleOverview(ctx, part, method) {
       classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
       lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
       workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
-      credits: Number(item.credits_charged || 0),
+      costFen: Number(item.cost_fen || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };

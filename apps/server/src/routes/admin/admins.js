@@ -6,7 +6,6 @@ import {
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
-import { adjustCredits, normalizeEntry, reconcileCredits, refundOrReverseEntry, setFrozenCredits } from '../../services/creditLedger.js';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';

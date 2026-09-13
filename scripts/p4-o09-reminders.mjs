@@ -24,8 +24,8 @@ const scheduler = await import('../apps/server/src/services/reminderScheduler.js
 
 const { db } = schema;
 const seeded = seed.seedDatabase();
-const org = db.prepare('SELECT * FROM organizations WHERE id=?').get(seeded.organizationId);
 const orgAdmin = db.prepare("SELECT * FROM users WHERE org_id=? AND role='ORG_ADMIN'").get(seeded.organizationId);
+const org = db.prepare('SELECT * FROM organizations WHERE id=?').get(seeded.organizationId);
 
 const checks = [];
 function check(name, condition, details = {}) {
@@ -34,14 +34,9 @@ function check(name, condition, details = {}) {
 }
 
 try {
-  // 1) low balance scan + event-key deduplication
-  db.prepare('UPDATE org_billing_accounts SET credit_balance=0 WHERE org_id=?').run(seeded.organizationId);
-  const lowFirst = scheduler.scanLowBalanceOrgs();
-  const lowSecond = scheduler.scanLowBalanceOrgs();
-  const lowRecipients = db.prepare("SELECT COUNT(*) AS count FROM notification_recipients WHERE event_key=? AND user_id=? AND delivery_status='DELIVERED'").get(`LOW_BALANCE:${seeded.organizationId}`, orgAdmin.id).count;
-  check('low-balance first scan finds active organization', lowFirst.length === 1 && lowFirst[0].orgId === seeded.organizationId, { lowFirst });
-  check('low-balance first scan targets organization admin', Number(lowFirst[0]?.adminCount) >= 1, { lowFirst });
-  check('low-balance second scan is deduplicated', lowSecond.length === 0 && Number(lowRecipients) === 1, { lowSecond, lowRecipients });
+  // 0) 2026-09-13（P4 删积分）：低余额预警随积分体系一起删除 —— 这里反过来钉住它不再存在，
+  //    免得哪天有人「顺手加回来」，把已废弃的积分口径又带回产品里。
+  check('scanLowBalanceOrgs 已删除（积分口径不再使用）', typeof scheduler.scanLowBalanceOrgs === 'undefined', { type: typeof scheduler.scanLowBalanceOrgs });
 
   // 2) contract expiry scan + event-key deduplication
   const expiry = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();

@@ -112,7 +112,8 @@ try {
   assert.ok(events.some((item) => item.event === 'start'), '应先发 start 事件');
   assert.ok(deltas.length >= 2, `应收到多个 delta 分片，实际 ${deltas.length}`);
   assert.ok(done, `应收到 done 事件，实际事件：${events.map((item) => item.event).join(',')}`);
-  assert.equal(done.data.creditsCharged, 1, '成功回复应扣 1 积分');
+  // 2026-09-13（P4 删积分）：响应里不该再有积分字段，扣费改看算力池账本 cost_fen
+  assert.equal(done.data.creditsCharged, undefined, '响应里不该再有 creditsCharged（积分已废弃）');
   assert.ok(done.data.message?.content?.length > 0, 'done 事件应带助手消息内容');
   assert.ok(String(done.data.message.content).includes('本地模拟回复'), '本地 mock 回复内容应可读');
 
@@ -122,16 +123,16 @@ try {
   assert.equal(detail.data.messages.length, 2, `应有 user + assistant 两条消息，实际 ${detail.data.messages.length}`);
   assert.equal(detail.data.messages[0].role, 'user', '第一条应为用户消息');
   assert.equal(detail.data.messages[1].role, 'assistant', '第二条应为助手消息');
-  assert.equal(detail.data.messages[1].creditsCharged, 1, '助手消息应记录扣费');
+  assert.equal(detail.data.messages[1].creditsCharged, undefined, '消息里不该再有积分字段');
   assert.equal(detail.data.title, '帮我写一个会变色的按钮', '首条消息应自动成为会话标题');
 
   const usage = new DatabaseSync(dbPath);
   const usageRow = usage.prepare("SELECT COUNT(*) n FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
-  const entryRow = usage.prepare("SELECT COUNT(*) n FROM credit_entries WHERE type='AI_VIBECODING_CHAT'").get();
+  const costRow = usage.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
   const assistantRow = usage.prepare("SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=? AND role='assistant'").get(conversationId);
   usage.close();
   assert.equal(usageRow.n, 1, `应写入 1 条 TEXT 用量记录，实际 ${usageRow.n}`);
-  assert.equal(entryRow.n, 1, `应写入 1 条 AI_VIBECODING_CHAT 流水，实际 ${entryRow.n}`);
+  assert.ok(Number(costRow.fen) > 0, `成功回复应在算力池账本记一笔（cost_fen > 0），实际 ${costRow.fen}`);
   assert.equal(assistantRow.n, 1, '助手消息应落库');
 
   // 重命名 + 列表
@@ -175,8 +176,8 @@ try {
   }
   console.log(JSON.stringify({
     name: 'vibecoding-chat', pass: true,
-    conversationId, deltas: deltas.length, creditsCharged: done.data.creditsCharged,
-    messages: detail.data.messages.length, artifacts: detail.data.artifacts.length, usageRecords: usageRow.n, ledgerEntries: entryRow.n,
+    conversationId, deltas: deltas.length, costFen: Number(costRow.fen),
+    messages: detail.data.messages.length, artifacts: detail.data.artifacts.length, usageRecords: usageRow.n, costFen: Number(costRow.fen),
   }, null, 2));
 } catch (error) {
   console.error(serverLog);

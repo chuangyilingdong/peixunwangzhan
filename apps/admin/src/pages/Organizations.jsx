@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatCredits, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
-import { OrgRechargeDialog, RechargeHistoryPanel } from '../components/CreditManagement.jsx';
 
 export function Organizations({ api }) {
   const [filters, setFilters] = useState({ search: '', status: '' });
@@ -162,53 +161,9 @@ export function Organizations({ api }) {
         <div className="metrics">
           <MetricCard label="服务状态" value={selected.serviceAvailable ? '可用' : '不可用'} hint={selected.status} tone={selected.serviceAvailable ? 'teal' : 'pink'} />
           <MetricCard label="合同剩余天数" value={selected.daysUntilContractExpires ?? '—'} hint={selected.contractExpiringSoon ? '30 天内到期，需提醒续约' : '按合同到期时间计算'} tone={selected.contractExpiringSoon ? 'orange' : undefined} />
-          <div className="metric-card violet credit-balance-card">
-            <span className="metric-symbol">✦</span><p>积分余额</p><strong>{formatCredits(detail.data.billing.balance)}</strong>
-            <small>冻结 {formatCredits(detail.data.billing.frozenCredits)} · 累计消耗 {formatCredits(detail.data.billing.totalCreditsSpent)}</small>
-            <button type="button" className="metric-action-button" onClick={() => setShowRechargeDialog(true)}>充值</button>
-          </div>
           <MetricCard label="教师席位" value={`${selected.teacherUsedSeats} / ${selected.totalTeacherSeats}`} hint={`基础 ${selected.baseTeacherSeats} + 购买 ${selected.purchasedTeacherSeats}`} tone={selected.totalTeacherSeats - selected.teacherUsedSeats < 3 ? 'orange' : undefined} />
         </div>
         
-        {showRechargeDialog && (
-          <OrgRechargeDialog
-            api={api}
-            orgId={selectedId}
-            orgName={selected.name}
-            onClose={() => setShowRechargeDialog(false)}
-            onSuccess={() => {
-              detail.refresh();
-              organizations.refresh();
-            }}
-          />
-        )}
-        
-        <Panel title="积分账户管理" actions={
-          <button className="secondary-button" onClick={() => setShowRechargeHistory(!showRechargeHistory)}>
-            {showRechargeHistory ? '隐藏' : '查看'}充值历史
-          </button>
-        }>
-          <div className="billing-info">
-            <div className="billing-row">
-              <span className="billing-label">可用余额：</span>
-              <span className="billing-value">{formatCredits(detail.data.billing.balance)} 积分</span>
-            </div>
-            <div className="billing-row">
-              <span className="billing-label">累计充值：</span>
-              <span className="billing-value">{formatCredits(detail.data.billing.totalCreditsIn)} 积分</span>
-            </div>
-            <div className="billing-row">
-              <span className="billing-label">累计消耗：</span>
-              <span className="billing-value">{formatCredits(detail.data.billing.totalCreditsSpent)} 积分</span>
-            </div>
-            <div className="billing-row">
-              <span className="billing-label">累计付款：</span>
-              <span className="billing-value">¥{(detail.data.billing.currencyPaidTotalFen / 100).toFixed(2)}</span>
-            </div>
-          </div>
-          
-          {showRechargeHistory && <RechargeHistoryPanel api={api} orgId={selectedId} />}
-        </Panel>
         {selected.contractExpiringSoon ? <Notice tone="warning">该机构合同将在 {selected.daysUntilContractExpires} 天内到期，请尽快联系续约。</Notice> : null}
         <div className="split">
           <Panel title="编辑机构资料">{editForm ? <form onSubmit={saveEdit}>
@@ -257,7 +212,7 @@ export function Organizations({ api }) {
           </tr>)}</tbody></table></div></Panel>
           <Panel title="套餐与课程授权">
             <h3>套餐（{detail.data.packages.length}）</h3>
-            {detail.data.packages.length ? <div className="table-wrap"><table><thead><tr><th>套餐</th><th>月度积分</th><th>学员席位</th><th>状态</th></tr></thead><tbody>{detail.data.packages.map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatCredits(item.monthlyCredits)}</td><td>{item.studentSeats}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty title="暂无机构套餐" />}
+            {detail.data.packages.length ? <div className="table-wrap"><table><thead><tr><th>套餐</th><th>价格</th><th>学员席位</th><th>状态</th></tr></thead><tbody>{detail.data.packages.map((item) => <tr key={item.id}><td>{item.name}</td><td>¥{(Number(item.priceFen || 0) / 100).toFixed(2)}</td><td>{item.studentSeats}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div> : <Empty title="暂无机构套餐" />}
             <h3>课程授权（{detail.data.courseAssignments.length}）</h3>
             {detail.data.courseAssignments.length ? <div className="table-wrap"><table><thead><tr><th>课包</th><th>状态</th><th>授权时间</th><th>有效期至</th></tr></thead><tbody>{detail.data.courseAssignments.map((item) => <tr key={item.id}><td>{item.title}</td><td><Status value={item.status} /></td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期）' : ''}</span> : '永久有效'}</td></tr>)}</tbody></table></div> : <Empty title="暂无课程授权" />}
           </Panel>

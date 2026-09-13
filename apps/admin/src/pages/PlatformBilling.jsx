@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatCredits, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, formatYuan, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 import { BillingSettings } from '../components/BillingSettings.jsx';
 
@@ -170,7 +170,7 @@ export function ProviderPolicyPanel({ api }) {
   if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
   if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
   return <Panel title="AI 渠道配置">
-    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口，不会生成内容、不扣积分。</Notice>
+    <Notice tone="warning">每种能力可以绑定不同渠道和模型。渠道密钥只提交服务器加密保存；点击“测试连接”只验证上游接口，不会生成内容、不产生费用。</Notice>
     {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
     <form onSubmit={save}>
       <div className="muted">渠道只负责保存供应商、模型和密钥；具体用哪个渠道，请在下面“能力路由”中切换。</div>
@@ -248,16 +248,16 @@ export function PlatformBilling({ api }) {
   const records = useData(() => api.get(`admin/billing/usage-records?${query.toString()}`), [api, query]);
   function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value })); setPage(1); }
   return <>
-    <PageHeader eyebrow="平台计费" title="计费与用量" description="查看全平台积分余额、能力消耗、机构排名和用量明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
+    <PageHeader eyebrow="平台计费" title="计费与用量" description="查看全平台算力消耗、能力分布、机构排名和用量明细。" actions={<button className="secondary-button" onClick={() => { overview.refresh(); records.refresh(); }}>刷新</button>} />
     <div className="metrics">
-      <MetricCard label="机构余额合计" value={formatCredits(overview.data?.totalCredits || 0)} hint="所有机构当前余额合计" />
+      <MetricCard label="算力消耗合计" value={formatYuan(overview.data?.totalFen || 0)} hint={`近 ${days} 日全部机构`} />
       <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
-      <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `累计消耗 ${formatCredits(overview.data.topOrgs[0].credits)}` : '暂无消耗'} tone="orange" />
+      <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `累计消耗 ${formatYuan(overview.data.topOrgs[0].costFen)}` : '暂无消耗'} tone="orange" />
       <MetricCard label="当前明细" value={records.data?.total ?? 0} hint="当前筛选条件命中的记录数" tone="pink" />
     </div>
     <div className="split">
-      <Panel title="能力消耗"><table><thead><tr><th>能力</th><th>调用次数</th><th>积分</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
-      <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatCredits(item.credits)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="能力消耗"><table><thead><tr><th>能力</th><th>调用次数</th><th>消耗</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
     </div>
     <ProviderPolicyPanel api={api} />
     <BillingSettings api={api} />
@@ -271,14 +271,14 @@ export function PlatformBilling({ api }) {
         <label>能力<select value={filters.modality} onChange={(e) => updateFilter('modality', e.target.value)}><option value="">全部能力</option><option value="TEXT">TEXT</option><option value="IMAGE">IMAGE</option><option value="MUSIC">MUSIC</option><option value="VIDEO">VIDEO</option></select></label>
         <label>状态<select value={filters.status} onChange={(e) => updateFilter('status', e.target.value)}><option value="">全部状态</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">拦截</option></select></label>
         <label>关键词<input value={filters.search} placeholder="机构 / 用户 / 项目 / 作品" onChange={(e) => updateFilter('search', e.target.value)} /></label>
-        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="credits">积分</option></select></label>
+        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="costFen">消耗</option></select></label>
         <label>每页数量<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value={10}>10 条/页</option><option value={20}>20 条/页</option><option value={50}>50 条/页</option></select></label>
       </div>
     </Panel>
     <Panel title="计费明细">
       {overview.loading || records.loading || organizations.loading ? <Loading label="正在读取计费数据。" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data?.items?.length ? <>
         <ListResultSummary total={records.data.total} page={records.data.page} totalPages={records.data.totalPages} label="条记录" />
-        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>积分</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatCredits(item.credits)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>消耗</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatYuan(item.costFen)}</td><td><Status value={item.status} /></td></tr>)}</tbody></table></div>
         <Pagination page={records.data.page} totalPages={records.data.totalPages} onChange={setPage} disabled={records.loading} />
       </> : <Empty title="当前筛选条件下无计费记录" body="可以调整时间范围、机构、能力、状态或关键词。" />}
     </Panel>

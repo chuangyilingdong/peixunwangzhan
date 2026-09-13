@@ -4,7 +4,6 @@ export * from './ui.jsx';
 export * from './worksState.js';
 export * from './worksState.jsx';
 export * from './classroom.jsx';
-export * from './creditDialogs.jsx';
 export * from './canvasWorkspace.jsx';
 export { Icon } from './icons.jsx';
 export * from './markdown.jsx';

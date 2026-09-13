@@ -369,18 +369,8 @@ export function normalizeUser(value, { includeAuthMeta = false } = {}) {
     expiresAt: value.expires_at || null,
     studentUsageScope: value.student_usage_scope || null,
     billingPackageId: value.billing_package_id || null,
-    monthlyCreditAllowance: Number(value.monthly_credit_allowance || 0),
-    monthlyBonusCredits: Number(value.monthly_bonus_credits || 0),
-    monthPeriodBoostCredits: Number(value.month_period_boost_credits || 0),
-    usedCreditsThisPeriod: Number(value.used_credits_this_period || 0),
-    creditsRemaining: Math.max(0, Number(value.monthly_credit_allowance || 0) + Number(value.monthly_bonus_credits || 0) + Number(value.month_period_boost_credits || 0) - Number(value.used_credits_this_period || 0)),
-    periodStartAt: value.period_start_at || null,
-    periodResetAt: value.period_reset_at || null,
-    magicStones: Number(value.magic_stones || 0),
-    personalCredits: Number(value.personal_credits || 0),
-    aiCreditLimit: value.ai_credit_limit == null ? null : Number(value.ai_credit_limit),
-    aiCreditsUsed: Number(value.ai_credits_used || 0),
-    aiCreditsRemaining: value.ai_credit_limit == null ? null : Math.max(0, Number(value.ai_credit_limit) - Number(value.ai_credits_used || 0)),
+    // 2026-09-13（P4 删积分）：月度额度 / 魔法石 / 个人积分 / 成员 AI 上限都不再对外返回。
+    // 库里那几列保留给历史数据（删代码不删表的惯例），代码不再读写。
     avatarKey: value.avatar_key || null,
     guardian: value.guardian_name == null && value.guardian_phone == null && value.guardian_relationship == null ? null : {
       name: value.guardian_name || null,
@@ -427,8 +417,7 @@ export function normalizePackage(value) {
     orgId: value.org_id,
     name: value.name,
     priceFen: Number(value.price_fen || 0),
-    monthlyCredits: Number(value.monthly_credits || 0),
-    bonusCredits: Number(value.bonus_credits || 0),
+    // 2026-09-13（P4 删积分）：monthlyCredits / bonusCredits 不再对外返回（列保留，代码不读写）
     durationDays: Number(value.duration_days || 0),
     capabilities: {
       allowImage: !!value.allow_image,
@@ -825,8 +814,7 @@ export function normalizeSession(value) {
     sessionKind: value.session_kind || 'REGULAR',
     deliveryMode: value.delivery_mode || 'CANVAS',
     status: value.status,
-    sessionCreditCap: value.session_credit_cap === null || value.session_credit_cap === undefined ? null : Number(value.session_credit_cap),
-    consumedCreditsTotal: Number(value.consumed_credits_total || 0),
+    // 2026-09-13（P4 删积分）：sessionCreditCap / consumedCreditsTotal 不再对外返回
     aiPaused: !!value.ai_paused,
     studentCallCap: value.student_call_cap === null || value.student_call_cap === undefined ? null : Number(value.student_call_cap),
     capabilities: {

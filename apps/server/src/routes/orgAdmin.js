@@ -14,8 +14,7 @@ export async function handleOrg(ctx) {
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']); const currentOrgId = orgId(auth); const part = pathname.slice('/api/org'.length);
 
   if (part === '/overview' && method === 'GET') {
-    ensureOrgBilling(currentOrgId);
-    const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);
+    // 2026-09-13（P4 删积分）：原来这里会 ensureOrgBilling() 并读机构积分账户，积分废弃后不再需要。
     const isTeacher = auth.user.role === 'TEACHER';
     const orgRecord = row('SELECT * FROM organizations WHERE id=?', [currentOrgId]);
     const normalizedOrg = normalizeOrg(orgRecord);
@@ -42,7 +41,9 @@ export async function handleOrg(ctx) {
       ? 'usage.org_id=? AND usage.created_at>=? AND usage.class_session_id IS NOT NULL AND EXISTS (SELECT 1 FROM class_sessions scoped_session JOIN classes scoped_class ON scoped_class.id=scoped_session.class_id WHERE scoped_session.id=usage.class_session_id AND (scoped_class.teacher_id=? OR EXISTS (SELECT 1 FROM class_members scoped_member WHERE scoped_member.class_id=scoped_class.id AND scoped_member.user_id=? AND scoped_member.role=\'TEACHER\' AND scoped_member.removed_at IS NULL)))'
       : 'usage.org_id=? AND usage.created_at>=?';
     const usageParams = isTeacher ? [currentOrgId, since7, auth.user.id, auth.user.id] : [currentOrgId, since7];
-    const usage7 = Number(row('SELECT COALESCE(SUM(usage.credits_charged),0) n FROM usage_records usage WHERE ' + usageScope, usageParams)?.n || 0);
+    // 2026-09-13（P4 删积分）：这里原来统计 SUM(credits_charged)（积分），积分废弃后恒为 0，
+    // 改成数调用次数 —— 「近 7 天 AI 调用」这个口径仍然有意义。
+    const usage7 = Number(row('SELECT COUNT(*) n FROM usage_records usage WHERE ' + usageScope, usageParams)?.n || 0);
     const sessionParams = [currentOrgId, ...teacherParams];
     const recentSessions = rows(
       'SELECT session.id,session.class_id,session.lesson_id,session.status,session.started_at,session.ended_at,klass.name class_name,lesson.title lesson_title,starter.display_name starter_name FROM class_sessions session JOIN classes klass ON klass.id=session.class_id LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id LEFT JOIN users starter ON starter.id=session.started_by WHERE klass.org_id=?' + teacherScope + ' ORDER BY COALESCE(session.started_at,\'\') DESC LIMIT 8',
@@ -69,13 +70,13 @@ export async function handleOrg(ctx) {
       const contractDaysRemaining = Number.isFinite(contractTimestamp) ? Math.ceil((contractTimestamp - Date.now()) / 86400000) : null;
       if (contractDaysRemaining !== null && contractDaysRemaining <= 30) alerts.push({ code: contractDaysRemaining < 0 ? 'CONTRACT_EXPIRED' : 'CONTRACT_EXPIRING', level: contractDaysRemaining < 0 ? 'danger' : 'warning', title: contractDaysRemaining < 0 ? '合同已到期' : '合同即将到期', message: contractDaysRemaining < 0 ? '请尽快联系平台处理续约或停用安排。' : '请提前确认续约安排，避免影响机构使用。', daysRemaining: contractDaysRemaining });
       if (normalizedOrg.teacherSeats > 0 && normalizedOrg.teacherUsedSeats >= normalizedOrg.teacherSeats) alerts.push({ code: 'TEACHER_SEATS_FULL', level: 'warning', title: '教师席位已用满', message: '当前有效教师数已达到可用席位上限。', used: normalizedOrg.teacherUsedSeats, total: normalizedOrg.teacherSeats });
-      if (Number(account?.credit_balance || 0) <= 0) alerts.push({ code: 'CREDIT_BALANCE_EMPTY', level: 'danger', title: '积分余额为零', message: '当前没有可用机构积分，新增 AI 用量可能被拦截。', balance: Number(account?.credit_balance || 0) });
+      // 2026-09-13（P4 删积分）：原来这里还有一条「积分余额为零」的预警，积分废弃后删除。
     }
     if (isTeacher) normalizedOrg.teacherUsedSeats = null;
     return {
       scope: { role: auth.user.role, label: isTeacher ? '教师教学视图' : '机构管理员经营视图', description: isTeacher ? '仅统计本人负责或已授权班级的教学数据。' : '统计当前机构的经营与教学运行数据。', classCount: activeClasses },
       org: normalizedOrg, students, teachers, activeClasses, activeSessions, works, pendingWorks, usage7,
-      creditBalance: isTeacher ? null : Number(account?.credit_balance || 0), unreadNotifications,
+      unreadNotifications,
       recentSessions, pendingWorkItems, unreadNotificationItems, alerts,
       breakdown: { students, activeClasses, activeSessions, works: workBreakdown, pendingWorks, usage7 },
     };
@@ -119,8 +120,7 @@ export async function handleOrg(ctx) {
       permissions, expiresAt: body.expiresAt || null,
       studentUsageScope: role === 'STUDENT' ? (body.studentUsageScope || 'HOME_PRACTICE') : null,
       billingPackageId: role === 'STUDENT' ? (body.billingPackageId || null) : null,
-      monthlyCreditAllowance: role === 'STUDENT' ? integer(body.monthlyCreditAllowance, '月度积分') : 0,
-      aiCreditLimit: body.aiCreditLimit === undefined || body.aiCreditLimit === null || body.aiCreditLimit === '' ? null : integer(body.aiCreditLimit, 'AI 积分上限', { max: 100000000 }),
+      // 2026-09-13（P4 删积分）：不再接受 monthlyCreditAllowance / aiCreditLimit（两道刹车都没了）
       classIds,
     }));
     audit(ctx, 'USER_CREATE', 'USER', created.id, null, { role, login, classIds });
@@ -145,7 +145,7 @@ export async function handleOrg(ctx) {
     const usageScope = body.studentUsageScope === undefined ? target.student_usage_scope : body.studentUsageScope; if (usageScope && !['FOLLOW_CLASS', 'HOME_PRACTICE'].includes(usageScope)) throw errors.badRequest('学员额度范围无效', 'INVALID_USAGE_SCOPE');
     const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);
     const now = nowIso();
-    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,student_usage_scope=?,billing_package_id=?,monthly_credit_allowance=?,ai_credit_limit=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, usageScope, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, body.monthlyCreditAllowance === undefined ? target.monthly_credit_allowance : integer(body.monthlyCreditAllowance, '月度积分'), body.aiCreditLimit === undefined || body.aiCreditLimit === null || body.aiCreditLimit === '' ? target.ai_credit_limit : integer(body.aiCreditLimit, 'AI 积分上限', { max: 100000000 }), now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
+    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,student_usage_scope=?,billing_package_id=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, usageScope, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
     audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), { ...body, status: nextStatus }); return orgMemberRow(row('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
   }
   let memberClassesMatch = part.match(/^\/users\/([^/]+)\/classes$/);
@@ -165,12 +165,12 @@ export async function handleOrg(ctx) {
     audit(ctx, 'USER_CLASSES_REPLACE', 'USER', target.id, { classIds: beforeClassIds, role: target.role }, { classIds, role: target.role });
     return orgMemberRow(row('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
   }
-  match = part.match(/^\/users\/([^/]+)\/(password|permissions|period-boosts)$/);
+  match = part.match(/^\/users\/([^/]+)\/(password|permissions)$/);
   if (match && method === 'PUT') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作', 'ORG_ADMIN_REQUIRED'); const target = orgUser(auth, match[1]);
     if (match[2] === 'password') { const password = String(ctx.body?.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位'); const now = nowIso(); transaction(() => { q('UPDATE users SET password_hash=?,updated_at=? WHERE id=? AND org_id=?', [hashPassword(password), now, target.id, currentOrgId]); q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); }); }
     if (match[2] === 'permissions') { if (target.role !== 'TEACHER') throw errors.badRequest('只能设置教师权限', 'INVALID_ROLE'); q('UPDATE users SET permissions=?,updated_at=? WHERE id=? AND org_id=?', [json(validateMemberPermissions(ctx.body?.permissions, target.role)), nowIso(), target.id, currentOrgId]); }
-    if (match[2] === 'period-boosts') q('UPDATE users SET month_period_boost_credits=?,updated_at=? WHERE id=? AND org_id=?', [integer(ctx.body?.bonusCredits, '额外积分'), nowIso(), target.id, currentOrgId]);
+    // 2026-09-13（P4 删积分）：原来还有 period-boosts（给成员加「本周期额外积分」），积分废弃后删除。
     audit(ctx, 'USER_' + match[2].toUpperCase(), 'USER', target.id, null, ctx.body); return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
   }
   if (part === '/audit-logs' && method === 'GET') {
@@ -199,8 +199,10 @@ export async function handleOrg(ctx) {
     if (row('SELECT id FROM billing_packages WHERE org_id=? AND name=?', [currentOrgId, name])) throw errors.conflict('同名套餐已存在', 'BILLING_PACKAGE_EXISTS');
     const capabilities = body.capabilities || {}; const packageId = id('pkg'); const now = nowIso();
     const studentSeats = integer(body.studentSeats, '学员席位', { min: 1, max: 100000, fallback: 1 });
+    // 2026-09-13（P4 删积分）：套餐的「月度积分 / 赠送积分」两列保留（历史数据），
+    // 但不再作为输入 —— 新套餐一律写 0。套餐现在只服务「学员席位 + 能力开关」。
     q('INSERT INTO billing_packages(id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,student_seats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
-      packageId, currentOrgId, name, integer(body.priceFen, '价格'), integer(body.monthlyCredits, '月度积分'), integer(body.bonusCredits, '赠送积分'), integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }),
+      packageId, currentOrgId, name, integer(body.priceFen, '价格'), 0, 0, integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }),
       capabilities.allowImage ? 1 : 0, capabilities.allowMusic ? 1 : 0, capabilities.allowVideo ? 1 : 0, capabilities.allowPodcast ? 1 : 0, capabilities.allowDubbing ? 1 : 0, studentSeats, now, now,
     ]);
     const created = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageId, currentOrgId]);
@@ -231,8 +233,9 @@ export async function handleOrg(ctx) {
     q('UPDATE billing_packages SET name=?,price_fen=?,monthly_credits=?,bonus_credits=?,duration_days=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,student_seats=?,status=?,updated_at=? WHERE id=? AND org_id=?', [
       name,
       body.priceFen === undefined ? target.price_fen : integer(body.priceFen, '价格'),
-      body.monthlyCredits === undefined ? target.monthly_credits : integer(body.monthlyCredits, '月度积分'),
-      body.bonusCredits === undefined ? target.bonus_credits : integer(body.bonusCredits, '赠送积分'),
+      // 两列「月度积分 / 赠送积分」不再接受输入，原值原样保留（历史数据不动）
+      target.monthly_credits,
+      target.bonus_credits,
       body.durationDays === undefined ? target.duration_days : integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }),
       capabilities.allowImage === undefined ? target.allow_image : (capabilities.allowImage ? 1 : 0),
       capabilities.allowMusic === undefined ? target.allow_music : (capabilities.allowMusic ? 1 : 0),
@@ -405,14 +408,21 @@ export async function handleOrg(ctx) {
       lessonId: item.session_lesson_id || item.project_lesson_id || null, lessonTitle: item.lesson_title || null,
       projectId: item.project_id || null, projectTitle: item.project_title || null, generationJobId: item.generation_job_id || null,
       modality: item.modality, model: item.model || item.job_model || null, provider: item.job_provider || null,
-      credits: Number(item.credits_charged || 0),
+      // 2026-09-13（P4 删积分）：原来是 credits（积分），现在给算力口径的金额（分）
+      costFen: Number(item.cost_fen || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total: items.length, filters: { days, modality: modality || null, status: status || null, classId: classId || null, sessionId: sessionId || null, studentId: studentId || null } };
   }
   if (part === '/billing/usage-overview' && method === 'GET') {
-    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const since = new Date(Date.now() - days * 86400000).toISOString(); ensureOrgBilling(currentOrgId); const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [currentOrgId]);
-    return { balance: Number(account.credit_balance || 0), totalCreditsIn: Number(account.total_credits_in || 0), totalCreditsSpent: Number(account.total_credits_spent || 0), modalities: rows('SELECT modality,SUM(credits_charged) credits,COUNT(*) calls FROM usage_records WHERE org_id=? AND created_at>=? GROUP BY modality', [currentOrgId, since]), topUsers: rows('SELECT user.id,user.display_name studentName,SUM(usage.credits_charged) credits,COUNT(*) calls FROM usage_records usage JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id WHERE usage.org_id=? AND usage.created_at>=? GROUP BY user.id ORDER BY credits DESC LIMIT 10', [currentOrgId, since]) };
+    // 2026-09-13（P4 删积分）：机构账单口径从「积分余额」换成「算力消耗（元）」。
+    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const since = new Date(Date.now() - days * 86400000).toISOString();
+    const totals = row('SELECT COALESCE(SUM(cost_fen),0) costFen, COUNT(*) calls FROM usage_records WHERE org_id=? AND created_at>=?', [currentOrgId, since]);
+    return {
+      totalFen: Number(totals?.costFen || 0), calls: Number(totals?.calls || 0),
+      modalities: rows('SELECT modality,SUM(cost_fen) costFen,COUNT(*) calls FROM usage_records WHERE org_id=? AND created_at>=? GROUP BY modality ORDER BY costFen DESC', [currentOrgId, since]),
+      topUsers: rows('SELECT user.id,user.display_name studentName,SUM(usage.cost_fen) costFen,COUNT(*) calls FROM usage_records usage JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id WHERE usage.org_id=? AND usage.created_at>=? GROUP BY user.id ORDER BY costFen DESC LIMIT 10', [currentOrgId, since]),
+    };
   }
   if (part === '/billing/usage-records' && method === 'GET') {
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const modality = ctx.search.get('modality'); const status = ctx.search.get('status'); const search = String(ctx.search.get('search') || '').trim();
@@ -428,7 +438,7 @@ export async function handleOrg(ctx) {
       classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
       lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
       workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
-      credits: Number(item.credits_charged || 0),
+      costFen: Number(item.cost_fen || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total: items.length };
@@ -515,11 +525,13 @@ export async function handleOrg(ctx) {
     if (!lessonId) throw errors.badRequest('开课必须指定课时', 'LESSON_REQUIRED');
     if (!row('SELECT id FROM class_curriculum_items WHERE class_id=? AND lesson_id=?', [cls.id, lessonId]) || !accessibleLesson(currentOrgId, lessonId)) throw errors.badRequest('课时不在本班已授权课单中', 'LESSON_NOT_ASSIGNED');
     if (row("SELECT id FROM class_sessions WHERE class_id=? AND status='ACTIVE'", [cls.id])) throw errors.conflict('当前班级已有进行中的课堂', 'CLASS_SESSION_ACTIVE');
-    const cap = ctx.body?.sessionCreditCap === undefined || ctx.body?.sessionCreditCap === null ? null : integer(ctx.body.sessionCreditCap, '课堂积分上限'); const capability = ctx.body?.capabilities || {}; const sessionId = id('csession'); const now = nowIso();
+    // 2026-09-13（P4 删积分）：开课时不再接受 sessionCreditCap（课堂积分上限），
+    // 列本身留着（历史数据），新课堂恒为 NULL。额度由算力池按「学生 × 课包」管。
+    const capability = ctx.body?.capabilities || {}; const sessionId = id('csession'); const now = nowIso();
     // 课堂能力默认跟随课时：课时开放了生视频，课堂就默认开生视频（此前硬编码导致新课堂永远是关的）
     const lessonCapabilities = lessonCanvasConfig(lessonId).capabilities || [];
     const capabilityDefault = (flag, key) => (capability[flag] === undefined ? (lessonCapabilities.includes(key) ? 1 : 0) : (capability[flag] ? 1 : 0)); const sessionKind = classMatch[2] === 'makeup' || ctx.body?.sessionKind === 'MAKEUP' ? 'MAKEUP' : 'REGULAR'; const deliveryMode = String(ctx.body?.deliveryMode || 'CANVAS').trim().toUpperCase(); if (!['CANVAS', 'VIBECODING'].includes(deliveryMode)) throw errors.badRequest('课堂入口类型无效', 'INVALID_DELIVERY_MODE');
-    transaction(() => { q('INSERT INTO class_sessions(id,class_id,lesson_id,status,session_kind,delivery_mode,session_credit_cap,consumed_credits_total,ai_paused,student_call_cap,allow_text,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [sessionId, cls.id, lessonId, 'ACTIVE', sessionKind, deliveryMode, cap, 0, capability.aiPaused ? 1 : 0, capability.studentCallCap === undefined || capability.studentCallCap === null ? null : integer(capability.studentCallCap, '单学生调用次数', { min: 1, max: 100000 }), capabilityDefault('allowText', 'text'), capabilityDefault('allowImage', 'image'), capabilityDefault('allowMusic', 'music'), capabilityDefault('allowVideo', 'video'), 0, 0, auth.user.id, now]); q('UPDATE classes SET current_session_id=?,updated_at=? WHERE id=? AND org_id=?', [sessionId, now, cls.id, currentOrgId]); });
+    transaction(() => { q('INSERT INTO class_sessions(id,class_id,lesson_id,status,session_kind,delivery_mode,session_credit_cap,consumed_credits_total,ai_paused,student_call_cap,allow_text,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,started_by,started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [sessionId, cls.id, lessonId, 'ACTIVE', sessionKind, deliveryMode, null, 0, capability.aiPaused ? 1 : 0, capability.studentCallCap === undefined || capability.studentCallCap === null ? null : integer(capability.studentCallCap, '单学生调用次数', { min: 1, max: 100000 }), capabilityDefault('allowText', 'text'), capabilityDefault('allowImage', 'image'), capabilityDefault('allowMusic', 'music'), capabilityDefault('allowVideo', 'video'), 0, 0, auth.user.id, now]); q('UPDATE classes SET current_session_id=?,updated_at=? WHERE id=? AND org_id=?', [sessionId, now, cls.id, currentOrgId]); });
     audit(ctx, sessionKind === 'MAKEUP' ? 'MAKEUP_SESSION_START' : 'SESSION_START', 'CLASS_SESSION', sessionId, null, { classId: cls.id, lessonId, sessionKind, deliveryMode }); return normalizeSession(row('SELECT session.*,COALESCE(lesson.published_title, lesson.title) AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE session.id=? AND session.class_id=?', [sessionId, cls.id]));
   }
   classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/cancel$/);
@@ -537,20 +549,19 @@ export async function handleOrg(ctx) {
     if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束', 'CLASS_SESSION_ENDED');
     const body = ctx.body || {}; const capabilities = body.capabilities || {};
     const value = (key, fallback) => Object.prototype.hasOwnProperty.call(capabilities, key) ? (capabilities[key] ? 1 : 0) : fallback;
-    const sessionCreditCap = Object.prototype.hasOwnProperty.call(body, 'sessionCreditCap') ? (body.sessionCreditCap === null || body.sessionCreditCap === '' ? null : integer(body.sessionCreditCap, '课堂积分上限')) : session.session_credit_cap;
     const studentCallCap = Object.prototype.hasOwnProperty.call(body, 'studentCallCap') ? (body.studentCallCap === null || body.studentCallCap === '' ? null : integer(body.studentCallCap, '单学生调用次数', { min: 1, max: 100000 })) : session.student_call_cap;
     const aiPaused = Object.prototype.hasOwnProperty.call(body, 'aiPaused') ? (body.aiPaused ? 1 : 0) : session.ai_paused;
-    q("UPDATE class_sessions SET session_credit_cap=?,student_call_cap=?,ai_paused=?,allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=? WHERE id=? AND class_id=? AND status='ACTIVE'", [sessionCreditCap, studentCallCap, aiPaused, value('allowText', session.allow_text), value('allowImage', session.allow_image), value('allowMusic', session.allow_music), value('allowVideo', session.allow_video), value('allowPodcast', session.allow_podcast), value('allowDubbing', session.allow_dubbing), session.id, cls.id]);
+    // 2026-09-13（P4 删积分）：不再更新 session_credit_cap（课堂积分上限已废弃）。
+    q("UPDATE class_sessions SET student_call_cap=?,ai_paused=?,allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=? WHERE id=? AND class_id=? AND status='ACTIVE'", [studentCallCap, aiPaused, value('allowText', session.allow_text), value('allowImage', session.allow_image), value('allowMusic', session.allow_music), value('allowVideo', session.allow_video), value('allowPodcast', session.allow_podcast), value('allowDubbing', session.allow_dubbing), session.id, cls.id]);
     const updated = normalizeSession(row('SELECT session.*,COALESCE(lesson.published_title, lesson.title) AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE session.id=? AND session.class_id=?', [session.id, cls.id]));
     audit(ctx, 'SESSION_AI_CONTROLS_UPDATE', 'CLASS_SESSION', session.id, normalizeSession(session), updated); return updated;
   }
-  classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/(end|credit-cap|capabilities)$/);
+  classMatch = part.match(/^\/classes\/([^/]+)\/sessions\/([^/]+)\/(end|capabilities)$/);
   if (classMatch && method === 'POST') {
     const cls = classInOrg(auth, classMatch[1]); assertTeachingClassManager(auth, cls); const session = row('SELECT * FROM class_sessions WHERE id=? AND class_id=?', [classMatch[2], cls.id]); if (!session) throw errors.notFound('课堂不存在', 'CLASS_SESSION_NOT_FOUND'); const action = classMatch[3];
     if (action === 'end') assertTransition(ctx, 'classSession', session.status, 'ENDED', { targetType: 'CLASS_SESSION', targetId: session.id, before: normalizeSession(session), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '课堂已结束，不能重复结束' });
     else if (session.status !== 'ACTIVE') throw errors.conflict('课堂已结束', 'CLASS_SESSION_ENDED');
     if (action === 'end') transaction(() => { q("UPDATE class_sessions SET status='ENDED',ended_at=?,ended_by=?,ended_reason=? WHERE id=? AND class_id=? AND status='ACTIVE'", [nowIso(), auth.user.id, String(ctx.body?.reason || 'MANUAL').slice(0, 100), session.id, cls.id]); q('UPDATE classes SET current_session_id=NULL,updated_at=? WHERE id=? AND org_id=? AND current_session_id=?', [nowIso(), cls.id, currentOrgId, session.id]); });
-    if (action === 'credit-cap') q("UPDATE class_sessions SET session_credit_cap=? WHERE id=? AND class_id=? AND status='ACTIVE'", [ctx.body?.sessionCreditCap === null ? null : integer(ctx.body?.sessionCreditCap, '课堂积分上限'), session.id, cls.id]);
     if (action === 'capabilities') { const capability = ctx.body?.capabilities || {}; q("UPDATE class_sessions SET allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=? WHERE id=? AND class_id=? AND status='ACTIVE'", [capability.allowText === undefined ? session.allow_text : (capability.allowText ? 1 : 0), capability.allowImage === undefined ? session.allow_image : (capability.allowImage ? 1 : 0), capability.allowMusic === undefined ? session.allow_music : (capability.allowMusic ? 1 : 0), capability.allowVideo === undefined ? session.allow_video : (capability.allowVideo ? 1 : 0), capability.allowPodcast === undefined ? session.allow_podcast : (capability.allowPodcast ? 1 : 0), capability.allowDubbing === undefined ? session.allow_dubbing : (capability.allowDubbing ? 1 : 0), session.id, cls.id]); }
     audit(ctx, 'SESSION_' + action.toUpperCase(), 'CLASS_SESSION', session.id, null, ctx.body); return normalizeSession(row('SELECT session.*,COALESCE(lesson.published_title, lesson.title) AS lesson_title FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE session.id=? AND session.class_id=?', [session.id, cls.id]));
   }
@@ -760,222 +771,12 @@ export async function handleOrg(ctx) {
   }
 
   // P1: 机构端 - 查看成员配额列表
-  if (part === '/members/credits' && method === 'GET') {
-    const auth = requireRole(ctx, ['ORG_ADMIN']);
-    const currentOrgId = auth.user.orgId;
-    const role = ctx.search?.role || 'STUDENT';
-    if (!['STUDENT', 'TEACHER'].includes(role)) throw errors.badRequest('角色必须是 STUDENT 或 TEACHER', 'INVALID_ROLE');
-    
-    const page = Math.max(1, Number(ctx.search?.page || 1));
-    const limit = Math.min(100, Math.max(1, Number(ctx.search?.limit || 50)));
-    const offset = (page - 1) * limit;
-    
-    const items = rows(
-      `SELECT u.id AS user_id, u.display_name, u.role, u.ai_credit_limit, u.ai_credits_used,
-              (SELECT MAX(created_at) FROM usage_records WHERE user_id = u.id) AS last_used_at,
-              (SELECT MAX(created_at) FROM user_credit_adjustments WHERE user_id = u.id AND adjustment_type = 'ALLOCATION') AS last_allocated_at
-       FROM users u
-       WHERE u.org_id = ? AND u.role = ? AND u.deleted_at IS NULL
-       ORDER BY u.display_name
-       LIMIT ? OFFSET ?`,
-      [currentOrgId, role, limit, offset]
-    );
-    
-    const total = count(
-      'SELECT COUNT(*) AS n FROM users WHERE org_id = ? AND role = ? AND deleted_at IS NULL',
-      [currentOrgId, role]
-    );
-    
-    return {
-      items: items.map(item => ({
-        userId: item.user_id,
-        displayName: item.display_name,
-        role: item.role,
-        aiCredits: Number(item.ai_credit_limit || 0),
-        aiCreditsUsed: Number(item.ai_credits_used),
-        aiCreditsAvailable: Number(item.ai_credit_limit || 0) - Number(item.ai_credits_used),
-        lastUsedAt: item.last_used_at,
-        lastAllocatedAt: item.last_allocated_at
-      })),
-      total,
-      page
-    };
-  }
   
   // P1: 机构端 - 调整单个用户配额
-  match = part.match(/^\/members\/([^/]+)\/credits\/adjust$/);
-  if (match && method === 'POST') {
-    const auth = requireRole(ctx, ['ORG_ADMIN']);
-    const currentOrgId = auth.user.orgId;
-    const userId = match[1];
-    
-    const user = row('SELECT * FROM users WHERE id = ? AND org_id = ? AND deleted_at IS NULL', [userId, currentOrgId]);
-    if (!user) throw errors.notFound('用户不存在或不属于当前机构', 'USER_NOT_FOUND');
-    if (!['STUDENT', 'TEACHER'].includes(user.role)) throw errors.badRequest('只能为学生或教师分配配额', 'INVALID_ROLE');
-    
-    const creditsChange = integer(ctx.body?.creditsChange, '配额变化量', { min: -1000000, max: 1000000 });
-    if (creditsChange === 0) throw errors.badRequest('配额变化量不能为零', 'INVALID_CREDITS_CHANGE');
-    
-    const reason = String(ctx.body?.reason || '配额调整').slice(0, 300);
-    const adjustmentType = creditsChange > 0 ? 'ALLOCATION' : 'ADJUSTMENT';
-    
-    const result = transaction(() => {
-      const creditsBefore = Number(user.ai_credit_limit || 0);
-      const creditsAfter = creditsBefore + creditsChange;
-      
-      if (creditsAfter < 0) throw errors.badRequest('调整后配额不能为负数', 'INSUFFICIENT_CREDITS');
-      
-      // 如果是增加配额,需要检查机构余额
-      if (creditsChange > 0) {
-        ensureOrgBilling(currentOrgId);
-        const account = row('SELECT credit_balance FROM org_billing_accounts WHERE org_id = ?', [currentOrgId]);
-        const orgBalance = Number(account.credit_balance);
-        if (orgBalance < creditsChange) throw errors.badRequest('机构积分余额不足', 'INSUFFICIENT_ORG_CREDITS');
-        
-        // 扣减机构余额
-        q('UPDATE org_billing_accounts SET credit_balance = credit_balance - ?, updated_version = updated_version + 1 WHERE org_id = ?', [creditsChange, currentOrgId]);
-        
-        // 记录机构积分流水
-        q('INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,user_id,status,reason,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-          [id('credit'), currentOrgId, 'OUT', 'USER_ALLOCATION', creditsChange, orgBalance - creditsChange, userId, 'EFFECTIVE', `为 ${user.display_name} 分配配额`, auth.user.id, nowIso()]
-        );
-      }
-      
-      // 更新用户配额
-      q('UPDATE users SET ai_credit_limit = ?, updated_at = ? WHERE id = ?', [creditsAfter, nowIso(), userId]);
-      
-      // 记录配额调整历史
-      q('INSERT INTO user_credit_adjustments(id,org_id,user_id,credits_before,credits_after,credits_change,reason,adjustment_type,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-        [id('adjustment'), currentOrgId, userId, creditsBefore, creditsAfter, creditsChange, reason, adjustmentType, auth.user.id, nowIso()]
-      );
-      
-      return { creditsBefore, creditsAfter };
-    });
-    
-    audit(ctx, 'ORG_USER_CREDIT_ADJUST', 'USER', userId, { aiCredits: result.creditsBefore }, { aiCredits: result.creditsAfter, reason }, { orgId: currentOrgId });
-    
-    return {
-      success: true,
-      creditsAfter: result.creditsAfter,
-      adjustment: {
-        id: id('adjustment'),
-        creditsBefore: result.creditsBefore,
-        creditsAfter: result.creditsAfter,
-        createdAt: nowIso()
-      }
-    };
-  }
   
   // P1: 机构端 - 批量分配配额
-  if (part === '/members/credits/batch-allocate' && method === 'POST') {
-    const auth = requireRole(ctx, ['ORG_ADMIN']);
-    const currentOrgId = auth.user.orgId;
-    
-    const userIds = ctx.body?.userIds;
-    if (!Array.isArray(userIds) || userIds.length === 0) throw errors.badRequest('用户ID列表不能为空', 'INVALID_USER_IDS');
-    if (userIds.length > 100) throw errors.badRequest('批量分配最多支持100个用户', 'TOO_MANY_USERS');
-    
-    const creditsPerUser = integer(ctx.body?.creditsPerUser, '每人配额', { min: 1, max: 100000 });
-    const reason = String(ctx.body?.reason || '批量配额分配').slice(0, 300);
-    const totalCreditsNeeded = userIds.length * creditsPerUser;
-    
-    // 验证用户存在且属于当前机构
-    const users = rows(
-      `SELECT id, display_name, role, ai_credit_limit, ai_credits_used FROM users WHERE id IN (${userIds.map(() => '?').join(',')}) AND org_id = ? AND deleted_at IS NULL`,
-      [...userIds, currentOrgId]
-    );
-    
-    if (users.length !== userIds.length) throw errors.badRequest('部分用户不存在或不属于当前机构', 'INVALID_USERS');
-    
-    const result = transaction(() => {
-      // 检查机构余额
-      ensureOrgBilling(currentOrgId);
-      const account = row('SELECT credit_balance FROM org_billing_accounts WHERE org_id = ?', [currentOrgId]);
-      const orgBalance = Number(account.credit_balance);
-      if (orgBalance < totalCreditsNeeded) throw errors.badRequest(`机构积分余额不足，需要 ${totalCreditsNeeded} 积分，当前余额 ${orgBalance}`, 'INSUFFICIENT_ORG_CREDITS');
-      
-      // 扣减机构余额
-      q('UPDATE org_billing_accounts SET credit_balance = credit_balance - ?, updated_version = updated_version + 1 WHERE org_id = ?', [totalCreditsNeeded, currentOrgId]);
-      
-      const now = nowIso();
-      let allocated = 0;
-      
-      // 为每个用户分配配额
-      for (const user of users) {
-        const creditsBefore = Number(user.ai_credit_limit || 0);
-        const creditsAfter = creditsBefore + creditsPerUser;
-        
-        q('UPDATE users SET ai_credit_limit = ?, updated_at = ? WHERE id = ?', [creditsAfter, now, user.id]);
-        
-        q('INSERT INTO user_credit_adjustments(id,org_id,user_id,credits_before,credits_after,credits_change,reason,adjustment_type,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-          [id('adjustment'), currentOrgId, user.id, creditsBefore, creditsAfter, creditsPerUser, reason, 'ALLOCATION', auth.user.id, now]
-        );
-        
-        allocated++;
-      }
-      
-      // 记录机构积分流水
-      q('INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,status,reason,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-        [id('credit'), currentOrgId, 'OUT', 'BATCH_USER_ALLOCATION', totalCreditsNeeded, orgBalance - totalCreditsNeeded, 'EFFECTIVE', `批量为 ${allocated} 个用户分配配额`, auth.user.id, now]
-      );
-      
-      return { allocated, orgBalanceAfter: orgBalance - totalCreditsNeeded };
-    });
-    
-    audit(ctx, 'ORG_BATCH_CREDIT_ALLOCATE', 'ORG', currentOrgId, null, { userCount: result.allocated, creditsPerUser, totalCredits: totalCreditsNeeded }, { orgId: currentOrgId });
-    
-    return {
-      success: true,
-      allocated: result.allocated,
-      totalCreditsUsed: totalCreditsNeeded,
-      orgBalanceAfter: result.orgBalanceAfter
-    };
-  }
   
   // P1: 机构端 - 查看用户配额调整历史
-  match = part.match(/^\/members\/([^/]+)\/credits\/history$/);
-  if (match && method === 'GET') {
-    const auth = requireRole(ctx, ['ORG_ADMIN']);
-    const currentOrgId = auth.user.orgId;
-    const userId = match[1];
-    
-    const user = row('SELECT * FROM users WHERE id = ? AND org_id = ? AND deleted_at IS NULL', [userId, currentOrgId]);
-    if (!user) throw errors.notFound('用户不存在或不属于当前机构', 'USER_NOT_FOUND');
-    
-    const page = Math.max(1, Number(ctx.search?.page || 1));
-    const limit = Math.min(100, Math.max(1, Number(ctx.search?.limit || 20)));
-    const offset = (page - 1) * limit;
-    
-    const items = rows(
-      `SELECT a.*, u.display_name AS actor_name
-       FROM user_credit_adjustments a
-       LEFT JOIN users u ON a.actor_id = u.id
-       WHERE a.user_id = ? AND a.org_id = ?
-       ORDER BY a.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [userId, currentOrgId, limit, offset]
-    );
-    
-    const total = count(
-      'SELECT COUNT(*) AS n FROM user_credit_adjustments WHERE user_id = ? AND org_id = ?',
-      [userId, currentOrgId]
-    );
-    
-    return {
-      items: items.map(item => ({
-        id: item.id,
-        creditsBefore: item.credits_before,
-        creditsAfter: item.credits_after,
-        creditsChange: item.credits_change,
-        reason: item.reason,
-        adjustmentType: item.adjustment_type,
-        actorName: item.actor_name,
-        createdAt: item.created_at
-      })),
-      total,
-      page
-    };
-  }
 
   return null;
 }

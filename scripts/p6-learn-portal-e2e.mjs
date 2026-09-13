@@ -80,16 +80,17 @@ try {
   const student = await login('student-1', 'study123');
   check('student login OK', () => assert.equal(student.user.role, 'STUDENT'));
   const meStudent = await api('/api/me', { token: student.token });
-  check('me returns personalCredits for student', () => assert.equal(typeof meStudent.data.personalCredits, 'number', 'me should include personalCredits, got ' + JSON.stringify(meStudent.data).slice(0, 200)));
-  check('me returns magicStones for student', () => assert.equal(typeof meStudent.data.magicStones, 'number'));
+  // 2026-09-13（P4 删积分）：/api/me 不再返回积分字段（列还在库里，只是不再对外）
+  check('me no longer returns personalCredits for student', () => assert.equal(meStudent.data.personalCredits, undefined, 'me should NOT include personalCredits, got ' + JSON.stringify(meStudent.data).slice(0, 200)));
+  check('me no longer returns magicStones for student', () => assert.equal(meStudent.data.magicStones, undefined));
 
   const teacher = await login('teacher-1', 'teach123');
   const meTeacher = await api('/api/me', { token: teacher.token });
-  check('me returns personalCredits for teacher', () => assert.equal(typeof meTeacher.data.personalCredits, 'number'));
+  check('me no longer returns personalCredits for teacher', () => assert.equal(meTeacher.data.personalCredits, undefined));
 
   const orgAdmin = await login('org-admin', 'org123');
   const meOrg = await api('/api/me', { token: orgAdmin.token });
-  check('me returns personalCredits for org-admin', () => assert.equal(typeof meOrg.data.personalCredits, 'number'));
+  check('me no longer returns personalCredits for org-admin', () => assert.equal(meOrg.data.personalCredits, undefined));
 
   // 3. Role → 落地路径（学生/教师/机构回首页，平台管理员进 /admin/）
   check('STUDENT → /', () => assert.equal(expectedPath(student.user.role), '/'));

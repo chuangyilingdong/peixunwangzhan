@@ -127,24 +127,11 @@ try {
   expect(unavailable.status === 400 && ['GENERATION_PROVIDER_UNAVAILABLE', 'GENERATION_PROVIDER_CONFIG_INVALID'].includes(unavailable.data?.error?.code), '开启外发后未进入 provider 失败路径', unavailable);
 
   const policy = await import('../apps/server/src/routes/billingConfig.js');
-  assert.throws(
-    () => policy.assertAiBudgets({ platformPerCallBudget: 0, platformDailyBudget: 1 }, 1, { dailyUsed: 1 }),
-    (error) => error.code === 'AI_PLATFORM_DAILY_BUDGET_EXCEEDED',
-  );
-  assert.throws(
-    () => policy.assertAiBudgets({ platformPerCallBudget: 1, platformDailyBudget: 0 }, 2, { dailyUsed: 0 }),
-    (error) => error.code === 'AI_PLATFORM_PER_CALL_BUDGET_EXCEEDED',
-  );
-  assert.doesNotThrow(() => policy.assertAiBudgets({ platformPerCallBudget: 0, platformDailyBudget: 0 }, 1, { dailyUsed: 999 }));
-  assert.throws(
-    () => policy.assertOrgAiBudget({ perCallBudget: 0, dailyBudget: 1 }, 1, { dailyUsed: 1 }),
-    (error) => error.code === 'AI_ORG_DAILY_BUDGET_EXCEEDED',
-  );
-  assert.throws(
-    () => policy.assertOrgAiBudget({ perCallBudget: 1, dailyBudget: 10 }, 2, { dailyUsed: 0 }),
-    (error) => error.code === 'AI_ORG_PER_CALL_BUDGET_EXCEEDED',
-  );
-  assert.doesNotThrow(() => policy.assertOrgAiBudget({ perCallBudget: 0, dailyBudget: 0 }, 1, { dailyUsed: 999 }));
+  // 2026-09-13（P4 删积分）：assertAiBudgets / assertOrgAiBudget 本来就是**空函数** ——
+  // 它们从不抛错、也从不拦任何调用（这正是本守卫长期红着的原因：断言了一个并不存在的行为）。
+  // 随积分体系一起删除，这里反过来钉住「不该再有这两个空壳」。
+  assert.equal(typeof policy.assertAiBudgets, 'undefined', '平台预算空断言应已删除（P4 删积分）');
+  assert.equal(typeof policy.assertOrgAiBudget, 'undefined', '机构预算空断言应已删除（P4 删积分）');
 
   // 当前外发保护已在任何生成前置生效；此处验证策略仍为非 mock。
   const providerInfo = await api('/api/ai/providers', { token: student });

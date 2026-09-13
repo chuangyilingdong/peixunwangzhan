@@ -6,8 +6,7 @@ import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame } from '../services/modelCapabilities.js';
 import { PUBLIC_SITE_URL } from '../config.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
-import { chargeCreditsInTransaction } from '../services/creditLedger.js';
-import { debitUserAiCredits, recordAiUsage } from '../services/creditUsage.js';
+import { recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
@@ -28,7 +27,7 @@ const isQuotaExhausted = (code) => String(code || '') === PROVIDER_ERROR_CODES.Q
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo' };
 const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video' };
 const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music' };
-const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'SESSION_CREDIT_CAP', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
+const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
@@ -142,7 +141,7 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
 export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null, model = '', units = 1 }) {
   const pkg = packageForUser(user, orgId);
   assertCapability(modality, context.activeSession, pkg);
-  assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id, credits: 1 });
+  assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id });
   // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
   if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
@@ -176,7 +175,7 @@ function normalizeJob(value, { assets = [] } = {}) {
     boxId: value.box_id || null,
     modalityLabel: MODALITY_LABELS[value.modality] || value.modality,
     provider: value.provider, model: value.model, prompt: value.prompt, status: value.status,
-    creditsCharged: Number(value.credits_charged || 0), retryOfJobId: value.retry_of_job_id || null, retryCount: Number(value.retry_count || 0), maxRetries: Number(value.max_retries ?? ASYNC_GENERATION_MAX_RETRIES),
+    retryOfJobId: value.retry_of_job_id || null, retryCount: Number(value.retry_count || 0), maxRetries: Number(value.max_retries ?? ASYNC_GENERATION_MAX_RETRIES),
     errorCode: value.error_code || null, errorMessage: value.error_message || null,
     createdAt: value.created_at, startedAt: value.started_at || null, completedAt: value.completed_at || null,
     assets,
@@ -372,7 +371,7 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
       [failCode, String(failMessage).slice(0, 1000), failAt, jobId]);
     recordAiUsage({
       orgId, userId, projectId: project.id, sessionId: session?.id || null, generationJobId: jobId,
-      modality, model: provider.model, credits: 0,
+      modality, model: provider.model,
       status: BLOCKED_ERROR_CODES.has(failCode) ? 'BLOCKED' : 'FAILED', failCode,
       // 失败不花学生的钱（cost_fen 记 0 但**仍然记 series_id**，这样池子报表里能看出「有哪些失败调用」）
       costFen: 0, seriesId: seriesIdOf(project) || null,
@@ -391,7 +390,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     if (!freshContext.canUseNow) throw errors.forbidden(freshContext.blockReason, freshContext.blockCode);
     const pkg = packageForUser(user, auth.user.orgId);
     assertCapability(modality, freshContext.activeSession, pkg);
-    assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: auth.user.orgId, userId: auth.user.id, credits: 1 });
+    assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: auth.user.orgId, userId: auth.user.id });
     const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
     if (lessonCapability && !(freshContext.lesson?.capabilities || []).includes(lessonCapability)) {
       throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
@@ -399,19 +398,12 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     // 框体占用在结算时再校验一次：等待期间同一框体可能已被另一次生成占用。
     const settledBoxId = row('SELECT box_id FROM generation_jobs WHERE id=?', [jobId])?.box_id || '';
     if (settledBoxId) assertBoxNotGenerated({ projectId: project.id, boxId: settledBoxId, excludeJobId: jobId });
-    const aiLimit = user.ai_credit_limit == null ? null : Number(user.ai_credit_limit);
-    if (aiLimit !== null && Number(user.ai_credits_used || 0) + 1 > aiLimit) throw errors.forbidden('该账号 AI 积分使用上限已用尽', 'AI_MEMBER_CREDIT_LIMIT');
-    const allowance = Number(user.monthly_credit_allowance || 0) + Number(user.monthly_bonus_credits || 0) + Number(user.month_period_boost_credits || 0);
-    if (Number(user.used_credits_this_period || 0) + 1 > allowance) throw errors.forbidden('个人额度不足', 'STUDENT_CREDIT_LIMIT');
-    chargeCreditsInTransaction({
-      orgId: auth.user.orgId, credits: 1, type: `AI_GENERATE_${modality}`, modality, model: provider.model,
-      userId: auth.user.id, sessionId: freshContext.activeSession?.id || null, projectId: project.id,
-    });
-    debitUserAiCredits({ userId: auth.user.id, orgId: auth.user.orgId, credits: 1 });
+    // 2026-09-13（P4 删积分）：成员 AI 上限 / 周期额度两道刹车已删除，且不再扣积分。
+    // 额度由算力池管（调用前的 assertComputePoolBudget 已经拦过一次，这里收尾记账）。
     recordAiUsage({
       orgId: auth.user.orgId, userId: auth.user.id, projectId: project.id,
       sessionId: freshContext.activeSession?.id || null, generationJobId: jobId,
-      modality, model: provider.model, credits: 1, status: 'SUCCESS',
+      modality, model: provider.model, status: 'SUCCESS',
       // 算力池账本：成功才花钱，金额 = 本次单价（与调用前预扣用的是同一个函数，所以两边必然一致）
       costFen: priceFenFor({ modality, model: provider.model }),
       seriesId: freshContext.series?.id || null,
@@ -429,7 +421,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     });
     const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     assertTransition(auditContext(auth, requestContext), 'generationJob', currentJob?.status, 'SUCCEEDED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { modality } });
-    q("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,credits_charged=1,completed_at=? WHERE id=?", [nowIso(), jobId]);
+    q("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,completed_at=? WHERE id=?", [nowIso(), jobId]);
   });
 }
 
@@ -721,7 +713,8 @@ function generationHistory(auth, search) {
       total,
       succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, auth.user.orgId]),
       failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, auth.user.orgId]),
-      creditsCharged: count('SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
+      // 2026-09-13（P4 删积分）：原来报积分，现在报**算力消耗（分）** —— 与算力池同一份账本
+      costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
     },
     items,
   };
@@ -753,8 +746,6 @@ function normalizeAiSession(value) {
     id: value.id, classId: value.class_id, lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
     status: value.status, aiPaused: !!value.ai_paused,
     studentCallCap: value.student_call_cap === null || value.student_call_cap === undefined ? null : Number(value.student_call_cap),
-    sessionCreditCap: value.session_credit_cap === null || value.session_credit_cap === undefined ? null : Number(value.session_credit_cap),
-    consumedCreditsTotal: Number(value.consumed_credits_total || 0),
     capabilities: {
       allowText: value.allow_text === undefined ? true : !!value.allow_text,
       allowImage: !!value.allow_image, allowMusic: !!value.allow_music, allowVideo: !!value.allow_video,
@@ -768,8 +759,6 @@ function studentAiCenter(ctx) {
   const auth = ctx.auth;
   const rawUser = auth.rawUser;
   const pkg = packageForUser(rawUser, auth.user.orgId);
-  const allowance = Number(rawUser.monthly_credit_allowance || 0) + Number(rawUser.monthly_bonus_credits || 0) + Number(rawUser.month_period_boost_credits || 0);
-  const used = Number(rawUser.used_credits_this_period || 0);
   const activeSessions = activeAiSessions(rawUser).map(normalizeAiSession);
   const session = activeSessions[0] || null;
   const capabilities = AI_MODALITIES.map((modality) => {
@@ -786,22 +775,21 @@ function studentAiCenter(ctx) {
         [auth.user.orgId, session.id, auth.user.id]);
       if (usedCalls >= Number(session.studentCallCap)) reasons.push('本课堂调用次数已达上限');
     }
-    if (session?.sessionCreditCap !== null && session?.sessionCreditCap !== undefined
-      && Number(session.consumedCreditsTotal || 0) + 1 > Number(session.sessionCreditCap)) reasons.push('课堂用量已达上限');
-    if (used + 1 > allowance) reasons.push('个人额度不足');
+    // 2026-09-13（P4 删积分）：不再有「课堂用量上限 / 个人额度」两条拒绝理由 ——
+    // 额度看算力池（学生 × 课包），那道闸门在调用前拦，这里不重复报。
     const scopeBlocked = rawUser.student_usage_scope !== 'HOME_PRACTICE' && !session;
     if (scopeBlocked) reasons.push(rawUser.student_usage_scope === 'FOLLOW_CLASS' ? '等待老师开启课堂' : '当前账号暂不能使用 AI');
     return {
       modality, label: MODALITY_LABELS[modality], packageEnabled, sessionEnabled,
-      available: packageEnabled && sessionEnabled && !session?.aiPaused && used + 1 <= allowance && !scopeBlocked,
-      reasons, creditsPerCall: 1,
+      available: packageEnabled && sessionEnabled && !session?.aiPaused && !scopeBlocked,
+      reasons,
     };
   });
   const jobs = {
     total: count('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
     succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, auth.user.orgId]),
     failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, auth.user.orgId]),
-    creditsCharged: count('SELECT COALESCE(SUM(credits_charged),0) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
+    costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
   };
   const assets = rows(`SELECT asset.*, project.title AS project_title, project.status AS project_status,
             lesson.title AS lesson_title, class.name AS class_name
@@ -833,13 +821,9 @@ function studentAiCenter(ctx) {
   }));
   return {
     provider: generationProviderInfo(),
-    period: {
-      allowance, used, remaining: Math.max(0, allowance - used),
-      start: rawUser.period_start_at || null, reset: rawUser.period_reset_at || null,
-      expired: Boolean(rawUser.period_reset_at && rawUser.period_reset_at <= nowIso()),
-    },
+    // 2026-09-13（P4 删积分）：原来的 period（周期额度 allowance/used/remaining）已删除。
+    // 学生的剩余额度看**算力池**（按 学生 × 课包 汇总，学生端「学习统计」与课时卡片都能看到）。
     usageScope: rawUser.student_usage_scope || null,
-    magicStones: Number(rawUser.magic_stones || 0),
     activeSessions,
     capabilities,
     jobs,
