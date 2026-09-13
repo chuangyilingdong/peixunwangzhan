@@ -5,7 +5,7 @@
 // 产物模型的要点：学生不能手写代码，代码只有一个来源——AI 回复里带文件名的围栏。
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
-  ApiError, audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso,
+  ApiError, audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso, normalizeLesson,
   pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { Readable } from 'node:stream';
@@ -423,9 +423,11 @@ function textDefaultModel() {
  */
 async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) {
   const policy = getAiProviderPolicy();
-  // 学生在哪个课时里创作，就用他在那个课时的令牌走网关（额度用尽网关直接拒服务）。
+  const lesson = normalizeLesson(row('SELECT * FROM course_lessons WHERE id=?', [conversation.lesson_id]), { asPublished: true });
+  const lessonModel = lesson?.classroomConfig?.vibeCoding?.model || '';
+  // Resolve each new logical request once; its provider instance retains this route in flight.
   const selection = await applyGatewayRoute(
-    providerSelectionForModality(policy, 'TEXT', conversation.model || ''),
+    providerSelectionForModality(policy, 'TEXT', lessonModel || conversation.model || ''),
     { orgId: auth.user.orgId, studentId: auth.user.id, lessonId: conversation.lesson_id || '', modality: 'TEXT' },
   );
   const provider = getGenerationProvider(selection);
@@ -469,7 +471,7 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
   try {
     const result = await provider.generateStream({
       messages: history,
-      computeContext: { orgId: auth.user.orgId, userId: auth.user.id },
+      computeContext: { orgId: auth.session?.org_id || auth.user.orgId, userId: auth.user.id, sessionId: conversation.class_session_id || null, lessonId: conversation.lesson_id },
       signal: abortController.signal,
       onReasoning: (delta) => {
         const piece = String(delta || '');
@@ -581,7 +583,7 @@ async function illustrateTurn(ctx, auth, conversation, artifactIds) {
   if (!collectIllustrationTargets(artifacts).length) return;
   try {
     const user = activeStudent(auth);
-    const context = resolveStudentLessonContext(user, conversation.lesson_id, conversation.class_id);
+    const context = resolveStudentLessonContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
     const results = await generateIllustrationsForArtifacts({
       auth: { ...auth, rawUser: user },
       context,
@@ -795,7 +797,9 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const lessonId = nonEmptyString(body.lessonId, '课时', { max: 100 });
     const classId = body.classId === undefined || body.classId === '' ? null : nonEmptyString(body.classId, '班级', { max: 100 });
     const user = activeStudent(auth);
-    const context = vibeCodingContext(user, lessonId, classId);
+    const context = vibeCodingContext(user, lessonId, body.sessionId || null);
+    const existing = row('SELECT * FROM vibecoding_conversations WHERE student_id=? AND org_id=? AND lesson_id=? AND class_session_id=? ORDER BY updated_at DESC LIMIT 1', [auth.user.id, auth.user.orgId, lessonId, context.activeSession.id]);
+    if (existing) return { ...normalizeConversation(existing, { includeArtifacts: true }), modelOptions: textModelOptions(), defaultModel: textDefaultModel() };
     const now = nowIso();
     const conversationId = id('vibeconv');
     const title = body.title === undefined || String(body.title).trim() === '' ? DEFAULT_TITLE : nonEmptyString(body.title, '会话标题', { max: 60 });
@@ -803,7 +807,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       q(`INSERT INTO vibecoding_conversations(
            id,org_id,student_id,class_id,lesson_id,class_session_id,title,model,files,entry_file,status,last_message_at,created_at,updated_at
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [conversationId, auth.user.orgId, auth.user.id, context.class?.id || classId, lessonId,
+        [conversationId, auth.user.orgId, auth.user.id, null, lessonId,
           context.activeSession?.id || null, title, null, '{}', 'index.html', 'DRAFT', null, now, now]);
       // 起始产物：让学生一进课堂就有东西可跑，而不是面对一块空白
       seedDefaultArtifacts(conversationId);
@@ -934,7 +938,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const { auth: ownerAuth, conversation } = ownConversation(ctx, messageMatch[1]);
     assertConversationEditable(conversation);
     const user = activeStudent(ownerAuth);
-    const context = vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
+    const context = vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
     assertChatPreflight({ user, orgId: ownerAuth.user.orgId, context, model: conversation.model || '' });
     // 附件先校验，再决定正文是否可以为空（只发图不发字是允许的）
     const attachments = resolveAttachments(ownerAuth, body.attachments);
@@ -1008,7 +1012,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   if (submitMatch && method === 'POST') {
     const { auth: ownerAuth, conversation } = ownConversation(ctx, submitMatch[1]);
     const user = activeStudent(ownerAuth);
-    vibeCodingContext(user, conversation.lesson_id, conversation.class_id);
+    vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
     const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ?', [conversation.id]);
     // 没有老师点评这一环了：提交只是「交给平台」，可以反复提交（round+1），不再挡第二次
     // 与画布作品一致：提交即确认版权与展示授权，平台后续才可发布到作品广场

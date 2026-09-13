@@ -11,20 +11,10 @@ import '@platform/shared/styles.css';
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/org').replace(/\/$/, '');
 
 const navigation = [
-  { to: '/dashboard', icon: '◈', label: '机构总览' }, 
-  // 2026-09-13（批次 B-6）：班级退场，导航这一条改成「课堂」（新的 /sessions 接口）。
-  // 旧的「班级与课堂」页仍在 /classes 上（URL 可达、导航里不再露出），留给批次 D 清掉。
-  { to: '/classrooms', icon: '▦', label: '课堂' }, 
-  { to: '/members', icon: '♙', label: '成员管理' }, 
-  { to: '/usage', icon: '▦', label: '算力用量' },
-  { to: '/grants', icon: '✦', label: '学员许可', adminOnly: true },
-  { to: '/works', icon: '✧', label: '作品管理' }, 
-  { to: '/inbox', icon: '✉', label: '站内信' }, 
-  { to: '/courses', icon: '◇', label: '课程中心' }, 
-  { to: '/series-overview', icon: '▦', label: '课包概览' },
-  { to: '/enrollment', icon: '♙', label: '学员开通', adminOnly: true }, 
-  { to: '/materials', icon: '▤', label: '宣传物料' }, 
-  { to: '/help-feedback', icon: '◎', label: '问题反馈', adminOnly: true }
+  { to: '/dashboard', icon: '◈', label: '机构总览' },
+  { to: '/classrooms', icon: '▦', label: '课堂' },
+  { to: '/members', icon: '♙', label: '账号', adminOnly: true },
+  { to: '/series-overview', icon: '◇', label: '课包与授权', adminOnly: true },
 ];
 const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
 
@@ -32,10 +22,11 @@ function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/overview'), [api]);
   // 2026-09-13（用户要求）：首页按「课包」看家底 —— 每个课包多少人次、多少学员、多少老师、多少课堂。
   // ⚠️ 必须和其它 hook 一起放在提前 return 之前（放到 return 之后会变成条件 hook，切页时 React 会崩）。
-  const seriesBox = useData(() => api.get('org/series-overview?days=30'), [api]);
+  const seriesBox = useData(() => data?.scope?.role === 'ORG_ADMIN' ? api.get('org/series-overview?days=30') : Promise.resolve({ items: [], totals: {} }), [api, data?.scope?.role]);
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   const isAdmin = data.scope?.role === 'ORG_ADMIN';
+  if (!isAdmin) return <><PageHeader title={data.org.name} description="仅展示本人课堂与机构课程" /><div className="metrics"><MetricCard label="进行中课堂" value={data.activeSessions} /><MetricCard label="待上课" value={data.pendingSessions} /></div><Panel title="近期本人课堂">{(data.recentSessions || []).map((item) => <p key={item.id}>{item.title || item.lessonTitle} · <Status value={item.status} /></p>)}</Panel></>;
   const alerts = data.alerts || [];
   const recentSessions = data.recentSessions || [];
   const unreadMessages = data.unreadNotificationItems || [];
@@ -51,8 +42,8 @@ function Dashboard({ api }) {
     </div>
     <Panel title="统计口径">
       <div className="row-actions"><Status value={data.org.status} /><span className="muted">{data.scope?.description}</span><span className="muted">课堂：待上课 {data.breakdown?.pendingSessions ?? data.pendingSessions ?? 0} · 上课中 {data.breakdown?.activeSessions ?? data.activeSessions}</span></div>
-      <p className="muted">合同到期：{formatDate(data.org.contractExpiresAt)}{isAdmin ? ` · 教师席位：${data.org.teacherUsedSeats} / ${data.org.teacherSeats}` : ' · 经营席位仅机构管理员可见'}</p>
-      <p className="muted">课包口径「已分配 / 可授权」＝平台给本机构的授权次数里已经分给学员的部分（每分给一名学员用掉 1 次）；「进行中的课堂」是当前存量，待上课的课堂还没开始。逐课包的明细见「课包概览」。</p>
+      <p className="muted">合同到期：{formatDate(data.org.contractExpiresAt)}{isAdmin ? ` · 教师人数：${data.org.teacherUsedSeats} / ${data.org.teacherSeats} · 学生人数：${data.org.studentUsedSeats} / ${data.org.studentSeats}` : ' · 经营席位仅机构管理员可见'}</p>
+      <p className="muted">课包口径「已分配 / 可授权」＝平台给本机构的授权次数里已经分给学员的部分（每分给一名学员用掉 1 次）；「进行中的课堂」是当前存量，待上课的课堂还没开始。逐课包的明细见「课包与授权」。</p>
     </Panel>
     <div className="split">
       <Panel title={isAdmin ? '经营提醒' : '教学提醒'}>
@@ -63,7 +54,7 @@ function Dashboard({ api }) {
           <thead><tr><th>课包</th><th>已分配 / 可授权</th><th>学员</th><th>课堂（待 / 中）</th><th>老师</th></tr></thead>
           <tbody>{seriesItems.map((item) => <tr key={item.seriesId}>
             <td><strong>{item.title}</strong></td>
-            <td>{item.quotaUsed} / {item.quotaTotal || '不限'}<div className="muted">剩 {item.remaining} 次</div></td>
+            <td>{item.quotaUsed} / {item.quotaTotal}<div className="muted">剩 {item.remaining} 次</div></td>
             <td>{item.grantedStudents}<div className="muted">{item.grantedCount} 人次</div></td>
             <td>{item.pendingSessions} / <strong>{item.activeSessions}</strong></td>
             <td>{item.teacherCount}</td>
@@ -317,6 +308,26 @@ function OrgCourses({ api }) {
   const detail = useData(() => seriesId ? api.get('org/course-series/' + encodeURIComponent(seriesId)) : Promise.resolve(null), [api, seriesId]);
   const [expanded, setExpanded] = useState('');
   const [lessonDetail, setLessonDetail] = useState(null);
+  const [assetError, setAssetError] = useState('');
+  const [assetBusy, setAssetBusy] = useState('');
+  useEffect(() => {
+    const lessonId = new URLSearchParams(window.location.search).get('lesson');
+    if (lessonId && detail.data?.lessons) setLessonDetail(detail.data.lessons.find((lesson) => lesson.id === lessonId) || null);
+  }, [detail.data]);
+  async function downloadTeachingAsset(asset) {
+    setAssetBusy(asset.id); setAssetError('');
+    try {
+      const path = asset.fileAssetId ? `/api/org/file-assets/${encodeURIComponent(asset.fileAssetId)}/download` : String(asset.assetUrl || '');
+      if (!path.startsWith('/api/org/file-assets/')) throw new Error('课件下载地址无效，请联系平台重新上传');
+      const file = asset.fileAssetId ? await api.get(`org/file-assets/${encodeURIComponent(asset.fileAssetId)}`) : null;
+      const url = await api.fetchBlobUrl(path);
+      const link = document.createElement('a');
+      link.href = url; link.download = file?.fileName || asset.fileName || asset.title || '课件';
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) { setAssetError(error.message || '课件下载失败'); }
+    finally { setAssetBusy(''); }
+  }
   if (seriesId) {
     if (detail.loading) return <Loading />;
     if (detail.error) return <ErrorState error={detail.error} onRetry={detail.refresh} />;
@@ -347,11 +358,12 @@ function OrgCourses({ api }) {
             </section>
             <section className="drawer-section">
               <h3>教学素材（备课资料）</h3>
+              {assetError ? <Notice tone="danger">{assetError}</Notice> : null}
               {(lessonDetail.teachingGroups || []).length ? lessonDetail.teachingGroups.map((group) => <div className="lesson-material-group-editor" key={group.id}>
                 <strong>{group.title}</strong>
                 {(group.assets || []).map((asset) => <div className="teaching-asset-row" key={asset.id}>
                   <span><strong>{asset.title}</strong>{asset.description ? <small className="muted">{asset.description}</small> : null}</span>
-                  {asset.assetUrl ? <a className="secondary-button" href={asset.assetUrl} target="_blank" rel="noreferrer">下载</a> : <span className="muted">未上传文件</span>}
+                  {asset.assetUrl ? <button className="secondary-button" disabled={Boolean(assetBusy)} onClick={() => downloadTeachingAsset(asset)}>{assetBusy === asset.id ? '正在下载…' : '下载课件'}</button> : <span className="muted">未上传文件</span>}
                 </div>)}
               </div>) : <Empty title="暂无教学素材" body="平台还没有为这节课配置备课资料。" />}
             </section>
@@ -502,7 +514,7 @@ export function App() {
   // 2026-09-13（批次 B-6）：班级退场后登录页文案也跟着改，别再说「管理班级」。
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学员创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
-  const visibleNavigation = navigation.filter((item) => !item.adminOnly || session.user?.role === 'ORG_ADMIN');
-  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={<Members api={api} user={session.user} />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={<SeriesOverview api={api} />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={<EnrollmentPage api={api} user={session.user} />} /><Route path="/usage" element={<UsagePage api={api} />} /><Route path="/grants" element={<StudentGrants api={api} />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教学总览' }, { to: '/classrooms', icon: '▦', label: '本人课堂' }, { to: '/courses', icon: '◇', label: '机构课程' }] : navigation;
+  return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

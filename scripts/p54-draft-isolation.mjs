@@ -49,7 +49,7 @@ try {
 
   const created = await api('/api/admin/course-series', {
     method: 'POST', token: admin,
-    body: { title: 'P54 草稿隔离课包', description: '第一版简介', visibility: 'ALL_ORGS', priceFen: 9900, lessons: [{ title: '第1课 原始标题', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'], lessonContent: '原始正文' }] },
+    body: { title: 'P54 草稿隔离课包', stockTotal: 1, description: '第一版简介', coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'ALL_ORGS', priceFen: 9900, lessons: [{ title: '第1课 原始标题', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'], lessonContent: '原始正文' }] },
   });
   assert.equal(created.status, 200, `建课包失败: ${JSON.stringify(created.data).slice(0, 160)}`);
   const seriesId = created.data.id;
@@ -57,14 +57,22 @@ try {
 
   // 首次发布 + 授权 + **发许可 + 建课堂把学生排进去**（学生才能进这节课）
   // 批次 D：原来走「建班级 → 配课单」，班级退场后改成直接建课堂（scripts/lib/classroomApi.mjs）
-  await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
-  await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365 } });
+  const initialPublish = await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+  assert.equal(initialPublish.status, 200, JSON.stringify(initialPublish));
+  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 1 } });
+  assert.equal(assigned.status, 200, JSON.stringify(assigned));
   const studentId = student.user?.id || student.data?.user?.id;
-  await api('/api/org/course-grants', { method: 'POST', token: orgAdmin.token, body: { seriesId, studentIds: [studentId] } });
+  const granted = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin.token, body: { seriesId, studentIds: [studentId] } });
+  assert.equal(granted.status, 200, JSON.stringify(granted));
+  assert.equal(granted.data.granted, 1);
   await openClassroom(api, orgAdmin.token, { lessonId, title: 'P54 课堂', studentIds: [studentId] });
 
   const orgRead = async () => JSON.stringify((await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token })).data);
-  const studentRead = async () => JSON.stringify((await api(`/api/student/projects`, { method: 'POST', token: student.token, body: { courseLessonId: lessonId, title: 'P54' } })).data);
+  const studentRead = async () => {
+    const response = await api('/api/student/projects', { method: 'POST', token: student.token, body: { courseLessonId: lessonId, title: 'P54' } });
+    assert.equal(response.status, 200, JSON.stringify(response));
+    return JSON.stringify(response.data);
+  };
 
   check('发布后机构端读到原始内容', (await orgRead()).includes('第1课 原始标题'));
   check('发布后学生端也读得到（能进课时）', (await studentRead()).length > 10);
@@ -77,7 +85,7 @@ try {
   check('平台端自己读到的是实时内容（编辑界面要能看到自己刚改的）', adminRead.includes('第1课 改过的标题'), adminRead.slice(0, 120));
   check('① 改完没发布：机构端仍读到旧标题', (await orgRead()).includes('第1课 原始标题'), (await orgRead()).slice(0, 160));
   const studentBefore = await studentRead();
-  check('① 改完没发布：学生端仍读到旧标题', studentBefore.includes('第1课 原始标题') || !studentBefore.includes('第1课 改过的标题'), studentBefore.slice(0, 160));
+  check('① 改完没发布：学生端仍读到旧标题', studentBefore.includes('第1课 原始标题') && !studentBefore.includes('第1课 改过的标题'), studentBefore.slice(0, 160));
 
   // ② 更新发布 → 机构端/学生端立刻读到新内容
   const published = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.1', note: '改了第 1 课标题与正文' } });
@@ -91,7 +99,8 @@ try {
   const orgAfterSeriesEdit = await orgRead();
   check('③ 课包资料改了但没发布：机构端仍读到旧标题', orgAfterSeriesEdit.includes('P54 草稿隔离课包"'), orgAfterSeriesEdit.slice(0, 120));
   check('③ 课包资料改了但没发布：机构端仍读到旧价格', !orgAfterSeriesEdit.includes('"priceFen":29900'), orgAfterSeriesEdit.slice(0, 200));
-  await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.2', note: '改了课包资料' } });
+  const seriesPublished = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.2', note: '改了课包资料' } });
+  assert.equal(seriesPublished.status, 200, JSON.stringify(seriesPublished));
   const orgAfterSeriesPublish = await orgRead();
   check('③ 更新发布后：机构端读到新课包标题与价格', orgAfterSeriesPublish.includes('改过') && orgAfterSeriesPublish.includes('29900'), orgAfterSeriesPublish.slice(0, 160));
 

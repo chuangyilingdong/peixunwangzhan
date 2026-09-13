@@ -33,6 +33,8 @@ await run(['packages/database/src/seed.js']);
 
 // 把 class_sessions 退回**旧结构**（两态 + class_id/started_* 非空 + 旧唯一索引），并塞进真实数据
 const fixture = {};
+const dataSnapshot = (db) => Object.fromEntries(['class_sessions', 'session_students', 'usage_records'].map((table) => [table, db.prepare(`SELECT * FROM ${table} ORDER BY id`).all()]));
+let migratedSnapshot;
 {
   const db = new DatabaseSync(dbPath);
   const teacher = db.prepare("SELECT id FROM users WHERE login='teacher-1'").get();
@@ -55,11 +57,16 @@ const fixture = {};
     VALUES ('p73_live',?,?, 'ACTIVE','CANVAS',?,?)`).run(cls.id, lesson.id, teacher.id, '2026-09-01T10:00:00.000Z');
   db.prepare(`INSERT INTO class_sessions(id,class_id,lesson_id,status,delivery_mode,allow_video,started_by,started_at,ended_by,ended_at,ended_reason)
     VALUES ('p73_done',?,?, 'ENDED','VIBECODING',0,?,?,?,?, 'MANUAL')`).run(cls.id, lesson.id, teacher.id, '2026-09-02T10:00:00.000Z', teacher.id, '2026-09-02T11:00:00.000Z');
-  // 用量：s1 花了 100 分（=有证据上过），s2 花了 0 分（=没消耗）
+  // 已扩展过的旧库也必须保留非默认课堂类型，不能重建后重置为 REGULAR。
+  db.exec("ALTER TABLE class_sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT 'REGULAR'");
+  db.exec("UPDATE class_sessions SET session_kind='TRIAL' WHERE id='p73_done'");
+  fixture.legacyRows = db.prepare('SELECT * FROM class_sessions ORDER BY id').all();
+  // 两名学员都有成功使用证据，金额分别为 100 和 0，均应完课。
   db.prepare(`INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,cost_fen,created_at)
     VALUES ('p73_u1',?,?,'p73_done','TEXT','m',0,'SUCCESS',100,'2026-09-02T10:30:00.000Z')`).run(orgId, students[0].id);
   db.prepare(`INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,cost_fen,created_at)
     VALUES ('p73_u2',?,?,'p73_done','TEXT','m',0,'SUCCESS',0,'2026-09-02T10:31:00.000Z')`).run(orgId, students[1].id);
+  fixture.usageRows = db.prepare('SELECT * FROM usage_records ORDER BY id').all();
   const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='class_sessions'").get().sql;
   check('起点：老库只有 ACTIVE/ENDED 两态、class_id 非空', ddl.includes("'ACTIVE','ENDED'") && !ddl.includes("'PENDING'") && /class_id TEXT NOT NULL/.test(ddl));
   Object.assign(fixture, { teacherId: teacher.id, studentA: students[0].id, studentB: students[1].id, lessonId: lesson.id, seriesId: lesson.series_id, lessonTitle: lesson.title, orgId });
@@ -79,6 +86,13 @@ await run(['packages/database/src/db.js', '--init']);
   const rows = db.prepare("SELECT * FROM class_sessions WHERE id LIKE 'p73_%' ORDER BY id").all();
   check('迁移后：两节老课堂都在（没丢数据）', rows.length === 2, `行数 ${rows.length}`);
   const done = rows.find((r) => r.id === 'p73_done');
+  for (const legacy of fixture.legacyRows) {
+    const migrated = rows.find((r) => r.id === legacy.id);
+    assert.ok(migrated, `迁移丢失课堂 ${legacy.id}`);
+    for (const [field, value] of Object.entries(legacy)) assert.equal(migrated[field], value, `${legacy.id}.${field} 迁移后应保留`);
+  }
+  assert.deepEqual(db.prepare('SELECT * FROM usage_records ORDER BY id').all(), fixture.usageRows, '首次迁移必须保留全部用量字段');
+  check('首次迁移完整保留旧课堂字段（含非默认 session_kind）和用量', true);
   check('迁移后：老字段没串位（status/delivery_mode/allow_video/ended_reason 都对）',
     done?.status === 'ENDED' && done?.delivery_mode === 'VIBECODING' && Number(done?.allow_video) === 0 && done?.ended_reason === 'MANUAL',
     JSON.stringify(done));
@@ -89,10 +103,8 @@ await run(['packages/database/src/db.js', '--init']);
   check('迁移后：旧的部分唯一索引（一班一活跃课堂）已移除', !db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_class_sessions_active'").all().length);
 
   const students = db.prepare("SELECT * FROM session_students WHERE session_id='p73_done'").all();
-  check('历史学员回填：只认消耗过算力的人（A 有、B 没有）',
-    students.length === 1 && students[0].student_id === fixture.studentA && students[0].status === 'COMPLETED',
-    JSON.stringify(students.map((s) => ({ id: s.student_id, status: s.status }))));
-  check('回填带上了消耗金额（100 分）与完成时间', Number(students[0]?.completed_cost_fen) === 100 && Boolean(students[0]?.completed_at), JSON.stringify(students[0]));
+  check('历史学员回填：每条成功使用都算完课（金额可为 0）', students.length === 2 && students.every((s) => s.status === 'COMPLETED'), JSON.stringify(students.map((s) => ({ id: s.student_id, status: s.status }))));
+  check('回填带上完成时间且保留实际金额', students.every((s) => Boolean(s.completed_at)) && students.some((s) => Number(s.completed_cost_fen) === 100), JSON.stringify(students));
   check('进行中的老课堂没有被回填（ACTIVE 不算完课）', Number(db.prepare("SELECT COUNT(*) n FROM session_students WHERE session_id='p73_live'").get().n) === 0);
   check('回填的学员行带上了 lesson/series（单表可查「这节课上过吗」）',
     students[0]?.lesson_id === fixture.lessonId && students[0]?.series_id === fixture.seriesId, JSON.stringify({ lesson: students[0]?.lesson_id, series: students[0]?.series_id }));
@@ -100,7 +112,7 @@ await run(['packages/database/src/db.js', '--init']);
   // 新模型的写入路径能跑：待上课（started_* 为空）+ 学员六态
   let insertError = null;
   try {
-    db.prepare("INSERT INTO class_sessions(id,title,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at) VALUES ('p73_pending','新课堂',?,?,?,'PENDING','CANVAS',datetime('now'),datetime('now'))").run(fixture.seriesId, fixture.lessonId, fixture.teacherId);
+    db.prepare("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,created_at,updated_at) VALUES ('p73_pending','新课堂',?,?,?,?,'PENDING','CANVAS',datetime('now'),datetime('now'))").run(fixture.orgId, fixture.seriesId, fixture.lessonId, fixture.teacherId);
     db.prepare("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_at) VALUES ('p73_ss','p73_pending',?,?,?,?,'PENDING',datetime('now'))").run(fixture.studentB, fixture.orgId, fixture.lessonId, fixture.seriesId);
   } catch (error) { insertError = error; }
   check('迁移后：能建「待上课」课堂并加学员（新模型写入路径可用）', !insertError, String(insertError?.message || ''));
@@ -109,16 +121,16 @@ await run(['packages/database/src/db.js', '--init']);
     db.prepare("INSERT INTO session_students(id,session_id,student_id,org_id,status,added_at) VALUES ('p73_ss2','p73_pending',?,?,'PENDING',datetime('now'))").run(fixture.studentB, fixture.orgId);
   } catch (error) { dupError = error; }
   check('同一课堂同一学员不能重复加（部分唯一索引真的在挡）', Boolean(dupError), '重复插入竟然成功了');
+  migratedSnapshot = dataSnapshot(db);
   db.close();
 }
 
-// 幂等：再跑一次
 await run(['packages/database/src/db.js', '--init']);
 {
   const db = new DatabaseSync(dbPath);
-  check('再跑一次幂等：课堂行数不变（3）', Number(db.prepare("SELECT COUNT(*) n FROM class_sessions WHERE id LIKE 'p73_%'").get().n) === 3);
-  check('再跑一次没有半截表（不该有 _migrated）', !db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%migrated%'").all().length);
-  check('再跑一次没有重复回填学员', Number(db.prepare("SELECT COUNT(*) n FROM session_students WHERE session_id='p73_done'").get().n) === 1);
+  const rerunSnapshot = dataSnapshot(db);
+  check('再跑一次没有半截迁移表', !db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%migrated%'").all().length);
+  assert.deepEqual(rerunSnapshot, migratedSnapshot, '再次初始化不得改变课堂、学员、用量任何字段');
   db.close();
 }
 

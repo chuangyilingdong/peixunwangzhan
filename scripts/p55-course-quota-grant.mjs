@@ -52,12 +52,13 @@ try {
   // 建课包（库存 3 次）并发布
   const created = await api('/api/admin/course-series', {
     method: 'POST', token: admin,
-    body: { title: 'P55 次数课包', visibility: 'ALL_ORGS', stockTotal: 3, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] },
+    body: { title: 'P55 次数课包', description: '次数授权回归课包', coverImageUrl: 'https://example.com/p55-cover.png', visibility: 'ALL_ORGS', stockTotal: 3, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] },
   });
   assert.equal(created.status, 200, `建课包失败: ${JSON.stringify(created.data).slice(0, 160)}`);
   const seriesId = created.data.id;
   const lessonId = created.data.lessons[0].id;
-  await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+  const published = await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
+  assert.equal(published.status, 200, `发布夹具失败: ${JSON.stringify(published.error)}`);
 
   // ① 授权次数不能超过库存
   const over = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 5 } });

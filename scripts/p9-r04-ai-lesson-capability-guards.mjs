@@ -9,7 +9,6 @@
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'p9-r04-ai-lesson-guards-'));
 process.env.PLATFORM_DATA_DIR = dir;
@@ -50,8 +49,12 @@ try {
   q("INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,credits_charged,created_at,box_id) VALUES ('job1','org1','stu1','proj1','IMAGE','local-mock','canvas-mock-v1','测试','SUCCEEDED',1,?,'box-image-1')", [now]);
   q("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset1','job1','org1','stu1','proj1','IMAGE','素材','mock://asset',?)", [now]);
 
-  // 批次 B：门禁要求「许可 + 课堂名单」——这条守卫是在进程内直接调路由，所以夹具要放在它自己造完数据之后
-  ensureClassroom(path.join(dir, 'platform.db'));
+  // 独立夹具：真实教师只开一个课堂，项目明确绑定该课堂。
+  q("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at) VALUES ('teacher1','org1','teacher1','教师','TEACHER','x','ACTIVE',?,?)", [now, now]);
+  q("INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,allow_text,allow_image,started_by,started_at,created_at,updated_at) VALUES ('session1','测试课堂','org1','series1','lesson1','teacher1','ACTIVE','CANVAS',1,1,'teacher1',?,?,?)", [now, now, now]);
+  q("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at) VALUES ('ss1','session1','stu1','org1','lesson1','series1','ACTIVE','teacher1',?)", [now]);
+  q("UPDATE student_projects SET class_session_id='session1' WHERE id='proj1'");
+  check(row("SELECT COUNT(*) n FROM class_sessions WHERE teacher_id='teacher1' AND status IN ('PENDING','ACTIVE')").n === 1, '教师夹具应只有一个未结束课堂');
 
   const dbUser = row("SELECT * FROM users WHERE id='stu1'");
   const auth = { user: normalizeUser(dbUser, { includeAuthMeta: true }), rawUser: dbUser, org: row("SELECT * FROM organizations WHERE id='org1'") };

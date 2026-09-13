@@ -1,4 +1,5 @@
 import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
+import { normalizeLesson } from '../lib.js';
 import { hashPassword } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
@@ -107,6 +108,7 @@ export async function handleOrg(ctx) {
       breakdown: { students, activeClasses, activeSessions, pendingSessions, works: workBreakdown, pendingWorks, usage7 },
     };
   }
+  if (auth.user.role === 'TEACHER' && (/^\/users(?:\/|$)/.test(part) || part === '/course-grants' || part === '/series-overview')) throw errors.forbidden('仅机构管理员可管理学生及授权', 'ORG_ADMIN_REQUIRED');
   if (part === '/users' && method === 'GET') {
     const role = ctx.search.get('role');
     // 教师需要读取本机构学生名册，才能履行“将学生加入班级”的职责；不开放教师名册和机构成员管理权限。
@@ -458,15 +460,15 @@ export async function handleOrg(ctx) {
    * 教师只能操作自己创建的课堂（sessionScope / assertSessionManager），机构管理员管全机构。
    * ⚠️ 下列接口与旧的 /classes/* 并存一段时间：界面已切到课堂，旧接口留待批次 D 清理。
    */
+  const assertTeacherSessionAvailable = (teacherId, excludeId = '') => {
+    if (row('SELECT role FROM users WHERE id=?', [teacherId])?.role !== 'TEACHER') return;
+    const occupied = row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [teacherId, excludeId]);
+    if (occupied) throw errors.conflict(`教师已有待上课或上课中的课堂（${occupied.title || occupied.id}），请先结束或解散`, 'TEACHER_SESSION_OCCUPIED');
+  };
   const sessionInOrg = (id) => {
     const value = row('SELECT * FROM class_sessions WHERE id=?', [id]);
     if (!value) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
-    if (value.org_id && value.org_id !== currentOrgId) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
-    if (!value.org_id) {
-      // 兜底：老数据可能还没回填 org_id，用负责老师所属机构判断
-      const owner = value.teacher_id ? row('SELECT org_id FROM users WHERE id=?', [value.teacher_id]) : null;
-      if (owner?.org_id && owner.org_id !== currentOrgId) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
-    }
+    if (value.org_id !== currentOrgId) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
     return assertSessionManager(auth, value);
   };
 
@@ -474,7 +476,7 @@ export async function handleOrg(ctx) {
     const params = [currentOrgId];
     const conditions = ['1=1'];
     // 课堂归属：org_id 是权威列（老数据迁移时从负责老师回填过）
-    conditions.push('(session.org_id = ? OR session.org_id IS NULL)');
+    conditions.push('session.org_id = ?');
     const scope = sessionScope('session', auth, params);
     if (scope) conditions.push(scope.replace(/^ AND /, ''));
     const status = String(ctx.search.get('status') || '').trim().toUpperCase();
@@ -505,6 +507,7 @@ export async function handleOrg(ctx) {
           + (counts.get(`${item.id}:COMPLETED`) || 0) + (counts.get(`${item.id}:INCOMPLETE`) || 0),
         completedCount: counts.get(`${item.id}:COMPLETED`) || 0,
       })),
+      ongoingSession: auth.user.role === 'TEACHER' ? row("SELECT id,title,status FROM class_sessions WHERE org_id=? AND teacher_id=? AND status IN ('PENDING','ACTIVE') ORDER BY created_at DESC LIMIT 1", [currentOrgId, auth.user.id]) || null : null,
       filters: { status: status || null, days, seriesId: seriesId || null, lessonId: lessonId || null },
     };
   }
@@ -515,8 +518,9 @@ export async function handleOrg(ctx) {
     const lesson = row("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [lessonId]);
     if (!lesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_FOUND');
     if (!accessibleLesson(currentOrgId, lessonId)) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
-    const deliveryMode = String(body.deliveryMode || lesson.delivery_mode || 'CANVAS').trim().toUpperCase();
-    if (!['CANVAS', 'VIBECODING'].includes(deliveryMode)) throw errors.badRequest('课堂入口类型无效', 'INVALID_DELIVERY_MODE');
+    const publishedLesson = normalizeLesson(lesson, { asPublished: true });
+    const deliveryMode = String(body.deliveryMode || publishedLesson.deliveryMode || 'CANVAS').trim().toUpperCase();
+    if (!['CANVAS', 'VIBECODING'].includes(deliveryMode) || !publishedLesson.deliveryModes.includes(deliveryMode)) throw errors.badRequest('该课时未发布此入口类型', 'INVALID_DELIVERY_MODE');
     // 负责老师：教师建课挂自己；机构管理员可以指定本机构的教师，默认也挂自己
     let teacherId = auth.user.id;
     if (auth.user.role === 'ORG_ADMIN' && body.teacherId) {
@@ -531,14 +535,17 @@ export async function handleOrg(ctx) {
     const now = nowIso();
     const title = String(body.title || '').trim().slice(0, 120)
       || `${lesson.title} · ${new Date(now).toISOString().slice(5, 10)}`;
-    q(`INSERT INTO class_sessions(id, title, org_id, series_id, lesson_id, teacher_id, status, delivery_mode,
-         ai_paused, student_call_cap, allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing, created_at, updated_at)
-       VALUES (?,?,?,?,?,?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    transaction(() => {
+      assertTeacherSessionAvailable(teacherId);
+      q(`INSERT INTO class_sessions(id, title, org_id, series_id, lesson_id, teacher_id, status, delivery_mode,
+         ai_paused, student_call_cap, allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing, created_at, updated_at, platform_budget_fen)
+       VALUES (?,?,?,?,?,?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [sessionId, title, currentOrgId, lesson.series_id, lessonId, teacherId, deliveryMode,
       capability.aiPaused ? 1 : 0,
       capability.studentCallCap === undefined || capability.studentCallCap === null ? null : integer(capability.studentCallCap, '单学生调用次数', { min: 1, max: 100000 }),
       capabilityDefault('allowText', 'text'), capabilityDefault('allowImage', 'image'),
-      capabilityDefault('allowMusic', 'music'), capabilityDefault('allowVideo', 'video'), 0, 0, now, now]);
+      capabilityDefault('allowMusic', 'music'), capabilityDefault('allowVideo', 'video'), 0, 0, now, now, publishedLesson.platformBudgetFen ?? null]);
+    });
     audit(ctx, 'SESSION_CREATE', 'CLASS_SESSION', sessionId, null, { title, lessonId, deliveryMode, teacherId });
     const created = row(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title, teacher.display_name teacher_name
       FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
@@ -587,6 +594,8 @@ export async function handleOrg(ctx) {
       const ready = count("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status='PENDING'", [target.id]);
       if (!ready) throw errors.badRequest('先添加学员再开始上课（名单为空不能开课）', 'SESSION_STUDENTS_REQUIRED');
       transaction(() => {
+        assertTeacherSessionAvailable(target.teacher_id, target.id);
+        if (!row("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [target.lesson_id]) || !accessibleLesson(currentOrgId, target.lesson_id)) throw errors.forbidden('课时未发布或授权已失效', 'LESSON_NOT_ASSIGNED');
         assertTransition(ctx, 'classSession', target.status, 'ACTIVE', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能开始上课' });
         q("UPDATE class_sessions SET status='ACTIVE', started_by=?, started_at=?, updated_at=? WHERE id=?", [auth.user.id, now, now, target.id]);
         q("UPDATE session_students SET status='ACTIVE', updated_at=? WHERE session_id=? AND status='PENDING'", [now, target.id]);
@@ -761,16 +770,16 @@ export async function handleOrg(ctx) {
     // 课堂：存量（待上课/上课中）
     const liveBySeries = new Map(rows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n
       FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id
-      WHERE session.status IN ('PENDING','ACTIVE') GROUP BY lesson.series_id, session.status`)
+      WHERE session.org_id=? AND session.status IN ('PENDING','ACTIVE') GROUP BY lesson.series_id, session.status`, [currentOrgId])
       .map((item) => [`${item.series_id}:${item.status}`, Number(item.n || 0)]));
     // 课堂：区间内已结束/已解散 + 涉及老师
     // ⚠️ 批次 A 阶段课堂还没有 teacher_id（批次 B 才加），所以先用 started_by；
     //    批次 B 落地后改成 COALESCE(session.teacher_id, session.started_by)（一行改动）。
     const doneBySeries = new Map(rows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n,
-        COUNT(DISTINCT session.started_by) teachers
+        COUNT(DISTINCT session.teacher_id) teachers
       FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id
-      WHERE session.ended_at IS NOT NULL AND session.ended_at >= ? AND session.ended_at < ?
-      GROUP BY lesson.series_id, session.status`, [since, until])
+      WHERE session.org_id=? AND session.ended_at IS NOT NULL AND session.ended_at >= ? AND session.ended_at < ?
+      GROUP BY lesson.series_id, session.status`, [currentOrgId, since, until])
       .map((item) => [`${item.series_id}:${item.status}`, { n: Number(item.n || 0), teachers: Number(item.teachers || 0) }]));
     const items = series.map((row0) => {
       const grant = grantBySeries.get(row0.id) || { grantedCount: 0, grantedStudents: 0 };
@@ -823,6 +832,8 @@ export async function handleOrg(ctx) {
     const requested = Array.isArray(ctx.body?.studentIds) ? ctx.body.studentIds : [];
     const studentIds = [...new Set(requested.map((value) => String(value || '').trim()).filter(Boolean))];
     if (!studentIds.length || studentIds.length > 200) throw errors.badRequest('请选择 1-200 名学员', 'INVALID_STUDENT_IDS');
+    return transaction(() => {
+    if (!row("SELECT id FROM course_series WHERE id=? AND status='PUBLISHED'", [seriesId])) throw errors.forbidden('课包未发布', 'COURSE_NOT_PUBLISHED');
     const assignment = row("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [seriesId, currentOrgId, nowIso()]);
     if (!assignment) throw errors.forbidden('该课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
     const placeholders = studentIds.map(() => '?').join(',');
@@ -833,11 +844,10 @@ export async function handleOrg(ctx) {
     const fresh = studentIds.filter((studentId) => !already.has(studentId));
     const quotaTotal = Number(assignment.quota_total || 0);
     const quotaUsed = Number(assignment.quota_used || 0);
-    if (quotaTotal > 0 && quotaUsed + fresh.length > quotaTotal) {
+    if (fresh.length && (quotaTotal <= 0 || quotaUsed + fresh.length > quotaTotal)) {
       throw errors.conflict(`可用次数不足：授权 ${quotaTotal} 次，已用 ${quotaUsed} 次，本次需要 ${fresh.length} 次`, 'COURSE_QUOTA_EXHAUSTED');
     }
     const now = nowIso();
-    transaction(() => {
       fresh.forEach((studentId) => {
         const existing = row('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
         if (existing) {
@@ -848,9 +858,9 @@ export async function handleOrg(ctx) {
         }
       });
       if (fresh.length) q('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
-    });
     audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length }, { orgId: currentOrgId });
     return { granted: fresh.length, skipped: studentIds.length - fresh.length, quotaTotal, quotaUsed: quotaUsed + fresh.length };
+    });
   }
 
   // P1: 机构端 - 查看成员配额列表

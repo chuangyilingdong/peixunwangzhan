@@ -94,13 +94,13 @@ try {
     // 发布要求至少一个未归档课时（seed 里那门课包也是这么建的）
     const created = await api('/api/admin/course-series', {
       method: 'POST', token: rootAdmin,
-      body: { title, description: '分页用例', visibility: 'ALL_ORGS', lessons: [{ title: title + ' 第1课', status: 'PUBLISHED', capabilities: ['text'] }] },
+      body: { title, stockTotal: 20, coverImageUrl: 'https://example.com/p14-cover.png', description: '分页用例', visibility: 'ALL_ORGS', lessons: [{ title: title + ' 第1课', status: 'PUBLISHED', capabilities: ['text'] }] },
     });
     assert.equal(created.status, 200, `创建课包失败: ${JSON.stringify(created.data)}`);
     const published = await api(`/api/admin/course-series/${created.data.id}/status`, { method: 'POST', token: rootAdmin, body: { action: 'publish' } });
     assert.equal(published.status, 200, `发布课包失败: ${JSON.stringify(published.data)}`);
     // 上架广场 ≠ 授权给机构（p40 那条口径）：机构端要看到，必须走授权
-    const assigned = await api(`/api/admin/course-series/${created.data.id}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgLogin.data.organization.id], validityDays: 365 } });
+    const assigned = await api(`/api/admin/course-series/${created.data.id}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgLogin.data.organization.id], validityDays: 365, quotaTotal: 10 } });
     assert.equal(assigned.status, 200, `授权课包失败: ${JSON.stringify(assigned.data)}`);
   }
   const seriesPage1 = await api('/api/org/course-series?limit=1&page=1', { token: org });

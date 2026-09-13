@@ -141,7 +141,7 @@ try {
   const tokenRow = usage.prepare("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1").get();
   usage.close();
   assert.equal(usageRow.n, 1, `应写入 1 条 TEXT 用量记录，实际 ${usageRow.n}`);
-  assert.ok(Number(costRow.fen) > 0, `成功回复应在算力池账本记一笔（cost_fen > 0），实际 ${costRow.fen}`);
+  assert.equal(Number(costRow.fen), 0, `平台承担成本，成功回复不得记录学生售价，实际 ${costRow.fen}`);
   // C3 前置（2026-09-13）：对话那条也要把上游 token 用量落进账本
   assert.ok(Number(tokenRow?.input_tokens) > 0 && Number(tokenRow?.output_tokens) > 0, `用量记录应带上游 token 数，实际 ${JSON.stringify(tokenRow)}`);
   assert.equal(assistantRow.n, 1, '助手消息应落库');

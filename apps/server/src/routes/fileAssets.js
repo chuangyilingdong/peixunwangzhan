@@ -139,15 +139,18 @@ function validateAudienceOrgIds(orgIds) {
 function teachingAssetVisibleToOrg(fileId, orgId) {
   if (!orgId) return false;
   return !!row(
-    `SELECT 1 FROM course_lesson_teaching_assets asset
-     JOIN course_lesson_teaching_groups grp ON grp.id = asset.group_id
-     JOIN course_lessons lesson ON lesson.id = grp.lesson_id
+    `SELECT 1 FROM course_lessons lesson
      JOIN course_series series ON series.id = lesson.series_id
      LEFT JOIN course_assignments assignment ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql()}
-     WHERE asset.file_asset_id = ? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'
-       AND ${orgSeriesAccessSql()}
+     WHERE lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}
+       AND (CASE WHEN json_valid(lesson.published_content) AND lesson.published_content IS NOT NULL
+         THEN EXISTS (SELECT 1 FROM json_each(lesson.published_content, '$.teachingGroups') grp,
+           json_each(grp.value, '$.assets') asset WHERE json_extract(asset.value, '$.fileAssetId') = ?)
+         ELSE EXISTS (SELECT 1 FROM course_lesson_teaching_assets asset
+           JOIN course_lesson_teaching_groups grp ON grp.id=asset.group_id
+           WHERE grp.lesson_id=lesson.id AND asset.file_asset_id=?) END)
      LIMIT 1`,
-    [orgId, fileId, orgId],
+    [orgId, orgId, fileId, fileId],
   );
 }
 
@@ -417,6 +420,9 @@ export async function handleAdminFileAssets(ctx) {
     audit(ctx, 'FILE_ASSET_CREATE', 'FILE_ASSET', fileId, null, { category, visibility, storageKind });
     return normalizeFileAsset(created);
   }
+
+  const downloadMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
+  if (downloadMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, downloadMatch[1], 'DOWNLOAD'));
 
   const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
   if (idMatch && method === 'GET') {

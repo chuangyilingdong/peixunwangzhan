@@ -49,10 +49,10 @@ export function CanvasClassroom({ api, onEnterProject }) {
     setBusy(lesson.id); setMessage('');
     try {
       const target = onEnterProject || ((projectId) => navigate(`/learn/canvas/${projectId}`));
-      // 「关闭再进入」复用同一份创作：服务端已经给出这节课最近的那个草稿，有就不再新建。
-      if (lesson.continueProject) target(lesson.continueProject.id);
-      else {
+      // 每次进入由服务端校验当前课堂并幂等取得该课堂的创作。
+      {
         const project = await api.post('student/projects', {
+          sessionId: lesson.session?.id,
           title: `${lesson.title || '今日课堂'} · 我的创作`,
           courseLessonId: lesson.id,
           canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },

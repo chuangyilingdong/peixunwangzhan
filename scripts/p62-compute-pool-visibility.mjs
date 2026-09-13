@@ -1,13 +1,4 @@
-/**
- * P62 算力可见性守卫（2026-09-12）：**学生与老师也要能看到「还剩多少」**。
- *
- * 闸门只有「可被理解」才会被接受：学生被拦住时要知道自己还有多少、老师排课时要知道谁快用完了。
- * 这一条钉三件事：
- *   ① 学生端的**画布项目详情**与 **VibeCoding 会话详情**都带算力池摘要，且**与闸门同源**
- *      （不是另算一个数 —— 改一次账，两边一起变）；
- *   ② 机构端**排课候选**每个学员带他在该课包的剩余；
- *   ③ 课包没填预算 → `unlimited: true`（口径：留空 = 不限制，只记账），界面据此显示「不限」。
- */
+/** P62 学生与教师可见性：历史预算/售价不能恢复学生余额或扣费，平台成本只作课堂预警。 */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -71,7 +62,7 @@ const addSpend = (userId, orgId, costFen) => {
   const db = new DatabaseSync(dbPath);
   db.prepare(`INSERT OR REPLACE INTO usage_records(
       id,org_id,user_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,created_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).run('p62_spend_' + costFen, orgId, userId, 'TEXT', 'm', 1, 'SUCCESS', null, '{}', costFen, seeded.seriesId);
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).run('p62_spend_' + costFen, orgId, userId, 'TEXT', 'm', 0, 'SUCCESS', null, '{}', costFen, seeded.seriesId);
   db.close();
 };
 
@@ -97,14 +88,14 @@ try {
     projectDetail.data?.computePool?.unlimited === true && projectDetail.data?.computePool?.capYuan === null,
     JSON.stringify(projectDetail.data?.computePool));
 
-  /* ② 填 200 元 + 花掉 50 元 → 学生端与闸门同源（剩余 150 元 / 25%） */
+  /* ② 历史预算与售价保留，但不再成为学生的算力余额。 */
   setSeriesBudget(20000);
   addSpend(identity.id, identity.org_id, 5000);
   const after = await api(`/api/student/projects/${encodeURIComponent(project.data.id)}`, { token: student });
   const pool = after.data?.computePool || {};
-  check('② 学生端看到：上限 200 / 已用 50 / 剩余 150（元）',
-    pool.capYuan === 200 && pool.usedYuan === 50 && pool.remainYuan === 150, JSON.stringify(pool));
-  check('② 学生端看到使用率 25%', pool.usagePercent === 25, String(pool.usagePercent));
+  check('② 历史预算和售价不会恢复学生限额或余额',
+    pool.unlimited === true && pool.capYuan === null && pool.usedYuan === null && pool.remainYuan === null, JSON.stringify(pool));
+  check('② 学生端不显示虚构的预算使用率', pool.usagePercent === null, String(pool.usagePercent));
   check('② 带上课包名字（学生知道这是哪门课的额度）', Boolean(pool.seriesTitle), JSON.stringify({ seriesTitle: pool.seriesTitle }));
 
   /* ③ VibeCoding 会话详情也带同一份（学生另一个创作入口） */
@@ -116,7 +107,7 @@ try {
   check('③ 能开会话', conversation.status === 200 && Boolean(conversation.data?.id), JSON.stringify(conversation).slice(0, 200));
   const conversationDetail = await api(`/api/student/vibecoding/conversations/${encodeURIComponent(conversation.data.id)}`, { token: student });
   check('③ VibeCoding 会话详情带同一份算力池摘要（与画布同源）',
-    conversationDetail.data?.computePool?.capYuan === 200 && conversationDetail.data?.computePool?.remainYuan === 150,
+    conversationDetail.data?.computePool?.unlimited === true && conversationDetail.data?.computePool?.capYuan === null && conversationDetail.data?.computePool?.usedYuan === null && conversationDetail.data?.computePool?.remainYuan === null,
     JSON.stringify(conversationDetail.data?.computePool));
 
   /* ④ 机构端排课候选：每个学员带他在这个课包的剩余（老师能看出谁快用完了） */
@@ -125,17 +116,20 @@ try {
   const candidates = await api(`/api/org/sessions/${encodeURIComponent(openSession)}/candidates`, { token: org });
   const me = candidates.data?.selectable?.concat(candidates.data?.blocked || [], candidates.data?.alreadyIn || []).find((item) => item.id === identity.id);
   check('④ 排课候选项带算力池字段', Boolean(me) && 'poolRemainYuan' in me && 'poolUnlimited' in me, JSON.stringify(me));
-  check('④ 该学员剩余 150 元 / 已用 25%（与闸门、学生端三处一致）',
-    me?.poolRemainYuan === 150 && me?.poolPercent === 25 && me?.poolCapYuan === 200, JSON.stringify(me));
+  check('④ 候选学员没有学生限额与余额',
+    me?.poolUnlimited === true && me?.poolRemainYuan === null && me?.poolPercent === null && me?.poolCapYuan === null, JSON.stringify(me));
 
-  /* ⑤ 三处同源：把消耗改成 180 元，三处一起变（不是各自算各自的） */
+  /* ⑤ 历史售价增加也不能影响不限额兼容摘要。 */
   addSpend(identity.id, identity.org_id, 13000); // 再花 130 → 合计 180
   const studentAgain = await api(`/api/student/projects/${encodeURIComponent(project.data.id)}`, { token: student });
   const candidatesAgain = await api(`/api/org/sessions/${encodeURIComponent(openSession)}/candidates`, { token: org });
   const meAgain = candidatesAgain.data?.selectable?.concat(candidatesAgain.data?.blocked || [], candidatesAgain.data?.alreadyIn || []).find((item) => item.id === identity.id);
-  check('⑤ 消耗更新后：学生端剩余 20 元 / 90%', studentAgain.data?.computePool?.remainYuan === 20 && studentAgain.data?.computePool?.usagePercent === 90, JSON.stringify(studentAgain.data?.computePool));
-  check('⑤ 消耗更新后：老师端同一格也变成 20 元 / 90%（同源）', meAgain?.poolRemainYuan === 20 && meAgain?.poolPercent === 90, JSON.stringify(meAgain));
+  check('⑤ 历史售价增加后学生端仍无余额限制', studentAgain.data?.computePool?.unlimited === true && studentAgain.data?.computePool?.remainYuan === null && studentAgain.data?.computePool?.usagePercent === null, JSON.stringify(studentAgain.data?.computePool));
+  check('⑤ 老师端同样不恢复学生余额', meAgain?.poolUnlimited === true && meAgain?.poolRemainYuan === null && meAgain?.poolPercent === null, JSON.stringify(meAgain));
 
+  check('课堂占用安全门禁仍保留', meAgain?.reason === 'IN_OTHER_SESSION', JSON.stringify(meAgain));
+  const privateReport = await api('/api/admin/compute-pools', { token: student });
+  check('学生不能访问平台成本报表', privateReport.status === 403, JSON.stringify(privateReport));
   console.log(JSON.stringify({ name: 'compute-pool-visibility', pass: failures === 0, failures }, null, 2));
 } catch (error) {
   console.error(serverLog.slice(-3000));

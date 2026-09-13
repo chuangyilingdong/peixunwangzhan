@@ -77,6 +77,12 @@ try {
   assert.equal(caps.allowMusic, true, '课时开了生音乐，课堂应默认开');
   assert.equal(caps.allowText, true, '课时开了 AI 文字，课堂应默认开');
 
+  const occupied = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId } });
+  assert.equal(occupied.status, 409);
+  assert.equal(occupied.data?.error?.code, 'TEACHER_SESSION_OCCUPIED');
+  const dissolved = await api(`/api/org/sessions/${started.data.id}/dissolve`, { method: 'POST', token: teacher, body: {} });
+  assert.equal(dissolved.status, 200);
+
   // 2) 显式关掉仍然生效（老师保留控制权）
   const started2 = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId, capabilities: { allowVideo: false } } });
   assert.equal(started2.status, 200, `二次建课堂失败: ${JSON.stringify(started2.data)}`);

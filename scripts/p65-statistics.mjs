@@ -4,7 +4,7 @@
  * 用户口径（梳理文档第 6 节）：统计 = **经营 / 算力 / 内容三层**，且「一个概念只在一个地方管」。
  * 这一条钉三件事：
  *   ① 算力层用**元**（不再是旧单位积分），且**四种模态都算进来**（含走不了网关的视频/音乐）；
- *   ② 算力层的数字与「算力网关」页**同源**（都来自算力池账本）；
+ *   ② 算力层的数字与「算力网关」页**同源**（都来自上游尝试账本）；
  *   ③ 内容层给出课包/课时使用热度与作品发布情况（两条链路合并计数）。
  */
 import assert from 'node:assert/strict';
@@ -48,15 +48,23 @@ const seeded = (() => {
     VALUES('p65_lesson_b','p65_series_b','P65 课时 B',1,'PUBLISHED','CANVAS',datetime('now'),datetime('now'))`).run();
   const lessons = [db.prepare('SELECT id, series_id FROM course_lessons WHERE id<>? ORDER BY sort LIMIT 1').get('p65_lesson_b') || db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get(), { id: 'p65_lesson_b', series_id: 'p65_series_b' }];
   const student = db.prepare("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 1").get();
-  const other = db.prepare('SELECT id FROM users WHERE role=?').get('x');
+  const teacher = db.prepare("SELECT id FROM users WHERE role='TEACHER' LIMIT 1").get();
+  for (const [index, lesson] of lessons.entries()) {
+    db.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,'ACTIVE',?,datetime('now'),datetime('now'))`).run('p65_session_' + index, 'P65 平台预算课堂', student.org_id, lesson.series_id, lesson.id, teacher.id, index ? 100 : 20000);
+  }
   db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(20000, lessons[0].series_id);
   db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(100, lessons[1].series_id);
-  const insert = db.prepare(`INSERT OR REPLACE INTO usage_records(
-      id,org_id,user_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,created_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`);
-  const rows = [['TEXT', 100], ['IMAGE', 200], ['VIDEO', 500], ['MUSIC', 300]];
-  rows.forEach(([modality, fen], index) => insert.run('p65_a' + index, student.org_id, student.id, modality, 'm', 1, 'SUCCESS', null, '{}', fen, lessons[0].series_id));
-  insert.run('p65_exhausted', student.org_id, student.id, 'IMAGE', 'm', 1, 'SUCCESS', null, '{}', 500, lessons[1].series_id); // 另一个课包上限 1 元 → 已用尽
+  const insert = (id, modality, fen, index, source = 'REPORTED') => {
+    const lesson = lessons[index];
+    db.prepare(`INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,class_session_id,created_at)
+      VALUES (?,?,?,?,'m',0,'SUCCESS','{}',999999,?,?,?,?)`).run(id, student.org_id, student.id, modality, lesson.series_id, id + '_call', 'p65_session_' + index, new Date().toISOString());
+    db.prepare(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,status,cost_source,upstream_cost_fen,sale_snapshot,class_session_id,lesson_id,created_at)
+      VALUES (?,?,1,?,?,?,'SUCCESS',?,?,'{}',?,?,?)`).run(id + '_attempt', id + '_call', student.org_id, student.id, modality, source, fen, 'p65_session_' + index, lesson.id, new Date().toISOString());
+  };
+  [['TEXT', 100], ['IMAGE', 200], ['VIDEO', 500], ['MUSIC', 300]].forEach(([modality, fen], index) => insert('p65_a' + index, modality, fen, 0, index === 0 ? 'ESTIMATED' : 'REPORTED'));
+  insert('p65_over_budget', 'IMAGE', 500, 1);
+  insert('p65_unknown', 'TEXT', null, 0, 'UNKNOWN');
   db.close();
   return { seriesId: lessons[0].series_id, lessonId: lessons[0].id, studentId: student.id };
 })();
@@ -80,7 +88,8 @@ try {
   check('① 统计接口可用（经营层还在）', stats.status === 200 && Number(stats.data?.metrics?.organizations) > 0, JSON.stringify(stats).slice(0, 200));
   const compute = stats.data?.compute || {};
   // 池子 A：对话 1 + 图片 2 + 视频 5 + 音乐 3 = 11 元；池子 B（另一个课包）：图片 5 元 → 合计 16 元
-  check('① 算力层用「元」：两个池子合计 = 11 + 5 = 16.00 元', compute.totalYuan === 16, JSON.stringify({ totalYuan: compute.totalYuan }));
+  check('① 已知上游成本为16元，不取旧售价；未知不伪装成总成本', compute.knownCostYuan === 16 && compute.totalYuan === null && compute.costBasis === 'KNOWN_UPSTREAM_ONLY', JSON.stringify(compute));
+  check('① 未知成本单列且计入调用次数', compute.unknownCalls === 1 && compute.calls === 6, JSON.stringify(compute));
   check('① 按模态拆开了（含视频与音乐 —— 它们走不了网关，只有应用侧账本算得到）',
     ['TEXT', 'IMAGE', 'VIDEO', 'MUSIC'].every((m) => (compute.byModality || []).some((item) => item.modality === m)), JSON.stringify(compute.byModality));
   check('① 各模态金额正确（视频 5 元 / 音乐 3 元 / 图片 2+5=7 元）',
@@ -88,16 +97,14 @@ try {
     compute.byModality.find((item) => item.modality === 'MUSIC')?.yuan === 3 &&
     compute.byModality.find((item) => item.modality === 'IMAGE')?.yuan === 7,
     JSON.stringify(compute.byModality));
-  check('① 池子健康度：识别出「已用尽」的池子', compute.pools?.exhausted >= 1, JSON.stringify(compute.pools));
-  check('① 池子健康度：两个课包 = 两个池子', compute.pools?.counted === 2, JSON.stringify(compute.pools));
-  check('① 池子健康度：已用合计 16 元', compute.pools?.usedYuan === 16, JSON.stringify(compute.pools));
-  check('① Top 学员消耗与算力网关页同源（同一份报表）', (compute.topStudents || []).some((item) => Number(item.usedYuan) >= 11), JSON.stringify(compute.topStudents));
-
-  // 与「算力网关」页那份报表逐项对一遍，确认「同源」不是嘴上说说
+  check('① 课堂预算识别超预算预警', compute.pools?.exhausted >= 1, JSON.stringify(compute.pools));
+  check('① 两个课堂分别计入平台预算', compute.pools?.counted === 2, JSON.stringify(compute.pools));
+  check('① 课堂已知成本16元，总成本保持未知', compute.pools?.knownCostYuan === 16 && compute.pools?.usedYuan === null && compute.pools?.unknown === 1, JSON.stringify(compute.pools));
+  // 与平台课堂预算报表逐项对齐；不再把课堂成本显示为学生余额。
   const pools = await api('/api/admin/compute-pools', { token: admin });
-  const sameStudent = (pools.data?.items || []).filter((item) => item.userId === seeded.studentId);
-  const reportUsed = sameStudent.reduce((total, item) => total + Number(item.usedYuan || 0), 0);
-  check('② 与算力网关页的池子报表金额一致（同源）', Math.abs(reportUsed - (compute.pools?.usedYuan || 0)) < 0.001, `报表 ${reportUsed} vs 统计 ${compute.pools?.usedYuan}`);
+  const classrooms = (pools.data?.items || []).filter(item => item.sessionId.startsWith('p65_session_'));
+  check('② 课堂报表与统计已知成本同源', classrooms.length === 2 && classrooms.reduce((sum, item) => sum + item.knownCostFen, 0) === compute.pools.knownCostYuan * 100, JSON.stringify(classrooms));
+  check('② 未知课堂与超预算课堂隔离，均只预警', classrooms.every(item => item.enforced === false) && classrooms.find(item => item.sessionId === 'p65_session_0')?.usedFen === null && classrooms.find(item => item.sessionId === 'p65_session_1')?.budgetState === 'OVER_BUDGET', JSON.stringify(classrooms));
 
   const content = stats.data?.content || {};
   check('③ 内容层：已发布课时数给了', Number(content.lessonsPublished) > 0, JSON.stringify(content.lessonsPublished));
@@ -126,7 +133,7 @@ try {
   check('⑥ 机构行带上「消耗 / 调用 / 学员数」三个数', Boolean(seededOrg) && typeof seededOrg.costFen === 'number' && typeof seededOrg.calls === 'number' && typeof seededOrg.studentCount === 'number', JSON.stringify(seededOrg));
   const studentsOfOrg = await api(`/api/admin/billing/org-student-usage?days=30&orgId=${seededOrg.id}`, { token: admin });
   const seededStudent = (studentsOfOrg.data?.students || [])[0];
-  check('⑥ 选中机构后能看到它下面每个学员的消耗（含涉及课包数与最近一次）', Boolean(seededStudent) && Number(seededStudent.costFen) > 0 && Number(seededStudent.seriesCount) >= 1 && Boolean(seededStudent.lastAt), JSON.stringify(seededStudent));
+  check('⑥ 选中机构后能看到它下面每个学员的消耗（含涉及课包数与最近一次）', Boolean(seededStudent) && Number(seededStudent.costFen) === 1600 && Number(seededStudent.seriesCount) >= 1 && Boolean(seededStudent.lastAt), JSON.stringify(seededStudent));
   check('⑥ 该机构的学员消耗之和 = 机构行上的消耗（同一份账本，不是两套算法）',
     (studentsOfOrg.data?.students || []).reduce((sum, item) => sum + Number(item.costFen || 0), 0) === Number(seededOrg.costFen),
     JSON.stringify({ orgFen: seededOrg.costFen, studentsFen: (studentsOfOrg.data?.students || []).map((item) => item.costFen) }));

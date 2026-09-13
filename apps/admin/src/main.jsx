@@ -6,7 +6,7 @@ import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/Cours
 import { ModelCompute } from './pages/ModelCompute.jsx';
 import { AdminPermissionGate, demos, visibleNavigation } from './shared.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
-import { Organizations } from './pages/Organizations.jsx';
+import { Organizations, Authorizations } from './pages/Organizations.jsx';
 import { PlatformUsers } from './pages/PlatformUsers.jsx';
 import { PlatformAdmins } from './pages/PlatformAdmins.jsx';
 import { PlatformAudit } from './pages/PlatformAudit.jsx';
@@ -34,6 +34,7 @@ export function App() {
   return <AdminShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
+    <Route path="/authorizations" element={page('ADMIN_ORGANIZATIONS', <Authorizations api={api} />)} />
     {/* 课包拆成两条路由：列表与详情各有自己的地址（可深链、可刷新、可后退） */}
     <Route path="/courses" element={page('ADMIN_COURSES', <CourseSeriesListPage api={api} />)} />
     <Route path="/courses/:seriesId" element={page('ADMIN_COURSES', <CourseSeriesDetailPage api={api} />)} />

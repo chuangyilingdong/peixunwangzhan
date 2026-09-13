@@ -41,7 +41,8 @@ function normalizeDeliveryMode(value) {
  * 返回值里第一种同时写回老字段 delivery_mode，保证既有读取方不受影响。
  */
 function normalizeDeliveryModes(value, fallbackMode = 'CANVAS') {
-  const raw = Array.isArray(value) ? value : (value ? [value] : []);
+  if (value !== undefined && value !== null && Array.isArray(value) && value.length && value.some((item) => !['CANVAS', 'VIBECODING'].includes(item))) throw errors.badRequest('课堂类型无效', 'INVALID_DELIVERY_MODES');
+  const raw = Array.isArray(value) ? value : [];
   const list = [...new Set(raw
     .map((item) => String(item || '').trim().toUpperCase())
     .filter((item) => ['CANVAS', 'VIBECODING'].includes(item)))];
@@ -123,11 +124,11 @@ function normalizeBoxMaterial(material, materialIndex, title) {
  * 平台端之后继续编辑的是实时数据；机构端/学生端/官网读的是这份快照，
  * 所以「改了但没点更新发布」时它们看不到改动。
  */
-function capturePublishedContent(seriesId, at = nowIso()) {
+function capturePublishedContent(seriesId, at = nowIso(), { inTransaction = false } = {}) {
   const series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
   if (!series) return { lessons: 0 };
   const lessons = rows('SELECT * FROM course_lessons WHERE series_id=?', [seriesId]);
-  transaction(() => {
+  const write = () => {
     q('UPDATE course_series SET published_content=? WHERE id=?', [json({
       title: series.title, description: series.description || '', coverImageUrl: series.cover_image_url || null,
       coverAssetId: series.cover_asset_id || null, priceFen: Number(series.price_fen || 0), stockTotal: Number(series.stock_total || 0),
@@ -136,15 +137,17 @@ function capturePublishedContent(seriesId, at = nowIso()) {
       estimatedCreditsPerPerson: Number(series.estimated_credits_per_person || 0),
     }), seriesId]);
     lessons.forEach((lessonRow) => {
-      const live = normalizeLesson(lessonRow);
+      const live = normalizeLesson(lessonRow, { includeTeaching: true });
       q('UPDATE course_lessons SET published_content=?,published_title=? WHERE id=?', [json({
         title: live.title, summary: live.summary, durationMinutes: live.durationMinutes, lessonContent: live.lessonContent,
-        deliveryMode: live.deliveryMode, deliveryModes: live.deliveryModes, perStudentBudgetFen: live.perStudentBudgetFen,
+        deliveryMode: live.deliveryMode, deliveryModes: live.deliveryModes, platformBudgetFen: live.platformBudgetFen,
+        teachingGroups: live.teachingGroups,
         classroomConfig: live.classroomConfig, canvasTemplateSnapshot: live.canvasTemplateSnapshot,
         capabilities: live.capabilities, materialGroups: live.materialGroups, generationBoxes: live.generationBoxes,
       }), live.title, lessonRow.id]);
     });
-  });
+  };
+  if (inTransaction) write(); else transaction(write);
   return { lessons: lessons.length, at };
 }
 
@@ -176,7 +179,7 @@ function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliv
       };
     }),
   }));
-  transaction(() => {
+  const write = () => {
     q('DELETE FROM course_lesson_capabilities WHERE lesson_id=?', [lessonId]);
     caps.forEach((capability) => q('INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,?,?)', [lessonId, capability, now]));
     q('DELETE FROM course_lesson_materials WHERE group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)', [lessonId]);
@@ -188,18 +191,21 @@ function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliv
       });
     });
     // 上课类型可多选：数组进新列，第一种同时写回老列（兼容既有读取方）
-    const modes = normalizeDeliveryModes(extra.deliveryModes, deliveryMode);
-    const budgetFen = normalizePerStudentBudgetFen(extra.perStudentBudgetFen);
+    const current = row('SELECT * FROM course_lessons WHERE id=?', [lessonId]);
+    const modes = normalizeDeliveryModes(extra.deliveryModes === undefined ? parseJson(current.delivery_modes, undefined) : extra.deliveryModes, deliveryMode);
+    const budgetFen = extra.perStudentBudgetFen === undefined ? current.per_student_budget_fen : normalizePerStudentBudgetFen(extra.perStudentBudgetFen);
     q('UPDATE course_lessons SET delivery_mode=?,delivery_modes=?,per_student_budget_fen=?,classroom_config=?,canvas_template_snapshot=?,updated_at=? WHERE id=?',
       [modes[0], json(modes), budgetFen, json(normalizeClassroomConfig(classroomConfig)), json(normalizeCanvasTemplateSnapshot(canvasTemplateSnapshot)), now, lessonId]);
-  });
+    if (extra.platformBudgetFen !== undefined) q('UPDATE course_lessons SET platform_budget_fen=? WHERE id=?', [normalizePlatformBudgetFen(extra.platformBudgetFen), lessonId]);
+  };
+  if (extra.inTransaction) write(); else transaction(write);
 }
 
 // 教学素材（教师备课资料）：整组替换，不影响学生画布素材。
-function replaceLessonTeachingMaterials(lessonId, groups) {
+function replaceLessonTeachingMaterials(lessonId, groups, { inTransaction = false } = {}) {
   const list = Array.isArray(groups) ? groups.slice(0, 50) : [];
   const now = nowIso();
-  transaction(() => {
+  const write = () => {
     q('DELETE FROM course_lesson_teaching_assets WHERE group_id IN (SELECT id FROM course_lesson_teaching_groups WHERE lesson_id=?)', [lessonId]);
     q('DELETE FROM course_lesson_teaching_groups WHERE lesson_id=?', [lessonId]);
     list.forEach((group, groupIndex) => {
@@ -217,33 +223,61 @@ function replaceLessonTeachingMaterials(lessonId, groups) {
         ]);
       });
     });
-  });
+  };
+  if (inTransaction) write(); else transaction(write);
 }
 
+function normalizePlatformBudgetFen(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 1000000000) throw errors.badRequest('每场课堂平台预算必须是 0–1000000000 的整数分', 'INVALID_PLATFORM_BUDGET');
+  return value;
+}
+function validateLessonForPublishing(lesson) {
+  nonEmptyString(lesson.title, '课时名称', { max: 200 });
+  if (!Number.isInteger(lesson.duration_minutes) || lesson.duration_minutes < 1 || lesson.duration_minutes > 1440) throw errors.badRequest('课时时长必须为 1–1440 分钟', 'INVALID_LESSON_DURATION');
+  normalizePlatformBudgetFen(lesson.platform_budget_fen);
+  const modes = normalizeDeliveryModes(parseJson(lesson.delivery_modes, undefined), lesson.delivery_mode);
+  const caps = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=?', [lesson.id]).map((item) => item.capability);
+  if (!caps.length) throw errors.badRequest(`课时「${lesson.title}」至少开放一种能力`, 'LESSON_CAPABILITIES_REQUIRED');
+  if (modes.includes('VIBECODING') && !caps.includes('text')) throw errors.badRequest(`VibeCoding 课时「${lesson.title}」需要开放 AI 文字能力`, 'VIBECODING_TEXT_CAPABILITY_REQUIRED');
+  const validUrl = (url) => typeof url === 'string' && /^(https:\/\/[^\s]+|\/api\/[^\s]+)$/.test(url);
+  const policy = parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
+  const validateModel = (modality, selected) => {
+    if (!selected) return; // Empty means follow the configured channel default.
+    const channel = (policy.channels || []).find((item) => item.id === policy.modalityChannels?.[modality]);
+    if (!channel || ![...(channel.models || []), channel.model].includes(selected)) throw errors.badRequest(`课时「${lesson.title}」的 ${modality} 模型未启用`, 'LESSON_MODEL_UNAVAILABLE');
+  };
+  const config = parseJson(lesson.classroom_config, {});
+  if (modes.includes('VIBECODING')) validateModel('TEXT', config.vibeCoding?.model);
+  const live = normalizeLesson(lesson, { includeTeaching: true });
+  live.materialGroups.forEach((group) => group.materials.forEach((material, index) => {
+    nonEmptyString(material.title, '学生素材名称', { max: 160 });
+    if (!['IMAGE', 'VIDEO', 'AUDIO', 'NOTE', 'PROMPT', GENERATION_BOX_MATERIAL_TYPE].includes(material.materialType)) throw errors.badRequest('学生素材类型无效', 'INVALID_MATERIAL_TYPE');
+    if (material.materialType === GENERATION_BOX_MATERIAL_TYPE) {
+      const snapshot = normalizeBoxMaterial(material, index, material.title);
+      validateModel(snapshot.box.modality, snapshot.box.model);
+      if (!caps.includes(snapshot.box.modality.toLowerCase())) throw errors.badRequest(`框体「${material.title}」未开放对应能力`, 'GENERATION_BOX_CAPABILITY_MISMATCH');
+    } else if (['NOTE', 'PROMPT'].includes(material.materialType)) {
+      nonEmptyString(material.snapshot?.content, `素材「${material.title}」内容`, { max: 50000 });
+    } else if (!validUrl(material.assetUrl)) throw errors.badRequest(`素材「${material.title}」缺少有效资源地址`, 'MATERIAL_ASSET_REQUIRED');
+    if (material.assetUrl && !validUrl(material.assetUrl)) throw errors.badRequest('素材地址必须是 HTTPS 或平台地址', 'INVALID_MATERIAL_URL');
+  }));
+  live.teachingGroups.forEach((group) => group.assets.forEach((asset) => {
+    nonEmptyString(asset.title, '教师素材名称', { max: 160 });
+    if (!validUrl(asset.assetUrl)) throw errors.badRequest(`教师素材「${asset.title}」缺少有效资源地址`, 'TEACHING_ASSET_REQUIRED');
+  }));
+}
 function validateSeriesForPublishing(seriesId) {
-  const lessons = rows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]);
-  const activeLessons = lessons.filter((lesson) => lesson.status !== 'ARCHIVED');
-  if (!activeLessons.length) throw errors.badRequest('课包至少需要一个未归档课时才能发布', 'COURSE_LESSONS_REQUIRED');
-  const unfinished = activeLessons.filter((lesson) => lesson.status !== 'PUBLISHED');
-  if (unfinished.length) throw errors.badRequest(`还有 ${unfinished.length} 个课时未发布，请先完成课时配置并发布课时`, 'COURSE_LESSONS_UNPUBLISHED');
-  activeLessons.forEach((lesson) => {
-    const mode = normalizeDeliveryMode(lesson.delivery_mode);
-    if (mode === 'VIBECODING') {
-      // VibeCoding 课时没有画布框体/素材绑定，改为校验学生进课堂后能真的对话
-      const capabilities = lessonCanvasConfig(lesson.id).capabilities || [];
-      if (!capabilities.includes('text')) throw errors.badRequest(`VibeCoding 课时「${lesson.title}」需要开放 AI 文字能力，否则学生进入课堂后无法对话`, 'VIBECODING_TEXT_CAPABILITY_REQUIRED');
-      return;
-    }
-    // 生成框体（素材表里 type=GENERATION_BOX 的素材）必须落在本课开放的能力里，
-    // 否则学生端看不到入口、配了也没用。
-    const canvas = lessonCanvasConfig(lesson.id);
-    const capabilities = canvas.capabilities || [];
-    canvas.materialGroups.forEach((group) => (group.materials || []).forEach((material) => {
-      if (material.materialType !== GENERATION_BOX_MATERIAL_TYPE) return;
-      const modality = String(material.snapshot?.box?.modality || '').toUpperCase();
-      if (!capabilities.includes(modality.toLowerCase())) throw errors.badRequest(`课时「${lesson.title}」的生成框体「${material.title}」类型是 ${modality}，但本课没有开放该能力`, 'GENERATION_BOX_CAPABILITY_MISMATCH');
-    }));
-  });
+  const series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
+  nonEmptyString(series?.title, '课包名称', { max: 200 });
+  nonEmptyString(series?.description, '课包简介', { max: 10000 });
+  if (!series.cover_asset_id && !series.cover_image_url) throw errors.badRequest('发布前请设置课包封面', 'COURSE_COVER_REQUIRED');
+  if (!Number.isInteger(series.price_fen) || series.price_fen < 0) throw errors.badRequest('课包价格无效', 'INVALID_COURSE_PRICE');
+  if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(series.visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
+  const lessons = rows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]).filter((lesson) => lesson.status !== 'ARCHIVED');
+  if (!lessons.length) throw errors.badRequest('课包至少需要一个未归档课时才能发布', 'COURSE_LESSONS_REQUIRED');
+  if (lessons.some((lesson) => lesson.status !== 'PUBLISHED')) throw errors.badRequest('请先完成课时配置并发布课时', 'COURSE_LESSONS_UNPUBLISHED');
+  lessons.forEach(validateLessonForPublishing);
 }
 function accessibleSeries(currentOrgId, seriesId) {
   return row(
@@ -252,7 +286,7 @@ function accessibleSeries(currentOrgId, seriesId) {
   );
 }
 const ORG_MEMBER_ROLES = new Set(['TEACHER', 'STUDENT']);
-const ORG_TEACHER_PERMISSIONS = new Set(['MANAGE_MEMBERS', 'MANAGE_CLASSES']);
+const ORG_TEACHER_PERMISSIONS = new Set(['MANAGE_CLASSES']);
 
 function validateMemberPhone(phone, existingId = null) {
   const value = phone == null ? '' : String(phone).trim();
@@ -355,12 +389,10 @@ function occupiedStudentSeats(currentOrgId, packageId, { excludeEnrollmentId = n
   return count('SELECT COUNT(*) n FROM student_enrollments WHERE ' + where, params);
 }
 
-function assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId = null } = {}) {
-  const limit = Number(pkg.student_seats || 0);
-  const occupied = occupiedStudentSeats(currentOrgId, pkg.id, { excludeEnrollmentId });
-  if (limit < 1) throw errors.conflict('套餐尚未配置可开通的学员席位', 'PACKAGE_STUDENT_SEATS_REQUIRED');
-  if (occupied >= limit) throw errors.conflict('套餐可用学员席位不足', 'STUDENT_SEAT_LIMIT');
-  return { limit, occupied, available: Math.max(0, limit - occupied) };
+function assertEnrollmentSeat(currentOrgId, pkg, options = {}) {
+  const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+  if (org.studentUsedSeats > org.studentSeats) throw errors.conflict('机构学生人数已超过上限', 'STUDENT_SEAT_LIMIT');
+  return { limit: org.studentSeats, occupied: org.studentUsedSeats, available: Math.max(0, org.studentSeats - org.studentUsedSeats) };
 }
 
 function setStudentEnrollmentAccess(currentOrgId, enrollment, status) {
@@ -471,10 +503,15 @@ function previewImport(body, currentOrgId) {
   const teacherCount = normalized.filter((item) => item.valid && item.value.role === 'TEACHER').length;
   const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
   if ((org.teacherSeats - org.teacherUsedSeats) < teacherCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'TEACHER') { item.valid = false; item.errors.push('教师席位不足'); } });
+  const studentCount = normalized.filter((item) => item.valid && item.value.role === 'STUDENT').length;
+  if (org.studentSeats - org.studentUsedSeats < studentCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'STUDENT') { item.valid = false; item.errors.push('机构学生容量不足'); } });
   return { total: normalized.length, validCount: normalized.filter((item) => item.valid).length, invalidCount: normalized.filter((item) => !item.valid).length, items: normalized };
 }
 
 function createMember(currentOrgId, value) {
+  const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+  if (value.role === 'STUDENT' && org.studentUsedSeats >= org.studentSeats) throw errors.conflict('机构学生容量不足', 'STUDENT_SEAT_LIMIT');
+  if (value.role === 'TEACHER' && org.teacherUsedSeats >= org.teacherSeats) throw errors.conflict('教师席位不足', 'TEACHER_SEAT_LIMIT');
   const now = nowIso(); const userId = id('user');
   // 2026-09-13（P4 删积分）：建号不再写 monthly_credit_allowance / ai_credit_limit（积分已废弃）
   q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
@@ -763,11 +800,13 @@ function organizationRow(orgId) {
 function contactPayload(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw errors.badRequest('联系人必须是对象', 'INVALID_ORG_CONTACT');
   const result = {};
+  const limits = { name: 200, phone: 200, email: 200, contractNotes: 5000 };
   Object.entries(value).forEach(([key, item]) => {
-    if (!/^[A-Za-z][A-Za-z0-9_]{0,49}$/.test(key)) throw errors.badRequest('联系人字段名无效', 'INVALID_ORG_CONTACT');
+    if (!Object.hasOwn(limits, key)) return;
     if (item === null || item === undefined || item === '') return;
-    if (typeof item !== 'string' && typeof item !== 'number' && typeof item !== 'boolean') throw errors.badRequest('联系人字段值无效', 'INVALID_ORG_CONTACT');
-    result[key] = typeof item === 'string' ? item.slice(0, 200) : item;
+    if (typeof item !== 'string') throw errors.badRequest('联系人及签约内容必须是文本', 'INVALID_ORG_CONTACT');
+    if (item.length > limits[key]) throw errors.badRequest(`${key === 'contractNotes' ? '签约内容' : '联系人字段'}不能超过${limits[key]}字`, 'INVALID_ORG_CONTACT');
+    result[key] = item.trim();
   });
   return result;
 }
@@ -886,17 +925,33 @@ function organizationFilters(ctx) {
   if (['TRIAL', 'ACTIVE', 'DISABLED'].includes(statusFilter)) { conditions.push('organization.status=?'); params.push(statusFilter); }
   return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params };
 }
-function platformWorkFilters(ctx) {
-  const status = ctx.search.get('status'); const orgFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
+function platformWorkFilters(ctx, kind = 'canvas') {
+  const alias = kind === 'vibecoding' ? 'submission' : 'work';
+  const lessonColumn = kind === 'vibecoding' ? 'lesson_id' : 'course_lesson_id';
   const conditions = []; const params = [];
-  if (['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED'].includes(status)) { conditions.push('work.status=?'); params.push(status); }
-  if (orgFilter) { conditions.push('work.org_id=?'); params.push(orgFilter); }
-  if (search) {
-    conditions.push('(work.title LIKE ? OR student.display_name LIKE ? OR organization.name LIKE ?)');
-    const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
-    params.push(keyword, keyword, keyword);
+  const value = (key) => String(ctx.search.get(key) || '').trim();
+  const keyword = (text) => '%' + text.replace(/[\\%_]/g, '\\$&') + '%';
+  const like = (columns, text) => {
+    conditions.push('(' + columns.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(' OR ') + ')');
+    params.push(...columns.map(() => keyword(text)));
+  };
+  const status = value('status');
+  if (['PENDING', 'APPROVED', 'REJECTED', 'PUBLISHED', 'UNPUBLISHED'].includes(status)) { conditions.push(`${alias}.status=?`); params.push(status); }
+  if (value('orgId')) { conditions.push(`${alias}.org_id=?`); params.push(value('orgId')); }
+  if (['1', '0'].includes(value('published'))) { conditions.push(`COALESCE(${alias}.is_public,0)=?`); params.push(Number(value('published'))); }
+  const publicationStateSql = `CASE WHEN COALESCE(${alias}.is_public,0)=1 THEN 'PUBLISHED' WHEN ${alias}.status='UNPUBLISHED' OR NULLIF(TRIM(${alias}.unpublish_reason),'') IS NOT NULL THEN 'UNPUBLISHED' ELSE 'SUBMITTED' END`;
+  if (['SUBMITTED', 'PUBLISHED', 'UNPUBLISHED'].includes(value('publicationState'))) { conditions.push(`(${publicationStateSql})=?`); params.push(value('publicationState')); }
+  if (value('student')) like(['student.display_name', 'student.login'], value('student'));
+  if (value('search')) like([`${alias}.title`, 'student.display_name', 'student.login', 'organization.name'], value('search'));
+  if (value('packageName')) {
+    conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson JOIN course_series filter_series ON filter_series.id=filter_lesson.series_id WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_series.title LIKE ? ESCAPE '\\')`);
+    params.push(keyword(value('packageName')));
   }
-  return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params };
+  if (value('lesson')) {
+    conditions.push(`EXISTS (SELECT 1 FROM course_lessons filter_lesson WHERE filter_lesson.id=${alias}.${lessonColumn} AND filter_lesson.title LIKE ? ESCAPE '\\')`);
+    params.push(keyword(value('lesson')));
+  }
+  return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params, publicationStateSql };
 }
 
 function buildOrganizationDetail(orgId) {
@@ -906,17 +961,17 @@ function buildOrganizationDetail(orgId) {
   const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
   const admins = orgAdminRows(organization.id);
   const packages = rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id]).map(normalizePackage);
-  const courseAssignments = rows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, series.title AS series_title
+  const courseAssignments = rows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title
     FROM course_assignments assignment JOIN course_series series ON series.id=assignment.series_id
     WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]).map((item) => ({
-    id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at,
+    id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at, quotaTotal: Number(item.quota_total), quotaUsed: Number(item.quota_used), remaining: Math.max(0, item.quota_total - item.quota_used),
     expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(),
   }));
   const summary = {
     teachers: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [organization.id]),
     students: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [organization.id]),
-    activeClasses: count("SELECT COUNT(*) AS n FROM classes WHERE org_id=? AND status='ACTIVE'", [organization.id]),
-    activeSessions: count(`SELECT COUNT(*) AS n FROM class_sessions session JOIN classes class ON class.id=session.class_id WHERE class.org_id=? AND session.status='ACTIVE'`, [organization.id]),
+    activeClasses: 0,
+    activeSessions: count(`SELECT COUNT(*) AS n FROM class_sessions session WHERE session.org_id=? AND session.status='ACTIVE'`, [organization.id]),
     projects: count('SELECT COUNT(*) AS n FROM student_projects WHERE org_id=? AND deleted_at IS NULL', [organization.id]),
     works: count('SELECT COUNT(*) AS n FROM works WHERE org_id=?', [organization.id]),
   };
@@ -1005,6 +1060,8 @@ export {
   validateMemberPermissions,
   validateMemberPhone,
   validateSeriesForPublishing,
+  validateLessonForPublishing,
+  normalizePlatformBudgetFen,
   validateTeacher,
   workInReviewScope,
   workReportInReviewScope,

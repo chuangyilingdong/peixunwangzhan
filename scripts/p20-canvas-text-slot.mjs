@@ -118,7 +118,7 @@ try {
   const costDb = new DatabaseSync(dbPath);
   const costFen = Number(costDb.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get()?.fen || 0);
   costDb.close();
-  assert.ok(costFen > 0, `成功生成应在算力池账本记一笔（cost_fen > 0），实际 ${costFen}`);
+  assert.equal(costFen, 0, `平台承担成本，成功生成不得记录学生售价，实际 ${costFen}`);
   // C3 前置（2026-09-13）：上游给的 token 用量要落进账本（计费口径不变，但账本从此有据可查）
   const tokenDb = new DatabaseSync(dbPath);
   const tokens = tokenDb.prepare("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1").get();

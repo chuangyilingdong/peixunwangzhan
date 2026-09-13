@@ -1,125 +1,130 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, WorkPlazaStatus, useData } from '@platform/shared';
-import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, Pagination, ListResultSummary, useData } from '@platform/shared';
+import { downloadCsv } from '../shared.jsx';
+
+const publicationLabels = { SUBMITTED: '已提交待发布', PUBLISHED: '已发布到官网', UNPUBLISHED: '已下架' };
+const emptyFilters = { publicationState: '', published: '', orgId: '', student: '', packageName: '', lesson: '', search: '' };
 
 export function PlatformWorks({ api }) {
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
-  const [filters, setFilters] = useState({ status: '', orgId: '', search: '' });
+  const [kind, setKind] = useState('canvas');
+  const [filters, setFilters] = useState(emptyFilters);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
-  const [sort, setSort] = useState('featured');
-  const [message, setMessage] = useState(''); const [action, setAction] = useState(null); const [reason, setReason] = useState(''); const [saving, setSaving] = useState(false);
-  const reports = useData(() => api.get('admin/work-reports?status=PENDING'), [api]);
-  const [reportAction, setReportAction] = useState(null); const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); const [reportBusy, setReportBusy] = useState(false);
-  const [detailId, setDetailId] = useState(null);
-  const detail = useData(() => detailId ? api.get(`admin/works/${detailId}/detail`) : Promise.resolve(null), [api, detailId]);
+  const [sort, setSort] = useState('submitted');
+  const [message, setMessage] = useState(null);
+  const [action, setAction] = useState(null);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const busy = useRef(false);
   const [exporting, setExporting] = useState(false);
+  const [detailId, setDetailId] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const reports = useData(() => historyOpen ? api.get('admin/work-reports') : Promise.resolve(null), [api, historyOpen]);
+  const detail = useData(() => detailId ? api.get(`admin/works/${detailId}/detail`) : Promise.resolve(null), [api, detailId]);
+  const query = useMemo(() => {
+    const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+    params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
+    return params.toString();
+  }, [filters, page, limit, sort]);
+  const endpoint = kind === 'canvas' ? 'admin/works' : 'admin/vibecoding-works';
+  const [revision, setRevision] = useState(0);
+  const [result, setResult] = useState({ key: '', loading: true, data: null, error: null });
+  const requestKey = `${endpoint}?${query}`;
+  // Switching modes or rapidly editing filters must not show an older request's rows.
+  useEffect(() => {
+    let active = true;
+    setResult({ key: requestKey, loading: true, data: null, error: null });
+    api.get(requestKey).then((data) => { if (active) setResult({ key: requestKey, loading: false, data, error: null }); }, (error) => { if (active) setResult({ key: requestKey, loading: false, data: null, error }); });
+    return () => { active = false; };
+  }, [api, requestKey, revision]);
+  const refresh = () => setRevision((value) => value + 1);
+  const loading = result.loading || result.key !== requestKey;
+  function filter(key, value) { setFilters((old) => ({ ...old, [key]: value })); setPage(1); }
+  function changeKind(next) { setKind(next); setPage(1); setAction(null); setDetailId(null); setMessage(null); }
+  function confirmPublication(item) { setAction({ item, kind, published: item.publicationState !== 'PUBLISHED' }); setReason(''); setMessage(null); }
+  async function publish() {
+    if (!action || busy.current || (!action.published && !reason.trim())) return;
+    busy.current = true; setSaving(true); setMessage(null);
+    try {
+      const base = action.kind === 'canvas' ? 'admin/works' : 'admin/vibecoding-works';
+      const path = action.kind === 'canvas' && !action.published ? 'unpublish' : 'plaza';
+      await api.put(`${base}/${action.item.id}/${path}`, { published: action.published, reason: reason.trim() });
+      setMessage({ tone: 'success', text: `已${action.published ? '发布到官网' : '下架'}《${action.item.title}》。` });
+      setAction(null); setReason(''); refresh();
+      if (detailId) detail.refresh();
+    } catch (error) { setMessage({ tone: 'danger', text: error.message || '操作失败，请重试。' }); }
+    finally { busy.current = false; setSaving(false); }
+  }
+  async function toggleFeature(item) {
+    if (busy.current || !window.confirm(`确认${item.featured ? '取消' : '设置'}《${item.title}》的精选推荐？`)) return;
+    busy.current = true; setSaving(true); setMessage(null);
+    try {
+      await api.put(`admin/works/${item.id}/feature`, { featured: !item.featured, reason: item.featured ? '' : '平台精选推荐' });
+      setMessage({ tone: 'success', text: `已${item.featured ? '取消' : '设置'}精选。` }); refresh();
+    } catch (error) { setMessage({ tone: 'danger', text: error.message || '精选操作失败，请重试。' }); }
+    finally { busy.current = false; setSaving(false); }
+  }
   async function exportWorks() {
-    setExporting(true); setMessage('');
+    setExporting(true); setMessage(null);
     try {
-      const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
-      const result = await api.get(`admin/works/export?${params.toString()}`);
+      const result = await api.get(`admin/works/export?${query}`);
       downloadCsv(result.filename, result.content);
-      setMessage(`已导出 ${result.count} 件作品。`);
-    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
+      setMessage({ tone: 'success', text: `已导出 ${result.count} 件画布作品。` });
+    } catch (error) { setMessage({ tone: 'danger', text: error.message || '导出失败，请重试。' }); }
+    finally { setExporting(false); }
   }
-  const [detailTab, setDetailTab] = useState('basic');
-  const [detailFeatureReason, setDetailFeatureReason] = useState('');
-  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
-  const works = useData(() => api.get(`admin/works?${query.toString()}`), [api, query]);
-  const vibeWorks = useData(() => api.get('admin/vibecoding-works?limit=20'), [api]);
-  async function toggleVibePlaza(item) {
-    // 移除时必须填原因：这条链路以前一个字都不记，学生不知道作品为什么被撤下来（原因学生可见）
-    let reason = '';
-    if (item.isPublic) {
-      reason = String(window.prompt(`把《${item.title}》从作品广场移除。请写下原因（学生会看到）：`, '') || '').trim();
-      if (!reason) return;
-    }
-    setSaving(true); setMessage('');
-    try {
-      await api.put(`admin/vibecoding-works/${item.id}/plaza`, { published: !item.isPublic, reason });
-      setMessage(item.isPublic ? `已将《${item.title}》从作品广场移除（原因已记下，学生会看到）。` : `已将《${item.title}》发布到作品广场，官网可点开直接玩。`);
-      vibeWorks.refresh();
-    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
-  }
-  // 筛选的下拉仍按库里的 status（历史数据），但**展示**统一走 WorkPlazaStatus（两条链路一套词）
-  const statusLabels = { PENDING: '已提交待发布', APPROVED: '已通过', REJECTED: '未通过', PUBLISHED: '已发布到作品广场', UNPUBLISHED: '已下架' };
-  const reportCategoryLabels = { INAPPROPRIATE: '内容不当', COPYRIGHT: '版权', PRIVACY: '隐私', OTHER: '其他' };
-  const reportStatusLabels = { PENDING: '待处理', RESOLVED: '已处理', DISMISSED: '已驳回' };
-  async function unpublish() { if (!action) return; setSaving(true); setMessage(''); try { await api.put(`admin/works/${action.id}/unpublish`, { reason }); setMessage(`已下架《${action.title}》。`); setAction(null); setReason(''); works.refresh(); reports.refresh(); if (detailId === action.id) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
-  async function toggleFeature(item) { setSaving(true); setMessage(''); try { await api.put(`admin/works/${item.id}/feature`, { featured: !item.featured, reason: !item.featured ? '平台精选推荐' : '' }); setMessage(item.featured ? `已取消《${item.title}》的精选。` : `已将《${item.title}》设为精选。`); works.refresh(); if (detailId === item.id) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
-  async function togglePlaza(item) { setSaving(true); setMessage(''); try { await api.put(`admin/works/${item.id}/plaza`, { published: !item.plazaPublished }); setMessage(item.plazaPublished ? `已将《${item.title}》从学生作品广场移除。` : `已将《${item.title}》发布到学生作品广场。`); works.refresh(); if (detailId === item.id) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); } }
-  async function handleReport() { if (!reportAction) return; setReportBusy(true); setMessage(''); try { await api.put(`admin/work-reports/${reportAction.id}`, reportForm); setMessage(`举报《${reportAction.workTitle}》已处理。`); setReportAction(null); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); reports.refresh(); works.refresh(); if (detailId === reportAction.workId) detail.refresh(); } catch (err) { setMessage(err.message); } finally { setReportBusy(false); } }
-  function openDetail(item) { setDetailId(item.id); setDetailTab('basic'); setDetailFeatureReason(item.featuredReason || ''); }
-  function closeDetail() { setDetailId(null); }
   return <>
-    <PageHeader eyebrow="内容治理" title="平台作品库" description="学生提交的作品会汇总到这里；由平台选择「发布到作品广场」的作品才会出现在官网学生作品广场（画布作品与 VibeCoding 作品都在本页，不再需要机构先审核）。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportWorks}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { works.refresh(); reports.refresh(); if (detailId) detail.refresh(); }}>刷新</button></>} />
-    <Panel title="筛选条件"><div className="form-grid"><label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>机构<select value={filters.orgId} onChange={(e) => { setFilters({ ...filters, orgId: e.target.value }); setPage(1); }}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label><label>关键词<input value={filters.search} placeholder="作品 / 学员 / 机构" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label><label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="featured">精选 / 提交时间</option><option value="submitted">最近提交</option><option value="title">作品名称</option></select></label><label>每页条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10</option><option value="20">20</option><option value="50">50</option></select></label></div>{message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}</Panel>
-    <Panel title={`作品列表（${works.data?.total ?? 0} 条）`}>{works.loading || organizations.loading ? <Loading /> : works.error ? <ErrorState error={works.error} onRetry={works.refresh} /> : works.data.items.length ? <><ListResultSummary total={works.data.total} page={works.data.page} totalPages={works.data.totalPages} label="件作品" /><div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>状态与授权</th><th>举报（暂缓）</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{works.data.items.map((item) => <tr key={item.id}><td><button className="text-button" onClick={() => openDetail(item)}><strong>{item.title}</strong></button><div className="muted">{item.description || '暂无描述'}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td><WorkPlazaStatus item={item} />{item.unpublishReason ? <div className="muted">下架原因：{item.unpublishReason}</div> : null}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{['PENDING', 'APPROVED', 'PUBLISHED'].includes(item.status) ? <button className="text-button" disabled={saving} onClick={() => togglePlaza(item)}>{item.plazaPublished ? '从作品广场移除' : '发布到作品广场'}</button> : null}{item.status === 'PUBLISHED' && <><button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button><button className="text-button" onClick={() => { setAction(item); setReason(''); }}>平台下架</button></>}</div></td></tr>)}</tbody></table></div><Pagination page={works.data.page} totalPages={works.data.totalPages} onChange={setPage} disabled={works.loading} /></> : <Empty title="没有符合条件的作品" />}</Panel>
-    <Panel title={`VibeCoding 作品（${vibeWorks.data?.total ?? 0} 条）`} actions={<button className="secondary-button" onClick={vibeWorks.refresh}>刷新</button>}>
-      {vibeWorks.loading ? <Loading /> : vibeWorks.error ? <ErrorState error={vibeWorks.error} onRetry={vibeWorks.refresh} /> : vibeWorks.data?.items?.length ? <>
-        <Notice>学生提交后就能在这里发布到作品广场（已没有「老师点评」这一环）；发布后官网 /works 会显示卡片：网页点开直接玩，PPT / Word / Excel 先在站内预览、再下载真文件。</Notice>
-        <div className="table-wrap"><table><thead><tr><th>作品</th><th>学员 / 机构</th><th>课时</th><th>状态与授权</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{vibeWorks.data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.description || '暂无描述'} · 第 {item.round} 次提交 · 主产物 {item.preview?.name || item.entryFile}</div></td><td><strong>{item.studentName || item.studentId}</strong><div className="muted">{item.organizationName || '未绑定机构'} · {item.className || '—'}</div></td><td>{item.lessonTitle || '—'}</td><td><WorkPlazaStatus item={item} />{item.unpublishReason ? <div className="muted">下架原因：{item.unpublishReason}</div> : null}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td><td>{formatDate(item.submittedAt)}</td><td><div className="row-actions">{item.copyrightConfirmedAt ? <button className="text-button" disabled={saving} onClick={() => toggleVibePlaza(item)}>{item.isPublic ? '从作品广场移除' : '发布到作品广场'}</button> : <span className="muted">学生未确认展示授权</span>}{item.isPublic ? <a className="text-button" href={`/works/${item.shareToken}`} target="_blank" rel="noreferrer">打开体验 ↗</a> : null}</div></td></tr>)}</tbody></table></div>
-      </> : <Empty title="暂无 VibeCoding 作品" body="学生在 VibeCoding 课堂提交作品后，会显示在这里。" />}
+    <PageHeader eyebrow="作品发布" title="平台作品库" description="查看学生提交的作品，选择发布到官网学生作品广场。由平台管理发布，教师无需审核。" actions={<>{kind === 'canvas' && <button className="secondary-button" disabled={exporting} onClick={exportWorks}>{exporting ? '导出中…' : '导出画布 CSV'}</button>}<button className="secondary-button" onClick={refresh}>刷新</button></>} />
+    <Panel title="作品筛选">
+      <div className="row-actions" role="group" aria-label="作品类型">
+        <button className={kind === 'canvas' ? 'primary-button' : 'secondary-button'} aria-pressed={kind === 'canvas'} disabled={saving} onClick={() => changeKind('canvas')}>画布作品</button>
+        <button className={kind === 'vibecoding' ? 'primary-button' : 'secondary-button'} aria-pressed={kind === 'vibecoding'} disabled={saving} onClick={() => changeKind('vibecoding')}>VibeCoding 作品</button>
+      </div>
+      <div className="form-grid top-gap">
+        <label>发布状态<select value={filters.publicationState} onChange={(e) => filter('publicationState', e.target.value)}><option value="">全部状态</option>{Object.entries(publicationLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>发布到官网<select value={filters.published} onChange={(e) => filter('published', e.target.value)}><option value="">全部</option><option value="1">已发布到官网</option><option value="0">未发布到官网</option></select></label>
+        <label>机构<select value={filters.orgId} onChange={(e) => filter('orgId', e.target.value)}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>学生姓名 / 账号<input value={filters.student} onChange={(e) => filter('student', e.target.value)} placeholder="输入姓名或登录账号" /></label>
+        <label>课包名称<input value={filters.packageName} onChange={(e) => filter('packageName', e.target.value)} placeholder="按课包名称筛选" /></label>
+        <label>课时名称<input value={filters.lesson} onChange={(e) => filter('lesson', e.target.value)} placeholder="按课时名称筛选" /></label>
+        <label>关键词<input value={filters.search} onChange={(e) => filter('search', e.target.value)} placeholder="作品 / 学生 / 机构" /></label>
+        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="submitted">最近提交</option><option value="title">作品名称</option></select></label>
+        <label>每页条数<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10</option><option value="20">20</option><option value="50">50</option></select></label>
+      </div>
+      <button className="text-button" onClick={() => { setFilters(emptyFilters); setPage(1); }}>清空筛选</button>
+      {organizations.error && <ErrorState error={organizations.error} onRetry={organizations.refresh} />}
     </Panel>
-    <Panel title={`举报记录（当前暂缓，仅保留历史只读） · ${reports.data?.pending || 0} 条`}>{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>类型 / 说明</th><th>时间</th><th>操作（暂缓）</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}<div className="muted"><Status value={item.workStatus} /></div></td><td>{item.reporterName || '学生'}</td><td>{item.category}<div className="muted">{item.details || '未补充说明'}</div></td><td>{formatDate(item.createdAt)}</td><td><button className="text-button" disabled title="举报治理按当前决策暂缓">暂缓</button></td></tr>)}</tbody></table></div> : <Empty title="暂无待处理举报" />}</Panel>
-    {detailId ? <Panel title={`作品详情 · ${detail.data?.title || ''}`} actions={<button className="secondary-button" onClick={closeDetail}>关闭</button>}>{detail.loading ? <Loading /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data ? <>
-      <div className="metric-row" style={{ marginBottom: 12 }}>
-        <span><Status value={detail.data.status} /></span>
-        {detail.data.featured ? <span className="status success">精选</span> : null}
-        <span className="muted">提交 {formatDate(detail.data.submittedAt)}</span>
-        {detail.data.reviewedAt ? <span className="muted">最近审核 {formatDate(detail.data.reviewedAt)} · {detail.data.reviewerName || '—'}</span> : null}
-      </div>
-      <div className="tabs" style={{ marginBottom: 12, display: 'flex', gap: 8 }}>
-        <button type="button" className={`tab-button ${detailTab === 'basic' ? 'active' : ''}`} style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: 6, background: detailTab === 'basic' ? '#0f172a' : '#fff', color: detailTab === 'basic' ? '#fff' : '#0f172a', cursor: 'pointer' }} onClick={() => setDetailTab('basic')}>基本</button>
-        <button type="button" className={`tab-button ${detailTab === 'submissions' ? 'active' : ''}`} style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: 6, background: detailTab === 'submissions' ? '#0f172a' : '#fff', color: detailTab === 'submissions' ? '#fff' : '#0f172a', cursor: 'pointer' }} onClick={() => setDetailTab('submissions')}>提交历史 · {detail.data.submissions.length}</button>
-        <button type="button" className={`tab-button ${detailTab === 'reports' ? 'active' : ''}`} style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: 6, background: detailTab === 'reports' ? '#0f172a' : '#fff', color: detailTab === 'reports' ? '#fff' : '#0f172a', cursor: 'pointer' }} onClick={() => setDetailTab('reports')}>举报记录（暂缓） · {detail.data.reports.length}</button>
-      </div>
-      {detailTab === 'basic' ? <div className="split">
-        <div>
-          <h4>作品信息</h4>
-          <p><strong>标题：</strong>{detail.data.title}</p>
-          <p><strong>描述：</strong>{detail.data.description || '暂无描述'}</p>
-          <p><strong>课程课时：</strong>{detail.data.courseLessonTitle || '—'}</p>
-          <p><strong>当前点评：</strong>{detail.data.teacherComment || '—'}</p>
-          <p><strong>版权授权：</strong>{detail.data.copyrightConfirmedAt ? `${formatDate(detail.data.copyrightConfirmedAt)} 已确认` : '未确认'}</p>
-          <p><strong>画布节点：</strong>{detail.data.canvasSnapshot?.nodes?.length || 0} 个 / 连线 {detail.data.canvasSnapshot?.edges?.length || 0} 条</p>
-        </div>
-        <div>
-          <h4>学生与上下文</h4>
-          <p><strong>学生：</strong>{detail.data.studentName || '—'}（{detail.data.studentLogin}）</p>
-          <p><strong>机构：</strong>{detail.data.organizationName || '未绑定'}</p>
-          <p><strong>课堂：</strong>{detail.data.sessionTitle || detail.data.className || '—'}</p>
-          <p><strong>精选授权：</strong>{detail.data.studentAllowFeature ? '已授权' : '已关闭'}</p>
-          <p><strong>作品墙匿名：</strong>{detail.data.studentShowcaseAnonymous ? '是' : '否'}</p>
-          <p><strong>批注数量：</strong>{detail.data.annotationCount}（展示最新 {detail.data.annotations.length} 条）</p>
-          {detail.data.featured ? <>
-            <p><strong>精选时间：</strong>{formatDate(detail.data.featuredAt)}</p>
-            <p><strong>精选理由：</strong>{detail.data.featuredReason || '—'}</p>
-          </> : <p className="muted">未设精选</p>}
-          {detail.data.latestPublishRequest ? <p><strong>最近发布申请：</strong>{detail.data.latestPublishRequest.status} · {formatDate(detail.data.latestPublishRequest.requestedAt)}{detail.data.latestPublishRequest.status === 'PENDING' ? '（待处理）' : ''}</p> : <p className="muted">无发布申请</p>}
-        </div>
-      </div> : null}
-      {detailTab === 'basic' && detail.data.canvasSnapshot ? <div style={{ marginTop: 12 }}>
-        <h4>画布快照（只读预览）</h4>
-        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 12, maxHeight: 360, overflow: 'auto' }}>
-          <div className="muted" style={{ marginBottom: 8 }}>节点 {detail.data.canvasSnapshot.nodes?.length || 0} 个 / 连线 {detail.data.canvasSnapshot.edges?.length || 0} 条</div>
-          <pre style={{ fontSize: 12, lineHeight: 1.5, margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(detail.data.canvasSnapshot, null, 2).slice(0, 2000)}{JSON.stringify(detail.data.canvasSnapshot).length > 2000 ? '\n…（已截断）' : ''}</pre>
-        </div>
-      </div> : null}
-      {detailTab === 'submissions' ? detail.data.submissions.length ? <div className="table-wrap"><table><thead><tr><th>轮次</th><th>标题</th><th>审核</th><th>审核说明</th><th>提交时间</th></tr></thead><tbody>{detail.data.submissions.map((s) => <tr key={s.id}><td>第 {s.round} 轮</td><td>{s.title}<div className="muted">{s.description || '无描述'}</div></td><td>{s.reviewStatus ? <><Status value={s.reviewStatus} />{s.reviewerName ? <div className="muted">{s.reviewerName}</div> : null}</> : <span className="muted">未审核</span>}</td><td>{s.reviewComment || '—'}</td><td>{formatDate(s.submittedAt)}{s.reviewedAt ? <div className="muted">审核 {formatDate(s.reviewedAt)}</div> : null}</td></tr>)}</tbody></table></div> : <Empty title="暂无提交历史" /> : null}
-      {detailTab === 'reports' ? detail.data.reports.length ? <div className="table-wrap"><table><thead><tr><th>类型</th><th>说明</th><th>举报人</th><th>状态</th><th>处理说明</th><th>时间</th></tr></thead><tbody>{detail.data.reports.map((r) => <tr key={r.id}><td>{reportCategoryLabels[r.category] || r.category}</td><td>{r.details || '—'}</td><td>{r.reporterName || '—'}</td><td><span className={`status ${r.status === 'PENDING' ? 'danger' : r.status === 'RESOLVED' ? 'success' : 'muted'}`}>{reportStatusLabels[r.status] || r.status}</span>{r.actionTaken === 'UNPUBLISH' ? <div className="muted">已下架</div> : null}</td><td>{r.resolution || '—'}{r.handlerName ? <div className="muted">{r.handlerName}</div> : null}</td><td>{formatDate(r.createdAt)}{r.handledAt ? <div className="muted">处理 {formatDate(r.handledAt)}</div> : null}</td></tr>)}</tbody></table></div> : <Empty title="暂无举报记录" /> : null}
-      <div className="row-actions top-gap" style={{ marginTop: 12 }}>
-        {detail.data.status === 'PUBLISHED' ? <>
-          <button className="text-button" disabled={saving} onClick={() => toggleFeature(detail.data)}>{detail.data.featured ? '取消精选' : '设为精选'}</button>
-          <button className="text-button" onClick={() => { setAction(detail.data); setReason(''); }}>平台下架</button>
-        </> : null}
-        <button className="secondary-button" onClick={detail.refresh}>刷新详情</button>
-      </div>
-    </> : null}</Panel> : null}
-    {action ? <Panel title={`下架《${action.title}》`}><label>下架原因<input value={reason} required maxLength={2000} placeholder="例如：内容不适合公开展示" onChange={(e) => setReason(e.target.value)} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={saving || !reason.trim()} onClick={unpublish}>{saving ? '处理中…' : '确认下架'}</button><button className="secondary-button" disabled={saving} onClick={() => { setAction(null); setReason(''); }}>取消</button></div></Panel> : null}
-    {reportAction ? <Panel title={`处理举报 · ${reportAction.workTitle}`}><div className="form-grid"><label>处理结果<select value={reportForm.status} onChange={(event) => setReportForm({ ...reportForm, status: event.target.value })}><option value="RESOLVED">已处理</option><option value="DISMISSED">驳回举报</option></select></label><label>作品动作<select value={reportForm.actionTaken} onChange={(event) => setReportForm({ ...reportForm, actionTaken: event.target.value })}><option value="NONE">保留作品</option><option value="UNPUBLISH">下架作品</option></select></label></div><label>处理说明<textarea value={reportForm.resolution} required maxLength={2000} placeholder="说明处理结论；下架时该说明会作为学生可见的下架原因。" onChange={(event) => setReportForm({ ...reportForm, resolution: event.target.value })} /></label><div className="row-actions top-gap"><button className="primary-button" disabled={reportBusy || !reportForm.resolution.trim()} onClick={handleReport}>{reportBusy ? '处理中…' : '确认处理'}</button><button className="secondary-button" disabled={reportBusy} onClick={() => setReportAction(null)}>取消</button></div></Panel> : null}
+    {message && <div role={message.tone === 'danger' ? 'alert' : 'status'}><Notice tone={message.tone}>{message.text}</Notice></div>}
+    {action && <Panel title={`${action.published ? '发布到官网' : '下架'}《${action.item.title}》`}>
+      <p>{action.published ? '确认后，所有官网访客都可以查看此作品。' : '确认后，作品将不再展示在官网；下架原因会告知学生。'}</p>
+      {!action.published && <label>下架原因<textarea value={reason} required maxLength={2000} onChange={(e) => setReason(e.target.value)} placeholder="请填写学生可见的下架原因" /></label>}
+      <div className="row-actions top-gap"><button className="primary-button" disabled={saving || (!action.published && !reason.trim())} onClick={publish}>{saving ? '处理中…' : action.published ? '确认发布' : '确认下架'}</button><button className="secondary-button" disabled={saving} onClick={() => setAction(null)}>取消</button></div>
+    </Panel>}
+    <Panel title={`${kind === 'canvas' ? '画布' : 'VibeCoding'}作品`}>
+      {loading ? <Loading /> : result.error ? <ErrorState error={result.error} onRetry={refresh} /> : result.data?.items?.length ? <>
+        <ListResultSummary total={result.data.total} page={result.data.page} totalPages={result.data.totalPages} label="件作品" />
+        <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生账号 / 机构</th><th>课包 / 课时 / 课堂</th><th>发布状态</th><th>提交时间</th><th>操作</th></tr></thead><tbody>{result.data.items.map((item) => <tr key={`${kind}-${item.id}`}>
+          <td>{kind === 'canvas' ? <button className="text-button" onClick={() => setDetailId(item.id)}><strong>{item.title}</strong></button> : <strong>{item.title}</strong>}<div className="muted">{item.description || '暂无描述'}</div></td>
+          <td><strong>{item.studentName || item.studentId}</strong><div>{item.studentLogin || '账号未记录'}</div><div className="muted">{item.organizationName || '未绑定机构'}</div></td>
+          <td><strong>{item.packageName || '课包未记录'}</strong><div>{item.courseLessonTitle || item.lessonTitle || '课时未记录'}</div><div className="muted">{item.sessionTitle || '课堂未记录'}</div></td>
+          <td><span className={`status ${item.publicationState === 'PUBLISHED' ? 'success' : ''}`}>{publicationLabels[item.publicationState] || '已提交待发布'}</span>{item.featured && <span className="status success">精选</span>}{item.publicationState === 'UNPUBLISHED' && item.unpublishReason && <div className="muted">下架原因：{item.unpublishReason}</div>}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td>
+          <td>{formatDate(item.submittedAt)}</td>
+          <td><div className="row-actions"><button className="text-button" disabled={saving || (item.publicationState !== 'PUBLISHED' && (!item.copyrightConfirmedAt || (kind === 'canvas' && item.status === 'REJECTED')))} onClick={() => confirmPublication(item)}>{item.publicationState === 'PUBLISHED' ? '下架' : '发布到官网'}</button>{item.publicationState === 'PUBLISHED' && item.shareToken && <a className="text-button" href={`/works/${item.shareToken}`} target="_blank" rel="noreferrer">查看官网作品</a>}{kind === 'canvas' && item.publicationState === 'PUBLISHED' && <button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button>}</div>{kind === 'canvas' && item.status === 'REJECTED' && <span className="muted">历史退回作品，需学生重新提交</span>}</td>
+        </tr>)}</tbody></table></div>
+        <Pagination page={result.data.page} totalPages={result.data.totalPages} onChange={setPage} disabled={loading} />
+      </> : <Empty title="没有符合条件的作品" body="可调整筛选条件，或切换作品类型。" />}
+    </Panel>
+    {detailId && <Panel title={`画布作品详情 · ${detail.data?.title || ''}`} actions={<button className="secondary-button" onClick={() => setDetailId(null)}>关闭</button>}>
+      {detail.loading ? <Loading /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data && <>
+        <p>{detail.data.description || '暂无描述'}</p><p>学生：{detail.data.studentName}（{detail.data.studentLogin}） · {detail.data.organizationName || '未绑定机构'}</p>
+        <p>课时：{detail.data.courseLessonTitle || '未记录'}</p>
+        <details><summary>画布快照（只读）</summary><pre style={{ maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(detail.data.canvasSnapshot, null, 2)}</pre></details>
+        <details><summary>提交历史（只读） · {detail.data.submissions?.length || 0}</summary>{detail.data.submissions?.map((item) => <p key={item.id}>第 {item.round} 次 · {item.title} · {formatDate(item.submittedAt)}</p>)}</details>
+      </>}
+    </Panel>}
+    <details onToggle={(event) => setHistoryOpen(event.currentTarget.open)}><summary>历史举报记录（只读，治理暂缓）</summary>
+      {historyOpen && <Panel title="历史举报记录">{reports.loading ? <Loading /> : reports.error ? <ErrorState error={reports.error} onRetry={reports.refresh} /> : reports.data?.items?.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>举报人</th><th>说明</th><th>历史状态</th><th>时间</th></tr></thead><tbody>{reports.data.items.map((item) => <tr key={item.id}><td>{item.workTitle}</td><td>{item.reporterName || '学生'}</td><td>{item.details || item.category}</td><td>{{ PENDING: '待处理（暂缓）', RESOLVED: '已处理', DISMISSED: '已驳回' }[item.status] || item.status}</td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无历史举报记录" />}</Panel>}
+    </details>
   </>;
 }
-

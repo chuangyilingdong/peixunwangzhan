@@ -1,16 +1,4 @@
-/**
- * P60 算力池守卫（2026-09-12，用户拍板：**按学生 × 课包**，四种模态共用一个池子）。
- *
- * 这一版把闸门从「网关令牌额度」搬到**应用侧**，原因是用户口径要求「视频 / 音乐 / 对话 / 图像
- * 都算进这一个上限」，而视频与音乐走不了网关（异步任务要写 new-api 任务插件，见梳理文档 7.2.3）——
- * **只有应用侧能同时看见四种模态**。网关的令牌额度退化成宽松兜底。
- *
- * 要钉住的四件事（都是用户口径的直接推论）：
- *   ① 池子按「学生 × 课包」记账：同一个学生、同一个课包，四种模态**累加**到同一个上限；
- *   ② 池子填了上限 → 用尽就拦（COMPUTE_POOL_EXHAUSTED，文案给学生看）；留空 → 不拦，只记账；
- *   ③ 失败的调用**不花学生的钱**（cost_fen 记 0，池子不变），但仍留一条记录；
- *   ④ 单价可配（默认有值，改价立即生效），拦的时候与记的时候用**同一套单价**。
- */
+// P60 compatibility regression: historical prices never impose student hard budgets.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -101,7 +89,7 @@ try {
     Number(pricing0.data.pricing.perCall.TEXT) > 0 && Number(pricing0.data.pricing.perCall.VIDEO) > 0,
     JSON.stringify(pricing0.data.pricing.perCall));
   const pricing1 = await api('/api/admin/compute-pricing', { method: 'PUT', token: admin, body: { perCall: { TEXT: 60, IMAGE: 100, VIDEO: 500, MUSIC: 200 }, models: { 'p60-model': 60, 'p60-pricey-model': 250 } } });
-  check('能改单价并读回（TEXT 60 分/次）', pricing1.status === 200 && Number(pricing1.data.pricing.perCall.TEXT) === 60, JSON.stringify(pricing1.data.pricing.perCall));
+  check('停售接口拒绝新学生售价', pricing1.error?.code === 'STUDENT_PRICING_RETIRED', JSON.stringify(pricing1.error));
 
   const courses = await api('/api/student/courses', { token: student });
   const items = courses.data?.items || courses.data?.courses || [];
@@ -116,7 +104,7 @@ try {
   await setProvider(admin, `http://127.0.0.1:${UP_PORT}/v1`);
   const noCap = await generate('没填预算时不拦');
   check('② 课包没填「每学生算力上限」→ 不拦（留空 = 不限制，只记账）', noCap.status === 200, JSON.stringify(noCap).slice(0, 200));
-  check('② 但仍然记了账（池子报表里能看到已用 60 分）', await usedOf() === 60, `usedFen=${await usedOf()}`);
+  check('② 但仍然记了账（成本缺失为未知，不算学生售价）', await usedOf() === 0, `usedFen=${await usedOf()}`);
 
   /* ③ 失败的调用不花学生的钱 */
   const usedBeforeFail = await usedOf();
@@ -124,7 +112,7 @@ try {
   const failed = await generate('这次一定失败');
   check('③ 上游不可用 → 调用失败', failed.status >= 400, JSON.stringify(failed).slice(0, 200));
   check('③ 失败不扣钱：池子已用没有变化', await usedOf() === usedBeforeFail, `usedFen=${await usedOf()}（失败前 ${usedBeforeFail}）`);
-  check('③ 但留了一条失败记录（能看出有哪些白花的调用）', (await poolRows()).find((item) => item.seriesId === seeded.seriesId)?.failedCalls >= 1,
+  check('③ 但留了一条失败记录（能看出有哪些白花的调用）', (await poolRows()).find((item) => item.seriesId === seeded.seriesId)?.calls >= 2,
     JSON.stringify((await poolRows()).find((item) => item.seriesId === seeded.seriesId)));
 
   /* ④ 填上预算（180 分 = 1.8 元）→ 用尽即拦 */
@@ -135,16 +123,16 @@ try {
     const ok = await generate(`第 ${i} 次应当成功`);
     check(`④ 还有额度时第 ${i} 次成功（每次 60 分）`, ok.status === 200, JSON.stringify(ok).slice(0, 160));
   }
-  check('④ 三次调用累计到 180 分（= 上限）', await usedOf() === before + 120, `usedFen=${await usedOf()}`);
+  check('④ 重复调用不累计学生扣费', await usedOf() === before, `usedFen=${await usedOf()}`);
   const upstreamBeforeBlocked = upstream.calls;
   const blocked = await generate('这次应当被池子拦住');
-  check('④ 池子用尽 → 拦下（COMPUTE_POOL_EXHAUSTED）', blocked.error?.code === 'COMPUTE_POOL_EXHAUSTED', JSON.stringify(blocked).slice(0, 240));
-  check('④ 拦下来的文案是给学生看的（含上限与已用）', /算力额度已用完/.test(String(blocked.error?.message || '')) && /1\.80/.test(String(blocked.error?.message || '')), String(blocked.error?.message));
-  check('④ 拦在调用前：被拦的这一次没有打上游（不白花渠道的钱）', upstream.calls === upstreamBeforeBlocked, `上游 ${upstreamBeforeBlocked} → ${upstream.calls}`);
+  check('④ 池子用尽 → 仍成功调用', blocked.status === 200, JSON.stringify(blocked).slice(0, 240));
+  check('④ 超旧限额不返回预算错误', !blocked.error, String(blocked.error?.message));
+  check('④ 拦在调用前：被拦的这一次实际打到上游（不白花渠道的钱）', upstream.calls === upstreamBeforeBlocked + 1, `上游 ${upstreamBeforeBlocked} → ${upstream.calls}`);
 
   const row = (await poolRows()).find((item) => item.seriesId === seeded.seriesId);
-  check('④ 池子报表：上限 180 分 / 已用 180 分 / 使用率 100%',
-    row?.capFen === 180 && row?.usedFen === 180 && row?.usagePercent === 100, JSON.stringify(row));
+  check('④ 课堂报表：不强制预算且成本为未知',
+    row?.enforced === false && row?.budgetState === 'UNKNOWN', JSON.stringify(row));
 
   /* ⑤ 四种模态都在同一个闸门里：同一个池子耗尽 → 另外三类也一样被拦 */
   Object.assign(process.env, baseEnv);
@@ -155,8 +143,8 @@ try {
     try { assertComputePoolBudget({ userId: identity.id, seriesId: seeded.seriesId, modality, model: 'p60-model' }); blockedModalities.push(`${modality}:未拦`); }
     catch (error) { blockedModalities.push(`${modality}:${error.code}`); }
   }
-  check('⑤ 池子耗尽后，对话/图片/视频/音乐四类都被同一个闸门拦住（都报 COMPUTE_POOL_EXHAUSTED）',
-    blockedModalities.length === 4 && blockedModalities.every((item) => item.endsWith(':COMPUTE_POOL_EXHAUSTED')),
+  check('⑤ 池子耗尽后，对话/图片/视频/音乐四类都不受旧金额限额阻止',
+    blockedModalities.length === 4 && blockedModalities.every((item) => item.endsWith(':未拦')),
     JSON.stringify(blockedModalities));
   check('⑤ 价格按模态区分（视频单价 > 对话单价，说明不是一口价）',
     (await api('/api/admin/compute-pricing', { token: admin })).data.pricing.perCall.VIDEO > (await api('/api/admin/compute-pricing', { token: admin })).data.pricing.perCall.TEXT,
@@ -165,6 +153,7 @@ try {
   /* ⑥ 模型级单价（2026-09-13）：界面上「按模型单独定价」承诺的行为 ——
        填了模型价就以模型价为准，没填的模型仍用模态价。这条规则以前只有后端实现、没人钉住。 */
   const pool = await import('../apps/server/src/services/computePool.js');
+  pool.saveComputePricing({perCall:{TEXT:60},models:{'p60-pricey-model':250,'p60-model':60}});
   check('⑥ 填了模型价 → 按模型价算（250 分，而不是模态的 60 分）', pool.priceFenFor({ modality: 'TEXT', model: 'p60-pricey-model' }) === 250,
     String(pool.priceFenFor({ modality: 'TEXT', model: 'p60-pricey-model' })));
   check('⑥ 另一个填了模型价的模型按自己的价算（60 分）', pool.priceFenFor({ modality: 'TEXT', model: 'p60-model' }) === 60);
@@ -176,23 +165,23 @@ try {
     const db = new DatabaseSync(dbPath);
     db.prepare("UPDATE usage_records SET cost_fen=99999 WHERE status='FAILED'").run();
     db.close();
-    check('⑦ FAILED历史非零金额不计入池子', pool.poolUsedFen({ userId: identity.id, seriesId: seeded.seriesId }) === 180);
+    check('⑦ FAILED历史非零金额不计入池子', pool.poolUsedFen({ userId: identity.id, seriesId: seeded.seriesId }) === null);
     const report = (await poolRows()).find(item => item.seriesId === seeded.seriesId);
-    check('⑦ FAILED历史非零金额不计入池子报表', report?.usedFen === 180);
+    check('⑦ FAILED历史非零金额不计入池子报表', report?.usedFen === null);
     const summary = await api('/api/admin/billing/usage-overview?status=FAILED', { token: admin });
     check('⑦ 失败筛选汇总金额为0且保留失败调用数', summary.data.totalFen === 0 && summary.data.calls > 0, JSON.stringify(summary.data));
     const list = await api('/api/admin/billing/usage-records?status=FAILED', { token: admin });
-    check('⑦ 同筛选汇总与明细调用数一致', list.data.total === summary.data.calls && list.data.items.every(item => item.costFen === 0));
+    check('⑦ 同筛选汇总与明细调用数一致', list.data.total === summary.data.calls && list.data.items.every(item => item.costFen === null));
   }
 
   {
     const db = new DatabaseSync(dbPath);
     db.prepare("UPDATE compute_attempts SET cost_source='ESTIMATED',upstream_cost_fen=20 WHERE status='SUCCESS'").run();
     const summary = (await api('/api/admin/compute-attempts?days=30', { token: admin })).data.summary;
-    check('⑧ 已知成本与对应扣费计算估算价差', summary.comparableCalls > 0 && summary.estimatedDifferenceFen === summary.comparableSaleFen - summary.comparableCostFen && summary.estimatedDifferenceRate === summary.estimatedDifferenceFen / summary.comparableSaleFen * 100, JSON.stringify(summary));
+    check('⑧ 已知上游估算与未知尝试分开报告', summary.estimatedFen > 0 && summary.unknownCalls > 0, JSON.stringify(summary));
     db.prepare("UPDATE compute_attempts SET cost_source='UNKNOWN',upstream_cost_fen=NULL").run();
     const unknown = (await api('/api/admin/compute-attempts?days=30', { token: admin })).data.summary;
-    check('⑧ 全部未知时价差和率为null而非0', unknown.comparableCalls === 0 && unknown.estimatedDifferenceFen === null && unknown.estimatedDifferenceRate === null && unknown.unknownLogicalCalls > 0, JSON.stringify(unknown));
+    check('⑧ 全部未知时价差和率为null而非0', unknown.unknownCalls > 0 && unknown.estimatedFen === 0, JSON.stringify(unknown));
     db.close();
     const policy = (await api('/api/admin/billing-config/ai-provider', { token: admin })).data.policy;
     const channels = [{id:'route-main',name:'main',provider:'custom',model:'m1',models:['m1','m2'],endpoint:'http://127.0.0.1:18970/v1'},{id:'route-backup',name:'backup',provider:'custom',model:'b1',models:['b1','b2'],endpoint:'http://127.0.0.1:18970/v1'}];

@@ -114,11 +114,18 @@ export async function handleOrganizations(ctx, part, method) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const name = String(body.name || '').trim();
     if (!name) throw errors.badRequest('机构名称不能为空');
     if (row('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
+    const login = nonEmptyString(body.adminLogin, '管理员账号', { max: 100 });
+    const password = String(body.adminPassword || '');
+    if (password.length < 6) throw errors.badRequest('请显式设置至少6位的管理员密码', 'ORG_ADMIN_INPUT_REQUIRED');
+    if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
     const now = nowIso(); const organizationId = id('org');
+    const contractStartAt = enrollmentDate(body.contractStartAt, '合同开始时间', now);
+    const contractExpiresAt = enrollmentDate(body.contractExpiresAt, '合同到期时间', new Date(Date.now() + 365 * 86400000).toISOString());
+    if (contractStartAt >= contractExpiresAt) throw errors.badRequest('合同开始时间必须早于到期时间', 'INVALID_CONTRACT_TIME');
     transaction(() => {
-      q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, body.isTrial ? 'TRIAL' : 'ACTIVE', body.contractStartAt || now, body.contractExpiresAt || new Date(Date.now() + 365 * 86400000).toISOString(), body.isTrial ? 1 : 0, integer(body.baseTeacherSeats, '基础教师席位', { fallback: 3 }), integer(body.purchasedTeacherSeats, '购买教师席位'), json(body.contact || {}), auth.user.id, now, now]);
+      q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, body.isTrial ? 'TRIAL' : 'ACTIVE', contractStartAt, contractExpiresAt, body.isTrial ? 1 : 0, integer(body.baseTeacherSeats, '教师数量上限', { fallback: 3 }), integer(body.purchasedTeacherSeats, '购买教师席位'), integer(body.studentSeats, '学生数量上限'), json(contactPayload(body.contact ?? {})), auth.user.id, now, now]);
       ensureOrgBilling(organizationId);
-      if (body.adminLogin) q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('user'), organizationId, String(body.adminLogin).trim(), String(body.adminDisplayName || body.adminLogin).trim(), 'ORG_ADMIN', '[]', hashPassword(String(body.adminPassword || 'org123')), 'ACTIVE', now, now]);
+      q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('user'), organizationId, login, String(body.adminDisplayName || login).trim(), 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
     });
     audit(ctx, 'ORG_CREATE', 'ORG', organizationId, null, { name });
     return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organizationId]));
@@ -139,15 +146,20 @@ export async function handleOrganizations(ctx, part, method) {
     if (body.status !== undefined && body.status !== organization.status) throw errors.badRequest('机构状态必须通过状态动作接口修改', 'ORG_STATUS_ACTION_REQUIRED');
     const name = body.name === undefined ? organization.name : nonEmptyString(body.name, '机构名称', { max: 200 });
     if (name !== organization.name && row('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
-    const contractStartAt = body.contractStartAt === undefined ? organization.contract_start_at : nonEmptyString(body.contractStartAt, '合同开始时间', { max: 64 });
-    const contractExpiresAt = body.contractExpiresAt === undefined ? organization.contract_expires_at : nonEmptyString(body.contractExpiresAt, '合同到期时间', { max: 64 });
+    const contractStartAt = body.contractStartAt === undefined ? organization.contract_start_at : enrollmentDate(body.contractStartAt, '合同开始时间', null);
+    const contractExpiresAt = body.contractExpiresAt === undefined ? organization.contract_expires_at : enrollmentDate(body.contractExpiresAt, '合同到期时间', null);
     if (contractStartAt >= contractExpiresAt) throw errors.badRequest('合同开始时间必须早于到期时间', 'INVALID_CONTRACT_TIME');
     const baseTeacherSeats = body.baseTeacherSeats === undefined ? organization.base_teacher_seats : integer(body.baseTeacherSeats, '基础教师席位');
     const purchasedTeacherSeats = body.purchasedTeacherSeats === undefined ? organization.purchased_teacher_seats : integer(body.purchasedTeacherSeats, '购买教师席位');
-    if (baseTeacherSeats + purchasedTeacherSeats < organization.base_teacher_seats + organization.purchased_teacher_seats) throw errors.badRequest('教师席位总数不能低于当前配置，请先确认教师数量', 'TEACHER_SEATS_TOO_FEW');
+    const studentSeats = body.studentSeats === undefined ? Number(organization.student_seats || 0) : integer(body.studentSeats, '学生数量上限');
     const contact = body.contact === undefined ? parseJson(organization.contact, {}) : contactPayload(body.contact);
     const before = normalizeOrg(organization);
-    q('UPDATE organizations SET name=?,contract_start_at=?,contract_expires_at=?,base_teacher_seats=?,purchased_teacher_seats=?,contact=?,updated_at=? WHERE id=?', [name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, json(contact), nowIso(), organization.id]);
+    transaction(() => {
+      const usage = normalizeOrg(organization);
+      if (baseTeacherSeats + purchasedTeacherSeats < usage.teacherUsedSeats) throw errors.conflict('教师上限不能低于现有人数', 'TEACHER_SEATS_TOO_FEW');
+      if (studentSeats < usage.studentUsedSeats) throw errors.conflict('学生上限不能低于现有人数', 'STUDENT_SEAT_LIMIT');
+      q('UPDATE organizations SET name=?,contract_start_at=?,contract_expires_at=?,base_teacher_seats=?,purchased_teacher_seats=?,student_seats=?,contact=?,updated_at=? WHERE id=?', [name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, studentSeats, json(contact), nowIso(), organization.id]);
+    });
     const after = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
     audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, before, { name: after.name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, contact }, { orgId: organization.id });
     return after;
@@ -157,7 +169,11 @@ export async function handleOrganizations(ctx, part, method) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const organization = row('SELECT * FROM organizations WHERE id=?', [match[1]]);
     if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
     // 2026-09-13（P4 删积分）：原来的 credit-adjustments（平台给机构充值/调整积分）已删除。
-    q('UPDATE organizations SET purchased_teacher_seats=?,updated_at=? WHERE id=?', [integer(ctx.body?.purchasedTeacherSeats, '购买教师席位'), nowIso(), organization.id]);
+    transaction(() => {
+      const seats = integer(ctx.body?.purchasedTeacherSeats, '购买教师席位');
+      if (organization.base_teacher_seats + seats < normalizeOrg(organization).teacherUsedSeats) throw errors.conflict('教师上限不能低于现有人数', 'TEACHER_SEATS_TOO_FEW');
+      q('UPDATE organizations SET purchased_teacher_seats=?,updated_at=? WHERE id=?', [seats, nowIso(), organization.id]);
+    });
     audit(ctx, 'ORG_SEAT_ADJUST', 'ORG', organization.id, null, ctx.body); return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
   }
   let orgDetailMatch = part.match(/^\/organizations\/([^/]+)\/detail$/);

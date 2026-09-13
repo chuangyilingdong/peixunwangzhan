@@ -1250,6 +1250,23 @@ for (const [table, column, type] of [['generation_jobs', 'compute_snapshot', 'TE
   if (!rows(`PRAGMA table_info(${table})`).some((item) => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 
+// Platform classroom budgets are advisory; never migrate per-student prices into them.
+for (const [table, column, type] of [
+  ['course_lessons', 'platform_budget_fen', 'INTEGER CHECK (platform_budget_fen IS NULL OR platform_budget_fen >= 0)'],
+  ['compute_attempts', 'class_session_id', 'TEXT'],
+  ['compute_attempts', 'lesson_id', 'TEXT'],
+]) {
+  if (!rows(`PRAGMA table_info(${table})`).some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+if (!rows('PRAGMA table_info(organizations)').some(item => item.name === 'student_seats')) {
+  db.exec('ALTER TABLE organizations ADD COLUMN student_seats INTEGER NOT NULL DEFAULT 0 CHECK (student_seats >= 0)');
+  db.exec(`UPDATE organizations SET student_seats = MAX(
+    COALESCE((SELECT SUM(MAX(0, student_seats)) FROM billing_packages WHERE org_id=organizations.id),0),
+    (SELECT COUNT(*) FROM users WHERE org_id=organizations.id AND role='STUDENT' AND deleted_at IS NULL)
+  )`);
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_compute_attempts_session ON compute_attempts(class_session_id, created_at)');
+
 // AI generation queue hardening fields; safe for existing production databases.
 for (const statement of [
   "ALTER TABLE generation_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
@@ -1631,6 +1648,8 @@ if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
       status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACTIVE','ENDED','DISSOLVED')),
       delivery_mode TEXT NOT NULL DEFAULT 'CANVAS',
       session_credit_cap INTEGER,
+      platform_budget_fen INTEGER,
+      session_kind TEXT NOT NULL DEFAULT 'REGULAR',
       consumed_credits_total INTEGER NOT NULL DEFAULT 0,
       ai_paused INTEGER NOT NULL DEFAULT 0,
       student_call_cap INTEGER,
@@ -1652,7 +1671,7 @@ if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
     )`);
     db.exec(`INSERT INTO class_sessions_migrated (
       id, title, org_id, class_id, series_id, lesson_id, teacher_id, status, delivery_mode,
-      session_credit_cap, consumed_credits_total, ai_paused, student_call_cap,
+      session_credit_cap, session_kind, consumed_credits_total, ai_paused, student_call_cap,
       allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing,
       started_by, started_at, ended_by, ended_at, ended_reason, created_at, updated_at
     ) SELECT
@@ -1664,7 +1683,7 @@ if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
       session.lesson_id,
       COALESCE(session.started_by, (SELECT klass.teacher_id FROM classes klass WHERE klass.id = session.class_id)),
       session.status, session.delivery_mode,
-      session.session_credit_cap, session.consumed_credits_total, session.ai_paused, session.student_call_cap,
+      session.session_credit_cap, session.session_kind, session.consumed_credits_total, session.ai_paused, session.student_call_cap,
       session.allow_text, session.allow_image, session.allow_music, session.allow_video, session.allow_podcast, session.allow_dubbing,
       session.started_by, session.started_at, session.ended_by, session.ended_at, session.ended_reason,
       session.started_at, COALESCE(session.ended_at, session.started_at)
@@ -1687,6 +1706,8 @@ try { db.exec('ALTER TABLE class_sessions ADD COLUMN org_id TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec('UPDATE class_sessions SET org_id=(SELECT owner.org_id FROM users owner WHERE owner.id = class_sessions.teacher_id) WHERE org_id IS NULL'); } catch (_) {}
 
+try { db.exec('ALTER TABLE class_sessions ADD COLUMN platform_budget_fen INTEGER CHECK (platform_budget_fen IS NULL OR platform_budget_fen >= 0)'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // 课堂表的索引统一在这里建：旧库要先重建出 created_at/teacher_id 才能建（写在基础 DDL 里会让老库初始化当场报错）
 db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_status ON class_sessions(status, created_at DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_teacher ON class_sessions(teacher_id, status)');
@@ -1732,7 +1753,7 @@ db.exec(`INSERT OR IGNORE INTO session_students(
          session.ended_at, SUM(record.cost_fen), COALESCE(session.ended_at, record.created_at)
   FROM usage_records record
   JOIN class_sessions session ON session.id = record.class_session_id
-  WHERE record.status='SUCCESS' AND record.cost_fen > 0
+  WHERE record.status='SUCCESS'
     AND session.status IN ('ENDED','DISSOLVED')
     AND NOT EXISTS (SELECT 1 FROM session_students existing WHERE existing.session_id = record.class_session_id)
   GROUP BY record.class_session_id, record.user_id`);

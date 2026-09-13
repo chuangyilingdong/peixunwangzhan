@@ -54,7 +54,7 @@ export function getStudentLessonParticipations(user) {
        FROM session_students part
        JOIN class_sessions session ON session.id = part.session_id
        LEFT JOIN users teacher ON teacher.id = session.teacher_id
-      WHERE part.student_id = ? AND part.org_id = ?
+      WHERE part.student_id = ? AND part.org_id = ? AND session.org_id = part.org_id
       ORDER BY part.added_at DESC`,
     [userId, orgId],
   );
@@ -90,7 +90,7 @@ export function getStudentClassrooms(user) {
        LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
        LEFT JOIN course_series series ON series.id = session.series_id
        LEFT JOIN users teacher ON teacher.id = session.teacher_id
-      WHERE part.student_id = ? AND part.org_id = ? AND session.status <> 'DISSOLVED'
+      WHERE part.student_id = ? AND part.org_id = ? AND session.org_id = part.org_id AND session.status <> 'DISSOLVED'
       ORDER BY COALESCE(session.started_at, session.created_at) DESC`,
     [userId, orgId],
   ).map((item) => ({
@@ -193,10 +193,10 @@ export function getStudentCourses(user) {
   );
 
   const seriesById = new Map();
-  for (const item of items) {
+  for (const item of items.filter((item) => granted.has(item.id))) {
     let series = seriesById.get(item.id);
     if (!series) {
-      series = normalizeSeries(item, { orgId });
+      series = normalizeSeries(item, { orgId, asPublished: true });
       series.lessons = [];
       series.classIds = [];
       series.hasGrant = granted.has(item.id);
@@ -204,7 +204,7 @@ export function getStudentCourses(user) {
     }
     let lesson = series.lessons.find((candidate) => candidate.id === item.lesson_id);
     if (!lesson) {
-      lesson = normalizeLesson({ /* 学生读已发布快照 */ 
+      lesson = normalizeLesson({ ...row('SELECT * FROM course_lessons WHERE id=?', [item.lesson_id]), /* 学生读已发布快照 */
         id: item.lesson_id,
         series_id: item.id,
         title: item.lesson_title,
@@ -217,7 +217,7 @@ export function getStudentCourses(user) {
         lesson_content: item.lesson_lesson_content,
         created_at: item.lesson_created_at,
         updated_at: item.lesson_updated_at,
-      });
+      }, { asPublished: true });
       // 课单退场后不再有「这节课属于哪些班级」这回事；两个键都留着但恒为空，
       // 免得既有读取方（学生端卡片）拿到 undefined。真正决定能不能进的是**课堂名单**。
       lesson.classIds = [];
@@ -269,8 +269,8 @@ export function getStudentAccessibleCourses(user, filters = {}) {
      ORDER BY series.sort, series.title`,
     params,
   );
-  return items.map((item) => {
-    const series = normalizeSeries(item, { orgId, includeLessons: true });
+  return items.filter((item) => granted.has(item.id)).map((item) => {
+    const series = normalizeSeries(item, { orgId, includeLessons: true, asPublished: true });
     series.hasGrant = granted.has(item.id);
     return series;
   });
@@ -289,8 +289,8 @@ export function getStudentCourseDetail(user, seriesId) {
        AND ${orgCourseAccessSql()}`,
     [orgId, seriesId, orgId],
   );
-  if (!series) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
-  const detail = normalizeSeries(series, { orgId, includeLessons: true });
+  if (!series || !studentHasGrant(studentIdentity(user).id, orgId, seriesId)) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
+  const detail = normalizeSeries(series, { orgId, includeLessons: true, asPublished: true });
   detail.lessons = (detail.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED');
   return detail;
 }
@@ -317,7 +317,7 @@ export function getStudentCourseDetail(user, seriesId) {
 export function resolveStudentLessonContext(user, courseLessonId, preferredSessionId = null) {
   const { id: userId, orgId } = studentIdentity(user);
   if (!courseLessonId) throw errors.badRequest('请选择课时', 'LESSON_REQUIRED');
-  void preferredSessionId;
+
 
   const lesson = row(
     `SELECT lesson.* FROM course_lessons lesson
@@ -349,9 +349,10 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
       FROM session_students part
       JOIN class_sessions session ON session.id = part.session_id
       LEFT JOIN users teacher ON teacher.id = session.teacher_id
-      WHERE part.student_id=? AND part.lesson_id=? AND part.status IN ('PENDING','ACTIVE')
+      WHERE part.student_id=? AND part.lesson_id=? AND part.org_id=? AND session.org_id=? AND part.status IN ('PENDING','ACTIVE')
+        ${preferredSessionId ? 'AND session.id=?' : ''}
       ORDER BY CASE part.status WHEN 'ACTIVE' THEN 0 ELSE 1 END, part.added_at DESC LIMIT 1`,
-    [userId, courseLessonId],
+    [userId, courseLessonId, orgId, orgId, ...(preferredSessionId ? [preferredSessionId] : [])],
   );
   if (!participation) {
     throw errors.forbidden('老师还没有把这节课的课堂安排给你：请让老师把你加进课堂。', 'NOT_IN_CLASSROOM');
@@ -403,7 +404,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
       completedCostFen: Number(participation.completed_cost_fen || 0),
     },
     lesson: normalizedLesson,
-    series: normalizeSeries(series, { orgId }),
+    series: normalizeSeries(series, { orgId, asPublished: true }),
     activeSession,
     canUseNow,
     canUseVibeCodingNow,
@@ -432,7 +433,7 @@ const WORK_PROGRESS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 
 function studentLessonProgressMap(user) {
   const { id: userId, orgId } = studentIdentity(user);
   const projects = rows(
-    `SELECT id, class_id, course_lesson_id, title, status, latest_version, last_saved_at, updated_at
+    `SELECT id, class_id, class_session_id, course_lesson_id, title, status, latest_version, last_saved_at, updated_at
      FROM student_projects
      WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED' AND deleted_at IS NULL`,
     [userId, orgId],
@@ -493,6 +494,7 @@ function studentLessonProgressMap(user) {
         id: project.id,
         title: project.title,
         classId: project.class_id,
+        sessionId: project.class_session_id,
         status: project.status,
         latestVersion: Number(project.latest_version || 0),
         lastSavedAt: project.last_saved_at,
@@ -717,7 +719,7 @@ export function buildStudentDashboard(user) {
           unreadFeedbackCount: progress.unreadFeedbackCount,
           lastActivityAt: progress.lastActivityAt,
         },
-        continueProject: progress.draftProjects[0] || null,
+        continueProject: progress.draftProjects.find((project) => project.sessionId === state.session?.id) || null,
         latestWork: [...progress.works].sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')))[0] || null,
       };
       allLessonTasks.push(task);
@@ -768,7 +770,7 @@ export function buildStudentDashboard(user) {
       const state = lessonAvailability({ lesson, hasGrant: courseHasGrant, participation: participationByLesson.get(lesson.id) });
       // 「关闭再进入复用同一份创作」：progressByLesson 就是按课时分的，draftProjects 已按最近改动倒序，
       // 所以取第一篇即「这节课最近在做的那个草稿」—— 绝不因为 classId 对不上而新开一个项目。
-      const continueProject = progress.draftProjects[0] || null;
+      const continueProject = progress.draftProjects.find((project) => project.sessionId === state.session?.id) || null;
       return {
         ...lesson,
         classId: null,
@@ -832,6 +834,7 @@ export function buildStudentDashboard(user) {
     lessonTitle: project.lesson_title || null,
     courseTitle: project.course_title || null,
     classId: project.class_id,
+        sessionId: project.class_session_id,
     status: project.status,
     latestVersion: Number(project.latest_version || 0),
     lastSavedAt: project.last_saved_at,
@@ -879,7 +882,8 @@ export function resolveProjectUsageContext(user, project) {
   if (project.status !== 'DRAFT') {
     throw errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE');
   }
-  return resolveStudentLessonContext(user, project.course_lesson_id, project.class_id);
+  if (!project.class_session_id) throw errors.forbidden('项目没有有效课堂归属，请从当前课堂进入', 'PROJECT_SESSION_REQUIRED');
+  return resolveStudentLessonContext(user, project.course_lesson_id, project.class_session_id);
 }
 
 /**

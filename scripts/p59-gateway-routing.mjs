@@ -1,18 +1,9 @@
 /**
  * P59 算力网关「路由」守卫（2026-09-12，P5 最后一公里）。
  *
- * P57/P58 解决的是「配得上、看得见」；这一步解决的是**拦得住**：
- * 学生的 AI 调用真的带着**他自己的令牌**打到网关，令牌额度用尽网关就拒服务 ——
- * 于是「1 个学生在这节课 50 元」是网关给出来的硬闸，而不是我们自己算出来的一个数。
- *
- * 令牌名（多段）约定：机构:<id>/学生:<id>/课时:<id>，解析顺序**最具体优先**：
- *   机构+学生+课时  →  学生+课时  →  机构+学生  →  学生
- * 所以平台管理员手动发的令牌（老约定）和按课时预算自动发的令牌都能被用上。
- *
- * 两个方向都要自证（这是本轮的教训：别只测「配好了能用」）：
- *   ① 网关启用 → 请求打到网关（带该学生的令牌 key），**直连上游一个请求都收不到**；
- *   ② 网关关闭 → 请求打到直连上游（行为与接网关之前完全一致）；
- *   ③ 网关说「额度用尽」→ 明确报 COMPUTE_QUOTA_EXHAUSTED，**绝不静默回退直连**（否则闸门形同虚设）。
+ * 平台承担成本，学生扣费为零；网关自动创建 internal-v2 不限额身份。
+ * 不复用历史手动令牌；网关故障、发牌失败及上游拒绝不得回退直连。
+ * 同步、VibeCoding SSE、异步 worker 和图片请求形状分别覆盖。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -46,7 +37,7 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-// 给所有课时填上「每学生算力上限」= 50 元（5000 分）→ 这节课的令牌额度就该是 50 元。
+// 给所有课时填上「历史每学生算力上限」= 50 元，验证内部身份不继承该限额。
 // 同时把课时开成**双入口**（画布 + VibeCoding）并开放 text/image 能力：
 // 这样同一个环境既能跑画布那条（同步/异步），也能跑 VibeCoding 对话那条（SSE）。
 // 直接改库（趁服务还没起，避免并发写锁），因为平台端传课时预算要绕好几个接口。
@@ -65,6 +56,7 @@ const GW_PORT = 18940;
 const gateway = { tokens: [], tokenPosts: [], relays: [], logins: 0 };
 let nextTokenId = 1;
 const quotaExhausted = { on: false };
+let provisionFails = false;
 const openAiReply = (text) => ({ choices: [{ message: { role: 'assistant', content: text } }] });
 
 const gatewayServer = http.createServer(async (req, res) => {
@@ -76,6 +68,7 @@ const gatewayServer = http.createServer(async (req, res) => {
   if (req.url.startsWith('/api/user/self')) return json({ username: 'root' });
   if (req.url.startsWith('/api/token/') && req.method === 'GET') return json({ items: gateway.tokens });
   if (req.url.startsWith('/api/token/') && req.method === 'POST') {
+    if (provisionFails) return json({ message: 'provision denied' }, 503);
     gateway.tokenPosts.push(body || {});
     const token = {
       id: nextTokenId++, name: String(body?.name || ''), key: `sk-token-${nextTokenId}`,
@@ -162,16 +155,16 @@ try {
   check('① 网关未启用：请求打到直连上游', upstream.requests.length === upstreamBefore + 1, `上游收到 ${upstream.requests.length - upstreamBefore} 次`);
   check('① 网关未启用：网关没有收到任何中继请求', gateway.relays.length === 0, `网关中继 ${gateway.relays.length} 次`);
 
-  /* ② 启用网关 → 自动按课时预算发令牌 → 请求带该学生的令牌打到网关，直连上游零请求 */
+  /* ② 启用网关 → 自动创建不限额内部身份 → 请求带该学生的令牌打到网关，直连上游零请求 */
   const enabled = await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });
   check('② 网关配置保存成功', enabled.status === 200 && enabled.data.config.enabled === true, JSON.stringify(enabled).slice(0, 200));
-  const expectedTokenName = [orgName, studentName, lessonName].join('/');
+  const expectedTokenName = 'internal-v2/' + [orgName, studentName, lessonName].join('/');
   const upstreamBeforeGateway = upstream.requests.length;
   const routedRun = await generate('启用网关后应当走网关');
   check('② 启用网关：生成成功', routedRun.status === 200, JSON.stringify(routedRun).slice(0, 300));
   const created = gateway.tokenPosts.find((item) => item.name === expectedTokenName);
-  check('② 按「每学生算力上限」自动发了令牌并按多段规范命名', Boolean(created), `TokenPosts=${JSON.stringify(gateway.tokenPosts)} 期望=${expectedTokenName}`);
-  check('② 令牌额度 = 50 元（5000 分 → 50 × 500000 = 25000000 quota）', Number(created?.remain_quota) === 25000000, String(created?.remain_quota));
+  check('② 自动创建 internal-v2 多段内部身份', Boolean(created), `TokenPosts=${JSON.stringify(gateway.tokenPosts)} 期望=${expectedTokenName}`);
+  check('② 内部身份不限额度、无模型限制', created?.unlimited_quota === true && created?.remain_quota === 0 && created?.model_limits_enabled === false, JSON.stringify(created));
   const relay = gateway.relays.at(-1);
   const issuedKey = gateway.tokens.find((item) => item.name === expectedTokenName)?.key;
   check('② 网关中继收到请求', gateway.relays.length === 1, `relays=${gateway.relays.length}`);
@@ -185,30 +178,28 @@ try {
   check('③ 第二次调用复用已有令牌（没有再发一张）', gateway.tokenPosts.length === beforeReuse, `tokenPosts=${gateway.tokenPosts.length}`);
   check('③ 第二次调用仍走网关', reuseRun.status === 200 && gateway.relays.length === 2, `relays=${gateway.relays.length}`);
 
-  /* ④ 解析顺序「最具体优先」：把细粒度令牌撤掉，只留 机构+学生 / 学生 两级 */
-  gateway.tokens = gateway.tokens.filter((item) => item.name !== expectedTokenName);
-  gateway.tokens.push({ id: nextTokenId++, name: [orgName, studentName].join('/'), key: 'sk-org-student', remain_quota: 1000000, used_quota: 0, unlimited_quota: false, status: 1 });
-  gateway.tokens.push({ id: nextTokenId++, name: studentName, key: 'sk-student-only', remain_quota: 1000000, used_quota: 0, unlimited_quota: false, status: 1 });
-  // 课时预算还在，所以「自动发牌」也可能抢先 —— 先把预算清掉，才测得到「用现有的令牌」
-  { const db = new DatabaseSync(dbPath); db.prepare('UPDATE course_lessons SET per_student_budget_fen=NULL').run(); db.close(); }
-  await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true }); // 顺手清路由缓存
-  await generate('应当用机构+学生那张令牌');
-  check('④ 最具体优先：用「机构+学生」而不是只有「学生」的令牌', gateway.relays.at(-1)?.auth === 'Bearer sk-org-student', String(gateway.relays.at(-1)?.auth));
-
-  /* ⑤ 只剩单段令牌时用它，且——没有课时预算就不自动发牌 */
-  gateway.tokens = gateway.tokens.filter((item) => item.name !== [orgName, studentName].join('/'));
+  /* ④ 不复用任何历史手动身份，即使旧令牌仍可用。 */
+  gateway.tokens = [
+    { id: nextTokenId++, name: [orgName, studentName, lessonName].join('/'), key: 'sk-legacy-specific', remain_quota: 0, unlimited_quota: false, status: 1 },
+    { id: nextTokenId++, name: [orgName, studentName].join('/'), key: 'sk-org-student', remain_quota: 1000000, unlimited_quota: false, status: 1 },
+    { id: nextTokenId++, name: studentName, key: 'sk-student-only', remain_quota: 1000000, unlimited_quota: false, status: 1 },
+  ];
+  { const db = new DatabaseSync(dbPath); db.prepare('UPDATE course_lessons SET per_student_budget_fen=NULL').run(); db.prepare('UPDATE class_sessions SET platform_budget_fen=0').run(); db.close(); }
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });
   const beforePosts = gateway.tokenPosts.length;
-  await generate('应当用只有学生那段的令牌');
-  check('⑤ 单段令牌（老约定）也能用上', gateway.relays.at(-1)?.auth === 'Bearer sk-student-only', String(gateway.relays.at(-1)?.auth));
-  check('⑤ 没有课时预算时不自动发牌（只记账，不拦）', gateway.tokenPosts.length === beforePosts, `tokenPosts=${gateway.tokenPosts.length}`);
+  const noBudgetRun = await generate('无学生预算仍自动创建内部身份');
+  const fresh = gateway.tokens.find(item => item.name === expectedTokenName);
+  check('④ 无学生预算仍自动发不限额身份，旧令牌不复用', noBudgetRun.status === 200 && gateway.tokenPosts.length === beforePosts + 1 && fresh?.unlimited_quota === true && gateway.relays.at(-1)?.auth === `Bearer ${fresh?.key}`, JSON.stringify(gateway.tokenPosts.at(-1)));
+  check('④ 内部 key 不返回学生', !JSON.stringify(noBudgetRun.data).includes(fresh.key));
 
   const keptTokens = gateway.tokens;
   gateway.tokens = [];
+  provisionFails = true;
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username:'root', password:'p59-password', enabled:true });
   const beforeMissing = upstream.requests.length;
-  const missing = await generate('网关无令牌必须拒绝');
-  check('⑤ 无令牌不得回退直连', missing.error?.code === 'COMPUTE_GATEWAY_UNAVAILABLE' && upstream.requests.length === beforeMissing, JSON.stringify(missing));
+  const missing = await generate('内部身份发牌失败必须拒绝');
+  check('⑤ 发牌失败不得回退直连', missing.error?.code === 'COMPUTE_GATEWAY_UNAVAILABLE' && upstream.requests.length === beforeMissing, JSON.stringify(missing));
+  provisionFails = false;
   gateway.tokens = keptTokens;
   await setGateway(admin, { baseUrl:'http://127.0.0.1:1', username:'root', password:'p59-password', enabled:true });
   const unreachable = await generate('网关不可达必须拒绝');
@@ -250,8 +241,11 @@ try {
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });
   const postsBeforeAsync = gateway.tokenPosts.length;
   const relaysBeforeAsync = gateway.relays.length;
-  const queued = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: project.data.id, prompt: '异步任务也应当走网关', modality: 'TEXT' } });
+  const asyncProject = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lessonId, title: 'P59 新课堂异步项目' } });
+  assert.ok(asyncProject.data?.id, JSON.stringify(asyncProject));
+  const queued = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: asyncProject.data.id, prompt: '异步任务也应当走网关', modality: 'TEXT' } });
   check('⑦ 异步任务入队成功', queued.status === 200 && queued.data?.job?.id, JSON.stringify(queued).slice(0, 200));
+  assert.ok(queued.data?.job?.id, JSON.stringify(queued));
   let asyncJob = null;
   for (let i = 0; i < 60; i += 1) {
     const detail = await api(`/api/ai/generations/history/${encodeURIComponent(queued.data.job.id)}`, { token: student });
@@ -261,7 +255,7 @@ try {
   }
   check('⑦ 异步任务跑完（成功）', asyncJob?.status === 'SUCCEEDED', JSON.stringify(asyncJob).slice(0, 300));
   const asyncKey = gateway.tokens.find((item) => item.name === expectedTokenName)?.key;
-  check('⑦ 异步任务在 worker 里重新解析了令牌（按课时预算发了一张多段令牌）', gateway.tokenPosts.length === postsBeforeAsync + 1 && Boolean(asyncKey), JSON.stringify(gateway.tokenPosts.at(-1)));
+  check('⑦ 异步任务在 worker 里重新解析了令牌（创建不限额内部身份）', gateway.tokenPosts.length === postsBeforeAsync + 1 && Boolean(asyncKey), JSON.stringify(gateway.tokenPosts.at(-1)));
   check('⑦ 异步任务的请求也确实打到了网关', gateway.relays.length === relaysBeforeAsync + 1, `relays=${gateway.relays.length}`);
   check('⑦ 异步任务用的是该学生的令牌 key', Boolean(asyncKey) && gateway.relays.at(-1)?.auth === `Bearer ${asyncKey}`, String(gateway.relays.at(-1)?.auth));
 
@@ -297,6 +291,11 @@ try {
     await new Promise((resolve) => shapeServer.close(resolve));
   }
 
+  { const db = new DatabaseSync(dbPath);
+    const charges = db.prepare('SELECT COUNT(*) n FROM usage_records WHERE credits_charged<>0').get();
+    check('学生所有调用扣费为零', charges.n === 0, JSON.stringify(charges));
+    db.close();
+  }
   console.log(JSON.stringify({ name: 'gateway-routing', pass: failures === 0, failures }, null, 2));
 } catch (error) {
   console.error(serverLog.slice(-4000));

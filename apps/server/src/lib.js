@@ -402,7 +402,9 @@ export function normalizeOrg(value) {
     baseTeacherSeats: Number(value.base_teacher_seats || 0),
     purchasedTeacherSeats: Number(value.purchased_teacher_seats || 0),
     teacherSeats,
-    teacherUsedSeats: count("SELECT COUNT(*) AS n FROM users WHERE org_id = ? AND role = 'TEACHER' AND status = 'ACTIVE' AND deleted_at IS NULL", [value.id]),
+    studentSeats: Number(value.student_seats || 0),
+    studentUsedSeats: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [value.id]),
+    teacherUsedSeats: count("SELECT COUNT(*) AS n FROM users WHERE org_id = ? AND role = 'TEACHER' AND deleted_at IS NULL", [value.id]),
     contact: parseJson(value.contact, {}),
     createdBy: value.created_by || null,
     createdAt: value.created_at,
@@ -485,9 +487,9 @@ export function normalizeLesson(value, { includeTeaching = false, asPublished = 
   const merged = snapshot
     ? {
       ...snapshot,
-      capabilities: Array.isArray(snapshot.capabilities) && snapshot.capabilities.length ? snapshot.capabilities : liveCanvas.capabilities,
-      materialGroups: Array.isArray(snapshot.materialGroups) ? snapshot.materialGroups : liveCanvas.materialGroups,
-      generationBoxes: Array.isArray(snapshot.generationBoxes) ? snapshot.generationBoxes : liveCanvas.generationBoxes,
+      capabilities: Array.isArray(snapshot.capabilities) ? snapshot.capabilities : [],
+      materialGroups: Array.isArray(snapshot.materialGroups) ? snapshot.materialGroups : [],
+      generationBoxes: Array.isArray(snapshot.generationBoxes) ? snapshot.generationBoxes : [],
     }
     : null;
   const pick = (key, fallback) => (merged && merged[key] !== undefined ? merged[key] : fallback);
@@ -507,13 +509,14 @@ export function normalizeLesson(value, { includeTeaching = false, asPublished = 
     deliveryModes: pick('deliveryModes', deliveryModesOf(value)),
     // 每个学生的算力上限（分）；null = 平台没配（不拦，只记账）
     perStudentBudgetFen: (() => { const raw = pick('perStudentBudgetFen', value.per_student_budget_fen); return raw === null || raw === undefined ? null : Number(raw); })(),
+    platformBudgetFen: (() => { const raw = pick('platformBudgetFen', value.platform_budget_fen); return raw == null ? null : Number(raw); })(),
     classroomConfig: pick('classroomConfig', parseJson(value.classroom_config, {})) || {},
     canvasTemplateSnapshot: pick('canvasTemplateSnapshot', parseJson(value.canvas_template_snapshot, {})) || {},
     capabilities: merged ? merged.capabilities : liveCanvas.capabilities,
     materialGroups: merged ? merged.materialGroups : liveCanvas.materialGroups,
     generationBoxes: merged ? merged.generationBoxes : liveCanvas.generationBoxes,
     // 教学素材是教师备课资料：只有机构端/平台端显式要求时才下发，学生端与公开接口一律不带。
-    ...(includeTeaching ? lessonTeachingMaterials(value.id) : {}),
+    ...(includeTeaching ? { teachingGroups: merged ? (Array.isArray(merged.teachingGroups) ? merged.teachingGroups : []) : lessonTeachingMaterials(value.id).teachingGroups } : {}),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };

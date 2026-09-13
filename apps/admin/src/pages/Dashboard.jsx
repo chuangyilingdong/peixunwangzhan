@@ -44,32 +44,20 @@ export function Dashboard({ api }) {
       <div className="metrics">
         <MetricCard label="活跃学生" value={metrics.activeStudents ?? 0} hint="查询区间内有学习活动的学生" />
         <MetricCard label="课堂场次（查询期）" value={metrics.classSessions ?? 0} hint="查询区间内的课堂场次" />
-        <MetricCard label="算力池扣费" value={yuan(compute.totalYuan)} hint="来源：算力池账本；不等同上游成本" />
+        <MetricCard label="已知成本小计" value={yuan(compute.knownCostYuan)} hint="不含未知成本；估算不代表真实账单" />
         <MetricCard label="异常调用" value={metrics.abnormalTasks ?? 0} hint="查询区间内失败或被拦截的调用" />
       </div>
       <Panel title="运营关注">
-        <div className="row-actions"><span>算力池接近上限 <strong>{compute.pools.nearLimit}</strong></span><span>已用尽 <strong>{compute.pools.exhausted}</strong></span><Link className="text-button" to="/compute/usage">查看用量与成本</Link><Link className="text-button" to="/organizations">管理机构</Link></div>
+        <div className="row-actions"><span>课堂成本未知 <strong>{compute.pools.unknown}</strong></span><span>超额预警 <strong>{compute.pools.exhausted}</strong></span><Link className="text-button" to="/compute/usage">查看用量与成本</Link><Link className="text-button" to="/organizations">管理机构</Link></div>
       </Panel>
       <details className="admin-detail"><summary>机构、教学与内容规模</summary><div className="metrics">
         {[['organizations', '机构总数'], ['activeOrganizations', '可用机构'], ['teachers', '教师'], ['students', '学生'], ['publishedCourses', '已发布课程'], ['activeAssignments', '课程授权'], ['projects', '新增项目'], ['works', '提交作品'], ['aiTasks', 'AI 任务'], ['newStudents', '新增学生'], ['lessonCompletions', '完成课时']].map(([key, label]) => <MetricCard key={key} label={label} value={metrics[key] ?? 0} hint={definition(key)} />)}
       </div></details>
       <div className="split">
-        <Panel title="算力池扣费与使用分布"><div className="muted" style={{ marginBottom: 8 }}>
-          口径：四种模态（对话 / 图片 / 视频 / 音乐）合计 {yuan(compute.totalYuan)}，共 {compute.calls} 次调用（成功 {compute.successCalls} 次）。
-          数据来自算力池账本（与「模型与算力」页同一份）；单价在「模型与算力 → 渠道与模型配置」维护；上游成本需另行核对账单。
-        </div>
-          <div className="table-wrap"><table><thead><tr><th>模态</th><th>调用</th><th>消耗（元）</th></tr></thead><tbody>
-            {compute.byModality.length ? compute.byModality.map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td><strong>{yuan(item.yuan)}</strong></td></tr>) : <tr><td colSpan={3}>所选区间暂无算力消耗</td></tr>}
-          </tbody></table></div>
-          <div className="muted top-gap">
-            池子健康度（存量）：有消耗的池子 {compute.pools.counted} 个 ·
-            接近上限 {compute.pools.nearLimit} 个 · <strong>已用尽 {compute.pools.exhausted} 个</strong> ·
-            不限预算 {compute.pools.unlimited} 个 · 已用合计 {yuan(compute.pools.usedYuan)} 元
-          </div>
-          <h4 className="top-gap">消耗最多的学员（Top 5）</h4>
-          <div className="table-wrap"><table><thead><tr><th>学员</th><th>机构</th><th>课包</th><th>已用（元）</th><th>使用率</th></tr></thead><tbody>
-            {compute.topStudents.length ? compute.topStudents.map((item, index) => <tr key={`${item.studentName}-${index}`}><td><strong>{item.studentName}</strong></td><td className="muted">{item.orgName}</td><td className="muted">{item.seriesTitle}</td><td>{yuan(item.usedYuan)}</td><td>{item.unlimited ? <span className="muted">不限</span> : <span className={item.usagePercent >= 100 ? 'status danger' : item.usagePercent >= 80 ? 'status warn' : ''}>{item.usagePercent}%</span>}</td></tr>) : <tr><td colSpan={5}>所选区间暂无学员消耗</td></tr>}
-          </tbody></table></div>
+        <Panel title="平台成本与课堂预警">
+          <p>四种模态已知成本小计 {yuan(compute.knownCostYuan)}，共 {compute.calls} 次使用（成功 {compute.successCalls} 次）。未知成本未计入小计，历史售价不作为成本。用户包算力，课堂预算超额仅告警。</p>
+          <table><thead><tr><th>模态</th><th>调用</th><th>已知成本小计</th></tr></thead><tbody>{compute.byModality.map(item=><tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{yuan(item.yuan)}</td></tr>)}</tbody></table>
+          <p>课堂 {compute.pools.counted} 场 · 成本未知 {compute.pools.unknown || 0} 场 · 超额预警 {compute.pools.exhausted} 场 · 未配置基准 {compute.pools.unlimited} 场</p>
         </Panel>
         <Panel title="内容（课包与课时的使用热度）">
           <div className="muted" style={{ marginBottom: 8 }}>

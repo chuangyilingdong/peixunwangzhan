@@ -42,22 +42,23 @@ await run(['packages/database/src/seed.js']);
 Object.assign(process.env, { PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' });
 const { aggregateUsage, lessonBudgetOverview } = await import('../apps/server/src/services/computeGateway.js');
 
-// 「课时预算对照」要的种子数据：两节课有每学生预算（50 元 / 20 元），排课名单里分别 3 人 / 2 人；
-// 再有一节没有任何预算（不该出现在对照表里）。直接改库，趁服务还没起。
-const seededLessons = { budgeted: '', halfBudgeted: '', noBudget: '', rosterCount: 0 };
+// 平台预算按课堂快照归集；学生人数及历史每学生预算不参与计算。
+const seededLessons = { budgeted: '', halfBudgeted: '', noBudget: '' };
 {
   const db = new DatabaseSync(dbPath);
-  const lessons = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 3').all().map((item) => item.id);
-  [seededLessons.budgeted, seededLessons.halfBudgeted, seededLessons.noBudget] = lessons;
-  db.prepare('UPDATE course_lessons SET per_student_budget_fen=NULL').run();
-  db.prepare('UPDATE course_lessons SET per_student_budget_fen=5000 WHERE id=?').run(seededLessons.budgeted);
-  db.prepare('UPDATE course_lessons SET per_student_budget_fen=2000 WHERE id=?').run(seededLessons.halfBudgeted);
-  // ⚠️ 人数从库里读出来当期望值，别写死（种子库里的学生数是会变的 —— 本轮第一次就写死了 3 人）
-  const students = db.prepare("SELECT id FROM users WHERE role='STUDENT' LIMIT 3").all().map((item) => item.id);
-  seededLessons.rosterCount = students.length;
-  const klass = db.prepare('SELECT id FROM classes LIMIT 1').get()?.id || null;
-  const roster = db.prepare("INSERT OR IGNORE INTO class_lesson_students(class_id,lesson_id,student_id,added_at) VALUES (?,?,?,datetime('now'))");
-  for (const student of students) roster.run(klass, seededLessons.budgeted, student);
+  [seededLessons.budgeted, seededLessons.halfBudgeted, seededLessons.noBudget] = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 3').all().map(item => item.id);
+  const student = db.prepare("SELECT id,org_id FROM users WHERE role='STUDENT' LIMIT 1").get();
+  const teacher = db.prepare("SELECT id FROM users WHERE role='TEACHER' LIMIT 1").get();
+  db.prepare('UPDATE course_lessons SET per_student_budget_fen=999999,platform_budget_fen=5000 WHERE id=?').run(seededLessons.budgeted);
+  const session = db.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,platform_budget_fen,created_at,updated_at)
+    SELECT ?,?, ?,series_id,id,?,'ACTIVE',?,datetime('now'),datetime('now') FROM course_lessons WHERE id=?`);
+  session.run('p58_a', 'P58 已知成本', student.org_id, teacher.id, 100, seededLessons.budgeted);
+  session.run('p58_b', 'P58 未知成本', student.org_id, teacher.id, 300, seededLessons.budgeted);
+  session.run('p58_none', 'P58 未配置预算', student.org_id, teacher.id, null, seededLessons.noBudget);
+  const attempt = db.prepare(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,status,cost_source,upstream_cost_fen,sale_snapshot,class_session_id,lesson_id,created_at)
+    VALUES (?,?,1,?,?,'TEXT','SUCCESS',?,?,'{}',?,?,datetime('now'))`);
+  attempt.run('p58_known', 'p58_call_known', student.org_id, student.id, 'REPORTED', 200, 'p58_a', seededLessons.budgeted);
+  attempt.run('p58_unknown', 'p58_call_unknown', student.org_id, student.id, 'UNKNOWN', null, 'p58_b', seededLessons.budgeted);
   db.close();
 }
 
@@ -122,18 +123,14 @@ try {
     JSON.stringify({ org: multi.byOrg, student: multi.byStudent, lesson: multi.byLesson }));
   check('多段令牌名不算「未归属」', multi.unattributed.length === 0, JSON.stringify(multi.unattributed));
 
-  // 课时预算对照：总预算 = 每学生上限 × 参与学生数（加人自动放大），实际 = 网关按课时归集的合计
-  const comparison = lessonBudgetOverview({ byLesson: usage.data.byLesson });
-  const budgeted = comparison.find((item) => item.lessonId === seededLessons.budgeted);
-  const halfBudgeted = comparison.find((item) => item.lessonId === seededLessons.halfBudgeted);
-  const people = seededLessons.rosterCount;
-  check(`预算对照：总预算 = 每学生 50 元 × ${people} 人 = ${50 * people} 元`,
-    budgeted?.budgetYuan === 50 * people && budgeted?.studentCount === people, JSON.stringify(budgeted));
-  check('预算对照：实际消耗挂上网关日志（2 元 / 1 次）', budgeted?.usedYuan === 2 && budgeted?.calls === 1, JSON.stringify(budgeted));
-  check(`预算对照：使用率 = 2 ÷ ${50 * people} = ${Number(((2 / (50 * people)) * 100).toFixed(1))}%`,
-    budgeted?.usagePercent === Number(((2 / (50 * people)) * 100).toFixed(1)), String(budgeted?.usagePercent));
-  check('预算对照：没排学生的课时不给百分比（避免出现除零/∞%）', halfBudgeted?.usagePercent === null && halfBudgeted?.studentCount === 0, JSON.stringify(halfBudgeted));
-  check('预算对照：没填预算的课时不出现', !comparison.some((item) => item.lessonId === seededLessons.noBudget), JSON.stringify(comparison.map((item) => item.lessonId)));
+  const comparison = lessonBudgetOverview({ byLesson: [{ key: seededLessons.budgeted, yuan: 9999 }] });
+  const budgeted = comparison.find(item => item.lessonId === seededLessons.budgeted);
+  const noBudget = comparison.find(item => item.lessonId === seededLessons.noBudget);
+  check('课堂快照预算相加，不乘学生数、不取历史售价', budgeted?.budgetFen === 400 && budgeted?.sessionCount === 2, JSON.stringify(budgeted));
+  check('已知成本依据 compute_attempts，不取传入网关汇总', budgeted?.knownCostFen === 200, JSON.stringify(budgeted));
+  check('未知成本单列，合计保持未知而非零', budgeted?.unknownCalls === 1 && budgeted?.usedFen === null && budgeted?.unknownSessions === 1, JSON.stringify(budgeted));
+  check('超预算仅预警，不执行学生限额', budgeted?.overBudgetSessions === 1 && budgeted?.enforced === false, JSON.stringify(budgeted));
+  check('未配置预算课堂仍列出且不限制', noBudget?.budgetFen === null && noBudget?.enforced === false, JSON.stringify(noBudget));
 
   console.log(JSON.stringify({ name: 'gateway-usage', pass: failures === 0, failures }, null, 2));
 } catch (error) {

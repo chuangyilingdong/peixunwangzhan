@@ -1,3 +1,4 @@
+import { lessonPlatformBudgetOverview } from './computePool.js';
 // 算力网关（new-api）客户端：平台用它配置渠道、给机构/学生分发令牌、读用量日志。
 //
 // 设计取舍（见 docs/项目重梳理-03-平台侧重做梳理.md 第 7 节）：
@@ -51,6 +52,7 @@ export function saveComputeGatewayConfig(patch, { password } = {}) {
   if (next.baseUrl && !/^https?:\/\//.test(next.baseUrl)) throw errors.badRequest('网关地址必须带 http(s)://', 'INVALID_GATEWAY_URL');
   if (password !== undefined && password !== null && String(password) !== '') setProviderApiKey(String(password), ADMIN_SECRET_KEY);
   q('UPDATE platform_settings SET compute_gateway=? WHERE id=1', [json(next)]);
+  clearGatewayRouteCache();
   return getComputeGatewayConfig();
 }
 
@@ -243,46 +245,8 @@ export function aggregateUsage(rowsInput, { quotaPerUnit = 500000 } = {}) {
   };
 }
 
-/**
- * 课时预算对照：把网关的实际消耗挂回「这节课的总预算」上。
- *
- * 口径（2026-09-11 用户答复）：预算**按学生算** —— 每学生 50 元，机构加 5 个学生，这节课就是 250 元。
- * 所以总预算 = 每学生上限 × 参与学生数（排课名单 `class_lesson_students` 里的去重人数），
- * 加人会**自动放大**预算；实际消耗取网关日志按「课时」维度的合计（同一张令牌名里的课时段）。
- *
- * ⚠️ 两个已知边界（写在这里免得被当成 bug）：
- *   ① 用量日志里那张令牌是 `…/课时:<id>`，所以实际消耗能按课时归集 —— 与预算同源，口径一致；
- *   ② 视频/音乐目前不走网关（异步任务要写 new-api 插件，见 7.2.3），**它们的花费不在这一列里**。
- */
-export function lessonBudgetOverview({ byLesson = [] } = {}) {
-  const budgetRows = rows(
-    `SELECT lesson.id AS lesson_id, lesson.title AS lesson_title,
-            lesson.per_student_budget_fen AS per_student_fen,
-            (SELECT COUNT(DISTINCT roster.student_id)
-               FROM class_lesson_students roster
-              WHERE roster.lesson_id = lesson.id) AS student_count
-       FROM course_lessons lesson
-      WHERE lesson.per_student_budget_fen IS NOT NULL AND lesson.per_student_budget_fen > 0`,
-  );
-  const toYuan = (fen) => Number((Number(fen || 0) / 100).toFixed(2));
-  const actualOf = new Map((Array.isArray(byLesson) ? byLesson : []).map((item) => [String(item.key), item]));
-  return budgetRows.map((item) => {
-    const perStudentFen = Number(item.per_student_fen || 0);
-    const studentCount = Number(item.student_count || 0);
-    const budgetFen = perStudentFen * studentCount;
-    const used = actualOf.get(String(item.lesson_id)) || { calls: 0, yuan: 0 };
-    const usedFen = Math.round(Number(used.yuan || 0) * 100);
-    return {
-      lessonId: item.lesson_id, lessonTitle: item.lesson_title,
-      perStudentYuan: toYuan(perStudentFen), studentCount,
-      budgetYuan: toYuan(budgetFen),
-      usedYuan: Number(Number(used.yuan || 0).toFixed(2)),
-      calls: Number(used.calls || 0),
-      // 没有学生参与时预算为 0：不给百分比（否则会出现除零或「∞%」这种看不懂的数）
-      usagePercent: budgetFen > 0 ? Number(((usedFen / budgetFen) * 100).toFixed(1)) : null,
-    };
-  }).sort((a, b) => Number(b.usedYuan || 0) - Number(a.usedYuan || 0));
-}
+// Classroom snapshot budgets aggregated across organizations.
+export function lessonBudgetOverview() { return lessonPlatformBudgetOverview(); }
 
 /** 平台端用：读日志并归集（默认近 7 天） */
 export async function gatewayUsageOverview({ days = 7 } = {}) {
@@ -295,16 +259,7 @@ export async function gatewayUsageOverview({ days = 7 } = {}) {
   };
 }
 
-/* ───────────────────────── 令牌路由：把 AI 调用真的接到网关 ─────────────────────────
- *
- * 上面那些是「看得见消耗」，这一段才是「拦得住」：学生的 AI 调用带着**自己的令牌**打到网关，
- * 令牌额度用尽网关就拒服务 → 「1 个学生 50 元」是硬闸，而不是我们自己算出来的一个数。
- *
- * 令牌名的解析顺序是**最具体优先**：
- *   机构:X/学生:Y/课时:Z  →  学生:Y/课时:Z  →  机构:X/学生:Y  →  学生:Y
- * 这样平台管理员手动分发的令牌（老约定，单段）和我们按课时预算自动发的令牌都能被用上。
- */
-
+// Internal generation identities are unlimited and server-only.
 /** 令牌名（多段）：机构:<id>/学生:<id>/课时:<id>，能给几段给几段。 */
 export function gatewayTokenName({ orgId, studentId, lessonId } = {}) {
   const parts = [];
@@ -314,28 +269,8 @@ export function gatewayTokenName({ orgId, studentId, lessonId } = {}) {
   return parts.join('/');
 }
 
-function tokenNameCandidates({ orgId, studentId, lessonId } = {}) {
-  const org = orgId ? `机构:${orgId}` : '';
-  const student = studentId ? `学生:${studentId}` : '';
-  const lesson = lessonId ? `课时:${lessonId}` : '';
-  const out = [];
-  for (const parts of [[org, student, lesson], [student, lesson], [org, student], [student]]) {
-    const name = parts.filter(Boolean).join('/');
-    if (name && !out.includes(name)) out.push(name);
-  }
-  return out;
-}
-
-/** 课时的「每学生算力上限」（元）。没填 = 不按课时自动发令牌（只记账，不拦）。 */
-function lessonBudgetFen(lessonId) {
-  if (!lessonId) return 0;
-  const value = row('SELECT per_student_budget_fen FROM course_lessons WHERE id=?', [lessonId])?.per_student_budget_fen;
-  const fen = Number(value);
-  return Number.isFinite(fen) && fen > 0 ? Math.round(fen) : 0;
-}
-
 /** 发一张令牌；同一名字并发时只发一张（不然两个并发的首次调用会各发一张）。 */
-async function ensureGatewayToken({ name, budgetFen, models }) {
+async function ensureGatewayToken({ name, budgetFen, models, unlimited = true }) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (provisioning.has(name)) {
       // 别人正在发：等它发完再找一次，别自己再发一张同名的
@@ -351,7 +286,7 @@ async function ensureGatewayToken({ name, budgetFen, models }) {
       const existing = await findGatewayTokenByName(name);
       if (existing?.key) return { ...existing, created: false };
       if (existing && !existing.key) return null; // 有令牌但取不到 key：网关没暴露，别当成可用
-      await createGatewayToken({ name, budgetFen, models, quotaPerUnit: getComputeGatewayConfig().quotaPerUnit });
+      await createGatewayToken({ name, budgetFen, models, unlimited, quotaPerUnit: getComputeGatewayConfig().quotaPerUnit });
       const created = await findGatewayTokenByName(name);
       return created?.key ? { ...created, created: true } : null;
     } finally {
@@ -361,26 +296,15 @@ async function ensureGatewayToken({ name, budgetFen, models }) {
   return null;
 }
 
-async function resolveRouteUncached({ orgId, studentId, lessonId, configured, models }) {
-  let sawTokenWithoutKey = false;
-  for (const name of tokenNameCandidates({ orgId, studentId, lessonId })) {
-    const token = await findGatewayTokenByName(name);
-    if (!token) continue;
-    if (!token.key) { sawTokenWithoutKey = true; continue; }
-    return { mode: 'gateway', endpoint: configured.baseUrl, apiKey: token.key, tokenName: name, reason: 'EXISTING_TOKEN', created: false };
+async function resolveRouteUncached({ orgId, studentId, lessonId, configured }) {
+  // Internal identities cannot inherit a manual student's exhausted quota or model restriction.
+  const name = 'internal-v2/' + gatewayTokenName({ orgId, studentId, lessonId });
+  const token = await ensureGatewayToken({ name, unlimited: true });
+  if (!token?.key) return { mode: 'direct', reason: 'PROVISION_FAILED' };
+  if (!token.unlimited) {
+    await gatewayRequest('/api/token/', { method: 'PUT', body: { id: token.id, name, unlimited_quota: true, remain_quota: 0, expired_time: -1, model_limits_enabled: false, model_limits: '' } });
   }
-  // 没有现成令牌：这节课填了「每学生算力上限」就按它自动发一张 ——
-  // 于是「1 个学生 50 元」不需要管理员先手动分发，本身就是硬闸。
-  const budgetFen = lessonBudgetFen(lessonId);
-  if (budgetFen > 0) {
-    const name = gatewayTokenName({ orgId, studentId, lessonId });
-    const token = await ensureGatewayToken({ name, budgetFen, models });
-    if (token?.key) {
-      return { mode: 'gateway', endpoint: configured.baseUrl, apiKey: token.key, tokenName: name, reason: token.created ? 'AUTO_PROVISIONED' : 'EXISTING_TOKEN', budgetFen, created: token.created === true };
-    }
-    return { mode: 'direct', reason: 'PROVISION_FAILED' };
-  }
-  return { mode: 'direct', reason: sawTokenWithoutKey ? 'TOKEN_WITHOUT_KEY' : 'NO_TOKEN', tokenName: gatewayTokenName({ orgId, studentId, lessonId }) };
+  return { mode: 'gateway', endpoint: configured.baseUrl, apiKey: token.key, tokenName: name, reason: 'INTERNAL_IDENTITY', created: token.created === true };
 }
 
 /**

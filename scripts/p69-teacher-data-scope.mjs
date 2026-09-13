@@ -136,11 +136,11 @@ try {
     !idsOf(tOverview.recentSessions).includes(seeded.sessionB) && idsOf(tOverview.recentSessions).includes(seeded.sessionA),
     JSON.stringify(idsOf(tOverview.recentSessions)));
 
-  /* ③ 名册是机构级信息：别把教师范围误伤到「看不到学生」 */
+  /* ③ 教师不可访问机构学生名册，管理员保留名册能力。 */
   const roster = await api('/api/org/users?role=STUDENT', { token: teacher });
-  check('③ 教师仍能看本机构学生名册（名册不属于某个课堂）',
-    roster.status === 200 && (roster.data?.items || []).some((item) => item.id === seeded.student1),
-    JSON.stringify(idsOf(roster.data?.items)).slice(0, 160));
+  check('③ 教师不能查看机构学生名册', roster.status === 403, JSON.stringify(roster));
+  const adminRoster = await api('/api/org/users?role=STUDENT', { token: admin });
+  check('③ 管理员可查看本机构学生名册', adminRoster.status === 200 && (adminRoster.data?.items || []).some((item) => item.id === seeded.student1), JSON.stringify(adminRoster).slice(0,160));
 
   /* ④ 作品范围：按 works.class_session_id 圈定（班级退场后的新落点） */
   const worksTeacher = await api('/api/org/works', { token: teacher });

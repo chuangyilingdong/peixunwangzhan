@@ -188,7 +188,7 @@ export function ProviderPolicyPanel({ api }) {
     } catch (e) { setMessage(`${channel.name}：${e.message || '探测失败'}`); }
     finally { setBusy(false); }
   }
-  async function save(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.put('admin/billing-config/ai-provider', form); setMessage('渠道配置已保存'); config.refresh(); } catch (e) { setMessage(e.message || '保存失败'); } finally { setBusy(false); } }
+  async function save(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.put('admin/billing-config/ai-provider', form); setMessage('渠道配置已保存，后续请求立即使用新路由；在途请求保留原路由'); config.refresh(); } catch (e) { setMessage(e.message || '保存失败'); } finally { setBusy(false); } }
   if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
   if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
   return <Panel title="AI 渠道配置">
@@ -300,22 +300,23 @@ export function BillingUsagePanel({ api }) {
       const all = []; let totalPages = 1;
       for (let next = 1; next <= totalPages; next++) { params.set('page',String(next)); const data = await api.get(`admin/billing/usage-records?${params}`); totalPages = data.totalPages; all.push(...data.items); }
       const cell = value => { let text = String(value ?? ''); if (/^[\s]*[=+@-]/.test(text)) text = "'" + text; return '"' + text.replaceAll('"','""') + '"'; };
-      const lines = [['时间','机构ID','学生ID','模型','状态','失败原因','学生扣费（分）','上游尝试'].map(cell).join(',')];
+      const lines = [['时间','机构ID','学生ID','模型','状态','失败原因','上游成本（分，空为未知）','上游尝试'].map(cell).join(',')];
       all.forEach(item => lines.push([item.createdAt,item.orgId,item.userId,item.model,item.status,item.failCode,item.costFen,JSON.stringify(item.attempts || [])].map(cell).join(',')));
       downloadCsv('compute-usage.csv',lines.join(String.fromCharCode(13,10)));
     } catch(error) { setExportError(error.message); } finally { setExportingRecords(false); }
   }
   function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value, ...(key === 'orgId' ? {studentId:''} : {}), ...(key === 'channelId' ? {model:''} : {}), ...(key === 'seriesId' ? {lessonId:''} : {}) })); setPage(1); }
   return <>
+    <p className="muted">用户包算力。金额仅为已知上游成本小计，不含未知部分；估算与上游报告不代表已对账付款。历史售价不计入成本。</p>
     <div className="metrics">
-      <MetricCard label="算力消耗合计" value={formatYuan(overview.data?.totalFen || 0)} hint={`当前筛选 · 近 ${filters.days} 日`} />
+      <MetricCard label="已知上游成本小计" value={formatYuan(overview.data?.totalFen || 0)} hint={`当前筛选 · 近 ${filters.days} 日`} />
       <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
-      <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `累计消耗 ${formatYuan(overview.data.topOrgs[0].costFen)}` : '暂无消耗'} tone="orange" />
+      <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `已知成本小计 ${formatYuan(overview.data.topOrgs[0].costFen)}` : '暂无消耗'} tone="orange" />
       <MetricCard label="当前明细" value={records.data?.total ?? 0} hint="当前筛选条件命中的记录数" tone="pink" />
     </div>
     <div className="split">
-      <Panel title="能力消耗"><table><thead><tr><th>能力</th><th>调用次数</th><th>消耗</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
-      <Panel title="机构消耗 Top 10"><table><thead><tr><th>机构</th><th>累计消耗</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="能力已知成本"><table><thead><tr><th>能力</th><th>调用次数</th><th>消耗</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{item.costFen == null ? '未知' : formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
+      <Panel title="机构已知成本 Top 10"><table><thead><tr><th>机构</th><th>已知成本小计</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.costFen == null ? '未知' : formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
     </div>
 
     <Panel title="计费明细筛选" actions={<button className="secondary-button" disabled={exportingRecords} onClick={exportRecords}>{exportingRecords ? '导出中…' : '导出筛选明细 CSV'}</button>}>
@@ -339,7 +340,7 @@ export function BillingUsagePanel({ api }) {
     <Panel title="计费明细">
       {overview.loading || records.loading || organizations.loading ? <Loading label="正在读取计费数据。" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data?.items?.length ? <>
         <ListResultSummary total={records.data.total} page={records.data.page} totalPages={records.data.totalPages} label="条记录" />
-        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>学生扣费 / 售价快照</th><th>上游尝试 / 成本</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{formatYuan(item.costFen)}<div className="muted">售价：{item.pricingSnapshot?.compute?.saleSnapshot ? formatYuan(item.pricingSnapshot.compute.saleSnapshot.unitFen) : '历史未记录'}</div></td><td>{item.attempts?.length ? item.attempts.map(attempt => <details key={attempt.id}><summary>#{attempt.attempt} {attempt.channelId} · {attempt.model} · {attempt.status}</summary><div>{attempt.costSource === 'ESTIMATED' ? '估算' : attempt.costSource === 'MOCK' ? '模拟' : attempt.costSource === 'REPORTED' ? '上游报告（CNY，未对账）' : '未知'}成本：{attempt.upstreamCostFen == null ? '未知' : formatYuan(attempt.upstreamCostFen)}</div><div>{attempt.errorCode} {attempt.errorMessage}</div>{attempt.taskId && <div>上游任务：{attempt.taskId}</div>}</details>) : <span className="muted">历史未记录，成本未知</span>}</td><td><Status value={item.status} /><div className="muted">{item.failCode}</div></td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>上游成本 / 历史售价</th><th>上游尝试 / 成本</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{item.costFen == null ? '未知' : formatYuan(item.costFen)}<div className="muted">历史售价：{formatYuan(item.historicalSaleFen || 0)}（不代表上游成本）</div></td><td>{item.attempts?.length ? item.attempts.map(attempt => <details key={attempt.id}><summary>#{attempt.attempt} {attempt.channelId} · {attempt.model} · {attempt.status}</summary><div>{attempt.costSource === 'ESTIMATED' ? '估算' : attempt.costSource === 'MOCK' ? '模拟' : attempt.costSource === 'REPORTED' ? '上游报告（CNY，未对账）' : '未知'}成本：{attempt.upstreamCostFen == null ? '未知' : formatYuan(attempt.upstreamCostFen)}</div><div>{attempt.errorCode} {attempt.errorMessage}</div>{attempt.taskId && <div>上游任务：{attempt.taskId}</div>}</details>) : <span className="muted">历史未记录，成本未知</span>}</td><td><Status value={item.status} /><div className="muted">{item.failCode}</div></td></tr>)}</tbody></table></div>
         <Pagination page={records.data.page} totalPages={records.data.totalPages} onChange={setPage} disabled={records.loading} />
       </> : <Empty title="当前筛选条件下无计费记录" body="可以调整时间范围、机构、能力、状态或关键词。" />}
     </Panel>
@@ -399,7 +400,7 @@ export function OrgStudentUsagePanel({ api }) {
             {orgs.length ? orgs.map((item) => <tr key={item.id} className={item.id === orgId ? 'is-selected' : undefined}>
               <td><button type="button" className="link-button" onClick={() => setOrgId(item.id === orgId ? '' : item.id)}>{item.name}</button>
                 <div className="muted">{item.status}{item.calls ? '' : ' · 这段时间没消耗'}</div></td>
-              <td><strong>{formatYuan(item.costFen)}</strong></td>
+              <td><strong>{item.costFen == null ? '未知' : formatYuan(item.costFen)}</strong></td>
               <td>{item.studentCount}</td>
               <td className="muted">{item.calls}</td>
             </tr>) : <tr><td colSpan="4"><Empty title="还没有机构" /></td></tr>}
@@ -412,7 +413,7 @@ export function OrgStudentUsagePanel({ api }) {
               {students.map((item) => <tr key={item.id}>
                 <td><strong>{item.name}</strong><div className="muted">{item.login}</div></td>
                 <td>{item.calls}</td>
-                <td><strong>{formatYuan(item.costFen)}</strong></td>
+                <td><strong>{item.costFen == null ? '未知' : formatYuan(item.costFen)}</strong></td>
                 <td>{item.seriesCount}</td>
                 <td className="muted">{item.lastAt ? formatDate(item.lastAt) : '—'}</td>
               </tr>)}

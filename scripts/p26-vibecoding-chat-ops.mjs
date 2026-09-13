@@ -8,7 +8,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p26-vibecoding-chat-ops-'));
@@ -43,6 +42,15 @@ seedDb.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').r
   modalityChannels: { TEXT: 'channel-test-text' },
   channels: [{ id: 'channel-test-text', provider: 'local-mock', model: 'mock-model-a', models: ['mock-model-a', 'mock-model-b'], modelMappings: [{ id: 'mock-model-a', displayName: '模拟模型 A' }, { id: 'mock-model-z', displayName: '候选但未启用' }] }],
 }));
+const classroomStudent = seedDb.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
+const teacher = seedDb.prepare("SELECT id FROM users WHERE org_id=? AND role='TEACHER' LIMIT 1").get(classroomStudent.org_id);
+const seriesId = seedDb.prepare('SELECT series_id FROM course_lessons WHERE id=?').get(lesson.id).series_id;
+assert.ok(teacher, '夹具需要真实教师');
+seedDb.prepare(`INSERT INTO class_sessions(id,title,org_id,series_id,lesson_id,teacher_id,status,delivery_mode,allow_text,started_by,started_at,created_at,updated_at)
+  VALUES ('p26_session','P26 课堂',?,?,?,?,'ACTIVE','VIBECODING',1,?,datetime('now'),datetime('now'),datetime('now'))`).run(classroomStudent.org_id, seriesId, lesson.id, teacher.id, teacher.id);
+seedDb.prepare(`INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at)
+  VALUES ('p26_student','p26_session',?,?,?,?,'ACTIVE',?,datetime('now'))`).run(classroomStudent.id, classroomStudent.org_id, lesson.id, seriesId, teacher.id);
+assert.equal(seedDb.prepare("SELECT COUNT(*) n FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE')").get(teacher.id).n, 1, '教师只拥有一个未结束课堂');
 seedDb.close();
 
 // 用与服务器相同的环境变量导入服务端模块，直接验证 system 上下文拼装
@@ -106,10 +114,6 @@ try {
     await sleep(100);
   }
   assert.equal(healthy, true, '服务器启动超时');
-  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
-  // 这条守卫走 VibeCoding 入口 → 把课堂入口类型切成 VIBECODING
-  switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
 
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(student, '学生登录失败');
@@ -148,12 +152,22 @@ try {
   assert.equal(pinned.status, 200, `置顶失败: ${JSON.stringify(pinned.data)}`);
   assert.ok(pinned.data.pinnedAt, '置顶后应有 pinnedAt');
   const second = await api('/api/student/vibecoding/conversations', { method: 'POST', token: student, body: { lessonId: lesson.id, title: 'P26 另一个会话' } });
-  assert.equal(second.status, 200, '第二个会话创建失败');
+  assert.equal(second.status, 200, '重新进入会话失败');
+  assert.equal(second.data.id, conversationId, '同课堂同课时重进必须返回原会话');
+  assert.equal(second.data.title, created.data.title, '重进不能覆盖原会话标题');
+  const reopened = await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student });
+  assert.deepEqual(reopened.data.messages, detail.messages, '重进必须保留原消息');
   const listAll = await api('/api/student/vibecoding/conversations?limit=50', { token: student });
+  assert.equal(listAll.status, 200);
+  assert.equal(listAll.data.items.length, 1, '重进不应新增会话');
   assert.equal(listAll.data.items[0].id, conversationId, '置顶会话应排在第一位');
-  const searched = await api('/api/student/vibecoding/conversations?limit=50&search=' + encodeURIComponent('另一个'), { token: student });
+  const searched = await api('/api/student/vibecoding/conversations?limit=50&search=' + encodeURIComponent('对话操作'), { token: student });
+  assert.equal(searched.status, 200);
   assert.equal(searched.data.items.length, 1, `搜索应命中 1 条，实际 ${searched.data.items.length}`);
-  assert.equal(searched.data.items[0].title, 'P26 另一个会话', '搜索命中标题应正确');
+  assert.equal(searched.data.items[0].id, conversationId, '搜索应命中原会话');
+  const missed = await api('/api/student/vibecoding/conversations?limit=50&search=' + encodeURIComponent('另一个'), { token: student });
+  assert.equal(missed.status, 200);
+  assert.equal(missed.data.items.length, 0, '重进传入的标题不应产生搜索结果');
 
   // 5) 每会话选模型
   assert.ok(Array.isArray(detail.modelOptions) && detail.modelOptions.length, '会话详情应带可选模型');
@@ -194,7 +208,7 @@ try {
   const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
   assert.equal(submitted.status, 200, `提交失败: ${JSON.stringify(submitted.data)}`);
   const afterSubmitStream = await stream(`/api/student/vibecoding/conversations/${conversationId}/messages`, { token: student, body: { content: '提交后还能聊' } });
-  assert.ok(afterSubmitStream, '提交后应当仍可继续创作（不再锁会话）');
+  assert.ok(afterSubmitStream.some((item) => item.event === 'done'), `提交后应当仍可继续创作: ${JSON.stringify(afterSubmitStream)}`);
 
   console.log(JSON.stringify({
     name: 'vibecoding-chat-ops', pass: true,

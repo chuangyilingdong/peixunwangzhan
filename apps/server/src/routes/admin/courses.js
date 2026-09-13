@@ -78,6 +78,7 @@ import {
   validateMemberPermissions,
   validateMemberPhone,
   validateSeriesForPublishing,
+  validateLessonForPublishing,
   validateTeacher,
   workInReviewScope,
   workReportInReviewScope,
@@ -119,6 +120,8 @@ export async function handleCourses(ctx, part, method) {
     if (!title) throw errors.badRequest('课包标题不能为空', 'COURSE_TITLE_REQUIRED');
     if (title.length > 200) throw errors.badRequest('课包标题不能超过200个字符', 'VALIDATION_ERROR');
     const visibility = body.visibility || 'ALL_ORGS'; const status = body.status || 'DRAFT';
+    if (status !== 'DRAFT') throw errors.badRequest('新课包只能创建为草稿，请使用发布接口', 'COURSE_STATUS_ACTION_REQUIRED');
+    const initialVersion = nonEmptyString(body.version ?? '1.0', '版本号', { max: 100 });
      const priceFen = integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000, fallback: 0 });
      const estimatedCreditsPerPerson = integer(body.estimatedCreditsPerPerson, '预估积分/人', { min: 0, max: 1000000000, fallback: 0 });
      // 课包库存（可授权出去的次数池）；机构授权单上的额度从这里出
@@ -156,8 +159,9 @@ export async function handleCourses(ctx, part, method) {
     const seriesDeliveryMode = normalizeDeliveryMode(body.deliveryMode);
     const createdLessonIds = [];
     transaction(() => {
-      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, String(body.version || '1.0').slice(0, 100), integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, now, now]);
+      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, initialVersion, integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, now, now]);
       lessons.forEach((lesson, index) => {
+        if (lesson.deliveryModes !== undefined && (!Array.isArray(lesson.deliveryModes) || !lesson.deliveryModes.length || lesson.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle) throw errors.badRequest(`第${index + 1}课标题不能为空`, 'LESSON_TITLE_REQUIRED');
         if (lessonTitle.length > 200) throw errors.badRequest(`第${index + 1}课标题不能超过200个字符`, 'VALIDATION_ERROR');
@@ -169,16 +173,18 @@ export async function handleCourses(ctx, part, method) {
          const lessonModes = Array.isArray(lesson.deliveryModes) && lesson.deliveryModes.length ? lesson.deliveryModes : null;
          const deliveryMode = normalizeDeliveryMode((lessonModes && lessonModes[0]) || lesson.deliveryMode || seriesDeliveryMode); const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
          q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
-         createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen, classroomConfig, canvasTemplateSnapshot: lesson.canvasTemplateSnapshot, teachingGroups: lesson.teachingGroups });
+         createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen, platformBudgetFen: lesson.platformBudgetFen, classroomConfig, canvasTemplateSnapshot: lesson.canvasTemplateSnapshot, teachingGroups: lesson.teachingGroups });
       });
-    });
      createdLessonIds.forEach((lesson) => {
-       replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot, { deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen });
-       if (lesson.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, lesson.teachingGroups);
+       replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot, { deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen, platformBudgetFen: lesson.platformBudgetFen, inTransaction: true });
+       if (lesson.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, lesson.teachingGroups, { inTransaction: true });
+       const saved = row('SELECT * FROM course_lessons WHERE id=?', [lesson.id]);
+       if (saved.status === 'PUBLISHED') validateLessonForPublishing(saved);
      });
     // 初始版本也记一条：版本历史从「初始版本」开始，之后重复用过的版本号一律拒绝
     q('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
-      [id('seriesver'), seriesId, String(body.version || '1.0').slice(0, 100), '初始版本', 'PUBLISHED', null, now, status === 'PUBLISHED' ? now : null]);
+      [id('seriesver'), seriesId, initialVersion, '初始版本', 'ARCHIVED', auth.user.id, now, null]);
+    });
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
@@ -193,18 +199,21 @@ export async function handleCourses(ctx, part, method) {
     const note = String(ctx.body?.note || '').trim().slice(0, 500);
     if (version === series.version) throw errors.badRequest('版本号与当前版本相同，请填写新的版本号', 'VERSION_UNCHANGED');
     if (row('SELECT id FROM course_series_versions WHERE series_id=? AND version=?', [series.id, version])) throw errors.conflict('该版本号已经用过，请换一个', 'VERSION_EXISTS');
+    validateSeriesForPublishing(series.id);
     const now = nowIso();
+    let captured;
     const versionId = id('seriesver');
     transaction(() => {
       q('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
         [versionId, series.id, version, note, 'PUBLISHED', auth.user.id, now, now]);
       // updated_at 与版本记录取同一时间：这样「有未发布改动」的判定立刻归零
-      q('UPDATE course_series SET version=?,updated_at=? WHERE id=?', [version, now, series.id]);
+      q("UPDATE course_series SET version=?,status='PUBLISHED',updated_at=? WHERE id=?", [version, now, series.id]);
+      captured = capturePublishedContent(series.id, now, { inTransaction: true });
       audit(ctx, 'COURSE_SERIES_VERSION_PUBLISH', 'COURSE_SERIES', series.id, { version: series.version }, { version, note });
     });
     // 草稿隔离的落点：把当前内容定格成「已发布内容」，机构端/学生端/官网从这一刻起读到的就是它
     // （放在事务外：capturePublishedContent 自己会开一个事务，嵌套会抛错）
-    const captured = capturePublishedContent(series.id, now);
+
     return { id: versionId, version, note, publishedAt: now, capturedLessons: captured.lessons };
   }
 
@@ -225,10 +234,10 @@ export async function handleCourses(ctx, part, method) {
     const versions = rows('SELECT * FROM course_series_versions WHERE series_id=? ORDER BY created_at DESC LIMIT 20', [series.id])
       .map((item) => ({ id: item.id, version: item.version, note: item.note || '', status: item.status, createdBy: item.created_by, createdAt: item.created_at, publishedAt: item.published_at }));
     // 「有未发布的改动」= 课包或课时最后修改时间晚于最近一次版本记录
-    const lastVersionAt = versions[0]?.createdAt || null;
+    const lastVersionAt = row("SELECT MAX(published_at) t FROM course_series_versions WHERE series_id=? AND status='PUBLISHED'", [series.id])?.t || null;
     const lastLessonAt = row('SELECT MAX(updated_at) AS t FROM course_lessons WHERE series_id=?', [series.id])?.t || null;
     const lastChangeAt = [series.updated_at, lastLessonAt].filter(Boolean).sort().pop() || series.updated_at;
-    const hasUnpublishedChanges = lastVersionAt ? String(lastChangeAt) > String(lastVersionAt) : Boolean(versions.length === 0);
+    const hasUnpublishedChanges = lastVersionAt ? String(lastChangeAt) > String(lastVersionAt) : true;
     return { series: normalizeSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage, versions, hasUnpublishedChanges, lastChangeAt, lastVersionAt };
   }
 
@@ -238,6 +247,7 @@ export async function handleCourses(ctx, part, method) {
     const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesEditMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const body = ctx.body || {};
+    if (body.version !== undefined) throw errors.badRequest('版本号必须通过更新发布接口修改', 'COURSE_VERSION_ACTION_REQUIRED');
     if (body.status !== undefined) throw errors.badRequest('课包状态必须通过状态动作接口修改', 'COURSE_STATUS_ACTION_REQUIRED');
     const title = body.title === undefined ? series.title : nonEmptyString(body.title, '课包标题', { max: 200 });
     if (title !== series.title && row("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
@@ -326,10 +336,17 @@ export async function handleCourses(ctx, part, method) {
       allowedFrom: transition.from, code: 'INVALID_COURSE_STATUS_TRANSITION',
       message: '当前状态 ' + series.status + ' 不允许执行 ' + action, details: { action },
     });
+    if (transition.requireLessons && series.published_content) throw errors.badRequest('重新发布请通过版本发布填写新版本号', 'COURSE_VERSION_ACTION_REQUIRED');
     if (transition.requireLessons) validateSeriesForPublishing(series.id);
     const before = normalizeSeries(series);
-    q('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, nowIso(), series.id]);
-    if (transition.to === 'PUBLISHED') capturePublishedContent(series.id);
+    const now = nowIso();
+    transaction(() => {
+      q('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, now, series.id]);
+      if (transition.to === 'PUBLISHED') {
+        capturePublishedContent(series.id, now, { inTransaction: true });
+        q("UPDATE course_series_versions SET status='PUBLISHED',published_at=? WHERE series_id=? AND version=?", [now, series.id, series.version]);
+      }
+    });
     const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, transition.auditAction, 'COURSE_SERIES', series.id, { status: before.status }, { action, status: after.status });
     return after;
@@ -346,6 +363,7 @@ export async function handleCourses(ctx, part, method) {
     const now = nowIso(); const replaceQueue = [];
     transaction(() => {
       lessons.forEach((lesson, index) => {
+        if (lesson.deliveryModes !== undefined && (!Array.isArray(lesson.deliveryModes) || !lesson.deliveryModes.length || lesson.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle || lessonTitle.length > 200) throw errors.badRequest('第' + (index + 1) + '课标题不能为空且不超过200字', 'LESSON_TITLE_REQUIRED');
         const lessonStatus = lesson.status || 'DRAFT';
@@ -358,8 +376,13 @@ export async function handleCourses(ctx, part, method) {
         replaceQueue.push({ id: lessonId, lesson, deliveryMode, classroomConfig });
       });
       q('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
+    replaceQueue.forEach((item) => {
+      replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig, item.lesson.canvasTemplateSnapshot, { deliveryModes: item.lesson.deliveryModes, platformBudgetFen: item.lesson.platformBudgetFen, inTransaction: true });
+      if (item.lesson.teachingGroups !== undefined) replaceLessonTeachingMaterials(item.id, item.lesson.teachingGroups, { inTransaction: true });
+      const saved = row('SELECT * FROM course_lessons WHERE id=?', [item.id]);
+      if (saved.status === 'PUBLISHED') validateLessonForPublishing(saved);
     });
-    replaceQueue.forEach((item) => replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig, item.lesson.canvasTemplateSnapshot, { deliveryModes: item.lesson.deliveryModes, perStudentBudgetFen: item.lesson.perStudentBudgetFen }));
+    });
     audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
     return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
@@ -411,6 +434,7 @@ export async function handleCourses(ctx, part, method) {
     const lesson = row('SELECT lesson.*, series.owner_type owner_type FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=?', [lessonEditMatch[1]]);
     if (!lesson || lesson.owner_type !== 'PLATFORM') throw errors.notFound('平台课时不存在', 'LESSON_NOT_FOUND');
     const body = ctx.body || {};
+    if (body.deliveryModes !== undefined && (!Array.isArray(body.deliveryModes) || !body.deliveryModes.length || body.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
     const title = body.title === undefined ? lesson.title : nonEmptyString(body.title, '课时标题', { max: 200 });
     const summary = body.summary === undefined ? lesson.summary : String(body.summary).slice(0, 10000);
     const durationMinutes = body.durationMinutes === undefined ? lesson.duration_minutes : integer(body.durationMinutes, '课时时长', { min: 1, max: 1440 });
@@ -426,13 +450,16 @@ export async function handleCourses(ctx, part, method) {
      const deliveryMode = patchModes ? normalizeDeliveryMode(patchModes[0])
        : (body.deliveryMode === undefined ? (lesson.delivery_mode || 'CANVAS') : normalizeDeliveryMode(body.deliveryMode));
      const classroomConfig = body.classroomConfig === undefined ? parseJson(lesson.classroom_config, {}) : normalizeClassroomConfig(body.classroomConfig);
+    transaction(() => {
     q('UPDATE course_lessons SET title=?,summary=?,duration_minutes=?,status=?,lesson_content=?,delivery_mode=?,classroom_config=?,updated_at=? WHERE id=?', [title, summary, durationMinutes, status, lessonContent, deliveryMode, json(classroomConfig), nowIso(), lesson.id]);
-    if (body.materialGroups !== undefined || body.capabilities !== undefined || body.deliveryMode !== undefined || body.deliveryModes !== undefined || body.perStudentBudgetFen !== undefined || body.classroomConfig !== undefined || body.canvasTemplateSnapshot !== undefined) {
+    if (body.materialGroups !== undefined || body.capabilities !== undefined || body.deliveryMode !== undefined || body.deliveryModes !== undefined || body.perStudentBudgetFen !== undefined || body.platformBudgetFen !== undefined || body.classroomConfig !== undefined || body.canvasTemplateSnapshot !== undefined) {
       const currentCanvas = lessonCanvasConfig(lesson.id);
-      replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig, body.canvasTemplateSnapshot ?? parseJson(lesson.canvas_template_snapshot, {}), { deliveryModes: body.deliveryModes, perStudentBudgetFen: body.perStudentBudgetFen });
+      replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig, body.canvasTemplateSnapshot ?? parseJson(lesson.canvas_template_snapshot, {}), { deliveryModes: body.deliveryModes ?? (body.deliveryMode !== undefined ? [deliveryMode] : undefined), perStudentBudgetFen: body.perStudentBudgetFen, platformBudgetFen: body.platformBudgetFen, inTransaction: true });
     }
-    if (body.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, body.teachingGroups);
+    if (body.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, body.teachingGroups, { inTransaction: true });
+    if (status === 'PUBLISHED') validateLessonForPublishing(row('SELECT * FROM course_lessons WHERE id=?', [lesson.id]));
     q('UPDATE course_series SET updated_at=? WHERE id=?', [nowIso(), lesson.series_id]);
+    });
     audit(ctx, 'COURSE_LESSON_UPDATE', 'COURSE_LESSON', lesson.id, { title: lesson.title, status: lesson.status, durationMinutes: lesson.duration_minutes }, { title, status, durationMinutes, lessonContentChanged: body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content }, {});
     if (body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content) {
       audit(ctx, 'COURSE_LESSON_CONTENT_UPDATE', 'COURSE_LESSON', lesson.id, { lessonContent: lesson.lesson_content }, { lessonContent });
@@ -472,30 +499,56 @@ export async function handleCourses(ctx, part, method) {
     const now = nowIso();
     // 有效期挂在「课包 → 机构」的授权上：平台课包本身不设有效期。
     const validityDays = integer(ctx.body?.validityDays, '授权有效期（天）', { min: 1, max: 3650, fallback: 365 });
-    // 授权次数（许可轴）：0 = 不限次数（老行为）；> 0 时受课包库存约束
-    const quotaTotal = integer(ctx.body?.quotaTotal, '授权次数', { min: 0, max: 100000000, fallback: 0 });
-    if (quotaTotal > 0) {
-      const stockTotal = Number(series.stock_total || 0);
-      const grantedTotal = Number(row("SELECT COALESCE(SUM(quota_total),0) n FROM course_assignments WHERE series_id=? AND status='ACTIVE'", [series.id])?.n || 0);
-      if (stockTotal > 0 && grantedTotal + quotaTotal > stockTotal) {
-        throw errors.conflict(`课包库存不足：库存 ${stockTotal} 次，已授权 ${grantedTotal} 次，本次申请 ${quotaTotal} 次`, 'COURSE_QUOTA_EXCEEDS_STOCK');
-      }
-    }
-    const expiresAt = new Date(Date.now() + validityDays * 24 * 60 * 60 * 1000).toISOString();
-    transaction(() => {
-      assignmentOrgIds.forEach((assignmentOrgId) => {
-        // 必须把 status 一起查出来：续期（对已有授权的机构再次授权）要按 REVOKED → ACTIVE 走状态机，
-        // 只查 id 的话 existing.status 是 undefined，状态机会直接抛「status 无效」（p40 用例盯住这一点）。
-        const existing = row('SELECT id, status FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, assignmentOrgId]);
-        if (existing) {
-          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, before: { status: existing.status, orgId: assignmentOrgId }, allowSameState: true, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能启用' });
-          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal > 0 ? quotaTotal : Number(existing.quota_total || 0), existing.id]);
-        }
-        else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, assignmentOrgId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
+    const expiresAt = new Date(Date.now() + validityDays * 86400000).toISOString();
+    const result = transaction(() => {
+      const currentSeries = row('SELECT * FROM course_series WHERE id=?', [series.id]);
+      if (currentSeries.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
+      const updates = assignmentOrgIds.map((organizationId) => {
+        const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
+        const quotaTotal = ctx.body?.quotaTotal === undefined && existing
+          ? Number(existing.quota_total) : integer(ctx.body?.quotaTotal, '授权总次数', { min: 1, max: 100000000 });
+        if (quotaTotal < 1) throw errors.badRequest('授权次数必须为正数', 'COURSE_QUOTA_REQUIRED');
+        if (quotaTotal < Number(existing?.quota_used || 0)) throw errors.conflict('授权次数不能低于已使用次数', 'COURSE_QUOTA_BELOW_USED');
+        return { organizationId, existing, quotaTotal };
       });
+      // 撤销只释放未消耗的额度；已消耗次数仍占库存。过期授权保留余额以便续期。
+      const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+      const delta = updates.reduce((n, { existing, quotaTotal }) => n + quotaTotal - (existing ? Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used) : 0), 0);
+      if (reserved + delta > Number(currentSeries.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+      updates.forEach(({ organizationId, existing, quotaTotal }) => {
+        if (existing) {
+          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
+          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
+        } else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
+      });
+      return updates.map(({ organizationId, quotaTotal }) => ({ orgId: organizationId, quotaTotal }));
     });
-    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds, validityDays, expiresAt, quotaTotal });
-    return { assignedCount: assignmentOrgIds.length, validityDays, expiresAt, quotaTotal };
+    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_SERIES', series.id, null, { orgIds: assignmentOrgIds, validityDays, expiresAt, allocations: result });
+    return { assignedCount: result.length, validityDays, expiresAt, quotaTotal: result[0]?.quotaTotal, allocations: result };
+  }
+
+  if (part === '/authorizations' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const items = rows("SELECT * FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' ORDER BY title").map((series) => {
+      const allocations = rows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id]).map((a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at }));
+      const reserved = allocations.reduce((n,a) => n + (a.status === 'ACTIVE' ? a.quotaTotal : a.quotaUsed), 0);
+      return { id: series.id, title: series.title, stockTotal: Number(series.stock_total || 0), reserved, available: Math.max(0, Number(series.stock_total || 0)-reserved), allocations };
+    });
+    return { items };
+  }
+  const stockMatch = part.match(/^\/course-series\/([^/]+)\/stock$/);
+  if (stockMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const stockTotal = integer(ctx.body?.stockTotal, '库存总次数', { min: 0, max: 100000000 });
+    transaction(() => {
+      const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM' AND status='PUBLISHED'", [stockMatch[1]]);
+      if (!series) throw errors.notFound('已发布课包不存在');
+      const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+      if (stockTotal < reserved) throw errors.conflict('库存不能低于已分配或已消耗次数', 'COURSE_STOCK_BELOW_RESERVED');
+      q('UPDATE course_series SET stock_total=?,updated_at=? WHERE id=?', [stockTotal, nowIso(), series.id]);
+      audit(ctx, 'COURSE_STOCK_UPDATE', 'COURSE_SERIES', series.id, { stockTotal: series.stock_total }, { stockTotal });
+    });
+    return { stockTotal };
   }
 
   // 平台兜底撤销：机构侧不可撤销（次数已消耗不可逆），出问题时由平台处理并写审计。

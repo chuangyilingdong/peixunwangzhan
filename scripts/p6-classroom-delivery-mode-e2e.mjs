@@ -38,6 +38,12 @@ const port = 18866;
 
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
+// 此守卫覆盖两种已发布入口，种子课时只开放画布。
+{
+  const db = new DatabaseSync(dbPath);
+  db.prepare(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`).run();
+  db.close();
+}
 
 const server = spawn(process.execPath, ['apps/server/src/index.js'], {
   cwd: root,

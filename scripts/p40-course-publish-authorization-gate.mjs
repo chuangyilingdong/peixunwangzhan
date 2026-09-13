@@ -11,6 +11,8 @@
  *   ② 授权后在有效期内能看到、过期/撤销后立刻看不到；
  *   ③ 课程广场「列表点得开」——详情与列表必须用同一套条件。
  */
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -28,9 +30,10 @@ async function expectError(fn, code, label) {
 }
 
 const now = new Date().toISOString();
+let adminServer;
 
 try {
-  const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
+  const { handleAdmin: adminHandler } = await import('../apps/server/src/routes/adminOrg.js');
   const { handleOrg } = await import('../apps/server/src/routes/orgAdmin.js');
   const { handlePublicCommunication } = await import('../apps/server/src/routes/communication.js');
   const { q, row, rows } = await import('../apps/server/src/lib.js');
@@ -38,6 +41,29 @@ try {
 
   const adminAuth = { user: { id: 'root', login: 'root', displayName: 'Root', role: 'SUPER_ADMIN', orgId: null, permissions: [] }, rawUser: { permissions: '[]' } };
   const adminCtx = (pathname, method = 'GET', body = null) => ({ pathname, method, body, auth: adminAuth, search: new URLSearchParams(), req: { socket: { remoteAddress: '127.0.0.1' } } });
+  // 用真实 HTTP 状态验证每次平台发布/授权请求；路由仍使用本用例的管理员上下文。
+  adminServer = createServer(async (req, res) => {
+    try {
+      let text = '';
+      for await (const chunk of req) text += chunk;
+      const data = await adminHandler(adminCtx(req.url, req.method, text ? JSON.parse(text) : null));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(data));
+    } catch (error) {
+      res.writeHead(error.status || 500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ code: error.code, message: error.message }));
+    }
+  });
+  await new Promise((resolve) => adminServer.listen(0, '127.0.0.1', resolve));
+  const handleAdmin = async (ctx) => {
+    const response = await fetch(`http://127.0.0.1:${adminServer.address().port}${ctx.pathname}`, {
+      method: ctx.method, headers: { 'content-type': 'application/json' },
+      body: ctx.body == null ? undefined : JSON.stringify(ctx.body),
+    });
+    const data = await response.json();
+    assert.equal(response.status, 200, `${ctx.method} ${ctx.pathname}: ${JSON.stringify(data)}`);
+    return data;
+  };
   const orgCtx = (orgId, pathname, method = 'GET', body = null) => ({ pathname, method, body, auth: { user: { id: `oa_${orgId}`, login: `oa_${orgId}`, role: 'ORG_ADMIN', orgId, permissions: [] }, rawUser: { permissions: '[]' } }, search: new URLSearchParams(), req: { socket: { remoteAddress: '127.0.0.1' } } });
   const publicCtx = (pathname, search = '') => ({ pathname, method: 'GET', body: null, auth: null, search: new URLSearchParams(search), req: { socket: { remoteAddress: '127.0.0.1' } } });
 
@@ -56,7 +82,7 @@ try {
   const created = await handleAdmin(adminCtx('/api/admin/course-series', 'POST', {
     title: 'P40 授权门禁用例课包',
     description: '发布只上课程广场，机构要授权才可见。',
-    visibility: 'ALL_ORGS',
+    stockTotal: 1, coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'ALL_ORGS',
     lessons: [{ title: '第1课 授权门禁', status: 'PUBLISHED', capabilities: ['text'] }],
   }));
   check(Boolean(created?.id), '创建课包应返回 id');
@@ -77,7 +103,7 @@ try {
   check(!(beforeAssign || []).some((item) => item.id === seriesId), '未授权机构的学生端也不应看到课包');
 
   // ③ 授权 2 年后：机构可见，且带出有效期
-  const assigned = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 730 }));
+  const assigned = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 730, quotaTotal: 1 }));
   check(assigned?.assignedCount === 1, `授权应写入 1 条，实际 ${assigned?.assignedCount}`);
   const twoYearsOut = Date.now() + 729 * 24 * 60 * 60 * 1000;
   check(new Date(assigned.expiresAt).getTime() > twoYearsOut, `2 年授权的到期时间应在 2 年后，实际 ${assigned?.expiresAt}`);
@@ -88,7 +114,9 @@ try {
   check(orgListed?.assignmentExpiresAt === assigned.expiresAt, '机构端应带出授权到期时间供展示');
   const orgDetail = await handleOrg(orgCtx('org1', `/api/org/course-series/${seriesId}`));
   check(orgDetail?.id === seriesId, '授权后机构应能读到课包详情');
-  check(getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' }).some((item) => item.id === seriesId), '授权后该机构学生端应能看到课包');
+  check(!getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' }).some((item) => item.id === seriesId), '仅机构授权、未发学员许可时学生不可见');
+  q("INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES ('grant-p40','org1','stu1',?,?)", [seriesId, now]);
+  check(getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' }).some((item) => item.id === seriesId), '发放学员许可后学生可见');
 
   // ④ 授权到期 → 机构立刻看不到（不需要任何定时任务）
   q("UPDATE course_assignments SET expires_at=? WHERE series_id=? AND org_id='org1'", [new Date(Date.now() - 60 * 1000).toISOString(), seriesId]);
@@ -97,7 +125,7 @@ try {
   check(!getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' }).some((item) => item.id === seriesId), '授权过期后学生端也不应看到课包');
 
   // ⑤ 重新授权（续期覆盖原有效期）→ 又能看到
-  const renewed = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365 }));
+  const renewed = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1 }));
   check(new Date(renewed.expiresAt).getTime() > Date.now(), '续期后到期时间应回到未来');
   check(await hasCourse('org1', seriesId), '续期后机构应重新看到课包');
   check(rows('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [seriesId, 'org1']).length === 1, '续期应复用同一条授权记录');
@@ -111,7 +139,7 @@ try {
 
   // ⑦ 撤销后重新授权（REVOKED → ACTIVE）：这是「先撤销、过阵子再给」的实际路径，
   //    曾经因为续期分支只查 id 不查 status 而直接抛「status 无效」。
-  await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365 }));
+  await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1 }));
   check(await hasCourse('org1', seriesId), '撤销后重新授权应能恢复机构可见');
 
   // ⑧ 下架 → 广场不再展示，机构本来就看不到
@@ -121,16 +149,18 @@ try {
   // ⑨ 「不上架（ASSIGNED_ORGS）」不上广场，但授权后机构照样可见 —— 两件事互不干涉
   const privateSeries = await handleAdmin(adminCtx('/api/admin/course-series', 'POST', {
     title: 'P40 不上架授权课包',
-    visibility: 'ASSIGNED_ORGS',
+    description: '定向授权课包', stockTotal: 1, coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'ASSIGNED_ORGS',
     lessons: [{ title: '第1课 定向课', status: 'PUBLISHED', capabilities: ['text'] }],
   }));
   await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/status`, 'POST', { action: 'publish' }));
   check(!(await plazaIds()).includes(privateSeries.id), '「不上架」课包不应出现在课程广场');
-  await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365 }));
+  await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1 }));
   check(await hasCourse('org1', privateSeries.id), '「不上架」课包授权后机构应能看到');
   check(!(await plazaIds()).includes(privateSeries.id), '机构可见不应把课包带上课程广场');
 } catch (error) {
   failures.push(`unexpected: ${error?.stack || error?.message || error}`);
+} finally {
+  if (adminServer) await new Promise((resolve) => adminServer.close(resolve));
 }
 
 if (failures.length) {

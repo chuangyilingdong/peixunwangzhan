@@ -7,7 +7,7 @@
  *   ② 课包范围只能是自己机构被授权的那些（不会串机构）；
  *   ③ 剩余次数 = 可授权 − 已分配（不为负）；
  *   ④ 课堂计数按「课时属于哪个课包」归集，与直接查库一致；
- *   ⑤ 权限边界：教师能看（课包库全机构可见），但不能分配（分配是机构管理员的事）。
+ *   ⑤ 权限边界：教师不能看机构课包分配概览，也不能分配（分配是机构管理员的事）。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -109,9 +109,9 @@ try {
     JSON.stringify({ totals, sum: { quotaUsed: sumOf('quotaUsed'), quotaTotal: sumOf('quotaTotal'), remaining: sumOf('remaining'), grantedStudents: sumOf('grantedStudents') } }));
   check('④ 课包数 = 逐项条数', Number(totals.seriesCount) === items.length, JSON.stringify({ seriesCount: totals.seriesCount, items: items.length }));
 
-  /* ⑤ 权限边界：教师能看、不能分配 */
+  /* ⑤ 权限边界：机构分配概览与分配操作仅管理员可用 */
   const teacherView = await api('/api/org/series-overview?days=30', { token: teacher });
-  check('⑤ 教师可以看课包概览（课包库本来就全机构可见）', teacherView.status === 200 && Array.isArray(teacherView.data?.items), JSON.stringify(teacherView).slice(0, 160));
+  check('⑤ 教师不能查看机构课包分配概览', teacherView.status === 403 && teacherView.error?.code === 'ORG_ADMIN_REQUIRED', JSON.stringify(teacherView).slice(0, 160));
   const teacherGrant = await api('/api/org/course-grants', { method: 'POST', token: teacher, body: { seriesId: series.id, studentIds: [students[2]?.id].filter(Boolean) } });
   check('⑤ 教师不能把课包分给学员（分配是机构管理员的事）', teacherGrant.status === 403, `实际 ${teacherGrant.status}`);
 

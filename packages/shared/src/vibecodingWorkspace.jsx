@@ -79,9 +79,8 @@ function ClassroomView({ api, onEnterConversation }) {
     setBusy(lesson.id);
     try {
       const target = onEnterConversation || ((id) => navigate(`/learn/vibecoding/${id}`));
-      const existing = byLesson.get(lesson.id);
-      if (existing) { target(existing.id); return; }
       const created = await api.post('student/vibecoding/conversations', {
+        sessionId: lesson.session?.id,
         lessonId: lesson.id, title: `${lesson.title || '今日课堂'} · 创作对话`,
       });
       target(created.id);
@@ -112,7 +111,8 @@ function ClassroomView({ api, onEnterConversation }) {
           </div>
           <div className="c-lesson-grid">
             {course.lessons.map((lesson, index) => {
-              const existing = byLesson.get(lesson.id);
+              const candidate = byLesson.get(lesson.id);
+              const existing = candidate?.classSessionId === lesson.session?.id ? candidate : null;
               const startable = Boolean(lesson.canStartVibeCoding);
               return (
                 <article
@@ -561,8 +561,6 @@ function WorkspaceView({ api }) {
   const recent = items.filter((item) => !item.pinnedAt);
   const modelOptions = data.modelOptions || [];
   const submission = data.submission;
-  // 算力池摘要（服务端随会话详情下发，与闸门同源；老数据可能没有这个字段）
-  const pool = data.computePool || null;
   const lastUserMessageId = [...messages].reverse().find((item) => item.role === 'user' && !String(item.id).startsWith('local-'))?.id || null;
 
   const sidebarZones = [
@@ -612,10 +610,7 @@ function WorkspaceView({ api }) {
       subtitle="正在创作"
       actions={(
         <>
-          {/* 算力池：本课包还剩多少（与闸门同源）。课包没填预算时显示「不限」——口径是留空=不限制 */}
-          {pool ? <Pill tone={pool.unlimited || Number(pool.remainYuan || 0) > 0 ? 'ok' : 'warn'}>
-            {pool.unlimited ? '本课包算力不限' : `本课包算力 剩 ¥${Number(pool.remainYuan || 0).toFixed(2)} / 上限 ¥${Number(pool.capYuan || 0).toFixed(2)}`}
-          </Pill> : null}
+
           {submission ? <Pill tone={submission.unpublishReason ? 'warn' : 'ok'} title={submission.unpublishReason || ''}>
             {submission.unpublishReason ? `作品广场已下架：${submission.unpublishReason}` : '已交给平台'}
           </Pill> : null}

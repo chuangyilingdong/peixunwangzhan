@@ -85,18 +85,17 @@ import {
 export async function handleWorks(ctx, part, method) {
   if (part === '/works' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const status = ctx.search.get('status'); const orgFilter = ctx.search.get('orgId'); const search = String(ctx.search.get('search') || '').trim();
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
     const sortKey = String(ctx.search.get('sort') || 'featured').trim();
     const sort = Object.hasOwn({ featured: true, submitted: true, title: true }, sortKey) ? sortKey : 'featured';
     const sortSql = { featured: 'work.featured_at DESC, work.submitted_at DESC, work.id DESC', submitted: 'work.submitted_at DESC, work.id DESC', title: 'work.title COLLATE NOCASE ASC, work.id DESC' }[sort];
-    const { where, params } = platformWorkFilters(ctx);
+    const { where, params, publicationStateSql } = platformWorkFilters(ctx);
     const total = Number(row('SELECT COUNT(*) n FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id' + where, params)?.n || 0);
     const items = rows(
-      `SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by${where} ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
+      `SELECT work.*,student.login student_login,series.title package_name,session.title session_title,${publicationStateSql} publication_state,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN class_sessions session ON session.id=work.class_session_id${where} ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
       [...params, limit, (page - 1) * limit],
-    ).map((work) => ({ ...normalizeWork(work), organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
+    ).map((work) => ({ ...normalizeWork(work), studentLogin: work.student_login, packageName: work.package_name, sessionTitle: work.session_title, publicationState: work.publication_state, organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/works/export' && method === 'GET') {
@@ -300,30 +299,26 @@ export async function handleWorks(ctx, part, method) {
   // ── VibeCoding 作品（学生提交后，平台决定是否发布到作品广场；没有老师点评这一环了）──
   if (part === '/vibecoding-works' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
-    const orgFilter = String(ctx.search.get('orgId') || '').trim();
-    const publishedFilter = String(ctx.search.get('published') || '').trim();
-    const search = String(ctx.search.get('search') || '').trim();
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
-    const conditions = ['1=1']; const params = [];
-    if (['PENDING', 'APPROVED', 'REJECTED'].includes(status)) { conditions.push('submission.status=?'); params.push(status); }
-    if (orgFilter) { conditions.push('submission.org_id=?'); params.push(orgFilter); }
-    if (publishedFilter === '1' || publishedFilter === '0') { conditions.push('submission.is_public=?'); params.push(Number(publishedFilter)); }
-    if (search) { conditions.push('(submission.title LIKE ? OR student.display_name LIKE ? OR student.login LIKE ?)'); const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
-    const where = ' WHERE ' + conditions.join(' AND ');
+    const { where, params, publicationStateSql } = platformWorkFilters(ctx, 'vibecoding');
+    const sort = ctx.search.get('sort') === 'title' ? 'title' : 'submitted';
+    const sortSql = sort === 'title' ? 'submission.title COLLATE NOCASE ASC, submission.id DESC' : 'submission.submitted_at DESC, submission.id DESC';
     const joins = ` FROM vibecoding_submissions submission
       LEFT JOIN users student ON student.id=submission.student_id
       LEFT JOIN organizations organization ON organization.id=submission.org_id
       LEFT JOIN classes class ON class.id=submission.class_id
-      LEFT JOIN course_lessons lesson ON lesson.id=submission.lesson_id`;
+      LEFT JOIN course_lessons lesson ON lesson.id=submission.lesson_id
+      LEFT JOIN course_series series ON series.id=lesson.series_id
+      LEFT JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
+      LEFT JOIN class_sessions session ON session.id=conversation.class_session_id`;
     const total = Number(row('SELECT COUNT(*) n' + joins + where, params)?.n || 0);
     const items = rows(
-      `SELECT submission.*, student.display_name student_name, student.login student_login, organization.name organization_name, class.name class_name, lesson.title lesson_title` + joins + where +
-      ' ORDER BY submission.submitted_at DESC, submission.id DESC LIMIT ? OFFSET ?',
+      `SELECT submission.*, series.title package_name, session.title session_title, ${publicationStateSql} publication_state, student.display_name student_name, student.login student_login, organization.name organization_name, class.name class_name, lesson.title lesson_title` + joins + where +
+      ` ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
       [...params, limit, (page - 1) * limit],
-    ).map((item) => ({ ...normalizeSubmission(item), organizationName: item.organization_name || null }));
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort: 'submitted' };
+    ).map((item) => ({ ...normalizeSubmission(item), studentLogin: item.student_login, packageName: item.package_name, sessionTitle: item.session_title, publicationState: item.publication_state, organizationName: item.organization_name || null }));
+    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   const vibeWorkPlazaMatch = part.match(/^\/vibecoding-works\/([^/]+)\/plaza$/);
   if (vibeWorkPlazaMatch && method === 'PUT') {

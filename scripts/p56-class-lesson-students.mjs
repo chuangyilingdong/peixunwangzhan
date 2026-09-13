@@ -45,7 +45,7 @@ try {
   assert.ok(admin && org?.token && students.length, '登录或学员缺失');
   const [first, second] = students;
 
-  const created = await api('/api/admin/course-series', { method: 'POST', token: admin, body: { title: 'P56 排课课包', visibility: 'ALL_ORGS', stockTotal: 10, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] } });
+  const created = await api('/api/admin/course-series', { method: 'POST', token: admin, body: { title: 'P56 排课课包', description: '排课候选与完课门禁', coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'ALL_ORGS', stockTotal: 10, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] } });
   const seriesId = created.data.id; const lessonId = created.data.lessons[0].id;
   await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
   await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 10 } });

@@ -61,7 +61,7 @@ try {
   // 建课包（版本 1.0）+ 课时
   const created = await api('/api/admin/course-series', {
     method: 'POST', token: admin,
-    body: { title: 'P53 版本课包', description: '版本守卫', visibility: 'ALL_ORGS', version: '1.0', lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] },
+    body: { title: 'P53 版本课包', stockTotal: 20, coverImageUrl: 'https://example.com/p53-cover.png', description: '版本守卫', visibility: 'ALL_ORGS', version: '1.0', lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] },
   });
   assert.equal(created.status, 200, `建课包失败: ${JSON.stringify(created.data).slice(0, 160)}`);
   const seriesId = created.data.id;
@@ -97,7 +97,7 @@ try {
 
   // ③ 发布即生效：机构端与学生端读到的就是新内容（同一份数据，不需要额外同步）
   await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
-  await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365 } });
+  await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 10 } });
   const orgCourse = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
   check('机构端读到的课时标题就是改后的内容（发布即生效）', JSON.stringify(orgCourse.data).includes('第1课（改过）'), JSON.stringify(orgCourse.data).slice(0, 160));
 

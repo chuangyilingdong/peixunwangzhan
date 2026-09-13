@@ -56,7 +56,7 @@ function ownProject(auth, projectId) {
      LEFT JOIN class_sessions session ON session.id = project.class_session_id
      WHERE project.id = ? AND project.student_id = ? AND project.org_id = ?
        AND project.deleted_at IS NULL AND project.status != 'ARCHIVED'`,
-    [projectId, auth.user.id, auth.user.orgId]);
+    [projectId, auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
   if (!project) throw errors.notFound('项目不存在', 'PROJECT_NOT_FOUND');
   return project;
 }
@@ -155,7 +155,7 @@ export function assertGenerationPreflight({ user, orgId, context, modality, proj
   if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
   // 算力池（学生 × 课包，四种模态共用一个池子）—— 这一条对**每一种模态**都生效，
   // 所以视频/音乐也被它管住（它们走不到网关，只有这里能拦）。
-  assertComputePoolBudget({ userId: user.id, seriesId: context.series?.id || null, modality, model, units });
+  assertComputePoolBudget({ userId: user.id, seriesId: context.series?.id || null, sessionId: context.activeSession?.id || null, modality, model, units });
 }
 
 function normalizeAsset(value) {
@@ -254,7 +254,7 @@ async function writeLyricsForMusic({ prompt, policy, requestContext = null, auth
   // 作词这一步也是学生在花算力，所以同样按他的令牌走网关（没有 auth 的调用点保持直连）。
   const baseSelection = providerSelectionForModality(policy, 'TEXT');
   const selection = auth
-    ? await applyGatewayRoute(baseSelection, { orgId: auth.user.orgId, studentId: auth.user.id, lessonId, modality: 'TEXT' })
+    ? await applyGatewayRoute(baseSelection, { orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId, modality: 'TEXT' })
     : baseSelection;
   const provider = getGenerationProvider(selection);
   try {
@@ -313,11 +313,11 @@ function resolveReferenceAssets(projectId, value) {
 function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, referenceAssetUrls = null, boxId = '', requestOptions = null, selection = null }) {
   const jobId = id('generation');
   const now = nowIso();
-  const saleSnapshot = { modality, model: provider.model, unitFen: priceFenFor({ modality, model: provider.model }), capturedAt: now, basis: 'PER_CALL', route: selection ? { ...selection, apiKey: undefined, gateway: undefined, backup: selection.backup ? { ...selection.backup, apiKey: undefined, gateway: undefined } : undefined } : null };
+  const saleSnapshot = { modality, model: provider.model, unitFen: 0, charged: false, capturedAt: now, basis: 'USER_INCLUDED_COMPUTE', route: selection ? { ...selection, apiKey: undefined, gateway: undefined, backup: selection.backup ? { ...selection.backup, apiKey: undefined, gateway: undefined } : undefined } : null };
   transaction(() => q(`INSERT INTO generation_jobs(
        id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url,last_frame_asset_url,reference_asset_urls,box_id,request_options
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [jobId, auth.user.orgId, auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl, lastFrameAssetUrl, Array.isArray(referenceAssetUrls) && referenceAssetUrls.length ? JSON.stringify(referenceAssetUrls) : null, boxId || null, requestOptions ? JSON.stringify(requestOptions) : null]));
+    [jobId, (auth.session?.org_id || auth.user.orgId), auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl, lastFrameAssetUrl, Array.isArray(referenceAssetUrls) && referenceAssetUrls.length ? JSON.stringify(referenceAssetUrls) : null, boxId || null, requestOptions ? JSON.stringify(requestOptions) : null]));
   q('UPDATE generation_jobs SET compute_snapshot=? WHERE id=?', [json(saleSnapshot), jobId]);
     if (startImmediately) {
       assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
@@ -387,15 +387,15 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
 
 function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext = null }) {
   transaction(() => {
-    const user = row("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, auth.user.orgId]);
+    const user = row("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
     const freshProject = ownProject(auth, project.id);
     if (!user) throw errors.forbidden('学生账号不可用', 'ACCOUNT_DISABLED');
     if (freshProject.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const freshContext = resolveProjectUsageContext(user, freshProject);
     if (!freshContext.canUseNow) throw errors.forbidden(freshContext.blockReason, freshContext.blockCode);
-    const pkg = packageForUser(user, auth.user.orgId);
+    const pkg = packageForUser(user, (auth.session?.org_id || auth.user.orgId));
     assertCapability(modality, freshContext.activeSession, pkg);
-    assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: auth.user.orgId, userId: auth.user.id });
+    assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id });
     const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
     if (lessonCapability && !(freshContext.lesson?.capabilities || []).includes(lessonCapability)) {
       throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
@@ -408,7 +408,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     // C3 前置：上游给了 token 用量就记下来（计费仍是「每次调用 × 单价」，不改口径）
     const firstAssetTokens = assetPayloads.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
     recordAiUsage({
-      orgId: auth.user.orgId, userId: auth.user.id, projectId: project.id,
+      orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, projectId: project.id,
       sessionId: freshContext.activeSession?.id || null, generationJobId: jobId,
       modality, model: provider.model, status: 'SUCCESS',
       inputTokens: firstAssetTokens?.inputTokens || 0, outputTokens: firstAssetTokens?.outputTokens || 0,
@@ -422,7 +422,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
       q(`INSERT INTO media_assets(
            id,job_id,org_id,user_id,project_id,modality,label,mime_type,asset_url,preview_url,metadata,created_at
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [assetId, jobId, auth.user.orgId, auth.user.id, project.id, modality,
+        [assetId, jobId, (auth.session?.org_id || auth.user.orgId), auth.user.id, project.id, modality,
           String(asset.label || `${MODALITY_LABELS[modality] || modality} ${index + 1}`).slice(0, 120),
           asset.mimeType || null, String(asset.assetUrl || `mock://generation/${assetId}`), asset.previewUrl || null,
           json(asset.metadata || {}), nowIso()]);
@@ -568,7 +568,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const box = resolveLessonGenerationBox(context, modality, boxId);
   // 走网关的话，这里换成「该学生在这节课的令牌」出口；解析不出来就原样直连。
   const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || ''), {
-    orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
+    orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
   });
   const provider = getGenerationProvider(providerSelection);
   const info = generationProviderInfo(providerSelection);
@@ -589,21 +589,21 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     studentOptions,
   });
   assertGenerationPreflight({
-    user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id,
+    user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id,
     boxId: box?.id || '', model: provider.model,
     frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
   });
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
   try {
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: auth.user.orgId, userId: auth.user.id, jobId } });
+    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
-    audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
+    audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
     const job = jobDetail(jobId);
     return { job, assets: job.assets };
   } catch (error) {
-    markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
+    markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
     if (error instanceof ApiError) throw error;
     const normalized = normalizeProviderError(error);
     throw errors.badRequest(normalized.message, normalized.code);
@@ -626,15 +626,18 @@ async function processAsyncGeneration(item) {
   const providerSelection = persistedJob?.provider && persistedJob.provider !== 'local-mock'
     ? { ...routedSelection, provider: persistedJob.provider, model: persistedJob.model }
     : {};
-  const context = resolveProjectUsageContext(auth.rawUser, project);
-  // 异步任务在 worker 里才真正打上游，所以网关出口也必须在这里解析一次
-  // （不把令牌 key 持久化进任务表 —— 每次现解析，令牌轮换/额度调整都立刻生效）。
-  const routedByGateway = await applyGatewayRoute(providerSelection, {
-    orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
-  });
-  routedByGateway.saleSnapshot = parseJson(persistedJob?.compute_snapshot, null);
-  const provider = getGenerationProvider(routedByGateway); const info = generationProviderInfo(routedByGateway);
+  let context = null;
+  let provider = { name: persistedJob?.provider || 'unknown', model: persistedJob?.model || '' };
+  let info = { mode: 'unknown' };
   try {
+    context = resolveProjectUsageContext(auth.rawUser, project);
+    // 恢复任务也必须重新验证课堂与网关；失败进入统一收尾，不能使 worker 退出。
+    const routedByGateway = await applyGatewayRoute(providerSelection, {
+      orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
+    });
+    routedByGateway.saleSnapshot = parseJson(persistedJob?.compute_snapshot, null);
+    provider = getGenerationProvider(routedByGateway);
+    info = generationProviderInfo(routedByGateway);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const box = resolveLessonGenerationBox(context, modality, boxId);
@@ -652,19 +655,19 @@ async function processAsyncGeneration(item) {
       studentOptions: requestOptions,
     });
     assertGenerationPreflight({
-      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId, model: provider.model,
+      user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId, model: provider.model,
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: auth.user.orgId, userId: auth.user.id, jobId } });
+    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
-    audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: auth.user.orgId });
+    audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
   } catch (error) {
-    markJobFailed({ jobId, orgId: auth.user.orgId, userId: auth.user.id, project, modality, provider, info, session: context.activeSession, error, requestContext });
+    markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
   }
 }
 
@@ -698,7 +701,7 @@ function generationHistory(auth, search) {
   const projectId = String(search.get('projectId') || '').trim();
   if (projectId && projectId.length > 100) throw errors.badRequest('projectId 无效', 'PROJECT_REQUIRED');
   const filters = ['job.user_id = ?', 'job.org_id = ?'];
-  const params = [auth.user.id, auth.user.orgId];
+  const params = [auth.user.id, (auth.session?.org_id || auth.user.orgId)];
   if (modality) { filters.push('job.modality = ?'); params.push(modality); }
   if (status) { filters.push('job.status = ?'); params.push(status); }
   if (projectId) { filters.push('job.project_id = ?'); params.push(projectId); }
@@ -719,10 +722,10 @@ function generationHistory(auth, search) {
     page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)),
     summary: {
       total,
-      succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, auth.user.orgId]),
-      failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, auth.user.orgId]),
+      succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+      failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
       // 2026-09-13（P4 删积分）：原来报积分，现在报**算力消耗（分）** —— 与算力池同一份账本
-      costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
+      costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     },
     items,
   };
@@ -776,7 +779,7 @@ function normalizeAiSession(value) {
 function studentAiCenter(ctx) {
   const auth = ctx.auth;
   const rawUser = auth.rawUser;
-  const pkg = packageForUser(rawUser, auth.user.orgId);
+  const pkg = packageForUser(rawUser, (auth.session?.org_id || auth.user.orgId));
   const activeSessions = activeAiSessions(rawUser).map(normalizeAiSession);
   const session = activeSessions[0] || null;
   const capabilities = AI_MODALITIES.map((modality) => {
@@ -790,7 +793,7 @@ function studentAiCenter(ctx) {
     else if (!sessionEnabled) reasons.push('当前课堂未开放');
     if (session?.studentCallCap !== null && session?.studentCallCap !== undefined) {
       const usedCalls = count("SELECT COUNT(*) n FROM usage_records WHERE org_id = ? AND class_session_id = ? AND user_id = ? AND status IN ('SUCCESS','FAILED')",
-        [auth.user.orgId, session.id, auth.user.id]);
+        [(auth.session?.org_id || auth.user.orgId), session.id, auth.user.id]);
       if (usedCalls >= Number(session.studentCallCap)) reasons.push('本课堂调用次数已达上限');
     }
     // 2026-09-13（P4 删积分）：不再有「课堂用量上限 / 个人额度」两条拒绝理由 ——
@@ -807,10 +810,10 @@ function studentAiCenter(ctx) {
     };
   });
   const jobs = {
-    total: count('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
-    succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, auth.user.orgId]),
-    failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, auth.user.orgId]),
-    costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]),
+    total: count('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
   };
   const assets = rows(`SELECT asset.*, project.title AS project_title, project.status AS project_status,
             lesson.title AS lesson_title, session.title AS session_title
@@ -819,8 +822,8 @@ function studentAiCenter(ctx) {
      LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
      LEFT JOIN class_sessions session ON session.id = project.class_session_id
      WHERE asset.user_id = ? AND asset.org_id = ?
-     ORDER BY asset.created_at DESC LIMIT 100`, [auth.user.id, auth.user.orgId]);
-  const projects = rows('SELECT id,canvas_snapshot FROM student_projects WHERE student_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]);
+     ORDER BY asset.created_at DESC LIMIT 100`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
+  const projects = rows('SELECT id,canvas_snapshot FROM student_projects WHERE student_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
   const currentByProject = new Map(projects.map((project) => [project.id, project.canvas_snapshot || '']));
   const snapshotsByProject = new Map();
   if (projects.length) {
@@ -831,7 +834,7 @@ function studentAiCenter(ctx) {
       snapshotsByProject.get(snapshot.project_id).push(snapshot);
     }
   }
-  const assetTotal = count('SELECT COUNT(*) n FROM media_assets WHERE user_id = ? AND org_id = ?', [auth.user.id, auth.user.orgId]);
+  const assetTotal = count('SELECT COUNT(*) n FROM media_assets WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
   const normalizedAssets = assets.map((asset) => ({
     ...normalizeAsset(asset),
     projectTitle: asset.project_title || null,
@@ -878,7 +881,7 @@ export async function handleAiGeneration(ctx) {
     const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const box = resolveLessonGenerationBox(context, modality, boxId);
     const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || ''), {
-      orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
+      orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
     });
     const provider = getGenerationProvider(providerSelection);
     const info = generationProviderInfo(providerSelection);
@@ -902,7 +905,7 @@ export async function handleAiGeneration(ctx) {
       studentOptions,
     });
     assertGenerationPreflight({
-      user: auth.rawUser, orgId: auth.user.orgId, context, modality, projectId: project.id, boxId: box?.id || '', model: provider.model,
+      user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id, boxId: box?.id || '', model: provider.model,
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
@@ -911,7 +914,7 @@ export async function handleAiGeneration(ctx) {
   }
   const cancelMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)\/cancel$/);
   if (cancelMatch && method === 'POST') {
-    const jobId = decodeURIComponent(cancelMatch[1]); const job = row('SELECT * FROM generation_jobs WHERE id=? AND user_id=? AND org_id=?', [jobId, auth.user.id, auth.user.orgId]);
+    const jobId = decodeURIComponent(cancelMatch[1]); const job = row('SELECT * FROM generation_jobs WHERE id=? AND user_id=? AND org_id=?', [jobId, auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
     if (!job) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
     if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);

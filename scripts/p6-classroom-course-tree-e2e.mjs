@@ -39,6 +39,12 @@ const port = 18867;
 
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
+// 此守卫覆盖两种已发布入口，种子课时只开放画布。
+{
+  const db = new DatabaseSync(dbPath);
+  db.prepare(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`).run();
+  db.close();
+}
 
 // Keep one published platform course outside the class curriculum so the
 // dashboard must prove that visible does not mean classroom-ready.

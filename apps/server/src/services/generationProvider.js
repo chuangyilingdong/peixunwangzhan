@@ -2,7 +2,7 @@ import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_K
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
-import { id, json, nowIso, q } from '../lib.js';
+import { id, json, nowIso, q, row } from '../lib.js';
 import { priceFenFor } from './computePool.js';
 
 function svgDataUrl(title, subtitle, hue) {
@@ -110,7 +110,7 @@ export function getGenerationProvider(selection = {}) {
   const wrapper = { ...primary, compute: null };
   const execute = async (method, args = {}) => {
     const modality = args.modality || 'TEXT';
-    const snapshot = selection.saleSnapshot || { model: primary.model, modality, unitFen: priceFenFor({ modality, model: primary.model }), capturedAt: nowIso(), basis: 'PER_CALL' };
+    const snapshot = { model: primary.model, modality, unitFen: 0, charged: false, capturedAt: nowIso(), basis: 'USER_INCLUDED_COMPUTE' };
     const callId = id('call');
     wrapper.compute = { callId, saleSnapshot: snapshot };
     // Gateway owns its routing. Never bypass a student's gateway quota with a direct fallback.
@@ -119,9 +119,13 @@ export function getGenerationProvider(selection = {}) {
       const selected = candidates[index]; const provider = index ? rawGenerationProvider(selected) : primary;
       const attemptId = id('attempt'); let emitted = false; let submitted = false;
       const context = args.computeContext || selection.computeContext || {};
+      const project = args.projectId ? row('SELECT org_id,class_session_id,course_lesson_id FROM student_projects WHERE id=?',[args.projectId]) : null;
+      const sessionId = context.sessionId || project?.class_session_id || null;
+      const session = sessionId ? row('SELECT org_id,lesson_id FROM class_sessions WHERE id=?',[sessionId]) : null;
       const estimate = selected.estimatedCostFen;
       q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [attemptId,callId,index+1,context.orgId || null,context.userId || args.userId || null,args.projectId || null,context.jobId || null,modality,selected.channelId || 'default',provider.name,provider.model,selected.gateway ? 'gateway' : 'direct','RUNNING',json(snapshot),nowIso()]);
+      q('UPDATE compute_attempts SET org_id=?,class_session_id=?,lesson_id=? WHERE id=?',[session?.org_id || context.orgId || project?.org_id || null,sessionId,session?.lesson_id || context.lessonId || project?.course_lesson_id || null,attemptId]);
       const output = (callback) => (...values) => { if (values[0]) { emitted = true; q('UPDATE compute_attempts SET output_started=1 WHERE id=?',[attemptId]); } return callback?.(...values); };
       try {
         const result = await provider[method]({ ...args,

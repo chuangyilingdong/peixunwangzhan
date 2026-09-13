@@ -446,8 +446,14 @@ export async function handleStudent(ctx) {
   }
   if (part === '/projects' && method === 'POST') {
     const courseLessonId = nonEmptyString(ctx.body?.courseLessonId, '课时', { max: 100 });
-    const lessonContext = resolveStudentLessonContext(auth.rawUser, courseLessonId, ctx.body?.classId || null);
+    const lessonContext = resolveStudentLessonContext(auth.rawUser, courseLessonId, ctx.body?.sessionId || null);
     if (!lessonContext.canUseNow) throw errors.forbidden(lessonContext.blockReason, lessonContext.blockCode);
+    const existing = row("SELECT id FROM student_projects WHERE student_id=? AND org_id=? AND course_lesson_id=? AND class_session_id=? AND status='DRAFT' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1", [auth.user.id, auth.user.orgId, courseLessonId, lessonContext.session.id]);
+    if (existing) {
+      const project = normalizeProject(fetchProject(ctx, existing.id), { includeSnapshot: true });
+      project.computePool = computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
+      return project;
+    }
     const now = nowIso();
     const projectId = id('project');
     const title = ctx.body?.title === undefined || String(ctx.body.title).trim() === ''

@@ -4,7 +4,7 @@
 // 学员六态：不在任何行 = 未加入任何课堂 … PENDING 待上课 / ACTIVE 上课中 /
 //           COMPLETED 已完课 / INCOMPLETE 未完课 / REMOVED 被移除
 //
-// 完课判定 = 这个学生在这节课**消耗过算力**（成功调用且 cost_fen > 0）。
+// 完课判定 = 这个学生在这节课**消耗过算力**（真实成功调用，不依赖费用是否已知或大于零）。
 // 这里有三个规则是用户逐条定的，改动前请先看注释：
 //   ① 已完课的学员**不能再被加到同一节课**（但可以上同课包的其他课时）；
 //   ② 未结束的参与（待上课/上课中）也不允许被别的课堂同时占用；
@@ -29,7 +29,7 @@ export function sessionScope(alias, auth, params) {
   return ` AND ${alias}.teacher_id=?`;
 }
 
-/** 这个学生在这节课上花过多少钱（分）——完课判定的唯一依据。 */
+/** 这个学生在这节课上花过多少钱（分）——仅用于展示金额。 */
 export function lessonCostFenFor({ studentId, sessionId }) {
   return Number(row(
     `SELECT COALESCE(SUM(cost_fen), 0) fen FROM usage_records
@@ -79,7 +79,7 @@ const SESSION_STATE_LABELS = { PENDING: '待上课', ACTIVE: '上课中', ENDED:
  */
 export function sessionCandidates(session) {
   const students = rows(
-    `SELECT student.id, student.login, student.display_name, student.status
+    `SELECT student.id, student.login, student.display_name, student.status, student.expires_at
       FROM users student
       WHERE student.org_id=? AND student.role='STUDENT' AND student.deleted_at IS NULL
       ORDER BY student.display_name, student.login`,
@@ -105,6 +105,8 @@ export function sessionCandidates(session) {
       [session.id, student.id],
     );
     if (own) { alreadyIn.push({ ...base, studentState: own.status }); continue; }
+    if (student.status !== 'ACTIVE') { blocked.push({ ...base, reason: 'STUDENT_DISABLED', reasonText: '学员账号已停用' }); continue; }
+    if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { blocked.push({ ...base, reason: 'STUDENT_EXPIRED', reasonText: '学员账号已到期' }); continue; }
     if (!granted.has(student.id)) { blocked.push({ ...base, reason: 'NO_GRANT', reasonText: '没有这个课包的许可（到「学员许可」分给 ta）' }); continue; }
     const occupied = activeParticipationFor({ studentId: student.id, lessonId: session.lesson_id });
     if (occupied) {
@@ -146,12 +148,16 @@ function candidatePool(studentId, seriesId, seriesTitle) {
  * 幂等：只结算还在 PENDING/ACTIVE 的行；已结算的行不动（重复点「结束」不会重算）。
  */
 export function settleSessionStudents({ sessionId, actorId }) {
-  const parts = rows("SELECT * FROM session_students WHERE session_id=? AND status IN ('PENDING','ACTIVE')", [sessionId]);
+  const session = row('SELECT status FROM class_sessions WHERE id=?', [sessionId]);
+  if (!session || !['ACTIVE', 'ENDED'].includes(session.status)) return { completed: 0, incomplete: 0 };
+  const parts = rows("SELECT * FROM session_students WHERE session_id=? AND (status IN ('PENDING','ACTIVE') OR (status='INCOMPLETE' AND ?='ENDED'))", [sessionId, session.status]);
   const now = nowIso();
   const summary = { completed: 0, incomplete: 0 };
   for (const part of parts) {
     const costFen = lessonCostFenFor({ studentId: part.student_id, sessionId });
-    const status = costFen > 0 ? 'COMPLETED' : 'INCOMPLETE';
+    const used = row("SELECT id FROM usage_records WHERE class_session_id=? AND user_id=? AND org_id=? AND status='SUCCESS' AND UPPER(model) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%' LIMIT 1", [sessionId, part.student_id, part.org_id]);
+    if (part.status === 'INCOMPLETE' && !used) continue;
+    const status = used ? 'COMPLETED' : 'INCOMPLETE';
     q('UPDATE session_students SET status=?, completed_at=?, completed_cost_fen=?, updated_at=? WHERE id=?',
       [status, now, costFen, now, part.id]);
     if (status === 'COMPLETED') summary.completed += 1; else summary.incomplete += 1;
@@ -170,6 +176,8 @@ export function addSessionStudents({ session, studentIds, actorId }) {
     for (const studentId of studentIds) {
       const student = row("SELECT * FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, session.org_id]);
       if (!student) { skipped.push({ studentId, reason: 'STUDENT_NOT_FOUND' }); continue; }
+      if (student.status !== 'ACTIVE') { skipped.push({ studentId, reason: 'STUDENT_DISABLED' }); continue; }
+      if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { skipped.push({ studentId, reason: 'STUDENT_EXPIRED' }); continue; }
       const own = row("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status<>'REMOVED'", [session.id, studentId]);
       if (own) { skipped.push({ studentId, reason: 'ALREADY_IN' }); continue; }
       const granted = row('SELECT id FROM student_course_grants WHERE org_id=? AND series_id=? AND student_id=? AND revoked_at IS NULL', [session.org_id, session.series_id, studentId]);

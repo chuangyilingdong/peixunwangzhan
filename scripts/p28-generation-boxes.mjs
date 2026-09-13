@@ -101,8 +101,6 @@ const BOX_IDS = ['box-image-vertical', 'box-image-wide', 'box-video-short', 'box
 try {
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* not up yet */ }
-  // 批次 B：门禁要求「许可 + 课堂名单」，先把这个学生放进一个进行中的课堂
-  ensureClassroom(dbPath);
     await sleep(100);
   }
 
@@ -114,10 +112,13 @@ try {
   const { DatabaseSync } = await import('node:sqlite');
   const seedDb = new DatabaseSync(dbPath);
   const seedDb2 = seedDb;
-  const lesson = seedDb.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
-  assert.ok(lesson?.id, '种子数据应至少有一个课时');
+  seedDb.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ provider: 'local-mock', channels: [{ id: 'p28-video', provider: 'local-mock', model: 'hailuo-h3-i2v', models: ['hailuo-h3-i2v'] }], modalityChannels: { VIDEO: 'p28-video' } }));
+  const lesson = seedDb.prepare("SELECT lesson.id, lesson.series_id FROM course_lessons lesson JOIN student_course_grants grant ON grant.series_id=lesson.series_id JOIN users student ON student.id=grant.student_id WHERE student.login='student-2' AND grant.revoked_at IS NULL AND lesson.status='PUBLISHED' ORDER BY lesson.sort LIMIT 1").get();
+  assert.ok(lesson?.id, '学生应持有目标课包许可');
 
-  // 预置素材要能被解析成上游可抓的公开地址，所以库里得真有这条公开文件
+  // 本用例只发布一个目标课时；其余种子课时未配置发布能力，不参与本次快照。
+  seedDb.prepare("UPDATE course_lessons SET status='ARCHIVED' WHERE series_id=? AND id<>?").run(lesson.series_id, lesson.id);
+  // 预置素材需要真实的公开文件记录，才能解析为上游可抓取地址。
   seedDb2.prepare("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('asset-seed','PLATFORM','INTERNAL_PROXY','seed.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)").run(new Date().toISOString(), new Date().toISOString());
 
   // 1) 管理端保存：框体作为素材一起提交，顺序原样保留
@@ -156,6 +157,11 @@ try {
   const againLesson = againSave.data.lessons.find((item) => item.id === lesson.id);
   assert.deepEqual(againLesson.materialGroups[0].materials.map((material) => material.id), savedMaterialIds, '二次保存后素材 id 不应变化');
   assert.deepEqual(againLesson.generationBoxes.map((box) => box.id), savedBoxIds, '二次保存后框体 id 不应变化');
+
+  seedDb.prepare("UPDATE course_series SET cover_image_url='https://example.com/p28.png' WHERE id=?").run(lesson.series_id);
+  const published = await api(`/api/admin/course-series/${lesson.series_id}/versions`, { method: 'POST', token: rootToken, body: { version: 'p28.1' } });
+  assert.equal(published.status, 200, JSON.stringify(published.data));
+  ensureClassroom(dbPath);
 
   // 4) 学生项目按素材顺序下发框体（含预填提示词与预置素材）
   const project = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lesson.id, title: 'P28 框体即素材' } });

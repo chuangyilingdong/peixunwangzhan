@@ -129,8 +129,8 @@ function ensureOrganization(now) {
     q(
       `INSERT INTO organizations(
         id,name,status,contract_start_at,contract_expires_at,is_trial,
-        base_teacher_seats,purchased_teacher_seats,contact,created_by,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         orgId,
         '示例创新学校',
@@ -140,7 +140,8 @@ function ensureOrganization(now) {
         0,
         3,
         2,
-        json({ contact: '张校长', phone: '13800000000', email: 'demo@example.edu.cn' }),
+        30,
+        json({ name: '张校长', phone: '13800000000', email: 'demo@example.edu.cn' }),
         null,
         now,
         now,
@@ -204,9 +205,9 @@ function ensureCourse(now) {
   if (!series) {
     const seriesId = id('series');
     q(
-      `INSERT INTO course_series(id,title,description,owner_type,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [seriesId, 'AI古诗词创意营', '5 课时古诗情景动画与创意表达课程', 'PLATFORM', 'ALL_ORGS', '1.0', 1, 'PUBLISHED', 3, 8, 16, JSON.stringify(['语文', '创意', '古诗词', '动画']), now, now],
+      `INSERT INTO course_series(id,title,description,owner_type,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,stock_total,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [seriesId, 'AI古诗词创意营', '5 课时古诗情景动画与创意表达课程', 'PLATFORM', 'ALL_ORGS', '1.0', 1, 'PUBLISHED', 3, 8, 16, JSON.stringify(['语文', '创意', '古诗词', '动画']), 30, now, now],
     );
     series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
   } else {
@@ -305,22 +306,18 @@ export function seedDatabase() {
     }, now);
 
     const course = ensureCourse(now);
-    const assignment = row(`SELECT id FROM course_assignments WHERE series_id=? AND org_id=?`, [course.series.id, organization.id]);
+    const assignment = row('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [course.series.id, organization.id]);
+    // 新演示授权显式给出有限额度；重复 seed 不重置现有额度或恢复已撤销许可。
     if (!assignment) {
-      q(`INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at) VALUES (?,?,?,?,?,?)`, [id('assignment'), course.series.id, organization.id, 'ACTIVE', null, now]);
-    } else {
-      q(`UPDATE course_assignments SET status='ACTIVE' WHERE id=?`, [assignment.id]);
+      const assignmentId = id('assignment');
+      const students = [student1, student2];
+      q(`INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,quota_total,quota_used)
+         VALUES (?,?,?,?,?,?,?,?)`, [assignmentId, course.series.id, organization.id, 'ACTIVE', null, now, 30, students.length]);
+      students.forEach((student) => {
+        q(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at)
+           VALUES (?,?,?,?,?,?,?)`, [id('coursegrant'), organization.id, student.id, course.series.id, assignmentId, null, now]);
+      });
     }
-    // 完整链路要走到最后一步：平台授权给机构 → **机构把课包分给学员**。
-    // 少了这一步，学员就「有课单、有机构授权，但没有许可」，按叠加口径进不了课
-    // （2026-09-13 补的门禁：学生进课要求有效学员许可）。
-    const assignmentId = row('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [course.series.id, organization.id])?.id || null;
-    [student1, student2].forEach((student) => {
-      const existing = row('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [organization.id, student.id, course.series.id]);
-      if (existing) q('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, null, assignmentId, existing.id]);
-      else q(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at)
-              VALUES (?,?,?,?,?,?,?)`, [id('coursegrant'), organization.id, student.id, course.series.id, assignmentId, null, now]);
-    });
     ensureClass({ orgId: organization.id, teacherId: teacher1.id, students: [student1, student2], ...course }, now);
     return { organizationId: organization.id, courseSeriesId: course.series.id };
   });

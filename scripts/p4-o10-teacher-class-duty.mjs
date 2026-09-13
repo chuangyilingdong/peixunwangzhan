@@ -52,7 +52,7 @@ try {
   check('机构管理员可创建无额外权限教师', createdTeacher.status === 200 && createdTeacher.body.data?.permissions?.length === 0);
   const dutyTeacher = await login('teacher-duty-test', 'teach123');
   const roster = await request(dutyTeacher, '/org/users?role=STUDENT');
-  check('教师可读取本机构学生名册', roster.status === 200 && roster.body.data?.items?.some((item) => item.login === 'student-1'));
+  check('教师不能读取机构成员名册', roster.status === 403 && roster.body.error?.code === 'ORG_ADMIN_REQUIRED');
   const courses = await request(dutyTeacher, '/org/course-series');
   const lesson = courses.body.data.items[0].lessons[0];
   // 批次 D（班级退场）：这一组「教师职责」从**班级**搬到**课堂** ——
@@ -60,7 +60,9 @@ try {
   const createdClass = await request(dutyTeacher, '/org/sessions', { method: 'POST', body: JSON.stringify({ lessonId: lesson.id, title: '教师职责测试课堂' }) });
   check('教师可创建课堂（挂在自己名下）', createdClass.status === 200 && Boolean(createdClass.body.data?.teacherId), JSON.stringify(createdClass.body.data).slice(0, 160));
   const classId = createdClass.body.data.id;
-  const added = await request(dutyTeacher, `/org/sessions/${classId}/students`, { method: 'POST', body: JSON.stringify({ studentIds: [roster.body.data.items.find((item) => item.login === 'student-1').id] }) });
+  const candidates = await request(dutyTeacher, `/org/sessions/${classId}/candidates`);
+  check('教师可读取自己课堂的可加学员', candidates.status === 200 && candidates.body.data?.selectable?.some((item) => item.login === 'student-1'));
+  const added = await request(dutyTeacher, `/org/sessions/${classId}/students`, { method: 'POST', body: JSON.stringify({ studentIds: [candidates.body.data.selectable.find((item) => item.login === 'student-1').id] }) });
   check('教师可把本机构学生加进自己的课堂', added.status === 200 && (added.body.data?.added || []).length === 1, JSON.stringify(added.body.data).slice(0, 160));
   const started = await request(dutyTeacher, `/org/sessions/${classId}/start`, { method: 'POST', body: '{}' });
   check('教师可开始自己的课堂（名单非空）', started.status === 200, `${started.status} ${JSON.stringify(started.body.data || {}).slice(0, 120)}`);

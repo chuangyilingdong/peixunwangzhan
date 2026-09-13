@@ -13,9 +13,9 @@
 //   ① 有许可 ≠ 能进操作环境：许可只代表能看课包信息，**必须被老师加进课堂**才能上课。
 //   ② 一个学生在一节课上只能属于一个未结束的课堂 —— 不可加名单会写出「占用它的是哪个课堂」。
 //   ③ 移除学员**只在开始上课前**；移除＝解锁（可以被别的课堂再添加）。
-//   ④ 完课判定＝这个学生在这节课消耗过算力（成功调用且花钱 > 0），结束课堂时自动结算。
+//   ④ 完课判定＝这个学生在这节课消耗过算力（真实成功调用，不依赖金额），结束课堂时自动结算。
 //   ⑤ 课堂自带入口类型：画布课堂 / VibeCoding 课堂，一个课堂只有一种。
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Empty, ErrorState, Loading, MetricCard, Notice, PageHeader, Panel, formatDate, formatYuan, useData } from '@platform/shared';
 
 const SESSION_STATE = {
@@ -41,14 +41,19 @@ function StateBadge({ value, map }) {
 }
 
 function Modal({ title, description, children, onClose, footer }) {
-  return <div className="modal-backdrop" role="dialog" aria-modal="true">
-    <section className="modal">
-      <h3>{title}</h3>
+  const ref = useRef(null);
+  const titleId = useId();
+  useEffect(() => {
+    const previous = document.activeElement;
+    ref.current?.showModal();
+    return () => { ref.current?.close(); previous?.focus?.(); };
+  }, []);
+  return <dialog ref={ref} className="classroom-dialog" aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); onClose(); }} style={{ width: 'min(620px, 92vw)', maxHeight: '88vh', overflow: 'auto', border: '1px solid #d7dfeb', borderRadius: 16, padding: 28 }}>
+      <h3 id={titleId}>{title}</h3>
       {description ? <p className="muted">{description}</p> : null}
       {children}
-      <div className="row-actions">{footer}</div>
-    </section>
-  </div>;
+      <div className="row-actions top-gap">{footer}</div>
+  </dialog>;
 }
 
 export function Classrooms({ api, user }) {
@@ -70,6 +75,7 @@ export function Classrooms({ api, user }) {
   query.set('days', days);
   const list = useData(() => api.get('org/sessions?' + query.toString()), [api, status, days]);
   const sessions = list.data?.items || [];
+  const ongoingSession = !isAdmin ? list.data?.ongoingSession : null;
 
   // 详情与候选人都挂在选中的课堂上；用 list.data 做依赖，列表刷新后详情跟着刷新
   const detail = useData(
@@ -158,21 +164,22 @@ export function Classrooms({ api, user }) {
           <option value="ENDED">已结束</option><option value="DISSOLVED">已解散</option>
         </select>
         <button className="secondary-button" onClick={list.refresh}>刷新</button>
-        <button className="primary-button" onClick={() => { setCreateOpen(true); setMessage(''); setError(''); }}>创建课堂</button>
+        <button className="primary-button" disabled={busy || list.loading || Boolean(ongoingSession)} title={ongoingSession ? '请先结束或解散当前课堂' : ''} onClick={() => { setCreateOpen(true); setMessage(''); setError(''); }}>创建课堂</button>
       </>}
     />
 
+    {ongoingSession ? <Notice tone="info">当前课堂：<strong>{ongoingSession.title}</strong> · {SESSION_STATE[ongoingSession.status]?.label}。结束或解散后可创建下一场。<button className="text-button" onClick={() => { setOpenId(ongoingSession.id); setPicked([]); }}>管理当前课堂</button></Notice> : null}
     {message ? <Notice tone="success">{message}</Notice> : null}
     {error ? <Notice tone="danger">{error}</Notice> : null}
 
-    <div className="metrics">
+    {!openId ? <div className="metrics">
       <MetricCard label="待上课" value={totals.pending} hint="还没开始，可以加/移除学员" tone="orange" />
       <MetricCard label="上课中" value={totals.active} hint="学员现在能进操作环境" tone="teal" />
       <MetricCard label="已结束" value={totals.ended} hint={`近 ${days} 天内`} />
       <MetricCard label="已解散" value={totals.dissolved} hint={`近 ${days} 天内`} tone="pink" />
-    </div>
+    </div> : null}
 
-    <Panel title={`课堂列表（近 ${days} 天）`} actions={
+    {!openId ? <Panel title={`课堂列表（近 ${days} 天）`} actions={
       <select value={days} onChange={(event) => setDays(event.target.value)} aria-label="时间范围">
         <option value="7">近 7 天</option><option value="30">近 30 天</option>
         <option value="90">近 90 天</option><option value="365">近 365 天</option>
@@ -190,7 +197,7 @@ export function Classrooms({ api, user }) {
           <td><button type="button" className="text-button" onClick={() => { setOpenId(item.id); setPicked([]); setMessage(''); setError(''); }}>{openId === item.id ? '收起' : '管理'}</button></td>
         </tr>)}</tbody>
       </table></div> : <Empty title="还没有课堂" body="点右上角「创建课堂」：选课包、选第几节课，然后添加学员。" />}
-    </Panel>
+    </Panel> : null}
 
     {openId ? <Panel title={`${current?.title || '课堂'} · 名单与操作`} actions={
       <div className="row-actions">
@@ -200,7 +207,7 @@ export function Classrooms({ api, user }) {
           <button className="secondary-button" disabled={busy} onClick={() => setConfirm({ kind: 'dissolve' })}>解散课堂</button>
         </> : null}
         {current?.status === 'ACTIVE' ? <button className="primary-button" disabled={busy} onClick={() => setConfirm({ kind: 'end' })}>结束课堂</button> : null}
-        <button className="text-button" onClick={() => setOpenId('')}>关闭</button>
+        <button className="secondary-button" onClick={() => setOpenId('')}>返回课堂列表</button>
       </div>
     }>
       {detail.loading ? <Loading label="正在读取课堂详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : <>
@@ -212,9 +219,16 @@ export function Classrooms({ api, user }) {
         </div>
         {current?.status === 'PENDING' && !canStart ? <Notice tone="warning">名单还是空的：<strong>先添加学员再开始上课</strong>。「开始上课」按钮在名单为空时是灰的，服务端也会拒（名单为空不能开课）。</Notice> : null}
         {current?.status === 'ACTIVE' ? <Notice tone="info">课堂进行中：学员现在能进操作环境。<strong>移除学员只在开始上课前</strong>可用（开始后就不动了，免得把已经创作到一半的人踢掉）。</Notice> : null}
-        {current?.status === 'ENDED' ? <Notice tone="info">课堂已结束。完课判定＝这个学生在这节课<strong>消耗过算力</strong>（成功调用且花钱 &gt; 0）；没花过钱的算未完课，可以重新排进别的课堂再上。</Notice> : null}
+        {current?.status === 'ENDED' ? <Notice tone="info">课堂已结束。完课判定＝这个学生在这节课<strong>消耗过算力</strong>（真实成功调用，费用为零或尚未确定也计入）；没有成功调用的算未完课。在途调用成功后会补记完课。</Notice> : null}
         {current?.status === 'DISSOLVED' ? <Notice tone="warning">课堂已解散，名单上的学员都已置为「被移除」（= 解锁，可以被别的课堂再添加）。</Notice> : null}
 
+        <nav aria-label="课堂步骤" className="row-actions top-gap">
+          <span className="status success">1 · 课堂已创建</span>
+          <span className={'status ' + (summary.total ? 'success' : 'warning')}>2 · 添加学员</span>
+          <span className={'status ' + (current?.status === 'ACTIVE' ? 'success' : '')}>3 · 开始上课</span>
+          <span className={'status ' + (current?.status === 'ENDED' ? 'success' : '')}>4 · 结束课堂</span>
+        </nav>
+        {current?.status === 'PENDING' ? <p className="muted">{summary.total ? '名单已就绪，确认学员后点击「开始上课」。' : '下一步：在下方可添加名单勾选学员，点击「加入课堂」。'}</p> : null}
         <h3>名单（{summary.total ?? 0} 人 · 完课 {summary.completed ?? 0} · 未完课 {summary.incomplete ?? 0} · 被移除 {summary.removed ?? 0}）</h3>
         {roster.length ? <div className="table-wrap"><table>
           <thead><tr><th>学员</th><th>账号</th><th>状态</th><th>这节课消耗</th><th>加入</th><th /></tr></thead>
@@ -266,9 +280,9 @@ export function Classrooms({ api, user }) {
     {createOpen ? <Modal
       title="创建课堂"
       description="选课包 → 选第几节课。创建后是「待上课」，加完学员再点「开始上课」。"
-      onClose={() => setCreateOpen(false)}
+      onClose={() => { if (!busy) setCreateOpen(false); }}
       footer={<>
-        <button className="secondary-button" onClick={() => setCreateOpen(false)}>取消</button>
+        <button className="secondary-button" disabled={busy} onClick={() => setCreateOpen(false)}>取消</button>
         <button className="primary-button" disabled={busy || !form.lessonId} onClick={createSession}>创建课堂</button>
       </>}
     >
@@ -286,9 +300,8 @@ export function Classrooms({ api, user }) {
         {lessonOptions.map((lesson) => <option key={lesson.id} value={lesson.id}>第 {lesson.sort} 节 · {lesson.title}</option>)}
       </select></label>
       {form.seriesId && !series.loading && !lessonOptions.length ? <Notice tone="warning">这个课包还没有已发布的课时，不能开课。</Notice> : null}
-      <label>入口类型<select value={form.deliveryMode} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}>
-        <option value="CANVAS">画布课堂</option>
-        <option value="VIBECODING">VibeCoding 课堂</option>
+      <label>入口类型<select value={form.deliveryMode} disabled={!form.lessonId} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}>
+        {(lessonOptions.find((lesson) => lesson.id === form.lessonId)?.deliveryModes || []).map((mode) => <option key={mode} value={mode}>{DELIVERY_LABEL[mode]}</option>)}
       </select></label>
       <p className="muted">一个课堂只有一种入口类型：画布课堂进画布，VibeCoding 课堂进 VibeCoding 工作区。</p>
       {isAdmin ? <label>负责老师<select value={form.teacherId} onChange={(event) => setForm({ ...form, teacherId: event.target.value })}>
@@ -296,7 +309,7 @@ export function Classrooms({ api, user }) {
         {teacherItems.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.displayName || teacher.login}</option>)}
       </select></label> : null}
       <label>课堂名称（可留空）<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="留空就自动取「课时名 · 日期」" /></label>
-      {!isAdmin ? <p className="muted">教师创建的课堂挂在你名下；你只能看到并管理自己创建的课堂。</p> : <p className="muted">你是机构管理员，可以看到并管理本机构的全部课堂。</p>}
+      {!isAdmin ? <p className="muted">教师同一时刻只能有一个待上课或上课中的课堂；请先结束或解散当前课堂再创建。</p> : <p className="muted">你是机构管理员，可以看到并管理本机构的全部课堂。</p>}
     </Modal> : null}
 
     {confirm ? <Modal
@@ -304,9 +317,9 @@ export function Classrooms({ api, user }) {
       description={confirm.kind === 'start'
         ? `开始后名单上的 ${summary.pending ?? 0} 名学员立刻可以进操作环境。开始之后就不能再移除学员了。`
         : confirm.kind === 'end'
-          ? '结束时会按「这节课有没有消耗过算力」给每个学员结算成已完课 / 未完课，结算后不能再改。'
+          ? '结束时会按「这节课有没有消耗过算力」给每个学员结算成已完课 / 未完课，在途调用成功后会补记完课，不必重复提交。'
           : '解散只适用于还没开始的课堂：名单上的学员会全部置为「被移除」（= 解锁，可以被别的课堂再添加）。'}
-      onClose={() => setConfirm(null)}
+      onClose={() => { if (!busy) setConfirm(null); }}
       footer={<>
         <button className="secondary-button" onClick={() => setConfirm(null)}>取消</button>
         <button className={confirm.kind === 'dissolve' ? 'secondary-button' : 'primary-button'} disabled={busy} onClick={() => actAndClose(confirm.kind)}>

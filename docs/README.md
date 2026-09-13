@@ -25,8 +25,7 @@
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch main
 生产：release 20260913T101458Z / commit cefd73a（服务 learning-platform-production @127.0.0.1:8789）
-账号：平台 root/liuyuchi123　机构 org-admin/OrgTest@2026!
-      教师 teacher-1/TeacherTest@2026!　学生 student-1/StudentTest@2026!
+账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 单价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元**每次**（真实售价，含毛利）
 数据：3 个课包（含 2 个演示课包）+ 9 个课堂 + 5 条学员许可 + 2 件学生作品
 ```
@@ -45,14 +44,12 @@
 3. **课堂四态**：待上课 PENDING / 上课中 ACTIVE / 已结束 ENDED / 已解散 DISSOLVED。
    一个课堂带**一种**入口类型（画布 或 VibeCoding）；**一个学生在一节课上只能属于一个未结束的课堂**。
 4. **学员六态**：未加入任何课堂 / 待上课 / 上课中 / 已完课 / 未完课 / 被移除。
-5. **完课判定 = 这个学生在这节课消耗过算力**（成功调用且 `cost_fen > 0`）——**不是**「交过作品」。
-   没花过钱的算**未完课**，可以重新排进课堂再上；已完课不能再被排进同一节课。
-6. **额度只走算力池**（`services/computePool.js`，学生 × 课包、四种模态共用一个上限）；
-   **积分系统已整体删除**。课包留空预算 = 不限制，只记账。
-7. **教师只看得到自己创建的课堂**（课包库全机构可见）；机构管理员看全机构。
-   这条是**安全相关**的：改数据范围之前先跑 `scripts/p69-teacher-data-scope.mjs`。
-8. **班级那三张表是历史表**（`classes` / `class_members` / `class_curriculum_items`）：
-   保留数据与 DDL，**不再被读写**。旧 `/api/org/classes/*` 已全部下线。
+5. **真实 SUCCESS 才算完课**：完课判定看该学生在本课堂是否存在真实成功的 AI 调用（`status=SUCCESS`），不依赖金额；失败、预检拦截、未知结果都不算。已完课不能再被排进同一节课；学生重进同一课堂必须幂等。
+6. **课包发布必须形成七字段版本快照**；机构授权与库存按课包版本约束。机构库存是有限次数，学生容量由机构字段控制；教师只能管理自己创建的课堂，单教师对应单课堂职责。
+7. **额度只走算力池**（`services/computePool.js`，学生 × 课包、四种模态共用一个上限）；**积分系统已整体删除**。课包留空预算 = 不限制，只记账。每课堂预算只做软预警，不阻断生成。
+8. **成本必须区分来源**：ESTIMATED、REPORTED、UNKNOWN、MOCK 各自保留语义；旧数据没有成本证据时保持 UNKNOWN，不能猜成本，也不能把金额当作真实 SUCCESS 的前提。
+9. **教师只看得到自己创建的课堂**（课包库全机构可见）；机构管理员看全机构。这条是安全相关的：改数据范围之前先跑 `scripts/p69-teacher-data-scope.mjs`。
+10. **班级那三张表是历史表**（`classes` / `class_members` / `class_curriculum_items`）：保留数据与 DDL，不再被读写。旧 `/api/org/classes/*` 已全部下线。
 
 ## 四、代码地图（详见 `docs/architecture/代码结构与路由.md`）
 
@@ -79,7 +76,7 @@ PLATFORM_DATA_DIR=.tmp/x PLATFORM_DB_PATH=.tmp/x/platform.db PORT=18888 node app
 **改完必跑**（守卫是这份代码的「别踩这里」）：
 
 ```bash
-node .tmp/smoke-run.mjs                    # 全量 85 个守卫（别用 bash 的 timeout，Windows 上杀不掉子进程）
+node .tmp/smoke-run.mjs                    # 全量 90 个守卫（76-80 为本轮新增）
 node scripts/p70-pages-render.mjs          # 三端页面真渲染 —— 改前端之后必跑（能拦白屏）
 node scripts/p66-student-grant-gate.mjs    # 进课三层门禁
 node scripts/p69-teacher-data-scope.mjs    # 教师数据范围（安全相关改动）
