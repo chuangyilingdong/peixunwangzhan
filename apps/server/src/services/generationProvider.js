@@ -111,7 +111,10 @@ export function getGenerationProvider(selection = {}) {
   const wrapper = { ...primary, compute: null };
   const execute = async (method, args = {}) => {
     const modality = args.modality || 'TEXT';
-    const snapshot = { model: primary.model, modality, unitFen: 0, charged: false, capturedAt: nowIso(), basis: 'USER_INCLUDED_COMPUTE' };
+    // 对外售价观测：unitFen 按「当前公告价」折算，仅用于观测与对账，**不代表学生被扣费**
+    // （charged 恒 false，学生账本 usage_records.cost_fen/credits_charged 恒 0）。baseline 明确标注观测口径。
+    const salePriceFen = priceFenFor({ modality, model: primary.model });
+    const snapshot = { model: primary.model, modality, unitFen: salePriceFen, charged: false, baseline: 'OBSERVATION_ONLY', capturedAt: nowIso(), basis: 'OBSERVATION_ONLY' };
     const callId = id('call');
     wrapper.compute = { callId, saleSnapshot: snapshot };
     // Gateway owns its routing. Never bypass a student's gateway quota with a direct fallback.
@@ -124,6 +127,8 @@ export function getGenerationProvider(selection = {}) {
       const sessionId = context.sessionId || project?.class_session_id || null;
       const session = sessionId ? row('SELECT org_id,lesson_id FROM class_sessions WHERE id=?',[sessionId]) : null;
       const estimate = selected.estimatedCostFen;
+      // 观测价按本次实际路由到的模型折算（主/备不同模型价可能不同），只观测、不扣学生。
+      const attemptSalePriceFen = priceFenFor({ modality, model: provider.model });
       const costRuleSnapshot = {
         basis: estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)) ? 'CONFIGURED_ESTIMATE' : 'UPSTREAM_REPORTED_OR_UNKNOWN',
         provider: provider.name,
@@ -132,8 +137,8 @@ export function getGenerationProvider(selection = {}) {
         estimatedCostFen: estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)) ? Number(estimate) : null,
         capturedAt: nowIso(),
       };
-      q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,cost_rule_snapshot,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [attemptId,callId,index+1,context.orgId || null,context.userId || args.userId || null,args.projectId || null,context.jobId || null,modality,selected.channelId || 'default',provider.name,provider.model,selected.gateway ? 'gateway' : 'direct','RUNNING',clientRequestId,selected.gateway ? null : (selected.channelId || 'default'),selected.providerAccountRef || null,json(costRuleSnapshot),json(snapshot),nowIso()]);
+      q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,sale_price_fen,cost_rule_snapshot,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [attemptId,callId,index+1,context.orgId || null,context.userId || args.userId || null,args.projectId || null,context.jobId || null,modality,selected.channelId || 'default',provider.name,provider.model,selected.gateway ? 'gateway' : 'direct','RUNNING',clientRequestId,selected.gateway ? null : (selected.channelId || 'default'),selected.providerAccountRef || null,attemptSalePriceFen,json(costRuleSnapshot),json(snapshot),nowIso()]);
       q('UPDATE compute_attempts SET org_id=?,class_session_id=?,lesson_id=? WHERE id=?',[session?.org_id || context.orgId || project?.org_id || null,sessionId,session?.lesson_id || context.lessonId || project?.course_lesson_id || null,attemptId]);
       const output = (callback) => (...values) => { if (values[0]) { emitted = true; q('UPDATE compute_attempts SET output_started=1 WHERE id=?',[attemptId]); } return callback?.(...values); };
       try {

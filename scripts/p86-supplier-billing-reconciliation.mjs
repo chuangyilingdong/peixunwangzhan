@@ -119,6 +119,14 @@ const manyA = lines.find((line) => line.lineId === 'many-a');
 const manyB = lines.find((line) => line.lineId === 'many-b');
 manuallyMatchSupplierLine(manyA.id, [{ targetType: 'ATTEMPT', targetId: 'attempt-many', amountMinor: 60 }], { actorId, reason: 'many to one first' });
 assert.throws(() => manuallyMatchSupplierLine(manyB.id, [{ targetType: 'ATTEMPT', targetId: 'attempt-many', amountMinor: 50 }], { actorId, reason: 'many to one overflow' }), (error) => error.code === 'SUPPLIER_MATCH_TARGET_AMOUNT_EXCEEDED');
+// 上游成本未知（upstream_cost_fen 为 NULL）时绝不能把上限算成 0：
+// 那会让「没配估算成本」的调用永远核销不上供应商账单，而账单正是还原实际扣款的唯一依据。
+attempt('attempt-unknown-cost', 'req-unknown-cost', null);
+importSupplierCsv({ supplierAccountId: account.id, csv: canonicalSupplierCsv([make({ line_id: 'unknown-cost-line', invoice_id: 'inv-unknown-cost', amount_minor: '77', request_id: 'req-unknown-cost' })]) }, actorId);
+lines = listSupplierLines({ supplierAccountId: account.id }).items;
+const unknownCostLine = lines.find((line) => line.lineId === 'unknown-cost-line');
+assert.equal(unknownCostLine.reconciliationStatus, 'MATCHED');
+assert.equal(unknownCostLine.settledAmountMinor, 77);
 lines = listSupplierLines({ supplierAccountId: account.id }).items;
 assert.equal(lines.find((line) => line.lineId === 'foreign').comparisonStatus, 'UNKNOWN_CURRENCY');
 assert.equal(lines.find((line) => line.lineId === 'response').matches[0].identifierType, 'RESPONSE');

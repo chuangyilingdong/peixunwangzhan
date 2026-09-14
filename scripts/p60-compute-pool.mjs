@@ -89,7 +89,8 @@ try {
     Number(pricing0.data.pricing.perCall.TEXT) > 0 && Number(pricing0.data.pricing.perCall.VIDEO) > 0,
     JSON.stringify(pricing0.data.pricing.perCall));
   const pricing1 = await api('/api/admin/compute-pricing', { method: 'PUT', token: admin, body: { perCall: { TEXT: 60, IMAGE: 100, VIDEO: 500, MUSIC: 200 }, models: { 'p60-model': 60, 'p60-pricey-model': 250 } } });
-  check('停售接口拒绝新学生售价', pricing1.error?.code === 'STUDENT_PRICING_RETIRED', JSON.stringify(pricing1.error));
+  check('对外售价观测配置可保存（仅观测，不扣学生）', pricing1.status === 200 && Number(pricing1.data.pricing.models['p60-pricey-model']) === 250, JSON.stringify(pricing1).slice(0, 200));
+  check('观测配置读回一致（模型级覆盖）', Number(pricing1.data.pricing.perCall.TEXT) === 60 && Number(pricing1.data.pricing.models['p60-model']) === 60, JSON.stringify(pricing1.data.pricing));
 
   const courses = await api('/api/student/courses', { token: student });
   const items = courses.data?.items || courses.data?.courses || [];

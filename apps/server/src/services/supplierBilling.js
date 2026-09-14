@@ -195,7 +195,11 @@ function exactCandidates(line, account) {
 function targetCost(targetType, targetId) {
   const target = targetType === 'ATTEMPT' ? row('SELECT upstream_cost_fen amount FROM compute_attempts WHERE id=?', [targetId]) : targetType === 'USAGE' ? row('SELECT cost_fen amount FROM usage_records WHERE id=?', [targetId]) : null;
   if (!target) throw errors.notFound('内部核销目标不存在', 'SUPPLIER_MATCH_TARGET_NOT_FOUND');
-  const amount = Number(target.amount);
+  // ⚠️ 这里只把「真实存在的金额」当上限。上游成本未知（NULL/空）时**不能**经 Number(null)=0 变成上限 0 ——
+  // 那会让成本未知的调用永远匹配不上供应商账单，而这正是最需要靠账单还原实际扣款的场景。
+  const raw = target.amount;
+  if (raw === null || raw === undefined || raw === '') return { amountMinor: null, currency: 'CNY' };
+  const amount = Number(raw);
   return { amountMinor: Number.isSafeInteger(amount) && amount >= 0 ? amount : null, currency: 'CNY' };
 }
 

@@ -80,9 +80,71 @@ export function GatewayPanel({ api }) {
   </Panel>;
 }
 
-/* ─────────────── ② 每次调用单价 ─────────────── */
-export function PricingPanel() {
-  return <Panel title="用户包算力"><p>学生售价与积分限额已停用。上游估算成本在渠道配置中维护；课时平台预算是每场课堂的总预警基准，超额仍可调用。</p></Panel>;
+/* ─────────────── ② 对外售价（观测口径） ─────────────── */
+// 这里维护的是**对外价**：只用于记录「这次调用对外值多少」以便观测与对账。
+// 它不扣学生（学生账本恒 0）、不是上游成本；改价也不追溯已记录的售价。
+const PRICING_MODALITIES = [['TEXT', '对话'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']];
+
+export function PricingPanel({ api }) {
+  const pricing = useData(() => api.get('admin/compute-pricing'), [api]);
+  const policy = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
+  const [perCall, setPerCall] = useState({});
+  const [models, setModels] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    const value = pricing.data?.pricing;
+    if (!value) return;
+    setPerCall({ ...(value.perCall || {}) });
+    setModels({ ...(value.models || {}) });
+  }, [pricing.data]);
+
+  // 模型覆盖按渠道分组：渠道清单来自「渠道与模型配置」，未归属任何渠道的已定价模型单列一组。
+  const channels = policy.data?.policy?.channels || [];
+  const assigned = new Set(channels.flatMap((channel) => [...(channel.models || []), channel.model].filter(Boolean)));
+  const groups = [
+    ...channels.map((channel) => ({ id: channel.id, name: channel.name || channel.id, models: [...new Set([...(channel.models || []), channel.model].filter(Boolean))] })),
+    { id: '__unassigned__', name: '其他模型（未归属渠道）', models: Object.keys(models).filter((model) => !assigned.has(model)) },
+  ];
+  const setModelPrice = (model, raw) => setModels((current) => {
+    const next = { ...current };
+    if (raw === '') delete next[model]; else next[model] = Number(raw);
+    return next;
+  });
+
+  async function save() {
+    setBusy(true); setMessage('');
+    try {
+      // 空输入不提交（留空的模型回落到模态价）；只送非负整数分。
+      const clean = (map) => Object.fromEntries(Object.entries(map)
+        .filter(([, value]) => value !== '' && value !== null && Number.isFinite(Number(value)))
+        .map(([key, value]) => [key, Number(value)]));
+      await api.put('admin/compute-pricing', { perCall: clean(perCall), models: clean(models) });
+      setMessage('对外售价已保存。改价只影响之后的调用，不追溯已记录的售价，也不会补扣学生。');
+      pricing.refresh();
+    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+  }
+
+  return <Panel title="对外售价（观测口径）" actions={<button type="button" className="secondary-button" disabled={pricing.loading} onClick={() => { pricing.refresh(); policy.refresh(); }}>刷新</button>}>
+    {pricing.loading ? <Loading label="正在读取对外售价…" /> : pricing.error ? <ErrorState error={pricing.error} onRetry={pricing.refresh} /> : <>
+      <Notice tone="info">这里维护的是<b>对外价</b>：只用于记录「这次调用对外值多少」以便观测与对账，<b>不扣学生</b>，也<b>不是上游成本</b>。上游成本请在渠道配置 / 供应商账单里维护。</Notice>
+      {message && <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice>}
+      <div className="form-grid">
+        {PRICING_MODALITIES.map(([id, name]) => <label key={id}>{name} · 每次调用基础价（分）<input type="number" min="0" step="1" value={perCall[id] ?? ''} onChange={(event) => setPerCall({ ...perCall, [id]: event.target.value === '' ? '' : Number(event.target.value) })} /></label>)}
+      </div>
+      <p className="muted">没有单独定价的模型按上面的模态基础价计算。</p>
+      {groups.map((group) => group.models.length ? <div className="card top-gap" key={group.id}>
+        <b>{group.name}</b>
+        <div className="form-grid top-gap">{group.models.map((model) => <label key={model}>{model}（分）<input type="number" min="0" step="1" value={models[model] ?? ''} placeholder="留空用模态价" onChange={(event) => setModelPrice(model, event.target.value)} /></label>)}</div>
+      </div> : null)}
+      {!channels.length ? <p className="muted">暂无渠道，模型清单来自「渠道与模型配置」；也可以先只填模态基础价。</p> : null}
+      <div className="row-actions top-gap">
+        <button type="button" className="primary-button" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存对外售价'}</button>
+        {pricing.data?.pricing?.updatedAt ? <span className="muted">上次更新 {formatDate(pricing.data.pricing.updatedAt)}</span> : null}
+      </div>
+    </>}
+  </Panel>;
 }
 
 export function ComputeUsagePanel({ api }) {

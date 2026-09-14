@@ -1374,6 +1374,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS compute_attempts (
   client_request_id TEXT, response_request_id TEXT, response_payload_id TEXT, usage_id TEXT,
   internal_usage_record_id TEXT REFERENCES usage_records(id) ON DELETE SET NULL, gateway_log_id TEXT, actual_channel_id TEXT, provider_account_ref TEXT,
   cost_source TEXT NOT NULL DEFAULT 'UNKNOWN', upstream_cost_fen REAL,
+  sale_price_fen REAL,
   cost_rule_snapshot TEXT, sale_snapshot TEXT NOT NULL, error_code TEXT, error_message TEXT,
   created_at TEXT NOT NULL, completed_at TEXT
 );
@@ -1397,6 +1398,8 @@ for (const [table, column, type] of [
   ['compute_attempts', 'actual_channel_id', 'TEXT'],
   ['compute_attempts', 'provider_account_ref', 'TEXT'],
   ['compute_attempts', 'cost_rule_snapshot', 'TEXT'],
+  // 对外售价观测：只记录「按当时公告价算出的每次调用售价」，不扣学生（usage_records.cost_fen 恒 0）。
+  ['compute_attempts', 'sale_price_fen', 'REAL'],
 ]) {
   if (!rows(`PRAGMA table_info(${table})`).some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }

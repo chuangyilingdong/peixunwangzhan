@@ -1,7 +1,35 @@
 import { errors, row, rows } from '../lib.js';
+import { getComputePricing } from './computePool.js';
 
 const CURRENCY = /^[A-Z]{3}$/;
 const text = (value) => String(value || '').trim();
+
+// 对外售价（观测口径）只对照、不扣学生、不计收入；模态与 computePool 的四档保持一致。
+const MODALITIES = ['TEXT', 'IMAGE', 'VIDEO', 'MUSIC'];
+
+// sale_price_fen 由 schema 迁移补齐；列未落地前回退为 NULL，服务不因缺列报错。
+let salePriceColumn;
+function salePriceExpression() {
+  if (salePriceColumn === undefined) {
+    salePriceColumn = rows("PRAGMA table_info(compute_attempts)").some((item) => item.name === 'sale_price_fen') ? 'attempt.sale_price_fen' : 'NULL';
+  }
+  return salePriceColumn;
+}
+
+/**
+ * 一次调用的「对外售价」：优先取该次落库快照，无快照回退当前 compute_pricing 配置，并标注来源。
+ * 未知（没有快照、模态与模型都没有配置价）返回 null，绝不按 0 处理。
+ */
+function resolveSalePrice(item, pricing) {
+  if (item.salePriceFen !== undefined && item.salePriceFen !== null && Number.isFinite(Number(item.salePriceFen))) {
+    return { minor: Number(item.salePriceFen), source: 'SNAPSHOT' };
+  }
+  const model = text(item.model);
+  if (model && Object.prototype.hasOwnProperty.call(pricing.models, model)) return { minor: Number(pricing.models[model]), source: 'PRICING' };
+  const modality = text(item.modality).toUpperCase();
+  if (MODALITIES.includes(modality)) return { minor: Number(pricing.perCall[modality] ?? 0), source: 'PRICING' };
+  return { minor: null, source: 'UNKNOWN' };
+}
 
 function rangeOf(filters = {}) {
   const days = Number(filters.days || 30);
@@ -70,6 +98,7 @@ export function listFinancialCalls(filters = {}) {
       usage.id linked_usage_id,COALESCE(usage.series_id,session.series_id) linked_series_id,
       COALESCE(attempt.class_session_id,usage.class_session_id) linked_session_id,COALESCE(attempt.lesson_id,session.lesson_id) linked_lesson_id
     ${CALL_FROM} WHERE ${where} GROUP BY attempt.id ORDER BY attempt.created_at DESC,attempt.id DESC LIMIT ? OFFSET ?`, [...scope.params, limit, (page - 1) * limit]);
+  const pricing = getComputePricing();
   const items = raw.map((item) => {
     const matches = rows(`SELECT match.id,match.target_type targetType,match.target_id targetId,match.allocated_amount_minor amountMinor,
         match.currency,match.method,line.reconciliation_status reconciliationStatus,line.supplier_line_id supplierLineId
@@ -78,6 +107,10 @@ export function listFinancialCalls(filters = {}) {
         AND ((match.target_type='ATTEMPT' AND match.target_id=?) OR (match.target_type='USAGE' AND match.target_id=?))
       ORDER BY match.created_at,match.id`, [item.id, item.internal_usage_record_id || '']);
     const currencies = [...new Set(matches.map((match) => match.currency))];
+    const settledAmountMinor = matches.length && currencies.length === 1 ? matches.reduce((sum, match) => sum + Number(match.amountMinor), 0) : null;
+    const sale = resolveSalePrice({ salePriceFen: item.sale_price_fen, model: item.model, modality: item.modality }, pricing);
+    // 差额 = 对外售价 − 实际核销；未核销（含多币种无法合并）时不计算，避免把未核销显示成正利润。
+    const differenceMinor = sale.minor == null || settledAmountMinor == null ? null : sale.minor - settledAmountMinor;
     return {
       id: item.id, callId: item.call_id, attempt: Number(item.attempt), createdAt: item.created_at,
       orgId: item.org_id || null, organizationName: item.organization_name || null,
@@ -87,12 +120,13 @@ export function listFinancialCalls(filters = {}) {
       provider: item.provider || null, model: item.model || null, status: item.status,
       costSource: item.cost_source, estimatedOrReportedMinor: item.upstream_cost_fen == null ? null : Number(item.upstream_cost_fen),
       costUnknown: item.cost_source === 'UNKNOWN' || item.upstream_cost_fen == null,
+      salePriceFen: sale.minor, salePriceSource: sale.source, salePriceIsSnapshot: sale.source === 'SNAPSHOT',
       clientRequestId: item.client_request_id || null, responseRequestId: item.response_request_id || null,
       responsePayloadId: item.response_payload_id || null, taskId: item.task_id || null,
       providerUsageId: item.usage_id || null, internalUsageRecordId: item.internal_usage_record_id || null,
       usageId: item.internal_usage_record_id || null, gatewayLogId: item.gateway_log_id || null,
       evidenceMatch: item.gateway_log_id || item.response_request_id || item.response_payload_id || item.task_id ? 'MATCHED' : item.internal_usage_record_id ? 'PARTIAL' : 'UNMATCHED',
-      settledAmountMinor: matches.length && currencies.length === 1 ? matches.reduce((sum, match) => sum + Number(match.amountMinor), 0) : null,
+      settledAmountMinor, differenceMinor,
       settledCurrency: currencies.length === 1 ? currencies[0] : null, matches,
     };
   });
@@ -219,4 +253,95 @@ export function financialReconciliationReport(filters = {}) {
     filters: { ...range, orgId: orgId || null, seriesId: seriesId || null },
     basis: { cash: 'PAID_LICENSE_PURCHASES', revenue: 'IMMUTABLE_LICENSE_EVENTS', cost: 'ACTIVE_SUPPLIER_MATCHES', estimatesExcluded: true },
   };
+}
+
+const GROUP_DIMENSIONS = [
+  { key: 'modality', label: '模态', of: (call) => call.modality || null, fallback: '未知模态' },
+  { key: 'channel', label: '渠道', of: (call) => call.channelId || null, fallback: '未知渠道' },
+  { key: 'model', label: '模型', of: (call) => call.model || null, fallback: '未知模型' },
+  { key: 'org', label: '机构', of: (call) => call.orgId || null, fallback: '未归属机构' },
+  { key: 'student', label: '学员', of: (call) => call.userId || null, fallback: '未归属学员' },
+];
+
+function emptyBucket(key, label) {
+  return {
+    key, label, calls: 0, externalAmountMinor: 0, saleUnknownCount: 0,
+    knownUpstreamCostMinor: 0, upstreamUnknownCount: 0,
+    settledAmountMinor: 0, settledCallCount: 0, unsettledCount: 0, mixedCurrencyCount: 0,
+    currencies: new Set(),
+  };
+}
+
+function addCall(bucket, call) {
+  bucket.calls += 1;
+  if (call.salePriceFen == null) bucket.saleUnknownCount += 1; else bucket.externalAmountMinor += call.salePriceFen;
+  if (call.costUnknown) bucket.upstreamUnknownCount += 1; else bucket.knownUpstreamCostMinor += call.upstreamCostFen;
+  if (call.matchCount === 0) bucket.unsettledCount += 1;
+  else if (call.settledCurrencies.length === 1) { bucket.settledAmountMinor += call.settledFen; bucket.settledCallCount += 1; bucket.currencies.add(call.settledCurrencies[0]); }
+  else { bucket.mixedCurrencyCount += 1; for (const currency of call.settledCurrencies) bucket.currencies.add(currency); }
+}
+
+function finalizeBucket(bucket) {
+  const currencies = [...bucket.currencies];
+  const singleCurrency = currencies.length === 1 ? currencies[0] : null;
+  const settledAmountMinor = bucket.mixedCurrencyCount > 0 ? null : bucket.settledAmountMinor;
+  // 差额 = 对外金额 − 实际核销；存在未知对外价、未核销或跨币种时留空，未知一律不并入差额、不按 0 处理。
+  const differenceMinor = bucket.saleUnknownCount === 0 && bucket.unsettledCount === 0 && bucket.mixedCurrencyCount === 0
+    ? bucket.externalAmountMinor - (settledAmountMinor || 0) : null;
+  return { ...bucket, currencies, currency: singleCurrency, settledAmountMinor, differenceMinor };
+}
+
+/**
+ * 调用账汇总：按模态 / 渠道 / 模型（以及机构 / 学员）对照三档金额与核销情况。
+ * 未知对外价或未知上游成本单列计数，绝不并入差额、绝不按 0 处理。
+ */
+export function financialCallSummary(filters = {}) {
+  const range = rangeOf(filters);
+  const scope = callScope(filters, range);
+  const where = scope.conditions.join(' AND ');
+  const saleColumn = salePriceExpression();
+  const raw = rows(`SELECT attempt.id,attempt.modality,COALESCE(attempt.actual_channel_id,attempt.channel_id) channelId,
+      attempt.model,attempt.org_id orgId,organization.name organizationName,attempt.user_id userId,student.display_name studentName,
+      ${saleColumn} salePriceFen,attempt.cost_source costSource,attempt.upstream_cost_fen upstreamCostFen,
+      (SELECT SUM(match.allocated_amount_minor) FROM supplier_billing_matches match
+        JOIN supplier_billing_lines line ON line.id=match.line_id
+        WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
+          AND ((match.target_type='ATTEMPT' AND match.target_id=attempt.id) OR (match.target_type='USAGE' AND match.target_id=attempt.internal_usage_record_id))) settledFen,
+      (SELECT COUNT(*) FROM supplier_billing_matches match
+        JOIN supplier_billing_lines line ON line.id=match.line_id
+        WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
+          AND ((match.target_type='ATTEMPT' AND match.target_id=attempt.id) OR (match.target_type='USAGE' AND match.target_id=attempt.internal_usage_record_id))) matchCount,
+      (SELECT GROUP_CONCAT(DISTINCT match.currency) FROM supplier_billing_matches match
+        JOIN supplier_billing_lines line ON line.id=match.line_id
+        WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
+          AND ((match.target_type='ATTEMPT' AND match.target_id=attempt.id) OR (match.target_type='USAGE' AND match.target_id=attempt.internal_usage_record_id))) settledCurrencies
+    ${CALL_FROM} WHERE ${where}`, scope.params);
+  const pricing = getComputePricing();
+  const calls = raw.map((item) => {
+    const sale = resolveSalePrice({ salePriceFen: item.salePriceFen, model: item.model, modality: item.modality }, pricing);
+    const matchCount = Number(item.matchCount || 0);
+    return {
+      modality: item.modality || null, channelId: item.channelId || null, model: item.model || null,
+      orgId: item.orgId || null, organizationName: item.organizationName || null, userId: item.userId || null, studentName: item.studentName || null,
+      salePriceFen: sale.minor, costUnknown: item.costSource === 'UNKNOWN' || item.upstreamCostFen == null,
+      upstreamCostFen: Number(item.upstreamCostFen || 0), matchCount,
+      settledFen: matchCount ? Number(item.settledFen || 0) : 0,
+      settledCurrencies: matchCount ? String(item.settledCurrencies || '').split(',').map((value) => value.trim()).filter(Boolean) : [],
+    };
+  });
+  const groups = {};
+  for (const dimension of GROUP_DIMENSIONS) {
+    const buckets = new Map();
+    for (const call of calls) {
+      const value = dimension.of(call);
+      const key = value || `\u0000${dimension.key}`;
+      const bucket = buckets.get(key) || emptyBucket(value, value ? (dimension.key === 'org' ? call.organizationName || value : dimension.key === 'student' ? call.studentName || value : value) : dimension.fallback);
+      addCall(bucket, call);
+      buckets.set(key, bucket);
+    }
+    groups[dimension.key] = [...buckets.values()].map(finalizeBucket).sort((a, b) => b.calls - a.calls || String(a.label).localeCompare(String(b.label), 'zh-CN'));
+  }
+  const totalBucket = emptyBucket(null, '全部调用');
+  for (const call of calls) addCall(totalBucket, call);
+  return { groups, totals: finalizeBucket(totalBucket), callCount: calls.length, filters: range };
 }

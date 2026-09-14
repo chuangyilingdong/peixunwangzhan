@@ -1,5 +1,5 @@
 import { platformPermissionForPathname, requirePlatformPermission } from '../../lib.js';
-import { financialReconciliationReport, financialReportOptions, listFinancialCalls } from '../../services/financialReporting.js';
+import { financialCallSummary, financialReconciliationReport, financialReportOptions, listFinancialCalls } from '../../services/financialReporting.js';
 import { appendLicensePurchase, licensePurchaseHistory } from '../../services/licenseLedger.js';
 import { rows } from '../../lib.js';
 
@@ -26,6 +26,7 @@ export async function handleFinancialReporting(ctx, part, method) {
   }
   if (part === '/financial-reporting/options' && method === 'GET') return financialReportOptions();
   if (part === '/financial-reporting/calls' && method === 'GET') return listFinancialCalls(filters(ctx.search));
+  if (part === '/financial-reporting/call-summary' && method === 'GET') return financialCallSummary(filters(ctx.search));
   if (part === '/financial-reporting/summary' && method === 'GET') return financialReconciliationReport(filters(ctx.search));
   return null;
 }

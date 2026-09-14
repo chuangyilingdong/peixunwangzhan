@@ -26,6 +26,16 @@ export function getComputePricing() {
   return { perCall, models, updatedAt: value?.updatedAt || null };
 }
 
+/**
+ * 保存「对外售价观测」配置（模态基础价 perCall + 按模型覆盖 models）。
+ *
+ * ⚠️ 语义（2026-09-13 观测口径）：这里存的是**对学生的公告售价**，用途只有一个 ——
+ *   让 compute_attempts.sale_price_fen / sale_snapshot 记下「按当时的价，这次调用对外值多少」。
+ *   它 **不扣学生钱**、**不是上游真实成本**，也 **不是** 课时平台预算基准。
+ *   - 学生账本恒 0：usage_records.cost_fen / credits_charged 与这里无关（见 creditUsage.js）。
+ *   - 上游成本另有一本账：compute_attempts.upstream_cost_fen（估算/上报，未知不按零算）。
+ *   - 改价**不追溯**：已落库的 sale_price_fen / sale_snapshot 保持写入时的值，只有新调用用新价。
+ */
 export function saveComputePricing(patch = {}) {
   const current = getComputePricing();
   for (const map of [patch.perCall, patch.models]) {

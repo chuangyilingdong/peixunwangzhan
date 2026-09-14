@@ -170,10 +170,11 @@ export async function handleOverview(ctx, part, method) {
   }
   if (part === '/compute-pricing' && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    throw errors.badRequest('学生售价已停用；请配置渠道上游成本估算', 'STUDENT_PRICING_RETIRED');
+    // 对外售价观测：这里维护的是「对学生的公告售价」，只用于观测与对账口径，
+    // 不扣学生（usage_records.cost_fen / credits_charged 恒为 0），也不是上游真实成本。
     const pricing = saveComputePricing(ctx.body || {});
-    audit(ctx, 'COMPUTE_PRICING_UPDATE', 'PLATFORM_SETTING', 'compute_pricing', null, { perCall: pricing.perCall, modelCount: Object.keys(pricing.models).length });
-    return { pricing };
+    audit(ctx, 'COMPUTE_PRICING_UPDATE', 'PLATFORM_SETTING', 'compute_pricing', null, { perCall: pricing.perCall, modelCount: Object.keys(pricing.models).length, baseline: 'OBSERVATION_ONLY' });
+    return { pricing, baseline: 'OBSERVATION_ONLY' };
   }
   if (part === '/compute-pools' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);

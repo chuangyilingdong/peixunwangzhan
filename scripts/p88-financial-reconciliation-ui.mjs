@@ -13,8 +13,9 @@ process.env.PLATFORM_DB_PATH = path.join(temp, 'platform.db');
 process.env.DEPLOYMENT_MODE = 'local-mock';
 
 const { q } = await import('../apps/server/src/lib.js');
-const { financialReconciliationReport } = await import('../apps/server/src/services/financialReporting.js');
+const { financialCallSummary, financialReconciliationReport, listFinancialCalls } = await import('../apps/server/src/services/financialReporting.js');
 const { canonicalSupplierCsv, cancelSupplierMatch, createSupplierAccount, importSupplierCsv, listSupplierLines, manuallyMatchSupplierLine, setSupplierLineState } = await import('../apps/server/src/services/supplierBilling.js');
+const { saveComputePricing } = await import('../apps/server/src/services/computePool.js');
 const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
 
 const now = new Date().toISOString();
@@ -31,7 +32,7 @@ const revenue = (id, orgId, seriesId, amount, currency) => q(`INSERT INTO licens
 revenue('revenue-cny', 'org-p88-known', 'series-cny', 800, 'CNY');
 revenue('revenue-usd', 'org-p88-known', 'series-usd', 450, 'USD');
 revenue('revenue-unknown', 'org-p88-unknown', 'series-cny', null, 'CNY');
-const attempt = (id, requestId, amount, orgId = 'org-p88-known', internalUsageRecordId = null) => q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,modality,channel_id,provider,model,routed_via,status,client_request_id,response_request_id,actual_channel_id,provider_account_ref,cost_source,upstream_cost_fen,sale_snapshot,created_at,internal_usage_record_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `call-${id}`, 1, orgId, 'TEXT', 'p88-channel', 'p88-provider', 'p88-model', 'direct', 'SUCCESS', requestId, requestId, 'p88-channel', 'p88-account', 'REPORTED', amount, '{}', now, internalUsageRecordId]);
+const attempt = (id, requestId, amount, orgId = 'org-p88-known', internalUsageRecordId = null, { costSource = 'REPORTED', salePriceFen = null, modality = 'TEXT' } = {}) => q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,modality,channel_id,provider,model,routed_via,status,client_request_id,response_request_id,actual_channel_id,provider_account_ref,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,created_at,internal_usage_record_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `call-${id}`, 1, orgId, modality, 'p88-channel', 'p88-provider', 'p88-model', 'direct', 'SUCCESS', requestId, requestId, 'p88-channel', 'p88-account', costSource, amount, salePriceFen, '{}', now, internalUsageRecordId]);
 attempt('attempt-active', 'request-active', 300);
 attempt('attempt-cancelled', 'request-cancelled', 200);
 const account = createSupplierAccount({ code: 'p88-account', name: 'P88 Supplier', provider: 'p88-provider', channelId: 'p88-channel', defaultCurrency: 'CNY', timezone: 'UTC' });
@@ -92,9 +93,61 @@ assert.deepEqual(new Set(multiCurrency.currencies), new Set(['CNY', 'USD']));
 assert.equal(multiCurrency.summary.currency, null);
 assert.equal(multiCurrency.summary.grossProfitMinor, null, 'multi-currency summary must not calculate margin');
 
+// —— 调用账三档金额（对外售价 / 上游估算或报告 / 实际核销）与模态渠道汇总一致性 ——
+saveComputePricing({ perCall: { TEXT: 7 } });
+q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', ['org-p88-ledger', 'P88 Ledger', 'ACTIVE', now, later, 0, now, now]);
+attempt('ledger-snapshot', 'request-ledger-snapshot', 200, 'org-p88-ledger', null, { salePriceFen: 500 });
+attempt('ledger-fallback', 'request-ledger-fallback', 40, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
+attempt('ledger-deficit', 'request-ledger-deficit', 60, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
+attempt('ledger-unknownsale', 'request-ledger-unknownsale', null, 'org-p88-ledger', null, { costSource: 'UNKNOWN', modality: 'EMBEDDING' });
+importSupplierCsv({ supplierAccountId: account.id, fileName: 'p88-ledger.csv', csv: canonicalSupplierCsv([
+  supplierLine('ledger-snapshot-line', 'request-ledger-snapshot', 200),
+  supplierLine('ledger-deficit-line', 'request-ledger-deficit', 50),
+]) });
+const ledgerCalls = listFinancialCalls({ days: 1, orgId: 'org-p88-ledger', limit: 100 }).items;
+const byId = (id) => ledgerCalls.find((item) => item.id === id);
+const snapshotCall = byId('ledger-snapshot');
+assert.equal(snapshotCall.salePriceFen, 500, '对外售价优先取本次落库快照');
+assert.equal(snapshotCall.salePriceSource, 'SNAPSHOT');
+assert.equal(snapshotCall.estimatedOrReportedMinor, 200, '上游估算或报告金额照旧返回');
+assert.equal(snapshotCall.settledAmountMinor, 200, '实际核销来自有效供应商标记');
+assert.equal(snapshotCall.differenceMinor, 300, '差额 = 对外售价 − 实际核销');
+const fallbackCall = byId('ledger-fallback');
+assert.equal(fallbackCall.salePriceFen, 7, '无快照时回退当前 compute_pricing 配置');
+assert.equal(fallbackCall.salePriceSource, 'PRICING', '回退必须标注来源');
+assert.equal(fallbackCall.settledAmountMinor, null);
+assert.equal(fallbackCall.differenceMinor, null, '未核销不得显示差额为正利润');
+assert.equal(byId('ledger-deficit').differenceMinor, -43, '已核销的负差额照实显示');
+const unknownSaleCall = byId('ledger-unknownsale');
+assert.equal(unknownSaleCall.salePriceFen, null, '未配置价的模态不按 0 处理');
+assert.equal(unknownSaleCall.salePriceSource, 'UNKNOWN');
+assert.equal(unknownSaleCall.differenceMinor, null, '对外售价未知时差额留空');
+
+const callSummary = financialCallSummary({ days: 1, orgId: 'org-p88-ledger' });
+assert.equal(callSummary.totals.calls, 4);
+const modelGroup = callSummary.groups.model.find((group) => group.key === 'p88-model');
+assert.equal(modelGroup.externalAmountMinor, 514, '对外金额只累加已知对外价，未知单列');
+assert.equal(modelGroup.saleUnknownCount, 1);
+assert.equal(modelGroup.knownUpstreamCostMinor, 300, '已知上游成本不含未知');
+assert.equal(modelGroup.upstreamUnknownCount, 1);
+assert.equal(modelGroup.settledAmountMinor, 250);
+assert.equal(modelGroup.unsettledCount, 2);
+assert.equal(modelGroup.differenceMinor, null, '存在未核销或未知对外价时汇总差额留空');
+const modalityGroups = callSummary.groups.modality;
+assert.equal(modalityGroups.find((group) => group.key === 'EMBEDDING').saleUnknownCount, 1, '未知对外价按模态单列');
+assert.equal(modalityGroups.find((group) => group.key === 'TEXT').settledAmountMinor, 250);
+for (const dimension of ['modality', 'channel', 'model', 'org', 'student']) {
+  const sum = (field) => callSummary.groups[dimension].reduce((total, group) => total + group[field], 0);
+  assert.equal(sum('calls'), callSummary.totals.calls, `${dimension} 汇总调用次数必须与总数一致`);
+  assert.equal(sum('externalAmountMinor'), callSummary.totals.externalAmountMinor, `${dimension} 汇总对外金额加总必须一致`);
+  assert.equal(sum('settledAmountMinor'), callSummary.totals.settledAmountMinor, `${dimension} 汇总实际核销加总必须一致`);
+  assert.equal(sum('unsettledCount'), callSummary.totals.unsettledCount, `${dimension} 未核销笔数加总必须一致`);
+}
+
 const billingAuth = { user: { id: 'billing-admin', login: 'billing-admin', role: 'SUPER_ADMIN', permissions: ['ADMIN_BILLING'] }, rawUser: { permissions: '["ADMIN_BILLING"]' } };
 const ctx = (auth) => ({ pathname: '/api/admin/financial-reporting/summary', method: 'GET', search: new URLSearchParams('days=1&currency=CNY'), body: {}, auth, req: { socket: { remoteAddress: '127.0.0.1' } } });
 assert.equal((await handleAdmin(ctx(billingAuth))).summary.cashReceivedMinor, 3500);
+assert.ok((await handleAdmin({ ...ctx(billingAuth), pathname: '/api/admin/financial-reporting/call-summary' })).totals.calls > 0, 'call-summary route must aggregate three-tier amounts');
 await assert.rejects(() => handleAdmin(ctx({ ...billingAuth, user: { ...billingAuth.user, permissions: ['ADMIN_CONTENT'] } })), (error) => error.code === 'PERMISSION_DENIED');
 await assert.rejects(() => handleAdmin(ctx({ ...billingAuth, user: { ...billingAuth.user, role: 'ORG_ADMIN' } })), (error) => error.code === 'FORBIDDEN' || error.status === 403);
 
@@ -108,6 +161,10 @@ assert.match(financialSource, /catch \(failure\) \{ setError\([\s\S]*setBusy\(fa
 assert.match(financialSource, /setActionDialog\(\{ kind: 'cancel-match', line, match \}\)/);
 assert.match(financialSource, /imports\/preview[\s\S]*严格校验并预览[\s\S]*确认导入/);
 assert.match(financialSource, /lines\/\$\{line\.id\}\/candidates[\s\S]*type="checkbox"[\s\S]*确认人工匹配/);
+assert.match(financialSource, /financial-reporting\/call-summary/, '调用账必须接入三档金额汇总接口');
+assert.match(financialSource, /对外售价与上游成本对照汇总/, '调用账必须有汇总区块');
+assert.match(financialSource, /对外售价不扣学生|不扣学生、不计收入/, '界面必须写明对外售价不扣学生不计收入');
+assert.match(financialSource, /未核销 \/ 未知/, '未核销时差额不得显示为正利润');
 assert.match(modelSource, /<FinancialReconciliation api=\{api\} view=\{view\}/);
 assert.match(adminSource, /handleFinancialReporting/);
 

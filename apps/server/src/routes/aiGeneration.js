@@ -313,7 +313,9 @@ function resolveReferenceAssets(projectId, value) {
 function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, referenceAssetUrls = null, boxId = '', requestOptions = null, selection = null }) {
   const jobId = id('generation');
   const now = nowIso();
-  const saleSnapshot = { modality, model: provider.model, unitFen: 0, charged: false, capturedAt: now, basis: 'USER_INCLUDED_COMPUTE', route: selection ? { ...selection, apiKey: undefined, gateway: undefined, backup: selection.backup ? { ...selection.backup, apiKey: undefined, gateway: undefined } : undefined } : null };
+  // 对外售价观测：快照里的 unitFen 是「按当前公告价算出的售价」，只观测、不扣学生
+  // （charged 恒 false，学生账本 usage_records.cost_fen/credits_charged 恒 0）。
+  const saleSnapshot = { modality, model: provider.model, unitFen: priceFenFor({ modality, model: provider.model }), charged: false, baseline: 'OBSERVATION_ONLY', basis: 'OBSERVATION_ONLY', capturedAt: now, route: selection ? { ...selection, apiKey: undefined, gateway: undefined, backup: selection.backup ? { ...selection.backup, apiKey: undefined, gateway: undefined } : undefined } : null };
   transaction(() => q(`INSERT INTO generation_jobs(
        id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url,last_frame_asset_url,reference_asset_urls,box_id,request_options
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -638,6 +640,16 @@ async function processAsyncGeneration(item) {
     routedByGateway.saleSnapshot = parseJson(persistedJob?.compute_snapshot, null);
     provider = getGenerationProvider(routedByGateway);
     info = generationProviderInfo(routedByGateway);
+    // 异步任务重算一次「对外售价观测」快照（路由/模型在这时才最终确定）：
+    // 只刷新 unitFen/baseline 与模型，**不动 route**，也不改学生账本（cost_fen 恒 0）。
+    q('UPDATE generation_jobs SET compute_snapshot=? WHERE id=?', [json({
+      ...(routedByGateway.saleSnapshot || {}),
+      modality, model: provider.model,
+      unitFen: priceFenFor({ modality, model: provider.model }),
+      charged: false, baseline: 'OBSERVATION_ONLY', basis: 'OBSERVATION_ONLY',
+      route: routedByGateway.saleSnapshot?.route || null,
+      capturedAt: nowIso(),
+    }), jobId]);
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const box = resolveLessonGenerationBox(context, modality, boxId);
