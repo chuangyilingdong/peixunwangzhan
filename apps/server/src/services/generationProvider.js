@@ -4,6 +4,7 @@ import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
 import { id, json, nowIso, q, row } from '../lib.js';
 import { priceFenFor } from './computePool.js';
+import { collectUsageEvidence, computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, normalizeUpstreamUnitPrices } from './upstreamCost.js';
 
 function svgDataUrl(title, subtitle, hue) {
   const escape = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -62,7 +63,7 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
   };
 }
 
-export function providerSelection({ provider, model, endpoint, channelId, providerAccountRef, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway, apiKey } = {}) {
+export function providerSelection({ provider, model, endpoint, channelId, providerAccountRef, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway, apiKey, upstreamUnitPrices, modelUnitPrices } = {}) {
   return {
     provider: String(provider || AI_PROVIDER).trim(),
     model: String(model || AI_PROVIDER_MODEL).trim(),
@@ -73,6 +74,10 @@ export function providerSelection({ provider, model, endpoint, channelId, provid
     modelRequestTemplates: modelRequestTemplates && typeof modelRequestTemplates === 'object' ? modelRequestTemplates : {},
     requestPaths: requestPaths && typeof requestPaths === 'object' ? requestPaths : {},
     pollPaths: pollPaths && typeof pollPaths === 'object' ? pollPaths : {},
+    // 合同单价（P90）：渠道上配的「上游进价」，折算上游成本用；没配就是 null（→ UNKNOWN，不按 0 计）。
+    upstreamUnitPrices: normalizeUpstreamUnitPrices(upstreamUnitPrices),
+    // 模型级覆盖：同渠道不同模型合同价不同（qwen-turbo vs qwen-max）时按模型选价，优先级 model > modality。
+    modelUnitPrices: normalizeModelUnitPrices(modelUnitPrices),
     // 调用方可以带一把**临时密钥**（例如平台端「用当前渠道试一次」探测一个还没保存的新 key）：
     // 有它就用它，不落库、不影响已保存的配置。
     apiKey: String(apiKey || '').trim(),
@@ -149,9 +154,25 @@ export function getGenerationProvider(selection = {}) {
           onSubmitted: (taskId) => { submitted = true; q("UPDATE compute_attempts SET status='SUBMITTED',task_id=? WHERE id=?",[String(taskId),attemptId]); args.onSubmitted?.(taskId); },
         });
         const reported = !selected.gateway ? result?.assets?.find(asset => asset?.metadata?.reportedCost)?.metadata?.reportedCost : null;
-        const known = provider.name === 'local-mock' || (estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)));
-        q("UPDATE compute_attempts SET status='SUCCESS',cost_source=?,upstream_cost_fen=?,completed_at=? WHERE id=?",[provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : known ? 'ESTIMATED' : 'UNKNOWN',provider.name === 'local-mock' ? 0 : reported ? reported.fen : known ? Number(estimate) : null,nowIso(),attemptId]);
+        const known = estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate));
+        // 合同单价折算（P90）：用量证据按模态采集（文本看上游 token 回执，图/视频/音乐看请求参数）。
+        // 有单价 + 有用量才算得出来；算不出来就保持 UNKNOWN，**绝不按 0 计**。
+        const usage = collectUsageEvidence({ modality, result, request: args.options || null });
+        const contract = reported ? null : computeContractCost({ modality, model: provider.model, unitPrices: selected.upstreamUnitPrices || null, modelUnitPrices: selected.modelUnitPrices || null, usage });
+        const computedSource = provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : contract ? 'COMPUTED' : known ? 'ESTIMATED' : 'UNKNOWN';
+        const upstreamCostFen = computedSource === 'MOCK' ? 0
+          : computedSource === 'REPORTED' ? reported.fen
+            : computedSource === 'COMPUTED' ? contract.fen
+              : computedSource === 'ESTIMATED' ? Number(estimate) : null;
+        // 快照留住「当时用的价 + 当时的用量」，改价不追溯。
+        const ruleSnapshot = contract ? contractCostRuleSnapshot({
+          provider: provider.name, channelId: selected.channelId || 'default', model: provider.model,
+          estimatedCostFen: known ? Number(estimate) : null, computed: contract,
+        }) : null;
+        const hasUsageEvidence = usage.evidence !== 'NONE';
+        q("UPDATE compute_attempts SET status='SUCCESS',cost_source=?,upstream_cost_fen=?,cost_rule_snapshot=COALESCE(?,cost_rule_snapshot),usage_snapshot=?,completed_at=? WHERE id=?",[computedSource,upstreamCostFen,ruleSnapshot ? json(ruleSnapshot) : null,hasUsageEvidence ? json(usage) : null,nowIso(),attemptId]);
         wrapper.name = provider.name; wrapper.model = provider.model;
+        wrapper.compute = { ...wrapper.compute, costSource: computedSource, upstreamCostFen, costRuleSnapshot: ruleSnapshot, usageSnapshot: hasUsageEvidence ? usage : null };
         return { ...result, compute: wrapper.compute };
       } catch (error) {
         q("UPDATE compute_attempts SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",[String(error.code || 'UPSTREAM_ERROR'),String(error.message || '调用失败').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').split(selected.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]').split(selected.gateway?.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]').slice(0,1000),nowIso(),attemptId]);

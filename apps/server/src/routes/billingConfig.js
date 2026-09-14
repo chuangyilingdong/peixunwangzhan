@@ -21,6 +21,7 @@ import {
 } from '../services/modelCapabilities.js';
 import { AI_PROVIDER_API_KEY, AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { getProviderApiKey, hasProviderApiKey, setProviderApiKey } from '../services/providerSecret.js';
+import { normalizeModelUnitPrices, normalizeUpstreamUnitPrices, validateModelUnitPrices, validateUpstreamUnitPrices } from '../services/upstreamCost.js';
 
 const VALID_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO', 'CANVAS']);
 const VALID_PERIODS = new Set(['DAY', 'MONTH']);
@@ -90,6 +91,12 @@ function normalizeProviderPolicy(value) {
       model: String(item.model || '').slice(0,200),
       modelCosts: item.modelCosts || {},
       estimatedCostFen: item.estimatedCostFen == null || item.estimatedCostFen === '' ? null : Number(item.estimatedCostFen),
+      // 合同单价（P90）：文本按每千 token、图片按张、视频按秒、音乐按次。
+      // 只认非负整数分；没配就是 null（= 折算不出来 → UNKNOWN，绝不按 0 计）。
+      upstreamUnitPrices: normalizeUpstreamUnitPrices(item.upstreamUnitPrices),
+      // 模型级覆盖（P90）：同一渠道里不同模型合同价不同（qwen-turbo vs qwen-max）时按模型选价，
+      // 优先级 model > modality。内层字段与渠道级完全一致。
+      modelUnitPrices: normalizeModelUnitPrices(item.modelUnitPrices),
       models: Array.isArray(item.models) ? [...new Set(item.models.map((m) => String(m || '').trim()).filter(Boolean))].slice(0, 50) : (item.model ? [String(item.model).slice(0, 200)] : []),
       endpoint: String(item.endpoint || '').slice(0,500),
       protocol: ['CHAT','RESPONSES','ANTHROPIC'].includes(String(item.protocol || '').toUpperCase()) ? String(item.protocol).toUpperCase() : 'CHAT',
@@ -520,6 +527,12 @@ export async function handleAdminBillingConfig(ctx) {
       if (!channel?.id || ids.has(channel.id)) throw errors.badRequest('渠道编号必须存在且唯一', 'AI_PROVIDER_CHANNEL_INVALID');
       ids.add(channel.id);
       if (channel.estimatedCostFen != null && channel.estimatedCostFen !== '' && (!Number.isFinite(Number(channel.estimatedCostFen)) || Number(channel.estimatedCostFen) < 0)) throw errors.badRequest('上游估算成本必须是非负金额', 'AI_PROVIDER_COST_INVALID');
+      // 合同单价保存前校验：必须是非负整数分，形状不对/金额为负当场报错（不静默丢弃成 0）。
+      const unitPriceProblems = validateUpstreamUnitPrices(channel.upstreamUnitPrices);
+      if (unitPriceProblems.length) throw errors.badRequest(`${channel.name || channel.id || '渠道'} 的合同单价有误：${unitPriceProblems.join('；')}`, 'AI_PROVIDER_COST_INVALID');
+      // 模型级覆盖同样严格校验：模型级非法值绝不静默丢弃（否则会悄悄回退到渠道价，算错成本）。
+      const modelUnitPriceProblems = validateModelUnitPrices(channel.modelUnitPrices);
+      if (modelUnitPriceProblems.length) throw errors.badRequest(`${channel.name || channel.id || '渠道'} 的模型级合同单价有误：${modelUnitPriceProblems.join('；')}`, 'AI_PROVIDER_COST_INVALID');
       if (channel.models?.length && !channel.models.includes(channel.model)) throw errors.badRequest('默认模型必须在可用模型中', 'AI_PROVIDER_MODEL_INVALID');
     }
     for (const modality of VALID_MODALITIES) {

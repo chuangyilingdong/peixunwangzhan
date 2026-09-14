@@ -100,6 +100,11 @@ attempt('ledger-snapshot', 'request-ledger-snapshot', 200, 'org-p88-ledger', nul
 attempt('ledger-fallback', 'request-ledger-fallback', 40, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
 attempt('ledger-deficit', 'request-ledger-deficit', 60, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
 attempt('ledger-unknownsale', 'request-ledger-unknownsale', null, 'org-p88-ledger', null, { costSource: 'UNKNOWN', modality: 'EMBEDDING' });
+// 只读透出用量证据与价目层级来源：原样写库，服务不改口径、不重算。
+q("UPDATE compute_attempts SET usage_snapshot=?,cost_rule_snapshot=? WHERE id='ledger-snapshot'", [
+  JSON.stringify({ modality: 'TEXT', evidence: 'UPSTREAM_USAGE', inputTokens: 800, outputTokens: 333, images: null, seconds: null, resolution: null, audio: null }),
+  JSON.stringify({ basis: 'CONTRACT_UNIT_PRICE', provider: 'p88-provider', channelId: 'p88-channel', model: 'p88-model', estimatedCostFen: null, source: 'COMPUTED', priceLevel: 'MODEL', unitPrice: { perImageFen: 200 }, usage: { images: 2 }, computedFen: 400, capturedAt: now }),
+]);
 importSupplierCsv({ supplierAccountId: account.id, fileName: 'p88-ledger.csv', csv: canonicalSupplierCsv([
   supplierLine('ledger-snapshot-line', 'request-ledger-snapshot', 200),
   supplierLine('ledger-deficit-line', 'request-ledger-deficit', 50),
@@ -122,6 +127,12 @@ const unknownSaleCall = byId('ledger-unknownsale');
 assert.equal(unknownSaleCall.salePriceFen, null, '未配置价的模态不按 0 处理');
 assert.equal(unknownSaleCall.salePriceSource, 'UNKNOWN');
 assert.equal(unknownSaleCall.differenceMinor, null, '对外售价未知时差额留空');
+// 用量证据与价目层级只读透出：有快照照原样返回，无快照为 null（字段必须存在）。
+assert.equal(snapshotCall.usageSnapshot.inputTokens, 800, 'usage_snapshot 必须原样透出');
+assert.equal(snapshotCall.costRuleSnapshot.priceLevel, 'MODEL', '价目层级沿用上游字段名 priceLevel');
+assert.equal(snapshotCall.costRuleSnapshot.source, 'COMPUTED', '来源沿用上游字段名 source');
+assert.ok('usageSnapshot' in fallbackCall && fallbackCall.usageSnapshot === null, '无用量证据时 usageSnapshot 必须存在且为 null');
+assert.ok('costRuleSnapshot' in fallbackCall && fallbackCall.costRuleSnapshot === null, '无价目快照时 costRuleSnapshot 必须存在且为 null');
 
 const callSummary = financialCallSummary({ days: 1, orgId: 'org-p88-ledger' });
 assert.equal(callSummary.totals.calls, 4);
@@ -144,6 +155,30 @@ for (const dimension of ['modality', 'channel', 'model', 'org', 'student']) {
   assert.equal(sum('unsettledCount'), callSummary.totals.unsettledCount, `${dimension} 未核销笔数加总必须一致`);
 }
 
+// —— P90 合同单价两层契约：界面写出的形状必须被后端原样接受（拍平＝静默丢弃）——
+const { computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, resolveUnitPrice, validateModelUnitPrices } = await import('../apps/server/src/services/upstreamCost.js');
+const uiUpstreamPrices = { IMAGE: { perImageFen: 50, byResolution: { '1K': 40 } } };
+const uiModelUnitPrices = { 'p88-model': { IMAGE: { perImageFen: 30, byResolution: { '1K': 25 } }, TEXT: { inputFenPer1kTokens: 250, outputFenPer1kTokens: 750 } } };
+assert.deepEqual(validateModelUnitPrices(uiModelUnitPrices), [], '界面写出的模型级覆盖必须能通过后端校验');
+assert.deepEqual(normalizeModelUnitPrices(uiModelUnitPrices), uiModelUnitPrices, '模型级覆盖必须按 {模型:{素材类型:{…}}} 原样保留');
+assert.deepEqual(normalizeModelUnitPrices({ 'p88-model': { perImageFen: 30 } }), null, '拍平的模型级覆盖会被丢弃 —— 界面绝不能这么写');
+assert.deepEqual(normalizeModelUnitPrices({ 'p88-model': { NOT_A_MODALITY: { perImageFen: 30 } } }), null, '未知素材类型同样被丢弃');
+const modelWins = resolveUnitPrice({ unitPrices: uiUpstreamPrices, modelUnitPrices: uiModelUnitPrices, model: 'p88-model', modality: 'IMAGE' });
+assert.equal(modelWins.price.perImageFen, 30, '模型级覆盖优先于素材类型价');
+assert.equal(modelWins.price.byResolution['1K'], 25);
+assert.equal(modelWins.modelPrice.perImageFen, 30, '两层各自的原始价都要带出来（快照要按层留证）');
+const modelCost = computeContractCost({ modality: 'IMAGE', model: 'p88-model', unitPrices: uiUpstreamPrices, modelUnitPrices: uiModelUnitPrices, usage: { images: 2, resolution: '1K' } });
+assert.equal(modelCost.fen, 50, '模型级档位价折算：2 张 × 25 分');
+assert.equal(modelCost.level, 'MODEL');
+const modalityCost = computeContractCost({ modality: 'IMAGE', model: 'p88-model', unitPrices: uiUpstreamPrices, modelUnitPrices: null, usage: { images: 2, resolution: '1K' } });
+assert.equal(modalityCost.fen, 80, '素材类型价折算：2 张 × 40 分档位价');
+assert.equal(contractCostRuleSnapshot({ provider: 'custom', channelId: 'c', model: 'p88-model', computed: modelCost }).priceLevel, 'MODEL', '快照必须标出命中的层级（界面按它显示 模型级覆盖 / 素材类型价）');
+assert.equal(contractCostRuleSnapshot({ provider: 'custom', channelId: 'c', model: 'p88-model', computed: modalityCost }).priceLevel, 'MODALITY');
+assert.equal(computeContractCost({ modality: 'IMAGE', model: 'p88-model', unitPrices: null, modelUnitPrices: null, usage: { images: 2, resolution: '1K' } }), null, '两层都没配 → null（UNKNOWN），绝不按 0');
+assert.equal(resolveUnitPrice({ unitPrices: uiUpstreamPrices, modelUnitPrices: { 'other-model': { IMAGE: { perImageFen: 10 } } }, model: 'p88-model', modality: 'IMAGE' }).price.perImageFen, 50, '别的模型的覆盖不能套到本模型上');
+assert.equal(resolveUnitPrice({ unitPrices: null, modelUnitPrices: uiModelUnitPrices, model: 'p88-model', modality: 'TEXT' }).price.inputFenPer1kTokens, 250, '模型级覆盖在没有素材类型价时也生效');
+assert.equal(resolveUnitPrice({ unitPrices: uiUpstreamPrices, modelUnitPrices: null, model: 'p88-model', modality: 'TEXT' }), null, '两层都没有这个素材类型 → null（UNKNOWN），不按 0');
+
 const billingAuth = { user: { id: 'billing-admin', login: 'billing-admin', role: 'SUPER_ADMIN', permissions: ['ADMIN_BILLING'] }, rawUser: { permissions: '["ADMIN_BILLING"]' } };
 const ctx = (auth) => ({ pathname: '/api/admin/financial-reporting/summary', method: 'GET', search: new URLSearchParams('days=1&currency=CNY'), body: {}, auth, req: { socket: { remoteAddress: '127.0.0.1' } } });
 assert.equal((await handleAdmin(ctx(billingAuth))).summary.cashReceivedMinor, 3500);
@@ -165,6 +200,50 @@ assert.match(financialSource, /financial-reporting\/call-summary/, '调用账必
 assert.match(financialSource, /对外售价与上游成本对照汇总/, '调用账必须有汇总区块');
 assert.match(financialSource, /对外售价不扣学生|不扣学生、不计收入/, '界面必须写明对外售价不扣学生不计收入');
 assert.match(financialSource, /未核销 \/ 未知/, '未核销时差额不得显示为正利润');
+// —— P90/P91 界面接入：上游计费列（来源 + 用量证据）、官方账单自动对账区块、合同单价两层编辑器 ——
+assert.match(financialSource, /上游计费（来源 \/ 用量证据）/, '调用账必须把「估算或报告」列换成「上游计费」列');
+assert.doesNotMatch(financialSource, /估算或报告（上游成本）/, '旧的「估算或报告」列必须被替换');
+for (const label of ['COMPUTED 按合同价折算', 'REPORTED 上游报告', 'ESTIMATED 配置估算', 'UNKNOWN 未知', 'MOCK 本地模拟']) {
+  assert.ok(financialSource.includes(label), `上游计费来源必须标注 ${label}`);
+}
+assert.match(financialSource, /usageEvidenceText\(item\.usageSnapshot\)/, '调用账必须展示用量证据');
+assert.match(financialSource, /tokens 输入/, '用量证据必须展示 tokens');
+assert.match(financialSource, /\$\{usage\.images\} 张/, '用量证据必须展示张数');
+assert.match(financialSource, /\$\{usage\.seconds\} 秒/, '用量证据必须展示秒数');
+assert.match(financialSource, /分辨率 \$\{usage\.resolution\}/, '用量证据必须展示分辨率');
+assert.match(financialSource, /不等于供应商最终账单/, '必须写明合同价折算≠供应商最终账单');
+assert.match(financialSource, /价目层级/, '两层价目（模型级 / 素材类型）必须按 priceLevel 标注');
+for (const [needle, label] of [
+  ['admin/provider-billing/adapters', '适配器与端点配置'],
+  ['admin/provider-billing/accounts/${accountId}/config', '端点配置保存'],
+  ['admin/provider-billing/accounts/${accountId}/credential', '凭据设置'],
+  ['api.delete(`admin/provider-billing/accounts/${accountId}/credential`)', '凭据清除'],
+  ['admin/provider-billing/accounts/${accountId}/sync', '立即同步该账户'],
+  ["api.post('admin/provider-billing/sync'", '立即同步全部账户'],
+  ['admin/financial-reporting/provider-bill-reconciliation', '官方账单对账结果接口'],
+]) assert.ok(financialSource.includes(needle), `官方账单自动对账区块必须有：${label}`);
+assert.match(financialSource, /最近同步状态与失败原因/, '必须显示最近同步状态与失败原因');
+assert.match(financialSource, /官方账单快照/, '必须有官方账单快照列表');
+assert.match(financialSource, /只提交、不回显/, '凭据必须只提交不回显');
+assert.match(financialSource, /凭据必须只提交|billing\?\.credentialConfigured \? <span className="status success">已配置/, '必须显示凭据是否已配置');
+assert.match(financialSource, /按<strong>账期聚合<\/strong>/, '必须写明官方账单是账期聚合');
+assert.match(financialSource, /CSV 手工导入保留为兜底/, '必须写明 CSV 保留为兜底');
+for (const column of ['官方账单合计', '平台 COMPUTED（合同价折算）', 'ESTIMATED', 'REPORTED', 'CSV 已核销', '差异（官方 − COMPUTED）']) {
+  assert.ok(financialSource.includes(column), `官方账单对账表必须有「${column}」列`);
+}
+assert.match(financialSource, /缺失单列、不按 0|不按 0 参与计算|绝不按 0 计/, '必须写明缺失 / 未知不按 0');
+const billingPanelSource = fs.readFileSync(path.join(root, 'apps/admin/src/components/BillingPanels.jsx'), 'utf8');
+assert.match(billingPanelSource, /上游合同单价（与上游的合同价 · 用于自动折算实际计费）/, '渠道配置必须有上游合同单价编辑器');
+for (const field of ['inputFenPer1kTokens', 'outputFenPer1kTokens', 'perImageFen', 'perSecondFen', 'audioExtraPerSecondFen', 'perCallFen', 'byResolution']) {
+  assert.ok(billingPanelSource.includes(field), `合同单价的字段名必须与后端 upstreamCost 一致：${field}`);
+}
+assert.match(billingPanelSource, /upstreamUnitPrices/, '素材类型价写回 channel.upstreamUnitPrices');
+assert.match(billingPanelSource, /modelUnitPrices/, '模型级覆盖写回 channel.modelUnitPrices');
+assert.match(billingPanelSource, /模型级覆盖（留空 = 用素材类型价）/, '必须说明模型级留空 = 回落素材类型价');
+assert.match(billingPanelSource, /模型级覆盖 &gt; 素材类型价/, '必须写明优先级 模型 > 素材类型');
+assert.match(billingPanelSource, /不等于供应商开出的最终账单/, '必须写明合同价折算≠供应商最终账单');
+assert.match(billingPanelSource, /保存失败：\{saveError\}/, '后端拒绝非法合同单价时必须展示错误');
+assert.match(billingPanelSource, /unitPriceEditor\(channel, index\)/, '合同单价编辑器必须按渠道分组渲染');
 assert.match(modelSource, /<FinancialReconciliation api=\{api\} view=\{view\}/);
 assert.match(adminSource, /handleFinancialReporting/);
 
@@ -176,14 +255,46 @@ fs.writeFileSync(entry, `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ModelCompute } from ${JSON.stringify(path.join(root, 'apps/admin/src/pages/ModelCompute.jsx').split(path.sep).join('/'))};
+import { ProviderBillReconciliationTable } from ${JSON.stringify(path.join(root, 'apps/admin/src/components/FinancialReconciliation.jsx').split(path.sep).join('/'))};
 const api = { get: () => new Promise(() => {}), post: () => Promise.resolve({}) };
 for (const view of ['calls','bills','matching','margin']) {
   const html = renderToStaticMarkup(<MemoryRouter initialEntries={['/compute/usage?view='+view]}><Routes><Route path="/compute/usage" element={<ModelCompute api={api} />} /></Routes></MemoryRouter>);
   for (const tab of ['调用账','供应商账单','匹配与核销','三账与毛利']) if (!html.includes(tab)) throw new Error(view+' missing tab '+tab);
-  const expected = { calls: '正在读取调用账', bills: '导入供应商账单', matching: '正在读取核销记录', margin: '正在计算三账对照' }[view];
-  if (!html.includes(expected)) throw new Error(view+' did not render '+expected);
+  // 「上游计费」（新列）与「官方账单自动对账」（新区块）必须在加载态就已经渲染出来，不能等数据。
+  const expected = {
+    calls: ['正在读取调用账', '上游计费'],
+    bills: ['导入供应商账单', '官方账单自动对账', '官方账单快照', '官方账单 × 平台口径', 'CSV 手工导入保留为兜底', '全部账户（汇总）'],
+    matching: ['正在读取核销记录'],
+    margin: ['正在计算三账对照'],
+  }[view];
+  for (const text of expected) if (!html.includes(text)) throw new Error(view+' did not render '+text);
 }
-console.log('P88 four-view SSR passed');
+
+// 官方账单对账表用夹具**真渲染**：缺失 / 未知必须留空，不能被显示成 0。
+const fixture = {
+  period: { currency: 'CNY', platformCurrency: 'CNY' },
+  rows: [
+    { model: 'model-a', modelLabel: 'model-a', officialAmountMinor: 1284, officialPresent: true, officialRowCount: 2, officialQuantity: null, computedAmountMinor: 1000, computedPresent: true, computedCallCount: 1, estimatedAmountMinor: null, estimatedCallCount: 0, reportedAmountMinor: null, reportedCallCount: 0, csvSettledAmountMinor: null, csvSettledMatchCount: 0, unknownCostCallCount: 1, differenceMinor: null, differenceReason: 'COMPUTED_INCOMPLETE', differenceStatus: null, inOfficialOnly: false, inPlatformOnly: false },
+    { model: null, modelLabel: '未标注模型', officialAmountMinor: null, officialPresent: false, officialRowCount: 0, officialQuantity: null, computedAmountMinor: null, computedPresent: false, computedCallCount: 0, estimatedAmountMinor: 400, estimatedCallCount: 1, reportedAmountMinor: null, reportedCallCount: 0, csvSettledAmountMinor: null, csvSettledMatchCount: 0, unknownCostCallCount: 0, differenceMinor: null, differenceReason: 'OFFICIAL_MISSING', differenceStatus: null, inOfficialOnly: false, inPlatformOnly: true },
+  ],
+  totals: {
+    modelCount: 2, officialAmountMinor: null, computedAmountMinor: null, estimatedAmountMinor: null, reportedAmountMinor: null,
+    csvSettledAmountMinor: null, differenceMinor: null,
+    presentSums: { officialAmountMinor: 1284, computedAmountMinor: 1000, estimatedAmountMinor: 400, reportedAmountMinor: null, csvSettledAmountMinor: null, differenceMinor: null },
+    complete: { official: false, computed: false, estimated: false, reported: false, csvSettled: false, difference: false },
+    computedCallCount: 1, estimatedCallCount: 1, reportedCallCount: 0, csvSettledMatchCount: 0, unknownCostCallCount: 1,
+  },
+  coverage: { officialSnapshotCount: 1, supersededSnapshotCount: 1, officialCurrencies: ['CNY'], officialCurrencyMismatch: false, excludedOfficial: [] },
+  missingInBill: [null], missingInPlatform: [null],
+};
+const tableHtml = renderToStaticMarkup(<ProviderBillReconciliationTable data={fixture} />);
+for (const text of ['官方账单合计', '平台 COMPUTED（合同价折算）', 'ESTIMATED', 'REPORTED', 'CSV 已核销', '差异（官方 − COMPUTED）', '12.84', '10.00', '4.00', '缺失 / 未知', '官方账单没有这个模型', '差异不可算', '严格合计留空', '已拿到部分', '平台有成本未知的调用，差异不可算']) {
+  if (!tableHtml.includes(text)) throw new Error('官方账单对账表缺少 '+text);
+}
+if (tableHtml.includes('>0.00<')) throw new Error('缺失 / 未知被显示成了 0');
+const emptyHtml = renderToStaticMarkup(<ProviderBillReconciliationTable data={{ rows: [] }} />);
+if (!emptyHtml.includes('这个账期没有可对账的数据')) throw new Error('空账期必须显示空态');
+console.log('P88 four-view SSR + official bill reconciliation table passed');
 `);
 const outDir = path.join(ssrTemp, 'out');
 await build({ root, configFile: path.join(root, 'apps/admin/vite.config.mjs'), logLevel: 'error', ssr: { noExternal: true }, build: { ssr: entry, outDir, emptyOutDir: true, minify: false } });

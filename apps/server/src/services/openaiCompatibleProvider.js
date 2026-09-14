@@ -430,7 +430,10 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         onSubmitted?.(payloadTaskId(parsed));
         return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '', clientRequestId, onEvidence })] };
       }
-      return { assets: [assetFromResponse({ payload: parsed, binary: parsed?.binary, contentType: parsed?.contentType, modality: normalizedModality, title, providerName, model: providerModel })] };
+      // 用量回执（P90）：文本把上游的 token 用量提到顶层 usage，调用方不用再翻产物 metadata。
+      // 非文本上游没有 token 回执，usage 为 null（图片/视频按张数、秒数在调用侧按请求参数记）。
+      const asset = assetFromResponse({ payload: parsed, binary: parsed?.binary, contentType: parsed?.contentType, modality: normalizedModality, title, providerName, model: providerModel });
+      return { assets: [asset], usage: asset?.metadata?.tokens || null };
     },
     // 多轮对话流式生成：上游返回 text/event-stream 时逐块回调；上游不支持流式则退化为整段返回。
     // signal：调用方中断（学生点「停止」或连接断开）时中止上游请求；onReasoning：推理型模型
@@ -476,7 +479,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
           const text = responseText(parsed);
           if (!text) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
           if (typeof onDelta === 'function') onDelta(text, text);
-          return { assets: [textAsset({ text, title, providerName, model: providerModel })], streamed: false };
+          return { assets: [textAsset({ text, title, providerName, model: providerModel, tokens: tokenUsage(parsed), cost: reportedCost(parsed) })], usage: tokenUsage(parsed), streamed: false };
         }
         let full = '';
         let usage = null;

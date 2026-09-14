@@ -1400,6 +1400,9 @@ for (const [table, column, type] of [
   ['compute_attempts', 'cost_rule_snapshot', 'TEXT'],
   // 对外售价观测：只记录「按当时公告价算出的每次调用售价」，不扣学生（usage_records.cost_fen 恒 0）。
   ['compute_attempts', 'sale_price_fen', 'REAL'],
+  // 合同单价折算（P90）：这一列只存**上游用量证据**（token / 秒数 / 张数 / 分辨率 / 含音频）。
+  // 金额仍然只落在 upstream_cost_fen；缺用量或缺单价时为 NULL（UNKNOWN），绝不按 0 计。
+  ['compute_attempts', 'usage_snapshot', 'TEXT'],
 ]) {
   if (!rows(`PRAGMA table_info(${table})`).some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
@@ -2396,3 +2399,75 @@ if (!rows('PRAGMA table_info(supplier_billing_matches)').some((item) => item.nam
   db.exec('ALTER TABLE supplier_billing_matches ADD COLUMN original_match_id TEXT REFERENCES supplier_billing_matches(id) ON DELETE RESTRICT');
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_supplier_matches_original ON supplier_billing_matches(original_match_id, cancelled_at)');
+
+// ── 官方账单 API 自动对账（供应方账单接口拉取）────────────────────────────────
+// 供应商账户上的**账单接口配置**：只存「怎么拉」，绝不存凭据。
+// 凭据（Bearer / 管理员 key）走 providerSecret.js（AES-256-GCM，key = `supplier-billing:<accountId>`），
+// 因此这里的 billing_headers 必须是**非敏感请求头**，服务写入前会拒绝 Authorization/api-key 之类的键。
+for (const [name, definition] of [
+  ['billing_adapter', 'TEXT'],
+  ['billing_endpoint', 'TEXT'],
+  ['billing_method', "TEXT NOT NULL DEFAULT 'GET'"],
+  ['billing_headers', 'TEXT'],
+  ['billing_mapping', 'TEXT'],
+  ['billing_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+  ['billing_period_days', 'INTEGER NOT NULL DEFAULT 1'],
+  ['billing_last_sync_at', 'TEXT'],
+  ['billing_last_sync_status', 'TEXT'],
+  ['billing_last_sync_error', 'TEXT'],
+  ['billing_last_snapshot_id', 'TEXT'],
+]) {
+  if (rows('PRAGMA table_info(supplier_accounts)').some((item) => item.name === name)) continue;
+  db.exec(`ALTER TABLE supplier_accounts ADD COLUMN ${name} ${definition}`);
+}
+
+// 每次拉取的**不可变快照**：成功与失败都落一行，失败行保留错误码/原文，成功行保留原始响应体。
+// 幂等键 = 账号 + 账期 + 响应哈希（只对成功行生效：失败是「这次没拉到」，不是同一份账单）。
+db.exec(`CREATE TABLE IF NOT EXISTS provider_bill_snapshots (
+  id TEXT PRIMARY KEY,
+  supplier_account_id TEXT NOT NULL,
+  adapter TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'MANUAL' CHECK (source IN ('MANUAL','SCHEDULED')),
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  currency TEXT,
+  status TEXT NOT NULL CHECK (status IN ('FETCHED','FAILED')),
+  response_hash TEXT NOT NULL,
+  http_status INTEGER,
+  raw_payload TEXT,
+  item_count INTEGER NOT NULL DEFAULT 0 CHECK (item_count >= 0),
+  total_amount_minor INTEGER,
+  error_code TEXT,
+  error_message TEXT,
+  error_detail TEXT,
+  duration_ms INTEGER NOT NULL DEFAULT 0 CHECK (duration_ms >= 0),
+  fetched_by TEXT,
+  fetched_at TEXT NOT NULL,
+  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT,
+  FOREIGN KEY (fetched_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_bill_snapshot_idempotency
+  ON provider_bill_snapshots(supplier_account_id, period_start, period_end, response_hash) WHERE status='FETCHED';
+CREATE INDEX IF NOT EXISTS idx_provider_bill_snapshot_account_time ON provider_bill_snapshots(supplier_account_id, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_provider_bill_snapshot_period ON provider_bill_snapshots(period_start, period_end, status);
+
+CREATE TABLE IF NOT EXISTS provider_bill_aggregates (
+  id TEXT PRIMARY KEY,
+  snapshot_id TEXT NOT NULL,
+  supplier_account_id TEXT NOT NULL,
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  model TEXT NOT NULL DEFAULT '',
+  currency TEXT NOT NULL CHECK (length(currency)=3),
+  amount_minor INTEGER NOT NULL,
+  quantity REAL,
+  unit TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (snapshot_id, model, currency),
+  FOREIGN KEY (snapshot_id) REFERENCES provider_bill_snapshots(id) ON DELETE RESTRICT,
+  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_period ON provider_bill_aggregates(period_start, period_end, model);
+CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_account ON provider_bill_aggregates(supplier_account_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_snapshot ON provider_bill_aggregates(snapshot_id);
+`);

@@ -9,6 +9,7 @@ import { handleAdmins } from './admin/admins.js';
 import { handleOverview } from './admin/overview.js';
 import { handleWorks } from './admin/works.js';
 import { handleSupplierBilling } from './admin/supplierBilling.js';
+import { handleProviderBilling } from './admin/providerBilling.js';
 import { handleFinancialReporting } from './admin/financialReporting.js';
 
 export async function handleAdmin(ctx) {
@@ -26,6 +27,7 @@ export async function handleAdmin(ctx) {
   { const result = await handleOverview(ctx, part, method); if (result !== null) return result; }
   { const result = await handleWorks(ctx, part, method); if (result !== null) return result; }
   { const result = await handleSupplierBilling(ctx, part, method); if (result !== null) return result; }
+  { const result = await handleProviderBilling(ctx, part, method); if (result !== null) return result; }
   { const result = await handleFinancialReporting(ctx, part, method); if (result !== null) return result; }
   return null;
 }

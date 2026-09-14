@@ -12,6 +12,28 @@ const INPUT_MODE_OPTIONS = [['TEXT', '文生视频（纯文本）'], ['FIRST_FRA
 // 音乐的生成模式（可多选）：歌词生音乐 / 描述生音乐（描述模式由平台先用文本模型代写歌词）
 const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描述生音乐']];
 
+/**
+ * 上游合同单价（P90）：与上游签的合同价，用来把「用量证据」自动折算成实际计费（来源 COMPUTED）。
+ *
+ * 结构必须与后端 `services/upstreamCost.js` 的 `normalizeUpstreamUnitPrices` 一模一样（**不要**在这里另发明一种）：
+ *   { TEXT:{inputFenPer1kTokens,outputFenPer1kTokens},
+ *     IMAGE:{perImageFen,byResolution:{'1K':30}},
+ *     VIDEO:{perSecondFen,byResolution,audioExtraPerSecondFen},
+ *     MUSIC:{perCallFen,perSecondFen} }
+ * 金额一律「非负整数分」；留空 = 这一项没配单价（折算不出来 → UNKNOWN，**绝不按 0 计**）。
+ * 两层：素材类型价（channel.upstreamUnitPrices，按渠道共用）
+ *      + 模型级覆盖（channel.modelUnitPrices = { [modelId]: { [素材类型]: {…} } }），
+ * 优先级 **模型 > 素材类型**（逐字段回退），模型级留空即回落素材类型价。
+ */
+const UNIT_PRICE_MODALITIES = [['TEXT', '文本'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']];
+const UNIT_PRICE_FIELDS = {
+  TEXT: [['inputFenPer1kTokens', '输入（分 / 千 token）'], ['outputFenPer1kTokens', '输出（分 / 千 token）']],
+  IMAGE: [['perImageFen', '每张（分）']],
+  VIDEO: [['perSecondFen', '每秒（分）'], ['audioExtraPerSecondFen', '含音频每秒加价（分）']],
+  MUSIC: [['perCallFen', '每次（分）'], ['perSecondFen', '每秒（分）']],
+};
+const UNIT_PRICE_TIER_SUGGESTIONS = { IMAGE: ['1K', '2K', '4K'], VIDEO: ['480p', '720p', '1080p', '2K', '4K'] };
+
 // 读回已声明的方式：既认新的多选数组，也认旧的单值 inputFrame（NONE/FIRST/LAST）。
 function inputModesOf(declared, modelId) {
   const value = declared?.inputModes ?? declared?.inputFrame;
@@ -33,6 +55,12 @@ export function ProviderPolicyPanel({ api }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState('IMAGE');
   const [routeSearch, setRouteSearch] = useState('');
+  // 合同单价编辑器：当前正在填哪个素材类型（按渠道 id 记）、还没填金额的档位草稿、档位名输入框。
+  const [unitPriceModality, setUnitPriceModality] = useState({});
+  const [unitPriceTierDrafts, setUnitPriceTierDrafts] = useState({});
+  const [unitPriceTierInput, setUnitPriceTierInput] = useState({});
+  // 保存失败单独存一份：后端拒绝（例如合同单价填了负数）时必须显示**红色**错误，不能被当成成功提示。
+  const [saveError, setSaveError] = useState('');
   // 播客 / 配音已下线，不再出现在配置里
   const modalities = [['TEXT', '文本'], ['IMAGE', '图片'], ['MUSIC', '音乐'], ['VIDEO', '视频']];
   const policy = config.data?.policy;
@@ -93,6 +121,134 @@ export function ProviderPolicyPanel({ api }) {
     if (custom && typeof custom === 'object') return JSON.stringify(custom, null, 2);
     const fallback = config.data?.defaultRequestTemplates?.[modality];
     return fallback ? JSON.stringify(fallback, null, 2) : '';
+  }
+  // ── 上游合同单价（P90）编辑器：两层契约 ─────────────────────────────────────
+  //   ① 素材类型价：channel.upstreamUnitPrices = { [素材类型]: {…字段…} } —— 本渠道共用；
+  //   ② 模型级覆盖：channel.modelUnitPrices = { [modelId]: { [素材类型]: {…同一套字段…} } }，
+  //      优先级 **模型 > 素材类型**（逐字段回退）；模型级留空 = 回落素材类型价。
+  // 两层写入的键名都与后端 upstreamCost.js 一致（inputFenPer1kTokens / perImageFen / perSecondFen /
+  // audioExtraPerSecondFen / perCallFen / byResolution）；传 null 的键会被删掉（= 没配），绝不写成 0。
+  const tierDraftKey = (index, modality, modelId = '') => `${index}:${modality}:${modelId}`;
+  // 填了非法值（负数、非数字）就**原样提交**，让后端拒绝并回显原因；前端不悄悄把它当成 0 或丢掉。
+  function unitPriceAmount(raw) {
+    const text = String(raw).trim();
+    if (text === '') return null;
+    return Number.isFinite(Number(text)) ? Number(text) : text;
+  }
+  function compactBucket(source, patch) {
+    const bucket = { ...(source || {}), ...patch };
+    for (const [key, value] of Object.entries(bucket)) if (value === null || value === undefined || value === '') delete bucket[key];
+    return bucket;
+  }
+  function patchUnitPrice(index, modality, patch) {
+    const channel = form.channels[index];
+    const prices = { ...(channel.upstreamUnitPrices || {}) };
+    const bucket = compactBucket(prices[modality], patch);
+    if (Object.keys(bucket).length) prices[modality] = bucket; else delete prices[modality];
+    updateChannel(index, { upstreamUnitPrices: Object.keys(prices).length ? prices : null });
+  }
+  /**
+   * 模型级覆盖读取：契约是 { [modelId]: {…与素材类型相同的字段…} }；
+   * 若后端把它写成「按素材类型再分一层」，这里也认，否则换了形状界面上会显示成「没配」，覆盖白填。
+   */
+  function readModelBucket(channel, modelId, modality) {
+    const raw = channel.modelUnitPrices?.[modelId];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const nested = modality ? raw[modality] : null;
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) return nested;
+    return raw;
+  }
+  function patchModelUnitPrice(index, modelId, modality, patch) {
+    const channel = form.channels[index];
+    const all = { ...(channel.modelUnitPrices || {}) };
+    const raw = all[modelId] && typeof all[modelId] === 'object' && !Array.isArray(all[modelId]) ? all[modelId] : {};
+    const nested = raw[modality] && typeof raw[modality] === 'object' && !Array.isArray(raw[modality]) ? raw[modality] : {};
+    const bucket = compactBucket(nested, patch);
+    // 契约是 { [modelId]: { [素材类型]: {…字段…} } }：**永远按素材类型再分一层**写 ——
+    // 拍平成 { perImageFen: 30 } 的对象会被后端 normalizeModelUnitPrices 当成「这个模型没配」直接丢掉。
+    if (Object.keys(bucket).length) all[modelId] = { ...raw, [modality]: bucket };
+    else if (Object.keys(raw).some((key) => key !== modality)) all[modelId] = { ...raw, [modality]: {} };   // 别的素材类型的覆盖不能一起抹掉
+    else delete all[modelId];
+    updateChannel(index, { modelUnitPrices: Object.keys(all).length ? all : null });
+  }
+  function setUnitPriceValue(index, modality, field, raw) { patchUnitPrice(index, modality, { [field]: unitPriceAmount(raw) }); }
+  function setUnitPriceTier(index, modality, tier, raw) {
+    const byResolution = { ...(form.channels[index].upstreamUnitPrices?.[modality]?.byResolution || {}) };
+    const value = unitPriceAmount(raw);
+    if (value === null) delete byResolution[tier]; else byResolution[tier] = value;
+    patchUnitPrice(index, modality, { byResolution: Object.keys(byResolution).length ? byResolution : null });
+  }
+  function setModelUnitPriceValue(index, modelId, modality, field, raw) { patchModelUnitPrice(index, modelId, modality, { [field]: unitPriceAmount(raw) }); }
+  function setModelUnitPriceTier(index, modelId, modality, tier, raw) {
+    const byResolution = { ...(readModelBucket(form.channels[index], modelId, modality)?.byResolution || {}) };
+    const value = unitPriceAmount(raw);
+    if (value === null) delete byResolution[tier]; else byResolution[tier] = value;
+    patchModelUnitPrice(index, modelId, modality, { byResolution: Object.keys(byResolution).length ? byResolution : null });
+  }
+  function addUnitPriceTier(index, modality, modelId, tier) {
+    const name = String(tier || '').trim().slice(0, 40);
+    if (!name) return;
+    const key = tierDraftKey(index, modality, modelId);
+    setUnitPriceTierDrafts((current) => ({ ...current, [key]: [...new Set([...(current[key] || []), name])] }));
+    setUnitPriceTierInput((current) => ({ ...current, [key]: '' }));
+  }
+  function removeUnitPriceTier(index, modality, modelId, tier) {
+    const key = tierDraftKey(index, modality, modelId);
+    setUnitPriceTierDrafts((current) => ({ ...current, [key]: (current[key] || []).filter((item) => item !== tier) }));
+    const bucket = modelId ? readModelBucket(form.channels[index], modelId, modality) : form.channels[index].upstreamUnitPrices?.[modality];
+    if (bucket?.byResolution?.[tier] === undefined) return;
+    const byResolution = { ...bucket.byResolution };
+    delete byResolution[tier];
+    const next = { byResolution: Object.keys(byResolution).length ? byResolution : null };
+    if (modelId) patchModelUnitPrice(index, modelId, modality, next); else patchUnitPrice(index, modality, next);
+  }
+  function unitPriceFields(index, modality, modelId, bucket) {
+    return <div className="form-grid top-gap">
+      {(UNIT_PRICE_FIELDS[modality] || []).map(([field, label]) => <label key={field}>{modelId ? `${modelId} · ` : ''}{label}<input type="number" min="0" step="1" value={bucket?.[field] ?? ''} placeholder={modelId ? '留空 = 用素材类型价' : '留空 = 未配（折算为 UNKNOWN）'} onChange={(event) => (modelId ? setModelUnitPriceValue(index, modelId, modality, field, event.target.value) : setUnitPriceValue(index, modality, field, event.target.value))} /></label>)}
+    </div>;
+  }
+  function unitPriceTiers(index, modality, modelId, bucket) {
+    const configured = Object.keys(bucket?.byResolution || {});
+    const key = tierDraftKey(index, modality, modelId);
+    const drafts = unitPriceTierDrafts[key] || [];
+    const tiers = [...new Set([...(UNIT_PRICE_TIER_SUGGESTIONS[modality] || []), ...configured, ...drafts])];
+    if (!tiers.length) return null;
+    return <div className="top-gap">
+      <div className="muted">分辨率档位价（可选）：配了这一档就以档位价为准；档位没配或拿不到分辨率时回落到上面的单价，仍折算不出来就保持 UNKNOWN（不按 0）。</div>
+      <div className="form-grid top-gap">
+        {tiers.map((tier) => <label key={tier}>{modelId ? `${modelId} · ` : ''}{tier}<span className="row-actions"><input type="number" min="0" step="1" value={bucket?.byResolution?.[tier] ?? ''} placeholder="分" onChange={(event) => (modelId ? setModelUnitPriceTier(index, modelId, modality, tier, event.target.value) : setUnitPriceTier(index, modality, tier, event.target.value))} /><button type="button" className="text-button" onClick={() => removeUnitPriceTier(index, modality, modelId, tier)}>删除</button></span></label>)}
+      </div>
+      <label className="top-gap">新增分辨率档位（输入后回车）<input value={unitPriceTierInput[key] || ''} placeholder="例如：512p" onChange={(event) => setUnitPriceTierInput((current) => ({ ...current, [key]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addUnitPriceTier(index, modality, modelId, event.target.value); } }} /></label>
+    </div>;
+  }
+  /**
+   * 合同单价编辑器：按渠道分组（每个渠道自己一份），在渠道内按素材类型切换，并逐个模型填「模型级覆盖」。
+   * 模型级留空 = 用素材类型价（优先级 模型 > 素材类型）。
+   */
+  function unitPriceEditor(channel, index) {
+    const priced = channel.upstreamUnitPrices || {};
+    const active = unitPriceModality[channel.id] || channelModality(channel.id) || 'TEXT';
+    const bucket = priced[active] || {};
+    const models = channel.models || [];
+    return <div className="channel-unit-prices top-gap">
+      <strong>上游合同单价（与上游的合同价 · 用于自动折算实际计费）</strong>
+      <div className="muted">这是与上游签的<strong>合同价</strong>：每次调用后平台按用量证据（token / 张数 / 秒数 / 分辨率）自动折算上游计费，来源标注为 <b>COMPUTED</b>。它<strong>不等于供应商开出的最终账单</strong>，也不是对外售价；缺用量或缺单价时金额保持 <b>UNKNOWN</b>，绝不按 0 计。金额一律填「非负整数分」，留空＝这一项没配（负数或非数字会被后端整单拒绝并在这里显示错误）。优先级：<b>模型级覆盖 &gt; 素材类型价</b>。</div>
+      <div className="row-actions top-gap" role="group" aria-label="合同单价的素材类型">
+        {UNIT_PRICE_MODALITIES.map(([id, label]) => <button key={id} type="button" className={active === id ? 'primary-button' : 'secondary-button'} aria-pressed={active === id} onClick={() => setUnitPriceModality((current) => ({ ...current, [channel.id]: id }))}>{label}{Object.keys(priced[id] || {}).length ? ' ✓' : ''}</button>)}
+      </div>
+      <div className="top-gap"><h4>素材类型价（本渠道共用）</h4>{unitPriceFields(index, active, '', bucket)}{unitPriceTiers(index, active, '', bucket)}</div>
+      <div className="top-gap"><h4>模型级覆盖（留空 = 用素材类型价）</h4>
+        {models.length ? models.map((modelId) => {
+          const modelBucket = readModelBucket(channel, modelId, active) || {};
+          return <div className="card top-gap" key={modelId}>
+            <div className="row-actions"><strong>{modelId}</strong>{Object.keys(modelBucket).length ? <span className="status success">已覆盖</span> : <span className="status">未覆盖（用素材类型价）</span>}</div>
+            {unitPriceFields(index, active, modelId, modelBucket)}
+            {unitPriceTiers(index, active, modelId, modelBucket)}
+          </div>;
+        }) : <div className="muted">先勾选可用模型，再填模型级覆盖。</div>}
+      </div>
+      <div className="muted top-gap">本渠道模型：{models.length ? models.join('、') : '（未勾选）'} —— 单价不同的模型用上面的「模型级覆盖」单独填，不必再为它建一个渠道。</div>
+    </div>;
   }
   /**
    * 模型能力编辑器：只显示该模态真正有意义的字段（文本/音乐等没有比例清晰度），
@@ -167,12 +323,13 @@ export function ProviderPolicyPanel({ api }) {
     } catch (e) { setMessage(`${channel.name}：${e.message || '探测失败'}`); }
     finally { setBusy(false); }
   }
-  async function save(event) { event.preventDefault(); setBusy(true); setMessage(''); try { await api.put('admin/billing-config/ai-provider', form); setMessage('渠道配置已保存，后续请求立即使用新路由；在途请求保留原路由'); config.refresh(); } catch (e) { setMessage(e.message || '保存失败'); } finally { setBusy(false); } }
+  async function save(event) { event.preventDefault(); setBusy(true); setMessage(''); setSaveError(''); try { await api.put('admin/billing-config/ai-provider', form); setMessage('渠道配置已保存，后续请求立即使用新路由；在途请求保留原路由'); config.refresh(); } catch (e) { setSaveError(`${e.message || '保存失败'}${e.code ? `（${e.code}）` : ''}`); } finally { setBusy(false); } }
   if (config.loading) return <Panel title="AI 渠道配置"><Loading label="正在读取配置…" /></Panel>;
   if (config.error || !form) return <Panel title="AI 渠道配置"><ErrorState error={config.error || new Error('配置读取失败')} onRetry={config.refresh} /></Panel>;
   return <Panel title="AI 渠道配置">
-    <Notice tone="warning">平台按下面的路由策略选择渠道和模型。测试连接只检查接口可达；“用当前渠道试一次”会发起真实生成，视频和音乐可能运行数分钟并产生上游费用。页面金额是估算或上游报告，真实结算金额未知，请以供应商账单为准。</Notice>
+    <Notice tone="warning">平台按下面的路由策略选择渠道和模型。测试连接只检查接口可达；“用当前渠道试一次”会发起真实生成，视频和音乐可能运行数分钟并产生上游费用。页面金额是估算或上游报告，真实结算金额未知，请以供应商账单为准。填了「上游合同单价」后，平台会按用量证据自动折算上游计费（COMPUTED），但它仍<strong>不等于供应商开出的最终账单</strong>。</Notice>
     {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
+    {saveError ? <Notice tone="danger">保存失败：{saveError}。修正渠道配置或合同单价后重试（合同单价必须是「非负整数分」，留空表示没配）。</Notice> : null}
     <form onSubmit={save}>
       <div className="muted">渠道只负责保存供应商、模型和密钥；具体用哪个渠道，请在下面“能力路由”中切换。</div>
       <div className="row-actions top-gap"><strong>渠道列表</strong><button type="button" className="secondary-button" onClick={addChannel}>＋添加渠道</button></div>
@@ -234,6 +391,7 @@ export function ProviderPolicyPanel({ api }) {
             {channelModality(channel.id) ? <details className="top-gap"><summary>请求模板</summary><div className="muted">仅在供应商要求特殊请求格式时配置；留空使用平台默认模板。</div><textarea rows={6} value={channelTemplateText(channel)} onChange={(e) => updateChannel(index, { requestTemplates: { ...(channel.requestTemplates || {}), [channelModality(channel.id)]: e.target.value } })} /></details> : null}
           </details>
           <details className="top-gap"><summary>逐模型上游估算成本（分 / 次）</summary>{(channel.models || []).map(model => <label key={model}>{model}<input type="number" min="0" step="0.01" value={channel.modelCosts?.[model] ?? ''} placeholder="留空使用渠道估价" onChange={e => { const costs = {...(channel.modelCosts || {})}; if(e.target.value === '') delete costs[model]; else costs[model] = Number(e.target.value); updateChannel(index,{modelCosts:costs}); }} /></label>)}</details>
+          {unitPriceEditor(channel, index)}
           {capabilityEditor(channel, index)}
           <div className="row-actions top-gap"><button type="button" className="secondary-button" disabled={busy} onClick={() => testChannel(channel)}>测试连接</button><button type="button" className="secondary-button" disabled={busy} onClick={() => probeChannel(channel, channelModality(channel.id) || 'TEXT')}>用当前渠道试一次</button><button type="button" className="secondary-button" disabled={busy} onClick={() => fetchModels(channel, index)}>读取模型</button></div>
         </> : null}

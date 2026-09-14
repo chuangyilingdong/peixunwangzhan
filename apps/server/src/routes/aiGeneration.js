@@ -387,7 +387,7 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
   });
 }
 
-function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext = null }) {
+function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext = null, usage = null }) {
   transaction(() => {
     const user = row("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
     const freshProject = ownProject(auth, project.id);
@@ -409,11 +409,14 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     // 额度由算力池管（调用前的 assertComputePoolBudget 已经拦过一次，这里收尾记账）。
     // C3 前置：上游给了 token 用量就记下来（计费仍是「每次调用 × 单价」，不改口径）
     const firstAssetTokens = assetPayloads.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
+    // P90：优先用 provider 返回的 usage 回执（流式是最后一帧给的），退回产物 metadata 里的那份。
+    const recordedUsage = usage || firstAssetTokens || null;
     recordAiUsage({
       orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, projectId: project.id,
       sessionId: freshContext.activeSession?.id || null, generationJobId: jobId,
       modality, model: provider.model, status: 'SUCCESS',
-      inputTokens: firstAssetTokens?.inputTokens || 0, outputTokens: firstAssetTokens?.outputTokens || 0,
+      inputTokens: recordedUsage?.inputTokens || 0, outputTokens: recordedUsage?.outputTokens || 0,
+      usage: recordedUsage,
       // 算力池账本：成功才花钱，金额 = 本次单价（与调用前预扣用的是同一个函数，所以两边必然一致）
       costFen: parseJson(row('SELECT compute_snapshot FROM generation_jobs WHERE id=?', [jobId])?.compute_snapshot, {})?.unitFen ?? provider.compute?.saleSnapshot?.unitFen ?? priceFenFor({ modality, model: provider.model }),
       seriesId: freshContext.series?.id || null,
@@ -443,14 +446,14 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
   const channelId = mapping?.channelId || policy?.modalityChannels?.[key];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
-    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {} }
-    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {} };
+    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {}, upstreamUnitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null }
+    : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {}, upstreamUnitPrices: null, modelUnitPrices: null };
   const selected = mapping ? { ...base, model: mapping.model } : modelOverride ? { ...base, model: modelOverride } : base;
   selected.estimatedCostFen = channel?.modelCosts?.[selected.model] ?? channel?.estimatedCostFen ?? null;
   const backup = policy?.channels?.find((item) => item.id === (mapping ? mapping.backupChannelId : policy?.modalityBackupChannels?.[key]));
   if (backup) {
     const backupModel = mapping?.backupModel || backup.model;
-    selected.backup = { ...backup, channelId: backup.id, model: backupModel, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
+    selected.backup = { ...backup, channelId: backup.id, model: backupModel, upstreamUnitPrices: backup.upstreamUnitPrices || null, modelUnitPrices: backup.modelUnitPrices || null, estimatedCostFen: backup.modelCosts?.[backupModel] ?? backup.estimatedCostFen ?? null };
   }
   return selected;
 }
@@ -600,7 +603,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
-    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
+    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
     audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
     const job = jobDetail(jobId);
     return { job, assets: job.assets };
@@ -676,7 +679,7 @@ async function processAsyncGeneration(item) {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
-    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext });
+    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
   } catch (error) {
     markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });

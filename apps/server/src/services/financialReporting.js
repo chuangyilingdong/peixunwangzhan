@@ -1,4 +1,4 @@
-import { errors, row, rows } from '../lib.js';
+import { errors, parseJson, row, rows } from '../lib.js';
 import { getComputePricing } from './computePool.js';
 
 const CURRENCY = /^[A-Z]{3}$/;
@@ -120,6 +120,12 @@ export function listFinancialCalls(filters = {}) {
       provider: item.provider || null, model: item.model || null, status: item.status,
       costSource: item.cost_source, estimatedOrReportedMinor: item.upstream_cost_fen == null ? null : Number(item.upstream_cost_fen),
       costUnknown: item.cost_source === 'UNKNOWN' || item.upstream_cost_fen == null,
+      // 上游用量证据（P90）：usage_snapshot 里存的是 upstreamCost.collectUsageEvidence 的原始形状
+      // （tokens / 张数 / 秒数 / 分辨率 / 含音频），**只读透出**给调用账展示，服务不改口径、不算钱。
+      usageSnapshot: parseJson(item.usage_snapshot, null),
+      // 价目层级来源（P90）：cost_rule_snapshot 里 priceLevel(MODEL|MODALITY) 与 source(COMPUTED…)
+      // 沿用 upstreamCost.contractCostRuleSnapshot 的原字段名，**只读透出**、不重算金额；无快照为 null。
+      costRuleSnapshot: parseJson(item.cost_rule_snapshot, null),
       salePriceFen: sale.minor, salePriceSource: sale.source, salePriceIsSnapshot: sale.source === 'SNAPSHOT',
       clientRequestId: item.client_request_id || null, responseRequestId: item.response_request_id || null,
       responsePayloadId: item.response_payload_id || null, taskId: item.task_id || null,
@@ -252,6 +258,181 @@ export function financialReconciliationReport(filters = {}) {
     },
     filters: { ...range, orgId: orgId || null, seriesId: seriesId || null },
     basis: { cash: 'PAID_LICENSE_PURCHASES', revenue: 'IMMUTABLE_LICENSE_EVENTS', cost: 'ACTIVE_SUPPLIER_MATCHES', estimatesExcluded: true },
+  };
+}
+
+// ── 官方账单 API 对账（按账期 × 模型）────────────────────────────────────────
+// 官方账单（provider_bill_aggregates，来自供应商账单接口）与平台自己的四档金额并排放：
+//   · COMPUTED / ESTIMATED / REPORTED —— compute_attempts.cost_source 的三档平台口径；
+//   · CSV 已核销 —— supplier_billing_matches 里 ACTIVE 的分摊金额（运营导入的账单已经对上账的部分）。
+// 差异 = 官方 − COMPUTED，按模型归因。**缺失的一侧留 null，绝不按 0 参与计算**：
+// 「上游没给这个模型」和「上游给了 0」是两件完全不同的事，报表必须能分辨。
+const PLATFORM_COST_CURRENCY = 'CNY';
+const PERIOD_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+function periodRange(filters = {}) {
+  const currency = text(filters.currency).toUpperCase() || PLATFORM_COST_CURRENCY;
+  if (!CURRENCY.test(currency)) throw errors.badRequest('币种必须是三位大写代码', 'INVALID_CURRENCY');
+  const period = text(filters.period);
+  let start = text(filters.periodStart) || text(filters.from);
+  let end = text(filters.periodEnd) || text(filters.to);
+  if (period) {
+    if (!PERIOD_MONTH.test(period)) throw errors.badRequest('period 必须是 YYYY-MM 格式', 'INVALID_PERIOD');
+    const year = Number(period.slice(0, 4)); const month = Number(period.slice(5, 7));
+    start = new Date(Date.UTC(year, month - 1, 1)).toISOString();
+    end = new Date(Date.UTC(year, month, 1)).toISOString();
+  }
+  const since = new Date(start); const until = new Date(end);
+  if (!start || !end || Number.isNaN(since.getTime()) || Number.isNaN(until.getTime()) || since >= until) {
+    throw errors.badRequest('账期无效（需要 period=YYYY-MM 或 periodStart/periodEnd）', 'INVALID_TIME_RANGE');
+  }
+  return { periodStart: since.toISOString(), periodEnd: until.toISOString(), currency };
+}
+
+export function providerBillReconciliation(filters = {}) {
+  const range = periodRange(filters);
+  const accountId = text(filters.supplierAccountId);
+
+  // 同一账号 + 同一账期可能被拉过多次（供应商改了数、或换了适配器）：只认**最近一次**成功的快照，
+  // 否则同一份账期会被重复计入官方合计。被顶掉的那几份单列出来，方便运营知道「数是新的」。
+  const snapshotConditions = ["snapshot.status='FETCHED'", 'snapshot.period_start>=?', 'snapshot.period_end<=?'];
+  const snapshotParams = [range.periodStart, range.periodEnd];
+  add(snapshotConditions, snapshotParams, accountId, 'snapshot.supplier_account_id=?');
+  const fetched = rows(`SELECT snapshot.*,account.code account_code,account.name account_name FROM provider_bill_snapshots snapshot
+    LEFT JOIN supplier_accounts account ON account.id=snapshot.supplier_account_id
+    WHERE ${snapshotConditions.join(' AND ')} ORDER BY snapshot.fetched_at DESC,snapshot.id DESC`, snapshotParams);
+  const latestByPeriod = new Map();
+  let supersededCount = 0;
+  for (const snapshot of fetched) {
+    const key = `${snapshot.supplier_account_id}\u0000${snapshot.period_start}\u0000${snapshot.period_end}`;
+    if (latestByPeriod.has(key)) { supersededCount += 1; continue; }
+    latestByPeriod.set(key, snapshot);
+  }
+  const snapshots = [...latestByPeriod.values()];
+  const snapshotIds = snapshots.map((item) => item.id);
+
+  const officialRows = snapshotIds.length
+    ? rows(`SELECT model,currency,SUM(amount_minor) amountMinor,SUM(COALESCE(quantity,0)) quantity,COUNT(*) rowCount
+        FROM provider_bill_aggregates WHERE snapshot_id IN (${snapshotIds.map(() => '?').join(',')}) GROUP BY model,currency`, snapshotIds)
+    : [];
+  const officialCurrencies = [...new Set(officialRows.map((item) => item.currency))].sort();
+  const officialInCurrency = officialRows.filter((item) => item.currency === range.currency);
+  const excludedOfficial = officialRows.filter((item) => item.currency !== range.currency)
+    .map((item) => ({ model: item.model || null, currency: item.currency, amountMinor: Number(item.amountMinor || 0) }));
+  const officialCurrencyMismatch = officialRows.length > 0 && officialInCurrency.length === 0;
+
+  // 平台口径：按模型 × cost_source 汇总（金额未知的行只计数，不进任何一档金额）。
+  const platformRows = rows(`SELECT COALESCE(model,'') model,cost_source source,upstream_cost_fen costFen,COUNT(*) n
+    FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY COALESCE(model,''),cost_source,upstream_cost_fen`, [range.periodStart, range.periodEnd]);
+
+  // CSV 已核销：运营导入的账单里已经对到内部调用上的**有效分摊**，按被对上的模型归集。
+  const csvRows = rows(`SELECT COALESCE(attempt.model,usage.model,'') model,SUM(match.allocated_amount_minor) amountMinor,COUNT(*) matchCount
+    FROM supplier_billing_matches match
+    JOIN supplier_billing_lines line ON line.id=match.line_id
+    LEFT JOIN compute_attempts attempt ON match.target_type='ATTEMPT' AND attempt.id=match.target_id
+    LEFT JOIN usage_records usage ON match.target_type='USAGE' AND usage.id=match.target_id
+    WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
+      AND line.occurred_at>=? AND line.occurred_at<? AND match.currency=?
+    GROUP BY COALESCE(attempt.model,usage.model,'')`, [range.periodStart, range.periodEnd, range.currency]);
+
+  const modelKeys = new Set([
+    ...officialInCurrency.map((item) => item.model || ''),
+    ...platformRows.map((item) => item.model || ''),
+    ...csvRows.map((item) => item.model || ''),
+  ]);
+  const label = (model) => (model ? model : '未标注模型');
+  const rowsOut = [...modelKeys].sort((a, b) => String(a).localeCompare(String(b))).map((model) => {
+    const official = officialInCurrency.filter((item) => (item.model || '') === model);
+    const platform = platformRows.filter((item) => (item.model || '') === model);
+    const csv = csvRows.find((item) => (item.model || '') === model);
+    const sumSource = (source) => platform.filter((item) => item.source === source && item.costFen !== null && item.costFen !== undefined);
+    const countSource = (source) => platform.filter((item) => item.source === source).reduce((sum, item) => sum + Number(item.n || 0), 0);
+    const amountOf = (source) => (sumSource(source).length ? sumSource(source).reduce((sum, item) => sum + Number(item.costFen || 0), 0) : null);
+    const unknownCostCallCount = platform.filter((item) => item.costFen === null || item.costFen === undefined).reduce((sum, item) => sum + Number(item.n || 0), 0);
+    const officialPresent = official.length > 0;
+    const officialAmountMinor = officialPresent ? official.reduce((sum, item) => sum + Number(item.amountMinor || 0), 0) : null;
+    const computedAmountMinor = amountOf('COMPUTED');
+    const computedPresent = computedAmountMinor !== null;
+    // 差异只在「官方给了数」且「平台这一侧数得全」时才算：任一缺失就留 null，不拿 0 顶。
+    const differenceMinor = officialPresent && computedPresent && unknownCostCallCount === 0 ? officialAmountMinor - computedAmountMinor : null;
+    const differenceReason = !officialPresent ? 'OFFICIAL_MISSING' : !computedPresent ? 'COMPUTED_MISSING' : unknownCostCallCount > 0 ? 'COMPUTED_INCOMPLETE' : null;
+    return {
+      model: model || null, modelLabel: label(model),
+      officialAmountMinor, officialPresent, officialRowCount: official.reduce((sum, item) => sum + Number(item.rowCount || 0), 0),
+      officialQuantity: officialPresent ? official.reduce((sum, item) => sum + Number(item.quantity || 0), 0) : null,
+      computedAmountMinor, computedPresent, computedCallCount: countSource('COMPUTED'),
+      estimatedAmountMinor: amountOf('ESTIMATED'), estimatedCallCount: countSource('ESTIMATED'),
+      reportedAmountMinor: amountOf('REPORTED'), reportedCallCount: countSource('REPORTED'),
+      csvSettledAmountMinor: csv ? Number(csv.amountMinor || 0) : null, csvSettledMatchCount: csv ? Number(csv.matchCount || 0) : 0,
+      unknownCostCallCount,
+      differenceMinor, differenceReason,
+      differenceStatus: differenceMinor === null ? null : differenceMinor === 0 ? 'EXACT' : differenceMinor > 0 ? 'OFFICIAL_HIGHER' : 'OFFICIAL_LOWER',
+      inOfficialOnly: officialPresent && platform.length === 0, inPlatformOnly: !officialPresent && platform.length > 0,
+    };
+  });
+
+  const sumOrNull = (list, key) => (list.length && list.every((item) => item[key] !== null) ? list.reduce((sum, item) => sum + item[key], 0) : null);
+  // 有的模型官方没给数、或没有 COMPUTED 调用 —— 合计就留空（不按 0 求和）。
+  // 但界面仍然想显示「已拿到的那部分的加总」，所以额外给一份 presentSums，并标明哪些列不完整：
+  // 看的人一眼能分清「合计为空」是「真的没有」还是「缺了一部分」。
+  const presentSum = (key) => rowsOut.filter((item) => item[key] !== null).reduce((sum, item) => sum + item[key], 0);
+  const complete = (key) => rowsOut.length > 0 && rowsOut.every((item) => item[key] !== null);
+  const totals = {
+    modelCount: rowsOut.length,
+    officialAmountMinor: sumOrNull(rowsOut, 'officialAmountMinor'),
+    computedAmountMinor: sumOrNull(rowsOut, 'computedAmountMinor'),
+    estimatedAmountMinor: sumOrNull(rowsOut, 'estimatedAmountMinor'),
+    reportedAmountMinor: sumOrNull(rowsOut, 'reportedAmountMinor'),
+    csvSettledAmountMinor: sumOrNull(rowsOut, 'csvSettledAmountMinor'),
+    differenceMinor: sumOrNull(rowsOut, 'differenceMinor'),
+    presentSums: {
+      officialAmountMinor: presentSum('officialAmountMinor'),
+      computedAmountMinor: presentSum('computedAmountMinor'),
+      estimatedAmountMinor: presentSum('estimatedAmountMinor'),
+      reportedAmountMinor: presentSum('reportedAmountMinor'),
+      csvSettledAmountMinor: presentSum('csvSettledAmountMinor'),
+      differenceMinor: presentSum('differenceMinor'),
+    },
+    complete: {
+      official: complete('officialAmountMinor'),
+      computed: complete('computedAmountMinor'),
+      estimated: complete('estimatedAmountMinor'),
+      reported: complete('reportedAmountMinor'),
+      csvSettled: complete('csvSettledAmountMinor'),
+      difference: complete('differenceMinor'),
+    },
+    computedCallCount: rowsOut.reduce((sum, item) => sum + item.computedCallCount, 0),
+    estimatedCallCount: rowsOut.reduce((sum, item) => sum + item.estimatedCallCount, 0),
+    reportedCallCount: rowsOut.reduce((sum, item) => sum + item.reportedCallCount, 0),
+    csvSettledMatchCount: rowsOut.reduce((sum, item) => sum + item.csvSettledMatchCount, 0),
+    unknownCostCallCount: rowsOut.reduce((sum, item) => sum + item.unknownCostCallCount, 0),
+  };
+  return {
+    period: { ...range, platformCurrency: PLATFORM_COST_CURRENCY },
+    rows: rowsOut,
+    totals,
+    coverage: {
+      officialSnapshotCount: snapshots.length, supersededSnapshotCount: supersededCount,
+      officialCurrencies, officialCurrencyMismatch, excludedOfficial,
+      supplierAccountIds: [...new Set(snapshots.map((item) => item.supplier_account_id))],
+    },
+    snapshots: snapshots.map((item) => ({
+      id: item.id, supplierAccountId: item.supplier_account_id, supplierAccountCode: item.account_code || null, supplierAccountName: item.account_name || null,
+      adapter: item.adapter, source: item.source, periodStart: item.period_start, periodEnd: item.period_end,
+      currency: item.currency || null, itemCount: Number(item.item_count || 0), totalAmountMinor: item.total_amount_minor === null || item.total_amount_minor === undefined ? null : Number(item.total_amount_minor),
+      fetchedAt: item.fetched_at, fetchedBy: item.fetched_by || null,
+    })),
+    missingInBill: rowsOut.filter((item) => !item.officialPresent).map((item) => item.model),
+    missingInPlatform: rowsOut.filter((item) => !item.computedPresent).map((item) => item.model),
+    basis: {
+      official: 'PROVIDER_BILL_AGGREGATES_LATEST_SNAPSHOT_PER_PERIOD',
+      computed: 'COMPUTE_ATTEMPTS_COST_SOURCE_COMPUTED',
+      estimated: 'COMPUTE_ATTEMPTS_COST_SOURCE_ESTIMATED',
+      reported: 'COMPUTE_ATTEMPTS_COST_SOURCE_REPORTED',
+      csvSettled: 'ACTIVE_SUPPLIER_MATCHES',
+      difference: 'OFFICIAL_MINUS_COMPUTED_PER_MODEL',
+      missingIsNotZero: true,
+    },
   };
 }
 

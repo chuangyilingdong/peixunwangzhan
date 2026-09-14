@@ -9,3 +9,13 @@ function decrypt(x) { try { if(!x?.iv||!x?.tag||!x?.data)return ''; const d=crea
 export function getProviderApiKey(channelId = 'default') { return decrypt(readStore()[String(channelId || 'default')]); }
 export function setProviderApiKey(value, channelId = 'default') { const text=String(value||'').trim(); if(!text) return; const secrets=readStore(); secrets[String(channelId || 'default')]=encrypt(text); mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,JSON.stringify({version:1,secrets}),{mode:0o600}); }
 export function hasProviderApiKey(channelId = 'default') { return Boolean(getProviderApiKey(channelId)); }
+// 删除某个 key 的凭据（轮换/停用供应商账单拉取时用）。只删这一个键，其它渠道的密钥原样保留。
+export function clearProviderApiKey(channelId = 'default') {
+  const key = String(channelId || 'default');
+  const secrets = readStore();
+  if (!Object.prototype.hasOwnProperty.call(secrets, key)) return false;
+  delete secrets[key];
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ version: 1, secrets }), { mode: 0o600 });
+  return true;
+}
