@@ -103,7 +103,7 @@ try {
   check(!(beforeAssign || []).some((item) => item.id === seriesId), '未授权机构的学生端也不应看到课包');
 
   // ③ 授权 2 年后：机构可见，且带出有效期
-  const assigned = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 730, quotaTotal: 1 }));
+  const assigned = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 730, quotaTotal: 1, amountMinor: 100, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P40-O-${seriesId}`, contractNo: `P40-C-${seriesId}`, idempotencyKey: `p40-purchase-${seriesId}` }));
   check(assigned?.assignedCount === 1, `授权应写入 1 条，实际 ${assigned?.assignedCount}`);
   const twoYearsOut = Date.now() + 729 * 24 * 60 * 60 * 1000;
   check(new Date(assigned.expiresAt).getTime() > twoYearsOut, `2 年授权的到期时间应在 2 年后，实际 ${assigned?.expiresAt}`);
@@ -139,7 +139,7 @@ try {
 
   // ⑦ 撤销后重新授权（REVOKED → ACTIVE）：这是「先撤销、过阵子再给」的实际路径，
   //    曾经因为续期分支只查 id 不查 status 而直接抛「status 无效」。
-  await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1 }));
+  await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1, amountMinor: 100, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P40-O-reactivate-${seriesId}`, contractNo: `P40-C-reactivate-${seriesId}`, idempotencyKey: `p40-reactivate-${seriesId}` }));
   check(await hasCourse('org1', seriesId), '撤销后重新授权应能恢复机构可见');
 
   // ⑧ 下架 → 广场不再展示，机构本来就看不到
@@ -154,7 +154,7 @@ try {
   }));
   await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/status`, 'POST', { action: 'publish' }));
   check(!(await plazaIds()).includes(privateSeries.id), '「不上架」课包不应出现在课程广场');
-  await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1 }));
+  await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1, amountMinor: 100, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P40-O-${privateSeries.id}`, contractNo: `P40-C-${privateSeries.id}`, idempotencyKey: `p40-purchase-${privateSeries.id}` }));
   check(await hasCourse('org1', privateSeries.id), '「不上架」课包授权后机构应能看到');
   check(!(await plazaIds()).includes(privateSeries.id), '机构可见不应把课包带上课程广场');
 } catch (error) {

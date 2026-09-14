@@ -223,6 +223,7 @@ export function ProviderPolicyPanel({ api }) {
               </div>;
             })()}
             <label>默认模型{(channel.models || []).length ? <select value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} required><option value="">请选择默认模型</option>{(channel.models || []).map((m) => <option key={m} value={m}>{m}</option>)}</select> : <input value={channel.model || ''} onChange={(e) => updateChannel(index, { model: e.target.value })} placeholder="模型 ID" required />}</label>
+            <label>供应商账户标识<input value={channel.providerAccountRef || ''} onChange={(e) => updateChannel(index, { providerAccountRef: e.target.value })} placeholder="必须与供应商账单 provider_account_id 一致" /></label>
             <label>上游估算成本（分 / 次，留空为未知）<input type="number" min="0" step="0.01" value={channel.estimatedCostFen ?? ''} onChange={e => updateChannel(index, { estimatedCostFen: e.target.value === '' ? null : Number(e.target.value) })} /></label><label>API Key<input type="password" value={channel.apiKey || ''} onChange={(e) => updateChannel(index, { apiKey: e.target.value })} placeholder="留空保持原密钥" autoComplete="new-password" /></label>
           </div>
           <details className="top-gap"><summary>高级配置</summary>

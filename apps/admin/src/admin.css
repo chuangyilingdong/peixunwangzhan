@@ -396,18 +396,31 @@
  
 }
 
-.admin-tabs a {
+.admin-tabs a,
+.admin-tabs button {
   padding:12px 2px;
+  border:0;
   border-bottom:3px solid transparent;
+  border-radius:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  cursor:pointer;
   white-space:nowrap;
  
 }
 
-.admin-tabs a.active {
+.admin-tabs a.active,
+.admin-tabs button.active {
   color:var(--deep);
   border-bottom-color:var(--purple);
   font-weight:650;
  
+}
+
+.admin-tabs button:focus-visible {
+  outline:2px solid var(--purple);
+  outline-offset:2px;
 }
 
 .admin-console .admin-detail {

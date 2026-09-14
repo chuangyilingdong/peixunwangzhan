@@ -59,7 +59,7 @@ try {
   // 批次 D：原来走「建班级 → 配课单」，班级退场后改成直接建课堂（scripts/lib/classroomApi.mjs）
   const initialPublish = await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
   assert.equal(initialPublish.status, 200, JSON.stringify(initialPublish));
-  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 1 } });
+  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 1, amountMinor: 100, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P54-O-${seriesId}`, contractNo: `P54-C-${seriesId}`, idempotencyKey: `p54-purchase-${seriesId}` } });
   assert.equal(assigned.status, 200, JSON.stringify(assigned));
   const studentId = student.user?.id || student.data?.user?.id;
   const granted = await api('/api/org/course-grants', { method: 'POST', token: orgAdmin.token, body: { seriesId, studentIds: [studentId] } });

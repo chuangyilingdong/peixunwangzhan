@@ -100,7 +100,7 @@ try {
     const published = await api(`/api/admin/course-series/${created.data.id}/status`, { method: 'POST', token: rootAdmin, body: { action: 'publish' } });
     assert.equal(published.status, 200, `发布课包失败: ${JSON.stringify(published.data)}`);
     // 上架广场 ≠ 授权给机构（p40 那条口径）：机构端要看到，必须走授权
-    const assigned = await api(`/api/admin/course-series/${created.data.id}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgLogin.data.organization.id], validityDays: 365, quotaTotal: 10 } });
+    const assigned = await api(`/api/admin/course-series/${created.data.id}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgLogin.data.organization.id], validityDays: 365, quotaTotal: 10, amountMinor: 1000, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P14-O-${created.data.id}`, contractNo: `P14-C-${created.data.id}`, idempotencyKey: `p14-purchase-${created.data.id}` } });
     assert.equal(assigned.status, 200, `授权课包失败: ${JSON.stringify(assigned.data)}`);
   }
   const seriesPage1 = await api('/api/org/course-series?limit=1&page=1', { token: org });

@@ -441,7 +441,7 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
   const channelId = mapping?.channelId || policy?.modalityChannels?.[key];
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
   const base = channel
-    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {} }
+    ? { provider: channel.provider, model: channel.model, endpoint: channel.endpoint, channelId: channel.id, providerAccountRef: channel.providerAccountRef || null, requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {}, requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {} }
     : { provider: policy.provider, model: policy.model, endpoint: policy.endpoint, channelId: 'default', requestTemplates: {}, modelRequestTemplates: {}, requestPaths: {}, pollPaths: {} };
   const selected = mapping ? { ...base, model: mapping.model } : modelOverride ? { ...base, model: modelOverride } : base;
   selected.estimatedCostFen = channel?.modelCosts?.[selected.model] ?? channel?.estimatedCostFen ?? null;

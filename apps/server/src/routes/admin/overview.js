@@ -98,15 +98,45 @@ export async function handleOverview(ctx, part, method) {
   if (part === '/compute-attempts' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
+    const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
+    const limit = integer(ctx.search.get('limit'), '每页数量', { min: 1, max: 100, fallback: 20 });
     const conditions = ['attempt.created_at>=?'];
     const params = [new Date(Date.now() - days * 86400000).toISOString()];
-    for (const [key, column] of [['orgId','org_id'],['userId','user_id'],['status','status']]) if (ctx.search.get(key)) { conditions.push(`attempt.${column}=?`); params.push(ctx.search.get(key)); }
+    for (const [key, column] of [
+      ['orgId','org_id'],['userId','user_id'],['status','status'],['callId','call_id'],['clientRequestId','client_request_id'],
+      ['responseRequestId','response_request_id'],['responsePayloadId','response_payload_id'],['taskId','task_id'],['usageId','usage_id'],
+      ['gatewayLogId','gateway_log_id'],['channelId','channel_id'],['actualChannelId','actual_channel_id'],['provider','provider'],
+      ['providerAccountRef','provider_account_ref'],['model','model'],['routedVia','routed_via'],
+    ]) if (ctx.search.get(key)) { conditions.push(`attempt.${column}=?`); params.push(ctx.search.get(key)); }
+    const evidenceSql = `(attempt.response_request_id IS NOT NULL OR attempt.response_payload_id IS NOT NULL OR attempt.task_id IS NOT NULL OR attempt.usage_id IS NOT NULL OR attempt.gateway_log_id IS NOT NULL)`;
+    const exactEvidenceSql = `(attempt.gateway_log_id IS NOT NULL OR attempt.response_request_id IS NOT NULL OR attempt.response_payload_id IS NOT NULL OR attempt.task_id IS NOT NULL)`;
+    const evidenceMatch = String(ctx.search.get('evidenceMatch') || '').trim().toUpperCase();
+    if (evidenceMatch === 'MATCHED') conditions.push(exactEvidenceSql);
+    else if (evidenceMatch === 'PARTIAL') conditions.push(`${evidenceSql} AND NOT ${exactEvidenceSql}`);
+    else if (evidenceMatch === 'UNMATCHED') conditions.push(`NOT ${evidenceSql}`);
+    else if (evidenceMatch) throw errors.badRequest('证据匹配状态无效', 'INVALID_EVIDENCE_MATCH');
     const where = conditions.join(' AND ');
+    const total = Number(row(`SELECT COUNT(*) n FROM compute_attempts attempt WHERE ${where}`, params)?.n || 0);
+    const offset = (page - 1) * limit;
+    const items = rows(`SELECT attempt.*,org.name org_name,student.display_name student_name FROM compute_attempts attempt LEFT JOIN organizations org ON org.id=attempt.org_id LEFT JOIN users student ON student.id=attempt.user_id WHERE ${where} ORDER BY attempt.created_at DESC,attempt.attempt DESC LIMIT ? OFFSET ?`, [...params, limit, offset]).map((item) => {
+      const hasExact = Boolean(item.gateway_log_id || item.response_request_id || item.response_payload_id || item.task_id);
+      const hasAny = hasExact || Boolean(item.usage_id);
+      return {
+        ...item,
+        callId: item.call_id, clientRequestId: item.client_request_id, responseRequestId: item.response_request_id,
+        responsePayloadId: item.response_payload_id, taskId: item.task_id, usageId: item.usage_id, gatewayLogId: item.gateway_log_id,
+        channelId: item.channel_id, actualChannelId: item.actual_channel_id, providerAccountRef: item.provider_account_ref,
+        costRuleSnapshot: parseJson(item.cost_rule_snapshot, null), evidenceMatch: hasExact ? 'MATCHED' : hasAny ? 'PARTIAL' : 'UNMATCHED',
+      };
+    });
     return {
-      items: rows(`SELECT attempt.*,org.name org_name,student.display_name student_name FROM compute_attempts attempt LEFT JOIN organizations org ON org.id=attempt.org_id LEFT JOIN users student ON student.id=attempt.user_id WHERE ${where} ORDER BY attempt.created_at DESC,attempt.attempt DESC LIMIT 100`, params),
+      items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)),
       summary: row(`SELECT COUNT(*) calls,SUM(CASE WHEN cost_source='ESTIMATED' THEN upstream_cost_fen ELSE 0 END) estimatedFen,
         SUM(CASE WHEN cost_source='REPORTED' THEN upstream_cost_fen ELSE 0 END) reportedFen,
-        SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unknownCalls FROM compute_attempts attempt WHERE ${where}`, params),
+        SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unknownCalls,
+        SUM(CASE WHEN ${exactEvidenceSql} THEN 1 ELSE 0 END) matchedCalls,
+        SUM(CASE WHEN NOT ${evidenceSql} THEN 1 ELSE 0 END) unmatchedCalls FROM compute_attempts attempt WHERE ${where}`, params),
+      filters: { days, evidenceMatch: evidenceMatch || null },
     };
   }
 

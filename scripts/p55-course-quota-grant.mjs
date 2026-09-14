@@ -60,11 +60,13 @@ try {
   const published = await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
   assert.equal(published.status, 200, `发布夹具失败: ${JSON.stringify(published.error)}`);
 
+  const purchase = (suffix, quantity, amountMinor = quantity * 10000) => ({ amountMinor, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P55-O-${suffix}`, contractNo: 'P55-C-1', idempotencyKey: `p55-${suffix}` });
+
   // ① 授权次数不能超过库存
-  const over = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 5 } });
+  const over = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 5, ...purchase('over', 5) } });
   check('① 授权次数超过库存被拒', over.status === 409 && over.error?.code === 'COURSE_QUOTA_EXCEEDS_STOCK', `${over.status} ${over.error?.code} ${over.error?.message || ''}`);
 
-  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 1 } });
+  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 1, ...purchase('initial', 1) } });
   check('① 授权 1 次成功', assigned.status === 200 && assigned.data.quotaTotal === 1, JSON.stringify(assigned.data).slice(0, 140));
   const detail = await api(`/api/admin/course-series/${seriesId}/detail`, { token: admin });
   const assignedOrg = (detail.data.assignedOrgs || [])[0] || {};

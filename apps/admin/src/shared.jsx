@@ -19,7 +19,7 @@ export const navigation = [
   { to: '/courses', icon: '▦', label: '课包创建与编排', permission: 'ADMIN_COURSES' },
   { heading: '机构管理' },
   { to: '/organizations', icon: '♙', label: '机构创建与管理', permission: 'ADMIN_ORGANIZATIONS' },
-  { to: '/authorizations', icon: '▦', label: '次数授权管理', permission: 'ADMIN_ORGANIZATIONS' },
+  { to: '/authorizations', icon: '▦', label: '次数授权管理', permission: 'ADMIN_BILLING' },
   { to: '/users', icon: '◉', label: '平台用户', permission: 'ADMIN_ORGANIZATIONS' },
   { heading: '作品发布' },
   { to: '/works', icon: '◇', label: '平台作品库', permission: 'ADMIN_WORKS' },

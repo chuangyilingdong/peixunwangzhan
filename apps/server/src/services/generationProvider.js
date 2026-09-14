@@ -62,12 +62,13 @@ function mockProvider(model = AI_PROVIDER_MODEL) {
   };
 }
 
-export function providerSelection({ provider, model, endpoint, channelId, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway, apiKey } = {}) {
+export function providerSelection({ provider, model, endpoint, channelId, providerAccountRef, requestTemplates, modelRequestTemplates, requestPaths, pollPaths, gateway, apiKey } = {}) {
   return {
     provider: String(provider || AI_PROVIDER).trim(),
     model: String(model || AI_PROVIDER_MODEL).trim(),
     endpoint: String(endpoint || AI_PROVIDER_ENDPOINT).trim(),
     channelId: String(channelId || 'default').trim(),
+    providerAccountRef: String(providerAccountRef || '').trim() || null,
     requestTemplates: requestTemplates && typeof requestTemplates === 'object' ? requestTemplates : {},
     modelRequestTemplates: modelRequestTemplates && typeof modelRequestTemplates === 'object' ? modelRequestTemplates : {},
     requestPaths: requestPaths && typeof requestPaths === 'object' ? requestPaths : {},
@@ -117,18 +118,28 @@ export function getGenerationProvider(selection = {}) {
     const candidates = [selection, ...(!selection.gateway && selection.backup ? [selection.backup] : [])];
     for (let index = 0; index < candidates.length; index++) {
       const selected = candidates[index]; const provider = index ? rawGenerationProvider(selected) : primary;
-      const attemptId = id('attempt'); let emitted = false; let submitted = false;
+      const attemptId = id('attempt'); const clientRequestId = id('req'); let emitted = false; let submitted = false;
       const context = args.computeContext || selection.computeContext || {};
       const project = args.projectId ? row('SELECT org_id,class_session_id,course_lesson_id FROM student_projects WHERE id=?',[args.projectId]) : null;
       const sessionId = context.sessionId || project?.class_session_id || null;
       const session = sessionId ? row('SELECT org_id,lesson_id FROM class_sessions WHERE id=?',[sessionId]) : null;
       const estimate = selected.estimatedCostFen;
-      q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [attemptId,callId,index+1,context.orgId || null,context.userId || args.userId || null,args.projectId || null,context.jobId || null,modality,selected.channelId || 'default',provider.name,provider.model,selected.gateway ? 'gateway' : 'direct','RUNNING',json(snapshot),nowIso()]);
+      const costRuleSnapshot = {
+        basis: estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)) ? 'CONFIGURED_ESTIMATE' : 'UPSTREAM_REPORTED_OR_UNKNOWN',
+        provider: provider.name,
+        channelId: selected.channelId || 'default',
+        model: provider.model,
+        estimatedCostFen: estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)) ? Number(estimate) : null,
+        capturedAt: nowIso(),
+      };
+      q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,cost_rule_snapshot,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [attemptId,callId,index+1,context.orgId || null,context.userId || args.userId || null,args.projectId || null,context.jobId || null,modality,selected.channelId || 'default',provider.name,provider.model,selected.gateway ? 'gateway' : 'direct','RUNNING',clientRequestId,selected.gateway ? null : (selected.channelId || 'default'),selected.providerAccountRef || null,json(costRuleSnapshot),json(snapshot),nowIso()]);
       q('UPDATE compute_attempts SET org_id=?,class_session_id=?,lesson_id=? WHERE id=?',[session?.org_id || context.orgId || project?.org_id || null,sessionId,session?.lesson_id || context.lessonId || project?.course_lesson_id || null,attemptId]);
       const output = (callback) => (...values) => { if (values[0]) { emitted = true; q('UPDATE compute_attempts SET output_started=1 WHERE id=?',[attemptId]); } return callback?.(...values); };
       try {
         const result = await provider[method]({ ...args,
+          clientRequestId,
+          onEvidence: (evidence = {}) => q(`UPDATE compute_attempts SET response_request_id=COALESCE(?,response_request_id),response_payload_id=COALESCE(?,response_payload_id),usage_id=COALESCE(?,usage_id),gateway_log_id=COALESCE(?,gateway_log_id),actual_channel_id=COALESCE(?,actual_channel_id) WHERE id=?`, [evidence.responseRequestId || null,evidence.responsePayloadId || null,evidence.usageId || null,evidence.gatewayLogId || null,evidence.actualChannelId || null,attemptId]),
           onDelta: output(args.onDelta), onReasoning: output(args.onReasoning),
           onSubmitted: (taskId) => { submitted = true; q("UPDATE compute_attempts SET status='SUBMITTED',task_id=? WHERE id=?",[String(taskId),attemptId]); args.onSubmitted?.(taskId); },
         });

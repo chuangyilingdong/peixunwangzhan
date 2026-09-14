@@ -97,7 +97,7 @@ try {
 
   // ③ 发布即生效：机构端与学生端读到的就是新内容（同一份数据，不需要额外同步）
   await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
-  await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 10 } });
+  await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 10, amountMinor: 1000, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P53-O-${seriesId}`, contractNo: `P53-C-${seriesId}`, idempotencyKey: `p53-purchase-${seriesId}` } });
   const orgCourse = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
   check('机构端读到的课时标题就是改后的内容（发布即生效）', JSON.stringify(orgCourse.data).includes('第1课（改过）'), JSON.stringify(orgCourse.data).slice(0, 160));
 

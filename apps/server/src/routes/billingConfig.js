@@ -85,6 +85,7 @@ function normalizeProviderPolicy(value) {
     const channelId = String(item.id).slice(0,64);
     return {
       id: channelId, name: String(item.name || item.id).slice(0,120),
+      providerAccountRef: String(item.providerAccountRef || '').trim().slice(0,200) || null,
       provider: GENERATION_PROVIDER_IDS.has(String(item.provider || '').toLowerCase()) ? String(item.provider).toLowerCase() : 'custom',
       model: String(item.model || '').slice(0,200),
       modelCosts: item.modelCosts || {},

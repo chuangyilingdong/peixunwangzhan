@@ -347,5 +347,5 @@ export async function applyGatewayRoute(selection, { orgId = '', studentId = '',
     throw error;
   }
   if (route.mode !== 'gateway') return selection;
-  return { ...selection, gateway: { endpoint: route.endpoint, apiKey: route.apiKey, tokenName: route.tokenName } };
+  return { ...selection, providerAccountRef: route.providerAccountRef || selection?.providerAccountRef, gateway: { endpoint: route.endpoint, apiKey: route.apiKey, tokenName: route.tokenName } };
 }

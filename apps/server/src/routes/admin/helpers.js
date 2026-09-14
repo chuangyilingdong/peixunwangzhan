@@ -963,10 +963,12 @@ function buildOrganizationDetail(orgId) {
   const packages = rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id]).map(normalizePackage);
   const courseAssignments = rows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title
     FROM course_assignments assignment JOIN course_series series ON series.id=assignment.series_id
-    WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]).map((item) => ({
-    id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at, quotaTotal: Number(item.quota_total), quotaUsed: Number(item.quota_used), remaining: Math.max(0, item.quota_total - item.quota_used),
-    expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(),
-  }));
+    WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]).map((item) => {
+    return {
+      id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at, quotaTotal: Number(item.quota_total), quotaUsed: Number(item.quota_used), remaining: Math.max(0, item.quota_total - item.quota_used),
+      expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(),
+    };
+  });
   const summary = {
     teachers: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [organization.id]),
     students: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [organization.id]),

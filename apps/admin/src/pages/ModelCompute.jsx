@@ -1,27 +1,33 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
 import { Notice, PageHeader } from '@platform/shared';
-import { ProviderPolicyPanel, BillingUsagePanel, OrgStudentUsagePanel } from '../components/BillingPanels.jsx';
-import { GatewayPanel, PricingPanel, ComputeUsagePanel } from '../components/ComputePanels.jsx';
+import { ProviderPolicyPanel } from '../components/BillingPanels.jsx';
+import { GatewayPanel, PricingPanel } from '../components/ComputePanels.jsx';
 import { BillingSettings } from '../components/BillingSettings.jsx';
-import { useLocation } from 'react-router-dom';
+import { FinancialReconciliation } from '../components/FinancialReconciliation.jsx';
+
+const FINANCIAL_VIEWS = new Set(['calls', 'bills', 'matching', 'margin']);
 
 export function ModelCompute({ api }) {
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const usage = location.pathname.endsWith('/usage');
+  const requestedView = searchParams.get('view');
+  const view = FINANCIAL_VIEWS.has(requestedView) ? requestedView : 'calls';
+  const setView = (next) => setSearchParams({ view: next }, { replace: true });
   return <>
-    <PageHeader eyebrow="算力管理" title="模型与算力" description={usage ? '按机构、学员和调用记录核查用量，查看已知上游成本与未知记录。' : '维护渠道与模型、上游成本估算、网关连接和能力开关。'} />
+    <PageHeader eyebrow="算力管理" title="模型与算力" description={usage ? '核查调用账、供应商账、匹配核销与真实毛利。' : '维护渠道与模型、上游成本估算、网关连接和能力开关。'} />
     <nav className="admin-tabs" aria-label="模型与算力视图">
       <NavLink to="/compute/config">渠道与模型配置</NavLink>
-      <NavLink to="/compute/usage">用量与成本</NavLink>
+      <NavLink to="/compute/usage">财务与对账</NavLink>
     </nav>
     {usage ? <>
-      <Notice>用户包算力。课堂总预算仅预警，超额仍可调用。金额来自上游尝试记录，历史售价不是真实上游成本；未知不按零处理。机构归属来自服务器会话，内部调用密钥不发送到浏览器。</Notice>
-      <OrgStudentUsagePanel api={api} />
-      <BillingUsagePanel api={api} />
-      <details className="admin-detail">
-        <summary>课堂平台预警与跨机构课时汇总</summary>
-        <ComputeUsagePanel api={api} />
-      </details>
+      <nav className="admin-tabs" aria-label="财务与对账四视图">
+        <button type="button" className={view === 'calls' ? 'active' : ''} aria-pressed={view === 'calls'} onClick={() => setView('calls')}>调用账</button>
+        <button type="button" className={view === 'bills' ? 'active' : ''} aria-pressed={view === 'bills'} onClick={() => setView('bills')}>供应商账单</button>
+        <button type="button" className={view === 'matching' ? 'active' : ''} aria-pressed={view === 'matching'} onClick={() => setView('matching')}>匹配与核销</button>
+        <button type="button" className={view === 'margin' ? 'active' : ''} aria-pressed={view === 'margin'} onClick={() => setView('margin')}>三账与毛利</button>
+      </nav>
+      <FinancialReconciliation api={api} view={view} />
     </> : <>
       <ProviderPolicyPanel api={api} />
       <PricingPanel api={api} />

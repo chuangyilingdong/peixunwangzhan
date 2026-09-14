@@ -216,12 +216,17 @@ async function parseResponse(response, modality) {
   const contentType = responseContentType(response, modality);
   if (isBinaryContentType(contentType)) {
     const bytes = Buffer.from(await response.arrayBuffer());
-    if (!bytes.length) return { contentType, binary: null };
-    return { contentType, binary: bytes };
+    const parsed = bytes.length ? { contentType, binary: bytes } : { contentType, binary: null };
+    response.__reportEvidence?.(parsed);
+    return parsed;
   }
   const raw = await response.text();
-  if (!raw) return {};
-  try { return JSON.parse(raw); } catch {
+  if (!raw) { response.__reportEvidence?.({}); return {}; }
+  try {
+    const parsed = JSON.parse(raw);
+    response.__reportEvidence?.(parsed);
+    return parsed;
+  } catch {
     if (response.ok) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID, response.status);
     return { error: { message: raw.slice(0, 500) } };
   }
@@ -270,21 +275,47 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
   return { model, prompt: String(prompt || ''), seconds: '5', metadata: { resolution: '480p' } };
 }
 
-async function fetchWithTimeout(url, { method = 'POST', body, apiKey, timeout, modality } = {}) {
+function evidenceId(value) {
+  if (value === undefined || value === null || typeof value === 'object') return '';
+  const text = String(value).trim();
+  return text && !/[\r\n\0]/.test(text) ? text.slice(0, 255) : '';
+}
+
+function responseEvidence(response, payload) {
+  const header = (...names) => names.map((name) => evidenceId(response?.headers?.get(name))).find(Boolean) || '';
+  return {
+    responseRequestId: header('x-request-id', 'request-id'),
+    responsePayloadId: evidenceId(payload?.id),
+    usageId: evidenceId(payload?.usage?.id),
+    gatewayLogId: header('x-oneapi-request-id', 'x-one-api-request-id', 'x-gateway-log-id'),
+    actualChannelId: header('x-oneapi-channel-id', 'x-one-api-channel-id', 'x-channel-id'),
+  };
+}
+
+function reportEvidence(callback, response, payload) {
+  if (typeof callback !== 'function') return;
+  const evidence = responseEvidence(response, payload);
+  if (Object.values(evidence).some(Boolean)) callback(evidence);
+}
+
+async function fetchWithTimeout(url, { method = 'POST', body, apiKey, timeout, modality, clientRequestId, onEvidence } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   timer.unref?.();
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       method,
       headers: {
         accept: 'application/json, image/*, audio/*, video/*',
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`,
+        ...(clientRequestId ? { 'x-client-request-id': clientRequestId } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: controller.signal,
     });
+    response.__reportEvidence = (payload) => reportEvidence(onEvidence, response, payload);
+    return response;
   } catch (error) {
     if (error?.name === 'AbortError') throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
     throw error;
@@ -345,7 +376,7 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
   };
 }
 
-async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, timeout, pollIntervalMs, title, providerName, model, pollPath = '' }) {
+async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, timeout, pollIntervalMs, title, providerName, model, pollPath = '', clientRequestId, onEvidence }) {
   let payload = initialPayload;
   const deadline = Date.now() + timeout;
   while (pendingPayload(payload) && !mediaCandidate(payload, modality)) {
@@ -354,7 +385,7 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, time
     const wait = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
     if (wait <= 0) throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
     await new Promise((resolve) => setTimeout(resolve, wait));
-    const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: Math.max(1000, Math.min(30000, deadline - Date.now())), modality });
+    const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: Math.max(1000, Math.min(30000, deadline - Date.now())), modality, clientRequestId, onEvidence });
     const next = await parseResponse(response, modality);
     if (!response.ok) throw providerHttpError(response, next);
     payload = next;
@@ -379,7 +410,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     // 而**不是每个调用方都传 options**（作词那一步就没传）→ 少了它就是
     // 「TypeError: Cannot read properties of undefined (reading 'referenceAssets')」，
     // 表现为「平台作词失败」→ 描述模式生音乐整条链路直接崩（2026-09-11 引入、09-12 守卫照出来）。
-    async generate({ modality, prompt, title, options = {}, messages, onSubmitted } = {}) {
+    async generate({ modality, prompt, title, options = {}, messages, onSubmitted, clientRequestId, onEvidence } = {}) {
       const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
       if (!Object.prototype.hasOwnProperty.call(DEFAULT_MODALITY_PATHS, normalizedModality)) {
         throw providerError('当前真实 AI 适配器暂不支持该素材类型。', PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED);
@@ -390,19 +421,21 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         apiKey,
         timeout,
         modality: normalizedModality,
+        clientRequestId,
+        onEvidence,
       });
       const parsed = await parseResponse(response, normalizedModality);
       if (!response.ok) throw providerHttpError(response, parsed);
       if (normalizedModality !== 'TEXT' && !parsed?.binary && pendingPayload(parsed)) {
         onSubmitted?.(payloadTaskId(parsed));
-        return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '' })] };
+        return { assets: [await pollForAsset({ initialPayload: parsed, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: pollInterval, title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '', clientRequestId, onEvidence })] };
       }
       return { assets: [assetFromResponse({ payload: parsed, binary: parsed?.binary, contentType: parsed?.contentType, modality: normalizedModality, title, providerName, model: providerModel })] };
     },
     // 多轮对话流式生成：上游返回 text/event-stream 时逐块回调；上游不支持流式则退化为整段返回。
     // signal：调用方中断（学生点「停止」或连接断开）时中止上游请求；onReasoning：推理型模型
     // 的思考增量（reasoning_content），用于给学生显示「正在思考」的进度。
-    async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, signal } = {}) {
+    async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, signal, clientRequestId, onEvidence } = {}) {
       const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints, requestPaths);
       const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates, messages, stream: true });
       const controller = new AbortController();
@@ -419,7 +452,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         try {
           response = await fetch(url, {
             method: 'POST',
-            headers: { accept: 'text/event-stream', 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+            headers: { accept: 'text/event-stream', 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, ...(clientRequestId ? { 'x-client-request-id': clientRequestId } : {}) },
             body: JSON.stringify(body),
             signal: controller.signal,
           });
@@ -431,12 +464,15 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
           throw error;
         }
         const contentType = String(response.headers.get('content-type') || '');
+        reportEvidence(onEvidence, response, null);
         if (!response.ok) {
           const parsed = await parseResponse(response, 'TEXT').catch(() => ({}));
+          reportEvidence(onEvidence, response, parsed);
           throw providerHttpError(response, parsed);
         }
         if (!/text\/event-stream/i.test(contentType) || !response.body) {
           const parsed = await parseResponse(response, 'TEXT');
+          reportEvidence(onEvidence, response, parsed);
           const text = responseText(parsed);
           if (!text) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
           if (typeof onDelta === 'function') onDelta(text, text);
@@ -463,6 +499,7 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
             try { chunk = JSON.parse(data); } catch { continue; }
             usage = tokenUsage(chunk) || usage;
             cost = reportedCost(chunk) || cost;
+            reportEvidence(onEvidence, response, chunk);
             const choice = chunk?.choices?.[0];
             const reasoning = choice?.delta?.reasoning_content ?? '';
             if (reasoning && typeof onReasoning === 'function') onReasoning(reasoning);

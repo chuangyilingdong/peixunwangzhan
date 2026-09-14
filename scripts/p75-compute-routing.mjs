@@ -15,7 +15,12 @@ const primary = { provider: 'custom', model: 'primary', endpoint: 'https://prima
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 try {
   let calls = [];
-  globalThis.fetch = async url => { calls.push(String(url)); return String(url).includes('primary') ? json({ error: 'rate limited' }, 429) : json({ choices: [{ message: { content: 'ok' } }] }); };
+  globalThis.fetch = async (url, options) => {
+    calls.push(String(url));
+    return String(url).includes('primary')
+      ? json({ error: 'rate limited' }, 429)
+      : new Response(JSON.stringify({ id: 'backup-response', usage: { id: 'backup-usage' }, choices: [{ message: { content: 'ok' } }] }), { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'backup-request' } });
+  };
   let provider = getGenerationProvider(primary);
   await provider.generate({ modality: 'TEXT' });
   assert.equal(calls.length, 2); assert.equal(provider.model, 'backup');
@@ -23,6 +28,11 @@ try {
   assert.deepEqual(attempts.map(x => x.status), ['FAILED', 'SUCCESS']);
   assert.equal(attempts[0].upstream_cost_fen, null); assert.equal(attempts[1].cost_source, 'ESTIMATED');
   assert.equal(attempts[1].upstream_cost_fen, 12);
+  assert.ok(attempts.every(x => x.client_request_id?.startsWith('req_')));
+  assert.equal(attempts[1].response_request_id, 'backup-request');
+  assert.equal(attempts[1].response_payload_id, 'backup-response');
+  assert.equal(attempts[1].usage_id, 'backup-usage');
+  assert.equal(JSON.parse(attempts[1].cost_rule_snapshot).estimatedCostFen, 12);
   assert.equal(provider.compute.saleSnapshot.model, 'primary');
   calls = [];
   globalThis.fetch = async url => { calls.push(url); throw new Error('socket closed after request'); };

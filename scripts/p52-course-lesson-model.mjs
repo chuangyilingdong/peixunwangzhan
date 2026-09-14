@@ -120,7 +120,7 @@ try {
   // ④ 发布课包 + 授权给机构 + 把三个课时排进学生所在班级
   const published = await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: rootAdmin, body: { action: 'publish' } });
   check('课包能发布（新字段不挡发布校验）', published.status === 200, JSON.stringify(published.data).slice(0, 160));
-  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 10 } });
+  const assigned = await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: rootAdmin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 10, amountMinor: 1000, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P52-O-${seriesId}`, contractNo: `P52-C-${seriesId}`, idempotencyKey: `p52-purchase-${seriesId}` } });
   check('课包能授权给机构', assigned.status === 200, JSON.stringify(assigned.data).slice(0, 160));
   // 授权给机构 ≠ 学员能上课：还要机构**把课包分给学员**（学生进课要求有效学员许可，叠加口径）。
   // 这里走机构端真实接口（与界面上「学员许可」页同一条链路），顺带把这一步也纳进覆盖。

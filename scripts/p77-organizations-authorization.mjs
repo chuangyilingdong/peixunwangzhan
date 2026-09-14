@@ -25,10 +25,11 @@ await rejects(() => admin('/organizations/'+a.id,'PUT',{studentSeats:1}), 'STUDE
 await rejects(() => org(a.id,'/users','GET',null,'TEACHER'), 'ORG_ADMIN_REQUIRED');
 await rejects(() => org(a.id,'/course-grants','GET',null,'TEACHER'), 'ORG_ADMIN_REQUIRED');
 q("INSERT INTO course_series(id,title,status,owner_type,visibility,stock_total,created_at,updated_at) VALUES ('p77','Inventory','PUBLISHED','PLATFORM','ASSIGNED_ORGS',3,?,?)",[now,now]);
+const purchase=(key, quantity, paymentStatus='PAID')=>({amountMinor:quantity*10000,currency:'CNY',paymentStatus,orderNo:'P77-O-'+key,contractNo:'P77-C-1',idempotencyKey:'p77-'+key});
 const assign=(body)=>admin('/course-series/p77/assignments','POST',body);
-await rejects(()=>assign({orgIds:[a.id,b.id],quotaTotal:2}), 'INVALID_ORG_IDS');
+await rejects(()=>assign({orgIds:[a.id,b.id],quotaTotal:2,...purchase('multi',2)}), 'INVALID_ORG_IDS');
 assert.equal(row("SELECT COUNT(*) n FROM course_assignments WHERE series_id='p77'").n,0);
-await assign({orgIds:[a.id],quotaTotal:2});
+await assign({orgIds:[a.id],quotaTotal:2,...purchase('initial',2)});
 await assign({orgIds:[a.id],validityDays:730});
 assert.equal(row("SELECT quota_total FROM course_assignments WHERE series_id='p77'").quota_total,2);
 const grants = await Promise.all([org(a.id,'/course-grants','POST',{seriesId:'p77',studentIds:[students[0].id]}),org(a.id,'/course-grants','POST',{seriesId:'p77',studentIds:[students[0].id]})]);

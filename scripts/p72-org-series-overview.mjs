@@ -64,6 +64,11 @@ try {
   seedDb.prepare('DELETE FROM student_course_grants WHERE series_id=? AND org_id=?').run(series.id, orgId);
   seedDb.prepare("DELETE FROM course_assignments WHERE series_id=? AND org_id=?").run(series.id, orgId);
   seedDb.prepare("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,quota_total,quota_used) VALUES ('assign_p72',?,?,'ACTIVE','user_p72',datetime('now'),5,0)").run(series.id, orgId);
+  seedDb.prepare(`INSERT INTO license_purchase_batches(
+    id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,
+    order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
+    VALUES ('purchase_p72','assign_p72',?,?,'PURCHASE',5,500,'CNY','PAID','ACTIVE',
+      'P72-O-assign-p72','P72-C-assign-p72','p72-purchase-assign-p72','user_p72',datetime('now'),datetime('now'))`).run(orgId, series.id);
   seedDb.close();
 
   /* ① 概览可用，且课包范围 = 我被授权的课包（同源） */

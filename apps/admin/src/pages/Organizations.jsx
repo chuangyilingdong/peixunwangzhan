@@ -52,6 +52,14 @@ function CreateOrganizationDialog({ form, setForm, saving, created, error, onClo
   </dialog>;
 }
 
+function newLicensePurchaseKey() {
+  return `license-purchase-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function initialLicensePurchaseForm() {
+  return { amount: '', currency: 'CNY', paymentStatus: 'PAID', orderNo: '', contractNo: '', idempotencyKey: newLicensePurchaseKey() };
+}
+
 export function Organizations({ api }) {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ search: '', status: '' });
@@ -295,11 +303,12 @@ export function Organizations({ api }) {
 export function Authorizations({ api }) {
   const location = useLocation();
   const inventory = useData(() => api.get('admin/authorizations'), [api]);
-  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
+  const organizations = { data: { items: inventory.data?.organizations || [] }, loading: inventory.loading, error: inventory.error, refresh: inventory.refresh };
   const deepLink = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const [seriesId, setSeriesId] = useState(() => deepLink.get('seriesId') || '');
   const [orgId, setOrgId] = useState(() => deepLink.get('orgId') || '');
   const [additionalQuota, setAdditionalQuota] = useState('');
+  const [purchaseForm, setPurchaseForm] = useState(initialLicensePurchaseForm);
   const [expiresAt, setExpiresAt] = useState('');
   const [stock, setStock] = useState('');
   const [busy, setBusy] = useState(false);
@@ -320,6 +329,7 @@ export function Authorizations({ api }) {
   useEffect(() => {
     setStock(selected ? String(selected.stockTotal) : '');
     setAdditionalQuota('');
+    setPurchaseForm(initialLicensePurchaseForm());
     setExpiresAt(assignment?.expiresAt ? isoDateInput(assignment.expiresAt) : '');
   }, [seriesId, orgId, selected?.stockTotal, assignment?.expiresAt]);
 
@@ -347,7 +357,16 @@ export function Authorizations({ api }) {
       confirmLabel: assignment ? '确认追加' : '确认授权',
       execute: async () => {
         setBusy(true); setMessage('');
-        try { await api.post(`admin/course-series/${seriesId}/assignments/append`, { orgId, additionalQuota: added }); setAdditionalQuota(''); setMessage(assignment ? '授权次数已追加。' : '机构授权已创建。'); inventory.refresh(); }
+        try {
+          const amountMinor = Math.round(Number(purchaseForm.amount) * 100);
+          await api.post('admin/license-purchases/append', {
+            seriesId, orgId, additionalQuota: added, amountMinor, currency: purchaseForm.currency,
+            paymentStatus: purchaseForm.paymentStatus, orderNo: purchaseForm.orderNo,
+            contractNo: purchaseForm.contractNo, idempotencyKey: purchaseForm.idempotencyKey,
+          });
+          setAdditionalQuota(''); setPurchaseForm(initialLicensePurchaseForm());
+          setMessage(assignment ? '授权次数已追加。' : '机构授权已创建。'); inventory.refresh();
+        }
         finally { setBusy(false); }
       },
     });
@@ -391,9 +410,16 @@ export function Authorizations({ api }) {
         </div>
         <div className="split">
           <Panel title="追加次数"><form onSubmit={appendQuota}>
-            <label>本次追加次数<input type="number" min="1" max={Math.min(100000000, selected.available)} required value={additionalQuota} onChange={(event) => setAdditionalQuota(event.target.value)} /></label>
-            <p className="muted">{Number(additionalQuota) > 0 ? `追加后总次数为 ${(assignment?.status === 'ACTIVE' ? assignment.quotaTotal : (assignment?.quotaUsed || 0)) + Number(additionalQuota)}，不会改变有效授权的当前有效期。` : '填写本次购买并追加的次数；有效期可在右侧单独调整。'}</p>
-            <button className="primary-button" disabled={busy || !additionalQuota || Number(additionalQuota) > selected.available}>{assignment ? '追加次数' : '创建授权并追加'}</button>
+            <label>本次购买次数<input type="number" min="1" max={Math.min(100000000, selected.available)} required value={additionalQuota} onChange={(event) => setAdditionalQuota(event.target.value)} /></label>
+            <div className="form-grid">
+              <label>实际成交总额（元）<input type="number" min="0" step="0.01" required value={purchaseForm.amount} onChange={(event) => setPurchaseForm({ ...purchaseForm, amount: event.target.value })} /></label>
+              <label>币种<select value={purchaseForm.currency} onChange={(event) => setPurchaseForm({ ...purchaseForm, currency: event.target.value })}><option value="CNY">CNY</option><option value="USD">USD</option><option value="HKD">HKD</option></select></label>
+              <label>收款状态<input value="已收款" readOnly /></label>
+              <label>订单号<input required maxLength={200} value={purchaseForm.orderNo} onChange={(event) => setPurchaseForm({ ...purchaseForm, orderNo: event.target.value })} /></label>
+              <label>合同号<input required maxLength={200} value={purchaseForm.contractNo} onChange={(event) => setPurchaseForm({ ...purchaseForm, contractNo: event.target.value })} /></label>
+            </div>
+            <p className="muted">{Number(additionalQuota) > 0 ? `追加后总次数为 ${(assignment?.status === 'ACTIVE' ? assignment.quotaTotal : (assignment?.quotaUsed || 0)) + Number(additionalQuota)}，不会改变有效授权的当前有效期。仅已收款购买可追加，未收款或部分收款订单请勿在此登记。` : '填写本次已收款购买的实际次数与成交信息；未收款或部分收款订单不会增加授权余额。'}</p>
+            <button className="primary-button" disabled={busy || !additionalQuota || Number(additionalQuota) > selected.available || purchaseForm.amount === '' || !purchaseForm.orderNo.trim() || !purchaseForm.contractNo.trim()}>{assignment ? '追加次数' : '创建授权并追加'}</button>
           </form></Panel>
           <Panel title="调整有效期"><form onSubmit={updateValidity}>
             <label>新的到期日期<input type="date" required min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label>
@@ -401,6 +427,7 @@ export function Authorizations({ api }) {
             <button className="secondary-button" disabled={busy || !assignment || assignment.status !== 'ACTIVE' || !expiresAt}>调整有效期</button>
           </form></Panel>
         </div>
+        {assignment?.purchaseBatches?.length ? <Panel title="购买批次历史"><div className="table-wrap"><table><thead><tr><th>购买时间</th><th>次数</th><th>实际成交总额</th><th>收款状态</th><th>订单号</th><th>合同号</th><th>已确认次数</th></tr></thead><tbody>{assignment.purchaseBatches.map((batch) => <tr key={batch.id}><td>{formatDate(batch.purchasedAt)}</td><td>{batch.quantity}</td><td>{batch.amountMinor == null || !batch.currency ? '未知（历史导入）' : `${(batch.amountMinor / 100).toFixed(2)} ${batch.currency}`}</td><td>{batch.paymentStatus === 'UNKNOWN' ? '未知' : <Status value={batch.paymentStatus} />}</td><td>{batch.orderNo || '未知'}</td><td>{batch.contractNo || '未知'}</td><td>{batch.recognizedQuantity}</td></tr>)}</tbody></table></div></Panel> : null}
         {!assignment ? <Notice tone="info">该机构尚未获得此课包。先追加正数次数即可创建授权，默认有效期为 365 天。</Notice> : null}
       </> : <Empty title="选择课包和机构查看授权" body="普通授权流程一次只操作一家机构。" />}
       {selected ? <Panel title="该课包机构授权明细">{selected.allocations.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>状态</th><th>购买次数</th><th>已分配</th><th>余额</th><th>到期时间</th></tr></thead><tbody>{selected.allocations.map((item) => <tr key={item.id}><td>{item.orgName}</td><td><Status value={item.status} /></td><td>{item.quotaTotal}</td><td>{item.quotaUsed}</td><td>{item.remaining}</td><td>{formatDate(item.expiresAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" />}</Panel> : null}

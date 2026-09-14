@@ -13,6 +13,7 @@ import { normalizePerStudentBudgetFen } from './helpers.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
+import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
 import {
   capturePublishedContent,
   ENROLLMENT_STATUSES,
@@ -446,8 +447,11 @@ export async function handleCourses(ctx, part, method) {
     const assignment = row("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE'", [series.id, orgId]);
     if (!assignment) throw errors.notFound('该机构没有此课包的有效授权', 'ASSIGNMENT_NOT_FOUND');
     assertTransition(ctx, 'courseAssignment', assignment.status, 'REVOKED', { targetType: 'COURSE_ASSIGNMENT', targetId: assignment.id, before: { status: assignment.status, orgId }, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能撤销' });
-    q("UPDATE course_assignments SET status='REVOKED' WHERE id=?", [assignment.id]);
-    audit(ctx, 'COURSE_SERIES_ASSIGN_REVOKE', 'COURSE_SERIES', series.id, { orgId }, { orgId, status: 'REVOKED' });
+    transaction(() => {
+      voidLicensePurchaseBatches(assignment.id);
+      q("UPDATE course_assignments SET status='REVOKED',quota_total=quota_used WHERE id=?", [assignment.id]);
+    });
+    audit(ctx, 'COURSE_SERIES_ASSIGN_REVOKE', 'COURSE_SERIES', series.id, { orgId, quotaTotal: Number(assignment.quota_total), quotaUsed: Number(assignment.quota_used) }, { orgId, status: 'REVOKED', quotaTotal: Number(assignment.quota_used), quotaUsed: Number(assignment.quota_used) });
     return { revoked: true, orgId };
   }
 
@@ -511,7 +515,9 @@ export async function handleCourses(ctx, part, method) {
   }
   match = part.match(/^\/course-series\/([^/]+)\/assignments$/);
   if (match && method === 'POST') {
-    const auth = requireRole(ctx, ['SUPER_ADMIN']); const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [match[1]]);
+    const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    requirePlatformPermission(ctx, 'ADMIN_BILLING');
+    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [match[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const organizationId = singleAssignmentOrgId(ctx.body);
     if (!row('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
@@ -527,24 +533,32 @@ export async function handleCourses(ctx, part, method) {
       const quotaTotal = ctx.body?.quotaTotal === undefined && existing
         ? Number(existing.quota_total) : integer(ctx.body?.quotaTotal, '授权总次数', { min: 1, max: 100000000 });
       if (quotaTotal < Number(existing?.quota_used || 0)) throw errors.conflict('授权次数不能低于已使用次数', 'COURSE_QUOTA_BELOW_USED');
-      const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
-      const delta = quotaTotal - (existing ? Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used) : 0);
-      if (reserved + delta > Number(currentSeries.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
-      if (existing) {
-        assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
-        q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
-      } else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
-      return assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]));
+      const baseQuota = existing ? Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used) : 0;
+      const delta = quotaTotal - baseQuota;
+      const purchase = delta > 0 ? normalizeLicensePurchaseInput(ctx.body, delta) : null;
+      const assignmentId = existing?.id || id('assign');
+      const batch = purchase ? createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase }) : null;
+      if (!batch?.replayed) {
+        const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+        if (reserved + delta > Number(currentSeries.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+        if (existing) {
+          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
+          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
+        } else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
+      }
+      return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch?.replayed) };
     });
-    audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_ASSIGNMENT', result.id, before, result, { orgId: organizationId });
-    return { assignedCount: 1, validityDays, expiresAt, quotaTotal: result.quotaTotal, allocations: [result] };
+    if (!result.replayed) audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_ASSIGNMENT', result.assignment.id, before, result.assignment, { orgId: organizationId });
+    return { assignedCount: 1, validityDays, expiresAt, quotaTotal: result.assignment.quotaTotal, allocations: [result.assignment] };
   }
 
   const assignmentAppendMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/append$/);
   if (assignmentAppendMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
+    requirePlatformPermission(ctx, 'ADMIN_BILLING');
     const organizationId = singleAssignmentOrgId(ctx.body);
     const additionalQuota = integer(ctx.body?.additionalQuota, '追加次数', { min: 1, max: 100000000 });
+    const purchase = normalizeLicensePurchaseInput(ctx.body, additionalQuota);
     if (!row('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     let before = null;
     const after = transaction(() => {
@@ -553,20 +567,25 @@ export async function handleCourses(ctx, part, method) {
       if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
       const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
       before = assignmentSnapshot(existing);
-      const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
-      if (reserved + additionalQuota > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
-      if (existing) {
-        assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
-        const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
-        q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [auth.user.id, nowIso(), baseQuota + additionalQuota, existing.id]);
-      } else {
-        const expiresAt = new Date(Date.now() + 365 * 86400000).toISOString();
-        q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [id('assign'), series.id, organizationId, 'ACTIVE', auth.user.id, nowIso(), expiresAt, additionalQuota]);
+      const now = nowIso();
+      const assignmentId = existing?.id || id('assign');
+      const batch = createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase });
+      if (!batch.replayed) {
+        const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+        if (reserved + additionalQuota > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
+        if (existing) {
+          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
+          const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
+          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [auth.user.id, now, baseQuota + additionalQuota, existing.id]);
+        } else {
+          const expiresAt = new Date(Date.now() + 365 * 86400000).toISOString();
+          q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, additionalQuota]);
+        }
       }
-      return assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]));
+      return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch.replayed) };
     });
-    audit(ctx, 'COURSE_ASSIGNMENT_QUOTA_APPEND', 'COURSE_ASSIGNMENT', after.id, before, { ...after, additionalQuota }, { orgId: organizationId });
-    return { assignment: after, additionalQuota };
+    if (!after.replayed) audit(ctx, 'COURSE_ASSIGNMENT_QUOTA_APPEND', 'COURSE_ASSIGNMENT', after.assignment.id, before, { ...after.assignment, additionalQuota }, { orgId: organizationId });
+    return { assignment: after.assignment, additionalQuota };
   }
 
   const assignmentValidityMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/validity$/);
@@ -591,11 +610,11 @@ export async function handleCourses(ctx, part, method) {
   if (part === '/authorizations' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const items = rows("SELECT * FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' ORDER BY title").map((series) => {
-      const allocations = rows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id]).map((a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at }));
+      const allocations = rows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id]).map((a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at, purchaseBatches: licensePurchaseHistory(a.id) }));
       const reserved = allocations.reduce((n,a) => n + (a.status === 'ACTIVE' ? a.quotaTotal : a.quotaUsed), 0);
       return { id: series.id, title: series.title, stockTotal: Number(series.stock_total || 0), reserved, available: Math.max(0, Number(series.stock_total || 0)-reserved), allocations };
     });
-    return { items };
+    return { items, organizations: rows('SELECT id,name,status FROM organizations ORDER BY name,id') };
   }
   const stockMatch = part.match(/^\/course-series\/([^/]+)\/stock$/);
   if (stockMatch && method === 'PUT') {
@@ -634,6 +653,8 @@ export async function handleCourses(ctx, part, method) {
       q('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=? WHERE id=?', [now, auth.user.id, reason, grant.id]);
       if (!submitted && grant.source_assignment_id) {
         q('UPDATE course_assignments SET quota_used=MAX(quota_used-1,0) WHERE id=?', [grant.source_assignment_id]);
+        const recognized = row("SELECT id FROM license_revenue_events WHERE grant_id=? AND event_type='GRANT' AND NOT EXISTS (SELECT 1 FROM license_revenue_events reversal WHERE reversal.reversal_of_event_id=license_revenue_events.id)", [grant.id]);
+        if (recognized) appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-reversal:${grant.id}:${grant.granted_at}` });
       }
     });
     audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null }, { revokedAt: now, reason, quotaRefunded: !submitted }, { orgId: grant.org_id });

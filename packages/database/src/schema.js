@@ -1200,6 +1200,137 @@ db.exec(`CREATE TABLE IF NOT EXISTS student_course_grants (
   FOREIGN KEY (series_id) REFERENCES course_series(id) ON DELETE CASCADE
 )`);
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_student_course_grants_unique ON student_course_grants(org_id, student_id, series_id)');
+
+// 课包许可三账：购买批次、收入事件、收入到购买批次的 FIFO 分摊。
+// 财务账只保留业务对象 ID 快照，不做级联外键，避免上游对象删除时抹掉历史。
+db.exec(`CREATE TABLE IF NOT EXISTS license_purchase_batches (
+  id TEXT PRIMARY KEY,
+  assignment_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  series_id TEXT NOT NULL,
+  purchase_type TEXT NOT NULL CHECK (purchase_type IN ('PURCHASE','LEGACY_OPENING_BALANCE')),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  amount_minor INTEGER CHECK (amount_minor IS NULL OR amount_minor >= 0),
+  currency TEXT,
+  payment_status TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','VOIDED')),
+  order_no TEXT,
+  contract_no TEXT,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  purchased_by TEXT,
+  purchased_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  CHECK ((purchase_type='LEGACY_OPENING_BALANCE' AND amount_minor IS NULL AND currency IS NULL)
+    OR (purchase_type='PURCHASE' AND amount_minor IS NOT NULL AND currency IS NOT NULL))
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_license_purchase_fifo ON license_purchase_batches(assignment_id, status, purchased_at, created_at, id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_license_purchase_org_series ON license_purchase_batches(org_id, series_id, purchased_at DESC)');
+
+db.exec(`CREATE TABLE IF NOT EXISTS license_revenue_events (
+  id TEXT PRIMARY KEY,
+  assignment_id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  series_id TEXT NOT NULL,
+  grant_id TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN ('GRANT','REVERSAL')),
+  quantity INTEGER NOT NULL CHECK (quantity IN (-1,1)),
+  amount_minor INTEGER,
+  currency TEXT,
+  reversal_of_event_id TEXT,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  actor_id TEXT,
+  occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  CHECK ((event_type='GRANT' AND quantity=1 AND reversal_of_event_id IS NULL)
+    OR (event_type='REVERSAL' AND quantity=-1 AND reversal_of_event_id IS NOT NULL))
+)`);
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_license_revenue_one_reversal ON license_revenue_events(reversal_of_event_id) WHERE reversal_of_event_id IS NOT NULL');
+db.exec('CREATE INDEX IF NOT EXISTS idx_license_revenue_grant ON license_revenue_events(grant_id, occurred_at, id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_license_revenue_org_series ON license_revenue_events(org_id, series_id, occurred_at DESC)');
+
+db.exec(`CREATE TABLE IF NOT EXISTS license_revenue_allocations (
+  id TEXT PRIMARY KEY,
+  revenue_event_id TEXT NOT NULL,
+  purchase_batch_id TEXT NOT NULL,
+  quantity INTEGER NOT NULL CHECK (quantity IN (-1,1)),
+  amount_minor INTEGER,
+  currency TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (revenue_event_id) REFERENCES license_revenue_events(id) ON DELETE RESTRICT,
+  FOREIGN KEY (purchase_batch_id) REFERENCES license_purchase_batches(id) ON DELETE RESTRICT
+)`);
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_license_revenue_allocation_event_batch ON license_revenue_allocations(revenue_event_id, purchase_batch_id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_license_revenue_allocation_batch ON license_revenue_allocations(purchase_batch_id, created_at, id)');
+
+// 老库只有 course_assignments 次数，没有可信成交金额。opening batch 覆盖完整历史额度，
+// 再用历史有效 grant 和 quota_used 缺口重建已用量，保证历史许可可真实 REVERSAL。
+db.exec(`INSERT OR IGNORE INTO license_purchase_batches(
+    id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,
+    order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
+  SELECT 'license_purchase_legacy_' || assignment.id, assignment.id, assignment.org_id, assignment.series_id,
+    'LEGACY_OPENING_BALANCE', assignment.quota_total, NULL, NULL, 'UNKNOWN',
+    CASE WHEN assignment.status='ACTIVE' THEN 'ACTIVE' ELSE 'VOIDED' END,
+    NULL, NULL, 'legacy-opening-balance:' || assignment.id, assignment.assigned_by,
+    assignment.assigned_at, assignment.assigned_at
+  FROM course_assignments assignment
+  WHERE assignment.quota_total > 0
+    AND NOT EXISTS (SELECT 1 FROM license_purchase_batches existing WHERE existing.assignment_id=assignment.id)`);
+// 修正旧版迁移曾按 remaining 建出的批次；一旦已有分摊，数量与状态都不再改写。
+db.exec(`UPDATE license_purchase_batches
+  SET quantity=(SELECT assignment.quota_total FROM course_assignments assignment WHERE assignment.id=license_purchase_batches.assignment_id),
+      status=(SELECT CASE WHEN assignment.status='ACTIVE' THEN 'ACTIVE' ELSE 'VOIDED' END FROM course_assignments assignment WHERE assignment.id=license_purchase_batches.assignment_id)
+  WHERE purchase_type='LEGACY_OPENING_BALANCE'
+    AND NOT EXISTS (SELECT 1 FROM license_revenue_allocations allocation WHERE allocation.purchase_batch_id=license_purchase_batches.id)
+    AND EXISTS (SELECT 1 FROM course_assignments assignment
+      WHERE assignment.id=license_purchase_batches.assignment_id AND assignment.quota_total > 0)`);
+db.exec(`INSERT OR IGNORE INTO license_revenue_events(
+    id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,reversal_of_event_id,
+    idempotency_key,actor_id,occurred_at,created_at)
+  SELECT 'license_revenue_legacy_grant_' || grant.id, grant.source_assignment_id, grant.org_id, grant.series_id,
+    grant.id, 'GRANT', 1, NULL, NULL, NULL, 'legacy-grant:' || grant.id, grant.granted_by,
+    grant.granted_at, grant.granted_at
+  FROM student_course_grants grant
+  JOIN license_purchase_batches batch
+    ON batch.assignment_id=grant.source_assignment_id AND batch.purchase_type='LEGACY_OPENING_BALANCE'
+  WHERE grant.revoked_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM license_revenue_events event WHERE event.grant_id=grant.id)`);
+db.exec(`INSERT OR IGNORE INTO license_revenue_allocations(
+    id,revenue_event_id,purchase_batch_id,quantity,amount_minor,currency,created_at)
+  SELECT 'license_allocation_legacy_grant_' || grant.id, event.id,
+    batch.id, 1, NULL, NULL, grant.granted_at
+  FROM student_course_grants grant
+  JOIN license_purchase_batches batch
+    ON batch.assignment_id=grant.source_assignment_id AND batch.purchase_type='LEGACY_OPENING_BALANCE'
+  JOIN license_revenue_events event
+    ON event.id='license_revenue_legacy_grant_' || grant.id
+  WHERE grant.revoked_at IS NULL`);
+// quota_used 可能大于仍有效 grant 数；稳定编号的匿名事件补齐缺失历史消耗。
+const legacyAssignments = rows(`SELECT assignment.id,assignment.org_id,assignment.series_id,assignment.quota_used,assignment.assigned_at,
+    (SELECT COUNT(*) FROM student_course_grants grant
+      WHERE grant.source_assignment_id=assignment.id AND grant.revoked_at IS NULL) active_grants
+  FROM course_assignments assignment
+  JOIN license_purchase_batches batch
+    ON batch.assignment_id=assignment.id AND batch.purchase_type='LEGACY_OPENING_BALANCE'
+  WHERE assignment.quota_used > 0`);
+for (const assignment of legacyAssignments) {
+  const missing = Math.max(0, Number(assignment.quota_used) - Number(assignment.active_grants));
+  for (let index = 1; index <= missing; index += 1) {
+    const suffix = `${assignment.id}_${index}`;
+    q(`INSERT OR IGNORE INTO license_revenue_events(
+        id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,reversal_of_event_id,
+        idempotency_key,actor_id,occurred_at,created_at)
+      VALUES (?,?,?,?,?,'GRANT',1,NULL,NULL,NULL,?,NULL,?,?)`, [
+      `license_revenue_legacy_used_${suffix}`, assignment.id, assignment.org_id, assignment.series_id,
+      `legacy-used:${suffix}`, `legacy-used:${suffix}`, assignment.assigned_at, assignment.assigned_at,
+    ]);
+    q(`INSERT OR IGNORE INTO license_revenue_allocations(
+        id,revenue_event_id,purchase_batch_id,quantity,amount_minor,currency,created_at)
+      VALUES (?,?,?,1,NULL,NULL,?)`, [
+      `license_allocation_legacy_used_${suffix}`, `license_revenue_legacy_used_${suffix}`,
+      `license_purchase_legacy_${assignment.id}`, assignment.assigned_at,
+    ]);
+  }
+}
 // 排课名单：这一节课谁来上（现状没有这层 —— 学生进班就自动算能上课）
 db.exec(`CREATE TABLE IF NOT EXISTS class_lesson_students (
   class_id TEXT NOT NULL,
@@ -1240,8 +1371,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS compute_attempts (
   org_id TEXT, user_id TEXT, project_id TEXT, generation_job_id TEXT,
   modality TEXT NOT NULL, channel_id TEXT, provider TEXT, model TEXT, routed_via TEXT,
   status TEXT NOT NULL, task_id TEXT, output_started INTEGER NOT NULL DEFAULT 0,
+  client_request_id TEXT, response_request_id TEXT, response_payload_id TEXT, usage_id TEXT,
+  internal_usage_record_id TEXT REFERENCES usage_records(id) ON DELETE SET NULL, gateway_log_id TEXT, actual_channel_id TEXT, provider_account_ref TEXT,
   cost_source TEXT NOT NULL DEFAULT 'UNKNOWN', upstream_cost_fen REAL,
-  sale_snapshot TEXT NOT NULL, error_code TEXT, error_message TEXT,
+  cost_rule_snapshot TEXT, sale_snapshot TEXT NOT NULL, error_code TEXT, error_message TEXT,
   created_at TEXT NOT NULL, completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_compute_attempts_call ON compute_attempts(call_id, attempt);
@@ -1255,9 +1388,23 @@ for (const [table, column, type] of [
   ['course_lessons', 'platform_budget_fen', 'INTEGER CHECK (platform_budget_fen IS NULL OR platform_budget_fen >= 0)'],
   ['compute_attempts', 'class_session_id', 'TEXT'],
   ['compute_attempts', 'lesson_id', 'TEXT'],
+  ['compute_attempts', 'client_request_id', 'TEXT'],
+  ['compute_attempts', 'response_request_id', 'TEXT'],
+  ['compute_attempts', 'response_payload_id', 'TEXT'],
+  ['compute_attempts', 'usage_id', 'TEXT'],
+  ['compute_attempts', 'internal_usage_record_id', 'TEXT'],
+  ['compute_attempts', 'gateway_log_id', 'TEXT'],
+  ['compute_attempts', 'actual_channel_id', 'TEXT'],
+  ['compute_attempts', 'provider_account_ref', 'TEXT'],
+  ['compute_attempts', 'cost_rule_snapshot', 'TEXT'],
 ]) {
   if (!rows(`PRAGMA table_info(${table})`).some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
+const duplicateComputeAttempt = row('SELECT call_id,attempt,COUNT(*) count FROM compute_attempts GROUP BY call_id,attempt HAVING COUNT(*)>1 LIMIT 1');
+if (duplicateComputeAttempt) {
+  throw new Error(`compute_attempts contains duplicate (call_id, attempt): ${duplicateComputeAttempt.call_id}/${duplicateComputeAttempt.attempt} (${duplicateComputeAttempt.count})`);
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_compute_attempts_call_attempt_unique ON compute_attempts(call_id, attempt)');
 if (!rows('PRAGMA table_info(organizations)').some(item => item.name === 'student_seats')) {
   db.exec('ALTER TABLE organizations ADD COLUMN student_seats INTEGER NOT NULL DEFAULT 0 CHECK (student_seats >= 0)');
   db.exec(`UPDATE organizations SET student_seats = MAX(
@@ -2106,3 +2253,129 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 // ── VibeCoding 会话置顶（侧栏排序用）─────────────────────────────────────────
 try { db.exec('ALTER TABLE vibecoding_conversations ADD COLUMN pinned_at TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// Supplier statements are independent evidence: accounts hold identifiers only, never credentials.
+db.exec(`CREATE TABLE IF NOT EXISTS supplier_accounts (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  channel_id TEXT,
+  default_currency TEXT NOT NULL CHECK (length(default_currency)=3),
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','DISABLED')),
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_accounts_status ON supplier_accounts(status, name);
+
+CREATE TABLE IF NOT EXISTS supplier_billing_imports (
+  id TEXT PRIMARY KEY,
+  supplier_account_id TEXT NOT NULL,
+  file_name TEXT NOT NULL DEFAULT '',
+  file_hash TEXT NOT NULL,
+  canonical_csv TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'IMPORTED' CHECK (status IN ('IMPORTED','CANCELLED')),
+  line_count INTEGER NOT NULL CHECK (line_count > 0),
+  imported_by TEXT,
+  imported_at TEXT NOT NULL,
+  cancelled_by TEXT,
+  cancelled_at TEXT,
+  cancel_reason TEXT,
+  UNIQUE (supplier_account_id, file_hash),
+  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT,
+  FOREIGN KEY (imported_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (cancelled_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_imports_account_time ON supplier_billing_imports(supplier_account_id, imported_at DESC);
+
+CREATE TABLE IF NOT EXISTS supplier_billing_lines (
+  id TEXT PRIMARY KEY,
+  import_id TEXT NOT NULL,
+  supplier_account_id TEXT NOT NULL,
+  line_number INTEGER NOT NULL CHECK (line_number > 1),
+  line_hash TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  provider_account_id TEXT NOT NULL,
+  invoice_id TEXT NOT NULL,
+  supplier_line_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  currency TEXT NOT NULL CHECK (length(currency)=3),
+  amount_minor INTEGER NOT NULL CHECK (amount_minor <> 0),
+  line_type TEXT NOT NULL CHECK (line_type IN ('USAGE','REFUND','CREDIT','ADJUSTMENT','TAX')),
+  original_supplier_line_id TEXT,
+  original_line_id TEXT,
+  usage_id TEXT,
+  response_payload_id TEXT,
+  response_request_id TEXT,
+  request_id TEXT,
+  task_id TEXT,
+  gateway_id TEXT,
+  description TEXT NOT NULL DEFAULT '',
+  reconciliation_status TEXT NOT NULL DEFAULT 'UNMATCHED' CHECK (reconciliation_status IN ('UNMATCHED','PARTIAL','MATCHED','AMBIGUOUS','EXCLUDED','DISPUTED','CANCELLED')),
+  comparison_status TEXT NOT NULL DEFAULT 'UNASSESSED' CHECK (comparison_status IN ('UNASSESSED','KNOWN','UNKNOWN_AMOUNT','UNKNOWN_CURRENCY')),
+  candidate_count INTEGER NOT NULL DEFAULT 0 CHECK (candidate_count >= 0),
+  match_method TEXT CHECK (match_method IS NULL OR match_method IN ('AUTO','MANUAL')),
+  state_reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (supplier_account_id, supplier_line_id),
+  UNIQUE (import_id, line_number),
+  FOREIGN KEY (import_id) REFERENCES supplier_billing_imports(id) ON DELETE RESTRICT,
+  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT,
+  FOREIGN KEY (original_line_id) REFERENCES supplier_billing_lines(id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_lines_import ON supplier_billing_lines(import_id, line_number);
+CREATE INDEX IF NOT EXISTS idx_supplier_lines_account_status ON supplier_billing_lines(supplier_account_id, reconciliation_status, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_supplier_lines_identifiers ON supplier_billing_lines(request_id, response_payload_id, response_request_id, task_id, gateway_id, usage_id);
+
+CREATE TABLE IF NOT EXISTS supplier_billing_matches (
+  id TEXT PRIMARY KEY,
+  line_id TEXT NOT NULL,
+  original_match_id TEXT,
+  target_type TEXT NOT NULL CHECK (target_type IN ('USAGE','ATTEMPT')),
+  target_id TEXT NOT NULL,
+  identifier_type TEXT NOT NULL CHECK (identifier_type IN ('USAGE','RESPONSE','REQUEST','TASK','GATEWAY','MANUAL')),
+  allocated_amount_minor INTEGER NOT NULL CHECK (allocated_amount_minor <> 0),
+  currency TEXT NOT NULL CHECK (length(currency)=3),
+  method TEXT NOT NULL CHECK (method IN ('AUTO','MANUAL')),
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  cancelled_by TEXT,
+  cancelled_at TEXT,
+  cancel_reason TEXT,
+  FOREIGN KEY (line_id) REFERENCES supplier_billing_lines(id) ON DELETE RESTRICT,
+  FOREIGN KEY (original_match_id) REFERENCES supplier_billing_matches(id) ON DELETE RESTRICT,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (cancelled_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_matches_active_target ON supplier_billing_matches(line_id, target_type, target_id) WHERE cancelled_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_supplier_matches_target ON supplier_billing_matches(target_type, target_id, cancelled_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_matches_line ON supplier_billing_matches(line_id, cancelled_at);
+
+CREATE TABLE IF NOT EXISTS supplier_billing_events (
+  id TEXT PRIMARY KEY,
+  supplier_account_id TEXT,
+  import_id TEXT,
+  line_id TEXT,
+  match_id TEXT,
+  action TEXT NOT NULL,
+  before_data TEXT,
+  after_data TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  actor_id TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE SET NULL,
+  FOREIGN KEY (import_id) REFERENCES supplier_billing_imports(id) ON DELETE SET NULL,
+  FOREIGN KEY (line_id) REFERENCES supplier_billing_lines(id) ON DELETE SET NULL,
+  FOREIGN KEY (match_id) REFERENCES supplier_billing_matches(id) ON DELETE SET NULL,
+  FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_events_account_time ON supplier_billing_events(supplier_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_supplier_events_line_time ON supplier_billing_events(line_id, created_at DESC);`);
+if (!rows('PRAGMA table_info(supplier_billing_matches)').some((item) => item.name === 'original_match_id')) {
+  db.exec('ALTER TABLE supplier_billing_matches ADD COLUMN original_match_id TEXT REFERENCES supplier_billing_matches(id) ON DELETE RESTRICT');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_supplier_matches_original ON supplier_billing_matches(original_match_id, cancelled_at)');

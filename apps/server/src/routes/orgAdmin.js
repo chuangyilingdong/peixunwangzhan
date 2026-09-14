@@ -9,6 +9,7 @@ import {
   sessionCandidates, sessionScope, sessionStudentCounts, settleSessionStudents,
 } from '../services/classroomSessions.js';
 import { computePoolSummary } from '../services/computePool.js';
+import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
 
 // 批次 D（班级退场）：原来这里还导入 classInOrg / assertTeachingClassManager / classMemberships /
 // teacherCanAccessClass / teacherScope / classSessionRows / classProgressRows / classDetail / curriculumItem
@@ -850,12 +851,20 @@ export async function handleOrg(ctx) {
     const now = nowIso();
       fresh.forEach((studentId) => {
         const existing = row('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
+        let grantId;
         if (existing) {
-          // 撤销过的那条沿用（谁什么时候被授权过留痕），并把它重新置为有效
-          q('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, auth.user.id, assignment.id, existing.id]);
+          // 主键维持稳定；每次重发由新的 granted_at 形成一代新事件，旧代必须已经完整冲销。
+          grantId = existing.id;
+          const unreversed = row(`SELECT event.id FROM license_revenue_events event
+            LEFT JOIN license_revenue_events reversal ON reversal.reversal_of_event_id=event.id
+            WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL LIMIT 1`, [grantId]);
+          if (unreversed) throw errors.conflict('上一次许可收入尚未冲销，不能重新授权', 'LICENSE_GRANT_REVERSAL_REQUIRED');
+          q('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, auth.user.id, assignment.id, grantId]);
         } else {
-          q('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at) VALUES (?,?,?,?,?,?,?)', [id('coursegrant'), currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now]);
+          grantId = id('coursegrant');
+          q('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at) VALUES (?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now]);
         }
+        appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-grant:${grantId}:${now}` });
       });
       if (fresh.length) q('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
     audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length }, { orgId: currentOrgId });

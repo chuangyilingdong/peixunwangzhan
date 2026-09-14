@@ -48,7 +48,7 @@ try {
   const created = await api('/api/admin/course-series', { method: 'POST', token: admin, body: { title: 'P56 排课课包', description: '排课候选与完课门禁', coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'ALL_ORGS', stockTotal: 10, lessons: [{ title: '第1课', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] } });
   const seriesId = created.data.id; const lessonId = created.data.lessons[0].id;
   await api(`/api/admin/course-series/${seriesId}/status`, { method: 'POST', token: admin, body: { action: 'publish' } });
-  await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 10 } });
+  await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [org.organization.id], validityDays: 365, quotaTotal: 10, amountMinor: 1000, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P56-O-${seriesId}`, contractNo: `P56-C-${seriesId}`, idempotencyKey: `p56-purchase-${seriesId}` } });
 
   // 批次 D（班级退场）：原来这里是「班级 + 课单 + 每节课的排课名单（class_lesson_students）」。
   // 那套已经下线，**排课名单的替代品就是课堂名单**（session_students），

@@ -13,12 +13,13 @@ export function recordAiUsage({
   const session = sessionId ? row('SELECT org_id,lesson_id FROM class_sessions WHERE id=?', [sessionId]) : null;
   orgId = session?.org_id || orgId;
   if (pricing?.compute?.callId) q('UPDATE compute_attempts SET org_id=?,class_session_id=COALESCE(class_session_id,?),lesson_id=COALESCE(lesson_id,?) WHERE call_id=?', [orgId, sessionId, session?.lesson_id || null, pricing.compute.callId]);
+  const usageRecordId = id('usage');
   q(
     `INSERT INTO usage_records(
        id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,input_tokens,output_tokens,created_at,compute_call_id
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
-      id('usage'), orgId, userId, sessionId, projectId, generationJobId, workId, modality, model, 0,
+      usageRecordId, orgId, userId, sessionId, projectId, generationJobId, workId, modality, model, 0,
       status, failCode,
       json(pricing || { modality, status, failCode, generationJobId }),
       0, seriesId || null,
@@ -26,5 +27,8 @@ export function recordAiUsage({
       nowIso(), pricing?.compute?.callId || null,
     ],
   );
+  if (pricing?.compute?.callId) {
+    q('UPDATE compute_attempts SET internal_usage_record_id=? WHERE call_id=?', [usageRecordId, pricing.compute.callId]);
+  }
   if (status === 'SUCCESS' && sessionId && row('SELECT status FROM class_sessions WHERE id=?',[sessionId])?.status === 'ENDED') settleSessionStudents({ sessionId, actorId: userId });
 }
