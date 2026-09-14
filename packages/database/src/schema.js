@@ -1392,7 +1392,7 @@ for (const [table, column, type] of [
   ['compute_attempts', 'response_request_id', 'TEXT'],
   ['compute_attempts', 'response_payload_id', 'TEXT'],
   ['compute_attempts', 'usage_id', 'TEXT'],
-  ['compute_attempts', 'internal_usage_record_id', 'TEXT'],
+  ['compute_attempts', 'internal_usage_record_id', 'TEXT REFERENCES usage_records(id) ON DELETE SET NULL'],
   ['compute_attempts', 'gateway_log_id', 'TEXT'],
   ['compute_attempts', 'actual_channel_id', 'TEXT'],
   ['compute_attempts', 'provider_account_ref', 'TEXT'],
@@ -1405,6 +1405,20 @@ if (duplicateComputeAttempt) {
   throw new Error(`compute_attempts contains duplicate (call_id, attempt): ${duplicateComputeAttempt.call_id}/${duplicateComputeAttempt.attempt} (${duplicateComputeAttempt.count})`);
 }
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_compute_attempts_call_attempt_unique ON compute_attempts(call_id, attempt)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_compute_attempts_internal_usage ON compute_attempts(internal_usage_record_id)');
+// 已有生产库的该列是在没有外键时 ALTER 出来的，SQLite 不会补回约束；
+// 用触发器让老库与新库一样「引用必须存在、删除用量时置空」，且可重复执行。
+db.exec(`CREATE TRIGGER IF NOT EXISTS trg_compute_attempts_internal_usage_insert
+  BEFORE INSERT ON compute_attempts
+  WHEN NEW.internal_usage_record_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM usage_records WHERE id=NEW.internal_usage_record_id)
+  BEGIN SELECT RAISE(ABORT, 'compute_attempts.internal_usage_record_id must reference usage_records(id)'); END`);
+db.exec(`CREATE TRIGGER IF NOT EXISTS trg_compute_attempts_internal_usage_update
+  BEFORE UPDATE OF internal_usage_record_id ON compute_attempts
+  WHEN NEW.internal_usage_record_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM usage_records WHERE id=NEW.internal_usage_record_id)
+  BEGIN SELECT RAISE(ABORT, 'compute_attempts.internal_usage_record_id must reference usage_records(id)'); END`);
+db.exec(`CREATE TRIGGER IF NOT EXISTS trg_usage_records_clear_attempt_link
+  AFTER DELETE ON usage_records
+  BEGIN UPDATE compute_attempts SET internal_usage_record_id=NULL WHERE internal_usage_record_id=OLD.id; END`);
 if (!rows('PRAGMA table_info(organizations)').some(item => item.name === 'student_seats')) {
   db.exec('ALTER TABLE organizations ADD COLUMN student_seats INTEGER NOT NULL DEFAULT 0 CHECK (student_seats >= 0)');
   db.exec(`UPDATE organizations SET student_seats = MAX(
