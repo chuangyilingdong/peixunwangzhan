@@ -1,6 +1,6 @@
 # AI 魔法学院学习平台 · 最终文档（唯一入口）
 
-> 版本：2026-09-14　｜　**课堂、课包发布、机构授权、算力预警与三端流程已定稿；真实三账对照已在当前候选代码实现并完成验证，尚未上线。**
+> 版本：2026-09-14　｜　**课堂、课包发布、机构授权、算力预警与三端流程已定稿；真实三账对照（对外售价 / 合同价折算 / 官方账单自动对账）已上线，生产 release 20260914T063932Z。**
 > 其它文档都从属于它：结构看 `docs/architecture/代码结构与路由.md`，
 > 设计口径看 `docs/项目重梳理-03-平台侧重做梳理.md`，
 > 操作命令看 `deploy/production/RUNBOOK.md`，
@@ -25,9 +25,12 @@
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch main
 生产：release 20260914T063932Z / commit 1f10a59（服务 learning-platform-production @127.0.0.1:8789）
+      本地 HEAD c9713f5 只比生产多一个纯文档提交，代码等同，不必为它再发一次
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
-单价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元**每次**（真实售价，含毛利）
-数据：3 个课包（含 2 个演示课包）+ 9 个课堂 + 5 条学员许可 + 2 件学生作品
+对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
+          ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
+          （详见 `docs/operations/真实三账对照-20260914.md`）
+数据：3 个已发布课包（含 2 个演示）+ 1 个草稿 + 9 个课堂 + 5 条学员许可 + 2 件学生作品
 ```
 
 平台里已经有一套**演示数据**（`deploy/production/seed-demo-teaching-data.mjs`，幂等可重跑），
@@ -76,12 +79,15 @@ PLATFORM_DATA_DIR=.tmp/x PLATFORM_DB_PATH=.tmp/x/platform.db PORT=18888 node app
 **改完必跑**（守卫是这份代码的「别踩这里」）：
 
 ```bash
-node .tmp/smoke-run.mjs                    # 全量 90 个守卫（76-80 为本轮新增）
+node .tmp/smoke-run.mjs                    # 全量 101 个守卫（p85–p91 为三账/账单新增）
 node scripts/p70-pages-render.mjs          # 三端页面真渲染 —— 改前端之后必跑（能拦白屏）
 node scripts/p66-student-grant-gate.mjs    # 进课三层门禁
 node scripts/p69-teacher-data-scope.mjs    # 教师数据范围（安全相关改动）
 node scripts/p73-session-migration.mjs     # 课堂表迁移（在有数据的库上真跑）
 node scripts/p74-session-scope-columns.mjs # 范围字段必须被写入 + 回填只按证据
+node scripts/p88-financial-reconciliation-ui.mjs  # 财务四视图 + 对账表
+node scripts/p90-contract-cost-computation.mjs    # 合同价折算的精确金额
+node scripts/p91-provider-bill-reconciliation.mjs # 账单适配器 / 幂等 / 凭据不外泄
 ```
 
 改前端还要 `vite build` 三端（`node_modules/vite/bin/vite.js build apps/<app> --config apps/<app>/vite.config.mjs`，
@@ -117,9 +123,13 @@ node scripts/p74-session-scope-columns.mjs # 范围字段必须被写入 + 回�
 | 文档 | 用途 |
 |---|---|
 | `docs/README.md` | **本文件**：唯一入口 |
+| `docs/operations/新对话交接-20260914.md` | 新开对话时先看：开工顺序 + 当天实测 + 待决策（**只当时点交接，口径以本文件为准**） |
 | `docs/项目重梳理-03-平台侧重做梳理.md` | 设计口径（三端各板块该有什么、算力总控怎么做） |
 | `docs/项目重梳理-01-决策基线.md` | 早期产品决策（部分章节已被本文件覆盖） |
 | `docs/architecture/代码结构与路由.md` | 代码放哪儿、接口有哪些 |
+| `docs/operations/真实三账对照-20260914.md` | **三账与金额口径**：对外售价、合同单价折算、官方账单自动对账的操作与边界 |
+| `docs/operations/全流程重梳理-20260913.md` | 课堂 / 课包 / 机构授权的当前规则 |
+| `docs/operations/后台算力改造-20260913.md` | 算力账本与成本来源改造记录 |
 | `docs/operations/交接说明.md` | 现状 + 环境 + 设计约定 + 运维 + 本地验证（**已精简**） |
 | `docs/operations/验收清单.md` | 发布前人工验收清单 |
 | `deploy/production/RUNBOOK.md` | 运维命令与发布流程 |
