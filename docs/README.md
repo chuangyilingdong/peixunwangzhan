@@ -24,7 +24,7 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch main
-生产：release 20260914T054512Z / commit 6df9531（服务 learning-platform-production @127.0.0.1:8789）
+生产：release 20260914T055200Z / commit 561de25（服务 learning-platform-production @127.0.0.1:8789）
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 单价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元**每次**（真实售价，含毛利）
 数据：3 个课包（含 2 个演示课包）+ 9 个课堂 + 5 条学员许可 + 2 件学生作品
