@@ -169,6 +169,11 @@ export function Classrooms({ api, user }) {
   }, kind === 'start' ? '课堂已开始，学员现在可以进操作环境了。' : kind === 'end' ? '课堂已结束，学员按「这节课有没有消耗过算力」结算成已完课 / 未完课。' : '课堂已解散，名单上的学员全部置为「被移除」。');
 
   return <>
+    {openId ? <nav aria-label="面包屑" className="breadcrumb row-actions">
+      <button type="button" className="text-button" onClick={closeSession}>课堂</button>
+      <span className="muted" aria-hidden="true">/</span>
+      <span>{current?.title || '课堂详情'}</span>
+    </nav> : null}
     <PageHeader
       eyebrow="开课与上课"
       title="课堂"

@@ -30,6 +30,7 @@ export function SeriesOverview({ api }) {
   const yuanRemaining = (item) => `${item.remaining} 次`;
 
   return <>
+    {tab === 'grant' || expanded ? <nav aria-label="面包屑" className="breadcrumb row-actions"><Link to="/series-overview">课包库存与学生授权</Link>{expanded ? <><span className="muted" aria-hidden="true">/</span><span>{current?.title || '课包详情'}</span></> : null}{tab === 'grant' ? <><span className="muted" aria-hidden="true">/</span><span>为学生添加课包</span></> : null}</nav> : null}
     <PageHeader
       eyebrow="课包经营"
       title="课包与授权"

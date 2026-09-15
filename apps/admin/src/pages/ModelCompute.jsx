@@ -25,6 +25,7 @@ export function ModelCompute({ api }) {
   const setView = (next) => setSearchParams(next === 'advanced' ? { view: next, advanced: advancedView } : { view: next }, { replace: true });
   const setAdvanced = (next) => setSearchParams({ view: 'advanced', advanced: next }, { replace: true });
   return <>
+    <nav aria-label="面包屑" className="breadcrumb row-actions"><NavLink to="/compute/config">AI 网关与课程配置</NavLink>{usage ? <><span className="muted" aria-hidden="true">/</span><span>CU 用量与任务</span></> : null}</nav>
     <PageHeader eyebrow="算力管理" title="模型与算力"
       description={usage
         ? '看每一笔调用的对外售价与我们的实际成本，并按机构 / 学员对照；三账与毛利看收入侧。'
