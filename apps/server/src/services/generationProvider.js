@@ -4,7 +4,7 @@ import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
 import { id, json, nowIso, q, row } from '../lib.js';
 import { priceFenFor } from './computePool.js';
-import { collectUsageEvidence, computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, normalizeUpstreamUnitPrices } from './upstreamCost.js';
+import { collectUsageEvidence, computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, normalizeUpstreamUnitPrices, reportedCostRuleSnapshot } from './upstreamCost.js';
 
 function svgDataUrl(title, subtitle, hue) {
   const escape = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -168,7 +168,9 @@ export function getGenerationProvider(selection = {}) {
         const ruleSnapshot = contract ? contractCostRuleSnapshot({
           provider: provider.name, channelId: selected.channelId || 'default', model: provider.model,
           estimatedCostFen: known ? Number(estimate) : null, computed: contract,
-        }) : null;
+        }) : reportedCostRuleSnapshot({
+          provider: provider.name, channelId: selected.channelId || 'default', model: provider.model, reported,
+        });
         const hasUsageEvidence = usage.evidence !== 'NONE';
         q("UPDATE compute_attempts SET status='SUCCESS',cost_source=?,upstream_cost_fen=?,cost_rule_snapshot=COALESCE(?,cost_rule_snapshot),usage_snapshot=?,completed_at=? WHERE id=?",[computedSource,upstreamCostFen,ruleSnapshot ? json(ruleSnapshot) : null,hasUsageEvidence ? json(usage) : null,nowIso(),attemptId]);
         wrapper.name = provider.name; wrapper.model = provider.model;

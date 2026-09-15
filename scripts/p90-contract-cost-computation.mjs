@@ -391,20 +391,25 @@ try {
 
   /* ⑦ Seedance 直连实扣（2026-09-15）：异步任务终态回执里的 usage.amount 就是**本次实际扣减**，
        按协议从 data.usage / task.usage / 顶层 usage 读出 → 来源 REPORTED，金额取上报值、不折算合同价。 */
-  // 图片：通用任务查询把 usage 放在 data.usage（code/data 信封）
+  // 图片：通用任务查询把 usage 放在 data.usage（code/data 信封）。
+  // 币种用实测值「¥」——上游真回的是它，不是文档示例里的 CNY。
   let imagePolls = 0;
   globalThis.fetch = async (_url, options = {}) => {
     if (options.method === 'POST') return jsonResponse({ code: true, data: { task_id: 'sd-image-1' } });
     imagePolls += 1;
-    return jsonResponse({ code: true, data: { task_id: 'sd-image-1', status: 'succeeded', data: [{ url: 'https://p90.test/sd-cover.png' }], usage: { amount: 0.54, currency: 'CNY' } } });
+    return jsonResponse({ code: true, data: { task_id: 'sd-image-1', status: 'SUCCESS', data: [{ url: 'https://p90.test/sd-cover.png' }], usage: { amount: 0.040112, currency: '¥' } } });
   };
   provider = getGenerationProvider(selection({ requestPaths: { IMAGE: '/v1/image/generations' } }));
   await provider.generate({ modality: 'IMAGE', prompt: 'seedance 一张图', options: { resolution: '2K' } });
   attempt = attemptOf(provider);
   assert.equal(imagePolls, 1, '提交一次 + 轮询一次');
   assert.equal(attempt.cost_source, 'REPORTED', '上游给了实扣金额就不再用合同价折算');
-  assert.equal(attempt.upstream_cost_fen, 54, '¥0.54 → 54 分');
-  assert.equal(attempt.cost_rule_snapshot && JSON.parse(attempt.cost_rule_snapshot).basis, 'UPSTREAM_REPORTED_OR_UNKNOWN');
+  assert.equal(attempt.upstream_cost_fen, 4, '¥0.040112 → 4 分（小数元四舍五入成整数分）');
+  const imageRule = JSON.parse(attempt.cost_rule_snapshot);
+  assert.equal(imageRule.basis, 'UPSTREAM_REPORTED', 'REPORTED 也留成本规则快照，basis 标明是上游上报');
+  assert.equal(imageRule.upstreamCurrency, '¥', '留下上游原样回传的币种写法作为证据');
+  assert.equal(imageRule.upstreamAmount, 0.040112, '留下未取整的原始金额');
+  assert.equal(imageRule.reportedFen, 4);
 
   // 视频（MiniMax-H3 协议）：提交 /v2/video_generation、轮询 /v2/query/video_generation/{id}，
   // 实扣在 task.usage，视频直链在 task.content.url
@@ -445,7 +450,8 @@ try {
 
   console.log('P90 合同单价折算：文本 token × 每千 token 价、图片按张/档、视频按秒/档、音乐按次，金额分整数精确断言通过');
   console.log('P90 缺用量与缺单价一律 null（UNKNOWN）不按 0、来源优先级 REPORTED>COMPUTED>ESTIMATED>UNKNOWN、改价不追溯、学生侧恒 0、渠道读写与非法值拒绝通过');
-  console.log('P90 Seedance 直连实扣：data.usage / task.usage / 顶层 usage 三处读取位置、¥20.40 这类小数换算成整数分、USD 不当人民币通过');
+  console.log('P90 Seedance 直连实扣：data.usage / task.usage / 顶层 usage 三处读取位置、实测币种「¥」认成人民币、');
+  console.log('      ¥20.40 与 ¥0.040112 这类小数换算成整数分、USD 不当人民币、REPORTED 也留 upstreamCurrency/upstreamAmount 证据 通过');
 } finally {
   globalThis.fetch = originalFetch;
 }

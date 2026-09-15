@@ -37,6 +37,18 @@ export function preferredCostSource(...sources) {
   return best;
 }
 
+/**
+ * 上游回传的币种写法并不统一 —— 文档示例写 `CNY`，**实测同一个接口回的是 `¥`**
+ * （api.seedance.nz 图片任务终态：`data.usage = {amount: 0.040112, currency: "¥"}`），
+ * 网关（new-api 风格）则写 `CNY`。这些都是人民币：该站点价格表、钱包余额都以元计。
+ * 明确**不认** USD / $ / JPY 等：跨币种不并账，硬当人民币会把真实毛利算错。
+ */
+const CNY_CURRENCY_ALIASES = Object.freeze(['CNY', 'RMB', '¥', 'CN¥', '人民币']);
+
+export function isCnyCurrency(value) {
+  return CNY_CURRENCY_ALIASES.includes(String(value ?? '').trim().toUpperCase());
+}
+
 /** REPORTED 是否严格优先于 COMPUTED（守卫直接断言这条规则用）。 */
 export function compareCostSources(left, right) {
   return costSourcePriority(left) - costSourcePriority(right);
@@ -373,6 +385,26 @@ export function contractCostRuleSnapshot({ provider, channelId, model, estimated
     unitPrice: computed.unitPrice,
     usage: computed.usage,
     computedFen: computed.fen,
+    capturedAt: capturedAt || new Date().toISOString(),
+  };
+}
+
+/**
+ * 上游直接报实扣（REPORTED）时的成本规则快照：没有"规则"可讲，但要留下**证据** ——
+ * 上游原样回传的币种写法（实测是「¥」而不是文档写的 CNY）和**未取整**的金额。
+ * 分是四舍五入来的（实测 ¥0.040112 → 4 分），把原始值留住才解释得清每一分怎么来的。
+ */
+export function reportedCostRuleSnapshot({ provider = null, channelId = null, model = null, reported = null, capturedAt = null } = {}) {
+  if (!reported) return null;
+  return {
+    basis: 'UPSTREAM_REPORTED',
+    provider: provider ?? null,
+    channelId: channelId ?? null,
+    model: model ?? null,
+    source: 'REPORTED',
+    upstreamCurrency: reported.upstreamCurrency ?? reported.currency ?? null,
+    upstreamAmount: Number(reported.amount),
+    reportedFen: Math.round(Number(reported.amount) * 100),
     capturedAt: capturedAt || new Date().toISOString(),
   };
 }

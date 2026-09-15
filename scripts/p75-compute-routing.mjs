@@ -64,10 +64,19 @@ try {
   // 上游金额是小数：20.40 直接 ×100 会得到 2039.9999999999998，必须四舍五入成整数分
   assert.ok(Number.isInteger(reportedCost({data:{usage:{amount:20.4,currency:'CNY'}}}).fen));
   assert.equal(reportedCost({data:{usage:{amount:20.4,currency:'CNY'}}}).fen,2040);
+  // 实测：上游回的币种写法是「¥」，**不是文档示例里的 CNY**
+  // （api.seedance.nz 图片任务终态 data.usage = {amount: 0.040112, currency: "¥"}）。
+  // 逐字比对 CNY 会让真实数据一条都读不到 —— 必须按人民币别名表认。
+  assert.equal(reportedCost({code:true,message:'ok',data:{status:'SUCCESS',usage:{amount:0.040112,currency:'¥'}}}).fen,4);
+  assert.equal(reportedCost({code:true,data:{usage:{amount:0.040112,currency:'¥'}}}).upstreamCurrency,'¥');
+  assert.equal(reportedCost({data:{usage:{amount:1.5,currency:'RMB'}}}).fen,150);
+  assert.equal(reportedCost({data:{usage:{amount:1.5,currency:'CNY'}}}).upstreamCurrency,'CNY');
+  assert.equal(reportedCost({data:{usage:{amount:1.5,currency:'cn¥'}}}).fen,150);
   // 非 CNY（Midjourney / Suno 按上游 cost 报的 USD）一律不认，绝不冒充成 CNY
   assert.equal(reportedCost({usage:{amount:0.045,currency:'USD'}}),null);
   assert.equal(reportedCost({task:{usage:{amount:9,currency:'USD'}}}),null);
   assert.equal(reportedCost({data:{usage:{amount:5,currency:'JPY'}}}),null);
+  assert.equal(reportedCost({data:{usage:{amount:5,currency:'$'}}}),null);
   // 缺 currency、缺金额、token 用量、网关 usage.id、负数、空 payload —— 都不认（不猜、不按 0）
   assert.equal(reportedCost({usage:{amount:3}}),null);
   assert.equal(reportedCost({usage:{id:'backup-usage'}}),null);

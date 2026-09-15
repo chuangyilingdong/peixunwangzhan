@@ -18,6 +18,7 @@ const DEFAULT_MIME_TYPES = Object.freeze({
 });
 
 import { musicRequestContext, renderRequestTemplate, requestTemplateFor } from './modelCapabilities.js';
+import { isCnyCurrency } from './upstreamCost.js';
 
 function providerError(message, code, status = 0) {
   const error = new Error(message);
@@ -100,14 +101,21 @@ function amountNode(value) {
 }
 
 // Only an explicit amount + CNY currency is usable without guessing units or FX.
-// 非 CNY（例如 Midjourney / Suno 按上游 cost 报的 USD）一律不认：跨币种不并账，
-// 硬收敛成 CNY 会把真实毛利算错；这类调用留在 COMPUTED / UNKNOWN，由账单侧单独核销。
+// ⚠️ 币种写法逐字比对是不行的：文档示例写 `CNY`，但**实测同一接口回的是 `¥`**
+// （`data.usage = {amount: 0.040112, currency: "¥"}`）。所以走 isCnyCurrency 别名表：
+// CNY / RMB / ¥ / CN¥ 都算人民币；USD / $ / JPY 一律不认（跨币种不并账，
+// 硬收敛成 CNY 会把真实毛利算错），这类调用留在 COMPUTED / UNKNOWN 由账单侧单独核销。
 export function reportedCost(payload) {
   for (const envelope of COST_ENVELOPES) {
     const cost = amountNode(envelope(payload));
-    if (!cost || cost.currency !== 'CNY' || !Number.isFinite(cost.amount) || cost.amount < 0) continue;
-    // 上游金额是小数（Seedance 官方示例 ¥20.40），直接 ×100 会得到 2039.9999999999998 这种非整数分。
-    return { source:'REPORTED', currency:'CNY', amount:cost.amount, fen:Math.round(cost.amount * 100) };
+    if (!cost || !isCnyCurrency(cost.currency) || !Number.isFinite(cost.amount) || cost.amount < 0) continue;
+    // 上游金额是小数的元，精度可能到 1e-6（实测 ¥0.040112）：×100 后必须四舍五入成整数分，
+    // 否则 20.40 这种会落成 2039.9999999999998，0.040112 会落成 4.0112。
+    return {
+      source: 'REPORTED', currency: 'CNY', amount: cost.amount, fen: Math.round(cost.amount * 100),
+      // 上游原样回传的币种写法，作为证据留进 cost_rule_snapshot（见 reportedCostRuleSnapshot）。
+      upstreamCurrency: String(cost.currency).trim(),
+    };
   }
   return null;
 }

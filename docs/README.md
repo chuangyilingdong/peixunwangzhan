@@ -128,6 +128,7 @@ node scripts/p91-provider-bill-reconciliation.mjs # 账单适配器 / 幂等 / �
 | `docs/项目重梳理-01-决策基线.md` | 早期产品决策（部分章节已被本文件覆盖） |
 | `docs/architecture/代码结构与路由.md` | 代码放哪儿、接口有哪些 |
 | `docs/operations/真实三账对照-20260914.md` | **三账与金额口径**：对外售价、合同单价折算、官方账单自动对账的操作与边界 |
+| `docs/operations/上游实扣接入-20260915.md` | **上游逐笔实扣**（Seedance 直连）：接口面、实测币种「¥」、合同单价填法、验证证据与边界 |
 | `docs/operations/全流程重梳理-20260913.md` | 课堂 / 课包 / 机构授权的当前规则 |
 | `docs/operations/后台算力改造-20260913.md` | 算力账本与成本来源改造记录 |
 | `docs/operations/交接说明.md` | 现状 + 环境 + 设计约定 + 运维 + 本地验证（**已精简**） |
