@@ -52,7 +52,7 @@ export function MyCoursesPage({ api }) {
 
     {items.length ? <div className="student-card-grid">{items.map((course) => <article className="student-card" key={course.id}>
       <div className="student-card__head">
-        <h3>{course.title}</h3>
+        <h3><Link to={`/my-courses/${encodeURIComponent(course.id)}`}>{course.title}</Link></h3>
         {course.hasGrant === false
           ? <span className="student-badge is-warn">未授权</span>
           : <span className="student-badge">{course.progress?.submittedPercent || 0}%</span>}

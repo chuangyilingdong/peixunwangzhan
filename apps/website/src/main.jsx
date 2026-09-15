@@ -9,6 +9,7 @@ import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, VibeC
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
+import { CourseDetailPage } from './pages/CourseDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 
 // 官网公开页面统一走共享 API client，保持错误解析与鉴权行为一致
@@ -469,6 +470,7 @@ export function App(){
         <Route path='/learn/vibecoding/:conversationId' element={<LearnVibeCodingConversationPage api={api}/>}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-courses' element={session ? <MyCoursesPage api={api} /> : <Navigate to='/login' replace />}/>
+        <Route path='/my-courses/:courseId' element={session ? <CourseDetailPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-stats' element={session ? <MyStatsPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='*' element={<Home session={session} logout={logout}/>}/>
       </Routes>
