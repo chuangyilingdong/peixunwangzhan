@@ -64,6 +64,15 @@
     这里保证的是「没有下载入口 + 链接短时失效 + 原始 Office 文件不外发 + 审计可溯源」。
     ⚠️ **部署依赖**：服务器必须装 `libreoffice-impress`/`writer` + **中文字体**（`fonts-noto-cjk`，
     不装的话转出来的 PDF 中文是方块）；上传目录必须归服务账号所有，否则转换会因 EACCES 失败。
+12. **VibeCoding 按「产物」提交，不是按对话提交**（2026-09-15）：学生做完一个游戏、一份 PPT，
+    **各自有提交按钮**（工作台的预览工具栏 / 文档预览上），平台在后台把每一条分别发布到作品广场，
+    官网访客就能点开玩。数据层唯一性是 `(conversation_id, entry_file)` —— 同一份产物重复提交是
+    **覆盖**（round+1），不同产物各自成条、各自审核、各自上下架。
+    ⚠️ 老库改这条要**重建表**（SQLite 改不了列级 UNIQUE）；迁移在生成库副本上验证过：
+    行数/列集合/每行内容一字不差。改这张表的约束前先跑 `p94`，并照 `p73` 的做法在**有数据的库**上真跑迁移。
+    ⚠️ 学生作品预览的 CSP 在服务器的 `/vibe-preview.html`（`sites-enabled` 里那份**不是** `sites-available` 的软链，
+    两份会各自漂移，改的时候两份都要改）；想让作品用 CDN 样式表和 WebSocket，`style-src` 要有 `https:`、
+    `connect-src` 要有 `wss:`。它还被 Cloudflare 边缘缓存，改完要在 Cloudflare 上 Purge 那个 URL。
 
 ## 四、代码地图（详见 `docs/architecture/代码结构与路由.md`）
 
@@ -90,7 +99,7 @@ PLATFORM_DATA_DIR=.tmp/x PLATFORM_DB_PATH=.tmp/x/platform.db PORT=18888 node app
 **改完必跑**（守卫是这份代码的「别踩这里」）：
 
 ```bash
-node .tmp/smoke-run.mjs                    # 全量 103 个守卫（p85–p91 三账/账单、p92 消耗口径、p93 素材预览）
+node .tmp/smoke-run.mjs                    # 全量 104 个守卫（p85–p91 三账/账单、p92 消耗口径、p93 素材预览、p94 按产物提交）
 node scripts/p70-pages-render.mjs          # 三端页面真渲染 —— 改前端之后必跑（能拦白屏）
 node scripts/p66-student-grant-gate.mjs    # 进课三层门禁
 node scripts/p69-teacher-data-scope.mjs    # 教师数据范围（安全相关改动）
@@ -101,6 +110,7 @@ node scripts/p90-contract-cost-computation.mjs    # 合同价折算的精确金�
 node scripts/p91-provider-bill-reconciliation.mjs # 账单适配器 / 幂等 / 凭据不外泄
 node scripts/p92-sale-price-scope.mjs             # 机构端/学员端「消耗」= 对外售价（只计成功尝试）
 node scripts/p93-material-preview.mjs             # 教学素材在线预览：形态判定 / 票据 / 转换失败不回落
+node scripts/p94-artifact-submission.mjs          # VibeCoding 按产物提交：(对话,产物) 唯一、重复提交走覆盖
 ```
 
 改前端还要 `vite build` 三端（`node_modules/vite/bin/vite.js build apps/<app> --config apps/<app>/vite.config.mjs`，
