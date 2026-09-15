@@ -53,9 +53,27 @@ try {
   await assert.rejects(provider.generate({ modality: 'TEXT' })); assert.equal(calls.length, 1);
   assert.ok(!JSON.stringify(rows('SELECT * FROM compute_attempts')).includes('test-only'));
   const { reportedCost } = await load('apps/server/src/services/openaiCompatibleProvider.js');
+  // 网关风格：金额在 usage.cost
   assert.equal(reportedCost({usage:{cost:3}}),null);
   assert.equal(reportedCost({usage:{cost:{amount:2,currency:'USD'}}}),null);
   assert.equal(reportedCost({usage:{cost:{amount:0.25,currency:'CNY'}}}).fen,25);
+  // Seedance 直连风格：金额就在 usage 本身，读取位置按协议分三种
+  assert.equal(reportedCost({usage:{amount:8.75,currency:'CNY'}}).fen,875);
+  assert.equal(reportedCost({code:true,data:{status:'succeeded',usage:{amount:0.54,currency:'CNY'}}}).fen,54);
+  assert.equal(reportedCost({task:{status:'succeeded',usage:{amount:21.8,currency:'CNY'}}}).fen,2180);
+  // 上游金额是小数：20.40 直接 ×100 会得到 2039.9999999999998，必须四舍五入成整数分
+  assert.ok(Number.isInteger(reportedCost({data:{usage:{amount:20.4,currency:'CNY'}}}).fen));
+  assert.equal(reportedCost({data:{usage:{amount:20.4,currency:'CNY'}}}).fen,2040);
+  // 非 CNY（Midjourney / Suno 按上游 cost 报的 USD）一律不认，绝不冒充成 CNY
+  assert.equal(reportedCost({usage:{amount:0.045,currency:'USD'}}),null);
+  assert.equal(reportedCost({task:{usage:{amount:9,currency:'USD'}}}),null);
+  assert.equal(reportedCost({data:{usage:{amount:5,currency:'JPY'}}}),null);
+  // 缺 currency、缺金额、token 用量、网关 usage.id、负数、空 payload —— 都不认（不猜、不按 0）
+  assert.equal(reportedCost({usage:{amount:3}}),null);
+  assert.equal(reportedCost({usage:{id:'backup-usage'}}),null);
+  assert.equal(reportedCost({data:{usage:{prompt_tokens:5,completion_tokens:6}}}),null);
+  assert.equal(reportedCost({usage:{amount:-1,currency:'CNY'}}),null);
+  assert.equal(reportedCost(null),null);
   const { providerSelectionForModality } = await load('apps/server/src/routes/aiGeneration.js');
   const { normalizeAiProviderPolicy } = await load('apps/server/src/routes/billingConfig.js');
   const policy = normalizeAiProviderPolicy(JSON.stringify({ channels: [

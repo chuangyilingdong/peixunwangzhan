@@ -81,11 +81,35 @@ function textFromContent(content) {
  * 各家字段名不一：OpenAI 新老两套都叫 prompt_tokens/completion_tokens，
  * 也有叫 input_tokens/output_tokens 的（Anthropic 风格、部分网关）。读不到就返回 null。
  */
+// 上游实扣金额的信封不止一种，按协议逐个认（顺序只为稳定，不表示优先级）：
+//   · usage.cost.{amount,currency} —— 网关风格：网关把实扣放进 usage.cost
+//   · usage.{amount,currency}      —— Seedance 直连：/v1/videos、/v1/midjourney/tasks 的顶层 usage
+//   · data.usage.{amount,currency} —— Seedance 通用图/视频/音频/3D 与音乐任务查询
+//   · task.usage.{amount,currency} —— Seedance MiniMax-H3（/v2/query/video_generation）
+// 认不出来一律 null（绝不猜、绝不按 0）。各上游都保证 amount 是「本次实际扣减」。
+const COST_ENVELOPES = [
+  (payload) => payload?.usage,
+  (payload) => payload?.data?.usage,
+  (payload) => payload?.task?.usage,
+];
+
+function amountNode(value) {
+  if (!value || typeof value !== 'object') return null;
+  const node = value.cost && typeof value.cost === 'object' ? value.cost : value;
+  return typeof node.amount === 'number' ? node : null;
+}
+
 // Only an explicit amount + CNY currency is usable without guessing units or FX.
+// 非 CNY（例如 Midjourney / Suno 按上游 cost 报的 USD）一律不认：跨币种不并账，
+// 硬收敛成 CNY 会把真实毛利算错；这类调用留在 COMPUTED / UNKNOWN，由账单侧单独核销。
 export function reportedCost(payload) {
-  const cost = payload?.usage?.cost;
-  if (!cost || typeof cost !== 'object' || cost.currency !== 'CNY' || typeof cost.amount !== 'number' || !Number.isFinite(cost.amount) || cost.amount < 0) return null;
-  return { source:'REPORTED', currency:'CNY', amount:cost.amount, fen:cost.amount * 100 };
+  for (const envelope of COST_ENVELOPES) {
+    const cost = amountNode(envelope(payload));
+    if (!cost || cost.currency !== 'CNY' || !Number.isFinite(cost.amount) || cost.amount < 0) continue;
+    // 上游金额是小数（Seedance 官方示例 ¥20.40），直接 ×100 会得到 2039.9999999999998 这种非整数分。
+    return { source:'REPORTED', currency:'CNY', amount:cost.amount, fen:Math.round(cost.amount * 100) };
+  }
+  return null;
 }
 
 function tokenUsage(payload) {

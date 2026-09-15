@@ -389,8 +389,63 @@ try {
   assert.equal(JSON.parse(attempt.cost_rule_snapshot).priceLevel, 'MODEL');
   assert.equal(JSON.parse(attempt.cost_rule_snapshot).model, 'qwen-turbo');
 
+  /* ⑦ Seedance 直连实扣（2026-09-15）：异步任务终态回执里的 usage.amount 就是**本次实际扣减**，
+       按协议从 data.usage / task.usage / 顶层 usage 读出 → 来源 REPORTED，金额取上报值、不折算合同价。 */
+  // 图片：通用任务查询把 usage 放在 data.usage（code/data 信封）
+  let imagePolls = 0;
+  globalThis.fetch = async (_url, options = {}) => {
+    if (options.method === 'POST') return jsonResponse({ code: true, data: { task_id: 'sd-image-1' } });
+    imagePolls += 1;
+    return jsonResponse({ code: true, data: { task_id: 'sd-image-1', status: 'succeeded', data: [{ url: 'https://p90.test/sd-cover.png' }], usage: { amount: 0.54, currency: 'CNY' } } });
+  };
+  provider = getGenerationProvider(selection({ requestPaths: { IMAGE: '/v1/image/generations' } }));
+  await provider.generate({ modality: 'IMAGE', prompt: 'seedance 一张图', options: { resolution: '2K' } });
+  attempt = attemptOf(provider);
+  assert.equal(imagePolls, 1, '提交一次 + 轮询一次');
+  assert.equal(attempt.cost_source, 'REPORTED', '上游给了实扣金额就不再用合同价折算');
+  assert.equal(attempt.upstream_cost_fen, 54, '¥0.54 → 54 分');
+  assert.equal(attempt.cost_rule_snapshot && JSON.parse(attempt.cost_rule_snapshot).basis, 'UPSTREAM_REPORTED_OR_UNKNOWN');
+
+  // 视频（MiniMax-H3 协议）：提交 /v2/video_generation、轮询 /v2/query/video_generation/{id}，
+  // 实扣在 task.usage，视频直链在 task.content.url
+  let videoPolls = 0;
+  const videoUrls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    videoUrls.push(String(url));
+    if (options.method === 'POST') return jsonResponse({ task_id: 'sd-video-1' });
+    videoPolls += 1;
+    return jsonResponse({ task: { id: 'sd-video-1', status: 'succeeded', content: { url: 'https://p90.test/sd-clip.mp4' }, usage: { amount: 21.8, currency: 'CNY' } } });
+  };
+  provider = getGenerationProvider(selection({ requestPaths: { VIDEO: '/v2/video_generation' }, pollPaths: { VIDEO: '/v2/query/video_generation/{id}' } }));
+  await provider.generate({ modality: 'VIDEO', prompt: 'seedance 一段视频', options: { durationSeconds: 5, resolution: '1080p' } });
+  attempt = attemptOf(provider);
+  assert.equal(videoPolls, 1);
+  assert.equal(videoUrls[0], 'https://p90.test/v2/video_generation', '按渠道 requestPaths 提交');
+  assert.equal(videoUrls[1], 'https://p90.test/v2/query/video_generation/sd-video-1', '按渠道 pollPaths 轮询');
+  assert.equal(attempt.cost_source, 'REPORTED');
+  assert.equal(attempt.upstream_cost_fen, 2180, '¥21.80 → 2180 分');
+  assert.equal(attempt.task_id, 'sd-video-1');
+
+  // 浮点陷阱：Seedance 官方示例的 ¥20.40，直接 ×100 = 2039.9999999999998 —— 落库必须是整数分
+  globalThis.fetch = async () => jsonResponse({ code: true, data: { task_id: 'sd-music-1', status: 'succeeded', data: [{ url: 'https://p90.test/sd-song.mp3' }], usage: { amount: 20.4, currency: 'CNY' } } });
+  provider = getGenerationProvider(selection());
+  await provider.generate({ modality: 'MUSIC', prompt: 'seedance 一首歌', options: { durationSeconds: 10 } });
+  attempt = attemptOf(provider);
+  assert.equal(attempt.cost_source, 'REPORTED');
+  assert.ok(Number.isInteger(attempt.upstream_cost_fen), '必须是整数分，不能是 2039.9999999999998');
+  assert.equal(attempt.upstream_cost_fen, 2040);
+
+  // 非 CNY 实扣（Midjourney / Suno 按上游 cost 报 USD）不认 → 回落合同价折算，绝不把美元当人民币
+  globalThis.fetch = async () => jsonResponse({ code: true, data: { task_id: 'sd-usd-1', status: 'succeeded', data: [{ url: 'https://p90.test/mj.png' }], usage: { amount: 0.045, currency: 'USD' } } });
+  provider = getGenerationProvider(selection({ upstreamUnitPrices: { IMAGE: { perImageFen: 30 } } }));
+  await provider.generate({ modality: 'IMAGE', prompt: '美元结算的图' });
+  attempt = attemptOf(provider);
+  assert.equal(attempt.cost_source, 'COMPUTED', 'USD 实扣不认，改用合同价折算');
+  assert.equal(attempt.upstream_cost_fen, 30);
+
   console.log('P90 合同单价折算：文本 token × 每千 token 价、图片按张/档、视频按秒/档、音乐按次，金额分整数精确断言通过');
   console.log('P90 缺用量与缺单价一律 null（UNKNOWN）不按 0、来源优先级 REPORTED>COMPUTED>ESTIMATED>UNKNOWN、改价不追溯、学生侧恒 0、渠道读写与非法值拒绝通过');
+  console.log('P90 Seedance 直连实扣：data.usage / task.usage / 顶层 usage 三处读取位置、¥20.40 这类小数换算成整数分、USD 不当人民币通过');
 } finally {
   globalThis.fetch = originalFetch;
 }
