@@ -57,6 +57,13 @@
     整节课的文本成本凭空消失。`compute_attempts` 的金额列在库里是 REAL，正是为了存这种小数分。
 9. **教师只看得到自己创建的课堂**（课包库全机构可见）；机构管理员看全机构。这条是安全相关的：改数据范围之前先跑 `scripts/p69-teacher-data-scope.mjs`。
 10. **班级那三张表是历史表**（`classes` / `class_members` / `class_curriculum_items`）：保留数据与 DDL，不再被读写。旧 `/api/org/classes/*` 已全部下线。
+11. **教学素材（备课资料）在机构/老师端只能在线预览、不提供下载**（2026-09-15，口径 A）：
+    预览走 `/api/org/file-assets/{id}/preview?t=<短时票据>`，`content-disposition: inline`，每次预览写
+    `FILE_PREVIEW` 审计。**PPT / Word 由服务端用 LibreOffice 转成 PDF 后再发，原始文件不出服务器**。
+    边界（不是实现缺陷，是 web 的物理限制）：视频/PDF 只要浏览器能渲染就拦不住录屏/截屏；
+    这里保证的是「没有下载入口 + 链接短时失效 + 原始 Office 文件不外发 + 审计可溯源」。
+    ⚠️ **部署依赖**：服务器必须装 `libreoffice-impress`/`writer` + **中文字体**（`fonts-noto-cjk`，
+    不装的话转出来的 PDF 中文是方块）；上传目录必须归服务账号所有，否则转换会因 EACCES 失败。
 
 ## 四、代码地图（详见 `docs/architecture/代码结构与路由.md`）
 
@@ -83,7 +90,7 @@ PLATFORM_DATA_DIR=.tmp/x PLATFORM_DB_PATH=.tmp/x/platform.db PORT=18888 node app
 **改完必跑**（守卫是这份代码的「别踩这里」）：
 
 ```bash
-node .tmp/smoke-run.mjs                    # 全量 102 个守卫（p85–p91 三账/账单、p92 机构端消耗口径）
+node .tmp/smoke-run.mjs                    # 全量 103 个守卫（p85–p91 三账/账单、p92 消耗口径、p93 素材预览）
 node scripts/p70-pages-render.mjs          # 三端页面真渲染 —— 改前端之后必跑（能拦白屏）
 node scripts/p66-student-grant-gate.mjs    # 进课三层门禁
 node scripts/p69-teacher-data-scope.mjs    # 教师数据范围（安全相关改动）
@@ -93,6 +100,7 @@ node scripts/p88-financial-reconciliation-ui.mjs  # 财务四视图 + 对账表
 node scripts/p90-contract-cost-computation.mjs    # 合同价折算的精确金额
 node scripts/p91-provider-bill-reconciliation.mjs # 账单适配器 / 幂等 / 凭据不外泄
 node scripts/p92-sale-price-scope.mjs             # 机构端/学员端「消耗」= 对外售价（只计成功尝试）
+node scripts/p93-material-preview.mjs             # 教学素材在线预览：形态判定 / 票据 / 转换失败不回落
 ```
 
 改前端还要 `vite build` 三端（`node_modules/vite/bin/vite.js build apps/<app> --config apps/<app>/vite.config.mjs`，

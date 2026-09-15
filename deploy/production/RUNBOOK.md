@@ -46,6 +46,23 @@ for u in https://iicili.cyou/ https://iicili.cyou/admin/ https://iicili.cyou/org
 - 复杂远程操作走「本地写脚本 → 转 LF → `scp` 上传 → `ssh bash /tmp/...`」，
   避开 Windows CRLF 与 PowerShell 转义（`node -e` 里写多行 SQL/JSX 必翻车）。
 
+## 服务器上的系统级依赖（换机器 / 重装时必须补）
+
+平台代码之外，服务器还依赖两个**系统包**，缺了不会报错、只会让功能静默失效：
+
+```bash
+# 教学素材在线预览：PPT/Word 要服务端转 PDF（2026-09-15 起）
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y libreoffice-impress libreoffice-writer fonts-noto-cjk
+soffice --version          # 期望 LibreOffice 26.x
+fc-list | grep -c cjk      # 期望 >0 —— 不装中文字体，转出来的 PDF 里中文是方块
+```
+
+- **`fonts-noto-cjk` 不能省**：只装 LibreOffice 也能转，但中文会渲染成方块，而且**不报错**。
+- 上传目录（`FILE_UPLOAD_ROOT`）必须归服务账号 `ai-kids-prod` 所有。若运维以 root 在里面留下过
+  目录，预览转换会因 `EACCES` 失败（对外表现为「这份课件暂时无法预览」，日志里有
+  `[materialPreview] 转换失败`）。修法：`chown -R ai-kids-prod:ai-kids-prod <上传目录>`。
+
 ## 当前架构
 
 - 域名：`https://iicili.cyou`
