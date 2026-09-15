@@ -710,7 +710,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   retry_of_job_id TEXT,
   FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE
+  FOREIGN KEY (project_id) REFERENCES student_projects(id) ON DELETE CASCADE,
   FOREIGN KEY (retry_of_job_id) REFERENCES generation_jobs(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_project_created ON generation_jobs(project_id, created_at DESC);
@@ -1610,6 +1610,22 @@ for (const statement of [
   catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 }
 db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VALUES (1, '${new Date().toISOString()}', '${new Date().toISOString()}')`);
+for (const statement of ['ALTER TABLE course_series ADD COLUMN cu_limit INTEGER', 'ALTER TABLE course_lessons ADD COLUMN cu_limit INTEGER', 'ALTER TABLE generation_jobs ADD COLUMN cu_reservation_id TEXT']) {
+  try { db.exec(statement); } catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+}
+db.exec(`CREATE TABLE IF NOT EXISTS student_course_cu_quotas (
+ id TEXT PRIMARY KEY, org_id TEXT NOT NULL, student_id TEXT NOT NULL, grant_id TEXT, series_id TEXT NOT NULL, lesson_id TEXT NOT NULL,
+ limit_cu INTEGER NOT NULL CHECK (limit_cu >= 0), reserved_cu INTEGER NOT NULL DEFAULT 0 CHECK (reserved_cu >= 0), settled_cu INTEGER NOT NULL DEFAULT 0 CHECK (settled_cu >= 0), warning_threshold_cu INTEGER,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(student_id, series_id, lesson_id),
+ FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE, FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS student_course_cu_ledger (
+ id TEXT PRIMARY KEY, quota_id TEXT NOT NULL, org_id TEXT NOT NULL, student_id TEXT NOT NULL, series_id TEXT NOT NULL, lesson_id TEXT NOT NULL, session_id TEXT, generation_job_id TEXT,
+ idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK (state IN ('RESERVED','SETTLED','RELEASED','VOIDED')), reserved_cu INTEGER NOT NULL DEFAULT 0, settled_cu INTEGER NOT NULL DEFAULT 0, reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ FOREIGN KEY (quota_id) REFERENCES student_course_cu_quotas(id) ON DELETE CASCADE, FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE, FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_student_course_cu_quota_lookup ON student_course_cu_quotas(org_id, student_id, series_id, lesson_id)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_student_course_cu_ledger_quota_state ON student_course_cu_ledger(quota_id, state)');
 
 // Lightweight forward-compatible migration for user credit adjustment tracking.
 db.exec(`CREATE TABLE IF NOT EXISTS user_credit_adjustments (

@@ -10,6 +10,7 @@ import { recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { assertComputePoolBudget, priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
+import { reserveCourseCu, settleCourseCu, releaseCourseCu } from '../services/courseCuLedger.js';
 
 /** 项目归属的课包 id（算力池的键）。失败路径上没有 context，所以这里按课时回查一次。 */
 function seriesIdOf(project) {
@@ -372,6 +373,8 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
   const failMessage = normalized.message || error?.message || '素材生成失败';
   const failAt = nowIso();
   transaction(() => {
+    const reservationId = row('SELECT cu_reservation_id FROM generation_jobs WHERE id=?', [jobId])?.cu_reservation_id;
+    if (reservationId) releaseCourseCu({ id: reservationId, reason: failCode, inTransaction: true });
     const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (currentJob) assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE id=?",
@@ -599,11 +602,15 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
   });
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
+  const reservation = reserveCourseCu({ orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, seriesId: seriesIdOf(project), lessonId: project.course_lesson_id, sessionId: project.class_session_id || null, generationJobId: jobId, idempotencyKey: `generation:${jobId}` });
+  if (reservation?.id) q('UPDATE generation_jobs SET cu_reservation_id=? WHERE id=?', [reservation.id, jobId]);
   try {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
+    const reservationId = row('SELECT cu_reservation_id FROM generation_jobs WHERE id=?', [jobId])?.cu_reservation_id;
+    if (reservationId) settleCourseCu({ id: reservationId });
     audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
     const job = jobDetail(jobId);
     return { job, assets: job.assets };
@@ -680,6 +687,8 @@ async function processAsyncGeneration(item) {
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
+    const reservationId = row('SELECT cu_reservation_id FROM generation_jobs WHERE id=?', [jobId])?.cu_reservation_id;
+    if (reservationId) settleCourseCu({ id: reservationId });
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
   } catch (error) {
     markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
@@ -926,6 +935,8 @@ export async function handleAiGeneration(ctx) {
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
+    const reservation = reserveCourseCu({ orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, seriesId: seriesIdOf(project), lessonId: project.course_lesson_id, sessionId: project.class_session_id || null, generationJobId: jobId, idempotencyKey: `generation:${jobId}` });
+    if (reservation?.id) q('UPDATE generation_jobs SET cu_reservation_id=? WHERE id=?', [reservation.id, jobId]);
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }
@@ -935,6 +946,8 @@ export async function handleAiGeneration(ctx) {
     if (!job) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
     if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);
+    const reservationId = job.cu_reservation_id;
+    if (reservationId) releaseCourseCu({ id: reservationId, reason: 'GENERATION_CANCELLED' });
     return jobDetail(jobId, { requireAuth: auth });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);

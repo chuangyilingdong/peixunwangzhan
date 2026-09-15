@@ -41,18 +41,22 @@ export function lessonCostFenFor({ studentId, sessionId }) {
   return salePriceFenFor({ sessionId, studentId });
 }
 
-/** 该学生在**这节课**上的参与行（含跨课堂占用；REMOVED 不算占用）。 */
-export function activeParticipationFor({ studentId, lessonId, excludeSessionId = null }) {
+/** 学生全局非终态占用：不区分课包或课程；REMOVED 不算占用。 */
+export function activeParticipationFor({ studentId, lessonId = null, excludeSessionId = null }) {
+  const lessonClause = lessonId ? ' AND part.lesson_id=?' : '';
+  const params = lessonId ? [studentId, lessonId] : [studentId];
+  if (excludeSessionId) { params.push(excludeSessionId); }
   return row(
     `SELECT part.*, session.title session_title, session.status session_status, session.teacher_id session_teacher_id,
-        teacher.display_name teacher_name, session.started_at, session.created_at
+        session.lesson_id occupied_lesson_id, session.series_id occupied_series_id,
+        lesson.title occupied_lesson_title, teacher.display_name teacher_name, session.started_at, session.created_at
       FROM session_students part
       JOIN class_sessions session ON session.id = part.session_id
+      LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
       LEFT JOIN users teacher ON teacher.id = session.teacher_id
-      WHERE part.student_id=? AND part.lesson_id=? AND part.status IN ('PENDING','ACTIVE')
+      WHERE part.student_id=?${lessonClause} AND part.status IN ('PENDING','ACTIVE') AND session.status IN ('PENDING','ACTIVE')
         ${excludeSessionId ? 'AND part.session_id <> ?' : ''}
-      ORDER BY part.added_at DESC LIMIT 1`,
-    excludeSessionId ? [studentId, lessonId, excludeSessionId] : [studentId, lessonId],
+      ORDER BY part.added_at DESC LIMIT 1`, params,
   ) || null;
 }
 
@@ -111,11 +115,11 @@ export function sessionCandidates(session) {
     if (student.status !== 'ACTIVE') { blocked.push({ ...base, reason: 'STUDENT_DISABLED', reasonText: '学员账号已停用' }); continue; }
     if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { blocked.push({ ...base, reason: 'STUDENT_EXPIRED', reasonText: '学员账号已到期' }); continue; }
     if (!granted.has(student.id)) { blocked.push({ ...base, reason: 'NO_GRANT', reasonText: '没有这个课包的许可（到「学员许可」分给 ta）' }); continue; }
-    const occupied = activeParticipationFor({ studentId: student.id, lessonId: session.lesson_id });
+    const occupied = activeParticipationFor({ studentId: student.id });
     if (occupied) {
       blocked.push({
         ...base, reason: 'IN_OTHER_SESSION',
-        reasonText: `已在另一个课堂里（${occupied.session_title || '未命名课堂'} · ${SESSION_STATE_LABELS[occupied.session_status] || occupied.session_status} · ${occupied.teacher_name || '未知老师'}）`,
+        reasonText: `已在另一个课堂里（${occupied.session_title || '未命名课堂'} · ${occupied.occupied_lesson_title || '未知课程'} · ${SESSION_STATE_LABELS[occupied.session_status] || occupied.session_status} · ${occupied.teacher_name || '未知老师'}）`,
         session: { id: occupied.session_id, title: occupied.session_title || null, status: occupied.session_status, teacherName: occupied.teacher_name || null },
       });
       continue;
@@ -185,7 +189,7 @@ export function addSessionStudents({ session, studentIds, actorId }) {
       if (own) { skipped.push({ studentId, reason: 'ALREADY_IN' }); continue; }
       const granted = row('SELECT id FROM student_course_grants WHERE org_id=? AND series_id=? AND student_id=? AND revoked_at IS NULL', [session.org_id, session.series_id, studentId]);
       if (!granted) { skipped.push({ studentId, reason: 'NO_GRANT' }); continue; }
-      const occupied = activeParticipationFor({ studentId, lessonId: session.lesson_id, excludeSessionId: session.id });
+      const occupied = activeParticipationFor({ studentId, excludeSessionId: session.id });
       if (occupied) { skipped.push({ studentId, reason: 'IN_OTHER_SESSION' }); continue; }
       const completed = completedParticipationFor({ studentId, lessonId: session.lesson_id, excludeSessionId: session.id });
       if (completed) { skipped.push({ studentId, reason: 'COMPLETED' }); continue; }
