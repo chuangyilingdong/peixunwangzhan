@@ -1,11 +1,11 @@
 // 平台端「模型与算力」页的面板（2026-09-13：从原 ComputeGateway.jsx 拆出）。
 //
 // 为什么拆：原来「算力网关」和「计费与模型」是两个页面，配一次上游要来回跳（用户反馈理解成本太高）。
-// 现在合并成一页、按步骤走，这里放**算力侧的三个面板**：
-//   GatewayPanel      ③ 可选的 new-api 网关状态与连接配置
-//   PricingPanel      ② 每次调用单价（对学生的售价）
-//   ComputeUsagePanel ④ 用量归集 + 算力池 + 两本账对账
-// 三个面板各自管自己的数据（互不依赖），所以能独立放进步骤里、也能单独刷新。
+// 现在合并成一页，这里放**算力侧的两个面板**：
+//   PricingPanel       ② 对外售价（公告价，观测口径）—— 机构/学员看到的「消耗」按它算
+//   ComputeBudgetPanel ④ 平台侧成本预警（每场课堂 / 课时跨机构）
+//   GatewayPanel       ③ 可选的 new-api 网关状态与连接配置（2026-09-15 起收进「高级」）
+// 逐笔明细与按机构/学员对照看「用量与成本」那边的调用账，不在这里重复。
 import { useEffect, useState } from 'react';
 import { ErrorState, Loading, Notice, Panel, formatDate, useData } from '@platform/shared';
 
@@ -147,20 +147,16 @@ export function PricingPanel({ api }) {
   </Panel>;
 }
 
-export function ComputeUsagePanel({ api }) {
-  const [days,setDays] = useState('30');
-  const attempts = useData(() => api.get(`admin/compute-attempts?days=${days}`),[api,days]);
+/**
+ * 平台侧的成本预警（按课堂 / 按课时）—— 2026-09-15 重排后挂在「用量与成本 → 三账与毛利」下。
+ * 原来这个组件（ComputeUsagePanel）里还有一张「上游调用与成本」表，与「调用账」重复且信息更少
+ * （没有对外售价、没有核销与差额），已删掉；逐笔明细一律看调用账。
+ */
+export function ComputeBudgetPanel({ api }) {
   const budgets = useData(() => api.get('admin/compute-pools?limit=500'),[api]);
   const money = fen => fen == null ? '未知' : yuan(fen / 100);
   const state = {UNKNOWN:'成本未知',OVER_BUDGET:'超额预警（仍可调用）',WITHIN_BUDGET:'已知成本在基准内',UNCONFIGURED:'未配置预警基准'};
   return <>
-    <Panel title="上游调用与成本" actions={<><select value={days} onChange={e=>setDays(e.target.value)}><option value="7">近7天</option><option value="30">近30天</option><option value="90">近90天</option></select><button className="secondary-button" onClick={attempts.refresh}>刷新</button></>}>
-      <p>用户包算力。估算不代表真实账单；历史售价不作为上游成本，未知成本不按零计算。</p>
-      {attempts.loading ? <Loading/> : attempts.error ? <ErrorState error={attempts.error} onRetry={attempts.refresh}/> : <>
-        <p>{attempts.data?.summary?.calls || 0} 次尝试 · 已知估算小计 {money(attempts.data?.summary?.estimatedFen)} · 上游报告小计 {money(attempts.data?.summary?.reportedFen)} · 未知 {attempts.data?.summary?.unknownCalls || 0} 次</p>
-        <div className="table-wrap"><table><thead><tr><th>时间 / 归属</th><th>模型 / 渠道</th><th>状态</th><th>成本来源 / 金额</th></tr></thead><tbody>{attempts.data?.items?.map(item=><tr key={item.id}><td>{formatDate(item.created_at)}<div>{item.org_name || '未归属'} · {item.student_name || '—'}</div></td><td>{item.model}<div>{item.channel_id} · #{item.attempt}</div></td><td>{item.status}<div>{item.error_code} {item.error_message}</div></td><td>{({UNKNOWN:'未知',ESTIMATED:'估算',REPORTED:'上游报告（未对账）',MOCK:'模拟'})[item.cost_source]} · {money(item.upstream_cost_fen)}</td></tr>)}</tbody></table></div>
-      </>}
-    </Panel>
     <Panel title="每场课堂平台预警" actions={<button className="secondary-button" onClick={budgets.refresh}>刷新</button>}>
       <p>每场课堂使用课时配置的总预警基准，不随参与人数放大，不阻止学生调用。成本包含失败、在途与成功尝试；未知部分单列。</p>
       {budgets.loading ? <Loading/> : budgets.error ? <ErrorState error={budgets.error} onRetry={budgets.refresh}/> : <div className="table-wrap"><table><thead><tr><th>机构 / 课堂</th><th>参与人数</th><th>预警基准</th><th>已知成本小计</th><th>未知尝试</th><th>预警</th></tr></thead><tbody>{budgets.data?.items?.map(item=><tr key={item.sessionId}><td>{item.orgName} · {item.sessionTitle || item.lessonTitle}</td><td>{item.studentCount}</td><td>{item.budgetFen == null ? '未配置' : money(item.budgetFen)}</td><td>{money(item.knownCostFen)}</td><td>{item.unknownCalls}</td><td>{state[item.budgetState]}</td></tr>)}</tbody></table></div>}

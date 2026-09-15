@@ -158,7 +158,7 @@ for (const dimension of ['modality', 'channel', 'model', 'org', 'student']) {
 // —— P90 合同单价两层契约：界面写出的形状必须被后端原样接受（拍平＝静默丢弃）——
 const { computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, resolveUnitPrice, validateModelUnitPrices } = await import('../apps/server/src/services/upstreamCost.js');
 const uiUpstreamPrices = { IMAGE: { perImageFen: 50, byResolution: { '1K': 40 } } };
-const uiModelUnitPrices = { 'p88-model': { IMAGE: { perImageFen: 30, byResolution: { '1K': 25 } }, TEXT: { inputFenPer1kTokens: 250, outputFenPer1kTokens: 750 } } };
+const uiModelUnitPrices = { 'p88-model': { IMAGE: { perImageFen: 30, byResolution: { '1K': 25 } }, TEXT: { inputFenPer1MTokens: 250, outputFenPer1MTokens: 750 } } };
 assert.deepEqual(validateModelUnitPrices(uiModelUnitPrices), [], '界面写出的模型级覆盖必须能通过后端校验');
 assert.deepEqual(normalizeModelUnitPrices(uiModelUnitPrices), uiModelUnitPrices, '模型级覆盖必须按 {模型:{素材类型:{…}}} 原样保留');
 assert.deepEqual(normalizeModelUnitPrices({ 'p88-model': { perImageFen: 30 } }), null, '拍平的模型级覆盖会被丢弃 —— 界面绝不能这么写');
@@ -176,7 +176,7 @@ assert.equal(contractCostRuleSnapshot({ provider: 'custom', channelId: 'c', mode
 assert.equal(contractCostRuleSnapshot({ provider: 'custom', channelId: 'c', model: 'p88-model', computed: modalityCost }).priceLevel, 'MODALITY');
 assert.equal(computeContractCost({ modality: 'IMAGE', model: 'p88-model', unitPrices: null, modelUnitPrices: null, usage: { images: 2, resolution: '1K' } }), null, '两层都没配 → null（UNKNOWN），绝不按 0');
 assert.equal(resolveUnitPrice({ unitPrices: uiUpstreamPrices, modelUnitPrices: { 'other-model': { IMAGE: { perImageFen: 10 } } }, model: 'p88-model', modality: 'IMAGE' }).price.perImageFen, 50, '别的模型的覆盖不能套到本模型上');
-assert.equal(resolveUnitPrice({ unitPrices: null, modelUnitPrices: uiModelUnitPrices, model: 'p88-model', modality: 'TEXT' }).price.inputFenPer1kTokens, 250, '模型级覆盖在没有素材类型价时也生效');
+assert.equal(resolveUnitPrice({ unitPrices: null, modelUnitPrices: uiModelUnitPrices, model: 'p88-model', modality: 'TEXT' }).price.inputFenPer1MTokens, 250, '模型级覆盖在没有素材类型价时也生效');
 assert.equal(resolveUnitPrice({ unitPrices: uiUpstreamPrices, modelUnitPrices: null, model: 'p88-model', modality: 'TEXT' }), null, '两层都没有这个素材类型 → null（UNKNOWN），不按 0');
 
 const billingAuth = { user: { id: 'billing-admin', login: 'billing-admin', role: 'SUPER_ADMIN', permissions: ['ADMIN_BILLING'] }, rawUser: { permissions: '["ADMIN_BILLING"]' } };
@@ -234,7 +234,7 @@ for (const column of ['官方账单合计', '平台 COMPUTED（合同价折算�
 assert.match(financialSource, /缺失单列、不按 0|不按 0 参与计算|绝不按 0 计/, '必须写明缺失 / 未知不按 0');
 const billingPanelSource = fs.readFileSync(path.join(root, 'apps/admin/src/components/BillingPanels.jsx'), 'utf8');
 assert.match(billingPanelSource, /上游合同单价（与上游的合同价 · 用于自动折算实际计费）/, '渠道配置必须有上游合同单价编辑器');
-for (const field of ['inputFenPer1kTokens', 'outputFenPer1kTokens', 'perImageFen', 'perSecondFen', 'audioExtraPerSecondFen', 'perCallFen', 'byResolution']) {
+for (const field of ['inputFenPer1MTokens', 'outputFenPer1MTokens', 'perImageFen', 'perSecondFen', 'audioExtraPerSecondFen', 'perCallFen', 'byResolution']) {
   assert.ok(billingPanelSource.includes(field), `合同单价的字段名必须与后端 upstreamCost 一致：${field}`);
 }
 assert.match(billingPanelSource, /upstreamUnitPrices/, '素材类型价写回 channel.upstreamUnitPrices');
@@ -244,7 +244,11 @@ assert.match(billingPanelSource, /模型级覆盖 &gt; 素材类型价/, '必须
 assert.match(billingPanelSource, /不等于供应商开出的最终账单/, '必须写明合同价折算≠供应商最终账单');
 assert.match(billingPanelSource, /保存失败：\{saveError\}/, '后端拒绝非法合同单价时必须展示错误');
 assert.match(billingPanelSource, /unitPriceEditor\(channel, index\)/, '合同单价编辑器必须按渠道分组渲染');
-assert.match(modelSource, /<FinancialReconciliation api=\{api\} view=\{view\}/);
+assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="calls"/, '调用账是默认视图');
+assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="margin"/, '三账与毛利');
+assert.match(modelSource, /<FinancialReconciliation api=\{api\} view=\{advancedView\}/, '供应商账单 / 匹配与核销收在「高级」里');
+assert.match(modelSource, /<OrgStudentUsagePanel api=\{api\}/, '「机构与学员」入口必须接出来（按机构看每个学员的消耗）');
+assert.match(modelSource, /<ComputeBudgetPanel api=\{api\}/, '平台成本预警挂在三账与毛利下');
 assert.match(adminSource, /handleFinancialReporting/);
 
 const ssrRoot = path.join(root, '.tmp');
@@ -257,17 +261,23 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ModelCompute } from ${JSON.stringify(path.join(root, 'apps/admin/src/pages/ModelCompute.jsx').split(path.sep).join('/'))};
 import { ProviderBillReconciliationTable } from ${JSON.stringify(path.join(root, 'apps/admin/src/components/FinancialReconciliation.jsx').split(path.sep).join('/'))};
 const api = { get: () => new Promise(() => {}), post: () => Promise.resolve({}) };
-for (const view of ['calls','bills','matching','margin']) {
-  const html = renderToStaticMarkup(<MemoryRouter initialEntries={['/compute/usage?view='+view]}><Routes><Route path="/compute/usage" element={<ModelCompute api={api} />} /></Routes></MemoryRouter>);
-  for (const tab of ['调用账','供应商账单','匹配与核销','三账与毛利']) if (!html.includes(tab)) throw new Error(view+' missing tab '+tab);
-  // 「上游计费」（新列）与「官方账单自动对账」（新区块）必须在加载态就已经渲染出来，不能等数据。
-  const expected = {
-    calls: ['正在读取调用账', '上游计费'],
-    bills: ['导入供应商账单', '官方账单自动对账', '官方账单快照', '官方账单 × 平台口径', 'CSV 手工导入保留为兜底', '全部账户（汇总）'],
-    matching: ['正在读取核销记录'],
-    margin: ['正在计算三账对照'],
-  }[view];
-  for (const text of expected) if (!html.includes(text)) throw new Error(view+' did not render '+text);
+// 2026-09-15 重排：顶层是「调用账 / 机构与学员 / 三账与毛利 / 高级」，
+// 供应商账单与匹配与核销收在「高级」下（高级里再用 advanced 参数切子视图）。
+const render = (entry) => renderToStaticMarkup(<MemoryRouter initialEntries={[entry]}><Routes><Route path="/compute/usage" element={<ModelCompute api={api} />} /></Routes></MemoryRouter>);
+for (const [view, tabs] of [['calls', ['调用账', '机构与学员', '三账与毛利', '高级']], ['orgs', []], ['margin', []], ['advanced', []]]) {
+  const html = render('/compute/usage?view=' + view);
+  for (const tab of tabs) if (!html.includes(tab)) throw new Error(view + ' missing tab ' + tab);
+}
+// 「上游计费」（新列）与「官方账单自动对账」（新区块）必须在加载态就已经渲染出来，不能等数据。
+for (const text of ['正在读取调用账', '上游计费']) if (!render('/compute/usage?view=calls').includes(text)) throw new Error('calls did not render ' + text);
+for (const text of ["正在读取机构消耗"]) if (!render('/compute/usage?view=orgs').includes(text)) throw new Error('orgs did not render ' + text);
+for (const text of ['正在计算三账对照', '每场课堂平台预警']) if (!render('/compute/usage?view=margin').includes(text)) throw new Error('margin did not render ' + text);
+for (const [adv, expected] of [
+  ['bills', ['导入供应商账单', '官方账单自动对账', '官方账单快照', '官方账单 × 平台口径', 'CSV 手工导入保留为兜底', '全部账户（汇总）']],
+  ['matching', ['正在读取核销记录']],
+]) {
+  const html = render('/compute/usage?view=advanced&advanced=' + adv);
+  for (const text of expected) if (!html.includes(text)) throw new Error(adv + ' did not render ' + text);
 }
 
 // 官方账单对账表用夹具**真渲染**：缺失 / 未知必须留空，不能被显示成 0。

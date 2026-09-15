@@ -16,18 +16,21 @@ const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描�
  * 上游合同单价（P90）：与上游签的合同价，用来把「用量证据」自动折算成实际计费（来源 COMPUTED）。
  *
  * 结构必须与后端 `services/upstreamCost.js` 的 `normalizeUpstreamUnitPrices` 一模一样（**不要**在这里另发明一种）：
- *   { TEXT:{inputFenPer1kTokens,outputFenPer1kTokens},
+ *   { TEXT:{inputFenPer1MTokens,outputFenPer1MTokens},
  *     IMAGE:{perImageFen,byResolution:{'1K':30}},
  *     VIDEO:{perSecondFen,byResolution,audioExtraPerSecondFen},
  *     MUSIC:{perCallFen,perSecondFen} }
  * 金额一律「非负整数分」；留空 = 这一项没配单价（折算不出来 → UNKNOWN，**绝不按 0 计**）。
+ * ⚠️ 文本的单位是**分 / 百万 token**（2026-09-15 改，原来按「分 / 千 token」）。
+ *    上游价目表一般写「元 / 百万 token」：deepseek-flash 输入 2 元、输出 8 元
+ *    → 分/百万 = 200 / 800，正好整数；换成「分/千」就是 0.2 / 0.8，**填不进去**。
  * 两层：素材类型价（channel.upstreamUnitPrices，按渠道共用）
  *      + 模型级覆盖（channel.modelUnitPrices = { [modelId]: { [素材类型]: {…} } }），
  * 优先级 **模型 > 素材类型**（逐字段回退），模型级留空即回落素材类型价。
  */
 const UNIT_PRICE_MODALITIES = [['TEXT', '文本'], ['IMAGE', '图片'], ['VIDEO', '视频'], ['MUSIC', '音乐']];
 const UNIT_PRICE_FIELDS = {
-  TEXT: [['inputFenPer1kTokens', '输入（分 / 千 token）'], ['outputFenPer1kTokens', '输出（分 / 千 token）']],
+  TEXT: [['inputFenPer1MTokens', '输入（分 / 百万 token）'], ['outputFenPer1MTokens', '输出（分 / 百万 token）']],
   IMAGE: [['perImageFen', '每张（分）']],
   VIDEO: [['perSecondFen', '每秒（分）'], ['audioExtraPerSecondFen', '含音频每秒加价（分）']],
   MUSIC: [['perCallFen', '每次（分）'], ['perSecondFen', '每秒（分）']],
@@ -126,7 +129,7 @@ export function ProviderPolicyPanel({ api }) {
   //   ① 素材类型价：channel.upstreamUnitPrices = { [素材类型]: {…字段…} } —— 本渠道共用；
   //   ② 模型级覆盖：channel.modelUnitPrices = { [modelId]: { [素材类型]: {…同一套字段…} } }，
   //      优先级 **模型 > 素材类型**（逐字段回退）；模型级留空 = 回落素材类型价。
-  // 两层写入的键名都与后端 upstreamCost.js 一致（inputFenPer1kTokens / perImageFen / perSecondFen /
+  // 两层写入的键名都与后端 upstreamCost.js 一致（inputFenPer1MTokens / perImageFen / perSecondFen /
   // audioExtraPerSecondFen / perCallFen / byResolution）；传 null 的键会被删掉（= 没配），绝不写成 0。
   const tierDraftKey = (index, modality, modelId = '') => `${index}:${modality}:${modelId}`;
   // 填了非法值（负数、非数字）就**原样提交**，让后端拒绝并回显原因；前端不悄悄把它当成 0 或丢掉。

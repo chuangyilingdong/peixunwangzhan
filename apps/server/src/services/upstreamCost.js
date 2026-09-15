@@ -1,7 +1,7 @@
 // P90 合同单价 → 逐笔自动上游计费
 //
 // 口径（与产品约定一致，别在别处再抄一遍）：
-//   · 文本：上游 input/output tokens × 每千 token 合同价（分/千 token）；
+//   · 文本：上游 input/output tokens × 每百万 token 合同价（分/百万 token，整数）；
 //   · 图片：张数（本平台每次调用 1 张）× 每次价，或按分辨率档位价；
 //   · 视频：请求参数秒数 × 每秒价（可用分辨率档位价、含音频档位价）；
 //   · 音乐：按次价（配了每秒价且拿得到时长时按时长折算）。
@@ -55,8 +55,12 @@ export function compareCostSources(left, right) {
 }
 
 const MODALITY_KEYS = Object.freeze(['TEXT', 'IMAGE', 'VIDEO', 'MUSIC']);
+// ⚠️ TEXT 的单位是**分 / 百万 token**（2026-09-15 改）。
+// 原来按「分 / 千 token」，对 DeepSeek 这类便宜模型根本填不进去：官方价是「元 / 百万 token」，
+// deepseek-flash 输入 2 元 / 输出 8 元 → 换算成「分 / 千」是 0.2 分 / 0.8 分，**不是整数分**，
+// 只能填 0 或 1，误差 5 倍以上。改成「分 / 百万 token」后这些价正好是整数（200 / 800）。
 const UNIT_PRICE_FEN_KEYS = Object.freeze({
-  TEXT: ['inputFenPer1kTokens', 'outputFenPer1kTokens'],
+  TEXT: ['inputFenPer1MTokens', 'outputFenPer1MTokens'],
   IMAGE: ['perImageFen'],
   VIDEO: ['perSecondFen', 'audioExtraPerSecondFen'],
   MUSIC: ['perCallFen', 'perSecondFen'],
@@ -145,7 +149,7 @@ function validateModalityPrice(level, modality, raw, problems) {
 /**
  * 渠道上的合同单价（upstreamUnitPrices）归一化。非法值一律**丢弃**而不是当成 0；
  * 全空时返回 null（= 没配单价）。
- * 形状：{ TEXT:{inputFenPer1kTokens,outputFenPer1kTokens},
+ * 形状：{ TEXT:{inputFenPer1MTokens,outputFenPer1MTokens},
  *        IMAGE:{perImageFen,byResolution:{'1K':30}}, VIDEO:{perSecondFen,byResolution,audioExtraPerSecondFen},
  *        MUSIC:{perCallFen,perSecondFen} }
  */
@@ -204,7 +208,7 @@ export function validateModelUnitPrices(value) {
  * 返回 { price, modelPrice, modalityPrice } | null：
  *   price = 两层逐字段合并后的视图（模型级优先，仅供调试/展示）；
  *   modelPrice / modalityPrice = 两层各自的原始价目，折算时按层取值（见 computeContractCost）。
- * 逐字段回退：模型级没写的字段（如 outputFenPer1kTokens）用素材类型级同名价。
+ * 逐字段回退：模型级没写的字段（如 outputFenPer1MTokens）用素材类型级同名价。
  */
 export function resolveUnitPrice({ unitPrices = null, modelUnitPrices = null, model = '', modality = '' } = {}) {
   const key = String(modality || '').trim().toUpperCase();
@@ -312,16 +316,19 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
   };
 
   if (key === 'TEXT') {
-    const perInput = field('inputFenPer1kTokens');
-    const perOutput = field('outputFenPer1kTokens');
+    const perInput = field('inputFenPer1MTokens');
+    const perOutput = field('outputFenPer1MTokens');
     if (!perInput || !perOutput) return null; // 缺单价
     const input = wholeCount(evidence.inputTokens);
     const output = wholeCount(evidence.outputTokens);
     if (input === null || output === null) return null; // 缺用量
     levels.add(perInput.level); levels.add(perOutput.level);
-    const inputFen = Math.round((input * perInput.fen) / 1000);
-    const outputFen = Math.round((output * perOutput.fen) / 1000);
-    return done(inputFen + outputFen, { inputFenPer1kTokens: perInput.fen, outputFenPer1kTokens: perOutput.fen }, { inputTokens: input, outputTokens: output, inputFen, outputFen });
+    // 单位是分/百万 token。⚠️ 便宜模型的单笔成本常常**不足 1 分**（deepseek-flash 一次对话约 0.5~1 分），
+    // 所以每笔会四舍五入到整数分：单笔看起来是 0 或 1 分，但四舍五入是无偏的，
+    // **按机构/学员/课时汇总之后总额仍然准**（误差随笔数开方增长，不随笔数线性放大）。
+    const inputFen = Math.round((input * perInput.fen) / 1000000);
+    const outputFen = Math.round((output * perOutput.fen) / 1000000);
+    return done(inputFen + outputFen, { inputFenPer1MTokens: perInput.fen, outputFenPer1MTokens: perOutput.fen }, { inputTokens: input, outputTokens: output, inputFen, outputFen });
   }
 
   if (key === 'IMAGE') {

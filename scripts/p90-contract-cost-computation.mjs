@@ -32,7 +32,7 @@ const serveMedia = (url) => { globalThis.fetch = async () => jsonResponse({ id: 
 
 // 合同单价：文本 2.50 元/千 input token、7.50 元/千 output token；图片 0.30 元/张；视频 0.10 元/秒；音乐 0.88 元/次
 const UNIT_PRICES = {
-  TEXT: { inputFenPer1kTokens: 250, outputFenPer1kTokens: 750 },
+  TEXT: { inputFenPer1MTokens: 250, outputFenPer1MTokens: 750 },
   IMAGE: { perImageFen: 30, byResolution: { '1K': 30, '2K': 60 } },
   VIDEO: { perSecondFen: 10, byResolution: { '720p': 20 }, audioExtraPerSecondFen: 5 },
   MUSIC: { perCallFen: 88, perSecondFen: 4 },
@@ -49,30 +49,37 @@ assert.ok(compareCostSources('ESTIMATED', 'UNKNOWN') > 0);
 assert.equal(costSourcePriority('COMPUTED'), 2);
 assert.equal(costSourcePriority('随便写的'), -1);
 
+/* ①' 文本单位是「分 / 百万 token」（2026-09-15 改）：上游价目表写「元 / 百万 token」，
+   deepseek-flash 输入 2 元 / 输出 8 元 → 200 / 800 分，正好整数。
+   换成旧的「分 / 千 token」是 0.2 / 0.8，根本填不进去 —— 所以旧字段名必须不再被接受。 */
+assert.equal(normalizeUpstreamUnitPrices({ TEXT: { inputFenPer1kTokens: 250 } }), null, '旧的「分/千」字段名不再被接受（否则等于两套单位并存）');
+assert.deepEqual(normalizeUpstreamUnitPrices({ TEXT: { inputFenPer1MTokens: 200, outputFenPer1MTokens: 800 } }), { TEXT: { inputFenPer1MTokens: 200, outputFenPer1MTokens: 800 } }, 'deepseek-flash 的高峰价正好是整数');
+assert.deepEqual(validateUpstreamUnitPrices({ TEXT: { inputFenPer1MTokens: 200, outputFenPer1MTokens: 800 } }), []);
+
 /* 合同单价归一化：非法值丢弃（不当 0），全空为 null */
-assert.equal(normalizeUpstreamUnitPrices({ TEXT: { inputFenPer1kTokens: -1, outputFenPer1kTokens: 'x' } }), null);
-assert.deepEqual(normalizeUpstreamUnitPrices({ TEXT: { inputFenPer1kTokens: '250', outputFenPer1kTokens: 750, 别的: 9 } }), { TEXT: { inputFenPer1kTokens: 250, outputFenPer1kTokens: 750 } });
+assert.equal(normalizeUpstreamUnitPrices({ TEXT: { inputFenPer1MTokens: -1, outputFenPer1MTokens: 'x' } }), null);
+assert.deepEqual(normalizeUpstreamUnitPrices({ TEXT: { inputFenPer1MTokens: '250', outputFenPer1MTokens: 750, 别的: 9 } }), { TEXT: { inputFenPer1MTokens: 250, outputFenPer1MTokens: 750 } });
 assert.equal(normalizeUpstreamUnitPrices(null), null);
-assert.deepEqual(validateUpstreamUnitPrices({ TEXT: { inputFenPer1kTokens: 250 } }), []);
-assert.ok(validateUpstreamUnitPrices({ TEXT: { inputFenPer1kTokens: -5 } }).length);
+assert.deepEqual(validateUpstreamUnitPrices({ TEXT: { inputFenPer1MTokens: 250 } }), []);
+assert.ok(validateUpstreamUnitPrices({ TEXT: { inputFenPer1MTokens: -5 } }).length);
 assert.ok(validateUpstreamUnitPrices({ NOT_A_MODALITY: { perCallFen: 1 } }).length);
 assert.ok(validateUpstreamUnitPrices({ IMAGE: { byResolution: { '2K': -1 } } }).length);
 
 /* 模型级覆盖归一化与校验：非法值拒绝（不静默），整条覆盖可以为空 */
-assert.deepEqual(normalizeModelUnitPrices({ 'qwen-max': { TEXT: { inputFenPer1kTokens: 200 } }, 空的: {} }), { 'qwen-max': { TEXT: { inputFenPer1kTokens: 200 } } });
+assert.deepEqual(normalizeModelUnitPrices({ 'qwen-max': { TEXT: { inputFenPer1MTokens: 200 } }, 空的: {} }), { 'qwen-max': { TEXT: { inputFenPer1MTokens: 200 } } });
 assert.equal(normalizeModelUnitPrices(null), null);
-assert.deepEqual(validateModelUnitPrices({ 'qwen-max': { TEXT: { inputFenPer1kTokens: 200, outputFenPer1kTokens: 600 } } }), []);
-assert.ok(validateModelUnitPrices({ 'qwen-max': { TEXT: { inputFenPer1kTokens: -1 } } }).length);
+assert.deepEqual(validateModelUnitPrices({ 'qwen-max': { TEXT: { inputFenPer1MTokens: 200, outputFenPer1MTokens: 600 } } }), []);
+assert.ok(validateModelUnitPrices({ 'qwen-max': { TEXT: { inputFenPer1MTokens: -1 } } }).length);
 assert.ok(validateModelUnitPrices({ 'qwen-max': '不是对象' }).length);
-assert.ok(validateModelUnitPrices({ '': { TEXT: { inputFenPer1kTokens: 1 } } }).length);
+assert.ok(validateModelUnitPrices({ '': { TEXT: { inputFenPer1MTokens: 1 } } }).length);
 assert.ok(validateModelUnitPrices({ 'qwen-max': { NOT_A_MODALITY: { perCallFen: 1 } } }).length);
 
 try {
-  /* ① 文本：input/output tokens × 每千 token 价，四舍五入后相加（精确值） */
-  serveText({ prompt_tokens: 800, completion_tokens: 333 });
+  /* ① 文本：input/output tokens × 每百万 token 价，四舍五入后相加（精确值） */
+  serveText({ prompt_tokens: 800000, completion_tokens: 333000 });
   let provider = getGenerationProvider(selection());
   const textResult = await provider.generate({ modality: 'TEXT', prompt: '合同单价折算' });
-  // 800 × 250 / 1000 = 200；333 × 750 / 1000 = 249.75 → 250；合计 450
+  // 800000 × 250 / 1000000 = 200；333000 × 750 / 1000000 = 249.75 → 250；合计 450
   let attempt = attemptOf(provider);
   assert.equal(attempt.cost_source, 'COMPUTED');
   assert.equal(attempt.upstream_cost_fen, 450);
@@ -80,28 +87,44 @@ try {
   assert.equal(textResult.compute.upstreamCostFen, 450);
   const usageSnapshot = JSON.parse(attempt.usage_snapshot);
   assert.equal(usageSnapshot.evidence, 'UPSTREAM_USAGE');
-  assert.equal(usageSnapshot.inputTokens, 800);
-  assert.equal(usageSnapshot.outputTokens, 333);
+  assert.equal(usageSnapshot.inputTokens, 800000);
+  assert.equal(usageSnapshot.outputTokens, 333000);
   const ruleSnapshot = JSON.parse(attempt.cost_rule_snapshot);
   assert.equal(ruleSnapshot.basis, 'CONTRACT_UNIT_PRICE');
   assert.equal(ruleSnapshot.source, 'COMPUTED');
   assert.equal(ruleSnapshot.computedFen, 450);
-  assert.deepEqual(ruleSnapshot.unitPrice, { inputFenPer1kTokens: 250, outputFenPer1kTokens: 750 });
-  assert.deepEqual(ruleSnapshot.usage, { inputTokens: 800, outputTokens: 333, inputFen: 200, outputFen: 250 });
+  assert.deepEqual(ruleSnapshot.unitPrice, { inputFenPer1MTokens: 250, outputFenPer1MTokens: 750 });
+  assert.deepEqual(ruleSnapshot.usage, { inputTokens: 800000, outputTokens: 333000, inputFen: 200, outputFen: 250 });
   assert.equal(ruleSnapshot.channelId, 'contract-a');
   assert.equal(ruleSnapshot.model, 'p90-model');
   assert.equal(ruleSnapshot.priceLevel, 'MODALITY', '只配了素材类型价 → 命中 MODALITY 层级');
   assert.deepEqual(ruleSnapshot.priceLayers, ['MODALITY']);
 
+  /* ①'' 真实 DeepSeek 文本价 + 亚分：单笔常常不足 1 分，四舍五入是无偏的，所以每笔可能是 0 分，
+     但按机构/学员汇总后总额仍然准。这里把「单笔亚分 → 0」和「百万量级 → 精确整数」都钉住。 */
+  const deepseekPrices = { TEXT: { inputFenPer1MTokens: 200, outputFenPer1MTokens: 800 } }; // deepseek-flash 高峰价
+  serveText({ prompt_tokens: 1000, completion_tokens: 500 });                                  // 一次普通对话
+  provider = getGenerationProvider(selection({ upstreamUnitPrices: deepseekPrices }));
+  await provider.generate({ modality: 'TEXT', prompt: '普通对话' });
+  attempt = attemptOf(provider);
+  assert.equal(attempt.cost_source, 'COMPUTED');
+  assert.equal(attempt.upstream_cost_fen, 0, '0.2 + 0.4 = 0.6 分 → 四舍五入到 0 分（单笔亚分，不是「没算出来」）');
+
+  serveText({ prompt_tokens: 1000000, completion_tokens: 1000000 });
+  provider = getGenerationProvider(selection({ upstreamUnitPrices: deepseekPrices }));
+  await provider.generate({ modality: 'TEXT', prompt: '百万 token 量级' });
+  attempt = attemptOf(provider);
+  assert.equal(attempt.upstream_cost_fen, 1000, '100 万 input × 200/百万 = 200 分；100 万 output × 800/百万 = 800 分；合计 1000 分（¥10）');
+
   /* 模型级覆盖：同一素材类型下两个模型合同价差十倍，各算各的（优先级 model > modality） */
   const MODEL_PRICES = {
     // 渠道级 TEXT 是 250/750（前面 UNIT_PRICES），模型级故意配成十倍差，证明模型级确实生效
-    'qwen-turbo': { TEXT: { inputFenPer1kTokens: 20, outputFenPer1kTokens: 60 } },
-    'qwen-max': { TEXT: { inputFenPer1kTokens: 200, outputFenPer1kTokens: 600 } },
+    'qwen-turbo': { TEXT: { inputFenPer1MTokens: 20, outputFenPer1MTokens: 60 } },
+    'qwen-max': { TEXT: { inputFenPer1MTokens: 200, outputFenPer1MTokens: 600 } },
   };
   const modelPriced = (model, extra = {}) => selection({ model, modelUnitPrices: MODEL_PRICES, ...extra });
 
-  serveText({ prompt_tokens: 1000, completion_tokens: 500 });
+  serveText({ prompt_tokens: 1000000, completion_tokens: 500000 });
   provider = getGenerationProvider(modelPriced('qwen-turbo'));
   await provider.generate({ modality: 'TEXT', prompt: '小模型' });
   attempt = attemptOf(provider);
@@ -110,32 +133,32 @@ try {
   let modelRule = JSON.parse(attempt.cost_rule_snapshot);
   assert.equal(modelRule.priceLevel, 'MODEL');
   assert.deepEqual(modelRule.priceLayers, ['MODEL']);
-  assert.deepEqual(modelRule.unitPrice, { inputFenPer1kTokens: 20, outputFenPer1kTokens: 60 });
+  assert.deepEqual(modelRule.unitPrice, { inputFenPer1MTokens: 20, outputFenPer1MTokens: 60 });
   assert.equal(modelRule.model, 'qwen-turbo');
 
-  serveText({ prompt_tokens: 1000, completion_tokens: 500 });
+  serveText({ prompt_tokens: 1000000, completion_tokens: 500000 });
   provider = getGenerationProvider(modelPriced('qwen-max'));
   await provider.generate({ modality: 'TEXT', prompt: '大模型' });
   attempt = attemptOf(provider);
   assert.equal(attempt.upstream_cost_fen, 500, 'qwen-max：1000 × 200/1000 + 500 × 600/1000 = 200 + 300');
   modelRule = JSON.parse(attempt.cost_rule_snapshot);
   assert.equal(modelRule.priceLevel, 'MODEL');
-  assert.deepEqual(modelRule.unitPrice, { inputFenPer1kTokens: 200, outputFenPer1kTokens: 600 });
+  assert.deepEqual(modelRule.unitPrice, { inputFenPer1MTokens: 200, outputFenPer1MTokens: 600 });
   assert.notEqual(attempt.upstream_cost_fen, 50, '同一素材类型下两个模型必须各算各的');
 
   // 模型级缺字段 → 该字段回退素材类型价（只写了 output，input 用渠道级的 250）
-  serveText({ prompt_tokens: 1000, completion_tokens: 500 });
-  provider = getGenerationProvider(selection({ model: 'qwen-partial', modelUnitPrices: { 'qwen-partial': { TEXT: { outputFenPer1kTokens: 600 } } } }));
+  serveText({ prompt_tokens: 1000000, completion_tokens: 500000 });
+  provider = getGenerationProvider(selection({ model: 'qwen-partial', modelUnitPrices: { 'qwen-partial': { TEXT: { outputFenPer1MTokens: 600 } } } }));
   await provider.generate({ modality: 'TEXT', prompt: '模型级只写了输出价' });
   attempt = attemptOf(provider);
   assert.equal(attempt.upstream_cost_fen, 550, 'input 回退渠道级 250（1000 → 250）+ 模型级 output 600（500 → 300）');
   modelRule = JSON.parse(attempt.cost_rule_snapshot);
   assert.equal(modelRule.priceLevel, 'MODEL');
   assert.deepEqual(modelRule.priceLayers, ['MODEL', 'MODALITY'], '混合层级如实记录');
-  assert.deepEqual(modelRule.unitPrice, { inputFenPer1kTokens: 250, outputFenPer1kTokens: 600 });
+  assert.deepEqual(modelRule.unitPrice, { inputFenPer1MTokens: 250, outputFenPer1MTokens: 600 });
 
   // 模型级没有这个素材类型 → 整层回退素材类型价（qwen-plus 不在 MODEL_PRICES 里）
-  serveText({ prompt_tokens: 800, completion_tokens: 333 });
+  serveText({ prompt_tokens: 800000, completion_tokens: 333000 });
   provider = getGenerationProvider(modelPriced('qwen-plus'));
   await provider.generate({ modality: 'TEXT', prompt: '没配模型价 → 回退' });
   attempt = attemptOf(provider);
@@ -175,13 +198,13 @@ try {
   assert.deepEqual(JSON.parse(attempt.cost_rule_snapshot).unitPrice, { perCallFen: 5 });
 
   /* ④ 上游明确给了成本 → REPORTED 优先于 COMPUTED（金额取上报值，不折算） */
-  serveText({ prompt_tokens: 800, completion_tokens: 333, cost: { amount: 3.5, currency: 'CNY' } });
+  serveText({ prompt_tokens: 800000, completion_tokens: 333000, cost: { amount: 3.5, currency: 'CNY' } });
   provider = getGenerationProvider(selection());
   await provider.generate({ modality: 'TEXT', prompt: '上报成本优先' });
   attempt = attemptOf(provider);
   assert.equal(attempt.cost_source, 'REPORTED');
   assert.equal(attempt.upstream_cost_fen, 350);
-  assert.deepEqual(JSON.parse(attempt.usage_snapshot), { modality: 'TEXT', evidence: 'UPSTREAM_USAGE', inputTokens: 800, outputTokens: 333, images: null, seconds: null, resolution: null, audio: null });
+  assert.deepEqual(JSON.parse(attempt.usage_snapshot), { modality: 'TEXT', evidence: 'UPSTREAM_USAGE', inputTokens: 800000, outputTokens: 333000, images: null, seconds: null, resolution: null, audio: null });
 
   /* ③ 缺用量：配了单价但上游没给 token → UNKNOWN + null（不是 0） */
   serveText(undefined);
@@ -194,13 +217,13 @@ try {
   assert.equal(attempt.cost_rule_snapshot !== null, true, 'ESTIMATED/CONFIGURED 快照仍在，只是没有折算');
 
   /* ③ 缺单价：有用量但渠道没配合同价 → UNKNOWN + null */
-  serveText({ prompt_tokens: 800, completion_tokens: 333 });
+  serveText({ prompt_tokens: 800000, completion_tokens: 333000 });
   provider = getGenerationProvider(selection({ upstreamUnitPrices: null }));
   await provider.generate({ modality: 'TEXT', prompt: '没有合同单价' });
   attempt = attemptOf(provider);
   assert.equal(attempt.cost_source, 'UNKNOWN');
   assert.equal(attempt.upstream_cost_fen, null);
-  assert.equal(JSON.parse(attempt.usage_snapshot).inputTokens, 800, '用量证据照记，只是折算不出来');
+  assert.equal(JSON.parse(attempt.usage_snapshot).inputTokens, 800000, '用量证据照记，只是折算不出来');
 
   /* 兜底：没单价但有配置估算 → ESTIMATED；快照形状保持原样（向后兼容） */
   provider = getGenerationProvider(selection({ upstreamUnitPrices: null, estimatedCostFen: 17 }));
@@ -282,39 +305,39 @@ try {
   assert.equal(attempt.upstream_cost_fen, null, '只有每秒价却拿不到时长 → 折不出来，不按 0 计');
 
   /* ⑤ 改价不追溯：老 attempt 的价与快照不动，新调用才用新价 */
-  serveText({ prompt_tokens: 1000, completion_tokens: 0 });
+  serveText({ prompt_tokens: 1000000, completion_tokens: 0 });
   provider = getGenerationProvider(selection());
   await provider.generate({ modality: 'TEXT', prompt: '改价前' });
   const before = attemptOf(provider);
   assert.equal(before.upstream_cost_fen, 250);
-  provider = getGenerationProvider(selection({ upstreamUnitPrices: { TEXT: { inputFenPer1kTokens: 400, outputFenPer1kTokens: 750 } } }));
+  provider = getGenerationProvider(selection({ upstreamUnitPrices: { TEXT: { inputFenPer1MTokens: 400, outputFenPer1MTokens: 750 } } }));
   await provider.generate({ modality: 'TEXT', prompt: '改价后' });
   const after = attemptOf(provider);
   assert.equal(after.upstream_cost_fen, 400, '新调用用新价');
   assert.equal(row('SELECT upstream_cost_fen FROM compute_attempts WHERE id=?', [before.id]).upstream_cost_fen, 250, '老 attempt 金额不被改价追溯');
-  assert.deepEqual(JSON.parse(row('SELECT cost_rule_snapshot FROM compute_attempts WHERE id=?', [before.id]).cost_rule_snapshot).unitPrice, { inputFenPer1kTokens: 250, outputFenPer1kTokens: 750 });
+  assert.deepEqual(JSON.parse(row('SELECT cost_rule_snapshot FROM compute_attempts WHERE id=?', [before.id]).cost_rule_snapshot).unitPrice, { inputFenPer1MTokens: 250, outputFenPer1MTokens: 750 });
 
   /* ⑥ 学生侧恒 0：用了 usage 也只是留证，cost_fen / credits_charged 不受影响 */
   const nowIso = new Date().toISOString();
   q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
     ['org-p90', 'P90 Org', 'ACTIVE', nowIso, new Date(Date.now() + 86400000).toISOString(), 0, nowIso, nowIso]);
-  serveText({ prompt_tokens: 800, completion_tokens: 333 });
+  serveText({ prompt_tokens: 800000, completion_tokens: 333000 });
   provider = getGenerationProvider(selection());
   await provider.generate({ modality: 'TEXT', prompt: '学生侧账本' });
   recordAiUsage({
     orgId: 'org-p90', userId: 'student-p90', modality: 'TEXT', model: 'p90-model', status: 'SUCCESS',
-    usage: { inputTokens: 800, outputTokens: 333 }, pricing: { compute: provider.compute, source: 'generation', charged: false },
+    usage: { inputTokens: 800000, outputTokens: 333000 }, pricing: { compute: provider.compute, source: 'generation', charged: false },
   });
   const usageRecord = row('SELECT * FROM usage_records WHERE generation_job_id IS NULL ORDER BY created_at DESC LIMIT 1');
   assert.equal(usageRecord.cost_fen, 0, '学生侧 cost_fen 恒 0');
   assert.equal(usageRecord.credits_charged, 0, '学生侧 credits_charged 恒 0');
-  assert.equal(usageRecord.input_tokens, 800);
-  assert.equal(usageRecord.output_tokens, 333);
+  assert.equal(usageRecord.input_tokens, 800000);
+  assert.equal(usageRecord.output_tokens, 333000);
   assert.equal(usageRecord.compute_call_id, provider.compute.callId);
   // 记账这一步不覆盖 provider 侧写下的整份用量证据（形状仍是用量快照那份）
   const linkedAttempt = row('SELECT usage_snapshot FROM compute_attempts WHERE call_id=?', [provider.compute.callId]);
   assert.deepEqual(JSON.parse(linkedAttempt.usage_snapshot), {
-    modality: 'TEXT', evidence: 'UPSTREAM_USAGE', inputTokens: 800, outputTokens: 333, images: null, seconds: null, resolution: null, audio: null,
+    modality: 'TEXT', evidence: 'UPSTREAM_USAGE', inputTokens: 800000, outputTokens: 333000, images: null, seconds: null, resolution: null, audio: null,
   });
 
   /* 渠道配置读写：normalizeAiProviderPolicy 读得到，PUT 存得下，非法值当场拒绝 */
@@ -323,7 +346,7 @@ try {
     channels: [{ id: 'contract-a', provider: 'custom', model: 'p90-model', models: ['p90-model'], endpoint: 'https://p90.test/v1', upstreamUnitPrices: UNIT_PRICES }],
     modalityChannels: { TEXT: 'contract-a' },
   }));
-  assert.deepEqual(readPolicy.channels[0].upstreamUnitPrices.TEXT, { inputFenPer1kTokens: 250, outputFenPer1kTokens: 750 });
+  assert.deepEqual(readPolicy.channels[0].upstreamUnitPrices.TEXT, { inputFenPer1MTokens: 250, outputFenPer1MTokens: 750 });
   assert.equal(readPolicy.channels[0].upstreamUnitPrices.VIDEO.audioExtraPerSecondFen, 5);
   assert.equal(readPolicy.channels[0].modelUnitPrices, null, '没配模型级覆盖时读回来是 null（不是空壳）');
 
@@ -333,31 +356,31 @@ try {
     provider: 'custom', model: 'p90-model', endpoint: 'https://p90.test/v1', displayName: 'P90 渠道',
     channels: [{
       id: 'contract-a', name: '合同渠道 A', provider: 'custom', model: 'p90-model', models: ['p90-model', 'qwen-turbo'], endpoint: 'https://p90.test/v1',
-      upstreamUnitPrices: { TEXT: { inputFenPer1kTokens: 100, outputFenPer1kTokens: 200 } },
-      modelUnitPrices: { 'qwen-turbo': { TEXT: { inputFenPer1kTokens: 10, outputFenPer1kTokens: 20 } } },
+      upstreamUnitPrices: { TEXT: { inputFenPer1MTokens: 100, outputFenPer1MTokens: 200 } },
+      modelUnitPrices: { 'qwen-turbo': { TEXT: { inputFenPer1MTokens: 10, outputFenPer1MTokens: 20 } } },
     }],
     modalityChannels: { TEXT: 'contract-a' },
   };
   const putResult = await put(putBody);
-  assert.deepEqual(putResult.policy.channels[0].upstreamUnitPrices, { TEXT: { inputFenPer1kTokens: 100, outputFenPer1kTokens: 200 } });
-  assert.deepEqual(putResult.policy.channels[0].modelUnitPrices, { 'qwen-turbo': { TEXT: { inputFenPer1kTokens: 10, outputFenPer1kTokens: 20 } } });
-  assert.deepEqual(getAiProviderPolicy().channels[0].upstreamUnitPrices.TEXT, { inputFenPer1kTokens: 100, outputFenPer1kTokens: 200 }, '落库后读回来一致');
-  assert.deepEqual(getAiProviderPolicy().channels[0].modelUnitPrices['qwen-turbo'].TEXT, { inputFenPer1kTokens: 10, outputFenPer1kTokens: 20 }, '模型级覆盖落库后读回来一致');
+  assert.deepEqual(putResult.policy.channels[0].upstreamUnitPrices, { TEXT: { inputFenPer1MTokens: 100, outputFenPer1MTokens: 200 } });
+  assert.deepEqual(putResult.policy.channels[0].modelUnitPrices, { 'qwen-turbo': { TEXT: { inputFenPer1MTokens: 10, outputFenPer1MTokens: 20 } } });
+  assert.deepEqual(getAiProviderPolicy().channels[0].upstreamUnitPrices.TEXT, { inputFenPer1MTokens: 100, outputFenPer1MTokens: 200 }, '落库后读回来一致');
+  assert.deepEqual(getAiProviderPolicy().channels[0].modelUnitPrices['qwen-turbo'].TEXT, { inputFenPer1MTokens: 10, outputFenPer1MTokens: 20 }, '模型级覆盖落库后读回来一致');
   await assert.rejects(
-    () => put({ ...putBody, channels: [{ ...putBody.channels[0], upstreamUnitPrices: { TEXT: { inputFenPer1kTokens: -1 } } }] }),
+    () => put({ ...putBody, channels: [{ ...putBody.channels[0], upstreamUnitPrices: { TEXT: { inputFenPer1MTokens: -1 } } }] }),
     (error) => error?.code === 'AI_PROVIDER_COST_INVALID',
   );
   await assert.rejects(
-    () => put({ ...putBody, channels: [{ ...putBody.channels[0], upstreamUnitPrices: { TEXT: { inputFenPer1kTokens: '不是金额' } } }] }),
+    () => put({ ...putBody, channels: [{ ...putBody.channels[0], upstreamUnitPrices: { TEXT: { inputFenPer1MTokens: '不是金额' } } }] }),
     (error) => error?.code === 'AI_PROVIDER_COST_INVALID',
   );
   // 模型级非法值同样当场拒绝（否则会悄悄回退渠道价，把成本算错）
   for (const bad of [
-    { 'qwen-turbo': { TEXT: { inputFenPer1kTokens: -1 } } },
-    { 'qwen-turbo': { TEXT: { outputFenPer1kTokens: '不是金额' } } },
+    { 'qwen-turbo': { TEXT: { inputFenPer1MTokens: -1 } } },
+    { 'qwen-turbo': { TEXT: { outputFenPer1MTokens: '不是金额' } } },
     { 'qwen-turbo': { NOT_A_MODALITY: { perCallFen: 1 } } },
     { 'qwen-turbo': '不是对象' },
-    { '': { TEXT: { inputFenPer1kTokens: 1 } } },
+    { '': { TEXT: { inputFenPer1MTokens: 1 } } },
   ]) {
     await assert.rejects(
       () => put({ ...putBody, channels: [{ ...putBody.channels[0], modelUnitPrices: bad }] }),
@@ -367,9 +390,9 @@ try {
 
   /* 端到端：渠道配置（合同价）→ providerSelectionForModality → 逐笔 COMPUTED */
   const selectionFromPolicy = providerSelectionForModality(getAiProviderPolicy(), 'TEXT', 'p90-model');
-  assert.deepEqual(selectionFromPolicy.upstreamUnitPrices, { TEXT: { inputFenPer1kTokens: 100, outputFenPer1kTokens: 200 } });
-  assert.deepEqual(selectionFromPolicy.modelUnitPrices, { 'qwen-turbo': { TEXT: { inputFenPer1kTokens: 10, outputFenPer1kTokens: 20 } } });
-  serveText({ prompt_tokens: 1000, completion_tokens: 500 });
+  assert.deepEqual(selectionFromPolicy.upstreamUnitPrices, { TEXT: { inputFenPer1MTokens: 100, outputFenPer1MTokens: 200 } });
+  assert.deepEqual(selectionFromPolicy.modelUnitPrices, { 'qwen-turbo': { TEXT: { inputFenPer1MTokens: 10, outputFenPer1MTokens: 20 } } });
+  serveText({ prompt_tokens: 1000000, completion_tokens: 500000 });
   provider = getGenerationProvider({ ...selectionFromPolicy, apiKey: 'p90-secret' });
   await provider.generate({ modality: 'TEXT', prompt: '走渠道配置' });
   attempt = attemptOf(provider);
@@ -381,7 +404,7 @@ try {
   // 同一渠道里的另一个模型走模型级覆盖价（同一条渠道配置，两张不同的对账金额）
   const turboSelection = providerSelectionForModality(getAiProviderPolicy(), 'TEXT', 'qwen-turbo');
   assert.equal(turboSelection.model, 'qwen-turbo');
-  serveText({ prompt_tokens: 1000, completion_tokens: 500 });
+  serveText({ prompt_tokens: 1000000, completion_tokens: 500000 });
   provider = getGenerationProvider({ ...turboSelection, apiKey: 'p90-secret' });
   await provider.generate({ modality: 'TEXT', prompt: '同渠道的小模型' });
   attempt = attemptOf(provider);
@@ -448,7 +471,7 @@ try {
   assert.equal(attempt.cost_source, 'COMPUTED', 'USD 实扣不认，改用合同价折算');
   assert.equal(attempt.upstream_cost_fen, 30);
 
-  console.log('P90 合同单价折算：文本 token × 每千 token 价、图片按张/档、视频按秒/档、音乐按次，金额分整数精确断言通过');
+  console.log('P90 合同单价折算：文本 token × 每百万 token 价（含亚分四舍五入）、图片按张/档、视频按秒/档、音乐按次，金额分整数精确断言通过');
   console.log('P90 缺用量与缺单价一律 null（UNKNOWN）不按 0、来源优先级 REPORTED>COMPUTED>ESTIMATED>UNKNOWN、改价不追溯、学生侧恒 0、渠道读写与非法值拒绝通过');
   console.log('P90 Seedance 直连实扣：data.usage / task.usage / 顶层 usage 三处读取位置、实测币种「¥」认成人民币、');
   console.log('      ¥20.40 与 ¥0.040112 这类小数换算成整数分、USD 不当人民币、REPORTED 也留 upstreamCurrency/upstreamAmount 证据 通过');
