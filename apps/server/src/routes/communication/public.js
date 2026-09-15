@@ -23,6 +23,7 @@ import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import { prepareFileDownload } from '../fileAssets.js';
 import {
   publicArtifactCatalog,
+  publicSnapshotFiles,
   renderSnapshotDocument,
   snapshotImageFileIds,
   submissionPreview,
@@ -242,6 +243,7 @@ export function handlePublicCommunication(ctx) {
     const file = row('SELECT * FROM file_assets WHERE id=?', [publicWorkImageMatch[2]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (!String(file.mime_type || '').startsWith('image/')) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_VIBECODING_IMAGE_NOT_FOUND');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
     return prepareFileDownload(ctx, file);
   }
@@ -418,15 +420,14 @@ function publicWorkRow(row) {
 
 // VibeCoding 作品：官网详情页用 files + entryFile 在 sandbox iframe 里直接运行；
 // 文档产物（PPT/Word/Excel）另给一份清单：能不能下载、配图在哪（见 publicArtifactCatalog）。
-// ⚠️ 「显示哪一份产物」由 preview 说了算（最近产出的那份），**不是** entryFile——
-// 种子 index.html 永远在，按它拼预览会把作品显示成「你好，AI 魔法学院」起始页。
+// ⚠️ 「显示哪一份产物」由提交时的 entryFile 明确指定，不能再按时间或种子 index.html 猜。
 function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
   let studentName = '小创作者';
   if (!row.student_anon && row.student_name) {
     const trimmed = String(row.student_name).trim();
     if (trimmed) studentName = trimmed.charAt(0) + '同学';
   }
-  const files = parseJson(row.files, {});
+  const files = includeFiles ? publicSnapshotFiles(row) : parseJson(row.files, {});
   return {
     id: row.id,
     type: 'VIBECODING',

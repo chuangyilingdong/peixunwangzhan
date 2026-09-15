@@ -58,6 +58,7 @@ const deckPath = path.join(dir, 'deck.pptx');
 const docPath = path.join(dir, 'plan.docx');
 const sheetPath = path.join(dir, 'cost.xlsx');
 const imageDeckPath = path.join(dir, 'with-image.pptx');
+const professionalDeckPath = path.join(dir, 'professional-components.pptx');
 writeFileSync(deckPath, renderPptx(DECK).buffer);
 writeFileSync(docPath, renderDocx(MARKDOWN, { title: '我的暑假计划' }).buffer);
 writeFileSync(sheetPath, renderXlsx(CSV, { sheetName: '暑假花销' }).buffer);
@@ -75,6 +76,14 @@ const DECK_WITH_IMAGE = {
   ],
 };
 writeFileSync(imageDeckPath, renderPptx(DECK_WITH_IMAGE, { attachmentImages: new Map([[1, PIXEL_PNG], [2, PIXEL_PNG]]) }).buffer);
+const PROFESSIONAL_DECK = {
+  title: '校园低碳行动', theme: 'forest', slides: [
+    { layout: 'chart', title: '参与人数持续增长', chart: { type: 'bar', labels: ['三月', '四月', '五月'], values: [42, 58, 91], unit: '人', highlight: 2 }, source: '环保社团月度记录' },
+    { layout: 'table', title: '行动明细', table: { headers: ['行动', '次数', '减碳量'], rows: [['步行上学', '128', '32kg'], ['自带水杯', '216', '11kg']] }, source: '环保社团统计' },
+    { layout: 'process', title: '实施路径', process: [{ title: '观察', detail: '找到问题' }, { title: '设计', detail: '形成方案' }, { title: '执行', detail: '记录一周' }] },
+  ],
+};
+writeFileSync(professionalDeckPath, renderPptx(PROFESSIONAL_DECK).buffer);
 
 const script = `
 import json, sys, hashlib
@@ -103,6 +112,7 @@ sheet = wb.active
 print(json.dumps({
     'deck': read_deck(sys.argv[1]),
     'imageDeck': read_deck(sys.argv[4]),
+    'professionalDeck': read_deck(sys.argv[5]),
     'paragraphs': [(p.style.name, p.text) for p in doc.paragraphs if p.text.strip()],
     'tables': [[cell.text for cell in row.cells] for row in doc.tables[0].rows] if doc.tables else [],
     'sheetName': sheet.title,
@@ -112,7 +122,7 @@ print(json.dumps({
 }, ensure_ascii=False))
 `;
 
-const output = execFileSync(python, ['-c', script, deckPath, docPath, sheetPath, imageDeckPath], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+const output = execFileSync(python, ['-c', script, deckPath, docPath, sheetPath, imageDeckPath, professionalDeckPath], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
 const result = JSON.parse(output);
 
 const result0 = result.deck;
@@ -130,6 +140,13 @@ assert.deepEqual(result.imageDeck.slides[1].pictures, [expectedHash], `第 1 页
 assert.deepEqual(result.imageDeck.slides[2].pictures, [expectedHash], '第 2 页（只有图）的内嵌图不一致');
 assert.ok(result.imageDeck.slides[2].texts.join('').includes('只有图的一页'), '第 2 页的标题丢了');
 assert.deepEqual(result0.slides[1].pictures, [], '不带图的 deck 里不该有图片');
+
+assert.equal(result.professionalDeck.slideCount, PROFESSIONAL_DECK.slides.length + 1, '专业组件 deck 页数不对');
+const professionalText = result.professionalDeck.slides.flatMap((slide) => slide.texts).join('\n');
+for (const expected of ['校园低碳行动', '参与人数持续增长', '三月', '91人', '环保社团月度记录', '行动明细', '步行上学', '实施路径', '观察', '找到问题']) {
+  assert.ok(professionalText.includes(expected), `python-pptx 没读出专业组件文字「${expected}」`);
+}
+assert.ok(result.professionalDeck.slides.slice(1).every((slide) => slide.pictures.length === 0), '图表/表格/流程应当是原生形状，不应变成图片');
 
 const paragraphText = result.paragraphs.map(([, text]) => text).join('\n');
 for (const expected of ['我的暑假计划', '这个暑假我想学会 游泳。', '时间安排', '七月上午：游泳课']) {

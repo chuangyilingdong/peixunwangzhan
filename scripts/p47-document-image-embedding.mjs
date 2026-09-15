@@ -62,28 +62,35 @@ const attachments = JSON.stringify([
 ]);
 db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m_user','c1','user','用这张图做 PPT','SUCCEEDED',?,?)").run(attachments, now);
 db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES('m_ai','c1','assistant','好的','SUCCEEDED',NULL,?)").run(new Date(Date.now() + 1000).toISOString());
-db.prepare("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES('a1','c1','m_ai','演示.pptx','pptx','{}',2,1,?,?)").run(now, now);
+const PPT_CONTENT = JSON.stringify({ title: '图片测试', slides: [{ title: '照片页', bullets: ['说明'], image: { attachment: 1 } }] });
+db.prepare("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES('a1','c1','m_ai','演示.pptx','pptx',?,?,1,?,?)").run(PPT_CONTENT, Buffer.byteLength(PPT_CONTENT), now, now);
 // 一件老产物：message_id 为空（流式期间落库、还没回填就被读了）
 db.prepare("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES('a2','c1',NULL,'老的.pptx','pptx','{}',2,1,?,?)").run(now, now);
 db.close();
 
 const { attachmentImageMap } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
+const { getArtifact, setArtifactAttachmentImages } = await import(pathToFileURL(path.join(root, 'apps/server/src/services/vibecodingArtifacts.js')).href);
 
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 
-const images = attachmentImageMap('c1', { messageId: 'm_ai' });
+const images = attachmentImageMap('c1', { messageId: 'm_ai', kind: 'pptx', content: PPT_CONTENT });
 check('顺着驼峰 messageId 找得到产出那一轮的图片附件', images.size === 1, `size=${images.size}`);
 check('取到的是那张图的真实字节', images.get(1)?.equals(PNG) === true, `bytes=${images.get(1)?.length}`);
 check('非图片附件不占编号（序号 2 不该有东西）', images.get(2) === undefined);
 // 数据库列名写法也要认（调用方可能直接传行对象）——写错就静默没图，属于同一个坑
-check('直接传数据库行对象（message_id）也能取到', attachmentImageMap('c1', { message_id: 'm_ai' }).size === 1);
+check('直接传数据库行对象（message_id）也能取到', attachmentImageMap('c1', { message_id: 'm_ai', kind: 'pptx', content: PPT_CONTENT }).size === 1);
+setArtifactAttachmentImages('a1', [{ index: 1, fileId: 'file_photo' }]);
+const clearDb = new DatabaseSync(dbPath);
+clearDb.prepare('DELETE FROM vibecoding_messages WHERE conversation_id=?').run('c1');
+clearDb.close();
+check('清空聊天后产物固化的附件图仍可读取', attachmentImageMap('c1', getArtifact('c1', 'a1')).get(1)?.equals(PNG) === true);
 check('messageId 缺失时不报错、只是没有图', attachmentImageMap('c1', { name: 'x' }).size === 0 && attachmentImageMap('c1', null).size === 0);
 check('不存在的那一轮不会误取别人的图', attachmentImageMap('c1', { messageId: 'm_user' }).size === 0);
 
 // 素材被挪走/删掉：不能抛异常（下载应当降级成「这一页没有图」）
 fs.rmSync(path.join(uploadRoot, photo.key));
-check('素材文件不在了也只是没有图，不抛异常', attachmentImageMap('c1', { messageId: 'm_ai' }).size === 0);
+check('素材文件不在了也只是没有图，不抛异常', attachmentImageMap('c1', { messageId: 'm_ai', kind: 'pptx', content: PPT_CONTENT }).size === 0);
 
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

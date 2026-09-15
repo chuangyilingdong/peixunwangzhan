@@ -29,6 +29,10 @@ const KIND_BY_EXTENSION = {
   pptx: 'pptx', docx: 'docx', xlsx: 'xlsx',
 };
 
+export function isSubmittableArtifactKind(kind) {
+  return ['html', 'pptx', 'docx', 'xlsx'].includes(String(kind || '').toLowerCase());
+}
+
 export function kindForName(name) {
   const extension = String(name || '').split('.').pop()?.toLowerCase();
   return KIND_BY_EXTENSION[extension] || 'text';
@@ -209,6 +213,7 @@ export function normalizeArtifact(value) {
     // 平台为这份文档生成出来的插画（[{slideIndex, prompt, fileId, url}] 或失败项的 error）。
     // 存成 JSON 一列，因为它只属于这份产物、且总是整份读写。
     ...(value.generated_images ? { generatedImages: parseJson(value.generated_images, []) } : {}),
+    ...(value.attachment_images ? { attachmentImages: parseJson(value.attachment_images, []) } : {}),
     // 列表接口默认不带正文：产物卡片只需要元信息，正文按需取
     ...(value.content === undefined ? {} : { content: value.content }),
   };
@@ -219,6 +224,10 @@ export function normalizeArtifact(value) {
  * ⚠️ 产物**换了一版**（revision 变化）时必须清空：新的 deck 引用的页和提示词都变了，
  * 留着旧图会让「第 2 页配图」配上上一版的图 —— 而且不报错。
  */
+export function setArtifactAttachmentImages(artifactId, images) {
+  q('UPDATE vibecoding_artifacts SET attachment_images=? WHERE id=?', [json(images || []), artifactId]);
+}
+
 export function setArtifactGeneratedImages(artifactId, images) {
   q('UPDATE vibecoding_artifacts SET generated_images=?, updated_at=? WHERE id=?', [json(images || []), nowIso(), artifactId]);
 }
@@ -255,15 +264,18 @@ export function upsertArtifact({ conversationId, messageId = null, name, content
   const bytes = Buffer.byteLength(text);
   if (bytes > ARTIFACT_LIMITS.maxFileBytes) return null;
   const total = Number(count('SELECT COALESCE(SUM(bytes),0) n FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]) || 0);
+  const fileCount = Number(count('SELECT COUNT(*) n FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]) || 0);
   const existing = row('SELECT * FROM vibecoding_artifacts WHERE conversation_id=? AND name=?', [conversationId, cleanName]);
-  if (!existing && total + bytes > ARTIFACT_LIMITS.maxTotalBytes) return null;
+  if (!existing && fileCount >= ARTIFACT_LIMITS.maxFiles) return null;
+  const nextTotal = total - Number(existing?.bytes || 0) + bytes;
+  if (nextTotal > ARTIFACT_LIMITS.maxTotalBytes) return null;
   const timestamp = at || nowIso();
 
   if (existing) {
     // 内容没变就不动修订号（模型常把同一个文件原样再写一遍）
     if (existing.content === text) return normalizeArtifact(existing);
     // 内容变了就是新一版：把上一版的生成插画一起清掉（否则新 deck 的第 2 页会配上旧图，且不报错）
-    q('UPDATE vibecoding_artifacts SET content=?,bytes=?,kind=?,revision=revision+1,message_id=?,generated_images=NULL,updated_at=? WHERE id=?',
+    q('UPDATE vibecoding_artifacts SET content=?,bytes=?,kind=?,revision=revision+1,message_id=?,generated_images=NULL,attachment_images=NULL,updated_at=? WHERE id=?',
       [text, bytes, kindForName(cleanName), messageId, timestamp, existing.id]);
     return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=?', [existing.id]));
   }

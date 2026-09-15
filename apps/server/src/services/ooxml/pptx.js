@@ -64,10 +64,10 @@ function estimateTextHeight(texts, { fontSize, boxWidth, lineSpacing = 1.35 }) {
 
 /** 内容页的正文框能放多少字：超了就降档 */
 function fitFontSize(texts, { boxWidth, boxHeight }) {
-  for (const size of [1800, 1600, 1400, 1250, 1100, 1000]) {
+  for (const size of [2000, 1800, 1600, 1450, 1300, 1200]) {
     if (estimateTextHeight(texts, { fontSize: size, boxWidth }) <= boxHeight) return size;
   }
-  return 1000;
+  return 1200;
 }
 
 function run(text, { size = 1800, bold = false, color = null, italic = false, theme = null } = {}) {
@@ -216,42 +216,67 @@ const SLIDE_LAYOUT_PART = '<?xml version="1.0" encoding="UTF-8" standalone="yes"
   + '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
   + '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>';
 
-/** 页脚：一根短强调线 + 右下角页码（封面/章节/结尾页不加） */
-function footerShapes({ theme, pageNumber, total }) {
-  return rect({ id: 60, name: 'FooterRule', x: MARGIN, y: SLIDE_H - MARGIN + 40000, cx: 420000, cy: 30480, color: theme.accent })
-    + textBox({
-      id: 61, name: 'PageNumber', x: SLIDE_W - MARGIN - 1200000, y: SLIDE_H - MARGIN - 80000, cx: 1200000, cy: 360000,
-      paragraphs: [paragraph(`${pageNumber} / ${total}`, { size: 1100, align: 'r', color: theme.body, theme })],
-    });
+/** 页脚：可选来源 + 右下角页码。来源与页码都不低于 12pt。 */
+function footerShapes({ theme, pageNumber, total, source = '' }) {
+  const shapes = [];
+  if (source) {
+    shapes.push(textBox({
+      id: 60, name: 'Source', x: MARGIN, y: SLIDE_H - MARGIN - 80000, cx: CONTENT_W * 0.72, cy: 360000,
+      paragraphs: [paragraph(`来源：${source}`, { size: 1200, color: theme.body, theme })],
+    }));
+  }
+  shapes.push(textBox({
+    id: 61, name: 'PageNumber', x: SLIDE_W - MARGIN - 1200000, y: SLIDE_H - MARGIN - 80000, cx: 1200000, cy: 360000,
+    paragraphs: [paragraph(`${pageNumber} / ${total}`, { size: 1200, align: 'r', color: theme.body, theme })],
+  }));
+  return shapes;
+}
+
+function titleShapes(title, { baseId, theme }) {
+  return [textBox({
+    id: baseId, name: 'Title', x: MARGIN, y: MARGIN, cx: CONTENT_W, cy: 900000,
+    paragraphs: [paragraph(title || '', { size: 3600, bold: true, color: theme.ink, theme })],
+  })];
+}
+
+function quoteLines(text) {
+  const value = String(text || '').trim();
+  const parts = value.match(/[^，。！？；]+[，。！？；]?/g)?.map((part) => part.trim()).filter(Boolean) || [value];
+  if (parts.length <= 1) return parts;
+  const lines = [];
+  for (const part of parts) {
+    const previous = lines[lines.length - 1];
+    if (previous && previous.length + part.length <= 16) lines[lines.length - 1] += part;
+    else lines.push(part);
+  }
+  return lines.slice(0, 4);
 }
 
 /**
- * 内容页：标题 + 强调短线 + 要点（可选配图）。
+ * 内容页：标题 + 要点（可选配图）。
  * 字号按正文框**自动降档**：宁可小一点，也不让文字冒出画布 —— 溢出不会报错，只会难看。
  */
 function contentShapes(slide, { baseId, theme, hasImage, pageNumber, total }) {
   const shapes = [];
   const layout = String(slide.layout || '').toLowerCase();
-  const bullets = Array.isArray(slide.bullets) ? slide.bullets.filter((item) => String(item ?? '').trim()) : [];
+  const bullets = (Array.isArray(slide.bullets) ? slide.bullets : []).filter((item) => String(item ?? '').trim()).slice(0, 8);
 
   // 金句页：一句话居中放大（不放标题条，视觉上做一次呼吸）
   if (layout === 'quote') {
     const text = String(slide.title || bullets[0] || '');
+    const lines = quoteLines(text);
+    const size = lines.length >= 3 ? 2800 : 3400;
     shapes.push(textBox({
-      id: baseId, name: 'Quote', x: MARGIN + CONTENT_W * 0.1, y: SLIDE_H * 0.3, cx: CONTENT_W * 0.8, cy: SLIDE_H * 0.36,
-      anchor: 'ctr', paragraphs: [paragraph(text, { size: 3200, align: 'ctr', bold: true, color: theme.ink, theme, lineSpacing: 120000 })],
+      id: baseId, name: 'Quote', x: MARGIN + CONTENT_W * 0.08, y: SLIDE_H * 0.24, cx: CONTENT_W * 0.84, cy: SLIDE_H * 0.5,
+      anchor: 'ctr', paragraphs: lines.map((line) => paragraph(line, { size, align: 'ctr', bold: true, color: theme.ink, theme, lineSpacing: 118000 })),
     }));
     return shapes;
   }
 
   const titleY = MARGIN;
-  shapes.push(textBox({
-    id: baseId, name: 'Title', x: MARGIN, y: titleY, cx: CONTENT_W, cy: 900000,
-    paragraphs: [paragraph(slide.title || '', { size: 3000, bold: true, color: theme.ink, theme })],
-  }));
-  shapes.push(rect({ id: baseId + 1, name: 'TitleRule', x: MARGIN, y: titleY + 980000, cx: 900000, cy: 45720, color: theme.accent }));
+  shapes.push(...titleShapes(slide.title, { baseId, theme }));
 
-  const bodyY = titleY + 1250000;
+  const bodyY = titleY + 1150000;
   const bodyCy = SLIDE_H - bodyY - MARGIN - 200000;
 
   // 只有图、没有要点：整页铺图 + 底部色带压标题
@@ -266,7 +291,15 @@ function contentShapes(slide, { baseId, theme, hasImage, pageNumber, total }) {
   }
 
   const textWidth = hasImage ? CONTENT_W * 0.46 : CONTENT_W;
-  if (bullets.length) {
+  if (bullets.length && !hasImage) {
+    const rowH = Math.min(900000, bodyCy / bullets.length);
+    bullets.forEach((item, index) => {
+      const y = bodyY + index * rowH;
+      shapes.push(textBox({ id: baseId + 2 + index * 2, name: `BulletNo ${index + 1}`, x: MARGIN, y, cx: 720000, cy: rowH, anchor: 'ctr', paragraphs: [paragraph(String(index + 1).padStart(2, '0'), { size: 1700, bold: true, color: index === 0 ? theme.accent : theme.ink, theme })] }));
+      shapes.push(textBox({ id: baseId + 3 + index * 2, name: `Bullet ${index + 1}`, x: MARGIN + 850000, y, cx: CONTENT_W - 850000, cy: rowH, anchor: 'ctr', paragraphs: [paragraph(String(item), { size: 2000, color: theme.body, theme })] }));
+      if (index < bullets.length - 1) shapes.push(rect({ id: 40 + index, name: `Separator ${index + 1}`, x: MARGIN + 850000, y: y + rowH - 22000, cx: CONTENT_W - 850000, cy: 12000, color: theme.body, alpha: 0.16 }));
+    });
+  } else if (bullets.length) {
     const size = fitFontSize(bullets.map(String), { boxWidth: textWidth, boxHeight: bodyCy });
     shapes.push(textBox({
       id: baseId + 2, name: 'Body', x: MARGIN, y: bodyY, cx: textWidth, cy: bodyCy,
@@ -286,33 +319,203 @@ function contentShapes(slide, { baseId, theme, hasImage, pageNumber, total }) {
   return shapes;
 }
 
-/** 章节页：整页主题色 + 强调线 + 标题 + 右下大序号 */
-function sectionShapes(slide, { baseId, theme, pageNumber }) {
-  return [
+function metricsShapes(slide, { baseId, theme }) {
+  const items = Array.isArray(slide.metrics) ? slide.metrics.slice(0, 4) : [];
+  const shapes = [
+    ...titleShapes(slide.title, { baseId, theme }),
+  ];
+  const columns = items.length === 3 ? 3 : items.length <= 2 ? Math.max(1, items.length) : 2;
+  const rows = Math.ceil(items.length / columns);
+  const gap = 220000;
+  const cellW = (CONTENT_W - gap * (columns - 1)) / columns;
+  const cellH = (SLIDE_H - MARGIN * 2 - 1500000 - gap * Math.max(0, rows - 1)) / Math.max(1, rows);
+  const valueSize = items.length <= 2 ? 4600 : items.length === 3 ? 4000 : 3800;
+  items.forEach((item, index) => {
+    const column = index % columns;
+    const rowIndex = Math.floor(index / columns);
+    const x = MARGIN + column * (cellW + gap);
+    const y = MARGIN + 1250000 + rowIndex * (cellH + gap);
+    shapes.push(rect({ id: baseId + 2 + index * 3, name: `Metric ${index + 1}`, x, y, cx: cellW, cy: cellH, color: theme.soft }));
+    shapes.push(textBox({
+      id: baseId + 3 + index * 3, name: `Metric Value ${index + 1}`, x: x + 260000, y: y + cellH * 0.18, cx: cellW - 520000, cy: cellH * 0.38,
+      anchor: 'ctr', paragraphs: [paragraph(item.value || '', { size: valueSize, bold: true, color: theme.accent, theme })],
+    }));
+    shapes.push(textBox({
+      id: baseId + 4 + index * 3, name: `Metric Label ${index + 1}`, x: x + 260000, y: y + cellH * 0.6, cx: cellW - 520000, cy: cellH * 0.25,
+      paragraphs: [paragraph(item.label || '', { size: 1500, color: theme.body, theme })],
+    }));
+  });
+  return shapes;
+}
+
+function timelineShapes(slide, { baseId, theme }) {
+  const steps = Array.isArray(slide.steps) ? slide.steps.slice(0, 6) : [];
+  const shapes = [...titleShapes(slide.title, { baseId, theme })];
+  const x = MARGIN + 300000;
+  const y = SLIDE_H * 0.43;
+  const width = CONTENT_W - 600000;
+  const slot = width / Math.max(1, steps.length);
+  if (steps.length > 1) shapes.push(rect({ id: 48, name: 'Timeline', x: x + slot / 2, y, cx: slot * (steps.length - 1), cy: 22000, color: theme.body, alpha: 0.26 }));
+  steps.forEach((step, index) => {
+    const center = x + slot * index + slot / 2;
+    const active = index === steps.length - 1;
+    shapes.push(rect({ id: baseId + 2 + index * 2, name: `Step ${index + 1}`, x: center - 180000, y: y - 170000, cx: 360000, cy: 360000, color: active ? theme.accent : theme.ink }));
+    shapes.push(textBox({
+      id: baseId + 3 + index * 2, name: `Step Text ${index + 1}`, x: center - slot * 0.43, y: y + 350000, cx: slot * 0.86, cy: 1300000,
+      paragraphs: [paragraph(String(step), { size: 1450, bold: active, align: 'ctr', color: active ? theme.ink : theme.body, theme })],
+    }));
+  });
+  return shapes;
+}
+
+function comparisonShapes(slide, { baseId, theme }) {
+  const columns = Array.isArray(slide.columns) ? slide.columns.slice(0, 2) : [];
+  const gap = 260000;
+  const width = (CONTENT_W - gap) / 2;
+  const maxBullets = Math.max(0, ...columns.map((column) => Array.isArray(column.bullets) ? column.bullets.length : 0));
+  const bodyH = Math.min(2450000, 900000 + maxBullets * 400000);
+  const bodyY = Math.round((SLIDE_H - bodyH) / 2 + 300000);
+  const shapes = [
+    ...titleShapes(slide.title, { baseId, theme }),
+  ];
+  columns.forEach((column, index) => {
+    const x = MARGIN + index * (width + gap);
+    shapes.push(rect({ id: baseId + 2 + index * 3, name: `Column ${index + 1}`, x, y: bodyY, cx: width, cy: bodyH, color: theme.soft, alpha: index === 0 ? null : 0.52 }));
+    const bullets = Array.isArray(column.bullets) ? column.bullets : [];
+    shapes.push(textBox({
+      id: baseId + 3 + index * 3, name: `Column Text ${index + 1}`, x: x + 300000, y: bodyY + 260000, cx: width - 560000, cy: bodyH - 520000,
+      anchor: 'ctr', paragraphs: [paragraph(column.title || '', { size: 2100, bold: true, color: theme.ink, theme }), ...bullets.map((item, bulletIndex) => paragraph(String(item), { size: 1450, bullets: true, spaceBefore: bulletIndex ? 500 : 700, color: theme.body, theme }))],
+    }));
+  });
+  return shapes;
+}
+
+function chartShapes(slide, { baseId, theme }) {
+  const chart = slide.chart || {};
+  const labels = Array.isArray(chart.labels) ? chart.labels.slice(0, 7) : [];
+  const values = Array.isArray(chart.values) ? chart.values.slice(0, labels.length).map(Number) : [];
+  const max = Math.max(...values.map((value) => Math.abs(value)), 1);
+  const highlight = Number(chart.highlight);
+  const shapes = [...titleShapes(slide.title, { baseId, theme })];
+  const chartX = MARGIN + 300000;
+  const chartY = MARGIN + 1250000;
+  const chartW = CONTENT_W - 600000;
+  const chartH = SLIDE_H - chartY - MARGIN - 450000;
+
+  if (chart.type === 'column') {
+    const slot = chartW / Math.max(1, labels.length);
+    const baseline = chartY + chartH - 500000;
+    labels.forEach((label, index) => {
+      const value = values[index] || 0;
+      const height = Math.max(80000, (Math.abs(value) / max) * (chartH - 1050000));
+      const width = Math.min(760000, slot * 0.58);
+      const x = chartX + slot * index + (slot - width) / 2;
+      const color = index === highlight ? theme.accent : theme.ink;
+      shapes.push(rect({ id: baseId + 2 + index * 3, name: `Column ${index + 1}`, x, y: baseline - height, cx: width, cy: height, color, alpha: index === highlight ? null : 0.78 }));
+      shapes.push(textBox({ id: baseId + 3 + index * 3, name: `Value ${index + 1}`, x: x - 120000, y: baseline - height - 380000, cx: width + 240000, cy: 320000, paragraphs: [paragraph(`${value}${chart.unit || ''}`, { size: 1400, bold: index === highlight, align: 'ctr', color, theme })] }));
+      shapes.push(textBox({ id: baseId + 4 + index * 3, name: `Label ${index + 1}`, x: chartX + slot * index, y: baseline + 100000, cx: slot, cy: 420000, paragraphs: [paragraph(label, { size: 1200, align: 'ctr', color: theme.body, theme })] }));
+    });
+    shapes.push(rect({ id: 48, name: 'Baseline', x: chartX, y: baseline, cx: chartW, cy: 16000, color: theme.body, alpha: 0.28 }));
+    return shapes;
+  }
+
+  const rowH = chartH / Math.max(1, labels.length);
+  const labelW = Math.min(1900000, chartW * 0.22);
+  const barX = chartX + labelW;
+  const barW = chartW - labelW - 1100000;
+  labels.forEach((label, index) => {
+    const value = values[index] || 0;
+    const y = chartY + rowH * index + rowH * 0.2;
+    const height = rowH * 0.46;
+    const width = Math.max(100000, (Math.abs(value) / max) * barW);
+    const color = index === highlight ? theme.accent : theme.ink;
+    shapes.push(textBox({ id: baseId + 2 + index * 3, name: `Label ${index + 1}`, x: chartX, y, cx: labelW - 160000, cy: height, anchor: 'ctr', paragraphs: [paragraph(label, { size: 1400, align: 'r', color: theme.body, theme })] }));
+    shapes.push(rect({ id: baseId + 3 + index * 3, name: `Bar ${index + 1}`, x: barX, y, cx: width, cy: height, color, alpha: index === highlight ? null : 0.78 }));
+    shapes.push(textBox({ id: baseId + 4 + index * 3, name: `Value ${index + 1}`, x: barX + width + 120000, y, cx: 1000000, cy: height, anchor: 'ctr', paragraphs: [paragraph(`${value}${chart.unit || ''}`, { size: 1400, bold: index === highlight, color, theme })] }));
+  });
+  return shapes;
+}
+
+function tableShapes(slide, { baseId, theme }) {
+  const table = slide.table || {};
+  const headers = Array.isArray(table.headers) ? table.headers.slice(0, 5) : [];
+  const rows = Array.isArray(table.rows) ? table.rows.slice(0, 6).map((row) => Array.isArray(row) ? row.slice(0, headers.length) : []) : [];
+  const shapes = [...titleShapes(slide.title, { baseId, theme })];
+  const x = MARGIN;
+  const y = MARGIN + 1250000;
+  const width = CONTENT_W;
+  const height = SLIDE_H - y - MARGIN - 430000;
+  const rowH = height / Math.max(1, rows.length + 1);
+  const colW = width / Math.max(1, headers.length);
+  shapes.push(rect({ id: baseId + 1, name: 'HeaderBg', x, y, cx: width, cy: rowH, color: theme.ink }));
+  headers.forEach((header, column) => shapes.push(textBox({
+    id: baseId + 2 + column, name: `Header ${column + 1}`, x: x + colW * column + 140000, y, cx: colW - 280000, cy: rowH,
+    anchor: 'ctr', paragraphs: [paragraph(header, { size: 1400, bold: true, color: 'FFFFFF', theme })],
+  })));
+  rows.forEach((row, rowIndex) => {
+    const rowY = y + rowH * (rowIndex + 1);
+    if (rowIndex % 2 === 0) shapes.push(rect({ id: 12 + rowIndex, name: `Row ${rowIndex + 1}`, x, y: rowY, cx: width, cy: rowH, color: theme.soft }));
+    row.forEach((cell, column) => shapes.push(textBox({
+      id: 20 + rowIndex * headers.length + column, name: `Cell ${rowIndex + 1}-${column + 1}`,
+      x: x + colW * column + 140000, y: rowY, cx: colW - 280000, cy: rowH,
+      anchor: 'ctr', paragraphs: [paragraph(cell, { size: 1250, bold: column === 0, color: column === 0 ? theme.ink : theme.body, theme })],
+    })));
+  });
+  return shapes;
+}
+
+function processShapes(slide, { baseId, theme }) {
+  const items = Array.isArray(slide.process) ? slide.process.slice(0, 5) : [];
+  const shapes = [...titleShapes(slide.title, { baseId, theme })];
+  const x = MARGIN + 200000;
+  const y = MARGIN + 1900000;
+  const width = CONTENT_W - 400000;
+  const slot = width / Math.max(1, items.length);
+  const node = Math.min(620000, slot * 0.46);
+  if (items.length > 1) shapes.push(rect({ id: 48, name: 'ProcessLine', x: x + slot / 2, y: y + node / 2 - 12000, cx: slot * (items.length - 1), cy: 24000, color: theme.body, alpha: 0.3 }));
+  items.forEach((item, index) => {
+    const center = x + slot * index + slot / 2;
+    shapes.push(rect({ id: baseId + 2 + index * 3, name: `Process ${index + 1}`, x: center - node / 2, y, cx: node, cy: node, color: index === items.length - 1 ? theme.accent : theme.ink }));
+    shapes.push(textBox({ id: baseId + 3 + index * 3, name: `ProcessNo ${index + 1}`, x: center - node / 2, y, cx: node, cy: node, anchor: 'ctr', paragraphs: [paragraph(String(index + 1).padStart(2, '0'), { size: 1800, bold: true, align: 'ctr', color: 'FFFFFF', theme })] }));
+    shapes.push(textBox({ id: baseId + 4 + index * 3, name: `ProcessText ${index + 1}`, x: center - slot * 0.43, y: y + node + 250000, cx: slot * 0.86, cy: 1450000, paragraphs: [paragraph(item.title || '', { size: 1600, bold: true, align: 'ctr', color: theme.ink, theme }), ...(item.detail ? [paragraph(item.detail, { size: 1200, align: 'ctr', color: theme.body, spaceBefore: 500, theme })] : [])] }));
+  });
+  return shapes;
+}
+
+function sectionShapes(slide, { baseId, theme, topics = [] }) {
+  const matched = String(slide.title || '').match(/^\s*(\d{1,2})[\s、.：:-]*(.*)$/);
+  const sectionNo = matched ? matched[1].padStart(2, '0') : '';
+  const sectionTitle = matched?.[2] || slide.title || '';
+  const shapes = [
     backdrop({ id: baseId, color: theme.cover }),
-    rect({ id: baseId + 1, name: 'Accent', x: MARGIN, y: SLIDE_H * 0.42, cx: 900000, cy: 68580, color: theme.accent }),
     textBox({
-      id: baseId + 2, name: 'SectionTitle', x: MARGIN, y: SLIDE_H * 0.47, cx: CONTENT_W * 0.8, cy: 1400000,
-      paragraphs: [paragraph(slide.title || '', { size: 3800, bold: true, color: 'FFFFFF', theme })],
+      id: baseId + 1, name: 'SectionNo', x: MARGIN, y: SLIDE_H * 0.22, cx: CONTENT_W * 0.18, cy: 1500000,
+      paragraphs: [paragraph(sectionNo || '•', { size: 7200, bold: true, color: theme.accent, theme })],
     }),
     textBox({
-      id: baseId + 3, name: 'SectionNo', x: SLIDE_W - MARGIN - 1500000, y: SLIDE_H - MARGIN - 900000, cx: 1500000, cy: 900000,
-      anchor: 'b', paragraphs: [paragraph(String(pageNumber).padStart(2, '0'), { size: 4400, align: 'r', bold: true, color: theme.accent, theme })],
+      id: baseId + 2, name: 'SectionTitle', x: MARGIN, y: SLIDE_H * 0.43, cx: CONTENT_W * 0.52, cy: 1500000,
+      paragraphs: [paragraph(sectionTitle, { size: 4000, bold: true, color: 'FFFFFF', theme })],
     }),
   ];
+  if (topics.length) {
+    shapes.push(textBox({
+      id: baseId + 3, name: 'SectionTopics', x: SLIDE_W * 0.63, y: SLIDE_H * 0.34, cx: SLIDE_W * 0.28, cy: SLIDE_H * 0.38,
+      anchor: 'ctr', paragraphs: topics.map((topic, index) => paragraph(`${String(index + 1).padStart(2, '0')}  ${topic}`, { size: 1500, color: index === 0 ? 'FFFFFF' : theme.soft, bold: index === 0, spaceBefore: index ? 900 : 0, theme })),
+    }));
+  }
+  return shapes;
 }
 
 /** 结尾页 */
 function thanksShapes(deck, { baseId, theme }) {
   return [
     backdrop({ id: baseId, color: theme.cover }),
-    rect({ id: baseId + 1, name: 'Accent', x: (SLIDE_W - 900000) / 2, y: SLIDE_H * 0.34, cx: 900000, cy: 68580, color: theme.accent }),
     textBox({
-      id: baseId + 2, name: 'Thanks', x: 0, y: SLIDE_H * 0.4, cx: SLIDE_W, cy: 1300000,
+      id: baseId + 1, name: 'Thanks', x: 0, y: SLIDE_H * 0.36, cx: SLIDE_W, cy: 1500000,
       anchor: 'ctr', paragraphs: [paragraph('谢谢观看', { size: 4000, align: 'ctr', bold: true, color: 'FFFFFF', theme })],
     }),
     textBox({
-      id: baseId + 3, name: 'ThanksSub', x: 0, y: SLIDE_H * 0.56, cx: SLIDE_W, cy: 700000,
+      id: baseId + 2, name: 'ThanksSub', x: 0, y: SLIDE_H * 0.56, cx: SLIDE_W, cy: 700000,
       anchor: 'ctr', paragraphs: [paragraph(deck.title || '', { size: 1800, align: 'ctr', color: theme.soft, theme })],
     }),
   ];
@@ -322,31 +525,34 @@ function thanksShapes(deck, { baseId, theme }) {
  * 封面：有封面图就整页铺图 + 压一层深色蒙层（像正经演示稿那样），没有就走纯色版。
  * 蒙层是必需的 —— 白字直接压在照片上十有八九看不清。
  */
-function coverShapes(deck, { theme, hasImage }) {
+function coverShapes(deck, { theme, hasImage, topics = [] }) {
   const shapes = [];
   if (hasImage) {
     shapes.push(picture({ id: 2, name: 'CoverImage', x: 0, y: 0, cx: SLIDE_W, cy: SLIDE_H, rId: IMAGE_REL_ID }));
     shapes.push(rect({ id: 3, name: 'CoverScrim', x: 0, y: 0, cx: SLIDE_W, cy: SLIDE_H, color: theme.cover, alpha: 0.58 }));
   } else {
     shapes.push(backdrop({ id: 2, color: theme.cover }));
-    // 纯色封面加一点几何装饰，免得空荡荡
-    shapes.push(rect({ id: 3, name: 'Decor', x: SLIDE_W * 0.72, y: SLIDE_H * 0.12, cx: SLIDE_W * 0.34, cy: SLIDE_H * 0.34, color: theme.accent, alpha: 0.16 }));
   }
-  shapes.push(rect({ id: 4, name: 'CoverRule', x: MARGIN, y: SLIDE_H * 0.34, cx: 900000, cy: 68580, color: theme.accent }));
   shapes.push(textBox({
-    id: 5, name: 'CoverTitle', x: MARGIN, y: SLIDE_H * 0.38, cx: CONTENT_W * 0.88, cy: 1600000,
+    id: 4, name: 'CoverTitle', x: MARGIN, y: SLIDE_H * 0.25, cx: hasImage ? CONTENT_W * 0.78 : CONTENT_W * 0.54, cy: 1800000,
     paragraphs: [paragraph(deck.title || '演示文稿', { size: 4400, bold: true, color: 'FFFFFF', theme })],
   }));
   if (deck.subtitle) {
     shapes.push(textBox({
-      id: 6, name: 'CoverSubtitle', x: MARGIN, y: SLIDE_H * 0.38 + 1700000, cx: CONTENT_W * 0.8, cy: 900000,
+      id: 5, name: 'CoverSubtitle', x: MARGIN, y: SLIDE_H * 0.25 + 1900000, cx: hasImage ? CONTENT_W * 0.72 : CONTENT_W * 0.52, cy: 900000,
       paragraphs: [paragraph(deck.subtitle, { size: 2000, color: theme.soft, theme })],
     }));
   }
   if (deck.author) {
     shapes.push(textBox({
-      id: 7, name: 'CoverAuthor', x: MARGIN, y: SLIDE_H - MARGIN - 500000, cx: CONTENT_W * 0.6, cy: 400000,
+      id: 6, name: 'CoverAuthor', x: MARGIN, y: SLIDE_H * 0.67, cx: CONTENT_W * 0.52, cy: 400000,
       paragraphs: [paragraph(deck.author, { size: 1400, color: theme.soft, theme })],
+    }));
+  }
+  if (!hasImage && topics.length) {
+    shapes.push(textBox({
+      id: 7, name: 'CoverTopics', x: SLIDE_W * 0.65, y: SLIDE_H * 0.3, cx: SLIDE_W * 0.27, cy: SLIDE_H * 0.4,
+      anchor: 'ctr', paragraphs: topics.map((topic, index) => paragraph(`${String(index + 1).padStart(2, '0')}  ${topic}`, { size: 1450, color: index === 0 ? 'FFFFFF' : theme.soft, bold: index === 0, spaceBefore: index ? 900 : 0, theme })),
     }));
   }
   return shapes;
@@ -362,7 +568,8 @@ export function renderPptx(deck, { attachmentImages = new Map(), generatedImages
   // 封面：封面图单独一个槽位（generatedImages 用 -1 表示），它也算进「最多 3 张」
   const coverBuffer = generatedImages.get(COVER_IMAGE_KEY) || null;
   const coverType = coverBuffer ? imageType(coverBuffer) : null;
-  slideParts.push({ xml: slideXml(coverShapes(deck, { theme, hasImage: Boolean(coverType) })), image: coverType ? { buffer: coverBuffer, ...coverType } : null });
+  const coverTopics = slides.filter((slide) => !['section', 'thanks'].includes(String(slide?.layout || '').toLowerCase()) && slide?.title).slice(0, 3).map((slide) => slide.title);
+  slideParts.push({ xml: slideXml(coverShapes(deck, { theme, hasImage: Boolean(coverType), topics: coverTopics })), image: coverType ? { buffer: coverBuffer, ...coverType } : null });
 
   // 内容页：优先用平台生成的插画，其次用学生自己传的图
   slides.forEach((slide, index) => {
@@ -372,7 +579,37 @@ export function renderPptx(deck, { attachmentImages = new Map(), generatedImages
       return;
     }
     if (layout === 'section') {
-      slideParts.push({ xml: slideXml(sectionShapes(slide, { baseId: 2, theme, pageNumber: index + 2 })), image: null });
+      const topics = [];
+      for (let cursor = index + 1; cursor < slides.length && topics.length < 3; cursor += 1) {
+        const candidate = slides[cursor];
+        if (['section', 'thanks'].includes(String(candidate?.layout || '').toLowerCase())) break;
+        if (candidate?.title) topics.push(candidate.title);
+      }
+      slideParts.push({ xml: slideXml(sectionShapes(slide, { baseId: 2, theme, pageNumber: index + 2, topics })), image: null });
+      return;
+    }
+    if (layout === 'metrics') {
+      slideParts.push({ xml: slideXml([...metricsShapes(slide, { baseId: 2, theme }), ...footerShapes({ theme, pageNumber: index + 2, total, source: slide.source })]), image: null });
+      return;
+    }
+    if (layout === 'timeline') {
+      slideParts.push({ xml: slideXml([...timelineShapes(slide, { baseId: 2, theme }), ...footerShapes({ theme, pageNumber: index + 2, total, source: slide.source })]), image: null });
+      return;
+    }
+    if (layout === 'comparison') {
+      slideParts.push({ xml: slideXml([...comparisonShapes(slide, { baseId: 2, theme }), ...footerShapes({ theme, pageNumber: index + 2, total, source: slide.source })]), image: null });
+      return;
+    }
+    if (layout === 'chart') {
+      slideParts.push({ xml: slideXml([...chartShapes(slide, { baseId: 2, theme }), ...footerShapes({ theme, pageNumber: index + 2, total, source: slide.source })]), image: null });
+      return;
+    }
+    if (layout === 'table') {
+      slideParts.push({ xml: slideXml([...tableShapes(slide, { baseId: 2, theme }), ...footerShapes({ theme, pageNumber: index + 2, total, source: slide.source })]), image: null });
+      return;
+    }
+    if (layout === 'process') {
+      slideParts.push({ xml: slideXml([...processShapes(slide, { baseId: 2, theme }), ...footerShapes({ theme, pageNumber: index + 2, total, source: slide.source })]), image: null });
       return;
     }
     const buffer = generatedImages.get(index) || (slide.imageAttachment ? attachmentImages.get(slide.imageAttachment) : null);
@@ -382,7 +619,7 @@ export function renderPptx(deck, { attachmentImages = new Map(), generatedImages
     // 金句页/整页图页不加页码（它们本身就是视觉停顿）
     const bare = layout === 'quote' || (!type && !(slide.bullets || []).length);
     slideParts.push({
-      xml: slideXml(bare ? shapes : [...shapes, footerShapes({ theme, pageNumber: index + 2, total })]),
+      xml: slideXml(bare ? shapes : [...shapes, ...footerShapes({ theme, pageNumber: index + 2, total, source: slide.source })]),
       image: type ? { buffer, ...type } : null,
     });
   });

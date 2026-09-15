@@ -2136,6 +2136,9 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_artifact_name ON vibecoding_
 // content 是模型写的规格原文（学生能在「源码」里看懂），不该被平台改写。
 try { db.exec('ALTER TABLE vibecoding_artifacts ADD COLUMN generated_images TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// PPT 实际引用的学生附件图最小集。独立固化后，清空聊天记录不会让产物丢图。
+try { db.exec('ALTER TABLE vibecoding_artifacts ADD COLUMN attachment_images TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // 启动迁移：把旧的 conversations.files JSON 展开成产物行。
 // 幂等——已经有产物的会话跳过；旧列保留不读，出问题可以回滚。
@@ -2340,7 +2343,7 @@ try {
 } catch (error) { if (!String(error?.message || '').includes('already exists')) throw error; }
 
 // ── VibeCoding 聊天附件（学生上传的图片，让模型「看图」）──────────────────────
-// 存 [{id,name,url}]：url 是公开下载地址（外联），模型与生成出来的页面都能取到。
+// 存 [{id,name,url,mime,inline}]：学生上传保持私有，inline 给模型看；发布后的公开读取由作品快照代理控制。
 try { db.exec('ALTER TABLE vibecoding_messages ADD COLUMN attachments TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 

@@ -7,11 +7,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Button, ConfirmDialog, ConsoleIcon, ConsoleEmpty, Pill, PopoverMenu, Spinner,
-  ConsoleShell, ChatThread, Composer, Workbench, PreviewFrame, ToastProvider,
+  ConsoleShell, ChatThread, Composer, Workbench, ToastProvider,
   useFollowScroll, useDockHeight, useWorkbenchWidth, useToast,
 } from './console/index.js';
 import { useData } from './classroom.jsx';
-import { buildPreviewDocument, downloadTextFile } from './vibecodingProject.js';
+import { buildPreviewDocument, downloadTextFile, isSubmittableArtifact } from './vibecodingProject.js';
 import { consumeVibeCodingStream } from './vibecodingStream.js';
 import { relativeTime } from './console/format.js';
 import {
@@ -171,7 +171,11 @@ function WorkspaceView({ api }) {
   const navigate = useNavigate();
   const params = useParams();
   const conversationId = params?.conversationId;
+  const activeConversationIdRef = useRef(conversationId);
+  activeConversationIdRef.current = conversationId;
   const toast = useToast();
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
   const [search, setSearch] = useState('');
   const conversation = useData(() => api.get(`student/vibecoding/conversations/${conversationId}`), [api, conversationId]);
@@ -180,13 +184,15 @@ function WorkspaceView({ api }) {
   const [messages, setMessages] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
   const [draft, setDraft] = useState('');
-  // 待发送的图片附件（上传后是 {id,name,url}，url 是公开地址，外联给模型和页面用）
+  // 待发送的附件：上传后保持私有；图片通过 inline 给模型看，页面预览按登录态转成 blob URL。
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const attachInputRef = useRef(null);
   const [streaming, setStreaming] = useState(false);
   const [tab, setTab] = useState('preview');
+  const [consoleLines, setConsoleLines] = useState([]);
+  const [previewAssetMap, setPreviewAssetMap] = useState({});
   // 工作台**默认收起**：学生上课时对话是主角，右边一直杵着一块预览区很干扰。
   // 任务真的产出了东西时会自动弹出来（见 streamReply 里的 onArtifact），学生也可以随时手动开。
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
@@ -210,6 +216,25 @@ function WorkspaceView({ api }) {
     messages[messages.length - 1]?.artifacts?.length || 0,
   ]);
 
+  useEffect(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setMessages([]);
+    setArtifacts([]);
+    setDraft('');
+    setAttachments([]);
+    setConsoleLines([]);
+    setSelectedArtifactName(null);
+    setWorkbenchOpen(false);
+    setStreaming(false);
+    reasoningRef.current = '';
+    autoOpenedRef.current = false;
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, [conversationId]);
+
   // 加载会话：把产物按 messageId 挂回对应消息，聊天里才能显示「这一轮写了哪些文件」
   useEffect(() => {
     const data = conversation.data;
@@ -223,11 +248,51 @@ function WorkspaceView({ api }) {
     })));
   }, [conversation.data?.id, conversation.data?.updatedAt]);
 
+  const previewAssetSourceKey = useMemo(() => JSON.stringify(
+    [...new Set([
+      ...messages.flatMap((message) => (message.attachments || []).map((item) => item.url)),
+      ...artifacts.flatMap((artifact) => [
+        ...(artifact.generatedImages || []).map((item) => item.url),
+        ...(artifact.attachmentImages || []).map((item) => item.fileId ? `/api/student/file-assets/${item.fileId}/download` : ''),
+      ]),
+    ].filter((url) => String(url).startsWith('/api/student/file-assets/'))) ],
+  ), [messages, artifacts]);
+  useEffect(() => {
+    const urls = JSON.parse(previewAssetSourceKey);
+    let live = true;
+    const created = [];
+    Promise.all(urls.map(async (url) => {
+      try {
+        const blobUrl = await apiRef.current.fetchBlobUrl(url);
+        created.push(blobUrl);
+        return [url, blobUrl];
+      } catch { return [url, '']; }
+    })).then((entries) => {
+      if (live) setPreviewAssetMap(Object.fromEntries(entries.filter(([, value]) => value)));
+      else created.forEach((url) => URL.revokeObjectURL(url));
+    });
+    return () => {
+      live = false;
+      created.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [conversationId, previewAssetSourceKey]);
+
   // 没有「老师点评」这一环了，所以**提交之后也能继续改**（学生想接着优化是常态）。
   // 只有归档会话才是只读；提交本身不再锁创作。
   const editable = conversation.data?.status !== 'ARCHIVED';
-  const entryFile = useMemo(() => entryOf(artifacts, conversation.data?.entryFile), [artifacts, conversation.data?.entryFile]);
-  const previewHtml = useMemo(() => buildPreviewDocument(filesFromArtifacts(artifacts), entryFile), [artifacts, entryFile]);
+  const defaultEntryFile = useMemo(() => entryOf(artifacts, conversation.data?.entryFile), [artifacts, conversation.data?.entryFile]);
+  const selectedArtifact = useMemo(
+    () => artifacts.find((item) => item.name === selectedArtifactName) || null,
+    [artifacts, selectedArtifactName],
+  );
+  const previewEntryFile = selectedArtifact && (selectedArtifact.kind === 'html' || /\.html?$/i.test(selectedArtifact.name))
+    ? selectedArtifact.name
+    : defaultEntryFile;
+  const previewHtml = useMemo(() => {
+    let document = buildPreviewDocument(filesFromArtifacts(artifacts), previewEntryFile);
+    for (const [source, resolved] of Object.entries(previewAssetMap)) document = document.split(source).join(resolved);
+    return document;
+  }, [artifacts, previewEntryFile, previewAssetMap]);
 
   if (conversation.loading) return <div className="c-page" data-console="vibecoding"><div className="c-page__center"><Spinner /> 正在打开创作工作区…</div></div>;
   if (conversation.error) return <div className="c-page" data-console="vibecoding"><div className="c-page__center"><ConsoleEmpty icon="alert" title="打开失败" body={conversation.error.message} /></div></div>;
@@ -249,6 +314,8 @@ function WorkspaceView({ api }) {
    * 产物在流式期间就到（artifact 事件），所以卡片是一个个出现的。
    */
   async function streamReply(route, body, { optimistic = [] } = {}) {
+    const requestConversationId = conversationId;
+    const isCurrentConversation = () => activeConversationIdRef.current === requestConversationId;
     setStreaming(true);
     reasoningRef.current = '';
     autoOpenedRef.current = false;
@@ -265,6 +332,7 @@ function WorkspaceView({ api }) {
       const response = await api.stream(`student/vibecoding/conversations/${conversationId}/${route}`, { body, signal: controller.signal });
       await consumeVibeCodingStream(response, {
         onStatus: (payload) => {
+          if (!isCurrentConversation()) return;
           // 插画生成走同一条 status 通道，但用 phase 区分开：
           // 它不是「模型在思考」，而是「平台在收集素材」，学生看到的应当是后者。
           if (payload?.phase === 'image') {
@@ -282,10 +350,12 @@ function WorkspaceView({ api }) {
           pushActivity(localId, { id: 'think', label: text ? '思考过程' : '推理中', detail: text || `已推理 ${chars} 字`, reasoning: true });
         },
         onDelta: (_payload, full) => {
+          if (!isCurrentConversation()) return;
           answered = true;
           setMessages((current) => current.map((item) => (item.id === localId ? { ...item, content: full } : item)));
         },
         onArtifact: ({ artifact, created }) => {
+          if (!isCurrentConversation()) return;
           setArtifacts((current) => {
             const next = current.filter((item) => item.id !== artifact.id);
             return [...next, artifact];
@@ -304,37 +374,42 @@ function WorkspaceView({ api }) {
           }
         },
         onDone: ({ message, artifacts: authoritative, elapsedMs }) => {
+          if (!isCurrentConversation()) return;
           setArtifacts(authoritative || []);
           setMessages((current) => current.map((item) => (item.id === localId
             ? { ...message, startedAt, elapsedMs, activity: item.activity, artifacts: (authoritative || []).filter((a) => a.messageId === message.id) }
             : item)));
         },
         onAborted: (_payload, full) => {
+          if (!isCurrentConversation()) return;
           setMessages((current) => current.map((item) => (item.id === localId ? { ...item, status: 'ABORTED', content: full } : item)));
         },
         onError: ({ message }) => {
+          if (!isCurrentConversation()) return;
           setMessages((current) => current.map((item) => (item.id === localId ? { ...item, status: 'FAILED', errorMessage: message } : item)));
         },
       });
       // 兜底：整轮没有 delta 也没有 error 时，别让消息永远停在「生成中」
-      setMessages((current) => current.map((item) => (item.id === localId && item.status === 'STREAMING'
+      if (isCurrentConversation()) setMessages((current) => current.map((item) => (item.id === localId && item.status === 'STREAMING'
         ? { ...item, status: answered ? 'SUCCEEDED' : 'FAILED', errorMessage: answered ? undefined : 'AI 没有返回内容' }
         : item)));
       list.refresh();
     } catch (error) {
       const aborted = error?.name === 'AbortError';
-      setMessages((current) => current.map((item) => (item.id === localId
+      if (isCurrentConversation()) setMessages((current) => current.map((item) => (item.id === localId
         ? { ...item, status: aborted ? 'ABORTED' : 'FAILED', errorMessage: aborted ? undefined : error.message }
         : item)));
-      if (!aborted) toast.error(error.message || 'AI 回复失败');
+      if (!aborted && isCurrentConversation()) toast.error(error.message || 'AI 回复失败');
     } finally {
-      abortRef.current = null;
-      setStreaming(false);
+      if (isCurrentConversation()) {
+        abortRef.current = null;
+        setStreaming(false);
+      }
     }
   }
 
   /**
-   * 上传附件：存成**公开**素材（外联），再把公开地址交给页面（图片另外内联一份给模型）。
+   * 上传附件：存成本人私有素材；图片用内联 data URL 给模型看，页面预览走临时 blob URL。
    *
    * 什么都能传（图片/音视频/文档，以服务端的白名单为准），但**只有图片能被模型看见** ——
    * 上游只认 image_url，PDF/视频没有内联这条路，服务端会如实告诉模型「这些文件你看不到」。
@@ -350,7 +425,7 @@ function WorkspaceView({ api }) {
         const probe = { name: file.name, mime: file.type, inline: isImage ? 'data:image/' : '' };
         const limit = attachmentSizeLimit(probe);
         if (file.size > limit) { toast.error(attachmentSizeMessage(file.name, limit)); continue; }
-        const asset = await api.upload('student/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' });
+        const asset = await api.upload('student/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PRIVATE' });
         // 上游不抓公网地址，模型要「看见」图只能内联；超限就不带 inline（并如实告诉学生）
         let inline = '';
         if (isImage) {
@@ -371,7 +446,7 @@ function WorkspaceView({ api }) {
           ? current
           : [...current, {
             id: asset.id, name: asset.fileName || file.name,
-            url: `/api/public/file-assets/${asset.id}/download`,
+            url: `/api/student/file-assets/${asset.id}/download`,
             mime: asset.mimeType || file.type || '', inline,
           }]));
       }
@@ -392,18 +467,55 @@ function WorkspaceView({ api }) {
    */
   function resolveAttachmentImage(artifact, { slide, slideIndex }) {
     const generated = (artifact?.generatedImages || []).find((item) => Number(item.slideIndex) === slideIndex && item.url && !item.error);
-    if (generated) return generated.url;
+    if (generated) return previewAssetMap[generated.url] || generated.url;
     const ordinal = Number(slide?.image?.attachment ?? slide?.imageAttachment);
     if (!ordinal) return null;
+    const persisted = (artifact?.attachmentImages || []).find((item) => Number(item.index) === ordinal && item.fileId);
+    if (persisted) {
+      const source = `/api/student/file-assets/${persisted.fileId}/download`;
+      return previewAssetMap[source] || source;
+    }
     const index = messages.findIndex((item) => item.id === artifact?.messageId);
     const before = index >= 0 ? messages.slice(0, index) : messages;
     for (let cursor = before.length - 1; cursor >= 0; cursor -= 1) {
       const message = before[cursor];
       if (message.role !== 'user' || !message.attachments?.length) continue;
       const images = message.attachments.filter((item) => String(item.mime || '').startsWith('image/'));
-      return images[ordinal - 1]?.url || null;
+      const source = images[ordinal - 1]?.url || '';
+      return previewAssetMap[source] || source || null;
     }
     return null;
+  }
+
+  function recordConsoleLine(line) {
+    const normalized = {
+      level: String(line?.level || 'log'),
+      text: String(line?.text || '').slice(0, 1200),
+      source: String(line?.source || '浏览器'),
+    };
+    setConsoleLines((current) => {
+      const last = current[current.length - 1];
+      if (last && last.level === normalized.level && last.text === normalized.text) return current;
+      return [...current.slice(-99), normalized];
+    });
+    if (['error', 'err'].includes(normalized.level.toLowerCase())) setTab('console');
+  }
+
+  function fixConsoleErrors() {
+    const errors = consoleLines.filter((line) => ['error', 'err'].includes(String(line.level).toLowerCase()));
+    if (!errors.length || streaming || !editable) return;
+    const target = isSubmittableArtifact(selectedArtifact) ? selectedArtifact.name : previewEntryFile;
+    if (!target) return;
+    const details = errors.slice(-5).map((line) => `- ${line.text}`).join('\n');
+    streamReply('messages', {
+      content: `请修复当前作品 ${target} 的浏览器运行错误。保持现有设计和功能，不要只解释，要直接输出修复后的完整文件。\n\n浏览器错误：\n${details}`,
+      attachments: [],
+    }, {
+      optimistic: [{
+        id: `local-user-${Date.now()}`, role: 'user', content: `请修复 ${target} 的运行错误`, status: 'SUCCEEDED',
+        createdAt: new Date().toISOString(), attachments: [],
+      }],
+    });
   }
 
   function send(text) {
@@ -472,8 +584,9 @@ function WorkspaceView({ api }) {
       onConfirm: async () => {
         setConfirm(null);
         try {
-          await api.delete(`student/vibecoding/conversations/${conversationId}/messages`);
+          const result = await api.delete(`student/vibecoding/conversations/${conversationId}/messages`);
           setMessages([]);
+          if (Array.isArray(result?.artifacts)) setArtifacts(result.artifacts);
           toast.ok('聊天记录已清空');
         } catch (error) { toast.error(error.message || '清空失败'); }
       },
@@ -539,15 +652,21 @@ function WorkspaceView({ api }) {
 
   // entryFile = 要提交的那份产物（正在预览的那一份）。不传就交给服务端用默认入口。
   function submitWork(entryFile) {
-    if (!messages.length) return;
+    const requested = artifacts.find((item) => item.name === entryFile);
+    const fallback = artifacts.find((item) => item.name === previewEntryFile);
+    const target = isSubmittableArtifact(requested) ? requested.name : (isSubmittableArtifact(fallback) ? fallback.name : '');
+    if (!artifacts.length || !target) {
+      toast.error('请先打开一份网页、PPT、Word 或 Excel 作品');
+      return;
+    }
     setConfirm({
-      title: entryFile ? `提交《${entryFile}》给平台？` : '把作品交给平台？',
+      title: `提交《${target}》给平台？`,
       body: '请确认这是你自己的作品，并同意平台在作品广场展示。这里提交的是**正在预览的这一份**；同一次创作里的其它产物可以分别提交。提交后不影响你继续修改。',
       confirmLabel: '确认提交',
       onConfirm: async () => {
         setConfirm(null);
         try {
-          await api.post(`student/vibecoding/conversations/${conversationId}/submit`, { copyrightConfirmed: true, entryFile: entryFile || undefined });
+          await api.post(`student/vibecoding/conversations/${conversationId}/submit`, { copyrightConfirmed: true, entryFile: target });
           toast.ok('已交给平台');
           conversation.refresh();
           list.refresh();
@@ -639,7 +758,7 @@ function WorkspaceView({ api }) {
           {workbenchOpen ? null : (
             <Button size="sm" variant="ghost" icon="eye" onClick={() => setWorkbenchOpen(true)}>预览作品</Button>
           )}
-          <Button size="sm" variant="primary" icon="check" disabled={!editable || streaming || !messages.length} onClick={() => submitWork(selectedArtifactName)}>
+          <Button size="sm" variant="primary" icon="check" disabled={!editable || streaming || !artifacts.some(isSubmittableArtifact)} onClick={() => submitWork(selectedArtifactName)}>
             {submission ? '重新提交' : '提交作品'}
           </Button>
         </>
@@ -690,6 +809,7 @@ function WorkspaceView({ api }) {
           onDeleteMessage={deleteMessage}
           onOpenArtifact={(artifact) => {
             setSelectedArtifactName(artifact?.name || null);
+            setConsoleLines([]);
             setWorkbenchOpen(true);
             setTab('preview');
             setMenu(null);
@@ -747,16 +867,21 @@ function WorkspaceView({ api }) {
         maxWidth={workbench.maxWidth}
         onPreviewWidth={workbench.preview}
         onCommitWidth={workbench.commit}
-        tabs={['preview']}
+        tabs={['preview', 'console']}
         artifacts={artifacts}
         previewHtml={previewHtml}
+        previewEntryName={previewEntryFile}
+        consoleLines={consoleLines}
+        onConsoleLine={recordConsoleLine}
+        onClearConsole={() => setConsoleLines([])}
+        onFixConsole={fixConsoleErrors}
         running={streaming}
         onRefresh={() => toast.toast('已重新载入预览')}
         onClose={() => setWorkbenchOpen(false)}
         activeTab={tab}
         onTabChange={setTab}
         activeArtifactName={selectedArtifactName}
-        onSelectArtifact={(artifact) => { setSelectedArtifactName(artifact?.name || null); setTab('preview'); }}
+        onSelectArtifact={(artifact) => { setSelectedArtifactName(artifact?.name || null); setConsoleLines([]); setTab('preview'); }}
         onSubmitArtifact={(entryName) => submitWork(entryName)}
         submittedNames={submittedNames}
         resolveAttachment={resolveAttachmentImage}

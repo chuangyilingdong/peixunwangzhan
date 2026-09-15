@@ -4,9 +4,7 @@
 // 独立成一块暗色播放区比塞进浅色正文更合适。学生不手写代码，所以这里给的是
 // 「成品预览 + 它是怎么写出来的（只读产物）」，不公开学生的创作对话。
 //
-// ⚠️ 显示哪一份产物**由服务端的 preview 说了算**（最近产出的那份），不是 entryFile：
-// 种子产物 index.html 永远躺在会话里，学生做的是 PPT 时按入口文件挑就会显示成
-// 「你好，AI 魔法学院」起始页（这正是这一页此前显示错东西的原因）。
+// ⚠️ 显示哪一份产物由服务端按提交时的 entryFile 决定；每条提交只包含该主产物及必要依赖。
 // 文档产物（PPT/Word/Excel）在这里先预览、再下载真文件（下载走公开地址）。
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';

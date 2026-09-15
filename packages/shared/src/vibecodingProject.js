@@ -43,6 +43,24 @@ export const CONSOLE_BRIDGE = `<script>(function(){
   window.addEventListener('unhandledrejection',function(event){send('error',['未处理的异步错误：'+(event.reason&&event.reason.message?event.reason.message:event.reason)]);});
 })();</script>`;
 
+function svgDataUrl(content) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(String(content || ''))}`;
+}
+
+function embedLocalAssets(value, files) {
+  return String(value || '')
+    .replace(/\b(src|href)=["']([^"']+)["']/gi, (match, attribute, name) => {
+      const clean = String(name).replace(/^\.\//, '').split(/[?#]/)[0];
+      if (!/\.svg$/i.test(clean) || files[clean] === undefined) return match;
+      return `${attribute}="${svgDataUrl(files[clean])}"`;
+    })
+    .replace(/url\(\s*["']?([^"')]+)["']?\s*\)/gi, (match, name) => {
+      const clean = String(name).replace(/^\.\//, '').split(/[?#]/)[0];
+      if (!/\.svg$/i.test(clean) || files[clean] === undefined) return match;
+      return `url("${svgDataUrl(files[clean])}")`;
+    });
+}
+
 /**
  * 把入口 HTML 里引用的本地 css/js 内联进预览文档；外链保持原样（sandbox 内没有同源权限）。
  * 工作区预览与官网公开作品页共用这一份，保证「学生看到的」和「作品广场看到的」一致。
@@ -52,15 +70,30 @@ export function buildPreviewDocument(files, entryFile) {
   if (entry === undefined) return '<!doctype html><html><body style="font-family:sans-serif;padding:16px">入口文件不存在</body></html>';
   if (!/\.html?$/i.test(entryFile)) return `<!doctype html><html><body><pre style="font-family:monospace;padding:12px">${escapeHtml(entry)}</pre></body></html>`;
   const resolve = (name) => {
-    const clean = String(name || '').replace(/^\.\//, '');
+    const clean = String(name || '').replace(/^\.\//, '').split(/[?#]/)[0];
     return files[clean] !== undefined ? files[clean] : files[name];
   };
   const html = String(entry)
-    .replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => (resolve(href) !== undefined ? `<style>${resolve(href)}</style>` : match))
-    .replace(/<script[^>]*src=["']([^"']+)["'][^>]*>\s*<\/script>/gi, (match, src) => (resolve(src) !== undefined ? `<script>${resolve(src)}</script>` : match));
-  // 桥必须装在学生脚本之前，否则早期 console 调用抓不到：优先塞进 head。
-  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${CONSOLE_BRIDGE}</head>`);
-  if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, (match) => `${match}${CONSOLE_BRIDGE}`);
-  return CONSOLE_BRIDGE + html;
+    .replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/gi, (match, href) => (resolve(href) !== undefined ? `<style>${embedLocalAssets(resolve(href), files)}</style>` : match))
+    .replace(/<script([^>]*)src=["']([^"']+)["']([^>]*)>\s*<\/script>/gi, (match, before, src, after) => {
+      const content = resolve(src);
+      if (content === undefined) return match;
+      const attributes = `${before} ${after}`;
+      if (/\bdefer\b/i.test(attributes)) {
+        return `<script>window.addEventListener('DOMContentLoaded',function(){${content}\n},{once:true});</script>`;
+      }
+      return `<script>${content}</script>`;
+    });
+  const embedded = embedLocalAssets(html, files);
+  // 桥必须装在学生脚本之前，否则 head 里的早期 console/error 调用抓不到。
+  if (/<head[^>]*>/i.test(embedded)) return embedded.replace(/<head[^>]*>/i, (match) => `${match}${CONSOLE_BRIDGE}`);
+  if (/<body[^>]*>/i.test(embedded)) return embedded.replace(/<body[^>]*>/i, (match) => `${match}${CONSOLE_BRIDGE}`);
+  return CONSOLE_BRIDGE + embedded;
+}
+
+/** 只有真正能在工作台里展示的主产物才允许单独提交。 */
+export function isSubmittableArtifact(artifact) {
+  const kind = String(artifact?.kind || '').toLowerCase();
+  return kind === 'html' || ['pptx', 'docx', 'xlsx'].includes(kind) || /\.html?$/i.test(String(artifact?.name || ''));
 }
 

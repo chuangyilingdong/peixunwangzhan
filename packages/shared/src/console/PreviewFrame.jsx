@@ -22,6 +22,7 @@ export function PreviewFrame({ html, className = '', title = '预览', onConsole
 
   useEffect(() => {
     function onMessage(event) {
+      if (event.source !== frameRef.current?.contentWindow) return;
       const payload = event?.data;
       if (!payload || typeof payload !== 'object') return;
       if (payload.source === 'vibecoding-preview-ready') { setReady((value) => value + 1); return; }

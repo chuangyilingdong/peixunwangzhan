@@ -8,6 +8,7 @@ import { artifactGroup, fileSize } from './format.js';
 import { DocumentPreview } from './DocumentPreview.jsx';
 import { ReplayDocument } from './Replay.jsx';
 import { isDocumentArtifact } from './attachments.js';
+import { isSubmittableArtifact } from '../vibecodingProject.js';
 
 export const WORKBENCH_DEFAULT_WIDTH = 520;
 export const WORKBENCH_MIN_WIDTH = 360;
@@ -176,7 +177,7 @@ const TABS = [
  */
 export function Workbench({
   mode = 'split', width, maxWidth, onPreviewWidth, onCommitWidth, onCancelWidth,
-  artifacts = [], previewHtml = '', consoleLines = [], onClearConsole, onRefresh, onClose,
+  artifacts = [], previewHtml = '', previewEntryName = '', consoleLines = [], onConsoleLine, onClearConsole, onFixConsole, onRefresh, onClose,
   activeTab, onTabChange, activeArtifactName, onSelectArtifact, running = false, emptyHint,
   tabs: allowedTabs, resolveAttachment, onDownloadArtifact, onSubmitArtifact, submittedNames,
 }) {
@@ -185,6 +186,7 @@ export function Workbench({
   const setTab = onTabChange ?? setInnerTab;
   const [reloadKey, setReloadKey] = useState(0);
   const [sourceName, setSourceName] = useState(null);
+  const [viewport, setViewport] = useState('desktop');
   // 学生端只给「预览」：代码与日志属于教师/调试视角，不是学生要看的东西
   const available = useMemo(
     () => (allowedTabs ? TABS.filter((item) => allowedTabs.includes(item.id)) : TABS),
@@ -201,9 +203,15 @@ export function Workbench({
   const currentTab = available.some((item) => item.id === tab) ? tab : (available[0]?.id || 'preview');
 
   const previewable = artifacts.some((item) => /^html?$/i.test(String(item.kind)) || /\.html?$/i.test(item.name));
-
+  const activeHtml = useMemo(() => {
+    const wanted = activeArtifactName ? artifacts.find((item) => item.name === activeArtifactName) : null;
+    if (wanted && (/^html?$/i.test(String(wanted.kind)) || /\.html?$/i.test(wanted.name))) return wanted;
+    return artifacts.find((item) => item.name === previewEntryName)
+      || artifacts.find((item) => /^index\.html?$/i.test(item.name))
+      || artifacts.find((item) => /^html?$/i.test(String(item.kind)) || /\.html?$/i.test(item.name))
+      || null;
+  }, [artifacts, activeArtifactName, previewEntryName]);
   // 预览区看什么：
-  //   · 学生点名看了某个产物（点卡片/点文件页签）→ 就看它；
   //   · 没点名 → 看**最近产出的那个**；它如果是文档（PPT/Word/Excel）就渲染文档预览，
   //     否则回到网页预览（用 entryFile 拼整个站点）。
   // 这样「刚做出一个 PPT」时，预览区出现的就是那份 PPT，而不是被种子产物 index.html 占着。
@@ -211,9 +219,10 @@ export function Workbench({
     const wanted = activeArtifactName ? artifacts.find((item) => item.name === activeArtifactName) : null;
     if (wanted) return isDocumentArtifact(wanted.kind) ? wanted : null;
     const newest = [...artifacts]
-      .sort((a, b) => String(b.updated || b.createdAt || '').localeCompare(String(a.updated || a.createdAt || '')))[0];
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
     return newest && isDocumentArtifact(newest.kind) ? newest : null;
   }, [artifacts, activeArtifactName]);
+  const canSubmitActive = isSubmittableArtifact(documentArtifact || activeHtml);
 
   const isSplit = mode === 'split';
 
@@ -293,21 +302,31 @@ export function Workbench({
           ) : previewable ? (
             <>
               <div className="c-preview__toolbar">
-                <span className="c-preview__url" title={entryLabel(artifacts)}>
+                <span className="c-preview__url" title={entryLabel(activeHtml)}>
                   <ConsoleIcon name="globe" size={13} />
-                  {entryLabel(artifacts)}
+                  {entryLabel(activeHtml)}
                 </span>
                 {/* 2026-09-15 用户口径：**按产物提交** —— 正在预览的这一份就能直接交给平台，
                     不必等整个作品做完。平台审核通过后会把它单独发到官网展示。 */}
-                {onSubmitArtifact ? (
+                {onSubmitArtifact && canSubmitActive ? (
                   <button
                     type="button"
-                    className={submittedNames?.has(sourceArtifact?.name) ? 'c-artifact-submit is-submitted' : 'c-artifact-submit'}
-                    onClick={() => onSubmitArtifact(sourceArtifact?.name)}
+                    className={submittedNames?.has(activeHtml?.name) ? 'c-artifact-submit is-submitted' : 'c-artifact-submit'}
+                    onClick={() => onSubmitArtifact(activeHtml?.name)}
                   >
-                    {submittedNames?.has(sourceArtifact?.name) ? '已提交 · 再交一次' : '提交这份作品'}
+                    {submittedNames?.has(activeHtml?.name) ? '已提交 · 再交一次' : '提交这份作品'}
                   </button>
                 ) : null}
+                <div className="c-preview-mode" role="group" aria-label="预览尺寸">
+                  <button type="button" className={viewport === 'desktop' ? 'is-active' : ''} onClick={() => setViewport('desktop')} title="桌面预览">
+                    <ConsoleIcon name="monitor" size={15} />
+                    <span>桌面</span>
+                  </button>
+                  <button type="button" className={viewport === 'phone' ? 'is-active' : ''} onClick={() => setViewport('phone')} title="手机预览">
+                    <ConsoleIcon name="smartphone" size={15} />
+                    <span>手机</span>
+                  </button>
+                </div>
                 <IconButton icon="refresh" size={15} label="重新运行" onClick={() => setReloadKey((value) => value + 1)} />
                 <IconButton
                   icon="external"
@@ -316,7 +335,17 @@ export function Workbench({
                   onClick={() => openInNewWindow(previewHtml)}
                 />
               </div>
-              <PreviewFrame className="c-preview__frame" html={previewHtml} reloadKey={reloadKey} title="作品预览" />
+              <div className={`c-preview-stage is-${viewport}`}>
+                {viewport === 'phone' ? (
+                  <div className="c-phone-frame" aria-label="手机模拟器">
+                    <div className="c-phone-frame__speaker" aria-hidden="true" />
+                    <PreviewFrame className="c-preview__frame" html={previewHtml} reloadKey={`${reloadKey}-${viewport}`} title="手机作品预览" onConsole={onConsoleLine} />
+                    <div className="c-phone-frame__home" aria-hidden="true" />
+                  </div>
+                ) : (
+                  <PreviewFrame className="c-preview__frame" html={previewHtml} reloadKey={`${reloadKey}-${viewport}`} title="作品预览" onConsole={onConsoleLine} />
+                )}
+              </div>
             </>
           ) : (
             <div className="c-preview__status">
@@ -373,6 +402,9 @@ export function Workbench({
         <div className="c-workbench__layer" role="tabpanel" hidden={currentTab !== 'console'}>
           <div className="c-source__bar">
             <span className="c-source__name"><ConsoleIcon name="terminal" size={13} /> 控制台</span>
+            {onFixConsole && consoleLines.some((line) => normalizeLevel(line.level) === 'error') ? (
+              <button type="button" className="c-btn c-btn--primary c-btn--sm" onClick={onFixConsole} disabled={running}>让 AI 修复</button>
+            ) : null}
             <button type="button" className="c-btn c-btn--ghost c-btn--sm" onClick={onClearConsole} disabled={!consoleLines.length}>清空</button>
           </div>
           <div className="c-console-body">
@@ -396,9 +428,8 @@ function normalizeLevel(level) {
   return 'info';
 }
 
-function entryLabel(artifacts) {
-  const entry = artifacts.find((item) => /^index\.html?$/i.test(item.name)) || artifacts.find((item) => /\.html?$/i.test(item.name));
-  return entry ? `作品预览 · ${entry.name}` : '作品预览';
+function entryLabel(artifact) {
+  return artifact ? `作品预览 · ${artifact.name}` : '作品预览';
 }
 
 /** 把当前预览文档在一个新标签页里打开（学生作品是自包含 HTML，可以直接跑） */

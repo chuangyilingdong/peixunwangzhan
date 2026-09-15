@@ -10,12 +10,12 @@
 //   · **门禁沿用画布那一套**：课时没开放 image 能力、或课堂不允许时，一张都不生成 ——
 //     文档产物不能变成绕过能力开关的后门。
 //   · **失败只影响那一页**：某张图生成失败就那一页不放图，绝不因此让整份 PPT 或整轮对话失败。
-//   · **图片存成公开素材**（与学生上传的图同一条下载地址），这样产物渲染、页面显示、
-//     学生自己下载都能直接用。
+//   · 图片先存成本人私有素材；活会话按登录态读取，只有作品发布后才通过快照代理公开。
 import { errors } from '../lib.js';
 import { getAiProviderPolicy } from '../routes/billingConfig.js';
 import { providerSelectionForModality, assertGenerationPreflight } from '../routes/aiGeneration.js';
-import { getGenerationProvider } from './generationProvider.js';
+import { generationProviderInfo, getGenerationProvider } from './generationProvider.js';
+import { assertExternalAiAllowed } from './providerContract.js';
 import { applyGatewayRoute } from './computeGateway.js';
 import { recordAiUsage } from './creditUsage.js';
 import { storeGeneratedAsset } from '../routes/fileAssets.js';
@@ -91,6 +91,8 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
     orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context?.lesson?.id || '', modality: 'IMAGE',
   });
   const provider = getGenerationProvider(selection);
+  const info = generationProviderInfo(selection);
+  assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   const seriesId = context?.series?.id || null;
 
   for (const target of targets) {
@@ -117,9 +119,10 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
           fileName: `illustration-${request.slideIndex + 1}.${extensionFor(mimeType)}`,
           ownerUserId: auth.user.id,
           ownerOrgId: auth.user.orgId,
+          visibility: 'PRIVATE',
           metadata: { source: 'vibecoding-illustration', artifactId: target.artifact.id, slideIndex: request.slideIndex, prompt: request.prompt, provider: provider.name, model: selection.model },
         });
-        images.push({ slideIndex: request.slideIndex, prompt: request.prompt, fileId: stored.id, url: stored.url });
+        images.push({ slideIndex: request.slideIndex, prompt: request.prompt, fileId: stored.id, url: `/api/student/file-assets/${stored.id}/download` });
         // 插画以前**一条用量记录都不写**（交接说明里的老缺口：VibeCoding 插画完全无记录），
         // 于是「每节课花了多少」里少了这一块。现在按张记一笔，并计入算力池。
         // ⚠️ 2026-09-15：cost_fen 恢复「恒 0」口径 —— 这里以前写的是 priceFenFor（对外售价），

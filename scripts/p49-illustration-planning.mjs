@@ -42,6 +42,14 @@ assert.equal(collectIllustrationTargets([{ id: 'a', kind: 'pptx', name: 'x.pptx'
 assert.equal(collectIllustrationTargets([]).length, 0, '空列表');
 assert.equal(collectIllustrationTargets(null).length, 0, 'null 也要能扛住');
 
+// 特殊信息版式不会渲染图片，因此即使模型误写 image 也不能发起无效生图或保留附件引用。
+for (const layout of ['section', 'quote', 'thanks', 'metrics', 'timeline', 'comparison']) {
+  const special = parseDeckSpec(deck([{ layout, title: layout, metrics: [{ value: '1' }], steps: ['a'], columns: [{ title: 'a' }], image: { prompt: '不该生成', attachment: 1 } }]));
+  assert.equal(special.slides[0].imagePrompt, null, `${layout} 不该保留 imagePrompt`);
+  assert.equal(special.slides[0].imageAttachment, null, `${layout} 不该保留 imageAttachment`);
+  assert.equal(deckIllustrationRequests(special).length, 0, `${layout} 不该产生生图请求`);
+}
+
 // 提示词要截断，避免把一整篇文章塞进生图请求
 const long = parseDeckSpec(deck([{ title: 'a', image: { prompt: '画'.repeat(800) } }]));
 assert.ok(deckIllustrationRequests(long)[0].prompt.length <= 300, `提示词该被截断，实际 ${deckIllustrationRequests(long)[0].prompt.length}`);

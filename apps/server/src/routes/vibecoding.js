@@ -9,10 +9,9 @@ import {
   pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { Readable } from 'node:stream';
-import { PUBLIC_SITE_URL } from '../config.js';
 import { resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
-import { getGenerationProvider } from '../services/generationProvider.js';
+import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { recordAiUsage } from '../services/creditUsage.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { modalityChannel } from '../services/modelCapabilities.js';
@@ -25,13 +24,13 @@ function conversationSeriesId(conversation) {
   if (!conversation?.lesson_id) return null;
   return row('SELECT series_id FROM course_lessons WHERE id=?', [conversation.lesson_id])?.series_id || null;
 }
-import { normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
+import { assertExternalAiAllowed, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import {
-  artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact, kindForName,
-  listArtifacts, pickEntryArtifact, seedDefaultArtifacts, setArtifactGeneratedImages, upsertArtifact, upsertArtifacts,
+  artifactsAsFiles, createArtifactScanner, extractArtifacts, getArtifact, isSubmittableArtifactKind, kindForName,
+  listArtifacts, pickEntryArtifact, seedDefaultArtifacts, setArtifactAttachmentImages, setArtifactGeneratedImages, upsertArtifact, upsertArtifacts,
 } from '../services/vibecodingArtifacts.js';
 import { MAX_ILLUSTRATIONS_PER_DECK, collectIllustrationTargets, generateIllustrationsForArtifacts } from '../services/vibecodingIllustrations.js';
-import { isDocumentKind, renderDocument } from '../services/ooxml/documents.js';
+import { isDocumentKind, parseDeckSpec, renderDocument } from '../services/ooxml/documents.js';
 import { uploadRoot } from '../services/fileUploadSecurity.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -97,13 +96,48 @@ function parseAttachments(value) {
   } catch { return []; }
 }
 
-/**
- * 公开下载地址（**绝对** URL）：外联给模型与生成出来的页面用。
- * ⚠️ 必须是绝对地址——上游模型在外部，站内相对路径它抓不到
- *（画布那边踩过同一个坑，见 aiGeneration.js 的 publicFileAssetUrl）。
- */
-function publicAssetUrl(assetId) {
-  return `${String(PUBLIC_SITE_URL || '').replace(/\/+$/, '')}/api/public/file-assets/${assetId}/download`;
+function normalizeLocalReference(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.startsWith('#') || /^(?:[a-z]+:|\/\/|\/)/i.test(raw)) return '';
+  const clean = raw.split(/[?#]/)[0].replace(/^\.\//, '');
+  if (!clean || clean.includes('..') || clean.includes('/') || clean.includes('\\')) return '';
+  return clean;
+}
+
+function localArtifactReferences(name, content) {
+  const kind = kindForName(name);
+  const text = String(content || '');
+  const values = [];
+  if (kind === 'html' || kind === 'svg') {
+    for (const match of text.matchAll(/\b(?:src|href)\s*=\s*["']([^"']+)["']/gi)) values.push(match[1]);
+  }
+  if (kind === 'html' || kind === 'css' || kind === 'svg') {
+    for (const match of text.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) values.push(match[1]);
+  }
+  return values.map(normalizeLocalReference).filter(Boolean);
+}
+
+/** 提交只定格当前主产物；HTML 会连同它引用的本地产物一起定格。 */
+export function submissionArtifactNames(allFiles, entryFile) {
+  if (!Object.hasOwn(allFiles, entryFile)) return [];
+  const entryKind = kindForName(entryFile);
+  if (isDocumentKind(entryKind)) return [entryFile];
+  if (entryKind !== 'html') return [];
+  const selected = new Set([entryFile]);
+  const queue = [entryFile];
+  while (queue.length) {
+    const current = queue.shift();
+    for (const reference of localArtifactReferences(current, allFiles[current])) {
+      if (!Object.hasOwn(allFiles, reference) || selected.has(reference) || kindForName(reference) === 'html') continue;
+      selected.add(reference);
+      queue.push(reference);
+    }
+  }
+  return [...selected];
+}
+
+function pickFiles(files, names) {
+  return Object.fromEntries(names.filter((name) => Object.hasOwn(files, name)).map((name) => [name, files[name]]));
 }
 
 function conversationScopeSql(alias = 'conversation') {
@@ -126,8 +160,8 @@ function ownConversation(ctx, conversationId) {
 
 /**
  * 把学生传来的附件 id 列表校验成可落库的 [{id,name,url,mime,inline}]。
- * 只接受**本人上传的、公开的**文件：别人的素材、没公开的一律拒掉并说明原因。
- * 类型不设限（以服务端上传白名单为准）；**能不能让模型看见**由 mime 决定，见 conversationHistory。
+ * 只接受本人上传的私有或公开文件；是否让模型看见由 mime/inline 决定。
+ * 私有附件通过登录态下载，提交发布后再由作品快照代理公开，上传本身不会产生匿名公网入口。
  */
 function resolveAttachments(auth, rawList) {
   const entries = (Array.isArray(rawList) ? rawList : [])
@@ -141,14 +175,14 @@ function resolveAttachments(auth, rawList) {
     const asset = row('SELECT * FROM file_assets WHERE id=?', [assetId]);
     if (!asset || asset.status !== 'ACTIVE') throw errors.badRequest('附件不存在或已失效', 'VIBECODING_ATTACHMENT_NOT_FOUND');
     if (asset.owner_user_id !== auth.user.id) throw errors.forbidden('只能引用自己上传的附件', 'VIBECODING_ATTACHMENT_NOT_OWNED');
-    if (asset.visibility !== 'PUBLIC_PLATFORM' && asset.visibility !== 'PUBLIC_RELEASE') {
-      throw errors.badRequest('附件需要是公开素材（外联给模型和页面用）', 'VIBECODING_ATTACHMENT_NOT_PUBLIC');
+    if (!['PRIVATE', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(asset.visibility)) {
+      throw errors.badRequest('附件可见范围不适用于 VibeCoding', 'VIBECODING_ATTACHMENT_VISIBILITY_INVALID');
     }
     // inline 只接受图片 data URL，且限长（超限/非图片就不带，模型看不到但页面能用外链）
     const raw = entries.find((item) => item.id === assetId)?.inline || '';
     const inline = raw.startsWith('data:image/') && raw.length <= MAX_INLINE_CHARS ? raw : '';
     resolved.push({
-      id: asset.id, name: String(asset.file_name || '附件'), url: publicAssetUrl(asset.id),
+      id: asset.id, name: String(asset.file_name || '附件'), url: `/api/student/file-assets/${asset.id}/download`,
       mime: String(asset.mime_type || ''), inline,
     });
   }
@@ -240,6 +274,30 @@ function triggeringImageAttachments(conversationId, artifact) {
   return parseAttachments(message?.attachments).filter((item) => String(item.mime || '').startsWith('image/'));
 }
 
+function referencedAttachmentOrdinals(artifact) {
+  if (String(artifact?.kind || '').toLowerCase() !== 'pptx') return [];
+  const deck = parseDeckSpec(String(artifact?.content || ''));
+  if (!deck) return [];
+  return [...new Set(deck.slides.map((slide) => Number(slide.imageAttachment)).filter((value) => Number.isInteger(value) && value > 0))];
+}
+
+function currentAttachmentImages(conversationId, artifact) {
+  if (Array.isArray(artifact?.attachmentImages)) return artifact.attachmentImages;
+  const sources = triggeringImageAttachments(conversationId, artifact);
+  return referencedAttachmentOrdinals(artifact)
+    .map((index) => ({ index, fileId: sources[index - 1]?.id || '' }))
+    .filter((item) => item.fileId);
+}
+
+function persistArtifactAttachmentImages(conversationId, artifact) {
+  if (!artifact?.id || String(artifact.kind || '').toLowerCase() !== 'pptx' || Array.isArray(artifact.attachmentImages)) return;
+  setArtifactAttachmentImages(artifact.id, currentAttachmentImages(conversationId, artifact));
+}
+
+function persistConversationAttachmentImages(conversationId) {
+  for (const artifact of listArtifacts(conversationId, { includeContent: true })) persistArtifactAttachmentImages(conversationId, artifact);
+}
+
 /** 从本地存储读回一份素材的字节（不给自己的接口发 HTTP 请求，磁盘上就是那份文件） */
 function readAssetBytes(fileId) {
   const asset = row('SELECT storage_kind, storage_key FROM file_assets WHERE id=?', [fileId]);
@@ -285,8 +343,7 @@ function generatedImageMap(artifact) {
  * 三处，任何一处断掉都**不报错**、只是 PPT 里没图 —— 必须能被自动化盯住。
  */
 export function attachmentImageMap(conversationId, artifact) {
-  const sources = triggeringImageAttachments(conversationId, artifact);
-  return imageMapFrom(sources.map((source, index) => ({ fileId: source.id, index: index + 1 })), (item) => Number(item.index));
+  return imageMapFrom(currentAttachmentImages(conversationId, artifact), (item) => Number(item.index));
 }
 
 /**
@@ -308,11 +365,20 @@ export function snapshotImageMaps(artifact) {
  * 这是三种文件格式的**写法说明**——模型不可能凭空猜出我们的规格长什么样，不给它，这个能力就等于不存在。
  * 反过来，这里也只说格式，不规定它必须产生产物、不规定话术。
  */
+const WEB_APP_GUIDE = [
+  '网页与互动作品请输出可直接运行的完整 HTML（可以配套本地 CSS/JS/SVG 文件），必须包含 viewport，桌面和手机都不能横向溢出。当前预览器不支持 npm、ES module/import、Worker 或用 fetch 读取本地 JSON；相关逻辑请写成普通浏览器脚本，数据直接放进 JS。',
+  '学生说“做小程序、手机应用、App”时，这里指的是浏览器内可点击的手机模拟作品，不是微信小程序：仍输出 HTML/CSS/JS，按 390×844 画布优先设计，并确保按钮、输入、切换、计分、弹层等核心交互真的可用。',
+  '成品要有清晰的信息层级、统一色板、可读字体、稳定间距，以及 hover/active/focus、加载、空状态或结果反馈；不要放点不动的装饰按钮、# 空链接、功能说明文案或 Lorem Ipsum。',
+  '写完前自行检查：脚本选择器存在、按钮都有事件、首屏无重叠、手机可滚动、外部素材加载失败时有可用的视觉兜底。',
+].join('\n');
+
 const DOCUMENT_GUIDE = [
   '除了网页，你也可以直接产出 Office 文档：用一个带扩展名的代码块写**内容**，平台会渲染成真正的文件，学生下载后能用 PowerPoint / Word / Excel / WPS 打开。',
-  '· PPT：```pptx 文件名.pptx ```，内容是一段 JSON —— {"title":"标题","subtitle":"副标题","author":"署名","theme":"ocean","slides":[{"title":"这一页的标题","bullets":["要点一","要点二"]}]}。每页 3~6 条要点、单条不超过 40 字，页数按需要；不要只做一页，也不要把整段话塞进一条要点。',
+  '· PPT：```pptx 文件名.pptx ```，内容是一段 JSON —— {"title":"标题","subtitle":"副标题","author":"署名","theme":"ocean","slides":[{"title":"这一页的标题","bullets":["要点一","要点二"]}]}。先规划故事线再写页面；每页只表达一个结论，正文页 3~6 条要点、单条不超过 40 字，不要把每页都做成相同的项目符号列表。',
   '  · theme 选一个贴合内容的配色：ocean（蓝，风景/科技）、forest（绿，自然/环保）、sunset（橙，美食/热情）、candy（紫，童趣/节日）、ink（默认）。',
-  '  · 版式（可选，写在那一页里）：{"layout":"section","title":"第二部分"} 做**章节分隔页**、{"layout":"quote","title":"一句话"} 做**金句页**、{"layout":"thanks"} 做**结尾页**。一份 8 页以上的 PPT 值得用 1~2 个章节页分段，结尾页收个尾。',
+  '  · 版式按内容选择：section 做章节页，quote 做金句页，thanks 做结尾页；metrics 用 metrics:[{"value":"72%","label":"参与率"}] 展示 2~4 个指标；timeline 用 steps:["调研","设计","验证"] 展示 3~6 个时间节点；comparison 用 columns:[{"title":"方案 A","bullets":["…"]},{"title":"方案 B","bullets":["…"]}] 做双栏对比。',
+  '  · 数据与结构组件：chart 用 chart:{"type":"bar","labels":["一月","二月","三月"],"values":[42,58,76],"unit":"%","highlight":2}；table 用 table:{"headers":["项目","本周","变化"],"rows":[["晨读","5次","+2"]]}；process 用 process:[{"title":"调研","detail":"确认问题"},{"title":"设计","detail":"形成方案"},{"title":"验证","detail":"收集反馈"}]。metrics、chart 和 table 页必须写 source；若是虚构演示数据就明确写“课堂示例数据”，不能编造机构或报告名。',
+  '  · 8 页以上至少使用 3 种内容版式，用 1~2 个章节页分段；不要连续 4 页使用同一种版式。每页只有一个视觉焦点，能用图表/流程/对比表达就不要退回长段项目符号。',
   '  **配图**（很影响成品像不像样，值得用）：封面写 {"cover":{"prompt":"…"}}，正文页在那一页加 image 字段，两种写法 ——',
   '  ① 让平台生成插画：{"title":"赛里木湖","bullets":["湖水蓝得像宝石"],"image":{"prompt":"新疆赛里木湖的夏天，写实插画风格，蓝天、雪山倒影、湖边草地，横构图"}}。'
     + `提示词要具体（画什么、什么风格、什么构图），**全篇最多 ${MAX_ILLUSTRATIONS_PER_DECK} 张（含封面）**，优先给封面和最有画面感的那几页，**不要每页都配**。`,
@@ -327,6 +393,7 @@ export function lessonSystemMessage(conversation) {
   const lesson = row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id]);
   const parts = [
     '请用适合 8–16 岁学生理解的中文回答，避免任何危险或不适龄内容。',
+    WEB_APP_GUIDE,
     DOCUMENT_GUIDE,
   ];
   // 产物清单原来是为了配合「产物约定」——约定删了，这段也随之删掉。
@@ -431,6 +498,8 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
     { orgId: auth.user.orgId, studentId: auth.user.id, lessonId: conversation.lesson_id || '', modality: 'TEXT' },
   );
   const provider = getGenerationProvider(selection);
+  const providerInfo = generationProviderInfo(selection);
+  assertExternalAiAllowed({ mode: providerInfo.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (typeof provider.generateStream !== 'function') throw errors.conflict('当前 AI 渠道不支持流式对话', 'VIBECODING_STREAM_UNAVAILABLE');
 
   const history = [lessonSystemMessage(conversation), ...conversationHistory(conversation.id)];
@@ -531,6 +600,9 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
     // 在这里直接用它会在求值实参时抛 ReferenceError，被本层的 catch 吞掉，
     // 表现成「插画静默不生成」（我踩过）。所以在外面重新取一次。
     const freshConversation = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]) || conversation;
+    for (const artifact of listArtifacts(conversation.id, { includeContent: true }).filter((item) => emittedArtifactIds.has(item.id))) {
+      persistArtifactAttachmentImages(conversation.id, artifact);
+    }
     await illustrateTurn(ctx, auth, freshConversation, emittedArtifactIds);
     sseSend(ctx, 'done', {
       message,
@@ -613,13 +685,27 @@ async function illustrateTurn(ctx, auth, conversation, artifactIds) {
 // 而作品广场要显示的是「交上来的那一版」。所以提交时把**产物清单**（含配图引用）定格一份，
 // 正文继续走 files 快照 —— 广场与下载都不去读活会话。
 
+function embeddedFileIds(files, ownerUserId = '') {
+  const ids = new Set();
+  for (const content of Object.values(files || {})) {
+    for (const match of String(content || '').matchAll(/\/api\/student\/file-assets\/([\w-]+)\/download/g)) {
+      const file = row('SELECT owner_user_id,visibility,status,mime_type FROM file_assets WHERE id=?', [match[1]]);
+      if (file?.status === 'ACTIVE' && String(file.mime_type || '').startsWith('image/')
+        && (file.owner_user_id === ownerUserId || ['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))) ids.add(match[1]);
+    }
+  }
+  return [...ids];
+}
+
 /**
  * 提交那一刻的产物清单。只存元信息与图片引用（fileId），不存正文，所以这一列很小。
  * ⚠️ 配图引用必须一起定格：只存正文的话，广场渲染出来的 PPT 会**静默**丢掉所有图
  * （学生自己下载的那份有图、广场那份没有，而两边都不报错）。
  */
-export function snapshotArtifacts(conversationId) {
-  return listArtifacts(conversationId, { includeContent: true }).map((artifact) => ({
+export function snapshotArtifacts(conversationId, names = null, files = {}, ownerUserId = '') {
+  const allowed = names ? new Set(names) : null;
+  const webImageIds = embeddedFileIds(files, ownerUserId);
+  return listArtifacts(conversationId, { includeContent: true }).filter((artifact) => !allowed || allowed.has(artifact.name)).map((artifact) => ({
     name: artifact.name,
     kind: artifact.kind || kindForName(artifact.name),
     bytes: Number(artifact.bytes || 0),
@@ -630,8 +716,9 @@ export function snapshotArtifacts(conversationId) {
       .filter((item) => item?.fileId && !item.error)
       .map((item) => ({ slideIndex: Number(item.slideIndex), fileId: String(item.fileId) })),
     // 学生传的图：规格里 {"attachment": N} 指的是**产出这一轮**里的第 N 张
-    attachmentImages: triggeringImageAttachments(conversationId, artifact)
-      .map((source, index) => ({ index: index + 1, fileId: source.id })),
+    attachmentImages: currentAttachmentImages(conversationId, artifact),
+    embeddedImages: artifact.name === names?.[0] && kindForName(artifact.name) === 'html'
+      ? webImageIds.map((fileId) => ({ fileId })) : [],
   }));
 }
 
@@ -649,6 +736,7 @@ export function parseSnapshotArtifacts(submission) {
       updatedAt: item.updatedAt || null,
       generatedImages: (Array.isArray(item.generatedImages) ? item.generatedImages : []).filter((image) => image?.fileId),
       attachmentImages: (Array.isArray(item.attachmentImages) ? item.attachmentImages : []).filter((image) => image?.fileId && Number(image.index) > 0),
+      embeddedImages: (Array.isArray(item.embeddedImages) ? item.embeddedImages : []).filter((image) => image?.fileId),
     }));
 }
 
@@ -664,18 +752,14 @@ function parseSnapshotFiles(value) {
 }
 
 /**
- * 「这次交上来的主产物」＝**最近产出的那一份**。
- * 为什么不是「优先 index.html」：种子产物 index.html 会一直躺在会话里，学生做的是 PPT 时它也在，
- * 按文件名优先挑就会把作品显示成「你好，AI 魔法学院」起始页 —— 这正是作品广场此前显示错东西的原因。
- * 学生侧预览区是同一个口径（Workbench 的 documentArtifact），改要一起改。
+ * 「这次交上来的主产物」由提交时的 entry_file 明确指定，不再根据时间猜测。
  */
 export function submissionPreview(submission) {
   const artifacts = parseSnapshotArtifacts(submission);
   if (!artifacts.length) return null;
-  const newest = artifacts
-    .slice()
-    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0];
-  return { name: newest.name, kind: newest.kind, document: isDocumentKind(newest.kind) };
+  const entryFile = String(submission?.entry_file || '').trim();
+  const selected = artifacts.find((item) => item.name === entryFile) || artifacts[0];
+  return { name: selected.name, kind: selected.kind, document: isDocumentKind(selected.kind) };
 }
 
 /**
@@ -697,7 +781,7 @@ export function publicArtifactCatalog(submission) {
       downloadUrl: `${base}/files/${encodeURIComponent(name)}/download`,
       images: {
         generated: Object.fromEntries((meta.generatedImages || [])
-          .map((image) => [String(image.slideIndex), `/api/public/file-assets/${image.fileId}/download`])),
+          .map((image) => [String(image.slideIndex), `${base}/images/${image.fileId}`])),
         attachment: Object.fromEntries((meta.attachmentImages || [])
           .map((image) => [String(image.index), `${base}/images/${image.fileId}`])),
       },
@@ -722,9 +806,26 @@ export function renderSnapshotDocument(submission, name) {
 export function snapshotImageFileIds(submission) {
   const ids = new Set();
   for (const item of parseSnapshotArtifacts(submission)) {
-    for (const image of [...item.generatedImages, ...item.attachmentImages]) ids.add(String(image.fileId));
+    for (const image of [...item.generatedImages, ...item.attachmentImages, ...item.embeddedImages]) ids.add(String(image.fileId));
   }
   return ids;
+}
+
+/** 公开页面只把当前提交快照准入的私有素材地址改写成作品专属代理。 */
+export function publicSnapshotFiles(submission) {
+  const files = parseSnapshotFiles(submission?.files);
+  const token = String(submission?.share_token || '').trim();
+  if (!token) return files;
+  const allowed = snapshotImageFileIds(submission);
+  return Object.fromEntries(Object.entries(files).map(([name, content]) => {
+    let text = String(content ?? '');
+    for (const fileId of allowed) {
+      const privateUrl = `/api/student/file-assets/${fileId}/download`;
+      const publicUrl = `/api/public/vibecoding-works/${token}/images/${fileId}`;
+      text = text.split(privateUrl).join(publicUrl);
+    }
+    return [name, text];
+  }));
 }
 
 export function normalizeSubmission(value, { includeContent = false } = {}) {
@@ -744,8 +845,7 @@ export function normalizeSubmission(value, { includeContent = false } = {}) {
     shareToken: value.share_token || null,
     featured: Boolean(value.featured_at),
     publishedAt: value.published_at || null,
-    // 「这次交上来的主产物」把产物清单里最近产出的那份挑出来（老记录没有快照 → null，
-    // 平台列表回退到只显示 entryFile）
+    // 当前提交的主产物由 entryFile 明确指定；老记录没有快照时才会是 null。
     preview: submissionPreview(value),
     ...(includeContent ? { files: parseSnapshotFiles(value.files), transcript: JSON.parse(value.transcript || '[]'), artifacts: parseSnapshotArtifacts(value) } : {}),
   };
@@ -965,9 +1065,11 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const { conversation } = ownConversation(ctx, messageMatch[1]);
     assertConversationEditable(conversation);
     const removed = Number(count('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]) || 0);
+    persistConversationAttachmentImages(conversation.id);
     q('DELETE FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]);
+    const preservedArtifacts = listArtifacts(conversation.id, { includeContent: true });
     audit(ctx, 'VIBECODING_MESSAGES_CLEAR', 'VIBECODING_CONVERSATION', conversation.id, { count: removed }, { count: 0 });
-    return { cleared: true, removed };
+    return { cleared: true, removed, artifacts: preservedArtifacts };
   }
 
   // 重新生成：清掉最后一条用户消息之后的回答，重新问一次（失败重试也走这里）
@@ -977,6 +1079,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     assertConversationEditable(conversation);
     const lastUser = row("SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
     if (!lastUser) throw errors.badRequest('还没有可以重新生成的消息', 'VIBECODING_NO_MESSAGE');
+    persistConversationAttachmentImages(conversation.id);
     q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
       [conversation.id, lastUser.created_at, lastUser.created_at, lastUser.message_rowid]);
     return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId: lastUser.id });
@@ -993,6 +1096,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const lastUser = row("SELECT id FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
     if (lastUser?.id !== message.id) throw errors.badRequest('只能编辑最后一条消息', 'VIBECODING_MESSAGE_NOT_LAST');
     const content = nonEmptyString(body.content, '消息内容', { max: MAX_MESSAGE_CHARS });
+    persistConversationAttachmentImages(conversation.id);
     q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
       [conversation.id, message.created_at, message.created_at, message.message_rowid]);
     q('UPDATE vibecoding_messages SET content=? WHERE id=?', [content, message.id]);
@@ -1007,6 +1111,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     assertConversationEditable(conversation);
     const message = row('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageDeleteMatch[2], conversation.id]);
     if (!message) throw errors.notFound('消息不存在', 'VIBECODING_MESSAGE_NOT_FOUND');
+    persistConversationAttachmentImages(conversation.id);
     q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid >= ?))',
       [conversation.id, message.created_at, message.created_at, message.message_rowid]);
     audit(ctx, 'VIBECODING_MESSAGE_DELETE', 'VIBECODING_CONVERSATION', conversation.id, { messageId: message.id, role: message.role }, null);
@@ -1018,26 +1123,31 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const { auth: ownerAuth, conversation } = ownConversation(ctx, submitMatch[1]);
     const user = activeStudent(ownerAuth);
     vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
-    const fileSnapshot = artifactsAsFiles(conversation.id);
+    const allFiles = artifactsAsFiles(conversation.id);
     // 2026-09-15 用户口径：**按产物提交**，不是按对话提交。
     // 「不需要提交整个作品，而是针对能展示出来的作品来提交」——学生做完一个游戏、一份 PPT，
     // 各自提交一次；后台才能把每一份都发到官网展示。同一份产物重复提交是覆盖（round+1），
     // 不同产物各自成条（唯一性 = (conversation_id, entry_file)，见 schema 里那次重建表）。
     const requestedEntry = String(ctx.body?.entryFile || '').trim().slice(0, 200);
     const entryFile = requestedEntry || String(conversation.entry_file || '').trim() || 'index.html';
-    if (fileSnapshot[entryFile] === undefined) {
+    if (allFiles[entryFile] === undefined) {
       throw errors.badRequest(`这份产物（${entryFile}）不在当前作品里，无法提交`, 'VIBECODING_ARTIFACT_NOT_FOUND');
     }
+    const entryKind = kindForName(entryFile);
+    if (!isSubmittableArtifactKind(entryKind)) {
+      throw errors.badRequest('只有网页、PPT、Word 和 Excel 可以作为作品提交', 'VIBECODING_ARTIFACT_NOT_SUBMITTABLE');
+    }
+    const includedNames = submissionArtifactNames(allFiles, entryFile);
     const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
     // 没有老师点评这一环了：提交只是「交给平台」，可以反复提交（round+1），不再挡第二次
     // 与画布作品一致：提交即确认版权与展示授权，平台后续才可发布到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
-    const files = fileSnapshot;
+    const files = pickFiles(allFiles, includedNames);
     // 产物清单也要一起定格：作品广场靠它判断「这次交上来的到底是哪份产物」（见 submissionPreview），
     // 以及那份文档的配图在哪。只在提交这一刻取，之后学生再改也不会影响广场那一版。
-    const artifacts = snapshotArtifacts(conversation.id);
+    const artifacts = snapshotArtifacts(conversation.id, includedNames, files, ownerAuth.user.id);
     const transcript = rows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id])
       .map((message) => ({ role: message.role, content: message.content, createdAt: message.created_at }));
     const title = body.title === undefined || String(body.title).trim() === '' ? conversation.title : nonEmptyString(body.title, '作品标题', { max: 60 });
@@ -1048,7 +1158,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       if (existing) {
         q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
              teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
-             copyright_confirmed_at=?,copyright_confirmed_by=? WHERE id=?`,
+             copyright_confirmed_at=?,copyright_confirmed_by=?,is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
+             featured_at=NULL,unpublish_reason=NULL WHERE id=?`,
           [title, description, json(files), json(artifacts), json(transcript), entryFile, now, now, now, ownerAuth.user.id, submissionId]);
       } else {
         q(`INSERT INTO vibecoding_submissions(

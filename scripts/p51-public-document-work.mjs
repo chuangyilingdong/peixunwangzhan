@@ -5,8 +5,8 @@
  * 「你好，AI 魔法学院」起始页（种子 index.html 一直在会话里，按文件名优先挑入口就挑到它），
  * 或者一段 JSON 原文，而且**没有任何地方能下载到真正的 .pptx**。这条链路里连着四处，
  * 任何一处断掉都不报错、只是「广场显示的不是那个东西」：
- *   ① 提交要把产物清单（含配图引用）定格成快照 —— 否则广场不知道「最近产出的是哪份」；
- *   ② 广场要按「最近产出的那份」选预览目标 —— 按 entry_file 选就会挑到种子 index.html；
+ *   ① 提交只定格显式 entryFile 对应的产物与配图，不能顺带公开同会话其他作品；
+ *   ② 广场严格按提交的 entry_file 选预览目标，不能根据更新时间猜测；
  *   ③ 公开下载要能从**快照**渲染出真文件（学生自己下载走的是活会话那条，两条不能混）；
  *   ④ 学生上传的图不是公开素材，得有一个**只认这份作品快照内 fileId** 的代理地址。
  * 另外钉住一个真 bug：提交快照里的文件名允许中文，读回时用写侧的 ASCII 路径校验会抛错
@@ -87,8 +87,11 @@ await run(['packages/database/src/seed.js']);
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x0a]);
 const PHOTO_KEY = '2026/09/p51-photo.png';
 const PHOTO_ID = 'file_p51_photo';
+const UNUSED_PHOTO_KEY = '2026/09/p51-unused-photo.png';
+const UNUSED_PHOTO_ID = 'file_p51_unused_photo';
 fs.mkdirSync(path.dirname(path.join(uploadRoot, PHOTO_KEY)), { recursive: true });
 fs.writeFileSync(path.join(uploadRoot, PHOTO_KEY), PNG);
+fs.writeFileSync(path.join(uploadRoot, UNUSED_PHOTO_KEY), PNG);
 // 平台生成的插画（公开素材，-1 = 封面）：广场那一版的封面图也要能拿到
 const COVER_KEY = '2026/09/p51-cover.png';
 const COVER_ID = 'file_p51_cover';
@@ -124,6 +127,10 @@ try {
     `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, PHOTO_KEY, null, null, '天山.png', 'image/png', PNG.length, 'x', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now);
+  seedDb.prepare(
+    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  ).run(UNUSED_PHOTO_ID, 'USER', 'org-1', 'student-2', 'INTERNAL_PROXY', null, UNUSED_PHOTO_KEY, null, null, '未引用照片.png', 'image/png', PNG.length, 'x2', 'MEDIA_ASSET', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'student-2', now, now);
   seedDb.prepare(
     `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -178,8 +185,11 @@ try {
       'INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
     ).run(id, conversationId, messageId, name, kind, content, Buffer.byteLength(content), 1, old, updatedAt);
     insertArtifact('vibeart_p51_seed', null, 'index.html', 'html', SEED_HTML, old);
-    driver.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES ('p51_m_user',?,'user','用这张图做 PPT','SUCCEEDED',?,?)")
-      .run(conversationId, JSON.stringify([{ id: PHOTO_ID, name: '天山.png', url: `/api/student/file-assets/${PHOTO_ID}/download`, mime: 'image/png', inline: '' }]), old);
+    driver.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES ('p51_m_user',?,'user','用第一张图做 PPT','SUCCEEDED',?,?)")
+      .run(conversationId, JSON.stringify([
+        { id: PHOTO_ID, name: '天山.png', url: `/api/student/file-assets/${PHOTO_ID}/download`, mime: 'image/png', inline: '' },
+        { id: UNUSED_PHOTO_ID, name: '未引用照片.png', url: `/api/student/file-assets/${UNUSED_PHOTO_ID}/download`, mime: 'image/png', inline: '' },
+      ]), old);
     driver.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status,attachments,created_at) VALUES ('p51_m_ai',?,'assistant','好的，这是一份新疆研学 PPT','SUCCEEDED',NULL,?)")
       .run(conversationId, recent);
     insertArtifact('vibeart_p51_deck', 'p51_m_ai', DECK_NAME, 'pptx', JSON.stringify(DECK), recent);
@@ -192,12 +202,12 @@ try {
 
   // 1) 提交：中文产物名不能让读回抛错（写侧那条 ASCII 路径校验曾在这里误伤，
   //    表现成「已经落库了、学生却收到 400」）
-  const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true, description: '新疆研学汇报' } });
+  const submitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true, entryFile: DECK_NAME, description: '新疆研学汇报' } });
   check('带中文文件名的作品能提交成功', submitted.status === 200, `status=${submitted.status} ${JSON.stringify(submitted.data).slice(0, 200)}`);
   assert.equal(submitted.status, 200);
   const submissionId = submitted.data.id;
-  check('提交快照带回了两个产物', (submitted.data.artifacts || []).length === 2, `artifacts=${(submitted.data.artifacts || []).map((item) => item.name).join(',')}`);
-  check('主产物 = 最近产出的那份 PPT（不是种子 index.html）', submitted.data.preview?.name === DECK_NAME && submitted.data.preview?.document === true, JSON.stringify(submitted.data.preview));
+  check('提交快照只带回这份 PPT', (submitted.data.artifacts || []).length === 1 && submitted.data.artifacts[0]?.name === DECK_NAME, `artifacts=${(submitted.data.artifacts || []).map((item) => item.name).join(',')}`);
+  check('主产物 = 显式提交的 PPT（不是种子 index.html）', submitted.data.preview?.name === DECK_NAME && submitted.data.preview?.document === true, JSON.stringify(submitted.data.preview));
   check('快照里记下了这一轮的配图引用', (submitted.data.artifacts || []).find((item) => item.name === DECK_NAME)?.attachmentImages?.length === 1, JSON.stringify((submitted.data.artifacts || []).find((item) => item.name === DECK_NAME)?.attachmentImages));
   check('提交快照里的正文按内容读得回来', String(submitted.data.files?.[DECK_NAME] || '').includes(DECK_TITLE));
 
@@ -216,15 +226,14 @@ try {
   // 4) 公开详情：产物清单 + 下载地址 + 配图地址
   const detail = await api(`/api/public/vibecoding-works/${shareToken}`);
   assert.equal(detail.status, 200, `公开详情失败: ${JSON.stringify(detail.data)}`);
-  check('入口文件仍然是 index.html（文件清单不骗人）', detail.data.entryFile === 'index.html');
+  check('入口文件就是显式提交的 PPT', detail.data.entryFile === DECK_NAME, String(detail.data.entryFile));
   const catalog = detail.data.artifacts || [];
   const deck = catalog.find((item) => item.name === DECK_NAME);
   check('清单里那份 PPT 标成「可下载的文档」', deck?.document === true && deck?.kind === 'pptx', JSON.stringify(deck));
   check('清单给出了下载地址（编码过的中文名）', String(deck?.downloadUrl || '').includes(encodeURIComponent(DECK_NAME)), String(deck?.downloadUrl));
   check('清单给出了附件图地址（学生传的图走限定代理）', deck?.images?.attachment?.['1'] === `/api/public/vibecoding-works/${shareToken}/images/${PHOTO_ID}`, JSON.stringify(deck?.images));
-  check('清单给出了封面插画地址（平台生成的图按幻灯片下标，-1 是封面）', deck?.images?.generated?.['-1'] === `/api/public/file-assets/${COVER_ID}/download`, JSON.stringify(deck?.images?.generated));
-  const htmlEntry = catalog.find((item) => item.name === 'index.html');
-  check('非文档产物不给下载地址（前端据此走网页预览）', htmlEntry && !htmlEntry.document && !htmlEntry.downloadUrl);
+  check('清单给出了封面插画地址（生成图也走作品快照代理）', deck?.images?.generated?.['-1'] === `/api/public/vibecoding-works/${shareToken}/images/${COVER_ID}`, JSON.stringify(deck?.images?.generated));
+  check('提交另一份作品时没有顺带公开种子网页', !catalog.some((item) => item.name === 'index.html'), JSON.stringify(catalog.map((item) => item.name)));
 
   // 5) 真下载：拿到的必须是能打开的 .pptx，而且用到了那张图（不能静默丢图）
   const download = await fetch(`http://127.0.0.1:${port}${deck.downloadUrl}`);
@@ -254,15 +263,22 @@ try {
   check('作品里用到的学生图能公开取到', viaProxy.status === 200 && Buffer.from(await viaProxy.arrayBuffer()).equals(PNG), `status=${viaProxy.status}`);
   const plainPublic = await fetch(`http://127.0.0.1:${port}/api/public/file-assets/${PHOTO_ID}/download`);
   check('同一张图走普通公开素材口取不到（PRIVATE 素材不因代理而变成公开资源）', plainPublic.status === 403, `status=${plainPublic.status}`);
+  const notReferenced = await fetch(`http://127.0.0.1:${port}/api/public/vibecoding-works/${shareToken}/images/${UNUSED_PHOTO_ID}`);
+  check('同一轮未被 PPT 引用的私有图片不能通过作品代理读取', notReferenced.status === 404, `status=${notReferenced.status}`);
   const notMine = await fetch(`http://127.0.0.1:${port}/api/public/vibecoding-works/${shareToken}/images/file_not_in_this_work`);
   check('不在快照里的 fileId 一律 404（不能拿作品链接当素材探针）', notMine.status === 404, `status=${notMine.status}`);
 
-  // 7) 下架后三样一起消失（列表 / 详情 / 下载 / 配图）
-  await api(`/api/admin/vibecoding-works/${submissionId}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: false, reason: 'P51 下架测试：清理测试作品（下架必须给原因）' } });
+  // 7) 已发布作品重新提交必须先撤下，不能绕过平台把新稿直接替换到线上。
+  const resubmitted = await api(`/api/student/vibecoding/conversations/${conversationId}/submit`, {
+    method: 'POST', token: student, body: { copyrightConfirmed: true, entryFile: DECK_NAME, description: '修改后重新提交' },
+  });
+  check('重新提交后恢复待发布状态并清除分享码', resubmitted.status === 200 && resubmitted.data.isPublic === false && !resubmitted.data.shareToken, JSON.stringify(resubmitted.data));
+  const afterDetail = await api(`/api/public/vibecoding-works/${shareToken}`);
+  check('重新提交后旧公开详情立即 404', afterDetail.status === 404, `status=${afterDetail.status}`);
   const afterDownload = await fetch(`http://127.0.0.1:${port}${deck.downloadUrl}`);
-  check('下架后下载地址 404', afterDownload.status === 404, `status=${afterDownload.status}`);
+  check('重新提交后旧下载地址 404', afterDownload.status === 404, `status=${afterDownload.status}`);
   const afterImage = await fetch(`http://127.0.0.1:${port}/api/public/vibecoding-works/${shareToken}/images/${PHOTO_ID}`);
-  check('下架后配图地址 404', afterImage.status === 404, `status=${afterImage.status}`);
+  check('重新提交后旧配图地址 404', afterImage.status === 404, `status=${afterImage.status}`);
 
   console.log(JSON.stringify({
     name: 'public-document-work', pass: failures === 0,

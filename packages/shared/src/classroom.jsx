@@ -1,15 +1,29 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader } from './ui.jsx';
 
 export function useData(load, deps = []) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
+  const requestRef = useRef(0);
+  const mountedRef = useRef(true);
   const refresh = async () => {
-    setState((old) => ({ ...old, loading: true, error: null }));
-    try { setState({ loading: false, error: null, data: await load() }); }
-    catch (error) { setState({ loading: false, error, data: null }); }
+    const request = ++requestRef.current;
+    if (mountedRef.current) setState((old) => ({ ...old, loading: true, error: null }));
+    try {
+      const data = await load();
+      if (mountedRef.current && request === requestRef.current) setState({ loading: false, error: null, data });
+    } catch (error) {
+      if (mountedRef.current && request === requestRef.current) setState({ loading: false, error, data: null });
+    }
   };
-  useEffect(() => { refresh(); }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    mountedRef.current = true;
+    refresh();
+    return () => {
+      mountedRef.current = false;
+      requestRef.current += 1;
+    };
+  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
   return { ...state, refresh };
 }
 

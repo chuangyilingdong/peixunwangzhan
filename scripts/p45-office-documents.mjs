@@ -14,7 +14,7 @@ import { inflateRawSync } from 'node:zlib';
 import { COVER_IMAGE_KEY, renderPptx } from '../apps/server/src/services/ooxml/pptx.js';
 import { renderDocx } from '../apps/server/src/services/ooxml/docx.js';
 import { renderXlsx } from '../apps/server/src/services/ooxml/xlsx.js';
-import { renderDocument, parseDeckSpec, deckIllustrationRequests } from '../apps/server/src/services/ooxml/documents.js';
+import { renderDocument, parseDeckSpec, deckIllustrationRequests, inspectDeckQuality } from '../apps/server/src/services/ooxml/documents.js';
 
 /* ── 极小的 ZIP 读取器（与写入器是两套代码，能互相印证） ── */
 function readZip(buffer) {
@@ -311,12 +311,12 @@ for (const [kind, content, name] of [['pptx', JSON.stringify(DECK), '去新疆�
     name: 'x.pptx',
   });
   assert.ok(!squeezed.error, `长要点渲染失败：${squeezed.error}`);
-  // 注意：页面上还有标题（3000），所以不能拿「最大字号」判断正文有没有降档
+  // 注意：页面上还有标题（3600），所以不能拿「最大字号」判断正文有没有降档
   const sizes = [...readZip(squeezed.buffer).get('ppt/slides/slide2.xml').toString('utf8').matchAll(/sz="(\d+)"/g)].map((m) => Number(m[1]));
   const bodySizes = sizes.filter((size) => size <= 2000);
   assert.ok(bodySizes.length, '没找到正文字号，断言的匹配规则可能失效了');
-  assert.ok(bodySizes.some((size) => size < 1800), `长要点没有触发降字号（正文字号 ${bodySizes.join(',')}）`);
-  assert.ok(Math.min(...bodySizes) >= 1000, `字号降到 ${Math.min(...bodySizes)} 就太小了，学生看不清`);
+  assert.ok(bodySizes.some((size) => size < 2000), `长要点没有触发降字号（正文字号 ${bodySizes.join(',')}）`);
+  assert.ok(Math.min(...bodySizes) >= 1200, `字号降到 ${Math.min(...bodySizes)} 就太小了，学生看不清`);
 
   const shortDoc = renderDocument({
     kind: 'pptx',
@@ -324,7 +324,50 @@ for (const [kind, content, name] of [['pptx', JSON.stringify(DECK), '去新疆�
     name: 'y.pptx',
   });
   const shortSizes = [...readZip(shortDoc.buffer).get('ppt/slides/slide2.xml').toString('utf8').matchAll(/sz="(\d+)"/g)].map((m) => Number(m[1]));
-  assert.ok(shortSizes.some((size) => size === 1800), `短要点不该被降档（字号 ${shortSizes.join(',')}）`);
+  assert.ok(shortSizes.some((size) => size === 2000), `短要点应使用 20pt 正文（字号 ${shortSizes.join(',')}）`);
+}
+
+/* ── 专业组件：图表 / 表格 / 流程 / 来源 ── */
+{
+  const spec = parseDeckSpec(JSON.stringify({
+    title: '校园低碳行动', theme: 'forest', slides: [
+      { layout: 'chart', title: '参与人数持续增长', chart: { type: 'bar', labels: ['三月', '四月', '五月', '六月'], values: [42, 58, 73, 91], unit: '人', highlight: 3 }, source: '环保社团月度记录，2026' },
+      { layout: 'chart', title: '各年级参与率', chart: { type: 'column', labels: ['三年级', '四年级', '五年级'], values: [52, 68, 84], unit: '%', highlight: 2 }, source: '课堂示例数据' },
+      { layout: 'table', title: '本周行动明细', table: { headers: ['行动', '次数', '减碳量'], rows: [['步行上学', '128', '32kg'], ['自带水杯', '216', '11kg'], ['光盘行动', '189', '24kg']] }, source: '环保社团统计' },
+      { layout: 'process', title: '从想法到行动', process: [{ title: '观察', detail: '找到浪费现象' }, { title: '设计', detail: '形成行动方案' }, { title: '执行', detail: '连续记录一周' }, { title: '复盘', detail: '比较数据变化' }] },
+    ],
+  }));
+  assert.equal(spec.slides.length, 4, '专业组件规格页数不对');
+  assert.equal(spec.slides[0].chart.values[3], 91, '横条图数据解析失败');
+  assert.equal(spec.slides[2].table.rows.length, 3, '表格行解析失败');
+  assert.equal(spec.slides[3].process.length, 4, '流程步骤解析失败');
+  const rendered = renderPptx(spec);
+  const entries = assertOoxmlPackage(rendered.buffer, { label: 'pptx-professional-components' });
+  const names = [...entries.keys()].filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).sort();
+  assert.equal(names.length, 5, '封面 + 4 个专业组件页应有 5 页');
+  const all = names.map((name) => entries.get(name).toString('utf8')).join('');
+  for (const text of ['参与人数持续增长', '91人', '本周行动明细', '步行上学', '从想法到行动', '环保社团月度记录']) {
+    assert.ok(all.includes(text), `专业组件没有写入「${text}」`);
+  }
+  assert.ok(all.includes('name="Bar 4"') && all.includes('name="Column 3"'), '横条图/柱图原生形状未生成');
+  assert.ok(all.includes('name="HeaderBg"') && all.includes('name="Cell 1-1"'), '表格原生形状未生成');
+  assert.ok(all.includes('name="Process 4"') && all.includes('name="ProcessLine"'), '流程图原生形状未生成');
+  for (const name of names) {
+    const xml = entries.get(name).toString('utf8');
+    const ids = [...xml.matchAll(/<p:cNvPr id="(\d+)"/g)].map((match) => match[1]);
+    assert.equal(ids.length, new Set(ids).size, `${name} 有重复 shape id：${ids.join(',')}`);
+    for (const match of xml.matchAll(/<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"/g)) {
+      const [x, y, cx, cy] = [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])];
+      assert.ok(x >= 0 && y >= 0 && x + cx <= SLIDE_W + 1 && y + cy <= SLIDE_H + 1, `${name} 专业组件溢出画布`);
+    }
+  }
+  const sourceSizes = [...all.matchAll(/name="Source"[\s\S]*?<a:rPr[^>]*sz="(\d+)"/g)].map((match) => Number(match[1]));
+  assert.ok(sourceSizes.length >= 3 && sourceSizes.every((size) => size >= 1200), `来源脚注不得小于 12pt：${sourceSizes.join(',')}`);
+  const weak = parseDeckSpec(JSON.stringify({ title: '弱样例', slides: Array.from({ length: 7 }, (_, index) => ({ title: `第 ${index + 1} 页`, bullets: ['同一种版式'] })) }));
+  const weakCodes = new Set(inspectDeckQuality(weak).issues.map((issue) => issue.code));
+  assert.ok(weakCodes.has('REPEATED_LAYOUT') && weakCodes.has('LOW_LAYOUT_VARIETY'), '质量检查应识别连续重复版式与低多样性');
+  const noSource = parseDeckSpec(JSON.stringify({ title: '缺来源', slides: [{ layout: 'chart', title: '数据', chart: { labels: ['A', 'B'], values: [1, 2] } }] }));
+  assert.ok(inspectDeckQuality(noSource).issues.some((issue) => issue.code === 'MISSING_SOURCE'), '质量检查应识别图表缺来源');
 }
 
 // 坏的规格要**给出可读的错误**，而不是抛栈或产出坏文件
