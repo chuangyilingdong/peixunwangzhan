@@ -78,14 +78,18 @@ export async function ensurePreviewPdf({ sourcePath, cacheKey }) {
     const [src, cached] = await Promise.all([stat(sourcePath), stat(target)]);
     if (cached.size > 0 && cached.mtimeMs >= src.mtimeMs) return target;
   } catch { /* 没缓存，继续转 */ }
-  await mkdir(cacheDir, { recursive: true });
   // ⚠️ 临时工作目录必须和最终产物在**同一个文件系统**里：
   // 服务器上 /tmp 是独立挂载的 tmpfs，而上传目录在磁盘上 —— 用 os.tmpdir() 的话
   // 最后那步 rename 会以 EXDEV（cross-device link）失败，而且**看起来像「转换失败」**。
   // 2026-09-15 真机验证就是这么翻车的：手工 soffice 能转，代码里一直返回 null。
+  //
+  // ⚠️ 建目录也必须包在 try 里：缓存目录归服务账号（ai-kids-prod）所有，但只要有谁以 root
+  // 在上传目录里留下过 root 所有的目录（运维手工操作、备份还原），服务就写不进去 ——
+  // 那样会抛 EACCES 冒到最外层变成 **500 内部错误**，而正确的对外表现是「这份课件暂时无法预览」。
   const work = path.join(cacheDir, `.work-${cacheKey}-${Date.now()}`);
-  await mkdir(work, { recursive: true });
   try {
+    await mkdir(cacheDir, { recursive: true });
+    await mkdir(work, { recursive: true });
     await new Promise((resolve, reject) => {
       execFile('soffice', [
         '--headless', '--norestore', '--invisible',
