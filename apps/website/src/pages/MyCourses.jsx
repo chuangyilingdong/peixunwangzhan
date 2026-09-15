@@ -15,6 +15,13 @@ export function MyCoursesPage({ api }) {
   }, [api]);
 
   const { items, summary } = state;
+  const lessonStatus = (lesson, granted) => {
+    if (!granted) return { label: '未授权', tone: 'is-warn' };
+    if (lesson.workStatus === 'PUBLISHED' || lesson.status === 'COMPLETED') return { label: '已完成', tone: 'is-ok' };
+    if (lesson.activeNow || lesson.status === 'ACTIVE') return { label: '上课中', tone: 'is-live' };
+    if (lesson.status === 'PENDING') return { label: '待上课', tone: 'is-pending' };
+    return { label: '未开课', tone: '' };
+  };
 
   return <div className="student-page">
     <header className="student-page-head">
@@ -54,6 +61,7 @@ export function MyCoursesPage({ api }) {
       {course.description ? <p className="student-card__desc">{course.description}</p> : null}
       <p className="student-card__meta">共 {course.progress?.lessonCount || 0} 节 · 已开始 {course.progress?.startedLessonCount || 0} 节 · 已提交 {course.progress?.submittedLessonCount || 0} 节</p>
       <div className="student-progress-bar"><i style={{ width: `${course.progress?.submittedPercent || 0}%` }} /></div>
+      {course.hasGrant !== false && course.lessons?.length ? <div className="student-course-lessons" aria-label="课包课程列表">{course.lessons.map((lesson, index) => { const status = lessonStatus(lesson, course.hasGrant !== false); return <div className="student-course-lesson" key={lesson.id || index}><span className="student-course-lesson__index">{String(index + 1).padStart(2, '0')}</span><span className="student-course-lesson__title">{lesson.title}</span><span className={`student-badge ${status.tone}`}>{status.label}</span>{status.label === '上课中' ? <Link className="student-course-lesson__action" to="/learn">进入课堂</Link> : null}{status.label === '已完成' ? <Link className="student-course-lesson__action" to="/learn">课程回顾</Link> : null}</div>; })}</div> : null}
     </article>)}</div> : null}
 
     {items.length ? <div className="student-page-actions"><Link className="button" to="/learn">进入学习 <b>↗</b></Link></div> : null}
