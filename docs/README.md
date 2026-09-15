@@ -1,6 +1,6 @@
 # AI 魔法学院学习平台 · 最终文档（唯一入口）
 
-> 版本：2026-09-14　｜　**课堂、课包发布、机构授权、算力预警与三端流程已定稿；真实三账对照（对外售价 / 合同价折算 / 官方账单自动对账）已上线，生产 release 20260914T063932Z。**
+> 版本：2026-09-15　｜　**课堂、课包发布、机构授权、算力预警与三端流程已定稿；VibeCoding 已支持交互式手机预览与结构化精品 PPT，当前代码提交 5e94e0e，尚未部署。**
 > 其它文档都从属于它：结构看 `docs/architecture/代码结构与路由.md`，
 > 设计口径看 `docs/项目重梳理-03-平台侧重做梳理.md`，
 > 操作命令看 `deploy/production/RUNBOOK.md`，
@@ -23,9 +23,9 @@
 
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
-仓库：E:\学习平台正常　branch main
-生产：release 20260914T063932Z / commit 1f10a59（服务 learning-platform-production @127.0.0.1:8789）
-      本地 HEAD c9713f5 只比生产多一个纯文档提交，代码等同，不必为它再发一次
+仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
+生产：release 20260915T054458Z / commit 6e22263（服务 learning-platform-production @127.0.0.1:8789）
+      本地 HEAD 5e94e0e：包含交互式手机预览、提交/隐私修复和精品 PPT 引擎；尚未推送、尚未部署
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
@@ -74,6 +74,12 @@
     两份会各自漂移，改的时候两份都要改）；想让作品用 CDN 样式表和 WebSocket，`style-src` 要有 `https:`、
     `connect-src` 要有 `wss:`。它还被 Cloudflare 边缘缓存，改完要在 Cloudflare 上 Purge 那个 URL。
 
+13. **VibeCoding 的“小程序”是浏览器手机作品，不是微信小程序**：工作台可在桌面/390×844 手机模拟器间切换，
+    HTML/CSS/JS 在沙箱内真实运行、可点击和输入；运行错误进入控制台，并可一键把错误交给 AI 修复。
+14. **PPT 走统一结构化规格与质量门禁**：站内预览和服务端下载共用 `packages/shared/src/deckSpec.js`；支持
+    指标、时间线、对比、横/柱图、表格、流程、图文、章节、金句和结束页。metrics/chart/table 必须带 `source`，
+    缺来源则拒绝导出；表格/图表/流程都有硬容量上限，不能靠 PowerPoint 自动缩成小字。
+
 ## 四、代码地图（详见 `docs/architecture/代码结构与路由.md`）
 
 ```text
@@ -99,7 +105,7 @@ PLATFORM_DATA_DIR=.tmp/x PLATFORM_DB_PATH=.tmp/x/platform.db PORT=18888 node app
 **改完必跑**（守卫是这份代码的「别踩这里」）：
 
 ```bash
-node .tmp/smoke-run.mjs                    # 全量 104 个守卫（p85–p91 三账/账单、p92 消耗口径、p93 素材预览、p94 按产物提交）
+node .tmp/smoke-run.mjs                    # 全量守卫（当前至少含 p95 VibeCoding 精品化守卫）
 node scripts/p70-pages-render.mjs          # 三端页面真渲染 —— 改前端之后必跑（能拦白屏）
 node scripts/p66-student-grant-gate.mjs    # 进课三层门禁
 node scripts/p69-teacher-data-scope.mjs    # 教师数据范围（安全相关改动）
@@ -111,6 +117,7 @@ node scripts/p91-provider-bill-reconciliation.mjs # 账单适配器 / 幂等 / �
 node scripts/p92-sale-price-scope.mjs             # 机构端/学员端「消耗」= 对外售价（只计成功尝试）
 node scripts/p93-material-preview.mjs             # 教学素材在线预览：形态判定 / 票据 / 转换失败不回落
 node scripts/p94-artifact-submission.mjs          # VibeCoding 按产物提交：(对话,产物) 唯一、重复提交走覆盖
+node scripts/p95-vibecoding-quality.mjs            # 手机预览、错误修复、提交隔离、私有素材、PPT 专业组件与共享规格
 ```
 
 改前端还要 `vite build` 三端（`node_modules/vite/bin/vite.js build apps/<app> --config apps/<app>/vite.config.mjs`，
