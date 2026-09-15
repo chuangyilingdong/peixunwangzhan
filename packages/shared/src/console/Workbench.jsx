@@ -178,7 +178,7 @@ export function Workbench({
   mode = 'split', width, maxWidth, onPreviewWidth, onCommitWidth, onCancelWidth,
   artifacts = [], previewHtml = '', consoleLines = [], onClearConsole, onRefresh, onClose,
   activeTab, onTabChange, activeArtifactName, onSelectArtifact, running = false, emptyHint,
-  tabs: allowedTabs, resolveAttachment, onDownloadArtifact,
+  tabs: allowedTabs, resolveAttachment, onDownloadArtifact, onSubmitArtifact, submittedNames,
 }) {
   const [innerTab, setInnerTab] = useState('preview');
   const tab = activeTab ?? innerTab;
@@ -270,11 +270,26 @@ export function Workbench({
           {documentArtifact ? (
             // 文档产物：先在这里预览，再决定下载（用户明确要的顺序）。
             // 这一块与官网公开作品页共用 ReplayDocument —— 「预览长什么样」只有一份实现。
-            <ReplayDocument
-              artifact={documentArtifact}
-              resolveImage={(slide, slideIndex) => resolveAttachment?.(documentArtifact, { slide, slideIndex })}
-              onDownload={() => onDownloadArtifact?.(documentArtifact)}
-            />
+            <>
+              {/* 文档产物（PPT/Word/Excel）也有自己的提交按钮：它同样是「能展示出来的作品」，
+                  而且「做一份精致的 PPT」正是学生的常见目标，不能只有网页能提交。 */}
+              {onSubmitArtifact ? (
+                <div className="c-artifact-submit-bar">
+                  <button
+                    type="button"
+                    className={submittedNames?.has(documentArtifact.name) ? 'c-artifact-submit is-submitted' : 'c-artifact-submit'}
+                    onClick={() => onSubmitArtifact(documentArtifact.name)}
+                  >
+                    {submittedNames?.has(documentArtifact.name) ? '已提交 · 再交一次' : `提交这份${documentArtifact.name.split('.').pop()?.toUpperCase() || '文档'}`}
+                  </button>
+                </div>
+              ) : null}
+              <ReplayDocument
+                artifact={documentArtifact}
+                resolveImage={(slide, slideIndex) => resolveAttachment?.(documentArtifact, { slide, slideIndex })}
+                onDownload={() => onDownloadArtifact?.(documentArtifact)}
+              />
+            </>
           ) : previewable ? (
             <>
               <div className="c-preview__toolbar">
@@ -282,6 +297,17 @@ export function Workbench({
                   <ConsoleIcon name="globe" size={13} />
                   {entryLabel(artifacts)}
                 </span>
+                {/* 2026-09-15 用户口径：**按产物提交** —— 正在预览的这一份就能直接交给平台，
+                    不必等整个作品做完。平台审核通过后会把它单独发到官网展示。 */}
+                {onSubmitArtifact ? (
+                  <button
+                    type="button"
+                    className={submittedNames?.has(sourceArtifact?.name) ? 'c-artifact-submit is-submitted' : 'c-artifact-submit'}
+                    onClick={() => onSubmitArtifact(sourceArtifact?.name)}
+                  >
+                    {submittedNames?.has(sourceArtifact?.name) ? '已提交 · 再交一次' : '提交这份作品'}
+                  </button>
+                ) : null}
                 <IconButton icon="refresh" size={15} label="重新运行" onClick={() => setReloadKey((value) => value + 1)} />
                 <IconButton
                   icon="external"

@@ -537,16 +537,17 @@ function WorkspaceView({ api }) {
     } catch (error) { toast.error(error.message || '切换模型失败'); }
   }
 
-  function submitWork() {
+  // entryFile = 要提交的那份产物（正在预览的那一份）。不传就交给服务端用默认入口。
+  function submitWork(entryFile) {
     if (!messages.length) return;
     setConfirm({
-      title: '把作品交给平台？',
-      body: '请确认这是你自己的作品，并同意平台在作品广场展示。交给平台后不影响你继续修改——平台会从作品里挑选发布到广场。',
+      title: entryFile ? `提交《${entryFile}》给平台？` : '把作品交给平台？',
+      body: '请确认这是你自己的作品，并同意平台在作品广场展示。这里提交的是**正在预览的这一份**；同一次创作里的其它产物可以分别提交。提交后不影响你继续修改。',
       confirmLabel: '确认提交',
       onConfirm: async () => {
         setConfirm(null);
         try {
-          await api.post(`student/vibecoding/conversations/${conversationId}/submit`, { copyrightConfirmed: true });
+          await api.post(`student/vibecoding/conversations/${conversationId}/submit`, { copyrightConfirmed: true, entryFile: entryFile || undefined });
           toast.ok('已交给平台');
           conversation.refresh();
           list.refresh();
@@ -561,6 +562,8 @@ function WorkspaceView({ api }) {
   const recent = items.filter((item) => !item.pinnedAt);
   const modelOptions = data.modelOptions || [];
   const submission = data.submission;
+  // 哪些产物已经交给平台（按产物提交，一份作品可以有多次提交）
+  const submittedNames = new Set(Array.isArray(data.submittedEntries) ? data.submittedEntries : []);
   const lastUserMessageId = [...messages].reverse().find((item) => item.role === 'user' && !String(item.id).startsWith('local-'))?.id || null;
 
   const sidebarZones = [
@@ -636,7 +639,7 @@ function WorkspaceView({ api }) {
           {workbenchOpen ? null : (
             <Button size="sm" variant="ghost" icon="eye" onClick={() => setWorkbenchOpen(true)}>预览作品</Button>
           )}
-          <Button size="sm" variant="primary" icon="check" disabled={!editable || streaming || !messages.length} onClick={submitWork}>
+          <Button size="sm" variant="primary" icon="check" disabled={!editable || streaming || !messages.length} onClick={() => submitWork(selectedArtifactName)}>
             {submission ? '重新提交' : '提交作品'}
           </Button>
         </>
@@ -754,6 +757,8 @@ function WorkspaceView({ api }) {
         onTabChange={setTab}
         activeArtifactName={selectedArtifactName}
         onSelectArtifact={(artifact) => { setSelectedArtifactName(artifact?.name || null); setTab('preview'); }}
+        onSubmitArtifact={(entryName) => submitWork(entryName)}
+        submittedNames={submittedNames}
         resolveAttachment={resolveAttachmentImage}
         onDownloadArtifact={(artifact) => {
           saveArtifact({ api, conversationId, artifact })

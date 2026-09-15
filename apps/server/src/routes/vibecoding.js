@@ -831,7 +831,11 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       `SELECT * FROM vibecoding_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
       [conversation.id, limit, offset],
     ).reverse().map(normalizeMessage);
-    const submission = row(submissionSelect() + ' WHERE submission.conversation_id = ?', [conversation.id]);
+    // 一个对话现在可以有**多份产物的提交**（按产物提交，2026-09-15）。
+    // 这里取最新的一条作为「当前提交」（旧代码是 row(...) 取一条 —— 有多条时是不确定的），
+    // 同时把已提交过的产物名一并下发，界面才能准确标出哪几份已经交过。
+    const submissions = rows(submissionSelect() + ' WHERE submission.conversation_id = ? ORDER BY submission.submitted_at DESC', [conversation.id]);
+    const submission = submissions[0] || null;
     // 历史产物（message_id 为空，来自旧 files JSON 的迁移）挂到最后一条助手消息上。
     // 迁移不可能知道每个文件是哪一轮写出来的，但「这次创作产出了哪些文件」必须看得见——
     // 否则老会话在聊天里一张产物卡片都没有，看起来像功能没生效。
@@ -844,6 +848,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       ...normalizeConversation(conversation, { includeArtifacts: true, artifacts }),
       messages, messagesTotal: total, messagesPage: page,
       submission: normalizeSubmission(submission),
+      submittedEntries: submissions.map((item) => item.entry_file),
       modelOptions: textModelOptions(),
       defaultModel: textDefaultModel(),
       // 算力池摘要（本课包还剩多少）随会话详情下发，工作台顶部显示
@@ -1013,13 +1018,23 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const { auth: ownerAuth, conversation } = ownConversation(ctx, submitMatch[1]);
     const user = activeStudent(ownerAuth);
     vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
-    const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ?', [conversation.id]);
+    const fileSnapshot = artifactsAsFiles(conversation.id);
+    // 2026-09-15 用户口径：**按产物提交**，不是按对话提交。
+    // 「不需要提交整个作品，而是针对能展示出来的作品来提交」——学生做完一个游戏、一份 PPT，
+    // 各自提交一次；后台才能把每一份都发到官网展示。同一份产物重复提交是覆盖（round+1），
+    // 不同产物各自成条（唯一性 = (conversation_id, entry_file)，见 schema 里那次重建表）。
+    const requestedEntry = String(ctx.body?.entryFile || '').trim().slice(0, 200);
+    const entryFile = requestedEntry || String(conversation.entry_file || '').trim() || 'index.html';
+    if (fileSnapshot[entryFile] === undefined) {
+      throw errors.badRequest(`这份产物（${entryFile}）不在当前作品里，无法提交`, 'VIBECODING_ARTIFACT_NOT_FOUND');
+    }
+    const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
     // 没有老师点评这一环了：提交只是「交给平台」，可以反复提交（round+1），不再挡第二次
     // 与画布作品一致：提交即确认版权与展示授权，平台后续才可发布到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
-    const files = artifactsAsFiles(conversation.id);
+    const files = fileSnapshot;
     // 产物清单也要一起定格：作品广场靠它判断「这次交上来的到底是哪份产物」（见 submissionPreview），
     // 以及那份文档的配图在哪。只在提交这一刻取，之后学生再改也不会影响广场那一版。
     const artifacts = snapshotArtifacts(conversation.id);
@@ -1034,17 +1049,17 @@ async function handleStudentVibeCoding(ctx, auth, part) {
         q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
              teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
              copyright_confirmed_at=?,copyright_confirmed_by=? WHERE id=?`,
-          [title, description, json(files), json(artifacts), json(transcript), conversation.entry_file || 'index.html', now, now, now, ownerAuth.user.id, submissionId]);
+          [title, description, json(files), json(artifacts), json(transcript), entryFile, now, now, now, ownerAuth.user.id, submissionId]);
       } else {
         q(`INSERT INTO vibecoding_submissions(
              id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
              copyright_confirmed_at,copyright_confirmed_by
            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [submissionId, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId, conversation.class_id, conversation.lesson_id,
-            title, description, json(files), json(artifacts), json(transcript), conversation.entry_file || 'index.html', 1, 'PENDING', now, now, now, now, ownerAuth.user.id]);
+            title, description, json(files), json(artifacts), json(transcript), entryFile, 1, 'PENDING', now, now, now, now, ownerAuth.user.id]);
       }
       q("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
-      audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id, existing ? { round: existing.round } : null, { title, round: Number(existing?.round || 0) + 1 });
+      audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id, existing ? { round: existing.round } : null, { title, entryFile, round: Number(existing?.round || 0) + 1 });
     });
     return normalizeSubmission(row(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
   }

@@ -2193,7 +2193,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_run_conversation ON vibecoding_runs
 // VibeCoding 会话没有画布项目，所以单独建表，避免把画布链路改出兼容性问题。
 db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_submissions (
   id TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL UNIQUE,
+  conversation_id TEXT NOT NULL,
   student_id TEXT NOT NULL,
   org_id TEXT NOT NULL,
   class_id TEXT,
@@ -2223,6 +2223,14 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_submissions(student_id, submitted_at DESC)');
 try { db.exec("ALTER TABLE vibecoding_submissions ADD COLUMN entry_file TEXT NOT NULL DEFAULT 'index.html'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 「一个对话 × 一份产物」唯一（新库在这里建；老库由下面那次重建表保证）。
+// 有了它，同一份产物重复提交走覆盖（round+1），不同产物各自成条。
+try {
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_conversation_entry ON vibecoding_submissions(conversation_id, entry_file)');
+} catch (error) {
+  // 老库此时还带着列级 UNIQUE(conversation_id)：建索引本身没问题，真出问题留给重建那段处理
+  if (!String(error?.message || '').includes('already exists')) throw error;
+}
 // 提交那一刻的产物清单（[{name,kind,bytes,revision,updatedAt,generatedImages,attachmentImages}]）。
 // 作品广场要回答两个问题：「学生交上来的到底是哪一份产物」（种子 index.html 一直躺在里面，
 // 按文件名优先挑就会把作品显示成起始页）和「那份文档的配图在哪」。正文仍走 files 快照，
@@ -2264,6 +2272,72 @@ try { db.exec('ALTER TABLE vibecoding_submissions ADD COLUMN featured_at TEXT');
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_share_token ON vibecoding_submissions(share_token) WHERE share_token IS NOT NULL'); }
 catch (error) { if (!String(error?.message || '').includes('already exists')) throw error; }
+
+// 一个对话可以**分别提交每一份产物**（2026-09-15 用户口径）：
+// 「不需要提交整个作品，而是针对能展示出来的作品来提交」——学生做完一个游戏、一份 PPT，
+// 各自有提交按钮，平台后台才能把每一份都发到官网展示。
+// 所以唯一性从「一个对话一条」改成「(对话, 产物) 一条」：同一份产物重复提交是覆盖（round+1），
+// 不同产物各自成条、各自审核、各自上广场。
+// 老库的 conversation_id 上是**列级 UNIQUE**，SQLite 改不了列约束，按官方推荐重建表
+// （与 file_assets / works / class_sessions 同一套做法）。幂等：只在旧约束还在时执行。
+// ⚠️ 复制列名用 pragma 动态取，不硬编码 —— 硬编码一旦漏列就是**静默丢数据**。
+try {
+  const submissionDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='vibecoding_submissions'").get()?.sql || '');
+  if (submissionDdl.includes('conversation_id TEXT NOT NULL UNIQUE')) {
+    const columns = db.prepare("SELECT name FROM pragma_table_info('vibecoding_submissions')").all().map((item) => item.name).join(',');
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    try {
+      db.exec(`CREATE TABLE vibecoding_submissions_migrated (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        student_id TEXT NOT NULL,
+        org_id TEXT NOT NULL,
+        class_id TEXT,
+        lesson_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        files TEXT NOT NULL DEFAULT '{}',
+        transcript TEXT NOT NULL DEFAULT '[]',
+        round INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED')),
+        teacher_comment TEXT,
+        reviewed_by TEXT,
+        reviewed_at TEXT,
+        submitted_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        unpublish_reason TEXT,
+        entry_file TEXT NOT NULL DEFAULT 'index.html',
+        artifacts TEXT NOT NULL DEFAULT '[]',
+        copyright_confirmed_at TEXT,
+        copyright_confirmed_by TEXT,
+        is_public INTEGER NOT NULL DEFAULT 0,
+        share_token TEXT,
+        published_at TEXT,
+        published_by TEXT,
+        featured_at TEXT,
+        FOREIGN KEY (conversation_id) REFERENCES vibecoding_conversations(id) ON DELETE CASCADE,
+        FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+      )`);
+      db.exec(`INSERT INTO vibecoding_submissions_migrated (${columns}) SELECT ${columns} FROM vibecoding_submissions`);
+      db.exec('DROP TABLE vibecoding_submissions');
+      db.exec('ALTER TABLE vibecoding_submissions_migrated RENAME TO vibecoding_submissions');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_org ON vibecoding_submissions(org_id, status, submitted_at DESC)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_vibe_submission_student ON vibecoding_submissions(student_id, submitted_at DESC)');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_share_token ON vibecoding_submissions(share_token) WHERE share_token IS NOT NULL');
+      // ⚠️ 这个复合唯一索引必须在**重建之后**再建一次：DROP TABLE 会把它一起带走。
+      // （第一版就是漏了这一步，「同一份产物重复提交」的唯一性实际没生效 —— 迁移验证脚本当场照出来了。）
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_submission_conversation_entry ON vibecoding_submissions(conversation_id, entry_file)');
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) { /* 已回滚 */ }
+      throw error;
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+} catch (error) { if (!String(error?.message || '').includes('already exists')) throw error; }
 
 // ── VibeCoding 聊天附件（学生上传的图片，让模型「看图」）──────────────────────
 // 存 [{id,name,url}]：url 是公开下载地址（外联），模型与生成出来的页面都能取到。
