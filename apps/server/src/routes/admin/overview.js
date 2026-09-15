@@ -455,20 +455,27 @@ export async function handleOverview(ctx, part, method) {
     const orgId = String(ctx.search.get('orgId') || '').trim();
     if (orgId && !row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     // 所有机构（含这段时间没有消耗的）：LEFT JOIN 用量，零消耗也列出来
+    // 每个机构 / 学员**两笔钱并排**（2026-09-15）：
+    //   saleFen = 对外售价合计（机构/学员看到的「消耗」，只计成功尝试）；
+    //   costFen = **我们已知的上游成本**；有任何一笔成本未知就整体给 null（不把已知部分当总额）。
+    // 这就是「机构下面学生花的钱 vs 我们的成本」的对照。
+    const SALE_FEN = `COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT SUM(a.sale_price_fen) FROM compute_attempts a WHERE a.call_id=usage.compute_call_id AND a.status='SUCCESS') ELSE 0 END), 0) saleFen`;
     const orgs = rows(`SELECT organization.id, organization.name, organization.status,
+        ${SALE_FEN},
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls, COUNT(DISTINCT usage.user_id) studentCount
       FROM organizations organization
       LEFT JOIN usage_records usage ON usage.org_id = organization.id AND usage.created_at>=? AND usage.created_at<?
-      GROUP BY organization.id ORDER BY fen DESC, organization.name ASC`, [since, until])
-      .map((item) => ({ id: item.id, name: item.name, status: item.status, costFen: Number(item.fen || 0), calls: Number(item.calls || 0), studentCount: Number(item.studentCount || 0) }));
+      GROUP BY organization.id ORDER BY saleFen DESC, organization.name ASC`, [since, until])
+      .map((item) => ({ id: item.id, name: item.name, status: item.status, saleFen: Number(item.saleFen || 0), costFen: Number(item.fen || 0), calls: Number(item.calls || 0), studentCount: Number(item.studentCount || 0) }));
     const students = orgId ? rows(`SELECT student.id, student.login, student.display_name,
+        ${SALE_FEN},
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls,
         COUNT(DISTINCT usage.series_id) seriesCount, MAX(usage.created_at) lastAt
       FROM usage_records usage JOIN users student ON student.id = usage.user_id
       WHERE usage.org_id=? AND usage.created_at>=? AND usage.created_at<?
-      GROUP BY student.id ORDER BY fen DESC, student.display_name ASC`, [orgId, since, until])
-      .map((item) => ({ id: item.id, login: item.login, name: item.display_name || item.login, costFen: Number(item.fen || 0), calls: Number(item.calls || 0), seriesCount: Number(item.seriesCount || 0), lastAt: item.last_at || item.lastAt || null })) : [];
-    const totals = { costFen: orgs.reduce((sum, item) => sum + item.costFen, 0), calls: orgs.reduce((sum, item) => sum + item.calls, 0), orgCount: orgs.length, activeOrgCount: orgs.filter((item) => item.calls > 0).length };
+      GROUP BY student.id ORDER BY saleFen DESC, student.display_name ASC`, [orgId, since, until])
+      .map((item) => ({ id: item.id, login: item.login, name: item.display_name || item.login, saleFen: Number(item.saleFen || 0), costFen: Number(item.fen || 0), calls: Number(item.calls || 0), seriesCount: Number(item.seriesCount || 0), lastAt: item.last_at || item.lastAt || null })) : [];
+    const totals = { saleFen: orgs.reduce((sum, item) => sum + item.saleFen, 0), costFen: orgs.reduce((sum, item) => sum + item.costFen, 0), calls: orgs.reduce((sum, item) => sum + item.calls, 0), orgCount: orgs.length, activeOrgCount: orgs.filter((item) => item.calls > 0).length };
     return { days, since, until, orgId: orgId || null, orgs, students, totals, costBasis: 'KNOWN_UPSTREAM_ONLY' };
   }
   if (part === '/billing/org-student-usage/export' && method === 'GET') {

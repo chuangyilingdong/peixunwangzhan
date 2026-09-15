@@ -132,6 +132,14 @@ try {
     const top = (overview.data?.topUsers || [])[0];
     check('⑪ 按学员分组同口径', Number(top?.costFen) === 100, JSON.stringify(overview.data?.topUsers));
 
+    // 平台端「机构与学员」对照（SUPER_ADMIN）：学生消耗（对外售价）与我们的成本必须并排给出
+    const rootToken = await login('root', 'admin123');
+    const pair = await api('/api/admin/billing/org-student-usage?days=30', { token: rootToken });
+    check('⑬ 对照表：机构行同时给出学生消耗 100 分与我们的成本 4 分', Number(pair.data?.orgs?.[0]?.saleFen) === 100 && Number(pair.data?.orgs?.[0]?.costFen) === 4, JSON.stringify(pair.data?.orgs?.[0]));
+    check('⑭ 对照表：汇总合计同口径', Number(pair.data?.totals?.saleFen) === 100 && Number(pair.data?.totals?.costFen) === 4, JSON.stringify(pair.data?.totals));
+    const studentPair = await api('/api/admin/billing/org-student-usage?days=30&orgId=' + encodeURIComponent(seeded.orgId), { token: rootToken });
+    check('⑮ 对照表：学员行同口径（选到机构后能看到每个学员的两笔钱）', Number(studentPair.data?.students?.[0]?.saleFen) === 100 && Number(studentPair.data?.students?.[0]?.costFen) === 4, JSON.stringify(studentPair.data?.students?.[0]));
+
     const center = await api('/api/ai/center', { token: studentToken });
     const centerCost = center.data?.jobs?.costFen ?? center.data?.jobs?.costFen;
     check('⑫ 学员端 AI 中心消耗 = 100 分', Number(centerCost) === 100, JSON.stringify(center.data?.jobs));
