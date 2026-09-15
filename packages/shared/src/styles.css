@@ -1107,6 +1107,16 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .teaching-asset-row strong, .teaching-asset-row small { display:block; }
 .teaching-asset-row small { margin-top:3px; color:#a49bbd; font-size:10px; }
 .drawer-overlay { position:fixed; inset:0; z-index:80; display:flex; justify-content:flex-end; background:rgba(24,16,48,.42); }
+/* 在线预览浮层（2026-09-15）：机构/老师只能看不能下载。
+   水印盖在内容之上——它不改变文件本身，但截图/录屏会带上来源与时间。 */
+.preview-overlay { position:fixed; inset:0; z-index:90; display:grid; place-items:center; padding:24px; background:rgba(18,12,36,.72); }
+.preview-panel { display:flex; flex-direction:column; width:min(1180px,96vw); max-height:94vh; border-radius:14px; background:#fff; overflow:hidden; box-shadow:0 24px 60px rgba(20,12,50,.38); }
+.preview-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid var(--line); }
+.preview-head h3 { margin:3px 0 0; font-size:17px; }
+.preview-stage { position:relative; flex:1; min-height:60vh; background:#1b1630; }
+.preview-stage video, .preview-stage audio { display:block; width:100%; max-height:74vh; }
+.preview-frame { width:100%; height:74vh; border:0; background:#fff; }
+.preview-watermark { position:absolute; inset:0; z-index:2; display:grid; place-items:center; pointer-events:none; color:rgba(255,255,255,.30); font-size:22px; font-weight:900; letter-spacing:2px; transform:rotate(-24deg); white-space:nowrap; }
 .drawer-panel { display:flex; flex-direction:column; width:min(920px,94vw); height:100vh; background:#fbfaff; box-shadow:-20px 0 50px rgba(40,28,90,.22); }
 .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:20px 24px; border-bottom:1px solid var(--line); background:#fff; }
 .drawer-head h2 { margin:3px 0 0; font-size:19px; }

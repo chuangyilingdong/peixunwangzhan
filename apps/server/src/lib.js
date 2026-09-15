@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
 import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
+import { previewKindFor, signPreviewTicket } from './services/materialPreview.js';
 
 const TOKEN_TTL_DAYS = 7;
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.DEPLOYMENT_MODE === 'internal-test' || process.env.NODE_ENV === 'production';
@@ -707,6 +708,25 @@ export function lessonCanvasConfig(lessonId, override = null) {
 }
 
 // 教学素材：教师备课资料，学生端不可见、不进入画布。
+/**
+ * 教学素材的**在线预览**信息（2026-09-15，口径 A：机构/老师只能在线看、不给下载入口）。
+ * - previewKind 决定前端用什么渲染：VIDEO / PDF / IMAGE / AUDIO / OFFICE / OTHER；
+ * - previewUrl 带**短时签名票据**（1 小时）—— 老师直接点开即可预览，把链接转给别人也很快失效；
+ * - OFFICE（PPT/DOCX）由服务端转成 PDF 再把 PDF 发出去，**原始文件不出服务器**。
+ * ⚠️ 视频/PDF 只要浏览器能渲染就拦不住录屏/截屏，这是 web 的物理限制，见 materialPreview.js。
+ */
+function previewInfoFor(fileAssetId) {
+  const id = String(fileAssetId || '').trim();
+  if (!id) return { previewKind: null, previewUrl: null };
+  const file = row('SELECT mime_type, file_name FROM file_assets WHERE id=?', [id]);
+  if (!file) return { previewKind: null, previewUrl: null };
+  const { ticket } = signPreviewTicket(id);
+  return {
+    previewKind: previewKindFor({ mimeType: file.mime_type, fileName: file.file_name }),
+    previewUrl: `/api/org/file-assets/${encodeURIComponent(id)}/preview?t=${encodeURIComponent(ticket)}`,
+  };
+}
+
 export function lessonTeachingMaterials(lessonId) {
   if (!lessonId) return { teachingGroups: [] };
   const groups = rows('SELECT * FROM course_lesson_teaching_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
@@ -714,6 +734,7 @@ export function lessonTeachingMaterials(lessonId) {
     assets: rows('SELECT * FROM course_lesson_teaching_assets WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
       id: item.id, title: item.title, description: item.description || '', assetType: item.asset_type || 'FILE',
       assetUrl: item.asset_url || null, fileAssetId: item.file_asset_id || null, sort: Number(item.sort || 0),
+      ...previewInfoFor(item.file_asset_id),
     })),
   }));
   return { teachingGroups: groups };

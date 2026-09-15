@@ -21,6 +21,7 @@ import {
 } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
+import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
 
 const STORAGE_KINDS = new Set(['EXTERNAL_URL', 'INTERNAL_PROXY', 'PENDING']);
@@ -534,10 +535,83 @@ export async function handleAdminFileAssets(ctx) {
   return null;
 }
 
+/**
+ * 在线预览：与下载**同一套落盘读取与 Range 处理**，但有两点关键差别 ——
+ *   ① `content-disposition: inline`（浏览器直接渲染，不弹下载）；
+ *   ② Office 文档先转成 PDF 再发，**原始 .pptx/.docx 不出服务器**。
+ * 用户口径 A（2026-09-15）：机构/老师只能在线看。
+ * ⚠️ 边界：能渲染就能被录屏/截屏，这是 web 的物理限制；这里保证的是「没有下载入口 +
+ *    链接带短时票据 + 原始 Office 文件不外发」。
+ */
+export async function prepareFilePreview(ctx, file) {
+  const kind = previewKindFor({ mimeType: file.mime_type, fileName: file.file_name });
+  let servePath = null;
+  let mimeType = file.mime_type || 'application/octet-stream';
+  if (file.storage_kind !== 'INTERNAL_PROXY') throw errors.badRequest('这份素材没有可预览的文件', 'PREVIEW_UNAVAILABLE');
+  const root = uploadRoot();
+  const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
+  if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  const absolute = path.resolve(root, storageKey);
+  if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  if (needsConversion(kind)) {
+    const converted = await ensurePreviewPdf({ sourcePath: absolute, cacheKey: file.id });
+    // 转不出来就明说「无法预览」，**绝不回退去发原始 Office 文件** —— 那等于把下载又放回来了
+    if (!converted) throw errors.badRequest('这份课件暂时无法在线预览（转换失败），请联系平台', 'PREVIEW_CONVERSION_FAILED');
+    servePath = converted; mimeType = 'application/pdf';
+  } else {
+    servePath = absolute;
+  }
+  let info;
+  try { info = await stat(servePath); } catch { throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND'); }
+  const total = info.size;
+  const rangeHeader = String(ctx.req.headers.range || '');
+  let start = 0; let end = total - 1; let status = 200;
+  if (rangeHeader) {
+    const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+    if (match) {
+      if (match[1]) start = Number(match[1]); else { const suffix = Number(match[2]); start = suffix > 0 ? Math.max(total - suffix, 0) : 0; }
+      end = match[2] && match[1] ? Number(match[2]) : total - 1;
+      if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start && start < total) { end = Math.min(end, total - 1); status = 206; } else { start = 0; end = total - 1; }
+    }
+  }
+  return {
+    __fileResponse: true, status,
+    headers: {
+      'content-type': mimeType,
+      'content-length': String(end - start + 1),
+      // 关键差别：inline，且不带 filename —— 界面上不给「另存为」的入口
+      'content-disposition': 'inline',
+      'accept-ranges': 'bytes',
+      'x-content-type-options': 'nosniff',
+      ...(status === 206 ? { 'content-range': `bytes ${start}-${end}/${total}` } : {}),
+      'cache-control': 'private, no-store',
+    },
+    stream: createReadStream(servePath, { start, end }),
+  };
+}
+
 export async function handleOrgFileAssets(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/file-assets')) return null;
   const part = pathname.slice('/api/org'.length);
+
+  // 预览路由放在 requireRole 之前：它靠**短时票据**放行（老师看课件时 <iframe>/<video> 不会带
+  // Authorization 头，而票据就在 URL 上），票据无效才回落到正常会话鉴权。
+  const previewMatch = part.match(/^\/file-assets\/([^/]+)\/preview$/);
+  if (previewMatch && method === 'GET') {
+    const fileId = previewMatch[1];
+    const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    const ticketOk = verifyPreviewTicket(fileId, ctx.search.get('t'));
+    if (!ticketOk) {
+      const session = requireRole(ctx, ['ORG_ADMIN', 'TEACHER', 'STUDENT']);
+      if (!session.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
+      authorizeFileAccess(ctx, fileId, 'READ');
+    }
+    audit(ctx, 'FILE_PREVIEW', 'FILE_ASSET', file.id, null, { ticket: ticketOk });
+    return await prepareFilePreview(ctx, file);
+  }
+
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER', 'STUDENT']);
   const currentOrgId = auth.user.orgId;
   if (!currentOrgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');

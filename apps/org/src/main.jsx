@@ -309,25 +309,16 @@ function OrgCourses({ api }) {
   const [expanded, setExpanded] = useState('');
   const [lessonDetail, setLessonDetail] = useState(null);
   const [assetError, setAssetError] = useState('');
-  const [assetBusy, setAssetBusy] = useState('');
+  // 在线预览（2026-09-15 口径 A）：机构/老师**只能看不能下载**。
+  // 视频用播放器、PDF/图片用 iframe、PPT/DOCX 由服务端转成 PDF 后再 iframe；原始 Office 文件不外发。
+  const [previewAsset, setPreviewAsset] = useState(null);
   useEffect(() => {
     const lessonId = new URLSearchParams(window.location.search).get('lesson');
     if (lessonId && detail.data?.lessons) setLessonDetail(detail.data.lessons.find((lesson) => lesson.id === lessonId) || null);
   }, [detail.data]);
-  async function downloadTeachingAsset(asset) {
-    setAssetBusy(asset.id); setAssetError('');
-    try {
-      const path = asset.fileAssetId ? `/api/org/file-assets/${encodeURIComponent(asset.fileAssetId)}/download` : String(asset.assetUrl || '');
-      if (!path.startsWith('/api/org/file-assets/')) throw new Error('课件下载地址无效，请联系平台重新上传');
-      const file = asset.fileAssetId ? await api.get(`org/file-assets/${encodeURIComponent(asset.fileAssetId)}`) : null;
-      const url = await api.fetchBlobUrl(path);
-      const link = document.createElement('a');
-      link.href = url; link.download = file?.fileName || asset.fileName || asset.title || '课件';
-      document.body.appendChild(link); link.click(); link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    } catch (error) { setAssetError(error.message || '课件下载失败'); }
-    finally { setAssetBusy(''); }
-  }
+  // 2026-09-15：原来的 downloadTeachingAsset（拉 blob + a[download] 触发另存为）已删除 ——
+  // 用户口径 A 要求机构/老师**只能在线看**，所以界面上不再有任何下载入口，
+  // 预览走带短时票据的 previewUrl（见下方 previewAsset 浮层）。
   if (seriesId) {
     if (detail.loading) return <Loading />;
     if (detail.error) return <ErrorState error={detail.error} onRetry={detail.refresh} />;
@@ -346,6 +337,27 @@ function OrgCourses({ api }) {
       <Panel title="课时列表">
         {c.lessons?.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>正文</th><th>教学素材</th><th>操作</th></tr></thead><tbody>{c.lessons.map((lesson) => <tr key={lesson.id} className="lesson-row" onClick={() => setLessonDetail(lesson)}><td>{lesson.sort}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td>{lesson.durationMinutes} 分钟</td><td><div style={{ whiteSpace: 'pre-wrap', maxWidth: 360 }}>{lesson.lessonContent || '—'}</div></td><td>{(lesson.teachingGroups || []).reduce((total, group) => total + (group.assets || []).length, 0)} 个</td><td><button className="secondary-button" onClick={(event) => { event.stopPropagation(); setLessonDetail(lesson); }}>查看</button></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
       </Panel>
+      {previewAsset ? <div className="preview-overlay" onClick={() => setPreviewAsset(null)} onContextMenu={(event) => event.preventDefault()}>
+        <div className="preview-panel" onClick={(event) => event.stopPropagation()}>
+          <header className="preview-head">
+            <div><span className="eyebrow">在线预览（不提供下载）</span><h3>{previewAsset.title}</h3></div>
+            <button type="button" className="drawer-close" onClick={() => setPreviewAsset(null)}>×</button>
+          </header>
+          <div className="preview-stage">
+            {/* 水印：盖在内容上，标明来源与时间；截图/录屏也会带上它。
+                真正的溯源在服务端：每次预览都写 FILE_PREVIEW 审计（谁、何时、哪个文件）。 */}
+            <div className="preview-watermark" aria-hidden="true">内部备课资料 · 请勿外传 · {new Date().toLocaleString('zh-CN')}</div>
+            {previewAsset.previewKind === 'VIDEO'
+              ? <video src={previewAsset.previewUrl} controls controlsList="nodownload noplaybackrate" disablePictureInPicture onContextMenu={(event) => event.preventDefault()} />
+              : previewAsset.previewKind === 'AUDIO'
+                ? <audio src={previewAsset.previewUrl} controls controlsList="nodownload" onContextMenu={(event) => event.preventDefault()} />
+                : previewAsset.previewKind === 'OTHER'
+                  ? <Empty title="这种格式无法在线预览" body="请联系平台把它转成 PDF 或视频。" />
+                  : <iframe src={previewAsset.previewUrl} title={previewAsset.title} className="preview-frame" />}
+          </div>
+          <p className="muted">PPT / Word 已由平台转换成 PDF 后展示，原始文件不会下发；链接带时效，转发出去会失效。请勿录屏或截图外传。</p>
+        </div>
+      </div> : null}
       {lessonDetail ? <div className="drawer-overlay" onClick={() => setLessonDetail(null)}>
         <div className="drawer-panel" onClick={(event) => event.stopPropagation()}>
           <header className="drawer-head"><div><span className="eyebrow">课时详情</span><h2>{lessonDetail.title}</h2></div><button type="button" className="drawer-close" onClick={() => setLessonDetail(null)}>×</button></header>
@@ -363,7 +375,7 @@ function OrgCourses({ api }) {
                 <strong>{group.title}</strong>
                 {(group.assets || []).map((asset) => <div className="teaching-asset-row" key={asset.id}>
                   <span><strong>{asset.title}</strong>{asset.description ? <small className="muted">{asset.description}</small> : null}</span>
-                  {asset.assetUrl ? <button className="secondary-button" disabled={Boolean(assetBusy)} onClick={() => downloadTeachingAsset(asset)}>{assetBusy === asset.id ? '正在下载…' : '下载课件'}</button> : <span className="muted">未上传文件</span>}
+                  {asset.previewUrl ? <button className="secondary-button" onClick={() => setPreviewAsset(asset)}>在线预览</button> : asset.assetUrl ? <span className="muted">暂不支持在线预览</span> : <span className="muted">未上传文件</span>}
                 </div>)}
               </div>) : <Empty title="暂无教学素材" body="平台还没有为这节课配置备课资料。" />}
             </section>
