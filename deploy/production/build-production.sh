@@ -51,9 +51,10 @@ for app in admin org website; do
   mkdir -p "$RELEASE_DIR/apps/${app}"
   cp -a "apps/${app}/dist/." "$RELEASE_DIR/apps/${app}/"
 done
-mkdir -p "$RELEASE_DIR/apps/server/src" "$RELEASE_DIR/packages/database/src"
+mkdir -p "$RELEASE_DIR/apps/server/src" "$RELEASE_DIR/packages/database/src" "$RELEASE_DIR/packages/shared/src"
 cp -a apps/server/src/. "$RELEASE_DIR/apps/server/src/"
 cp -a packages/database/src/. "$RELEASE_DIR/packages/database/src/"
+cp -a packages/shared/src/. "$RELEASE_DIR/packages/shared/src/"
 mkdir -p "$RELEASE_DIR/node_modules/@platform/database/src"
 cp packages/database/package.json "$RELEASE_DIR/node_modules/@platform/database/package.json"
 cp -a packages/database/src/. "$RELEASE_DIR/node_modules/@platform/database/src/"
