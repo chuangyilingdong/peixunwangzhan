@@ -35,7 +35,7 @@ export function sessionScope(alias, auth, params) {
  * 2026-09-15 改口径：原来读 `usage_records.cost_fen`，那一列现行代码恒写 0
  * （平台承担算力成本、不扣学生），所以这一列在机构端**永远显示 ¥0.00**。
  * 现在改为对外售价口径（见 computePool.salePriceFenFor 的完整说明）：
- * 机构/学员看到的是「按公告价算的消耗」，平台自己的进货成本与毛利只在「财务与对账」看。
+ * 机构/学员看到的是「按公告价算的消耗」，平台自己的进货成本与毛利只在「用量与成本」看。
  */
 export function lessonCostFenFor({ studentId, sessionId }) {
   return salePriceFenFor({ sessionId, studentId });

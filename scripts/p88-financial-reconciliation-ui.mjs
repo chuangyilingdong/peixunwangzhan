@@ -260,6 +260,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ModelCompute } from ${JSON.stringify(path.join(root, 'apps/admin/src/pages/ModelCompute.jsx').split(path.sep).join('/'))};
 import { ProviderBillReconciliationTable } from ${JSON.stringify(path.join(root, 'apps/admin/src/components/FinancialReconciliation.jsx').split(path.sep).join('/'))};
+import { minorText } from ${JSON.stringify(path.join(root, 'apps/admin/src/components/FinancialReconciliation.jsx').split(path.sep).join('/'))};
+// 金额显示口径（2026-09-15）：逐笔成本可以是**小数分**（文本一次约 0.2~0.4 分）。
+// 一律 toFixed(2) 会把 0.37 分显示成 0.00，看起来像没记账 —— 所以小数分必须按 4 位显示。
+if (minorText(4) !== '0.04') throw new Error('整数分应按 2 位显示：' + minorText(4));
+if (minorText(100) !== '1.00') throw new Error('整数分应按 2 位显示：' + minorText(100));
+if (minorText(0.3678) !== '0.0037') throw new Error('小数分必须按 4 位显示（否则看着像 0）：' + minorText(0.3678));
+if (minorText(4.3678) !== '0.0437') throw new Error('整数分+小数分混合也按 4 位：' + minorText(4.3678));
+if (minorText(null) !== '未知') throw new Error('未知不能显示成 0：' + minorText(null));
 const api = { get: () => new Promise(() => {}), post: () => Promise.resolve({}) };
 // 2026-09-15 重排：顶层是「调用账 / 机构与学员 / 三账与毛利 / 高级」，
 // 供应商账单与匹配与核销收在「高级」下（高级里再用 advanced 参数切子视图）。

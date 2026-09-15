@@ -426,7 +426,7 @@ export async function handleOrg(ctx) {
       lessonId: item.session_lesson_id || item.project_lesson_id || null, lessonTitle: item.lesson_title || null,
       projectId: item.project_id || null, projectTitle: item.project_title || null, generationJobId: item.generation_job_id || null,
       modality: item.modality, model: item.model || item.job_model || null, provider: item.job_provider || null,
-      // 对外售价口径（分）：机构端看到的「消耗」就是它；平台自己的进货成本与毛利只在平台端「财务与对账」看。
+      // 对外售价口径（分）：机构端看到的「消耗」就是它；平台自己的进货成本与毛利只在平台端「用量与成本」看。
       // 没有关联算力记录的历史行（2026-09-13 之前）没有售价证据，按「缺证据不猜」记 0。
       costFen: Number(item.sale_price_fen || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
@@ -436,7 +436,7 @@ export async function handleOrg(ctx) {
   if (part === '/billing/usage-overview' && method === 'GET') {
     // 2026-09-15 口径定稿：机构端「消耗」= **对外售价合计**（算力账本里逐笔写的公告价快照，只计成功尝试）。
     // 原来读 usage_records.cost_fen —— 那一列现行代码恒为 0（平台承担成本、不扣学生），
-    // 于是这个账单页面永远显示 0。平台自己的进货成本与毛利只在平台端「财务与对账」看。
+    // 于是这个账单页面永远显示 0。平台自己的进货成本与毛利只在平台端「用量与成本」看。
     const SALE_FEN = salePriceFenSuccessSql();
     const SALE_FEN_ATTEMPT = salePriceFenSuccessSql('attempt');
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const since = new Date(Date.now() - days * 86400000).toISOString();

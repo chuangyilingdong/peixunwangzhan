@@ -74,7 +74,7 @@ export function priceFenFor({ modality, model = '' } = {}) {
  * 只读 `compute_attempts.sale_price_fen`：逐笔写入时的公告价快照，改价不追溯。
  * **只计成功尝试**（`status='SUCCESS'`）：失败、以及主备切换产生的额外尝试都没有交付东西，
  * 不该让学生/老师看到重复的消耗。这与「平台成本账本里失败尝试天然记 null」是同一个道理。
- * ⚠️ 平台端「财务与对账」的对外售价汇总是**观测口径、按每次尝试各计一行**，两者用途不同，别互相对数。
+ * ⚠️ 平台端「用量与成本 → 调用账」的对外售价汇总是**观测口径、按每次尝试各计一行**，两者用途不同，别互相对数。
  *
  * ⚠️ **不要再读 `usage_records.cost_fen`**（2026-09-15 之前机构端各处就是这么读的）。
  *    那一列现在有三种含义混在一起，求和没有意义：
@@ -83,7 +83,7 @@ export function priceFenFor({ modality, model = '' } = {}) {
  *      · 2026-09-13 之前的历史行是**积分时代**的旧值。
  *    而且没有 compute_attempts 的历史行没有售价证据 —— 按「缺证据不猜」不计入，不是按 0 顶替。
  *
- * 平台自己的**进货成本与毛利**不在这里：那本账在「财务与对账」，读 compute_attempts.upstream_cost_fen。
+ * 平台自己的**进货成本与毛利**不在这里：那本账在「用量与成本」，读 compute_attempts.upstream_cost_fen。
  */
 export function salePriceFenFor({ sessionId = null, studentId = null, orgId = null, since = null } = {}) {
   const conditions = ["status='SUCCESS'"];

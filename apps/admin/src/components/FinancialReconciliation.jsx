@@ -5,7 +5,12 @@ import { downloadCsv } from '../shared.jsx';
 const STATUS = { MATCHED: '已匹配', PARTIAL: '部分匹配', UNMATCHED: '未匹配', AMBIGUOUS: '有歧义', EXCLUDED: '已排除', DISPUTED: '争议中', CANCELLED: '已取消' };
 const EMPTY_FILTERS = { days: '30', orgId: '', studentId: '', seriesId: '', sessionId: '', lessonId: '', model: '', channelId: '', currency: '' };
 const money = (minor, currency) => minor == null || !currency ? '未知' : `${(Number(minor) / 100).toFixed(2)} ${currency}`;
-const minorText = (value) => value == null ? '未知' : (Number(value) / 100).toFixed(2);
+// 金额单位是「分」，展示时换算成元。
+// ⚠️ 逐笔折算出来的成本**可以是小数分**（2026-09-15：DeepSeek 一次课堂对话约 0.2~0.4 分），
+// 所以不能一律 toFixed(2) —— 那会把 0.37 分显示成 0.00，看起来像没记账（数字其实是对的）。
+// 规则：整数分按 2 位显示；带小数分的按 4 位显示，把那部分露出来。
+const hasSubFen = (value) => Math.abs(Number(value) - Math.round(Number(value))) > 1e-9;
+export const minorText = (value) => value == null ? '未知' : (Number(value) / 100).toFixed(hasSubFen(value) ? 4 : 2);
 const SALE_SOURCE = { SNAPSHOT: '快照价', PRICING: '当前配置价', UNKNOWN: '未知' };
 // 上游计费来源（P90）。COMPUTED = 按渠道「上游合同单价」折算出来的自动计费；它不是供应商最终账单。
 const UPSTREAM_SOURCE = { COMPUTED: 'COMPUTED 按合同价折算', REPORTED: 'REPORTED 上游报告', ESTIMATED: 'ESTIMATED 配置估算', MOCK: 'MOCK 本地模拟（不计费）', UNKNOWN: 'UNKNOWN 未知' };
