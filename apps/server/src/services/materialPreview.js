@@ -15,7 +15,6 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import os from 'node:os';
 
 const PREVIEW_DIR = '.preview';
 const CONVERT_TIMEOUT_MS = 120000;
@@ -80,7 +79,11 @@ export async function ensurePreviewPdf({ sourcePath, cacheKey }) {
     if (cached.size > 0 && cached.mtimeMs >= src.mtimeMs) return target;
   } catch { /* 没缓存，继续转 */ }
   await mkdir(cacheDir, { recursive: true });
-  const work = path.join(os.tmpdir(), `preview-${cacheKey}-${Date.now()}`);
+  // ⚠️ 临时工作目录必须和最终产物在**同一个文件系统**里：
+  // 服务器上 /tmp 是独立挂载的 tmpfs，而上传目录在磁盘上 —— 用 os.tmpdir() 的话
+  // 最后那步 rename 会以 EXDEV（cross-device link）失败，而且**看起来像「转换失败」**。
+  // 2026-09-15 真机验证就是这么翻车的：手工 soffice 能转，代码里一直返回 null。
+  const work = path.join(cacheDir, `.work-${cacheKey}-${Date.now()}`);
   await mkdir(work, { recursive: true });
   try {
     await new Promise((resolve, reject) => {
@@ -92,12 +95,23 @@ export async function ensurePreviewPdf({ sourcePath, cacheKey }) {
       ], { timeout: CONVERT_TIMEOUT_MS }, (error) => (error ? reject(error) : resolve()));
     });
     const produced = (await readdir(work)).find((name) => name.toLowerCase().endsWith('.pdf'));
-    if (!produced) return null;
-    // 用 rename 落到最终位置：要么完整可见，要么不存在
-    const { rename } = await import('node:fs/promises');
-    await rename(path.join(work, produced), target);
+    if (!produced) {
+      console.error(`[materialPreview] 转换没有产出 PDF：${path.basename(sourcePath)}`);
+      return null;
+    }
+    // rename 落在同一文件系统里就是原子的：要么完整可见，要么不存在
+    const { rename, copyFile } = await import('node:fs/promises');
+    try {
+      await rename(path.join(work, produced), target);
+    } catch (error) {
+      // 兜底：万一还是跨设备（缓存目录被换到别的挂载点），退化成复制
+      console.error(`[materialPreview] rename 失败（${error.code}），改用复制：${path.basename(target)}`);
+      await copyFile(path.join(work, produced), target);
+    }
     return target;
-  } catch {
+  } catch (error) {
+    // 不要静默：转换失败必须能在 journalctl 里看到原因（这个坑就是静默吞错埋的）
+    console.error(`[materialPreview] 转换失败：${path.basename(sourcePath)} — ${error.message}`);
     return null;
   } finally {
     const { rm } = await import('node:fs/promises');
