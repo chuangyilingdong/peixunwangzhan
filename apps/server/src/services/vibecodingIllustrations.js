@@ -17,7 +17,6 @@ import { getAiProviderPolicy } from '../routes/billingConfig.js';
 import { providerSelectionForModality, assertGenerationPreflight } from '../routes/aiGeneration.js';
 import { getGenerationProvider } from './generationProvider.js';
 import { applyGatewayRoute } from './computeGateway.js';
-import { priceFenFor } from './computePool.js';
 import { recordAiUsage } from './creditUsage.js';
 import { storeGeneratedAsset } from '../routes/fileAssets.js';
 import { isDocumentKind, parseDeckSpec, deckIllustrationRequests } from './ooxml/documents.js';
@@ -123,10 +122,14 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
         images.push({ slideIndex: request.slideIndex, prompt: request.prompt, fileId: stored.id, url: stored.url });
         // 插画以前**一条用量记录都不写**（交接说明里的老缺口：VibeCoding 插画完全无记录），
         // 于是「每节课花了多少」里少了这一块。现在按张记一笔，并计入算力池。
+        // ⚠️ 2026-09-15：cost_fen 恢复「恒 0」口径 —— 这里以前写的是 priceFenFor（对外售价），
+        //    把售价塞进了成本列，让 usage_records.cost_fen 又多了第三种含义。
+        //    现在机构端/学员端的「消耗」统一读 compute_attempts.sale_price_fen，而插画走的是
+        //    getGenerationProvider（会写算力账本），所以它照样被算进去，不需要在这里重复记金额。
         recordAiUsage({
           orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,
           modality: 'IMAGE', model: selection.model, status: 'SUCCESS',
-          costFen: priceFenFor({ modality: 'IMAGE', model: selection.model }), seriesId,
+          costFen: 0, seriesId,
           pricing: { source: 'vibecoding-illustration', provider: provider.name, artifactId: target.artifact.id, slideIndex: request.slideIndex },
         });
       } catch (error) {

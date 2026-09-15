@@ -8,7 +8,7 @@ import {
   addSessionStudents, assertSessionManager, normalizeSessionStudent, removeSessionStudent,
   sessionCandidates, sessionScope, sessionStudentCounts, settleSessionStudents,
 } from '../services/classroomSessions.js';
-import { computePoolSummary } from '../services/computePool.js';
+import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
 import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
 
 // 批次 D（班级退场）：原来这里还导入 classInOrg / assertTeachingClassManager / classMemberships /
@@ -407,33 +407,44 @@ export async function handleOrg(ctx) {
     if (search) { const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR class.name LIKE ? OR usage.fail_code LIKE ?)'); params.push(keyword, keyword, keyword, keyword, keyword); }
     const items = rows(`SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
       session.title session_title,session.lesson_id session_lesson_id,lesson.title lesson_title,
-      job.provider job_provider,job.model job_model
+      job.provider job_provider,job.model job_model,
+      attempt.sale_price_fen sale_price_fen
       FROM usage_records usage
       LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id
       LEFT JOIN student_projects project ON project.id=usage.project_id AND project.org_id=usage.org_id
       LEFT JOIN class_sessions session ON session.id=usage.class_session_id
       LEFT JOIN course_lessons lesson ON lesson.id=COALESCE(session.lesson_id, project.course_lesson_id)
       LEFT JOIN generation_jobs job ON job.id=usage.generation_job_id AND job.org_id=usage.org_id
+      -- 对外售价口径（2026-09-15）：金额取算力账本里逐笔写的售价快照，不再读 usage_records.cost_fen
+      -- （那一列现行代码恒为 0）。只认成功尝试 —— 失败与主备重试没有交付东西，不该显示消耗。
+      LEFT JOIN compute_attempts attempt ON attempt.id = (
+        SELECT a.id FROM compute_attempts a WHERE a.call_id = usage.compute_call_id AND a.status='SUCCESS'
+        ORDER BY a.attempt LIMIT 1)
       WHERE ${conditions.join(' AND ')} ORDER BY usage.created_at DESC LIMIT ${limit}`, params).map((item) => ({
       id: item.id, userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
       classSessionId: item.class_session_id || null, classId: item.class_id || null, sessionTitle: item.session_title || null,
       lessonId: item.session_lesson_id || item.project_lesson_id || null, lessonTitle: item.lesson_title || null,
       projectId: item.project_id || null, projectTitle: item.project_title || null, generationJobId: item.generation_job_id || null,
       modality: item.modality, model: item.model || item.job_model || null, provider: item.job_provider || null,
-      // 2026-09-13（P4 删积分）：原来是 credits（积分），现在给算力口径的金额（分）
-      costFen: Number(item.cost_fen || 0),
+      // 对外售价口径（分）：机构端看到的「消耗」就是它；平台自己的进货成本与毛利只在平台端「财务与对账」看。
+      // 没有关联算力记录的历史行（2026-09-13 之前）没有售价证据，按「缺证据不猜」记 0。
+      costFen: Number(item.sale_price_fen || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
     }));
     return { items, total: items.length, filters: { days, modality: modality || null, status: status || null, sessionId: sessionId || null, studentId: studentId || null } };
   }
   if (part === '/billing/usage-overview' && method === 'GET') {
-    // 2026-09-13（P4 删积分）：机构账单口径从「积分余额」换成「算力消耗（元）」。
+    // 2026-09-15 口径定稿：机构端「消耗」= **对外售价合计**（算力账本里逐笔写的公告价快照，只计成功尝试）。
+    // 原来读 usage_records.cost_fen —— 那一列现行代码恒为 0（平台承担成本、不扣学生），
+    // 于是这个账单页面永远显示 0。平台自己的进货成本与毛利只在平台端「财务与对账」看。
+    const SALE_FEN = salePriceFenSuccessSql();
+    const SALE_FEN_ATTEMPT = salePriceFenSuccessSql('attempt');
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const since = new Date(Date.now() - days * 86400000).toISOString();
-    const totals = row('SELECT COALESCE(SUM(cost_fen),0) costFen, COUNT(*) calls FROM usage_records WHERE org_id=? AND created_at>=?', [currentOrgId, since]);
+    const totals = row(`SELECT ${SALE_FEN} costFen, COUNT(DISTINCT call_id) calls FROM compute_attempts WHERE org_id=? AND created_at>=?`, [currentOrgId, since]);
     return {
       totalFen: Number(totals?.costFen || 0), calls: Number(totals?.calls || 0),
-      modalities: rows('SELECT modality,SUM(cost_fen) costFen,COUNT(*) calls FROM usage_records WHERE org_id=? AND created_at>=? GROUP BY modality ORDER BY costFen DESC', [currentOrgId, since]),
-      topUsers: rows('SELECT user.id,user.display_name studentName,SUM(usage.cost_fen) costFen,COUNT(*) calls FROM usage_records usage JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id WHERE usage.org_id=? AND usage.created_at>=? GROUP BY user.id ORDER BY costFen DESC LIMIT 10', [currentOrgId, since]),
+      modalities: rows(`SELECT modality,${SALE_FEN} costFen,COUNT(DISTINCT call_id) calls FROM compute_attempts WHERE org_id=? AND created_at>=? GROUP BY modality ORDER BY costFen DESC`, [currentOrgId, since]),
+      topUsers: rows(`SELECT user.id,user.display_name studentName,${SALE_FEN_ATTEMPT} costFen,COUNT(DISTINCT attempt.call_id) calls FROM compute_attempts attempt JOIN users user ON user.id=attempt.user_id AND user.org_id=attempt.org_id WHERE attempt.org_id=? AND attempt.created_at>=? GROUP BY user.id ORDER BY costFen DESC LIMIT 10`, [currentOrgId, since]),
     };
   }
 

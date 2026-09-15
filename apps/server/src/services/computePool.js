@@ -68,6 +68,43 @@ export function priceFenFor({ modality, model = '' } = {}) {
   return Number(pricing.perCall[String(modality || '').toUpperCase()] ?? 0);
 }
 
+/**
+ * 对外售价合计（分）——**机构端 / 学员端显示「消耗」金额的唯一口径**（2026-09-15 定）。
+ *
+ * 只读 `compute_attempts.sale_price_fen`：逐笔写入时的公告价快照，改价不追溯。
+ * **只计成功尝试**（`status='SUCCESS'`）：失败、以及主备切换产生的额外尝试都没有交付东西，
+ * 不该让学生/老师看到重复的消耗。这与「平台成本账本里失败尝试天然记 null」是同一个道理。
+ * ⚠️ 平台端「财务与对账」的对外售价汇总是**观测口径、按每次尝试各计一行**，两者用途不同，别互相对数。
+ *
+ * ⚠️ **不要再读 `usage_records.cost_fen`**（2026-09-15 之前机构端各处就是这么读的）。
+ *    那一列现在有三种含义混在一起，求和没有意义：
+ *      · 现行生成链路写 **0**（平台承担算力成本、不扣学生，见 creditUsage 的注释）；
+ *      · VibeCoding 插画那条路径曾把**对外售价**写进去（为了让「每节课花了多少」算上插画）；
+ *      · 2026-09-13 之前的历史行是**积分时代**的旧值。
+ *    而且没有 compute_attempts 的历史行没有售价证据 —— 按「缺证据不猜」不计入，不是按 0 顶替。
+ *
+ * 平台自己的**进货成本与毛利**不在这里：那本账在「财务与对账」，读 compute_attempts.upstream_cost_fen。
+ */
+export function salePriceFenFor({ sessionId = null, studentId = null, orgId = null, since = null } = {}) {
+  const conditions = ["status='SUCCESS'"];
+  const params = [];
+  if (sessionId) { conditions.push('class_session_id=?'); params.push(sessionId); }
+  if (studentId) { conditions.push('user_id=?'); params.push(studentId); }
+  if (orgId) { conditions.push('org_id=?'); params.push(orgId); }
+  if (since) { conditions.push('created_at>=?'); params.push(since); }
+  return Number(row(`SELECT COALESCE(SUM(sale_price_fen),0) fen FROM compute_attempts WHERE ${conditions.join(' AND ')}`, params)?.fen || 0);
+}
+
+/**
+ * 同一口径的 SQL 片段：机构端/学员端的「消耗」直接把它拼进自己的聚合里，
+ * 免得每处各写一遍 CASE WHEN 又悄悄写歪（统一走 salePriceFenFor 的定义）。
+ * `alias` 传表别名（如 'attempt'）时会带上前缀。
+ */
+export function salePriceFenSuccessSql(alias = '') {
+  const prefix = alias ? `${alias}.` : '';
+  return `COALESCE(SUM(CASE WHEN ${prefix}status='SUCCESS' THEN ${prefix}sale_price_fen ELSE 0 END),0)`;
+}
+
 /** Compatibility responses expose no student spending ceiling. */
 export function seriesBudgetFen() { return null; }
 export function poolUsedFen() { return null; }

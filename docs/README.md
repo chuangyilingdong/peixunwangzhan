@@ -50,7 +50,7 @@
 5. **真实 SUCCESS 才算完课**：完课判定看该学生在本课堂是否存在真实成功的 AI 调用（`status=SUCCESS`），不依赖金额；失败、预检拦截、未知结果都不算。已完课不能再被排进同一节课；学生重进同一课堂必须幂等。
 6. **课包发布必须形成七字段版本快照**；机构授权与库存按课包版本约束。机构库存是有限次数，学生容量由机构字段控制；教师只能管理自己创建的课堂，单教师对应单课堂职责。
 7. **平台承担算力成本**：不向学生展示或扣减积分、售价余额；每次调用按机构、学生、课时和课堂记入平台成本账本。课时金额是每场课堂的成本预警基准，超过只提醒平台，不阻断学生生成。
-8. **成本必须区分来源**：ESTIMATED、REPORTED、UNKNOWN、MOCK 各自保留语义；供应商账单匹配后的金额才是实际结算成本。机构实收、许可确认收入、结算成本和真实毛利分账核算；旧数据没有证据时保持 UNKNOWN，不能猜成本。**对外售价**（模型与算力 → 对外售价）只是逐笔对照用的公告价，不扣学生、不计收入；调用账按「对外售价 / 上游成本 / 实际核销 / 差额」显示，未知或未核销时差额留空。操作见 `docs/operations/真实三账对照-20260914.md`。
+8. **成本必须区分来源**：ESTIMATED、REPORTED、UNKNOWN、MOCK 各自保留语义；供应商账单匹配后的金额才是实际结算成本。机构实收、许可确认收入、结算成本和真实毛利分账核算；旧数据没有证据时保持 UNKNOWN，不能猜成本。**对外售价**（模型与算力 → 对外售价）只是逐笔对照用的公告价，不扣学生、不计收入；调用账按「对外售价 / 上游成本 / 实际核销 / 差额」显示，未知或未核销时差额留空。操作见 `docs/operations/真实三账对照-20260914.md`。**机构端/学员端看到的「消耗」= 对外售价合计（只计成功尝试）**；平台自己的上游成本与毛利只在平台端「财务与对账」看，机构看不到。
 9. **教师只看得到自己创建的课堂**（课包库全机构可见）；机构管理员看全机构。这条是安全相关的：改数据范围之前先跑 `scripts/p69-teacher-data-scope.mjs`。
 10. **班级那三张表是历史表**（`classes` / `class_members` / `class_curriculum_items`）：保留数据与 DDL，不再被读写。旧 `/api/org/classes/*` 已全部下线。
 
@@ -79,7 +79,7 @@ PLATFORM_DATA_DIR=.tmp/x PLATFORM_DB_PATH=.tmp/x/platform.db PORT=18888 node app
 **改完必跑**（守卫是这份代码的「别踩这里」）：
 
 ```bash
-node .tmp/smoke-run.mjs                    # 全量 101 个守卫（p85–p91 为三账/账单新增）
+node .tmp/smoke-run.mjs                    # 全量 102 个守卫（p85–p91 三账/账单、p92 机构端消耗口径）
 node scripts/p70-pages-render.mjs          # 三端页面真渲染 —— 改前端之后必跑（能拦白屏）
 node scripts/p66-student-grant-gate.mjs    # 进课三层门禁
 node scripts/p69-teacher-data-scope.mjs    # 教师数据范围（安全相关改动）
@@ -88,6 +88,7 @@ node scripts/p74-session-scope-columns.mjs # 范围字段必须被写入 + 回�
 node scripts/p88-financial-reconciliation-ui.mjs  # 财务四视图 + 对账表
 node scripts/p90-contract-cost-computation.mjs    # 合同价折算的精确金额
 node scripts/p91-provider-bill-reconciliation.mjs # 账单适配器 / 幂等 / 凭据不外泄
+node scripts/p92-sale-price-scope.mjs             # 机构端/学员端「消耗」= 对外售价（只计成功尝试）
 ```
 
 改前端还要 `vite build` 三端（`node_modules/vite/bin/vite.js build apps/<app> --config apps/<app>/vite.config.mjs`，

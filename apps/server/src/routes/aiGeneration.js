@@ -9,7 +9,7 @@ import { assertSessionAiControls } from '../services/aiControls.js';
 import { recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
-import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
+import { assertComputePoolBudget, priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
 
 /** 项目归属的课包 id（算力池的键）。失败路径上没有 context，所以这里按课时回查一次。 */
 function seriesIdOf(project) {
@@ -739,8 +739,9 @@ function generationHistory(auth, search) {
       total,
       succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
       failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
-      // 2026-09-13（P4 删积分）：原来报积分，现在报**算力消耗（分）** —— 与算力池同一份账本
-      costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+      // 对外售价口径（2026-09-15）：学员看到的「消耗」= 算力账本里成功尝试的售价快照合计。
+      // 原来读 usage_records.cost_fen —— 那一列现行代码恒为 0（平台承担成本、不扣学生），这里永远显示 0。
+      costFen: count(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     },
     items,
   };
@@ -828,7 +829,8 @@ function studentAiCenter(ctx) {
     total: count('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
-    costFen: count('SELECT COALESCE(SUM(cost_fen),0) n FROM usage_records WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    // 同上：对外售价口径（2026-09-15），不读 usage_records.cost_fen。
+    costFen: count(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
   };
   const assets = rows(`SELECT asset.*, project.title AS project_title, project.status AS project_status,
             lesson.title AS lesson_title, session.title AS session_title

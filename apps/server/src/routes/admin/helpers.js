@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
+import { salePriceFenSuccessSql } from '../../services/computePool.js';
 import { normalizeSubmission } from '../vibecoding.js';
 
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
@@ -600,7 +601,10 @@ function buildStudentDataExport(user, org) {
   );
   const generationJobs = rows(
     `SELECT job.id, job.modality, job.provider, job.model, job.status, job.credits_charged,
-            job.created_at, job.completed_at, project.title AS project_title
+            job.created_at, job.completed_at, project.title AS project_title,
+            -- 对外售价口径（2026-09-15）：导出里的金额取算力账本里成功尝试的售价快照。
+            -- 原来这一项读 job.cost_fen —— 那张表根本没有 cost_fen 列，于是永远导出 0（静默 bug）。
+            (SELECT ${salePriceFenSuccessSql('a')} FROM compute_attempts a WHERE a.generation_job_id = job.id) AS sale_fen
      FROM generation_jobs job
      LEFT JOIN student_projects project ON project.id=job.project_id
      WHERE job.user_id=? AND job.org_id=?
@@ -609,7 +613,8 @@ function buildStudentDataExport(user, org) {
   );
   const usageRecords = rows(
     `SELECT usage.id, usage.modality, usage.model, usage.credits_charged, usage.status, usage.created_at,
-            project.title AS project_title
+            project.title AS project_title,
+            (SELECT ${salePriceFenSuccessSql('a')} FROM compute_attempts a WHERE a.call_id = usage.compute_call_id) AS sale_fen
      FROM usage_records usage
  LEFT JOIN student_projects project ON project.id=usage.project_id AND project.student_id=usage.user_id AND project.org_id=usage.org_id
      WHERE usage.user_id=? AND usage.org_id=?
@@ -659,16 +664,16 @@ function buildStudentDataExport(user, org) {
       total: generationJobs.length,
       items: generationJobs.map((item) => ({
         id: item.id, modality: item.modality, provider: item.provider, model: item.model,
-        status: item.status, costFen: Number(item.cost_fen || 0),
+        status: item.status, costFen: Number(item.sale_fen || 0),
         projectTitle: item.project_title || null, createdAt: item.created_at, completedAt: item.completed_at || null,
       })),
     },
     usageRecords: {
       total: usageRecords.length,
-      totalFen: usageRecords.reduce((total, item) => total + Number(item.cost_fen || 0), 0),
+      totalFen: usageRecords.reduce((total, item) => total + Number(item.sale_fen || 0), 0),
       items: usageRecords.map((item) => ({
         id: item.id, modality: item.modality, model: item.model,
-        costFen: Number(item.cost_fen || 0), status: item.status,
+        costFen: Number(item.sale_fen || 0), status: item.status,
         projectTitle: item.project_title || null, createdAt: item.created_at,
       })),
     },

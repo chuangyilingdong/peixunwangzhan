@@ -10,7 +10,7 @@
 //   ② 未结束的参与（待上课/上课中）也不允许被别的课堂同时占用；
 //   ③ 被移除 = 解锁（可以再被其他课堂加）。
 import { errors, id, nowIso, q, row, rows, transaction } from '../lib.js';
-import { computePoolSummary } from './computePool.js';
+import { computePoolSummary, salePriceFenFor } from './computePool.js';
 
 /** 教师只能碰自己创建的课堂；机构管理员可以碰本机构所有课堂。 */
 export function assertSessionManager(auth, session) {
@@ -29,13 +29,16 @@ export function sessionScope(alias, auth, params) {
   return ` AND ${alias}.teacher_id=?`;
 }
 
-/** 这个学生在这节课上花过多少钱（分）——仅用于展示金额。 */
+/**
+ * 这个学生在这节课上的**对外售价合计（分）** —— 用于机构端「这节课消耗」列与课堂结算。
+ *
+ * 2026-09-15 改口径：原来读 `usage_records.cost_fen`，那一列现行代码恒写 0
+ * （平台承担算力成本、不扣学生），所以这一列在机构端**永远显示 ¥0.00**。
+ * 现在改为对外售价口径（见 computePool.salePriceFenFor 的完整说明）：
+ * 机构/学员看到的是「按公告价算的消耗」，平台自己的进货成本与毛利只在「财务与对账」看。
+ */
 export function lessonCostFenFor({ studentId, sessionId }) {
-  return Number(row(
-    `SELECT COALESCE(SUM(cost_fen), 0) fen FROM usage_records
-      WHERE class_session_id=? AND user_id=? AND status='SUCCESS'`,
-    [sessionId, studentId],
-  )?.fen || 0);
+  return salePriceFenFor({ sessionId, studentId });
 }
 
 /** 该学生在**这节课**上的参与行（含跨课堂占用；REMOVED 不算占用）。 */
