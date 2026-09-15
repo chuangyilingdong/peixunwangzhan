@@ -172,6 +172,12 @@ node scripts/p92-sale-price-scope.mjs             # 机构端/学员端「消耗
   最长行 10745 字符）：不影响运行，但**没法 diff、没法读**。建议单独做一次「用格式化器重排」的
   纯空白改动（行为等价，但要三端真浏览器过一遍），我没有在本轮顺手做 —— 风险与收益不匹配。
 - 平台端 `/api/admin/leads`（官网预约线索）后端保留、无管理界面：这是**之前有意保留**的，不是遗漏。
+- **学员数据导出 `buildStudentDataExport()` 没有任何路由调用它**（2026-09-15 发现）：其它导出
+  （`/organizations/export`、`/platform-users/export`、`/works/export`、`/audit-logs/export`、
+  `/billing/org-student-usage/export`）都接了路由，只有它是一整个函数没人调 —— 合规/可携带导出
+  这块要么接出来、要么删掉，属于产品决定。
+  （顺带：它内部 `aiTasks` 的金额原来读 `job.cost_fen`，而 `generation_jobs` 根本没有这一列，
+  所以永远导出 0 —— 这个潜在错误已随本轮口径改动修掉，但函数仍不可达。）
 - **生产账号口令被硬编码在两个受控文件里**（2026-09-15 发现，早于本轮、已在远端历史里）：
   `deploy/production/seed-demo-teaching-data.mjs:19-21`（`process.env.XXX_PASSWORD || '明文口令'` 这种兜底）
   与 `docs/operations/交接说明.md:198-199`（四个账号口令列成表）。这与本文件「凭据不写入文档」
