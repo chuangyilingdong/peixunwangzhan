@@ -79,12 +79,12 @@ try {
   serveText({ prompt_tokens: 800000, completion_tokens: 333000 });
   let provider = getGenerationProvider(selection());
   const textResult = await provider.generate({ modality: 'TEXT', prompt: '合同单价折算' });
-  // 800000 × 250 / 1000000 = 200；333000 × 750 / 1000000 = 249.75 → 250；合计 450
+  // 800000 × 250 / 1000000 = 200；333000 × 750 / 1000000 = 249.75；合计 449.75（分以下保留小数，不取整）
   let attempt = attemptOf(provider);
   assert.equal(attempt.cost_source, 'COMPUTED');
-  assert.equal(attempt.upstream_cost_fen, 450);
+  assert.equal(attempt.upstream_cost_fen, 449.75);
   assert.equal(textResult.compute.costSource, 'COMPUTED');
-  assert.equal(textResult.compute.upstreamCostFen, 450);
+  assert.equal(textResult.compute.upstreamCostFen, 449.75);
   const usageSnapshot = JSON.parse(attempt.usage_snapshot);
   assert.equal(usageSnapshot.evidence, 'UPSTREAM_USAGE');
   assert.equal(usageSnapshot.inputTokens, 800000);
@@ -92,9 +92,9 @@ try {
   const ruleSnapshot = JSON.parse(attempt.cost_rule_snapshot);
   assert.equal(ruleSnapshot.basis, 'CONTRACT_UNIT_PRICE');
   assert.equal(ruleSnapshot.source, 'COMPUTED');
-  assert.equal(ruleSnapshot.computedFen, 450);
+  assert.equal(ruleSnapshot.computedFen, 449.75);
   assert.deepEqual(ruleSnapshot.unitPrice, { inputFenPer1MTokens: 250, outputFenPer1MTokens: 750 });
-  assert.deepEqual(ruleSnapshot.usage, { inputTokens: 800000, outputTokens: 333000, inputFen: 200, outputFen: 250 });
+  assert.deepEqual(ruleSnapshot.usage, { inputTokens: 800000, outputTokens: 333000, inputFen: 200, outputFen: 249.75 });
   assert.equal(ruleSnapshot.channelId, 'contract-a');
   assert.equal(ruleSnapshot.model, 'p90-model');
   assert.equal(ruleSnapshot.priceLevel, 'MODALITY', '只配了素材类型价 → 命中 MODALITY 层级');
@@ -108,7 +108,7 @@ try {
   await provider.generate({ modality: 'TEXT', prompt: '普通对话' });
   attempt = attemptOf(provider);
   assert.equal(attempt.cost_source, 'COMPUTED');
-  assert.equal(attempt.upstream_cost_fen, 0, '0.2 + 0.4 = 0.6 分 → 四舍五入到 0 分（单笔亚分，不是「没算出来」）');
+  assert.equal(attempt.upstream_cost_fen, 0.6, "0.2 + 0.4 = 0.6 分 —— 分以下保留小数，不能取整成 0（取整会让整节课的文本成本凭空消失）");
 
   serveText({ prompt_tokens: 1000000, completion_tokens: 1000000 });
   provider = getGenerationProvider(selection({ upstreamUnitPrices: deepseekPrices }));
@@ -162,7 +162,7 @@ try {
   provider = getGenerationProvider(modelPriced('qwen-plus'));
   await provider.generate({ modality: 'TEXT', prompt: '没配模型价 → 回退' });
   attempt = attemptOf(provider);
-  assert.equal(attempt.upstream_cost_fen, 450, '回退渠道级 250/750：800/333 → 200 + 250');
+  assert.equal(attempt.upstream_cost_fen, 449.75, '回退渠道级 250/750：200000 tokens → 200 + 249.75 = 449.75');
   modelRule = JSON.parse(attempt.cost_rule_snapshot);
   assert.equal(modelRule.priceLevel, 'MODALITY');
   assert.deepEqual(modelRule.priceLayers, ['MODALITY']);
@@ -471,7 +471,7 @@ try {
   assert.equal(attempt.cost_source, 'COMPUTED', 'USD 实扣不认，改用合同价折算');
   assert.equal(attempt.upstream_cost_fen, 30);
 
-  console.log('P90 合同单价折算：文本 token × 每百万 token 价（含亚分四舍五入）、图片按张/档、视频按秒/档、音乐按次，金额分整数精确断言通过');
+  console.log('P90 合同单价折算：文本 token × 每百万 token 价（分以下保留 4 位小数，不取整）、图片按张/档、视频按秒/档、音乐按次，金额分整数精确断言通过');
   console.log('P90 缺用量与缺单价一律 null（UNKNOWN）不按 0、来源优先级 REPORTED>COMPUTED>ESTIMATED>UNKNOWN、改价不追溯、学生侧恒 0、渠道读写与非法值拒绝通过');
   console.log('P90 Seedance 直连实扣：data.usage / task.usage / 顶层 usage 三处读取位置、实测币种「¥」认成人民币、');
   console.log('      ¥20.40 与 ¥0.040112 这类小数换算成整数分、USD 不当人民币、REPORTED 也留 upstreamCurrency/upstreamAmount 证据 通过');

@@ -74,6 +74,15 @@ function fenAmount(value) {
   return Math.round(n);
 }
 
+/**
+ * 分以下的小数（保留 4 位，即 0.0001 分）。
+ * 只有**单笔成本天然小于 1 分**的场景才用得上（目前只有文本：DeepSeek 一次课堂对话约 0.2 分）——
+ * 见 computeContractCost 里 TEXT 分支的说明。整数输入原样返回，不影响其它模态。
+ */
+function subFen(value) {
+  return Math.round(Number(value) * 10000) / 10000;
+}
+
 /** 非负整数计数（token 数 / 张数）；非法 → null。 */
 function wholeCount(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -323,12 +332,14 @@ export function computeContractCost({ modality, model = '', unitPrices = null, m
     const output = wholeCount(evidence.outputTokens);
     if (input === null || output === null) return null; // 缺用量
     levels.add(perInput.level); levels.add(perOutput.level);
-    // 单位是分/百万 token。⚠️ 便宜模型的单笔成本常常**不足 1 分**（deepseek-flash 一次对话约 0.5~1 分），
-    // 所以每笔会四舍五入到整数分：单笔看起来是 0 或 1 分，但四舍五入是无偏的，
-    // **按机构/学员/课时汇总之后总额仍然准**（误差随笔数开方增长，不随笔数线性放大）。
-    const inputFen = Math.round((input * perInput.fen) / 1000000);
-    const outputFen = Math.round((output * perOutput.fen) / 1000000);
-    return done(inputFen + outputFen, { inputFenPer1MTokens: perInput.fen, outputFenPer1MTokens: perOutput.fen }, { inputTokens: input, outputTokens: output, inputFen, outputFen });
+    // 单位是分/百万 token。⚠️ 单笔成本**常常小于 1 分**（DeepSeek 一次课堂对话约 0.2 分），
+    // 所以这里**不按整数分取整**，保留到 0.0001 分（compute_attempts.upstream_cost_fen 本来就是 REAL，
+    // double 精度对任何现实累计额都够）。若按整数分取整，每一笔都会记成 0 ——
+    // 一节课的文本成本整块消失，文本那一侧的「机构/学员消耗 vs 我们实际消耗」对照永远是空的。
+    // （图片/视频/音乐的单笔都是整数分，各自的分支不需要这层小数。）
+    const inputFen = subFen((input * perInput.fen) / 1000000);
+    const outputFen = subFen((output * perOutput.fen) / 1000000);
+    return done(subFen(inputFen + outputFen), { inputFenPer1MTokens: perInput.fen, outputFenPer1MTokens: perOutput.fen }, { inputTokens: input, outputTokens: output, inputFen, outputFen });
   }
 
   if (key === 'IMAGE') {
