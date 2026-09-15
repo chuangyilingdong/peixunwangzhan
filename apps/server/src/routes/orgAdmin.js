@@ -566,6 +566,33 @@ export async function handleOrg(ctx) {
     return normalizeSession(created);
   }
   let sessionDetailMatch = part.match(/^\/sessions\/([^/]+)$/);
+  if (sessionDetailMatch && method === 'PUT') {
+    const target = sessionInOrg(sessionDetailMatch[1]);
+    if (target.status !== 'PENDING') throw errors.conflict('只有待上课课堂可以编辑名称', 'SESSION_NOT_PENDING');
+    const body = ctx.body || {};
+    const titleProvided = Object.prototype.hasOwnProperty.call(body, 'title');
+    const lessonProvided = Object.prototype.hasOwnProperty.call(body, 'lessonId');
+    const title = titleProvided ? String(body.title || '').trim().slice(0, 120) : target.title;
+    if (titleProvided && !title) throw errors.badRequest('课堂名称不能为空', 'SESSION_TITLE_REQUIRED');
+    const nextLessonId = lessonProvided ? String(body.lessonId || '').trim() : target.lesson_id;
+    if (!nextLessonId) throw errors.badRequest('请选择这节课（课包里的第几节）', 'SESSION_LESSON_REQUIRED');
+    const nextLesson = row("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [nextLessonId]);
+    if (!nextLesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_FOUND');
+    if (!accessibleLesson(currentOrgId, nextLessonId)) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
+    const roster = Number(row("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status<>'REMOVED'", [target.id])?.n || 0);
+    if (lessonProvided && nextLessonId !== target.lesson_id && roster > 0 && body.confirmClearStudents !== true) throw errors.conflict('换课会清空当前课堂名单，请明确确认', 'SESSION_SWAP_CONFIRM_REQUIRED');
+    const publishedLesson = normalizeLesson(nextLesson, { asPublished: true });
+    const deliveryMode = String(body.deliveryMode || target.delivery_mode || publishedLesson.deliveryMode || 'CANVAS').trim().toUpperCase();
+    if (!['CANVAS', 'VIBECODING'].includes(deliveryMode) || !publishedLesson.deliveryModes.includes(deliveryMode)) throw errors.badRequest('该课时未发布此入口类型', 'INVALID_DELIVERY_MODE');
+    const before = normalizeSession(target); const now = nowIso();
+    transaction(() => {
+      if (lessonProvided && nextLessonId !== target.lesson_id && roster > 0) q("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason='SESSION_LESSON_SWAP', updated_at=? WHERE session_id=? AND status<>'REMOVED'", [auth.user.id, now, now, target.id]);
+      q('UPDATE class_sessions SET title=?,lesson_id=?,series_id=?,delivery_mode=?,platform_budget_fen=?,updated_at=? WHERE id=?', [title, nextLessonId, nextLesson.series_id, deliveryMode, publishedLesson.platformBudgetFen ?? null, now, target.id]);
+    });
+    const updated = row('SELECT * FROM class_sessions WHERE id=?', [target.id]);
+    audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, before, { ...normalizeSession(updated), title, swappedLesson: lessonProvided && nextLessonId !== target.lesson_id, rosterCleared: roster > 0 });
+    return normalizeSession(updated);
+  }
   if (sessionDetailMatch && method === 'GET') {
     const target = sessionInOrg(sessionDetailMatch[1]);
     const detail = row(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, lesson.lesson_content lesson_content,

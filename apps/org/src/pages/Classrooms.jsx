@@ -72,6 +72,10 @@ export function Classrooms({ api, user }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({ seriesId: '', lessonId: '', title: '', teacherId: '', deliveryMode: 'CANVAS' });
   const [picked, setPicked] = useState([]);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapForm, setSwapForm] = useState({ seriesId: '', lessonId: '' });
 
   const query = new URLSearchParams();
   if (status) query.set('status', status);
@@ -224,6 +228,8 @@ export function Classrooms({ api, user }) {
       <div className="row-actions">
         {current?.coursewareUrl ? <a className="secondary-button" href={current.coursewareUrl} target="_blank" rel="noreferrer">查看课件</a> : null}
         {current?.status === 'PENDING' ? <>
+          <button className="secondary-button" disabled={busy} onClick={() => { setTitleDraft(current.title || ''); setEditingTitle(true); }}>编辑课堂名称</button>
+          <button className="secondary-button" disabled={busy} onClick={() => { setSwapForm({ seriesId: current.seriesId || '', lessonId: current.lessonId || '' }); setSwapOpen(true); }}>更换课包课程</button>
           <button className="primary-button" disabled={busy || !canStart} title={canStart ? '' : '先添加学员再开始上课（名单为空不能开课）'} onClick={() => setConfirm({ kind: 'start' })}>开始上课</button>
           <button className="secondary-button" disabled={busy} onClick={() => setConfirm({ kind: 'dissolve' })}>解散课堂</button>
         </> : null}
@@ -297,6 +303,10 @@ export function Classrooms({ api, user }) {
         </> : null}
       </>}
     </Panel> : null}
+
+    {swapOpen ? <Modal title="更换课包课程" description={summary.total ? '更换后当前学生名单会被移除并保留历史记录，请确认后继续。' : '仅待上课课堂可以更换课包课程。'} onClose={() => { if (!busy) setSwapOpen(false); }} footer={<><button className="secondary-button" onClick={() => setSwapOpen(false)}>取消</button><button className="primary-button" disabled={busy || !swapForm.lessonId} onClick={() => run(async () => { await api.put(`org/sessions/${encodeURIComponent(openId)}`, { lessonId: swapForm.lessonId, confirmClearStudents: Number(summary.total || 0) > 0 }); setSwapOpen(false); }, '课堂课包课程已更新。')}>确认更换</button></>}><label>课包<SearchSelect ariaLabel="更换课包" value={swapForm.seriesId} options={seriesItems} placeholder="请选择课包" getLabel={(item) => item.title} onChange={(seriesId) => setSwapForm({ seriesId, lessonId: '' })} /></label><label>课程<select value={swapForm.lessonId} disabled={!swapForm.seriesId} onChange={(event) => setSwapForm({ ...swapForm, lessonId: event.target.value })}><option value="">请选择课程</option>{(seriesItems.find((item) => item.id === swapForm.seriesId)?.lessons || []).filter((item) => item.status === 'PUBLISHED').map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}</select></label></Modal> : null}
+
+    {editingTitle ? <Modal title="编辑课堂名称" description="仅待上课课堂可以修改展示名称。" onClose={() => { if (!busy) setEditingTitle(false); }} footer={<><button className="secondary-button" onClick={() => setEditingTitle(false)}>取消</button><button className="primary-button" disabled={busy || !titleDraft.trim()} onClick={() => run(async () => { await api.put(`org/sessions/${encodeURIComponent(openId)}`, { title: titleDraft.trim() }); setEditingTitle(false); }, '课堂名称已更新。')}>保存名称</button></>}><label>课堂名称<input value={titleDraft} maxLength={120} onChange={(event) => setTitleDraft(event.target.value)} /></label></Modal> : null}
 
     {createOpen ? <Modal
       title="创建课堂"
