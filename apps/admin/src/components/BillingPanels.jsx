@@ -345,8 +345,8 @@ export function ProviderPolicyPanel({ api }) {
           <div className="form-grid top-gap">
             <label>渠道名称<input value={channel.name || ''} onChange={(e) => updateChannel(index, { name: e.target.value })} placeholder="例如：图片-供应商A" required /></label>
             <label>调用地址<input value={channel.endpoint || ''} onChange={(e) => updateChannel(index, { endpoint: e.target.value })} placeholder="https://.../v1" required /></label>
-            <label>可用模型（勾选本渠道提供的模型）</label>
-            <div className="channel-model-list">
+            <label className="span-2">可用模型（勾选本渠道提供的模型）</label>
+            <div className="channel-model-list span-2">
               {/* ⚠️ 这里必须把「候选清单」和「已启用」两个来源合并渲染。
                   只渲染候选的话，不在候选里的已启用模型在界面上看不见，但**仍然在表单状态里**，
                   一保存就会被写回去——2026-09-11 用户就踩了这个：他在库里删掉过 gpt-6-astra，

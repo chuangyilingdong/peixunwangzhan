@@ -1092,7 +1092,11 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .course-lesson-draft { margin:14px 0; padding:14px; border:1px solid #f0edf5; border-radius:12px; background:#fcfbff; }
 .course-lesson-draft__no { display:grid; place-items:center; width:24px; height:24px; border-radius:8px; color:var(--deep); background:#eeeaff; font-size:11px; font-weight:800; }
 .course-more-settings { margin-top:12px; padding:14px; border:1px dashed #e2dcf2; border-radius:12px; background:#fcfbff; }
-.channel-model-list { display:flex; flex-wrap:wrap; gap:8px 14px; padding:10px 12px; border:1px solid #eeebff; border-radius:10px; background:#fbfaff; }
+/* 2026-09-15：模型清单要**横跨整行**并限高滚动。
+   原来它被放在 form-grid 的第二列（约半宽），30 多个模型每个换一行 ——
+   右边一条长龙、左边一大片空白，整个渠道卡片被拉得很长。横跨整行后每行能排好几个。
+   （配合 JSX 上的 span-2 类；.form-grid .span-2 是既有约定。） */
+.channel-model-list { display:flex; flex-wrap:wrap; gap:8px 14px; padding:10px 12px; border:1px solid #eeebff; border-radius:10px; background:#fbfaff; max-height:280px; overflow:auto; }
 .channel-model-list label { display:flex; gap:6px; align-items:center; margin:0; font-weight:400; cursor:pointer; font-size:12px; }
 /* 已启用、但不在候选清单里的模型：在勾选框里也要显示出来（标个记号），
    否则它在界面上看不见、却仍会被表单保存回去（2026-09-11 踩过）。 */
