@@ -11,10 +11,11 @@ import '@platform/shared/styles.css';
 const APP_BASENAME = (import.meta.env?.VITE_APP_BASE || '/org').replace(/\/$/, '');
 
 const navigation = [
-  { to: '/dashboard', icon: '◈', label: '机构总览' },
-  { to: '/classrooms', icon: '▦', label: '课堂' },
-  { to: '/members', icon: '♙', label: '账号', adminOnly: true },
-  { to: '/series-overview', icon: '◇', label: '课包与授权', adminOnly: true },
+  { to: '/dashboard', icon: '◈', label: '机构工作台' },
+  { to: '/series-overview', icon: '◇', label: '课包库存与学生授权', adminOnly: true },
+  { to: '/classrooms', icon: '▦', label: '机构课堂总览' },
+  { to: '/members', icon: '♙', label: '机构成员管理', adminOnly: true },
+  { to: '/works', icon: '✦', label: '学生学习结果与作品' },
 ];
 const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
 
@@ -526,7 +527,7 @@ export function App() {
   // 2026-09-13（批次 B-6）：班级退场后登录页文案也跟着改，别再说「管理班级」。
   if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学员创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
   if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
-  const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教学总览' }, { to: '/classrooms', icon: '▦', label: '本人课堂' }, { to: '/courses', icon: '◇', label: '机构课程' }] : navigation;
+  const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教师工作台' }, { to: '/courses', icon: '◇', label: '教学课程库' }, { to: '/classrooms', icon: '▦', label: '我的课堂' }, { to: '/works', icon: '✦', label: '学生学习结果与作品' }] : navigation;
   return <AppShell product="AI 魔法学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

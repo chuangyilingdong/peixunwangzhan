@@ -24,8 +24,8 @@ function LoginPage() {
       throw new Error(err.message || '登录失败');
     }
     const role = session.user?.role;
-    // 学生登录后返回官网首页，不再跳转到 /learn
-    const target = role === 'STUDENT' ? '/' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/';
+    // 线框主流程：学生登录后直接进入「我的课包」，官网公开首页仍可从品牌入口返回。
+    const target = role === 'STUDENT' ? '/my-courses' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/';
     window.location.assign(target);
   }
   return <div className='website-login'><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title='登录' description='使用机构分配的账号进入你的工作台。' onLogin={handleLogin} demos={[]} /></div>;
