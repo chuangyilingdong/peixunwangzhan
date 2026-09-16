@@ -92,6 +92,24 @@ Landlock（`landlock-run` 二进制，镜像里就有），或更强一档的 bu
 （外层容器 + 内层内核沙箱，双保险）。这不是必须项（外层容器已经解决了「互不可见」），
 但能加厚一层，等主线做完再评估。
 
+### 4.2 dsh 必须挂在域名根路径或独立子域，**不能挂子路径**（2026-09-16 实测）
+
+`dsh-host-frontend-static` 在服务端**硬注入** `<base href="/">`：
+
+```js
+ctx.webServer.renderIndex(await readFile(distIndex, "utf8"))
+  .replace(/<head(?:\s[^>]*)?>/i, (open) => `${open}<base href="/">`)
+```
+
+后果：前端所有相对资源都按**域名根**解析，插件也按 `/plugins/...` 绝对路径拉。
+我们实测过挂在 `https://iicili.cyou/dsh-probe/`：页面能返回（dsh 自己的 303 与 401 都对），
+但浏览器会去请求 `https://iicili.cyou/plugins/...`、`https://iicili.cyou/assets/...` ——
+**落到官网根上**，界面起不来。顺带踩到第二个坑：dsh 的 303 跳转带**绝对路径 `Location: /`**
+（与容器里那个 `absolute_redirect` 同源），必须在 nginx 里 `proxy_redirect` 改写。
+
+→ 结论：一个学生一个入口，入口用**独立端口**（`https://iicili.cyou:18201/`）或**独立子域**，
+不能用 `/dsh/<名>/` 这种子路径。
+
 ## 五、分期计划（每期都可独立验收，不一次性推翻线上）
 
 **阶段 0 — 隔离原型（本机 Docker，不碰生产库与生产密钥）**
