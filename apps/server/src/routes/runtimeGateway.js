@@ -60,8 +60,11 @@ function verifyRuntimeKey(token) {
 /**
  * 每一通调用都重新过门禁：课堂仍在进行 + 学生仍在名单里（ACTIVE）。
  * 这一步不做的话，老师结束课堂之后容器里还能继续烧算力。
+ *
+ * 也导出给「拉起容器」那条路用（`services/studentRuntime.js`）：**开盒子与调模型是同一套门禁**，
+ * 两处各写一份迟早会走偏（比如开盒子时只看课堂、不看名单）。
  */
-function assertRuntimeClassroomActive(payload) {
+export function assertRuntimeClassroomActive(payload) {
   const session = row('SELECT id,org_id,lesson_id,status,teacher_id FROM class_sessions WHERE id=?', [payload.s]);
   if (!session || session.org_id !== payload.o) throw errors.forbidden('课堂不存在或不属于该机构', 'RUNTIME_CLASSROOM_UNAVAILABLE');
   if (session.status !== 'ACTIVE') throw errors.forbidden('课堂已经结束，创作环境已关闭', 'RUNTIME_CLASSROOM_INACTIVE');

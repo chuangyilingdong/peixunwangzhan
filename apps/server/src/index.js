@@ -6,6 +6,7 @@ import { handleAdmin } from './routes/adminOrg.js';
 import { handleOrg } from './routes/orgAdmin.js';
 import { handleStudent } from './routes/student.js';
 import { handleRuntimeGateway } from './routes/runtimeGateway.js';
+import { handleStudentRuntime } from './routes/studentRuntime.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
 // 官方账单 API 自动对账：日级定时拉取（定时器 unref，不拖住进程退出）
@@ -111,6 +112,7 @@ const server = http.createServer(async (req, res) => {
       ?? await handleStudentFileAssets(ctx)
       ?? await handleStudentBillingConfig(ctx)
       ?? await handleVibeCoding(ctx)
+      ?? await handleStudentRuntime(ctx)
       ?? await handleStudent(ctx)
       ?? await handleAi(ctx)
       ?? await handleAiGeneration(ctx);
