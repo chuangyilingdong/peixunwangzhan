@@ -76,6 +76,24 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # 学生环境里的 agent 走我们网关调模型（SSE 流式）。**历史一长就要小心**：
+    # 一次任务几十轮工具调用之后，上下文很大，上游出第一个 token 可能要等很久，
+    # 而 location /api/ 用的是 nginx 默认 **60s** 读超时 —— 超时会让 nginx 直接 504，
+    # **请求根本没到应用**（账本里连一条失败记录都没有），学生看到的是
+    # 「AI 供应商调用失败 / PI_AI_ERROR」（2026-09-16 实测：跑完一串 Bash 工具后死在末尾）。
+    # 这里单独给网关放宽 + 关缓冲（SSE 不能被 nginx 攒着）。
+    location ~ ^/api/gateway/ {
+        proxy_pass http://127.0.0.1:8789;
+        proxy_http_version 1.1;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # 开创作环境（VibeCoding）是**同步等**宿主把学生环境起起来：平台侧超时 90s，
     # 宿主脚本自己还会等 dsh 打印 token（最长 ~60s）。而 location /api/ 没写 proxy_read_timeout
     # ＝ nginx 默认 **60s** —— 也就是「慢一点的学生会先被 nginx 掐成 504」，前端拿到 504 显示

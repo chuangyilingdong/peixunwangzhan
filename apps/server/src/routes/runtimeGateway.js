@@ -137,7 +137,17 @@ function normalizeMessages(body) {
     .filter((item) => item.tool_calls || item.tool_call_id
       || (typeof item.content === 'string' ? item.content.trim() !== '' : item.content.length > 0));
   if (!messages.length) throw errors.badRequest('messages 不能为空', 'VALIDATION_REQUIRED');
-  return messages.slice(-40);
+  // ⚠️ 截断必须**保住工具调用的配对**（2026-09-16 实测踩到）：
+  // 上游要求「带 tool_calls 的 assistant 消息后面必须紧跟对应的工具结果」。
+  // agent 干活时历史里全是这种成对消息（一次任务几十轮 Bash），从中间 `slice(-40)` 切开，
+  // 开头就会剩下一堆「孤儿工具结果」，上游直接拒 → 学生看到「AI 供应商调用失败」。
+  // 所以切完之后要把开头的孤儿 tool 消息丢掉（它的 assistant 已经被切走了）。
+  const MAX_HISTORY = 40;
+  if (messages.length <= MAX_HISTORY) return messages;
+  let start = messages.length - MAX_HISTORY;
+  while (start < messages.length && messages[start].role === 'tool') start += 1;
+  // 兜底：万一丢光了（极端情况：一整段全是工具结果），至少留最后一条
+  return start >= messages.length ? messages.slice(-1) : messages.slice(start);
 }
 
 // 给守卫脚本 p97 直接断言这两个纯函数（它们决定「学生的图有没有被压扁」与「名字解析到哪条渠道」）。
