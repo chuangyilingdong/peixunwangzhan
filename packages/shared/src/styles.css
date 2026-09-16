@@ -1248,8 +1248,6 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .cv-save-state.is-error { max-width: 48ch; overflow: hidden; color: #ffb4b4; border-color: rgb(255 107 107 / 45%); background: rgb(255 107 107 / 12%); text-overflow: ellipsis; white-space: nowrap; }
 .cv-viewport { flex: 1; min-height: 0; overflow: hidden; border-radius: 20px; }
 .cv-viewport .learning-canvas { height: 100%; min-height: 0; border-radius: 20px; }
-/* 官网匿名统计同意条固定悬浮在底部，别让它压住画布底部（含缩放手柄） */
-body:has(.analytics-consent) .cv-main { padding-bottom: 132px; }
 
 /* 浮层：提示条 / 对话框 */
 .cv-toast { position: fixed; right: 18px; bottom: 18px; z-index: 60; max-width: 360px; padding: 11px 15px; border: 1px solid var(--cv-border-strong); border-radius: 12px; color: var(--cv-text); background: rgb(28 28 33 / 96%); box-shadow: 0 18px 44px rgb(0 0 0 / 40%); font-size: 12px; backdrop-filter: blur(12px); animation: cv-toast-in var(--cv-motion) ease-out; }

@@ -72,7 +72,8 @@ export function Dashboard({ api }) {
       <Panel title="官网转化（第一方匿名分析）">
         <div className="muted" style={{ marginBottom: 8 }}>
           区间内匿名事件 {site.totals?.events || 0} 条 · 去重访客 {site.totals?.visitors || 0} 人 ·
-          数据保留 {site.retentionDays || 90} 天。访客同意匿名分析后才记录，不含 IP / 姓名 / 电话。
+          数据保留 {site.retentionDays || 90} 天。不含 IP / 姓名 / 电话。
+          ⚠️ 官网同意弹窗已下线（2026-09-16）：没有入口写「已同意」，所以不会产生新事件，下面是历史数据。
         </div>
         <div className="table-wrap"><table><thead><tr><th>步骤</th><th>匿名访客</th><th>事件数</th><th>较上一步</th></tr></thead><tbody>
           {site.funnel?.length ? site.funnel.map((item) => <tr key={item.eventName}><td><strong>{item.label}</strong><div className="muted">{item.eventName}</div></td><td>{item.visitors}</td><td>{item.events}</td><td>{item.rateFromPrevious == null ? '—' : `${item.rateFromPrevious}%`}</td></tr>) : <tr><td colSpan={4}>所选区间暂无已同意的分析事件</td></tr>}

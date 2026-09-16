@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
+import { getAnalyticsConsent, trackAnalytics } from './analytics.js';
 import { LoginPanel, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
@@ -337,7 +337,9 @@ function MarketplaceDetail(){
   </main></>;
 }
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
-function AnalyticsConsentBanner({ onDecision }) { return <aside className="analytics-consent" role="dialog" aria-label="统计分析选择"><div><strong>帮助我们改进官网体验</strong><p>我们只在你选择同意后记录匿名页面访问与转化事件，不记录 IP、姓名、电话或完整查询参数；数据最多保留 90 天。详见<Link to="/privacy">隐私政策</Link>。</p></div><div className="analytics-consent-actions"><button type="button" className="consent-muted" onClick={() => onDecision(false)}>仅使用必要功能</button><button type="button" className="button" onClick={() => onDecision(true)}>同意匿名分析</button></div></aside> }
+// 匿名统计同意横幅已按用户要求删除（2026-09-16）。
+// 删除后**没有**默认打开统计：`trackAnalytics` 仍然只在 `getAnalyticsConsent() === true` 时才发事件，
+// 而没有横幅就没有人点「同意」，所以官网不发送任何匿名事件（宁可不统计，也不无同意上报）。
 function LearnPageInner({ api }) {
   // 以课程为先：先选课包，再选这一节课；上课形式由课包/这节课决定，学生不选。
   return <main className='learn-page-shell'><StudentCourseCenter api={api} onEnterCanvas={(id) => { window.location.assign('/learn/canvas/' + id); }} onEnterVibeCoding={(id) => { window.location.assign('/learn/vibecoding/' + id); }} /></main>;
@@ -358,7 +360,6 @@ export function App(){
   const loc = useLocation();
   const navigate = useNavigate();
   const [session, setSession] = useState(readUserSession);
-  const [analyticsConsent, setAnalyticsConsentState] = useState(getAnalyticsConsent());
   const api = useMemo(() => createApiClient({ getToken: () => session?.token || null, onUnauthorized: () => { removeUserSession(); setSession(null); } }), [session]);
   function logout() {
     removeUserSession();
@@ -392,15 +393,14 @@ export function App(){
     if (ogTitle) ogTitle.setAttribute('content', title);
     const ogUrl = document.querySelector('meta[property="og:url"]');
     if (ogUrl) ogUrl.setAttribute('content', window.location.origin + (loc.pathname === '/' ? '' : loc.pathname));
-    if (analyticsConsent === true) trackAnalytics('page_view', { title });
-  }, [loc.pathname, analyticsConsent]);
+    if (getAnalyticsConsent() === true) trackAnalytics('page_view', { title });
+  }, [loc.pathname]);
   // ⚠️ hook 必须全部写在下面的提前 return 之前：学生会话过期时 App 会在这里提前返回，
   // 若 hook 在其后，同一次渲染里 hook 数从 7 变 6，React 抛 #300 直接白屏（而不是跳登录页）。
   const [showStudentMenu, setShowStudentMenu] = useState(false);
   if (loc.pathname.startsWith('/learn') && !session) {
     return <Navigate to='/login' replace />;
   }
-  function decide(value) { setAnalyticsConsent(value); setAnalyticsConsentState(value); if (value) trackAnalytics('analytics_consent_granted'); }
   const roleBadge = { STUDENT: '小小创作者', TEACHER: '教师', ORG_ADMIN: '机构管理员', SUPER_ADMIN: '平台管理员', PLATFORM_ADMIN: '平台管理员' };
   // 学生用户下拉菜单（showStudentMenu 这个 state 在上面统一声明，必须在提前 return 之前）
   const studentMenuItems = [
@@ -476,7 +476,6 @@ export function App(){
         <Route path='*' element={<Home session={session} logout={logout}/>}/>
       </Routes>
       {!isFullPage && loc.pathname !== '/' && <Footer/>}
-      {analyticsConsent === null && <AnalyticsConsentBanner onDecision={decide}/>}
     </div>
   );
 }
