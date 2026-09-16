@@ -85,7 +85,7 @@ function runScript(script, args, { timeout, maxBuffer = 1024 * 1024 } = {}) {
         const detail = /sudo/i.test(String(error.message)) && /password|not allowed|no tty/i.test(String(stderr))
           ? `平台账号没有运行宿主脚本的权限（检查 sudoers 规则）；原文：${String(stderr).trim().slice(0, 200)}`
           : String(stderr || error.message || '').trim().slice(0, 400);
-        reject(Object.assign(new Error(detail || '宿主脚本执行失败'), { code: 'RUNTIME_HOST_SCRIPT_FAILED' }));
+        reject(hostError(detail, 'RUNTIME_HOST_SCRIPT_FAILED'));
         return;
       }
       resolve(String(stdout || ''));
@@ -230,6 +230,20 @@ function callBroker(payload, timeout) {
 }
 
 /**
+ * 宿主脚本的报错 → **对外的明确答复**。
+ * 为什么需要：脚本的失败原来会一路冒成 500「服务器内部错误」，可「这个学生还没有创作环境」
+ * 根本不是服务端故障 —— 它是学生少做了一步（先点「进入创作环境」）。报成 500 既误导排查，
+ * 也让学生看到一个「系统坏了」的界面。
+ */
+function hostError(message, fallbackCode) {
+  const text = String(message || '').trim();
+  if (/COLLECT_NO_USER|COLLECT_NO_WORKSPACE/.test(text)) {
+    return errors.conflict('你的创作环境还没开起来（或已经被收回）。先点「进入创作环境」，再回来提交作品。', 'RUNTIME_NOT_LAUNCHED');
+  }
+  return Object.assign(new Error(text || '宿主操作失败'), { code: fallbackCode || 'RUNTIME_HOST_SCRIPT_FAILED' });
+}
+
+/**
  * 执行一次宿主操作，返回脚本的 stdout。
  * 失败一律抛错（**失败要吵**）—— 调用方不该拿到一个「看着像成功」的空结果。
  */
@@ -239,7 +253,7 @@ async function runHost(op, params, { timeout }) {
     const result = await callBroker({ op, ...params }, timeout);
     if (!result.ok) {
       const detail = [result.message, String(result.stderr || '').trim()].filter(Boolean).join('；').slice(0, 400);
-      throw Object.assign(new Error(detail || '宿主操作失败'), { code: result.code || 'RUNTIME_HOST_SCRIPT_FAILED' });
+      throw hostError(detail, result.code);
     }
     return String(result.stdout || '');
   }
