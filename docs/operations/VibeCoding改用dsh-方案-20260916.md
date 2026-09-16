@@ -159,7 +159,8 @@ dsh --profile web --dump-default-config  → 539 行组合树，关键几条：
    `ui-cordis` 一直等 `dynamicCordisRunner`，整页变成「Failed to load plugins」（实测）。
    两边一起关之后界面正常起来。
 5. **脚本必须是 LF**：CRLF 会让容器 `exec format error`；另外别忘了 shebang（都踩过）。
-   仓库里用 `.gitattributes` 保住 LF，Dockerfile 里再兜一次 `sed -i 's/$//'`。
+   仓库里用 `.gitattributes` 保住 LF，Dockerfile 里再兜一次 `sed -i 's/
+$//'`。
 
 四场景复测结果（`curl`，含 cookie jar）：
 
@@ -171,6 +172,40 @@ dsh --profile web --dump-default-config  → 539 行组合树，关键几条：
 | 无票据无 cookie | 403 |
 
 产物：`deploy/dsh-student/`（Dockerfile、补丁层、课程技能、容器内反代、入口脚本、README）。
+
+## 十二、模型走我们网关的接法（2026-09-16 已实现并测过）
+
+dsh 侧用 `llm-pi-ai` 的 hand-declared gateway 指向我们新加的 OpenAI 兼容端点：
+
+```yaml
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      platform-gateway:
+        apiKeyEnv: PLATFORM_GATEWAY_KEY        # 凭据引用，密钥不进配置文件
+        api: openai-completions
+        baseURL: <平台>/api/gateway/v1
+        models: [{ id: deepseek-flash }, { id: deepseek-pro }]
+```
+
+我们这边新增：`POST /api/gateway/v1/chat/completions`（`apps/server/src/routes/runtimeGateway.js`）。
+三条硬要求都在端点里落地：
+
+1. **身份是平台签发的**：运行时密钥是 HMAC 签名的一串（内含机构/学生/课时/课堂 + 过期时间），
+   请求里塞别的机构/学生改不动归属。密钥由 `issueRuntimeKey()` 在**开班发容器时**签发。
+2. **每通调用都重新过门禁**：课堂必须仍是 `ACTIVE`、学生必须仍在名单里（`session_students.status='ACTIVE'`）。
+   老师结束课堂或把学生移出名单之后，容器里即使还揣着密钥也调不动——不用等容器回收。
+3. **每通调用都记账**：与 VibeCoding 原链路同一套（`applyGatewayRoute` 选渠道 → `recordAiUsage` 落
+   `usage_records` + 算力池口径）。响应**原样说 OpenAI 方言**（不套我们的 `{success,data}` 信封，
+   否则 dsh 这类客户端不认）。
+
+守卫 `scripts/p97-runtime-gateway.mjs`（Node 22 实测全过）：无密钥/篡改/过期 → 401；
+正常调用 → 200 且落了 `usage_records`；塞别的归属不影响记账对象；课堂结束 → 403；学生被移出 → 403。
+
+**尚未做**：把 dsh 报的模型名（如 `deepseek-flash`）映射到我们渠道里的 model id（现在渠道选择
+按既有策略走，若映射缺失会挑默认渠道）；以及**这个端点尚未部署**——它只服务 dsh 容器，
+在 dsh 没上线前不往外发（避免多一个没有消费者的公网路由）。
 
 ## 十、要你拍板的两件事（其余我按上面的默认走）
 

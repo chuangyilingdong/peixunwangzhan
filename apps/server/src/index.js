@@ -5,6 +5,7 @@ import { handleAuth } from './routes/auth.js';
 import { handleAdmin } from './routes/adminOrg.js';
 import { handleOrg } from './routes/orgAdmin.js';
 import { handleStudent } from './routes/student.js';
+import { handleRuntimeGateway } from './routes/runtimeGateway.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
 // 官方账单 API 自动对账：日级定时拉取（定时器 unref，不拖住进程退出）
@@ -95,7 +96,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const data = await handlePublicCommunication(ctx)
+    const data = await handleRuntimeGateway(ctx)
+      ?? await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)
       ?? await handleAuth(ctx)
       ?? await handleAdmin(ctx)
