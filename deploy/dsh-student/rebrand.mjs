@@ -80,6 +80,30 @@ for (const file of [...walk(DSH_ROOT), ...walk(PROFILE_ROOT)]) {
 }
 console.log(`[rebrand] 运行环境说明里的 DSH 字样：改了 ${dshTouched} 个文件`);
 
+// 欢迎页那两句（用户 2026-09-16 口径：**并成一句**「小灵ai陪你VibeCoding」）：
+//   · hero.headline 是原来那句标语，换成我们自己的；
+//   · hero.preview 是「预览版」角标，**内容清空 + 用 CSS 把它藏掉**（角标是装饰，留着空胶囊难看）。
+// 用正则按**键名**替换而不是写死原文：dsh 升级改了文案也不会漏改。
+const HERO_COPY = [
+  [/("hero\.headline"\s*:\s*)"[^"]*"/g, '$1"小灵ai陪你VibeCoding"'],
+  [/("hero\.preview"\s*:\s*)"[^"]*"/g, '$1""'],
+];
+// 角标那个 class 的哈希名不同版本会变，所以按「_previewBadge{」这个后缀匹配 CSS 规则
+const BADGE_CSS = /(\.[A-Za-z0-9_-]*_previewBadge\s*\{)/g;
+let heroTouched = 0;
+for (const file of [...walk(DSH_ROOT), ...walk(PROFILE_ROOT)]) {
+  let source;
+  try { source = fs.readFileSync(file, 'utf8'); } catch { continue; }
+  let next = source;
+  for (const [pattern, replacement] of HERO_COPY) next = next.replace(pattern, replacement);
+  next = next.replace(BADGE_CSS, '$1display:none;');
+  if (next !== source) {
+    fs.writeFileSync(file, next);
+    heroTouched += 1;
+  }
+}
+console.log(`[rebrand] 欢迎页文案与角标：改了 ${heroTouched} 个文件`);
+
 // 前端入口与 favicon
 const dist = path.join(DSH_ROOT, 'dsh-web-frontend', 'dist');
 if (fs.existsSync(dist)) {

@@ -25,8 +25,13 @@
 - **读图跟着模型走，不需要额外的插件**：学生贴进来的图当**内容块**走同一条 TEXT 渠道、同一个模型 ——
   我们的渠道模型本来就能看图（平台老 VibeCoding 的聊天一直这么发，实测能读出图里的颜色）。
   浏览器里实测过：贴一张图发出去，落在我们账本里的那一通 `withImages=true`。
-  入口脚本另外把 `@liustack/modlens` 的凭据也钉到我们的网关：它是「给纯文本模型配的视觉桥」，
-  我们这条路上用不到，但万一将来把学生指到纯文本模型、或者有人点了它，钱也仍然进我们的账。
+  入口脚本把 `@liustack/modlens` 的凭据也钉到我们的网关上（**它的位置与定位见下面「modlens 是什么」**）。
+
+### modlens 是什么（2026-09-16 用户口径）
+
+**modlens 补的是 dsh 自身缺的那块能力**（dsh 开源项目里没有「读图」这个能力，要靠插件给它装上），
+**和「我们的模型能不能看图」是两件事** —— 别把这两句混起来说（我前面写错过一次，已改）。
+所以它照装照挂；入口脚本给它写的凭据指向我们的网关，是保证**它真去读图时花的钱也进我们的账**。
 
 ## 品牌（灵动ai）
 
@@ -46,8 +51,11 @@
 品牌图：`assets/lingdong-ai-logo.png` 是原图，`assets/lingdong-ai-logo-480.png` 是裁掉透明留白后
 480 宽的版本（构建里用后者）。
 
-**仍然保留的官方文案**（要不要换等用户定）：欢迎页那句标语「探索未至之境」与「预览版」角标，
-都是 dsh 的官方文案，只是文字、不含它的标识。
+**欢迎页文案**（2026-09-16 用户定稿）：原来那两句官方文案（标语「探索未至之境」+「预览版」角标）
+并成一句 —— **「小灵ai陪你VibeCoding」**，角标直接藏掉。做法在 `rebrand.mjs` 里按**键名**替换
+（`hero.headline` / `hero.preview`）+ 给角标那条 CSS 规则加 `display:none`，dsh 升级改文案也不会漏改。
+
+**学生界面的取舍**（2026-09-16 用户定）：**保留「设置」入口**，不隐藏（里面有模型选择等）。
 
 ## 机器（容器宿主）
 
@@ -115,7 +123,7 @@ docker run --rm -p 18080:8080 \
 | omdsh-dev/DSH-better-sidebar | `dsh-better-sidebar` | 0.19.1 | 已装并挂载（侧边栏底座） |
 | bowenliang123/dsh-context | `dsh-context` | 0.52.2 | 已装并挂载（它自己声明兼容 dsh 0.1.5-rc.1） |
 | awesome-dsh-plugin/dsh-find-plugin | `dsh-find-plugin` | 0.3.7 | 已装并挂载 |
-| liustack/modlens | `@liustack/modlens` | 3.26.1 | 已装并挂载（**给纯文本模型用的视觉桥**：我们的模型自己能看图，这条路上用不到；凭据已由入口脚本钉到我们的网关，万一被用到钱也进我们的账） |
+| liustack/modlens | `@liustack/modlens` | 3.26.1 | 已装并挂载（**dsh 侧的读图能力**，补的是 dsh 自身缺的那块；凭据由入口脚本钉到我们的网关，读图花的钱也进我们的账） |
 | zhu1090093659/dsh-web | `@linxin666/dsh-web-all` | 0.3.23 | 已装并挂载（聚合仓；`dsh-web` 本身是 20 多个子包的 monorepo，装的是它的全家桶聚合包） |
 | FSMargoo/dsh-at-file | `dsh-at-file` | 0.6.3 | **已装但禁用**：它 import 的 `settingsNamespace` 在我们钉的 dsh 0.1.5-rc.1 里不存在，挂上就整棵树加载失败、界面起不来（npm 上它只有这一个版本，没有可回退的旧版） |
 | dataelement/dsh-desktop | `dsh-ppt` + `dsh-ppt-composer` | 0.1.1-rc.2 | 已装；**PPT 预设**（可编辑 PPTD + 本地生成 PPTX，16 套模板 / 134 布局） |
