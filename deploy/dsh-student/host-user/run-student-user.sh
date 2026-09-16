@@ -25,9 +25,11 @@ SKILLS_DIR="$RUNTIME_ROOT/etc/dsh/skills"
 NGINX_DIR="${NGINX_DIR:-/etc/nginx/dsh-students}"
 PUBLIC_IP="${PUBLIC_IP:-iicili.cyou}"
 LOG_DIR="${LOG_DIR:-/srv/dsh-runtime/logs}"
-# 对外端口池：nginx 听这一段，转发到「对外端口 + 1000」的内部端口（dsh 只绑回环）
+# 对外端口池：nginx 听这一段，转发到「对外端口 + 1000」的内部端口（dsh 只绑回环）。
+# ⚠️ 这一段**必须与云安全组放行的范围一致** —— 否则学生会被分到一个从公网打不开的端口
+# （2026-09-16 定的口径：安全组放行 18201-18220，所以池子就是 20 个）。
 PORT_BASE="${PORT_BASE:-18201}"
-PORT_RANGE="${PORT_RANGE:-64}"
+PORT_RANGE="${PORT_RANGE:-20}"
 INNER_OFFSET=1000
 # 一个学生的资源上限（systemd 硬限）：一个学生写死循环也只烂在他自己那一格
 MEMORY_MAX="${MEMORY_MAX:-768M}"

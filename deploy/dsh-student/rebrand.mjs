@@ -104,6 +104,19 @@ for (const file of [...walk(DSH_ROOT), ...walk(PROFILE_ROOT)]) {
 }
 console.log(`[rebrand] 欢迎页文案与角标：改了 ${heroTouched} 个文件`);
 
+// 启动画面那个字标：boot card 的 `wordmark` 默认值是**独立的 "HARNESS"**，
+// 不在 "DeepSeek Harness" 整串里，所以按整串替换抓不到它（实测：加载页露出 HARNESS）。
+const BOOT_WORDMARK = [/wordmark\s*,\s*"HARNESS"/g, `wordmark,"${BRAND}"`];
+let bootTouched = 0;
+for (const file of [...walk(DSH_ROOT), ...walk(PROFILE_ROOT)]) {
+  let source;
+  try { source = fs.readFileSync(file, 'utf8'); } catch { continue; }
+  if (!source.includes('"HARNESS"')) continue;
+  const next = source.replace(BOOT_WORDMARK[0], BOOT_WORDMARK[1]);
+  if (next !== source) { fs.writeFileSync(file, next); bootTouched += 1; }
+}
+console.log(`[rebrand] 启动画面的字标：改了 ${bootTouched} 个文件`);
+
 // 前端入口与 favicon
 const dist = path.join(DSH_ROOT, 'dsh-web-frontend', 'dist');
 if (fs.existsSync(dist)) {
