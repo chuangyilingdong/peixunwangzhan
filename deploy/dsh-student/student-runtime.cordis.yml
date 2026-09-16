@@ -84,3 +84,12 @@
 - id: open-in-app
   name: '@deepseek-ai/dsh-host-open-in-app'
   disabled: true
+
+# —— 第三方插件里与当前 dsh 版本不兼容的那些 ——
+# dsh-at-file 要 `@deepseek-ai/dsh-settings` 的 `settingsNamespace` 导出，而我们钉的 dsh 0.1.5-rc.1
+# 里没有这个导出（它面向更新的 harness；npm 上 dsh 最新也还是 0.1.5-rc.1，插件只有 0.6.3 一个版本）。
+# 包仍然装在 profile 里，只是不挂载；等 dsh 升级到插件要求的版本再打开这一行。
+# 实测：只要挂上它，整棵插件树加载失败、界面直接起不来。
+- id: dsh-at-file
+  name: dsh-at-file
+  disabled: true

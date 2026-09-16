@@ -34,8 +34,31 @@ COPY entrypoint.sh /usr/local/bin/dsh-student-entrypoint
 RUN sed -i 's/\r$//' /usr/local/bin/dsh-student-entrypoint \
  && chmod +x /usr/local/bin/dsh-student-entrypoint
 
-ENV DSH_HOME=/home/student/.dsh \
-    DSH_WORKSPACE=/home/student/workspace \
+ENV DSH_HOME=/home/student/.dsh
+# ---------------------------------------------------------------------------
+# 社区插件 + dsh-desktop 的 PPT 预设（用户指定；**全部固定版本**，不用 latest）
+#
+# `dsh plugin` 是个 pnpm 转发器，所以容器里要先有 pnpm。
+# 装进来的东西按用途分三类，注意它们与「给孩子用」的取舍见 README：
+#   · 界面/易用：dsh-better-sidebar（侧边栏底座：文件/终端/侧边对话/Git/子代理页面）
+#                dsh-at-file（@ 引用工作区文件）、dsh-context（上下文用量与压缩）
+#                @linxin666/dsh-web-all（聚合：任务板/Git 图/远程 Web UI/皮肤/宠物…）
+#   · 能力：@liustack/modlens（视觉桥：让纯文本模型读图，需视觉渠道凭据）
+#            dsh-find-plugin（让模型自己去 GitHub 找插件）
+#   · 产物：dsh-desktop 的 dsh-ppt + dsh-ppt-composer（可编辑 PPTD + 本地生成 PPTX）
+# ---------------------------------------------------------------------------
+# ⚠️ 关键：`dsh plugin` 是 pnpm 转发器，PATH 上没有 pnpm 时它会**打印一行提示然后照样退出 0**
+# （实测踩到：插件一个没装，构建却"成功"）。所以这里显式装 pnpm，并且装完必须**断言**真的进了 profile。
+RUN npm install -g pnpm@10.17.0  && command -v pnpm  && npm config set registry https://registry.npmmirror.com  && dsh plugin --profile web add       "dsh-better-sidebar@${SIDEBAR_VERSION}"       "dsh-find-plugin@${FIND_PLUGIN_VERSION}"       "@liustack/modlens@${MODLENS_VERSION}"       "dsh-at-file@${AT_FILE_VERSION}"       "dsh-context@${CONTEXT_VERSION}"       "@linxin666/dsh-web-all@${DSH_WEB_ALL_VERSION}"  && for pkg in dsh-better-sidebar dsh-find-plugin @liustack/modlens dsh-at-file dsh-context @linxin666/dsh-web-all; do       grep -q "\"$pkg\"" "$DSH_HOME/profiles/web/package.json" || { echo "插件 $pkg 没有装进 profile" >&2; exit 1; };     done
+
+# PPT 预设：dsh-desktop 以本地 tarball 分发（npm 上没有），按 commit 固定再装。
+# 走 jsDelivr 而不是 raw.githubusercontent —— 这台机器上 raw 域名实测连不上（curl 000），jsDelivr 正常。
+ARG DSH_DESKTOP_SHA=aca970834bce88d2ec14ec278b368f6f0d168d0a
+ARG PPT_BUNDLE=dsh-ppt-0.1.1-rc.2-desktop-20260906.tgz
+ARG PPT_COMPOSER_BUNDLE=dsh-ppt-composer-0.1.1-rc.2-desktop-20260906.tgz
+RUN mkdir -p /opt/ppt-bundles && cd /opt/ppt-bundles  && for f in "${PPT_BUNDLE}" "${PPT_COMPOSER_BUNDLE}"; do       for attempt in 1 2 3; do         curl -fsSL --retry 3 --retry-delay 2           "https://cdn.jsdelivr.net/gh/dataelement/dsh-desktop@${DSH_DESKTOP_SHA}/packages/ppt-bundles/${f}" -o "${f}" && break;         [ "${attempt}" = "3" ] && { echo "拉取 ${f} 失败" >&2; exit 1; };         sleep 3;       done;     done  && ln -sf "${PPT_BUNDLE}" dsh-ppt.tgz  && dsh plugin --profile web add "/opt/ppt-bundles/${PPT_BUNDLE}"  && node -e "const fs=require('fs');const p=process.env.DSH_HOME+'/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.pnpm={...(j.pnpm||{}),overrides:{...((j.pnpm&&j.pnpm.overrides)||{}),'dsh-ppt':'file:/opt/ppt-bundles/dsh-ppt.tgz'}};fs.writeFileSync(p,JSON.stringify(j,null,2));"  && dsh plugin --profile web add "/opt/ppt-bundles/${PPT_COMPOSER_BUNDLE}"  && node -e "const fs=require('fs');const p=process.env.DSH_HOME+'/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.dsh.profile.bundles=j.dsh.profile.bundles.filter((b)=>b!=='dsh-ppt');fs.writeFileSync(p,JSON.stringify(j,null,2));"  && node -e "const j=require(process.env.DSH_HOME+'/profiles/web/package.json');const b=j.dsh.profile.bundles;if(!b.includes('dsh-ppt-composer'))throw new Error('composer 没进 bundles');if(b.includes('dsh-ppt'))throw new Error('dsh-ppt 必须只当依赖、不能当 bundle（会与 composer 抢注册 dsh-ppt-bundled）');if(!(j.dependencies||{})['dsh-ppt'])throw new Error('dsh-ppt 依赖丢了');console.log('PPT bundles OK:',b.filter((x)=>x.includes('ppt')).join(','));"
+
+ENV DSH_WORKSPACE=/home/student/workspace \
     DSH_COURSE_SKILLS=/etc/dsh/skills \
     DSH_PERMISSION_MODE=workspace-write \
     DSH_PATCH=/etc/dsh/student-runtime.cordis.yml \
