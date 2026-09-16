@@ -26,10 +26,13 @@ NGINX_DIR="${NGINX_DIR:-/etc/nginx/dsh-students}"
 PUBLIC_IP="${PUBLIC_IP:-iicili.cyou}"
 LOG_DIR="${LOG_DIR:-/srv/dsh-runtime/logs}"
 # 对外端口池：nginx 听这一段，转发到「对外端口 + 1000」的内部端口（dsh 只绑回环）。
-# ⚠️ 这一段**必须与云安全组放行的范围一致** —— 否则学生会被分到一个从公网打不开的端口
-# （2026-09-16 定的口径：安全组放行 18201-18220，所以池子就是 20 个）。
+# ⚠️ 这一段**必须与云安全组放行的范围一致** —— 否则学生会被分到一个从公网打不开的端口。
+# ⚠️ 2026-09-16：原来是写死的 20 个，于是「第 21 个学生根本进不来」—— 那是**我写死的上限，
+#    不是协议限制**：TCP 端口有 6 万多个，端口模型本身能撑几千人，只要安全组放行这一段。
+#    所以池子放到 400 个（18201-18600）。要再放大只需改 PORT_RANGE + 安全组，
+#    不需要动代码、也不需要配 DNS。
 PORT_BASE="${PORT_BASE:-18201}"
-PORT_RANGE="${PORT_RANGE:-20}"
+PORT_RANGE="${PORT_RANGE:-400}"
 INNER_OFFSET=1000
 # 一个学生的资源上限（systemd 硬限）：一个学生写死循环也只烂在他自己那一格
 MEMORY_MAX="${MEMORY_MAX:-768M}"
@@ -254,10 +257,13 @@ systemd-run --unit="${UNIT}" --collect \
   --no-open --host 127.0.0.1 --port "${INNER_PORT}" >/dev/null
 
 TOKEN=""
-for _ in $(seq 1 60); do
+# 等 dsh 打印出它的 token（这是冷启动里我们唯一能等的信号）。
+# 2026-09-16：粒度从 1 秒改成 0.2 秒（总上限仍是 60 秒）——
+# 学生对这个等待很敏感（「进个网页等十几秒体验很差」），能少等一秒是一秒。
+for _ in $(seq 1 300); do
   TOKEN="$(sed -n 's/.*[?&]token=\([A-Za-z0-9._-]*\).*/\1/p' "${LOG_FILE}" 2>/dev/null | head -1)"
   [ -n "${TOKEN}" ] && break
-  sleep 1
+  sleep 0.2
 done
 if [ -z "${TOKEN}" ]; then
   echo "[run] 学生环境没起来，日志尾巴：" >&2

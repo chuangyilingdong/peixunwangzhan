@@ -14,6 +14,50 @@ import { computePoolSummary, salePriceFenSuccessSql } from '../services/computeP
 import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
 
 /**
+ * 老师点「开始上课」时，**提前把这节课学生的创作环境热起来**（2026-09-16）。
+ *
+ * 为什么：用户口径「无论什么时候都要秒进」——而 dsh 进程冷启动实测 17.9 秒
+ * （平台侧同步等它起来，学生就干等十几秒，体验很差）。进程本身的启动速度我们改不了，
+ * 能改的是**什么时候付这个 17.9 秒**：放在老师点「开始上课」那一刻（那时学生在进教室、
+ * 还没坐下打开页面），学生点「进入创作环境」时环境已经热了 → 复用路径 0.07 秒。
+ *
+ * 三条约束（与 releaseSessionRuntimes 同一套理由）：
+ *   ① **绝不连累老师**：fire-and-forget + 逐人 try/catch，开始上课的响应不等它；
+ *   ② **串行开**：同时拉起一批会让宿主机瞬间打满（每个环境 ~490MB），串行对课堂开始更友好；
+ *   ③ 宿主侧有**容量闸门**（run-student-user.sh），装不下会明确拒绝 —— 这里只是尽力预热，
+ *      拒绝掉的等到学生真点进去再开（那次就会等一下，但不影响其他学生）。
+ */
+async function warmSessionRuntimes(sessionId, lessonId, orgId) {
+  let studentIds = [];
+  try {
+    studentIds = rows("SELECT DISTINCT student_id FROM session_students WHERE session_id=? AND status='ACTIVE'", [sessionId]).map((item) => item.student_id);
+  } catch (error) {
+    console.warn(`[runtime] 预热前读名单失败 session=${sessionId}：${error?.message || error}`);
+    return;
+  }
+  if (!studentIds.length) return;
+  let launchStudentRuntime = null;
+  try {
+    ({ launchStudentRuntime } = await import('../services/studentRuntime.js'));
+  } catch (error) {
+    console.warn(`[runtime] 预热的通道不可用：${error?.message || error}`);
+    return;
+  }
+  let warmed = 0;
+  let lastError = '';
+  for (const studentId of studentIds) {
+    try {
+      await launchStudentRuntime({ sessionId, studentId, orgId, lessonId: lessonId || null });
+      warmed += 1;
+    } catch (error) {
+      // 容量不够、学生没许可等都会走到这里 —— 预热是尽力而为，绝不能影响老师上课
+      lastError = String(error?.message || error);
+    }
+  }
+  console.log(`[runtime] 课堂 ${sessionId} 预热完成：${warmed}/${studentIds.length} 个学生环境已就绪${lastError ? `（最后一个未就绪：${lastError}）` : ''}`);
+}
+
+/**
  * 课堂结束 / 解散时，把这个课堂所有学生的**创作环境收掉**（2026-09-16）。
  *
  * 为什么必须在这里做：一个学生的创作环境（dsh）是**常驻进程**，生产实测 RSS 486MB
@@ -793,6 +837,9 @@ export async function handleOrg(ctx) {
         q("UPDATE session_students SET status='ACTIVE', updated_at=? WHERE session_id=? AND status='PENDING'", [now, target.id]);
       });
       audit(ctx, 'SESSION_START', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'ACTIVE', studentCount: ready });
+      // 开始上课就把这节课学生的环境**预热**（尽力而为、不阻塞这个响应）：
+      // 学生点「进入创作环境」时环境已经热了 → 复用 0.07 秒，而不是干等 17.9 秒冷启动。
+      warmSessionRuntimes(target.id, target.lesson_id, target.org_id);
     } else if (action === 'end') {
       if (target.status !== 'ACTIVE') throw errors.conflict('只有正在上课的课堂可以结束', 'SESSION_NOT_ACTIVE');
       const settlement = transaction(() => {

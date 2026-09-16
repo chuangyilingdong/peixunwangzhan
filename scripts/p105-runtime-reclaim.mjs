@@ -53,6 +53,19 @@ check('把学生移出名单接上了（紧跟 SESSION_STUDENT_REMOVE 审计）'
 check('回收调用是 fire-and-forget（不能 await，否则老师的动作会被几十个学生的回收拖住）',
   !/await releaseSessionRuntimes\(/.test(source));
 
+/* ④ 「开始上课」要预热环境：用户口径「无论什么时候都要秒进」——
+      dsh 冷启动 17.9 秒改不了，能改的是**什么时候付**：老师点开始上课时就热起来，
+      学生点进去走复用（0.07 秒）。 */
+check('预热助手存在', /async function warmSessionRuntimes\(/.test(source));
+check('开始上课接上了预热（紧跟 SESSION_START 审计）',
+  /'SESSION_START'[\s\S]{0,500}warmSessionRuntimes\(target\.id, target\.lesson_id, target\.org_id\);/.test(source));
+check('预热是 fire-and-forget（不能 await，否则老师点「开始上课」要等全班开完环境）',
+  !/await warmSessionRuntimes\(/.test(source));
+check('预热逐人兜底（容量不够/没许可的学生不能拖垮整轮预热）',
+  /for \(const studentId of studentIds\)[\s\S]{0,200}try \{[\s\S]{0,120}await launchStudentRuntime\(/.test(source));
+check('预热传了 orgId（launchStudentRuntime 的门禁要用它校验学生归属）',
+  /await launchStudentRuntime\(\{ sessionId, studentId, orgId, lessonId/.test(source));
+
 assert.ok(source.length > 0);
 
 if (failures) { console.log(`\nP105 有 ${failures} 项未通过`); process.exitCode = 1; }
