@@ -265,6 +265,32 @@ NGINX
 nginx -t >/dev/null 2>&1 || { echo "[run] nginx 配置校验失败，撤掉这条入口" >&2; rm -f "${NGINX_DIR}/${USER_NAME}.conf"; systemctl stop "${UNIT}" >/dev/null 2>&1 || true; exit 5; }
 systemctl reload nginx
 
+# ⑧ 等到入口**真的放行**再返回（2026-09-16 实测踩到）：
+# `systemctl reload` 只是给 master 发信号，**老 worker 要把手里的连接排空才退出** ——
+# 这中间有一小段窗口，新连接可能被老 worker 按**旧票据**处理，学生看到的就是 403
+# （实测：launch 返回后 100ms 请求 → 403；同一张票据过几秒再请求 → 302）。
+# 平台拿到的 URL 是直接给浏览器打开的，所以这里必须**用请求本身当探针**，
+# 确认放行了才把 EDGE_URL 交出去。
+entry_is_live() {
+  local code
+  code="$(curl -sk -o /dev/null -m 3 -w '%{http_code}' -H "Host: ${PUBLIC_IP}" \
+    "https://127.0.0.1:${PUBLIC_PORT}/?t=${TICKET}" 2>/dev/null || true)"
+  [ "${code}" = "302" ] || [ "${code}" = "200" ]
+}
+if command -v curl >/dev/null 2>&1; then
+  ENTRY_OK=0
+  for _ in $(seq 1 25); do
+    entry_is_live && { ENTRY_OK=1; break; }
+    sleep 0.2
+  done
+  if [ "${ENTRY_OK}" != 1 ]; then
+    echo "[run] 入口写好了但探针 5 秒内一直没放行（最后一跳 HTTP：$(curl -sk -o /dev/null -m 3 -w '%{http_code}' -H "Host: ${PUBLIC_IP}" "https://127.0.0.1:${PUBLIC_PORT}/?t=${TICKET}" 2>/dev/null)）—— 不把这个地址交出去" >&2
+    exit 6
+  fi
+else
+  echo "[run] 没有 curl，跳过入口探针（不保证浏览器打开时已经放行）" >&2
+fi
+
 echo "RUNTIME_NAME=${USER_NAME}" >&2
 echo "HOST_PORT=${PUBLIC_PORT}" >&2
 echo "RUNTIME_NAME=${USER_NAME}"
