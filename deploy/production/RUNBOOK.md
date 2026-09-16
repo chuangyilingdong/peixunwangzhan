@@ -10,6 +10,17 @@
 服务器上**必须先补 Node 到 PATH**，否则会报 `node: not found`（运行时 Node 在
 `/srv/ai-kids-platform/runtime/node/bin`）。
 
+> ⚠️ **2026-09-16 踩到的坑：服务器上 `remote.origin.fetch` 只配了 `main`** ——
+> 于是在特性分支上 `git pull` 是**静默空转**（输出「Already up to date」，其实什么都没拉，
+> 部署上去的还是老代码）。先就地补一次（幂等），并**核对 HEAD 与本地一致**再往下走：
+> ```bash
+> cd /srv/ai-kids-platform/internal-test/source
+> git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+> git fetch origin
+> git branch --set-upstream-to=origin/feature/vibecoding-ppt-quality-20260915
+> git log --oneline -1        # ← 与本地 HEAD 不一致就别继续
+> ```
+
 ```bash
 ssh -i ~/.ssh/ai_kids_platform_ecs_temp_ed25519 root@39.106.183.200
 cd /srv/ai-kids-platform/internal-test/source        # 目录名沿用，内测服务已删
@@ -62,6 +73,38 @@ fc-list | grep -c cjk      # 期望 >0 —— 不装中文字体，转出来的 
 - 上传目录（`FILE_UPLOAD_ROOT`）必须归服务账号 `ai-kids-prod` 所有。若运维以 root 在里面留下过
   目录，预览转换会因 `EACCES` 失败（对外表现为「这份课件暂时无法预览」，日志里有
   `[materialPreview] 转换失败`）。修法：`chown -R ai-kids-prod:ai-kids-prod <上传目录>`。
+
+### 宿主特权代理（2026-09-16 起，**取代了 sudoers**）
+
+平台要让宿主干三件要 root 的事（开环境 / 收环境 / 取产物）。**不能用 sudo**：
+平台服务的单元里有 `NoNewPrivileges=true`，那个标志会让 sudo 直接拒绝提权
+（实测原文：`sudo: The "no new privileges" flag is set, which prevents sudo from running as root`），
+跟 sudoers 怎么写无关。所以宿主上跑一个 root 常驻的**特权代理**（socket 上按白名单执行那三个脚本）：
+
+```bash
+systemctl status dsh-host-broker --no-pager
+ls -la /run/dsh-host-user/broker.sock     # 期望 srw-rw---- root ai-kids-prod
+journalctl -u dsh-host-broker -n 30 --no-pager   # 每次操作一行（只记 op/身份，不记密钥）
+# 平台侧开关：/etc/ai-kids-platform/production.env
+#   DSH_RUNTIME_MODE=user
+#   DSH_RUNTIME_TRANSPORT=broker     # 默认；设成 script 才回去直接跑脚本（容器版/本地守卫）
+```
+安装与安全边界见 `deploy/dsh-student/host-user/README.md`。旧的
+`/etc/sudoers.d/dsh-students` 已撤（备份 `.removed-*`），要回滚就改回来并把 transport 设成 `script`。
+
+### ⚠️ 文件安全扫描与内存（2026-09-16 实测，**这条是个已知风险**）
+
+生产配的是 `FILE_UPLOAD_SCANNER=/usr/bin/clamscan` —— 独立扫描器，**每次调用都重新加载
+108MB 病毒库**：冷启动 16–40 秒、热缓存约 10 秒，进程 RSS 峰值可达 **618MB**。
+这台机器只有 1607MB，两个学生环境就占约 940MB —— 一旦同时有学生在创作，
+扫描会掉进 swap（实测从 9.7 秒退化到 59 秒），把所有文件上传拖成超时。
+
+- 已经把超时从 30s 放宽到 **120s**（`FILE_UPLOAD_SCANNER_TIMEOUT_MS` 可调）——
+  这只是让空闲时能用，**没有解决根因**；
+- 根因方案（常驻 clamd / 异步扫描 / 只在发布时扫）**要定口径**，
+  见 `docs/operations/新对话交接-dsh迁移-20260916-第四轮.md` 第四节；
+- 排查这类问题先看这三个数：`free -m`（swap）、`ps -eo pid,rss,cmd | grep clams`（扫描进程多大）、
+  `journalctl -u learning-platform-production | grep FILE_SCANNER`。
 
 ### 学生运行时网关的环境变量（2026-09-16 起）
 
