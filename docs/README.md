@@ -24,7 +24,7 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-HEAD：f02d3ee6833846bac97f05dde58aee8f6b6ab2c0（已推送）
+代码提交：f02d3ee6833846bac97f05dde58aee8f6b6ab2c0（= 生产版本；其后只有文档提交）
 生产：release 20260916T035836Z / commit f02d3ee（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
