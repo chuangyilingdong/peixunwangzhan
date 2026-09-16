@@ -24,11 +24,11 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：9cd9228351fd1d1ad42c7872993c110f39610c97（= 生产版本；其后只有文档提交）
-生产：release 20260916T043829Z / commit 9cd9228（服务 learning-platform-production @127.0.0.1:8789）
+代码提交：4c5760d4e0b59f5a8e662c8f49e408d827b6ef5b（= 生产版本；其后只有文档提交）
+生产：release 20260916T044727Z / commit 4c5760d（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
-      上一版（可回滚）：release 20260916T043133Z / commit 415d44c
+      上一版（可回滚）：release 20260916T043829Z / commit 9cd9228
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
@@ -53,10 +53,16 @@ classroomMode / classroomBlockReason`。**不要再在前端拿 `lesson.status`�
 或作品状态去猜上课状态** —— 那样会出现「列表全写未开课、顶部计数却说有课在上课」的自相矛盾。
 说明文案也要按这节课自己的入口类型取，且**能进的时候不给「为什么进不去」**。
 
-**官网匿名统计同意横幅已删除**（2026-09-16，用户要求）：横幅、样式、`setAnalyticsConsent` 全部下线。
-口径要保持一致：`trackAnalytics` 仍然只在「已同意」时才发事件，而没有横幅就没有入口写「已同意」⇒ **官网不再产生新的匿名事件**
-（宁可不统计，也不无同意上报）；以前点过同意的浏览器里留着 `granted`，照旧上报。平台端「官网转化」面板看到的是历史数据。
-若以后要重新统计，先定隐私口径（恢复横幅，或明确改成无需同意的口径），**不要**把 consent 默认改成 true。
+**官网匿名统计已彻底删除**（2026-09-16，用户要求「全部彻底消除」）：不是藏起横幅，而是整条链路下线 ——
+前端 `apps/website/src/analytics.js` 与全部 `trackAnalytics` 调用、服务端
+`apps/server/src/routes/analytics.js`（`POST /api/public/analytics/events` 接收与
+`GET /api/admin/analytics/overview` 查询）、平台端「官网转化」看板与 payload 里的 `site`/
+口径表 `site.funnel` 全部删掉；`lib.js` 里 `/api/admin/analytics` 的 ADMIN_ANALYTICS 映射也去掉
+（该权限域继续由工作台/总览/算力接口使用）。
+`analytics_events` 表与历史数据**保留**（本仓库惯例：删代码不删表），需要时查库回溯。
+守卫已改成断言「确实没有了」：p65 断言那两个端点 404 且统计接口不再带 `site`，
+p9-r03 的 ADMIN_ANALYTICS 代表接口换成 `/api/admin/dashboard`。
+要重新做访客统计，得先定隐私口径并重新加回接收与展示，别只把前端埋点加回来（会 404）。
 
 **仍未完成 / 不能标完成**：整个 MVP 与「1–7 阶段」改造仍未全量验收；CU 预留账本只接入部分 AI 链路，不是全闭环。
 
