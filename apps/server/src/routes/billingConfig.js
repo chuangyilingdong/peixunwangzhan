@@ -81,6 +81,10 @@ function normalizeProviderPolicy(value) {
   const modelMappings = Array.isArray(parsed.modelMappings) ? parsed.modelMappings.filter((item) => item && item.model).map((item) => ({ displayName: String(item.displayName || item.model).slice(0,120), model: String(item.model).slice(0,200), contextWindow: Number(item.contextWindow || 0) || null, thinkingLevel: String(item.thinkingLevel || '').slice(0,30) })).slice(0,100) : [];
   const modalityChannels = parsed.modalityChannels && typeof parsed.modalityChannels === 'object' ? Object.fromEntries(Object.entries(parsed.modalityChannels).filter(([k,v]) => VALID_MODALITIES.has(k) && typeof v === 'string').map(([k,v]) => [k, String(v).slice(0,64)])) : {};
   const modalityBackupChannels = parsed.modalityBackupChannels || {};
+  // 读图渠道（2026-09-16）：dsh 里的视觉桥（modlens）要把学生发的图交给一个**能看图**的模型，
+  // 这个渠道就是它走的那条。不配 = 平台明确拒绝带图的调用（见 runtimeGateway 的 RUNTIME_VISION_UNCONFIGURED），
+  // 绝不把图悄悄丢给纯文本渠道 —— 那样学生拿到的是一段编出来的「图里有什么」，钱照花。
+  const visionChannelId = String(parsed.visionChannelId || '').trim().slice(0, 64);
   const modalityOfChannel = (channelId) => Object.entries({ ...modalityBackupChannels, ...modalityChannels }).find(([, id]) => id === channelId)?.[0] || '';
   const channels = Array.isArray(parsed.channels) ? parsed.channels.filter((item) => item && item.id).slice(0, 30).map((item) => {
     const channelId = String(item.id).slice(0,64);
@@ -119,6 +123,7 @@ function normalizeProviderPolicy(value) {
     endpoint,
     model,
     displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels, modalityBackupChannels, modelRoutes: parsed.modelRoutes || [],
+    visionChannelId,
     allowStudentExternalContent,
     updatedAt: value?.updated_at || null,
   };
@@ -539,6 +544,10 @@ export async function handleAdminBillingConfig(ctx) {
       const main = modalityChannels[modality]; const backup = modalityBackupChannels[modality];
       if ((main && !ids.has(main)) || (backup && (!ids.has(backup) || backup === main))) throw errors.badRequest('主备渠道必须存在且不能相同', 'AI_PROVIDER_ROUTE_INVALID');
     }
+    // 读图渠道（2026-09-16）：必须指向一条真实存在的渠道，否则保存时就报错，
+    // 不能让「读图」这件事静默地退化成「把图发给纯文本模型」。
+    const visionChannelId = body.visionChannelId === undefined ? (before.visionChannelId || '') : String(body.visionChannelId || '').trim().slice(0, 64);
+    if (visionChannelId && !ids.has(visionChannelId)) throw errors.badRequest('读图渠道必须来自已配置的渠道列表', 'AI_PROVIDER_ROUTE_INVALID');
     const modelRoutes = body.modelRoutes === undefined ? (before.modelRoutes || []) : body.modelRoutes;
     if (!Array.isArray(modelRoutes) || modelRoutes.length > 500) throw errors.badRequest('模型路由必须是最多500条的列表', 'AI_PROVIDER_ROUTE_INVALID');
     const routeKeys = new Set();
@@ -562,7 +571,7 @@ export async function handleAdminBillingConfig(ctx) {
     if (Array.isArray(body.channels)) body.channels.forEach((channel) => { if (channel?.id && String(channel.apiKey || '').trim()) setProviderApiKey(channel.apiKey, String(channel.id)); });
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     const after = {
-      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels, modalityBackupChannels, modelRoutes,
+      provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels, modalityBackupChannels, modelRoutes, visionChannelId,
       allowStudentExternalContent,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });

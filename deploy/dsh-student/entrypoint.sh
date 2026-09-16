@@ -16,6 +16,30 @@ LOG=/tmp/dsh-web.log
 export PLATFORM_GATEWAY_KEY="${PLATFORM_GATEWAY_KEY:-}"
 export PLATFORM_GATEWAY_BASE_URL="${GATEWAY_BASE_URL:-}"
 
+# 0) 视觉桥（modlens，界面上的读图能力）的凭据：**必须指向我们的网关**。
+# 它自带 OpenAI / Gemini / Antigravity CLI 等渠道，容器里既没有那些凭据，
+# 就算有 —— 读图花的钱也不进我们的账本。所以这里按本次容器注入的运行时密钥写死一条路由。
+# 用 node 生成而不是 heredoc：密钥或 URL 里出现引号也不会把 JSON 写坏。
+#   · structuredOutput 必须是 false：我们的网关只转 messages 与 stream，**不转 response_format**，
+#     打开它等于要求上游按 JSON Schema 回，实际拿不到 → modlens 以「契约不完整」失败。
+#   · reuse 全 false：明确拒绝复用容器里其他工具的登录态（容器里本来也没有）。
+MODLENS_CONFIG_PATH="${HOME:-/root}/.modlens/config.json"
+export MODLENS_CONFIG_PATH
+if [ -n "${PLATFORM_GATEWAY_KEY}" ] && [ -n "${PLATFORM_GATEWAY_BASE_URL}" ]; then
+  PLATFORM_VISION_MODEL="${PLATFORM_VISION_MODEL:-platform-vision}" \
+  node -e 'const fs=require("fs"),path=require("path");const file=process.env.MODLENS_CONFIG_PATH;
+fs.mkdirSync(path.dirname(file),{recursive:true});
+fs.writeFileSync(file,JSON.stringify({
+  provider:"openai",
+  cooldown:"off",
+  providers:{openai:{baseUrl:process.env.PLATFORM_GATEWAY_BASE_URL,apiKey:process.env.PLATFORM_GATEWAY_KEY,model:process.env.PLATFORM_VISION_MODEL,structuredOutput:false}},
+  reuse:{claude:false,codex:false,opencode:false,pi:false,grok:false}
+},null,2),{mode:0o600});'
+  echo "[entrypoint] 读图已指向我们的网关（模型 ${PLATFORM_VISION_MODEL:-platform-vision}）"
+else
+  echo "[entrypoint] 警告：没有注入网关凭据，读图不会被接通（模型调用本身也没法工作）" >&2
+fi
+
 # 1) 起 dsh（后台），日志同时在容器 stdout 留一份
 dsh --profile web --patch "${DSH_PATCH}" --no-open --host "${DSH_INNER_HOST}" --port "${DSH_INNER_PORT}" 2>&1 | tee "${LOG}" &
 

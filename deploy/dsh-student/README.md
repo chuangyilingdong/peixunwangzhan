@@ -16,6 +16,16 @@
     `directory-picker`、`open-in-app`
 - **容器内 nginx**：dsh 只绑 `127.0.0.1` 且**拒绝** `--host 0.0.0.0`（官方理由：会把 RCE 暴露到网络），
   所以对外入口必须由容器内的这层 nginx 提供 —— 它校验我们平台的短时票据，再把请求转给 `127.0.0.1:3080`。
+- **读图（modlens）也走我们的网关**：入口脚本按本次容器注入的运行时密钥写 `~/.modlens/config.json`，
+  把它的 openai 路由指向 `GATEWAY_BASE_URL` + `PLATFORM_GATEWAY_KEY`（`provider: openai`、`reuse` 全 false）。
+  它自带 OpenAI / Gemini / Antigravity CLI 等渠道，容器里既没有那些凭据、花了钱也不进我们的账，
+  所以这一步是**必须**的，不是可选优化。模型名由 `PLATFORM_VISION_MODEL` 给（默认 `platform-vision`），
+  平台在**读图渠道的模型清单**里解析它（见下「模型名只当意向」）。
+
+## 机器（容器宿主）
+
+这台生产机跑不了容器，所以学生容器放在**另一台机器**上：装机、拉起、回收、自检的脚本都在
+[`host/`](host/README.md)，平台与宿主之间只有「一个脚本 + 几个参数」这一层接口。
 
 ## 构建与运行
 
@@ -46,6 +56,26 @@ docker run --rm -p 18080:8080 \
 2. `dsh_edge` cookie 的值就是平台票据；生产应换成平台签发的**按会话**cookie（并在会话结束时失效）。
 3. 还没接：我们自己的 PPT/文档产物工具（dsh 没有这类工具）、以及把 `deliverables/presented`
    事件接回我们的作品提交接口。
+4. 工作区要学生手动选一次（dsh 的界面在选好工作区前不让发消息）；平台建会话时应预选 `/home/student/workspace`。
+
+## 模型名只当「意向」、读图单独一条渠道（2026-09-16）
+
+容器补丁层里那两行 `deepseek-flash` / `deepseek-pro` **只是给学生看的槽位名**，不是上游的真名。
+网关（`apps/server/src/routes/runtimeGateway.js` 的 `resolveRuntimeSelection`）这样解析：
+
+| 容器报的 | 落点 |
+|---|---|
+| 带图的请求（modlens 读图） | 政策里的 **`visionChannelId`（读图渠道）**，并在它的模型清单里解析名字 |
+| 名字**在**默认 TEXT 渠道的模型清单里 | 就用这个名字（渠道支持多模型时有用） |
+| 名字**不在**（含 `provider/model` 前缀的写法） | 用这条渠道**自己的 model**，绝不把容器报的字符串原样发上游 |
+| 管理员配了 `modelRoutes`（名字 → 哪条渠道） | 按路由走（既有语义不变） |
+
+没配读图渠道时，带图的调用**直接 409**（`RUNTIME_VISION_UNCONFIGURED`）而不是退回纯文本渠道 ——
+后者会让学生拿到一段编出来的「图里有什么」，钱照花、结论是假的。
+
+守卫：`node scripts/p97-runtime-gateway.mjs`（网关这一侧的规矩）、
+`node scripts/p98-runtime-container-e2e.mjs`（**真容器**：容器里读图 → 我们的网关 → 落进 usage_records；
+本机没有 docker 或没有镜像时**明确跳过**，不装作通过）。
 
 ## 已装的社区插件与 PPT 预设（2026-09-16）
 
@@ -56,7 +86,7 @@ docker run --rm -p 18080:8080 \
 | omdsh-dev/DSH-better-sidebar | `dsh-better-sidebar` | 0.19.1 | 已装并挂载（侧边栏底座） |
 | bowenliang123/dsh-context | `dsh-context` | 0.52.2 | 已装并挂载（它自己声明兼容 dsh 0.1.5-rc.1） |
 | awesome-dsh-plugin/dsh-find-plugin | `dsh-find-plugin` | 0.3.7 | 已装并挂载 |
-| liustack/modlens | `@liustack/modlens` | 3.26.1 | 已装并挂载（视觉桥，**需要视觉渠道凭据**，见下） |
+| liustack/modlens | `@liustack/modlens` | 3.26.1 | 已装并挂载（视觉桥；**凭据由入口脚本指向我们的网关**，见上「读图」） |
 | zhu1090093659/dsh-web | `@linxin666/dsh-web-all` | 0.3.23 | 已装并挂载（聚合仓；`dsh-web` 本身是 20 多个子包的 monorepo，装的是它的全家桶聚合包） |
 | FSMargoo/dsh-at-file | `dsh-at-file` | 0.6.3 | **已装但禁用**：它 import 的 `settingsNamespace` 在我们钉的 dsh 0.1.5-rc.1 里不存在，挂上就整棵树加载失败、界面起不来（npm 上它只有这一个版本，没有可回退的旧版） |
 | dataelement/dsh-desktop | `dsh-ppt` + `dsh-ppt-composer` | 0.1.1-rc.2 | 已装；**PPT 预设**（可编辑 PPTD + 本地生成 PPTX，16 套模板 / 134 布局） |

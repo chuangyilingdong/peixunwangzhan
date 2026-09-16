@@ -12,6 +12,9 @@
  *   ③ 密钥有效但学生被移出名单 → 403
  *   ④ 正常调用 → 200，返回 OpenAI 形状的回复，且**落了 usage_records**
  *   ⑤ 调用方改不动归属：即使请求里塞别的机构/学生字段，账也记在密钥里的那个学生/课堂上
+ *   ⑥ 模型名映射：容器报的名字只当「意向」，认不出就用渠道自己的 model（绝不原样发上游）
+ *   ⑦ 读图：没配读图渠道 → 409（明确拒绝）；配了 → 走那条渠道并且仍然记账
+ *   ⑧ 多模态内容不被压扁：图片原样透传，容器内路径（file://）不发出去
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { issueRuntimeKey } from '../apps/server/src/routes/runtimeGateway.js';
+import { issueRuntimeKey, normalizeRuntimeMessages, resolveRuntimeSelection } from '../apps/server/src/routes/runtimeGateway.js';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p97-runtime-gateway-'));
@@ -133,6 +136,78 @@ try {
     probe.close();
     const removed = await call(key, { messages });
     check('③ 学生被移出名单 → 403', removed.status === 403, `实际 ${removed.status} ${removed.text.slice(0, 120)}`);
+  }
+
+  // ⑥ 模型名映射：容器报的名字只当「意向」，解析不到就绝不原样发上游
+  {
+    const policy = {
+      provider: 'local-mock', model: '', endpoint: '', channels: [
+        { id: 'ch-text', provider: 'local-mock', model: 'local-mock-text', models: ['local-mock-text', 'local-mock-pro'], endpoint: '' },
+        { id: 'ch-vision', provider: 'local-mock', model: 'local-mock-vision', models: ['local-mock-vision'], endpoint: '' },
+      ],
+      modalityChannels: { TEXT: 'ch-text' }, modalityBackupChannels: {}, modelRoutes: [], visionChannelId: '',
+    };
+    const unknown = resolveRuntimeSelection(policy, 'deepseek-pro', false);
+    check('⑥ 认不出的名字 → 用渠道自己的 model（不原样发上游）', unknown.channelId === 'ch-text' && unknown.model === 'local-mock-text', JSON.stringify({ channelId: unknown.channelId, model: unknown.model }));
+    const known = resolveRuntimeSelection(policy, 'platform-gateway/local-mock-pro', false);
+    check('⑥ 认得出的名字（带 provider/ 前缀）→ 就用它', known.model === 'local-mock-pro', known.model);
+    const routed = resolveRuntimeSelection({ ...policy, modelRoutes: [{ modality: 'TEXT', model: 'deepseek-flash', channelId: 'ch-vision' }] }, 'deepseek-flash', false);
+    check('⑥ 管理员配了模型路由 → 按路由走那条渠道', routed.channelId === 'ch-vision' && routed.model === 'deepseek-flash', JSON.stringify({ channelId: routed.channelId, model: routed.model }));
+    const vision = resolveRuntimeSelection({ ...policy, visionChannelId: 'ch-vision' }, 'deepseek-pro', true);
+    check('⑥ 带图的请求 → 走读图渠道，且不带备份渠道', vision.channelId === 'ch-vision' && vision.model === 'local-mock-vision' && !vision.backup, JSON.stringify({ channelId: vision.channelId, model: vision.model, backup: Boolean(vision.backup) }));
+    let visionGuard = '';
+    try { resolveRuntimeSelection(policy, '', true); } catch (error) { visionGuard = error.code || ''; }
+    check('⑥ 没配读图渠道时解析直接报错（不会退回文本渠道）', visionGuard === 'RUNTIME_VISION_CHANNEL_MISSING', visionGuard);
+  }
+
+  // ⑧ 多模态内容不被压扁：以前这一层只做 String(content)，图片在这里就没了
+  {
+    const parts = normalizeRuntimeMessages({ messages: [{ role: 'user', content: [
+      { type: 'text', text: '这张图里是什么？' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+      { type: 'image_url', image_url: { url: 'file:///home/student/workspace/a.png' } },
+      { type: 'video_url', video_url: { url: 'https://example.com/a.mp4' } },
+    ] }] })[0].content;
+    check('⑧ 图片原样透传（data:image 保留）', Array.isArray(parts) && parts.some((p) => p.type === 'image_url' && p.image_url.url.startsWith('data:image/png')), JSON.stringify(parts));
+    check('⑧ 容器内路径（file://）不发上游', Array.isArray(parts) && !parts.some((p) => String(p.image_url?.url || '').startsWith('file://')), JSON.stringify(parts));
+    check('⑧ 认不出的模态（video_url）丢掉，不塞给上游', Array.isArray(parts) && !parts.some((p) => p.type === 'video_url'), JSON.stringify(parts));
+    const textOnly = normalizeRuntimeMessages({ messages: [{ role: 'user', content: [{ type: 'text', text: '你好' }] }] });
+    check('⑧ 纯文本仍然压回字符串（老形状不变）', textOnly[0].content === '你好', JSON.stringify(textOnly[0].content));
+  }
+
+  // ⑦ 读图闸门：没配读图渠道就明确拒绝；配了就走那条渠道，而且**照样记账**
+  {
+    const base = {
+      provider: 'local-mock', model: '', endpoint: '', channels: [
+        { id: 'ch-text', provider: 'local-mock', model: 'local-mock-text', models: ['local-mock-text'], endpoint: '' },
+        { id: 'ch-vision', provider: 'local-mock', model: 'local-mock-vision', models: ['local-mock-vision'], endpoint: '' },
+      ],
+      modalityChannels: { TEXT: 'ch-text' }, modalityBackupChannels: {}, modelRoutes: [], visionChannelId: '',
+      allowStudentExternalContent: true,
+    };
+    const probe = new DatabaseSync(dbPath);
+    // ③ 把学生移出名单后没有放回去，这里先恢复：否则下面几通调用会被 RUNTIME_STUDENT_NOT_ACTIVE 挡掉
+    probe.prepare("UPDATE session_students SET status='ACTIVE', removed_reason=NULL WHERE id='p97_part'").run();
+    probe.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify(base));
+    probe.close();
+    const imageMessages = [{ role: 'user', content: [{ type: 'text', text: '这张图里是什么' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }];
+    const noVision = await call(key, { messages: imageMessages });
+    check('⑦ 没配读图渠道 → 409（明确拒绝，不把图丢给纯文本模型）', noVision.status === 409 && /RUNTIME_VISION_UNCONFIGURED/.test(noVision.text), `实际 ${noVision.status} ${noVision.text.slice(0, 160)}`);
+
+    const setter = new DatabaseSync(dbPath);
+    setter.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ ...base, visionChannelId: 'ch-vision' }));
+    setter.close();
+
+    const visionCall = await call(key, { messages: imageMessages, stream: true });
+    check('⑦ 配了读图渠道 → 200', visionCall.status === 200, `实际 ${visionCall.status} ${visionCall.text.slice(0, 160)}`);
+    const probe2 = new DatabaseSync(dbPath);
+    const row = probe2.prepare('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(sessionId);
+    check('⑦ 这一通读图记在**读图渠道的模型**上', row?.model === 'local-mock-vision', String(row?.model));
+    check('⑦ 记账里留了「容器报的名字 → 实际渠道/模型」', /modelResolution/.test(String(row?.pricing_snapshot || '')) && /"withImages":true/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 260));
+    probe2.close();
+
+    const textCall = await call(key, { messages, model: 'deepseek-pro' });
+    check('⑥ 未知模型名走 HTTP → 200，且回复里的 model 是渠道自己的 model', textCall.status === 200 && textCall.payload?.model === 'local-mock-text', `实际 ${textCall.status} ${textCall.text.slice(0, 160)}`);
   }
 
   console.log(JSON.stringify({ name: 'runtime-gateway', pass: failures === 0, failures }, null, 2));

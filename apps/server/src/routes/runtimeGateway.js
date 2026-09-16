@@ -79,16 +79,113 @@ function readBearer(ctx) {
   return match ? match[1].trim() : '';
 }
 
+// 读图请求（modlens 这类视觉桥）发过来的是 OpenAI 的多模态 content 数组，这里是收口的地方：
+// 只认文字与 http(s)/data:image 的图片，其余部分一律丢掉。
+// ⚠️ 以前这一层只做 String(content)，数组会被压成 "[object Object]" —— 图片在网关这一跳就没了，
+// 上游只看到一句空话，学生的图等于没发（2026-09-16 修）。
+const MAX_IMAGE_PARTS_PER_MESSAGE = 4;
+const MAX_IMAGE_URL_CHARS = 5_600_000; // 约 4MB 的 base64
+
+function normalizeContentParts(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return String(content ?? '');
+  const parts = [];
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue;
+    const type = String(item.type || '').trim();
+    if (type === 'text' || type === 'input_text') {
+      const text = String(item.text ?? '');
+      if (text.trim()) parts.push({ type: 'text', text });
+      continue;
+    }
+    if (type === 'image_url' || type === 'input_image') {
+      if (parts.filter((part) => part.type === 'image_url').length >= MAX_IMAGE_PARTS_PER_MESSAGE) continue;
+      const url = String(item.image_url?.url ?? item.image_url ?? item.image ?? '').trim();
+      // 只放行能真正被上游取到的图：容器内的文件路径（file:// 等）发出去只会让上游报错
+      if (!/^(?:https?:\/\/|data:image\/)/i.test(url) || url.length > MAX_IMAGE_URL_CHARS) continue;
+      parts.push({ type: 'image_url', image_url: { url } });
+    }
+  }
+  // 全是文字就退回字符串：文本这条路（也是绝大多数调用）保持原来的形状不变
+  return parts.every((part) => part.type === 'text') ? parts.map((part) => part.text).join('\n') : parts;
+}
+
 function normalizeMessages(body) {
   const raw = Array.isArray(body?.messages) ? body.messages : [];
   const messages = raw
     .map((item) => ({
       role: ['system', 'user', 'assistant', 'tool'].includes(String(item?.role)) ? String(item.role) : 'user',
-      content: typeof item?.content === 'string' ? item.content : String(item?.content ?? ''),
+      content: normalizeContentParts(item?.content),
     }))
-    .filter((item) => item.content.trim() !== '');
+    .filter((item) => (typeof item.content === 'string' ? item.content.trim() !== '' : item.content.length > 0));
   if (!messages.length) throw errors.badRequest('messages 不能为空', 'VALIDATION_REQUIRED');
   return messages.slice(-40);
+}
+
+// 给守卫脚本 p97 直接断言这两个纯函数（它们决定「学生的图有没有被压扁」与「名字解析到哪条渠道」）。
+export const normalizeRuntimeMessages = normalizeMessages;
+export { resolveRuntimeSelection };
+
+const hasImageParts = (messages) => messages.some((item) => Array.isArray(item.content) && item.content.some((part) => part.type === 'image_url'));
+
+// 容器里的模型清单是我们自己写在镜像补丁层里的，**不是上游的真名**。所以报上来的名字只当「意向」：
+// 在我们自己渠道的可用模型清单里认得出就用它，认不出就用这条渠道自己的默认模型。
+// 绝不把容器报的字符串原样发给上游 —— 轻则上游 400，重则按另一个模型计费（2026-09-16 修）。
+function bareModelName(value) {
+  const text = String(value || '').trim();
+  return text.includes('/') ? text.slice(text.lastIndexOf('/') + 1) : text;
+}
+
+function channelById(policy, channelId) {
+  const id = String(channelId || '').trim();
+  return id && Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === id) || null : null;
+}
+
+function modelForChannel(channel, requestedModel) {
+  const wanted = bareModelName(requestedModel).toLowerCase();
+  const known = [...(channel?.models || []), channel?.model].filter(Boolean);
+  const hit = wanted ? known.find((item) => String(item).trim().toLowerCase() === wanted) : null;
+  return String(hit || channel?.model || '').trim();
+}
+
+/** 换成指定渠道的选择：端点、模板、合同单价跟着渠道走；**不带备份渠道**（备份会把图发给纯文本模型）。 */
+function selectionOnChannel(policy, channelId, requestedModel) {
+  const channel = channelById(policy, channelId);
+  if (!channel) throw errors.conflict('平台配置的读图渠道不存在，请让管理员检查渠道设置', 'RUNTIME_VISION_CHANNEL_MISSING');
+  const model = modelForChannel(channel, requestedModel);
+  const base = providerSelectionForModality(policy, 'TEXT', '');
+  const priced = { estimatedCostFen: channel.modelCosts?.[model] ?? channel.estimatedCostFen ?? null };
+  if (base.channelId === channel.id) return { ...base, model, ...priced };
+  return {
+    provider: channel.provider, model, endpoint: channel.endpoint, channelId: channel.id,
+    providerAccountRef: channel.providerAccountRef || null,
+    requestTemplates: channel.requestTemplates || {}, modelRequestTemplates: channel.modelRequestTemplates || {},
+    requestPaths: channel.requestPaths || {}, pollPaths: channel.pollPaths || {},
+    upstreamUnitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null,
+    ...priced,
+  };
+}
+
+/**
+ * 容器报的模型名 → 我们渠道里的 model id。
+ * ① 带图的请求走「读图渠道」（政策里的 visionChannelId），并在它的模型清单里解析名字；
+ * ② 文本请求：政策里配了模型路由（管理员指定「这个名字走哪条渠道」）就按路由走（既有语义不变），
+ *    没有路由就用平台默认的 TEXT 渠道，同样在它的模型清单里解析名字。
+ */
+function resolveRuntimeSelection(policy, requestedModel, withImages) {
+  if (withImages) return selectionOnChannel(policy, policy?.visionChannelId, requestedModel);
+  const routes = Array.isArray(policy?.modelRoutes) ? policy.modelRoutes : [];
+  const wanted = bareModelName(requestedModel).toLowerCase();
+  const route = wanted
+    ? routes.find((item) => String(item?.modality || '').toUpperCase() === 'TEXT' && bareModelName(item?.model).toLowerCase() === wanted)
+    : null;
+  if (route?.channelId) return providerSelectionForModality(policy, 'TEXT', route.model);
+  const base = providerSelectionForModality(policy, 'TEXT', '');
+  const channel = channelById(policy, base.channelId);
+  const model = modelForChannel(channel, requestedModel);
+  return model && model !== base.model
+    ? { ...base, model, estimatedCostFen: channel?.modelCosts?.[model] ?? channel?.estimatedCostFen ?? null }
+    : base;
 }
 
 function sseWrite(res, payload) {
@@ -107,9 +204,15 @@ export async function handleRuntimeGateway(ctx) {
 
   const policy = getAiProviderPolicy();
   const requestedModel = String(body.model || '').trim();
+  const withImages = hasImageParts(messages);
+  // 没有配读图渠道时**明确拒绝**，不退回纯文本渠道：那会让学生拿到一段编出来的「图里有什么」，
+  // 钱照花、结论是假的。
+  if (withImages && !channelById(policy, policy?.visionChannelId)) {
+    throw errors.conflict('平台还没有开通读图能力，先别让它看图', 'RUNTIME_VISION_UNCONFIGURED');
+  }
   // 渠道选择与预算检查与 VibeCoding 原链路同一套：机构/学生/课时/课堂四个维度都带上
   const selection = await applyGatewayRoute(
-    providerSelectionForModality(policy, 'TEXT', requestedModel),
+    resolveRuntimeSelection(policy, requestedModel, withImages),
     { orgId: payload.o, studentId: payload.u, lessonId: session.lesson_id || '', modality: 'TEXT' },
   );
   // 预算检查是**提示性**的（enforced 恒为 false，见 computePool 注释）：课时金额超了只提醒平台，不阻断学生生成
@@ -126,7 +229,11 @@ export async function handleRuntimeGateway(ctx) {
       modality: 'TEXT', model: selection.model, status, failCode,
       inputTokens: usage?.inputTokens || 0, outputTokens: usage?.outputTokens || 0,
       costFen: provider.compute?.saleSnapshot?.unitFen ?? priceFenFor({ modality: 'TEXT', model: selection.model }),
-      pricing: { compute: provider.compute, source: 'dsh-runtime-gateway', provider: providerName, mode: selection.provider },
+      pricing: {
+        compute: provider.compute, source: 'dsh-runtime-gateway', provider: providerName, mode: selection.provider,
+        // 容器报的名字与我们真正调用的渠道/模型都留档：对账时能看出「学生选的那个名字」到底落在哪儿
+        modelResolution: { requested: requestedModel || null, withImages, channelId: selection.channelId || null, model: selection.model },
+      },
     });
     void text;
   };

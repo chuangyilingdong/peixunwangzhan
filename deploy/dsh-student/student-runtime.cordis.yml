@@ -39,6 +39,11 @@
 
 # 模型路由：只用我们自己的网关（OpenAI 兼容），不直连 DeepSeek 官方。
 # apiKeyEnv 是凭据引用，密钥不进配置文件；baseURL 由容器环境注入。
+#
+# ⚠️ 这里的模型 id 只是**给学生看的槽位名**，不是上游的真名：学生选了哪个名字，由我们网关
+# 在**自己渠道的模型清单**里解析（认得出就用它，认不出就用那条渠道的默认模型），
+# 见 apps/server/src/routes/runtimeGateway.js 的 resolveRuntimeSelection 与守卫 scripts/p97。
+# 也就是说：改这里不影响计费，改渠道配置才影响。
 - id: llm-pi-ai
   name: '@deepseek-ai/dsh-llm-pi-ai'
   config:

@@ -80,7 +80,16 @@ export function ProviderPolicyPanel({ api }) {
   }
   function removeChannel(index) {
     const id = form.channels[index].id;
-    setForm({ ...form, channels: form.channels.filter((_, i) => i !== index), modalityChannels: Object.fromEntries(Object.entries(form.modalityChannels).filter(([, v]) => v !== id)), modalityBackupChannels: Object.fromEntries(Object.entries(form.modalityBackupChannels || {}).filter(([, v]) => v !== id)) });
+    // 删渠道时顺手把「指着这条渠道」的路由一起清掉：留着的话保存会被后端拦下
+    // （读图渠道必须来自已配置的渠道列表），报错落在别的字段上，很难看懂。
+    setForm({
+      ...form,
+      channels: form.channels.filter((_, i) => i !== index),
+      modalityChannels: Object.fromEntries(Object.entries(form.modalityChannels).filter(([, v]) => v !== id)),
+      modalityBackupChannels: Object.fromEntries(Object.entries(form.modalityBackupChannels || {}).filter(([, v]) => v !== id)),
+      visionChannelId: form.visionChannelId === id ? '' : (form.visionChannelId || ''),
+      modelRoutes: (form.modelRoutes || []).filter((route) => route.channelId !== id && route.backupChannelId !== id),
+    });
   }
   function channelRequest(channel) { return { endpoint: channel.endpoint, channelId: channel.id, ...(channel.apiKey ? { apiKey: channel.apiKey } : {}) }; }
   // 渠道按「能力路由」确定模态，模型能力按模态归一化。
@@ -401,6 +410,13 @@ export function ProviderPolicyPanel({ api }) {
       </div>)}
       <div className="top-gap"><strong>能力路由（切换渠道）</strong><div className="muted">主渠道明确拒绝（认证失败、接口不存在、限流）时尝试备用渠道的默认模型。已输出、已受理或结果未知不自动重试；启用网关时主备由网关管理。</div></div>
       <div className="form-grid top-gap">{modalities.map(([id,name])=><div key={id}><label>{name} · 主渠道<select value={form.modalityChannels[id]||''} onChange={e=>setForm({...form,modalityChannels:{...form.modalityChannels,[id]:e.target.value}})}><option value="">使用默认渠道</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>{name} · 备用渠道<select value={form.modalityBackupChannels?.[id]||''} onChange={e=>setForm({...form,modalityBackupChannels:{...(form.modalityBackupChannels || {}),[id]:e.target.value}})}><option value="">不配置备用渠道</option>{form.channels.filter(c=>c.id!==form.modalityChannels[id]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div>)}</div>
+      {/* 读图渠道（2026-09-16）：学生端 dsh 里的视觉桥（modlens）把学生发的图交给这条渠道的模型。
+          必须单独配一条**能看图**的渠道：不配 = 带图的调用被明确拒绝（409），
+          不会悄悄丢给文本渠道去编——那等于花钱买一段假结论。 */}
+      <div className="form-grid top-gap">
+        <label>读图渠道（学生发图时用）<select value={form.visionChannelId||''} onChange={e=>setForm({...form,visionChannelId:e.target.value})}><option value="">不配置（带图的调用会被拒绝）</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}（{c.model}）</option>)}</select></label>
+        <div className="muted">学生端「看图」走这条渠道，费用照常进算力账；留空则学生发图时平台直接拒绝，不会拿纯文本模型去猜图。</div>
+      </div>
       <details className="top-gap"><summary>平台路由策略</summary>
         <p className="muted">平台按能力和用户选择的模型决定调用渠道；仅在上游明确拒绝且尚未产出结果时尝试备用。启用 new-api 后，文本和图片的渠道切换由网关管理；视频和音乐仍按这里的直接渠道执行。</p>
         <label className="top-gap">搜索渠道或模型<input value={routeSearch} onChange={(event) => setRouteSearch(event.target.value)} placeholder="输入名称或模型 ID" /></label>
