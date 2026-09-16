@@ -1,0 +1,11 @@
+[Unit]
+Description=回收闲置的学生创作环境（dsh 用户版）
+Documentation=file:/opt/dsh-host-user/README.md
+# 平台那侧负责「课堂结束/解散/移出学生」的即时回收；这个 timer 兜的是
+# 「课堂还在上、学生早就不用了」——那条没有触发点，只能靠定时扫。
+[Service]
+Type=oneshot
+Environment=IDLE_MINUTES=20
+Environment=MAX_AGE_MINUTES=180
+Environment=CPU_IDLE_PERCENT=1
+ExecStart=/opt/dsh-host-user/reap-idle-user.sh
