@@ -2,6 +2,18 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+// 课时状态只认服务端给的课堂状态（participationStatus / canStart）：
+// 以前这里拿作品状态（workStatus / lesson.status）顶替，结果正在上课的课时也显示「未开课」。
+// 规则与「学习上课」页的 lessonStateBadge 完全一致 —— 四处口径必须一样。
+const LESSON_STATE = {
+  ACTIVE: { label: '上课中', tone: 'is-live' },
+  PENDING: { label: '待上课', tone: 'is-pending' },
+  COMPLETED: { label: '已完课', tone: 'is-ok' },
+  INCOMPLETE: { label: '未完课', tone: 'is-pending' },
+  REMOVED: { label: '已被移出', tone: 'is-warn' },
+};
+const MODE_LABEL = { CANVAS: '画布课堂', VIBECODING: 'VibeCoding 课堂' };
+
 export function MyCoursesPage({ api }) {
   const [state, setState] = useState({ loading: true, error: null, items: [], summary: null });
 
@@ -17,10 +29,9 @@ export function MyCoursesPage({ api }) {
   const { items, summary } = state;
   const lessonStatus = (lesson, granted) => {
     if (!granted) return { label: '未授权', tone: 'is-warn' };
-    if (lesson.workStatus === 'PUBLISHED' || lesson.status === 'COMPLETED') return { label: '已完成', tone: 'is-ok' };
-    if (lesson.activeNow || lesson.status === 'ACTIVE') return { label: '上课中', tone: 'is-live' };
-    if (lesson.status === 'PENDING') return { label: '待上课', tone: 'is-pending' };
-    return { label: '未开课', tone: '' };
+    const state = LESSON_STATE[lesson.participationStatus];
+    if (state) return state;
+    return { label: '未加入课堂', tone: '' };
   };
 
   return <div className="student-page">
@@ -39,7 +50,7 @@ export function MyCoursesPage({ api }) {
     {summary ? <div className="student-summary">
       <div className="student-summary-card"><span>课程</span><strong>{summary.courseCount || 0}</strong></div>
       <div className="student-summary-card"><span>课时</span><strong>{summary.assignedLessonCount || 0}</strong></div>
-      <div className="student-summary-card"><span>已开始</span><strong>{summary.startedLessonCount || 0}</strong></div>
+      <div className="student-summary-card"><span>上课中</span><strong>{summary.activeLessonCount || 0}</strong></div>
       <div className="student-summary-card"><span>已提交作品</span><strong>{summary.submittedLessonCount || 0}</strong></div>
     </div> : null}
 
@@ -59,9 +70,22 @@ export function MyCoursesPage({ api }) {
       </div>
       {course.hasGrant === false ? <p className="student-card__meta">这个课包还没有分配给你，请联系老师开通后再进入。</p> : null}
       {course.description ? <p className="student-card__desc">{course.description}</p> : null}
-      <p className="student-card__meta">共 {course.progress?.lessonCount || 0} 节 · 已开始 {course.progress?.startedLessonCount || 0} 节 · 已提交 {course.progress?.submittedLessonCount || 0} 节</p>
+      <p className="student-card__meta">共 {course.progress?.lessonCount || 0} 节 · 上课中 {course.progress?.activeLessonCount || 0} 节 · 待上课 {course.progress?.pendingLessonCount || 0} 节 · 已完课 {course.progress?.completedLessonCount || 0} 节</p>
       <div className="student-progress-bar"><i style={{ width: `${course.progress?.submittedPercent || 0}%` }} /></div>
-      {course.hasGrant !== false && course.lessons?.length ? <div className="student-course-lessons" aria-label="课包课程列表">{course.lessons.map((lesson, index) => { const status = lessonStatus(lesson, course.hasGrant !== false); return <div className="student-course-lesson" key={lesson.id || index}><span className="student-course-lesson__index">{String(index + 1).padStart(2, '0')}</span><span className="student-course-lesson__title">{lesson.title}</span><span className={`student-badge ${status.tone}`}>{status.label}</span>{status.label === '上课中' ? <Link className="student-course-lesson__action" to="/learn">进入课堂</Link> : null}{status.label === '已完成' ? <Link className="student-course-lesson__action" to="/learn">课程回顾</Link> : null}</div>; })}</div> : null}
+      {course.hasGrant !== false && course.lessons?.length ? <div className="student-course-lessons" aria-label="课包课程列表">{course.lessons.map((lesson, index) => {
+        const status = lessonStatus(lesson, course.hasGrant !== false);
+        const mode = MODE_LABEL[lesson.classroomMode] || '画布课堂';
+        return <div className="student-course-lesson" key={lesson.id || index}>
+          <span className="student-course-lesson__index">{String(index + 1).padStart(2, '0')}</span>
+          <span className="student-course-lesson__title" title={lesson.title}>{lesson.title}<span className="muted"> · {mode}</span></span>
+          <span className={`student-badge ${status.tone}`}>{status.label}</span>
+          {status.label === '上课中' && (lesson.canStart || lesson.canStartVibeCoding)
+            ? <Link className="student-course-lesson__action" to="/learn">进入课堂</Link>
+            : status.label === '已完课'
+              ? <Link className="student-course-lesson__action" to="/my-works">回顾作品</Link>
+              : <span className="muted" title={lesson.classroomBlockReason || ''}>—</span>}
+        </div>;
+      })}</div> : null}
     </article>)}</div> : null}
 
     {items.length ? <div className="student-page-actions"><Link className="button" to="/learn">进入学习 <b>↗</b></Link></div> : null}

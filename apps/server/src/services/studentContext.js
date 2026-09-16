@@ -592,7 +592,7 @@ function studentLatestNotifications(user, limit = 5) {
  *   ⑤ COMPLETED                 → 已完课（这节课上完了）
  *   ⑥ INCOMPLETE                → 未完课（没消耗过算力，可以重新排进课堂再上）
  */
-function lessonAvailability({ lesson, hasGrant, participation }) {
+export function lessonAvailability({ lesson, hasGrant, participation }) {
   const lessonMode = lesson.deliveryMode || 'CANVAS';
   const partStatus = participation?.status || null;
   const sessionStatus = participation?.session_status || null;
@@ -666,6 +666,28 @@ function lessonAvailability({ lesson, hasGrant, participation }) {
       },
     } : null,
   };
+}
+
+/**
+ * 「这个学生的每一节课是什么状态」——按课程上下文一次算清，给 dashboard、我的课程、
+ * 课包详情共用。**不要再在别处重写一遍判断**：写歪了就会出现「列表写着未开课、
+ * 顶部计数却说有一节在上课」这种自相矛盾的页面。
+ *
+ * @param user    学生用户
+ * @param context 可选，已经算好的 `buildStudentContext(user)`，传进来就不重复查库
+ */
+export function lessonStateMap(user, context = null) {
+  const resolved = context || buildStudentContext(user);
+  const participationByLesson = participationMapByLesson(getStudentLessonParticipations(user));
+  const map = new Map();
+  for (const course of resolved.courses || []) {
+    const hasGrant = Boolean(course.hasGrant);
+    for (const lesson of course.lessons || []) {
+      if (map.has(lesson.id)) continue;
+      map.set(lesson.id, lessonAvailability({ lesson, hasGrant, participation: participationByLesson.get(lesson.id) }));
+    }
+  }
+  return map;
 }
 
 export function buildStudentDashboard(user) {

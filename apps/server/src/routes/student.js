@@ -1,7 +1,7 @@
 import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
-import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
+import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
 import { computePoolSummary } from '../services/computePool.js';
 
@@ -193,13 +193,16 @@ const WORK_STATUS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
 
 function studentCourseOverview(ctx) {
   const context = buildStudentContext(ctx.auth.rawUser);
+  // 每节课的课堂状态（许可 / 名单 / 课堂是否开始 / 入口类型）走同一个权威算法，
+  // 免得「我的课程」自己瞎猜：以前这里没有参与状态，页面就只好拿作品状态顶上，
+  // 于是正在上课的课时也显示成「未开课」。
+  const stateByLesson = lessonStateMap(ctx.auth.rawUser, context);
   const projects = rows(`SELECT id, course_lesson_id, class_id, title, status, updated_at FROM student_projects WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`, [ctx.auth.user.id, ctx.auth.user.orgId]);
   const works = rows('SELECT id, project_id, course_lesson_id, class_id, title, status, submitted_at FROM works WHERE student_id = ? AND org_id = ?', [ctx.auth.user.id, ctx.auth.user.orgId]);
   const classById = new Map(context.classes.map((item) => [item.id, item]));
   // 批次 C：班级退场后 `course.classes` 恒为空（键留着不炸既有读取方）；
   // 「这节课我上着哪个课堂」改由每个课时的 `participation*` / `classroomCount` 表达。
   void classById;
-  const activeLessonIds = new Set(context.activeSessions.map((item) => item.lessonId).filter(Boolean));
   const projectGroups = new Map();
   const workGroups = new Map();
   for (const project of projects) {
@@ -219,12 +222,28 @@ function studentCourseOverview(ctx) {
       const lessonProjects = projectGroups.get(lesson.id) || [];
       const lessonWorks = workGroups.get(lesson.id) || [];
       const bestWork = lessonWorks.reduce((best, item) => WORK_STATUS_RANK[item.status] > (WORK_STATUS_RANK[best?.status] || 0) ? item : best, null);
+      const state = stateByLesson.get(lesson.id) || null;
+      const classroomMode = state?.sessionMode || state?.lessonMode || lesson.deliveryMode || 'CANVAS';
+      const canEnter = Boolean(state?.canStart || state?.canStartVibeCoding);
       return {
         ...lesson,
         projectCount: lessonProjects.length,
         workCount: lessonWorks.length,
         workStatus: bestWork?.status || null,
-        activeNow: activeLessonIds.has(lesson.id),
+        // 课堂状态：与 dashboard 同一套字段名，前端两处可以共用一个翻法
+        activeNow: Boolean(state?.activeNow),
+        participationStatus: state?.participationStatus || null,
+        participationLabel: state?.participationLabel || '未加入课堂',
+        canStart: Boolean(state?.canStart),
+        canStartVibeCoding: Boolean(state?.canStartVibeCoding),
+        classroomMode,
+        classroomSessionId: state?.session?.id || null,
+        classroomSessionTitle: state?.sessionTitle || null,
+        teacherName: state?.teacherName || null,
+        // 能进就别再说「为什么进不去」；说原因时也必须按这节课自己的入口类型取，
+        // 否则画布节课会拿到「请从 VibeCoding 入口进入」这种自相矛盾的话。
+        classroomBlockReason: canEnter ? null : (classroomMode === 'VIBECODING' ? state?.vibeCodingBlockReason : state?.blockReason) || null,
+        completedAt: state?.completedAt || null,
         lastActivityAt: [...lessonProjects.map((item) => item.updated_at), ...lessonWorks.map((item) => item.submitted_at)].filter(Boolean).sort().at(-1) || null,
       };
     });
@@ -236,7 +255,12 @@ function studentCourseOverview(ctx) {
       lessons,
       progress: {
         lessonCount: lessons.length,
+        // 注意口径：`startedLessonCount` 数的是**有没有创作过**（有项目），
+        // 不是「有没有开始上课」；课堂口径看下面三个新的计数，界面上别混着用。
         startedLessonCount: lessons.filter((item) => item.projectCount > 0).length,
+        activeLessonCount: lessons.filter((item) => item.participationStatus === 'ACTIVE').length,
+        pendingLessonCount: lessons.filter((item) => item.participationStatus === 'PENDING').length,
+        completedLessonCount: lessons.filter((item) => item.participationStatus === 'COMPLETED').length,
         submittedLessonCount,
         publishedLessonCount: lessons.filter((item) => item.workStatus === 'PUBLISHED').length,
         submittedPercent: lessons.length ? Math.round((submittedLessonCount / lessons.length) * 100) : 0,
@@ -250,6 +274,9 @@ function studentCourseOverview(ctx) {
       courseCount: items.length,
       classCount: context.classes.length,
       activeLessonCount: allLessons.filter((item) => item.activeNow).length,
+      pendingLessonCount: allLessons.filter((item) => item.participationStatus === 'PENDING').length,
+      completedLessonCount: allLessons.filter((item) => item.participationStatus === 'COMPLETED').length,
+      incompleteLessonCount: allLessons.filter((item) => item.participationStatus === 'INCOMPLETE').length,
       assignedLessonCount: allLessons.length,
       startedLessonCount: allLessons.filter((item) => item.projectCount > 0).length,
       submittedLessonCount: allLessons.filter((item) => item.workCount > 0).length,
@@ -353,7 +380,27 @@ export async function handleStudent(ctx) {
   if (courseDetailMatch && method === 'GET') {
     requireRole(ctx, ['STUDENT']);
     const detail = getStudentCourseDetail(ctx.auth.rawUser, courseDetailMatch[1]);
-    return detail;
+    // 课包详情里的课时也要带课堂状态，口径与「我的课程」完全一致（同一张 map）。
+    const stateByLesson = lessonStateMap(ctx.auth.rawUser);
+    const lessons = (detail.lessons || []).map((lesson) => {
+      const state = stateByLesson.get(lesson.id) || null;
+      const classroomMode = state?.sessionMode || state?.lessonMode || lesson.deliveryMode || 'CANVAS';
+      const canEnter = Boolean(state?.canStart || state?.canStartVibeCoding);
+      return {
+        ...lesson,
+        participationStatus: state?.participationStatus || null,
+        participationLabel: state?.participationLabel || '未加入课堂',
+        canStart: Boolean(state?.canStart),
+        canStartVibeCoding: Boolean(state?.canStartVibeCoding),
+        classroomMode,
+        classroomSessionId: state?.session?.id || null,
+        classroomSessionTitle: state?.sessionTitle || null,
+        teacherName: state?.teacherName || null,
+        classroomBlockReason: canEnter ? null : (classroomMode === 'VIBECODING' ? state?.vibeCodingBlockReason : state?.blockReason) || null,
+        completedAt: state?.completedAt || null,
+      };
+    });
+    return { ...detail, lessons, hasGrant: true };
   }
   if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);
 
