@@ -76,6 +76,31 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # 在线预览类响应允许**同源**内嵌（2026-09-16 修复）。
+    # 课件预览（/api/org/file-assets/:id/preview）与学生作品里的 PPT/PDF
+    # （/api/{org,student,public}/…/files/:name/preview）都是**在我们自己的页面里用 iframe 打开的**，
+    # 而站点级安全头是 X-Frame-Options: DENY + frame-ancestors 'none' → 浏览器一律拒收，
+    # 用户看到的是「iicili.cyou 拒绝了我们的连接请求」（实测如此）。
+    # 这里只对「以 /preview 结尾」的路径放开到 SAMEORIGIN，别的地方维持 DENY。
+    # ⚠️ nginx 的 add_header 是**子层级覆盖父层级**：这里必须把需要的头重新写一遍，
+    #    只写 X-Frame-Options 而不管 CSP，frame-ancestors 'none' 仍然会挡。
+    # ⚠️ 正则 location 的优先级高于普通前缀（/api/ 不是 ^~），所以这条会先生效。
+    location ~ ^/api/(?:org|public|student|admin)/.*preview$ {
+        proxy_pass http://127.0.0.1:8789;
+        proxy_http_version 1.1;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Content-Security-Policy "default-src 'self'; frame-ancestors 'self'; object-src 'none'; base-uri 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+
     location = /admin { return 301 /admin/; }
     location /admin/ {
         root /srv/ai-kids-platform/production/current/apps;

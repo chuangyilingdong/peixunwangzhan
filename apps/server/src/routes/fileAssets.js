@@ -614,6 +614,12 @@ export async function prepareFilePreview(ctx, file) {
       'content-disposition': 'inline',
       'accept-ranges': 'bytes',
       'x-content-type-options': 'nosniff',
+      // 预览是**在我们自己的页面里 iframe 打开的**，所以必须显式声明允许同源内嵌：
+      // 默认安全头是 x-frame-options: DENY（见 lib.js 的 securityHeaders），浏览器会直接拒收这个 iframe
+      // （教师看到的是「iicili.cyou 拒绝了我们的连接请求」）。这里覆盖成 SAMEORIGIN，
+      // nginx 那边也对 /api/**/preview 做了同样放行 —— 两处都要，因为两边都会加这个头。
+      'x-frame-options': 'SAMEORIGIN',
+      'content-security-policy': "frame-ancestors 'self'",
       ...(status === 206 ? { 'content-range': `bytes ${start}-${end}/${total}` } : {}),
       'cache-control': 'private, no-store',
     },

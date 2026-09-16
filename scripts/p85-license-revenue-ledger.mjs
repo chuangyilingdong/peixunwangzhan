@@ -19,7 +19,7 @@ const {
 
 const now = new Date().toISOString();
 q("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES ('org85','P85','ACTIVE',?,?,0,?,?)", [now, new Date(Date.now() + 86400000).toISOString(), now, now]);
-q("INSERT INTO course_series(id,title,status,owner_type,visibility,stock_total,created_at,updated_at) VALUES ('series85','Ledger','PUBLISHED','PLATFORM','ASSIGNED_ORGS',30,?,?)", [now, now]);
+q("INSERT INTO course_series(id,title,status,owner_type,visibility,stock_total,created_at,updated_at) VALUES ('series85','Ledger','PUBLISHED','PLATFORM','PUBLIC',30,?,?)", [now, now]);
 q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at,quota_total,quota_used) VALUES ('legacy85','series85','org85','ACTIVE',?,8,3)", [now]);
 q("INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at) VALUES ('legacy-grant85','org85','student85','series85','legacy85','org-admin',?)", [now]);
 
@@ -85,7 +85,7 @@ for (const paymentStatus of ['UNPAID', 'PARTIAL', 'REFUNDED']) {
   );
 }
 
-q("INSERT INTO course_series(id,title,status,owner_type,visibility,stock_total,created_at,updated_at) VALUES ('paid-series85','Paid Ledger','PUBLISHED','PLATFORM','ASSIGNED_ORGS',10,?,?)", [now, now]);
+q("INSERT INTO course_series(id,title,status,owner_type,visibility,stock_total,created_at,updated_at) VALUES ('paid-series85','Paid Ledger','PUBLISHED','PLATFORM','PUBLIC',10,?,?)", [now, now]);
 q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at,quota_total,quota_used) VALUES ('paid85','paid-series85','org85','ACTIVE',?,5,0)", [now]);
 const first = normalizeLicensePurchaseInput({ amountMinor: 100, currency: 'cny', paymentStatus: 'PAID', orderNo: 'O-85-1', contractNo: 'C-85', idempotencyKey: 'P85-1' }, 3);
 const second = normalizeLicensePurchaseInput({ amountMinor: 10, currency: 'CNY', paymentStatus: 'PAID', orderNo: 'O-85-2', contractNo: 'C-85', idempotencyKey: 'P85-2' }, 2);

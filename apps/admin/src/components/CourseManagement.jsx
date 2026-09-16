@@ -7,26 +7,25 @@ import {
   Pagination, Status, formatDate, useData,
 } from '@platform/shared';
 
-// 可见范围只决定「上不上官网课程广场」。机构能不能看到/使用平台课包，与这里无关：
-// 只看「机构授权」那一栏有没有给该机构一条在有效期内的授权（发布 ≠ 授权）。
-const VISIBILITY_LABELS = { ALL_ORGS: '上架课程广场', ASSIGNED_ORGS: '不上架（仅授权机构）', PRIVATE: '私有（不上架）' };
+// 可见范围（2026-09-16 用户口径：三值改两值）：**公开** = 官网课程广场 + 授权机构都可以；
+// **私有** = 不对外。机构实际能不能用，仍只看「机构授权」那一栏（发布 ≠ 授权）。
+const VISIBILITY_LABELS = { PUBLIC: '公开', PRIVATE: '私有' };
 const VISIBILITY_OPTIONS = [
-  ['ALL_ORGS', '上架课程广场（全站公开可见）'],
-  ['ASSIGNED_ORGS', '不上架（只给已授权机构）'],
-  ['PRIVATE', '私有（不上架、不对外）'],
+  ['PUBLIC', '公开（课程广场 + 授权机构都能用）'],
+  ['PRIVATE', '私有（不对外，只能由平台自己安排）'],
 ];
 // 授权有效期的常用档位：平台口径是按年授权（1 年 / 2 年），也允许自定义天数。
-const VALIDITY_PRESETS = [['365', '1 年'], ['730', '2 年'], ['1095', '3 年'], ['custom', '自定义天数']];
-function validityDaysOf(choice, customDays) {
-  if (choice === 'custom') return Math.max(1, Math.min(3650, Number(customDays) || 365));
-  return Number(choice) || 365;
-}
+// 授权有效期不再由平台选（2026-09-16 口径）：它跟随机构的合同到期日，见 organizations 的同步。
 const LESSON_CAPABILITY_OPTIONS = [
   ['text', 'AI 文字'], ['image', 'AI 生图'], ['video', 'AI 生视频'], ['music', 'AI 音乐'],
 ];
+// 素材类型（2026-09-16 用户口径：删掉「文字说明」这个选项，文字类只留「提示词」）。
+// ⚠️ 服务端与老数据里仍然会出现 NOTE（schema 默认值就是它），所以 NOTE **不能从白名单里删**——
+// 只是不再作为可选项出现；历史课时打开时，下拉里会临时补一条「文字说明（旧数据）」让它显示正确。
 const MATERIAL_TYPE_OPTIONS = [
-  ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['NOTE', '文字说明'], ['PROMPT', '提示词'], ['GENERATION_BOX', '生成框体'],
+  ['IMAGE', '图片'], ['VIDEO', '视频'], ['AUDIO', '音频'], ['PROMPT', '提示词'], ['GENERATION_BOX', '生成框体'],
 ];
+const LEGACY_MATERIAL_TYPE_LABELS = { NOTE: '文字说明（旧数据）' };
 // 生成框体支持的模态；每个框体单独选模型与参数。
 const GENERATION_BOX_MODALITY_OPTIONS = [['TEXT', 'AI 文字'], ['IMAGE', 'AI 生图'], ['VIDEO', 'AI 生视频'], ['MUSIC', 'AI 音乐']];
 // 音乐的生成模式：歌词生音乐（学生写词）/ 描述生音乐（平台代写词）
@@ -43,12 +42,24 @@ function valueOptionsFor(options, current) {
 // 平台留空＝不指定，学生在画布课堂里自己选；填了＝学生在课堂里只能看、不能改。
 const STUDENT_CHOICE = '';
 function paramLabel(value, suffix = '') { return value === '' || value === undefined || value === null ? '学生自选' : `${value}${suffix}`; }
+// 素材编辑器里的一个字段：**带标签**，并且把「提示」放在控件下面。
+// 为什么要它：原来一排裸 input/select 挤在一起（用户反馈「素材1和素材2只有一点点缝隙」），
+// 每个控件没有标签、看不出哪个是哪个。这个组件把「标签 + 控件 + 提示」固定成一个块，
+// 版面靠 CSS 的间距与卡片分隔来区分。
+function LessonField({ label, hint, children }) {
+  return <label className="lesson-field">
+    <span className="lesson-field__label">{label}</span>
+    {children}
+    {hint ? <small className="muted">{hint}</small> : null}
+  </label>;
+}
+
 let uidSeed = 0;
 function nextUid() { uidSeed += 1; return `tmp-${Date.now().toString(36)}-${uidSeed}`; }
 const defaultClassroomConfig = { version: 3 };
 const emptyCourseForm = {
   title: '', description: '', coverImageUrl: '', coverAssetId: '', priceYuan: '', version: '1.0',
-  estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'ALL_ORGS', deliveryMode: 'CANVAS',
+  estimatedCreditsPerPerson: '', gradeRange: '', visibility: 'PUBLIC', deliveryMode: 'CANVAS',
   difficultyLevel: '', ageRangeMin: '', ageRangeMax: '', tags: '', stockTotal: '', perStudentBudgetYuan: '',
 };
 
@@ -271,7 +282,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   const addMaterial = (groupIndex) => updateGroups((list) => list.map((group, i) => {
     if (i !== groupIndex) return group;
     const materials = group.materials || [];
-    return { ...group, materials: [...materials, { uid: nextUid(), title: `素材${materials.length + 1}`, description: '', materialType: 'NOTE', assetUrl: '', snapshot: {} }] };
+    return { ...group, materials: [...materials, { uid: nextUid(), title: `素材${materials.length + 1}`, description: '', materialType: 'PROMPT', assetUrl: '', snapshot: {} }] };
   }));
   const addGroup = () => updateGroups((list) => [...list, { uid: nextUid(), title: `素材${list.length + 1}`, materials: [] }]);
 
@@ -298,33 +309,69 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
       <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={addGroup}>＋素材组</button></div>
         {groups.map((group, groupIndex) => <div className="lesson-material-group-editor" key={group.id || group.uid || `new-${groupIndex}`}>
           <div className="lesson-config-row"><input value={group.title || ''} placeholder={`素材${groupIndex + 1}`} onChange={(event) => updateGroup(groupIndex, { title: event.target.value })} /><button type="button" className="text-button danger-text" onClick={() => updateGroups((list) => list.filter((_, i) => i !== groupIndex))}>删除组</button></div>
-          {(group.materials || []).map((material, materialIndex) => { const snapshot = material.snapshot || {}; const isBox = material.materialType === 'GENERATION_BOX'; const isText = ['NOTE', 'PROMPT'].includes(material.materialType); const box = isBox ? (snapshot.box || {}) : null; const modality = String(box?.modality || 'TEXT').toUpperCase(); const caps = isBox ? capabilitiesFor(modality, box.model) : null; const capabilityLabel = String(modality).toLowerCase() === 'image' ? 'AI 生图' : String(modality).toLowerCase() === 'video' ? 'AI 生视频' : String(modality).toLowerCase() === 'music' ? 'AI 音乐' : 'AI 文字'; return <div className="lesson-material-item-editor" key={material.id || material.uid || `new-${materialIndex}`}>
-            <div className="lesson-config-row"><input value={material.title || ''} placeholder="素材标题" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { title: event.target.value })} /><select value={material.materialType || 'NOTE'} onChange={(event) => changeMaterialType(groupIndex, materialIndex, material.uid, event.target.value)}>{MATERIAL_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button type="button" className="text-button danger-text" onClick={() => removeMaterial(groupIndex, materialIndex)}>删除</button></div>
-            <MaterialPreview url={material.assetUrl} type={material.materialType} content={snapshot.content} />
-            {isBox ? <>
-              {capabilities.includes(String(modality).toLowerCase()) ? null : <p className="muted">本课没有开放「{capabilityLabel}」能力，学生看不到这个框体；勾选上方能力后才会出现。</p>}
-              <details><summary>高级设置：模型与生成参数</summary><div className="form-grid">
-                <label>模态<select value={modality} onChange={(event) => changeBoxModality(groupIndex, materialIndex, material.uid, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-                <label>模型{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</label>
-                {modality === 'MUSIC' ? <label>生成模式<select value={box.mode || 'LYRICS'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, mode: event.target.value }))}>{MUSIC_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label> : null}
-                {modality === 'IMAGE' || modality === 'VIDEO' ? <>
-                  <label>比例<select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-                  <label>清晰度<select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-                </> : null}
-                {modality === 'VIDEO' ? <>
-                  <label>时长（秒）<select value={box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, durationSeconds: event.target.value === '' ? null : Number(event.target.value) }))}><option value="">学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.durations.map(String), box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></label>
-                  <label>生成音频<select value={box.audio === true ? 'YES' : box.audio === false ? 'NO' : ''} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.value === '' ? null : event.target.value === 'YES' }))}><option value="">学生自选（课堂里由学生挑）</option><option value="YES">带音频</option><option value="NO">不带音频</option></select>{caps.audio ? '' : <small className="muted">当前模型不支持生成音频</small>}</label>
-                </> : null}
-              </div>
-              </details>
-              {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 渠道与模型配置」里填写。</p> : null}
-              <textarea rows={3} value={snapshot.content || ''} placeholder={(box?.mode === 'DESCRIPTION' ? '平台预填描述（学生加入画布时会自动填进框体，可以改）：例如「关于春天放风筝的欢快儿歌」' : '平台预填歌词（学生加入画布时会自动填进框体，可以改）：例如 [Verse] 小星星眨眨眼')} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} />
-              <div className="lesson-config-row"><input value={material.assetUrl || ''} placeholder={modality === 'VIDEO' ? '预置首帧图地址（图生视频模型直接用）' : '预置素材地址（可选）'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传素材'}<input type="file" accept="image/*" disabled={uploading === `${groupIndex}:${materialIndex}`} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label></div>
-            </> : <>
-              <input value={material.description || ''} placeholder="给学生看的说明（可选）" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { description: event.target.value })} />
-              {isText ? <textarea rows={2} value={snapshot.content || ''} placeholder={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} /> : <><input value={material.assetUrl || ''} placeholder="资源地址（可粘贴 HTTPS，也可上传文件）" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { assetUrl: event.target.value })} /><label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传文件'}<input type="file" accept="image/*,video/*,audio/*" disabled={uploading === `${groupIndex}:${materialIndex}`} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label></>}
-            </>}
-          </div>; })}
+          {(group.materials || []).map((material, materialIndex) => {
+            const snapshot = material.snapshot || {};
+            const isBox = material.materialType === 'GENERATION_BOX';
+            const isText = ['NOTE', 'PROMPT'].includes(material.materialType);
+            const box = isBox ? (snapshot.box || {}) : null;
+            const modality = String(box?.modality || 'TEXT').toUpperCase();
+            const caps = isBox ? capabilitiesFor(modality, box.model) : null;
+            const capabilityLabel = modality === 'IMAGE' ? 'AI 生图' : modality === 'VIDEO' ? 'AI 生视频' : modality === 'MUSIC' ? 'AI 音乐' : 'AI 文字';
+            // 生成框体的「预置素材」只在**图片 / 视频**模态下才有意义：
+            //   · IMAGE：它是一张预置图；· VIDEO：它可能被当首帧（图生视频模型必须给一张）。
+            // 文字框体（对话）与音乐框体根本不吃素材 —— 原来也给它们摆一行「上传素材」，
+            // 用户口径：选了生成框体还要填上传素材「很多余」。所以按模态收放。
+            const needsPresetAsset = isBox && (modality === 'IMAGE' || modality === 'VIDEO');
+            const firstFrameRequired = isBox && modality === 'VIDEO' && !(caps?.inputModes || []).includes('TEXT');
+            const currentType = material.materialType || 'PROMPT';
+            const typeOptions = MATERIAL_TYPE_OPTIONS.some(([value]) => value === currentType)
+              ? MATERIAL_TYPE_OPTIONS
+              : [[currentType, LEGACY_MATERIAL_TYPE_LABELS[currentType] || currentType], ...MATERIAL_TYPE_OPTIONS];
+            return <article className="lesson-material-item-editor" key={material.id || material.uid || `new-${materialIndex}`}>
+              <header className="lesson-material-item-head">
+                <span className="lesson-material-item-index">素材 {materialIndex + 1}</span>
+                <select className="lesson-material-item-type" value={currentType} onChange={(event) => changeMaterialType(groupIndex, materialIndex, material.uid, event.target.value)}>{typeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                <button type="button" className="text-button danger-text" onClick={() => removeMaterial(groupIndex, materialIndex)}>删除</button>
+              </header>
+              <LessonField label="素材标题"><input value={material.title || ''} placeholder="显示给学生看的名字" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { title: event.target.value })} /></LessonField>
+              {isBox ? <>
+                {capabilities.includes(modality.toLowerCase()) ? null : <p className="muted">本课没有开放「{capabilityLabel}」能力，学生看不到这个框体；勾选上方能力后才会出现。</p>}
+                <div className="lesson-field-row">
+                  <LessonField label="生成什么"><select value={modality} onChange={(event) => changeBoxModality(groupIndex, materialIndex, material.uid, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField>
+                  <LessonField label="模型">{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</LessonField>
+                  {modality === 'MUSIC' ? <LessonField label="生成模式"><select value={box.mode || 'LYRICS'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, mode: event.target.value }))}>{MUSIC_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField> : null}
+                </div>
+                {modality === 'IMAGE' || modality === 'VIDEO' ? <div className="lesson-field-row">
+                  <LessonField label="比例"><select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></LessonField>
+                  <LessonField label="清晰度"><select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></LessonField>
+                  {modality !== 'TEXT' && !caps.aspectRatios.length ? null : null}
+                </div> : null}
+                {modality === 'VIDEO' ? <div className="lesson-field-row">
+                  <LessonField label="时长（秒）"><select value={box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, durationSeconds: event.target.value === '' ? null : Number(event.target.value) }))}><option value="">学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.durations.map(String), box.durationSeconds === null || box.durationSeconds === undefined ? '' : String(box.durationSeconds)).map((value) => <option key={value} value={value}>{value} 秒</option>)}</select></LessonField>
+                  <LessonField label="生成音频" hint={caps.audio ? '' : '当前模型不支持生成音频'}><select value={box.audio === true ? 'YES' : box.audio === false ? 'NO' : ''} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.value === '' ? null : event.target.value === 'YES' }))}><option value="">学生自选（课堂里由学生挑）</option><option value="YES">带音频</option><option value="NO">不带音频</option></select></LessonField>
+                </div> : null}
+                {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 渠道与模型配置」里填写。</p> : null}
+                {modality === 'TEXT' ? null : <LessonField label={box?.mode === 'DESCRIPTION' ? '平台预填描述' : box?.mode === 'LYRICS' ? '平台预填歌词' : '平台预填内容'} hint="学生把框体加入画布时会自动填进去，可以改"><textarea rows={3} value={snapshot.content || ''} placeholder={box?.mode === 'DESCRIPTION' ? '例如「关于春天放风筝的欢快儿歌」' : box?.mode === 'LYRICS' ? '例如 [Verse] 小星星眨眨眼' : '留空则由学生自己想'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} /></LessonField>}
+                {needsPresetAsset ? <LessonField label={modality === 'VIDEO' ? '预置首帧图' : '预置图片'} hint={firstFrameRequired ? '这个模型不支持纯文字生视频，必须给一张首帧图' : '可选：留空则由学生在课堂里自己连一张图'}>
+                  <div className="lesson-asset-input">
+                    <input value={material.assetUrl || ''} placeholder={modality === 'VIDEO' ? '首帧图地址（https:// 或平台上传地址）' : '图片地址（https:// 或平台上传地址）'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { assetUrl: event.target.value })} />
+                    <label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传图片'}<input type="file" accept="image/*" disabled={uploading === `${groupIndex}:${materialIndex}`} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label>
+                  </div>
+                </LessonField> : null}
+              </> : <>
+                <LessonField label="给学生看的说明" hint="可选"><input value={material.description || ''} placeholder="一句话说明这个素材是干什么的" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { description: event.target.value })} /></LessonField>
+                {isText
+                  ? <LessonField label={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'}><textarea rows={3} value={snapshot.content || ''} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} /></LessonField>
+                  : <LessonField label="素材文件" hint="可粘贴 HTTPS 地址，也可直接上传">
+                    <div className="lesson-asset-input">
+                      <input value={material.assetUrl || ''} placeholder="资源地址" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { assetUrl: event.target.value })} />
+                      <label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传文件'}<input type="file" accept="image/*,video/*,audio/*" disabled={uploading === `${groupIndex}:${materialIndex}`} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label>
+                    </div>
+                  </LessonField>}
+              </>}
+              <MaterialPreview url={material.assetUrl} type={material.materialType} content={snapshot.content} />
+            </article>;
+          })}
           <button type="button" className="text-button" onClick={() => addMaterial(groupIndex)}>＋素材</button>
         </div>)}
         {!groups.length && <p className="muted">还没有画布素材。学生进入课时后，可在左侧素材面板按这里的顺序逐个点击加入画布；「生成框体」也是一种素材，每个框体只能生成一次。</p>}
@@ -523,8 +570,6 @@ function CourseDetail({ api, courseId, onBack }) {
   const [editForm, setEditForm] = useState(null);
   const [assignOrgId, setAssignOrgId] = useState('');
   const [assignQuota, setAssignQuota] = useState('');
-  const [assignValidity, setAssignValidity] = useState('365');
-  const [assignCustomDays, setAssignCustomDays] = useState('365');
   const [lessonDraft, setLessonDraft] = useState({ title: '', durationMinutes: 45 });
   const [editingLesson, setEditingLesson] = useState(null);
   const [showPublishReminder, setShowPublishReminder] = useState(false);
@@ -633,7 +678,8 @@ function CourseDetail({ api, courseId, onBack }) {
     if (!assignOrgId) return;
     setBusy(true); setMessage('');
     try {
-      const result = await api.post(`admin/course-series/${courseId}/assignments`, { orgIds: [assignOrgId], validityDays: assignDays, quotaTotal: Number(String(assignQuota || "").trim() || 0) });
+      // 不传有效期了：服务端按该机构的合同到期日算（老参数照旧兼容，但不再由这里决定）
+      const result = await api.post(`admin/course-series/${courseId}/assignments`, { orgIds: [assignOrgId], quotaTotal: Number(String(assignQuota || "").trim() || 0) });
       setMessage(`已授权该机构使用本课包，有效期至 ${formatDate(result?.expiresAt) || '—'}。`);
       setAssignOrgId(''); setAssignQuota(''); detail.refresh();
     }
@@ -652,8 +698,6 @@ function CourseDetail({ api, courseId, onBack }) {
   }
 
   const activeAssignments = (detail.data?.assignedOrgs || []).filter((item) => !item.expired).length;
-  const assignDays = validityDaysOf(assignValidity, assignCustomDays);
-  const assignExpiresAt = new Date(Date.now() + assignDays * 24 * 60 * 60 * 1000).toISOString();
   const publishedLessons = (series?.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED').length;
   const vibecodingLessons = (series?.lessons || []).filter((lesson) => (lesson.deliveryModes || [lesson.deliveryMode]).includes('VIBECODING')).length;
   const vibecodingWithoutText = (series?.lessons || []).filter((lesson) => (lesson.deliveryModes || [lesson.deliveryMode]).includes('VIBECODING') && !(lesson.capabilities || []).includes('text')).length;
@@ -715,7 +759,7 @@ function CourseDetail({ api, courseId, onBack }) {
           </div>
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存课包资料'}</button>
           {saveState ? <Notice tone={saveState.tone}>{saveState.text}</Notice> : null}
-          <p className="muted">当前版本只读：改完进入「版本发布」标签页，点击「更新发布」填写新版本号。状态变更请使用右上角发布 / 下架。可见范围只决定「上不上课程广场」；机构看不到课包不是权限问题，是还没在「次数授权管理」中授权给它。</p>
+          <p className="muted">当前版本只读：改完进入「版本发布」标签页，点击「更新发布」填写新版本号。状态变更请使用右上角发布 / 下架。<strong>公开</strong> = 课程广场与授权机构都能用，<strong>私有</strong> = 不对外；机构看不到课包不是权限问题，是还没在「次数授权管理」中授权给它。</p>
         </form> : null}
       </Panel> : null}
 
@@ -750,14 +794,12 @@ function CourseDetail({ api, courseId, onBack }) {
       </> : null}
 
       {activeTab === 'assign' ? <Panel title={`机构授权（${detail.data.assignedOrgs.length}）`}>
-        <p className="muted">平台课包必须在这里逐家授权，机构后台才看得到、用得上（发布本身不对任何机构生效）。有效期按机构单独设置，到期后该机构立即看不到此课包，续期时重新授权即可覆盖原有效期。</p>
+        <p className="muted">平台课包必须在这里逐家授权，机构后台才看得到、用得上（发布本身不对任何机构生效）。授权有效期跟随机构的合同到期日，合同到期后该机构立即看不到此课包，续签合同即自动续上。</p>
         <div className="form-grid">
           <label>授权次数<input type="number" min="0" placeholder="留空 = 不限次数" value={assignQuota} onChange={(event) => setAssignQuota(event.target.value)} /></label><label>授权给机构<select value={assignOrgId} onChange={(event) => setAssignOrgId(event.target.value)}><option value="">选择机构</option>{organizations.data?.items?.map((org) => <option key={org.id} value={org.id}>{org.name}</option>) || null}</select></label>
-          <label>授权时效<select value={assignValidity} onChange={(event) => setAssignValidity(event.target.value)}>{VALIDITY_PRESETS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          {assignValidity === 'custom' ? <label>有效期（天，≤3650）<input type="number" min="1" max="3650" value={assignCustomDays} onChange={(event) => setAssignCustomDays(event.target.value)} /></label> : null}
           <div><button type="button" className="secondary-button" disabled={!assignOrgId || busy} onClick={assign}>授权</button></div>
         </div>
-        <p className="muted">本次授权有效期至 {formatDate(assignExpiresAt)}（共 {assignDays} 天）。</p>
+        <p className="muted">授权有效期自动跟随该机构的<strong>合同到期日</strong>（2026-09-16 口径）；要延长使用期限就去改机构合同，授权会一起续上。</p>
         {detail.data.assignedOrgs.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>授权时间</th><th>有效期至</th><th>次数（已用/授权）</th><th>操作</th></tr></thead><tbody>{detail.data.assignedOrgs.map((item) => <tr key={item.id}><td>{item.orgName}</td><td>{formatDate(item.assignedAt)}</td><td>{item.expiresAt ? <span className={item.expired ? 'status warning' : ''}>{formatDate(item.expiresAt)}{item.expired ? '（已过期，机构已看不到）' : ''}</span> : '永久有效'}</td><td>{item.quotaTotal ? (item.quotaUsed || 0) + " / " + item.quotaTotal : "不限"}</td><td><button className="text-button danger-text" disabled={busy} onClick={() => run(`admin/course-series/${courseId}/assignments/revoke`, 'POST', { orgId: item.orgId }, `已撤销 ${item.orgName} 的授权，该机构将立即看不到此课包。`, `确认撤销「${item.orgName}」对此课包的授权？`)}>撤销授权</button></td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" body="平台课包发布后只会上架课程广场；要出现在机构后台，必须在这里授权给对应机构。" />}
       </Panel> : null}
 

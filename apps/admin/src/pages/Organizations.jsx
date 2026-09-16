@@ -266,7 +266,7 @@ export function Organizations({ api }) {
         <div className="split">
           <Panel title="机构管理员"><form onSubmit={createAdmin}>
             <div className="form-grid">
-              <label>登录名<input value={adminForm.login} onChange={(e) => setAdminForm({ ...adminForm, login: e.target.value })} required /></label>
+              <label>登录名<input value={adminForm.login} pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(e) => setAdminForm({ ...adminForm, login: e.target.value })} required /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。</small></label>
               <label>姓名<input value={adminForm.displayName} onChange={(e) => setAdminForm({ ...adminForm, displayName: e.target.value })} required /></label>
               <label>初始密码（至少6位）<input type="password" autoComplete="new-password" minLength={6} value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} required /></label>
               <button className="primary-button" disabled={detailBusy}>新增管理员</button>
@@ -309,7 +309,6 @@ export function Authorizations({ api }) {
   const [orgId, setOrgId] = useState(() => deepLink.get('orgId') || '');
   const [additionalQuota, setAdditionalQuota] = useState('');
   const [purchaseForm, setPurchaseForm] = useState(initialLicensePurchaseForm);
-  const [expiresAt, setExpiresAt] = useState('');
   const [stock, setStock] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -330,7 +329,6 @@ export function Authorizations({ api }) {
     setStock(selected ? String(selected.stockTotal) : '');
     setAdditionalQuota('');
     setPurchaseForm(initialLicensePurchaseForm());
-    setExpiresAt(assignment?.expiresAt ? isoDateInput(assignment.expiresAt) : '');
   }, [seriesId, orgId, selected?.stockTotal, assignment?.expiresAt]);
 
   async function saveStock(event) {
@@ -372,21 +370,6 @@ export function Authorizations({ api }) {
     });
   }
 
-  async function updateValidity(event) {
-    event.preventDefault();
-    const nextExpiresAt = new Date(`${expiresAt}T23:59:59.999Z`).toISOString();
-    await confirm({
-      title: '确认调整授权有效期',
-      message: `${selected.title} / ${selectedOrg.name}：有效期 ${formatDate(assignment.expiresAt)} → ${formatDate(nextExpiresAt)}。总次数保持 ${assignment.quotaTotal}，已分配保持 ${assignment.quotaUsed}，剩余保持 ${assignment.remaining}。`,
-      confirmLabel: '确认调整',
-      execute: async () => {
-        setBusy(true); setMessage('');
-        try { await api.put(`admin/course-series/${seriesId}/assignments/validity`, { orgId, expiresAt: nextExpiresAt }); setMessage('授权有效期已更新。'); inventory.refresh(); }
-        finally { setBusy(false); }
-      },
-    });
-  }
-
   return <>
     <PageHeader title="授权管理" description="选择一个课包和一家机构，查看当前授权后再追加次数或调整有效期。" />
     {confirmation}
@@ -418,17 +401,19 @@ export function Authorizations({ api }) {
               <label>订单号<input required maxLength={200} value={purchaseForm.orderNo} onChange={(event) => setPurchaseForm({ ...purchaseForm, orderNo: event.target.value })} /></label>
               <label>合同号<input required maxLength={200} value={purchaseForm.contractNo} onChange={(event) => setPurchaseForm({ ...purchaseForm, contractNo: event.target.value })} /></label>
             </div>
-            <p className="muted">{Number(additionalQuota) > 0 ? `追加后总次数为 ${(assignment?.status === 'ACTIVE' ? assignment.quotaTotal : (assignment?.quotaUsed || 0)) + Number(additionalQuota)}，不会改变有效授权的当前有效期。仅已收款购买可追加，未收款或部分收款订单请勿在此登记。` : '填写本次已收款购买的实际次数与成交信息；未收款或部分收款订单不会增加授权余额。'}</p>
+            <p className="muted">{Number(additionalQuota) > 0 ? `追加后总次数为 ${(assignment?.status === 'ACTIVE' ? assignment.quotaTotal : (assignment?.quotaUsed || 0)) + Number(additionalQuota)}；授权的有效期跟随机构合同，与本次购买无关。仅已收款购买可追加，未收款或部分收款订单请勿在此登记。` : '填写本次已收款购买的实际次数与成交信息；未收款或部分收款订单不会增加授权余额。'}</p>
             <button className="primary-button" disabled={busy || !additionalQuota || Number(additionalQuota) > selected.available || purchaseForm.amount === '' || !purchaseForm.orderNo.trim() || !purchaseForm.contractNo.trim()}>{assignment ? '追加次数' : '创建授权并追加'}</button>
           </form></Panel>
-          <Panel title="调整有效期"><form onSubmit={updateValidity}>
-            <label>新的到期日期<input type="date" required min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label>
-            <p className="muted">仅调整到期时间，不改变总次数、已分配和剩余次数。</p>
-            <button className="secondary-button" disabled={busy || !assignment || assignment.status !== 'ACTIVE' || !expiresAt}>调整有效期</button>
-          </form></Panel>
+          <Panel title="授权有效期"><div className="card-list">
+            <p className="muted">授权有效期<strong>不需要在这里填</strong>：它自动跟随该机构的<strong>合同到期日</strong>
+              （2026-09-16 口径）。要延长机构的使用期限，就去改这家机构的合同日期，授权会自动一起续上。</p>
+            <p className="muted">当前：{assignment?.expiresAt
+              ? <>到期时间 <strong>{formatDate(assignment.expiresAt)}</strong>{selectedOrg?.contractExpiresAt ? <>，与合同到期日（{formatDate(selectedOrg.contractExpiresAt)}）一致</> : null}</>
+              : '未设置（该机构没有合同到期日，视为永久有效）'}</p>
+          </div></Panel>
         </div>
         {assignment?.purchaseBatches?.length ? <Panel title="购买批次历史"><div className="table-wrap"><table><thead><tr><th>购买时间</th><th>次数</th><th>实际成交总额</th><th>收款状态</th><th>订单号</th><th>合同号</th><th>已确认次数</th></tr></thead><tbody>{assignment.purchaseBatches.map((batch) => <tr key={batch.id}><td>{formatDate(batch.purchasedAt)}</td><td>{batch.quantity}</td><td>{batch.amountMinor == null || !batch.currency ? '未知（历史导入）' : `${(batch.amountMinor / 100).toFixed(2)} ${batch.currency}`}</td><td>{batch.paymentStatus === 'UNKNOWN' ? '未知' : <Status value={batch.paymentStatus} />}</td><td>{batch.orderNo || '未知'}</td><td>{batch.contractNo || '未知'}</td><td>{batch.recognizedQuantity}</td></tr>)}</tbody></table></div></Panel> : null}
-        {!assignment ? <Notice tone="info">该机构尚未获得此课包。先追加正数次数即可创建授权，默认有效期为 365 天。</Notice> : null}
+        {!assignment ? <Notice tone="info">该机构尚未获得此课包。先追加正数次数即可创建授权；有效期自动跟随该机构的合同到期日。</Notice> : null}
       </> : <Empty title="选择课包和机构查看授权" body="普通授权流程一次只操作一家机构。" />}
       {selected ? <Panel title="该课包机构授权明细">{selected.allocations.length ? <div className="table-wrap"><table><thead><tr><th>机构</th><th>状态</th><th>购买次数</th><th>已分配</th><th>余额</th><th>到期时间</th></tr></thead><tbody>{selected.allocations.map((item) => <tr key={item.id}><td>{item.orgName}</td><td><Status value={item.status} /></td><td>{item.quotaTotal}</td><td>{item.quotaUsed}</td><td>{item.remaining}</td><td>{formatDate(item.expiresAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无机构授权" />}</Panel> : null}
     </>}

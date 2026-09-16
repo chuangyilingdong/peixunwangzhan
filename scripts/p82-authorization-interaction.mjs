@@ -36,29 +36,50 @@ const replayed = await admin('/course-series/p77/assignments/append', 'POST', { 
 assert.equal(replayed.assignment.quotaTotal, 3);
 assert.equal(row("SELECT COUNT(*) n FROM license_purchase_batches WHERE idempotency_key='p82-append-1'").n, 1);
 
-const requestedExpiry = new Date(Date.now() + 30 * 86400000).toISOString();
-const validity = await admin('/course-series/p77/assignments/validity', 'PUT', { orgId: orgA.id, expiresAt: requestedExpiry });
-assert.equal(validity.assignment.quotaTotal, 3);
-assert.equal(validity.assignment.quotaUsed, 2);
-assert.equal(validity.assignment.remaining, 1);
-assert.equal(validity.assignment.expiresAt, requestedExpiry);
-q("UPDATE course_assignments SET status='REVOKED' WHERE series_id='p77' AND org_id=?", [orgB.id]);
-await rejects(
-  () => admin('/course-series/p77/assignments/validity', 'PUT', { orgId: orgB.id, expiresAt: requestedExpiry }),
-  'ASSIGNMENT_NOT_ACTIVE',
-);
+// ① 授权的到期时间 = 该机构的**合同到期日**（2026-09-16 口径，平台不再单独填有效期）
+{
+  const orgRow = row("SELECT * FROM organizations WHERE id=?", [orgA.id]);
+  const assignmentRow = row("SELECT * FROM course_assignments WHERE series_id='p77' AND org_id=?", [orgA.id]);
+  assert.equal(assignmentRow.expires_at, orgRow.contract_expires_at, '授权到期日应等于机构合同到期日');
+}
+
+// ② 改机构合同到期日 → 它的有效授权跟着变（「同步」的全部含义）
+{
+  const nextContract = new Date(Date.now() + 30 * 86400000).toISOString();
+  const original = row("SELECT * FROM organizations WHERE id=?", [orgA.id]);
+  await admin(`/organizations/${orgA.id}`, 'PUT', {
+    name: original.name,
+    contractStartAt: original.contract_start_at,
+    contractExpiresAt: nextContract,
+  });
+  const moved = row("SELECT * FROM course_assignments WHERE series_id='p77' AND org_id=?", [orgA.id]);
+  assert.equal(moved.expires_at, nextContract, '合同改期后授权应同步到新的合同到期日');
+  // 还原，免得影响后面的用例（后面的用例拿它做撤销/重授权）
+  await admin(`/organizations/${orgA.id}`, 'PUT', {
+    name: original.name,
+    contractStartAt: original.contract_start_at,
+    contractExpiresAt: original.contract_expires_at,
+  });
+}
+
+// ③ 老接口必须已经不存在：有效期只能通过「改合同」来变
+//    （哪天有人把 /assignments/validity 加回来，这里会红）
+{
+  const legacy = await admin('/course-series/p77/assignments/validity', 'PUT', { orgId: orgA.id, expiresAt: new Date(Date.now() + 86400000).toISOString() });
+  assert.equal(legacy, null, '「调整授权有效期」接口应已删除（返回 null → 路由层 404）');
+}
 
 const appendAudit = row("SELECT * FROM audit_logs WHERE action='COURSE_ASSIGNMENT_QUOTA_APPEND' ORDER BY created_at DESC LIMIT 1");
 const validityAudit = row("SELECT * FROM audit_logs WHERE action='COURSE_ASSIGNMENT_VALIDITY_UPDATE' ORDER BY created_at DESC LIMIT 1");
+void validityAudit;
 assert.equal(appendAudit.org_id, orgA.id);
 assert.deepEqual(
   [JSON.parse(appendAudit.before_data).quotaTotal, JSON.parse(appendAudit.after_data).quotaTotal],
   [2, 3],
 );
 assert.equal(JSON.parse(appendAudit.after_data).additionalQuota, 1);
-assert.equal(validityAudit.org_id, orgA.id);
-assert.equal(JSON.parse(validityAudit.before_data).quotaTotal, JSON.parse(validityAudit.after_data).quotaTotal);
-assert.notEqual(JSON.parse(validityAudit.before_data).expiresAt, JSON.parse(validityAudit.after_data).expiresAt);
+// 有效期调整已不再是平台动作 → 这条审计不该再产生（它只在旧接口里写）
+assert.equal(validityAudit, undefined, '不该再有 COURSE_ASSIGNMENT_VALIDITY_UPDATE 审计');
 
 const originalGrant = row(`SELECT grant.* FROM student_course_grants grant
   JOIN users student ON student.id=grant.student_id AND student.org_id=grant.org_id
@@ -103,7 +124,10 @@ assert.match(authorizationPage, /SearchSelect ariaLabel="搜索机构" value=\{o
 assert.equal((authorizationPage.match(/ariaLabel="搜索课包"/g) || []).length, 1);
 assert.equal((authorizationPage.match(/ariaLabel="搜索机构"/g) || []).length, 1);
 assert.match(authorizationPage, /license-purchases\/append/);
-assert.match(authorizationPage, /assignments\/validity/);
+// 授权有效期不再由平台填（2026-09-16 口径）：界面上**不该**再有这个调用了，
+// 取而代之的是「跟随机构合同到期日」的说明。哪天有人把入口加回来，这里会红。
+assert.doesNotMatch(authorizationPage, /assignments\/validity/);
+assert.match(authorizationPage, /合同到期日/);
 assert.match(authorizationPage, /deepLink\.get\('seriesId'\)/);
 assert.match(authorizationPage, /deepLink\.get\('orgId'\)/);
 assert.match(authorizationPage, /实际成交总额（元）/);

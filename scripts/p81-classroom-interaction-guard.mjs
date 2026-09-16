@@ -17,7 +17,11 @@ assert.match(classroomSource, /navigate\('\/classrooms\/'/);
 assert.match(classroomSource, /navigate\(-1\)/);
 assert.match(classroomSource, /navigate\('\/classrooms', \{ replace: true \}\)/);
 assert.doesNotMatch(classroomSource, />入口类型<select/);
-assert.match(classroomSource, /lessonModes\.length > 1/);
+// 2026-09-16 订正：这条原本钉的是「一个课时有多个可选环境时给出选择」，用的是当年的
+// `lessonModes.length > 1` 变量；那之后界面改成按 `lesson.deliveryModes` 列表判断，
+// 变量名没了 → 断言一直红着（**测试漂移，不是功能回归**）。改成钉当下真正的口径：
+// 可选环境来自课时自己声明的列表（老师不该在界面上凭空造一个环境）。
+assert.match(classroomSource, /lesson\?\.deliveryModes\?\.length/);
 assert.match(classroomSource, /SearchSelect/);
 assert.match(classroomSource, /<SearchSelect ariaLabel="搜索课包"/);
 assert.match(classroomSource, /<SearchSelect ariaLabel="搜索负责老师"/);
@@ -41,7 +45,9 @@ import { Classrooms } from ${JSON.stringify(path.join(root, 'apps/org/src/pages/
 import { SearchSelect, getSearchSelectKeyAction } from ${JSON.stringify(path.join(root, 'packages/shared/src/SearchSelect.jsx').split(path.sep).join('/'))};
 const api = { get: () => Promise.resolve({ items: [] }), post: () => Promise.resolve({}), delete: () => Promise.resolve({}) };
 const detail = renderToString(<MemoryRouter initialEntries={['/classrooms/session-deep']}><Routes><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={{ role: 'TEACHER' }} />} /></Routes></MemoryRouter>);
-if (!detail.includes('返回课堂列表')) throw new Error('deep link did not render detail route');
+// 2026-09-16 订正：按钮文案早就从「返回课堂列表」改成「返回列表」（班级退场那轮），
+// 断言没跟着改 → 这条深链用例也一直红着（测试漂移）。钉当下真正的文案：
+if (!detail.includes('返回列表')) throw new Error('deep link did not render detail route');
 const select = renderToString(<SearchSelect value="" onChange={() => {}} options={[]} ariaLabel="课包" />);
 if (!select.includes('aria-expanded="false"') || !select.includes('aria-haspopup="listbox"')) throw new Error('closed selector aria missing');
 const expected = [['ArrowDown',false,'OPEN',1],['ArrowUp',false,'OPEN',-1],['ArrowDown',true,'MOVE',1],['ArrowUp',true,'MOVE',-1],['Enter',true,'SELECT',null],['Escape',true,'CLOSE',null]];

@@ -1,4 +1,4 @@
-import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
+import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable } from '../lib.js';
 import { normalizeLesson } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 import { prepareFileDownload, prepareFilePreview } from './fileAssets.js';
@@ -119,7 +119,13 @@ export async function handleOrg(ctx) {
     const search = String(ctx.search.get('search') || '').trim(); const params = [currentOrgId]; let where = 'org_id=? AND deleted_at IS NULL';
     if (ORG_MEMBER_ROLES.has(role)) { where += ' AND role=?'; params.push(role); }
     if (search) { where += ' AND (login LIKE ? OR display_name LIKE ? OR phone LIKE ?)'; const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
-    const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC LIMIT 500', params).map((item) => orgMemberRow(item, currentOrgId)); return { items, total: items.length };
+    // 2026-09-16：名单会很长（一百个学生很正常），所以改成**真分页 + 搜索**，
+    // 并且**最新添加的排在最前**（created_at DESC）—— 老师刚建完账号就能在第一页看到。
+    // ⚠️ 原来这里是 LIMIT 500 加一个假 total（= 当页条数），分页组件拿它算不出页数。
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
+    const total = Number(count('SELECT COUNT(*) n FROM users WHERE ' + where, params) || 0);
+    const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?', [...params, limit, offset]).map((item) => orgMemberRow(item, currentOrgId));
+    return pageResult(items, { page, limit, total });
   }
   let importMatch = part.match(/^\/users\/import\/(preview|commit)$/);
   if (importMatch && method === 'POST') {
@@ -135,8 +141,12 @@ export async function handleOrg(ctx) {
   if (part === '/users' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建账号', 'ORG_ADMIN_REQUIRED');
     const body = ctx.body || {}; const role = String(body.role || '').trim().toUpperCase(); const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim();
-    if (!ORG_MEMBER_ROLES.has(role) || !login || !displayName || String(body.password || '').length < 6) throw errors.badRequest('账号信息不完整');
-    if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
+    if (!ORG_MEMBER_ROLES.has(role) || !displayName || String(body.password || '').length < 6) throw errors.badRequest('账号信息不完整');
+    // 登录名：只允许英文数字（可带 . _ -），全局唯一且**忽略大小写**；
+    // 姓名：同机构同角色不允许重名（2026-09-16 用户口径：不同用户可能同登录名或同名字）
+    normalizeLogin(login, '登录名');
+    assertLoginAvailable(login);
+    assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role });
     const phone = validateMemberPhone(body.phone);
     const permissions = validateMemberPermissions(body.permissions, role);
     const organization = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
@@ -172,6 +182,7 @@ export async function handleOrg(ctx) {
     if (nextStatus === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'SELF_DISABLE_FORBIDDEN');
     const phone = body.phone === undefined ? target.phone : validateMemberPhone(body.phone, target.id);
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim(); if (!displayName) throw errors.badRequest('姓名不能为空', 'DISPLAY_NAME_REQUIRED');
+    if (displayName !== target.display_name) assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role: target.role, excludeUserId: target.id });
     // 批次 D：`studentUsageScope` 不再接受修改 —— 字段已退役（不再决定任何门禁）。
     // 传了就忽略（不报错），列本身保留历史值。要「能不能用 AI」请看算力池与课堂名单。
     const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);

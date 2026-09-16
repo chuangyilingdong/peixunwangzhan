@@ -2,7 +2,7 @@ import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeLesson, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
-  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE,
+  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -274,7 +274,7 @@ function validateSeriesForPublishing(seriesId) {
   nonEmptyString(series?.description, '课包简介', { max: 10000 });
   if (!series.cover_asset_id && !series.cover_image_url) throw errors.badRequest('发布前请设置课包封面', 'COURSE_COVER_REQUIRED');
   if (!Number.isInteger(series.price_fen) || series.price_fen < 0) throw errors.badRequest('课包价格无效', 'INVALID_COURSE_PRICE');
-  if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(series.visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
+  if (!normalizeSeriesVisibility(series.visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
   const lessons = rows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]).filter((lesson) => lesson.status !== 'ARCHIVED');
   if (!lessons.length) throw errors.badRequest('课包至少需要一个未归档课时才能发布', 'COURSE_LESSONS_REQUIRED');
   if (lessons.some((lesson) => lesson.status !== 'PUBLISHED')) throw errors.badRequest('请先完成课时配置并发布课时', 'COURSE_LESSONS_UNPUBLISHED');
@@ -453,7 +453,7 @@ function importItems(body) {
   return items;
 }
 
-function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, teacherSeatOffset = 0) {
+function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, seenNames, teacherSeatOffset = 0) {
   const item = raw && typeof raw === 'object' ? raw : {};
   const role = String(item.role || '').trim().toUpperCase();
   const login = String(item.login || '').trim();
@@ -464,12 +464,17 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
   // 2026-09-13（P4 删积分）：批量导入不再处理 monthlyCreditAllowance / aiCreditLimit。
   if (!ORG_MEMBER_ROLES.has(role)) errorsForRow.push('角色必须是 TEACHER 或 STUDENT');
   if (!login) errorsForRow.push('登录名不能为空');
-  if (login.length > 100) errorsForRow.push('登录名不能超过 100 个字符');
+  else if (!LOGIN_PATTERN.test(login)) errorsForRow.push('登录名只能用英文和数字（可带 . _ -），2-50 位');
   if (!displayName) errorsForRow.push('姓名不能为空');
   if (password.length < 6) errorsForRow.push('初始密码至少 6 位');
   if (phone && !/^[0-9+()\-\s]{6,30}$/.test(phone)) errorsForRow.push('手机号格式无效');
-  if (seenLogins.has(login)) errorsForRow.push('本批次登录名重复');
-  if (row('SELECT id FROM users WHERE login=?', [login])) errorsForRow.push('登录名已存在');
+  if (seenLogins.has(login.toLowerCase())) errorsForRow.push('本批次登录名重复');
+  if (row('SELECT id FROM users WHERE LOWER(login)=LOWER(?)', [login])) errorsForRow.push('登录名已存在');
+  // 同机构同角色不允许重名（本批次内 + 与库里已存在的都算）—— 2026-09-16 用户口径
+  if (displayName && (seenNames.has(displayName.toLowerCase()) || row('SELECT id FROM users WHERE display_name=? AND deleted_at IS NULL AND org_id IS ? AND role=?', [displayName, currentOrgId, role]))) {
+    errorsForRow.push('本机构已有同名的' + (role === 'TEACHER' ? '老师' : '学员') + '，请换个名字或加个区分');
+  }
+  seenNames.add((displayName || '').toLowerCase());
   if (phone && (seenPhones.has(phone) || row('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL', [phone]))) errorsForRow.push('手机号已被其他账号使用');
   let permissions = [];
   if (role === 'TEACHER') {
@@ -500,7 +505,9 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, te
 function previewImport(body, currentOrgId) {
   const items = importItems(body);
   const seenLogins = new Set(); const seenPhones = new Set();
-  const normalized = items.map((item, index) => validateImportItem(item, currentOrgId, index + 1, seenLogins, seenPhones));
+  // 本批次里已经用过的姓名（小写）：同机构同角色重名要在导入预览阶段就挡下来
+  const seenNames = new Set();
+  const normalized = items.map((item, index) => validateImportItem(item, currentOrgId, index + 1, seenLogins, seenPhones, seenNames));
   const teacherCount = normalized.filter((item) => item.valid && item.value.role === 'TEACHER').length;
   const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
   if ((org.teacherSeats - org.teacherUsedSeats) < teacherCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'TEACHER') { item.valid = false; item.errors.push('教师席位不足'); } });

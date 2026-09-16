@@ -60,7 +60,7 @@ await run(['packages/database/src/seed.js']);
     difficulty_level,age_range_min,age_range_max,tags,created_at,updated_at
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     seriesId, '未配置体验课包', '用于验证未加入班级课单时保持置灰。',
-    'PLATFORM', 'ALL_ORGS', '1.0', 99, 'PUBLISHED', 2, 8, 16, '[]', now, now,
+    'PLATFORM', 'PUBLIC', '1.0', 99, 'PUBLISHED', 2, 8, 16, '[]', now, now,
   );
   db.prepare(`INSERT INTO course_lessons(
     id,series_id,title,summary,sort,status,duration_minutes,lesson_content,created_at,updated_at

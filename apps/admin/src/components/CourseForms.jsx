@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Notice } from '@platform/shared';
 
 export function CreateCourseModal({ api, onClose, onCreated }) {
-  const [form, setForm] = useState({ title: '', description: '', coverImageUrl: '', coverAssetId: '', version: '1.0', priceYuan: '', visibility: 'ALL_ORGS', difficultyLevel: '' });
+  const [form, setForm] = useState({ title: '', description: '', coverImageUrl: '', coverAssetId: '', version: '1.0', priceYuan: '', visibility: 'PUBLIC', difficultyLevel: '' });
   const dialogRef = useRef(null);
   useEffect(() => {
     const opener = document.activeElement;
@@ -43,7 +43,7 @@ export function CreateCourseModal({ api, onClose, onCreated }) {
       <label>课包名称<input autoFocus required maxLength={200} value={form.title} onChange={(event) => update({ title: event.target.value })} /></label>
         <label>初始版本<input required maxLength={100} value={form.version} onChange={(event) => update({ version: event.target.value })} /></label>
         <label>价格（元）<input inputMode="decimal" value={form.priceYuan} onChange={(event) => update({ priceYuan: event.target.value })} /></label>
-        <label>可见范围<select value={form.visibility} onChange={(event) => update({ visibility: event.target.value })}><option value="ALL_ORGS">上架课程广场</option><option value="ASSIGNED_ORGS">仅授权机构</option><option value="PRIVATE">私有</option></select></label>
+        <label>可见范围<select value={form.visibility} onChange={(event) => update({ visibility: event.target.value })}><option value="PUBLIC">公开（课程广场 + 授权机构）</option><option value="PRIVATE">私有</option></select></label>
         <label>难度（1–5）<input type="number" min="1" max="5" value={form.difficultyLevel} onChange={(event) => update({ difficultyLevel: event.target.value })} /></label>
       <label style={{ gridColumn: '1 / -1' }}>简介<textarea rows={3} maxLength={10000} value={form.description} onChange={(event) => update({ description: event.target.value })} /></label>
       </div>

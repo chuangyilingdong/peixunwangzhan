@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
+  assignmentActiveSql, contractExpiryForOrg, normalizeSeriesVisibility, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -133,7 +133,9 @@ export async function handleCourses(ctx, part, method) {
       params.push(keyword, keyword);
     }
     if (['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(statusFilter)) { conditions.push('series.status=?'); params.push(statusFilter); }
-    if (['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibilityFilter)) { conditions.push('series.visibility=?'); params.push(visibilityFilter); }
+    // 列表筛选也走归一化：老前端还在传 ALL_ORGS，映射成 PUBLIC 才筛得到东西
+    const visibilityWanted = normalizeSeriesVisibility(visibilityFilter);
+    if (visibilityWanted) { conditions.push('series.visibility=?'); params.push(visibilityWanted); }
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
     const total = Number(row('SELECT COUNT(*) n FROM course_series series' + where, params)?.n || 0);
     const items = rows('SELECT series.* FROM course_series series' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map((item) => normalizeSeries(item));
@@ -143,7 +145,8 @@ export async function handleCourses(ctx, part, method) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const title = String(body.title || '').trim();
     if (!title) throw errors.badRequest('课包标题不能为空', 'COURSE_TITLE_REQUIRED');
     if (title.length > 200) throw errors.badRequest('课包标题不能超过200个字符', 'VALIDATION_ERROR');
-    const visibility = body.visibility || 'ALL_ORGS'; const status = body.status || 'DRAFT';
+    // 可见范围：两值（公开/私有）；老值由 normalizeSeriesVisibility 归一化成 PUBLIC
+    const visibility = normalizeSeriesVisibility(body.visibility || 'PUBLIC'); const status = body.status || 'DRAFT';
     if (status !== 'DRAFT') throw errors.badRequest('新课包只能创建为草稿，请使用发布接口', 'COURSE_STATUS_ACTION_REQUIRED');
     const initialVersion = nonEmptyString(body.version ?? '1.0', '版本号', { max: 100 });
      const priceFen = integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000, fallback: 0 });
@@ -158,7 +161,7 @@ export async function handleCourses(ctx, part, method) {
      if (coverImageUrl && !/^(https:\/\/|\/api\/)/.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接或平台上传地址', 'INVALID_COVER_URL');
      const coverAssetId = body.coverAssetId ? String(body.coverAssetId).trim() : null;
      if (coverAssetId && !coverAssetId.startsWith('file_')) throw errors.badRequest('封面资源 ID 格式无效', 'INVALID_COVER_ASSET_ID');
-    if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
+    if (!visibility) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
     if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) throw errors.badRequest('课包状态无效', 'INVALID_COURSE_STATUS');
     const lessons = body.lessons === undefined ? [] : body.lessons;
     if (!Array.isArray(lessons) || lessons.length > 200) throw errors.badRequest('课时列表无效', 'INVALID_LESSONS');
@@ -288,8 +291,8 @@ export async function handleCourses(ctx, part, method) {
      const seriesPerStudentBudgetFen = body.perStudentBudgetFen === undefined
        ? (series.per_student_budget_fen === null || series.per_student_budget_fen === undefined ? null : Number(series.per_student_budget_fen))
        : normalizePerStudentBudgetFen(body.perStudentBudgetFen);
-    const visibility = body.visibility === undefined ? series.visibility : body.visibility;
-    if (!['ALL_ORGS', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
+    const visibility = body.visibility === undefined ? series.visibility : normalizeSeriesVisibility(body.visibility);
+    if (!visibility) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
     const sort = body.sort === undefined ? series.sort : integer(body.sort, '课包排序', { min: 0, max: 100000 });
     // P5-W05: 课程资料核验字段
     const difficultyLevel = body.difficultyLevel;
@@ -522,8 +525,9 @@ export async function handleCourses(ctx, part, method) {
     const organizationId = singleAssignmentOrgId(ctx.body);
     if (!row('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     const now = nowIso();
-    const validityDays = integer(ctx.body?.validityDays, '授权有效期（天）', { min: 1, max: 3650, fallback: 365 });
-    const expiresAt = new Date(Date.now() + validityDays * 86400000).toISOString();
+    // 到期时间**不再由平台填**：跟机构的合同日期同步（2026-09-16 用户口径）。
+    // 老前端仍会传 validityDays —— 照旧收下但**忽略**，免得老界面直接报错。
+    const expiresAt = contractExpiryForOrg(organizationId);
     let before = null;
     const result = transaction(() => {
       const currentSeries = row('SELECT * FROM course_series WHERE id=?', [series.id]);
@@ -549,7 +553,7 @@ export async function handleCourses(ctx, part, method) {
       return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch?.replayed) };
     });
     if (!result.replayed) audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_ASSIGNMENT', result.assignment.id, before, result.assignment, { orgId: organizationId });
-    return { assignedCount: 1, validityDays, expiresAt, quotaTotal: result.assignment.quotaTotal, allocations: [result.assignment] };
+    return { assignedCount: 1, expiresAt, quotaTotal: result.assignment.quotaTotal, allocations: [result.assignment] };
   }
 
   const assignmentAppendMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/append$/);
@@ -578,8 +582,8 @@ export async function handleCourses(ctx, part, method) {
           const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
           q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [auth.user.id, now, baseQuota + additionalQuota, existing.id]);
         } else {
-          const expiresAt = new Date(Date.now() + 365 * 86400000).toISOString();
-          q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, additionalQuota]);
+          // 首次追加即建立授权：到期时间同样跟合同走
+          q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, contractExpiryForOrg(organizationId), additionalQuota]);
         }
       }
       return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch.replayed) };
@@ -588,24 +592,8 @@ export async function handleCourses(ctx, part, method) {
     return { assignment: after.assignment, additionalQuota };
   }
 
-  const assignmentValidityMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/validity$/);
-  if (assignmentValidityMatch && method === 'PUT') {
-    requireRole(ctx, ['SUPER_ADMIN']);
-    const organizationId = singleAssignmentOrgId(ctx.body);
-    const expiresAtDate = new Date(ctx.body?.expiresAt);
-    if (!ctx.body?.expiresAt || Number.isNaN(expiresAtDate.getTime())) throw errors.badRequest('请选择有效的到期时间', 'INVALID_ASSIGNMENT_EXPIRY');
-    if (expiresAtDate.getTime() <= Date.now()) throw errors.badRequest('到期时间必须晚于当前时间', 'INVALID_ASSIGNMENT_EXPIRY');
-    if (expiresAtDate.getTime() > Date.now() + 3650 * 86400000) throw errors.badRequest('有效期不能超过 3650 天', 'INVALID_ASSIGNMENT_EXPIRY');
-    const expiresAt = expiresAtDate.toISOString();
-    const assignment = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [assignmentValidityMatch[1], organizationId]);
-    if (!assignment) throw errors.notFound('该机构尚未获得此课包授权', 'ASSIGNMENT_NOT_FOUND');
-    if (assignment.status !== 'ACTIVE') throw errors.conflict('请先追加次数恢复授权，再调整有效期', 'ASSIGNMENT_NOT_ACTIVE');
-    const before = assignmentSnapshot(assignment);
-    q('UPDATE course_assignments SET expires_at=? WHERE id=?', [expiresAt, assignment.id]);
-    const after = assignmentSnapshot(row('SELECT * FROM course_assignments WHERE id=?', [assignment.id]));
-    audit(ctx, 'COURSE_ASSIGNMENT_VALIDITY_UPDATE', 'COURSE_ASSIGNMENT', assignment.id, before, after, { orgId: organizationId });
-    return { assignment: after };
-  }
+  // 「调整授权有效期」这个接口**已删除**（2026-09-16 用户口径：有效期不需要，跟机构的合同日期同步）。
+  // 要改授权的到期时间，就去改机构的合同日期 —— 授权会跟着变（见 organizations.js 里的同步）。
 
   if (part === '/authorizations' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);

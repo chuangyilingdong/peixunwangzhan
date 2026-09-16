@@ -72,9 +72,12 @@ try {
   const plazaIds = async () => ((await handlePublicCommunication(publicCtx('/api/public/marketplace')))?.items || []).map((item) => item.id);
 
   // ── 夹具：两家机构（org1 会被授权，org2 不会）
+  // ⚠️ 合同到期日必须**在未来**：2026-09-16 口径下，授权的到期时间 = 机构合同到期日，
+  //    合同当天到期的话「刚授权就已经失效」—— 那是对的，但这条用例要验的是「授权后机构可见」。
+  const contractExpiry = new Date(Date.now() + 730 * 86400000).toISOString();
   for (const [orgId, name] of [['org1', '已授权学校'], ['org2', '未授权学校']]) {
     q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-      [orgId, name, 'ACTIVE', now, now, 0, 1, 0, null, now, now]);
+      [orgId, name, 'ACTIVE', now, contractExpiry, 0, 1, 0, null, now, now]);
   }
   q("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE',?,?)", [now, now]);
 
@@ -102,7 +105,8 @@ try {
   const beforeAssign = getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' });
   check(!(beforeAssign || []).some((item) => item.id === seriesId), '未授权机构的学生端也不应看到课包');
 
-  // ③ 授权 2 年后：机构可见，且带出有效期
+  // ③ 授权后机构可见，且带出有效期 —— 有效期 = 该机构的合同到期日（上面给了 2 年后），
+  //    所以这里的 `validityDays` 只是老前端的遗留参数，服务端已忽略它
   const assigned = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 730, quotaTotal: 1, amountMinor: 100, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P40-O-${seriesId}`, contractNo: `P40-C-${seriesId}`, idempotencyKey: `p40-purchase-${seriesId}` }));
   check(assigned?.assignedCount === 1, `授权应写入 1 条，实际 ${assigned?.assignedCount}`);
   const twoYearsOut = Date.now() + 729 * 24 * 60 * 60 * 1000;
@@ -146,16 +150,18 @@ try {
   await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/status`, 'POST', { action: 'archive' }));
   check(!(await plazaIds()).includes(seriesId), '下架后课包应退出课程广场');
 
-  // ⑨ 「不上架（ASSIGNED_ORGS）」不上广场，但授权后机构照样可见 —— 两件事互不干涉
+  // ⑨ 「私有」不上广场，但授权后机构照样可见 —— 两件事互不干涉
+  // （2026-09-16 口径改了：可见范围只剩「公开 / 私有」，「仅授权机构」那个中间态取消；
+  //   这条用例验的是「发布 ≠ 授权」，与可见范围叫什么名字无关，所以改用 PRIVATE）
   const privateSeries = await handleAdmin(adminCtx('/api/admin/course-series', 'POST', {
-    title: 'P40 不上架授权课包',
-    description: '定向授权课包', stockTotal: 1, coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'ASSIGNED_ORGS',
+    title: 'P40 私有授权课包',
+    description: '定向授权课包', stockTotal: 1, coverImageUrl: 'https://example.com/guard-cover.png', visibility: 'PRIVATE',
     lessons: [{ title: '第1课 定向课', status: 'PUBLISHED', capabilities: ['text'] }],
   }));
   await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/status`, 'POST', { action: 'publish' }));
-  check(!(await plazaIds()).includes(privateSeries.id), '「不上架」课包不应出现在课程广场');
+  check(!(await plazaIds()).includes(privateSeries.id), '「私有」课包不应出现在课程广场');
   await handleAdmin(adminCtx(`/api/admin/course-series/${privateSeries.id}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1, amountMinor: 100, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P40-O-${privateSeries.id}`, contractNo: `P40-C-${privateSeries.id}`, idempotencyKey: `p40-purchase-${privateSeries.id}` }));
-  check(await hasCourse('org1', privateSeries.id), '「不上架」课包授权后机构应能看到');
+  check(await hasCourse('org1', privateSeries.id), '「私有」课包授权后机构应能看到');
   check(!(await plazaIds()).includes(privateSeries.id), '机构可见不应把课包带上课程广场');
 } catch (error) {
   failures.push(`unexpected: ${error?.stack || error?.message || error}`);

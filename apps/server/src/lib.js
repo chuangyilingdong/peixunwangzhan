@@ -739,6 +739,93 @@ export function lessonTeachingMaterials(lessonId) {
   return { teachingGroups: groups };
 }
 
+/**
+ * 课包「可见范围」（2026-09-16 用户口径：三值改两值）。
+ * **公开** = 课程广场 + 授权机构都可以；**私有** = 不对外。
+ * 老的两个值（ALL_ORGS=上架课程广场 / ASSIGNED_ORGS=仅授权机构）在入口处**照旧收下**并映射成
+ * PUBLIC —— 它们本来只差「上不上广场」这一件事，现在合并了；直接报 400 只会让老前端与
+ * 历史守卫无谓地红，所以这里做归一化而不是拒绝。
+ */
+/**
+ * 登录名格式（2026-09-16 用户口径）：**只允许英文与数字**（可以带 . _ -）。
+ * 口径原话：「登录名现在可以填中文，应该是只能英文、数字」。
+ * 为什么保留 . _ - ：历史账号与守卫里已经有 p4-o14-student / teacher-1 这类名字，
+ * 一刀切只留字母数字会把它们连同生产账号一起挡在门外。
+ * 不允许空格、中文、@ 等 —— 那些正是会被认错、打不出来的字符。
+ */
+export const LOGIN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$/;
+
+/** 校验并返回登录名；不合法就报错（错误码 INVALID_LOGIN_FORMAT，前端据此给中文提示）。 */
+export function normalizeLogin(value, field = '登录名') {
+  const login = String(value ?? '').trim();
+  // 空值沿用通用校验码（与原来的 nonEmptyString 一致），只有『格式不对』才是新码
+  if (!login) throw errors.badRequest(`${field}不能为空`);
+  if (!LOGIN_PATTERN.test(login)) {
+    throw errors.badRequest(`${field}只能用英文和数字（可带 . _ -），2-50 位`, 'INVALID_LOGIN_FORMAT');
+  }
+  return login;
+}
+
+/**
+ * 登录名全局唯一（忽略大小写）。
+ * 口径：不同用户不能同登录名 —— 大小写不同也算同一个（`Zhang` 与 `zhang` 会被人认成一个人）。
+ * 软删除的账号**仍然占着**这个登录名（它们还在库里，放行会造成两个同登录名的账号）。
+ */
+export function assertLoginAvailable(login, { excludeUserId = null } = {}) {
+  const clash = row('SELECT id,login,display_name FROM users WHERE LOWER(login)=LOWER(?) AND (? IS NULL OR id<>?) LIMIT 1', [login, excludeUserId, excludeUserId]);
+  if (clash) throw errors.conflict(`登录名「${login}」已被占用（${clash.display_name || clash.login}）`, 'LOGIN_EXISTS');
+}
+
+/**
+ * 姓名唯一：**同一机构 + 同一角色**内不允许重名（2026-09-16 用户口径）。
+ * 为什么按这个范围：不同机构的学生当然可以同名；一个机构里「张老师」和「张三同学」也可以同名。
+ * 会出问题的场景是「同一批名单里两个同名的人」—— 老师在学员列表里根本分不出来。
+ * orgId 为空（平台管理员）时按全局同名同角色算。
+ */
+export function assertDisplayNameAvailable(displayName, { orgId = null, role = null, excludeUserId = null } = {}) {
+  const name = String(displayName ?? '').trim();
+  if (!name) return;
+  const clash = row(
+    `SELECT id,login,display_name FROM users
+      WHERE display_name=? AND deleted_at IS NULL
+        AND (? IS NULL OR org_id IS ?) AND (? IS NULL OR role=?) AND (? IS NULL OR id<>?)
+      LIMIT 1`,
+    [name, orgId, orgId, role, role, excludeUserId, excludeUserId],
+  );
+  if (clash) {
+    const scope = orgId ? '本机构' : '平台';
+    throw errors.conflict(`${scope}已经有同名的${role === 'STUDENT' ? '学员' : role === 'TEACHER' ? '老师' : '账号'}「${name}」（登录名 ${clash.login}），请换个名字或加个区分`, 'DISPLAY_NAME_EXISTS');
+  }
+}
+
+export const SERIES_VISIBILITIES = Object.freeze(['PUBLIC', 'PRIVATE']);
+
+export function normalizeSeriesVisibility(value) {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (raw === 'ALL_ORGS' || raw === 'ASSIGNED_ORGS') return 'PUBLIC';
+  return SERIES_VISIBILITIES.includes(raw) ? raw : null;
+}
+
+/**
+ * 平台→机构授权的到期时间：**跟机构的合同日期走**（2026-09-16 用户口径）。
+ *
+ * 口径原话：平台给机构授权次数时「还需要填有效期，这里有效期不需要，跟机构创建的合同日期同步即可」。
+ * 所以授权不再有自己单独的有效期：合同续了，授权自动跟着续（见 syncAssignmentExpiryForOrg）。
+ * 返回 null 表示这家机构没有合同到期日 —— 此时授权不设到期（与 assignmentActiveSql 的语义一致）。
+ */
+export function contractExpiryForOrg(orgId) {
+  return row('SELECT contract_expires_at FROM organizations WHERE id=?', [String(orgId || '')])?.contract_expires_at || null;
+}
+
+/**
+ * 机构的合同日期变了（续签 / 改期）→ 它的**有效**授权一起跟过去。
+ * 契约：授权有效期 = 合同到期日，所以这里不做任何「取更晚的那个」之类的小聪明 ——
+ * 合同怎么改，授权就怎么变，这才叫「同步」。
+ */
+export function syncAssignmentExpiryForOrg(orgId, expiresAt = null) {
+  return q("UPDATE course_assignments SET expires_at=? WHERE org_id=? AND status='ACTIVE'", [expiresAt, String(orgId || '')]);
+}
+
 export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false } = {}) {
   // 课包字段同样支持草稿隔离：机构端/学生端/官网读「更新发布」时的快照
   const seriesSnapshot = asPublished ? publishedSnapshotOf(value) : null;

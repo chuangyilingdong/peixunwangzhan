@@ -63,7 +63,7 @@ export function PlatformAdmins({ api, currentUser }) {
     <div className="split">
       <Panel title={editing ? `编辑管理员：${editing.displayName}` : '新建平台管理员'}>
         <form onSubmit={editing ? save : create}>
-          {!editing && <div className="form-grid"><label>登录名<input value={form.login} onChange={(e) => setForm({ ...form, login: e.target.value })} required /></label><label>初始密码<input type="password" autoComplete="new-password" value={form.password} minLength={6} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label></div>}
+          {!editing && <div className="form-grid"><label>登录名<input value={form.login} pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(e) => setForm({ ...form, login: e.target.value })} required /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。</small></label><label>初始密码<input type="password" autoComplete="new-password" value={form.password} minLength={6} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label></div>}
           <label>姓名<input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} required /></label>
           <label>权限码</label>
           <div className="row-actions">{permissionOptions.map((permission) => <label key={permission} className="checkbox-option"><input type="checkbox" checked={form.permissions.includes(permission)} onChange={() => toggle(permission)} />{ADMIN_PERMISSION_LABELS[permission] || permission}</label>)}</div>

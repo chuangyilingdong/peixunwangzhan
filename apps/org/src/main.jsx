@@ -150,7 +150,7 @@ function Members({ api, user }) {
       <Panel title="新建账号">
         <form onSubmit={create}>
           <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="STUDENT">学生</option><option value="TEACHER">教师</option></select></label>
-          <label>登录名<input value={form.login} required onChange={(event) => setForm({ ...form, login: event.target.value })} /></label>
+          <label>登录名<input value={form.login} required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(event) => setForm({ ...form, login: event.target.value })} /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。姓名在同一批人里也不能重名。</small></label>
           <label>姓名<input value={form.displayName} required onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
           <label>初始密码<input type="password" minLength="6" value={form.password} required onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
           <label>手机号（可选）<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>

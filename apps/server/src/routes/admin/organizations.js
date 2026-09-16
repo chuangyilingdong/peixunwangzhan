@@ -2,8 +2,8 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
-} from '../../lib.js';
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable } from '../../lib.js';
+import { syncAssignmentExpiryForOrg } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -114,10 +114,11 @@ export async function handleOrganizations(ctx, part, method) {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const name = String(body.name || '').trim();
     if (!name) throw errors.badRequest('机构名称不能为空');
     if (row('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
-    const login = nonEmptyString(body.adminLogin, '管理员账号', { max: 100 });
+    const login = normalizeLogin(body.adminLogin, '管理员账号');
+    const adminDisplayName = String(body.adminDisplayName || login).trim().slice(0, 100);
     const password = String(body.adminPassword || '');
     if (password.length < 6) throw errors.badRequest('请显式设置至少6位的管理员密码', 'ORG_ADMIN_INPUT_REQUIRED');
-    if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
+    assertLoginAvailable(login);
     const now = nowIso(); const organizationId = id('org');
     const purchasedTeacherSeats = integer(body.purchasedTeacherSeats, '购买教师席位');
     const totalTeacherSeats = body.teacherSeats === undefined ? null : integer(body.teacherSeats, '教师数量上限');
@@ -131,7 +132,7 @@ export async function handleOrganizations(ctx, part, method) {
     transaction(() => {
       q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, body.isTrial ? 'TRIAL' : 'ACTIVE', contractStartAt, contractExpiresAt, body.isTrial ? 1 : 0, baseTeacherSeats, purchasedTeacherSeats, integer(body.studentSeats, '学生数量上限'), json(contactPayload(body.contact ?? {})), auth.user.id, now, now]);
       ensureOrgBilling(organizationId);
-      q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('user'), organizationId, login, String(body.adminDisplayName || login).trim(), 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
+      q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('user'), organizationId, login, adminDisplayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
     });
     audit(ctx, 'ORG_CREATE', 'ORG', organizationId, null, { name });
     return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organizationId]));
@@ -169,6 +170,9 @@ export async function handleOrganizations(ctx, part, method) {
       if (baseTeacherSeats + purchasedTeacherSeats < usage.teacherUsedSeats) throw errors.conflict('教师上限不能低于现有人数', 'TEACHER_SEATS_TOO_FEW');
       if (studentSeats < usage.studentUsedSeats) throw errors.conflict('学生上限不能低于现有人数', 'STUDENT_SEAT_LIMIT');
       q('UPDATE organizations SET name=?,contract_start_at=?,contract_expires_at=?,base_teacher_seats=?,purchased_teacher_seats=?,student_seats=?,contact=?,updated_at=? WHERE id=?', [name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, studentSeats, json(contact), nowIso(), organization.id]);
+      // 授权有效期 = 机构合同到期日（2026-09-16 用户口径），所以合同一改就要同步过去：
+      // 续签之后机构不该还因为「原来那条授权到期了」而看不到课包。
+      if (contractExpiresAt !== organization.contract_expires_at) syncAssignmentExpiryForOrg(organization.id, contractExpiresAt);
     });
     const after = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
     audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, before, { name: after.name, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, contact }, { orgId: organization.id });
@@ -203,9 +207,11 @@ export async function handleOrganizations(ctx, part, method) {
     const organization = organizationRow(orgAdminMatch[1]);
     const body = ctx.body || {}; const now = nowIso();
     const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim(); const password = String(body.password || '');
-    if (!login || !displayName) throw errors.badRequest('登录名和姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
+    if (!displayName) throw errors.badRequest('姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
     if (password.length < 6) throw errors.badRequest('管理员密码至少6位', 'ORG_ADMIN_INPUT_REQUIRED');
-    if (row('SELECT id FROM users WHERE login=?', [login])) throw errors.conflict('登录名已存在', 'LOGIN_EXISTS');
+    normalizeLogin(login, '登录名');
+    assertLoginAvailable(login);
+    assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN' });
     const userId = id('user');
     q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [userId, organization.id, login, displayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
     const admin = row('SELECT * FROM users WHERE id=?', [userId]);
@@ -222,6 +228,7 @@ export async function handleOrganizations(ctx, part, method) {
     const body = ctx.body || {};
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName || '').trim();
     if (!displayName) throw errors.badRequest('管理员姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
+    if (displayName !== target.display_name) assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN', excludeUserId: target.id });
     let passwordHash = target.password_hash;
     if (body.password !== undefined) {
       const password = String(body.password || '');

@@ -270,10 +270,10 @@ export function handlePublicCommunication(ctx) {
   }
 
   // P5-W05: 公开课包列表（无需登录）。公开口径 = 平台自有的 PUBLISHED 且「上架课程广场」的课包
-  // （visibility='ALL_ORGS'）。visibility='ASSIGNED_ORGS' 是「不上架、只给授权机构」，不能出现在这里。
+  // （visibility='PUBLIC'）。visibility='ASSIGNED_ORGS' 是「不上架、只给授权机构」，不能出现在这里。
   if (pathname === '/api/public/course-series' && method === 'GET') {
     const params = [];
-    const wheres = ["series.status = 'PUBLISHED'", "series.owner_type = 'PLATFORM'", "series.visibility = 'ALL_ORGS'"];
+    const wheres = ["series.status = 'PUBLISHED'", "series.owner_type = 'PLATFORM'", "series.visibility = 'PUBLIC'"];
     if (ctx.search.get('difficulty') != null) {
       wheres.push('series.difficulty_level = ?');
       params.push(Number(ctx.search.get('difficulty')));
@@ -301,7 +301,7 @@ export function handlePublicCommunication(ctx) {
   const publicCourseDetailMatch = pathname.match(/^\/api\/public\/course-series\/([\w-]+)$/);
   if (publicCourseDetailMatch && method === 'GET') {
     const series = row(
-      "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND owner_type='PLATFORM' AND visibility='ALL_ORGS'",
+      "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND owner_type='PLATFORM' AND visibility='PUBLIC'",
       [publicCourseDetailMatch[1]],
     );
     if (!series) throw errors.notFound('课包不存在或不可公开访问', 'COURSE_SERIES_NOT_FOUND');
@@ -317,7 +317,7 @@ export function handlePublicCommunication(ctx) {
     return detail;
   }
 
-  // 课程广场：平台自有、已发布（PUBLISHED）、可见范围是「上架课程广场」（visibility='ALL_ORGS'）
+  // 课程广场：平台自有、已发布（PUBLISHED）、可见范围是「上架课程广场」（visibility='PUBLIC'）
   // 的课包自动出现，按课堂类型分为「画布课程」与「VibeCoding 课程」两类，不再需要人工上架。
   // 注意：上架广场 **不等于** 授权给机构 —— 机构后台只认 course_assignments（见 orgSeriesAccessSql）。
   if (pathname === '/api/public/marketplace' && method === 'GET') {
@@ -331,7 +331,7 @@ export function handlePublicCommunication(ctx) {
     const page = integer(ctx.search.get('page'), '页码', { min: 1, max: 100000, fallback: 1 });
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 100, fallback: 20 });
     const offset = (page - 1) * limit;
-    const wheres = ["series.status='PUBLISHED'", "series.owner_type='PLATFORM'", "series.visibility='ALL_ORGS'"];
+    const wheres = ["series.status='PUBLISHED'", "series.owner_type='PLATFORM'", "series.visibility='PUBLIC'"];
     const params = [];
     if (['CANVAS', 'VIBECODING'].includes(category)) { wheres.push('series.delivery_mode=?'); params.push(category); }
     if (difficulty != null) { wheres.push('series.difficulty_level=?'); params.push(Number(difficulty)); }
@@ -372,7 +372,7 @@ export function handlePublicCommunication(ctx) {
     const series = row(
       // 与上面的列表用**同一套条件**：早先这里多要一个 marketplace_status='APPROVED'（而全站没有任何
       // 入口能把它置成 APPROVED），于是广场里点开的课程必然 404。上架与否只看 PUBLISHED + 上架范围。
-      "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND owner_type='PLATFORM' AND visibility='ALL_ORGS'",
+      "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND owner_type='PLATFORM' AND visibility='PUBLIC'",
       [publicMarketplaceDetailMatch[1]],
     );
     if (!series) throw errors.notFound('课程不存在或未上架', 'MARKETPLACE_COURSE_NOT_FOUND');

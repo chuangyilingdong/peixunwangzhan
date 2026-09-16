@@ -101,7 +101,9 @@ try {
   // 4. 官网 LoginPage 按角色分流（`window.location.assign`，不再是 navigate('/learn')）
   const websiteSrc = fs.readFileSync(path.join(root, 'apps/website/src/main.jsx'), 'utf8');
   check('website LoginPage 按角色分流并 assign', () => assert.ok(websiteSrc.includes('window.location.assign(target)'), 'LoginPage should assign by role'));
-  check('website LoginPage 学生回首页', () => assert.ok(websiteSrc.includes("role === 'STUDENT' ? '/'"), 'STUDENT should land on /'));
+  // 2026-09-16 订正：学生登录后落**我的课程**（课程优先），不再是官网首页 ——
+  // 代码在 cd1d2d5 就改成 /my-courses 了，这条断言当时没跟着改，一直红着（属于测试漂移，不是功能回归）。
+  check('website LoginPage 学生进我的课程', () => assert.ok(websiteSrc.includes("role === 'STUDENT' ? '/my-courses'"), 'STUDENT should land on /my-courses'));
   check('website LoginPage 平台管理员进 /admin/', () => assert.ok(websiteSrc.includes("'/admin/'"), 'PLATFORM admin should land on /admin/'));
   check('website has /learn route', () => assert.ok(websiteSrc.includes("path='/learn'"), 'Website should declare /learn route'));
 
@@ -116,7 +118,9 @@ try {
 
   const classroomJsx = fs.readFileSync(path.join(root, 'packages/shared/src/classroom.jsx'), 'utf8');
   check('CanvasClassroom exported', () => assert.ok(classroomJsx.includes('export function CanvasClassroom')));
-  check('LearnEntry exported', () => assert.ok(classroomJsx.includes('export function LearnEntry')));
+  // 2026-09-16 订正：这个组件早就改名成 StudentCourseCenter（课程优先那轮），
+  // 断言还写着旧的 LearnEntry —— 同样是测试漂移，不是功能回归。
+  check('StudentCourseCenter exported', () => assert.ok(classroomJsx.includes('export function StudentCourseCenter')));
 
   const cwJsx = fs.readFileSync(path.join(root, 'packages/shared/src/canvasWorkspace.jsx'), 'utf8');
   check('CanvasWorkspace exported', () => assert.ok(cwJsx.includes('export function CanvasWorkspace')));

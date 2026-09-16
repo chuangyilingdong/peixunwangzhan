@@ -287,7 +287,34 @@ export async function handleOverview(ctx, part, method) {
       unknown: poolRows.filter(item => item.budgetState === 'UNKNOWN').length,
       nearLimit: poolRows.filter((item) => item.usagePercent != null && item.usagePercent >= 80 && item.usagePercent < 100).length,
       exhausted: poolRows.filter((item) => item.budgetState === 'OVER_BUDGET').length,
-      usedYuan: null, knownCostYuan: poolRows.reduce((total,item) => total + item.knownCostFen,0) / 100,
+      // 超支金额（元）：只把**算得出超支**的课堂加起来；有任何一场成本未知，整条数字标成 null
+      // （用户口径：要能看出「有没有超出、超了多少」；不知道就得说不知道）。
+      overBudgetYuan: poolRows.some((item) => item.budgetState === 'OVER_BUDGET' && item.overBudgetFen == null)
+        ? null
+        : poolRows.reduce((total, item) => total + (item.overBudgetFen || 0), 0) / 100,
+      knownCostYuan: poolRows.reduce((total,item) => total + item.knownCostFen,0) / 100,
+      // 总成本保持 null：有课堂成本未知时，给一个数字等于把「不知道」说成「知道」
+      usedYuan: null,
+    };
+    // 超支的课堂明细（最多 5 条，最新的在前）：工作台要能一眼看到「哪节课、哪家机构、超了多少」
+    const overBudgetSessions = poolRows
+      .filter((item) => item.budgetState === 'OVER_BUDGET')
+      .slice(0, 5)
+      .map((item) => ({
+        sessionId: item.sessionId, lessonTitle: item.lessonTitle, orgName: item.orgName, sessionTitle: item.sessionTitle,
+        budgetFen: item.budgetFen, knownCostFen: item.knownCostFen, overBudgetFen: item.overBudgetFen, studentCount: item.studentCount,
+      }));
+    const platformBudgetAlert = {
+      lessons: lessonPlatformBudgetOverview()
+        .filter((item) => item.overBudgetSessions > 0)
+        .map((item) => ({
+          lessonId: item.lessonId, lessonTitle: item.lessonTitle, seriesTitle: item.seriesTitle || null, platformBudgetFen: item.platformBudgetFen,
+          budgetFen: item.budgetFen, knownCostFen: item.knownCostFen, overBudgetFen: item.overBudgetFen,
+          overBudgetSessions: item.overBudgetSessions, sessionCount: item.sessionCount, orgCount: item.orgCount,
+          unknownSessions: item.unknownSessions,
+        }))
+        .sort((left, right) => (right.overBudgetFen || 0) - (left.overBudgetFen || 0)),
+      sessions: overBudgetSessions,
     };
     const computeTopStudents = [];
 
@@ -325,6 +352,8 @@ export async function handleOverview(ctx, part, method) {
         successCalls: Number(computeTotals?.successCalls || 0),
         byModality: computeByModality.map((item) => ({ modality: item.modality, yuan: Number((Number(item.fen || 0) / 100).toFixed(2)), calls: Number(item.calls || 0) })),
         pools, topStudents: computeTopStudents,
+        // 预算超支预警（用户口径：要能看到有没有超出、超了多少，并在工作台明确提示）
+        budgetAlert: platformBudgetAlert,
       },
       content,
       filters: { orgId: orgFilter || null, from: since, to: until },

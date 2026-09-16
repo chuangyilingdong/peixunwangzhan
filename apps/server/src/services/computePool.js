@@ -274,7 +274,13 @@ export function classroomBudgetStatus(sessionId) {
   const budgetFen = session?.platform_budget_fen ?? null;
   const knownCostFen = Number(cost?.known || 0);
   const unknownCalls = Number(cost?.unknown || 0) + historical;
-  return { budgetFen, knownCostFen, unknownCalls, usedFen: unknownCalls ? null : knownCostFen,
+  // 超了多少（分）：只算得出的部分。预算没配、或成本全是未知时不报数字 ——
+  // 报一个「0」会让人以为没超，而实际情况是「不知道」（用户口径：要能看出有没有超出、超了多少）。
+  const knownComplete = !unknownCalls;
+  const overBudgetFen = budgetFen !== null && knownComplete ? Math.max(0, knownCostFen - budgetFen) : null;
+  return { budgetFen, knownCostFen, unknownCalls, usedFen: knownComplete ? knownCostFen : null,
+    overBudgetFen,
+    usagePercent: budgetFen ? Math.round((knownCostFen / budgetFen) * 1000) / 10 : null,
     budgetState: budgetFen !== null && knownCostFen > budgetFen ? 'OVER_BUDGET' : unknownCalls || !session ? 'UNKNOWN' : budgetFen === null ? 'UNCONFIGURED' : 'WITHIN_BUDGET', enforced: false };
 }
 
@@ -291,15 +297,22 @@ export function classroomBudgetReport({ limit = 100, orgId = '' } = {}) {
 /** Same lesson aggregated across organizations; each classroom contributes one baseline. */
 export function lessonPlatformBudgetOverview() {
   return rows(`SELECT l.id lessonId,l.title lessonTitle,l.platform_budget_fen platformBudgetFen,
+    series.title seriesTitle,
     COUNT(s.id) sessionCount,COUNT(DISTINCT s.org_id) orgCount
-    FROM course_lessons l LEFT JOIN class_sessions s ON s.lesson_id=l.id
+    FROM course_lessons l
+    LEFT JOIN course_series series ON series.id = l.series_id
+    LEFT JOIN class_sessions s ON s.lesson_id=l.id
     GROUP BY l.id ORDER BY l.sort`).map(item => {
       const sessions = rows('SELECT id FROM class_sessions WHERE lesson_id=?', [item.lessonId]).map(s => classroomBudgetStatus(s.id));
       const unknownCalls = sessions.reduce((n,s) => n+s.unknownCalls,0);
       const knownCostFen = sessions.reduce((n,s) => n+s.knownCostFen,0);
+      const overRows = sessions.filter(s => s.budgetState === 'OVER_BUDGET');
       return { ...item, budgetFen: sessions.some(s => s.budgetFen == null) ? null : sessions.reduce((n,s) => n+s.budgetFen,0),
         knownCostFen, usedFen: unknownCalls ? null : knownCostFen, unknownCalls,
-        overBudgetSessions: sessions.filter(s => s.budgetState==='OVER_BUDGET').length,
+        overBudgetSessions: overRows.length,
+        // 这个课时**一共超了多少钱**（各场课堂的超支之和）。有课堂成本未知时给 null ——
+        // 「未知」与「没超」必须能分开，否则这条预警会骗人。
+        overBudgetFen: unknownCalls ? null : overRows.reduce((n, s) => n + (s.overBudgetFen || 0), 0),
         unknownSessions: sessions.filter(s => s.budgetState==='UNKNOWN').length, enforced: false };
     });
 }

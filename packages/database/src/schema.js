@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS course_series (
   grade_range TEXT NOT NULL DEFAULT '',
   owner_type TEXT NOT NULL DEFAULT 'PLATFORM' CHECK (owner_type IN ('PLATFORM','ORG')),
   org_id TEXT,
-  visibility TEXT NOT NULL DEFAULT 'ALL_ORGS' CHECK (visibility IN ('ALL_ORGS','ASSIGNED_ORGS','PRIVATE')),
+  visibility TEXT NOT NULL DEFAULT 'PUBLIC' CHECK (visibility IN ('PUBLIC','PRIVATE')),
   version TEXT NOT NULL DEFAULT '1.0',
   sort INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
@@ -2564,3 +2564,88 @@ CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_period ON provider_bill_a
 CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_account ON provider_bill_aggregates(supplier_account_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_snapshot ON provider_bill_aggregates(snapshot_id);
 `);
+
+// ── 课包「可见范围」从三值改成两值：公开 / 私有（2026-09-16 用户口径）──────────────────────
+//
+// 口径原话：上架课程广场和仅授权机构这两个选项「意义不大」，定义为**公开**和**私有** ——
+// 公开就代表课程广场和授权机构都可以。
+//
+// ⚠️ 为什么必须重建表：`visibility` 上带的是**列级 CHECK**（三值），而 SQLite 改不了 CHECK
+// （与 file_assets / works / class_sessions 那几次同一套做法）。不迁移的话老库上
+// `UPDATE ... SET visibility='PUBLIC'` 会被约束直接拒掉。
+//
+// 映射：ALL_ORGS → PUBLIC、ASSIGNED_ORGS → PUBLIC（两值的区别本来只在「上不上课程广场」，
+// 现在合并了）、PRIVATE → PRIVATE 不动。
+// 幂等：只在旧约束里还看得见 'ASSIGNED_ORGS' 时执行；执行完 DDL 里就没有它了。
+// ⚠️ 新表的列必须把历次 ALTER 加过的都写全（stock_total / per_student_budget_fen /
+//    published_content / cu_limit / cover_asset_id）—— 漏一个就是静默丢列。
+const seriesDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='course_series'").get()?.sql || '');
+if (seriesDdl.includes("'ASSIGNED_ORGS'")) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`CREATE TABLE course_series_migrated (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      cover_image_url TEXT,
+      price_fen INTEGER NOT NULL DEFAULT 0,
+      validity_days INTEGER NOT NULL DEFAULT 365,
+      estimated_credits_per_person INTEGER NOT NULL DEFAULT 0,
+      grade_range TEXT NOT NULL DEFAULT '',
+      owner_type TEXT NOT NULL DEFAULT 'PLATFORM' CHECK (owner_type IN ('PLATFORM','ORG')),
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'PUBLIC' CHECK (visibility IN ('PUBLIC','PRIVATE')),
+      version TEXT NOT NULL DEFAULT '1.0',
+      sort INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
+      marketplace_status TEXT NOT NULL DEFAULT 'NONE',
+      marketplace_reward_credits INTEGER NOT NULL DEFAULT 0,
+      difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 5),
+      age_range_min INTEGER,
+      age_range_max INTEGER,
+      tags TEXT NOT NULL DEFAULT '[]',
+      delivery_mode TEXT NOT NULL DEFAULT 'CANVAS' CHECK (delivery_mode IN ('CANVAS','VIBECODING')),
+      stock_total INTEGER NOT NULL DEFAULT 0,
+      per_student_budget_fen INTEGER,
+      published_content TEXT,
+      cu_limit INTEGER,
+      cover_asset_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+    )`);
+    db.exec(`INSERT INTO course_series_migrated (
+      id, title, description, cover_image_url, price_fen, validity_days, estimated_credits_per_person,
+      grade_range, owner_type, org_id, visibility, version, sort, status, marketplace_status,
+      marketplace_reward_credits, difficulty_level, age_range_min, age_range_max, tags, delivery_mode,
+      stock_total, per_student_budget_fen, published_content, cu_limit, cover_asset_id, created_at, updated_at
+    ) SELECT
+      id, title, description, cover_image_url, price_fen, validity_days, estimated_credits_per_person,
+      grade_range, owner_type, org_id,
+      CASE WHEN visibility IN ('ALL_ORGS','ASSIGNED_ORGS') THEN 'PUBLIC' ELSE 'PRIVATE' END,
+      version, sort, status, marketplace_status,
+      marketplace_reward_credits, difficulty_level, age_range_min, age_range_max, tags, delivery_mode,
+      COALESCE(stock_total, 0), per_student_budget_fen, published_content, cu_limit, cover_asset_id,
+      created_at, updated_at
+    FROM course_series`);
+    db.exec('DROP TABLE course_series');
+    db.exec('ALTER TABLE course_series_migrated RENAME TO course_series');
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_course_series_platform_title ON course_series(title) WHERE owner_type = 'PLATFORM'");
+    db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_versions ON course_series_versions(series_id, created_at DESC)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_difficulty ON course_series(difficulty_level)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_course_series_cover_asset ON course_series(cover_asset_id) WHERE cover_asset_id IS NOT NULL');
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+// 发布快照里如果还留着老的三值，一并改成两值（快照是 JSON，不受 CHECK 约束，但要一起读得懂）
+try {
+  db.exec(`UPDATE course_series_versions SET snapshot = REPLACE(REPLACE(snapshot, '"visibility":"ALL_ORGS"', '"visibility":"PUBLIC"'), '"visibility":"ASSIGNED_ORGS"', '"visibility":"PUBLIC"') WHERE snapshot LIKE '%"visibility":"ALL_ORGS"%' OR snapshot LIKE '%"visibility":"ASSIGNED_ORGS"%'`);
+} catch (_) { /* 老库可能没有这张表/这一列，忽略 */ }
+
