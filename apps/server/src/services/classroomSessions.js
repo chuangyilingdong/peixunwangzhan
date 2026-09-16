@@ -12,10 +12,9 @@
 import { errors, id, nowIso, q, row, rows, transaction } from '../lib.js';
 import { computePoolSummary, salePriceFenFor } from './computePool.js';
 
-/** 教师只能碰自己创建的课堂；机构管理员可以碰本机构所有课堂。 */
+/** 写操作仅课堂负责人可执行；机构管理员对其他课堂只读。 */
 export function assertSessionManager(auth, session) {
-  if (auth.user.role === 'ORG_ADMIN') return session;
-  if (auth.user.role === 'TEACHER' && session.teacher_id === auth.user.id) return session;
+  if (['ORG_ADMIN', 'TEACHER'].includes(auth.user.role) && session.teacher_id === auth.user.id) return session;
   throw errors.forbidden('这不是你负责的课堂', 'SESSION_PERMISSION_DENIED');
 }
 
@@ -156,8 +155,8 @@ function candidatePool(studentId, seriesId, seriesTitle) {
  */
 export function settleSessionStudents({ sessionId, actorId }) {
   const session = row('SELECT status FROM class_sessions WHERE id=?', [sessionId]);
-  if (!session || !['ACTIVE', 'ENDED'].includes(session.status)) return { completed: 0, incomplete: 0 };
-  const parts = rows("SELECT * FROM session_students WHERE session_id=? AND (status IN ('PENDING','ACTIVE') OR (status='INCOMPLETE' AND ?='ENDED'))", [sessionId, session.status]);
+  if (!session || session.status !== 'ACTIVE') return { completed: 0, incomplete: 0 };
+  const parts = rows("SELECT * FROM session_students WHERE session_id=? AND status IN ('PENDING','ACTIVE')", [sessionId]);
   const now = nowIso();
   const summary = { completed: 0, incomplete: 0 };
   for (const part of parts) {
@@ -197,8 +196,8 @@ export function addSessionStudents({ session, studentIds, actorId }) {
       const removed = row("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status='REMOVED'", [session.id, studentId]);
       const status = session.status === 'ACTIVE' ? 'ACTIVE' : 'PENDING';
       if (removed) {
-        q('UPDATE session_students SET status=?, added_by=?, added_at=?, removed_by=NULL, removed_at=NULL, removed_reason=NULL, updated_at=? WHERE id=?',
-          [status, actorId, now, now, removed.id]);
+        q('UPDATE session_students SET status=?, lesson_id=?, series_id=?, added_by=?, added_at=?, removed_by=NULL, removed_at=NULL, removed_reason=NULL, updated_at=? WHERE id=?',
+          [status, session.lesson_id, session.series_id, actorId, now, now, removed.id]);
       } else {
         q(`INSERT INTO session_students(id, session_id, student_id, org_id, lesson_id, series_id, status, added_by, added_at, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)`,
@@ -230,6 +229,63 @@ export function sessionStudentCounts(sessionIds) {
       WHERE session_id IN (${placeholders}) AND status<>'REMOVED' GROUP BY session_id, status`,
     sessionIds,
   ).map((item) => [`${item.session_id}:${item.status}`, Number(item.n || 0)]));
+}
+
+export function sessionRuntimeDetail(session, auth, students) {
+  const asOf = nowIso();
+  const latest = (values) => values.filter(Boolean).sort().at(-1) || null;
+  const usage = rows(`SELECT user_id, status, created_at FROM usage_records
+    WHERE org_id=? AND class_session_id=? AND UPPER(model) NOT LIKE '%MOCK%'
+    AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%'
+    AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%'`, [session.org_id, session.id]);
+  const aiFor = (studentId = null) => {
+    const records = studentId ? usage.filter((item) => item.user_id === studentId) : usage;
+    return { successCount: records.filter((item) => item.status === 'SUCCESS').length,
+      failedCount: records.filter((item) => item.status === 'FAILED').length,
+      lastUsedAt: latest(records.map((item) => item.created_at)),
+      salePriceFen: salePriceFenFor({ orgId: session.org_id, sessionId: session.id, ...(studentId ? { studentId } : {}) }) };
+  };
+  const works = rows(`SELECT work.id,work.student_id,student.display_name student_name,work.title,work.status,
+      work.submitted_at,work.project_id FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
+      WHERE work.org_id=? AND work.class_session_id=?`, [session.org_id, session.id]).map((work) => ({
+    id: work.id, source: 'CANVAS', studentId: work.student_id, studentName: work.student_name,
+    title: work.title, status: work.status, createdAt: null, updatedAt: null, submittedAt: work.submitted_at,
+    projectId: work.project_id, conversationId: null, entryFile: null, previewUrl: null,
+  }));
+  works.push(...rows(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
+    JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
+    JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
+    WHERE submission.org_id=? AND conversation.class_session_id=?`, [session.org_id, session.id]).map((work) => ({
+    id: work.id, source: 'VIBECODING', studentId: work.student_id, studentName: work.student_name,
+    title: work.title, status: work.status, createdAt: work.created_at, updatedAt: work.updated_at,
+    submittedAt: work.submitted_at, projectId: null, conversationId: work.conversation_id,
+    entryFile: work.entry_file, previewUrl: null,
+  })));
+  for (const work of works) work.detailUrl = `/api/org/sessions/${encodeURIComponent(session.id)}/works/${work.source}/${encodeURIComponent(work.id)}`;
+  works.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
+  const labels = { SESSION_CREATE: '创建课堂', SESSION_UPDATE: '编辑课堂', SESSION_START: '开始上课', SESSION_END: '结束课堂', SESSION_DISSOLVE: '解散课堂', SESSION_STUDENTS_ADD: '添加学员', SESSION_STUDENT_REMOVE: '移除学员' };
+  const events = rows(`SELECT audit.id,audit.action,audit.actor_id,actor.display_name actor_name,audit.created_at
+    FROM audit_logs audit LEFT JOIN users actor ON actor.id=audit.actor_id
+    WHERE audit.org_id=? AND audit.target_type='CLASS_SESSION' AND audit.target_id=? ORDER BY audit.created_at DESC LIMIT 200`, [session.org_id, session.id])
+    .filter((event) => labels[event.action]).map((event) => ({ id: event.id, action: event.action, actorId: event.actor_id,
+      actorName: event.actor_name || null, createdAt: event.created_at, summary: labels[event.action] }));
+  const activity = rows(`SELECT student_id,updated_at activity_at FROM student_projects WHERE org_id=? AND class_session_id=? AND deleted_at IS NULL
+    UNION ALL SELECT student_id,COALESCE(last_message_at,updated_at) activity_at FROM vibecoding_conversations WHERE org_id=? AND class_session_id=?`, [session.org_id, session.id, session.org_id, session.id]);
+  const enrichedStudents = students.map((part) => {
+    const ai = aiFor(part.student_id);
+    const ownWorks = works.filter((work) => work.studentId === part.student_id);
+    return { ...normalizeSessionStudent(part), ai, presence: 'unknown', workCount: ownWorks.length,
+      lastActivityAt: latest([ai.lastUsedAt, ...ownWorks.map((work) => work.submittedAt), ...activity.filter((item) => item.student_id === part.student_id).map((item) => item.activity_at)]) };
+  });
+  const canManage = session.teacher_id === auth.user.id && ['PENDING', 'ACTIVE'].includes(session.status);
+  const pending = canManage && session.status === 'PENDING';
+  const until = session.status === 'ACTIVE' ? asOf : session.ended_at;
+  const duration = session.started_at && until ? Math.max(0, Math.floor((Date.parse(until) - Date.parse(session.started_at)) / 1000)) : null;
+  return { canManage, permissions: { canManage, canEdit: pending, canStart: pending, canEnd: canManage && session.status === 'ACTIVE', canDissolve: pending, canAddStudents: canManage, canRemoveStudents: pending },
+    runtime: { asOf, startedAt: session.started_at || null, endedAt: session.ended_at || null,
+      durationSeconds: Number.isFinite(duration) ? duration : null,
+      lastActivityAt: latest([...usage.map((item) => item.created_at), ...activity.map((item) => item.activity_at), ...works.map((item) => item.submittedAt), ...events.map((item) => item.createdAt)]),
+      presence: 'unknown', presenceSource: 'NO_HEARTBEAT', ai: aiFor() }, students: enrichedStudents, works, events };
 }
 
 export function normalizeSessionStudent(part) {

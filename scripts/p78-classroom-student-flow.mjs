@@ -192,7 +192,7 @@ try {
     db.close();
     await run(['--input-type=module', '-e', `const {settleSessionStudents}=await import('./apps/server/src/services/classroomSessions.js'); settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}}); settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}});`]);
     const detail = await api(`/api/org/sessions/${next.data.id}`, { token: teacher });
-    check('结束后零成本真实成功补完课，重复结算幂等', detail.data.students.find(x=>x.studentId===seeded.studentId)?.status === 'COMPLETED');
+    check('结束后真实成功不修改已结课结果，重复结算保持冻结', detail.data.students.find(x=>x.studentId===seeded.studentId)?.status === 'INCOMPLETE');
   }
 
   /* ④ 平台兜底撤销 → 立刻又进不去（不给缓存留缝） */

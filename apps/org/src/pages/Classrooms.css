@@ -1,0 +1,160 @@
+.classroom-dialog {
+  width: min(620px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  border: 1px solid #d7dfeb;
+  border-radius: 8px;
+  padding: 28px;
+}
+
+.classroom-dialog::backdrop {
+  background: rgb(20 28 38 / 38%);
+}
+
+.classroom-dialog-wide {
+  width: min(1180px, 94vw);
+}
+
+.classroom-work-preview {
+  min-width: 0;
+}
+
+.classroom-work-preview iframe {
+  width: 100%;
+  height: min(560px, 62vh);
+  border: 0;
+}
+
+.classroom-dialog-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.classroom-dialog-fields.top-gap {
+  margin-top: 20px;
+}
+
+.classroom-dialog-fields > label {
+  margin-top: 16px;
+}
+
+.classroom-runtime {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  padding: 20px 0;
+  margin: 16px 0;
+  border-block: 1px solid #e3e7ec;
+}
+
+.classroom-runtime dt {
+  color: #66717e;
+  margin-bottom: 8px;
+}
+
+.classroom-runtime dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.classroom-section {
+  padding-block: 20px;
+  border-bottom: 1px solid #e3e7ec;
+}
+
+.classroom-candidates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+}
+
+.classroom-candidate {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e3e7ec;
+}
+
+.classroom-candidate input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.classroom-blocked {
+  padding: 12px 0;
+  border-bottom: 1px solid #e3e7ec;
+}
+
+.classroom-blocked p,
+.classroom-events p {
+  margin: 6px 0;
+}
+
+.classroom-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.classroom-events li {
+  display: flex;
+  gap: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e3e7ec;
+}
+
+.classrooms-page td,
+.classroom-dialog,
+.classroom-runtime dd {
+  overflow-wrap: anywhere;
+}
+
+.classrooms-page input[type="search"] {
+  width: min(280px, 100%);
+}
+
+.classrooms-page .table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.classrooms-page table {
+  min-width: 760px;
+}
+
+.classrooms-page td {
+  overflow-wrap: normal;
+}
+
+@media (max-width: 760px) {
+  .classrooms-page > .panel > .panel-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .classrooms-page > .panel > .panel-heading > h2 {
+    width: 100%;
+  }
+
+  .classroom-runtime {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .classroom-candidates {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .classroom-events li {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .classroom-dialog {
+    padding: 20px;
+  }
+}

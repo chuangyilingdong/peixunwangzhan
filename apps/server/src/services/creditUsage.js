@@ -1,6 +1,5 @@
 // Successful usage is independent of student charges. Historical cost_fen remains untouched.
 import { id, json, nowIso, q, row } from '../lib.js';
-import { settleSessionStudents } from './classroomSessions.js';
 
 export function recordAiUsage({
   orgId, userId, projectId = null, sessionId = null, generationJobId = null,
@@ -40,5 +39,5 @@ export function recordAiUsage({
   if (pricing?.compute?.callId) {
     q('UPDATE compute_attempts SET internal_usage_record_id=? WHERE call_id=?', [usageRecordId, pricing.compute.callId]);
   }
-  if (status === 'SUCCESS' && sessionId && row('SELECT status FROM class_sessions WHERE id=?',[sessionId])?.status === 'ENDED') settleSessionStudents({ sessionId, actorId: userId });
+  // Late provider results remain in the ledger; ended classroom outcomes are frozen.
 }

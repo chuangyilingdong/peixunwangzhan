@@ -1,11 +1,13 @@
 import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
 import { normalizeLesson } from '../lib.js';
+import { normalizeSubmission, snapshotImageFileIds } from './vibecoding.js';
+import { prepareFileDownload } from './fileAssets.js';
 import { hashPassword } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
 import { assertTransition } from '../services/domainState.js';
 import {
-  addSessionStudents, assertSessionManager, normalizeSessionStudent, removeSessionStudent,
+  addSessionStudents, assertSessionManager, sessionRuntimeDetail, removeSessionStudent,
   sessionCandidates, sessionScope, sessionStudentCounts, settleSessionStudents,
 } from '../services/classroomSessions.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
@@ -477,12 +479,46 @@ export async function handleOrg(ctx) {
     const occupied = row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [teacherId, excludeId]);
     if (occupied) throw errors.conflict(`教师已有待上课或上课中的课堂（${occupied.title || occupied.id}），请先结束或解散`, 'TEACHER_SESSION_OCCUPIED');
   };
-  const sessionInOrg = (id) => {
+  const sessionInOrg = (id, { manage = true } = {}) => {
     const value = row('SELECT * FROM class_sessions WHERE id=?', [id]);
     if (!value) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
     if (value.org_id !== currentOrgId) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
-    return assertSessionManager(auth, value);
+    return manage || auth.user.role === 'TEACHER' ? assertSessionManager(auth, value) : value;
   };
+
+  const sessionWorkMatch = part.match(/^\/sessions\/([^/]+)\/works\/(CANVAS|VIBECODING)\/([^/]+)(?:\/images\/([^/]+))?$/);
+  if (sessionWorkMatch && method === 'GET') {
+    const target = sessionInOrg(sessionWorkMatch[1], { manage: false });
+    const [, , source, workId, imageId] = sessionWorkMatch;
+    const work = source === 'CANVAS'
+      ? row(`SELECT work.*,student.display_name student_name FROM works work
+          JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
+          WHERE work.id=? AND work.org_id=? AND work.class_session_id=?`, [workId, currentOrgId, target.id])
+      : row(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
+          JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
+            AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
+          JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
+          WHERE submission.id=? AND submission.org_id=? AND conversation.class_session_id=?`, [workId, currentOrgId, target.id]);
+    if (!work) throw errors.notFound('作品不属于此课堂', 'SESSION_WORK_NOT_FOUND');
+    const canvasSnapshot = source === 'CANVAS' ? normalizeWork(work, { includeSnapshot: true }).canvasSnapshot : null;
+    const allowedImages = source === 'VIBECODING' ? snapshotImageFileIds(work) : new Set(
+      (Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : []).flatMap((node) =>
+        ['previewUrl', 'assetUrl', 'referenceUrl'].map((key) => String(node?.data?.[key] || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean)));
+    if (imageId) {
+      if (!allowedImages.has(imageId)) throw errors.notFound('图片不属于此作品', 'SESSION_WORK_IMAGE_NOT_FOUND');
+      const file = row('SELECT * FROM file_assets WHERE id=?', [imageId]);
+      if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(String(file.mime_type || '').toLowerCase())
+        || (file.owner_user_id !== work.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))
+        || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'SESSION_WORK_IMAGE_NOT_FOUND');
+      return prepareFileDownload(ctx, file);
+    }
+    const base = { id: work.id, source, title: work.title, studentId: work.student_id, studentName: work.student_name || null, status: work.status, submittedAt: work.submitted_at };
+    const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `/api/org/sessions/${encodeURIComponent(target.id)}/works/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
+    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls };
+    const content = normalizeSubmission(work, { includeContent: true });
+    // Keep private references intact; the authenticated viewer resolves them to local blob URLs.
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls };
+  }
 
   if (part === '/sessions' && method === 'GET') {
     const params = [currentOrgId];
@@ -567,6 +603,7 @@ export async function handleOrg(ctx) {
   }
   let sessionDetailMatch = part.match(/^\/sessions\/([^/]+)$/);
   if (sessionDetailMatch && method === 'PUT') {
+    return transaction(() => {
     const target = sessionInOrg(sessionDetailMatch[1]);
     if (target.status !== 'PENDING') throw errors.conflict('只有待上课课堂可以编辑名称', 'SESSION_NOT_PENDING');
     const body = ctx.body || {};
@@ -574,6 +611,12 @@ export async function handleOrg(ctx) {
     const lessonProvided = Object.prototype.hasOwnProperty.call(body, 'lessonId');
     const title = titleProvided ? String(body.title || '').trim().slice(0, 120) : target.title;
     if (titleProvided && !title) throw errors.badRequest('课堂名称不能为空', 'SESSION_TITLE_REQUIRED');
+    if (!lessonProvided && !Object.prototype.hasOwnProperty.call(body, 'deliveryMode')) {
+      q('UPDATE class_sessions SET title=?,updated_at=? WHERE id=?', [title, nowIso(), target.id]);
+      const updated = row('SELECT * FROM class_sessions WHERE id=?', [target.id]);
+      audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, normalizeSession(target), { ...normalizeSession(updated), swappedLesson: false, rosterCleared: false });
+      return normalizeSession(updated);
+    }
     const nextLessonId = lessonProvided ? String(body.lessonId || '').trim() : target.lesson_id;
     if (!nextLessonId) throw errors.badRequest('请选择这节课（课包里的第几节）', 'SESSION_LESSON_REQUIRED');
     const nextLesson = row("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [nextLessonId]);
@@ -582,19 +625,22 @@ export async function handleOrg(ctx) {
     const roster = Number(row("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status<>'REMOVED'", [target.id])?.n || 0);
     if (lessonProvided && nextLessonId !== target.lesson_id && roster > 0 && body.confirmClearStudents !== true) throw errors.conflict('换课会清空当前课堂名单，请明确确认', 'SESSION_SWAP_CONFIRM_REQUIRED');
     const publishedLesson = normalizeLesson(nextLesson, { asPublished: true });
-    const deliveryMode = String(body.deliveryMode || target.delivery_mode || publishedLesson.deliveryMode || 'CANVAS').trim().toUpperCase();
+    // 未显式传 deliveryMode 时，换课取新课默认；同课编辑保留现有配置。
+    const lessonChanged = lessonProvided && nextLessonId !== target.lesson_id;
+    const deliveryMode = String(Object.prototype.hasOwnProperty.call(body, 'deliveryMode') ? (body.deliveryMode ?? '') : ((lessonChanged ? publishedLesson.deliveryMode : target.delivery_mode) || 'CANVAS')).trim().toUpperCase();
     if (!['CANVAS', 'VIBECODING'].includes(deliveryMode) || !publishedLesson.deliveryModes.includes(deliveryMode)) throw errors.badRequest('该课时未发布此入口类型', 'INVALID_DELIVERY_MODE');
     const before = normalizeSession(target); const now = nowIso();
-    transaction(() => {
-      if (lessonProvided && nextLessonId !== target.lesson_id && roster > 0) q("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason='SESSION_LESSON_SWAP', updated_at=? WHERE session_id=? AND status<>'REMOVED'", [auth.user.id, now, now, target.id]);
-      q('UPDATE class_sessions SET title=?,lesson_id=?,series_id=?,delivery_mode=?,platform_budget_fen=?,updated_at=? WHERE id=?', [title, nextLessonId, nextLesson.series_id, deliveryMode, publishedLesson.platformBudgetFen ?? null, now, target.id]);
-    });
+    {
+      if (lessonChanged && roster > 0) q("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason='SESSION_LESSON_SWAP', updated_at=? WHERE session_id=? AND status<>'REMOVED'", [auth.user.id, now, now, target.id]);
+      q('UPDATE class_sessions SET title=?,lesson_id=?,series_id=?,delivery_mode=?,platform_budget_fen=?,ai_paused=?,student_call_cap=?,allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,updated_at=? WHERE id=?', [title, nextLessonId, nextLesson.series_id, deliveryMode, lessonChanged ? (publishedLesson.platformBudgetFen ?? null) : target.platform_budget_fen, lessonChanged ? 0 : target.ai_paused, lessonChanged ? null : target.student_call_cap, lessonChanged ? (publishedLesson.capabilities || []).includes('text') * 1 : target.allow_text, lessonChanged ? (publishedLesson.capabilities || []).includes('image') * 1 : target.allow_image, lessonChanged ? (publishedLesson.capabilities || []).includes('music') * 1 : target.allow_music, lessonChanged ? (publishedLesson.capabilities || []).includes('video') * 1 : target.allow_video, lessonChanged ? 0 : target.allow_podcast, lessonChanged ? 0 : target.allow_dubbing, now, target.id]);
+    }
     const updated = row('SELECT * FROM class_sessions WHERE id=?', [target.id]);
-    audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, before, { ...normalizeSession(updated), title, swappedLesson: lessonProvided && nextLessonId !== target.lesson_id, rosterCleared: roster > 0 });
+    audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, before, { ...normalizeSession(updated), title, swappedLesson: lessonChanged, rosterCleared: lessonChanged && roster > 0 });
     return normalizeSession(updated);
+    });
   }
   if (sessionDetailMatch && method === 'GET') {
-    const target = sessionInOrg(sessionDetailMatch[1]);
+    const target = sessionInOrg(sessionDetailMatch[1], { manage: false });
     const detail = row(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, lesson.lesson_content lesson_content,
         series.title series_title, teacher.display_name teacher_name
       FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
@@ -611,7 +657,7 @@ export async function handleOrg(ctx) {
       ...normalizeSession(detail),
       // 「查看课件」用：前端拿它在新标签打开机构端的课时教案抽屉
       coursewareUrl: detail.series_id ? `/org/courses/${detail.series_id}?lesson=${detail.lesson_id || ''}` : null,
-      students: students.map(normalizeSessionStudent),
+      ...sessionRuntimeDetail(target, auth, students),
       studentSummary: {
         total: students.filter((item) => item.status !== 'REMOVED').length,
         pending: students.filter((item) => item.status === 'PENDING').length,
@@ -667,7 +713,7 @@ export async function handleOrg(ctx) {
     return normalizeSession(updated);
   }
   if (part.match(/^\/sessions\/([^/]+)\/candidates$/) && method === 'GET') {
-    const target = sessionInOrg(part.match(/^\/sessions\/([^/]+)\/candidates$/)[1]);
+    const target = sessionInOrg(part.match(/^\/sessions\/([^/]+)\/candidates$/)[1], { manage: false });
     return { sessionId: target.id, lessonId: target.lesson_id, seriesId: target.series_id, status: target.status, ...sessionCandidates(target) };
   }
   if (part.match(/^\/sessions\/([^/]+)\/students$/) && method === 'POST') {
