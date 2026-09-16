@@ -101,8 +101,7 @@ export function CanvasClassroom({ api, onEnterProject }) {
             <div className="lesson-number">{String(lesson.sort).padStart(2, '0')}</div>
             <div className="lesson-detail-main">
               <div className="lesson-detail-title-row">
-                <div><span className="lesson-kicker">第 {lesson.sort} 节</span><h3>{lesson.title}</h3></div>
-                <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
+                <div><span className="lesson-kicker">第 {lesson.sort} 节 · 画布课堂</span><h3>{lesson.title}</h3></div>
               </div>
               <p>{lesson.summary || '本节课的创作任务与课堂说明将在这里展示。'}</p>
               <div className="lesson-meta">
@@ -112,9 +111,12 @@ export function CanvasClassroom({ api, onEnterProject }) {
                 {lesson.workCount ? ` · 已提交 ${lesson.workCount} 次` : ''}
                 {lesson.participationStatus === 'COMPLETED' ? ` · 这节课已完课` : ''}
               </div>
+              <p className="lesson-detail-hint">{lesson.canStart ? '画布课堂已开始，现在可以进入创作。' : (lesson.blockReason || '等待老师开始上课。')}</p>
+            </div>
+            <div className="lesson-detail-state">
+              <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
             </div>
             <div className="lesson-detail-action">
-              <span className="lesson-block-reason">{lesson.blockReason || (lesson.canStart ? '画布课堂已开始，现在可以进入创作。' : '等待老师开始上课。')}</span>
               <button className={lesson.canStart ? 'primary-button' : 'secondary-button'} disabled={buttonDisabled} onClick={() => enter(lesson)}>
                 {busy === lesson.id ? '正在进入…'
                   : lesson.canStart ? (lesson.continueProject ? '继续创作' : '进入课堂')
@@ -234,7 +236,6 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
             <div className="lesson-detail-main">
               <div className="lesson-detail-title-row">
                 <div><span className="lesson-kicker">第 {lesson.sort} 节 · {DELIVERY_MODE_LABEL[mode]}</span><h3>{lesson.title}</h3></div>
-                <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
               </div>
               <p>{lesson.summary || '本节课的创作任务与课堂说明将在这里展示。'}</p>
               <div className="lesson-meta">
@@ -244,9 +245,13 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
                 {lesson.workCount ? ` · 已提交 ${lesson.workCount} 次` : ''}
                 {lesson.participationStatus === 'COMPLETED' ? ' · 这节课已完课' : ''}
               </div>
+              {/* 能不能进、为什么不能进，都写在课名这一栏里，不再和按钮抢右栏那点宽度 */}
+              <p className="lesson-detail-hint">{canEnter ? `老师已开始 ${DELIVERY_MODE_LABEL[mode]}，现在可以进入创作。` : (reason || '等待老师开始上课。')}</p>
+            </div>
+            <div className="lesson-detail-state">
+              <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
             </div>
             <div className="lesson-detail-action">
-              <span className="lesson-block-reason">{reason || (canEnter ? `老师已开始 ${DELIVERY_MODE_LABEL[mode]}，现在可以进入创作。` : '等待老师开始上课。')}</span>
               <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={() => enter(lesson)}>
                 {busy === lesson.id ? '正在进入…'
                   : canEnter ? (lesson.continueProject ? '继续创作' : '进入课堂')

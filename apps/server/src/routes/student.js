@@ -1048,22 +1048,29 @@ export async function handleStudent(ctx) {
 
   if (part === '/works' && method === 'GET') {
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
-    const total = Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId])?.n || 0);
-    // 汇总口径跨页，不能从当前页 items 推导
+    // 学生的作品有两个来源：画布作品（works）与 VibeCoding 产物（vibecoding_submissions，按产物各成一条）。
+    // 只列其中一半会让「我的作品」跟学生真实做过的东西对不上，所以这里合并后再排序分页。
+    const workRowCount = Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId])?.n || 0);
+    const submissionRowCount = Number(row('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId])?.n || 0);
+    // 汇总口径跨页，且必须按**两类来源相加**，不能只数画布作品
     const summary = {
-      total,
-      published: Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId])?.n || 0),
+      total: workRowCount + submissionRowCount,
+      published: Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId])?.n || 0)
+        + Number(row('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId])?.n || 0),
       withFeedback: Number(row("SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND teacher_comment IS NOT NULL AND teacher_comment <> ''", [auth.user.id, auth.user.orgId])?.n || 0),
     };
+    // 两类来源要合并后统一排序分页，所以这里**不能**先在 SQL 里分页（否则 total 与 items 都会少一半）。
     const rawItems = rows(
-      `SELECT work.*, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title, reviewer.display_name AS reviewer_name
+      `SELECT work.*, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
+              series.title AS series_title, reviewer.display_name AS reviewer_name
        FROM works work
        LEFT JOIN classes class ON class.id = work.class_id AND class.org_id = work.org_id
        LEFT JOIN course_lessons lesson ON lesson.id = work.course_lesson_id
+       LEFT JOIN course_series series ON series.id = lesson.series_id
        LEFT JOIN users reviewer ON reviewer.id = work.reviewed_by
        WHERE work.student_id = ? AND work.org_id = ?
-       ORDER BY work.submitted_at DESC LIMIT ? OFFSET ?`,
-      [auth.user.id, auth.user.orgId, limit, offset],
+       ORDER BY work.submitted_at DESC`,
+      [auth.user.id, auth.user.orgId],
     );
     const submissionsByWork = workSubmissionRows(rawItems.map((work) => work.id));
     const items = rawItems.map((work) => {
@@ -1075,6 +1082,9 @@ export async function handleStudent(ctx) {
       const project = row('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.project_id, ctx.auth.user.id, ctx.auth.user.orgId]);
       return {
         ...normalized,
+        source: 'CANVAS',
+        seriesTitle: work.series_title || null,
+        entryFile: null,
         submissionRound,
         submissions,
         publishRequests,
@@ -1098,7 +1108,58 @@ export async function handleStudent(ctx) {
         })(),
       };
     });
-    return { ...pageResult(items, { page, limit, total }), summary };
+    // VibeCoding 产物：按「产物」各成一条（与课堂作品、提交口径一致），映射成同一种作品形状。
+    const vibeItems = rows(
+      `SELECT submission.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
+              series.title AS series_title, conversation.class_session_id AS class_session_id
+       FROM vibecoding_submissions submission
+       LEFT JOIN course_lessons lesson ON lesson.id = submission.lesson_id
+       LEFT JOIN course_series series ON series.id = lesson.series_id
+       LEFT JOIN vibecoding_conversations conversation ON conversation.id = submission.conversation_id
+       WHERE submission.student_id = ? AND submission.org_id = ?`,
+      [auth.user.id, auth.user.orgId],
+    ).map((submission) => {
+      const isPublic = Number(submission.is_public || 0) === 1;
+      return {
+        id: submission.id,
+        projectId: null,
+        studentId: submission.student_id,
+        studentName: null,
+        orgId: submission.org_id,
+        classId: submission.class_id || null,
+        className: null,
+        courseLessonId: submission.lesson_id || null,
+        courseLessonTitle: submission.lesson_title || null,
+        title: submission.title,
+        description: submission.description || '',
+        status: submission.status,
+        teacherComment: null,
+        unpublishReason: submission.unpublish_reason || null,
+        submittedAt: submission.submitted_at,
+        plazaPublished: isPublic,
+        shareToken: submission.share_token || null,
+        source: 'VIBECODING',
+        seriesTitle: submission.series_title || null,
+        entryFile: submission.entry_file || 'index.html',
+        classSessionId: submission.class_session_id || null,
+        submissionRound: Number(submission.round || 1),
+        submissions: [],
+        publishRequests: [],
+        pendingPublishRequest: null,
+        latestPublishRequest: null,
+        actions: {},
+        sharing: {
+          scope: isPublic ? 'PUBLIC' : 'ORGANIZATION',
+          isPublic,
+          shareToken: isPublic ? submission.share_token : null,
+          publicUrl: isPublic && submission.share_token ? `/works/${submission.share_token}` : null,
+        },
+      };
+    });
+    // 两类来源合并后**统一按提交时间排序再分页**：单独分页会让「最新作品」被来源顺序盖住。
+    const merged = [...items, ...vibeItems]
+      .sort((left, right) => String(right.submittedAt || '').localeCompare(String(left.submittedAt || '')));
+    return { ...pageResult(merged.slice(offset, offset + limit), { page, limit, total: merged.length }), summary };
   }
 
   return null;
