@@ -91,8 +91,51 @@ port_in_use() {
 #   ④ 上次写的那条入口配置还在（端口从它里面读回来，端口池就这么点，别漏了它）。
 # ---------------------------------------------------------------------------
 REUSE_MAX_AGE_S="${REUSE_MAX_AGE_S:-14400}"
+
+# 已在跑的那个 dsh 进程，环境里带的是哪把网关密钥？
+# （dsh 只在启动时读一次环境变量，所以复用**改不了**它手里的密钥 —— 这一点决定了下面那条判据。）
+running_env_key() {
+  local pid
+  pid="$(systemctl show "${UNIT}" -p MainPID --value 2>/dev/null || true)"
+  [ "${pid:-0}" -gt 0 ] 2>/dev/null || return 1
+  [ -r "/proc/${pid}/environ" ] || return 1
+  tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | sed -n 's/^PLATFORM_GATEWAY_KEY=//p' | head -1
+}
+
+# 环境里那把密钥**还能不能用来上这节课**？
+#
+# 2026-09-16 踩到的坑：dsh 只在启动时读一次 PLATFORM_GATEWAY_KEY，复用刷新不了它 ——
+# 所以复用之前必须确认它手里那把**仍然是给这个课堂、这个学生的、且没过期**。
+# 判据只看密钥 payload 里的 s/u 与 exp（不验签：签名是不是我们发的，由平台每次调用时验；
+# 这里只回答「复用它之后 AI 能不能用」）。不满足就老老实实冷启动 ——
+# 否则学生进得去、但一发消息就报「API 密钥无效」或「课堂已经结束」。
+# 典型要冷启动的两种情况：① 老师结束课堂 A、用同一个学生又开了课堂 B（s 变了）；
+# ② 上一次冷启动是我手工测试留下的假密钥（根本解不出 payload）。
+environment_key_usable() {
+  local key verdict
+  VERBOSE_REASON="no-key"
+  key="$(running_env_key)" || return 1
+  [ -n "${key}" ] || return 1
+  verdict="$("${DSH_NODE}" -e '
+    const raw = process.argv[1] || "";
+    const parts = raw.split(".");
+    if (parts.length !== 3 || parts[0] !== "rt1") { console.log("bad-shape"); process.exit(0); }
+    let p = null;
+    try { p = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")); } catch { console.log("bad-payload"); process.exit(0); }
+    if (p.s !== process.argv[2]) { console.log("other-session"); process.exit(0); }
+    if (p.u !== process.argv[3]) { console.log("other-student"); process.exit(0); }
+    if (!Number.isFinite(p.exp) || p.exp <= Date.now() + 5 * 60 * 1000) { console.log("expiring"); process.exit(0); }
+    console.log("ok");
+  ' "${key}" "${SESSION}" "${STUDENT}" 2>/dev/null || true)"
+  VERBOSE_REASON="${verdict:-no-key}"
+  [ "${verdict}" = "ok" ]
+}
+
 reuse_running_environment() {
   systemctl is-active --quiet "${UNIT}" 2>/dev/null || return 1
+  # 环境里那把密钥必须对这节课仍然可用（见上面的注释）—— 这一条比「单元在跑」更关键：
+  # 单元在跑只说明进程活着，不代表它还能调得动模型。
+  environment_key_usable || return 1
   local started now_us age port token
   started="$(systemctl show "${UNIT}" -p ActiveEnterTimestampMonotonic --value 2>/dev/null || true)"
   started="${started:-0}"
@@ -114,6 +157,8 @@ REUSED=0
 if reuse_running_environment; then
   REUSED=1
   echo "[run] 复用已在跑的环境 ${USER_NAME}（端口 ${PUBLIC_PORT}），只换票据" >&2
+else
+  echo "[run] 走冷启动（复用不成立：${VERBOSE_REASON:-环境没在跑}）" >&2
 fi
 
 # 下面这一段只在**冷启动**时跑：分配端口、停旧的、建用户与工作区、起 dsh、等 token。
