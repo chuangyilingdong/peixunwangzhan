@@ -115,6 +115,12 @@ find "/home/${USER_NAME}" -type d -exec chown "${USER_NAME}:${USER_NAME}" {} + 2
 chown "${USER_NAME}:${USER_NAME}" "${DSH_HOME}/settings.yaml" 2>/dev/null || true
 
 # ⑤ 起进程：systemd 管资源上限，日志落到文件（启动票据从里面取）
+#
+# ⚠️ `--trusted-host` 不能省：dsh 的 `/api` 有一道「浏览器信任栅栏」，它只认
+# **绑定的网卡地址 + --trusted-host 给的额外值**。我们绑的是回环（127.0.0.1），
+# 栅栏里就只有回环地址 —— 学生从「域名:端口」进来时所有 /api 请求都会被 403 挡掉，
+# 界面表现为「自动重连中…」（WebSocket 也升不上去）。实测踩到过。
+# 两种写法都给：`域名` 与 `域名:端口`（栅栏按 Host 头比对，端口要一起给）。
 : > "${LOG_FILE}"
 systemd-run --unit="${UNIT}" --collect \
   --uid="${USER_NAME}" --gid="${USER_NAME}" \
@@ -128,7 +134,10 @@ systemd-run --unit="${UNIT}" --collect \
   --setenv=DSH_COURSE_SKILLS="${SKILLS_DIR}" \
   --setenv=PLATFORM_GATEWAY_KEY="${KEY}" \
   --setenv=GATEWAY_BASE_URL="${GATEWAY}" \
+  --setenv=PLATFORM_GATEWAY_BASE_URL="${GATEWAY}" \
+  --setenv=PLATFORM_VISION_MODEL="${VISION_MODEL}" \
   "${DSH_NODE}" "${DSH_BIN}" --profile web --patch "${PATCH_FILE}" \
+  --trusted-host "${PUBLIC_IP}" --trusted-host "${PUBLIC_IP}:${PUBLIC_PORT}" \
   --no-open --host 127.0.0.1 --port "${INNER_PORT}" >/dev/null
 
 TOKEN=""
