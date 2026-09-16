@@ -142,11 +142,11 @@ reuse_running_environment() {
   [ "${started}" -gt 0 ] 2>/dev/null || return 1
   now_us="$(awk '{printf "%d", $1 * 1000000}' /proc/uptime)"
   age=$(( (now_us - started) / 1000000 ))
-  [ "${age}" -ge 0 ] && [ "${age}" -le "${REUSE_MAX_AGE_S}" ] || return 1
+  if [ "${age}" -lt 0 ] || [ "${age}" -gt "${REUSE_MAX_AGE_S}" ]; then VERBOSE_REASON="环境起太久了（${age}s > ${REUSE_MAX_AGE_S}s）"; return 1; fi
   port="$(sed -n 's/^ *listen \([0-9]\{1,\}\) ssl;.*/\1/p' "${NGINX_DIR}/${USER_NAME}.conf" 2>/dev/null | head -1)"
-  [ -n "${port}" ] || return 1
+  [ -n "${port}" ] || { VERBOSE_REASON="上次的入口配置里读不到端口"; return 1; }
   token="$(sed -n 's/.*[?&]token=\([A-Za-z0-9._-]*\).*/\1/p' "${LOG_FILE}" 2>/dev/null | head -1)"
-  [ -n "${token}" ] || return 1
+  [ -n "${token}" ] || { VERBOSE_REASON="日志里捞不到 dsh token"; return 1; }
   PUBLIC_PORT="${port}"
   INNER_PORT=$((PUBLIC_PORT + INNER_OFFSET))
   TOKEN="${token}"
@@ -178,6 +178,22 @@ INNER_PORT=$((PUBLIC_PORT + INNER_OFFSET))
 # 同名容器式的幂等：这个学生已经在跑就先收掉（同一节课重进）
 if systemctl is-active --quiet "${UNIT}" 2>/dev/null; then
   systemctl stop "${UNIT}" >/dev/null 2>&1 || true
+fi
+
+# ⑨ 容量闸门（2026-09-16）：**装不下就别开**。
+# 一个学生环境稳态约 470-490MB（峰值 643MB），这台 1.6GB 的机器只放得下 2 个；
+# 第 3 个硬塞进来会把**所有人**拖进 swap（文档实测：同样操作 9.7s → 59s）。
+# 所以宁可让这一次开盒子明确失败（平台会报「机器满了」），也不要让全班一起变慢。
+# ⚠️ 这个检查必须放在**停掉旧环境之后**：重启同一个学生时，旧进程刚释放的内存要算进可用量，
+#    否则「明明只是重进一下」也会被自己的旧环境挡住。
+#    可通过 REQUIRED_MB 调整（默认 600 = 稳态 490 + 余量）；设 0 可关掉这个闸门。
+REQUIRED_MB="${REQUIRED_MB:-600}"
+if [ "${REQUIRED_MB}" -gt 0 ] && command -v free >/dev/null 2>&1; then
+  AVAIL_MB="$(free -m | awk '/^Mem:/{print $7}')"
+  if [ -n "${AVAIL_MB}" ] && [ "${AVAIL_MB}" -lt "${REQUIRED_MB}" ]; then
+    echo "[run] 这台机器可用内存 ${AVAIL_MB}MB，装不下一个新环境（需要约 ${REQUIRED_MB}MB）：拒绝开盒子" >&2
+    exit 7
+  fi
 fi
 
 # ① 用户：一个学生一个 Linux 用户，家目录 0700（同学读不到）
