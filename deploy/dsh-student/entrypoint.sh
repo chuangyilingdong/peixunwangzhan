@@ -32,6 +32,10 @@ if [ -z "${TOKEN}" ]; then
   exit 1
 fi
 echo "[entrypoint] dsh 已就绪，会话票据长度 ${#TOKEN}"
+# 入口标记：按**这次启动**的唯一值（dsh token 的哈希），用来判断这台容器是否已经补过 token。
+# 不能用固定值，也不能用平台票据本身 —— 同一个学生拿同一张票据重开容器时会误判（实测出现过 401）。
+EDGE_MARKER="$(printf '%s' "${TOKEN}" | sha256sum | cut -c1-16)"
+echo "[entrypoint] 入口标记 ${EDGE_MARKER}"
 
 # 3) 渲染 nginx 配置并启动
 EDGE_TICKET="${EDGE_TICKET:-}"
@@ -41,6 +45,7 @@ sed -e "s#__INNER_HOST__#${DSH_INNER_HOST}#g" \
     -e "s#__EDGE_PORT__#${EDGE_PORT}#g" \
     -e "s#__DSH_TOKEN__#${TOKEN}#g" \
     -e "s#__EDGE_TICKET__#${EDGE_TICKET}#g" \
+    -e "s#__EDGE_MARKER__#${EDGE_MARKER}#g" \
     /etc/dsh/nginx.conf.template > /etc/nginx/conf.d/dsh-student.conf
 
 echo "[entrypoint] 对外入口 http://0.0.0.0:${EDGE_PORT}/（平台票据校验：$([ -n "${EDGE_TICKET}" ] && echo 开 || echo 关)）"

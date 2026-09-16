@@ -78,9 +78,8 @@
 - id: plugin-inventory
   name: '@deepseek-ai/dsh-host-plugin-inventory'
   disabled: true
-- id: directory-picker
-  name: '@deepseek-ai/dsh-host-directory-picker-auto'
-  disabled: true
+# ⚠️ 目录选择器**必须留着**：dsh 的 web 界面在「选好工作区」之前不允许发消息，
+# 把它关掉的结果是输入框一直是灰的（实测）。学生选自己容器里的 /home/student/workspace 即可。
 - id: open-in-app
   name: '@deepseek-ai/dsh-host-open-in-app'
   disabled: true
@@ -93,3 +92,20 @@
 - id: dsh-at-file
   name: dsh-at-file
   disabled: true
+
+# —— 第三方插件（主要是 @linxin666/dsh-web-all）带进来的成人入口：给学生全部关掉 ——
+# 关的是**行**不是包：包还在 profile 里，等以后需要再打开。
+- {id: web-ui-plugin-manager, name: '@linxin666/dsh-web-all/plugin-manager', disabled: true}
+- {id: web-ui-market, name: '@linxin666/dsh-web-all/market', disabled: true}
+- {id: web-ui-community-plugins, name: '@linxin666/dsh-web-all/community-plugins', disabled: true}
+- {id: web-ui-remote-web-ui, name: '@linxin666/dsh-web-all/remote-web-ui', disabled: true}
+- {id: web-ui-doctor, name: '@linxin666/dsh-web-all/doctor', disabled: true}
+- {id: web-ui-task-board, name: '@linxin666/dsh-web-all/task-board', disabled: true}
+- {id: web-ui-git-graph, name: '@linxin666/dsh-web-all/git-graph', disabled: true}
+- {id: web-ui-pet, name: '@linxin666/dsh-web-all/pet', disabled: true}
+- {id: web-ui-skin-center, name: '@linxin666/dsh-web-all/skin-center', disabled: true}
+- {id: web-ui-session-archive, name: '@linxin666/dsh-web-all/session-archive', disabled: true}
+- {id: web-ui-usage, name: '@linxin666/dsh-web-all/usage', disabled: true}
+- {id: web-ui-model-capabilities, name: '@linxin666/dsh-web-all/model-capabilities', disabled: true}
+- {id: web-ui-describe-image, name: '@linxin666/dsh-web-all/describe-image', disabled: true}
+- {id: ui-settings-plugin-inventory, name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory', disabled: true}

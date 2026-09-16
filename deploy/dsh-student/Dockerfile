@@ -64,6 +64,14 @@ ENV DSH_WORKSPACE=/home/student/workspace \
     DSH_PATCH=/etc/dsh/student-runtime.cordis.yml \
     GATEWAY_BASE_URL=http://host.docker.internal:8789/api/gateway/v1 \
     EDGE_PORT=8080
+# 工作目录 + 预置「开发者内测声明已读」
+# 那个弹窗是 DSH 面向 Harness 开发者的公告（客户端读 ui-onboarding.welcomeNoticeVersion
+# 与服务端公告版本比较，不相等就弹），孩子不该看到，而且它会挡住界面（实测不点「继续」就用不了）。
+# 值取自 dsh 自己的常量 "2026-08-13.1"（在 dsh-client-ui-settings-models/lib/client.js 里）。
+RUN mkdir -p /home/student/.dsh /home/student/workspace \
+ && printf 'ui-onboarding:\n  welcomeNoticeVersion: "2026-08-13.1"\n' > /home/student/.dsh/settings.yaml \
+ && cat /home/student/.dsh/settings.yaml
+WORKDIR /home/student/workspace
 # dsh 只认 127.0.0.1；对外暴露的是容器内 nginx 的 EDGE_PORT
 EXPOSE 8080
 
