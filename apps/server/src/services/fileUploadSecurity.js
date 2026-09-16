@@ -192,7 +192,7 @@ async function scanWithConfiguredScanner(buffer) {
       settled = true;
       child.kill();
       reject(errors.serviceUnavailable('文件安全扫描超时，上传已拒绝', 'FILE_SCANNER_TIMEOUT'));
-    }, 30_000);
+    }, timeoutMs);
     const fail = (error) => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } };
     child.on('error', () => fail(errors.serviceUnavailable('文件安全扫描器不可用', 'FILE_SCANNER_UNAVAILABLE')));
     child.on('close', (code) => {
