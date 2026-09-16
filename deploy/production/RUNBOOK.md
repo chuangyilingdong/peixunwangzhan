@@ -515,3 +515,32 @@ AI 不再使用平台预算或机构预算。机构充值后获得共享积分�
 - 发布前生产数据库备份：`/srv/ai-kids-platform/production/backups/20260906T170118Z`。
 - 发布后验证：`learning-platform-production` 为 `active`；`127.0.0.1:8789/health` 返回 `status=ok`；当前 release 静态包已包含 `AI生成`、`AI 素材工坊`。
 - 测试入口：`https://iicili.cyou/learn/canvas/`；若旧页面仍缓存，请执行 `Ctrl + F5` 后重新进入课堂画布。
+
+### 预览类响应要允许同源内嵌（2026-09-16 修复，**两处都要改**）
+
+课件预览与学生作品里的 PPT/PDF 都是**在我们自己的页面里用 iframe 打开的**，而站点级安全头是
+`X-Frame-Options: DENY` + `frame-ancestors 'none'` → 浏览器直接拒收，教师看到的是
+「iicili.cyou 拒绝了我们的连接请求」。（用户报的「教师素材在线预览全部失效」就是它。）
+
+**应用侧**：`prepareFilePreview`（`apps/server/src/routes/fileAssets.js`）的响应里显式写
+`x-frame-options: SAMEORIGIN` + `content-security-policy: frame-ancestors 'self'` ——
+因为 `lib.js` 的 `securityHeaders()` 会给**所有**响应加 DENY，只改 nginx 不够。
+
+**nginx 侧**：`/api/**/preview` 单独放行（见 `nginx.conf.example` 里那条正则 location）。
+⚠️ 两条要点：① `add_header` 是**子层级覆盖父层级**，该 location 里 CSP 必须一起重写，
+否则 `frame-ancestors 'none'` 仍然挡；② 正则 location 的优先级高于普通前缀（`location /api/` 不是 `^~`）。
+
+已在生产上生效并实测：真实预览响应 `200` + `%PDF` + 只有 SAMEORIGIN；普通接口与首页仍是 DENY。
+要再核对：`curl -s -o /dev/null -D - --resolve iicili.cyou:443:127.0.0.1 "<一个真实的预览地址>" | grep -i x-frame`
+
+### 数据库结构迁移会在服务启动时自动跑
+
+本轮起，`packages/database/src/schema.js` 里多了一次**重建表**迁移（课包 `visibility` 三值→两值）。
+它是幂等的（DDL 里看不到旧值就跳过），但**发布顺序不能颠倒**：先备份、再切 release、再重启，
+否则重启时迁移已经改了库而备份还是旧的（实际上备份在 build 之前做，顺序天然正确）。
+
+迁移后核对：
+```bash
+node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync('/srv/ai-kids-platform/production/data/platform.db');console.log(db.prepare('SELECT visibility, COUNT(*) n FROM course_series GROUP BY visibility').all())"
+# 期望只有 PUBLIC / PRIVATE
+```
