@@ -1,6 +1,9 @@
 # AI 魔法学院学习平台 · 最终文档（唯一入口）
 
-> 版本：2026-09-15　｜　**当前 HEAD 2a3ce32 已推送，生产只读核验为同一提交；课堂深度交互后续改动仍在本地，未提交、未部署，整体 MVP / 1–7 项不能标为完成。**
+> 版本：2026-09-16　｜　**当前 HEAD `cca6c43` 已推送；生产跑 `4c5760d`（release 20260916T044727Z），服务正常。
+> 学生端 VibeCoding 正在迁到 dsh（DeepSeek Harness）：隔离运行时与网关端点已在本地跑通，但**尚未部署**，
+> 见 `docs/operations/VibeCoding改用dsh-方案-20260916.md` 与 `docs/operations/新对话交接-dsh迁移-20260916.md`。
+> 整体 MVP / 1–7 项仍不能标为完成。**
 > 其它文档都从属于它：结构看 `docs/architecture/代码结构与路由.md`，
 > 设计口径看 `docs/项目重梳理-03-平台侧重做梳理.md`，
 > 操作命令看 `deploy/production/RUNBOOK.md`，
@@ -24,7 +27,8 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：4c5760d4e0b59f5a8e662c8f49e408d827b6ef5b（= 生产版本；其后只有文档提交）
+代码提交：cca6c43（本地 HEAD，已推送）；**生产版本 = 4c5760d4e0b59f5a8e662c8f49e408d827b6ef5b**
+          4c5760d 之后的提交（dsh 容器/网关/插件/裁剪）都只在本地，未部署
 生产：release 20260916T044727Z / commit 4c5760d（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
