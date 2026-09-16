@@ -266,7 +266,7 @@ async function parseResponse(response, modality) {
 
 // 请求体由渠道模板生成：模板里的 {{aspectRatio}} / {{resolution}} / {{durationSeconds}} / {{audio}}
 // 会被课时配置的取值替换，不再由代码写死。
-function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, referenceAssets = [], requestTemplates = {}, modelRequestTemplates = {}, messages = null, stream = false }) {
+function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, referenceAssets = [], requestTemplates = {}, modelRequestTemplates = {}, messages = null, stream = false, tools = null, toolChoice = null }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
   // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES。
   const firstFrameUrl = String(options.firstFrameUrl || '').trim();
@@ -301,6 +301,13 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       if (Array.isArray(rendered?.messages)) rendered.messages = messages;
     }
     if (stream) rendered.stream = true;
+    // 工具调用（2026-09-16 打通）：渠道模板的合法占位符里**没有** tools，不能靠模板渲染，
+    // 只能在渲染**之后**挂上去。不挂的后果不是「少个功能」，而是模型把工具调用写进正文
+    // （DSML 标记），学生看到的是「AI 说一句就停」。
+    if (Array.isArray(tools) && tools.length) {
+      rendered.tools = tools;
+      if (toolChoice) rendered.tool_choice = toolChoice;
+    }
     return rendered;
   }
   // 没有模板的模态（音乐/播客）保持改造前的请求体形状。
@@ -470,9 +477,9 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
     // 多轮对话流式生成：上游返回 text/event-stream 时逐块回调；上游不支持流式则退化为整段返回。
     // signal：调用方中断（学生点「停止」或连接断开）时中止上游请求；onReasoning：推理型模型
     // 的思考增量（reasoning_content），用于给学生显示「正在思考」的进度。
-    async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, signal, clientRequestId, onEvidence } = {}) {
+    async generateStream({ messages, prompt = '', title, options, onDelta, onReasoning, onToolCalls, signal, clientRequestId, onEvidence, tools = null, toolChoice = null } = {}) {
       const url = modalityEndpoint(endpoint, 'TEXT', modalityEndpoints, requestPaths);
-      const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates, messages, stream: true });
+      const body = requestBody({ modality: 'TEXT', model: providerModel, prompt, title, voice, options, requestTemplates, modelRequestTemplates, messages, stream: true, tools, toolChoice });
       const controller = new AbortController();
       let callerAborted = false;
       const abortFromCaller = () => { callerAborted = true; controller.abort(); };
@@ -516,6 +523,9 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         let full = '';
         let usage = null;
         let cost = null;
+        // 有没有看到工具调用分片。只有工具调用、没有正文的响应是**合法**的，
+        // 不能因为 full 是空的就判「响应格式无效」（老代码会在这里把 agent 的一步打断）。
+        let sawToolCalls = false;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -538,13 +548,21 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
             const choice = chunk?.choices?.[0];
             const reasoning = choice?.delta?.reasoning_content ?? '';
             if (reasoning && typeof onReasoning === 'function') onReasoning(reasoning);
+            // 工具调用（2026-09-16 打通）：**必须单独取** —— 带 tool_calls 的分片通常没有 content，
+            // 而老代码下一行就是 `if (!delta) continue`，等于把工具调用整段丢掉，
+            // 模型于是只能把调用写进正文（学生看到「AI 说一句就停」）。
+            const toolCallDelta = choice?.delta?.tool_calls;
+            if (Array.isArray(toolCallDelta) && toolCallDelta.length) {
+              sawToolCalls = true;
+              if (typeof onToolCalls === 'function') onToolCalls(toolCallDelta, choice?.finish_reason || null);
+            }
             const delta = choice?.delta?.content ?? choice?.message?.content ?? chunk?.output_text ?? '';
             if (!delta) continue;
             full += delta;
             if (typeof onDelta === 'function') onDelta(delta, full);
           }
         }
-        if (!full.trim()) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
+        if (!full.trim() && !sawToolCalls) throw providerError('AI 供应商响应格式无效', PROVIDER_ERROR_CODES.RESPONSE_INVALID);
         return { assets: [textAsset({ text: full, title, providerName, model: providerModel, tokens: usage, cost })], usage, streamed: true };
       } finally {
         clearTimeout(timer);

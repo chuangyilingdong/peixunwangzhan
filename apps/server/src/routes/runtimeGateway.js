@@ -117,11 +117,25 @@ function normalizeContentParts(content) {
 function normalizeMessages(body) {
   const raw = Array.isArray(body?.messages) ? body.messages : [];
   const messages = raw
-    .map((item) => ({
-      role: ['system', 'user', 'assistant', 'tool'].includes(String(item?.role)) ? String(item.role) : 'user',
-      content: normalizeContentParts(item?.content),
-    }))
-    .filter((item) => (typeof item.content === 'string' ? item.content.trim() !== '' : item.content.length > 0));
+    .map((item) => {
+      const message = {
+        role: ['system', 'user', 'assistant', 'tool'].includes(String(item?.role)) ? String(item.role) : 'user',
+        content: normalizeContentParts(item?.content),
+      };
+      // 工具调用（2026-09-16 打通）—— 这三样以前**全被丢掉**，工具链路在网关这一跳就断了：
+      //   · assistant 消息上的 tool_calls：模型上一轮请求调用了什么；
+      //   · tool 消息上的 tool_call_id：这是哪一次调用的结果（少了它上游对不上号）；
+      //   · name：客户端有时用它标工具名。
+      if (Array.isArray(item?.tool_calls) && item.tool_calls.length) message.tool_calls = item.tool_calls;
+      if (item?.tool_call_id) message.tool_call_id = String(item.tool_call_id);
+      if (item?.name && message.role === 'tool') message.name = String(item.name);
+      return message;
+    })
+    // ⚠️ 过滤条件必须放过「只有工具调用/只有工具结果、没有正文」的消息：
+    //    assistant 的 tool_calls 消息 content 是空的，tool 结果也可能为空 ——
+    //    老条件是「content 非空」，会把它们整条筛掉，于是模型的调用与结果对不上。
+    .filter((item) => item.tool_calls || item.tool_call_id
+      || (typeof item.content === 'string' ? item.content.trim() !== '' : item.content.length > 0));
   if (!messages.length) throw errors.badRequest('messages 不能为空', 'VALIDATION_REQUIRED');
   return messages.slice(-40);
 }
@@ -244,9 +258,16 @@ export async function handleRuntimeGateway(ctx) {
   // 所以这里自己写响应体，然后返回 __streamed 让分发层不要再套信封（这也是 index.js 约定的写法）。
   const effectiveModel = String(selection.model || requestedModel || '').trim() || 'platform-gateway';
 
+  // 客户端带来的工具定义：**必须原样转发**，否则模型没有工具通道，只能把调用写进正文
+  // （DSML 标记 → 学生看到「AI 说一句就停」）。
+  // ⚠️ 必须声明在**流式与非流式两个分支之前**：我第一版放在流式分支里，
+  //    非流式那条路会踩暂时性死区（ReferenceError → 500），被 p97 当场抓住。
+  const tools = Array.isArray(body?.tools) && body.tools.length ? body.tools : null;
+  const toolChoice = body?.tool_choice ?? null;
+
   if (!stream) {
     try {
-      const result = await provider.generate({ modality: 'TEXT', messages, model: body.model || undefined });
+      const result = await provider.generate({ modality: 'TEXT', messages, model: body.model || undefined, tools, toolChoice });
       // 同流式：上游把工具调用当正文吐出来时（DSML），别原样交给客户端。
       const text = stripDsml(String(result?.assets?.[0]?.metadata?.text || '').trim());
       const usage = result?.usage || result?.assets?.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
@@ -281,10 +302,23 @@ export async function handleRuntimeGateway(ctx) {
   // 真正的修法是打通 tools / tool_calls —— 见 services/dsmlFilter.js 的文件头注释。
   let dsmlStripped = 0;
   const dsml = createDsmlStripper({ onStrip: (chars) => { dsmlStripped += chars; } });
+  // 这一轮里上游有没有返回工具调用 —— 决定最后那个分片的 finish_reason。
+  let sawToolCalls = false;
   try {
     const result = await provider.generateStream({
       messages,
       model: body.model || undefined,
+      tools,
+      toolChoice,
+      // 工具调用：按 OpenAI 方言原样转给客户端（dsh 就是靠这个才知道该去执行什么）。
+      // ⚠️ 这条**不能**过 DSML 过滤器 —— 它要的就是结构化字段，不是正文。
+      onToolCalls: (toolCallDelta, finishReason) => {
+        sawToolCalls = true;
+        sseWrite(res, {
+          id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel,
+          choices: [{ index: 0, delta: { tool_calls: toolCallDelta }, finish_reason: finishReason || null }],
+        });
+      },
       onDelta: (delta) => {
         const piece = dsml.push(delta);
         if (!piece) return;
@@ -309,7 +343,7 @@ export async function handleRuntimeGateway(ctx) {
     // 留个痕：这段被摘掉了多少字符。它持续大于 0 就说明上游还在拿工具调用当正文，
     // 那时要去看「打通 tools / tool_calls」这件事（本过滤只是止血）。
     if (dsmlStripped) console.warn(`[runtimeGateway] 摘掉工具调用标记 ${dsmlStripped} 字符（模型 ${effectiveModel}）`);
-    sseWrite(res, { id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    sseWrite(res, { id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel, choices: [{ index: 0, delta: {}, finish_reason: sawToolCalls ? 'tool_calls' : 'stop' }] });
     sseWrite(res, {
       id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel, choices: [],
       usage: { prompt_tokens: usage?.inputTokens || 0, completion_tokens: usage?.outputTokens || 0, total_tokens: (usage?.inputTokens || 0) + (usage?.outputTokens || 0) },
