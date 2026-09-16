@@ -45,7 +45,7 @@ export function PlatformUsers({ api }) {
   }
   return <>
     {confirmation}
-    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号、套餐与状态，并可执行启停、重置密码与解绑手机。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportUsers}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={users.refresh}>刷新</button></>} />
+    <PageHeader eyebrow="平台教务" title="平台用户" description="按角色、机构和关键词查看全平台真实账号与状态，并可执行启停、重置密码与解绑手机。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportUsers}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={users.refresh}>刷新</button></>} />
     <Panel title="筛选条件">
       <div className="form-grid">
         <label>角色<select value={filters.role} onChange={(e) => { setFilters({ ...filters, role: e.target.value }); setPage(1); }}><option value="">全部角色</option>{Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -57,7 +57,7 @@ export function PlatformUsers({ api }) {
       {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
     </Panel>
     <Panel title="用户列表">
-      {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <><ListResultSummary total={users.data.total} page={users.data.page} totalPages={users.data.totalPages} label="名用户" /><div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>套餐</th><th>状态</th><th>有效期至</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td>{item.role === 'STUDENT' ? (item.billingPackageName || '未绑定') : '—'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td><td><div className="row-actions">
+      {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <><ListResultSummary total={users.data.total} page={users.data.page} totalPages={users.data.totalPages} label="名用户" /><div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>状态</th><th>有效期至</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td><td><div className="row-actions">
         <button className="text-button" onClick={() => { setDetailId(item.id); setRoleDraft(item.role); setMessage(''); }}>详情</button>
         {item.status === 'ACTIVE'
           ? <button className="text-button" disabled={busy} onClick={() => run(item, 'status', { status: 'DISABLED' }, `已停用 ${item.displayName}，该账号现有登录会话立即失效。`, `确认停用「${item.displayName}」？停用后该账号现有登录会话立即失效，将无法登录和使用平台功能。`)}>停用</button>

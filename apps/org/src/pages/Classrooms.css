@@ -40,6 +40,22 @@
   margin-top: 16px;
 }
 
+/* 课堂模式是**平台**在课包课时里定的，老师只看不改 —— 所以这里不是输入控件，
+   而是把该课时已发布的全部上课类型平铺出来（画布 + VibeCoding 都开时两个都显示）。 */
+.classroom-mode-readonly {
+  display: block;
+  padding: 9px 11px;
+  border: 1px dashed #d8ccef;
+  border-radius: 8px;
+  color: #554b7a;
+  background: #faf8ff;
+  font-weight: 700;
+}
+
+.classroom-mode-readonly + .muted {
+  margin-top: 6px;
+}
+
 .classroom-runtime {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

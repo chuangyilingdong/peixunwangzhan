@@ -449,7 +449,6 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
             <label>时长（分钟）<input type="number" min="1" max="1440" value={durationMinutes} onChange={(event) => update({ durationMinutes: event.target.value })} /></label>
             <label>状态<select value={status} onChange={(event) => update({ status: event.target.value })}><option value="DRAFT">草稿</option><option value="PUBLISHED">已发布</option><option value="ARCHIVED">已下架</option></select></label>
           </div>
-          <label>课时正文 / 教学指引<textarea rows={4} placeholder="≤50000 字" value={lessonContent} onChange={(event) => update({ lessonContent: event.target.value })} /></label>
         </section>
         <section className="drawer-section" hidden={step !== 0}>
           <label>平台预算（元 / 每场课堂）<input inputMode="decimal" value={edit.platformBudgetYuan ?? (lesson.platformBudgetFen == null ? '' : String(lesson.platformBudgetFen / 100))} placeholder="留空表示未设置" onChange={(event) => update({ platformBudgetYuan: event.target.value })} /></label>

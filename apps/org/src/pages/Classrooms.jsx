@@ -37,6 +37,9 @@ function publishedModes(lesson) {
     .filter((mode) => Object.hasOwn(DELIVERY_LABEL, mode));
 }
 
+/** 课时的上课类型是**平台**在课包里设定的（可同时开画布 + VibeCoding），老师只读不改。 */
+const deliveryModeLabels = (lesson) => publishedModes(lesson).map((mode) => DELIVERY_LABEL[mode]);
+
 function StateBadge({ value, map = SESSION_STATE }) {
   const item = map[value] || { label: value || '未知状态', tone: 'muted' };
   return <span className={'status ' + (item.tone === 'muted' ? '' : item.tone)}>{item.label}</span>;
@@ -211,8 +214,6 @@ export function Classrooms({ api, user }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [titleDraft, setTitleDraft] = useState('');
-  const [swapForm, setSwapForm] = useState({ seriesId: '', lessonId: '' });
-  const [clearConfirmed, setClearConfirmed] = useState(false);
   const [picked, setPicked] = useState([]);
   const [search, setSearch] = useState('');
   const query = new URLSearchParams({ days });
@@ -231,9 +232,14 @@ export function Classrooms({ api, user }) {
   const candidatesReady = canAdd && !candidates.loading && !candidates.error && candidates.data?.sessionId === openId && candidates.data?.lessonId === current?.lessonId;
   const selectable = candidatesReady ? candidates.data.selectable || [] : [];
   const blocked = candidatesReady ? candidates.data.blocked || [] : [];
-  const matches = (item) => `${item.name || ''} ${item.login || ''}`.toLowerCase().includes(search.trim().toLowerCase());
+  const keyword = search.trim().toLowerCase();
+  const matches = (item) => `${item.name || ''} ${item.login || ''}`.toLowerCase().includes(keyword);
   const visibleSelectable = selectable.filter(matches);
-  const visibleBlocked = blocked.filter(matches);
+  // 「不可加」默认**不铺开**：一个机构可能有上百个不可加学员，全列出来既没用又没法查
+  // （2026-09-16 用户口径）。只有搜索命中的不可加学员才连原因一起显示 ——
+  // 「搜一个人，看到他为什么进不来」。
+  const visibleBlocked = keyword ? blocked.filter(matches) : [];
+  const blockedTotal = blocked.length;
   const summary = current?.studentSummary || {};
   const roster = current?.students || [];
   const terminal = ['ENDED', 'DISSOLVED'].includes(current?.status);
@@ -243,16 +249,7 @@ export function Classrooms({ api, user }) {
   const lessonsFor = (id) => (seriesItems.find((item) => item.id === id)?.lessons || []).filter((item) => item.status === 'PUBLISHED');
   const lessonOptions = lessonsFor(form.seriesId);
   const selectedLesson = lessonOptions.find((item) => item.id === form.lessonId);
-  const swapLessons = lessonsFor(swapForm.seriesId);
-  const swapLesson = swapLessons.find((item) => item.id === swapForm.lessonId);
-  const swapModes = publishedModes(swapLesson);
-  const lessonChanged = Boolean(swapLesson && swapLesson.id !== current?.lessonId);
-  const mustClearStudents = lessonChanged && Number(summary.total || 0) > 0;
   const titleValidation = !titleDraft.trim() ? '课堂名称不能为空。' : titleDraft.trim() === current?.title?.trim() ? '名称没有变化。' : '';
-  const swapValidation = !swapLesson ? '请选择已发布的课程。'
-    : !swapModes.includes(swapForm.deliveryMode) ? '请选择该课程已发布的课堂环境。'
-    : !lessonChanged && swapForm.deliveryMode === current?.deliveryMode ? '课程和环境均没有变化。'
-    : mustClearStudents && !clearConfirmed ? '请明确确认清空当前名单。' : '';
 
   useEffect(() => { setPicked([]); }, [openId, candidates.data, candidates.loading, current?.lessonId]);
   useEffect(() => { setModal(null); setPicked([]); setSearch(''); setError(''); }, [openId]);
@@ -309,17 +306,6 @@ export function Classrooms({ api, user }) {
       setModal(null);
     }, '课堂名称已更新。', 'canEdit');
   }
-  async function swapLessonSubmit() {
-    if (swapValidation) { setError(swapValidation); return; }
-    await run(async () => {
-      await api.put(`org/sessions/${encodeURIComponent(openId)}`, {
-        lessonId: swapForm.lessonId,
-        deliveryMode: swapForm.deliveryMode,
-        confirmClearStudents: mustClearStudents && clearConfirmed,
-      });
-      setModal(null); setPicked([]); setSearch('');
-    }, lessonChanged ? '课程与环境已更新，请重新添加学员。' : '课堂环境已更新，学员名单保持不变。', 'canEdit');
-  }
   async function actAndClose() {
     const kind = modal?.kind;
     const permission = { remove: 'canRemoveStudents', start: 'canStart', end: 'canEnd', dissolve: 'canDissolve' }[kind];
@@ -370,11 +356,6 @@ export function Classrooms({ api, user }) {
       {previewHref(current?.coursewareUrl) ? <a className="secondary-button" href={current.coursewareUrl} target="_blank" rel="noreferrer">查看课件</a> : null}
       {current?.status === 'PENDING' && allowed('canEdit') ? <>
         <button className="secondary-button" disabled={busy} onClick={() => { setTitleDraft(current.title || ''); showModal({ kind: 'title' }); }}>编辑名称</button>
-        <button className="secondary-button" disabled={busy} onClick={() => {
-          setSwapForm({ seriesId: current.seriesId || '', lessonId: current.lessonId || '', deliveryMode: current.deliveryMode || '' });
-          setClearConfirmed(false);
-          showModal({ kind: 'swap' });
-        }}>更换课程与环境</button>
       </> : null}
       {allowed('canStart') && current?.status === 'PENDING' ? <button className="primary-button" disabled={busy || !summary.pending} onClick={() => showModal({ kind: 'start' })}>开始上课</button> : null}
       {allowed('canDissolve') && current?.status === 'PENDING' ? <button className="secondary-button" disabled={busy} onClick={() => showModal({ kind: 'dissolve' })}>解散课堂</button> : null}
@@ -413,7 +394,11 @@ export function Classrooms({ api, user }) {
               {visibleSelectable.length ? visibleSelectable.map((student) => <label key={student.id} className="classroom-candidate"><input type="checkbox" disabled={busy} checked={picked.includes(student.id)} onChange={(event) => setPicked((old) => event.target.checked ? [...old, student.id] : old.filter((id) => id !== student.id))} /><strong>{student.name || student.login}</strong><span className="muted">{student.login}</span></label>) : <p className="muted">{search ? '没有匹配的可加学员。' : '暂无可加学员，请检查课包许可和课堂占用。'}</p>}
               <button className="primary-button top-gap" disabled={busy || !candidatesReady || !picked.length} onClick={addStudents}>加入课堂（已选 {picked.length} 人）</button>
             </div>
-            <div><h4>不可加（{visibleBlocked.length}）</h4>{visibleBlocked.length ? visibleBlocked.map((student) => <div key={student.id} className="classroom-blocked"><strong>{student.name || student.login}</strong><span className="muted"> · {student.login}</span><p>{student.reasonText || '不可加入'}</p>{student.session?.title ? <small className="muted">占用课堂：{student.session.title} · {student.session.teacherName || '未知老师'}</small> : null}</div>) : <p className="muted">没有匹配的不可加学员。</p>}</div>
+            <div><h4>不可加{keyword ? `（${visibleBlocked.length}）` : blockedTotal ? `（${blockedTotal} 人，搜索后显示原因）` : ''}</h4>{keyword
+              ? (visibleBlocked.length
+                ? visibleBlocked.map((student) => <div key={student.id} className="classroom-blocked"><strong>{student.name || student.login}</strong><span className="muted"> · {student.login}</span><p>{student.reasonText || '不可加入'}</p>{student.session?.title ? <small className="muted">占用课堂：{student.session.title} · {student.session.teacherName || '未知老师'}</small> : null}</div>)
+                : <p className="muted">搜到的学员不在不可加名单里。</p>)
+              : <p className="muted">{blockedTotal ? `本机构另有 ${blockedTotal} 人暂时不可加入：在上面搜姓名或账号，就会显示他不能加入的原因。` : '没有不可加的学员。'}</p>}</div>
           </div>}
         </section> : null}
         <section className="classroom-section"><h3>课堂作品（{current.works?.length ?? 0}）</h3>
@@ -437,34 +422,14 @@ export function Classrooms({ api, user }) {
     {modal?.kind === 'title' ? <Modal title="编辑课堂名称" busy={busy} error={error} onClose={closeModal} footer={<><button className="secondary-button" onClick={closeModal}>取消</button><button className="primary-button" disabled={!allowed('canEdit') || Boolean(titleValidation)} onClick={saveTitle}>{busy ? '保存中…' : '保存名称'}</button></>}>
       <label>课堂名称<input value={titleDraft} maxLength={120} onChange={(event) => setTitleDraft(event.target.value)} /></label>{titleValidation ? <p className="muted">{titleValidation}</p> : null}
     </Modal> : null}
-    {modal?.kind === 'swap' ? <Modal title="更换课程与环境" description="同一课程切换环境保留学员名单；更换课程则清空名单并保留移除记录。" busy={busy} error={error || series.error?.message} onClose={closeModal} footer={<><button className="secondary-button" onClick={closeModal}>取消</button><button className="primary-button" disabled={!allowed('canEdit') || series.loading || Boolean(series.error) || Boolean(swapValidation)} onClick={swapLessonSubmit}>{busy ? '更换中…' : '确认更换'}</button></>}>
-      <label>课包<SearchSelect ariaLabel="更换课包" value={swapForm.seriesId} options={seriesItems} getLabel={(item) => item.title} onChange={(seriesId) => {
-        setSwapForm({ seriesId, lessonId: '', deliveryMode: '' });
-        setClearConfirmed(false);
-      }} /></label>
-      <label>课程<select value={swapForm.lessonId} disabled={!swapForm.seriesId} onChange={(event) => {
-        const lesson = swapLessons.find((item) => item.id === event.target.value);
-        setSwapForm({ ...swapForm, lessonId: event.target.value, deliveryMode: lesson?.id === current?.lessonId ? current.deliveryMode : lesson?.deliveryMode || '' });
-        setClearConfirmed(false);
-      }}>
-        <option value="">请选择课程</option>
-        {swapLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>第 {lesson.sort} 节 · {lesson.title}</option>)}
-      </select></label>
-      {swapLesson ? <label>课堂环境<select value={swapForm.deliveryMode || ''} onChange={(event) => setSwapForm({ ...swapForm, deliveryMode: event.target.value })}>
-        <option value="" disabled>请选择已发布环境</option>
-        {swapModes.map((mode) => <option key={mode} value={mode}>{DELIVERY_LABEL[mode]}</option>)}
-      </select></label> : null}
-      {swapLesson && !lessonChanged ? <p className="muted">仅切换环境，当前学员名单保持不变。</p> : null}
-      {mustClearStudents ? <label className="classroom-candidate"><input type="checkbox" checked={clearConfirmed} onChange={(event) => setClearConfirmed(event.target.checked)} /><span>我确认清空当前 {summary.total} 人名单，更换后重新添加学员。</span></label> : null}
-      {swapValidation ? <p className="muted">{swapValidation}</p> : null}
-      {series.loading ? <Loading label="正在读取课程…" /> : null}
-    </Modal> : null}
     {modal?.kind === 'create' ? <Modal title="创建课堂" busy={busy} error={error || series.error?.message || teachers.error?.message} onClose={closeModal} footer={<><button className="secondary-button" onClick={closeModal}>取消</button><button className="primary-button" disabled={!selectedLesson || series.loading || Boolean(series.error)} onClick={createSession}>{busy ? '创建中…' : '创建课堂'}</button></>}>
       <label>课包<SearchSelect ariaLabel="搜索课包" value={form.seriesId} options={seriesItems} placeholder="请选择课包" getLabel={(item) => item.title} onChange={(seriesId) => setForm({ ...form, seriesId, lessonId: '', deliveryMode: 'CANVAS' })} /></label>
       {series.loading ? <Loading label="正在读取课程…" /> : null}
       {!series.loading && !seriesItems.length ? <Notice tone="warning">本机构暂无已授权课包。</Notice> : null}
       <label>第几节课<select value={form.lessonId} disabled={!form.seriesId} onChange={(event) => { const lesson = lessonOptions.find((item) => item.id === event.target.value); setForm({ ...form, lessonId: event.target.value, deliveryMode: lesson?.deliveryMode || 'CANVAS' }); }}><option value="">请选择课程</option>{lessonOptions.map((lesson) => <option key={lesson.id} value={lesson.id}>第 {lesson.sort} 节 · {lesson.title}</option>)}</select></label>
-      {selectedLesson ? <label>课堂模式<select value={form.deliveryMode} onChange={(event) => setForm({ ...form, deliveryMode: event.target.value })}>{(selectedLesson.deliveryModes?.length ? selectedLesson.deliveryModes : [selectedLesson.deliveryMode || 'CANVAS']).map((mode) => <option key={mode} value={mode}>{DELIVERY_LABEL[mode] || mode}</option>)}</select></label> : null}
+      {/* 课堂模式只读：由平台在课包课时里设定（可同时开画布 + VibeCoding），老师不选。
+          会话本身仍落一个具体值（取该课时已发布的第一个类型），但学生的入口按课时的全部类型放行。 */}
+      {selectedLesson ? <label>课堂模式<span className="classroom-mode-readonly">{deliveryModeLabels(selectedLesson).join(' / ') || '—'}</span><span className="muted">由平台在课包课时里设定，老师不改；两种都开时学生端两个入口并列。</span></label> : null}
       {isAdmin ? <label>负责老师<SearchSelect ariaLabel="搜索负责老师" value={form.teacherId} options={teachers.data?.items || []} placeholder="挂在我自己名下" getLabel={(item) => item.displayName || item.login} onChange={(teacherId) => setForm({ ...form, teacherId })} /></label> : null}
       <label>课堂名称（可留空）<input value={form.title} maxLength={120} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="留空自动生成" /></label>
       <p className="muted">仅负责老师可以管理课堂；机构管理员查看其他老师课堂时为只读。</p>

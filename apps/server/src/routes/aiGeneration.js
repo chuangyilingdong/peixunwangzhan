@@ -26,7 +26,6 @@ const MODALITY_LABELS = {
 /** 网关说「额度用尽」：这是本学生在这节课的钱花完了，不是故障，重试没有意义。 */
 const isQuotaExhausted = (code) => String(code || '') === PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED;
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo' };
-const PACKAGE_CAPABILITY_BY_MODALITY = { IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video' };
 const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music' };
 const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
 const GENERATION_PAGE_SIZE = 20;
@@ -66,12 +65,12 @@ function packageForUser(user, orgId) {
   return user.billing_package_id ? row('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [user.billing_package_id, orgId]) : null;
 }
 
-function assertCapability(modality, session, pkg) {
+// 2026-09-16：删掉「套餐能力」这一层 —— 套餐不再参与「能不能用某个 AI 能力」的判定。
+// 现在只看：平台模态开关 + 课堂开放的能力 + 课时开放的能力（后面几条在各自的函数里）。
+function assertCapability(modality, session) {
   const sessionCapability = SESSION_CAPABILITY_BY_MODALITY[modality];
-  const packageColumn = PACKAGE_CAPABILITY_BY_MODALITY[modality];
   if (!sessionCapability) return;
   if (session && session.capabilities && !session.capabilities[sessionCapability]) throw errors.forbidden('当前课堂未开放该 AI 能力', 'SESSION_CAPABILITY_DISABLED');
-  if (!pkg || pkg.status !== 'ACTIVE' || !pkg[packageColumn]) throw errors.forbidden('当前套餐未开通该 AI 能力', 'PACKAGE_CAPABILITY_DISABLED');
 }
 
 /**
@@ -142,8 +141,7 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
  * 文档插画一次生成 3 张就是 3）。
  */
 export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null, model = '', units = 1 }) {
-  const pkg = packageForUser(user, orgId);
-  assertCapability(modality, context.activeSession, pkg);
+  assertCapability(modality, context.activeSession);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id });
   // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
   if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
@@ -398,8 +396,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     if (freshProject.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
     const freshContext = resolveProjectUsageContext(user, freshProject);
     if (!freshContext.canUseNow) throw errors.forbidden(freshContext.blockReason, freshContext.blockCode);
-    const pkg = packageForUser(user, (auth.session?.org_id || auth.user.orgId));
-    assertCapability(modality, freshContext.activeSession, pkg);
+    assertCapability(modality, freshContext.activeSession);
     assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id });
     const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
     if (lessonCapability && !(freshContext.lesson?.capabilities || []).includes(lessonCapability)) {
@@ -804,16 +801,14 @@ function normalizeAiSession(value) {
 function studentAiCenter(ctx) {
   const auth = ctx.auth;
   const rawUser = auth.rawUser;
-  const pkg = packageForUser(rawUser, (auth.session?.org_id || auth.user.orgId));
   const activeSessions = activeAiSessions(rawUser).map(normalizeAiSession);
   const session = activeSessions[0] || null;
   const capabilities = AI_MODALITIES.map((modality) => {
     const capability = SESSION_CAPABILITY_BY_MODALITY[modality];
-    const packageEnabled = modality === 'TEXT' || Boolean(pkg?.status === 'ACTIVE' && pkg[PACKAGE_CAPABILITY_BY_MODALITY[modality]]);
     const sessionEnabled = !capability || !session || !session.capabilities || session.capabilities[capability];
     const reasons = [];
-    if (!pkg || pkg.status !== 'ACTIVE') reasons.push('当前账号未绑定可用套餐');
-    else if (!packageEnabled) reasons.push('套餐未开通该能力');
+    // 2026-09-16：套餐（billing_packages）不再参与能力判定，那两条理由（未绑定套餐 /
+    // 套餐未开通该能力）一并删掉 —— 学生看到「套餐」两个字已无从处理，只会来问。
     if (session?.aiPaused) reasons.push('教师已暂停课堂 AI');
     else if (!sessionEnabled) reasons.push('当前课堂未开放');
     if (session?.studentCallCap !== null && session?.studentCallCap !== undefined) {
@@ -829,8 +824,8 @@ function studentAiCenter(ctx) {
     const scopeBlocked = !session;
     if (scopeBlocked) reasons.push('等老师把你加进课堂并点「开始上课」');
     return {
-      modality, label: MODALITY_LABELS[modality], packageEnabled, sessionEnabled,
-      available: packageEnabled && sessionEnabled && !session?.aiPaused && !scopeBlocked,
+      modality, label: MODALITY_LABELS[modality], sessionEnabled,
+      available: sessionEnabled && !session?.aiPaused && !scopeBlocked,
       reasons,
     };
   });

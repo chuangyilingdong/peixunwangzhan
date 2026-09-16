@@ -19,6 +19,7 @@ import { recordAiUsage } from '../services/creditUsage.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
 import { assertExternalAiAllowed, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
+import { createDsmlStripper, stripDsml } from '../services/dsmlFilter.js';
 
 const PREFIX = 'rt1';
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
@@ -246,7 +247,8 @@ export async function handleRuntimeGateway(ctx) {
   if (!stream) {
     try {
       const result = await provider.generate({ modality: 'TEXT', messages, model: body.model || undefined });
-      const text = String(result?.assets?.[0]?.metadata?.text || '').trim();
+      // 同流式：上游把工具调用当正文吐出来时（DSML），别原样交给客户端。
+      const text = stripDsml(String(result?.assets?.[0]?.metadata?.text || '').trim());
       const usage = result?.usage || result?.assets?.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
       record('SUCCESS', { text, usage });
       ctx.res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -275,12 +277,16 @@ export async function handleRuntimeGateway(ctx) {
   heartbeat.unref?.();
   let streamed = '';
   let usage = null;
+  // 止血：上游把工具调用当正文吐出来（DSML 标记）时，别让学生看见乱码。
+  // 真正的修法是打通 tools / tool_calls —— 见 services/dsmlFilter.js 的文件头注释。
+  let dsmlStripped = 0;
+  const dsml = createDsmlStripper({ onStrip: (chars) => { dsmlStripped += chars; } });
   try {
     const result = await provider.generateStream({
       messages,
       model: body.model || undefined,
       onDelta: (delta) => {
-        const piece = String(delta || '');
+        const piece = dsml.push(delta);
         if (!piece) return;
         streamed += piece;
         sseWrite(res, {
@@ -289,9 +295,20 @@ export async function handleRuntimeGateway(ctx) {
         });
       },
     });
+    const tail = dsml.flush();
+    if (tail) {
+      streamed += tail;
+      sseWrite(res, {
+        id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel,
+        choices: [{ index: 0, delta: { content: tail }, finish_reason: null }],
+      });
+    }
     usage = result?.usage || result?.assets?.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
     const text = String(result?.assets?.[0]?.metadata?.text || streamed || '').trim();
     record('SUCCESS', { text, usage });
+    // 留个痕：这段被摘掉了多少字符。它持续大于 0 就说明上游还在拿工具调用当正文，
+    // 那时要去看「打通 tools / tool_calls」这件事（本过滤只是止血）。
+    if (dsmlStripped) console.warn(`[runtimeGateway] 摘掉工具调用标记 ${dsmlStripped} 字符（模型 ${effectiveModel}）`);
     sseWrite(res, { id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
     sseWrite(res, {
       id: completionId, object: 'chat.completion.chunk', created, model: effectiveModel, choices: [],

@@ -76,6 +76,23 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # 开创作环境（VibeCoding）是**同步等**宿主把学生环境起起来：平台侧超时 90s，
+    # 宿主脚本自己还会等 dsh 打印 token（最长 ~60s）。而 location /api/ 没写 proxy_read_timeout
+    # ＝ nginx 默认 **60s** —— 也就是「慢一点的学生会先被 nginx 掐成 504」，前端拿到 504 显示
+    # 「服务暂时不可用，请稍后重试」，学生会以为系统坏了（2026-09-16 发现）。
+    # 这里单独给这条路径放宽；正则 location 优先级高于前缀 /api/。
+    location ~ ^/api/student/runtime/(launch|stop)$ {
+        proxy_pass http://127.0.0.1:8789;
+        proxy_http_version 1.1;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+        proxy_buffering off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # 在线预览类响应允许**同源**内嵌（2026-09-16 修复）。
     # 课件预览（/api/org/file-assets/:id/preview）与学生作品里的 PPT/PDF
     # （/api/{org,student,public}/…/files/:name/preview）都是**在我们自己的页面里用 iframe 打开的**，

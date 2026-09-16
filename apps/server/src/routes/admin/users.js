@@ -111,8 +111,8 @@ export async function handleUsers(ctx, part, method) {
       params,
     );
     const content = csvDocument(
-      ['登录名', '姓名', '角色', '机构', '状态', '手机号', '套餐', '有效期至', '创建时间'],
-      items.map((user) => [user.login, user.display_name, user.role, user.organization_name || '平台', user.status, user.phone || '', user.billing_package_name || '', user.expires_at || '', user.created_at]),
+      ['登录名', '姓名', '角色', '机构', '状态', '手机号', '有效期至', '创建时间'],
+      items.map((user) => [user.login, user.display_name, user.role, user.organization_name || '平台', user.status, user.phone || '', user.expires_at || '', user.created_at]),
     );
     audit(ctx, 'PLATFORM_USER_EXPORT', 'USER', null, null, { count: items.length, filters: { role: ctx.search.get('role') || null, orgId: ctx.search.get('orgId') || null, search: ctx.search.get('search') || null } });
     return { filename: csvFileName('platform-users'), content, count: items.length };

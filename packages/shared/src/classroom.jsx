@@ -187,6 +187,11 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
   const selectedCourse = courses.find((course) => course.id === selectedCourseId) || null;
   const modeOf = (lesson) => (lesson.deliveryMode === 'VIBECODING' ? 'VIBECODING' : 'CANVAS');
   const startable = (lesson) => (modeOf(lesson) === 'VIBECODING' ? Boolean(lesson.canStartVibeCoding) : Boolean(lesson.canStart));
+  // 一个课时可以**同时**开画布 + VibeCoding（平台在课包课时里设定的，可多选）。
+  // 这时两个入口要**并列**给学生，不能替他挑一个 —— 2026-09-16 用户口径。
+  // 服务端的 canStart / canStartVibeCoding 也已按课时的全部类型放行。
+  const modesOf = (lesson) => (lesson?.deliveryModes?.length ? lesson.deliveryModes : [lesson?.deliveryMode || 'CANVAS'])
+    .filter((mode) => Object.hasOwn(DELIVERY_MODE_LABEL, mode));
 
   async function enter(lesson) {
     if (!startable(lesson)) return;
@@ -230,7 +235,12 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
         </div>
         {selectedCourse.lessons.map((lesson) => {
           const mode = modeOf(lesson);
-          const canEnter = startable(lesson);
+          const modes = modesOf(lesson);
+          const offersCanvas = modes.includes('CANVAS');
+          const offersVibe = modes.includes('VIBECODING');
+          const canEnterVibe = offersVibe && Boolean(lesson.canStartVibeCoding);
+          const canEnterCanvas = offersCanvas && Boolean(lesson.canStart);
+          const canEnter = canEnterCanvas || canEnterVibe;
           const disabled = !canEnter || busy === lesson.id;
           const badge = lessonStateBadge(lesson);
           // 说明必须按这一节自己的入口类型取：拿错会给出「老师开启的是画布课堂，本课时不走 VibeCoding」这种怪话。
@@ -239,7 +249,7 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
             <div className="lesson-number">{String(lesson.sort).padStart(2, '0')}</div>
             <div className="lesson-detail-main">
               <div className="lesson-detail-title-row">
-                <div><span className="lesson-kicker">第 {lesson.sort} 节 · {DELIVERY_MODE_LABEL[mode]}</span><h3>{lesson.title}</h3></div>
+                <div><span className="lesson-kicker">第 {lesson.sort} 节 · {modes.map((item) => DELIVERY_MODE_LABEL[item]).join(' / ')}</span><h3>{lesson.title}</h3></div>
               </div>
               <p>{lesson.summary || '本节课的创作任务与课堂说明将在这里展示。'}</p>
               <div className="lesson-meta">
@@ -250,23 +260,30 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
                 {lesson.participationStatus === 'COMPLETED' ? ' · 这节课已完课' : ''}
               </div>
               {/* 能不能进、为什么不能进，都写在课名这一栏里，不再和按钮抢右栏那点宽度 */}
-              <p className="lesson-detail-hint">{canEnter ? `老师已开始 ${DELIVERY_MODE_LABEL[mode]}，现在可以进入创作。` : (reason || '等待老师开始上课。')}</p>
+              <p className="lesson-detail-hint">{canEnter ? `老师已开始${modes.length > 1 ? '' : ' ' + DELIVERY_MODE_LABEL[mode]}，现在可以进入创作。` : (reason || '等待老师开始上课。')}</p>
             </div>
             <div className="lesson-detail-state">
               <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
             </div>
             <div className="lesson-detail-action">
               {/* VibeCoding 课：创作环境可用时，入口换成「进入创作环境」（学生自己的盒子），
-                  并多一个「提交作品」。不可用时保持原样 —— 迁移不该让入口变成点不动的按钮。 */}
-              {runtime.ready && mode === 'VIBECODING'
-                ? <RuntimeActions api={api} lesson={lesson} canEnter={canEnter} />
-                : <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={() => enter(lesson)}>
-                  {busy === lesson.id ? '正在进入…'
-                    : canEnter ? (lesson.continueProject ? '继续创作' : '进入课堂')
-                      : lesson.participationStatus === 'COMPLETED' ? '已完课'
-                        : lesson.hasGrant === false ? '未授权'
-                          : '等待开课'}
-                </button>}
+                  并多一个「提交作品」。不可用时保持原样 —— 迁移不该让入口变成点不动的按钮。
+                  两种都开时**两个入口并列**（画布按钮 + VibeCoding 那两个），学生自己挑。 */}
+              {runtime.ready && offersVibe ? <RuntimeActions api={api} lesson={lesson} canEnter={canEnterVibe} /> : null}
+              {offersCanvas ? <button className={canEnterCanvas ? 'primary-button' : 'secondary-button'} disabled={!canEnterCanvas || busy === lesson.id} onClick={() => enter(lesson)}>
+                {busy === lesson.id ? '正在进入…'
+                  : canEnterCanvas ? (lesson.continueProject ? '继续创作' : '进入课堂')
+                    : lesson.participationStatus === 'COMPLETED' ? '已完课'
+                      : lesson.hasGrant === false ? '未授权'
+                        : '等待开课'}
+              </button> : null}
+              {/* 只开 VibeCoding、而创作环境不可用时的兜底：保留一个点不动的按钮，别让卡片空着 */}
+              {!offersCanvas && !(runtime.ready && offersVibe) ? <button className="secondary-button" disabled>
+                {busy === lesson.id ? '正在进入…'
+                  : lesson.participationStatus === 'COMPLETED' ? '已完课'
+                    : lesson.hasGrant === false ? '未授权'
+                      : '等待开课'}
+              </button> : null}
             </div>
           </article>;
         })}

@@ -380,8 +380,10 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
   const sessionLive = participation.session_status === 'ACTIVE' && participation.status === 'ACTIVE';
   const sessionMode = participation.session_delivery_mode || null;
   const lessonMode = normalizedLesson?.deliveryMode || 'CANVAS';
-  const canUseNow = sessionLive && sessionMode === 'CANVAS';
-  const canUseVibeCodingNow = sessionLive && sessionMode === 'VIBECODING';
+  // 与 lessonAvailability 同一口径：入口按**课时已发布的类型**放行，不受课堂单值限制。
+  const lessonModes = Array.isArray(normalizedLesson?.deliveryModes) && normalizedLesson.deliveryModes.length ? normalizedLesson.deliveryModes : [lessonMode];
+  const canUseNow = sessionLive && lessonModes.includes('CANVAS');
+  const canUseVibeCodingNow = sessionLive && lessonModes.includes('VIBECODING');
   const waiting = participation.status === 'PENDING' || participation.session_status === 'PENDING';
   const waitingReason = waiting
     ? '老师还没开始上课，等老师点「开始上课」就能进'
@@ -389,7 +391,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
   const vibeWaitingReason = waiting
     ? '老师还没开始 VibeCoding 课堂，等老师点「开始上课」就能进'
     : '这节课的课堂已经结束，请联系老师重新安排';
-  void lessonMode;
+  void sessionMode;
 
   return {
     // 班级退场：class 恒为 null，课堂信息在 session 上（保留 class 键是为了不炸既有读取方）
@@ -594,13 +596,19 @@ function studentLatestNotifications(user, limit = 5) {
  */
 export function lessonAvailability({ lesson, hasGrant, participation }) {
   const lessonMode = lesson.deliveryMode || 'CANVAS';
+  // 上课类型只认**课时已发布的类型**，不再由课堂（class_sessions.delivery_mode）的单值限制：
+  // 平台在课时上可以同时开画布 + VibeCoding，两种入口就都该放行（老师不再选课堂模式，
+  // 课堂那个单值只作历史兼容）。2026-09-16 用户口径。
+  const lessonModes = Array.isArray(lesson.deliveryModes) && lesson.deliveryModes.length ? lesson.deliveryModes : [lessonMode];
+  const offersCanvas = lessonModes.includes('CANVAS');
+  const offersVibe = lessonModes.includes('VIBECODING');
   const partStatus = participation?.status || null;
   const sessionStatus = participation?.session_status || null;
   const sessionMode = participation?.session_delivery_mode || null;
   const inRoster = Boolean(partStatus) && partStatus !== 'REMOVED';
   const sessionLive = inRoster && partStatus === 'ACTIVE' && sessionStatus === 'ACTIVE';
-  const canStart = Boolean(hasGrant) && sessionLive && sessionMode === 'CANVAS';
-  const canStartVibeCoding = Boolean(hasGrant) && sessionLive && sessionMode === 'VIBECODING';
+  const canStart = Boolean(hasGrant) && sessionLive && offersCanvas;
+  const canStartVibeCoding = Boolean(hasGrant) && sessionLive && offersVibe;
 
   // 原因：先许可、再课堂名单、再课堂是否开始、最后入口类型 —— 与门禁同序
   const reason = !hasGrant
@@ -615,7 +623,7 @@ export function lessonAvailability({ lesson, hasGrant, participation }) {
             ? '这节课没上完（没消耗过算力）：等老师把你重新排进课堂就能再上'
             : sessionStatus === 'PENDING' || partStatus === 'PENDING'
               ? '老师还没开始上课，等老师点「开始上课」就能进'
-              : sessionMode === 'VIBECODING'
+              : sessionMode === 'VIBECODING' && !offersCanvas
                 ? '老师开启的是 VibeCoding 课堂，请从 VibeCoding 入口进入'
                 : '这节课的课堂已经结束，请联系老师重新安排';
   const vibeReason = !hasGrant
@@ -630,7 +638,7 @@ export function lessonAvailability({ lesson, hasGrant, participation }) {
             ? '这节课没上完（没消耗过算力）：等老师把你重新排进课堂就能再上'
             : sessionStatus === 'PENDING' || partStatus === 'PENDING'
               ? '老师还没开始 VibeCoding 课堂，等老师点「开始上课」就能进'
-              : sessionMode === 'CANVAS'
+              : sessionMode === 'CANVAS' && !offersVibe
                 ? '老师开启的是画布课堂，本课时不走 VibeCoding'
                 : '这节课的课堂已经结束，请联系老师重新安排';
 

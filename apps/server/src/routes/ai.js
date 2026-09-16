@@ -15,9 +15,6 @@ const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const SESSION_CAPABILITY_BY_MODALITY = {
   IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo',
 };
-const PACKAGE_CAPABILITY_BY_MODALITY = {
-  IMAGE: 'allow_image', MUSIC: 'allow_music', VIDEO: 'allow_video',
-};
 const LESSON_CAPABILITY_BY_MODALITY = {
   TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music',
 };
@@ -41,15 +38,13 @@ function rejectWithUsage({ orgId, userId, projectId, sessionId = null, modality,
   throw error;
 }
 
-function assertCapability(modality, session, pkg) {
+// 2026-09-16：删掉「套餐能力」这一层拦截 —— 套餐（billing_packages）已经不参与
+// 「学生能不能用某个 AI 能力」的判定。现在只看：平台模态开关 + 课堂开放的能力 + 课时开放的能力。
+function assertCapability(modality, session) {
   const sessionColumn = SESSION_CAPABILITY_BY_MODALITY[modality];
-  const packageColumn = PACKAGE_CAPABILITY_BY_MODALITY[modality];
   if (!sessionColumn) return;
   if (session && session.capabilities && !session.capabilities[sessionColumn]) {
     throw errors.forbidden('当前课堂未开放该 AI 能力', 'SESSION_CAPABILITY_DISABLED');
-  }
-  if (!pkg || pkg.status !== 'ACTIVE' || !pkg[packageColumn]) {
-    throw errors.forbidden('当前套餐未开通该 AI 能力', 'PACKAGE_CAPABILITY_DISABLED');
   }
 }
 
@@ -115,10 +110,7 @@ export async function handleAi(ctx) {
       const currentContext = resolveProjectUsageContext(currentUser, currentProject);
       if (!currentContext.canUseNow) throw errors.forbidden(currentContext.blockReason, currentContext.blockCode);
       const currentSession = currentContext.activeSession;
-      const pkg = currentUser.billing_package_id
-        ? row('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [currentUser.billing_package_id, orgId])
-        : null;
-      assertCapability(modality, currentSession, pkg);
+      assertCapability(modality, currentSession);
       assertSessionAiControls({ modality, session: currentSession, orgId, userId });
 
       // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
