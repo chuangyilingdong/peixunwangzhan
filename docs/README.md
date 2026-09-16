@@ -1,7 +1,9 @@
 # AI 魔法学院学习平台 · 最终文档（唯一入口）
 
-> 版本：2026-09-16　｜　**当前 HEAD `cca6c43` 已推送；生产跑 `4c5760d`（release 20260916T044727Z），服务正常。
-> 学生端 VibeCoding 正在迁到 dsh（DeepSeek Harness）：隔离运行时与网关端点已在本地跑通，但**尚未部署**，
+> 版本：2026-09-16　｜　**当前本地代码提交 `dd0fe89`（已推送；本次文档提交在其之后）；生产跑 `4c5760d`
+> （release 20260916T044727Z），服务正常。
+> 学生端 VibeCoding 正在迁到 dsh（DeepSeek Harness）：隔离运行时（含读图走我们网关并记账）与容器宿主脚本
+> 已在本地/真容器上跑通，但**尚未部署**、也还没接学生入口，
 > 见 `docs/operations/VibeCoding改用dsh-方案-20260916.md` 与 `docs/operations/新对话交接-dsh迁移-20260916.md`。
 > 整体 MVP / 1–7 项仍不能标为完成。**
 > 其它文档都从属于它：结构看 `docs/architecture/代码结构与路由.md`，
@@ -27,8 +29,8 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：cca6c43（本地 HEAD，已推送）；**生产版本 = 4c5760d4e0b59f5a8e662c8f49e408d827b6ef5b**
-          4c5760d 之后的提交（dsh 容器/网关/插件/裁剪）都只在本地，未部署
+代码提交：dd0fe89（本地代码提交，已推送；此后只有文档提交）；**生产版本 = 4c5760d4e0b59f5a8e662c8f49e408d827b6ef5b**
+          4c5760d 之后的提交（dsh 容器/网关/读图/宿主脚本/裁剪）都只在本地，未部署
 生产：release 20260916T044727Z / commit 4c5760d（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
