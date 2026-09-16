@@ -24,11 +24,11 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：724d2169279940693d5625352d2eb2cb68773f59（= 生产版本；其后只有文档提交）
-生产：release 20260916T041841Z / commit 724d216（服务 learning-platform-production @127.0.0.1:8789）
+代码提交：415d44c0fc7925e3df24ec5bb2c3c0f82df0c53f（= 生产版本；其后只有文档提交）
+生产：release 20260916T043133Z / commit 415d44c（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
-      上一版（可回滚）：release 20260916T041043Z / commit cd1d2d5
+      上一版（可回滚）：release 20260916T041841Z / commit 724d216
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
@@ -126,7 +126,21 @@ classroomMode / classroomBlockReason`。**不要再在前端拿 `lesson.status`�
     （本意是官网顶部导航），它会命中**所有** `<header>` —— 共享 `PageHeader` 和学生页自己的 `student-page-head`
     都被压成 76px 白色吸顶条并盖住下面内容（「我的课程」的指标卡被切掉就是这个原因）。
     现在这条规则只作用于真正的官网导航 `.site-topbar`；新增官网顶部导航时才需要带上这个类。
-17. **PPT 走统一结构化规格与质量门禁**：站内预览和服务端下载共用 `packages/shared/src/deckSpec.js`；支持
+17. **学生端四个页面按线框图定版**（2026-09-16，桌面 + 390px 实测）：
+    「我的课程」= 课包卡片等高（flex 纵向 + 页脚 `margin-top:auto`），行内标出上课形式与真实状态；
+    「课包详情」(`/my-courses/:id`) = 返回我的课包 + 课包抬头 + 课程状态说明 + 「课包课程列表」表格
+    （序号 / 课程信息 / 课程状态 / 操作）；「学习上课」课时行 = 稳定四列（序号 / 课程信息 / 状态 / 操作），
+    能不能进的原因写在课名那栏；「我的作品」= 搜索 + 课包/课程/类型筛选 + 总数 + 卡片（类型徽标 / 来自课包›课程 / 创建时间 / 查看）。
+    ⚠️ **坑（实测过）**：官网样式表里还有**裸类名** `.success{padding:72px 20px}`，
+    它会命中共享的 `<span class="status success">`，把「上课中」徽标撑成 158px 高、整行 249px，
+    右侧说明与按钮全被挤歪 —— 已限定到 `.demo .success`。
+    **改官网样式时只用带前缀的选择器，别写裸标签（`header`）和裸类名（`.success`）**：这份 CSS 和共享组件同页生效。
+    已知差异（未做，别当成已完成）：线框图顶部导航是「我的课包 / 我的作品」，我们仍是官网导航；
+    课时缩略图用形式图标（🎨 / 💻）代替线框图里的插画；作品封面没有真实图，用渐变 + 类型图标占位。
+18. **「我的作品」是两类来源合并的**：画布作品（`works`）与 VibeCoding 产物（`vibecoding_submissions`，按产物各成一条）
+    一起列出，合并后统一按提交时间排序再分页（`summary.total` 也是两类相加）。
+    合并期间**不能先在 SQL 里分页**，否则 total 与 items 都会少一半（p14 抓的就是这条）。
+19. **PPT 走统一结构化规格与质量门禁**：站内预览和服务端下载共用 `packages/shared/src/deckSpec.js`；支持
     指标、时间线、对比、横/柱图、表格、流程、图文、章节、金句和结束页。metrics/chart/table 必须带 `source`，
     缺来源则拒绝导出；表格/图表/流程都有硬容量上限，不能靠 PowerPoint 自动缩成小字。
 
