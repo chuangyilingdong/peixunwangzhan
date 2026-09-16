@@ -68,6 +68,20 @@
             name: 平台网关 · DeepSeek Pro
             input: [text, image]
 
+# —— 默认模型与官方路由：必须只用我们自己的网关 ——
+# dsh 出厂的默认模型是它自带的 `deepseek-official` 渠道（catalog 路由），容器里没有那个 key：
+# 学生一发消息就是 MISSING_CREDENTIAL（实测：界面显示 DeepSeek-V41-Flash，然后整轮失败）。
+# 所以这里把默认模型指到我们网关的槽位，并把官方那条路由**关掉** ——
+# 学生也就不会在模型选择器里挑到一个必然失败的模型。
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: platform-gateway
+    model: deepseek-flash
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  disabled: true
+
 # 课程技能：我们自己的技能根目录（把课程要求写成 SKILL.md）。
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
@@ -123,3 +137,7 @@
 - {id: web-ui-model-capabilities, name: '@linxin666/dsh-web-all/model-capabilities', disabled: true}
 - {id: web-ui-describe-image, name: '@linxin666/dsh-web-all/describe-image', disabled: true}
 - {id: ui-settings-plugin-inventory, name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory', disabled: true}
+
+# —— 品牌：把官方那个鲸鱼标与「DeepSeek Harness」字标换成灵动ai（见 brand-plugin/ 与 rebrand.mjs）——
+# 关掉官方品牌行（它的两个插槽占用者），由我们自己的品牌包顶上；字符串与 favicon 在构建期替换。
+- {id: ui-brand-official, name: '@deepseek-ai/dsh-client-ui-brand-official', disabled: true}

@@ -4,11 +4,17 @@
 
 配套方案与全部踩坑记录：`docs/operations/VibeCoding改用dsh-方案-20260916.md`。
 
+> **学生看到的品牌是「灵动ai」**（2026-09-16 起）：界面标题、侧边栏、欢迎页、favicon 全是我们的；
+> 容器里看不到 dsh/DeepSeek 的标识。做法见下面「品牌（灵动ai）」一节。
+
 ## 里面有什么
 
 - **dsh** `@deepseek-ai/dsh@0.1.5-rc.1`（**固定版本**：官方自称会有破坏性变更，不要用 latest）
 - **我们的补丁层** `student-runtime.cordis.yml`：
-  - 模型路由只用**我们自己的网关**（`llm-pi-ai` 的 hand-declared gateway，凭据走 `apiKeyEnv`，密钥不进配置文件）
+  - 模型路由只用**我们自己的网关**（`llm-pi-ai` 的 hand-declared gateway，凭据走 `apiKeyEnv`，密钥不进配置文件），
+    并且把**默认模型**指到我们网关的槽位、关掉 dsh 自带的 `deepseek-official` 路由
+    （不这么做，学生一发消息就是 `MISSING_CREDENTIAL`，实测）
+  - 模型声明带 `input: [text, image]`：dsh 对**手写声明的模型**默认只认文本，不声明的话学生贴的图进不了请求体
   - 课程技能目录（`skills/`，一个课程一个 `SKILL.md`）
   - 沙箱 `workspace-write` + 审批 `never`（**语义是「直接拒绝」**，不是自动放行），并把 `defaultPreset` 显式指到同名预设
   - 关掉给学生的成人入口：`cordis-host-runner` / `cordis-client-runner` / `ui-cordis`
@@ -16,12 +22,32 @@
     `directory-picker`、`open-in-app`
 - **容器内 nginx**：dsh 只绑 `127.0.0.1` 且**拒绝** `--host 0.0.0.0`（官方理由：会把 RCE 暴露到网络），
   所以对外入口必须由容器内的这层 nginx 提供 —— 它校验我们平台的短时票据，再把请求转给 `127.0.0.1:3080`。
-- **读图跟着模型走，不需要额外的插件**：dsh 的 pi-ai 适配器对**手写声明的模型**默认只认文本，
-  所以补丁层里给模型写了 `input: [text, image]`（官方原文：Declaring images is what makes a
-  hand-declared vision model usable）。声明之后，学生贴进来的图当**内容块**走同一条 TEXT 渠道、
-  同一个模型 —— 我们的渠道模型本来就能看图（平台老 VibeCoding 的聊天一直这么发，实测能读出图里的颜色）。
+- **读图跟着模型走，不需要额外的插件**：学生贴进来的图当**内容块**走同一条 TEXT 渠道、同一个模型 ——
+  我们的渠道模型本来就能看图（平台老 VibeCoding 的聊天一直这么发，实测能读出图里的颜色）。
+  浏览器里实测过：贴一张图发出去，落在我们账本里的那一通 `withImages=true`。
   入口脚本另外把 `@liustack/modlens` 的凭据也钉到我们的网关：它是「给纯文本模型配的视觉桥」，
   我们这条路上用不到，但万一将来把学生指到纯文本模型、或者有人点了它，钱也仍然进我们的账。
+
+## 品牌（灵动ai）
+
+学生端**只应该看到灵动ai**。做法分两半：
+
+1. **插槽**（`brand-plugin/`）：dsh 的侧边栏与欢迎页品牌位是官方留出来的扩展点
+   （`sidebar.brand.mark`、`sidebar.brand.name`、`conversation.hero.brand.mark`），官方包
+   `@deepseek-ai/dsh-client-ui-brand-official`（鲸鱼标 + 字标）只是它的占用者。
+   我们在补丁层关掉官方那一行，换上自己的 `@lingdong/dsh-brand`：品牌图内联进客户端 bundle，
+   侧边栏给方标+字标、欢迎页给横标。
+2. **替换**（`rebrand.mjs`，构建期）：做不了插槽的地方只能改字符串 ——
+   页面标题（`dsh-client-ui-layout` 里写死的 `productTitle`）、关于面板/内测公告文案、
+   前端 `index.html` 的 `<title>`、`manifest.webmanifest` 的名字、`favicon.svg`，
+   以及**发给模型的运行环境说明**里的 `DSH` 字样（模型偶尔会复述给学生看）。
+   只替换**品牌串与散文短语**（`DSH home` / `DSH file policy` …），不碰 `DSH_HOME` 这类标识符与路径。
+
+品牌图：`assets/lingdong-ai-logo.png` 是原图，`assets/lingdong-ai-logo-480.png` 是裁掉透明留白后
+480 宽的版本（构建里用后者）。
+
+**仍然保留的官方文案**（要不要换等用户定）：欢迎页那句标语「探索未至之境」与「预览版」角标，
+都是 dsh 的官方文案，只是文字、不含它的标识。
 
 ## 机器（容器宿主）
 

@@ -1,0 +1,24 @@
+{
+  "name": "@lingdong/dsh-brand",
+  "version": "1.0.0",
+  "private": true,
+  "description": "灵动ai 的学生端品牌：占住侧边栏的品牌插槽，替换 DSH 官方那个鲸鱼标与字标",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
+    }
+  }
+}

@@ -36,6 +36,12 @@ RUN sed -i 's/\r$//' /usr/local/bin/dsh-student-entrypoint \
 
 ENV DSH_HOME=/home/student/.dsh
 # ---------------------------------------------------------------------------
+# 品牌图与品牌包（真正的字符串替换在最后一步，等所有插件都装完）
+COPY assets/lingdong-ai-logo-480.png /opt/brand-plugin/logo.png
+COPY brand-plugin/ /opt/brand-plugin/
+COPY rebrand.mjs /opt/rebrand.mjs
+COPY plugin-shims.mjs /opt/plugin-shims.mjs
+# ---------------------------------------------------------------------------
 # 社区插件 + dsh-desktop 的 PPT 预设（用户指定；**全部固定版本**，不用 latest）
 #
 # `dsh plugin` 是个 pnpm 转发器，所以容器里要先有 pnpm。
@@ -51,6 +57,15 @@ ENV DSH_HOME=/home/student/.dsh
 # （实测踩到：插件一个没装，构建却"成功"）。所以这里显式装 pnpm，并且装完必须**断言**真的进了 profile。
 RUN npm install -g pnpm@10.17.0  && command -v pnpm  && npm config set registry https://registry.npmmirror.com  && dsh plugin --profile web add       "dsh-better-sidebar@${SIDEBAR_VERSION}"       "dsh-find-plugin@${FIND_PLUGIN_VERSION}"       "@liustack/modlens@${MODLENS_VERSION}"       "dsh-at-file@${AT_FILE_VERSION}"       "dsh-context@${CONTEXT_VERSION}"       "@linxin666/dsh-web-all@${DSH_WEB_ALL_VERSION}"  && for pkg in dsh-better-sidebar dsh-find-plugin @liustack/modlens dsh-at-file dsh-context @linxin666/dsh-web-all; do       grep -q "\"$pkg\"" "$DSH_HOME/profiles/web/package.json" || { echo "插件 $pkg 没有装进 profile" >&2; exit 1; };     done
 
+# 品牌包安装（**必须在 PPT 那一步之前**：`dsh plugin add` 会按已装包重算
+# `dsh.profile.bundles`，而 PPT 那一步最后要把 `dsh-ppt` 从 bundles 里摘掉；顺序反了就会把
+# dsh-ppt 又加回去 → 与 composer 抢注册 `dsh-ppt-bundled` → 整棵插件树起不来，实测踩到）。
+# 另一个连带坑：`dsh plugin add` 交给 pnpm 干，容器里没装 pnpm 时它在这里是 **exit 127**
+# （和「打印提示却退出 0」那次表现不同，但一样是没装成）——所以这一步必须排在装 pnpm 之后。
+RUN node /opt/brand-plugin/build.mjs /opt/brand-plugin/logo.png \
+ && dsh plugin --profile web add /opt/brand-plugin \
+ && node -e "const j=require(process.env.DSH_HOME+'/profiles/web/package.json');if(!j.dsh.profile.bundles.includes('@lingdong/dsh-brand'))throw new Error('品牌包没进 bundles');console.log('品牌包已进 bundles');"
+
 # PPT 预设：dsh-desktop 以本地 tarball 分发（npm 上没有），按 commit 固定再装。
 # 走 jsDelivr 而不是 raw.githubusercontent —— 这台机器上 raw 域名实测连不上（curl 000），jsDelivr 正常。
 ARG DSH_DESKTOP_SHA=aca970834bce88d2ec14ec278b368f6f0d168d0a
@@ -64,6 +79,11 @@ ENV DSH_WORKSPACE=/home/student/workspace \
     DSH_PATCH=/etc/dsh/student-runtime.cordis.yml \
     GATEWAY_BASE_URL=http://host.docker.internal:8789/api/gateway/v1 \
     EDGE_PORT=8080
+# 品牌最后一步（**必须在所有插件装完之后**，否则第三方 bundle 里的品牌串会漏）：
+# 换掉品牌串、标题、favicon、manifest；再给第三方插件打兼容性小补丁；品牌图用完就删。
+RUN node /opt/rebrand.mjs /opt/brand-plugin/logo.png \
+ && node /opt/plugin-shims.mjs \
+ && rm -f /opt/brand-plugin/logo.png
 # 工作目录 + 预置「开发者内测声明已读」
 # 那个弹窗是 DSH 面向 Harness 开发者的公告（客户端读 ui-onboarding.welcomeNoticeVersion
 # 与服务端公告版本比较，不相等就弹），孩子不该看到，而且它会挡住界面（实测不点「继续」就用不了）。

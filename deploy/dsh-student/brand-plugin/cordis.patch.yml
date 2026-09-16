@@ -1,0 +1,8 @@
+# 品牌层：把侧边栏的品牌插槽交给灵动ai 自己的组件。
+#
+# 为什么用「插槽」而不是改 dsh 的代码：侧边栏的品牌位本来就是官方留出来的扩展点
+# （`sidebar.brand.mark` / `sidebar.brand.name`，官方包 @deepseek-ai/dsh-client-ui-brand-official
+# 只是它的一个占用者）。我们关掉官方那一行、注册自己的组件，dsh 升级也不会跟丢。
+- insert:
+    - id: lingdong-brand
+      name: '@lingdong/dsh-brand'
