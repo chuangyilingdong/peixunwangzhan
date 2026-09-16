@@ -346,8 +346,19 @@ dsh 侧用 `llm-pi-ai` 的 hand-declared gateway 指向我们新加的 OpenAI �
 2. **算力记账**：走 SDK 的 `session.event`。事件流里有 `assistant/message.usage`（token 计数）、`tool/call`、`tool/result`；
    原文「usage ... so the model output and its accounting travel together」。**注意 SDK 没有「本次 prompt 的结果」**——
    只能按 `turn/start`/`turn/end`/`step/*` 自己切区间，不能靠 `prompt()` 的返回值。
-3. **按产物提交**：用 `deliverables/presented` 事件拿产物路径清单，再走我们现有的 `/submit`
-   （`(conversation_id, entry_file)` 唯一、版权确认、只允许网页/PPT/Word/Excel 那套规则不变）。
+3. **按产物提交**：~~用 `deliverables/presented` 事件拿产物路径清单，再走我们现有的 `/submit`
+   （`(conversation_id, entry_file)` 唯一、版权确认、只允许网页/PPT/Word/Excel 那套规则不变）。~~
+
+   > **⚠️ 订正（2026-09-16 第三轮，实测）**：上面这条里有两处不成立，实现时已按实测改：
+   > ① **产物清单不以 `deliverables/presented` 为准** —— 那个事件只记路径、不复制内容，
+   >    还依赖模型记得调 `present` 工具；**真相是学生的工作区**（dsh 的 PPT 插件做完演示文稿
+   >    也会把成品 `.pptx` 发布到工作区里的 `<标题>/` 目录，实测代码路径）。
+   >    所以做成了宿主侧脚本枚举工作区（`deploy/dsh-student/host-user/collect-student*.{sh,mjs}`）。
+   > ② **「那套规则不变」只对网页作品成立** —— 现有链路把 `files` 当**文本规格**存、
+   >    下载时现场渲染，装不下真二进制 `.pptx`；而且现有链路只认**同层扁平文件名**，
+   >    而 dsh 的作品常带子目录（所以要拍平 + 改写引用）。
+   >    落库规则（表、列、版权确认、`(conversation_id, entry_file)` 唯一）确实照旧，
+   >    二进制产物的收纳与展示**待定口径**。详见 `新对话交接-dsh迁移-20260916-第三轮.md` 第三节。
 
 ### 8.5 品牌与许可
 

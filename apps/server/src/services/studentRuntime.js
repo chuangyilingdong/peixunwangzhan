@@ -23,6 +23,10 @@ import { issueRuntimeKey, assertRuntimeClassroomActive } from '../routes/runtime
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 const LAUNCH_TIMEOUT_MS = 90 * 1000;
 const STOP_TIMEOUT_MS = 30 * 1000;
+const COLLECT_TIMEOUT_MS = 60 * 1000;
+// 取产物要把文件内容整份带回来（二进制走 base64 后还会涨三分之一），默认那 1MB 的 stdout 上限
+// 根本不够。与宿主侧 collect-student.mjs 的 MAX_TOTAL_BYTES（48MB）配套：48MB 的 base64 约 64MB。
+const COLLECT_MAX_BUFFER = 96 * 1024 * 1024;
 const NAME_PREFIX = 'dsh-s-';
 
 function config() {
@@ -43,6 +47,9 @@ function config() {
     // 所以脚本直接给完整 EDGE_URL，这里留空即表示「用脚本给的地址」。
     edgeBase: String(process.env.DSH_RUNTIME_EDGE_BASE || '').trim(),
     visionModel: String(process.env.DSH_RUNTIME_VISION_MODEL || 'platform-vision').trim(),
+    // 取产物（学生点「提交作品」时用）：列清单与取回一份，都是同一个脚本的两个子命令。
+    collectScript: String(process.env.DSH_RUNTIME_COLLECT_SCRIPT
+      || (mode === 'container' ? '/opt/dsh-host/collect-student-container.sh' : '/opt/dsh-host-user/collect-student-user.sh')).trim(),
   };
 }
 
@@ -60,12 +67,11 @@ function useSudo() {
   return String(process.env.DSH_RUNTIME_SUDO || (cfg.mode === 'user' ? 'true' : 'false')) !== 'false';
 }
 
-function runScript(script, args, timeout) {
-  const cfg = config();
+function runScript(script, args, { timeout, maxBuffer = 1024 * 1024 } = {}) {
   const command = useSudo() ? 'sudo' : 'bash';
   const argv = useSudo() ? ['-n', script, ...args] : [script, ...args];
   return new Promise((resolve, reject) => {
-    execFile(command, argv, { timeout, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(command, argv, { timeout, maxBuffer }, (error, stdout, stderr) => {
       if (error) {
         // sudo 没有权限时会给出很干的报错，这里补一句人能看懂的
         const detail = /sudo/i.test(String(error.message)) && /password|not allowed|no tty/i.test(String(stderr))
@@ -77,6 +83,78 @@ function runScript(script, args, timeout) {
       resolve(String(stdout || ''));
     });
   });
+}
+
+/**
+ * 宿主脚本约定的输出：**stdout 一行 JSON**，告警与错误走 stderr。
+ * 解析不出来就报错（而不是返回一个空清单让界面显示「你没有作品」—— 那是在骗人）。
+ */
+function parseScriptJson(stdout, what) {
+  const text = String(stdout || '').trim();
+  const lastLine = text.split('\n').filter((line) => line.trim().startsWith('{')).pop();
+  if (!lastLine) throw Object.assign(new Error(`宿主脚本没有输出 JSON（${what}）：${text.slice(0, 200)}`), { code: 'RUNTIME_HOST_SCRIPT_OUTPUT_INVALID' });
+  try {
+    return JSON.parse(lastLine);
+  } catch {
+    throw Object.assign(new Error(`宿主脚本输出的 JSON 解析失败（${what}）：${lastLine.slice(0, 200)}`), { code: 'RUNTIME_HOST_SCRIPT_OUTPUT_INVALID' });
+  }
+}
+
+/**
+ * 这个学生现在能提交哪些作品 —— 读他创作环境的工作区。
+ *
+ * 产物在哪是**实测出来的**，不是按文档推的（2026-09-16）：dsh 的 PPT 插件做完演示文稿会把
+ * 成果发布到工作区里（以标题命名的目录，含 PPTD 工程与成品 .pptx），网页作品也落在工作区，
+ * 所以「枚举工作区」对这两类都成立。会话日志里的 `deliverables/presented` 只记路径、不复制内容，
+ * 还依赖模型记得调 present 工具，所以**不拿它当唯一真相**。
+ */
+export async function listStudentDeliverables({ sessionId, studentId, orgId, lessonId = null }) {
+  const cfg = config();
+  assertCollectable({ sessionId, studentId, orgId, lessonId });
+  const stdout = await runScript(cfg.collectScript, ['--session', sessionId, '--student', studentId, '--list'], {
+    timeout: COLLECT_TIMEOUT_MS, maxBuffer: COLLECT_MAX_BUFFER,
+  });
+  const parsed = parseScriptJson(stdout, '列产物');
+  return {
+    workspace: parsed.workspace || null,
+    truncated: Boolean(parsed.truncated),
+    deliverables: Array.isArray(parsed.deliverables) ? parsed.deliverables : [],
+    // 超限/符号链接这类「看到了但不能给你」的东西也如实下发，界面才能说清为什么少了一份
+    skipped: Array.isArray(parsed.skipped) ? parsed.skipped : [],
+  };
+}
+
+/**
+ * 取回一份产物：它自己 + 它引用的本地素材。
+ * @returns {Promise<{name: string, kind: string, files: Array<{name, encoding, content, bytes, binary, sha256}>, missing: string[], totalBytes: number}>}
+ */
+export async function collectStudentDeliverable({ sessionId, studentId, orgId, lessonId = null, name }) {
+  const cfg = config();
+  assertCollectable({ sessionId, studentId, orgId, lessonId });
+  const wanted = String(name || '').trim();
+  if (!wanted) throw errors.badRequest('要取哪一份产物得说出来', 'RUNTIME_DELIVERABLE_REQUIRED');
+  const stdout = await runScript(cfg.collectScript, ['--session', sessionId, '--student', studentId, '--export', wanted], {
+    timeout: COLLECT_TIMEOUT_MS, maxBuffer: COLLECT_MAX_BUFFER,
+  });
+  const collected = parseScriptJson(stdout, '取产物');
+  if (!Array.isArray(collected.files) || !collected.files.length) {
+    throw errors.conflict('这份产物取回来是空的', 'RUNTIME_DELIVERABLE_EMPTY');
+  }
+  return collected;
+}
+
+/** 列产物/取产物共用的前置：脚本在不在 + 门禁（与开盒子、调模型同一套）。 */
+function assertCollectable({ sessionId, studentId, orgId, lessonId }) {
+  const cfg = config();
+  if (!cfg.enabled) throw errors.conflict('学生创作环境未启用', 'RUNTIME_LAUNCH_UNAVAILABLE');
+  if (!existsSync(cfg.collectScript)) {
+    throw errors.conflict(`这台机器还不能取学生的作品：宿主脚本不在（${cfg.collectScript}）`, 'RUNTIME_LAUNCH_UNAVAILABLE');
+  }
+  const student = row('SELECT id,org_id FROM users WHERE id=?', [studentId]);
+  if (!student || student.org_id !== orgId) throw errors.forbidden('学生不属于该机构', 'RUNTIME_STUDENT_INVALID');
+  // 门禁：课堂 ACTIVE + 学生在名单里。下课之后连「取作品」都不给 —— 作品靠宿主侧的留存兜底
+  // （收环境前会先留一份，见 stop-student-user.sh），不靠让学生继续访问已经收掉的环境。
+  return assertRuntimeClassroomActive({ o: orgId, u: studentId, s: sessionId, l: lessonId });
 }
 
 function parseLaunchOutput(stdout) {
@@ -128,7 +206,7 @@ export async function launchStudentRuntime({ sessionId, studentId, orgId, lesson
   // 容器版可以指定容器名；用户版的用户名是**由课堂+学生确定性推导**的（停课时要能算回来），
   // 所以那一边不接受 --name（传了会报「不认识的参数」）。
   if (cfg.mode === 'container') launchArgs.push('--name', containerNameFor(sessionId, studentId));
-  const stdout = await runScript(cfg.launchScript, launchArgs, LAUNCH_TIMEOUT_MS);
+  const stdout = await runScript(cfg.launchScript, launchArgs, { timeout: LAUNCH_TIMEOUT_MS });
   const { containerName, hostPort } = parseLaunchOutput(stdout);
 
   // 入口地址：宿主脚本给的 EDGE_URL 是**完整地址**（用户版是 https://域名:端口，容器版由 nginx 前缀转发），
@@ -160,6 +238,6 @@ export async function stopStudentRuntime({ sessionId = '', studentId = '', conta
   const stopArgs = cfg.mode === 'container'
     ? (containerName ? ['--name', containerName] : sessionId ? ['--session', sessionId] : ['--student', studentId])
     : ['--session', sessionId || '-', '--student', studentId || '-'];
-  const stdout = await runScript(cfg.stopScript, stopArgs, STOP_TIMEOUT_MS);
+  const stdout = await runScript(cfg.stopScript, stopArgs, { timeout: STOP_TIMEOUT_MS });
   return { output: stdout.trim().split('\n').slice(-5) };
 }

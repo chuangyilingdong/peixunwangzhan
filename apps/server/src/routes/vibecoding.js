@@ -1186,6 +1186,103 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   return null;
 }
 
+/**
+ * 把文本产物里**指向某个本地素材**的引用改写成给定地址（学生创作环境的作品回传用）。
+ *
+ * 为什么不能直接做全局字符串替换：正文里随便一句提到 `hero.png` 也会被改掉。
+ * 所以只动我们认得的引用写法 —— 与 `localArtifactReferences` 同一套规则，
+ * 两处要一起改（否则「扫得到、改不到」，作品在广场上会丢图而两边都不报错）。
+ *
+ * @param {string} content 文本产物正文
+ * @param {string} name 产物名（决定按 HTML 还是 CSS 的写法扫）
+ * @param {Map<string,string>} replacements 本地素材名 → 替换成的地址
+ */
+export function rewriteLocalReferences(content, name, replacements) {
+  const kind = kindForName(name);
+  const rewrite = (raw) => {
+    const clean = normalizeLocalReference(raw);
+    if (!clean) return raw;
+    const target = replacements.get(clean);
+    return target === undefined ? raw : target;
+  };
+  let text = String(content ?? '');
+  if (kind === 'html' || kind === 'svg') {
+    text = text.replace(/(\b(?:src|href)\s*=\s*["'])([^"']+)(["'])/gi, (whole, head, value, tail) => head + rewrite(value) + tail);
+  }
+  if (kind === 'html' || kind === 'css' || kind === 'svg') {
+    text = text.replace(/(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi, (whole, head, value, tail) => head + rewrite(value) + tail);
+  }
+  return text;
+}
+
+/**
+ * 给「不是平台内沙箱产出」的作品写一条提交记录（学生自己的创作环境 = dsh，2026-09-16）。
+ *
+ * 为什么复用这张表：作品广场、平台发布/下架、机构查看、老师端读的全是 `vibecoding_submissions`。
+ * dsh 的作品只是**怎么产出的**不一样，交上来之后要走的还是同一条链路 —— 所以不另起一张表，
+ * 也就不会出现「两边各有一套提交、广场只认一套」的分叉。
+ *
+ * 与会话提交（上面的 /submit）只有两处不同，别的都一样：
+ *   · 产物不是从 `vibecoding_artifacts` 里取的，而是宿主侧从学生工作区取回来、调用方传进来的
+ *     —— 它就是**提交这一刻要定格的快照**（学生之后再改工作区，广场上那一版不受影响）；
+ *   · 没有平台内的聊天记录，所以 transcript 是空的。
+ * 规则保持一致：入口只允许网页/PPT/Word/Excel、必须确认版权、重复提交是覆盖（round+1）。
+ *
+ * @param {{ctx: object, auth: object, conversation: object, entryFile: string,
+ *          files: Record<string,string>, artifacts: Array<object>, title: string, description?: string}} input
+ */
+export function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, files, artifacts, title, description = '' }) {
+  const now = nowIso();
+  const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
+  const submissionId = existing?.id || id('vibesub');
+  const transcript = json([]);
+  transaction(() => {
+    if (existing) {
+      q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
+           teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
+           copyright_confirmed_at=?,copyright_confirmed_by=?,is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
+           featured_at=NULL,unpublish_reason=NULL WHERE id=?`,
+        [title, description, json(files), json(artifacts), transcript, entryFile, now, now, now, auth.user.id, submissionId]);
+    } else {
+      q(`INSERT INTO vibecoding_submissions(
+           id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
+           copyright_confirmed_at,copyright_confirmed_by
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [submissionId, conversation.id, auth.user.id, auth.user.orgId, conversation.class_id || null, conversation.lesson_id || null,
+          title, description, json(files), json(artifacts), transcript, entryFile, 1, 'PENDING', now, now, now, now, auth.user.id]);
+    }
+    q("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
+    audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id,
+      existing ? { round: existing.round } : null,
+      { title, entryFile, round: Number(existing?.round || 0) + 1, source: 'STUDENT_RUNTIME' });
+  });
+  return normalizeSubmission(row(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
+}
+
+/**
+ * 这个学生在这节课上的「创作会话」身份 —— dsh 那条路没有平台内的聊天，
+ * 但提交记录必须挂在一条会话上（表结构如此：conversation_id NOT NULL + 外键），
+ * 作品广场也按「会话 × 产物」去重。所以按「学生 + 课 + 本次课堂」找一条现成的，
+ * 没有就建一条（与老 /conversations 的查询同一套键，两处不会各建各的）。
+ */
+export function ensureRuntimeConversation({ auth, lessonId, classSessionId, classId = null, title }) {
+  const existing = row(
+    'SELECT * FROM vibecoding_conversations WHERE student_id=? AND org_id=? AND lesson_id=? AND class_session_id=? ORDER BY updated_at DESC LIMIT 1',
+    [auth.user.id, auth.user.orgId, lessonId, classSessionId],
+  );
+  if (existing) return existing;
+  const now = nowIso();
+  const conversationId = id('vibeconv');
+  transaction(() => {
+    q(`INSERT INTO vibecoding_conversations(
+         id,org_id,student_id,class_id,lesson_id,class_session_id,title,model,files,entry_file,status,last_message_at,created_at,updated_at
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [conversationId, auth.user.orgId, auth.user.id, classId, lessonId, classSessionId,
+        String(title || '创作环境').slice(0, 60), null, '{}', 'index.html', 'DRAFT', null, now, now]);
+  });
+  return row('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversationId]);
+}
+
 export async function handleVibeCoding(ctx) {
   const { pathname } = ctx;
   if (!pathname.startsWith('/api/student/vibecoding')) return null;

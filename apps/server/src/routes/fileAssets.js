@@ -367,6 +367,37 @@ export async function storeGeneratedAsset({ buffer, mimeType, fileName, ownerUse
   return { id: fileId, url: `/api/public/file-assets/${fileId}/download`, fileName: stored.fileName, mimeType: stored.mimeType, bytes: stored.fileSize, row: created };
 }
 
+/**
+ * 把学生作品里的一个二进制素材存成**私有**文件资产（2026-09-16 加）。
+ *
+ * 什么时候用：学生的创作环境（dsh）里做出的网页，图片是**工作区里的本地文件**（`hero.png`），
+ * 而我们的作品快照 `files` 只能装文本。所以把字节存成私有素材，再把 HTML 里的引用改写成
+ * 学生的私有下载地址 —— 与「学生在工作台里传图、模型用绝对地址引用」是同一套机制。
+ *
+ * 三个口径：
+ *   · `PRIVATE` + 属主是学生本人 —— 作品没发布之前不该有公网地址；
+ *   · proxy 路由必须是 `/api/student/file-assets/<id>/download`：作品发布时
+ *     `publicSnapshotFiles` 正是按这个前缀把它改写成作品专属的公开代理地址（前缀不一致就改写不到）；
+ *   · 仍走 `persistSecureUpload`（验扩展名/魔术字节/大小），所以生成物与学生手传的图共用一条路。
+ */
+export async function storeStudentArtifactAsset({ buffer, mimeType, fileName, ownerUserId, ownerOrgId = null, metadata = {} }) {
+  const stored = await persistSecureUpload({ fileName, mimeType, buffer });
+  const fileId = id('file');
+  const now = nowIso();
+  q(
+    `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [fileId, 'USER', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, stored.storageKey,
+      `/api/student/file-assets/${fileId}/download`, null, stored.fileName, stored.mimeType, stored.fileSize,
+      stored.checksum, 'GENERAL', 'PRIVATE', 'ACTIVE', 'NOT_REQUIRED', null,
+      json({ ...metadata, source: 'STUDENT_RUNTIME', security: stored.security }), ownerUserId, now, now],
+  );
+  return {
+    id: fileId,
+    url: `/api/student/file-assets/${fileId}/download`,
+    fileName: stored.fileName, mimeType: stored.mimeType, bytes: stored.fileSize,
+  };
+}
+
 export async function handleAdminFileAssets(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/admin/file-assets')) return null;

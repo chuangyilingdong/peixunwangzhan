@@ -51,9 +51,69 @@ bash run-student-user.sh --session <课堂id> --student <学生id> \
   --ticket <平台签发的短时票据>
 # 输出：RUNTIME_NAME= / HOST_PORT= / EDGE_URL=https://<域名>:<端口>/?t=<票据>
 
-# 收（课堂结束 / 移出名单 / 兜底）
+# 收（课堂结束 / 移出名单 / 兜底）—— 收之前会**先留住产物**，见下面「取回产物」
 bash stop-student-user.sh --session <课堂id> --student <学生id>
+
+# 取回产物：列清单 / 取一份 / 留存（平台调这个；root 或经窄 sudoers）
+bash collect-student-user.sh --session <课堂id> --student <学生id> --list
+bash collect-student-user.sh --session <课堂id> --student <学生id> --export mygame/index.html
+bash collect-student-user.sh --session <课堂id> --student <学生id> --preserve
 ```
+
+## 取回产物（2026-09-16 加，切学生入口前必需的那一段）
+
+dsh 把作品落在**学生自己的工作区**里，平台库里一份都没有 —— 学生点「提交作品」时，
+平台就是靠 `collect-student-user.sh` 把文件取回去的。脚本**只打印一行 JSON 到 stdout**
+（告警与错误走 stderr，失败退出码非 0 且带 `COLLECT_*` 错误码），平台直接 `JSON.parse`。
+
+三个子命令：
+
+| 子命令 | 干什么 | 输出 |
+|---|---|---|
+| `--list` | 走查工作区，列出**可以当作品交**的文件（网页/PPT/Word/Excel） | `{deliverables:[{name,kind,bytes,mtime,recommended}], skipped, truncated}` |
+| `--export <工作区相对路径>` | 取回一份：它自己 + 它引用的本地素材（递归） | `{name, origin, files:[{name,encoding,content,bytes,binary,sha256}], renamed, missing, warnings}` |
+| `--preserve` | 把当前所有产物**原样留一份**到工作区之外 | `{directory, saved}` |
+
+产物在哪、长什么样，是**实测**出来的（不是按文档推的）：
+
+- 网页作品就是工作区里的 `index.html` 之类；
+- **PPT 成品也在工作区里**：`dsh-ppt` 做完一份演示文稿走 `publishWorkspaceOutput()`，
+  在工作区建一个以标题命名的目录（第 2 版起 `<标题>-r2`），里面既有 PPTD 工程文件，
+  也有**成品 `.pptx`（真二进制）**；
+- 会话日志里的 `deliverables/presented` 事件**只记路径、不复制内容**，而且依赖模型记得调
+  `present` 工具 —— 所以**不拿它当唯一真相**（`present` 确实挂在默认的 `standard` preset 里，
+  这一点核实过，但产物本身以工作区为准）。
+
+三条硬约束（都在 `collect-student.mjs` 里，本机守卫 `scripts/p100` 有对抗性用例）：
+
+1. **只收工作区内部的普通文件**：`realpath` 之后必须仍在工作区内（挡 `../../etc/shadow`）；
+2. **拒收符号链接本身**（`lstat` 判定）—— 只看 `realpath` 会被链接指到工作区外面去；
+3. **单文件 24MB / 一次导出 48MB 上限**，超了进 `skipped`（`TOO_LARGE`）**明确报出来**，
+   不悄悄少给。
+
+另外，`--export` 会做一次**拍平**：现有作品链路只认同层文件名（服务端的产物名校验、
+公开下载口、前端预览三处都拒 `/`，2026-09-16 核实），所以 `mygame/index.html` +
+`mygame/assets/hero.png` 会被拍平成 `index.html` + `hero.png`，**并把 HTML 里的引用一起改写**，
+改名情况进 `renamed`/`warnings`。`--preserve` 不做拍平（留存件是底档，按原样留）。
+
+### 收环境前先留存
+
+`stop-student-user.sh` 现在第一步就是 `collect-student-user.sh --preserve`（留到
+`/srv/dsh-runtime/deliverables/<时间戳>/`，含 `INDEX.json` 与每份的 `MANIFEST.json`）。
+补这一步之前，「下课」等于**学生的作品直接消失** —— 没点过提交的那些就真没了。
+留存失败**不拦**收环境（否则一个坏脚本会让课堂永远收不掉），但会在 stderr 上吵一句。
+
+### sudoers 要加一行
+
+平台账号要能调第三个脚本（`/etc/sudoers.d/dsh-students`）：
+
+```
+ai-kids-prod ALL=(root) NOPASSWD: /opt/dsh-host-user/run-student-user.sh, /opt/dsh-host-user/stop-student-user.sh, /opt/dsh-host-user/collect-student-user.sh
+```
+
+⚠️ 加这一行之前先确认三个脚本 + `collect-student.mjs` 都是 **root 所有且平台账号不可写**
+（否则就是提权后门）。`collect-student-user.sh` 是会 `exec` 旁边的 `collect-student.mjs` 的，
+所以那个 `.mjs` 也要一起算进「root 所有、不可写」。
 
 平台侧开关（`/etc/ai-kids-platform/production.env`）：
 
