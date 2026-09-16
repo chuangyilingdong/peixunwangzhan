@@ -430,7 +430,10 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
   const closeDisabled = busy || Boolean(edit.uploadCount);
   return <dialog className="lesson-editor-dialog" ref={dialogRef} aria-labelledby="lesson-drawer-title" onCancel={(event) => { event.preventDefault(); if (!closeDisabled) onClose(); }} style={{ width: 'min(920px, 100vw)', maxWidth: '100vw', height: '100dvh', maxHeight: '100dvh', margin: '0 0 0 auto', padding: 0, border: 0 }}>
     <div className="drawer-panel" style={{ width: '100%', height: '100%', minWidth: 0 }}>
-      <style>{`.lesson-editor-dialog .lesson-canvas-config-editor{min-width:0;max-width:none;width:100%}.lesson-editor-dialog .lesson-config-row{flex-wrap:wrap}.lesson-editor-dialog .inline-file-upload input{display:block;max-width:100%}`}</style>
+      {/* 只保留抽屉里的宽度/换行修正。这里**不能**给 .inline-file-upload input 加 display:block：
+          它是 label 包住的隐藏文件域，露出来会在「上传图片」按钮旁边多一个原生的
+          「选择文件 / 未选择任何文件」。 */}
+      <style>{`.lesson-editor-dialog .lesson-canvas-config-editor{min-width:0;max-width:none;width:100%}.lesson-editor-dialog .lesson-config-row{flex-wrap:wrap}`}</style>
       <header className="drawer-head">
         <div><span className="eyebrow">课时配置</span><h2 id="lesson-drawer-title">{title || '未命名课时'}</h2></div>
         <button type="button" className="drawer-close" aria-label="关闭课时配置" disabled={closeDisabled} onClick={onClose}>×</button>
