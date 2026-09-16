@@ -24,10 +24,11 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-HEAD：2a3ce3298af7ba8528ba8acb213d9d5b3b64f403（已推送）
-生产：release 20260915T141240Z / commit 2a3ce32（服务 learning-platform-production @127.0.0.1:8789）
-      最近 SSH 只读确认：active/running、NRestarts=0、ExecMainStatus=0；本次文档修订未执行部署
-本地：课堂深度交互后续改动未提交、未部署，不属于上述生产版本
+HEAD：f02d3ee6833846bac97f05dde58aee8f6b6ab2c0（已推送）
+生产：release 20260916T035836Z / commit f02d3ee（服务 learning-platform-production @127.0.0.1:8789）
+      部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
+      /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
+      上一版（可回滚）：release 20260915T141240Z / commit 2a3ce32
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
@@ -35,10 +36,13 @@ HEAD：2a3ce3298af7ba8528ba8acb213d9d5b3b64f403（已推送）
 历史数据快照（非本次复核）：3 个已发布课包（含 2 个演示）+ 1 个草稿 + 9 个课堂 + 5 条学员许可 + 2 件学生作品
 ```
 
-**当前本地进展（不代表上线或完整验收）**：p96 / p78 / p66 / p69 已通过（Node 22，本机实测）；三端生产构建通过；
+**本轮课堂深度交互（已部署到上面的 release）**：p96 / p78 / p66 / p69 已通过（Node 22，本机实测）；三端生产构建通过；
 GUI（隔离库 `127.0.0.1:15175`，非生产数据）已走通：创建 → 改名 → 加人 → 移除的取消/确认 → 换课清空确认 → 重新加人 →
 同课程切环境保留名单 → 开始 → 上课中补加 → 结束/解散后只读；并实测了私有作品只读预览（画布快照图片与 Vibe 沙箱内
 `Add one` 计数 0→1、私有图片在沙箱内以 data 地址正常显示）。390px 下弹窗与表格可操作（名单表横向滚动）。
+生产上只读复核过：课堂列表/详情正常渲染，机构管理员打开**其他老师**的课堂显示「只读课堂：仅负责老师可以管理此课堂」且没有写操作入口。
+
+**仍未完成 / 不能标完成**：整个 MVP 与「1–7 阶段」改造仍未全量验收；CU 预留账本只接入部分 AI 链路，不是全闭环。
 
 **CU 实现边界**：CU 预留账本仅接入部分 AI 链路，尚非全闭环；旧摘要中“CU 全实现”类表述不代表当前实际能力。下文既往核验及梳理记录按历史时点理解，不作为本轮全量验收证据。
 
