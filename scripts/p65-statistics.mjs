@@ -118,13 +118,8 @@ try {
     ['newStudents', 'activeStudents', 'lessonCompletions'].every((key) => Boolean(stats.data?.meta?.metricDefinitions?.[key])),
     JSON.stringify(Object.keys(stats.data?.meta?.metricDefinitions || {})));
 
-  /* ⑤ B5（2026-09-13）：官网转化漏斗并入统计板块，且与「转化分析」同源 */
-  const site = stats.data?.site || {};
-  check('⑤ 统计接口里带上了官网漏斗（四步）', Array.isArray(site.funnel) && site.funnel.length === 4, JSON.stringify(site.funnel));
-  check('⑤ 漏斗步骤名与「转化分析」一致（同一份实现）',
-    ['page_view', 'marketplace_view', 'marketplace_detail_view', 'demo_submitted'].every((name) => (site.funnel || []).some((item) => item.eventName === name)),
-    JSON.stringify((site.funnel || []).map((item) => item.eventName)));
-  check('⑤ 漏斗口径在口径表里写明（含「与统计板块同一个实现」）', Boolean(stats.data?.meta?.metricDefinitions?.['site.funnel']));
+  /* ⑤ 官网转化漏斗已于 2026-09-16 整体下线（用户要求彻底删除）：统计接口不再带 site 字段 */
+  check('⑤ 统计接口不再返回官网漏斗', stats.data?.site === undefined, JSON.stringify(stats.data?.site));
 
   /* ⑥ 2026-09-13：机构 → 学员 消耗下钻（用户要的「平台能看到所有机构和下面学生的消耗」） */
   const drill = await api('/api/admin/billing/org-student-usage?days=30', { token: admin });
@@ -147,10 +142,14 @@ try {
   const studentForbidden = await api('/api/admin/billing/org-student-usage?days=30', { token: studentToken });
   check('⑥ 学生不能看全平台机构的消耗（403）', studentForbidden.status === 403, `实际 ${studentForbidden.status}`);
 
-  const funnelEndpoint = await api('/api/admin/analytics/overview', { token: admin });
-  check('⑤ 转化分析接口仍可用，且与统计看板同一批步骤',
-    funnelEndpoint.status === 200 && JSON.stringify(funnelEndpoint.data?.funnel?.map((item) => item.eventName)) === JSON.stringify((site.funnel || []).map((item) => item.eventName)),
-    JSON.stringify(funnelEndpoint.data?.funnel?.map((item) => item.eventName)));
+  // 官网匿名转化分析已整体下线（2026-09-16，用户要求彻底删除）：前端不再上报、服务端不再接收与展示，
+  // 所以这里断言的是「确实没有了」——端点 404、看板 payload 不带 site，而不是「还能读到空漏斗」。
+  const retired = await api('/api/admin/analytics/overview', { token: admin });
+  check('⑤ 官网转化接口已下线（404），不再有匿名事件入口', retired.status === 404, `实际 ${retired.status}`);
+  const dashboardPayload = await api('/api/admin/dashboard/overview?days=30', { token: admin });
+  check('⑤ 运营总览不再返回 site 字段（历史上报数据只留在 analytics_events 表里）',
+    dashboardPayload.status === 200 && dashboardPayload.data?.site === undefined,
+    JSON.stringify(dashboardPayload.data?.site));
 
   console.log(JSON.stringify({ name: 'statistics', pass: failures === 0, failures }, null, 2));
 } catch (error) {

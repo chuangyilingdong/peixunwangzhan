@@ -14,7 +14,6 @@ import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, ha
 // 2026-09-13（P4 删积分）：adminCredits.js / websiteCredits.js 两个路由文件已删除（积分体系下线）。
 import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handleVibeCoding } from './routes/vibecoding.js';
-import { handlePublicAnalytics, handleAdminAnalytics } from './routes/analytics.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
 
@@ -96,9 +95,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const data = await handlePublicAnalytics(ctx)
-      ?? await handleAdminAnalytics(ctx)
-      ?? await handlePublicCommunication(ctx)
+    const data = await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)
       ?? await handleAuth(ctx)
       ?? await handleAdmin(ctx)
@@ -107,7 +104,8 @@ const server = http.createServer(async (req, res) => {
       ?? await handleAdminBillingConfig(ctx)
       ?? await handleOrg(ctx)
       ?? await handleOrgCommunication(ctx)
-      ?? await handleOrgFileAssets(ctx)      ?? await handleStudentCommunication(ctx)
+      ?? await handleOrgFileAssets(ctx)
+      ?? await handleStudentCommunication(ctx)
       ?? await handleStudentFileAssets(ctx)
       ?? await handleStudentBillingConfig(ctx)
       ?? await handleVibeCoding(ctx)

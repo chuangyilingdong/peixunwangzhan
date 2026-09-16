@@ -42,7 +42,8 @@ try {
     ['ADMIN_WORKS', '/api/admin/works'],
     ['ADMIN_BILLING', '/api/admin/billing/usage-overview'],
     ['ADMIN_CONTENT', '/api/admin/inbox'],
-    ['ADMIN_ANALYTICS', '/api/admin/analytics/overview'],
+    // 官网匿名统计已整体下线（2026-09-16）：ADMIN_ANALYTICS 这个域现在由工作台/总览接口代表。
+    ['ADMIN_ANALYTICS', '/api/admin/dashboard'],
     ['ADMIN_AUDIT', '/api/admin/audit-logs'],
   ];
   for (const [permission, pathname] of domains) {

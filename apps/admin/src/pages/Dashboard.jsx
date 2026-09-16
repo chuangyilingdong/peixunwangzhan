@@ -19,8 +19,6 @@ export function Dashboard({ api }) {
   // 统计三层：经营（metrics）/ 算力（compute，单位元）/ 内容（content）
   const compute = data?.compute || { totalYuan: 0, calls: 0, successCalls: 0, byModality: [], pools: { counted: 0, nearLimit: 0, exhausted: 0, unlimited: 0, usedYuan: 0 }, topStudents: [] };
   const content = data?.content || { lessonHot: [], submittedWorks: 0, onPlaza: 0, featured: 0, unpublished: 0, lessonsPublished: 0 };
-  // B5：官网转化漏斗并入统计板块（与「转化分析」同一个后端实现，口径只此一处）
-  const site = data?.site || { totals: { events: 0, visitors: 0 }, funnel: [], byEvent: [], retentionDays: 0 };
   const yuan = (value) => `¥${Number(value || 0).toFixed(2)}`;
   const definition = (key) => definitions[key] || '';
   return <>
@@ -69,17 +67,6 @@ export function Dashboard({ api }) {
           </tbody></table></div>
         </Panel>
       </div>
-      <Panel title="官网转化（第一方匿名分析）">
-        <div className="muted" style={{ marginBottom: 8 }}>
-          区间内匿名事件 {site.totals?.events || 0} 条 · 去重访客 {site.totals?.visitors || 0} 人 ·
-          数据保留 {site.retentionDays || 90} 天。不含 IP / 姓名 / 电话。
-          ⚠️ 官网同意弹窗已下线（2026-09-16）：没有入口写「已同意」，所以不会产生新事件，下面是历史数据。
-        </div>
-        <div className="table-wrap"><table><thead><tr><th>步骤</th><th>匿名访客</th><th>事件数</th><th>较上一步</th></tr></thead><tbody>
-          {site.funnel?.length ? site.funnel.map((item) => <tr key={item.eventName}><td><strong>{item.label}</strong><div className="muted">{item.eventName}</div></td><td>{item.visitors}</td><td>{item.events}</td><td>{item.rateFromPrevious == null ? '—' : `${item.rateFromPrevious}%`}</td></tr>) : <tr><td colSpan={4}>所选区间暂无已同意的分析事件</td></tr>}
-        </tbody></table></div>
-        {site.byEvent?.length ? <div className="top-gap"><h4>事件明细</h4><div className="table-wrap"><table><thead><tr><th>事件</th><th>匿名访客</th><th>次数</th></tr></thead><tbody>{site.byEvent.map((item) => <tr key={item.eventName}><td>{item.eventName}</td><td>{item.visitors}</td><td>{item.events}</td></tr>)}</tbody></table></div></div> : null}
-      </Panel>
       <details className="admin-detail"><summary>查看统计口径</summary><Panel title="统计口径"><div className="table-wrap"><table><thead><tr><th>指标</th><th>口径说明</th></tr></thead><tbody>{Object.entries(definitions).map(([key, text]) => <tr key={key}><td>{key}</td><td>{text}</td></tr>)}</tbody></table></div></Panel></details>
     </>}
   </>;

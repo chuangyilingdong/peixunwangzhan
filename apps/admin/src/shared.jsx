@@ -51,7 +51,7 @@ export const ADMIN_PERMISSION_LABELS = {
   ADMIN_WORKS: '作品与内容审核',
   ADMIN_BILLING: '模型与算力',
   ADMIN_CONTENT: '通知、物料与官网内容',
-  ADMIN_ANALYTICS: '平台概览（含官网转化）',
+  ADMIN_ANALYTICS: '平台概览与统计',
   ADMIN_AUDIT: '平台管理员与操作审计',
 };
 

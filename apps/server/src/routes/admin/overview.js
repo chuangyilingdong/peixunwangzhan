@@ -11,7 +11,6 @@ import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
-import { analyticsOverview } from '../analytics.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
@@ -251,19 +250,9 @@ export async function handleOverview(ctx, part, method) {
     const newStudents = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND created_at>=? AND created_at<?`, [...usersParams, since, until]);
     const activeStudents = singleNumber("SELECT COUNT(DISTINCT student_id) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?", [orgFilter, orgFilter, since, until]);
     const lessonCompletions = singleNumber(`SELECT COUNT(*) n FROM session_students progress JOIN class_sessions classroom ON classroom.id=progress.session_id WHERE (?='' OR classroom.org_id=?) AND progress.status='COMPLETED' AND progress.completed_at>=? AND progress.completed_at<?`, [orgFilter, orgFilter, since, until]);
-    // B5 官网转化漏斗并进统计板块：**复用** analyticsOverview（与「转化分析」同一个实现，口径只此一处）
-    // B5 官网转化漏斗并进统计板块：**复用** analyticsOverview（与「转化分析」同一个实现，口径只此一处）。
-    // ⚠️ 它收的是 URLSearchParams（内部用 search.get）：传普通对象会当场 TypeError ——
-    //    所以下面 catch 里必须打日志，静默降级成空漏斗正是交接说明里那类最难查的失败。
-    const siteFunnel = (() => {
-      try {
-        const report = analyticsOverview(new URLSearchParams({ from: since, to: until }));
-        return { totals: report.totals, funnel: report.funnel, byEvent: report.byEvent, retentionDays: report.retentionDays };
-      } catch (error) {
-        console.error('[DASHBOARD SITE FUNNEL] 官网漏斗读取失败，本次按空漏斗返回：', error?.message || error);
-        return { totals: { events: 0, visitors: 0 }, funnel: [], byEvent: [], retentionDays: 0 };
-      }
-    })();
+    // 官网匿名转化漏斗已随该功能整体下线（2026-09-16，用户要求彻底删除）：
+    // 前端不再上报、服务端不再接收，这里也就不再返回 site 字段。
+    // analytics_events 表与历史数据保留（本仓库惯例：删代码不删表），需要时可查库回溯。
     const usage = scoped('usage_records');
     const usageTotal = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where}`, usage.params);
     const usageSuccess = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='SUCCESS'`, usage.params);
@@ -329,7 +318,6 @@ export async function handleOverview(ctx, part, method) {
         aiTasks, abnormalTasks, usageCalls: usageTotal, successfulCalls: usageSuccess, failedCalls: usageFailed, blockedCalls: usageBlocked,
         newStudents, activeStudents, lessonCompletions,
       },
-      site: siteFunnel,
       byOrg, byModality,
       compute: {
         totalYuan: null, knownCostYuan: Number((Number(computeTotals?.fen || 0) / 100).toFixed(2)), costBasis: 'KNOWN_UPSTREAM_ONLY',
@@ -359,7 +347,6 @@ export async function handleOverview(ctx, part, method) {
           newStudents: '查询时间内新建的学生账号（deleted_at IS NULL，含已停用）。',
           activeStudents: '查询时间内创建过项目的学生数（按学生去重）。',
           lessonCompletions: '查询时间内有成功使用证据的课堂参与完课人数（按场次）。',
-          'site.funnel': '官网转化漏斗（第一方匿名埋点，仅在访客同意后记录）：访客 → 课程广场 → 课程详情 → 提交预约；与统计板块同一个实现。',
           'site.totals': '区间内匿名事件总量与去重访客数。',
           'byOrg': '按机构统计的算力消耗（分）与调用次数 Top 10。',
           'byModality': '按模态统计的算力消耗（分）与调用次数；含视频与音乐。',
