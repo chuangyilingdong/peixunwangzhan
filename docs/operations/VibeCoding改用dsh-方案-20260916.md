@@ -62,6 +62,36 @@ POST /api/student/vibecoding/conversations/:id/messages
 
 → 需要一台**新机器**（建议 4–8 vCPU / 8–16GB / 装 Docker），或者至少先把原型跑在本机 Docker 里。
 
+### 4.1 dsh 自带的沙箱管不住「读」——这是必须容器的真正原因（2026-09-16 实测）
+
+dsh **自带内核级沙箱**，不用容器也能拦住一部分乱来：`dsh-sandbox-local` 会调 Linux 的
+Landlock（`landlock-run` 二进制，镜像里就有），或更强一档的 bubblewrap。实测（我们容器里）：
+
+- `landlock-run --probe` → `partially enforced (older ABI)`（内核在真强制，只是 ABI 较旧）；
+- 沙箱里写工作区成功；**写 `/etc/pwned.txt` 被内核拒绝**（`Permission denied`，文件确实没落盘）。
+
+但**它管不住「读」**，这是关键：它交给沙箱的授权是
+`readOnly: ["/"]`（`dsh-sandbox-local/lib/index.js:49`）——**整个磁盘设为可读，只锁写**。
+也就是说，如果两个学生共住一台机器（各自一个工作区目录），学生 A 的 AI 完全可以
+`cat` 到学生 B 的工作区，也能读到平台的生产数据库文件。Landlock 拦得住他改，拦不住他看。
+
+所以「学生之间互不可见」这件事**不能指望 dsh 的沙箱**，必须由我们提供的边界来决定：
+
+| 做法 | 学生 A 能读到 B 的东西吗 | 备注 |
+|---|---|---|
+| 容器（一人一个） | **不能**（各自的 mount namespace，看不到对方的文件） | 现在采用 |
+| 独立 Linux 用户 + 权限 | 部分能（同机文件系统仍互相可见，要靠权限面面俱到） | 折中方案，隔离弱一档 |
+| 同机同用户共住 | **能**（`readOnly: ["/"]`，直接 cat） | 不可接受 |
+
+另外两个容器才管得住、沙箱不管的：**资源上限**（一个学生死循环拖垮全班 —— 靠 cgroup
+`--memory/--cpus/--pids-limit`）与**收尾**（删容器＝会话+工作区+票据一起没）。
+
+**顺带一个可改进项**：我们镜像里**没装 bubblewrap**，而容器里装了也用不了
+（`bwrap: Creating new namespace failed: Operation not permitted`，被 Docker 默认 seccomp 挡）。
+想让 dsh 跑到它自己那档最强隔离，需要在镜像里装 bwrap **并**给容器放开创建 namespace 的权限
+（外层容器 + 内层内核沙箱，双保险）。这不是必须项（外层容器已经解决了「互不可见」），
+但能加厚一层，等主线做完再评估。
+
 ## 五、分期计划（每期都可独立验收，不一次性推翻线上）
 
 **阶段 0 — 隔离原型（本机 Docker，不碰生产库与生产密钥）**
