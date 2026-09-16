@@ -18,7 +18,11 @@ RUNTIME_KEY="${RUNTIME_KEY:-}"
 VISIBILITY_TIMEOUT="${VISIBILITY_TIMEOUT:-120}"
 NAME="dsh-smoke-$$"
 TICKET="smoke-ticket-$$"
-PORT="${PORT:-0}"   # 0 = 让 docker 随机挑一个
+# ⚠️ 变量名必须带前缀：`PORT` 这种大众名字会被宿主上的其他环境（比如平台自己的
+# `/etc/ai-kids-platform/production.env` 里就有 PORT=8789）污染，实测直接去抢平台的端口、
+# 报 "failed to bind host port 127.0.0.1:8789: address already in use"。
+# 0 = 让 docker 随机挑一个。
+SMOKE_HOST_PORT="${SMOKE_HOST_PORT:-0}"
 
 pass=0; fail=0
 ok() { echo "  ✓ $*"; pass=$((pass + 1)); }
@@ -34,7 +38,8 @@ echo "[smoke] ② 起一个容器，看入口闸门"
 docker rm -f "${NAME}" >/dev/null 2>&1 || true
 docker run -d --name "${NAME}" --label dsh.runtime=smoke \
   --memory 2g --cpus 2 --pids-limit 512 --tmpfs /tmp:rw,size=256m,exec \
-  --publish "127.0.0.1:${PORT}:8080" \
+  --add-host host.docker.internal:host-gateway \
+  --publish "127.0.0.1:${SMOKE_HOST_PORT}:8080" \
   -e "EDGE_TICKET=${TICKET}" \
   -e "GATEWAY_BASE_URL=${GATEWAY_URL:-http://127.0.0.1:1/api/gateway/v1}" \
   -e "PLATFORM_GATEWAY_KEY=${RUNTIME_KEY:-smoke-placeholder}" \

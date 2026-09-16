@@ -68,12 +68,16 @@ docker image inspect "${IMAGE_TAG}" >/dev/null 2>&1 || { echo "[run] 镜像 ${IM
 # 同名容器先清掉：同一个学生重进一节课时，旧容器要么已经死了、要么就是上一个残骸
 docker rm -f "${NAME}" >/dev/null 2>&1 || true
 
+# `--add-host host.docker.internal:host-gateway`：Linux 上没有 host.docker.internal 这个名字
+# （那是 Docker Desktop 给的），显式加一条别名，平台就可以把网关地址写成
+# http://host.docker.internal:8789/... 而不必关心宿主上跑的是什么。
 docker run -d --name "${NAME}" \
   --label dsh.runtime=student \
   --label "dsh.session=${SESSION}" \
   --label "dsh.student=${STUDENT}" \
   --memory "${CONTAINER_MEMORY}" --cpus "${CONTAINER_CPUS}" --pids-limit "${CONTAINER_PIDS}" \
   --tmpfs /tmp:rw,size=256m,exec \
+  --add-host host.docker.internal:host-gateway \
   --publish "${BIND_HOST}:${PORT}:8080" \
   -e "EDGE_TICKET=${TICKET}" \
   -e "GATEWAY_BASE_URL=${GATEWAY}" \
