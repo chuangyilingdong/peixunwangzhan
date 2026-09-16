@@ -13,6 +13,55 @@ import {
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
 import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
 
+/**
+ * 课堂结束 / 解散时，把这个课堂所有学生的**创作环境收掉**（2026-09-16）。
+ *
+ * 为什么必须在这里做：一个学生的创作环境（dsh）是**常驻进程**，生产实测 RSS 486MB
+ * （cgroup 峰值 643MB）。课堂结束不收，它就一直在机器上挂着 —— 这条以前完全没接线
+ * （`/api/student/runtime/stop` 前端从来没调用过，也没有任何定时任务），
+ * 结果是「今天有多少学生上过课」变成「机器上挂着多少个 500MB」，
+ * 一台 1.6GB 的机器**两个学生就满**。收掉之后，占用只跟「这一刻真的在上课的课堂」有关 ——
+ * 这才是「很多人同时上课」能成立的前提。
+ *
+ * 三条设计约束：
+ *   ① **绝不连累老师**：整个流程 fire-and-forget、逐人 try/catch，失败只打一行日志；
+ *      收环境失败绝不能让「结束课堂」这个动作失败或变慢。
+ *   ② 用户版按「课堂 + 学生」收（用户名由这两者哈希推导，宿主脚本自己算得回来），
+ *      所以这里逐人调，不能只给课堂。
+ *   ③ 用**动态 import** 引 stopStudentRuntime：路线文件之间没有静态环，
+ *      避免「一个 import 把整个服务拖成链接期错误」（这个项目踩过这类问题）。
+ */
+async function releaseSessionRuntimes(sessionId, reason = 'SESSION_END') {
+  let studentIds = [];
+  try {
+    studentIds = rows('SELECT DISTINCT student_id FROM session_students WHERE session_id=?', [sessionId]).map((item) => item.student_id);
+  } catch (error) {
+    console.warn(`[runtime] 收环境前读名单失败 session=${sessionId}：${error?.message || error}`);
+    return;
+  }
+  if (!studentIds.length) return;
+  let stopStudentRuntime = null;
+  try {
+    ({ stopStudentRuntime } = await import('../services/studentRuntime.js'));
+  } catch (error) {
+    console.warn(`[runtime] 收环境的通道不可用（${reason}）：${error?.message || error}`);
+    return;
+  }
+  let stopped = 0;
+  let lastError = '';
+  for (const studentId of studentIds) {
+    try {
+      await stopStudentRuntime({ sessionId, studentId });
+      stopped += 1;
+    } catch (error) {
+      // 「这个学生根本没开过环境」是最常见的正常情况，也会走到这里 —— 宿主的收环境脚本是幂等的
+      lastError = String(error?.message || error);
+    }
+  }
+  console.log(`[runtime] 课堂 ${sessionId} ${reason}：已回收 ${stopped}/${studentIds.length} 个学生环境${lastError ? `（最后一次未收原因：${lastError}）` : ''}`);
+}
+
+
 // 批次 D（班级退场）：原来这里还导入 classInOrg / assertTeachingClassManager / classMemberships /
 // teacherCanAccessClass / teacherScope / classSessionRows / classProgressRows / classDetail / curriculumItem
 // —— 那些都是班级口径的辅助函数，随 `/classes/*` 旧接口一起下线了。
@@ -754,6 +803,7 @@ export async function handleOrg(ctx) {
         return summary;
       });
       audit(ctx, 'SESSION_END', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'ENDED', ...settlement });
+      releaseSessionRuntimes(target.id, 'SESSION_END');
     } else {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以解散', 'SESSION_NOT_PENDING');
       transaction(() => {
@@ -763,6 +813,7 @@ export async function handleOrg(ctx) {
         q("UPDATE class_sessions SET status='DISSOLVED', ended_by=?, ended_at=?, ended_reason=?, updated_at=? WHERE id=?", [auth.user.id, now, reason || 'DISSOLVED', now, target.id]);
       });
       audit(ctx, 'SESSION_DISSOLVE', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'DISSOLVED' });
+      releaseSessionRuntimes(target.id, 'SESSION_DISSOLVE');
     }
     const updated = row(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title, teacher.display_name teacher_name
       FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
@@ -787,6 +838,8 @@ export async function handleOrg(ctx) {
     const target = sessionInOrg(sessionStudentMatch[1]);
     const result = removeSessionStudent({ session: target, studentId: sessionStudentMatch[2], actorId: auth.user.id, reason: String(ctx.body?.reason || '').trim().slice(0, 200) || null });
     audit(ctx, 'SESSION_STUDENT_REMOVE', 'CLASS_SESSION', target.id, null, { studentId: result.studentId });
+    // 被移出名单的学生：环境留着他也用不了（每次调用都会被门禁挡），但会一直占内存 —— 一并收掉。
+    releaseSessionRuntimes(target.id, 'SESSION_STUDENT_REMOVE');
     return result;
   }
 
