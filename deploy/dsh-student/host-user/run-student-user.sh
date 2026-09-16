@@ -53,6 +53,11 @@ done
 [ -n "${SESSION}" ] && [ -n "${STUDENT}" ] || { echo "[run] 必须给 --session 与 --student" >&2; exit 2; }
 [ -n "${KEY}" ] || { echo "[run] 必须给 --key（平台签发的运行时密钥）" >&2; exit 2; }
 [ -n "${GATEWAY}" ] || { echo "[run] 必须给 --gateway（我们的网关地址）" >&2; exit 2; }
+# ⚠️ 票据**必须非空**：下面那条 nginx 闸门是 `if ($ticket = "${TICKET}") { set $ok 1; }`，
+# 空票据会让闸门恒等成立 —— 等于这个学生的入口对**任何知道端口的人**开放（实测过：
+# 配置被写坏成空票据时就是这个后果）。平台侧一定给票据（24 字节随机），
+# 所以这里只在「调用方漏传」时兜底，宁可直接失败也不要写出一个没锁的入口。
+[ -n "${TICKET}" ] || { echo "[run] 必须给 --ticket（入口闸门的票据，空票据等于不锁门）" >&2; exit 2; }
 [ -x "$DSH_NODE" ] || { echo "[run] 运行时不在：$DSH_NODE（先跑 provision-user-runtime.sh）" >&2; exit 4; }
 
 # 用户名：只留小写字母数字与连字符，且**由课堂+学生确定性推导**（停的时候要能算回来）
@@ -68,6 +73,53 @@ port_in_use() {
   ss -tln 2>/dev/null | grep -q ":$1 " && return 0
   return 1
 }
+
+# ---------------------------------------------------------------------------
+# 复用优先（2026-09-16 晚加入）
+#
+# 学生点「进入创作环境」→ 平台 → 这个脚本。以前这里是无条件「停掉 + 冷启动」，
+# 而 dsh 冷启动要十几秒：学生刷新一下、老师再点一次、或者学生掉线重进，
+# 都要白等一遍（用户口径：「应该秒进才对」）。
+#
+# 环境其实**还活着**的时候，只要换一张票据就行 —— dsh 的 token 还在日志里，
+# 票据只是 nginx 那一段配置，重写 + reload 是秒级的。
+#
+# 复用条件（任一不满足就老实冷启动）：
+#   ① 单元还在跑；
+#   ② 起得不太久 —— 运行时密钥 6 小时有效，这里留一半余量（4 小时）；
+#   ③ 日志里还能捞到 dsh 的 token；
+#   ④ 上次写的那条入口配置还在（端口从它里面读回来，端口池就这么点，别漏了它）。
+# ---------------------------------------------------------------------------
+REUSE_MAX_AGE_S="${REUSE_MAX_AGE_S:-14400}"
+reuse_running_environment() {
+  systemctl is-active --quiet "${UNIT}" 2>/dev/null || return 1
+  local started now_us age port token
+  started="$(systemctl show "${UNIT}" -p ActiveEnterTimestampMonotonic --value 2>/dev/null || true)"
+  started="${started:-0}"
+  [ "${started}" -gt 0 ] 2>/dev/null || return 1
+  now_us="$(awk '{printf "%d", $1 * 1000000}' /proc/uptime)"
+  age=$(( (now_us - started) / 1000000 ))
+  [ "${age}" -ge 0 ] && [ "${age}" -le "${REUSE_MAX_AGE_S}" ] || return 1
+  port="$(sed -n 's/^ *listen \([0-9]\{1,\}\) ssl;.*/\1/p' "${NGINX_DIR}/${USER_NAME}.conf" 2>/dev/null | head -1)"
+  [ -n "${port}" ] || return 1
+  token="$(sed -n 's/.*[?&]token=\([A-Za-z0-9._-]*\).*/\1/p' "${LOG_FILE}" 2>/dev/null | head -1)"
+  [ -n "${token}" ] || return 1
+  PUBLIC_PORT="${port}"
+  INNER_PORT=$((PUBLIC_PORT + INNER_OFFSET))
+  TOKEN="${token}"
+  return 0
+}
+
+REUSED=0
+if reuse_running_environment; then
+  REUSED=1
+  echo "[run] 复用已在跑的环境 ${USER_NAME}（端口 ${PUBLIC_PORT}），只换票据" >&2
+fi
+
+# 下面这一段只在**冷启动**时跑：分配端口、停旧的、建用户与工作区、起 dsh、等 token。
+# 复用路径直接跳到下面的「写入口 + reload」，所以拿 ${REUSED} 把整段包起来。
+if [ "${REUSED}" = 0 ]; then
+
 if [ -n "${PUBLIC_PORT}" ]; then
   port_in_use "${PUBLIC_PORT}" && { echo "[run] 端口 ${PUBLIC_PORT} 已被占用" >&2; exit 3; }
 else
@@ -152,8 +204,12 @@ if [ -z "${TOKEN}" ]; then
   systemctl stop "${UNIT}" >/dev/null 2>&1 || true
   exit 1
 fi
+fi   # ← 冷启动段到此为止（复用路径直接跳到这里）
+
 # 入口标记：按**这次启动**的唯一值（dsh token 的哈希）。与容器版同一套理由：
 # 固定值或票据值都会在「同一个学生拿同一张票据重开」时误判（实测出现过 401）。
+# 复用路径下 TOKEN 是从日志里读回来的同一个 token，所以 MARKER 不变 —— 学生手里的
+# dsh_edge cookie 仍然有效，不会多一次 302。
 MARKER="$(printf '%s' "${TOKEN}" | sha256sum | cut -c1-16)"
 
 # ⑥ 入口：一条 nginx server 块，对外只开这个端口，先把平台票据过了再转发给学生的 dsh。
@@ -173,7 +229,10 @@ server {
     absolute_redirect off;
     # dsh 自己的 303 也带绝对 Location（Location: /），一并改写成相对，留在这个入口里。
     # ⚠️ 这里的 \$1 必须转义：nginx 配置是**未加引号的 heredoc**，不转义会被 shell 当成位置参数展开
-    # （踩过：脚本报 `$1: unbound variable`）。
+    # （踩过：脚本每次启动都刷一行 unbound variable）。
+    # ⚠️ 这段注释里也**不能出现反引号**：未加引号的 heredoc 会把反引号当命令替换真的去执行。
+    # ⚠️ 这条注释本身也要小心：heredoc 会展开里面的变量引用（写位置参数的符号就会报 unbound），
+    #   所以这里只说「位置参数的符号」，不写出那个符号本身（2026-09-16 因为写了它又踩了一次）。
     proxy_redirect ~^https?://[^/]+/(.*)\$ /\$1;
     proxy_redirect ~^/(.*)\$ /\$1;
 
