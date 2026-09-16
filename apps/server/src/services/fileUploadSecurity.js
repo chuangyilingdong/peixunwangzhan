@@ -180,6 +180,13 @@ async function scanWithConfiguredScanner(buffer) {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, ['--no-summary', '-'], { windowsHide: true });
     let settled = false;
+    // 扫描超时（2026-09-16 实测后从 30s 放宽到 120s，可用 FILE_UPLOAD_SCANNER_TIMEOUT_MS 调）：
+    // 生产上配的是 `clamscan`（**独立**扫描器，每次调用都要重新加载 108MB 的病毒库），
+    // 实测冷启动 16–40 秒、热缓存约 10 秒 —— 原来那个 30 秒在机器忙的时候必然超时，
+    // 结果是**所有上传都间歇性失败**（学生看到的是一句「文件安全扫描超时」）。
+    // 真正的解法是改用 clamd（常驻、毫秒级）或改成异步扫描，但那个要占内存（这台机器内存紧张），
+    // 得先定口径；在那之前先把阈值放到「冷启动也能过」的位置，别让上传功能性失败。
+    const timeoutMs = Number(process.env.FILE_UPLOAD_SCANNER_TIMEOUT_MS || 120_000);
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
