@@ -132,6 +132,9 @@ console.log('\n【六】学员名单分页：最新添加的在最前，total �
   check('totalPages 按 total 算得出来', firstPage.totalPages === Math.ceil(firstPage.total / 20), `${firstPage.totalPages} vs ${firstPage.total}`);
   check('第二页有内容且与第一页不重叠', secondPage.items.length > 0 && !secondPage.items.some((item) => firstPage.items.some((other) => other.id === item.id)));
   check('最新的排最前面（刚建的 pager25 在第一条）', firstPage.items[0]?.login === 'pager25', firstPage.items[0]?.login);
+  // 不带 page 的老形态必须仍然可用：三个「当选项源用」的页面就靠它（否则会静默只显示前 20 人）
+  const legacy = await org(orgA.id, '/users?role=STUDENT');
+  check('不带 page 时仍给整表（上限 500），不会把老调用方截断成 20 条', legacy.items.length > 20 && legacy.total === legacy.items.length, );
   const searched = await org(orgA.id, '/users?role=STUDENT&limit=20&page=1&search=pager1');
   check('搜索能筛出目标（pager1x 系列）', searched.items.length > 0 && searched.items.every((item) => String(item.login).includes('pager1')), JSON.stringify(searched.items.map((item) => item.login)));
 }

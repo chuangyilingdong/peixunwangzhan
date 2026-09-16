@@ -119,11 +119,22 @@ export async function handleOrg(ctx) {
     const search = String(ctx.search.get('search') || '').trim(); const params = [currentOrgId]; let where = 'org_id=? AND deleted_at IS NULL';
     if (ORG_MEMBER_ROLES.has(role)) { where += ' AND role=?'; params.push(role); }
     if (search) { where += ' AND (login LIKE ? OR display_name LIKE ? OR phone LIKE ?)'; const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; params.push(keyword, keyword, keyword); }
-    // 2026-09-16：名单会很长（一百个学生很正常），所以改成**真分页 + 搜索**，
+    // 2026-09-16：名单会很长（一百个学生很正常），所以支持**真分页 + 搜索**，
     // 并且**最新添加的排在最前**（created_at DESC）—— 老师刚建完账号就能在第一页看到。
-    // ⚠️ 原来这里是 LIMIT 500 加一个假 total（= 当页条数），分页组件拿它算不出页数。
-    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
+    //
+    // ⚠️ **带 page 才分页，不带 page 维持老的整表语义（上限 500）**。
+    // 为什么这么设计：这个接口还有三个「当选项源用」的调用方（机构成员管理页、
+    // 学员开通页的学生选择、课堂的「负责老师」下拉），它们只读 items、不翻页 ——
+    // 如果一律按 20 条分页，这些页面会**静默只显示前 20 个人**（本轮差点就这么上线）。
+    // 所以：分页由调用方显式声明（带 page），老调用方行为不变；total 一律给真的。
+    const wantsPaging = ctx.search.get('page') !== null;
     const total = Number(count('SELECT COUNT(*) n FROM users WHERE ' + where, params) || 0);
+    if (!wantsPaging) {
+      const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT 500', params).map((item) => orgMemberRow(item, currentOrgId));
+      // 老形态：给 items 与真 total（原来那个 total 是「当页条数」，本来就是错的）
+      return { items, total, page: 1, limit: 500, totalPages: Math.max(1, Math.ceil(total / 500)) };
+    }
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
     const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?', [...params, limit, offset]).map((item) => orgMemberRow(item, currentOrgId));
     return pageResult(items, { page, limit, total });
   }
