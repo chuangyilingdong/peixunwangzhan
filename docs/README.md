@@ -24,11 +24,11 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：f02d3ee6833846bac97f05dde58aee8f6b6ab2c0（= 生产版本；其后只有文档提交）
-生产：release 20260916T035836Z / commit f02d3ee（服务 learning-platform-production @127.0.0.1:8789）
+代码提交：cd1d2d53dbd164a13fc25ec035b50e5b84bf000c（= 生产版本；其后只有文档提交）
+生产：release 20260916T041043Z / commit cd1d2d5（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
-      上一版（可回滚）：release 20260915T141240Z / commit 2a3ce32
+      上一版（可回滚）：release 20260916T035836Z / commit f02d3ee
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
@@ -41,6 +41,10 @@ GUI（隔离库 `127.0.0.1:15175`，非生产数据）已走通：创建 → 改
 同课程切环境保留名单 → 开始 → 上课中补加 → 结束/解散后只读；并实测了私有作品只读预览（画布快照图片与 Vibe 沙箱内
 `Add one` 计数 0→1、私有图片在沙箱内以 data 地址正常显示）。390px 下弹窗与表格可操作（名单表横向滚动）。
 生产上只读复核过：课堂列表/详情正常渲染，机构管理员打开**其他老师**的课堂显示「只读课堂：仅负责老师可以管理此课堂」且没有写操作入口。
+
+**学生学习入口已改成「课程优先」**（生产实测，`https://iicili.cyou/learn`，学生账号）：先看课包 → 再选这一节课 →
+由这节课的入口类型决定进画布还是 VibeCoding，页面上只是把形式**标出来**，不让学生选。课包卡片会写「上课形式：画布课堂 N 节 · VibeCoding 课堂 M 节」。
+产品：生产上 3 个课包（画布 6 节 / VibeCoding 4 节 / 画布 2 节），VibeCoding 那门课的第 1 节显示「上课中 · VibeCoding 课堂」并可进入。
 
 **仍未完成 / 不能标完成**：整个 MVP 与「1–7 阶段」改造仍未全量验收；CU 预留账本只接入部分 AI 链路，不是全闭环。
 
@@ -105,7 +109,17 @@ GUI（隔离库 `127.0.0.1:15175`，非生产数据）已走通：创建 → 改
 15. **结课后的课堂是只读的**：机构管理员能看本机构**所有**课堂，但只有**课堂负责人**（`teacher_id`）能改名/换课/换环境/
     加人/开始/结束/解散；教师看不到别人的课堂（403），跨机构一律 404。终态课堂（已结束/已解散）的详情只给结果、作品与事件，
     不给任何写操作入口。
-14. **PPT 走统一结构化规格与质量门禁**：站内预览和服务端下载共用 `packages/shared/src/deckSpec.js`；支持
+16. **学生「学习上课」以课程为先，形式由课时决定**（2026-09-16）：「上课形式」是**每节课**在课包里定的
+    （`course_lessons.delivery_mode`，老师开课堂时按这一节再选一次），所以入口只有一条：
+    `https://iicili.cyou/learn` → 先课包、再课时 → 由这节课的 `deliveryMode` 决定进画布还是 VibeCoding。
+    页面只把形式**标出来**（徽标 + 课包上的「上课形式：画布课堂 N 节 · …」），**不让学生选**，也不再按形式分两个入口。
+    能不能进仍然只由服务端 `canStart` / `canStartVibeCoding` 说了算；`/learn/canvas/:projectId`、
+    `/learn/vibecoding/:conversationId` 是创作台自身路径，创作台的「课程大厅 / 返回课程」仍指回 `/learn`。
+    ⚠️ **坑（实测过）**：官网 `apps/website/src/styles.css` 里原来有一条**裸 `header{height:76px;position:sticky;…}`**
+    （本意是官网顶部导航），它会命中**所有** `<header>` —— 共享 `PageHeader` 和学生页自己的 `student-page-head`
+    都被压成 76px 白色吸顶条并盖住下面内容（「我的课程」的指标卡被切掉就是这个原因）。
+    现在这条规则只作用于真正的官网导航 `.site-topbar`；新增官网顶部导航时才需要带上这个类。
+17. **PPT 走统一结构化规格与质量门禁**：站内预览和服务端下载共用 `packages/shared/src/deckSpec.js`；支持
     指标、时间线、对比、横/柱图、表格、流程、图文、章节、金句和结束页。metrics/chart/table 必须带 `source`，
     缺来源则拒绝导出；表格/图表/流程都有硬容量上限，不能靠 PowerPoint 自动缩成小字。
 
