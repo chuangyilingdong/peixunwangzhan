@@ -11,6 +11,7 @@
 import { errors, requireRole, row } from '../lib.js';
 import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
 import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingArtifacts.js';
+import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
 
@@ -48,6 +49,17 @@ const MIME_BY_EXTENSION = {
   woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
   mp3: 'audio/mpeg', mp4: 'video/mp4', webm: 'video/webm',
 };
+
+/**
+ * 一份产物该用什么 MIME 存。文档三种按既有口径取（`documentMime`），其余查上表；
+ * **查不到就返回 null**（调用方据此拒收并告警），绝不猜一个 MIME 出来 ——
+ * 猜错的后果是 `persistSecureUpload` 拿魔术字节一验就对不上，白折腾一趟。
+ */
+function mimeForArtifact(name) {
+  const extension = String(name).split('.').pop()?.toLowerCase() || '';
+  if (['pptx', 'docx', 'xlsx'].includes(extension)) return documentMime(extension);
+  return MIME_BY_EXTENSION[extension] || null;
+}
 
 export async function handleStudentRuntime(ctx) {
   const { pathname, method } = ctx;
@@ -108,26 +120,17 @@ export async function handleStudentRuntime(ctx) {
 
     const entryPayload = (collected.files || []).find((file) => file.name === collected.name) || null;
     if (!entryPayload) throw errors.conflict('取回来的产物里没有主产物', 'RUNTIME_DELIVERABLE_EMPTY');
-    // 主产物是二进制时**现在还不收**：作品快照的 files 只能装规格文本，下载/预览也是按规格文本渲染的
-    // （见 services/ooxml/documents.js 的取舍说明）。dsh 的 PPT 插件产出的是真 .pptx 字节，
-    // 直接存进去会得到一个「存得下、下载出来是乱码」的作品。所以先把话说清楚，别悄悄收下一个坏作品。
-    if (entryPayload.binary) {
-      throw errors.badRequest(
-        '这份作品的主产物是二进制文件（PPT/Word/Excel 的原文件）。现在的作品链路只支持网页作品，'
-        + '要把 PPT 也交上来得先定「二进制产物怎么存、在作品广场怎么展示」这条口径。',
-        'RUNTIME_DELIVERABLE_BINARY_UNSUPPORTED',
-      );
-    }
 
-    // ① 先把二进制素材（网页里的本地图）存成学生的私有资产，拿到引用要改写成的地址
+    // ① 二进制文件（PPT/Word/Excel 的原文件、网页里的本地图）都存成**学生的私有资产**。
+    //    主产物走 fileId（快照里那份产物直接指向它），被引用的素材走 URL 改写。
     const warnings = [...(Array.isArray(collected.warnings) ? collected.warnings : [])];
     const assetUrls = new Map();
     const embeddedImages = [];
+    let entryFileId = null;
     for (const file of collected.files || []) {
       if (!file.binary) continue;
       const name = safeArtifactName(file.name);
-      const extension = name.split('.').pop()?.toLowerCase() || '';
-      const mimeType = MIME_BY_EXTENSION[extension];
+      const mimeType = mimeForArtifact(name);
       if (!mimeType) {
         // 存不了的素材（少见格式）不拦提交，但要**说出来** —— 否则学生只会看到图裂了
         warnings.push(`素材 ${name} 的格式还不支持随作品提交，交上来的作品里它会是空的`);
@@ -142,7 +145,15 @@ export async function handleStudentRuntime(ctx) {
           ownerOrgId: orgId,
         });
         assetUrls.set(name, asset.url);
-        embeddedImages.push({ fileId: asset.id });
+        if (name === entryFile) {
+          // 主产物就是这份真文件：字节进 file_assets，快照里只记 fileId
+          entryFileId = asset.id;
+        } else if (mimeType.startsWith('image/')) {
+          // 被 HTML 引用的图：进快照的准入名单，发布后广场那条公开代理才认它
+          embeddedImages.push({ fileId: asset.id });
+        } else {
+          warnings.push(`素材 ${name} 不是图片，发布到作品广场后可能取不到（广场只代理图片素材）`);
+        }
       } catch (error) {
         warnings.push(`素材 ${name} 没能随作品存下来：${String(error.message || error).slice(0, 120)}`);
       }
@@ -155,21 +166,32 @@ export async function handleStudentRuntime(ctx) {
       if (file.binary) continue;
       files[name] = assetUrls.size ? rewriteLocalReferences(file.content, name, assetUrls) : file.content;
     }
-    if (!Object.hasOwn(files, entryFile)) throw errors.conflict('主产物没能落进作品快照', 'RUNTIME_DELIVERABLE_EMPTY');
+    // 主产物必须落到某一处：要么是文本快照里的一份，要么是存下来的那个真文件
+    if (!entryFileId && !Object.hasOwn(files, entryFile)) throw errors.conflict('主产物没能落进作品快照', 'RUNTIME_DELIVERABLE_EMPTY');
 
     // ③ 产物清单在**这一刻定格**（广场靠它判断交上来的到底是哪一份、以及图片在哪）
     const now = new Date().toISOString();
-    const artifacts = Object.keys(files).map((name) => ({
-      name,
-      kind: kindForName(name),
-      bytes: Buffer.byteLength(files[name] || '', 'utf8'),
-      revision: 1,
-      updatedAt: now,
-      generatedImages: [],
-      attachmentImages: [],
-      // 只有入口 HTML 上挂图：与老链路 snapshotArtifacts 的规则一致（它只认入口那一份的配图）
-      embeddedImages: name === entryFile ? embeddedImages : [],
-    }));
+    const artifacts = [];
+    if (entryFileId) {
+      artifacts.push({
+        name: entryFile, kind: entryKind, bytes: Number(entryPayload.bytes || 0), revision: 1,
+        updatedAt: now, fileId: entryFileId, generatedImages: [], attachmentImages: [], embeddedImages: [],
+      });
+    }
+    for (const name of Object.keys(files)) {
+      artifacts.push({
+        name,
+        kind: kindForName(name),
+        bytes: Buffer.byteLength(files[name] || '', 'utf8'),
+        revision: 1,
+        updatedAt: now,
+        fileId: null,
+        generatedImages: [],
+        attachmentImages: [],
+        // 只有入口 HTML 上挂图：与老链路 snapshotArtifacts 的规则一致（它只认入口那一份的配图）
+        embeddedImages: name === entryFile ? embeddedImages : [],
+      });
+    }
 
     const conversation = ensureRuntimeConversation({
       auth, lessonId: classroom.lesson_id || null, classSessionId: classroom.id,

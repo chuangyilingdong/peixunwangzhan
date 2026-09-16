@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell } from '@platform/shared';
+import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell } from '@platform/shared';
 
 function formatDate(value) {
   if (!value) return '';
@@ -105,6 +105,10 @@ export function WorkDetailPage({ api }) {
                 <ReplayPanel title="作品预览" icon="eye" className="c-replay__preview">
                   <div className="c-replay__files"><ConsoleEmpty icon="file" title="这份作品没有可预览的产物" body="交上来的文件只能在右边看源码。" /></div>
                 </ReplayPanel>
+              ) : current.document && current.storage === 'FILE' ? (
+                // 存的是**真文件**（学生创作环境交上来的 PPT/Word/Excel 原文件）：
+                // 服务端已经把它转成 PDF，这里只负责显示；下载仍给原文件。
+                <ReplayFilePreview url={current.previewUrl} name={current.name} />
               ) : current.document ? (
                 <ReplayPanel title="作品预览" icon="eye" className="c-replay__preview">
                   <ReplayDocument

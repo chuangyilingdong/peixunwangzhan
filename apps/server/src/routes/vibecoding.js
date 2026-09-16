@@ -734,6 +734,9 @@ export function parseSnapshotArtifacts(submission) {
       bytes: Number(item.bytes || 0),
       revision: Number(item.revision || 1),
       updatedAt: item.updatedAt || null,
+      // 存的是**真文件**时的引用（学生创作环境交上来的 .pptx/.docx/.xlsx 走这条）：
+      // 正文在 file_assets 里，快照只记 id。空串/缺失一律当「这份是规格文本」。
+      fileId: item.fileId ? String(item.fileId) : null,
       generatedImages: (Array.isArray(item.generatedImages) ? item.generatedImages : []).filter((image) => image?.fileId),
       attachmentImages: (Array.isArray(item.attachmentImages) ? item.attachmentImages : []).filter((image) => image?.fileId && Number(image.index) > 0),
       embeddedImages: (Array.isArray(item.embeddedImages) ? item.embeddedImages : []).filter((image) => image?.fileId),
@@ -769,15 +772,31 @@ export function submissionPreview(submission) {
  */
 export function publicArtifactCatalog(submission) {
   const files = parseSnapshotFiles(submission?.files);
-  const byName = new Map(parseSnapshotArtifacts(submission).map((item) => [item.name, item]));
+  const artifacts = parseSnapshotArtifacts(submission);
+  const byName = new Map(artifacts.map((item) => [item.name, item]));
+  // 产物名要取**两边的并集**：二进制产物（学生创作环境交上来的真 .pptx）**不在 files 里**，
+  // 只以 fileId 存在快照里 —— 只枚举 files 的话，它会从作品清单里凭空消失
+  // （广场看不到、也没法下载，而两边都不报错）。
+  const names = [...new Set([...Object.keys(files), ...artifacts.map((item) => item.name)])].sort();
   const base = `/api/public/vibecoding-works/${submission.share_token}`;
-  return Object.keys(files).sort().map((name) => {
+  return names.map((name) => {
     const meta = byName.get(name) || {};
     const kind = meta.kind || kindForName(name);
     const item = { name, kind, document: isDocumentKind(kind), updatedAt: meta.updatedAt || null };
     if (!item.document) return item;
+    if (meta.fileId) {
+      // 这份是**真文件**：预览用服务端转出来的 PDF（Office 转 PDF，见 materialPreview），
+      // 下载给原文件。两者都不经过「规格文本渲染」那条路。
+      return {
+        ...item,
+        storage: 'FILE',
+        previewUrl: `${base}/files/${encodeURIComponent(name)}/preview`,
+        downloadUrl: `${base}/files/${encodeURIComponent(name)}/download`,
+      };
+    }
     return {
       ...item,
+      storage: 'SPEC',
       downloadUrl: `${base}/files/${encodeURIComponent(name)}/download`,
       images: {
         generated: Object.fromEntries((meta.generatedImages || [])
@@ -787,6 +806,22 @@ export function publicArtifactCatalog(submission) {
       },
     };
   });
+}
+
+/**
+ * 这份作品快照里**以真文件存的产物** id 集合（公开取文件的准入名单）。
+ * 与 `snapshotImageFileIds` 同一个道理：作品里引用了什么就只放行什么，
+ * 不能因为拿得到一个 fileId 就去读别人的文件。
+ */
+export function snapshotDocumentFileIds(submission) {
+  const ids = new Set();
+  for (const item of parseSnapshotArtifacts(submission)) if (item.fileId) ids.add(String(item.fileId));
+  return ids;
+}
+
+/** 快照里某一份产物（按名字），广场/机构端取文件前用它换出 fileId。 */
+export function snapshotArtifactByName(submission, name) {
+  return parseSnapshotArtifacts(submission).find((item) => item.name === String(name || '')) || null;
 }
 
 /** 从提交快照渲染一份真文件（广场的下载口用它；学生自己下载走的是活会话那条） */

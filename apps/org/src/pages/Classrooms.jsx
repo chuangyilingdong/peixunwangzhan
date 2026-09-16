@@ -154,12 +154,18 @@ function ClassroomWork({ api, sessionId, work, onClose }) {
     || views[0];
   const entry = selected?.name || data?.entryFile;
   const document = selected && (selected.document || ['pptx', 'docx', 'xlsx'].includes(String(selected.kind).toLowerCase()));
+  // 真文件产物（学生创作环境交上来的 PPT/Word/Excel 原文件）：地址由服务端拼好，
+  // 预览是服务端转出来的 PDF —— 这类产物没有「规格文本」，客户端渲染不了。
+  const documentFile = document ? (data?.fileUrls?.[selected.name] || null) : null;
   // Run private student code in the existing opaque-origin sandbox, with network access blocked.
   const html = data?.source === 'VIBECODING' && entry && !document
     ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">${buildPreviewDocument(files, entry)}`
     : '';
   return <Modal title={`只读作品 · ${work.title || '未命名作品'}`} wide onClose={onClose}
-    footer={<button className="secondary-button" onClick={onClose}>关闭预览</button>}>
+    footer={<>
+      {documentFile?.download ? <a className="secondary-button" href={documentFile.download}>下载原文件</a> : null}
+      <button className="secondary-button" onClick={onClose}>关闭预览</button>
+    </>}>
     {detail.loading ? <Loading label="正在读取私有作品…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : data ? <>
       <p className="muted">{data.studentName || '—'} · {formatDate(data.submittedAt)}</p>
       {imageError ? <Notice tone="warning">{imageError}</Notice> : null}
@@ -170,7 +176,8 @@ function ClassroomWork({ api, sessionId, work, onClose }) {
           {views.length > 1 ? <label>作品文件<select value={entry || ''} onChange={(event) => setActiveName(event.target.value)}>
             {views.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
           </select></label> : null}
-          {document ? <ReplayDocument artifact={{ ...selected, content: String(files[selected.name] ?? selected.content ?? '') }} resolveImage={(slide, slideIndex) => {
+          {documentFile ? <iframe className="c-replay__doc" src={documentFile.preview} title={selected.name} />
+            : document ? <ReplayDocument artifact={{ ...selected, content: String(files[selected.name] ?? selected.content ?? '') }} resolveImage={(slide, slideIndex) => {
             const generated = selected.generatedImages?.find((item) => Number(item.slideIndex) === slideIndex && !item.error && images[item.fileId]);
             if (generated && images[generated.fileId]) return images[generated.fileId];
             const ordinal = Number(slide?.image?.attachment ?? slide?.imageAttachment);

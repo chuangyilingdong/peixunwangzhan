@@ -44,6 +44,19 @@ export function ReplayPanel({ title, icon = 'code', actions, children, className
   );
 }
 
+/**
+ * 真文件产物的只读预览：服务端已经把 Office 转成 PDF，这里只是把它显示出来。
+ * 为什么不像规格文本那样在客户端渲染：`.pptx` 是二进制，浏览器渲染不了；
+ * 而作品广场的用途就是「给人看」—— 点开只有下载入口等于没展示。
+ */
+export function ReplayFilePreview({ url, name = '' }) {
+  return (
+    <ReplayPanel title="作品预览" icon="eye" className="c-replay__preview">
+      <iframe className="c-replay__doc" src={url} title={name || '作品预览'} />
+    </ReplayPanel>
+  );
+}
+
 /** 作品预览：真的能玩（沙箱 iframe 里跑学生的 HTML） */
 export function ReplayPreview({ html, title = '作品预览', height = '62vh' }) {
   const [reloadKey, setReloadKey] = useState(0);

@@ -267,8 +267,14 @@ try {
     noConfirm.status === 400 && noConfirm.data?.error?.code === 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED', JSON.stringify(noConfirm.data));
 
   const binaryEntry = await api('/api/student/runtime/submit', { method: 'POST', token, body: { name: 'deck/演示文稿.pptx', copyrightConfirmed: true } });
-  check('二进制主产物（真 pptx）被明确拒绝（RUNTIME_DELIVERABLE_BINARY_UNSUPPORTED）',
-    binaryEntry.status === 400 && binaryEntry.data?.error?.code === 'RUNTIME_DELIVERABLE_BINARY_UNSUPPORTED', JSON.stringify(binaryEntry.data));
+  check('二进制主产物（真 pptx）能交上来，入口拍平', binaryEntry.status === 200 && binaryEntry.data?.entryFile === '演示文稿.pptx',
+    JSON.stringify(binaryEntry.data).slice(0, 300));
+  check('真文件产物不进 files（它按 fileId 存在快照里）',
+    Object.keys(binaryEntry.data?.files || {}).length === 0, JSON.stringify(Object.keys(binaryEntry.data?.files || {})));
+  const binaryArtifact = (binaryEntry.data?.artifacts || []).find((item) => item.name === '演示文稿.pptx');
+  check('快照里记下了这份真文件的 fileId', Boolean(binaryArtifact?.fileId), JSON.stringify(binaryArtifact));
+  check('主产物预览仍是文档（广场卡片靠它决定怎么展示）',
+    binaryEntry.data?.preview?.document === true && binaryEntry.data?.preview?.kind === 'pptx', JSON.stringify(binaryEntry.data?.preview));
 
   const submitted = await api('/api/student/runtime/submit', {
     method: 'POST', token, body: { name: 'mygame/index.html', title: '嵌套作品', copyrightConfirmed: true },
@@ -313,6 +319,32 @@ try {
   const mine = await api('/api/student/vibecoding/submissions', { token });
   check('交上来的作品出现在学生的作品列表里（与老链路同一张表）',
     mine.status === 200 && (mine.data?.items || []).some((item) => item.entryFile === 'index.html'), JSON.stringify(mine.data).slice(0, 200));
+
+  /* ── 真文件产物发布到作品广场：看得到、下得动、预览不 500 ── */
+  const rootAdmin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
+  const published = await api(`/api/admin/vibecoding-works/${binaryEntry.data.id}/plaza`, { method: 'PUT', token: rootAdmin, body: { published: true } });
+  check('真文件产物能发布到作品广场', published.status === 200 && published.data?.isPublic === true, JSON.stringify(published.data).slice(0, 200));
+  const shareToken = published.data?.shareToken;
+  const detail = await api(`/api/public/vibecoding-works/${shareToken}`);
+  const catalog = detail.data?.artifacts || [];
+  const card = catalog.find((item) => item.name === '演示文稿.pptx');
+  check('广场作品清单里有这份真文件（不能因为不在 files 里就凭空消失）', Boolean(card), JSON.stringify(catalog));
+  check('它带的是「真文件」标记与预览/下载两个地址',
+    card?.storage === 'FILE' && String(card.previewUrl || '').includes('/preview') && String(card.downloadUrl || '').includes('/download'),
+    JSON.stringify(card));
+  const fileResponse = await fetch(`http://127.0.0.1:${PORT}${card?.downloadUrl}`);
+  const fileBytes = Buffer.from(await fileResponse.arrayBuffer());
+  check('广场能下到原文件，字节与交上来的一致（PK 头对得上）',
+    fileResponse.status === 200 && fileBytes.subarray(0, 4).toString('hex') === '504b0304' && fileBytes.length === 52,
+    `status=${fileResponse.status} bytes=${fileBytes.length}`);
+  const previewResponse = await fetch(`http://127.0.0.1:${PORT}${card?.previewUrl}`);
+  // 本机没有 LibreOffice 时转不出 PDF，那是**预期内**的失败 —— 关键是不能 500、
+  // 也不能回退去发原始 Office 文件（那等于把下载绕过去了）。
+  const previewOk = previewResponse.status === 200
+    ? String(previewResponse.headers.get('content-type') || '').includes('pdf')
+    : previewResponse.status === 400;
+  check('广场预览：转得出就给 PDF，转不出就明确说「无法预览」（不 500、不回退发原文件）',
+    previewOk, `status=${previewResponse.status} type=${previewResponse.headers.get('content-type')}`);
 } finally {
   server.kill();
   // 有红的地方就把后端日志尾巴贴出来：这条链路的失败大多发生在宿主脚本那一跳，

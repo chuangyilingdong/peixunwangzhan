@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader } from './ui.jsx';
+import { RuntimeActions, useRuntimeStatus } from './runtimeWorkspace.jsx';
 
 export function useData(load, deps = []) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
@@ -177,6 +178,9 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
   const [busy, setBusy] = useState(null);
   const [message, setMessage] = useState('');
   const [selectedCourseId, setSelectedCourseId] = useState(null);
+  // 学生创作环境（dsh）能不能用：能用就把 VibeCoding 课的入口换成它（见 runtimeWorkspace.jsx）。
+  // ⚠️ 这个 hook 必须在下面那些提前 return **之前**调用，否则偶尔会「少一个 hook」直接崩。
+  const runtime = useRuntimeStatus(api);
   if (classroom.loading) return <Loading label="正在读取课程中心…" />;
   if (classroom.error) return <ErrorState error={classroom.error} onRetry={classroom.refresh} />;
   const courses = (classroom.data?.classroomCourses || []).filter((course) => (course.lessons || []).length);
@@ -252,13 +256,17 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
               <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
             </div>
             <div className="lesson-detail-action">
-              <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={() => enter(lesson)}>
-                {busy === lesson.id ? '正在进入…'
-                  : canEnter ? (lesson.continueProject ? '继续创作' : '进入课堂')
-                    : lesson.participationStatus === 'COMPLETED' ? '已完课'
-                      : lesson.hasGrant === false ? '未授权'
-                        : '等待开课'}
-              </button>
+              {/* VibeCoding 课：创作环境可用时，入口换成「进入创作环境」（学生自己的盒子），
+                  并多一个「提交作品」。不可用时保持原样 —— 迁移不该让入口变成点不动的按钮。 */}
+              {runtime.ready && mode === 'VIBECODING'
+                ? <RuntimeActions api={api} lesson={lesson} canEnter={canEnter} />
+                : <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={() => enter(lesson)}>
+                  {busy === lesson.id ? '正在进入…'
+                    : canEnter ? (lesson.continueProject ? '继续创作' : '进入课堂')
+                      : lesson.participationStatus === 'COMPLETED' ? '已完课'
+                        : lesson.hasGrant === false ? '未授权'
+                          : '等待开课'}
+                </button>}
             </div>
           </article>;
         })}

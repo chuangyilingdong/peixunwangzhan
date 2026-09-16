@@ -1,7 +1,7 @@
 import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction } from '../lib.js';
 import { normalizeLesson } from '../lib.js';
-import { normalizeSubmission, snapshotImageFileIds } from './vibecoding.js';
-import { prepareFileDownload } from './fileAssets.js';
+import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
+import { prepareFileDownload, prepareFilePreview } from './fileAssets.js';
 import { hashPassword } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
@@ -486,6 +486,33 @@ export async function handleOrg(ctx) {
     return manage || auth.user.role === 'TEACHER' ? assertSessionManager(auth, value) : value;
   };
 
+  // 机构/老师看**私有作品里的真文件**（学生创作环境交上来的 PPT/Word/Excel 原文件）。
+  // 预览走服务端转出来的 PDF、下载给原文件；准入与图片那条一样 ——
+  // **只认这份作品快照里出现过的 fileId**，拿得到别人的 id 也读不到别人的文件。
+  // （作品没发布时走不了公开地址，所以机构端必须有自己的这一条。）
+  const sessionWorkFileMatch = part.match(/^\/sessions\/([^/]+)\/works\/(VIBECODING)\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
+  if (sessionWorkFileMatch && method === 'GET') {
+    const target = sessionInOrg(sessionWorkFileMatch[1], { manage: false });
+    const [, , , workId, rawName, mode] = sessionWorkFileMatch;
+    let name = '';
+    try { name = decodeURIComponent(rawName); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
+    if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_FILE_NAME');
+    const work = row(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
+          JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
+            AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
+          JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
+          WHERE submission.id=? AND submission.org_id=? AND conversation.class_session_id=?`, [workId, currentOrgId, target.id]);
+    if (!work) throw errors.notFound('作品不属于此课堂', 'SESSION_WORK_NOT_FOUND');
+    const fileId = snapshotArtifactByName(work, name)?.fileId;
+    if (!fileId || !snapshotDocumentFileIds(work).has(String(fileId))) {
+      throw errors.notFound('文件不属于此作品', 'SESSION_WORK_FILE_NOT_FOUND');
+    }
+    const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE') throw errors.notFound('作品文件不可用', 'SESSION_WORK_FILE_NOT_FOUND');
+    if (file.expires_at && Date.parse(file.expires_at) <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    return mode === 'preview' ? prepareFilePreview(ctx, file) : prepareFileDownload(ctx, file);
+  }
+
   const sessionWorkMatch = part.match(/^\/sessions\/([^/]+)\/works\/(CANVAS|VIBECODING)\/([^/]+)(?:\/images\/([^/]+))?$/);
   if (sessionWorkMatch && method === 'GET') {
     const target = sessionInOrg(sessionWorkMatch[1], { manage: false });
@@ -516,8 +543,17 @@ export async function handleOrg(ctx) {
     const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `/api/org/sessions/${encodeURIComponent(target.id)}/works/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
     if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls };
     const content = normalizeSubmission(work, { includeContent: true });
+    // 真文件产物（学生创作环境交上来的 PPT/Word/Excel）的取用地址也在服务端拼好：
+    // 前端不该自己去拼路由（前缀/编码错一处就是 404，而且两边都没法测）。
+    const workBase = `/api/org/sessions/${encodeURIComponent(target.id)}/works/VIBECODING/${encodeURIComponent(work.id)}`;
+    const fileUrls = Object.fromEntries(parseSnapshotArtifacts(work)
+      .filter((item) => item.fileId)
+      .map((item) => [item.name, {
+        preview: `${workBase}/files/${encodeURIComponent(item.name)}/preview`,
+        download: `${workBase}/files/${encodeURIComponent(item.name)}/download`,
+      }]));
     // Keep private references intact; the authenticated viewer resolves them to local blob URLs.
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls };
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls, fileUrls };
   }
 
   if (part === '/sessions' && method === 'GET') {

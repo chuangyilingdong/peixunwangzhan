@@ -20,11 +20,13 @@ import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
-import { prepareFileDownload } from '../fileAssets.js';
+import { prepareFileDownload, prepareFilePreview } from '../fileAssets.js';
 import {
   publicArtifactCatalog,
   publicSnapshotFiles,
   renderSnapshotDocument,
+  snapshotArtifactByName,
+  snapshotDocumentFileIds,
   snapshotImageFileIds,
   submissionPreview,
 } from '../vibecoding.js';
@@ -204,15 +206,20 @@ export function handlePublicCommunication(ctx) {
     return publicVibeCodingWorkRow(work, { includeFiles: true });
   }
 
-  // 已发布作品里的文档产物（PPT / Word / Excel）：当场从**提交快照**渲染成真文件发出去。
-  // 为什么必须从快照渲染：产物里存的是规格文本，真文件是渲染出来的；而学生提交后还能接着改，
-  // 广场要给的必须是交上来的那一版。文件名允许中文，所以要 decode。
+  // 已发布作品里的文档产物（PPT / Word / Excel）。
+  // 两种存法在这里分道扬镳，**都要能下**：
+  //   · 规格文本（平台内沙箱那条老链路）：当场从提交快照渲染成真文件再发；
+  //   · 真文件（学生创作环境交上来的 .pptx/.docx/.xlsx）：字节就存在 file_assets 里，直接发原文件。
+  // 为什么必须从快照取：学生提交后还能接着改，广场要给的必须是**交上来的那一版**。
+  // 文件名允许中文，所以要 decode。
   const publicDocumentMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)\/files\/(.+)\/download$/);
   if (publicDocumentMatch && method === 'GET') {
     const submission = publicSubmission(publicDocumentMatch[1]);
     let name = '';
     try { name = decodeURIComponent(publicDocumentMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
     if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_VIBECODING_FILE_NAME');
+    const stored = snapshotArtifactByName(submission, name)?.fileId;
+    if (stored) return prepareFileDownload(ctx, publicWorkFile(submission, stored));
     const rendered = renderSnapshotDocument(submission, name);
     if (rendered.error) throw errors.notFound(rendered.error, 'PUBLIC_VIBECODING_FILE_NOT_FOUND');
     const safeName = String(rendered.filename || name || 'download').replace(/[\r\n"\\/]/g, '_');
@@ -228,6 +235,20 @@ export function handlePublicCommunication(ctx) {
       },
       stream: Readable.from(rendered.buffer),
     };
+  }
+
+  // 已发布作品里的**真文件**产物怎么看：服务端用 LibreOffice 转成 PDF 再发（inline）。
+  // 为什么不在客户端预览：prptx/docx/xlsx 浏览器渲染不了，而广场的用途就是「给人看」——
+  // 一个只能下载、点了没反应的卡片等于没发。转出来的 PDF 也顺手让原始 Office 文件不外发。
+  const publicDocumentPreviewMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)\/files\/(.+)\/preview$/);
+  if (publicDocumentPreviewMatch && method === 'GET') {
+    const submission = publicSubmission(publicDocumentPreviewMatch[1]);
+    let name = '';
+    try { name = decodeURIComponent(publicDocumentPreviewMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
+    if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_VIBECODING_FILE_NAME');
+    const stored = snapshotArtifactByName(submission, name)?.fileId;
+    if (!stored) throw errors.notFound('这份作品没有可在线预览的文件', 'PUBLIC_VIBECODING_FILE_NOT_FOUND');
+    return prepareFilePreview(ctx, publicWorkFile(submission, stored));
   }
 
   // 作品里用到的学生上传图（PPT 规格里的 {"attachment": N}）。
@@ -456,4 +477,19 @@ function publicSubmission(token) {
   );
   if (!submission) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
   return submission;
+}
+
+/**
+ * 取这份已发布作品里的一个**真文件**产物（拿 fileId 换出 file_assets 行）。
+ * 准入只认**提交快照里出现过的 fileId** —— 拿得到别人的 fileId 也读不到别人的文件。
+ */
+function publicWorkFile(submission, fileId) {
+  if (!snapshotDocumentFileIds(submission).has(String(fileId))) {
+    throw errors.notFound('文件不存在于这份作品中', 'PUBLIC_VIBECODING_FILE_NOT_FOUND');
+  }
+  const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+  if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+  if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+  return file;
 }
