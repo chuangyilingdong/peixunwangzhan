@@ -24,11 +24,11 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：415d44c0fc7925e3df24ec5bb2c3c0f82df0c53f（= 生产版本；其后只有文档提交）
-生产：release 20260916T043133Z / commit 415d44c（服务 learning-platform-production @127.0.0.1:8789）
+代码提交：9cd9228351fd1d1ad42c7872993c110f39610c97（= 生产版本；其后只有文档提交）
+生产：release 20260916T043829Z / commit 9cd9228（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
-      上一版（可回滚）：release 20260916T041841Z / commit 724d216
+      上一版（可回滚）：release 20260916T043133Z / commit 415d44c
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
@@ -52,6 +52,11 @@ GUI（隔离库 `127.0.0.1:15175`，非生产数据）已走通：创建 → 改
 classroomMode / classroomBlockReason`。**不要再在前端拿 `lesson.status`（那是课时的发布状态）
 或作品状态去猜上课状态** —— 那样会出现「列表全写未开课、顶部计数却说有课在上课」的自相矛盾。
 说明文案也要按这节课自己的入口类型取，且**能进的时候不给「为什么进不去」**。
+
+**官网匿名统计同意横幅已删除**（2026-09-16，用户要求）：横幅、样式、`setAnalyticsConsent` 全部下线。
+口径要保持一致：`trackAnalytics` 仍然只在「已同意」时才发事件，而没有横幅就没有入口写「已同意」⇒ **官网不再产生新的匿名事件**
+（宁可不统计，也不无同意上报）；以前点过同意的浏览器里留着 `granted`，照旧上报。平台端「官网转化」面板看到的是历史数据。
+若以后要重新统计，先定隐私口径（恢复横幅，或明确改成无需同意的口径），**不要**把 consent 默认改成 true。
 
 **仍未完成 / 不能标完成**：整个 MVP 与「1–7 阶段」改造仍未全量验收；CU 预留账本只接入部分 AI 链路，不是全闭环。
 
