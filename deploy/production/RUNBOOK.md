@@ -63,6 +63,14 @@ fc-list | grep -c cjk      # 期望 >0 —— 不装中文字体，转出来的 
   目录，预览转换会因 `EACCES` 失败（对外表现为「这份课件暂时无法预览」，日志里有
   `[materialPreview] 转换失败`）。修法：`chown -R ai-kids-prod:ai-kids-prod <上传目录>`。
 
+### 学生运行时网关的环境变量（2026-09-16 起）
+
+`RUNTIME_GATEWAY_SECRET` 必须写进 `/etc/ai-kids-platform/production.env`（生成用 `openssl rand -base64 48`）。
+它是「学生容器 → 平台网关」那把运行时密钥的 HMAC 密钥；**不配的话 `/api/gateway/v1/*` 一律拒绝服务**
+（故意的 fail-closed：这个端点能让调用方花平台的算力钱，没密钥就不该开）。
+换密钥 = 所有正在上课的容器立刻失效（它们手里的密钥验不过），所以挑没有课堂的时候换。
+确认生效：不带密钥调一次应当得到 401/409，**不是** 500。
+
 ## 当前架构
 
 - 域名：`https://iicili.cyou`
