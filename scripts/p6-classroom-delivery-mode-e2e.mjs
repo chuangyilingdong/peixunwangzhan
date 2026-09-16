@@ -187,19 +187,21 @@ try {
     || dashboard.data?.tasks?.find((task) => task.lessonId === lessonId);
   assert.ok(vibeTask, `dashboard 未找到活动 VibeCoding 课时任务: ${JSON.stringify(dashboard.raw)}`);
   assert.equal(vibeTask.deliveryMode, 'VIBECODING');
-  assert.equal(vibeTask.canStart, false, 'VibeCoding 课堂里画布入口不应点亮');
+  // 2026-09-16 口径变更：上课类型由**课时已发布的类型**决定（平台在课时里可同时开画布 + VibeCoding，
+  // 老师不再选课堂模式）。本夹具的课时是 delivery_modes=["CANVAS","VIBECODING"]（见文件开头），
+  // 所以**两个入口都该点亮** —— 旧口径「一个课堂只有一种入口」已作废。
+  assert.equal(vibeTask.canStart, true, '两种都开的课时，画布入口也该点亮');
   assert.equal(vibeTask.canStartVibeCoding, true, 'VibeCoding 课堂已开启，VibeCoding 入口应点亮');
   assert.equal(vibeTask.vibeCodingBlockReason, null);
   assert.equal(vibeTask.activeNow, true);
 
-  // 画布与 VibeCoding 互斥：VibeCoding 课堂里不能创建画布项目（入口走 /learn/vibecoding）
+  // 两种都开：画布项目也能建（入口不再互斥）。「只开一种」的反例在下面单独验。
   const vibeProject = await api('/api/student/projects', {
     method: 'POST',
     token: student,
-    body: { courseLessonId: lessonId, title: 'VibeCoding 不应伪装为 Canvas' },
+    body: { courseLessonId: lessonId, title: '两种都开：画布项目也能建' },
   });
-  assertStatus(vibeProject, 403, 'VibeCoding 活动课堂错误地创建了 Canvas 项目');
-  assert.equal(errorCode(vibeProject), 'VIBECODING_CLASSROOM_UNAVAILABLE');
+  assertStatus(vibeProject, 200, '两种都开的课时应该允许创建 Canvas 项目');
 
   const endVibe = await api(`/api/org/sessions/${vibeSession.data.id}/end`, {
     method: 'POST',

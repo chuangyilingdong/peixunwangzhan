@@ -239,14 +239,15 @@ try {
   assertStatus(afterVibe, 200, '学生读取 VibeCoding 状态失败');
   const vibeLesson = findLessonEntry(afterVibe, targetLessonId)?.lesson;
   assert.equal(vibeLesson?.activeNow, true);
-  assert.equal(vibeLesson?.canStart, false, 'VibeCoding 课堂里画布入口不应点亮');
+  // 2026-09-16 口径：入口按**课时已发布的类型**放行（本夹具课时是 ["CANVAS","VIBECODING"]），
+  // 课堂那个单值不再有门禁作用。规则细节（含「只开一种必须锁死」的反例）见 p104。
+  assert.equal(vibeLesson?.canStart, true, '两种都开的课时，画布入口也该点亮');
   assert.equal(vibeLesson?.canStartVibeCoding, true, 'VibeCoding 入口应点亮');
   assert.equal(vibeLesson?.vibeCodingBlockReason, null);
   const vibeProject = await api('/api/student/projects', {
-    method: 'POST', token: student, body: { courseLessonId: targetLessonId,  title: 'VibeCoding 应阻断' },
+    method: 'POST', token: student, body: { courseLessonId: targetLessonId, title: '两种都开：画布项目也能建' },
   });
-  assertStatus(vibeProject, 403, 'VibeCoding 课堂错误创建 Canvas 项目');
-  assert.equal(errorCode(vibeProject), 'VIBECODING_CLASSROOM_UNAVAILABLE');
+  assertStatus(vibeProject, 200, '两种都开的课时应该允许创建 Canvas 项目');
 
   const endVibe = await api(`/api/org/sessions/${vibeSession.data.id}/end`, {
     method: 'POST', token: teacher, body: { reason: 'COURSE_TREE_E2E_VIBE_DONE' },

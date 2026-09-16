@@ -175,8 +175,10 @@ try {
   check('③b VibeCoding 课堂开始上课', vibeStart.status === 200, JSON.stringify(vibeStart).slice(0, 160));
   const okConversation = await createConversation();
   check('③b 上课中：VibeCoding 入口能进', okConversation.status === 200, JSON.stringify(okConversation).slice(0, 200));
-  check('③b 入口类型要对上：VibeCoding 课堂里画布入口进不去',
-    (await createProject()).error?.code === 'VIBECODING_CLASSROOM_UNAVAILABLE');
+  // 2026-09-16 口径：入口按课时已发布的类型放行（p66 的夹具课时是 ["CANVAS","VIBECODING"]），
+  // 所以 VibeCoding 课堂里画布入口**也能进**。规则细节与反例见 p104。
+  check('③b 入口类型要对上：两种都开的课时，VibeCoding 课堂里画布入口也能进',
+    (await createProject()).status === 200);
   await api(`/api/org/sessions/${vibeSession.data.id}/end`, { method: 'POST', token: teacher, body: {} });
 
   /* ④ 平台兜底撤销 → 立刻又进不去（不给缓存留缝） */

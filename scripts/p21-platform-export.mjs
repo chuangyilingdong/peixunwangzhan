@@ -93,7 +93,7 @@ try {
   const userExport = await api('/api/admin/platform-users/export?role=STUDENT', { token: admin });
   assert.equal(userExport.status, 200, `用户导出失败: ${JSON.stringify(userExport.data)}`);
   const userLines = csvLines(userExport.data.content);
-  assert.equal(userLines[0], '登录名,姓名,角色,机构,状态,手机号,套餐,有效期至,创建时间', `用户表头不符: ${userLines[0]}`);
+  assert.equal(userLines[0], '登录名,姓名,角色,机构,状态,手机号,有效期至,创建时间', `用户表头不符: ${userLines[0]}`);
   assert.equal(userExport.data.count, userList.data.total, `按角色筛选的导出条数应与列表一致（${userExport.data.count} vs ${userList.data.total}）`);
   assert.ok(userLines.slice(1).every((line) => line.includes('STUDENT')), '导出行应都是 STUDENT');
 
