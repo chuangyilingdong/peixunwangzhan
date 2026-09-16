@@ -11,3 +11,5 @@
 *.pdf binary
 *.woff binary
 *.woff2 binary
+deploy/dsh-student/*.sh text eol=lf
+deploy/dsh-student/**/*.sh text eol=lf

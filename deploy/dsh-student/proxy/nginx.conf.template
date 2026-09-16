@@ -1,0 +1,46 @@
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+#
+# 姿态：对外只开 __EDGE_PORT__；dsh 本体始终只在 127.0.0.1:__INNER_PORT__（它自己也拒绝 0.0.0.0）。
+# 两道闸门：
+#   ① 平台票据：__EDGE_TICKET__（平台签发的短时票据，?t= 或 X-Platform-Ticket）。
+#      第一次带票据进来就换成本入口自己的 dsh_edge cookie，之后凭 cookie 放行 ——
+#      不让票据一直挂在 URL 上（静态资源与 WebSocket 也不需要）。
+#   ② dsh 会话票据：实测协议是「GET / 无 cookie → 401；GET /?token=<TOKEN> → 303 到 / 并下发
+#      Set-Cookie: dsh-auth-<随机>=…」。cookie 名带随机后缀，没法按名字匹配，
+#      所以用我们自己的 dsh_edge 当「已经补过 token」的标记，只补一次，浏览器地址栏里看不到它。
+server {
+  listen __EDGE_PORT__;
+  server_name _;
+  # 默认 absolute_redirect 会把 Location 写成 http://host:内部端口/...，浏览器会跳出入口
+  # （实测会跑到本机另一个 8080 服务上），必须关掉。
+  absolute_redirect off;
+
+  # ① 平台票据闸门
+  set $platform_ticket $arg_t;
+  if ($http_x_platform_ticket) { set $platform_ticket $http_x_platform_ticket; }
+  set $edge_ok 0;
+  if ($platform_ticket = "__EDGE_TICKET__") { set $edge_ok 1; }
+  if ($cookie_dsh_edge = "__EDGE_TICKET__") { set $edge_ok 1; }
+  if ($edge_ok = 0) { return 403; }
+
+  client_max_body_size 32m;
+
+  # ② 首次进入：补上 dsh 的会话票据，并打上「补过了」的标记
+  location = / {
+    # 标记值用**本容器的票据**，不是固定的 1：否则浏览器里另一个容器留下的
+    # dsh_edge=1 会让这台机器误以为「token 已经补过」，直接打到 dsh 的 401 页
+    # （实测踩到：换端口后就出现「dsh web authentication required」）。
+    if ($cookie_dsh_edge != "__EDGE_TICKET__") {
+      add_header Set-Cookie "dsh_edge=__EDGE_TICKET__; Path=/; HttpOnly; SameSite=Lax" always;
+      return 302 /?token=__DSH_TOKEN__;
+    }
+    proxy_pass http://__INNER_HOST__:__INNER_PORT__;
+    include /etc/dsh/proxy-headers.conf;
+  }
+
+  location / {
+    proxy_pass http://__INNER_HOST__:__INNER_PORT__;
+    include /etc/dsh/proxy-headers.conf;
+  }
+}

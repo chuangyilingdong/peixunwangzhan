@@ -1,0 +1,86 @@
+# 平台「学生运行时」补丁层
+# 用法：dsh --profile web --patch /etc/dsh/student-runtime.cordis.yml
+# 作用：把官方 web 组合改成「孩子用的一次性创作环境」——模型走我们自己的网关、
+#      关掉能自造插件挂进宿主的那两个 runner、关掉插件管理/目录选择等成人入口、
+#      把写权限限制在一次性的 workspace 里，并且不弹「等你点同意」的审批。
+
+# 审批：没有真人坐在旁边点同意，所以不弹审批。
+# 官方语义（docs/subsystems/approval.md）：'never' = every ask resolves 'rejected'（**直接拒绝**，不是自动放行）；
+# 'ask' 在没有应答者时是 'unavailable'，调用方同样 fail-closed。
+- id: approval
+  name: '@deepseek-ai/dsh-user-approval'
+  config:
+    policy: 'never'
+
+# 权限预设：沙箱模式必须和审批策略配成同一个预设，否则组合期直接报错
+# 「composed sandbox and approval defaults match no preset」。这里把三档都改成不弹审批，
+# 并把 defaultPreset 显式指到 workspace-write。
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    defaultPreset: workspace-write
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: never
+      workspace-write:
+        sandbox: workspace-write
+        approval: never
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+
+# 沙箱：只在这一次性的工作区里可写（容器是外层边界，这里是内层策略）。
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: 'workspace-write'
+    workspaceRoot: !!js process.env.DSH_WORKSPACE
+
+# 模型路由：只用我们自己的网关（OpenAI 兼容），不直连 DeepSeek 官方。
+# apiKeyEnv 是凭据引用，密钥不进配置文件；baseURL 由容器环境注入。
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      platform-gateway:
+        displayName: 平台网关
+        apiKeyEnv: PLATFORM_GATEWAY_KEY
+        api: openai-completions
+        baseURL: !!js process.env.PLATFORM_GATEWAY_BASE_URL
+        models:
+          - id: deepseek-flash
+            name: 平台网关 · DeepSeek Flash
+          - id: deepseek-pro
+            name: 平台网关 · DeepSeek Pro
+
+# 课程技能：我们自己的技能根目录（把课程要求写成 SKILL.md）。
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js process.env.DSH_COURSE_SKILLS
+
+# —— 以下四行是「给学生用必须关掉」的成人入口 ——
+# cordis-*-runner 让模型自己写 JS 并以临时插件挂进宿主，官方注释写明在 Web 面上
+# 沙箱与审批两道都会被绕过；插件管理和目录选择则是给孩子看的多余且危险的面。
+- id: cordis-host-runner
+  name: '@deepseek-ai/dsh-cordis-host-runner'
+  disabled: true
+- id: cordis-client-runner
+  name: '@deepseek-ai/dsh-cordis-client-runner'
+  disabled: true
+# 只关 host 侧 runner 会让 web 起不来：客户端面板 ui-cordis 在等 dynamicCordisRunner 这个服务，
+# 结果整页显示「Failed to load plugins」（实测踩到）。两边必须一起关。
+- id: ui-cordis
+  name: '@deepseek-ai/dsh-client-ui-cordis'
+  disabled: true
+- id: plugin-inventory
+  name: '@deepseek-ai/dsh-host-plugin-inventory'
+  disabled: true
+- id: directory-picker
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
+- id: open-in-app
+  name: '@deepseek-ai/dsh-host-open-in-app'
+  disabled: true

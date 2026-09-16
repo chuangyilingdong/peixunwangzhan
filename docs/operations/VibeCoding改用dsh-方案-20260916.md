@@ -142,6 +142,36 @@ dsh --profile web --dump-default-config  → 539 行组合树，关键几条：
 6. 学生界面里要**关掉** `host-plugin-inventory`（插件管理）、目录选择、以及终端/文件系统相关入口；
    `--trusted-host` 用我们自己的域名，配合我们的反代与 HTTPS 终止（dsh 自己没有 TLS）。
 
+### 9.1 入口与闸门（2026-09-16 实测补齐）
+
+容器内 nginx 这一层是必须的，而且踩到四个坑，都已修好并复测：
+
+1. **dsh 只绑回环**：`--host 0.0.0.0` 被官方故意拒绝；只绑 127.0.0.1 时 Docker 端口发布从宿主
+   根本连不上（HTTP 000）。→ 反代必须放在**容器内**（`deploy/dsh-student/proxy/`）。
+2. **`absolute_redirect` 默认开着**：`return 302 /?token=…` 会被 nginx 写成
+   `http://host:内部端口/…`，浏览器直接跳出入口（实测跑到了本机另一个 8080 服务上，
+   差点把别人的界面当成 dsh）。→ 必须 `absolute_redirect off`。
+3. **dsh 的鉴权协议**：`GET /` 无 cookie → **401**；`GET /?token=<TOKEN>` → **303** 到 `/` 并下发
+   `Set-Cookie: dsh-auth-<随机后缀>=…`。cookie 名带随机后缀，没法按名字匹配，所以用我们自己的
+   `dsh_edge` 当「已经补过 token」的标记，而且**标记值必须是本容器的票据**（用固定的 `1` 会让
+   浏览器里别的容器留下的 cookie 误导这一台，直接打到 401 页）。
+4. **host 侧与 client 侧的 cordis 必须一起关**：只关 `cordis-host-runner` 时，客户端面板
+   `ui-cordis` 一直等 `dynamicCordisRunner`，整页变成「Failed to load plugins」（实测）。
+   两边一起关之后界面正常起来。
+5. **脚本必须是 LF**：CRLF 会让容器 `exec format error`；另外别忘了 shebang（都踩过）。
+   仓库里用 `.gitattributes` 保住 LF，Dockerfile 里再兜一次 `sed -i 's/$//'`。
+
+四场景复测结果（`curl`，含 cookie jar）：
+
+| 场景 | 结果 |
+|---|---|
+| 全新浏览器 + 票据 | 200，真 dsh 界面（`<title>DeepSeek Harness</title>`，26131 字节） |
+| 带别的容器的旧 cookie + 票据 | 200（第一次命中就换成本容器 cookie） |
+| 只有旧 cookie、无票据 | 403 |
+| 无票据无 cookie | 403 |
+
+产物：`deploy/dsh-student/`（Dockerfile、补丁层、课程技能、容器内反代、入口脚本、README）。
+
 ## 十、要你拍板的两件事（其余我按上面的默认走）
 
 1. **审批策略**：学生跑到需要「升级权限」的命令时，dsh 默认会弹审批等人点。
