@@ -24,11 +24,11 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：cd1d2d53dbd164a13fc25ec035b50e5b84bf000c（= 生产版本；其后只有文档提交）
-生产：release 20260916T041043Z / commit cd1d2d5（服务 learning-platform-production @127.0.0.1:8789）
+代码提交：724d2169279940693d5625352d2eb2cb68773f59（= 生产版本；其后只有文档提交）
+生产：release 20260916T041841Z / commit 724d216（服务 learning-platform-production @127.0.0.1:8789）
       部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
       /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
-      上一版（可回滚）：release 20260916T035836Z / commit f02d3ee
+      上一版（可回滚）：release 20260916T041043Z / commit cd1d2d5
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
@@ -45,6 +45,13 @@ GUI（隔离库 `127.0.0.1:15175`，非生产数据）已走通：创建 → 改
 **学生学习入口已改成「课程优先」**（生产实测，`https://iicili.cyou/learn`，学生账号）：先看课包 → 再选这一节课 →
 由这节课的入口类型决定进画布还是 VibeCoding，页面上只是把形式**标出来**，不让学生选。课包卡片会写「上课形式：画布课堂 N 节 · VibeCoding 课堂 M 节」。
 产品：生产上 3 个课包（画布 6 节 / VibeCoding 4 节 / 画布 2 节），VibeCoding 那门课的第 1 节显示「上课中 · VibeCoding 课堂」并可进入。
+
+**学生端三个页面共用一份「这节课我能不能上」**（2026-09-16）：`lessonAvailability` 是唯一算法，
+`lessonStateMap()` 是它的批量版，`dashboard`、`/api/student/courses`（我的课程）、
+`/api/student/courses/:id`（课包详情）都从这一处取 `participationStatus / canStart / canStartVibeCoding /
+classroomMode / classroomBlockReason`。**不要再在前端拿 `lesson.status`（那是课时的发布状态）
+或作品状态去猜上课状态** —— 那样会出现「列表全写未开课、顶部计数却说有课在上课」的自相矛盾。
+说明文案也要按这节课自己的入口类型取，且**能进的时候不给「为什么进不去」**。
 
 **仍未完成 / 不能标完成**：整个 MVP 与「1–7 阶段」改造仍未全量验收；CU 预留账本只接入部分 AI 链路，不是全闭环。
 
