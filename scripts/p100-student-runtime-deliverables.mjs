@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { ensureClassroom, switchClassroom } from './lib/classroomFixture.mjs';
@@ -143,7 +144,46 @@ console.log('\n【一】宿主侧的产物逻辑（跑的是真脚本）');
     fs.existsSync(path.join(dir, 'INDEX.json')) && fs.existsSync(path.join(dir, 'index.html', 'MANIFEST.json')));
 }
 
-/* ────────────────────── 【二】平台侧两个接口（接真的产物逻辑） ────────────────────── */
+/* ─────────────── 特权代理的校验（broker-policy.mjs，纯函数，跨平台可测） ─────────────── */
+// 这一段是补出来的：真机上 PPT 一提交就报「name 不合法（必须是工作区内的相对路径）」，
+// 因为我写的名字模式**不允许斜杠**，而平台传的正是工作区相对路径。
+// 校验逻辑不该只能靠真机试出来，所以把它抽成纯函数并在守卫里逐条钉住。
+console.log('\n【一·补】特权代理的校验与参数拼装');
+{
+  const { buildRequestPlan } = await import(pathToFileURL(path.join(root, 'deploy', 'dsh-student', 'host-user', 'broker-policy.mjs')).href);
+  const scripts = { launch: '/s/launch.sh', stop: '/s/stop.sh', collect: '/s/collect.sh' };
+  const timeouts = { launch: 1, stop: 2, collect: 3 };
+  const plan = (request) => {
+    try { return { ok: true, plan: buildRequestPlan(request, scripts, timeouts) }; }
+    catch (error) { return { ok: false, message: error.message }; }
+  };
+  const base = { session: 'csession_1', student: 'user_1' };
+
+  // 该放行的：工作区相对路径（就是会有斜杠）
+  for (const name of ['index.html', 'deck/演示文稿.pptx', 'mygame/assets/hero.png']) {
+    const result = plan({ ...base, op: 'collect', mode: 'export', name });
+    check(`相对路径要放行：${name}`, result.ok && result.plan.args.at(-1) === name, JSON.stringify(result));
+  }
+  // 该拒的：越界、绝对、反斜杠、以 - 开头
+  for (const [label, name] of [
+    ['`..` 越界', '../../etc/shadow'],
+    ['路径中间夹 `..`', 'a/../../b'],
+    ['绝对路径', '/etc/shadow'],
+    ['反斜杠', 'a\\b'],
+    ['以 - 开头', '-rf'],
+    ['NUL', 'a\u0000b'],
+  ]) {
+    const result = plan({ ...base, op: 'collect', mode: 'export', name });
+    check(`产物名要拒（${label}）`, !result.ok, JSON.stringify(result));
+  }
+  // 未知 op / 带 - 的参数值 / 不合法的会话标识
+  check('未知 op 要拒', !plan({ ...base, op: 'shell', cmd: 'id' }).ok);
+  check('参数值以 - 开头要拒（会被脚本当成选项）',
+    !plan({ ...base, op: 'launch', key: '--help', gateway: 'g', ticket: 't' }).ok);
+  check('会话标识里的怪字符要拒', !plan({ op: 'stop', session: 'a b', student: 'user_1' }).ok);
+  check('list 不传 name 也能拼出计划', plan({ ...base, op: 'collect', mode: 'list' }).ok);
+}
+
 const bashWorks = spawnSync('bash', ['-c', 'exit 0'], { encoding: 'utf8' }).status === 0;
 if (!bashWorks) {
   console.log('  ⏭ 这台机器上没有可用的 bash —— 跳过平台侧接口那一半（宿主脚本的调用约定就是 bash）');
