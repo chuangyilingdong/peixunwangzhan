@@ -5,7 +5,7 @@ import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { getAnalyticsConsent, setAnalyticsConsent, trackAnalytics } from './analytics.js';
-import { LoginPanel, CanvasClassroom, CanvasWorkspace, LearnEntry, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
@@ -42,7 +42,7 @@ function Logo(){return <Link className="logo" to="/"><i>✦</i>AI魔法学院</L
 function Header({ user, userBadge }){
   const loc=useLocation();
   const nav=[['/','首页'],['/learn','学习上课'],['/marketplace','课程广场'],['/works','作品广场']];
-  return <header><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div></div></header>;
+  return <header className="site-topbar"><div className="bar"><Logo/><nav aria-label="主导航">{nav.map(([to,n])=><NavLink key={to} to={to} className={({isActive})=>isActive&&(to!=='/'||loc.pathname==='/')?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div></div></header>;
 }
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">课程广场</Link><Link to="/org">机构方案</Link><Link to="/works">学员作品</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/handbook">产品手册</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 五格殿下 · AI魔法学院 <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link onClick={()=>trackAnalytics('cta_click',{target:to})} to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
@@ -338,8 +338,9 @@ function MarketplaceDetail(){
 }
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
 function AnalyticsConsentBanner({ onDecision }) { return <aside className="analytics-consent" role="dialog" aria-label="统计分析选择"><div><strong>帮助我们改进官网体验</strong><p>我们只在你选择同意后记录匿名页面访问与转化事件，不记录 IP、姓名、电话或完整查询参数；数据最多保留 90 天。详见<Link to="/privacy">隐私政策</Link>。</p></div><div className="analytics-consent-actions"><button type="button" className="consent-muted" onClick={() => onDecision(false)}>仅使用必要功能</button><button type="button" className="button" onClick={() => onDecision(true)}>同意匿名分析</button></div></aside> }
-function LearnPageInner({ api, navigate }) {
-  return <main className='learn-page-shell'><LearnEntry role="STUDENT" onSelectCanvas={() => navigate('/learn/canvas')} onSelectVibeCoding={() => navigate('/learn/vibecoding')} /></main>;
+function LearnPageInner({ api }) {
+  // 以课程为先：先选课包，再选这一节课；上课形式由课包/这节课决定，学生不选。
+  return <main className='learn-page-shell'><StudentCourseCenter api={api} onEnterCanvas={(id) => { window.location.assign('/learn/canvas/' + id); }} onEnterVibeCoding={(id) => { window.location.assign('/learn/vibecoding/' + id); }} /></main>;
 }
 function LearnCanvasPage({ api }) {
   return <CanvasClassroom api={api} onEnterProject={(id) => { window.location.assign('/learn/canvas/' + id); }} />;
@@ -463,7 +464,7 @@ export function App(){
         <Route path='/terms' element={<LegalPage type='terms'/>}/>
         <Route path='/privacy' element={<LegalPage type='privacy'/>}/>
         <Route path='/minors' element={<LegalPage type='minors'/>}/>
-        <Route path='/learn' element={<LearnPageInner api={api} navigate={navigate}/>}/>
+        <Route path='/learn' element={<LearnPageInner api={api}/>}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/learn/vibecoding' element={<LearnVibeCodingPage api={api}/>}/>
