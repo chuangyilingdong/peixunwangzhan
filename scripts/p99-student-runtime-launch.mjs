@@ -48,6 +48,10 @@ if (spawnSync('docker', ['image', 'inspect', IMAGE], { encoding: 'utf8' }).statu
 process.env.RUNTIME_GATEWAY_SECRET = SECRET;
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
+// 这条守卫测的是**容器版**宿主脚本（本机有 docker）；用户版要 root 与 nginx，跑在真机上
+// （见 deploy/dsh-student/host-user/ 与真机验证记录）。
+process.env.DSH_RUNTIME_MODE = 'container';
+process.env.DSH_RUNTIME_SUDO = 'false';
 process.env.DSH_RUNTIME_LAUNCH_SCRIPT = LAUNCH_SCRIPT;
 process.env.DSH_RUNTIME_STOP_SCRIPT = STOP_SCRIPT;
 process.env.DSH_RUNTIME_GATEWAY_URL = `http://host.docker.internal:${PORT}/api/gateway/v1`;
