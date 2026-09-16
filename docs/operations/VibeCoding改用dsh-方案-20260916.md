@@ -104,9 +104,127 @@ POST /api/student/vibecoding/conversations/:id/messages
    给学生用得关掉一部分）。你给一份「学生能看见什么」，我按这个裁剪。
 4. **并发的量级**：预估同时在线创作的学生数，决定每容器几个人、机器规格。
 
-## 八、待补（调研中）
+## 九、阶段 0 实测（容器里真装真跑，2026-09-16）
 
-- dsh Web UI 的启动参数、协议、能否被反代到子路径；
-- 它自带的用户/凭据/工作区模型是否支持多租户，官方推荐的多用户做法；
-- 三个能力插件的官方包名与配置项（浏览器 / 沙箱 / PPT·文档产物），以及产物清单与用量事件怎么拿；
-- 自定义插件（我们要往它 UI 里加「提交作品」等入口）的开发方式。
+镜像：`debian:bookworm-slim`（本机已有；**Docker Hub 在这台机器上不可达**，所以用官方 Node 二进制装进去）
++ `npm i -g @deepseek-ai/dsh@0.1.5-rc.1`（固定版本，不用 latest）。Dockerfile 在 `.tmp/dsh-spike/`（未纳入仓库）。
+
+实测结论（都是真跑出来的）：
+
+```text
+dsh --version                 → 0.1.5-rc.1
+dsh --help                    → 子命令只有 web / plugin；有 --profile / --patch / --dump-config
+                                示例里已经给出 headless（跑一次任务打印结果就退出）与 sdk 两个 profile
+dsh web --help                → --host / --port / --no-open / --trusted-host <authority...>
+                                注意 --trusted-host：这是给「被反代到别人域名」留的正规口子
+dsh --profile web --dump-default-config  → 539 行组合树，关键几条：
+                                 · sandbox-policy: mode = DSH_PERMISSION_MODE ?? 'workspace-write'，
+                                   workspaceRoot = process.cwd()          ← 一容器一工作区
+                                 · bash-sandbox: timeoutMs 60000
+                                 · approval: policy = full-access ? 'never' : **'ask'**
+                                 · llm-pi-ai 已在组合里（不配 providers 就没有可用路由）
+                                 · session-persistence-jsonl: root = $DSH_HOME/sessions   ← 一容器一 DSH_HOME
+                                 · **dsh-cordis-host-runner / dsh-cordis-client-runner 默认就在组合里**
+                                 · host-plugin-inventory、host-directory-picker-auto、host-open-in-app 也在
+```
+
+这几条直接决定了我们的容器怎么配：
+
+1. **一个学生一节课 = 一个容器 + 一个 `DSH_HOME`**（会话日志天然隔离在容器里，`workspaceRoot` 指到一次性工作区）。
+2. **必须关掉 `dsh-cordis-host-runner` / `dsh-cordis-client-runner`**：它们让模型能自己写插件挂进宿主，
+   官方注释明说在 Web 面上沙箱与审批这两道**都会被绕过**。给学生的运行时里不能有这条路径。
+3. **审批策略要显式定**：默认 `ask` 是给「有真人坐旁边点同意」的场景准备的，我们这里没有真人可点。
+   要么改成拒绝、要么只允许 `workspace-write` 且不提供升级通道 —— 这条得你拍板（见第十节）。
+4. **模型路由只认我们自己的网关**：在 `llm-pi-ai.providers` 里声明 `api: openai-completions` + `baseURL` + `apiKeyEnv`，
+   指向我们的网关；这样 token 用量与成本记账仍走我们自己那一套（`llm-deepseek` 会额外发 DSH 专有字段，不用它）。
+5. **PPT/文档产物由我们自己提供工具**（dsh 没有），我们已有的 `deckSpec` + OOXML 生成正好包一个 `defineTool` 进去；
+   产物清单用 `present` 工具 + `deliverables/presented` 事件，提交仍走我们现有 `/submit` 那套规则。
+6. 学生界面里要**关掉** `host-plugin-inventory`（插件管理）、目录选择、以及终端/文件系统相关入口；
+   `--trusted-host` 用我们自己的域名，配合我们的反代与 HTTPS 终止（dsh 自己没有 TLS）。
+
+## 十、要你拍板的两件事（其余我按上面的默认走）
+
+1. **审批策略**：学生跑到需要「升级权限」的命令时，dsh 默认会弹审批等人点。
+   我们这边没人点，所以建议「**直接拒绝 + 只在一次性工作区内可写**」（安全、但模型遇到受限命令会失败并换做法）；
+   另一种是给 `danger-full-access`（能力最大、但容器里就能随意读写）。前者我建议。
+2. **一个学生一个容器，还是同一个容器多会话**：隔离性 vs 成本。
+   一容器多会话省资源，但 dsh 的「一个 cookie = 全部会话权限」意味着同容器内的学生会互相看得见 —— **不建议**。
+   我按「一容器一会话」设计，资源估算见第十一节。
+
+## 十一、要你给的资源（阻塞项，第一条最要紧）
+
+1. **一台能跑容器的机器**：现在这台生产机（2 vCPU / 1.6GB，**没有 docker/podman**）跑不动。
+   按「一学生一容器」估：每个容器里跑 Node 运行时 + 一个 Chromium（browser-use 走 Playwright MCP），
+   单容器建议 1–2 vCPU / 1.5–2GB。**10 个学生同时上课 ≈ 10–20 vCPU / 15–20GB**，另需镜像与工作区磁盘。
+2. **模型渠道**：确认 dsh 走我们的网关（保住记账），并给出这个用途可用的 key/额度。
+3. **并发量级**：峰值同时创作的学生数，决定机器规格与是否需要预热池。
+4. **学生界面边界清单**：哪些入口给学生看（我先把终端、插件管理、目录选择、文件系统隐藏，其余你确认）。
+
+
+> 调研对象：GitHub `deepseek-ai/deepseek-harness` master 快照（版本号 `0.1.6-alpha.1`；npm 上最新是 `0.1.5-rc.1`）。
+
+### 8.1 它的 Web UI 不是「可以挂到别人站点上」的东西 —— 这决定了整个方案
+
+- `dsh web` = `--profile web` 的别名，默认只监听 `http://127.0.0.1:3080`；
+  **故意不支持 `--host 0.0.0.0`**，启动就报错退出，理由原文是「会把这台机器上的远程代码执行暴露到网络上」。
+- 它**没有用户体系**：唯一身份是一个进程级浏览器 cookie。原文（`.agents/notes/implemented/architecture/2026-08-24-browser-token-authentication.md:13,31`）：
+  「Every API Proxy method, Remote unary call, ... requires **the same browser session**」「**One application credential is the enforceable identity used for every operation.**
+  Cookie 是 `HttpOnly` + `SameSite=Strict` + host-only，且**没有 logout**；
+  `packages/identity` 里只有一个匿名安装 UUID，官方原文注明「Do not use it to identify a user」。
+- 它**拒绝跨站承载**：`packages/client/connection/src/api-request-trust.ts` 里 `sec-fetch-site === 'cross-site'` 直接返回 false，
+  `sandboxed iframe`（opaque origin）也拒绝。→ **把 dsh Web UI 用 iframe 嵌进我们官网是行不通的**（跨源）。
+- 它还**没有 TLS**：`packages/host/webserver/README.md:39` 原文「carries no TLS, authentication, or origin policy of its own」。
+- 官方对「多租户」的措辞是未来时：`a future multi-principal Host must revisit ...`；
+  `packages/ptc-runtime` 里写「A container-class backend would provide a hard multi-tenant boundary ... **nothing is decided beyond the well-known `isolation` value**」。
+
+**所以「用 dsh Web UI 当学生界面 + 保留多租户」现实上只有一个做法**：
+**一个学生一节课 = 一个隔离容器里的一个 dsh 运行时**，我们的站点**不嵌 iframe**，而是
+「门禁通过 → 我们发短时票据 → 反代到这个容器（同源路径，cookie 由我们的反代持有/透传）」，
+或者更干净：**学生界面由我们自己的前端实现，通过 dsh 的 SDK 驱动容器里的运行时**（下面 8.4 说明为什么这条更稳）。
+
+### 8.2 三个能力的官方现成件——和我们想的不一样
+
+| 你要的能力 | 官方到底有什么 | 结论 |
+|---|---|---|
+| 浏览器预览与交互 | `dsh-browser-use` **本身零浏览器代码**，只注册一个 provider 名；真正的实现在三个**实验性** provider 里（Playwright MCP / Chrome DevTools MCP / Stagehand）。**Stagehand 强制要 OpenAI/Anthropic 之类的 key，且明确不支持 DeepSeek 端点与 baseURL 覆盖** | 只能走 **Playwright MCP** 路线（容器里装 Chromium），且它是「MCP 连接」不是现成工具 |
+| 文件与命令沙箱 | `dsh-sandbox-local` + `dsh-bash-sandbox`：**同内核同文件系统的 argv 级文件策略**，三档 `read-only`（默认）/`workspace-write`/`danger-full-access`，**只管文件效果，网络与进程可见性不在承诺里**；原文「**use a container, microVM, or remote executor when the whole environment must be isolated**」。fail-closed：没有可用 runner 就 `SANDBOX_UNAVAILABLE`，绝不裸跑 | 与你的选择一致：**必须容器**；容器内再叠这层策略 |
+| PPT/文档产物 | **没有**。全仓库没有任何 pptx/docx/xlsx 生成工具或技能，只有图标与「不可预览」判定 | 这块**必须我们自己写工具**（我们已有 `packages/shared/src/deckSpec.js` 与服务端 OOXML 生成，正好包装成一个 dsh 工具） |
+
+另外两个必须知道的坑：
+- `packages/extensions/tool-cordis` 允许模型**自己写 JavaScript 并以临时插件挂进宿主**，
+  而它的注释明说在 Web 面上「**both the sandbox and the approval seam are bypassed rather than enforced**」。
+  给学生用**必须把这个插件关掉**（或整包不装）。
+- 产物登记有现成件：`present` 工具 + `deliverables/presented` 事件（`docs/persistence-catalog.md` 里是 log-only 事件），
+  但它**只记路径、不校验内容**；内容校验要在我们提交环节自己做。
+
+### 8.3 模型路由：可以指到我们自己的网关（记账能保住）
+
+`llm-pi-ai` 支持 hand-declared gateway：
+`providers.<route>` 里给 `api: openai-completions` + `baseURL` + `apiKeyEnv`（**凭据引用，不落明文**）+ `models` 列表即可，
+原文「each key is the provider route name」「apiKeyEnv is a credential reference resolved per request ... so no secret enters the configuration file」。
+`llm-deepseek` 的 route 名是 `deepseek-official`，也能 `baseURL` 覆盖，但它会额外发 `dsh_session_log`、`dsh_plugin_packages`
+这类 DSH 专有 header/字段（`docs/deepseek-llm-api-wire-extensions.md`），**建议直接走 llm-pi-ai + 我们网关**，顺带把成本记在我们账上。
+
+### 8.4 我们要的三件事，分别接在哪（这是可落地的地方）
+
+1. **课堂门禁**：开会话之前必须过 `resolveStudentLessonContext`。dsh 侧没有用户概念，所以门禁**只能在我们这边**——
+   我们是唯一发「容器 + 运行时」的人，没开课的学生根本拿不到实例。
+2. **算力记账**：走 SDK 的 `session.event`。事件流里有 `assistant/message.usage`（token 计数）、`tool/call`、`tool/result`；
+   原文「usage ... so the model output and its accounting travel together」。**注意 SDK 没有「本次 prompt 的结果」**——
+   只能按 `turn/start`/`turn/end`/`step/*` 自己切区间，不能靠 `prompt()` 的返回值。
+3. **按产物提交**：用 `deliverables/presented` 事件拿产物路径清单，再走我们现有的 `/submit`
+   （`(conversation_id, entry_file)` 唯一、版权确认、只允许网页/PPT/Word/Excel 那套规则不变）。
+
+### 8.5 品牌与许可
+
+MIT；描述性文字可以说「built on DeepSeek Harness」；**项目名里不要直接用全称**（官方建议用 DSH 缩写）；
+官方品牌本身是一个可替换插件（`ui-brand-official`），换成我们自己的品牌在机制上是被支持的。
+
+### 8.6 调研里没能确认的（要实测才能定）
+
+1. dsh 前端在**反代子路径**下能否工作：vite `base: './'` 是相对路径，但 `index.html` 里的
+   `/manifest.webmanifest`、`/favicon.svg` 和代码里的 `/api`、`/api/remote.mux`、`/plugins` 都是绝对路径，仓库里找不到任何 base-path 配置项；
+2. 同源反代 + 同源 iframe 承载是否真的可行（理论上能过信任围栏，但官方没有任何「与他人共用 origin」的先例或契约）；
+3. 浏览器 provider 那几个实验性包在 npm 上是否真的已发布、版本号多少；
+4. `tool-cordis` 关掉之后，还有没有别的「模型可自造插件」的路径。
+
