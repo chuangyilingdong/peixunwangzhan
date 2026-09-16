@@ -1,0 +1,39 @@
+# 宿主特权代理（学生创作环境用）—— 2026-09-16
+#
+# 为什么要这个单元（而不是继续用 sudoers）：
+# 平台服务的单元里有 `NoNewPrivileges=true`，那个标志会让 **sudo 拒绝提权**
+# （第一次真部署时实测：`sudo: The "no new privileges" flag is set ...`）。
+# 所以「平台进程 → sudo → 宿主脚本」在生产上根本走不通。
+# 这里改成一个 root 常驻的 socket 代理，按白名单执行那几个固定脚本：
+# 加固一个都不用关，而且比 sudoers 更窄（不再依赖 setuid）。
+#
+# 安装（root）：
+#   install -o root -g root -m 0644 dsh-host-broker.mjs /opt/dsh-host-user/dsh-host-broker.mjs
+#   install -o root -g root -m 0644 dsh-host-broker.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now dsh-host-broker
+#   systemctl status dsh-host-broker --no-pager
+[Unit]
+Description=dsh host broker（学生创作环境：开/收/取产物，按白名单执行宿主脚本）
+After=network.target
+
+[Service]
+Type=simple
+# 用运行时的 node：这台机器上除了它，系统 node 不一定有/版本不对
+ExecStart=/opt/dsh-runtime/opt/node/bin/node /opt/dsh-host-user/dsh-host-broker.mjs
+Restart=always
+RestartSec=3
+
+# socket 放在 /run 下：单元负责建目录，代理负责把 socket 的属组改成平台账号那一组（0660）
+RuntimeDirectory=dsh-host-user
+RuntimeDirectoryMode=0755
+Environment=DSH_HOST_DIR=/opt/dsh-host-user
+Environment=DSH_BROKER_SOCKET=/run/dsh-host-user/broker.sock
+Environment=DSH_BROKER_GROUP=ai-kids-prod
+# 代理本身就是 root，且只 exec 那三个既定脚本；这个标志不影响它 fork/exec
+NoNewPrivileges=yes
+# 学生家目录 / srv / nginx 都要动，所以**不能**开 ProtectSystem=strict
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

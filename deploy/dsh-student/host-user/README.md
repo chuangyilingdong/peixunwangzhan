@@ -103,17 +103,35 @@ dsh 把作品落在**学生自己的工作区**里，平台库里一份都没有
 补这一步之前，「下课」等于**学生的作品直接消失** —— 没点过提交的那些就真没了。
 留存失败**不拦**收环境（否则一个坏脚本会让课堂永远收不掉），但会在 stderr 上吵一句。
 
-### sudoers 要加一行
+### 提权通道：特权代理（不是 sudoers）
 
-平台账号要能调第三个脚本（`/etc/sudoers.d/dsh-students`）：
+平台账号要能调那三个脚本（建 Linux 用户、写 nginx 入口、起 systemd 单元、读学生工作区），
+但这些都要 root。**不能用 sudo** —— 平台服务的单元里有 `NoNewPrivileges=true`，
+那个标志会让 sudo 直接拒绝提权（2026-09-16 第一次真部署时实测：
 
 ```
-ai-kids-prod ALL=(root) NOPASSWD: /opt/dsh-host-user/run-student-user.sh, /opt/dsh-host-user/stop-student-user.sh, /opt/dsh-host-user/collect-student-user.sh
+sudo: The "no new privileges" flag is set, which prevents sudo from running as root.
 ```
 
-⚠️ 加这一行之前先确认三个脚本 + `collect-student.mjs` 都是 **root 所有且平台账号不可写**
-（否则就是提权后门）。`collect-student-user.sh` 是会 `exec` 旁边的 `collect-student.mjs` 的，
-所以那个 `.mjs` 也要一起算进「root 所有、不可写」。
+所以最初写好的那条窄 sudoers 在生产上**根本走不通**，不管怎么写）。现在的做法是一个
+**root 常驻的特权代理** `dsh-host-broker.mjs`：
+
+```bash
+install -o root -g root -m 0644 dsh-host-broker.mjs /opt/dsh-host-user/dsh-host-broker.mjs
+install -o root -g root -m 0644 dsh-host-broker.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now dsh-host-broker
+systemctl status dsh-host-broker --no-pager
+ls -la /run/dsh-host-user/broker.sock     # 期望 srw-rw---- root ai-kids-prod
+```
+
+- 协议：一行 JSON 请求 → 一行 JSON 应答；op 只有 `launch` / `stop` / `collect` 三种，
+  **脚本路径写死在代理里**，不从请求来 —— 它不是一个「以 root 执行任意命令」的后门。
+- socket 权限 `0660`、属组 `ai-kids-prod`：能连上它的只有平台那一个身份。
+- 参数都过校验：未知 op、以 `-` 开头的值（会被脚本当成选项）、带 `..` 的产物名、超长值一律拒。
+- 平台侧开关：`DSH_RUNTIME_TRANSPORT=broker`（用户版**默认**）或 `script`（容器版/本地守卫）。
+
+**旧的 sudoers 规则（`/etc/sudoers.d/dsh-students`）已经撤掉** —— 代理取代了它，
+少一处提权面。要回滚就把它改回来并把 `DSH_RUNTIME_TRANSPORT` 设成 `script`。
 
 平台侧开关（`/etc/ai-kids-platform/production.env`）：
 

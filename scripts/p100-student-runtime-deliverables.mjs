@@ -188,6 +188,9 @@ const baseEnv = {
   DSH_RUNTIME_MODE: 'user',
   DSH_RUNTIME_SUDO: 'false',
   DSH_RUNTIME_ENABLED: 'true',
+  // 本机没有 dsh-host-broker（生产走的是那条特权代理 socket），这里明确用「脚本」通道，
+  // 于是能用一个桩脚本把「平台 → 脚本 → 产物逻辑 → 落库」整条链真跑一遍。
+  DSH_RUNTIME_TRANSPORT: 'script',
   DSH_RUNTIME_COLLECT_SCRIPT: stub.split(path.sep).join('/'),
 };
 const run = (args) => new Promise((resolve, reject) => {

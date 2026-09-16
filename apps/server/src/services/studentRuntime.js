@@ -17,6 +17,7 @@
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { connect } from 'node:net';
 import { errors, row } from '../lib.js';
 import { issueRuntimeKey, assertRuntimeClassroomActive } from '../routes/runtimeGateway.js';
 
@@ -50,6 +51,13 @@ function config() {
     // 取产物（学生点「提交作品」时用）：列清单与取回一份，都是同一个脚本的两个子命令。
     collectScript: String(process.env.DSH_RUNTIME_COLLECT_SCRIPT
       || (mode === 'container' ? '/opt/dsh-host/collect-student-container.sh' : '/opt/dsh-host-user/collect-student-user.sh')).trim(),
+    // 怎么「动 root」这件事，两种通道（2026-09-16 第一次真部署才发现要分）：
+    //   · broker（用户版默认）：连宿主上的**特权代理** socket —— 平台服务跑在
+    //     systemd 加固下（单元里有 NoNewPrivileges=true），那个标志会让 **sudo 拒绝提权**，
+    //     所以「平台 → sudo → 脚本」在生产上根本走不通；
+    //   · script：直接跑脚本（容器版不需要 root；本地/守卫里也是这条，好测）。
+    transport: (String(process.env.DSH_RUNTIME_TRANSPORT || (mode === 'container' ? 'script' : 'broker')).trim() === 'script' ? 'script' : 'broker'),
+    brokerSocket: String(process.env.DSH_RUNTIME_BROKER_SOCKET || '/run/dsh-host-user/broker.sock').trim(),
   };
 }
 
@@ -111,9 +119,7 @@ function parseScriptJson(stdout, what) {
 export async function listStudentDeliverables({ sessionId, studentId, orgId, lessonId = null }) {
   const cfg = config();
   assertCollectable({ sessionId, studentId, orgId, lessonId });
-  const stdout = await runScript(cfg.collectScript, ['--session', sessionId, '--student', studentId, '--list'], {
-    timeout: COLLECT_TIMEOUT_MS, maxBuffer: COLLECT_MAX_BUFFER,
-  });
+  const stdout = await runHost('collect', { session: sessionId, student: studentId, mode: 'list' }, { timeout: COLLECT_TIMEOUT_MS });
   const parsed = parseScriptJson(stdout, '列产物');
   return {
     workspace: parsed.workspace || null,
@@ -133,9 +139,7 @@ export async function collectStudentDeliverable({ sessionId, studentId, orgId, l
   assertCollectable({ sessionId, studentId, orgId, lessonId });
   const wanted = String(name || '').trim();
   if (!wanted) throw errors.badRequest('要取哪一份产物得说出来', 'RUNTIME_DELIVERABLE_REQUIRED');
-  const stdout = await runScript(cfg.collectScript, ['--session', sessionId, '--student', studentId, '--export', wanted], {
-    timeout: COLLECT_TIMEOUT_MS, maxBuffer: COLLECT_MAX_BUFFER,
-  });
+  const stdout = await runHost('collect', { session: sessionId, student: studentId, mode: 'export', name: wanted }, { timeout: COLLECT_TIMEOUT_MS });
   const collected = parseScriptJson(stdout, '取产物');
   if (!Array.isArray(collected.files) || !collected.files.length) {
     throw errors.conflict('这份产物取回来是空的', 'RUNTIME_DELIVERABLE_EMPTY');
@@ -145,10 +149,10 @@ export async function collectStudentDeliverable({ sessionId, studentId, orgId, l
 
 /** 列产物/取产物共用的前置：脚本在不在 + 门禁（与开盒子、调模型同一套）。 */
 function assertCollectable({ sessionId, studentId, orgId, lessonId }) {
-  const cfg = config();
-  if (!cfg.enabled) throw errors.conflict('学生创作环境未启用', 'RUNTIME_LAUNCH_UNAVAILABLE');
-  if (!existsSync(cfg.collectScript)) {
-    throw errors.conflict(`这台机器还不能取学生的作品：宿主脚本不在（${cfg.collectScript}）`, 'RUNTIME_LAUNCH_UNAVAILABLE');
+  // 「取产物这条通道在不在」单独判：script 模式下它看的是 collect 脚本（与开盒子看的不是同一个文件）
+  const availability = hostChannel('collect');
+  if (!availability.available) {
+    throw errors.conflict(`这台机器还不能取学生的作品：${availability.reason}`, 'RUNTIME_LAUNCH_UNAVAILABLE');
   }
   const student = row('SELECT id,org_id FROM users WHERE id=?', [studentId]);
   if (!student || student.org_id !== orgId) throw errors.forbidden('学生不属于该机构', 'RUNTIME_STUDENT_INVALID');
@@ -166,12 +170,105 @@ function parseLaunchOutput(stdout) {
   return { containerName, hostPort };
 }
 
-/** 这台机器现在能不能开盒子（给管理端/学生端一个明确的「不可用」而不是转圈）。 */
-export function studentRuntimeAvailability() {
+/**
+ * 宿主脚本的调用计划：**一次操作 → 一个脚本 + 一串 argv**。
+ * 两种通道（特权代理 / 直接跑脚本）共用这一份，免得两边参数写法漂移
+ * （漂移的后果是「本地测通了、生产上参数不一样」）。
+ */
+function scriptPlanFor(op, params) {
+  const cfg = config();
+  const base = ['--session', params.session, '--student', params.student];
+  if (op === 'launch') {
+    return {
+      script: cfg.launchScript,
+      args: [...base, '--key', params.key, '--gateway', cfg.gatewayUrl, '--ticket', params.ticket,
+        ...(cfg.visionModel ? ['--vision-model', cfg.visionModel] : []),
+        ...(cfg.mode === 'container' ? ['--name', params.containerName] : [])],
+    };
+  }
+  if (op === 'stop') {
+    return {
+      script: cfg.stopScript,
+      args: cfg.mode === 'container'
+        ? (params.containerName ? ['--name', params.containerName] : ['--session', params.session])
+        : base,
+    };
+  }
+  if (op === 'collect') {
+    const tail = params.mode === 'export' ? ['--export', params.name] : [`--${params.mode}`];
+    return { script: cfg.collectScript, args: [...base, ...tail] };
+  }
+  throw new Error(`不认识的宿主操作：${op}`);
+}
+
+/** 走特权代理：一行 JSON 请求，一行 JSON 应答（见 deploy/dsh-student/host-user/dsh-host-broker.mjs）。 */
+function callBroker(payload, timeout) {
+  const cfg = config();
+  return new Promise((resolve, reject) => {
+    const socket = connect(cfg.brokerSocket);
+    let buffer = '';
+    let settled = false;
+    const finish = (fn, value) => { if (!settled) { settled = true; socket.destroy(); fn(value); } };
+    socket.setEncoding('utf8');
+    socket.setTimeout(timeout, () => finish(reject, Object.assign(new Error(`宿主代理超时（${timeout}ms）`), { code: 'RUNTIME_HOST_SCRIPT_FAILED' })));
+    socket.on('connect', () => socket.write(JSON.stringify(payload) + '\n'));
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) return;
+      let parsed;
+      try { parsed = JSON.parse(buffer.slice(0, newline)); }
+      catch { finish(reject, Object.assign(new Error('宿主代理的应答不是 JSON'), { code: 'RUNTIME_HOST_SCRIPT_OUTPUT_INVALID' })); return; }
+      finish(resolve, parsed || {});
+    });
+    socket.on('error', (error) => finish(reject, Object.assign(
+      new Error(`连不上宿主代理（${cfg.brokerSocket}）：${error.message}；检查 dsh-host-broker 服务是否在跑`),
+      { code: 'RUNTIME_HOST_SCRIPT_FAILED' },
+    )));
+    socket.on('close', () => finish(reject, Object.assign(new Error('宿主代理提前断开'), { code: 'RUNTIME_HOST_SCRIPT_FAILED' })));
+  });
+}
+
+/**
+ * 执行一次宿主操作，返回脚本的 stdout。
+ * 失败一律抛错（**失败要吵**）—— 调用方不该拿到一个「看着像成功」的空结果。
+ */
+async function runHost(op, params, { timeout }) {
+  const cfg = config();
+  if (cfg.transport === 'broker') {
+    const result = await callBroker({ op, ...params }, timeout);
+    if (!result.ok) {
+      const detail = [result.message, String(result.stderr || '').trim()].filter(Boolean).join('；').slice(0, 400);
+      throw Object.assign(new Error(detail || '宿主操作失败'), { code: result.code || 'RUNTIME_HOST_SCRIPT_FAILED' });
+    }
+    return String(result.stdout || '');
+  }
+  const plan = scriptPlanFor(op, params);
+  return runScript(plan.script, plan.args, { timeout });
+}
+
+/**
+ * 「动宿主的通道」现在在位吗？
+ * @param {'launch'|'stop'|'collect'} which 只有 script 模式才需要区分（看哪个脚本），
+ *   broker 模式三种操作共用同一个 socket。
+ */
+function hostChannel(which) {
   const cfg = config();
   if (!cfg.enabled) return { available: false, reason: '未启用（DSH_RUNTIME_ENABLED=false）' };
-  if (!existsSync(cfg.launchScript)) return { available: false, reason: `宿主脚本不在：${cfg.launchScript}` };
+  if (cfg.transport === 'broker') {
+    // 代理没起来（或 socket 权限不对）时**明确说不可用**，让学生界面退回原来的入口，
+    // 而不是等他点了「进入创作环境」才失败。
+    if (!existsSync(cfg.brokerSocket)) return { available: false, reason: `宿主代理 socket 不在：${cfg.brokerSocket}（dsh-host-broker 没跑？）` };
+    return { available: true, reason: '' };
+  }
+  const script = which === 'collect' ? cfg.collectScript : which === 'stop' ? cfg.stopScript : cfg.launchScript;
+  if (!existsSync(script)) return { available: false, reason: `宿主脚本不在：${script}` };
   return { available: true, reason: '' };
+}
+
+/** 这台机器现在能不能开盒子（给管理端/学生端一个明确的「不可用」而不是转圈）。 */
+export function studentRuntimeAvailability() {
+  return hostChannel('launch');
 }
 
 /**
@@ -195,18 +292,16 @@ export async function launchStudentRuntime({ sessionId, studentId, orgId, lesson
   const ticket = randomBytes(24).toString('base64url');
 
   // ③ 起环境
-  const launchArgs = [
-    '--session', sessionId,
-    '--student', studentId,
-    '--key', runtimeKey,
-    '--gateway', cfg.gatewayUrl,
-    '--ticket', ticket,
-    '--vision-model', cfg.visionModel,
-  ];
-  // 容器版可以指定容器名；用户版的用户名是**由课堂+学生确定性推导**的（停课时要能算回来），
-  // 所以那一边不接受 --name（传了会报「不认识的参数」）。
-  if (cfg.mode === 'container') launchArgs.push('--name', containerNameFor(sessionId, studentId));
-  const stdout = await runScript(cfg.launchScript, launchArgs, { timeout: LAUNCH_TIMEOUT_MS });
+  const stdout = await runHost('launch', {
+    session: sessionId,
+    student: studentId,
+    key: runtimeKey,
+    ticket,
+    // 网关地址与读图模型由平台侧给（配置只留一处），脚本/代理不各自兜默认值
+    gateway: cfg.gatewayUrl,
+    visionModel: cfg.visionModel,
+    containerName: cfg.mode === 'container' ? containerNameFor(sessionId, studentId) : '',
+  }, { timeout: LAUNCH_TIMEOUT_MS });
   const { containerName, hostPort } = parseLaunchOutput(stdout);
 
   // 入口地址：宿主脚本给的 EDGE_URL 是**完整地址**（用户版是 https://域名:端口，容器版由 nginx 前缀转发），
@@ -231,13 +326,17 @@ export async function launchStudentRuntime({ sessionId, studentId, orgId, lesson
  */
 export async function stopStudentRuntime({ sessionId = '', studentId = '', containerName = '' } = {}) {
   const cfg = config();
-  if (!existsSync(cfg.stopScript)) throw errors.conflict(`宿主脚本不在：${cfg.stopScript}`, 'RUNTIME_LAUNCH_UNAVAILABLE');
+  // 「这台机器能不能收」与开盒子同一套判断（代理/脚本哪条通道在位）
+  const availability = hostChannel('stop');
+  if (!availability.available) throw errors.conflict(`这台机器还不能收学生的环境：${availability.reason}`, 'RUNTIME_LAUNCH_UNAVAILABLE');
   if (!sessionId && !studentId && !containerName) throw errors.badRequest('收环境要给出课堂、学生或环境名', 'VALIDATION_REQUIRED');
-  // 用户版按「课堂」收：用户名由课堂+学生推导，脚本自己算得回来；
+  // 用户版按「课堂 + 学生」收：用户名由这两者推导，脚本自己算得回来（所以两个都必须给）。
   // 容器版可以按容器名收，也可以按课堂（脚本支持 --session）。
-  const stopArgs = cfg.mode === 'container'
-    ? (containerName ? ['--name', containerName] : sessionId ? ['--session', sessionId] : ['--student', studentId])
-    : ['--session', sessionId || '-', '--student', studentId || '-'];
-  const stdout = await runScript(cfg.stopScript, stopArgs, { timeout: STOP_TIMEOUT_MS });
+  if (cfg.mode !== 'container' && (!sessionId || !studentId)) {
+    throw errors.badRequest('用户版收环境要同时给出课堂与学生（用户名由这两者推导）', 'VALIDATION_REQUIRED');
+  }
+  const stdout = await runHost('stop', {
+    session: sessionId || '', student: studentId || '', containerName: containerName || '',
+  }, { timeout: STOP_TIMEOUT_MS });
   return { output: stdout.trim().split('\n').slice(-5) };
 }
