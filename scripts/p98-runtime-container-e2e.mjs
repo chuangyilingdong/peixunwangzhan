@@ -169,6 +169,29 @@ try {
     audit.close();
   }
 
+  // ⑤ 默认那条路：**不配读图渠道**时，带图的请求跟着模型走（同一条 TEXT 渠道）。
+  //    这是平台现在的真实配置（模型自己就能看图），所以这条是主路径，上面那条是可选覆盖。
+  {
+    const setter = new DatabaseSync(dbPath);
+    const policy = JSON.parse(setter.prepare('SELECT ai_provider_policy FROM platform_settings WHERE id=1').get().ai_provider_policy);
+    setter.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ ...policy, visionChannelId: '' }));
+    setter.close();
+
+    const followCall = docker(['exec', '-i', CONTAINER, 'sh', '-lc',
+      'cat > /tmp/p98-follow.json && curl -s -X POST -H "content-type: application/json" -H "authorization: Bearer $PLATFORM_GATEWAY_KEY" --data @/tmp/p98-follow.json "$GATEWAY_BASE_URL/chat/completions"'],
+    { input: probe });
+    const followBody = String(followCall.stdout || '');
+    check('⑤ 不配读图渠道 → 带图调用仍然 200，且落在**模型自己那条渠道**上',
+      followCall.status === 0 && new RegExp(`"model"\\s*:\\s*"${TEXT_MODEL}"`).test(followBody),
+      `${followCall.status} ${followBody.slice(0, 300)}`);
+
+    const audit = new DatabaseSync(dbPath);
+    const row = audit.prepare('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(sessionId);
+    check('⑤ 这一通也记在文本渠道的模型上（钱一样进我们的账）', row?.model === TEXT_MODEL, String(row?.model));
+    check('⑤ 记账里仍然带着「这轮有图」的证据', /"withImages":true/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 240));
+    audit.close();
+  }
+
   const gate = docker(['exec', CONTAINER, 'sh', '-lc', 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/']);
   check('④ 容器入口闸门仍然拦得住没票据的请求（403）', String(gate.stdout || '').trim() === '403', String(gate.stdout || '').trim());
   const gateTicket = docker(['exec', CONTAINER, 'sh', '-lc', `curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8080/?t=${TICKET}"`]);

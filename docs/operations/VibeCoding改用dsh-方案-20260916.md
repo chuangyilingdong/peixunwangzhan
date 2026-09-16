@@ -209,16 +209,21 @@ dsh 侧用 `llm-pi-ai` 的 hand-declared gateway 指向我们新加的 OpenAI �
   不是上游真名。网关按顺序解析（`resolveRuntimeSelection`）：政策 `modelRoutes` 优先 → 默认 TEXT 渠道的
   模型清单里认得出就用 → 认不出就用**这条渠道自己的 model**。以前会把容器报的字符串原样当上游 model
   发出去（轻则 400，重则按另一个模型计费）。
-- **读图（modlens）也走我们的网关**。政策新增 `visionChannelId`（读图渠道，后台「能力路由」可配）：
-  带图的请求走这条渠道、**不带备份渠道**（备份会把图发给纯文本模型）；**没配就直接 409**
-  （`RUNTIME_VISION_UNCONFIGURED`），不悄悄退回文本渠道——那等于花钱买一段编出来的「图里有什么」。
-  容器的入口脚本按本次注入的运行时密钥写 `~/.modlens/config.json`（`provider: openai` + 我们的
-  baseUrl/apiKey；`structuredOutput` 必须关，因为我们的网关不转 `response_format`）。
-  网关这一层同时修掉「多模态内容被压成 `"[object Object]"`」——学生的图以前在网关就没了。
+- **读图：图跟着模型走，不需要额外的视觉渠道**（2026-09-16 第二轮纠正过一个错假设）。
+  我们的模型（`deepseek-flash` 那条渠道）本来就能看图：平台老 VibeCoding 的聊天一直把图当内容块
+  发给同一个模型（代码注释里记着实测：data URL 答出「红 蓝」，外链会报错）。要在 dsh 里成立，缺的是：
+  ① 补丁层给模型声明 `input: [text, image]` —— pi-ai 适配器对**手写声明的模型**默认只认文本
+  （官方原文：*Declaring images is what makes a hand-declared vision model usable*）；
+  ② 网关别把图弄丢 —— 以前多模态 content 被压成 `"[object Object]"`（图在网关这一跳就没了），
+  现在只放行 text 与 `http(s)`/`data:image`。
+  因此**默认语义 = 图走同一条 TEXT 渠道、同一个模型**；政策里的 `visionChannelId`（后台「读图渠道」）
+  只是**可选覆盖**（留空即默认），不是一道闸门 —— 上一版那个「不配就 409」是错的，会把学生正常发图挡掉。
+  容器里仍然把 `@liustack/modlens`（给纯文本模型用的视觉桥）的凭据钉到我们网关：这条路上用不到它，
+  但万一将来指向纯文本模型、或有人点了它，钱也仍然进我们的账。
 - **容器宿主（机器那一半）成脚本**：`deploy/dsh-student/host/`（装机 / 拉起 / 停 / 兜底回收 / 自检）。
 
-守卫：`p97`（网关这一侧 18 项）+ 新增 `p98`（真容器端到端：容器里的读图打到我们的网关、落在读图渠道、
-进 `usage_records`；没有 docker/镜像时明确跳过）。
+守卫：`p97`（网关这一侧 20 项）+ 新增 `p98`（真容器端到端：容器里带图的调用打到我们的网关、
+跟着模型落在 TEXT 渠道（或配了读图渠道时落在它上面）、进 `usage_records`；没有 docker/镜像时明确跳过）。
 
 **尚未做**：这个端点尚未部署（它只服务 dsh 容器，dsh 没上线前不往外发，避免多一个没有消费者的公网路由）；
 端到端还差「平台侧拉起容器 + 工作区预选 + 产物 → `/submit`」这一段。

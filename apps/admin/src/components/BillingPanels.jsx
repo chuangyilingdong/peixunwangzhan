@@ -410,12 +410,12 @@ export function ProviderPolicyPanel({ api }) {
       </div>)}
       <div className="top-gap"><strong>能力路由（切换渠道）</strong><div className="muted">主渠道明确拒绝（认证失败、接口不存在、限流）时尝试备用渠道的默认模型。已输出、已受理或结果未知不自动重试；启用网关时主备由网关管理。</div></div>
       <div className="form-grid top-gap">{modalities.map(([id,name])=><div key={id}><label>{name} · 主渠道<select value={form.modalityChannels[id]||''} onChange={e=>setForm({...form,modalityChannels:{...form.modalityChannels,[id]:e.target.value}})}><option value="">使用默认渠道</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>{name} · 备用渠道<select value={form.modalityBackupChannels?.[id]||''} onChange={e=>setForm({...form,modalityBackupChannels:{...(form.modalityBackupChannels || {}),[id]:e.target.value}})}><option value="">不配置备用渠道</option>{form.channels.filter(c=>c.id!==form.modalityChannels[id]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label></div>)}</div>
-      {/* 读图渠道（2026-09-16）：学生端 dsh 里的视觉桥（modlens）把学生发的图交给这条渠道的模型。
-          必须单独配一条**能看图**的渠道：不配 = 带图的调用被明确拒绝（409），
-          不会悄悄丢给文本渠道去编——那等于花钱买一段假结论。 */}
+      {/* 读图渠道（2026-09-16）：学生端 dsh 里带图的请求走哪条渠道。
+          **留空就是跟着上面的文本渠道走**（默认，也是常态：我们的模型本来就能看图）；
+          只有想把图单独送去另一条渠道（比如换了便宜/更会看图的模型）时才配它。 */}
       <div className="form-grid top-gap">
-        <label>读图渠道（学生发图时用）<select value={form.visionChannelId||''} onChange={e=>setForm({...form,visionChannelId:e.target.value})}><option value="">不配置（带图的调用会被拒绝）</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}（{c.model}）</option>)}</select></label>
-        <div className="muted">学生端「看图」走这条渠道，费用照常进算力账；留空则学生发图时平台直接拒绝，不会拿纯文本模型去猜图。</div>
+        <label>读图渠道（留空＝跟着文本渠道的模型走）<select value={form.visionChannelId||''} onChange={e=>setForm({...form,visionChannelId:e.target.value})}><option value="">跟着文本渠道走（默认）</option>{form.channels.map(c=><option key={c.id} value={c.id}>{c.name}（{c.model}）</option>)}</select></label>
+        <div className="muted">学生端发图默认交给文本渠道那个模型去读（费用照常进算力账）。只有要把图单独送到另一条渠道时才在这里选；选了的渠道被删除时，这里会自动清回默认。</div>
       </div>
       <details className="top-gap"><summary>平台路由策略</summary>
         <p className="muted">平台按能力和用户选择的模型决定调用渠道；仅在上游明确拒绝且尚未产出结果时尝试备用。启用 new-api 后，文本和图片的渠道切换由网关管理；视频和音乐仍按这里的直接渠道执行。</p>

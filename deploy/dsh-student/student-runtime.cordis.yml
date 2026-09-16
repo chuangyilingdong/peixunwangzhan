@@ -44,6 +44,13 @@
 # 在**自己渠道的模型清单**里解析（认得出就用它，认不出就用那条渠道的默认模型），
 # 见 apps/server/src/routes/runtimeGateway.js 的 resolveRuntimeSelection 与守卫 scripts/p97。
 # 也就是说：改这里不影响计费，改渠道配置才影响。
+#
+# `input: [text, image]` **不能省**：dsh 的 pi-ai 适配器对**手写声明的模型**默认只认文本
+# （官方原文：Declaring images is what makes a hand-declared vision model usable）。
+# 不声明的话，学生贴进来的图根本不会进请求体 —— 而我们的模型（deepseek-flash 那条渠道）
+# 本来就能看图（平台老 VibeCoding 的聊天一直就是这么发的，实测能读图里的颜色）。
+# 声明之后：图当**内容块**走同一条 TEXT 渠道、同一个模型，费用照常进我们的算力账。
+# （另配了「读图渠道」才改走那条，见后台计费配置的「读图渠道」。）
 - id: llm-pi-ai
   name: '@deepseek-ai/dsh-llm-pi-ai'
   config:
@@ -56,8 +63,10 @@
         models:
           - id: deepseek-flash
             name: 平台网关 · DeepSeek Flash
+            input: [text, image]
           - id: deepseek-pro
             name: 平台网关 · DeepSeek Pro
+            input: [text, image]
 
 # 课程技能：我们自己的技能根目录（把课程要求写成 SKILL.md）。
 - id: skill-filesystem

@@ -168,12 +168,14 @@ function selectionOnChannel(policy, channelId, requestedModel) {
 
 /**
  * 容器报的模型名 → 我们渠道里的 model id。
- * ① 带图的请求走「读图渠道」（政策里的 visionChannelId），并在它的模型清单里解析名字；
+ * ① 带图的请求**默认跟着模型走**：图交给同一条 TEXT 渠道的模型去读（我们的视觉模型本来就能看图，
+ *    平台老 VibeCoding 的聊天一直就是这么发的）；只有政策里另配了「读图渠道」才改走那条。
  * ② 文本请求：政策里配了模型路由（管理员指定「这个名字走哪条渠道」）就按路由走（既有语义不变），
  *    没有路由就用平台默认的 TEXT 渠道，同样在它的模型清单里解析名字。
  */
 function resolveRuntimeSelection(policy, requestedModel, withImages) {
-  if (withImages) return selectionOnChannel(policy, policy?.visionChannelId, requestedModel);
+  // 配了读图渠道 → 图片走它（渠道不存在时 selectionOnChannel 会明确报错，不会静默退回）
+  if (withImages && channelById(policy, policy?.visionChannelId)) return selectionOnChannel(policy, policy.visionChannelId, requestedModel);
   const routes = Array.isArray(policy?.modelRoutes) ? policy.modelRoutes : [];
   const wanted = bareModelName(requestedModel).toLowerCase();
   const route = wanted
@@ -205,12 +207,8 @@ export async function handleRuntimeGateway(ctx) {
   const policy = getAiProviderPolicy();
   const requestedModel = String(body.model || '').trim();
   const withImages = hasImageParts(messages);
-  // 没有配读图渠道时**明确拒绝**，不退回纯文本渠道：那会让学生拿到一段编出来的「图里有什么」，
-  // 钱照花、结论是假的。
-  if (withImages && !channelById(policy, policy?.visionChannelId)) {
-    throw errors.conflict('平台还没有开通读图能力，先别让它看图', 'RUNTIME_VISION_UNCONFIGURED');
-  }
-  // 渠道选择与预算检查与 VibeCoding 原链路同一套：机构/学生/课时/课堂四个维度都带上
+  // 渠道选择与预算检查与 VibeCoding 原链路同一套：机构/学生/课时/课堂四个维度都带上。
+  // 带图的请求默认**跟着模型走**（同一条 TEXT 渠道），配了「读图渠道」才改走那条。
   const selection = await applyGatewayRoute(
     resolveRuntimeSelection(policy, requestedModel, withImages),
     { orgId: payload.o, studentId: payload.u, lessonId: session.lesson_id || '', modality: 'TEXT' },

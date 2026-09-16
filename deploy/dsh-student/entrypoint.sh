@@ -16,9 +16,12 @@ LOG=/tmp/dsh-web.log
 export PLATFORM_GATEWAY_KEY="${PLATFORM_GATEWAY_KEY:-}"
 export PLATFORM_GATEWAY_BASE_URL="${GATEWAY_BASE_URL:-}"
 
-# 0) 视觉桥（modlens，界面上的读图能力）的凭据：**必须指向我们的网关**。
-# 它自带 OpenAI / Gemini / Antigravity CLI 等渠道，容器里既没有那些凭据，
-# 就算有 —— 读图花的钱也不进我们的账本。所以这里按本次容器注入的运行时密钥写死一条路由。
+# 0) 视觉桥（modlens）的凭据：**必须指向我们的网关**。
+# 先说清主路径：学生贴的图**不走它** —— 我们的模型自己就能看图（补丁层里声明了
+# `input: [text, image]`，图当内容块走同一条 TEXT 渠道）。modlens 是「给纯文本模型配的视觉桥」，
+# 我们这条路上用不到；这里接上只是为了万一将来把学生指到纯文本模型（或有人点了它）时，
+# 它不要去花别家的钱 —— 它自带 OpenAI / Gemini / Antigravity CLI 等渠道，容器里既没有那些凭据，
+# 就算有，读图花的钱也不进我们的账本。所以按本次容器注入的运行时密钥写死一条路由。
 # 用 node 生成而不是 heredoc：密钥或 URL 里出现引号也不会把 JSON 写坏。
 #   · structuredOutput 必须是 false：我们的网关只转 messages 与 stream，**不转 response_format**，
 #     打开它等于要求上游按 JSON Schema 回，实际拿不到 → modlens 以「契约不完整」失败。

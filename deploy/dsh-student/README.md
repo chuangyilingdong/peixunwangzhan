@@ -16,11 +16,12 @@
     `directory-picker`、`open-in-app`
 - **容器内 nginx**：dsh 只绑 `127.0.0.1` 且**拒绝** `--host 0.0.0.0`（官方理由：会把 RCE 暴露到网络），
   所以对外入口必须由容器内的这层 nginx 提供 —— 它校验我们平台的短时票据，再把请求转给 `127.0.0.1:3080`。
-- **读图（modlens）也走我们的网关**：入口脚本按本次容器注入的运行时密钥写 `~/.modlens/config.json`，
-  把它的 openai 路由指向 `GATEWAY_BASE_URL` + `PLATFORM_GATEWAY_KEY`（`provider: openai`、`reuse` 全 false）。
-  它自带 OpenAI / Gemini / Antigravity CLI 等渠道，容器里既没有那些凭据、花了钱也不进我们的账，
-  所以这一步是**必须**的，不是可选优化。模型名由 `PLATFORM_VISION_MODEL` 给（默认 `platform-vision`），
-  平台在**读图渠道的模型清单**里解析它（见下「模型名只当意向」）。
+- **读图跟着模型走，不需要额外的插件**：dsh 的 pi-ai 适配器对**手写声明的模型**默认只认文本，
+  所以补丁层里给模型写了 `input: [text, image]`（官方原文：Declaring images is what makes a
+  hand-declared vision model usable）。声明之后，学生贴进来的图当**内容块**走同一条 TEXT 渠道、
+  同一个模型 —— 我们的渠道模型本来就能看图（平台老 VibeCoding 的聊天一直这么发，实测能读出图里的颜色）。
+  入口脚本另外把 `@liustack/modlens` 的凭据也钉到我们的网关：它是「给纯文本模型配的视觉桥」，
+  我们这条路上用不到，但万一将来把学生指到纯文本模型、或者有人点了它，钱也仍然进我们的账。
 
 ## 机器（容器宿主）
 
@@ -58,23 +59,25 @@ docker run --rm -p 18080:8080 \
    事件接回我们的作品提交接口。
 4. 工作区要学生手动选一次（dsh 的界面在选好工作区前不让发消息）；平台建会话时应预选 `/home/student/workspace`。
 
-## 模型名只当「意向」、读图单独一条渠道（2026-09-16）
+## 模型名只当「意向」、带图的请求默认跟着模型走（2026-09-16）
 
 容器补丁层里那两行 `deepseek-flash` / `deepseek-pro` **只是给学生看的槽位名**，不是上游的真名。
 网关（`apps/server/src/routes/runtimeGateway.js` 的 `resolveRuntimeSelection`）这样解析：
 
 | 容器报的 | 落点 |
 |---|---|
-| 带图的请求（modlens 读图） | 政策里的 **`visionChannelId`（读图渠道）**，并在它的模型清单里解析名字 |
+| 带图的请求（学生贴图） | **同一条 TEXT 渠道、同一个模型**（默认；我们的模型能看图） |
+| 带图的请求 + 后台配了「读图渠道」 | 改走那条渠道（可选覆盖，留给「想把图单独送去另一条渠道」的场景） |
 | 名字**在**默认 TEXT 渠道的模型清单里 | 就用这个名字（渠道支持多模型时有用） |
 | 名字**不在**（含 `provider/model` 前缀的写法） | 用这条渠道**自己的 model**，绝不把容器报的字符串原样发上游 |
 | 管理员配了 `modelRoutes`（名字 → 哪条渠道） | 按路由走（既有语义不变） |
 
-没配读图渠道时，带图的调用**直接 409**（`RUNTIME_VISION_UNCONFIGURED`）而不是退回纯文本渠道 ——
-后者会让学生拿到一段编出来的「图里有什么」，钱照花、结论是假的。
+网关同时负责**别把图弄丢**：多模态 content 数组以前被压成 `"[object Object]"`（学生的图在网关这一跳就没了），
+现在只放行文字与 `http(s)`/`data:image`，其余（含容器内的 `file://` 路径）丢掉。
 
-守卫：`node scripts/p97-runtime-gateway.mjs`（网关这一侧的规矩）、
-`node scripts/p98-runtime-container-e2e.mjs`（**真容器**：容器里读图 → 我们的网关 → 落进 usage_records；
+守卫：`node scripts/p97-runtime-gateway.mjs`（网关这一侧的规矩，20 项）、
+`node scripts/p98-runtime-container-e2e.mjs`（**真容器**：容器里带图的调用打到我们的网关、
+跟着模型落在 TEXT 渠道（或配了读图渠道时落在它上面）、进 `usage_records`；
 本机没有 docker 或没有镜像时**明确跳过**，不装作通过）。
 
 ## 已装的社区插件与 PPT 预设（2026-09-16）
@@ -86,7 +89,7 @@ docker run --rm -p 18080:8080 \
 | omdsh-dev/DSH-better-sidebar | `dsh-better-sidebar` | 0.19.1 | 已装并挂载（侧边栏底座） |
 | bowenliang123/dsh-context | `dsh-context` | 0.52.2 | 已装并挂载（它自己声明兼容 dsh 0.1.5-rc.1） |
 | awesome-dsh-plugin/dsh-find-plugin | `dsh-find-plugin` | 0.3.7 | 已装并挂载 |
-| liustack/modlens | `@liustack/modlens` | 3.26.1 | 已装并挂载（视觉桥；**凭据由入口脚本指向我们的网关**，见上「读图」） |
+| liustack/modlens | `@liustack/modlens` | 3.26.1 | 已装并挂载（**给纯文本模型用的视觉桥**：我们的模型自己能看图，这条路上用不到；凭据已由入口脚本钉到我们的网关，万一被用到钱也进我们的账） |
 | zhu1090093659/dsh-web | `@linxin666/dsh-web-all` | 0.3.23 | 已装并挂载（聚合仓；`dsh-web` 本身是 20 多个子包的 monorepo，装的是它的全家桶聚合包） |
 | FSMargoo/dsh-at-file | `dsh-at-file` | 0.6.3 | **已装但禁用**：它 import 的 `settingsNamespace` 在我们钉的 dsh 0.1.5-rc.1 里不存在，挂上就整棵树加载失败、界面起不来（npm 上它只有这一个版本，没有可回退的旧版） |
 | dataelement/dsh-desktop | `dsh-ppt` + `dsh-ppt-composer` | 0.1.1-rc.2 | 已装；**PPT 预设**（可编辑 PPTD + 本地生成 PPTX，16 套模板 / 134 布局） |

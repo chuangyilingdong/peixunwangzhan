@@ -13,7 +13,7 @@
  *   ④ 正常调用 → 200，返回 OpenAI 形状的回复，且**落了 usage_records**
  *   ⑤ 调用方改不动归属：即使请求里塞别的机构/学生字段，账也记在密钥里的那个学生/课堂上
  *   ⑥ 模型名映射：容器报的名字只当「意向」，认不出就用渠道自己的 model（绝不原样发上游）
- *   ⑦ 读图：没配读图渠道 → 409（明确拒绝）；配了 → 走那条渠道并且仍然记账
+ *   ⑦ 读图：**默认跟着模型走**（同一条 TEXT 渠道）；另配了读图渠道才改走那条，两侧都要记账
  *   ⑧ 多模态内容不被压扁：图片原样透传，容器内路径（file://）不发出去
  */
 import assert from 'node:assert/strict';
@@ -154,10 +154,11 @@ try {
     const routed = resolveRuntimeSelection({ ...policy, modelRoutes: [{ modality: 'TEXT', model: 'deepseek-flash', channelId: 'ch-vision' }] }, 'deepseek-flash', false);
     check('⑥ 管理员配了模型路由 → 按路由走那条渠道', routed.channelId === 'ch-vision' && routed.model === 'deepseek-flash', JSON.stringify({ channelId: routed.channelId, model: routed.model }));
     const vision = resolveRuntimeSelection({ ...policy, visionChannelId: 'ch-vision' }, 'deepseek-pro', true);
-    check('⑥ 带图的请求 → 走读图渠道，且不带备份渠道', vision.channelId === 'ch-vision' && vision.model === 'local-mock-vision' && !vision.backup, JSON.stringify({ channelId: vision.channelId, model: vision.model, backup: Boolean(vision.backup) }));
-    let visionGuard = '';
-    try { resolveRuntimeSelection(policy, '', true); } catch (error) { visionGuard = error.code || ''; }
-    check('⑥ 没配读图渠道时解析直接报错（不会退回文本渠道）', visionGuard === 'RUNTIME_VISION_CHANNEL_MISSING', visionGuard);
+    check('⑥ 配了读图渠道 → 带图的请求走那条渠道，且不带备份渠道', vision.channelId === 'ch-vision' && vision.model === 'local-mock-vision' && !vision.backup, JSON.stringify({ channelId: vision.channelId, model: vision.model, backup: Boolean(vision.backup) }));
+    const followModel = resolveRuntimeSelection(policy, 'deepseek-pro', true);
+    check('⑥ 没配读图渠道 → 带图的请求**跟着模型走**（同一条 TEXT 渠道）',
+      followModel.channelId === 'ch-text' && followModel.model === 'local-mock-text',
+      JSON.stringify({ channelId: followModel.channelId, model: followModel.model }));
   }
 
   // ⑧ 多模态内容不被压扁：以前这一层只做 String(content)，图片在这里就没了
@@ -175,7 +176,7 @@ try {
     check('⑧ 纯文本仍然压回字符串（老形状不变）', textOnly[0].content === '你好', JSON.stringify(textOnly[0].content));
   }
 
-  // ⑦ 读图闸门：没配读图渠道就明确拒绝；配了就走那条渠道，而且**照样记账**
+  // ⑦ 读图：默认跟着模型走；另配了读图渠道才改走那条。两侧都要记账。
   {
     const base = {
       provider: 'local-mock', model: '', endpoint: '', channels: [
@@ -191,20 +192,31 @@ try {
     probe.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify(base));
     probe.close();
     const imageMessages = [{ role: 'user', content: [{ type: 'text', text: '这张图里是什么' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }];
-    const noVision = await call(key, { messages: imageMessages });
-    check('⑦ 没配读图渠道 → 409（明确拒绝，不把图丢给纯文本模型）', noVision.status === 409 && /RUNTIME_VISION_UNCONFIGURED/.test(noVision.text), `实际 ${noVision.status} ${noVision.text.slice(0, 160)}`);
+
+    const followModel = await call(key, { messages: imageMessages, model: 'deepseek-flash' });
+    check('⑦ 没配读图渠道 → 200，图跟着模型走（落在 TEXT 渠道的模型上）',
+      followModel.status === 200 && followModel.payload?.model === 'local-mock-text',
+      `实际 ${followModel.status} ${followModel.text.slice(0, 160)}`);
+    {
+      const audit = new DatabaseSync(dbPath);
+      const row = audit.prepare('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(sessionId);
+      check('⑦ 这一通读图照样进我们的账（记在 TEXT 渠道的模型上）', row?.model === 'local-mock-text', String(row?.model));
+      check('⑦ 记账里留了「带图」与「报的名字 → 实际渠道/模型」', /"withImages":true/.test(String(row?.pricing_snapshot || '')) && /modelResolution/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 260));
+      audit.close();
+    }
 
     const setter = new DatabaseSync(dbPath);
     setter.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ ...base, visionChannelId: 'ch-vision' }));
     setter.close();
 
     const visionCall = await call(key, { messages: imageMessages, stream: true });
-    check('⑦ 配了读图渠道 → 200', visionCall.status === 200, `实际 ${visionCall.status} ${visionCall.text.slice(0, 160)}`);
-    const probe2 = new DatabaseSync(dbPath);
-    const row = probe2.prepare('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(sessionId);
-    check('⑦ 这一通读图记在**读图渠道的模型**上', row?.model === 'local-mock-vision', String(row?.model));
-    check('⑦ 记账里留了「容器报的名字 → 实际渠道/模型」', /modelResolution/.test(String(row?.pricing_snapshot || '')) && /"withImages":true/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 260));
-    probe2.close();
+    check('⑦ 配了读图渠道 → 200，改走那条渠道', visionCall.status === 200, `实际 ${visionCall.status} ${visionCall.text.slice(0, 160)}`);
+    {
+      const audit = new DatabaseSync(dbPath);
+      const row = audit.prepare('SELECT model FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(sessionId);
+      check('⑦ 这一通读图记在**读图渠道的模型**上', row?.model === 'local-mock-vision', String(row?.model));
+      audit.close();
+    }
 
     const textCall = await call(key, { messages, model: 'deepseek-pro' });
     check('⑥ 未知模型名走 HTTP → 200，且回复里的 model 是渠道自己的 model', textCall.status === 200 && textCall.payload?.model === 'local-mock-text', `实际 ${textCall.status} ${textCall.text.slice(0, 160)}`);
