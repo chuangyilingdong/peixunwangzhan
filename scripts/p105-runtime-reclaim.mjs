@@ -62,9 +62,12 @@ check('开始上课接上了预热（紧跟 SESSION_START 审计）',
 check('预热是 fire-and-forget（不能 await，否则老师点「开始上课」要等全班开完环境）',
   !/await warmSessionRuntimes\(/.test(source));
 check('预热逐人兜底（容量不够/没许可的学生不能拖垮整轮预热）',
-  /for \(const studentId of studentIds\)[\s\S]{0,200}try \{[\s\S]{0,120}await launchStudentRuntime\(/.test(source));
+  /batch\.map\(\(studentId\) => launchStudentRuntime\([\s\S]{0,200}\.catch\(/.test(source)
+  || /for \(const studentId of studentIds\)[\s\S]{0,200}try \{[\s\S]{0,120}await launchStudentRuntime\(/.test(source));
 check('预热传了 orgId（launchStudentRuntime 的门禁要用它校验学生归属）',
-  /await launchStudentRuntime\(\{ sessionId, studentId, orgId, lessonId/.test(source));
+  /launchStudentRuntime\(\{ sessionId, studentId, orgId, lessonId/.test(source));
+check('预热是**有上限的并发**（串联太慢：30 个学生要 9 分钟；但不许一次性全开把宿主机打爆）',
+  /WARM_CONCURRENCY = \d+/.test(source) && !/Promise\.all\(studentIds\.map/.test(source));
 
 assert.ok(source.length > 0);
 
