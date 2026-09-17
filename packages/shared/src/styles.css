@@ -1176,11 +1176,12 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 
 /* 顶栏：左品牌 / 中课时 / 右上两个动作 */
 .cv-topbar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 14px; height: 52px; padding: 0 14px; border-bottom: 1px solid var(--cv-border); background: var(--cv-bg); }
-/* 顶栏左上角：品牌标（灵动ai 横标，按高度缩放）+ 它下面的学生账号名。
-   原来是「✦ AI 魔法学院 / 学生创作画布」那个占位块（2026-09-17 用户口径换成品牌 logo + 学生名）。 */
-.cv-brand { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-width: 0; }
-.cv-brand__logo { display: block; height: 20px; width: auto; }
-.cv-brand__name { max-width: 150px; overflow: hidden; color: var(--cv-text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+/* 顶栏左上角：品牌标（灵动ai 横标，按高度缩放）+ **右边**的学生账号名。
+   原来是「✦ AI 魔法学院 / 学生创作画布」那个占位块；用户 2026-09-17 先要 logo + 名字，
+   再调成「名字放 logo 右边、白色、格式『同学：xxx』」（放下面太挤、灰字不够显眼）。 */
+.cv-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cv-brand__logo { display: block; height: 22px; width: auto; }
+.cv-brand__name { max-width: 160px; overflow: hidden; color: #fff; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .cv-toptitle { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
 .cv-toptitle span { color: var(--cv-text-faint); font-size: 10px; letter-spacing: .04em; }
 .cv-toptitle strong { max-width: 46vw; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }

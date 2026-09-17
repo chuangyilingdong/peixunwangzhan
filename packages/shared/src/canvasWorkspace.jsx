@@ -583,9 +583,11 @@ export function CanvasWorkspace({ api, ...props }) {
     <header className="cv-topbar">
       {/* 左上角：灵动ai 的标 + 这位学生自己的账号名（用户 2026-09-17 口径：
           原来那个「✦ AI 魔法学院 / 学生创作画布」换成品牌 logo，logo 下方显示学生名字）。 */}
+      {/* 用户 2026-09-17 再调：名字放在 logo **右边**（放下面太挤），白色更显眼，
+          格式是「同学：xxx」。 */}
       <div className="cv-brand">
         <img className="cv-brand__logo" src={brandLogo} alt="灵动ai" />
-        <small className="cv-brand__name" title="当前登录的账号">{studentName || '同学'}</small>
+        <small className="cv-brand__name" title="当前登录的账号">{studentName ? `同学：${studentName}` : '同学'}</small>
       </div>
       <div className="cv-toptitle"><span>正在上课</span><strong>{lessonTitle}</strong>
 

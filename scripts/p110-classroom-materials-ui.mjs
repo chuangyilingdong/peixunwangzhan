@@ -142,6 +142,18 @@ check('④ logo 是打进产物的静态资源（不是运行时拼的路径）'
 check('④ 学生名读的是登录会话（读不到时退回占位，不能让顶栏空着）',
   /session\?\.user\?\.displayName \|\| session\?\.user\?\.login/.test(workspace) && /'同学'/.test(workspace));
 
+/* ── 画布交互（2026-09-17 再追加的三条）──────────────────────────────────── */
+check('① 点空白处 = 取消选择（react-flow 自己会清高亮，但底部编辑面板是我们的状态，得一起收）',
+  /onPaneClick=\{\(\) => \{ setContextMenu\(null\); setActiveNodeId\(null\); \}\}/.test(canvasCode));
+check('③ 取消连线后引用**直接消失**（不再只是标「已失效」还要学生自己点 ×）',
+  /chip\.remove\(\);/.test(canvasCode) && /if \(removed\) sync\(\);/.test(canvasCode)
+  && !/classList\.toggle\('is-stale', !known\)/.test(canvasCode));
+check('② 名字在 logo 右边、白色、格式「同学：xxx」',
+  /cv-brand__name" title="当前登录的账号">\{studentName \? `同学：\$\{studentName\}` : '同学'\}/.test(workspaceCode)
+  && /\.cv-brand \{ display: flex; align-items: center; gap: 10px/.test(sharedCssCode)
+  && /\.cv-brand__name \{[^}]*color: #fff/.test(sharedCssCode)
+  && !/\.cv-brand \{ display: flex; flex-direction: column/.test(sharedCssCode));
+
 /* ── 反向自检 ────────────────────────────────────────────────────────────── */
 check('【反向自检】素材面板没有把「大分组」又嵌回列表里（那就是回到用户要取消的那一层）',
   !/<div className="cv-group" key=\{group\.id \|\| group\.title\}><h4>\{group\.title\}<\/h4>/.test(workspace));

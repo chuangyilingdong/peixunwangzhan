@@ -181,15 +181,30 @@ function PromptEditor({ value, refs = [], readOnly = false, placeholder = '', on
   };
   useEffect(() => { if (insertRef) insertRef.current = insertCitation; return () => { if (insertRef) insertRef.current = null; }; });
 
-  // 连线的增删会改变引用是否有效：只更新芯片的样式，不重建 DOM（保住光标）
+  // 连线的增删会改变引用是否有效。
+  // 用户 2026-09-17 口径：**取消连线就直接把引用去掉** —— 原来只是把芯片标成「已失效」，
+  // 还要学生自己再点一次 ×，白多一步（而且那句「(已失效)」留在句子里很难看）。
+  // 有效的芯片只清理样式，不重建 DOM（保住光标）。
   useEffect(() => {
     const element = boxRef.current;
     if (!element) return;
+    let removed = false;
     element.querySelectorAll('.learning-node__citation').forEach((chip) => {
-      const known = refs.some((item) => item.label === chip.getAttribute('data-label'));
-      chip.classList.toggle('is-stale', !known);
+      if (refs.some((item) => item.label === chip.getAttribute('data-label'))) {
+        chip.classList.remove('is-stale');
+        return;
+      }
+      // 芯片后面那个不间断空格一起带走，别在句子里留双空格
+      const next = chip.nextSibling;
+      if (next?.nodeType === 3) next.nodeValue = String(next.nodeValue).replace(/^[\s\u00a0]/, '');
+      chip.remove();
+      removed = true;
     });
-  }, [refs]);
+    // 芯片没了，**值也得跟着变**：不然父组件的提示词里还留着 `@图片 1`，
+    // 提交上去就是一句指向不存在素材的空引用。sync 只读 DOM 与 refs，不进依赖数组
+    // （它是每次渲染新建的函数，写进依赖会每渲染跑一次）。
+    if (removed) sync();
+  }, [refs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <div
     ref={boxRef}
@@ -1368,7 +1383,10 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         isValidConnection={readOnly ? undefined : (connection) => connection.source !== connection.target}
         onDrop={onDrop}
         onPaneContextMenu={handlePaneContextMenu}
-        onPaneClick={() => setContextMenu(null)}
+        // 点空白处 = 取消选择：react-flow 自己会 resetSelectedElements（选中框的高亮它管），
+        // 但**底部编辑面板是我们自己的状态**，不清就会一直挂在那儿 ——
+        // 学生看到的就是「点了空白没反应」（用户 2026-09-17 报的第 1 条）。
+        onPaneClick={() => { setContextMenu(null); setActiveNodeId(null); }}
         onDragOver={(event) => event.preventDefault()}
         onMoveStart={() => setViewportBusy(true)}
         onMoveEnd={() => { setViewport(getViewport()); setViewportBusy(false); }}
