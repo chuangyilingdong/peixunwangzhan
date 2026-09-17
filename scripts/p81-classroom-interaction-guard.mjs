@@ -7,24 +7,38 @@ import { DatabaseSync } from 'node:sqlite';
 import { build } from 'vite';
 
 const root = process.cwd();
-const classroomSource = fs.readFileSync(path.join(root, 'apps/org/src/pages/Classrooms.jsx'), 'utf8');
-const mainSource = fs.readFileSync(path.join(root, 'apps/org/src/main.jsx'), 'utf8');
-const selectSource = fs.readFileSync(path.join(root, 'packages/shared/src/SearchSelect.jsx'), 'utf8');
+const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+// 2026-09-17：课堂按线框图拆成四个独立路由（列表 / 创建 / 详情 / 添加学生），界面挪进
+// pages/classroom/。下面这些断言**契约没变**，只是跟着代码换了文件 —— 导航调用留在路由壳
+// Classrooms.jsx；创建表单（两个 SearchSelect + 上课类型判断）在 CreateClassroom.jsx。
+const classroomSource = read('apps/org/src/pages/Classrooms.jsx');
+const createSource = read('apps/org/src/pages/classroom/CreateClassroom.jsx');
+const detailSource = read('apps/org/src/pages/classroom/ClassroomDetail.jsx');
+const statesSource = read('apps/org/src/pages/classroom/states.jsx');
+const mainSource = read('apps/org/src/main.jsx');
+const selectSource = read('packages/shared/src/SearchSelect.jsx');
 
 assert.match(mainSource, /path="\/classrooms\/:sessionId"/);
+// 两个新的独立页也要真挂在路由上，否则「创建课堂 / 添加学生」点不进去
+assert.match(mainSource, /path="\/classrooms\/new"/);
+assert.match(mainSource, /path="\/classrooms\/:sessionId\/students\/new"/);
 assert.match(classroomSource, /useParams\(\)/);
 assert.match(classroomSource, /navigate\('\/classrooms\/'/);
 assert.match(classroomSource, /navigate\(-1\)/);
 assert.match(classroomSource, /navigate\('\/classrooms', \{ replace: true \}\)/);
-assert.doesNotMatch(classroomSource, />入口类型<select/);
+for (const source of [classroomSource, createSource]) assert.doesNotMatch(source, />入口类型<select/);
 // 2026-09-16 订正：这条原本钉的是「一个课时有多个可选环境时给出选择」，用的是当年的
 // `lessonModes.length > 1` 变量；那之后界面改成按 `lesson.deliveryModes` 列表判断，
 // 变量名没了 → 断言一直红着（**测试漂移，不是功能回归**）。改成钉当下真正的口径：
 // 可选环境来自课时自己声明的列表（老师不该在界面上凭空造一个环境）。
-assert.match(classroomSource, /lesson\?\.deliveryModes\?\.length/);
-assert.match(classroomSource, /SearchSelect/);
-assert.match(classroomSource, /<SearchSelect ariaLabel="搜索课包"/);
-assert.match(classroomSource, /<SearchSelect ariaLabel="搜索负责老师"/);
+// 2026-09-17：四个页面共用同一份判断，落点从创建页挪到了 states.jsx 的 publishedModes ——
+// 口径没变，只是收口到一处；断言跟着契约走，不去为了变绿改代码。
+assert.match(statesSource, /lesson\?\.deliveryModes\?\.length/);
+assert.match(createSource, /SearchSelect/);
+assert.match(createSource, /<SearchSelect ariaLabel="搜索课包"/);
+assert.match(createSource, /<SearchSelect ariaLabel="搜索负责老师"/);
+// 深链直接进来（数据还没到）时也必须有回头路 —— 上面那条 SSR 用例就是钉这个的
+assert.match(detailSource, /返回列表/);
 assert.match(selectSource, /role="combobox"/);
 assert.match(selectSource, /role="listbox"/);
 assert.match(selectSource, /aria-activedescendant/);

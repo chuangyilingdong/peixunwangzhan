@@ -38,6 +38,10 @@ const SCAN_DIRS = [
   ['admin', 'apps/admin/src/pages'],
   ['admin', 'apps/admin/src/components'],
   ['org', 'apps/org/src/pages'],
+  // 2026-09-17：课堂按线框图拆成四个独立路由，界面挪到 pages/classroom/ 子目录。
+  // 本扫描是 readdirSync **非递归**，不列出来就覆盖不到 —— 而「渲染期抛错 → 整页白屏」
+  // 正是这道守卫存在的理由，新写的页面更不能漏。
+  ['org', 'apps/org/src/pages/classroom'],
   ['website', 'apps/website/src/pages'],
 ];
 const standalone = [];

@@ -36,6 +36,18 @@
   margin-top: 20px;
 }
 
+/* 确认弹窗内容比线框图长（多了「状态变化」和「不会发生的事情」两段），
+   不吸底的话「确认解散」要滚到底才看得见。dialog 自身 padding 是 28px，
+   所以负 bottom/-margin 把它压到滚动口最底部，并补一条分隔线。 */
+.classrooms-page .classroom-dialog > .classroom-dialog-fields:last-child {
+  position: sticky;
+  bottom: -28px;
+  margin-bottom: -28px;
+  padding: 14px 0 16px;
+  border-top: 1px solid #e8e3f2;
+  background: #fff;
+}
+
 .classroom-dialog-fields > label {
   margin-top: 16px;
 }
@@ -140,8 +152,18 @@
 }
 
 .classrooms-page table {
-  min-width: 760px;
+  min-width: 1080px;
 }
+
+/* 状态徽标与行内操作一律不许折行：九列挤在一起时「待上课」会被拆成两行、
+   「查看详情」会变成「查看详 / 情」，很难看。 */
+.classrooms-page td .status,
+.classrooms-page td .text-button,
+.classroom-facts dd .status {
+  white-space: nowrap;
+}
+
+.classroom-facts dd .status { flex: none; }
 
 .classrooms-page td {
   overflow-wrap: normal;
@@ -173,4 +195,234 @@
   .classroom-dialog {
     padding: 20px;
   }
+}
+
+/* ── 2026-09-17 按线框图改造新增（005-01 ~ 005-04）─────────────────────────────
+   配色沿用共享主题里已有的语义色（.notice / .status 那几对），不新造色值，
+   这样与工作台其它页面同色系；只新增排版类，不改动任何已有选择器。            */
+
+.classroom-parent-line {
+  margin: -6px 0 16px;
+  color: #8b83a3;
+  font-size: 12px;
+}
+
+/* 弹窗/页面顶部的三格信息带 */
+.classroom-info-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  border: 1px solid #e8e3f2;
+  border-radius: 12px;
+  background: #fbfaff;
+}
+
+.classroom-info-strip dt {
+  margin-bottom: 6px;
+  color: #8b83a3;
+  font-size: 12px;
+}
+
+.classroom-info-strip dd {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.classroom-info-strip-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #aa701e;
+  background: #fff1d4;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* 「即将移除学生」那种带头像的一行 */
+.classroom-student-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e8e3f2;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.classroom-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 50%;
+  color: #7058d5;
+  background: #f0ebff;
+  font-weight: 800;
+}
+
+/* 弹窗里成块的段落（校验清单、影响说明） */
+.classroom-block { margin-bottom: 18px; }
+.classroom-block:last-child { margin-bottom: 0; }
+
+.classroom-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.classroom-block-head h4 { margin: 0; font-size: 14px; }
+
+/* 弹窗里的编号规则列表（复用 .notice 的底色，只调排版） */
+.classroom-rule-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: #554b7a;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.classroom-rule-list li + li { margin-top: 4px; }
+
+/* 标签 + 值的字段栅格：详情页「课堂信息」与弹窗各种「影响 / 状态变化」共用 */
+.classroom-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px 24px;
+  margin: 0;
+}
+
+.classroom-facts[data-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.classroom-facts > div { min-width: 0; }
+
+.classroom-facts dt {
+  margin-bottom: 5px;
+  color: #8b83a3;
+  font-size: 12px;
+}
+
+.classroom-facts dd {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.classroom-facts dd small { font-weight: 400; }
+
+.classroom-boundary-line { margin: 6px 0 0; font-size: 13px; line-height: 1.7; }
+
+/* 详情页：左「课堂信息」右「课堂操作」 */
+.classroom-detail-grid,
+.classroom-create-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 20px;
+  align-items: start;
+}
+
+.classroom-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.classroom-actions-stack > * { width: 100%; text-align: center; }
+
+/* ⚠️ 必须带 .classrooms-page 前缀：main.jsx 里 pages/Classrooms.css 先于
+   @platform/shared/styles.css 求值，同优先级时**共享样式表在后、会赢** ——
+   写成裸类名的话 .secondary-button / .primary-button 会把这里的颜色盖掉
+   （实测过：解散课堂按钮一度仍是灰的）。 */
+.classrooms-page .danger-outline {
+  color: #b13d55;
+  border-color: #f3c9d2;
+  background: #fff;
+}
+
+.classrooms-page .danger-solid {
+  color: #fff;
+  border-color: #b13d55;
+  background: #b13d55;
+  box-shadow: none;
+}
+
+/* 创建课堂：右栏的课程缩略图 */
+.classroom-course-badge {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  color: #7058d5;
+  background: #f0ebff;
+  font-size: 19px;
+  font-weight: 900;
+}
+
+/* 添加学生：页头摘要 + 筛选行 + 分组标签页 */
+.classroom-add-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 380px);
+  gap: 20px;
+  align-items: start;
+  margin-bottom: 18px;
+}
+
+.classroom-add-head-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid #e8e3f2;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.classroom-add-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.classroom-add-filter input[type="search"],
+.classroom-add-filter input:not([type]) {
+  width: min(280px, 100%);
+}
+
+.classrooms-page .classroom-add-tabs { margin: 0 0 0 auto; }
+
+.classroom-check-col { width: 46px; }
+
+.classroom-block-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 980px) {
+  .classroom-detail-grid,
+  .classroom-create-grid,
+  .classroom-add-head,
+  .classroom-block-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .classroom-info-strip { grid-template-columns: minmax(0, 1fr); }
+  .classroom-facts[data-columns="2"] { grid-template-columns: minmax(0, 1fr); }
+  .classroom-add-tabs { margin-left: 0; }
 }

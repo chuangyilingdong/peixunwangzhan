@@ -1,0 +1,17 @@
+/* 机构端统一字体（2026-09-17，用户口径：「后台全部用画布课堂那个字体」）。
+ *
+ * 画布课堂用的字体栈定义在 packages/shared/src/styles.css 的 `--cv-font`
+ * （'Geist', 'Noto Sans SC', …系统字体兜底），dsh 控制台的 `--font-sans` 也是同一套。
+ * 直接引这个变量，不要在第二个地方再抄一遍字体清单 —— 两处各写一份迟早会漂。
+ *
+ * 为什么之前看着不是这个字体：共享样式表用**根绝对路径**引 /fonts/Geist-*.woff2，
+ * 而 apps/org 没有 public/ 目录 → 整个机构端一直在 404、静默回退系统字体。
+ * 字体文件已放到 apps/org/public/fonts（与 apps/website/public/fonts 同源同内容）。
+ *
+ * ⚠️ 只给两个**后台**应用加这条；学生端（apps/website）自己 :root 另有一套口径，
+ *    那边不做改动。
+ */
+:root,
+body {
+  font-family: var(--cv-font);
+}

@@ -596,6 +596,57 @@ export async function handleOrg(ctx) {
     const occupied = row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [teacherId, excludeId]);
     if (occupied) throw errors.conflict(`教师已有待上课或上课中的课堂（${occupied.title || occupied.id}），请先结束或解散`, 'TEACHER_SESSION_OCCUPIED');
   };
+  /**
+   * 「开始上课 / 解散课堂」二次确认弹窗里的逐条校验（2026-09-17）。
+   *
+   * 为什么要有它：确认弹窗要逐条显示「通过」，而这些检查原来只散落在下面各个 POST 的 throw 里。
+   * 前端凭详情字段推，其中「老师账号是否可正常教学」「N 名学生资格是否仍有效」两条根本推不出来
+   * —— 在界面上给一条没真跑过的检查打绿勾，就是在撒谎，所以判定挪到服务端，界面只负责显示。
+   *
+   * ⚠️ 这里**只读、只给界面看**。真正的写操作仍以下面 POST 里的断言为准：
+   * 预检通过之后状态可能已经被别人改了，预检不是放行凭据。
+   */
+  const sessionPrecheck = (session, action) => {
+    const check = (key, label, passed, detail) => ({ key, label, passed: Boolean(passed), detail });
+    const pendingLabel = normalizeSession(session).statusLabel || session.status;
+    const statusCheck = check('SESSION_PENDING', '课堂状态 = 待上课', session.status === 'PENDING',
+      session.status === 'PENDING' ? '当前状态正确' : `当前是「${pendingLabel}」`);
+    if (action === 'dissolve') {
+      return [
+        statusCheck,
+        check('NOT_STARTED', '尚未记录实际开始时间', !session.started_at,
+          session.started_at ? `已记录开始时间 ${session.started_at}` : '实际开始时间仍为空'),
+        check('OWNER_MATCH', '课堂由当前教师账号创建', session.teacher_id === auth.user.id,
+          session.teacher_id === auth.user.id ? '创建账号 = 当前账号' : '你不是这个课堂的负责老师'),
+      ];
+    }
+    const teacher = row('SELECT id, display_name, status, role, deleted_at FROM users WHERE id=?', [session.teacher_id]);
+    const teacherOk = Boolean(teacher) && teacher.role === 'TEACHER' && teacher.status === 'ACTIVE' && !teacher.deleted_at;
+    const occupied = teacherOk
+      ? row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [session.teacher_id, session.id])
+      : null;
+    const lessonOk = Boolean(row("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [session.lesson_id]))
+      && Boolean(accessibleLesson(currentOrgId, session.lesson_id));
+    const roster = rows(`SELECT part.student_id, student.display_name, student.login, student.status account_status, student.expires_at
+      FROM session_students part JOIN users student ON student.id=part.student_id
+      WHERE part.session_id=? AND part.status='PENDING'`, [session.id]);
+    const granted = new Set(rows('SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL', [session.org_id, session.series_id]).map((item) => item.student_id));
+    const ineligible = roster.filter((item) => item.account_status !== 'ACTIVE'
+      || (item.expires_at && Date.parse(item.expires_at) <= Date.now()) || !granted.has(item.student_id));
+    return [
+      statusCheck,
+      check('TEACHER_READY', '教师账号可正常教学', teacherOk && !occupied,
+        !teacherOk ? `${teacher?.display_name || '未知教师'} · 账号异常或已停用`
+          : occupied ? `${teacher.display_name} · 另有待上课/上课中的课堂（${occupied.title || occupied.id}）`
+            : `${teacher.display_name} · 状态正常`),
+      check('LESSON_AVAILABLE', '课包 / 课程当前可用', lessonOk, lessonOk ? '当前版本与课程有效' : '课时未发布或课包授权已失效'),
+      check('ROSTER_NOT_EMPTY', '课堂至少有 1 名学生', roster.length > 0, `当前 ${roster.length} 名`),
+      check('STUDENTS_ELIGIBLE', `${roster.length} 名学生资格仍有效`, roster.length > 0 && ineligible.length === 0,
+        ineligible.length
+          ? `${ineligible.length} 名已失效：${ineligible.slice(0, 3).map((item) => item.display_name || item.login).join('、')}${ineligible.length > 3 ? ' 等' : ''}`
+          : '账号 / 课包许可均通过'),
+    ];
+  };
   const sessionInOrg = (id, { manage = true } = {}) => {
     const value = row('SELECT * FROM class_sessions WHERE id=?', [id]);
     if (!value) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
@@ -674,42 +725,58 @@ export async function handleOrg(ctx) {
   }
 
   if (part === '/sessions' && method === 'GET') {
-    const params = [currentOrgId];
-    const conditions = ['1=1'];
+    // 2026-09-17：补上真分页与四态计数。原先是硬编码 LIMIT 200、不返回总数 ——
+    // 界面上做不出「共 N 条 / 翻页」，超过 200 个课堂的机构还会**静默**看不到后面的，
+    // 正是本项目最主要的失败类型（字段没人填、界面不报错）。
+    const baseParams = [currentOrgId];
+    const baseConditions = ['1=1'];
     // 课堂归属：org_id 是权威列（老数据迁移时从负责老师回填过）
-    conditions.push('session.org_id = ?');
-    const scope = sessionScope('session', auth, params);
-    if (scope) conditions.push(scope.replace(/^ AND /, ''));
-    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
-    if (['PENDING', 'ACTIVE', 'ENDED', 'DISSOLVED'].includes(status)) { conditions.push('session.status=?'); params.push(status); }
+    baseConditions.push('session.org_id = ?');
+    const scope = sessionScope('session', auth, baseParams);
+    if (scope) baseConditions.push(scope.replace(/^ AND /, ''));
     const lessonId = String(ctx.search.get('lessonId') || '').trim();
-    if (lessonId) { conditions.push('session.lesson_id=?'); params.push(lessonId); }
+    if (lessonId) { baseConditions.push('session.lesson_id=?'); baseParams.push(lessonId); }
     const seriesId = String(ctx.search.get('seriesId') || '').trim();
-    if (seriesId) { conditions.push('session.series_id=?'); params.push(seriesId); }
+    if (seriesId) { baseConditions.push('session.series_id=?'); baseParams.push(seriesId); }
     const search = String(ctx.search.get('search') || '').trim();
-    if (search) { conditions.push('(session.title LIKE ? OR lesson.title LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+    if (search) { baseConditions.push('(session.title LIKE ? OR lesson.title LIKE ?)'); baseParams.push(`%${search}%`, `%${search}%`); }
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 90 });
-    conditions.push('COALESCE(session.created_at, session.started_at) >= ?');
-    params.push(new Date(Date.now() - days * 86400000).toISOString());
-    const items = rows(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title,
-        teacher.display_name teacher_name
-      FROM class_sessions session
+    baseConditions.push('COALESCE(session.created_at, session.started_at) >= ?');
+    baseParams.push(new Date(Date.now() - days * 86400000).toISOString());
+    // 状态过滤单独拼：四张状态汇总卡要的是**不带状态过滤**的口径，
+    // 否则选中某个状态之后另外三张卡会全部归零，看着像数据丢了。
+    const status = String(ctx.search.get('status') || '').trim().toUpperCase();
+    const statusFiltered = ['PENDING', 'ACTIVE', 'ENDED', 'DISSOLVED'].includes(status);
+    const conditions = statusFiltered ? [...baseConditions, 'session.status=?'] : baseConditions;
+    const params = statusFiltered ? [...baseParams, status] : baseParams;
+    const FROM = `FROM class_sessions session
       LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
       LEFT JOIN course_series series ON series.id = session.series_id
-      LEFT JOIN users teacher ON teacher.id = session.teacher_id
+      LEFT JOIN users teacher ON teacher.id = session.teacher_id`;
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 100 });
+    const total = count(`SELECT COUNT(*) n ${FROM} WHERE ${conditions.join(' AND ')}`, params);
+    const statusCounts = { PENDING: 0, ACTIVE: 0, ENDED: 0, DISSOLVED: 0 };
+    for (const item of rows(`SELECT session.status status, COUNT(*) n ${FROM} WHERE ${baseConditions.join(' AND ')} GROUP BY session.status`, baseParams)) {
+      if (statusCounts[item.status] !== undefined) statusCounts[item.status] = Number(item.n || 0);
+    }
+    const items = rows(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title,
+        teacher.display_name teacher_name
+      ${FROM}
       WHERE ${conditions.join(' AND ')}
       ORDER BY CASE session.status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 ELSE 2 END,
-               COALESCE(session.started_at, session.created_at) DESC LIMIT 200`, params);
+               COALESCE(session.started_at, session.created_at) DESC
+      LIMIT ? OFFSET ?`, [...params, limit, offset]);
     const counts = sessionStudentCounts(items.map((item) => item.id));
     return {
-      items: items.map((item) => ({
+      ...pageResult(items.map((item) => ({
         ...normalizeSession(item),
         studentCount: (counts.get(`${item.id}:PENDING`) || 0) + (counts.get(`${item.id}:ACTIVE`) || 0)
           + (counts.get(`${item.id}:COMPLETED`) || 0) + (counts.get(`${item.id}:INCOMPLETE`) || 0),
         completedCount: counts.get(`${item.id}:COMPLETED`) || 0,
-      })),
+      })), { page, limit, total }),
+      statusCounts,
       ongoingSession: auth.user.role === 'TEACHER' ? row("SELECT id,title,status FROM class_sessions WHERE org_id=? AND teacher_id=? AND status IN ('PENDING','ACTIVE') ORDER BY created_at DESC LIMIT 1", [currentOrgId, auth.user.id]) || null : null,
-      filters: { status: status || null, days, seriesId: seriesId || null, lessonId: lessonId || null },
+      filters: { status: statusFiltered ? status : null, days, seriesId: seriesId || null, lessonId: lessonId || null },
     };
   }
   if (part === '/sessions' && method === 'POST') {
@@ -820,6 +887,15 @@ export async function handleOrg(ctx) {
         removed: students.filter((item) => item.status === 'REMOVED').length,
       },
     };
+  }
+  // 读权限与详情一致（本人课堂 / 机构管理员看全机构），因为它只是把详情的字段组合成一张清单。
+  let sessionPrecheckMatch = part.match(/^\/sessions\/([^/]+)\/precheck$/);
+  if (sessionPrecheckMatch && method === 'GET') {
+    const target = sessionInOrg(sessionPrecheckMatch[1], { manage: false });
+    const action = String(ctx.search.get('action') || 'start').trim().toLowerCase();
+    if (!['start', 'dissolve'].includes(action)) throw errors.badRequest('预检类型只有 start / dissolve', 'INVALID_PRECHECK_ACTION');
+    const checks = sessionPrecheck(target, action);
+    return { sessionId: target.id, action, allPassed: checks.every((item) => item.passed), checks };
   }
   let sessionActionMatch = part.match(/^\/sessions\/([^/]+)\/(start|end|dissolve)$/);
   if (sessionActionMatch && method === 'POST') {
