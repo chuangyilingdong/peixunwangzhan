@@ -169,6 +169,15 @@
 .learning-canvas__toolbar-btn:hover { color: #fff; background: rgb(255 255 255 / 7%); }
 .learning-canvas__toolbar-sep { width: 1px; height: 26px; margin: 0 4px; background: var(--cv-border-strong); }
 
+/* 缩放控件：− 百分比 ＋，点百分比出档位菜单（50% / 100% / 800%）。
+   工具栏常驻右上角（见文件底部那条覆盖），所以菜单往下展开、右对齐。 */
+.learning-canvas__zoom { position: relative; display: flex; align-items: center; gap: 2px; }
+.learning-canvas__toolbar-btn.is-zoom-readout { width: auto; min-width: 52px; padding: 0 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.learning-canvas__zoom-menu { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; min-width: 172px; padding: 6px; border: 1px solid var(--cv-border-strong); border-radius: 12px; background: var(--cv-surface); box-shadow: 0 16px 40px rgb(0 0 0 / 40%); }
+.learning-canvas__zoom-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 8px; border: 0; border-radius: 8px; color: var(--cv-text); background: transparent; text-align: left; font-size: 12px; cursor: pointer; transition: background var(--cv-motion) ease-out; }
+.learning-canvas__zoom-menu button:hover { background: rgb(255 255 255 / 7%); }
+.learning-canvas__zoom-menu button span { color: var(--cv-text-faint); font-size: 11px; }
+
 /* ── 连线：干净贝塞尔曲线 + 沿路径游走的主色高光（复刻参考的发光连线） ── */
 .learning-canvas .react-flow__edge:hover .react-flow__edge-path { stroke: #6b6b75; }
 .learning-canvas .learning-edge.is-selected { stroke: var(--cv-primary); stroke-width: 2.2; }

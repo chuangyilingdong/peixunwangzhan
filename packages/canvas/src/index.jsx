@@ -759,7 +759,10 @@ function NodeEditPanel({ node, onRequestMaterials }) {
       : data.uploaded ? 'asset'
         : (data.assetUrl || data.generatedText) ? 'done' : 'empty';
   const generate = (() => {
-    if (slotType === 'image') return { modality: 'IMAGE', label: data.assetUrl ? '重新生成' : '生成画面', payload: { title: data.title || '画面灵感', prompt: data.caption || '', params: resolveSlotParams(data) }, blocked: missingPrompt ? '先写下画面描述，再生成' : '' };
+    // ⚠️ `referenceAssets` 不能省：连到生图框体上的素材就是「照这张图改」的意思。
+    // 以前这里**没有带**（只有视频分支带），于是面板上写着「引用中」、请求里一张参考图都没有，
+    // 出来的是另一张画（用户 2026-09-17 报「引用没有真实生效」的三层之一）。
+    if (slotType === 'image') return { modality: 'IMAGE', label: data.assetUrl ? '重新生成' : '生成画面', payload: { title: data.title || '画面灵感', prompt: data.caption || '', referenceAssets: getIncomingAssetRefs(id), params: resolveSlotParams(data) }, blocked: missingPrompt ? '先写下画面描述，再生成' : '' };
     if (slotType === 'video' || slotType === 'animation') {
       const inputModes = Array.isArray(data.inputModes) && data.inputModes.length ? data.inputModes : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
       const supportsText = inputModes.includes('TEXT');
@@ -849,6 +852,15 @@ function NodeEditPanel({ node, onRequestMaterials }) {
       supportsFirstFrame={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('FIRST_FRAME')}
       supportsLastFrame={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('LAST_FRAME')}
     /> : null}
+    {/* 生图框体：连过来的素材要**看得见**（缩略图，悬停出大图，右上角 × 断线）。
+        ⚠️ 只在真有连线时才渲染这一行：以前它是无条件渲染的，多占 80px、面板一高就压住框体，
+        用户当时要求去掉（见上面 819 行那条注释）。但那次把「没连时不显示」一并做成了「永远不显示」，
+        而生图框体压根没有别的参考行 —— 于是连了参考图也看不见（用户 2026-09-17 报的第 3 条）。 */}
+    {slotType === 'image' && getIncomingAssetRefs(id).length ? <FrameRefRows
+      nodeId={id}
+      omni
+      referenceAssets={getIncomingAssetRefs(id)}
+    /> : null}
     <SlotParamPickers id={id} data={data} />
     <div className="learning-node__panel-footer nodrag">
       <button type="button" className="learning-canvas__config-chip" title="本框体的生成配置来自课时设置" onClick={() => onRequestMaterials?.()}>✦ {configLabel}</button>
@@ -886,6 +898,13 @@ const DOCK_GAP = 14;
 // 初始视野 / 「适配视图」用的分边留白：下边固定留出面板的位置（面板最高约 320px），
 // 其余三边给一点点边距。必须写成 px——ReactFlow 把数字当「比例」解析，不是像素。
 const CANVAS_FIT_PADDING = { top: '24px', right: '40px', bottom: '320px', left: '40px' };
+// 画布缩放范围。**上限必须是 8（800%）**：学生要看清楚素材细节（用户 2026-09-17 报
+// 「放大最多就放大这么多了」，并给了别的平台能放到 800% 的对照）。
+// 以前是 1.8 —— 连一张 1k 图的像素都到不了，等于看不清自己生成的东西。
+const CANVAS_MAX_ZOOM = 8;
+const CANVAS_MIN_ZOOM = 0.35;
+// 缩放档位（菜单里的快捷值，与对照平台的 50% / 100% / 800% 一致）
+const CANVAS_ZOOM_STEPS = [0.5, 1, 8];
 
 // 这些字段是「边打字边改」的，连续编辑同一条框体的同一批字段只记一条撤销记录。
 const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait', 'place', 'mood', 'emoji', 'studentParams', 'audio']);
@@ -1037,11 +1056,23 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   // 用户是否正在平移/缩放画布：① 面板在这段时间里不夹取、严格跟随框体；
   // ② 这段时间里面板的「让位」请求必须停手（否则拖画布时会被顶一下）
   const [viewportBusy, setViewportBusy] = useState(false);
+  const [zoomMenu, setZoomMenu] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   // 底部面板要编辑哪个框体：优先当前选中的，取消选中后沿用上一次（面板不会突然消失）
   const [activeNodeId, setActiveNodeId] = useState(null);
   // setFlowViewport 是 ReactFlow 的命令式视口设置；本组件自己还有一个同名 state（viewport），故改名区分
-  const { getViewport, setViewport: setFlowViewport, screenToFlowPosition, setCenter, fitView } = useReactFlow();
+  const { getViewport, setViewport: setFlowViewport, screenToFlowPosition, setCenter, fitView, zoomIn, zoomOut, zoomTo } = useReactFlow();
+  // 当前缩放倍数（工具栏那个百分比读数）。用 store 订阅而不是 viewport state：
+  // 后者只在 onMoveEnd 更新，滚轮缩放时读数会明显滞后。
+  const zoom = useStore((state) => state.transform[2]);
+  // 缩放菜单点外面就关掉（否则它会一直挂在那儿）。
+  // 菜单自己 mousedown 要 stopPropagation，不然点菜单项会先被这里关掉、onClick 就不触发了。
+  useEffect(() => {
+    if (!zoomMenu) return undefined;
+    const close = () => setZoomMenu(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [zoomMenu]);
   // 面板在框体下方放不下时，把它需要的空间量（像素）换成一个画布上移：内容上移 → 下面腾出位置。
   // ⚠️ 这段必须放在 useReactFlow() 解构**之后**：依赖数组里的 getViewport 是立即求值的，
   // 放前面会踩 TDZ（ReferenceError → 整页白屏；本轮踩过一次）。
@@ -1351,8 +1382,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
             edges: (deletingEdges || []).filter((edge) => !protectedIds.has(edge.source) && !protectedIds.has(edge.target)),
           };
         }}
-        minZoom={0.35}
-        maxZoom={1.8}
+        minZoom={CANVAS_MIN_ZOOM}
+        maxZoom={CANVAS_MAX_ZOOM}
         defaultViewport={initial.viewport}
       >
         <Background color="#7e8ed8" gap={24} size={1} />
@@ -1365,6 +1396,20 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
         <span className="learning-canvas__toolbar-sep" />
         <button type="button" className="learning-canvas__toolbar-btn" title="适配视图" aria-label="适配视图" onClick={() => fitView({ padding: CANVAS_FIT_PADDING, duration: 320, maxZoom: 1.2 })}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/></svg></button>
+        <span className="learning-canvas__toolbar-sep" />
+        {/* 缩放：− 百分比 ＋，点百分比出档位（50% / 100% / 800%）。
+            学生要放大看素材细节，而以前上限只有 180%（用户 2026-09-17 报「放大最多就放大这么多了」）。 */}
+        <div className="learning-canvas__zoom">
+          <button type="button" className="learning-canvas__toolbar-btn" title="缩小" aria-label="缩小" onClick={() => { setZoomMenu(false); zoomOut({ duration: 160 }); }}>−</button>
+          <button type="button" className="learning-canvas__toolbar-btn is-zoom-readout" title="缩放（50% / 100% / 800%）" aria-label={`当前缩放 ${Math.round(zoom * 100)}%`} aria-expanded={zoomMenu} onClick={() => setZoomMenu((open) => !open)}>{Math.round(zoom * 100)}%</button>
+          <button type="button" className="learning-canvas__toolbar-btn" title="放大" aria-label="放大" onClick={() => { setZoomMenu(false); zoomIn({ duration: 160 }); }}>＋</button>
+          {zoomMenu ? <div className="learning-canvas__zoom-menu" role="menu" onMouseDown={(event) => event.stopPropagation()}>
+            <button type="button" role="menuitem" onClick={() => { setZoomMenu(false); zoomIn({ duration: 160 }); }}>放大<span>＋</span></button>
+            <button type="button" role="menuitem" onClick={() => { setZoomMenu(false); zoomOut({ duration: 160 }); }}>缩小<span>−</span></button>
+            <button type="button" role="menuitem" onClick={() => { setZoomMenu(false); fitView({ padding: CANVAS_FIT_PADDING, duration: 320, maxZoom: 1.2 }); }}>适合屏幕</button>
+            {CANVAS_ZOOM_STEPS.map((step) => <button key={step} type="button" role="menuitem" onClick={() => { setZoomMenu(false); zoomTo(step, { duration: 220 }); }}>缩放至 {Math.round(step * 100)}%</button>)}
+          </div> : null}
+        </div>
       </div>}
       <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片排布；从卡片两侧的 ＋ 拖一条线连到另一个框体。' : '从左侧「素材」面板添加框体，写好提示词就能生成；从卡片两侧的 ＋ 拖线连接框体，也可以把图片/视频直接拖进画布。'}</div>
       {contextMenu && allowNodeCreation && <div className="learning-canvas__context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>

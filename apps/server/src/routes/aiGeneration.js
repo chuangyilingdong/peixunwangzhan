@@ -3,7 +3,7 @@ import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
-import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame } from '../services/modelCapabilities.js';
+import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, requestTemplateFor } from '../services/modelCapabilities.js';
 import { PUBLIC_SITE_URL } from '../config.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { recordAiUsage } from '../services/creditUsage.js';
@@ -495,6 +495,27 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     aspectRatio: chosen('aspectRatio', capabilities.aspectRatios, '比例') || capabilities.aspectRatios[0] || '',
     resolution: chosen('resolution', capabilities.resolutions, '清晰度') || capabilities.resolutions[0] || '',
   };
+  if (key === 'IMAGE') {
+    // 图片参考：学生把素材连到生图框体，就是「照这张图改」的意思。
+    // ⚠️ 这里以前**根本没设过** options.referenceAssets（只有 VIDEO 分支设）——
+    // 于是前端就算把连线传上来，也会在这一层被吃掉（2026-09-17 用户报「引用没有真实生效」的三层之一）。
+    // 承载它的位置由渠道模板决定（默认模板用 {{referenceImageUrls}} → 顶层 images）。
+    const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
+    if (references.length) {
+      const template = requestTemplateFor(
+        Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null,
+        key,
+        { model: selection?.model },
+      );
+      // 模板里没有能放参考图的位置 → 上游收到的请求体里一张图都没有。
+      // 这种情况**必须当场拒绝**：静默丢掉的结果是「出来一张跟参考无关的图」，
+      // 比报错糟得多（学生会以为模型不听话，其实是图根本没发出去）。与视频那条门禁同一个口径。
+      if (!/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(template || {}))) {
+        throw errors.forbidden('当前图片模型不能带参考图：请去掉连线，或让老师换一个支持参考的模型', 'GENERATION_REFERENCES_UNSUPPORTED');
+      }
+      options.referenceAssets = references;
+    }
+  }
   if (key === 'VIDEO') {
     const lockedDuration = Number(target?.durationSeconds);
     const studentDuration = Number(studentOptions?.durationSeconds);
@@ -580,6 +601,18 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
   const resolvedReferences = resolveReferenceAssets(project.id, referenceAssets);
+  // 学生连了参考图，但**一张都没解析出可公开访问的地址**（素材库预置图、上游的过期临时链接、
+  // data: 地址都会这样）—— 这时上游其实也收不到任何参考。当场拒绝，别让学生以为「引用生效了」
+  // 却拿到一张无关的图（2026-09-17 用户报「引用没有真实生效」的另一条静默路径）。
+  // 只对 IMAGE / VIDEO 生效：参考素材本来就只在这两个模态里用。
+  {
+    const modalityKey = String(modality || '').toUpperCase();
+    const requested = (Array.isArray(referenceAssets) ? referenceAssets : [])
+      .filter((item) => item && String(typeof item === 'string' ? item : item.url || '').trim());
+    if (requested.length && !resolvedReferences.length && (modalityKey === 'IMAGE' || modalityKey === 'VIDEO')) {
+      throw errors.forbidden('这张参考图没法发给模型（它不在可公开访问的素材里）：重新上传素材再连一次，或先去掉连线', 'GENERATION_REFERENCE_UNRESOLVED');
+    }
+  }
   const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
   const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
   const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'

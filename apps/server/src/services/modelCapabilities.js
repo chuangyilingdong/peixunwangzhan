@@ -245,13 +245,18 @@ export function listChannelModels(policy, modality) {
 
 /** 生成请求模板的可用占位符。 */
 // durationSeconds 保持改造前的字符串形态（seconds: '5'），需要数字的上游用 durationSecondsNumber。
-export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'durationSecondsNumber', 'audio', 'voice', 'n', 'firstFrameUrl', 'lastFrameUrl', 'frameItems', 'referenceItems', 'lyrics', 'style', 'messages']);
+export const TEMPLATE_PLACEHOLDERS = Object.freeze(['model', 'prompt', 'title', 'aspectRatio', 'resolution', 'durationSeconds', 'durationSecondsNumber', 'audio', 'voice', 'n', 'firstFrameUrl', 'lastFrameUrl', 'frameItems', 'referenceItems', 'referenceImageUrls', 'lyrics', 'style', 'messages']);
 
 // 默认请求模板刻意与改造前的请求体同形，只把写死的值换成占位符：
 // 管理员没改模板时，线上请求形状不变。视频的比例与音频放在 metadata 里（该字段原本就是透传袋），
 // 若某家模型要求在顶层，管理员在「计费与模型」里把占位符挪到顶层即可。
 export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
-  IMAGE: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}', metadata: { resolution: '{{resolution}}', output_format: 'png' } }),
+  // ⚠️ IMAGE 这一条**不再是「与改造前同形」**（2026-09-17 有意打破）：加了 `images: {{referenceImageUrls}}`。
+  // 原因：学生把素材连到生图框体、界面上写着「引用中」，请求体里却一张参考图都没有 ——
+  // 出来的是另一张画（用户 2026-09-17 报的「引用没有真实生效」）。
+  // 上游（api.seedance.nz）图生图收的就是**顶层 `images` 数组**（其 llms.txt 写明；该模型 ≤16 张）。
+  // 没连参考图时这个键会被整段去掉（见 referenceImageUrls 的说明），所以纯文生图**形状不变**。
+  IMAGE: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}', images: '{{referenceImageUrls}}', metadata: { resolution: '{{resolution}}', output_format: 'png' } }),
   // 音乐：上游（Mureka）要求 metadata.lyrics 必填；描述模式下 {{lyrics}} 是平台代写的词，
   // {{style}} 是学生写的描述（当曲风提示词用）。
   // version 是该中继要求的 API 版本（不带会报 version is required），需要的话在渠道模板里改。
@@ -278,6 +283,17 @@ function typedTemplateValue(key, context) {
     if (first) items.push({ type: 'image_url', image_url: { url: first }, role: 'first_frame' });
     if (last) items.push({ type: 'image_url', image_url: { url: last }, role: 'last_frame' });
     return items;
+  }
+  if (key === 'referenceImageUrls') {
+    // 图片参考的**裸 URL 数组**：图生图那类上游要的是顶层 `images: ["url", …]`，
+    // 和视频那套 content 项对象（referenceItems）不是一个形状 —— 两者不能互相顶替。
+    // 没有参考图时返回 undefined：JSON.stringify 会把整个键去掉，
+    // 于是「没连参考图」的请求体与改造前**逐字一致**（不给上游发一个空的 images 字段）。
+    const urls = (Array.isArray(context.referenceAssets) ? context.referenceAssets : [])
+      .filter((asset) => String(asset?.type || 'IMAGE').toUpperCase() === 'IMAGE')
+      .map((asset) => String(asset?.url || '').trim())
+      .filter(Boolean);
+    return urls.length ? urls : undefined;
   }
   if (key === 'referenceItems') {
     // 全能参考：按类型展开成 MiniMax V2 的 content 项（图片 ≤9 / 视频 ≤3 / 音频 ≤3，由服务端限制）
