@@ -44,7 +44,6 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   const [rendering, setRendering] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const pdfRef = useRef(null);
-  const pdfUrlRef = useRef('');
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
   const panelRef = useRef(null);
@@ -73,17 +72,20 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     return () => { cancelled = true; };
   }, [api, asset?.fileAssetId]);
 
-  /* ② 文档形态：拉字节 → 交给 pdf.js。走 fetchBlobUrl 是为了带上会话鉴权头（不必依赖票据）。 */
+  /* ② 文档形态：把**同源票据地址**直接交给 pdf.js。
+     ⚠️ 不要先 api.fetchBlobUrl 再喂 blob: 地址 —— 生产 CSP 是 `connect-src 'self'`，
+        而 Chrome **不把 'self' 算作覆盖 blob:**（img-src / media-src 里我们当初为画布素材
+        显式加了 blob:，connect-src 没有），于是 pdf.js 的请求状态是 0，界面报
+        「Unexpected server response (0) while retrieving PDF "blob:…"」。
+        票据就在查询串里，同源请求本来就带得上凭据，根本不需要那个 blob。
+        （生产上实测过的原话：Connecting to 'blob:…' violates … "connect-src 'self'"。） */
   useEffect(() => {
     if (!state.previewUrl || !isDocument) return undefined;
     let cancelled = false;
     (async () => {
       try {
-        const blobUrl = await api.fetchBlobUrl(state.previewUrl);
-        if (cancelled) { URL.revokeObjectURL(blobUrl); return; }
-        pdfUrlRef.current = blobUrl;
         const pdfjs = await loadPdfjs();
-        const pdf = await pdfjs.getDocument({ url: blobUrl }).promise;
+        const pdf = await pdfjs.getDocument({ url: state.previewUrl }).promise;
         if (cancelled) { pdf.destroy?.(); return; }
         pdfRef.current = pdf;
         setPageCount(pdf.numPages);
@@ -97,9 +99,8 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
       renderTokenRef.current += 1;
       pdfRef.current?.destroy?.().catch?.(() => {});
       pdfRef.current = null;
-      if (pdfUrlRef.current) { URL.revokeObjectURL(pdfUrlRef.current); pdfUrlRef.current = ''; }
     };
-  }, [api, state.previewUrl, isDocument]);
+  }, [state.previewUrl, isDocument]);
 
   /* ③ 画当前页。zoom=1 表示「适应宽度」，所以基准比例按容器宽度算。 */
   const draw = useCallback(async () => {
