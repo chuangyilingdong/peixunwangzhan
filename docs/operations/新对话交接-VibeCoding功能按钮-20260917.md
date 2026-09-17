@@ -93,10 +93,26 @@ failed to apply loader entry lingdong-feature: cannot get property "sessionProje
 功能开关曾被并进品牌包（同样是因为那个错误结论）。现在品牌包只剩品牌 ——
 它是**承重**的（它挂了整个外观都没了），不该跟着别人一起出事。
 
-### 4. 平台侧（上一轮已提交，本轮未再动）
+### 4. 平台侧：删老工作台 + 入口改回 dsh（`442f34d`），本轮**把它发了出去**
 
 老工作台（约 960 行的控制台）、只被它用的 SSE 客户端、网站上 `/learn/vibecoding` 两条路由与页面组件
-已删；入口恢复成「进入创作环境」+「提交作品」。见 commit `442f34d`。
+已删；入口恢复成「进入创作环境」+「提交作品」。上一轮只提交、没发布 —— 本轮发布并核验（见第五节第 1 条）。
+
+### 5. 装机路径：功能包必须随镜像走（本段是最后补的，别删）
+
+`provision-user-runtime.sh` 从镜像里 `tar` 出 `etc/dsh` 与 `home/student/.dsh` **覆盖**宿主 ——
+**镜像才是补丁层与 profile 模板的源头**。本轮的按钮先是手工接在宿主上的，
+所以 `Dockerfile`（`COPY feature-plugin/` + `dsh plugin add /opt/feature-plugin` + 两条断言）、
+`provision`（抽取清单加 `opt/feature-plugin`、补根路径软链、收尾把两个自写插件的
+「目录 / profile 软链 / package.json 引用 2 处」打出来）都补齐了，`p108` 钉住。
+
+### 6. 顺带处理了一个并行提交
+
+`5f30023`（另一个会话在 14:07 落的 `deploy/dsh-student/agent-presets/make-presets.mjs`）
+已删除：它要生成的三个 preset 在 `67a104f` 撤掉了（理由见上面第 2 条），留着会误导下一个人。
+它里头**唯一有价值的那条发现是真的**（「补丁层与 profile 的源头是镜像」），
+已搬进部署 README 与 `provision` 的注释 —— 本轮的镜像缺口正是因为看到它才查出来的。
+它另说的「补丁层里至今没有 agent-presets 这一段」与实测不符：那段一直在。
 
 ## 四、怎么验的（这次是真端到端）
 
@@ -108,14 +124,24 @@ failed to apply loader entry lingdong-feature: cannot get property "sessionProje
    —— 证明那段角色说明确实进了系统提示词（不是只有界面变了）。
 4. **两台真学生环境重启后复验**：`systemctl` 单元 active、启动日志无报错、
    发给浏览器的客户端插件清单里出现 `@lingdong/dsh-feature/client.js`（之前只有品牌那条）。
-5. 全量守卫 **117/117**；`p108` 新增 17 条断言钉住这个插件（inject 与服务一致、
+5. **学生从平台进去那一段也验了**（发布之后，用生产测试账号 `student-1`，服务端侧走的）：
+   `/api/student/runtime/status` 返回 `available: true`（学生看到的就是「进入创作环境」，
+   不是「暂不可用」）；调「进入创作环境」那个按钮的后端 `/api/student/runtime/launch`，
+   返回的入口是**当前**的（`18202` + 新票据 —— 每次点都由宿主脚本现取现给，不存在陈旧票据）；
+   跟着它 302 到 dsh 页面 → **200，标题「灵动ai」，客户端插件清单里有
+   `@lingdong/dsh-feature/client.js`**。⚠️ 这一段是**服务端侧**验的：本机出口封着 HTTPS，
+   没能在浏览器里点这一遍（前几轮同样受这个限制）。
+6. 全量守卫 **117/117**；`p108` 新增 22 条断言钉住这个插件与它的装机路径（inject 与服务一致、
    `apply` 兜异常、无诊断残留、品牌包不含功能代码、补丁层不再配 preset 等）。
 
 ## 五、风险与未做
 
-1. ⚠️ **平台侧的 release 还没发**。生产当前是 `20260917T050652Z` / commit `6123291`，
-   而「删老工作台 + 入口改回 dsh」在 `442f34d` 里 —— **没发就等于学生那边没变**。
-   发不发、什么时候发，要你定（发布流程见 `deploy/production/RUNBOOK.md`）。
+1. ✅ **平台侧已发布**：生产 `release 20260917T061044Z` / commit `92d9700`。
+   回滚 = `current` 软链切回 `20260917T050652Z` 再重启（备份 `backups/20260917T061040Z`）。
+   核验：BUILD-METADATA 的 commit 对得上、服务 active 且 `NRestarts=0`、`/health` 200、
+   三端入口 200，并且**部署出去的产物里老工作台痕迹为 0**、新的「进入创作环境」在。
+
+   ⚠️ **但镜像还没重建**（见下一条），也就是说：**现在别跑 `provision-user-runtime.sh`**。
 2. **切换会在对话里留下一张卡片**。dsh 的规矩：命令的结果「renders as a persistent flow node」，
    没有「不显示」开关（官方 `/plan` 也一样）。所以文案改成了给学生看的一句「已切到「做网页」」，
    但卡片本身还在。真嫌吵的话得另找通道。
@@ -126,7 +152,18 @@ failed to apply loader entry lingdong-feature: cannot get property "sessionProje
    保留是刻意的（删它要连提交/产物一起拆），等专门一轮再收。
 5. 三个功能的角色文案**只在探针会话里真机跑过一轮**（模型答「做网页」）。三档合不合口味，
    要在真课上多跑几节才知道。
-6. ⚠️ **宿主上发现一处属主不对（本轮已修一半，另一半是既存问题）**：
+6. ⚠️ **镜像还没重建 —— 这是本轮最后发现、也最容易被忽略的一个缺口**。
+   `provision-user-runtime.sh` 会从镜像里 `tar` 出 `etc/dsh` 与 `home/student/.dsh`
+   **覆盖**到宿主上：也就是说**补丁层与 profile 模板的源头是镜像**，宿主上那两份只是它的副本。
+   而这一排按钮是先在宿主上**手工接通**的（`/opt/feature-plugin` + profile 软链 + bundles 那条），
+   镜像里当时没有它 —— 换台机器、或重跑一次 provision，**按钮就没了**
+   （更坏的情况：profile 里留了 bundles 却缺软链 → 整个创作环境起不来）。
+   已经做的：`Dockerfile` 补上 `COPY feature-plugin/ /opt/feature-plugin/` +
+   照品牌包同款 `dsh plugin add`（并断言 bundles 与 dependencies 两条），
+   `provision` 的抽取清单与根路径软链也补齐了，`p108` 钉住这一串。
+   **没做的：真正重建一次镜像并重跑 provision 验证**（本机没有 docker，镜像历来在别处构建）。
+   重建之前，宿主上那份是手工接的 —— 别去动它，也别跑 provision。
+7. ⚠️ **宿主上发现一处属主不对（本轮已修一半，另一半是既存问题）**：
    `/opt/feature-plugin` 与 `/opt/dsh-runtime/opt/brand-plugin` 这两个**所有学生共读**的目录，
    属主一度是某个学生用户 —— 目录属主能**替换目录里的文件**，等于一个学生能改到别人加载的插件
    （`dsh` 的宿主插件是以该学生身份加载的）。已改回 `root:root` + `755`/`644`。
