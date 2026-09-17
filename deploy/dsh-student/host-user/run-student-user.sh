@@ -63,6 +63,15 @@ done
 [ -n "${TICKET}" ] || { echo "[run] 必须给 --ticket（入口闸门的票据，空票据等于不锁门）" >&2; exit 2; }
 [ -x "$DSH_NODE" ] || { echo "[run] 运行时不在：$DSH_NODE（先跑 provision-user-runtime.sh）" >&2; exit 4; }
 
+# 网页搜索那条路：dsh 的搜索插件（@deepseek-ai/dsh-web-search-deepseek）调的是 **Anthropic 协议的
+# /messages**（搜索是模型一跳里的服务端工具），它认两个环境变量（源码里写死的）：
+#   DEEPSEEK_SEARCH_BASE_URL —— 端点基地址，插件自己会拼 "/messages"；
+#   DEEPSEEK_API_KEY        —— 密钥。
+# ⚠️ 两个都必须指向**我们自己的网关**、给的必须是**本次的运行时密钥**（就是下面 PLATFORM_GATEWAY_KEY
+#    那把，短时、绑课堂）。**绝不**把渠道真密钥导出到学生环境 —— 学生能从自己的进程里读出来，
+#    既泄漏又能绕过账本花钱。网关那一跳会把它换成真密钥（见 runtimeSearchGateway.js）。
+SEARCH_GATEWAY="${GATEWAY%/}/search"
+
 # 用户名：只留小写字母数字与连字符，且**由课堂+学生确定性推导**（停的时候要能算回来）
 USER_NAME="dshs-$(printf '%s|%s' "${SESSION}" "${STUDENT}" | sha256sum | cut -c1-10)"
 WORKSPACE="/home/${USER_NAME}/workspace"
@@ -97,12 +106,17 @@ REUSE_MAX_AGE_S="${REUSE_MAX_AGE_S:-14400}"
 
 # 已在跑的那个 dsh 进程，环境里带的是哪把网关密钥？
 # （dsh 只在启动时读一次环境变量，所以复用**改不了**它手里的密钥 —— 这一点决定了下面那条判据。）
-running_env_key() {
+# 读任意一个环境变量都用它：`reuse` 的判据要看的不止密钥一个。
+running_env_value() {
   local pid
   pid="$(systemctl show "${UNIT}" -p MainPID --value 2>/dev/null || true)"
   [ "${pid:-0}" -gt 0 ] 2>/dev/null || return 1
   [ -r "/proc/${pid}/environ" ] || return 1
-  tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | sed -n 's/^PLATFORM_GATEWAY_KEY=//p' | head -1
+  tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | sed -n "s/^$1=//p" | head -1
+}
+
+running_env_key() {
+  running_env_value PLATFORM_GATEWAY_KEY
 }
 
 # 环境里那把密钥**还能不能用来上这节课**？
@@ -119,6 +133,12 @@ environment_key_usable() {
   VERBOSE_REASON="no-key"
   key="$(running_env_key)" || return 1
   [ -n "${key}" ] || return 1
+  # 网页搜索那两个变量也必须已经在环境里。它们在**这次改动之前**起的环境里是不存在的 ——
+  # 那时复用得到的是一个「AI 能用、一搜索就报 no API key」的半坏环境，而且学生没有任何提示。
+  # 宁可冷启动一次（十几秒，一次性）把它补齐。判据与密钥同一套理由：进程活着 ≠ 它手里那套是齐的。
+  local search_base
+  search_base="$(running_env_value DEEPSEEK_SEARCH_BASE_URL)"
+  if [ "${search_base}" != "${SEARCH_GATEWAY}" ]; then VERBOSE_REASON="环境里的搜索网关不是这次的（${search_base:-空}）"; return 1; fi
   verdict="$("${DSH_NODE}" -e '
     const raw = process.argv[1] || "";
     const parts = raw.split(".");
@@ -277,6 +297,8 @@ systemd-run --unit="${UNIT}" --collect \
   --setenv=GATEWAY_BASE_URL="${GATEWAY}" \
   --setenv=PLATFORM_GATEWAY_BASE_URL="${GATEWAY}" \
   --setenv=PLATFORM_VISION_MODEL="${VISION_MODEL}" \
+  --setenv=DEEPSEEK_SEARCH_BASE_URL="${SEARCH_GATEWAY}" \
+  --setenv=DEEPSEEK_API_KEY="${KEY}" \
   "${DSH_NODE}" "${DSH_BIN}" --profile web --patch "${PATCH_FILE}" \
   --trusted-host "${PUBLIC_IP}" --trusted-host "${PUBLIC_IP}:${PUBLIC_PORT}" \
   --no-open --host 127.0.0.1 --port "${INNER_PORT}" >/dev/null

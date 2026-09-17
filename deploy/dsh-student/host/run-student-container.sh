@@ -71,6 +71,10 @@ docker rm -f "${NAME}" >/dev/null 2>&1 || true
 # `--add-host host.docker.internal:host-gateway`：Linux 上没有 host.docker.internal 这个名字
 # （那是 Docker Desktop 给的），显式加一条别名，平台就可以把网关地址写成
 # http://host.docker.internal:8789/... 而不必关心宿主上跑的是什么。
+#
+# DEEPSEEK_SEARCH_BASE_URL / DEEPSEEK_API_KEY 是 dsh 网页搜索插件要的两个变量（它调的是 Anthropic
+# 协议的 /messages，不是搜索接口）。两者都指向我们自己的网关、给的都必须是**本次的运行时密钥** ——
+# 渠道真密钥绝不进容器（学生读得到进程环境，导出去既能泄漏又能绕过账本）。与用户版脚本同一套。
 docker run -d --name "${NAME}" \
   --label dsh.runtime=student \
   --label "dsh.session=${SESSION}" \
@@ -83,6 +87,8 @@ docker run -d --name "${NAME}" \
   -e "GATEWAY_BASE_URL=${GATEWAY}" \
   -e "PLATFORM_GATEWAY_KEY=${KEY}" \
   -e "PLATFORM_VISION_MODEL=${VISION_MODEL}" \
+  -e "DEEPSEEK_SEARCH_BASE_URL=${GATEWAY%/}/search" \
+  -e "DEEPSEEK_API_KEY=${KEY}" \
   "${IMAGE_TAG}" >/dev/null
 
 echo "CONTAINER_NAME=${NAME}" >&2
