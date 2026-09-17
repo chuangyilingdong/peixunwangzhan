@@ -46,6 +46,21 @@ q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at) VALUES
 q("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,category,visibility,status,review_status,created_at,updated_at) VALUES ('file_p76','PLATFORM','PENDING','guide.pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED',?,?)", [now, now]);
 await call(`/course-lessons/${lessonId}`, 'PUT', { teachingGroups: [{ title: 'teacher', assets: [{ title: 'guide', assetType: 'PDF', fileAssetId: 'file_p76', assetUrl: '/api/org/file-assets/file_p76/download' }] }] });
 await call(`/course-series/${series.id}/versions`, 'POST', { version: '1.2' });
+// 2026-09-17 回归：教学素材的 previewUrl 里是**短时签名票据**，绝不能跟着发布快照一起冻结。
+// 线上真出过这个故障：快照冻的票据 1 小时后作废，老师点预览必然打不开，还会顺着「票据无效」
+// 的回落分支用 cookie 兜底鉴权，报出「教学素材仅教师可见」这种驴唇不对马嘴的错。
+// 这里**故意把快照里的票据改成早已过期**，再断言下发出去的一定是现签的、未来才过期的。
+const frozenSnapshot = JSON.parse(row('SELECT published_content FROM course_lessons WHERE id=?', [lessonId]).published_content);
+frozenSnapshot.teachingGroups[0].assets[0].previewUrl = '/api/org/file-assets/file_p76/preview?t=1000000000000.deadbeef';
+q('UPDATE course_lessons SET published_content=? WHERE id=?', [JSON.stringify(frozenSnapshot), lessonId]);
+const snapshotWithStaleTicket = normalizeLesson(row('SELECT * FROM course_lessons WHERE id=?', [lessonId]), { asPublished: true, includeTeaching: true });
+const issuedUrl = snapshotWithStaleTicket.teachingGroups[0].assets[0].previewUrl;
+assert.match(issuedUrl, /[?&]t=\d+\./, `教学素材没带上预览票据：${issuedUrl}`);
+assert.ok(Number(issuedUrl.match(/[?&]t=(\d+)\./)[1]) > Date.now(), '快照里冻结的过期票据被原样发给了前端（正是线上那个故障）');
+assert.ok(!issuedUrl.includes('deadbeef'), '快照里那张死票据还在被原样下发');
+// 内容仍然按快照定格（只有票据是现签的）
+assert.equal(snapshotWithStaleTicket.teachingGroups[0].title, 'teacher');
+assert.equal(snapshotWithStaleTicket.teachingGroups[0].assets[0].title, 'guide');
 await call(`/course-lessons/${lessonId}`, 'PUT', { teachingGroups: [] });
 const teacherCtx = { auth: { user: { id: 'teacher-p76', role: 'TEACHER', orgId: 'org-p76' } } };
 assert.equal(authorizeFileAccess(teacherCtx, 'file_p76').id, 'file_p76');

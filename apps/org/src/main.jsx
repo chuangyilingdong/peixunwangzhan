@@ -6,6 +6,7 @@ import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, f
 import { StudentGrants } from './pages/StudentGrants.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
 import { Classrooms } from './pages/Classrooms.jsx';
+import { TeachingAssetViewer } from './components/TeachingAssetViewer.jsx';
 import '@platform/shared/styles.css';
 import './theme.css';
 
@@ -339,27 +340,8 @@ function OrgCourses({ api }) {
       <Panel title="课时列表">
         {c.lessons?.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>正文</th><th>教学素材</th><th>操作</th></tr></thead><tbody>{c.lessons.map((lesson) => <tr key={lesson.id} className="lesson-row" onClick={() => setLessonDetail(lesson)}><td>{lesson.sort}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td>{lesson.durationMinutes} 分钟</td><td><div style={{ whiteSpace: 'pre-wrap', maxWidth: 360 }}>{lesson.lessonContent || '—'}</div></td><td>{(lesson.teachingGroups || []).reduce((total, group) => total + (group.assets || []).length, 0)} 个</td><td><button className="secondary-button" onClick={(event) => { event.stopPropagation(); setLessonDetail(lesson); }}>查看</button></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
       </Panel>
-      {previewAsset ? <div className="preview-overlay" onClick={() => setPreviewAsset(null)} onContextMenu={(event) => event.preventDefault()}>
-        <div className="preview-panel" onClick={(event) => event.stopPropagation()}>
-          <header className="preview-head">
-            <div><span className="eyebrow">在线预览（不提供下载）</span><h3>{previewAsset.title}</h3></div>
-            <button type="button" className="drawer-close" onClick={() => setPreviewAsset(null)}>×</button>
-          </header>
-          <div className="preview-stage">
-            {/* 水印：盖在内容上，标明来源与时间；截图/录屏也会带上它。
-                真正的溯源在服务端：每次预览都写 FILE_PREVIEW 审计（谁、何时、哪个文件）。 */}
-            <div className="preview-watermark" aria-hidden="true">内部备课资料 · 请勿外传 · {new Date().toLocaleString('zh-CN')}</div>
-            {previewAsset.previewKind === 'VIDEO'
-              ? <video src={previewAsset.previewUrl} controls controlsList="nodownload noplaybackrate" disablePictureInPicture onContextMenu={(event) => event.preventDefault()} />
-              : previewAsset.previewKind === 'AUDIO'
-                ? <audio src={previewAsset.previewUrl} controls controlsList="nodownload" onContextMenu={(event) => event.preventDefault()} />
-                : previewAsset.previewKind === 'OTHER'
-                  ? <Empty title="这种格式无法在线预览" body="请联系平台把它转成 PDF 或视频。" />
-                  : <iframe src={previewAsset.previewUrl} title={previewAsset.title} className="preview-frame" />}
-          </div>
-          <p className="muted">PPT / Word 已由平台转换成 PDF 后展示，原始文件不会下发；链接带时效，转发出去会失效。请勿录屏或截图外传。</p>
-        </div>
-      </div> : null}
+      {/* 教学素材查看器：关掉浏览器内置 PDF 工具栏 + 自建翻页与全屏。实现与理由见组件头部注释。 */}
+      {previewAsset ? <TeachingAssetViewer api={api} asset={previewAsset} onClose={() => setPreviewAsset(null)} /> : null}
       {lessonDetail ? <div className="drawer-overlay" onClick={() => setLessonDetail(null)}>
         <div className="drawer-panel" onClick={(event) => event.stopPropagation()}>
           <header className="drawer-head"><div><span className="eyebrow">课时详情</span><h2>{lessonDetail.title}</h2></div><button type="button" className="drawer-close" onClick={() => setLessonDetail(null)}>×</button></header>

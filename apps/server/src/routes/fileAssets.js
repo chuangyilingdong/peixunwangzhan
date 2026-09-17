@@ -18,6 +18,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
+  previewInfoFor,
 } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
@@ -652,6 +653,14 @@ export async function handleOrgFileAssets(ctx) {
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER', 'STUDENT']);
   const currentOrgId = auth.user.orgId;
   if (!currentOrgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
+
+  // 现取一张预览票据（2026-09-17）：抽屉可能是几小时前打开的，payload 里那张早过期了。
+  // 老师**点开素材那一刻**再来拿一张新鲜的，于是「课包里的素材随时能看」不依赖任何长时链接。
+  const ticketMatch = part.match(/^\/file-assets\/([^/]+)\/preview-ticket$/);
+  if (ticketMatch && method === 'GET') {
+    const file = authorizeFileAccess(ctx, ticketMatch[1], 'READ');
+    return previewInfoFor(file.id);
+  }
 
   if (part === '/file-assets' && method === 'GET') {
     const category = String(ctx.search.get('category') || '').trim();

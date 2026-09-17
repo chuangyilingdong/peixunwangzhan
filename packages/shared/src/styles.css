@@ -1298,3 +1298,17 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 
 
 
+
+/* ── 教学素材查看器（2026-09-17，见 apps/org/src/components/TeachingAssetViewer.jsx）──
+   面板全屏 + 自建翻页工具栏。浏览器内置 PDF 阅读器那一排（下载/旋转/打印/保存到云端硬盘/
+   文档属性）**不在 DOM 里、删不掉**，只能靠 URL 片段 #toolbar=0 让它整条不出现；
+   代价是没有页码控件了，所以上一页/下一页由我们自己给。
+   全部挂在 .ta-panel 作用域下，不动同一个 .preview-* 家族的既有样式（管理端也在用）。 */
+.ta-panel:fullscreen { width:100vw; height:100vh; max-height:100vh; border-radius:0; }
+.ta-panel .preview-stage > .preview-frame { position:absolute; inset:0; width:100%; height:100%; }
+.ta-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 20px; border-top:1px solid var(--line); background:#fbfaff; }
+.ta-page { color:var(--ink); font-weight:700; font-variant-numeric:tabular-nums; }
+.ta-hint { flex:1; min-width:200px; font-size:12px; line-height:1.6; }
+.ta-state { display:grid; place-items:center; height:100%; min-height:40vh; padding:24px; }
+.ta-image { display:block; max-width:100%; max-height:74vh; margin:auto; }
+.ta-panel:fullscreen .ta-image { max-height:calc(100vh - 140px); }

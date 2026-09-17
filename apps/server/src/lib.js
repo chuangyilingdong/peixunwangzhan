@@ -526,7 +526,7 @@ export function normalizeLesson(value, { includeTeaching = false, asPublished = 
     materialGroups: merged ? merged.materialGroups : liveCanvas.materialGroups,
     generationBoxes: merged ? merged.generationBoxes : liveCanvas.generationBoxes,
     // 教学素材是教师备课资料：只有机构端/平台端显式要求时才下发，学生端与公开接口一律不带。
-    ...(includeTeaching ? { teachingGroups: merged ? (Array.isArray(merged.teachingGroups) ? merged.teachingGroups : []) : lessonTeachingMaterials(value.id).teachingGroups } : {}),
+    ...(includeTeaching ? { teachingGroups: teachingGroupsFor(value.id, merged) } : {}),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -714,7 +714,7 @@ export function lessonCanvasConfig(lessonId, override = null) {
  * - OFFICE（PPT/DOCX）由服务端转成 PDF 再把 PDF 发出去，**原始文件不出服务器**。
  * ⚠️ 视频/PDF 只要浏览器能渲染就拦不住录屏/截屏，这是 web 的物理限制，见 materialPreview.js。
  */
-function previewInfoFor(fileAssetId) {
+export function previewInfoFor(fileAssetId) {
   const id = String(fileAssetId || '').trim();
   if (!id) return { previewKind: null, previewUrl: null };
   const file = row('SELECT mime_type, file_name FROM file_assets WHERE id=?', [id]);
@@ -724,6 +724,32 @@ function previewInfoFor(fileAssetId) {
     previewKind: previewKindFor({ mimeType: file.mime_type, fileName: file.file_name }),
     previewUrl: `/api/org/file-assets/${encodeURIComponent(id)}/preview?t=${encodeURIComponent(ticket)}`,
   };
+}
+
+/**
+ * 教学素材的对外形态（2026-09-17 修）。
+ *
+ * 发布快照里的 teachingGroups 是**定格**的：标题、说明、排序都按发布那一刻算，这是对的。
+ * 但 `previewUrl` 绝不能跟着定格 —— 那里面是**短时签名票据**，冻进快照就成了
+ * 「发布 1 小时后永久失效的死链」。2026-09-17 的故障就是这么来的：
+ * 老师点预览 → 票据早过期 → 回落到会话鉴权 → iframe 带不了鉴权头 → 用 cookie 兜底
+ * → 浏览器里恰好是学生会话 → 报出「教学素材仅教师可见」这条驴唇不对马嘴的错。
+ *
+ * 所以：内容取快照，`previewKind / previewUrl` 一律**现签**。
+ */
+function teachingGroupsFor(lessonId, snapshot) {
+  const frozen = snapshot && Array.isArray(snapshot.teachingGroups) ? snapshot.teachingGroups : null;
+  if (!frozen) return lessonTeachingMaterials(lessonId).teachingGroups;
+  return frozen.map((group) => ({
+    ...group,
+    assets: (Array.isArray(group.assets) ? group.assets : []).map((asset) => (
+      asset.fileAssetId
+        ? { ...asset, ...previewInfoFor(asset.fileAssetId) }
+        // 没有 file_asset_id 的素材本来就没有可预览的文件：把快照里可能残留的地址清掉，
+        // 宁可前端显示「暂不支持在线预览」，也不要发一条指不回去的链接。
+        : { ...asset, previewKind: null, previewUrl: null }
+    )),
+  }));
 }
 
 export function lessonTeachingMaterials(lessonId) {

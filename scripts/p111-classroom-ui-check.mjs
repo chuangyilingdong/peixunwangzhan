@@ -32,7 +32,9 @@ fs.mkdirSync(shotDir, { recursive: true });
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'classroom-ui-'));
 const dbPath = path.join(temp, 'platform.db');
-const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
+// 教学素材的「真文件」要落在服务端认的上传根下，预览才读得到（fileUploadSecurity.uploadRoot）
+const uploadRoot = path.join(temp, 'uploads');
+const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, FILE_UPLOAD_ROOT: uploadRoot, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args, extraEnv = {}) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: { ...env, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
@@ -68,6 +70,37 @@ for (const studentId of grantedIds) {
   const exists = db.prepare('SELECT id FROM student_course_grants WHERE org_id=? AND series_id=? AND student_id=?').get(teacher.org_id, lesson.series_id, studentId);
   if (!exists) db.prepare("INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES(?,?,?,?,?)")
     .run(`grant-ui-${studentId}`, teacher.org_id, studentId, lesson.series_id, new Date().toISOString());
+}
+// ── 教学素材夹具（2026-09-17）───────────────────────────────────────────────
+// 目的是**端到端复现线上那个故障**：发布快照里冻着一张早已过期的预览票据。
+// 修复前：课时抽屉把这张死链发给前端 → iframe 打不开 → 顺着「票据无效」的回落分支
+//         用 cookie 兜底鉴权 → 报出「教学素材仅教师可见」（老师明明就是老师）。
+// 修复后：previewUrl 现签，抽屉里那张永远新鲜；点开时还会再取一张。
+// 所以这一节是「故意把快照写坏」，再断言浏览器里**真的能看到内容**。
+{
+  const now = new Date().toISOString();
+  const seriesId = 'series-ui-materials';
+  const materialLessonId = 'lesson-ui-materials';
+  const fileId = 'file-ui-materials';
+  // 真文件落到上传根下：预览要 stat/读它
+  const relKey = 'teaching/ui-material.pdf';
+  fs.mkdirSync(path.join(uploadRoot, 'teaching'), { recursive: true });
+  fs.writeFileSync(path.join(uploadRoot, relKey), fs.readFileSync(path.join(root, '.tmp', 'test-sample.pdf')));
+  db.prepare(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
+    VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'ui-material.pdf','application/pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`)
+    .run(fileId, relKey, now, now);
+  db.prepare(`INSERT INTO course_series(id,title,description,owner_type,visibility,version,status,created_at,updated_at)
+    VALUES(?,'P111 教学素材课包','用于验证教学素材预览','PLATFORM','PUBLIC','1.0','PUBLISHED',?,?)`).run(seriesId, now, now);
+  // 快照里那张票据**故意写成早已过期**（1000000000000 = 2001 年）
+  const deadPreviewUrl = `/api/org/file-assets/${fileId}/preview?t=1000000000000.deadbeef`;
+  const snapshot = {
+    capabilities: [], materialGroups: [], generationBoxes: [],
+    teachingGroups: [{ id: 'tg-ui', title: '备课资料', sort: 1, assets: [{ id: 'ta-ui', title: 'P111 讲义', description: '端到端素材', assetType: 'FILE', fileAssetId: fileId, assetUrl: null, sort: 1, previewKind: 'PDF', previewUrl: deadPreviewUrl }] }],
+  };
+  db.prepare(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
+    VALUES(?,?,'第 1 课 · 教学素材验证','',1,'PUBLISHED',45,'CANVAS',?,?,?)`).run(materialLessonId, seriesId, JSON.stringify(snapshot), now, now);
+  db.prepare("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at) VALUES('assign-ui-materials',?,?,'ACTIVE',?)").run(seriesId, teacher.org_id, now);
+  console.log('教学素材夹具：series=', seriesId, ' 快照里的票据已写死为过期');
 }
 db.close();
 
@@ -259,13 +292,54 @@ try {
   await expectText('创建页（无占用时）', ['当前账号无「待上课 / 上课中」课堂，可以创建新的课堂']);
   await shot('13-create-allowed');
 
+  // ── 教学素材预览（端到端）：快照里那张**写死的过期票据**不能影响老师看素材。
+  // 这一节在修复前必然红：抽屉会拿着死链去开 iframe，iframe 又带不了鉴权头，
+  // 于是回落到 cookie 鉴权并报出「教学素材仅教师可见」。
+  await page.goto(`${base}/courses/series-ui-materials`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  await expectText('课包详情', ['P111 教学素材课包', '第 1 课 · 教学素材验证']);
+  await page.getByRole('button', { name: '查看' }).first().click();
+  await settle();
+  await expectText('课时抽屉', ['教学素材', 'P111 讲义']);
+  await page.getByRole('button', { name: '在线预览' }).first().click();
+  await page.waitForTimeout(1500);
+  await expectText('素材查看器', ['在线预览（不提供下载）', 'P111 讲义', '全屏观看', '上一页', '下一页']);
+  // 直接看 iframe 的地址，把两件事钉死：
+  //   ① 票据必须是**新签的**（未来才过期），不能是快照里那张 deadbeef 死链；
+  //   ② 必须带 #toolbar=0 —— 否则浏览器内置阅读器那一排「下载/旋转/打印/保存到云端硬盘/
+  //      文档属性」会全回来（它们不在 DOM 里，只能靠这个片段让它整条不出现）。
+  const frameSrc = await page.locator('iframe.preview-frame').getAttribute('src');
+  if (!frameSrc) problems.push('素材预览：根本没有渲染出 iframe');
+  else {
+    const ticket = frameSrc.match(/[?&]t=(\d+)\./);
+    if (frameSrc.includes('deadbeef') || !ticket) problems.push(`素材预览：用的不是现签票据（${frameSrc.slice(0, 90)}）`);
+    else if (!(Number(ticket[1]) > Date.now())) problems.push('素材预览：票据是过期的');
+    if (!frameSrc.includes('toolbar=0') || !frameSrc.includes('navpanes=0')) problems.push('素材预览：没关掉浏览器内置阅读器的工具栏');
+  }
+  // iframe 里若回显鉴权错误，说明请求确实被挡了（PDF 正常渲染时这里读不到正文）
+  const frameTexts = await Promise.all(page.frames().map((frame) => frame.locator('body').innerText().catch(() => '')));
+  if (frameTexts.some((text) => /TEACHING_ASSET_FORBIDDEN|仅教师可见|FILE_ACCESS_DENIED/.test(text))) {
+    problems.push('素材预览：iframe 里回显了鉴权错误 —— 预览请求被拒了');
+  }
+  await shot('14-material-viewer');
+
+  await page.getByRole('button', { name: '全屏观看' }).click();
+  await page.waitForTimeout(1000);
+  const fullscreen = await page.evaluate(() => Boolean(document.fullscreenElement));
+  if (!fullscreen) problems.push('素材查看器：点「全屏观看」没有真的进入全屏');
+  await shot('15-material-viewer-fullscreen');
+  await page.evaluate(() => document.exitFullscreen?.());
+  await page.waitForTimeout(500);
+  await page.getByRole('button', { name: '关闭预览' }).click().catch(() => {});
+  await page.waitForTimeout(400);
+
   if (pageErrors.length) problems.push(`浏览器报错：${pageErrors.slice(0, 5).join(' | ')}`);
   // 任何 4xx/5xx 都算问题，**不留豁免**：这条曾经放着 /fonts/Geist-*.woff2 的一条例外
   // （机构端没打包字体，一直 404 回退系统字体）。2026-09-17 字体已补进 apps/org/public/fonts，
   // 所以把豁免撤掉 —— 留着它以后字体真回归了会被静默吞掉。
   const failures = [...new Set(badRequests)];
   if (failures.length) problems.push(`请求失败：${failures.slice(0, 6).join(' | ')}`);
-  assert.ok(fs.readdirSync(shotDir).length >= 13, '截图没出全');
+  assert.ok(fs.readdirSync(shotDir).length >= 15, '截图没出全');
   await browser.close();
   console.log(`\n截图 ${fs.readdirSync(shotDir).length} 张 → ${shotDir}`);
   if (problems.length) { console.error('\n发现问题：'); for (const item of problems) console.error('  ✗ ' + item); process.exitCode = 1; }
