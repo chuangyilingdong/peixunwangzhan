@@ -74,7 +74,7 @@ function TeacherDashboard({ api }) {
     </div>
 
     <div className="split">
-      <Panel title="当前教学" actions={ongoing ? <Status value={ongoing.status} /> : null}>
+      <Panel title="当前教学" actions={ongoing ? <span className={"status " + (ongoing.status === "ACTIVE" ? "success" : "warning")}>{ORG_SESSION_LABEL[ongoing.status] || ongoing.status}</span> : null}>
         {sessions.loading ? <Loading label="正在读取课堂…" /> : !ongoing ? <Empty title="当前没有进行中的课堂" body="创建课堂并添加学生后，可以在这里直接进入。" />
           : <>
             <h3>{ongoing.title || '未命名课堂'}</h3>
