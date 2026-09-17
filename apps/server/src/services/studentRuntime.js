@@ -234,13 +234,27 @@ function callBroker(payload, timeout) {
  * 为什么需要：脚本的失败原来会一路冒成 500「服务器内部错误」，可「这个学生还没有创作环境」
  * 根本不是服务端故障 —— 它是学生少做了一步（先点「进入创作环境」）。报成 500 既误导排查，
  * 也让学生看到一个「系统坏了」的界面。
+ *
+ * ⚠️ 2026-09-17 补上另一半（浏览器实检时抓到）：**其余失败原来也是 500**。
+ * 宿主脚本失败的原因是「这台机器可用内存装不下新环境」「端口池占满了」这类
+ * **学生看得懂、也说得清**的话（脚本自己打的就是给人看的中文），却被吞成一个
+ * 「服务器内部错误」—— 学生不知道发生了什么，老师也只看到 500。
+ * 现在：对外 503 + 脚本原话的尾巴；完整原文进服务器日志（诊断靠日志，不靠学生转述）。
  */
 function hostError(message, fallbackCode) {
   const text = String(message || '').trim();
   if (/COLLECT_NO_USER|COLLECT_NO_WORKSPACE/.test(text)) {
     return errors.conflict('你的创作环境还没开起来（或已经被收回）。先点「进入创作环境」，再回来提交作品。', 'RUNTIME_NOT_LAUNCHED');
   }
-  return Object.assign(new Error(text || '宿主操作失败'), { code: fallbackCode || 'RUNTIME_HOST_SCRIPT_FAILED' });
+  const code = fallbackCode || 'RUNTIME_HOST_SCRIPT_FAILED';
+  if (!text) {
+    console.error(`[studentRuntime] 宿主操作失败（${code}）：脚本没有给出原因`);
+    return errors.serviceUnavailable('创作环境没开起来，请告诉老师（服务器上会有记录）。', code);
+  }
+  console.error(`[studentRuntime] 宿主操作失败（${code}）：${text}`);
+  // 只带最后几行：脚本的报错本来就是「一句中文说明」，前面几行是过程日志
+  const tail = text.split('\n').map((line) => line.trim()).filter(Boolean).slice(-3).join('；').slice(0, 300);
+  return errors.serviceUnavailable(`创作环境没开起来：${tail}`, code);
 }
 
 /**

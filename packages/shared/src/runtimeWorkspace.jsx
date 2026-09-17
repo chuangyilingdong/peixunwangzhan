@@ -4,9 +4,12 @@
 // （apps/server/src/routes/studentRuntime.js），与老的 VibeCoding 工作台是两条链
 // （老工作台读平台库里的产物，这条读学生自己机器上的工作区）。
 //
-// 一条刻意的设计：**运行时没配好就不接管入口**。`/runtime/status` 说不可用（这台机器没装宿主
-// 脚本、或学生当前没有进行中的课堂）时，这里一律渲染 null，让课程中心继续用它原来的
-// 「进入课堂」—— 学生入口不会因为这次迁移而变成点不动的按钮。
+// ⚠️ 2026-09-17 的口径：**创作环境是「升级」不是入口**。
+// VibeCoding 进去默认走平台自己的链路（没有沙箱、秒进），学生想要「AI 真的动手做出来」
+// 时再点这里的「让 AI 真的做出来」把盒子开起来。所以这个文件现在是那个**升级点**的实现：
+//   · 课程中心的入口按钮（RuntimeActions）与 VibeCoding 工作台里的按钮共用同一个 hook；
+//   · **运行时没配好就不接管**：`/runtime/status` 说不可以用时一律渲染 null，
+//     课程中心继续走平台链路 —— 学生入口永远不会因为这台机器没配好而变成点不动的按钮。
 import { useEffect, useState } from 'react';
 import { Notice } from './ui.jsx';
 
@@ -45,30 +48,34 @@ export function useRuntimeStatus(api) {
 const LAUNCH_KEY = 'dsh-launch-started-at';
 const LAUNCH_GUARD_MS = 170 * 1000;   // 比服务端 90 秒超时 + nginx 180 秒都留出余量
 
-export function RuntimeActions({ api, lesson, canEnter }) {
-  const [busy, setBusy] = useState('');
+/**
+ * 「开创作环境」这件事的**唯一实现**：课程中心的入口按钮与 VibeCoding 工作台里的
+ * 「让 AI 真的做出来」两处共用同一份 —— 两处各写一份的话，忙状态、超时、
+ * sessionStorage 那几个坑迟早只在一边被修好（这几种坑我们已经踩过一遍了）。
+ *
+ * @returns {{ launching: boolean, elapsed: number, message: string, launch: () => Promise<void>, clearMessage: () => void }}
+ *   `launch()` 成功时会**新标签页**打开学生自己的盒子（创作环境不该顶掉我们的页面）。
+ */
+export function useRuntimeLaunch(api, { enabled = true } = {}) {
+  const [launching, setLaunching] = useState(false);
   const [message, setMessage] = useState('');
-  const [picker, setPicker] = useState(null);
-  const [confirming, setConfirming] = useState(null);
-  const [report, setReport] = useState(null);
   const [elapsed, setElapsed] = useState(0);
-  const disabled = !canEnter || Boolean(busy);
 
   // 刷新后接着显示「正在开环境…」（服务器上那个请求没因为刷新而停下）
   useEffect(() => {
     const startedAt = Number((typeof sessionStorage !== 'undefined' && sessionStorage.getItem(LAUNCH_KEY)) || 0);
-    if (startedAt && Date.now() - startedAt < LAUNCH_GUARD_MS) setBusy('enter');
+    if (startedAt && Date.now() - startedAt < LAUNCH_GUARD_MS) setLaunching(true);
   }, []);
   // 计时：让「正在开环境」看起来是在干活，而不是死住了
   useEffect(() => {
-    if (busy !== 'enter') { setElapsed(0); return undefined; }
+    if (!launching) { setElapsed(0); return undefined; }
     const timer = setInterval(() => setElapsed((n) => n + 1), 1000);
     return () => clearInterval(timer);
-  }, [busy]);
+  }, [launching]);
 
-  async function enterEnvironment() {
-    if (!canEnter) return;
-    setBusy('enter'); setMessage(''); setReport(null); setElapsed(0);
+  async function launch() {
+    if (!enabled || launching) return;
+    setLaunching(true); setMessage(''); setElapsed(0);
     try { sessionStorage.setItem(LAUNCH_KEY, String(Date.now())); } catch { /* 隐私模式等，忽略 */ }
     try {
       // 给这次请求设超时：服务端开环境最长 90 秒 + 探针几秒，超过就不等了、明确报错。
@@ -82,9 +89,21 @@ export function RuntimeActions({ api, lesson, canEnter }) {
     } catch (error) { setMessage(error.message || '进入创作环境失败'); }
     finally {
       try { sessionStorage.removeItem(LAUNCH_KEY); } catch { /* 忽略 */ }
-      setBusy('');
+      setLaunching(false);
     }
   }
+
+  return { launching, elapsed, message, launch, clearMessage: () => setMessage('') };
+}
+
+export function RuntimeActions({ api, lesson, canEnter }) {
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [picker, setPicker] = useState(null);
+  const [confirming, setConfirming] = useState(null);
+  const [report, setReport] = useState(null);
+  const launchState = useRuntimeLaunch(api, { enabled: canEnter });
+  const disabled = !canEnter || Boolean(busy) || launchState.launching;
 
   async function openPicker() {
     setBusy('list'); setMessage(''); setReport(null);
@@ -110,13 +129,13 @@ export function RuntimeActions({ api, lesson, canEnter }) {
   }
 
   return <>
-    <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={enterEnvironment}>
-      {busy === 'enter' ? `正在开环境…${elapsed ? ` ${elapsed}s` : ''}` : '进入创作环境'}
+    <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={launchState.launch}>
+      {launchState.launching ? `正在开环境…${launchState.elapsed ? ` ${launchState.elapsed}s` : ''}` : '让 AI 真的做出来'}
     </button>
     <button className="secondary-button" disabled={disabled} onClick={openPicker}>
       {busy === 'list' ? '读取中…' : busy === 'submit' ? '提交中…' : '提交作品'}
     </button>
-    {message && <p className="lesson-block-reason">{message}</p>}
+    {(message || launchState.message) && <p className="lesson-block-reason">{message || launchState.message}</p>}
 
     {picker ? <div className="modal-overlay" role="dialog" aria-modal="true">
       <div className="modal-content">

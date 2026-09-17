@@ -2105,6 +2105,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS vibecoding_conversations (
   model TEXT,
   files TEXT NOT NULL DEFAULT '{}',
   entry_file TEXT NOT NULL DEFAULT 'index.html',
+  -- 学生进课堂时选的「做什么」：CHAT 对话 / CODE 写代码 / WEB 做网页（取值域见 apps/server/src/routes/vibecoding.js）。
+  -- ⚠️ **留空 = 迁移前的老行为**（既能出网页也能出文档），老会话因此零回归；取值在代码里规范化，不加 CHECK。
+  mode TEXT,
   status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','SUBMITTED','ARCHIVED')),
   last_message_at TEXT,
   created_at TEXT NOT NULL,
@@ -2150,10 +2153,15 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_vibe_artifact_name ON vibecoding_
 // ── 文档产物的生成插画（PPT 每页配图，2026-09-11）────────────────────────────
 // 存 [{slideIndex,prompt,fileId,url}]（失败项带 error）。放在这一列而不是重写 content：
 // content 是模型写的规格原文（学生能在「源码」里看懂），不该被平台改写。
-try { db.exec('ALTER TABLE vibecoding_artifacts ADD COLUMN generated_images TEXT'); }
-catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+try { db.exec('ALTER TABLE vibecoding_artifacts ADD COLUMN generated_images TEXT'); }catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // PPT 实际引用的学生附件图最小集。独立固化后，清空聊天记录不会让产物丢图。
 try { db.exec('ALTER TABLE vibecoding_artifacts ADD COLUMN attachment_images TEXT'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
+// ── 会话上的「做什么」选项（2026-09-17）──────────────────────────────────────
+// 学生进 VibeCoding 时选 对话 / 写代码 / 做网页，它决定系统提示词怎么拼（见 vibecoding.js 的
+// lessonSystemMessage）。**留空表示迁移前的老会话**，走老提示词，零回归。
+try { db.exec('ALTER TABLE vibecoding_conversations ADD COLUMN mode TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
 // 启动迁移：把旧的 conversations.files JSON 展开成产物行。

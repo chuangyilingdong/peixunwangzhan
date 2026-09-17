@@ -14,12 +14,39 @@ import { useData } from './classroom.jsx';
 import { buildPreviewDocument, downloadTextFile, isSubmittableArtifact } from './vibecodingProject.js';
 import { consumeVibeCodingStream } from './vibecodingStream.js';
 import { relativeTime } from './console/format.js';
+import { useRuntimeStatus, useRuntimeLaunch } from './runtimeWorkspace.jsx';
 import {
   ATTACHMENT_ACCEPT, MAX_ATTACHMENTS, MAX_INLINE_BYTES, isDocumentArtifact,
   attachmentSizeLimit, attachmentSizeMessage,
 } from './console/attachments.js';
 
 const DEFAULT_TITLE = '新的创作对话';
+
+/**
+ * 学生进课堂时选的「做什么」（2026-09-17）。三张卡片只在**还没聊过**的时候出现；
+ * 选中之后它会随会话存下来，服务端据此拼系统提示词（见 vibecoding.js 的 lessonSystemMessage）。
+ *
+ * ⚠️ 这里只决定「AI 干什么、默认产出什么」，**不决定能力边界** —— 三个选项都能写网页、做文档，
+ * 所以别在文案里承诺「对话就不能做网页」，那是错的。
+ */
+const MODE_CARDS = [
+  {
+    id: 'CHAT', icon: 'messageSquare', title: '对话',
+    desc: '不懂就问：讲解、答疑、帮你想思路',
+    prompts: ['帮我讲讲什么是循环', '这个游戏的猫怎么才能追得更智能？', '我这关太难了，怎么改简单一点'],
+  },
+  {
+    id: 'CODE', icon: 'code', title: '写代码',
+    desc: '一起写代码，每段都讲清楚在干什么',
+    prompts: ['写一个猜数字的小游戏', '教我用键盘控制角色移动', '帮我看看这段代码为什么不动'],
+  },
+  {
+    id: 'WEB', icon: 'globe', title: '做网页',
+    desc: '做一个能在右边直接看到的网页',
+    prompts: ['做一个点击按钮会变色的网页', '做一个我自己的名片网页', '做一个记录心情的页面'],
+  },
+];
+const MODE_TITLE = Object.fromEntries(MODE_CARDS.map((card) => [card.id, card.title]));
 // 思考过程在界面上最多展示这么多字符（只保留尾部）——长推理没必要全塞进 DOM
 const REASONING_TAIL_CHARS = 4000;
 // 附件的类型 / 张数 / 大小上限都在 console/attachments.js（与服务端白名单对齐，有 p44 盯着）
@@ -180,6 +207,23 @@ function WorkspaceView({ api }) {
   const [search, setSearch] = useState('');
   const conversation = useData(() => api.get(`student/vibecoding/conversations/${conversationId}`), [api, conversationId]);
   const list = useData(() => api.get(`student/vibecoding/conversations?limit=50${search ? `&search=${encodeURIComponent(search)}` : ''}`), [api, conversationId, search]);
+  // 创作环境（沙箱）与「让 AI 真的做出来」：这是**升级点**，不是入口。
+  // ⚠️ 这两个 hook 必须在下面那些提前 return **之前**调用（本文件 297 行附近有 return），
+  //    否则会「少一个 hook」直接崩 —— 这个坑在 classroom.jsx 里已经踩过一次并留了注释。
+  const runtime = useRuntimeStatus(api);
+  const launch = useRuntimeLaunch(api, { enabled: runtime.ready });
+  // 「让 AI 真的做出来」失败/退出的原因必须**说出来**（这台机器没配好、脚本失败、没有进行中的课堂…）。
+  // ⚠️ 必须放在下面那些提前 return **之前**：hook 顺序不能变。
+  // ⚠️ 更重要的原因：不显示的话，「点了没反应」就成了这个项目最怕的那种
+  //    「不报错、只表现为卡住」—— 我第一版正是漏了这一段，浏览器实检时当场抓到。
+  useEffect(() => {
+    if (!launch.message) return;
+    toast.error(launch.message);
+    launch.clearMessage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [launch.message]);
+  // 学生刚点的选项（还没落库前先本地生效，免得等一个回包才变色）
+  const [pickedMode, setPickedMode] = useState(null);
 
   const [messages, setMessages] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
@@ -298,6 +342,10 @@ function WorkspaceView({ api }) {
   if (conversation.error) return <div className="c-page" data-console="vibecoding"><div className="c-page__center"><ConsoleEmpty icon="alert" title="打开失败" body={conversation.error.message} /></div></div>;
 
   const data = conversation.data;
+  // 这一节选的「做什么」。学生刚点的本地先生效；老会话没有 mode → null（界面按老行为走）。
+  const effectiveMode = pickedMode ?? data.mode ?? null;
+  // 卡片只在**还没聊过**时出现：聊起来之后换选项会让前后两套角色说明打架（服务端也会 409）。
+  const canPickMode = !messages.length && !streaming;
 
   /** 更新某条消息上的活动步骤（同 id 覆盖，避免流式期间堆出几十条） */
   function pushActivity(messageId, step) {
@@ -650,6 +698,55 @@ function WorkspaceView({ api }) {
     } catch (error) { toast.error(error.message || '切换模型失败'); }
   }
 
+  /** 选「做什么」（对话 / 写代码 / 做网页）：只在还没聊过时可选，服务端也这么判（聊过会 409）。 */
+  async function chooseMode(mode) {
+    const previous = pickedMode;
+    setPickedMode(mode);
+    try {
+      await api.put(`student/vibecoding/conversations/${conversationId}`, { mode });
+      conversation.refresh();
+    } catch (error) {
+      setPickedMode(previous);
+      toast.error(error.message || '选择失败，稍后再试');
+    }
+  }
+
+  /**
+   * 「让 AI 真的做出来」：升级到创作环境（沙箱，dsh）。
+   * 它和课程中心那个按钮共用同一个 hook —— 忙状态、超时、跨刷新防重复点只有一份实现。
+   * 升级前先把「当前要求」整理成可复制的一段话：沙箱里是**另一段对话、另一份工作区**，
+   * 不带上要求，学生进去要从头再说一遍。
+   */
+  function handoffText() {
+    const asks = messages.filter((item) => item.role === 'user').slice(-4).map((item) => `- ${String(item.content || '').slice(0, 200)}`);
+    const files = artifacts.map((item) => `- ${item.name}`);
+    return [
+      `这节课我要做的东西（${MODE_TITLE[effectiveMode] || 'VibeCoding'}）：`,
+      ...(asks.length ? asks : ['- （还没说具体要求）']),
+      ...(files.length ? ['', '已经在平台上产出的文件：', ...files] : []),
+    ].join('\n');
+  }
+
+  /**
+   * 「让 AI 真的做出来」：升级到创作环境（沙箱，dsh）。
+   * 与课程中心那个按钮共用 `useRuntimeLaunch` —— 忙状态、超时、跨刷新防重复点只有一份实现。
+   *
+   * 升级前把「当前要求」复制进剪贴板：沙箱里是**另一段对话、另一份工作区**，
+   * 不带上要求，学生进去要从头再说一遍（这是这轮明确接受的一个交接代价，见交接文档）。
+   */
+  async function upgradeToSandbox() {
+    let copied = false;
+    try { await navigator.clipboard.writeText(handoffText()); copied = true; } catch { copied = false; }
+    setConfirm({
+      title: '让 AI 真的做出来？',
+      body: copied
+        ? '会给你开一个创作环境：AI 在那里能真的把代码跑起来、自己看效果、自己改。你刚提的要求已经复制好了，粘到新开的那个页面里就能接着说。'
+        : '会给你开一个创作环境：AI 在那里能真的把代码跑起来、自己看效果、自己改。进去之后把要求再说一遍就行。',
+      confirmLabel: '打开创作环境',
+      onConfirm: () => { setConfirm(null); launch.launch(); },
+    });
+  }
+
   // entryFile = 要提交的那份产物（正在预览的那一份）。不传就交给服务端用默认入口。
   function submitWork(entryFile) {
     const requested = artifacts.find((item) => item.name === entryFile);
@@ -755,6 +852,14 @@ function WorkspaceView({ api }) {
             </select>
           ) : null}
           <Button size="sm" variant="ghost" icon="refresh" disabled={streaming || !messages.length || !editable} onClick={regenerate}>重新生成</Button>
+          {/* 升级点：这台机器配好创作环境（student/runtime/status 说可用）才出现。
+              默认不需要它 —— VibeCoding 本来就跑在平台上；学生想要「AI 真的把代码跑起来、
+              自己看效果再改」时才点这里。没配好时这块什么也不渲染，入口不会因此变残。 */}
+          {runtime.ready ? (
+            <Button size="sm" variant="ghost" icon="play" disabled={launch.launching || !editable} onClick={upgradeToSandbox}>
+              {launch.launching ? `正在开环境…${launch.elapsed ? ` ${launch.elapsed}s` : ''}` : '让 AI 真的做出来'}
+            </Button>
+          ) : null}
           {workbenchOpen ? null : (
             <Button size="sm" variant="ghost" icon="eye" onClick={() => setWorkbenchOpen(true)}>预览作品</Button>
           )}
@@ -822,15 +927,42 @@ function WorkspaceView({ api }) {
           emptyState={(
             <div className="c-landing">
               <span className="c-landing__mark"><ConsoleIcon name="wand" size={24} /></span>
-              <h2>和 AI 一起做东西</h2>
-              <p>想做什么直接说，AI 会一边想一边做，做出来的东西放在右边随时看。改主意了就接着聊，它会跟着改。</p>
-              <div className="c-landing__prompts">
-                {['做一个点击按钮会变色的网页', '写一个猜数字的小游戏', '做一份去新疆旅游的 PPT', '做一张记录心情的 Excel 表格'].map((prompt) => (
-                  <button key={prompt} type="button" className="c-landing__prompt" onClick={() => { setDraft(prompt); setTimeout(() => send(prompt), 0); }}>
-                    {prompt}
-                  </button>
-                ))}
-              </div>
+              {canPickMode ? <>
+                <h2>今天想做什么？</h2>
+                <p>先选一个：选好之后 AI 就按这个角色陪你上课。开始聊之前都能改。</p>
+                <div className="c-mode-grid">
+                  {MODE_CARDS.map((card) => (
+                    <button
+                      key={card.id}
+                      type="button"
+                      className={`c-mode-card${effectiveMode === card.id ? ' is-active' : ''}`}
+                      aria-pressed={effectiveMode === card.id}
+                      onClick={() => chooseMode(card.id)}
+                    >
+                      <span className="c-mode-card__icon"><ConsoleIcon name={card.icon} size={18} /></span>
+                      <strong>{card.title}</strong>
+                      <small>{card.desc}</small>
+                    </button>
+                  ))}
+                </div>
+                {effectiveMode ? <div className="c-landing__prompts">
+                  {(MODE_CARDS.find((card) => card.id === effectiveMode)?.prompts || []).map((prompt) => (
+                    <button key={prompt} type="button" className="c-landing__prompt" onClick={() => { setDraft(prompt); setTimeout(() => send(prompt), 0); }}>
+                      {prompt}
+                    </button>
+                  ))}
+                </div> : <p className="c-landing__hint">选好上面一个，这里会给出几个可以照着开的头。</p>}
+              </> : <>
+                <h2>接着做下去</h2>
+                <p>想做什么直接说，AI 会一边想一边做，做出来的东西放在右边随时看。改主意了就接着聊，它会跟着改。</p>
+                <div className="c-landing__prompts">
+                  {['继续完善这个作品', '帮我加一个新功能', '哪里可以做得更好看一点', '看看有没有哪里会出错'].map((prompt) => (
+                    <button key={prompt} type="button" className="c-landing__prompt" onClick={() => { setDraft(prompt); setTimeout(() => send(prompt), 0); }}>
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </>}
             </div>
           )}
         />

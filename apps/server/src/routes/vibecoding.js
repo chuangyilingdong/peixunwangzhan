@@ -50,6 +50,8 @@ function normalizeConversation(value, { includeArtifacts = false, artifacts: pro
   const entry = includeArtifacts ? pickEntryArtifact(artifacts) : null;
   return {
     id: value.id, title: value.title, status: value.status, model: value.model || null,
+    // 三个选项之一；老会话没有 → null（界面据此按老行为处理）
+    mode: normalizeVibeMode(value.mode) || null,
     lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
     classId: value.class_id || null, className: value.class_name || null,
     classSessionId: value.class_session_id || null,
@@ -389,13 +391,49 @@ const DOCUMENT_GUIDE = [
   '学生要文档时就直接给对应的代码块，不要用文字描述一遍内容来代替。',
 ].join('\n');
 
+/**
+ * 学生进 VibeCoding 时选的「做什么」（2026-09-17）。
+ * 它只决定**AI 的角色与默认产出**，不决定能力边界 —— 三种选项都照旧遵守上面的格式说明，
+ * 所以选了「对话」也不会突然不会写网页。
+ *
+ * ⚠️ **空值 = 迁移前的老会话**：那时没有选项，提示词就是「格式说明 + 课时上下文」。
+ * 老会话必须逐字保持原样（零回归），所以这里的空值分支不许再加料。
+ */
+export const VIBE_MODES = ['CHAT', 'CODE', 'WEB'];
+
+export function normalizeVibeMode(value) {
+  const text = String(value || '').trim().toUpperCase();
+  return VIBE_MODES.includes(text) ? text : '';
+}
+
+/** 三个选项各自的角色说明（能力说明在上面那两份 guide 里，公用）。 */
+const MODE_ROLE_GUIDE = {
+  CHAT: [
+    '【本节选项：对话】学生选的是「对话」，你的角色是这节课的助教：讲清概念、答疑、给思路、检查他的想法对不对。',
+    '默认**不要**产出文件 —— 除非学生明确要你写代码或做个东西，那就照后面的格式说明产出。',
+  ].join('\n'),
+  CODE: [
+    '【本节选项：写代码】学生选的是「写代码」，你要陪他把代码写出来：产出完整可运行的文件（用围栏加文件名），并**讲清每段关键代码在干什么**，让他看懂而不是只拿到一堆代码。',
+    '允许多文件工程（HTML + CSS + JS 分开），但要在文件之间说明关系。写完按上面的自查项过一遍。',
+  ].join('\n'),
+  WEB: [
+    '【本节选项：做网页】学生选的是「做网页」，你要做出一个**能直接在右边预览**的页面：优先单文件 `index.html`（CSS 与 JS 内联在里面），桌面和手机都不能横向溢出。',
+    '**不要依赖外网资源**（CDN 上的库、图、字体在预览里会加载失败或直接被拦）：需要图标/插画就用内联 SVG 或 CSS 画出来。',
+  ].join('\n'),
+};
+
 export function lessonSystemMessage(conversation) {
-  const lesson = row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id]);
+  const lesson = conversation?.lesson_id
+    ? row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id])
+    : null;
+  const mode = normalizeVibeMode(conversation?.mode);
   const parts = [
     '请用适合 8–16 岁学生理解的中文回答，避免任何危险或不适龄内容。',
-    WEB_APP_GUIDE,
-    DOCUMENT_GUIDE,
   ];
+  // 选了选项就在最前面放它的角色说明；没选（老会话）与迁移前逐字一致。
+  if (mode) parts.push(MODE_ROLE_GUIDE[mode]);
+  // 两种产出格式说明**永远都给**：选项只改默认行为，不改能力边界。
+  parts.push(WEB_APP_GUIDE, DOCUMENT_GUIDE);
   // 产物清单原来是为了配合「产物约定」——约定删了，这段也随之删掉。
   // 允许不带 id 调用（单测里只验证课时上下文的拼装）。
   if (lesson) {
@@ -1058,8 +1096,20 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       else if (!textModelOptions().some((item) => item.id === requested)) throw errors.badRequest('该模型不在当前 AI 渠道的可选范围内', 'VIBECODING_MODEL_NOT_AVAILABLE');
       else nextModel = requested;
     }
-    q('UPDATE vibecoding_conversations SET title=?,model=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
-      [title, nextModel, nowIso(), conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
+    // 选项（对话 / 写代码 / 做网页，2026-09-17）：它决定系统提示词，所以**只有还没聊过**才允许改 ——
+    // 聊到一半换选项会让同一段对话前后两套角色说明打架，学生也会以为前面的要求被继承了。
+    let nextMode = normalizeVibeMode(conversation.mode);
+    if (body.mode !== undefined) {
+      const requested = normalizeVibeMode(body.mode);
+      if (!requested) throw errors.badRequest('不认识的课堂选项（可选：对话 / 写代码 / 做网页）', 'INVALID_VIBE_MODE');
+      if (requested !== nextMode) {
+        const said = Number(count('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id = ?', [conversation.id]) || 0);
+        if (said > 0) throw errors.conflict('这个对话已经开始了，选项不能再改；想换一种做法就新建一个对话。', 'VIBECODING_MODE_LOCKED');
+        nextMode = requested;
+      }
+    }
+    q('UPDATE vibecoding_conversations SET title=?,model=?,mode=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
+      [title, nextModel, nextMode || null, nowIso(), conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
     const updated = row('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversation.id]);
     return normalizeConversation(updated, { includeArtifacts: true });
   }

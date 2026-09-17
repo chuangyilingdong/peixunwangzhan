@@ -362,6 +362,47 @@
   transform: translateY(-1px);
 }
 
+/* 三张「做什么」的卡片（2026-09-17）：只在还没聊过时出现，选好之后 AI 按那个角色上课。
+   卡片是**选项**不是入口 —— 三个选项的能力边界完全一样，只有 AI 的默认角色与产出不同。 */
+.c-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+  width: min(100%, 640px);
+}
+.c-mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background-color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-out);
+}
+.c-mode-card:hover { border-color: var(--border-focus); background: var(--bg-elevated); transform: translateY(-1px); }
+.c-mode-card.is-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface)); }
+.c-mode-card__icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.c-mode-card strong { color: var(--text); font-size: var(--fs-sm); }
+.c-mode-card small { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.6; }
+.c-landing__hint { color: var(--text-dim); font-size: var(--fs-xs); }
+/* 窄屏（手机竖屏）：三列会挤成一坨，改成竖排 */
+@media (max-width: 560px) {
+  .c-mode-grid { grid-template-columns: 1fr; }
+}
+
 /* ── 回到底部 ───────────────────────────────────────────────────────────
    挂在输入停靠区正上方；44×44 起，chevron 旋转 90° 变成朝下。 */
 .c-jump-latest {
