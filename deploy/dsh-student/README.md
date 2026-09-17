@@ -67,6 +67,39 @@
 
 **学生界面的取舍**（2026-09-16 用户定）：**保留「设置」入口**，不隐藏（里面有模型选择等）。
 
+## 学生端的三个功能：对话 / 写代码 / 做网页（`feature-plugin/`）
+
+用户口径（2026-09-17）：「一个页面，然后分成不同的功能，例如像豆包这种」—— 做在 **dsh 自己的输入框那一排**，
+点了就切，**随时可切**（不是只有新会话能选）。切了 AI 的角色与默认产出跟着变，**能力边界不变**
+（同一个 agent、同一套工具与技能；三档都还能写网页、做文档）。
+
+做法（三件事都用 dsh 现成的机制，写法照抄官方 `dsh-plan-mode` —— 它做的就是同一件事）：
+
+| 要做什么 | 用什么 | 注意 |
+|---|---|---|
+| 按会话记住选了哪个功能 | `sessionProjections.register` + `agent.session.append('studentFeature/mode', …)` | 状态钉在**会话日志**上，不在进程内存里；恢复/分叉会话能重建 |
+| 让功能影响模型 | `systemPrompt.section`，`text` 是**函数** | ⚠️ **不要**用 `agent/request` 改消息：官方写死了它不能改消息 |
+| 浏览器怎么切 | 宿主注册 `/feature <id>` 命令，客户端 `ctx.remote.commands.execute` | 不自建 RPC 命名空间 |
+
+浏览器那半边挂在 **`conversation.input.left`**（官方留白、没有占用者的 list 插槽）。三条硬约束：
+- 插件里**只能 require react / react/jsx-runtime**（别的包不在磁盘上，被打进 shell 了）；
+- 样式一律**内联**（没有给我们注入样式表的通道）；
+- 插槽给的标准 props 是 **`sessionId` / `useSession` / `useProjection`** 三个，当前功能用
+  `useProjection('studentFeature')` 读 —— 与官方「计划模式」读 `useProjection('plan')` 同款。
+- 插槽是 `scope: session` 的：**新会话首页不渲染**，所以这一排按钮在「已经有会话」之后才出现。
+
+> ⚠️ **最容易踩、也最贵的两个坑**（都实测踩过，守卫 p108 已钉住）：
+> 1. **宿主插件里读服务必须先 `inject`**。少写一个，cordis 抛「cannot get property … without inject」，
+>    而加载器遇到插件 `apply` 抛错会让**整个 profile 起不来** —— 学生打开创作环境直接白屏。
+>    所以包里的 `apply` 自己兜了异常：最坏是「功能开关不生效」，不能是「学生进不去」。
+> 2. **诊断代码（`appendFileSync` / 调试 `console.log`）不许留在包里**。上一轮靠「写文件看有没有出现」
+>    判断插件加载，而那次判断建立在一份**没有重启过的部署**上，于是得出「宿主插件挂不上」的**错误结论**，
+>    整个方向都跟着错了一轮。判插件有没有加载，请直接读启动日志。
+
+**部署**：包放在 `/opt/feature-plugin`，profile 的 `node_modules/@lingdong/dsh-feature` 软链指向它，
+`package.json` 的 `dsh.profile.bundles` 里也要有 `@lingdong/dsh-feature`（**两个都要**：
+bundles 决定加载器有这一行，node_modules 决定这行解析得到；缺前者不会加载，缺后者整个环境起不来）。
+
 ## 机器（容器宿主）
 
 这台生产机跑不了容器，所以学生容器放在**另一台机器**上：装机、拉起、回收、自检的脚本都在

@@ -9,8 +9,8 @@
  *   · 老工作台（平台自己的对话工作台）真的没了：文件、导出、路由都不在，
  *     也不存在任何一条指向它的入口 —— 否则「抛弃」只是嘴上说说；
  *   · VibeCoding 的入口就是「进入创作环境」（走宿主脚本拉起 dsh）+「提交作品」；
- *   · 三个功能（对话 / 写代码 / 做网页）做在 **dsh 那边**（见 deploy/dsh-student/mode-plugin），
- *     不在平台里再造一套；
+ *   · 三个功能（对话 / 写代码 / 做网页）做在 **dsh 那边**（见 deploy/dsh-student/feature-plugin）：
+ *     输入框那一排三个按钮，点了就切，宿主侧把当前功能放进系统提示词 —— 不在平台里再造一套；
  *   · 后端的会话/产物/提交仍然在（dsh 那条路在用），所以老链路那部分提示词分档的断言保留，
  *     但明确标注「已无界面」—— 别让下一个人以为它还是学生的路。
  *
@@ -117,6 +117,83 @@ check('预览仍走 /vibe-preview.html 那个放宽 CSP 的外壳', /PREVIEW_SHE
 check('预览文档仍由 buildPreviewDocument 统一拼（作品广场与机构端看的是同一份）',
   /export function buildPreviewDocument/.test(read('packages/shared/src/vibecodingProject.js'))
   && /buildPreviewDocument/.test(read('apps/website/src/pages/WorkDetail.jsx')));
+
+/* ── ⑤ 功能开关插件本身：三个按钮做在 dsh 那边（deploy/dsh-student/feature-plugin）──
+   这一段是 2026-09-17 补的，钉的都是**实测踩过的坑**，一条都别再踩：
+
+   · **apply 里读服务必须先 inject**。曾经把 inject 清空做诊断、apply 里照读
+     ctx.sessionProjections —— cordis 直接抛「cannot get property … without inject」，
+     而加载器遇到插件 apply 抛错会让**整个 profile 起不来**（学生白屏）。所以：
+     ① inject 必须列全它读的服务；② apply 只能用列进去的服务；③ 宿主半个包要自己兜异常。
+   · **诊断代码不许留在包里**（appendFileSync / 调试 console.log）。上一轮往文件里写诊断，
+     得靠「文件出没出现」判断插件有没有加载 —— 那个判断还建立在一次没重启的部署上，
+     直接导致了「宿主插件挂不上」这个**错误结论**，整个方向都跟着错了一轮。
+   · **品牌包只管品牌**。功能开关曾被并进品牌包（因为上面那个错误结论），已拆回来：
+     品牌是承重的，它挂了整个外观都没了。
+   · **三个功能的角色说明不许回显给客户端**：命令的结果会作为卡片留在对话里，
+     所以返回的必须是给学生看的一句话，不是内部那段角色提示词。
+*/
+const featurePlugin = 'deploy/dsh-student/feature-plugin';
+const featureHost = read(`${featurePlugin}/lib/index.js`);
+const featureClient = read(`${featurePlugin}/lib/client.js`);
+const featurePkg = JSON.parse(read(`${featurePlugin}/package.json`));
+const brandHost = read('deploy/dsh-student/brand-plugin/lib/index.js');
+const brandClient = read('deploy/dsh-student/brand-plugin/lib/client.js');
+const patchLayer = read('deploy/dsh-student/student-runtime.cordis.yml');
+
+check('功能包两个半边都在，而且 package.json 声明了客户端那一半（没这一行 dsh 不会下发它）',
+  featurePkg.name === '@lingdong/dsh-feature' && featurePkg.exports['./client'] !== undefined
+  && featurePkg.dsh?.client?.platform === 'web' && featurePkg.dsh?.bundle?.patch === './cordis.patch.yml');
+
+const injected = /export const inject = \[([^\]]*)\]/.exec(featureHost)?.[1] ?? '';
+check('宿主侧 inject 列全了它读的三个服务（少一个 cordis 就会抛，进而整个环境起不来）',
+  ['sessionProjections', 'systemPrompt', 'commands'].every((name) => injected.includes(name)), injected);
+
+// 先把注释剥掉再查 —— 注释里提到「客户端用 ctx.remote…」不是代码，别把它当成违规
+const hostCode = featureHost.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const readServices = [...hostCode.matchAll(/[A-Za-z]*[Cc]tx\.([a-zA-Z]+)/g)]
+  .map((match) => match[1])
+  .filter((name) => name !== 'logger' && name !== 'inject');
+check('宿主侧只读它 inject 过的服务（读别的同样会抛）',
+  readServices.length > 0 && readServices.every((name) => injected.includes(name)),
+  `读到：${[...new Set(readServices)].join(', ')}`);
+
+check('宿主 apply 自己兜异常（插件坏掉只让功能开关失效，不能连带学生进不去）',
+  /export function apply\(ctx, config = \{\}\) \{\s*try \{/.test(featureHost) && /catch \(error\)/.test(featureHost));
+
+check('没有诊断/调试残留（appendFileSync / 调试 console.log）',
+  !/appendFileSync/.test(featureHost + featureClient)
+  && !/console\.log\('\[lingdong/.test(featureHost + featureClient));
+
+// 两边写法不同（宿主是 `const FEATURES = ['chat', …]`，客户端是 `{ id: 'chat', label: '对话' }`），
+// 所以钉的是「同一组 id」与「学生看到的那三个中文名」
+check('三个功能的 id 两边一致，且学生看到的就是这三个名字',
+  ['chat', 'code', 'web'].every((id) => new RegExp(`'${id}'`).test(featureHost) && featureClient.includes(`id: '${id}'`))
+  && ['对话', '写代码', '做网页'].every((label) => featureClient.includes(`label: '${label}'`)));
+
+check('切换命令回显给学生的是短句，不是内部那段角色说明',
+  /已切到「\$\{LABELS\[wanted\]\}」/.test(featureHost) && !/kind: 'success', text: FEATURE_TEXT/.test(featureHost));
+
+check('客户端挂在输入框那一排（conversation.input.left），不去占别人的插槽',
+  /ctx\.slots\.inject\('conversation\.input\.left'/.test(featureClient)
+  && (featureClient.match(/ctx\.slots\.inject\(/g) || []).length === 1);
+
+check('当前功能从会话投影读（useProjection），不是自己另存一份状态',
+  /useProjection\('studentFeature'/.test(featureClient) && /wire: \{ viewSchema/.test(featureHost));
+
+check('切功能走现成的命令通道（remote.commands.execute），不自建 RPC',
+  /remote\.commands\.execute\(target \|\| sessionId, `\/feature \$\{feature\}`/.test(featureClient)
+  && /inject = \['slots', 'remote', 'remote\.commands'\]/.test(featureClient));
+
+check('品牌包只管品牌：不再含功能开关那段（已拆回功能包）',
+  !/FEATURE_TEXT|studentFeature|FeatureSwitch/.test(brandHost + brandClient)
+  && /export function apply\(\) \{\}/.test(brandHost));
+
+check('补丁层不再配 dsh 原生 preset（那是「宿主插件挂不上」这个错误结论下的替代方案，已撤）',
+  !/id: agent-presets/.test(patchLayer) && !/name: '@deepseek-ai\/dsh-agent-presets'/.test(patchLayer));
+
+// 三个 preset 目录也不该还在宿主上（装机脚本若被重新执行会再拉回来，所以这里只钉仓库侧）
+check('仓库里没有残留的 preset 目录', !fs.existsSync(path.join(root, 'deploy/dsh-student/agent-presets')));
 
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);
