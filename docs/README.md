@@ -135,17 +135,18 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：bd576bf（本地 HEAD = origin，已推送；其中生产版是 d6e432e）
-生产：release 20260917T105252Z / commit d6e432e（服务 learning-platform-production @127.0.0.1:8789）
-      生效内容：课堂四页按线框图改造 + 后端补分页与预检 + 后台字体统一 +
-      教学素材查看器（pdf.js 画 canvas：无下载/打印/右键入口，快捷键拦死，可全屏讲课）
-      部署后核验：BUILD-METADATA commit = d6e432e；active、NRestarts=0；
-      /、/admin/、/org/、/student/、/api/health 全 200；
-      /org/fonts/Geist-Regular.woff2 与 /admin/fonts/Geist-Regular.woff2 均 200（**修好前一直是 404**）；
-      pdf.js 按需加载已生效 —— 线上 org 主包里 `pdfjs` 出现 0 次，懒加载产物（437KB + 1.27MB）可公开取到；
-      产物里 .mjs 数量 = 0，worker 是 application/javascript（**原来是 octet-stream，浏览器直接拒收模块**）
-      上一版（可回滚）：release 20260917T104955Z / commit 456aec4
-      整库备份：production/backups/20260917T105252Z/platform.db
+代码提交：0801bc8（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260917T111554Z / commit 0801bc8（服务 learning-platform-production @127.0.0.1:8789）
+      生效内容：**002 六屏齐了** —— 002-03 学生授权中心 / 002-04 学生授权详情 / 002-04B 单授权抽屉 /
+      002-06 采购·增购·开通记录；配套三个新机构侧接口
+      （org/student-grants-summary、org/students/:id/course-grants、org/license-batches）
+      部署后核验：BUILD-METADATA commit = 0801bc8；active、NRestarts=0；
+      /、/admin/、/org/、/student/、/api/health 全 200；四端入口资产 content-type 正确（js/css）；
+      **线上 /org 入口包里能找到本次新屏文案**（学生授权中心 / 采购 / 增购 / 开通记录 / 学生授权详情）
+      —— 证明线上跑的确实是新代码，不只是「文件 200」；
+      真 Chrome 打开线上 /org、/admin、/learn 均可挂载、无 JS 异常、无失败请求
+      上一版（可回滚）：release 20260917T105252Z / commit d6e432e
+      整库备份：production/backups/20260917T111553Z/platform.db（12.9MB；目录名比 release 戳早 1 秒，别按 release 戳去找）
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
