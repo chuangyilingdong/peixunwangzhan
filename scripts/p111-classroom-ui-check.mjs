@@ -61,6 +61,12 @@ const extra = extraNames.map((name, index) => {
   return row;
 });
 const students = [...seeded.map((s) => ({ id: s.id, name: s.display_name })), ...extra.map((s, i) => ({ id: s.id, name: extraNames[i] }))];
+// 002-04 两条断言要用的值（2026-09-17 按线框图加的状态推导）：
+//   · grantedSeriesTitle —— 学生已持有的课包标题，用来验 002-04A 的候选池**真的**排除了它；
+//   · idleGrantName —— 有许可但没有任何课堂/调用的学生，用来验状态推导的**负例**（应当是「待激活」）。
+//     students[4] = 林子涵：在 grantedIds 里（有许可），但 rosterIds（前 3 人）里没有它、也没有调用记录。
+const grantedSeriesTitle = db.prepare('SELECT title FROM course_series WHERE id=?').get(lesson.series_id)?.title || '';
+const idleGrantName = students[4]?.name || '';
 // 只给前 5 人许可：其余 2 人保持「没有这个课包的许可」→ 判定说明里的 C 类有真实人数
 const grantedIds = students.slice(0, 5).map((s) => s.id);
 // 进课堂的只有前 3 人 —— 留出 2 个「有许可但没在这堂课」的学生，
@@ -143,6 +149,26 @@ for (const studentId of grantedIds) {
   db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,cost_fen,created_at) VALUES (?,?,?,?,NULL,'TEXT','gpt-4o-mini',0,'SUCCESS',100,?)")
     .run('usage-ui-learned', teacher.org_id, students[0].id, 'csession-ui-learned', learnedAt);
   console.log('002-04 学习记录夹具：', students[0].name, '在', lesson.series_id, '的第 2 课上有一条成功调用（正面分支）');
+}
+
+// ── 002-04A 候选池夹具（2026-09-17）────────────────────────────────────────
+// 为什么要它：种子里的授权单配额全是 0，而 0 次**真的不能授权**
+// （POST /api/org/course-grants 里 quotaTotal <= 0 直接拒），所以「剩余人次 > 0」的候选池必然是空的 ——
+// 第一版就是这么空的。这里给两张授权单补上可用人次，候选规则才有东西可验：
+//   · 素材课包（学生没持有）→ 应当出现在候选里；
+//   · 学生已持有的那个课包 → 有余额也必须**被排除**，这正是 002-04A 候选规则要证的。
+{
+  const upsertQuota = (seriesId, total, used) => {
+    const changed = db.prepare("UPDATE course_assignments SET quota_total=?, quota_used=? WHERE series_id=? AND org_id=? AND status='ACTIVE'")
+      .run(total, used, seriesId, teacher.org_id).changes;
+    if (!changed) {
+      db.prepare("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at,quota_total,quota_used) VALUES(?,?,?,'ACTIVE',?,?,?)")
+        .run(`assign-ui-quota-${seriesId}`, seriesId, teacher.org_id, new Date().toISOString(), total, used);
+    }
+  };
+  upsertQuota('series-ui-materials', 10, 0);
+  upsertQuota(lesson.series_id, 10, grantedIds.length);
+  console.log(`002-04A 夹具：素材课包 10 人次（候选）、学生已持有的课包 10 人次其中 ${grantedIds.length} 已分配（应被候选池排除）`);
 }
 db.close();
 
@@ -514,39 +540,91 @@ try {
   if (typeof totalStudents === 'number' && withGrants + withoutGrants !== totalStudents) problems.push(`002-03：卡片算术对不上（总数 ${totalStudents} ≠ 已有 ${withGrants} + 暂无 ${withoutGrants}）`);
   await orgShot('21-org-student-grant-center');
 
-  // ── 002-04 学生授权详情：从有许可的学生那一行下钻
+  // ── 002-04 学生授权详情（按线框图第 1 张重排）：从有许可的学生那一行下钻。
+  // 入口做在**课包名**上（线框图表只有 4 列、没有「操作」列），所以这里点行内那个 text-button。
   const grantedName = students[0].name;
   await orgPage.locator('tr', { hasText: grantedName }).first().getByRole('button', { name: '查看授权' }).click();
   await orgSettle();
   await orgExpect('002-04 学生授权详情', [
-    '学生授权详情', '学生授权中心', '当前授权课包数', '已产生正式学习记录', '待激活', '本版本不区分这一态',
-    '当前课包授权', '版本', '授权时间', '授权状态', '正式学习记录', '已产生',
-    '授权规则', '本页负责', '本页不包含',
+    '学生授权详情', '学生授权中心', '本页只管理', '002-04A', '002-04B',
+    '当前授权课包', '已产生正式学习记录', '当前课包授权', '当前未取消授权',
+    '当前版本', '授权时间', '授权状态', '授权规则', '本页负责',
   ]);
   // 正面分支必须被验到：夹具给这名学生造了一条「成功且非 mock」的调用，
-  // 所以卡片与表格都该是「已产生」。只断言「未产生」等于没验（SQL 坏成永远返回空也是绿的）。
+  // 所以「已产生正式学习记录」该是 1、该行该是「学习中」。
+  // 只断言「待激活」等于没验 —— 判定 SQL 坏成永远返回空，守卫也照样是绿的。
   const learnedCount = await cardValue('已产生正式学习记录');
   if (learnedCount !== 1) problems.push(`002-04：「已产生正式学习记录」期望 1（夹具给 ${grantedName} 造了一条成功调用），实际 ${learnedCount} —— 判定 SQL 可能永远返回空`);
-  if (!(await orgPage.locator('table tbody tr', { hasText: '已产生' }).count())) {
-    problems.push('002-04：课包授权表里没有任何一行显示「已产生」—— 正面分支没走通');
+  if (!(await orgPage.locator('table tbody tr', { hasText: '学习中' }).count())) {
+    problems.push('002-04：课包授权表里没有任何一行是「学习中」—— 状态推导（学习中 = 已进入正式课堂或已产生有效 AI 记录）没走通');
   }
   // 机构端**没有取消授权权限**（用户 2026-09-17 口径）：这一页不能出现取消类的可点入口。
-  // 注意：文案里出现「取消授权只有平台端有权限」是说明，不算违规 —— 所以这里断言的是**按钮**。
-  if (await orgPage.getByRole('button', { name: /取消授权|取消资格/ }).count()) {
+  // 注意：文案里出现「撤销授权只有平台端有权限」是说明，不算违规 —— 所以这里断言的是**按钮**。
+  if (await orgPage.getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
     problems.push('002-04：出现了「取消授权 / 取消资格」按钮 —— 机构端没有取消权限（用户口径），不该给机构这个入口');
   }
   await orgShot('22-org-student-grant-detail');
 
-  // ── 002-04B 单授权详情抽屉
-  await orgPage.getByRole('button', { name: '查看授权' }).first().click();
-  await orgPage.waitForTimeout(500);
-  await orgExpect('002-04B 单授权详情', ['单授权详情', '授权对象', '授权信息', '操作账号', '来源', '占用人次', '正式学习记录', '页面边界', '关闭']);
-  if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格/ }).count()) {
+  // ── 002-04A「添加课包」抽屉（线框图右栏）：候选规则、仅单选、授权后预览。
+  // ⚠️ 只打开 + 选中 + 关掉，**绝不点「确认授权」** —— 那会写库，把后面 002-03 / 002-06 的数字改掉。
+  // ⚠️ 必须 exact —— getByRole 的 name 默认是**子串**匹配，「添加课包」会命中页签「为学生添加课包」，
+  //    于是点去了学员许可页、抽屉压根没开（第一版就这么踩的，截图拍到的是错页面）。
+  await orgPage.getByRole('button', { name: '添加课包', exact: true }).first().click();
+  await orgPage.waitForTimeout(700);
+  await orgExpect('002-04A 添加课包', ['002-04A', '添加课包', '当前学生', '候选课包规则', '可授权课包', '搜索课包', '总人次', '已分配', '剩余']);
+  const candidate = orgPage.locator('.drawer-panel input[type=radio]').first();
+  if (await candidate.count()) {
+    await candidate.click();
+    await orgPage.waitForTimeout(500);
+    await orgExpect('002-04A 授权预览', ['本次授权预览', '授权后状态', '待激活', '剩余人次', '总人次', '确认授权后', '页面边界', '取消', '确认授权']);
+    if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
+      problems.push('002-04A：抽屉里出现了取消类按钮（机构端没有取消权限）');
+    }
+    // 候选池规则要**真的生效**：这名学生已经持有的课包不能出现在候选里
+    const candidateTitles = (await orgPage.locator('.drawer-panel .item-card label').allInnerTexts()).map((text) => text.trim().replace(/\s+/g, ' '));
+    if (grantedSeriesTitle && candidateTitles.some((title) => title.includes(grantedSeriesTitle))) {
+      problems.push(`002-04A：候选里出现了该学生已持有的课包「${grantedSeriesTitle}」——候选规则没生效（候选：${candidateTitles.join('、')}）`);
+    }
+    console.log(`002-04A 候选课包（${candidateTitles.length} 个）：${candidateTitles.join('、')}`);
+  } else {
+    problems.push('002-04A：一个候选课包都没有 —— 夹具里有可授权的课包，候选池不该是空的');
+  }
+  await orgShot('26-org-add-grant-drawer');
+  await orgPage.locator('.drawer-panel').getByRole('button', { name: '取消', exact: true }).click();
+  await orgPage.waitForTimeout(400);
+
+  // ── 002-04B 单授权详情抽屉（入口是行内的课包名按钮）
+  await orgPage.locator('table tbody tr').first().getByRole('button').first().click();
+  await orgPage.waitForTimeout(600);
+  await orgExpect('002-04B 单授权详情', ['单授权详情', '授权对象', '授权信息', '操作账号', '来源', '占用人次', '授权状态', '正式学习记录', '页面边界', '关闭']);
+  if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
     problems.push('002-04B：抽屉里出现了取消类按钮 —— 机构端没有取消权限（用户口径）');
   }
   await orgShot('23-org-grant-drawer');
   await orgPage.locator('.drawer-close').click().catch(() => {});
   await orgPage.waitForTimeout(300);
+
+  // ── 002-04 的负例：换一个「有授权但没有任何学习活动」的学生 —— 状态必须是「待激活」。
+  // 没有这一条，「待激活/学习中」的推导只被正面验过（全算成学习中也不会红）。
+  await orgPage.getByRole('button', { name: '← 返回学生授权中心' }).click();
+  await orgSettle();
+  await orgPage.locator('form.filter-form input').first().fill(idleGrantName);
+  await orgPage.getByRole('button', { name: '查询' }).first().click();
+  await orgSettle();
+  const idleRow = orgPage.locator('table tbody tr', { hasText: idleGrantName }).first();
+  if (await idleRow.count()) {
+    await idleRow.getByRole('button', { name: '查看授权' }).click();
+    await orgSettle();
+    await orgExpect('002-04 待激活分支', ['待激活']);
+    const idleLearned = await cardValue('已产生正式学习记录');
+    if (idleLearned !== 0) problems.push(`002-04：${idleGrantName} 没有任何课堂与调用，「已产生正式学习记录」应为 0，实际 ${idleLearned}`);
+    if (await orgPage.locator('table tbody tr', { hasText: '学习中' }).count()) {
+      problems.push(`002-04：${idleGrantName} 的授权不该是「学习中」（既没进过课堂也没有 AI 调用）`);
+    }
+    await orgShot('27-org-grant-pending-state');
+  } else {
+    problems.push(`002-03：搜索「${idleGrantName}」没找到那一行`);
+  }
 
   // ── 002-04 空分支：筛出「暂无课包」的学生，详情页要给空态而不是崩掉
   await orgPage.getByRole('button', { name: '← 返回学生授权中心' }).click();

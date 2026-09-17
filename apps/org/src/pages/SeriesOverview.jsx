@@ -13,9 +13,10 @@
 //   · 本页＝看课包的**分配与使用账**（次数、学员、课堂），并下钻到「谁被分到了」
 //   · 「学员开通」＝学员的席位与有效期
 //
-// ⚠️ 线框图里「授权状态：待激活 / 学习中」这一层**数据库里没有**（student_course_grants 只有
-//    granted_at/revoked_at，没有任何状态列）。按用户口径**不伪造**：只用
-//    「有效（未撤销）/ 已取消（有 revoked_at）」两态；「待激活」那一格显示「—」并说明不区分。
+// ⚠️ 「授权状态：待激活 / 学习中 / 已取消」这一层**数据库里没有状态列**（student_course_grants 只有
+//    granted_at/revoked_at）。但线框图 002-04 的「授权规则」第一次给了判定口径，所以现在**能真算**：
+//    待激活 = 尚未产生正式学习记录；学习中 = 已进入正式课堂或已产生有效 AI 学习记录；已取消 = 有 revoked_at。
+//    「已完成」线框图只列了状态名、**没给口径** —— 按纪律不编，服务端不产出它。
 //
 // ⚠️ **取消授权只有平台端有权限**（用户 2026-09-17 明确）：机构端没有取消入口，
 //    也不展示「取消资格」那一层 —— 给机构看「取消资格」却不给取消，是误导。
@@ -127,69 +128,174 @@ function StudentGrantCenter({ api, onOpenStudent, onAddGrants }) {
   </>;
 }
 
+/** 授权状态徽标：线框图 002-04 的 3 态（「已完成」口径未定，服务端不产出它）。 */
+function GrantStateBadge({ item }) {
+  if (item.state === 'REVOKED') return <><span className="status">已取消</span>{item.revokeReason ? <div className="muted">{item.revokeReason}</div> : null}</>;
+  if (item.state === 'LEARNING') return <span className="status success">学习中</span>;
+  return <span className="status warning">待激活</span>;
+}
+
 /**
- * 002-04 学生授权详情（含 002-04B 单授权详情抽屉）。
+ * 002-04A「添加课包」抽屉：为**一个**学生新增一笔授权。
  *
- * 「正式学习记录 已产生/未产生」数据库里**没有标志位**，用服务端按完课口径算出来的结果
- * （该学生在属于这个课包的课堂上有没有成功且非 mock 的 AI 调用，见 orgAdmin.js 同段注释）。
+ * 候选课包规则（线框图右栏）：机构已开通 + 当前可授权 + 剩余人次 > 0 + 该学生当前无这一课包的有效授权。
+ *   ⚠️ 线框图那条规则写的是「剩余人次 ≥ 0」，但紧接着又说「剩余人次 = 0 的课包不展示」——
+ *      按后者实现（这也是平台口径：余额必须大于零才能分配，零次不代表不限）。
+ * 只允许选 1 个：线框图「页面边界」明说不支持多选 / 批量，所以这里不接「为学生添加课包」那套批量流程。
+ *
+ * 候选**不新增接口**：库存与权益状态来自 series-overview、已有授权来自学生授权接口，
+ * 两份数据都在手上，再开一个接口等于把同一份账算两遍。
+ */
+function AddGrantDrawer({ api, student, grants, onClose, onDone }) {
+  const overview = useData(() => api.get('org/series-overview?days=30'), [api]);
+  const [search, setSearch] = useState('');
+  const [pickedId, setPickedId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const heldSeries = new Set((grants || []).filter((item) => item.status === 'ACTIVE').map((item) => item.seriesId));
+  const candidates = (overview.data?.items || []).filter((item) => item.assignmentStatus === 'ACTIVE'
+    && Number(item.remaining || 0) > 0
+    && !heldSeries.has(item.seriesId)
+    && (!search.trim() || String(item.title || '').toLowerCase().includes(search.trim().toLowerCase())));
+  const picked = candidates.find((item) => item.seriesId === pickedId) || null;
+
+  async function submit() {
+    if (!picked) return;
+    setBusy(true); setError('');
+    try {
+      await api.post('org/course-grants', { seriesId: picked.seriesId, studentIds: [student.studentId] });
+      onDone();
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+
+  return <div className="drawer-overlay" onClick={onClose}>
+    <div className="drawer-panel" onClick={(event) => event.stopPropagation()}>
+      <header className="drawer-head">
+        <div><span className="eyebrow">002-04A</span><h2>添加课包</h2><span className="muted">父级：002-04 | 学生授权详情</span></div>
+        <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">×</button>
+      </header>
+      <div className="drawer-body">
+        <section className="drawer-section">
+          <h3>当前学生</h3>
+          <div className="row-actions"><strong>{student.displayName || student.login}</strong><span className="muted">{student.login}</span><AccountBadge status={student.status} /></div>
+        </section>
+        <section className="drawer-section">
+          <h3>候选课包规则</h3>
+          <p className="muted">仅展示：机构已开通 + 当前可授权 + 剩余人次 &gt; 0 + 该学生当前无这一课包的有效授权。</p>
+          <p className="muted">一次只能选 1 个课包；已存在有效授权、权益已停用、剩余人次为 0 的课包都不展示。</p>
+        </section>
+        <section className="drawer-section">
+          <h3>可授权课包（共 {candidates.length} 个）</h3>
+          <label>搜索课包<input value={search} placeholder="输入课包名称" onChange={(event) => setSearch(event.target.value)} /></label>
+          {overview.loading ? <Loading label="正在读取可授权课包…" /> : overview.error ? <ErrorState error={overview.error} onRetry={overview.refresh} /> : candidates.length ? <div className="card-list">
+            {/* 这里刻意**不用** `.checkbox-option` 那套：全局 `label{display:grid}` 会把每一行拆成竖排，
+                而线框图这一行是「单选 + 课包名 + 三个数字 + 状态徽标」一整行（`checkbox-option` 这个类
+                其实在样式表里根本没有定义）。所以用 row-actions 排一行，label 内联 flex 覆盖 grid。 */}
+            {candidates.map((item) => <div className="row-actions item-card" key={item.seriesId} style={{ justifyContent: 'space-between' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0, fontWeight: 800 }}>
+                <input type="radio" name="grant-series" style={{ width: 'auto' }} checked={pickedId === item.seriesId} onChange={() => setPickedId(item.seriesId)} />
+                {item.title}
+                <span className="muted">v{item.version || '—'}</span>
+              </label>
+              <span className="muted">总人次 {item.quotaTotal} · 已分配 {item.quotaUsed} · 剩余 {item.remaining}</span>
+              <span className={'status' + (pickedId === item.seriesId ? ' success' : '')}>{pickedId === item.seriesId ? '已选择' : '可授权'}</span>
+            </div>)}
+          </div> : <Empty title="没有可授权的课包" body="可能原因：该学生已持有这些课包的有效授权，或课包剩余人次为 0。" />}
+        </section>
+        {picked ? <section className="drawer-section">
+          <h3>本次授权预览</h3>
+          <div className="row-actions"><strong>{picked.title}</strong><span className="muted">v{picked.version || '—'}</span></div>
+          <p>授权后状态：<span className="status warning">待激活</span></p>
+          <p className="muted">已分配 {picked.quotaUsed} → {Number(picked.quotaUsed) + 1} · 剩余人次 {picked.remaining} → {Number(picked.remaining) - 1} · 总人次 {picked.quotaTotal}（不变）</p>
+          {error ? <Notice tone="danger">{error}</Notice> : null}
+          <h3 className="top-gap">确认授权后</h3>
+          <ol className="muted">
+            <li>创建学生课包授权，初始状态 = 待激活</li>
+            <li>已分配人次 +1，剩余人次 −1</li>
+            <li>写入平台侧的授权审计与许可收入台账</li>
+          </ol>
+          <p className="muted">页面边界：不支持多选 / 批量授权，不设置授权有效期，不修改平台总人次。</p>
+        </section> : null}
+      </div>
+      <footer className="drawer-foot">
+        <button className="secondary-button" onClick={onClose}>取消</button>
+        <button className="primary-button" disabled={!picked || busy} onClick={submit}>{busy ? '授权中…' : '确认授权'}</button>
+      </footer>
+    </div>
+  </div>;
+}
+
+/**
+ * 002-04 学生授权详情（2026-09-17 按线框图第 1 张重排）。两个抽屉：002-04A 添加课包 / 002-04B 单授权详情。
+ *
+ * 与线框图的**两处有意偏离**（都是按用户口径，别当成漏做）：
+ *   ① 线框图 header 写「撤销授权进入 002-04C」、规则 4 写「取消后返还 1 人次」——
+ *      用户已定：**机构端没有取消授权权限**，所以 002-04C 不做，也不展示撤销资格校验。
+ *   ② 规则 1 列了「已完成」这一态，但线框图**没给判定口径**（规则 2 只定义了待激活 / 学习中），
+ *      所以服务端不产出 COMPLETED —— 要它得先定口径。
  */
 function StudentGrantDetail({ api, studentId, onBack }) {
   const data = useData(() => api.get(`org/students/${encodeURIComponent(studentId)}/course-grants`), [api, studentId]);
   const [openGrantId, setOpenGrantId] = useState('');
+  const [adding, setAdding] = useState(false);
   const student = data.data?.student;
   const summary = data.data?.summary || {};
   const items = data.data?.items || [];
   const activeItems = items.filter((item) => item.status === 'ACTIVE');
+  const revokedCount = summary.revokedCount ?? (items.length - activeItems.length);
   const openGrant = items.find((item) => item.id === openGrantId) || null;
 
   return <>
     <PageHeader eyebrow="002-04" title="学生授权详情" description="父级：002-03 | 学生授权中心"
-      actions={<button className="secondary-button" onClick={onBack}>← 返回学生授权中心</button>} />
+      actions={<><button className="secondary-button" onClick={onBack}>← 返回学生授权中心</button><button className="primary-button" onClick={() => setAdding(true)}>添加课包</button></>} />
+    <Notice tone="info">
+      本页只管理<strong>学生课包授权</strong>关系；学习结果、作品、课堂数据不在本页处理。新增授权进入 002-04A；单条授权进入 002-04B。
+      <div className="muted">撤销授权只有平台端有权限，机构端不提供该入口（因此没有 002-04C 这一步）。</div>
+    </Notice>
     {data.loading ? <Loading label="正在读取该学生的授权…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : <>
       <Panel title="学生">
         <div className="row-actions">
           <strong>{student?.displayName || student?.login || '—'}</strong>
-          <span className="muted">{student?.login}</span>
-          {student?.phone ? <span className="muted">{student.phone}</span> : null}
+          <span className="muted">登录账号：{student?.login}</span>
           <AccountBadge status={student?.status} />
         </div>
         <div className="metrics top-gap">
-          <MetricCard label="当前授权课包数" value={summary.activeSeriesCount ?? 0} hint="有效（未撤销）的授权" />
-          <MetricCard label="已产生正式学习记录" value={summary.learnedSeriesCount ?? 0} hint="有成功且非演示的 AI 调用" tone="teal" />
-          {/* 「待激活」这一态数据库里不存在（只有 granted_at/revoked_at），按口径不伪造：显示 — 并说明。 */}
-          <MetricCard label="待激活" value="—" hint="本版本不区分这一态" tone="orange" />
+          <MetricCard label="当前授权课包" value={summary.activeSeriesCount ?? 0} hint="当前未取消的授权" />
+          <MetricCard label="已产生正式学习记录" value={summary.learnedSeriesCount ?? 0} hint={`其中学习中 ${summary.learningCount ?? 0} · 待激活 ${summary.pendingActivationCount ?? 0}`} tone="teal" />
         </div>
+        <p className="muted top-gap">账号信息仅用于确认授权对象；学生基础资料请前往「机构成员管理」。</p>
       </Panel>
 
-      <Panel title={`当前课包授权（有效 ${activeItems.length} 个 / 共 ${items.length} 条）`}>
-        {items.length ? <div className="table-wrap"><table>
-          <thead><tr><th>课包</th><th>版本</th><th>授权时间</th><th>授权状态</th><th>正式学习记录</th><th>操作</th></tr></thead>
-          <tbody>{items.map((item) => <tr key={item.id}>
-            <td><strong>{item.seriesTitle || item.seriesId}</strong></td>
+      <Panel title={`当前课包授权（当前未取消授权：${activeItems.length} 条）`}
+        actions={<button className="secondary-button" type="button" onClick={() => setAdding(true)}>添加课包</button>}>
+        {activeItems.length ? <div className="table-wrap"><table>
+          <thead><tr><th>课包</th><th>当前版本</th><th>授权时间</th><th>授权状态</th></tr></thead>
+          <tbody>{activeItems.map((item) => <tr key={item.id}>
+            <td><button type="button" className="text-button" onClick={() => setOpenGrantId(item.id)}>{item.seriesTitle || item.seriesId}</button></td>
             <td>{item.version ? `v${item.version}` : '—'}</td>
             <td>{formatDate(item.grantedAt)}</td>
-            <td>{item.status === 'ACTIVE' ? <span className="status success">有效</span>
-              : <><span className="status">已取消</span>{item.revokeReason ? <div className="muted">{item.revokeReason}</div> : null}</>}</td>
-            <td>{item.learned ? <span className="status success">已产生</span> : <span className="muted">未产生</span>}</td>
-            <td><button type="button" className="text-button" onClick={() => setOpenGrantId(item.id)}>查看授权</button></td>
+            <td><GrantStateBadge item={item} /></td>
           </tr>)}</tbody>
-        </table></div> : <Empty title="该学生还没有任何课包授权" body="到「学生授权中心」为学生添加课包；每分给一人用掉 1 次。" />}
+        </table></div> : <Empty title="该学生还没有任何课包授权" body="点右上角「添加课包」为他开一笔；每分给一人用掉 1 次。" />}
+        {revokedCount ? <p className="muted top-gap">另有 {revokedCount} 条已取消的授权不在本列表（按线框图口径本页只展示未取消的）—— 撤销由平台执行，原因与时间在单授权详情里。</p> : null}
       </Panel>
 
       <Panel title="授权规则">
         <ol className="muted">
-          <li>同一学生同一课包只能授权一次；重复授权会被跳过，不重复扣次数。</li>
-          <li>每分给一名学生用掉 1 次，余额必须大于零才能分配；零次不代表不限。</li>
-          <li>机构侧不可撤销（次数已消耗不可逆）；误授权由平台兜底撤销，撤销后学生立刻进不去，已上过的课次数不退。</li>
-          <li>学生「能不能学这门课」只看有没有一条有效授权 —— 与账号状态、席位有效期是两回事。</li>
+          <li>授权状态：待激活 / 学习中 / 已取消；本页展示当前未取消的授权。</li>
+          <li>待激活＝尚未在该课包产生正式学习记录；学习中＝已进入正式课堂，或已产生有效 AI 学习记录。</li>
+          <li>「查看授权」进入 002-04B 单授权详情；<strong>撤销授权只有平台端有权限</strong>，本页不提供撤销，也不做撤销资格校验。</li>
+          <li>新增授权成功扣除 1 人次；误授权由平台兜底撤销，平台撤销后返还 1 人次。</li>
         </ol>
       </Panel>
 
-      <Panel title="本页负责 / 本页不包含">
-        <div className="split">
-          <div><strong>本页负责</strong><p className="muted">某个学生拿到了哪些课包、每条授权的状态与正式学习记录。</p></div>
-          <div><strong>本页不包含</strong><p className="muted">改授权（机构不能撤销，误授权找平台兜底）；学生账号本身（在「机构成员管理」）；席位与有效期（在「学员开通」）。</p></div>
-        </div>
+      <Panel title="本页负责">
+        <ol className="muted">
+          <li>确认授权对象：{student?.displayName || student?.login} · {student?.login}</li>
+          <li>查看学生当前课包授权及授权状态</li>
+          <li>发起新增课包授权（002-04A）</li>
+          <li>进入单授权详情判断后续操作（002-04B）</li>
+        </ol>
       </Panel>
     </>}
 
@@ -210,7 +316,7 @@ function StudentGrantDetail({ api, studentId, onBack }) {
             <p>操作账号：{openGrant.grantedByName || openGrant.grantedByLogin || '—'}</p>
             <p>来源：{openGrant.sourceLabel}</p>
             <p>占用人次：{openGrant.quotaConsumed} 次</p>
-            <p>授权状态：{openGrant.status === 'ACTIVE' ? '有效' : `已取消（${openGrant.revokeReason || '未填原因'}）`}</p>
+            <p>授权状态：<GrantStateBadge item={openGrant} /></p>
           </section>
           <section className="drawer-section">
             <h3>正式学习记录</h3>
@@ -229,6 +335,9 @@ function StudentGrantDetail({ api, studentId, onBack }) {
         <footer className="drawer-foot"><button className="secondary-button" onClick={() => setOpenGrantId('')}>关闭</button></footer>
       </div>
     </div> : null}
+
+    {adding && student ? <AddGrantDrawer api={api} student={student} grants={items}
+      onClose={() => setAdding(false)} onDone={() => { setAdding(false); data.refresh(); }} /> : null}
   </>;
 }
 

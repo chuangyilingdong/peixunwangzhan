@@ -112,6 +112,12 @@ async function releaseSessionRuntimes(sessionId, reason = 'SESSION_END') {
 // teacherCanAccessClass / teacherScope / classSessionRows / classProgressRows / classDetail / curriculumItem
 // —— 那些都是班级口径的辅助函数，随 `/classes/*` 旧接口一起下线了。
 import { ensureOrgBilling, integer, orgId, orgUser, hasPermission, accessibleLesson, accessibleSeries, ORG_MEMBER_ROLES, validateMemberPhone, validateMemberPermissions, orgMemberRow, ENROLLMENT_STATUSES, PAYMENT_STATUSES, packageSnapshot, enrollmentDate, enrollmentRow, normalizeEnrollment, appendEnrollmentEvent, expireDueEnrollments, occupiedStudentSeats, assertEnrollmentSeat, setStudentEnrollmentAccess, packageWithSeatUsage, previewImport, createMember, validateTeacher, workInReviewScope, workReportRows, workReportInReviewScope, reportResolution, normalizeWorkPublishRequest, sessionTeacherScope, sessionOwnedByTeacherExists } from './adminOrg.js';
+/**
+ * 学生课包授权的展示状态（线框图 002-04「授权规则」给的判定口径）。
+ * ⚠️ 「已完成」不在其中：线框图只列了这个状态名，**没给判定口径**，按纪律不编。
+ */
+const GRANT_STATE_LABELS = { PENDING_ACTIVATION: '待激活', LEARNING: '学习中', REVOKED: '已取消' };
+
 export async function handleOrg(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/')) return null;
@@ -1319,6 +1325,16 @@ export async function handleOrg(ctx) {
         AND UPPER(COALESCE(json_extract(usage.pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%'
         AND UPPER(COALESCE(json_extract(usage.pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%'`,
       [studentId, currentOrgId]).map((item) => item.series_id));
+    // 「已进入正式课堂」= 这个学生在属于该课包的课堂上，课堂**已经正式开过**（上课中 / 已结束）。
+    // 与「有没有 AI 调用」是两条不同的线：线框图把「学习中」定义成**两者之一**成立即可
+    // （待激活 = 两者都没有）；而「完课」只看 AI 调用那一条（services/classroomSessions.js:164）。
+    // 待上课（PENDING）不算 —— 排了课但没开课，学生还没真正进过课堂。
+    const enteredSeries = new Set(rows(`SELECT DISTINCT lesson.series_id series_id
+      FROM session_students part
+      JOIN class_sessions session ON session.id=part.session_id
+      JOIN course_lessons lesson ON lesson.id=session.lesson_id
+      WHERE part.student_id=? AND session.org_id=? AND session.status IN ('ACTIVE','ENDED')`,
+      [studentId, currentOrgId]).map((item) => item.series_id));
     const items = rows(`SELECT grant.id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         grant.source_assignment_id, series.title, series.version,
         actor.display_name granted_by_name, actor.login granted_by_login
@@ -1326,27 +1342,39 @@ export async function handleOrg(ctx) {
       JOIN course_series series ON series.id=grant.series_id
       LEFT JOIN users actor ON actor.id=grant.granted_by
       WHERE grant.org_id=? AND grant.student_id=?
-      ORDER BY grant.revoked_at IS NOT NULL, grant.granted_at DESC`, [currentOrgId, studentId]).map((item) => ({
-      id: item.id, seriesId: item.series_id, seriesTitle: item.title || null, version: item.version || null,
-      grantedAt: item.granted_at,
-      status: item.revoked_at ? 'REVOKED' : 'ACTIVE',
-      revokedAt: item.revoked_at || null, revokeReason: item.revoke_reason || null,
-      learned: learnedSeries.has(item.series_id),
-      grantedByName: item.granted_by_name || null, grantedByLogin: item.granted_by_login || null,
-      // 占用人次：授给一名学生就是 1 次（平台口径），不是估算出来的
-      quotaConsumed: 1,
-      sourceAssignmentId: item.source_assignment_id || null,
-      sourceLabel: item.source_assignment_id ? '平台授予本机构的课包权益' : '历史数据（无授权单）',
-    }));
+      ORDER BY grant.revoked_at IS NOT NULL, grant.granted_at DESC`, [currentOrgId, studentId]).map((item) => {
+      const learned = learnedSeries.has(item.series_id);
+      const entered = enteredSeries.has(item.series_id);
+      // 授权状态（线框图 002-04「授权规则」1/2 第一次给了判定口径，所以现在能真算，不再是「没有状态列」）：
+      //   已取消   = 有 revoked_at
+      //   学习中   = **已进入正式课堂** 或 **已产生有效 AI 学习记录**（两者之一）
+      //   待激活   = 两者都没有
+      // ⚠️ 线框图 rule 1 还列了「已完成」，但**通篇没给判定口径**（rule 2 只定义了待激活/学习中）。
+      //    所以这里**不编**：不产出 COMPLETED。要它就得先定口径（是「全部课时完课」还是别的）。
+      const state = item.revoked_at ? 'REVOKED' : ((learned || entered) ? 'LEARNING' : 'PENDING_ACTIVATION');
+      return {
+        id: item.id, seriesId: item.series_id, seriesTitle: item.title || null, version: item.version || null,
+        grantedAt: item.granted_at,
+        status: item.revoked_at ? 'REVOKED' : 'ACTIVE',
+        state, stateLabel: GRANT_STATE_LABELS[state],
+        revokedAt: item.revoked_at || null, revokeReason: item.revoke_reason || null,
+        learned, enteredClass: entered,
+        grantedByName: item.granted_by_name || null, grantedByLogin: item.granted_by_login || null,
+        // 占用人次：授给一名学生就是 1 次（平台口径），不是估算出来的
+        quotaConsumed: 1,
+        sourceAssignmentId: item.source_assignment_id || null,
+        sourceLabel: item.source_assignment_id ? '平台授予本机构的课包权益' : '历史数据（无授权单）',
+      };
+    });
     const activeItems = items.filter((item) => item.status === 'ACTIVE');
     return {
       student: { studentId: student.id, displayName: student.display_name, login: student.login, phone: student.phone || null, status: student.status },
       summary: {
         activeSeriesCount: activeItems.length,
         learnedSeriesCount: activeItems.filter((item) => item.learned).length,
-        // 「待激活」这一层数据库里不存在（只有 granted_at/revoked_at），按口径**不伪造**：
-        // 恒为 0，页面显示「—」并说明本版本不区分这一态。
-        pendingActivationCount: 0,
+        learningCount: activeItems.filter((item) => item.state === 'LEARNING').length,
+        pendingActivationCount: activeItems.filter((item) => item.state === 'PENDING_ACTIVATION').length,
+        revokedCount: items.length - activeItems.length,
       },
       items, total: items.length,
     };
