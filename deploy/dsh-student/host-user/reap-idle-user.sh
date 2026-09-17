@@ -21,9 +21,9 @@
 # 建议交给 systemd timer（每 5 分钟）：见同目录 dsh-host-reap.service / .timer
 set -Eeuo pipefail
 
-IDLE_MINUTES="${IDLE_MINUTES:-20}"        # 至少跑这么久才考虑闲置回收
-MAX_AGE_MINUTES="${MAX_AGE_MINUTES:-180}" # 兜底：不管用没用，跑满这么久就收
-CPU_IDLE_PERCENT="${CPU_IDLE_PERCENT:-1}" # 这段时间 CPU 占比低于这个数就算闲置
+IDLE_MINUTES="${IDLE_MINUTES:-0}"         # 0 = **不做闲置回收**（默认，见下面的口径说明）
+MAX_AGE_MINUTES="${MAX_AGE_MINUTES:-720}" # 纯兜底：跑满 12 小时才收，防平台侧漏收造成的泄漏
+CPU_IDLE_PERCENT="${CPU_IDLE_PERCENT:-1}" # 这段 CPU 占比低于这个数就算闲置（仅在 IDLE_MINUTES>0 时生效）
 STATE_DIR="${STATE_DIR:-/srv/dsh-runtime/.reap}"
 STOP_SCRIPT="${STOP_SCRIPT:-/opt/dsh-host-user/stop-student-user.sh}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -77,6 +77,13 @@ for unit in "${units[@]}"; do
 
   if [ "${age_minutes}" -ge "${MAX_AGE_MINUTES}" ]; then
     echo "[reap] ${user} 跑了 ${age_minutes} 分钟 ≥ ${MAX_AGE_MINUTES} → 收（兜底）"
+  elif [ "${IDLE_MINUTES}" -le 0 ]; then
+    # 闲置回收被关掉了 —— **这是默认**。理由（2026-09-17 用户口径「点一下就是秒进」）：
+    # 秒进的唯一充要条件是「点下去那一刻环境已经在跑」（在跑 → 复用 0.07 秒；没在跑 → 冷启动 17.9 秒）。
+    # 而闲置回收恰好破坏这一点：学生上课中途停用 20 分钟，回来就要重新等。
+    # 所以：课堂进行中的环境**一直留着**（秒进），回收交给平台那侧「课堂结束/解散/移出学生」，
+    # 这里只做防泄漏的兜底。要省内存就把 IDLE_MINUTES 设成正数（代价是偶尔要等冷启动）。
+    continue
   else
     [ -n "${prev_line}" ] || continue          # 第一次见到它，先记一笔，下轮再判
     prev_cpu="${prev_line%% *}"; prev_at="${prev_line##* }"

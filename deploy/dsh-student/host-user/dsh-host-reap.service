@@ -5,7 +5,11 @@ Documentation=file:/opt/dsh-host-user/README.md
 # 「课堂还在上、学生早就不用了」——那条没有触发点，只能靠定时扫。
 [Service]
 Type=oneshot
-Environment=IDLE_MINUTES=20
-Environment=MAX_AGE_MINUTES=180
+# IDLE_MINUTES=0 → **不做闲置回收**（2026-09-17 用户口径「点一下就是秒进」）：
+# 秒进的前提是「点下去时环境已经在跑」，而闲置回收恰好会把它收掉（回来就得等 17.9 秒冷启动）。
+# 所以课堂进行中的环境一直留着，回收交给平台侧的「课堂结束/解散/移出学生」；
+# 这里的 MAX_AGE 只是防泄漏的兜底。想省内存就把 IDLE_MINUTES 设成正数（如 20）。
+Environment=IDLE_MINUTES=0
+Environment=MAX_AGE_MINUTES=720
 Environment=CPU_IDLE_PERCENT=1
 ExecStart=/opt/dsh-host-user/reap-idle-user.sh

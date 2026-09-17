@@ -43,16 +43,18 @@ async function warmSessionRuntimes(sessionId, lessonId, orgId) {
     console.warn(`[runtime] 预热的通道不可用：${error?.message || error}`);
     return;
   }
+  // 并发 3 个一批：一个环境冷启动 ~18 秒，串行预热 30 个学生要 9 分钟（那时都快下课了）；
+  // 也不能一次全开（宿主机内存会被瞬间打满，其他学生反而更慢）。3 个一批是「够快又不打爆」的折中。
+  const WARM_CONCURRENCY = 3;
   let warmed = 0;
   let lastError = '';
-  for (const studentId of studentIds) {
-    try {
-      await launchStudentRuntime({ sessionId, studentId, orgId, lessonId: lessonId || null });
-      warmed += 1;
-    } catch (error) {
+  for (let at = 0; at < studentIds.length; at += WARM_CONCURRENCY) {
+    const batch = studentIds.slice(at, at + WARM_CONCURRENCY);
+    const results = await Promise.all(batch.map((studentId) => launchStudentRuntime({ sessionId, studentId, orgId, lessonId: lessonId || null })
+      .then(() => true)
       // 容量不够、学生没许可等都会走到这里 —— 预热是尽力而为，绝不能影响老师上课
-      lastError = String(error?.message || error);
-    }
+      .catch((error) => { lastError = String(error?.message || error); return false; })));
+    warmed += results.filter(Boolean).length;
   }
   console.log(`[runtime] 课堂 ${sessionId} 预热完成：${warmed}/${studentIds.length} 个学生环境已就绪${lastError ? `（最后一个未就绪：${lastError}）` : ''}`);
 }
