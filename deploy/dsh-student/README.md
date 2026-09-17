@@ -24,9 +24,12 @@
   - 课程技能目录（`skills/`，一个课程一个 `SKILL.md`）
   - 沙箱 `workspace-write` + 审批 `never`（**语义是「直接拒绝」**，不是自动放行），并把 `defaultPreset` 显式指到同名预设
 
-> ⚠️ **这个补丁层是宿主文件、不在 release 产物里**：装机时它被放到
-> `/opt/dsh-runtime/etc/dsh/student-runtime.cordis.yml`（`provision-user-runtime.sh` 只校验它在不在，
-> **不负责安装**），而 dsh **只在启动时读一次** —— 改完必须**重启学生环境**才生效。
+> ⚠️ **补丁层的源头是镜像，不是宿主上的那个文件**（2026-09-17 订正，原来这里写反了）：
+> 装机时 `provision-user-runtime.sh` 从镜像里 `tar` 出 `etc/dsh` 与 `home/student/.dsh`
+> **覆盖**到 `/opt/dsh-runtime/` 下 —— 所以**直接改宿主上的
+> `/opt/dsh-runtime/etc/dsh/student-runtime.cordis.yml`，下一次 provision 就没了**。
+> 要改就得改 `Dockerfile` 里 `COPY` 的那份（本目录的 `student-runtime.cordis.yml`）并重建镜像。
+> 另外 dsh **只在启动时读一次**补丁层 —— 改完必须**重启学生环境**才生效。
   - 关掉给学生的成人入口：`cordis-host-runner` / `cordis-client-runner` / `ui-cordis`
     （模型能自造插件挂进宿主，官方注释说在 Web 面上沙箱与审批都会被绕过）、`plugin-inventory`（插件管理）、
     `directory-picker`、`open-in-app`

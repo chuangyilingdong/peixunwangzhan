@@ -195,5 +195,28 @@ check('补丁层不再配 dsh 原生 preset（那是「宿主插件挂不上」�
 // 三个 preset 目录也不该还在宿主上（装机脚本若被重新执行会再拉回来，所以这里只钉仓库侧）
 check('仓库里没有残留的 preset 目录', !fs.existsSync(path.join(root, 'deploy/dsh-student/agent-presets')));
 
+/* ── ⑥ 镜像侧：功能包必须随镜像走（2026-09-17 补）────────────────────────────
+   为什么单独钉这一段：`provision-user-runtime.sh` 会从镜像里 `tar` 出 `etc/dsh` 与
+   `home/student/.dsh` **覆盖**到宿主上 —— 也就是说**镜像才是那些文件的源头**。
+   而本轮这套是先在宿主上手工接通的（`/opt/feature-plugin` + profile 软链 + bundles），
+   镜像里当时没有它：**换台机器或重跑一次 provision，这一排按钮就没了**
+   （更坏的情况是 profile 里留了 bundles 却缺软链 —— 那样整个环境起不来）。
+   所以这三条钉的是「镜像重建之后它还在」。 */
+const dockerfile = read('deploy/dsh-student/Dockerfile');
+const provision = read('deploy/dsh-student/host-user/provision-user-runtime.sh');
+
+check('Dockerfile 把功能包烤进镜像', /COPY feature-plugin\/ \/opt\/feature-plugin\//.test(dockerfile));
+check('Dockerfile 用 `dsh plugin add` 把它装进 profile，并断言 bundles 与 dependencies 都有',
+  /dsh plugin --profile web add \/opt\/feature-plugin/.test(dockerfile)
+  && /功能开关包没进 bundles/.test(dockerfile) && /功能开关包没进 dependencies/.test(dockerfile));
+check('装功能包这一步排在 PPT 那一步之前（排后面会把 dsh-ppt 又加回 bundles → 整棵插件树起不来）',
+  dockerfile.indexOf('add /opt/feature-plugin') > 0
+  && dockerfile.indexOf('add /opt/feature-plugin') < dockerfile.indexOf('ARG PPT_BUNDLE='));
+check('provision 会抽取 opt/feature-plugin 并补上根路径软链',
+  /-cf - opt\/node opt\/brand-plugin opt\/feature-plugin home\/student\/\.dsh etc\/dsh/.test(provision)
+  && /ln -sfn "\$\{RUNTIME_ROOT\}\/opt\/feature-plugin" \/opt\/feature-plugin/.test(provision));
+check('「补丁层与 profile 的源头是镜像」这件事写在部署 README 里了（否则下一个人会去改宿主上的文件）',
+  /补丁层的源头是镜像/.test(read('deploy/dsh-student/README.md')));
+
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

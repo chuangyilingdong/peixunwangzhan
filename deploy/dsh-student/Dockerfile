@@ -39,6 +39,11 @@ ENV DSH_HOME=/home/student/.dsh
 # 品牌图与品牌包（真正的字符串替换在最后一步，等所有插件都装完）
 COPY assets/lingdong-ai-logo-480.png /opt/brand-plugin/logo.png
 COPY brand-plugin/ /opt/brand-plugin/
+# 学生端「功能」开关（输入框那一排的三个按钮：对话 / 写代码 / 做网页）。
+# ⚠️ 只把目录放进镜像**不够**：它必须像品牌包那样用 `dsh plugin add` 装进 profile ——
+# 否则 profile 里既没有 `node_modules/@lingdong/dsh-feature`，也没有
+# `dsh.profile.bundles` 里那一条，插件根本不会被加载（装法见下面紧跟着的那一步）。
+COPY feature-plugin/ /opt/feature-plugin/
 COPY rebrand.mjs /opt/rebrand.mjs
 COPY plugin-shims.mjs /opt/plugin-shims.mjs
 # ---------------------------------------------------------------------------
@@ -65,6 +70,16 @@ RUN npm install -g pnpm@10.17.0  && command -v pnpm  && npm config set registry 
 RUN node /opt/brand-plugin/build.mjs /opt/brand-plugin/logo.png \
  && dsh plugin --profile web add /opt/brand-plugin \
  && node -e "const j=require(process.env.DSH_HOME+'/profiles/web/package.json');if(!j.dsh.profile.bundles.includes('@lingdong/dsh-brand'))throw new Error('品牌包没进 bundles');console.log('品牌包已进 bundles');"
+
+# 功能开关包安装（同样**必须在 PPT 那一步之前**，理由同上：`dsh plugin add` 会重算 bundles，
+# 排在 PPT 之后会把 dsh-ppt 又加回 bundles 里）。
+# ⚠️ 这里是**两个都要**才生效：`dsh plugin add` 同时做两件事 ——
+#   · profile 的 `dependencies` 加一条 `link:/opt/feature-plugin` → pnpm 建出
+#     `node_modules/@lingdong/dsh-feature`（少了它，加载器解析这一行会失败，**整个环境起不来**）；
+#   · `dsh.profile.bundles` 加一条 `@lingdong/dsh-feature`（少了它，加载器根本没有这一行）。
+# 只做其中一个都是坏的，所以下面照品牌包那样断言 bundles，pnpm 侧由这行命令自己保证。
+RUN dsh plugin --profile web add /opt/feature-plugin \
+ && node -e "const j=require(process.env.DSH_HOME+'/profiles/web/package.json');if(!j.dsh.profile.bundles.includes('@lingdong/dsh-feature'))throw new Error('功能开关包没进 bundles');if(!j.dependencies['@lingdong/dsh-feature'])throw new Error('功能开关包没进 dependencies');console.log('功能开关包已进 bundles 与 dependencies');"
 
 # PPT 预设：dsh-desktop 以本地 tarball 分发（npm 上没有），按 commit 固定再装。
 # 走 jsDelivr 而不是 raw.githubusercontent —— 这台机器上 raw 域名实测连不上（curl 000），jsDelivr 正常。

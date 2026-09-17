@@ -8,9 +8,11 @@
 # 装完的布局（与容器里**同一套绝对路径**，少一处不一致就少一个坑）：
 #   /opt/dsh-runtime/opt/node            运行时（node + dsh 全局包）
 #   /opt/dsh-runtime/opt/brand-plugin    品牌包（profile 里有指向它的绝对符号链接）
+#   /opt/dsh-runtime/opt/feature-plugin  学生端功能开关包（同上，profile 里也有软链）
 #   /opt/dsh-runtime/home/student/.dsh   烤好的 profile（含全部插件）—— 共享只读模板
 #   /opt/dsh-runtime/etc/dsh             补丁层与课程技能
-#   /opt/brand-plugin -> /opt/dsh-runtime/opt/brand-plugin   （补上镜像里的绝对路径）
+#   /opt/brand-plugin -> /opt/dsh-runtime/opt/brand-plugin        （补上镜像里的绝对路径）
+#   /opt/feature-plugin -> /opt/dsh-runtime/opt/feature-plugin    （同上）
 #   /etc/nginx/dsh-students/            每个学生一条 server 块（开课时生成、停课时删）
 #   /etc/nginx/dsh-proxy-headers.conf   dsh 的转发头（含 WebSocket 升级与 SSE）
 #   /srv/dsh-runtime/logs/              每个学生一份启动日志
@@ -41,10 +43,14 @@ docker image inspect "${IMAGE_OR_TAR}" >/dev/null 2>&1 || die "镜像 ${IMAGE_OR
 log "从镜像提取运行时到 ${RUNTIME_ROOT}"
 mkdir -p "${RUNTIME_ROOT}"
 docker run --rm --entrypoint tar "${IMAGE_OR_TAR}" \
-  -C / -cf - opt/node opt/brand-plugin home/student/.dsh etc/dsh \
+  -C / -cf - opt/node opt/brand-plugin opt/feature-plugin home/student/.dsh etc/dsh \
   | tar -C "${RUNTIME_ROOT}" -xf -
-# 补上镜像里的绝对路径（profile 里 @lingdong/dsh-brand 指向它）
+# 补上镜像里的绝对路径（profile 里 @lingdong/dsh-brand / @lingdong/dsh-feature 指向它们）。
+# ⚠️ 这一段是**覆盖式**的：镜像里的 etc/dsh 与 profile 模板会把宿主上的同名文件盖掉 ——
+# 所以对补丁层与 profile 的改动必须落在镜像里（Dockerfile 的 COPY + `dsh plugin add`），
+# 只改宿主上的文件，下一次 provision 就没了。
 ln -sfn "${RUNTIME_ROOT}/opt/brand-plugin" /opt/brand-plugin
+ln -sfn "${RUNTIME_ROOT}/opt/feature-plugin" /opt/feature-plugin
 # 镜像里没装 bubblewrap，所以 dsh 只能跑到较弱那档 Landlock；这里补装，
 # 让内核沙箱尽量往强的那档走（外层靠用户隔离，内层再加一层写保护）。
 if ! command -v bwrap >/dev/null 2>&1; then
@@ -93,6 +99,16 @@ log "装完了。校验："
 log "  运行时：$([ -x ${RUNTIME_ROOT}/opt/node/bin/node ] && echo OK || echo 缺失)"
 log "  模板：$([ -d ${RUNTIME_ROOT}/home/student/.dsh/profiles/web ] && echo OK || echo 缺失)"
 log "  补丁层：$([ -f ${RUNTIME_ROOT}/etc/dsh/student-runtime.cordis.yml ] && echo OK || echo 缺失)"
+# 两个自写插件包：目录在还不够，profile 模板里必须**同时**有软链与 bundles 那一条，
+# 否则学生的创作环境要么没这一排按钮，要么（缺软链时）整个起不来。这里提前喊出来。
+for plug in brand feature; do
+  pkg="@lingdong/dsh-$plug"
+  tmpl="${RUNTIME_ROOT}/home/student/.dsh/profiles/web"
+  ln_ok=$([ -e "${tmpl}/node_modules/${pkg}" ] && echo OK || echo 缺失)
+  # package.json 里这个名字应出现**两次**：dependencies 一条（link:）、dsh.profile.bundles 一条
+  n=$(grep -c "\"${pkg}\"" "${tmpl}/package.json" 2>/dev/null || echo 0)
+  log "  插件 ${pkg}：目录 $([ -d "${RUNTIME_ROOT}/opt/${plug}-plugin" ] && echo OK || echo 缺失) / profile 软链 ${ln_ok} / package.json 引用 ${n}/2"
+done
 log "  学生入口目录：/etc/nginx/dsh-students（nginx 已 include）"
 log ""
 log "下一步：把 host-user/ 下的 run/stop 脚本放到 /opt/dsh-host-user/，"

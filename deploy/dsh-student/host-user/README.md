@@ -27,9 +27,11 @@
 ```
 /opt/dsh-runtime/opt/node            运行时（node + dsh 全局包）
 /opt/dsh-runtime/opt/brand-plugin    品牌包（profile 里有指向它的绝对符号链接）
+/opt/dsh-runtime/opt/feature-plugin  学生端功能开关包（输入框那一排的三个按钮，同上）
 /opt/dsh-runtime/home/student/.dsh   烤好的 profile（含全部插件）—— 共享只读模板
 /opt/dsh-runtime/etc/dsh             补丁层与课程技能
-/opt/brand-plugin -> /opt/dsh-runtime/opt/brand-plugin   （补上镜像里的绝对路径）
+/opt/brand-plugin -> /opt/dsh-runtime/opt/brand-plugin        （补上镜像里的绝对路径）
+/opt/feature-plugin -> /opt/dsh-runtime/opt/feature-plugin    （同上）
 /etc/nginx/dsh-students/<名>.conf    每个学生一条 server 块（开课时生成、停课时删）
 /etc/nginx/dsh-proxy-headers.conf    WebSocket 升级 + SSE 不缓冲 + 长超时
 /srv/dsh-runtime/logs/<名>.log       每个学生的启动日志（dsh 的会话票据从这里取）
@@ -221,6 +223,7 @@ dsh 的客户端代码有两处**同名拷贝**，而且 pnpm 用的是符号链
 | 补丁 | 在哪 | 为什么 |
 |---|---|---|
 | 侧边栏/欢迎页品牌插槽 | `brand-plugin/` | 换掉官方鲸鱼标与字标 |
+| 输入框那一排的三个功能按钮 | `feature-plugin/` | 对话 / 写代码 / 做网页，随时可切（2026-09-17 起） |
 | 页面标题、关于/公告文案、favicon、manifest、启动字标 | `rebrand.mjs` | 做不了插槽的地方只能改字符串 |
 | **「内测声明」弹窗永不渲染** | `plugin-shims.mjs`（`WelcomeNotice`） | 它是给 dsh 开发者看的公告，会**挡住学生界面** |
 | PPT 选板的空值崩溃 | `plugin-shims.mjs` | 见文件内注释 |
