@@ -23,11 +23,21 @@ async function verifyHttp(item) {
   const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || '';
   const assets = [...html.matchAll(/(?:src|href)=[\"'](\/(?:admin\/|org\/|student\/)?assets\/index-[^\"']+\.(?:js|css))[\"']/g)].map(m => m[1]);
   const assetText = (await Promise.all(assets.map(async asset => { try { return await (await fetch(site + asset)).text(); } catch { return ''; } }))).join('\\n');
+  // 2026-09-17 线上真实故障学到的：**资产 200 不等于能用**。浏览器对模块脚本校验 MIME，
+  // 类型不对（典型：.mjs 被 nginx 当 application/octet-stream）会被 X-Content-Type-Options:
+  // nosniff 直接拒收 —— 表现是「Failed to fetch dynamically imported module」，
+  // 而文件明明是 200 能取到的，只看状态码永远发现不了。
+  const assetTypes = await Promise.all(assets.map(async (asset) => {
+    try { const head = await fetch(site + asset, { method: 'HEAD' }); return head.headers.get('content-type') || ''; } catch { return ''; }
+  }));
+  const assetMimeOk = assets.length > 0 && assetTypes.every((type) => /javascript|ecmascript|text\/css/i.test(type));
+  const noMjsAssetOk = assets.every((asset) => !/\.mjs$/i.test(asset));
   const robotsHeader = (headers['x-robots-tag'] || '').toLowerCase();
   const checked = {
     status: response.status, title, titleOk: item.title.test(title),
     loginOk: !item.requireLogin || body.includes('登录你的工作台') || assetText.includes('登录你的工作台'),
     websiteNavRejected: !item.requireLogin || (!body.includes('预约演示') && !assetText.includes('预约演示')),
+    assetMimeOk, noMjsAssetOk, assetTypes,
     assetPrefixOk: item.path === '/' ? assets.every(x => x.startsWith('/assets/')) : assets.every(x => x.startsWith(item.path + 'assets/')),
     modeOk: mode === 'internal-test' ? headers['x-internal-test'] === 'true' : headers['x-internal-test'] === undefined,
     robotsOk: mode === 'internal-test' ? robotsHeader.includes('noindex') : (!robotsHeader || (!robotsHeader.includes('noindex') && !robotsHeader.includes('nofollow'))),
