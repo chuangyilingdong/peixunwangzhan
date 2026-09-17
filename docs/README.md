@@ -135,17 +135,19 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：1ec4f9f（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260917T115238Z / commit 1ec4f9f（服务 learning-platform-production @127.0.0.1:8789）
-      生效内容：002 六屏（002-01/02/03/04/04B/06）+ 本轮按线框图（图1）重排的 002-04：
-      **授权状态 3 态**（待激活 / 学习中 / 已取消 —— 按线框图「授权规则」给的判定口径真算出来，
-      不再是「数据库没状态列」）、**002-04A「添加课包」抽屉**（候选池规则 + 仅单选 + 授权后预览）
-      部署后核验：BUILD-METADATA commit = 1ec4f9f；active、NRestarts=0；五入口全 200；
+代码提交：d0e3452（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260917T115852Z / commit d0e3452（服务 learning-platform-production @127.0.0.1:8789）
+      生效内容：002 七屏 —— 002-01/02 库存、002-03 学生授权中心、002-04 学生授权详情、
+      **002-04A 添加课包抽屉**、002-04B 单授权抽屉、**002-05 学生授权记录**、002-06 采购与开通记录；
+      **授权状态 3 态**（待激活 / 学习中 / 已取消，按线框图口径真算）；授权操作的**「来源」**开始落库
+      部署后核验：BUILD-METADATA commit = d0e3452；active、NRestarts=0；五入口全 200；
       四端入口资产 content-type 正确（js/css）；**线上 /org 入口包与 release 产物逐字节一致**
-      （releases/20260917T115238Z/apps/org/assets/index-68Ux3RNI.js，761901B，
-      md5 932652187c32…），且包里含本次新文案（002-04A / 候选课包规则 / 本次授权预览 / 待激活 / 学习中）
-      上一版（可回滚）：release 20260917T111554Z / commit 0801bc8
-      整库备份：production/backups/20260917T115237Z/platform.db（12.9MB；⚠️ 目录名比 release 戳早 1 秒）
+      （releases/20260917T115852Z/apps/org/assets/index-IDf79ih0.js，767615B，
+      md5 370e51293db7…），且包里含本次新文案（002-05 / 学生授权记录 / 记录边界 / 002-04A）
+      上一版（可回滚）：release 20260917T115238Z / commit 1ec4f9f
+      整库备份：production/backups/20260917T115852Z/platform.db（12.9MB）
+      ⚠️ 备份目录名与 release 戳是**两个独立时间戳**：可能相同（这次就相同），也可能差 1 秒
+      （前面某次是 115237Z vs 115238Z）—— 找它请用 `ls -t production/backups/ | head -1`，别按 release 戳猜
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
