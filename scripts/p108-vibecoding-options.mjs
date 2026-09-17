@@ -34,6 +34,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from './lib/sourceText.mjs';
 import { execFileSync } from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -150,7 +151,7 @@ check('宿主侧 inject 列全了它读的三个服务（少一个 cordis 就会
   ['sessionProjections', 'systemPrompt', 'commands'].every((name) => injected.includes(name)), injected);
 
 // 先把注释剥掉再查 —— 注释里提到「客户端用 ctx.remote…」不是代码，别把它当成违规
-const hostCode = featureHost.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const hostCode = stripComments(featureHost);
 const readServices = [...hostCode.matchAll(/[A-Za-z]*[Cc]tx\.([a-zA-Z]+)/g)]
   .map((match) => match[1])
   .filter((name) => name !== 'logger' && name !== 'inject');

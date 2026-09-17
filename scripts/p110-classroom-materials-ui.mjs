@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from './lib/sourceText.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
@@ -109,6 +110,37 @@ check('任何比例画出来都不超过那个 18px 的框（超了就会把框�
     const size = ratioThumbSize(value);
     return size && size.width <= 18 && size.height <= 18;
   }));
+
+/* ── 学生画布页头与提示（2026-09-17 追加的四条）───────────────────────────
+   用户的四条：① 那句「「素材1」已经在画布上了，已为你定位」删掉；
+   ② 「我的课堂画布」与底部提示条两处文案删掉；③ 「已保存」挪到顶部，给画布留空间；
+   ④ 左上角换成品牌 logo + 下面显示学生账号名。 */
+const sharedCssNow = read('packages/shared/src/styles.css');
+// ⚠️ 判「某段代码还在不在」之前必须先剥注释 —— 这几处的注释里**故意写着**原来的文案
+// （说明「以前是什么、为什么删」），不剥的话断言会被自己的注释绊倒（真绊倒过一次）。
+// 剥注释用 scripts/lib/sourceText.mjs：**别退回正则**，注释里出现注释符号时正则会把真代码吞掉。
+const workspaceCode = stripComments(workspace);
+const canvasCode = stripComments(canvasJsx);
+const sharedCssCode = stripComments(sharedCssNow);
+check('①「已经在画布上了，已为你定位」那句提示没了（定位本身就是反馈）',
+  !/已经在画布上了/.test(workspaceCode));
+check('② 底部提示条学生侧不再渲染（那句话还写着已取消的「素材」面板，留着也是错的）',
+  /\{allowNodeCreation \? <div className="learning-canvas__tip">/.test(canvasCode)
+  && !/从左侧「素材」面板添加框体/.test(canvasCode));
+check('②+③ 那条「标题 + 作品名 + 已保存」的横条整条去掉了（腾出一行给画布）',
+  !/cv-heading/.test(workspaceCode) && !/\.cv-heading/.test(sharedCssCode));
+check('③「已保存」挪进顶栏（保存状态仍在，只是位置变了）',
+  /className="cv-actions">\s*<span\s+className=\{`cv-save-state/.test(workspaceCode));
+check('④ 左上角换成品牌 logo + 下面显示学生账号名',
+  /className="cv-brand__logo" src=\{brandLogo\}/.test(workspaceCode)
+  && /className="cv-brand__name"/.test(workspaceCode)
+  && /readSession\(\)/.test(workspaceCode)
+  && !/AI 魔法学院/.test(workspaceCode));
+check('④ logo 是打进产物的静态资源（不是运行时拼的路径）',
+  /import brandLogo from '\.\/assets\/lingdong-ai-logo\.png';/.test(workspace)
+  && fs.existsSync(path.join(root, 'packages/shared/src/assets/lingdong-ai-logo.png')));
+check('④ 学生名读的是登录会话（读不到时退回占位，不能让顶栏空着）',
+  /session\?\.user\?\.displayName \|\| session\?\.user\?\.login/.test(workspace) && /'同学'/.test(workspace));
 
 /* ── 反向自检 ────────────────────────────────────────────────────────────── */
 check('【反向自检】素材面板没有把「大分组」又嵌回列表里（那就是回到用户要取消的那一层）',

@@ -1422,7 +1422,10 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
           </div> : null}
         </div>
       </div>}
-      <div className="learning-canvas__tip">{allowNodeCreation ? '拖动卡片排布；从卡片两侧的 ＋ 拖一条线连到另一个框体。' : '从左侧「素材」面板添加框体，写好提示词就能生成；从卡片两侧的 ＋ 拖线连接框体，也可以把图片/视频直接拖进画布。'}</div>
+      {/* 学生那侧**不再显示底部提示条**（用户 2026-09-17 口径：这处文案删掉，给画布留空间）。
+          它原来还写着「从左侧『素材』面板添加框体」—— 那个「素材」大类本轮已经取消，留着也是错的。
+          能自由建节点的画布（机构端/老师）照旧保留提示。 */}
+      {allowNodeCreation ? <div className="learning-canvas__tip">拖动卡片排布；从卡片两侧的 ＋ 拖一条线连到另一个框体。</div> : null}
       {contextMenu && allowNodeCreation && <div className="learning-canvas__context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
         <strong>创建节点</strong>
         <button type="button" onClick={() => addNodeAt('prompt', contextMenu.position)} disabled={!enabledCapabilities.has('text')}>✎ AI 文字</button>

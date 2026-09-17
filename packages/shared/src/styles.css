@@ -1176,11 +1176,11 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 
 /* 顶栏：左品牌 / 中课时 / 右上两个动作 */
 .cv-topbar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 14px; height: 52px; padding: 0 14px; border-bottom: 1px solid var(--cv-border); background: var(--cv-bg); }
-.cv-brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.cv-brand__mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: var(--cv-primary); background: rgb(163 254 68 / 12%); font-size: 14px; }
-.cv-brand strong, .cv-brand small { display: block; }
-.cv-brand strong { font-size: 13px; font-weight: 600; }
-.cv-brand small { margin-top: 1px; color: var(--cv-text-faint); font-size: 10px; }
+/* 顶栏左上角：品牌标（灵动ai 横标，按高度缩放）+ 它下面的学生账号名。
+   原来是「✦ AI 魔法学院 / 学生创作画布」那个占位块（2026-09-17 用户口径换成品牌 logo + 学生名）。 */
+.cv-brand { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-width: 0; }
+.cv-brand__logo { display: block; height: 20px; width: auto; }
+.cv-brand__name { max-width: 150px; overflow: hidden; color: var(--cv-text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .cv-toptitle { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
 .cv-toptitle span { color: var(--cv-text-faint); font-size: 10px; letter-spacing: .04em; }
 .cv-toptitle strong { max-width: 46vw; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -1257,10 +1257,8 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 
 /* 画布主区 */
 .cv-main { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 0; min-height: 0; padding: 12px 14px 14px; }
-.cv-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.cv-heading__title { min-width: 0; }
-.cv-heading__title span { display: block; color: var(--cv-text-faint); font-size: 10px; letter-spacing: .06em; }
-.cv-heading__title h2 { margin: 3px 0 0; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+/* .cv-heading（「我的课堂画布」+ 作品名 + 已保存 那条横条）2026-09-17 已整条删掉：
+   两处文案按用户口径去掉、保存状态挪进顶栏，腾出一行给画布。样式一并清掉，别留死规则。 */
 .cv-save-state { flex: 0 0 auto; padding: 5px 11px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-dim); background: rgb(255 255 255 / 4%); font-size: 11px; }
 .cv-save-state.is-dirty { color: var(--cv-primary); border-color: rgb(163 254 68 / 30%); background: rgb(163 254 68 / 10%); }
 /* 自动保存失败要显眼：学生得知道「刚才的改动没写进去」（线上出现过课包被归档 → 保存接口一直 404） */

@@ -4,6 +4,9 @@ import { CanvasEditor, createCanvasTemplate } from '@platform/canvas';
 import { formatDate } from './auth.js';
 import { Icon } from './icons.jsx';
 import { materialVisual } from './materialTypes.js';
+import { readSession } from './auth.js';
+// 品牌标（学生画布左上角）。与 dsh 学生端用的是同一张图，见 deploy/dsh-student/assets/。
+import brandLogo from './assets/lingdong-ai-logo.png';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 import { useData } from './classroom.jsx';
 
@@ -106,6 +109,16 @@ export function CanvasWorkspace({ api, ...props }) {
   const [generating, setGenerating] = useState(false);
   const [toolPanel, setToolPanel] = useState(null);
   const [promptTarget, setPromptTarget] = useState(null);
+  // 顶栏要显示「这是谁的画布」：登录时把用户写进了会话（登录响应里的 user），读一次就够。
+  // 读不到就退回占位文案，不能让顶栏空着。
+  // ⚠️ 必须放在这一堆 hook 里（下面有「hook 全部调用完毕才可以提前返回」那条线）——
+  //    写到提前 return 之后，一走到那个分支 hook 数量就变了，React 直接崩（p34 抓过）。
+  const [studentName] = useState(() => {
+    try {
+      const session = readSession();
+      return String(session?.user?.displayName || session?.user?.login || '').trim();
+    } catch { return ''; }
+  });
   // 受鉴权保护的素材（/api/**）要带 token 取回来转成 blob: 才能给 <img>/<video> 用
   // （那两个标签发不出 Authorization 头）。同一个地址只取一次。
   // ⚠️ 必须放在所有提前 return 之前（p34 守卫盯着这条：hook 写在 return 之后会整页白屏）。
@@ -500,7 +513,9 @@ export function CanvasWorkspace({ api, ...props }) {
     const existing = (current.nodes || []).find((node) => node.id === `box-${box.id}` || node.data?.boxId === box.id);
     // 已经在画布上的框体不再重复添加（一个框体只对应一个节点），改成选中并定位过去：
     // 学生点了必须看得见反应，否则就像按钮坏了。
-    if (existing) { setFocusRequest({ id: existing.id, token: Date.now() }); setMessage(`「${box.title}」已经在画布上了，已为你定位。`); return; }
+    // 已经在画布上：直接把视图定位过去就好。**不再弹那句提示**
+    // （用户 2026-09-17 口径：「素材1」已经在画布上了…这句删掉）—— 定位本身就是反馈。
+    if (existing) { setFocusRequest({ id: existing.id, token: Date.now() }); return; }
     // 能力未开放时也不允许加框体，避免出现学生无法生成的空框体。
     if (!(Array.isArray(project.data.capabilities) ? project.data.capabilities : ['text']).includes(slotType)) { setMessage('本课未开放该 AI 能力。'); return; }
     // 服务端已经有这个框体的任务、画布上却没有节点（例如恢复过历史版本）：把结果或「生成中」状态一起接回来。
@@ -566,11 +581,20 @@ export function CanvasWorkspace({ api, ...props }) {
 
   return <main className="cv-shell">
     <header className="cv-topbar">
-      <div className="cv-brand"><span className="cv-brand__mark">✦</span><div><strong>AI 魔法学院</strong><small>学生创作画布</small></div></div>
+      {/* 左上角：灵动ai 的标 + 这位学生自己的账号名（用户 2026-09-17 口径：
+          原来那个「✦ AI 魔法学院 / 学生创作画布」换成品牌 logo，logo 下方显示学生名字）。 */}
+      <div className="cv-brand">
+        <img className="cv-brand__logo" src={brandLogo} alt="灵动ai" />
+        <small className="cv-brand__name" title="当前登录的账号">{studentName || '同学'}</small>
+      </div>
       <div className="cv-toptitle"><span>正在上课</span><strong>{lessonTitle}</strong>
 
       </div>
       <div className="cv-actions">
+        <span
+          className={`cv-save-state ${saveError ? 'is-error' : changed ? 'is-dirty' : ''}`}
+          title={saveError ? `保存失败：${saveError}（改动还没写进服务器，先别刷新；请把这条信息发给老师）` : undefined}
+        >{saveError ? `保存失败：${saveError}` : changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
         <button type="button" className="cv-btn" onClick={() => navigate('/learn/canvas')}>课程大厅</button>
         <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasNodes} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>
       </div>
@@ -654,13 +678,10 @@ export function CanvasWorkspace({ api, ...props }) {
         </div> : null}
       </aside>
       <div className="cv-main">
-        <div className="cv-heading">
-          <div className="cv-heading__title"><span>我的课堂画布</span><h2>{project.data.title}</h2></div>
-          <span
-            className={`cv-save-state ${saveError ? 'is-error' : changed ? 'is-dirty' : ''}`}
-            title={saveError ? `保存失败：${saveError}（改动还没写进服务器，先别刷新；请把这条信息发给老师）` : undefined}
-          >{saveError ? `保存失败：${saveError}` : changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
-        </div>
+        {/* 原来这里有一条「我的课堂画布 + 作品名 + 已保存」的横条，占掉一行的画布高度；
+            用户 2026-09-17 口径：那两处文案删掉、「已保存」挪到顶部即可，给画布留更多空间。
+            所以这条横条整条没了 —— 保存状态在上面的顶栏里（顶栏中间本来就有课时名，
+            作品名也随这条横条一起去掉，需要的话说一声再加回来）。 */}
         <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>
     </section>
