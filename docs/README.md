@@ -110,13 +110,16 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：4151d62（本地 HEAD，已推送）；**生产版本 = 9e7520c**（release 20260916T101237Z）
-          本轮（9e7520c 之后 13 个提交）做了：学生环境改「同机独立用户」、公网入口打通、
-          品牌收尾（内测声明弹窗 + 启动字标）、平台侧拉起代码 —— **都还没部署**
-生产：release 20260916T101237Z / commit 9e7520c（服务 learning-platform-production @127.0.0.1:8789）
-      部署后核验：BUILD-METADATA commit 与本地一致；active/running、NRestarts=0、ExecMainStatus=0；
-      /、/admin/、/org/、/student/、/api/health、/vibe-preview.html 全 200；未登录读私有作品 401；日志无异常
-      上一版（可回滚）：release 20260916T044727Z / commit 4c5760d（再上一版 20260916T043829Z / 9cd9228）
+代码提交：88e39cb（本地 HEAD = origin，已推送）
+生产：release 20260917T091831Z / commit 88e39cb（服务 learning-platform-production @127.0.0.1:8789）
+      生效内容：教师端「我的课堂」按线框图改成四个独立路由 + 后端补分页与预检 + 后台字体统一 + 清根目录垃圾文件
+      部署后核验：BUILD-METADATA commit = 88e39cb；active、NRestarts=0；
+      /、/admin/、/org/、/student/、/api/health 全 200；
+      /org/fonts/Geist-Regular.woff2 与 /admin/fonts/Geist-Regular.woff2 均 200（**修好前一直是 404**）；
+      新接口未带票据返回 401（= 路由已注册，不是 404）；新界面字串（状态与时间规则 / 开始前资格校验 /
+      不可添加判定说明 / 保存后的业务链）在线上包体内
+      上一版（可回滚）：release 20260917T075524Z / commit 203a3c6（第十一轮那条线）
+      整库备份：production/backups/20260917T091826Z/platform.db
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
