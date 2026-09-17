@@ -4,6 +4,11 @@
 // 否则 token 用量与成本就从我们的账本里漏出去了。dsh 侧用 `llm-pi-ai` 的 hand-declared gateway
 // 指向这里（`api: openai-completions` + `baseURL` + `apiKeyEnv`），所以这个端点说 OpenAI 兼容的话。
 //
+// 本文件提供两条端点（身份、门禁、记账三件事完全共用）：
+//   · `handleRuntimeGateway`      —— `/api/gateway/v1/chat/completions`，OpenAI 兼容（聊天/agent 干活）；
+//   · `handleRuntimeSearchGateway`（见 `runtimeSearchGateway.js`）—— `/api/gateway/v1/search/messages`，
+//     Anthropic 协议**原样透传**（dsh 的网页搜索插件调的是 Anthropic Messages，不是搜索接口）。
+//
 // 三条硬要求（都在这里落地）：
 //   ① 身份不是浏览器给的：运行时密钥是我们**签发**的（HMAC 签名，内含机构/学生/课时/课堂），
 //      调用方改不了归属；密钥里没有的东西一律不认。
@@ -12,9 +17,11 @@
 //   ③ 每一通调用都记账：与 VibeCoding 原来的链路完全同一套（算力池预算 → 渠道 → recordAiUsage）。
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { errors, id, json, nowIso, q, row } from '../lib.js';
+import { AI_PROVIDER_API_KEY } from '../config.js';
 import { getAiProviderPolicy } from './billingConfig.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
+import { getProviderApiKey } from '../services/providerSecret.js';
 import { recordAiUsage } from '../services/creditUsage.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
@@ -43,7 +50,11 @@ export function issueRuntimeKey({ orgId, userId, sessionId, lessonId = null, ttl
   return `${PREFIX}.${body}.${sign(body)}`;
 }
 
-function verifyRuntimeKey(token) {
+/**
+ * 运行时密钥的校验。**导出**给搜索那条路复用：两条端点的身份必须同一套实现 ——
+ * 这里各写一份的话，迟早出现「聊天验签、搜索不验签」这种洞（改一处忘一处）。
+ */
+export function verifyRuntimeKey(token) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3 || parts[0] !== PREFIX) throw errors.unauthorized('运行时密钥无效', 'RUNTIME_KEY_INVALID');
   const [, body, mac] = parts;
@@ -81,6 +92,17 @@ function readBearer(ctx) {
   const header = String(ctx.req?.headers?.authorization || '');
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : '';
+}
+
+/**
+ * 调用方把运行时密钥放在哪儿都认：`authorization: Bearer <key>` 或 `x-api-key: <key>`。
+ * dsh 的聊天适配器走 Bearer，而它的**网页搜索插件两个都发**（源码里写死同时带 x-api-key 与
+ * authorization）—— 所以两种都读，少读一种就等于「搜索永远 401」。
+ * 放宽的只是**位置**，密钥本身照样要验签（见 verifyRuntimeKey）。
+ */
+export function readRuntimeToken(ctx) {
+  const apiKey = String(ctx.req?.headers?.['x-api-key'] || '').trim();
+  return apiKey || readBearer(ctx);
 }
 
 // 读图请求（modlens 这类视觉桥）发过来的是 OpenAI 的多模态 content 数组，这里是收口的地方：
@@ -150,7 +172,8 @@ function normalizeMessages(body) {
   return start >= messages.length ? messages.slice(-1) : messages.slice(start);
 }
 
-// 给守卫脚本 p97 直接断言这两个纯函数（它们决定「学生的图有没有被压扁」与「名字解析到哪条渠道」）。
+// 给守卫脚本直接断言这几个纯函数（它们决定「学生的图有没有被压扁」、名字解析到哪条渠道、
+// 以及搜索要打到哪里 —— 都是**纯函数**，能脱离网络断言，所以守卫钉的是真逻辑而不是文案）。
 export const normalizeRuntimeMessages = normalizeMessages;
 export { resolveRuntimeSelection };
 
@@ -222,11 +245,79 @@ function sseWrite(res, payload) {
   res.write(`data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`);
 }
 
+/**
+ * 网页搜索要打的**完整** Anthropic Messages 地址。
+ *
+ * 为什么搜索不能沿用聊天那条路：dsh 的搜索插件（`@deepseek-ai/dsh-web-search-deepseek`）
+ * 调的是 **Anthropic 协议的 `/messages`**（`const endpoint = `${options.baseURL}/messages``），
+ * 搜索是「模型一跳里的服务端工具 `web_search_20250305`」，**不是**一个搜索接口。
+ * 插件自己的注释写明：它复用 `DEEPSEEK_API_KEY`，但**不复用** chat 的 base（`$DEEPSEEK_BASE_URL`）。
+ * 所以这两条路的 base 本来就不是同一个，不能拿聊天的 endpoint 直接当搜索的 endpoint。
+ *
+ * 三种渠道各推各的（都用渠道自己配的东西，不写死任何一家）：
+ *   · 走了算力网关（new-api）→ 网关自己的 `/v1/messages`；
+ *   · 渠道 `protocol=ANTHROPIC` → 它的 endpoint 就是 Anthropic 基地址；
+ *   · 其余（上游是 DeepSeek 官方那类 OpenAI 兼容口）→ 取**同源主机**的 `/anthropic/v1/messages`。
+ *     （DeepSeek 官方就是这个形状：chat 在 `api.deepseek.com`，Anthropic 口在
+ *      `api.deepseek.com/anthropic/v1`，**同一把密钥**。已实测：拿我们渠道里现成的 key
+ *      打这条口能返回真实的 `web_search_tool_result`。）
+ */
+export function searchUpstreamEndpoint({ endpoint, protocol = '', viaGateway = false } = {}) {
+  const base = String(endpoint || '').trim().replace(/\/+$/, '');
+  if (!base) throw errors.conflict('没有可用的搜索上游端点，请让管理员检查渠道配置', 'RUNTIME_SEARCH_ENDPOINT_MISSING');
+  let origin = '';
+  try { origin = new URL(base).origin; } catch { throw errors.conflict(`搜索上游端点不是完整地址：${base}`, 'RUNTIME_SEARCH_ENDPOINT_INVALID'); }
+  // 渠道把完整地址配到头了（以 /messages 结尾）就照用，别再拼一层
+  if (/\/messages$/i.test(base)) return base;
+  if (viaGateway) return /\/v1$/i.test(base) ? `${base}/messages` : `${base}/v1/messages`;
+  if (String(protocol).toUpperCase() === 'ANTHROPIC') return `${base}/messages`;
+  return `${origin}/anthropic/v1/messages`;
+}
+
+/**
+ * 搜索这条路「走哪条渠道、用哪个模型」——**不碰凭证，也不管网关**（这两件事各由下面一个函数与本函数组合）。
+ *
+ * 与聊天那条路同一个规矩（见 `resolveRuntimeSelection` 的注释）：**调用方报的模型名只当意向**，
+ * 在我们自己渠道的可用模型清单里认得出就用它，认不出就用这条渠道自己的模型 ——
+ * 绝不把调用方给的字符串原样发给上游（轻则上游 400，重则按另一个模型计费）。
+ * （实测 `deepseek-v4-flash`（插件默认）与 `deepseek-flash`（我们渠道的）上游都认，
+ *   但规矩不能因为「这次恰好认」就破。）
+ */
+export function searchChannelSelection(policy, requestedModel = '') {
+  const base = providerSelectionForModality(policy, 'TEXT', '');
+  const channel = channelById(policy, base.channelId);
+  const model = modelForChannel(channel, requestedModel) || base.model;
+  return {
+    channel,
+    selection: { ...base, model, estimatedCostFen: channel?.modelCosts?.[model] ?? channel?.estimatedCostFen ?? null },
+  };
+}
+
+/**
+ * 搜索这一跳「打哪个地址、用哪把真密钥」——按**最终真正要打的那一跳**算：
+ * 过了算力网关就是网关自己，没过就是渠道上游。
+ *
+ * 真密钥在这里解析出来、**只在这一跳用**，绝不进学生环境 —— 网页搜索必须走网关的原因就是它：
+ * 密钥一旦导出，学生能从自己的进程里读出来，既泄漏又能绕过账本花钱；走网关则学生手里只有
+ * 一把短时的、绑课堂的运行时密钥（`verifyRuntimeKey` 验的就是它）。
+ * 取值顺序与聊天那条路的 `providerConfig` 完全一致（网关令牌 > 渠道密钥 > 默认密钥）。
+ */
+export function searchUpstreamCredentials(channel, selection = {}) {
+  const endpoint = searchUpstreamEndpoint({
+    endpoint: selection.gateway?.endpoint || channel?.endpoint,
+    protocol: channel?.protocol || '',
+    viaGateway: Boolean(selection.gateway),
+  });
+  const apiKey = String(selection.gateway?.apiKey || getProviderApiKey(channel?.id) || getProviderApiKey() || AI_PROVIDER_API_KEY || '').trim();
+  if (!apiKey) throw errors.conflict('搜索渠道没有配置密钥，请让管理员检查渠道设置', 'RUNTIME_SEARCH_KEY_MISSING');
+  return { endpoint, apiKey };
+}
+
 export async function handleRuntimeGateway(ctx) {
   const path = String(ctx.pathname || '');
   if (path !== '/api/gateway/v1/chat/completions' || ctx.method !== 'POST') return null;
 
-  const payload = verifyRuntimeKey(readBearer(ctx));
+  const payload = verifyRuntimeKey(readRuntimeToken(ctx));
   const session = assertRuntimeClassroomActive(payload);
   const body = ctx.body || {};
   const messages = normalizeMessages(body);

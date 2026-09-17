@@ -6,6 +6,7 @@ import { handleAdmin } from './routes/adminOrg.js';
 import { handleOrg } from './routes/orgAdmin.js';
 import { handleStudent } from './routes/student.js';
 import { handleRuntimeGateway } from './routes/runtimeGateway.js';
+import { handleRuntimeSearchGateway } from './routes/runtimeSearchGateway.js';
 import { handleStudentRuntime } from './routes/studentRuntime.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
@@ -98,6 +99,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const data = await handleRuntimeGateway(ctx)
+      ?? await handleRuntimeSearchGateway(ctx)
       ?? await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)
       ?? await handleAuth(ctx)
