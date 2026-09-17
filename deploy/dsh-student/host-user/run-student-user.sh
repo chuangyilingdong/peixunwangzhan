@@ -147,6 +147,14 @@ reuse_running_environment() {
   age=$(( (now_us - started) / 1000000 ))
   if [ "${age}" -lt 0 ] || [ "${age}" -gt "${REUSE_MAX_AGE_S}" ]; then VERBOSE_REASON="环境起太久了（${age}s > ${REUSE_MAX_AGE_S}s）"; return 1; fi
   port="$(sed -n 's/^ *listen \([0-9]\{1,\}\) ssl;.*/\1/p' "${NGINX_DIR}/${USER_NAME}.conf" 2>/dev/null | head -1)"
+  # 兜底：入口配置丢了（被回收脚本清掉、或上一次写失败了），但单元还在跑 ——
+  # 端口可以从单元自己的启动参数推回来（内部端口 = 对外端口 + 1000）。
+  # 2026-09-17 实测踩到：环境活着、入口没了，复用因此判定失败 → 又去冷启动 → 撞上并发保护，
+  # 前端一直卡在「正在开环境…」。有这条兜底就能直接复用、把入口补回来。
+  if [ -z "${port}" ]; then
+    inner_port="$(systemctl show "${UNIT}" -p ExecStart --value 2>/dev/null | sed -n 's/.*--port \([0-9]\{1,\}\).*/\1/p' | head -1)"
+    [ -n "${inner_port}" ] && port=$(( inner_port - INNER_OFFSET ))
+  fi
   [ -n "${port}" ] || { VERBOSE_REASON="上次的入口配置里读不到端口"; return 1; }
   token="$(sed -n 's/.*[?&]token=\([A-Za-z0-9._-]*\).*/\1/p' "${LOG_FILE}" 2>/dev/null | head -1)"
   [ -n "${token}" ] || { VERBOSE_REASON="日志里捞不到 dsh token"; return 1; }
@@ -156,9 +164,22 @@ reuse_running_environment() {
   return 0
 }
 
+# ★ 并发保护（2026-09-17 实测踩到）：
+# 前端那个按钮点下去是「一个请求一直挂着」，学生看它卡着就会**再点几次** ——
+# 于是同一个学生的两三个开环境脚本同时抢同一个 systemd 单元：后来者直接撞上
+#   `Failed to start transient service unit: Unit ... was already loaded`
+# 结果比「慢」更糟：环境起来了、入口配置却没写成，前端永远卡在「正在开环境…」。
+# 用 flock 把同一个学生的开环境请求**串行化**：后来者等前一个跑完，然后**重新走复用判定** ——
+# 那时环境已经热了，走的是 0.07 秒那条路，对学生的体验反而更好。
+LAUNCH_LOCK="${LAUNCH_LOCK:-/run/dsh-launch-${USER_NAME}.lock}"
+exec 9>"${LAUNCH_LOCK}"
+if ! flock -w 90 9; then
+  echo "[run] 另一个开环境请求还在跑（等了 90 秒），本次放弃" >&2
+  exit 10
+fi
+
 REUSED=0
-if reuse_running_environment; then
-  REUSED=1
+if reuse_running_environment; then  REUSED=1
   echo "[run] 复用已在跑的环境 ${USER_NAME}（端口 ${PUBLIC_PORT}），只换票据" >&2
 else
   echo "[run] 走冷启动（复用不成立：${VERBOSE_REASON:-环境没在跑}）" >&2
@@ -238,6 +259,10 @@ chown "${USER_NAME}:${USER_NAME}" "${DSH_HOME}/settings.yaml" 2>/dev/null || tru
 # 界面表现为「自动重连中…」（WebSocket 也升不上去）。实测踩到过。
 # 两种写法都给：`域名` 与 `域名:端口`（栅栏按 Host 头比对，端口要一起给）。
 : > "${LOG_FILE}"
+# 起之前先把这个单元的历史状态清掉：只 `systemctl stop` 不够 ——
+# 单元处于 failed/inactive 但**仍然 loaded** 时，systemd-run --unit= 会直接报
+# 「Unit ... was already loaded or has a fragment file」（2026-09-17 实测）。
+systemctl reset-failed "${UNIT}" >/dev/null 2>&1 || true
 systemd-run --unit="${UNIT}" --collect \
   --uid="${USER_NAME}" --gid="${USER_NAME}" \
   --working-directory="${WORKSPACE}" \
