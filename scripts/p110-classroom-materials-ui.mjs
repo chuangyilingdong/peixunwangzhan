@@ -95,6 +95,20 @@ check('不是比例的值（「自动」这种）返回 null，不画错东西',
 const canvasJsx = read('packages/canvas/src/index.jsx');
 check('画幅那一行才画示意图（清晰度 / 时长不画）', /row\.ratio \? ratioThumbSize\(item\.value\) : null/.test(canvasJsx) && /is-ratio/.test(canvasJsx));
 check('「自动」也有一个示意（虚线，表示跟随课程默认）', /learning-node__seg-thumb is-auto/.test(canvasJsx) && /\.learning-node__seg-thumb\.is-auto \{/.test(canvasCss));
+// 用户 2026-09-17 追加：「比例这里现在布局很乱，应该要保证底部对齐吧」——
+// 各档比例不一样高，缩略图必须装在一个固定尺寸的框里，否则文字会被顶到不同高度。
+check('缩略图装在固定 18×18 的框里（每档都是「框 + 文字」，标签才能同一水平线）',
+  /\.learning-node__seg-thumb-box \{ display: grid; place-items: center; flex: 0 0 auto; width: 18px; height: 18px; \}/.test(canvasCss)
+  && (canvasJsx.match(/className="learning-node__seg-thumb-box"/g) || []).length === 2);
+// 选中态是 font-weight:700 —— 字重一变行高也变，**选中那一档的文字会比别档低几像素**。
+// 实际渲染出来量过：不写死 line-height 时其余在 277、选中的在 280；写死之后六档全在同一条线。
+check('选中态的字重变化不会把文字顶下去（line-height 写死）',
+  /\.learning-node__seg-row\.is-ratio \.learning-node__seg button \{[^}]*line-height: 16px/.test(canvasCss));
+check('任何比例画出来都不超过那个 18px 的框（超了就会把框撑开、又对不齐）',
+  ['1:1', '16:9', '9:16', '4:3', '3:4', '21:9', '9:21', '5:4', '2:3'].every((value) => {
+    const size = ratioThumbSize(value);
+    return size && size.width <= 18 && size.height <= 18;
+  }));
 
 /* ── 反向自检 ────────────────────────────────────────────────────────────── */
 check('【反向自检】素材面板没有把「大分组」又嵌回列表里（那就是回到用户要取消的那一层）',

@@ -579,11 +579,14 @@ function SlotParamPickers({ id, data }) {
     {rows.map((row) => <div className={`learning-node__seg-row${row.ratio ? ' is-ratio' : ''}`} key={row.key}>
       <span className="learning-node__seg-label">{row.label}</span>
       <div className="learning-node__seg" role="group" aria-label={`${data.title || '框体'}${row.label}`}>
-        <button type="button" className={student[row.key] ? '' : 'is-on'} title={`按课程默认（${row.items[0].label}）`} onClick={() => update(row.key, '')}>{row.ratio ? <i className="learning-node__seg-thumb is-auto" aria-hidden="true" /> : null}自动</button>
+        <button type="button" className={student[row.key] ? '' : 'is-on'} title={`按课程默认（${row.items[0].label}）`} onClick={() => update(row.key, '')}>{row.ratio ? <span className="learning-node__seg-thumb-box" aria-hidden="true"><i className="learning-node__seg-thumb is-auto" /></span> : null}自动</button>
         {row.items.map((item) => {
           const thumb = row.ratio ? ratioThumbSize(item.value) : null;
           return <button type="button" key={item.value} className={String(student[row.key]) === item.value ? 'is-on' : ''} onClick={() => update(row.key, item.value)}>
-            {row.ratio ? (thumb ? <i className="learning-node__seg-thumb" style={{ width: `${thumb.width}px`, height: `${thumb.height}px` }} aria-hidden="true" /> : null) : null}
+            {/* ⚠️ 缩略图必须放在**固定高度**的框里：各档比例不一样高（9:16 高、16:9 扁），
+                直接当按钮的 flex 子项会把文字顶到不同高度 —— 看上去就是「布局很乱、
+                底部对不齐」（用户 2026-09-17 反馈）。最长边就是 18px，所以框取 18×18。 */}
+            {row.ratio ? <span className="learning-node__seg-thumb-box" aria-hidden="true">{thumb ? <i className="learning-node__seg-thumb" style={{ width: `${thumb.width}px`, height: `${thumb.height}px` }} /> : null}</span> : null}
             {item.label}
           </button>;
         })}

@@ -196,7 +196,13 @@
 .learning-node__seg button.is-on { color: var(--cv-primary-fg); background: var(--cv-primary); font-weight: 700; }
 /* 画幅档位：文字上面加一个同比例的小示意图（用户 2026-09-17 口径：光看「9:16 / 16:9」
    不容易想象出画面形状）。示意图用 currentColor 描边，选中态跟着变色不用额外规则。 */
-.learning-node__seg-row.is-ratio .learning-node__seg button { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px 9px; }
+/* line-height 必须写死：选中态是 font-weight:700，字重一变行高也变，
+   于是**选中那一档的文字会比别档低几像素**（拍出来量过：其余在 277、选中的 280）。 */
+.learning-node__seg-row.is-ratio .learning-node__seg button { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px 9px; line-height: 16px; }
+/* ⚠️ 缩略图装在一个**固定 18×18** 的框里（最长边就是 18px）：
+   各档比例不一样高，不固定高度的话文字会被顶到不同位置 —— 看上去就是「布局很乱、底部对不齐」。
+   框固定住，每档都是「18px 框 + 文字」，标签自然同一水平线。 */
+.learning-node__seg-thumb-box { display: grid; place-items: center; flex: 0 0 auto; width: 18px; height: 18px; }
 .learning-node__seg-thumb { display: block; flex: 0 0 auto; border: 1px solid currentColor; border-radius: 2px; opacity: .85; }
 .learning-node__seg-thumb.is-auto { width: 14px; height: 12px; border-style: dashed; }
 
