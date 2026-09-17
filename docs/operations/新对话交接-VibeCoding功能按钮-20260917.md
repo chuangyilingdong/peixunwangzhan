@@ -126,6 +126,13 @@ failed to apply loader entry lingdong-feature: cannot get property "sessionProje
    保留是刻意的（删它要连提交/产物一起拆），等专门一轮再收。
 5. 三个功能的角色文案**只在探针会话里真机跑过一轮**（模型答「做网页」）。三档合不合口味，
    要在真课上多跑几节才知道。
+6. ⚠️ **宿主上发现一处属主不对（本轮已修一半，另一半是既存问题）**：
+   `/opt/feature-plugin` 与 `/opt/dsh-runtime/opt/brand-plugin` 这两个**所有学生共读**的目录，
+   属主一度是某个学生用户 —— 目录属主能**替换目录里的文件**，等于一个学生能改到别人加载的插件
+   （`dsh` 的宿主插件是以该学生身份加载的）。已改回 `root:root` + `755`/`644`。
+   **既存的那一半**：`/opt/dsh-runtime/opt/node`（共享 Node 运行时）的属主是探针账号 `dshprobe2`，
+   本轮**没动**（chown 整个运行时风险大于收益，且实际入口被 dsh 沙箱挡着）。
+   要收的话：`chown -R root:root /opt/dsh-runtime/opt/node`，并顺手把不再用的探针账号 `dshprobe2` 收掉。
 
 ## 六、这一轮的坑（都别再踩）
 
