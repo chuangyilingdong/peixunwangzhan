@@ -1,95 +1,177 @@
-// 机构端 - 课包概览（2026-09-13，用户要求）
+// 机构端 - 002 机构课包库存与学生授权（2026-09-17 按线框图重做）
 //
-// 一句话：**机构把课包当成资源来盘** —— 每个课包可授权多少次、已经分给多少人、还剩几次、
-// 多少人正在学、几个老师在开课、现在有几个课堂在等/在上的。
+// 线框图把这一套拆成 002-01 库存列表 / 002-02 单课包详情 / 002-03 学生授权中心 /
+// 002-04 学生授权详情 / 002-06 采购·增购·开通记录。本轮先落 **002-01 + 002-02**，
+// 并保留原有的「分配给学生」入口（等 002-03/04 做完再合并进来，别中途把功能删掉）。
 //
-// 与相邻页面的边界（避免又出现"三套东西说不清"）：
+// 与相邻页面的边界（沿用原注释，别又出现"三套东西说不清"）：
 //   · 「课程中心」＝看课包内容（封面/课时/教案）
 //   · 本页＝看课包的**分配与使用账**（次数、学员、课堂），并下钻到「谁被分到了」
-//   · 「学员许可」＝执行分配（勾学员、扣次数）
 //   · 「学员开通」＝学员的席位与有效期
+//
+// ⚠️ 线框图里「授权状态：待激活 / 学习中」这一层**数据库里没有**（student_course_grants 只有
+//    granted_at/revoked_at，没有任何状态列）。按用户口径**不伪造**：只用
+//    「有效（未撤销）/ 已取消（有 revoked_at）」两态。同理，单课包详情里的「学习记录
+//    已产生/未产生」现在也没有字段支撑，**不显示**，等有口径再加。
 import { Link } from 'react-router-dom';
 import { StudentGrants } from './StudentGrants.jsx';
 import { useState } from 'react';
 import { Empty, ErrorState, Loading, MetricCard, Notice, PageHeader, Panel, Status, formatDate, useData } from '@platform/shared';
 
+const DAYS_OPTIONS = [['1', '近 1 天'], ['7', '近 7 天'], ['30', '近 30 天'], ['90', '近 90 天']];
+
+/** 权益状态：有效 / 已禁用（平台撤销授权）—— 只有这两态，没有「待激活」。 */
+function EntitlementBadge({ status }) {
+  if (!status) return <Status value="NONE" />;
+  return <span className={'status' + (status === 'ACTIVE' ? ' success' : '')}>{status === 'ACTIVE' ? '有效' : '已禁用'}</span>;
+}
+
 export function SeriesOverview({ api }) {
   const [tab, setTab] = useState('overview');
   const [days, setDays] = useState('30');
-  const [expanded, setExpanded] = useState('');
+  const [openId, setOpenId] = useState('');          // 002-02：当前打开的课包
+  const [draft, setDraft] = useState({ search: '', status: '' });
+  const [applied, setApplied] = useState({ search: '', status: '' });
   const overview = useData(() => api.get(`org/series-overview?days=${days}`), [api, days]);
-  const items = overview.data?.items || [];
+  const allItems = overview.data?.items || [];
   const totals = overview.data?.totals || {};
-  // 下钻明细：复用「学员许可」那条接口（谁被分到了、什么时候、有没有被撤销）
+  const items = allItems.filter((item) => {
+    if (applied.search && !String(item.title || '').toLowerCase().includes(applied.search.trim().toLowerCase())) return false;
+    if (applied.status === 'ACTIVE' && item.assignmentStatus !== 'ACTIVE') return false;
+    if (applied.status === 'REVOKED' && item.assignmentStatus === 'ACTIVE') return false;
+    return true;
+  });
+  const current = allItems.find((item) => item.seriesId === openId) || null;
+  // 下钻明细：谁被分到了这个课包（复用「学员许可」那条接口）
   const detail = useData(
-    () => (expanded ? api.get(`org/course-grants?seriesId=${encodeURIComponent(expanded)}`) : Promise.resolve({ items: [] })),
-    [api, expanded],
+    () => (openId ? api.get(`org/course-grants?seriesId=${encodeURIComponent(openId)}`) : Promise.resolve({ items: [] })),
+    [api, openId],
   );
   const detailRows = detail.data?.items || [];
-  const current = items.find((item) => item.seriesId === expanded) || null;
-  const yuanRemaining = (item) => `${item.remaining} 次`;
+  const activeRows = detailRows.filter((row) => !row.revokedAt);
+  const recentGrants = [...detailRows].sort((a, b) => String(b.grantedAt).localeCompare(String(a.grantedAt))).slice(0, 5);
+
+  function submitFilters(event) {
+    event.preventDefault();
+    setApplied(draft);
+  }
 
   return <>
-    {tab === 'grant' || expanded ? <nav aria-label="面包屑" className="breadcrumb row-actions"><Link to="/series-overview">课包库存与学生授权</Link>{expanded ? <><span className="muted" aria-hidden="true">/</span><span>{current?.title || '课包详情'}</span></> : null}{tab === 'grant' ? <><span className="muted" aria-hidden="true">/</span><span>为学生添加课包</span></> : null}</nav> : null}
-    <PageHeader
-      eyebrow="课包经营"
-      title="课包与授权"
-      description="每个已授权课包的可授权次数、已分配、剩余，以及学员与课堂的使用情况；点课包名可下钻看「分给了谁」。"
-      actions={<button className="secondary-button" onClick={overview.refresh}>刷新</button>}
-    />
-    <div className="row-actions"><button className="secondary-button" onClick={() => setTab('overview')}>分配概况</button><button className="secondary-button" onClick={() => setTab('grant')}>分配给学生</button><Link to="/courses">浏览课程内容</Link></div>
-    {tab === 'grant' ? <StudentGrants api={api} /> : <>
-    {overview.loading ? <Loading label="正在读取课包分配情况…" /> : overview.error ? <ErrorState error={overview.error} onRetry={overview.refresh} /> : <>
-      <div className="metrics">
-        <MetricCard label="已授权课包" value={totals.seriesCount ?? 0} hint="平台授权给本机构、且在有效期内的课包" />
-        <MetricCard label="已分配 / 可授权" value={`${totals.quotaUsed ?? 0} / ${totals.quotaTotal ?? 0}`} hint={`剩余 ${totals.remaining ?? 0} 次`} tone="teal" />
-        <MetricCard label="已分配学员" value={totals.grantedStudents ?? 0} hint="当前持有有效许可的学员（去重）" tone="orange" />
-        <MetricCard label="进行中的课堂" value={totals.activeSessions ?? 0} hint={`另有 ${totals.pendingSessions ?? 0} 个课堂待上课`} tone="pink" />
-      </div>
+    {tab === 'grant' || openId ? <nav aria-label="面包屑" className="breadcrumb row-actions">
+      <button type="button" className="text-button" onClick={() => { setOpenId(''); setTab('overview'); }}>机构课包库存与学生授权</button>
+      {openId ? <><span className="muted" aria-hidden="true">/</span><span>{current?.title || '课包详情'}</span></> : null}
+      {tab === 'grant' ? <><span className="muted" aria-hidden="true">/</span><span>为学生添加课包</span></> : null}
+    </nav> : null}
 
-      <Panel title={`按课包（近 ${days} 天课堂）`} actions={
-        <select value={days} onChange={(event) => setDays(event.target.value)}>
-          <option value="1">近 1 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option>
-        </select>
-      }>
-        {items.length ? <div className="table-wrap"><table>
-          <thead><tr><th>课包</th><th>次数（已分配 / 可授权）</th><th>剩余</th><th>已分配学员</th><th>课堂（待 / 中 / 已结束）</th><th>涉及老师</th><th>明细</th></tr></thead>
-          <tbody>{items.map((item) => <tr key={item.seriesId}>
-            <td><strong>{item.title}</strong><div className="muted">{item.seriesId}</div></td>
-            <td>{item.quotaUsed} / {item.quotaTotal || '—'}</td>
-            <td>{yuanRemaining(item)}</td>
-            <td>{item.grantedStudents}<div className="muted">{item.grantedCount} 人次</div></td>
-            <td>{item.pendingSessions} / <strong>{item.activeSessions}</strong> / {item.endedSessions}{item.dissolvedSessions ? <span className="muted">（另解散 {item.dissolvedSessions}）</span> : null}</td>
-            <td>{item.teacherCount}</td>
-            <td><button type="button" className="text-button" onClick={() => setExpanded(expanded === item.seriesId ? '' : item.seriesId)}>{expanded === item.seriesId ? '收起' : '看分给了谁'}</button></td>
-          </tr>)}</tbody>
-        </table></div> : <Empty title="还没有被平台授权的课包" body="平台把课包授权给本机构后，这里会显示每个课包的次数与使用情况。" />}
-        <p className="muted top-gap">
-          次数口径：平台给本机构的授权单上是「可授权次数」，每分给一名学员用掉 1 次；余额必须大于零才能分配，零次不代表不限。
-          课堂按「这节课属于哪个课包」归集，所以待上课/上课中是<strong>当前存量</strong>，已结束是近 {days} 天内的。
-        </p>
-        {/* 计数器与实际许可数不一致时要说出来（种子/演示数据、或平台侧直插库会出现），别让人对着两个数纳闷 */}
-        {items.some((item) => item.grantedCount > item.quotaUsed) ? <Notice tone="info">
-          有课包的「已分配学员」多于「已分配次数」——说明其中一部分许可是**演示/历史数据**（没走分配计数器）。
-          剩余次数按计数器算；要核对具体是谁，点课包右侧的「看分给了谁」。
-        </Notice> : null}
+    {openId ? <PageHeader eyebrow="002-02" title="单课包库存详情" description={`父级：002-01 | 机构课包库存`}
+      actions={<button className="secondary-button" onClick={() => setOpenId('')}>← 返回课包库存</button>} />
+      : <PageHeader eyebrow="002-01" title="机构课包库存" description="查看机构当前拥有的课包权益、人次库存及使用情况"
+        actions={<Link className="secondary-button" to="/courses">浏览课程内容</Link>} />}
+
+    {openId ? <>
+      {/* 002-02：课包头部 + 三张卡 + 已授权学生 + 最近授权 */}
+      <Panel title="课包信息">
+        <div className="row-actions">
+          <strong>{current?.title || '—'}</strong>
+          <span className="muted">当前版本：{current?.version ? `v${current.version}` : '—'}</span>
+          <span className="muted">适用对象：{current?.ageRangeMin || current?.ageRangeMax ? `${current.ageRangeMin ?? '?'}-${current.ageRangeMax ?? '?'} 岁` : '—'}</span>
+          <span className="muted">开通时间：{formatDate(current?.assignedAt)}</span>
+          <EntitlementBadge status={current?.assignmentStatus} />
+        </div>
+        <p className="muted">机构已获得该课包的人次权益，可继续为符合条件的学生进行授权。</p>
       </Panel>
+      <div className="metrics">
+        <MetricCard label="总人次" value={current?.quotaTotal ?? 0} hint="平台授予 · 只读" />
+        <MetricCard label="已授权" value={current?.quotaUsed ?? 0} hint="已分配给学生的" tone="teal" />
+        <MetricCard label="剩余" value={current?.remaining ?? 0} hint="当前可分配库存" tone="orange" />
+      </div>
+      <div className="split">
+        <Panel title={`已授权学生（当前 ${activeRows.length} 人）`}>
+          {detail.loading ? <Loading label="正在读取授权明细…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : activeRows.length ? <div className="table-wrap"><table>
+            <thead><tr><th>学生</th><th>登录账号</th><th>授权时间</th><th>授权状态</th></tr></thead>
+            <tbody>{activeRows.map((row) => <tr key={row.id}>
+              <td><strong>{row.studentName || row.studentLogin}</strong></td>
+              <td className="muted">{row.studentLogin}</td>
+              <td>{formatDate(row.grantedAt)}</td>
+              <td><span className="status success">有效</span></td>
+            </tr>)}</tbody>
+          </table></div> : <Empty title="这个课包还没有分给任何学生" body="到「学生授权中心」把课包分给学生；每分给一人用掉 1 次。" />}
+          <p className="muted top-gap">完整授权管理前往「学生授权中心」。撤销由平台兜底执行（机构侧没有撤销入口）；撤销后学生立刻进不去，已上过的课次数不退。</p>
+        </Panel>
+        <Panel title="最近授权">
+          {recentGrants.length ? <div className="card-list">{recentGrants.map((row) => <div className="row-actions" key={row.id}>
+            <span className="muted">{formatDate(row.grantedAt)}</span>
+            <strong>{row.studentName || row.studentLogin}</strong>
+            <span className={row.revokedAt ? 'muted' : 'status success'}>{row.revokedAt ? '已取消' : '授权成功'}</span>
+            <span className="muted">-1</span>
+          </div>)}</div> : <p className="muted">暂无授权记录。</p>}
+          <Notice tone="info">
+            这里只列**学生授权**引起的库存变化。
+            <div className="muted">平台的采购 / 增购 / 权益调整记录在平台侧，机构端不展示（线框图里那串「53→52」的前后值数据库里也没有存，不编）。</div>
+          </Notice>
+        </Panel>
+      </div>
+    </> : <>
+      {tab === 'grant' ? <StudentGrants api={api} /> : <>
+        {overview.loading ? <Loading label="正在读取课包库存…" /> : overview.error ? <ErrorState error={overview.error} onRetry={overview.refresh} /> : <>
+          <Notice tone="info">总人次由平台授予，机构仅查看与使用，不可在本页面直接修改总人次。</Notice>
+          <div className="metrics">
+            <MetricCard label="已开通课包数" value={totals.seriesCount ?? 0} hint={`当前有效课包 ${allItems.filter((item) => item.assignmentStatus === 'ACTIVE').length} 个`} />
+            <MetricCard label="总人次" value={totals.quotaTotal ?? 0} hint="平台累计授予" tone="teal" />
+            <MetricCard label="已授权" value={totals.quotaUsed ?? 0} hint="已分配给学生的" tone="orange" />
+            <MetricCard label="剩余" value={totals.remaining ?? 0} hint="当前可分配库存" tone="pink" />
+          </div>
 
-      {expanded ? <Panel title={`${current?.title || '课包'} · 分给了谁`}>
-        {detail.loading ? <Loading label="正在读取分配明细…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detailRows.length ? <div className="table-wrap"><table>
-          <thead><tr><th>学员</th><th>账号</th><th>分配时间</th><th>状态</th></tr></thead>
-          <tbody>{detailRows.map((row) => <tr key={row.id}>
-            <td><strong>{row.studentName || row.studentLogin}</strong></td>
-            <td className="muted">{row.studentLogin}</td>
-            <td>{formatDate(row.grantedAt)}</td>
-            <td>{row.revokedAt ? <><Status value="REVOKED" /><div className="muted">{row.revokeReason || ''}</div></> : <Status value="ACTIVE" />}</td>
-          </tr>)}</tbody>
-        </table></div> : <Empty title="这个课包还没有分给任何学员" body="到「学员许可」页把课包分给学员；每分给一人用掉 1 次。" />}
-        {detailRows.length ? <p className="muted top-gap">撤销由平台兜底执行（机构侧没有撤销入口）；撤销后学员立刻进不去，已上过的课次数不退。</p> : null}
-      </Panel> : null}
+          <Panel title="筛选">
+            <form className="filter-form" onSubmit={submitFilters}>
+              <label>课包名称<input value={draft.search} placeholder="请输入课包名称" onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
+              <label>权益状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
+                <option value="">全部</option><option value="ACTIVE">有效</option><option value="REVOKED">已禁用</option>
+              </select></label>
+              <label>课堂统计范围<select value={days} onChange={(event) => setDays(event.target.value)}>
+                {DAYS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select></label>
+              <div className="row-actions">
+                <button className="primary-button" disabled={overview.loading}>查询</button>
+                <button className="secondary-button" type="button" disabled={overview.loading} onClick={() => { setDraft({ search: '', status: '' }); setApplied({ search: '', status: '' }); }}>重置</button>
+              </div>
+            </form>
+          </Panel>
 
-      {!items.length ? <Notice tone="info">还没有授权课包时，先到「课程中心」确认平台是否已把课包授权给本机构。</Notice> : null}
-    </>}
+          <Panel title="课包库存">
+            {items.length ? <div className="table-wrap"><table>
+              <thead><tr><th>课包</th><th>当前版本</th><th>权益状态</th><th>总人次</th><th>已授权</th><th>剩余</th><th>开通时间</th><th>操作</th></tr></thead>
+              <tbody>{items.map((item) => <tr key={item.seriesId}>
+                <td><strong>{item.title}</strong><div className="muted">机构已开通权益</div></td>
+                <td>{item.version ? `v${item.version}` : '—'}</td>
+                <td><EntitlementBadge status={item.assignmentStatus} /></td>
+                <td>{item.quotaTotal || '—'}</td>
+                <td>{item.quotaUsed}</td>
+                <td><span className="status warning">{item.remaining}</span></td>
+                <td>{formatDate(item.assignedAt)}</td>
+                <td><button type="button" className="text-button" onClick={() => setOpenId(item.seriesId)}>查看详情</button></td>
+              </tr>)}</tbody>
+            </table></div> : <Empty title="没有符合条件的课包" body="调整筛选条件，或等平台把课包授权给本机构。" />}
+            <p className="muted top-gap">
+              次数口径：平台给本机构的授权单上是「可授权次数」，每分给一名学生用掉 1 次；余额必须大于零才能分配，零次不代表不限。
+              课堂按「这节课属于哪个课包」归集，所以待上课/上课中是<strong>当前存量</strong>，已结束是近 {days} 天内的。
+            </p>
+            {allItems.some((item) => item.grantedCount > item.quotaUsed) ? <Notice tone="info">
+              有课包的「已授权学生」多于「已授权次数」——说明其中一部分许可是**演示/历史数据**（没走分配计数器）。
+              剩余次数按计数器算；要核对具体是谁，点「查看详情」。
+            </Notice> : null}
+          </Panel>
+
+          <Panel title="常用入口">
+            <div className="row-actions">
+              <button className="secondary-button" type="button" onClick={() => setTab('grant')}>学生授权中心<div className="muted">为学生添加课包</div></button>
+              <Link className="secondary-button" to="/courses">教学课程库<div className="muted">课包 / 课程 / 教学资料</div></Link>
+              <Link className="secondary-button" to="/members">机构成员管理<div className="muted">学生 / 教师 / 账号</div></Link>
+            </div>
+            <p className="muted">机构管理员，只读查看平台授予的人次库存；采购 / 增购 / 开通记录由平台侧维护。</p>
+          </Panel>
+        </>}
+      </>}
     </>}
   </>;
 }

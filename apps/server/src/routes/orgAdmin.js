@@ -1093,8 +1093,10 @@ export async function handleOrg(ctx) {
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const until = nowIso();
-    const series = rows(`SELECT series.id, series.title, series.cover_image_url, series.sort,
-        COALESCE(assignment.quota_total, 0) quota_total, COALESCE(assignment.quota_used, 0) quota_used
+    const series = rows(`SELECT series.id, series.title, series.cover_image_url, series.sort, series.version,
+        series.difficulty_level, series.age_range_min, series.age_range_max,
+        COALESCE(assignment.quota_total, 0) quota_total, COALESCE(assignment.quota_used, 0) quota_used,
+        assignment.status assignment_status, assignment.assigned_at assignment_assigned_at
       FROM course_series series
       LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()}
       WHERE series.status='PUBLISHED' AND ${orgSeriesAccessSql()}
@@ -1125,6 +1127,14 @@ export async function handleOrg(ctx) {
       const quotaUsed = Number(row0.quota_used || 0);
       return {
         seriesId: row0.id, title: row0.title, coverImageUrl: row0.cover_image_url || null,
+        // 2026-09-17（002-01/002-02 线框图）：库存列表与单课包详情要「当前版本 / 开通时间 / 权益状态」，
+        // 这三个都在 course_series 与 course_assignments 上，直接带出来，不再让前端去别处拼。
+        version: row0.version || null,
+        assignmentStatus: row0.assignment_status || null,
+        assignedAt: row0.assignment_assigned_at || null,
+        difficultyLevel: row0.difficulty_level ?? null,
+        ageRangeMin: row0.age_range_min ?? null,
+        ageRangeMax: row0.age_range_max ?? null,
         quotaTotal, quotaUsed, remaining: Math.max(0, quotaTotal - quotaUsed),
         grantedCount: grant.grantedCount, grantedStudents: grant.grantedStudents,
         pendingSessions: liveBySeries.get(`${row0.id}:PENDING`) || 0,
