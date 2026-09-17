@@ -7,6 +7,7 @@ export * from './worksState.jsx';
 export * from './classroom.jsx';
 export * from './canvasWorkspace.jsx';
 export { Icon } from './icons.jsx';
+export { materialVisual, materialToneClass } from './materialTypes.js';
 export * from './markdown.jsx';
 export * from './vibecodingProject.js';
 // 控制台设计系统（含 CSS）。组件会被 tree-shake，但 CSS 是副作用导入会留在包里，

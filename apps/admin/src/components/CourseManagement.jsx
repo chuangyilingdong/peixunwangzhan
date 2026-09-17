@@ -3,8 +3,8 @@ import { CreateCourseModal, MaterialPreview } from './CourseForms.jsx';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Empty, ErrorState, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Panel,
-  Pagination, Status, formatDate, useData,
+  Empty, ErrorState, Icon, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Panel,
+  Pagination, Status, formatDate, materialVisual, useData,
 } from '@platform/shared';
 
 // 可见范围（2026-09-16 用户口径：三值改两值）：**公开** = 官网课程广场 + 授权机构都可以；
@@ -328,8 +328,12 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
               ? MATERIAL_TYPE_OPTIONS
               : [[currentType, LEGACY_MATERIAL_TYPE_LABELS[currentType] || currentType], ...MATERIAL_TYPE_OPTIONS];
             return <article className="lesson-material-item-editor" key={material.id || material.uid || `new-${materialIndex}`}>
+              {/* 类型标记：老师在一列里扫的时候，先看这个色块就知道这条是生图框体 / 生视频框体 /
+                  提示词…（类型下拉只显示当前值，扫列表时看不出来；用户 2026-09-17 报的第 2 条）。
+                  色与学生端列表、画布上的框体是同一套。 */}
               <header className="lesson-material-item-head">
                 <span className="lesson-material-item-index">素材 {materialIndex + 1}</span>
+                <span className={`lesson-material-kind is-${materialVisual({ materialType: currentType, modality }).tone}`} title={`类型：${materialVisual({ materialType: currentType, modality }).label}`}><Icon name={materialVisual({ materialType: currentType, modality }).icon} size={13} />{materialVisual({ materialType: currentType, modality }).label}</span>
                 <select className="lesson-material-item-type" value={currentType} onChange={(event) => changeMaterialType(groupIndex, materialIndex, material.uid, event.target.value)}>{typeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
                 <button type="button" className="text-button danger-text" onClick={() => removeMaterial(groupIndex, materialIndex)}>删除</button>
               </header>

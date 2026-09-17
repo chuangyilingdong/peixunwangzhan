@@ -578,3 +578,23 @@
 
 }
 
+
+/* 素材类型标记（2026-09-17）：老师在一列素材里扫的时候先看它 —— 生图框体 / 生视频框体 /
+   生音乐框体 / 提示词 / 图片 … 一眼分开。色与学生端左侧列表、画布上的框体是同一套
+   （画布是深色主题用亮色，这里是浅色主题用对应的深色）。 */
+.lesson-material-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.lesson-material-kind.is-image { color: #0369a1; background: #e0f2fe; }
+.lesson-material-kind.is-video { color: #5b21b6; background: #ede9fe; }
+.lesson-material-kind.is-audio { color: #9d174d; background: #fce7f3; }
+.lesson-material-kind.is-prompt { color: #3f6212; background: #ecfccb; }

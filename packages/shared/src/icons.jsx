@@ -14,6 +14,12 @@ const PATHS = {
   upload: 'M12 16V4M7 9l5-5 5 5M4 18h16',
   plus: 'M12 5v14M5 12h14',
   locate: 'M12 4v3M12 17v3M4 12h3M17 12h3M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  // 素材类型图标（学生端左侧列表 + 老师端课包配置共用，见 materialVisual）
+  image: 'M4 5h16v14H4zM8.5 9a1.5 1.5 0 1 1 3 0 1.5 1.5 0 1 1-3 0M4 16l5-4 4 3 3-2 4 3',
+  video: 'M4 6h12v12H4zM16 10.5l4-2.5v8l-4-2.5z',
+  music: 'M10 17V7l9-2v10M7 17a3 3 0 1 1-6 0 3 3 0 1 1 6 0M19 15a3 3 0 1 1-6 0 3 3 0 1 1 6 0',
+  text: 'M5 7h14M5 12h10M5 17h7',
+  spark: 'M12 4l1.8 5.2L19 11l-5.2 1.8L12 18l-1.8-5.2L5 11l5.2-1.8z',
 };
 
 export function Icon({ name, size = 16, strokeWidth = 1.7, className }) {

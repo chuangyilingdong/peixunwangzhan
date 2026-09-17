@@ -1227,6 +1227,12 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .cv-item:hover:not(:disabled) { border-color: var(--cv-border-strong); background: rgb(255 255 255 / 7%); }
 .cv-item:disabled { opacity: .45; cursor: not-allowed; }
 .cv-item__icon { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 8px; color: var(--cv-primary); background: rgb(163 254 68 / 10%); font-size: 13px; }
+/* 素材类型分色：与画布上的框体同一套（.learning-node--* 的蓝 / 紫 / 粉），
+   这样「生图框体 / 生视频框体 / 生音乐框体」在列表里也是一眼分得出来。 */
+.cv-item__icon.is-image { color: #7dd3fc; background: rgb(125 211 252 / 14%); }
+.cv-item__icon.is-video { color: #c4b5fd; background: rgb(196 181 253 / 14%); }
+.cv-item__icon.is-audio { color: #f9a8d4; background: rgb(249 168 212 / 14%); }
+.cv-item__icon.is-prompt { color: var(--cv-primary); background: rgb(163 254 68 / 12%); }
 .cv-item__text { flex: 1; min-width: 0; }
 .cv-item__text strong { display: block; overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .cv-item__text small { display: block; margin-top: 2px; color: var(--cv-text-faint); font-size: 10px; line-height: 1.45; }

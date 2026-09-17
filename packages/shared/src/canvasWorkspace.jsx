@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { CanvasEditor, createCanvasTemplate } from '@platform/canvas';
 import { formatDate } from './auth.js';
 import { Icon } from './icons.jsx';
+import { materialVisual } from './materialTypes.js';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 import { useData } from './classroom.jsx';
 
@@ -549,6 +550,19 @@ export function CanvasWorkspace({ api, ...props }) {
     }));
   const capabilities = Array.isArray(project.data.capabilities) && project.data.capabilities.length ? project.data.capabilities : ['text'];
   const hasNodes = Boolean((draft || canvasSnapshot)?.nodes?.length);
+  // 当前展开的大分组：导航项的 key 就是 `group:<id 或下标>`
+  const activeGroupIndex = typeof toolPanel === 'string' && toolPanel.startsWith('group:')
+    ? materialGroups.findIndex((group, index) => `group:${group.id || index}` === toolPanel)
+    : -1;
+  const activeGroup = activeGroupIndex >= 0 ? materialGroups[activeGroupIndex] : null;
+  // 画布面板上那个「✦ 生图 · 1k · …」的配置芯片点进来时：优先打开**有生成框体**的那一组，
+  // 没有就打开第一组（以前是打开笼统的「素材」面板，现在没有那一层了）。
+  const openMaterialsPanel = () => {
+    setSidebarCollapsed(false);
+    const index = materialGroups.findIndex((group) => (group.materials || []).some((item) => item.materialType === 'GENERATION_BOX'));
+    const target = index >= 0 ? index : 0;
+    setToolPanel(materialGroups.length ? `group:${materialGroups[target].id || target}` : 'materials');
+  };
 
   return <main className="cv-shell">
     <header className="cv-topbar">
@@ -568,39 +582,69 @@ export function CanvasWorkspace({ api, ...props }) {
           <button type="button" className="cv-sidebar__toggle" aria-label={sidebarCollapsed ? '展开工具' : '收起工具'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开工具' : '收起工具'} onClick={() => setSidebarCollapsed((value) => !value)}><Icon name="sidebar" size={15} /></button>
         </div>
         <div className="cv-nav">
-          {[['materials', 'grid', '素材'], ['capabilities', 'sliders', '能力']].map(([key, icon, label]) => <button key={key} type="button" className={`cv-nav-item ${toolPanel === key ? 'is-active' : ''}`} title={label} onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === key ? null : key)); }}><i><Icon name={icon} size={15} /></i><span>{label}</span></button>)}
+          {/* 导航就是**大分组本身**（用户 2026-09-17 口径：取消「素材」这一层大类 ——
+              以前是「素材」里再叠「图片模块 / 提示词模块 …」，素材一多就得在一个长列表里滚着找）。
+              现在点哪个分组只看哪个分组的素材，列表短、一眼到底。 */}
+          {materialGroups.map((group, index) => {
+            const key = `group:${group.id || index}`;
+            const count = (group.materials || []).length;
+            return <button key={key} type="button" className={`cv-nav-item ${toolPanel === key ? 'is-active' : ''}`} title={`${group.title || `素材组 ${index + 1}`}（${count} 个）`} onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === key ? null : key)); }}><i><Icon name="grid" size={15} /></i><span>{group.title || `素材组 ${index + 1}`}</span></button>;
+          })}
+          {localMaterials.length ? <button type="button" className={`cv-nav-item ${toolPanel === 'local' ? 'is-active' : ''}`} title={`本地素材（${localMaterials.length} 个）`} onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === 'local' ? null : value)); }}><i><Icon name="upload" size={15} /></i><span>本地素材</span></button> : null}
+          {materialGroups.length ? null : <button type="button" className={`cv-nav-item ${toolPanel === 'materials' ? 'is-active' : ''}`} title="课堂素材" onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === 'materials' ? null : value)); }}><i><Icon name="grid" size={15} /></i><span>课堂素材</span></button>}
+          <button type="button" className={`cv-nav-item ${toolPanel === 'capabilities' ? 'is-active' : ''}`} title="能力" onClick={() => { setSidebarCollapsed(false); setToolPanel((value) => (value === 'capabilities' ? null : value)); }}><i><Icon name="sliders" size={15} /></i><span>能力</span></button>
         </div>
         {toolPanel && !sidebarCollapsed ? <div className="cv-panel">
-          {toolPanel === 'materials' ? <>
-            <div className="cv-panel__head"><div><strong>课堂素材</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
-            {localMaterials.length ? <div className="cv-group"><h4>本地素材</h4>{localMaterials.map((item) => <button className="cv-item" key={item.id} type="button" disabled={!editable} title={editable ? '定位到画布上的这个框体' : '作品已提交，画布不能再修改'} onClick={() => setFocusRequest({ id: item.id, token: Date.now() })}>
-              <span className="cv-item__icon">{item.kind === '视频' ? '▶' : item.kind === '音频' ? '♫' : '▧'}</span>
+          {activeGroup ? <>
+            <div className="cv-panel__head"><div><strong>{activeGroup.title || `素材组 ${activeGroupIndex + 1}`}</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
+            <div className="cv-group">
+              {(activeGroup.materials || []).map((material) => {
+                const box = material.materialType === 'GENERATION_BOX' ? boxForMaterial(material) : null;
+                // 素材类型决定图标与色调（与画布上框体那套蓝 / 紫 / 粉一致），
+                // 于是一眼能分出这是生图框体、生视频框体还是生音乐框体（用户 2026-09-17 报的第 2 条）。
+                const visual = materialVisual({ materialType: material.materialType, modality: box?.modality });
+                if (box) {
+                  const slotType = String(box.modality || '').toLowerCase();
+                  const enabled = capabilities.includes(slotType);
+                  const running = boxRunning(box.id);
+                  const onCanvas = boxOnCanvas(box.id);
+                  const blocked = !editable ? '作品已提交，画布不能再修改' : (!enabled ? '本课未开放该 AI 能力' : '');
+                  const state = onCanvas ? '已在画布上' : (running ? '生成中…' : (boxSucceeded(box.id) ? '已生成，点击接回画布' : '未生成'));
+                  return <button className="cv-item" key={material.id} type="button" disabled={Boolean(blocked)} title={blocked || (onCanvas ? '已在画布上：点击定位到这个框体' : undefined)} onClick={() => addBoxToCanvas(box)}>
+                    <span className={`cv-item__icon is-${visual.tone}`}><Icon name={visual.icon} size={15} /></span>
+                    <span className="cv-item__text"><strong>{material.title}</strong><small>{visual.label} · {boxParamsLabel(box)} · {state}{blocked ? ' · ' + blocked : ''}</small></span>
+                    <b className="cv-item__plus">{onCanvas ? '◎' : '＋'}</b>
+                  </button>;
+                }
+                // 提示词素材：全是「素材1 / 素材2」时分不清哪条是哪条（用户 2026-09-17 报的第 3 条），
+                // 所以把内容摘要放在副标题上，鼠标悬停看全文。
+                const promptText = String(material.snapshot?.content || material.description || '').replace(/\s+/g, ' ').trim();
+                const subtitle = material.materialType === 'PROMPT'
+                  ? (promptText ? (promptText.length > 18 ? `${promptText.slice(0, 18)}…` : promptText) : '点击后选择插入到哪个框体')
+                  : (material.description || '点击后加入画布');
+                const hover = material.materialType === 'PROMPT' && promptText
+                  ? `${material.title || '提示词'}｜${promptText.length > 300 ? `${promptText.slice(0, 300)}…` : promptText}`
+                  : (editable ? undefined : '作品已提交，画布不能再修改');
+                return <button className="cv-item" key={material.id || material.title} type="button" disabled={!editable} title={hover} onClick={() => material.materialType === 'PROMPT' ? openPromptInsert(material) : addLessonMaterialToCanvas(material)}>
+                  <span className={`cv-item__icon is-${visual.tone}`}><Icon name={visual.icon} size={15} /></span>
+                  <span className="cv-item__text"><strong>{material.title}</strong><small>{editable ? subtitle : '作品已提交，画布不能再修改'}</small></span>
+                  <b className="cv-item__plus">＋</b>
+                </button>;
+              })}
+              {(activeGroup.materials || []).length ? null : <p className="cv-empty">这一组还没有素材。</p>}
+            </div>
+          </> : null}
+          {toolPanel === 'local' ? <>
+            <div className="cv-panel__head"><div><strong>本地素材</strong><small>你从电脑拖进画布的图片 / 视频 / 音频</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
+            <div className="cv-group">{localMaterials.map((item) => <button className="cv-item" key={item.id} type="button" disabled={!editable} title={editable ? '定位到画布上的这个框体' : '作品已提交，画布不能再修改'} onClick={() => setFocusRequest({ id: item.id, token: Date.now() })}>
+              <span className={`cv-item__icon is-${item.kind === '视频' ? 'video' : item.kind === '音频' ? 'audio' : 'image'}`}><Icon name={item.kind === '视频' ? 'video' : item.kind === '音频' ? 'music' : 'image'} size={15} /></span>
               <span className="cv-item__text"><strong>{item.title}</strong><small>{item.kind} · {item.uploading ? '上传中…' : '本地素材 · 已在画布上'}</small></span>
               <b className="cv-item__plus">◎</b>
-            </button>)}</div> : null}
-            {materialGroups.length ? materialGroups.map((group) => <div className="cv-group" key={group.id || group.title}><h4>{group.title}</h4>{(group.materials || []).map((material) => {
-              const box = material.materialType === 'GENERATION_BOX' ? boxForMaterial(material) : null;
-              if (box) {
-                const slotType = String(box.modality || '').toLowerCase();
-                const enabled = capabilities.includes(slotType);
-                const running = boxRunning(box.id);
-                const onCanvas = boxOnCanvas(box.id);
-                const label = slotType === 'image' ? '生图' : slotType === 'video' ? '生视频' : slotType === 'music' ? '音乐' : '文字';
-                const icon = slotType === 'image' ? '▧' : slotType === 'video' ? '▶' : slotType === 'music' ? '♫' : '✎';
-                const blocked = !editable ? '作品已提交，画布不能再修改' : (!enabled ? '本课未开放该 AI 能力' : '');
-                const state = onCanvas ? '已在画布上' : (running ? '生成中…' : (boxSucceeded(box.id) ? '已生成，点击接回画布' : '未生成'));
-                return <button className="cv-item" key={material.id} type="button" disabled={Boolean(blocked)} title={blocked || (onCanvas ? '已在画布上：点击定位到这个框体' : undefined)} onClick={() => addBoxToCanvas(box)}>
-                  <span className="cv-item__icon">{icon}</span>
-                  <span className="cv-item__text"><strong>{material.title}</strong><small>{label} · {boxParamsLabel(box)} · {state}{blocked ? ' · ' + blocked : ''}</small></span>
-                  <b className="cv-item__plus">{onCanvas ? '◎' : '＋'}</b>
-                </button>;
-              }
-              return <button className="cv-item" key={material.id || material.title} type="button" disabled={!editable} title={editable ? undefined : '作品已提交，画布不能再修改'} onClick={() => material.materialType === 'PROMPT' ? openPromptInsert(material) : addLessonMaterialToCanvas(material)}>
-                <span className="cv-item__icon">{material.materialType === 'IMAGE' ? '▧' : material.materialType === 'VIDEO' ? '▶' : '✎'}</span>
-                <span className="cv-item__text"><strong>{material.title}</strong><small>{editable ? (material.materialType === 'PROMPT' ? '点击后选择插入到哪个框体' : (material.description || '点击后加入画布')) : '作品已提交，画布不能再修改'}</small></span>
-                <b className="cv-item__plus">＋</b>
-              </button>;
-            })}</div>) : (localMaterials.length ? null : <p className="cv-empty">老师还没有为本节课配置素材；把电脑里的图片/视频/音频直接拖进画布，也会出现在这里。</p>)}
+            </button>)}</div>
+          </> : null}
+          {toolPanel === 'materials' ? <>
+            <div className="cv-panel__head"><div><strong>课堂素材</strong><small>{editable ? '点框体或素材加入画布' : '作品已提交，画布不能再修改'}</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
+            <p className="cv-empty">老师还没有为本节课配置素材；把电脑里的图片/视频/音频直接拖进画布，也会出现在这里。</p>
           </> : null}
           {toolPanel === 'capabilities' ? <>
             <div className="cv-panel__head"><div><strong>本课开放能力</strong><small>未勾选的 AI 能力不会出现在画布中</small></div><button type="button" className="cv-sidebar__close" onClick={() => setToolPanel(null)}><Icon name="close" size={14} /></button></div>
@@ -617,7 +661,7 @@ export function CanvasWorkspace({ api, ...props }) {
             title={saveError ? `保存失败：${saveError}（改动还没写进服务器，先别刷新；请把这条信息发给老师）` : undefined}
           >{saveError ? `保存失败：${saveError}` : changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
         </div>
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={() => { setSidebarCollapsed(false); setToolPanel('materials'); }} onChange={setDraft} focusRequest={focusRequest} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${message.includes('失败') || message.includes('错误') ? 'is-error' : ''}`}>{message}</div>}

@@ -20,6 +20,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
+// 画幅档位的小示意图尺寸（纯函数单独放，守卫才跑得到；.jsx 在 node 里导不进来）
+import { ratioThumbSize } from './ratioThumb.js';
 
 const CanvasActionsContext = createContext(null);
 // 受鉴权保护的素材地址（/api/**）不能直接塞进 <img>/<video>/<audio> 的 src：那些请求带不了
@@ -566,7 +568,7 @@ function SlotParamPickers({ id, data }) {
   if (readOnly || !data.slotType || !options) return null;
   const student = data.studentParams || {};
   const rows = [];
-  if (!data.aspectRatio && Array.isArray(options.aspectRatios) && options.aspectRatios.length) rows.push({ key: 'aspectRatio', label: '画幅', items: options.aspectRatios.map((value) => ({ value, label: value })) });
+  if (!data.aspectRatio && Array.isArray(options.aspectRatios) && options.aspectRatios.length) rows.push({ key: 'aspectRatio', label: '画幅', ratio: true, items: options.aspectRatios.map((value) => ({ value, label: value })) });
   if (!data.resolution && Array.isArray(options.resolutions) && options.resolutions.length) rows.push({ key: 'resolution', label: '清晰度', items: options.resolutions.map((value) => ({ value, label: value })) });
   const durationOpen = data.slotType === 'video' && (data.durationSeconds === null || data.durationSeconds === undefined);
   if (durationOpen && Array.isArray(options.durations) && options.durations.length) rows.push({ key: 'durationSeconds', label: '时长', items: options.durations.map((value) => ({ value: String(value), label: `${value} 秒` })) });
@@ -574,11 +576,17 @@ function SlotParamPickers({ id, data }) {
   if (!rows.length && !audioOpen) return null;
   const update = (key, value) => updateNode(id, { studentParams: { ...student, [key]: value } });
   return <div className="learning-node__seg-rows nodrag">
-    {rows.map((row) => <div className="learning-node__seg-row" key={row.key}>
+    {rows.map((row) => <div className={`learning-node__seg-row${row.ratio ? ' is-ratio' : ''}`} key={row.key}>
       <span className="learning-node__seg-label">{row.label}</span>
       <div className="learning-node__seg" role="group" aria-label={`${data.title || '框体'}${row.label}`}>
-        <button type="button" className={student[row.key] ? '' : 'is-on'} title={`按课程默认（${row.items[0].label}）`} onClick={() => update(row.key, '')}>自动</button>
-        {row.items.map((item) => <button type="button" key={item.value} className={String(student[row.key]) === item.value ? 'is-on' : ''} onClick={() => update(row.key, item.value)}>{item.label}</button>)}
+        <button type="button" className={student[row.key] ? '' : 'is-on'} title={`按课程默认（${row.items[0].label}）`} onClick={() => update(row.key, '')}>{row.ratio ? <i className="learning-node__seg-thumb is-auto" aria-hidden="true" /> : null}自动</button>
+        {row.items.map((item) => {
+          const thumb = row.ratio ? ratioThumbSize(item.value) : null;
+          return <button type="button" key={item.value} className={String(student[row.key]) === item.value ? 'is-on' : ''} onClick={() => update(row.key, item.value)}>
+            {row.ratio ? (thumb ? <i className="learning-node__seg-thumb" style={{ width: `${thumb.width}px`, height: `${thumb.height}px` }} aria-hidden="true" /> : null) : null}
+            {item.label}
+          </button>;
+        })}
       </div>
     </div>)}
     {audioOpen ? <div className="learning-node__seg-row">
