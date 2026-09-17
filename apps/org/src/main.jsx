@@ -166,12 +166,46 @@ function Dashboard({ api }) {
   const seriesItems = seriesBox.data?.items || [];
   const seriesTotals = seriesBox.data?.totals || {};
   return <>
-    <PageHeader eyebrow={isAdmin ? '机构经营' : '教师教学'} title={data.org.name} description={data.scope?.description || '实时掌握课包分配、课堂与算力消耗。'} actions={<button className="secondary-button" onClick={() => { refresh(); seriesBox.refresh(); }}>刷新看板</button>} />
+    <PageHeader eyebrow="001-01" title="机构工作台" description="机构运营管理中心"
+      actions={<button className="secondary-button" onClick={() => { refresh(); seriesBox.refresh(); }}>刷新看板</button>} />
+    <Notice tone="info">
+      机构工作台做机构运营总览，不代替教师的课堂执行。
+      <div className="muted">课堂的创建、进入与开课在「我的课堂」和教师工作台里；本页的课堂信息只作运营观察。</div>
+    </Notice>
     <div className="metrics">
-      <MetricCard label="已授权课包" value={seriesTotals.seriesCount ?? 0} hint="平台授权给本机构、在有效期内的课包" />
-      <MetricCard label="已分配 / 可授权" value={`${seriesTotals.quotaUsed ?? 0} / ${seriesTotals.quotaTotal ?? 0}`} hint={`剩余 ${seriesTotals.remaining ?? 0} 次`} tone="teal" />
-      <MetricCard label="已分配学员" value={seriesTotals.grantedStudents ?? 0} hint={isAdmin ? `本机构 ${data.students} 名学员 · ${data.teachers} 位教师` : '当前持有有效许可的学员'} tone="orange" />
-      <MetricCard label="进行中的课堂" value={seriesTotals.activeSessions ?? 0} hint={`另有 ${seriesTotals.pendingSessions ?? 0} 个课堂待上课 · 学生作品 ${data.works}`} tone="pink" />
+      <MetricCard label="学生总数" value={data.students ?? 0} hint="本机构学生" />
+      <MetricCard label="教师总数" value={data.teachers ?? 0} hint="本机构教师" tone="teal" />
+      <MetricCard label="待上课课堂" value={data.pendingSessions ?? 0} hint="机构范围" tone="orange" />
+      <MetricCard label="上课中课堂" value={data.activeSessions ?? 0} hint="机构范围" />
+      <MetricCard label="已开通课包" value={seriesTotals.seriesCount ?? 0} hint="当前有效" tone="pink" />
+    </div>
+    <div className="split">
+      <Panel title="需要关注">
+        <div className="card-list">
+          <Notice tone={data.attention?.exhaustedSeries ? 'warning' : 'success'}>
+            <strong>课包剩余人次不足</strong> · {data.attention?.exhaustedSeries ?? 0} 个课包
+            <div className="muted">进入「机构课包库存与学生授权」处理库存与授权业务。这里只数**已经用尽**的课包 —— 平台没有定义「不足」的阈值，不为机构发明一个。</div>
+          </Notice>
+          <Notice tone={data.attention?.restrictedAccounts ? 'warning' : 'success'}>
+            <strong>受限账号</strong> · {data.attention?.restrictedAccounts ?? 0} 个账号
+            <div className="muted">进入「机构成员管理」处理账号启停。</div>
+          </Notice>
+          <Notice tone={data.activeSessions ? 'info' : 'success'}>
+            <strong>当前上课中课堂</strong> · {data.activeSessions ?? 0} 个课堂
+            <div className="muted">仅运营提示，本页不提供课堂操作。课包总人次由平台分配，机构工作台不提供调整入口。</div>
+          </Notice>
+          {alerts.map((alert) => <Notice key={alert.code} tone={alert.level || 'info'}><strong>{alert.title}</strong><div>{alert.message}</div></Notice>)}
+        </div>
+      </Panel>
+      <Panel title="机构运营摘要">
+        <div className="card-list">
+          <div className="row-actions"><span className="muted">本月新增学生</span><strong>{data.month?.newStudents ?? 0} 人</strong></div>
+          <div className="row-actions"><span className="muted">本月新增教师</span><strong>{data.month?.newTeachers ?? 0} 人</strong></div>
+          <div className="row-actions"><span className="muted">本月新增课包授权</span><strong>{data.month?.grants ?? 0} 次</strong></div>
+          <div className="row-actions"><span className="muted">本月已结束课堂</span><strong>{data.month?.endedSessions ?? 0} 个</strong></div>
+        </div>
+        <Notice tone="info">本区域无课堂创建 / 进入 / 开始 / 结束操作。</Notice>
+      </Panel>
     </div>
     <Panel title="统计口径">
       <div className="row-actions"><Status value={data.org.status} /><span className="muted">{data.scope?.description}</span><span className="muted">课堂：待上课 {data.breakdown?.pendingSessions ?? data.pendingSessions ?? 0} · 上课中 {data.breakdown?.activeSessions ?? data.activeSessions}</span></div>

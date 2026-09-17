@@ -192,6 +192,19 @@ export async function handleOrg(ctx) {
       // 2026-09-13（P4 删积分）：原来这里还有一条「积分余额为零」的预警，积分废弃后删除。
     }
     if (isTeacher) normalizedOrg.teacherUsedSeats = null;
+    // 2026-09-17（001-01 机构工作台线框图）：补「机构运营摘要」要的**本月**口径与两个关注项。
+    // 只对机构管理员算；教师视图一律 0（线框图也写明教师工作台不展示机构运营数据）。
+    const monthStart = `${nowIso().slice(0, 7)}-01`;
+    const monthCount = (sql, params) => (isTeacher ? 0 : count(sql, params));
+    const monthNewStudents = monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role=\'STUDENT\' AND deleted_at IS NULL AND created_at>=?', [currentOrgId, monthStart]);
+    const monthNewTeachers = monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role=\'TEACHER\' AND deleted_at IS NULL AND created_at>=?', [currentOrgId, monthStart]);
+    const monthGrants = monthCount('SELECT COUNT(*) n FROM student_course_grants WHERE org_id=? AND granted_at>=?', [currentOrgId, monthStart]);
+    const monthEndedSessions = monthCount("SELECT COUNT(*) n FROM class_sessions WHERE org_id=? AND status='ENDED' AND ended_at>=?", [currentOrgId, monthStart]);
+    // 「需要关注」的两条（合约/席位那两条仍在 alerts 里）：
+    const restrictedAccounts = monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role IN (\'STUDENT\',\'TEACHER\') AND deleted_at IS NULL AND status<>\'ACTIVE\'', [currentOrgId]);
+    // ⚠️ 线框图写的是「剩余人次不足」，但平台没定义「不足」的阈值 —— 这里只数**已经用尽**的，
+    //    不替平台发明一个阈值（宁可少报，也不给机构一个凭空的门槛）。
+    const exhaustedSeries = monthCount('SELECT COUNT(*) n FROM course_assignments WHERE org_id=? AND status=\'ACTIVE\' AND quota_total>0 AND quota_used>=quota_total', [currentOrgId]);
     return {
       scope: {
         role: auth.user.role,
@@ -203,6 +216,8 @@ export async function handleOrg(ctx) {
       org: normalizedOrg, students, teachers, activeClasses, activeSessions, pendingSessions, works, pendingWorks, usage7,
       unreadNotifications,
       recentSessions, pendingWorkItems, unreadNotificationItems, alerts,
+      month: { newStudents: monthNewStudents, newTeachers: monthNewTeachers, grants: monthGrants, endedSessions: monthEndedSessions },
+      attention: { exhaustedSeries, restrictedAccounts },
       breakdown: { students, activeClasses, activeSessions, pendingSessions, works: workBreakdown, pendingWorks, usage7 },
     };
   }
