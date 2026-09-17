@@ -71,9 +71,23 @@ docker run --rm -p 18080:8080 \
   -e EDGE_TICKET=<平台签发的短时票据> \
   -e GATEWAY_BASE_URL=http://<我们网关>/api/gateway/v1 \
   -e PLATFORM_GATEWAY_KEY=<网关凭据> \
+  -e DEEPSEEK_SEARCH_BASE_URL=http://<我们网关>/api/gateway/v1/search \
+  -e DEEPSEEK_API_KEY=<网关凭据同上> \
   dsh-student:local
 # 学生从 http://<入口>/?t=<票据> 进入
 ```
+
+### 为什么有两个 `DEEPSEEK_*` 变量
+
+dsh 的**网页搜索**插件（`@deepseek-ai/dsh-web-search-deepseek`）不读 `GATEWAY_BASE_URL`：
+
+- 它调的**不是搜索接口**，而是 **Anthropic 协议的 `/messages`**（搜索是模型一跳里的服务端
+  工具 `web_search_20250305`）；端点来自 `DEEPSEEK_SEARCH_BASE_URL`，它自己拼 `/messages`。
+- 它认的密钥变量名是 `DEEPSEEK_API_KEY`（源码写死），与聊天那条路**不复用** base、只复用 key。
+
+⚠️ 这两个变量给的都必须是**平台的网关地址 + 运行时密钥**（`PLATFORM_GATEWAY_KEY` 那把，
+短时、绑课堂），**不是**渠道真密钥 —— 学生读得到自己的进程环境，真密钥导出即等于泄漏 + 绕过账本。
+网关那一跳会把它换成真密钥（见 `apps/server/src/routes/runtimeSearchGateway.js`）。
 
 ## 入口闸门（已实测）
 
