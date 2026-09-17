@@ -102,6 +102,48 @@ for (const studentId of grantedIds) {
   db.prepare("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_at) VALUES('assign-ui-materials',?,?,'ACTIVE',?)").run(seriesId, teacher.org_id, now);
   console.log('教学素材夹具：series=', seriesId, ' 快照里的票据已写死为过期');
 }
+
+// ── 002-06 采购 / 增购 / 开通记录夹具（2026-09-17）─────────────────────────
+// 批次表里**没有**「初次开通 / 增购 / 平台调整」这三列，002-06 是按**批次在同一张授权单里的
+// 序号**推出来的。所以这里刻意造出三种：同一张授权单的两条 PURCHASE（第一条=初次开通、
+// 第二条=增购）+ 一条 LEGACY_OPENING_BALANCE（=平台调整）。
+// 守卫要能证明这个分类**是算出来的**，而不是页面上写死的文案。
+{
+  // 挂在上面那个素材课包的授权单上（seriesId 是那个块的局部变量，这里用同一个字面量并核对它真在）
+  const batchSeriesId = 'series-ui-materials';
+  assert.ok(db.prepare('SELECT id FROM course_series WHERE id=?').get(batchSeriesId), 'fixture: 素材课包不在，批次夹具挂不上');
+  const insertBatch = db.prepare(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`);
+  // ⚠️ 表上的 CHECK：LEGACY_OPENING_BALANCE 必须金额与币种都为 NULL；PURCHASE 必须两者都有值
+  insertBatch.run('batch-ui-1', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'PURCHASE', 10, 100000, 'CNY', 'PAID', 'P111-ORDER-1', null, 'p111-batch-1', teacher.id, '2026-09-01T02:00:00.000Z', '2026-09-01T02:00:00.000Z');
+  insertBatch.run('batch-ui-2', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'PURCHASE', 5, 50000, 'CNY', 'PAID', null, 'P111-CONTRACT-2', 'p111-batch-2', teacher.id, '2026-09-10T02:00:00.000Z', '2026-09-10T02:00:00.000Z');
+  insertBatch.run('batch-ui-3', 'assign-ui-materials', teacher.org_id, batchSeriesId, 'LEGACY_OPENING_BALANCE', 3, null, null, 'PAID', null, null, 'p111-batch-3', null, '2026-08-01T02:00:00.000Z', '2026-08-01T02:00:00.000Z');
+  console.log('002-06 夹具：3 条批次（初次开通 / 增购 / 平台调整各一条）');
+}
+
+// ── 002-04「正式学习记录」的正例夹具（2026-09-17）───────────────────────────
+// 只造「未产生」是不够的：那段判定 SQL 就算坏成**永远返回空**，守卫照样绿 ——
+// 正面分支根本没被验到。所以这里造一个真产生了正式学习记录的样本
+// （口径见交接文档 4.6「守卫要反向自检才可信」）。
+// 判定条件是「该学生在属于这个课包的课堂上，有过成功且非 mock 的 AI 调用」，
+// 于是这里造：一节该课包的课堂 + 一条 SUCCESS 且模型名不含 MOCK 的调用记录。
+{
+  const learnedAt = new Date().toISOString();
+  // ⚠️ 必须用这个课包下**另一节**课时：如果复用了待上课堂那节课，
+  // 「已完成当前课堂对应课程」的判定会让学生从候选池掉出去，
+  // 把「共 3 条课堂记录」「3 名学生资格仍有效」这些别的断言一起带红（第一版就踩了）。
+  const learnedLessonId = 'lesson-ui-learned';
+  db.prepare(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
+    VALUES(?,?,'第 2 课 · 学习记录样本','',99,'PUBLISHED',45,'CANVAS','{}',?,?)`).run(learnedLessonId, lesson.series_id, learnedAt, learnedAt);
+  // teacher_id 特意留空：这节课只是「学习记录」的容器，不该出现在教师自己的课堂列表里
+  // （挂了 teacher.id 就会把「共 3 条课堂记录」变成 4，污染教师视角的断言）。
+  db.prepare(`INSERT INTO class_sessions(id,title,org_id,lesson_id,series_id,teacher_id,status,delivery_mode,started_at,created_at,updated_at)
+    VALUES(?,'002-04 学习记录样本',?,?,?,NULL,'ENDED','CANVAS',?,?,?)`)
+    .run('csession-ui-learned', teacher.org_id, learnedLessonId, lesson.series_id, learnedAt, learnedAt, learnedAt);
+  db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,cost_fen,created_at) VALUES (?,?,?,?,NULL,'TEXT','gpt-4o-mini',0,'SUCCESS',100,?)")
+    .run('usage-ui-learned', teacher.org_id, students[0].id, 'csession-ui-learned', learnedAt);
+  console.log('002-04 学习记录夹具：', students[0].name, '在', lesson.series_id, '的第 2 课上有一条成功调用（正面分支）');
+}
 db.close();
 
 const apiPort = 18787;
@@ -412,6 +454,145 @@ try {
   await page.waitForTimeout(500);
   await page.getByRole('button', { name: '关闭预览' }).click().catch(() => {});
   await page.waitForTimeout(400);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 002-03 / 002-04 / 002-04B / 002-06：**机构管理员**视角（2026-09-17 补）
+  //
+  // 在这之前 p111 只有教师身份，机构端那几屏只能手点 —— 所以它们没有守卫。
+  // 这里用**独立的浏览器上下文**跑机构管理员（不与教师会话抢 storage），
+  // 让 002 这一套进自动验收。
+  // ══════════════════════════════════════════════════════════════════════════
+  const orgContext = await browser.newContext({ viewport: { width: 1480, height: 1000 }, deviceScaleFactor: 1 });
+  const orgPage = await orgContext.newPage();
+  orgPage.on('pageerror', (error) => pageErrors.push(`pageerror(org): ${String(error.message).slice(0, 300)}`));
+  orgPage.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (/Failed to load resource/.test(message.text())) return;
+    pageErrors.push(`console(org): ${message.text().slice(0, 200)}`);
+  });
+  orgPage.on('response', (response) => { if (response.status() >= 400) badRequests.push(`${response.status()} ${response.url()}`); });
+  const orgExpect = async (label, texts) => {
+    const body = await orgPage.locator('body').innerText();
+    for (const text of texts) { if (!body.includes(text)) problems.push(`${label}：页面上找不到「${text}」`); }
+  };
+  const orgShot = async (name) => { await orgPage.screenshot({ path: path.join(shotDir, `${name}.png`), fullPage: true }); };
+  const orgSettle = async () => { await orgPage.waitForLoadState('networkidle').catch(() => {}); await orgPage.waitForTimeout(350); };
+  // 读一张指标卡的数字：卡片的 DOM 是「标签\n数值\n说明」，所以取夹在两个换行之间的整数。
+  // 用它来断言「卡片是按真实数据算的」——只断言标签存在的话，写死的数字也能过。
+  const cardValue = async (label) => {
+    const text = await orgPage.locator('.metric-card', { hasText: label }).first().innerText();
+    const match = text.match(/\n(-?\d+)\n/);
+    return match ? Number(match[1]) : null;
+  };
+
+  await orgPage.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
+  await orgSettle();
+  await orgPage.getByRole('button', { name: /机构管理员/ }).click();
+  await orgPage.getByRole('button', { name: /进入工作台/ }).click();
+  await orgPage.waitForURL(/\/dashboard/, { timeout: 20000 }).catch(() => {});
+  await orgSettle();
+
+  // ── 002-01：四个页签都在（机构管理员能看到入口）
+  await orgPage.goto(`${base}/series-overview`, { waitUntil: 'domcontentloaded' });
+  await orgSettle();
+  await orgExpect('002-01 库存列表', ['机构课包库存', '课包库存', '学生授权中心', '采购与开通记录', '为学生添加课包']);
+  await orgShot('20-org-series-overview');
+
+  // ── 002-03 学生授权中心：4 张卡必须**按真实数据算**
+  // 夹具里正好 5 名学生有许可（grantedIds），所以「已有课包学生」必须等于 5。
+  await orgPage.locator('.tab', { hasText: '学生授权中心' }).click();
+  await orgSettle();
+  await orgExpect('002-03 学生授权中心', [
+    '学生总数', '已有课包学生', '暂无课包学生', '本月新增授权',
+    '账号状态', '授权情况', '授权概览', '查看授权',
+    '学生', '登录账号', '已授权课包数', '最近授权时间',
+  ]);
+  const totalStudents = await cardValue('学生总数');
+  const withGrants = await cardValue('已有课包学生');
+  const withoutGrants = await cardValue('暂无课包学生');
+  if (withGrants !== grantedIds.length) problems.push(`002-03：「已有课包学生」期望 ${grantedIds.length}（夹具里正好这么多人有许可），实际 ${withGrants} —— 卡片像是写死的`);
+  if (typeof totalStudents === 'number' && withGrants + withoutGrants !== totalStudents) problems.push(`002-03：卡片算术对不上（总数 ${totalStudents} ≠ 已有 ${withGrants} + 暂无 ${withoutGrants}）`);
+  await orgShot('21-org-student-grant-center');
+
+  // ── 002-04 学生授权详情：从有许可的学生那一行下钻
+  const grantedName = students[0].name;
+  await orgPage.locator('tr', { hasText: grantedName }).first().getByRole('button', { name: '查看授权' }).click();
+  await orgSettle();
+  await orgExpect('002-04 学生授权详情', [
+    '学生授权详情', '学生授权中心', '当前授权课包数', '已产生正式学习记录', '待激活', '本版本不区分这一态',
+    '当前课包授权', '版本', '授权时间', '授权状态', '正式学习记录', '已产生',
+    '授权规则', '本页负责', '本页不包含',
+  ]);
+  // 正面分支必须被验到：夹具给这名学生造了一条「成功且非 mock」的调用，
+  // 所以卡片与表格都该是「已产生」。只断言「未产生」等于没验（SQL 坏成永远返回空也是绿的）。
+  const learnedCount = await cardValue('已产生正式学习记录');
+  if (learnedCount !== 1) problems.push(`002-04：「已产生正式学习记录」期望 1（夹具给 ${grantedName} 造了一条成功调用），实际 ${learnedCount} —— 判定 SQL 可能永远返回空`);
+  if (!(await orgPage.locator('table tbody tr', { hasText: '已产生' }).count())) {
+    problems.push('002-04：课包授权表里没有任何一行显示「已产生」—— 正面分支没走通');
+  }
+  // 机构端**没有取消授权权限**（用户 2026-09-17 口径）：这一页不能出现取消类的可点入口。
+  // 注意：文案里出现「取消授权只有平台端有权限」是说明，不算违规 —— 所以这里断言的是**按钮**。
+  if (await orgPage.getByRole('button', { name: /取消授权|取消资格/ }).count()) {
+    problems.push('002-04：出现了「取消授权 / 取消资格」按钮 —— 机构端没有取消权限（用户口径），不该给机构这个入口');
+  }
+  await orgShot('22-org-student-grant-detail');
+
+  // ── 002-04B 单授权详情抽屉
+  await orgPage.getByRole('button', { name: '查看授权' }).first().click();
+  await orgPage.waitForTimeout(500);
+  await orgExpect('002-04B 单授权详情', ['单授权详情', '授权对象', '授权信息', '操作账号', '来源', '占用人次', '正式学习记录', '页面边界', '关闭']);
+  if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格/ }).count()) {
+    problems.push('002-04B：抽屉里出现了取消类按钮 —— 机构端没有取消权限（用户口径）');
+  }
+  await orgShot('23-org-grant-drawer');
+  await orgPage.locator('.drawer-close').click().catch(() => {});
+  await orgPage.waitForTimeout(300);
+
+  // ── 002-04 空分支：筛出「暂无课包」的学生，详情页要给空态而不是崩掉
+  await orgPage.getByRole('button', { name: '← 返回学生授权中心' }).click();
+  await orgSettle();
+  await orgPage.locator('form.filter-form select').nth(1).selectOption('WITHOUT');
+  await orgPage.getByRole('button', { name: '查询' }).first().click();
+  await orgSettle();
+  const noGrantRow = orgPage.locator('table tbody tr').first();
+  if (await noGrantRow.count()) {
+    await noGrantRow.getByRole('button', { name: '查看授权' }).click();
+    await orgSettle();
+    await orgExpect('002-04 暂无课包的详情', ['该学生还没有任何课包授权']);
+    await orgShot('24-org-student-grant-empty');
+  } else {
+    problems.push('002-03：「授权情况 = 暂无课包」筛选后一行都没有 —— 夹具里应有 2 名没课包的学生');
+  }
+
+  // ── 002-06 采购 / 增购 / 开通记录：三分类是**按批次序号算出来的**，不是写死的文案
+  await orgPage.locator('.tab', { hasText: '采购与开通记录' }).click();
+  await orgSettle();
+  await orgExpect('002-06 采购与开通记录', [
+    '采购 / 增购 / 开通记录', '业务记录', '初次开通', '增购', '平台调整',
+    '业务时间', '业务类型', '人次数量', '业务来源', '经办', '备注', '页面边界',
+  ]);
+  const firstOpening = await cardValue('初次开通');
+  const additional = await cardValue('增购');
+  const adjustment = await cardValue('平台调整');
+  const batchTotal = await cardValue('业务记录');
+  // 卡片之间必须自洽（合计 = 三类之和）。**不写死总数** —— 种子库里本来就可能有别的批次（实测有），
+  // 写死会让守卫因为夹具之外的数据变红，那种红是噪音。
+  if (batchTotal !== firstOpening + additional + adjustment) {
+    problems.push(`002-06：卡片加起来对不上（合计 ${batchTotal} ≠ 初次开通 ${firstOpening} + 增购 ${additional} + 平台调整 ${adjustment}）`);
+  }
+  if (!(firstOpening >= 1 && additional >= 1 && adjustment >= 1)) {
+    problems.push(`002-06：三类里至少一类是 0（初次开通 ${firstOpening} / 增购 ${additional} / 平台调整 ${adjustment}）—— 夹具造了三类，分类逻辑没算出来`);
+  }
+  // 分类必须**落在正确的行上**：按备注里的订单号 / 期初文案定位那一行，再断言它的「业务类型」。
+  // 只断言「三个数字都 > 0」是不够的 —— 数字对、行错也是错的。
+  for (const [noteText, expectedType] of [['P111-ORDER-1', '初次开通'], ['P111-CONTRACT-2', '增购'], ['期初人次', '平台调整']]) {
+    const row = orgPage.locator('table tbody tr', { hasText: noteText });
+    if (!(await row.count())) { problems.push(`002-06：表里找不到备注含「${noteText}」的那一行`); continue; }
+    const text = await row.first().innerText();
+    if (!text.includes(expectedType)) problems.push(`002-06：「${noteText}」那一行的业务类型不是「${expectedType}」（实际：${text.replace(/\n/g, ' | ')}）`);
+  }
+  await orgShot('25-org-license-batches');
+  await orgContext.close();
 
   if (pageErrors.length) problems.push(`浏览器报错：${pageErrors.slice(0, 5).join(' | ')}`);
   // 任何 4xx/5xx 都算问题，**不留豁免**：这条曾经放着 /fonts/Geist-*.woff2 的一条例外

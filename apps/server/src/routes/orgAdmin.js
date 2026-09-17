@@ -221,7 +221,10 @@ export async function handleOrg(ctx) {
       breakdown: { students, activeClasses, activeSessions, pendingSessions, works: workBreakdown, pendingWorks, usage7 },
     };
   }
-  if (auth.user.role === 'TEACHER' && (/^\/users(?:\/|$)/.test(part) || part === '/course-grants' || part === '/series-overview')) throw errors.forbidden('仅机构管理员可管理学生及授权', 'ORG_ADMIN_REQUIRED');
+  if (auth.user.role === 'TEACHER' && (/^\/users(?:\/|$)/.test(part) || part === '/course-grants' || part === '/series-overview'
+    // 2026-09-17：002-03 / 002-04 / 002-06 这三个新入口与库存、授权同一权限面 ——
+    // 教师只能看自己课堂，看不到机构的人次账与学生授权明细。
+    || part === '/student-grants-summary' || part === '/license-batches' || /^\/students\/[^/]+\/course-grants$/.test(part))) throw errors.forbidden('仅机构管理员可管理学生及授权', 'ORG_ADMIN_REQUIRED');
   if (part === '/users' && method === 'GET') {
     const role = ctx.search.get('role');
     // 教师需要读取本机构学生名册，才能履行“将学生加入班级”的职责；不开放教师名册和机构成员管理权限。
@@ -1215,6 +1218,202 @@ export async function handleOrg(ctx) {
     audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length }, { orgId: currentOrgId });
     return { granted: fresh.length, skipped: studentIds.length - fresh.length, quotaTotal, quotaUsed: quotaUsed + fresh.length };
     });
+  }
+
+  /**
+   * 002-03 学生授权中心（2026-09-17 按线框图）：换一个视角看同一份授权 ——
+   * 上面那些接口是从**课包**看「分给了谁」，这里从**学生**看「拿到了哪些课包」。
+   *
+   * 口径（别自己发明状态）：
+   *   · 学生 = 本机构 role='STUDENT' 且未删除的账号；「账号状态」就是 users.status 的 ACTIVE / DISABLED。
+   *   · 「已有课包」= student_course_grants 里**未撤销**的记录数 > 0（没有「待激活」这一层，见 002-01 注释）。
+   *   · 「本月新增授权」= 本月 granted_at 的授权条数。含后来被平台撤销的 —— 那次授权确实发生过，
+   *     按「发生过的事」计数才对得上总览页的 month.grants。
+   *   · 「授权概览」只给前几个课包名，前端自己接「等 N 个」——不然这一格会把表格撑变形。
+   */
+  if (part === '/student-grants-summary' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生授权中心', 'ORG_ADMIN_REQUIRED');
+    const monthStart = `${nowIso().slice(0, 7)}-01`;
+    const totals = {
+      students: count("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [currentOrgId]),
+      grantedThisMonth: count('SELECT COUNT(*) n FROM student_course_grants WHERE org_id=? AND granted_at>=?', [currentOrgId, monthStart]),
+      withGrants: count(`SELECT COUNT(DISTINCT grant.student_id) n FROM student_course_grants grant
+        JOIN users student ON student.id=grant.student_id AND student.deleted_at IS NULL
+        WHERE grant.org_id=? AND grant.revoked_at IS NULL AND student.role='STUDENT'`, [currentOrgId]),
+    };
+    totals.withoutGrants = Math.max(0, totals.students - totals.withGrants);
+
+    const search = String(ctx.search.get('search') || '').trim();
+    const accountStatus = String(ctx.search.get('status') || '').trim().toUpperCase();
+    const grantState = String(ctx.search.get('grantState') || '').trim().toUpperCase();
+    const params = [currentOrgId];
+    let where = "student.org_id=? AND student.role='STUDENT' AND student.deleted_at IS NULL";
+    if (accountStatus === 'ACTIVE' || accountStatus === 'DISABLED') { where += ' AND student.status=?'; params.push(accountStatus); }
+    if (search) {
+      const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%';
+      where += ' AND (student.login LIKE ? OR student.display_name LIKE ? OR student.phone LIKE ?)';
+      params.push(keyword, keyword, keyword);
+    }
+    // 有效课包数用**同一个字面量表达式**算两遍（HAVING 与 SELECT）：SQLite 里别名进 HAVING 靠不住，
+    // 两处必须逐字一致，否则「筛选说 0 个、列里显示 2 个」。
+    // ⚠️ `grant.id IS NOT NULL` 不能省：左连接没匹配到时 grant.revoked_at 也是 NULL，
+    //    只判 revoked_at 会把「一个课包都没有的学生」数成 1（p111 当场抓到过这个 bug）。
+    const activeCountSql = 'SUM(CASE WHEN grant.id IS NOT NULL AND grant.revoked_at IS NULL THEN 1 ELSE 0 END)';
+    let having = '';
+    if (grantState === 'WITH') having = ` HAVING ${activeCountSql} > 0`;
+    else if (grantState === 'WITHOUT') having = ` HAVING ${activeCountSql} = 0`;
+    const fromSql = `FROM users student
+      LEFT JOIN student_course_grants grant ON grant.student_id=student.id AND grant.org_id=student.org_id
+      WHERE ${where} GROUP BY student.id${having}`;
+    const total = count(`SELECT COUNT(*) n FROM (SELECT student.id ${fromSql})`, params);
+    const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
+    const listRows = rows(`SELECT student.id, student.login, student.display_name, student.phone, student.status,
+        ${activeCountSql} active_count,
+        MAX(CASE WHEN grant.revoked_at IS NULL THEN grant.granted_at END) last_granted_at
+      ${fromSql}
+      ORDER BY last_granted_at IS NULL, last_granted_at DESC, student.created_at DESC
+      LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    // 当前页学生的课包名（只为「授权概览」这一格）
+    const seriesByStudent = new Map();
+    if (listRows.length) {
+      const placeholders = listRows.map(() => '?').join(',');
+      for (const item of rows(`SELECT grant.student_id, series.id series_id, series.title
+        FROM student_course_grants grant JOIN course_series series ON series.id=grant.series_id
+        WHERE grant.org_id=? AND grant.revoked_at IS NULL AND grant.student_id IN (${placeholders})
+        ORDER BY grant.granted_at DESC`, [currentOrgId, ...listRows.map((item) => item.id)])) {
+        if (!seriesByStudent.has(item.student_id)) seriesByStudent.set(item.student_id, []);
+        seriesByStudent.get(item.student_id).push({ seriesId: item.series_id, title: item.title });
+      }
+    }
+    const items = listRows.map((item) => ({
+      studentId: item.id, displayName: item.display_name, login: item.login, phone: item.phone || null, status: item.status,
+      grantedCount: Number(item.active_count || 0),
+      lastGrantedAt: item.last_granted_at || null,
+      grantedSeries: seriesByStudent.get(item.id) || [],
+    }));
+    return { ...pageResult(items, { page, limit, total }), totals };
+  }
+
+  /**
+   * 002-04 学生授权详情：一个学生拿到了哪些课包、每个课包有没有**正式学习记录**。
+   * 002-04B 那个右侧抽屉（单条授权详情）也用这个接口的数据，不另开接口。
+   *
+   * 「正式学习记录 已产生/未产生」数据库里**没有标志位**，用现成口径算：
+   * 「该学生在属于这个课包的课堂上，有过成功且非 mock 的 AI 调用」——
+   * 与完课判定（services/classroomSessions.js:164）**逐字同一套条件**。
+   * ⚠️ 那三个 NOT LIKE '%MOCK%' 是三处不同的东西（模型名 / 供应商 / 运行模式），
+   *    要改必须两边一起改，否则会出现「课堂算完课了、这里说没学」。
+   */
+  const studentGrantsMatch = part.match(/^\/students\/([^/]+)\/course-grants$/);
+  if (studentGrantsMatch && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生授权详情', 'ORG_ADMIN_REQUIRED');
+    const studentId = studentGrantsMatch[1];
+    const student = row("SELECT id, login, display_name, phone, status FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
+    if (!student) throw errors.notFound('学生不存在或不属于本机构', 'STUDENT_NOT_FOUND');
+    const learnedSeries = new Set(rows(`SELECT DISTINCT lesson.series_id series_id
+      FROM usage_records usage
+      JOIN class_sessions session ON session.id=usage.class_session_id
+      JOIN course_lessons lesson ON lesson.id=session.lesson_id
+      WHERE usage.user_id=? AND usage.org_id=? AND usage.status='SUCCESS'
+        AND UPPER(usage.model) NOT LIKE '%MOCK%'
+        AND UPPER(COALESCE(json_extract(usage.pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%'
+        AND UPPER(COALESCE(json_extract(usage.pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%'`,
+      [studentId, currentOrgId]).map((item) => item.series_id));
+    const items = rows(`SELECT grant.id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
+        grant.source_assignment_id, series.title, series.version,
+        actor.display_name granted_by_name, actor.login granted_by_login
+      FROM student_course_grants grant
+      JOIN course_series series ON series.id=grant.series_id
+      LEFT JOIN users actor ON actor.id=grant.granted_by
+      WHERE grant.org_id=? AND grant.student_id=?
+      ORDER BY grant.revoked_at IS NOT NULL, grant.granted_at DESC`, [currentOrgId, studentId]).map((item) => ({
+      id: item.id, seriesId: item.series_id, seriesTitle: item.title || null, version: item.version || null,
+      grantedAt: item.granted_at,
+      status: item.revoked_at ? 'REVOKED' : 'ACTIVE',
+      revokedAt: item.revoked_at || null, revokeReason: item.revoke_reason || null,
+      learned: learnedSeries.has(item.series_id),
+      grantedByName: item.granted_by_name || null, grantedByLogin: item.granted_by_login || null,
+      // 占用人次：授给一名学生就是 1 次（平台口径），不是估算出来的
+      quotaConsumed: 1,
+      sourceAssignmentId: item.source_assignment_id || null,
+      sourceLabel: item.source_assignment_id ? '平台授予本机构的课包权益' : '历史数据（无授权单）',
+    }));
+    const activeItems = items.filter((item) => item.status === 'ACTIVE');
+    return {
+      student: { studentId: student.id, displayName: student.display_name, login: student.login, phone: student.phone || null, status: student.status },
+      summary: {
+        activeSeriesCount: activeItems.length,
+        learnedSeriesCount: activeItems.filter((item) => item.learned).length,
+        // 「待激活」这一层数据库里不存在（只有 granted_at/revoked_at），按口径**不伪造**：
+        // 恒为 0，页面显示「—」并说明本版本不区分这一态。
+        pendingActivationCount: 0,
+      },
+      items, total: items.length,
+    };
+  }
+
+  /**
+   * 002-06 采购 / 增购 / 开通记录：机构能看到的「这些人次是从哪来的」。
+   *
+   * ⚠️ 批次表里**没有**「初次开通 / 增购 / 平台调整」这三列 —— 它只有
+   *    purchase_type（PURCHASE | LEGACY_OPENING_BALANCE）。线框图要的三分类按
+   *    **批次在同一张授权单里的序号**推出来：LEGACY → 平台调整；PURCHASE 的第一条 → 初次开通，
+   *    之后的 → 增购。用窗口函数算序号，而不是给库加一列（加列要迁移，且历史批次补不出真序号）。
+   *    序号**只按 PURCHASE 排**（PARTITION BY 带上 purchase_type）：期初结转那条批次日期通常最早，
+   *    若把它算进序号，真正的第一笔采购会被挤成「增购」（p111 抓到过这个）。
+   *
+   * 卡片口径：只吃「课包 / 时间 / 来源」三个筛选，**不吃业务类型** —— 卡片本身就是业务类型的
+   * 分布，再按业务类型筛会让另外三张卡变成 0。
+   */
+  if (part === '/license-batches' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看采购与开通记录', 'ORG_ADMIN_REQUIRED');
+    const seriesFilter = String(ctx.search.get('seriesId') || '').trim();
+    const businessFilter = String(ctx.search.get('businessType') || '').trim().toUpperCase();
+    const sourceFilter = String(ctx.search.get('source') || '').trim().toUpperCase();
+    const from = String(ctx.search.get('from') || '').trim();
+    const to = String(ctx.search.get('to') || '').trim();
+    const allRows = rows(`SELECT batch.id, batch.series_id, batch.purchase_type, batch.quantity, batch.payment_status,
+        batch.order_no, batch.contract_no, batch.purchased_at,
+        series.title series_title, actor.display_name actor_name,
+        ROW_NUMBER() OVER (PARTITION BY batch.assignment_id, batch.purchase_type ORDER BY batch.purchased_at, batch.created_at, batch.id) seq
+      FROM license_purchase_batches batch
+      JOIN course_series series ON series.id=batch.series_id
+      LEFT JOIN users actor ON actor.id=batch.purchased_by
+      WHERE batch.org_id=? AND batch.status='ACTIVE'
+      ORDER BY batch.purchased_at DESC, batch.id DESC`, [currentOrgId]);
+    const mapped = allRows.map((item) => {
+      const businessType = item.purchase_type === 'LEGACY_OPENING_BALANCE'
+        ? 'PLATFORM_ADJUSTMENT'
+        : (Number(item.seq) <= 1 ? 'FIRST_OPENING' : 'ADDITIONAL');
+      const source = item.order_no ? 'ORDER' : (item.contract_no ? 'CONTRACT' : 'PLATFORM');
+      const note = [
+        item.order_no ? `订单 ${item.order_no}` : null,
+        item.contract_no ? `合同 ${item.contract_no}` : null,
+      ].filter(Boolean).join(' · ');
+      return {
+        id: item.id, purchasedAt: item.purchased_at, seriesId: item.series_id, seriesTitle: item.series_title || null,
+        businessType, source, quantity: Number(item.quantity || 0),
+        actorName: item.actor_name || null, paymentStatus: item.payment_status || null,
+        note: note || (item.purchase_type === 'LEGACY_OPENING_BALANCE' ? '平台开通时结转的期初人次' : '—'),
+      };
+    });
+    const scoped = mapped.filter((item) => {
+      if (seriesFilter && item.seriesId !== seriesFilter) return false;
+      if (from && String(item.purchasedAt) < from) return false;
+      if (to && String(item.purchasedAt) > to) return false;
+      if (sourceFilter && item.source !== sourceFilter) return false;
+      return true;
+    });
+    const totals = {
+      total: scoped.length,
+      firstOpening: scoped.filter((item) => item.businessType === 'FIRST_OPENING').length,
+      additional: scoped.filter((item) => item.businessType === 'ADDITIONAL').length,
+      platformAdjustment: scoped.filter((item) => item.businessType === 'PLATFORM_ADJUSTMENT').length,
+      quantity: scoped.reduce((sum, item) => sum + item.quantity, 0),
+    };
+    const filtered = businessFilter ? scoped.filter((item) => item.businessType === businessFilter) : scoped;
+    const { page, limit } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
+    return { ...pageResult(filtered.slice((page - 1) * limit, page * limit), { page, limit, total: filtered.length }), totals };
   }
 
   // P1: 机构端 - 查看成员配额列表
