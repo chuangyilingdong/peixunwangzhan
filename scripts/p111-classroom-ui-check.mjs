@@ -303,13 +303,15 @@ try {
   await expectText('课时抽屉', ['教学素材', 'P111 讲义']);
   await page.getByRole('button', { name: '在线预览' }).first().click();
   await page.waitForTimeout(2500);
-  await expectText('素材查看器', ['在线预览（不提供下载）', 'P111 讲义', '全屏观看', '上一页', '下一页', '适应画面']);
+  await expectText('素材查看器', ['在线预览（不提供下载）', 'P111 讲义', '全屏观看', '上一页', '下一页', '适应宽度']);
 
   // ① 必须**不再有 iframe**：那等于把渲染交回浏览器内置阅读器，那一排下载/打印按钮就回来了，
   //    而且 Ctrl+P / Ctrl+S / 右键都不过我们的页面，拦不住。现在应当是自己画的 canvas。
   const hasIframe = await page.locator('iframe.preview-frame').count();
   if (hasIframe) problems.push('素材预览：还在用 iframe（浏览器内置阅读器），下载/打印的口子堵不住');
-  const canvasBox = await page.locator('canvas.ta-canvas').boundingBox().catch(() => null);
+  const geometry = await page.evaluate(() => ({ wrap: document.querySelector(".ta-scroll")?.clientWidth, stage: document.querySelector(".preview-stage")?.clientWidth, panel: document.querySelector(".ta-panel")?.clientWidth, slots: document.querySelectorAll(".ta-page-slot").length, firstSlot: Math.round(document.querySelector(".ta-page-slot")?.getBoundingClientRect().width || 0), canvases: document.querySelectorAll("canvas.ta-canvas").length }));
+  console.log("查看器几何:", JSON.stringify(geometry));
+  const canvasBox = await page.locator('canvas.ta-canvas').first().boundingBox().catch(() => null);
   if (!canvasBox || canvasBox.width < 100 || canvasBox.height < 100) problems.push('素材预览：canvas 没有真正画出页面内容');
 
   // ② 快捷键必须被拦下（capture 阶段 preventDefault；dispatchEvent 返回 false 表示已 preventDefault）
@@ -329,7 +331,24 @@ try {
     ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })) === false);
   if (!contextBlocked) problems.push('素材预览：右键菜单没有被拦下（可以「图片另存为」）');
 
-  // ④ 翻页：自建工具栏得真的能翻（原来靠内置阅读器的页码控件，现在没了）
+  // ④ 滚轮：文档要能**连续往下滑**（用户原话「应该是有那种慢慢滑下去的感觉」），页码跟着滚动走。
+  //    早先做成「一次只画一页、只能点按钮翻」，手感和阅读器完全不一样。
+  const scrollBox = await page.locator('.ta-scroll').boundingBox();
+  if (!scrollBox) problems.push('素材预览：找不到滚动容器');
+  else {
+    await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2);
+    await page.mouse.wheel(0, 1600);
+    await page.waitForTimeout(1300);
+    const toolbarText = await page.locator('.ta-toolbar').innerText();
+    if (!/第 [2-9]/.test(toolbarText)) problems.push(`素材预览：滚轮下滑后页码没跟着走（工具栏首行：${toolbarText.split('\n')[0]}）`);
+    const scrollTop = await page.evaluate(() => document.querySelector('.ta-scroll')?.scrollTop || 0);
+    if (!(scrollTop > 200)) problems.push(`素材预览：滚轮没有真的滚下去（scrollTop=${Math.round(scrollTop)}）`);
+    await shot('16-material-scrolled');
+    await page.evaluate(() => { const node = document.querySelector('.ta-scroll'); if (node) node.scrollTop = 0; });
+    await page.waitForTimeout(600);
+  }
+
+  // ⑤ 工具栏翻页也得能翻（跳页）
   await page.getByRole('button', { name: '下一页' }).click();
   await page.waitForTimeout(1200);
   await expectText('素材翻页', ['第 2']);
@@ -340,12 +359,12 @@ try {
 
   // 全屏：画布必须**按新尺寸重画**（用户报过「全屏还是这么小」——
   // 进全屏后 stage 变宽了却没重画，画面就停在进全屏前的像素尺寸、缩在中间
-  const canvasBefore = await page.locator('canvas.ta-canvas').boundingBox();
+  const canvasBefore = await page.locator('canvas.ta-canvas').first().boundingBox();
   await page.getByRole('button', { name: '全屏观看' }).click();
   await page.waitForTimeout(1600);
   const fullscreen = await page.evaluate(() => Boolean(document.fullscreenElement));
   if (!fullscreen) problems.push('素材查看器：点「全屏观看」没有真的进入全屏');
-  const canvasAfter = await page.locator('canvas.ta-canvas').boundingBox();
+  const canvasAfter = await page.locator('canvas.ta-canvas').first().boundingBox();
   if (!canvasBefore || !canvasAfter) problems.push('素材查看器：量不到画布尺寸');
   else if (!(canvasAfter.width > canvasBefore.width * 1.2)) problems.push(`全屏后画布没有按新尺寸重画（${Math.round(canvasBefore.width)}px → ${Math.round(canvasAfter.width)}px）`);
   await shot('15-material-viewer-fullscreen');
@@ -360,7 +379,7 @@ try {
   // 所以把豁免撤掉 —— 留着它以后字体真回归了会被静默吞掉。
   const failures = [...new Set(badRequests)];
   if (failures.length) problems.push(`请求失败：${failures.slice(0, 6).join(' | ')}`);
-  assert.ok(fs.readdirSync(shotDir).length >= 15, '截图没出全');
+  assert.ok(fs.readdirSync(shotDir).length >= 16, '截图没出全');
   await browser.close();
   console.log(`\n截图 ${fs.readdirSync(shotDir).length} 张 → ${shotDir}`);
   if (problems.length) { console.error('\n发现问题：'); for (const item of problems) console.error('  ✗ ' + item); process.exitCode = 1; }
