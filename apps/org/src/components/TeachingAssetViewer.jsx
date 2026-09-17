@@ -102,7 +102,8 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     };
   }, [state.previewUrl, isDocument]);
 
-  /* ③ 画当前页。zoom=1 表示「适应宽度」，所以基准比例按容器宽度算。 */
+  /* ③ 画当前页。zoom=1 表示「适应画面」：宽和高都要塞得下（contain）。
+     只按宽度铺满的话，16:9 的幻灯片在全屏里会被撑出屏幕；按 contain 才能整页可见。 */
   const draw = useCallback(async () => {
     const pdf = pdfRef.current;
     const canvas = canvasRef.current;
@@ -113,8 +114,10 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
       const pdfPage = await pdf.getPage(page);
       if (token !== renderTokenRef.current) return;
       const base = pdfPage.getViewport({ scale: 1 });
-      const available = Math.max(320, (stageRef.current?.clientWidth || 900) - 36);
-      const scale = (available / base.width) * zoom;
+      const stage = stageRef.current;
+      const availableWidth = Math.max(320, (stage?.clientWidth || 900) - 36);
+      const availableHeight = Math.max(240, (stage?.clientHeight || 600) - 36);
+      const scale = Math.min(availableWidth / base.width, availableHeight / base.height) * zoom;
       const viewport = pdfPage.getViewport({ scale });
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const context = canvas.getContext('2d');
@@ -133,7 +136,20 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     }
   }, [page, zoom]);
 
-  useEffect(() => { if (pageCount) draw(); }, [pageCount, draw]);
+  // 重画的三个触发点：换页/缩放、**进出全屏**、窗口尺寸变化。
+  // ⚠️ 进出全屏要等一会儿再画：requestFullscreen() 是异步的，fullscreenchange 之后布局才落定，
+  //    当场量 clientWidth 量到的还是旧值 —— 那正是「全屏里画面还是那么小」的原因。
+  useEffect(() => {
+    if (!pageCount) return undefined;
+    const timer = setTimeout(draw, fullscreen ? 150 : 0);
+    return () => clearTimeout(timer);
+  }, [pageCount, draw, fullscreen]);
+
+  useEffect(() => {
+    const onResize = () => { if (pdfRef.current) draw(); };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [draw]);
 
   /* ④ 堵快捷键：Ctrl/Cmd + P（打印）/ S（保存）/ U（查看源码）。capture 阶段抢在默认行为之前。 */
   useEffect(() => {
@@ -220,7 +236,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
             <button type="button" className="secondary-button" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))))} aria-label="缩小">−</button>
             <span className="ta-page">{Math.round(zoom * 100)}%</span>
             <button type="button" className="secondary-button" disabled={zoom >= 4} onClick={() => setZoom((value) => Math.min(4, Number((value + 0.25).toFixed(2))))} aria-label="放大">＋</button>
-            <button type="button" className="text-button" disabled={zoom === 1} onClick={() => setZoom(1)}>适应宽度</button>
+            <button type="button" className="text-button" disabled={zoom === 1} onClick={() => setZoom(1)}>适应画面</button>
           </span>
         </> : <span className="ta-page">{kind === 'VIDEO' ? '视频' : kind === 'AUDIO' ? '音频' : kind === 'IMAGE' ? '图片' : '素材'}预览</span>}
         <span className="ta-hint muted">PPT / Word 已由平台转换成 PDF 后展示，原始文件不会下发；素材仅可在本页查看，请勿截屏外传。</span>

@@ -303,7 +303,7 @@ try {
   await expectText('课时抽屉', ['教学素材', 'P111 讲义']);
   await page.getByRole('button', { name: '在线预览' }).first().click();
   await page.waitForTimeout(2500);
-  await expectText('素材查看器', ['在线预览（不提供下载）', 'P111 讲义', '全屏观看', '上一页', '下一页', '适应宽度']);
+  await expectText('素材查看器', ['在线预览（不提供下载）', 'P111 讲义', '全屏观看', '上一页', '下一页', '适应画面']);
 
   // ① 必须**不再有 iframe**：那等于把渲染交回浏览器内置阅读器，那一排下载/打印按钮就回来了，
   //    而且 Ctrl+P / Ctrl+S / 右键都不过我们的页面，拦不住。现在应当是自己画的 canvas。
@@ -338,10 +338,16 @@ try {
   await expectText('素材翻回首页', ['第 1']);
   await shot('14-material-viewer');
 
+  // 全屏：画布必须**按新尺寸重画**（用户报过「全屏还是这么小」——
+  // 进全屏后 stage 变宽了却没重画，画面就停在进全屏前的像素尺寸、缩在中间
+  const canvasBefore = await page.locator('canvas.ta-canvas').boundingBox();
   await page.getByRole('button', { name: '全屏观看' }).click();
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1600);
   const fullscreen = await page.evaluate(() => Boolean(document.fullscreenElement));
   if (!fullscreen) problems.push('素材查看器：点「全屏观看」没有真的进入全屏');
+  const canvasAfter = await page.locator('canvas.ta-canvas').boundingBox();
+  if (!canvasBefore || !canvasAfter) problems.push('素材查看器：量不到画布尺寸');
+  else if (!(canvasAfter.width > canvasBefore.width * 1.2)) problems.push(`全屏后画布没有按新尺寸重画（${Math.round(canvasBefore.width)}px → ${Math.round(canvasAfter.width)}px）`);
   await shot('15-material-viewer-fullscreen');
   await page.evaluate(() => document.exitFullscreen?.());
   await page.waitForTimeout(500);
