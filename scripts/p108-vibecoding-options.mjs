@@ -147,8 +147,8 @@ check('功能包两个半边都在，而且 package.json 声明了客户端那�
   && featurePkg.dsh?.client?.platform === 'web' && featurePkg.dsh?.bundle?.patch === './cordis.patch.yml');
 
 const injected = /export const inject = \[([^\]]*)\]/.exec(featureHost)?.[1] ?? '';
-check('宿主侧 inject 列全了它读的三个服务（少一个 cordis 就会抛，进而整个环境起不来）',
-  ['sessionProjections', 'systemPrompt', 'commands'].every((name) => injected.includes(name)), injected);
+check('宿主侧 inject 列全了它读的服务（少一个 cordis 就会抛，进而整个环境起不来）',
+  ['systemPrompt', 'commands'].every((name) => injected.includes(name)), injected);
 
 // 先把注释剥掉再查 —— 注释里提到「客户端用 ctx.remote…」不是代码，别把它当成违规
 const hostCode = stripComments(featureHost);
@@ -158,6 +158,22 @@ const readServices = [...hostCode.matchAll(/[A-Za-z]*[Cc]tx\.([a-zA-Z]+)/g)]
 check('宿主侧只读它 inject 过的服务（读别的同样会抛）',
   readServices.length > 0 && readServices.every((name) => injected.includes(name)),
   `读到：${[...new Set(readServices)].join(', ')}`);
+
+/* ⚠️⚠️ 这一条是 2026-09-17 真机事故换来的，**别删、别放宽**：
+   第一版插件用 `sessionProjections` + `agent.session.append('studentFeature/mode', …)` 记状态，
+   功能是好的，但那个 harness 加载会话日志时有硬规则 —— 事件类型要么是它已知的，要么信封带
+   `ignorable: true`，否则**拒绝解释整份日志**（学生历史直接打不开）；而 `session.append()`
+   没有任何办法设置那个标记（它只转发 sourceEventSeqs / surfaceOp）。
+   也就是说：**第三方插件在运行时写不出合规的自定义事件**，往日志里写自定义类型 = 把会话写死。
+   修法：状态放插件自己的文件（$DSH_HOME/lingdong-feature.json），会话日志一个字节都不写。
+   事故现场与修法见 docs/operations/新对话交接-功能插件写坏会话日志-20260917.md。 */
+check('【事故守卫】宿主侧**绝不**往会话日志写自定义事件（append / sessionProjections 都不能出现）',
+  !/\.session\.append\(/.test(hostCode) && !/sessionProjections/.test(hostCode) && !/'studentFeature\/mode'/.test(hostCode));
+check('状态落在插件自己的文件里（$DSH_HOME 下，按会话 id 记）',
+  /lingdong-feature\.json/.test(featureHost) && /readFileSync\(storePath\(\)/.test(featureHost) && /writeFileSync\(storePath\(\)/.test(featureHost));
+check('不带参数的 /feature 回报当前值（客户端挂载时靠它对上游按钮状态）',
+  /feature=\$\{current\}/.test(featureHost));
+
 
 check('宿主 apply 自己兜异常（插件坏掉只让功能开关失效，不能连带学生进不去）',
   /export function apply\(ctx, config = \{\}\) \{\s*try \{/.test(featureHost) && /catch \(error\)/.test(featureHost));
@@ -179,12 +195,15 @@ check('客户端挂在输入框那一排（conversation.input.left），不去�
   /ctx\.slots\.inject\('conversation\.input\.left'/.test(featureClient)
   && (featureClient.match(/ctx\.slots\.inject\(/g) || []).length === 1);
 
-check('当前功能从会话投影读（useProjection），不是自己另存一份状态',
-  /useProjection\('studentFeature'/.test(featureClient) && /wire: \{ viewSchema/.test(featureHost));
+const clientCode = stripComments(featureClient);
+check('客户端**不读会话投影**（那正是写坏日志的那条路），改成挂载时问宿主一次',
+  !/useProjection/.test(clientCode) && /call\('', sessionId\)/.test(clientCode)
+  && /'feature='/.test(clientCode));
 
 check('切功能走现成的命令通道（remote.commands.execute），不自建 RPC',
-  /remote\.commands\.execute\(target \|\| sessionId, `\/feature \$\{feature\}`/.test(featureClient)
-  && /inject = \['slots', 'remote', 'remote\.commands'\]/.test(featureClient));
+  /ctx\.remote\.commands\.execute\(/.test(clientCode)
+  && /\/feature \$\{feature\}` : '\/feature'/.test(clientCode)
+  && /inject = \['slots', 'remote', 'remote\.commands'\]/.test(clientCode));
 
 check('品牌包只管品牌：不再含功能开关那段（已拆回功能包）',
   !/FEATURE_TEXT|studentFeature|FeatureSwitch/.test(brandHost + brandClient)

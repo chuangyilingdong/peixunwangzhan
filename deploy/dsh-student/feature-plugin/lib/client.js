@@ -4,17 +4,20 @@
  * 往输入框工具行左侧（`conversation.input.left`，官方留白、没有占用者的 list 插槽）放三个按钮：
  * 对话 / 写代码 / 做网页。点了就切，切了 AI 的角色跟着变（宿主侧把它放进系统提示词）。
  *
+ * 状态在**宿主**那边（插件自己的状态文件，按会话记），客户端只负责显示与切换：
+ *   · 挂载时调一次 `/feature`（不带参数）问当前值 —— 宿主回报 `feature=<id>`；
+ *   · 点击时调 `/feature <id>`，成功后把本地显示状态改掉。
+ * ⚠️ 这里**不能**读会话投影（`useProjection`）：那要求宿主往会话日志里写自定义事件，
+ *    而那个 harness 会因此拒绝加载整份历史（详见宿主侧文件头的教训）。所以显示状态是本地的，
+ *    真值以宿主为准、切换时对齐。
+ *
  * 几条来自 dsh 自身的约束（照做，别绕）：
- *   · 浏览器里**只能 require 极少的种子模块**（react / react/jsx-runtime），别的包根本不在磁盘上
- *     （它们被打进 shell 了）—— 所以只 require 这两个，其余全靠 cordis 服务拿。
- *   · 插槽给的标准 props 是 **`sessionId` / `useSession` / `useProjection`** 三个
- *     （见 dsh-client-ui-session 里那行 `keyedHooks: ["projection"]`），当前功能从
- *     `useProjection('studentFeature', …)` 读 —— 这正是官方「计划模式」按钮读 `useProjection('plan')` 的写法。
- *   · **不自建 RPC**：切功能走宿主注册好的 `/feature` 命令
- *     （`ctx.remote.commands.execute(sessionId, '/feature web', [])`），与官方 dsh-client-ui-plan 同一个通道。
- *     返回值形状也是官方的：`{ok, value:{result:{kind,text}}}` / `{ok:false, error:{code,message}}`。
- *   · 插槽是 `scope: session` 的：**新会话首页（hero）不渲染它**，所以这一排按钮在
- *     「已经有一个会话」之后才出现（第一条消息之前用默认功能）。
+ *   · 浏览器里**只能 require 极少的种子模块**（react / react/jsx-runtime），别的包根本不在磁盘上。
+ *   · 插槽给的标准 props 是 **`sessionId` / `useSession` / `useProjection`** 三个。
+ *   · **不自建 RPC**：切换走宿主注册好的 `/feature` 命令，与官方 dsh-client-ui-plan 同一个通道。
+ *     返回值形状：`{ok, value:{result:{kind,text}}}` / `{ok:false, error:{code,message}}`。
+ *   · 插槽是 `scope: session` 的：**新会话首页不渲染它**，所以这一排按钮在「已经有一个会话」
+ *     之后才出现（第一条消息之前用默认功能）。
  */
 window.__ModuleLoader__.load({
   id: '@lingdong/dsh-feature',
@@ -28,37 +31,55 @@ window.__ModuleLoader__.load({
       { id: 'web', label: '做网页', hint: '做出一个能直接打开的页面' },
     ];
     const FALLBACK = 'chat';
+    const KNOWN = FEATURES.map((item) => item.id);
+    /** 宿主回报的格式（见宿主侧 handler）：`feature=<id>` */
+    const REPORT_PREFIX = 'feature=';
 
     /**
      * 三个按钮。放在输入框工具行左侧、和附件键同一排 —— 一眼看到这个页面能做什么。
      *
-     * ⚠️ 样式一律**内联**：dsh 的客户端没有给我们注入样式表的通道，
-     * 写 class 名而指望某份 css 被加载，是这里最容易踩空的地方。
-     * @param props - 插槽给的标准 props + 我们 inject 进去的 select。
+     * ⚠️ 样式一律**内联**：dsh 的客户端没有给我们注入样式表的通道。
+     * @param props - 插槽给的标准 props + 我们 inject 进去的 call。
      */
-    function FeatureSwitch({ sessionId, useProjection, select }) {
-      const active = useProjection('studentFeature', (value) => (
-        typeof value === 'string' ? value : undefined
-      )) || FALLBACK;
+    function FeatureSwitch({ sessionId, call }) {
+      const [active, setActive] = react.useState(FALLBACK);
+      const [ready, setReady] = react.useState(false);
       const [pending, setPending] = react.useState('');
       const [error, setError] = react.useState('');
+
+      // 挂载（或换会话）时问一次宿主的当前值。问不到就一直显示默认「对话」——
+      // 显示错了也不要紧：真正的角色由宿主决定，这里只是别让按钮看起来没选。
+      react.useEffect(() => {
+        let alive = true;
+        if (!sessionId) return undefined;
+        setReady(false);
+        Promise.resolve(call('', sessionId)).then((result) => {
+          if (!alive) return;
+          const text = String(result?.value?.result?.text || '');
+          const id = text.startsWith(REPORT_PREFIX) ? text.slice(REPORT_PREFIX.length).trim() : '';
+          if (KNOWN.includes(id)) setActive(id);
+          setReady(true);
+        }).catch(() => { if (alive) setReady(true); });
+        return () => { alive = false; };
+      }, [sessionId, call]);
 
       const choose = react.useCallback(async (id) => {
         if (!sessionId || id === active || pending) return;
         setPending(id);
         setError('');
         try {
-          const result = await select(id, sessionId);
+          const result = await call(id, sessionId);
           if (result === undefined) { setError('切换通道不可用'); return; }
           if (!result.ok) { setError(`${result.error.message}（${result.error.code}）`); return; }
           if (result.value === undefined) { setError('这条切换命令没注册上'); return; }
-          if (result.value.result?.kind === 'error') setError(result.value.result.text || '切换失败');
+          if (result.value.result?.kind === 'error') { setError(result.value.result.text || '切换失败'); return; }
+          setActive(id);
         } catch (cause) {
           setError(String(cause?.message || cause));
         } finally {
           setPending('');
         }
-      }, [sessionId, active, pending, select]);
+      }, [sessionId, active, pending, call]);
 
       const chipStyle = (isActive) => ({
         display: 'inline-flex', alignItems: 'center',
@@ -80,7 +101,7 @@ window.__ModuleLoader__.load({
         style: chipStyle(item.id === active),
         'aria-pressed': item.id === active,
         title: item.hint,
-        disabled: pending !== '',
+        disabled: pending !== '' || !ready,
         onClick: () => { choose(item.id); },
       }, item.label)), error
         ? react.createElement('span', { style: { fontSize: '12px', color: '#ff8a2a' } }, error)
@@ -95,9 +116,13 @@ window.__ModuleLoader__.load({
         name: 'conversation.input.left',
         id: 'lingdong-feature',
         order: 10,
-        // sessionId 由插槽给我们；切功能走宿主注册的 /feature 命令
+        // feature 为空字符串 = 问当前值；否则切换。sessionId 由插槽给我们。
         inject: (sessionId) => ({
-          select: (feature, target) => ctx.remote.commands.execute(target || sessionId, `/feature ${feature}`, []),
+          call: (feature, target) => ctx.remote.commands.execute(
+            target || sessionId,
+            String(feature || '').trim() ? `/feature ${feature}` : '/feature',
+            [],
+          ),
         }),
       }, FeatureSwitch));
     }
