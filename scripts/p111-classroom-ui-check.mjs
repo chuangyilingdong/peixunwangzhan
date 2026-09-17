@@ -302,25 +302,40 @@ try {
   await settle();
   await expectText('课时抽屉', ['教学素材', 'P111 讲义']);
   await page.getByRole('button', { name: '在线预览' }).first().click();
-  await page.waitForTimeout(1500);
-  await expectText('素材查看器', ['在线预览（不提供下载）', 'P111 讲义', '全屏观看', '上一页', '下一页']);
-  // 直接看 iframe 的地址，把两件事钉死：
-  //   ① 票据必须是**新签的**（未来才过期），不能是快照里那张 deadbeef 死链；
-  //   ② 必须带 #toolbar=0 —— 否则浏览器内置阅读器那一排「下载/旋转/打印/保存到云端硬盘/
-  //      文档属性」会全回来（它们不在 DOM 里，只能靠这个片段让它整条不出现）。
-  const frameSrc = await page.locator('iframe.preview-frame').getAttribute('src');
-  if (!frameSrc) problems.push('素材预览：根本没有渲染出 iframe');
-  else {
-    const ticket = frameSrc.match(/[?&]t=(\d+)\./);
-    if (frameSrc.includes('deadbeef') || !ticket) problems.push(`素材预览：用的不是现签票据（${frameSrc.slice(0, 90)}）`);
-    else if (!(Number(ticket[1]) > Date.now())) problems.push('素材预览：票据是过期的');
-    if (!frameSrc.includes('toolbar=0') || !frameSrc.includes('navpanes=0')) problems.push('素材预览：没关掉浏览器内置阅读器的工具栏');
+  await page.waitForTimeout(2500);
+  await expectText('素材查看器', ['在线预览（不提供下载）', 'P111 讲义', '全屏观看', '上一页', '下一页', '适应宽度']);
+
+  // ① 必须**不再有 iframe**：那等于把渲染交回浏览器内置阅读器，那一排下载/打印按钮就回来了，
+  //    而且 Ctrl+P / Ctrl+S / 右键都不过我们的页面，拦不住。现在应当是自己画的 canvas。
+  const hasIframe = await page.locator('iframe.preview-frame').count();
+  if (hasIframe) problems.push('素材预览：还在用 iframe（浏览器内置阅读器），下载/打印的口子堵不住');
+  const canvasBox = await page.locator('canvas.ta-canvas').boundingBox().catch(() => null);
+  if (!canvasBox || canvasBox.width < 100 || canvasBox.height < 100) problems.push('素材预览：canvas 没有真正画出页面内容');
+
+  // ② 快捷键必须被拦下（capture 阶段 preventDefault；dispatchEvent 返回 false 表示已 preventDefault）
+  const shortcutBlocked = await page.evaluate(() => {
+    const result = {};
+    for (const key of ['p', 's', 'u']) {
+      result[key] = document.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true })) === false;
+    }
+    return result;
+  });
+  for (const [key, blocked] of Object.entries(shortcutBlocked)) {
+    if (!blocked) problems.push(`素材预览：Ctrl+${key.toUpperCase()} 没有被拦下（打印/保存/查看源码还能用）`);
   }
-  // iframe 里若回显鉴权错误，说明请求确实被挡了（PDF 正常渲染时这里读不到正文）
-  const frameTexts = await Promise.all(page.frames().map((frame) => frame.locator('body').innerText().catch(() => '')));
-  if (frameTexts.some((text) => /TEACHING_ASSET_FORBIDDEN|仅教师可见|FILE_ACCESS_DENIED/.test(text))) {
-    problems.push('素材预览：iframe 里回显了鉴权错误 —— 预览请求被拒了');
-  }
+
+  // ③ 右键菜单必须被吃掉（canvas 上不给「图片另存为」）
+  const contextBlocked = await page.evaluate(() => document.querySelector('.ta-panel')
+    ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })) === false);
+  if (!contextBlocked) problems.push('素材预览：右键菜单没有被拦下（可以「图片另存为」）');
+
+  // ④ 翻页：自建工具栏得真的能翻（原来靠内置阅读器的页码控件，现在没了）
+  await page.getByRole('button', { name: '下一页' }).click();
+  await page.waitForTimeout(1200);
+  await expectText('素材翻页', ['第 2']);
+  await page.getByRole('button', { name: '‹ 上一页' }).click();
+  await page.waitForTimeout(900);
+  await expectText('素材翻回首页', ['第 1']);
   await shot('14-material-viewer');
 
   await page.getByRole('button', { name: '全屏观看' }).click();

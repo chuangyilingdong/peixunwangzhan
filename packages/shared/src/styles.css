@@ -1300,12 +1300,19 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 
 
 /* ── 教学素材查看器（2026-09-17，见 apps/org/src/components/TeachingAssetViewer.jsx）──
-   面板全屏 + 自建翻页工具栏。浏览器内置 PDF 阅读器那一排（下载/旋转/打印/保存到云端硬盘/
-   文档属性）**不在 DOM 里、删不掉**，只能靠 URL 片段 #toolbar=0 让它整条不出现；
-   代价是没有页码控件了，所以上一页/下一页由我们自己给。
+   自己用 pdf.js 把每页画到 <canvas>，**不用浏览器内置 PDF 阅读器** ——
+   那一排「下载/旋转/打印/保存到云端硬盘/文档属性」是它的 UI，不在 DOM 里删不掉；
+   更要紧的是 Ctrl+P / Ctrl+S / 右键菜单都不经过我们的页面，事件收不到就拦不住。
+   全屏的是整个面板（不是内容区），这样全屏里仍够得着翻页与关闭。
+   ⚠️ 打印样式把查看器整个藏掉 —— 万一从浏览器菜单走打印，打出来也应该是白纸。
    全部挂在 .ta-panel 作用域下，不动同一个 .preview-* 家族的既有样式（管理端也在用）。 */
 .ta-panel:fullscreen { width:100vw; height:100vh; max-height:100vh; border-radius:0; }
-.ta-panel .preview-stage > .preview-frame { position:absolute; inset:0; width:100%; height:100%; }
+.ta-canvas-wrap { position:absolute; inset:0; display:grid; place-items:start center; overflow:auto; padding:18px; }
+.ta-canvas { display:block; background:#fff; box-shadow:0 8px 26px rgb(0 0 0 / 45%); user-select:none; -webkit-user-drag:none; }
+.ta-rendering { position:absolute; top:10px; left:50%; transform:translateX(-50%); padding:5px 12px; border-radius:99px; color:#fff; background:rgb(0 0 0 / 55%); font-size:12px; }
+.ta-render-error { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); }
+.ta-zoom { display:inline-flex; align-items:center; gap:6px; }
+@media print { .preview-overlay, .ta-panel { display:none !important; } }
 .ta-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 20px; border-top:1px solid var(--line); background:#fbfaff; }
 .ta-page { color:var(--ink); font-weight:700; font-variant-numeric:tabular-nums; }
 .ta-hint { flex:1; min-width:200px; font-size:12px; line-height:1.6; }
