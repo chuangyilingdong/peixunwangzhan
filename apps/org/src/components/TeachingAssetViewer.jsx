@@ -51,6 +51,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   const [fullscreen, setFullscreen] = useState(false);
   const pdfRef = useRef(null);
   const canvasRefs = useRef(new Map());          // 页码 → canvas
+  const renderTasksRef = useRef(new Map());      // 页码 → 正在跑的 pdf.js 渲染任务
   const wrapRef = useRef(null);
   const panelRef = useRef(null);
   const scrollTokenRef = useRef(0);
@@ -110,6 +111,9 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     return () => {
       cancelled = true;
       scrollTokenRef.current += 1;
+      // 先把在跑的任务全取消（否则 pdf destroy 时它们还在往画布上画）
+      for (const task of renderTasksRef.current.values()) { try { task.cancel(); } catch { /* ignore */ } }
+      renderTasksRef.current.clear();
       pdfRef.current?.destroy?.().catch?.(() => {});
       pdfRef.current = null;
       canvasRefs.current.clear();
@@ -132,6 +136,19 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
   }, [recompute, fullscreen]);
 
   /* ④ 按滚动位置算「该画哪几页」：只画窗口内的，离得远的释放掉。 */
+
+  /**
+   * 取消某页正在跑的渲染任务，并**等它真正结束**。
+   * pdf.js 不允许同一块 canvas 上并存两个渲染任务 —— 旧任务还在画的时候开新任务，
+   * 缓冲区会被写花（用户看到的就是「全屏之后画面倒着、内容对不上」）。
+   */
+  const cancelRender = useCallback(async (pageNumber) => {
+    const task = renderTasksRef.current.get(pageNumber);
+    if (!task) return;
+    renderTasksRef.current.delete(pageNumber);
+    try { task.cancel(); await task.promise; } catch { /* 取消会 reject，属正常 */ }
+  }, []);
+
   const renderWindow = useCallback(async () => {
     const pdf = pdfRef.current;
     const wrap = wrapRef.current;
@@ -150,6 +167,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
     for (const [pageNumber, canvas] of [...canvasRefs.current]) {
       const index = pageNumber - 1;
       if (index < first || index > last) {
+        await cancelRender(pageNumber);
         if (canvas.width) { canvas.width = 0; canvas.height = 0; }
         canvasRefs.current.delete(pageNumber);
       }
@@ -168,17 +186,27 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
       //    —— 用户看到的「全屏还是这么小 / 文档好像也没全屏」就是这个。
       const targetWidth = Math.floor(pages[index].width * scale);
       if (canvasRefs.current.has(index + 1) && canvas.style.width === `${targetWidth}px`) continue;
-      canvasRefs.current.set(index + 1, canvas);
-      setRenderingPage(index + 1);
       try {
         const pdfPage = await pdf.getPage(index + 1);
         if (token !== scrollTokenRef.current) return;
         const viewport = pdfPage.getViewport({ scale });
+        // ⚠️ 同一块 canvas 上**绝不允许两个渲染任务并存**：pdf.js 会明确拒绝，
+        //    而如果有旧任务还在往这块画布上画，缓冲区就会被写花 ——
+        //    表现出来就是全屏之后画面「倒着 / 内容对不上」。所以每次重画前先把旧任务取消并等它结束。
+        await cancelRender(index + 1);
         canvas.width = Math.floor(viewport.width * dpr);
         canvas.height = Math.floor(viewport.height * dpr);
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
-        await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport, transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0] }).promise;
+        canvasRefs.current.set(index + 1, canvas);
+        setRenderingPage(index + 1);
+        const task = pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport, transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0] });
+        renderTasksRef.current.set(index + 1, task);
+        try {
+          await task.promise;
+        } finally {
+          if (renderTasksRef.current.get(index + 1) === task) renderTasksRef.current.delete(index + 1);
+        }
       } catch (error) {
         if (!/cancel/i.test(String(error?.name || error?.message || ''))) {
           setState((old) => ({ ...old, error: `第 ${index + 1} 页渲染失败：${error?.message || '未知错误'}` }));
@@ -187,7 +215,7 @@ export function TeachingAssetViewer({ api, asset, onClose }) {
         setRenderingPage(0);
       }
     }
-  }, [pages, scale]);
+  }, [pages, scale, cancelRender]);
 
   useEffect(() => { if (pages.length && scale) renderWindow(); }, [pages, scale, fullscreen, renderWindow]);
 

@@ -358,7 +358,29 @@ try {
   await shot('14-material-viewer');
 
   // 全屏：画布必须**按新尺寸重画**（用户报过「全屏还是这么小」——
-  // 进全屏后 stage 变宽了却没重画，画面就停在进全屏前的像素尺寸、缩在中间
+  // 进全屏后 stage 变宽了却没重画，画面就停在进全屏前的像素尺寸、缩在中间），
+  // 而且**内容不能变**（用户又报过「全屏之后画面倒着的、图也对不上」——
+  // 那是同一块画布上并存了两个 pdf.js 渲染任务、缓冲区被写花）。
+  // 所以这里对画布做 4×4 平均亮度指纹：内容只是被放大，指纹应当基本一致；
+  // 一旦翻转 / 错位 / 写花，指纹立刻对不上。
+  const fingerprint = () => page.evaluate(() => {
+    const canvas = document.querySelector('canvas.ta-canvas');
+    if (!canvas || !canvas.width) return null;
+    const context = canvas.getContext('2d');
+    const cells = [];
+    const cellW = Math.max(1, Math.floor(canvas.width / 4));
+    const cellH = Math.max(1, Math.floor(canvas.height / 4));
+    for (let gy = 0; gy < 4; gy += 1) {
+      for (let gx = 0; gx < 4; gx += 1) {
+        const data = context.getImageData(gx * cellW, gy * cellH, cellW, cellH).data;
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+        cells.push(Math.round(sum / (data.length / 4)));
+      }
+    }
+    return cells;
+  });
+  const beforeShot = await fingerprint();
   const canvasBefore = await page.locator('canvas.ta-canvas').first().boundingBox();
   await page.getByRole('button', { name: '全屏观看' }).click();
   await page.waitForTimeout(1600);
@@ -367,6 +389,12 @@ try {
   const canvasAfter = await page.locator('canvas.ta-canvas').first().boundingBox();
   if (!canvasBefore || !canvasAfter) problems.push('素材查看器：量不到画布尺寸');
   else if (!(canvasAfter.width > canvasBefore.width * 1.2)) problems.push(`全屏后画布没有按新尺寸重画（${Math.round(canvasBefore.width)}px → ${Math.round(canvasAfter.width)}px）`);
+  const afterShot = await fingerprint();
+  if (!beforeShot || !afterShot) problems.push('素材查看器：读不到画布像素');
+  else {
+    const worst = Math.max(...beforeShot.map((value, index) => Math.abs(value - afterShot[index])));
+    if (worst > 40) problems.push(`全屏后画面内容变了（指纹最大偏差 ${worst}）—— 像是渲染被写花或翻转：${JSON.stringify(beforeShot)} → ${JSON.stringify(afterShot)}`);
+  }
   await shot('15-material-viewer-fullscreen');
   await page.evaluate(() => document.exitFullscreen?.());
   await page.waitForTimeout(500);
