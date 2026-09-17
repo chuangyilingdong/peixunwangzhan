@@ -1096,17 +1096,14 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       else if (!textModelOptions().some((item) => item.id === requested)) throw errors.badRequest('该模型不在当前 AI 渠道的可选范围内', 'VIBECODING_MODEL_NOT_AVAILABLE');
       else nextModel = requested;
     }
-    // 选项（对话 / 写代码 / 做网页，2026-09-17）：它决定系统提示词，所以**只有还没聊过**才允许改 ——
-    // 聊到一半换选项会让同一段对话前后两套角色说明打架，学生也会以为前面的要求被继承了。
+    // 功能（对话 / 写代码 / 做网页，2026-09-17）：它决定系统提示词怎么拼。
+    // **随时可切** —— 界面上它就在输入框那一排（照豆包那种排法），学生换功能就该立刻换行为。
+    // 只影响**下一条消息起**的那一轮：系统提示词是每轮按当前值重拼的，历史不动，也不会两套说明叠在一起。
     let nextMode = normalizeVibeMode(conversation.mode);
     if (body.mode !== undefined) {
       const requested = normalizeVibeMode(body.mode);
-      if (!requested) throw errors.badRequest('不认识的课堂选项（可选：对话 / 写代码 / 做网页）', 'INVALID_VIBE_MODE');
-      if (requested !== nextMode) {
-        const said = Number(count('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id = ?', [conversation.id]) || 0);
-        if (said > 0) throw errors.conflict('这个对话已经开始了，选项不能再改；想换一种做法就新建一个对话。', 'VIBECODING_MODE_LOCKED');
-        nextMode = requested;
-      }
+      if (!requested) throw errors.badRequest('不认识的课堂功能（可选：对话 / 写代码 / 做网页）', 'INVALID_VIBE_MODE');
+      nextMode = requested;
     }
     q('UPDATE vibecoding_conversations SET title=?,model=?,mode=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
       [title, nextModel, nextMode || null, nowIso(), conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);

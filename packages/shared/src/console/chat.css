@@ -362,47 +362,6 @@
   transform: translateY(-1px);
 }
 
-/* 三张「做什么」的卡片（2026-09-17）：只在还没聊过时出现，选好之后 AI 按那个角色上课。
-   卡片是**选项**不是入口 —— 三个选项的能力边界完全一样，只有 AI 的默认角色与产出不同。 */
-.c-mode-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--sp-3);
-  width: min(100%, 640px);
-}
-.c-mode-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  text-align: left;
-  transition: border-color var(--dur-fast) var(--ease-standard),
-    background-color var(--dur-fast) var(--ease-standard),
-    transform var(--dur-fast) var(--ease-out);
-}
-.c-mode-card:hover { border-color: var(--border-focus); background: var(--bg-elevated); transform: translateY(-1px); }
-.c-mode-card.is-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface)); }
-.c-mode-card__icon {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-}
-.c-mode-card strong { color: var(--text); font-size: var(--fs-sm); }
-.c-mode-card small { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.6; }
-.c-landing__hint { color: var(--text-dim); font-size: var(--fs-xs); }
-/* 窄屏（手机竖屏）：三列会挤成一坨，改成竖排 */
-@media (max-width: 560px) {
-  .c-mode-grid { grid-template-columns: 1fr; }
-}
-
 /* ── 回到底部 ───────────────────────────────────────────────────────────
    挂在输入停靠区正上方；44×44 起，chevron 旋转 90° 变成朝下。 */
 .c-jump-latest {
@@ -505,8 +464,38 @@
   gap: var(--sp-3);
   padding: var(--sp-1) 0.625rem 0.625rem;
 }
-.c-composer__left { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.c-composer__left { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; overflow: hidden; }
 .c-composer__right { display: flex; align-items: center; gap: var(--sp-1); }
+
+/* ── 输入框里的功能按钮（2026-09-17）────────────────────────────────────
+   照豆包那种排法：一个页面，功能就是输入框这一排按钮，点了就切，不用先进一张选择页。
+   当前选中的高亮；窄屏允许横向滚动，别把发送键挤掉。 */
+.c-composer__divider { width: 1px; height: 18px; margin: 0 var(--sp-1); background: var(--border); flex: none; }
+.c-tools { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.c-tools::-webkit-scrollbar { display: none; }
+.c-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.c-tool-chip:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text); }
+.c-tool-chip.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.c-tool-chip:disabled { opacity: .5; }
 
 /* 发送键：34px 圆形；不可用时是中性底，可用时才点亮成橙色 */
 .c-send {

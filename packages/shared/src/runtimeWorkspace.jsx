@@ -130,7 +130,7 @@ export function RuntimeActions({ api, lesson, canEnter }) {
 
   return <>
     <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={launchState.launch}>
-      {launchState.launching ? `正在开环境…${launchState.elapsed ? ` ${launchState.elapsed}s` : ''}` : '让 AI 真的做出来'}
+      {launchState.launching ? `正在开环境…${launchState.elapsed ? ` ${launchState.elapsed}s` : ''}` : '进入创作环境'}
     </button>
     <button className="secondary-button" disabled={disabled} onClick={openPicker}>
       {busy === 'list' ? '读取中…' : busy === 'submit' ? '提交中…' : '提交作品'}

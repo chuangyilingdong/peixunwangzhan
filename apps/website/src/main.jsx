@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Notice, VibeCodingClassroom, VibeCodingWorkspace, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
@@ -340,19 +340,13 @@ function End({title,text}){return <section className="end"><h2>{title}</h2><p>{t
 // 前端不再有任何上报入口，服务端的接收端点与平台端「官网转化」看板也一并下线，只保留历史表与数据。
 function LearnPageInner({ api }) {
   // 以课程为先：先选课包，再选这一节课；上课形式由课包/这节课决定，学生不选。
-  return <main className='learn-page-shell'><StudentCourseCenter api={api} onEnterCanvas={(id) => { window.location.assign('/learn/canvas/' + id); }} onEnterVibeCoding={(id) => { window.location.assign('/learn/vibecoding/' + id); }} /></main>;
+  return <main className='learn-page-shell'><StudentCourseCenter api={api} onEnterCanvas={(id) => { window.location.assign('/learn/canvas/' + id); }} /></main>;
 }
 function LearnCanvasPage({ api }) {
   return <CanvasClassroom api={api} onEnterProject={(id) => { window.location.assign('/learn/canvas/' + id); }} />;
 }
 function LearnProjectPage({ api }) {
   return <CanvasWorkspace api={api} />;
-}
-function LearnVibeCodingPage({ api }) {
-  return <VibeCodingClassroom api={api} onEnterConversation={(id) => { window.location.assign('/learn/vibecoding/' + id); }} />;
-}
-function LearnVibeCodingConversationPage({ api }) {
-  return <VibeCodingWorkspace api={api} />;
 }
 export function App(){
   const loc = useLocation();
@@ -377,7 +371,6 @@ export function App(){
       '/minors': '儿童 / 未成年人说明 · AI魔法学院',
       '/learn': '学习上课 · AI魔法学院',
       '/learn/canvas': '画布上课 · AI魔法学院',
-      '/learn/vibecoding': 'VibeCoding 上课 · AI魔法学院',
     };
     const title = titles[loc.pathname] || titles['/'];
     document.title = title;
@@ -464,8 +457,6 @@ export function App(){
         <Route path='/learn' element={<LearnPageInner api={api}/>}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
-        <Route path='/learn/vibecoding' element={<LearnVibeCodingPage api={api}/>}/>
-        <Route path='/learn/vibecoding/:conversationId' element={<LearnVibeCodingConversationPage api={api}/>}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-courses' element={session ? <MyCoursesPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='/my-courses/:courseId' element={session ? <CourseDetailPage api={api} /> : <Navigate to='/login' replace />}/>

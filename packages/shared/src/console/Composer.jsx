@@ -19,6 +19,9 @@ export const Composer = forwardRef(function Composer({
   value, onChange, onSubmit, onStop, streaming = false, disabled = false,
   blockedReason = '', placeholder = '说说你想做什么…', history = [], maxLength = 4000,
   attachments = [], onAttach, onRemoveAttachment, onPasteFiles, uploading = false,
+  // 功能按钮：和附件、发送键同一排，点了就切（2026-09-17，照豆包那种「一个页面 + 一排功能」）。
+  // 每项 { id, icon, label }；activeId 那个高亮。不选也能用（不选＝按默认能力干活）。
+  tools = [], activeId = '', onSelectTool,
 }, ref) {
   const textareaRef = useRef(null);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -133,6 +136,27 @@ export const Composer = forwardRef(function Composer({
             <span className="c-dim" style={{ fontSize: 'var(--fs-xs)', fontVariantNumeric: 'tabular-nums' }}>
               {value ? `${String(value).length} / ${maxLength}` : ''}
             </span>
+            {/* 功能按钮排在附件键右边（豆包那一排的排法）：一眼看到「这个页面能做什么」，
+                不用先过一张选择页。当前选中的那个高亮；不选也能直接发消息。 */}
+            {tools.length ? <>
+              <span className="c-composer__divider" aria-hidden="true" />
+              <div className="c-tools" role="group" aria-label="功能">
+                {tools.map((tool) => (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    className={`c-tool-chip${tool.id === activeId ? ' is-active' : ''}`}
+                    aria-pressed={tool.id === activeId}
+                    disabled={disabled}
+                    title={tool.hint || tool.label}
+                    onClick={() => onSelectTool?.(tool.id)}
+                  >
+                    <ConsoleIcon name={tool.icon} size={15} />
+                    <span>{tool.label}</span>
+                  </button>
+                ))}
+              </div>
+            </> : null}
           </div>
           <div className="c-composer__right">
             {streaming ? (

@@ -85,6 +85,22 @@
             name: 平台网关 · DeepSeek Pro
             input: [text, image]
 
+# —— 学生端的三个功能：对话 / 写代码 / 做网页（2026-09-17）——
+# 用 dsh **原生的 preset 机制**：一个 preset = 一个目录（agent.cordis.yml 定义它自己的提示词/工具/技能，
+# preset.yml 给选择器显示的名字与描述）。dsh 自带的选择器（输入框那一排的「标准模式 ⌄」）会列出来，
+# 学生在那儿切换即可 —— 所以这条不需要任何自写插件。
+# ⚠️ dsh 的规矩：**只有空会话能切 preset**（已经聊过就固定了）。要「随时可切」得另想办法。
+# ⚠️ 为什么不用自写插件：实测这个部署里 `link:` 进 profile 的包**只有客户端半边会下发，
+#    宿主半边不被加载**（连品牌包的 apply 都没跑过），所以宿主插件这条路暂时走不通（见交接文档）。
+# 预设目录由 provision-user-runtime.sh 从官方 preset 复制而来（改 persona 段），装在 /opt/dsh-runtime/etc/dsh/agent-presets。
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  config:
+    default: chat
+    roots:
+      - path: /opt/dsh-runtime/etc/dsh/agent-presets
+        trust: user
+
 # —— 默认模型与官方路由：必须只用我们自己的网关 ——
 # dsh 出厂的默认模型是它自带的 `deepseek-official` 渠道（catalog 路由），容器里没有那个 key：
 # 学生一发消息就是 MISSING_CREDENTIAL（实测：界面显示 DeepSeek-V41-Flash，然后整轮失败）。

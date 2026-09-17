@@ -67,7 +67,6 @@ assert.equal(inferred.slides[0].chart.highlight, 1, '过滤数据点后高亮索
 assert.equal(inferred.slides.some((slide) => slide.title === '坏表格' && slide.table), false, '异常表格不能进入预览/下载结构');
 
 const workbench = fs.readFileSync(path.join(root, 'packages/shared/src/console/Workbench.jsx'), 'utf8');
-const workspace = fs.readFileSync(path.join(root, 'packages/shared/src/vibecodingWorkspace.jsx'), 'utf8');
 const dataHook = fs.readFileSync(path.join(root, 'packages/shared/src/classroom.jsx'), 'utf8');
 const route = fs.readFileSync(path.join(root, 'apps/server/src/routes/vibecoding.js'), 'utf8');
 const artifacts = fs.readFileSync(path.join(root, 'apps/server/src/services/vibecodingArtifacts.js'), 'utf8');
@@ -75,12 +74,9 @@ const artifacts = fs.readFileSync(path.join(root, 'apps/server/src/services/vibe
 assert.match(workbench, /c-phone-frame/);
 assert.match(workbench, /onFixConsole/);
 assert.match(workbench, /updatedAt \|\| b\.createdAt/);
-assert.match(workspace, /tabs=\{\['preview', 'console'\]\}/);
-assert.match(workspace, /visibility: 'PRIVATE'/);
-assert.match(workspace, /请修复当前作品/);
-assert.match(workspace, /activeConversationIdRef/);
-assert.match(workspace, /return \(\) => \{\s*abortRef\.current\?\.abort\(\)/);
-assert.match(workspace, /!artifacts\.length \|\| !target/);
+// ⚠️ 2026-09-17：原来这里还有一组针对平台老工作台（vibecodingWorkspace.jsx）的断言，
+// 那个文件已随「抛弃老 vibecoding」删除（学生干活的地方改成 dsh 创作环境）。
+// 上面这些断言覆盖的是**还活着的代码**（预览文档、提交依赖、PPT 版式、服务端隔离与配额），所以留着。
 assert.match(dataHook, /request === requestRef\.current/);
 assert.match(dataHook, /requestRef\.current \+= 1/);
 assert.match(route, /390×844/);
@@ -94,4 +90,4 @@ assert.match(artifacts, /fileCount >= ARTIFACT_LIMITS\.maxFiles/);
 assert.match(artifacts, /total - Number\(existing\?\.bytes \|\| 0\) \+ bytes/);
 
 fs.rm(temp, { recursive: true, force: true }, () => {});
-console.log('P95 VibeCoding 精品化守卫通过（手机预览、错误修复、提交隔离、私有素材、配额、新 PPT 版式）');
+console.log('P95 VibeCoding 精品化守卫通过（提交依赖、预览文档、提交隔离、私有素材、配额、新 PPT 版式）');

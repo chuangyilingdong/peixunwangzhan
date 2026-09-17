@@ -1,5 +1,20 @@
 /**
- * P108 VibeCoding 的三个选项（对话 / 写代码 / 做网页）与「沙箱改为按需」（2026-09-17）。
+ * P108 VibeCoding 的**页面归属**（2026-09-17，用户口径两次）。
+ *
+ * 第一次：「一个页面，分成不同的功能，例如像豆包这种」→ 功能做成一排按钮。
+ * 第二次：「我需要的是 dsh 那个页面来完成这些工作，抛弃掉以前的老 vibecoding」
+ *         → 学生干活的地方是**创作环境（dsh）**，平台那套老工作台删掉。
+ *
+ * 所以这个守卫现在钉的是**页面归属**这件事：
+ *   · 老工作台（平台自己的对话工作台）真的没了：文件、导出、路由都不在，
+ *     也不存在任何一条指向它的入口 —— 否则「抛弃」只是嘴上说说；
+ *   · VibeCoding 的入口就是「进入创作环境」（走宿主脚本拉起 dsh）+「提交作品」；
+ *   · 三个功能（对话 / 写代码 / 做网页）做在 **dsh 那边**（见 deploy/dsh-student/mode-plugin），
+ *     不在平台里再造一套；
+ *   · 后端的会话/产物/提交仍然在（dsh 那条路在用），所以老链路那部分提示词分档的断言保留，
+ *     但明确标注「已无界面」—— 别让下一个人以为它还是学生的路。
+ *
+ * 旧版这个守卫（沙箱按需、平台链路优先）已随用户口径作废。
  *
  * 背景：以前 VibeCoding 的入口绑在创作环境（dsh 沙箱）上 —— 沙箱不可用时卡片里只剩一个
  * 点不动的按钮。而那个沙箱一个人约 447MB，一台 1.6GB 的机器只装得下 1-2 个，
@@ -66,55 +81,42 @@ check('三个选项都保留文档写法说明', [chat, code, web].every((text) 
 check('「对话」档明确说了默认不产出文件（它是助教，不是产线）', /默认\*\*不要\*\*产出文件/.test(chat));
 check('「做网页」档明确要求不依赖外网资源（预览里加载不进来）', /不要依赖外网资源/.test(web));
 
-/* ── ③ 选项只能在还没聊过时选，非法值要明确报错 ───────────────────────────── */
+/* ── ③ 老链路的后端**保留**（dsh 那条路在用提交/产物），但已无学生界面 ──────────
+   这些断言钉的是「后端还在、参数校验还在」；不是「学生还会看到它」。
+   平台侧那个 mode 现在没有任何界面在写它（学生选功能是在 dsh 里），
+   留着是刻意的：删它要连提交/产物一起拆，风险大于收益，等专门一轮再收。 */
 const source = read('apps/server/src/routes/vibecoding.js');
 check('改选项走的是会话更新接口（PUT /conversations/:id），不新造一条', /body\.mode !== undefined/.test(source) && /UPDATE vibecoding_conversations SET title=\?,model=\?,mode=\?/.test(source));
-check('非法选项明确报错（INVALID_VIBE_MODE），不静默忽略', /INVALID_VIBE_MODE/.test(source));
-check('聊过之后锁定（VIBECODING_MODE_LOCKED），并且是**按消息数**判的',
-  /VIBECODING_MODE_LOCKED/.test(source) && /COUNT\(\*\) n FROM vibecoding_messages WHERE conversation_id/.test(source));
+check('非法功能明确报错（INVALID_VIBE_MODE），不静默忽略', /INVALID_VIBE_MODE/.test(source));
+check('**随时可切**（用户口径：像豆包那排功能按钮一样，不该锁）', !/VIBECODING_MODE_LOCKED/.test(source));
 check('会话下发带上了 mode（界面才能显示已选哪个）', /mode: normalizeVibeMode\(value\.mode\) \|\| null/.test(source));
 check('库里有这一列：新库建表带 mode，老库走 ALTER',
   /mode TEXT,/.test(read('packages/database/src/schema.js')) && /ALTER TABLE vibecoding_conversations ADD COLUMN mode TEXT/.test(read('packages/database/src/schema.js')));
 
-/* ── ④ 入口不再依赖沙箱；预览仍在沙箱 iframe 里 ───────────────────────────── */
+/* ── ④ 页面归属：老工作台真的没了，入口只走创作环境（dsh）─────────────────── */
 const classroom = read('packages/shared/src/classroom.jsx');
-check('VibeCoding 入口按钮**不在** runtime.ready 分支里', /offersVibe \? <button/.test(classroom));
-check('那个「点不动的兜底按钮」已经删掉（它的存在本身就是那个 bug）', !/只开 VibeCoding、而创作环境不可用时的兜底/.test(classroom));
-check('沙箱按钮仍保留，并且只在运行时可用时出现（它是升级点，不是入口）',
+const sharedIndex = read('packages/shared/src/index.js');
+const siteMain = read('apps/website/src/main.jsx');
+
+check('老工作台的两个文件已删除', !fs.existsSync(path.join(root, 'packages/shared/src/vibecodingWorkspace.jsx'))
+  && !fs.existsSync(path.join(root, 'packages/shared/src/vibecodingStream.js')));
+check('shared 不再导出它们', !/vibecodingWorkspace\.jsx/.test(sharedIndex) && !/vibecodingStream\.js/.test(sharedIndex));
+check('网站不再有 /learn/vibecoding 路由（否则「抛弃」只是嘴上说说）',
+  !/learn\/vibecoding/.test(siteMain) && !/VibeCodingWorkspace|VibeCodingClassroom/.test(siteMain));
+check('入口只走创作环境：VibeCoding 那一排就是「进入创作环境」+「提交作品」',
   /\{runtime\.ready && offersVibe \? <RuntimeActions/.test(classroom));
-const center = classroom.split('export function StudentCourseCenter')[1] || '';
-check('入口由按钮**显式指定**目标（两种都开时才不会点 VibeCoding 进了画布）',
-  /async function enter\(lesson, target\)/.test(center)
-  && /if \(target === 'VIBECODING'\)/.test(center)
-  && /enter\(lesson, 'VIBECODING'\)/.test(center) && /enter\(lesson, 'CANVAS'\)/.test(center));
-{
-  // 反向自检：enter() 内部**不许**再出现按课时单值分支的写法 —— 那正是「点 VibeCoding 却进画布」的来源。
-  // （modeOf 仍然可以用于徽标与提示文案，所以这里只看 enter 的函数体。）
-  const from = center.indexOf('async function enter(lesson, target)');
-  const body = from < 0 ? '' : center.slice(from, from + 1200);
-  check('enter() 内部不再按 modeOf 推分支', Boolean(body) && !/modeOf\(lesson\)/.test(body));
-}
+check('平台里不再有「建对话再跳页面」这条入口（老工作台的路）',
+  !/student\/vibecoding\/conversations/.test(classroom) && !/learn\/vibecoding/.test(classroom));
+check('这台机器开不了创作环境时，兜底按钮把原因写在按钮上（不留一个没头没尾的点不动按钮）',
+  /创作环境暂不可用/.test(classroom));
 
-const workspace = read('packages/shared/src/vibecodingWorkspace.jsx');
-check('三张选项卡片在工作台里（还没聊过时出现）', /c-mode-grid/.test(workspace) && /canPickMode/.test(workspace) && /chooseMode\(/.test(workspace));
-check('「让 AI 真的做出来」在工作台里也有一份，且与入口共用同一个 hook',
-  /useRuntimeLaunch/.test(workspace) && /upgradeToSandbox/.test(workspace) && /export function useRuntimeLaunch/.test(read('packages/shared/src/runtimeWorkspace.jsx')));
-check('升级前会把当前要求复制给剪贴板（沙箱是另一段对话，不带过去就得重说）', /navigator\.clipboard\.writeText\(handoffText\(\)\)/.test(workspace));
-check('工作台里升级失败会**说出来**（我第一版漏了这段，浏览器实检时抓到：点了没反应）',
-  /launch\.message/.test(workspace) && /toast\.error\(launch\.message\)/.test(workspace));
-
-// 宿主脚本失败的原因必须传到学生眼前：500「服务器内部错误」把「装不下新环境 / 端口占满」全吞了
-const runtime = read('apps/server/src/services/studentRuntime.js');
-check('宿主脚本失败映射成「说得清」的答复（不再是 500 内部错误）',
-  /errors\.serviceUnavailable\(`创作环境没开起来：\$\{tail\}`/.test(runtime) && /console\.error\(`\[studentRuntime\] 宿主操作失败/.test(runtime));
-
-// 预览：学生的代码只能跑在 sandbox iframe（allow-scripts）里，不能进主文档
+// 预览仍在沙箱 iframe 里：它现在服务的是**作品广场与机构端课堂详情**（学生工作台已删）
 const frame = read('packages/shared/src/console/PreviewFrame.jsx');
 check('预览仍是 sandbox="allow-scripts" 的 iframe（不引入同源执行）', /sandbox="allow-scripts"/.test(frame));
-check('预览仍走 /vibe-preview.html 那个放宽 CSP 的外壳（主站 CSP 会拦 srcdoc 的内联脚本）',
-  /PREVIEW_SHELL_URL = '\/vibe-preview\.html'/.test(frame) && /postMessage/.test(frame));
-check('预览文档仍由 buildPreviewDocument 统一拼（学生看到的与作品广场看到的一致）',
-  /buildPreviewDocument/.test(read('packages/shared/src/vibecodingWorkspace.jsx')) && /export function buildPreviewDocument/.test(read('packages/shared/src/vibecodingProject.js')));
+check('预览仍走 /vibe-preview.html 那个放宽 CSP 的外壳', /PREVIEW_SHELL_URL = '\/vibe-preview\.html'/.test(frame));
+check('预览文档仍由 buildPreviewDocument 统一拼（作品广场与机构端看的是同一份）',
+  /export function buildPreviewDocument/.test(read('packages/shared/src/vibecodingProject.js'))
+  && /buildPreviewDocument/.test(read('apps/website/src/pages/WorkDetail.jsx')));
 
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

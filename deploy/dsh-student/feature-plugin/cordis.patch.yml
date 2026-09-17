@@ -1,0 +1,9 @@
+# 学生端「功能」层：把输入框那一排交给灵动ai 自己的功能开关。
+#
+# 为什么是 patch 的 insert（而不是改 dsh 的代码）：插槽本来就是官方留出来的扩展点，
+# 我们只在 `conversation.input.left`（输入框工具行左侧，官方留白、没有占用者）里加自己的组件。
+# 这一行也是**客户端半边被扫描的前提**：dsh 只扫描 loader 里的行，没这一行
+# package.json 里的 dsh.client 根本不会被看到。
+- insert:
+    - id: lingdong-feature
+      name: '@lingdong/dsh-feature'

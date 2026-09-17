@@ -172,7 +172,7 @@ export function CanvasClassroom({ api, onEnterProject }) {
 // （`course_lessons.delivery_mode`，老师开课堂时也按这一节选），学生一进来就选方式，
 // 等于让他去猜老师开的是哪种课堂。所以入口改成：先看课包 → 再选这一节课 →
 // 服务端给出的 `deliveryMode` 决定进哪个创作环境，学生不需要知道也不需要选。
-export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
+export function StudentCourseCenter({ api, onEnterCanvas }) {
   const navigate = useNavigate();
   const classroom = useData(() => api.get('student/dashboard'), [api]);
   const [busy, setBusy] = useState(null);
@@ -193,30 +193,20 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
   const modesOf = (lesson) => (lesson?.deliveryModes?.length ? lesson.deliveryModes : [lesson?.deliveryMode || 'CANVAS'])
     .filter((mode) => Object.hasOwn(DELIVERY_MODE_LABEL, mode));
 
-  async function enter(lesson, target) {
-    // ⚠️ 目标入口必须由**按钮**传进来，不能从课时上推：一个课时可以两种都开，
-    // 而 lesson.deliveryMode 只是「第一种」，按它分支会让 VibeCoding 按钮走进画布分支
-    //（2026-09-17 发现：点 VibeCoding 却进了画布，正是这条推出来的）。
-    if (target === 'VIBECODING' ? !lesson.canStartVibeCoding : !lesson.canStart) return;
+  // 只负责画布入口。VibeCoding 的入口是「进入创作环境」（RuntimeActions，走宿主脚本拉起 dsh），
+  // 与画布不是同一条流程，所以**不在这里按课时类型分支** —— 那个分支写法 2026-09-17 修过一次
+  //（一个课时两种都开时，按课时单值推会把 VibeCoding 按钮送进画布）。
+  async function enter(lesson) {
+    if (!lesson.canStart) return;
     setBusy(lesson.id); setMessage('');
     try {
-      if (target === 'VIBECODING') {
-        // 每次进入由服务端校验当前课堂并幂等取得这节课堂的对话。
-        const created = await api.post('student/vibecoding/conversations', {
-          sessionId: lesson.session?.id,
-          lessonId: lesson.id,
-          title: `${lesson.title || '今日课堂'} · 创作对话`,
-        });
-        (onEnterVibeCoding || ((id) => navigate(`/learn/vibecoding/${id}`)))(created.id);
-      } else {
-        const project = await api.post('student/projects', {
-          sessionId: lesson.session?.id,
-          title: `${lesson.title || '今日课堂'} · 我的创作`,
-          courseLessonId: lesson.id,
-          canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
-        });
-        (onEnterCanvas || ((id) => navigate(`/learn/canvas/${id}`)))(project.id);
-      }
+      const project = await api.post('student/projects', {
+        sessionId: lesson.session?.id,
+        title: `${lesson.title || '今日课堂'} · 我的创作`,
+        courseLessonId: lesson.id,
+        canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
+      });
+      (onEnterCanvas || ((id) => navigate(`/learn/canvas/${id}`)))(project.id);
     } catch (error) { setMessage(error.message || '进入课堂失败'); }
     finally { setBusy(null); }
   }
@@ -268,25 +258,26 @@ export function StudentCourseCenter({ api, onEnterCanvas, onEnterVibeCoding }) {
               <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
             </div>
             <div className="lesson-detail-action">
-              {/* VibeCoding 课（2026-09-17 口径）：入口**不再依赖创作环境**——
-                  进去默认走平台自己的链路（无沙箱、秒进），进去之后学生自己选
-                  「对话 / 写代码 / 做网页」。想「让 AI 真的做出来」时再点 RuntimeActions 里
-                  那个按钮把盒子开起来（它是升级点，不是入口；这台机器没配好时它渲染 null）。
+              {/* VibeCoding 课（2026-09-17 口径变更）：**学生干活的地方就是创作环境（dsh）**。
+                  平台自己那套老工作台已删（用户口径：「我需要的是 dsh 那个页面来完成这些工作，
+                  抛弃掉以前的老 vibecoding」），所以这里不放任何指向平台内对话页的按钮 ——
+                  入口就是「进入创作环境」+「提交作品」。
                   两种都开时**两个入口并列**（画布按钮 + VibeCoding 那两个），学生自己挑。 */}
-              {offersVibe ? <button className={canEnterVibe ? 'primary-button' : 'secondary-button'} disabled={!canEnterVibe || busy === lesson.id} onClick={() => enter(lesson, 'VIBECODING')}>
-                {busy === lesson.id ? '正在进入…'
-                  : canEnterVibe ? '进入课堂'
-                    : lesson.participationStatus === 'COMPLETED' ? '已完课'
-                      : lesson.hasGrant === false ? '未授权'
-                        : '等待开课'}
-              </button> : null}
               {runtime.ready && offersVibe ? <RuntimeActions api={api} lesson={lesson} canEnter={canEnterVibe} /> : null}
-              {offersCanvas ? <button className={canEnterCanvas ? 'primary-button' : 'secondary-button'} disabled={!canEnterCanvas || busy === lesson.id} onClick={() => enter(lesson, 'CANVAS')}>
+              {offersCanvas ? <button className={canEnterCanvas ? 'primary-button' : 'secondary-button'} disabled={!canEnterCanvas || busy === lesson.id} onClick={() => enter(lesson)}>
                 {busy === lesson.id ? '正在进入…'
                   : canEnterCanvas ? (lesson.continueProject ? '继续创作' : '进入课堂')
                     : lesson.participationStatus === 'COMPLETED' ? '已完课'
                       : lesson.hasGrant === false ? '未授权'
                         : '等待开课'}
+              </button> : null}
+              {/* 只开 VibeCoding、而这台机器现在开不了创作环境时的兜底：按钮点不动，但**把原因说在按钮上**
+                  （别让卡片空着，也别让学生以为是自己点错了）。 */}
+              {offersVibe && !runtime.ready ? <button className="secondary-button" disabled>
+                {busy === lesson.id ? '正在进入…'
+                  : lesson.participationStatus === 'COMPLETED' ? '已完课'
+                    : lesson.hasGrant === false ? '未授权'
+                      : canEnterVibe ? '创作环境暂不可用' : '等待开课'}
               </button> : null}
             </div>
           </article>;

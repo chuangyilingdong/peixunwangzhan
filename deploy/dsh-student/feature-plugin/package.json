@@ -1,0 +1,23 @@
+{
+  "name": "@lingdong/dsh-feature",
+  "version": "1.0.0",
+  "private": true,
+  "description": "灵动ai 学生端「功能」开关：在输入框那一排给三个功能（对话 / 写代码 / 做网页），点了就切，切了 AI 的角色跟着变",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
+    }
+  }
+}
