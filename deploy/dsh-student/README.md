@@ -99,6 +99,25 @@
 >    判断插件加载，而那次判断建立在一份**没有重启过的部署**上，于是得出「宿主插件挂不上」的**错误结论**，
 >    整个方向都跟着错了一轮。判插件有没有加载，请直接读启动日志。
 
+## 办公文件预览：Univer 插件（2026-09-17 起装）
+
+学生用 dsh 做出了 `.pptx`，但 dsh 自己没有 office 渲染器 —— 界面只给一句「此文件类型不支持预览」，
+于是「生成了个 PPT，打不开也看不到」。装 `dsh-univer-office`（0.3.2）补上这一块：
+**浏览器内预览与编辑** xlsx / docx / pptx（导入 `.xlsx/.csv/.tsv/.docx/.pptx`）。
+它声明支持 `^0.1.5-rc.1`，与我们钉的 dsh 版本对得上。
+
+三条**实测**出来的事（写在这里免得下一轮再踩）：
+
+| 事项 | 实测 |
+|---|---|
+| `dsh plugin add` 会重算 bundles | 它把 `dsh-ppt` **又加回了 bundles** —— 必须再摘一次（否则与 composer 抢注册 `dsh-ppt-bundled`，整棵插件树起不来）。所以这一步必须排在「PPT 那一步之后」 |
+| Chromium | 「PDF 打印 / 截图 / 幻灯片校验 / SVG 文字测量」**需要本机有 Chromium**。镜像里没有（`/usr/bin/chromium-browser` 只是 snap 桩，`/snap/bin/chromium` 不存在）→ 这几项不可用；**预览与编辑本身是浏览器内渲染，不受影响** |
+| 内存 | 一个学生环境 RSS 从 **~258MB → ~550MB（+~290MB）**。这台 1.6GB 的机器本来就只塞得下 1-2 个环境，装完余量更紧 —— 要开更多学生得先加内存 |
+
+顺带（同一轮）：宿主上的 `/opt/ppt-bundles` **原本是缺的**，而 profile 的 pnpm override 指着它
+（`file:/opt/ppt-bundles/dsh-ppt.tgz`）—— 于是**任何 pnpm 操作都会失败**（`dsh plugin add` 也跑不了）。
+镜像里有这份、`provision` 不抽它，所以宿主上要单独补：见下面「PPT 预设」一节的做法。
+
 **部署**：包放在 `/opt/feature-plugin`，profile 的 `node_modules/@lingdong/dsh-feature` 软链指向它，
 `package.json` 的 `dsh.profile.bundles` 里也要有 `@lingdong/dsh-feature`（**两个都要**：
 bundles 决定加载器有这一行，node_modules 决定这行解析得到；缺前者不会加载，缺后者整个环境起不来）。

@@ -219,5 +219,20 @@ check('provision 会抽取 opt/feature-plugin 并补上根路径软链',
 check('「补丁层与 profile 的源头是镜像」这件事写在部署 README 里了（否则下一个人会去改宿主上的文件）',
   /补丁层的源头是镜像/.test(read('deploy/dsh-student/README.md')));
 
+// Univer 办公插件（2026-09-17）：让 dsh 里能预览 pptx/xlsx/docx。
+// 三条实测约束必须随镜像走，不然下一轮会踩：`dsh plugin add` 会把 dsh-ppt 加回 bundles、
+// 没有 Chromium 则 PDF/截图那几项不可用、一个学生环境内存 +~290MB。
+check('Dockerfile 装了 dsh-univer-office，并把 dsh-ppt 从 bundles 再摘一次（否则抢注册、整棵树起不来）',
+  /dsh plugin --profile web add dsh-univer-office/.test(dockerfile)
+  && /j\.dsh\.profile\.bundles=j\.dsh\.profile\.bundles\.filter\(\(b\)=>b!=='dsh-ppt'\)/.test(dockerfile)
+  && /univer 没进 bundles/.test(dockerfile));
+check('装 univer 排在**最后一条 dsh plugin add**（PPT 那步）之后：bundles 的最终状态由它自己的断言收口',
+  dockerfile.indexOf('add dsh-univer-office') > 0
+  && dockerfile.indexOf('add dsh-univer-office') > dockerfile.indexOf('ARG PPT_BUNDLE='));
+check('「没有 Chromium → PDF/截图不可用」与「内存 +~290MB」两条实测都写进 Dockerfile 注释了',
+  /需要本机有 Chromium/.test(dockerfile) && /\+~290MB/.test(dockerfile));
+check('部署 README 也记了内存这笔账（1.6GB 机器本来就只塞得下 1-2 个环境）',
+  /univer/i.test(read('deploy/dsh-student/README.md')) && /290MB/.test(read('deploy/dsh-student/README.md')));
+
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

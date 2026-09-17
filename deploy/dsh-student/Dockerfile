@@ -88,6 +88,24 @@ ARG PPT_BUNDLE=dsh-ppt-0.1.1-rc.2-desktop-20260906.tgz
 ARG PPT_COMPOSER_BUNDLE=dsh-ppt-composer-0.1.1-rc.2-desktop-20260906.tgz
 RUN mkdir -p /opt/ppt-bundles && cd /opt/ppt-bundles  && for f in "${PPT_BUNDLE}" "${PPT_COMPOSER_BUNDLE}"; do       for attempt in 1 2 3; do         curl -fsSL --retry 3 --retry-delay 2           "https://cdn.jsdelivr.net/gh/dataelement/dsh-desktop@${DSH_DESKTOP_SHA}/packages/ppt-bundles/${f}" -o "${f}" && break;         [ "${attempt}" = "3" ] && { echo "拉取 ${f} 失败" >&2; exit 1; };         sleep 3;       done;     done  && ln -sf "${PPT_BUNDLE}" dsh-ppt.tgz  && dsh plugin --profile web add "/opt/ppt-bundles/${PPT_BUNDLE}"  && node -e "const fs=require('fs');const p=process.env.DSH_HOME+'/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.pnpm={...(j.pnpm||{}),overrides:{...((j.pnpm&&j.pnpm.overrides)||{}),'dsh-ppt':'file:/opt/ppt-bundles/dsh-ppt.tgz'}};fs.writeFileSync(p,JSON.stringify(j,null,2));"  && dsh plugin --profile web add "/opt/ppt-bundles/${PPT_COMPOSER_BUNDLE}"  && node -e "const fs=require('fs');const p=process.env.DSH_HOME+'/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.dsh.profile.bundles=j.dsh.profile.bundles.filter((b)=>b!=='dsh-ppt');fs.writeFileSync(p,JSON.stringify(j,null,2));"  && node -e "const j=require(process.env.DSH_HOME+'/profiles/web/package.json');const b=j.dsh.profile.bundles;if(!b.includes('dsh-ppt-composer'))throw new Error('composer 没进 bundles');if(b.includes('dsh-ppt'))throw new Error('dsh-ppt 必须只当依赖、不能当 bundle（会与 composer 抢注册 dsh-ppt-bundled）');if(!(j.dependencies||{})['dsh-ppt'])throw new Error('dsh-ppt 依赖丢了');console.log('PPT bundles OK:',b.filter((x)=>x.includes('ppt')).join(','));"
 
+# Univer 办公插件（2026-09-17）：让 dsh 里**能预览/编辑** pptx / xlsx / docx ——
+# 学生用 dsh 做出了 PPT，但 dsh 自己没有 office 渲染器，界面只给一句「此文件类型不支持预览」。
+# 版本：0.3.2；它声明支持 `^0.1.5-rc.1`，与我们钉的 dsh 0.1.5-rc.1 对得上；engines node>=22.19（镜像是 24.9）。
+#
+# ⚠️ 四条实测出来的事，别在下一轮再踩：
+#   ① `dsh plugin add` 会**按已装包重算 bundles**，把 dsh-ppt 又加回 bundles —— 必须再摘一次
+#      （dsh-ppt 只是依赖，进了 bundles 会与 composer 抢注册 `dsh-ppt-bundled`，整棵树起不来）。
+#   ② 所以这一步必须排在**最后一条 `dsh plugin add`**（也就是上面 PPT 那一步之后）——
+#      它是最后动的，bundles 的最终状态要由它自己的断言来收口（同时盯 univer 在不在、dsh-ppt 有没有回来）。
+#   ③ 「PDF 打印 / 截图 / 幻灯片校验 / SVG 文字测量」**需要本机有 Chromium**。镜像里没有
+#      （`/usr/bin/chromium-browser` 只是 snap 桩，`/snap/bin/chromium` 并不存在）——这几项不可用；
+#      **预览与编辑本身是 Univer 在浏览器里渲染，不受影响**。
+#   ④ 内存实测（宿主上真跑）：一个学生环境 RSS 从 ~258MB 涨到 ~550MB（**+~290MB**）。
+#      这台 1.6GB 的机器本来就只塞得下 1-2 个学生环境，装完之后余量更紧 ——
+#      要开更多学生就得先加内存，或者按需把它关掉。
+RUN dsh plugin --profile web add dsh-univer-office \
+ && node -e "const fs=require('fs');const p=process.env.DSH_HOME+'/profiles/web/package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));if(!j.dependencies['dsh-univer-office'])throw new Error('univer 没进 dependencies');if(!j.dsh.profile.bundles.includes('dsh-univer-office'))throw new Error('univer 没进 bundles');j.dsh.profile.bundles=j.dsh.profile.bundles.filter((b)=>b!=='dsh-ppt');fs.writeFileSync(p,JSON.stringify(j,null,2));const k=JSON.parse(fs.readFileSync(p,'utf8'));if(k.dsh.profile.bundles.includes('dsh-ppt'))throw new Error('dsh-ppt 又回到 bundles 了');if(!k.dependencies['dsh-ppt'])throw new Error('dsh-ppt 依赖丢了');console.log('univer 已装；dsh-ppt 只在依赖里');"
+
 ENV DSH_WORKSPACE=/home/student/workspace \
     DSH_COURSE_SKILLS=/etc/dsh/skills \
     DSH_PERMISSION_MODE=workspace-write \
