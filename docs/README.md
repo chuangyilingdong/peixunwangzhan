@@ -135,18 +135,17 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：0801bc8（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260917T111554Z / commit 0801bc8（服务 learning-platform-production @127.0.0.1:8789）
-      生效内容：**002 六屏齐了** —— 002-03 学生授权中心 / 002-04 学生授权详情 / 002-04B 单授权抽屉 /
-      002-06 采购·增购·开通记录；配套三个新机构侧接口
-      （org/student-grants-summary、org/students/:id/course-grants、org/license-batches）
-      部署后核验：BUILD-METADATA commit = 0801bc8；active、NRestarts=0；
-      /、/admin/、/org/、/student/、/api/health 全 200；四端入口资产 content-type 正确（js/css）；
-      **线上 /org 入口包里能找到本次新屏文案**（学生授权中心 / 采购 / 增购 / 开通记录 / 学生授权详情）
-      —— 证明线上跑的确实是新代码，不只是「文件 200」；
-      真 Chrome 打开线上 /org、/admin、/learn 均可挂载、无 JS 异常、无失败请求
-      上一版（可回滚）：release 20260917T105252Z / commit d6e432e
-      整库备份：production/backups/20260917T111553Z/platform.db（12.9MB；目录名比 release 戳早 1 秒，别按 release 戳去找）
+代码提交：1ec4f9f（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260917T115238Z / commit 1ec4f9f（服务 learning-platform-production @127.0.0.1:8789）
+      生效内容：002 六屏（002-01/02/03/04/04B/06）+ 本轮按线框图（图1）重排的 002-04：
+      **授权状态 3 态**（待激活 / 学习中 / 已取消 —— 按线框图「授权规则」给的判定口径真算出来，
+      不再是「数据库没状态列」）、**002-04A「添加课包」抽屉**（候选池规则 + 仅单选 + 授权后预览）
+      部署后核验：BUILD-METADATA commit = 1ec4f9f；active、NRestarts=0；五入口全 200；
+      四端入口资产 content-type 正确（js/css）；**线上 /org 入口包与 release 产物逐字节一致**
+      （releases/20260917T115238Z/apps/org/assets/index-68Ux3RNI.js，761901B，
+      md5 932652187c32…），且包里含本次新文案（002-04A / 候选课包规则 / 本次授权预览 / 待激活 / 学习中）
+      上一版（可回滚）：release 20260917T111554Z / commit 0801bc8
+      整库备份：production/backups/20260917T115237Z/platform.db（12.9MB；⚠️ 目录名比 release 戳早 1 秒）
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 对外售价：对话 1 / 图片 1 / 视频 5 / 音乐 2 元每次（库里按**分**存：100 / 100 / 500 / 200）
           ⚠️ 只是**观测口径**的对外公告价：不扣学生、不计收入、不进真实毛利公式
