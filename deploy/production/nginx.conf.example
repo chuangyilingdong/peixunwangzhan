@@ -1,5 +1,20 @@
 # AI 少儿编程平台｜iicili.cyou 生产单域名配置
 # 生产 API 仅监听 127.0.0.1:8789；80 强制跳转 HTTPS。
+#
+# ⚠️ 服务器级前置要求（不在本文件里，换机器 / 重装时必须补）：
+#   **`/etc/nginx/mime.types` 的 `application/javascript` 那一行要带上 `mjs`。**
+#   nginx 编译内置的类型表里有 `js` 但没有 `mjs`，于是 .mjs 回落成 `application/octet-stream`；
+#   再配上本文件里的 `X-Content-Type-Options: nosniff`，浏览器**直接拒收**这个模块脚本
+#   —— 2026-09-17 线上真实故障：pdf.js 的 worker 报 "Failed to fetch dynamically imported module"，
+#   而文件是 200 能取到的，只看状态码发现不了。
+#   做法：
+#     sed -i 's|^\( *\)application/javascript\( *\)\(.*\);[[:space:]]*$|\1application/javascript\2\3 mjs;|' /etc/nginx/mime.types
+#     nginx -t && systemctl reload nginx
+#   ⚠️ 不要在 server{} 里写 `types { … }` 去补 —— 那会**替换掉整张类型表**，
+#      css/js/png 会一起变成 octet-stream。
+#   ⚠️ 改完要**等 reload 生效再验证**（HUP 之后新 worker 才接管，立刻探测可能还是旧行为）。
+#   ⚠️ 另外：本仓库的 apps/org 构建已把 .mjs 产物统一改名成 .js（见 vite.config.mjs），
+#      所以即使服务器没配这条，机构端的 pdf.js worker 也能加载 —— 这条是兜底与通用性。
 
 server {
     listen 80;
