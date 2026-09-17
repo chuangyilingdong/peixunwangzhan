@@ -118,6 +118,19 @@ import { ensureOrgBilling, integer, orgId, orgUser, hasPermission, accessibleLes
  */
 const GRANT_STATE_LABELS = { PENDING_ACTIVATION: '待激活', LEARNING: '学习中', REVOKED: '已取消' };
 
+/**
+ * 授权操作的「来源」枚举（002-05 的「来源」列要它）。
+ * 审计表原来只记 request_path，而机构授权的路径都是 `/api/org/course-grants`，分不出是哪个入口发起的；
+ * 所以让调用方带一个**受限枚举**，存进 `audit_logs.after_data` —— 不是新列，不需要迁移。
+ * 白名单外的值一律当没传（不让前端往审计里塞任意字符串）。
+ */
+const GRANT_SOURCE_LABELS = {
+  STUDENT_CENTER: '学生授权中心',
+  STUDENT_DETAIL: '学生授权详情',
+  ADD_GRANT_DRAWER: '学生授权详情（添加课包）',
+  GRANT_PAGE: '为学生添加课包',
+};
+
 export async function handleOrg(ctx) {
   const { pathname, method } = ctx;
   if (!pathname.startsWith('/api/org/')) return null;
@@ -230,7 +243,7 @@ export async function handleOrg(ctx) {
   if (auth.user.role === 'TEACHER' && (/^\/users(?:\/|$)/.test(part) || part === '/course-grants' || part === '/series-overview'
     // 2026-09-17：002-03 / 002-04 / 002-06 这三个新入口与库存、授权同一权限面 ——
     // 教师只能看自己课堂，看不到机构的人次账与学生授权明细。
-    || part === '/student-grants-summary' || part === '/license-batches' || /^\/students\/[^/]+\/course-grants$/.test(part))) throw errors.forbidden('仅机构管理员可管理学生及授权', 'ORG_ADMIN_REQUIRED');
+    || part === '/student-grants-summary' || part === '/license-batches' || part === '/student-grant-records' || /^\/students\/[^/]+\/course-grants$/.test(part))) throw errors.forbidden('仅机构管理员可管理学生及授权', 'ORG_ADMIN_REQUIRED');
   if (part === '/users' && method === 'GET') {
     const role = ctx.search.get('role');
     // 教师需要读取本机构学生名册，才能履行“将学生加入班级”的职责；不开放教师名册和机构成员管理权限。
@@ -1184,6 +1197,9 @@ export async function handleOrg(ctx) {
   if (part === '/course-grants' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可以给学员授权课包', 'ORG_ADMIN_REQUIRED');
     const seriesId = nonEmptyString(ctx.body?.seriesId, '课包', { max: 100 });
+    // 002-05「来源」列要它，见 GRANT_SOURCE_LABELS 的注释（白名单外的值当没传）
+    const requestedSource = String(ctx.body?.source || '').trim().toUpperCase();
+    const grantSource = GRANT_SOURCE_LABELS[requestedSource] ? requestedSource : null;
     const requested = Array.isArray(ctx.body?.studentIds) ? ctx.body.studentIds : [];
     const studentIds = [...new Set(requested.map((value) => String(value || '').trim()).filter(Boolean))];
     if (!studentIds.length || studentIds.length > 200) throw errors.badRequest('请选择 1-200 名学员', 'INVALID_STUDENT_IDS');
@@ -1221,7 +1237,7 @@ export async function handleOrg(ctx) {
         appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-grant:${grantId}:${now}` });
       });
       if (fresh.length) q('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
-    audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length }, { orgId: currentOrgId });
+    audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length, source: grantSource }, { orgId: currentOrgId });
     return { granted: fresh.length, skipped: studentIds.length - fresh.length, quotaTotal, quotaUsed: quotaUsed + fresh.length };
     });
   }
@@ -1442,6 +1458,129 @@ export async function handleOrg(ctx) {
     const filtered = businessFilter ? scoped.filter((item) => item.businessType === businessFilter) : scoped;
     const { page, limit } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
     return { ...pageResult(filtered.slice((page - 1) * limit, page * limit), { page, limit, total: filtered.length }), totals };
+  }
+
+  /**
+   * 002-05 学生授权记录（2026-09-17 按线框图第 2 张）。
+   *
+   * 数据源 = **现有审计表** `audit_logs`（用户 2026-09-17 定的口径，不为它新建表）：
+   *   · `ORG_COURSE_GRANT` —— 机构授权（target=COURSE_SERIES，`after_data.studentIds` 是被授权的人）
+   *   · `COURSE_GRANT_REVOKE` —— 平台撤销（target=STUDENT_COURSE_GRANT，target_id 就是 grant.id）
+   *
+   * ⚠️ 套用审计表有**三处对不全**（用户已知并接受，所以界面上要如实说明，不能看起来像全的）：
+   *   ① 「操作结果」只有成功 —— 失败的授权在抛错前就返回了，**根本不落审计**；
+   *   ② 「来源」老记录没有（只有 request_path，而机构授权的路径永远是 `/api/org/course-grants`）；
+   *      所以从这一版起让调用方带 `source` 存进 after_data，老记录只能显示「机构端授权」；
+   *   ③ 一次批量授权在审计里是**一条**记录，这里按 `studentIds` 拆成每人一行（线框图要的是人维度）。
+   * 另外注意：机构端**没有**取消授权权限，所以「取消授权」那些行的操作账号一定是**平台**侧账号。
+   */
+  if (part === '/student-grant-records' && method === 'GET') {
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生授权记录', 'ORG_ADMIN_REQUIRED');
+    const logs = rows(`SELECT log.id, log.action, log.target_id, log.actor_id, log.before_data, log.after_data, log.created_at,
+        actor.display_name actor_name, actor.login actor_login
+      FROM audit_logs log
+      LEFT JOIN users actor ON actor.id=log.actor_id
+      WHERE log.org_id=? AND log.action IN ('ORG_COURSE_GRANT','COURSE_GRANT_REVOKE')
+      ORDER BY log.created_at DESC, log.id DESC
+      LIMIT 2000`, [currentOrgId]);
+    // 批量把名字查出来（逐条查库会 N+1）
+    const studentIds = new Set();
+    const grantIds = new Set();
+    for (const log of logs) {
+      if (log.action === 'ORG_COURSE_GRANT') {
+        for (const studentId of (parseJson(log.after_data, {})?.studentIds || [])) studentIds.add(studentId);
+      } else if (log.target_id) grantIds.add(log.target_id);
+    }
+    const grantById = new Map();
+    if (grantIds.size) {
+      const placeholders = [...grantIds].map(() => '?').join(',');
+      for (const item of rows(`SELECT id, student_id, series_id FROM student_course_grants WHERE id IN (${placeholders})`, [...grantIds])) {
+        grantById.set(item.id, item);
+        studentIds.add(item.student_id);
+      }
+    }
+    const studentById = new Map();
+    if (studentIds.size) {
+      const placeholders = [...studentIds].map(() => '?').join(',');
+      for (const item of rows(`SELECT id, login, display_name FROM users WHERE id IN (${placeholders})`, [...studentIds])) studentById.set(item.id, item);
+    }
+    // 课包：机构的授权记录里 target_id 就是 seriesId；撤销的要从 grant 行反查
+    const seriesIds = new Set();
+    for (const log of logs) {
+      if (log.action === 'ORG_COURSE_GRANT') { if (log.target_id) seriesIds.add(log.target_id); }
+      else { const grant = grantById.get(log.target_id); if (grant?.series_id) seriesIds.add(grant.series_id); }
+    }
+    const seriesById = new Map();
+    if (seriesIds.size) {
+      const ids = [...seriesIds];
+      const placeholders = ids.map(() => '?').join(',');
+      for (const item of rows(`SELECT id, title FROM course_series WHERE id IN (${placeholders})`, ids)) seriesById.set(item.id, item);
+    }
+    const records = [];
+    for (const log of logs) {
+      const isGrant = log.action === 'ORG_COURSE_GRANT';
+      const after = parseJson(log.after_data, {}) || {};
+      // 授权：操作账号 = 发起授权的机构账号；取消：平台侧账号
+      const base = {
+        occurredAt: log.created_at,
+        operationType: isGrant ? 'GRANT' : 'REVOKE',
+        operationLabel: isGrant ? '授权' : '取消授权',
+        // 能进审计的就只有成功的（失败的没落库）—— 这不是"全部成功"，是"只看得见成功"
+        result: 'SUCCESS', resultLabel: '成功',
+        actorId: log.actor_id || null,
+        actorName: log.actor_name || log.actor_login || (isGrant ? '机构账号' : '平台账号'),
+        actorScope: isGrant ? 'ORG' : 'PLATFORM',
+        source: isGrant ? (after.source || 'ORG_UNKNOWN') : 'PLATFORM',
+        sourceLabel: isGrant ? (GRANT_SOURCE_LABELS[after.source] || '机构端授权（旧记录无来源）') : '平台撤销',
+        note: isGrant ? null : (after.reason || null),
+      };
+      if (isGrant) {
+        for (const studentId of (Array.isArray(after.studentIds) ? after.studentIds : [])) {
+          const student = studentById.get(studentId);
+          records.push({
+            ...base, id: `${log.id}:${studentId}`,
+            studentId, studentName: student?.display_name || null, studentLogin: student?.login || null,
+            seriesId: log.target_id, seriesTitle: seriesById.get(log.target_id)?.title || null,
+          });
+        }
+      } else {
+        const grant = grantById.get(log.target_id);
+        const student = grant ? studentById.get(grant.student_id) : null;
+        records.push({
+          ...base, id: log.id,
+          studentId: grant?.student_id || null, studentName: student?.display_name || null, studentLogin: student?.login || null,
+          seriesId: grant?.series_id || null, seriesTitle: grant ? (seriesById.get(grant.series_id)?.title || null) : null,
+        });
+      }
+    }
+    // 卡片：三条是**绝对口径**（本月 / 今日），记录总数是全部 —— 与筛选无关（和 002-06 同一套理由）
+    const monthStart = `${nowIso().slice(0, 7)}-01`;
+    const dayStart = `${nowIso().slice(0, 10)}`;
+    const totals = {
+      grantedThisMonth: records.filter((item) => item.operationType === 'GRANT' && String(item.occurredAt) >= monthStart).length,
+      revokedThisMonth: records.filter((item) => item.operationType === 'REVOKE' && String(item.occurredAt) >= monthStart).length,
+      grantedToday: records.filter((item) => item.operationType === 'GRANT' && String(item.occurredAt) >= dayStart).length,
+      total: records.length,
+    };
+    const search = String(ctx.search.get('search') || '').trim().toLowerCase();
+    const seriesFilter = String(ctx.search.get('seriesId') || '').trim();
+    const typeFilter = String(ctx.search.get('operationType') || '').trim().toUpperCase();
+    const actorFilter = String(ctx.search.get('actorId') || '').trim();
+    const from = String(ctx.search.get('from') || '').trim();
+    const to = String(ctx.search.get('to') || '').trim();
+    const filtered = records.filter((item) => {
+      if (seriesFilter && item.seriesId !== seriesFilter) return false;
+      if (typeFilter && item.operationType !== typeFilter) return false;
+      if (actorFilter && item.actorId !== actorFilter) return false;
+      if (from && String(item.occurredAt) < from) return false;
+      if (to && String(item.occurredAt) > to) return false;
+      if (search && !`${item.studentName || ''} ${item.studentLogin || ''}`.toLowerCase().includes(search)) return false;
+      return true;
+    });
+    // 「操作账号」下拉：本机构记录里出现过的账号去重（只有平台侧账号做过取消）
+    const actorOptions = [...new Map(records.filter((item) => item.actorId).map((item) => [item.actorId, { actorId: item.actorId, name: item.actorName, scope: item.actorScope }])).values()];
+    const { page, limit } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
+    return { ...pageResult(filtered.slice((page - 1) * limit, page * limit), { page, limit, total: filtered.length }), totals, actorOptions };
   }
 
   // P1: 机构端 - 查看成员配额列表

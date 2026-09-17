@@ -58,7 +58,7 @@ export function StudentGrants({ api }) {
     if (!seriesId || !picked.length) return;
     setBusy(true); setMessage('');
     try {
-      const result = await api.post('org/course-grants', { seriesId, studentIds: picked.map((item) => item.id) });
+      const result = await api.post('org/course-grants', { seriesId, studentIds: picked.map((item) => item.id), source: 'GRANT_PAGE' });
       const left = result.quotaTotal > 0 ? `本课包已用 ${result.quotaUsed} / ${result.quotaTotal} 次` : '本课包不限次数';
       setMessage(`已授权 ${result.granted} 名学员${result.skipped ? `（跳过已授权 ${result.skipped} 名）` : ''}；${left}。`);
       setPicked([]); grants.refresh(); courses.refresh(); students.refresh();

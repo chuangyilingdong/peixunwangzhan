@@ -39,6 +39,7 @@ const SOURCE_OPTIONS = [['', '全部'], ['ORDER', '订单'], ['CONTRACT', '合�
 const TAB_META = {
   overview: { eyebrow: '002-01', title: '机构课包库存', description: '查看机构当前拥有的课包权益、人次库存及使用情况' },
   students: { eyebrow: '002-03', title: '学生授权中心', description: '按学生看授权：谁已经有课包、谁还没有；点开可看单个学生的授权明细' },
+  records: { eyebrow: '002-05', title: '学生授权记录', description: '记录学生课包授权与取消授权的操作历史（只看得见成功的操作）' },
   batches: { eyebrow: '002-06', title: '采购 / 增购 / 开通记录', description: '本机构的人次是从哪来的：初次开通、增购与平台调整' },
 };
 
@@ -163,7 +164,7 @@ function AddGrantDrawer({ api, student, grants, onClose, onDone }) {
     if (!picked) return;
     setBusy(true); setError('');
     try {
-      await api.post('org/course-grants', { seriesId: picked.seriesId, studentIds: [student.studentId] });
+      await api.post('org/course-grants', { seriesId: picked.seriesId, studentIds: [student.studentId], source: 'ADD_GRANT_DRAWER' });
       onDone();
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
@@ -234,7 +235,7 @@ function AddGrantDrawer({ api, student, grants, onClose, onDone }) {
  *   ② 规则 1 列了「已完成」这一态，但线框图**没给判定口径**（规则 2 只定义了待激活 / 学习中），
  *      所以服务端不产出 COMPLETED —— 要它得先定口径。
  */
-function StudentGrantDetail({ api, studentId, onBack }) {
+function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
   const data = useData(() => api.get(`org/students/${encodeURIComponent(studentId)}/course-grants`), [api, studentId]);
   const [openGrantId, setOpenGrantId] = useState('');
   const [adding, setAdding] = useState(false);
@@ -267,7 +268,10 @@ function StudentGrantDetail({ api, studentId, onBack }) {
       </Panel>
 
       <Panel title={`当前课包授权（当前未取消授权：${activeItems.length} 条）`}
-        actions={<button className="secondary-button" type="button" onClick={() => setAdding(true)}>添加课包</button>}>
+        actions={<>
+          <button className="secondary-button" type="button" onClick={() => onOpenRecords?.(student?.displayName || student?.login || '')}>授权记录</button>
+          <button className="secondary-button" type="button" onClick={() => setAdding(true)}>添加课包</button>
+        </>}>
         {activeItems.length ? <div className="table-wrap"><table>
           <thead><tr><th>课包</th><th>当前版本</th><th>授权时间</th><th>授权状态</th></tr></thead>
           <tbody>{activeItems.map((item) => <tr key={item.id}>
@@ -277,7 +281,7 @@ function StudentGrantDetail({ api, studentId, onBack }) {
             <td><GrantStateBadge item={item} /></td>
           </tr>)}</tbody>
         </table></div> : <Empty title="该学生还没有任何课包授权" body="点右上角「添加课包」为他开一笔；每分给一人用掉 1 次。" />}
-        {revokedCount ? <p className="muted top-gap">另有 {revokedCount} 条已取消的授权不在本列表（按线框图口径本页只展示未取消的）—— 撤销由平台执行，原因与时间在单授权详情里。</p> : null}
+        {revokedCount ? <p className="muted top-gap">另有 {revokedCount} 条已取消的授权不在本列表（按线框图口径本页只展示未取消的）—— 撤销由平台执行，原因与时间在「学生授权记录」里。</p> : null}
       </Panel>
 
       <Panel title="授权规则">
@@ -418,9 +422,101 @@ function LicenseBatches({ api, seriesOptions }) {
   </>;
 }
 
+/**
+ * 002-05 学生授权记录（按线框图第 2 张）：授权 / 取消授权的操作审计。
+ *
+ * ⚠️ 页面上必须留着**三条如实说明**（服务端 orgAdmin.js 同段有完整理由，别为了好看删掉）：
+ *   ① 只看得见**成功**的操作 —— 失败的授权在抛错前就返回了，根本不落审计；
+ *   ② **旧记录的「来源」是空的**（本版起调用方才带上 source），所以显示「机构端授权（旧记录无来源）」；
+ *   ③ **机构端没有取消授权权限** → 表里「取消授权」那些行的操作账号一定是**平台**侧账号。
+ */
+function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
+  const blank = { search: initialSearch, seriesId: '', operationType: '', actorId: '', from: '', to: '' };
+  const [draft, setDraft] = useState(blank);
+  const [applied, setApplied] = useState(blank);
+  const [page, setPage] = useState(1);
+  const query = new URLSearchParams({ page: String(page), limit: '20' });
+  Object.entries(applied).forEach(([key, value]) => { if (value) query.set(key, value); });
+  const queryString = query.toString();
+  const data = useData(() => api.get(`org/student-grant-records?${queryString}`), [api, queryString]);
+  const totals = data.data?.totals || {};
+  const items = data.data?.items || [];
+  const actors = data.data?.actorOptions || [];
+
+  function submit(event) {
+    event.preventDefault();
+    setPage(1);
+    setApplied(draft);
+  }
+
+  return <>
+    <Notice tone="info">
+      本页用于授权操作审计。它**只看得见成功的操作**（失败的授权不落审计），
+      旧记录的「来源」也没有（本版起才随操作一起记录）。
+      <div className="muted">机构端没有取消授权权限，所以「取消授权」那一行的操作账号是<strong>平台</strong>侧的。</div>
+    </Notice>
+    <div className="metrics">
+      <MetricCard label="本月授权" value={totals.grantedThisMonth ?? 0} hint="本月新增的学生课包授权" />
+      <MetricCard label="本月取消" value={totals.revokedThisMonth ?? 0} hint="本月由平台取消的授权" tone="orange" />
+      <MetricCard label="今日授权" value={totals.grantedToday ?? 0} hint="今日新增授权" tone="teal" />
+      <MetricCard label="记录总数" value={totals.total ?? 0} hint="累计授权操作记录（按学生拆分后）" tone="pink" />
+    </div>
+
+    <Panel title="筛选">
+      <form className="filter-form" onSubmit={submit}>
+        <label>学生<input value={draft.search} placeholder="姓名 / 登录账号" onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
+        <label>课包<select value={draft.seriesId} onChange={(event) => setDraft({ ...draft, seriesId: event.target.value })}>
+          <option value="">全部课包</option>
+          {seriesOptions.map((series) => <option key={series.id} value={series.id}>{series.title}</option>)}
+        </select></label>
+        <label>操作类型<select value={draft.operationType} onChange={(event) => setDraft({ ...draft, operationType: event.target.value })}>
+          <option value="">全部</option><option value="GRANT">授权</option><option value="REVOKE">取消授权</option>
+        </select></label>
+        <label>操作账号<select value={draft.actorId} onChange={(event) => setDraft({ ...draft, actorId: event.target.value })}>
+          <option value="">全部</option>
+          {actors.map((actor) => <option key={actor.actorId} value={actor.actorId}>{actor.name}{actor.scope === 'PLATFORM' ? '（平台）' : ''}</option>)}
+        </select></label>
+        <label>起始时间<input type="date" value={draft.from} onChange={(event) => setDraft({ ...draft, from: event.target.value })} /></label>
+        <label>结束时间<input type="date" value={draft.to} onChange={(event) => setDraft({ ...draft, to: event.target.value })} /></label>
+        <div className="row-actions">
+          <button className="primary-button" disabled={data.loading}>查询</button>
+          <button className="secondary-button" type="button" disabled={data.loading} onClick={() => { const reset = { search: '', seriesId: '', operationType: '', actorId: '', from: '', to: '' }; setDraft(reset); setApplied(reset); setPage(1); }}>重置</button>
+        </div>
+      </form>
+    </Panel>
+
+    <Panel title="授权操作记录">
+      {data.loading ? <Loading label="正在读取授权记录…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : items.length ? <>
+        <ListResultSummary total={data.data?.total} page={data.data?.page} totalPages={data.data?.totalPages} label="条记录" />
+        <div className="table-wrap"><table>
+          <thead><tr><th>时间</th><th>学生</th><th>课包</th><th>操作类型</th><th>操作结果</th><th>操作账号</th><th>来源</th></tr></thead>
+          <tbody>{items.map((item) => <tr key={item.id}>
+            <td>{formatDate(item.occurredAt)}</td>
+            <td><strong>{item.studentName || '—'}</strong>{item.studentLogin ? <div className="muted">{item.studentLogin}</div> : null}</td>
+            <td>{item.seriesTitle || '—'}</td>
+            <td>{item.operationType === 'GRANT'
+              ? <span className="status success">授权</span>
+              : <><span className="status warning">取消授权</span>{item.note ? <div className="muted">{item.note}</div> : null}</>}</td>
+            <td><span className="status success">{item.resultLabel}</span></td>
+            <td>{item.actorName}{item.actorScope === 'PLATFORM' ? <div className="muted">平台侧</div> : null}</td>
+            <td className="muted">{item.sourceLabel}</td>
+          </tr>)}</tbody>
+        </table></div>
+        <Pagination page={data.data?.page} totalPages={data.data?.totalPages} onChange={setPage} disabled={data.loading} />
+      </> : <Empty title="没有符合条件的记录" body="调整筛选条件；本机构还没有发生过授权时这里会是空的。" />}
+      <p className="muted top-gap">
+        记录边界：授权的成功操作与平台的取消操作都会保留审计记录；<strong>失败的授权不在这里</strong>（审计只落成功）。
+        人次增减的数值口径以平台侧的许可收入台账为准，本页只记"谁在什么时候对谁做了授权 / 取消"。
+      </p>
+    </Panel>
+  </>;
+}
+
 export function SeriesOverview({ api }) {
   const [tab, setTab] = useState('overview');
   const [days, setDays] = useState('30');
+  // 002-05 从 002-04 跳过来时带着学生姓名预填（所以 key 用 recordSearch 强制重挂，换人时筛选会刷新）
+  const [recordSearch, setRecordSearch] = useState('');
   const [openId, setOpenId] = useState('');                  // 002-02：当前打开的课包
   const [openStudentId, setOpenStudentId] = useState('');    // 002-04：当前打开的学生
   const [draft, setDraft] = useState({ search: '', status: '' });
@@ -460,7 +556,7 @@ export function SeriesOverview({ api }) {
   const meta = TAB_META[tab];
   return <>
     <nav className="tabs" aria-label="课包与学生授权视图">
-      {[['overview', '课包库存'], ['students', '学生授权中心'], ['batches', '采购与开通记录'], ['grant', '为学生添加课包']]
+      {[['overview', '课包库存'], ['students', '学生授权中心'], ['records', '学生授权记录'], ['batches', '采购与开通记录'], ['grant', '为学生添加课包']]
         .map(([key, label]) => <button key={key} type="button" className={'tab' + (tab === key && !drilling ? ' is-active' : '')} onClick={() => goTab(key)}>{label}</button>)}
     </nav>
 
@@ -520,8 +616,10 @@ export function SeriesOverview({ api }) {
           </Notice>
         </Panel>
       </div>
-    </> : openStudentId ? <StudentGrantDetail api={api} studentId={openStudentId} onBack={() => setOpenStudentId('')} />
+    </> : openStudentId ? <StudentGrantDetail api={api} studentId={openStudentId} onBack={() => setOpenStudentId('')}
+      onOpenRecords={(name) => { setOpenStudentId(''); setRecordSearch(name || ''); setTab('records'); }} />
       : tab === 'students' ? <StudentGrantCenter api={api} onOpenStudent={setOpenStudentId} onAddGrants={() => goTab('grant')} />
+        : tab === 'records' ? <GrantRecords key={recordSearch} api={api} seriesOptions={seriesOptions} initialSearch={recordSearch} />
         : tab === 'batches' ? <LicenseBatches api={api} seriesOptions={seriesOptions} />
           : tab === 'grant' ? <StudentGrants api={api} />
             : <>

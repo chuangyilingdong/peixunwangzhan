@@ -670,6 +670,37 @@ try {
     if (!text.includes(expectedType)) problems.push(`002-06：「${noteText}」那一行的业务类型不是「${expectedType}」（实际：${text.replace(/\n/g, ' | ')}）`);
   }
   await orgShot('25-org-license-batches');
+  // ── 002-05 学生授权记录：这里**故意走一次真实授权**（不是只读夹具）——
+  // 顺便把这一版新加的「来源」端到端验掉：机构授权时带 source，审计里要能原样读回来。
+  // ⚠️ 放在最后：它会多产生一条授权，若跑在前面会把 002-03 的「已有课包学生」等数字改掉。
+  const orgToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data?.token;
+  assert.ok(orgToken, 'fixture: org-admin 登录失败（002-05 需要它来造一条真实授权记录）');
+  const noGrantStudent = students[5];   // 孙雨桐：前面「暂无课包」筛选里用的就是这类学生
+  const grantResp = await api('/api/org/course-grants', { method: 'POST', token: orgToken, body: { seriesId: 'series-ui-materials', studentIds: [noGrantStudent.id], source: 'STUDENT_CENTER' } });
+  assert.equal(grantResp.status, 200, `002-05 夹具：真实授权失败 ${JSON.stringify(grantResp).slice(0, 200)}`);
+  console.log('002-05 夹具：给', noGrantStudent.name, '授了素材课包（source=STUDENT_CENTER），应产生一条授权记录');
+
+  await orgPage.locator('.tab', { hasText: '学生授权记录' }).click();
+  await orgSettle();
+  await orgExpect('002-05 学生授权记录', [
+    '学生授权记录', '本月授权', '本月取消', '今日授权', '记录总数',
+    '学生', '课包', '操作类型', '操作结果', '操作账号', '来源',
+  ]);
+  const recordRow = orgPage.locator('table tbody tr', { hasText: noGrantStudent.name });
+  if (!(await recordRow.count())) {
+    problems.push(`002-05：刚授权出去的「${noGrantStudent.name}」没有出现在授权记录里 —— 审计没写进去，或接口没读出来`);
+  } else {
+    const text = await recordRow.first().innerText();
+    // 「来源」是本版新加的字段（老记录没有），这里必须显示成 学生授权中心 才算真的记下来了
+    for (const needle of ['P111 教学素材课包', '授权', '成功', '学生授权中心']) {
+      if (!text.includes(needle)) problems.push(`002-05：记录行里缺「${needle}」（实际：${text.replace(/\n/g, ' | ')}）`);
+    }
+  }
+  const grantedToday = await cardValue('今日授权');
+  if (!(grantedToday >= 1)) problems.push(`002-05：「今日授权」至少该是 1（刚发生了一次授权），实际 ${grantedToday}`);
+  const recordTotal = await cardValue('记录总数');
+  if (!(recordTotal >= 1)) problems.push(`002-05：「记录总数」至少该是 1，实际 ${recordTotal}`);
+  await orgShot('28-org-grant-records');
   await orgContext.close();
 
   if (pageErrors.length) problems.push(`浏览器报错：${pageErrors.slice(0, 5).join(' | ')}`);
