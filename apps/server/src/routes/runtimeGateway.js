@@ -138,7 +138,7 @@ function normalizeContentParts(content) {
 
 function normalizeMessages(body) {
   const raw = Array.isArray(body?.messages) ? body.messages : [];
-  const messages = raw
+  let messages = raw
     .map((item) => {
       const message = {
         role: ['system', 'user', 'assistant', 'tool'].includes(String(item?.role)) ? String(item.role) : 'user',
@@ -165,11 +165,52 @@ function normalizeMessages(body) {
   // 开头就会剩下一堆「孤儿工具结果」，上游直接拒 → 学生看到「AI 供应商调用失败」。
   // 所以切完之后要把开头的孤儿 tool 消息丢掉（它的 assistant 已经被切走了）。
   const MAX_HISTORY = 40;
-  if (messages.length <= MAX_HISTORY) return messages;
-  let start = messages.length - MAX_HISTORY;
-  while (start < messages.length && messages[start].role === 'tool') start += 1;
-  // 兜底：万一丢光了（极端情况：一整段全是工具结果），至少留最后一条
-  return start >= messages.length ? messages.slice(-1) : messages.slice(start);
+  if (messages.length > MAX_HISTORY) {
+    let start = messages.length - MAX_HISTORY;
+    while (start < messages.length && messages[start].role === 'tool') start += 1;
+    // 兜底：万一丢光了（极端情况：一整段全是工具结果），至少留最后一条
+    messages = start >= messages.length ? messages.slice(-1) : messages.slice(start);
+  }
+  return boundHistoryImages(messages);
+}
+
+/**
+ * 历史里的图片按**字节**封顶（2026-09-17 实测踩到）。
+ *
+ * 为什么需要：dsh 每轮把整段对话重发一次，而 agent 干活时会**不停地读自己的截图**
+ * （「读取图片」→ 图片作为内容块进历史）。图片按**字节**很大、按 **token** 很小 ——
+ * 学生那一轮读了 8 张截图，账本上只有 25k tokens，请求体却轻松超过 2MB，
+ * 于是整轮被 `PAYLOAD_TOO_LARGE` 掐掉、活干到一半停住。
+ *
+ * 这个上限是**安全阀**，不是常规行为：常规会话（十几张截图）根本碰不到它。
+ * 真的碰到了就从**最新**往回留（越近的截图越可能是模型正在看的），更早的换成一句话 ——
+ * 并且**告诉它图在哪儿**：这些图是 agent 自己从工作区读的（`/tmp/xxx.png` 之类），需要时再读一次即可，
+ * 所以省略不会让它丢掉信息，只会多一次读文件。
+ *
+ * 只换图片那一块，**消息本身与 tool_call_id 都不动** —— 工具调用的配对不能因为省略图片而散掉。
+ */
+const MAX_HISTORY_IMAGE_CHARS = 12_000_000; // 约 9MB 的图片（base64 后）：与下面的分发层上限留足余量
+const ELIDED_IMAGE_NOTE = '（更早的一张截图已省略：需要时请重新读取工作区里的那个图片文件）';
+
+function boundHistoryImages(messages) {
+  let budget = MAX_HISTORY_IMAGE_CHARS;
+  let elided = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const content = messages[index].content;
+    if (!Array.isArray(content)) continue;
+    const parts = [];
+    for (const part of content) {
+      if (part?.type !== 'image_url') { parts.push(part); continue; }
+      const size = String(part.image_url?.url || '').length;
+      if (size <= budget) { budget -= size; parts.push(part); continue; }
+      parts.push({ type: 'text', text: ELIDED_IMAGE_NOTE });
+      elided += 1;
+    }
+    // 理论上不会空（省略时补了文字），兜底一下免得交给上游一个空 content 数组
+    messages[index].content = parts.length ? parts : [{ type: 'text', text: ELIDED_IMAGE_NOTE }];
+  }
+  if (elided) console.warn(`[runtimeGateway] 历史图片超预算，省略了 ${elided} 张（上限 ${MAX_HISTORY_IMAGE_CHARS} 字符）—— 模型需要时可以重新读文件`);
+  return messages;
 }
 
 // 给守卫脚本直接断言这几个纯函数（它们决定「学生的图有没有被压扁」、名字解析到哪条渠道、

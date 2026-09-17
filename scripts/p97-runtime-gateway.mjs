@@ -222,6 +222,38 @@ try {
     check('⑥ 未知模型名走 HTTP → 200，且回复里的 model 是渠道自己的 model', textCall.status === 200 && textCall.payload?.model === 'local-mock-text', `实际 ${textCall.status} ${textCall.text.slice(0, 160)}`);
   }
 
+  // ⑨ 历史图片按字节封顶（2026-09-17）：agent 会不停读自己的截图，dsh 每轮把整段历史重发 ——
+  //    图片按字节很大、按 token 很小（实测那一轮 8 张截图只算 25k tokens，但请求体过了 2MB），
+  //    没有这个安全阀，修完 2MB 的墙，下一堵墙只是更远一点。
+  {
+    const big = (n) => `data:image/png;base64,${'A'.repeat(n)}`;
+    const withImage = (label) => ({ role: 'user', content: [{ type: 'text', text: label }, { type: 'image_url', image_url: { url: big(3_000_000) } }] });
+    const many = normalizeRuntimeMessages({ messages: [withImage('第1张'), withImage('第2张'), withImage('第3张'), withImage('第4张'), withImage('第5张'), withImage('第6张')] });
+    const chars = many.reduce((total, m) => total + (Array.isArray(m.content) ? m.content.filter((p) => p.type === 'image_url').reduce((s, p) => s + p.image_url.url.length, 0) : 0), 0);
+    check('⑨ 图片总量被压到预算以内（6×3M 字符 > 12M 预算）', chars <= 12_000_000, `实际 ${chars}`);
+    check('⑨ 消息条数不变（省略图片不能让 tool 配对散掉）', many.length === 6, String(many.length));
+    check('⑨ 从**最新**往回留：最后一条的图还在', many.at(-1).content.some((p) => p.type === 'image_url'));
+    check('⑨ 更早的图换成了「需要时请重新读文件」的说明（不是静默丢掉）',
+      !many[0].content.some((p) => p.type === 'image_url') && many[0].content.some((p) => p.type === 'text' && /已省略/.test(p.text)),
+      JSON.stringify(many[0].content));
+    const small = normalizeRuntimeMessages({ messages: [{ role: 'user', content: [{ type: 'text', text: '看一下' }, { type: 'image_url', image_url: { url: big(2000) } }] }] });
+    check('⑨ 常规会话（一张小图）完全不受影响 —— 这是安全阀，不是常态',
+      small[0].content.every((p) => !(p.type === 'text' && /已省略/.test(p.text))), JSON.stringify(small[0].content));
+  }
+
+  // ⑩ 请求体上限：网关那条必须**远大于**普通 JSON 接口（实测踩到的那一堵墙）
+  {
+    const bigBody = { messages: [{ role: 'user', content: [{ type: 'text', text: '这是这张图' }, { type: 'image_url', image_url: { url: `data:image/png;base64,${'A'.repeat(3_000_000)}` } }] }] };
+    const large = await call(key, bigBody);
+    check('⑩ 超过 2MB 的网关请求被接受（agent 带几张截图就会超过它）', large.status === 200, `实际 ${large.status} ${large.text.slice(0, 160)}`);
+    const other = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ login: 'x', password: 'y', pad: 'A'.repeat(3_000_000) }),
+    });
+    const otherText = await other.text();
+    check('⑩ 普通接口仍然守 2MB（不是把全局都放开了）', other.status === 400 && /PAYLOAD_TOO_LARGE/.test(otherText), `${other.status} ${otherText.slice(0, 140)}`);
+  }
+
   console.log(JSON.stringify({ name: 'runtime-gateway', pass: failures === 0, failures }, null, 2));
 } catch (error) {
   console.error(logs.slice(-3000));

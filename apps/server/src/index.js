@@ -27,6 +27,22 @@ const INTERNAL_TEST = DEPLOYMENT_MODE === 'internal-test';
 const API_HOST = INTERNAL_TEST ? '127.0.0.1' : String(process.env.API_HOST || '0.0.0.0');
 const PUBLIC_ROUTES = ['/', '/marketplace', '/org', '/works', '/handbook', '/compare', '/download', '/demo', '/terms', '/privacy', '/minors'];
 
+/**
+ * 普通 JSON 接口的请求体上限（2MB）与**学生运行时网关**的上限（默认 24MB）分开。
+ *
+ * 为什么网关那条要大得多（2026-09-17 实测踩到）：dsh 每轮都把整段对话重发一次，
+ * 而 agent 干活时会**不停地读自己的截图**（`读取图片` → 图片作为内容块进历史）。
+ * 图片按**字节**很大、按 **token** 很小 —— 学生那一轮读了 8 张截图，账本上只有 25k tokens，
+ * 但请求体轻松超过 2MB → 整轮被 400 挡掉、学生的活干到一半停住。
+ * 我们的网关自己允许「一条消息 4 张图、每张 5.6M 字符」，却让分发层砍到 2MB，本来就不自洽。
+ *
+ * ⚠️ 这个值必须**小于 nginx 的 `client_max_body_size`**（生产是 30m）：大了就轮不到我们说话，
+ * 小也轮不到我们报错（nginx 直接 413，学生会看到一句没头没尾的错）。
+ */
+const JSON_BODY_LIMIT = '2mb';
+const RUNTIME_GATEWAY_BODY_LIMIT = String(process.env.RUNTIME_GATEWAY_BODY_LIMIT || '24mb').trim();
+const jsonBodyLimitFor = (pathname) => (String(pathname || '').startsWith('/api/gateway/') ? RUNTIME_GATEWAY_BODY_LIMIT : JSON_BODY_LIMIT);
+
 function sendFileResponse(res, fileResponse, req) {
   const headers = { ...corsHeaders(req, fileResponse.headers || {}) };
   res.writeHead(fileResponse.status || 200, headers);
@@ -81,7 +97,7 @@ const server = http.createServer(async (req, res) => {
         const requestLimit = maxUploadBytes() + 1024 * 1024;
         if (Number.isFinite(declaredLength) && declaredLength > requestLimit) throw errors.badRequest('请求体过大', 'PAYLOAD_TOO_LARGE');
         ctx.rawBody = await readBodyBuffer(req, requestLimit);
-      } else ctx.body = await readJson(req, '2mb');
+      } else ctx.body = await readJson(req, jsonBodyLimitFor(ctx.pathname));
     }
     if (handleSeoAsset(ctx)) return;
 
@@ -133,6 +149,13 @@ const server = http.createServer(async (req, res) => {
       ? error
       : new ApiError(500, 'INTERNAL_ERROR', '服务器内部错误');
     if (!(error instanceof ApiError)) console.error('[API INTERNAL ERROR]', error);
+    // 「请求体过大」必须留痕：它以前是**一声不响**地把整轮对话掐掉（学生只看到运行失败，
+    // 日志里连一行都没有），而它恰恰是「AI 干到一半停住」的一个真凶。留下路径、实际上限与
+    // nginx 声明的长度，下次一眼能看出是哪一条、差多少。
+    if (apiError.code === 'PAYLOAD_TOO_LARGE') {
+      console.warn(`[API] 请求体过大被拒：${ctx.method} ${ctx.pathname}（上限 ${jsonBodyLimitFor(ctx.pathname)}，`
+        + `nginx 收到的 content-length ${String(ctx.req?.headers?.['content-length'] || '未知')}）`);
+    }
     sendJson(res, apiError.status || 500, apiError.toResponse(), req, ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {});
   }
 });
