@@ -109,6 +109,10 @@ check('解析不出公开地址的参考图也明确拒绝（GENERATION_REFERENC
   /GENERATION_REFERENCE_UNRESOLVED/.test(generationSource) && /requested\.length && !resolvedReferences\.length/.test(generationSource));
 check('这条拦截只对 IMAGE / VIDEO 生效（别把别的模态误伤）',
   /modalityKey === 'IMAGE' \|\| modalityKey === 'VIDEO'/.test(generationSource));
+// 视频那套「输入画面」判据（首帧/尾帧/参考互斥）**不能套到图片上**：
+// 图片现在也会带参考图，套上去会报「当前视频模型不支持多素材参考」（实测到过，403）。
+check('视频那套输入画面判据限定为 VIDEO 模态（否则图片带参考图会被误拒）',
+  /if \(frameCheck && String\(modality \|\| ''\)\.toUpperCase\(\) === 'VIDEO'\) assertVideoFrames\(frameCheck\)/.test(generationSource));
 
 /* ── ② 缩放：上限必须是 800%，而且学生找得到 ────────────────────────────── */
 const canvas = read('packages/canvas/src/index.jsx');

@@ -149,7 +149,11 @@ export function assertGenerationPreflight({ user, orgId, context, modality, proj
   if (lessonCapability && !(context.lesson?.capabilities || []).includes(lessonCapability)) {
     throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
   }
-  if (frameCheck) assertVideoFrames(frameCheck);
+  // ⚠️ 「输入画面」这套规则**只对视频成立**（首帧/尾帧/全能参考互斥、必须有画面…）。
+  // 图片也会带参考图，而且从 2026-09-17 起图片的 referenceAssets 真的会进 options ——
+  // 不限定模态的话，视频这套判据会把图片请求按视频规则拒掉
+  // （实测：图片带参考图报「当前视频模型不支持多素材参考」，403）。
+  if (frameCheck && String(modality || '').toUpperCase() === 'VIDEO') assertVideoFrames(frameCheck);
   // 框体占用同样属于业务拦截：入队前就能判断，不必等结算
   if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
   // 算力池（学生 × 课包，四种模态共用一个池子）—— 这一条对**每一种模态**都生效，
