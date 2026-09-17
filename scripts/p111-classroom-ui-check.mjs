@@ -193,6 +193,18 @@ try {
   if (fontState.geistLoaded === false) problems.push('字体：Geist 没有真正加载（@font-face 未生效，会静默回退系统字体）');
   console.log(`✓ 后台字体：${fontState.family.slice(0, 60)}${fontState.family.length > 60 ? '…' : ''} · Geist 已加载=${fontState.geistLoaded}`);
 
+  // ── 001-02 教师工作台（教师登录后的落地页；p70 用超管身份跑不到它，只能这里验）
+  await page.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  await expectText('教师工作台', [
+    '教师工作台', '我的教学执行中心',
+    '我的待上课课堂', '我的上课中课堂', '最近已结束课堂', '最近学生作品',
+    '当前教学', '创建课堂', '创建规则', '常用入口',
+    '教师工作台只展示当前登录教师自己的教学任务与结果', '不受其他教师的课堂影响',
+    '历史课堂只读', '不评价 / 评分 / 要求重交',
+  ]);
+  await shot('17-teacher-dashboard');
+
   // ── 005-01 列表
   await page.goto(`${base}/classrooms`, { waitUntil: 'domcontentloaded' });
   await settle();
@@ -407,7 +419,7 @@ try {
   // 所以把豁免撤掉 —— 留着它以后字体真回归了会被静默吞掉。
   const failures = [...new Set(badRequests)];
   if (failures.length) problems.push(`请求失败：${failures.slice(0, 6).join(' | ')}`);
-  assert.ok(fs.readdirSync(shotDir).length >= 16, '截图没出全');
+  assert.ok(fs.readdirSync(shotDir).length >= 17, '截图没出全');
   await browser.close();
   console.log(`\n截图 ${fs.readdirSync(shotDir).length} 张 → ${shotDir}`);
   if (problems.length) { console.error('\n发现问题：'); for (const item of problems) console.error('  ✗ ' + item); process.exitCode = 1; }

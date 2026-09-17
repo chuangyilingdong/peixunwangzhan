@@ -21,6 +21,136 @@ const navigation = [
 ];
 const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
 
+const ORG_SESSION_LABEL = { PENDING: '待上课', ACTIVE: '上课中', ENDED: '已结束', DISSOLVED: '已解散' };
+
+/** 上课时长按秒走（只发生在「上课中」，其它状态是死数）。 */
+function LiveDuration({ startedAt }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return <span className="muted">尚未开始</span>;
+  const seconds = Math.max(0, Math.floor((now - started) / 1000));
+  const pad = (value) => String(value).padStart(2, '0');
+  return <span>{pad(Math.floor(seconds / 3600))}:{pad(Math.floor(seconds % 3600 / 60))}:{pad(seconds % 60)}</span>;
+}
+
+/**
+ * 001-02 教师工作台（2026-09-17 按线框图重做）。
+ *
+ * 口径（线框图原文，代码里也要守）：
+ *   · 只展示**当前登录教师自己**的教学任务与结果，不展示机构运营数据；
+ *   · 本人只要存在「待上课 / 上课中」课堂就**不能创建新课** —— 规则只看当前账号，不受别的老师影响；
+ *   · 已结束课堂是**只读历史**：不可重新开始、不可增删学生、不可改课包/课程；
+ *   · 作品只做归档查看，不评价、不评分、不要求重交。
+ */
+function TeacherDashboard({ api }) {
+  const navigate = useNavigate();
+  // 列表接口顺带给出 statusCounts 与 ongoingSession（我加的），所以这里 limit=1 就够
+  const sessions = useData(() => api.get('org/sessions?days=90&limit=1'), [api]);
+  const counts = sessions.data?.statusCounts || {};
+  const ongoing = sessions.data?.ongoingSession || null;
+  // 当前课堂要的字段（学生数 / 实际开始 / 课包课程）只有详情有
+  const current = useData(() => ongoing?.id ? api.get(`org/sessions/${encodeURIComponent(ongoing.id)}`) : Promise.resolve(null), [api, ongoing?.id]);
+  const finished = useData(() => api.get('org/sessions?days=90&status=ENDED&limit=5'), [api]);
+  const works = useData(() => api.get('org/works'), [api]);
+  const session = current.data;
+  const blocked = Number(counts.PENDING || 0) + Number(counts.ACTIVE || 0);
+  const recentWorks = (works.data?.items || []).slice(0, 4);
+
+  return <>
+    <PageHeader eyebrow="001-02" title="教师工作台" description="我的教学执行中心"
+      actions={<span className="muted">{new Date().toLocaleDateString('zh-CN')}</span>} />
+
+    <Notice tone="info">
+      教师工作台只展示当前登录教师自己的教学任务与结果，不展示机构运营数据。
+      <div className="muted">当前账号只要存在「待上课 / 上课中」课堂，就不能创建新的课堂。</div>
+    </Notice>
+
+    <div className="metrics">
+      <MetricCard label="我的待上课课堂" value={counts.PENDING ?? 0} hint="当前账号" />
+      <MetricCard label="我的上课中课堂" value={counts.ACTIVE ?? 0} hint="当前账号" tone="teal" />
+      <MetricCard label="最近已结束课堂" value={counts.ENDED ?? 0} hint="最近记录" tone="orange" />
+      <MetricCard label="最近学生作品" value={recentWorks.length} hint="自动归档" tone="pink" />
+    </div>
+
+    <div className="split">
+      <Panel title="当前教学" actions={ongoing ? <Status value={ongoing.status} /> : null}>
+        {sessions.loading ? <Loading label="正在读取课堂…" /> : !ongoing ? <Empty title="当前没有进行中的课堂" body="创建课堂并添加学生后，可以在这里直接进入。" />
+          : <>
+            <h3>{ongoing.title || '未命名课堂'}</h3>
+            <p className="muted">{session?.seriesTitle || '—'}{session?.lessonTitle ? ` · ${session.lessonTitle}` : ''}</p>
+            <dl className="classroom-runtime">
+              <div><dt>学生数</dt><dd>{session?.studentSummary?.total ?? '—'} 人</dd></div>
+              <div><dt>实际开始</dt><dd>{session?.startedAt ? formatDate(session.startedAt) : '—'}</dd></div>
+              <div><dt>已开课时长</dt><dd>{ongoing.status === 'ACTIVE' ? <LiveDuration startedAt={session?.startedAt} /> : '尚未开始'}</dd></div>
+              <div><dt>实际结束</dt><dd>{session?.endedAt ? formatDate(session.endedAt) : '—'}</dd></div>
+            </dl>
+            <div className="row-actions top-gap">
+              <button className="primary-button" onClick={() => navigate('/classrooms/' + encodeURIComponent(ongoing.id))}>进入课堂</button>
+              {session?.coursewareUrl ? <a className="secondary-button" href={session.coursewareUrl}>查看课程资料</a> : null}
+              <button className="secondary-button" onClick={() => navigate('/classrooms/' + encodeURIComponent(ongoing.id) + '/students/new')}>添加学生</button>
+              <button className="secondary-button" onClick={() => navigate('/classrooms/' + encodeURIComponent(ongoing.id))}>{ongoing.status === 'ACTIVE' ? '结束课堂' : '开始上课'}</button>
+            </div>
+            <p className="muted">开始后不可移除学生 / 不可更换课包或课程 / 不提供学生 AI 控制。</p>
+          </>}
+      </Panel>
+
+      <Panel title="创建课堂">
+        <button className="secondary-button wide" disabled={blocked > 0} onClick={() => navigate('/classrooms/new')}>+ 创建课堂</button>
+        {blocked > 0
+          ? <Notice tone="warning">当前不可创建<div className="muted">原因：当前账号已有 {blocked} 个「待上课 / 上课中」课堂。需先结束或解散当前课堂，才可创建下一课堂。</div></Notice>
+          : <p className="muted">当前账号无「待上课 / 上课中」课堂，可以创建。</p>}
+        <p className="muted"><strong>创建规则</strong></p>
+        <ol className="course-lessons">
+          <li>本人无「待上课 / 上课中」课堂 → 可创建</li>
+          <li>本人有「待上课 / 上课中」课堂 → 禁止创建</li>
+        </ol>
+        <p className="muted">规则只看当前账号（creator_account_id），不受其他教师的课堂影响。</p>
+      </Panel>
+    </div>
+
+    <div className="split">
+      <Panel title="最近已结束课堂" actions={<button className="text-button" onClick={() => navigate('/classrooms')}>进入「我的课堂」→</button>}>
+        {finished.loading ? <Loading label="正在读取…" /> : (finished.data?.items?.length
+          ? <div className="table-wrap"><table>
+            <thead><tr><th>课堂</th><th>课包 / 课程</th><th>学生数</th><th>实际开始</th><th>实际结束</th><th>操作</th></tr></thead>
+            <tbody>{finished.data.items.map((item) => <tr key={item.id}>
+              <td><strong>{item.title || '未命名课堂'}</strong></td>
+              <td>{item.seriesTitle || '—'}<div className="muted">{item.lessonTitle || '—'}</div></td>
+              <td>{item.studentCount ?? 0}</td>
+              <td>{formatDate(item.startedAt)}</td>
+              <td>{formatDate(item.endedAt)}</td>
+              <td><button className="text-button" onClick={() => navigate('/classrooms/' + encodeURIComponent(item.id))}>查看详情</button></td>
+            </tr>)}</tbody>
+          </table></div>
+          : <p className="muted">暂无已结束课堂。</p>)}
+        <Notice tone="info">历史课堂只读<div className="muted">已结束课堂不可重新开始、添加/移除学生或更改课包/课程；学生完成结果由课堂结束时本课堂有效算力自动形成。</div></Notice>
+      </Panel>
+
+      <Panel title="最近学生作品" actions={<button className="text-button" onClick={() => navigate('/works')}>查看全部 →</button>}>
+        {works.loading ? <Loading label="正在读取…" /> : (recentWorks.length ? <div className="card-list">
+          {recentWorks.map((item) => <div className="row-actions" key={item.id}>
+            <span className="status">作</span>
+            <strong>{item.title || '未命名作品'}</strong>
+            <span className="muted">{item.studentName || '—'}{item.seriesTitle ? ` · ${item.seriesTitle}` : ''}</span>
+            <span className="muted">{formatDate(item.submittedAt || item.updatedAt || item.createdAt)}</span>
+          </div>)}
+        </div> : <p className="muted">暂无学生作品。</p>)}
+        <p className="muted">教师仅查看归档作品，不评价 / 评分 / 要求重交。</p>
+      </Panel>
+    </div>
+
+    <Panel title="常用入口">
+      <div className="row-actions">
+        <button className="secondary-button" onClick={() => navigate('/courses')}>教学课程库<div className="muted">课包 / 课程 / 教学资料</div></button>
+        <button className="secondary-button" onClick={() => navigate('/classrooms')}>我的课堂<div className="muted">课堂创建 / 治理 / 历史</div></button>
+        <button className="secondary-button" onClick={() => navigate('/works')}>学生学习结果与作品<div className="muted">学习结果 / 作品查看</div></button>
+      </div>
+      <p className="muted">本页不含排课、预约、计划上课时间、机构库存与平台 AI 运营。</p>
+    </Panel>
+  </>;
+}
+
 function Dashboard({ api }) {
   const { loading, error, data, refresh } = useData(() => api.get('org/overview'), [api]);
   // 2026-09-13（用户要求）：首页按「课包」看家底 —— 每个课包多少人次、多少学员、多少老师、多少课堂。
@@ -29,7 +159,7 @@ function Dashboard({ api }) {
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   const isAdmin = data.scope?.role === 'ORG_ADMIN';
-  if (!isAdmin) return <><PageHeader title={data.org.name} description="仅展示本人课堂与机构课程" /><div className="metrics"><MetricCard label="进行中课堂" value={data.activeSessions} /><MetricCard label="待上课" value={data.pendingSessions} /></div><Panel title="近期本人课堂">{(data.recentSessions || []).map((item) => <p key={item.id}>{item.title || item.lessonTitle} · <Status value={item.status} /></p>)}</Panel></>;
+  if (!isAdmin) return <TeacherDashboard api={api} />;
   const alerts = data.alerts || [];
   const recentSessions = data.recentSessions || [];
   const unreadMessages = data.unreadNotificationItems || [];
