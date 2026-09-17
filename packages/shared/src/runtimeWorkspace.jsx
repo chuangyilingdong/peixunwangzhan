@@ -36,26 +36,54 @@ export function useRuntimeStatus(api) {
   return { status, ready: Boolean(status?.available) && Boolean(status?.classroom) };
 }
 
+// 「正在开环境」这件事必须能**跨页面刷新**记住（2026-09-17 实测踩到）。
+// 前端那个按钮本来是禁用着的（busy 期间点不动），但学生看到一直转圈会**刷新页面**，
+// 刷新之后组件的忙状态归零、按钮又能点了 —— 而服务器上第一个请求还在跑。
+// 于是一次「进不去」变成了三个开环境脚本互抢同一个 systemd 单元，环境起来了、
+// 入口却没写成，前端永远卡在「正在开环境…」。用 sessionStorage 把这个状态钉住：
+// 最近一次点过、且还没超过保护窗口，就继续显示「正在开环境…」并且不让再点。
+const LAUNCH_KEY = 'dsh-launch-started-at';
+const LAUNCH_GUARD_MS = 170 * 1000;   // 比服务端 90 秒超时 + nginx 180 秒都留出余量
+
 export function RuntimeActions({ api, lesson, canEnter }) {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [picker, setPicker] = useState(null);
   const [confirming, setConfirming] = useState(null);
   const [report, setReport] = useState(null);
+  const [elapsed, setElapsed] = useState(0);
   const disabled = !canEnter || Boolean(busy);
+
+  // 刷新后接着显示「正在开环境…」（服务器上那个请求没因为刷新而停下）
+  useEffect(() => {
+    const startedAt = Number((typeof sessionStorage !== 'undefined' && sessionStorage.getItem(LAUNCH_KEY)) || 0);
+    if (startedAt && Date.now() - startedAt < LAUNCH_GUARD_MS) setBusy('enter');
+  }, []);
+  // 计时：让「正在开环境」看起来是在干活，而不是死住了
+  useEffect(() => {
+    if (busy !== 'enter') { setElapsed(0); return undefined; }
+    const timer = setInterval(() => setElapsed((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   async function enterEnvironment() {
     if (!canEnter) return;
-    setBusy('enter'); setMessage(''); setReport(null);
+    setBusy('enter'); setMessage(''); setReport(null); setElapsed(0);
+    try { sessionStorage.setItem(LAUNCH_KEY, String(Date.now())); } catch { /* 隐私模式等，忽略 */ }
     try {
-      const launched = await api.post('student/runtime/launch');
+      // 给这次请求设超时：服务端开环境最长 90 秒 + 探针几秒，超过就不等了、明确报错。
+      // 不设的话它会一直挂着，学生只能反复刷新重试 —— 那正是并发互撞的来源。
+      const launched = await api.post('student/runtime/launch', undefined, { timeoutMs: LAUNCH_GUARD_MS });
       if (launched?.edgeUrl) {
         // 新标签页打开：创作环境是学生自己的一个「盒子」，不该顶掉我们的页面
         window.open(launched.edgeUrl, '_blank', 'noopener,noreferrer');
       }
       if (launched?.localOnly) setMessage('创作环境给的是本机地址，只有服务器上能打开 —— 请联系老师（这台机器还没配对外入口）。');
     } catch (error) { setMessage(error.message || '进入创作环境失败'); }
-    finally { setBusy(''); }
+    finally {
+      try { sessionStorage.removeItem(LAUNCH_KEY); } catch { /* 忽略 */ }
+      setBusy('');
+    }
   }
 
   async function openPicker() {
@@ -83,7 +111,7 @@ export function RuntimeActions({ api, lesson, canEnter }) {
 
   return <>
     <button className={canEnter ? 'primary-button' : 'secondary-button'} disabled={disabled} onClick={enterEnvironment}>
-      {busy === 'enter' ? '正在开环境…' : '进入创作环境'}
+      {busy === 'enter' ? `正在开环境…${elapsed ? ` ${elapsed}s` : ''}` : '进入创作环境'}
     </button>
     <button className="secondary-button" disabled={disabled} onClick={openPicker}>
       {busy === 'list' ? '读取中…' : busy === 'submit' ? '提交中…' : '提交作品'}

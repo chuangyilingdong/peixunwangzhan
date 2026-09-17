@@ -29,20 +29,37 @@ function fallbackMessage(status, generic) {
 }
 
 export function createApiClient({ baseUrl = apiBase(), getToken = () => null, onUnauthorized = () => {} } = {}) {
-  async function request(path, { method = 'GET', body, headers = {}, signal } = {}) {
+  async function request(path, { method = 'GET', body, headers = {}, signal, timeoutMs = 0 } = {}) {
     const token = getToken();
-    const response = await fetch(requestUrl(baseUrl, path), {
-      method,
-      signal,
-      credentials: 'include',
-      headers: {
-        accept: 'application/json',
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(token ? { authorization: 'Bearer ' + token } : {}),
-        ...headers,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    // 超时（2026-09-17）：不设的话，请求一旦挂住就**永远转圈** —— 学生会以为卡死、
+    // 刷新页面再点，而服务端那边每次点击都是一次真实的重活（开环境的并发互撞就是这么来的）。
+    // 超时后明确报错，比永远转圈强得多。timeoutMs = 0 表示不设（保持原有行为）。
+    const controller = timeoutMs ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    let response;
+    try {
+      response = await fetch(requestUrl(baseUrl, path), {
+        method,
+        signal: signal || controller?.signal,
+        credentials: 'include',
+        headers: {
+          accept: 'application/json',
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(token ? { authorization: 'Bearer ' + token } : {}),
+          ...headers,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (error) {
+      if (controller?.signal.aborted) {
+        throw new ApiError(`等了 ${Math.round(timeoutMs / 1000)} 秒还没有响应，这次就不再等了（服务端可能仍在处理，稍等一下再试，别连续点）`, {
+          status: 0, code: 'REQUEST_TIMEOUT', details: null,
+        });
+      }
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     const text = await response.text();
     let payload = null;
     try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
