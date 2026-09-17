@@ -701,6 +701,33 @@ try {
   const recordTotal = await cardValue('记录总数');
   if (!(recordTotal >= 1)) problems.push(`002-05：「记录总数」至少该是 1，实际 ${recordTotal}`);
   await orgShot('28-org-grant-records');
+
+  // ── 002-05 的**取消授权**那一行也要端到端验到（图2 的核心行之一，光验授权只是半条）。
+  // 用平台超管真撤销一次：这也是「机构端没有取消权限」的实证 —— 撤销只能由平台账号发起。
+  const adminToken = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data?.token;
+  assert.ok(adminToken, '002-05 夹具：平台超管登录失败（撤销只能由平台发起）');
+  const grantedList = await api('/api/org/course-grants?seriesId=series-ui-materials', { token: orgToken });
+  const createdGrant = (grantedList.data?.items || []).find((item) => item.studentId === noGrantStudent.id);
+  assert.ok(createdGrant, '002-05 夹具：找不到刚建的那条授权');
+  const revokedResp = await api(`/api/admin/course-grants/${createdGrant.id}/revoke`, { method: 'POST', token: adminToken, body: { reason: 'P111 守卫：验证取消授权记录' } });
+  assert.equal(revokedResp.status, 200, `002-05 夹具：平台撤销失败 ${JSON.stringify(revokedResp).slice(0, 200)}`);
+  // 筛成「取消授权」再查一次（换筛选会让 queryString 变 → useData 真的重新拉）
+  await orgPage.locator('form.filter-form select').nth(1).selectOption('REVOKE');
+  await orgPage.getByRole('button', { name: '查询' }).first().click();
+  await orgSettle();
+  const revokeRow = orgPage.locator('table tbody tr', { hasText: noGrantStudent.name }).first();
+  if (!(await revokeRow.count())) {
+    problems.push('002-05：平台撤销之后，「取消授权」记录里没有这一行 —— 撤销没有落审计，或接口没读出来');
+  } else {
+    const revokeText = await revokeRow.innerText();
+    // 「平台」两字是关键：取消授权那一行的操作账号必须是**平台侧**（机构端没有这个权限）
+    for (const needle of ['取消授权', '成功', '平台']) {
+      if (!revokeText.includes(needle)) problems.push(`002-05：取消授权记录行里缺「${needle}」（实际：${revokeText.replace(/\n/g, ' | ')}）`);
+    }
+  }
+  const revokedThisMonth = await cardValue('本月取消');
+  if (!(revokedThisMonth >= 1)) problems.push(`002-05：「本月取消」至少该是 1（刚撤销过一次），实际 ${revokedThisMonth}`);
+  await orgShot('29-org-grant-records-revoke');
   await orgContext.close();
 
   if (pageErrors.length) problems.push(`浏览器报错：${pageErrors.slice(0, 5).join(' | ')}`);
