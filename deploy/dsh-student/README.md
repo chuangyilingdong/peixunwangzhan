@@ -15,8 +15,18 @@
     并且把**默认模型**指到我们网关的槽位、关掉 dsh 自带的 `deepseek-official` 路由
     （不这么做，学生一发消息就是 `MISSING_CREDENTIAL`，实测）
   - 模型声明带 `input: [text, image]`：dsh 对**手写声明的模型**默认只认文本，不声明的话学生贴的图进不了请求体
+  - `maxRequestImageBytes: 8388608`（8MiB）：**每次请求的图片总量预算**。dsh 每轮重发全量历史、
+    历史里的图会被重新编码进每一次请求体，不设上限的话请求体会随会话无限增长。
+    超预算时 dsh 把**最老的**图从这一次请求里省略（历史不动，最新的一定看得见），
+    换成一行 `[image omitted to fit request image limits; …]`。取值必须明显大于一轮工作集
+    （一轮「看自己的产物」通常读 4-12 张，8MiB ≈ 30 张）—— 设小了 agent 会反复重读被省略的图。
+    详见 `docs/operations/新对话交接-网页搜索与秒进-20260917.md` 第四节。
   - 课程技能目录（`skills/`，一个课程一个 `SKILL.md`）
   - 沙箱 `workspace-write` + 审批 `never`（**语义是「直接拒绝」**，不是自动放行），并把 `defaultPreset` 显式指到同名预设
+
+> ⚠️ **这个补丁层是宿主文件、不在 release 产物里**：装机时它被放到
+> `/opt/dsh-runtime/etc/dsh/student-runtime.cordis.yml`（`provision-user-runtime.sh` 只校验它在不在，
+> **不负责安装**），而 dsh **只在启动时读一次** —— 改完必须**重启学生环境**才生效。
   - 关掉给学生的成人入口：`cordis-host-runner` / `cordis-client-runner` / `ui-cordis`
     （模型能自造插件挂进宿主，官方注释说在 Web 面上沙箱与审批都会被绕过）、`plugin-inventory`（插件管理）、
     `directory-picker`、`open-in-app`
