@@ -7,6 +7,8 @@
 //                     实测价（2026-09-18 P92）= 上游逐笔实扣 ÷ 用量（滚动近 N 天，只算 REPORTED），
 //                     用来校合同价；样本不足不给数，要写进合同价由人点「采纳为成本价」。
 //   ③ 路由与开关   —— 能力路由 / 读图渠道 / 平台路由策略 / 学生外发开关 / 四个模态总开关（原来散在三个折叠里）。
+//   ④ 上游账户余额（实时）—— 平台内部口径：我们这把 key 在供应商那边还剩多少钱。**必须手动点才去问上游**
+//                     （不随页面加载、不轮询）。机构端 / 学生端没有这块。
 //
 // OrgStudentUsagePanel  机构 → 学员 消耗下钻（「用量与成本」页用，不动）。
 //
@@ -96,6 +98,108 @@ const INSUFFICIENT_REASON_TEXT = {
   NO_USAGE_IN_SNAPSHOT: (item) => `测不出来：有实扣 ${item.excluded?.noUnits ?? 0} 笔，但快照里没有用量`,
   NO_REPORTED_SAMPLES: () => '测不出来：这段时间上游没回过逐笔实扣',
 };
+
+/* ─────────────── ④ 上游账户余额（实时）—— 平台内部口径，只读，手动刷新 ───────────────
+ *
+ * 用户口径（2026-09-18）：「学生消耗…能显示给我们实时实际的价格消耗吗」——逐笔实扣（每笔真花了多少钱）
+ * 已经在收并在「调用账」里看得到；**这块补的是另一半**：我们这把 key 在**上游账户**里还剩多少钱。
+ * 上游接口 `GET {base}/api/usage/wallet/`（见后端 `admin/billing-config/upstream-wallet`），
+ * 返回 `display_type`（CNY / USD / TOKENS）+ `amount` / `used_amount` / `total_available` 等。
+ *
+ * 三条口径，别改：
+ *   · **平台内部可见**：机构端 / 学生端一律没有这个探针，页面上也写明「机构端/学生端看不到」。
+ *   · **手动刷新**：不在页面加载时打上游（那是运营点一下才需要的动作，自动打等于把上游当心跳）。
+ *   · **失败只红一行**：后端已经做到「一条渠道挂掉不影响整页」，这里也只把那一行标出来 + 给可重试的按钮。
+ */
+// 低余额阈值（唯一一处定义，改这里就够）：**折算成金额小于 100 就标红**。
+//   · CNY：100 元（上游 amount 的单位就是元，不是分）。
+//   · USD：**按数值与同一个阈值比较，不做汇率换算** —— 上游没给汇率，我们也不自己编一个；
+//     所以 100 USD 与 100 CNY 在这里是一样的红/不红，标红只是「提醒去看一眼」，**不是准确的人民币折算**。
+//   · TOKENS：**不套用金额阈值**（token 数与钱不是一回事，只显示数字）。
+const LOW_BALANCE_ALERT_AMOUNT = 100;
+const WALLET_ALERT_CURRENCIES = new Set(['CNY', 'USD']);
+
+/** 余额数字：上游给的是 JSON number（可能是小数），原样显示、不做单位换算。null 由调用方决定不显示。 */
+function walletAmountText(value) {
+  if (value === null || value === undefined) return '';
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(value);
+}
+
+function UpstreamWalletPanel({ api }) {
+  // 不用 useData：useData 一挂载就请求，而这块**必须由人点**才去打上游（见上面的口径）。
+  const [state, setState] = useState({ loading: false, error: null, data: null });
+  async function load() {
+    setState((old) => ({ ...old, loading: true, error: null }));
+    try {
+      // 服务端每个渠道各自 9 秒超时（并发），这里给 20 秒的客户端上限：真超了就明确报错，不无限转圈。
+      const data = await api.get('admin/billing-config/upstream-wallet', { timeoutMs: 20000 });
+      setState({ loading: false, error: null, data });
+    } catch (error) {
+      setState({ loading: false, error, data: null });
+    }
+  }
+  const rows = state.data?.channels || [];
+  const summary = state.data?.summary || null;
+  const refreshButton = <button type="button" className="secondary-button" disabled={state.loading} onClick={load}>{state.loading ? '查询中…' : rows.length ? '刷新余额' : '查询余额'}</button>;
+  return <Panel title="④ 上游账户余额（实时）" actions={refreshButton}>
+    <Notice tone="info">这是<strong>平台内部口径</strong>：我们这把 API Key 在<strong>上游账户</strong>里还剩多少钱。
+      <strong>机构端 / 学生端看不到这块</strong>（学生消耗另有一本账，见「用量与成本」的调用账：那是逐笔实扣）。
+      余额只有点「查询余额」时才去问上游（<strong>不随页面加载、不轮询</strong>）。</Notice>
+    {state.error ? <Notice tone="danger">查询失败：{state.error.message || '未知原因'}
+      {state.error.code ? `（${state.error.code}）` : ''}
+      <button type="button" className="text-button" onClick={load}>重试</button></Notice> : null}
+    {state.loading && !rows.length ? <Loading label="正在逐个渠道向上游查余额…" /> : null}
+    {!state.loading && !rows.length ? <div className="muted top-gap">
+      还没有查询结果。点右上角「查询余额」按当前渠道列表查一遍（每条渠道一次请求；没配调用地址或 API Key 的渠道会被跳过）。</div> : null}
+    {rows.length ? <div className="top-gap">
+      <div className="muted">{state.data?.fetchedAt ? `更新于 ${formatDate(state.data.fetchedAt)}` : ''}
+        {summary ? ` · 共 ${summary.total} 条渠道（成功 ${summary.ok} · 失败 ${summary.failed} · 跳过 ${summary.skipped}）` : ''}
+        {summary?.skipped ? '（跳过 = 没配调用地址或 API Key，没有向上游发请求）' : ''}</div>
+      <div className="table-wrap top-gap"><table>
+        <thead><tr><th>渠道</th><th>账户余额</th><th>已用</th><th>总额 / 配额</th><th>上游账户</th><th>状态</th></tr></thead>
+        <tbody>{rows.map((item) => {
+          // 低余额标红：只在认得出的币种（CNY / USD）且余额真的低于阈值时；TOKENS 与未知币种不套金额阈值。
+          const alert = item.ok && WALLET_ALERT_CURRENCIES.has(item.displayType)
+            && item.amount !== null && item.amount !== undefined && item.amount < LOW_BALANCE_ALERT_AMOUNT;
+          return <tr key={item.channelId}>
+            <td><strong>{item.name || item.channelId}</strong>
+              <div className="muted">{item.endpointBase || '（推不出账户地址）'}</div></td>
+            <td className={alert ? 'danger-text' : ''}>
+              {/* 有什么显示什么：字段为 null（上游没给这一项）时**不显示**，绝不打印 "null" */}
+              {item.amount !== null && item.amount !== undefined
+                ? <><strong>{walletAmountText(item.amount)}</strong>{item.displayType ? ` ${item.displayType}` : ''}</>
+                : <span className="muted">—</span>}
+              {alert ? <div className="danger-text">余额偏低（低于 {LOW_BALANCE_ALERT_AMOUNT} {item.displayType}）</div> : null}
+              {item.displayType === 'USD' ? <div className="muted">USD 未做汇率换算，标红只按数值比较</div> : null}
+              {item.displayType === 'TOKENS' ? <div className="muted">按 token 计，不套金额阈值</div> : null}
+            </td>
+            <td>{item.usedAmount !== null && item.usedAmount !== undefined ? walletAmountText(item.usedAmount) : <span className="muted">—</span>}</td>
+            <td>
+              {item.totalAvailable !== null && item.totalAvailable !== undefined ? <div>总额 {walletAmountText(item.totalAvailable)}</div> : null}
+              {item.quota !== null && item.quota !== undefined ? <div className="muted">配额 {walletAmountText(item.quota)}
+                {item.usedQuota !== null && item.usedQuota !== undefined ? ` · 已用配额 ${walletAmountText(item.usedQuota)}` : ''}</div> : null}
+              {item.totalAvailable === null && item.totalAvailable === undefined && (item.quota === null || item.quota === undefined)
+                ? <span className="muted">—</span> : null}
+            </td>
+            <td>
+              {item.username ? <div>{item.username}</div> : null}
+              {item.group ? <div className="muted">分组 {item.group}</div> : null}
+              {!item.username && !item.group ? <span className="muted">—</span> : null}
+            </td>
+            <td>{item.ok
+              ? <span className="muted">正常</span>
+              : <><span className="danger-text">{item.skipped ? '已跳过' : '查询失败'}</span>
+                <div className="muted">{item.error || '未知原因'}</div>
+                <button type="button" className="secondary-button top-gap" disabled={state.loading} title="重新查询全部渠道（该接口一次查所有渠道）" onClick={load}>重试</button></>}
+            </td>
+          </tr>;
+        })}</tbody>
+      </table></div>
+      <div className="muted top-gap">阈值：认得出的币种（CNY / USD）余额低于 {LOW_BALANCE_ALERT_AMOUNT} 标红；
+        TOKENS 类账号只显示数字，不套金额阈值。逐笔实扣（每个学生每节课真花了多少）在「用量与成本 → 调用账」里看。</div>
+    </div> : null}
+  </Panel>;
+}
 
 export function AiCapabilityPanel({ api }) {
   const config = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
@@ -627,6 +731,9 @@ export function AiCapabilityPanel({ api }) {
         <span className="muted">一次保存会写两处：渠道 / 价目表成本价 / 路由与开关 走 AI 渠道配置，对外价走对外价配置。模态总开关在 ③ 里单独保存。</span>
       </div>
     </form>
+    {/* ④ 上游账户余额（实时）—— 放在 form 外面：它只读、不参与「保存全部配置」，
+        按钮也不会误提交表单；且必须人工点「查询余额」才去打上游。 */}
+    <UpstreamWalletPanel api={api} />
   </>;
 }
 

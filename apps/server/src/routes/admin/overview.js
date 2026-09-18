@@ -11,6 +11,8 @@ import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
+import { getProviderApiKey } from '../../services/providerSecret.js';
+import { AI_PROVIDER_API_KEY } from '../../config.js';
 import { resolveUnitPrice } from '../../services/upstreamCost.js';
 import { MEASURED_PRICE_RULES, measuredUnitPrices } from '../../services/measuredUnitPrices.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
@@ -199,6 +201,158 @@ function measuredUnitPriceItems(measured, policy) {
   });
 }
 
+/* ── 上游账户余额探针（P113，2026-09-18 用户口径「学生消耗能显示实时实际价格消耗吗」）─────────────
+ *
+ * 用户问的是两件事，答案是「一半已经有、一半这次补上」：
+ *   ① **逐笔实扣**（每个学生每节课真花了多少钱）——**已经在收**：上游异步任务终态响应里带
+ *      `usage:{amount,currency}`，我们解析后落 `compute_attempts.upstream_cost_fen`（cost_source='REPORTED'），
+ *      平台端「调用账」已能按学生 / 课包 / 课时看。这部分与下面的探针无关，本端点一个字都不改它。
+ *   ② **上游账户余额**（我们这把 key 在供应商那边还剩多少钱）——上游有这个接口，我们此前没接。
+ *      用户口径：「加一下，只有平台内部可以看」。
+ *
+ * 上游接口（文档 https://api.seedance.nz/docs/，已核实）：
+ *   GET {base}/api/usage/wallet/，鉴权 `Authorization: Bearer sk-…`（就是渠道里存的那把 key）。
+ *   `data` 里是 { object:'wallet_balance', quota, used_quota, total_available, amount, used_amount,
+ *                display_type, username, group }，`display_type` 是 CNY / USD / TOKENS。
+ *
+ * 三条硬边界（都在本文件里落实，别在别处再实现一遍）：
+ *   · **只读**：本端点不写任何配置、不落库、不改账本，纯粹是「把渠道的 key 拿去上游问一句」。
+ *   · **key 绝不外泄**：响应体只取下面那 8 个字段 + 我们自己的错误文案；**不带** Authorization 头、
+ *     **不带** key、**不透传**上游原始响应（上游错误文案里出现 key 片段也要擦掉，见 scrubUpstreamSecret）。
+ *   · **平台内部专用**：与同文件其它 billing 端点同一道门（SUPER_ADMIN + ADMIN_BILLING），
+ *     机构管理员 / 教师 / 学生一律 403；这块 UI 也只放在平台端「AI 能力与价格」页。
+ */
+const UPSTREAM_WALLET_PATH = '/api/usage/wallet/';
+// 8~10 秒：给上游留够时间，又不至于让平台端点了刷新之后一直转圈。
+// 每个渠道**各自**吃这一个超时（并发发，见下方 Promise.all）——串行的话 30 条渠道最坏 4 分半，
+// 页面会以为卡死，运维也会以为是我们挂了。
+const UPSTREAM_WALLET_TIMEOUT_MS = 9000;
+
+/**
+ * 从渠道的**调用地址**推出上游**账户接口**的基地址（base）。不硬编码任何域名 —— 我们有多渠道。
+ *
+ * 为什么要推、不能直接用：渠道里存的 `endpoint` 是**生成接口**的地址，形如
+ *   · `https://api.seedance.nz/v1`   （带末尾版本段，常态）
+ *   · `https://api.seedance.nz/v1/`  （多一条斜杠，等价）
+ *   · `https://api.seedance.nz`      （已经是站点根）
+ *   · `https://host:8443/openai/v1/chat/completions`（配到头了，还带路径前缀）
+ * 而上游的账户接口路径是**挂在站点根上**的 `/api/usage/wallet/`（文档给的 base 就是站点根），
+ * 直接拼 `endpoint + /api/usage/wallet/` 会拼出 `/v1/api/usage/wallet/` 这种不存在的地址。
+ *
+ * 规则（两步，都是纯形状判定，与具体厂商无关）：
+ *   ① 取 URL 的 origin（协议 + 主机 + 端口）—— 这一步就覆盖了绝大多数渠道；
+ *   ② 若路径里还剩**非资源、非版本**的前缀段（例如 `/openai`、`/anthropic` 这类子路径部署），
+ *      保留它接在 origin 后面；从尾部**逐段丢弃**的是：
+ *        · 版本段：`v1` / `v2` / `v1beta` / `v1.5` / `alpha1` 这类；
+ *        · 生成接口的落点段：`chat` / `completions` / `responses` / `messages` / `models` /
+ *          `images` / `generations` / `videos` / `music` / `audio` / `speech` / `embeddings` 等。
+ *      只丢**尾部**的段，中间的前缀段留着 —— 否则 `https://host/openai/v1` 会被推成站点根，
+ *      把「子路径部署的网关」推错（这类渠道的账户接口在 `/openai/api/usage/wallet/`）。
+ *   推不出来（空值 / 非法 URL / 非 http(s)）就返回 ''，由调用方把该渠道标成 `ok:false` ——
+ *   **不猜、也不打到别的域名上去**。
+ */
+const UPSTREAM_BASE_TAIL_SEGMENT = /^(?:v\d+(?:[.\-]\d+)*(?:beta\d*|alpha\d*|preview\d*|rc\d*)?|beta\d*|alpha\d*|preview\d*|rc\d*|chat|completions|responses|messages|models|images|generations|videos|music|audio|speech|embeddings|edit|rerank)$/i;
+export function upstreamWalletBase(endpoint) {
+  const raw = String(endpoint || '').trim();
+  if (!raw) return '';
+  let url = null;
+  try { url = new URL(raw); } catch { return ''; }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+  // origin 天然丢掉 URL 里的 user:pass@（真有的话也不能进响应体）
+  const segments = url.pathname.split('/').filter(Boolean);
+  while (segments.length && UPSTREAM_BASE_TAIL_SEGMENT.test(segments[segments.length - 1])) segments.pop();
+  return url.origin + (segments.length ? `/${segments.join('/')}` : '');
+}
+
+/** 该渠道探余额要用哪把 key —— 与生成链路**同一套回退顺序**（见 services/generationProvider.js）：
+ *  渠道自己的 key → default 那把（老的单供应商配置）→ 全局 env。不另造一套取 key 规则，
+ *  否则会出现「能生成、但探不到余额」这种自相矛盾的状态。 */
+function upstreamWalletKey(channelId) {
+  return getProviderApiKey(String(channelId || 'default')) || getProviderApiKey() || AI_PROVIDER_API_KEY;
+}
+
+/** 擦掉任何可能是密钥的片段：先精确替换这把 key，再兜掉 `sk-…` 形状的串。
+ *  上游的报错文案有时会把收到的 key 前缀回显出来 —— 那种话**不能**原样带回前端。 */
+function scrubUpstreamSecret(text, secret) {
+  let out = String(text ?? '');
+  if (secret) out = out.split(secret).join('[已隐藏]');
+  return out.replace(/\bsk-[A-Za-z0-9_-]{4,}/g, '[已隐藏]').slice(0, 200);
+}
+
+/** 上游返回里的文本字段（username / group）：擦洗后再截断；上游没给就是 null（前端不显示）。 */
+function upstreamText(value, secret) {
+  if (value === null || value === undefined) return null;
+  const text = scrubUpstreamSecret(value, secret).slice(0, 80);
+  return text || null;
+}
+
+/** 上游返回里的数值：是有限数字就给数字，别的（字符串数字也收）给 null —— 前端据此不显示。 */
+function upstreamNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 探一个渠道的账户余额。**永不抛错**：任何失败都变成 `{ ok:false, error }`，
+ * 一条渠道挂掉不能让整页 500（用户口径：绝不让整个页面炸）。
+ * 返回体里**只有**文档里的那 8 个字段 + 我们自己的字段，上游原始响应整体不透传。
+ */
+async function probeUpstreamWallet(channel) {
+  const base = { channelId: channel.id, name: channel.name || channel.id };
+  const rawEndpoint = String(channel.endpoint || '').trim();
+  if (!rawEndpoint) return { ...base, endpointBase: '', skipped: true, reason: 'NO_ENDPOINT', ok: false, error: '该渠道没有配调用地址，已跳过（没有向上游发请求）' };
+  const endpointBase = upstreamWalletBase(rawEndpoint);
+  if (!endpointBase) return { ...base, endpointBase: '', skipped: true, reason: 'ENDPOINT_UNUSABLE', ok: false, error: '调用地址不是可用的 http(s) 地址，推不出账户接口，已跳过' };
+  const apiKey = upstreamWalletKey(channel.id);
+  // 没配 key 的渠道：照列（否则运维看不到「这条渠道为什么不在列表里」），标 skipped + 原因，
+  // 且**绝不发请求** —— 没 key 可带，发过去只会换来一个 401，白暴露一次探测。
+  if (!apiKey) return { ...base, endpointBase, skipped: true, reason: 'NO_API_KEY', ok: false, error: '该渠道未配置 API Key，已跳过（没有向上游发请求）' };
+
+  const url = endpointBase + UPSTREAM_WALLET_PATH;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_WALLET_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }, signal: controller.signal });
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+    if (!response.ok) {
+      const upstreamMessage = scrubUpstreamSecret(payload?.message || payload?.error?.message || '', apiKey);
+      const error = response.status === 401 || response.status === 403
+        ? `上游拒绝这把 API Key（HTTP ${response.status}），请在 ① 里重新填写并保存`
+        : response.status === 404
+          ? `上游这个地址下没有账户接口（HTTP 404：${UPSTREAM_WALLET_PATH}），确认调用地址是否指到站点根`
+          : `上游返回 HTTP ${response.status}${upstreamMessage ? `：${upstreamMessage}` : ''}`;
+      return { ...base, endpointBase, ok: false, error };
+    }
+    const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+    if (!data || typeof data !== 'object') return { ...base, endpointBase, ok: false, error: '上游返回的不是 JSON，账户接口可能不存在' };
+    const displayType = data.display_type === null || data.display_type === undefined ? null : String(data.display_type).slice(0, 20);
+    const amount = upstreamNumber(data.amount);
+    if (displayType === null && amount === null) return { ...base, endpointBase, ok: false, error: '上游响应里没有余额字段（display_type 与 amount 都没有）' };
+    return {
+      ...base, endpointBase, ok: true, error: null,
+      // display_type 原样带出（CNY / USD / TOKENS，将来上游加币种也不用改我们），
+      // currencyLike 只是给前端一个「要不要套金额阈值」的判据：认得出的币种才算钱。
+      displayType, currencyLike: displayType && /^[A-Z]{3}$/.test(displayType) ? displayType : null,
+      amount, usedAmount: upstreamNumber(data.used_amount),
+      quota: upstreamNumber(data.quota), usedQuota: upstreamNumber(data.used_quota),
+      totalAvailable: upstreamNumber(data.total_available),
+      // username / group 也过一遍擦洗：上游若把收到的 key 回显在某个账号字段里，照样进不来前端。
+      username: upstreamText(data.username, apiKey),
+      group: upstreamText(data.group, apiKey),
+      walletPath: UPSTREAM_WALLET_PATH,
+    };
+  } catch (error) {
+    const aborted = error?.name === 'AbortError';
+    const cause = scrubUpstreamSecret(error?.cause?.code || error?.message || '未知原因', apiKey);
+    return { ...base, endpointBase, ok: false, error: aborted ? `上游 ${UPSTREAM_WALLET_TIMEOUT_MS} 毫秒内没有响应（先确认平台能不能访问这个地址）` : `连不上上游（${cause}）` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function handleOverview(ctx, part, method) {
   if (part === '/billing/filter-options' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -352,6 +506,32 @@ export async function handleOverview(ctx, part, method) {
       },
       rules: MEASURED_PRICE_RULES,
       meta: measured.meta,
+    };
+  }
+
+  /**
+   * 上游账户余额（实时）—— 平台内部专用，只读。
+   * 见文件上方 P113 注释块：逐笔实扣不用这里管，这里只补「我们这把 key 在供应商那边还剩多少」。
+   * 遍历当前配置里的渠道并发探一遍（每渠道独立超时 + 独立 try/catch，失败只让那一行变红，不影响整页）。
+   * 渠道没配 endpoint / 没配 key → 照列但 `skipped:true`，并且**不发出任何请求**。
+   */
+  if (part === '/billing-config/upstream-wallet' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    requirePlatformPermission(ctx, 'ADMIN_BILLING');
+    const channels = (getAiProviderPolicy()?.channels || []).filter((channel) => channel?.id);
+    const probes = await Promise.all(channels.map((channel) => probeUpstreamWallet(channel)));
+    return {
+      fetchedAt: nowIso(),
+      scope: 'PLATFORM_INTERNAL',       // 机构端 / 学生端看不到这块（只有 /api/admin/** 有它）
+      walletPath: UPSTREAM_WALLET_PATH,
+      timeoutMs: UPSTREAM_WALLET_TIMEOUT_MS,
+      channels: probes,
+      summary: {
+        total: probes.length,
+        ok: probes.filter((item) => item.ok).length,
+        failed: probes.filter((item) => !item.ok && !item.skipped).length,
+        skipped: probes.filter((item) => item.skipped).length,
+      },
     };
   }
 
