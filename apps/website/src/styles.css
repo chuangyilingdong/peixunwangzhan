@@ -23,9 +23,22 @@
 .hp-trust strong{display:block;color:#f2f2f3;font-size:clamp(11.5px,1.35vw,13.5px);font-weight:700;text-align:left}
 .hp-trust span{display:block;margin-top:2px;color:#b9b7bd;font-size:clamp(10.5px,1.2vw,12px);text-align:left}
 .hp-kicker{margin:0;color:rgba(255,255,255,.58);font-size:clamp(11px,1.3vw,12.5px);font-weight:700;letter-spacing:.22em}
-.hp-title{margin:0 auto;max-width:94vw;font-size:clamp(30px,6vw,80px);line-height:1.12;letter-spacing:-.03em;white-space:normal}
-.hp-title span,.hp-title em{display:block}
-.hp-title em{color:#ff5c93;font-style:normal}
+/* ⚠️ 必须有确定宽度（width:100%）：.hp-hero 是 align-items:center 的 flex 列，
+   不给宽度的话 flex 项会塌成 fit-content —— 而 MaskedHeading 又**按容器宽度算字号**
+   （textScale×clientWidth），于是「字号←宽度←字号」互相决定，最后落到 20px 下限（实测 195px 盒 / 20px 字）。
+   给了 100% 之后 clientWidth 才是英雄区的内容宽（1440 下约 1360），字号也就正常了。
+   组件自己的 font-size 由 JS 内联，所以这里那条 font-size 已经不生效（留着无害）。 */
+.hp-title{margin:0 auto;width:100%;max-width:94vw;font-size:clamp(30px,6vw,80px);line-height:1.12;letter-spacing:-.03em;white-space:normal}
+/* 2026-09-18 晚：标题两行现在各是一个 MaskedHeading（tag=span）—— 组件 CSS 里写了 width:100%，
+   但 span 默认 inline、那条会被忽略，所以这里显式 block，两行才各自占一行。
+   ⚠️ 还要 `overflow:hidden`：组件的媒体是**按 fillScale（默认 1.25+）故意放大**的（parallax 要往那圈
+   余量里滑），所以它天生溢出盒子 —— 实测把整页撑出 208px 的横向可滚动溢出（口径⑤那类）。
+   裁掉零视觉损失：字形遮罩本来就只让"字里"那部分可见。 */
+.hp-title .masked-heading{display:block;overflow:hidden}
+/* 媒体那一层单独裁：媒体的放大是**故意**的（见上），但它不该把整页撑出横向可滚动溢出。 */
+.hp-title .masked-heading__clip{overflow:hidden}
+/* 第二行（原来是品牌粉 .hp-title em）的颜色现在来自视频 —— 靠组件 props 的
+   brightness/saturation 拉开层次，不用 CSS 覆盖（组件在 place() 里会内联写 filter，覆盖不住）。 */
 .hp-sub{max-width:min(560px,92%);margin:0;color:rgba(255,255,255,.8);font-size:clamp(13.5px,1.55vw,16px);line-height:1.55}
 .hp-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:6px}
 .hp-stats{position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,1.4vw,18px);width:min(920px,100%);margin:0 auto;padding:clamp(16px,2.6vh,28px) clamp(20px,4vw,40px) clamp(24px,3.6vh,42px);animation:hp-rise .85s cubic-bezier(.22,1,.36,1) .45s both}
@@ -501,23 +514,26 @@
   .works-search input{max-width:none;width:100%}
 }
 
-/* ── 账号徽标：照用户给的参考图重做（2026-09-18 晚）────────────────────────────
-   参考样式 = **圆形头像 + 名字 + 一个小箭头**，没有药丸底框、**没有角色标签**
-   （用户口径：「『小小创作者』要删除掉，不需要这样的标签」）。
-   ⚠️ 原来那个药丸底（#f2effc）与 `.role-tag` 都不再渲染了；role-tag 的规则留着无害（别处没用到）。 */
-.header-user{display:inline-flex;align-items:center;gap:8px;padding:4px 2px;border:0;background:transparent;color:var(--ink);font-size:13px;font-weight:700}
-.header-user-avatar{display:grid;place-items:center;width:26px;height:26px;flex:0 0 auto;border-radius:50%;color:#3f2f82;background:linear-gradient(135deg,#fedf81,#ad91ff);font-size:12px;font-weight:900}
-.header-user-name{max-width:10em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.header-user .dropdown-arrow{font-size:11px;color:currentColor;opacity:.55}
-.header-user:hover .header-user-name{text-decoration:underline;text-underline-offset:3px}
-/* 深色首页顶栏压在视频上：去掉底框之后靠文字阴影保证可读 */
+/* ── 账号徽标（2026-09-18 晚用户第三次调整）───────────────────────────────────
+   · **圆形头像删掉**（首页徽标 + 下拉里那两处都删）；
+   · 名字给一个有质感的底色凸显 —— 玻璃药丸：白渐变 + 内高光 + 细边 + 模糊，
+     与顶栏导航那层玻璃同一套做法（浅底 / 深底两种配色）；
+   · 下拉箭头放大（11px→16px）并把不透明度提到 1；深色首页上换成白色（用户截图就是那个场景，
+     浅底上白色会看不见，所以浅底仍用深墨色）；
+   · 展开时箭头转 180°（靠 aria-expanded，不用额外 state）。 */
+.header-user{display:inline-flex;align-items:center;gap:10px;padding:3px 2px;border:0;background:transparent;color:var(--ink);font-size:13px;font-weight:700}
+.header-user-name{display:inline-flex;align-items:center;max-width:12em;overflow:hidden;padding:6px 15px;border:1px solid rgba(42,31,80,.10);border-radius:999px;color:var(--ink);background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(255,255,255,.66));box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 8px 20px rgba(42,31,80,.12);backdrop-filter:blur(10px) saturate(120%);text-overflow:ellipsis;white-space:nowrap}
+.header-user:hover .header-user-name{border-color:rgba(112,88,213,.38)}
+.header-user .dropdown-arrow{font-size:16px;line-height:1;color:var(--ink);opacity:1;transition:transform .2s ease}
+.header-user[aria-expanded='true'] .dropdown-arrow{transform:rotate(180deg)}
+/* 深色首页顶栏压在视频上：玻璃换成"暗玻璃"，字与箭头转白 */
 .site-topbar.on-dark .header-user{color:#fff;background:transparent}
-.site-topbar.on-dark .header-user-name{text-shadow:0 1px 10px rgba(0,0,0,.55)}
-/* 下拉：参考图是一张白卡 —— 顶部「名字 + 头像」，分隔线，然后纯文字菜单项（不带图标） */
+.site-topbar.on-dark .header-user-name{border-color:rgba(255,255,255,.28);color:#fff;background:linear-gradient(180deg,rgba(255,255,255,.18),rgba(255,255,255,.05));box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 10px 26px rgba(0,0,0,.35);text-shadow:0 1px 10px rgba(0,0,0,.45)}
+.site-topbar.on-dark .header-user .dropdown-arrow{color:#fff}
+/* 下拉：参考图是一张白卡 —— 顶部名字，分隔线，然后纯文字菜单项（不带图标、不带头像） */
 .student-dropdown-menu{min-width:196px;padding:6px 0 8px;border:1px solid #ece8f4;border-radius:14px;box-shadow:0 18px 40px rgba(40,30,80,.16)}
 .dropdown-head{padding:12px 16px 10px}
 .dropdown-head strong{display:block;color:var(--ink);font-size:14px}
-.dropdown-avatar{display:grid;place-items:center;width:30px;height:30px;margin-top:8px;border-radius:50%;color:#3f2f82;background:linear-gradient(135deg,#fedf81,#ad91ff);font-size:13px;font-weight:900}
 .student-dropdown-menu .menu-item{padding:11px 16px;color:#3a3547;font-size:14px}
 .student-dropdown-menu .menu-divider{margin:6px 0}
 

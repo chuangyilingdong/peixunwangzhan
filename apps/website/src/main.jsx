@@ -10,6 +10,9 @@ import { MyStatsPage } from './pages/MyStats.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
 import SpecularButton from './components/SpecularButton.jsx';
+// 首页大标题用 React Bits 的 MaskedHeading（字形当遮罩、视频从字里透出来），
+// 同样见组件文件顶部的来源与注意事项（依赖 gsap）
+import MaskedHeading from './components/MaskedHeading.jsx';
 
 // 官网公开页面统一走共享 API client，保持错误解析与鉴权行为一致
 const publicApi = createApiClient();
@@ -168,12 +171,9 @@ function StatValue({ value, suffix }) {
 // 只有「字段不存在」或「接口失败」才用内置 fallback。
 // ⚠️ 别写 `content.x || fallback`：空串是 falsy，后台清空后官网会继续显示内置默认文案，
 //    用户看到的就是「我在后台清空了为什么还显示」。
-// 首页大标题的字号自适应：标题是**后台可改**的，用户写长了就会被裁 ——
-// 2026-09-18 实测：他写的那行「不只是学工具，而是掌握Ai时代的创造方式」宽 1471px 而视口 1440px，
-// 左右各被 overflow:hidden 裁掉 15px（没有滚动条，所以肉眼不容易发现）。
-// 做法：按最长那一行的「字宽」估算（中文 1、拉丁 0.58），再用 min(6vw, 92vw/字宽) 压到一行放得下；
-// ≤1120px 由 min() 与 26px 下限接管；真放不下还有 CSS 换行兜底（绝不裁字）。
-const titleWeight = (text) => [...String(text || '')].reduce((n, ch) => n + (/[\u2e80-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch) ? 1 : 0.58), 0);
+// 📌 2026-09-18 晚：首页大标题的字号以前在这里按「字宽」估算（`min(6vw, 92vw/字宽)`，且最多 76px）——
+//    换成 MaskedHeading 之后**这套算法删掉了**：组件按 `textScale × 容器宽度` 自己算字号
+//    （更贴「按文字所在盒子算」的口径，见交接文档 §三.3），标题太长时自然折行、不裁字。
 function cmsPick(content, key, fallback) {
   const value = content?.[key];
   return value === undefined || value === null ? (fallback ?? '') : value;
@@ -190,17 +190,32 @@ function HomeLanding() {
   const title = cmsPick(content, 'heroTitle', CMS_FALLBACK.HOME.heroTitle);
   const accent = cmsPick(content, 'heroAccent', CMS_FALLBACK.HOME.heroAccent);
   const description = cmsPick(content, 'heroDescription', CMS_FALLBACK.HOME.heroDescription);
-  const longestLine = Math.max(titleWeight(title), titleWeight(accent), 1);
   // 文案要等 CMS 接口回来才渲染：否则会先画一帧兜底文案（可能与后台里改过的不同）再被替换掉，
   // 强刷时看起来就是「旧版内容闪一下」。视频与按钮（不依赖 CMS）照常立刻出现，所以不会白屏。
   const ready = !cms.loading;
-  const titleStyle = { fontSize: `clamp(26px, min(6vw, ${(92 / longestLine).toFixed(2)}vw), 76px)` };
+  // 2026-09-18 晚（用户口径）：首页大标题换成 React Bits 的 **MaskedHeading** —— 字形当遮罩，
+  // 让首页那支视频**从字里透出来**（指针移动时字下的画面还会平移）。
+  // ⚠️ 两行各自一个组件（tag='span'，外面的 h1 仍是唯一的一级标题）；媒体就是首页背景那支视频，
+  //    所以字里透出来的画面与背景是同一份，看着像"字母变成了看向视频的窗口"。
+  // ⚠️⚠️ 字号必须**自己按字数算**再传给组件：它按空格切词、每个词 `white-space:pre`，
+  //    而中文没有空格 —— 那一行就是**一个不可断行的词**，字号大了会被裁掉（换不回 vw 那套自适应）。
+  //    这里按"每个中文字约占 0.058 个容器宽、拉丁 0.6"估，字多了就按 0.92/字宽 缩，保证一行放得下。
+  const glyphWidth = (value) => [...String(value || '')].reduce((n, ch) => n + (/[\u2e80-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch) ? 1 : 0.6), 0);
+  const scaleFor = (value) => Math.min(0.058, 0.92 / Math.max(glyphWidth(value), 1));
+  const maskMedia = { mediaType: 'video', src: '/assets/hero-animal.mp4', poster: '/assets/hero-animal-poster.webp', fillScale: 1.3, parallax: 34, reveal: 'wipe', trigger: 'view', align: 'center', weight: 800, tracking: -0.02, lineHeight: 1.12 };
   return <main className="hp">
     <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
     <section className="hp-hero">
       {ready && (trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
       {ready && kicker ? <p className="hp-kicker">{kicker}</p> : null}
-      {ready && (title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
+      {ready && (title || accent) ? <h1 className="hp-title">
+        {/* `data-line` 是给守卫用的稳定标记（组件把 ...rest 透传到根元素上）——
+            换结构之后别再靠 span/em 这种位置选择器取文案，一改就误判。 */}
+        {title ? <MaskedHeading tag="span" data-line="title" className="hp-title__line" text={title} textScale={scaleFor(title)} {...maskMedia} /> : null}
+        {/* 第二行原来是品牌粉（`.hp-title em`）。加了遮罩之后字是透明的、颜色来自视频，
+            所以这里靠提高饱和度/亮度让它比第一行更"亮粉"一点，保住原来两行的层次。 */}
+        {accent ? <MaskedHeading tag="span" data-line="accent" className="hp-title__line hp-title__line--accent" text={accent} textScale={scaleFor(accent)} {...maskMedia} brightness={1.12} saturation={1.6} /> : null}
+      </h1> : null}
       {ready && description ? <p className="hp-sub">{description}</p> : null}
       {/* 首页两个 CTA 用 SpecularButton（用户口径：两个**背景要一样**，主次只靠光效区分）：
           都是透明玻璃面（tintOpacity 0.08 + blur 8），主按钮高光常亮并缓慢扫过、次按钮只在光标靠近时亮起。
@@ -601,20 +616,20 @@ export function App(){
     { to: '/my-stats', label: '学习统计' },
   ];
 
-  // 账号徽标（用户口径 2026-09-18 晚）：**不带角色标签**（「不需要这样的标签」），
-  // 样式照参考图：一个圆形头像 + 名字 + 一个小箭头，没有药丸底框。
+  // 账号徽标（用户口径 2026-09-18 晚，第三次调整）：
+  //   **那个圆形头像删掉**（首页徽标 + 下拉里那两处「学」字圆头像都删，用户：「图4 这个图标删除」）；
+  //   名字给一个有质感的底色凸显；下拉箭头放大（深色首页上换成白色 —— 他截图里就是那个场景）。
   const userBadge = session ? (
     session.user?.role === 'STUDENT' ? (
       <div className='header-user-menu' ref={studentMenuRef}>
         <button className='header-user' aria-haspopup='menu' aria-expanded={showStudentMenu} onClick={() => setShowStudentMenu(!showStudentMenu)}>
-          <span className='header-user-avatar' aria-hidden='true'>{userName.slice(0, 1)}</span>
           <span className='header-user-name'>{userName}</span>
           <span className='dropdown-arrow' aria-hidden='true'>⌄</span>
         </button>
         {showStudentMenu && (
           <div className='student-dropdown-menu' role='menu'>
-            {/* 参考图的下拉：顶部是「名字 + 头像」，一条分隔线，然后是纯文字菜单项（不带图标） */}
-            <div className='dropdown-head'><strong>{userName}</strong><span className='dropdown-avatar' aria-hidden='true'>{userName.slice(0, 1)}</span></div>
+            {/* 参考图的下拉：顶部是名字，一条分隔线，然后是纯文字菜单项（不带图标、不带头像） */}
+            <div className='dropdown-head'><strong>{userName}</strong></div>
             <div className='menu-divider'></div>
             {studentMenuItems.map(item => (
               <Link key={item.to} to={item.to} className='menu-item' role='menuitem' onClick={() => setShowStudentMenu(false)}>
@@ -630,7 +645,6 @@ export function App(){
       </div>
     ) : (
       <span className='header-user'>
-        <span className='header-user-avatar' aria-hidden='true'>{userName.slice(0, 1)}</span>
         <span className='header-user-name'>{userName}</span>
         <button className='text-button' onClick={logout}>退出</button>
       </span>

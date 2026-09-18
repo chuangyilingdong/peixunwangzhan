@@ -14,6 +14,9 @@ importers:
       '@xyflow/react':
         specifier: ^12.3.6
         version: 12.11.5(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      gsap:
+        specifier: ^3.15.0
+        version: 3.15.0
       highlight.js:
         specifier: ^11.12.0
         version: 11.12.0
@@ -686,6 +689,9 @@ packages:
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
     engines: {node: '>=6.9.0'}
+
+  gsap@3.15.0:
+    resolution: {integrity: sha512-dMW4CWBTUK1AEEDeZc1g4xpPGIrSf9fJF960qbTZmN/QwZIWY5wgliS6JWl9/25fpTGJrMRtSjGtOmPnfjZB+A==}
 
   highlight.js@11.12.0:
     resolution: {integrity: sha512-nbfWpyRMcMrPMmDwJB+dhX/eiaPKtc2RB+0QZskqJ3WjRA/FDS0e9hZrx8EC/lbEv8gXy98FcDbNa/dspAaJMg==}
@@ -1385,6 +1391,8 @@ snapshots:
     optional: true
 
   gensync@1.0.0-beta.2: {}
+
+  gsap@3.15.0: {}
 
   highlight.js@11.12.0: {}
 

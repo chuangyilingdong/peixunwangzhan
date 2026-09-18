@@ -212,10 +212,10 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
 
   if (selectedCourse) {
     return <main className="classroom-center classroom-course-detail">
+      {/* ⚠️ 2026-09-18 晚用户口径：这一屏的**眉题（「学习上课」）与描述**都删掉了
+          （「图3 红框这 2 行字全部删除」）—— 只留课包标题。 */}
       <PageHeader
-        eyebrow="学习上课"
         title={selectedCourse.title}
-        description={selectedCourse.description || '选一节课进入今天的课堂；每节课的上课形式由课包设定。'}
         actions={<button className="secondary-button" onClick={() => { setSelectedCourseId(null); setMessage(''); }}>← 返回我的课程</button>}
       />
       {message && <Notice tone="danger">{message}</Notice>}
@@ -285,8 +285,10 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
     </main>;
   }
 
+  // ⚠️ 2026-09-18 晚用户口径：眉题（「学习上课」）与描述（「先选课包，再选这一节课…」）都删掉了
+  //    （「图2 红框这 2 行字全部删除」）—— 这一屏只留「我的课程」这个标题。
   return <main className="classroom-center classroom-course-center">
-    <PageHeader eyebrow="学习上课" title="我的课程" description="先选课包，再选这一节课；上课形式（画布 / VibeCoding）由课包设定，不需要你自己选。" actions={<>
+    <PageHeader title="我的课程" actions={<>
       {/* 用户口径 2026-09-18 晚：这一页是学生登录后的落地页，要有个回官网首页的出口。
           做成可选属性 —— 别的端引这个组件时不会凭空多出一个指向 '/' 的链接。 */}
       {homeHref ? <a className="secondary-button" href={homeHref}>← 返回首页</a> : null}

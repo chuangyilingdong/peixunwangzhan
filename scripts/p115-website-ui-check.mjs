@@ -177,9 +177,14 @@ try {
 
   const captureCopy = (target = page) => target.evaluate(() => {
     const text = (sel) => { const el = document.querySelector(sel); return el ? el.innerText.replace(/\s+/g, ' ').trim() : null; };
+    // 2026-09-18 晚：标题换成 MaskedHeading 之后结构变了（一行一个组件、文字在 color:transparent 的
+    // `.masked-heading__measure` 里）。**别再按 span/em 这种位置选择器取文案** —— 一改结构就误判
+    // （上一版就是这么把「标题」读成了两遍、还把口径③ 误报成"清空了还在显示"）。
+    // 用组件透传的 data-line 标记来认这两行。
+    const lineText = (name) => text(`.hp-title [data-line="${name}"] .masked-heading__measure`) || text(`.hp-title [data-line="${name}"]`);
     return {
-      title: text('.hp-title span'),
-      accent: text('.hp-title em'),
+      title: lineText('title'),
+      accent: lineText('accent'),
       sub: text('.hp-sub'),
       trust: text('.hp-trust'),
       stats: [...document.querySelectorAll('.hp-stat strong')].map((el) => el.innerText.replace(/\s+/g, ' ').trim()),
@@ -256,23 +261,41 @@ try {
     console.log(`  · 顶栏几何：导航偏离中心 ${navDelta.toFixed(1)}px`);
   }
 
-  // 首页大标题：字号按字数自适应，**不许折行、不许被裁**
+  // 首页大标题（2026-09-18 晚换成 React Bits 的 MaskedHeading）：两行各是一个组件，
+  // 字号由组件按 `textScale × 容器宽度` 自己算。要守的还是那两条老口径：
+  // **每行只占一行、不许被裁**（太长的 CMS 文案允许折行，但绝不能横向溢出）。
   const titleGeo = await page.evaluate(() => {
-    const el = document.querySelector('.hp-title');
-    if (!el) return null;
-    const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
-    const blocks = [...el.querySelectorAll('span, em')];
+    const lines = [...document.querySelectorAll('.hp-title .masked-heading')];
+    if (!lines.length) return null;
     return {
-      fontSize: Math.round(parseFloat(getComputedStyle(el).fontSize)),
-      lines: blocks.map((b) => Math.round(b.getBoundingClientRect().height / lineHeight)),
-      over: el.scrollWidth - el.clientWidth,
+      count: lines.length,
+      rows: lines.map((el) => {
+        const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+        const measure = el.querySelector('.masked-heading__measure');
+        return {
+          fontSize: Math.round(parseFloat(getComputedStyle(el).fontSize)),
+          count: Math.round(el.getBoundingClientRect().height / lineHeight),
+          over: el.scrollWidth - el.clientWidth,
+          boxW: Math.round(el.clientWidth),
+          textW: measure ? Math.round(measure.getBoundingClientRect().width) : null,
+        };
+      }),
+      clips: document.querySelectorAll('.hp-title .masked-heading__clip').length,
+      media: document.querySelectorAll('.hp-title .masked-heading__source').length,
     };
   });
-  if (!titleGeo) problems.push('首页：没找到 .hp-title');
+  if (!titleGeo) problems.push('首页：没找到 .hp-title 里的 MaskedHeading');
   else {
-    console.log(`  · 首页标题：字号 ${titleGeo.fontSize}px、各行行数 [${titleGeo.lines.join(', ')}]`);
-    if (titleGeo.lines.some((n) => n !== 1)) problems.push(`首页：大标题折行了（各行行数 ${titleGeo.lines.join(', ')}）—— 字号自适应没算出「一行放得下」的大小`);
-    if (titleGeo.over > 1) problems.push(`首页：大标题横向溢出 ${titleGeo.over}px（会被 overflow:hidden 裁掉）`);
+    console.log(`  · 首页标题（MaskedHeading）：${titleGeo.count} 行、遮罩 ${titleGeo.clips} 个、媒体 ${titleGeo.media} 个、`
+      + titleGeo.rows.map((r) => `${r.fontSize}px/${r.count}行 盒${r.boxW}/文${r.textW}`).join(' '));
+    if (titleGeo.count !== 2) problems.push(`首页：大标题应当是两行 MaskedHeading（实际 ${titleGeo.count} 行）`);
+    for (const row of titleGeo.rows) {
+      if (row.count !== 1) problems.push(`首页：MaskedHeading 那一行占了 ${row.count} 行 —— 字号按容器宽度算，写超了就会折行`);
+      if (row.over > 1) problems.push(`首页：标题横向溢出 ${row.over}px（会被裁掉）`);
+    }
+    if (titleGeo.clips !== titleGeo.count || titleGeo.media !== titleGeo.count) {
+      problems.push(`首页：每一行标题都要有「字形遮罩 + 媒体」（实际遮罩 ${titleGeo.clips}、媒体 ${titleGeo.media}，行数 ${titleGeo.count}）`);
+    }
   }
 
   await sweepHorizontalScroll('首页', ['.site', '.hp']);
@@ -743,16 +766,23 @@ try {
       badgeWidth: box ? Math.round(box.width) : 0,
       roleTags: bar ? bar.querySelectorAll('.role-tag').length : 0,
       avatars: bar ? bar.querySelectorAll('.header-user-avatar').length : 0,
+      nameBg: (() => { const el = bar?.querySelector('.header-user-name'); return el ? getComputedStyle(el).backgroundImage : null; })(),
+      arrowSize: (() => { const el = bar?.querySelector('.dropdown-arrow'); return el ? Math.round(parseFloat(getComputedStyle(el).fontSize)) : null; })(),
+      arrowColor: (() => { const el = bar?.querySelector('.dropdown-arrow'); return el ? getComputedStyle(el).color : null; })(),
       names: bar ? bar.querySelectorAll('.header-user-name').length : 0,
     };
   });
-  console.log(`  · 登录态首页顶栏：「${signedBar.text}」徽标 ${signedBar.badges} 个 宽 ${signedBar.badgeWidth}px 头像 ${signedBar.avatars} 名字 ${signedBar.names} 角色标签 ${signedBar.roleTags}`);
+  console.log(`  · 登录态首页顶栏：「${signedBar.text}」徽标 ${signedBar.badges} 个 宽 ${signedBar.badgeWidth}px 头像 ${signedBar.avatars} 名字 ${signedBar.names} 角色标签 ${signedBar.roleTags} 箭头 ${signedBar.arrowSize}px ${signedBar.arrowColor} 名字底 ${String(signedBar.nameBg).slice(0, 46)}`);
   if (!signedBar.badges || signedBar.badgeWidth < 40) problems.push('首页（已登录）：右上角应当显示账号徽标（.header-user）—— 学生登录后回首页看不到账号就是用户报的那个 bug');
   if (signedBar.text.includes('机构 / 老师登录') || signedBar.text.includes('学生登录')) problems.push('首页（已登录）：不该再显示登录入口');
-  // 徽标样式（用户口径 2026-09-18 晚）：「小小创作者」这类**角色标签要删掉**，
-  // 参考图是「圆形头像 + 名字 + 小箭头」，没有药丸底框。
+  // 2026-09-18 晚用户口径（第三次调徽标）：
+  //   ①那个圆形头像**删掉**（首页与下拉里都删）；②名字要有底色凸显；③箭头放大、深色首页上换白色。
   if (signedBar.roleTags) problems.push(`首页徽标：不该再有角色标签（.role-tag，例如「小小创作者」），实际 ${signedBar.roleTags} 个`);
-  if (!signedBar.avatars || !signedBar.names) problems.push('首页徽标：应当是「圆形头像 + 名字 + 箭头」的样式（缺 .header-user-avatar / .header-user-name）');
+  if (signedBar.avatars) problems.push(`首页徽标：那个圆形头像应当已删除（还有 ${signedBar.avatars} 个 .header-user-avatar）`);
+  if (!signedBar.names) problems.push('首页徽标：应当有名字（.header-user-name）');
+  if (!/gradient/.test(String(signedBar.nameBg))) problems.push(`首页徽标：名字应当有一层有质感的底色（实际 background-image=${signedBar.nameBg}）`);
+  if (!(signedBar.arrowSize >= 15)) problems.push(`首页徽标：下拉箭头要放大（实际 ${signedBar.arrowSize}px，应 ≥15px）`);
+  if (signedBar.arrowColor !== 'rgb(255, 255, 255)') problems.push(`首页（深色底）：箭头应当是白色（实际 ${signedBar.arrowColor}）`);
   // 下拉：参考图是一张白卡 —— 顶部「名字 + 头像」+ 分隔线 + 纯文字项（不带图标）
   await page.locator('.site-topbar .header-user').click();
   await page.waitForTimeout(400);
