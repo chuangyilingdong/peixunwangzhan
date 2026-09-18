@@ -1177,7 +1177,7 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 /* 顶栏：左品牌 / 中课时 / 右上两个动作 */
 .cv-topbar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 14px; height: 52px; padding: 0 14px; border-bottom: 1px solid var(--cv-border); background: var(--cv-bg); }
 /* 顶栏左上角：品牌标（灵动ai 横标，按高度缩放）+ **右边**的学生账号名。
-   原来是「✦ AI 魔法学院 / 学生创作画布」那个占位块；用户 2026-09-17 先要 logo + 名字，
+   原来是「✦ 灵动ai学院 / 学生创作画布」那个占位块；用户 2026-09-17 先要 logo + 名字，
    再调成「名字放 logo 右边、白色、格式『同学：xxx』」（放下面太挤、灰字不够显眼）。 */
 .cv-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .cv-brand__logo { display: block; height: 22px; width: auto; }

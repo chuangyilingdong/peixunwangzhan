@@ -96,7 +96,7 @@ export function verifyTotp(secret, code, {
   return null;
 }
 
-export function otpauthUri({ secret, account, issuer = 'AI魔法学院', digits = DEFAULT_DIGITS, period = DEFAULT_PERIOD_SECONDS }) {
+export function otpauthUri({ secret, account, issuer = '灵动ai学院', digits = DEFAULT_DIGITS, period = DEFAULT_PERIOD_SECONDS }) {
   const label = `${issuer}:${account}`;
   const params = new URLSearchParams({ secret: base32Encode(base32Decode(secret)), issuer, algorithm: 'SHA1', digits: String(digits), period: String(period) });
   return `otpauth://totp/${encodeURIComponent(label)}?${params.toString()}`;

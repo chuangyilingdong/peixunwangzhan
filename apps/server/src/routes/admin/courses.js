@@ -730,7 +730,6 @@ export async function handleCourses(ctx, part, method) {
         tags: normalized.tags,
         status: normalized.status,
         marketplaceStatus: normalized.marketplaceStatus,
-        marketplaceRewardCredits: normalized.marketplaceRewardCredits,
         visibility: normalized.visibility,
         createdAt: normalized.createdAt,
       };
@@ -747,7 +746,6 @@ export async function handleCourses(ctx, part, method) {
     return {
       ...detail,
       marketplaceStatus: detail.marketplaceStatus,
-      marketplaceRewardCredits: detail.marketplaceRewardCredits,
       lessonTitles: (detail.lessons || []).map((l) => ({ id: l.id, title: l.title, sort: l.sort })),
     };
   }
@@ -760,26 +758,13 @@ export async function handleCourses(ctx, part, method) {
     const body = ctx.body || {};
     const newStatus = body.marketplaceStatus === undefined ? series.marketplace_status : body.marketplaceStatus;
     if (!['PENDING', 'APPROVED', 'REJECTED', 'NONE'].includes(newStatus)) throw errors.badRequest('应用市场状态无效', 'INVALID_MARKETPLACE_STATUS');
-    const newCredits = body.marketplaceRewardCredits === undefined ? Number(series.marketplace_reward_credits || 0) : integer(body.marketplaceRewardCredits, '积分激励', { min: 0, max: 999999 });
+    // 2026-09-18：这里原来还能一并写「积分激励」（marketplace_reward_credits）。平台没有积分概念，
+    // 该字段没有后台入口、没有任何调用方，也不再对公开接口下发，所以**不再接受它作为输入**：
+    // 本端点只改应用市场状态，奖励列原值原样保留（本仓库惯例：删代码不删列，历史数据不动）。
     const before = platformSeries(series, { parseTags: true });
-    q('UPDATE course_series SET marketplace_status=?,marketplace_reward_credits=?,updated_at=? WHERE id=?', [newStatus, newCredits, nowIso(), series.id]);
+    q('UPDATE course_series SET marketplace_status=?,updated_at=? WHERE id=?', [newStatus, nowIso(), series.id]);
     const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
-    audit(ctx, 'COURSE_SERIES_MARKETPLACE_UPDATE', 'COURSE_SERIES', series.id, { marketplaceStatus: before.marketplaceStatus, marketplaceRewardCredits: before.marketplaceRewardCredits }, { marketplaceStatus: after.marketplaceStatus, marketplaceRewardCredits: after.marketplaceRewardCredits });
-    return after;
-  }
-
-  const marketplaceRewardsMatch = part.match(/^\/course-marketplace\/([^/]+)\/rewards$/);
-  if (marketplaceRewardsMatch && method === 'PUT') {
-    requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceRewardsMatch[1]]);
-    if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    if (series.status !== 'PUBLISHED') throw errors.badRequest('仅已发布课包可调整积分激励', 'COURSE_NOT_PUBLISHED');
-    const body = ctx.body || {};
-    const newCredits = integer(body.marketplaceRewardCredits, '积分激励', { min: 0, max: 999999 });
-    const before = platformSeries(series, { parseTags: true });
-    q('UPDATE course_series SET marketplace_reward_credits=?,updated_at=? WHERE id=?', [newCredits, nowIso(), series.id]);
-    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
-    audit(ctx, 'COURSE_SERIES_MARKETPLACE_REWARD_UPDATE', 'COURSE_SERIES', series.id, { marketplaceRewardCredits: before.marketplaceRewardCredits }, { marketplaceRewardCredits: after.marketplaceRewardCredits });
+    audit(ctx, 'COURSE_SERIES_MARKETPLACE_UPDATE', 'COURSE_SERIES', series.id, { marketplaceStatus: before.marketplaceStatus }, { marketplaceStatus: after.marketplaceStatus });
     return after;
   }
 

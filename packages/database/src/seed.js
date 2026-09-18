@@ -1,28 +1,11 @@
 import { hashPassword, id, json, nowIso, q, row, transaction } from './schema.js';
+import { WEBSITE_CONTENT_DEFAULTS } from './websiteContentDefaults.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const PLUS_DAYS = (days) => new Date(Date.now() + days * DAY).toISOString();
 
 function ensureWebsiteContent(now) {
-  const defaults = {
-    HOME: {
-      heroKicker: '教培机构青少年 AI 开课平台',
-      heroTitle: '给机构一套',
-      heroAccent: '能落地的青少年 AI 课',
-      heroDescription: 'AI魔法学院把课程、桌面客户端、机构账号、灵动值计费与作品展厅放在一个平台里。',
-      trustTitle: '响应教育部「做中学」领航行动',
-      trustDescription: '真实问题 · 项目式探究 · 每节课都有作品'
-    },
-    FAQ: {
-      title: '开课前，你可能想知道',
-      items: [
-        { question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' },
-        { question: 'Windows 机房和 Mac 教室都能用吗？', answer: '可以，公开客户端支持 macOS Apple 芯片版与 Windows 64 位。' },
-        { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 与 micro:bit 的课堂实践。' }
-      ]
-    },
-    BRAND: { name: 'AI魔法学院', tagline: '青少年 AI 创作开课平台', contactEmail: 'hello@aimagc.cn' }
-  };
+  const defaults = WEBSITE_CONTENT_DEFAULTS;
   for (const [contentKey, content] of Object.entries(defaults)) {
     const existing = row('SELECT content_key FROM website_contents WHERE content_key=?', [contentKey]);
     if (!existing) {
@@ -41,7 +24,7 @@ function ensurePlatformSettings(now) {
      ON CONFLICT(id) DO UPDATE SET
        platform_name=excluded.platform_name,
        updated_at=excluded.updated_at`,
-    ['AI 少儿编程平台（P0）', now, now],
+    ['灵动ai学院', now, now],
   );
 }
 
@@ -159,7 +142,7 @@ function ensureOrganization(now) {
     `INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,status,reason,actor_id,created_at)
      SELECT ?,?,?,?,?,?,'EFFECTIVE',?,NULL,?
      WHERE NOT EXISTS (SELECT 1 FROM credit_entries WHERE org_id=? AND type='OPENING_BALANCE')`,
-    [id('credit'), organization.id, 'IN', 'OPENING_BALANCE', 100000, 100000, '示例机构期初积分', now, organization.id],
+    [id('credit'), organization.id, 'IN', 'OPENING_BALANCE', 100000, 100000, '示例机构期初授权次数', now, organization.id],
   );
   return organization;
 }

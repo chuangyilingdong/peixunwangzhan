@@ -15,7 +15,7 @@ import { normalizeSubmission } from '../vibecoding.js';
 function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
 function platformIssuerName() {
   const settings = row('SELECT platform_name FROM platform_settings WHERE id=1');
-  return String(settings?.platform_name || '').trim() || 'AI魔法学院';
+  return String(settings?.platform_name || '').trim() || '灵动ai学院';
 }
 // 二次验证的敏感操作（关闭 / 重发恢复码）要求再输一次登录密码
 function assertSelfPassword(ctx, auth, action) {

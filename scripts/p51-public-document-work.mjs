@@ -2,7 +2,7 @@
  * 作品广场的**文档产物**链路守卫（2026-09-11 新增）。
  *
  * 为什么单独立一条：学生交上来的是一份 PPT 时，广场此前会显示成
- * 「你好，AI 魔法学院」起始页（种子 index.html 一直在会话里，按文件名优先挑入口就挑到它），
+ * 「你好，灵动ai学院」起始页（种子 index.html 一直在会话里，按文件名优先挑入口就挑到它），
  * 或者一段 JSON 原文，而且**没有任何地方能下载到真正的 .pptx**。这条链路里连着四处，
  * 任何一处断掉都不报错、只是「广场显示的不是那个东西」：
  *   ① 提交只定格显式 entryFile 对应的产物与配图，不能顺带公开同会话其他作品；
@@ -111,7 +111,7 @@ const DECK = {
 };
 const DECK_NAME = '去新疆旅游.pptx';
 // 种子产物：学生进了课堂就有它，交作品时它还在（这正是广场显示错东西的根源）
-const SEED_HTML = '<!doctype html><html><head><title>我的第一个网页</title></head><body><h1>你好，AI 魔法学院！</h1></body></html>';
+const SEED_HTML = '<!doctype html><html><head><title>我的第一个网页</title></head><body><h1>你好，灵动ai学院！</h1></body></html>';
 
 let serverLog = '';
 let server = null;

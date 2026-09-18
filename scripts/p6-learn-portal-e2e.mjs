@@ -107,9 +107,14 @@ try {
   check('website LoginPage 平台管理员进 /admin/', () => assert.ok(websiteSrc.includes("'/admin/'"), 'PLATFORM admin should land on /admin/'));
   check('website has /learn route', () => assert.ok(websiteSrc.includes("path='/learn'"), 'Website should declare /learn route'));
 
-  // 5. Header navigation has new items（自由画布/自由对话 已按产品决定删除，不再断言）
-  check('Header nav has 学习上课', () => assert.ok(websiteSrc.includes('学习上课')));
-  check('Header nav has 作品广场', () => assert.ok(websiteSrc.includes('作品广场')));
+  // 5. Header navigation（自由画布/自由对话 已按产品决定删除，不再断言）
+  // 2026-09-18 口径变更（不是测试漂移）：官网导航统一带「灵动」前缀并从 4 项扩到 7 项，
+  // 原来的「学习上课 / 课程广场 / 作品广场」三个标签随之变成「灵动学习 / 灵动课程 / 灵动作品」。
+  // 桌面端与移动抽屉现在共用 WEBSITE_NAV 这一份数据源，所以逐个标签钉住它，
+  // 顺带能拦住「改导航时漏改一份」这类回归。
+  for (const label of ['首页', '灵动学习', '灵动课程', '灵动作品', '灵动介绍', '机构手册', '常见问题']) {
+    check(`Header nav has ${label}`, () => assert.ok(websiteSrc.includes(`'${label}'`), `官网导航应含「${label}」`));
+  }
 
   // 6. Shared package exports classroom components
   const sharedIndex = fs.readFileSync(path.join(root, 'packages/shared/src/index.js'), 'utf8');

@@ -26,13 +26,18 @@ try {
   assert.equal(calls.length, 2); assert.equal(provider.model, 'backup');
   let attempts = rows('SELECT * FROM compute_attempts WHERE call_id=? ORDER BY attempt', [provider.compute.callId]);
   assert.deepEqual(attempts.map(x => x.status), ['FAILED', 'SUCCESS']);
-  assert.equal(attempts[0].upstream_cost_fen, null); assert.equal(attempts[1].cost_source, 'ESTIMATED');
-  assert.equal(attempts[1].upstream_cost_fen, 12);
+  // 2026-09-18 口径变更（不是测试漂移）：渠道卡里手填的「估算成本」（夹具里的 estimatedCostFen: 12）
+  // 已从成本取值链整体移除 —— 成本来源只剩 MOCK / REPORTED / COMPUTED / UNKNOWN 四种
+  // （MOCK=本地模拟 / REPORTED=上游逐笔回实扣 / COMPUTED=按合同单价×用量折算）。
+  // 本例既没有上游回实扣、也没有配合同单价 → 只能是 UNKNOWN，金额保持 null（**绝不按 0 计**）。
+  // 夹具里保留 estimatedCostFen: 12 是为了证明它不再影响成本（读回来了这条就红）。
+  assert.equal(attempts[0].upstream_cost_fen, null); assert.equal(attempts[1].cost_source, 'UNKNOWN');
+  assert.equal(attempts[1].upstream_cost_fen, null);
   assert.ok(attempts.every(x => x.client_request_id?.startsWith('req_')));
   assert.equal(attempts[1].response_request_id, 'backup-request');
   assert.equal(attempts[1].response_payload_id, 'backup-response');
   assert.equal(attempts[1].usage_id, 'backup-usage');
-  assert.equal(JSON.parse(attempts[1].cost_rule_snapshot).estimatedCostFen, 12);
+  assert.equal(JSON.parse(attempts[1].cost_rule_snapshot).estimatedCostFen, null);
   assert.equal(provider.compute.saleSnapshot.model, 'primary');
   calls = [];
   globalThis.fetch = async url => { calls.push(url); throw new Error('socket closed after request'); };
@@ -90,7 +95,11 @@ try {
     { id:'b', provider:'custom', endpoint:'https://backup.test/v1', model:'default-backup', models:['default-backup','mapped-backup'], modelCosts:{'mapped-backup':9} }
   ], modalityChannels:{TEXT:'a'}, modelRoutes:[{modality:'TEXT',channelId:'a',model:'two',backupChannelId:'b',backupModel:'mapped-backup'}] }));
   const selected = providerSelectionForModality(policy,'TEXT','two');
-  assert.equal(selected.model,'two'); assert.equal(selected.backup.model,'mapped-backup'); assert.equal(selected.backup.estimatedCostFen,9);
+  // 这条断言原来查 `selected.backup.estimatedCostFen === 9`（渠道 modelCosts 映射过来的估算成本）。
+  // 2026-09-18 口径变更（不是测试漂移）：`modelCosts` / `estimatedCostFen` 已退役，
+  // 选择对象上不再带这档价 —— 这里改成断言它**不再被读出来**（夹具里仍留着 modelCosts:9，
+  // 哪天有人把它读回来这条就红）。真正要守的是「按模型映射到 mapped-backup」这件事。
+  assert.equal(selected.model,'two'); assert.equal(selected.backup.model,'mapped-backup'); assert.equal(selected.backup.estimatedCostFen,null);
   assert.equal(providerSelectionForModality(policy,'TEXT','one').backup,undefined);
   calls = [];
   globalThis.fetch = async (url, options) => { calls.push(JSON.parse(options.body).model); return String(url).includes('primary') ? json({error:'limited'},429) : json({choices:[{message:{content:'mapped'}}]}); };

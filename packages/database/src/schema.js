@@ -15,7 +15,7 @@ db.exec('PRAGMA foreign_keys = ON');
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS platform_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
-  platform_name TEXT NOT NULL DEFAULT 'AI魔法学院兼容平台',
+  platform_name TEXT NOT NULL DEFAULT '灵动ai学院兼容平台',
   ai_provider_policy TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

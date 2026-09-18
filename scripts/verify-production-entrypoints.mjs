@@ -11,7 +11,7 @@ if (!['internal-test', 'public'].includes(mode)) {
 const executablePath = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const httpOnly = process.argv.includes('--http') || process.env.VERIFY_HTTP_ONLY === 'true';
 const cases = [
-  { path: '/', title: /AI魔法学院/, requireLogin: false, rejectLogin: false },
+  { path: '/', title: /灵动ai学院/, requireLogin: false, rejectLogin: false },
   { path: '/admin/', title: /平台管理/, requireLogin: true, rejectLogin: false },
   { path: '/org/', title: /机构教务/, requireLogin: true, rejectLogin: false },
 ];

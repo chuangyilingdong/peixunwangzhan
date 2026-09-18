@@ -901,7 +901,6 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     sort: Number(value.sort || 0),
     status: value.status,
     marketplaceStatus: value.marketplace_status,
-    marketplaceRewardCredits: Number(value.marketplace_reward_credits || 0),
     // 算力池：**每个学生在这个课包上的总预算**（分，5000 = 50 元）；留空 = 不限制、只记账。
     // ⚠️ 2026-09-18：这条注释原来说"闸门在应用侧（services/computePool.js）"——**那个池子闸门已退役**
     //    （恒 unlimited 的兼容桩与空壳断言都删了；学生额度改成"只留一套按钱的"课堂上限，

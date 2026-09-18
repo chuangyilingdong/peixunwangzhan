@@ -83,8 +83,12 @@ try {
   assert.ok(linkedAttempt.internal_usage_record_id?.startsWith('usage_'));
   assert.equal(linkedAttempt.usage_id, 'usage-87', 'provider usage ID must remain upstream evidence');
   assert.equal(row('SELECT compute_call_id FROM usage_records WHERE id=?', [linkedAttempt.internal_usage_record_id]).compute_call_id, attempt.call_id);
+  // 2026-09-18 口径变更（不是测试漂移）：渠道卡手填的「估算成本」（estimatedCostFen / modelCosts）
+  // 已从成本取值链移除，快照的 basis 从 CONFIGURED_ESTIMATE 变成 UPSTREAM_REPORTED_OR_UNKNOWN，
+  // estimatedCostFen 恒为 null。这条**故意保留**夹具里的 estimatedCostFen: 17 —— 它现在必须被忽略，
+  // 断言它没有影响快照，等于把「那档已退役」钉住（哪天有人把它读回来，这条会红）。
   assert.deepEqual(JSON.parse(attempt.cost_rule_snapshot), {
-    basis: 'CONFIGURED_ESTIMATE', provider: 'custom', channelId: 'configured-channel', model: 'evidence-model', estimatedCostFen: 17, capturedAt: JSON.parse(attempt.cost_rule_snapshot).capturedAt,
+    basis: 'UPSTREAM_REPORTED_OR_UNKNOWN', provider: 'custom', channelId: 'configured-channel', model: 'evidence-model', estimatedCostFen: null, capturedAt: JSON.parse(attempt.cost_rule_snapshot).capturedAt,
   });
   assert.ok(!JSON.stringify(attempt).includes('p87-secret'));
   assert.throws(() => q('INSERT INTO compute_attempts(id,call_id,attempt,modality,status,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?)', ['duplicate', attempt.call_id, attempt.attempt, 'TEXT', 'RUNNING', '{}', new Date().toISOString()]));

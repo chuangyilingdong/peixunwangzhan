@@ -360,7 +360,8 @@ export function handlePublicCommunication(ctx) {
         tags,
         lessonCount: Number(item.lesson_count || 0),
         deliveryMode: item.delivery_mode || 'CANVAS',
-        marketplaceRewardCredits: Number(item.marketplace_reward_credits || 0),
+        // 2026-09-18：不再下发 marketplaceRewardCredits（「积分激励」已随积分口径整体删除，
+        // 官网也不再显示；该列保留在库里作为历史数据）。
       };
     });
     return { items, total, page, limit };
@@ -409,7 +410,6 @@ export function handlePublicCommunication(ctx) {
       tags,
       lessonCount: lessons.length,
       lessons,
-      marketplaceRewardCredits: Number(series.marketplace_reward_credits || 0),
       createdAt: series.created_at,
       updatedAt: series.updated_at,
     };

@@ -233,11 +233,11 @@ export function renderDocx(markdown, meta = {}) {
     { name: 'word/_rels/document.xml.rels', data: DOC_RELS },
     { name: 'word/styles.xml', data: STYLES },
     { name: 'word/numbering.xml', data: NUMBERING },
-    { name: 'docProps/core.xml', data: coreProps(meta.title || '文档', meta.author || 'AI 魔法学院', createdAt) },
+    { name: 'docProps/core.xml', data: coreProps(meta.title || '文档', meta.author || '灵动ai学院', createdAt) },
     { name: 'docProps/app.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
       + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
       + 'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
-      + '<Application>AI 魔法学院</Application><AppVersion>1.0</AppVersion></Properties>' },
+      + '<Application>灵动ai学院</Application><AppVersion>1.0</AppVersion></Properties>' },
   ]);
   return { buffer, blockCount: blocks.length };
 }

@@ -7,7 +7,7 @@ function InternalTestBanner() {
 }
 
 export function AppShell({ product, roleLabel, user, navigation, onLogout, onChangePassword, children }) {
-  return <><InternalTestBanner/><div className="app-shell"><aside className="sidebar"><div className="sidebar-top"><div className="brand"><span className="brand-mark">✦</span><span>{product}</span></div><div className="role-chip">{roleLabel}</div></div><nav className="app-nav">{navigation.map((item) => item.heading ? <p className="nav-heading" key={item.heading}>{item.heading}</p> : <NavLink key={item.to} to={item.to} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}><span className="nav-icon">{item.icon}</span>{item.label}{item.badge && <small>{item.badge}</small>}</NavLink>)}</nav><div className="sidebar-help"><span>✦</span><div><b>需要帮助？</b><small>查看开课与创作指南</small></div></div><div className="sidebar-footer"><div className="avatar">{(user?.displayName || user?.login || '?').slice(0, 1)}</div><div><strong>{user?.displayName || user?.login}</strong><small>{user?.login}</small></div>{onChangePassword ? <button className="icon-button" title="账号安全" onClick={onChangePassword}>🔑</button> : null}<button className="icon-button" title="退出登录" onClick={onLogout}>↪</button></div></aside><main className="app-main"><div className="app-topbar"><span className="crumb">AI魔法学院 / {roleLabel}</span><div><span className="top-status">● 服务正常</span><button className="top-help">?</button></div></div><div className="page-content">{children}</div></main></div></>;
+  return <><InternalTestBanner/><div className="app-shell"><aside className="sidebar"><div className="sidebar-top"><div className="brand"><span className="brand-mark">✦</span><span>{product}</span></div><div className="role-chip">{roleLabel}</div></div><nav className="app-nav">{navigation.map((item) => item.heading ? <p className="nav-heading" key={item.heading}>{item.heading}</p> : <NavLink key={item.to} to={item.to} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}><span className="nav-icon">{item.icon}</span>{item.label}{item.badge && <small>{item.badge}</small>}</NavLink>)}</nav><div className="sidebar-help"><span>✦</span><div><b>需要帮助？</b><small>查看开课与创作指南</small></div></div><div className="sidebar-footer"><div className="avatar">{(user?.displayName || user?.login || '?').slice(0, 1)}</div><div><strong>{user?.displayName || user?.login}</strong><small>{user?.login}</small></div>{onChangePassword ? <button className="icon-button" title="账号安全" onClick={onChangePassword}>🔑</button> : null}<button className="icon-button" title="退出登录" onClick={onLogout}>↪</button></div></aside><main className="app-main"><div className="app-topbar"><span className="crumb">灵动ai学院 / {roleLabel}</span><div><span className="top-status">● 服务正常</span><button className="top-help">?</button></div></div><div className="page-content">{children}</div></main></div></>;
 }
 
 export function LoginPanel({ title, description, clientType, demos = [], onLogin }) {
@@ -36,7 +36,7 @@ export function LoginPanel({ title, description, clientType, demos = [], onLogin
   }
   return <div className="login-page">
     <section className="login-intro">
-      <div className="brand"><span className="brand-mark">✦</span><span>AI魔法学院</span></div>
+      <div className="brand"><span className="brand-mark">✦</span><span>灵动ai学院</span></div>
       <div className="login-orbit a"></div><div className="login-orbit b"></div>
       <div className="login-copy"><p className="login-eyebrow">青少年 AI 创作开课平台</p><h1>{title}</h1><p>{description}</p><div className="login-points"><span>✦ 创作</span><span>✦ 课程</span><span>✦ 作品</span></div></div>
     </section>
@@ -55,7 +55,7 @@ export function LoginPanel({ title, description, clientType, demos = [], onLogin
         </form>
         {demos.length>0&&<div className="demo-list"><span>演示账号</span>{demos.map(d=><button key={d.login} type="button" onClick={()=>{setLogin(d.login);setPassword(d.password);setMfaRequired(false);setMfaCode('')}}><strong>{d.label}</strong><small>{d.login}</small><b>使用</b></button>)}</div>}
       </div>
-      <small className="login-legal">AI魔法学院 · 为课堂创作而设计</small>
+      <small className="login-legal">灵动ai学院 · 为课堂创作而设计</small>
     </section>
   </div>;
 }
