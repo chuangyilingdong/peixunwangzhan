@@ -143,14 +143,29 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：f7b5802（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T065543Z / commit f7b5802（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（f7b5802）：**品牌标换成真 logo**（「灵动ai」横标，三端外壳/登录页/官网导航与页脚共用
-      `packages/shared/src/assets/lingdong-ai-logo.png`；旧的「✦ + 文字」占位标与其死样式一起退休；
-      深色底——官网黑底首页顶栏、AppShell 深色侧栏、登录页 intro——加白底药丸保证辨识度）+
-      **清掉「五格殿下」**（官网页脚版权、协议页「主体」）。这一版**不需要数据迁移**：
-      已查生产库 CMS 内容里没有「五格殿下」（website_contents 0 行 / 历史版本 0 行）
-      上一版（可回滚）：release 20260918T063303Z / commit 6e48631
+代码提交：e3409d0（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T071301Z / commit e3409d0（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（e3409d0）：**首页标题按内容自适应字号**（原来 `white-space:nowrap`，用户在后台
+      把标题写长后左右各被 `overflow:hidden` 裁掉 15px——实测那行 1471px / 视口 1440px；
+      现在按最长一行的字宽算 `min(6vw, 92vw/字宽)`，CSS 换行兜底，四档宽度实测 clipping=0）
+      上一版改动（033531a，同一次上线的前一步）：①**首页清空的 CMS 字段不再回退显示** ——
+      根因是取值用了 `x || fallback`，空串是 falsy，运营清空后官网又退回内置默认文案
+      （用户清空的正是 heroKicker / trustTitle / trustDescription）；②CTA 从「预约演示」改叫
+      **「联系我们」**（顶栏/首页/页脚/法务页/各页结尾按钮 + /demo 页文案），迁移脚本同步把
+      CMS 已发布文案里的「预约演示」也换成「联系我们」（含历史版本）；③**官网上字体统一**成
+      平台后台那一套（`:root` 改用 `var(--cv-font)` = Geist + Noto Sans SC，与 admin/dsh 同源）；
+      ④**新增后台「联系我们（商机）」页面** —— 官网表单一直写 `leads` 表、服务端也一直有
+      `/api/admin/leads`，但此前**没有任何后台页面在读它**（用户问「提交了在哪收」的答案是收不到）
+      部署后核验（2026-09-18 实跑 `.tmp/verify-prod-002.sh`，三层全过 → `PROD_ACCEPTANCE_OK`）：
+      BUILD-METADATA commit = e3409d0；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
+      **三端入口包各自与 release 产物逐字节一致**（admin 661781B e5df7b6f04cb…、
+      org 771024B 3c4bf8c46aa0…、website 707607B 44902a92e638…）；反向断言 9 项全过
+      真浏览器复核线上：首页标题左右各留 85px（clipping=0）、清空的两处字段确实不显示、
+      两个 CTA 都是「联系我们」、字体算出 `Geist, "Noto Sans SC"` 且 `document.fonts.check('16px Geist')` 为真
+      上一版（可回滚）：release 20260918T065543Z / commit f7b5802
+      整库备份：production/backups/20260918T071301Z/platform.db
+      更早两版（按时间倒序）：release 20260918T063303Z / 6e48631（官网改版）、
+      release 20260918T065543Z / f7b5802（品牌标换真 logo + 清「五格殿下」）
       上一版改动（6e48631）：**官网改版** —— 品牌统一「灵动ai学院」、导航 7 项（首页/灵动学习/灵动课程/
       灵动作品/灵动介绍/机构手册/常见问题）+ 未登录时两个登录入口、新增 `/intro` 与 `/faq`、
       `/handbook` 改读 CMS、首页按用户给的样式提示词重做（黑底单屏 + 全屏视频 + 数据区走 CMS）、
