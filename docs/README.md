@@ -135,19 +135,20 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：aa67a7a（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T040615Z / commit aa67a7a（服务 learning-platform-production @127.0.0.1:8789）
-      生效内容：**平台端 AI 配置重做**（用户口径「做大量的减法」「一定要简单明了」）——
-      供应商账单两条线整体下线（含 7 张表与 2 个面板）；三账报表改**两账**（对外售价 / 上游成本，
-      核销额改取 `compute_attempts.upstream_cost_fen`）；成本机制 **4 套 → 1 套**；
-      配置页压成**三块**：① 渠道 → ② 价目表（每行 = 渠道 × 模型，成本价 ‖ 对外价 ‖ 毛利 ‖ 能力）
-      → ③ 路由与开关。**同一个模型的价从"4 处填"变成"1 行 2 列"**。
-      部署后核验：BUILD-METADATA commit = aa67a7a；active、NRestarts=0；五入口全 200；
-      **三端入口包各自与 release 产物逐字节一致**（admin 593842B md5 6e5ded5b4757…、
-      org 770114B 436f1133c282…、website 713724B 267e01a557ed…），且各自含本端新文案；
-      真 Chrome 打开线上 /org、/admin、/learn 均可挂载、无 JS 异常
-      上一版（可回滚）：release 20260918T032913Z / commit 6c104a8
-      整库备份：production/backups/20260918T040615Z/platform.db
+代码提交：4099d02（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T042620Z / commit 4099d02（服务 learning-platform-production @127.0.0.1:8789）
+      生效内容：**课程算力预估内部化**（官网不再展示，公开接口也不下发 —— 只有平台自己能看）、
+      **实测单价**（用上游逐笔实回扣 ÷ 用量反推每个模型的真实成本价，价目表里一列 + 「采纳为成本价」）、
+      **学生算力额度 6 套收敛成 1 套按钱的**（`class_sessions.student_cost_cap_fen`，按上游成本拦，
+      留空=不限，现有课堂一律不受影响）
+      部署后核验：BUILD-METADATA commit = 4099d02；active、NRestarts=0；五入口全 200；
+      **三端入口包各自与 release 产物逐字节一致**（admin 604677B e76acdcd8ca4…、
+      org 770862B 14a0ae1639fd…、website 713479B 70d7b4a5d2b0…）；
+      **反向断言通过：官网包里没有**「预估消耗」「灵动值/人」「perStudentBudgetFen」
+      「estimatedCreditsPerPerson」—— 内部成本口径不再泄漏到公开面（这是本轮新增的验收手法：
+      光验"该有的有"不够，**内部口径要验"不该有的没有"**）
+      上一版（可回滚）：release 20260918T040615Z / commit aa67a7a
+      整库备份：production/backups/20260918T042620Z/platform.db
       ⚠️ 备份目录名与 release 戳是**两个独立时间戳**：可能相同、也可能差 1 秒 ——
       找它请用 `ls -t production/backups/ | head -1`，别按 release 戳猜
       ⚠️ 验收脚本第 ③ 层**必须按端查各自的包**（管理端的中文拿去 grep 机构端的包会全红，
