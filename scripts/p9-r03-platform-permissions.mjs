@@ -56,7 +56,8 @@ try {
   await expectError(() => requirePlatformPermission(ctx('/api/admin/unregistered', auth('limited', [])), UNREGISTERED_PLATFORM_PERMISSION), 'PLATFORM_ENDPOINT_UNREGISTERED', 'unregistered admin API deny');
   requirePlatformPermission(ctx('/api/admin/unregistered', root), UNREGISTERED_PLATFORM_PERMISSION);
   check(platformPermissionForPathname('/api/admin/notification-queue/summary') === 'ADMIN_CONTENT', 'notification endpoints must be explicitly registered');
-  for (const pathname of ['/api/admin/compute-attempts', '/api/admin/compute-gateway/channels', '/api/admin/compute-pricing', '/api/admin/compute-pools/reconciliation', '/api/admin/supplier-billing', '/api/admin/financial-reporting', '/api/admin/authorizations', '/api/admin/license-purchases', '/api/admin/license-reports']) {
+  // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+  for (const pathname of ['/api/admin/compute-attempts', '/api/admin/compute-gateway/channels', '/api/admin/compute-pricing', '/api/admin/compute-pools/reconciliation', '/api/admin/financial-reporting', '/api/admin/authorizations', '/api/admin/license-purchases', '/api/admin/license-reports']) {
     check(platformPermissionForPathname(pathname) === 'ADMIN_BILLING', `${pathname}: finance endpoint must use billing domain`);
     requirePlatformPermission(ctx(pathname, auth('finance', ['ADMIN_BILLING'])), 'ADMIN_BILLING');
     await expectError(() => requirePlatformPermission(ctx(pathname, auth('courses-only', ['ADMIN_COURSES'])), 'ADMIN_BILLING'), 'PERMISSION_DENIED', `${pathname} cross-domain deny`);

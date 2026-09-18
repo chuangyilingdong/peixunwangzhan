@@ -40,11 +40,12 @@ export function App() {
     <Route path="/courses/:seriesId" element={page('ADMIN_COURSES', <CourseSeriesDetailPage api={api} />)} />
     <Route path="/users" element={page('ADMIN_ORGANIZATIONS', <PlatformUsers api={api} />)} />
     <Route path="/works" element={page('ADMIN_WORKS', <PlatformWorks api={api} />)} />
-    {/* 2026-09-13：原「算力网关」与「计费与模型」合并成一页 —— 两个页面让人来回跳，理解成本太高 */}
-    <Route path="/compute" element={<Navigate to="/compute/config" replace />} />
+    {/* 2026-09-13：原「算力网关」与「计费与模型」合并成一页 —— 两个页面让人来回跳，理解成本太高。
+        2026-09-18 路由收敛（用户口径「一个页面一个名字」「两个僵尸重定向删掉」）：
+        删掉 /billing → /compute、/compute → /compute/config 这两条二层跳转（路径名跟页面名也对不上），
+        只留两条直达路由 —— /compute/config（渠道与价格）、/compute/usage（用量与成本）。 */}
     <Route path="/compute/config" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/compute/usage" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
-    <Route path="/billing" element={<Navigate to="/compute" replace />} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />
     <Route path="/inbox" element={page('ADMIN_CONTENT', <AdminInbox api={api} />)} />

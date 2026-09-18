@@ -131,15 +131,21 @@ export function getGenerationProvider(selection = {}) {
       const project = args.projectId ? row('SELECT org_id,class_session_id,course_lesson_id FROM student_projects WHERE id=?',[args.projectId]) : null;
       const sessionId = context.sessionId || project?.class_session_id || null;
       const session = sessionId ? row('SELECT org_id,lesson_id FROM class_sessions WHERE id=?',[sessionId]) : null;
-      const estimate = selected.estimatedCostFen;
       // 观测价按本次实际路由到的模型折算（主/备不同模型价可能不同），只观测、不扣学生。
       const attemptSalePriceFen = priceFenFor({ modality, model: provider.model });
+      // 2026-09-18（用户口径：成本只留"价目表 → 合同单价"一套）：
+      // 这里原来还有一档 `selected.estimatedCostFen`（渠道卡里手填的"估算成本 分/次"），
+      // 它的优先级低于合同单价 —— 也就是说**填了合同单价，这档就完全被忽略、白填**，
+      // 而 UI 上两者挤在同一张渠道卡里，没人分得清哪个算数。现在估算那档已从取值链移除：
+      // 成本的来源只有三种，且都能说清 —— MOCK（本地模拟）/ REPORTED（上游逐笔回实扣）/
+      // COMPUTED（按价目表里的合同单价 × 用量折算）；都没有就是 **UNKNOWN（未知，绝不按 0 计）**。
+      // ⚠️ 老库里渠道上残留的 `estimatedCostFen` / `modelCosts` 字段现在**没有读取方**（等价于已退役）。
       const costRuleSnapshot = {
-        basis: estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)) ? 'CONFIGURED_ESTIMATE' : 'UPSTREAM_REPORTED_OR_UNKNOWN',
+        basis: 'UPSTREAM_REPORTED_OR_UNKNOWN',
         provider: provider.name,
         channelId: selected.channelId || 'default',
         model: provider.model,
-        estimatedCostFen: estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate)) ? Number(estimate) : null,
+        estimatedCostFen: null,
         capturedAt: nowIso(),
       };
       q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,sale_price_fen,cost_rule_snapshot,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -154,20 +160,20 @@ export function getGenerationProvider(selection = {}) {
           onSubmitted: (taskId) => { submitted = true; q("UPDATE compute_attempts SET status='SUBMITTED',task_id=? WHERE id=?",[String(taskId),attemptId]); args.onSubmitted?.(taskId); },
         });
         const reported = !selected.gateway ? result?.assets?.find(asset => asset?.metadata?.reportedCost)?.metadata?.reportedCost : null;
-        const known = estimate !== null && estimate !== undefined && Number.isFinite(Number(estimate));
         // 合同单价折算（P90）：用量证据按模态采集（文本看上游 token 回执，图/视频/音乐看请求参数）。
         // 有单价 + 有用量才算得出来；算不出来就保持 UNKNOWN，**绝不按 0 计**。
         const usage = collectUsageEvidence({ modality, result, request: args.options || null });
         const contract = reported ? null : computeContractCost({ modality, model: provider.model, unitPrices: selected.upstreamUnitPrices || null, modelUnitPrices: selected.modelUnitPrices || null, usage });
-        const computedSource = provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : contract ? 'COMPUTED' : known ? 'ESTIMATED' : 'UNKNOWN';
+        // 成本来源只剩这三种（见上面那段注释：估算那档已退役）
+        const computedSource = provider.name === 'local-mock' ? 'MOCK' : reported ? 'REPORTED' : contract ? 'COMPUTED' : 'UNKNOWN';
         const upstreamCostFen = computedSource === 'MOCK' ? 0
           : computedSource === 'REPORTED' ? reported.fen
             : computedSource === 'COMPUTED' ? contract.fen
-              : computedSource === 'ESTIMATED' ? Number(estimate) : null;
+              : null;
         // 快照留住「当时用的价 + 当时的用量」，改价不追溯。
         const ruleSnapshot = contract ? contractCostRuleSnapshot({
           provider: provider.name, channelId: selected.channelId || 'default', model: provider.model,
-          estimatedCostFen: known ? Number(estimate) : null, computed: contract,
+          estimatedCostFen: null, computed: contract,
         }) : reportedCostRuleSnapshot({
           provider: provider.name, channelId: selected.channelId || 'default', model: provider.model, reported,
         });

@@ -35,25 +35,13 @@ function ensureWebsiteContent(now) {
 
 function ensurePlatformSettings(now) {
   q(
-    `INSERT INTO platform_settings(id,platform_name,modalities,billing_settings,created_at,updated_at)
-     VALUES (1,?,?,?,?,?)
+    // 2026-09-18：modalities / billing_settings 两列已下线（只有本种子写过，全仓无读取方）。
+    `INSERT INTO platform_settings(id,platform_name,created_at,updated_at)
+     VALUES (1,?,?,?)
      ON CONFLICT(id) DO UPDATE SET
        platform_name=excluded.platform_name,
-       modalities=excluded.modalities,
-       billing_settings=excluded.billing_settings,
        updated_at=excluded.updated_at`,
-    [
-      'AI 少儿编程平台（P0）',
-      json({
-        TEXT: { enabled: true },
-        IMAGE: { enabled: true },
-        MUSIC: { enabled: true },
-        VIDEO: { enabled: true },
-      }),
-      json({ currency: 'CNY', defaultSessionCreditCap: 200 }),
-      now,
-      now,
-    ],
+    ['AI 少儿编程平台（P0）', now, now],
   );
 }
 

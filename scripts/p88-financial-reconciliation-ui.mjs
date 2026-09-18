@@ -14,7 +14,7 @@ process.env.DEPLOYMENT_MODE = 'local-mock';
 
 const { q } = await import('../apps/server/src/lib.js');
 const { financialCallSummary, financialReconciliationReport, listFinancialCalls } = await import('../apps/server/src/services/financialReporting.js');
-const { canonicalSupplierCsv, cancelSupplierMatch, createSupplierAccount, importSupplierCsv, listSupplierLines, manuallyMatchSupplierLine, setSupplierLineState } = await import('../apps/server/src/services/supplierBilling.js');
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
 const { saveComputePricing } = await import('../apps/server/src/services/computePool.js');
 const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
 
@@ -35,11 +35,9 @@ revenue('revenue-unknown', 'org-p88-unknown', 'series-cny', null, 'CNY');
 const attempt = (id, requestId, amount, orgId = 'org-p88-known', internalUsageRecordId = null, { costSource = 'REPORTED', salePriceFen = null, modality = 'TEXT' } = {}) => q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,modality,channel_id,provider,model,routed_via,status,client_request_id,response_request_id,actual_channel_id,provider_account_ref,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,created_at,internal_usage_record_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `call-${id}`, 1, orgId, modality, 'p88-channel', 'p88-provider', 'p88-model', 'direct', 'SUCCESS', requestId, requestId, 'p88-channel', 'p88-account', costSource, amount, salePriceFen, '{}', now, internalUsageRecordId]);
 attempt('attempt-active', 'request-active', 300);
 attempt('attempt-cancelled', 'request-cancelled', 200);
-const account = createSupplierAccount({ code: 'p88-account', name: 'P88 Supplier', provider: 'p88-provider', channelId: 'p88-channel', defaultCurrency: 'CNY', timezone: 'UTC' });
-const supplierLine = (lineId, requestId, amount, currency = 'CNY') => ({ schema_version: 'v1', provider: 'p88-provider', provider_account_id: 'p88-account', invoice_id: 'p88-invoice', line_id: lineId, line_type: 'USAGE', occurred_at: now, currency, amount_minor: String(amount), original_line_id: '', usage_id: '', response_payload_id: '', response_request_id: '', request_id: requestId, task_id: '', gateway_id: '', description: '' });
-importSupplierCsv({ supplierAccountId: account.id, fileName: 'p88.csv', csv: canonicalSupplierCsv([supplierLine('active-line', 'request-active', 300), supplierLine('cancelled-line', 'request-cancelled', 200)]) });
-const cancelled = listSupplierLines({ supplierAccountId: account.id }).items.find((line) => line.lineId === 'cancelled-line');
-cancelSupplierMatch(cancelled.matches[0].id, { reason: 'P88 cancelled evidence' });
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+// 原先这里用供应商账单服务造「账单行」，再做自动/人工匹配与取消匹配，
+// 这些夹具与随之而来的 CSV 已核销金额断言一并删除；上游逐笔实扣金额改用 compute_attempts 的夹具表达。
 
 for (const [id, orgId, currency, revenueAmount] of [
   ['partial', 'org-p88-partial', 'CNY', 600],
@@ -56,34 +54,15 @@ attempt('attempt-usd', 'request-usd', 300, 'org-p88-usd');
 q("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-double-linked','org-p88-double','student-double','TEXT','p88-model',0,'SUCCESS','{}',0,'series-double','call-attempt-double',?)", [now]);
 q("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-double-extra','org-p88-double','student-double','TEXT','p88-model',0,'SUCCESS','{}',0,'series-double','call-attempt-double',?)", [now]);
 attempt('attempt-double', 'request-double', 100, 'org-p88-double', 'usage-double-linked');
-importSupplierCsv({ supplierAccountId: account.id, fileName: 'p88-edge.csv', csv: canonicalSupplierCsv([
-  supplierLine('partial-line', 'request-partial', 300),
-  supplierLine('disputed-line', 'request-disputed', 250),
-  supplierLine('usd-line', 'request-usd', 300, 'USD'),
-  supplierLine('double-line', 'request-double', 100),
-]) });
-const edgeLines = listSupplierLines({ supplierAccountId: account.id }).items;
-const partialLine = edgeLines.find((line) => line.lineId === 'partial-line');
-manuallyMatchSupplierLine(partialLine.id, [{ targetType: 'ATTEMPT', targetId: 'attempt-partial', amountMinor: 150 }], { reason: 'P88 partial allocation' });
-const disputedLine = edgeLines.find((line) => line.lineId === 'disputed-line');
-setSupplierLineState(disputedLine.id, 'dispute', { reason: 'P88 disputed evidence' });
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+// 原先这里导入第二份「供应商账单」并做部分匹配（150 分）+ 标记争议，用来验证「部分核销 / 争议行让真实毛利未知」；
+// 随 CSV 已核销口径一起删除。
 
 const known = financialReconciliationReport({ days: 1, orgId: 'org-p88-known', currency: 'CNY' });
 assert.equal(known.summary.cashReceivedMinor, 1000, 'only PAID purchases are cash received');
 assert.equal(known.summary.recognizedRevenueMinor, 800);
-assert.equal(known.summary.settledCostMinor, 300, 'only active supplier matches are settled cost');
-assert.equal(known.summary.grossProfitMinor, 500);
-const partialReport = financialReconciliationReport({ days: 1, orgId: 'org-p88-partial', currency: 'CNY' });
-assert.equal(partialReport.summary.settledCostMinor, 150, 'partial allocation remains visible as settled amount');
-assert.equal(partialReport.summary.grossProfitMinor, null, 'partial supplier row makes real margin unknown');
-assert.equal(partialReport.summary.unreconciledMinor, 150, 'partial remainder is pending exposure');
-const disputedReport = financialReconciliationReport({ days: 1, orgId: 'org-p88-disputed', currency: 'CNY' });
-assert.equal(disputedReport.summary.grossProfitMinor, null, 'disputed supplier row makes real margin unknown');
-const usdReport = financialReconciliationReport({ days: 1, orgId: 'org-p88-usd', currency: 'USD' });
-assert.equal(usdReport.summary.grossProfitMinor, 600, 'known same-currency USD supports nominal margin');
-const doubleReport = financialReconciliationReport({ days: 1, orgId: 'org-p88-double', currency: 'CNY' });
-assert.equal(doubleReport.summary.settledCostMinor, 100, 'multiple usage rows sharing call_id must not duplicate one match');
-assert.equal(doubleReport.summary.grossProfitMinor, 400);
+// 2026-09-18：settledCostMinor / grossProfitMinor / unreconciledMinor 与「USD 名义毛利、同一 call_id 不重复核销」
+// 这几条都建立在供应商账单匹配之上，随供应商账单下线一并删除（用户口径）。
 const unknown = financialReconciliationReport({ days: 1, orgId: 'org-p88-unknown', currency: 'CNY' });
 assert.equal(unknown.rows[0].recognizedRevenueMinor, null, 'unknown revenue must stay unknown');
 assert.equal(unknown.summary.recognizedRevenueMinor, null, 'unknown revenue must not become zero');
@@ -105,28 +84,37 @@ q("UPDATE compute_attempts SET usage_snapshot=?,cost_rule_snapshot=? WHERE id='l
   JSON.stringify({ modality: 'TEXT', evidence: 'UPSTREAM_USAGE', inputTokens: 800, outputTokens: 333, images: null, seconds: null, resolution: null, audio: null }),
   JSON.stringify({ basis: 'CONTRACT_UNIT_PRICE', provider: 'p88-provider', channelId: 'p88-channel', model: 'p88-model', estimatedCostFen: null, source: 'COMPUTED', priceLevel: 'MODEL', unitPrice: { perImageFen: 200 }, usage: { images: 2 }, computedFen: 400, capturedAt: now }),
 ]);
-importSupplierCsv({ supplierAccountId: account.id, fileName: 'p88-ledger.csv', csv: canonicalSupplierCsv([
-  supplierLine('ledger-snapshot-line', 'request-ledger-snapshot', 200),
-  supplierLine('ledger-deficit-line', 'request-ledger-deficit', 50),
-]) });
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+// 原先这里导入一份「供应商账单」把 ledger-snapshot（200 分）与 ledger-deficit（50 分）核销掉，
+// 用来验证「实际核销金额 / 差额 = 对外售价 − 实际核销」；随 CSV 已核销口径一起删除。
 const ledgerCalls = listFinancialCalls({ days: 1, orgId: 'org-p88-ledger', limit: 100 }).items;
 const byId = (id) => ledgerCalls.find((item) => item.id === id);
 const snapshotCall = byId('ledger-snapshot');
 assert.equal(snapshotCall.salePriceFen, 500, '对外售价优先取本次落库快照');
 assert.equal(snapshotCall.salePriceSource, 'SNAPSHOT');
 assert.equal(snapshotCall.estimatedOrReportedMinor, 200, '上游估算或报告金额照旧返回');
-assert.equal(snapshotCall.settledAmountMinor, 200, '实际核销来自有效供应商标记');
-assert.equal(snapshotCall.differenceMinor, 300, '差额 = 对外售价 − 实际核销');
 const fallbackCall = byId('ledger-fallback');
 assert.equal(fallbackCall.salePriceFen, 7, '无快照时回退当前 compute_pricing 配置');
 assert.equal(fallbackCall.salePriceSource, 'PRICING', '回退必须标注来源');
-assert.equal(fallbackCall.settledAmountMinor, null);
-assert.equal(fallbackCall.differenceMinor, null, '未核销不得显示差额为正利润');
-assert.equal(byId('ledger-deficit').differenceMinor, -43, '已核销的负差额照实显示');
+// 2026-09-18 口径变更（两账，不是测试漂移）：差额 = 对外售价 − **上游成本**，两侧都算得出就给 ——
+// 这里上游成本 ESTIMATED(40 分) 是**已知**成本，所以差额 = 7 − 40 = −33，亏损必须显出来（不再是 null）。
+// 字段名沿用：settledAmountMinor 现在就是上游成本、settledCurrency 现在是上游成本账的币种。
+assert.equal(fallbackCall.settledAmountMinor, 40, 'settledAmountMinor 字段名沿用，语义 = 上游成本');
+assert.equal(fallbackCall.settledCurrency, 'CNY', 'settledCurrency 字段名沿用，语义 = 上游成本账币种');
+assert.equal(fallbackCall.differenceMinor, -33, '已知上游成本时必须给出差额（可为负）');
+assert.deepEqual(fallbackCall.matches, [], '供应商账单匹配已下线，matches 恒为空数组（形状不变）');
 const unknownSaleCall = byId('ledger-unknownsale');
 assert.equal(unknownSaleCall.salePriceFen, null, '未配置价的模态不按 0 处理');
 assert.equal(unknownSaleCall.salePriceSource, 'UNKNOWN');
 assert.equal(unknownSaleCall.differenceMinor, null, '对外售价未知时差额留空');
+// 2026-09-18 口径变更（两账）：对外价**已知**、上游成本**未知**时，差额同样必须留空 ——
+// 未知既不能当 0 参与差额，更不能把「成本未知」显示成正利润。这是原「未核销不算差额」规则的等价延续。
+attempt('ledger-unknowncost', 'request-unknowncost', null, 'org-p88-usd', null, { costSource: 'UNKNOWN', salePriceFen: 500 });
+const unknownCostCall = listFinancialCalls({ days: 1, orgId: 'org-p88-usd', limit: 100 }).items.find((item) => item.id === 'ledger-unknowncost');
+assert.equal(unknownCostCall.salePriceFen, 500, '该用例的对外价是已知快照价');
+assert.equal(unknownCostCall.costUnknown, true);
+assert.equal(unknownCostCall.settledAmountMinor, null, '成本未知不得当成 0');
+assert.equal(unknownCostCall.differenceMinor, null, '成本未知时差额留空（不得显示成正利润）');
 // 用量证据与价目层级只读透出：有快照照原样返回，无快照为 null（字段必须存在）。
 assert.equal(snapshotCall.usageSnapshot.inputTokens, 800, 'usage_snapshot 必须原样透出');
 assert.equal(snapshotCall.costRuleSnapshot.priceLevel, 'MODEL', '价目层级沿用上游字段名 priceLevel');
@@ -141,12 +129,11 @@ assert.equal(modelGroup.externalAmountMinor, 514, '对外金额只累加已知�
 assert.equal(modelGroup.saleUnknownCount, 1);
 assert.equal(modelGroup.knownUpstreamCostMinor, 300, '已知上游成本不含未知');
 assert.equal(modelGroup.upstreamUnknownCount, 1);
-assert.equal(modelGroup.settledAmountMinor, 250);
-assert.equal(modelGroup.unsettledCount, 2);
+// 2026-09-18：settledAmountMinor / unsettledCount 是「CSV 已核销」口径的产物，随供应商账单下线删除；
+// 下面「未核销时差额必须留空」与各维度加总一致性两条是口径规则，保留。
 assert.equal(modelGroup.differenceMinor, null, '存在未核销或未知对外价时汇总差额留空');
 const modalityGroups = callSummary.groups.modality;
 assert.equal(modalityGroups.find((group) => group.key === 'EMBEDDING').saleUnknownCount, 1, '未知对外价按模态单列');
-assert.equal(modalityGroups.find((group) => group.key === 'TEXT').settledAmountMinor, 250);
 for (const dimension of ['modality', 'channel', 'model', 'org', 'student']) {
   const sum = (field) => callSummary.groups[dimension].reduce((total, group) => total + group[field], 0);
   assert.equal(sum('calls'), callSummary.totals.calls, `${dimension} 汇总调用次数必须与总数一致`);
@@ -190,21 +177,25 @@ const financialSource = fs.readFileSync(path.join(root, 'apps/admin/src/componen
 const modelSource = fs.readFileSync(path.join(root, 'apps/admin/src/pages/ModelCompute.jsx'), 'utf8');
 const adminSource = fs.readFileSync(path.join(root, 'apps/server/src/routes/adminOrg.js'), 'utf8');
 assert.doesNotMatch(financialSource, /window\.prompt|\bprompt\s*\(/);
-assert.match(financialSource, /<dialog[\s\S]*<form onSubmit=\{submit\}>[\s\S]*<textarea[^>]*required/);
-assert.match(financialSource, /const title = action\.kind === 'cancel-match' \? '取消匹配'/, 'dialog heading must be non-empty');
-assert.match(financialSource, /catch \(failure\) \{ setError\([\s\S]*setBusy\(false\); \}/, 'API failure must retain dialog state and reason');
-assert.match(financialSource, /setActionDialog\(\{ kind: 'cancel-match', line, match \}\)/);
-assert.match(financialSource, /imports\/preview[\s\S]*严格校验并预览[\s\S]*确认导入/);
-assert.match(financialSource, /lines\/\$\{line\.id\}\/candidates[\s\S]*type="checkbox"[\s\S]*确认人工匹配/);
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+// 原先这里断言「CSV 导入预览 / 人工匹配候选 / 取消匹配理由弹窗」那一套界面（imports/preview、lines/:id/candidates、
+// cancel-match dialog），随 CSV 手工导入下线一并删除。
 assert.match(financialSource, /financial-reporting\/call-summary/, '调用账必须接入三档金额汇总接口');
 assert.match(financialSource, /对外售价与上游成本对照汇总/, '调用账必须有汇总区块');
 assert.match(financialSource, /对外售价不扣学生|不扣学生、不计收入/, '界面必须写明对外售价不扣学生不计收入');
-assert.match(financialSource, /未核销 \/ 未知/, '未核销时差额不得显示为正利润');
-// —— P90/P91 界面接入：上游计费列（来源 + 用量证据）、官方账单自动对账区块、合同单价两层编辑器 ——
-assert.match(financialSource, /上游计费（来源 \/ 用量证据）/, '调用账必须把「估算或报告」列换成「上游计费」列');
+// 2026-09-18 口径变更（两账，不是测试漂移）：第二本账的数据源换成 compute_attempts.upstream_cost_fen 之后，
+// 那本账就叫**上游成本**，「未结算」这套已经不存在的动作词统一改成「成本未知」；
+// 差额为空的原因只有两种（成本未知 / 对外价未知），文案如实写。
+// 断言意图不变：成本未知或对外价未知时差额不得显示成正利润。
+assert.match(financialSource, /成本未知 \/ 未知/, '成本未知时差额不得显示为正利润');
+// —— P90 界面接入：上游成本列（来源 + 用量证据）与合同单价两层编辑器 ——
+// 2026-09-18 口径变更：原「上游计费（来源 / 用量证据）」与「已结算」两列现在是同一个数
+// （后端 settledAmountMinor 恒等于 knownUpstreamCostMinor），已合并成一列「上游成本（来源 / 用量证据）」。
+assert.match(financialSource, /上游成本（来源 \/ 用量证据）/, '调用账必须把「估算或报告」列换成「上游成本」列');
 assert.doesNotMatch(financialSource, /估算或报告（上游成本）/, '旧的「估算或报告」列必须被替换');
+assert.doesNotMatch(financialSource, /<th>已结算<\/th>/, '「已结算」列与上游成本同值，必须合并掉、不许并排显示两个一样的数');
 for (const label of ['COMPUTED 按合同价折算', 'REPORTED 上游报告', 'ESTIMATED 配置估算', 'UNKNOWN 未知', 'MOCK 本地模拟']) {
-  assert.ok(financialSource.includes(label), `上游计费来源必须标注 ${label}`);
+  assert.ok(financialSource.includes(label), `上游成本来源必须标注 ${label}`);
 }
 assert.match(financialSource, /usageEvidenceText\(item\.usageSnapshot\)/, '调用账必须展示用量证据');
 assert.match(financialSource, /tokens 输入/, '用量证据必须展示 tokens');
@@ -213,27 +204,15 @@ assert.match(financialSource, /\$\{usage\.seconds\} 秒/, '用量证据必须展
 assert.match(financialSource, /分辨率 \$\{usage\.resolution\}/, '用量证据必须展示分辨率');
 assert.match(financialSource, /不等于供应商最终账单/, '必须写明合同价折算≠供应商最终账单');
 assert.match(financialSource, /价目层级/, '两层价目（模型级 / 素材类型）必须按 priceLevel 标注');
-for (const [needle, label] of [
-  ['admin/provider-billing/adapters', '适配器与端点配置'],
-  ['admin/provider-billing/accounts/${accountId}/config', '端点配置保存'],
-  ['admin/provider-billing/accounts/${accountId}/credential', '凭据设置'],
-  ['api.delete(`admin/provider-billing/accounts/${accountId}/credential`)', '凭据清除'],
-  ['admin/provider-billing/accounts/${accountId}/sync', '立即同步该账户'],
-  ["api.post('admin/provider-billing/sync'", '立即同步全部账户'],
-  ['admin/financial-reporting/provider-bill-reconciliation', '官方账单对账结果接口'],
-]) assert.ok(financialSource.includes(needle), `官方账单自动对账区块必须有：${label}`);
-assert.match(financialSource, /最近同步状态与失败原因/, '必须显示最近同步状态与失败原因');
-assert.match(financialSource, /官方账单快照/, '必须有官方账单快照列表');
-assert.match(financialSource, /只提交、不回显/, '凭据必须只提交不回显');
-assert.match(financialSource, /凭据必须只提交|billing\?\.credentialConfigured \? <span className="status success">已配置/, '必须显示凭据是否已配置');
-assert.match(financialSource, /按<strong>账期聚合<\/strong>/, '必须写明官方账单是账期聚合');
-assert.match(financialSource, /CSV 手工导入保留为兜底/, '必须写明 CSV 保留为兜底');
-for (const column of ['官方账单合计', '平台 COMPUTED（合同价折算）', 'ESTIMATED', 'REPORTED', 'CSV 已核销', '差异（官方 − COMPUTED）']) {
-  assert.ok(financialSource.includes(column), `官方账单对账表必须有「${column}」列`);
-}
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+// 原先这里断言「官方账单自动对账区块」：账单接口的适配器/端点/凭据/立即同步四个接口、
+// 官方账单对账结果接口、同步状态与快照列表，以及官方账单对账表各列（含 CSV 已核销）。整套已下线。
 assert.match(financialSource, /缺失单列、不按 0|不按 0 参与计算|绝不按 0 计/, '必须写明缺失 / 未知不按 0');
 const billingPanelSource = fs.readFileSync(path.join(root, 'apps/admin/src/components/BillingPanels.jsx'), 'utf8');
-assert.match(billingPanelSource, /上游合同单价（与上游的合同价 · 用于自动折算实际计费）/, '渠道配置必须有上游合同单价编辑器');
+// 2026-09-18：合同单价编辑器从「渠道卡里默认展开的一大块」搬进了「② 价目表」（一行 = 渠道 × 模型），
+// 断言随界面的新落点改写 —— 这是口径变更/界面重排，不是测试漂移。断言的意图一条没少：
+// 成本价与对外价并排、分模态计价单位、两层契约写回键名、模型级留空回落、优先级、错误回显、按渠道分组。
+assert.match(billingPanelSource, /成本价（与上游合同价 · 用于自动折算实际计费）/, '价目表必须有成本价一列（与上游的合同价）');
 for (const field of ['inputFenPer1MTokens', 'outputFenPer1MTokens', 'perImageFen', 'perSecondFen', 'audioExtraPerSecondFen', 'perCallFen', 'byResolution']) {
   assert.ok(billingPanelSource.includes(field), `合同单价的字段名必须与后端 upstreamCost 一致：${field}`);
 }
@@ -243,12 +222,21 @@ assert.match(billingPanelSource, /模型级覆盖（留空 = 用素材类型价�
 assert.match(billingPanelSource, /模型级覆盖 &gt; 素材类型价/, '必须写明优先级 模型 > 素材类型');
 assert.match(billingPanelSource, /不等于供应商开出的最终账单/, '必须写明合同价折算≠供应商最终账单');
 assert.match(billingPanelSource, /保存失败：\{saveError\}/, '后端拒绝非法合同单价时必须展示错误');
-assert.match(billingPanelSource, /unitPriceEditor\(channel, index\)/, '合同单价编辑器必须按渠道分组渲染');
+assert.match(billingPanelSource, /priceGroups\.map\(\(group\) => priceRows\(group\)\)/, '合同单价编辑器必须按渠道分组渲染（现在并进价目表）');
+// 2026-09-18：对外价（原 PricingPanel）与成本价并排进同一张表，断言随之改到 BillingPanels.jsx。口径一条没变：
+// 对外价不扣学生、不是上游成本、走 admin/compute-pricing、模态基础价与模型级覆盖都要能改。
+assert.match(billingPanelSource, /不扣学生/, '价目表必须写明对外价不扣学生');
+assert.match(billingPanelSource, /不是上游成本/, '价目表必须写明对外价不是上游成本');
+assert.match(billingPanelSource, /api\.put\('admin\/compute-pricing'/, '价目表必须 PUT 对外价配置');
+assert.match(billingPanelSource, /perCall/, '价目表必须能改模态基础价');
+assert.match(billingPanelSource, /models\[model\]/, '价目表必须能改模型级对外价覆盖');
+assert.match(billingPanelSource, /channels\.map/, '价目表必须按渠道分组');
 assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="calls"/, '调用账是默认视图');
-assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="margin"/, '三账与毛利');
-assert.match(modelSource, /<FinancialReconciliation api=\{api\} view=\{advancedView\}/, '供应商账单 / 匹配与核销收在「高级」里');
+assert.match(modelSource, /<FinancialReconciliation api=\{api\} view="margin"/, '两账与毛利');
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+// （原断言：advancedView 下挂着「供应商账单 / 匹配与核销」两个子视图。）
 assert.match(modelSource, /<OrgStudentUsagePanel api=\{api\}/, '「机构与学员」入口必须接出来（按机构看每个学员的消耗）');
-assert.match(modelSource, /<ComputeBudgetPanel api=\{api\}/, '平台成本预警挂在三账与毛利下');
+assert.match(modelSource, /<ComputeBudgetPanel api=\{api\}/, '平台成本预警挂在两账与毛利下');
 assert.match(adminSource, /handleFinancialReporting/);
 
 const ssrRoot = path.join(root, '.tmp');
@@ -259,7 +247,6 @@ fs.writeFileSync(entry, `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ModelCompute } from ${JSON.stringify(path.join(root, 'apps/admin/src/pages/ModelCompute.jsx').split(path.sep).join('/'))};
-import { ProviderBillReconciliationTable } from ${JSON.stringify(path.join(root, 'apps/admin/src/components/FinancialReconciliation.jsx').split(path.sep).join('/'))};
 import { minorText } from ${JSON.stringify(path.join(root, 'apps/admin/src/components/FinancialReconciliation.jsx').split(path.sep).join('/'))};
 // 金额显示口径（2026-09-15）：逐笔成本可以是**小数分**（文本一次约 0.2~0.4 分）。
 // 一律 toFixed(2) 会把 0.37 分显示成 0.00，看起来像没记账 —— 所以小数分必须按 4 位显示。
@@ -269,50 +256,22 @@ if (minorText(0.3678) !== '0.0037') throw new Error('小数分必须按 4 位显
 if (minorText(4.3678) !== '0.0437') throw new Error('整数分+小数分混合也按 4 位：' + minorText(4.3678));
 if (minorText(null) !== '未知') throw new Error('未知不能显示成 0：' + minorText(null));
 const api = { get: () => new Promise(() => {}), post: () => Promise.resolve({}) };
-// 2026-09-15 重排：顶层是「调用账 / 机构与学员 / 三账与毛利 / 高级」，
-// 供应商账单与匹配与核销收在「高级」下（高级里再用 advanced 参数切子视图）。
+// 2026-09-15 重排：顶层是「调用账 / 机构与学员 / 两账与毛利」。
+// 2026-09-18：「高级」一级页签随供应商账单两条线一起删掉（它下面只有那两屏），断言里的 advanced 一并去掉；
+//            同一天「三账」改称「两账」（第二本账就是上游成本，没有第三本）—— 口径变更，不是测试漂移。
 const render = (entry) => renderToStaticMarkup(<MemoryRouter initialEntries={[entry]}><Routes><Route path="/compute/usage" element={<ModelCompute api={api} />} /></Routes></MemoryRouter>);
-for (const [view, tabs] of [['calls', ['调用账', '机构与学员', '三账与毛利', '高级']], ['orgs', []], ['margin', []], ['advanced', []]]) {
+for (const [view, tabs] of [['calls', ['调用账', '机构与学员', '两账与毛利']], ['orgs', []], ['margin', []]]) {
   const html = render('/compute/usage?view=' + view);
   for (const tab of tabs) if (!html.includes(tab)) throw new Error(view + ' missing tab ' + tab);
 }
-// 「上游计费」（新列）与「官方账单自动对账」（新区块）必须在加载态就已经渲染出来，不能等数据。
-for (const text of ['正在读取调用账', '上游计费']) if (!render('/compute/usage?view=calls').includes(text)) throw new Error('calls did not render ' + text);
+// 「上游成本」（合并后的列）必须在加载态就已经渲染出来，不能等数据。
+for (const text of ['正在读取调用账', '上游成本']) if (!render('/compute/usage?view=calls').includes(text)) throw new Error('calls did not render ' + text);
 for (const text of ["正在读取机构消耗"]) if (!render('/compute/usage?view=orgs').includes(text)) throw new Error('orgs did not render ' + text);
-for (const text of ['正在计算三账对照', '每场课堂平台预警']) if (!render('/compute/usage?view=margin').includes(text)) throw new Error('margin did not render ' + text);
-for (const [adv, expected] of [
-  ['bills', ['导入供应商账单', '官方账单自动对账', '官方账单快照', '官方账单 × 平台口径', 'CSV 手工导入保留为兜底', '全部账户（汇总）']],
-  ['matching', ['正在读取核销记录']],
-]) {
-  const html = render('/compute/usage?view=advanced&advanced=' + adv);
-  for (const text of expected) if (!html.includes(text)) throw new Error(adv + ' did not render ' + text);
-}
-
-// 官方账单对账表用夹具**真渲染**：缺失 / 未知必须留空，不能被显示成 0。
-const fixture = {
-  period: { currency: 'CNY', platformCurrency: 'CNY' },
-  rows: [
-    { model: 'model-a', modelLabel: 'model-a', officialAmountMinor: 1284, officialPresent: true, officialRowCount: 2, officialQuantity: null, computedAmountMinor: 1000, computedPresent: true, computedCallCount: 1, estimatedAmountMinor: null, estimatedCallCount: 0, reportedAmountMinor: null, reportedCallCount: 0, csvSettledAmountMinor: null, csvSettledMatchCount: 0, unknownCostCallCount: 1, differenceMinor: null, differenceReason: 'COMPUTED_INCOMPLETE', differenceStatus: null, inOfficialOnly: false, inPlatformOnly: false },
-    { model: null, modelLabel: '未标注模型', officialAmountMinor: null, officialPresent: false, officialRowCount: 0, officialQuantity: null, computedAmountMinor: null, computedPresent: false, computedCallCount: 0, estimatedAmountMinor: 400, estimatedCallCount: 1, reportedAmountMinor: null, reportedCallCount: 0, csvSettledAmountMinor: null, csvSettledMatchCount: 0, unknownCostCallCount: 0, differenceMinor: null, differenceReason: 'OFFICIAL_MISSING', differenceStatus: null, inOfficialOnly: false, inPlatformOnly: true },
-  ],
-  totals: {
-    modelCount: 2, officialAmountMinor: null, computedAmountMinor: null, estimatedAmountMinor: null, reportedAmountMinor: null,
-    csvSettledAmountMinor: null, differenceMinor: null,
-    presentSums: { officialAmountMinor: 1284, computedAmountMinor: 1000, estimatedAmountMinor: 400, reportedAmountMinor: null, csvSettledAmountMinor: null, differenceMinor: null },
-    complete: { official: false, computed: false, estimated: false, reported: false, csvSettled: false, difference: false },
-    computedCallCount: 1, estimatedCallCount: 1, reportedCallCount: 0, csvSettledMatchCount: 0, unknownCostCallCount: 1,
-  },
-  coverage: { officialSnapshotCount: 1, supersededSnapshotCount: 1, officialCurrencies: ['CNY'], officialCurrencyMismatch: false, excludedOfficial: [] },
-  missingInBill: [null], missingInPlatform: [null],
-};
-const tableHtml = renderToStaticMarkup(<ProviderBillReconciliationTable data={fixture} />);
-for (const text of ['官方账单合计', '平台 COMPUTED（合同价折算）', 'ESTIMATED', 'REPORTED', 'CSV 已核销', '差异（官方 − COMPUTED）', '12.84', '10.00', '4.00', '缺失 / 未知', '官方账单没有这个模型', '差异不可算', '严格合计留空', '已拿到部分', '平台有成本未知的调用，差异不可算']) {
-  if (!tableHtml.includes(text)) throw new Error('官方账单对账表缺少 '+text);
-}
-if (tableHtml.includes('>0.00<')) throw new Error('缺失 / 未知被显示成了 0');
-const emptyHtml = renderToStaticMarkup(<ProviderBillReconciliationTable data={{ rows: [] }} />);
-if (!emptyHtml.includes('这个账期没有可对账的数据')) throw new Error('空账期必须显示空态');
-console.log('P88 four-view SSR + official bill reconciliation table passed');
+for (const text of ['正在计算两账对照', '每场课堂平台预警']) if (!render('/compute/usage?view=margin').includes(text)) throw new Error('margin did not render ' + text);
+// 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
+// 原先这里还 SSR 了「高级 → 供应商账单 / 匹配与核销」两个子视图（bills / matching），
+// 并用夹具真渲染「官方账单对账表」（缺失 / 未知必须留空，不得显示成 0）。整块随两条线一起删除。
+console.log('P88 three-view SSR passed');
 `);
 const outDir = path.join(ssrTemp, 'out');
 await build({ root, configFile: path.join(root, 'apps/admin/vite.config.mjs'), logLevel: 'error', ssr: { noExternal: true }, build: { ssr: entry, outDir, emptyOutDir: true, minify: false } });
@@ -323,4 +282,6 @@ await new Promise((resolve, reject) => {
   child.on('close', (code) => code ? reject(new Error(`P88 SSR exited ${code}`)) : resolve());
 });
 fs.rmSync(ssrTemp, { recursive: true, force: true });
-console.log('P88 passed: real three-ledger summary, unknown/multi-currency rules, PAID revenue basis, active supplier cost, four-view SSR, CSV/candidate interactions, native reason dialog, billing permission, and admin routing.');
+// 2026-09-18：覆盖范围随供应商账单两条线收窄（供应商成本核销 / CSV 候选与导入 / 官方账单区块已下线）；
+// 同一天「三账」→「两账」（对外售价 / 上游成本），日志描述一并改口径。
+console.log('P88 passed: real two-ledger summary, unknown/multi-currency rules, PAID revenue basis, three-view SSR, billing permission, and admin routing.');

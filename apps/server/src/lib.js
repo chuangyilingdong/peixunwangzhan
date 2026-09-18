@@ -67,8 +67,6 @@ export function platformPermissionForPathname(pathname) {
     ['/api/admin/compute-gateway', 'ADMIN_BILLING'],
     ['/api/admin/compute-pricing', 'ADMIN_BILLING'],
     ['/api/admin/compute-pools', 'ADMIN_BILLING'],
-    ['/api/admin/supplier-billing', 'ADMIN_BILLING'],
-    ['/api/admin/provider-billing', 'ADMIN_BILLING'],
     ['/api/admin/financial-reporting', 'ADMIN_BILLING'],
     ['/api/admin/authorizations', 'ADMIN_BILLING'],
     ['/api/admin/license-purchases', 'ADMIN_BILLING'],

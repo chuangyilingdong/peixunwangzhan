@@ -16,8 +16,6 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS platform_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   platform_name TEXT NOT NULL DEFAULT 'AI魔法学院兼容平台',
-  modalities TEXT NOT NULL DEFAULT '{}',
-  billing_settings TEXT NOT NULL DEFAULT '{}',
   ai_provider_policy TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -1044,21 +1042,9 @@ CREATE TABLE IF NOT EXISTS platform_modality_settings (
   id          TEXT    NOT NULL PRIMARY KEY,
   modality    TEXT    NOT NULL UNIQUE,
   enabled     INTEGER NOT NULL DEFAULT 1,
-  unit_cost   INTEGER NOT NULL DEFAULT 1,
   display_name TEXT   NOT NULL,
   description TEXT    NOT NULL DEFAULT '',
   sort_order  INTEGER NOT NULL DEFAULT 0,
-  created_at  TEXT    NOT NULL,
-  updated_at  TEXT    NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS platform_credit_quotas (
-  id          TEXT    NOT NULL PRIMARY KEY,
-  scope       TEXT    NOT NULL UNIQUE,
-  period      TEXT    NOT NULL DEFAULT 'MONTH',
-  daily_limit INTEGER NOT NULL,
-  monthly_limit INTEGER NOT NULL,
-  note        TEXT    NOT NULL DEFAULT '',
   created_at  TEXT    NOT NULL,
   updated_at  TEXT    NOT NULL
 );
@@ -1073,20 +1059,6 @@ CREATE TABLE IF NOT EXISTS platform_alert_thresholds (
   created_at   TEXT    NOT NULL,
   updated_at   TEXT    NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS org_ai_budgets (
-  id TEXT NOT NULL PRIMARY KEY,
-  org_id TEXT NOT NULL,
-  per_call_budget INTEGER NOT NULL DEFAULT 0,
-  daily_budget INTEGER NOT NULL DEFAULT 0,
-  reason TEXT NOT NULL DEFAULT '',
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_org_ai_budgets_org
-  ON org_ai_budgets(org_id);
 
 CREATE TABLE IF NOT EXISTS org_capability_overrides (
   id          TEXT    NOT NULL PRIMARY KEY,
@@ -1352,18 +1324,6 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 // 这是「每次调用预估单价」，用于折算池子的消耗（不是上游账单）；模型级优先于模态级。
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN compute_pricing TEXT NOT NULL DEFAULT '{}'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
-db.exec(`CREATE TABLE IF NOT EXISTS org_ai_budgets (
-  id TEXT NOT NULL PRIMARY KEY,
-  org_id TEXT NOT NULL,
-  per_call_budget INTEGER NOT NULL DEFAULT 0,
-  daily_budget INTEGER NOT NULL DEFAULT 0,
-  reason TEXT NOT NULL DEFAULT '',
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
-)`);
-try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_org_ai_budgets_org ON org_ai_budgets(org_id)'); } catch (_) {}
 
 // Durable upstream attempts are independent of the student charge ledger.
 db.exec(`CREATE TABLE IF NOT EXISTS compute_attempts (
@@ -1474,34 +1434,21 @@ try { db.exec('CREATE INDEX IF NOT EXISTS idx_website_content_revisions_key_crea
 try { db.exec("DELETE FROM platform_modality_settings WHERE modality IN ('PODCAST','DUBBING')"); } catch (_) {}
 
 // Seed default platform modality settings if empty
+// 2026-09-18：unit_cost 列与 platform_credit_quotas 表已下线（全仓无读取方），种子随之收敛。
 {
   const now = new Date().toISOString();
   const exists = row("SELECT COUNT(*) n FROM platform_modality_settings")?.n || 0;
   if (!exists) {
     const defaults = [
-      ['pmod_text',    'TEXT',    1, 1, '文本生成', '', 1, now, now],
-      ['pmod_image',   'IMAGE',   1, 1, '图像创作', '', 2, now, now],
-      ['pmod_music',   'MUSIC',   1, 1, '音乐创作', '', 3, now, now],
-      ['pmod_video',   'VIDEO',   1, 2, '视频生成', '', 4, now, now],
-      ['pmod_canvas',  'CANVAS',  1, 0, '画布编辑', '', 5, now, now],
+      ['pmod_text',    'TEXT',    1, '文本生成', '', 1, now, now],
+      ['pmod_image',   'IMAGE',   1, '图像创作', '', 2, now, now],
+      ['pmod_music',   'MUSIC',   1, '音乐创作', '', 3, now, now],
+      ['pmod_video',   'VIDEO',   1, '视频生成', '', 4, now, now],
+      ['pmod_canvas',  'CANVAS',  1, '画布编辑', '', 5, now, now],
     ];
     for (const d of defaults) {
       q(
-        'INSERT INTO platform_modality_settings(id,modality,enabled,unit_cost,display_name,description,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        d,
-      );
-    }
-  }
-  const qExists = row("SELECT COUNT(*) n FROM platform_credit_quotas")?.n || 0;
-  if (!qExists) {
-    const qdef = [
-      ['pcq_global',  'GLOBAL',  'MONTH', 50000, 500000, '平台全量默认', now, now],
-      ['pcq_student', 'STUDENT', 'MONTH', 200,   3000,   '学生月配额',   now, now],
-      ['pcq_teacher', 'TEACHER', 'MONTH', 500,   8000,   '教师月配额',   now, now],
-    ];
-    for (const d of qdef) {
-      q(
-        'INSERT INTO platform_credit_quotas(id,scope,period,daily_limit,monthly_limit,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+        'INSERT INTO platform_modality_settings(id,modality,enabled,display_name,description,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
         d,
       );
     }
@@ -2375,203 +2322,12 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 try { db.exec('ALTER TABLE vibecoding_conversations ADD COLUMN pinned_at TEXT'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 
-// Supplier statements are independent evidence: accounts hold identifiers only, never credentials.
-db.exec(`CREATE TABLE IF NOT EXISTS supplier_accounts (
-  id TEXT PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE,
-  name TEXT NOT NULL,
-  provider TEXT NOT NULL,
-  channel_id TEXT,
-  default_currency TEXT NOT NULL CHECK (length(default_currency)=3),
-  timezone TEXT NOT NULL DEFAULT 'UTC',
-  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','DISABLED')),
-  created_by TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_supplier_accounts_status ON supplier_accounts(status, name);
-
-CREATE TABLE IF NOT EXISTS supplier_billing_imports (
-  id TEXT PRIMARY KEY,
-  supplier_account_id TEXT NOT NULL,
-  file_name TEXT NOT NULL DEFAULT '',
-  file_hash TEXT NOT NULL,
-  canonical_csv TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'IMPORTED' CHECK (status IN ('IMPORTED','CANCELLED')),
-  line_count INTEGER NOT NULL CHECK (line_count > 0),
-  imported_by TEXT,
-  imported_at TEXT NOT NULL,
-  cancelled_by TEXT,
-  cancelled_at TEXT,
-  cancel_reason TEXT,
-  UNIQUE (supplier_account_id, file_hash),
-  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT,
-  FOREIGN KEY (imported_by) REFERENCES users(id) ON DELETE SET NULL,
-  FOREIGN KEY (cancelled_by) REFERENCES users(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_supplier_imports_account_time ON supplier_billing_imports(supplier_account_id, imported_at DESC);
-
-CREATE TABLE IF NOT EXISTS supplier_billing_lines (
-  id TEXT PRIMARY KEY,
-  import_id TEXT NOT NULL,
-  supplier_account_id TEXT NOT NULL,
-  line_number INTEGER NOT NULL CHECK (line_number > 1),
-  line_hash TEXT NOT NULL,
-  provider TEXT NOT NULL,
-  provider_account_id TEXT NOT NULL,
-  invoice_id TEXT NOT NULL,
-  supplier_line_id TEXT NOT NULL,
-  occurred_at TEXT NOT NULL,
-  currency TEXT NOT NULL CHECK (length(currency)=3),
-  amount_minor INTEGER NOT NULL CHECK (amount_minor <> 0),
-  line_type TEXT NOT NULL CHECK (line_type IN ('USAGE','REFUND','CREDIT','ADJUSTMENT','TAX')),
-  original_supplier_line_id TEXT,
-  original_line_id TEXT,
-  usage_id TEXT,
-  response_payload_id TEXT,
-  response_request_id TEXT,
-  request_id TEXT,
-  task_id TEXT,
-  gateway_id TEXT,
-  description TEXT NOT NULL DEFAULT '',
-  reconciliation_status TEXT NOT NULL DEFAULT 'UNMATCHED' CHECK (reconciliation_status IN ('UNMATCHED','PARTIAL','MATCHED','AMBIGUOUS','EXCLUDED','DISPUTED','CANCELLED')),
-  comparison_status TEXT NOT NULL DEFAULT 'UNASSESSED' CHECK (comparison_status IN ('UNASSESSED','KNOWN','UNKNOWN_AMOUNT','UNKNOWN_CURRENCY')),
-  candidate_count INTEGER NOT NULL DEFAULT 0 CHECK (candidate_count >= 0),
-  match_method TEXT CHECK (match_method IS NULL OR match_method IN ('AUTO','MANUAL')),
-  state_reason TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (supplier_account_id, supplier_line_id),
-  UNIQUE (import_id, line_number),
-  FOREIGN KEY (import_id) REFERENCES supplier_billing_imports(id) ON DELETE RESTRICT,
-  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT,
-  FOREIGN KEY (original_line_id) REFERENCES supplier_billing_lines(id) ON DELETE RESTRICT
-);
-CREATE INDEX IF NOT EXISTS idx_supplier_lines_import ON supplier_billing_lines(import_id, line_number);
-CREATE INDEX IF NOT EXISTS idx_supplier_lines_account_status ON supplier_billing_lines(supplier_account_id, reconciliation_status, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS idx_supplier_lines_identifiers ON supplier_billing_lines(request_id, response_payload_id, response_request_id, task_id, gateway_id, usage_id);
-
-CREATE TABLE IF NOT EXISTS supplier_billing_matches (
-  id TEXT PRIMARY KEY,
-  line_id TEXT NOT NULL,
-  original_match_id TEXT,
-  target_type TEXT NOT NULL CHECK (target_type IN ('USAGE','ATTEMPT')),
-  target_id TEXT NOT NULL,
-  identifier_type TEXT NOT NULL CHECK (identifier_type IN ('USAGE','RESPONSE','REQUEST','TASK','GATEWAY','MANUAL')),
-  allocated_amount_minor INTEGER NOT NULL CHECK (allocated_amount_minor <> 0),
-  currency TEXT NOT NULL CHECK (length(currency)=3),
-  method TEXT NOT NULL CHECK (method IN ('AUTO','MANUAL')),
-  created_by TEXT,
-  created_at TEXT NOT NULL,
-  cancelled_by TEXT,
-  cancelled_at TEXT,
-  cancel_reason TEXT,
-  FOREIGN KEY (line_id) REFERENCES supplier_billing_lines(id) ON DELETE RESTRICT,
-  FOREIGN KEY (original_match_id) REFERENCES supplier_billing_matches(id) ON DELETE RESTRICT,
-  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-  FOREIGN KEY (cancelled_by) REFERENCES users(id) ON DELETE SET NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_matches_active_target ON supplier_billing_matches(line_id, target_type, target_id) WHERE cancelled_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_supplier_matches_target ON supplier_billing_matches(target_type, target_id, cancelled_at);
-CREATE INDEX IF NOT EXISTS idx_supplier_matches_line ON supplier_billing_matches(line_id, cancelled_at);
-
-CREATE TABLE IF NOT EXISTS supplier_billing_events (
-  id TEXT PRIMARY KEY,
-  supplier_account_id TEXT,
-  import_id TEXT,
-  line_id TEXT,
-  match_id TEXT,
-  action TEXT NOT NULL,
-  before_data TEXT,
-  after_data TEXT,
-  reason TEXT NOT NULL DEFAULT '',
-  actor_id TEXT,
-  created_at TEXT NOT NULL,
-  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE SET NULL,
-  FOREIGN KEY (import_id) REFERENCES supplier_billing_imports(id) ON DELETE SET NULL,
-  FOREIGN KEY (line_id) REFERENCES supplier_billing_lines(id) ON DELETE SET NULL,
-  FOREIGN KEY (match_id) REFERENCES supplier_billing_matches(id) ON DELETE SET NULL,
-  FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_supplier_events_account_time ON supplier_billing_events(supplier_account_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_supplier_events_line_time ON supplier_billing_events(line_id, created_at DESC);`);
-if (!rows('PRAGMA table_info(supplier_billing_matches)').some((item) => item.name === 'original_match_id')) {
-  db.exec('ALTER TABLE supplier_billing_matches ADD COLUMN original_match_id TEXT REFERENCES supplier_billing_matches(id) ON DELETE RESTRICT');
-}
-db.exec('CREATE INDEX IF NOT EXISTS idx_supplier_matches_original ON supplier_billing_matches(original_match_id, cancelled_at)');
-
-// ── 官方账单 API 自动对账（供应方账单接口拉取）────────────────────────────────
-// 供应商账户上的**账单接口配置**：只存「怎么拉」，绝不存凭据。
-// 凭据（Bearer / 管理员 key）走 providerSecret.js（AES-256-GCM，key = `supplier-billing:<accountId>`），
-// 因此这里的 billing_headers 必须是**非敏感请求头**，服务写入前会拒绝 Authorization/api-key 之类的键。
-for (const [name, definition] of [
-  ['billing_adapter', 'TEXT'],
-  ['billing_endpoint', 'TEXT'],
-  ['billing_method', "TEXT NOT NULL DEFAULT 'GET'"],
-  ['billing_headers', 'TEXT'],
-  ['billing_mapping', 'TEXT'],
-  ['billing_enabled', 'INTEGER NOT NULL DEFAULT 0'],
-  ['billing_period_days', 'INTEGER NOT NULL DEFAULT 1'],
-  ['billing_last_sync_at', 'TEXT'],
-  ['billing_last_sync_status', 'TEXT'],
-  ['billing_last_sync_error', 'TEXT'],
-  ['billing_last_snapshot_id', 'TEXT'],
-]) {
-  if (rows('PRAGMA table_info(supplier_accounts)').some((item) => item.name === name)) continue;
-  db.exec(`ALTER TABLE supplier_accounts ADD COLUMN ${name} ${definition}`);
-}
-
-// 每次拉取的**不可变快照**：成功与失败都落一行，失败行保留错误码/原文，成功行保留原始响应体。
-// 幂等键 = 账号 + 账期 + 响应哈希（只对成功行生效：失败是「这次没拉到」，不是同一份账单）。
-db.exec(`CREATE TABLE IF NOT EXISTS provider_bill_snapshots (
-  id TEXT PRIMARY KEY,
-  supplier_account_id TEXT NOT NULL,
-  adapter TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'MANUAL' CHECK (source IN ('MANUAL','SCHEDULED')),
-  period_start TEXT NOT NULL,
-  period_end TEXT NOT NULL,
-  currency TEXT,
-  status TEXT NOT NULL CHECK (status IN ('FETCHED','FAILED')),
-  response_hash TEXT NOT NULL,
-  http_status INTEGER,
-  raw_payload TEXT,
-  item_count INTEGER NOT NULL DEFAULT 0 CHECK (item_count >= 0),
-  total_amount_minor INTEGER,
-  error_code TEXT,
-  error_message TEXT,
-  error_detail TEXT,
-  duration_ms INTEGER NOT NULL DEFAULT 0 CHECK (duration_ms >= 0),
-  fetched_by TEXT,
-  fetched_at TEXT NOT NULL,
-  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT,
-  FOREIGN KEY (fetched_by) REFERENCES users(id) ON DELETE SET NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_bill_snapshot_idempotency
-  ON provider_bill_snapshots(supplier_account_id, period_start, period_end, response_hash) WHERE status='FETCHED';
-CREATE INDEX IF NOT EXISTS idx_provider_bill_snapshot_account_time ON provider_bill_snapshots(supplier_account_id, fetched_at DESC);
-CREATE INDEX IF NOT EXISTS idx_provider_bill_snapshot_period ON provider_bill_snapshots(period_start, period_end, status);
-
-CREATE TABLE IF NOT EXISTS provider_bill_aggregates (
-  id TEXT PRIMARY KEY,
-  snapshot_id TEXT NOT NULL,
-  supplier_account_id TEXT NOT NULL,
-  period_start TEXT NOT NULL,
-  period_end TEXT NOT NULL,
-  model TEXT NOT NULL DEFAULT '',
-  currency TEXT NOT NULL CHECK (length(currency)=3),
-  amount_minor INTEGER NOT NULL,
-  quantity REAL,
-  unit TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE (snapshot_id, model, currency),
-  FOREIGN KEY (snapshot_id) REFERENCES provider_bill_snapshots(id) ON DELETE RESTRICT,
-  FOREIGN KEY (supplier_account_id) REFERENCES supplier_accounts(id) ON DELETE RESTRICT
-);
-CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_period ON provider_bill_aggregates(period_start, period_end, model);
-CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_account ON provider_bill_aggregates(supplier_account_id, period_start, period_end);
-CREATE INDEX IF NOT EXISTS idx_provider_bill_aggregate_snapshot ON provider_bill_aggregates(snapshot_id);
-`);
+// 2026-09-18：供应商账单两条线整体下线（用户口径）。
+// 这里原本建「供应商账户 / 账单导入 / 账单行 / 行与用量的匹配 / 账单事件 / 官方账单快照 /
+// 官方账单按模型聚合」七张表及其全部索引，还带一批账号配置列的迁移，已一并删除：
+// 上游是逐笔回传实扣金额（REPORTED），账已经在 compute_attempts.upstream_cost_fen 里；
+// CSV 手工导入与账单 API 拉取要等「按账期开票」的上游才用得上，属储备能力。
+// ⚠️ 故意不写 DROP TABLE：老库里的历史数据保留，只是新库不再建。
 
 // ── 课包「可见范围」从三值改成两值：公开 / 私有（2026-09-16 用户口径）──────────────────────
 //

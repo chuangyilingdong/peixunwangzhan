@@ -1,3 +1,17 @@
+// 用量与成本报表 —— 2026-09-18 起是「**两账**」：
+//   ① 对外售价 —— compute_attempts.sale_price_fen（本次落库快照价，无快照回退当前 compute_pricing 配置并标注来源）。
+//      **只观测、不扣学生、不计收入**，也不进入任何毛利公式。
+//   ② 上游成本 —— compute_attempts.upstream_cost_fen，来源由 cost_source 标注
+//      （COMPUTED 按合同单价折算 / REPORTED 上游报告 / ESTIMATED 配置估算 / MOCK 本地模拟）。
+//      成本未知（cost_source='UNKNOWN' 或没有金额）**单列计数，绝不按 0 算**。
+//   差额 = 对外售价 − 上游成本：两侧都算得出、且成本不未知时才给，任一未知一律返回 null
+//   —— 与原「未核销时不计算差额、避免把未核销显示成正利润」一脉相承，这个谨慎保持不变。
+//
+// 2026-09-18 减法（用户口径）：供应商账单两条线（CSV 手工导入 + 供应商账单接口拉取）整体下线。
+//   原先的第三本账「实际核销」来自供应商账单匹配与账单快照那 7 张表（账单行 / 匹配 / 导入 / 账户 / 快照 / 聚合），
+//   表、服务、路由都已删除，本文件不再查这些表、也不再按币种 UNION 它们。
+//   **对外字段名刻意保持不变**（settledAmountMinor / differenceMinor / settledCostMinor /
+//   supplierRowsComplete / unreconciledMinor 等），避免前端与守卫跟着改；但语义已变，见各处注释。
 import { errors, parseJson, row, rows } from '../lib.js';
 import { getComputePricing } from './computePool.js';
 
@@ -6,6 +20,13 @@ const text = (value) => String(value || '').trim();
 
 // 对外售价（观测口径）只对照、不扣学生、不计收入；模态与 computePool 的四档保持一致。
 const MODALITIES = ['TEXT', 'IMAGE', 'VIDEO', 'MUSIC'];
+
+// 上游成本账的记账币种：compute_attempts.upstream_cost_fen 没有币种列（平台成本一律按人民币分记账），
+// 所以第二本账统一归到 CNY 上 —— 选了别的币种的报表里这本账不参与（跨币种不可比），成本侧留 null 而不是 0。
+const PLATFORM_COST_CURRENCY = 'CNY';
+
+// 成本未知的判定：来源标了 UNKNOWN，或压根没有金额。未知 ≠ 0，永远单列计数。
+const costUnknownOf = (source, fen) => source === 'UNKNOWN' || fen === null || fen === undefined;
 
 // sale_price_fen 由 schema 迁移补齐；列未落地前回退为 NULL，服务不因缺列报错。
 let salePriceColumn;
@@ -54,6 +75,12 @@ function pageNumber(value, fallback, max) {
 }
 
 export function financialReportOptions() {
+  // 币种下拉：购买批次 / 许可收入事件两个账本，外加**上游成本账**的币种（第二本账也要能选出来看）。
+  const licenseCurrencies = rows("SELECT currency id,currency name FROM (SELECT currency FROM license_purchase_batches WHERE currency IS NOT NULL UNION SELECT currency FROM license_revenue_events WHERE currency IS NOT NULL) ORDER BY currency");
+  const hasUpstreamCost = rows('SELECT 1 ok FROM compute_attempts WHERE upstream_cost_fen IS NOT NULL LIMIT 1').length > 0;
+  const currencies = hasUpstreamCost && !licenseCurrencies.some((item) => item.id === PLATFORM_COST_CURRENCY)
+    ? [...licenseCurrencies, { id: PLATFORM_COST_CURRENCY, name: PLATFORM_COST_CURRENCY }].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    : licenseCurrencies;
   return {
     organizations: rows('SELECT id,name FROM organizations ORDER BY name,id'),
     students: rows("SELECT id,display_name name,login,org_id orgId FROM users WHERE role='STUDENT' AND deleted_at IS NULL ORDER BY display_name,login"),
@@ -62,7 +89,7 @@ export function financialReportOptions() {
     lessons: rows('SELECT id,title name,series_id seriesId FROM course_lessons ORDER BY title,id'),
     models: rows("SELECT DISTINCT model id,model name FROM compute_attempts WHERE model IS NOT NULL AND model<>'' ORDER BY model"),
     channels: rows("SELECT DISTINCT COALESCE(actual_channel_id,channel_id) id,COALESCE(actual_channel_id,channel_id) name FROM compute_attempts WHERE COALESCE(actual_channel_id,channel_id) IS NOT NULL ORDER BY name"),
-    currencies: rows("SELECT currency id,currency name FROM (SELECT currency FROM license_purchase_batches WHERE currency IS NOT NULL UNION SELECT currency FROM license_revenue_events WHERE currency IS NOT NULL UNION SELECT currency FROM supplier_billing_lines) ORDER BY currency"),
+    currencies,
   };
 }
 
@@ -100,17 +127,12 @@ export function listFinancialCalls(filters = {}) {
     ${CALL_FROM} WHERE ${where} GROUP BY attempt.id ORDER BY attempt.created_at DESC,attempt.id DESC LIMIT ? OFFSET ?`, [...scope.params, limit, (page - 1) * limit]);
   const pricing = getComputePricing();
   const items = raw.map((item) => {
-    const matches = rows(`SELECT match.id,match.target_type targetType,match.target_id targetId,match.allocated_amount_minor amountMinor,
-        match.currency,match.method,line.reconciliation_status reconciliationStatus,line.supplier_line_id supplierLineId
-      FROM supplier_billing_matches match JOIN supplier_billing_lines line ON line.id=match.line_id
-      WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
-        AND ((match.target_type='ATTEMPT' AND match.target_id=?) OR (match.target_type='USAGE' AND match.target_id=?))
-      ORDER BY match.created_at,match.id`, [item.id, item.internal_usage_record_id || '']);
-    const currencies = [...new Set(matches.map((match) => match.currency))];
-    const settledAmountMinor = matches.length && currencies.length === 1 ? matches.reduce((sum, match) => sum + Number(match.amountMinor), 0) : null;
     const sale = resolveSalePrice({ salePriceFen: item.sale_price_fen, model: item.model, modality: item.modality }, pricing);
-    // 差额 = 对外售价 − 实际核销；未核销（含多币种无法合并）时不计算，避免把未核销显示成正利润。
-    const differenceMinor = sale.minor == null || settledAmountMinor == null ? null : sale.minor - settledAmountMinor;
+    const costUnknown = costUnknownOf(item.cost_source, item.upstream_cost_fen);
+    // 上游成本（第二本账）：compute_attempts.upstream_cost_fen，来源见 cost_source。未知 → null，不按 0。
+    const upstreamCostMinor = costUnknown ? null : Number(item.upstream_cost_fen);
+    // 差额 = 对外售价 − 上游成本；任一侧未知（含成本未知）就不计算 —— 保持「未知不得显示成正利润」的谨慎。
+    const differenceMinor = sale.minor == null || upstreamCostMinor == null ? null : sale.minor - upstreamCostMinor;
     return {
       id: item.id, callId: item.call_id, attempt: Number(item.attempt), createdAt: item.created_at,
       orgId: item.org_id || null, organizationName: item.organization_name || null,
@@ -118,8 +140,8 @@ export function listFinancialCalls(filters = {}) {
       seriesId: item.linked_series_id || null, sessionId: item.linked_session_id || null, lessonId: item.linked_lesson_id || null,
       modality: item.modality, channelId: item.channel_id || null, actualChannelId: item.actual_channel_id || null,
       provider: item.provider || null, model: item.model || null, status: item.status,
-      costSource: item.cost_source, estimatedOrReportedMinor: item.upstream_cost_fen == null ? null : Number(item.upstream_cost_fen),
-      costUnknown: item.cost_source === 'UNKNOWN' || item.upstream_cost_fen == null,
+      costSource: item.cost_source, estimatedOrReportedMinor: upstreamCostMinor,
+      costUnknown,
       // 上游用量证据（P90）：usage_snapshot 里存的是 upstreamCost.collectUsageEvidence 的原始形状
       // （tokens / 张数 / 秒数 / 分辨率 / 含音频），**只读透出**给调用账展示，服务不改口径、不算钱。
       usageSnapshot: parseJson(item.usage_snapshot, null),
@@ -132,8 +154,13 @@ export function listFinancialCalls(filters = {}) {
       providerUsageId: item.usage_id || null, internalUsageRecordId: item.internal_usage_record_id || null,
       usageId: item.internal_usage_record_id || null, gatewayLogId: item.gateway_log_id || null,
       evidenceMatch: item.gateway_log_id || item.response_request_id || item.response_payload_id || item.task_id ? 'MATCHED' : item.internal_usage_record_id ? 'PARTIAL' : 'UNMATCHED',
-      settledAmountMinor, differenceMinor,
-      settledCurrency: currencies.length === 1 ? currencies[0] : null, matches,
+      // ⚠️ 字段名沿用（前端读它），但语义已变：settledAmountMinor 现在 = **上游成本**（未知为 null），
+      //    settledCurrency 现在 = 上游成本账的币种（固定 PLATFORM_COST_CURRENCY），未知时为 null。
+      settledAmountMinor: upstreamCostMinor,
+      differenceMinor,
+      settledCurrency: upstreamCostMinor == null ? null : PLATFORM_COST_CURRENCY,
+      // matches 沿用空数组：供应商账单匹配已整体下线，没有任何「核销明细」可返回了；留着只为不改变响应形状。
+      matches: [],
     };
   });
   return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), filters: range };
@@ -150,6 +177,10 @@ function merge(map, source, amountField, extras = []) {
   }
 }
 
+/**
+ * 两账对照（原「三账与毛利」）：机构购买实收 / 许可确认收入（这两本账口径不变）与**上游成本**并排。
+ * 上游成本来自 compute_attempts.upstream_cost_fen，按机构归集；成本未知的调用只计数、不进金额，毛利一律留空。
+ */
 export function financialReconciliationReport(filters = {}) {
   const range = rangeOf(filters);
   const orgId = text(filters.orgId); const studentId = text(filters.studentId); const seriesId = text(filters.seriesId);
@@ -172,266 +203,77 @@ export function financialReconciliationReport(filters = {}) {
     LEFT JOIN student_course_grants grant ON grant.id=event.grant_id
     WHERE ${revenueWhere.join(' AND ')} GROUP BY event.org_id,event.currency`, revenueParams);
 
-  const costWhere = ['line.occurred_at>=?', 'line.occurred_at<?']; const costParams = [range.since, range.until];
-  add(costWhere, costParams, orgId, 'dimension.orgId=?'); add(costWhere, costParams, studentId, 'dimension.userId=?'); add(costWhere, costParams, seriesId, 'dimension.seriesId=?'); add(costWhere, costParams, range.currency, 'line.currency=?');
-  const dimensionsCte = `WITH active_match AS (
-      SELECT match.id,match.line_id,match.target_type,match.target_id,match.allocated_amount_minor
-      FROM supplier_billing_matches match WHERE match.cancelled_at IS NULL
-    ), dimension AS (
-      SELECT active_match.id matchId,active_match.line_id lineId,active_match.allocated_amount_minor amountMinor,
-        attempt.org_id orgId,attempt.user_id userId,COALESCE(usage.series_id,session.series_id) seriesId
-      FROM active_match JOIN compute_attempts attempt ON active_match.target_type='ATTEMPT' AND attempt.id=active_match.target_id
-      LEFT JOIN usage_records usage ON usage.id=attempt.internal_usage_record_id
-      LEFT JOIN class_sessions session ON session.id=COALESCE(attempt.class_session_id,usage.class_session_id)
-      UNION ALL
-      SELECT active_match.id,active_match.line_id,active_match.allocated_amount_minor,
-        usage.org_id,usage.user_id,COALESCE(usage.series_id,session.series_id)
-      FROM active_match JOIN usage_records usage ON active_match.target_type='USAGE' AND usage.id=active_match.target_id
-      LEFT JOIN class_sessions session ON session.id=usage.class_session_id
-    )`;
-  const costs = rows(`${dimensionsCte}
-    SELECT dimension.orgId,organization.name organizationName,line.currency,SUM(dimension.amountMinor) amountMinor,
-      COUNT(dimension.matchId) settledMatchCount,
-      SUM(CASE WHEN line.reconciliation_status<>'MATCHED' THEN 1 ELSE 0 END) unresolvedSupplierLineCount
-    FROM dimension JOIN supplier_billing_lines line ON line.id=dimension.lineId
-    LEFT JOIN organizations organization ON organization.id=dimension.orgId
-    WHERE line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED') AND ${costWhere.join(' AND ')}
-    GROUP BY dimension.orgId,line.currency`, costParams);
-
-  const exposureWhere = ["line.reconciliation_status IN ('UNMATCHED','PARTIAL','AMBIGUOUS','DISPUTED')", 'line.occurred_at>=?', 'line.occurred_at<?'];
-  const exposureParams = [range.since, range.until]; add(exposureWhere, exposureParams, range.currency, 'line.currency=?');
-  const globalExposure = orgId || studentId || seriesId ? [] : rows(`SELECT line.currency,
-      SUM(line.amount_minor-COALESCE(matched.amountMinor,0)) amountMinor,COUNT(*) lineCount
-    FROM supplier_billing_lines line
-    LEFT JOIN (SELECT line_id,SUM(allocated_amount_minor) amountMinor FROM supplier_billing_matches WHERE cancelled_at IS NULL GROUP BY line_id) matched ON matched.line_id=line.id
-    WHERE ${exposureWhere.join(' AND ')} AND NOT EXISTS (
-      SELECT 1 FROM supplier_billing_matches active WHERE active.line_id=line.id AND active.cancelled_at IS NULL
-    ) GROUP BY line.currency`, exposureParams).map((item) => ({ currency: item.currency, amountMinor: Number(item.amountMinor || 0), lineCount: Number(item.lineCount || 0) }));
-  const attributedExposureWhere = [...exposureWhere]; const attributedExposureParams = [...exposureParams];
-  add(attributedExposureWhere, attributedExposureParams, orgId, 'line_dimension.orgId=?'); add(attributedExposureWhere, attributedExposureParams, studentId, 'line_dimension.userId=?'); add(attributedExposureWhere, attributedExposureParams, seriesId, 'line_dimension.seriesId=?');
-  const unreconciled = rows(`${dimensionsCte}, line_dimension AS (
-      SELECT lineId,orgId,userId,seriesId FROM dimension GROUP BY lineId,orgId,userId,seriesId
-    )
-    SELECT line_dimension.orgId,organization.name organizationName,line.currency,
-      SUM(line.amount_minor-COALESCE(matched.amountMinor,0)) amountMinor,COUNT(DISTINCT line.id) lineCount
-    FROM line_dimension JOIN supplier_billing_lines line ON line.id=line_dimension.lineId
-    LEFT JOIN organizations organization ON organization.id=line_dimension.orgId
-    LEFT JOIN (SELECT line_id,SUM(allocated_amount_minor) amountMinor FROM supplier_billing_matches WHERE cancelled_at IS NULL GROUP BY line_id) matched ON matched.line_id=line.id
-    WHERE ${attributedExposureWhere.join(' AND ')} GROUP BY line_dimension.orgId,line.currency`, attributedExposureParams)
-    .map((item) => ({ orgId: item.orgId || null, organizationName: item.organizationName || null, currency: item.currency, amountMinor: Number(item.amountMinor || 0), lineCount: Number(item.lineCount || 0) }));
+  // 上游成本账（第二本账）：compute_attempts.upstream_cost_fen，按机构归集到 PLATFORM_COST_CURRENCY。
+  // 成本未知的调用只计数（unresolvedSupplierLineCount，字段名沿用），金额一律不并入 —— 未知绝不按 0：
+  //   · 一组里**一笔已知成本都没有**（全是未知）→ 金额给 NULL（不是 0：0 会读成「成本为零」）；
+  //   · 一组里有已知也有未知 → 给**已知部分的合计**，同时 unresolvedSupplierLineCount 标出未知笔数，
+  //     毛利一律留空（见下方 supplierRowsComplete 闸门），与「部分核销不让毛利显得完整」同源。
+  // 选了非 CNY 的币种时这本账不参与：上游成本是按人民币分记账的，跨币种不可比，成本侧留 null。
+  const costEnabled = !range.currency || range.currency === PLATFORM_COST_CURRENCY;
+  const costWhere = ['attempt.created_at>=?', 'attempt.created_at<?']; const costParams = [range.since, range.until];
+  add(costWhere, costParams, orgId, 'attempt.org_id=?'); add(costWhere, costParams, studentId, 'attempt.user_id=?'); add(costWhere, costParams, seriesId, 'COALESCE(usage.series_id,session.series_id)=?');
+  const costs = !costEnabled ? [] : rows(`SELECT attempt.org_id orgId,organization.name organizationName,
+      CASE WHEN SUM(CASE WHEN attempt.cost_source='UNKNOWN' OR attempt.upstream_cost_fen IS NULL THEN 0 ELSE 1 END)=0
+        THEN NULL
+        ELSE SUM(CASE WHEN attempt.cost_source='UNKNOWN' OR attempt.upstream_cost_fen IS NULL THEN 0 ELSE attempt.upstream_cost_fen END) END amountMinor,
+      COUNT(CASE WHEN attempt.cost_source<>'UNKNOWN' AND attempt.upstream_cost_fen IS NOT NULL THEN 1 END) settledMatchCount,
+      SUM(CASE WHEN attempt.cost_source='UNKNOWN' OR attempt.upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unresolvedSupplierLineCount
+    ${CALL_FROM} WHERE ${costWhere.join(' AND ')} GROUP BY attempt.org_id`, costParams)
+    .map((item) => ({ ...item, currency: PLATFORM_COST_CURRENCY }));
 
   const grouped = new Map();
   merge(grouped, purchases, 'cashReceivedMinor', ['paidPurchaseCount', 'pendingPaymentCount']);
   merge(grouped, revenues, 'recognizedRevenueMinor', ['recognizedQuantity', 'unknownRevenueEvents']);
   merge(grouped, costs, 'settledCostMinor', ['settledMatchCount', 'unresolvedSupplierLineCount']);
-  const exposureByGroup = new Map(unreconciled.map((item) => [groupKey(item.orgId, item.currency), item]));
   const reportRows = [...grouped.values()].map((item) => {
     const cashReceivedMinor = item.cashReceivedMinor ?? null;
     const recognizedRevenueMinor = item.unknownRevenueEvents || item.recognizedRevenueMinor == null ? null : item.recognizedRevenueMinor;
     const settledCostMinor = item.settledCostMinor ?? null;
-    const exposure = exposureByGroup.get(groupKey(item.orgId, item.currency));
-    const pendingExposureMinor = exposure?.amountMinor ?? 0;
-    const supplierRowsComplete = !item.unresolvedSupplierLineCount && !exposure?.lineCount;
+    // 成本未知的调用笔数（字段名沿用 unresolvedSupplierLineCount：供应商账单行已下线，这里现在指「成本未知的调用」）。
+    const costUnknownCallCount = Number(item.unresolvedSupplierLineCount || 0);
+    // 成本侧完整 = 这一组**确实有**算得出的成本，且没有一笔成本未知。
+    // 注意「一笔成本数据都没有」（记录里压根没有 compute_attempts）不算完整 —— 那是「未知」，不是「没有缺口」。
+    const supplierRowsComplete = settledCostMinor != null && costUnknownCallCount === 0;
     return {
-      ...item, cashReceivedMinor, recognizedRevenueMinor, settledCostMinor, pendingExposureMinor,
-      pendingExposureLineCount: exposure?.lineCount || 0, supplierRowsComplete,
+      ...item, cashReceivedMinor, recognizedRevenueMinor, settledCostMinor, costUnknownCallCount,
+      // 未决敞口：供应商账单线已下线，「未核销敞口」这个口径不存在了。这里改成「无法计价的成本缺口」：
+      // 成本侧完整 → 0（确实没有缺口）；否则 → null（缺口金额不可知，绝不给 0 充数），笔数见下列计数。
+      pendingExposureMinor: supplierRowsComplete ? 0 : null,
+      pendingExposureLineCount: costUnknownCallCount,
+      supplierRowsComplete,
       grossProfitMinor: recognizedRevenueMinor != null && settledCostMinor != null && supplierRowsComplete
         ? recognizedRevenueMinor - settledCostMinor : null,
     };
   }).sort((a, b) => String(a.organizationName).localeCompare(String(b.organizationName), 'zh-CN'));
-  const currencies = [...new Set([...reportRows.map((item) => item.currency), ...unreconciled.map((item) => item.currency), ...globalExposure.map((item) => item.currency)].filter(Boolean))];
+  const currencies = [...new Set(reportRows.map((item) => item.currency).filter(Boolean))];
   const comparableCurrency = range.currency || (currencies.length === 1 ? currencies[0] : null);
   const comparable = comparableCurrency ? reportRows.filter((item) => item.currency === comparableCurrency) : [];
   const knownRevenue = comparable.length > 0 && comparable.every((item) => item.recognizedRevenueMinor != null);
   const knownCost = comparable.length > 0 && comparable.every((item) => item.settledCostMinor != null);
-  const supplierRowsComplete = comparable.length > 0 && comparable.every((item) => item.supplierRowsComplete)
-    && (orgId || studentId || seriesId || !globalExposure.some((item) => item.currency === comparableCurrency && item.lineCount > 0));
+  const supplierRowsComplete = comparable.length > 0 && comparable.every((item) => item.supplierRowsComplete);
   return {
-    rows: reportRows, unreconciled, globalExposure, currencies, comparableCurrency,
+    rows: reportRows, currencies, comparableCurrency,
     summary: {
       currency: comparableCurrency,
       cashReceivedMinor: comparableCurrency && comparable.some((item) => item.cashReceivedMinor != null) ? comparable.reduce((sum, item) => sum + (item.cashReceivedMinor || 0), 0) : null,
       recognizedRevenueMinor: knownRevenue ? comparable.reduce((sum, item) => sum + item.recognizedRevenueMinor, 0) : null,
+      // 上游成本合计：只加**算得出的**部分；同币种的组里有一组成本未知就整列留空（knownCost）。
       settledCostMinor: knownCost ? comparable.reduce((sum, item) => sum + item.settledCostMinor, 0) : null,
-      unreconciledMinor: comparableCurrency ? unreconciled.filter((item) => item.currency === comparableCurrency).reduce((sum, item) => sum + item.amountMinor, 0) + globalExposure.filter((item) => item.currency === comparableCurrency).reduce((sum, item) => sum + item.amountMinor, 0) : null,
+      // 「未结算 / 未核销」口径随供应商账单线下线：这里改成「成本未知」——
+      // 成本未知的**金额不可知**，所以恒为 null（有成本未知）或 0（确实没有未知），绝不按 0 掩盖未知。
+      unreconciledMinor: comparable.length === 0 ? null : supplierRowsComplete ? 0 : null,
+      costUnknownCallCount: comparable.reduce((sum, item) => sum + (item.costUnknownCallCount || 0), 0),
       grossProfitMinor: knownRevenue && knownCost && supplierRowsComplete ? comparable.reduce((sum, item) => sum + item.grossProfitMinor, 0) : null,
     },
     filters: { ...range, orgId: orgId || null, seriesId: seriesId || null },
-    basis: { cash: 'PAID_LICENSE_PURCHASES', revenue: 'IMMUTABLE_LICENSE_EVENTS', cost: 'ACTIVE_SUPPLIER_MATCHES', estimatesExcluded: true },
-  };
-}
-
-// ── 官方账单 API 对账（按账期 × 模型）────────────────────────────────────────
-// 官方账单（provider_bill_aggregates，来自供应商账单接口）与平台自己的四档金额并排放：
-//   · COMPUTED / ESTIMATED / REPORTED —— compute_attempts.cost_source 的三档平台口径；
-//   · CSV 已核销 —— supplier_billing_matches 里 ACTIVE 的分摊金额（运营导入的账单已经对上账的部分）。
-// 差异 = 官方 − COMPUTED，按模型归因。**缺失的一侧留 null，绝不按 0 参与计算**：
-// 「上游没给这个模型」和「上游给了 0」是两件完全不同的事，报表必须能分辨。
-const PLATFORM_COST_CURRENCY = 'CNY';
-const PERIOD_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-function periodRange(filters = {}) {
-  const currency = text(filters.currency).toUpperCase() || PLATFORM_COST_CURRENCY;
-  if (!CURRENCY.test(currency)) throw errors.badRequest('币种必须是三位大写代码', 'INVALID_CURRENCY');
-  const period = text(filters.period);
-  let start = text(filters.periodStart) || text(filters.from);
-  let end = text(filters.periodEnd) || text(filters.to);
-  if (period) {
-    if (!PERIOD_MONTH.test(period)) throw errors.badRequest('period 必须是 YYYY-MM 格式', 'INVALID_PERIOD');
-    const year = Number(period.slice(0, 4)); const month = Number(period.slice(5, 7));
-    start = new Date(Date.UTC(year, month - 1, 1)).toISOString();
-    end = new Date(Date.UTC(year, month, 1)).toISOString();
-  }
-  const since = new Date(start); const until = new Date(end);
-  if (!start || !end || Number.isNaN(since.getTime()) || Number.isNaN(until.getTime()) || since >= until) {
-    throw errors.badRequest('账期无效（需要 period=YYYY-MM 或 periodStart/periodEnd）', 'INVALID_TIME_RANGE');
-  }
-  return { periodStart: since.toISOString(), periodEnd: until.toISOString(), currency };
-}
-
-export function providerBillReconciliation(filters = {}) {
-  const range = periodRange(filters);
-  const accountId = text(filters.supplierAccountId);
-
-  // 同一账号 + 同一账期可能被拉过多次（供应商改了数、或换了适配器）：只认**最近一次**成功的快照，
-  // 否则同一份账期会被重复计入官方合计。被顶掉的那几份单列出来，方便运营知道「数是新的」。
-  const snapshotConditions = ["snapshot.status='FETCHED'", 'snapshot.period_start>=?', 'snapshot.period_end<=?'];
-  const snapshotParams = [range.periodStart, range.periodEnd];
-  add(snapshotConditions, snapshotParams, accountId, 'snapshot.supplier_account_id=?');
-  const fetched = rows(`SELECT snapshot.*,account.code account_code,account.name account_name FROM provider_bill_snapshots snapshot
-    LEFT JOIN supplier_accounts account ON account.id=snapshot.supplier_account_id
-    WHERE ${snapshotConditions.join(' AND ')} ORDER BY snapshot.fetched_at DESC,snapshot.id DESC`, snapshotParams);
-  const latestByPeriod = new Map();
-  let supersededCount = 0;
-  for (const snapshot of fetched) {
-    const key = `${snapshot.supplier_account_id}\u0000${snapshot.period_start}\u0000${snapshot.period_end}`;
-    if (latestByPeriod.has(key)) { supersededCount += 1; continue; }
-    latestByPeriod.set(key, snapshot);
-  }
-  const snapshots = [...latestByPeriod.values()];
-  const snapshotIds = snapshots.map((item) => item.id);
-
-  const officialRows = snapshotIds.length
-    ? rows(`SELECT model,currency,SUM(amount_minor) amountMinor,SUM(COALESCE(quantity,0)) quantity,COUNT(*) rowCount
-        FROM provider_bill_aggregates WHERE snapshot_id IN (${snapshotIds.map(() => '?').join(',')}) GROUP BY model,currency`, snapshotIds)
-    : [];
-  const officialCurrencies = [...new Set(officialRows.map((item) => item.currency))].sort();
-  const officialInCurrency = officialRows.filter((item) => item.currency === range.currency);
-  const excludedOfficial = officialRows.filter((item) => item.currency !== range.currency)
-    .map((item) => ({ model: item.model || null, currency: item.currency, amountMinor: Number(item.amountMinor || 0) }));
-  const officialCurrencyMismatch = officialRows.length > 0 && officialInCurrency.length === 0;
-
-  // 平台口径：按模型 × cost_source 汇总（金额未知的行只计数，不进任何一档金额）。
-  const platformRows = rows(`SELECT COALESCE(model,'') model,cost_source source,upstream_cost_fen costFen,COUNT(*) n
-    FROM compute_attempts WHERE created_at>=? AND created_at<? GROUP BY COALESCE(model,''),cost_source,upstream_cost_fen`, [range.periodStart, range.periodEnd]);
-
-  // CSV 已核销：运营导入的账单里已经对到内部调用上的**有效分摊**，按被对上的模型归集。
-  const csvRows = rows(`SELECT COALESCE(attempt.model,usage.model,'') model,SUM(match.allocated_amount_minor) amountMinor,COUNT(*) matchCount
-    FROM supplier_billing_matches match
-    JOIN supplier_billing_lines line ON line.id=match.line_id
-    LEFT JOIN compute_attempts attempt ON match.target_type='ATTEMPT' AND attempt.id=match.target_id
-    LEFT JOIN usage_records usage ON match.target_type='USAGE' AND usage.id=match.target_id
-    WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
-      AND line.occurred_at>=? AND line.occurred_at<? AND match.currency=?
-    GROUP BY COALESCE(attempt.model,usage.model,'')`, [range.periodStart, range.periodEnd, range.currency]);
-
-  const modelKeys = new Set([
-    ...officialInCurrency.map((item) => item.model || ''),
-    ...platformRows.map((item) => item.model || ''),
-    ...csvRows.map((item) => item.model || ''),
-  ]);
-  const label = (model) => (model ? model : '未标注模型');
-  const rowsOut = [...modelKeys].sort((a, b) => String(a).localeCompare(String(b))).map((model) => {
-    const official = officialInCurrency.filter((item) => (item.model || '') === model);
-    const platform = platformRows.filter((item) => (item.model || '') === model);
-    const csv = csvRows.find((item) => (item.model || '') === model);
-    const sumSource = (source) => platform.filter((item) => item.source === source && item.costFen !== null && item.costFen !== undefined);
-    const countSource = (source) => platform.filter((item) => item.source === source).reduce((sum, item) => sum + Number(item.n || 0), 0);
-    const amountOf = (source) => (sumSource(source).length ? sumSource(source).reduce((sum, item) => sum + Number(item.costFen || 0), 0) : null);
-    const unknownCostCallCount = platform.filter((item) => item.costFen === null || item.costFen === undefined).reduce((sum, item) => sum + Number(item.n || 0), 0);
-    const officialPresent = official.length > 0;
-    const officialAmountMinor = officialPresent ? official.reduce((sum, item) => sum + Number(item.amountMinor || 0), 0) : null;
-    const computedAmountMinor = amountOf('COMPUTED');
-    const computedPresent = computedAmountMinor !== null;
-    // 差异只在「官方给了数」且「平台这一侧数得全」时才算：任一缺失就留 null，不拿 0 顶。
-    const differenceMinor = officialPresent && computedPresent && unknownCostCallCount === 0 ? officialAmountMinor - computedAmountMinor : null;
-    const differenceReason = !officialPresent ? 'OFFICIAL_MISSING' : !computedPresent ? 'COMPUTED_MISSING' : unknownCostCallCount > 0 ? 'COMPUTED_INCOMPLETE' : null;
-    return {
-      model: model || null, modelLabel: label(model),
-      officialAmountMinor, officialPresent, officialRowCount: official.reduce((sum, item) => sum + Number(item.rowCount || 0), 0),
-      officialQuantity: officialPresent ? official.reduce((sum, item) => sum + Number(item.quantity || 0), 0) : null,
-      computedAmountMinor, computedPresent, computedCallCount: countSource('COMPUTED'),
-      estimatedAmountMinor: amountOf('ESTIMATED'), estimatedCallCount: countSource('ESTIMATED'),
-      reportedAmountMinor: amountOf('REPORTED'), reportedCallCount: countSource('REPORTED'),
-      csvSettledAmountMinor: csv ? Number(csv.amountMinor || 0) : null, csvSettledMatchCount: csv ? Number(csv.matchCount || 0) : 0,
-      unknownCostCallCount,
-      differenceMinor, differenceReason,
-      differenceStatus: differenceMinor === null ? null : differenceMinor === 0 ? 'EXACT' : differenceMinor > 0 ? 'OFFICIAL_HIGHER' : 'OFFICIAL_LOWER',
-      inOfficialOnly: officialPresent && platform.length === 0, inPlatformOnly: !officialPresent && platform.length > 0,
-    };
-  });
-
-  const sumOrNull = (list, key) => (list.length && list.every((item) => item[key] !== null) ? list.reduce((sum, item) => sum + item[key], 0) : null);
-  // 有的模型官方没给数、或没有 COMPUTED 调用 —— 合计就留空（不按 0 求和）。
-  // 但界面仍然想显示「已拿到的那部分的加总」，所以额外给一份 presentSums，并标明哪些列不完整：
-  // 看的人一眼能分清「合计为空」是「真的没有」还是「缺了一部分」。
-  const presentSum = (key) => rowsOut.filter((item) => item[key] !== null).reduce((sum, item) => sum + item[key], 0);
-  const complete = (key) => rowsOut.length > 0 && rowsOut.every((item) => item[key] !== null);
-  const totals = {
-    modelCount: rowsOut.length,
-    officialAmountMinor: sumOrNull(rowsOut, 'officialAmountMinor'),
-    computedAmountMinor: sumOrNull(rowsOut, 'computedAmountMinor'),
-    estimatedAmountMinor: sumOrNull(rowsOut, 'estimatedAmountMinor'),
-    reportedAmountMinor: sumOrNull(rowsOut, 'reportedAmountMinor'),
-    csvSettledAmountMinor: sumOrNull(rowsOut, 'csvSettledAmountMinor'),
-    differenceMinor: sumOrNull(rowsOut, 'differenceMinor'),
-    presentSums: {
-      officialAmountMinor: presentSum('officialAmountMinor'),
-      computedAmountMinor: presentSum('computedAmountMinor'),
-      estimatedAmountMinor: presentSum('estimatedAmountMinor'),
-      reportedAmountMinor: presentSum('reportedAmountMinor'),
-      csvSettledAmountMinor: presentSum('csvSettledAmountMinor'),
-      differenceMinor: presentSum('differenceMinor'),
-    },
-    complete: {
-      official: complete('officialAmountMinor'),
-      computed: complete('computedAmountMinor'),
-      estimated: complete('estimatedAmountMinor'),
-      reported: complete('reportedAmountMinor'),
-      csvSettled: complete('csvSettledAmountMinor'),
-      difference: complete('differenceMinor'),
-    },
-    computedCallCount: rowsOut.reduce((sum, item) => sum + item.computedCallCount, 0),
-    estimatedCallCount: rowsOut.reduce((sum, item) => sum + item.estimatedCallCount, 0),
-    reportedCallCount: rowsOut.reduce((sum, item) => sum + item.reportedCallCount, 0),
-    csvSettledMatchCount: rowsOut.reduce((sum, item) => sum + item.csvSettledMatchCount, 0),
-    unknownCostCallCount: rowsOut.reduce((sum, item) => sum + item.unknownCostCallCount, 0),
-  };
-  return {
-    period: { ...range, platformCurrency: PLATFORM_COST_CURRENCY },
-    rows: rowsOut,
-    totals,
-    coverage: {
-      officialSnapshotCount: snapshots.length, supersededSnapshotCount: supersededCount,
-      officialCurrencies, officialCurrencyMismatch, excludedOfficial,
-      supplierAccountIds: [...new Set(snapshots.map((item) => item.supplier_account_id))],
-    },
-    snapshots: snapshots.map((item) => ({
-      id: item.id, supplierAccountId: item.supplier_account_id, supplierAccountCode: item.account_code || null, supplierAccountName: item.account_name || null,
-      adapter: item.adapter, source: item.source, periodStart: item.period_start, periodEnd: item.period_end,
-      currency: item.currency || null, itemCount: Number(item.item_count || 0), totalAmountMinor: item.total_amount_minor === null || item.total_amount_minor === undefined ? null : Number(item.total_amount_minor),
-      fetchedAt: item.fetched_at, fetchedBy: item.fetched_by || null,
-    })),
-    missingInBill: rowsOut.filter((item) => !item.officialPresent).map((item) => item.model),
-    missingInPlatform: rowsOut.filter((item) => !item.computedPresent).map((item) => item.model),
     basis: {
-      official: 'PROVIDER_BILL_AGGREGATES_LATEST_SNAPSHOT_PER_PERIOD',
-      computed: 'COMPUTE_ATTEMPTS_COST_SOURCE_COMPUTED',
-      estimated: 'COMPUTE_ATTEMPTS_COST_SOURCE_ESTIMATED',
-      reported: 'COMPUTE_ATTEMPTS_COST_SOURCE_REPORTED',
-      csvSettled: 'ACTIVE_SUPPLIER_MATCHES',
-      difference: 'OFFICIAL_MINUS_COMPUTED_PER_MODEL',
-      missingIsNotZero: true,
+      cash: 'PAID_LICENSE_PURCHASES',
+      revenue: 'IMMUTABLE_LICENSE_EVENTS',
+      // 第二本账：compute_attempts.upstream_cost_fen（来源见 cost_source）。
+      cost: 'COMPUTE_ATTEMPTS_UPSTREAM_COST_FEN',
+      costCurrency: PLATFORM_COST_CURRENCY,
+      // 上游成本本身就可能是 ESTIMATED / REPORTED（估值或上游回执）—— 不再声称「估算成本不进入本报表」。
+      estimatesExcluded: false,
     },
   };
 }
@@ -448,33 +290,39 @@ function emptyBucket(key, label) {
   return {
     key, label, calls: 0, externalAmountMinor: 0, saleUnknownCount: 0,
     knownUpstreamCostMinor: 0, upstreamUnknownCount: 0,
-    settledAmountMinor: 0, settledCallCount: 0, unsettledCount: 0, mixedCurrencyCount: 0,
-    currencies: new Set(),
+    // 字段名沿用（前端读它）：settledAmountMinor 现在 = 上游成本（只累加算得出的部分）、
+    // unsettledCount 现在 = 成本未知的笔数、settledCallCount = 算得出成本的笔数。
+    settledAmountMinor: 0, settledCallCount: 0, unsettledCount: 0,
   };
 }
 
 function addCall(bucket, call) {
   bucket.calls += 1;
   if (call.salePriceFen == null) bucket.saleUnknownCount += 1; else bucket.externalAmountMinor += call.salePriceFen;
-  if (call.costUnknown) bucket.upstreamUnknownCount += 1; else bucket.knownUpstreamCostMinor += call.upstreamCostFen;
-  if (call.matchCount === 0) bucket.unsettledCount += 1;
-  else if (call.settledCurrencies.length === 1) { bucket.settledAmountMinor += call.settledFen; bucket.settledCallCount += 1; bucket.currencies.add(call.settledCurrencies[0]); }
-  else { bucket.mixedCurrencyCount += 1; for (const currency of call.settledCurrencies) bucket.currencies.add(currency); }
+  if (call.costUnknown) {
+    // 成本未知：只计数，绝不并入任何金额（未知不等于 0）。
+    bucket.upstreamUnknownCount += 1;
+    bucket.unsettledCount += 1;
+    return;
+  }
+  bucket.knownUpstreamCostMinor += call.upstreamCostFen;
+  bucket.settledAmountMinor += call.upstreamCostFen;
+  bucket.settledCallCount += 1;
 }
 
 function finalizeBucket(bucket) {
-  const currencies = [...bucket.currencies];
-  const singleCurrency = currencies.length === 1 ? currencies[0] : null;
-  const settledAmountMinor = bucket.mixedCurrencyCount > 0 ? null : bucket.settledAmountMinor;
-  // 差额 = 对外金额 − 实际核销；存在未知对外价、未核销或跨币种时留空，未知一律不并入差额、不按 0 处理。
-  const differenceMinor = bucket.saleUnknownCount === 0 && bucket.unsettledCount === 0 && bucket.mixedCurrencyCount === 0
-    ? bucket.externalAmountMinor - (settledAmountMinor || 0) : null;
-  return { ...bucket, currencies, currency: singleCurrency, settledAmountMinor, differenceMinor };
+  // 差额 = 对外售价 − 上游成本：本组只要有一笔对外价未知或成本未知就留空
+  // （与「未核销不算差额、避免把未知显示成正利润」一脉相承）；未知绝不按 0 参与计算。
+  const differenceMinor = bucket.saleUnknownCount === 0 && bucket.upstreamUnknownCount === 0
+    ? bucket.externalAmountMinor - bucket.knownUpstreamCostMinor : null;
+  // currency 沿用（前端拿它显示币种）：两本账里只有上游成本有币种口径（人民币分）。
+  return { ...bucket, currency: PLATFORM_COST_CURRENCY, differenceMinor };
 }
 
 /**
- * 调用账汇总：按模态 / 渠道 / 模型（以及机构 / 学员）对照三档金额与核销情况。
- * 未知对外价或未知上游成本单列计数，绝不并入差额、绝不按 0 处理。
+ * 调用账汇总：按模态 / 渠道 / 模型（以及机构 / 学员）对照**两账**金额 ——
+ * 对外售价（externalAmountMinor，未知单列 saleUnknownCount）与上游成本（knownUpstreamCostMinor，未知单列 upstreamUnknownCount）。
+ * 未知一律单列计数，绝不并入差额、绝不按 0 处理。
  */
 export function financialCallSummary(filters = {}) {
   const range = rangeOf(filters);
@@ -483,31 +331,17 @@ export function financialCallSummary(filters = {}) {
   const saleColumn = salePriceExpression();
   const raw = rows(`SELECT attempt.id,attempt.modality,COALESCE(attempt.actual_channel_id,attempt.channel_id) channelId,
       attempt.model,attempt.org_id orgId,organization.name organizationName,attempt.user_id userId,student.display_name studentName,
-      ${saleColumn} salePriceFen,attempt.cost_source costSource,attempt.upstream_cost_fen upstreamCostFen,
-      (SELECT SUM(match.allocated_amount_minor) FROM supplier_billing_matches match
-        JOIN supplier_billing_lines line ON line.id=match.line_id
-        WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
-          AND ((match.target_type='ATTEMPT' AND match.target_id=attempt.id) OR (match.target_type='USAGE' AND match.target_id=attempt.internal_usage_record_id))) settledFen,
-      (SELECT COUNT(*) FROM supplier_billing_matches match
-        JOIN supplier_billing_lines line ON line.id=match.line_id
-        WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
-          AND ((match.target_type='ATTEMPT' AND match.target_id=attempt.id) OR (match.target_type='USAGE' AND match.target_id=attempt.internal_usage_record_id))) matchCount,
-      (SELECT GROUP_CONCAT(DISTINCT match.currency) FROM supplier_billing_matches match
-        JOIN supplier_billing_lines line ON line.id=match.line_id
-        WHERE match.cancelled_at IS NULL AND line.reconciliation_status NOT IN ('CANCELLED','EXCLUDED')
-          AND ((match.target_type='ATTEMPT' AND match.target_id=attempt.id) OR (match.target_type='USAGE' AND match.target_id=attempt.internal_usage_record_id))) settledCurrencies
+      ${saleColumn} salePriceFen,attempt.cost_source costSource,attempt.upstream_cost_fen upstreamCostFen
     ${CALL_FROM} WHERE ${where}`, scope.params);
   const pricing = getComputePricing();
   const calls = raw.map((item) => {
     const sale = resolveSalePrice({ salePriceFen: item.salePriceFen, model: item.model, modality: item.modality }, pricing);
-    const matchCount = Number(item.matchCount || 0);
+    const costUnknown = costUnknownOf(item.costSource, item.upstreamCostFen);
     return {
       modality: item.modality || null, channelId: item.channelId || null, model: item.model || null,
       orgId: item.orgId || null, organizationName: item.organizationName || null, userId: item.userId || null, studentName: item.studentName || null,
-      salePriceFen: sale.minor, costUnknown: item.costSource === 'UNKNOWN' || item.upstreamCostFen == null,
-      upstreamCostFen: Number(item.upstreamCostFen || 0), matchCount,
-      settledFen: matchCount ? Number(item.settledFen || 0) : 0,
-      settledCurrencies: matchCount ? String(item.settledCurrencies || '').split(',').map((value) => value.trim()).filter(Boolean) : [],
+      salePriceFen: sale.minor, costUnknown,
+      upstreamCostFen: costUnknown ? null : Number(item.upstreamCostFen),
     };
   });
   const groups = {};

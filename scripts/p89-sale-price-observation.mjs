@@ -90,13 +90,15 @@ assert.equal(priceFenFor({ modality: 'TEXT', model: 'p89-model' }), 999);
 assert.equal(priceFenFor({ modality: 'TEXT', model: 'p89-unlisted' }), 40);
 assert.equal(priceFenFor({ modality: 'VIDEO' }), 500);
 
-/* 界面：PricingPanel 必须可编辑、按渠道分组、并写清「对外价，不扣学生，不是上游成本」 */
-const panelSource = fs.readFileSync(path.join(root, 'apps/admin/src/components/ComputePanels.jsx'), 'utf8');
+/* 界面：对外价面板必须可编辑、按渠道分组、并写清「对外价，不扣学生，不是上游成本」。
+ * 2026-09-18：对外价的界面从 ComputePanels.jsx 的 PricingPanel 搬进 BillingPanels.jsx 的「② 价目表」
+ * （与成本价并排一行 = 渠道 × 模型）—— 断言随之改到新落点，口径一条没变。 */
+const panelSource = fs.readFileSync(path.join(root, 'apps/admin/src/components/BillingPanels.jsx'), 'utf8');
 assert.match(panelSource, /不扣学生/, 'PricingPanel must state the price does not charge students');
 assert.match(panelSource, /不是上游成本/, 'PricingPanel must state the price is not upstream cost');
 assert.match(panelSource, /api\.put\('admin\/compute-pricing'/, 'PricingPanel must PUT the pricing config');
 assert.match(panelSource, /perCall/, 'PricingPanel must edit the modality base price');
-assert.match(panelSource, /models/, 'PricingPanel must edit the per-model overrides');
+assert.match(panelSource, /models\[model\]/, 'PricingPanel must edit the per-model overrides');
 assert.match(panelSource, /channels\.map/, 'PricingPanel must group overrides by channel');
 assert.doesNotMatch(panelSource, /学生售价与积分限额已停用/, 'retired pricing notice must be gone');
 
@@ -105,4 +107,4 @@ console.log(JSON.stringify({
   checks: ['config-save-read', 'audit-observation-only', 'snapshot-write', 'price-not-retroactive', 'student-charge-always-zero', 'panel-copy'],
   upstreamCalls: calls.length,
 }, null, 2));
-console.log('P89 passed: 对外售价可存可读、audit 标注 OBSERVATION_ONLY、调用写入 sale_price_fen/sale_snapshot、改价不追溯、学生扣费恒 0、PricingPanel 可编辑并写清口径。');
+console.log('P89 passed: 对外售价可存可读、audit 标注 OBSERVATION_ONLY、调用写入 sale_price_fen/sale_snapshot、改价不追溯、学生扣费恒 0、价目表（对外价与成本价并排）可编辑并写清口径。');

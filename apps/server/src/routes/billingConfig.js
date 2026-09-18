@@ -93,8 +93,9 @@ function normalizeProviderPolicy(value) {
       providerAccountRef: String(item.providerAccountRef || '').trim().slice(0,200) || null,
       provider: GENERATION_PROVIDER_IDS.has(String(item.provider || '').toLowerCase()) ? String(item.provider).toLowerCase() : 'custom',
       model: String(item.model || '').slice(0,200),
-      modelCosts: item.modelCosts || {},
-      estimatedCostFen: item.estimatedCostFen == null || item.estimatedCostFen === '' ? null : Number(item.estimatedCostFen),
+      // 2026-09-18：`modelCosts` / `estimatedCostFen`（渠道卡里手填的"估算成本"）**已退役** ——
+      // 它们优先级低于合同单价，填了也被覆盖，是纯干扰（用户口径：成本只留价目表一套）。
+      // 现在这里不再回显这两个字段（老库里的值仍在，但没有读取方）。
       // 合同单价（P90）：文本按每千 token、图片按张、视频按秒、音乐按次。
       // 只认非负整数分；没配就是 null（= 折算不出来 → UNKNOWN，绝不按 0 计）。
       upstreamUnitPrices: normalizeUpstreamUnitPrices(item.upstreamUnitPrices),
@@ -221,7 +222,6 @@ function normalizeModality(value) {
     id: value.id,
     modality: value.modality,
     enabled: !!value.enabled,
-    unitCost: Number(value.unit_cost),
     displayName: value.display_name,
     description: value.description || '',
     sortOrder: Number(value.sort_order),
@@ -332,14 +332,12 @@ export async function handleAdminBillingConfig(ctx) {
     const body = ctx.body || {};
     const updates = [];
     const newEnabled = body.enabled === undefined ? (existing.enabled ? 1 : 0) : (bool(body.enabled) ? 1 : 0);
-    const newUnitCost = body.unitCost === undefined ? Number(existing.unit_cost) : integer(body.unitCost, 'unitCost', { min: 0, max: 100 });
     const newDisplayName = body.displayName === undefined ? existing.display_name : nonEmptyString(body.displayName, 'displayName', { max: 100 });
     const newDescription = body.description === undefined ? existing.description : String(body.description || '').slice(0, 1000);
     const newSortOrder = body.sortOrder === undefined ? Number(existing.sort_order) : integer(body.sortOrder, 'sortOrder', { min: 0, max: 1000 });
     const reason = body.reason ? String(body.reason).trim().slice(0, 500) : '';
     const now = nowIso();
     if (newEnabled !== existing.enabled) { logChange('MODALITY_SETTING', existing.id, 'enabled', existing.enabled, newEnabled, auth.user.id, reason); updates.push(['enabled', newEnabled]); }
-    if (newUnitCost !== Number(existing.unit_cost)) { logChange('MODALITY_SETTING', existing.id, 'unitCost', existing.unit_cost, newUnitCost, auth.user.id, reason); updates.push(['unit_cost', newUnitCost]); }
     if (newDisplayName !== existing.display_name) { logChange('MODALITY_SETTING', existing.id, 'displayName', existing.display_name, newDisplayName, auth.user.id, reason); updates.push(['display_name', newDisplayName]); }
     if (newDescription !== existing.description) { logChange('MODALITY_SETTING', existing.id, 'description', existing.description, newDescription, auth.user.id, reason); updates.push(['description', newDescription]); }
     if (newSortOrder !== Number(existing.sort_order)) { logChange('MODALITY_SETTING', existing.id, 'sortOrder', existing.sort_order, newSortOrder, auth.user.id, reason); updates.push(['sort_order', newSortOrder]); }
@@ -347,7 +345,7 @@ export async function handleAdminBillingConfig(ctx) {
     const setClauses = updates.map(([k]) => `${k}=?`).join(', ');
     const values = updates.map(([, v]) => v);
     q(`UPDATE platform_modality_settings SET ${setClauses}, updated_at=? WHERE id=?`, [...values, now, existing.id]);
-    audit(ctx, 'BILLING_CONFIG_MODALITY_UPDATE', 'PLATFORM_MODALITY_SETTING', existing.id, { modality, before: existing, after: { enabled: newEnabled, unitCost: newUnitCost, displayName: newDisplayName } }, { reason });
+    audit(ctx, 'BILLING_CONFIG_MODALITY_UPDATE', 'PLATFORM_MODALITY_SETTING', existing.id, { modality, before: existing, after: { enabled: newEnabled, displayName: newDisplayName } }, { reason });
     return normalizeModality(row('SELECT * FROM platform_modality_settings WHERE id=?', [existing.id]));
   }
 
@@ -531,7 +529,7 @@ export async function handleAdminBillingConfig(ctx) {
     for (const channel of channels) {
       if (!channel?.id || ids.has(channel.id)) throw errors.badRequest('渠道编号必须存在且唯一', 'AI_PROVIDER_CHANNEL_INVALID');
       ids.add(channel.id);
-      if (channel.estimatedCostFen != null && channel.estimatedCostFen !== '' && (!Number.isFinite(Number(channel.estimatedCostFen)) || Number(channel.estimatedCostFen) < 0)) throw errors.badRequest('上游估算成本必须是非负金额', 'AI_PROVIDER_COST_INVALID');
+      // （2026-09-18：原来这里还校验 `estimatedCostFen`「上游估算成本」——那个字段已退役，见上面 normalize 处注释）
       // 合同单价保存前校验：必须是非负整数分，形状不对/金额为负当场报错（不静默丢弃成 0）。
       const unitPriceProblems = validateUpstreamUnitPrices(channel.upstreamUnitPrices);
       if (unitPriceProblems.length) throw errors.badRequest(`${channel.name || channel.id || '渠道'} 的合同单价有误：${unitPriceProblems.join('；')}`, 'AI_PROVIDER_COST_INVALID');
@@ -560,9 +558,7 @@ export async function handleAdminBillingConfig(ctx) {
       }
       if (route.channelId === route.backupChannelId && route.model === route.backupModel) throw errors.badRequest('主备不能是相同渠道的相同模型', 'AI_PROVIDER_ROUTE_INVALID');
     }
-    for (const channel of channels) for (const [modelId, amount] of Object.entries(channel.modelCosts || {})) {
-      if (![...(channel.models || []), channel.model].includes(modelId) || typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) throw errors.badRequest('模型成本必须属于可用模型且为非负金额', 'AI_PROVIDER_COST_INVALID');
-    }
+    // （2026-09-18：原来这里还校验逐模型 `modelCosts`「模型成本」——该字段已退役，理由同上）
     const registration = validateProviderRegistration({ provider, model, endpoint });
     if (!registration.valid) throw errors.badRequest('AI 供应商配置不完整：' + registration.reasons.join('；'), 'AI_PROVIDER_CONFIG_INVALID');
     if (providerDefinition(provider)?.kind === 'CUSTOM' && displayName.length < 2) throw errors.badRequest('自定义供应商名称必填', 'CUSTOM_PROVIDER_NAME_REQUIRED');
@@ -693,7 +689,7 @@ export async function handleStudentBillingConfig(ctx) {
     const modalities = getModalitySettings();
     const items = modalities.map((m) => {
       const e = isModalityEnabled(auth.user.orgId, m.modality);
-      return { modality: m.modality, displayName: m.displayName, unitCost: m.unitCost, enabled: e.enabled, source: e.source, reason: e.reason || '' };
+      return { modality: m.modality, displayName: m.displayName, enabled: e.enabled, source: e.source, reason: e.reason || '' };
     });
     return { items, orgId: auth.user.orgId };
   }

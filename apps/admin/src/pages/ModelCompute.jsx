@@ -1,69 +1,44 @@
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
-import { Notice, PageHeader } from '@platform/shared';
-import { ProviderPolicyPanel, OrgStudentUsagePanel } from '../components/BillingPanels.jsx';
-import { GatewayPanel, PricingPanel, ComputeBudgetPanel } from '../components/ComputePanels.jsx';
-import { BillingSettings } from '../components/BillingSettings.jsx';
+import { PageHeader } from '@platform/shared';
+import { AiCapabilityPanel, OrgStudentUsagePanel } from '../components/BillingPanels.jsx';
+import { ComputeBudgetPanel } from '../components/ComputePanels.jsx';
 import { FinancialReconciliation } from '../components/FinancialReconciliation.jsx';
 
-// 2026-09-15 重排（用户反馈「好多东西、好混乱」）：
-//   · 默认三屏就是用户要的两条主线 —— 配好渠道与售价 / 按机构与学员对照消耗。
-//   · 「供应商账单」「匹配与核销」只对**按账期开票**的上游有用；我们上游（Seedance 直连）
-//     是逐笔回实扣金额的，这两屏永远是空的，所以收进「高级」里，不再占默认视野。
-//   · 「算力网关」生产里一直是关的、而且上游本身就是一层 new-api 网关，同样收进「高级」；
-//     没有直接删掉 —— 删了组件留下后端就是死代码，那正是这次要清理的问题。
-const FINANCIAL_VIEWS = new Set(['calls', 'orgs', 'margin', 'advanced']);
-const ADVANCED_VIEWS = new Set(['bills', 'matching']);
+// 2026-09-18 页面收敛（用户口径：「一个页面一个名字」「必须做大量的减法」）。
+//   · 名字统一：菜单 / 分组头 / 页面标题 / 路径都叫「AI 能力与价格」，
+//     二级页签只留两个 —— 「渠道与价格」「用量与成本」（路径 /compute/config、/compute/usage）。
+//   · 「AI 网关」这个说法随算力网关（new-api）UI 一起下线。
+//   · 用量页删掉「高级」一级页签：它下面只有「供应商账单」与「匹配与核销」两屏，
+//     而我们上游（Seedance 直连、DeepSeek）是逐笔回实扣金额、账已经在 compute_attempts 里，
+//     那两屏永远是空的（用户口径：供应商账单两条线整体下线）。删掉比继续展示一份空账更诚实。
+const USAGE_VIEWS = new Set(['calls', 'orgs', 'margin']);
 
 export function ModelCompute({ api }) {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const usage = location.pathname.endsWith('/usage');
   const requested = searchParams.get('view');
-  const view = FINANCIAL_VIEWS.has(requested) ? requested : 'calls';
-  // 「高级」里再分供应商账单 / 匹配与核销两个子视图
-  const advancedView = ADVANCED_VIEWS.has(searchParams.get('advanced')) ? searchParams.get('advanced') : 'bills';
-  const setView = (next) => setSearchParams(next === 'advanced' ? { view: next, advanced: advancedView } : { view: next }, { replace: true });
-  const setAdvanced = (next) => setSearchParams({ view: 'advanced', advanced: next }, { replace: true });
+  const view = USAGE_VIEWS.has(requested) ? requested : 'calls';
+  const setView = (next) => setSearchParams({ view: next }, { replace: true });
   return <>
-    <nav aria-label="面包屑" className="breadcrumb row-actions"><NavLink to="/compute/config">AI 网关与课程配置</NavLink>{usage ? <><span className="muted" aria-hidden="true">/</span><span>CU 用量与任务</span></> : null}</nav>
-    <PageHeader eyebrow="算力管理" title="模型与算力"
+    <nav aria-label="面包屑" className="breadcrumb row-actions"><NavLink to="/compute/config">AI 能力与价格</NavLink>{usage ? <><span className="muted" aria-hidden="true">/</span><span>用量与成本</span></> : null}</nav>
+    <PageHeader eyebrow={usage ? '平台运营' : '平台配置'} title="AI 能力与价格"
       description={usage
-        ? '看每一笔调用的对外售价与我们的实际成本，并按机构 / 学员对照；三账与毛利看收入侧。'
-        : '维护渠道与模型、定对外售价。日常只需要这两块，网关与能力开关在页面底部。'} />
-    <nav className="admin-tabs" aria-label="模型与算力视图">
-      <NavLink to="/compute/config">渠道与模型配置</NavLink>
+        ? '看每一笔调用的对外售价与上游成本（两本账），并按机构 / 学员对照；两账与毛利看收入侧。'
+        : '三块就配完：① 渠道（怎么连上游）② 价目表（成本价与对外价并排）③ 路由与开关（用哪个渠道）。'} />
+    <nav className="admin-tabs" aria-label="AI 能力与价格视图">
+      <NavLink to="/compute/config">渠道与价格</NavLink>
       <NavLink to="/compute/usage">用量与成本</NavLink>
     </nav>
     {usage ? <>
       <nav className="admin-tabs" aria-label="用量与成本视图">
         <button type="button" className={view === 'calls' ? 'active' : ''} aria-pressed={view === 'calls'} onClick={() => setView('calls')}>调用账</button>
         <button type="button" className={view === 'orgs' ? 'active' : ''} aria-pressed={view === 'orgs'} onClick={() => setView('orgs')}>机构与学员</button>
-        <button type="button" className={view === 'margin' ? 'active' : ''} aria-pressed={view === 'margin'} onClick={() => setView('margin')}>三账与毛利</button>
-        <button type="button" className={view === 'advanced' ? 'active' : ''} aria-pressed={view === 'advanced'} onClick={() => setView('advanced')}>高级</button>
+        <button type="button" className={view === 'margin' ? 'active' : ''} aria-pressed={view === 'margin'} onClick={() => setView('margin')}>两账与毛利</button>
       </nav>
       {view === 'calls' ? <FinancialReconciliation api={api} view="calls" /> : null}
       {view === 'orgs' ? <OrgStudentUsagePanel api={api} /> : null}
       {view === 'margin' ? <><FinancialReconciliation api={api} view="margin" /><ComputeBudgetPanel api={api} /></> : null}
-      {view === 'advanced' ? <>
-        <Notice tone="info">这两屏只对<strong>按账期开票</strong>的上游有用：要把供应商账单导进来、再人工匹配核销。
-          我们现在用的上游（Seedance 直连、DeepSeek）都是<strong>逐笔回实扣金额</strong>的，
-          成本在调用时就已经记进账本了，所以这里通常是空的 —— 不需要配，也不影响调用账的数字。</Notice>
-        <nav className="admin-tabs" aria-label="高级对账视图">
-          <button type="button" className={advancedView === 'bills' ? 'active' : ''} aria-pressed={advancedView === 'bills'} onClick={() => setAdvanced('bills')}>供应商账单</button>
-          <button type="button" className={advancedView === 'matching' ? 'active' : ''} aria-pressed={advancedView === 'matching'} onClick={() => setAdvanced('matching')}>匹配与核销</button>
-        </nav>
-        <FinancialReconciliation api={api} view={advancedView} />
-      </> : null}
-    </> : <>
-      <ProviderPolicyPanel api={api} />
-      <PricingPanel api={api} />
-      <details className="top-gap">
-        <summary>高级：算力网关与能力总开关</summary>
-        <p className="muted">算力网关用于把调用转给一层 new-api 再出网（生产当前未启用，上游本身已是网关）；
-          「模态开关」是平台级总开关，关掉后学生无法使用对应能力。</p>
-        <GatewayPanel api={api} />
-        <BillingSettings api={api} />
-      </details>
-    </>}
+    </> : <AiCapabilityPanel api={api} />}
   </>;
 }

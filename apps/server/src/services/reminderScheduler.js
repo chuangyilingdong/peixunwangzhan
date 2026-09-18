@@ -45,7 +45,11 @@ export function scanContractExpiryOrgs() {
           targetUserId: admin.id,
           targetOrgId: org.id,
           eventKey: `CONTRACT_EXPIRY:${org.id}:${daysLeft}d`,
-          targetUrl: '/admin/billing',
+          // 2026-09-18：`/admin/billing` 这条旧路径已随配置页改名删掉（僵尸重定向一并删了），
+          // 留着它会让「合同即将到期」的通知点进去掉到工作台。改成课包许可与授权那条线
+          // （合同到期最相关的落点）。⚠️ 写**应用内部路由**（`/authorizations`）——
+          // `/admin` 是 basename，不进 targetUrl（导航里也是这么写的）。
+          targetUrl: '/authorizations',
         });
       } catch { /* ignore */ }
     }

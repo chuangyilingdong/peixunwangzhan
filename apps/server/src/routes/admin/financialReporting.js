@@ -1,5 +1,5 @@
 import { platformPermissionForPathname, requirePlatformPermission } from '../../lib.js';
-import { financialCallSummary, financialReconciliationReport, financialReportOptions, listFinancialCalls, providerBillReconciliation } from '../../services/financialReporting.js';
+import { financialCallSummary, financialReconciliationReport, financialReportOptions, listFinancialCalls } from '../../services/financialReporting.js';
 import { appendLicensePurchase, licensePurchaseHistory } from '../../services/licenseLedger.js';
 import { rows } from '../../lib.js';
 
@@ -28,7 +28,6 @@ export async function handleFinancialReporting(ctx, part, method) {
   if (part === '/financial-reporting/calls' && method === 'GET') return listFinancialCalls(filters(ctx.search));
   if (part === '/financial-reporting/call-summary' && method === 'GET') return financialCallSummary(filters(ctx.search));
   if (part === '/financial-reporting/summary' && method === 'GET') return financialReconciliationReport(filters(ctx.search));
-  // 官方账单 API 对账：账期 × 模型，官方合计 / COMPUTED / ESTIMATED / REPORTED / CSV 已核销，差异按模型归因。
-  if (part === '/financial-reporting/provider-bill-reconciliation' && method === 'GET') return providerBillReconciliation(filters(ctx.search));
+  // 2026-09-18：官方账单 API 对账（provider-bill-reconciliation）随供应商账单两条线整体下线，handler 一并删除。
   return null;
 }

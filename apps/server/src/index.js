@@ -10,8 +10,8 @@ import { handleRuntimeSearchGateway } from './routes/runtimeSearchGateway.js';
 import { handleStudentRuntime } from './routes/studentRuntime.js';
 import { handleAi } from './routes/ai.js';
 import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
-// 官方账单 API 自动对账：日级定时拉取（定时器 unref，不拖住进程退出）
-import { initializeProviderBillingScheduler, shutdownProviderBillingScheduler } from './services/providerBilling.js';
+// 2026-09-18：供应商账单两条线整体下线（用户口径）——服务、路由与「官方账单 API 日级定时拉取」
+// 一并删除，这里不再有任何账单 scheduler 的 import。
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, handlePublicFileAssets } from './routes/fileAssets.js';
 // 2026-09-13（P4 删积分）：adminCredits.js / websiteCredits.js 两个路由文件已删除（积分体系下线）。
@@ -161,7 +161,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 initializeAsyncGenerationQueue();
-initializeProviderBillingScheduler();
 
 server.listen(PORT, API_HOST, () => {
   console.log(`AI Kids Platform API listening on http://${API_HOST}:${PORT}`);
@@ -178,8 +177,6 @@ function shutdown(signal) {
     clearTimeout(forcedExit);
     try { shutdownCommunicationWorkers(); }
     catch (error) { console.error('[COMMUNICATION SHUTDOWN ERROR]', error); }
-    try { shutdownProviderBillingScheduler(); }
-    catch (error) { console.error('[PROVIDER BILLING SHUTDOWN ERROR]', error); }
     process.exit(0);
   });
 }
