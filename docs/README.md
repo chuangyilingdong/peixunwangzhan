@@ -143,29 +143,40 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：e3409d0（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T071301Z / commit e3409d0（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（e3409d0）：**首页标题按内容自适应字号**（原来 `white-space:nowrap`，用户在后台
+代码提交：0a9821c（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T074116Z / commit 0a9821c（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（0a9821c）：**登录页动效**（用 find-ui-motion 案例库挑的机制、**纯 CSS 实现**，
+      不引依赖：背景光斑漂移 / 卡片「模糊→清晰 + 上移」入场 / 表单逐行错开淡入 / 标题聚焦收拢 /
+      提交按钮内联转圈 + `aria-busy` / 按下反馈；全部有 `prefers-reduced-motion` 兜底）
+      ＋修掉一个**既存**的登录页错位 bug：`.website-login::after` 装饰线故意往右出血把容器
+      `scrollWidth` 撑大，而 `overflow:hidden` **仍是可编程滚动的容器** —— 点一下输入框/按钮，
+      浏览器为了把焦点滚进视野会把整页横向滚 224px（实测容器 left 从居中的 123 变成 -101）。
+      改成 `overflow-x: clip` 后复测 `scrollLeft=0`、left 回到 123。详细成因写在样式注释里，别改回 hidden
+      ＋修掉守卫的**偶发红**：`scripts/lib/classroomFixture.mjs` 建连接没有 busy 等待，而守卫的结构是
+      「本进程写临时库 + 同时 spawn 服务也开着同一个库」→ 偶发 `database is locked`（1 秒内失败、单跑又全过，
+      长期被误当成机器负载）。夹具被 20 多个守卫共用，加 `PRAGMA busy_timeout=5000` 一处修全体
+      上一版改动（e3409d0）：**首页标题按内容自适应字号**（原来 `white-space:nowrap`，用户在后台
       把标题写长后左右各被 `overflow:hidden` 裁掉 15px——实测那行 1471px / 视口 1440px；
       现在按最长一行的字宽算 `min(6vw, 92vw/字宽)`，CSS 换行兜底，四档宽度实测 clipping=0）
-      上一版改动（033531a，同一次上线的前一步）：①**首页清空的 CMS 字段不再回退显示** ——
-      根因是取值用了 `x || fallback`，空串是 falsy，运营清空后官网又退回内置默认文案
-      （用户清空的正是 heroKicker / trustTitle / trustDescription）；②CTA 从「预约演示」改叫
-      **「联系我们」**（顶栏/首页/页脚/法务页/各页结尾按钮 + /demo 页文案），迁移脚本同步把
-      CMS 已发布文案里的「预约演示」也换成「联系我们」（含历史版本）；③**官网上字体统一**成
-      平台后台那一套（`:root` 改用 `var(--cv-font)` = Geist + Noto Sans SC，与 admin/dsh 同源）；
+      更早一版改动（033531a）：①**首页清空的 CMS 字段不再回退显示** —— 根因是取值用了
+      `x || fallback`，空串是 falsy，运营清空后官网又退回内置默认文案（用户清空的正是
+      heroKicker / trustTitle / trustDescription）；②CTA 从「预约演示」改叫**「联系我们」**
+      （顶栏/首页/页脚/法务页/各页结尾按钮 + /demo 页文案），迁移脚本同步把 CMS 已发布文案里的
+      「预约演示」也换成「联系我们」（含历史版本）；③**官网上字体统一**成平台后台那一套
+      （`:root` 改用 `var(--cv-font)` = Geist + Noto Sans SC，与 admin/dsh 同源）；
       ④**新增后台「联系我们（商机）」页面** —— 官网表单一直写 `leads` 表、服务端也一直有
       `/api/admin/leads`，但此前**没有任何后台页面在读它**（用户问「提交了在哪收」的答案是收不到）
       部署后核验（2026-09-18 实跑 `.tmp/verify-prod-002.sh`，三层全过 → `PROD_ACCEPTANCE_OK`）：
-      BUILD-METADATA commit = e3409d0；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
-      **三端入口包各自与 release 产物逐字节一致**（admin 661781B e5df7b6f04cb…、
-      org 771024B 3c4bf8c46aa0…、website 707607B 44902a92e638…）；反向断言 9 项全过
-      真浏览器复核线上：首页标题左右各留 85px（clipping=0）、清空的两处字段确实不显示、
-      两个 CTA 都是「联系我们」、字体算出 `Geist, "Noto Sans SC"` 且 `document.fonts.check('16px Geist')` 为真
-      上一版（可回滚）：release 20260918T065543Z / commit f7b5802
-      整库备份：production/backups/20260918T071301Z/platform.db
-      更早两版（按时间倒序）：release 20260918T063303Z / 6e48631（官网改版）、
-      release 20260918T065543Z / f7b5802（品牌标换真 logo + 清「五格殿下」）
+      BUILD-METADATA commit = 0a9821c；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
+      **三端入口包各自与 release 产物逐字节一致**（admin 661860B 1b69d5f12659…、
+      org 771103B 73cee6952092…、website 707686B cde2a7f82981…）；反向断言 9 项全过
+      真浏览器复核线上：登录页三处动效都在跑（`loginCardIn` / `loginDrift` / `wlRingDriftA`）、
+      `overflow-x` 为 `clip`、点按钮后 `scrollLeft=0` 且容器仍居中在 123、错误提示正常
+      上一版（可回滚）：release 20260918T071301Z / commit e3409d0
+      整库备份：production/backups/20260918T074115Z/platform.db
+      更早三版（按时间倒序）：release 20260918T063303Z / 6e48631（官网改版）、
+      release 20260918T065543Z / f7b5802（品牌标换真 logo + 清「五格殿下」）、
+      release 20260918T071301Z / e3409d0（首页空值/CTA/字体/商机页 + 标题自适应）
       上一版改动（6e48631）：**官网改版** —— 品牌统一「灵动ai学院」、导航 7 项（首页/灵动学习/灵动课程/
       灵动作品/灵动介绍/机构手册/常见问题）+ 未登录时两个登录入口、新增 `/intro` 与 `/faq`、
       `/handbook` 改读 CMS、首页按用户给的样式提示词重做（黑底单屏 + 全屏视频 + 数据区走 CMS）、
