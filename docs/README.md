@@ -143,9 +143,16 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：ef947be（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T090418Z / commit ef947be（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（ef947be）：**四处观感/残留修复**（用户 2026-09-18 报的）
+代码提交：28159f7（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T091642Z / commit 28159f7（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（28159f7）：**登录页品牌主张恒定两行**（用户报「怎么是 3 行」）。根因是我上一版的字号
+      `clamp(1.9rem,3.3vw,3.6rem)` 在 1440 下算出约 58px，而第二行「掌握 Ai 时代的创造方式」12 个字
+      要 560px 才放得下、实际只够约 46px 的字 → 折成三行。改成**按「文案盒」宽度算字号**：
+      `.login-copy` 加 `container-type:inline-size`，字号用容器查询单位 `clamp(1.2rem,7cqw,2.6rem)`
+      （7cqw ≈ 留 15% 余量；最长行 12.2 字 → 刚好放得下约需 8.2cqw），两行加 `nowrap`
+      ⚠️ **别改回 vw**：vw 与盒子宽度无关，盒一变窄就折行 —— 这次就是那么折的；
+      两处媒体查询里写死的 vw 字号也一并改成 cqw。实测五档（1440/1280/1024/768/390）每行都 1 行、零溢出
+      上一版改动（ef947be）：**四处观感/残留修复**（用户 2026-09-18 报的）
       ①**强刷不再闪旧内容**：`index.html` 的启动骨架屏还是更早那版文案与配色，重做成品牌一致的加载态
       （黑底 + logo + 「正在进入课堂」+ 加载线，**不再写会过期的营销文案**）；首页的 `CMS_FALLBACK.HOME`
       还留着「给机构一套 / 能落地的青少年 AI 课 / 响应教育部…」，接口回来前会先渲染它 → 兜底对齐成 CMS
@@ -205,13 +212,13 @@
       ④**新增后台「联系我们（商机）」页面**（官网表单一直写 `leads` 表、服务端也一直有 `/api/admin/leads`，
       但此前没有任何后台页面在读它 —— 用户问「提交了在哪收」的答案是收不到）
       部署后核验（2026-09-18 实跑 `.tmp/verify-prod-002.sh`，三层全过 → `PROD_ACCEPTANCE_OK`）：
-      BUILD-METADATA commit = ef947be；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
+      BUILD-METADATA commit = 28159f7；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
       **三端入口包各自与 release 产物逐字节一致**（admin 662864B bdfaabbb489d…、
       org 772107B 90022893c16f…、website 760958B b1424de8047c…）；反向断言 9 项全过
       真浏览器复核线上：首页两个 specular 按钮都渲染出 canvas（164×84）、指针靠近时高光才亮、
       无横向溢出；登录页三处动效仍在跑、`overflow-x` 为 `clip`、点按钮后 `scrollLeft=0`
-      上一版（可回滚）：release 20260918T084810Z / commit 0340f66
-      整库备份：production/backups/20260918T090418Z/platform.db
+      上一版（可回滚）：release 20260918T090418Z / commit ef947be
+      整库备份：production/backups/20260918T091642Z/platform.db
       更早三版（按时间倒序）：release 20260918T063303Z / 6e48631（官网改版）、
       release 20260918T065543Z / f7b5802（品牌标换真 logo + 清「五格殿下」）、
       release 20260918T071301Z / e3409d0（首页空值/CTA/字体/商机页 + 标题自适应）
