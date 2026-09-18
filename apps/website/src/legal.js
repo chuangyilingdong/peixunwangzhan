@@ -1,6 +1,6 @@
 export const LEGAL_VERSION = '2026.09.03';
 export const LEGAL_EFFECTIVE_DATE = '2026-09-03';
-export const LEGAL_OWNER = '五格殿下 · 灵动ai学院';
+export const LEGAL_OWNER = '灵动ai学院';
 export const LEGAL_STATUS = '上线准备稿：正式备案主体与法务确认后生效';
 
 export const LEGAL_DOCUMENTS = {

@@ -1,5 +1,13 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
+// 品牌标（「灵动ai」横标，蓝 + 橙）。三端外壳、登录页、官网导航与页脚共用这一张图，
+// 不再各写一份「✦ + 文字」的临时标记 —— 那套符号当初只是占位，logo 到位后就该退休。
+// 深色底（官网黑底首页、官网登录页）由各自的样式表补一层白底药丸，否则蓝色的「灵动」在深色上几乎看不清。
+import brandLogo from './assets/lingdong-ai-logo.png';
+
+export function BrandLogo({ height = 26 }) {
+  return <img className="brand-logo" src={brandLogo} alt="灵动ai学院" style={{ height }} />;
+}
 
 const INTERNAL_TEST = typeof import.meta !== 'undefined' && import.meta.env?.VITE_DEPLOYMENT_MODE === 'internal-test';
 function InternalTestBanner() {
@@ -7,7 +15,8 @@ function InternalTestBanner() {
 }
 
 export function AppShell({ product, roleLabel, user, navigation, onLogout, onChangePassword, children }) {
-  return <><InternalTestBanner/><div className="app-shell"><aside className="sidebar"><div className="sidebar-top"><div className="brand"><span className="brand-mark">✦</span><span>{product}</span></div><div className="role-chip">{roleLabel}</div></div><nav className="app-nav">{navigation.map((item) => item.heading ? <p className="nav-heading" key={item.heading}>{item.heading}</p> : <NavLink key={item.to} to={item.to} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}><span className="nav-icon">{item.icon}</span>{item.label}{item.badge && <small>{item.badge}</small>}</NavLink>)}</nav><div className="sidebar-help"><span>✦</span><div><b>需要帮助？</b><small>查看开课与创作指南</small></div></div><div className="sidebar-footer"><div className="avatar">{(user?.displayName || user?.login || '?').slice(0, 1)}</div><div><strong>{user?.displayName || user?.login}</strong><small>{user?.login}</small></div>{onChangePassword ? <button className="icon-button" title="账号安全" onClick={onChangePassword}>🔑</button> : null}<button className="icon-button" title="退出登录" onClick={onLogout}>↪</button></div></aside><main className="app-main"><div className="app-topbar"><span className="crumb">灵动ai学院 / {roleLabel}</span><div><span className="top-status">● 服务正常</span><button className="top-help">?</button></div></div><div className="page-content">{children}</div></main></div></>;
+  // product 这个 prop 仍由调用方传（接口不变），但品牌区显示的是 logo —— 名字写在 img 的 alt 里。
+  return <><InternalTestBanner/><div className="app-shell"><aside className="sidebar"><div className="sidebar-top"><div className="brand"><BrandLogo height={22} /></div><div className="role-chip">{roleLabel}</div></div><nav className="app-nav">{navigation.map((item) => item.heading ? <p className="nav-heading" key={item.heading}>{item.heading}</p> : <NavLink key={item.to} to={item.to} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}><span className="nav-icon">{item.icon}</span>{item.label}{item.badge && <small>{item.badge}</small>}</NavLink>)}</nav><div className="sidebar-help"><span>✦</span><div><b>需要帮助？</b><small>查看开课与创作指南</small></div></div><div className="sidebar-footer"><div className="avatar">{(user?.displayName || user?.login || '?').slice(0, 1)}</div><div><strong>{user?.displayName || user?.login}</strong><small>{user?.login}</small></div>{onChangePassword ? <button className="icon-button" title="账号安全" onClick={onChangePassword}>🔑</button> : null}<button className="icon-button" title="退出登录" onClick={onLogout}>↪</button></div></aside><main className="app-main"><div className="app-topbar"><span className="crumb">灵动ai学院 / {roleLabel}</span><div><span className="top-status">● 服务正常</span><button className="top-help">?</button></div></div><div className="page-content">{children}</div></main></div></>;
 }
 
 export function LoginPanel({ title, description, clientType, demos = [], onLogin }) {
@@ -36,7 +45,7 @@ export function LoginPanel({ title, description, clientType, demos = [], onLogin
   }
   return <div className="login-page">
     <section className="login-intro">
-      <div className="brand"><span className="brand-mark">✦</span><span>灵动ai学院</span></div>
+      <div className="brand"><BrandLogo height={30} /></div>
       <div className="login-orbit a"></div><div className="login-orbit b"></div>
       <div className="login-copy"><p className="login-eyebrow">青少年 AI 创作开课平台</p><h1>{title}</h1><p>{description}</p><div className="login-points"><span>✦ 创作</span><span>✦ 课程</span><span>✦ 作品</span></div></div>
     </section>

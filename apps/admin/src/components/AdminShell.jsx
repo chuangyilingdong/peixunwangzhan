@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import { BrandLogo } from '@platform/shared';
 
 export function AdminShell({ user, navigation = [], onLogout, children }) {
   const [open, setOpen] = useState(false);
@@ -10,7 +11,7 @@ export function AdminShell({ user, navigation = [], onLogout, children }) {
     <a className="admin-skip" href="#admin-content">跳转到主要内容</a>
     <div className="admin-layout">
       <aside className="admin-sidebar">
-        <div className="admin-brand"><strong>灵动ai学院</strong><span>平台管理中心</span></div>
+        <div className="admin-brand"><BrandLogo height={24} /><span>平台管理中心</span></div>
         <button className="secondary-button admin-menu" aria-expanded={open} aria-controls="admin-navigation" onClick={() => setOpen(!open)}>导航菜单</button>
         <nav id="admin-navigation" className={`admin-navigation ${open ? 'is-open' : ''}`} aria-label="平台管理导航">
           {navigation.map((item) => item.heading ? <h2 key={item.heading}>{item.heading}</h2> : <NavLink key={item.to} to={item.to}>{item.label}</NavLink>)}
