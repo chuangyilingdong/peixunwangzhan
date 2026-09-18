@@ -143,15 +143,23 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：6e48631（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T063303Z / commit 6e48631（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（6e48631）：**官网改版** —— 品牌统一「灵动ai学院」、导航 7 项（首页/灵动学习/灵动课程/
+代码提交：f7b5802（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T065543Z / commit f7b5802（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（f7b5802）：**品牌标换成真 logo**（「灵动ai」横标，三端外壳/登录页/官网导航与页脚共用
+      `packages/shared/src/assets/lingdong-ai-logo.png`；旧的「✦ + 文字」占位标与其死样式一起退休；
+      深色底——官网黑底首页顶栏、AppShell 深色侧栏、登录页 intro——加白底药丸保证辨识度）+
+      **清掉「五格殿下」**（官网页脚版权、协议页「主体」）。这一版**不需要数据迁移**：
+      已查生产库 CMS 内容里没有「五格殿下」（website_contents 0 行 / 历史版本 0 行）
+      上一版（可回滚）：release 20260918T063303Z / commit 6e48631
+      上一版改动（6e48631）：**官网改版** —— 品牌统一「灵动ai学院」、导航 7 项（首页/灵动学习/灵动课程/
       灵动作品/灵动介绍/机构手册/常见问题）+ 未登录时两个登录入口、新增 `/intro` 与 `/faq`、
       `/handbook` 改读 CMS、首页按用户给的样式提示词重做（黑底单屏 + 全屏视频 + 数据区走 CMS）、
       机构手册按 7 张参考图重写为 8 节 + 7 行对比表；并删除「灵动值」营销口径与「积分激励」字段说法
-      ⚠️ **上线前先跑了内容迁移** `migrate-website-content-20260918.mjs`（CMS 是 insert-only，
+      ⚠️ 那一版**上线前先跑了内容迁移** `migrate-website-content-20260918.mjs`（CMS 是 insert-only，
       改种子对已落库的行无效）：品牌改名（含历史版本）、`灵动值计费`→`授权次数`、
       补种 INTRO / HANDBOOK、补 HOME.stats 与一条 FAQ；跑完残留 0、幂等
+      （⚠️ 之后用户在后台改过首页文案——「国内首家青少年Ai培训」与数据区的 3 门/48 节就是他改的，
+      这正是首页数据区走 CMS 的目的：改内容不用发版）
       生效内容（累积，自 release 20260918T053148Z / 843ebe6 起）：**P03 平台机构与授权次数配置按 8 张线框图对齐** —— 机构列表/详情（含电话脱敏、
       4 入口卡、数据概览）/禁用抽屉（原因必填）/课包与授权次数（添加课包、调整授权次数两个抽屉）/
       **授权次数变更记录**（新表 `course_quota_changes`，5 类变更、变更前后值都记）；机构新增
@@ -161,16 +169,14 @@
       另：算力额度一类的东西**一律不拦人**（`enforced: false` 是机器可读承诺）；唯一还按"量"拦的是
       **授权次数不足**（机构把课包分给学生时次数不够）。
       部署后核验（2026-09-18 实跑 `.tmp/verify-prod-002.sh`，三层全过 → `PROD_ACCEPTANCE_OK`）：
-      BUILD-METADATA commit = 6e48631；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
-      **三端入口包各自与 release 产物逐字节一致**（admin 656089B 4f5e1b396464…、
-      org 770993B 9561ef4bed51…、website 707253B bd52e9330009… —— 三端都变了是对的，
-      这一版改了官网 + 三端外壳的品牌名与文案）；反向断言 8 项全过
+      BUILD-METADATA commit = f7b5802；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
+      **三端入口包各自与 release 产物逐字节一致**（admin 656162B 487b5843b2c3…、
+      org 771024B 3c4bf8c46aa0…、website 707249B bc2e644d1b28…）；反向断言 **9 项**全过
       （内部成本口径 `预估消耗` / `perStudentBudgetFen` / `estimatedCreditsPerPerson` / `usage/wallet` /
-      `上游账户余额` 5 项 + 已删口径 `灵动值` / 旧品牌名 2 种写法 3 项）
-      真浏览器复核线上：官网 12 个路由逐页（`/`、`/intro`、`/faq`、`/handbook`、两个登录入口…）
-      无横向溢出、无 404、7 项导航与两个登录入口在位
-      上一版（可回滚）：release 20260918T054145Z / commit 592a12e
-      整库备份：production/backups/20260918T063240Z/platform.db（**迁移前打的**，12.7MB，含 release/ 快照与 logs/）
+      `上游账户余额` 5 项 + 已删口径与旧名 `灵动值` / 旧品牌名 2 种写法 / `五格殿下` 4 项）
+      真浏览器复核线上：官网 12 个路由逐页 + 生产页脚版权「© 2026 灵动ai学院」、
+      协议页主体「灵动ai学院」、两种底色下的 logo（黑底首页与登录页是白底药丸、浅底内页原色）
+      整库备份：production/backups/20260918T065543Z/platform.db（本次发布前自动打的）
       ⚠️ 备份目录名与 release 戳是**两个独立时间戳**：可能相同、也可能差 1 秒 ——
       找它请用 `ls -t production/backups/ | head -1`，别按 release 戳猜
       ⚠️ 验收脚本第 ③ 层**必须按端查各自的包**（管理端的中文拿去 grep 机构端的包会全红，
