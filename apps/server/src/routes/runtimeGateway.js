@@ -24,7 +24,7 @@ import { generationProviderInfo, getGenerationProvider } from '../services/gener
 import { getProviderApiKey } from '../services/providerSecret.js';
 import { recordAiUsage } from '../services/creditUsage.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
-import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
+import { priceFenFor } from '../services/computePool.js';
 import { assertExternalAiAllowed, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { createDsmlStripper, stripDsml } from '../services/dsmlFilter.js';
 
@@ -374,7 +374,6 @@ export async function handleRuntimeGateway(ctx) {
     { orgId: payload.o, studentId: payload.u, lessonId: session.lesson_id || '', modality: 'TEXT' },
   );
   // 预算检查是**提示性**的（enforced 恒为 false，见 computePool 注释）：课时金额超了只提醒平台，不阻断学生生成
-  assertComputePoolBudget({ sessionId: session.id });
   const provider = getGenerationProvider(selection);
   const providerInfo = generationProviderInfo(selection);
   assertExternalAiAllowed({ mode: providerInfo.mode, allowStudentExternalContent: policy.allowStudentExternalContent });

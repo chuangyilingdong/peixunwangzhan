@@ -17,7 +17,7 @@ import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
 import { modalityChannel } from '../services/modelCapabilities.js';
 import { providerSelectionForModality } from './aiGeneration.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
-import { assertComputePoolBudget, computePoolSummary, priceFenFor } from '../services/computePool.js';
+import { computePoolSummary, priceFenFor } from '../services/computePool.js';
 
 /** 会话归属的课包 id（算力池的键）。会话只存了课时，所以这里回查一次。 */
 function conversationSeriesId(conversation) {
@@ -212,7 +212,6 @@ function assertChatPreflight({ user, orgId, context, model = '' }) {
   if (!(context.lesson?.capabilities || []).includes('text')) throw errors.forbidden('本课时未开放 AI 文字能力', 'LESSON_CAPABILITY_DISABLED');
   // 2026-09-13（P4 删积分）：成员 AI 上限 / 周期额度两道刹车已删除（额度看算力池）。
   // 算力池（学生 × 课包）：对话也从这个池子扣，与画布/视频/音乐共用一个上限
-  assertComputePoolBudget({ userId: user.id, seriesId: context.series?.id || null, modality: 'TEXT', model });
 }
 
 function sseOpen(ctx) {

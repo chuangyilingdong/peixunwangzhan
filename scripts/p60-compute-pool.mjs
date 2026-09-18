@@ -135,18 +135,17 @@ try {
   check('④ 课堂报表：不强制预算且成本为未知',
     row?.enforced === false && row?.budgetState === 'UNKNOWN', JSON.stringify(row));
 
-  /* ⑤ 四种模态都在同一个闸门里：同一个池子耗尽 → 另外三类也一样被拦 */
+  /* ⑤ 【2026-09-18 口径变更 —— 不是测试漂移】旧的「按金额的学生算力上限」闸门已退役：
+     `assertComputePoolBudget` 是个从不抛错的空壳，池子那几个兼容函数恒返回 null / unlimited
+     （用户已定：学生额度只留一套**按钱的**，6 套收敛成 1 套，见 docs/operations/平台AI与CU配置-重梳理-20260918.md）。
+     所以这里不再断言「四种模态被同一个闸门拦住」（那个闸门本身没了），
+     改成**反向断言：退役的兼容桩不许加回来** —— 否则等于有人又铺一层已经退役的额度体系。 */
   Object.assign(process.env, baseEnv);
-  const { assertComputePoolBudget } = await import('../apps/server/src/services/computePool.js');
-  const identity = (() => { const db = new DatabaseSync(dbPath); const r = db.prepare("SELECT id FROM users WHERE login='student-2'").get(); db.close(); return r; })();
-  const blockedModalities = [];
-  for (const modality of ['TEXT', 'IMAGE', 'VIDEO', 'MUSIC']) {
-    try { assertComputePoolBudget({ userId: identity.id, seriesId: seeded.seriesId, modality, model: 'p60-model' }); blockedModalities.push(`${modality}:未拦`); }
-    catch (error) { blockedModalities.push(`${modality}:${error.code}`); }
-  }
-  check('⑤ 池子耗尽后，对话/图片/视频/音乐四类都不受旧金额限额阻止',
-    blockedModalities.length === 4 && blockedModalities.every((item) => item.endsWith(':未拦')),
-    JSON.stringify(blockedModalities));
+  const retiredPoolApi = await import('../apps/server/src/services/computePool.js');
+  const RETIRED_POOL_EXPORTS = ['seriesBudgetFen', 'poolUsedFen', 'computePoolStatus', 'computePoolReport', 'budgetedSeriesOverview', 'assertComputePoolBudget'];
+  check('⑤ 退役的池子兼容桩不许加回来（否则又铺一层死额度）',
+    RETIRED_POOL_EXPORTS.every((name) => typeof retiredPoolApi[name] === 'undefined'),
+    `仍在导出：${RETIRED_POOL_EXPORTS.filter((name) => typeof retiredPoolApi[name] !== 'undefined').join('、')}`);
   check('⑤ 价格按模态区分（视频单价 > 对话单价，说明不是一口价）',
     (await api('/api/admin/compute-pricing', { token: admin })).data.pricing.perCall.VIDEO > (await api('/api/admin/compute-pricing', { token: admin })).data.pricing.perCall.TEXT,
     'VIDEO vs TEXT');
@@ -166,7 +165,9 @@ try {
     const db = new DatabaseSync(dbPath);
     db.prepare("UPDATE usage_records SET cost_fen=99999 WHERE status='FAILED'").run();
     db.close();
-    check('⑦ FAILED历史非零金额不计入池子', pool.poolUsedFen({ userId: identity.id, seriesId: seeded.seriesId }) === null);
+    // 2026-09-18：原来这里断言 `pool.poolUsedFen(...) === null` —— 那个函数是个恒返回 null 的兼容桩，
+    // 已随口径收敛删掉（口径变更，不是测试漂移）。「失败调用不计入」这件事由下面两条**走真实报表口径**
+    // 的断言继续保证，比断言一个死函数强。
     const report = (await poolRows()).find(item => item.seriesId === seeded.seriesId);
     check('⑦ FAILED历史非零金额不计入池子报表', report?.usedFen === null);
     const summary = await api('/api/admin/billing/usage-overview?status=FAILED', { token: admin });

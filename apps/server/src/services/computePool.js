@@ -105,14 +105,6 @@ export function salePriceFenSuccessSql(alias = '') {
   return `COALESCE(SUM(CASE WHEN ${prefix}status='SUCCESS' THEN ${prefix}sale_price_fen ELSE 0 END),0)`;
 }
 
-/** Compatibility responses expose no student spending ceiling. */
-export function seriesBudgetFen() { return null; }
-export function poolUsedFen() { return null; }
-export function computePoolStatus({ seriesId } = {}) {
-  return { seriesId: seriesId || null, capFen: null, usedFen: null, remainFen: null, unlimited: true, usagePercent: null, enforced: false };
-}
-export function computePoolReport(options = {}) { return classroomBudgetReport(options); }
-
 /**
  * 对账：**池子账（应用侧，四种模态、按单价折算）** vs **网关账（精确，只含对话/图片）**。
  *
@@ -238,16 +230,19 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
  * 没有课包上下文或没填预算时 `unlimited: true`（口径：留空 = 不限制，只记账）。
  */
 export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}) {
-  const status = computePoolStatus({ userId, seriesId });
-  const toYuan = (fen) => (fen === null || fen === undefined ? null : Number((Number(fen) / 100).toFixed(2)));
+  // 2026-09-18：这里原来返回「每学生算力上限」的用量（cap/used/remain），但那套池子口径
+  // 早已降级成恒 `unlimited` 的兼容桩（`computePoolStatus` 已删）。现在把话说清楚：
+  // **没有按课包的学生上限**，不填 = 不限制、只记账；要控成本走「按钱的」那一套（正在收敛）。
+  // 前端仍在读 `unlimited` / `capYuan` 这几个键，所以**形状保持不变**、值恒为「不限」。
+  void userId;
   return {
-    seriesId: status.seriesId,
+    seriesId: seriesId || null,
     seriesTitle: seriesTitle || (seriesId ? (row('SELECT title FROM course_series WHERE id=?', [seriesId])?.title || null) : null),
-    unlimited: status.unlimited,
-    capYuan: toYuan(status.capFen),
-    usedYuan: toYuan(status.usedFen),
-    remainYuan: toYuan(status.remainFen),
-    usagePercent: status.usagePercent,
+    unlimited: true,
+    capYuan: null,
+    usedYuan: null,
+    remainYuan: null,
+    usagePercent: null,
   };
 }
 
@@ -257,12 +252,10 @@ export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}
  * 就是这么问的）。这里把「配了预算、但还没人用」的课包也列出来，让「我填上了」在界面上看得见。
  * ⚠️ 只读我们自己的库（不需要算力网关）—— 没配网关时也要能看到。
  */
-export function budgetedSeriesOverview() { return lessonPlatformBudgetOverview(); }
-
-// Compatibility preflight: advisory only, regardless of modality or historical price.
-export function assertComputePoolBudget({ seriesId = null, sessionId = null } = {}) {
-  return { costFen: 0, seriesId, enforced: false, ...classroomBudgetStatus(sessionId) };
-}
+// 2026-09-18 删除：seriesBudgetFen / poolUsedFen / computePoolStatus / computePoolReport /
+// budgetedSeriesOverview / assertComputePoolBudget —— 全是**兼容桩或空壳**（恒返回 null / unlimited，
+// 从不拦截也从不返回有效数据），全仓零外部调用方（只有它们自己的导入行）。
+// 「每学生算力上限」这件事历史上被实现了 6 遍、只有课堂次数上限真的会拦人，正在按用户口径收敛成 1 套按钱的。
 
 /** Known upstream amounts are a lower bound whenever any attempt has unknown cost. */
 export function classroomBudgetStatus(sessionId) {

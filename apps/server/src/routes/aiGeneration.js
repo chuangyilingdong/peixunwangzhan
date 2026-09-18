@@ -9,7 +9,7 @@ import { assertSessionAiControls } from '../services/aiControls.js';
 import { recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
-import { assertComputePoolBudget, priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
+import { priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
 import { reserveCourseCu, settleCourseCu, releaseCourseCu } from '../services/courseCuLedger.js';
 
 /** 项目归属的课包 id（算力池的键）。失败路径上没有 context，所以这里按课时回查一次。 */
@@ -158,7 +158,6 @@ export function assertGenerationPreflight({ user, orgId, context, modality, proj
   if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
   // 算力池（学生 × 课包，四种模态共用一个池子）—— 这一条对**每一种模态**都生效，
   // 所以视频/音乐也被它管住（它们走不到网关，只有这里能拦）。
-  assertComputePoolBudget({ userId: user.id, seriesId: context.series?.id || null, sessionId: context.activeSession?.id || null, modality, model, units });
 }
 
 function normalizeAsset(value) {
@@ -410,7 +409,7 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
     const settledBoxId = row('SELECT box_id FROM generation_jobs WHERE id=?', [jobId])?.box_id || '';
     if (settledBoxId) assertBoxNotGenerated({ projectId: project.id, boxId: settledBoxId, excludeJobId: jobId });
     // 2026-09-13（P4 删积分）：成员 AI 上限 / 周期额度两道刹车已删除，且不再扣积分。
-    // 额度由算力池管（调用前的 assertComputePoolBudget 已经拦过一次，这里收尾记账）。
+    // 这里只收尾记账；额度不在这一层拦（历史上那句 assertComputePoolBudget 是个从不抛错的空壳，2026-09-18 已删）。
     // C3 前置：上游给了 token 用量就记下来（计费仍是「每次调用 × 单价」，不改口径）
     const firstAssetTokens = assetPayloads.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
     // P90：优先用 provider 返回的 usage 回执（流式是最后一帧给的），退回产物 metadata 里的那份。

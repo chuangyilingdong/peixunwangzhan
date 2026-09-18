@@ -28,7 +28,7 @@ import {
 } from './runtimeGateway.js';
 import { recordAiUsage } from '../services/creditUsage.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
-import { assertComputePoolBudget, priceFenFor } from '../services/computePool.js';
+import { priceFenFor } from '../services/computePool.js';
 import { assertExternalAiAllowed, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { collectUsageEvidence, computeContractCost, contractCostRuleSnapshot } from '../services/upstreamCost.js';
 
@@ -135,7 +135,6 @@ export async function handleRuntimeSearchGateway(ctx) {
     // 学生在搜索框里输入的话会**发到平台外部**：与聊天同一个闸门，不许外发时一并挡住搜索。
     assertExternalAiAllowed({ mode: 'external-adapter', allowStudentExternalContent: policy.allowStudentExternalContent });
     // 预算检查与聊天同口径（提示性，不阻断学生）。
-    assertComputePoolBudget({ sessionId: session.id });
     upstream = {
       ...searchUpstreamCredentials(channel, selection),
       model: selection.model,

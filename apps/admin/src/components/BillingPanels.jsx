@@ -1,10 +1,12 @@
 // 平台端「模型与算力」页的面板（2026-09-13：从原 PlatformBilling.jsx 拆出）。
 //
 // ProviderPolicyPanel  ① 上游渠道与模型：多渠道 + 每渠道多模型 + 能力路由 + 每模型能力 + 「用当前渠道试一次」
-// BillingUsagePanel    ④ 用量与账单：全平台算力消耗、能力分布、机构排名、逐条明细
 // 模态开关与预警（BillingSettings）单独作为步骤⑤，由合并页直接引用。
-import { useEffect, useMemo, useState } from 'react';
-import { Empty, ErrorState, formatDate, formatYuan, Loading, MetricCard, Notice, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+//
+// 2026-09-18：删掉 BillingUsagePanel（④ 用量与账单）—— 它**全仓零引用**（只有本文件头这行注释提到它），
+// 里面那套 14 字段大筛选表单与 4 张卡从来没人能看到。平台端看用量走「调用账 / 机构与学员」两个视图。
+import { useEffect, useState } from 'react';
+import { Empty, ErrorState, formatDate, formatYuan, Loading, Notice, Panel, useData } from '@platform/shared';
 import { downloadCsv } from '../shared.jsx';
 
 // 视频模型的输入画面支持方式（可多选）：一个模型可以既支持文生、也支持图生/首尾帧。
@@ -439,80 +441,6 @@ export function ProviderPolicyPanel({ api }) {
       <div className="row-actions top-gap"><button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部渠道配置'}</button></div>
     </form>
   </Panel>;
-}
-
-export function BillingUsagePanel({ api }) {
-  const organizations = useData(() => api.get('admin/organizations/options'), [api]);
-  const [filters, setFilters] = useState({ days: '30', orgId: '', modality: '', status: '', search: '', startDate: '', endDate: '' });
-  const [page, setPage] = useState(1); const [limit, setLimit] = useState(20); const [sort, setSort] = useState('created');
-  const [optionSearch, setOptionSearch] = useState('');
-  const filterOptions = useData(() => api.get(`admin/billing/filter-options?orgId=${encodeURIComponent(filters.orgId)}`), [api, filters.orgId]);
-  const filterPolicy = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
-  const channels = filterPolicy.data?.policy?.channels || [];
-  const modelOptions = [...new Set(channels.filter(item => !filters.channelId || item.id === filters.channelId).flatMap(item => [...(item.models || []), item.model].filter(Boolean)))].map(id => ({ id, name:id }));
-  const choices = [
-    ['studentId','学生',(filterOptions.data?.students || []).map(item => ({...item,name:`${item.name || item.login}（${item.login}）`}))],
-    ['channelId','渠道',channels], ['model','模型',modelOptions],
-    ['seriesId','课包',filterOptions.data?.series || []],
-    ['lessonId','课时',(filterOptions.data?.lessons || []).filter(item => !filters.seriesId || item.seriesId === filters.seriesId)],
-  ];
-  const query = useMemo(() => { const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)); params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort); return params; }, [filters, page, limit, sort]);
-  const overview = useData(() => api.get(`admin/billing/usage-overview?${query.toString()}`), [api, query]);
-  const records = useData(() => api.get(`admin/billing/usage-records?${query.toString()}`), [api, query]);
-  const [exportingRecords, setExportingRecords] = useState(false);
-  const [exportError, setExportError] = useState('');
-  async function exportRecords() {
-    setExportingRecords(true); setExportError('');
-    try {
-      const params = new URLSearchParams(query); params.set('limit','100');
-      const all = []; let totalPages = 1;
-      for (let next = 1; next <= totalPages; next++) { params.set('page',String(next)); const data = await api.get(`admin/billing/usage-records?${params}`); totalPages = data.totalPages; all.push(...data.items); }
-      const cell = value => { let text = String(value ?? ''); if (/^[\s]*[=+@-]/.test(text)) text = "'" + text; return '"' + text.replaceAll('"','""') + '"'; };
-      const lines = [['时间','机构ID','学生ID','模型','状态','失败原因','上游成本（分，空为未知）','上游尝试'].map(cell).join(',')];
-      all.forEach(item => lines.push([item.createdAt,item.orgId,item.userId,item.model,item.status,item.failCode,item.costFen,JSON.stringify(item.attempts || [])].map(cell).join(',')));
-      downloadCsv('compute-usage.csv',lines.join(String.fromCharCode(13,10)));
-    } catch(error) { setExportError(error.message); } finally { setExportingRecords(false); }
-  }
-  function updateFilter(key, value) { setFilters((oldFilters) => ({ ...oldFilters, [key]: value, ...(key === 'orgId' ? {studentId:''} : {}), ...(key === 'channelId' ? {model:''} : {}), ...(key === 'seriesId' ? {lessonId:''} : {}) })); setPage(1); }
-  return <>
-    <p className="muted">用户包算力。金额仅为已知上游成本小计，不含未知部分；估算与上游报告不代表已对账付款。历史售价不计入成本。</p>
-    <div className="metrics">
-      <MetricCard label="已知上游成本小计" value={formatYuan(overview.data?.totalFen || 0)} hint={`当前筛选 · 近 ${filters.days} 日`} />
-      <MetricCard label="能力类型" value={overview.data?.usage?.length || 0} hint="已产生消耗的能力类型" tone="teal" />
-      <MetricCard label="Top 机构" value={overview.data?.topOrgs?.[0]?.name || '—'} hint={overview.data?.topOrgs?.[0] ? `已知成本小计 ${formatYuan(overview.data.topOrgs[0].costFen)}` : '暂无消耗'} tone="orange" />
-      <MetricCard label="当前明细" value={records.data?.total ?? 0} hint="当前筛选条件命中的记录数" tone="pink" />
-    </div>
-    <div className="split">
-      <Panel title="能力已知成本"><table><thead><tr><th>能力</th><th>调用次数</th><th>消耗</th></tr></thead><tbody>{(overview.data?.usage || []).map((item) => <tr key={item.modality}><td>{item.modality}</td><td>{item.calls}</td><td>{item.costFen == null ? '未知' : formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
-      <Panel title="机构已知成本 Top 10"><table><thead><tr><th>机构</th><th>已知成本小计</th></tr></thead><tbody>{(overview.data?.topOrgs || []).map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.costFen == null ? '未知' : formatYuan(item.costFen)}</td></tr>)}</tbody></table></Panel>
-    </div>
-
-    <Panel title="计费明细筛选" actions={<button className="secondary-button" disabled={exportingRecords} onClick={exportRecords}>{exportingRecords ? '导出中…' : '导出筛选明细 CSV'}</button>}>
-      {exportError && <Notice tone="danger">{exportError}</Notice>}
-      <div className="form-grid">
-        <label>时间范围<select value={filters.days} onChange={(e) => updateFilter('days', e.target.value)}><option value="1">今日</option><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="365">近一年</option></select></label>
-        <label>开始日期<input type="date" value={filters.startDate} onChange={(e) => updateFilter('startDate', e.target.value)} /></label>
-        <label>结束日期<input type="date" value={filters.endDate} onChange={(e) => updateFilter('endDate', e.target.value)} /></label>
-        <label>机构<select value={filters.orgId} onChange={(e) => updateFilter('orgId', e.target.value)}><option value="">全部机构</option>{organizations.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) || null}</select></label>
-        <label>能力<select value={filters.modality} onChange={(e) => updateFilter('modality', e.target.value)}><option value="">全部能力</option><option value="TEXT">TEXT</option><option value="IMAGE">IMAGE</option><option value="MUSIC">MUSIC</option><option value="VIDEO">VIDEO</option></select></label>
-        <label>状态<select value={filters.status} onChange={(e) => updateFilter('status', e.target.value)}><option value="">全部状态</option><option value="SUCCESS">成功</option><option value="FAILED">失败</option><option value="BLOCKED">拦截</option></select></label>
-        <label>搜索筛选选项<input value={optionSearch} placeholder="输入学生、渠道、模型或课程名称" onChange={e => setOptionSearch(e.target.value)} /></label>
-        {choices.map(([key,label,items]) => <label key={key}>{label}<select disabled={key === 'studentId' && filterOptions.loading} value={filters[key] || ''} onChange={e => updateFilter(key,e.target.value)}><option value="">全部{label}</option>{filters[key] && !items.some(item => item.id === filters[key]) && <option value={filters[key]}>已指定（高级筛选）</option>}{items.filter(item => item.id === filters[key] || String(item.name || item.id).toLowerCase().includes(optionSearch.toLowerCase())).map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label>)}
-        {(filterOptions.error || filterPolicy.error) && <Notice tone="danger">筛选选项加载失败，请刷新页面重试；也可展开高级筛选输入编号。</Notice>}
-        <details><summary>高级筛选 · 精确编号</summary>{[['studentId','学生ID'],['channelId','渠道ID'],['model','模型ID'],['seriesId','课包ID'],['lessonId','课时ID']].map(([key,label]) => <label key={key}>{label}<input value={filters[key] || ''} onChange={e => updateFilter(key,e.target.value)} /></label>)}</details>
-        <label>关键词<input value={filters.search} placeholder="机构 / 用户 / 项目 / 作品" onChange={(e) => updateFilter('search', e.target.value)} /></label>
-        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="costFen">消耗</option></select></label>
-        <label>每页数量<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value={10}>10 条/页</option><option value={20}>20 条/页</option><option value={50}>50 条/页</option></select></label>
-      </div>
-    </Panel>
-    <Panel title="计费明细">
-      {overview.loading || records.loading || organizations.loading ? <Loading label="正在读取计费数据。" /> : records.error ? <ErrorState error={records.error} onRetry={records.refresh} /> : records.data?.items?.length ? <>
-        <ListResultSummary total={records.data.total} page={records.data.page} totalPages={records.data.totalPages} label="条记录" />
-        <div className="table-wrap"><table><thead><tr><th>时间</th><th>机构 / 用户</th><th>能力 / 模型</th><th>课堂上下文</th><th>上游成本 / 历史售价</th><th>上游尝试 / 成本</th><th>状态</th></tr></thead><tbody>{records.data.items.map((item) => <tr key={item.id}><td>{formatDate(item.createdAt)}</td><td><strong>{item.organizationName || item.orgId}</strong><div className="muted">{item.userName || item.userLogin || item.userId}</div></td><td>{item.modality}<div className="muted">{item.model}</div></td><td>{item.className || '非课堂调用'}{item.projectTitle ? <div className="muted">项目：{item.projectTitle}</div> : null}{item.workTitle ? <div className="muted">作品：{item.workTitle}</div> : null}</td><td>{item.costFen == null ? '未知' : formatYuan(item.costFen)}<div className="muted">历史售价：{formatYuan(item.historicalSaleFen || 0)}（不代表上游成本）</div></td><td>{item.attempts?.length ? item.attempts.map(attempt => <details key={attempt.id}><summary>#{attempt.attempt} {attempt.channelId} · {attempt.model} · {attempt.status}</summary><div>{attempt.costSource === 'ESTIMATED' ? '估算' : attempt.costSource === 'MOCK' ? '模拟' : attempt.costSource === 'REPORTED' ? '上游报告（CNY，未对账）' : '未知'}成本：{attempt.upstreamCostFen == null ? '未知' : formatYuan(attempt.upstreamCostFen)}</div><div>{attempt.errorCode} {attempt.errorMessage}</div>{attempt.taskId && <div>上游任务：{attempt.taskId}</div>}</details>) : <span className="muted">历史未记录，成本未知</span>}</td><td><Status value={item.status} /><div className="muted">{item.failCode}</div></td></tr>)}</tbody></table></div>
-        <Pagination page={records.data.page} totalPages={records.data.totalPages} onChange={setPage} disabled={records.loading} />
-      </> : <Empty title="当前筛选条件下无计费记录" body="可以调整时间范围、机构、能力、状态或关键词。" />}
-    </Panel>
-  </>;
 }
 
 

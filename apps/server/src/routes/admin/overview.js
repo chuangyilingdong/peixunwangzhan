@@ -1,6 +1,6 @@
 // 平台管理端「overview」域路由：从 adminOrg.js 拆出，行为不变。
 import { clearGatewayRouteCache, createGatewayToken, gatewayUsageOverview, getComputeGatewayConfig, listGatewayChannels, listGatewayTokens, saveComputeGatewayConfig, testComputeGateway } from '../../services/computeGateway.js';
-import { classroomBudgetReport, lessonPlatformBudgetOverview, budgetedSeriesOverview, computePoolReconciliation, computePoolReport, getComputePricing, saveComputePricing } from '../../services/computePool.js';
+import { classroomBudgetReport, lessonPlatformBudgetOverview, computePoolReconciliation, getComputePricing, saveComputePricing } from '../../services/computePool.js';
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
@@ -279,7 +279,7 @@ export async function handleOverview(ctx, part, method) {
     const computeByModality = rows(`SELECT modality,SUM(CASE WHEN cost_source<>'UNKNOWN' THEN upstream_cost_fen ELSE 0 END) fen,COUNT(*) calls
       FROM compute_attempts WHERE ${attemptScope.where} GROUP BY modality ORDER BY fen DESC`,attemptScope.params);
     // 池子健康度是**存量口径**（不随筛选时间变化）：有消耗的池子里，多少接近上限、多少已用尽。
-    // 复用算力网关页那份报表（computePoolReport），避免两处各算一套。
+    // 复用同一份报表口径（classroomBudgetReport），避免两处各算一套。
     const poolRows = classroomBudgetReport({ limit: 500, orgId: orgFilter });
     const pools = {
       counted: poolRows.length,
