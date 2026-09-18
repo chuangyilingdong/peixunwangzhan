@@ -177,14 +177,9 @@ try {
 
   const captureCopy = (target = page) => target.evaluate(() => {
     const text = (sel) => { const el = document.querySelector(sel); return el ? el.innerText.replace(/\s+/g, ' ').trim() : null; };
-    // 2026-09-18 晚：标题换成 MaskedHeading 之后结构变了（一行一个组件、文字在 color:transparent 的
-    // `.masked-heading__measure` 里）。**别再按 span/em 这种位置选择器取文案** —— 一改结构就误判
-    // （上一版就是这么把「标题」读成了两遍、还把口径③ 误报成"清空了还在显示"）。
-    // 用组件透传的 data-line 标记来认这两行。
-    const lineText = (name) => text(`.hp-title [data-line="${name}"] .masked-heading__measure`) || text(`.hp-title [data-line="${name}"]`);
     return {
-      title: lineText('title'),
-      accent: lineText('accent'),
+      title: text('.hp-title span'),
+      accent: text('.hp-title em'),
       sub: text('.hp-sub'),
       trust: text('.hp-trust'),
       stats: [...document.querySelectorAll('.hp-stat strong')].map((el) => el.innerText.replace(/\s+/g, ' ').trim()),
@@ -261,41 +256,26 @@ try {
     console.log(`  · 顶栏几何：导航偏离中心 ${navDelta.toFixed(1)}px`);
   }
 
-  // 首页大标题（2026-09-18 晚换成 React Bits 的 MaskedHeading）：两行各是一个组件，
-  // 字号由组件按 `textScale × 容器宽度` 自己算。要守的还是那两条老口径：
-  // **每行只占一行、不许被裁**（太长的 CMS 文案允许折行，但绝不能横向溢出）。
+  // 首页大标题（口径不变）：**每行只占一行、不许被裁**。
+  // ⚠️ 2026-09-18 晚这里换过一次 MaskedHeading（字形遮罩），用户看过实际页面后要求撤回
+  // （「文字效果不好，而且看不清了」—— 那效果的原理就是「字=媒体」，视频又暗又花，必然不好读）。
+  // 所以断言又回到实心字这一套：两行 span/em、字号按字数算、每行一行、不横向溢出。
   const titleGeo = await page.evaluate(() => {
-    const lines = [...document.querySelectorAll('.hp-title .masked-heading')];
-    if (!lines.length) return null;
+    const el = document.querySelector('.hp-title');
+    if (!el) return null;
+    const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+    const blocks = [...el.querySelectorAll('span, em')];
     return {
-      count: lines.length,
-      rows: lines.map((el) => {
-        const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
-        const measure = el.querySelector('.masked-heading__measure');
-        return {
-          fontSize: Math.round(parseFloat(getComputedStyle(el).fontSize)),
-          count: Math.round(el.getBoundingClientRect().height / lineHeight),
-          over: el.scrollWidth - el.clientWidth,
-          boxW: Math.round(el.clientWidth),
-          textW: measure ? Math.round(measure.getBoundingClientRect().width) : null,
-        };
-      }),
-      clips: document.querySelectorAll('.hp-title .masked-heading__clip').length,
-      media: document.querySelectorAll('.hp-title .masked-heading__source').length,
+      fontSize: Math.round(parseFloat(getComputedStyle(el).fontSize)),
+      lines: blocks.map((b) => Math.round(b.getBoundingClientRect().height / lineHeight)),
+      over: el.scrollWidth - el.clientWidth,
     };
   });
-  if (!titleGeo) problems.push('首页：没找到 .hp-title 里的 MaskedHeading');
+  if (!titleGeo) problems.push('首页：没找到 .hp-title');
   else {
-    console.log(`  · 首页标题（MaskedHeading）：${titleGeo.count} 行、遮罩 ${titleGeo.clips} 个、媒体 ${titleGeo.media} 个、`
-      + titleGeo.rows.map((r) => `${r.fontSize}px/${r.count}行 盒${r.boxW}/文${r.textW}`).join(' '));
-    if (titleGeo.count !== 2) problems.push(`首页：大标题应当是两行 MaskedHeading（实际 ${titleGeo.count} 行）`);
-    for (const row of titleGeo.rows) {
-      if (row.count !== 1) problems.push(`首页：MaskedHeading 那一行占了 ${row.count} 行 —— 字号按容器宽度算，写超了就会折行`);
-      if (row.over > 1) problems.push(`首页：标题横向溢出 ${row.over}px（会被裁掉）`);
-    }
-    if (titleGeo.clips !== titleGeo.count || titleGeo.media !== titleGeo.count) {
-      problems.push(`首页：每一行标题都要有「字形遮罩 + 媒体」（实际遮罩 ${titleGeo.clips}、媒体 ${titleGeo.media}，行数 ${titleGeo.count}）`);
-    }
+    console.log(`  · 首页标题：字号 ${titleGeo.fontSize}px、各行行数 [${titleGeo.lines.join(', ')}]`);
+    if (titleGeo.lines.some((n) => n !== 1)) problems.push(`首页：大标题折行了（各行行数 ${titleGeo.lines.join(', ')}）—— 字号自适应没算出「一行放得下」的大小`);
+    if (titleGeo.over > 1) problems.push(`首页：大标题横向溢出 ${titleGeo.over}px（会被 overflow:hidden 裁掉）`);
   }
 
   await sweepHorizontalScroll('首页', ['.site', '.hp']);
@@ -345,6 +325,14 @@ try {
   ignoreNetworkFailures = false;
 
   // ── 登录页 ────────────────────────────────────────────────────────────────
+  // 用户 2026-09-18 晚报的：**未登录点「灵动学习」跳的是机构/老师登录**。
+  // 那些 /learn*、/my-* 都是学生的页面，未登录必须带去**学生登录**（?as=student）。
+  await page.goto(`${base}/learn`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  const learnRedirect = `${new URL(page.url()).pathname}${new URL(page.url()).search}`;
+  console.log(`  · 未登录访问 /learn → ${learnRedirect}`);
+  if (learnRedirect !== '/login?as=student') problems.push(`未登录访问学生页面应当带去学生登录（/login?as=student），实际 ${learnRedirect}`);
+  await expectText('学生登录页', ['学生登录']);
   await page.goto(`${base}/login`, { waitUntil: 'domcontentloaded' });
   await settle();
   await expectText('登录页', ['机构 / 老师登录', '账号', '密码']);

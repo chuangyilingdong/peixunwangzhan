@@ -10,9 +10,6 @@ import { MyStatsPage } from './pages/MyStats.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
 import SpecularButton from './components/SpecularButton.jsx';
-// 首页大标题用 React Bits 的 MaskedHeading（字形当遮罩、视频从字里透出来），
-// 同样见组件文件顶部的来源与注意事项（依赖 gsap）
-import MaskedHeading from './components/MaskedHeading.jsx';
 
 // 官网公开页面统一走共享 API client，保持错误解析与鉴权行为一致
 const publicApi = createApiClient();
@@ -171,9 +168,10 @@ function StatValue({ value, suffix }) {
 // 只有「字段不存在」或「接口失败」才用内置 fallback。
 // ⚠️ 别写 `content.x || fallback`：空串是 falsy，后台清空后官网会继续显示内置默认文案，
 //    用户看到的就是「我在后台清空了为什么还显示」。
-// 📌 2026-09-18 晚：首页大标题的字号以前在这里按「字宽」估算（`min(6vw, 92vw/字宽)`，且最多 76px）——
-//    换成 MaskedHeading 之后**这套算法删掉了**：组件按 `textScale × 容器宽度` 自己算字号
-//    （更贴「按文字所在盒子算」的口径，见交接文档 §三.3），标题太长时自然折行、不裁字。
+// 首页大标题的字号自适应（**撤回 MaskedHeading 之后又回来了**，见上面那段说明）：
+// 标题是后台可改的，写长了会被裁。按最长那一行的「字宽」估算（中文 1、拉丁 0.58），
+// 再用 min(6vw, 92vw/字宽) 压到一行放得下；真放不下还有 CSS 换行兜底（绝不裁字）。
+const titleWeight = (text) => [...String(text || '')].reduce((n, ch) => n + (/[\u2e80-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch) ? 1 : 0.58), 0);
 function cmsPick(content, key, fallback) {
   const value = content?.[key];
   return value === undefined || value === null ? (fallback ?? '') : value;
@@ -193,29 +191,20 @@ function HomeLanding() {
   // 文案要等 CMS 接口回来才渲染：否则会先画一帧兜底文案（可能与后台里改过的不同）再被替换掉，
   // 强刷时看起来就是「旧版内容闪一下」。视频与按钮（不依赖 CMS）照常立刻出现，所以不会白屏。
   const ready = !cms.loading;
-  // 2026-09-18 晚（用户口径）：首页大标题换成 React Bits 的 **MaskedHeading** —— 字形当遮罩，
-  // 让首页那支视频**从字里透出来**（指针移动时字下的画面还会平移）。
-  // ⚠️ 两行各自一个组件（tag='span'，外面的 h1 仍是唯一的一级标题）；媒体就是首页背景那支视频，
-  //    所以字里透出来的画面与背景是同一份，看着像"字母变成了看向视频的窗口"。
-  // ⚠️⚠️ 字号必须**自己按字数算**再传给组件：它按空格切词、每个词 `white-space:pre`，
-  //    而中文没有空格 —— 那一行就是**一个不可断行的词**，字号大了会被裁掉（换不回 vw 那套自适应）。
-  //    这里按"每个中文字约占 0.058 个容器宽、拉丁 0.6"估，字多了就按 0.92/字宽 缩，保证一行放得下。
-  const glyphWidth = (value) => [...String(value || '')].reduce((n, ch) => n + (/[\u2e80-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch) ? 1 : 0.6), 0);
-  const scaleFor = (value) => Math.min(0.058, 0.92 / Math.max(glyphWidth(value), 1));
-  const maskMedia = { mediaType: 'video', src: '/assets/hero-animal.mp4', poster: '/assets/hero-animal-poster.webp', fillScale: 1.3, parallax: 34, reveal: 'wipe', trigger: 'view', align: 'center', weight: 800, tracking: -0.02, lineHeight: 1.12 };
+  // ⚠️⚠️ 2026-09-18 晚：这里**一度**换成了 React Bits 的 MaskedHeading（字形遮罩、视频从字里透出来，
+  // 见提交 ab859a2），但用户看过实际页面后要求撤回：**「文字效果不好，而且看不清了」**。
+  // 原因很实在：那个效果的原理就是「字 = 媒体」，而首页那支视频本身又暗又花，
+  // 字里透出来的画面深浅不一 → 大标题必然不好读。所以又换回这套**按字数自适应字号**的实心字。
+  // 📌 如果以后还想用那个效果：**别用在首页这句暗底长文案上**，找一句短的、媒体用亮且干净的画面
+  //    （纯色渐变/亮图），可读性才立得住。组件源码在 git 历史里（ab859a2），要恢复照那个提交拿。
+  const longestLine = Math.max(titleWeight(title), titleWeight(accent), 1);
+  const titleStyle = { fontSize: `clamp(26px, min(6vw, ${(92 / longestLine).toFixed(2)}vw), 76px)` };
   return <main className="hp">
     <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
     <section className="hp-hero">
       {ready && (trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
       {ready && kicker ? <p className="hp-kicker">{kicker}</p> : null}
-      {ready && (title || accent) ? <h1 className="hp-title">
-        {/* `data-line` 是给守卫用的稳定标记（组件把 ...rest 透传到根元素上）——
-            换结构之后别再靠 span/em 这种位置选择器取文案，一改就误判。 */}
-        {title ? <MaskedHeading tag="span" data-line="title" className="hp-title__line" text={title} textScale={scaleFor(title)} {...maskMedia} /> : null}
-        {/* 第二行原来是品牌粉（`.hp-title em`）。加了遮罩之后字是透明的、颜色来自视频，
-            所以这里靠提高饱和度/亮度让它比第一行更"亮粉"一点，保住原来两行的层次。 */}
-        {accent ? <MaskedHeading tag="span" data-line="accent" className="hp-title__line hp-title__line--accent" text={accent} textScale={scaleFor(accent)} {...maskMedia} brightness={1.12} saturation={1.6} /> : null}
-      </h1> : null}
+      {ready && (title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
       {ready && description ? <p className="hp-sub">{description}</p> : null}
       {/* 首页两个 CTA 用 SpecularButton（用户口径：两个**背景要一样**，主次只靠光效区分）：
           都是透明玻璃面（tintOpacity 0.08 + blur 8），主按钮高光常亮并缓慢扫过、次按钮只在光标靠近时亮起。
@@ -484,12 +473,8 @@ function MarketplaceDetail(){
   const [data,setData]=useState(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState(null);
-  function startLearning(){
-    const session=readUserSession();
-    if(!session){window.location.href='/login';return;}
-    if(session.user?.role==='STUDENT') window.location.href='/learn';
-    else window.location.href='/demo';
-  }
+  // 2026-09-18 晚：这里原来有个 startLearning()，给详情页底部那个「开始学习」按钮用；
+  // 按用户口径那个按钮整条删掉了（「图1 红框…开始学习和旁边的文字」），所以这个函数也一起删。
   useEffect(()=>{let live=true;
     publicApi.get('public/marketplace/'+id)
       .then((j)=>{if(live){setData(j||null);setLoading(false);}})
@@ -499,26 +484,27 @@ function MarketplaceDetail(){
   if(loading) return <><Title eyebrow="课程详情" title={<>加载中…</>} desc=""/><main className="inner"><div className="mkt-grid">{Array.from({length:4},(_,i)=><div key={i} className="mkt-skeleton"/>)}</div></main></>;
   if(error) return <><Title eyebrow="课程详情" title={<>未找到</>} desc={error}/><main className="inner"><div className="note">⚠ <div><b>无法加载课程</b><p>{error}</p></div><Link to="/marketplace" className="button" style={{marginTop:'20px'}}>返回课程广场</Link></div></main></>;
   const d=data;
-  return <><Title eyebrow="课程广场" title={<>{d.title}</>} desc={d.description||''}/>
-  <main className="inner">
+  // ⚠️ 2026-09-18 晚用户口径（图2）：**原来那个页头整块删掉了**（「课程广场」眉题 + 课包标题 + 简介）——
+  // 课包名称改到下面那排信息（图3）里当标题，「开始学习」那一条也一起删（图1 红框）。
+  return <main className="inner">
     <Link to="/marketplace" className="back-link">← 返回课程广场</Link>
     <div className="mkt-detail">
       {(d.coverAssetId || d.coverImageUrl)&&<div className="mkt-detail-cover" role="img" aria-label={`${d.title || '课程'}封面`} style={{backgroundImage:'url('+(d.coverAssetId ? '/api/public/file-assets/'+d.coverAssetId+'/download' : d.coverImageUrl)+')'}}/>}
       <div className="mkt-detail-info">
+        <h1 className="mkt-detail-title">{d.title}</h1>
+        {d.description&&<p className="mkt-detail-desc">{d.description}</p>}
         <div className="mkt-detail-row"><span className="mkt-label2">难度</span><DifficultyStars level={d.difficultyLevel}/></div>
         <div className="mkt-detail-row"><span className="mkt-label2">适学年龄</span><span>{ageLabel(d.ageRangeMin,d.ageRangeMax)||'未设置'}</span></div>
         {(d.tags||[]).length>0&&<div className="mkt-detail-row"><span className="mkt-label2">标签</span><div className="mkt-chips">{(d.tags||[]).map(t=><span key={t} className="mkt-tag">{t}</span>)}</div></div>}
         {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">版本</span><span>{d.version}</span></div>}
         <div className="mkt-detail-row"><span className="mkt-label2">课时</span><span>{d.lessonCount||0} 节</span></div>
-        {d.priceFen>0&&<div className="mkt-detail-row"><span className="mkt-label2">参考价格</span><span className="mkt-price">¥ {(d.priceFen/100).toFixed(2)} <span className="mkt-price-note">（线下购买）</span></span></div>}
+        {/* 参考价格：**不带小数、不带「（线下购买）」**（用户口径：「直接写 ￥8000 即可」） */}
+        {d.priceFen>0&&<div className="mkt-detail-row"><span className="mkt-label2">参考价格</span><span className="mkt-price">{'¥'+(Number.isInteger(d.priceFen/100)?d.priceFen/100:(d.priceFen/100).toFixed(2))}</span></div>}
       </div>
     </div>
-    {(d.lessons||[]).length>0&&<div className="mkt-lessons"><h2>课程内容</h2>{(d.lessons||[]).map((l,i)=><div key={l.id} className="mkt-lesson"><div className="mkt-lesson-num">{String(i+1).padStart(2,'0')}</div><div className="mkt-lesson-body"><h3>{l.title}</h3>{l.summary&&<p className="mkt-lesson-summary">{l.summary}</p>}{l.lessonContent&&<p className="mkt-lesson-content">{String(l.lessonContent).slice(0,300)}{l.lessonContent&&l.lessonContent.length>300?'…':''}</p>}</div></div>)}</div>}
-    <div className="mkt-cta">
-      <button className="button mkt-start" onClick={startLearning}>开始学习</button>
-      {d.priceFen>0&&<p className="mkt-contact-note">如需购买课程包，请联系客服办理</p>}
-    </div>
-  </main></>;
+    {/* 课时列表：**不显示那个「01 / 02」编号块**（用户口径：图1 红框那个编号删除） */}
+    {(d.lessons||[]).length>0&&<div className="mkt-lessons"><h2>课程内容</h2>{(d.lessons||[]).map((l)=><div key={l.id} className="mkt-lesson"><div className="mkt-lesson-body"><h3>{l.title}</h3>{l.summary&&<p className="mkt-lesson-summary">{l.summary}</p>}{l.lessonContent&&<p className="mkt-lesson-content">{String(l.lessonContent).slice(0,300)}{l.lessonContent&&l.lessonContent.length>300?'…':''}</p>}</div></div>)}</div>}
+  </main>;
 }
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>联系我们 · 开通试用</Button></section>}
 // 官网匿名统计（含同意横幅与埋点）已按用户要求**彻底删除**（2026-09-16）：
@@ -604,8 +590,11 @@ export function App(){
     document.addEventListener('keydown', closeOnEscape);
     return () => { document.removeEventListener('mousedown', closeOnOutside); document.removeEventListener('keydown', closeOnEscape); };
   }, [showStudentMenu]);
+  // ⚠️ 2026-09-18 晚用户口径：「未登录点灵动学习跳的是机构/老师登录，应该跳学生登录」——
+  // 这些 `/learn*`、`/my-*` 都是**学生**的页面，所以未登录时统一带去**学生登录**（`?as=student`）。
+  // 原来落到 `/login` 会走默认那一支（机构/老师登录），学生点进来第一眼就看到老师的表单。
   if (loc.pathname.startsWith('/learn') && !session) {
-    return <Navigate to='/login' replace />;
+    return <Navigate to='/login?as=student' replace />;
   }
   const displayName = session?.user?.displayName || session?.user?.login || '用户';
   const userName = String(displayName);
@@ -681,13 +670,13 @@ export function App(){
         <Route path='/learn' element={<LearnPageInner api={api}/>}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
-        <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>
+        <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
         {/* ⚠️ 这两条是**老地址的重定向**：`/my-courses`（指标卡 + 课时列表那一版）已按用户口径删掉，
             学生端的「我的课程」就是 /learn 那个页面。留着重定向是为了老链接/老书签不 404。
             别把这两行删了 —— 删了就真的 404。 */}
         <Route path='/my-courses' element={<Navigate to='/learn' replace/>}/>
         <Route path='/my-courses/:courseId' element={<Navigate to='/learn' replace/>}/>
-        <Route path='/my-stats' element={session ? <MyStatsPage api={api} /> : <Navigate to='/login' replace />}/>
+        <Route path='/my-stats' element={session ? <MyStatsPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
         <Route path='*' element={<Home/>}/>
       </Routes>
       {!isFullPage && loc.pathname !== '/' && <Footer/>}
