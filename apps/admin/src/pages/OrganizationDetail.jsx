@@ -5,12 +5,146 @@
 //   「已开通课包数」用 detail.courseAssignments 的长度（服务端一次就返回了，不额外请求）。
 //   「当前活跃课堂数」用 summary.activeSessions（class_sessions 里 status='ACTIVE' 的数量）；
 //   detail.summary.activeClasses 在服务端是**写死的 0**，所以不拿它当活跃课堂数（已在报告里说明）。
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, useData } from '@platform/shared';
 import { isoDateInput } from '../shared.jsx';
 import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { OrganizationCard, OrganizationEntryCards, OrganizationStatusBadge } from '../components/OrganizationShared.jsx';
+
+/**
+ * 「机构管理员」三个弹窗（新增 / 编辑 / 停用启用）共用的外壳（2026-09-18 用户口径：
+ * 新增与编辑都改成「按钮 → 弹窗」，面板里不再常驻输入框、行内也不再有密码输入框）。
+ *
+ * 复用仓库既有的 `.admin-confirm` 弹窗样式（`AdminConfirm.jsx` 的二次确认、图2「添加机构」弹窗
+ * 都是这一套，来自 admin.css），只把「标题 / 就地错误 / 提交中禁用 / 取消+确认」写一次。
+ * 一律 `<dialog showModal()>`：原生聚焦陷阱 + Esc 关闭，不用原生 confirm 对话框（p83 明确断言不许用）。
+ */
+function AdminDialogShell({ title, description = '', error = '', saving = false, submitLabel, submitDisabled = false, onClose = () => {}, onSubmit = () => {}, children }) {
+  const dialogRef = useRef(null);
+  const titleId = useId();
+  useEffect(() => {
+    const opener = document.activeElement;
+    dialogRef.current?.showModal();
+    return () => { dialogRef.current?.close(); if (opener?.isConnected) opener.focus(); };
+  }, []);
+  return <dialog ref={dialogRef} className="admin-confirm" style={{ width: 'min(720px, calc(100vw - 32px))' }} aria-labelledby={titleId}
+    onCancel={(event) => { event.preventDefault(); if (!saving) onClose(); }}>
+    <form onSubmit={onSubmit} noValidate>
+      <h2 id={titleId}>{title}</h2>
+      {description ? <p className="muted">{description}</p> : null}
+      {children}
+      {error ? <Notice tone="danger">{error}</Notice> : null}
+      <div className="row-actions">
+        <button type="button" className="secondary-button" disabled={saving} onClick={onClose}>取消</button>
+        <button className="primary-button" disabled={saving || submitDisabled}>{saving ? '提交中…' : submitLabel}</button>
+      </div>
+    </form>
+  </dialog>;
+}
+
+/** 字段下方的固定提示位：有错误就显示红字（就地提示），否则显示灰色说明 —— 两者不会叠成两行。 */
+function fieldNote(errors, key, hint) {
+  if (errors[key]) return <small className="org-field-error">{errors[key]}</small>;
+  return hint ? <small className="muted">{hint}</small> : null;
+}
+
+/** 新增管理员弹窗：字段顺序 姓名 → 登录名 → 初始密码（用户口径：姓名排最前面）。 */
+function CreateAdminDialog({ onClose = () => {}, onSubmit = () => {} }) {
+  const [form, setForm] = useState({ displayName: '', login: '', password: '' });
+  const [errors, setErrors] = useState({});
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function validate() {
+    const next = {};
+    if (!form.displayName.trim()) next.displayName = '请填写姓名';
+    if (!form.login.trim()) next.login = '请填写登录名';
+    else if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(form.login.trim())) next.login = '登录名只能用英文和数字（可带 . _ -）';
+    if (form.password.length < 6) next.password = '初始密码至少 6 位';
+    return next;
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    const next = validate(); setErrors(next); setError('');
+    if (Object.keys(next).length) return;
+    setSaving(true);
+    try { await onSubmit({ displayName: form.displayName.trim(), login: form.login.trim(), password: form.password }); }
+    catch (failure) { setError(failure.message); } finally { setSaving(false); }
+  }
+
+  const distinct = '全平台不能重复';
+  return <AdminDialogShell title="新增管理员" description="新账号用「登录名 + 初始密码」登录机构端，可以管理机构下的教师、学生与课包授权。" error={error} saving={saving} submitLabel="创建管理员" onClose={onClose} onSubmit={submit}>
+    <div className="form-grid grid-3">
+      <label>姓名 *<input autoFocus value={form.displayName} maxLength={200} placeholder="如：李校长" onChange={(event) => setForm({ ...form, displayName: event.target.value })} />{fieldNote(errors, 'displayName', '机构内显示，可用作重名区分')}</label>
+      <label>登录名 *<input value={form.login} maxLength={50} placeholder="如：lixiaozhang" onChange={(event) => setForm({ ...form, login: event.target.value })} />{fieldNote(errors, 'login', `英文和数字（可带 . _ -）；${distinct}`)}</label>
+      <label>初始密码 *<input type="password" autoComplete="new-password" minLength={6} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />{fieldNote(errors, 'password', '至少 6 位，交给机构管理员本人后请尽快修改')}</label>
+    </div>
+  </AdminDialogShell>;
+}
+
+/** 编辑管理员弹窗：可改姓名；重置密码留空 = 不改（服务端 PUT 支持 displayName 与 password 两个字段）。 */
+function EditAdminDialog({ admin = {}, onClose = () => {}, onSubmit = () => {} }) {
+  const [displayName, setDisplayName] = useState(admin.displayName || '');
+  const [password, setPassword] = useState('');
+  const [errors, setErrors] = useState({});
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function validate() {
+    const next = {};
+    if (!displayName.trim()) next.displayName = '请填写姓名';
+    if (password && password.length < 6) next.password = '新密码至少 6 位（不想改就留空）';
+    return next;
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    const next = validate(); setErrors(next); setError('');
+    if (Object.keys(next).length) return;
+    setSaving(true);
+    try {
+      // 只提交真正要改的字段：password 留空就**不带这个键**，服务端保持原密码（PUT 是增量语义）。
+      const payload = { displayName: displayName.trim() };
+      if (password) payload.password = password;
+      await onSubmit(payload);
+    } catch (failure) { setError(failure.message); } finally { setSaving(false); }
+  }
+
+  return <AdminDialogShell title="编辑管理员" description={`${admin.login || ''} · 姓名可以改；重置密码留空则保持原密码不变。`} error={error} saving={saving} submitLabel="保存修改" onClose={onClose} onSubmit={submit}>
+    <div className="form-grid">
+      <label>姓名 *<input autoFocus value={displayName} maxLength={200} onChange={(event) => setDisplayName(event.target.value)} />{fieldNote(errors, 'displayName', '机构内显示，可用作重名区分')}</label>
+      <label>重置密码<input type="password" autoComplete="new-password" minLength={6} value={password} placeholder="留空 = 不修改" onChange={(event) => setPassword(event.target.value)} />{fieldNote(errors, 'password', '至少 6 位；填了就覆盖原密码，该账号现有会话会失效')}</label>
+    </div>
+  </AdminDialogShell>;
+}
+
+/** 停用 / 启用管理员的确认弹窗（影响说明写清，不用原生 confirm 对话框）。 */
+function AdminStatusDialog({ admin = {}, nextStatus = 'DISABLED', onClose = () => {}, onSubmit = () => {} }) {
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const disabling = nextStatus === 'DISABLED';
+
+  async function submit(event) {
+    event.preventDefault();
+    setSaving(true); setError('');
+    try { await onSubmit(); } catch (failure) { setError(failure.message); } finally { setSaving(false); }
+  }
+
+  return <AdminDialogShell title={disabling ? '停用管理员' : '启用管理员'} error={error} saving={saving}
+    submitLabel={disabling ? '确认停用' : '确认启用'} onClose={onClose} onSubmit={submit}>
+    <Notice tone={disabling ? 'warning' : 'info'}>{disabling
+      ? '停用后该账号立即无法登录机构端，现有登录会话也会立即失效（历史数据与审计不受影响）；同一机构至少要保留一名有效管理员，最后一名会被服务端拒绝。'
+      : '启用后该账号可以重新登录机构端，恢复原有的机构管理权限。'}</Notice>
+    <div className="table-wrap"><table><tbody>
+      <tr><th>姓名</th><td>{admin.displayName || '—'}</td></tr>
+      <tr><th>登录名</th><td>{admin.login || '—'}</td></tr>
+      <tr><th>当前状态</th><td><span className={'status ' + (admin.status === 'ACTIVE' ? 'success' : 'muted')}>{admin.status === 'ACTIVE' ? '启用' : '停用'}</span></td></tr>
+      <tr><th>操作后状态</th><td><span className={'status ' + (disabling ? 'danger' : 'success')}>{disabling ? '停用' : '启用'}</span></td></tr>
+    </tbody></table></div>
+  </AdminDialogShell>;
+}
 
 /**
  * 图4「禁用机构」确认抽屉。
@@ -66,8 +200,8 @@ export function OrganizationDetail({ api }) {
   const [disableError, setDisableError] = useState('');
   const [confirm, confirmation] = useAdminConfirm();
   const [editForm, setEditForm] = useState(null);
-  const [adminForm, setAdminForm] = useState({ login: '', displayName: '', password: '' });
-  const [passwordForm, setPasswordForm] = useState({});
+  // 机构管理员的三个弹窗：null | {mode:'create'} | {mode:'edit',admin} | {mode:'status',admin,nextStatus}
+  const [adminDialog, setAdminDialog] = useState(null);
   const organization = detail.data?.organization || null;
   const summary = detail.data?.summary || {};
   const assignments = detail.data?.courseAssignments || [];
@@ -139,30 +273,28 @@ export function OrganizationDetail({ api }) {
     } catch (error) { setMessage({ tone: 'danger', text: error.message }); } finally { setBusy(false); }
   }
 
-  async function createAdmin(event) {
-    event.preventDefault();
-    if (!orgId) return;
-    setBusy(true); setMessage(null);
-    try {
-      await api.post(`admin/organizations/${encodeURIComponent(orgId)}/admins`, adminForm);
-      setAdminForm({ login: '', displayName: '', password: '' });
-      setMessage({ tone: 'success', text: '机构管理员已创建。' });
-      detail.refresh();
-    } catch (error) { setMessage({ tone: 'danger', text: error.message }); } finally { setBusy(false); }
+  /**
+   * 新增机构管理员（弹窗提交）。**故意不在这里 catch**：错误要让弹窗就地显示（red 字），
+   * 而不是飘到页面顶上；成功才关窗、刷新、给页面提示。
+   */
+  async function createAdmin(payload) {
+    await api.post(`admin/organizations/${encodeURIComponent(orgId)}/admins`, payload);
+    setAdminDialog(null);
+    setMessage({ tone: 'success', text: `管理员「${payload.displayName}」已创建。` });
+    detail.refresh();
   }
 
-  async function updateAdmin(admin, payload, confirmText) {
-    if (confirmText) {
-      const approved = await confirm({ title: '停用机构管理员', message: confirmText, confirmLabel: '确认停用' });
-      if (!approved) return;
-    }
-    setBusy(true); setMessage(null);
-    try {
-      await api.put(`admin/organizations/${encodeURIComponent(orgId)}/admins/${admin.id}`, payload);
-      setPasswordForm({ ...passwordForm, [admin.id]: '' });
-      setMessage({ tone: 'success', text: '管理员信息已更新。' });
-      detail.refresh();
-    } catch (error) { setMessage({ tone: 'danger', text: error.message }); } finally { setBusy(false); }
+  /** 编辑（改姓名 / 重置密码）与停用启用共用同一条 PUT；失败同样抛回弹窗就地显示。 */
+  async function updateAdmin(admin, payload) {
+    await api.put(`admin/organizations/${encodeURIComponent(orgId)}/admins/${admin.id}`, payload);
+    setAdminDialog(null);
+    setMessage({
+      tone: 'success',
+      text: payload.status === 'DISABLED' ? `管理员「${admin.displayName}」已停用，该账号现有会话已失效。`
+        : payload.status === 'ACTIVE' ? `管理员「${admin.displayName}」已启用。`
+          : `管理员「${admin.displayName}」的资料已更新。`,
+    });
+    detail.refresh();
   }
 
   if (!orgId) return <Panel title="机构详情"><Empty title="缺少机构标识" body="请从机构列表点「查看详情」进入本页。" /></Panel>;
@@ -209,24 +341,22 @@ export function OrganizationDetail({ api }) {
           <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存机构资料'}</button>
           <p className="muted">机构状态请用右上角的「禁用机构 / 恢复服务」，状态变更都会写入审计。</p>
         </form> : null}</Panel>
-        <Panel title="机构管理员"><form onSubmit={createAdmin}>
-          <div className="form-grid">
-            <label>登录名<input value={adminForm.login} pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(event) => setAdminForm({ ...adminForm, login: event.target.value })} required /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。</small></label>
-            <label>姓名<input value={adminForm.displayName} onChange={(event) => setAdminForm({ ...adminForm, displayName: event.target.value })} required /></label>
-            <label>初始密码（至少6位）<input type="password" autoComplete="new-password" minLength={6} value={adminForm.password} onChange={(event) => setAdminForm({ ...adminForm, password: event.target.value })} required /></label>
-            <button className="primary-button" disabled={busy}>新增管理员</button>
-          </div>
-        </form>
-          <div className="table-wrap"><table><thead><tr><th>登录名</th><th>姓名</th><th>状态</th><th>重置密码</th><th>操作</th></tr></thead><tbody>{(detail.data.admins || []).map((admin) => <tr key={admin.id}>
-            <td>{admin.login}</td><td>{admin.displayName}</td><td><span className={'status ' + (admin.status === 'ACTIVE' ? 'success' : 'muted')}>{admin.status === 'ACTIVE' ? '启用' : '停用'}</span></td>
-            <td><input type="password" autoComplete="new-password" aria-label={`${admin.displayName} 的新密码`} placeholder="新密码" value={passwordForm[admin.id] || ''} onChange={(event) => setPasswordForm({ ...passwordForm, [admin.id]: event.target.value })} /></td>
-            <td><div className="row-actions">
-              <button type="button" className="secondary-button" disabled={busy || (passwordForm[admin.id] || '').length < 6} onClick={() => updateAdmin(admin, { password: passwordForm[admin.id] })}>保存新密码</button>
-              {admin.status === 'ACTIVE'
-                ? <button type="button" className="secondary-button" disabled={busy} onClick={() => updateAdmin(admin, { status: 'DISABLED' }, `确认停用管理员「${admin.displayName}」？停用后该账号立即无法登录。`)}>停用</button>
-                : <button type="button" className="secondary-button" disabled={busy} onClick={() => updateAdmin(admin, { status: 'ACTIVE' })}>启用</button>}
-            </div></td>
-          </tr>)}</tbody></table></div>
+        <Panel title="机构管理员" actions={(detail.data.admins || []).length ? <button type="button" className="primary-button" onClick={() => setAdminDialog({ mode: 'create' })}>新增管理员</button> : null}>
+          {/* 2026-09-18 用户口径：这里**不再常驻输入框**（新增走右上角按钮 → 弹窗），
+              表格行里也不再有密码框（编辑 / 重置密码走「编辑」弹窗）。 */}
+          {(detail.data.admins || []).length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>登录名</th><th>状态</th><th>操作</th></tr></thead><tbody>
+            {(detail.data.admins || []).map((admin) => <tr key={admin.id}>
+              <td><strong>{admin.displayName}</strong></td>
+              <td>{admin.login}</td>
+              <td><span className={'status ' + (admin.status === 'ACTIVE' ? 'success' : 'muted')}>{admin.status === 'ACTIVE' ? '启用' : '停用'}</span></td>
+              <td><div className="row-actions">
+                <button type="button" className="secondary-button" onClick={() => setAdminDialog({ mode: 'edit', admin })}>编辑</button>
+                {admin.status === 'ACTIVE'
+                  ? <button type="button" className="secondary-button danger-text" onClick={() => setAdminDialog({ mode: 'status', admin, nextStatus: 'DISABLED' })}>停用</button>
+                  : <button type="button" className="secondary-button" onClick={() => setAdminDialog({ mode: 'status', admin, nextStatus: 'ACTIVE' })}>启用</button>}
+              </div></td>
+            </tr>)}
+          </tbody></table></div> : <Empty title="暂无机构管理员" body="点右上角「新增管理员」，用弹窗为该机构创建一个机构管理员账号。" />}
         </Panel>
       </div>
 
@@ -239,5 +369,9 @@ export function OrganizationDetail({ api }) {
       <p className="muted">课包与授权次数（总授权次数 / 已授权次数 / 剩余授权次数）在 <Link to={`/organizations/${encodeURIComponent(orgId)}/quota`}>本机构的课包与授权次数</Link>页配置；授权次数的变更流水在 <Link to={`/organizations/${encodeURIComponent(orgId)}/quota-changes`}>授权次数变更记录</Link>页。</p>
     </>}
     {showDisableDrawer ? <DisableOrganizationDrawer organization={organization || {}} stats={stats} saving={busy} error={disableError} onClose={() => { if (!busy) setShowDisableDrawer(false); }} onConfirm={disableOrganization} /> : null}
+    {/* 机构管理员：三个弹窗按需渲染（没点按钮时 DOM 里连表单都没有 —— p83 的「首屏不渲染表单」同款口径）。 */}
+    {adminDialog?.mode === 'create' ? <CreateAdminDialog onClose={() => setAdminDialog(null)} onSubmit={createAdmin} /> : null}
+    {adminDialog?.mode === 'edit' ? <EditAdminDialog admin={adminDialog.admin} onClose={() => setAdminDialog(null)} onSubmit={(payload) => updateAdmin(adminDialog.admin, payload)} /> : null}
+    {adminDialog?.mode === 'status' ? <AdminStatusDialog admin={adminDialog.admin} nextStatus={adminDialog.nextStatus} onClose={() => setAdminDialog(null)} onSubmit={() => updateAdmin(adminDialog.admin, { status: adminDialog.nextStatus })} /> : null}
   </>;
 }

@@ -702,6 +702,26 @@ a.org-entry-card:hover {
   .org-entry-grid { grid-template-columns:1fr; }
 }
 
+/* 弹窗里的三列表单行（2026-09-18）。
+ *
+ * 为什么单独加一个变体：admin.css 里 `.admin-console .form-grid` 是
+ * `repeat(auto-fit,minmax(min(100%,210px),1fr))` + `align-items:end` —— 两个问题：
+ *   ① auto-fit 到窄一点的弹窗宽度会**折成两列**（用户要的是「三个字段同一行」）；
+ *   ② `align-items:end` 会把较矮的那格**底对齐**：`label` 里只要有一格多了一行提示小字
+ *      （如登录名的「只能用英文和数字…」），那一格变高，另两格就被压到下方 → 标签与输入框
+ *      的上沿全错开（用户截图里就是这个现象）。
+ * 所以这里固定三列 + 顶对齐：同一行内三格的 label 顶沿、input 顶沿必然同一条基线，
+ * 提示文字放在输入框下方也不影响这一行里其它格子的基线。
+ * 用法：`<div className="form-grid grid-3">`（只给「新增管理员」这种确定三字段的窄行用）。 */
+.admin-console .form-grid.grid-3 {
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  align-items:start;
+}
+
+@media(max-width:720px) {
+  .admin-console .form-grid.grid-3 { grid-template-columns:1fr; }
+}
+
 /* 平台管理端统一字体（2026-09-17，用户口径：「后台全部用画布课堂那个字体」）。
  *
  * 字体栈只有一处定义：packages/shared/src/styles.css 的 `--cv-font`

@@ -70,4 +70,14 @@ const source = fs.readFileSync(path.join(root, 'apps/admin/src/pages/Organizatio
 assert.doesNotMatch(source, /window\.confirm/, 'organization actions must use accessible confirmation dialogs');
 assert.match(source, /authorizations\?orgId=/, 'authorization next step must carry the created organization id');
 
+// 2026-09-18：机构详情页的「机构管理员」改成了三个弹窗（新增 / 编辑 / 停用），代码搬到
+// `OrganizationDetail.jsx` —— 上面那条只扫了 `Organizations.jsx`，**等于没覆盖新弹窗**。
+// 同一个口径必须一起扫：所有写操作都要走可访问的确认弹窗（`<dialog showModal()>`），不许用原生 confirm。
+// （这正是"守卫要跟着代码搬家"的典型：文件一拆，旧断言就悄悄失去覆盖。）
+{
+  const detailSource = fs.readFileSync(path.join(root, 'apps/admin/src/pages/OrganizationDetail.jsx'), 'utf8');
+  assert.doesNotMatch(detailSource, /window\.confirm/, 'organization detail actions must use accessible dialogs');
+  assert.match(detailSource, /showModal\(\)/, 'organization detail dialogs must be real modal dialogs');
+}
+
 console.log('P83 passed: create button without initial form, complete organization creation fields, unified capacity updates, status guard, accessible confirmations, authorization next step');
