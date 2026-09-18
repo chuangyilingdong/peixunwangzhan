@@ -158,12 +158,15 @@
 
 /* 生成按钮：主色实心胶囊（参考的 primary 按钮） */
 .learning-node__generation-state.is-error { color: #ffb4b4; border-color: rgb(255 107 107 / 35%); background: rgb(255 107 107 / 12%); }
-.learning-node__text-result { max-height: 160px; margin: 0 12px 10px; padding: 9px 11px; overflow: auto; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); color: var(--cv-text-dim); background: var(--cv-surface-2); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.learning-node__text-result { max-height: 160px; padding: 9px 11px; overflow: auto; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); color: var(--cv-text-dim); background: var(--cv-surface-2); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 /* 2026-09-18 晚用户口径：生成出来的文字要**能选中复制**，并在右上角给一个复制按钮。
    画布整体是拖拽面（react-flow 节点里默认选不中文字），所以这里显式打开 user-select；
-   右侧 padding 给复制按钮让位，免得按钮压住第一行文字。 */
-.learning-node__text-wrap { position: relative; }
-.learning-node__text-result { user-select: text; -webkit-user-select: text; cursor: text; padding-right: 62px; }
+   右侧 padding 给复制按钮让位，免得按钮压住第一行文字。
+   ⚠️ 那条 `margin: 0 12px` 必须**挂在 wrapper 上**（不是结果块上）：复制按钮是按 wrapper 绝对定位的，
+   边距留在结果块上会让按钮偏出盒子右边（第一版就那样 —— 用户报「复制按钮位置有问题」，
+   它会压住结果块的边框和滚动条）。外边距归一处置，按钮与盒子才对得齐。 */
+.learning-node__text-wrap { position: relative; margin: 0 12px 10px; }
+.learning-node__text-result { margin: 0; user-select: text; -webkit-user-select: text; cursor: text; padding-right: 62px; }
 .learning-node__copy { position: absolute; top: 6px; right: 8px; z-index: 2; padding: 3px 10px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-dim); background: rgb(21 21 21 / 92%); font-size: 11px; font-weight: 700; cursor: pointer; transition: color .15s ease, border-color .15s ease; }
 .learning-node__copy:hover { color: var(--cv-text); border-color: var(--cv-text-dim); }
 

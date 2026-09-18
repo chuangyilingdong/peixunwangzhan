@@ -166,7 +166,10 @@ check('【反向自检】类型色三处同源（学生端与老师端都从 mat
              ③「图3 文本生成这里的框应该是可以选中里面的文字进行复制的，同时在右上角提供复制按钮一键复制」
    （①「灵动学习页面这里的提示要删除」在 p115 里按真浏览器断言：/learn 页不得再出现那条横幅） */
 check('③ 生成结果能选中复制：结果块显式 user-select:text（画布是拖拽面，默认选不中文字）',
-  /\.learning-node__text-result \{ user-select: text; -webkit-user-select: text; cursor: text; padding-right: 62px; \}/.test(canvasCss));
+  /\.learning-node__text-result \{ margin: 0; user-select: text; -webkit-user-select: text; cursor: text; padding-right: 62px; \}/.test(canvasCss));
+check('③ 复制按钮与结果块对得齐：那条 `margin: 0 12px …` 在 **wrapper** 上，不在结果块上（放错了按钮会偏出盒子右边）',
+  /\.learning-node__text-wrap \{ position: relative; margin: 0 12px 10px; \}/.test(canvasCss)
+  && !/\.learning-node__text-result \{ max-height: 160px; margin: 0 12px 10px;/.test(canvasCss));
 check('③ 右上角有「复制」按钮（JSX + CSS 都在；走剪贴板 API，且有 execCommand 兜底）',
   /<CopyTextButton text=\{generated\} \/>/.test(canvasJsx)
   && /\.learning-node__copy \{ position: absolute; top: 6px; right: 8px/.test(canvasCss)
