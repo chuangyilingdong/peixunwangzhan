@@ -558,6 +558,10 @@ try {
   await settle();
   // ① 原来的分类筛选整块不要了（页面里那个「全部作品 / 小游戏 / 互动故事…」的 chips）
   if (await page.locator('.filters').count()) problems.push('灵动作品：分类筛选块应已删除（用户口径：这里全部不要）');
+  // 同批删掉的还有页头与底部那条提示（用户：「图1这里怎么还在」「图2也要删除」）
+  if (await page.locator('.page-title').count()) problems.push('灵动作品：页头（学员作品 / 孩子们的灵感，正在发光 / 描述）应已删除');
+  if ((await bodyText()).includes('作品来自真实课堂')) problems.push('灵动作品：底部那条「作品来自真实课堂」提示应已删除');
+  if ((await bodyText()).includes('了解机构作品展厅')) problems.push('灵动作品：底部那条提示里的「了解机构作品展厅」按钮应已删除');
   // ② 换成搜索框
   if (!(await page.locator('#works-search').count())) problems.push('灵动作品：没找到搜索框（#works-search）');
   const workCount = await page.locator('.work').count();
@@ -622,6 +626,35 @@ try {
   await page.waitForTimeout(300);
   if ((await page.locator('.work').count()) !== workCount) problems.push('灵动作品：清空搜索之后没有回到全部');
   await shot('15-works-cards');
+
+  // ── ⑤d 顶栏的登录入口去向 + 登录态（用户口径 2026-09-18 晚）
+  // ①「机构 / 老师登录」应当**直接进机构后台**（另一个 SPA，整页跳），不再走官网那个"看着像首页"的登录页
+  const orgEntryHref = await page.evaluate(() => {
+    const hit = [...document.querySelectorAll('.site-topbar .head-actions a')].find((a) => a.textContent.includes('机构'));
+    return hit ? hit.getAttribute('href') : null;
+  });
+  console.log(`  · 顶栏「机构 / 老师登录」→ ${orgEntryHref}`);
+  if (!String(orgEntryHref || '').startsWith('/org')) problems.push(`顶栏：「机构 / 老师登录」应当直接进机构后台（/org/，整页跳），实际 href=${orgEntryHref}`);
+  // ② 登录之后右上角必须显示账号徽标 —— 用户报的 bug：「我用学生登录后，为什么到首页右上角不显示」
+  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    // 会话 key 见 packages/shared/src/auth.js（官网根路径用的是 .student 桶）
+    window.localStorage.setItem('ai-kids-platform.session.v1.student', JSON.stringify({ token: 'p115-session', user: { id: 'p115', login: 'p115-student', displayName: 'P115 同学', role: 'STUDENT' } }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await settle();
+  const signedBar = await page.evaluate(() => {
+    const bar = document.querySelector('.site-topbar');
+    const badge = bar?.querySelector('.header-user');
+    const box = badge?.getBoundingClientRect();
+    return { text: bar ? bar.innerText.replace(/\n/g, ' ') : '', badges: bar ? bar.querySelectorAll('.header-user').length : 0, badgeWidth: box ? Math.round(box.width) : 0 };
+  });
+  console.log(`  · 登录态首页顶栏：「${signedBar.text}」徽标 ${signedBar.badges} 个 宽 ${signedBar.badgeWidth}px`);
+  if (!signedBar.badges || signedBar.badgeWidth < 40) problems.push('首页（已登录）：右上角应当显示账号徽标（.header-user）—— 学生登录后回首页看不到账号就是用户报的那个 bug');
+  if (signedBar.text.includes('机构 / 老师登录') || signedBar.text.includes('学生登录')) problems.push('首页（已登录）：不该再显示登录入口');
+  if (!signedBar.text.includes('P115')) problems.push('首页（已登录）：徽标里没显示当前账号名');
+  await shot('16-home-signed-in');
+  await page.evaluate(() => window.localStorage.removeItem('ai-kids-platform.session.v1.student'));
 
   // ── ⑥ reduced-motion：不创建 WebGL（SpecularButton 的平台侧改造），按钮与文案仍要可用
   //    ⚠️ 放在改库之前：改完之后首页文案已经被清空了，这一段的断言会失去意义。

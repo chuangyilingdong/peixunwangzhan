@@ -36,7 +36,7 @@ function LoginPage() {
   }
   // 背景按首页来做（用户口径 2026-09-18）：同一份视频资产、同一套「视频 + 压暗层」叠法。
   // 平台端/机构端登录页没有这个视频资源，所以视频只铺在官网这一侧（共享面板只给底色）。
-  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-animal.mp4' poster='/assets/hero-animal-poster.webp' autoPlay muted loop playsInline preload='auto' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} demos={[]} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<Link to='/login?as=staff'>去机构登录</Link></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
+  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-animal.mp4' poster='/assets/hero-animal-poster.webp' autoPlay muted loop playsInline preload='auto' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} demos={[]} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<a href={ORG_APP_URL}>去机构后台</a></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
 }
 
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
@@ -54,30 +54,39 @@ const BRAND_TAGLINE = '青少年 AI 创作开课平台';
 // 此前 main.jsx 里有两份内容相同的硬编码导航（Header 的 nav 与 WEBSITE_NAV），改文案要改两处。
 const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/intro', '灵动介绍'], ['/handbook', '机构手册'], ['/faq', '常见问题']];
 // 未登录时的两个登录入口（用户口径 2026-09-18）。机构/老师与学生是**同一套账号体系、同一个登录接口**，
-// 这两个入口只决定默认提示文案与登录后的落点，不参与鉴权判定——所以不往 auth/login 里传 clientType，
+// 两个入口只决定落点，不参与鉴权判定——所以不往 auth/login 里传 clientType，
 // 避免「老师从学生入口进来就被拒」这类按入口拦人的行为。
-const LOGIN_ENTRIES = [['/login?as=staff', '机构 / 老师登录'], ['/login?as=student', '学生登录']];
+// ⚠️ 2026-09-18 晚用户口径：「机构和老师登录应该是到后台」——所以机构/老师这条**直接进机构后台**
+//    （`/org/`，那边有自己的一套登录页）。原来它指向官网自己的 `/login?as=staff`，而那个页面铺的是
+//    首页那支视频，点进去看着还像首页（用户就是这么报的：「为什么还在首页」）。
+//    学生入口留在官网上 —— 学生登录后进自己的课包中心。
+//    第三条 `true` = **跨应用跳转**（机构后台是另一个 SPA），必须整页跳、不能走前端路由。
+const LOGIN_ENTRIES = [['机构 / 老师登录', ORG_APP_URL, true], ['学生登录', '/login?as=student', false]];
 // 品牌区用真正的 logo（灵动ai 横标，三端共用同一张图）；不再用「✦ + 文字」的占位标记。
 function Logo(){return <Link className="logo" to="/"><BrandLogo height={26} /></Link>}
 function AuthEntries({ onDark, onNavigate }){
   // 未登录时导航右侧的两个入口。登录后这里换成账号徽标（由 App 传 userBadge 进来）。
-  // 黑底首页上跟右上角另外那个按钮一样用 SpecularButton（用户口径 2026-09-18「也是一样的改动」）；
-  // 浅底内页仍用原来的描边胶囊 —— 光效是「白线在暗面上扫」，放在白底上等于看不见。
-  if (onDark) return <>{LOGIN_ENTRIES.map(([to, label]) => <SpecularButton key={to} className="site-specular-btn" size="sm" radius={999} tint="#ffffff" tintOpacity={0.06} blur={6} textColor="#ffffff" lineColor="#ffffff" baseColor="#7c7c85" intensity={0.8} shineSize={15} shineFade={45} thickness={1} speed={0.45} followMouse proximity={160} onClick={() => onNavigate(to)}>{label}</SpecularButton>)}</>;
-  return <>{LOGIN_ENTRIES.map(([to, label]) => <Link key={to} className='site-login' to={to}>{label}</Link>)}</>;
+  // 黑底首页上用 SpecularButton；浅底内页仍用原来的描边胶囊 —— 光效是「白线在暗面上扫」。
+  const go = (to, external) => { if (external) window.location.assign(to); else onNavigate(to); };
+  if (onDark) return <>{LOGIN_ENTRIES.map(([label, to, external]) => <SpecularButton key={label} className="site-specular-btn" size="sm" radius={999} tint="#ffffff" tintOpacity={0.06} blur={6} textColor="#ffffff" lineColor="#ffffff" baseColor="#7c7c85" intensity={0.8} shineSize={15} shineFade={45} thickness={1} speed={0.45} followMouse proximity={160} onClick={() => go(to, external)}>{label}</SpecularButton>)}</>;
+  return <>{LOGIN_ENTRIES.map(([label, to, external]) => external ? <a key={label} className='site-login' href={to}>{label}</a> : <Link key={label} className='site-login' to={to}>{label}</Link>)}</>;
 }
-function Header({ userBadge }){
+function Header({ userBadge, signedIn }){
   const loc=useLocation();
   const navigate=useNavigate();
   const [menuOpen,setMenuOpen]=useState(false);
   // 路由变化后收起抽屉：否则从抽屉点进新页面，抽屉会留在上面盖住内容。
   useEffect(()=>{ setMenuOpen(false); },[loc.pathname]);
   const onDark=loc.pathname==='/';
+  // ⚠️ 登录之后**必须换成账号徽标，黑底首页也不例外**（用户 2026-09-18 晚报的 bug：
+  //    「我用学生登录后，为什么到首页右上角不显示」）。原来这里是 `onDark ? <AuthEntries/> : userBadge`
+  //    —— 深色首页上**永远**渲染两个登录入口、永远不渲染 userBadge，所以已登录用户看着像没登录。
+  //    徽标在深色底上的配色早就在 styles.css 里备好了（`.site-topbar.on-dark .header-user` 那组）。
   // 顶栏右侧**只保留两个登录入口**：右上角那个「联系我们」在 2026-09-18 晚按用户口径删除。
   // 原因是导航用 `position:absolute; left:50%` 在页面里居中，视口一窄它就和右侧按钮组叠在一起 ——
   // 用户在内页截图报的「联系我们被遮挡」就是这一处（浅底那个实心胶囊被玻璃导航压住）。
   // ⚠️ 只删右上角这一个：首页 hero 的两个 CTA、页脚「合作」列、各页结尾的「联系我们」都保留。
-  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
+  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{!signedIn && onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
 }
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
@@ -230,7 +239,10 @@ function Works(){
   // 搜索按「标题 / 学生名字」匹配（大小写不敏感、去首尾空格）
   const keyword=query.trim().toLowerCase();
   const visible=keyword?items.filter((w)=>String(w.title||'').toLowerCase().includes(keyword)||String(w.studentName||'').toLowerCase().includes(keyword)):items;
-  return <><Title eyebrow="学员作品" title={<>孩子们的灵感，<em>正在发光</em></>} desc="来自课堂与作品社区的真实 HTML 创作。点击卡片即可打开体验，游戏、古诗、3D、单词闯关都能在浏览器里直接玩。"/><main className="inner">
+  // 页头（「学员作品」+「孩子们的灵感，正在发光」+ 描述）与底部那条
+  // 「作品来自真实课堂 / 了解机构作品展厅」提示，都按用户口径 2026-09-18 晚**删掉了** ——
+  // 这一页只留「搜索 + 卡片」（用户：「灵动作品这里全部不要」「图2也要删除」）。
+  return <main className="inner works-page">
     {/* 搜索（用户口径 2026-09-18 晚）：**原来的分类筛选整块不要了**，换成一个搜索框，
         按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把画布作品与 VibeCoding 作品合并出来的，
         所以过滤也在前端做 —— 不用改接口。 */}
@@ -244,8 +256,7 @@ function Works(){
     {!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}
     {loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}
     {loaded&&items.length>0&&visible.length===0&&<div className="note">✦ <p>没有搜到匹配的作品。换个标题或学生名字试试，或者<b>清空</b>搜索词。</p></div>}
-    <div className="note">✦ <div><b>作品来自真实课堂</b><p>每一份作品都记录着孩子从想法、对话到实现的创作过程。机构开通后，可拥有自己的校区作品展厅。</p></div><Button soft to="/org">了解机构作品展厅</Button></div>
-  </main></>;
+  </main>;
 }
 // ── 机构手册 / 灵动介绍 / 常见问题（2026-09-18 起三个页面都由后台 CMS 维护）───────────
 // 用户口径：「灵动介绍、机构手册、常见问题尽量做成后台可配置的」，机构手册的图与文字
@@ -599,7 +610,7 @@ export function App(){
   return (
     <div className='site'>
       {INTERNAL_TEST && <div className='internal-test-banner' role='status'>内部测试环境 · 不代表正式服务</div>}
-      {!isFullPage && <Header userBadge={userBadge} />}
+      {!isFullPage && <Header userBadge={userBadge} signedIn={Boolean(session)} />}
       <Routes>
         <Route path='/' element={<Home/>}/>
         <Route path='/login' element={<LoginPage/>}/>
