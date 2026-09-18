@@ -151,9 +151,24 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：593470f（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T132726Z / commit 593470f（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（593470f，用户第九轮口径）：
+代码提交：ab859a2（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T134920Z / commit ab859a2（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（ab859a2，用户第十轮口径）：
+      ①**首页大标题换成 React Bits 的 MaskedHeading**（原样搬入，新依赖 `gsap@^3.15` 在工作区根）：
+      字形当遮罩、**首页那支视频从字里透出来**，指针在标题上移动时字下的画面还会平移。两行各一个组件
+      （`tag='span'`，外面仍是唯一 h1）。⚠️ 四个坑都写进了交接文档 §十二：**中文不能断行**（组件按空格切词
+      且 `white-space:pre`）→ 字号改成自己按字数算 `min(0.058, 0.92/字宽)`；**标题盒必须 `width:100%`**
+      （flex 列里会塌成 fit-content，与"按容器宽算字号"死循环，实测落到 20px）；**媒体是故意放大的**
+      （parallax 要余量）→ 必须 `overflow:hidden` 裁掉，否则整页横向可滚动溢出 208px；
+      **它只在 useEffect 里建 Observer**（所以 p70 的 SSR 渲染不会报未定义）
+      ②**「我的课程」两个页头各删两行**（眉题「学习上课」+ 描述）
+      ③**徽标第三次调整**：圆形头像删掉、箭头 11→16px 且深色首页上转白、名字加玻璃药丸底色
+      ⚠️ 两处留给用户定：品牌粉被遮罩吃掉了（第二行只靠 brightness/saturation 调亮粉）；媒体是视频 →
+      页面上 3 个 `<video>` 在跑，要省 CPU 可换 `mediaType="image"` + poster
+      核验：`PROD_ACCEPTANCE_OK` + 真浏览器打线上：`{lines:2, clips:2, media:2, over:0, 79px/1行, 文613/767 ≤ 盒1354}`、
+      徽标无头像/箭头 16px 白色/名字渐变底
+      可回滚上一版：release 20260918T132726Z / commit 593470f
+      上一版改动（593470f）：**网络失败记 error.cause + 学生文案改「服务器繁忙，请重试一下。」；我的课程卡片四条**
       ①**生图网络失败：把 `error.cause` 记进 `error_message`**（原来只有 `fetch failed`，真正原因在 cause，
       下次报错直接能定性）；**学生文案改成「服务器繁忙，请重试一下。」**（这类失败都在上游受理之前
       —— 0.8 秒、无 task_id，重试安全；用户实测"多按几次就能生"）。⚠️ 判据窄、且排在 TIMEOUT 之后，
