@@ -67,6 +67,16 @@ function providerDetail(error) {
   return raw.length > 160 ? `${raw.slice(0, 160)}…` : raw;
 }
 
+// 网络层失败的判据（2026-09-18 晚加）。
+// undici 把真正的原因包在 `error.cause` 里，外层只是一句 `TypeError: fetch failed`；
+// 所以只看 message 不够，要连 cause.code/message 一起拼起来判。
+// ⚠️ 判据要**窄**：上游返回的错误、我们自己的超时/业务拦截都有自己的 code 或 HTTP 状态，
+//    会先被上面那些分支接住，不该落到这里。
+const NETWORK_FAILURE = /fetch failed|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|EPIPE|ETIMEDOUT|UND_ERR_|socket hang up|other side closed/i;
+function isNetworkFailure(error) {
+  return NETWORK_FAILURE.test(`${error?.message || ''} ${error?.cause?.code || ''} ${error?.cause?.message || ''}`);
+}
+
 export function normalizeProviderError(error, { status } = {}) {
   const code = String(error?.code || '').toUpperCase();
   const httpStatus = Number(status || error?.status || error?.response?.status || 0);
@@ -93,6 +103,13 @@ export function normalizeProviderError(error, { status } = {}) {
   if (code === PROVIDER_ERROR_CODES.AUTH_FAILED || httpStatus === 401 || httpStatus === 403) return { code: PROVIDER_ERROR_CODES.AUTH_FAILED, retryable: false, message: withDetail(`AI渠道认证失败（HTTP ${httpStatus || 401}）。请在管理后台重新填写并保存该渠道 API Key。`) };
   if (code.includes('SAFETY') || code.includes('CONTENT') || httpStatus === 400 && /safety|moderation|policy/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.SAFETY_REJECTED, retryable: false, message: '内容未通过 AI 服务安全策略' };
   if (code === 'ABORT_ERR' || code === 'ETIMEDOUT' || code === 'GENERATION_TIMEOUT' || code === PROVIDER_ERROR_CODES.TIMEOUT || error?.name === 'AbortError' || /timeout|超时/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.TIMEOUT, retryable: true, message: 'AI 服务响应超时' };
+  // 网络层失败（连接被拒/重置、TLS 握手失败、DNS 抖动…）。
+  // ⚠️ 用户口径 2026-09-18 晚：「失败的文案调整下：服务器繁忙，请重试一下。因为我多按几次按钮，就可以生了。」
+  //    这类失败**发生在上游受理之前**（生产实测：平均 **0.8 秒**、**没有 task_id**、没有输出生成，
+  //    而上游受理的那种平均要 50 秒且都有 task_id）—— 所以重试是安全的，文案就直说"再点一次"，
+  //    别把 undici 那句 `fetch failed` 甩给学生看（他看不懂，也不知道该怎么办）。
+  //    ⚠️ 必须排在 TIMEOUT **之后**：我们自己的超时有明确的 code / AbortError，会先被上面那条接住。
+  if (isNetworkFailure(error)) return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: true, message: '服务器繁忙，请重试一下。' };
   if (httpStatus === 429 || code.includes('RATE')) return { code: PROVIDER_ERROR_CODES.RATE_LIMITED, retryable: true, message: withDetail('AI 服务请求频率受限') };
   if (httpStatus >= 500 || code.includes('UPSTREAM')) return { code: PROVIDER_ERROR_CODES.UPSTREAM, retryable: true, message: withDetail('AI 服务暂时不可用') };
   if (code === PROVIDER_ERROR_CODES.CONFIG_INVALID) return { code, retryable: false, message: 'AI 供应商配置不完整' };

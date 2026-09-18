@@ -681,6 +681,37 @@ try {
   console.log(`  · 课程中心的站内外壳：顶栏 ${learnChrome.topbar} 个、账号徽标 ${learnChrome.badge} 个、页脚 ${learnChrome.footer} 个`);
   if (!learnChrome.topbar) problems.push('课程中心（/learn）：应当有站内导航栏（用户口径：点灵动学习也要有导航栏）');
   if (!learnChrome.badge) problems.push('课程中心（/learn）：顶栏里应当显示当前账号徽标');
+  // 课程卡片的四条口径（用户 2026-09-18 晚）
+  const card = await page.evaluate(() => {
+    const el = document.querySelector('.course-package-card');
+    if (!el) return null;
+    const cover = el.querySelector('.course-package-cover');
+    const label = el.querySelector('.course-cover-label');
+    const desc = el.querySelector('.course-package-desc');
+    const cta = el.querySelector('.course-package-cta');
+    const title = el.querySelector('.course-package-heading h2');
+    const box = (node) => (node ? node.getBoundingClientRect() : null);
+    return {
+      coverHeight: cover ? Math.round(box(cover).height) : null,
+      labelText: label ? label.textContent.trim() : null,
+      titleText: title ? title.textContent.trim() : null,
+      hasDescRow: Boolean(desc),
+      ctaRadius: cta ? Math.round(parseFloat(getComputedStyle(cta).borderRadius)) : null,
+      ctaInsideDesc: Boolean(desc && cta && desc.contains(cta)),
+      text: el.innerText.replace(/\n/g, ' '),
+    };
+  });
+  console.log(`  · 课程卡片：封面 ${card?.coverHeight}px、封面标签「${card?.labelText}」、标题「${card?.titleText}」、按钮在简介行内=${card?.ctaInsideDesc} 圆角 ${card?.ctaRadius}px`);
+  if (!card) problems.push('课程中心：没找到课程卡片（.course-package-card）');
+  else {
+    if (card.coverHeight == null || card.coverHeight < 220) problems.push(`课程卡片：封面高度太小（${card.coverHeight}px，应 ≥220px）—— 用户口径：图展示不完`);
+    if (card.labelText !== card.titleText) problems.push(`课程卡片：封面上那行字应当是课包标题（实际「${card.labelText}」，标题是「${card.titleText}」）`);
+    if (!card.ctaInsideDesc) problems.push('课程卡片：「查看课程」应当和简介在同一行（.course-package-desc 里），不再单独占一行');
+    if (card.ctaRadius !== 999) problems.push(`课程卡片：「查看课程」应当是药丸按钮（圆角实际 ${card.ctaRadius}px）`);
+    for (const gone of ['上课形式：', '已分给你', '未授权 · 请找老师', '节课正在上课', '已完课']) {
+      if (card.text.includes(gone)) problems.push(`课程卡片：应当已删掉那两行状态文字，却还出现「${gone}」`);
+    }
+  }
   await shot('17-my-courses');
   // ⚠️ 反过来：真正的课堂（/learn/canvas）**必须仍然没有**站内导航（那是学生干活的全屏环境）
   await page.goto(`${base}/learn/canvas`, { waitUntil: 'domcontentloaded' });

@@ -186,7 +186,6 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
   const courses = (classroom.data?.classroomCourses || []).filter((course) => (course.lessons || []).length);
   const selectedCourse = courses.find((course) => course.id === selectedCourseId) || null;
   const modeOf = (lesson) => (lesson.deliveryMode === 'VIBECODING' ? 'VIBECODING' : 'CANVAS');
-  const startable = (lesson) => (modeOf(lesson) === 'VIBECODING' ? Boolean(lesson.canStartVibeCoding) : Boolean(lesson.canStart));
   // 一个课时可以**同时**开画布 + VibeCoding（平台在课包课时里设定的，可多选）。
   // 这时两个入口要**并列**给学生，不能替他挑一个 —— 2026-09-16 用户口径。
   // 服务端的 canStart / canStartVibeCoding 也已按课时的全部类型放行。
@@ -301,30 +300,22 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
     {courses.length ? <section className="course-package-grid" aria-label="课程包列表">
       {courses.map((course, index) => {
         const lessons = course.lessons || [];
-        const openCount = lessons.filter(startable).length;
-        const completedCount = lessons.filter((lesson) => lesson.participationStatus === 'COMPLETED').length;
-        const modeSummary = ['CANVAS', 'VIBECODING']
-          .map((mode) => ({ mode, count: lessons.filter((lesson) => modeOf(lesson) === mode).length }))
-          .filter((item) => item.count)
-          .map((item) => `${DELIVERY_MODE_LABEL[item.mode]} ${item.count} 节`)
-          .join(' · ');
+        // ⚠️ 2026-09-18 晚用户口径：卡片上原来那两行（「已分给你 · 等老师把你加进课堂」这行状态、
+        //    以及「上课形式：画布课堂 N 节」）**都删掉了** —— 所以这里不再算 openCount/completedCount/
+        //    modeSummary（算了也没地方用）。
         return <article className="course-package-card" key={course.id}>
           <div className={`course-package-cover cover-tone-${index % 4}`}>
             {course.coverImageUrl ? <img src={course.coverImageUrl} alt="" /> : <><span className="course-cover-orbit" /><span className="course-cover-symbol">✦</span></>}
-            <span className="course-cover-label">AI 创作课程</span>
+            {/* 封面上的那行字改成**课包标题**（原来写死「AI 创作课程」，看不出是哪个课包） */}
+            <span className="course-cover-label">{course.title}</span>
           </div>
           <div className="course-package-body">
             <div className="course-package-heading"><h2>{course.title}</h2><span>{lessons.length} 节课</span></div>
-            <p>{course.description || '围绕真实作品展开的项目式创作课程。'}</p>
-            <div className="course-package-footer">
-              <span>{course.hasGrant === false
-                ? '未授权 · 请找老师把这个课包分给你'
-                : openCount ? `${openCount} 节课正在上课`
-                  : completedCount ? `已完课 ${completedCount} 节 · 等老师安排下一节`
-                    : '已分给你 · 等老师把你加进课堂'}</span>
-              <button className="primary-button" onClick={() => setSelectedCourseId(course.id)}>查看课程</button>
+            {/* 「查看课程」不再单独占一行，挪到简介右边 */}
+            <div className="course-package-desc">
+              <p>{course.description || '围绕真实作品展开的项目式创作课程。'}</p>
+              <button type="button" className="course-package-cta" onClick={() => setSelectedCourseId(course.id)}>查看课程</button>
             </div>
-            {modeSummary ? <p className="muted">上课形式：{modeSummary}</p> : null}
           </div>
         </article>;
       })}

@@ -183,7 +183,18 @@ export function getGenerationProvider(selection = {}) {
         wrapper.compute = { ...wrapper.compute, costSource: computedSource, upstreamCostFen, costRuleSnapshot: ruleSnapshot, usageSnapshot: hasUsageEvidence ? usage : null };
         return { ...result, compute: wrapper.compute };
       } catch (error) {
-        q("UPDATE compute_attempts SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",[String(error.code || 'UPSTREAM_ERROR'),String(error.message || '调用失败').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').split(selected.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]').split(selected.gateway?.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]').slice(0,1000),nowIso(),attemptId]);
+        // ⚠️ 2026-09-18 晚：这里原来只记 `error.message`，而网络层失败的外层永远只有一句
+        // `fetch failed` —— 真正的原因（`ECONNRESET` / `UND_ERR_CONNECT_TIMEOUT` / TLS / DNS…）
+        // **在 `error.cause` 里**，不记下来就根本没法排查（这一轮为此刻意绕了很久才定位到"网络层"）。
+        // 记成 `fetch failed [ECONNRESET] connect ECONNRESET …`：保留原文，同时一眼能看出原因。
+        // 敏感信息照旧擦掉（Bearer / 渠道 key）。
+        const causeText = error?.cause ? `${error.cause.code || error.cause.name || ''} ${error.cause.message || ''}`.trim() : '';
+        const failMessage = [String(error.message || '调用失败'), causeText ? `[${causeText}]` : ''].filter(Boolean).join(' ')
+          .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+          .split(selected.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]')
+          .split(selected.gateway?.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]')
+          .slice(0, 1000);
+        q("UPDATE compute_attempts SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",[String(error.code || 'UPSTREAM_ERROR'),failMessage,nowIso(),attemptId]);
         // Only an explicit pre-acceptance rejection is safe. Network ambiguity, accepted jobs and output never retry.
         if (index + 1 >= candidates.length || emitted || submitted || args.signal?.aborted || error.safeToRetry !== true) throw error;
       }
