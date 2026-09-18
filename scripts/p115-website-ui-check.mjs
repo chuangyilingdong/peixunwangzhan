@@ -540,6 +540,34 @@ try {
   if (!priced?.coverHasImage || !String(priced.background).includes('lingdong-ai-logo.png')) problems.push('灵动课程：给课包写了封面地址，缩略图却没渲染出来 —— 公开接口是不是又漏下发 coverAssetId / coverImageUrl 了');
   await shot('10-marketplace-priced');
 
+  // ── ⑤b2 课包详情页（用户第十一轮口径：删页头 / 删课时编号 / 删「开始学习」那条 / 价格写整数）
+  //    ⚠️ 这里在**信息区**里量价格，用的是本脚本上面刚写进库的 price_fen=19900（确定性，不依赖生产数据）。
+  const detailHref = await page.locator('.mp-row .mp-cta').first().getAttribute('href').catch(() => null);
+  if (!detailHref) problems.push('课包详情：从列表里取不到课包详情链接');
+  else {
+    await page.goto(`${base}${detailHref}`, { waitUntil: 'domcontentloaded' });
+    await settle();
+    const detail = await page.evaluate(() => ({
+      pageTitle: document.querySelectorAll('.page-title').length,
+      infoTitle: document.querySelector('.mkt-detail-title')?.textContent?.trim() || null,
+      numbers: document.querySelectorAll('.mkt-lesson-num').length,
+      cta: document.querySelectorAll('.mkt-start,.mkt-cta').length,
+      priceRow: [...document.querySelectorAll('.mkt-detail-row')].find((row) => row.textContent.includes('参考价格'))?.textContent?.replace(/\s+/g, ' ').trim() || null,
+      text: document.body.innerText.replace(/\s+/g, ' '),
+    }));
+    console.log(`  · 课包详情：页头 ${detail.pageTitle} 个、信息区标题「${detail.infoTitle}」、编号块 ${detail.numbers} 个、开始学习块 ${detail.cta} 个、价格行「${detail.priceRow}」`);
+    if (detail.pageTitle) problems.push('课包详情：页头（课程广场眉题 + 课包标题 + 简介）应当已删除');
+    if (!detail.infoTitle) problems.push('课包详情：课包名称应当写在信息区里（.mkt-detail-title）');
+    if (detail.numbers) problems.push(`课包详情：课时编号块应当已删除（还有 ${detail.numbers} 个）`);
+    if (detail.cta) problems.push('课包详情：「开始学习」那一条应当已删除');
+    // 夹具里 price_fen=19900 → 参考价格要写 ¥199（不带小数、不带「线下购买」）
+    if (!detail.priceRow || !detail.priceRow.includes('¥199') || /\.00/.test(detail.priceRow)) {
+      problems.push(`课包详情：参考价格应写「¥199」（不带小数、不带「线下购买」），实际「${detail.priceRow}」`);
+    }
+    if (detail.text.includes('线下购买') || detail.text.includes('请联系客服办理')) problems.push('课包详情：不该再出现「线下购买」或「请联系客服办理」');
+    await shot('18-marketplace-detail');
+  }
+
   // ── ⑤b 灵动课程：**没有任何筛选**（用户口径 2026-09-18 晚「筛选删除」）。
   //    ⚠️ 我上一轮把那两个「画布 / VibeCoding」分类按钮做到了这一页，用户指出地方错了
   //    （那是「灵动作品」的），所以这里改成断言"一个筛选节点都不该有"，包括 .mp-cats。
