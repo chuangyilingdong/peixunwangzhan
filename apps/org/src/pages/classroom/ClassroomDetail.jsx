@@ -36,19 +36,20 @@ function Duration({ runtime, status }) {
   return <span>{seconds === null ? '尚未开始' : `${Math.floor(seconds / 3600)} 时 ${Math.floor(seconds % 3600 / 60)} 分 ${seconds % 60} 秒`}</span>;
 }
 
-// 「这堂课还剩多少额度 / 已用多少」——2026-09-18 起读**唯一那套按钱的**额度
-// （每学生 × 本场课堂的上游成本上限，`class_sessions.student_cost_cap_fen`；
-//  留空 = 不限制，只记账）。服务端给的是服务端算好的同一份状态，界面上不做任何推断。
+// 「这堂课花了多少算力」——2026-09-18 用户口径：这套额度**只观测、不真拦**
+// （原话「学生算力额度的设置目前都是不真拦，都是给我们内部看的」）。
+// 读的是 `class_sessions.student_cost_cap_fen`（观测上限，分/人；留空 = 不设上限）。
+// ⚠️ 界面上**必须写明"不拦学生"**：老师看到"超了"时不能以为系统挡住了学生。
 function capText(costCap) {
   if (!costCap) return null;
-  if (!costCap.configured) return '不限（未配置每学生上限，只记账）';
+  if (!costCap.configured) {
+    return `已用 ${formatYuan(costCap.usedFen || 0)} · 未设观测上限（仅内部观测，不拦学生）`;
+  }
   const used = formatYuan(costCap.usedFen);
   const cap = formatYuan(costCap.capFen);
-  const remain = formatYuan(costCap.remainFen);
-  const unknown = costCap.unknownCalls ? ` · ${costCap.unknownCalls} 笔成本未知（实际可能更多）` : '';
-  return costCap.exceeded
-    ? `已用 ${used} / 上限 ${cap} · 已用尽${unknown}`
-    : `已用 ${used} / 上限 ${cap}（还剩 ${remain}）${unknown}`;
+  const unknown = costCap.unknownCalls ? ` · ${costCap.unknownCalls} 笔成本未知（金额只是下界）` : '';
+  const over = costCap.exceeded ? ' · 已超观测上限（仅记录，不拦学生）' : '';
+  return `已用 ${used} / 观测上限 ${cap}（仅内部观测，不拦学生）${over}${unknown}`;
 }
 
 function AiUsage({ ai }) {
@@ -203,9 +204,8 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
               {current.status === 'PENDING' && !summary.pending ? <p className="muted">名单为空：添加学生后才能开始上课。</p> : null}
               {current.status === 'PENDING' ? <p className="muted">开始或解散均需二次确认。</p> : null}
               {current.runtime?.ai ? <p className="muted">课堂 AI 使用：<AiUsage ai={current.runtime.ai} /></p> : null}
-              {/* 这堂课每个学生的算力上限（唯一那套按钱的；留空 = 不限制）。
-                  超限的调用会在**调用前**被拦（学生看到的是「已用/上限/还有几笔成本未知」），
-                  但这里只展示状态，不代替服务端拦截。 */}
+              {/* 这堂课每学生的算力消耗（观测口径：**只记录、不拦学生**）。
+                  超了也只是看得见，学生不会被系统挡住，也不会看到这个数字。 */}
               {capText(current.runtime?.costCap) ? <p className="muted">本课堂每学生算力：{capText(current.runtime?.costCap)}</p> : null}
               <p className="muted">最近活动：{formatDate(current.runtime?.lastActivityAt)}</p>
             </Panel>

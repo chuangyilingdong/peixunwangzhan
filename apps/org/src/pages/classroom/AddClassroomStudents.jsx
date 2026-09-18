@@ -18,18 +18,19 @@ const BLOCK_GROUPS = [
 ];
 const groupOf = (reason) => BLOCK_GROUPS.find((group) => group.reasons.includes(reason)) || BLOCK_GROUPS[2];
 
-// 「这堂课给每个学生的算力」列：服务端给的 pool* 字段现在读的是**唯一那套按钱的**
-// （每学生 × 本场课堂的上游成本上限，见 services/sessionCostCap.js），不再是恒「不限」的死池子。
-// 口径：没配上限 → 不限（不填就不管，只记账）；配了 → 已用 / 上限 / 还剩。
+// 「这堂课给每个学生的算力」列：服务端给的 pool* 读的是**观测口径**（每学生 × 本场课堂的上游成本
+// 与观测上限，见 services/sessionCostCap.js）—— **只观测、不真拦**（2026-09-18 用户口径）。
+// 没配观测上限 → 只显示已用；配了 → 已用 / 观测上限 / 差额，并写明"不拦学生"。
 // 候选人多半还没进这堂课，所以「已用 ¥0.00」是**真实值**，不是占位符。
 // 注意：pool* 的值是**分**（formatYuan 的入参就是分）。
 function poolText(student) {
-  if (student.poolUnlimited) return '不限（不填就不管，只记账）';
-  if (student.poolCapYuan == null) return '—';
   const used = formatYuan(student.poolUsedYuan || 0);
+  const unknown = student.poolUnknownCalls ? ` · ${student.poolUnknownCalls} 笔成本未知` : '';
+  if (student.poolUnlimited) return `已用 ${used}（未设观测上限，不拦学生）${unknown}`;
+  if (student.poolCapYuan == null) return `已用 ${used}${unknown}`;
   const cap = formatYuan(student.poolCapYuan);
   const remain = formatYuan(student.poolRemainYuan);
-  return `已用 ${used} / 上限 ${cap}（还剩 ${remain}）${student.poolUnknownCalls ? ` · ${student.poolUnknownCalls} 笔成本未知` : ''}`;
+  return `已用 ${used} / 观测上限 ${cap}（还剩 ${remain} · 仅观测，不拦学生）${unknown}`;
 }
 
 export function AddClassroomStudents({ api, openId, onBack }) {

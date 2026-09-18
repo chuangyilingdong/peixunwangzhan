@@ -81,9 +81,14 @@ export function normalizeProviderError(error, { status } = {}) {
   // 但那不是 key 填错了，提示学生「让老师充算力」比提示管理员「重填 key」有用得多。
   // ⚠️ 这一条**不带上游原文**（withDetail）：原文是「请在管理后台重新填写并保存该渠道 API Key」，
   //    拼上去正好把最误导人的那句话又还给了学生（守卫 p59 ⑥ 专门钉这一条）。
+  // ⚠️ 2026-09-18 文案修正：这里说的是**上游账号自己**的额度/余额用尽（网关或供应商返回 402/403），
+  //    **不是**我们平台给学生设的额度 —— 平台侧的算力额度/上限一律**只观测、不拦人**
+  //    （用户口径：「学生算力额度的设置都是不真拦，都是给我们内部看的」）。
+  //    原来那句「本节课的算力额度已用尽，请联系老师为本节课增加额度」会让学生以为是我们的闸门到了，
+  //    其实是上游账户没钱了 —— 学生帮不上忙，该找的是平台运营。
   if (code === PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED || httpStatus === 402
     || (httpStatus === 403 && /quota|额度|余额|balance|insufficient|用尽/i.test(String(error?.message || '')))) {
-    return { code: PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED, retryable: false, message: '本节课的算力额度已用尽，请联系老师为本节课增加额度。' };
+    return { code: PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED, retryable: false, message: 'AI 服务暂时不可用（上游账户额度或余额不足，平台会处理）。请稍后再试，或先做不需要 AI 的部分。' };
   }
   if (code === PROVIDER_ERROR_CODES.AUTH_FAILED || httpStatus === 401 || httpStatus === 403) return { code: PROVIDER_ERROR_CODES.AUTH_FAILED, retryable: false, message: withDetail(`AI渠道认证失败（HTTP ${httpStatus || 401}）。请在管理后台重新填写并保存该渠道 API Key。`) };
   if (code.includes('SAFETY') || code.includes('CONTENT') || httpStatus === 400 && /safety|moderation|policy/i.test(String(error?.message || ''))) return { code: PROVIDER_ERROR_CODES.SAFETY_REJECTED, retryable: false, message: '内容未通过 AI 服务安全策略' };

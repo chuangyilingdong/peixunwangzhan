@@ -1,41 +1,44 @@
-// 学生算力上限 —— **全平台唯一保留的一套**（2026-09-18 用户口径）。
+// 学生算力额度 —— **只观测，不拦人**（2026-09-18 用户口径，同日更正）。
 //
-// 历史背景（必须记住，别再铺第二层）：「学生的算力上限」在仓库里被实现过 **6 遍**
-// （`class_sessions.student_call_cap` 次数上限 / 课包 CU 额度 `student_course_cu_quotas`+`_ledger` /
+// 用户原话：「**学生算力额度的设置目前都是不真拦，都是给我们内部看的。**」
+// 所以这套东西的性质是**运营观测指标**，与平台端已有的「课堂成本预警」
+// （`computePool.classroomBudgetStatus`，`enforced: false`）**同一性质** —— 数字好看得见，
+// 但**不挡任何一次调用**。要控成本请用别的办法（渠道价目表、教师暂停课堂 AI）。
+//
+// 历史背景（别再铺第二层）：「学生的算力上限」在仓库里被实现过 **6 遍**
+// （`class_sessions.student_call_cap` 次数 / 课包 CU 额度 `student_course_cu_quotas`+`_ledger` /
 //  `platform_credit_quotas` / `org_ai_budgets` / `billing_packages.monthly_credits+bonus_credits` /
-//  `per_student_budget_fen`），其中**只有 `student_call_cap` 真的会拦人**，而它数的是**次数不是钱**。
-// 用户 2026-09-18 定了：「只留一套**按钱**的，删其余 5 套」。
-// 这套就是那一套；其余 5 套的删除见 docs/operations/平台AI与CU配置-重梳理-20260918.md 的 Phase 6。
+//  `per_student_budget_fen`）。2026-09-18 用户定了「只留一套按钱的」——**这一套**；
+// 其余 5 套已删（见 docs/operations/平台AI与CU配置-重梳理-20260918.md 的 Phase 6）。
+// 同日更正：留下的这一套也**不拦人**，只算数给人看。
 //
-// 口径（照抄用户原话的精神，改动前先读）：
-//   · 概念 = **每个学生在每场课堂上的算力上限（分）**，依据**上游成本**
-//     （`compute_attempts.upstream_cost_fen`），不是对外售价（那是 `sale_price_fen`，只进报表）、
+// 口径：
+//   · 概念 = **每名学生 × 每场课堂**的算力消耗观测值，依据**上游成本**
+//     （`compute_attempts.upstream_cost_fen`）——不是对外售价（`sale_price_fen`，只进报表）、
 //     更不是调用次数。
-//   · 该学生在这堂课**已花的已知成本 ≥ 上限**时拦截（调用前的准入判断，不做预留）。
+//   · `exceeded` = 已花的**已知成本** ≥ 观测上限：**只是一个标记**（给运营/老师看"这堂课花超了"），
+//     `enforced` **恒为 false** —— 不再有任何代码路径会因为 `exceeded` 拦住学生调用。
 //   · `cost_source='UNKNOWN'`（或没有金额）的调用**只计笔数、不按 0 计入金额** ——
-//     按 0 计等于把「不知道花了多少」说成「没花钱」；拦截文案里必须点明「还有 N 笔成本未知」。
-//   · **留空 = 不限制**（不填就不管，只记账、只统计）。
+//     按 0 计等于把「不知道花了多少」说成「没花钱」；`costIncomplete` 标出金额只是**下界**。
+//   · **留空 = 不设观测上限**（`configured: false`）：照样记账、照样统计，只是没有"超没超"可比。
 //
-// 配置列：`class_sessions.student_cost_cap_fen`（分，NULL = 不限制）。只**新增**列，老列一字不改。
+// 配置列：`class_sessions.student_cost_cap_fen`（分，NULL = 不设观测上限）。只**新增**列，老列一字不改。
 //   为什么不复用 `class_sessions.platform_budget_fen`：那一列是「**整场课堂**的成本基准」，
-//   只预警不拦人（见 computePool.classroomBudgetStatus），它是按整场人头配的基准；
-//   把它同时当「**每个学生**的上限」= 一场 20 人的课堂会给每个学生都发放整场额度，
-//   单位不同、口径混用 —— 正是这轮要消灭的病症（"看着配了、其实不生效"）。
+//   它是按整场人头配的；拿它当「**每个学生**的观测上限」会让一场 20 人的课堂给每个学生
+//   都显示整场额度 —— 单位不同、口径混用，正是这轮要消灭的病症。
 //
-// ⚠️ 这套**会真的拦住学生调用**（这是它与前面 5 套最大的区别）。所以：
-//   默认/留空必须是不限制；只有显式配了上限的课堂才会拦。
-//   配入口在机构端建课堂/改课堂的能力参数里（`capabilities.studentCostCapFen`，单位分）。
-import { errors, row, rows } from '../lib.js';
-
-/** 金额展示（分 → 元，两位小数）。文案要给学生看，所以带货币符号。 */
-export function formatFenAsYuan(fen) {
-  return `¥${(Number(fen || 0) / 100).toFixed(2)}`;
-}
+// ⚠️ **学生端不下发**（2026-09-18 用户口径：额度是内部看的，学生既看不到也不会被它拦）：
+//   学生可见负载（`/api/ai/center`、`routes/ai.js`）里**没有**这套字段，也**不进**"能力不可用理由"。
+//   老师端（机构端课堂详情）与平台端（内部报表）保留这份数字。
+import { row, rows } from '../lib.js';
 
 const KNOWN_COST_SQL = "(cost_source <> 'UNKNOWN' AND upstream_cost_fen IS NOT NULL)";
 const UNKNOWN_COST_SQL = "(cost_source = 'UNKNOWN' OR upstream_cost_fen IS NULL)";
 
-/** 这堂课配的「每学生算力上限（分）」；**留空 = null = 不限制**（老课堂都是 NULL，不会被误伤）。 */
+/**
+ * 这堂课配的「算力**观测**上限（分）」；**留空 = null = 不设观测上限**（老课堂都是 NULL）。
+ * ⚠️ 它**只是分母**：没有任何地方会因为达到它而拒绝调用。
+ */
 export function studentCostCapFen(sessionId) {
   if (!sessionId) return null;
   const value = row('SELECT student_cost_cap_fen FROM class_sessions WHERE id=?', [sessionId])?.student_cost_cap_fen;
@@ -45,7 +48,7 @@ export function studentCostCapFen(sessionId) {
 }
 
 /**
- * 一场课堂里**每个学生**的已花成本（同一张表的同一列，与平台用量报表、课堂预算预警同一套口径）。
+ * 一场课堂里**每个学生**的已花成本（同一张表的同一列，与平台用量报表、课堂成本预警同一套口径）。
  * 一次 group by 取全名单，避免老师端名单里 N 个学生打 N 次库。
  */
 export function sessionCostUsageByStudent(sessionId) {
@@ -60,7 +63,13 @@ export function sessionCostUsageByStudent(sessionId) {
   return map;
 }
 
-/** 把「上限 + 已花」折成一份状态（学生端 / 老师端 / 候选名单共用同一份，不各算一套）。 */
+/**
+ * 把「观测上限 + 已花」折成一份观测状态（老师端 / 平台端 / 候选名单共用同一份，不各算一套）。
+ *
+ * ⚠️ `enforced` **恒为 false**（2026-09-18 用户口径）：这是本轮的要害 ——
+ *   `exceeded: true` 只代表"看板上这个数超了"，**不代表任何人被挡住**。
+ *   写新代码时不要读 `exceeded` 去做准入判断；要拦人的话那是另一个（不存在的）机制。
+ */
 export function sessionCostCapState({ capFen = null, usedFen = 0, unknownCalls = 0 } = {}) {
   const configured = capFen !== null && capFen !== undefined;
   const used = Number(usedFen || 0);
@@ -68,62 +77,38 @@ export function sessionCostCapState({ capFen = null, usedFen = 0, unknownCalls =
   const exceeded = configured && used >= capFen;
   return {
     configured,
-    state: !configured ? 'UNCONFIGURED' : exceeded ? 'EXHAUSTED' : 'WITHIN_CAP',
+    state: !configured ? 'UNCONFIGURED' : exceeded ? 'EXCEEDED_OBSERVED' : 'WITHIN_CAP',
     capFen: configured ? capFen : null,
     usedFen: used,
     remainFen: configured ? Math.max(0, capFen - used) : null,
-    // 未知笔数：只要有，金额就是**下界**（"至少花了这么多"），文案必须说清
+    // 未知笔数：只要有，金额就是**下界**（"至少花了这么多"），显示时要能看出不完整
     unknownCalls: unknown,
     costIncomplete: unknown > 0,
     usagePercent: configured ? (capFen > 0 ? Math.round((used / capFen) * 1000) / 10 : (exceeded ? 100 : 0)) : null,
     exceeded,
+    // 恒 false：这套额度是**观测口径，不是闸门**（2026-09-18 用户口径）。
+    enforced: false,
   };
 }
 
 /**
- * 额度状态：`studentId` 给了就是那个学生的，没给就是**整场课堂**（四个模态合计，老师端看总量）。
- * 无论有没有配上限都返回同一份形状 —— 「没配」= `configured:false`（前端据此显示"不限"）。
+ * 观测状态：`studentId` 给了就是那个学生的，没给就是**整场课堂**（四个模态合计，老师端看总量）。
+ * 无论有没有配上限都返回同一份形状 —— 「没配」= `configured:false`（只是没有分母）。
+ *
+ * ⚠️ 这是**纯读函数**：调用它不会改变任何请求的结果（它不再是 assert，不抛错、不拦人）。
+ * ⚠️ 成本合计**复用 `sessionCostUsageByStudent`（唯一一份 SQL）** —— 老师端的课堂详情读的也是
+ *    同一个函数，两边不会有"两套算法"（这也是为什么守卫的自检要砸这个合计：砸了它，
+ *    老师端与学生侧的状态会一起错，而"观测口径的可信度全在这个数算得对"）。
  */
 export function sessionCostCapStatus({ sessionId, studentId = null }) {
   if (!sessionId) return sessionCostCapState({ capFen: null });
   const capFen = studentCostCapFen(sessionId);
-  const conditions = ['class_session_id=?'];
-  const params = [sessionId];
-  if (studentId) { conditions.push('user_id=?'); params.push(studentId); }
-  // ⚠️ 没有上限时也照样查已花金额：「不限制」不等于「不记账」，老师端仍要看得出消耗。
-  const cost = row(`SELECT SUM(CASE WHEN ${KNOWN_COST_SQL} THEN upstream_cost_fen ELSE 0 END) knownFen,
-      SUM(CASE WHEN ${UNKNOWN_COST_SQL} THEN 1 ELSE 0 END) unknownCalls
-    FROM compute_attempts WHERE ${conditions.join(' AND ')}`, params);
-  return sessionCostCapState({ capFen, usedFen: cost?.knownFen || 0, unknownCalls: cost?.unknownCalls || 0 });
-}
-
-/**
- * 学生看得懂的拦截文案（不是 `COURSE_CU_EXHAUSTED` 这种机器码）。
- * 要点：① 还剩多少 / 上限多少，让学生知道自己花到哪了；
- *       ② 有成本未知的调用就点名笔数 —— 否则学生以为「我一分钱没花怎么就被拦了」。
- */
-export function sessionCostCapMessage(status) {
-  const head = `你在本课堂的 AI 算力额度已经用完了：本堂课每人上限 ${formatFenAsYuan(status.capFen)}，你已用掉 ${formatFenAsYuan(status.usedFen)}`;
-  const unknown = status.unknownCalls
-    ? `。另外还有 ${status.unknownCalls} 笔调用的成本未知（可能不止这些），老师能看到明细`
-    : '（成本按上游实际扣费统计）';
-  return `${head}${unknown}。请找老师看是否需要调高本课堂的额度，或等下一节课再继续。`;
-}
-
-/**
- * 调用前的准入刹车：**故意放在"调用前"而不是"结算后"**。
- * 结算时（settleSuccessfulJob）当前这次调用的成本已经落库了，那时再拦会把一次
- * **已经产出素材、已经花掉上游钱**的调用判成失败 —— 学生白花钱还拿不到东西。
- * 所以：上限是准入控制（花超了就进不来），不是事后审计（事后审计在报表里）。
- */
-export function assertSessionCostCap({ sessionId, studentId, orgId = null }) {
-  if (!sessionId || !studentId) return null;
-  const status = sessionCostCapStatus({ sessionId, studentId });
-  if (!status.exceeded) return status;
-  if (orgId) {
-    // 只统计本机构这一堂课的账。绝不做跨机构回填：查不到就是查不到（教学平台不猜账）。
-    const owned = row('SELECT id FROM class_sessions WHERE id=? AND org_id=?', [sessionId, orgId]);
-    if (!owned) return status;
-  }
-  throw errors.forbidden(sessionCostCapMessage(status), 'SESSION_STUDENT_COST_CAP_EXHAUSTED');
+  const byStudent = sessionCostUsageByStudent(sessionId);
+  // ⚠️ 没有观测上限时也照样查已花金额：「不设上限」不等于「不记账」。
+  const totals = studentId ? null : [...byStudent.values()].reduce(
+    (sum, item) => ({ usedFen: sum.usedFen + item.usedFen, unknownCalls: sum.unknownCalls + item.unknownCalls }),
+    { usedFen: 0, unknownCalls: 0 },
+  );
+  const usage = studentId ? byStudent.get(studentId) : totals;
+  return sessionCostCapState({ capFen, usedFen: usage?.usedFen || 0, unknownCalls: usage?.unknownCalls || 0 });
 }

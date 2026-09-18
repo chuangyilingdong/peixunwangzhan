@@ -394,11 +394,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_class_sort ON class_curriculum_
 -- 2026-09-13（课堂成为主对象）：class_sessions 就是「课堂」，自带课包/课时/负责老师，班级退场后它独立存在。
 -- 四态：PENDING（待上课，已创建未开始）/ ACTIVE（上课中）/ ENDED（已结束）/ DISSOLVED（已解散）。
 --
--- ⚠️ 学生算力额度（2026-09-18 用户口径：6 套收敛成 1 套**按钱的**，见
---    docs/operations/平台AI与CU配置-重梳理-20260918.md 的 Phase 6）：
---      · student_cost_cap_fen（分）= **唯一保留、唯一真的会拦人**的那一套：
---        每名学生在这场课堂上的**上游成本**上限，依据 compute_attempts.upstream_cost_fen；
---        **NULL = 不限制**（留空就不管，只记账、只统计）；判定与文案见 services/sessionCostCap.js。
+-- ⚠️ 学生算力额度（2026-09-18 用户口径，两次更正后的最终口径：6 套收敛成 1 套**按钱的**，
+--    且这一套**只观测、不真拦**。原话：「学生算力额度的设置目前都是不真拦，都是给我们内部看的。」
+--    见 docs/operations/平台AI与CU配置-重梳理-20260918.md 的 Phase 6）：
+--      · student_cost_cap_fen（分）= **唯一保留的那一套，且只是观测分母**：
+--        每名学生在这场课堂上的**上游成本**观测值（依据 compute_attempts.upstream_cost_fen）
+--        与它比大小，只用于老师端/平台端看数；**NULL = 不设观测上限**（照样记账、照样统计）。
+--        **它不拦任何一次调用** —— 没有任何代码路径会因为达到它而拒绝生成
+--        （见 services/sessionCostCap.js，enforced 恒 false）。
 --      · student_call_cap（次）= **已退役**（2026-09-18）。它数的是**次数不是钱**，
 --        已在代码里删除拦截与回显；这一列**不删**（老库有数据），也**不再被读写**。
 --      · session_credit_cap / consumed_credits_total = 更早的积分时代遗留，同样只留列不读写。
@@ -1841,9 +1844,9 @@ try { db.exec('UPDATE class_sessions SET org_id=(SELECT owner.org_id FROM users 
 
 try { db.exec('ALTER TABLE class_sessions ADD COLUMN platform_budget_fen INTEGER CHECK (platform_budget_fen IS NULL OR platform_budget_fen >= 0)'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
-// 学生算力上限（2026-09-18 唯一保留的那套，按**上游成本**，分；NULL = 不限制）。
-// 老库补列时**一律 NULL**（不填就不管）—— 绝不从 platform_budget_fen（整场基准）或已退役的
-// student_call_cap（次数）回填：回填等于凭空给老课堂加上一个会拦人的额度（用户口径要求不误伤）。
+// 算力**观测**上限（2026-09-18 唯一保留的那套，按**上游成本**，分；NULL = 不设观测上限；
+// 只观测、不拦人）。老库补列时**一律 NULL**（不填就不设）—— 绝不从 platform_budget_fen（整场基准）
+// 或已退役的 student_call_cap（次数）回填：回填等于凭空给老课堂造出一个"看起来超了"的假分母。
 try { db.exec('ALTER TABLE class_sessions ADD COLUMN student_cost_cap_fen INTEGER CHECK (student_cost_cap_fen IS NULL OR student_cost_cap_fen >= 0)'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // 课堂表的索引统一在这里建：旧库要先重建出 created_at/teacher_id 才能建（写在基础 DDL 里会让老库初始化当场报错）

@@ -12,9 +12,9 @@ import { applyGatewayRoute } from '../services/computeGateway.js';
 import { priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
 // 2026-09-18（用户口径）：`services/courseCuLedger.js` 已**整体删除** —— 那套课包 CU 额度
 // （`reserveCourseCu/settleCourseCu/releaseCourseCu`）的 `cu_limit` 全仓无人写，恒 `UNLIMITED`、
-// 两张 `student_course_cu_*` 表永远是空的。学生的算力上限现在只有一套**按钱的**：
-// `services/sessionCostCap.js`（每学生 × 每场课堂，依据上游成本，见该文件的完整口径说明）。
-import { assertSessionCostCap, sessionCostCapStatus, sessionCostCapMessage } from '../services/sessionCostCap.js';
+// 两张 `student_course_cu_*` 表永远是空的。学生算力额度现在**只有一套、且只观测不拦人**：
+// `services/sessionCostCap.js`（每学生 × 每场课堂的消耗观测，`enforced` 恒 false）。
+// 这个路由**不再调用它** —— 额度不进生成链路（用户口径：额度是内部看的，不真拦）。
 
 /** 项目归属的课包 id（报表分组用）。失败路径上没有 context，所以这里按课时回查一次。 */
 function seriesIdOf(project) {
@@ -31,10 +31,12 @@ const MODALITY_LABELS = {
 const isQuotaExhausted = (code) => String(code || '') === PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED;
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo' };
 const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music' };
-// 业务侧「拦在调用前」的错误码：这些不是上游故障，是课堂/额度政策，记 BLOCKED 不是 FAILED。
-// 2026-09-18：`SESSION_STUDENT_CALL_CAP`（按**次数**的课堂上限）已退役，换成按钱的
-// `SESSION_STUDENT_COST_CAP_EXHAUSTED`（见 services/sessionCostCap.js）。
-const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_COST_CAP_EXHAUSTED', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
+// 业务侧「拦在调用前」的错误码：这些不是上游故障，是课堂/能力政策，记 BLOCKED 不是 FAILED。
+// 2026-09-18：`SESSION_STUDENT_CALL_CAP`（按**次数**的课堂上限）已退役。
+// 同日更正（用户口径）：「学生算力额度只观测、不真拦」—— 一度加过的那个
+// 「额度已用完」错误码也**一并删除**（额度不再是任何一条拦截理由，学生端也不显示它）。
+// 所以这张表里现在**没有任何额度类错误码**，别再往里加。
+const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
@@ -150,12 +152,10 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
 export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null, model = '', units = 1 }) {
   assertCapability(modality, context.activeSession);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id });
-  // 学生算力上限（**唯一保留的一套，按钱的**，2026-09-18 用户口径）：这堂课这名学生
-  // 已花的**已知上游成本** ≥ 本课堂配的上限就拦。四种模态都被它管住（视频/音乐走不到网关，
-  // 只有这里拦得到）。留空 = 不限制（老课堂的 student_cost_cap_fen 是 NULL，不会被误伤）。
-  // ⚠️ 只在**调用前**拦：结算时（settleSuccessfulJob）这次调用的成本已经落库了，
-  //    那时再拦会把一次已产出素材、已经花掉上游钱的调用判成失败（学生白花钱还拿不到东西）。
-  assertSessionCostCap({ sessionId: context.activeSession?.id || null, studentId: user.id, orgId });
+  // 2026-09-18（用户口径）：「学生算力额度只观测、不真拦」—— 这里原来有一行
+  // 额度断言（按钱的课堂上限，超了抛 403）。**已删除**：额度不再进生成链路。
+  // 观测值仍在（老师端/平台端看得到），但没有任何调用会被它挡住。
+  // ⚠️ 别把额度断言加回来当闸门 —— 要拦人得先有用户口径，并连同学生端文案、守卫一起改。
   // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
   if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
@@ -825,16 +825,17 @@ function activeAiSessions(user) {
      ORDER BY session.started_at DESC`, [user.id, user.org_id]);
 }
 
-function normalizeAiSession(value, { costCap = null } = {}) {
+function normalizeAiSession(value) {
   if (!value) return null;
   return {
     id: value.id, classId: value.class_id, lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
     status: value.status, aiPaused: !!value.ai_paused,
-    // 2026-09-18（用户口径）：`student_call_cap`（按**次数**的上限）已退役，不再回显 ——
-    // 免得学生端/老师端看到「还剩 3 次」这种与钱无关、且现在**根本不生效**的旧数。
-    // 学生在这堂课的额度改看下面 `costCap`（按上游成本，唯一会拦人的那套）。
+    // 2026-09-18（用户口径，两次更正后的最终口径）：
+    //   · `student_call_cap`（按**次数**的上限）已退役，不回显 —— 那是与钱无关、且不生效的旧数；
+    //   · 按钱的观测额度（`student_cost_cap_fen`）**也不给学生**：「学生算力额度的设置
+    //     目前都是不真拦，都是给我们内部看的」→ 学生既看不到它，也不会被它拦。
+    //   所以学生可见的课堂对象里**没有任何额度字段**（`studentCallCap` 恒 null 只是键兼容位）。
     studentCallCap: null,
-    costCap,
     capabilities: {
       allowText: value.allow_text === undefined ? true : !!value.allow_text,
       allowImage: !!value.allow_image, allowMusic: !!value.allow_music, allowVideo: !!value.allow_video,
@@ -848,10 +849,8 @@ function studentAiCenter(ctx) {
   const auth = ctx.auth;
   const rawUser = auth.rawUser;
   const orgId = (auth.session?.org_id || auth.user.orgId);
-  // 每个进行中的课堂都带上「这堂课我还能花多少」（唯一那套按钱的额度；留空 = 不限制）。
-  const activeSessions = activeAiSessions(rawUser).map((value) => normalizeAiSession(value, {
-    costCap: sessionCostCapStatus({ sessionId: value.id, studentId: auth.user.id }),
-  }));
+  // 学生可见负载**不带额度**（2026-09-18 用户口径）：观测数字只在老师端/平台端。
+  const activeSessions = activeAiSessions(rawUser).map(normalizeAiSession);
   const session = activeSessions[0] || null;
   const capabilities = AI_MODALITIES.map((modality) => {
     const capability = SESSION_CAPABILITY_BY_MODALITY[modality];
@@ -861,12 +860,10 @@ function studentAiCenter(ctx) {
     // 套餐未开通该能力）一并删掉 —— 学生看到「套餐」两个字已无从处理，只会来问。
     if (session?.aiPaused) reasons.push('教师已暂停课堂 AI');
     else if (!sessionEnabled) reasons.push('当前课堂未开放');
-    // 2026-09-18（用户口径）：这里原来是「本课堂 AI 调用**次数**已达上限」——
-    // 已退役（次数不是钱）。改成唯一那套按钱的：达到本课堂配的**上游成本**上限就报，
-    // 文案与真正拦截时的 403 文案**同一份**（同一个函数生成，不各写一句）。
-    if (session?.costCap?.exceeded) reasons.push(sessionCostCapMessage(session.costCap));
-    // 2026-09-13（P4 删积分）：不再有「课堂用量上限 / 个人额度」两条拒绝理由 ——
-    // 额度只有 sessionCostCap 这一套，且它在**调用前**拦，这里只说状态、不重复拦。
+    // 2026-09-18（用户口径，两次更正后的最终口径）：额度**不是**学生侧的理由 ——
+    // 先前的「本课堂 AI 调用次数已达上限」（按次数，已退役）和「本课堂算力额度已用完」
+    // （按钱）两条**都不该出现在这里**：额度只观测、不真拦，学生也不该知道内部额度。
+    // 别再往 reasons 里加任何额度类文案。
     // 2026-09-13：取消「在家练习」免课堂通道 —— **有许可只代表能看课包信息**，
     // 要进操作环境必须被老师加进课堂、且课堂正在进行。所以这里只看有没有进行中的课堂，
     // 不再看 student_usage_scope（那个字段已退役，见 orgAdmin 建号那段的说明）。
@@ -874,8 +871,8 @@ function studentAiCenter(ctx) {
     if (scopeBlocked) reasons.push('等老师把你加进课堂并点「开始上课」');
     return {
       modality, label: MODALITY_LABELS[modality], sessionEnabled,
-      // 额度用尽也算「不可用」，理由里已经写明还剩多少、上限多少、有几笔成本未知。
-      available: sessionEnabled && !session?.aiPaused && !scopeBlocked && !session?.costCap?.exceeded,
+      // 可用性只看「课堂是否开放/是否被暂停/是否在课堂里」——**与额度无关**（额度不拦人）。
+      available: sessionEnabled && !session?.aiPaused && !scopeBlocked,
       reasons,
     };
   });

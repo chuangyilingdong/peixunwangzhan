@@ -142,13 +142,14 @@ export function sessionCandidates(session) {
 }
 
 /**
- * 候选人的算力额度摘要（老师端口径）—— 现在读**唯一那套按钱的**：本场课堂每学生上限
- * （`class_sessions.student_cost_cap_fen`，留空 = 不限制）+ ta 在这堂课已花的上游成本。
+ * 候选人的算力**观测**摘要（老师端口径）—— 读唯一那套（**只观测、不真拦**，
+ * 2026-09-18 用户口径）：本场课堂每学生的观测上限（`class_sessions.student_cost_cap_fen`，
+ * 留空 = 不设观测上限）+ ta 在这堂课已花的上游成本。
  *
  * 键名（`poolUnlimited` / `poolCapYuan` / `poolUsedYuan` / `poolRemainYuan` / `poolPercent`）
  * **保持不变**：机构端「添加学生」页整列在渲染它们，而且这些键的语义本来就是
- * 「这个学生在这里还剩多少」—— 变的是**数据源**（从恒 unlimited 的死池子换成会拦人的按钱额度），
- * 不再是「恒说一句不限」。
+ * 「这个学生在这里花了多少」—— 变的是**数据源**（从恒 unlimited 的死池子换成新口径）
+ * 和**性质**（观测数字，不是闸门）。
  * ⚠️ 键名里的 `Yuan` 是历史命名，**值一律是「分」**（与全仓 `formatYuan(fen)` 的入参口径一致）。
  */
 function candidateCostCap(session, studentId) {
@@ -163,6 +164,8 @@ function candidateCostCap(session, studentId) {
     poolRemainYuan: status.remainFen,
     poolPercent: status.usagePercent,
     poolUnknownCalls: status.unknownCalls,
+    // 明写「不拦人」：老师看到"超了"时不该以为学生被系统挡住了。
+    poolEnforced: false,
   };
 }
 
@@ -255,8 +258,8 @@ export function sessionRuntimeDetail(session, auth, students) {
     WHERE org_id=? AND class_session_id=? AND UPPER(model) NOT LIKE '%MOCK%'
     AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%'
     AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%'`, [session.org_id, session.id]);
-  // 学生算力额度（唯一那套**按钱的**）：每个学生在这堂课的上游成本 + 上限 + 还剩多少。
-  // 一次 group by 取全名单（不是每个学生打一次库），口径与拦截（sessionCostCap）同一份实现。
+  // 学生算力**观测**值（唯一那套，只观测不拦人）：每个学生在这堂课的上游成本 + 观测上限 + 差额。
+  // 一次 group by 取全名单（不是每个学生打一次库），与老师端/平台端读的是同一份实现。
   const costCapFen = studentCostCapFen(session.id);
   const costUsage = sessionCostUsageByStudent(session.id);
   const costCapFor = (studentId) => sessionCostCapState({
@@ -266,7 +269,7 @@ export function sessionRuntimeDetail(session, auth, students) {
   });
   const aiFor = (studentId = null) => {
     const records = studentId ? usage.filter((item) => item.user_id === studentId) : usage;
-    // costCap = 老师端要看的「这堂课还剩多少额度 / 已用多少」（学生端读的是同一份状态）。
+    // costCap = 老师端要看的「这堂课花了多少 / 有没有超观测上限」（`enforced` 恒 false）。
     const costCap = studentId ? costCapFor(studentId) : sessionCostCapState({
       capFen: costCapFen,
       usedFen: [...costUsage.values()].reduce((total, item) => total + item.usedFen, 0),
@@ -319,8 +322,9 @@ export function sessionRuntimeDetail(session, auth, students) {
     runtime: { asOf, startedAt: session.started_at || null, endedAt: session.ended_at || null,
       durationSeconds: Number.isFinite(duration) ? duration : null,
       lastActivityAt: latest([...usage.map((item) => item.created_at), ...activity.map((item) => item.activity_at), ...works.map((item) => item.submittedAt), ...events.map((item) => item.createdAt)]),
-      // costCap：本课堂的「每学生算力上限 + 整场已花」（配置列 class_sessions.student_cost_cap_fen，
-      // 留空 = configured:false = 不限制）。老师端由此显示「这堂课还剩多少额度 / 已用多少」。
+      // costCap：本课堂的「每学生算力观测上限 + 整场已花」（配置列 class_sessions.student_cost_cap_fen，
+      // 留空 = configured:false = 不设观测上限）。**只观测、不拦人**（enforced 恒 false），
+      // 老师端由此显示「这堂课花了多少 / 有没有超观测上限」，学生端拿不到这个字段。
       presence: 'unknown', presenceSource: 'NO_HEARTBEAT', costCap: sessionAi.costCap, ai: sessionAi }, students: enrichedStudents, works, events };
 }
 

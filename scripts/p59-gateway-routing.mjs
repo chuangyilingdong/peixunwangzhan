@@ -211,7 +211,10 @@ try {
   quotaExhausted.on = true;
   const quotaRun = await generate('额度用尽应当被拦住');
   check('⑥ 额度用尽：接口报 COMPUTE_QUOTA_EXHAUSTED', quotaRun.error?.code === 'COMPUTE_QUOTA_EXHAUSTED', JSON.stringify(quotaRun).slice(0, 300));
-  check('⑥ 额度用尽：提示是给学生看的（不是让管理员重填 key）', /算力额度已用尽/.test(String(quotaRun.error?.message || '')), String(quotaRun.error?.message));
+  // 2026-09-18 文案修正（口径变更，不是测试漂移）：这里说的是**上游账户**额度/余额用尽，
+  // 不是我们平台给学生设的额度（平台侧额度一律只观测、不拦人）。原来那句「本节课的算力额度
+  // 已用尽，请联系老师增加额度」会让学生误以为是我们的闸门，已改成如实说明上游不足、平台会处理。
+  check('⑥ 额度用尽：提示是给学生看的（如实说上游不足、不是让管理员重填 key）', /上游账户额度或余额不足/.test(String(quotaRun.error?.message || '')), String(quotaRun.error?.message));
   check('⑥ 额度用尽：没有静默回退直连', upstream.requests.length === upstreamBeforeQuota, `上游多收到 ${upstream.requests.length - upstreamBeforeQuota} 次`);
 
   /* ⑥b VibeCoding 对话（SSE，另一条代码路径）也要把「额度用尽」讲成学生听得懂的话 ——
@@ -226,7 +229,7 @@ try {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${student}` }, body: JSON.stringify({ content: '额度用尽时我该看到什么' }),
   });
   const chatStream = await chatResponse.text();
-  check('⑥ 额度耗尽时 VibeCoding 给学生看的是「算力额度已用尽」', /算力额度已用尽/.test(chatStream), chatStream.slice(-400));
+  check('⑥ 额度耗尽时 VibeCoding 给学生看的也是「上游账户额度或余额不足」', /上游账户额度或余额不足/.test(chatStream), chatStream.slice(-400));
   check('⑥ VibeCoding 的失败码是 COMPUTE_QUOTA_EXHAUSTED', chatStream.includes('COMPUTE_QUOTA_EXHAUSTED'), chatStream.slice(-400));
   check('⑥ VibeCoding 没把运维文案（重填 API Key）甩给学生', !/重新填写并保存该渠道 API Key/.test(chatStream), chatStream.slice(-400));
   quotaExhausted.on = false;

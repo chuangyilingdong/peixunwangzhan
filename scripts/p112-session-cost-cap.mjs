@@ -1,22 +1,32 @@
 /**
- * P112 学生算力上限 —— **唯一保留的那一套，按钱的**（2026-09-18 用户口径）。
+ * P112 学生算力额度 —— **只观测、不真拦**（2026-09-18 用户口径）。
  *
- * 背景：这个平台里「学生的算力上限」被实现过 **6 遍**，其中只有 1 套真的会拦人
- * （而且它数的是**次数**不是钱）。用户 2026-09-18 定了：只留一套按钱的，删其余 5 套。
- * 本守卫钉住**留下的那一套**的全部口径（`services/sessionCostCap.js`）：
+ * 用户原话：「**学生算力额度的设置目前都是不真拦，都是给我们内部看的。**」
+ * 「学生的算力上限」历史上被实现过 **6 遍**：2026-09-18 先收敛成「只留一套按钱的」，
+ * 同日更正为「这一套也**不拦人**」——本守卫钉住的是**最终口径**：
  *
- *   ① 额度内放行：已花的**已知上游成本** < 上限 → 正常调用（真的打到上游）；
- *   ② 超过后拦住：已花 ≥ 上限 → 调用前 403，错误码是**新的那套**、文案是学生看得懂的话；
- *   ③ 留空（不设上限）时不拦 —— 留空 = 不限制，**只记账**（绝不能因为没配额度就拦人）；
- *   ④ 有 UNKNOWN 成本时：**只计笔数、不按 0 计入金额**，且拦截提示里带笔数。
+ *   ⚠️ 这套额度**不是闸门**，是运营观测指标（与 `computePool.classroomBudgetStatus` 的
+ *      `enforced: false` 同一性质）。所以本守卫**刻意不再断言"被拦住"**，
+ *      而是反过来断言**超过观测上限也必须照旧放行**：
  *
- * 另外钉住三件"退休"的事（否则过一阵又会长回来）：
- *   · 次数上限那套（`SESSION_STUDENT_CALL_CAP` / `student_call_cap`）已退役，不许再加回来；
- *   · 课包 CU 额度那套（`services/courseCuLedger.js` + 两张 `student_course_cu_*` 表）已整体删除；
- *   · 机构端候选名单里的额度列读的是**新口径**（`poolUnlimited/poolCapYuan/poolUsedYuan`），
- *     而且"不限"只在上限**真的没配**时才出现。
+ *   ① 超过观测上限照旧放行：已用金额越过观测上限之后，**下一次仍然 200**，
+ *      而且**真的打到了上游**（不是被静默跳过、也不是缓存命中）——这是本轮最要紧的一条；
+ *   ② 状态里 `exceeded === true` 而 `enforced === false`，且 `usedFen` / `unknownCalls`
+ *      照实反映（超了必须**看得见**，否则观测就没意义）；
+ *   ③ 留空（不设观测上限）时行为与配了的一样：**都放行**，只是状态 `configured: false`；
+ *   ④ 有 `UNKNOWN` 成本时**只计笔数、不按 0 计入金额**（`costIncomplete: true`，笔数带在状态里）。
  *
- * 真跑链路：建课堂（走 `POST /api/org/sessions`，上限就在 `capabilities.studentCostCapFen` 里）→
+ * 另外钉住「不许偷偷变回闸门」的六件事：
+ *   · 全仓再也搜不到那个"按钱的额度"错误码（下面用拼接构造它的名字 —— 连守卫里都不留字面量，
+ *     这样 `grep -rn <那个码>` 全仓为空才算真的清干净了）；
+ *   · `BLOCKED_ERROR_CODES` 里没有任何额度码；
+ *   · 生成链路与 `routes/ai.js` 里**不再有**任何额度断言；观测状态 `enforced` 恒 false；
+ *   · **学生端负载里没有额度**（`/api/ai/center` 的 activeSessions 不带 costCap、
+ *     能力不可用理由里没有额度文案）—— 学生看不到内部额度，也不会被它拦；
+ *   · 机构端那个输入与列都**保留**（列/外键不删），标签已改成"观测"口径；
+ *   · 老师端两处文案必须写着"不拦学生"，不许留下"还剩多少额度/已用尽"这种像闸门的话。
+ *
+ * 真跑链路：建课堂（走 `POST /api/org/sessions`，观测上限在 `capabilities.studentCostCapFen` 里）→
  * 加学员 → 开始上课 → 学生建项目 → 逐次生成（假上游返回真实 token 用量 → 成本按合同单价折算）。
  * 全部走真实接口，只通过 `DatabaseSync` **读**库复核落列（不插库绕门禁）。
  */
@@ -50,16 +60,16 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-/* 造数（趁服务没起）：选同一个课包下的**两节**课时 ——
-   ③「留空不拦」用第二节（没有上限），①②④ 用第一节（上限 200 分）。
-   两节课都要声明 text 能力，否则生成前置先把请求拒了（那测的就不是额度了）。 */
+/* 造数（趁服务没起）：同一个课包下的**两节**课时 ——
+   ①②④ 用第一节（配了观测上限 200 分），③ 用第二节（不设观测上限）。
+   两节都要声明 text 能力，否则生成前置先把请求拒了（那测的就不是额度了）。 */
 const seeded = {};
 {
   const db = new DatabaseSync(dbPath);
   const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
   const grant = db.prepare('SELECT series_id FROM student_course_grants WHERE student_id=? AND revoked_at IS NULL').get(student.id);
   const lessons = db.prepare("SELECT id FROM course_lessons WHERE series_id=? AND status='PUBLISHED' ORDER BY sort").all(grant.series_id);
-  assert.ok(lessons.length >= 2, '种子课包至少要有两节已发布课时才能同时验「有上限」与「留空」');
+  assert.ok(lessons.length >= 2, '种子课包至少要有两节已发布课时才能同时验「配了观测上限」与「留空」');
   seeded.studentId = student.id; seeded.orgId = student.org_id; seeded.seriesId = grant.series_id;
   seeded.lessonWithCapId = lessons[0].id;
   seeded.lessonNoCapId = lessons[1].id;
@@ -77,7 +87,7 @@ const upstreamServer = http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c);
   upstream.calls += 1;
   const body = { id: 'p112-payload', choices: [{ message: { role: 'assistant', content: 'P112 生成结果' } }] };
-  // 100 万 input + 100 万 output × 50 分/百万 = 100 分/次（合同单价见下面的 UNIT_PRICES）
+  // 100 万 input + 100 万 output × 50 分/百万 = 100 分/次（合同单价见下面的配置）
   if (upstreamMode === 'priced') body.usage = { prompt_tokens: 1000000, completion_tokens: 1000000 };
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -85,7 +95,7 @@ const upstreamServer = http.createServer(async (req, res) => {
 await new Promise((resolve) => upstreamServer.listen(0, '127.0.0.1', resolve));
 const upstreamPort = upstreamServer.address().port;
 
-const port = 19112;
+const port = 19114;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...baseEnv, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let serverLog = '';
 server.stdout.on('data', (x) => { serverLog += x; });
@@ -101,15 +111,23 @@ const sessionCapFen = (sessionId) => {
   db.close();
   return row?.student_cost_cap_fen ?? null;
 };
+const attemptsOf = (sessionId) => {
+  const db = new DatabaseSync(dbPath);
+  const n = db.prepare('SELECT COUNT(*) n FROM compute_attempts WHERE class_session_id=?').get(sessionId).n;
+  db.close();
+  return Number(n);
+};
+/** 这场课堂在老师端看到的观测状态（每个学生一份 + 整场一份都从接口拿，不自己算）。 */
+const capStatusOf = async (token, sessionId) => (await api(`/api/org/sessions/${sessionId}`, { token })).data?.runtime?.costCap;
 
 /** 把假上游接成唯一的 TEXT 渠道（合同单价 50 分/百万 token，进出同价）。 */
-const CAP_FEN = 200;         // 每学生上限 200 分 = ¥2.00
+const CAP_FEN = 200;         // 观测上限 200 分 = ¥2.00（**只是分母，不拦人**）
 const PER_CALL_FEN = 100;    // 每次调用 100 分 = ¥1.00
 const configureUpstream = async (token) => api('/api/admin/billing-config/ai-provider', {
   method: 'PUT', token,
   body: {
     provider: 'custom', displayName: 'P112 上游', model: 'p112-model', endpoint: `http://127.0.0.1:${upstreamPort}/v1`,
-    allowStudentExternalContent: true, reason: 'P112 学生算力上限守卫',
+    allowStudentExternalContent: true, reason: 'P112 学生算力观测守卫',
     channels: [{
       id: 'p112-main', name: 'P112 渠道', provider: 'custom', model: 'p112-model',
       models: ['p112-model'], endpoint: `http://127.0.0.1:${upstreamPort}/v1`,
@@ -123,8 +141,6 @@ try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break; } catch { /* wait */ } await sleep(100); }
   const admin = (await api('/api/auth/login', { method: 'POST', body: { login: 'root', password: 'admin123' } })).data.token;
   const teacher = (await api('/api/auth/login', { method: 'POST', body: { login: 'teacher-1', password: 'teach123' } })).data.token;
-  // 机构管理员：教师同一时间只能有一个未终态课堂（TEACHER_SESSION_OCCUPIED），
-  // 所以「非法额度 / 空串 / 换课清额度」这几条用他来建，才不会撞上占用规则。
   const orgAdmin = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data.token;
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(admin && teacher && orgAdmin && student, '登录失败');
@@ -132,174 +148,173 @@ try {
     (await configureUpstream(admin)).status === 200);
 
   const newProject = async (lessonId) => {
-    const project = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lessonId, title: 'P112 额度' } });
+    const project = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lessonId, title: 'P112 观测' } });
     assert.ok(project.data?.id, '学生项目创建失败：' + JSON.stringify(project).slice(0, 300));
     return project.data.id;
   };
   const generate = (projectId, prompt) => api('/api/ai/generations', { method: 'POST', token: student, body: { projectId, prompt, modality: 'TEXT' } });
 
-  /* ============ ③「留空 = 不限制」先验（先占课堂，验完结束，腾出学位给①） ============
-     口径：**不填就不管，只记账** —— 花超任何数都不能拦。这也保证「不上额度的老课堂」不会被误伤。 */
-  const noCapSession = (await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonNoCapId, title: 'P112 没配上限的课堂' } })).data;
-  assert.ok(noCapSession?.id, '建课堂失败');
-  check('③ 建课堂时**不传**额度 → 列就是 NULL（留空 = 不限制，不是 0）',
-    sessionCapFen(noCapSession.id) === null, String(sessionCapFen(noCapSession.id)));
-  check('③ 没配上限时，机构端候选名单如实说「不限」',
-    (await api(`/api/org/sessions/${noCapSession.id}/candidates`, { token: teacher })).data?.selectable
-      ?.find((item) => item.id === seeded.studentId)?.poolUnlimited === true);
-  check('③ 学员加得进去', (await api(`/api/org/sessions/${noCapSession.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } })).data?.added?.length === 1);
-  check('③ 开始上课', (await api(`/api/org/sessions/${noCapSession.id}/start`, { method: 'POST', token: teacher })).data?.status === 'ACTIVE');
-  const noCapProject = await newProject(seeded.lessonNoCapId);
-  const noCapCalls = [];
-  for (let i = 1; i <= 3; i += 1) noCapCalls.push(await generate(noCapProject, `没配上限的第 ${i} 次（累计 ${i * PER_CALL_FEN} 分，早就超过 ${CAP_FEN} 分了）`));
-  check('③ 没配上限 → 连续 3 次（累计 300 分）全部放行，一次都不拦',
-    noCapCalls.every((item) => item.status === 200), JSON.stringify(noCapCalls.map((item) => item.status)));
-  check('③ 但账照记（成本真的进了 compute_attempts，不是"不限额=不记账"）',
-    (await api(`/api/org/sessions/${noCapSession.id}`, { token: teacher })).data?.runtime?.costCap?.usedFen === 3 * PER_CALL_FEN,
-    JSON.stringify((await api(`/api/org/sessions/${noCapSession.id}`, { token: teacher })).data?.runtime?.costCap));
-  check('③ 没配上限时，老师端状态里 configured=false（界面显示「不限（只记账）」）',
-    (await api(`/api/org/sessions/${noCapSession.id}`, { token: teacher })).data?.runtime?.costCap?.configured === false);
-  check('③ 结束没上限的课堂（腾出学位给下一场）', (await api(`/api/org/sessions/${noCapSession.id}/end`, { method: 'POST', token: teacher })).data?.status === 'ENDED');
-  const retiredColumnReads = (await api(`/api/org/sessions/${noCapSession.id}`, { token: teacher })).data;
-  check('③ 回显里不再有已退役的 studentCallCap（次数上限）', retiredColumnReads.studentCallCap === undefined, JSON.stringify(Object.keys(retiredColumnReads).slice(0, 40)));
-
-  /* ============ ①②④ 有上限的课堂：上限 200 分 / 每次 100 分 ============ */
-  // 先验「非法额度不许悄悄写进去」—— 用**机构管理员**建（教师同一时间只能有一个未终态课堂，
-  // 拿 teacher-1 再建会被 TEACHER_SESSION_OCCUPIED 挡住，那样测的就不是额度校验了）。
-  // 0 分尤其危险：0 会让"已用 ≥ 上限"永远成立，等于把整堂课的学生全拦死。
+  /* ================== 配了观测上限的课堂：①②④ ================== */
+  // 非法值仍拒绝：不是"拦学生"，而是不许写进一个假分母（0 分会让"已超"永远为真）。
   const invalidCaps = [];
   for (const bad of [0, -5, 'abc']) {
     const attempt = await api('/api/org/sessions', {
       method: 'POST', token: orgAdmin,
-      body: { lessonId: seeded.lessonWithCapId, title: `P112 非法额度 ${String(bad)}`, capabilities: { studentCostCapFen: bad } },
+      body: { lessonId: seeded.lessonWithCapId, title: `P112 非法数字 ${String(bad)}`, capabilities: { studentCostCapFen: bad } },
     });
     invalidCaps.push({ status: attempt.status, code: attempt.error?.code || null });
   }
-  check('① 额度校验：0 / 负数 / 非数一律 400（不能悄悄配出一个"0 分"把人全拦死）',
+  check('⓪ 观测上限只接受正整数：0 / 负数 / 非数一律 400（不许写进一个假分母）',
     invalidCaps.every((item) => item.status === 400 && item.code === 'VALIDATION_ERROR'), JSON.stringify(invalidCaps));
-
-  // 空串也算「没填」→ 不限制（若被当成 0 会变成"谁都别用"）
-  const blankCapSession = (await api('/api/org/sessions', {
-    method: 'POST', token: orgAdmin,
-    body: { lessonId: seeded.lessonWithCapId, title: 'P112 空串额度', capabilities: { studentCostCapFen: '' } },
-  })).data;
-  check('① 空串额度 = 没填 = NULL（不限制），不是 0',
-    blankCapSession?.id && sessionCapFen(blankCapSession.id) === null, String(sessionCapFen(blankCapSession?.id)));
-  // 换课 → 上限清空（口径：留空 = 不限制，绝不用老课的额度顶替新课堂）。
-  // 换课只在**待上课**允许，所以这条用刚建的（PENDING）课堂验。
-  const swapCapSession = (await api('/api/org/sessions', {
-    method: 'POST', token: orgAdmin,
-    body: { lessonId: seeded.lessonWithCapId, title: 'P112 换课清额度', capabilities: { studentCostCapFen: 300 } },
-  })).data;
-  check('① 换课清额度：先确认它真的写进去了', sessionCapFen(swapCapSession?.id) === 300, String(sessionCapFen(swapCapSession?.id)));
-  check('① 换课时上限清成 NULL（不限制），绝不用老课的额度顶替新课堂',
-    (await api(`/api/org/sessions/${swapCapSession.id}`, { method: 'PUT', token: orgAdmin, body: { lessonId: seeded.lessonNoCapId, confirmClearStudents: true } })).status === 200
-      && sessionCapFen(swapCapSession.id) === null, String(sessionCapFen(swapCapSession.id)));
 
   const cappedSession = (await api('/api/org/sessions', {
     method: 'POST', token: teacher,
-    body: { lessonId: seeded.lessonWithCapId, title: 'P112 有算力上限的课堂', capabilities: { studentCostCapFen: CAP_FEN } },
+    body: { lessonId: seeded.lessonWithCapId, title: 'P112 配了数字的课堂', capabilities: { studentCostCapFen: CAP_FEN } },
   })).data;
-  assert.ok(cappedSession?.id, '建带额度的课堂失败');
-  check('① 建课堂时 `capabilities.studentCostCapFen` 真的落到 `class_sessions.student_cost_cap_fen`（分）',
+  assert.ok(cappedSession?.id, '建带观测上限的课堂失败');
+  check('⓪ 建课堂时 `capabilities.studentCostCapFen` 落到 `class_sessions.student_cost_cap_fen`（分，观测口径）',
     sessionCapFen(cappedSession.id) === CAP_FEN, String(sessionCapFen(cappedSession.id)));
-  const cappedCandidates = (await api(`/api/org/sessions/${cappedSession.id}/candidates`, { token: teacher })).data;
-  const candidate = cappedCandidates?.selectable?.find((item) => item.id === seeded.studentId);
-  check('① 机构端候选名单读的是**新口径**：上限 200 分 / 已用 0 / 还剩 200（不再恒说"不限"）',
-    candidate?.poolUnlimited === false && candidate?.poolCapYuan === CAP_FEN && candidate?.poolUsedYuan === 0 && candidate?.poolRemainYuan === CAP_FEN,
+  const candidates = (await api(`/api/org/sessions/${cappedSession.id}/candidates`, { token: teacher })).data;
+  const candidate = candidates?.selectable?.find((item) => item.id === seeded.studentId);
+  check('⓪ 机构端候选名单带观测数字（已用 0 / 观测上限 200）且明写不拦人（poolEnforced=false）',
+    candidate?.poolCapYuan === CAP_FEN && candidate?.poolUsedYuan === 0 && candidate?.poolEnforced === false,
     JSON.stringify(candidate));
-  check('① 学员加得进去', (await api(`/api/org/sessions/${cappedSession.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } })).data?.added?.length === 1);
-  check('① 开始上课', (await api(`/api/org/sessions/${cappedSession.id}/start`, { method: 'POST', token: teacher })).data?.status === 'ACTIVE');
+  check('⓪ 学员加得进去', (await api(`/api/org/sessions/${cappedSession.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } })).data?.added?.length === 1);
+  check('⓪ 开始上课', (await api(`/api/org/sessions/${cappedSession.id}/start`, { method: 'POST', token: teacher })).data?.status === 'ACTIVE');
   const cappedProject = await newProject(seeded.lessonWithCapId);
 
-  const call1 = await generate(cappedProject, '第 1 次：已用 0 分，应当放行');
-  check('① 已用 0 < 上限 200 → 第 1 次放行（真的打到上游）', call1.status === 200, JSON.stringify(call1).slice(0, 240));
-  check('① 第 1 次确实花了 100 分（按合同单价折算，不是次数）',
-    (await api(`/api/org/sessions/${cappedSession.id}`, { token: teacher })).data?.runtime?.costCap?.usedFen === PER_CALL_FEN);
+  const call1 = await generate(cappedProject, '第 1 次：已用 0 分');
+  check('① 第 1 次放行且真的打到上游', call1.status === 200 && attemptsOf(cappedSession.id) === 1, JSON.stringify(call1).slice(0, 200));
+  check('① 第 1 次确实记了 100 分（按合同单价折算，不是次数）',
+    (await capStatusOf(teacher, cappedSession.id))?.usedFen === PER_CALL_FEN);
 
-  // ④ UNKNOWN：上游这一笔什么都不回 → 成本未知。它必须**只计笔数、不按 0 计入金额**。
+  // ④ UNKNOWN：这一笔上游什么都不回 → 成本未知，必须只计笔数、不按 0 计入金额
   upstreamMode = 'unknown';
   const unknownCall = await generate(cappedProject, '第 2 次：上游不回用量 → 成本 UNKNOWN');
   upstreamMode = 'priced';
-  check('④ 成本未知的那一笔仍然放行（不能因为"算不出钱"就把学生拦死）', unknownCall.status === 200, JSON.stringify(unknownCall).slice(0, 240));
-  const afterUnknown = (await api(`/api/org/sessions/${cappedSession.id}`, { token: teacher })).data?.runtime?.costCap;
+  const afterUnknown = await capStatusOf(teacher, cappedSession.id);
+  check('④ 成本未知的那一笔照常放行（观测口径下更没有任何理由挡它）', unknownCall.status === 200, JSON.stringify(unknownCall).slice(0, 200));
   check('④ 已用金额**不把 UNKNOWN 按 0 记账**：仍是 100 分（不是 100+0 的"两次"）',
     afterUnknown?.usedFen === PER_CALL_FEN, JSON.stringify(afterUnknown));
-  check('④ 未知笔数如实统计：unknownCalls = 1，且 costIncomplete = true（金额只是下界）',
+  check('④ 未知笔数如实统计：unknownCalls = 1 且 costIncomplete = true（金额只是下界）',
     afterUnknown?.unknownCalls === 1 && afterUnknown?.costIncomplete === true, JSON.stringify(afterUnknown));
 
-  const call3 = await generate(cappedProject, '第 3 次：已用 100 < 200，应当放行');
-  check('① 已用 100 < 上限 200 → 第 3 次放行', call3.status === 200, JSON.stringify(call3).slice(0, 240));
-  check('① 已用正好 200 分（两次有价调用；UNKNOWN 那笔没被算成钱）',
-    (await api(`/api/org/sessions/${cappedSession.id}`, { token: teacher })).data?.runtime?.costCap?.usedFen === CAP_FEN);
+  const call3 = await generate(cappedProject, '第 3 次：已用 100 < 200');
+  check('① 第 3 次放行（此时已用 100，还没到观测上限）', call3.status === 200, JSON.stringify(call3).slice(0, 200));
+  const atCap = await capStatusOf(teacher, cappedSession.id);
+  check('② 已用正好 200 分 = 观测上限 → `exceeded: true` 但 `enforced: false`（超了看得见，但不拦）',
+    atCap?.usedFen === CAP_FEN && atCap?.exceeded === true && atCap?.enforced === false, JSON.stringify(atCap));
 
-  const upstreamBeforeBlocked = upstream.calls;
-  const blocked = await generate(cappedProject, '第 4 次：已用 200 ≥ 上限 200 → 应当被拦');
-  check('② 已用 ≥ 上限 → 拦住（403）', blocked.status === 403, JSON.stringify(blocked).slice(0, 240));
-  check('② 错误码是**新的那套**（按钱的），不是已退役的次数上限',
-    blocked.error?.code === 'SESSION_STUDENT_COST_CAP_EXHAUSTED', String(blocked.error?.code));
-  check('② 拦截发生在**调用前**：被拦的这一次没有打到上游（不白花渠道的钱）',
-    upstream.calls === upstreamBeforeBlocked, `上游 ${upstreamBeforeBlocked} → ${upstream.calls}`);
-  const message = String(blocked.error?.message || '');
-  check('② 文案是学生看得懂的话：说清上限、已用、怎么处理',
-    /本课堂/.test(message) && /上限/.test(message) && /已用/.test(message) && /老师/.test(message), message);
-  check('② 文案里带"还有 1 笔成本未知"（不是把不知道说成没花钱）',
-    /1 笔.*成本未知/.test(message), message);
-  check('② 用的不是退役那套机器码（COURSE_CU_EXHAUSTED / SESSION_STUDENT_CALL_CAP）',
-    !/COURSE_CU_EXHAUSTED|SESSION_STUDENT_CALL_CAP/.test(message), message);
-  check('② 拦截发生在调用前：没有留下任何"失败的上游调用"（额度不是上游故障）',
-    (() => { const db = new DatabaseSync(dbPath); const n = db.prepare('SELECT COUNT(*) n FROM compute_attempts WHERE class_session_id=?').get(cappedSession.id).n; db.close(); return n === 3; })(),
-    '本课堂 attempt 行数应为 3（2 次有价 + 1 次未知）');
-  check('② 被拦的这次按 **BLOCKED** 归类（不是上游故障）——两条入口的拦截码都在 BLOCKED_ERROR_CODES 里',
-    /'SESSION_STUDENT_COST_CAP_EXHAUSTED'/.test(fs.readFileSync(path.join(root, 'apps/server/src/routes/aiGeneration.js'), 'utf8')));
-  // 异步入口也必须拦住（同一个 assertGenerationPreflight，但不能只验一条入口）
-  const asyncBlocked = await api('/api/ai/generations/async', { method: 'POST', token: student, body: { projectId: cappedProject, prompt: '异步入口也该被拦', modality: 'TEXT' } });
-  check('② 异步入口（排产前预检）同样拦住，错误码一致、且不建任务',
-    asyncBlocked.status === 403 && asyncBlocked.error?.code === 'SESSION_STUDENT_COST_CAP_EXHAUSTED', JSON.stringify(asyncBlocked).slice(0, 200));
-  check('② 被拦的异步请求没有生成 job（拦在入队前）',
-    (() => { const db = new DatabaseSync(dbPath); const n = db.prepare("SELECT COUNT(*) n FROM generation_jobs WHERE project_id=? AND error_code='SESSION_STUDENT_COST_CAP_EXHAUSTED'").get(cappedProject).n; db.close(); return n === 0; })());
+  /* ★ 本轮最要紧的一条：**超过观测上限照旧放行，并且真的打到上游** ★ */
+  const upstreamBeforeOver = upstream.calls;
+  const overCap = await generate(cappedProject, '第 4 次：已用 200 ≥ 观测上限 200 —— 观测口径下必须照旧放行');
+  const overAtt = attemptsOf(cappedSession.id);
+  check('①★ 已用 ≥ 观测上限之后**仍然 200**（额度只观测、不真拦）',
+    overCap.status === 200, JSON.stringify(overCap).slice(0, 240));
+  check('①★ 这一次**真的打到了上游**（不是被静默跳过/缓存命中）',
+    upstream.calls === upstreamBeforeOver + 1, `上游 ${upstreamBeforeOver} → ${upstream.calls}`);
+  check('①★ compute_attempts 也如实多了一行（这次调用留下了成本证据）', overAtt === 4, String(overAtt));
+  const afterOver = await capStatusOf(teacher, cappedSession.id);
+  check('② 超限之后数字继续往上走（300 分 / 150%）——超了要看得见，且不改变任何准入结果',
+    afterOver?.usedFen === 3 * PER_CALL_FEN && afterOver?.usagePercent === 150 && afterOver?.exceeded === true && afterOver?.enforced === false,
+    JSON.stringify(afterOver));
+  const overCapAgain = await generate(cappedProject, '第 5 次：继续超，继续必须放行');
+  check('①★ 再超一次也照旧放行（不是"只放行一次"的假动作）',
+    overCapAgain.status === 200 && attemptsOf(cappedSession.id) === 5, JSON.stringify(overCapAgain).slice(0, 200));
 
-  /* 学生端 / 老师端都要能看到「这堂课还剩多少额度 / 已用多少」 */
+  /* 学生端：不该知道内部额度，更不该因为额度被标成"不可用" */
   const center = (await api('/api/ai/center', { token: student })).data;
   const centerSession = (center?.activeSessions || []).find((item) => item.id === cappedSession.id);
-  check('② 学生端 /api/ai/center 看到本课堂额度：已用 200 / 上限 200 / 还剩 0 / 1 笔未知',
-    centerSession?.costCap?.configured === true && centerSession?.costCap?.usedFen === CAP_FEN
-      && centerSession?.costCap?.capFen === CAP_FEN && centerSession?.costCap?.remainFen === 0 && centerSession?.costCap?.unknownCalls === 1,
-    JSON.stringify(centerSession?.costCap));
-  check('② 学生端能力列表把额度用尽如实标成不可用，理由就是那一句人话',
-    (center?.capabilities || []).some((item) => item.available === false && /本课堂/.test(item.reasons.join(' '))),
-    JSON.stringify((center?.capabilities || []).map((item) => item.reasons)));
+  check('⓪ 学生端 activeSessions **不带** costCap（额度是内部看的，学生看不到）',
+    centerSession !== undefined && centerSession.costCap === undefined && !('student_cost_cap_fen' in centerSession),
+    JSON.stringify(centerSession));
+  check('⓪ 学生端能力列表里没有额度类文案（既没"上限"也没"额度已用完"），且可用性不受额度影响',
+    (center?.capabilities || []).every((item) => !/额度|上限|用尽|用完/.test(item.reasons.join(' ')))
+      && (center?.capabilities || []).some((item) => item.available === true),
+    JSON.stringify((center?.capabilities || []).map((item) => ({ available: item.available, reasons: item.reasons }))));
+  const centerJson = JSON.stringify(center);
+  const centerHit = centerJson.match(/studentCostCapFen|costCap|观测上限|student_call_cap/);
+  check('⓪ 学生端 /api/ai/center 整个负载里搜不到内部额度字眼',
+    centerHit === null && !/costCap/.test(centerJson), `命中：${centerHit?.[0]}`);
+
+  /* 老师端：数字保留，并且明写"不拦人" */
   const detail = (await api(`/api/org/sessions/${cappedSession.id}`, { token: teacher })).data;
-  check('② 老师端课堂详情：本课堂配置的上限 + 整场已花都看得到',
-    detail?.runtime?.costCap?.configured === true && detail?.runtime?.costCap?.capFen === CAP_FEN && detail?.runtime?.costCap?.usedFen === CAP_FEN,
+  // 到这一刻：有价调用 4 次（第 1/3/4/5 次）× 100 分 = 400 分；UNKNOWN 那次不计金额、只计笔数。
+  check('② 老师端课堂详情：本课堂的观测数字都在（配置/已用/超限标记/不拦人）',
+    detail?.runtime?.costCap?.configured === true && detail?.runtime?.costCap?.capFen === CAP_FEN
+      && detail?.runtime?.costCap?.usedFen === 4 * PER_CALL_FEN && detail?.runtime?.costCap?.usagePercent === 200
+      && detail?.runtime?.costCap?.exceeded === true && detail?.runtime?.costCap?.enforced === false,
     JSON.stringify(detail?.runtime?.costCap));
-  check('② 老师端名单里那个学生：已用 200 / 上限 200 / 还剩 0 / 1 笔未知',
-    (() => { const mine = (detail?.students || []).find((item) => item.studentId === seeded.studentId)?.ai?.costCap;
-      return mine?.usedFen === CAP_FEN && mine?.remainFen === 0 && mine?.unknownCalls === 1 && mine?.configured === true; })(),
-    JSON.stringify((detail?.students || []).find((item) => item.studentId === seeded.studentId)?.ai?.costCap));
+  const mine = (detail?.students || []).find((item) => item.studentId === seeded.studentId)?.ai?.costCap;
+  check('② 老师端名单里那个学生：已用 400 / 观测上限 200 / 1 笔未知 / enforced=false',
+    mine?.usedFen === 4 * PER_CALL_FEN && mine?.capFen === CAP_FEN && mine?.unknownCalls === 1 && mine?.enforced === false,
+    JSON.stringify(mine));
 
-  // 换课清额度那条在 ① 段已经验过（只能在「待上课」换课，这里已 ACTIVE）
+  check('⓪ 结束这堂课（腾出学位给「留空」那一段）', (await api(`/api/org/sessions/${cappedSession.id}/end`, { method: 'POST', token: teacher })).data?.status === 'ENDED');
 
-  /* 退休清单：不许悄悄长回来 */
+  /* ================== ③ 不设观测上限的课堂：行为与配了一样，都放行 ================== */
+  const noCapSession = (await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonNoCapId, title: 'P112 没配数字的课堂' } })).data;
+  assert.ok(noCapSession?.id, '建"不设观测上限"的课堂失败');
+  check('③ 不传观测上限 → 列就是 NULL（不设上限，不是 0）',
+    sessionCapFen(noCapSession.id) === null, String(sessionCapFen(noCapSession.id)));
+  check('③ 学员加得进去', (await api(`/api/org/sessions/${noCapSession.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } })).data?.added?.length === 1);
+  check('③ 开始上课', (await api(`/api/org/sessions/${noCapSession.id}/start`, { method: 'POST', token: teacher })).data?.status === 'ACTIVE');
+  const noCapProject = await newProject(seeded.lessonNoCapId);
+  const noCapCalls = [];
+  for (let i = 1; i <= 3; i += 1) noCapCalls.push(await generate(noCapProject, `不设观测上限的第 ${i} 次`));
+  check('③ 不设观测上限 → 连续 3 次全部放行（与配了上限的课堂**行为完全一样**：都不拦）',
+    noCapCalls.every((item) => item.status === 200), JSON.stringify(noCapCalls.map((item) => item.status)));
+  const noCapStatus = await capStatusOf(teacher, noCapSession.id);
+  check('③ 只是状态显示 `configured: false`（没有分母），已用金额照记、enforced 恒 false',
+    noCapStatus?.configured === false && noCapStatus?.capFen === null && noCapStatus?.usedFen === 3 * PER_CALL_FEN
+      && noCapStatus?.enforced === false,
+    JSON.stringify(noCapStatus));
+
+  /* ================== 不许偷偷变回闸门 ================== */
   Object.assign(process.env, baseEnv);
-  const capApi = await import('../apps/server/src/services/sessionCostCap.js');
-  check('退休 ①：课包 CU 额度那套 service 已删除（services/courseCuLedger.js）',
-    !fs.existsSync(path.join(root, 'apps/server/src/services/courseCuLedger.js')));
-  check('退休 ①：两个 CU 导出（reserve/settle/release CourseCu）全仓零定义',
-    [capApi.reserveCourseCu, capApi.settleCourseCu, capApi.releaseCourseCu].every((item) => item === undefined));
-  const aiControls = fs.readFileSync(path.join(root, 'apps/server/src/services/aiControls.js'), 'utf8');
   const aiGeneration = fs.readFileSync(path.join(root, 'apps/server/src/routes/aiGeneration.js'), 'utf8');
-  check('退休 ②：次数上限的**读写代码**不许加回来（注释里提"已退役"不算回退）',
-    !/session\.studentCallCap/.test(aiControls) && !/'SESSION_STUDENT_CALL_CAP'/.test(aiGeneration)
-      && !/session\.student_call_cap/.test(fs.readFileSync(path.join(root, 'apps/server/src/services/studentContext.js'), 'utf8')),
-    'aiControls.js / aiGeneration.js / studentContext.js');
+  const aiRoute = fs.readFileSync(path.join(root, 'apps/server/src/routes/ai.js'), 'utf8');
+  const sessionCostCap = fs.readFileSync(path.join(root, 'apps/server/src/services/sessionCostCap.js'), 'utf8');
+  const orgAdminSource = fs.readFileSync(path.join(root, 'apps/server/src/routes/orgAdmin.js'), 'utf8');
+  // 拼接构造这个错误码的名字：**故意不写字面量**，这样 `grep -rn <那个码>` 全仓为空，
+  // 才算真的"清干净了"（守卫自己也不该是唯一还留着它的地方）。
+  const RETIRED_CAP_CODE = ['SESSION', 'STUDENT', 'COST', 'CAP', 'EXHAUSTED'].join('_');
+  check('退休 ①：额度类错误码全仓已清空（生成链路 / ai 路由 / 本 service 都没有它）',
+    ![aiGeneration, aiRoute, sessionCostCap].some((source) => source.includes(RETIRED_CAP_CODE)));
+  // 全仓（apps/server/src 下的所有 .js，递归）都不该再出现这个码
+  const sourceFilesUnder = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return sourceFilesUnder(full);
+    return entry.name.endsWith('.js') ? [full] : [];
+  });
+  const offenders = sourceFilesUnder(path.join(root, 'apps/server/src')).filter((file) => fs.readFileSync(file, 'utf8').includes(RETIRED_CAP_CODE));
+  check("退休 ①'：这个错误码在 apps/server/src 全量源码里都不出现（守卫用拼接的名字去搜）",
+    offenders.length === 0, offenders.join('、'));
+  check('退休 ②：BLOCKED_ERROR_CODES 里没有任何额度码（额度不再是拦截理由）',
+    (() => {
+      const line = aiGeneration.split('\n').find((item) => item.includes('const BLOCKED_ERROR_CODES')) || '';
+      return !/COST_CAP|CALL_CAP|QUOTA/.test(line);
+    })(),
+    aiGeneration.split('\n').find((item) => item.includes('const BLOCKED_ERROR_CODES')) || '（没找到这行！）');
+  check('退休 ③：生成链路与 ai 路由都**不再调用**额度断言，service 里也没有 assert 导出',
+    !/assertSessionCostCap/.test(aiGeneration) && !/assertSessionCostCap/.test(aiRoute)
+      && !/export function assertSessionCostCap/.test(sessionCostCap));
+  check('退休 ④：观测状态里 `enforced` 恒为 false（这就是"不拦人"的机器可读承诺）',
+    /enforced: false/.test(sessionCostCap));
+  const capApi = await import('../apps/server/src/services/sessionCostCap.js');
+  const pureStatus = capApi.sessionCostCapStatus({ sessionId: cappedSession.id, studentId: seeded.studentId });
+  check('退休 ④：读状态是个纯读函数（调用它不抛错、不改任何东西），且 enforced 恒 false',
+    pureStatus?.enforced === false && pureStatus?.exceeded === true, JSON.stringify(pureStatus));
+  check('退休 ⑤：机构端那个输入还在（列不删、入口不删），标签已改成"观测"口径',
+    /student_cost_cap_fen/.test(orgAdminSource) && /算力观测上限/.test(orgAdminSource));
   const schema = fs.readFileSync(path.join(root, 'packages/database/src/schema.js'), 'utf8');
-  check('退休 ③：两张 CU 表不再建（CREATE 已删），但也**不写 DROP**（老库数据保留）',
-    !/CREATE TABLE IF NOT EXISTS student_course_cu_(quotas|ledger)/.test(schema) && !/DROP TABLE[^;]*student_course_cu/.test(schema));
-  check('退休 ④：`student_call_cap` 列本身保留（老库有数据），只是在注释里标明已退役',
-    /student_call_cap INTEGER/.test(schema) && /已退役/.test(schema));
-  check('保留唯一来源：新列 `student_cost_cap_fen` 在 schema 里有建表与老库补列两处',
+  check('退休 ⑤：列与外键都没删（student_cost_cap_fen 的建表 + 老库补列两处都在）',
     /student_cost_cap_fen INTEGER/.test(schema) && /ALTER TABLE class_sessions ADD COLUMN student_cost_cap_fen/.test(schema));
+  const orgDetail = fs.readFileSync(path.join(root, 'apps/org/src/pages/classroom/ClassroomDetail.jsx'), 'utf8');
+  const orgAdd = fs.readFileSync(path.join(root, 'apps/org/src/pages/classroom/AddClassroomStudents.jsx'), 'utf8');
+  check('退休 ⑥：老师端两处文案都写明"不拦学生"（不许留下"还剩多少额度"这种像闸门的话）',
+    /不拦学生/.test(orgDetail) && /不拦学生/.test(orgAdd)
+      && !/额度已经用完|已用尽|请找老师/.test(orgDetail) && !/额度已经用完|已用尽|请找老师/.test(orgAdd));
 } catch (error) {
   console.error(serverLog.slice(-4000));
   throw error;

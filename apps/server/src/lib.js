@@ -957,12 +957,13 @@ export function normalizeSession(value) {
     studentCount: value.student_count === undefined ? undefined : Number(value.student_count || 0),
     // 2026-09-13（P4 删积分）：sessionCreditCap / consumedCreditsTotal 不再对外返回
     aiPaused: !!value.ai_paused,
-    // 2026-09-18（用户口径：学生算力上限 6 套收敛成 1 套**按钱的**）：
-    // `studentCallCap`（按**次数**的课堂上限）已**退役**，不再对外返回 —— 免得前端或别的读取方
-    // 继续展示一个「看着配了、其实早就没人拦」的数（次数本来也不是钱）。
-    // 唯一那套改成 `studentCostCapFen`（分，NULL = 不限制），判定与文案见 services/sessionCostCap.js；
-    // 列 `class_sessions.student_call_cap` 保留（老库有数据）但已无读写方。
-    studentCostCapFen: value.student_cost_cap_fen === null || value.student_cost_cap_fen === undefined ? null : Number(value.student_cost_cap_fen),
+    // 2026-09-18（用户口径，两次更正后的最终口径）：这里**不再对外返回任何额度字段**。
+    //   · `studentCallCap`（按**次数**的课堂上限）已退役；
+    //   · 按钱的观测额度（`student_cost_cap_fen`）**也不下发**：「学生算力额度的设置目前
+    //     都是不真拦，都是给我们内部看的」—— normalizeSession 的消费方含**学生端**负载
+    //     （`studentContext.buildStudentContext().activeSessions`），所以字段一律不出这里。
+    //   老师端/平台端要看那份数字，读课堂详情里的 `runtime.costCap` / `students[].ai.costCap`
+    //   （见 services/classroomSessions.js，`enforced` 恒 false）。
     capabilities: {
       allowText: value.allow_text === undefined ? true : !!value.allow_text,
       allowImage: !!value.allow_image,
