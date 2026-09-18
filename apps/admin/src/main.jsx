@@ -7,6 +7,11 @@ import { ModelCompute } from './pages/ModelCompute.jsx';
 import { AdminPermissionGate, demos, visibleNavigation } from './shared.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { Organizations, Authorizations } from './pages/Organizations.jsx';
+// P03（2026-09-18 按线框图对齐）：机构拆成「列表 / 详情 / 课包与授权次数 / 授权次数变更记录」四条路由，
+// 各有自己的地址（可深链、可刷新、可后退）—— 与 /courses、/courses/:seriesId 的做法一致。
+import { OrganizationDetail } from './pages/OrganizationDetail.jsx';
+import { OrganizationQuota } from './pages/OrganizationQuota.jsx';
+import { OrganizationQuotaChanges } from './pages/OrganizationQuotaChanges.jsx';
 import { PlatformUsers } from './pages/PlatformUsers.jsx';
 import { PlatformAdmins } from './pages/PlatformAdmins.jsx';
 import { PlatformAudit } from './pages/PlatformAudit.jsx';
@@ -34,6 +39,9 @@ export function App() {
   return <AdminShell product="AI 魔法学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
+    <Route path="/organizations/:orgId" element={page('ADMIN_ORGANIZATIONS', <OrganizationDetail api={api} />)} />
+    <Route path="/organizations/:orgId/quota" element={page('ADMIN_ORGANIZATIONS', <OrganizationQuota api={api} />)} />
+    <Route path="/organizations/:orgId/quota-changes" element={page('ADMIN_ORGANIZATIONS', <OrganizationQuotaChanges api={api} />)} />
     <Route path="/authorizations" element={page('ADMIN_BILLING', <Authorizations api={api} />)} />
     {/* 课包拆成两条路由：列表与详情各有自己的地址（可深链、可刷新、可后退） */}
     <Route path="/courses" element={page('ADMIN_COURSES', <CourseSeriesListPage api={api} />)} />

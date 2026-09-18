@@ -15,6 +15,7 @@ import { effectiveCapabilities, normalizeAspectRatio } from '../../services/mode
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
 import { appendLicenseReversal, createLicensePurchaseBatch, licensePurchaseHistory, normalizeLicensePurchaseInput, voidLicensePurchaseBatches } from '../../services/licenseLedger.js';
+import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../../services/courseQuotaLedger.js';
 import {
   capturePublishedContent,
   ENROLLMENT_STATUSES,
@@ -564,6 +565,16 @@ export async function handleCourses(ctx, part, method) {
           assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
           q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
         } else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
+        // 授权次数变更流水（P03-04 写入点① 初始开通 / 增加 / 减少）——**就在本事务里**，
+        // 与授权单落库同生共死（流水表只记新的，历史补不出来）。
+        recordQuotaChange({
+          orgId: organizationId, seriesId: series.id, assignmentId,
+          changeType: 'AUTO', autoCreated: !existing, skipWhenUnchanged: true,
+          quotaTotalBefore: Number(existing ? existing.quota_total : 0),
+          quotaUsedBefore: Number(existing ? existing.quota_used : 0),
+          actorId: auth.user.id, actorRole: auth.user.role,
+          reason: '平台给机构开通课包', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
+        });
       }
       return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch?.replayed) };
     });
@@ -600,6 +611,15 @@ export async function handleCourses(ctx, part, method) {
           // 首次追加即建立授权：到期时间同样跟合同走
           q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, contractExpiryForOrg(organizationId), additionalQuota]);
         }
+        // 授权次数变更流水：同上（首次追加 = 初始开通，已有授权单追加 = 增加授权次数）。
+        recordQuotaChange({
+          orgId: organizationId, seriesId: series.id, assignmentId,
+          changeType: 'AUTO', autoCreated: !existing, skipWhenUnchanged: true,
+          quotaTotalBefore: Number(existing ? existing.quota_total : 0),
+          quotaUsedBefore: Number(existing ? existing.quota_used : 0),
+          actorId: auth.user.id, actorRole: auth.user.role,
+          reason: '平台追加授权次数', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
+        });
       }
       return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch.replayed) };
     });
@@ -655,7 +675,21 @@ export async function handleCourses(ctx, part, method) {
     transaction(() => {
       q('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=? WHERE id=?', [now, auth.user.id, reason, grant.id]);
       if (!submitted && grant.source_assignment_id) {
+        // 授权次数变更流水（P03-04 写入点⑤ 授权取消返还）：退回 1 次就是 quota_used −1，
+        // 必须在同一个事务里记 —— 先把「退回前」的已授权次数读出来（MAX(quota_used-1,0) 在
+        // quota_used 已经是 0 时不会真的变，那种情况就不写这笔流水，免得记出一条 0 变动）。
+        const assignmentBefore = row('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
         q('UPDATE course_assignments SET quota_used=MAX(quota_used-1,0) WHERE id=?', [grant.source_assignment_id]);
+        if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
+          recordQuotaChange({
+            orgId: grant.org_id, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,
+            changeType: 'GRANT_REFUND',
+            quotaTotalBefore: Number(assignmentBefore.quota_total || 0),
+            quotaUsedBefore: Number(assignmentBefore.quota_used || 0),
+            actorId: auth.user.id, actorRole: auth.user.role,
+            reason, source: COURSE_QUOTA_SOURCES.ADMIN_GRANT_REVOKE,
+          });
+        }
         const recognized = row("SELECT id FROM license_revenue_events WHERE grant_id=? AND event_type='GRANT' AND NOT EXISTS (SELECT 1 FROM license_revenue_events reversal WHERE reversal.reversal_of_event_id=license_revenue_events.id)", [grant.id]);
         if (recognized) appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-reversal:${grant.id}:${grant.granted_at}` });
       }

@@ -1,57 +1,267 @@
+// P03-01 机构列表（图1）+ 图2 添加机构弹窗（2026-09-18 按线框图对齐）。
+//
+// 口径（用户 2026-09-18 定死）：平台侧**没有**「算力额度」，只有**授权次数** ——
+//   总授权次数 / 已授权次数 / 剩余授权次数（= 前两者之差）。界面上不出现「算力额度」「总人次」「已分配人次」。
+// 本页两个动作：① 选机构看详情（→ P03-02）② 进详情后在 P03-03 配置课包与授权次数。
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, SearchSelect, Status, useData } from '@platform/shared';
-import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
+import { Empty, ErrorState, formatDate, Loading, ListResultSummary, MetricCard, Notice, PageHeader, Pagination, Panel, SearchSelect, Status, useData } from '@platform/shared';
+import { downloadCsv } from '../shared.jsx';
 import { useAdminConfirm } from '../components/AdminConfirm.jsx';
+import { OrganizationStatusBadge } from '../components/OrganizationShared.jsx';
 
-function initialOrganizationForm() {
+// 状态筛选只有这三个是服务端 organizationFilters 认得的值（其余枚举 FROZEN/EXPIRED 不参与筛选）。
+const ORGANIZATION_STATUS_FILTERS = [['', '全部状态'], ['ACTIVE', '启用'], ['TRIAL', '试用中'], ['DISABLED', '禁用']];
+
+/**
+ * 「已开通课包数」这一列：`GET /api/admin/organizations` **目前不返回**这个数
+ * （lib.js 的 normalizeOrg 只算了教师数/学生数，没有课包数）。
+ * 前端**不在这里逐行补请求**（一页 20 条机构就是 20 次请求）；只有服务端把课包数带上列表项时，
+ * 这一列才会出现。已按契约在报告里列成「待服务端补的字段」。
+ */
+function openedPackageCount(item) {
+  for (const key of ['openedPackageCount', 'coursePackageCount', 'packageCount']) {
+    const value = item?.[key];
+    if (value !== null && value !== undefined && Number.isFinite(Number(value))) return Number(value);
+  }
+  return null;
+}
+
+function newOrganizationForm() {
   return {
-    name: '', contactName: '', contactPhone: '', contactEmail: '',
+    name: '', shortName: '', region: '', notes: '', status: 'ACTIVE',
+    contactName: '', contactPhone: '',
+    // 图2 没画「签约信息 / 人数上限 / 管理员账号」，但服务端 POST /organizations 必需：
+    // 管理员账号密码是硬校验（ORG_ADMIN_INPUT_REQUIRED），学生上限不给就是 0（等于开不出学生）。
+    // 所以这几项收在「签约、人数上限与管理员账号」折叠区里，默认值与既有口径一致。
     contractStartAt: new Date().toISOString().slice(0, 10),
     contractExpiresAt: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
-    contractNotes: '', status: 'ACTIVE', teacherSeats: 3, studentSeats: 0,
+    teacherSeats: 3, studentSeats: 0,
     adminLogin: '', adminDisplayName: '', adminPassword: '',
   };
 }
 
-function CreateOrganizationDialog({ form, setForm, saving, created, error, onClose, onSubmit, onView, onAuthorize }) {
+/** 图2「添加机构」弹窗：必填校验 + 错误就地提示；成功后由父级关窗、刷新列表、给成功提示。 */
+function CreateOrganizationDialog({ form, setForm, saving, error, onClose, onSubmit }) {
   const dialogRef = useRef(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  // 签约/人数/管理员账号收在折叠区里；折叠区的必填项校验失败时**自动展开**，
+  // 否则用户只会看到「点创建没反应」而看不见红字（折叠的内容也不在可访问文本里）。
+  const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
     const opener = document.activeElement;
     dialogRef.current?.showModal();
     return () => { dialogRef.current?.close(); if (opener?.isConnected) opener.focus(); };
   }, []);
+
+  /** 必填与格式校验：全在前端先拦一道，错误就地显示在字段下方（不看控制台）。 */
+  function validate() {
+    const errors = {};
+    if (!form.name.trim()) errors.name = '请填写机构名称';
+    if (!form.shortName.trim()) errors.shortName = '请填写机构简称';
+    if (!form.contactName.trim()) errors.contactName = '请填写联系人';
+    if (!form.contactPhone.trim()) errors.contactPhone = '请填写联系电话';
+    else if (!/^[0-9+\-\s()]{6,20}$/.test(form.contactPhone.trim())) errors.contactPhone = '联系电话格式不正确（6-20 位数字，可带 + - 空格括号）';
+    if (form.notes.length > 200) errors.notes = '备注不能超过 200 字';
+    const start = new Date(form.contractStartAt).getTime();
+    const expires = new Date(form.contractExpiresAt).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(expires)) errors.contractStartAt = '请填写合同开始与到期日期';
+    else if (start >= expires) errors.contractStartAt = '合同开始日期必须早于到期日期';
+    if (Number(form.teacherSeats) < 0 || !Number.isFinite(Number(form.teacherSeats))) errors.teacherSeats = '教师数量上限不能为负数';
+    if (Number(form.studentSeats) < 0 || !Number.isFinite(Number(form.studentSeats))) errors.studentSeats = '学生数量上限不能为负数';
+    if (!form.adminLogin.trim()) errors.adminLogin = '请填写机构管理员登录名';
+    else if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(form.adminLogin.trim())) errors.adminLogin = '只能用英文和数字（可带 . _ -）';
+    if (!form.adminDisplayName.trim()) errors.adminDisplayName = '请填写机构管理员姓名';
+    if (form.adminPassword.length < 6) errors.adminPassword = '管理员初始密码至少 6 位';
+    return errors;
+  }
+
+  // 折叠区里的字段（合同日期、人数上限、管理员账号）——它们的错误要不要展开折叠区看这里。
+  const DETAIL_FIELDS = ['contractStartAt', 'teacherSeats', 'studentSeats', 'adminLogin', 'adminDisplayName', 'adminPassword'];
+
+  function submit(event) {
+    event.preventDefault();
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
+      if (DETAIL_FIELDS.some((key) => errors[key])) setDetailsOpen(true);
+      return;
+    }
+    onSubmit(event);
+  }
+
+  const errorText = (key) => (fieldErrors[key] ? <small className="org-field-error">{fieldErrors[key]}</small> : null);
+
   return <dialog ref={dialogRef} className="admin-confirm" style={{ width: 'min(760px, calc(100vw - 32px))' }} aria-labelledby="create-organization-title" onCancel={(event) => { event.preventDefault(); if (!saving) onClose(); }}>
-    {created ? <div>
-      <h2 id="create-organization-title">机构已创建</h2>
-      <p><strong>{created.name}</strong> · <Status value={created.status} /></p>
-      <p>教师上限 {created.teacherSeats} 人，学生上限 {created.studentSeats} 人。接下来可查看机构详情，或前往授权课包。</p>
-      <div className="row-actions"><button type="button" className="secondary-button" autoFocus onClick={onView}>继续查看机构</button><button type="button" className="primary-button" onClick={onAuthorize}>去授权课包</button></div>
-    </div> : <form onSubmit={onSubmit}>
-      <h2 id="create-organization-title">创建机构</h2>
+    <form onSubmit={submit} noValidate>
+      <h2 id="create-organization-title">添加机构</h2>
+      <p className="muted">创建后到机构详情页配置课包与授权次数。</p>
       <div className="form-grid">
-        <label>机构名称<input autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required maxLength={200} /></label>
-        <label>状态<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="ACTIVE">正常</option><option value="TRIAL">试用</option></select></label>
-        <label>联系人姓名<input value={form.contactName} onChange={(event) => setForm({ ...form, contactName: event.target.value })} maxLength={200} /></label>
-        <label>联系人电话<input type="tel" value={form.contactPhone} onChange={(event) => setForm({ ...form, contactPhone: event.target.value })} maxLength={200} /></label>
-        <label>联系人邮箱<input type="email" value={form.contactEmail} onChange={(event) => setForm({ ...form, contactEmail: event.target.value })} maxLength={200} /></label>
-        <label>签约开始日期<input type="date" value={form.contractStartAt} onChange={(event) => setForm({ ...form, contractStartAt: event.target.value })} required /></label>
-        <label>签约到期日期<input type="date" value={form.contractExpiresAt} onChange={(event) => setForm({ ...form, contractExpiresAt: event.target.value })} required /></label>
-        <label>教师数量上限<input type="number" min="0" max="1000000" value={form.teacherSeats} onChange={(event) => setForm({ ...form, teacherSeats: event.target.value })} required /></label>
-        <label>学生数量上限<input type="number" min="0" max="1000000" value={form.studentSeats} onChange={(event) => setForm({ ...form, studentSeats: event.target.value })} required /></label>
+        <label>机构名称 *<input autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required maxLength={200} placeholder="如：北京市海淀区魔法学院" />{errorText('name')}</label>
+        <label>机构简称 *<input value={form.shortName} onChange={(event) => setForm({ ...form, shortName: event.target.value })} required maxLength={50} placeholder="如：海淀魔法学院" />{errorText('shortName')}</label>
+        <label>联系人 *<input value={form.contactName} onChange={(event) => setForm({ ...form, contactName: event.target.value })} required maxLength={200} />{errorText('contactName')}</label>
+        <label>联系电话 *<input type="tel" value={form.contactPhone} onChange={(event) => setForm({ ...form, contactPhone: event.target.value })} required maxLength={200} placeholder="如：13800138000" />{errorText('contactPhone')}</label>
       </div>
-      <label>签约备注<textarea rows={3} maxLength={5000} value={form.contractNotes} onChange={(event) => setForm({ ...form, contractNotes: event.target.value })} placeholder="填写签约服务、约定事项或合同备注" /></label>
-      <div className="form-grid">
-        <label>管理员账号<input autoComplete="username" value={form.adminLogin} onChange={(event) => setForm({ ...form, adminLogin: event.target.value })} required maxLength={100} /></label>
-        <label>管理员姓名<input value={form.adminDisplayName} onChange={(event) => setForm({ ...form, adminDisplayName: event.target.value })} required maxLength={200} /></label>
-        <label>管理员初始密码<input type="password" autoComplete="new-password" value={form.adminPassword} onChange={(event) => setForm({ ...form, adminPassword: event.target.value })} required minLength={6} /></label>
+      <div>
+        <span className="org-field-label">机构状态</span>
+        <div className="row-actions org-option-row">
+          <label className="checkbox-option"><input type="radio" name="organization-status" checked={form.status === 'ACTIVE'} onChange={() => setForm({ ...form, status: 'ACTIVE' })} />正常</label>
+          <label className="checkbox-option"><input type="radio" name="organization-status" checked={form.status === 'DISABLED'} onChange={() => setForm({ ...form, status: 'DISABLED' })} />停用</label>
+        </div>
+        {form.status === 'DISABLED' ? <small className="muted">选择停用后，创建成功会立即调用「禁用机构」（禁用需写明原因，这里按「创建机构时选择停用」记录）。</small> : null}
       </div>
+      <label>所属区域<input value={form.region} onChange={(event) => setForm({ ...form, region: event.target.value })} maxLength={100} placeholder="如：北京市·海淀区" /><small className="muted">选填；机构课包与授权次数、变更记录页会显示。</small></label>
+      <label>备注<textarea rows={3} maxLength={200} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="填机构服务的约定事项或口头承诺" /><small className="muted">{form.notes.length}/200</small>{errorText('notes')}</label>
+      <details className="admin-detail" open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
+        <summary>签约信息、人数上限与机构管理员账号（服务端必填项）</summary>
+        <div className="form-grid">
+          <label>签约开始日期 *<input type="date" value={form.contractStartAt} onChange={(event) => setForm({ ...form, contractStartAt: event.target.value })} required />{errorText('contractStartAt')}</label>
+          <label>签约到期日期 *<input type="date" value={form.contractExpiresAt} onChange={(event) => setForm({ ...form, contractExpiresAt: event.target.value })} required /></label>
+          <label>教师数量上限 *<input type="number" min="0" max="1000000" value={form.teacherSeats} onChange={(event) => setForm({ ...form, teacherSeats: event.target.value })} required />{errorText('teacherSeats')}</label>
+          <label>学生数量上限 *<input type="number" min="0" max="1000000" value={form.studentSeats} onChange={(event) => setForm({ ...form, studentSeats: event.target.value })} required />{errorText('studentSeats')}</label>
+          <label>机构管理员登录名 *<input autoComplete="username" value={form.adminLogin} onChange={(event) => setForm({ ...form, adminLogin: event.target.value })} required maxLength={100} />{errorText('adminLogin')}</label>
+          <label>机构管理员姓名 *<input value={form.adminDisplayName} onChange={(event) => setForm({ ...form, adminDisplayName: event.target.value })} required maxLength={200} />{errorText('adminDisplayName')}</label>
+          <label>管理员初始密码 *<input type="password" autoComplete="new-password" value={form.adminPassword} onChange={(event) => setForm({ ...form, adminPassword: event.target.value })} required minLength={6} />{errorText('adminPassword')}</label>
+        </div>
+      </details>
       {error ? <Notice tone="danger">{error}</Notice> : null}
-      <div className="row-actions"><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>取消</button><button className="primary-button" disabled={saving}>{saving ? '创建中…' : '创建机构'}</button></div>
-    </form>}
+      <div className="row-actions">
+        <button type="button" className="secondary-button" disabled={saving} onClick={onClose}>取消</button>
+        <button className="primary-button" disabled={saving}>{saving ? '创建中…' : '创建机构'}</button>
+      </div>
+    </form>
   </dialog>;
 }
 
+export function Organizations({ api }) {
+  const navigate = useNavigate();
+  // 筛选分「输入中」与「已生效」两份：点「查询」才把 draft 抄进 applied（图1 的查询 / 重置按钮）。
+  const [draft, setDraft] = useState({ search: '', status: '' });
+  const [applied, setApplied] = useState({ search: '', status: '' });
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [sort, setSort] = useState('created');
+  const query = useMemo(() => {
+    const params = new URLSearchParams(Object.entries(applied).filter(([, value]) => value));
+    params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
+    return params;
+  }, [applied, page, limit, sort]);
+  const organizations = useData(() => api.get(`admin/organizations?${query.toString()}`), [api, query]);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [form, setForm] = useState(newOrganizationForm);
+  const [dialogError, setDialogError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [createdId, setCreatedId] = useState('');
+
+  function submitFilters(event) {
+    event.preventDefault();
+    setPage(1);
+    setApplied({ ...draft });
+    setMessage(null);
+    organizations.refresh();
+  }
+
+  function resetFilters() {
+    const empty = { search: '', status: '' };
+    setDraft(empty); setApplied(empty); setSort('created'); setPage(1);
+    organizations.refresh(); setMessage(null);
+  }
+
+  async function exportOrganizations() {
+    setExporting(true); setMessage(null);
+    try {
+      const params = new URLSearchParams(Object.entries(applied).filter(([, value]) => value));
+      const result = await api.get(`admin/organizations/export?${params.toString()}`);
+      downloadCsv(result.filename, result.content);
+      setMessage({ tone: 'success', text: `已导出 ${result.count} 家机构。` });
+    } catch (error) { setMessage({ tone: 'danger', text: error.message }); } finally { setExporting(false); }
+  }
+
+  async function create(event) {
+    event.preventDefault(); setSaving(true); setDialogError('');
+    try {
+      const created = await api.post('admin/organizations', {
+        name: form.name.trim(),
+        // 机构简称 / 所属区域：2026-09-18 新增字段，服务端正在补；老服务端会忽略这两个键，不会报错。
+        shortName: form.shortName.trim(),
+        region: form.region.trim() || undefined,
+        isTrial: false,
+        contractStartAt: form.contractStartAt,
+        contractExpiresAt: form.contractExpiresAt,
+        teacherSeats: Number(form.teacherSeats),
+        studentSeats: Number(form.studentSeats),
+        // 联系人 / 电话仍在 contact 这个 JSON 里，键名照服务端 contactPayload 的白名单：
+        // name / phone / email / contractNotes（图2 的「备注」就是 contractNotes）。
+        contact: { name: form.contactName.trim(), phone: form.contactPhone.trim(), contractNotes: form.notes.trim() },
+        adminLogin: form.adminLogin.trim(),
+        adminDisplayName: form.adminDisplayName.trim(),
+        adminPassword: form.adminPassword,
+      });
+      let warning = '';
+      if (form.status === 'DISABLED') {
+        // 服务端 POST 只能建 ACTIVE，没有「直接建停用机构」的入参 → 建完立刻走状态动作（禁用必须带原因）。
+        try { await api.post(`admin/organizations/${created.id}/status`, { action: 'disable', reason: '创建机构时选择停用' }); }
+        catch (error) { warning = `机构已创建，但停用未生效：${error.message}`; }
+      }
+      setShowCreateDialog(false);
+      setCreatedId(created.id);
+      setMessage(warning ? { tone: 'warning', text: warning } : { tone: 'success', text: `机构「${created.name}」已创建。` });
+      organizations.refresh();
+    } catch (error) { setDialogError(error.message); } finally { setSaving(false); }
+  }
+
+  const items = organizations.data?.items || [];
+  // 「已开通课包数」整列只在服务端真的带了这个数时才出现（见 openedPackageCount 的注释）。
+  const showPackageColumn = items.some((item) => openedPackageCount(item) !== null);
+
+  return <>
+    <PageHeader eyebrow="平台教务" title="机构与课包人次" description="创建与维护机构资料、服务状态，并为每家机构配置课包与授权次数。" actions={<><button className="secondary-button" disabled={exporting} onClick={exportOrganizations}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { organizations.refresh(); setMessage(null); }}>刷新</button></>} />
+    {showCreateDialog ? <CreateOrganizationDialog form={form} setForm={setForm} saving={saving} error={dialogError} onClose={() => setShowCreateDialog(false)} onSubmit={create} /> : null}
+    <Notice tone="info">先选机构 → 再配置课包与授权次数（总授权次数 / 已授权次数 / 剩余授权次数）：列表里「查看详情」进机构详情，详情页的「授权次数」入口进本机构的课包与授权次数。</Notice>
+    {message ? <Notice tone={message.tone}>{message.text}{createdId ? <> 下一步：<Link to={`/organizations/${encodeURIComponent(createdId)}`}>查看机构详情</Link> · <Link to={`/authorizations?orgId=${encodeURIComponent(createdId)}`}>去授权课包</Link></> : null}</Notice> : null}
+    <Panel title="机构列表">
+      <form className="filter-form" onSubmit={submitFilters}>
+        <label>机构名称<input value={draft.search} placeholder="机构名称 / 机构 ID" onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
+        <label>状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>{ORGANIZATION_STATUS_FILTERS.map(([value, label]) => <option key={value || 'all'} value={value}>{label}</option>)}</select></label>
+        <label>排序<select value={sort} onChange={(event) => { setSort(event.target.value); setPage(1); }}><option value="created">创建时间</option><option value="name">机构名称</option><option value="expires">合同到期</option></select></label>
+        <label>每页<select value={limit} onChange={(event) => { setLimit(Number(event.target.value)); setPage(1); }}><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
+        <div className="row-actions">
+          <button className="primary-button" disabled={organizations.loading}>查询</button>
+          <button type="button" className="secondary-button" onClick={resetFilters}>重置</button>
+          <button type="button" className="secondary-button" onClick={() => { setForm(newOrganizationForm()); setDialogError(''); setShowCreateDialog(true); }}>创建机构</button>
+        </div>
+      </form>
+      {organizations.loading ? <Loading /> : organizations.error ? <ErrorState error={organizations.error} onRetry={organizations.refresh} /> : items.length ? <>
+        <ListResultSummary total={organizations.data.total} page={organizations.data.page} totalPages={organizations.data.totalPages} label="条数据" />
+        <div className="table-wrap"><table>
+          <thead><tr>
+            <th>机构名称</th><th>状态</th><th>教师数</th><th>学生数</th>
+            {showPackageColumn ? <th>已开通课包数</th> : null}
+            <th>创建时间</th><th>操作</th>
+          </tr></thead>
+          <tbody>{items.map((item) => <tr key={item.id}>
+            <td>
+              <Link to={`/organizations/${encodeURIComponent(item.id)}`}><strong>{item.name}</strong></Link>
+              <div className="muted">{item.shortName || item.orgCode || item.id}</div>
+            </td>
+            <td><OrganizationStatusBadge status={item.status} /></td>
+            <td>{item.teacherUsedSeats}</td>
+            <td>{item.studentUsedSeats}</td>
+            {showPackageColumn ? <td>{openedPackageCount(item) ?? '—'}</td> : null}
+            <td>{formatDate(item.createdAt)}</td>
+            <td><div className="row-actions"><button type="button" className="secondary-button" onClick={() => navigate(`/organizations/${encodeURIComponent(item.id)}`)}>查看详情</button></div></td>
+          </tr>)}</tbody>
+        </table></div>
+        <Pagination page={organizations.data.page} totalPages={organizations.data.totalPages} onChange={setPage} disabled={organizations.loading} />
+      </> : <Empty title="没有符合条件的机构" body="可以调整机构名称或状态筛选条件，或点「重置」清空条件。" />}
+    </Panel>
+  </>;
+}
+
+// ── 下面是「授权与人次流水」（Authorizations）页面用的两个小工具 ──
+// 它们原来在文件顶部；机构部分重排后挪到 Authorizations 之前，只为让归属清楚，行为没变。
 function newLicensePurchaseKey() {
   return `license-purchase-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -59,246 +269,6 @@ function newLicensePurchaseKey() {
 function initialLicensePurchaseForm() {
   return { amount: '', currency: 'CNY', paymentStatus: 'PAID', orderNo: '', contractNo: '', idempotencyKey: newLicensePurchaseKey() };
 }
-
-export function Organizations({ api }) {
-  const navigate = useNavigate();
-  const [filters, setFilters] = useState({ search: '', status: '' });
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
-  const [sort, setSort] = useState('created');
-  const query = useMemo(() => {
-    const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
-    params.set('page', String(page)); params.set('limit', String(limit)); params.set('sort', sort);
-    return params;
-  }, [filters, page, limit, sort]);
-  const organizations = useData(() => api.get(`admin/organizations?${query.toString()}`), [api, query]);
-  const [selectedId, setSelectedId] = useState('');
-  const detail = useData(() => selectedId ? api.get(`admin/organizations/${selectedId}/detail`) : Promise.resolve(null), [api, selectedId]);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [form, setForm] = useState(initialOrganizationForm);
-  const [createdOrganization, setCreatedOrganization] = useState(null);
-  const [editForm, setEditForm] = useState(null);
-  const [adminForm, setAdminForm] = useState({ login: '', displayName: '', password: '' });
-  const [passwordForm, setPasswordForm] = useState({});
-  const [message, setMessage] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [confirm, confirmation] = useAdminConfirm();
-  async function exportOrganizations() {
-    setExporting(true); setMessage('');
-    try {
-      const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
-      const result = await api.get(`admin/organizations/export?${params.toString()}`);
-      downloadCsv(result.filename, result.content);
-      setMessage(`已导出 ${result.count} 家机构。`);
-    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
-  }
-  const [detailBusy, setDetailBusy] = useState(false);
-  const [showRechargeDialog, setShowRechargeDialog] = useState(false);
-  const [showRechargeHistory, setShowRechargeHistory] = useState(false);
-  const selected = detail.data?.organization || null;
-
-  function selectOrg(item) {
-    setSelectedId(item.id);
-    setMessage('');
-    setShowRechargeHistory(false);
-    const contact = item.contact || {};
-    setEditForm({
-      name: item.name,
-      contractStartAt: isoDateInput(item.contractStartAt),
-      contractExpiresAt: isoDateInput(item.contractExpiresAt),
-      teacherSeats: item.teacherSeats,
-      studentSeats: item.studentSeats,
-      contactName: contact.name || '',
-      contactPhone: contact.phone || '',
-      contactEmail: contact.email || '',
-      contractNotes: contact.contractNotes || '',
-    });
-  }
-
-  async function create(event) {
-    event.preventDefault(); setSaving(true); setMessage('');
-    try {
-      const created = await api.post('admin/organizations', {
-        name: form.name,
-        adminLogin: form.adminLogin,
-        adminDisplayName: form.adminDisplayName,
-        adminPassword: form.adminPassword,
-        isTrial: form.status === 'TRIAL',
-        contractStartAt: form.contractStartAt,
-        contractExpiresAt: form.contractExpiresAt,
-        teacherSeats: Number(form.teacherSeats),
-        studentSeats: Number(form.studentSeats),
-        contact: { name: form.contactName, phone: form.contactPhone, email: form.contactEmail, contractNotes: form.contractNotes },
-      });
-      setCreatedOrganization(created);
-      setMessage('机构已创建。'); organizations.refresh();
-    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
-  }
-
-  async function saveEdit(event) {
-    event.preventDefault(); if (!selectedId || !editForm) return;
-    setDetailBusy(true); setMessage('');
-    try {
-      await api.put(`admin/organizations/${selectedId}`, {
-        name: editForm.name,
-        contractStartAt: new Date(editForm.contractStartAt).toISOString(),
-        contractExpiresAt: new Date(editForm.contractExpiresAt + 'T23:59:59.999Z').toISOString(),
-        teacherSeats: Number(editForm.teacherSeats),
-        studentSeats: Number(editForm.studentSeats),
-        contact: {
-          name: editForm.contactName,
-          phone: editForm.contactPhone,
-          email: editForm.contactEmail,
-          contractNotes: editForm.contractNotes,
-        },
-      });
-      setMessage('机构资料已保存。'); organizations.refresh(); detail.refresh();
-    } catch (err) { setMessage(err.message); } finally { setDetailBusy(false); }
-  }
-
-  async function changeStatus(item, action) {
-    const text = action === 'disable'
-      ? `确认停用「${item.name}」？该机构全部用户会立即无法登录、新建课堂和使用 AI。`
-      : `确认执行「${action}」？恢复服务要求合同未到期，成功后机构服务立即恢复。`;
-    const approved = await confirm({ title: action === 'disable' ? '停用机构' : '确认机构状态变更', message: text, confirmLabel: action === 'disable' ? '确认停用' : '确认执行' });
-    if (!approved) return;
-    setDetailBusy(true); setMessage('');
-    try {
-      await api.post(`admin/organizations/${item.id}/status`, { action });
-      setMessage(action === 'disable' ? '机构已停用，该机构用户会立即无法访问机构端功能。' : '机构状态已更新。');
-      organizations.refresh(); if (item.id === selectedId) detail.refresh();
-    } catch (err) { setMessage(err.message); } finally { setDetailBusy(false); }
-  }
-
-  async function createAdmin(event) {
-    event.preventDefault(); if (!selectedId) return;
-    setDetailBusy(true); setMessage('');
-    try {
-      await api.post(`admin/organizations/${selectedId}/admins`, adminForm);
-      setAdminForm({ login: '', displayName: '', password: '' });
-      setMessage('机构管理员已创建。'); detail.refresh();
-    } catch (err) { setMessage(err.message); } finally { setDetailBusy(false); }
-  }
-
-  async function updateAdmin(admin, payload, confirmText) {
-    if (confirmText) {
-      const approved = await confirm({ title: '停用机构管理员', message: confirmText, confirmLabel: '确认停用' });
-      if (!approved) return;
-    }
-    setDetailBusy(true); setMessage('');
-    try {
-      await api.put(`admin/organizations/${selectedId}/admins/${admin.id}`, payload);
-      setPasswordForm({ ...passwordForm, [admin.id]: '' });
-      setMessage('管理员信息已更新。'); detail.refresh();
-    } catch (err) { setMessage(err.message); } finally { setDetailBusy(false); }
-  }
-
-  return <>
-    <PageHeader eyebrow="平台教务" title="机构管理" description="创建和维护机构资料、服务状态、管理员、人数上限与审计记录。" actions={<><button className="primary-button" onClick={() => { setForm(initialOrganizationForm()); setCreatedOrganization(null); setShowCreateDialog(true); setMessage(''); }}>创建机构</button><button className="secondary-button" disabled={exporting} onClick={exportOrganizations}>{exporting ? '导出中…' : '导出 CSV'}</button><button className="secondary-button" onClick={() => { organizations.refresh(); if (selectedId) detail.refresh(); }}>刷新</button></>} />
-    {showCreateDialog ? <CreateOrganizationDialog form={form} setForm={setForm} saving={saving} created={createdOrganization} error={!createdOrganization ? message : ''} onClose={() => setShowCreateDialog(false)} onSubmit={create} onView={() => { selectOrg(createdOrganization); setShowCreateDialog(false); }} onAuthorize={() => { const orgId = createdOrganization.id; setShowCreateDialog(false); navigate(`/authorizations?orgId=${encodeURIComponent(orgId)}`); }} /> : null}
-    {confirmation}
-    <Panel title="服务规则说明"><Notice tone="info">停用机构后，该机构全部现有登录会话立即失效，无法新建课堂、开课堂或调用 AI；恢复服务要求合同未到期，成功后机构用户可重新登录或继续使用未失效会话。所有状态和资料变更都会写入审计。</Notice></Panel>
-    {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
-    <Panel title="机构列表">
-      <div className="form-grid">
-        <label>关键词<input value={filters.search} placeholder="机构名称 / ID" onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }} /></label>
-        <label>状态<select value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(1); }}><option value="">全部状态</option><option value="TRIAL">试用</option><option value="ACTIVE">正常</option><option value="DISABLED">已停用</option></select></label>
-        <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="name">机构名称</option><option value="expires">合同到期</option></select></label>
-        <label>每页<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
-      </div>
-      {organizations.loading ? <Loading /> : organizations.error ? <ErrorState error={organizations.error} onRetry={organizations.refresh} /> : organizations.data?.items?.length ? <><ListResultSummary total={organizations.data.total} page={organizations.data.page} totalPages={organizations.data.totalPages} label="家机构" /><div className="table-wrap"><table><thead><tr><th>机构</th><th>状态</th><th>合同</th><th>教师席位</th><th>学生使用 / 上限</th><th>服务</th><th>操作</th></tr></thead><tbody>{organizations.data.items.map((item) => {
-        const disabled = item.status === 'DISABLED';
-        return <tr key={item.id}>
-          <td><button className="text-button" onClick={() => selectOrg(item)}><strong>{item.name}</strong></button><div className="muted">{item.id}</div></td>
-          <td><Status value={item.status} /></td>
-          <td>{formatDate(item.contractExpiresAt)}{item.contractExpiresAt && new Date(item.contractExpiresAt).getTime() - Date.now() < 30 * 86400000 ? <span className="status warning">即将到期</span> : null}</td>
-          <td>{item.teacherUsedSeats} / {item.teacherSeats}</td>
-          <td>{item.studentUsedSeats} / {item.studentSeats}</td>
-          <td>{['TRIAL', 'ACTIVE'].includes(item.status) && (!item.contractExpiresAt || new Date(item.contractExpiresAt).getTime() > Date.now()) ? <span className="status success">可用</span> : <span className="status danger">不可用</span>}</td>
-          <td><div className="row-actions">
-            <button className="secondary-button" onClick={() => selectOrg(item)}>详情</button>
-            {disabled
-              ? <button className="secondary-button" disabled={detailBusy} onClick={() => changeStatus(item, 'recover')}>恢复服务</button>
-              : <button className="secondary-button" disabled={detailBusy} onClick={() => changeStatus(item, 'disable')}>停用</button>}
-            {item.status === 'TRIAL' ? <button className="secondary-button" disabled={detailBusy} onClick={() => changeStatus(item, 'activate')}>试用转正</button> : null}
-          </div></td>
-        </tr>;
-      })}</tbody></table></div><Pagination page={organizations.data.page} totalPages={organizations.data.totalPages} onChange={setPage} disabled={organizations.loading} /></> : <Empty title="没有符合条件的机构" body="可以调整关键词或状态筛选条件。" />}
-    </Panel>
-    {selectedId ? (
-      detail.loading ? <Loading label="正在读取机构详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : detail.data ? <>
-        <div className="metrics">
-          <MetricCard label="学生数量" value={`${selected.studentUsedSeats} / ${selected.studentSeats}`} hint="按机构设置限制，停用账号仍占容量" />
-          <MetricCard label="服务状态" value={selected.serviceAvailable ? '可用' : '不可用'} hint={selected.status} tone={selected.serviceAvailable ? 'teal' : 'pink'} />
-          <MetricCard label="合同剩余天数" value={selected.daysUntilContractExpires ?? '—'} hint={selected.contractExpiringSoon ? '30 天内到期，需提醒续约' : '按合同到期时间计算'} tone={selected.contractExpiringSoon ? 'orange' : undefined} />
-          <MetricCard label="教师数量" value={`${selected.teacherUsedSeats} / ${selected.teacherSeats}`} hint={`基础 ${selected.baseTeacherSeats} + 购买 ${selected.purchasedTeacherSeats}`} tone={selected.teacherSeats - selected.teacherUsedSeats < 3 ? 'orange' : undefined} />
-        </div>
-
-        {selected.contractExpiringSoon ? <Notice tone="warning">该机构合同将在 {selected.daysUntilContractExpires} 天内到期，请尽快联系续约。</Notice> : null}
-        <div className="split">
-          <Panel title="编辑机构资料">{editForm ? <form onSubmit={saveEdit}>
-            <label>机构名称<input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} required /></label>
-            <div className="form-grid">
-              <label>合同开始日期<input type="date" value={editForm.contractStartAt} onChange={(e) => setEditForm({ ...editForm, contractStartAt: e.target.value })} required /></label>
-              <label>合同到期日期<input type="date" value={editForm.contractExpiresAt} onChange={(e) => setEditForm({ ...editForm, contractExpiresAt: e.target.value })} required /></label>
-              <label>学生数量上限<input type="number" min="0" value={editForm.studentSeats} onChange={(e) => setEditForm({ ...editForm, studentSeats: e.target.value })} required /></label>
-              <label>教师数量上限<input type="number" min={selected.teacherUsedSeats} max="1000000" value={editForm.teacherSeats} onChange={(e) => setEditForm({ ...editForm, teacherSeats: e.target.value })} required /></label>
-            </div>
-            <div className="form-grid">
-              <label>联系人<input value={editForm.contactName} onChange={(e) => setEditForm({ ...editForm, contactName: e.target.value })} /></label>
-              <label>联系电话<input value={editForm.contactPhone} onChange={(e) => setEditForm({ ...editForm, contactPhone: e.target.value })} /></label>
-              <label>联系邮箱<input value={editForm.contactEmail} onChange={(e) => setEditForm({ ...editForm, contactEmail: e.target.value })} /></label>
-            </div>
-            <label>签约内容<textarea rows={4} maxLength={5000} value={editForm.contractNotes} onChange={(e) => setEditForm({ ...editForm, contractNotes: e.target.value })} placeholder="填写签约服务、约定事项或合同备注" /></label>
-            <button className="primary-button" disabled={detailBusy}>{detailBusy ? '保存中…' : '保存机构资料'}</button>
-            <p className="muted">机构服务状态请使用列表中的停用 / 恢复 / 转正动作。</p>
-          </form> : null}</Panel>
-          <Panel title="业务汇总"><div className="table-wrap"><table><thead><tr><th>指标</th><th>数量</th></tr></thead><tbody>
-            <tr><td>教师</td><td>{detail.data.summary.teachers}</td></tr>
-            <tr><td>学生</td><td>{detail.data.summary.students}</td></tr>
-
-            <tr><td>进行中课堂</td><td>{detail.data.summary.activeSessions}</td></tr>
-            <tr><td>项目</td><td>{detail.data.summary.projects}</td></tr>
-            <tr><td>作品</td><td>{detail.data.summary.works}</td></tr>
-          </tbody></table></div></Panel>
-        </div>
-        <div className="split">
-          <Panel title="机构管理员"><form onSubmit={createAdmin}>
-            <div className="form-grid">
-              <label>登录名<input value={adminForm.login} pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(e) => setAdminForm({ ...adminForm, login: e.target.value })} required /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。</small></label>
-              <label>姓名<input value={adminForm.displayName} onChange={(e) => setAdminForm({ ...adminForm, displayName: e.target.value })} required /></label>
-              <label>初始密码（至少6位）<input type="password" autoComplete="new-password" minLength={6} value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} required /></label>
-              <button className="primary-button" disabled={detailBusy}>新增管理员</button>
-            </div>
-          </form>
-          <div className="table-wrap"><table><thead><tr><th>登录名</th><th>姓名</th><th>状态</th><th>重置密码</th><th>操作</th></tr></thead><tbody>{detail.data.admins.map((admin) => <tr key={admin.id}>
-            <td>{admin.login}</td><td>{admin.displayName}</td><td><Status value={admin.status} /></td>
-            <td><input type="password" autoComplete="new-password" aria-label={`${admin.displayName} 的新密码`} placeholder="新密码" value={passwordForm[admin.id] || ''} onChange={(e) => setPasswordForm({ ...passwordForm, [admin.id]: e.target.value })} /></td>
-            <td><div className="row-actions">
-              <button className="secondary-button" disabled={detailBusy || (passwordForm[admin.id] || '').length < 6} onClick={() => updateAdmin(admin, { password: passwordForm[admin.id] })}>保存新密码</button>
-              {admin.status === 'ACTIVE'
-                ? <button className="secondary-button" disabled={detailBusy} onClick={() => updateAdmin(admin, { status: 'DISABLED' }, `确认停用管理员「${admin.displayName}」？停用后该账号立即无法登录。`)}>停用</button>
-                : <button className="secondary-button" disabled={detailBusy} onClick={() => updateAdmin(admin, { status: 'ACTIVE' })}>启用</button>}
-            </div></td>
-          </tr>)}</tbody></table></div></Panel>
-          <Panel title="课包授权与余额">
-            <Link to={`/authorizations?orgId=${encodeURIComponent(selectedId)}`}>前往授权管理</Link>
-            {detail.data.courseAssignments.length ? <div className="table-wrap"><table><thead><tr><th>课包</th><th>状态</th><th>购买次数</th><th>已分配</th><th>余额</th><th>到期时间</th></tr></thead><tbody>{detail.data.courseAssignments.map((item) => <tr key={item.id}><td>{item.title}</td><td><Status value={item.status} /></td><td>{item.quotaTotal}</td><td>{item.quotaUsed}</td><td>{item.remaining}</td><td>{formatDate(item.expiresAt)}</td></tr>)}</tbody></table></div> : <Empty title="暂无课包授权" />}
-          </Panel>
-        </div>
-        <Panel title="最近审计记录">
-          {detail.data.audits.length ? <div className="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>操作者</th><th>目标</th><th>变更摘要</th></tr></thead><tbody>{detail.data.audits.map((item) => <tr key={item.id}>
-            <td>{formatDate(item.createdAt)}</td><td><code>{item.action}</code></td><td>{item.actorRole || '—'}</td><td>{item.targetType}{item.targetId ? ` · ${item.targetId}` : ''}</td>
-            <td>{JSON.stringify(item.afterData || {})}</td>
-          </tr>)}</tbody></table></div> : <Empty title="暂无审计记录" />}
-        </Panel>
-      </> : null
-    ) : <Panel title="机构详情"><Empty title="选择机构查看详情" body="点击机构列表中的名称或“详情”按钮，可查看合同、管理员、课包余额和审计。" /></Panel>}
-  </>;
-}
-
-
 
 export function Authorizations({ api }) {
   const location = useLocation();

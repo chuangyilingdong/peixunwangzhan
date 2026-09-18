@@ -12,6 +12,7 @@ import {
 } from '../services/classroomSessions.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
 import { appendLicenseGrantRevenue } from '../services/licenseLedger.js';
+import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../services/courseQuotaLedger.js';
 
 /**
  * 老师点「开始上课」时，**提前把这节课学生的创作环境热起来**（2026-09-16）。
@@ -1250,7 +1251,19 @@ export async function handleOrg(ctx) {
         }
         appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-grant:${grantId}:${now}` });
       });
-      if (fresh.length) q('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
+      // 授权次数变更流水（P03-04 写入点④ 授权消耗）：只有真的扣了次数才记一笔
+      // ——「同一学生同一课包重复授权被跳过」「撤销后重新授权（同一 grant 复活）」两条路径
+      //   都以 `fresh`（= 本次真正新增的授权数）为准，所以不会记成两笔、也不会漏记。
+      // 与 quota_used 的更新在**同一个事务**里（本函数上面就是 transaction(() => {...})）。
+      if (fresh.length) {
+        q('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
+        recordQuotaChange({
+          orgId: currentOrgId, seriesId, assignmentId: assignment.id,
+          changeType: 'GRANT_CONSUME', quotaTotalBefore: quotaTotal, quotaUsedBefore: quotaUsed,
+          actorId: auth.user.id, actorRole: auth.user.role,
+          reason: '', source: COURSE_QUOTA_SOURCES.ORG_GRANT,
+        });
+      }
     audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length, source: grantSource }, { orgId: currentOrgId });
     return { granted: fresh.length, skipped: studentIds.length - fresh.length, quotaTotal, quotaUsed: quotaUsed + fresh.length };
     });

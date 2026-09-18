@@ -599,6 +599,109 @@
 .lesson-material-kind.is-audio { color: #9d174d; background: #fce7f3; }
 .lesson-material-kind.is-prompt { color: #3f6212; background: #ecfccb; }
 
+/* P03「机构与课包人次」（2026-09-18 按线框图对齐）专属样式。
+ *
+ * 先说清楚**没有**新造的东西：抽屉用的是共享的 `.drawer-overlay/.drawer-panel/.drawer-head/.drawer-body/
+ * .drawer-foot/.drawer-section/.drawer-close`（packages/shared/src/styles.css），筛选行用 `.filter-form`，
+ * 表格用 `.table-wrap`，分页与"共 N 条"用共享的 `Pagination`/`ListResultSummary`，橙色警示用 `.notice.warning`，
+ * 状态徽标用 `.status`，机构卡直接套 `.panel` + 共享的 `.avatar`。
+ * 这里只补三处仓库里确实没有的：① 机构卡的横向排布 ② 四个入口卡的网格 ③ 必填错误的就地提示。 */
+.admin-console .org-summary {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  flex-wrap:wrap;
+}
+
+.org-summary-identity {
+  display:flex;
+  align-items:flex-start;
+  gap:14px;
+  min-width:0;
+}
+
+.org-summary-text { min-width:0; }
+.org-summary-text p { margin:6px 0 0; line-height:1.6; }
+.org-summary-name { font-size:17px; }
+.org-summary-actions { margin-left:auto; }
+
+/* 图3 的四个入口卡：一行四张，窄屏折成两列/一列（与 .metrics 的断点同口径）。 */
+.org-entry-grid {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:12px;
+  margin-bottom:20px;
+}
+
+.org-entry-card {
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  padding:16px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 7px 20px #40307106;
+  transition:border-color .15s ease-out, box-shadow .15s ease-out;
+}
+
+a.org-entry-card:hover {
+  border-color:#c9bdf0;
+  box-shadow:0 9px 24px #40307114;
+}
+
+.org-entry-card:focus-visible {
+  outline:2px solid var(--purple);
+  outline-offset:2px;
+}
+
+.org-entry-card strong { font-size:14px; }
+.org-entry-card small { color:#858094; font-size:11px; line-height:1.5; }
+.org-entry-icon { color:var(--purple); font-size:18px; }
+
+/* 没有落点的入口（如「课堂记录」：平台端还没有这个页面）不做成链接，视觉上也要看得出不可点。 */
+.org-entry-card.is-disabled {
+  color:#8d8798;
+  background:#faf9fd;
+  box-shadow:none;
+}
+.org-entry-card.is-disabled .org-entry-icon { color:#b3adc0; }
+
+/* 与 `label` 同款标题（用于「机构状态」「调整类型」这类 radio 组：label 不能嵌 label）。 */
+.org-field-label {
+  display:block;
+  margin:12px 0 6px;
+  color:#514b60;
+  font-size:12px;
+  font-weight:600;
+}
+
+/* 必填/格式错误的就地提示（红字，紧跟字段之后）。 */
+.org-field-error {
+  display:block;
+  margin-top:4px;
+  color:#c25668;
+  font-size:11px;
+  font-weight:600;
+}
+
+/* `.admin-confirm .row-actions` 是给弹窗**底部按钮行**定的（右对齐 + 24px 上边距），
+ * 但弹窗表单里也有用 `.row-actions` 排 radio 的行（机构状态：正常 / 停用）——
+ * 那两枚单选被这条规则顶到了右边、还多出一截上边距。这里把表单内的这类行改回左对齐、无额外边距。 */
+.admin-confirm .org-option-row {
+  justify-content:flex-start;
+  margin-top:0;
+}
+
+@media(max-width:900px) {
+  .org-entry-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+
+@media(max-width:540px) {
+  .org-entry-grid { grid-template-columns:1fr; }
+}
+
 /* 平台管理端统一字体（2026-09-17，用户口径：「后台全部用画布课堂那个字体」）。
  *
  * 字体栈只有一处定义：packages/shared/src/styles.css 的 `--cv-font`

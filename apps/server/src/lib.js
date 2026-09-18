@@ -403,6 +403,10 @@ export function normalizeOrg(value) {
   return {
     id: value.id,
     name: value.name,
+    // P03（2026-09-18 按线框图）：机构简称 / 机构编码（ORG0001 这种，创建时生成、此后不变）/ 所属区域。
+    shortName: value.short_name || null,
+    orgCode: value.org_code || null,
+    region: value.region || null,
     status: value.status,
     contractStartAt: value.contract_start_at,
     contractExpiresAt: value.contract_expires_at,

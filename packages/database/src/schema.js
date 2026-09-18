@@ -1965,6 +1965,80 @@ try { db.exec("ALTER TABLE course_lessons ADD COLUMN canvas_template_snapshot TE
 try { db.exec('ALTER TABLE course_assignments ADD COLUMN expires_at TEXT'); } catch (_) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_course_assignments_org_expires ON course_assignments(org_id, expires_at)'); } catch (_) {}
 
+// ── P03 机构三列：机构简称 / 机构编码 / 所属区域（2026-09-18 按线框图）─────────────────
+// 用词口径（用户 2026-09-18）：平台侧**只有「授权次数」**（总 / 已授权 / 剩余）这一个说法，
+// 本文件与本任务新增的代码/注释/接口字段一律按这个口径写。
+// 三列都可空：老库先加列、再由下面的回填补号；新库建表时没有这三列，靠这里的 ALTER 补上。
+try { db.exec('ALTER TABLE organizations ADD COLUMN short_name TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE organizations ADD COLUMN org_code TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE organizations ADD COLUMN region TEXT'); } catch (_) {}
+// 机构编码唯一：用**部分**唯一索引，让还没补号（NULL/空串）的历史机构不互相冲突。
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_org_code ON organizations(org_code) WHERE org_code IS NOT NULL AND org_code <> ''"); } catch (_) {}
+
+/**
+ * 机构编码格式：`ORG` + 至少 4 位序号（ORG0001、ORG0002……；序号超过 9999 后自然变长）。
+ * 「可读」= 人能一眼看出是第几家机构；「稳定」= 只与创建顺序有关，**创建后不再变**
+ * （见 routes/admin/organizations.js 的 ORG_CODE_IMMUTABLE 守卫）。
+ */
+export function formatOrgCode(sequence) {
+  const value = Math.max(1, Number(sequence) || 1);
+  return 'ORG' + String(value).padStart(4, '0');
+}
+
+/**
+ * 下一个可用机构编码：取现有编码里最大的 `ORG<数字>` 再 +1，跳过已占用的。
+ * 传入 codes 时用调用方给的快照（创建接口一次事务内连开多家机构时用），不传就现查库。
+ */
+export function nextOrgCode(codes = null) {
+  const list = codes || rows("SELECT org_code FROM organizations WHERE org_code IS NOT NULL AND TRIM(org_code) <> ''").map((item) => item.org_code);
+  const used = new Set(list.map((code) => String(code)));
+  let max = 0;
+  for (const code of used) {
+    const matched = /^ORG(\d+)$/.exec(code);
+    if (matched) max = Math.max(max, Number(matched[1]));
+  }
+  let sequence = max;
+  let candidate = formatOrgCode(sequence + 1);
+  while (used.has(candidate)) { sequence += 1; candidate = formatOrgCode(sequence + 1); }
+  return candidate;
+}
+
+// 存量机构回填：**按 created_at 升序补号**（最早创建的机构拿 ORG0001），只补没有编码的。
+// 说明：建表/加列这套语句在每次进程启动时都会执行一遍（server 启动即 import 本文件），
+// 所以这里天然幂等 —— 已补齐的不会再动，seed/测试直接 INSERT 的机构下次启动也会被补上。
+for (const item of rows("SELECT id FROM organizations WHERE org_code IS NULL OR TRIM(org_code) = '' ORDER BY created_at, id")) {
+  q('UPDATE organizations SET org_code=? WHERE id=?', [nextOrgCode(), item.id]);
+}
+
+// ── 授权次数变更流水（P03-04「授权次数变更记录」页的服务端）──────────────────────────────
+// 这是**授权次数（库存账）**：记「平台给机构开的授权次数」和「机构把这些次数授权给学生」的每一次变动；
+// 它**不是财务账** —— 财务账是 license_purchase_batches / license_revenue_events（成交金额、收入确认、分摊），
+// 两者可以不一致（平台给机构开/调授权次数默认**不生成**许可批次，用户 2026-09-18 未要求联动）。
+// 用途：机构详情/课包授权次数页的「变更记录」列表（GET /api/admin/organizations/:id/course-quota-changes）。
+//
+// ⚠️ 历史数据补不出来：表建好之后**只记新的**，建表之前的开通/调整/授权消耗/撤销一律没有流水。
+// 表里刻意**不加外键**（与 license_purchase_batches / license_revenue_events 一致）：
+// 课包或授权单被删掉时，这条流水仍要留着（它就是「发生过的事」的证据）。
+db.exec(`CREATE TABLE IF NOT EXISTS course_quota_changes (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  series_id TEXT NOT NULL,
+  assignment_id TEXT,
+  change_type TEXT NOT NULL CHECK (change_type IN ('INITIAL_OPEN','ADD','REDUCE','GRANT_CONSUME','GRANT_REFUND')),
+  delta INTEGER NOT NULL,
+  quota_total_before INTEGER NOT NULL,
+  quota_total_after INTEGER NOT NULL,
+  quota_used_before INTEGER NOT NULL,
+  quota_used_after INTEGER NOT NULL,
+  actor_id TEXT,
+  actor_role TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_course_quota_changes_org_created ON course_quota_changes(org_id, created_at DESC, id DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_course_quota_changes_org_series ON course_quota_changes(org_id, series_id, created_at DESC, id DESC)');
+
 export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
 export function nowIso() { return new Date().toISOString(); }
 
