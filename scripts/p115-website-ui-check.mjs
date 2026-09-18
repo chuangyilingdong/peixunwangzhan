@@ -529,6 +529,100 @@ try {
   if (!priced?.coverHasImage || !String(priced.background).includes('lingdong-ai-logo.png')) problems.push('灵动课程：给课包写了封面地址，缩略图却没渲染出来 —— 公开接口是不是又漏下发 coverAssetId / coverImageUrl 了');
   await shot('10-marketplace-priced');
 
+  // ── ⑤b 灵动课程：只留两个分类按钮（画布 / VibeCoding），并且真的能筛（用户口径 2026-09-18 晚）
+  const catLabels = (await page.locator('.mp-cats .mp-cat').allInnerTexts()).map((t) => t.trim());
+  console.log(`  · 灵动课程分类按钮：[${catLabels.join(' / ')}]`);
+  if (catLabels.join('|') !== '画布|VibeCoding') problems.push(`灵动课程：筛选应只有两个板块 [画布|VibeCoding]（实际 [${catLabels.join('|')}]）`);
+  if (await page.locator('.mp .mkt-filters,.mp .mkt-search,#marketplace-search,.mp-filter-toggle').count()) {
+    problems.push('灵动课程：除这两个分类按钮外，不该再有别的筛选（难度/年龄/标签/排序/搜索已按用户口径下线）');
+  }
+  const allRows = await page.locator('.mp-row').count();
+  await page.locator('.mp-cats .mp-cat').nth(1).click(); // VibeCoding（种子里的课包是画布课程 → 应当一条都不剩）
+  await page.waitForTimeout(700);
+  const vibeRows = await page.locator('.mp-row').count();
+  const vibePressed = await page.locator('.mp-cats .mp-cat').nth(1).getAttribute('aria-pressed');
+  const emptyNote = await page.locator('.mp-note').count();
+  console.log(`  · 点 VibeCoding：课包行 ${allRows} → ${vibeRows}、aria-pressed=${vibePressed}、空态提示=${emptyNote}`);
+  if (vibePressed !== 'true') problems.push('灵动课程：点分类按钮后 aria-pressed 应当是 true');
+  if (allRows && vibeRows >= allRows) problems.push(`灵动课程：选了 VibeCoding 之后条数没变（${allRows} → ${vibeRows}）—— 分类没有真的接到接口上`);
+  if (vibeRows === 0 && !emptyNote) problems.push('灵动课程：筛成空列表时应当给一句空态提示');
+  await page.locator('.mp-cats .mp-cat').nth(1).click(); // 再点一次取消 → 回到全部
+  await page.waitForTimeout(700);
+  const backRows = await page.locator('.mp-row').count();
+  if (backRows !== allRows) problems.push(`灵动课程：再点一次应当取消选择、回到全部（${allRows} → ${backRows}）`);
+  await shot('13-marketplace-category');
+
+  // ── ⑤c 灵动作品：卡片按 zip 重做 + 分类筛选换成搜索框（用户口径 2026-09-18 晚）
+  await page.goto(`${base}/works`, { waitUntil: 'domcontentloaded' });
+  for (let i = 0; i < 40; i += 1) { if (await page.locator('.work').count()) break; await page.waitForTimeout(250); }
+  await settle();
+  // ① 原来的分类筛选整块不要了（页面里那个「全部作品 / 小游戏 / 互动故事…」的 chips）
+  if (await page.locator('.filters').count()) problems.push('灵动作品：分类筛选块应已删除（用户口径：这里全部不要）');
+  // ② 换成搜索框
+  if (!(await page.locator('#works-search').count())) problems.push('灵动作品：没找到搜索框（#works-search）');
+  const workCount = await page.locator('.work').count();
+  if (!workCount) problems.push('灵动作品：一张卡片都没有');
+  const cardGeo = await page.evaluate(() => {
+    const card = document.querySelector('.work');
+    if (!card) return null;
+    const art = card.querySelector('.art');
+    const title = card.querySelector('.work-title');
+    const foot = card.querySelector('.work-foot');
+    const artBox = art ? art.getBoundingClientRect() : null;
+    return {
+      cardRadius: Math.round(parseFloat(getComputedStyle(card).borderRadius)),
+      cardBg: getComputedStyle(card).backgroundColor,
+      artRatio: artBox && artBox.height ? +(artBox.width / artBox.height).toFixed(2) : null,
+      artRadius: art ? Math.round(parseFloat(getComputedStyle(art).borderRadius)) : null,
+      titleWrap: title ? getComputedStyle(title).whiteSpace : null,
+      titleEllipsis: title ? getComputedStyle(title).textOverflow : null,
+      footDisplay: foot ? getComputedStyle(foot).display : null,
+      footSpans: foot ? foot.querySelectorAll('span').length : null,
+      buttonsInside: card.querySelectorAll('button').length,
+      hitLinks: card.querySelectorAll('.work-hit').length,
+      heights: { card: card.offsetHeight, art: art?.offsetHeight, body: card.querySelector('.work-body')?.offsetHeight, title: title?.offsetHeight, foot: foot?.offsetHeight },
+      bodyStyle: (() => { const b = card.querySelector('.work-body'); if (!b) return null; const s = getComputedStyle(b); return { display: s.display, flex: s.flex, gap: s.gap, minHeight: s.minHeight, padding: s.padding }; })(),
+      html: card.innerHTML.replace(/\s+/g, ' ').slice(0, 420),
+    };
+  });
+  console.log(`  · 灵动作品卡片：圆角 ${cardGeo?.cardRadius}px 底色 ${cardGeo?.cardBg}、封面 ${cardGeo?.artRatio}:1 圆角 ${cardGeo?.artRadius}px、` +
+    `标题 ${cardGeo?.titleWrap}/${cardGeo?.titleEllipsis}、底部 ${cardGeo?.footDisplay} ${cardGeo?.footSpans} 格高 ${cardGeo?.heights?.foot}px、卡内按钮 ${cardGeo?.buttonsInside}、可点层 ${cardGeo?.hitLinks}`);
+  if (!cardGeo) problems.push('灵动作品：取不到卡片几何');
+  else {
+    // 底部那行必须就是一行（正常 ~20px）。踩过：用 <footer> 会命中全局的页脚样式
+    // （padding 64/28/24 + 灰底），把它撑到 108px，卡片里就多出一大块空白。
+    if (cardGeo.heights && cardGeo.heights.foot > 32) {
+      problems.push(`灵动作品：底部那行高度异常（${cardGeo.heights.foot}px，正常一行约 20px）—— 大概率又命中全局的 footer 样式了`);
+    }
+    // 卡高与内容的差 = 内外边距 + 行高（正常约 70px）；超过 120 就说明有东西在撑高度
+    if (cardGeo.heights && cardGeo.heights.card - (cardGeo.heights.art + cardGeo.heights.title + cardGeo.heights.foot) > 120) {
+      problems.push(`灵动作品：卡片里多出一大块空白（卡高 ${cardGeo.heights.card} vs 内容 ${cardGeo.heights.art}+${cardGeo.heights.title}+${cardGeo.heights.foot}）`);
+    }
+    // zip 的设计：白卡、20px 圆角、封面 ≈1.43:1 且圆角 14、标题单行省略、底部一行两格、卡内没有按钮
+    if (cardGeo.cardRadius !== 20) problems.push(`灵动作品：卡片圆角应为 20px（实际 ${cardGeo.cardRadius}px）`);
+    if (cardGeo.cardBg !== 'rgb(255, 255, 255)') problems.push(`灵动作品：卡片应为白底（实际 ${cardGeo.cardBg}）`);
+    if (cardGeo.artRatio == null || Math.abs(cardGeo.artRatio - 1.43) > 0.08) problems.push(`灵动作品：封面比例应≈1.43:1（实际 ${cardGeo.artRatio}:1）`);
+    if (cardGeo.artRadius !== 14) problems.push(`灵动作品：封面圆角应为 14px（实际 ${cardGeo.artRadius}px）`);
+    if (cardGeo.titleWrap !== 'nowrap' || cardGeo.titleEllipsis !== 'ellipsis') problems.push(`灵动作品：标题应当是单行省略（实际 white-space=${cardGeo.titleWrap} text-overflow=${cardGeo.titleEllipsis}）`);
+    if (cardGeo.footDisplay !== 'flex' || cardGeo.footSpans < 2) problems.push(`灵动作品：底部应当是一行两格（学生名 / 机构）`);
+    if (cardGeo.buttonsInside) problems.push(`灵动作品：卡片里不该再有按钮（zip 的卡里没有按钮，整卡可点）`);
+  }
+  // ③ 搜索真的按「标题 / 学生名字」过滤
+  const firstTitle = await page.locator('.work .work-title').first().innerText();
+  await page.locator('#works-search').fill(firstTitle.trim().slice(0, 3));
+  await page.waitForTimeout(300);
+  const searched = await page.locator('.work').count();
+  const searchedText = await page.locator('.works').innerText();
+  console.log(`  · 搜索「${firstTitle.trim().slice(0, 3)}」：${workCount} → ${searched} 件`);
+  if (!searched) problems.push(`灵动作品：用第一张卡的标题去搜，一条都没匹配上（搜索没生效）`);
+  if (searched > workCount) problems.push('灵动作品：搜索之后条数反而变多了？');
+  if (!searchedText.includes(firstTitle.trim().slice(0, 3))) problems.push('灵动作品：搜索结果里没有包含搜索词的那张卡');
+  await shot('14-works-search');
+  await page.locator('#works-search').fill('');
+  await page.waitForTimeout(300);
+  if ((await page.locator('.work').count()) !== workCount) problems.push('灵动作品：清空搜索之后没有回到全部');
+  await shot('15-works-cards');
+
   // ── ⑥ reduced-motion：不创建 WebGL（SpecularButton 的平台侧改造），按钮与文案仍要可用
   //    ⚠️ 放在改库之前：改完之后首页文案已经被清空了，这一段的断言会失去意义。
   const { context: rmContext, pg: rmPage } = await newPage({ reducedMotion: 'reduce' });

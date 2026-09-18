@@ -82,12 +82,36 @@ function Header({ userBadge }){
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
-function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';const isVibe=work.type==='VIBECODING';
-    // VibeCoding 作品可能是能玩的网页，也可能是 PPT / Word / Excel（站内预览 + 下载真文件）；
-    // 是哪一种由服务端的 preview 说了算（最近产出的那份），前端不再自己猜。
-    const docKind=isVibe&&work.preview?.document?String(work.preview.kind||'').toLowerCase():'';
-    const vibeHint=docKind==='pptx'?' · 演示文稿':docKind==='xlsx'?' · 表格':docKind==='docx'?' · 文档':isVibe?' · 可在线玩':'';
-    return <article className={'work w'+index%6}><div className="art"><span>{isVibe?(docKind?'📊':'🎮'):emoji}</span><i>✦</i><b>AI</b></div><div className="work-body"><small>{student}{vibeHint}</small><h3>{title}</h3><p>{desc}</p><button type="button" aria-label={`打开作品：${title}`} onClick={()=>{if(url)navigate(url);}}>打开体验 <b>↗</b></button></div></article>}
+// 作品卡片：按用户给的 zip（Figma Make 导出）重做 —— 白卡 + 10px 内边距 + **1.43:1 圆角封面**
+// + **单行标题**（超出省略）+ 底部一行（左：学生名 / 右：机构）。
+// ⚠️ 两处如实说明：
+//   ①我们**没有作品封面图**（公开接口不下发任何缩略图），所以封面位沿用原来的「渐变 + emoji」画布块，
+//     几何（比例/圆角/悬停放大/底部渐隐）照 zip；将来有真缩略图就把 .art 换成 <img> 即可。
+//   ②zip 参考图里那套「星级评价 + 浏览数 + 作者皇冠」我们没有对应数据，**不假装有**；
+//     只把 exists 的 featured 用一颗小星标出来（列表本来就按 featured 排序）。
+// 整张卡可点（zip 的卡里没有按钮）：铺一层透明的 Link 覆盖整卡，键盘也能进。
+function Work({work,index=0}){
+  const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);
+  const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';
+  const title=work.title;const student=work.studentName||'小创作者';const isVibe=work.type==='VIBECODING';
+  // VibeCoding 作品可能是能玩的网页，也可能是 PPT / Word / Excel（站内预览 + 下载真文件）；
+  // 是哪一种由服务端的 preview 说了算（最近产出的那份），前端不再自己猜。
+  const docKind=isVibe&&work.preview?.document?String(work.preview.kind||'').toLowerCase():'';
+  const vibeHint=docKind==='pptx'?'演示文稿':docKind==='xlsx'?'表格':docKind==='docx'?'文档':isVibe?'可在线玩':'';
+  return <article className={'work w'+index%6}>
+    {url?<Link className="work-hit" to={url} aria-label={`打开作品：${title}`}/>:null}
+    <div className="art" aria-hidden="true"><span>{isVibe?(docKind?'📊':'🎮'):emoji}</span></div>
+    <div className="work-body">
+      <h3 className="work-title" title={title}>{title}</h3>
+      {/* ⚠️ 这里用 div 而不是 <footer>：站点有一条**全局** `footer{padding:64px 28px 24px;background:#f8f7fc}`
+          （页脚用的），挂在 <footer> 上会被它撑到 108px 还带一层灰底（实测踩过）。 */}
+      <div className="work-foot">
+        <span className="work-student">{work.featured?<i className="work-featured" title="精选作品" aria-label="精选作品">★</i>:null}{student}</span>
+        <span className="work-org">{work.orgName||vibeHint}</span>
+      </div>
+    </div>
+  </article>;
+}
 function Title({eyebrow,title,desc}){return <section className="page-title"><div><Kicker>{eyebrow}</Kicker><h1>{title}</h1><p>{desc}</p></div></section>}
 
 
@@ -191,6 +215,7 @@ function Works(){
   const [items,setItems]=useState(FALLBACK_WORKS.map(w=>({title:w[1],description:w[3],studentName:'小创作者',emoji:w[0]})));
   const [loaded,setLoaded]=useState(false);
   const [error,setError]=useState(null);
+  const [query,setQuery]=useState('');
   useEffect(()=>{
     // 作品广场同时展示画布作品（public/works）与平台已发布的 VibeCoding 作品（public/vibecoding-works）
     Promise.allSettled([publicApi.get('public/works'), publicApi.get('public/vibecoding-works')]).then(([canvas, vibe])=>{
@@ -202,7 +227,25 @@ function Works(){
       setLoaded(true);
     });
   },[]);
-  return <><Title eyebrow="学员作品" title={<>孩子们的灵感，<em>正在发光</em></>} desc="来自课堂与作品社区的真实 HTML 创作。点击卡片即可打开体验，游戏、古诗、3D、单词闯关都能在浏览器里直接玩。"/><main className="inner"><div className="filters"><b>全部作品</b><span>小游戏</span><span>互动故事</span><span>AI 绘本</span><span>智能硬件</span></div><div className="works all">{items.map((w,i)=><Work key={w.id||w.title} work={w} index={i}/>)}</div>{!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}{loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}<div className="note">✦ <div><b>作品来自真实课堂</b><p>每一份作品都记录着孩子从想法、对话到实现的创作过程。机构开通后，可拥有自己的校区作品展厅。</p></div><Button soft to="/org">了解机构作品展厅</Button></div></main></>;
+  // 搜索按「标题 / 学生名字」匹配（大小写不敏感、去首尾空格）
+  const keyword=query.trim().toLowerCase();
+  const visible=keyword?items.filter((w)=>String(w.title||'').toLowerCase().includes(keyword)||String(w.studentName||'').toLowerCase().includes(keyword)):items;
+  return <><Title eyebrow="学员作品" title={<>孩子们的灵感，<em>正在发光</em></>} desc="来自课堂与作品社区的真实 HTML 创作。点击卡片即可打开体验，游戏、古诗、3D、单词闯关都能在浏览器里直接玩。"/><main className="inner">
+    {/* 搜索（用户口径 2026-09-18 晚）：**原来的分类筛选整块不要了**，换成一个搜索框，
+        按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把画布作品与 VibeCoding 作品合并出来的，
+        所以过滤也在前端做 —— 不用改接口。 */}
+    <div className="works-search">
+      <label className="sr-only" htmlFor="works-search">搜索作品标题或学生名字</label>
+      <input id="works-search" value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="搜索作品标题或学生名字…" autoComplete="off"/>
+      {query?<button type="button" className="works-search-clear" onClick={()=>setQuery('')}>清空</button>:null}
+      {loaded?<span className="works-search-count">共 <b>{visible.length}</b> 件</span>:null}
+    </div>
+    <div className="works all">{visible.map((w,i)=><Work key={w.id||w.title} work={w} index={i}/>)}</div>
+    {!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}
+    {loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}
+    {loaded&&items.length>0&&visible.length===0&&<div className="note">✦ <p>没有搜到匹配的作品。换个标题或学生名字试试，或者<b>清空</b>搜索词。</p></div>}
+    <div className="note">✦ <div><b>作品来自真实课堂</b><p>每一份作品都记录着孩子从想法、对话到实现的创作过程。机构开通后，可拥有自己的校区作品展厅。</p></div><Button soft to="/org">了解机构作品展厅</Button></div>
+  </main></>;
 }
 // ── 机构手册 / 灵动介绍 / 常见问题（2026-09-18 起三个页面都由后台 CMS 维护）───────────
 // 用户口径：「灵动介绍、机构手册、常见问题尽量做成后台可配置的」，机构手册的图与文字
@@ -330,8 +373,11 @@ function Marketplace(){
   // 所以这里不再维护难度/年龄/标签/搜索/排序这些筛选态，只留分页。
   // ⚠️ 公开接口仍然支持这些查询参数（别的调用方在用），删掉的只是官网这一处的入口。
   const limit=20;
+  // 只保留「课程类型」一个筛选维度（画布 / VibeCoding），见下面 .mp-cats 的注释
+  const [category,setCategory]=useState('');
   const buildParams=()=>{
     const p=new URLSearchParams();
+    if(category) p.set('category',category);
     p.set('sort','popular');
     p.set('page',page);
     p.set('limit',limit);
@@ -342,7 +388,7 @@ function Marketplace(){
       .then((j)=>{if(live){const d=j||{};setItems(d.items||[]);setTotal(d.total||0);setLoading(false);}})
       .catch(e=>{if(live){setError(e.message);setLoading(false);}});
     return()=>{live=false};
-  },[page]);
+  },[category,page]);
   const totalPages=Math.ceil(total/limit)||1;
   // 页头（大标题 + 副标题）走 CMS 的 MARKETPLACE 键，后台「官网内容 → 灵动课程」可改；
   // 没配就用 CMS_FALLBACK.MARKETPLACE。与首页同一套口径：**接口回来前不渲染文案**（ready），
@@ -354,9 +400,17 @@ function Marketplace(){
     <div className="mp-aura" aria-hidden="true" />
     <div className="mp-inner">
     <header className="mp-head">
-      <p className="mp-eyebrow">课包 · COURSE PACKS</p>
       {headReady ? <><h1 className="mp-title">{headTitle}</h1>{headLead ? <p className="mp-lead">{headLead}</p> : null}</> : <div className="mp-head-hold" aria-hidden="true" />}
     </header>
+    {/* 筛选（用户口径 2026-09-18 晚）：**只留两个板块** —— 画布 / VibeCoding。
+        上次把整块筛选删了，这次按新口径加回这两个分类；默认两个都不选 = 全部，
+        再点一次已选中的那个就取消（否则选完就没路回到「全部」）。
+        ⚠️ 别的筛选（难度/年龄/标签/排序/搜索）按用户口径**不再出现在官网上**。 */}
+    <div className="mp-cats">
+      {[['CANVAS','画布'],['VIBECODING','VibeCoding']].map(([value,label])=>(
+        <button type="button" key={value} aria-pressed={category===value} className={'mp-cat'+(category===value?' on':'')} onClick={()=>{setCategory(category===value?'':value);setPage(1);}}>{label}</button>
+      ))}
+    </div>
     {loading?<div className="mp-rows">{Array.from({length:4},(_,i)=><div key={i} className="mp-skeleton"/>)}</div>:
      error?<div className="mp-note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
      items.length===0?<div className="mp-note">✦ <div><b>暂无课包，敬请期待</b><p>灵动课程会陆续上线优质 AI 课包。</p></div></div>:
