@@ -177,7 +177,13 @@
 .website-login {
   min-height: 100vh;
   position: relative;
-  overflow: hidden;
+  /* ⚠️ 这里必须是 clip、不能是 hidden（2026-09-18 真浏览器测出来的）：
+     装饰用的两圈轨道线故意往右下出血（::after 的 right:-14vw），让本容器的 scrollWidth 大于宽度。
+     `overflow:hidden` 只是不显示滚动条，**仍然是一个可编程滚动的容器** ——
+     一点输入框/按钮，浏览器为了把焦点元素滚进视野就会把它横向滚 224px，整个登录页看起来「错位」。
+     clip 连程序化滚动都不允许，出血照样被裁掉。 */
+  overflow-x: clip;
+  overflow-y: visible;
   background:
     radial-gradient(circle at 12% 18%, rgba(255, 224, 151, .22), transparent 26%),
     radial-gradient(circle at 88% 78%, rgba(154, 125, 255, .27), transparent 32%),
@@ -186,6 +192,13 @@
 .website-login::before,.website-login::after { content: ""; position: absolute; pointer-events: none; border: 1px solid rgba(255,255,255,.18); border-radius: 50%; transform: rotate(-22deg); }
 .website-login::before { width: 72vw; height: 33vw; left: -20vw; top: -13vw; }
 .website-login::after { width: 58vw; height: 25vw; right: -14vw; bottom: -8vw; border-color: rgba(255,218,118,.28); transform: rotate(25deg); }
+/* 两圈轨道线缓慢漂移（登录页动效，2026-09-18）：保留各自原本的 rotate 作为起点，
+   只加一点位移与倾角变化 —— 页面因此是「活着」的，但不会抢卡片和表单的注意力。 */
+@keyframes wlRingDriftA { from { transform: rotate(-22deg) translate3d(0,0,0); } to { transform: rotate(-19deg) translate3d(0,-2.5vw,0); } }
+@keyframes wlRingDriftB { from { transform: rotate(25deg) translate3d(0,0,0); } to { transform: rotate(28deg) translate3d(0,2vw,0); } }
+.website-login::before { animation: wlRingDriftA 17s ease-in-out infinite alternate; }
+.website-login::after { animation: wlRingDriftB 21s ease-in-out infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .website-login::before, .website-login::after { animation: none; } }
 .website-login .login-page { width: min(1180px,100%); min-height: 100vh; margin: 0 auto; padding: 72px 42px 50px; display: grid; grid-template-columns: minmax(0,1.05fr) minmax(380px,.75fr); align-items: center; gap: clamp(50px,8vw,120px); position: relative; z-index: 1; }
 .login-back { position: absolute; z-index: 3; top: 28px; left: max(28px,calc(50% - 548px)); display: inline-flex; align-items: center; gap: 7px; color: rgba(255,255,255,.78); font-size: 13px; font-weight: 700; transition: color .2s ease,transform .2s ease; }
 .login-back:hover { color: #fff; transform: translateX(-3px); }

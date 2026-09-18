@@ -1326,3 +1326,43 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
    （2026-09-17 教师工作台截图里就是这个）。 */
 .table-wrap td .text-button,
 .table-wrap td .status { white-space: nowrap; }
+
+/* ── 登录页动效（2026-09-18）────────────────────────────────────────────────
+   三个登录页（官网 /login、平台端、机构端）共用这一套，全是**纯 CSS**：
+   不引任何依赖、不引 Tailwind —— 官网与三端是手写 CSS 体系，引一套组件库的代价
+   远大于收益（而且生产 CSP 是 script-src 'self'，外链脚本一进来就被拒）。
+   机制取自 find-ui-motion 案例库，逐条对应：
+     · 背景氛围光斑缓慢漂移（对应 ambient 类，如 Ribbon / Particles 的克制版）
+     · 卡片「模糊→清晰 + 上移」入场（对应 Fade In Unblur）
+     · 表单逐行错开淡入（避免整块闪现）
+     · 标题聚焦收拢（对应 Focus In Contract；只动 opacity / blur / scale，
+       不碰 letter-spacing —— 官网那边把标题字距设成 -4px，动画若写死字距会把它覆盖掉）
+     · 提交按钮内联转圈（对应 Loading Button）
+   ⚠️ 全部只在 prefers-reduced-motion: no-preference 下播放，见文件末尾的 reduce 兜底。 */
+.login-intro::before{content:"";position:absolute;inset:-25%;z-index:0;pointer-events:none;background:radial-gradient(circle at 28% 32%,#a08cff59,transparent 42%),radial-gradient(circle at 74% 68%,#ff8fc04d,transparent 40%);filter:blur(34px);animation:loginDrift 19s ease-in-out infinite alternate}
+@keyframes loginDrift{from{transform:translate3d(-2.5%,-1.5%,0) scale(1)}to{transform:translate3d(2.5%,2%,0) scale(1.09)}}
+.login-card{animation:loginCardIn .72s cubic-bezier(.22,1,.36,1) both}
+@keyframes loginCardIn{from{opacity:0;transform:translateY(18px) scale(.986);filter:blur(10px)}to{opacity:1;transform:none;filter:blur(0)}}
+.login-card form>*{animation:loginRowIn .5s cubic-bezier(.22,1,.36,1) both}
+.login-card form>*:nth-child(1){animation-delay:.18s}
+.login-card form>*:nth-child(2){animation-delay:.24s}
+.login-card form>*:nth-child(3){animation-delay:.3s}
+.login-card form>*:nth-child(4){animation-delay:.36s}
+.login-card form>*:nth-child(5){animation-delay:.42s}
+.login-card form>*:nth-child(n+6){animation-delay:.48s}
+@keyframes loginRowIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.login-intro h1{animation:loginTitleIn .8s cubic-bezier(.22,1,.36,1) both}
+@keyframes loginTitleIn{from{opacity:0;filter:blur(9px);transform:scale(.94)}to{opacity:1;filter:blur(0);transform:none}}
+.login-points span{animation:loginRowIn .5s cubic-bezier(.22,1,.36,1) both}
+.login-points span:nth-child(1){animation-delay:.34s}
+.login-points span:nth-child(2){animation-delay:.4s}
+.login-points span:nth-child(3){animation-delay:.46s}
+.primary-button .btn-spinner{display:inline-block;width:13px;height:13px;margin-right:8px;border:2px solid #ffffff5c;border-top-color:#fff;border-radius:50%;vertical-align:-2px;font-style:normal;animation:loginSpin .7s linear infinite}
+@keyframes loginSpin{to{transform:rotate(360deg)}}
+/* 按下反馈：桌面端鼠标按下时给一点「压下去」的触感（对应 feedback-button-press） */
+.primary-button:active:not(:disabled){transform:translateY(1px) scale(.995)}
+/* 动效一律是增强：系统设了「减少动态效果」就全部不播放，直接显示终态。 */
+@media(prefers-reduced-motion:reduce){
+  .login-intro::before,.login-card,.login-card form>*,.login-intro h1,.login-points span{animation:none!important}
+  .primary-button .btn-spinner{animation:loginSpin 1.4s linear infinite}
+}

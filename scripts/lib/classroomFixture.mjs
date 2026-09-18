@@ -38,9 +38,24 @@ const sessionCapabilityFlags = (db, lessonId) => {
   return flags;
 };
 
+/**
+ * 打开一个「守卫自己的」连接：**必须带 busy 等待**。
+ *
+ * 为什么：这些守卫都是「本进程开若干 DatabaseSync 写同一个临时库」+「同时 spawn 一个服务进程
+ * 也开着同一个库」的结构。SQLite 默认 busy_timeout=0，一旦两边同时写就直接抛
+ * `database is locked`（errcode 5）—— 症状是守卫**偶发**在 1 秒内失败，单跑又全过，
+ * 于是长期被误当成「机器负载」或「端口残留」。2026-09-18 抓到堆栈就是这里第 84 行的插入。
+ * 这个夹具被 20 多个守卫共用，所以修这一处，那些偶发红都会消失。
+ */
+function openDb(dbPath) {
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA busy_timeout = 5000');
+  return db;
+}
+
 /** 每个有许可的学生 × 该课包的每节已发布课时 → 一个 ACTIVE 课堂 + 他在名单里。幂等。 */
 export function ensureClassroom(dbPath) {
-  const db = new DatabaseSync(dbPath);
+  const db = openDb(dbPath);
   const created = [];
   try {
     // 守卫环境可能还没建库/建表（有的守卫是自己在进程内造库）—— 那种情况直接什么都不做
@@ -99,7 +114,7 @@ export function ensureClassroom(dbPath) {
  * 该课包下**每节已发布课时**都切一遍（守卫常会遍历候选课时）。
  */
 export function switchClassroom(dbPath, { deliveryMode = 'VIBECODING', requireSupports = true } = {}) {
-  const db = new DatabaseSync(dbPath);
+  const db = openDb(dbPath);
   const switched = [];
   try {
     // ⚠️ 要覆盖**所有**有许可的课包：只取第一个的话，守卫遍历到的其它课包课时仍然进不去

@@ -60,7 +60,7 @@ export function LoginPanel({ title, description, clientType, demos = [], onLogin
           {mfaRequired&&<label>动态验证码 / 恢复码<input value={mfaCode} onChange={e=>setMfaCode(e.target.value)} autoComplete="one-time-code" placeholder="6 位动态码，或 XXXX-XXXXX 恢复码" required/></label>}
           {mfaRequired&&<p className="muted">该账号已开启二次验证：请输入验证器 App 当前显示的动态码；验证器不可用时可用一枚恢复码。</p>}
           {error&&<Notice tone="danger">{error}</Notice>}
-          <button className="primary-button wide" disabled={pending}>{pending?'正在验证…':(mfaRequired?'验证并进入':'进入工作台')} <span>↗</span></button>
+          <button className="primary-button wide" disabled={pending} aria-busy={pending}>{pending?<i className="btn-spinner" aria-hidden="true"/>:null}{pending?'正在验证…':(mfaRequired?'验证并进入':'进入工作台')} <span>↗</span></button>
         </form>
         {demos.length>0&&<div className="demo-list"><span>演示账号</span>{demos.map(d=><button key={d.login} type="button" onClick={()=>{setLogin(d.login);setPassword(d.password);setMfaRequired(false);setMfaCode('')}}><strong>{d.label}</strong><small>{d.login}</small><b>使用</b></button>)}</div>}
       </div>
