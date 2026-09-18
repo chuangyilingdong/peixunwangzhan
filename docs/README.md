@@ -151,9 +151,23 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：0557bf2（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T100834Z / commit 0557bf2（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（9a5785a + 0557bf2，2026-09-18 晚）：**顶栏去掉「联系我们」+ 灵动课程重做成课包列表**
+代码提交：8e61bbb（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T103135Z / commit 8e61bbb（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（8e61bbb）：**把灵动课程的交互改回参考稿** —— 参数排**默认收起、悬停（或键盘聚焦进行内）才展开**
+      （`grid-template-rows 0fr→1fr` 做 height:auto 过渡，0.6s / `cubic-bezier(.16,1,.3,1)` 照参考稿）；
+      行入场**错开滑入**；行/缩略图/按钮的悬停反馈补齐；**筛选区默认收起**（只留「筛选与搜索 ▼」胶囊，
+      参考稿首屏只有「页头 + 课包行」）。
+      ⚠️ **参考稿给的交互不要自己"优化"掉**：上一版我嫌参数藏起来看不到，擅自改成常显，用户看到实际页面后
+      直接指出「这个页面交互跟参考稿完全不一样」—— 那个悬停下拉正是这个组件的核心。
+      ⚠️ 两个实现坑：`grid-template-rows:0fr` 收起时**上下 padding 必须一起归零**（padding 是盒子的高度下限，
+      否则留下 20+24=44px 空带）；入场动画**只能用 CSS keyframes**，IntersectionObserver 会让 p70 直接报未定义。
+      同批修两处「启动迁移」并发崩（`busy_timeout` 排到 `journal_mode` 之前、`ADD COLUMN` 的 TOCTOU）；
+      ⚠️ 但**「偶发守卫红项」没有根治** —— 见交接文档 §十.G（还有 `database is locked` 与
+      `UNIQUE constraint failed` 两个失败模式，复现脚本 `.tmp/verify-startup-race.mjs`）
+      核验：`PROD_ACCEPTANCE_OK` + 真浏览器打线上：收起态 `grid-rows=0px/opacity=0` → 悬停 `opacity=1`、
+      筛选默认收起、4 个课包行、横向溢出 0、三个内页顶栏无「联系我们」且不叠压
+      可回滚上一版：release 20260918T100834Z / commit 0557bf2
+      上一版改动（9a5785a + 0557bf2，2026-09-18 晚）：**顶栏去掉「联系我们」+ 灵动课程重做成课包列表**
       ①顶栏右上角那个「联系我们」删了：导航是 `position:absolute; left:50%` **页面居中**的，视口一窄就和
       右侧按钮组叠压（用户在内页截到的「遮挡」就是它）。只删这一个 —— hero 两个 CTA、页脚「合作」列、
       各页结尾的「联系我们」都保留
