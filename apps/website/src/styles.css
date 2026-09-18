@@ -389,7 +389,9 @@
 .mp-row:hover,.mp-row:focus-within{border-color:#ff5c9373;background:#ffffff0f}
 .mp-main{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:clamp(18px,3vw,32px);padding:clamp(20px,2.6vw,30px) clamp(20px,3vw,34px)}
 /* 缩略图：比参考稿的框大一圈（用户口径「他这个图的框太小了」）。没有封面时用课包首字占位 */
-.mp-cover{width:clamp(86px,9vw,112px);height:clamp(86px,9vw,112px);display:grid;place-items:center;overflow:hidden;border:1px solid #ffffff1f;border-radius:24px;background:#ffffff0a;background-size:cover;background-position:center}
+/* 缩略图：**横向的封面比例**（用户口径 2026-09-18 晚「可以再宽一点，左侧还有空位」）。
+   原来是个正方形小方块，左侧那一大片空着；现在拉成 ~16:9 的封面框（最大 216×122）。 */
+.mp-cover{width:clamp(150px,16.5vw,216px);height:clamp(88px,9.6vw,122px);display:grid;place-items:center;overflow:hidden;border:1px solid #ffffff1f;border-radius:22px;background:#ffffff0a;background-size:cover;background-position:center}
 .mp-cover span{color:var(--mp-accent);font-size:34px;font-weight:800}
 /* 参考稿里图标框在悬停时会亮起来（border 与底色都偏主色） */
 .mp-row:hover .mp-cover,.mp-row:focus-within .mp-cover{border-color:#ff5c9366;background-color:#ff5c9314}
@@ -397,7 +399,9 @@
 .mp-name{margin:0 0 8px;font-size:clamp(19px,2.1vw,26px);font-weight:700;letter-spacing:-.01em}
 /* 简介太长就用省略号收尾（用户口径）：两行截断，不做展开 */
 .mp-desc{display:-webkit-box;margin:0;overflow:hidden;color:#ffffff73;font-size:14px;line-height:1.7;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.mp-side{display:flex;flex-direction:column;align-items:flex-end;gap:14px}
+/* 价格与按钮**并排、价格在左**（用户口径：参考稿是「价格 + 按钮」一行，不是上下堆叠）。
+   价格块内部仍然右对齐，这样数字挨着按钮、看着像一列。 */
+.mp-side{display:flex;flex-direction:row;align-items:center;gap:clamp(16px,2.4vw,30px)}
 .mp-price{text-align:right}
 .mp-price strong{display:block;font-size:clamp(20px,2.2vw,27px);font-weight:700;letter-spacing:-.02em}
 .mp-price span{display:block;margin-top:5px;color:#ffffff4d;font-size:11px;font-weight:700;letter-spacing:.12em}
@@ -407,10 +411,9 @@
 /* 参考稿：按钮的光晕在整行悬停时变强（group-hover） */
 .mp-row:hover .mp-cta,.mp-row:focus-within .mp-cta{box-shadow:0 16px 40px #ff5c9366}
 /* 筛选区默认收起，只留一个胶囊开关（参考稿首屏没有筛选块） */
-.mp-filter-bar{display:flex;justify-content:center;max-width:1000px;margin:0 auto 20px}
-.mp-filter-toggle{display:inline-flex;align-items:center;gap:9px;padding:10px 20px;border:1px solid #ffffff1f;border-radius:999px;color:#ffffffa6;background:#ffffff0a;font-size:12.5px;font-weight:800;letter-spacing:.04em;transition:border-color .3s ease,color .3s ease}
-.mp-filter-toggle:hover{border-color:#ff5c93a6;color:#fff}
-.mp-filter-toggle b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:99px;color:#fff;background:var(--mp-accent);font-size:10.5px}
+/* 筛选区已整体删除（用户口径 2026-09-18 晚）—— 相关样式（.mp-filter-bar / .mp-filter-toggle
+   与下面那批 .mp .mkt-* 覆盖）一并去掉，别留着让人以为还能打开。 */
+
 /* 图3 那一排「关键参数」= 参考稿里的 FEATURES DROPDOWN：**默认收起，悬停（或键盘聚焦进行内）才展开**。
    ⚠️ 2026-09-18 晚用户指出「交互跟参考稿完全不一样」—— 我上一版把它改成了常显，等于把这个组件
    最关键的交互拿掉了。现在还原：用 grid-template-rows 0fr→1fr 做「height:auto 的过渡」，
@@ -434,30 +437,21 @@
 .mp-note{display:flex;align-items:center;gap:16px;max-width:1000px;margin:0 auto;padding:22px 26px;border:1px solid #ffffff1a;border-radius:20px;color:var(--mp-accent);background:#ffffff08;font-size:24px}
 .mp-note div{color:#ffffffcc;font-size:14px}
 .mp-note p{margin:5px 0 0;color:#ffffff73;font-size:13px;line-height:1.6}
-/* 筛选区沿用原来的 DOM（.mkt-*），只在 .mp 里换成暗色并收紧 —— 免得把一套能用的筛选逻辑重写。
-   收紧是必要的：参考设计里没有筛选区，铺太大会把课包行挤到折线以下。 */
-.mp .mkt-filters{padding:14px 18px 16px;margin-bottom:22px;border:1px solid #ffffff14;border-radius:18px;background:#ffffff08}
-.mp .mkt-row{gap:12px;margin-bottom:9px}
-.mp .mkt-label{min-width:62px;padding-top:7px;color:#ffffff80;font-size:11.5px}
-.mp .mkt-chip{padding:6px 13px;border-color:#ffffff1f;color:#ffffffa6;background:#ffffff0a;font-size:11.5px}
-.mp .mkt-chip:hover{border-color:#ff5c93a6;color:#fff}
-.mp .mkt-chip.on{color:#fff;background:var(--mp-accent);border-color:var(--mp-accent)}
-.mp .mkt-search{margin-top:10px;padding-top:10px;border-top-color:#ffffff14}
-.mp .mkt-search input{padding:9px 14px;border-color:#ffffff1f;color:#fff;background:#ffffff0a;font-size:12.5px}
-.mp .mkt-search input::placeholder{color:#ffffff59}
-.mp .mkt-search input:focus{border-color:var(--mp-accent)}
-.mp .mkt-reset{padding:9px 16px;border-color:#ffffff1f;color:#ffffffa6;background:#ffffff0a}
+/* 筛选区已整体删除（用户口径 2026-09-18 晚），所以那批 `.mp .mkt-*` 覆盖也一并删掉；
+   只留分页的暗色覆盖（分页还在）。 */
 .mp .mp-pages{color:#ffffff8c}
 .mp .mp-pages button{border-color:#ffffff1f;color:#fff;background:#ffffff0a}
 .mp .mp-pages span{color:#fff;background:#ff5c932e}
 @media(max-width:900px){
   .mp-main{grid-template-columns:auto minmax(0,1fr);gap:16px}
-  .mp-side{grid-column:1 / -1;flex-direction:row;align-items:center;justify-content:space-between;width:100%}
+  /* 窄屏：价格与按钮移到信息区下面自己一行，仍然是「价格在左、按钮在右」 */
+  .mp-side{grid-column:1 / -1;align-items:center;justify-content:space-between;width:100%}
   .mp-price{text-align:left}
   .mp-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:560px){
-  .mp-cover{width:74px;height:74px;border-radius:20px}
-  .mp-side{flex-direction:column;align-items:stretch;gap:12px}
-  .mp-cta{justify-content:center}
+  /* 小屏也保持横向封面（等比缩小），别退回方块 */
+  .mp-cover{width:108px;height:66px;border-radius:16px}
+  .mp-side{flex-wrap:wrap;gap:12px}
+  .mp-cta{flex:1 1 auto;justify-content:center}
 }

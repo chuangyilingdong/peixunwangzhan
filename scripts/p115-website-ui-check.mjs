@@ -444,24 +444,45 @@ try {
     const features = first.querySelector('.mp-features');
     return {
       coverWidth: cover ? Math.round(cover.getBoundingClientRect().width) : null,
+      coverHeight: cover ? Math.round(cover.getBoundingClientRect().height) : null,
       coverHasImage: cover ? cover.classList.contains('has-image') : null,
       featureCount: first.querySelectorAll('.mp-feature').length,
       featureLabels: [...first.querySelectorAll('.mp-feature span')].map((el) => el.textContent),
       ctaText: cta ? cta.textContent.trim() : null,
       ctaHref: cta ? cta.getAttribute('href') : null,
       priceText: first.querySelector('.mp-price strong')?.textContent || '',
+      // 价格与按钮是否**同一行**（用户口径：参考稿是并排、价格在左，不是上下堆叠）
+      priceRight: first.querySelector('.mp-price') ? Math.round(first.querySelector('.mp-price').getBoundingClientRect().right) : null,
+      ctaLeft: cta ? Math.round(cta.getBoundingClientRect().left) : null,
+      priceCenterY: first.querySelector('.mp-price') ? Math.round(first.querySelector('.mp-price').getBoundingClientRect().top + first.querySelector('.mp-price').getBoundingClientRect().height / 2) : null,
+      ctaCenterY: cta ? Math.round(cta.getBoundingClientRect().top + cta.getBoundingClientRect().height / 2) : null,
       featuresOpacity: features ? getComputedStyle(features).opacity : null,
     };
   });
   if (!rowGeo) problems.push('灵动课程：取不到课包行的几何与文案');
   else {
-    console.log(`  · 灵动课程：缩略图 ${rowGeo.coverWidth}px、参数 ${rowGeo.featureCount} 项 [${rowGeo.featureLabels.join(' / ')}]、价格「${rowGeo.priceText}」、CTA「${rowGeo.ctaText}」→ ${rowGeo.ctaHref}`);
-    // 缩略图框要比参考稿大一圈（用户口径：「他这个图的框太小了，我们可以大一点」）
-    if (rowGeo.coverWidth == null || rowGeo.coverWidth < 84) problems.push(`灵动课程：缩略图框太小（${rowGeo.coverWidth}px，应 ≥84px）`);
+    console.log(`  · 灵动课程：缩略图 ${rowGeo.coverWidth}×${rowGeo.coverHeight}px、参数 ${rowGeo.featureCount} 项 [${rowGeo.featureLabels.join(' / ')}]、价格「${rowGeo.priceText}」、CTA「${rowGeo.ctaText}」→ ${rowGeo.ctaHref}`);
+    // 缩略图：**横向封面比例**（用户口径 2026-09-18 晚「可以再宽一点，左侧还有空位」）
+    if (rowGeo.coverWidth == null || rowGeo.coverWidth < 150) problems.push(`灵动课程：缩略图不够宽（${rowGeo.coverWidth}px，应 ≥150px；用户要求拉宽、用上左侧空位）`);
+    if (rowGeo.coverWidth && rowGeo.coverHeight && rowGeo.coverWidth <= rowGeo.coverHeight) problems.push(`灵动课程：缩略图应当是横向封面（现在是 ${rowGeo.coverWidth}×${rowGeo.coverHeight}，正方形/竖的）`);
     if (rowGeo.featureCount !== 4) problems.push(`灵动课程：关键参数应当是 4 项（实际 ${rowGeo.featureCount} 项）`);
+    // 参数口径（用户口径 2026-09-18 晚：第二格从「适学年龄」换成「版本号」）
+    const expectedLabels = ['难度', '版本', '课时', '课堂形式'];
+    if (rowGeo.featureLabels.join('|') !== expectedLabels.join('|')) {
+      problems.push(`灵动课程：四个参数位应为 [${expectedLabels.join(' / ')}]（实际 [${rowGeo.featureLabels.join(' / ')}]）`);
+    }
     if (!String(rowGeo.ctaText).includes('查看课程列表')) problems.push(`灵动课程：按钮文案应为「查看课程列表」（实际「${rowGeo.ctaText}」）`);
+    // 按钮里**不要箭头**（用户口径：「我们还有个箭头也要去掉」）
+    if (String(rowGeo.ctaText).includes('↗')) problems.push(`灵动课程：按钮里不该有箭头（实际「${rowGeo.ctaText}」）`);
     if (!/^\/marketplace\/.+/.test(String(rowGeo.ctaHref))) problems.push(`灵动课程：按钮应当进到该课包的详细课程列表（实际 href=${rowGeo.ctaHref}）`);
     if (!/¥|价格面议/.test(rowGeo.priceText)) problems.push(`灵动课程：价格位上既不是价格也不是「价格面议」（实际「${rowGeo.priceText}」）`);
+    // 价格在左、按钮在右，**同一行**（价格块的右边不出按钮的左边界、两者中线基本齐平）
+    if (rowGeo.priceRight != null && rowGeo.ctaLeft != null && rowGeo.priceRight > rowGeo.ctaLeft + 2) {
+      problems.push(`灵动课程：价格跑到按钮右边去了（价格右边缘 ${rowGeo.priceRight} > 按钮左边缘 ${rowGeo.ctaLeft}）—— 口径是价格在左`);
+    }
+    if (rowGeo.priceCenterY != null && rowGeo.ctaCenterY != null && Math.abs(rowGeo.priceCenterY - rowGeo.ctaCenterY) > 8) {
+      problems.push(`灵动课程：价格与按钮不在同一行（中线差 ${Math.abs(rowGeo.priceCenterY - rowGeo.ctaCenterY)}px）—— 参考稿是并排，不是上下堆叠`);
+    }
     // 参考稿的核心交互：那一排关键参数**默认收起、悬停（或键盘聚焦进入行内）才展开**。
     // ⚠️ 上一版我把它改成常显，用户当场指出「交互跟参考稿完全不一样」—— 所以这条要钉死。
     // 只在真有悬停能力的设备上要求「先收起」；触屏/窄屏收起来等于永久看不到参数，必须是常显。
@@ -479,15 +500,11 @@ try {
     } else if (Number(expandedOpacity) < 1) {
       problems.push(`灵动课程：没有悬停能力的设备上参数必须常显（opacity=${expandedOpacity}）`);
     }
-    // 筛选区默认收起（参考稿首屏只有页头 + 课包行），点一下才展开
-    if (await page.locator('.mp-filter-bar .mp-filter-toggle').count() === 0) problems.push('灵动课程：没找到筛选开关（.mp-filter-toggle）');
-    if (await page.locator('.mp .mkt-filters').count()) problems.push('灵动课程：筛选区默认应当是收起的（参考稿首屏没有筛选块）');
-    await page.locator('.mp-filter-bar .mp-filter-toggle').click();
-    await page.waitForTimeout(300);
-    if (!(await page.locator('.mp .mkt-filters').count())) problems.push('灵动课程：点开筛选开关之后筛选区没有出现');
-    await shot('11-marketplace-filters-open');
-    await page.locator('.mp-filter-bar .mp-filter-toggle').click();
-    await page.waitForTimeout(300);
+    // 筛选区**已整体删除**（用户口径 2026-09-18 晚「图1 筛选删除」）：
+    // 这一页不该再有筛选开关、筛选块、搜索框 —— 参考稿首屏只有「页头 + 课包行」。
+    for (const gone of ['.mp-filter-bar', '.mp-filter-toggle', '.mp .mkt-filters', '.mp .mkt-search', '#marketplace-search']) {
+      if (await page.locator(gone).count()) problems.push(`灵动课程：筛选区已按用户口径删除，不该再出现 ${gone}`);
+    }
   }
   await shot('09-marketplace');
   await sweepHorizontalScroll('灵动课程', ['.mp']);

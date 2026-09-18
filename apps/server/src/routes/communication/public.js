@@ -359,6 +359,10 @@ export function handlePublicCommunication(ctx) {
         // 价格那段 UI 永远不出现）。这里按官网已经在用的字段名补齐（详情接口同）。
         coverAssetId: item.cover_asset_id || null,
         priceFen: Number(item.price_fen || 0),
+        // 2026-09-18 晚：官网课包列表的参数位从「适学年龄」换来「版本号」（用户口径：适学年龄那几个
+        // 都是「未设置」）。版本号在课包编辑表单里是有的，但**列表接口以前没下发** —— 补上，
+        // 否则页面又会显示「未设置」。
+        version: item.version || '',
         difficultyLevel: item.difficulty_level != null ? Number(item.difficulty_level) : null,
         ageRangeMin: item.age_range_min != null ? Number(item.age_range_min) : null,
         ageRangeMax: item.age_range_max != null ? Number(item.age_range_max) : null,
