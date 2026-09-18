@@ -143,16 +143,29 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：b1a4f5b（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T082501Z / commit b1a4f5b（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（b1a4f5b）：**首页按钮按用户口径收口** ①两个 hero CTA **背景统一**成同一套透明玻璃
-      （都是 `tintOpacity 0.08 + blur 8`，实测两侧算出 `color(srgb 1 1 1 / 0.08)`）—— 原来主按钮是实心白底，
-      高光在它上面根本看不出来，等于把 specular 按钮做成了普通白按钮；主次现在只靠光效区分
-      （联系我们 autoAnimate 常亮扫过 / 查看课程 靠近才亮）②**顶栏右上角三个入口也换成 specular**
-      （联系我们 ↗ / 机构 / 老师登录 / 学生登录，尺寸压到与原来胶囊一致：96×31 / 118×31 / 81×31）。
-      ⚠️ 只在**黑底首页**这么做（光效是「白线在暗面上扫」，浅底内页等于看不见）——
-      浅底内页保持原来的实心+描边胶囊（实测内页顶栏 0 个 specular），与顶栏本来就有的 `.on-dark` 变体一致
-      上一版改动（a49f224 / b4b7f74）：**首页两个 CTA 换成 React Bits 的 SpecularButton**
+代码提交：0340f66（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T084810Z / commit 0340f66（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（0340f66）：**修掉「偶发 database is locked」的真正根因** —— 这是那批「全量守卫每跑必有一个
+      红项、每轮换一个、单跑又全过」的成因（不是机器负载）。这次本地 runner 把失败输出留下来了
+      （`.tmp/smoke-fail-<name>.log`），堆栈直接指向 `packages/database/src/schema.js:1508` 的迁移语句 ——
+      崩在**启动路径**上，而不是守卫自己的查询。根因：schema 自己那条连接设了 `journal_mode=WAL` 与
+      `foreign_keys`，**但没有 busy_timeout**（SQLite 默认 0 = 不等待），而该文件 import 时就会跑一遍迁移；
+      两个进程同时起来（重启时新旧进程重叠、或守卫「本进程写库 + 同时 spawn 服务」）时一边直接抛
+      `database is locked`（errcode 5）。光有 WAL 不够：WAL 只让读写不互阻，写与写仍要排队，排队前提就是这个超时。
+      同批把本文件的写事务 `BEGIN` → `BEGIN IMMEDIATE`（6 处）：延迟事务在「已读后要写」时会撞上
+      SQLite 死锁检测、**绕过 busy_timeout 直接返回 BUSY**。**生产意义：重启时新旧进程短暂重叠不会再崩在启动迁移上**
+      本版另一改动（749bc36）：**登录页按用户给的设计重做**（左侧品牌区 + 右侧玻璃卡片，三端共用）。
+      用户三条口径逐条落地：①**删掉「忘记密码」**（我们没这功能），**也没放「记住我」**（它在
+      我们这里没有真实行为，放一个点了没用的勾选框比不放更糟）②**logo 大气**（30px → 52px 高，166×52，
+      对齐设计稿的 clamp(120px,12vw,165px)）③**背景按首页做**（官网铺首页同一份视频 + 同款压暗层；
+      平台端/机构端没有该视频资源，继续用共享深紫底，不让视频 404）。另外密码框加了「显示/隐藏」、
+      输入框加图标（内联 SVG 无依赖）；顺手修掉官网登录页把「去机构/学生登录」入口顶到折线以下的
+      老问题（`min-height:100vh`，等于藏起来，而两个登录入口是用户明确要的）
+      上一版改动（b1a4f5b）：**首页按钮收口** ①两个 hero CTA 背景统一成同一套透明玻璃
+      （实测两侧都算出 `color(srgb 1 1 1 / 0.08)`；原来主按钮是实心白底，高光在它上面根本看不出来）
+      ②顶栏右上角三个入口也换成 specular（96×31 / 118×31 / 81×31）。⚠️ 只在**黑底首页**这么做
+      （光效是「白线在暗面上扫」，浅底内页等于看不见），浅底内页保持原来的实心+描边胶囊
+      更早一版改动（a49f224 / b4b7f74）：**首页两个 CTA 换成 React Bits 的 SpecularButton**
       （WebGL 镜面高光；原样搬入 `apps/website/src/components/SpecularButton.{jsx,css}`，新增依赖 `ogl`）。
       平台补充：`prefers-reduced-motion: reduce` 时**不创建 WebGL**（连 rAF 都不起）。
       因为它是 `<button>`，导航改用 onClick + navigate（右键新标签打开不再可用，已注明）。
@@ -175,13 +188,13 @@
       ④**新增后台「联系我们（商机）」页面**（官网表单一直写 `leads` 表、服务端也一直有 `/api/admin/leads`，
       但此前没有任何后台页面在读它 —— 用户问「提交了在哪收」的答案是收不到）
       部署后核验（2026-09-18 实跑 `.tmp/verify-prod-002.sh`，三层全过 → `PROD_ACCEPTANCE_OK`）：
-      BUILD-METADATA commit = b1a4f5b；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
-      **三端入口包各自与 release 产物逐字节一致**（admin 661860B 1b69d5f12659…、
-      org 771103B 73cee6952092…、website 759620B f0a176e511f8…）；反向断言 9 项全过
+      BUILD-METADATA commit = 0340f66；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
+      **三端入口包各自与 release 产物逐字节一致**（admin 662864B bdfaabbb489d…、
+      org 772107B 90022893c16f…、website 760828B 4a517d4722fe…）；反向断言 9 项全过
       真浏览器复核线上：首页两个 specular 按钮都渲染出 canvas（164×84）、指针靠近时高光才亮、
       无横向溢出；登录页三处动效仍在跑、`overflow-x` 为 `clip`、点按钮后 `scrollLeft=0`
-      上一版（可回滚）：release 20260918T081408Z / commit a49f224
-      整库备份：production/backups/20260918T082500Z/platform.db
+      上一版（可回滚）：release 20260918T082501Z / commit b1a4f5b
+      整库备份：production/backups/20260918T084809Z/platform.db
       更早三版（按时间倒序）：release 20260918T063303Z / 6e48631（官网改版）、
       release 20260918T065543Z / f7b5802（品牌标换真 logo + 清「五格殿下」）、
       release 20260918T071301Z / e3409d0（首页空值/CTA/字体/商机页 + 标题自适应）
