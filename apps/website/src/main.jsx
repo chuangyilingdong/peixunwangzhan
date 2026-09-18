@@ -151,14 +151,17 @@ function HomeLanding() {
   const accent = cmsPick(content, 'heroAccent', CMS_FALLBACK.HOME.heroAccent);
   const description = cmsPick(content, 'heroDescription', CMS_FALLBACK.HOME.heroDescription);
   const longestLine = Math.max(titleWeight(title), titleWeight(accent), 1);
+  // 文案要等 CMS 接口回来才渲染：否则会先画一帧兜底文案（可能与后台里改过的不同）再被替换掉，
+  // 强刷时看起来就是「旧版内容闪一下」。视频与按钮（不依赖 CMS）照常立刻出现，所以不会白屏。
+  const ready = !cms.loading;
   const titleStyle = { fontSize: `clamp(26px, min(6vw, ${(92 / longestLine).toFixed(2)}vw), 76px)` };
   return <main className="hp">
     <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
     <section className="hp-hero">
-      {(trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
-      {kicker ? <p className="hp-kicker">{kicker}</p> : null}
-      {(title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
-      {description ? <p className="hp-sub">{description}</p> : null}
+      {ready && (trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
+      {ready && kicker ? <p className="hp-kicker">{kicker}</p> : null}
+      {ready && (title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
+      {ready && description ? <p className="hp-sub">{description}</p> : null}
       {/* 首页两个 CTA 用 SpecularButton（用户口径：两个**背景要一样**，主次只靠光效区分）：
           都是透明玻璃面（tintOpacity 0.08 + blur 8），主按钮高光常亮并缓慢扫过、次按钮只在光标靠近时亮起。
           ⚠️ 它渲染的是 <button>，所以导航走 onClick + navigate，不再是 <a>；
@@ -168,7 +171,7 @@ function HomeLanding() {
         <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={0.9} shineSize={15} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>查看课程</SpecularButton>
       </div>
     </section>
-    {stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
+    {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
   </main>;
 }
 function Home(_props) { return <HomeLanding />; }
@@ -242,7 +245,12 @@ function Compare(){const rows=[['工具形态','多个网站 / App 来回切换'
 // ⚠️ 这里只放**精简可用**的文案；对外那份丰富内容存在数据库（website_contents）里，由后台维护，
 // 所以「改内容」应该去后台改，而不是改这个 fallback（改了也只影响接口挂掉时的显示）。
 const CMS_FALLBACK = {
-  HOME: { heroKicker: '教培机构青少年 AI 开课平台', heroTitle: '给机构一套', heroAccent: '能落地的青少年 AI 课', heroDescription: BRAND_NAME + '把课程、机构账号、授权次数与作品展厅放在一个平台里。', trustTitle: '响应教育部「做中学」领航行动', trustDescription: '真实问题 · 项目式探究 · 每节课都有作品' },
+  // CMS 兜底（**要与线上 CMS 里那份保持一致**）：公开接口挂掉时官网照常可用。
+  // ⚠️ 2026-09-18 教训：这里原来还留着更早的营销文案（「给机构一套 / 能落地的青少年 AI 课」
+  // 与「响应教育部…领航行动」）。用户在 CMS 里改过首页之后，**接口没回来之前官网会先渲染这一份**，
+  // 于是每次强刷都会闪一下旧内容（他报的「强制刷新出现的残留，还带有之前的旧版内容」就是这个）。
+  // 两处一起治：①这份兜底对齐成 CMS 当前的内容；②渲染前确认接口已回来（见下面的 ready）。
+  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: [{ icon: '◆', value: 3, suffix: ' 门', label: '标准课包' }, { icon: '◇', value: 48, suffix: ' 节', label: '课时总量' }, { icon: '✧', value: 2, suffix: ' 类', label: '课堂形式' }, { icon: '⌘', value: 1, suffix: ' 套', label: '机构工作台' }] },
   FAQ: { title: '开课前，你可能想知道', items: [{ question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用授权次数管理课堂用量。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。' }] },
   INTRO: { title: '灵动介绍', lead: BRAND_NAME + '是面向 8–16 岁的 AI 创作开课平台：学生用中文与 AI 伙伴「阿飞」对话，当堂做出能运行、能展示的作品。', highlights: [], sections: [], cta: { title: '把 AI 课开起来', text: '联系我们，我们会按你的班型给出课包与开通方案。' } },
   HANDBOOK: { title: '机构合作手册', lead: '把「一门 AI 课」变成能复制的校区产品：课程、账号、授权次数与作品沉淀在同一套平台里。', sections: [], compareRows: [], cta: { title: '获取完整机构手册', text: '先联系我们，我们会把最新版本、课件示例与合作说明发给你。' } },

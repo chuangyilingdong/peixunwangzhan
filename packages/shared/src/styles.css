@@ -1338,7 +1338,11 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .login-page{position:relative;min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr) minmax(430px,.98fr);overflow:hidden;background:radial-gradient(ellipse 55% 100% at 100% 50%,rgba(220,79,145,.34),transparent 68%),radial-gradient(ellipse 65% 90% at 16% 100%,rgba(150,54,177,.36),transparent 68%),linear-gradient(115deg,#1b0a1e 0%,#3d0f2e 48%,#180a20 100%)}
 .login-page::before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.6;background:repeating-linear-gradient(122deg,transparent 0 66px,rgba(255,255,255,.035) 67px 69px,transparent 70px 145px)}
 .login-intro{position:relative;z-index:1;display:flex;flex-direction:column;overflow:hidden;padding:clamp(2rem,5vw,4.8rem);color:#fff}
-.login-intro::before{content:"";position:absolute;inset:-25%;z-index:0;pointer-events:none;background:radial-gradient(circle at 28% 32%,#a08cff59,transparent 42%),radial-gradient(circle at 74% 68%,#ff8fc04d,transparent 40%);filter:blur(34px);animation:loginDrift 19s ease-in-out infinite alternate}
+/* ⚠️ 这层环境光必须**渐隐到透明**，否则会沿栏的边界露出一条直线：它是 .login-intro 的 ::before，
+   而 .login-intro 是网格里的一栏（有 overflow:hidden）；原来 inset:-25% + 两个圆斑（半径之和超出盒子），
+   光斑到盒子边缘还没衰减到 0 → 用户 2026-09-18 报的「有明显的边框痕迹」就是它。
+   现在：①不再外扩；②加一层椭圆遮罩，保证到边缘前已经透明 —— 之后无论里面放什么渐变都不会露边。 */
+.login-intro::before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(circle at 30% 32%,#a08cff59,transparent 46%),radial-gradient(circle at 68% 64%,#ff8fc04d,transparent 44%);filter:blur(34px);-webkit-mask-image:radial-gradient(ellipse at 42% 42%,#000 32%,transparent 74%);mask-image:radial-gradient(ellipse at 42% 42%,#000 32%,transparent 74%);animation:loginDrift 19s ease-in-out infinite alternate}
 .login-brand{position:relative;z-index:1;box-sizing:content-box;align-self:flex-start;padding:9px 13px;border-radius:16px;background:#fff;box-shadow:0 8px 26px #0000003d}
 .login-copy{position:relative;z-index:1;max-width:560px;margin-top:clamp(3rem,10vh,7rem)}
 .login-headline{margin:0;color:#fff;font-size:clamp(1.9rem,3.3vw,3.6rem);font-weight:800;line-height:1.24;letter-spacing:-.05em}

@@ -10,6 +10,12 @@ if (!['internal-test', 'public'].includes(mode)) {
 }
 const executablePath = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const httpOnly = process.argv.includes('--http') || process.env.VERIFY_HTTP_ONLY === 'true';
+// ⚠️ 2026-09-18 口径变更（不是测试漂移）：登录页按新设计重做，卡片标题从「登录你的工作台」
+// 换成了各端自己的标题（平台管理中心 / 机构教务工作台），所以 loginOk 改查登录表单里的
+// 占位文案「请输入登录名」——它在三端登录页都在，且只在登录页出现。
+// 同批：官网 CTA 从「预约演示」改叫「联系我们」，那条反向断言（后台包里不许出现官网导航）
+// 原来查的词已经不存在了（等于失效），改用只属于官网导航的「灵动学习」
+// （实测 admin/org 产物里为 0、官网为 2）。
 const cases = [
   { path: '/', title: /灵动ai学院/, requireLogin: false, rejectLogin: false },
   { path: '/admin/', title: /平台管理/, requireLogin: true, rejectLogin: false },
@@ -35,8 +41,8 @@ async function verifyHttp(item) {
   const robotsHeader = (headers['x-robots-tag'] || '').toLowerCase();
   const checked = {
     status: response.status, title, titleOk: item.title.test(title),
-    loginOk: !item.requireLogin || body.includes('登录你的工作台') || assetText.includes('登录你的工作台'),
-    websiteNavRejected: !item.requireLogin || (!body.includes('预约演示') && !assetText.includes('预约演示')),
+    loginOk: !item.requireLogin || body.includes('请输入登录名') || assetText.includes('请输入登录名'),
+    websiteNavRejected: !item.requireLogin || (!body.includes('灵动学习') && !assetText.includes('灵动学习')),
     assetMimeOk, noMjsAssetOk, assetTypes,
     assetPrefixOk: item.path === '/' ? assets.every(x => x.startsWith('/assets/')) : assets.every(x => x.startsWith(item.path + 'assets/')),
     modeOk: mode === 'internal-test' ? headers['x-internal-test'] === 'true' : headers['x-internal-test'] === undefined,
@@ -71,8 +77,8 @@ try {
       status: response.status(),
       title,
       titleOk: item.title.test(title),
-      loginOk: !item.requireLogin || body.includes('登录你的工作台') || assetText.includes('登录你的工作台'),
-      websiteNavRejected: !item.requireLogin || (!body.includes('预约演示') && !assetText.includes('预约演示')),
+      loginOk: !item.requireLogin || body.includes('请输入登录名') || assetText.includes('请输入登录名'),
+      websiteNavRejected: !item.requireLogin || (!body.includes('灵动学习') && !assetText.includes('灵动学习')),
       assetPrefixOk: item.path === '/' ? assets.every(x => x.startsWith('/assets/')) : assets.every(x => x.startsWith(item.path + 'assets/')),
       modeOk: mode === 'internal-test'
         ? headers['x-internal-test'] === 'true'
