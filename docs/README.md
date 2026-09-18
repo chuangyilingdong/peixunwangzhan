@@ -151,9 +151,23 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：479deec（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T123610Z / commit 479deec（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（479deec，用户第七轮口径一条）：**「灵动学习」（/learn 我的课程）也要有站内导航栏**
+代码提交：66f3459（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T125311Z / commit 66f3459（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（66f3459，用户第八轮口径前三条）：
+      ①**「灵动学习」页头那条浅蓝两步说明删掉**（⚠️ 画布上课页里还有一条一模一样的，用户没点它，先留着）
+      ②**画布右下角那条提示不再一直挂着**（`.cv-toast` 原来一旦出现就没人清 → 长期挡住画布右下角）：
+      非错误提示 5 秒自动消失、**报错留着**（它是画布唯一显示操作失败的地方，不能整个删）
+      ③**生成出来的文字能选中复制 + 右上角一键复制**（画布节点默认选不中文字 → 显式 user-select:text；
+      按钮带 nodrag、走剪贴板 API 且有 execCommand 兜底、成功后变「已复制」）
+      ⚠️ 归因手法：先用字符串定位"这是不是我们的代码" —— `进阶挑战/小提示/尝试不同风格` 全仓搜不到
+      （那是 **dsh 创作环境**的），`已添加「${box.title」…` 在我们 `canvasWorkspace.jsx` 里 ✓
+      核验：`PROD_ACCEPTANCE_OK` + p115（/learn 不得再有那条横幅）/ p110（画布界面：复制按钮与 toast 契约）
+      可回滚上一版：release 20260918T123610Z / commit 479deec
+      📌 **另一件事：生图"调用失败但上游无失败记录"已排查完，结论在交接文档 §十一** ——
+      `error_message = fetch failed`（网络层、没拿到响应）、未扣学生；**但不能只凭"上游没有失败记录"
+      就说不是我们的问题**：若是"请求到了、上游做了并计费、响应回丢"，上游那条会是**成功**记录。
+      拿我们的 `client_request_id`（已通过 `x-client-request-id` 发给上游）去上游日志搜即可定性。
+      ⚠️ 代码**没动**（那是提问不是改需求），建议下一步把 `error.cause` 一起落库。
       （用户：「点击『灵动课程』上方都有导航栏，图2 点击『灵动学习』应该也要有导航栏才对」）。
       根因：`isFullPage = pathname.startsWith('/learn')` 把**整条 `/learn*`** 都当全屏页、顶栏页脚全去掉了
       → 改成 `startsWith('/learn/canvas')`：只有真正的课堂页（学生干活的环境、要让出整屏）才算全屏；
