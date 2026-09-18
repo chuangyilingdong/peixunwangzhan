@@ -143,10 +143,16 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：592a12e（本地 HEAD 已前进到文档提交 152d062，已推送；**生产版是 592a12e**）
-生产：release 20260918T054145Z / commit 592a12e（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（592a12e）：机构详情页「机构管理员」改成**三个弹窗**、修掉字段框体错位
-      生效内容：**P03 平台机构与授权次数配置按 8 张线框图对齐** —— 机构列表/详情（含电话脱敏、
+代码提交：6e48631（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T063303Z / commit 6e48631（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（6e48631）：**官网改版** —— 品牌统一「灵动ai学院」、导航 7 项（首页/灵动学习/灵动课程/
+      灵动作品/灵动介绍/机构手册/常见问题）+ 未登录时两个登录入口、新增 `/intro` 与 `/faq`、
+      `/handbook` 改读 CMS、首页按用户给的样式提示词重做（黑底单屏 + 全屏视频 + 数据区走 CMS）、
+      机构手册按 7 张参考图重写为 8 节 + 7 行对比表；并删除「灵动值」营销口径与「积分激励」字段说法
+      ⚠️ **上线前先跑了内容迁移** `migrate-website-content-20260918.mjs`（CMS 是 insert-only，
+      改种子对已落库的行无效）：品牌改名（含历史版本）、`灵动值计费`→`授权次数`、
+      补种 INTRO / HANDBOOK、补 HOME.stats 与一条 FAQ；跑完残留 0、幂等
+      生效内容（累积，自 release 20260918T053148Z / 843ebe6 起）：**P03 平台机构与授权次数配置按 8 张线框图对齐** —— 机构列表/详情（含电话脱敏、
       4 入口卡、数据概览）/禁用抽屉（原因必填）/课包与授权次数（添加课包、调整授权次数两个抽屉）/
       **授权次数变更记录**（新表 `course_quota_changes`，5 类变更、变更前后值都记）；机构新增
       简称/编码/所属区域三列（编码 `ORG0001` 规则、存量启动时幂等回填）
@@ -155,13 +161,16 @@
       另：算力额度一类的东西**一律不拦人**（`enforced: false` 是机器可读承诺）；唯一还按"量"拦的是
       **授权次数不足**（机构把课包分给学生时次数不够）。
       部署后核验（2026-09-18 实跑 `.tmp/verify-prod-002.sh`，三层全过 → `PROD_ACCEPTANCE_OK`）：
-      BUILD-METADATA commit = 592a12e；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
-      **三端入口包各自与 release 产物逐字节一致**（admin 645312B 6619d6443950…、
-      org 770994B 823e5f40e401…、website 713479B 70d7b4a5d2b0… —— org/website 与上一版逐字节相同是**对的**，
-      这一版只动了管理端）；官网反向断言（`预估消耗` / `perStudentBudgetFen` / `estimatedCreditsPerPerson` /
-      `usage/wallet` / `上游账户余额` 五项）全过
-      上一版（可回滚）：release 20260918T053148Z / commit 843ebe6
-      整库备份：production/backups/20260918T054145Z/platform.db（12.7MB，含 release/ 快照与 logs/）
+      BUILD-METADATA commit = 6e48631；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
+      **三端入口包各自与 release 产物逐字节一致**（admin 656089B 4f5e1b396464…、
+      org 770993B 9561ef4bed51…、website 707253B bd52e9330009… —— 三端都变了是对的，
+      这一版改了官网 + 三端外壳的品牌名与文案）；反向断言 8 项全过
+      （内部成本口径 `预估消耗` / `perStudentBudgetFen` / `estimatedCreditsPerPerson` / `usage/wallet` /
+      `上游账户余额` 5 项 + 已删口径 `灵动值` / 旧品牌名 2 种写法 3 项）
+      真浏览器复核线上：官网 12 个路由逐页（`/`、`/intro`、`/faq`、`/handbook`、两个登录入口…）
+      无横向溢出、无 404、7 项导航与两个登录入口在位
+      上一版（可回滚）：release 20260918T054145Z / commit 592a12e
+      整库备份：production/backups/20260918T063240Z/platform.db（**迁移前打的**，12.7MB，含 release/ 快照与 logs/）
       ⚠️ 备份目录名与 release 戳是**两个独立时间戳**：可能相同、也可能差 1 秒 ——
       找它请用 `ls -t production/backups/ | head -1`，别按 release 戳猜
       ⚠️ 验收脚本第 ③ 层**必须按端查各自的包**（管理端的中文拿去 grep 机构端的包会全红，
