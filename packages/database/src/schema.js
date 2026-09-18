@@ -11,6 +11,14 @@ fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 export const db = new DatabaseSync(databasePath);
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
+// ⚠️ busy_timeout 必须有：SQLite 默认是 0（不等待），而这个文件**在 import 时就会跑一遍迁移**。
+// 两个进程同时起来（重启时旧进程还没退、新进程已经在迁移；或守卫「本进程写库 + 同时 spawn 服务」）
+// 就会让其中一边直接抛 `database is locked`（errcode 5）并崩在启动路径上 —— 光有 WAL 不够：
+// WAL 只保证读写不互相阻塞，写与写仍然要排队，而排队的前提就是这个超时。
+// 2026-09-18 定位：全量守卫里反复出现的「偶发几秒内失败、单跑又全过」就是它（堆栈指向下面那条迁移）。
+// 同批还有一处：本文件里的写事务从 `BEGIN` 改成 `BEGIN IMMEDIATE` —— 延迟事务在「已读后要写」时
+// 会撞上 SQLite 的死锁检测、**绕过 busy_timeout 直接返回 BUSY**，IMMEDIATE 则在开头就取写锁。
+db.exec('PRAGMA busy_timeout = 5000');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS platform_settings (
@@ -1607,7 +1615,7 @@ export function one(sql, params = []) { return db.prepare(sql).get(...params); }
 export function json(value) { return JSON.stringify(value ?? null); }
 export function parseJson(value, fallback = null) { if (value == null) return fallback; try { return JSON.parse(value); } catch { return fallback; } }
 export function transaction(fn) {
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try { const result = fn(); db.exec('COMMIT'); return result; }
   catch (error) { db.exec('ROLLBACK'); throw error; }
 }
@@ -1707,7 +1715,7 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 const worksDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='works'").get()?.sql || '');
 if (worksDdl && !worksDdl.includes("'UNPUBLISHED'")) {
   db.exec('PRAGMA foreign_keys = OFF');
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.exec(`CREATE TABLE works_migrated (
       id TEXT PRIMARY KEY,
@@ -1771,7 +1779,7 @@ if (worksDdl && !worksDdl.includes("'UNPUBLISHED'")) {
 const sessionDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='class_sessions'").get()?.sql || '');
 if (sessionDdl && !sessionDdl.includes("'PENDING'")) {
   db.exec('PRAGMA foreign_keys = OFF');
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.exec(`CREATE TABLE class_sessions_migrated (
       id TEXT PRIMARY KEY,
@@ -2079,7 +2087,7 @@ try { db.exec('CREATE INDEX IF NOT EXISTS idx_pcl_user ON personal_credit_ledger
 const fileAssetsDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='file_assets'").get()?.sql || '');
 if (fileAssetsDdl && !fileAssetsDdl.includes("'TEACHING_ASSET'")) {
   db.exec('PRAGMA foreign_keys = OFF');
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.exec(`CREATE TABLE file_assets_migrated (
       id TEXT PRIMARY KEY,
@@ -2345,7 +2353,7 @@ try {
   if (submissionDdl.includes('conversation_id TEXT NOT NULL UNIQUE')) {
     const columns = db.prepare("SELECT name FROM pragma_table_info('vibecoding_submissions')").all().map((item) => item.name).join(',');
     db.exec('PRAGMA foreign_keys = OFF');
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE');
     try {
       db.exec(`CREATE TABLE vibecoding_submissions_migrated (
         id TEXT PRIMARY KEY,
@@ -2431,7 +2439,7 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 const seriesDdl = String(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='course_series'").get()?.sql || '');
 if (seriesDdl.includes("'ASSIGNED_ORGS'")) {
   db.exec('PRAGMA foreign_keys = OFF');
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.exec(`CREATE TABLE course_series_migrated (
       id TEXT PRIMARY KEY,
