@@ -34,7 +34,9 @@ function LoginPage() {
     const target = role === 'STUDENT' ? '/my-courses' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/';
     window.location.assign(target);
   }
-  return <div className='website-login'><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '使用机构分配给你的学员账号进入课堂。' : '使用机构分配给老师或管理员的账号进入工作台。'} onLogin={handleLogin} demos={[]} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<Link to='/login?as=staff'>去机构登录</Link></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
+  // 背景按首页来做（用户口径 2026-09-18）：同一份视频资产、同一套「视频 + 压暗层」叠法。
+  // 平台端/机构端登录页没有这个视频资源，所以视频只铺在官网这一侧（共享面板只给底色）。
+  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-animal.mp4' poster='/assets/hero-animal-poster.webp' autoPlay muted loop playsInline preload='auto' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} demos={[]} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<Link to='/login?as=staff'>去机构登录</Link></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
 }
 
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';

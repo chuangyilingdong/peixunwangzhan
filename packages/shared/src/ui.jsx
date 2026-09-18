@@ -43,28 +43,52 @@ export function LoginPanel({ title, description, clientType, demos = [], onLogin
       setPending(false);
     }
   }
+  // 密码框的「显示 / 隐藏」：纯前端切换 input 的 type，不改变任何鉴权行为。
+  const [showPassword, setShowPassword] = useState(false);
   return <div className="login-page">
+    {/* 左侧品牌区：logo 放大到 52px 高（约 166px 宽，与设计稿的 clamp(120px,12vw,165px) 一致）、
+        两行品牌主张 + 一行说明 + 底部品牌行。这里放的是**品牌文案**（固定），
+        页面级标题（学生登录 / 机构 · 老师登录）放在右侧卡片里 —— 两个入口靠它区分。 */}
     <section className="login-intro">
-      <div className="brand"><BrandLogo height={30} /></div>
-      <div className="login-orbit a"></div><div className="login-orbit b"></div>
-      <div className="login-copy"><p className="login-eyebrow">青少年 AI 创作开课平台</p><h1>{title}</h1><p>{description}</p><div className="login-points"><span>✦ 创作</span><span>✦ 课程</span><span>✦ 作品</span></div></div>
+      <div className="login-brand"><BrandLogo height={52} /></div>
+      <div className="login-copy">
+        <p className="login-headline">培养青少年 <span className="login-accent">Ai</span> 思维</p>
+        <p className="login-headline"><span className="login-accent">掌握 Ai 时代的创造方式</span></p>
+        <p className="login-note">从灵感到创造，让每一次探索都有回响。</p>
+      </div>
+      <div className="login-foot"><span />灵动ai学院 · 创造力教育平台</div>
     </section>
     <section className="login-side">
       <div className="login-card">
-        <p className="login-card-kicker">欢迎回来</p>
-        <h2>登录你的工作台</h2>
-        <p className="muted">使用机构或平台分配的账号进入。</p>
+        <span className="login-kicker">WELCOME BACK</span>
+        <h1>{title}</h1>
+        <p className="login-sub">{description}</p>
         <form onSubmit={submit}>
-          <label>登录名<input value={login} onChange={e=>setLogin(e.target.value)} autoComplete="username" required/></label>
-          <label>密码<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" required/></label>
-          {mfaRequired&&<label>动态验证码 / 恢复码<input value={mfaCode} onChange={e=>setMfaCode(e.target.value)} autoComplete="one-time-code" placeholder="6 位动态码，或 XXXX-XXXXX 恢复码" required/></label>}
-          {mfaRequired&&<p className="muted">该账号已开启二次验证：请输入验证器 App 当前显示的动态码；验证器不可用时可用一枚恢复码。</p>}
+          <label><span className="login-label">账号</span>
+            <span className="login-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="3" /><path d="M3.5 9h17M7 13h6" /></svg>
+              <input value={login} onChange={e=>setLogin(e.target.value)} autoComplete="username" placeholder="请输入登录名" required/>
+            </span>
+          </label>
+          <label><span className="login-label">密码</span>
+            <span className="login-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10.5" rx="2.5" /><path d="M8 10V7.2A4 4 0 0 1 16 7.2V10" /></svg>
+              <input type={showPassword?'text':'password'} value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" placeholder="请输入密码" required/>
+              <button className="login-eye" type="button" onClick={()=>setShowPassword(v=>!v)} aria-label={showPassword?'隐藏密码':'显示密码'}>{showPassword?'隐藏':'显示'}</button>
+            </span>
+          </label>
+          {mfaRequired&&<label><span className="login-label">动态验证码 / 恢复码</span>
+            <span className="login-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M10 8h4M10 12h4M10 16h2" /></svg>
+              <input value={mfaCode} onChange={e=>setMfaCode(e.target.value)} autoComplete="one-time-code" placeholder="6 位动态码，或 XXXX-XXXXX 恢复码" required/>
+            </span>
+          </label>}
+          {mfaRequired&&<p className="login-hint">该账号已开启二次验证：请输入验证器 App 当前显示的动态码；验证器不可用时可用一枚恢复码。</p>}
           {error&&<Notice tone="danger">{error}</Notice>}
-          <button className="primary-button wide" disabled={pending} aria-busy={pending}>{pending?<i className="btn-spinner" aria-hidden="true"/>:null}{pending?'正在验证…':(mfaRequired?'验证并进入':'进入工作台')} <span>↗</span></button>
+          <button className="login-submit" disabled={pending} aria-busy={pending}>{pending?<i className="btn-spinner" aria-hidden="true"/>:null}{pending?'正在验证…':(mfaRequired?'验证并进入':'进入工作台')}<span>→</span></button>
         </form>
         {demos.length>0&&<div className="demo-list"><span>演示账号</span>{demos.map(d=><button key={d.login} type="button" onClick={()=>{setLogin(d.login);setPassword(d.password);setMfaRequired(false);setMfaCode('')}}><strong>{d.label}</strong><small>{d.login}</small><b>使用</b></button>)}</div>}
       </div>
-      <small className="login-legal">灵动ai学院 · 为课堂创作而设计</small>
     </section>
   </div>;
 }
