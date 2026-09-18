@@ -135,19 +135,23 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：6c104a8（本地 HEAD = origin，已推送；**生产版就是它**，其中的功能提交是 `159f7fc`）
-生产：release 20260918T032913Z / commit 6c104a8（服务 learning-platform-production @127.0.0.1:8789）
-      生效内容：002 七屏 + 本轮「勾选要授权的学员」按表格重做（复选框紧挨姓名、行高一致、
-      按剩余人次封顶、已授权行停用并标徽标）；改动原因与守卫写法见下面那条 ⚠️
-      部署后核验：BUILD-METADATA commit = 6c104a8；active、NRestarts=0；五入口全 200；
-      四端入口资产 content-type 正确（js/css）；**线上 /org 入口包与 release 产物逐字节一致**
-      （releases/20260918T032913Z/apps/org/assets/index-BNk1rEiw.js，770114B，md5 436f1133c282…），
-      且包里含本次新文案（勾选要授权的学员 / 全选本页可授权 / 本次将用掉 / 授权后本课包剩 / 零次不代表不限）；
+代码提交：aa67a7a（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T040615Z / commit aa67a7a（服务 learning-platform-production @127.0.0.1:8789）
+      生效内容：**平台端 AI 配置重做**（用户口径「做大量的减法」「一定要简单明了」）——
+      供应商账单两条线整体下线（含 7 张表与 2 个面板）；三账报表改**两账**（对外售价 / 上游成本，
+      核销额改取 `compute_attempts.upstream_cost_fen`）；成本机制 **4 套 → 1 套**；
+      配置页压成**三块**：① 渠道 → ② 价目表（每行 = 渠道 × 模型，成本价 ‖ 对外价 ‖ 毛利 ‖ 能力）
+      → ③ 路由与开关。**同一个模型的价从"4 处填"变成"1 行 2 列"**。
+      部署后核验：BUILD-METADATA commit = aa67a7a；active、NRestarts=0；五入口全 200；
+      **三端入口包各自与 release 产物逐字节一致**（admin 593842B md5 6e5ded5b4757…、
+      org 770114B 436f1133c282…、website 713724B 267e01a557ed…），且各自含本端新文案；
       真 Chrome 打开线上 /org、/admin、/learn 均可挂载、无 JS 异常
-      上一版（可回滚）：release 20260917T115852Z / commit d0e3452
-      整库备份：production/backups/20260918T032912Z/platform.db
-      ⚠️ 备份目录名与 release 戳是**两个独立时间戳**：可能相同（115852Z 那次就相同），
-      也可能差 1 秒（这次 032912Z vs 032913Z）—— 找它请用 `ls -t production/backups/ | head -1`，别按 release 戳猜
+      上一版（可回滚）：release 20260918T032913Z / commit 6c104a8
+      整库备份：production/backups/20260918T040615Z/platform.db
+      ⚠️ 备份目录名与 release 戳是**两个独立时间戳**：可能相同、也可能差 1 秒 ——
+      找它请用 `ls -t production/backups/ | head -1`，别按 release 戳猜
+      ⚠️ 验收脚本第 ③ 层**必须按端查各自的包**（管理端的中文拿去 grep 机构端的包会全红，
+      而机构端没改、md5 与上一版相同才是对的）—— 这个假警报踩过一次
 账号：平台 root；机构 org-admin；教师 teacher-1；学生 student-1（凭据不写入文档）
 
 > ⚠️ **「勾选要授权的学员」为什么重做过（2026-09-18，用户反馈「布局和逻辑很不舒服」）**：
