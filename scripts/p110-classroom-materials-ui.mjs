@@ -161,5 +161,20 @@ check('【反向自检】类型色三处同源（学生端与老师端都从 mat
   /import \{ materialVisual \} from '\.\/materialTypes\.js';/.test(workspace)
   && /materialVisual, useData,/.test(read('apps/admin/src/components/CourseManagement.jsx')));
 
+/* ── 文字框体的复制（2026-09-18 晚用户提的三条里的两条）──────────────────────
+   用户原话：②「图2 画布课堂右下角这个提示必须要移除，很挡视野」
+             ③「图3 文本生成这里的框应该是可以选中里面的文字进行复制的，同时在右上角提供复制按钮一键复制」
+   （①「灵动学习页面这里的提示要删除」在 p115 里按真浏览器断言：/learn 页不得再出现那条横幅） */
+check('③ 生成结果能选中复制：结果块显式 user-select:text（画布是拖拽面，默认选不中文字）',
+  /\.learning-node__text-result \{ user-select: text; -webkit-user-select: text; cursor: text; padding-right: 62px; \}/.test(canvasCss));
+check('③ 右上角有「复制」按钮（JSX + CSS 都在；走剪贴板 API，且有 execCommand 兜底）',
+  /<CopyTextButton text=\{generated\} \/>/.test(canvasJsx)
+  && /\.learning-node__copy \{ position: absolute; top: 6px; right: 8px/.test(canvasCss)
+  && /navigator\.clipboard\?\.writeText/.test(canvasJsx)
+  && /document\.execCommand\('copy'\)/.test(canvasJsx));
+check('② 画布右下角那条提示（.cv-toast）不再一直挂着：非错误 5 秒自动消失、报错留着',
+  /const timer = setTimeout\(\(\) => setMessage\(''\), 5000\);/.test(workspace)
+  && /if \(message\.includes\('失败'\) \|\| message\.includes\('错误'\)\) return undefined;/.test(workspace));
+
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

@@ -662,6 +662,8 @@ try {
 
   // ── ⑤e 学生端：保留的是课程中心页（/learn），要有返回首页；被删的那一版改成重定向
   await expectText('我的课程', ['我的课程', '返回首页', '刷新课程']);
+  // 用户 2026-09-18 晚：「图1 灵动学习页面这里的提示要删除」——就是页头那条浅蓝的两步说明。
+  if ((await bodyText()).includes('进操作环境要两步')) problems.push('课程中心（/learn）：页头那条「进操作环境要两步…」提示应已删除');
   const studentPage = await page.evaluate(() => ({
     backHref: document.querySelector('.page-header a[href="/"]')?.getAttribute('href') || null,
     legacyLinks: document.querySelectorAll('a[href^="/my-courses"]').length,

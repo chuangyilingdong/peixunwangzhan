@@ -294,10 +294,10 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
       <button className="secondary-button" onClick={classroom.refresh}>刷新课程</button>
     </>} />
     {message && <Notice tone="danger">{message}</Notice>}
-    <Notice tone="info">
-      进操作环境要两步：<strong>老师把课包分给你</strong>（「未授权」= 还没分），然后<strong>把你加进某节课的课堂</strong>，
-      老师点「开始上课」后这节课才能进。课上完标记为<strong>已完课</strong>；没消耗过算力的算<strong>未完课</strong>，可以重新排进课堂再上。
-    </Notice>
+    {/* ⚠️ 这里原来有一条 tone="info" 的「进操作环境要两步…」横幅，按用户口径 2026-09-18 晚**删掉了**
+        （原话：「图1 灵动学习页面这里的提示要删除」）。别再加回来 —— 两步的说明在课包卡片自己那句状态里
+        （「已分给你 · 等老师把你加进课堂」）已经有了。
+        ⚠️ 上面 CanvasClassroom（画布上课页）里还有一条**一模一样**的横幅，用户这次没点它，先留着。 */}
     {courses.length ? <section className="course-package-grid" aria-label="课程包列表">
       {courses.map((course, index) => {
         const lessons = course.lessons || [];

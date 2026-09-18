@@ -551,13 +551,40 @@ function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, reference
   </div>;
 }
 
+// 一键复制（用户口径 2026-09-18 晚：生成出来的文字要能复制，且右上角给一个复制按钮）。
+// 优先用剪贴板 API（生产是 HTTPS、本地 localhost 都算安全上下文）；被拒或老浏览器退回
+// textarea + execCommand —— 别让按钮点了没反应。复制成功后按钮上自己变「已复制」。
+function CopyTextButton({ text, onCopied }) {
+  const [done, setDone] = useState(false);
+  async function copy() {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = text; area.style.position = 'fixed'; area.style.opacity = '0';
+        document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove();
+      }
+      setDone(true); onCopied?.();
+      setTimeout(() => setDone(false), 1600);
+    } catch { setDone(false); }
+  }
+  return <button type="button" className="learning-node__copy" onClick={copy} aria-label={done ? '已复制' : '复制文字'}>{done ? '已复制' : '复制'}</button>;
+}
+
 // 文字框体：卡片只负责展示（标题 + 生成结果），提示词与生成按钮都在画布底部面板里。
+// ⚠️ 2026-09-18 晚用户口径：生成结果**要能选中里面的文字复制**，并在右上角给一键复制按钮。
+// 画布整体是拖拽面（react-flow），默认选不中文字 —— 所以结果块显式 `user-select:text`，
+// 复制按钮挂在结果块右上角并带 `nodrag`（否则按按钮会被当成拖框体）。
 function PromptNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const generated = String(data.generatedText || '');
   return <NodeFrame icon="✎" tone="prompt" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {generated
-      ? <div className="learning-node__text-result nodrag">{generated}</div>
+      ? <div className="learning-node__text-wrap nodrag">
+        <CopyTextButton text={generated} />
+        <div className="learning-node__text-result">{generated}</div>
+      </div>
       : <div className="learning-node__art"><span>✎</span><small>{data.slotType === 'text' ? '在底部面板写提示词，生成文字' : '在底部面板写下内容'}</small></div>}
   </NodeFrame>;
 }

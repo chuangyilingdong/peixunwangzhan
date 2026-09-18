@@ -105,6 +105,17 @@ export function CanvasWorkspace({ api, ...props }) {
   const [busy, setBusy] = useState(false);
   const [canvasRevision, setCanvasRevision] = useState(0);
   const [message, setMessage] = useState('');
+  // ⚠️ 用户口径 2026-09-18 晚：「画布课堂右下角这个提示必须要移除，很挡视野」。
+  // 那个提示就是下面渲染的 `.cv-toast`（`position:fixed; right:18px; bottom:18px`）。
+  // 它原来**一旦出现就一直挂着**（要等下一次操作把它覆盖掉）—— 比如
+  // 「已添加「X」，请填写提示词或从素材插入。」说完就没人再去清它，于是那条横幅长期挡住画布右下角。
+  // 现在的口径：**非错误的提示 5 秒后自动消失**；带「失败 / 错误」的留着（出错信息不该自己溜走）。
+  useEffect(() => {
+    if (!message) return undefined;
+    if (message.includes('失败') || message.includes('错误')) return undefined;
+    const timer = setTimeout(() => setMessage(''), 5000);
+    return () => clearTimeout(timer);
+  }, [message]);
   const [generationForm, setGenerationForm] = useState({ modality: 'IMAGE', prompt: '', title: '' });
   const [generating, setGenerating] = useState(false);
   const [toolPanel, setToolPanel] = useState(null);
