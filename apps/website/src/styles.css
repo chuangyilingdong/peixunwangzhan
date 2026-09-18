@@ -27,7 +27,7 @@
 .hp-trust strong{display:block;color:#f2f2f3;font-size:clamp(11.5px,1.35vw,13.5px);font-weight:700;text-align:left}
 .hp-trust span{display:block;margin-top:2px;color:#b9b7bd;font-size:clamp(10.5px,1.2vw,12px);text-align:left}
 .hp-kicker{margin:0;color:rgba(255,255,255,.58);font-size:clamp(11px,1.3vw,12.5px);font-weight:700;letter-spacing:.22em}
-.hp-title{margin:0;font-size:clamp(30px,6vw,80px);line-height:1.1;letter-spacing:-.03em;white-space:nowrap}
+.hp-title{margin:0 auto;max-width:94vw;font-size:clamp(30px,6vw,80px);line-height:1.12;letter-spacing:-.03em;white-space:normal}
 .hp-title span,.hp-title em{display:block}
 .hp-title em{color:#ff5c93;font-style:normal}
 .hp-sub{max-width:min(560px,92%);margin:0;color:rgba(255,255,255,.8);font-size:clamp(13.5px,1.55vw,16px);line-height:1.55}
@@ -43,8 +43,10 @@
 .hp-stat span{color:#8e8e8e;font-size:clamp(11px,1.2vw,12.5px)}
 @keyframes hp-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
 /* 标题在窄屏必须允许换行：提示词是 nowrap（那版是英文短词），中文标题在 1120px 以下 nowrap 会横向溢出 */
-@media(max-width:1120px){.hp-title{white-space:normal;font-size:clamp(30px,7vw,60px)}}
-@media(max-width:720px){.hp-hero{padding-top:clamp(84px,13vh,124px);gap:12px}.hp-title{font-size:clamp(27px,8.4vw,42px);letter-spacing:-.04em}.hp-stats{grid-template-columns:repeat(2,1fr)}.hp-trust{align-items:flex-start;border-radius:18px}.hp-actions .hp-cta{flex:1 1 auto;justify-content:center}}
+/* 标题字号由组件按内容长度内联给出（见 main.jsx 的 titleStyle），这里不再覆盖字号，
+   只负责换行与留白 —— 两边都写字号会变成「改了一处不生效」的坑。 */
+@media(max-width:1120px){.hp-title{line-height:1.16}}
+@media(max-width:720px){.hp-hero{padding-top:clamp(84px,13vh,124px);gap:12px}.hp-title{letter-spacing:-.04em}.hp-stats{grid-template-columns:repeat(2,1fr)}.hp-trust{align-items:flex-start;border-radius:18px}.hp-actions .hp-cta{flex:1 1 auto;justify-content:center}}
 @media(prefers-reduced-motion:reduce){.hp-hero,.hp-stats{animation:none}.hp-cta{transition:none}}
 
 /* ── Unified login header ────────────────────────────────── */

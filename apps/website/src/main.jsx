@@ -116,10 +116,16 @@ function StatValue({ value, suffix }) {
 // 只有「字段不存在」或「接口失败」才用内置 fallback。
 // ⚠️ 别写 `content.x || fallback`：空串是 falsy，后台清空后官网会继续显示内置默认文案，
 //    用户看到的就是「我在后台清空了为什么还显示」。
-const cmsPick = (content, key, fallback) => {
+// 首页大标题的字号自适应：标题是**后台可改**的，用户写长了就会被裁 ——
+// 2026-09-18 实测：他写的那行「不只是学工具，而是掌握Ai时代的创造方式」宽 1471px 而视口 1440px，
+// 左右各被 overflow:hidden 裁掉 15px（没有滚动条，所以肉眼不容易发现）。
+// 做法：按最长那一行的「字宽」估算（中文 1、拉丁 0.58），再用 min(6vw, 92vw/字宽) 压到一行放得下；
+// ≤1120px 由 min() 与 26px 下限接管；真放不下还有 CSS 换行兜底（绝不裁字）。
+const titleWeight = (text) => [...String(text || '')].reduce((n, ch) => n + (/[\u2e80-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch) ? 1 : 0.58), 0);
+function cmsPick(content, key, fallback) {
   const value = content?.[key];
   return value === undefined || value === null ? (fallback ?? '') : value;
-};
+}
 function HomeLanding() {
   const cms = useWebsiteContent('HOME');
   const content = cms.data || {};
@@ -131,12 +137,14 @@ function HomeLanding() {
   const title = cmsPick(content, 'heroTitle', CMS_FALLBACK.HOME.heroTitle);
   const accent = cmsPick(content, 'heroAccent', CMS_FALLBACK.HOME.heroAccent);
   const description = cmsPick(content, 'heroDescription', CMS_FALLBACK.HOME.heroDescription);
+  const longestLine = Math.max(titleWeight(title), titleWeight(accent), 1);
+  const titleStyle = { fontSize: `clamp(26px, min(6vw, ${(92 / longestLine).toFixed(2)}vw), 76px)` };
   return <main className="hp">
     <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
     <section className="hp-hero">
       {(trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
       {kicker ? <p className="hp-kicker">{kicker}</p> : null}
-      {(title || accent) && <h1 className="hp-title">{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
+      {(title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
       {description ? <p className="hp-sub">{description}</p> : null}
       <div className="hp-actions"><Link className="hp-cta" to="/demo">联系我们</Link><Link className="hp-cta ghost" to="/marketplace">查看课程</Link></div>
     </section>
