@@ -143,37 +143,39 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：0a9821c（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T074116Z / commit 0a9821c（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（0a9821c）：**登录页动效**（用 find-ui-motion 案例库挑的机制、**纯 CSS 实现**，
-      不引依赖：背景光斑漂移 / 卡片「模糊→清晰 + 上移」入场 / 表单逐行错开淡入 / 标题聚焦收拢 /
-      提交按钮内联转圈 + `aria-busy` / 按下反馈；全部有 `prefers-reduced-motion` 兜底）
-      ＋修掉一个**既存**的登录页错位 bug：`.website-login::after` 装饰线故意往右出血把容器
-      `scrollWidth` 撑大，而 `overflow:hidden` **仍是可编程滚动的容器** —— 点一下输入框/按钮，
-      浏览器为了把焦点滚进视野会把整页横向滚 224px（实测容器 left 从居中的 123 变成 -101）。
-      改成 `overflow-x: clip` 后复测 `scrollLeft=0`、left 回到 123。详细成因写在样式注释里，别改回 hidden
-      ＋修掉守卫的**偶发红**：`scripts/lib/classroomFixture.mjs` 建连接没有 busy 等待，而守卫的结构是
-      「本进程写临时库 + 同时 spawn 服务也开着同一个库」→ 偶发 `database is locked`（1 秒内失败、单跑又全过，
-      长期被误当成机器负载）。夹具被 20 多个守卫共用，加 `PRAGMA busy_timeout=5000` 一处修全体
-      上一版改动（e3409d0）：**首页标题按内容自适应字号**（原来 `white-space:nowrap`，用户在后台
+代码提交：a49f224（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T081408Z / commit a49f224（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（a49f224 的祖先 b4b7f74）：**首页两个 CTA 换成 React Bits 的 SpecularButton**
+      （WebGL 镜面高光；原样搬入 `apps/website/src/components/SpecularButton.{jsx,css}`，新增依赖 `ogl`）。
+      主按钮「联系我们」高光常亮 + 缓慢扫过，次按钮「查看课程」只在光标靠近时亮起；两个都保持药丸形状。
+      平台补充：`prefers-reduced-motion: reduce` 时**不创建 WebGL**（连 rAF 都不起）。
+      因为它是 `<button>`，导航改用 onClick + navigate（右键新标签打开不再可用，已注明）。
+      代价：官网入口包 707,686B → 759,136B（+51KB，约 +7%）
+      本版另一提交（a49f224）：**守卫自建 SQLite 连接补 busy 等待** —— 近几轮全量守卫每跑必有一个红项、
+      且每轮换一个（p13/p16/p20/p31/p33/p35/p51…），特征都是「几秒内失败、单跑又全过」，
+      长期被误判成机器负载；真实原因是各守卫自己的连接没有 busy 等待，撞上同时 spawn 的服务 →
+      `database is locked`。给夹具加 `openDb()` 并清扫 54 个守卫 127 处连接后，全量守卫跑出 123/123 全绿
+      上一版改动（0a9821c）：**登录页动效**（纯 CSS：背景光斑漂移 / 卡片模糊→清晰入场 / 表单逐行错开 /
+      标题聚焦收拢 / 提交按钮内联转圈 + `aria-busy` / 按下反馈，都有 reduced-motion 兜底）
+      ＋修掉**既存**的登录页错位 bug：`.website-login::after` 装饰线往右出血把容器 `scrollWidth` 撑大，
+      而 `overflow:hidden` **仍是可编程滚动的容器** —— 点一下输入框/按钮就整页横向滚 224px
+      （容器 left 从居中的 123 变成 -101）。改 `overflow-x: clip` 后复测 `scrollLeft=0`、left 回到 123
+      更早一版改动（e3409d0）：**首页标题按内容自适应字号**（原来 `white-space:nowrap`，用户在后台
       把标题写长后左右各被 `overflow:hidden` 裁掉 15px——实测那行 1471px / 视口 1440px；
       现在按最长一行的字宽算 `min(6vw, 92vw/字宽)`，CSS 换行兜底，四档宽度实测 clipping=0）
-      更早一版改动（033531a）：①**首页清空的 CMS 字段不再回退显示** —— 根因是取值用了
-      `x || fallback`，空串是 falsy，运营清空后官网又退回内置默认文案（用户清空的正是
-      heroKicker / trustTitle / trustDescription）；②CTA 从「预约演示」改叫**「联系我们」**
-      （顶栏/首页/页脚/法务页/各页结尾按钮 + /demo 页文案），迁移脚本同步把 CMS 已发布文案里的
-      「预约演示」也换成「联系我们」（含历史版本）；③**官网上字体统一**成平台后台那一套
-      （`:root` 改用 `var(--cv-font)` = Geist + Noto Sans SC，与 admin/dsh 同源）；
-      ④**新增后台「联系我们（商机）」页面** —— 官网表单一直写 `leads` 表、服务端也一直有
-      `/api/admin/leads`，但此前**没有任何后台页面在读它**（用户问「提交了在哪收」的答案是收不到）
+      再早一版改动（033531a）：①**首页清空的 CMS 字段不再回退显示**（根因：取值用了 `x || fallback`，
+      空串是 falsy）；②CTA「预约演示」→**「联系我们」**（含 CMS 已发布文案，迁移脚本同步换、含历史版本）；
+      ③**官网字体统一**成后台那套（`:root` 用 `var(--cv-font)` = Geist + Noto Sans SC）；
+      ④**新增后台「联系我们（商机）」页面**（官网表单一直写 `leads` 表、服务端也一直有 `/api/admin/leads`，
+      但此前没有任何后台页面在读它 —— 用户问「提交了在哪收」的答案是收不到）
       部署后核验（2026-09-18 实跑 `.tmp/verify-prod-002.sh`，三层全过 → `PROD_ACCEPTANCE_OK`）：
-      BUILD-METADATA commit = 0a9821c；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
+      BUILD-METADATA commit = a49f224；active、NRestarts=0；五入口全 200；入口资产 MIME 正确；
       **三端入口包各自与 release 产物逐字节一致**（admin 661860B 1b69d5f12659…、
-      org 771103B 73cee6952092…、website 707686B cde2a7f82981…）；反向断言 9 项全过
-      真浏览器复核线上：登录页三处动效都在跑（`loginCardIn` / `loginDrift` / `wlRingDriftA`）、
-      `overflow-x` 为 `clip`、点按钮后 `scrollLeft=0` 且容器仍居中在 123、错误提示正常
-      上一版（可回滚）：release 20260918T071301Z / commit e3409d0
-      整库备份：production/backups/20260918T074115Z/platform.db
+      org 771103B 73cee6952092…、website 758909B 0af9993bfeaf…）；反向断言 9 项全过
+      真浏览器复核线上：首页两个 specular 按钮都渲染出 canvas（164×84）、指针靠近时高光才亮、
+      无横向溢出；登录页三处动效仍在跑、`overflow-x` 为 `clip`、点按钮后 `scrollLeft=0`
+      上一版（可回滚）：release 20260918T074116Z / commit 0a9821c
+      整库备份：production/backups/20260918T081408Z/platform.db
       更早三版（按时间倒序）：release 20260918T063303Z / 6e48631（官网改版）、
       release 20260918T065543Z / f7b5802（品牌标换真 logo + 清「五格殿下」）、
       release 20260918T071301Z / e3409d0（首页空值/CTA/字体/商机页 + 标题自适应）
