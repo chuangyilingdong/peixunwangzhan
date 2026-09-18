@@ -135,23 +135,21 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：0c4413a（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T044947Z / commit 0c4413a（服务 learning-platform-production @127.0.0.1:8789）
-      生效内容：**上游账户余额（实时）探针** —— 平台端「AI 能力与价格 → 渠道与价格」多了 ④ 一块，
-      按渠道调上游 `GET {base}/api/usage/wallet/`，显示余额/已用/配额 + 低余额标红（手动刷新，不轮询）；
-      另有此前的：学生算力额度=只观测不真拦、课程算力预估内部化、实测单价、配置三块化 + 供应商账单下线
-      ⚠️ **算力额度一类的东西一律不拦人**（`enforced: false` 是机器可读承诺）：课堂成本预警、
-      每学生算力观测上限、课包算力预估全是内部观测口径；学生端看不到任何额度、也不会因额度被拒。
-      唯一还按"量"拦的是**课包授权人次**（人次库存，不是算力）。
-      ⚠️ **上游账户余额只有平台端能看**：机构端/学生端没有这个探针（实测 org 与 website 的产物里
-      「上游账户余额」出现 0 次，admin 为 1 次），端点本身也是 SUPER_ADMIN + ADMIN_BILLING 双门禁，
-      机构/教师/学生一律 403；响应里**不含 API key**（对上游回显做过 scrub，且有反向断言证明确实调到了上游）。
-      部署后核验：BUILD-METADATA commit = 0c4413a；active、NRestarts=0；五入口全 200；
-      **三端入口包各自与 release 产物逐字节一致**（admin 609645B f329ee2bf3ba…、
-      org 770994B 823e5f40e401…、website 713479B 70d7b4a5d2b0…）；
-      反向断言通过：官网包里没有「预估消耗」「灵动值/人」「perStudentBudgetFen」「estimatedCreditsPerPerson」
-      上一版（可回滚）：release 20260918T043903Z / commit 70e1ca5
-      整库备份：production/backups/20260918T044947Z/platform.db
+代码提交：843ebe6（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T053148Z / commit 843ebe6（服务 learning-platform-production @127.0.0.1:8789）
+      生效内容：**P03 平台机构与授权次数配置按 8 张线框图对齐** —— 机构列表/详情（含电话脱敏、
+      4 入口卡、数据概览）/禁用抽屉（原因必填）/课包与授权次数（添加课包、调整授权次数两个抽屉）/
+      **授权次数变更记录**（新表 `course_quota_changes`，5 类变更、变更前后值都记）；机构新增
+      简称/编码/所属区域三列（编码 `ORG0001` 规则、存量启动时幂等回填）
+      ⚠️ **平台侧没有"算力额度"这个说法，只有"授权次数"**（用户口径 2026-09-18）：
+      一律用 总授权次数 / 已授权次数 / 剩余授权次数；界面不许出现"算力额度/总人次"。
+      另：算力额度一类的东西**一律不拦人**（`enforced: false` 是机器可读承诺）；唯一还按"量"拦的是
+      **授权次数不足**（机构把课包分给学生时次数不够）。
+      部署后核验：BUILD-METADATA commit = 843ebe6；active、NRestarts=0；五入口全 200；
+      **三端入口包各自与 release 产物逐字节一致**（admin 640517B 1889c876c385…、
+      org 770994B 823e5f40e401…、website 713479B 70d7b4a5d2b0…）
+      上一版（可回滚）：release 20260918T044947Z / commit 0c4413a
+      整库备份：production/backups/20260918T053147Z/platform.db
       ⚠️ 备份目录名与 release 戳是**两个独立时间戳**：可能相同、也可能差 1 秒 ——
       找它请用 `ls -t production/backups/ | head -1`，别按 release 戳猜
       ⚠️ 验收脚本第 ③ 层**必须按端查各自的包**（管理端的中文拿去 grep 机构端的包会全红，
