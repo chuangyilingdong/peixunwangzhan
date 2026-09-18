@@ -377,12 +377,22 @@
 .mp-title{margin:0 auto 16px;font-size:clamp(27px,4.2vw,54px);font-weight:800;line-height:1.14;letter-spacing:-.02em;white-space:normal}
 .mp-lead{margin:0 auto;max-width:660px;color:#ffffff8c;font-size:clamp(14px,1.5vw,17px);line-height:1.75}
 .mp-rows{display:grid;gap:16px;max-width:1000px;margin:0 auto}
-.mp-row{border:1px solid #ffffff14;border-radius:26px;background:#ffffff08;transition:border-color .5s ease,background .5s ease}
+.mp-row{border:1px solid #ffffff14;border-radius:30px;background:#ffffff08;transition:border-color .5s ease,background .5s ease;animation:mp-row-in .6s cubic-bezier(.16,1,.3,1) both}
+.mp-row:nth-child(2){animation-delay:.07s}
+.mp-row:nth-child(3){animation-delay:.14s}
+.mp-row:nth-child(4){animation-delay:.21s}
+.mp-row:nth-child(n+5){animation-delay:.28s}
+@keyframes mp-row-in{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
+/* ⚠️ 入场动画用 CSS keyframes，**别改成 IntersectionObserver（whileInView）**：p70 的 DOM 桩里没有
+   这个全局，用了会让守卫直接报未定义（首页数据区那条注释记着同一个坑）。代价是首屏以下的行走完动画
+   才被滚到，没有「滚入再滑进」的效果 —— 可以接受。 */
 .mp-row:hover,.mp-row:focus-within{border-color:#ff5c9373;background:#ffffff0f}
 .mp-main{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:clamp(18px,3vw,32px);padding:clamp(20px,2.6vw,30px) clamp(20px,3vw,34px)}
 /* 缩略图：比参考稿的框大一圈（用户口径「他这个图的框太小了」）。没有封面时用课包首字占位 */
 .mp-cover{width:clamp(86px,9vw,112px);height:clamp(86px,9vw,112px);display:grid;place-items:center;overflow:hidden;border:1px solid #ffffff1f;border-radius:24px;background:#ffffff0a;background-size:cover;background-position:center}
 .mp-cover span{color:var(--mp-accent);font-size:34px;font-weight:800}
+/* 参考稿里图标框在悬停时会亮起来（border 与底色都偏主色） */
+.mp-row:hover .mp-cover,.mp-row:focus-within .mp-cover{border-color:#ff5c9366;background-color:#ff5c9314}
 .mp-info{min-width:0}
 .mp-name{margin:0 0 8px;font-size:clamp(19px,2.1vw,26px);font-weight:700;letter-spacing:-.01em}
 /* 简介太长就用省略号收尾（用户口径）：两行截断，不做展开 */
@@ -393,19 +403,32 @@
 .mp-price span{display:block;margin-top:5px;color:#ffffff4d;font-size:11px;font-weight:700;letter-spacing:.12em}
 .mp-cta{display:inline-flex;align-items:center;gap:8px;padding:14px 26px;border-radius:999px;color:#fff;background:var(--mp-accent);font-size:13px;font-weight:800;letter-spacing:.04em;white-space:nowrap;box-shadow:0 10px 30px #ff5c9338;transition:background .35s ease,color .35s ease,transform .35s ease}
 .mp-cta:hover{color:#141018;background:#fff;transform:translateY(-1px)}
-/* 图3 那一排「关键参数」：**默认就铺开**。
-   参考稿是悬停才展开（FEATURES DROPDOWN），但那是设计花活 —— 用户要的是「图3 的参数取课包的
-   关键参数」，参数藏起来等于没显示（截图/首屏都看不到）。要做回悬停展开：把下面这条 max-height
-   规则从注释里放出来即可。 */
-.mp-features{overflow:hidden;border-top:1px solid #ffffff0f}
-.mp-feature-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;padding:20px clamp(20px,3vw,34px) 24px}
+.mp-cta:active{transform:scale(.97)}
+/* 参考稿：按钮的光晕在整行悬停时变强（group-hover） */
+.mp-row:hover .mp-cta,.mp-row:focus-within .mp-cta{box-shadow:0 16px 40px #ff5c9366}
+/* 筛选区默认收起，只留一个胶囊开关（参考稿首屏没有筛选块） */
+.mp-filter-bar{display:flex;justify-content:center;max-width:1000px;margin:0 auto 20px}
+.mp-filter-toggle{display:inline-flex;align-items:center;gap:9px;padding:10px 20px;border:1px solid #ffffff1f;border-radius:999px;color:#ffffffa6;background:#ffffff0a;font-size:12.5px;font-weight:800;letter-spacing:.04em;transition:border-color .3s ease,color .3s ease}
+.mp-filter-toggle:hover{border-color:#ff5c93a6;color:#fff}
+.mp-filter-toggle b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:99px;color:#fff;background:var(--mp-accent);font-size:10.5px}
+/* 图3 那一排「关键参数」= 参考稿里的 FEATURES DROPDOWN：**默认收起，悬停（或键盘聚焦进行内）才展开**。
+   ⚠️ 2026-09-18 晚用户指出「交互跟参考稿完全不一样」—— 我上一版把它改成了常显，等于把这个组件
+   最关键的交互拿掉了。现在还原：用 grid-template-rows 0fr→1fr 做「height:auto 的过渡」，
+   时长与缓动照参考稿（0.6s / cubic-bezier(.16,1,.3,1)），并叠一层 y(-18px)→0 + 淡入。
+   ⚠️ **只在真有悬停能力的设备上收起**：触屏/窄屏没有 hover，收起来就等于永久看不到参数。 */
+.mp-features{display:grid;overflow:hidden;grid-template-rows:1fr;border-top:1px solid #ffffff0f}
+.mp-feature-grid{min-height:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;padding:20px clamp(20px,3vw,34px) 24px;transition:transform .6s cubic-bezier(.16,1,.3,1),opacity .45s ease}
 .mp-feature span{display:block;color:#ffffff4d;font-size:10.5px;font-weight:800;letter-spacing:.2em}
 .mp-feature strong{display:block;margin-top:6px;font-size:15px;font-weight:700}
-/* 悬停展开版（当前未启用）：
-   @media (min-width:900px) and (hover:hover){
-     .mp-features{max-height:0;opacity:0;border-top-color:transparent;transition:max-height .5s cubic-bezier(.16,1,.3,1),opacity .4s ease,border-top-color .4s ease}
-     .mp-row:hover .mp-features,.mp-row:focus-within .mp-features{max-height:190px;opacity:1;border-top-color:#ffffff0f}
-   } */
+@media (hover:hover) and (pointer:fine){
+  .mp-features{grid-template-rows:0fr;border-top-color:transparent;transition:grid-template-rows .6s cubic-bezier(.16,1,.3,1),border-top-color .45s ease}
+  /* ⚠️ 上下 padding 必须一起归零：padding 是**任何盒子的高度下限**，光把内容收起来的话
+     这一排会留下 20+24=44px 的空带（实测 grid-template-rows 解析成 44px 就是这么来的）。 */
+  .mp-feature-grid{padding-top:0;padding-bottom:0;transform:translateY(-18px);opacity:0;transition:transform .6s cubic-bezier(.16,1,.3,1),opacity .45s ease,padding-top .6s cubic-bezier(.16,1,.3,1),padding-bottom .6s cubic-bezier(.16,1,.3,1)}
+  .mp-row:hover .mp-features,.mp-row:focus-within .mp-features{grid-template-rows:1fr;border-top-color:#ffffff0f}
+  .mp-row:hover .mp-feature-grid,.mp-row:focus-within .mp-feature-grid{padding-top:20px;padding-bottom:24px;transform:translateY(0);opacity:1}
+}
+@media (prefers-reduced-motion:reduce){.mp-features,.mp-feature-grid{transition:none!important}.mp-row{animation:none}.mp-skeleton{animation:none}}
 .mp-skeleton{height:126px;border-radius:26px;background:#ffffff0a;animation:mp-pulse 1.4s ease-in-out infinite}
 @keyframes mp-pulse{0%,100%{opacity:.55}50%{opacity:1}}
 .mp-note{display:flex;align-items:center;gap:16px;max-width:1000px;margin:0 auto;padding:22px 26px;border:1px solid #ffffff1a;border-radius:20px;color:var(--mp-accent);background:#ffffff08;font-size:24px}

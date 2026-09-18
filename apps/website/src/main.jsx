@@ -327,6 +327,10 @@ function Marketplace(){
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState(null);
   const [filters,setFilters]=useState({difficulty:'',ageMin:'',ageMax:'',tag:'',search:'',sort:'popular',category:''});
+  // 筛选区**默认收起**（用户口径 2026-09-18 晚「交互跟参考稿完全不一样」）：参考稿的首屏就是
+  // 「页头 + 课包行」，没有筛选块 —— 铺开会把课包行挤到折线以下，整页看着就不像那个设计。
+  // 功能一个没删，点一下展开；展开时会带上当前生效的筛选条数。
+  const [showFilters,setShowFilters]=useState(false);
   const limit=20;
   const difficultyOptions=[{label:'全部',value:''},{label:'1-2',value:'1'},{label:'3',value:'3'},{label:'4-5',value:'4'}];
   const ageOptions=[{label:'全部',value:'',ageMin:'',ageMax:''},{label:'6-8岁',value:'age6-8',ageMin:'6',ageMax:'8'},{label:'9-12岁',value:'age9-12',ageMin:'9',ageMax:'12'},{label:'13+岁',value:'age13plus',ageMin:'13',ageMax:''}];
@@ -360,6 +364,8 @@ function Marketplace(){
   const headReady = !headCms.loading;
   const headTitle = cmsPick(content, 'title', CMS_FALLBACK.MARKETPLACE.title);
   const headLead = cmsPick(content, 'lead', CMS_FALLBACK.MARKETPLACE.lead);
+  // 收起时也让人知道「有几个筛选正在生效」，否则会把「怎么只有两条课包」当成 bug
+  const activeFilterCount=[filters.category,filters.difficulty,filters.tag,activeAge,filters.search].filter(Boolean).length+(filters.sort!=='popular'?1:0);
   return <main className="mp">
     <div className="mp-aura" aria-hidden="true" />
     <div className="mp-inner">
@@ -367,14 +373,17 @@ function Marketplace(){
       <p className="mp-eyebrow">课包 · COURSE PACKS</p>
       {headReady ? <><h1 className="mp-title">{headTitle}</h1>{headLead ? <p className="mp-lead">{headLead}</p> : null}</> : <div className="mp-head-hold" aria-hidden="true" />}
     </header>
-    <div className="mkt-filters">
+    <div className="mp-filter-bar">
+      <button type="button" className={'mp-filter-toggle'+(showFilters?' open':'')} aria-expanded={showFilters} onClick={()=>setShowFilters(v=>!v)}>{showFilters?'收起筛选':'筛选与搜索'}{activeFilterCount?<b>{activeFilterCount}</b>:null}<span aria-hidden="true">{showFilters?'▲':'▼'}</span></button>
+    </div>
+    {showFilters && <div className="mkt-filters">
       <div className="mkt-row"><span className="mkt-label">课程类型</span><div className="mkt-chips">{[{label:'全部课程',value:''},{label:'画布课程',value:'CANVAS'},{label:'VibeCoding 课程',value:'VIBECODING'}].map(o=><button type="button" key={o.value||'all'} aria-pressed={filters.category===o.value} className={'mkt-chip'+(filters.category===o.value?' on':'')} onClick={()=>{setFilters(f=>({...f,category:o.value}));setPage(1);}}>{o.label}</button>)}</div></div>
       <div className="mkt-row"><span className="mkt-label">难度</span><div className="mkt-chips">{difficultyOptions.map(o=><button type="button" key={o.value} aria-pressed={filters.difficulty===o.value} className={'mkt-chip'+(filters.difficulty===o.value?' on':'')} onClick={()=>{setFilters(f=>({...f,difficulty:o.value}));setPage(1);}}>{o.label}</button>)}</div></div>
       <div className="mkt-row"><span className="mkt-label">适学年龄</span><div className="mkt-chips">{ageOptions.map(o=><button type="button" key={o.value} aria-pressed={activeAge===o.value} className={'mkt-chip'+(activeAge===o.value?' on':'')} onClick={()=>{setActiveAge(activeAge===o.value?'':o.value);setPage(1);}}>{o.label}</button>)}</div></div>
       {allTags.length>0&&<div className="mkt-row"><span className="mkt-label">标签</span><div className="mkt-chips">{allTags.slice(0,12).map(t=><button type="button" key={t} aria-pressed={filters.tag===t} className={'mkt-chip small'+(filters.tag===t?' on':'')} onClick={()=>{setFilters(f=>({...f,tag:f.tag===t?'':t}));setPage(1);}}>{t}</button>)}</div></div>}
       <div className="mkt-row"><span className="mkt-label">排序</span><div className="mkt-chips"><button type="button" aria-pressed={filters.sort==='popular'} className={'mkt-chip'+(filters.sort==='popular'?' on':'')} onClick={()=>{setFilters(f=>({...f,sort:'popular'}));setPage(1);}}>综合推荐</button><button type="button" aria-pressed={filters.sort==='recent'} className={'mkt-chip'+(filters.sort==='recent'?' on':'')} onClick={()=>{setFilters(f=>({...f,sort:'recent'}));setPage(1);}}>最新上线</button></div></div>
       <div className="mkt-search"><label className="sr-only" htmlFor="marketplace-search">搜索课程名称</label><input id="marketplace-search" placeholder="搜索课程名称…" value={filters.search} onChange={e=>{setFilters(f=>({...f,search:e.target.value}));setPage(1);}}/><button type="button" aria-label="重置课程筛选" onClick={()=>{setFilters(f=>({...f,search:'',difficulty:'',tag:'',sort:'popular'}));setActiveAge('');setPage(1);}} className="mkt-reset">重置</button></div>
-    </div>
+    </div>}
     {loading?<div className="mp-rows">{Array.from({length:4},(_,i)=><div key={i} className="mp-skeleton"/>)}</div>:
      error?<div className="mp-note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
      items.length===0?<div className="mp-note">✦ <div><b>暂无课包，敬请期待</b><p>灵动课程会陆续上线优质 AI 课包。</p></div></div>:

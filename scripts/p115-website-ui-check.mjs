@@ -462,11 +462,32 @@ try {
     if (!String(rowGeo.ctaText).includes('查看课程列表')) problems.push(`灵动课程：按钮文案应为「查看课程列表」（实际「${rowGeo.ctaText}」）`);
     if (!/^\/marketplace\/.+/.test(String(rowGeo.ctaHref))) problems.push(`灵动课程：按钮应当进到该课包的详细课程列表（实际 href=${rowGeo.ctaHref}）`);
     if (!/¥|价格面议/.test(rowGeo.priceText)) problems.push(`灵动课程：价格位上既不是价格也不是「价格面议」（实际「${rowGeo.priceText}」）`);
-    // 参考设计的交互：宽屏悬停才展开那一排参数 —— 悬停之后必须真的可见
+    // 参考稿的核心交互：那一排关键参数**默认收起、悬停（或键盘聚焦进入行内）才展开**。
+    // ⚠️ 上一版我把它改成常显，用户当场指出「交互跟参考稿完全不一样」—— 所以这条要钉死。
+    // 只在真有悬停能力的设备上要求「先收起」；触屏/窄屏收起来等于永久看不到参数，必须是常显。
+    const hoverCapable = await page.evaluate(() => matchMedia('(hover:hover) and (pointer:fine)').matches);
+    const collapsedOpacity = await page.locator('.mp-row').first().locator('.mp-feature-grid').evaluate((el) => getComputedStyle(el).opacity);
+    const collapsedRows = await page.locator('.mp-row').first().locator('.mp-features').evaluate((el) => getComputedStyle(el).gridTemplateRows);
     await page.locator('.mp-row').first().hover();
-    await page.waitForTimeout(700);
-    const hoveredOpacity = await page.locator('.mp-row').first().locator('.mp-features').evaluate((el) => getComputedStyle(el).opacity);
-    if (hoveredOpacity !== '1') problems.push(`灵动课程：悬停之后那一排关键参数没有展开（opacity=${hoveredOpacity}）`);
+    await page.waitForTimeout(800);
+    const expandedOpacity = await page.locator('.mp-row').first().locator('.mp-feature-grid').evaluate((el) => getComputedStyle(el).opacity);
+    await shot('12-marketplace-row-hover');
+    console.log(`  · 参数排交互：悬停能力=${hoverCapable} 收起时 grid-rows=${collapsedRows} opacity=${collapsedOpacity} → 悬停后 opacity=${expandedOpacity}`);
+    if (hoverCapable) {
+      if (Number(collapsedOpacity) >= 1) problems.push(`灵动课程：那一排关键参数在宽屏上应当**默认收起**（实际收起时 opacity=${collapsedOpacity}）—— 参考稿是悬停才展开`);
+      if (Number(expandedOpacity) !== 1) problems.push(`灵动课程：悬停之后那一排关键参数没有展开（opacity=${expandedOpacity}）`);
+    } else if (Number(expandedOpacity) < 1) {
+      problems.push(`灵动课程：没有悬停能力的设备上参数必须常显（opacity=${expandedOpacity}）`);
+    }
+    // 筛选区默认收起（参考稿首屏只有页头 + 课包行），点一下才展开
+    if (await page.locator('.mp-filter-bar .mp-filter-toggle').count() === 0) problems.push('灵动课程：没找到筛选开关（.mp-filter-toggle）');
+    if (await page.locator('.mp .mkt-filters').count()) problems.push('灵动课程：筛选区默认应当是收起的（参考稿首屏没有筛选块）');
+    await page.locator('.mp-filter-bar .mp-filter-toggle').click();
+    await page.waitForTimeout(300);
+    if (!(await page.locator('.mp .mkt-filters').count())) problems.push('灵动课程：点开筛选开关之后筛选区没有出现');
+    await shot('11-marketplace-filters-open');
+    await page.locator('.mp-filter-bar .mp-filter-toggle').click();
+    await page.waitForTimeout(300);
   }
   await shot('09-marketplace');
   await sweepHorizontalScroll('灵动课程', ['.mp']);

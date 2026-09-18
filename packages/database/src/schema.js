@@ -9,16 +9,19 @@ export const dataDir = process.env.PLATFORM_DATA_DIR || path.resolve(__dirname, 
 export const databasePath = process.env.PLATFORM_DB_PATH || path.join(dataDir, 'platform.db');
 fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 export const db = new DatabaseSync(databasePath);
+// ⚠️ busy_timeout 必须**排在第一条会抢锁的语句之前**：SQLite 默认是 0（不等待）。
+// 而下面第一句 `PRAGMA journal_mode = WAL` 就要取写锁 —— 两个进程同时起来（重启时旧进程还没退、
+// 新进程已经在跑迁移；或守卫「本进程写库 + 同时 spawn 服务」）时，那一句就会抛
+// `database is locked`（errcode 5）并**崩在启动路径上**。
+// 2026-09-18 定位过一次，但当时把它写在了 WAL 之后 —— 等于**最危险的那一句仍然裸奔**：
+// 晚些时候全量守卫里又是一次「几秒内失败、单跑全过」，堆栈正好指向 schema.js:12（就是 WAL 那句）。
+// 所以顺序不能动：busy_timeout → journal_mode → 其余。
+// 光有 WAL 也不够：WAL 只让读写不互阻，写与写仍要排队，排队的前提就是这个超时。
+db.exec('PRAGMA busy_timeout = 5000');
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
-// ⚠️ busy_timeout 必须有：SQLite 默认是 0（不等待），而这个文件**在 import 时就会跑一遍迁移**。
-// 两个进程同时起来（重启时旧进程还没退、新进程已经在迁移；或守卫「本进程写库 + 同时 spawn 服务」）
-// 就会让其中一边直接抛 `database is locked`（errcode 5）并崩在启动路径上 —— 光有 WAL 不够：
-// WAL 只保证读写不互相阻塞，写与写仍然要排队，而排队的前提就是这个超时。
-// 2026-09-18 定位：全量守卫里反复出现的「偶发几秒内失败、单跑又全过」就是它（堆栈指向下面那条迁移）。
 // 同批还有一处：本文件里的写事务从 `BEGIN` 改成 `BEGIN IMMEDIATE` —— 延迟事务在「已读后要写」时
 // 会撞上 SQLite 的死锁检测、**绕过 busy_timeout 直接返回 BUSY**，IMMEDIATE 则在开头就取写锁。
-db.exec('PRAGMA busy_timeout = 5000');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS platform_settings (
@@ -1361,7 +1364,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS compute_attempts (
 CREATE INDEX IF NOT EXISTS idx_compute_attempts_call ON compute_attempts(call_id, attempt);
 CREATE INDEX IF NOT EXISTS idx_compute_attempts_org ON compute_attempts(org_id, created_at);`);
 for (const [table, column, type] of [['generation_jobs', 'compute_snapshot', 'TEXT'], ['usage_records', 'compute_call_id', 'TEXT']]) {
-  if (!rows(`PRAGMA table_info(${table})`).some((item) => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  addColumnIfMissing(table, column, type);
 }
 
 // Platform classroom budgets are advisory; never migrate per-student prices into them.
@@ -1384,7 +1387,8 @@ for (const [table, column, type] of [
   // 金额仍然只落在 upstream_cost_fen；缺用量或缺单价时为 NULL（UNKNOWN），绝不按 0 计。
   ['compute_attempts', 'usage_snapshot', 'TEXT'],
 ]) {
-  if (!rows(`PRAGMA table_info(${table})`).some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  // 这一段的「判断列不存在」交给 addColumnIfMissing 自己做（这里再判一次就是重复的 TOCTOU）
+  addColumnIfMissing(table, column, type);
 }
 const duplicateComputeAttempt = row('SELECT call_id,attempt,COUNT(*) count FROM compute_attempts GROUP BY call_id,attempt HAVING COUNT(*)>1 LIMIT 1');
 if (duplicateComputeAttempt) {
@@ -1405,8 +1409,9 @@ db.exec(`CREATE TRIGGER IF NOT EXISTS trg_compute_attempts_internal_usage_update
 db.exec(`CREATE TRIGGER IF NOT EXISTS trg_usage_records_clear_attempt_link
   AFTER DELETE ON usage_records
   BEGIN UPDATE compute_attempts SET internal_usage_record_id=NULL WHERE internal_usage_record_id=OLD.id; END`);
-if (!rows('PRAGMA table_info(organizations)').some(item => item.name === 'student_seats')) {
-  db.exec('ALTER TABLE organizations ADD COLUMN student_seats INTEGER NOT NULL DEFAULT 0 CHECK (student_seats >= 0)');
+// 只有**这一次真的由本进程加上列**时才跑回填：回填是给新列算初值，不能每次启动都重算
+// （那会把人工调整过的 student_seats 覆盖回"按课包/学生数推算"的值）。
+if (addColumnIfMissing('organizations', 'student_seats', 'INTEGER NOT NULL DEFAULT 0 CHECK (student_seats >= 0)')) {
   db.exec(`UPDATE organizations SET student_seats = MAX(
     COALESCE((SELECT SUM(MAX(0, student_seats)) FROM billing_packages WHERE org_id=organizations.id),0),
     (SELECT COUNT(*) FROM users WHERE org_id=organizations.id AND role='STUDENT' AND deleted_at IS NULL)
@@ -1613,6 +1618,29 @@ export function row(sql, params = []) { return db.prepare(sql).get(...params); }
 export function count(sql, params = []) { return Number(row(sql, params).n || 0); }
 export function one(sql, params = []) { return db.prepare(sql).get(...params); }
 export function json(value) { return JSON.stringify(value ?? null); }
+
+/**
+ * 加列（幂等），并且**容忍并发启动**。
+ *
+ * 为什么不能只写 `if (不存在) ALTER`：多进程同时 import 本文件（它 import 时就跑一遍迁移）时，
+ * 「判断不存在」与「ALTER」之间会被另一个进程插进来（TOCTOU），后到的那次拿到
+ * `duplicate column name` 并**崩在启动路径上**。
+ * 2026-09-18 晚复现：同一条库路径起 4 个进程、跑 32 次，出现过 1 次 duplicate column name
+ * （`.tmp/verify-startup-race.mjs`）。
+ * ⚠️ **只有 `duplicate column name` 可以吞**（列已经在了正是我们要的结果）；别写成 `catch {}` ——
+ * 那会把真正的迁移失败一起吞掉，问题会变成"上线之后才发现少了一列/列不对"。
+ * 注意这不是"根治"：根本问题是**多个进程各自跑全量迁移**，真要根治得让启动迁移在跨进程上加一把锁、
+ * 只让一个进程迁移（见交接文档 §十.G）。这一步只是把其中一类崩法消掉。
+ */
+export function addColumnIfMissing(table, column, type) {
+  if (rows(`PRAGMA table_info(${table})`).some((item) => item.name === column)) return false;
+  try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); return true; }
+  catch (error) {
+    if (!/duplicate column name/i.test(String(error?.message || ''))) throw error;
+    // 另一个进程刚把它加上了：那就**不是"我加的"**，调用方那段一次性回填交给它跑。
+    return false;
+  }
+}
 export function parseJson(value, fallback = null) { if (value == null) return fallback; try { return JSON.parse(value); } catch { return fallback; } }
 export function transaction(fn) {
   db.exec('BEGIN IMMEDIATE');
