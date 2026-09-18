@@ -393,6 +393,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_curriculum_class_sort ON class_curriculum_
 
 -- 2026-09-13（课堂成为主对象）：class_sessions 就是「课堂」，自带课包/课时/负责老师，班级退场后它独立存在。
 -- 四态：PENDING（待上课，已创建未开始）/ ACTIVE（上课中）/ ENDED（已结束）/ DISSOLVED（已解散）。
+--
+-- ⚠️ 学生算力额度（2026-09-18 用户口径：6 套收敛成 1 套**按钱的**，见
+--    docs/operations/平台AI与CU配置-重梳理-20260918.md 的 Phase 6）：
+--      · student_cost_cap_fen（分）= **唯一保留、唯一真的会拦人**的那一套：
+--        每名学生在这场课堂上的**上游成本**上限，依据 compute_attempts.upstream_cost_fen；
+--        **NULL = 不限制**（留空就不管，只记账、只统计）；判定与文案见 services/sessionCostCap.js。
+--      · student_call_cap（次）= **已退役**（2026-09-18）。它数的是**次数不是钱**，
+--        已在代码里删除拦截与回显；这一列**不删**（老库有数据），也**不再被读写**。
+--      · session_credit_cap / consumed_credits_total = 更早的积分时代遗留，同样只留列不读写。
 CREATE TABLE IF NOT EXISTS class_sessions (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -1560,19 +1569,13 @@ db.exec(`INSERT OR IGNORE INTO platform_settings(id, created_at, updated_at) VAL
 for (const statement of ['ALTER TABLE course_series ADD COLUMN cu_limit INTEGER', 'ALTER TABLE course_lessons ADD COLUMN cu_limit INTEGER', 'ALTER TABLE generation_jobs ADD COLUMN cu_reservation_id TEXT']) {
   try { db.exec(statement); } catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 }
-db.exec(`CREATE TABLE IF NOT EXISTS student_course_cu_quotas (
- id TEXT PRIMARY KEY, org_id TEXT NOT NULL, student_id TEXT NOT NULL, grant_id TEXT, series_id TEXT NOT NULL, lesson_id TEXT NOT NULL,
- limit_cu INTEGER NOT NULL CHECK (limit_cu >= 0), reserved_cu INTEGER NOT NULL DEFAULT 0 CHECK (reserved_cu >= 0), settled_cu INTEGER NOT NULL DEFAULT 0 CHECK (settled_cu >= 0), warning_threshold_cu INTEGER,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(student_id, series_id, lesson_id),
- FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE, FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (lesson_id) REFERENCES course_lessons(id) ON DELETE CASCADE
-)`);
-db.exec(`CREATE TABLE IF NOT EXISTS student_course_cu_ledger (
- id TEXT PRIMARY KEY, quota_id TEXT NOT NULL, org_id TEXT NOT NULL, student_id TEXT NOT NULL, series_id TEXT NOT NULL, lesson_id TEXT NOT NULL, session_id TEXT, generation_job_id TEXT,
- idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK (state IN ('RESERVED','SETTLED','RELEASED','VOIDED')), reserved_cu INTEGER NOT NULL DEFAULT 0, settled_cu INTEGER NOT NULL DEFAULT 0, reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- FOREIGN KEY (quota_id) REFERENCES student_course_cu_quotas(id) ON DELETE CASCADE, FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE, FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
-)`);
-db.exec('CREATE INDEX IF NOT EXISTS idx_student_course_cu_quota_lookup ON student_course_cu_quotas(org_id, student_id, series_id, lesson_id)');
-db.exec('CREATE INDEX IF NOT EXISTS idx_student_course_cu_ledger_quota_state ON student_course_cu_ledger(quota_id, state)');
+// 2026-09-18（用户口径：学生算力上限 6 套收敛成 1 套按钱的）：**课包 CU 额度**那套整体退役 ——
+// `student_course_cu_quotas` / `student_course_cu_ledger` 两张表的 CREATE 已从这里删除，
+// 配套索引一并删掉（services/courseCuLedger.js 也已删除）。
+// ⚠️ **不写 DROP**：老库里的这两张表与数据原样保留（表还在、没人再读写），只是新库不再建。
+// 退役原因：写入方 `cu_limit` 全仓无人写 → 额度恒 UNLIMITED、两张表永远是空的（看着配了其实不生效）。
+// 上面那三列（course_series/course_lessons.cu_limit、generation_jobs.cu_reservation_id）同样属于这套，
+// 也保留列不删（老库有数据），但已无读取方。
 
 // Lightweight forward-compatible migration for user credit adjustment tracking.
 db.exec(`CREATE TABLE IF NOT EXISTS user_credit_adjustments (
@@ -1837,6 +1840,11 @@ catch (error) { if (!String(error?.message || '').includes('duplicate column nam
 try { db.exec('UPDATE class_sessions SET org_id=(SELECT owner.org_id FROM users owner WHERE owner.id = class_sessions.teacher_id) WHERE org_id IS NULL'); } catch (_) {}
 
 try { db.exec('ALTER TABLE class_sessions ADD COLUMN platform_budget_fen INTEGER CHECK (platform_budget_fen IS NULL OR platform_budget_fen >= 0)'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 学生算力上限（2026-09-18 唯一保留的那套，按**上游成本**，分；NULL = 不限制）。
+// 老库补列时**一律 NULL**（不填就不管）—— 绝不从 platform_budget_fen（整场基准）或已退役的
+// student_call_cap（次数）回填：回填等于凭空给老课堂加上一个会拦人的额度（用户口径要求不误伤）。
+try { db.exec('ALTER TABLE class_sessions ADD COLUMN student_cost_cap_fen INTEGER CHECK (student_cost_cap_fen IS NULL OR student_cost_cap_fen >= 0)'); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // 课堂表的索引统一在这里建：旧库要先重建出 created_at/teacher_id 才能建（写在基础 DDL 里会让老库初始化当场报错）
 db.exec('CREATE INDEX IF NOT EXISTS idx_class_sessions_status ON class_sessions(status, created_at DESC)');

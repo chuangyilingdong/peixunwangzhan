@@ -10,6 +10,7 @@ import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
 import { normalizePerStudentBudgetFen } from './helpers.js';
+import { courseComputeEstimate } from '../../services/courseEstimate.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
@@ -98,6 +99,17 @@ function singleAssignmentOrgId(body) {
   return directOrgId;
 }
 
+/**
+ * 平台端课包归一化入口：**只有平台端自己的读取面**才带「算力预估（分/人）」。
+ *
+ * 用户口径（2026-09-18）：算力预估是平台内部口径，官网/机构端/学生端一律不下发。
+ * lib.js 的 normalizeSeries 把该字段做成默认关闭的 `includeEstimatedCredits`，平台端在这里统一打开 ——
+ * 好处是「哪些响应带内部成本口径」在本文件里一眼可见，也不会因为漏改一个调用点而丢字段。
+ */
+function platformSeries(value, options = {}) {
+  return normalizeSeries(value, { includeEstimatedCredits: true, ...options });
+}
+
 function assignmentSnapshot(assignment) {
   if (!assignment) return null;
   const quotaTotal = Number(assignment.quota_total || 0);
@@ -138,7 +150,7 @@ export async function handleCourses(ctx, part, method) {
     if (visibilityWanted) { conditions.push('series.visibility=?'); params.push(visibilityWanted); }
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
     const total = Number(row('SELECT COUNT(*) n FROM course_series series' + where, params)?.n || 0);
-    const items = rows('SELECT series.* FROM course_series series' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map((item) => normalizeSeries(item));
+    const items = rows('SELECT series.* FROM course_series series' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map((item) => platformSeries(item));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/course-series' && method === 'POST') {
@@ -150,7 +162,7 @@ export async function handleCourses(ctx, part, method) {
     if (status !== 'DRAFT') throw errors.badRequest('新课包只能创建为草稿，请使用发布接口', 'COURSE_STATUS_ACTION_REQUIRED');
     const initialVersion = nonEmptyString(body.version ?? '1.0', '版本号', { max: 100 });
      const priceFen = integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000, fallback: 0 });
-     const estimatedCreditsPerPerson = integer(body.estimatedCreditsPerPerson, '预估积分/人', { min: 0, max: 1000000000, fallback: 0 });
+     const estimatedCreditsPerPerson = integer(body.estimatedCreditsPerPerson, '算力预估（分/人）', { min: 0, max: 1000000000, fallback: 0 });
      // 课包库存（可授权出去的次数池）；机构授权单上的额度从这里出
      const stockTotal = integer(body.stockTotal, '课包库存（次）', { min: 0, max: 100000000, fallback: 0 });
      // 算力池：**每个学生在这个课包上的总预算**（分）。留空 = 不限制、只记账。
@@ -213,7 +225,7 @@ export async function handleCourses(ctx, part, method) {
       [id('seriesver'), seriesId, initialVersion, '初始版本', 'ARCHIVED', auth.user.id, now, null]);
     });
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
   // 更新发布：版本号由人填（不再自动 +0.1），同时记一条版本历史。
   // 读模型仍是「当前内容」，所以发布后已授权机构与官网自然一起更新。
@@ -265,7 +277,10 @@ export async function handleCourses(ctx, part, method) {
     const lastLessonAt = row('SELECT MAX(updated_at) AS t FROM course_lessons WHERE series_id=?', [series.id])?.t || null;
     const lastChangeAt = [series.updated_at, lastLessonAt].filter(Boolean).sort().pop() || series.updated_at;
     const hasUnpublishedChanges = lastVersionAt ? String(lastChangeAt) > String(lastVersionAt) : true;
-    return { series: normalizeSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage, versions, hasUnpublishedChanges, lastChangeAt, lastVersionAt };
+    // 「算力预估 vs 实际」：挂在详情返回里（而不是新增端点）—— 面板就在这一页，一次请求拿全，
+    // 也保证预估值与实际值来自同一时刻；service 是纯只读的聚合，见 services/courseEstimate.js。
+    const computeEstimate = courseComputeEstimate(series.id);
+    return { series: platformSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage, versions, hasUnpublishedChanges, lastChangeAt, lastVersionAt, computeEstimate };
   }
 
   let seriesEditMatch = part.match(/^\/course-series\/([^/]+)$/);
@@ -284,7 +299,7 @@ export async function handleCourses(ctx, part, method) {
     const coverAssetId = body.coverAssetId === undefined ? series.cover_asset_id : (body.coverAssetId ? String(body.coverAssetId).trim() : null);
     if (coverAssetId && !coverAssetId.startsWith('file_')) throw errors.badRequest('封面资源 ID 格式无效', 'INVALID_COVER_ASSET_ID');
      const priceFen = body.priceFen === undefined ? Number(series.price_fen || 0) : integer(body.priceFen, '课程包价格（分）', { min: 0, max: 1000000000 });
-     const estimatedCreditsPerPerson = body.estimatedCreditsPerPerson === undefined ? Number(series.estimated_credits_per_person || 0) : integer(body.estimatedCreditsPerPerson, '预估积分/人', { min: 0, max: 1000000000 });
+     const estimatedCreditsPerPerson = body.estimatedCreditsPerPerson === undefined ? Number(series.estimated_credits_per_person || 0) : integer(body.estimatedCreditsPerPerson, '算力预估（分/人）', { min: 0, max: 1000000000 });
      const gradeRange = body.gradeRange === undefined ? (series.grade_range || '') : String(body.gradeRange || '').trim().slice(0, 100);
      const stockTotal = body.stockTotal === undefined ? Number(series.stock_total || 0) : integer(body.stockTotal, '课包库存（次）', { min: 0, max: 100000000 });
      // 算力池：每学生在这个课包上的总预算（分）；显式传 null 表示「清空 = 不限制」
@@ -314,12 +329,12 @@ export async function handleCourses(ctx, part, method) {
         tags = undefined;
       }
     }
-    const before = normalizeSeries(series);
+    const before = platformSeries(series);
     const deliveryMode = body.deliveryMode === undefined ? undefined : normalizeDeliveryMode(body.deliveryMode);
      q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,per_student_budget_fen=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, seriesPerStudentBudgetFen, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
-    const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
+    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   // 删除平台课包：仅当没有任何班级/课单/课堂/作品引用时才允许，否则引导改用「下架」。
@@ -337,7 +352,7 @@ export async function handleCourses(ctx, part, method) {
     if (blocked) {
       throw errors.badRequest(`该课包已被引用（班级 ${refs.classes} 处、课单 ${refs.curriculumItems} 处、课堂 ${refs.sessions} 场、作品 ${refs.works} 件），不能删除；请改用「下架」`, 'COURSE_SERIES_IN_USE');
     }
-    const before = normalizeSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    const before = platformSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true });
     transaction(() => {
       q('DELETE FROM course_assignments WHERE series_id=?', [series.id]);
       q('DELETE FROM course_series WHERE id=?', [series.id]);
@@ -359,13 +374,13 @@ export async function handleCourses(ctx, part, method) {
     const transition = transitions[action];
     if (!transition) throw errors.badRequest('无效的课包状态操作', 'INVALID_COURSE_STATUS_ACTION');
     assertTransition(ctx, 'courseSeries', series.status, transition.to, {
-      targetType: 'COURSE_SERIES', targetId: series.id, before: normalizeSeries(series),
+      targetType: 'COURSE_SERIES', targetId: series.id, before: platformSeries(series),
       allowedFrom: transition.from, code: 'INVALID_COURSE_STATUS_TRANSITION',
       message: '当前状态 ' + series.status + ' 不允许执行 ' + action, details: { action },
     });
     if (transition.requireLessons && series.published_content) throw errors.badRequest('重新发布请通过版本发布填写新版本号', 'COURSE_VERSION_ACTION_REQUIRED');
     if (transition.requireLessons) validateSeriesForPublishing(series.id);
-    const before = normalizeSeries(series);
+    const before = platformSeries(series);
     const now = nowIso();
     transaction(() => {
       q('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, now, series.id]);
@@ -374,7 +389,7 @@ export async function handleCourses(ctx, part, method) {
         q("UPDATE course_series_versions SET status='PUBLISHED',published_at=? WHERE series_id=? AND version=?", [now, series.id, series.version]);
       }
     });
-    const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
+    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
     audit(ctx, transition.auditAction, 'COURSE_SERIES', series.id, { status: before.status }, { action, status: after.status });
     return after;
   }
@@ -411,7 +426,7 @@ export async function handleCourses(ctx, part, method) {
     });
     });
     audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   let seriesReorderMatch = part.match(/^\/course-series\/([^/]+)\/lessons\/reorder$/);
@@ -437,7 +452,7 @@ export async function handleCourses(ctx, part, method) {
       q('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
     });
     audit(ctx, 'COURSE_LESSON_REORDER', 'COURSE_SERIES', series.id, null, { lessonIds: requested });
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   let seriesRevokeMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/revoke$/);
@@ -494,7 +509,7 @@ export async function handleCourses(ctx, part, method) {
     if (body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content) {
       audit(ctx, 'COURSE_LESSON_CONTENT_UPDATE', 'COURSE_LESSON', lesson.id, { lessonContent: lesson.lesson_content }, { lessonContent });
     }
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   if (lessonEditMatch && method === 'DELETE') {
@@ -514,7 +529,7 @@ export async function handleCourses(ctx, part, method) {
       q('UPDATE course_series SET updated_at=? WHERE id=?', [now, lesson.series_id]);
     });
     audit(ctx, 'COURSE_LESSON_DELETE', 'COURSE_LESSON', lesson.id, { title: lesson.title }, { deleted: true, resequenced: true }, {});
-    return normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
   match = part.match(/^\/course-series\/([^/]+)\/assignments$/);
   if (match && method === 'POST') {
@@ -671,7 +686,7 @@ export async function handleCourses(ctx, part, method) {
        LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     ).map((item) => {
-      const normalized = normalizeSeries(item, { parseTags: true });
+      const normalized = platformSeries(item, { parseTags: true });
       return {
         id: normalized.id,
         title: normalized.title,
@@ -694,7 +709,7 @@ export async function handleCourses(ctx, part, method) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
     if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    const detail = normalizeSeries(series, { includeLessons: true, includeAllLessons: true, parseTags: true, includeTeaching: true });
+    const detail = platformSeries(series, { includeLessons: true, includeAllLessons: true, parseTags: true, includeTeaching: true });
     return {
       ...detail,
       marketplaceStatus: detail.marketplaceStatus,
@@ -712,9 +727,9 @@ export async function handleCourses(ctx, part, method) {
     const newStatus = body.marketplaceStatus === undefined ? series.marketplace_status : body.marketplaceStatus;
     if (!['PENDING', 'APPROVED', 'REJECTED', 'NONE'].includes(newStatus)) throw errors.badRequest('应用市场状态无效', 'INVALID_MARKETPLACE_STATUS');
     const newCredits = body.marketplaceRewardCredits === undefined ? Number(series.marketplace_reward_credits || 0) : integer(body.marketplaceRewardCredits, '积分激励', { min: 0, max: 999999 });
-    const before = normalizeSeries(series, { parseTags: true });
+    const before = platformSeries(series, { parseTags: true });
     q('UPDATE course_series SET marketplace_status=?,marketplace_reward_credits=?,updated_at=? WHERE id=?', [newStatus, newCredits, nowIso(), series.id]);
-    const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
+    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
     audit(ctx, 'COURSE_SERIES_MARKETPLACE_UPDATE', 'COURSE_SERIES', series.id, { marketplaceStatus: before.marketplaceStatus, marketplaceRewardCredits: before.marketplaceRewardCredits }, { marketplaceStatus: after.marketplaceStatus, marketplaceRewardCredits: after.marketplaceRewardCredits });
     return after;
   }
@@ -727,9 +742,9 @@ export async function handleCourses(ctx, part, method) {
     if (series.status !== 'PUBLISHED') throw errors.badRequest('仅已发布课包可调整积分激励', 'COURSE_NOT_PUBLISHED');
     const body = ctx.body || {};
     const newCredits = integer(body.marketplaceRewardCredits, '积分激励', { min: 0, max: 999999 });
-    const before = normalizeSeries(series, { parseTags: true });
+    const before = platformSeries(series, { parseTags: true });
     q('UPDATE course_series SET marketplace_reward_credits=?,updated_at=? WHERE id=?', [newCredits, nowIso(), series.id]);
-    const after = normalizeSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
+    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
     audit(ctx, 'COURSE_SERIES_MARKETPLACE_REWARD_UPDATE', 'COURSE_SERIES', series.id, { marketplaceRewardCredits: before.marketplaceRewardCredits }, { marketplaceRewardCredits: after.marketplaceRewardCredits });
     return after;
   }

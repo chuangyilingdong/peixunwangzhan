@@ -850,7 +850,18 @@ export function syncAssignmentExpiryForOrg(orgId, expiresAt = null) {
   return q("UPDATE course_assignments SET expires_at=? WHERE org_id=? AND status='ACTIVE'", [expiresAt, String(orgId || '')]);
 }
 
-export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false } = {}) {
+/**
+ * 课包归一化。
+ *
+ * `includeEstimatedCredits`（2026-09-18 用户口径：算力预估是**平台内部口径**，只有平台自己能看）：
+ * 这个字段默认**不下发** —— 它落在 `estimated_credits_per_person` 列里，单位是**分/人**
+ * （与成本账一致，不再是「积分」）。官网公开接口（`/api/public/course-series*`）、机构端、学生端
+ * 都在这里读同一份归一化，所以把开关做成**默认关闭、平台端显式打开**：
+ *   · 平台端读取面（平台课包详情/列表/写入回执）→ `includeEstimatedCredits: true`（见 admin/courses.js）；
+ *   · 其它所有调用方（公开/机构/学生）→ 什么都不用改，自动不带这个内部成本字段。
+ * 反过来做（默认带、公开侧逐个剥）漏一个调用点就是一个对外泄漏，而且加新公开端点的人不会记得剥。
+ */
+export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false, includeEstimatedCredits = false } = {}) {
   // 课包字段同样支持草稿隔离：机构端/学生端/官网读「更新发布」时的快照
   const seriesSnapshot = asPublished ? publishedSnapshotOf(value) : null;
   const snapPick = (key, fallback) => (seriesSnapshot && seriesSnapshot[key] !== undefined ? seriesSnapshot[key] : fallback);
@@ -872,7 +883,10 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     coverAssetId: snapPick('coverAssetId', value.cover_asset_id || null),
     priceFen: Number(snapPick('priceFen', value.price_fen) || 0),
     validityDays: Number(value.validity_days || 0),
-    estimatedCreditsPerPerson: Number(value.estimated_credits_per_person || 0),
+    // 算力预估（分/人）：**平台内部口径**，只有平台端读取面（includeEstimatedCredits）才下发。
+    // 不放进公开面是用户口径（2026-09-18）；平台端的「预估 vs 实际」对比读它在
+    // admin/course-series/:id/detail 的 computeEstimate（services/courseEstimate.js）。
+    ...(includeEstimatedCredits ? { estimatedCreditsPerPerson: Number(value.estimated_credits_per_person || 0) } : {}),
     gradeRange: value.grade_range || '',
     ownerType: value.owner_type,
     orgId: value.org_id || null,
@@ -885,11 +899,17 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     marketplaceStatus: value.marketplace_status,
     marketplaceRewardCredits: Number(value.marketplace_reward_credits || 0),
     // 算力池：**每个学生在这个课包上的总预算**（分，5000 = 50 元）；留空 = 不限制、只记账。
-    // 四种模态（对话 / 图片 / 视频 / 音乐）共用这一个池子，闸门在应用侧（services/computePool.js）。
-    perStudentBudgetFen: (() => {
-      const raw = snapPick('perStudentBudgetFen', value.per_student_budget_fen);
-      return raw === null || raw === undefined ? null : Number(raw);
-    })(),
+    // ⚠️ 2026-09-18：这条注释原来说"闸门在应用侧（services/computePool.js）"——**那个池子闸门已退役**
+    //    （恒 unlimited 的兼容桩与空壳断言都删了；学生额度改成"只留一套按钱的"课堂上限，
+    //    见 services/sessionCostCap.js）。这个字段现在是**平台端的参考值**，没有闸门在读它。
+    // ⚠️ 它属于**平台内部成本口径**（同 estimatedCreditsPerPerson），所以跟它一起只发给平台端读取面：
+    //    公开面 / 机构端 / 学生端都不该看到（用户口径：算力预估与预算是内部展示，只有平台自己能看）。
+    ...(includeEstimatedCredits ? {
+      perStudentBudgetFen: (() => {
+        const raw = snapPick('perStudentBudgetFen', value.per_student_budget_fen);
+        return raw === null || raw === undefined ? null : Number(raw);
+      })(),
+    } : {}),
     // P5-W05 课程资料核验字段
     difficultyLevel: snapPick('difficultyLevel', value.difficulty_level != null ? Number(value.difficulty_level) : null),
     ageRangeMin: value.age_range_min != null ? Number(value.age_range_min) : null,
@@ -937,7 +957,12 @@ export function normalizeSession(value) {
     studentCount: value.student_count === undefined ? undefined : Number(value.student_count || 0),
     // 2026-09-13（P4 删积分）：sessionCreditCap / consumedCreditsTotal 不再对外返回
     aiPaused: !!value.ai_paused,
-    studentCallCap: value.student_call_cap === null || value.student_call_cap === undefined ? null : Number(value.student_call_cap),
+    // 2026-09-18（用户口径：学生算力上限 6 套收敛成 1 套**按钱的**）：
+    // `studentCallCap`（按**次数**的课堂上限）已**退役**，不再对外返回 —— 免得前端或别的读取方
+    // 继续展示一个「看着配了、其实早就没人拦」的数（次数本来也不是钱）。
+    // 唯一那套改成 `studentCostCapFen`（分，NULL = 不限制），判定与文案见 services/sessionCostCap.js；
+    // 列 `class_sessions.student_call_cap` 保留（老库有数据）但已无读写方。
+    studentCostCapFen: value.student_cost_cap_fen === null || value.student_cost_cap_fen === undefined ? null : Number(value.student_cost_cap_fen),
     capabilities: {
       allowText: value.allow_text === undefined ? true : !!value.allow_text,
       allowImage: !!value.allow_image,

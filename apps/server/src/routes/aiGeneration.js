@@ -10,9 +10,13 @@ import { recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
-import { reserveCourseCu, settleCourseCu, releaseCourseCu } from '../services/courseCuLedger.js';
+// 2026-09-18（用户口径）：`services/courseCuLedger.js` 已**整体删除** —— 那套课包 CU 额度
+// （`reserveCourseCu/settleCourseCu/releaseCourseCu`）的 `cu_limit` 全仓无人写，恒 `UNLIMITED`、
+// 两张 `student_course_cu_*` 表永远是空的。学生的算力上限现在只有一套**按钱的**：
+// `services/sessionCostCap.js`（每学生 × 每场课堂，依据上游成本，见该文件的完整口径说明）。
+import { assertSessionCostCap, sessionCostCapStatus, sessionCostCapMessage } from '../services/sessionCostCap.js';
 
-/** 项目归属的课包 id（算力池的键）。失败路径上没有 context，所以这里按课时回查一次。 */
+/** 项目归属的课包 id（报表分组用）。失败路径上没有 context，所以这里按课时回查一次。 */
 function seriesIdOf(project) {
   if (!project?.course_lesson_id) return null;
   return row('SELECT series_id FROM course_lessons WHERE id=?', [project.course_lesson_id])?.series_id || null;
@@ -27,7 +31,10 @@ const MODALITY_LABELS = {
 const isQuotaExhausted = (code) => String(code || '') === PROVIDER_ERROR_CODES.QUOTA_EXHAUSTED;
 const SESSION_CAPABILITY_BY_MODALITY = { IMAGE: 'allowImage', MUSIC: 'allowMusic', VIDEO: 'allowVideo' };
 const LESSON_CAPABILITY_BY_MODALITY = { TEXT: 'text', IMAGE: 'image', VIDEO: 'video', MUSIC: 'music' };
-const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_CALL_CAP', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
+// 业务侧「拦在调用前」的错误码：这些不是上游故障，是课堂/额度政策，记 BLOCKED 不是 FAILED。
+// 2026-09-18：`SESSION_STUDENT_CALL_CAP`（按**次数**的课堂上限）已退役，换成按钱的
+// `SESSION_STUDENT_COST_CAP_EXHAUSTED`（见 services/sessionCostCap.js）。
+const BLOCKED_ERROR_CODES = new Set(['SESSION_AI_PAUSED', 'SESSION_CAPABILITY_DISABLED', 'SESSION_STUDENT_COST_CAP_EXHAUSTED', 'GENERATION_FIRST_FRAME_REQUIRED', 'MODALITY_DISABLED']);
 const GENERATION_PAGE_SIZE = 20;
 const asyncGenerationQueue = [];
 let asyncGenerationWorkerRunning = false;
@@ -143,6 +150,12 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
 export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null, model = '', units = 1 }) {
   assertCapability(modality, context.activeSession);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id });
+  // 学生算力上限（**唯一保留的一套，按钱的**，2026-09-18 用户口径）：这堂课这名学生
+  // 已花的**已知上游成本** ≥ 本课堂配的上限就拦。四种模态都被它管住（视频/音乐走不到网关，
+  // 只有这里拦得到）。留空 = 不限制（老课堂的 student_cost_cap_fen 是 NULL，不会被误伤）。
+  // ⚠️ 只在**调用前**拦：结算时（settleSuccessfulJob）这次调用的成本已经落库了，
+  //    那时再拦会把一次已产出素材、已经花掉上游钱的调用判成失败（学生白花钱还拿不到东西）。
+  assertSessionCostCap({ sessionId: context.activeSession?.id || null, studentId: user.id, orgId });
   // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
   if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
@@ -156,8 +169,6 @@ export function assertGenerationPreflight({ user, orgId, context, modality, proj
   if (frameCheck && String(modality || '').toUpperCase() === 'VIDEO') assertVideoFrames(frameCheck);
   // 框体占用同样属于业务拦截：入队前就能判断，不必等结算
   if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
-  // 算力池（学生 × 课包，四种模态共用一个池子）—— 这一条对**每一种模态**都生效，
-  // 所以视频/音乐也被它管住（它们走不到网关，只有这里能拦）。
 }
 
 function normalizeAsset(value) {
@@ -374,8 +385,9 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
   const failMessage = normalized.message || error?.message || '素材生成失败';
   const failAt = nowIso();
   transaction(() => {
-    const reservationId = row('SELECT cu_reservation_id FROM generation_jobs WHERE id=?', [jobId])?.cu_reservation_id;
-    if (reservationId) releaseCourseCu({ id: reservationId, reason: failCode, inTransaction: true });
+    // 2026-09-18：这里原来要 releaseCourseCu 释放课包 CU 预留（那套已整体删除，恒 UNLIMITED、
+    // 从没真的预留过任何东西）。现在失败路径不需要回滚任何额度：按钱的那套是**调用前准入**，
+    // 不做预留，也就不存在"失败要退"的问题。
     const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (currentJob) assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE id=?",
@@ -635,15 +647,11 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
   });
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
-  const reservation = reserveCourseCu({ orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, seriesId: seriesIdOf(project), lessonId: project.course_lesson_id, sessionId: project.class_session_id || null, generationJobId: jobId, idempotencyKey: `generation:${jobId}` });
-  if (reservation?.id) q('UPDATE generation_jobs SET cu_reservation_id=? WHERE id=?', [reservation.id, jobId]);
   try {
     const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
-    const reservationId = row('SELECT cu_reservation_id FROM generation_jobs WHERE id=?', [jobId])?.cu_reservation_id;
-    if (reservationId) settleCourseCu({ id: reservationId });
     audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
     const job = jobDetail(jobId);
     return { job, assets: job.assets };
@@ -720,8 +728,6 @@ async function processAsyncGeneration(item) {
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
-    const reservationId = row('SELECT cu_reservation_id FROM generation_jobs WHERE id=?', [jobId])?.cu_reservation_id;
-    if (reservationId) settleCourseCu({ id: reservationId });
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
   } catch (error) {
     markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
@@ -819,12 +825,16 @@ function activeAiSessions(user) {
      ORDER BY session.started_at DESC`, [user.id, user.org_id]);
 }
 
-function normalizeAiSession(value) {
+function normalizeAiSession(value, { costCap = null } = {}) {
   if (!value) return null;
   return {
     id: value.id, classId: value.class_id, lessonId: value.lesson_id || null, lessonTitle: value.lesson_title || null,
     status: value.status, aiPaused: !!value.ai_paused,
-    studentCallCap: value.student_call_cap === null || value.student_call_cap === undefined ? null : Number(value.student_call_cap),
+    // 2026-09-18（用户口径）：`student_call_cap`（按**次数**的上限）已退役，不再回显 ——
+    // 免得学生端/老师端看到「还剩 3 次」这种与钱无关、且现在**根本不生效**的旧数。
+    // 学生在这堂课的额度改看下面 `costCap`（按上游成本，唯一会拦人的那套）。
+    studentCallCap: null,
+    costCap,
     capabilities: {
       allowText: value.allow_text === undefined ? true : !!value.allow_text,
       allowImage: !!value.allow_image, allowMusic: !!value.allow_music, allowVideo: !!value.allow_video,
@@ -837,7 +847,11 @@ function normalizeAiSession(value) {
 function studentAiCenter(ctx) {
   const auth = ctx.auth;
   const rawUser = auth.rawUser;
-  const activeSessions = activeAiSessions(rawUser).map(normalizeAiSession);
+  const orgId = (auth.session?.org_id || auth.user.orgId);
+  // 每个进行中的课堂都带上「这堂课我还能花多少」（唯一那套按钱的额度；留空 = 不限制）。
+  const activeSessions = activeAiSessions(rawUser).map((value) => normalizeAiSession(value, {
+    costCap: sessionCostCapStatus({ sessionId: value.id, studentId: auth.user.id }),
+  }));
   const session = activeSessions[0] || null;
   const capabilities = AI_MODALITIES.map((modality) => {
     const capability = SESSION_CAPABILITY_BY_MODALITY[modality];
@@ -847,13 +861,12 @@ function studentAiCenter(ctx) {
     // 套餐未开通该能力）一并删掉 —— 学生看到「套餐」两个字已无从处理，只会来问。
     if (session?.aiPaused) reasons.push('教师已暂停课堂 AI');
     else if (!sessionEnabled) reasons.push('当前课堂未开放');
-    if (session?.studentCallCap !== null && session?.studentCallCap !== undefined) {
-      const usedCalls = count("SELECT COUNT(*) n FROM usage_records WHERE org_id = ? AND class_session_id = ? AND user_id = ? AND status IN ('SUCCESS','FAILED')",
-        [(auth.session?.org_id || auth.user.orgId), session.id, auth.user.id]);
-      if (usedCalls >= Number(session.studentCallCap)) reasons.push('本课堂调用次数已达上限');
-    }
+    // 2026-09-18（用户口径）：这里原来是「本课堂 AI 调用**次数**已达上限」——
+    // 已退役（次数不是钱）。改成唯一那套按钱的：达到本课堂配的**上游成本**上限就报，
+    // 文案与真正拦截时的 403 文案**同一份**（同一个函数生成，不各写一句）。
+    if (session?.costCap?.exceeded) reasons.push(sessionCostCapMessage(session.costCap));
     // 2026-09-13（P4 删积分）：不再有「课堂用量上限 / 个人额度」两条拒绝理由 ——
-    // 额度看算力池（学生 × 课包），那道闸门在调用前拦，这里不重复报。
+    // 额度只有 sessionCostCap 这一套，且它在**调用前**拦，这里只说状态、不重复拦。
     // 2026-09-13：取消「在家练习」免课堂通道 —— **有许可只代表能看课包信息**，
     // 要进操作环境必须被老师加进课堂、且课堂正在进行。所以这里只看有没有进行中的课堂，
     // 不再看 student_usage_scope（那个字段已退役，见 orgAdmin 建号那段的说明）。
@@ -861,12 +874,13 @@ function studentAiCenter(ctx) {
     if (scopeBlocked) reasons.push('等老师把你加进课堂并点「开始上课」');
     return {
       modality, label: MODALITY_LABELS[modality], sessionEnabled,
-      available: sessionEnabled && !session?.aiPaused && !scopeBlocked,
+      // 额度用尽也算「不可用」，理由里已经写明还剩多少、上限多少、有几笔成本未知。
+      available: sessionEnabled && !session?.aiPaused && !scopeBlocked && !session?.costCap?.exceeded,
       reasons,
     };
   });
   const jobs = {
-    total: count('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    total: count('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, orgId]),
     succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     // 同上：对外售价口径（2026-09-15），不读 usage_records.cost_fen。
@@ -966,8 +980,6 @@ export async function handleAiGeneration(ctx) {
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
     });
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
-    const reservation = reserveCourseCu({ orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, seriesId: seriesIdOf(project), lessonId: project.course_lesson_id, sessionId: project.class_session_id || null, generationJobId: jobId, idempotencyKey: `generation:${jobId}` });
-    if (reservation?.id) q('UPDATE generation_jobs SET cu_reservation_id=? WHERE id=?', [reservation.id, jobId]);
     enqueuePersistedJob(jobId);
     return { job: jobDetail(jobId), queued: true };
   }
@@ -976,9 +988,8 @@ export async function handleAiGeneration(ctx) {
     const jobId = decodeURIComponent(cancelMatch[1]); const job = row('SELECT * FROM generation_jobs WHERE id=? AND user_id=? AND org_id=?', [jobId, auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
     if (!job) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
     if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
+    // 2026-09-18：取消不再需要释放任何额度（课包 CU 预留那套已删；按钱的那套是准入判断、不预留）。
     q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);
-    const reservationId = job.cu_reservation_id;
-    if (reservationId) releaseCourseCu({ id: reservationId, reason: 'GENERATION_CANCELLED' });
     return jobDetail(jobId, { requireAuth: auth });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);

@@ -58,7 +58,10 @@ try {
   const created = check(await api('org/sessions', teacher, 'POST', { lessonId: first.id, title: 'detail test' }));
   const route = `org/sessions/${created.id}`;
   const snapshot = () => db.prepare('SELECT * FROM class_sessions WHERE id=?').get(created.id);
-  db.prepare('UPDATE class_sessions SET platform_budget_fen=4321,student_call_cap=7,ai_paused=1 WHERE id=?').run(created.id);
+  // 2026-09-18：学生算力上限收敛成唯一那套**按钱的** —— 断言的目标列从已退役的
+  // `student_call_cap`（**次数**）换成 `student_cost_cap_fen`（**分**）。
+  // 这是口径变更，不是测试漂移：老列已无读写方，钉它等于钉一个死字段。
+  db.prepare('UPDATE class_sessions SET platform_budget_fen=4321,student_cost_cap_fen=700,ai_paused=1 WHERE id=?').run(created.id);
   const before = snapshot();
   check(await api(route, teacher, 'PUT', { title: 'renamed' }));
   const after = snapshot();
@@ -77,7 +80,8 @@ try {
   assert.equal(part.status, 'REMOVED');
   assert.equal(part.lesson_id, first.id);
   assert.equal(snapshot().ai_paused, 0);
-  assert.equal(snapshot().student_call_cap, null);
+  // 换课 → 学生算力上限清空（口径：留空 = 不限制，绝不用老课的额度顶替新课堂）
+  assert.equal(snapshot().student_cost_cap_fen, null);
   assert.equal(snapshot().platform_budget_fen, 9876);
   assert.equal(snapshot().delivery_mode, 'VIBECODING');
   check(await api(route, teacher, 'PUT', { deliveryMode: 'CANVAS' }));

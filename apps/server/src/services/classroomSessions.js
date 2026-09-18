@@ -10,7 +10,8 @@
 //   ② 未结束的参与（待上课/上课中）也不允许被别的课堂同时占用；
 //   ③ 被移除 = 解锁（可以再被其他课堂加）。
 import { errors, id, nowIso, q, row, rows, transaction } from '../lib.js';
-import { computePoolSummary, salePriceFenFor } from './computePool.js';
+import { salePriceFenFor } from './computePool.js';
+import { sessionCostUsageByStudent, sessionCostCapState, studentCostCapFen } from './sessionCostCap.js';
 
 /** 写操作仅课堂负责人可执行；机构管理员对其他课堂只读。 */
 export function assertSessionManager(auth, session) {
@@ -99,12 +100,15 @@ export function sessionCandidates(session) {
   const blocked = [];
   const alreadyIn = [];
   for (const student of students) {
-    // 算力池摘要挂在**每一条**候选上（可加 / 不可加 / 已在这节课上）——
-    // 老师挑人时要能看出「谁快用完了」，而这个人可能正好因为别的原因暂时不可加。
-    // 口径与学生端同一个 computePoolSummary（不是另算一个数）。
+    // 额度摘要挂在**每一条**候选上（可加 / 不可加 / 已在这节课上）——
+    // 老师挑人时要能看出「这场课堂给每个学生多少算力、他在这堂课上已经花了多少」，
+    // 而这个人可能正好因为别的原因暂时不可加。
+    // 2026-09-18（用户口径）：口径从「按课包的池子」换成**唯一那套按钱的**
+    // （每学生 × 本场课堂的上游成本上限，见 services/sessionCostCap.js）——
+    // 原来的池子那套恒 `unlimited`，「不限」是一句永远为真的废话。
     const base = {
       id: student.id, login: student.login, name: student.display_name || student.login, accountStatus: student.status,
-      ...candidatePool(student.id, session.series_id, session.series_title),
+      ...candidateCostCap(session, student.id),
     };
     const own = row(
       'SELECT status FROM session_students WHERE session_id=? AND student_id=? AND status<>\'REMOVED\'',
@@ -137,15 +141,28 @@ export function sessionCandidates(session) {
   return { selectable, blocked, alreadyIn };
 }
 
-/** 候选人的算力池摘要（老师端口径）。没有课包/没填预算 → unlimited。 */
-function candidatePool(studentId, seriesId, seriesTitle) {
-  if (!seriesId) return { poolUnlimited: true, poolCapYuan: null, poolRemainYuan: null, poolPercent: null };
-  const pool = computePoolSummary({ userId: studentId, seriesId, seriesTitle });
+/**
+ * 候选人的算力额度摘要（老师端口径）—— 现在读**唯一那套按钱的**：本场课堂每学生上限
+ * （`class_sessions.student_cost_cap_fen`，留空 = 不限制）+ ta 在这堂课已花的上游成本。
+ *
+ * 键名（`poolUnlimited` / `poolCapYuan` / `poolUsedYuan` / `poolRemainYuan` / `poolPercent`）
+ * **保持不变**：机构端「添加学生」页整列在渲染它们，而且这些键的语义本来就是
+ * 「这个学生在这里还剩多少」—— 变的是**数据源**（从恒 unlimited 的死池子换成会拦人的按钱额度），
+ * 不再是「恒说一句不限」。
+ * ⚠️ 键名里的 `Yuan` 是历史命名，**值一律是「分」**（与全仓 `formatYuan(fen)` 的入参口径一致）。
+ */
+function candidateCostCap(session, studentId) {
+  const capFen = session?.id ? studentCostCapFen(session.id) : null;
+  const usage = session?.id ? sessionCostUsageByStudent(session.id).get(studentId) : null;
+  const status = sessionCostCapState({ capFen, usedFen: usage?.usedFen || 0, unknownCalls: usage?.unknownCalls || 0 });
   return {
-    poolUnlimited: pool.unlimited,
-    poolCapYuan: pool.capYuan,
-    poolRemainYuan: pool.remainYuan,
-    poolPercent: pool.usagePercent,
+    poolUnlimited: !status.configured,
+    poolCapYuan: status.capFen,
+    // 「已用」是这名学生**在这场课堂**上已确认的上游成本（他还没进课堂时恒为 0，这是如实值）。
+    poolUsedYuan: status.usedFen,
+    poolRemainYuan: status.remainFen,
+    poolPercent: status.usagePercent,
+    poolUnknownCalls: status.unknownCalls,
   };
 }
 
@@ -238,11 +255,27 @@ export function sessionRuntimeDetail(session, auth, students) {
     WHERE org_id=? AND class_session_id=? AND UPPER(model) NOT LIKE '%MOCK%'
     AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%'
     AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%'`, [session.org_id, session.id]);
+  // 学生算力额度（唯一那套**按钱的**）：每个学生在这堂课的上游成本 + 上限 + 还剩多少。
+  // 一次 group by 取全名单（不是每个学生打一次库），口径与拦截（sessionCostCap）同一份实现。
+  const costCapFen = studentCostCapFen(session.id);
+  const costUsage = sessionCostUsageByStudent(session.id);
+  const costCapFor = (studentId) => sessionCostCapState({
+    capFen: costCapFen,
+    usedFen: costUsage.get(studentId)?.usedFen || 0,
+    unknownCalls: costUsage.get(studentId)?.unknownCalls || 0,
+  });
   const aiFor = (studentId = null) => {
     const records = studentId ? usage.filter((item) => item.user_id === studentId) : usage;
+    // costCap = 老师端要看的「这堂课还剩多少额度 / 已用多少」（学生端读的是同一份状态）。
+    const costCap = studentId ? costCapFor(studentId) : sessionCostCapState({
+      capFen: costCapFen,
+      usedFen: [...costUsage.values()].reduce((total, item) => total + item.usedFen, 0),
+      unknownCalls: [...costUsage.values()].reduce((total, item) => total + item.unknownCalls, 0),
+    });
     return { successCount: records.filter((item) => item.status === 'SUCCESS').length,
       failedCount: records.filter((item) => item.status === 'FAILED').length,
       lastUsedAt: latest(records.map((item) => item.created_at)),
+      costCap,
       salePriceFen: salePriceFenFor({ orgId: session.org_id, sessionId: session.id, ...(studentId ? { studentId } : {}) }) };
   };
   const works = rows(`SELECT work.id,work.student_id,student.display_name student_name,work.title,work.status,
@@ -281,11 +314,14 @@ export function sessionRuntimeDetail(session, auth, students) {
   const pending = canManage && session.status === 'PENDING';
   const until = session.status === 'ACTIVE' ? asOf : session.ended_at;
   const duration = session.started_at && until ? Math.max(0, Math.floor((Date.parse(until) - Date.parse(session.started_at)) / 1000)) : null;
+  const sessionAi = aiFor();
   return { canManage, permissions: { canManage, canEdit: pending, canStart: pending, canEnd: canManage && session.status === 'ACTIVE', canDissolve: pending, canAddStudents: canManage, canRemoveStudents: pending },
     runtime: { asOf, startedAt: session.started_at || null, endedAt: session.ended_at || null,
       durationSeconds: Number.isFinite(duration) ? duration : null,
       lastActivityAt: latest([...usage.map((item) => item.created_at), ...activity.map((item) => item.activity_at), ...works.map((item) => item.submittedAt), ...events.map((item) => item.createdAt)]),
-      presence: 'unknown', presenceSource: 'NO_HEARTBEAT', ai: aiFor() }, students: enrichedStudents, works, events };
+      // costCap：本课堂的「每学生算力上限 + 整场已花」（配置列 class_sessions.student_cost_cap_fen，
+      // 留空 = configured:false = 不限制）。老师端由此显示「这堂课还剩多少额度 / 已用多少」。
+      presence: 'unknown', presenceSource: 'NO_HEARTBEAT', costCap: sessionAi.costCap, ai: sessionAi }, students: enrichedStudents, works, events };
 }
 
 export function normalizeSessionStudent(part) {

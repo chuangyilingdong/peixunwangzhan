@@ -11,6 +11,8 @@ import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
+import { resolveUnitPrice } from '../../services/upstreamCost.js';
+import { MEASURED_PRICE_RULES, measuredUnitPrices } from '../../services/measuredUnitPrices.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
 import { normalizeSubmission } from '../vibecoding.js';
@@ -83,6 +85,119 @@ import {
   workReportInReviewScope,
   workReportRows,
 } from './helpers.js';
+
+/* ── 实测单价（P92）：上游逐笔实扣 → 我们真实的单价，并与合同单价对照 ──────────────────────
+ *
+ * 用户口径（2026-09-18）：「每个模型我们能知道我们的成本价格」。上游没有价目表 API 可拉
+ * （能拉的只有模型清单），但**逐笔实扣我们已经在收**（compute_attempts.upstream_cost_fen，
+ * cost_source='REPORTED'），所以成本价以「实扣反推的实测单价」为主，价目表里的合同单价仍由人填、可覆盖。
+ *
+ * 数据源与算法在 services/measuredUnitPrices.js（那里只读账本，不解析配置、不写任何东西）。
+ * 这里只做两件事，都是**只读**的：
+ *   ① 把实测单价与该 (渠道, 模型, 模态) **当前的合同价**并排（用现成的 getAiProviderPolicy +
+ *      resolveUnitPrice 取值，不自己解析 ai_provider_policy）；
+ *   ② 算出偏差 deviationPercent，并给出「采纳为成本价」要写的那几个字段（suggestedUnitPrices）——
+ *      真正的写入由人在价目表上点按钮触发，走 PUT admin/billing-config/ai-provider（本端点永不写配置）。
+ *
+ * 偏差拿什么和实测比：**同一批样本、同一用量构成**下的合同价折算值。
+ *   TEXT 按实际的输入/输出 token 混比混价（合同价 × 本次混比），IMAGE 用每张价，
+ *   VIDEO 用每秒价（含音频样本再加音频加价），MUSIC 用每次价 —— 这样两边是同一个单位、可直接相减。
+ */
+function fenOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function measuredContractComparableUnitPrice({ modality, prices, units }) {
+  if (!prices) return null;
+  if (modality === 'TEXT') {
+    const inputFen = fenOrNull(prices.inputFenPer1MTokens);
+    const outputFen = fenOrNull(prices.outputFenPer1MTokens);
+    if (!(units.tokens > 0)) return null;
+    if (units.inputTokens > 0 && inputFen === null) return null;
+    if (units.outputTokens > 0 && outputFen === null) return null;
+    // 分/百万 token：(输入 token × 输入价 + 输出 token × 输出价) ÷ 总 token
+    return Math.round(((units.inputTokens * (inputFen ?? 0) + units.outputTokens * (outputFen ?? 0)) / units.tokens) * 100) / 100;
+  }
+  if (modality === 'IMAGE') return fenOrNull(prices.perImageFen);
+  if (modality === 'VIDEO') {
+    const perSecondFen = fenOrNull(prices.perSecondFen);
+    if (perSecondFen === null) return null;
+    if (units.audioSeconds > 0) {
+      const audioExtraFen = fenOrNull(prices.audioExtraPerSecondFen);
+      if (audioExtraFen === null) return null;
+      return Math.round(((units.seconds * perSecondFen + units.audioSeconds * audioExtraFen) / units.seconds) * 100) / 100;
+    }
+    return perSecondFen;
+  }
+  if (modality === 'MUSIC') return fenOrNull(prices.perCallFen);
+  return null;
+}
+
+/** 「采纳为成本价」要写进模型级合同单价的字段（**只算不写**，写入由人点按钮触发）。 */
+function measuredSuggestedUnitPrices({ item, contractPrices, contractComparable }) {
+  const measured = item.measuredUnitPrice;
+  if (measured === null || measured === undefined) return { prices: null, note: null };
+  if (item.modality === 'IMAGE') return { prices: { perImageFen: measured }, note: null };
+  if (item.modality === 'MUSIC') return { prices: { perCallFen: measured }, note: '音乐按次计价（契约里 MUSIC 的主价是每次价）。' };
+  if (item.modality === 'VIDEO') {
+    const audioExtraFen = fenOrNull(contractPrices?.audioExtraPerSecondFen);
+    if (item.units.audioSamples > 0 && audioExtraFen !== null && item.units.seconds > 0) {
+      // 含音频的样本里，音频加价那部分要从实扣里先扣掉，剩下的才是「基础每秒价」——
+      // 否则会把音频加价重复算进每秒价。已配的音频加价原样保留，本函数不动它。
+      const base = (item.totalCostFen - audioExtraFen * item.units.audioSeconds) / item.units.seconds;
+      if (!(base > 0)) return { prices: null, note: '实扣除掉音频加价后不为正，无法反推每秒价（检查音频加价是否填错）。' };
+      return { prices: { perSecondFen: Math.round(base) }, note: '含音频样本已按当前音频加价扣除，写入的是基础每秒价。' };
+    }
+    return { prices: { perSecondFen: measured }, note: item.units.audioSamples > 0 ? '样本含音频但没配音频加价，写入的是含音频的均价。' : null };
+  }
+  if (item.modality === 'TEXT') {
+    // 文本有两个 token 单价，实扣总额**拆不开**输入/输出。折中办法（并如实标注）：
+    // 保持合同价里输入:输出的比例，等比缩放到实测总额 —— 总额对了，比例仍是人填的那个。
+    const inputFen = fenOrNull(contractPrices?.inputFenPer1MTokens);
+    const outputFen = fenOrNull(contractPrices?.outputFenPer1MTokens);
+    if (inputFen === null || outputFen === null || !(contractComparable > 0)) {
+      return { prices: null, note: '文本有输入/输出两个 token 单价，单靠实扣总额拆不开。请先按上游价目表填一次输入/输出价，之后就能用实测总额等比校正。' };
+    }
+    const scale = measured / contractComparable;
+    return {
+      prices: { inputFenPer1MTokens: Math.round(inputFen * scale), outputFenPer1MTokens: Math.round(outputFen * scale) },
+      note: '文本按实测总额等比校正（输入:输出 比例保持合同价里的比例不变）。',
+    };
+  }
+  return { prices: null, note: null };
+}
+
+/** 把 service 的实测结果与该渠道当前合同价拼成端点返回体（只读）。 */
+function measuredUnitPriceItems(measured, policy) {
+  const channels = new Map((policy?.channels || []).map((channel) => [channel.id, channel]));
+  return measured.items.map((item) => {
+    const channel = channels.get(item.channelId) || null;
+    const resolved = channel
+      ? resolveUnitPrice({ unitPrices: channel.upstreamUnitPrices || null, modelUnitPrices: channel.modelUnitPrices || null, model: item.model, modality: item.modality })
+      : null;
+    const contractPrices = resolved?.price || null;
+    const comparable = contractPrices ? measuredContractComparableUnitPrice({ modality: item.modality, prices: contractPrices, units: item.units }) : null;
+    const deviationPercent = item.measuredUnitPrice !== null && comparable !== null && comparable > 0
+      ? Math.round(((item.measuredUnitPrice - comparable) / comparable) * 1000) / 10
+      : null;
+    const suggested = channel ? measuredSuggestedUnitPrices({ item, contractPrices, contractComparable: comparable }) : { prices: null, note: '这条渠道不在当前配置里，采纳会写到无主配置上，已禁用。' };
+    return {
+      ...item,
+      channelName: channel?.name || null,
+      contract: {
+        configured: Boolean(contractPrices),
+        channelConfigured: Boolean(channel),
+        level: resolved ? (resolved.modelPrice ? 'MODEL' : 'MODALITY') : null,
+        prices: contractPrices,
+        comparableUnitPrice: comparable,
+      },
+      deviationPercent,
+      suggestedUnitPrices: suggested.prices,
+      suggestNote: suggested.note,
+    };
+  });
+}
 
 export async function handleOverview(ctx, part, method) {
   if (part === '/billing/filter-options' && method === 'GET') {
@@ -206,6 +321,38 @@ export async function handleOverview(ctx, part, method) {
     clearGatewayRouteCache();
     audit(ctx, 'COMPUTE_GATEWAY_TOKEN_CREATE', 'PLATFORM_SETTING', 'compute_gateway', null, { name: String(ctx.body?.name || ''), budgetFen: Number(ctx.body?.budgetFen || 0), unlimited: ctx.body?.unlimited === true });
     return result;
+  }
+
+  /**
+   * 实测单价（P92）：按 (渠道 × 模型 × 模态) 用上游逐笔实扣反推我们的真实单价，
+   * 并带回该组合**当前的合同单价**与偏差（合同价 vs 实测价）。
+   *
+   * ⚠️ 只读端点：这里不写任何配置。「采纳为成本价」是人在价目表上点按钮、走
+   *    PUT /api/admin/billing-config/ai-provider 落库（那才是唯一的写路径）。
+   * 只统计上游逐笔回报的实扣（cost_source='REPORTED'），**不含**我们自己按合同价折算的（COMPUTED）——
+   * 把 COMPUTED 混进来就是拿自己的假设证明自己的假设，偏差永远为 0。被排除的笔数在 excluded 里列出来。
+   */
+  if (part === '/billing-config/measured-unit-prices' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
+    const measured = measuredUnitPrices({ days });
+    const items = measuredUnitPriceItems(measured, getAiProviderPolicy());
+    return {
+      days: measured.days, since: measured.since, until: measured.until,
+      minSamples: measured.minSamples, onlyCostSource: measured.onlyCostSource,
+      items,
+      excluded: measured.excluded,
+      summary: {
+        groups: items.length,
+        withPrice: items.filter((item) => item.measuredUnitPrice !== null).length,
+        insufficient: items.filter((item) => item.measuredUnitPrice === null).length,
+        contractUnconfigured: items.filter((item) => !item.contract.configured).length,
+        totalReportedCostFen: Math.round(items.reduce((total, item) => total + Number(item.totalCostFen || 0), 0)),
+        totalLedgerCostFen: items.reduce((total, item) => total + Number(item.ledgerCostFen || 0), 0),
+      },
+      rules: MEASURED_PRICE_RULES,
+      meta: measured.meta,
+    };
   }
 
   if (part === '/dashboard/overview' && method === 'GET') {

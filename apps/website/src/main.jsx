@@ -324,7 +324,6 @@ function MarketplaceDetail(){
         {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">版本</span><span>{d.version}</span></div>}
         <div className="mkt-detail-row"><span className="mkt-label2">课时</span><span>{d.lessonCount||0} 节</span></div>
         {d.priceFen>0&&<div className="mkt-detail-row"><span className="mkt-label2">参考价格</span><span className="mkt-price">¥ {(d.priceFen/100).toFixed(2)} <span className="mkt-price-note">（线下购买）</span></span></div>}
-        {d.estimatedCreditsPerPerson>0&&<div className="mkt-detail-row"><span className="mkt-label2">预估消耗</span><span className="mkt-credits">{d.estimatedCreditsPerPerson} 灵动值/人</span></div>}
         {d.marketplaceRewardCredits>0&&<div className="mkt-detail-row"><span className="mkt-label2">奖励</span><span className="mkt-credits">奖励 {d.marketplaceRewardCredits} 灵动值</span></div>}
       </div>
     </div>

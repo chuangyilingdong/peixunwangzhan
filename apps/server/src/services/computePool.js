@@ -1,4 +1,7 @@
-// 用户包算力；历史 cost_fen 仅历史售价，课堂平台预算只预警。
+// 算力单价与「对外售价观测」、以及课堂**整场**成本基准的预警（enforced 恒 false）。
+// 2026-09-18（用户口径）：**学生的算力上限只有一套，按钱的** —— services/sessionCostCap.js
+// （每学生 × 每场课堂，依据上游成本，会真的拦人）。本文件里没有任何会拦学生的闸门。
+// 历史 cost_fen 仅历史售价；课堂 platform_budget_fen 只预警、不拦人。
 import { errors } from '../lib.js';
 import { row, rows, q, nowIso, parseJson, json } from '../lib.js';
 
@@ -228,12 +231,16 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
  * 界面用的池子摘要（学生端 / 老师端要看的「还剩多少」）。
  * 挂在已有的负载上（画布项目详情 / VibeCoding 会话详情 / 排课候选），学生与老师不用多打一次接口。
  * 没有课包上下文或没填预算时 `unlimited: true`（口径：留空 = 不限制，只记账）。
+ *
+ * ⚠️ 2026-09-18（用户口径：学生的算力上限 6 套收敛成 1 套**按钱的**）：
+ *   **这里恒「不限」是有意为真的** —— 「按课包的学生算力上限」这套池子口径**已经不存在**
+ *   （恒 `unlimited` 的兼容桩 `computePoolStatus` 已删）。学生额度只有一套，就是
+ *   **`services/sessionCostCap.js`**：每学生 × 每场课堂、按**上游成本**（钱）算，
+ *   配在 `class_sessions.student_cost_cap_fen`，**留空 = 不限制**。
+ *   要控成本、要拦人，都改那边；**不要再往这个函数里加第二套额度**（那就又回到 6 套并行）。
+ *   前端仍在读 `unlimited` / `capYuan` 这几个键，所以**形状保持不变**、值恒为「不限（只记账）」。
  */
 export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}) {
-  // 2026-09-18：这里原来返回「每学生算力上限」的用量（cap/used/remain），但那套池子口径
-  // 早已降级成恒 `unlimited` 的兼容桩（`computePoolStatus` 已删）。现在把话说清楚：
-  // **没有按课包的学生上限**，不填 = 不限制、只记账；要控成本走「按钱的」那一套（正在收敛）。
-  // 前端仍在读 `unlimited` / `capYuan` 这几个键，所以**形状保持不变**、值恒为「不限」。
   void userId;
   return {
     seriesId: seriesId || null,
@@ -251,11 +258,15 @@ export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}
  * 池子报表只列**有消耗**的池子，于是刚填完预算的人会以为「填了没生效」（用户 2026-09-12 实操时
  * 就是这么问的）。这里把「配了预算、但还没人用」的课包也列出来，让「我填上了」在界面上看得见。
  * ⚠️ 只读我们自己的库（不需要算力网关）—— 没配网关时也要能看到。
+ * ⚠️ 2026-09-18：这里的 budgetFen 是**整场课堂的成本基准**（只预警、**不拦人**），
+ *    不是「每学生上限」。每学生那套（会拦人）在 services/sessionCostCap.js。
  */
 // 2026-09-18 删除：seriesBudgetFen / poolUsedFen / computePoolStatus / computePoolReport /
 // budgetedSeriesOverview / assertComputePoolBudget —— 全是**兼容桩或空壳**（恒返回 null / unlimited，
 // 从不拦截也从不返回有效数据），全仓零外部调用方（只有它们自己的导入行）。
-// 「每学生算力上限」这件事历史上被实现了 6 遍、只有课堂次数上限真的会拦人，正在按用户口径收敛成 1 套按钱的。
+// 「每学生算力上限」这件事历史上被实现了 6 遍、只有课堂**次数**上限真的会拦人（而次数不是钱）。
+// 用户已定：只留一套**按钱的** —— services/sessionCostCap.js（每学生 × 每场课堂，依据上游成本）。
+// 下面这一族 `classroomBudget*` 保留，但只做**整场预警**（enforced 恒 false）：它不是学生额度。
 
 /** Known upstream amounts are a lower bound whenever any attempt has unknown cost. */
 export function classroomBudgetStatus(sessionId) {

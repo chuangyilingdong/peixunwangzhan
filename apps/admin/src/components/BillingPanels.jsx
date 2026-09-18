@@ -3,7 +3,9 @@
 // AiCapabilityPanel  「渠道与价格」整页就是三块（2026-09-18 用户口径「大量减法、简单明了」）：
 //   ① 渠道         —— 每张卡只有 4 项必填（名称 / 调用地址 / 可用模型 / 默认模型）+ 供应商账户标识 + API Key，
 //                     外加折叠的「高级配置」（手动模型 ID、请求模板）。
-//   ② 价目表       —— 一行 = 渠道 × 模型，**成本价与对外价并排**（"这个渠道的这个模型多少钱"的唯一真相表）。
+//   ② 价目表       —— 一行 = 渠道 × 模型，**成本价 / 实测价 / 对外价并排**（"这个渠道的这个模型多少钱"的唯一真相表）。
+//                     实测价（2026-09-18 P92）= 上游逐笔实扣 ÷ 用量（滚动近 N 天，只算 REPORTED），
+//                     用来校合同价；样本不足不给数，要写进合同价由人点「采纳为成本价」。
 //   ③ 路由与开关   —— 能力路由 / 读图渠道 / 平台路由策略 / 学生外发开关 / 四个模态总开关（原来散在三个折叠里）。
 //
 // OrgStudentUsagePanel  机构 → 学员 消耗下钻（「用量与成本」页用，不动）。
@@ -83,10 +85,25 @@ const parseCapabilityText = (text) => String(text || '').split(/[,，\s]+/).map(
 
 /** 金额（分）显示：整数分原样，带小数分的补 4 位（文本一次可能只有零点几分的成本）。 */
 const fenText = (value) => Number.isInteger(Number(value)) ? `${Number(value)} 分` : `${Number(value).toFixed(4)} 分`;
+/** 实测单价显示：单位随模态（分/百万 token、分/张、分/秒、分/次），整数分。 */
+const unitPriceText = (value, unitLabel) => `${Number(value)} ${unitLabel}`;
+/** 偏差多大算"醒目"：合同价与实测差两成以上就标红（合同价填错、上游调价都会落到这里）。 */
+const DEVIATION_ALERT_PERCENT = 20;
+/** 实测单价的样本阈值与文案（与后端 services/measuredUnitPrices.js 的默认阈值一致）。 */
+const MEASURED_MIN_SAMPLES = 3;
+const INSUFFICIENT_REASON_TEXT = {
+  TOO_FEW_SAMPLES: (item) => `样本不足（${item.sampleCount} 笔）`,
+  NO_USAGE_IN_SNAPSHOT: (item) => `测不出来：有实扣 ${item.excluded?.noUnits ?? 0} 笔，但快照里没有用量`,
+  NO_REPORTED_SAMPLES: () => '测不出来：这段时间上游没回过逐笔实扣',
+};
 
 export function AiCapabilityPanel({ api }) {
   const config = useData(() => api.get('admin/billing-config/ai-provider'), [api]);
   const pricing = useData(() => api.get('admin/compute-pricing'), [api]);
+  // 实测单价（P92）：上游逐笔实扣 ÷ 用量，滚动近 N 天。**只读**，用来校价目表里的合同价。
+  const [measuredDays, setMeasuredDays] = useState('30');
+  const measured = useData(() => api.get(`admin/billing-config/measured-unit-prices?days=${measuredDays}`), [api, measuredDays]);
+  const measuredByKey = new Map((measured.data?.items || []).map((item) => [`${item.channelId}:${item.model}:${item.modality}`, item]));
   const [form, setForm] = useState(null);
   const [perCall, setPerCall] = useState({});
   const [models, setModels] = useState({});
@@ -375,7 +392,64 @@ export function AiCapabilityPanel({ api }) {
     { id: '__unassigned__', index: -1, channel: null, name: '其他模型（不在任何渠道里）', models: Object.keys(models).filter((model) => !assigned.has(model)) },
   ].filter((group) => group.models.length);
 
-  /** ② 一行 = 渠道 × 模型：成本价、对外价并排，外加只展示的毛利与折叠的能力。 */
+  /**
+   * 「采纳为成本价」（P92）：把**实测单价**写进该模型的合同单价（模型级覆盖），
+   * 走现有保存路径 `PUT admin/billing-config/ai-provider` —— 不另造写接口，也不在服务端自动写。
+   * 这是这个页面唯一的「实测 → 配置」动作，且**必须由人点击**触发（实测只用来校，不自动改价）。
+   * 与页面底部的「保存全部配置」同一条路径，所以会连同本页当前（未保存）的改动一起提交。
+   */
+  async function adoptMeasuredPrice(index, model, modality, item) {
+    const channel = form.channels[index];
+    const suggested = item?.suggestedUnitPrices;
+    if (!channel || !suggested || !Object.keys(suggested).length) return;
+    const text = Object.entries(suggested).map(([field, value]) => `${field} = ${value} 分`).join('，');
+    if (!window.confirm(`把实测单价写进「${channel.name || channel.id} / ${model}」的合同成本价？\n\n写入：${text}\n（实测 ${item.sampleCount} 笔 / 近 ${measuredDays} 天，只算上游逐笔实扣）${item.suggestNote ? `\n说明：${item.suggestNote}` : ''}\n\n会连同本页当前未保存的改动一起提交。`)) return;
+    const all = { ...(channel.modelUnitPrices || {}) };
+    const raw = all[model] && typeof all[model] === 'object' && !Array.isArray(all[model]) ? all[model] : {};
+    const nested = raw[modality] && typeof raw[modality] === 'object' && !Array.isArray(raw[modality]) ? raw[modality] : {};
+    // 契约是 { [modelId]: { [素材类型]: {…字段…} } }：只补这几个字段，别的档位价/字段原样保留。
+    all[model] = { ...raw, [modality]: compactBucket(nested, suggested) };
+    const next = { ...form, channels: form.channels.map((item2, i) => (i === index ? { ...item2, modelUnitPrices: all } : item2)) };
+    setForm(next);
+    setBusy(true); setSaveError(''); setSaveMessage('');
+    try {
+      await api.put('admin/billing-config/ai-provider', next);
+      setSaveMessage(`已采纳实测单价：${model} 的合同成本价写入 ${text}。`);
+      config.refresh(); measured.refresh();
+    } catch (error) {
+      setSaveError(`采纳实测单价失败：${error.message || '未知原因'}${error.code ? `（${error.code}）` : ''}`);
+    } finally { setBusy(false); }
+  }
+
+  /** 实测（近 N 天）单元格：实测单价 + 与合同价的偏差；样本不足时说清"为什么没有数"。 */
+  function measuredCell(index, channel, model, modality) {
+    if (!channel) return <span className="muted">—（不在任何渠道里，没有实测）</span>;
+    if (measured.error) return <span className="muted">读取失败：{measured.error.message || '未知原因'}</span>;
+    if (!measured.data) return <span className="muted">读取中…</span>;
+    const item = measuredByKey.get(`${channel.id}:${model}:${modality}`);
+    if (!item) return <span className="muted">暂无样本（近 {measuredDays} 天没有上游逐笔实扣）</span>;
+    const excluded = Object.entries(item.excluded?.bySource || {}).filter(([, count]) => count > 0);
+    const excludedText = excluded.length ? `另有 ${excluded.map(([source, count]) => `${count} 笔 ${source}`).join('、')}未计入` : '';
+    if (item.measuredUnitPrice === null || item.measuredUnitPrice === undefined) {
+      const reason = (INSUFFICIENT_REASON_TEXT[item.insufficientReason] || INSUFFICIENT_REASON_TEXT.NO_REPORTED_SAMPLES)(item);
+      return <div className="muted">{reason}<div>{excludedText}</div></div>;
+    }
+    const deviation = item.deviationPercent;
+    const alert = deviation !== null && Math.abs(deviation) >= DEVIATION_ALERT_PERCENT;
+    return <div>
+      <strong>{unitPriceText(item.measuredUnitPrice, item.unitLabel)}</strong>
+      <div className={alert ? 'danger-text' : 'muted'}>
+        {item.contract.configured
+          ? `合同价 ${item.contract.comparableUnitPrice === null ? '算不出来' : unitPriceText(item.contract.comparableUnitPrice, item.unitLabel)}${deviation === null ? '' : ` · 偏差 ${deviation > 0 ? '+' : ''}${deviation}%`}`
+          : '合同价未配（成本折算现在是 UNKNOWN）'}
+      </div>
+      <div className="muted">{item.sampleCount} 笔 · {excludedText}</div>
+      {item.suggestedUnitPrices ? <button type="button" className="secondary-button top-gap" disabled={busy} title={item.suggestNote || ''} onClick={() => adoptMeasuredPrice(index, model, modality, item)}>采纳为成本价</button> : null}
+      {!item.suggestedUnitPrices && item.suggestNote ? <div className="muted">{item.suggestNote}</div> : null}
+    </div>;
+  }
+
+  /** ② 一行 = 渠道 × 模型：成本价、实测、对外价并排，外加只展示的毛利与折叠的能力。 */
   function priceRows(group) {
     const { channel, index } = group;
     const modality = channel ? modalityOf(channel) : '';
@@ -383,7 +457,7 @@ export function AiCapabilityPanel({ api }) {
     const primaryField = PRIMARY_COST_FIELD[modality];
     return <tbody key={group.id}>
       {channel ? <tr>
-        <td colSpan={5}>
+        <td colSpan={6}>
           <div className="row-actions"><strong>{group.name}</strong>
             <label>计价模态<select value={modality} onChange={(event) => setPriceModality((current) => ({ ...current, [channel.id]: event.target.value }))}>{MODALITIES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
             {channelModality(channel.id) !== modality ? <span className="muted">（能力路由现在给这条渠道定的是「{MODALITIES.find(([id]) => id === channelModality(channel.id))?.[1] || '未路由'}」）</span> : <span className="muted">（来自能力路由）</span>}
@@ -392,7 +466,7 @@ export function AiCapabilityPanel({ api }) {
           {unitPriceFields(index, modality, '', sharedBucket)}
           {unitPriceTiers(index, modality, '', sharedBucket)}
         </td>
-      </tr> : <tr><td colSpan={5}><strong>{group.name}</strong><span className="muted"> · 不在任何渠道的模型清单里，只有对外价（历史遗留；要清掉就把对外价清空）</span></td></tr>}
+      </tr> : <tr><td colSpan={6}><strong>{group.name}</strong><span className="muted"> · 不在任何渠道的模型清单里，只有对外价（历史遗留；要清掉就把对外价清空）</span></td></tr>}
       {group.models.map((model) => {
         const modelBucket = channel ? (readModelBucket(channel, model, modality) || {}) : null;
         const costFen = primaryField ? (modelBucket?.[primaryField] ?? sharedBucket?.[primaryField]) : null;
@@ -401,6 +475,7 @@ export function AiCapabilityPanel({ api }) {
         return <tr key={model}>
           <td><strong>{model}</strong>{channel?.model === model ? <div className="muted">渠道默认模型</div> : null}</td>
           <td>{channel ? <>{unitPriceFields(index, modality, model, modelBucket)}{unitPriceTiers(index, modality, model, modelBucket)}</> : <span className="muted">—</span>}</td>
+          <td>{measuredCell(index, channel, model, modality)}</td>
           <td>
             <input type="number" min="0" step="1" value={models[model] ?? ''} placeholder={perCall[modality] == null ? (channel ? '留空 = 模态基础价未配' : '留空 = 用该模态的基础价') : `留空 = 模态基础价 ${perCall[modality]} 分`} onChange={(event) => setModelPrice(model, event.target.value)} />
             <div className="muted">只用于统计，不扣学生、不计收入、不是上游成本</div>
@@ -485,13 +560,17 @@ export function AiCapabilityPanel({ api }) {
       </Panel>
 
       {/* ② 价目表：取代原来散落的「上游合同单价」+「上游估算成本」+「逐模型估算成本」+「对外售价」四处定价。 */}
-      <Panel title="② 价目表（每行 = 渠道 × 模型）" actions={<button type="button" className="secondary-button" disabled={pricing.loading} onClick={() => { config.refresh(); pricing.refresh(); }}>刷新</button>}>
+      <Panel title="② 价目表（每行 = 渠道 × 模型）" actions={<><select value={measuredDays} onChange={(event) => setMeasuredDays(event.target.value)} title="实测单价统计窗口"><option value="7">实测：近 7 天</option><option value="30">实测：近 30 天</option><option value="90">实测：近 90 天</option></select><button type="button" className="secondary-button" disabled={pricing.loading} onClick={() => { config.refresh(); pricing.refresh(); measured.refresh(); }}>刷新</button></>}>
         <Notice tone="info">这是<strong>唯一</strong>填价格的地方。<strong>成本价</strong>＝与上游签的合同价（单位随模态：文本分/百万 token、图片分/张、视频分/秒、音乐分/次），
           平台按用量证据自动折算上游计费（来源 <b>COMPUTED</b>），但<strong>不等于供应商开出的最终账单</strong>；<strong>对外价</strong>只用于统计「这次调用对外值多少」，
           <strong>不扣学生、不计收入、不是上游成本</strong>。留在库里没配的项一律折算为 <b>UNKNOWN</b>，绝不按 0 计。毛利列只是把两个数相减给你看，不参与任何计算。
-          成本价两层：模型级覆盖 &gt; 素材类型价；模型级覆盖（留空 = 用素材类型价）。</Notice>
+          成本价两层：模型级覆盖 &gt; 素材类型价；模型级覆盖（留空 = 用素材类型价）。
+          <br /><strong>实测（近 {measuredDays} 天）＝ 上游逐笔实回扣金额 ÷ 用量</strong>，滚动近 {measuredDays} 天；
+          <strong>只统计上游逐笔回报的实扣</strong>（cost_source=REPORTED），<strong>不含我们自己按合同价折算的</strong>（COMPUTED）——
+          否则就是拿自己的假设验证自己，偏差永远是 0。样本不足（少于 {MEASURED_MIN_SAMPLES} 笔，或快照里取不到用量）时<strong>不给数</strong>，
+          只显示「样本不足（N 笔）」。实测只是给你校价用的，<strong>不会自动改价</strong>；要写进合同价，点那一行的「采纳为成本价」（仍走本页的保存路径，由你决定）。</Notice>
         {!priceGroups.length ? <div className="muted top-gap">还没有渠道和模型：先在 ① 里加一条渠道并勾选可用模型，价目表就会按「渠道 × 模型」列出来。</div> : <div className="table-wrap top-gap"><table>
-          <thead><tr><th>模型</th><th>成本价（与上游合同价 · 用于自动折算实际计费）</th><th>对外价（仅统计）</th><th>毛利（对外价 − 成本价）</th><th>能力（决定课时里能选什么）</th></tr></thead>
+          <thead><tr><th>模型</th><th>成本价（与上游合同价 · 用于自动折算实际计费）</th><th>实测（近 {measuredDays} 天）</th><th>对外价（仅统计）</th><th>毛利（对外价 − 成本价）</th><th>能力（决定课时里能选什么）</th></tr></thead>
           {priceGroups.map((group) => priceRows(group))}
         </table></div>}
         <details className="top-gap"><summary>模态基础价（没有单独定价的模型按它算，单位：分 / 次）</summary>

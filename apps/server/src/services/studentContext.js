@@ -47,7 +47,7 @@ export function getStudentLessonParticipations(user) {
     `SELECT part.*, session.title session_title, session.status session_status,
             session.delivery_mode session_delivery_mode, session.started_at session_started_at,
             session.ended_at session_ended_at, session.ended_reason session_ended_reason,
-            session.ai_paused, session.student_call_cap,
+            session.ai_paused, session.student_cost_cap_fen,
             session.allow_text, session.allow_image, session.allow_music, session.allow_video,
             session.allow_podcast, session.allow_dubbing,
             teacher.display_name teacher_name
@@ -341,7 +341,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
   // 这节课上属于他的参与记录（被移除的不算）；多条时优先取「上课中」那条
   const participation = row(
     `SELECT part.*, session.status session_status, session.delivery_mode session_delivery_mode,
-        session.teacher_id, teacher.display_name teacher_name, session.ai_paused, session.student_call_cap,
+        session.teacher_id, teacher.display_name teacher_name, session.ai_paused, session.student_cost_cap_fen,
         session.allow_text, session.allow_image, session.allow_music, session.allow_video,
         session.allow_podcast, session.allow_dubbing,
         session.started_by, session.started_at, session.ended_by, session.ended_at, session.ended_reason,
@@ -369,7 +369,8 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
     status: participation.session_status,
     delivery_mode: participation.session_delivery_mode,
     ai_paused: participation.ai_paused,
-    student_call_cap: participation.student_call_cap,
+    // 2026-09-18：`student_call_cap` → `student_cost_cap_fen`（学生算力上限收敛成唯一那套按钱的）。
+    student_cost_cap_fen: participation.student_cost_cap_fen,
     allow_text: participation.allow_text, allow_image: participation.allow_image,
     allow_music: participation.allow_music, allow_video: participation.allow_video,
     allow_podcast: participation.allow_podcast, allow_dubbing: participation.allow_dubbing,

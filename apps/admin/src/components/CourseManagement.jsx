@@ -75,6 +75,45 @@ function coverUrlOf(course) {
   return course.coverImageUrl || '';
 }
 
+/* ---------------------------------------------------------------- 课包：算力预估（分/人） */
+
+// 算力预估是**平台内部口径**（2026-09-18 用户口径：只在平台端展示与对账，官网/机构端/学生端都不下发）。
+// 单位是**分/人**，与成本账（compute_attempts.upstream_cost_fen）同一口径，不再是「积分」。
+// 读数来自课包详情接口的 computeEstimate（见 services/courseEstimate.js）：预估 × 实际 × 价目表折算。
+function formatFen(value) {
+  if (value === null || value === undefined) return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  // 文本单笔成本天然小于 1 分（上游按 token 计价），所以保留两位小数而不是硬取整。
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+/** 输入框旁的一句参考值：**只做价目表折算，不做用量预测**，公式与假设都在服务端给的 note 里。 */
+function estimateReferenceHint(estimate) {
+  const reference = estimate?.reference;
+  if (!reference) return '正在读取当前价目表…';
+  if (reference.perPersonFen === null || reference.perPersonFen === undefined) return `按当前价目表折算不出参考值：${reference.note}`;
+  return `按当前价目表折算约 ${formatFen(reference.perPersonFen)} 分/人 —— ${reference.note}`;
+}
+
+/** 预估 vs 实际的结论文案 + 徽标语气。未知成本只计笔数，所以「已知」永远是下界。 */
+function estimateVerdict(estimate) {
+  if (!estimate) return { tone: 'muted', label: '暂无读数', detail: '' };
+  if (!estimate.estimateConfigured) return { tone: 'muted', label: '未填预估', detail: '这个课包还没填「算力预估（分/人）」，填上之后这里才会出现对比。' };
+  if (!estimate.studentCount) return { tone: 'muted', label: '还没有学生上课', detail: '这个课包还没有学生上过课（也没有人用过算力），暂时没法算人均实际。' };
+  if (estimate.overEstimate) {
+    return {
+      tone: 'danger',
+      label: '超出预估',
+      detail: `人均实际已经比预估高 ${formatFen(estimate.overEstimateFen)} 分${estimate.costComplete ? '' : '（且还有成本未知的调用，实际只会更高）'} —— 要么预估填低了，要么课时里的生成用量比自己以为的大。`,
+    };
+  }
+  if (!estimate.costComplete) {
+    return { tone: 'warning', label: '成本未算全', detail: `还有 ${estimate.unknownCostCalls} 笔调用的成本未知（只计笔数、不按 0 计入金额），所以「实际」目前只是下界，不能断言没超。` };
+  }
+  return { tone: 'success', label: '在预估内', detail: '这个课包全部的调用成本都已折算出金额，人均实际没有超过预估。' };
+}
+
 /* ---------------------------------------------------------------- 课时画布配置 */
 
 // 教学素材（教师备课资料，学生不可见）
@@ -585,6 +624,8 @@ function CourseDetail({ api, courseId, onBack }) {
   const detail = useData(() => api.get(`admin/course-series/${courseId}/detail`), [api, courseId]);
   const organizations = useData(() => api.get('admin/organizations/options'), [api]);
   const series = detail.data?.series || null;
+  // 算力预估读数（预估 / 实际 / 价目表参考值）：跟着详情接口一起回来，见 services/courseEstimate.js
+  const estimate = detail.data?.computeEstimate || null;
 
   useEffect(() => {
     if (!series) return;
@@ -626,10 +667,13 @@ function CourseDetail({ api, courseId, onBack }) {
     try {
       const priceText = String(editForm.priceYuan || '0').trim();
       if (!/^\d+(?:\.\d{1,2})?$/.test(priceText)) throw new Error('课包价格必须是有效的元金额，最多两位小数');
+      // 算力预估的单位是**分/人**（与成本账一致）：非负整数，留空＝未填（0）。
+      const estimateText = String(editForm.estimatedCreditsPerPerson ?? '').trim();
+      if (estimateText && !/^\d+$/.test(estimateText)) throw new Error('算力预估必须是 ≥ 0 的整数分（单位：分/人）');
       const body = {
         title: editForm.title, description: editForm.description, coverImageUrl: editForm.coverImageUrl || null, coverAssetId: editForm.coverAssetId || null,
         priceFen: Math.round(Number(priceText) * 100),
-        estimatedCreditsPerPerson: Number(editForm.estimatedCreditsPerPerson || 0), gradeRange: editForm.gradeRange || '',
+        estimatedCreditsPerPerson: estimateText ? Number(estimateText) : 0, gradeRange: editForm.gradeRange || '',
         visibility: editForm.visibility, deliveryMode: editForm.deliveryMode || 'CANVAS',
       };
       if (body.coverImageUrl && !/^(https:\/\/|\/api\/)/.test(body.coverImageUrl)) throw new Error('封面地址必须是 HTTPS 链接或平台上传地址');
@@ -758,6 +802,12 @@ function CourseDetail({ api, courseId, onBack }) {
             <label>价格（元）<input inputMode="decimal" value={editForm.priceYuan} onChange={(event) => setEditForm({ ...editForm, priceYuan: event.target.value })} /></label>
             <label>版本号<input value={editForm.version} disabled title="版本号由「更新发布」推进，这里只读" /></label>
             <label>难度（1-5）<input type="number" min="1" max="5" value={editForm.difficultyLevel} placeholder="留空表示未设置" onChange={(event) => setEditForm({ ...editForm, difficultyLevel: event.target.value })} /></label>
+            {/* 算力预估（分/人）：**平台内部口径** —— 只在这里和下面的对比面板里出现，
+                官网课程广场、机构端、学生端都不下发（见 lib.js 的 includeEstimatedCredits）。 */}
+            <label className="span-2">算力预估（分/人）
+              <input type="number" min="0" step="1" inputMode="numeric" value={editForm.estimatedCreditsPerPerson} placeholder="留空 = 未填；单位是分，与成本账一致" onChange={(event) => setEditForm({ ...editForm, estimatedCreditsPerPerson: event.target.value })} />
+              <small className="muted">{estimateReferenceHint(estimate)}</small>
+            </label>
           </div>
           <h3 className="form-section-title">可见范围</h3>
           <div className="form-grid">
@@ -767,6 +817,63 @@ function CourseDetail({ api, courseId, onBack }) {
           {saveState ? <Notice tone={saveState.tone}>{saveState.text}</Notice> : null}
           <p className="muted">当前版本只读：改完进入「版本发布」标签页，点击「更新发布」填写新版本号。状态变更请使用右上角发布 / 下架。<strong>公开</strong> = 课程广场与授权机构都能用，<strong>私有</strong> = 不对外；机构看不到课包不是权限问题，是还没在「次数授权管理」中授权给它。</p>
         </form> : null}
+      </Panel> : null}
+
+      {activeTab === 'basic' ? <Panel title="算力预估 vs 实际" actions={estimate ? <span className={`status ${estimateVerdict(estimate).tone}`}>{estimateVerdict(estimate).label}</span> : null}>
+        <p className="muted">
+          这个字段是<strong>平台内部口径</strong>（单位：分/人），只在平台端展示与对账 —— 官网课程广场、机构端、学生端都不会下发。
+          实际成本取该课包下所有 <code>compute_attempts</code> 的成功调用，按课时归集（<code>class_sessions.lesson_id</code> 兜底）；
+          <strong>成本未知的调用只计笔数、不按 0 计入金额</strong>，所以「实际」永远是已知部分的下界。
+        </p>
+        <div className="split">
+          <div className="table-wrap"><table><thead><tr><th>口径</th><th>分/人</th><th>合计（分）</th><th>说明</th></tr></thead><tbody>
+            <tr>
+              <td>课包预估</td>
+              <td>{estimate?.estimateConfigured ? formatFen(estimate.estimatedPerPersonFen) : '未填'}</td>
+              <td>{estimate?.estimatedTotalFen == null ? '—' : formatFen(estimate.estimatedTotalFen)}</td>
+              <td>预估值 × 上过课的学生数（没有学生时合计留空，不编数字）</td>
+            </tr>
+            <tr>
+              <td>实际（上游成本）</td>
+              <td>{formatFen(estimate?.actualKnownPerPersonFen)}{estimate?.costComplete ? '' : ' 起'}</td>
+              <td>{formatFen(estimate?.actualKnownTotalFen)}</td>
+              <td>{estimate?.costComplete
+                ? `成功调用 ${estimate.successAttemptCount} 笔的成本全部已知`
+                : `另有 ${estimate.unknownCostCalls} 笔成本未知（尝试 ${estimate.unknownCostAttempts} 笔、历史无算力证据用量 ${estimate.uncostedLegacyCalls} 笔），只计笔数、不计入金额`}{estimate?.failedAttemptCount ? `；另有 ${estimate.failedAttemptCount} 笔失败/被拦的调用（不计入成本）` : ''}</td>
+            </tr>
+            <tr>
+              <td>参考值（价目表折算）</td>
+              <td>{estimate?.reference?.perPersonFen == null ? '—' : formatFen(estimate.reference.perPersonFen)}</td>
+              <td>—</td>
+              <td>{estimate?.reference?.note || '正在读取当前价目表…'}</td>
+            </tr>
+          </tbody></table></div>
+          <div>
+            {estimateVerdict(estimate).detail ? <Notice tone={estimateVerdict(estimate).tone === 'danger' ? 'danger' : estimateVerdict(estimate).tone === 'warning' ? 'warning' : 'info'}>{estimateVerdict(estimate).detail}</Notice> : null}
+            <p className="muted">
+              上过课的学生：<strong>{estimate ? estimate.studentCount : '—'}</strong> 人
+              {estimate?.studentCountSource === 'SESSION_ROSTER' ? '（来自课堂名单，退出的已剔除）'
+                : estimate?.studentCountSource === 'COMPUTE_USERS' ? '（没有课堂名单，按真正用过算力的人数）'
+                  : estimate?.studentCountSource === 'NONE' ? '（还没有课堂名单，也没有人用过算力）' : ''}
+              ；调用尝试：<strong>{estimate ? estimate.attemptCount : '—'}</strong> 笔（成功 {estimate ? estimate.successAttemptCount : '—'}）。
+            </p>
+          </div>
+        </div>
+        <h3 className="form-section-title">按课时拆分（实际成本）</h3>
+        {estimate?.lessons?.length
+          ? <div className="table-wrap"><table><thead><tr><th>课时</th><th>调用尝试</th><th>未知成本笔数</th><th>已知成本（分）</th><th>关联学生</th></tr></thead><tbody>
+            {estimate.lessons.map((item) => <tr key={item.lessonId || 'unlinked'}>
+              <td><strong>{item.lessonTitle}</strong></td>
+              <td>{item.attemptCount}（成功 {item.successAttemptCount}）</td>
+              <td>{item.unknownCostCalls + item.uncostedLegacyCalls > 0
+                ? <span className="status warning">{item.unknownCostCalls + item.uncostedLegacyCalls} 笔未知</span>
+                : <span className="status success">0</span>}</td>
+              <td>{formatFen(item.knownCostFen)}</td>
+              <td>{item.computeStudents} 人</td>
+            </tr>)}
+          </tbody></table></div>
+          : <Empty title="还没有可归集的实际成本" body="该课包还没有产生成功调用，或调用没有关联到课时（课堂/项目都要带上课时才能归集）。" />}
+        <p className="muted">「实际」只算成功调用（<code>status='SUCCESS'</code>）的上游成本；失败与被拦的调用不计入金额，只单独计数。归集口径：<code>compute_attempts.lesson_id</code> 为空时用课堂的课时兜底，再退一步用课堂带的教学课包。</p>
       </Panel> : null}
 
       {activeTab === 'lessons' ? <>

@@ -6,6 +6,7 @@ import {
 } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
+import { assertSessionCostCap } from '../services/sessionCostCap.js';
 import { recordAiUsage } from '../services/creditUsage.js';
 import { isModalityEnabled } from './billingConfig.js';
 import { assertLessonGenerationBox } from './aiGeneration.js';
@@ -112,6 +113,11 @@ export async function handleAi(ctx) {
       const currentSession = currentContext.activeSession;
       assertCapability(modality, currentSession);
       assertSessionAiControls({ modality, session: currentSession, orgId, userId });
+      // 学生算力上限（**唯一保留的一套，按钱的**，2026-09-18 用户口径）：与生成链路的
+      // `assertGenerationPreflight` 用**同一个** assert（同一份文案、同一套判定）——
+      // 这条端点也花钱（它写 usage_records），所以也不能绕开额度。
+      // 留空 = 不限制（老课堂的 student_cost_cap_fen 是 NULL，不会被误伤）。
+      assertSessionCostCap({ sessionId: currentSession?.id || null, studentId: userId, orgId });
 
       // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
       if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');

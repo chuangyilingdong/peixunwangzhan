@@ -842,12 +842,22 @@ export async function handleOrg(ctx) {
       || `${lesson.title} · ${new Date(now).toISOString().slice(5, 10)}`;
     transaction(() => {
       assertTeacherSessionAvailable(teacherId);
+      // 2026-09-18（用户口径：学生算力上限 6 套收敛成 1 套**按钱的**）：
+      // 这里原来写的是 `student_call_cap`（单学生**调用次数**上限）—— 那套已退役（数次数不是钱）。
+      // 现在写 `student_cost_cap_fen`：本课堂**每名学生**的上游成本上限（分）。
+      // **留空/不传 = NULL = 不限制**（口径与以前一样：不填就不管，只记账）；
+      // 字段名从 capabilities.studentCallCap 换成 capabilities.studentCostCapFen（单位是「分」，
+      // 不是次数 —— 老字段**故意不做单位换算**：把「次数」乘一个价猜成钱等于凭空发明额度）。
       q(`INSERT INTO class_sessions(id, title, org_id, series_id, lesson_id, teacher_id, status, delivery_mode,
-         ai_paused, student_call_cap, allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing, created_at, updated_at, platform_budget_fen)
+         ai_paused, student_cost_cap_fen, allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing, created_at, updated_at, platform_budget_fen)
        VALUES (?,?,?,?,?,?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [sessionId, title, currentOrgId, lesson.series_id, lessonId, teacherId, deliveryMode,
       capability.aiPaused ? 1 : 0,
-      capability.studentCallCap === undefined || capability.studentCallCap === null ? null : integer(capability.studentCallCap, '单学生调用次数', { min: 1, max: 100000 }),
+      // 空串也算「没填」→ NULL（**不能落到 0**：0 分会把每一次调用都判成"已超上限"，
+      // 那是把一个空输入变成"谁都别用"的陷阱；真正的最小值是 1 分）。
+      capability.studentCostCapFen === undefined || capability.studentCostCapFen === null || capability.studentCostCapFen === ''
+        ? null
+        : integer(capability.studentCostCapFen, '每学生算力上限（分）', { min: 1, max: 100000000 }),
       capabilityDefault('allowText', 'text'), capabilityDefault('allowImage', 'image'),
       capabilityDefault('allowMusic', 'music'), capabilityDefault('allowVideo', 'video'), 0, 0, now, now, publishedLesson.platformBudgetFen ?? null]);
     });
@@ -889,7 +899,10 @@ export async function handleOrg(ctx) {
     const before = normalizeSession(target); const now = nowIso();
     {
       if (lessonChanged && roster > 0) q("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason='SESSION_LESSON_SWAP', updated_at=? WHERE session_id=? AND status<>'REMOVED'", [auth.user.id, now, now, target.id]);
-      q('UPDATE class_sessions SET title=?,lesson_id=?,series_id=?,delivery_mode=?,platform_budget_fen=?,ai_paused=?,student_call_cap=?,allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,updated_at=? WHERE id=?', [title, nextLessonId, nextLesson.series_id, deliveryMode, lessonChanged ? (publishedLesson.platformBudgetFen ?? null) : target.platform_budget_fen, lessonChanged ? 0 : target.ai_paused, lessonChanged ? null : target.student_call_cap, lessonChanged ? (publishedLesson.capabilities || []).includes('text') * 1 : target.allow_text, lessonChanged ? (publishedLesson.capabilities || []).includes('image') * 1 : target.allow_image, lessonChanged ? (publishedLesson.capabilities || []).includes('music') * 1 : target.allow_music, lessonChanged ? (publishedLesson.capabilities || []).includes('video') * 1 : target.allow_video, lessonChanged ? 0 : target.allow_podcast, lessonChanged ? 0 : target.allow_dubbing, now, target.id]);
+      // 2026-09-18：`student_call_cap` → `student_cost_cap_fen`（学生算力上限收敛成唯一那套**按钱的**）。
+      // 「换课」时与 platform_budget_fen 一样重新取新课时快照 → 这里没有课时级的学生上限基准，
+      // 所以换课就**清成 NULL（= 不限制）**，绝不用老课的额度顶替新课堂（口径：留空就不管）。
+      q('UPDATE class_sessions SET title=?,lesson_id=?,series_id=?,delivery_mode=?,platform_budget_fen=?,ai_paused=?,student_cost_cap_fen=?,allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,updated_at=? WHERE id=?', [title, nextLessonId, nextLesson.series_id, deliveryMode, lessonChanged ? (publishedLesson.platformBudgetFen ?? null) : target.platform_budget_fen, lessonChanged ? 0 : target.ai_paused, lessonChanged ? null : target.student_cost_cap_fen, lessonChanged ? (publishedLesson.capabilities || []).includes('text') * 1 : target.allow_text, lessonChanged ? (publishedLesson.capabilities || []).includes('image') * 1 : target.allow_image, lessonChanged ? (publishedLesson.capabilities || []).includes('music') * 1 : target.allow_music, lessonChanged ? (publishedLesson.capabilities || []).includes('video') * 1 : target.allow_video, lessonChanged ? 0 : target.allow_podcast, lessonChanged ? 0 : target.allow_dubbing, now, target.id]);
     }
     const updated = row('SELECT * FROM class_sessions WHERE id=?', [target.id]);
     audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, before, { ...normalizeSession(updated), title, swappedLesson: lessonChanged, rosterCleared: lessonChanged && roster > 0 });

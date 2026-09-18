@@ -2,7 +2,7 @@
 //   ① 文本按上游 input/output tokens × 每千 token 合同价（分整数、四舍五入，断言精确值）；
 //   ② 图片按张数(1) × 每次价或分辨率档；视频按请求参数秒数 × 每秒价（可分辨率 / 含音频档）；音乐按次（可时长）；
 //   ③ 缺用量或缺单价 → null（UNKNOWN），**绝不按 0 计**；
-//   ④ 来源优先级 REPORTED > COMPUTED > ESTIMATED > UNKNOWN；
+//   ④ 来源优先级 REPORTED > COMPUTED > UNKNOWN（ESTIMATED 那档 2026-09-18 退役，见下面 ② 段注）；
 //   ⑤ cost_rule_snapshot 记录所用价与用量快照（用量另有 usage_snapshot 单列），改价不追溯；
 //   ⑥ 学生侧 usage_records.cost_fen / credits_charged 恒 0（creditUsage 语义不变）。
 import assert from 'node:assert/strict';
@@ -42,7 +42,7 @@ const selection = (extra = {}) => ({
   apiKey: 'p90-secret', upstreamUnitPrices: UNIT_PRICES, ...extra,
 });
 
-/* ④ 来源优先级：REPORTED > COMPUTED > ESTIMATED > UNKNOWN */
+/* ④ 来源优先级：REPORTED > COMPUTED > UNKNOWN（ESTIMATED 已退役；映射函数保留它只为读老数据） */
 assert.ok(compareCostSources('REPORTED', 'COMPUTED') > 0);
 assert.ok(compareCostSources('COMPUTED', 'ESTIMATED') > 0);
 assert.ok(compareCostSources('ESTIMATED', 'UNKNOWN') > 0);
@@ -225,12 +225,16 @@ try {
   assert.equal(attempt.upstream_cost_fen, null);
   assert.equal(JSON.parse(attempt.usage_snapshot).inputTokens, 800000, '用量证据照记，只是折算不出来');
 
-  /* 兜底：没单价但有配置估算 → ESTIMATED；快照形状保持原样（向后兼容） */
+  /* 【2026-09-18 口径变更 —— 不是测试漂移】"配置估算（estimatedCostFen）兜底 → ESTIMATED" 这一档
+     已退役：它的优先级低于合同单价，填了也被覆盖，UI 上两者挤在同一张卡里没人分得清哪个算数
+     （用户口径：成本只留"价目表 → 合同单价"一套）。现在即使传了 estimatedCostFen 也不再生效 ——
+     没单价就是 **UNKNOWN**（未知，绝不按 0 计），快照形状保持原样（estimatedCostFen 恒 null）。
+     反向断言：把这一档加回来会立刻打红。 */
   provider = getGenerationProvider(selection({ upstreamUnitPrices: null, estimatedCostFen: 17 }));
   await provider.generate({ modality: 'TEXT', prompt: '估算兜底' });
   attempt = attemptOf(provider);
-  assert.equal(attempt.cost_source, 'ESTIMATED');
-  assert.equal(attempt.upstream_cost_fen, 17);
+  assert.equal(attempt.cost_source, 'UNKNOWN', '配置估算那档已退役：没单价就该是 UNKNOWN');
+  assert.equal(attempt.upstream_cost_fen, null, '退役后不再有金额，且绝不按 0 计');
   assert.deepEqual(Object.keys(JSON.parse(attempt.cost_rule_snapshot)).sort(), ['basis', 'capturedAt', 'channelId', 'estimatedCostFen', 'model', 'provider']);
 
   /* ② 图片：张数(1) × 每次价；给了分辨率档位就按档位价 */
