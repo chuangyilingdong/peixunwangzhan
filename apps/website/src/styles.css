@@ -529,3 +529,11 @@
 .works-cat{padding:8px 20px;border:1px solid var(--line);border-radius:99px;color:#6a6378;background:#fff;font-size:12.5px;font-weight:800;letter-spacing:.02em;cursor:pointer;transition:border-color .2s ease,color .2s ease,background .2s ease}
 .works-cat:hover{border-color:var(--purple);color:var(--purple)}
 .works-cat.on{color:#fff;background:var(--purple);border-color:var(--purple)}
+
+/* ── /learn（我的课程）现在挂在站内顶栏下面（2026-09-18 晚用户口径）────────────────
+   「点击『灵动课程』上方都有导航栏，点击『灵动学习』应该也要有导航栏才对」。
+   这一层外壳原来是全屏页（min-height:100vh + 34~76px 上边距），加了顶栏之后会变成
+   「顶栏 + 76px 再顶一段空白」而且白留一屏高度，所以：不再占满视口、上边距收一档。
+   ⚠️ 只有它被改 —— 课堂页（/learn/canvas*）还是原来的全屏壳（见 main.jsx 的 isFullPage）。 */
+.learn-page-shell{min-height:0;padding:clamp(24px,3.4vw,40px) clamp(20px,6vw,88px) 84px}
+@media(max-width:700px){.learn-page-shell{padding:20px 17px 60px}}

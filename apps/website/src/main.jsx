@@ -637,7 +637,11 @@ export function App(){
     )
   ) : <AuthEntries/>;
   if (loc.pathname === '/login') return <LoginPage/>;
-  const isFullPage = loc.pathname.startsWith('/learn');
+  // 2026-09-18 晚用户口径：「点击『灵动课程』上方都有导航栏，点击『灵动学习』应该也要有导航栏才对」。
+  // 所以 /learn（我的课程）是**普通页面**——顶栏 + 页脚都在。
+  // ⚠️ 只有真正的课堂（/learn/canvas、/learn/canvas/:projectId）才当全屏页：那是学生干活的环境，
+  //    要让出整屏高度、不能再叠一层站内导航。
+  const isFullPage = loc.pathname.startsWith('/learn/canvas');
   return (
     <div className='site'>
       {INTERNAL_TEST && <div className='internal-test-banner' role='status'>内部测试环境 · 不代表正式服务</div>}

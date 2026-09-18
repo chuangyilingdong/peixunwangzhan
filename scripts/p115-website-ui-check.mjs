@@ -670,7 +670,24 @@ try {
   console.log(`  · 课程中心：返回首页 → ${studentPage.backHref}、指向 /my-courses 的链接 ${studentPage.legacyLinks} 个、课程卡片 ${studentPage.courseCards} 个`);
   if (studentPage.backHref !== '/') problems.push(`课程中心：应当有一个指向首页的「返回首页」（实际 href=${studentPage.backHref}）`);
   if (studentPage.legacyLinks) problems.push(`课程中心：不该再有指向 /my-courses 的链接（${studentPage.legacyLinks} 个）—— 那一版页面已删`);
+  // 用户 2026-09-18 晚：「点击『灵动课程』上方都有导航栏，点击『灵动学习』应该也要有导航栏才对」
+  const learnChrome = await page.evaluate(() => ({
+    topbar: document.querySelectorAll('.site-topbar').length,
+    badge: document.querySelectorAll('.site-topbar .header-user').length,
+    footer: document.querySelectorAll('body > #root .site > footer').length,
+  }));
+  console.log(`  · 课程中心的站内外壳：顶栏 ${learnChrome.topbar} 个、账号徽标 ${learnChrome.badge} 个、页脚 ${learnChrome.footer} 个`);
+  if (!learnChrome.topbar) problems.push('课程中心（/learn）：应当有站内导航栏（用户口径：点灵动学习也要有导航栏）');
+  if (!learnChrome.badge) problems.push('课程中心（/learn）：顶栏里应当显示当前账号徽标');
   await shot('17-my-courses');
+  // ⚠️ 反过来：真正的课堂（/learn/canvas）**必须仍然没有**站内导航（那是学生干活的全屏环境）
+  await page.goto(`${base}/learn/canvas`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  const canvasChrome = await page.locator('.site-topbar').count();
+  console.log(`  · 课堂页 /learn/canvas 的站内顶栏：${canvasChrome} 个（应当 0）`);
+  if (canvasChrome) problems.push('/learn/canvas 那个课堂页不该有站内导航（它要让出整屏高度）');
+  await page.goto(`${base}/learn`, { waitUntil: 'domcontentloaded' });
+  await settle();
   // 被删的那一版：路由还在但只做重定向（老链接/老书签不 404）
   await page.goto(`${base}/my-courses`, { waitUntil: 'domcontentloaded' });
   await settle();
