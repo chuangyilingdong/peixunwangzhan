@@ -172,7 +172,7 @@ export function CanvasClassroom({ api, onEnterProject }) {
 // （`course_lessons.delivery_mode`，老师开课堂时也按这一节选），学生一进来就选方式，
 // 等于让他去猜老师开的是哪种课堂。所以入口改成：先看课包 → 再选这一节课 →
 // 服务端给出的 `deliveryMode` 决定进哪个创作环境，学生不需要知道也不需要选。
-export function StudentCourseCenter({ api, onEnterCanvas }) {
+export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
   const navigate = useNavigate();
   const classroom = useData(() => api.get('student/dashboard'), [api]);
   const [busy, setBusy] = useState(null);
@@ -287,7 +287,12 @@ export function StudentCourseCenter({ api, onEnterCanvas }) {
   }
 
   return <main className="classroom-center classroom-course-center">
-    <PageHeader eyebrow="学习上课" title="我的课程" description="先选课包，再选这一节课；上课形式（画布 / VibeCoding）由课包设定，不需要你自己选。" actions={<button className="secondary-button" onClick={classroom.refresh}>刷新课程</button>} />
+    <PageHeader eyebrow="学习上课" title="我的课程" description="先选课包，再选这一节课；上课形式（画布 / VibeCoding）由课包设定，不需要你自己选。" actions={<>
+      {/* 用户口径 2026-09-18 晚：这一页是学生登录后的落地页，要有个回官网首页的出口。
+          做成可选属性 —— 别的端引这个组件时不会凭空多出一个指向 '/' 的链接。 */}
+      {homeHref ? <a className="secondary-button" href={homeHref}>← 返回首页</a> : null}
+      <button className="secondary-button" onClick={classroom.refresh}>刷新课程</button>
+    </>} />
     {message && <Notice tone="danger">{message}</Notice>}
     <Notice tone="info">
       进操作环境要两步：<strong>老师把课包分给你</strong>（「未授权」= 还没分），然后<strong>把你加进某节课的课堂</strong>，

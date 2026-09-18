@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, RuntimeActions, useRuntimeStatus, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
-import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
-import { CourseDetailPage } from './pages/CourseDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
 import SpecularButton from './components/SpecularButton.jsx';
@@ -31,7 +29,7 @@ function LoginPage() {
     }
     const role = session.user?.role;
     // 线框主流程：学生登录后直接进入「我的课包」，官网公开首页仍可从品牌入口返回。
-    const target = role === 'STUDENT' ? '/my-courses' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/';
+    const target = role === 'STUDENT' ? '/learn' : role === 'TEACHER' || role === 'ORG_ADMIN' ? '/' : role === 'SUPER_ADMIN' || role === 'PLATFORM_ADMIN' ? '/admin/' : '/';
     window.location.assign(target);
   }
   // 背景按首页来做（用户口径 2026-09-18）：同一份视频资产、同一套「视频 + 压暗层」叠法。
@@ -52,7 +50,7 @@ const BRAND_NAME = '灵动ai学院';
 const BRAND_TAGLINE = '青少年 AI 创作开课平台';
 // 官网主导航：桌面端与移动端抽屉共用这一份。
 // 此前 main.jsx 里有两份内容相同的硬编码导航（Header 的 nav 与 WEBSITE_NAV），改文案要改两处。
-const WEBSITE_NAV = [['/', '首页'], ['/my-courses', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/intro', '灵动介绍'], ['/handbook', '机构手册'], ['/faq', '常见问题']];
+const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/intro', '灵动介绍'], ['/handbook', '机构手册'], ['/faq', '常见问题']];
 // 未登录时的两个登录入口（用户口径 2026-09-18）。机构/老师与学生是**同一套账号体系、同一个登录接口**，
 // 两个入口只决定落点，不参与鉴权判定——所以不往 auth/login 里传 clientType，
 // 避免「老师从学生入口进来就被拒」这类按入口拦人的行为。
@@ -225,6 +223,7 @@ function Works(){
   const [loaded,setLoaded]=useState(false);
   const [error,setError]=useState(null);
   const [query,setQuery]=useState('');
+  const [kind,setKind]=useState('');
   useEffect(()=>{
     // 作品广场同时展示画布作品（public/works）与平台已发布的 VibeCoding 作品（public/vibecoding-works）
     Promise.allSettled([publicApi.get('public/works'), publicApi.get('public/vibecoding-works')]).then(([canvas, vibe])=>{
@@ -236,26 +235,40 @@ function Works(){
       setLoaded(true);
     });
   },[]);
+  // ⚠️ 2026-09-18 晚更正：用户说的「筛选就分为 2 个板块：画布、VibeCoding」是**这一页**的，
+  //    我上一轮做错地方了（做到了灵动课程上），现在挪到这里。默认两个都不选 = 全部；
+  //    再点一次已选中的那个取消选择（否则选完就没有回到「全部」的路）。
+  //    分类与搜索是**叠加**关系：先按类型筛，再按标题/学生名字搜。
+  //    画布作品的接口对象没有 `type` 字段，VibeCoding 的是 `type:'VIBECODING'`，就按这个分。
+  const isVibe = (w) => w.type === 'VIBECODING';
+  const byKind = kind ? items.filter((w) => (kind === 'VIBECODING' ? isVibe(w) : !isVibe(w))) : items;
   // 搜索按「标题 / 学生名字」匹配（大小写不敏感、去首尾空格）
   const keyword=query.trim().toLowerCase();
-  const visible=keyword?items.filter((w)=>String(w.title||'').toLowerCase().includes(keyword)||String(w.studentName||'').toLowerCase().includes(keyword)):items;
+  const visible=keyword?byKind.filter((w)=>String(w.title||'').toLowerCase().includes(keyword)||String(w.studentName||'').toLowerCase().includes(keyword)):byKind;
   // 页头（「学员作品」+「孩子们的灵感，正在发光」+ 描述）与底部那条
   // 「作品来自真实课堂 / 了解机构作品展厅」提示，都按用户口径 2026-09-18 晚**删掉了** ——
-  // 这一页只留「搜索 + 卡片」（用户：「灵动作品这里全部不要」「图2也要删除」）。
+  // 这一页只留「分类 + 搜索 + 卡片」（用户：「灵动作品这里全部不要」「图2也要删除」）。
   return <main className="inner works-page">
-    {/* 搜索（用户口径 2026-09-18 晚）：**原来的分类筛选整块不要了**，换成一个搜索框，
-        按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把画布作品与 VibeCoding 作品合并出来的，
-        所以过滤也在前端做 —— 不用改接口。 */}
-    <div className="works-search">
-      <label className="sr-only" htmlFor="works-search">搜索作品标题或学生名字</label>
-      <input id="works-search" value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="搜索作品标题或学生名字…" autoComplete="off"/>
-      {query?<button type="button" className="works-search-clear" onClick={()=>setQuery('')}>清空</button>:null}
-      {loaded?<span className="works-search-count">共 <b>{visible.length}</b> 件</span>:null}
+    <div className="works-bar">
+      {/* 筛选：只留两个板块（画布 / VibeCoding），见上面注释 */}
+      <div className="works-cats">
+        {[['CANVAS','画布'],['VIBECODING','VibeCoding']].map(([value,label])=>(
+          <button type="button" key={value} aria-pressed={kind===value} className={'works-cat'+(kind===value?' on':'')} onClick={()=>setKind(kind===value?'':value)}>{label}</button>
+        ))}
+      </div>
+      {/* 搜索：按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把画布作品与 VibeCoding 作品
+          合并出来的，所以过滤也在前端做 —— 不用改接口。 */}
+      <div className="works-search">
+        <label className="sr-only" htmlFor="works-search">搜索作品标题或学生名字</label>
+        <input id="works-search" value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="搜索作品标题或学生名字…" autoComplete="off"/>
+        {query?<button type="button" className="works-search-clear" onClick={()=>setQuery('')}>清空</button>:null}
+        {loaded?<span className="works-search-count">共 <b>{visible.length}</b> 件</span>:null}
+      </div>
     </div>
     <div className="works all">{visible.map((w,i)=><Work key={w.id||w.title} work={w} index={i}/>)}</div>
     {!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}
     {loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}
-    {loaded&&items.length>0&&visible.length===0&&<div className="note">✦ <p>没有搜到匹配的作品。换个标题或学生名字试试，或者<b>清空</b>搜索词。</p></div>}
+    {loaded&&items.length>0&&visible.length===0&&<div className="note">✦ <p>{keyword?'没有搜到匹配的作品。换个标题或学生名字试试，或者':'这个分类下暂时没有作品。点'} <b>{keyword?'清空搜索词':'取消分类'}</b> 看看全部。</p></div>}
   </main>;
 }
 // ── 机构手册 / 灵动介绍 / 常见问题（2026-09-18 起三个页面都由后台 CMS 维护）───────────
@@ -384,11 +397,8 @@ function Marketplace(){
   // 所以这里不再维护难度/年龄/标签/搜索/排序这些筛选态，只留分页。
   // ⚠️ 公开接口仍然支持这些查询参数（别的调用方在用），删掉的只是官网这一处的入口。
   const limit=20;
-  // 只保留「课程类型」一个筛选维度（画布 / VibeCoding），见下面 .mp-cats 的注释
-  const [category,setCategory]=useState('');
   const buildParams=()=>{
     const p=new URLSearchParams();
-    if(category) p.set('category',category);
     p.set('sort','popular');
     p.set('page',page);
     p.set('limit',limit);
@@ -399,7 +409,7 @@ function Marketplace(){
       .then((j)=>{if(live){const d=j||{};setItems(d.items||[]);setTotal(d.total||0);setLoading(false);}})
       .catch(e=>{if(live){setError(e.message);setLoading(false);}});
     return()=>{live=false};
-  },[category,page]);
+  },[page]);
   const totalPages=Math.ceil(total/limit)||1;
   // 页头（大标题 + 副标题）走 CMS 的 MARKETPLACE 键，后台「官网内容 → 灵动课程」可改；
   // 没配就用 CMS_FALLBACK.MARKETPLACE。与首页同一套口径：**接口回来前不渲染文案**（ready），
@@ -413,15 +423,9 @@ function Marketplace(){
     <header className="mp-head">
       {headReady ? <><h1 className="mp-title">{headTitle}</h1>{headLead ? <p className="mp-lead">{headLead}</p> : null}</> : <div className="mp-head-hold" aria-hidden="true" />}
     </header>
-    {/* 筛选（用户口径 2026-09-18 晚）：**只留两个板块** —— 画布 / VibeCoding。
-        上次把整块筛选删了，这次按新口径加回这两个分类；默认两个都不选 = 全部，
-        再点一次已选中的那个就取消（否则选完就没路回到「全部」）。
-        ⚠️ 别的筛选（难度/年龄/标签/排序/搜索）按用户口径**不再出现在官网上**。 */}
-    <div className="mp-cats">
-      {[['CANVAS','画布'],['VIBECODING','VibeCoding']].map(([value,label])=>(
-        <button type="button" key={value} aria-pressed={category===value} className={'mp-cat'+(category===value?' on':'')} onClick={()=>{setCategory(category===value?'':value);setPage(1);}}>{label}</button>
-      ))}
-    </div>
+    {/* ⚠️ 2026-09-18 晚更正：那两个「画布 / VibeCoding」分类按钮**不属于这一页** ——
+        用户说的是「灵动作品」那一页（见 Works 里的 .works-cats）。这一页按之前的删改口径
+        仍然**没有任何筛选**（参考稿首屏就是「页头 + 课包行」）。别再往这里加回来。 */}
     {loading?<div className="mp-rows">{Array.from({length:4},(_,i)=><div key={i} className="mp-skeleton"/>)}</div>:
      error?<div className="mp-note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
      items.length===0?<div className="mp-note">✦ <div><b>暂无课包，敬请期待</b><p>灵动课程会陆续上线优质 AI 课包。</p></div></div>:
@@ -504,12 +508,16 @@ function MarketplaceDetail(){
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>联系我们 · 开通试用</Button></section>}
 // 官网匿名统计（含同意横幅与埋点）已按用户要求**彻底删除**（2026-09-16）：
 // 前端不再有任何上报入口，服务端的接收端点与平台端「官网转化」看板也一并下线，只保留历史表与数据。
-// ⚠️ 2026-09-18 晚口径变更：**学生端那个「学习上课」列表页（StudentCourseCenter）删掉了**。
-// 它自己的标题也叫「我的课程」，和 /my-courses 重名 —— 学生在 /my-courses 点「进入课堂」会跳到这里，
-// 看着就像"又回到同一个页面"（用户原话：「我点击进入课堂，又跳转到我的课程页面」）。
-// 现在「进入课堂」在 /my-courses 里**直接建项目并进画布**，所有学生入口（顶栏「灵动学习」、
-// 徽标下拉、以及老链接）都落到 /my-courses；`/learn` 只留一条重定向（老链接与 p6 守卫都要它存在），
-// 真正的课堂 `/learn/canvas/:projectId` 不受影响。
+//
+// ⚠️⚠️ 2026-09-18 晚的页面取舍（**我上一轮做反了一次，这里是最终口径**）：
+//   学生端的「我的课程」**只保留这一个页面**（`StudentCourseCenter`：学习上课 / 刷新课程 / 课程卡片 +
+//   查看课程 → 选课时 → 进入课堂）。另一条 `/my-courses`（指标卡 + 课时列表那一版）**删掉**，
+//   现在只做重定向过来。用户原话：「把图3的页面删了，留图4这个页面」。
+//   ⚠️ 我上一轮理解反了（以为留 /my-courses、删这个），所以把两边的入口来回改了一次 ——
+//   判断这种"两页同名"的问题时，**以用户截图里的 URL 为准**，别按"哪个更像我改过的"猜。
+function LearnPageInner({ api }) {
+  return <main className='learn-page-shell'><StudentCourseCenter api={api} homeHref='/' onEnterCanvas={(id) => { window.location.assign('/learn/canvas/' + id); }} /></main>;
+}
 function LearnCanvasPage({ api }) {
   return <CanvasClassroom api={api} onEnterProject={(id) => { window.location.assign('/learn/canvas/' + id); }} />;
 }
@@ -566,6 +574,21 @@ export function App(){
   // ⚠️ hook 必须全部写在下面的提前 return 之前：学生会话过期时 App 会在这里提前返回，
   // 若 hook 在其后，同一次渲染里 hook 数从 7 变 6，React 抛 #300 直接白屏（而不是跳登录页）。
   const [showStudentMenu, setShowStudentMenu] = useState(false);
+  const studentMenuRef = useRef(null);
+  // 学生下拉「开着不关」的两条兜底（用户 2026-09-18 晚报的 bug：
+  // 「我在首页点开这个下拉框，我切换页面还存在」）：
+  //   ① 路由一变就收起 —— 顶栏是常驻的，靠 state 的下拉不会自己跟着路由走；
+  //   ② 点空白处或按 Esc 也收起 —— 只靠"再点一次按钮"太隐蔽。
+  // ⚠️ 这两个 hook 必须在下面那个提前 return **之前**（React #300，见下条注释）。
+  useEffect(() => { setShowStudentMenu(false); }, [loc.pathname]);
+  useEffect(() => {
+    if (!showStudentMenu) return undefined;
+    const closeOnOutside = (event) => { if (!studentMenuRef.current?.contains(event.target)) setShowStudentMenu(false); };
+    const closeOnEscape = (event) => { if (event.key === 'Escape') setShowStudentMenu(false); };
+    document.addEventListener('mousedown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => { document.removeEventListener('mousedown', closeOnOutside); document.removeEventListener('keydown', closeOnEscape); };
+  }, [showStudentMenu]);
   if (loc.pathname.startsWith('/learn') && !session) {
     return <Navigate to='/login' replace />;
   }
@@ -573,7 +596,7 @@ export function App(){
   const userName = String(displayName);
   // 「我的课程」页（学生登录后的落地页）；原先这里写的是 '/learn'，见下面路由处的口径变更
   const studentMenuItems = [
-    { to: '/my-courses', label: '我的课程' },
+    { to: '/learn', label: '我的课程' },
     { to: '/my-works', label: '我的作品' },
     { to: '/my-stats', label: '学习统计' },
   ];
@@ -582,7 +605,7 @@ export function App(){
   // 样式照参考图：一个圆形头像 + 名字 + 一个小箭头，没有药丸底框。
   const userBadge = session ? (
     session.user?.role === 'STUDENT' ? (
-      <div className='header-user-menu'>
+      <div className='header-user-menu' ref={studentMenuRef}>
         <button className='header-user' aria-haspopup='menu' aria-expanded={showStudentMenu} onClick={() => setShowStudentMenu(!showStudentMenu)}>
           <span className='header-user-avatar' aria-hidden='true'>{userName.slice(0, 1)}</span>
           <span className='header-user-name'>{userName}</span>
@@ -637,14 +660,15 @@ export function App(){
         <Route path='/terms' element={<LegalPage type='terms'/>}/>
         <Route path='/privacy' element={<LegalPage type='privacy'/>}/>
         <Route path='/minors' element={<LegalPage type='minors'/>}/>
-        {/* ⚠️ 这条**必须留着**（老链接 + p6 守卫「website has /learn route」都依赖它存在），
-            但页面本身已按用户口径删掉 —— 这里只做重定向到「我的课程」。别删这一行。 */}
-        <Route path='/learn' element={<Navigate to='/my-courses' replace/>}/>
+        <Route path='/learn' element={<LearnPageInner api={api}/>}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>
-        <Route path='/my-courses' element={session ? <MyCoursesPage api={api} /> : <Navigate to='/login' replace />}/>
-        <Route path='/my-courses/:courseId' element={session ? <CourseDetailPage api={api} /> : <Navigate to='/login' replace />}/>
+        {/* ⚠️ 这两条是**老地址的重定向**：`/my-courses`（指标卡 + 课时列表那一版）已按用户口径删掉，
+            学生端的「我的课程」就是 /learn 那个页面。留着重定向是为了老链接/老书签不 404。
+            别把这两行删了 —— 删了就真的 404。 */}
+        <Route path='/my-courses' element={<Navigate to='/learn' replace/>}/>
+        <Route path='/my-courses/:courseId' element={<Navigate to='/learn' replace/>}/>
         <Route path='/my-stats' element={session ? <MyStatsPage api={api} /> : <Navigate to='/login' replace />}/>
         <Route path='*' element={<Home/>}/>
       </Routes>

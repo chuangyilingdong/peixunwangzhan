@@ -529,30 +529,14 @@ try {
   if (!priced?.coverHasImage || !String(priced.background).includes('lingdong-ai-logo.png')) problems.push('灵动课程：给课包写了封面地址，缩略图却没渲染出来 —— 公开接口是不是又漏下发 coverAssetId / coverImageUrl 了');
   await shot('10-marketplace-priced');
 
-  // ── ⑤b 灵动课程：只留两个分类按钮（画布 / VibeCoding），并且真的能筛（用户口径 2026-09-18 晚）
-  const catLabels = (await page.locator('.mp-cats .mp-cat').allInnerTexts()).map((t) => t.trim());
-  console.log(`  · 灵动课程分类按钮：[${catLabels.join(' / ')}]`);
-  if (catLabels.join('|') !== '画布|VibeCoding') problems.push(`灵动课程：筛选应只有两个板块 [画布|VibeCoding]（实际 [${catLabels.join('|')}]）`);
-  if (await page.locator('.mp .mkt-filters,.mp .mkt-search,#marketplace-search,.mp-filter-toggle').count()) {
-    problems.push('灵动课程：除这两个分类按钮外，不该再有别的筛选（难度/年龄/标签/排序/搜索已按用户口径下线）');
+  // ── ⑤b 灵动课程：**没有任何筛选**（用户口径 2026-09-18 晚「筛选删除」）。
+  //    ⚠️ 我上一轮把那两个「画布 / VibeCoding」分类按钮做到了这一页，用户指出地方错了
+  //    （那是「灵动作品」的），所以这里改成断言"一个筛选节点都不该有"，包括 .mp-cats。
+  for (const gone of ['.mp-cats', '.mp-cat', '.mp-filter-bar', '.mp-filter-toggle', '.mp .mkt-filters', '.mp .mkt-search', '#marketplace-search']) {
+    if (await page.locator(gone).count()) problems.push(`灵动课程：这一页不该有任何筛选，却还有 ${gone}`);
   }
-  const allRows = await page.locator('.mp-row').count();
-  await page.locator('.mp-cats .mp-cat').nth(1).click(); // VibeCoding（种子里的课包是画布课程 → 应当一条都不剩）
-  await page.waitForTimeout(700);
-  const vibeRows = await page.locator('.mp-row').count();
-  const vibePressed = await page.locator('.mp-cats .mp-cat').nth(1).getAttribute('aria-pressed');
-  const emptyNote = await page.locator('.mp-note').count();
-  console.log(`  · 点 VibeCoding：课包行 ${allRows} → ${vibeRows}、aria-pressed=${vibePressed}、空态提示=${emptyNote}`);
-  if (vibePressed !== 'true') problems.push('灵动课程：点分类按钮后 aria-pressed 应当是 true');
-  if (allRows && vibeRows >= allRows) problems.push(`灵动课程：选了 VibeCoding 之后条数没变（${allRows} → ${vibeRows}）—— 分类没有真的接到接口上`);
-  if (vibeRows === 0 && !emptyNote) problems.push('灵动课程：筛成空列表时应当给一句空态提示');
-  await page.locator('.mp-cats .mp-cat').nth(1).click(); // 再点一次取消 → 回到全部
-  await page.waitForTimeout(700);
-  const backRows = await page.locator('.mp-row').count();
-  if (backRows !== allRows) problems.push(`灵动课程：再点一次应当取消选择、回到全部（${allRows} → ${backRows}）`);
-  await shot('13-marketplace-category');
 
-  // ── ⑤c 灵动作品：卡片按 zip 重做 + 分类筛选换成搜索框（用户口径 2026-09-18 晚）
+  // ── ⑤c 灵动作品：分类只有两个（画布 / VibeCoding）+ 搜索框 + 卡片按 zip 重做
   await page.goto(`${base}/works`, { waitUntil: 'domcontentloaded' });
   for (let i = 0; i < 40; i += 1) { if (await page.locator('.work').count()) break; await page.waitForTimeout(250); }
   await settle();
@@ -562,6 +546,24 @@ try {
   if (await page.locator('.page-title').count()) problems.push('灵动作品：页头（学员作品 / 孩子们的灵感，正在发光 / 描述）应已删除');
   if ((await bodyText()).includes('作品来自真实课堂')) problems.push('灵动作品：底部那条「作品来自真实课堂」提示应已删除');
   if ((await bodyText()).includes('了解机构作品展厅')) problems.push('灵动作品：底部那条提示里的「了解机构作品展厅」按钮应已删除');
+  // 分类只有两个：画布 / VibeCoding（用户口径 2026-09-18 晚「筛选就分为 2 个板块」——
+  // ⚠️ 说的**是这一页**，我上一轮做错到灵动课程上了，见 ⑤b 的注释）。
+  const workCatLabels = (await page.locator('.works-cats .works-cat').allInnerTexts()).map((t) => t.trim());
+  console.log(`  · 灵动作品分类：[${workCatLabels.join(' / ')}]`);
+  if (workCatLabels.join('|') !== '画布|VibeCoding') problems.push(`灵动作品：分类应只有两个板块 [画布|VibeCoding]（实际 [${workCatLabels.join('|')}]）`);
+  const allWorks = await page.locator('.work').count();
+  await page.locator('.works-cats .works-cat').nth(1).click(); // VibeCoding（种子里那几条兜底作品都是画布 → 应当清空）
+  await page.waitForTimeout(400);
+  const vibeWorks = await page.locator('.work').count();
+  const workCatPressed = await page.locator('.works-cats .works-cat').nth(1).getAttribute('aria-pressed');
+  console.log(`  · 点 VibeCoding：作品 ${allWorks} → ${vibeWorks}、aria-pressed=${workCatPressed}`);
+  if (workCatPressed !== 'true') problems.push('灵动作品：点分类后 aria-pressed 应当是 true');
+  if (allWorks && vibeWorks >= allWorks) problems.push(`灵动作品：选了 VibeCoding 之后条数没变（${allWorks} → ${vibeWorks}）—— 分类没真的生效`);
+  if (!vibeWorks && !(await page.locator('.note').count())) problems.push('灵动作品：分类筛成空时应当有一句空态提示');
+  await page.locator('.works-cats .works-cat').nth(1).click(); // 再点一次取消 → 回到全部
+  await page.waitForTimeout(400);
+  if ((await page.locator('.work').count()) !== allWorks) problems.push(`灵动作品：再点一次应当取消分类、回到全部（${allWorks} → ${await page.locator('.work').count()}）`);
+  await shot('13-works-category');
   // ② 换成搜索框
   if (!(await page.locator('#works-search').count())) problems.push('灵动作品：没找到搜索框（#works-search）');
   const workCount = await page.locator('.work').count();
@@ -647,34 +649,36 @@ try {
   await page.locator('.login-field input').first().fill('student-1');
   await page.locator('.login-field input').nth(1).fill('study123');
   await page.locator('.login-submit').click();
-  // LoginPage 用 window.location.assign 按角色分流，学生会落到 /my-courses（用户口径：一登录就进我的课程）
-  await page.waitForURL(/\/my-courses/, { timeout: 20000 }).catch(() => {});
+  // LoginPage 用 window.location.assign 按角色分流，学生会落到 /learn（口径：一登录就进「我的课程」；
+  // ⚠️ 2026-09-18 晚更正：保留的是 StudentCourseCenter 那个页面（`/learn`），
+  //    `/my-courses`（指标卡 + 课时列表那一版）已删、只留重定向 —— 上一轮我两个页面搞反了）
+  await page.waitForURL(/\/learn/, { timeout: 20000 }).catch(() => {});
   await settle();
   const landPath = new URL(page.url()).pathname;
-  const onStudentPage = await page.locator('.student-page-back').count();
-  console.log(`  · 学生登录后落在 ${landPath}（「我的课程」=${onStudentPage ? '是' : '否'}）`);
-  if (landPath !== '/my-courses') problems.push(`学生登录后应当落在 /my-courses（实际 ${landPath}）`);
-  if (!onStudentPage) problems.push('学生登录后应当看到「我的课程」页（.student-page-back 没找到）');
+  const onStudentPage = await page.locator('.classroom-center').count();
+  console.log(`  · 学生登录后落在 ${landPath}（课程中心页=${onStudentPage ? '是' : '否'}）`);
+  if (landPath !== '/learn') problems.push(`学生登录后应当落在 /learn（实际 ${landPath}）`);
+  if (!onStudentPage) problems.push('学生登录后应当看到「我的课程」（课程中心）页');
 
-  // ── ⑤e 学生端：落地页是 /my-courses，要能直进课堂、要有返回首页，/learn 只留重定向
-  await expectText('我的课程', ['我的课程', '返回首页']);
+  // ── ⑤e 学生端：保留的是课程中心页（/learn），要有返回首页；被删的那一版改成重定向
+  await expectText('我的课程', ['我的课程', '返回首页', '刷新课程']);
   const studentPage = await page.evaluate(() => ({
-    backHref: document.querySelector('.student-page-back')?.getAttribute('href') || null,
-    learnLinks: document.querySelectorAll('a[href="/learn"]').length,
-    actionCells: document.querySelectorAll('.student-course-lesson__actions').length,
+    backHref: document.querySelector('.page-header a[href="/"]')?.getAttribute('href') || null,
+    legacyLinks: document.querySelectorAll('a[href^="/my-courses"]').length,
+    courseCards: document.querySelectorAll('.course-package-card').length,
   }));
-  console.log(`  · 我的课程：返回首页 → ${studentPage.backHref}、指向 /learn 的链接 ${studentPage.learnLinks} 个、课时操作列 ${studentPage.actionCells} 个`);
-  if (studentPage.backHref !== '/') problems.push(`我的课程：应当有一个指向首页的「返回首页」（实际 href=${studentPage.backHref}）`);
-  if (studentPage.learnLinks) problems.push(`我的课程：不该再有指向 /learn 的链接（${studentPage.learnLinks} 个）—— 「进入课堂」应当在这一页直接进`);
+  console.log(`  · 课程中心：返回首页 → ${studentPage.backHref}、指向 /my-courses 的链接 ${studentPage.legacyLinks} 个、课程卡片 ${studentPage.courseCards} 个`);
+  if (studentPage.backHref !== '/') problems.push(`课程中心：应当有一个指向首页的「返回首页」（实际 href=${studentPage.backHref}）`);
+  if (studentPage.legacyLinks) problems.push(`课程中心：不该再有指向 /my-courses 的链接（${studentPage.legacyLinks} 个）—— 那一版页面已删`);
   await shot('17-my-courses');
-  // 「/learn 那个页面删掉了」= 路由还在但只做重定向（p6 守卫要求源码里有 path='/learn'）
-  await page.goto(`${base}/learn`, { waitUntil: 'domcontentloaded' });
+  // 被删的那一版：路由还在但只做重定向（老链接/老书签不 404）
+  await page.goto(`${base}/my-courses`, { waitUntil: 'domcontentloaded' });
   await settle();
-  const afterLearn = new URL(page.url()).pathname;
-  const stillMyCourses = await page.locator('.student-page-back').count();
-  console.log(`  · /learn → ${afterLearn}（落地在「我的课程」=${stillMyCourses ? '是' : '否'}）`);
-  if (afterLearn !== '/my-courses') problems.push(`/learn 应当重定向到 /my-courses（实际停在 ${afterLearn}）`);
-  if (!stillMyCourses) problems.push('/learn 重定向之后应当看到「我的课程」页');
+  const afterLegacy = new URL(page.url()).pathname;
+  const stillCenter = await page.locator('.classroom-center').count();
+  console.log(`  · /my-courses → ${afterLegacy}（落到课程中心=${stillCenter ? '是' : '否'}）`);
+  if (afterLegacy !== '/learn') problems.push(`/my-courses 应当重定向到 /learn（实际停在 ${afterLegacy}）`);
+  if (!stillCenter) problems.push('/my-courses 重定向之后应当看到课程中心页');
 
   // ③ 回首页看徽标（用**真实会话**，账号名应当是「小明」）
   await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
@@ -724,6 +728,22 @@ try {
     if (dropdown.labels.includes('进入学习')) problems.push('首页徽标下拉：不该再有「进入学习」（那个列表页已按用户口径删除）');
   }
   await shot('16-home-signed-in');
+  // 用户报的 bug：「我在首页点开这个下拉框，我切换页面还存在」。
+  // 顶栏是常驻的，state 控制的菜单不会自己跟着路由走 —— 两条兜底都要验：
+  //   ① Esc / 点空白处收起；② 路由一变就收起。
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const afterEscape = await page.locator('.student-dropdown-menu').count();
+  console.log(`  · 按 Esc 之后下拉还在吗：${afterEscape ? '还在 ✗' : '已收起 ✓'}`);
+  if (afterEscape) problems.push('顶栏下拉：按 Esc 应当收起');
+  await page.locator('.site-topbar .header-user').click();
+  await page.waitForTimeout(300);
+  if (!(await page.locator('.student-dropdown-menu').count())) problems.push('顶栏下拉：再点一次应当还能打开');
+  await page.locator('.site-topbar nav a', { hasText: '灵动作品' }).first().click();
+  await page.waitForTimeout(700);
+  const afterNav = await page.locator('.student-dropdown-menu').count();
+  console.log(`  · 用顶栏切换页面之后下拉还在吗：${afterNav ? '还在 ✗' : '已收起 ✓'}（当前 ${new URL(page.url()).pathname}）`);
+  if (afterNav) problems.push('顶栏下拉：切换页面之后必须自动收起（用户报的 bug：「我切换页面还存在」）');
   await page.evaluate(() => window.localStorage.removeItem('ai-kids-platform.session.v1.student'));
   await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
   await settle();

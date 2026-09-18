@@ -101,11 +101,15 @@ try {
   // 4. 官网 LoginPage 按角色分流（`window.location.assign`，不再是 navigate('/learn')）
   const websiteSrc = fs.readFileSync(path.join(root, 'apps/website/src/main.jsx'), 'utf8');
   check('website LoginPage 按角色分流并 assign', () => assert.ok(websiteSrc.includes('window.location.assign(target)'), 'LoginPage should assign by role'));
-  // 2026-09-16 订正：学生登录后落**我的课程**（课程优先），不再是官网首页 ——
-  // 代码在 cd1d2d5 就改成 /my-courses 了，这条断言当时没跟着改，一直红着（属于测试漂移，不是功能回归）。
-  check('website LoginPage 学生进我的课程', () => assert.ok(websiteSrc.includes("role === 'STUDENT' ? '/my-courses'"), 'STUDENT should land on /my-courses'));
+  // 2026-09-16 订正：学生登录后落**我的课程**（课程优先），不再是官网首页。
+  // 2026-09-18 晚口径变更（**不是测试漂移**）：用户看实际页面后确定 —— 学生端只保留
+  // StudentCourseCenter 那一版「我的课程」（`/learn`），另一版 `/my-courses`（指标卡 + 课时列表）
+  // 删掉、只留重定向。所以登录落点从 '/my-courses' 改成 '/learn'，这条断言跟着改。
+  check('website LoginPage 学生进我的课程', () => assert.ok(websiteSrc.includes("role === 'STUDENT' ? '/learn'"), 'STUDENT should land on /learn'));
   check('website LoginPage 平台管理员进 /admin/', () => assert.ok(websiteSrc.includes("'/admin/'"), 'PLATFORM admin should land on /admin/'));
   check('website has /learn route', () => assert.ok(websiteSrc.includes("path='/learn'"), 'Website should declare /learn route'));
+  // 被删的那一版要留重定向，否则老书签直接 404
+  check('website 旧 /my-courses 留了重定向', () => assert.ok(websiteSrc.includes("path='/my-courses'") && websiteSrc.includes("to='/learn' replace"), 'old /my-courses should redirect to /learn'));
 
   // 5. Header navigation（自由画布/自由对话 已按产品决定删除，不再断言）
   // 2026-09-18 口径变更（不是测试漂移）：官网导航统一带「灵动」前缀并从 4 项扩到 7 项，
