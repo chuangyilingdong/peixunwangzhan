@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, RuntimeActions, useRuntimeStatus, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
@@ -52,7 +52,7 @@ const BRAND_NAME = '灵动ai学院';
 const BRAND_TAGLINE = '青少年 AI 创作开课平台';
 // 官网主导航：桌面端与移动端抽屉共用这一份。
 // 此前 main.jsx 里有两份内容相同的硬编码导航（Header 的 nav 与 WEBSITE_NAV），改文案要改两处。
-const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/intro', '灵动介绍'], ['/handbook', '机构手册'], ['/faq', '常见问题']];
+const WEBSITE_NAV = [['/', '首页'], ['/my-courses', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/intro', '灵动介绍'], ['/handbook', '机构手册'], ['/faq', '常见问题']];
 // 未登录时的两个登录入口（用户口径 2026-09-18）。机构/老师与学生是**同一套账号体系、同一个登录接口**，
 // 两个入口只决定落点，不参与鉴权判定——所以不往 auth/login 里传 clientType，
 // 避免「老师从学生入口进来就被拒」这类按入口拦人的行为。
@@ -504,10 +504,12 @@ function MarketplaceDetail(){
 function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>联系我们 · 开通试用</Button></section>}
 // 官网匿名统计（含同意横幅与埋点）已按用户要求**彻底删除**（2026-09-16）：
 // 前端不再有任何上报入口，服务端的接收端点与平台端「官网转化」看板也一并下线，只保留历史表与数据。
-function LearnPageInner({ api }) {
-  // 以课程为先：先选课包，再选这一节课；上课形式由课包/这节课决定，学生不选。
-  return <main className='learn-page-shell'><StudentCourseCenter api={api} onEnterCanvas={(id) => { window.location.assign('/learn/canvas/' + id); }} /></main>;
-}
+// ⚠️ 2026-09-18 晚口径变更：**学生端那个「学习上课」列表页（StudentCourseCenter）删掉了**。
+// 它自己的标题也叫「我的课程」，和 /my-courses 重名 —— 学生在 /my-courses 点「进入课堂」会跳到这里，
+// 看着就像"又回到同一个页面"（用户原话：「我点击进入课堂，又跳转到我的课程页面」）。
+// 现在「进入课堂」在 /my-courses 里**直接建项目并进画布**，所有学生入口（顶栏「灵动学习」、
+// 徽标下拉、以及老链接）都落到 /my-courses；`/learn` 只留一条重定向（老链接与 p6 守卫都要它存在），
+// 真正的课堂 `/learn/canvas/:projectId` 不受影响。
 function LearnCanvasPage({ api }) {
   return <CanvasClassroom api={api} onEnterProject={(id) => { window.location.assign('/learn/canvas/' + id); }} />;
 }
@@ -539,6 +541,9 @@ export function App(){
       '/privacy': '隐私政策 · ' + BRAND_NAME,
       '/minors': '儿童 / 未成年人说明 · ' + BRAND_NAME,
       '/learn': '灵动学习 · ' + BRAND_NAME,
+      '/my-courses': '我的课程 · ' + BRAND_NAME,
+      '/my-works': '我的作品 · ' + BRAND_NAME,
+      '/my-stats': '学习统计 · ' + BRAND_NAME,
       '/learn/canvas': '画布上课 · ' + BRAND_NAME,
     };
     // 动态路由（课程/作品详情）按前缀回落：否则它们会退到首页标题，浏览器标签上看着不像同一个站。
@@ -564,34 +569,37 @@ export function App(){
   if (loc.pathname.startsWith('/learn') && !session) {
     return <Navigate to='/login' replace />;
   }
-  const roleBadge = { STUDENT: '小小创作者', TEACHER: '教师', ORG_ADMIN: '机构管理员', SUPER_ADMIN: '平台管理员', PLATFORM_ADMIN: '平台管理员' };
-  // 学生用户下拉菜单（showStudentMenu 这个 state 在上面统一声明，必须在提前 return 之前）
+  const displayName = session?.user?.displayName || session?.user?.login || '用户';
+  const userName = String(displayName);
+  // 「我的课程」页（学生登录后的落地页）；原先这里写的是 '/learn'，见下面路由处的口径变更
   const studentMenuItems = [
-    { to: '/learn', icon: '🎨', label: '进入学习' },
-    { to: '/my-works', icon: '✧', label: '我的作品' },
-    { to: '/my-courses', icon: '◇', label: '我的课程' },
-    { to: '/my-stats', icon: '◈', label: '学习统计' },
+    { to: '/my-courses', label: '我的课程' },
+    { to: '/my-works', label: '我的作品' },
+    { to: '/my-stats', label: '学习统计' },
   ];
-  
+
+  // 账号徽标（用户口径 2026-09-18 晚）：**不带角色标签**（「不需要这样的标签」），
+  // 样式照参考图：一个圆形头像 + 名字 + 一个小箭头，没有药丸底框。
   const userBadge = session ? (
     session.user?.role === 'STUDENT' ? (
       <div className='header-user-menu'>
-        <button className='header-user' onClick={() => setShowStudentMenu(!showStudentMenu)}>
-          <span>{session.user?.displayName || session.user?.login || '用户'}</span>
-          <span className='role-tag'>{roleBadge[session.user?.role]}</span>
-          <span className='dropdown-arrow'>{showStudentMenu ? '▲' : '▼'}</span>
+        <button className='header-user' aria-haspopup='menu' aria-expanded={showStudentMenu} onClick={() => setShowStudentMenu(!showStudentMenu)}>
+          <span className='header-user-avatar' aria-hidden='true'>{userName.slice(0, 1)}</span>
+          <span className='header-user-name'>{userName}</span>
+          <span className='dropdown-arrow' aria-hidden='true'>⌄</span>
         </button>
         {showStudentMenu && (
-          <div className='student-dropdown-menu'>
+          <div className='student-dropdown-menu' role='menu'>
+            {/* 参考图的下拉：顶部是「名字 + 头像」，一条分隔线，然后是纯文字菜单项（不带图标） */}
+            <div className='dropdown-head'><strong>{userName}</strong><span className='dropdown-avatar' aria-hidden='true'>{userName.slice(0, 1)}</span></div>
+            <div className='menu-divider'></div>
             {studentMenuItems.map(item => (
-              <Link key={item.to} to={item.to} className='menu-item' onClick={() => setShowStudentMenu(false)}>
-                <span className='menu-icon'>{item.icon}</span>
+              <Link key={item.to} to={item.to} className='menu-item' role='menuitem' onClick={() => setShowStudentMenu(false)}>
                 <span className='menu-label'>{item.label}</span>
               </Link>
             ))}
             <div className='menu-divider'></div>
-            <button className='menu-item logout-item' onClick={() => { setShowStudentMenu(false); logout(); }}>
-              <span className='menu-icon'>🚪</span>
+            <button className='menu-item logout-item' role='menuitem' onClick={() => { setShowStudentMenu(false); logout(); }}>
               <span className='menu-label'>退出登录</span>
             </button>
           </div>
@@ -599,8 +607,8 @@ export function App(){
       </div>
     ) : (
       <span className='header-user'>
-        <span>{session.user?.displayName || session.user?.login || '用户'}</span>
-        <span className='role-tag'>{roleBadge[session.user?.role] || session.user?.role}</span>
+        <span className='header-user-avatar' aria-hidden='true'>{userName.slice(0, 1)}</span>
+        <span className='header-user-name'>{userName}</span>
         <button className='text-button' onClick={logout}>退出</button>
       </span>
     )
@@ -629,7 +637,9 @@ export function App(){
         <Route path='/terms' element={<LegalPage type='terms'/>}/>
         <Route path='/privacy' element={<LegalPage type='privacy'/>}/>
         <Route path='/minors' element={<LegalPage type='minors'/>}/>
-        <Route path='/learn' element={<LearnPageInner api={api}/>}/>
+        {/* ⚠️ 这条**必须留着**（老链接 + p6 守卫「website has /learn route」都依赖它存在），
+            但页面本身已按用户口径删掉 —— 这里只做重定向到「我的课程」。别删这一行。 */}
+        <Route path='/learn' element={<Navigate to='/my-courses' replace/>}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login' replace />}/>

@@ -638,26 +638,95 @@ try {
   });
   console.log(`  · 顶栏「机构 / 老师登录」→ ${orgEntryHref}（pathname）`);
   if (!String(orgEntryHref || '').startsWith('/org')) problems.push(`顶栏：「机构 / 老师登录」应当直接进机构后台（/org/，整页跳），实际 pathname=${orgEntryHref}`);
-  // ② 登录之后右上角必须显示账号徽标 —— 用户报的 bug：「我用学生登录后，为什么到首页右上角不显示」
+  // ② 登录之后右上角必须显示账号徽标 —— 用户报的 bug：「我用学生登录后，为什么到首页右上角不显示」。
+  //    ⚠️ 这里**真走一遍登录**（种子里的 student-1 / study123），不注入假会话：
+  //    假 token 会在第一个带鉴权的请求上 401，而 onUnauthorized 会把会话清掉、页面被踢回登录页，
+  //    那样既验不准，也会连带把下面「我的课程」那几条搞成假红。
+  await page.goto(`${base}/login?as=student`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  await page.locator('.login-field input').first().fill('student-1');
+  await page.locator('.login-field input').nth(1).fill('study123');
+  await page.locator('.login-submit').click();
+  // LoginPage 用 window.location.assign 按角色分流，学生会落到 /my-courses（用户口径：一登录就进我的课程）
+  await page.waitForURL(/\/my-courses/, { timeout: 20000 }).catch(() => {});
+  await settle();
+  const landPath = new URL(page.url()).pathname;
+  const onStudentPage = await page.locator('.student-page-back').count();
+  console.log(`  · 学生登录后落在 ${landPath}（「我的课程」=${onStudentPage ? '是' : '否'}）`);
+  if (landPath !== '/my-courses') problems.push(`学生登录后应当落在 /my-courses（实际 ${landPath}）`);
+  if (!onStudentPage) problems.push('学生登录后应当看到「我的课程」页（.student-page-back 没找到）');
+
+  // ── ⑤e 学生端：落地页是 /my-courses，要能直进课堂、要有返回首页，/learn 只留重定向
+  await expectText('我的课程', ['我的课程', '返回首页']);
+  const studentPage = await page.evaluate(() => ({
+    backHref: document.querySelector('.student-page-back')?.getAttribute('href') || null,
+    learnLinks: document.querySelectorAll('a[href="/learn"]').length,
+    actionCells: document.querySelectorAll('.student-course-lesson__actions').length,
+  }));
+  console.log(`  · 我的课程：返回首页 → ${studentPage.backHref}、指向 /learn 的链接 ${studentPage.learnLinks} 个、课时操作列 ${studentPage.actionCells} 个`);
+  if (studentPage.backHref !== '/') problems.push(`我的课程：应当有一个指向首页的「返回首页」（实际 href=${studentPage.backHref}）`);
+  if (studentPage.learnLinks) problems.push(`我的课程：不该再有指向 /learn 的链接（${studentPage.learnLinks} 个）—— 「进入课堂」应当在这一页直接进`);
+  await shot('17-my-courses');
+  // 「/learn 那个页面删掉了」= 路由还在但只做重定向（p6 守卫要求源码里有 path='/learn'）
+  await page.goto(`${base}/learn`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  const afterLearn = new URL(page.url()).pathname;
+  const stillMyCourses = await page.locator('.student-page-back').count();
+  console.log(`  · /learn → ${afterLearn}（落地在「我的课程」=${stillMyCourses ? '是' : '否'}）`);
+  if (afterLearn !== '/my-courses') problems.push(`/learn 应当重定向到 /my-courses（实际停在 ${afterLearn}）`);
+  if (!stillMyCourses) problems.push('/learn 重定向之后应当看到「我的课程」页');
+
+  // ③ 回首页看徽标（用**真实会话**，账号名应当是「小明」）
   await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => {
-    // 会话 key 见 packages/shared/src/auth.js（官网根路径用的是 .student 桶）
-    window.localStorage.setItem('ai-kids-platform.session.v1.student', JSON.stringify({ token: 'p115-session', user: { id: 'p115', login: 'p115-student', displayName: 'P115 同学', role: 'STUDENT' } }));
-  });
-  await page.reload({ waitUntil: 'domcontentloaded' });
   await settle();
   const signedBar = await page.evaluate(() => {
     const bar = document.querySelector('.site-topbar');
     const badge = bar?.querySelector('.header-user');
     const box = badge?.getBoundingClientRect();
-    return { text: bar ? bar.innerText.replace(/\n/g, ' ') : '', badges: bar ? bar.querySelectorAll('.header-user').length : 0, badgeWidth: box ? Math.round(box.width) : 0 };
+    return {
+      text: bar ? bar.innerText.replace(/\n/g, ' ') : '',
+      badges: bar ? bar.querySelectorAll('.header-user').length : 0,
+      badgeWidth: box ? Math.round(box.width) : 0,
+      roleTags: bar ? bar.querySelectorAll('.role-tag').length : 0,
+      avatars: bar ? bar.querySelectorAll('.header-user-avatar').length : 0,
+      names: bar ? bar.querySelectorAll('.header-user-name').length : 0,
+    };
   });
-  console.log(`  · 登录态首页顶栏：「${signedBar.text}」徽标 ${signedBar.badges} 个 宽 ${signedBar.badgeWidth}px`);
+  console.log(`  · 登录态首页顶栏：「${signedBar.text}」徽标 ${signedBar.badges} 个 宽 ${signedBar.badgeWidth}px 头像 ${signedBar.avatars} 名字 ${signedBar.names} 角色标签 ${signedBar.roleTags}`);
   if (!signedBar.badges || signedBar.badgeWidth < 40) problems.push('首页（已登录）：右上角应当显示账号徽标（.header-user）—— 学生登录后回首页看不到账号就是用户报的那个 bug');
   if (signedBar.text.includes('机构 / 老师登录') || signedBar.text.includes('学生登录')) problems.push('首页（已登录）：不该再显示登录入口');
-  if (!signedBar.text.includes('P115')) problems.push('首页（已登录）：徽标里没显示当前账号名');
+  // 徽标样式（用户口径 2026-09-18 晚）：「小小创作者」这类**角色标签要删掉**，
+  // 参考图是「圆形头像 + 名字 + 小箭头」，没有药丸底框。
+  if (signedBar.roleTags) problems.push(`首页徽标：不该再有角色标签（.role-tag，例如「小小创作者」），实际 ${signedBar.roleTags} 个`);
+  if (!signedBar.avatars || !signedBar.names) problems.push('首页徽标：应当是「圆形头像 + 名字 + 箭头」的样式（缺 .header-user-avatar / .header-user-name）');
+  // 下拉：参考图是一张白卡 —— 顶部「名字 + 头像」+ 分隔线 + 纯文字项（不带图标）
+  await page.locator('.site-topbar .header-user').click();
+  await page.waitForTimeout(400);
+  const dropdown = await page.evaluate(() => {
+    const menu = document.querySelector('.student-dropdown-menu');
+    if (!menu) return null;
+    return {
+      items: menu.querySelectorAll('.menu-item').length,
+      labels: [...menu.querySelectorAll('.menu-item .menu-label')].map((el) => el.textContent.trim()),
+      hasHead: menu.querySelectorAll('.dropdown-head').length,
+      icons: menu.querySelectorAll('.menu-icon').length,
+      radius: Math.round(parseFloat(getComputedStyle(menu).borderRadius)),
+    };
+  });
+  console.log(`  · 徽标下拉：${JSON.stringify(dropdown)}`);
+  if (!dropdown) problems.push('首页徽标：点一下应当弹出下拉菜单');
+  else {
+    if (!dropdown.hasHead) problems.push('首页徽标下拉：顶部应当有「名字 + 头像」那一块（.dropdown-head）');
+    if (!dropdown.items) problems.push('首页徽标下拉：没有菜单项');
+    if (dropdown.icons) problems.push(`首页徽标下拉：参考图是纯文字项，不该有图标（.menu-icon 还有 ${dropdown.icons} 个）`);
+    if (dropdown.radius < 10) problems.push(`首页徽标下拉：应当是圆角卡片（实际 ${dropdown.radius}px）`);
+    if (!dropdown.labels.includes('我的课程')) problems.push(`首页徽标下拉：应当有「我的课程」入口（实际 [${dropdown.labels.join(' / ')}]）`);
+    if (dropdown.labels.includes('进入学习')) problems.push('首页徽标下拉：不该再有「进入学习」（那个列表页已按用户口径删除）');
+  }
   await shot('16-home-signed-in');
   await page.evaluate(() => window.localStorage.removeItem('ai-kids-platform.session.v1.student'));
+  await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
+  await settle();
 
   // ── ⑥ reduced-motion：不创建 WebGL（SpecularButton 的平台侧改造），按钮与文案仍要可用
   //    ⚠️ 放在改库之前：改完之后首页文案已经被清空了，这一段的断言会失去意义。

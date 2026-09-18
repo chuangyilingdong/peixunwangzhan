@@ -504,3 +504,36 @@
   .works-search{flex-wrap:wrap}
   .works-search input{max-width:none;width:100%}
 }
+
+/* ── 账号徽标：照用户给的参考图重做（2026-09-18 晚）────────────────────────────
+   参考样式 = **圆形头像 + 名字 + 一个小箭头**，没有药丸底框、**没有角色标签**
+   （用户口径：「『小小创作者』要删除掉，不需要这样的标签」）。
+   ⚠️ 原来那个药丸底（#f2effc）与 `.role-tag` 都不再渲染了；role-tag 的规则留着无害（别处没用到）。 */
+.header-user{display:inline-flex;align-items:center;gap:8px;padding:4px 2px;border:0;background:transparent;color:var(--ink);font-size:13px;font-weight:700}
+.header-user-avatar{display:grid;place-items:center;width:26px;height:26px;flex:0 0 auto;border-radius:50%;color:#3f2f82;background:linear-gradient(135deg,#fedf81,#ad91ff);font-size:12px;font-weight:900}
+.header-user-name{max-width:10em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.header-user .dropdown-arrow{font-size:11px;color:currentColor;opacity:.55}
+.header-user:hover .header-user-name{text-decoration:underline;text-underline-offset:3px}
+/* 深色首页顶栏压在视频上：去掉底框之后靠文字阴影保证可读 */
+.site-topbar.on-dark .header-user{color:#fff;background:transparent}
+.site-topbar.on-dark .header-user-name{text-shadow:0 1px 10px rgba(0,0,0,.55)}
+/* 下拉：参考图是一张白卡 —— 顶部「名字 + 头像」，分隔线，然后纯文字菜单项（不带图标） */
+.student-dropdown-menu{min-width:196px;padding:6px 0 8px;border:1px solid #ece8f4;border-radius:14px;box-shadow:0 18px 40px rgba(40,30,80,.16)}
+.dropdown-head{padding:12px 16px 10px}
+.dropdown-head strong{display:block;color:var(--ink);font-size:14px}
+.dropdown-avatar{display:grid;place-items:center;width:30px;height:30px;margin-top:8px;border-radius:50%;color:#3f2f82;background:linear-gradient(135deg,#fedf81,#ad91ff);font-size:13px;font-weight:900}
+.student-dropdown-menu .menu-item{padding:11px 16px;color:#3a3547;font-size:14px}
+.student-dropdown-menu .menu-divider{margin:6px 0}
+
+/* ── 我的课程：页头加「返回首页」 + 课时行里的操作列（2026-09-18 晚）───────────────
+   学生登录后落在这里，所以给一个回首页的出口（用户口径）。
+   课时行的操作列现在可能同时有「进入创作环境 / 提交作品 / 进入课堂」，所以做成可换行的 flex。 */
+.student-page-head__top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.student-page-back{white-space:nowrap}
+.student-course-lesson__actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+/* 共享按钮是按卡片尺寸做的，放进这一行要缩一号，否则比整行字都大 */
+.student-course-lesson__actions .primary-button,
+.student-course-lesson__actions .secondary-button{padding:5px 10px;border-radius:99px;font-size:10px;font-weight:800;box-shadow:none}
+/* 画布入口从 <a> 变成了 <button>：补上按钮的默认样式重置 */
+.student-course-lesson__action{border:0;cursor:pointer;font-family:inherit}
+.student-course-lesson__action:disabled{cursor:not-allowed;opacity:.6}
