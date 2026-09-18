@@ -15,3 +15,48 @@
 body {
   font-family: var(--cv-font);
 }
+
+/* ── 「勾选要授权的学员」那一块的布局（2026-09-18，用户反馈「布局和逻辑很不舒服」）────────────
+ *
+ * 为什么这几条要写在机构端自己这儿：
+ *   · `.checkbox-option` **只在平台端的 admin.css 里定义**（`.admin-console .checkbox-option`），
+ *     而机构端引的是共享样式表 + 本文件 —— 那个类在这里等于不存在，于是学生的每一行落到全局
+ *     `label{display:grid;gap:6px;margin:12px 0}` 上：姓名与复选框被拆成两行、行高被撑到上百像素
+ *     （用户截图里复选框飘在名字右边很远处，就是这个原因）。
+ *   · `.filters` 与 `.tag` 在共享样式表里**也没有定义**（原代码引了它们，等于没生效）。
+ *   所以这里用**本应用自己的类名**（pick-*）把这两处补齐 —— 不去改共享样式表（别的端在用），
+ *   也不去引用平台端的类（跨端引用迟早漂）。
+ *
+ * 学员名单改用**表格**：复选框独占第一列、紧挨姓名，列对齐、行高一致，一百个人也撑得住。
+ */
+.pick-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 4px 0 12px;
+}
+.pick-bar input {
+  width: auto;
+  min-width: 240px;
+  flex: 1 1 240px;
+  max-width: 360px;
+}
+.pick-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: var(--deep);
+  background: #f0ecff;
+  font-size: 12px;
+  font-weight: 800;
+}
+/* 表格默认是 vertical-align:top，带徽标的行会看着发飘；勾选行统一中线对齐 */
+.student-pick-row td {
+  vertical-align: middle;
+}
+.student-pick-row.is-picked {
+  background: #f6f3ff;
+}
+
