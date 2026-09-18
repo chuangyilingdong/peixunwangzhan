@@ -24,11 +24,13 @@ export const WEBSITE_CONTENT_DEFAULTS = {
     trustTitle: '',
     trustDescription: '',
     // 首页底部数据区（官网首页从 CMS 读 stats，后台「官网内容 → 首页」可改）
-    // ⚠️ 与代码里的 HOME_STATS_FALLBACK / CMS_FALLBACK.HOME.stats 必须是同一组数字，
-    //    全站口径也是它（/org 写「11 门 / 87 节标准课包」，/demo 写「11 门标准课包」）。
+    // ⚠️ 与代码里的 HOME_STATS_FALLBACK / CMS_FALLBACK.HOME.stats 必须是同一组数字。
+    //    这一组（3 门 / 48 节）是 2026-09-18 晚**打线上真浏览器量出来的**线上 CMS 现值 ——
+    //    判断哪一组对只能这么量：本地守卫跑的是全新种子库，看不见生产 CMS 里那份数字。
+    //    注：/org 与 /demo 的硬编码文案写的是「11 门 / 87 节」，与线上 CMS 不一致，已在交接文档记录。
     stats: [
-      { icon: '◆', value: 11, suffix: ' 门', label: '标准课包' },
-      { icon: '◇', value: 87, suffix: ' 节', label: '课时总量' },
+      { icon: '◆', value: 3, suffix: ' 门', label: '标准课包' },
+      { icon: '◇', value: 48, suffix: ' 节', label: '课时总量' },
       { icon: '✧', value: 2, suffix: ' 类', label: '课堂形式' },
       { icon: '⌘', value: 1, suffix: ' 套', label: '机构工作台' },
     ],

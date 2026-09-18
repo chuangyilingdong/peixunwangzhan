@@ -104,9 +104,18 @@ function Title({eyebrow,title,desc}){return <section className="page-title"><div
 // trustDescription/stats`），后台「官网内容 → 首页」可改；没配就用下面的 fallback。
 // ⚠️ 数据区**不要**改成 IntersectionObserver 触发：首页是单屏不滚动，没有交叉可言；
 //    而且渲染守卫（scripts/p70）的 DOM 桩里没有这个全局，用了会让守卫直接报未定义。
+// ⚠️ 这一组数字**必须与线上 CMS 的 HOME.stats 一致**（口径①）。
+// 怎么定的：2026-09-18 晚用真浏览器打线上量出来的（首页数据区显示 3 门 / 48 节）——
+//   代码里三处来源必须是同一组：CMS_FALLBACK.HOME.stats / HOME_STATS_FALLBACK /
+//   packages/database/src/websiteContentDefaults.js 的 HOME.stats。
+//   当时这里与 CMS_FALLBACK 一个写 11 门/87 节、一个写 3 门/48 节，于是**同一页会因为
+//   「接口通 / 断」显示两套数字**；而 11 门/87 节只出现在 /org 与 /demo 的硬编码文案里
+//   （那两处与线上 CMS 也不一致，已记在交接文档里等用户定）。
+// ⚠️ 判断哪一组是对的，**只能打线上量**：p115 跑的是全新种子库（CMS = 种子），
+//   只要两个兜底互相一致它就绿 —— 它看不见生产 CMS 里那份不同的数字。
 const HOME_STATS_FALLBACK = [
-  { icon: '◆', value: 11, suffix: ' 门', label: '标准课包' },
-  { icon: '◇', value: 87, suffix: ' 节', label: '课时总量' },
+  { icon: '◆', value: 3, suffix: ' 门', label: '标准课包' },
+  { icon: '◇', value: 48, suffix: ' 节', label: '课时总量' },
   { icon: '✧', value: 2, suffix: ' 类', label: '课堂形式' },
   { icon: '⌘', value: 1, suffix: ' 套', label: '机构工作台' },
 ];
