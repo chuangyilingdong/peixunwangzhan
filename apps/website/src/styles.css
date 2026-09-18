@@ -338,6 +338,13 @@
 .site-menu-items a.active{color:#ff5c93}
 .site-menu-login{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
 .site-menu-login .site-login{border-color:rgba(255,255,255,.3);color:#fff;background:rgba(255,255,255,.1)}
+/* 黑底首页顶栏的三个 specular 按钮（用户口径 2026-09-18：右上角这几个也要一样的改动）。
+   尺寸压到与原来的描边胶囊一致 —— 组件自带的 --sm 是「页面级小按钮」，放顶栏偏大；
+   这里用两段选择器提高优先级，因为组件的样式表是在本文件之后被 import 的。 */
+.site-topbar .site-specular-btn{font-size:12.5px;padding:9px 15px}
+/* 顶栏按钮之间留够间距：specular 的 canvas 会往外出血 20px（画高光要余量），
+   间距太小相邻两个的高光会在视觉上叠在一起。 */
+.site-topbar.on-dark .head-actions{gap:16px}
 @media(max-width:1120px){.bar nav{display:none}.site-burger{display:block}}
 /* ⚠️ 手机端顶栏只留「logo + 汉堡」，两个登录入口收进抽屉（抽屉里渲染同一份 AuthEntries）。
    原先只隐藏了「预约演示」：两个登录胶囊是 nowrap 且不收缩，会把汉堡挤出视口 ——

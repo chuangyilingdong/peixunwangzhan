@@ -57,17 +57,25 @@ const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace
 const LOGIN_ENTRIES = [['/login?as=staff', '机构 / 老师登录'], ['/login?as=student', '学生登录']];
 // 品牌区用真正的 logo（灵动ai 横标，三端共用同一张图）；不再用「✦ + 文字」的占位标记。
 function Logo(){return <Link className="logo" to="/"><BrandLogo height={26} /></Link>}
-function AuthEntries(){
+function AuthEntries({ onDark, onNavigate }){
   // 未登录时导航右侧的两个入口。登录后这里换成账号徽标（由 App 传 userBadge 进来）。
+  // 黑底首页上跟右上角另外那个按钮一样用 SpecularButton（用户口径 2026-09-18「也是一样的改动」）；
+  // 浅底内页仍用原来的描边胶囊 —— 光效是「白线在暗面上扫」，放在白底上等于看不见。
+  if (onDark) return <>{LOGIN_ENTRIES.map(([to, label]) => <SpecularButton key={to} className="site-specular-btn" size="sm" radius={999} tint="#ffffff" tintOpacity={0.06} blur={6} textColor="#ffffff" lineColor="#ffffff" baseColor="#7c7c85" intensity={0.8} shineSize={15} shineFade={45} thickness={1} speed={0.45} followMouse proximity={160} onClick={() => onNavigate(to)}>{label}</SpecularButton>)}</>;
   return <>{LOGIN_ENTRIES.map(([to, label]) => <Link key={to} className='site-login' to={to}>{label}</Link>)}</>;
 }
 function Header({ userBadge }){
   const loc=useLocation();
+  const navigate=useNavigate();
   const [menuOpen,setMenuOpen]=useState(false);
   // 路由变化后收起抽屉：否则从抽屉点进新页面，抽屉会留在上面盖住内容。
   useEffect(()=>{ setMenuOpen(false); },[loc.pathname]);
   const onDark=loc.pathname==='/';
-  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">联系我们 <b>↗</b></Link>{userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
+  // 顶栏在**黑底首页**上用同一套 specular 按钮（用户口径 2026-09-18）；浅底内页保持原来的实心胶囊。
+  const homeCta = onDark
+    ? <SpecularButton className="site-specular-btn" size="sm" radius={999} tint="#ffffff" tintOpacity={0.06} blur={6} textColor="#ffffff" lineColor="#ffffff" baseColor="#7c7c85" intensity={0.85} shineSize={15} shineFade={45} thickness={1} speed={0.5} followMouse proximity={160} onClick={() => navigate('/demo')}>联系我们 ↗</SpecularButton>
+    : <Link className="top-button" to="/demo">联系我们 <b>↗</b></Link>;
+  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{homeCta}{onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
 }
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
@@ -149,13 +157,13 @@ function HomeLanding() {
       {kicker ? <p className="hp-kicker">{kicker}</p> : null}
       {(title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
       {description ? <p className="hp-sub">{description}</p> : null}
-      {/* 首页两个 CTA 用 SpecularButton：主按钮 autoAnimate（高光常亮 + 缓慢扫过），
-          次按钮只在光标靠近时亮起 —— 一强一弱，两个都是药丸形状（radius 会按高度自动夹成胶囊）。
+      {/* 首页两个 CTA 用 SpecularButton（用户口径：两个**背景要一样**，主次只靠光效区分）：
+          都是透明玻璃面（tintOpacity 0.08 + blur 8），主按钮高光常亮并缓慢扫过、次按钮只在光标靠近时亮起。
           ⚠️ 它渲染的是 <button>，所以导航走 onClick + navigate，不再是 <a>；
           代价是右键「新标签打开」不再可用（首页 CTA 影响很小，接受）。 */}
       <div className="hp-actions">
-        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.94} textColor="#0b0b0d" lineColor="#ffffff" baseColor="#9a9aa2" intensity={1.1} shineSize={17} shineFade={40} thickness={1} speed={0.7} followMouse proximity={250} autoAnimate onClick={() => navigate('/demo')}>联系我们</SpecularButton>
-        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#6f6f78" intensity={0.85} shineSize={14} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>查看课程</SpecularButton>
+        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={1.15} shineSize={17} shineFade={40} thickness={1} speed={0.7} followMouse proximity={250} autoAnimate onClick={() => navigate('/demo')}>联系我们</SpecularButton>
+        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={0.9} shineSize={15} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>查看课程</SpecularButton>
       </div>
     </section>
     {stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
