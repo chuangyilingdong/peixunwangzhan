@@ -1344,8 +1344,14 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
    现在：①不再外扩；②加一层椭圆遮罩，保证到边缘前已经透明 —— 之后无论里面放什么渐变都不会露边。 */
 .login-intro::before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(circle at 30% 32%,#a08cff59,transparent 46%),radial-gradient(circle at 68% 64%,#ff8fc04d,transparent 44%);filter:blur(34px);-webkit-mask-image:radial-gradient(ellipse at 42% 42%,#000 32%,transparent 74%);mask-image:radial-gradient(ellipse at 42% 42%,#000 32%,transparent 74%);animation:loginDrift 19s ease-in-out infinite alternate}
 .login-brand{position:relative;z-index:1;box-sizing:content-box;align-self:flex-start;padding:9px 13px;border-radius:16px;background:#fff;box-shadow:0 8px 26px #0000003d}
-.login-copy{position:relative;z-index:1;max-width:560px;margin-top:clamp(3rem,10vh,7rem)}
-.login-headline{margin:0;color:#fff;font-size:clamp(1.9rem,3.3vw,3.6rem);font-weight:800;line-height:1.24;letter-spacing:-.05em}
+/* 品牌主张是**两行固定文案**，必须恒定两行：字号按「文案盒」的宽度算（容器查询单位 cqw），
+   而不是按视口 —— 原来写的是 clamp(1.9rem,3.3vw,3.6rem)，1440 下算出约 58px，
+   而「掌握 Ai 时代的创造方式」12 个字要 560px 才放得下、实际只够约 46px 的字，
+   于是折成了三行（用户 2026-09-18 报的「怎么是 3 行」）。
+   7cqw ≈ 留有约 15% 余量的「一行放得下」字号（最长行 12 个字 → 100/12.2 ≈ 8.2cqw 刚好，取 7 留余量）；
+   上下限兜住极小/极大屏。⚠️ 别改回 vw —— vw 跟盒宽无关，盒一变窄就会折行。 */
+.login-copy{position:relative;z-index:1;max-width:560px;margin-top:clamp(3rem,10vh,7rem);container-type:inline-size}
+.login-headline{margin:0;color:#fff;font-size:clamp(1.2rem,7cqw,2.6rem);font-weight:800;line-height:1.24;letter-spacing:-.05em;white-space:nowrap}
 .login-accent{color:#ff5c93}
 .login-note{margin:1.6rem 0 0;color:#ffffffa6;font-size:.9rem;line-height:1.8;letter-spacing:.04em}
 .login-foot{position:relative;z-index:1;display:flex;align-items:center;gap:.65rem;padding-top:2.5rem;margin-top:auto;color:#ffffff7a;font-size:.72rem;letter-spacing:.13em}
@@ -1392,6 +1398,6 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .demo-list strong{font-size:12px}
 .demo-list small{grid-row:2;margin-top:2px;color:#ffffff8f;font-size:10px}
 .demo-list b{grid-column:2;grid-row:1 / span 2;align-self:center;color:#ff9dc0;font-size:10px;font-weight:800}
-@media(max-width:900px){.login-page{grid-template-columns:1fr}.login-intro{min-height:340px;padding:2.5rem}.login-copy{margin-top:2rem}.login-headline{font-size:clamp(1.7rem,7vw,2.6rem)}.login-note,.login-foot{display:none}.login-side{padding:2.5rem 1.5rem 3rem}.login-card{margin-top:-2.5rem}}
-@media(max-width:480px){.login-page{overflow:visible}.login-intro{min-height:280px;padding:2rem 1.5rem}.login-copy{margin-top:1.5rem}.login-headline{font-size:clamp(1.35rem,6.6vw,1.9rem)}.login-card{padding:1.9rem 1.4rem}.login-sub{margin-bottom:1.8rem}}
+@media(max-width:900px){.login-page{grid-template-columns:1fr}.login-intro{min-height:340px;padding:2.5rem}.login-copy{margin-top:2rem}.login-headline{font-size:clamp(1.1rem,7cqw,2.2rem)}.login-note,.login-foot{display:none}.login-side{padding:2.5rem 1.5rem 3rem}.login-card{margin-top:-2.5rem}}
+@media(max-width:480px){.login-page{overflow:visible}.login-intro{min-height:280px;padding:2rem 1.5rem}.login-copy{margin-top:1.5rem}.login-headline{font-size:clamp(1rem,7cqw,1.6rem)}.login-card{padding:1.9rem 1.4rem}.login-sub{margin-bottom:1.8rem}}
 @media(prefers-reduced-motion:reduce){.login-intro::before,.login-card,.login-card form>*{animation:none!important}.btn-spinner{animation:loginSpin 1.4s linear infinite}}
