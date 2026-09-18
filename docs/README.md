@@ -151,9 +151,18 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：b1dd526（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260918T121940Z / commit b1dd526（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（b1dd526，用户第六轮口径三条 —— 后两条是纠正上一版）：
+代码提交：479deec（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260918T123610Z / commit 479deec（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（479deec，用户第七轮口径一条）：**「灵动学习」（/learn 我的课程）也要有站内导航栏**
+      （用户：「点击『灵动课程』上方都有导航栏，图2 点击『灵动学习』应该也要有导航栏才对」）。
+      根因：`isFullPage = pathname.startsWith('/learn')` 把**整条 `/learn*`** 都当全屏页、顶栏页脚全去掉了
+      → 改成 `startsWith('/learn/canvas')`：只有真正的课堂页（学生干活的环境、要让出整屏）才算全屏；
+      `/learn` 是普通页面（顶栏 + 页脚 + 徽标都在）。连带把 `.learn-page-shell` 的 `min-height:100vh`
+      与 34~76px 上边距收掉（那是"没有顶栏"时的设计；末尾规则会盖掉手机那条，所以单独补了移动端一条）。
+      核验：p115（真登录）断言课程中心必须有站内顶栏 + 徽标，**同时反向断言 `/learn/canvas` 仍不得有顶栏**；
+      部署产物与本地测过的包逐字节一致（`PROD_ACCEPTANCE_OK`）
+      可回滚上一版：release 20260918T121940Z / commit b1dd526
+      上一版改动（b1dd526）：**下拉切页面自动收起；分类挪回灵动作品；两个「我的课程」页面留对了那个**
       ①**顶栏下拉点开后切页面不收起**（用户：「我在首页点开这个下拉框，我切换页面还存在」）：
       顶栏常驻、state 在 App 里，路由变化不会关它 → 补两条兜底（路由变化就关 + 点空白处/Esc 也关）
       ②**那两个「画布 / VibeCoding」分类按钮做错了页面** → 挪到**灵动作品**（与搜索框同排、分类与搜索叠加）；
