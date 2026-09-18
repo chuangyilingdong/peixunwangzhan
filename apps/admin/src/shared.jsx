@@ -25,6 +25,8 @@ export const navigation = [
   { to: '/compute/config', icon: '⚡', label: 'AI 能力与价格', permission: 'ADMIN_BILLING' },
   { heading: '机构与课包人次' },
   { to: '/organizations', icon: '♙', label: '机构与课包人次', permission: 'ADMIN_ORGANIZATIONS' },
+  // 官网「联系我们」表单的提交收件箱（2026-09-18：此前只有接口没有页面，提交没人看得见）
+  { to: '/leads', icon: '☎', label: '联系我们（商机）', permission: 'ADMIN_ORGANIZATIONS' },
   { to: '/authorizations', icon: '▦', label: '授权与人次流水', permission: 'ADMIN_BILLING' },
   { to: '/users', icon: '◉', label: '平台用户', permission: 'ADMIN_ORGANIZATIONS' },
   { heading: '用量与成本' },

@@ -732,7 +732,9 @@ a.org-entry-card:hover {
  * 而 apps/admin 没有 public/ 目录 → 一直在 404、静默回退系统字体。
  * 字体文件已放到 apps/admin/public/fonts（与 apps/website/public/fonts 同源同内容）。
  *
- * ⚠️ 只给两个**后台**应用加这条；学生端（apps/website）自己 :root 另有一套口径，不改。
+ * 2026-09-18 更新：用户口径变成「官网首页也用后台这个字体」，所以 apps/website/src/styles.css 的
+ * :root 现在也引 `var(--cv-font)`（它自己有 public/fonts 下的 Geist 与 Noto 分片）。
+ * 三个应用至此同一套字体栈，仍然只有 `--cv-font` 一处定义。
  */
 :root,
 body {

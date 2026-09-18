@@ -13,6 +13,8 @@ import { OrganizationDetail } from './pages/OrganizationDetail.jsx';
 import { OrganizationQuota } from './pages/OrganizationQuota.jsx';
 import { OrganizationQuotaChanges } from './pages/OrganizationQuotaChanges.jsx';
 import { PlatformUsers } from './pages/PlatformUsers.jsx';
+// 联系我们（商机）：官网「联系我们」表单的提交落在 leads 表，这个页面是它的收件箱。
+import { Leads } from './pages/Leads.jsx';
 import { PlatformAdmins } from './pages/PlatformAdmins.jsx';
 import { PlatformAudit } from './pages/PlatformAudit.jsx';
 import { PlatformNotifications } from './pages/PlatformNotifications.jsx';
@@ -39,6 +41,7 @@ export function App() {
   return <AdminShell product="灵动ai学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />
     <Route path="/organizations" element={page('ADMIN_ORGANIZATIONS', <Organizations api={api} />)} />
+    <Route path="/leads" element={page('ADMIN_ORGANIZATIONS', <Leads api={api} />)} />
     <Route path="/organizations/:orgId" element={page('ADMIN_ORGANIZATIONS', <OrganizationDetail api={api} />)} />
     <Route path="/organizations/:orgId/quota" element={page('ADMIN_ORGANIZATIONS', <OrganizationQuota api={api} />)} />
     <Route path="/organizations/:orgId/quota-changes" element={page('ADMIN_ORGANIZATIONS', <OrganizationQuotaChanges api={api} />)} />

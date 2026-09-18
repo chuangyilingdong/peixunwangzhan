@@ -65,9 +65,9 @@ function Header({ userBadge }){
   // 路由变化后收起抽屉：否则从抽屉点进新页面，抽屉会留在上面盖住内容。
   useEffect(()=>{ setMenuOpen(false); },[loc.pathname]);
   const onDark=loc.pathname==='/';
-  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">预约演示 <b>↗</b></Link>{userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
+  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions"><Link className="top-button" to="/demo">联系我们 <b>↗</b></Link>{userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
 }
-function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">预约演示</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
+function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 function Work({work,index=0}){const navigate=useNavigate();const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';const title=work.title;const desc=work.description;const student=work.studentName||'小创作者';const isVibe=work.type==='VIBECODING';
@@ -112,26 +112,41 @@ function StatValue({ value, suffix }) {
   const text = Number.isInteger(target) ? String(Math.round(shown)) : shown.toFixed(1);
   return <>{text}{suffix}</>;
 }
+// CMS 字段取值规则（2026-09-18 用户报的 bug）：**空串 = 运营故意清空 → 官网不显示**，
+// 只有「字段不存在」或「接口失败」才用内置 fallback。
+// ⚠️ 别写 `content.x || fallback`：空串是 falsy，后台清空后官网会继续显示内置默认文案，
+//    用户看到的就是「我在后台清空了为什么还显示」。
+const cmsPick = (content, key, fallback) => {
+  const value = content?.[key];
+  return value === undefined || value === null ? (fallback ?? '') : value;
+};
 function HomeLanding() {
   const cms = useWebsiteContent('HOME');
   const content = cms.data || {};
-  const stats = Array.isArray(content.stats) && content.stats.length ? content.stats : HOME_STATS_FALLBACK;
+  // stats 同理：后台把整排删空（空数组）就是不要这一排，不再退回内置那四项。
+  const stats = Array.isArray(content.stats) ? content.stats : HOME_STATS_FALLBACK;
+  const trustTitle = cmsPick(content, 'trustTitle', CMS_FALLBACK.HOME.trustTitle);
+  const trustDescription = cmsPick(content, 'trustDescription', CMS_FALLBACK.HOME.trustDescription);
+  const kicker = cmsPick(content, 'heroKicker', CMS_FALLBACK.HOME.heroKicker);
+  const title = cmsPick(content, 'heroTitle', CMS_FALLBACK.HOME.heroTitle);
+  const accent = cmsPick(content, 'heroAccent', CMS_FALLBACK.HOME.heroAccent);
+  const description = cmsPick(content, 'heroDescription', CMS_FALLBACK.HOME.heroDescription);
   return <main className="hp">
     <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
     <section className="hp-hero">
-      <div className="hp-trust"><span className="hp-trust-mark">✦</span><div><strong>{content.trustTitle || CMS_FALLBACK.HOME.trustTitle}</strong><span>{content.trustDescription || CMS_FALLBACK.HOME.trustDescription}</span></div></div>
-      <p className="hp-kicker">{content.heroKicker || CMS_FALLBACK.HOME.heroKicker}</p>
-      <h1 className="hp-title"><span>{content.heroTitle || CMS_FALLBACK.HOME.heroTitle}</span><em>{content.heroAccent || CMS_FALLBACK.HOME.heroAccent}</em></h1>
-      <p className="hp-sub">{content.heroDescription || CMS_FALLBACK.HOME.heroDescription}</p>
-      <div className="hp-actions"><Link className="hp-cta" to="/demo">预约演示</Link><Link className="hp-cta ghost" to="/marketplace">查看课程</Link></div>
+      {(trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
+      {kicker ? <p className="hp-kicker">{kicker}</p> : null}
+      {(title || accent) && <h1 className="hp-title">{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
+      {description ? <p className="hp-sub">{description}</p> : null}
+      <div className="hp-actions"><Link className="hp-cta" to="/demo">联系我们</Link><Link className="hp-cta ghost" to="/marketplace">查看课程</Link></div>
     </section>
-    <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section>
+    {stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
   </main>;
 }
 function Home(_props) { return <HomeLanding />; }
-function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号与示范课包清单。</p></div><Button>预约产品演示</Button></section>}
+function CTA(){return <section className="cta"><div><Kicker>准备好把 AI 课开起来了吗？</Kicker><h2>让每个孩子<br/><em>用 AI 做出自己的作品</em></h2><p>获取演示账号与示范课包清单。</p></div><Button>联系我们</Button></section>}
 
-function Org(){const faqCms=useWebsiteContent('FAQ');const modules=[['机构账号','管理员、教师、学员分级；学员无需自备 API Key','课堂零配置，避免密钥泄露'],['授权次数','按机构开通、按班分给学生；剩余次数不足友好提示','用量可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];return <><Title eyebrow="机构方案" title={<>教培机构如何开<br/><em>青少年 AI 通识课</em></>} desc="平台提供课程、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。"/><main className="inner"><section className="org-intro"><div><i>“</i><h2>不是再找一个聊天网站，<br/>而是一套<span>可管、可教、可展示</span>的课堂产品。</h2><p>学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的游戏、动画、互动故事和硬件作品。</p></div><div className="steps">{[['01','平台开通机构','配置席位、开通授权次数、发布课包权限。'],['02','老师创建学员账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']].map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section><section className="faq"><div><Kicker>常见问题</Kicker><h2>{faqCms.data?.title||'开课前，你可能想知道'}</h2></div><div>{(faqCms.data?.items||[['需要学员自备 API Key 或对话平台账号？','不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用授权次数管理课堂用量。'],['机房和教室的电脑都能用吗？','可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。'],['能否做 Arduino 和 micro:bit 硬件课？','支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。']].map((item)=>({question:item[0],answer:item[1]}))).map((item,i)=><details key={item.question} open={i===0}><summary>{item.question}</summary><p>{item.answer}</p></details>)}</div></section><End title="让你的校区拥有一门可复制的 AI 课" text="预约演示，获取试用账号与示范课包清单。"/></main></>}
+function Org(){const faqCms=useWebsiteContent('FAQ');const modules=[['机构账号','管理员、教师、学员分级；学员无需自备 API Key','课堂零配置，避免密钥泄露'],['授权次数','按机构开通、按班分给学生；剩余次数不足友好提示','用量可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];return <><Title eyebrow="机构方案" title={<>教培机构如何开<br/><em>青少年 AI 通识课</em></>} desc="平台提供课程、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。"/><main className="inner"><section className="org-intro"><div><i>“</i><h2>不是再找一个聊天网站，<br/>而是一套<span>可管、可教、可展示</span>的课堂产品。</h2><p>学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的游戏、动画、互动故事和硬件作品。</p></div><div className="steps">{[['01','平台开通机构','配置席位、开通授权次数、发布课包权限。'],['02','老师创建学员账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']].map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section><section className="faq"><div><Kicker>常见问题</Kicker><h2>{faqCms.data?.title||'开课前，你可能想知道'}</h2></div><div>{(faqCms.data?.items||[['需要学员自备 API Key 或对话平台账号？','不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用授权次数管理课堂用量。'],['机房和教室的电脑都能用吗？','可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。'],['能否做 Arduino 和 micro:bit 硬件课？','支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。']].map((item)=>({question:item[0],answer:item[1]}))).map((item,i)=><details key={item.question} open={i===0}><summary>{item.question}</summary><p>{item.answer}</p></details>)}</div></section><End title="让你的校区拥有一门可复制的 AI 课" text="联系我们，获取试用账号与示范课包清单。"/></main></>}
 function Works(){
   const [items,setItems]=useState(FALLBACK_WORKS.map(w=>({title:w[1],description:w[3],studentName:'小创作者',emoji:w[0]})));
   const [loaded,setLoaded]=useState(false);
@@ -177,13 +192,13 @@ function CmsCompare({ rows }) {
 function Handbook() {
   const cms = useWebsiteContent('HANDBOOK');
   const content = cms.data || {};
-  return <><Title eyebrow="机构手册 · 2026" title={<>{content.title || '机构合作手册'}</>} desc={content.lead || ''} /><main className="inner handbook-page"><CmsSections sections={content.sections} /><CmsCompare rows={content.compareRows} /><End title={content.cta?.title || '获取完整机构手册'} text={content.cta?.text || '先预约演示，我们会把最新版本、课件示例与合作说明发给你。'} /></main></>;
+  return <><Title eyebrow="机构手册 · 2026" title={<>{content.title || '机构合作手册'}</>} desc={content.lead || ''} /><main className="inner handbook-page"><CmsSections sections={content.sections} /><CmsCompare rows={content.compareRows} /><End title={content.cta?.title || '获取完整机构手册'} text={content.cta?.text || '先联系我们，我们会把最新版本、课件示例与合作说明发给你。'} /></main></>;
 }
 function Intro() {
   const cms = useWebsiteContent('INTRO');
   const content = cms.data || {};
   const highlights = cmsList(content.highlights);
-  return <><Title eyebrow="灵动介绍" title={<>{content.title || '灵动介绍'}</>} desc={content.lead || ''} /><main className="inner intro-page">{highlights.length ? <section className="modules">{highlights.map((item, index) => <article key={index + '-' + (item.title || '')}><small>0{index + 1}</small><h3>{item.title || ''}</h3><p>{item.desc || ''}</p></article>)}</section> : null}<CmsSections sections={content.sections} /><End title={content.cta?.title || '把 AI 课开起来'} text={content.cta?.text || '预约演示，我们会按你的班型给出课包与开通方案。'} /></main></>;
+  return <><Title eyebrow="灵动介绍" title={<>{content.title || '灵动介绍'}</>} desc={content.lead || ''} /><main className="inner intro-page">{highlights.length ? <section className="modules">{highlights.map((item, index) => <article key={index + '-' + (item.title || '')}><small>0{index + 1}</small><h3>{item.title || ''}</h3><p>{item.desc || ''}</p></article>)}</section> : null}<CmsSections sections={content.sections} /><End title={content.cta?.title || '把 AI 课开起来'} text={content.cta?.text || '联系我们，我们会按你的班型给出课包与开通方案。'} /></main></>;
 }
 function Faq() {
   const cms = useWebsiteContent('FAQ');
@@ -191,9 +206,9 @@ function Faq() {
   const items = cmsList(content.items);
   // ⚠️ 页头与区块**不要都渲染 CMS 标题**：那样同一句话会在首屏出现两遍（2026-09-18 真浏览器实测到）。
   // 页头说页面名（常见问题），区块说这组问答自己的名字（CMS 的 title）。
-  return <><Title eyebrow="帮助中心" title="常见问题" desc="开课前、上课中、课后最常被问到的事，都在这里。" /><main className="inner faq-page"><section className="faq"><div><h2>{content.title || '常见问题'}</h2><p className="faq-note">没有找到答案？<Link to="/demo">预约演示</Link>，我们按你的班型回答。</p></div><div>{items.map((item, index) => <details key={item.question || index} open={index === 0}><summary>{item.question || ''}</summary><p>{item.answer || ''}</p></details>)}</div></section><End title="把 AI 课开起来" text="预约演示，获取演示账号与示范课包清单。" /></main></>;
+  return <><Title eyebrow="帮助中心" title="常见问题" desc="开课前、上课中、课后最常被问到的事，都在这里。" /><main className="inner faq-page"><section className="faq"><div><h2>{content.title || '常见问题'}</h2><p className="faq-note">没有找到答案？<Link to="/demo">联系我们</Link>，我们按你的班型回答。</p></div><div>{items.map((item, index) => <details key={item.question || index} open={index === 0}><summary>{item.question || ''}</summary><p>{item.answer || ''}</p></details>)}</div></section><End title="把 AI 课开起来" text="联系我们，获取演示账号与示范课包清单。" /></main></>;
 }
-function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','同一个工作台里完成：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构授权次数按班分配，用量有记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>{BRAND_NAME}</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>预约机构演示</Button></section></main></>}
+function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','同一个工作台里完成：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构授权次数按班分配，用量有记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>{BRAND_NAME}</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>联系我们</Button></section></main></>}
 // 官网公开端的内容兜底：公开接口不可用、或后台还没发布过该区块时，官网仍要有东西可看。
 // 键必须与后台「官网内容」的白名单一致（apps/admin/src/shared.jsx 的 WEBSITE_CONTENT_LABELS）。
 // ⚠️ 这里只放**精简可用**的文案；对外那份丰富内容存在数据库（website_contents）里，由后台维护，
@@ -201,8 +216,8 @@ function Compare(){const rows=[['工具形态','多个网站 / App 来回切换'
 const CMS_FALLBACK = {
   HOME: { heroKicker: '教培机构青少年 AI 开课平台', heroTitle: '给机构一套', heroAccent: '能落地的青少年 AI 课', heroDescription: BRAND_NAME + '把课程、机构账号、授权次数与作品展厅放在一个平台里。', trustTitle: '响应教育部「做中学」领航行动', trustDescription: '真实问题 · 项目式探究 · 每节课都有作品' },
   FAQ: { title: '开课前，你可能想知道', items: [{ question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用授权次数管理课堂用量。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。' }] },
-  INTRO: { title: '灵动介绍', lead: BRAND_NAME + '是面向 8–16 岁的 AI 创作开课平台：学生用中文与 AI 伙伴「阿飞」对话，当堂做出能运行、能展示的作品。', highlights: [], sections: [], cta: { title: '把 AI 课开起来', text: '预约演示，我们会按你的班型给出课包与开通方案。' } },
-  HANDBOOK: { title: '机构合作手册', lead: '把「一门 AI 课」变成能复制的校区产品：课程、账号、授权次数与作品沉淀在同一套平台里。', sections: [], compareRows: [], cta: { title: '获取完整机构手册', text: '先预约演示，我们会把最新版本、课件示例与合作说明发给你。' } },
+  INTRO: { title: '灵动介绍', lead: BRAND_NAME + '是面向 8–16 岁的 AI 创作开课平台：学生用中文与 AI 伙伴「阿飞」对话，当堂做出能运行、能展示的作品。', highlights: [], sections: [], cta: { title: '把 AI 课开起来', text: '联系我们，我们会按你的班型给出课包与开通方案。' } },
+  HANDBOOK: { title: '机构合作手册', lead: '把「一门 AI 课」变成能复制的校区产品：课程、账号、授权次数与作品沉淀在同一套平台里。', sections: [], compareRows: [], cta: { title: '获取完整机构手册', text: '先联系我们，我们会把最新版本、课件示例与合作说明发给你。' } },
 };
 function useWebsiteContent(key) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
@@ -214,7 +229,7 @@ function useWebsiteContent(key) {
 
 function LegalPage({ type }){
   const document = LEGAL_DOCUMENTS[type] || LEGAL_DOCUMENTS.privacy;
-  return <><Title eyebrow="协议与隐私" title={<>{document.title}</>} desc={document.intro}/><main className="inner legal-page"><div className="legal-meta"><span className="status-pill">{LEGAL_STATUS}</span><span>版本 {LEGAL_VERSION}</span><span>生效日期 {LEGAL_EFFECTIVE_DATE}</span><span>主体：{LEGAL_OWNER}</span></div><div className="legal-notice">本页面是上线准备稿。正式对外服务前，运营主体、备案信息和法务审核结果应由业务方确认并替换；如与正式发布版本不一致，以正式发布版本为准。</div>{document.sections.map(([heading,body])=><section className="legal-section" key={heading}><h2>{heading}</h2><p>{body}</p></section>)}<div className="legal-links"><b>相关入口</b><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><Link to="/demo">预约演示</Link></div></main></>;
+  return <><Title eyebrow="协议与隐私" title={<>{document.title}</>} desc={document.intro}/><main className="inner legal-page"><div className="legal-meta"><span className="status-pill">{LEGAL_STATUS}</span><span>版本 {LEGAL_VERSION}</span><span>生效日期 {LEGAL_EFFECTIVE_DATE}</span><span>主体：{LEGAL_OWNER}</span></div><div className="legal-notice">本页面是上线准备稿。正式对外服务前，运营主体、备案信息和法务审核结果应由业务方确认并替换；如与正式发布版本不一致，以正式发布版本为准。</div>{document.sections.map(([heading,body])=><section className="legal-section" key={heading}><h2>{heading}</h2><p>{body}</p></section>)}<div className="legal-links"><b>相关入口</b><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><Link to="/demo">联系我们</Link></div></main></>;
 }
 
 function Demo(){
@@ -236,8 +251,8 @@ function Demo(){
       setState('success');
     }catch(err){setError(err.message);setState('error');}
   }
-  if(state==='success') return <><Title eyebrow="预约演示 · 开通试用" title={<>预约成功！</>} desc="我们会在 1 个工作日内联系你。"/><main className="inner"><section className="demo"><div className="success"><i>✦</i><h2>收到你的预约啦！</h2><p>我们会在 1 个工作日内联系你，发送演示安排与资料。</p></div></section></main></>;
-  return <><Title eyebrow="预约演示 · 开通试用" title={<>把 AI 课开起来</>} desc="欢迎教培机构、学校与区域合作伙伴联系，获取演示账号与课包清单。"/><main className="inner"><section className="demo"><div><h2>预约后，你将获得</h2>{['产品演示与开课流程讲解','11 门标准课包与课件清单','体验课包与演示账号'].map((x,i)=><p key={x}><b>0{i+1}</b>{x}</p>)}</div><form onSubmit={submit}><label>机构 / 学校名称<input name="orgName" required placeholder="请输入机构名称"/></label><label>联系人<input name="contactName" required placeholder="请输入姓名"/></label><label>联系电话<input name="contactPhone" required placeholder="请输入手机号" maxLength={20}/></label><label>你想了解什么？<select name="intent" defaultValue=""><option value="" disabled>请选择合作方向</option><option>少儿编程 / AI 素养课程</option><option>学校拓展课 / 社团</option><option>寒暑假科创营</option><option>区域合作</option></select></label><label>补充说明<textarea name="notes" placeholder="例如：校区数量、预计班级规模……"/></label><label className="check-row legal-consent"><input type="checkbox" checked={legalConsent} onChange={e=>setLegalConsent(e.target.checked)}/><span>我已阅读并同意 <Link to="/terms" target="_blank">用户协议</Link>、<Link to="/privacy" target="_blank">隐私政策</Link>和<Link to="/minors" target="_blank">儿童 / 未成年人说明</Link></span></label>{error&&<small style={{color:'#e74c3c'}}>{error}</small>}<button className="button" disabled={state==='loading'}>{state==='loading'?'提交中…':'提交预约 ↗'}</button><small>提交即表示同意我们用于联系你的预约信息。</small></form></section></main></>;
+  if(state==='success') return <><Title eyebrow="联系我们 · 开通试用" title={<>已提交！</>} desc="我们会在 1 个工作日内联系你。"/><main className="inner"><section className="demo"><div className="success"><i>✦</i><h2>已收到你的信息！</h2><p>我们会在 1 个工作日内联系你，发送演示安排与资料。</p></div></section></main></>;
+  return <><Title eyebrow="联系我们 · 开通试用" title={<>把 AI 课开起来</>} desc="欢迎教培机构、学校与区域合作伙伴联系，获取演示账号与课包清单。"/><main className="inner"><section className="demo"><div><h2>联系我们后，你将获得</h2>{['产品演示与开课流程讲解','11 门标准课包与课件清单','体验课包与演示账号'].map((x,i)=><p key={x}><b>0{i+1}</b>{x}</p>)}</div><form onSubmit={submit}><label>机构 / 学校名称<input name="orgName" required placeholder="请输入机构名称"/></label><label>联系人<input name="contactName" required placeholder="请输入姓名"/></label><label>联系电话<input name="contactPhone" required placeholder="请输入手机号" maxLength={20}/></label><label>你想了解什么？<select name="intent" defaultValue=""><option value="" disabled>请选择合作方向</option><option>少儿编程 / AI 素养课程</option><option>学校拓展课 / 社团</option><option>寒暑假科创营</option><option>区域合作</option></select></label><label>补充说明<textarea name="notes" placeholder="例如：校区数量、预计班级规模……"/></label><label className="check-row legal-consent"><input type="checkbox" checked={legalConsent} onChange={e=>setLegalConsent(e.target.checked)}/><span>我已阅读并同意 <Link to="/terms" target="_blank">用户协议</Link>、<Link to="/privacy" target="_blank">隐私政策</Link>和<Link to="/minors" target="_blank">儿童 / 未成年人说明</Link></span></label>{error&&<small style={{color:'#e74c3c'}}>{error}</small>}<button className="button" disabled={state==='loading'}>{state==='loading'?'提交中…':'提交信息 ↗'}</button><small>提交即表示同意我们用于联系你的信息。</small></form></section></main></>;
 }
 
 // ---- Marketplace ----
@@ -354,7 +369,7 @@ function MarketplaceDetail(){
     </div>
   </main></>;
 }
-function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>预约演示 · 开通试用</Button></section>}
+function End({title,text}){return <section className="end"><h2>{title}</h2><p>{text}</p><Button>联系我们 · 开通试用</Button></section>}
 // 官网匿名统计（含同意横幅与埋点）已按用户要求**彻底删除**（2026-09-16）：
 // 前端不再有任何上报入口，服务端的接收端点与平台端「官网转化」看板也一并下线，只保留历史表与数据。
 function LearnPageInner({ api }) {
@@ -387,7 +402,7 @@ export function App(){
       '/handbook': '机构手册 · ' + BRAND_NAME,
       '/faq': '常见问题 · ' + BRAND_NAME,
       '/compare': '选型对比 · ' + BRAND_NAME,
-      '/demo': '预约演示 · ' + BRAND_NAME,
+      '/demo': '联系我们 · ' + BRAND_NAME,
       '/terms': '用户协议 · ' + BRAND_NAME,
       '/privacy': '隐私政策 · ' + BRAND_NAME,
       '/minors': '儿童 / 未成年人说明 · ' + BRAND_NAME,
