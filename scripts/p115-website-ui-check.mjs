@@ -631,10 +631,13 @@ try {
   // ①「机构 / 老师登录」应当**直接进机构后台**（另一个 SPA，整页跳），不再走官网那个"看着像首页"的登录页
   const orgEntryHref = await page.evaluate(() => {
     const hit = [...document.querySelectorAll('.site-topbar .head-actions a')].find((a) => a.textContent.includes('机构'));
-    return hit ? hit.getAttribute('href') : null;
+    if (!hit) return null;
+    // ⚠️ 别只比字符串开头：生产构建会把 VITE_ORG_APP_URL 注成**绝对地址**
+    //    （https://iicili.cyou/org），本地默认才是 /org/。统一解析成 pathname 再比。
+    try { return new URL(hit.getAttribute('href'), window.location.origin).pathname; } catch { return hit.getAttribute('href'); }
   });
-  console.log(`  · 顶栏「机构 / 老师登录」→ ${orgEntryHref}`);
-  if (!String(orgEntryHref || '').startsWith('/org')) problems.push(`顶栏：「机构 / 老师登录」应当直接进机构后台（/org/，整页跳），实际 href=${orgEntryHref}`);
+  console.log(`  · 顶栏「机构 / 老师登录」→ ${orgEntryHref}（pathname）`);
+  if (!String(orgEntryHref || '').startsWith('/org')) problems.push(`顶栏：「机构 / 老师登录」应当直接进机构后台（/org/，整页跳），实际 pathname=${orgEntryHref}`);
   // ② 登录之后右上角必须显示账号徽标 —— 用户报的 bug：「我用学生登录后，为什么到首页右上角不显示」
   await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
