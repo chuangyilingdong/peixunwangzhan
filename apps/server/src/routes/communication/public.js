@@ -354,6 +354,11 @@ export function handlePublicCommunication(ctx) {
         title: item.title,
         description: item.description || '',
         coverImageUrl: item.cover_image_url || null,
+        // 2026-09-18 晚：官网课程广场要显示「课包缩略图」与「价格」，但这两个字段**以前没下发** ——
+        // 官网里 `item.coverAssetId` / `item.priceFen` 的引用一直是死的（缩略图只剩首字占位、
+        // 价格那段 UI 永远不出现）。这里按官网已经在用的字段名补齐（详情接口同）。
+        coverAssetId: item.cover_asset_id || null,
+        priceFen: Number(item.price_fen || 0),
         difficultyLevel: item.difficulty_level != null ? Number(item.difficulty_level) : null,
         ageRangeMin: item.age_range_min != null ? Number(item.age_range_min) : null,
         ageRangeMax: item.age_range_max != null ? Number(item.age_range_max) : null,
@@ -399,6 +404,9 @@ export function handlePublicCommunication(ctx) {
       title: series.title,
       description: series.description || '',
       coverImageUrl: series.cover_image_url || null,
+      // 与列表同口径补齐（官网详情页的 `d.coverAssetId` / `d.priceFen` 原来也是死的）
+      coverAssetId: series.cover_asset_id || null,
+      priceFen: Number(series.price_fen || 0),
       ownerType: series.owner_type,
       visibility: series.visibility,
       version: series.version,

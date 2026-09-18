@@ -71,7 +71,11 @@ const revisionPlan = revisionRows
   .map((row) => ({ id: row.id, key: row.content_key, version: row.version, brand: countBrand(row.content), terms: countTerms(row.content) }))
   .filter((item) => item.brand || item.terms);
 
-const missingKeys = ['INTRO', 'HANDBOOK'].filter((key) => !byKey[key]);
+// 新键：按「种子里有、库里没有」推出来。以前这里写死 `['INTRO','HANDBOOK']` 两个字面量，
+// 于是每加一个区块都得记得回来补一笔 —— 忘了就成「后台看不到这个区块、改了对官网也无效」
+// （管理端只列库里已有的行，缺行时详情接口直接 404）。改成从种子推导，加 key 只动种子与白名单。
+// 2026-09-18 晚加 MARKETPLACE（灵动课程页头的大标题 / 副标题）就靠这条自动带上。
+const missingKeys = Object.keys(WEBSITE_CONTENT_DEFAULTS).filter((key) => !byKey[key]);
 const homeRow = byKey.HOME;
 const homeStats = homeRow ? (JSON.parse(homeRow.published_content || homeRow.draft_content || '{}').stats || null) : null;
 const needStats = Boolean(homeRow) && !Array.isArray(homeStats);

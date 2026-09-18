@@ -9,14 +9,23 @@
  * 这里只放**纯数据**、不 import 任何模块，数据库初始化脚本与迁移脚本都能安全引用。
  */
 export const WEBSITE_CONTENT_DEFAULTS = {
+  // ⚠️ HOME 的文案必须与官网代码里的兜底 `CMS_FALLBACK.HOME`（apps/website/src/main.jsx）**逐字一致**：
+  //    这一份是「后台还没编辑过时官网显示什么」，那一份是「公开接口挂掉时官网显示什么」，
+  //    两者不一致 = 同一页面会因为**接口通/断显示两套内容**（口径①，见第十六轮交接文档）。
+  //    scripts/p115-website-ui-check.mjs 会把两条路径各渲染一遍逐字对比，别让它们漂开。
+  //    2026-09-18 修正：这里原来还留着更早的营销文案（「给机构一套 / 能落地的青少年 AI 课」
+  //    与「响应教育部…领航行动」）。用户在 CMS 里换掉之后，代码兜底对齐了、**这一份没对齐** ——
+  //    而 seed 是 insert-only 且直接把 published_content 写进去，于是**任何新库/新环境上线即带退役文案**。
   HOME: {
-    heroKicker: '教培机构青少年 AI 开课平台',
-    heroTitle: '给机构一套',
-    heroAccent: '能落地的青少年 AI 课',
-    heroDescription: '灵动ai学院把课程、机构账号、授权次数与作品展厅放在一个平台里。',
-    trustTitle: '响应教育部「做中学」领航行动',
-    trustDescription: '真实问题 · 项目式探究 · 每节课都有作品',
+    heroKicker: '',
+    heroTitle: '培养青少年Ai思维',
+    heroAccent: '掌握Ai时代的创造方式',
+    heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作',
+    trustTitle: '',
+    trustDescription: '',
     // 首页底部数据区（官网首页从 CMS 读 stats，后台「官网内容 → 首页」可改）
+    // ⚠️ 与代码里的 HOME_STATS_FALLBACK / CMS_FALLBACK.HOME.stats 必须是同一组数字，
+    //    全站口径也是它（/org 写「11 门 / 87 节标准课包」，/demo 写「11 门标准课包」）。
     stats: [
       { icon: '◆', value: 11, suffix: ' 门', label: '标准课包' },
       { icon: '◇', value: 87, suffix: ' 节', label: '课时总量' },
@@ -49,7 +58,7 @@ export const WEBSITE_CONTENT_DEFAULTS = {
       { title: '为什么不是一个对话网站', body: '通用对话工具解决「聊」，课堂要解决「管」：账号怎么开、用量怎么算、课怎么交付、作品怎么沉淀。这几件事在同一套平台里闭环，才谈得上开班。' },
       { title: '两类课堂，一个入口', body: '画布课堂适合低门槛、当堂出作品的创作；VibeCoding 课堂适合让 AI 真正把代码跑起来、自己看效果再改。学生从「灵动学习」进入，先选课包，再进这一节课。' },
     ],
-    cta: { title: '把 AI 课开起来', text: '预约演示，我们会按你的班型给出课包与开通方案。' },
+    cta: { title: '把 AI 课开起来', text: '联系我们，我们会按你的班型给出课包与开通方案。' },
   },
   // 机构手册（/handbook）：正文按用户给的另一家平台手册（7 张图）改写，只保留我们平台真有的能力；
   // 涉及具体数字、政策文件名称与配图的，都留成后台可改的字段，不在这里写死。
@@ -95,7 +104,7 @@ export const WEBSITE_CONTENT_DEFAULTS = {
       {
         title: '旗舰课包：看得见的课程质量',
         body: '不是网盘里的散页 PPT。互动课件进课程中心，翻页、进度、道具一体呈现——老师开课即用，学生也愿意跟着学。',
-        bullets: ['课包与课时结构化：课时、课件与提示词一体交付', '互动故事创作：从故事设定到分叉剧情、画风、配乐，完成一部能点、能选、能分享的作品', '课程大纲与课件示例可在预约演示时索取'],
+        bullets: ['课包与课时结构化：课时、课件与提示词一体交付', '互动故事创作：从故事设定到分叉剧情、画风、配乐，完成一部能点、能选、能分享的作品', '课程大纲与课件示例可在联系我们时索取'],
       },
     ],
     compareRows: [
@@ -107,7 +116,14 @@ export const WEBSITE_CONTENT_DEFAULTS = {
       { label: '开源硬件', left: '需另装 IDE，与对话工具脱节', right: 'Arduino / micro:bit 软硬一体，桌面端一键上传' },
       { label: '运营闭环', left: '作业在群里，难形成校区案例库', right: '作品 / 用量 / 课包在平台内闭环' },
     ],
-    cta: { title: '获取完整机构手册', text: '先预约演示，我们会把最新版手册、课件示例与合作说明发给你。' },
+    cta: { title: '获取完整机构手册', text: '先联系我们，我们会把最新版手册、课件示例与合作说明发给你。' },
+  },
+  // 灵动课程（/marketplace）的页头：大标题 + 副标题。用户在后台「官网内容 → 灵动课程」可改
+  // （用户口径 2026-09-18 晚：这两句要能后台配置）。
+  // ⚠️ 与官网代码里的 CMS_FALLBACK.MARKETPLACE（apps/website/src/main.jsx）保持一致（口径①）。
+  MARKETPLACE: {
+    title: '灵动Ai学院课包展示',
+    lead: '灵动Ai坚持自研国内精品Ai课程，持续探索适合青少年Ai培训体系。',
   },
   BRAND: { name: '灵动ai学院', tagline: '青少年 AI 创作开课平台', contactEmail: 'hello@aimagc.cn' }
 };

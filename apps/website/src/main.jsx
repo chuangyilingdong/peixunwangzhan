@@ -73,11 +73,11 @@ function Header({ userBadge }){
   // 路由变化后收起抽屉：否则从抽屉点进新页面，抽屉会留在上面盖住内容。
   useEffect(()=>{ setMenuOpen(false); },[loc.pathname]);
   const onDark=loc.pathname==='/';
-  // 顶栏在**黑底首页**上用同一套 specular 按钮（用户口径 2026-09-18）；浅底内页保持原来的实心胶囊。
-  const homeCta = onDark
-    ? <SpecularButton className="site-specular-btn" size="sm" radius={999} tint="#ffffff" tintOpacity={0.06} blur={6} textColor="#ffffff" lineColor="#ffffff" baseColor="#7c7c85" intensity={0.85} shineSize={15} shineFade={45} thickness={1} speed={0.5} followMouse proximity={160} onClick={() => navigate('/demo')}>联系我们 ↗</SpecularButton>
-    : <Link className="top-button" to="/demo">联系我们 <b>↗</b></Link>;
-  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{homeCta}{onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
+  // 顶栏右侧**只保留两个登录入口**：右上角那个「联系我们」在 2026-09-18 晚按用户口径删除。
+  // 原因是导航用 `position:absolute; left:50%` 在页面里居中，视口一窄它就和右侧按钮组叠在一起 ——
+  // 用户在内页截图报的「联系我们被遮挡」就是这一处（浅底那个实心胶囊被玻璃导航压住）。
+  // ⚠️ 只删右上角这一个：首页 hero 的两个 CTA、页脚「合作」列、各页结尾的「联系我们」都保留。
+  return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
 }
 function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
@@ -250,10 +250,17 @@ const CMS_FALLBACK = {
   // 与「响应教育部…领航行动」）。用户在 CMS 里改过首页之后，**接口没回来之前官网会先渲染这一份**，
   // 于是每次强刷都会闪一下旧内容（他报的「强制刷新出现的残留，还带有之前的旧版内容」就是这个）。
   // 两处一起治：①这份兜底对齐成 CMS 当前的内容；②渲染前确认接口已回来（见下面的 ready）。
-  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: [{ icon: '◆', value: 3, suffix: ' 门', label: '标准课包' }, { icon: '◇', value: 48, suffix: ' 节', label: '课时总量' }, { icon: '✧', value: 2, suffix: ' 类', label: '课堂形式' }, { icon: '⌘', value: 1, suffix: ' 套', label: '机构工作台' }] },
+  // ⚠️ stats 必须与 HOME_STATS_FALLBACK 是**同一个常量**：以前这里另写了一份 3 门 / 48 节，
+  // 而别处是 11 门 / 87 节 —— 于是同一页会因为「接口通 / 断」显示两套数字
+  // （接口断 → 用这份；接口通但行里没有 stats → 用 HOME_STATS_FALLBACK）。
+  // scripts/p115-website-ui-check.mjs 会把两条路径各渲染一遍并逐字对比，就是为了钉住这条。
+  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK },
   FAQ: { title: '开课前，你可能想知道', items: [{ question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用授权次数管理课堂用量。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。' }] },
   INTRO: { title: '灵动介绍', lead: BRAND_NAME + '是面向 8–16 岁的 AI 创作开课平台：学生用中文与 AI 伙伴「阿飞」对话，当堂做出能运行、能展示的作品。', highlights: [], sections: [], cta: { title: '把 AI 课开起来', text: '联系我们，我们会按你的班型给出课包与开通方案。' } },
   HANDBOOK: { title: '机构合作手册', lead: '把「一门 AI 课」变成能复制的校区产品：课程、账号、授权次数与作品沉淀在同一套平台里。', sections: [], compareRows: [], cta: { title: '获取完整机构手册', text: '先联系我们，我们会把最新版本、课件示例与合作说明发给你。' } },
+  // 灵动课程（/marketplace）的页头：大标题 + 副标题。用户在后台「官网内容 → 灵动课程」可改
+  // （用户口径 2026-09-18 晚：这两句要能后台配置）。
+  MARKETPLACE: { title: '灵动Ai学院课包展示', lead: '灵动Ai坚持自研国内精品Ai课程，持续探索适合青少年Ai培训体系。' },
 };
 function useWebsiteContent(key) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
@@ -303,6 +310,8 @@ function ageLabel(min,max){
   return `≤${max} 岁`;
 }
 function Marketplace(){
+  const headCms = useWebsiteContent('MARKETPLACE');
+  const content = headCms.data || {};
   const [items,setItems]=useState([]);
   const [total,setTotal]=useState(0);
   const [page,setPage]=useState(1);
@@ -336,7 +345,19 @@ function Marketplace(){
     return()=>{live=false};
   },[filters,page]);
   const totalPages=Math.ceil(total/limit)||1;
-  return <><Title eyebrow="课程广场" title={<>发现优质<em>AI 编程课程</em></>} desc="平台已发布的课程都会自动出现在这里，分为画布课程与 VibeCoding 课程两类，涵盖 AI 创作、游戏设计与互动故事。"/><main className="inner">
+  // 页头（大标题 + 副标题）走 CMS 的 MARKETPLACE 键，后台「官网内容 → 灵动课程」可改；
+  // 没配就用 CMS_FALLBACK.MARKETPLACE。与首页同一套口径：**接口回来前不渲染文案**（ready），
+  // 否则强刷会先闪一帧与后台不符的字。
+  const headReady = !headCms.loading;
+  const headTitle = cmsPick(content, 'title', CMS_FALLBACK.MARKETPLACE.title);
+  const headLead = cmsPick(content, 'lead', CMS_FALLBACK.MARKETPLACE.lead);
+  return <main className="mp">
+    <div className="mp-aura" aria-hidden="true" />
+    <div className="mp-inner">
+    <header className="mp-head">
+      <p className="mp-eyebrow">课包 · COURSE PACKS</p>
+      {headReady ? <><h1 className="mp-title">{headTitle}</h1>{headLead ? <p className="mp-lead">{headLead}</p> : null}</> : <div className="mp-head-hold" aria-hidden="true" />}
+    </header>
     <div className="mkt-filters">
       <div className="mkt-row"><span className="mkt-label">课程类型</span><div className="mkt-chips">{[{label:'全部课程',value:''},{label:'画布课程',value:'CANVAS'},{label:'VibeCoding 课程',value:'VIBECODING'}].map(o=><button type="button" key={o.value||'all'} aria-pressed={filters.category===o.value} className={'mkt-chip'+(filters.category===o.value?' on':'')} onClick={()=>{setFilters(f=>({...f,category:o.value}));setPage(1);}}>{o.label}</button>)}</div></div>
       <div className="mkt-row"><span className="mkt-label">难度</span><div className="mkt-chips">{difficultyOptions.map(o=><button type="button" key={o.value} aria-pressed={filters.difficulty===o.value} className={'mkt-chip'+(filters.difficulty===o.value?' on':'')} onClick={()=>{setFilters(f=>({...f,difficulty:o.value}));setPage(1);}}>{o.label}</button>)}</div></div>
@@ -345,21 +366,35 @@ function Marketplace(){
       <div className="mkt-row"><span className="mkt-label">排序</span><div className="mkt-chips"><button type="button" aria-pressed={filters.sort==='popular'} className={'mkt-chip'+(filters.sort==='popular'?' on':'')} onClick={()=>{setFilters(f=>({...f,sort:'popular'}));setPage(1);}}>综合推荐</button><button type="button" aria-pressed={filters.sort==='recent'} className={'mkt-chip'+(filters.sort==='recent'?' on':'')} onClick={()=>{setFilters(f=>({...f,sort:'recent'}));setPage(1);}}>最新上线</button></div></div>
       <div className="mkt-search"><label className="sr-only" htmlFor="marketplace-search">搜索课程名称</label><input id="marketplace-search" placeholder="搜索课程名称…" value={filters.search} onChange={e=>{setFilters(f=>({...f,search:e.target.value}));setPage(1);}}/><button type="button" aria-label="重置课程筛选" onClick={()=>{setFilters(f=>({...f,search:'',difficulty:'',tag:'',sort:'popular'}));setActiveAge('');setPage(1);}} className="mkt-reset">重置</button></div>
     </div>
-    {loading?<div className="mkt-grid">{Array.from({length:8},(_,i)=><div key={i} className="mkt-skeleton"/>)}</div>:
-     error?<div className="note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
-     items.length===0?<div className="note">✦ <div><b>暂无课程，敬请期待</b><p>课程广场将陆续上线优质 AI 编程课程。</p></div></div>:
-     <><div className="mkt-grid">{items.map(item=><Link key={item.id} to={'/marketplace/'+item.id} className="mkt-card">
-       <div className="mkt-cover" style={(item.coverAssetId || item.coverImageUrl)?{backgroundImage:'url('+(item.coverAssetId ? '/api/public/file-assets/'+item.coverAssetId+'/download' : item.coverImageUrl)+')'}:{}}>{!item.coverAssetId && !item.coverImageUrl&&<span>{item.title?.charAt(0)||'课'}</span>}</div>
-       <div className="mkt-body"><h3>{item.title}</h3>
-         <span className="mkt-tag">{item.deliveryMode==='VIBECODING'?'VibeCoding 课程':'画布课程'}</span>
-         <div className="mkt-meta"><DifficultyStars level={item.difficultyLevel}/>{ageLabel(item.ageRangeMin,item.ageRangeMax)?<span className="mkt-age">{ageLabel(item.ageRangeMin,item.ageRangeMax)}</span>:null}</div>
-         {(item.tags||[]).slice(0,3).map(t=><span key={t} className="mkt-tag">{t}</span>)}
-         {(item.tags||[]).length>3&&<span className="mkt-tag-more">+{item.tags.length-3}</span>}
-       </div>
-     </Link>)}</div>
-     {totalPages>1&&<div className="mkt-pages"><button type="button" disabled={page<=1} aria-label="上一页" onClick={()=>setPage(p=>p-1)}>上一页</button><span>{page} / {totalPages}</span><button type="button" disabled={page>=totalPages} aria-label="下一页" onClick={()=>setPage(p=>p+1)}>下一页</button></div>}
+    {loading?<div className="mp-rows">{Array.from({length:4},(_,i)=><div key={i} className="mp-skeleton"/>)}</div>:
+     error?<div className="mp-note">⚠ <div><b>加载失败</b><p>{error}</p></div></div>:
+     items.length===0?<div className="mp-note">✦ <div><b>暂无课包，敬请期待</b><p>灵动课程会陆续上线优质 AI 课包。</p></div></div>:
+     <><div className="mp-rows">{items.map(item=>{
+       // 缩略图两个来源：后台上传的封面资产（coverAssetId）优先，其次贴的外链地址。
+       // ⚠️ 公开接口以前**两个都不下发**，所以这个位置一直是空的（只有首字占位块）。
+       const cover=item.coverAssetId?('/api/public/file-assets/'+item.coverAssetId+'/download'):(item.coverImageUrl||'');
+       // 课包目前没有折扣：只显示现价，不做划线原价（用户口径 2026-09-18）。
+       // 没定价（price_fen=0，默认值）时不假装是 0 元，写「价格面议」。
+       const priceFen=Number(item.priceFen||0);const yuan=priceFen/100;
+       const priceText=priceFen>0?'¥ '+(Number.isInteger(yuan)?yuan:yuan.toFixed(2)):'价格面议';
+       // 图3 那四个参数位：取课包自己的关键字段（难度 / 适学年龄 / 课时 / 课堂形式）
+       const params=[['难度',item.difficultyLevel?item.difficultyLevel+' / 5':'未设置'],['适学年龄',ageLabel(item.ageRangeMin,item.ageRangeMax)||'未设置'],['课时',(item.lessonCount||0)+' 节'],['课堂形式',item.deliveryMode==='VIBECODING'?'VibeCoding 课程':'画布课程']];
+       return <article className="mp-row" key={item.id}>
+         <div className="mp-main">
+           <div className={'mp-cover'+(cover?' has-image':'')} style={cover?{backgroundImage:'url('+cover+')'}:undefined}>{cover?null:<span>{item.title?.charAt(0)||'课'}</span>}</div>
+           <div className="mp-info"><h2 className="mp-name">{item.title}</h2><p className="mp-desc">{item.description||'课包简介待补充。'}</p></div>
+           <div className="mp-side">
+             <div className="mp-price"><strong>{priceText}</strong><span>{priceFen>0?'按课包开通':'开通方案请联系我们'}</span></div>
+             <Link className="mp-cta" to={'/marketplace/'+item.id}>查看课程列表<b>↗</b></Link>
+           </div>
+         </div>
+         <div className="mp-features"><div className="mp-feature-grid">{params.map(([label,value])=><div className="mp-feature" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div></div>
+       </article>;
+     })}</div>
+     {totalPages>1&&<div className="mkt-pages mp-pages"><button type="button" disabled={page<=1} aria-label="上一页" onClick={()=>setPage(p=>p-1)}>上一页</button><span>{page} / {totalPages}</span><button type="button" disabled={page>=totalPages} aria-label="下一页" onClick={()=>setPage(p=>p+1)}>下一页</button></div>}
      </>}
-  </main></>;
+    </div>
+  </main>;
 }
 
 function MarketplaceDetail(){
