@@ -10,6 +10,8 @@ import { MyCoursesPage } from './pages/MyCourses.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
 import { CourseDetailPage } from './pages/CourseDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
+// 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
+import SpecularButton from './components/SpecularButton.jsx';
 
 // 官网公开页面统一走共享 API client，保持错误解析与鉴权行为一致
 const publicApi = createApiClient();
@@ -128,6 +130,7 @@ function cmsPick(content, key, fallback) {
 }
 function HomeLanding() {
   const cms = useWebsiteContent('HOME');
+  const navigate = useNavigate();
   const content = cms.data || {};
   // stats 同理：后台把整排删空（空数组）就是不要这一排，不再退回内置那四项。
   const stats = Array.isArray(content.stats) ? content.stats : HOME_STATS_FALLBACK;
@@ -146,7 +149,14 @@ function HomeLanding() {
       {kicker ? <p className="hp-kicker">{kicker}</p> : null}
       {(title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
       {description ? <p className="hp-sub">{description}</p> : null}
-      <div className="hp-actions"><Link className="hp-cta" to="/demo">联系我们</Link><Link className="hp-cta ghost" to="/marketplace">查看课程</Link></div>
+      {/* 首页两个 CTA 用 SpecularButton：主按钮 autoAnimate（高光常亮 + 缓慢扫过），
+          次按钮只在光标靠近时亮起 —— 一强一弱，两个都是药丸形状（radius 会按高度自动夹成胶囊）。
+          ⚠️ 它渲染的是 <button>，所以导航走 onClick + navigate，不再是 <a>；
+          代价是右键「新标签打开」不再可用（首页 CTA 影响很小，接受）。 */}
+      <div className="hp-actions">
+        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.94} textColor="#0b0b0d" lineColor="#ffffff" baseColor="#9a9aa2" intensity={1.1} shineSize={17} shineFade={40} thickness={1} speed={0.7} followMouse proximity={250} autoAnimate onClick={() => navigate('/demo')}>联系我们</SpecularButton>
+        <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#6f6f78" intensity={0.85} shineSize={14} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>查看课程</SpecularButton>
+      </div>
     </section>
     {stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
   </main>;

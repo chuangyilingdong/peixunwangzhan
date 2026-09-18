@@ -19,6 +19,7 @@
     "@xyflow/react": "^12.3.6",
     "highlight.js": "^11.12.0",
     "marked": "^18.0.12",
+    "ogl": "^1.0.11",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
