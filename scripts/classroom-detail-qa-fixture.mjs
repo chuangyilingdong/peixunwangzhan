@@ -11,7 +11,7 @@ assert.ok(dbPath.startsWith(allowed + path.sep), 'Fixture only permits existing 
 const uploads = path.join(path.dirname(dbPath), 'uploads');
 fs.mkdirSync(uploads, { recursive: true });
 assert.ok(fs.realpathSync(uploads).startsWith(allowed + path.sep), 'Upload directory must remain inside .tmp');
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const admin = db.prepare("SELECT * FROM users WHERE login='org-admin' AND role='ORG_ADMIN'").get();
 const session = db.prepare("SELECT * FROM class_sessions WHERE teacher_id=? AND org_id=? ORDER BY created_at DESC LIMIT 1").get(admin.id, admin.org_id);
 assert.ok(session, 'Requires an existing org-admin classroom; no reset or global seed');

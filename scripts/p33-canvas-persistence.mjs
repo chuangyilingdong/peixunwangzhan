@@ -68,7 +68,7 @@ try {
   assert.ok(rootToken && student, '登录失败');
 
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const lesson = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
   db.close();
 

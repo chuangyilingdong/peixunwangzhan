@@ -32,7 +32,7 @@ await run(['packages/database/src/seed.js']);
 
 const seeded = { seriesId: '', lessonId: '', lessonSecondId: '', classId: '' };
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const lesson = db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get();
   seeded.lessonId = lesson.id; seeded.seriesId = lesson.series_id;
   // 候选池那条要用**另一节课**：夹具已经把这节课开成课堂了，同一节课上他会被判「已在别的课堂」。
@@ -57,9 +57,9 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
   const j = await r.json().catch(() => ({}));
   return { status: r.status, data: j?.data ?? j, error: j?.error || null };
 }
-const setSeriesBudget = (fen) => { const db = new DatabaseSync(dbPath); db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(fen, seeded.seriesId); db.close(); };
+const setSeriesBudget = (fen) => { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(fen, seeded.seriesId); db.close(); };
 const addSpend = (userId, orgId, costFen) => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare(`INSERT OR REPLACE INTO usage_records(
       id,org_id,user_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,created_at
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).run('p62_spend_' + costFen, orgId, userId, 'TEXT', 'm', 0, 'SUCCESS', null, '{}', costFen, seeded.seriesId);
@@ -74,7 +74,7 @@ try {
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   const org = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data.token;
   assert.ok(admin && student && org, '登录失败');
-  const identity = (() => { const db = new DatabaseSync(dbPath); const r = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get(); db.close(); return r; })();
+  const identity = (() => { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); const r = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get(); db.close(); return r; })();
 
   /* ① 课包没填预算 → 学生端看到「不限」（口径：留空 = 不限制，只记账） */
   const courses = await api('/api/student/courses', { token: student });

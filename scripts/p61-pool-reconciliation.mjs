@@ -45,7 +45,7 @@ await run(['packages/database/src/seed.js']);
    · 学员 B 在课包 S 上只有一条失败记录（失败不花钱 → 不进对账）。
    ⚠️ 用真实的 user/series/lesson id，因为令牌名要能被解析、课时要能映射到课包。 */
 const seeded = (() => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const lesson = db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get();
   const students = db.prepare("SELECT id, org_id FROM users WHERE role='STUDENT' LIMIT 2").all();
   const [a, b] = students;

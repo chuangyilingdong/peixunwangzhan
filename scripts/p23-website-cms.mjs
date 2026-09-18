@@ -106,7 +106,7 @@ try {
 
   // 6) 审计落库
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const audits = db.prepare("SELECT action, COUNT(*) n FROM audit_logs WHERE target_id='FAQ' AND action LIKE 'WEBSITE_CONTENT%' GROUP BY action").all();
   db.close();
   const auditMap = Object.fromEntries(audits.map((item) => [item.action, Number(item.n)]));

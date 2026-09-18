@@ -39,7 +39,7 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath);
+const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
 const lesson = seedDb.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
 seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
 seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
@@ -130,7 +130,7 @@ try {
   }
 
   /* ── 审计里不该再有点评事件 ── */
-  const audit = new DatabaseSync(dbPath);
+  const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
   const reviewLog = audit.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='VIBECODING_REVIEW'").get();
   const submitLog = audit.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='VIBECODING_SUBMIT'").get();
   audit.close();

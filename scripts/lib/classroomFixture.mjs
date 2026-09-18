@@ -47,7 +47,7 @@ const sessionCapabilityFlags = (db, lessonId) => {
  * 于是长期被误当成「机器负载」或「端口残留」。2026-09-18 抓到堆栈就是这里第 84 行的插入。
  * 这个夹具被 20 多个守卫共用，所以修这一处，那些偶发红都会消失。
  */
-function openDb(dbPath) {
+export function openDb(dbPath) {
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA busy_timeout = 5000');
   return db;

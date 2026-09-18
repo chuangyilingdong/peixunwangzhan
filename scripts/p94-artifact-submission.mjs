@@ -36,7 +36,7 @@ await run(['packages/database/src/seed.js']);
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const index = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_vibe_submission_conversation_entry'").get();
 check('① 复合唯一索引 (conversation_id, entry_file) 已建', Boolean(index));
 const ddl = String(db.prepare("SELECT sql FROM sqlite_master WHERE name='vibecoding_submissions'").get()?.sql || '');

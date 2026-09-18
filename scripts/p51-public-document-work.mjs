@@ -117,7 +117,7 @@ let serverLog = '';
 let server = null;
 try {
   const { DatabaseSync } = await import('node:sqlite');
-  const seedDb = new DatabaseSync(dbPath);
+  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
   const lesson = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1').get();
   seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
   seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
@@ -176,7 +176,7 @@ try {
   // 造出「学生做了一份 PPT」的状态：种子产物 + 学生要的中文名文档 + 一张这一轮传的图。
   // 学生不能手写代码了，所以直接写产物表（与 p25 同一套做法）；本脚本验的是提交之后的链路。
   {
-    const driver = new DatabaseSync(dbPath);
+    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
     const at = new Date();
     const old = new Date(at.getTime() - 60000).toISOString();
     const recent = at.toISOString();
@@ -250,7 +250,7 @@ try {
   // 5b) 广场给的必须是**交上来的那一版**：提交后学生还能接着改（不再锁创作），
   //     改活会话里的产物不能把广场上的作品一起改掉。
   {
-    const driver = new DatabaseSync(dbPath);
+    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
     driver.prepare('UPDATE vibecoding_artifacts SET content=? WHERE id=?').run(JSON.stringify({ ...DECK, title: '改版之后的标题' }), 'vibeart_p51_deck');
     driver.close();
   }

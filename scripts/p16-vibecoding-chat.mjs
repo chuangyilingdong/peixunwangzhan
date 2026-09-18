@@ -36,7 +36,7 @@ await run(['packages/database/src/seed.js']);
 
 // 准备两种课时：一个 VibeCoding，一个画布（用于验证互斥）
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath);
+const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
 const lessons = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 2').all();
 assert.equal(lessons.length >= 2, true, '种子数据应至少有两个课时');
 const vibeLessonId = lessons[0].id;
@@ -133,7 +133,7 @@ try {
   assert.equal(detail.data.messages[1].creditsCharged, undefined, '消息里不该再有积分字段');
   assert.equal(detail.data.title, '帮我写一个会变色的按钮', '首条消息应自动成为会话标题');
 
-  const usage = new DatabaseSync(dbPath);
+  const usage = new DatabaseSync(dbPath); usage.exec('PRAGMA busy_timeout = 5000');
   const usageRow = usage.prepare("SELECT COUNT(*) n FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
   const costRow = usage.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get();
   const assistantRow = usage.prepare("SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=? AND role='assistant'").get(conversationId);
@@ -175,7 +175,7 @@ try {
 
   // 迁移来的产物（message_id 为空）也必须挂到最后一条助手消息上
   {
-    const driver = new DatabaseSync(dbPath);
+    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
     driver.prepare('UPDATE vibecoding_artifacts SET message_id=NULL WHERE conversation_id=?').run(conversationId);
     driver.close();
     const reread = await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student });

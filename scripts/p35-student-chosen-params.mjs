@@ -59,7 +59,7 @@ try {
   assert.ok(rootToken && student, '登录失败');
 
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const lesson = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
   db.close();
 
@@ -93,7 +93,7 @@ try {
   assert.equal(openFromProject.aspectRatio, '', '项目接口也应下发空参数');
   assert.ok(openFromProject.paramOptions?.aspectRatios?.length, '项目接口应下发 paramOptions');
 
-  const db2 = new DatabaseSync(dbPath, { readOnly: true });
+  const db2 = new DatabaseSync(dbPath, { readOnly: true }); db2.exec('PRAGMA busy_timeout = 5000');
   const jobOptions = (jobId) => db2.prepare('SELECT request_options FROM generation_jobs WHERE id=?').get(jobId)?.request_options || null;
 
   // 2) 学生选的参数被采纳并落库

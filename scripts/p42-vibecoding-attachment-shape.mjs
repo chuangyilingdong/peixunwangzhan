@@ -23,7 +23,7 @@ const run = (args) => new Promise((resolve, reject) => {
 await run(['packages/database/src/db.js', '--init']);
 
 const { DatabaseSync } = await import('node:sqlite');
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 db.exec('PRAGMA foreign_keys = OFF');
 db.prepare("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1','o1','u1','t','{}','index.html','DRAFT',?,?)").run(new Date().toISOString(), new Date().toISOString());
 const now = new Date().toISOString();

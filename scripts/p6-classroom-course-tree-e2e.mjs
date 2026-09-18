@@ -41,7 +41,7 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 // 此守卫覆盖两种已发布入口，种子课时只开放画布。
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`).run();
   db.close();
 }
@@ -51,7 +51,7 @@ await run(['packages/database/src/seed.js']);
 // 它必须对该机构有生效授权：平台课包「发布」只上课程广场，机构能看到的前提是授权
 // （见交接说明第四节；否则这个课包在校端根本不会出现，就测不到「可见但未开课」了）。
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const now = new Date().toISOString();
   const seriesId = `series_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
   const lessonId = `lesson_${randomUUID().replaceAll('-', '').slice(0, 20)}`;

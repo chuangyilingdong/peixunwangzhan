@@ -55,7 +55,7 @@ try {
   const teacher = await login('teacher-1', 'teach123');
 
   // 给机构一个「有次数」的课包：直接改库设可授权次数（平台侧接口要绕平台账号，这里只测机构视角）
-  const seedDb = new DatabaseSync(dbPath);
+  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
   const series = seedDb.prepare("SELECT id, title FROM course_series WHERE status='PUBLISHED' LIMIT 1").get();
   const orgId = seedDb.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
   const students = seedDb.prepare("SELECT id FROM users WHERE role='STUDENT' AND org_id=? LIMIT 3").all(orgId);
@@ -94,7 +94,7 @@ try {
   check('② 「已分配学员」与明细细表对得上（同一份许可数据）', activeGrants.length === Number(after?.grantedStudents), JSON.stringify({ detailActive: activeGrants.length, students: after?.grantedStudents }));
 
   /* ③ 课堂计数：按「课时属于哪个课包」归集，与直接查库一致 */
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const lessonIds = db.prepare('SELECT id FROM course_lessons WHERE series_id=?').all(series.id).map((item) => item.id);
   const placeholders = lessonIds.map(() => '?').join(',') || "''";
   const liveCount = (status) => Number(db.prepare(`SELECT COUNT(*) n FROM class_sessions WHERE status=? AND lesson_id IN (${placeholders})`).get(status, ...lessonIds)?.n || 0);

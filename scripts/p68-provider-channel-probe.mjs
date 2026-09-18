@@ -120,7 +120,7 @@ try {
     JSON.stringify(unconfigured.data).slice(0, 200));
 
   /* ④ 探测不写用量：它是「试参数」，不是创作 */
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const usageRows = db.prepare('SELECT COUNT(*) n FROM usage_records').get().n;
   const auditRows = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AI_PROVIDER_PROBE'").get().n;
   db.close();

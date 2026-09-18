@@ -103,7 +103,7 @@ try {
 
   // 3) 课时保存时按这个列表校验：不在列表里的取值会被拒
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const lesson = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
   db.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
   db.close();

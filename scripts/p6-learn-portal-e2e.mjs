@@ -68,7 +68,7 @@ try {
   await waitForServer();
 
   // 1. Schema: personal_credit_ledger + users.personal_credits/magic_stones columns exist
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA foreign_keys = ON');
   const cols = db.prepare(`SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones')`).all().map(r => r.name);
   check('users columns migrated', () => assert.ok(cols.includes('personal_credits') && cols.includes('magic_stones'), 'missing cols: ' + cols.join(',')));
@@ -145,7 +145,7 @@ try {
   check('AppShell 不再有 item.external 分支', () => assert.ok(!uiJsx.includes('item.external'), 'external 分支已随该入口删除'));
 
   // 9. Personal credit ledger is writable + indexed
-  const db2 = new DatabaseSync(dbPath);
+  const db2 = new DatabaseSync(dbPath); db2.exec('PRAGMA busy_timeout = 5000');
   const userId = student.user.id;
   const orgId = 'test-org';
   db2.prepare(`INSERT INTO organizations (id, name, status, contract_start_at, contract_expires_at, created_at, updated_at) VALUES (?, 't', 'ACTIVE', datetime('now'), datetime('now', '+30 days'), datetime('now'), datetime('now'))`).run(orgId);

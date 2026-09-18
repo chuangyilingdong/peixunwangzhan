@@ -24,7 +24,7 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 
 // ── 造一个「老库」：works 用**旧 CHECK**（四个状态），并塞进一条作品 + 一条子表记录 ──
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(`CREATE TABLE works (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, student_id TEXT NOT NULL, org_id TEXT, class_id TEXT,
@@ -50,7 +50,7 @@ const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`
 await import('./../packages/database/src/schema.js');
 
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const ddl = String(db.prepare("SELECT sql FROM sqlite_master WHERE name='works'").get()?.sql || '');
   check('迁移后：works 的 CHECK 含 UNPUBLISHED', ddl.includes("'UNPUBLISHED'"), ddl.slice(0, 200));
   check('迁移后：新列 unpublish_reason / unpublished_at 都在', ddl.includes('unpublish_reason') && ddl.includes('unpublished_at'));
@@ -74,7 +74,7 @@ await import('./../packages/database/src/schema.js');
 // ── 幂等：再跑一次，行数不变、不重建、不报错 ──
 await import(`../packages/database/src/schema.js?v=2`);
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const total = db.prepare('SELECT COUNT(*) n FROM works').get().n;
   check('再跑一次是幂等的：作品行数与迁移后一致', Number(total) === Number(process.env.EXPECTED_WORKS || 2), `行数 ${total}`);
   const ddl = String(db.prepare("SELECT sql FROM sqlite_master WHERE name='works'").get()?.sql || '');

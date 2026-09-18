@@ -41,7 +41,7 @@ await run(['packages/database/src/seed.js']);
 const { buildPreviewDocument } = await import(pathToFileURL(path.join(root, 'packages/shared/src/vibecodingProject.js')).href);
 
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath);
+const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
 const lesson = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1').get();
 seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
 seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
@@ -108,7 +108,7 @@ try {
   // 学生不能手写代码了，所以这里直接写产物表来准备作品内容；
   // 本脚本验的是「提交→点评→发布→公开可玩」这条链路，不是产物怎么来的。
   {
-    const driver = new DatabaseSync(dbPath);
+    const driver = new DatabaseSync(dbPath); driver.exec('PRAGMA busy_timeout = 5000');
     const now = new Date().toISOString();
     driver.prepare('DELETE FROM vibecoding_artifacts WHERE conversation_id=?').run(conversationId);
     for (const [name, kind, content] of [['index.html', 'html', gameHtml], ['game.js', 'js', gameScript]]) {
@@ -174,7 +174,7 @@ try {
   assert.equal(afterDetail.status, 404, `下架后直链应 404，实际 ${afterDetail.status}`);
 
   // 8) 审计落库
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const audits = db.prepare("SELECT action, COUNT(*) n FROM audit_logs WHERE action IN ('VIBECODING_SUBMIT','PLATFORM_VIBECODING_WORK_PUBLISH','PLATFORM_VIBECODING_WORK_UNPUBLISH') GROUP BY action").all();
   db.close();
   const auditMap = Object.fromEntries(audits.map((item) => [item.action, Number(item.n)]));

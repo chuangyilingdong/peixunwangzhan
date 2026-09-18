@@ -50,7 +50,7 @@ await run(['packages/database/src/seed.js']);
    usage_records.cost_fen 故意写成 999 —— 只要「消耗」还读那一列，断言立刻红。 */
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const orgId = db.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
   const student = db.prepare("SELECT id FROM users WHERE login='student-1'").get().id;
   const teacher = db.prepare("SELECT id FROM users WHERE login='teacher-1'").get().id;

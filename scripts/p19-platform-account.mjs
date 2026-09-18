@@ -36,7 +36,7 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath);
+const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
 const org = seedDb.prepare('SELECT id FROM organizations LIMIT 1').get();
 const student = seedDb.prepare("SELECT id, login FROM users WHERE login='student-2'").get();
 const rootUser = seedDb.prepare("SELECT id FROM users WHERE login='root'").get();
@@ -146,7 +146,7 @@ try {
   const staleStudent = await api('/api/student/dashboard', { token: studentLogin.data.token });
   assert.equal(staleStudent.status, 401, `改角色后学生会话应失效，实际 ${staleStudent.status}`);
 
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const audit = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action IN ('PLATFORM_USER_ROLE','PLATFORM_SELF_PASSWORD_UPDATE')").get();
   const role = db.prepare('SELECT role FROM users WHERE id=?').get(student.id);
   db.close();

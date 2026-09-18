@@ -42,7 +42,7 @@ await run(['packages/database/src/seed.js']);
 // 这样同一个环境既能跑画布那条（同步/异步），也能跑 VibeCoding 对话那条（SSE）。
 // 直接改库（趁服务还没起，避免并发写锁），因为平台端传课时预算要绕好几个接口。
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare('UPDATE course_lessons SET per_student_budget_fen=?').run(5000);
   db.prepare("UPDATE course_lessons SET delivery_modes=?").run('["CANVAS","VIBECODING"]');
   for (const capability of ['text', 'image']) {
@@ -140,7 +140,7 @@ try {
   const items = courses.data?.items || courses.data?.courses || [];
   const lessonId = items?.[0]?.currentLessonId || items?.[0]?.lessons?.[0]?.id || items?.[0]?.lesson?.id || items?.[0]?.id;
   assert.ok(lessonId, '未取到课时 ID：' + JSON.stringify(courses.data).slice(0, 200));
-  const identity = (() => { const db = new DatabaseSync(dbPath); const r = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get(); db.close(); return r; })();
+  const identity = (() => { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); const r = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get(); db.close(); return r; })();
   const studentName = `学生:${identity.id}`;
   const orgName = `机构:${identity.org_id}`;
   const lessonName = `课时:${lessonId}`;
@@ -184,7 +184,7 @@ try {
     { id: nextTokenId++, name: [orgName, studentName].join('/'), key: 'sk-org-student', remain_quota: 1000000, unlimited_quota: false, status: 1 },
     { id: nextTokenId++, name: studentName, key: 'sk-student-only', remain_quota: 1000000, unlimited_quota: false, status: 1 },
   ];
-  { const db = new DatabaseSync(dbPath); db.prepare('UPDATE course_lessons SET per_student_budget_fen=NULL').run(); db.prepare('UPDATE class_sessions SET platform_budget_fen=0').run(); db.close(); }
+  { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); db.prepare('UPDATE course_lessons SET per_student_budget_fen=NULL').run(); db.prepare('UPDATE class_sessions SET platform_budget_fen=0').run(); db.close(); }
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });
   const beforePosts = gateway.tokenPosts.length;
   const noBudgetRun = await generate('无学生预算仍自动创建内部身份');
@@ -239,7 +239,7 @@ try {
         这里把网关上的令牌清空，只有 worker 真的解析过才会又出现一张令牌） */
   // ⑦ 走的是**画布**链路（异步任务），所以先把课堂入口类型切回 CANVAS。
   switchClassroom(dbPath, { deliveryMode: 'CANVAS', requireSupports: false });
-  { const db = new DatabaseSync(dbPath); db.prepare('UPDATE course_lessons SET per_student_budget_fen=?').run(5000); db.close(); }
+  { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000'); db.prepare('UPDATE course_lessons SET per_student_budget_fen=?').run(5000); db.close(); }
   gateway.tokens = [];
   await setGateway(admin, { baseUrl: `http://127.0.0.1:${GW_PORT}`, username: 'root', password: 'p59-password', enabled: true });
   const postsBeforeAsync = gateway.tokenPosts.length;
@@ -294,7 +294,7 @@ try {
     await new Promise((resolve) => shapeServer.close(resolve));
   }
 
-  { const db = new DatabaseSync(dbPath);
+  { const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     const charges = db.prepare('SELECT COUNT(*) n FROM usage_records WHERE credits_charged<>0').get();
     check('学生所有调用扣费为零', charges.n === 0, JSON.stringify(charges));
     db.close();

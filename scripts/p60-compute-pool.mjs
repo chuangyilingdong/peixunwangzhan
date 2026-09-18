@@ -36,7 +36,7 @@ await run(['packages/database/src/seed.js']);
    · 课包预算先留空（第 ① 段验证「留空不拦」），之后按段设置。 */
 const seeded = { seriesId: '', lessonId: '' };
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const lesson = db.prepare('SELECT id, series_id FROM course_lessons ORDER BY sort LIMIT 1').get();
   seeded.lessonId = lesson.id; seeded.seriesId = lesson.series_id;
   db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
@@ -70,7 +70,7 @@ const setProvider = (token, endpoint) => api('/api/admin/billing-config/ai-provi
   body: { provider: 'custom', displayName: 'P60 上游', model: 'p60-model', endpoint, platformPerCallBudget: 0, platformDailyBudget: 0, allowStudentExternalContent: true, reason: 'P60 算力池守卫' },
 });
 const setSeriesBudget = (fen) => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare('UPDATE course_series SET per_student_budget_fen=? WHERE id=?').run(fen, seeded.seriesId);
   db.close();
 };
@@ -162,7 +162,7 @@ try {
 
   // Corrupt historical failed charges must never inflate the student pool or admin summaries.
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     db.prepare("UPDATE usage_records SET cost_fen=99999 WHERE status='FAILED'").run();
     db.close();
     // 2026-09-18：原来这里断言 `pool.poolUsedFen(...) === null` —— 那个函数是个恒返回 null 的兼容桩，
@@ -177,7 +177,7 @@ try {
   }
 
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     db.prepare("UPDATE compute_attempts SET cost_source='ESTIMATED',upstream_cost_fen=20 WHERE status='SUCCESS'").run();
     const summary = (await api('/api/admin/compute-attempts?days=30', { token: admin })).data.summary;
     check('⑧ 已知上游估算与未知尝试分开报告', summary.estimatedFen > 0 && summary.unknownCalls > 0, JSON.stringify(summary));

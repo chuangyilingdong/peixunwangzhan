@@ -74,7 +74,7 @@ try {
   assert.ok(rootToken && student, '登录失败');
 
   const { DatabaseSync } = await import('node:sqlite');
-  const seedDb = new DatabaseSync(dbPath);
+  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
   const lesson = seedDb.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
   seedDb.close();
 

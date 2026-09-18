@@ -7,7 +7,7 @@ const routeSource = fs.readFileSync(new URL('../apps/server/src/routes/admin/wor
 const pageSource = fs.readFileSync(new URL('../apps/admin/src/pages/PlatformWorks.jsx', import.meta.url), 'utf8');
 const helper = helperSource.slice(helperSource.indexOf('function platformWorkFilters('), helperSource.indexOf('\nfunction buildOrganizationDetail('));
 const platformWorkFilters = new Function(`${helper}; return platformWorkFilters;`)();
-const db = new DatabaseSync(':memory:');
+const db = new DatabaseSync(':memory:'); db.exec('PRAGMA busy_timeout = 5000');
 db.exec(`
 CREATE TABLE users(id TEXT, display_name TEXT, login TEXT);
 CREATE TABLE organizations(id TEXT, name TEXT);

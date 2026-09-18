@@ -88,7 +88,7 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 setProviderApiKey(CHANNEL_KEY, CHANNEL_ID);
 
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const teacher = db.prepare("SELECT * FROM users WHERE login='teacher-1'").get();
 const student = db.prepare("SELECT * FROM users WHERE login='student-1'").get();
 const lesson = db.prepare("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
@@ -114,7 +114,7 @@ const policy = {
   allowStudentExternalContent: true,
 };
 const writePolicy = (patch = {}) => {
-  const writer = new DatabaseSync(dbPath);
+  const writer = new DatabaseSync(dbPath); writer.exec('PRAGMA busy_timeout = 5000');
   writer.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ ...policy, ...patch }));
   writer.close();
 };
@@ -220,7 +220,7 @@ try {
 
   /* ⑤ 记账：上游 tokens 与按合同单价折算的成本都落账 */
   {
-    const audit = new DatabaseSync(dbPath);
+    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
     const usage = audit.prepare("SELECT * FROM usage_records WHERE class_session_id=? AND modality='TEXT' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(sessionId);
     check('⑤ 落了 usage_records，tokens 来自上游回执', usage?.input_tokens === 1000000 && usage?.output_tokens === 500000,
       JSON.stringify({ in: usage?.input_tokens, out: usage?.output_tokens }));
@@ -242,7 +242,7 @@ try {
     reply = { status: 429, body: { type: 'error', error: { type: 'rate_limit_error', message: '上游限流了' } } };
     const limited = await search(pluginBody(), key);
     check('⑥ 上游 429 → 原样回吐 429 与上游原话', limited.status === 429 && /上游限流了/.test(limited.text), `${limited.status} ${limited.text.slice(0, 160)}`);
-    const audit = new DatabaseSync(dbPath);
+    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
     const failed = audit.prepare("SELECT * FROM usage_records WHERE class_session_id=? AND status='FAILED' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(sessionId);
     check('⑥ 失败也落账（带 fail_code）', Boolean(failed?.fail_code), JSON.stringify({ code: failed?.fail_code }));
     audit.close();
@@ -260,18 +260,18 @@ try {
 
   /* ⑧ 门禁：课堂结束 / 学生被移出（与聊天同一个判据，不用等环境回收） */
   {
-    const probe = new DatabaseSync(dbPath);
+    const probe = new DatabaseSync(dbPath); probe.exec('PRAGMA busy_timeout = 5000');
     probe.prepare("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE id=?").run(now, sessionId);
     probe.close();
     const ended = await search(pluginBody(), key);
     check('⑧ 课堂已结束 → 403', ended.status === 403 && /课堂已经结束/.test(ended.text), `${ended.status} ${ended.text.slice(0, 160)}`);
-    const probe2 = new DatabaseSync(dbPath);
+    const probe2 = new DatabaseSync(dbPath); probe2.exec('PRAGMA busy_timeout = 5000');
     probe2.prepare("UPDATE class_sessions SET status='ACTIVE' WHERE id=?").run(sessionId);
     probe2.prepare("UPDATE session_students SET status='REMOVED', removed_reason='P106' WHERE id='p106_part'").run();
     probe2.close();
     const removed = await search(pluginBody(), key);
     check('⑧ 学生被移出名单 → 403', removed.status === 403 && /不在课堂名单/.test(removed.text), `${removed.status} ${removed.text.slice(0, 160)}`);
-    const probe3 = new DatabaseSync(dbPath);
+    const probe3 = new DatabaseSync(dbPath); probe3.exec('PRAGMA busy_timeout = 5000');
     probe3.prepare("UPDATE session_students SET status='ACTIVE', removed_reason=NULL WHERE id='p106_part'").run();
     probe3.close();
   }

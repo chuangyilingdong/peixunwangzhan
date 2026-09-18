@@ -43,7 +43,7 @@ await run(['packages/database/src/seed.js']);
 // 否则「看得见/看不见」测不出区别（空集合会让断言变成假绿）。
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const orgId = db.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
   const t1 = db.prepare("SELECT id FROM users WHERE login='teacher-1'").get().id;
   const t2 = db.prepare("SELECT id FROM users WHERE login='teacher-2'").get().id;
@@ -147,7 +147,7 @@ try {
   check('④ 作品接口可用（教师视角）', worksTeacher.status === 200, JSON.stringify(worksTeacher).slice(0, 160));
   // 教师自己的课堂里造一件作品：应当看得到；再给别人的课堂造一件：不该看到。
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     const now = new Date().toISOString();
     // ⚠️ works.project_id 是 UNIQUE（一个项目一件作品），所以两件作品得挂在两个项目上。
     // ⚠️ works 表没有 created_at/updated_at（只有 submitted_at），canvas_snapshot 是 NOT NULL。

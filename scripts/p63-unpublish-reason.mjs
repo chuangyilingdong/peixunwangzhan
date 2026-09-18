@@ -42,7 +42,7 @@ await run(['packages/database/src/seed.js']);
 // → 把所有课时开成双入口并开放 text 能力（趁服务没起，避免并发写锁）
 {
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare("UPDATE course_lessons SET delivery_modes='[\"CANVAS\",\"VIBECODING\"]'").run();
   db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) SELECT id, 'text', datetime('now') FROM course_lessons").run();
   db.close();
@@ -90,7 +90,7 @@ try {
 
   /* 2026-09-13（C2）存储层：下架要有**自己的状态和原因列**，不再复用 REJECTED / teacher_comment */
   const { DatabaseSync } = await import('node:sqlite');
-  const afterUnpublish = new DatabaseSync(dbPath);
+  const afterUnpublish = new DatabaseSync(dbPath); afterUnpublish.exec('PRAGMA busy_timeout = 5000');
   const rowAfter = afterUnpublish.prepare('SELECT status, unpublish_reason, unpublished_at, is_public, teacher_comment FROM works WHERE id=?').get(workId);
   afterUnpublish.close();
   check('① 存储层：下架写的是 UNPUBLISHED，不再是 REJECTED',
@@ -107,7 +107,7 @@ try {
   /* 重新上架：状态回到 PUBLISHED，且**旧的下架原因被清掉**（不给学生过期说明） */
   const republished = await api(`/api/admin/works/${encodeURIComponent(workId)}/plaza`, { method: 'PUT', token: admin, body: { published: true } });
   check('① 重新上架成功（UNPUBLISHED → PUBLISHED 这条路是通的）', republished.status === 200, JSON.stringify(republished).slice(0, 200));
-  const recheck = new DatabaseSync(dbPath);
+  const recheck = new DatabaseSync(dbPath); recheck.exec('PRAGMA busy_timeout = 5000');
   const rowRepublished = recheck.prepare('SELECT status, unpublish_reason, is_public FROM works WHERE id=?').get(workId);
   recheck.close();
   check('① 重新上架后：旧下架原因清空、状态回到 PUBLISHED',
@@ -115,7 +115,7 @@ try {
     JSON.stringify(rowRepublished));
 
   /* 历史行兜底：C2 之前的行是 REJECTED + teacher_comment，读取时仍要能给学生一句下架说明 */
-  const legacy = new DatabaseSync(dbPath);
+  const legacy = new DatabaseSync(dbPath); legacy.exec('PRAGMA busy_timeout = 5000');
   legacy.prepare("UPDATE works SET status='REJECTED', unpublish_reason=NULL, teacher_comment=?, is_public=0 WHERE id=?").run('C2 之前的下架原因', workId);
   legacy.close();
   const legacyMine = ((await api('/api/student/works?limit=20', { token: student })).data?.items || []).find((item) => item.id === workId);

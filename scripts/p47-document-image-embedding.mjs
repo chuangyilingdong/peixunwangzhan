@@ -46,7 +46,7 @@ const photo = putAsset('file_photo', '2026/09/photo.png', PNG, 'image/png', '照
 const doc = putAsset('file_doc', '2026/09/notes.pdf', PDF, 'application/pdf', '笔记.pdf');
 
 const { DatabaseSync } = await import('node:sqlite');
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 db.exec('PRAGMA foreign_keys = OFF');
 const now = new Date().toISOString();
 const asset = (item) => db.prepare(
@@ -81,7 +81,7 @@ check('非图片附件不占编号（序号 2 不该有东西）', images.get(2)
 // 数据库列名写法也要认（调用方可能直接传行对象）——写错就静默没图，属于同一个坑
 check('直接传数据库行对象（message_id）也能取到', attachmentImageMap('c1', { message_id: 'm_ai', kind: 'pptx', content: PPT_CONTENT }).size === 1);
 setArtifactAttachmentImages('a1', [{ index: 1, fileId: 'file_photo' }]);
-const clearDb = new DatabaseSync(dbPath);
+const clearDb = new DatabaseSync(dbPath); clearDb.exec('PRAGMA busy_timeout = 5000');
 clearDb.prepare('DELETE FROM vibecoding_messages WHERE conversation_id=?').run('c1');
 clearDb.close();
 check('清空聊天后产物固化的附件图仍可读取', attachmentImageMap('c1', getArtifact('c1', 'a1')).get(1)?.equals(PNG) === true);

@@ -66,7 +66,7 @@ try {
   const orgToken = await login('org-admin', 'org123');
   const studentToken = await login('student-1', 'study123');
 
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const orgId = db.prepare("SELECT org_id FROM users WHERE login='org-admin'").get().org_id;
   const studentId = db.prepare("SELECT id FROM users WHERE login='student-1'").get().id;
   db.close();
@@ -114,7 +114,7 @@ try {
 
   /* ④ 列还在（删代码不删表），但新写入的积分列恒为 0 */
   console.log('\n④ 积分列保留但不再写入');
-  const db2 = new DatabaseSync(dbPath);
+  const db2 = new DatabaseSync(dbPath); db2.exec('PRAGMA busy_timeout = 5000');
   const cols = db2.prepare("SELECT name FROM pragma_table_info('users') WHERE name IN ('personal_credits','magic_stones','monthly_credit_allowance','ai_credit_limit')").all().map((r) => r.name);
   check('users 的积分列仍在库里（历史数据可回查）', cols.length === 4, cols.join(','));
   const tables = db2.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('credit_entries','personal_credit_ledger','user_credit_adjustments','org_billing_accounts')").all().map((r) => r.name);

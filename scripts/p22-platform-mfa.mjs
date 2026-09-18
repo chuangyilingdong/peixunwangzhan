@@ -166,7 +166,7 @@ try {
 
   // 13) 审计落库
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const audits = db.prepare("SELECT action, COUNT(*) n FROM audit_logs WHERE action LIKE 'PLATFORM_MFA%' GROUP BY action").all();
   const mfaLogin = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='AUTH_LOGIN' AND after_data LIKE '%RECOVERY_CODE%'").get();
   const credentials = db.prepare('SELECT COUNT(*) n FROM user_mfa_credentials').get();

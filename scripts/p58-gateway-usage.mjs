@@ -45,7 +45,7 @@ const { aggregateUsage, lessonBudgetOverview } = await import('../apps/server/sr
 // 平台预算按课堂快照归集；学生人数及历史每学生预算不参与计算。
 const seededLessons = { budgeted: '', halfBudgeted: '', noBudget: '' };
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   [seededLessons.budgeted, seededLessons.halfBudgeted, seededLessons.noBudget] = db.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 3').all().map(item => item.id);
   const student = db.prepare("SELECT id,org_id FROM users WHERE role='STUDENT' LIMIT 1").get();
   const teacher = db.prepare("SELECT id FROM users WHERE role='TEACHER' LIMIT 1").get();

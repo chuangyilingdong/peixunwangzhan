@@ -245,7 +245,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 {
-  const seedDb = new DatabaseSync(dbPath);
+  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
   const lesson = seedDb.prepare('SELECT id FROM course_lessons ORDER BY sort LIMIT 1').get();
   seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING' WHERE id=?").run(lesson.id);
   seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
@@ -278,7 +278,7 @@ try {
 
   const login = async (l, p) => (await api('/api/auth/login', { method: 'POST', body: { login: l, password: p } })).data.token;
   // 先**没有**课堂：门禁应当拦住一切（这是「没被老师排进课就进不去」那条口径）
-  const cold = new DatabaseSync(dbPath);
+  const cold = new DatabaseSync(dbPath); cold.exec('PRAGMA busy_timeout = 5000');
   const anyStudent = cold.prepare("SELECT login FROM users WHERE role='STUDENT' AND deleted_at IS NULL ORDER BY created_at LIMIT 1").get();
   cold.close();
   const coldToken = await login(anyStudent.login, 'study123');
@@ -289,7 +289,7 @@ try {
   // 放进课堂（夹具覆盖所有有许可的学生）
   ensureClassroom(dbPath);
   switchClassroom(dbPath, { deliveryMode: 'VIBECODING' });
-  const scopeDb = new DatabaseSync(dbPath);
+  const scopeDb = new DatabaseSync(dbPath); scopeDb.exec('PRAGMA busy_timeout = 5000');
   const enrolled = scopeDb.prepare(
     `SELECT student.login, lesson.id AS lesson_id FROM session_students part
        JOIN class_sessions session ON session.id = part.session_id AND session.status='ACTIVE'

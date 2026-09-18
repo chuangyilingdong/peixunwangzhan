@@ -14,7 +14,7 @@ if (init.status !== 0) throw new Error(`db init failed: ${init.stderr}`);
 const seed = spawnSync(process.execPath, ['packages/database/src/seed.js'], { cwd: root, env, encoding: 'utf8' });
 if (seed.status !== 0) throw new Error(`db seed failed: ${seed.stderr}`);
 
-const db = new DatabaseSync(dbPath, { readOnly: true });
+const db = new DatabaseSync(dbPath, { readOnly: true }); db.exec('PRAGMA busy_timeout = 5000');
 const seedLogins = ['root', 'org-admin', 'teacher-1', 'teacher-2', 'student-1', 'student-2'];
 const seedOrgNames = ['示例创新学校'];
 

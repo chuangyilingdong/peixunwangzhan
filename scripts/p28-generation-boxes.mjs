@@ -110,7 +110,7 @@ try {
   assert.ok(student, '学生登录失败');
 
   const { DatabaseSync } = await import('node:sqlite');
-  const seedDb = new DatabaseSync(dbPath);
+  const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
   const seedDb2 = seedDb;
   seedDb.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ provider: 'local-mock', channels: [{ id: 'p28-video', provider: 'local-mock', model: 'hailuo-h3-i2v', models: ['hailuo-h3-i2v'] }], modalityChannels: { VIDEO: 'p28-video' } }));
   const lesson = seedDb.prepare("SELECT lesson.id, lesson.series_id FROM course_lessons lesson JOIN student_course_grants grant ON grant.series_id=lesson.series_id JOIN users student ON student.id=grant.student_id WHERE student.login='student-2' AND grant.revoked_at IS NULL AND lesson.status='PUBLISHED' ORDER BY lesson.sort LIMIT 1").get();

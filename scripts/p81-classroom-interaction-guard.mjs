@@ -89,7 +89,7 @@ const run = (args) => new Promise((resolve, reject) => {
 });
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const lesson = db.prepare("SELECT id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
 const forged = db.prepare("SELECT id FROM users WHERE role='TEACHER' AND login<>'teacher-1' LIMIT 1").get();
 const actual = db.prepare("SELECT id FROM users WHERE login='teacher-1'").get();

@@ -41,7 +41,7 @@ await run(['packages/database/src/seed.js']);
 // 起点：把种子给 student-2 的那条许可**删掉**（模拟「机构还没分给他」）
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
   const grant = db.prepare('SELECT id, series_id FROM student_course_grants WHERE student_id=?').get(student.id);
   const lesson = db.prepare('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort LIMIT 1').get(grant.series_id);
@@ -65,14 +65,14 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
   return { status: r.status, data: j?.data ?? j, error: j?.error || null };
 }
 const grantNow = () => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const existing = db.prepare('SELECT id FROM student_course_grants WHERE student_id=? AND series_id=?').get(seeded.studentId, seeded.seriesId);
   if (existing) db.prepare('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL WHERE id=?').run(existing.id);
   else db.prepare(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES (?,?,?,?,datetime('now'))`).run('p66_grant', seeded.orgId, seeded.studentId, seeded.seriesId);
   db.close();
 };
 const revokeNow = () => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare("UPDATE student_course_grants SET revoked_at=datetime('now'),revoke_reason='P66 守卫：平台兜底撤销' WHERE student_id=? AND series_id=?").run(seeded.studentId, seeded.seriesId);
   db.close();
 };

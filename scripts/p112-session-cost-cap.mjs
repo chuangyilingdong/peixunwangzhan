@@ -65,7 +65,7 @@ await run(['packages/database/src/seed.js']);
    两节都要声明 text 能力，否则生成前置先把请求拒了（那测的就不是额度了）。 */
 const seeded = {};
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const student = db.prepare("SELECT id, org_id FROM users WHERE login='student-2'").get();
   const grant = db.prepare('SELECT series_id FROM student_course_grants WHERE student_id=? AND revoked_at IS NULL').get(student.id);
   const lessons = db.prepare("SELECT id FROM course_lessons WHERE series_id=? AND status='PUBLISHED' ORDER BY sort").all(grant.series_id);
@@ -106,13 +106,13 @@ async function api(pathname, { method = 'GET', token, body } = {}) {
   return { status: r.status, data: j?.data ?? j, error: j?.error || null };
 }
 const sessionCapFen = (sessionId) => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const row = db.prepare('SELECT student_cost_cap_fen FROM class_sessions WHERE id=?').get(sessionId);
   db.close();
   return row?.student_cost_cap_fen ?? null;
 };
 const attemptsOf = (sessionId) => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const n = db.prepare('SELECT COUNT(*) n FROM compute_attempts WHERE class_session_id=?').get(sessionId).n;
   db.close();
   return Number(n);

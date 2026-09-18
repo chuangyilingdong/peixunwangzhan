@@ -46,7 +46,7 @@ await run(['packages/database/src/seed.js']);
 const { DatabaseSync } = await import('node:sqlite');
 
 // ① 历史数据回填：造一条「项目已提交、用量未关联作品」的旧数据，再跑一次启动迁移
-const seedDb = new DatabaseSync(dbPath);
+const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
 const student = seedDb.prepare("SELECT * FROM users WHERE login='student-2'").get();
 const klass = seedDb.prepare('SELECT * FROM classes WHERE org_id=? LIMIT 1').get(student.org_id);
 const lesson = seedDb.prepare('SELECT lesson_id FROM class_curriculum_items WHERE class_id=? LIMIT 1').get(klass.id).lesson_id;
@@ -63,7 +63,7 @@ seedDb.close();
 
 await run(['packages/database/src/db.js', '--init']);
 
-const afterMigration = new DatabaseSync(dbPath);
+const afterMigration = new DatabaseSync(dbPath); afterMigration.exec('PRAGMA busy_timeout = 5000');
 const backfilled = afterMigration.prepare('SELECT work_id FROM usage_records WHERE id=?').get(legacyUsageId);
 afterMigration.close();
 assert.equal(backfilled.work_id, legacyWorkId, '启动迁移应把历史用量回填到对应作品');
@@ -116,7 +116,7 @@ try {
 
   // 模拟该项目已产生的 AI 用量；真实生成链路由 p4-o12 / p6-a01 覆盖，这里只验证提交时的关联回填
   const liveUsageId = newId('usage');
-  const liveDb = new DatabaseSync(dbPath);
+  const liveDb = new DatabaseSync(dbPath); liveDb.exec('PRAGMA busy_timeout = 5000');
   liveDb.prepare('INSERT INTO usage_records(id,org_id,user_id,project_id,modality,credits_charged,status,created_at) VALUES (?,?,?,?,?,?,?,?)')
     .run(liveUsageId, student.org_id, student.id, projectId, 'IMAGE', 1, 'SUCCESS', now());
   liveDb.close();
@@ -125,7 +125,7 @@ try {
   assert.equal(submitted.status, 200, `作品提交失败: ${JSON.stringify(submitted.data)}`);
   const workId = submitted.data.work.id;
 
-  const linkedDb = new DatabaseSync(dbPath);
+  const linkedDb = new DatabaseSync(dbPath); linkedDb.exec('PRAGMA busy_timeout = 5000');
   const linked = linkedDb.prepare('SELECT work_id FROM usage_records WHERE id=?').get(liveUsageId);
   linkedDb.close();
   assert.equal(linked.work_id, workId, '提交作品后应把该项目的用量记录关联到作品');

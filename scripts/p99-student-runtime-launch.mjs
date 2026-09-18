@@ -75,7 +75,7 @@ const docker = (args) => spawnSync('docker', args, { encoding: 'utf8', maxBuffer
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const teacher = db.prepare("SELECT * FROM users WHERE login='teacher-1'").get();
 const student = db.prepare("SELECT * FROM users WHERE login='student-1'").get();
 const lesson = db.prepare("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
@@ -142,7 +142,7 @@ try {
 
   // ③④ 门禁不过就开不出来
   {
-    const probeDb = new DatabaseSync(dbPath);
+    const probeDb = new DatabaseSync(dbPath); probeDb.exec('PRAGMA busy_timeout = 5000');
     probeDb.prepare("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE id=?").run(now, sessionId);
     probeDb.close();
     let code = '';
@@ -150,7 +150,7 @@ try {
     check('③ 课堂已结束 → 开不出来（RUNTIME_CLASSROOM_INACTIVE）', code === 'RUNTIME_CLASSROOM_INACTIVE', code);
   }
   {
-    const probeDb = new DatabaseSync(dbPath);
+    const probeDb = new DatabaseSync(dbPath); probeDb.exec('PRAGMA busy_timeout = 5000');
     probeDb.prepare("UPDATE class_sessions SET status='ACTIVE' WHERE id=?").run(sessionId);
     probeDb.prepare("UPDATE session_students SET status='REMOVED', removed_reason='P99' WHERE id='p99_part'").run();
     probeDb.close();

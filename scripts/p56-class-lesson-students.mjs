@@ -114,7 +114,7 @@ try {
     await api(`/api/org/sessions/${again.data.id}/start`, { method: 'POST', token: org.token });
     {
       const { DatabaseSync } = await import('node:sqlite');
-      const db = new DatabaseSync(dbPath);
+      const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
       db.prepare("INSERT INTO usage_records(id,org_id,user_id,class_session_id,project_id,modality,model,credits_charged,status,cost_fen,created_at) VALUES (?,?,?,?,NULL,'TEXT','p56-model',0,'SUCCESS',100,?)")
         .run('usage_p56_completed', org.organization.id, first.id, again.data.id, new Date().toISOString());
       db.close();

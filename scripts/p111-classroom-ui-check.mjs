@@ -45,7 +45,7 @@ const run = (args, extraEnv = {}) => new Promise((resolve, reject) => {
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const lesson = db.prepare("SELECT id, series_id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
 const teacher = db.prepare("SELECT id, org_id FROM users WHERE login='teacher-1'").get();
 const seeded = db.prepare("SELECT id, login, display_name, password_hash FROM users WHERE role='STUDENT' AND org_id=? AND deleted_at IS NULL LIMIT 2").all(teacher.org_id);

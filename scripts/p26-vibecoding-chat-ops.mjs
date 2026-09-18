@@ -33,7 +33,7 @@ await run(['packages/database/src/seed.js']);
 
 // 让课时带上正文，验证会注入到 system 上下文
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath);
+const seedDb = new DatabaseSync(dbPath); seedDb.exec('PRAGMA busy_timeout = 5000');
 const lesson = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1').get();
 seedDb.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING', lesson_content='本课目标：用 AI 做出一个会动的小网页。' WHERE id=?").run(lesson.id);
 seedDb.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);

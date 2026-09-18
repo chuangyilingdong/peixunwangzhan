@@ -70,7 +70,7 @@ if (imageReady.status !== 0) {
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const teacher = db.prepare("SELECT * FROM users WHERE login='teacher-1'").get();
 const student = db.prepare("SELECT * FROM users WHERE login='student-1'").get();
 const lesson = db.prepare("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
@@ -159,7 +159,7 @@ try {
     `${textCall.status} ${textBody.slice(0, 300)}`);
 
   {
-    const audit = new DatabaseSync(dbPath);
+    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
     const rows = audit.prepare('SELECT model,modality,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC').all(sessionId);
     check('③ 两通调用都落进了 usage_records（读图与文本都进我们的账）', rows.length >= 2, JSON.stringify(rows.length));
     const visionRow = rows.find((item) => item.model === VISION_MODEL);
@@ -172,7 +172,7 @@ try {
   // ⑤ 默认那条路：**不配读图渠道**时，带图的请求跟着模型走（同一条 TEXT 渠道）。
   //    这是平台现在的真实配置（模型自己就能看图），所以这条是主路径，上面那条是可选覆盖。
   {
-    const setter = new DatabaseSync(dbPath);
+    const setter = new DatabaseSync(dbPath); setter.exec('PRAGMA busy_timeout = 5000');
     const policy = JSON.parse(setter.prepare('SELECT ai_provider_policy FROM platform_settings WHERE id=1').get().ai_provider_policy);
     setter.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({ ...policy, visionChannelId: '' }));
     setter.close();
@@ -185,7 +185,7 @@ try {
       followCall.status === 0 && new RegExp(`"model"\\s*:\\s*"${TEXT_MODEL}"`).test(followBody),
       `${followCall.status} ${followBody.slice(0, 300)}`);
 
-    const audit = new DatabaseSync(dbPath);
+    const audit = new DatabaseSync(dbPath); audit.exec('PRAGMA busy_timeout = 5000');
     const row = audit.prepare('SELECT model,pricing_snapshot FROM usage_records WHERE class_session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(sessionId);
     check('⑤ 这一通也记在文本渠道的模型上（钱一样进我们的账）', row?.model === TEXT_MODEL, String(row?.model));
     check('⑤ 记账里仍然带着「这轮有图」的证据', /"withImages":true/.test(String(row?.pricing_snapshot || '')), String(row?.pricing_snapshot).slice(0, 240));

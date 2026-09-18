@@ -39,7 +39,7 @@ await run(['packages/database/src/seed.js']);
 /* 造数：一个学员在一个课包上花掉 4 种模态的钱（对话 1 元 / 图片 2 元 / 视频 5 元 / 音乐 3 元），
    课包预算 200 元；另造一个「用尽」的池子（同一学员第二个课包，花掉超过上限）。 */
 const seeded = (() => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   // ⚠️ 需要**两个不同课包**才测得到「两个池子」：种子库只有一个课包（我还第一次写成
   //    取前两节课 —— 它们同属一个课包，两段造数会落进同一个池子）。所以自己造第二个，确定性更好。
   db.prepare(`INSERT OR REPLACE INTO course_series(id,title,description,owner_type,visibility,version,sort,status,delivery_mode,stock_total,created_at,updated_at)

@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { ensureClassroom, openDb } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'p20-text-slot-'));
@@ -35,7 +35,10 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { DatabaseSync } = await import('node:sqlite');
-const seedDb = new DatabaseSync(dbPath);
+// ⚠️ 读同一个库必须走 openDb（带 PRAGMA busy_timeout）：本守卫同时 spawn 了一个服务也开着这个库，
+// 默认 busy_timeout=0 一撞就 `database is locked` —— 表现为「偶发 1 秒内失败、单跑又全过」，
+// 2026-09-18 反复踩到（同一类问题也修了 scripts/lib/classroomFixture.mjs）。
+const seedDb = openDb(dbPath);
 const lessons = seedDb.prepare('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 2').all();
 assert.equal(lessons.length, 2, '种子数据应至少有两个课时');
 const [textLesson, noCapLesson] = lessons;
@@ -115,12 +118,12 @@ try {
   assert.match(text, /本地模拟回复/, `文字内容应可读，实际 ${JSON.stringify(text.slice(0, 60))}`);
   // 2026-09-13（P4 删积分）：任务详情不再带积分字段；扣费看算力池账本（cost_fen）
   assert.equal(job.creditsCharged, undefined, '任务详情不该再有积分字段');
-  const costDb = new DatabaseSync(dbPath);
+  const costDb = openDb(dbPath);
   const costFen = Number(costDb.prepare("SELECT COALESCE(SUM(cost_fen),0) fen FROM usage_records WHERE modality='TEXT' AND status='SUCCESS'").get()?.fen || 0);
   costDb.close();
   assert.equal(costFen, 0, `平台承担成本，成功生成不得记录学生售价，实际 ${costFen}`);
   // C3 前置（2026-09-13）：上游给的 token 用量要落进账本（计费口径不变，但账本从此有据可查）
-  const tokenDb = new DatabaseSync(dbPath);
+  const tokenDb = openDb(dbPath);
   const tokens = tokenDb.prepare("SELECT input_tokens, output_tokens FROM usage_records WHERE modality='TEXT' AND status='SUCCESS' ORDER BY created_at DESC LIMIT 1").get();
   tokenDb.close();
   assert.ok(Number(tokens?.input_tokens) > 0 && Number(tokens?.output_tokens) > 0, `用量记录应带上游 token 数，实际 ${JSON.stringify(tokens)}`);

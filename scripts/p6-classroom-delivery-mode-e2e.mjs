@@ -40,7 +40,7 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 // 此守卫覆盖两种已发布入口，种子课时只开放画布。
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare(`UPDATE course_lessons SET delivery_modes='["CANVAS","VIBECODING"]' WHERE status='PUBLISHED'`).run();
   db.close();
 }
@@ -96,7 +96,7 @@ function assertStatus(result, status, message) {
 }
 
 function readDeliveryMode(sessionId) {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   try {
     return db.prepare('SELECT delivery_mode FROM class_sessions WHERE id=?').get(sessionId)?.delivery_mode;
   } finally {

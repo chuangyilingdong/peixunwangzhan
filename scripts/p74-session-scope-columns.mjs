@@ -41,7 +41,7 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const seeded = (() => {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const student = db.prepare("SELECT id, login, org_id FROM users WHERE login='student-2'").get();
   const lesson = db.prepare("SELECT id, series_id FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
   db.prepare("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))").run(lesson.id);
@@ -92,7 +92,7 @@ try {
   const generated = await api('/api/ai/generations', { method: 'POST', token: student.token, body: { projectId: project.data.id, prompt: 'P74 用量归属', modality: 'TEXT' } });
   check('② 生成调用成功（前置）', generated.status === 200 || generated.status === 202, `${generated.status} ${JSON.stringify(generated.error || {}).slice(0, 140)}`);
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     const own = db.prepare('SELECT COUNT(*) n, MAX(class_session_id) sid FROM usage_records WHERE project_id=?').get(project.data.id);
     check('③ 用量记录的 class_session_id 也被写上了（教师用量范围靠它）',
       Number(own.n) > 0 && own.sid === sessionId, JSON.stringify({ rows: own.n, sessionId: own.sid }));
@@ -102,7 +102,7 @@ try {
   const submitted = await api(`/api/student/projects/${project.data.id}/submit`, { method: 'POST', token: student.token, body: { copyrightConfirmed: true } });
   check('④ 提交作品成功（前置）', submitted.status === 200, JSON.stringify(submitted.data).slice(0, 160));
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     const work = db.prepare('SELECT id, class_session_id FROM works WHERE project_id=?').get(project.data.id);
     check('⑤ 作品的 class_session_id 被写上了（教师作品范围就靠它，漏了会静默看不到）',
       work?.class_session_id === sessionId, JSON.stringify(work));
@@ -113,7 +113,7 @@ try {
   const teacherWorks = await api('/api/org/works', { token: teacher.token });
   const ids = (teacherWorks.data?.items || []).map((item) => item.id);
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     const workId = db.prepare('SELECT id FROM works WHERE project_id=?').get(project.data.id)?.id;
     db.close();
     check('⑥ 教师看得到自己课堂里的作品（范围真的圈得住，不是「谁都看不到」）', ids.includes(workId), JSON.stringify(ids).slice(0, 160));
@@ -122,7 +122,7 @@ try {
   /* B. 回填：老数据只按证据补、幂等、无证据留空 */
   const legacy = 'legacy_lesson_p74';
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     const now = '2026-01-01T00:00:00.000Z';
     // 老项目/老作品：没记课堂；但他在那节课上有一条课堂名单记录（＝证据）
     db.prepare("INSERT INTO student_projects(id,student_id,org_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES (?,?,?,?,?,'SUBMITTED',?,?,?)")
@@ -139,7 +139,7 @@ try {
   // 「重启服务」＝重跑 schema（发布时就是这么跑回填的）。这里用同一个进程跑 db.js 即可。
   await run(['packages/database/src/db.js', '--init']);
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     const evidenced = db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_evidenced');
     const orphan = db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_orphan');
     const project = db.prepare('SELECT class_session_id FROM student_projects WHERE id=?').get('p74_legacy_evidenced');
@@ -150,7 +150,7 @@ try {
   }
   await run(['packages/database/src/db.js', '--init']);
   {
-    const db = new DatabaseSync(dbPath);
+    const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
     check('⑩ 再跑一次结果不变（回填幂等）',
       db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_evidenced').class_session_id === sessionId
       && db.prepare('SELECT class_session_id FROM works WHERE id=?').get('w74_legacy_orphan').class_session_id === null);

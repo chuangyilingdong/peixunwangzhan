@@ -21,7 +21,7 @@ async function run(args) {
 }
 await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
-const db = new DatabaseSync(dbPath);
+const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
 const student = db.prepare("SELECT * FROM users WHERE login='student-1'").get();
 const lessons = db.prepare("SELECT * FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort").all();
 const first = lessons[0];

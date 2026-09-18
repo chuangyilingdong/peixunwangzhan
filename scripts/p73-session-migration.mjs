@@ -36,7 +36,7 @@ const fixture = {};
 const dataSnapshot = (db) => Object.fromEntries(['class_sessions', 'session_students', 'usage_records'].map((table) => [table, db.prepare(`SELECT * FROM ${table} ORDER BY id`).all()]));
 let migratedSnapshot;
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const teacher = db.prepare("SELECT id FROM users WHERE login='teacher-1'").get();
   const students = db.prepare("SELECT id FROM users WHERE role='STUDENT' ORDER BY login LIMIT 2").all();
   const lesson = db.prepare("SELECT id, series_id, title FROM course_lessons WHERE status='PUBLISHED' ORDER BY sort LIMIT 1").get();
@@ -77,7 +77,7 @@ let migratedSnapshot;
 await run(['packages/database/src/db.js', '--init']);
 
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='class_sessions'").get().sql;
   check('迁移后：CHECK 含 PENDING 与 DISSOLVED', ddl.includes("'PENDING'") && ddl.includes("'DISSOLVED'"));
   check('迁移后：class_id 可空、started_* 可空、新列齐全',
@@ -127,7 +127,7 @@ await run(['packages/database/src/db.js', '--init']);
 
 await run(['packages/database/src/db.js', '--init']);
 {
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const rerunSnapshot = dataSnapshot(db);
   check('再跑一次没有半截迁移表', !db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%migrated%'").all().length);
   assert.deepEqual(rerunSnapshot, migratedSnapshot, '再次初始化不得改变课堂、学员、用量任何字段');

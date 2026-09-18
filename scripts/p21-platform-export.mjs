@@ -107,7 +107,7 @@ try {
 
   // 5) 权限域：无对应业务域权限的平台管理员被拒
   const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   const auditCount = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action IN ('PLATFORM_ORG_EXPORT','PLATFORM_USER_EXPORT','PLATFORM_WORK_EXPORT')").get().n;
   const now = new Date().toISOString();
   db.prepare("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('admin_limited','limited','受限管理员','SUPER_ADMIN','[\"ADMIN_CONTENT\"]','placeholder','ACTIVE',?,?)").run(now, now);
