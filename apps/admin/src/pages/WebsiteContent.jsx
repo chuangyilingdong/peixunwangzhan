@@ -12,7 +12,7 @@ export function parseWebsiteDraft(value) {
 export function WebsitePreview({ content, selectedKey }) {
   if (!content) return <div className="cms-preview-empty">保存或修正 JSON 后可预览。</div>;
   if (selectedKey === 'HOME') return <div className="cms-preview-home"><span className="cms-preview-kicker">{content.heroKicker || '首页眉题'}</span><h3>{content.heroTitle || '首页标题'} <em>{content.heroAccent || '强调标题'}</em></h3><p>{content.heroDescription || '首页描述'}</p><div className="cms-preview-trust"><strong>{content.trustTitle || '信任区标题'}</strong><span>{content.trustDescription || '信任区描述'}</span></div>{content.coverImageUrl ? <img src={content.coverImageUrl} alt="首页封面预览" /> : null}</div>;
-  if (selectedKey === 'FAQ') return <div className="cms-preview-faq"><h3>{content.title || '常见问题'}</h3>{(Array.isArray(content.items) ? content.items : []).map((item, index) => <details key={`${item.question || 'faq'}-${index}`}><summary>{item.question || `问题 ${index + 1}`}</summary><p>{item.answer || '答案待填写'}</p></details>)}</div>;
+  if (selectedKey === 'FAQ') return <div className="cms-preview-faq">{FAQ_AUDIENCES.map(([key, label]) => <div className="cms-preview-faq-group" key={key}><h4>{label}</h4>{cmsListOf(content[key]).length ? cmsListOf(content[key]).map((item, index) => <details key={`${key}-${index}`}><summary>{item.question || `问题 ${index + 1}`}</summary><p>{item.answer || '答案待填写'}</p></details>) : <p>这一档还没有问题</p>}</div>)}</div>;
   if (selectedKey === 'BRAND') return <div className="cms-preview-brand"><strong>{content.name || '品牌名称'}</strong><span>{content.tagline || '品牌标语'}</span><small>{content.contactEmail || '联系邮箱'}</small></div>;
   if (selectedKey === 'MARKETPLACE') return <div className="cms-preview-faq"><h3>{content.title || '灵动Ai学院课包展示'}</h3>{content.lead ? <p>{content.lead}</p> : null}</div>;
   // 灵动介绍 / 机构手册：正文是「分节」结构，预览按可折叠列表展示，配图一起预览
@@ -21,6 +21,13 @@ export function WebsitePreview({ content, selectedKey }) {
 }
 
 const cmsListOf = (value) => (Array.isArray(value) ? value : []);
+/**
+ * 常见问题的三个档位（2026-09-18 晚用户口径：「最好3个选项，学生端、老师端、机构端，
+ * 可以配置3个端的不同的问题」）。**字段名就是档位 key**，顺序与官网 FAQs 的档位一致 ——
+ * 改这里要同时改 apps/website/src/main.jsx 的 FAQ_AUDIENCES，以及内容形状
+ * （packages/database/src/websiteContentDefaults.js 的 FAQ、官网 CMS_FALLBACK.FAQ）。
+ */
+const FAQ_AUDIENCES = [['student', '学生端'], ['teacher', '老师端'], ['org', '机构端']];
 /**
  * 「分节」编辑器（灵动介绍 / 机构手册共用）。
  * 两份内容的正文形状一样：{ title, body, bullets[], imageUrl, imageAlt }，所以只用一套表单。
@@ -129,19 +136,9 @@ export function WebsiteContent({ api }) {
     const next = { ...(structured || {}), ...patch };
     keepDraft(JSON.stringify(next, null, 2), next);
   }
-  function updateFaqItem(index, patch) {
-    const items = Array.isArray(structured?.items) ? structured.items : [];
-    updateStructured({ items: items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) });
-  }
-  function moveFaqItem(index, direction) {
-    const items = Array.isArray(structured?.items) ? [...structured.items] : [];
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= items.length) return;
-    [items[index], items[nextIndex]] = [items[nextIndex], items[index]];
-    updateStructured({ items });
-  }
-  function addFaqItem() { updateStructured({ items: [...(Array.isArray(structured?.items) ? structured.items : []), { question: '', answer: '' }] }); }
-  function removeFaqItem(index) { updateStructured({ items: (structured?.items || []).filter((_, itemIndex) => itemIndex !== index) }); }
+  // 常见问题原来是「一个 items 列表」配四个专用 handler（updateFaqItem / moveFaqItem / addFaqItem /
+  // removeFaqItem）。2026-09-18 晚改成分档后，档位 key 就是字段名，直接走下面那套通用列表 handler
+  // （updateList / moveList / addList / removeList），所以那四个函数删掉了。
   function updateStat(index, patch) {
     const stats = Array.isArray(structured?.stats) ? structured.stats : [];
     updateStructured({ stats: stats.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) });
@@ -236,7 +233,19 @@ export function WebsiteContent({ api }) {
             <div className="cms-faq-list">{cmsListOf(structured?.stats).map((item, index) => <div className="cms-faq-item" key={`stat-${index}`}><div className="cms-faq-heading"><strong>第 {index + 1} 项</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList('stats', index, -1)} aria-label={`第 ${index + 1} 项上移`}>↑</button><button type="button" className="text-button" disabled={index === cmsListOf(structured?.stats).length - 1} onClick={() => moveList('stats', index, 1)} aria-label={`第 ${index + 1} 项下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList('stats', index)}>删除</button></div></div><div className="form-grid"><label>图标<input value={item.icon || ''} onChange={(event) => updateList('stats', index, { icon: event.target.value })} maxLength={4} /></label><label>数值<input value={item.value ?? ''} onChange={(event) => updateList('stats', index, { value: event.target.value })} maxLength={12} /></label><label>后缀<input value={item.suffix || ''} onChange={(event) => updateList('stats', index, { suffix: event.target.value })} maxLength={8} /></label><label>名称<input value={item.label || ''} onChange={(event) => updateList('stats', index, { label: event.target.value })} maxLength={24} /></label></div></div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={() => addList('stats', { icon: '✦', value: '', suffix: '', label: '' })}>新增数据项</button>
           </div>}
-          {selectedKey === 'FAQ' && <div className="cms-form"><label>FAQ 标题<input value={structured?.title || ''} onChange={(event) => updateStructured({ title: event.target.value })} maxLength={150} /></label><div className="cms-faq-list">{(Array.isArray(structured?.items) ? structured.items : []).map((item, index) => <div className="cms-faq-item" key={`faq-${index}`}><div className="cms-faq-heading"><strong>问题 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveFaqItem(index, -1)} aria-label={`问题 ${index + 1} 上移`}>↑</button><button type="button" className="text-button" disabled={index === structured.items.length - 1} onClick={() => moveFaqItem(index, 1)} aria-label={`问题 ${index + 1} 下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeFaqItem(index)}>删除</button></div></div><label>问题<input value={item.question || ''} onChange={(event) => updateFaqItem(index, { question: event.target.value })} maxLength={200} /></label><label>答案<textarea value={item.answer || ''} onChange={(event) => updateFaqItem(index, { answer: event.target.value })} maxLength={1000} /></label></div>)}</div><button type="button" className="secondary-button top-gap" onClick={addFaqItem}>新增问题</button></div>}
+          {selectedKey === 'FAQ' && <div className="cms-form">
+            {/* 三个档位各配一套问答（2026-09-18 晚用户口径）。三组共用同一套增删改 + 上下移，
+                档位 key 直接当字段名用（与官网 /faq 的三个 tab 一一对应）。
+                ⚠️ 某一档留空 = 官网那一档就是空的（口径③：空 = 运营故意清空，不回退显示兜底）。 */}
+            {FAQ_AUDIENCES.map(([key, label]) => {
+              const items = cmsListOf(structured?.[key]);
+              return <div className="cms-faq-group" key={key}>
+                <div className="cms-faq-group-head"><strong>{label}</strong><span>{items.length} 条 · 字段 {key}</span></div>
+                <div className="cms-faq-list">{items.map((item, index) => <div className="cms-faq-item" key={`faq-${key}-${index}`}><div className="cms-faq-heading"><strong>问题 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList(key, index, -1)} aria-label={`${label} 第 ${index + 1} 个问题上移`}>↑</button><button type="button" className="text-button" disabled={index === items.length - 1} onClick={() => moveList(key, index, 1)} aria-label={`${label} 第 ${index + 1} 个问题下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList(key, index)}>删除</button></div></div><label>问题<input value={item.question || ''} onChange={(event) => updateList(key, index, { question: event.target.value })} maxLength={200} /></label><label>答案<textarea value={item.answer || ''} onChange={(event) => updateList(key, index, { answer: event.target.value })} maxLength={1000} /></label></div>)}</div>
+                <button type="button" className="secondary-button top-gap" onClick={() => addList(key, { question: '', answer: '' })}>给{label}新增问题</button>
+              </div>;
+            })}
+          </div>}
           {selectedKey === 'BRAND' && <div className="cms-form"><div className="form-grid"><label>品牌名称<input value={structured?.name || ''} onChange={(event) => updateStructured({ name: event.target.value })} maxLength={100} /></label><label>联系邮箱<input type="email" value={structured?.contactEmail || ''} onChange={(event) => updateStructured({ contactEmail: event.target.value })} maxLength={200} /></label></div><label>品牌标语<input value={structured?.tagline || ''} onChange={(event) => updateStructured({ tagline: event.target.value })} maxLength={200} /></label></div>}
           {selectedKey === 'MARKETPLACE' && <div className="cms-form">
             <label>页面大标题<input value={structured?.title || ''} onChange={(event) => updateStructured({ title: event.target.value })} maxLength={100} /></label>

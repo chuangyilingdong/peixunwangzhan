@@ -14,7 +14,10 @@
  *      只替换这个确切串，不做通配 —— 免得把别的句子改坏。
  *   ③ 补种新键：INTRO（灵动介绍）、HANDBOOK（机构手册）两行整行插入（含已发布版本，
  *      否则公开接口返回 NOT_FOUND，官网只能退回前端 fallback）。
- *   ④ 补新字段：HOME.stats（首页数据区）缺失时补上；FAQ 里「授权次数用完会怎样」那条缺失时追加。
+ *   ④ 补新字段：HOME.stats（首页数据区）缺失时补上。
+ *   ⑤ FAQ 形状升级（2026-09-18 晚用户口径「最好3个选项，学生端、老师端、机构端」）：
+ *      老的 { title, items } → { student, teacher, org } 三档。老 items **保序落到 student**
+ *      （运营编辑过的内容不丢），并按问题文字补上种子里 student 档缺的那几条；teacher/org 用种子补。
  *
  * ⚠️ 这里改的是**官网公开面真正显示的内容**。所以流程是：先打印计划 →（--dry-run 只看）→
  *    事务内写入 → 复查残留必须为 0。改动前确认整库备份在（production/backups/<stamp>/platform.db）。
@@ -81,8 +84,17 @@ const homeStats = homeRow ? (JSON.parse(homeRow.published_content || homeRow.dra
 const needStats = Boolean(homeRow) && !Array.isArray(homeStats);
 const faqRow = byKey.FAQ;
 // 缺失判断必须**在替换之后**做：替换会把旧问法改成新问法，之后再比对才不会重复追加。
-const faqItems = faqRow ? (JSON.parse(patchText(faqRow.published_content || faqRow.draft_content) || '{}').items || []) : [];
-const missingFaq = (WEBSITE_CONTENT_DEFAULTS.FAQ.items || []).filter((item) => !faqItems.some((existing) => existing.question === item.question));
+const faqContent = faqRow ? JSON.parse(patchText(faqRow.published_content || faqRow.draft_content) || '{}') : null;
+// ⑤ FAQ 形状升级（2026-09-18 晚用户口径「最好3个选项，学生端、老师端、机构端」）：
+//    老形状 { title, items } → 新形状 { student, teacher, org }。
+//    **老 items 落到 student 档且保序保留**（那是运营已经编辑过的内容，不能丢），
+//    再按问题文字补上种子里 student 档缺的那几条（沿用原来「只追加、不覆盖」的口径）；
+//    teacher / org 两档用种子补。`title` 字段废弃 —— 官网页头只剩「常见问题」一行。
+const faqNeedsAudiences = Boolean(faqContent) && !Array.isArray(faqContent.student);
+const legacyFaqItems = Array.isArray(faqContent?.items) ? faqContent.items : [];
+const faqStudentAdd = faqNeedsAudiences
+  ? (WEBSITE_CONTENT_DEFAULTS.FAQ.student || []).filter((item) => !legacyFaqItems.some((existing) => existing.question === item.question))
+  : [];
 
 console.log(`数据库：${dbPath}`);
 console.log(`① 品牌改名 ${BRAND_FROM.join(' / ')} → ${BRAND_TO}`);
@@ -90,9 +102,10 @@ console.log(`   website_contents 待改 ${textPlan.length} 行 ${JSON.stringify(
 console.log(`   website_content_revisions 待改 ${revisionPlan.length} 行 ${JSON.stringify(revisionPlan)}`);
 console.log(`② 口径替换 ${JSON.stringify(TERMS)}`);
 console.log(`③ 补种新键：${missingKeys.length ? missingKeys.join(', ') : '（无，已存在）'}`);
-console.log(`④ 补字段：HOME.stats ${needStats ? '缺失→补' : '（已有）'}；FAQ 缺 ${missingFaq.length} 条${missingFaq.length ? '：' + missingFaq.map((item) => item.question).join(' / ') : ''}`);
+console.log(`④ 补字段：HOME.stats ${needStats ? '缺失→补' : '（已有）'}`);
+console.log(`⑤ FAQ 形状升级：${faqNeedsAudiences ? `需要 —— 老 items ${legacyFaqItems.length} 条→student（另补 ${faqStudentAdd.length} 条），teacher/org 用种子` : '（已是按端三档的新形状）'}`);
 
-const nothingToDo = !textPlan.length && !revisionPlan.length && !missingKeys.length && !needStats && !missingFaq.length;
+const nothingToDo = !textPlan.length && !revisionPlan.length && !missingKeys.length && !needStats && !faqNeedsAudiences;
 if (nothingToDo) {
   console.log('结论：无需改动（幂等，已迁移过）。');
   db.close();
@@ -127,11 +140,15 @@ try {
     content.stats = WEBSITE_CONTENT_DEFAULTS.HOME.stats;
     updateContent.run(JSON.stringify(content), JSON.stringify(content), now, 'HOME');
   }
-  // FAQ：只追加缺失的问题，不覆盖已有条目
-  if (missingFaq.length) {
-    const content = JSON.parse(patchText(faqRow.published_content || faqRow.draft_content));
-    content.items = [...(content.items || []), ...missingFaq];
-    updateContent.run(JSON.stringify(content), JSON.stringify(content), now, 'FAQ');
+  // FAQ 形状升级：老 items 保序进 student（不覆盖运营改过的文案），teacher / org 用种子补，
+  // title 废弃。draft 与 published 一起写 —— 公开端立刻按新形状供数（否则官网上那一页会是空的）。
+  if (faqNeedsAudiences) {
+    const next = JSON.stringify({
+      student: [...legacyFaqItems, ...faqStudentAdd],
+      teacher: WEBSITE_CONTENT_DEFAULTS.FAQ.teacher,
+      org: WEBSITE_CONTENT_DEFAULTS.FAQ.org,
+    });
+    updateContent.run(next, next, now, 'FAQ');
   }
   // 新键：整行插入（含发布版本，否则公开接口返回 NOT_FOUND）
   for (const key of missingKeys) {

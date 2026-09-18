@@ -61,10 +61,14 @@ try {
   }
 
   // 1) 公开端读已发布的 FAQ（seed 里就有）
+  //    ⚠️ 2026-09-18 晚 FAQ **改成按端三档**（student / teacher / org，用户口径「学生端、老师端、机构端，
+  //    可以配置3个端的不同的问题」），所以老的 `content.title` / `content.items` 断言已经不成立：
+  //    现在要保证的是**三档都下发成数组**（档位名由官网写死，内容按档位分别配置）。
   const publicFaq = await api('/api/public/website-content/FAQ');
   assert.equal(publicFaq.status, 200, `公开端应能读到 FAQ: ${JSON.stringify(publicFaq.data)}`);
-  assert.ok(publicFaq.data.content.title, 'FAQ 应带标题');
-  assert.ok(Array.isArray(publicFaq.data.content.items), 'FAQ 应带问题列表');
+  for (const audience of ['student', 'teacher', 'org']) {
+    assert.ok(Array.isArray(publicFaq.data.content[audience]), `FAQ 应带 ${audience} 档的问题列表`);
+  }
 
   // 2) 未知 key / 已删除的 COURSES 一律 400
   for (const key of ['NOT_A_KEY', 'COURSES']) {
@@ -82,20 +86,23 @@ try {
   assert.ok(!(list.data.items || []).some((item) => item.key === 'COURSES'), '列表不应再出现已删除的 COURSES');
   const detail = await api('/api/admin/website-content/FAQ', { token: rootToken });
   assert.equal(detail.status, 200, `FAQ 详情失败: ${JSON.stringify(detail.data)}`);
-  assert.ok(detail.data.content.title, '详情应带草稿内容');
+  assert.ok(Array.isArray(detail.data.content.student), '详情应带草稿内容（按端三档后看 student 档）');
 
   // 4) 保存草稿：公开端仍读旧内容；发布后才生效
+  //    标记放在 teacher 档（老版本是改 title，形状变了之后那条改不动了）
   const draft = JSON.parse(JSON.stringify(detail.data.content));
-  draft.title = '开课前，你可能想知道（测试）';
+  const MARK = 'p23 草稿标记问题';
+  draft.teacher = [...(Array.isArray(draft.teacher) ? draft.teacher : []), { question: MARK, answer: '只应出现在发布之后' }];
+  const hasMark = (content) => (Array.isArray(content?.teacher) ? content.teacher : []).some((item) => item.question === MARK);
   const saved = await api('/api/admin/website-content/FAQ', { method: 'PUT', token: rootToken, body: { content: draft } });
   assert.equal(saved.status, 200, `保存草稿失败: ${JSON.stringify(saved.data)}`);
-  assert.equal(saved.data.content.title, '开课前，你可能想知道（测试）', '草稿应保存成功');
+  assert.ok(hasMark(saved.data.content), '草稿应保存成功');
   const stillOld = await api('/api/public/website-content/FAQ');
-  assert.notEqual(stillOld.data.content.title, '开课前，你可能想知道（测试）', '未发布时公开端应仍是旧内容');
+  assert.ok(!hasMark(stillOld.data.content), '未发布时公开端应仍是旧内容');
   const published = await api('/api/admin/website-content/FAQ/publish', { method: 'POST', token: rootToken, body: { reason: 'p23 冒烟发布' } });
   assert.equal(published.status, 200, `发布失败: ${JSON.stringify(published.data)}`);
   const afterPublish = await api('/api/public/website-content/FAQ');
-  assert.equal(afterPublish.data.content.title, '开课前，你可能想知道（测试）', '发布后公开端应读到新内容');
+  assert.ok(hasMark(afterPublish.data.content), '发布后公开端应读到新内容');
 
   // 5) 越权与非法 key
   const orgToken = (await login('org-admin', 'org123')).data.token;
@@ -115,9 +122,9 @@ try {
 
   console.log(JSON.stringify({
     name: 'website-cms', pass: true,
-    publicRead: { key: 'FAQ', title: publicFaq.data.content.title, items: publicFaq.data.content.items.length },
+    publicRead: { key: 'FAQ', audiences: Object.fromEntries(['student', 'teacher', 'org'].map((audience) => [audience, publicFaq.data.content[audience].length])) },
     removedKeys: { COURSES: 400, NOT_A_KEY: 400 },
-    draftVsPublish: { beforePublish: stillOld.data.content.title, afterPublish: afterPublish.data.content.title },
+    draftVsPublish: { beforePublishHasMark: hasMark(stillOld.data.content), afterPublishHasMark: hasMark(afterPublish.data.content) },
     guards: { orgAdmin403: true, badKey400: true },
     audits: auditMap,
   }, null, 2));

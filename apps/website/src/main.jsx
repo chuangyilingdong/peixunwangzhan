@@ -311,30 +311,47 @@ function Intro() {
   const highlights = cmsList(content.highlights);
   return <><Title eyebrow="灵动介绍" title={<>{content.title || '灵动介绍'}</>} desc={content.lead || ''} /><main className="inner intro-page">{highlights.length ? <section className="modules">{highlights.map((item, index) => <article key={index + '-' + (item.title || '')}><small>0{index + 1}</small><h3>{item.title || ''}</h3><p>{item.desc || ''}</p></article>)}</section> : null}<CmsSections sections={content.sections} /><End title={content.cta?.title || '把 AI 课开起来'} text={content.cta?.text || '联系我们，我们会按你的班型给出课包与开通方案。'} /></main></>;
 }
-// 常见问题 /faq：黑底 + 卡片式手风琴（2026-09-18 晚按用户给的参考稿重做）。
+// 常见问题 /faq：黑底 + 卡片式手风琴，**按端分三档**（2026-09-18 晚用户口径）。
 // ⚠️ 参考稿是 Tailwind + framer-motion 写的，这里**不引入这两个依赖**：官网是纯 CSS 的一套
 //    （依赖里只有 ogl，没有 Tailwind），为一张页面把它引进来会与全局 styles.css 打架；
 //    展开动画改用 CSS 的 grid-template-rows 0fr→1fr 复现，时长与缓动跟参考稿一致（见 .fq-panel）。
 // ⚠️ 主色用站内那支粉（同 .mp 的 --mp-accent），**不引入参考稿里的紫 #A855F7** —— 官网已经统一过
 //    一套主色，再放第二支会看着不像同一个站（/marketplace 那条口径的延续）。
-// ⚠️ 页头只在这一处渲染 CMS 标题：上一版「页头 + 区块」两处都渲染，同一句话出现两遍（第十五轮实测到）。
-//    现在 h1 说页面名（常见问题），CMS 的 title 是它下面那句说明，只出现一次。
+// ⚠️ 页头只剩「常见问题」一行。参考稿那个眉题「帮助中心」、标题下那句说明、以及列表下那行
+//    「没有找到答案？联系我们」都是用户看过实际页面后要求删掉的（2026-09-18 晚）—— 别再加回来。
+//    顺带：这一页现在**没有任何 CMS 文案**在接口回来前需要门控（标题与档位名都是常量），
+//    所以不再有「强刷先闪一帧与后台不符的字」的问题（那是 mp / 首页才需要的 ready 门控）。
+// 档位：字段名就是 CMS 里的 key，顺序 = 官网显示顺序；名字写在这里，不由 CMS 改。
+const FAQ_AUDIENCES = [['student', '学生端'], ['teacher', '老师端'], ['org', '机构端']];
 function Faq() {
   const cms = useWebsiteContent('FAQ');
   const content = cms.data || {};
-  const items = cmsList(content.items);
-  // 初始态照参考稿：**一条都不展开**（参考稿是 useState<number | null>(null)，不是默认开第一条）。
+  const [audience, setAudience] = useState('student');
+  // 初始态照参考稿：**一条都不展开**；切换档位时也收起 —— 否则会把这一档的第 N 条
+  // 当成那一档的第 N 条继续展开（两档的问题条数本来就不一样）。
   const [openIndex, setOpenIndex] = useState(null);
-  const ready = !cms.loading;
-  const group = cmsPick(content, 'title', CMS_FALLBACK.FAQ.title);
+  // ⚠️ 存量库兼容：生产库里 FAQ 目前还是老的 { title, items } 形状。迁移脚本跑过之后这两行可以删。
+  //    没有它的话，「代码先上、迁移后跑」那个窗口里 FAQ 会是空的（老形状读不出 student）。
+  const legacyItems = cmsList(content.items);
+  const itemsOf = (key) => { const own = cmsList(content[key]); return own.length ? own : (key === 'student' ? legacyItems : own); };
+  const items = itemsOf(audience);
+  const pickAudience = (key) => { setAudience(key); setOpenIndex(null); };
+  const stepAudience = (direction) => {
+    const index = FAQ_AUDIENCES.findIndex(([key]) => key === audience);
+    const next = (index + direction + FAQ_AUDIENCES.length) % FAQ_AUDIENCES.length;
+    pickAudience(FAQ_AUDIENCES[next][0]);
+    document.getElementById('fq-tab-' + FAQ_AUDIENCES[next][0])?.focus();
+  };
   return <main className="fq">
     <div className="fq-aura" aria-hidden="true" />
     <div className="fq-inner">
-      {/* 与首页 / 课程广场同一口径：接口回来前不渲染文案，否则强刷会先闪一帧与后台不符的字 */}
-      <header className="fq-head">
-        {ready ? <><div className="fq-eyebrow"><i aria-hidden="true" /><span>帮助中心</span><i aria-hidden="true" /></div><h1 className="fq-title">常见问题</h1>{group ? <p className="fq-lead">{group}</p> : null}</> : <div className="fq-head-hold" aria-hidden="true" />}
-      </header>
-      <div className="fq-list">
+      <header className="fq-head"><h1 className="fq-title">常见问题</h1></header>
+      {/* 三档切换。用真 tablist：点击、键盘左右、读屏都能用（不用参考稿那种纯 div 点击） */}
+      <div className="fq-tabs" role="tablist" aria-label="按角色查看常见问题">
+        {FAQ_AUDIENCES.map(([key, label]) => <button key={key} type="button" role="tab" id={'fq-tab-' + key} aria-selected={audience === key} aria-controls={'fq-panel-' + audience} className={'fq-tab' + (audience === key ? ' on' : '')} onClick={() => pickAudience(key)} onKeyDown={(event) => { if (event.key === 'ArrowRight') { event.preventDefault(); stepAudience(1); } else if (event.key === 'ArrowLeft') { event.preventDefault(); stepAudience(-1); } }}>{label}</button>)}
+      </div>
+      {/* key={audience} 让切档时整列重挂载，CSS 入场动画随之重放（纯 keyframes，不用 IntersectionObserver） */}
+      <div className="fq-list" key={audience} role="tabpanel" id={'fq-panel-' + audience} aria-labelledby={'fq-tab-' + audience}>
         {items.map((item, index) => {
           const isOpen = openIndex === index;
           return <article className={'fq-card' + (isOpen ? ' on' : '')} key={item.question || index}>
@@ -352,7 +369,6 @@ function Faq() {
           </article>;
         })}
       </div>
-      <p className="fq-note">没有找到答案？<Link to="/demo">联系我们</Link>，我们按你的班型回答。</p>
     </div>
   </main>;
 }
@@ -372,7 +388,14 @@ const CMS_FALLBACK = {
   // （接口断 → 用这份；接口通但行里没有 stats → 用 HOME_STATS_FALLBACK）。
   // scripts/p115-website-ui-check.mjs 会把两条路径各渲染一遍并逐字对比，就是为了钉住这条。
   HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK },
-  FAQ: { title: '开课前，你可能想知道', items: [{ question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力，学生不持有 API Key，机构用授权次数管理课堂用量。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以。课堂通过浏览器访问，Chrome / Edge 最新版本即可，机房不需要额外安装环境。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 一键烧录，以及 micro:bit 的 MicroPython 上传与串口监视。' }] },
+  // 常见问题（/faq）：按端三档，与 packages/database/src/websiteContentDefaults.js 的 FAQ **逐字一致**
+  // （口径①：接口通/断不能显示两套内容）。student 取的是**生产 CMS 已发布的原文** ——
+  // 原来这里只有 3 条、且少了「授权次数用完会怎样」，与线上那份对不上，正是那条口径要防的隐患。
+  FAQ: {
+    student: [{ question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以，公开客户端支持 macOS Apple 芯片版与 Windows 64 位。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 与 micro:bit 的课堂实践。' }, { question: '机构的授权次数用完了会怎样？', answer: '机构端会提示老师补足授权次数，补足后学生即可继续上课；平台不会因为算力用量去拦学生。' }],
+    teacher: [{ question: '上课前需要做什么准备？', answer: '学生用机构账号登录，浏览器打开课堂即可开始；机房电脑不需要额外安装环境。' }, { question: '学生的作品和用量在哪里看？', answer: '机构后台可以查看学生的用量记录与作品，并把优秀作品发布到作品展厅。' }],
+    org: [{ question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学员无需自备 Key，由机构统一开通与管理。' }, { question: '平台提供哪些课程？', answer: '课程中心提供标准课包（含 PPT 与 HTML 互动课件），机构可按课包直接排课。' }],
+  },
   INTRO: { title: '灵动介绍', lead: BRAND_NAME + '是面向 8–16 岁的 AI 创作开课平台：学生用中文与 AI 伙伴「阿飞」对话，当堂做出能运行、能展示的作品。', highlights: [], sections: [], cta: { title: '把 AI 课开起来', text: '联系我们，我们会按你的班型给出课包与开通方案。' } },
   HANDBOOK: { title: '机构合作手册', lead: '把「一门 AI 课」变成能复制的校区产品：课程、账号、授权次数与作品沉淀在同一套平台里。', sections: [], compareRows: [], cta: { title: '获取完整机构手册', text: '先联系我们，我们会把最新版本、课件示例与合作说明发给你。' } },
   // 灵动课程（/marketplace）的页头：大标题 + 副标题。用户在后台「官网内容 → 灵动课程」可改
