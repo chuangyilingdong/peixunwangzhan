@@ -311,13 +311,50 @@ function Intro() {
   const highlights = cmsList(content.highlights);
   return <><Title eyebrow="灵动介绍" title={<>{content.title || '灵动介绍'}</>} desc={content.lead || ''} /><main className="inner intro-page">{highlights.length ? <section className="modules">{highlights.map((item, index) => <article key={index + '-' + (item.title || '')}><small>0{index + 1}</small><h3>{item.title || ''}</h3><p>{item.desc || ''}</p></article>)}</section> : null}<CmsSections sections={content.sections} /><End title={content.cta?.title || '把 AI 课开起来'} text={content.cta?.text || '联系我们，我们会按你的班型给出课包与开通方案。'} /></main></>;
 }
+// 常见问题 /faq：黑底 + 卡片式手风琴（2026-09-18 晚按用户给的参考稿重做）。
+// ⚠️ 参考稿是 Tailwind + framer-motion 写的，这里**不引入这两个依赖**：官网是纯 CSS 的一套
+//    （依赖里只有 ogl，没有 Tailwind），为一张页面把它引进来会与全局 styles.css 打架；
+//    展开动画改用 CSS 的 grid-template-rows 0fr→1fr 复现，时长与缓动跟参考稿一致（见 .fq-panel）。
+// ⚠️ 主色用站内那支粉（同 .mp 的 --mp-accent），**不引入参考稿里的紫 #A855F7** —— 官网已经统一过
+//    一套主色，再放第二支会看着不像同一个站（/marketplace 那条口径的延续）。
+// ⚠️ 页头只在这一处渲染 CMS 标题：上一版「页头 + 区块」两处都渲染，同一句话出现两遍（第十五轮实测到）。
+//    现在 h1 说页面名（常见问题），CMS 的 title 是它下面那句说明，只出现一次。
 function Faq() {
   const cms = useWebsiteContent('FAQ');
   const content = cms.data || {};
   const items = cmsList(content.items);
-  // ⚠️ 页头与区块**不要都渲染 CMS 标题**：那样同一句话会在首屏出现两遍（2026-09-18 真浏览器实测到）。
-  // 页头说页面名（常见问题），区块说这组问答自己的名字（CMS 的 title）。
-  return <><Title eyebrow="帮助中心" title="常见问题" desc="开课前、上课中、课后最常被问到的事，都在这里。" /><main className="inner faq-page"><section className="faq"><div><h2>{content.title || '常见问题'}</h2><p className="faq-note">没有找到答案？<Link to="/demo">联系我们</Link>，我们按你的班型回答。</p></div><div>{items.map((item, index) => <details key={item.question || index} open={index === 0}><summary>{item.question || ''}</summary><p>{item.answer || ''}</p></details>)}</div></section><End title="把 AI 课开起来" text="联系我们，获取演示账号与示范课包清单。" /></main></>;
+  // 初始态照参考稿：**一条都不展开**（参考稿是 useState<number | null>(null)，不是默认开第一条）。
+  const [openIndex, setOpenIndex] = useState(null);
+  const ready = !cms.loading;
+  const group = cmsPick(content, 'title', CMS_FALLBACK.FAQ.title);
+  return <main className="fq">
+    <div className="fq-aura" aria-hidden="true" />
+    <div className="fq-inner">
+      {/* 与首页 / 课程广场同一口径：接口回来前不渲染文案，否则强刷会先闪一帧与后台不符的字 */}
+      <header className="fq-head">
+        {ready ? <><div className="fq-eyebrow"><i aria-hidden="true" /><span>帮助中心</span><i aria-hidden="true" /></div><h1 className="fq-title">常见问题</h1>{group ? <p className="fq-lead">{group}</p> : null}</> : <div className="fq-head-hold" aria-hidden="true" />}
+      </header>
+      <div className="fq-list">
+        {items.map((item, index) => {
+          const isOpen = openIndex === index;
+          return <article className={'fq-card' + (isOpen ? ' on' : '')} key={item.question || index}>
+            <span className="fq-bar" aria-hidden="true" />
+            {/* 参考稿是 div + onClick；这里用真按钮：点整行照样展开，但键盘和读屏也能用。
+                ⚠️ 问题文字与图标都用带类名的 span，**不要用 em** —— styles.css 里 `h2 em`
+                是全局规则（会把 h2 里的 em 染成紫色），而它们正在 h2 里。 */}
+            <h2 className="fq-q">
+              <button type="button" aria-expanded={isOpen} onClick={() => setOpenIndex(isOpen ? null : index)}>
+                <span className="fq-qtext">{item.question || ''}</span>
+                <span className="fq-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg></span>
+              </button>
+            </h2>
+            <div className="fq-panel"><div className="fq-answer"><p>{item.answer || ''}</p></div></div>
+          </article>;
+        })}
+      </div>
+      <p className="fq-note">没有找到答案？<Link to="/demo">联系我们</Link>，我们按你的班型回答。</p>
+    </div>
+  </main>;
 }
 function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','同一个工作台里完成：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构授权次数按班分配，用量有记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>{BRAND_NAME}</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>联系我们</Button></section></main></>}
 // 官网公开端的内容兜底：公开接口不可用、或后台还没发布过该区块时，官网仍要有东西可看。
