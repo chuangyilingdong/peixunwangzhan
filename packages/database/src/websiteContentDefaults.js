@@ -94,7 +94,8 @@ export const WEBSITE_CONTENT_DEFAULTS = {
     //    生产 CSP 与「不把访客 IP 带给外域」那条口径都不允许。
     // ⚠️ 带 Lines 的字段是**多行标题**（字符串数组，不是带换行的字符串）：
     //    按设计稿，**第 2 行**描边显示（CSS 的 .hb-outline）。
-    hero: { line1: '让AI创作课、编程课', line2: '真正进课堂', imageUrl: '/assets/handbook/hero.webp', imageAlt: '暗色科技氛围中的创作路径主视觉' },
+    // loaderWord = 进场幕布上那行字（用户 2026-09-19：原来是「开课」，改成这句）。
+    hero: { line1: '让AI创作课、编程课', line2: '真正进课堂', loaderWord: '让Ai真正进入课堂', imageUrl: '/assets/handbook/hero.webp', imageAlt: '暗色科技氛围中的创作路径主视觉' },
     about: {
       index: '01 / 关于',
       headingLines: ['从试点走向普及，', '机构需要的不只是工具'],

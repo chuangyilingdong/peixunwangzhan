@@ -362,8 +362,9 @@ export function WebsiteContent({ api }) {
                   {section === 'poster' && <label>眉题<input value={block.eyebrow || ''} onChange={(event) => updateSection(section, { eyebrow: event.target.value })} maxLength={24} /></label>}
                 </div>
                 {section === 'hero' && <div className="form-grid">
+                  <label>进场幕布文案<input value={block.loaderWord || ''} onChange={(event) => updateSection('hero', { loaderWord: event.target.value })} maxLength={30} placeholder="进场那一秒盖在整页上的那行字" /></label>
                   <label>标题第 1 行<input value={block.line1 || ''} onChange={(event) => updateSection('hero', { line1: event.target.value })} maxLength={40} /></label>
-                  <label>标题第 2 行（缩进）<input value={block.line2 || ''} onChange={(event) => updateSection('hero', { line2: event.target.value })} maxLength={40} /></label>
+                  <label>标题第 2 行<input value={block.line2 || ''} onChange={(event) => updateSection('hero', { line2: event.target.value })} maxLength={40} /></label>
                 </div>}
                 {section === 'about' && <>
                   <div className="form-grid">
