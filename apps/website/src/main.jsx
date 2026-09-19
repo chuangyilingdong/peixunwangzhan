@@ -417,7 +417,7 @@ function Works(){
       {/* 类型筛选：全部 + 数据里真有的类型（点一次选中，再点一次取消回「全部」） */}
       <div className="pl-types">
         <button type="button" data-type="all" aria-pressed={kind===''} className={'pl-type'+(kind===''?' on':'')} onClick={()=>setKind('')}>
-          <Icon name="spark" size={15} className="pl-type-ico" />全部<span className="pl-type-n">{items.length}</span>
+          全部<span className="pl-type-n">{items.length}</span>
         </button>
         {['CANVAS','VIBECODING'].map((key)=><button type="button" key={key} data-type={key} aria-pressed={kind===key} className={'pl-type'+(kind===key?' on':'')} onClick={()=>setKind(kind===key?'':key)}>
           <Icon name={PL_CATEGORY_ICON[key]} size={15} className="pl-type-ico" />{PL_CATEGORY_LABEL[key]}<span className="pl-type-n">{catCounts[key]||0}</span>

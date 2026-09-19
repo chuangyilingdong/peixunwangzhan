@@ -689,3 +689,17 @@
 .pl-outlink{color:var(--deep);font-weight:800;text-decoration:underline;text-underline-offset:3px}
 /* 作者行右下角那一格：机构名（用户给的图2 红框位置） */
 .pl-author .pl-org{margin-left:auto;color:#a09aa9;font-weight:700}
+
+/* ── 作品广场的"紫 → 粉"渐变（2026-09-19 晚）────────────────────────────────────
+   用户口径：「这个页面所有的紫色…全部变成紫色粉色的渐变，高级一点。现在这个颜色 ai 味很重」。
+   参考的四处：分类胶囊选中态、翻页选中态、封面上的类型角标、以及角标在白底上的那种。
+   ⚠️ 改动只落在**实心紫的填充面**上（--pl-grad）；正文里的紫色文字（作者名等）保持不动 ——
+   文字用渐变会糊，而且那几处不是用户圈的那几个。 */
+:root{--pl-grad:linear-gradient(135deg,#6a4bd8 0%,#9b4fe0 46%,#ff5c93 100%);--pl-grad-shadow:0 8px 20px #8b3fd93d}
+.pl-type.on{background:var(--pl-grad);border-color:transparent;box-shadow:var(--pl-grad-shadow)}
+.pl-type.on:hover{background:var(--pl-grad);filter:brightness(1.06)}
+.pl-page.on{background:var(--pl-grad);border-color:transparent;box-shadow:var(--pl-grad-shadow)}
+.pl-page.on:hover:not(:disabled){background:var(--pl-grad);filter:brightness(1.06);color:#fff}
+.pl-badge{background:var(--pl-grad);box-shadow:0 4px 12px #6a4bd847}
+/* 计数小胶囊在渐变底上：半透明白更干净（原来是淡紫底 + 深紫字，压在渐变上会脏） */
+.pl-type.on .pl-type-n{background:#ffffff33;color:#fff}
