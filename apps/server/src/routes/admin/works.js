@@ -6,6 +6,8 @@ import {
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
 import { configuredPlazaCategoryMap, DEFAULT_PLAZA_CATEGORY_MAP, PLAZA_CATEGORIES, PLAZA_CATEGORY_LABEL, PLAZA_WORK_TYPES, plazaCategoryMap } from '../../services/plazaCategories.js';
@@ -83,6 +85,45 @@ import {
   workReportRows,
 } from './helpers.js';
 
+/**
+ * 导入件的媒体根（与 `scripts/import-*.mjs` 的 `PLAZA_MEDIA_ROOT` **同名同默认值**）。
+ * nginx 的 `location ^~ /media/` 指到这里。服务端平时不碰文件系统 ——
+ * **只有「彻底删除」**要把导入件的目录挪进 `_trash/`。
+ */
+const MEDIA_ROOT = process.env.PLAZA_MEDIA_ROOT || '/srv/ai-kids-platform/public-media';
+
+/**
+ * 彻底删除一件**导入件**之前，把它的媒体目录挪进 `_trash/`。
+ * 返回一个"说清楚到底做了什么"的小对象 —— 前端要原样显示给管理员（挪了 / 没挪 / 失败）。
+ *
+ * 三条保守规则（宁可留下文件，也别删错）：
+ *   · 只在认得出是导入件时才动文件（`imported.source` 是 `ltai` 或 `webworks`）；
+ *   · 挪之前先查**还有没有别的作品引用同一份媒体**，有就不挪（LIKE 是粗判，
+ *     粗判的代价只是"少删了一个目录"，方向是安全的）；
+ *   · 目录本来就不在，算"没挪"，不算失败。
+ */
+function quarantineImportedMedia(work) {
+  const imported = parseJson(work.canvas_snapshot, {})?.imported;
+  const sourceId = imported ? String(imported.sourceId || '') : '';
+  const dirName = imported?.source === 'ltai' ? 'ltai-works' : imported?.source === 'webworks' ? 'web-works' : null;
+  if (!dirName || !sourceId) return null;
+  const relative = `${dirName}/${sourceId}`;
+  const from = path.join(MEDIA_ROOT, relative);
+  const stillUsed = row('SELECT id FROM works WHERE id<>? AND canvas_snapshot LIKE ? LIMIT 1', [work.id, `%"sourceId":"${sourceId}"%`]);
+  if (stillUsed) return { path: relative, action: 'kept', note: '还有别的作品引用同一份媒体，没有挪动' };
+  if (!fs.existsSync(from)) return { path: relative, action: 'missing', note: '媒体目录本来就不在' };
+  const to = path.join(MEDIA_ROOT, '_trash', `${nowIso().replace(/[:.]/g, '-')}-${sourceId}`);
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+    return { path: relative, action: 'quarantined', trash: path.relative(MEDIA_ROOT, to).split(path.sep).join('/') };
+  } catch (error) {
+    // 挪不动（权限 / 跨设备）**不该**让整次删除失败：库里已经决定要删了，留下文件只是多占点空间。
+    // 报出来让管理员知道，好过静默留一堆没人认领的文件。
+    return { path: relative, action: 'failed', note: String(error?.message || error).slice(0, 200) };
+  }
+}
+
 export async function handleWorks(ctx, part, method) {
   if (part === '/works' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -130,6 +171,71 @@ export async function handleWorks(ctx, part, method) {
     q('UPDATE platform_settings SET plaza_category_map=?, updated_at=? WHERE id=1', [JSON.stringify(clean), nowIso()]);
     audit(ctx, 'PLAZA_CATEGORY_MAP_UPDATE', 'PLATFORM', 'plaza-category-map', {}, { map: before }, { map: clean });
     return { map: plazaCategoryMap(), configured: clean };
+  }
+
+  // ── 作品编辑 / 彻底删除（2026-09-19 用户点名「后台作品的编辑/删除」，口径：「软删 + 彻底删除两档」）
+  //
+  // 「编辑」只让改**展示文案**（标题 + 描述）。发布状态、展示授权、精选都各有专门的动作与审计
+  // （unpublish / plaza / feature）—— 不从这条走，否则"改个标题"就能顺手把发布状态也改了，账对不上。
+  //
+  // 「删除」分两档，这是本文件里**唯一不可恢复**的操作：
+  //   · 软删 = 上面已有的「下架」（`/works/:id/unpublish`）：is_public=0 + UNPUBLISHED，后台还看得到、能改回；
+  //   · 彻底删 = 下面这条 DELETE：库里真删，并**把导入件的媒体目录挪进 `_trash/`**
+  //     （挪走而不是 `rm -rf`：删错了还能捞回来，而 `_trash` 下的文件不再被任何页面引用）。
+  //   所以它要求显式 `confirm:true` + 一句原因（原因进审计日志，学生看不到）。
+  //   作品连着的 5 张子表（举报/批注/提交历史/反馈已读/发布申请）都是 `ON DELETE CASCADE`，
+  //   由 SQLite 自己清（`packages/database/src/schema.js` 里 `PRAGMA foreign_keys = ON`，
+  //   服务端共用同一个连接 —— 这一点如果哪天变了，这里会留下孤儿行）。
+  let workEditMatch = part.match(/^\/works\/([^/]+)$/);
+  if (workEditMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const work = row('SELECT * FROM works WHERE id=?', [workEditMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    const title = nonEmptyString(ctx.body?.title, '作品标题', { max: 200 });
+    const description = String(ctx.body?.description ?? '').trim();
+    if (description.length > 2000) throw errors.badRequest('作品描述不能超过 2000 个字符', 'VALIDATION_ERROR', { field: 'description' });
+    q('UPDATE works SET title=?,description=? WHERE id=?', [title, description, work.id]);
+    audit(ctx, 'PLATFORM_WORK_EDIT', 'WORK', work.id, { title: work.title, description: work.description }, { title, description }, { orgId: work.org_id });
+    return normalizeWork(row('SELECT * FROM works WHERE id=?', [work.id]));
+  }
+  let workDeleteMatch = part.match(/^\/works\/([^/]+)$/);
+  if (workDeleteMatch && method === 'DELETE') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const work = row('SELECT * FROM works WHERE id=?', [workDeleteMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    if (ctx.body?.confirm !== true) throw errors.badRequest('彻底删除不可恢复，请显式确认', 'WORK_DELETE_CONFIRM_REQUIRED');
+    const reason = nonEmptyString(ctx.body?.reason, '删除原因', { max: 200 });
+    const before = normalizeWork(work);
+    const media = quarantineImportedMedia(work);
+    q('DELETE FROM works WHERE id=?', [work.id]);
+    audit(ctx, 'PLATFORM_WORK_DELETE', 'WORK', work.id, before, { deleted: true, reason, media }, { orgId: work.org_id });
+    return { deleted: true, id: work.id, title: before.title, media };
+  }
+  let vibeEditMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
+  if (vibeEditMatch && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeEditMatch[1]]);
+    if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    const title = nonEmptyString(ctx.body?.title, '作品标题', { max: 200 });
+    const description = String(ctx.body?.description ?? '').trim();
+    if (description.length > 2000) throw errors.badRequest('作品描述不能超过 2000 个字符', 'VALIDATION_ERROR', { field: 'description' });
+    q('UPDATE vibecoding_submissions SET title=?,description=?,updated_at=? WHERE id=?', [title, description, nowIso(), submission.id]);
+    audit(ctx, 'PLATFORM_VIBECODING_WORK_EDIT', 'VIBECODING_SUBMISSION', submission.id, { title: submission.title, description: submission.description }, { title, description }, { orgId: submission.org_id });
+    return normalizeSubmission(row('SELECT * FROM vibecoding_submissions WHERE id=?', [submission.id]));
+  }
+  let vibeDeleteMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
+  if (vibeDeleteMatch && method === 'DELETE') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDeleteMatch[1]]);
+    if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    if (ctx.body?.confirm !== true) throw errors.badRequest('彻底删除不可恢复，请显式确认', 'WORK_DELETE_CONFIRM_REQUIRED');
+    const reason = nonEmptyString(ctx.body?.reason, '删除原因', { max: 200 });
+    const before = normalizeSubmission(submission);
+    // ⚠️ 与 `works` 不同：VibeCoding 提交的产物（files / artifacts）都在**这一行里**，
+    //    没有外键子表、也没有落盘目录，所以删行就是删干净了（学生那段对话记录不跟着删）。
+    q('DELETE FROM vibecoding_submissions WHERE id=?', [submission.id]);
+    audit(ctx, 'PLATFORM_VIBECODING_WORK_DELETE', 'VIBECODING_SUBMISSION', submission.id, before, { deleted: true, reason }, { orgId: submission.org_id });
+    return { deleted: true, id: submission.id, title: before.title, media: null };
   }
 
   if (part === '/works/export' && method === 'GET') {
