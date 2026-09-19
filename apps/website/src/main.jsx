@@ -422,6 +422,9 @@ function Download() {
         <li><b>交作品</b> —— 做好的网页 / 文档直接提交，老师和你都能在「我的作品」里看到。</li>
       </ol>
       <p className="dl-note">还没有学生账号？<Link to="/demo">联系我们</Link>，我们会按你的班型开通。</p>
+      {/* 深链：装了客户端的人点一下就能把它叫起来（没装则什么都不会发生，所以下面说明这一点）。
+          客户端侧注册 lingdong:// 见 deploy/desktop/（electron-builder 的 protocols + setAsDefaultProtocolClient）。 */}
+      <p className="dl-note">已经装好了？<a href="lingdong://open">打开客户端</a>（点了没反应，说明这台电脑还没装）。</p>
     </section>
   </main></>;
 }

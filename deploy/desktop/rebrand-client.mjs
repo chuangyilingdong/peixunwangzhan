@@ -71,6 +71,44 @@ edit('apps/desktop/src/locale.ts', (text) => {
   return next;
 });
 
+// ④ dsh 界面里的品牌串（**在源码里替换**，编译时进 bundle）。
+//    与 `deploy/dsh-student/rebrand.mjs` 对 Linux 镜像做的事一样 —— 那一步只服务服务器上的学生环境，
+//    客户端里的 dsh 是**另一棵树**（检出源码 → app.asar），所以这里要再来一遍，
+//    否则学生打开客户端看到的第一屏还写着 "deepseek HARNESS"。
+const UI_BRAND = '灵动ai';
+const UI_ROOTS = ['packages', 'apps/desktop/renderer'];
+const UI_EXTENSIONS = /\.(ts|tsx|js|mjs|cjs|jsx|html|webmanifest|json|css)$/u;
+const UI_REPLACEMENTS = [['DeepSeek Harness', UI_BRAND], ['Deepseek Harness', UI_BRAND], ['deepseek harness', UI_BRAND]];
+const SKIP_DIRS = new Set(['node_modules', '.git', 'lib', 'dist', 'coverage', '.desktop-build']);
+
+function walkSource(root, out = []) {
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
+  for (const entry of entries) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) { if (!SKIP_DIRS.has(entry.name)) walkSource(full, out); continue; }
+    if (UI_EXTENSIONS.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+let uiChanged = 0;
+let uiScanned = 0;
+for (const root of UI_ROOTS) {
+  for (const file of walkSource(path.join(checkout, root))) {
+    uiScanned += 1;
+    let source = '';
+    try { source = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    if (!UI_REPLACEMENTS.some(([from]) => source.includes(from))) continue;
+    let next = source;
+    for (const [from, to] of UI_REPLACEMENTS) next = next.split(from).join(to);
+    if (next === source) continue;
+    if (!dryRun) fs.writeFileSync(file, next);
+    uiChanged += 1;
+  }
+}
+changes.push([`${UI_ROOTS.join(' + ')} 里的 dsh 界面品牌串`, `扫 ${uiScanned} 个文件，命中并替换 ${uiChanged} 个`]);
+
 console.log(`检出：${checkout}${dryRun ? '（--dry-run，不写入）' : ''}`);
 console.log(`品牌：${BRAND.productName}（英文 ${BRAND.productNameEn}）/ 安装包 ${BRAND.artifactName}`);
 for (const [file, result] of changes) console.log(`  · ${file} —— ${result}`);

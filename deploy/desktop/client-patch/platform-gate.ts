@@ -39,6 +39,16 @@ interface LingdongContext {
 type GateAction = { action: 'login' } | { action: 'refresh' } | { action: 'logout' }
 type GateOutcome = { kind: 'enter' } | { kind: 'quit' }
 
+/**
+ * 深链 `lingdong://open` 的落点（官网点「进入课堂 / 打开客户端」时由系统拉起）。
+ * 作用只有一个：**把客户端叫到前台并让等待页重新问一次"现在有没有课"** ——
+ * 学生不用自己去点刷新。登录页时它什么都不做（得先把账号登进去）。
+ */
+let notifyDeepLink: (() => void) | null = null
+export function lingdongDeepLink(): void {
+  try { notifyDeepLink?.() } catch { /* 深链只是便利，出错不该影响客户端 */ }
+}
+
 const sessionFile = (): string => join(app.getPath('userData'), 'lingdong-session.json')
 
 function readJson<T>(file: string): T | null {
@@ -68,6 +78,34 @@ async function call(path: string, { method = 'GET', body, token }: { method?: st
   return payload?.data ?? payload
 }
 
+/**
+ * 把 dsh 的默认模型指到我们网关（写 `$DSH_HOME/settings.yaml`）。
+ *
+ * ⚠️ **必须改这里，不能只靠补丁层的 `agent-default-model`**：用户层设置盖过补丁层。
+ *    学生机器上那份 settings 里存着**上游模型**（`deepseek-official/deepseek-v4-pro`），
+ *    而官方渠道已被我们禁用 —— 一发就 `NO_ADAPTER: no adapter registered for provider "deepseek-official"`
+ *    （实测报错）。这正是客户端界面显示「当前模型不可用」的原因。
+ * ⚠️ **不能带 `reasoningEffort`**：手写声明的渠道不认它 —— 带上会报
+ *    `UNSUPPORTED_REASONING_EFFORT: provider "platform-gateway" model "deepseek-flash"
+ *     does not support reasoning effort "low"`（实测），去掉才回落到渠道默认。
+ * 只改这一个键，其余设置原样保留；改前留一份 .lingdong-backup。
+ */
+function pointDefaultModelToGateway(home: string): void {
+  const file = join(home, 'settings.yaml')
+  let text = ''
+  try { text = existsSync(file) ? readFileSync(file, 'utf8') : '' } catch { return }
+  const block = 'agent-default-model:\n  provider: platform-gateway\n  model: deepseek-flash\n'
+  const next = /^agent-default-model:\n(?:[ \t]+.*\n)*/mu.test(text)
+    ? text.replace(/^agent-default-model:\n(?:[ \t]+.*\n)*/mu, block)
+    : block + text
+  if (next === text) return
+  try {
+    const backup = `${file}.lingdong-backup`
+    if (existsSync(file) && !existsSync(backup)) writeFileSync(backup, text)
+    writeFileSync(file, next)
+  } catch (error) { console.error('灵动ai：写入默认模型失败（不影响登录）', error) }
+}
+
 /** 铺好网关密钥与补丁层。**只有这节课真的在进行时**才会走到这里。 */
 function applyGateway(context: LingdongContext): void {
   const key = context.gateway?.key
@@ -80,6 +118,7 @@ function applyGateway(context: LingdongContext): void {
   if (existsSync(patch)) {
     try { writeFileSync(join(home, 'lingdong.patch.yml'), readFileSync(patch, 'utf8')) } catch (error) { console.error('灵动ai：写入补丁层失败', error) }
   }
+  pointDefaultModelToGateway(home)
   try {
     writeFileSync(join(app.getPath('userData'), 'lingdong-classroom.json'), JSON.stringify({
       classroom: context.classroom, presets: context.presets ?? [], sends: context.sends ?? null,
@@ -143,6 +182,8 @@ export async function runLingdongGate(createWindow: () => BrowserWindow, isQuitt
         continue
       }
       if (!context.classroom) {
+        // 等老师开始上课：这里挂上深链回调 —— 官网拉起的客户端会立刻重问一次（学生不用自己点刷新）
+        notifyDeepLink = () => waiting?.({ action: 'refresh' })
         const action = await show('waiting.html', { message: context.message || '老师还没有开始上课', name: session.user?.displayName || '' }).then(nextAction)
         if (action.action === 'logout') { writeSession(null); continue }
         continue // refresh：回循环顶部重新问一次「现在有没有课」
@@ -151,6 +192,7 @@ export async function runLingdongGate(createWindow: () => BrowserWindow, isQuitt
       return { kind: 'enter' }
     }
   } finally {
+    notifyDeepLink = null
     ipcMain.removeHandler('lingdong:gate')
   }
 }

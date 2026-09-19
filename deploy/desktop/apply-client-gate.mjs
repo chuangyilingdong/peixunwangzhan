@@ -33,12 +33,14 @@ if (!existsSync(join(checkout, 'apps/desktop/package.json'))) throw new Error(`�
 
 const report = []
 const write = (file, text) => { if (!dryRun) writeFileSync(join(checkout, file), text); }
-/** 精确替换；命中 0 次或已改过都要看得见（上游升级后锚点可能漂） */
-const patch = (file, anchor, replacement, note) => {
+/** 精确替换；命中 0 次或已改过都要看得见（上游升级后锚点可能漂）。
+ *  ⚠️ `marker` 是**这条补丁的特征串**，用来判断是否已打过 —— 不能用"文件里有灵动ai"这种松散判断：
+ *     加新补丁时会被误判成"已打过"而整个跳过（踩过）。 */
+const patch = (file, anchor, replacement, note, marker = replacement.slice(0, 60)) => {
   const full = join(checkout, file)
   if (!existsSync(full)) { report.push(`!! ${file}：文件不存在`); return }
   const before = readFileSync(full, 'utf8')
-  if (before.includes(replacement.trim().split('\n')[0]) && before.includes('灵动ai')) {
+  if (before.includes(marker)) {
     report.push(`·  ${file}：已打过（跳过）`)
     return
   }
@@ -72,19 +74,52 @@ contextBridge.exposeInMainWorld('lingdong', {
 })`,
   '暴露 window.lingdong.gate')
 
-// ④ main.ts：在启动后端之前过登录门
+// ④ main.ts：在启动后端之前过登录门 + 注册深链协议
+// 先去重：早期版本只插过 `import { runLingdongGate }`，加 deepLink 后会与新的那条并存（踩过）
+const mainFile = join(checkout, 'apps/desktop/src/main.ts')
+if (existsSync(mainFile)) {
+  const stale = "import { runLingdongGate } from './platform-gate.ts'\n"
+  const current = readFileSync(mainFile, 'utf8')
+  if (current.includes(stale)) {
+    write('apps/desktop/src/main.ts', current.replace(stale, ''))
+    report.push('✓  apps/desktop/src/main.ts：清掉重复的旧 import')
+  }
+}
 patch('apps/desktop/src/main.ts',
   "import { fileURLToPath } from 'node:url'",
-  "import { fileURLToPath } from 'node:url'\nimport { runLingdongGate } from './platform-gate.ts'",
-  '引入登录门模块')
+  "import { fileURLToPath } from 'node:url'\nimport { lingdongDeepLink, runLingdongGate } from './platform-gate.ts'",
+  '引入登录门模块', 'lingdongDeepLink, runLingdongGate')
 patch('apps/desktop/src/main.ts',
   '  automaticCheck()\n  await reconcileBackend().catch(() => undefined)',
   `  automaticCheck()
-  // 灵动ai 登录门（2026-09-19）：没有我们的账号、或这节课还没开始上课，就**不启动**创作环境。
+  // 灵动ai 登录门：没有我们的账号、或这节课还没开始上课，就**不启动**创作环境。
   // 学生登录后这里会向平台要这节课的运行时密钥与预设提示词（见 src/platform-gate.ts 文件头）。
   if ((await runLingdongGate(createMainWindow, isQuitting)).kind === 'quit') { app.quit(); return }
   await reconcileBackend().catch(() => undefined)`,
-  '在 reconcileBackend 之前插登录门')
+  '在 reconcileBackend 之前插登录门', 'if ((await runLingdongGate(createMainWindow, isQuitting))')
+// 深链协议：安装器写进注册表，系统才知道怎么用 lingdong:// 拉起本客户端。
+// ⚠️ 单独一条、挂在 automaticCheck() 上 —— 挂在上面那个锚点上的话，登录门一插好锚点就没了。
+patch('apps/desktop/src/main.ts',
+  '  automaticCheck()\n',
+  `  automaticCheck()
+  // 深链协议（2026-09-19）：官网点「打开客户端」→ 系统拉起 lingdong://open → second-instance
+  // → focusPrimaryWindow() 里调 lingdongDeepLink()，让「等老师开始上课」那一页立刻重问一次。
+  app.setAsDefaultProtocolClient('lingdong')
+`,
+  '注册 lingdong://（main）', "setAsDefaultProtocolClient('lingdong')")
+patch('apps/desktop/src/main.ts',
+  '  focusPrimaryWindow = () => {\n    if (quitting) return\n',
+  '  focusPrimaryWindow = () => {\n    if (quitting) return\n    // 深链/第二次启动都走到这里：让等待页立刻重问一次「现在有没有课」\n    lingdongDeepLink()\n',
+  '深链落到 focusPrimaryWindow', '深链/第二次启动都走到这里')
+
+// ④b 打包：注册 lingdong:// 协议（安装器写进注册表，系统才知道怎么拉起客户端）
+patch('apps/desktop/scripts/electron-builder-config.mjs',
+  '    ],\n    mac: {',
+  `    ],
+    // 深链协议：官网「打开客户端」链接用 lingdong://open 拉起本客户端
+    protocols: [{ name: '灵动ai创作客户端', schemes: ['lingdong'] }],
+    mac: {`,
+  '注册 lingdong:// 协议', 'protocols: [{ name: ')
 
 // ⑤ 打包：把 gate/ 打进 extraResources
 patch('apps/desktop/scripts/electron-builder-config.mjs',
