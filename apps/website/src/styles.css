@@ -782,14 +782,15 @@
 .hb-about p{max-width:36rem;margin:0;color:#4b4943;font-size:clamp(1rem,1.3vw,1.2rem);line-height:1.9}
 
 /* 海报块：整张显示（contain），**不裁不灰** —— 信息图裁一刀就没法看了。
-   纸色底是为了让白底海报不跟黑底打架；点开可看原图大小（见 JSX 的 .hb-link）。 */
+   纸色底是为了让白底海报不跟黑底打架。
+   ⚠️ 2026-09-19 用户口径：「这个图不需要放大」——**去掉了点开看大图**，
+   所以这里不再有 `.hb-link`（那段样式已删），图片本身也不是链接。 */
 .hb-poster{display:flex;flex-direction:column;align-items:center;gap:clamp(1rem,2vw,1.8rem);padding:clamp(3rem,7vw,6rem) var(--hb-pad);color:var(--hb-ink);background:var(--hb-paper)}
 .hb-poster__head{max-width:56rem;text-align:center}
 .hb-poster__head h2{margin:.8rem 0 0;font-family:var(--hb-display);font-size:clamp(1.5rem,2.6vw,2.6rem);font-weight:900;line-height:1.2;letter-spacing:.01em}
 .hb-poster__frame{display:block;width:100%;max-width:1180px;border:1px solid #0000001f;background:#fff;box-shadow:0 18px 50px #0000001f}
 .hb-poster__frame img{width:100%;height:auto;object-fit:contain}
 .hb-poster__cap{max-width:56rem;margin:0;color:#777268;font-size:.86rem;line-height:1.7;text-align:center}
-.hb-link{margin-left:.8rem;padding-bottom:.2rem;border-bottom:1px solid currentColor;color:#8c7036;font-size:.82rem;letter-spacing:.06em;white-space:nowrap}
 
 /* 横滑区：外层高度由 JS 按"一屏 + 轨道多出来的宽度"设（.hb-work 是滚动预算），
    里层 sticky 钉住一屏，滚动进度 → translateX。窄屏全部让位给竖排（见下面的 media query）。 */
