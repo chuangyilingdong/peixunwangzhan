@@ -9,6 +9,9 @@ export function parseWebsiteDraft(value) {
   try { const result = JSON.parse(value); return result && typeof result === 'object' && !Array.isArray(result) ? result : null; } catch { return null; }
 }
 
+/** 草稿预览里图片的统一内联样式（原来这串在好几处重复写）。 */
+const PREVIEW_IMAGE_STYLE = { display: 'block', maxWidth: '100%', marginTop: '8px', borderRadius: '8px' };
+
 export function WebsitePreview({ content, selectedKey }) {
   if (!content) return <div className="cms-preview-empty">保存或修正 JSON 后可预览。</div>;
   if (selectedKey === 'HOME') return <div className="cms-preview-home"><span className="cms-preview-kicker">{content.heroKicker || '首页眉题'}</span><h3>{content.heroTitle || '首页标题'} <em>{content.heroAccent || '强调标题'}</em></h3><p>{content.heroDescription || '首页描述'}</p><div className="cms-preview-trust"><strong>{content.trustTitle || '信任区标题'}</strong><span>{content.trustDescription || '信任区描述'}</span></div>{content.coverImageUrl ? <img src={content.coverImageUrl} alt="首页封面预览" /> : null}</div>;
@@ -22,7 +25,28 @@ export function WebsitePreview({ content, selectedKey }) {
   if (selectedKey === 'BRAND') return <div className="cms-preview-brand"><strong>{content.name || '品牌名称'}</strong><span>{content.tagline || '品牌标语'}</span><small>{content.contactEmail || '联系邮箱'}</small></div>;
   if (selectedKey === 'MARKETPLACE') return <div className="cms-preview-faq"><h3>{content.title || '灵动Ai学院课包展示'}</h3>{content.lead ? <p>{content.lead}</p> : null}</div>;
   // 灵动介绍 / 机构手册：正文是「分节」结构，预览按可折叠列表展示，配图一起预览
-  if (selectedKey === 'INTRO' || selectedKey === 'HANDBOOK') return <div className="cms-preview-faq"><h3>{content.title || (selectedKey === 'INTRO' ? '灵动介绍' : '机构手册')}</h3>{content.lead ? <p>{content.lead}</p> : null}{(Array.isArray(content.sections) ? content.sections : []).map((item, index) => <details key={`preview-section-${index}`}><summary>{item.title || `第 ${index + 1} 节`}</summary>{item.body ? <p>{item.body}</p> : null}{(Array.isArray(item.bullets) ? item.bullets.filter(Boolean) : []).length ? <ul>{item.bullets.filter(Boolean).map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet}</li>)}</ul> : null}{item.imageUrl ? <img src={item.imageUrl} alt={item.imageAlt || ''} style={{ display: 'block', maxWidth: '100%', marginTop: '8px', borderRadius: '8px' }} /> : null}</details>)}{Array.isArray(content.compareRows) && content.compareRows.length ? <p>对比表 {content.compareRows.length} 行（{content.compareRows.map((row) => row.label).filter(Boolean).join(' / ')}）</p> : null}</div>;
+  // 灵动介绍：分节结构（标题 + 正文 + 要点 + 配图）
+  if (selectedKey === 'INTRO') return <div className="cms-preview-faq"><h3>{content.title || '灵动介绍'}</h3>{content.lead ? <p>{content.lead}</p> : null}{(Array.isArray(content.sections) ? content.sections : []).map((item, index) => <details key={`preview-section-${index}`}><summary>{item.title || `第 ${index + 1} 节`}</summary>{item.body ? <p>{item.body}</p> : null}{(Array.isArray(item.bullets) ? item.bullets.filter(Boolean) : []).length ? <ul>{item.bullets.filter(Boolean).map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet}</li>)}</ul> : null}{item.imageUrl ? <img src={item.imageUrl} alt={item.imageAlt || ''} style={PREVIEW_IMAGE_STYLE} /> : null}</details>)}</div>;
+  // 机构手册（2026-09-19 按设计稿重做成「分区」结构）：预览按官网的真实顺序走一遍，图也一起看
+  if (selectedKey === 'HANDBOOK') {
+    const hero = content.hero || {};
+    const about = content.about || {};
+    const poster = content.poster || {};
+    const work = content.work || {};
+    const cards = Array.isArray(work.cards) ? work.cards : [];
+    const lines = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
+    return <div className="cms-preview-faq">
+      <h3>{[hero.line1, hero.line2].filter(Boolean).join(' ') || '机构手册'}</h3>
+      {hero.imageUrl ? <img src={hero.imageUrl} alt={hero.imageAlt || ''} style={PREVIEW_IMAGE_STYLE} /> : null}
+      {lines(about.headingLines).length ? <p>{lines(about.headingLines).join(' / ')}</p> : null}
+      {about.body ? <p>{about.body}</p> : null}
+      {poster.imageUrl ? <details><summary>{poster.title || '海报'}</summary><img src={poster.imageUrl} alt={poster.imageAlt || ''} style={PREVIEW_IMAGE_STYLE} /></details> : null}
+      <p>横滑卡片 {cards.length} 张：{cards.map((card) => card.title).filter(Boolean).join(' / ') || '（未配置）'}</p>
+      {lines(work.introLines).length ? <p>卡片区大标题：{lines(work.introLines).join(' ')}</p> : null}
+      {content.compare?.body ? <p>对比区：{content.compare.body}</p> : null}
+      {content.cta?.headline ? <p>结尾行动：{content.cta.headline}</p> : null}
+    </div>;
+  }
   return <pre className="cms-preview-json">{JSON.stringify(content, null, 2)}</pre>;
 }
 
@@ -198,6 +222,31 @@ export function WebsiteContent({ api }) {
     [order[index], order[next]] = [order[next], order[index]];
     updateStructured({ audienceOrder: order });
   }
+  // 机构手册（2026-09-19 按设计稿重做成「分区」结构）用的几个 helper：
+  // 它的字段是**嵌套**的（hero/about/poster/work/compare/cta 各一小块），
+  // 上面那套 updateList/moveList 只认顶层字段，所以这里补一层「分区内的字段」操作。
+  function updateSection(section, patch) {
+    updateStructured({ [section]: { ...(structured?.[section] || {}), ...patch } });
+  }
+  /** 多行标题里的一行（headingLines / introLines）。 */
+  function updateSectionLine(section, field, index, value) {
+    const lines = cmsListOf(structured?.[section]?.[field]);
+    updateSection(section, { [field]: lines.map((line, lineIndex) => (lineIndex === index ? value : line)) });
+  }
+  /** 分区里的列表（现在只有 work.cards）：增删改 + 上下移。 */
+  function updateSectionList(section, field, index, patch) {
+    const items = cmsListOf(structured?.[section]?.[field]);
+    updateSection(section, { [field]: items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) });
+  }
+  function moveSectionList(section, field, index, direction) {
+    const items = [...cmsListOf(structured?.[section]?.[field])];
+    const next = index + direction;
+    if (next < 0 || next >= items.length) return;
+    [items[index], items[next]] = [items[next], items[index]];
+    updateSection(section, { [field]: items });
+  }
+  function addSectionList(section, field, blank) { updateSection(section, { [field]: [...cmsListOf(structured?.[section]?.[field]), blank] }); }
+  function removeSectionList(section, field, index) { updateSection(section, { [field]: cmsListOf(structured?.[section]?.[field]).filter((_, itemIndex) => itemIndex !== index) }); }
   // 配图上传：走平台已有的文件资产接口（与课程封面上传同一条路），拿到公开可读地址后写回字段。
   async function uploadImage(file, apply, key) {
     setUploading(key); setMessage('');
@@ -294,13 +343,58 @@ export function WebsiteContent({ api }) {
             <div className="form-grid top-gap"><label>结尾行动标题<input value={structured?.cta?.title || ''} onChange={(event) => updateStructured({ cta: { ...(structured?.cta || {}), title: event.target.value } })} maxLength={120} /></label><label>结尾说明<input value={structured?.cta?.text || ''} onChange={(event) => updateStructured({ cta: { ...(structured?.cta || {}), text: event.target.value } })} maxLength={300} /></label></div>
           </div>}
           {selectedKey === 'HANDBOOK' && <div className="cms-form">
-            <label>页面标题<input value={structured?.title || ''} onChange={(event) => updateStructured({ title: event.target.value })} maxLength={100} /></label>
-            <label>一句话说明<textarea value={structured?.lead || ''} onChange={(event) => updateStructured({ lead: event.target.value })} maxLength={600} /></label>
-            <CmsSectionsFields structured={structured} onList={(index, patch) => updateList('sections', index, patch)} onMove={(index, direction) => moveList('sections', index, direction)} onAdd={(blank) => addList('sections', blank)} onRemove={(index) => removeList('sections', index)} uploading={uploading} onUpload={(file, index) => uploadImage(file, (url) => updateList('sections', index, { imageUrl: url }), `section-${index}`)} />
-            <div className="cms-section-heading top-gap"><strong>对比表（维度 / 分散拼凑 / 灵动ai学院）</strong><span>整张表为空时官网不显示对比区</span></div>
-            <div className="cms-faq-list">{cmsListOf(structured?.compareRows).map((row, index) => <div className="cms-faq-item" key={`row-${index}`}><div className="cms-faq-heading"><strong>第 {index + 1} 行</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList('compareRows', index, -1)} aria-label={`第 ${index + 1} 行上移`}>↑</button><button type="button" className="text-button" disabled={index === cmsListOf(structured?.compareRows).length - 1} onClick={() => moveList('compareRows', index, 1)} aria-label={`第 ${index + 1} 行下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList('compareRows', index)}>删除</button></div></div><div className="form-grid"><label>对比维度<input value={row.label || ''} onChange={(event) => updateList('compareRows', index, { label: event.target.value })} maxLength={40} /></label><label>分散拼凑<input value={row.left || ''} onChange={(event) => updateList('compareRows', index, { left: event.target.value })} maxLength={160} /></label><label>灵动ai学院<input value={row.right || ''} onChange={(event) => updateList('compareRows', index, { right: event.target.value })} maxLength={160} /></label></div></div>)}</div>
-            <button type="button" className="secondary-button top-gap" onClick={() => addList('compareRows', { label: '', left: '', right: '' })}>新增对比行</button>
-            <div className="form-grid top-gap"><label>结尾行动标题<input value={structured?.cta?.title || ''} onChange={(event) => updateStructured({ cta: { ...(structured?.cta || {}), title: event.target.value } })} maxLength={120} /></label><label>结尾说明<input value={structured?.cta?.text || ''} onChange={(event) => updateStructured({ cta: { ...(structured?.cta || {}), text: event.target.value } })} maxLength={300} /></label></div>
+            {/* 2026-09-19 按用户给的设计稿（design (1).zip）重做：整页换成
+                「主视觉 + 关于 + 海报 + 横滑卡片 + 对比 + 结尾行动」。字段与官网一一对应
+                （apps/website/src/main.jsx 的 Handbook()）。
+                ⚠️ 带 Lines 的是**多行标题**：官网把**第 2 行**渲染成描边字（设计稿如此），
+                   所以这里**一行一个输入框**，不要合并成一个 textarea、也不要在里面敲换行。
+                ⚠️ 图片留空时官网用内置的默认图（public/assets/handbook/）；换图可以直接贴地址，
+                   也可以点「上传图片」走平台的文件资产接口。 */}
+            {[['hero', '主视觉（首屏）', '两行大标题 + 通屏背景图'], ['about', '关于（纸色区块）', '左侧图 + 右侧标题与正文'], ['poster', '海报（信息图）', '用户给的那张「AI 时代的孩子」——整张显示，不裁切，点开可看大图']].map(([section, title, hint]) => {
+              const block = structured?.[section] || {};
+              const lines = cmsListOf(block.headingLines);
+              return <div key={`hb-${section}`}>
+                <div className="cms-section-heading top-gap"><strong>{title}</strong><span>{hint}</span></div>
+                <div className="form-grid">
+                  <label>图片地址<input value={block.imageUrl || ''} onChange={(event) => updateSection(section, { imageUrl: event.target.value })} placeholder="留空则用默认图" /></label>
+                  <label>图片说明（无障碍用）<input value={block.imageAlt || ''} onChange={(event) => updateSection(section, { imageAlt: event.target.value })} maxLength={160} /></label>
+                  {section === 'about' && <label>角标文字<input value={block.index || ''} onChange={(event) => updateSection(section, { index: event.target.value })} maxLength={24} placeholder="例如 01 / 关于" /></label>}
+                  {section === 'poster' && <label>眉题<input value={block.eyebrow || ''} onChange={(event) => updateSection(section, { eyebrow: event.target.value })} maxLength={24} /></label>}
+                </div>
+                {section === 'hero' && <div className="form-grid">
+                  <label>标题第 1 行<input value={block.line1 || ''} onChange={(event) => updateSection('hero', { line1: event.target.value })} maxLength={40} /></label>
+                  <label>标题第 2 行（缩进）<input value={block.line2 || ''} onChange={(event) => updateSection('hero', { line2: event.target.value })} maxLength={40} /></label>
+                </div>}
+                {section === 'about' && <>
+                  <div className="form-grid">
+                    <label>标题第 1 行<input value={lines[0] || ''} onChange={(event) => updateSectionLine('about', 'headingLines', 0, event.target.value)} maxLength={40} /></label>
+                    <label>标题第 2 行<input value={lines[1] || ''} onChange={(event) => updateSectionLine('about', 'headingLines', 1, event.target.value)} maxLength={40} /></label>
+                  </div>
+                  <label>正文<textarea value={block.body || ''} onChange={(event) => updateSection('about', { body: event.target.value })} maxLength={800} /></label>
+                </>}
+                {section === 'poster' && <>
+                  <label>海报标题<input value={block.title || ''} onChange={(event) => updateSection('poster', { title: event.target.value })} maxLength={60} /></label>
+                  <label>图注<textarea value={block.caption || ''} onChange={(event) => updateSection('poster', { caption: event.target.value })} maxLength={200} /></label>
+                </>}
+                <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hb-${section}` ? '上传中…' : '上传图片'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateSection(section, { imageUrl: url }), `hb-${section}`); }} /></label></div>
+              </div>;
+            })}
+            <div className="cms-section-heading top-gap"><strong>横滑卡片区（向右滚动的 5 张）</strong><span>标题 + 一句话 + 配图；第 2 行标题官网是描边字</span></div>
+            <div className="form-grid">{cmsListOf(structured?.work?.introLines).map((line, index) => <label key={`hb-intro-${index}`}>大标题第 {index + 1} 行{index === 1 ? '（描边）' : ''}<input value={line || ''} onChange={(event) => updateSectionLine('work', 'introLines', index, event.target.value)} maxLength={20} /></label>)}</div>
+            <div className="cms-faq-list">{cmsListOf(structured?.work?.cards).map((card, index) => <div className="cms-faq-item" key={`hb-card-${index}`}><div className="cms-faq-heading"><strong>卡片 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveSectionList('work', 'cards', index, -1)} aria-label={`卡片 ${index + 1} 上移`}>↑</button><button type="button" className="text-button" disabled={index === cmsListOf(structured?.work?.cards).length - 1} onClick={() => moveSectionList('work', 'cards', index, 1)} aria-label={`卡片 ${index + 1} 下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeSectionList('work', 'cards', index)}>删除</button></div></div>
+              <div className="form-grid"><label>标题<input value={card.title || ''} onChange={(event) => updateSectionList('work', 'cards', index, { title: event.target.value })} maxLength={40} /></label><label>一句话说明<input value={card.desc || ''} onChange={(event) => updateSectionList('work', 'cards', index, { desc: event.target.value })} maxLength={120} /></label><label>配图地址<input value={card.imageUrl || ''} onChange={(event) => updateSectionList('work', 'cards', index, { imageUrl: event.target.value })} /></label><label>配图说明<input value={card.imageAlt || ''} onChange={(event) => updateSectionList('work', 'cards', index, { imageAlt: event.target.value })} maxLength={160} /></label></div>
+              <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hb-card-${index}` ? '上传中…' : '上传配图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateSectionList('work', 'cards', index, { imageUrl: url }), `hb-card-${index}`); }} /></label></div>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={() => addSectionList('work', 'cards', { title: '', desc: '', imageUrl: '', imageAlt: '' })}>新增卡片</button>
+            <div className="cms-section-heading top-gap"><strong>对比区（粒子背景）</strong><span>眉题 + 两行标题（第 2 行描边）+ 正文</span></div>
+            <div className="form-grid">
+              <label>眉题<input value={structured?.compare?.eyebrow || ''} onChange={(event) => updateSection('compare', { eyebrow: event.target.value })} maxLength={24} /></label>
+              <label>标题第 1 行<input value={cmsListOf(structured?.compare?.headingLines)[0] || ''} onChange={(event) => updateSectionLine('compare', 'headingLines', 0, event.target.value)} maxLength={30} /></label>
+              <label>标题第 2 行（描边）<input value={cmsListOf(structured?.compare?.headingLines)[1] || ''} onChange={(event) => updateSectionLine('compare', 'headingLines', 1, event.target.value)} maxLength={30} /></label>
+            </div>
+            <label>正文<textarea value={structured?.compare?.body || ''} onChange={(event) => updateSection('compare', { body: event.target.value })} maxLength={800} /></label>
+            <div className="cms-section-heading top-gap"><strong>结尾行动</strong><span>大标题 + 说明（按钮与联系方式由官网统一）</span></div>
+            <div className="form-grid"><label>标题<input value={structured?.cta?.headline || ''} onChange={(event) => updateSection('cta', { headline: event.target.value })} maxLength={40} /></label><label>说明<input value={structured?.cta?.text || ''} onChange={(event) => updateSection('cta', { text: event.target.value })} maxLength={200} /></label></div>
           </div>}
           </fieldset>
           <div className="cms-preview-wrap"><div className="cms-section-heading"><strong>草稿预览</strong><span>未保存内容仅在本页预览</span></div><WebsitePreview content={preview} selectedKey={selectedKey} /></div>

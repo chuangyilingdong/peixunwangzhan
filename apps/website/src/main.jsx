@@ -487,15 +487,222 @@ function CmsSections({ sections }) {
     {item.imageUrl && <img className="hb-image" src={item.imageUrl} alt={item.imageAlt || item.title || ''} loading="lazy" />}
   </article>)}</section>;
 }
-function CmsCompare({ rows }) {
-  const list = cmsList(rows);
-  if (!list.length) return null;
-  return <section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>{BRAND_NAME}</b></div>{list.map((row, index) => <div key={index + '-' + (row.label || '')}><strong>{row.label || ''}</strong><span>{row.left || ''}</span><b>✓ {row.right || ''}</b></div>)}</section>;
-}
+// ── 机构手册 /handbook（2026-09-19 按用户给的设计稿 design (1).zip 重做）────────────────
+// 设计稿是 Tailwind + GSAP + Lenis + 热链远程图片的静态页。这里按本项目一贯的做法**移植**，不照抄依赖：
+//   ① **不引 GSAP / Lenis / Tailwind**：官网是纯 CSS 一套；而且生产 CSP 是 `script-src 'self'`，
+//      设计稿里那几个 `<script src>`（gsap / ScrollTrigger / lenis）在我们站上**一个都加载不了**。
+//      入场、视差、横向滚动钉住、粒子、自定义光标全部用原生 CSS + rAF 复刻。
+//   ② **图片自托管**：设计稿热链 `a.lovart.ai`（那域名本机与服务器都连不通，口径也不许热链），
+//      7 张配图压成 webp 放进 `public/assets/handbook/`（合计 ~750KB），海报同理。
+//   ③ **文案与图片全部读 CMS**（沿用「机构手册的图与文字都能后台配」那条口径）。
+//      逐字段与兜底合并，所以**改版期间库里还是老内容时页面也不会变空**。
+// ⚠️ 浏览器 API 只出现在 `useEffect` 里，且每处都 `typeof … !== 'undefined'` 兜底 ——
+//    p70 的 DOM 桩里没有 `IntersectionObserver` / `ResizeObserver` / canvas，
+//    在渲染期碰它们会让渲染守卫直接报未定义（首页那段注释记过这个坑）。
+/** 系统要求减少动效时，入场/视差/横向钉住/粒子全部不启用（内容照常可读，不是"藏起来"）。 */
+const hbReducedMotion = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+/**
+ * 多行标题：新形状是**字符串数组**（`headingLines` / `introLines` —— 后台每行一个输入框，
+ * 运营不用在一个框里敲换行）。这里同时兼容"带换行的字符串"那种老写法（改版期间库里可能还是老内容）。
+ * 每行在 CSS 里是一个块级 span，所以**不用写 `<br/>`**。
+ */
+const hbLines = (value) => (Array.isArray(value) ? value : String(value || '').split('\n')).map((line) => String(line).trim()).filter(Boolean);
 function Handbook() {
   const cms = useWebsiteContent('HANDBOOK');
-  const content = cms.data || {};
-  return <><Title eyebrow="机构手册 · 2026" title={<>{content.title || '机构合作手册'}</>} desc={content.lead || ''} /><main className="inner handbook-page"><CmsSections sections={content.sections} /><CmsCompare rows={content.compareRows} /><End title={content.cta?.title || '获取完整机构手册'} text={content.cta?.text || '先联系我们，我们会把最新版本、课件示例与合作说明发给你。'} /></main></>;
+  const stored = cms.data || {};
+  const fallback = CMS_FALLBACK.HANDBOOK;
+  const hero = { ...fallback.hero, ...(stored.hero || {}) };
+  const about = { ...fallback.about, ...(stored.about || {}) };
+  const poster = { ...fallback.poster, ...(stored.poster || {}) };
+  const work = { ...fallback.work, ...(stored.work || {}) };
+  const compare = { ...fallback.compare, ...(stored.compare || {}) };
+  const cta = { ...fallback.cta, ...(stored.cta || {}) };
+  const cards = cmsList(stored.work?.cards).length ? cmsList(stored.work.cards) : cmsList(fallback.work.cards);
+  const workLines = hbLines(work.introLines);
+  const compareLines = hbLines(compare.headingLines);
+
+  const sectionRef = useRef(null);
+  const trackRef = useRef(null);
+  const canvasRef = useRef(null);
+  // ① 横向滚动钉住（设计稿用 ScrollTrigger pin + scrub 做的）。
+  //    这里等价实现：section 的高度 = 一屏 + 轨道多出来的宽度，里面那层 sticky 钉住一屏，
+  //    滚动进度 → translateX。窗口变化时重量一次；窄屏（<901px）完全交给 CSS 的竖排，不设高度。
+  useEffect(() => {
+    const section = sectionRef.current; const track = trackRef.current;
+    if (!section || !track || hbReducedMotion()) return undefined;
+    const isDesktop = () => typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 901px)').matches : true;
+    let frame = 0;
+    const measure = () => {
+      if (!isDesktop()) { section.style.height = ''; track.style.transform = ''; return; }
+      const distance = Math.max(0, track.scrollWidth - window.innerWidth);
+      section.style.height = `${window.innerHeight + distance}px`;
+    };
+    const paint = () => {
+      frame = 0;
+      if (!isDesktop()) return;
+      const budget = Math.max(1, section.offsetHeight - window.innerHeight);
+      const progress = Math.min(1, Math.max(0, -section.getBoundingClientRect().top / budget));
+      const distance = Math.max(0, track.scrollWidth - window.innerWidth);
+      track.style.transform = `translate3d(${-progress * distance}px, 0, 0)`;
+    };
+    const onScroll = () => { if (!frame) frame = window.requestAnimationFrame(paint); };
+    const onResize = () => { measure(); paint(); };
+    measure(); paint();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize);
+    return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onResize); if (frame) window.cancelAnimationFrame(frame); };
+  }, [cards.length]);
+  // ② 入场：设计稿靠 GSAP 从下方推上来。这里用 IntersectionObserver 加个类，CSS 负责动画；
+  //    没有这个 API（或要求减少动效）时**直接给上类**，内容永远可见 —— 动画只是锦上添花。
+  useEffect(() => {
+    const nodes = document.querySelectorAll ? [...document.querySelectorAll('.hb-reveal')] : [];
+    if (!nodes.length) return undefined;
+    if (hbReducedMotion() || typeof IntersectionObserver !== 'function') { nodes.forEach((node) => node.classList.add('is-in')); return undefined; }
+    const observer = new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add('is-in'); observer.unobserve(entry.target); } }), { rootMargin: '0px 0px -12% 0px' });
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, []);
+  // ③ 对比区的粒子（设计稿的 #particle-canvas）：纯装饰，画不出来也不影响任何信息。
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof canvas.getContext !== 'function' || hbReducedMotion()) return undefined;
+    const context = canvas.getContext('2d');
+    if (!context) return undefined;
+    const section = canvas.parentElement;
+    const pointer = { x: 0, y: 0, active: false };
+    let particles = []; let width = 1; let height = 1; let frame = 0; let visible = true;
+    const build = () => {
+      const rect = section.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = Math.max(1, rect.width); height = Math.max(1, rect.height);
+      canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+      canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const count = Math.min(170, Math.round(width * height / 9000));
+      particles = Array.from({ length: count }, () => ({ baseX: Math.random() * width, baseY: Math.random() * height, x: Math.random() * width, y: Math.random() * height, radius: .5 + Math.random() * 1.7, density: 8 + Math.random() * 22 }));
+    };
+    const draw = () => {
+      if (visible) {
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = 'rgba(188, 164, 108, .72)';
+        for (const particle of particles) {
+          if (pointer.active) {
+            const dx = pointer.x - particle.x; const dy = pointer.y - particle.y;
+            const squared = dx * dx + dy * dy;
+            if (squared > .0001 && squared < 48400) {
+              const distance = Math.sqrt(squared); const force = (220 - distance) / 220;
+              particle.x -= (dx / distance) * force * particle.density;
+              particle.y -= (dy / distance) * force * particle.density;
+            }
+          }
+          particle.x += (particle.baseX - particle.x) * .035;
+          particle.y += (particle.baseY - particle.y) * .035;
+          if (!Number.isFinite(particle.x) || !Number.isFinite(particle.y)) { particle.x = particle.baseX; particle.y = particle.baseY; }
+          context.beginPath(); context.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2); context.fill();
+        }
+      }
+      frame = window.requestAnimationFrame(draw);
+    };
+    const onPointerMove = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = event.clientX - rect.left; pointer.y = event.clientY - rect.top;
+      pointer.active = Number.isFinite(pointer.x) && Number.isFinite(pointer.y);
+    };
+    const onPointerLeave = () => { pointer.active = false; };
+    section.addEventListener('pointermove', onPointerMove);
+    section.addEventListener('pointerleave', onPointerLeave);
+    let resizeObserver = null;
+    if (typeof ResizeObserver === 'function') { resizeObserver = new ResizeObserver(() => { build(); }); resizeObserver.observe(section); }
+    if (typeof IntersectionObserver === 'function') new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; }).observe(section);
+    build(); draw();
+    return () => {
+      section.removeEventListener('pointermove', onPointerMove);
+      section.removeEventListener('pointerleave', onPointerLeave);
+      resizeObserver?.disconnect();
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+  // ④ 预加载幕布：**幕布本身由 CSS 动画自动收起**（animation-fill-mode forwards → 最终
+  //    visibility:hidden + pointer-events:none），所以就算 JS 没跑起来也不会把页面盖住；
+  //    JS 只负责把那个计数器从 00 数到 100。
+  useEffect(() => {
+    const counter = document.getElementById('hb-count');
+    if (!counter || hbReducedMotion()) return undefined;
+    const started = performance.now(); const total = 1100;
+    let frame = 0;
+    const step = (now) => {
+      const ratio = Math.min(1, (now - started) / total);
+      counter.textContent = String(Math.round(ratio * 100)).padStart(2, '0');
+      if (ratio < 1) frame = window.requestAnimationFrame(step);
+    };
+    frame = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  return <main className="hb">
+    {/* 幕布（纯装饰）：CSS 自动收起，见上面的说明 */}
+    <div className="hb-preloader" aria-hidden="true"><span className="hb-preloader__rule" /><p>开课</p><span className="hb-preloader__count" id="hb-count">00</span></div>
+    <section className="hb-hero" id="hb-hero">
+      <div className="hb-hero__media"><img src={hero.imageUrl} alt={hero.imageAlt || ''} fetchPriority="high" /></div>
+      <div className="hb-hero__veil" aria-hidden="true" />
+      <div className="hb-hero__copy">
+        <h1>
+          {[hero.line1, hero.line2].filter(Boolean).map((line, index) => <span className="hb-mask" key={index}><span className={'hb-line' + (index === 1 ? ' hb-line--offset' : '')} style={{ animationDelay: `${.15 + index * .12}s` }}>{line}</span></span>)}
+        </h1>
+      </div>
+    </section>
+
+    <section className="hb-about">
+      <div className="hb-about__media hb-reveal"><img src={about.imageUrl} alt={about.imageAlt || ''} loading="lazy" />{about.index ? <span className="hb-index">{about.index}</span> : null}</div>
+      <div className="hb-about__copy">
+        <h2 className="hb-reveal">{hbLines(about.headingLines).map((line, index) => <span key={index}>{line}</span>)}</h2>
+        <p className="hb-reveal">{about.body}</p>
+      </div>
+    </section>
+
+    {/* 海报（用户 2026-09-19 让「找个合适的放」）：它是**信息图**，密密麻麻全是字，
+        所以在纸色底上**整张显示**（object-fit: contain），不裁不灰 —— 放进上面那个
+        会裁切的满幅槽位会把字切没。点开可看原图大小。 */}
+    {poster.imageUrl ? <section className="hb-poster hb-reveal">
+      <div className="hb-poster__head">{poster.eyebrow ? <span className="hb-eyebrow">{poster.eyebrow}</span> : null}<h2>{poster.title}</h2></div>
+      <a className="hb-poster__frame" href={poster.imageUrl} target="_blank" rel="noreferrer"><img src={poster.imageUrl} alt={poster.imageAlt || poster.title || ''} loading="lazy" /></a>
+      <p className="hb-poster__cap">{poster.caption}<a className="hb-link" href={poster.imageUrl} target="_blank" rel="noreferrer">点开看大图 ↗</a></p>
+    </section> : null}
+
+    <section className="hb-work" id="hb-work" ref={sectionRef}>
+      <div className="hb-work__pin">
+        <div className="hb-work__track" ref={trackRef}>
+          <article className="hb-intro">
+            <h2>{workLines.map((line, index) => <span className={index === 1 ? 'hb-outline' : ''} key={index}>{line}</span>)}</h2>
+            <span className="hb-intro__rule" />
+          </article>
+          {cards.map((card, index) => <article className="hb-card hb-interactive" key={index + '-' + (card.title || '')}>
+            <img src={card.imageUrl} alt={card.imageAlt || card.title || ''} loading="lazy" />
+            <div className="hb-card__meta">
+              <span>{String(index + 1).padStart(2, '0')}</span>
+              <h3>{card.title}</h3>
+              <p>{card.desc}</p>
+            </div>
+          </article>)}
+        </div>
+      </div>
+    </section>
+
+    <section className="hb-compare">
+      <canvas ref={canvasRef} aria-hidden="true" />
+      <div className="hb-compare__copy hb-reveal">
+        {compare.eyebrow ? <p className="hb-eyebrow">{compare.eyebrow}</p> : null}
+        <h2>{compareLines.map((line, index) => <span className={index === 1 ? 'hb-outline' : ''} key={index}>{line}</span>)}</h2>
+        <p>{compare.body}</p>
+      </div>
+    </section>
+
+    <section className="hb-cta hb-reveal">
+      <h2>{cta.headline}</h2>
+      <p>{cta.text}</p>
+      <Button>联系我们 · 开通试用</Button>
+    </section>
+  </main>;
 }
 function Intro() {
   const cms = useWebsiteContent('INTRO');
@@ -655,7 +862,7 @@ const CMS_FALLBACK = {
     org: [{ question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学员无需自备 Key，由机构统一开通与管理。' }, { question: '平台提供哪些课程？', answer: '课程中心提供标准课包（含 PPT 与 HTML 互动课件），机构可按课包直接排课。' }],
   },
   INTRO: { title: '灵动介绍', lead: BRAND_NAME + '是面向 8–16 岁的 AI 创作开课平台：学生用中文与 AI 伙伴「阿飞」对话，当堂做出能运行、能展示的作品。', highlights: [], sections: [], cta: { title: '把 AI 课开起来', text: '联系我们，我们会按你的班型给出课包与开通方案。' } },
-  HANDBOOK: { title: '机构合作手册', lead: '把「一门 AI 课」变成能复制的校区产品：课程、账号、授权次数与作品沉淀在同一套平台里。', sections: [], compareRows: [], cta: { title: '获取完整机构手册', text: '先联系我们，我们会把最新版本、课件示例与合作说明发给你。' } },
+  HANDBOOK: {"hero":{"line1":"让AI创作课、编程课","line2":"真正进课堂","imageUrl":"/assets/handbook/hero.webp","imageAlt":"暗色科技氛围中的创作路径主视觉"},"about":{"index":"01 / 关于","headingLines":["从试点走向普及，","机构需要的不只是工具"],"body":"国家和教育部门连续推动中小学人工智能教育，课程要能开齐开足，生成式AI要可用、可管。机构真正需要的是：能进课表、能管住账号与用量、每节课都有作品的完整方案。","imageUrl":"/assets/handbook/about.webp","imageAlt":"AI 创意思维与数据面板"},"poster":{"eyebrow":"一页看懂","title":"为什么现在就是开 AI 课的好时机","caption":"政策、家长认知、市场供给与窗口期判断 —— 一页看完。","imageUrl":"/assets/handbook/poster.webp","imageAlt":"AI 时代的孩子从这里起步：政策层面 / 家长认知 / 市场供给 / 窗口期判断"},"work":{"introLines":["开课管课","沉作品","一体化交付"],"cards":[{"title":"中文对话创作","desc":"学生与 AI 伙伴「阿飞」对话，做出可运行的作品","imageUrl":"/assets/handbook/card-1.webp","imageAlt":"学生在 AI 辅助下创作"},{"title":"课堂即开即用","desc":"标准课包与互动课件直接进课堂","imageUrl":"/assets/handbook/card-2.webp","imageAlt":"课件与课堂流程"},{"title":"账号用量可控","desc":"分级账号、授权次数、用量记录","imageUrl":"/assets/handbook/card-3.webp","imageAlt":"统一平台下的多端能力"},{"title":"作品进展厅","desc":"校区案例库与招生素材自动沉淀","imageUrl":"/assets/handbook/card-4.webp","imageAlt":"作品与案例展台"},{"title":"体验课转正班","desc":"90 分钟出作品，家长当场看得见","imageUrl":"/assets/handbook/card-5.webp","imageAlt":"一步一步的成长路径"}]},"compare":{"eyebrow":"对比","headingLines":["别再","东拼西凑"],"body":"对话用一家、写代码换一个编译器、课件散在网盘和群聊里——老师每换一门课就要重新教学生用哪个网站。灵动AI课堂把对话创作、代码运行、课件管理、作品沉淀整合在同一平台。"},"cta":{"headline":"把 AI 课开起来","text":"联系我们，我们会按你的班型给出课包与开通方案。"}},
   // 灵动课程（/marketplace）的页头：大标题 + 副标题。用户在后台「官网内容 → 灵动课程」可改
   // （用户口径 2026-09-18 晚：这两句要能后台配置）。
   MARKETPLACE: { title: '灵动Ai学院课包展示', lead: '灵动Ai坚持自研国内精品Ai课程，持续探索适合青少年Ai培训体系。' },
