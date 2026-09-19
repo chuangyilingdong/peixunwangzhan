@@ -389,12 +389,10 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
             const modality = String(box?.modality || 'TEXT').toUpperCase();
             const caps = isBox ? capabilitiesFor(modality, box.model) : null;
             const capabilityLabel = modality === 'IMAGE' ? 'AI 生图' : modality === 'VIDEO' ? 'AI 生视频' : modality === 'MUSIC' ? 'AI 音乐' : 'AI 文字';
-            // 生成框体的「预置素材」只在**图片 / 视频**模态下才有意义：
-            //   · IMAGE：它是一张预置图；· VIDEO：它可能被当首帧（图生视频模型必须给一张）。
-            // 文字框体（对话）与音乐框体根本不吃素材 —— 原来也给它们摆一行「上传素材」，
-            // 用户口径：选了生成框体还要填上传素材「很多余」。所以按模态收放。
-            const needsPresetAsset = isBox && (modality === 'IMAGE' || modality === 'VIDEO');
-            const firstFrameRequired = isBox && modality === 'VIDEO' && !(caps?.inputModes || []).includes('TEXT');
+            // ⚠️ 2026-09-19 用户口径：把生成框体的「平台预填内容」与「预置图片 / 预置首帧图」两栏**删掉** ——
+            //    框体进画布后由学生自己写描述、自己连一张图（学生端本来就有「首帧/尾帧」连线行，
+            //    缺首帧时还会提示「该模型需要先连接一张画面（首帧）」，见 canvas 的 blocked 文案）。
+            //    所以那两个字段不是"唯一的入口"，删掉不留功能缺口。
             const currentType = material.materialType || 'PROMPT';
             const typeOptions = MATERIAL_TYPE_OPTIONS.some(([value]) => value === currentType)
               ? MATERIAL_TYPE_OPTIONS
@@ -427,16 +425,8 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                   <LessonField label="生成音频" hint={caps.audio ? '' : '当前模型不支持生成音频'}><select value={box.audio === true ? 'YES' : box.audio === false ? 'NO' : ''} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.value === '' ? null : event.target.value === 'YES' }))}><option value="">学生自选（课堂里由学生挑）</option><option value="YES">带音频</option><option value="NO">不带音频</option></select></LessonField>
                 </div> : null}
                 {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 渠道与模型配置」里填写。</p> : null}
-                {modality === 'TEXT' ? null : <LessonField label={box?.mode === 'DESCRIPTION' ? '平台预填描述' : box?.mode === 'LYRICS' ? '平台预填歌词' : '平台预填内容'} hint="学生把框体加入画布时会自动填进去，可以改"><textarea rows={3} value={snapshot.content || ''} placeholder={box?.mode === 'DESCRIPTION' ? '例如「关于春天放风筝的欢快儿歌」' : box?.mode === 'LYRICS' ? '例如 [Verse] 小星星眨眨眼' : '留空则由学生自己想'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} /></LessonField>}
-                {needsPresetAsset ? <LessonField label={modality === 'VIDEO' ? '预置首帧图' : '预置图片'} hint={firstFrameRequired ? '这个模型不支持纯文字生视频，必须给一张首帧图' : '可选：留空则由学生在课堂里自己连一张图'}>
-                  <div className="lesson-asset-input">
-                    <input value={material.assetUrl || ''} placeholder={modality === 'VIDEO' ? '首帧图地址（https:// 或平台上传地址）' : '图片地址（https:// 或平台上传地址）'} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { assetUrl: event.target.value })} />
-                    <label className="inline-file-upload">{uploading === `${groupIndex}:${materialIndex}` ? '上传中…' : '上传图片'}<input type="file" accept="image/*" disabled={uploading === `${groupIndex}:${materialIndex}`} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; uploadMaterial(groupIndex, materialIndex, file); }} /></label>
-                  </div>
-                </LessonField> : null}
-              </> : <>
-                <LessonField label="给学生看的说明" hint="可选"><input value={material.description || ''} placeholder="一句话说明这个素材是干什么的" onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { description: event.target.value })} /></LessonField>
-                {isText
+                                              </> : <>
+                                {isText
                   ? <LessonField label={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'}><textarea rows={3} value={snapshot.content || ''} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} /></LessonField>
                   : <LessonField label="素材文件" hint="可粘贴 HTTPS 地址，也可直接上传">
                     <div className="lesson-asset-input">
