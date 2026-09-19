@@ -22,18 +22,10 @@ import '@xyflow/react/dist/style.css';
 import './styles.css';
 // 画幅档位的小示意图尺寸（纯函数单独放，守卫才跑得到；.jsx 在 node 里导不进来）
 import { ratioThumbSize } from './ratioThumb.js';
+// 框体「能不能删」的判据 + 未生成时的引导插画地址（纯函数单独放 .js，守卫 p122 才跑得到）
+import { BOX_EMPTY_ART, isProtectedBoxNode } from './boxRules.js';
 
 const CanvasActionsContext = createContext(null);
-/**
- * 图片/视频框体「**还没生成**」时占位区里那张引导图（2026-09-19 用户口径：
- * 原来是一枚 🌈 emoji + 一行小字，换成这张「小灵陪你一起创作」的引导插画）。
- *
- * ⚠️ 用**绝对路径**：画布同时跑在官网（学生的 `/learn/canvas`）与机构端（`/org/` 的课堂页），
- *    而 nginx 的 `/assets/` 落在**官网那份 dist** 上 —— 两边用同一个绝对地址都取得到。
- *    文件：`apps/website/public/assets/learning/box-empty-art.webp`（1200×676，34KB）。
- *    插图自带点阵底，正好接上占位区原本的点阵背景。
- */
-const BOX_EMPTY_ART = '/assets/learning/box-empty-art.webp';
 // 受鉴权保护的素材地址（/api/**）不能直接塞进 <img>/<video>/<audio> 的 src：那些请求带不了
 // Authorization 头，必然 401、图永远出不来。宿主通过 resolveAssetUrl 把它换成能显示的地址
 // （官网学习页是「带 token 取回二进制 → blob:」，见 packages/shared/src/api.js 的 fetchBlobUrl）。
@@ -1446,12 +1438,8 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         //     否则会出现「面板显示已生成、画布上却没有」。
         // 判据与节点状态的算法保持一致（见 ImageNode 里 state 的推导：PENDING / assetUrl / generatedText）。
         onBeforeDelete={readOnly ? undefined : async ({ nodes: deletingNodes, edges: deletingEdges }) => {
-          const protectedIds = new Set((deletingNodes || []).filter((node) => {
-            const data = node.data || {};
-            if (!data.slotType) return false;                 // 不是框体（普通素材节点）照常可删
-            if (data.generationStatus === 'PENDING') return true;
-            return Boolean(data.assetUrl || data.generatedText || data.uploaded);
-          }).map((node) => node.id));
+          // 判据在 boxRules.js 里（纯函数，守卫 p122 直接拿状态矩阵跑它 —— 别在这里重写一份）
+          const protectedIds = new Set((deletingNodes || []).filter(isProtectedBoxNode).map((node) => node.id));
           if (!protectedIds.size) return true;
           return {
             nodes: (deletingNodes || []).filter((node) => !protectedIds.has(node.id)),
