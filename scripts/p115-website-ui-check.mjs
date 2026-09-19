@@ -78,6 +78,28 @@ const seedDb = new DatabaseSync(dbPath);
 seedDb.exec('PRAGMA busy_timeout = 5000');
 const homeRow = seedDb.prepare("SELECT published_content FROM website_contents WHERE content_key='HOME'").get();
 assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里');
+// 词条：一条**导入件**（形状与服务端 scripts/import-plaza-works.mjs 写进 works.canvas_snapshot 的一致）。
+// 为什么守卫要自己造：种子里只有画布作品，而「导入件怎么显示、点开是什么样」是本轮新加的展示路径 ——
+// 不造一条，这条路径在守卫里永远验不到（线上有 476 件，但守卫跑的是临时库）。
+{
+  const nowIso = new Date().toISOString();
+  const owner = seedDb.prepare("SELECT id, org_id FROM users WHERE login='student-1'").get();
+  assert.ok(owner, 'fixture: 需要 student-1 来挂导入件');
+  // 封面用 1×1 的 data URI：守卫不该依赖外网图床
+  const pixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+  seedDb.prepare("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_import',?,?,'导入件样例','SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)")
+    .run(owner.id, owner.org_id, nowIso, nowIso, nowIso);
+  const snapshot = JSON.stringify({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 },
+    imported: { source: 'ltai', sourceId: 1, workType: 'image', workTypeLabel: '图片', coverUrl: pixel,
+      contentUrls: [pixel], externalUrl: null, authorName: '样例作者', createdAt: '2026-09-01 10:00:00' } });
+  seedDb.prepare("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_import','project_guard_import',?,?,'导入件样例','',?,'PUBLISHED',?,1,'guardimport1',?)")
+    .run(owner.id, owner.org_id, snapshot, nowIso, nowIso);
+  // 另加一条**我们自己的公开画布作品**：广场要同时显示两类，且筛选（类型胶囊）得有两种类型才测得出来
+  seedDb.prepare("INSERT OR IGNORE INTO student_projects (id,student_id,org_id,title,status,canvas_snapshot,latest_version,last_saved_at,created_at,updated_at) VALUES ('project_guard_canvas',?,?,'站内画布样例','SUBMITTED','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}',1,?,?,?)")
+    .run(owner.id, owner.org_id, nowIso, nowIso, nowIso);
+  seedDb.prepare("INSERT OR IGNORE INTO works (id,project_id,student_id,org_id,title,description,canvas_snapshot,status,submitted_at,is_public,share_token,copyright_confirmed_at) VALUES ('work_guard_canvas','project_guard_canvas',?,?,'站内画布样例','','{\"nodes\":[],\"edges\":[],\"viewport\":{\"x\":0,\"y\":0,\"zoom\":1}}','PUBLISHED',?,1,'guardcanvas1',?)")
+    .run(owner.id, owner.org_id, nowIso, nowIso);
+}
 const cmsHome = JSON.parse(homeRow.published_content);
 console.log(`CMS 当前 HOME：title=「${cmsHome.heroTitle}」 accent=「${cmsHome.heroAccent}」 stats=${(cmsHome.stats || []).map((s) => s.value + (s.suffix || '')).join(' / ')}`);
 
@@ -577,97 +599,114 @@ try {
     if (await page.locator(gone).count()) problems.push(`灵动课程：这一页不该有任何筛选，却还有 ${gone}`);
   }
 
-  // ── ⑤c 灵动作品：分类只有两个（画布 / VibeCoding）+ 搜索框 + 卡片按 zip 重做
+  // ── ⑤c 灵动作品（2026-09-19 晚按用户给的参考站重做）
+  // 参考站是用户自己的另一个站（ltai.cc/works-square）：一排类型胶囊 + 封面卡片网格，
+  // 卡片 = 封面（左上角类型角标、视频中间播放键）+ 标题 + 日期 + 作者。
+  // 我们比它多两类站内作品（画布 / VibeCoding，没有封面图，用渐变占位）与一个搜索框。
+  // ⚠️ 这一节是**口径**：筛选行、卡片构成、导入件点开是看图/播放层 —— 改版要连这里一起改。
   await page.goto(`${base}/works`, { waitUntil: 'domcontentloaded' });
-  for (let i = 0; i < 40; i += 1) { if (await page.locator('.work').count()) break; await page.waitForTimeout(250); }
+  for (let i = 0; i < 40; i += 1) { if (await page.locator('.pl-card').count()) break; await page.waitForTimeout(250); }
   await settle();
-  // ① 原来的分类筛选整块不要了（页面里那个「全部作品 / 小游戏 / 互动故事…」的 chips）
-  if (await page.locator('.filters').count()) problems.push('灵动作品：分类筛选块应已删除（用户口径：这里全部不要）');
-  // 同批删掉的还有页头与底部那条提示（用户：「图1这里怎么还在」「图2也要删除」）
-  if (await page.locator('.page-title').count()) problems.push('灵动作品：页头（学员作品 / 孩子们的灵感，正在发光 / 描述）应已删除');
+  // ① 页头与底部那条提示仍然不要（2026-09-18 晚的口径，这一轮没改）
+  if (await page.locator('.page-title').count()) problems.push('灵动作品：页头（学员作品 / 孩子们的灵感…）应已删除');
   if ((await bodyText()).includes('作品来自真实课堂')) problems.push('灵动作品：底部那条「作品来自真实课堂」提示应已删除');
-  if ((await bodyText()).includes('了解机构作品展厅')) problems.push('灵动作品：底部那条提示里的「了解机构作品展厅」按钮应已删除');
-  // 分类只有两个：画布 / VibeCoding（用户口径 2026-09-18 晚「筛选就分为 2 个板块」——
-  // ⚠️ 说的**是这一页**，我上一轮做错到灵动课程上了，见 ⑤b 的注释）。
-  const workCatLabels = (await page.locator('.works-cats .works-cat').allInnerTexts()).map((t) => t.trim());
-  console.log(`  · 灵动作品分类：[${workCatLabels.join(' / ')}]`);
-  if (workCatLabels.join('|') !== '画布|VibeCoding') problems.push(`灵动作品：分类应只有两个板块 [画布|VibeCoding]（实际 [${workCatLabels.join('|')}]）`);
-  const allWorks = await page.locator('.work').count();
-  await page.locator('.works-cats .works-cat').nth(1).click(); // VibeCoding（种子里那几条兜底作品都是画布 → 应当清空）
-  await page.waitForTimeout(400);
-  const vibeWorks = await page.locator('.work').count();
-  const workCatPressed = await page.locator('.works-cats .works-cat').nth(1).getAttribute('aria-pressed');
-  console.log(`  · 点 VibeCoding：作品 ${allWorks} → ${vibeWorks}、aria-pressed=${workCatPressed}`);
-  if (workCatPressed !== 'true') problems.push('灵动作品：点分类后 aria-pressed 应当是 true');
-  if (allWorks && vibeWorks >= allWorks) problems.push(`灵动作品：选了 VibeCoding 之后条数没变（${allWorks} → ${vibeWorks}）—— 分类没真的生效`);
-  if (!vibeWorks && !(await page.locator('.note').count())) problems.push('灵动作品：分类筛成空时应当有一句空态提示');
-  await page.locator('.works-cats .works-cat').nth(1).click(); // 再点一次取消 → 回到全部
-  await page.waitForTimeout(400);
-  if ((await page.locator('.work').count()) !== allWorks) problems.push(`灵动作品：再点一次应当取消分类、回到全部（${allWorks} → ${await page.locator('.work').count()}）`);
+  if ((await bodyText()).includes('了解机构作品展厅')) problems.push('灵动作品：底部那条提示里的按钮应已删除');
+
+  // ② 类型筛选行：第一个是「全部」且默认选中；类型只列**数据里真有的**
+  const typeCount = await page.locator('.pl-types .pl-type').count();
+  const allCards = await page.locator('.pl-card').count();
+  console.log(`  · 灵动作品类型：${typeCount} 个胶囊、卡片 ${allCards} 张`);
+  if (!typeCount) problems.push('灵动作品：没有类型筛选行（.pl-types .pl-type）');
+  if (await page.locator('.pl-types .pl-type').first().getAttribute('data-type') !== 'all') problems.push('灵动作品：第一个类型按钮应当是「全部」');
+  if (await page.locator('.pl-types .pl-type').first().getAttribute('aria-pressed') !== 'true') problems.push('灵动作品：默认应当选中「全部」');
+  if (!allCards) problems.push('灵动作品：一张卡片都没有');
+  const typeKeysShown = await page.locator('.pl-types .pl-type').evaluateAll((els) => els.map((el) => el.getAttribute('data-type')));
+  const cardTypes = await page.locator('.pl-card').evaluateAll((els) => els.map((el) => el.getAttribute('data-type')));
+  console.log(`  · 类型集合：[${typeKeysShown.join(', ')}]；卡片类型：[${[...new Set(cardTypes)].join(', ')}]`);
+  if (!cardTypes.includes('canvas')) problems.push('灵动作品：种子里那几张画布作品应当显示为「画布」类型');
+  if (!cardTypes.includes('image')) problems.push('灵动作品：造的那条导入件应当显示为「图片」类型（导入件没被当成普通作品？）');
+  // 点一个类型 → 只剩该类型；「全部」不再选中；再点一次回到全部
+  const targetType = 'image';
+  const targetIndex = typeKeysShown.indexOf(targetType);
+  if (targetIndex < 0) problems.push('灵动作品：筛选行里没有「图片」（导入件那条）');
+  else {
+    await page.locator('.pl-types .pl-type').nth(targetIndex).click();
+    await settle();
+    const filteredTypes = await page.locator('.pl-card').evaluateAll((els) => els.map((el) => el.getAttribute('data-type')));
+    console.log(`  · 点「${targetType}」：${allCards} → ${filteredTypes.length} 张（类型：${[...new Set(filteredTypes)].join(', ')}）`);
+    if (filteredTypes.length >= allCards) problems.push(`灵动作品：选了「${targetType}」之后条数没变（${allCards} → ${filteredTypes.length}）—— 分类没真的生效`);
+    if (filteredTypes.some((key) => key !== targetType)) problems.push(`灵动作品：筛「${targetType}」之后混进了别的类型：${[...new Set(filteredTypes)].join(', ')}`);
+    if (await page.locator('.pl-types .pl-type').first().getAttribute('aria-pressed') !== 'false') problems.push('灵动作品：筛了类型之后「全部」不该还是选中');
+    await page.locator('.pl-types .pl-type').nth(targetIndex).click();
+    await settle();
+    if ((await page.locator('.pl-card').count()) !== allCards) problems.push(`灵动作品：再点一次应当取消分类、回到全部（${allCards} → ${await page.locator('.pl-card').count()}）`);
+  }
   await shot('13-works-category');
-  // ② 换成搜索框
-  if (!(await page.locator('#works-search').count())) problems.push('灵动作品：没找到搜索框（#works-search）');
-  const workCount = await page.locator('.work').count();
-  if (!workCount) problems.push('灵动作品：一张卡片都没有');
+
+  // ③ 卡片构成：白卡 20px 圆角、封面 14px 圆角、单行省略标题、有角标与作者、整卡可点
   const cardGeo = await page.evaluate(() => {
-    const card = document.querySelector('.work');
+    const card = document.querySelector('.pl-card');
     if (!card) return null;
-    const art = card.querySelector('.art');
-    const title = card.querySelector('.work-title');
-    const foot = card.querySelector('.work-foot');
-    const artBox = art ? art.getBoundingClientRect() : null;
+    const cover = card.querySelector('.pl-cover');
+    const title = card.querySelector('.pl-title');
+    const coverBox = cover ? cover.getBoundingClientRect() : null;
     return {
       cardRadius: Math.round(parseFloat(getComputedStyle(card).borderRadius)),
       cardBg: getComputedStyle(card).backgroundColor,
-      artRatio: artBox && artBox.height ? +(artBox.width / artBox.height).toFixed(2) : null,
-      artRadius: art ? Math.round(parseFloat(getComputedStyle(art).borderRadius)) : null,
+      coverRadius: cover ? Math.round(parseFloat(getComputedStyle(cover).borderRadius)) : null,
+      coverRatio: coverBox && coverBox.height ? +(coverBox.width / coverBox.height).toFixed(2) : null,
       titleWrap: title ? getComputedStyle(title).whiteSpace : null,
       titleEllipsis: title ? getComputedStyle(title).textOverflow : null,
-      footDisplay: foot ? getComputedStyle(foot).display : null,
-      footSpans: foot ? foot.querySelectorAll('span').length : null,
-      buttonsInside: card.querySelectorAll('button').length,
-      hitLinks: card.querySelectorAll('.work-hit').length,
-      heights: { card: card.offsetHeight, art: art?.offsetHeight, body: card.querySelector('.work-body')?.offsetHeight, title: title?.offsetHeight, foot: foot?.offsetHeight },
-      bodyStyle: (() => { const b = card.querySelector('.work-body'); if (!b) return null; const s = getComputedStyle(b); return { display: s.display, flex: s.flex, gap: s.gap, minHeight: s.minHeight, padding: s.padding }; })(),
-      html: card.innerHTML.replace(/\s+/g, ' ').slice(0, 420),
+      badge: cover ? (cover.querySelector('.pl-badge')?.textContent || '').trim() : null,
+      author: (card.querySelector('.pl-author')?.textContent || '').trim(),
+      hasDate: Boolean(card.querySelector('.pl-date')),
+      hitTags: [...card.querySelectorAll('.pl-hit')].map((el) => el.tagName.toLowerCase()),
+      cardHeight: card.offsetHeight,
+      coverHeight: cover?.offsetHeight || 0,
     };
   });
-  console.log(`  · 灵动作品卡片：圆角 ${cardGeo?.cardRadius}px 底色 ${cardGeo?.cardBg}、封面 ${cardGeo?.artRatio}:1 圆角 ${cardGeo?.artRadius}px、` +
-    `标题 ${cardGeo?.titleWrap}/${cardGeo?.titleEllipsis}、底部 ${cardGeo?.footDisplay} ${cardGeo?.footSpans} 格高 ${cardGeo?.heights?.foot}px、卡内按钮 ${cardGeo?.buttonsInside}、可点层 ${cardGeo?.hitLinks}`);
+  console.log(`  · 卡片：圆角 ${cardGeo?.cardRadius}px 白底=${cardGeo?.cardBg === 'rgb(255, 255, 255)'}、封面 ${cardGeo?.coverRatio}:1 圆角 ${cardGeo?.coverRadius}px、` +
+    `角标「${cardGeo?.badge}」、作者「${cardGeo?.author}」、有日期=${cardGeo?.hasDate}、可点元素 [${(cardGeo?.hitTags || []).join(',')}]`);
   if (!cardGeo) problems.push('灵动作品：取不到卡片几何');
   else {
-    // 底部那行必须就是一行（正常 ~20px）。踩过：用 <footer> 会命中全局的页脚样式
-    // （padding 64/28/24 + 灰底），把它撑到 108px，卡片里就多出一大块空白。
-    if (cardGeo.heights && cardGeo.heights.foot > 32) {
-      problems.push(`灵动作品：底部那行高度异常（${cardGeo.heights.foot}px，正常一行约 20px）—— 大概率又命中全局的 footer 样式了`);
-    }
-    // 卡高与内容的差 = 内外边距 + 行高（正常约 70px）；超过 120 就说明有东西在撑高度
-    if (cardGeo.heights && cardGeo.heights.card - (cardGeo.heights.art + cardGeo.heights.title + cardGeo.heights.foot) > 120) {
-      problems.push(`灵动作品：卡片里多出一大块空白（卡高 ${cardGeo.heights.card} vs 内容 ${cardGeo.heights.art}+${cardGeo.heights.title}+${cardGeo.heights.foot}）`);
-    }
-    // zip 的设计：白卡、20px 圆角、封面 ≈1.43:1 且圆角 14、标题单行省略、底部一行两格、卡内没有按钮
     if (cardGeo.cardRadius !== 20) problems.push(`灵动作品：卡片圆角应为 20px（实际 ${cardGeo.cardRadius}px）`);
     if (cardGeo.cardBg !== 'rgb(255, 255, 255)') problems.push(`灵动作品：卡片应为白底（实际 ${cardGeo.cardBg}）`);
-    if (cardGeo.artRatio == null || Math.abs(cardGeo.artRatio - 1.43) > 0.08) problems.push(`灵动作品：封面比例应≈1.43:1（实际 ${cardGeo.artRatio}:1）`);
-    if (cardGeo.artRadius !== 14) problems.push(`灵动作品：封面圆角应为 14px（实际 ${cardGeo.artRadius}px）`);
-    if (cardGeo.titleWrap !== 'nowrap' || cardGeo.titleEllipsis !== 'ellipsis') problems.push(`灵动作品：标题应当是单行省略（实际 white-space=${cardGeo.titleWrap} text-overflow=${cardGeo.titleEllipsis}）`);
-    if (cardGeo.footDisplay !== 'flex' || cardGeo.footSpans < 2) problems.push(`灵动作品：底部应当是一行两格（学生名 / 机构）`);
-    if (cardGeo.buttonsInside) problems.push(`灵动作品：卡片里不该再有按钮（zip 的卡里没有按钮，整卡可点）`);
+    if (cardGeo.coverRadius !== 14) problems.push(`灵动作品：封面圆角应为 14px（实际 ${cardGeo.coverRadius}px）`);
+    if (cardGeo.coverRatio == null || cardGeo.coverRatio < 1.4) problems.push(`灵动作品：封面应当接近 16:9（实测 ${cardGeo.coverRatio}:1）`);
+    if (cardGeo.titleWrap !== 'nowrap' || cardGeo.titleEllipsis !== 'ellipsis') problems.push(`灵动作品：标题应当单行省略（实际 ${cardGeo.titleWrap}/${cardGeo.titleEllipsis}）`);
+    if (!cardGeo.badge) problems.push('灵动作品：封面上没有类型角标');
+    if (!cardGeo.author) problems.push('灵动作品：卡片上没有作者');
+    if (cardGeo.hitTags.length !== 1) problems.push(`灵动作品：整卡应当只有一个可点元素（实际 ${cardGeo.hitTags.length} 个）`);
+    if (cardGeo.cardHeight - cardGeo.coverHeight > 140) problems.push(`灵动作品：卡片里多出一大块空白（卡高 ${cardGeo.cardHeight} vs 封面 ${cardGeo.coverHeight}）`);
   }
-  // ③ 搜索真的按「标题 / 学生名字」过滤
-  const firstTitle = await page.locator('.work .work-title').first().innerText();
-  await page.locator('#works-search').fill(firstTitle.trim().slice(0, 3));
-  await page.waitForTimeout(300);
-  const searched = await page.locator('.work').count();
-  const searchedText = await page.locator('.works').innerText();
-  console.log(`  · 搜索「${firstTitle.trim().slice(0, 3)}」：${workCount} → ${searched} 件`);
-  if (!searched) problems.push(`灵动作品：用第一张卡的标题去搜，一条都没匹配上（搜索没生效）`);
-  if (searched > workCount) problems.push('灵动作品：搜索之后条数反而变多了？');
-  if (!searchedText.includes(firstTitle.trim().slice(0, 3))) problems.push('灵动作品：搜索结果里没有包含搜索词的那张卡');
+
+  // ④ 导入件点开：看图/播放层（本轮新加的"能看"能力；参考站的点开是没动作的）
+  const importCard = page.locator('.pl-card[data-type="image"]').first();
+  if (await importCard.count()) {
+    await importCard.locator('.pl-hit').click();
+    const viewerShown = await page.locator('.pl-viewer').count();
+    console.log(`  · 点导入件：查看层 ${viewerShown ? '出现了' : '没出现'}`);
+    if (!viewerShown) problems.push('灵动作品：点导入件应当弹出看图/播放层（.pl-viewer）');
+    else {
+      if (!(await page.locator('.pl-viewer img.pl-image').count())) problems.push('灵动作品：查看层里没有图片');
+      await shot('15b-works-viewer');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      if (await page.locator('.pl-viewer').count()) problems.push('灵动作品：按 Esc 应当关掉查看层');
+    }
+  } else problems.push('灵动作品：没找到那条导入件卡片');
+
+  // ⑤ 搜索仍然按「标题 / 学生名字」过滤
+  await page.locator('#works-search').fill('导入件');
+  await page.waitForTimeout(350);
+  const searched = await page.locator('.pl-card').count();
+  console.log(`  · 搜索「导入件」：${allCards} → ${searched} 张`);
+  if (!searched) problems.push('灵动作品：用导入件标题去搜，一条都没匹配上（搜索没生效）');
+  if (searched > allCards) problems.push('灵动作品：搜索之后条数反而变多了？');
   await shot('14-works-search');
   await page.locator('#works-search').fill('');
   await page.waitForTimeout(300);
-  if ((await page.locator('.work').count()) !== workCount) problems.push('灵动作品：清空搜索之后没有回到全部');
+  if ((await page.locator('.pl-card').count()) !== allCards) problems.push('灵动作品：清空搜索之后没有回到全部');
   await shot('15-works-cards');
 
   // ── ⑤d 顶栏的登录入口去向 + 登录态（用户口径 2026-09-18 晚）

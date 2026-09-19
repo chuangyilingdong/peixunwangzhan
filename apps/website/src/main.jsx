@@ -97,26 +97,127 @@ function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 //   ②zip 参考图里那套「星级评价 + 浏览数 + 作者皇冠」我们没有对应数据，**不假装有**；
 //     只把 exists 的 featured 用一颗小星标出来（列表本来就按 featured 排序）。
 // 整张卡可点（zip 的卡里没有按钮）：铺一层透明的 Link 覆盖整卡，键盘也能进。
-function Work({work,index=0}){
+// ── 作品广场的卡片与筛选（2026-09-19 晚按用户给的参考站重做）────────────────────────
+// 用户口径：「我们现在灵动作品的展示有问题，参考这个网站的展示来设计」——参考站
+// （ltai.cc/works-square，也是用户自己的站）的版式是：
+//   类型筛选行（全部分类 + 各类型，各带一个小图标）→ 封面卡片网格
+//   卡片 = 封面（左上角一枚类型角标、视频中间一个播放键）+ 标题 + 日期 + 作者
+// 我们这边比它多两类**站内作品**（画布 / VibeCoding，它们没有封面图，仍用原来的渐变占位），
+// 并且比它多一个搜索框（原来就有，保留）。
+//
+// ⚠️ 导入件（服务端 `scripts/import-plaza-works.mjs` 扒过来的）点开是**看图 / 播视频 / 跳原平台**，
+//    站内作品点开仍是进详情页 —— 两种作品在同一个网格里，靠 `work.imported` 分支。
+const PL_TYPE_ORDER = ['canvas','VIBECODING','image','video','webpage','miniGame','ppt','brandDesign','music','podcast','agent','workflow','pictureBook'];
+const PL_TYPE_META = {
+  canvas:{label:'画布',icon:'🎨'}, VIBECODING:{label:'VibeCoding',icon:'🤖'},
+  image:{label:'图片',icon:'🖼'}, video:{label:'视频',icon:'🎬'}, webpage:{label:'网页',icon:'🌐'},
+  miniGame:{label:'小游戏',icon:'🎮'}, ppt:{label:'PPT',icon:'📊'}, brandDesign:{label:'品牌设计',icon:'🎯'},
+  music:{label:'音乐',icon:'🎵'}, podcast:{label:'AI播客',icon:'🎙'}, agent:{label:'智能体',icon:'🧠'},
+  workflow:{label:'工作流',icon:'⚙️'}, pictureBook:{label:'绘本',icon:'📖'},
+};
+const plTypeOf = (w) => (w.imported ? (w.workType || 'image') : (w.type === 'VIBECODING' ? 'VIBECODING' : 'canvas'));
+const plDateOf = (w) => {
+  const raw = w.imported ? (w.createdAt || w.submittedAt) : w.submittedAt;
+  if (!raw) return '';
+  const text = String(raw).replace(' ', 'T');
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return String(raw).slice(0, 10);
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+};
+// 哪些类型是「看图」、哪些是「播放」——**先看类型，再看扩展名**。
+// ⚠️ 光看扩展名会漏：导入的数据里图片有不少是**没有扩展名**的图床链接
+//    （形如 `https://space.coze.cn/api/coze_space/gen_image?...`），视频也有 `.mov` 之外的写法。
+//    类型是第一判据，扩展名只在「类型没给出线索」时兜底。
+const PL_IMAGE_TYPES = new Set(['image', 'brandDesign', 'pictureBook', 'workflow']);
+const plIsVideo = (w) => w.workType === 'video' || (w.contentUrls || []).some((url) => /\.(mp4|mov|webm|m4v)(\?|$)/i.test(url));
+const plImageUrls = (w) => {
+  const urls = w.contentUrls || [];
+  const looksImage = (url) => /^data:image\//i.test(url) || /\.(png|jpe?g|gif|webp|bmp|avif|svg)(\?|$)/i.test(url);
+  if (PL_IMAGE_TYPES.has(w.workType)) return urls.filter((url) => looksImage(url) || !/\.(mp4|mov|webm|m4v|pdf|zip)(\?|$)/i.test(url));
+  return urls.filter(looksImage);
+};
+/** 这条作品点开之后干什么：图片看图、视频播放、只有外链的跳原平台、站内作品进详情页。 */
+const plOpenKind = (w) => {
+  if (!w.imported) return 'detail';
+  if (plIsVideo(w) && (w.contentUrls || []).length) return 'video';
+  if (plImageUrls(w).length) return 'image';
+  if (w.externalUrl) return 'external';
+  return 'none';
+};
+
+// 作品查看器：图片看大图（多张可翻）、视频直接播。参考站卡片点开没有动作，我们做成能看/能播。
+function WorkViewer({ work, onClose }) {
+  const [active, setActive] = useState(0);
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const images = plImageUrls(work);
+  const isVideo = plOpenKind(work) === 'video';
+  return <div className="pl-viewer" role="dialog" aria-modal="true" aria-label={`查看作品：${work.title}`} onClick={onClose}>
+    <div className="pl-viewer-box" onClick={(event) => event.stopPropagation()}>
+      <div className="pl-viewer-head">
+        <div><span className="pl-badge">{(PL_TYPE_META[plTypeOf(work)] || {}).label || ''}</span><h3>{work.title}</h3></div>
+        <button type="button" className="pl-viewer-close" onClick={onClose} aria-label="关闭">×</button>
+      </div>
+      <div className="pl-viewer-body">
+        {isVideo
+          ? <video className="pl-video" src={work.contentUrls[0]} controls autoPlay playsInline />
+          : images.length ? <img className="pl-image" src={images[active]} alt={work.title} /> : null}
+        {!isVideo && images.length > 1 ? <div className="pl-thumbs">
+          {images.map((url, index) => <button type="button" key={url} className={'pl-thumb' + (index === active ? ' on' : '')} onClick={() => setActive(index)} aria-label={`第 ${index + 1} 张`}>
+            <img src={url} alt="" loading="lazy" />
+          </button>)}
+        </div> : null}
+      </div>
+      <div className="pl-viewer-foot">
+        <span>{work.studentName || '小创作者'}</span>
+        <span>{work.orgName || ''}</span>
+      </div>
+    </div>
+  </div>;
+}
+
+function Work({work,index=0,onOpen}){
   const url=work.publicUrl||(work.shareToken?'/works/'+work.shareToken:null);
   const emoji=work.canvasSnapshot?.nodes?.[0]?.data?.emoji||work.emoji||'✦';
   const title=work.title;const student=work.studentName||'小创作者';const isVibe=work.type==='VIBECODING';
-  // VibeCoding 作品可能是能玩的网页，也可能是 PPT / Word / Excel（站内预览 + 下载真文件）；
-  // 是哪一种由服务端的 preview 说了算（最近产出的那份），前端不再自己猜。
   const docKind=isVibe&&work.preview?.document?String(work.preview.kind||'').toLowerCase():'';
   const vibeHint=docKind==='pptx'?'演示文稿':docKind==='xlsx'?'表格':docKind==='docx'?'文档':isVibe?'可在线玩':'';
-  return <article className={'work w'+index%6}>
-    {url?<Link className="work-hit" to={url} aria-label={`打开作品：${title}`}/>:null}
-    <div className="art" aria-hidden="true"><span>{isVibe?(docKind?'📊':'🎮'):emoji}</span></div>
-    <div className="work-body">
-      <h3 className="work-title" title={title}>{title}</h3>
-      {/* ⚠️ 这里用 div 而不是 <footer>：站点有一条**全局** `footer{padding:64px 28px 24px;background:#f8f7fc}`
-          （页脚用的），挂在 <footer> 上会被它撑到 108px 还带一层灰底（实测踩过）。 */}
-      <div className="work-foot">
-        <span className="work-student">{work.featured?<i className="work-featured" title="精选作品" aria-label="精选作品">★</i>:null}{student}</span>
-        <span className="work-org">{work.orgName||vibeHint}</span>
-      </div>
+  const typeKey=plTypeOf(work);
+  const typeMeta=PL_TYPE_META[typeKey]||{label:typeKey,icon:'✦'};
+  const openKind=plOpenKind(work);
+  const cover=work.coverUrl||null;
+  const date=plDateOf(work);
+  // 封面：导入件用真封面；站内作品没有封面图，沿用原来的渐变占位（按序号换色）
+  const coverNode=cover
+    ? <img className="pl-cover-img" src={cover} alt="" loading="lazy"/>
+    : <span className="pl-cover-ph">{isVibe?(docKind?'📊':'🎮'):emoji}</span>;
+  const body=<>
+    <div className={'pl-cover w'+(index%6)}>
+      {coverNode}
+      <span className="pl-badge">{typeMeta.label}</span>
+      {openKind==='video'?<i className="pl-play" aria-hidden="true">▶</i>:null}
+      <span className="pl-mark">灵动ai</span>
     </div>
+    <div className="pl-meta">
+      <h3 className="pl-title" title={title}>{title}</h3>
+      {date?<span className="pl-date">{date}</span>:null}
+    </div>
+    <div className="pl-author">{work.featured?<i className="work-featured" title="精选作品" aria-label="精选作品">★</i>:null}
+      <span className="pl-student">{student}</span>
+      {!student&&work.orgName?<span className="pl-org">{work.orgName}</span>:null}
+      {vibeHint?<span className="pl-org">{vibeHint}</span>:null}
+    </div>
+  </>;
+  // 什么都能点：站内作品进详情页（<Link>，右键新标签照旧可用）；导入件弹出看图/播放层。
+  return <article className="pl-card" data-type={typeKey}>
+    {openKind==='detail'&&url
+      ? <Link className="pl-hit" to={url} aria-label={`打开作品：${title}`}>{body}</Link>
+      : openKind==='external'
+        ? <a className="pl-hit" href={work.externalUrl} target="_blank" rel="noreferrer" aria-label={`在原平台打开：${title}`}>{body}</a>
+        : <button type="button" className="pl-hit" onClick={()=>onOpen(work)} aria-label={`查看作品：${title}`}>{body}</button>}
   </article>;
 }
 function Title({eyebrow,title,desc}){return <section className="page-title"><div><Kicker>{eyebrow}</Kicker><h1>{title}</h1><p>{desc}</p></div></section>}
@@ -233,8 +334,10 @@ function Works(){
   const [error,setError]=useState(null);
   const [query,setQuery]=useState('');
   const [kind,setKind]=useState('');
+  const [viewing,setViewing]=useState(null);
   useEffect(()=>{
-    // 作品广场同时展示画布作品（public/works）与平台已发布的 VibeCoding 作品（public/vibecoding-works）
+    // 作品广场同时展示三类：画布作品（public/works）、平台已发布的 VibeCoding 作品
+    // （public/vibecoding-works）、以及导入件（它们在 public/works 里，带 imported 标记）。
     Promise.allSettled([publicApi.get('public/works'), publicApi.get('public/vibecoding-works')]).then(([canvas, vibe])=>{
       const canvasItems = canvas.status === 'fulfilled' && Array.isArray(canvas.value?.items) ? canvas.value.items : [];
       const vibeItems = vibe.status === 'fulfilled' && Array.isArray(vibe.value?.items) ? vibe.value.items : [];
@@ -244,29 +347,32 @@ function Works(){
       setLoaded(true);
     });
   },[]);
-  // ⚠️ 2026-09-18 晚更正：用户说的「筛选就分为 2 个板块：画布、VibeCoding」是**这一页**的，
-  //    我上一轮做错地方了（做到了灵动课程上），现在挪到这里。默认两个都不选 = 全部；
-  //    再点一次已选中的那个取消选择（否则选完就没有回到「全部」的路）。
-  //    分类与搜索是**叠加**关系：先按类型筛，再按标题/学生名字搜。
-  //    画布作品的接口对象没有 `type` 字段，VibeCoding 的是 `type:'VIBECODING'`，就按这个分。
-  const isVibe = (w) => w.type === 'VIBECODING';
-  const byKind = kind ? items.filter((w) => (kind === 'VIBECODING' ? isVibe(w) : !isVibe(w))) : items;
+  // 类型筛选（2026-09-19 晚按参考站重做）：参考站是一排「全部分类 + 各类型」的胶囊，各自带图标。
+  // 我们这边多两类站内作品（画布 / VibeCoding），所以类型集合要按**当前数据里真有的**来排，
+  // 不能写死 —— 否则广场上会挂着一堆点开是空的分类（参考站也是这个做法）。
+  const typeCounts = items.reduce((acc, w) => { const key = plTypeOf(w); acc[key] = (acc[key] || 0) + 1; return acc; }, {});
+  const typeKeys = PL_TYPE_ORDER.filter((key) => typeCounts[key]);
+  for (const key of Object.keys(typeCounts)) if (!typeKeys.includes(key)) typeKeys.push(key);
+  const byKind = kind ? items.filter((w) => plTypeOf(w) === kind) : items;
   // 搜索按「标题 / 学生名字」匹配（大小写不敏感、去首尾空格）
   const keyword=query.trim().toLowerCase();
   const visible=keyword?byKind.filter((w)=>String(w.title||'').toLowerCase().includes(keyword)||String(w.studentName||'').toLowerCase().includes(keyword)):byKind;
   // 页头（「学员作品」+「孩子们的灵感，正在发光」+ 描述）与底部那条
-  // 「作品来自真实课堂 / 了解机构作品展厅」提示，都按用户口径 2026-09-18 晚**删掉了** ——
-  // 这一页只留「分类 + 搜索 + 卡片」（用户：「灵动作品这里全部不要」「图2也要删除」）。
+  // 「作品来自真实课堂 / 了解机构作品展厅」提示，都按用户口径 2026-09-18 晚**删掉了**
+  // （用户：「灵动作品这里全部不要」「图2也要删除」）。2026-09-19 晚只换展示，不再加回来。
   return <main className="inner works-page">
     <div className="works-bar">
-      {/* 筛选：只留两个板块（画布 / VibeCoding），见上面注释 */}
-      <div className="works-cats">
-        {[['CANVAS','画布'],['VIBECODING','VibeCoding']].map(([value,label])=>(
-          <button type="button" key={value} aria-pressed={kind===value} className={'works-cat'+(kind===value?' on':'')} onClick={()=>setKind(kind===value?'':value)}>{label}</button>
-        ))}
+      {/* 类型筛选：全部 + 数据里真有的类型（点一次选中，再点一次取消回「全部」） */}
+      <div className="pl-types">
+        <button type="button" data-type="all" aria-pressed={kind===''} className={'pl-type'+(kind===''?' on':'')} onClick={()=>setKind('')}>
+          <i aria-hidden="true">✦</i>全部<span className="pl-type-n">{items.length}</span>
+        </button>
+        {typeKeys.map((key)=><button type="button" key={key} data-type={key} aria-pressed={kind===key} className={'pl-type'+(kind===key?' on':'')} onClick={()=>setKind(kind===key?'':key)}>
+          <i aria-hidden="true">{(PL_TYPE_META[key]||{}).icon||'✦'}</i>{(PL_TYPE_META[key]||{}).label||key}<span className="pl-type-n">{typeCounts[key]}</span>
+        </button>)}
       </div>
-      {/* 搜索：按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把画布作品与 VibeCoding 作品
-          合并出来的，所以过滤也在前端做 —— 不用改接口。 */}
+      {/* 搜索：按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把三类作品合并出来的，
+          所以过滤也在前端做 —— 不用改接口。 */}
       <div className="works-search">
         <label className="sr-only" htmlFor="works-search">搜索作品标题或学生名字</label>
         <input id="works-search" value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="搜索作品标题或学生名字…" autoComplete="off"/>
@@ -274,10 +380,11 @@ function Works(){
         {loaded?<span className="works-search-count">共 <b>{visible.length}</b> 件</span>:null}
       </div>
     </div>
-    <div className="works all">{visible.map((w,i)=><Work key={w.id||w.title} work={w} index={i}/>)}</div>
+    <div className="works all">{visible.map((w,i)=><Work key={w.id||w.title} work={w} index={i} onOpen={setViewing}/>)}</div>
     {!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}
     {loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}
     {loaded&&items.length>0&&visible.length===0&&<div className="note">✦ <p>{keyword?'没有搜到匹配的作品。换个标题或学生名字试试，或者':'这个分类下暂时没有作品。点'} <b>{keyword?'清空搜索词':'取消分类'}</b> 看看全部。</p></div>}
+    {viewing?<WorkViewer work={viewing} onClose={()=>setViewing(null)}/>:null}
   </main>;
 }
 // ── 机构手册 / 灵动介绍 / 常见问题（2026-09-18 起三个页面都由后台 CMS 维护）───────────

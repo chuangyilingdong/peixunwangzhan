@@ -432,12 +432,22 @@ export function handlePublicCommunication(ctx) {
 
 function publicWorkRow(row) {
   const canvas = parseJson(row.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
+  // ⚠️ 导入件（`scripts/import-plaza-works.mjs` 从用户自己的另一个站扒过来的）：
+  //    作品内容不是画布快照，而是「一张封面 + 一个本体（视频/图片/或原平台链接）」，
+  //    元数据塞在 `canvas_snapshot.imported` 里。这一块要原样吐给前端 —— 广场按 workType
+  //    显示角标、按 coverUrl 显示真封面、按 contentUrls 看大图/播视频、按 externalUrl 跳原平台。
+  const imported = canvas && typeof canvas === 'object' && canvas.imported && typeof canvas.imported === 'object'
+    ? canvas.imported
+    : null;
   // 脱敏作者信息
   let studentName = '小创作者';
   if (!row.student_anon && row.student_name) {
     const trimmed = String(row.student_name).trim();
     if (trimmed) studentName = trimmed.charAt(0) + '同学';
   }
+  // ⚠️ 导入件**不套「X同学」那套脱敏**：那些名字本来就是原站公开的昵称/机构老师名
+  //    （「宸宸」「二七」「乐高机器人编程中心雪儿老师」），套上去反而认不出是谁的作品。
+  if (imported?.authorName) studentName = String(imported.authorName);
   return {
     id: row.id,
     title: row.title,
@@ -448,6 +458,14 @@ function publicWorkRow(row) {
     publicUrl: row.share_token ? `/works/${row.share_token}` : null,
     orgName: row.org_name || null,
     studentName,
+    // 导入件才有的字段（我们自己的画布/VibeCoding 作品一律是 null/false，前端据此分支）
+    imported: Boolean(imported),
+    workType: imported?.workType || null,
+    workTypeLabel: imported?.workTypeLabel || null,
+    coverUrl: imported?.coverUrl || null,
+    contentUrls: Array.isArray(imported?.contentUrls) ? imported.contentUrls : [],
+    externalUrl: imported?.externalUrl || null,
+    createdAt: imported?.createdAt || null,
   };
 }
 
