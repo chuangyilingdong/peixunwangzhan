@@ -135,7 +135,11 @@ export function handlePublicCommunication(ctx) {
 
   // P5-W04: 公开作品列表
   if (pathname === '/api/public/works' && method === 'GET') {
-    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 60, fallback: 20 });
+    // ⚠️ 上限 60 → 500（2026-09-19 晚）：作品广场导入了 476 件（见 scripts/import-plaza-works.mjs），
+    //    而这一页原来是把「画布作品 + 导入件」一次取回、在前端做类型筛选与搜索的 —— 卡在 60 的话
+    //    广场永远只显示前 60 件、类型胶囊上的件数也是错的。这一条是**公开只读**的口子，
+    //    500 条元数据（不含内容）约 200KB，比图片本身小两个数量级；真要再涨就得改成翻页。
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 60 });
     const items = rows(`
       SELECT work.id, work.title, work.description, work.canvas_snapshot,
              work.featured_at, work.submitted_at, work.share_token,

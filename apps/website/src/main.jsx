@@ -338,7 +338,10 @@ function Works(){
   useEffect(()=>{
     // 作品广场同时展示三类：画布作品（public/works）、平台已发布的 VibeCoding 作品
     // （public/vibecoding-works）、以及导入件（它们在 public/works 里，带 imported 标记）。
-    Promise.allSettled([publicApi.get('public/works'), publicApi.get('public/vibecoding-works')]).then(([canvas, vibe])=>{
+    // ⚠️ limit=500：作品广场要**一次取全**（类型胶囊上的件数与筛选都建立在这份列表上）。
+//    服务端那条公开接口的上限就是 500（见 routes/communication/public.js 的注释），
+//    图片都是 loading="lazy"，所以列表长不等于首屏重。
+    Promise.allSettled([publicApi.get('public/works?limit=500'), publicApi.get('public/vibecoding-works?limit=100')]).then(([canvas, vibe])=>{
       const canvasItems = canvas.status === 'fulfilled' && Array.isArray(canvas.value?.items) ? canvas.value.items : [];
       const vibeItems = vibe.status === 'fulfilled' && Array.isArray(vibe.value?.items) ? vibe.value.items : [];
       const merged = [...vibeItems, ...canvasItems].sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured)));
