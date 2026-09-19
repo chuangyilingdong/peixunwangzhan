@@ -26,6 +26,9 @@
  *
  * 跑法（服务器上）：
  *   node scripts/import-plaza-works.mjs [--limit 50] [--skip-media] [--dry-run]
+ *   ⚠️ 导完**必须**再跑一次 `node scripts/remux-imported-videos.mjs`：
+ *     他站上的视频有一批是 `.mov`（容器品牌 `ftypqt`），Chrome 加载不出来（实测 readyState 一直 0），
+ *     要转成标准 mp4 才能播。那一步会顺手把库里的地址也改掉。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -101,6 +104,10 @@ async function download(url, destDir, fileName) {
   if (length > MAX_FILE_BYTES) { log(`    !! 太大（${(length / 1024 / 1024).toFixed(1)}MB），只留外链：${url.slice(-40)}`); return null; }
   const bytes = Buffer.from(await response.arrayBuffer());
   if (bytes.length > MAX_FILE_BYTES) { log('    !! 实际大小超限，丢弃'); return null; }
+  // ⚠️ 空响应**算失败**：源站偶尔会 200 + 0 字节（实测 797 个文件里有 1 个），
+  //    当成功写下去就会留下一个 0 字节文件 —— 那种文件在广场上就是一张裂图，
+  //    而脚本自己还以为"下过了"。宁可记一次失败，让重跑时再试。
+  if (bytes.length === 0) { log(`    !! 源站返回空内容：${url.slice(0, 80)}`); return null; }
   fs.mkdirSync(destDir, { recursive: true });
   fs.writeFileSync(dest, bytes);
   return path.relative(MEDIA_ROOT, dest);
