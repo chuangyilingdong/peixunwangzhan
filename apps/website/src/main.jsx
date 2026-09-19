@@ -158,6 +158,10 @@ const plImageUrls = (w) => {
 /** 这条作品点开之后干什么：图片看图、视频播放、只有外链的跳原平台、站内作品进详情页。 */
 const plOpenKind = (w) => {
   if (!w.imported) return 'detail';
+  // ⭐ 托管的可运行网页作品（入口页在我们自己的 `/media/` 下）→ 在**沙箱**里跑。
+  //    判据放在最前面：这类作品的 `contentUrls` 是空的、`externalUrl` 是 null，
+  //    只有 `entryUrl` 有值 —— 不加这一支它会掉到 'none'（点开什么都不发生）。
+  if (w.entryUrl) return 'webwork';
   if (plIsVideo(w) && (w.contentUrls || []).length) return 'video';
   if (plIsAudio(w)) return 'audio';
   if (plImageUrls(w).length) return 'image';
@@ -178,6 +182,7 @@ function WorkViewer({ work, onClose }) {
   const isVideo = kind === 'video';
   const isAudio = kind === 'audio';
   const isEmbed = kind === 'embed';
+  const isWebWork = kind === 'webwork';
   return <div className="pl-viewer" role="dialog" aria-modal="true" aria-label={`查看作品：${work.title}`} onClick={onClose}>
     <div className="pl-viewer-box" onClick={(event) => event.stopPropagation()}>
       <div className="pl-viewer-head">
@@ -189,7 +194,16 @@ function WorkViewer({ work, onClose }) {
           ? <video className="pl-video" src={work.contentUrls[0]} controls autoPlay playsInline />
           : isAudio
             ? <audio className="pl-audio" src={(work.contentUrls || [])[0]} controls autoPlay />
-            : isEmbed
+            : isWebWork
+              // ⭐ 托管在**我们自己源**上的可运行网页作品（`/media/web-works/…`）。
+              //    ⚠️ 这里的 sandbox **绝不能**带 `allow-same-origin`：它与主站同源，
+              //    带上以后学生 HTML 就能读我们的 cookie / localStorage、甚至以我们的身份发请求。
+              //    不带时文档是 opaque origin，作品里的 three.js / p5 / CDN 依赖照样能加载，
+              //    相对路径资源也照常解析（sandbox 不影响 base URL）。
+              //    ⚠️ 同理**不给**「在新窗口打开」的出口（见下方 foot）——那等于把学生代码
+              //    提到我们源上当顶层页面跑，正好绕过这层沙箱。
+              ? <iframe className="pl-frame" src={work.entryUrl} title={work.title} loading="lazy" sandbox="allow-scripts allow-modals allow-forms allow-popups" />
+              : isEmbed
               // 外链作品的"在我们页面里打开"：能嵌的嵌进来（对方 CSP 挡掉时这里是空白，
               // 所以下面永远跟着一个「在新窗口打开」的出口）
               ? <iframe className="pl-frame" src={work.externalUrl} title={work.title} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" referrerPolicy="no-referrer" />
@@ -202,6 +216,9 @@ function WorkViewer({ work, onClose }) {
       </div>
       <div className="pl-viewer-foot">
         <span>{work.studentName || '小创作者'}{work.orgName ? ` · ${work.orgName}` : ''}</span>
+        {/* 出口只给**外链**作品（新窗口打开的是别人的域名，不涉及我们的源）。
+            ⭐ 托管的网页作品（entryUrl）刻意没有出口：它的入口页在我们自己源上，
+            在新窗口打开就是拿我们的源跑学生代码，等于绕开上面那层沙箱。 */}
         {work.externalUrl ? <a className="pl-outlink" href={work.externalUrl} target="_blank" rel="noreferrer">打不开？在新窗口打开 ↗</a> : <span>{work.orgName || ''}</span>}
       </div>
     </div>

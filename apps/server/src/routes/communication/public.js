@@ -473,6 +473,11 @@ function publicWorkRow(row) {
     coverUrl: imported?.coverUrl || null,
     contentUrls: Array.isArray(imported?.contentUrls) ? imported.contentUrls : [],
     externalUrl: imported?.externalUrl || null,
+    // ⭐ 托管在**我们自己** `/media/` 下的可运行网页作品（2026-09-19 从 aimagc.cn 抓的那 9 件，
+    //    见 `scripts/import-aimagc-webworks.mjs`）：入口页是站内地址，前端要在
+    //    **不带 `allow-same-origin` 的沙箱**里跑它 —— 它与主站同源，少了那条限制学生 HTML
+    //    就能读我们的 cookie / localStorage。所以这一项**不能**当普通外链处理。
+    entryUrl: imported?.entryUrl || null,
     createdAt: imported?.createdAt || null,
   };
 }

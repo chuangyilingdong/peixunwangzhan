@@ -6,8 +6,11 @@
 #     每次发布换代都不会把它冲掉；
 #   · 而且**不能**复用 /downloads/：那条是 `default_type application/octet-stream` + nosniff，
 #     图片/视频会因此被浏览器拒收（<img>/<video> 直接不显示）。这里让 nginx 按扩展名给对的类型。
+#   · 还必须带 **CORS 头**（2026-09-19 晚补）：广场的「网页作品」跑在不带 allow-same-origin 的
+#     sandbox iframe 里，文档 origin 是 opaque（`null`），里面 `import` 的 ES module 一律按
+#     CORS 模式取 —— 少了这个头，three.js 那几件直接白屏。详见下面那段注释。
 #
-# 自检顺序：备份 → 插入 → nginx -t → reload → 公网取一张真图看 content-type。
+# 自检顺序：备份 → 插入/补头 → nginx -t → reload → 公网取一张真图看 content-type 与 CORS 头。
 # 任一步失败都不 reload（配置没动过就谈不上回滚）。
 set -euo pipefail
 
@@ -43,6 +46,9 @@ block = anchor + """
     location ^~ /media/ {
         alias /srv/ai-kids-platform/public-media/;
         autoindex off;
+        # ⭐ CORS：网页作品跑在 sandbox iframe 里（文档 origin 是 opaque），
+        #    里面的 ES module 按 CORS 模式取 —— 缺这个头作品会整片白屏。
+        add_header Access-Control-Allow-Origin "*" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         expires 30d;
@@ -54,16 +60,45 @@ print('已插入 /media/ location')
 PY
 fi
 
+# /media/ 可能是更早那版（没有 CORS 头）加进去的 —— 单独补一次，幂等。
+# ⚠️ 判断**只看 /media/ 那一段里有没有**这个头：整个配置里别处（比如 API 的 CORS）本来就有，
+#    用全局 grep 判断会误以为"已经有了"而跳过。
+python3 - "$CONF" <<'PY'
+import re, sys
+path = sys.argv[1]
+text = open(path, encoding='utf-8').read()
+found = re.search(r'location \^~ /media/ \{.*?\n    \}', text, re.S)
+if not found:
+    raise SystemExit('!! 找不到 /media/ 那一段 —— 拒绝盲插 CORS 头')
+block = found.group(0)
+if 'Access-Control-Allow-Origin' in block:
+    print('/media/ 已经有 CORS 头，跳过')
+    raise SystemExit(0)
+head = '        autoindex off;\n'
+if head not in block:
+    raise SystemExit('!! /media/ 那一段的结构跟预期不一样 —— 拒绝盲插')
+cors = """
+        # ⭐ CORS（2026-09-19 晚补）：广场的「网页作品」跑在**不带 allow-same-origin 的 sandbox
+        #    iframe** 里，文档 origin 是 opaque（`null`）—— 里面 `import` 的 ES module（three.js 等）
+        #    一律按 **CORS 模式**取，缺这个头就被浏览器直接挡掉、作品整片白屏（实测过：
+        #    `Access to script … from origin 'null' has been blocked by CORS policy`）。
+        #    媒体本来就是公开文件，放开读没有新增暴露。
+        add_header Access-Control-Allow-Origin "*" always;
+"""
+open(path, 'w', encoding='utf-8').write(text.replace(block, block.replace(head, head + cors, 1), 1))
+print('/media/ 已补上 Access-Control-Allow-Origin')
+PY
+
 echo "=== nginx -t ==="
 nginx -t
 echo "=== reload ==="
 systemctl reload nginx
-echo "=== 公网核验：取一张真封面看类型 ==="
+echo "=== 公网核验：取一张真封面看类型与 CORS 头 ==="
 SAMPLE=$(find "$MEDIA_DIR/ltai-works" -type f \( -name 'cover.jpg' -o -name 'cover.jpeg' -o -name 'cover.png' -o -name 'cover.webp' \) | head -1)
 if [ -n "$SAMPLE" ]; then
   REL=${SAMPLE#"$MEDIA_DIR"/}
   echo "样本：$REL"
-  curl -sI -m 20 "https://iicili.cyou/media/$REL" | grep -iE "^HTTP|content-type|content-length|cache-control"
+  curl -sI -m 20 "https://iicili.cyou/media/$REL" | grep -iE "^HTTP|content-type|content-length|cache-control|access-control-allow-origin"
 else
   echo "!! 媒体目录里没找到封面样本"
 fi
