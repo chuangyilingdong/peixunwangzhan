@@ -17,6 +17,11 @@
 //    · dsh 的内部请求不改变这个条数；
 //    · 历史被压缩会变短 → 取最大值（只增不减），不倒退；
 //    · 学生编辑/重发导致条数不增时**不追加**（对学生有利的方向）。
+// ⚠️ 但"user 消息"里有两类**不是学生按的**，必须减掉（两个都在真客户端上踩过）：
+//    · 工具回填（带 `tool_call_id` / `tool_calls`）；
+//    · **dsh 注入的上下文块**：`agent-instructions` 把工作区指令当普通 user 消息投进历史，
+//      整条裹在 `<system-reminder>…</system-reminder>` 里（基线一次 + 刷新若干次）。
+//      不减掉它，按一次发送会被记成 3 次。见 isInjectedReminder。
 //
 // ── 口径与默认值 ─────────────────────────────────────────────────────────
 //   · 配置位置：`course_lessons.classroom_config.vibeCoding.sendLimit`（**不新增表、不迁移数据**；
@@ -59,14 +64,54 @@ export function vibecodingPresetPrompts(lessonId) {
 }
 
 /**
+ * dsh 的**运行时上下文快照**（`@deepseek-ai/dsh-system-prompt`）。
+ *
+ * 与 `<system-reminder>` 那类不同：它**不带任何包裹**，只有这句话打头，正文是沙箱/审批策略。
+ * 每轮请求都会带上它（快照会更新），实测不排除的话一次发送会被多记 1 次。
+ * 前缀取的是上游定型文案（`apps/cli/tests/.../session.expected.jsonl` 里逐字一致），
+ * 用整句而不是 "Current runtime context." 半句 —— 免得把学生恰好在英文里打出的半句排除掉。
+ */
+const RUNTIME_CONTEXT_PREFIX = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.';
+
+/**
+ * 这条 user 消息是不是 **dsh 自己注入的上下文块**（不是学生按的那一下发送）。
+ *
+ * 为什么要专门认它们：dsh 把上下文当**普通 user 消息**投进历史，而网关只拿得到
+ * `{role, content}`（实测：body 里没有 source/name 之类可判的字段），所以只能认内容。
+ * 不认的话，学生**按一次发送**会被记成 3 次（2026-09-19 真客户端实测：学生那条 +
+ * 运行时上下文快照 + skills 指令块）。两个来源：
+ *   · `agent-instructions`（工作区指令：基线 + 刷新）—— 整条裹在 `<system-reminder>…</system-reminder>`；
+ *   · `system-prompt`（运行时上下文快照）—— 以上面那句英文打头。
+ * 判据是"整条被方括号裹住"：dsh 会把正文里的收尾标记转义成 `<\/system-reminder>`，所以真·注入的
+ * 消息里只有末尾一个未转义的收尾，学生自己打的字不会整条长成这个形状。
+ *
+ * ⚠️ 还有一类**不用排除**：`session-title-llm` 起标题那个请求（"Generate the session title from
+ *    this JSON array of human messages: …"）。它是**另一个请求**，body 里只有它自己那一条 user 消息，
+ *    观察到的最多也就 1，跟学生那次取最大值不会互相抬高。加进来反而是给学生省一次额度。
+ */
+function isInjectedReminder(message) {
+  const content = message.content;
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
+      : '';
+  const trimmed = text.trim();
+  if (trimmed.startsWith(RUNTIME_CONTEXT_PREFIX)) return true;
+  return trimmed.startsWith('<system-reminder>') && trimmed.endsWith('</system-reminder>');
+}
+
+/**
  * 数对话历史里的 user 消息条数（= 学生的发送次数）。
  * ⚠️ 带 `tool_call_id` / `tool_calls` 的"user"消息不算 —— 那是工具回填，不是人按的发送。
+ * ⚠️ dsh 注入的 `<system-reminder>` 块也不算（见 isInjectedReminder）。
  */
 export function countUserMessages(messages) {
   if (!Array.isArray(messages)) return 0;
   return messages.filter((message) => {
     if (!message || message.role !== 'user') return false;
     if (message.tool_call_id || message.tool_calls) return false;
+    if (isInjectedReminder(message)) return false;
     return true;
   }).length;
 }
