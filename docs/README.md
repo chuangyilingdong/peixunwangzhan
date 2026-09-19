@@ -160,31 +160,27 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：ed9d6fa（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260919T044004Z / commit ed9d6fa（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（ed9d6fa，用户口径：**要客户端 + 首页能下载**）：
-      ①**官网新增 `/download` 下载页**（首页 hero 下一行小字入口 + 页脚「了解更多」也有）。
+代码提交：2469bb2（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260919T084246Z / commit 2469bb2（服务 learning-platform-production @127.0.0.1:8789）
+      ⚠️ **桌面客户端已从本仓库拆出去独立成仓**（2026-09-19）：工作区 `E:\灵动ai客户端`，
+      接口契约在客户端仓库的 `docs/平台接口契约.md`；本仓库只留 `/download` 下载页、
+      服务器下载目录与那三个交付面接口（`client-context` / 网关 / `submit-upload`）。
+      细节见 `docs/operations/客户端仓库-客户端已独立成仓-20260919.md`。
+      本版改动（2469bb2，用户口径：**网站上的 dsh 就不要了，vibecoding 在客户端进行**）：
+      ①**官网去掉网页侧创作环境**：VibeCoding 课时只把学生送到客户端
+      （`lingdong://open` 深链 + 下载入口），页面不再拉起任何创作环境（守卫 p117 钉着）。
+      ②**客户端安装包已发布**：`lingdong-client-0.1.6-alpha.2-win-x64.exe`（308138555 字节、
+      sha256 `e83a1cb5…`），清单 `win-x64` 已置回、公网下载入口 200（发布脚本在客户端仓库）。
       页面读服务器 `/downloads/manifest.json` 拿版本/体积/校验值，**不把文件名写死在代码里**。
       nginx 新增 `location ^~ /downloads/`，指向 **release 之外**的 `/srv/ai-kids-platform/downloads/`
-      —— 每次发布换代都不会把安装包冲掉。安装包 `lingdong-client-0.1.6-alpha.2-win-x64.exe`（294MB）
-      已在服务器上，**但 `manifest.json` 里 `win-x64` 已被置为 `null`（故意摘下来的）**：
-      ⚠️ 客户端还跑不通（登录后拿到的网关密钥到不了 dsh，每轮「API 密钥无效」），
-      **不能让外部下到一个发不出消息的客户端**；修好后把清单改回来即可
-      （备份 `manifest.json.bak-20260919T055643Z` 在服务器上）。Mac 位留空＝「准备中」。
-      ②**客户端从上游源码自建**（选的是"上游 apps/desktop 自己构建"这条路）：
-      · `deploy/desktop/rebrand-client.mjs` —— 换我们的 productName / 安装包名 / 外壳文案；
-      · `deploy/desktop/apply-client-gate.mjs` + `client-patch/` —— **登录门**：学生用我们的账号登录 →
-        取 `client-context`（课堂 + 网关密钥 + 预设提示词 + 剩余次数）→ 写补丁层与环境变量 →
-        **只有课堂在进行时**才启动 dsh；没在上的课只显示「等老师开始上课」。
-      📌 两个必须记住的坑（都写进代码注释了）：
-        · 补丁层要挂在桌面宿主的 `patchFiles`，**不能**写 profile 的 `cordis.patch.yml` ——
-          宿主显式传 `patchFiles: []`，而 `profile-context.ts` 是
-          `initialProfile?.patches ?? loadOptionalPatches(...)`，空数组不是 undefined，那个文件永远不会被读；
-        · 上游默认带的第三方插件（`dsh-dream-skin` 等）会让客户端**启动即判定失败**（弹「无法使用」），
-          必须在打包前禁掉。
-      ③客户端实测（本机）：登录页正常渲染 → 用学生账号登录本地验证台 → 登录门写下
-      `~/.dsh/lingdong.patch.yml` 并启动 dsh（127.0.0.1:19387 提供服务）。
-      ⚠️ **未验证**：dsh 是否真的把模型调用路由到我们的网关（模型列表仍显示上游那一条）—— 下一步第一件事。
+      —— 每次发布换代都不会把安装包冲掉。
+      Mac 位留空＝「准备中」。
+      ②**客户端已在客户端仓库里做完了上半场**（登录门 → 进课 → 发消息 → 平台记账 **实测通过**）：
+      登录门拿到的网关密钥**确实到了 dsh**（旧结论「密钥到不了 dsh」已被推翻，机理与修法见
+      第十九轮交接 §二.D/§二.F）；⚠️ 那两处必须记住的坑仍在：补丁层要挂桌面宿主的 `patchFiles`
+      （**不能**写 profile 的 `cordis.patch.yml` —— 宿主显式传空数组，那个文件永远不会被读）；
+      上游默认带的第三方插件（`dsh-dream-skin` 等）会让客户端**启动即判定失败**，打包前必须禁掉。
+      ③还没有的：**客户端里的预设提示词可点块**与**交作品入口**（服务端 `submit-upload` 已就绪）。
       核验：`PROD_ACCEPTANCE_OK` + 真浏览器打线上：下载页两张卡片、Windows 卡片链接到安装包、
       卡片显示版本与体积、Mac 无链接、首页有入口、页脚有链接、无 JS 异常；
       安装包与 manifest 公网可取（`/downloads/` 200、字节与 sha256 已记录）。

@@ -84,7 +84,7 @@ function stripComments(source) {
     const trimmed = line.trimStart();
     // ⚠️ JSX 里的块注释写作 `{/* … */}`，行首是 `{` 而不是 `/*`：只认 `startsWith('/*')` 会漏掉它，
     // 于是注释正文被当成代码扫，报出假的「未声明 setter」（2026-09-19：`main.jsx` 那句解释
-    // 「客户端侧注册 lingdong:// 见 deploy/desktop/（… + setAsDefaultProtocolClient）」就被误报）。
+    // 「客户端侧注册 lingdong://」的注释就被误报）。（客户端那套 2026-09-19 已拆去独立仓库。）
     if (trimmed.startsWith('/*') || trimmed.startsWith('{/*')) {
       const start = line.indexOf('/*');
       const end = line.indexOf('*/', start + 2);
