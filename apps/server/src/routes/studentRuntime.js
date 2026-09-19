@@ -135,104 +135,186 @@ export async function handleStudentRuntime(ctx) {
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
-
-    const collected = await collectStudentDeliverable({ ...scope, name: ctx.body?.name });
-    const entryFile = safeArtifactName(collected.name);
-    const entryKind = kindForName(entryFile);
-    if (!isSubmittableArtifactKind(entryKind)) {
-      throw errors.badRequest('只有网页、PPT、Word 和 Excel 可以作为作品提交', 'VIBECODING_ARTIFACT_NOT_SUBMITTABLE');
-    }
-
-    const entryPayload = (collected.files || []).find((file) => file.name === collected.name) || null;
-    if (!entryPayload) throw errors.conflict('取回来的产物里没有主产物', 'RUNTIME_DELIVERABLE_EMPTY');
-
-    // ① 二进制文件（PPT/Word/Excel 的原文件、网页里的本地图）都存成**学生的私有资产**。
-    //    主产物走 fileId（快照里那份产物直接指向它），被引用的素材走 URL 改写。
-    const warnings = [...(Array.isArray(collected.warnings) ? collected.warnings : [])];
-    const assetUrls = new Map();
-    const embeddedImages = [];
-    let entryFileId = null;
-    for (const file of collected.files || []) {
-      if (!file.binary) continue;
-      const name = safeArtifactName(file.name);
-      const mimeType = mimeForArtifact(name);
-      if (!mimeType) {
-        // 存不了的素材（少见格式）不拦提交，但要**说出来** —— 否则学生只会看到图裂了
-        warnings.push(`素材 ${name} 的格式还不支持随作品提交，交上来的作品里它会是空的`);
-        continue;
-      }
-      try {
-        const asset = await storeStudentArtifactAsset({
-          buffer: Buffer.from(file.content, 'base64'),
-          mimeType,
-          fileName: name,
-          ownerUserId: auth.user.id,
-          ownerOrgId: orgId,
-        });
-        assetUrls.set(name, asset.url);
-        if (name === entryFile) {
-          // 主产物就是这份真文件：字节进 file_assets，快照里只记 fileId
-          entryFileId = asset.id;
-        } else if (mimeType.startsWith('image/')) {
-          // 被 HTML 引用的图：进快照的准入名单，发布后广场那条公开代理才认它
-          embeddedImages.push({ fileId: asset.id });
-        } else {
-          warnings.push(`素材 ${name} 不是图片，发布到作品广场后可能取不到（广场只代理图片素材）`);
-        }
-      } catch (error) {
-        warnings.push(`素材 ${name} 没能随作品存下来：${String(error.message || error).slice(0, 120)}`);
-      }
-    }
-
-    // ② 文本产物落库，把指向那些素材的引用改写成私有下载地址
-    const files = {};
-    for (const file of collected.files || []) {
-      const name = safeArtifactName(file.name);
-      if (file.binary) continue;
-      files[name] = assetUrls.size ? rewriteLocalReferences(file.content, name, assetUrls) : file.content;
-    }
-    // 主产物必须落到某一处：要么是文本快照里的一份，要么是存下来的那个真文件
-    if (!entryFileId && !Object.hasOwn(files, entryFile)) throw errors.conflict('主产物没能落进作品快照', 'RUNTIME_DELIVERABLE_EMPTY');
-
-    // ③ 产物清单在**这一刻定格**（广场靠它判断交上来的到底是哪一份、以及图片在哪）
-    const now = new Date().toISOString();
-    const artifacts = [];
-    if (entryFileId) {
-      artifacts.push({
-        name: entryFile, kind: entryKind, bytes: Number(entryPayload.bytes || 0), revision: 1,
-        updatedAt: now, fileId: entryFileId, generatedImages: [], attachmentImages: [], embeddedImages: [],
-      });
-    }
-    for (const name of Object.keys(files)) {
-      artifacts.push({
-        name,
-        kind: kindForName(name),
-        bytes: Buffer.byteLength(files[name] || '', 'utf8'),
-        revision: 1,
-        updatedAt: now,
-        fileId: null,
-        generatedImages: [],
-        attachmentImages: [],
-        // 只有入口 HTML 上挂图：与老链路 snapshotArtifacts 的规则一致（它只认入口那一份的配图）
-        embeddedImages: name === entryFile ? embeddedImages : [],
-      });
-    }
-
-    const conversation = ensureRuntimeConversation({
-      auth, lessonId: classroom.lesson_id || null, classSessionId: classroom.id,
-      title: classroom.title || '创作环境',
+    return recordSubmissionFromArtifacts({
+      ctx, auth, orgId, classroom, collected: await collectStudentDeliverable({ ...scope, name: ctx.body?.name }),
     });
-    const body = ctx.body || {};
-    const title = body.title === undefined || String(body.title).trim() === ''
-      ? String(conversation.title || '我的作品').slice(0, 60)
-      : String(body.title).trim().slice(0, 60);
-    const submission = recordRuntimeSubmission({
-      ctx, auth, conversation, entryFile, files, artifacts, title,
-      description: String(body.description || '').slice(0, 1000),
-    });
-    // 拍平改名 / 丢了素材这些事要让学生看见 —— 提交成功了但作品缺了东西，比提交失败更糟
-    return { ...submission, warnings, missing: collected.missing || [] };
+  }
+
+  // 桌面客户端交作品（2026-09-19）：学生在**自己电脑上**做出来的东西，服务器读不到他的磁盘，
+  // 所以字节必须由客户端传上来（`/submit` 那条是服务器去学生盒子里取，客户端没有盒子）。
+  // 形状与「取回来的产物」一致（`{ name, files: [{ name, content, binary }] }`），
+  // 下半段（存资产 → 改引用 → 定格清单 → 落库）与 `/submit` **共用同一份实现** ——
+  // 两条入口各写一份的话，广场那边的规则迟早只在一半上生效。
+  // ⚠️ 二进制用 base64 装在 JSON 里：body 上限是 `maxUploadBytes() + 1MB`（见 index.js），
+  //    默认 25MB 文件 → 约 33MB 传输量，够学生交 PPT；超了会在这里明确报错而不是静默截断。
+  if (part === '/submit-upload' && method === 'POST') {
+    const classroom = requireActiveClassroom(auth.user.id, '没有创作环境可以交作品');
+    if (ctx.body?.copyrightConfirmed !== true) {
+      throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
+    }
+    return recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, collected: collectUploadedArtifacts(ctx.body) });
   }
 
   return null;
+}
+
+/** 一次提交最多带几个文件：正常作品（一个 HTML + 几张图 / 一个 PPT）远用不到这么多。 */
+const MAX_UPLOAD_FILES = 60;
+/**
+ * 解出来的字节总量上限（base64 解回来之后的**真实**大小）。
+ *
+ * ⚠️ 这个数必须**小于传输层的上限**才会先于它报错：`index.js` 给 body 的上限是
+ *    `maxUploadBytes() + 1MB`（默认 26MB），而 base64 会胖 4/3 —— 于是单个文件超过约
+ *    19MB 时请求根本进不来（框架先给一个 `PAYLOAD_TOO_LARGE`）。取 16MB 的意思是：
+ *    「大到不像学生作品」的那一段由我们把话说清楚（学生看到的是中文原因，不是一个裸 413），
+ *    再大才轮到传输层。
+ */
+const MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
+
+/**
+ * 把客户端传上来的产物整理成与 `collectStudentDeliverable()` **同形**的一份。
+ *
+ * 为什么要严进：这是**学生自己机器**上的字节，平台对它们的唯一约束就是这里 ——
+ * 文件名要平铺（`safeArtifactName` 是**拒绝**带路径的名字，不是悄悄改名，所以借 `../`
+ * 写到别处这条路根本走不通）、主产物必须在清单里、总量要有上限。
+ * 形状不对一律 400 并说清是哪一条，别让学生对着一个 500 猜。
+ * @param body - `{ name, files: [{ name, content, binary }] }`；`binary` 为真时 `content` 是 base64。
+ */
+function collectUploadedArtifacts(body) {
+  const rawName = String(body?.name || '').trim();
+  if (!rawName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
+  const entryName = safeArtifactName(rawName);
+  const raw = Array.isArray(body?.files) ? body.files : [];
+  if (!entryName) throw errors.badRequest('请告诉平台哪一份是主产物（name）', 'RUNTIME_UPLOAD_NAME_REQUIRED');
+  if (!raw.length) throw errors.badRequest('没有收到任何作品文件', 'RUNTIME_UPLOAD_EMPTY');
+  if (raw.length > MAX_UPLOAD_FILES) {
+    throw errors.badRequest(`一次最多交 ${MAX_UPLOAD_FILES} 个文件`, 'RUNTIME_UPLOAD_TOO_MANY_FILES');
+  }
+
+  const files = [];
+  const seen = new Set();
+  let total = 0;
+  for (const item of raw) {
+    const name = safeArtifactName(item?.name);
+    if (!name) throw errors.badRequest(`文件名不合法：${String(item?.name || '').slice(0, 60)}`, 'RUNTIME_UPLOAD_BAD_NAME');
+    if (seen.has(name)) throw errors.badRequest(`同一个文件名出现了两次：${name}`, 'RUNTIME_UPLOAD_DUPLICATE_NAME');
+    seen.add(name);
+    const binary = item?.binary === true;
+    const content = String(item?.content ?? '');
+    const bytes = binary ? Buffer.byteLength(content, 'base64') : Buffer.byteLength(content, 'utf8');
+    total += bytes;
+    if (total > MAX_UPLOAD_BYTES) {
+      throw errors.badRequest(`作品太大了（上限 ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)}MB）`, 'RUNTIME_UPLOAD_TOO_LARGE');
+    }
+    files.push({ name, content, binary, bytes });
+  }
+  if (!seen.has(entryName)) {
+    throw errors.badRequest('主产物不在文件清单里', 'RUNTIME_UPLOAD_ENTRY_MISSING');
+  }
+  // `missing` 与服务器取产物那条路同义：这里由客户端自己保证，平台侧没有"没取到"的概念
+  return { name: entryName, files, missing: [], warnings: [] };
+}
+
+/**
+ * 把一份产物清单落成一次作品提交（`/submit` 与 `/submit-upload` 共用）。
+ *
+ * 步骤：① 二进制存成学生的私有资产（主产物走 fileId、被引用的图走 URL 改写）；
+ *       ② 文本产物落库并改写本地引用；③ 产物清单在这一刻定格（广场靠它认版本与图）。
+ */
+async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, collected }) {
+  const entryFile = safeArtifactName(collected.name);
+  const entryKind = kindForName(entryFile);
+  if (!isSubmittableArtifactKind(entryKind)) {
+    throw errors.badRequest('只有网页、PPT、Word 和 Excel 可以作为作品提交', 'VIBECODING_ARTIFACT_NOT_SUBMITTABLE');
+  }
+
+  const entryPayload = (collected.files || []).find((file) => file.name === collected.name) || null;
+  if (!entryPayload) throw errors.conflict('取回来的产物里没有主产物', 'RUNTIME_DELIVERABLE_EMPTY');
+
+  // ① 二进制文件（PPT/Word/Excel 的原文件、网页里的本地图）都存成**学生的私有资产**。
+  //    主产物走 fileId（快照里那份产物直接指向它），被引用的素材走 URL 改写。
+  const warnings = [...(Array.isArray(collected.warnings) ? collected.warnings : [])];
+  const assetUrls = new Map();
+  const embeddedImages = [];
+  let entryFileId = null;
+  for (const file of collected.files || []) {
+    if (!file.binary) continue;
+    const name = safeArtifactName(file.name);
+    const mimeType = mimeForArtifact(name);
+    if (!mimeType) {
+      // 存不了的素材（少见格式）不拦提交，但要**说出来** —— 否则学生只会看到图裂了
+      warnings.push(`素材 ${name} 的格式还不支持随作品提交，交上来的作品里它会是空的`);
+      continue;
+    }
+    try {
+      const asset = await storeStudentArtifactAsset({
+        buffer: Buffer.from(file.content, 'base64'),
+        mimeType,
+        fileName: name,
+        ownerUserId: auth.user.id,
+        ownerOrgId: orgId,
+      });
+      assetUrls.set(name, asset.url);
+      if (name === entryFile) {
+        // 主产物就是这份真文件：字节进 file_assets，快照里只记 fileId
+        entryFileId = asset.id;
+      } else if (mimeType.startsWith('image/')) {
+        // 被 HTML 引用的图：进快照的准入名单，发布后广场那条公开代理才认它
+        embeddedImages.push({ fileId: asset.id });
+      } else {
+        warnings.push(`素材 ${name} 不是图片，发布到作品广场后可能取不到（广场只代理图片素材）`);
+      }
+    } catch (error) {
+      warnings.push(`素材 ${name} 没能随作品存下来：${String(error.message || error).slice(0, 120)}`);
+    }
+  }
+
+  // ② 文本产物落库，把指向那些素材的引用改写成私有下载地址
+  const files = {};
+  for (const file of collected.files || []) {
+    const name = safeArtifactName(file.name);
+    if (file.binary) continue;
+    files[name] = assetUrls.size ? rewriteLocalReferences(file.content, name, assetUrls) : file.content;
+  }
+  // 主产物必须落到某一处：要么是文本快照里的一份，要么是存下来的那个真文件
+  if (!entryFileId && !Object.hasOwn(files, entryFile)) throw errors.conflict('主产物没能落进作品快照', 'RUNTIME_DELIVERABLE_EMPTY');
+
+  // ③ 产物清单在**这一刻定格**（广场靠它判断交上来的到底是哪一份、以及图片在哪）
+  const now = new Date().toISOString();
+  const artifacts = [];
+  if (entryFileId) {
+    artifacts.push({
+      name: entryFile, kind: entryKind, bytes: Number(entryPayload.bytes || 0), revision: 1,
+      updatedAt: now, fileId: entryFileId, generatedImages: [], attachmentImages: [], embeddedImages: [],
+    });
+  }
+  for (const name of Object.keys(files)) {
+    artifacts.push({
+      name,
+      kind: kindForName(name),
+      bytes: Buffer.byteLength(files[name] || '', 'utf8'),
+      revision: 1,
+      updatedAt: now,
+      fileId: null,
+      generatedImages: [],
+      attachmentImages: [],
+      // 只有入口 HTML 上挂图：与老链路 snapshotArtifacts 的规则一致（它只认入口那一份的配图）
+      embeddedImages: name === entryFile ? embeddedImages : [],
+    });
+  }
+
+  const conversation = ensureRuntimeConversation({
+    auth, lessonId: classroom.lesson_id || null, classSessionId: classroom.id,
+    title: classroom.title || '创作环境',
+  });
+  const body = ctx.body || {};
+  const title = body.title === undefined || String(body.title).trim() === ''
+    ? String(conversation.title || '我的作品').slice(0, 60)
+    : String(body.title).trim().slice(0, 60);
+  const submission = recordRuntimeSubmission({
+    ctx, auth, conversation, entryFile, files, artifacts, title,
+    description: String(body.description || '').slice(0, 1000),
+  });
+  // 拍平改名 / 丢了素材这些事要让学生看见 —— 提交成功了但作品缺了东西，比提交失败更糟
+  return { ...submission, warnings, missing: collected.missing || [] };
 }

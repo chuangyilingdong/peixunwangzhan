@@ -41,7 +41,17 @@ const PUBLIC_ROUTES = ['/', '/marketplace', '/org', '/works', '/handbook', '/com
  */
 const JSON_BODY_LIMIT = '2mb';
 const RUNTIME_GATEWAY_BODY_LIMIT = String(process.env.RUNTIME_GATEWAY_BODY_LIMIT || '24mb').trim();
-const jsonBodyLimitFor = (pathname) => (String(pathname || '').startsWith('/api/gateway/') ? RUNTIME_GATEWAY_BODY_LIMIT : JSON_BODY_LIMIT);
+// 桌面客户端交作品（`/api/student/runtime/submit-upload`，2026-09-19）：字节以 base64 装在 JSON 里，
+// 2MB 的通用上限连一个 PPT 都装不下。**按路径开额度**，不动全局 —— 放宽全局放宽的是攻击面，
+// 不只是善良的上传。24MB 对应解回来约 17MB 的文件，而 `studentRuntime.js` 的 MAX_UPLOAD_BYTES
+// 取得比它小一点：为的是"作品太大"这句中文原因由**我们**先说出口，而不是让学生吃一个裸 413。
+const RUNTIME_UPLOAD_BODY_LIMIT = String(process.env.RUNTIME_UPLOAD_BODY_LIMIT || '24mb').trim();
+const jsonBodyLimitFor = (pathname) => {
+  const path = String(pathname || '');
+  if (path.startsWith('/api/gateway/')) return RUNTIME_GATEWAY_BODY_LIMIT;
+  if (path === '/api/student/runtime/submit-upload') return RUNTIME_UPLOAD_BODY_LIMIT;
+  return JSON_BODY_LIMIT;
+};
 
 function sendFileResponse(res, fileResponse, req) {
   const headers = { ...corsHeaders(req, fileResponse.headers || {}) };

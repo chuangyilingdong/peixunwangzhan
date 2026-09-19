@@ -189,6 +189,20 @@ export function OfficialBrandName() {
 }
 `);
 
+// ⑥b 窗口标题与 PWA 名：dsh 的**官方构建档**把标题钉在一个常量里，而且构建会**断言**这个值
+//     （`assertClientBuildEnvironment`），所以不能只在生成时传环境变量 —— 必须改常量本身，
+//     两处一起改（常量 + 断言里那份期望），否则下一次构建直接报错。
+//     实测：不改的话客户端窗口标题栏写着 "DeepSeek Harness"（品牌合规也不允许用全称）。
+edit('scripts/client-build-environment.ts', (text) =>
+  text.replace("  DSH_CLIENT_TITLE: 'DeepSeek Harness',", `  DSH_CLIENT_TITLE: '${BRAND.productName}',`));
+edit('scripts/client-build-environment.client.spec.ts', (text) =>
+  text.split("DSH_CLIENT_TITLE: 'DeepSeek Harness'").join(`DSH_CLIENT_TITLE: '${BRAND.productName}'`));
+edit('apps/web/vite.config.ts', (text) =>
+  text.replace("const DEFAULT_CLIENT_TITLE = 'DSH Local Build'", `const DEFAULT_CLIENT_TITLE = '${BRAND.productName}'`));
+edit('apps/web/public/manifest.webmanifest', (text) => text
+  .replace('"name": "DeepSeek Harness"', `"name": "${BRAND.productName}"`)
+  .replace('"short_name": "DSH"', '"short_name": "灵动ai"'));
+
 console.log(`检出：${checkout}${dryRun ? '（--dry-run，不写入）' : ''}`);
 console.log(`品牌：${BRAND.productName}（英文 ${BRAND.productNameEn}）/ 安装包 ${BRAND.artifactName}`);
 for (const [file, result] of changes) console.log(`  · ${file} —— ${result}`);
