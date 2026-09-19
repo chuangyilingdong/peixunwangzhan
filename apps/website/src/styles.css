@@ -633,7 +633,7 @@
 .pl-type{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:1px solid var(--line);border-radius:999px;color:#5f586c;background:#fff;font-size:13px;font-weight:700;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease}
 .pl-type:hover{border-color:#cdc3ef;color:var(--deep)}
 .pl-type.on{color:#fff;background:var(--purple);border-color:var(--purple)}
-.pl-type i{font-style:normal;font-size:14px;line-height:1}
+.pl-type .pl-type-ico{flex:none;margin-top:-1px}
 .pl-type-n{min-width:18px;padding:1px 5px;border-radius:999px;background:#f0ecff;color:var(--deep);font-size:10.5px;font-weight:900;text-align:center}
 .pl-type.on .pl-type-n{background:#ffffff2e;color:#fff}
 /* 卡片：白底 20px 圆角 + 内嵌封面（封面圆角 14px，与上一版同一套手感） */
@@ -643,7 +643,7 @@
 .pl-cover{position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:linear-gradient(140deg,#8065df,#b3a4fa)}
 .pl-cover-img{display:block;width:100%;height:100%;object-fit:cover}
 /* 站内作品（画布/VibeCoding）没有封面图，沿用原来的渐变占位（按序号换色） */
-.pl-cover-ph{position:absolute;inset:0;display:grid;place-items:center;font-size:56px}
+.pl-cover-ph{position:absolute;inset:0;display:grid;place-items:center;color:#ffffffd9}
 .pl-cover.w1 .pl-cover-ph{background:linear-gradient(140deg,#ff9d6d,#ffd18e)}
 .pl-cover.w2 .pl-cover-ph{background:linear-gradient(140deg,#5e90e8,#9abaff)}
 .pl-cover.w3 .pl-cover-ph{background:linear-gradient(140deg,#df7da6,#f7b8cb)}

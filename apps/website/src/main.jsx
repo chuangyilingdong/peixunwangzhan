@@ -4,7 +4,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
 import { MyStatsPage } from './pages/MyStats.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
@@ -111,17 +111,19 @@ function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 // ⚠️ 每个作品属于哪一类**由服务端算好**（`work.plazaCategory`，见 services/plazaCategories.js），
 //    前端不自己判类型 —— 否则后台一改分类，前端还按老规矩算。
 const PL_CATEGORY_LABEL = { CANVAS: '画布作品', VIBECODING: 'VibeCoding作品' };
-const PL_CATEGORY_ICON = { CANVAS: '🎨', VIBECODING: '🤖' };
+// 图标一律用 shared 的线性 SVG（packages/shared/src/icons.jsx），**不用 emoji**
+//（用户口径：「网站需要用到的 icon 材质的，直接从这里取。我们的 AI 味太重了」）。
+const PL_CATEGORY_ICON = { CANVAS: 'brush', VIBECODING: 'code' };
 const plCategoryOf = (w) => (w.plazaCategory || (w.type === 'VIBECODING' ? 'VIBECODING' : 'CANVAS'));
 /** 一页 12 件（用户口径：「每一页 12 个作品然后翻页」）。 */
 const PL_PER_PAGE = 12;
 const PL_TYPE_ORDER = ['canvas','VIBECODING','image','video','webpage','miniGame','ppt','brandDesign','music','podcast','agent','workflow','pictureBook'];
 const PL_TYPE_META = {
-  canvas:{label:'画布',icon:'🎨'}, VIBECODING:{label:'VibeCoding',icon:'🤖'},
-  image:{label:'图片',icon:'🖼'}, video:{label:'视频',icon:'🎬'}, webpage:{label:'网页',icon:'🌐'},
-  miniGame:{label:'小游戏',icon:'🎮'}, ppt:{label:'PPT',icon:'📊'}, brandDesign:{label:'品牌设计',icon:'🎯'},
-  music:{label:'音乐',icon:'🎵'}, podcast:{label:'AI播客',icon:'🎙'}, agent:{label:'智能体',icon:'🧠'},
-  workflow:{label:'工作流',icon:'⚙️'}, pictureBook:{label:'绘本',icon:'📖'},
+  canvas:{label:'画布',icon:'brush'}, VIBECODING:{label:'VibeCoding',icon:'code'},
+  image:{label:'图片',icon:'image'}, video:{label:'视频',icon:'video'}, webpage:{label:'网页',icon:'globe'},
+  miniGame:{label:'小游戏',icon:'gamepad'}, ppt:{label:'PPT',icon:'monitor'}, brandDesign:{label:'品牌设计',icon:'palette'},
+  music:{label:'音乐',icon:'music'}, podcast:{label:'AI播客',icon:'mic'}, agent:{label:'智能体',icon:'cpu'},
+  workflow:{label:'工作流',icon:'flow'}, pictureBook:{label:'绘本',icon:'book'},
 };
 const plTypeOf = (w) => (w.imported ? (w.workType || 'image') : (w.type === 'VIBECODING' ? 'VIBECODING' : 'canvas'));
 const plDateOf = (w) => {
@@ -232,7 +234,8 @@ function Work({work,index=0,onOpen}){
   // 封面：导入件用真封面；站内作品没有封面图，沿用原来的渐变占位（按序号换色）
   const coverNode=cover
     ? <img className="pl-cover-img" src={cover} alt="" loading="lazy"/>
-    : <span className="pl-cover-ph">{isVibe?(docKind?'📊':'🎮'):emoji}</span>;
+    // 没有封面图的站内作品：用同一套线性图标占位（不再用 emoji）
+    : <span className="pl-cover-ph"><Icon name={isVibe?(docKind==='pptx'?'monitor':docKind?'text':'gamepad'):'brush'} size={46} strokeWidth={1.2} /></span>;
   const body=<>
     <div className={'pl-cover w'+(index%6)}>
       {coverNode}
@@ -414,10 +417,10 @@ function Works(){
       {/* 类型筛选：全部 + 数据里真有的类型（点一次选中，再点一次取消回「全部」） */}
       <div className="pl-types">
         <button type="button" data-type="all" aria-pressed={kind===''} className={'pl-type'+(kind===''?' on':'')} onClick={()=>setKind('')}>
-          <i aria-hidden="true">✦</i>全部<span className="pl-type-n">{items.length}</span>
+          <Icon name="spark" size={15} className="pl-type-ico" />全部<span className="pl-type-n">{items.length}</span>
         </button>
         {['CANVAS','VIBECODING'].map((key)=><button type="button" key={key} data-type={key} aria-pressed={kind===key} className={'pl-type'+(kind===key?' on':'')} onClick={()=>setKind(kind===key?'':key)}>
-          <i aria-hidden="true">{PL_CATEGORY_ICON[key]}</i>{PL_CATEGORY_LABEL[key]}<span className="pl-type-n">{catCounts[key]||0}</span>
+          <Icon name={PL_CATEGORY_ICON[key]} size={15} className="pl-type-ico" />{PL_CATEGORY_LABEL[key]}<span className="pl-type-n">{catCounts[key]||0}</span>
         </button>)}
       </div>
       {/* 搜索：按作品的「标题 / 学生名字」过滤。作品列表本来就是前端把三类作品合并出来的，
@@ -436,7 +439,7 @@ function Works(){
         ? <span className="pl-page-gap" key={'gap'+idx}>…</span>
         : <button type="button" key={n} className={'pl-page'+(n===currentPage?' on':'')} aria-current={n===currentPage?'page':undefined} onClick={()=>{setPage(n);window.scrollTo({top:0,behavior:'smooth'});}}>{n}</button>)}
       <button type="button" className="pl-page" disabled={currentPage>=pageCount} onClick={()=>{setPage(currentPage+1);window.scrollTo({top:0,behavior:'smooth'});}}>下一页</button>
-      <span className="pl-page-info">第 {currentPage} / {pageCount} 页 · 每页 {PL_PER_PAGE} 件</span>
+      <span className="pl-page-info">第 {currentPage} / {pageCount} 页</span>
     </div>:null}
     {!loaded&&<div className="note">✦ <p>正在加载作品…</p></div>}
     {loaded&&items.length===0&&<div className="note">✦ <p>{error||'暂无公开作品，学生可在作品页开启公开后展示。'}</p></div>}
