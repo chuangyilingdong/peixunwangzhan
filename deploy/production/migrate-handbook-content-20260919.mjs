@@ -46,6 +46,7 @@ const NEXT = WEBSITE_CONTENT_DEFAULTS[KEY];
 /** 新形状的六个分区 —— 齐了就算形状已迁过。 */
 const SECTIONS = ['hero', 'about', 'poster', 'work', 'compare', 'cta'];
 const isNewShape = (content) => Boolean(content) && SECTIONS.every((key) => content[key] && typeof content[key] === 'object');
+const id = (prefix) => `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
 
 /** 缺的键拿默认值补上；**已有的值一律不动**（运营改过的文案不能被默认值盖掉）。递归进对象，不进数组。 */
 function fillMissing(stored, fallback) {
