@@ -50,7 +50,7 @@ const BRAND_NAME = '灵动ai学院';
 const BRAND_TAGLINE = '青少年 AI 创作开课平台';
 // 官网主导航：桌面端与移动端抽屉共用这一份。
 // 此前 main.jsx 里有两份内容相同的硬编码导航（Header 的 nav 与 WEBSITE_NAV），改文案要改两处。
-const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/intro', '灵动介绍'], ['/handbook', '机构手册'], ['/faq', '常见问题'], ['/download', 'VibeCoding客户端下载']];
+const WEBSITE_NAV = [['/', '首页'], ['/learn', '灵动学习'], ['/marketplace', '灵动课程'], ['/works', '灵动作品'], ['/handbook', '机构手册'], ['/faq', '常见问题'], ['/download', 'VibeCoding客户端下载']];
 // 未登录时的两个登录入口（用户口径 2026-09-18）。机构/老师与学生是**同一套账号体系、同一个登录接口**，
 // 两个入口只决定落点，不参与鉴权判定——所以不往 auth/login 里传 clientType，
 // 避免「老师从学生入口进来就被拒」这类按入口拦人的行为。
@@ -86,7 +86,7 @@ function Header({ userBadge, signedIn }){
   // ⚠️ 只删右上角这一个：首页 hero 的两个 CTA、页脚「合作」列、各页结尾的「联系我们」都保留。
   return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{!signedIn && onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
 }
-function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/download">下载客户端</Link><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
+function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/download">下载客户端</Link><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 // 作品卡片：按用户给的 zip（Figma Make 导出）重做 —— 白卡 + 10px 内边距 + **1.43:1 圆角封面**
@@ -467,26 +467,19 @@ function Works(){
     {viewing?<WorkViewer work={viewing} onClose={()=>setViewing(null)}/>:null}
   </main>;
 }
-// ── 机构手册 / 灵动介绍 / 常见问题（2026-09-18 起三个页面都由后台 CMS 维护）───────────
+// ── 机构手册 / 常见问题（由后台 CMS 维护）────────────────────────────────────
 // 用户口径：「灵动介绍、机构手册、常见问题尽量做成后台可配置的」，机构手册的图与文字
-// 「基本都是平台后台可以配置的」。所以这三页**不硬编码文案**：读 CMS 对应键（INTRO / HANDBOOK / FAQ），
-// 前端只留一个精简 fallback（见 CMS_FALLBACK）。后台在「官网内容」里按区块编辑 + 传图，官网立即生效。
-// 三个键的字段形状（后台表单与公开端渲染共用，改动要同步 apps/admin/src/pages/WebsiteContent.jsx）：
-//   INTRO    { title, lead, highlights:[{title,desc}], sections:[{title,body,bullets[],imageUrl,imageAlt}], cta:{title,text} }
-//   HANDBOOK { title, lead, sections:[{title,body,bullets[],imageUrl,imageAlt}], compareRows:[{label,left,right}], cta:{title,text} }
-//   FAQ      { title, items:[{question,answer}] }
+// 「基本都是平台后台可以配置的」。所以这些页面**不硬编码文案**：读 CMS 对应键（HANDBOOK / FAQ），
+// 前端只留一份精简兜底（见 CMS_FALLBACK）。后台在「官网内容」里按区块编辑 + 传图，官网立即生效。
+// ⚠️ 兜底与 packages/database/src/websiteContentDefaults.js 必须**逐字一致**（口径①）。
+// 两个键的字段形状（后台表单与公开端渲染共用，改动要同步 apps/admin/src/pages/WebsiteContent.jsx）：
+//   HANDBOOK { hero{line1,line2,loaderWord,imageUrl,imageAlt}, about{index,headingLines[],body,imageUrl,imageAlt},
+//              poster{eyebrow,title,caption,imageUrl,imageAlt}, work{introLines[],cards[{title,desc,imageUrl,imageAlt}]},
+//              compare{eyebrow,headingLines[],body}, cta{headline,text,buttonLabel,buttonTo} }
+//   FAQ      { audienceOrder[], student[], teacher[], org[] }（每档是 [{question,answer}]）
+// ⚠️ 2026-09-19 用户口径：**灵动介绍（INTRO）整页删除** —— 页面 / 导航 / 页脚入口 / 路由 / CMS 键一起撤，
+//    旧内容留底在 docs/operations/灵动介绍-旧内容留底-20260919.md。
 const cmsList = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
-function CmsSections({ sections }) {
-  const list = cmsList(sections);
-  if (!list.length) return null;
-  return <section className="hb-sections">{list.map((item, index) => <article className="hb-section" key={index + '-' + (item.title || '')}>
-    <small>{String(index + 1).padStart(2, '0')}</small>
-    <h2>{item.title || ''}</h2>
-    {item.body && <p>{item.body}</p>}
-    {cmsList(item.bullets).length ? <ul>{cmsList(item.bullets).map((bullet, bulletIndex) => <li key={bulletIndex}>{String(bullet)}</li>)}</ul> : null}
-    {item.imageUrl && <img className="hb-image" src={item.imageUrl} alt={item.imageAlt || item.title || ''} loading="lazy" />}
-  </article>)}</section>;
-}
 // ── 机构手册 /handbook（2026-09-19 按用户给的设计稿 design (1).zip 重做）────────────────
 // 设计稿是 Tailwind + GSAP + Lenis + 热链远程图片的静态页。这里按本项目一贯的做法**移植**，不照抄依赖：
 //   ① **不引 GSAP / Lenis / Tailwind**：官网是纯 CSS 一套；而且生产 CSP 是 `script-src 'self'`，
@@ -716,12 +709,6 @@ function Handbook() {
     </section>
   </main>;
 }
-function Intro() {
-  const cms = useWebsiteContent('INTRO');
-  const content = cms.data || {};
-  const highlights = cmsList(content.highlights);
-  return <><Title eyebrow="灵动介绍" title={<>{content.title || '灵动介绍'}</>} desc={content.lead || ''} /><main className="inner intro-page">{highlights.length ? <section className="modules">{highlights.map((item, index) => <article key={index + '-' + (item.title || '')}><small>0{index + 1}</small><h3>{item.title || ''}</h3><p>{item.desc || ''}</p></article>)}</section> : null}<CmsSections sections={content.sections} /><End title={content.cta?.title || '把 AI 课开起来'} text={content.cta?.text || '联系我们，我们会按你的班型给出课包与开通方案。'} /></main></>;
-}
 // 常见问题 /faq：黑底 + 卡片式手风琴，**按端分三档**（2026-09-18 晚用户口径）。
 // ⚠️ 参考稿是 Tailwind + framer-motion 写的，这里**不引入这两个依赖**：官网是纯 CSS 的一套
 //    （依赖里只有 ogl，没有 Tailwind），为一张页面把它引进来会与全局 styles.css 打架；
@@ -873,7 +860,6 @@ const CMS_FALLBACK = {
     teacher: [{ question: '上课前需要做什么准备？', answer: '学生用机构账号登录，浏览器打开课堂即可开始；机房电脑不需要额外安装环境。' }, { question: '学生的作品和用量在哪里看？', answer: '机构后台可以查看学生的用量记录与作品，并把优秀作品发布到作品展厅。' }],
     org: [{ question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学员无需自备 Key，由机构统一开通与管理。' }, { question: '平台提供哪些课程？', answer: '课程中心提供标准课包（含 PPT 与 HTML 互动课件），机构可按课包直接排课。' }],
   },
-  INTRO: { title: '灵动介绍', lead: BRAND_NAME + '是面向 8–16 岁的 AI 创作开课平台：学生用中文与 AI 伙伴「阿飞」对话，当堂做出能运行、能展示的作品。', highlights: [], sections: [], cta: { title: '把 AI 课开起来', text: '联系我们，我们会按你的班型给出课包与开通方案。' } },
   HANDBOOK: {"hero":{"line1":"让AI创作课、编程课","line2":"真正进课堂","loaderWord":"让Ai真正进入课堂","imageUrl":"/assets/handbook/hero.webp","imageAlt":"暗色科技氛围中的创作路径主视觉"},"about":{"index":"01 / 关于","headingLines":["从试点走向普及，","机构需要的不只是工具"],"body":"国家和教育部门连续推动中小学人工智能教育，课程要能开齐开足，生成式AI要可用、可管。机构真正需要的是：能进课表、能管住账号与用量、每节课都有作品的完整方案。","imageUrl":"/assets/handbook/about.webp","imageAlt":"AI 创意思维与数据面板"},"poster":{"eyebrow":"一页看懂","title":"为什么现在就是开 AI 课的好时机","caption":"政策、家长认知、市场供给与窗口期判断 —— 一页看完。","imageUrl":"/assets/handbook/poster.webp","imageAlt":"AI 时代的孩子从这里起步：政策层面 / 家长认知 / 市场供给 / 窗口期判断"},"work":{"introLines":["开课管课","沉作品","一体化交付"],"cards":[{"title":"中文对话创作","desc":"学生与 AI 伙伴「阿飞」对话，做出可运行的作品","imageUrl":"/assets/handbook/card-1.webp","imageAlt":"学生在 AI 辅助下创作"},{"title":"课堂即开即用","desc":"标准课包与互动课件直接进课堂","imageUrl":"/assets/handbook/card-2.webp","imageAlt":"课件与课堂流程"},{"title":"账号用量可控","desc":"分级账号、授权次数、用量记录","imageUrl":"/assets/handbook/card-3.webp","imageAlt":"统一平台下的多端能力"},{"title":"作品进展厅","desc":"校区案例库与招生素材自动沉淀","imageUrl":"/assets/handbook/card-4.webp","imageAlt":"作品与案例展台"},{"title":"体验课转正班","desc":"90 分钟出作品，家长当场看得见","imageUrl":"/assets/handbook/card-5.webp","imageAlt":"一步一步的成长路径"}]},"compare":{"eyebrow":"对比","headingLines":["别再","东拼西凑"],"body":"对话用一家、写代码换一个编译器、课件散在网盘和群聊里——老师每换一门课就要重新教学生用哪个网站。灵动AI课堂把对话创作、代码运行、课件管理、作品沉淀整合在同一平台。"},"cta":{"headline":"把 AI 课开起来","text":"联系我们，我们会按你的班型给出课包与开通方案。","buttonLabel":"点击进入常见问题","buttonTo":"/faq"}},
   // 灵动课程（/marketplace）的页头：大标题 + 副标题。用户在后台「官网内容 → 灵动课程」可改
   // （用户口径 2026-09-18 晚：这两句要能后台配置）。
@@ -1078,7 +1064,6 @@ export function App(){
       '/marketplace': '灵动课程 · ' + BRAND_NAME,
       '/org': '机构方案 · ' + BRAND_NAME,
       '/works': '灵动作品 · ' + BRAND_NAME,
-      '/intro': '灵动介绍 · ' + BRAND_NAME,
       '/handbook': '机构手册 · ' + BRAND_NAME,
       '/faq': '常见问题 · ' + BRAND_NAME,
       '/download': '下载创作客户端 · ' + BRAND_NAME,
@@ -1198,7 +1183,9 @@ export function App(){
         <Route path='/works/shared/:token' element={<WorkDetailPage api={publicApi}/>}/>
         <Route path='/works/:token' element={<WorkDetailPage api={publicApi}/>}/>
         <Route path='/handbook' element={<Handbook/>}/>
-        <Route path='/intro' element={<Intro/>}/>
+        {/* 2026-09-19 用户口径：灵动介绍这一页**整个删掉**（页面 / 导航 / 页脚入口一起）。
+            留一条重定向，老链接与老书签不会 404（与 /my-courses → /learn 同一套做法）。 */}
+        <Route path='/intro' element={<Navigate to='/' replace/>}/>
         <Route path='/faq' element={<Faq/>}/>
         <Route path='/download' element={<Download/>}/>
         <Route path='/compare' element={<Compare/>}/>

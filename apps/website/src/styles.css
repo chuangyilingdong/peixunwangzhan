@@ -295,9 +295,11 @@
 .work-detail__canvas{margin:20px 0}
 .work-detail__foot{margin:18px 0 48px}
 /* ── 官网顶栏：7 项主导航 + 未登录时的两个登录入口 ──────────────────────────
-   2026-09-18：导航从 4 项扩到 7 项（首页 / 灵动学习 / 灵动课程 / 灵动作品 / 灵动介绍 / 机构手册 /
-   常见问题），未登录时并列「机构 / 老师登录」「学生登录」。项变多后顶栏在窄屏会挤，所以
-   1120px 以下把主导航收进汉堡抽屉（抽屉与桌面端共用 WEBSITE_NAV 同一份数据源），不横向硬挤。 */
+   2026-09-18：导航从 4 项扩到 7 项，未登录时并列「机构 / 老师登录」「学生登录」。项变多后
+   顶栏在窄屏会挤，所以 1120px 以下把主导航收进汉堡抽屉（抽屉与桌面端共用 WEBSITE_NAV 同一份
+   数据源），不横向硬挤。
+   ⚠️ 入口清单以 main.jsx 的 WEBSITE_NAV 为准（现在 7 项：首页/灵动学习/灵动课程/灵动作品/
+   机构手册/常见问题/VibeCoding客户端下载）。2026-09-19 用户口径删掉了「灵动介绍」那一项。 */
 .site-login{padding:10px 15px;border:1px solid var(--line);border-radius:99px;color:var(--ink);background:#fff;font-size:13px;font-weight:800;white-space:nowrap;transition:border-color .2s ease,color .2s ease}
 .site-login:hover{border-color:var(--purple);color:var(--deep)}
 .site-burger{display:none;width:44px;height:44px;flex:0 0 auto;margin-left:0;border:1px solid var(--line);border-radius:50%;color:var(--ink);background:#fff;font-size:19px;line-height:1;cursor:pointer}
@@ -349,24 +351,12 @@
 /* 登录页：两个入口之间的交叉链接（登录页是深紫底，用浅色文字） */
 .login-switch{margin:16px 0 0;text-align:center;color:rgba(255,255,255,.78);font-size:13px}
 .login-switch a{color:#ffe798;font-weight:800;text-decoration:underline;text-underline-offset:3px}
-/* ── 机构手册 / 灵动介绍 / 常见问题 ────────────────────────────────────────
-   这三页内容来自 CMS（字段可长可短、图可配可不配），所以样式只负责版式：
-   没有内容的区块由组件判定不渲染，条目多少都不变形。 */
-.hb-sections{display:grid;gap:clamp(14px,2vw,24px);margin-top:clamp(28px,3.6vw,48px)}
-.hb-section{padding:clamp(20px,2.6vw,34px);border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:0 10px 30px #4431840f}
-.hb-section:nth-child(3n+2){background:#faf9ff}
-.hb-section:nth-child(3n){background:#fffaf6}
-.hb-section>small{display:block;color:#a59eb3;font-size:12px;font-weight:900;letter-spacing:.08em}
-.hb-section h2{margin:10px 0 12px;color:var(--ink);font-size:clamp(19px,2.3vw,27px);line-height:1.35;letter-spacing:-1px}
-.hb-section p{max-width:74ch;margin:0;color:var(--muted);font-size:14px;line-height:1.9}
-.hb-section ul{display:grid;gap:9px;max-width:78ch;margin:16px 0 0;padding:0;list-style:none}
-.hb-section ul li{position:relative;padding-left:22px;color:#5f5871;font-size:13.5px;line-height:1.8}
-.hb-section ul li:before{content:"✦";position:absolute;left:0;top:1px;color:var(--purple);font-size:11px}
-.hb-image{display:block;width:100%;height:auto;margin-top:20px;border:1px solid var(--line);border-radius:14px}
-.handbook-page .compare{margin-top:clamp(28px,3.6vw,48px)}
-/* 灵动介绍页的三张卡就是正文第一块，不需要 .modules 默认的 75px 上边距（否则首屏下面一大片空的） */
-.intro-page .modules{margin-top:0}
-@media(max-width:700px){.hb-section{padding:20px 18px}.hb-section h2{font-size:19px}}
+/* ── 常见问题（/faq）等 CMS 页的通用版式 ───────────────────────────────────
+   内容来自 CMS（字段可长可短、图可配可不配），所以样式只负责版式：
+   没有内容的区块由组件判定不渲染，条目多少都不变形。
+   ⚠️ 2026-09-19：原先这里还有机构手册/灵动介绍用的 .hb-sections/.hb-section/.hb-image ——
+   那套是 CmsSections/CmsCompare 的样式，两个组件（与灵动介绍整页）都已删除，样式一并清掉，
+   别再加回来。机构手册现在用的是下面那套 .hb-hero/.hb-about/... 。 */
 
 /* ── 灵动课程 /marketplace：黑底课包列表（2026-09-18 晚按用户给的参考设计重做）───────────
    设计语言跟首页一致：黑底 + 环境光晕 + 大圆角浮层行；结构照参考稿（
@@ -716,8 +706,8 @@
    外链脚本一个都加载不了），入场/横扫/粒子都用原生 CSS + rAF 复刻，见 main.jsx 的 Handbook()。
    配色是**这一页自带的一套**（黑底 + 纸色块 + 暖金）：设计稿那 7 张配图本身就是暖橙/青的，
    换成站内那支粉会跟图打架。变量只挂在 .hb 下，**不影响站内其它页面**。
-   ⚠️ 类名统一 hb- 前缀，别用 hb-section / hb-sections / hb-image —— 那三个是
-   CmsSections（灵动介绍页）在用的老类名。 */
+   ⚠️ 类名统一 hb- 前缀。别用 hb-section / hb-sections / hb-image ——
+   那三个是已删除的 CmsSections 老类名，别再捡回来。 */
 .hb{--hb-ink:#090909;--hb-ink-soft:#151513;--hb-paper:#eeeae1;--hb-accent:#bca46c;--hb-line:rgba(238,234,225,.18);--hb-pad:clamp(1.25rem,4vw,5rem);--hb-display:"Geist","Noto Sans SC","PingFang SC","Hiragino Sans GB",sans-serif;background:var(--hb-ink);color:var(--hb-paper)}
 .hb img{display:block;width:100%;height:100%;object-fit:cover}
 .hb-eyebrow{margin:0;font-size:.78rem;line-height:1.5;letter-spacing:.12em;color:var(--hb-accent)}

@@ -24,9 +24,6 @@ export function WebsitePreview({ content, selectedKey }) {
   }
   if (selectedKey === 'BRAND') return <div className="cms-preview-brand"><strong>{content.name || '品牌名称'}</strong><span>{content.tagline || '品牌标语'}</span><small>{content.contactEmail || '联系邮箱'}</small></div>;
   if (selectedKey === 'MARKETPLACE') return <div className="cms-preview-faq"><h3>{content.title || '灵动Ai学院课包展示'}</h3>{content.lead ? <p>{content.lead}</p> : null}</div>;
-  // 灵动介绍 / 机构手册：正文是「分节」结构，预览按可折叠列表展示，配图一起预览
-  // 灵动介绍：分节结构（标题 + 正文 + 要点 + 配图）
-  if (selectedKey === 'INTRO') return <div className="cms-preview-faq"><h3>{content.title || '灵动介绍'}</h3>{content.lead ? <p>{content.lead}</p> : null}{(Array.isArray(content.sections) ? content.sections : []).map((item, index) => <details key={`preview-section-${index}`}><summary>{item.title || `第 ${index + 1} 节`}</summary>{item.body ? <p>{item.body}</p> : null}{(Array.isArray(item.bullets) ? item.bullets.filter(Boolean) : []).length ? <ul>{item.bullets.filter(Boolean).map((bullet, bulletIndex) => <li key={bulletIndex}>{bullet}</li>)}</ul> : null}{item.imageUrl ? <img src={item.imageUrl} alt={item.imageAlt || ''} style={PREVIEW_IMAGE_STYLE} /> : null}</details>)}</div>;
   // 机构手册（2026-09-19 按设计稿重做成「分区」结构）：预览按官网的真实顺序走一遍，图也一起看
   if (selectedKey === 'HANDBOOK') {
     const hero = content.hero || {};
@@ -68,30 +65,6 @@ const faqAudienceOrder = (content) => {
   const configured = cmsListOf(content?.audienceOrder).filter((key) => FAQ_LABELS[key]);
   return [...configured, ...FAQ_AUDIENCES.map(([key]) => key).filter((key) => !configured.includes(key))];
 };
-/**
- * 「分节」编辑器（灵动介绍 / 机构手册共用）。
- * 两份内容的正文形状一样：{ title, body, bullets[], imageUrl, imageAlt }，所以只用一套表单。
- * 配图两个来源都支持：直接贴已有资源地址，或点「上传配图」走平台的文件资产接口
- * （上传后拿到的是 /api/public/file-assets/<id>/download 这种公开可读地址）。
- * ⚠️ 要点用「一行一条」的 textarea，**不要**在 onChange 里过滤空行：那样用户按回车想开新行时
- * 空行会被立刻吃掉，永远敲不出第二行。空行由官网渲染侧过滤（main.jsx 的 cmsList）。
- */
-function CmsSectionsFields({ structured, onList, onMove, onAdd, onRemove, uploading, onUpload }) {
-  const sections = cmsListOf(structured?.sections);
-  return <>
-    <div className="cms-section-heading top-gap"><strong>正文分节（标题 + 正文 + 要点 + 配图）</strong><span>留空的字段官网不显示，条目多少都不会变形</span></div>
-    <div className="cms-faq-list">{sections.map((item, index) => <div className="cms-faq-item" key={`section-${index}`}>
-      <div className="cms-faq-heading"><strong>第 {index + 1} 节</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => onMove(index, -1)} aria-label={`第 ${index + 1} 节上移`}>↑</button><button type="button" className="text-button" disabled={index === sections.length - 1} onClick={() => onMove(index, 1)} aria-label={`第 ${index + 1} 节下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => onRemove(index)}>删除</button></div></div>
-      <label>标题<input value={item.title || ''} onChange={(event) => onList(index, { title: event.target.value })} maxLength={120} /></label>
-      <label>正文<textarea value={item.body || ''} onChange={(event) => onList(index, { body: event.target.value })} maxLength={2000} /></label>
-      <label>要点（一行一条）<textarea value={cmsListOf(item.bullets).join('\n')} onChange={(event) => onList(index, { bullets: event.target.value.split('\n') })} maxLength={2000} /></label>
-      <div className="form-grid"><label>配图地址<input value={item.imageUrl || ''} onChange={(event) => onList(index, { imageUrl: event.target.value })} placeholder="留空则不显示图片" /></label><label>图片说明（无障碍用）<input value={item.imageAlt || ''} onChange={(event) => onList(index, { imageAlt: event.target.value })} maxLength={120} /></label></div>
-      <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `section-${index}` ? '上传中…' : '上传配图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) onUpload(file, index); }} /></label></div>
-      {item.imageUrl ? <img src={item.imageUrl} alt="" style={{ display: 'block', maxWidth: '260px', marginTop: '10px', border: '1px solid #ece8f2', borderRadius: '10px' }} /> : null}
-    </div>)}</div>
-    <button type="button" className="secondary-button top-gap" onClick={() => onAdd({ title: '', body: '', bullets: [], imageUrl: '', imageAlt: '' })}>新增一节</button>
-  </>;
-}
 
 export function WebsiteContent({ api }) {
   const [confirm, confirmation] = useAdminConfirm();
@@ -199,7 +172,7 @@ export function WebsiteContent({ api }) {
   function addCourse() { updateStructured({ courses: [...(Array.isArray(structured?.courses) ? structured.courses : []), { icon: '✨', title: '', category: '', lessonCount: 8, ageRange: '8–16 岁', summary: '', lessons: [] }] }); }
   function removeCourse(index) { updateStructured({ courses: (structured?.courses || []).filter((_, itemIndex) => itemIndex !== index) }); }
   // ── 列表字段的通用增删改 ──────────────────────────────────────────────
-  // 灵动介绍的 highlights / 机构手册的 compareRows / 首页的 stats 都是「数组里放对象」，
+  // 首页的 stats（以及历史上机构手册的 cards）都是「数组里放对象」，
   // 一份代码管多种字段，免得每加一个区块就把同样的四个函数再抄一遍。
   function updateList(field, index, patch) {
     const items = cmsListOf(structured?.[field]);
@@ -284,7 +257,7 @@ export function WebsiteContent({ api }) {
   const preview = structured;
   return <>
     {confirmation}
-    <PageHeader eyebrow="官网运营" title="官网内容 CMS" description="用结构化表单维护首页、灵动介绍、灵动课程、机构手册、常见问题与品牌信息；公开端只读取已发布版本，保留历史版本供回滚。" actions={<button className="secondary-button" disabled={busy} onClick={reloadContent}>刷新</button>} />
+    <PageHeader eyebrow="官网运营" title="官网内容 CMS" description="用结构化表单维护首页、灵动课程、机构手册、常见问题与品牌信息；公开端只读取已发布版本，保留历史版本供回滚。" actions={<button className="secondary-button" disabled={busy} onClick={reloadContent}>刷新</button>} />
     {message && <Notice tone={message.includes('已') || message.includes('保存') ? 'success' : 'danger'}>{message}</Notice>}
     <div className="split website-cms">
       <Panel title="内容区块">
@@ -332,22 +305,6 @@ export function WebsiteContent({ api }) {
             <label>页面大标题<input value={structured?.title || ''} onChange={(event) => updateStructured({ title: event.target.value })} maxLength={100} /></label>
             <label>副标题<textarea value={structured?.lead || ''} onChange={(event) => updateStructured({ lead: event.target.value })} maxLength={400} /></label>
             <p className="muted">这里只改「灵动课程」页头这两句。课包本身（价格、封面、难度、适学年龄、课时、上下架）在「课包与课程编排」里维护 —— 官网列表读的就是那些字段。</p>
-          </div>}
-          {selectedKey === 'INTRO' && <div className="cms-form">
-            <label>页面标题<input value={structured?.title || ''} onChange={(event) => updateStructured({ title: event.target.value })} maxLength={100} /></label>
-            <label>一句话说明<textarea value={structured?.lead || ''} onChange={(event) => updateStructured({ lead: event.target.value })} maxLength={600} /></label>
-            <div className="cms-section-heading top-gap"><strong>三块要点（官网显示为顶部三张卡）</strong><span>标题 + 说明</span></div>
-            <div className="cms-faq-list">{cmsListOf(structured?.highlights).map((item, index) => <div className="cms-faq-item" key={`hl-${index}`}><div className="cms-faq-heading"><strong>要点 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList('highlights', index, -1)} aria-label={`要点 ${index + 1} 上移`}>↑</button><button type="button" className="text-button" disabled={index === cmsListOf(structured?.highlights).length - 1} onClick={() => moveList('highlights', index, 1)} aria-label={`要点 ${index + 1} 下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList('highlights', index)}>删除</button></div></div><div className="form-grid"><label>标题<input value={item.title || ''} onChange={(event) => updateList('highlights', index, { title: event.target.value })} maxLength={40} /></label><label>说明<input value={item.desc || ''} onChange={(event) => updateList('highlights', index, { desc: event.target.value })} maxLength={200} /></label></div></div>)}</div>
-            <button type="button" className="secondary-button top-gap" onClick={() => addList('highlights', { title: '', desc: '' })}>新增要点</button>
-            <CmsSectionsFields structured={structured} onList={(index, patch) => updateList('sections', index, patch)} onMove={(index, direction) => moveList('sections', index, direction)} onAdd={(blank) => addList('sections', blank)} onRemove={(index) => removeList('sections', index)} uploading={uploading} onUpload={(file, index) => uploadImage(file, (url) => updateList('sections', index, { imageUrl: url }), `section-${index}`)} />
-            <div className="form-grid top-gap">
-              {/* ⚠️ 原来这里绑的是 `cta.title`，而官网渲染的是 `cta.headline` —— 后台改了没反应（已修）。
-                  按钮的文案与去向也在这里（2026-09-19 用户口径：按钮改成「点击进入常见问题」跳 /faq）。 */}
-              <label>结尾行动大标题<input value={structured?.cta?.headline || ''} onChange={(event) => updateSection('cta', { headline: event.target.value })} maxLength={40} /></label>
-              <label>结尾说明<input value={structured?.cta?.text || ''} onChange={(event) => updateSection('cta', { text: event.target.value })} maxLength={200} /></label>
-              <label>按钮文案<input value={structured?.cta?.buttonLabel || ''} onChange={(event) => updateSection('cta', { buttonLabel: event.target.value })} maxLength={24} /></label>
-              <label>按钮去向（站内路径）<input value={structured?.cta?.buttonTo || ''} onChange={(event) => updateSection('cta', { buttonTo: event.target.value })} maxLength={80} placeholder="例如 /faq、/demo" /></label>
-            </div>
           </div>}
           {selectedKey === 'HANDBOOK' && <div className="cms-form">
             {/* 2026-09-19 按用户给的设计稿（design (1).zip）重做：整页换成
