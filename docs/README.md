@@ -147,9 +147,33 @@
 ```text
 入口：https://iicili.cyou/{admin,org,student}/     （官网在根路径 /）
 仓库：E:\学习平台正常　branch feature/vibecoding-ppt-quality-20260915
-代码提交：5b65599（本地 HEAD = origin，已推送；**生产版就是它**）
-生产：release 20260919T035341Z / commit 5b65599（服务 learning-platform-production @127.0.0.1:8789）
-      本版改动（5b65599，用户口径：**VibeCoding 的「发送次数上限」与「预设提示词」＋给桌面客户端的进门接口**）：
+代码提交：ed9d6fa（本地 HEAD = origin，已推送；**生产版就是它**）
+生产：release 20260919T044004Z / commit ed9d6fa（服务 learning-platform-production @127.0.0.1:8789）
+      本版改动（ed9d6fa，用户口径：**要客户端 + 首页能下载**）：
+      ①**官网新增 `/download` 下载页**（首页 hero 下一行小字入口 + 页脚「了解更多」也有）。
+      页面读服务器 `/downloads/manifest.json` 拿版本/体积/校验值，**不把文件名写死在代码里**。
+      nginx 新增 `location ^~ /downloads/`，指向 **release 之外**的 `/srv/ai-kids-platform/downloads/`
+      —— 每次发布换代都不会把安装包冲掉。当前已上传
+      `lingdong-client-0.1.6-alpha.2-win-x64.exe`（294MB，sha256 见 manifest）；Mac 位留空=「准备中」。
+      ②**客户端从上游源码自建**（选的是"上游 apps/desktop 自己构建"这条路）：
+      · `deploy/desktop/rebrand-client.mjs` —— 换我们的 productName / 安装包名 / 外壳文案；
+      · `deploy/desktop/apply-client-gate.mjs` + `client-patch/` —— **登录门**：学生用我们的账号登录 →
+        取 `client-context`（课堂 + 网关密钥 + 预设提示词 + 剩余次数）→ 写补丁层与环境变量 →
+        **只有课堂在进行时**才启动 dsh；没在上的课只显示「等老师开始上课」。
+      📌 两个必须记住的坑（都写进代码注释了）：
+        · 补丁层要挂在桌面宿主的 `patchFiles`，**不能**写 profile 的 `cordis.patch.yml` ——
+          宿主显式传 `patchFiles: []`，而 `profile-context.ts` 是
+          `initialProfile?.patches ?? loadOptionalPatches(...)`，空数组不是 undefined，那个文件永远不会被读；
+        · 上游默认带的第三方插件（`dsh-dream-skin` 等）会让客户端**启动即判定失败**（弹「无法使用」），
+          必须在打包前禁掉。
+      ③客户端实测（本机）：登录页正常渲染 → 用学生账号登录本地验证台 → 登录门写下
+      `~/.dsh/lingdong.patch.yml` 并启动 dsh（127.0.0.1:19387 提供服务）。
+      ⚠️ **未验证**：dsh 是否真的把模型调用路由到我们的网关（模型列表仍显示上游那一条）—— 下一步第一件事。
+      核验：`PROD_ACCEPTANCE_OK` + 真浏览器打线上：下载页两张卡片、Windows 卡片链接到安装包、
+      卡片显示版本与体积、Mac 无链接、首页有入口、页脚有链接、无 JS 异常；
+      安装包与 manifest 公网可取（`/downloads/` 200、字节与 sha256 已记录）。
+      可回滚上一版：release 20260919T035341Z / commit 5b65599
+      上一版改动（5b65599）：**VibeCoding 发送次数上限 + 预设提示词 + 给客户端的 client-context 接口**
       ①**课时级「发送次数上限」**（建课时选 VibeCoding 就能设「发送按钮能按几次」）。这是**一套独立机制**，
       与「算力额度只观测、不拦人」（`services/sessionCostCap.js`）**不是一回事** —— 那套的文件头自己写着
       「要拦人的话那是另一个（不存在的）机制」，这就是那个。落点是**教学节奏**，按次数算，与花多少钱无关。
