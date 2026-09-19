@@ -86,7 +86,7 @@ function Header({ userBadge, signedIn }){
   // ⚠️ 只删右上角这一个：首页 hero 的两个 CTA、页脚「合作」列、各页结尾的「联系我们」都保留。
   return <header className={'site-topbar'+(onDark?' on-dark':'')}><div className="bar"><Logo/><nav aria-label="主导航">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'on':''}>{n}</NavLink>)}</nav><div className="head-actions">{!signedIn && onDark ? <AuthEntries onDark onNavigate={navigate}/> : userBadge}</div><button type="button" className="site-burger" aria-label={menuOpen?'关闭菜单':'打开菜单'} aria-expanded={menuOpen} onClick={()=>setMenuOpen(v=>!v)}>{menuOpen?'×':'☰'}</button></div>{menuOpen && <div className="site-menu-overlay"><div className="site-menu-head"><span>{BRAND_NAME}</span><button type="button" onClick={()=>setMenuOpen(false)}>关闭 ×</button></div><div className="site-menu-items">{WEBSITE_NAV.map(([to,n])=><NavLink key={to} to={to} end={to==='/'} className={({isActive})=>isActive?'active':''} onClick={()=>setMenuOpen(false)}>{n}<span>↗</span></NavLink>)}</div><div className="site-menu-login">{userBadge}</div></div>}</header>;
 }
-function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
+function Footer(){return <footer><div className="foot"><div><Logo/><p>面向教培机构与学校的<br/>青少年 AI 通识与 VibeCoding 开课平台。</p></div><div><strong>产品</strong><Link to="/marketplace">灵动课程</Link><Link to="/org">机构方案</Link><Link to="/works">灵动作品</Link><Link to="/intro">灵动介绍</Link></div><div><strong>合作</strong><Link to="/demo">联系我们</Link><Link to="/handbook">机构手册</Link><a href={ORG_APP_URL}>机构后台</a></div><div><strong>了解更多</strong><Link to="/download">下载客户端</Link><Link to="/faq">常见问题</Link><Link to="/compare">选型对比</Link><Link to="/terms">用户协议</Link><Link to="/privacy">隐私政策</Link><Link to="/minors">儿童 / 未成年人说明</Link><a href="mailto:hello@aimagc.cn">联系合作</a></div></div><div className="copyright">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div></footer>}
 function Button({children,to='/demo',soft=false}){return <Link to={to} className={'button '+(soft?'soft':'')}>{children}<b>↗</b></Link>}
 function Kicker({children}){return <div className="kicker">✦ {children}</div>}
 // 作品卡片：按用户给的 zip（Figma Make 导出）重做 —— 白卡 + 10px 内边距 + **1.43:1 圆角封面**
@@ -214,6 +214,8 @@ function HomeLanding() {
         <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={1.15} shineSize={17} shineFade={40} thickness={1} speed={0.7} followMouse proximity={250} autoAnimate onClick={() => navigate('/demo')}>联系我们</SpecularButton>
         <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={0.9} shineSize={15} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>查看课程</SpecularButton>
       </div>
+      {/* 下载客户端入口（2026-09-19）：用一行小字，不动 hero 的版式与那两个按钮 */}
+      <p className="hp-download"><Link to="/download">下载创作客户端（Windows）<span>先装客户端，上课直接进课堂 →</span></Link></p>
     </section>
     {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
   </main>;
@@ -376,6 +378,52 @@ function Faq() {
       </div>
     </div>
   </main>;
+}
+// 下载创作客户端（/download，2026-09-19）。
+// 安装包放在**发布目录之外**（服务器 /srv/ai-kids-platform/downloads/，nginx 的 /downloads/），
+// 所以每次发布换代都不会把它冲掉；这里读同目录的 manifest.json 拿到当前版本/体积/校验值，
+// 而不是把文件名写死在这份代码里（否则每次出包都得改官网并重发）。
+function Download() {
+  const [manifest, setManifest] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let live = true;
+    fetch('/downloads/manifest.json', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+      .then((data) => { if (live) setManifest(data); })
+      .catch((reason) => { if (live) setError(reason.message || '读取失败'); });
+    return () => { live = false; };
+  }, []);
+  const windows = manifest?.files?.['win-x64'] || null;
+  const mac = manifest?.files?.['mac-arm64'] || null;
+  const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(0) + ' MB' : '');
+  return <><Title eyebrow="创作客户端" title={<>把课堂装进<br/><em>学生的电脑</em></>} desc="VibeCoding 课堂用客户端上：老师开始上课后，学生用账号登录即可进入自己的创作环境。" /><main className="inner">
+    <section className="dl">
+      <article className="dl-card">
+        <i>🪟</i>
+        <h3>Windows 版</h3>
+        {windows
+          ? <><p>版本 {manifest.version} · {mb(windows.size)}</p><a className="button" href={'/downloads/' + windows.name}>下载安装包</a>
+            <small>下载后双击安装；首次打开若提示「未知发布者」，选择「仍要运行」即可（我们正在办理代码签名证书）。</small></>
+          : <><p>{error ? '安装包暂时取不到（' + error + '）' : '正在读取安装包信息…'}</p><small>稍后再试，或联系我们获取安装包。</small></>}
+      </article>
+      <article className="dl-card">
+        <i>🍎</i>
+        <h3>Mac 版（Apple 芯片）</h3>
+        {mac ? <><p>版本 {manifest.version} · {mb(mac.size)}</p><a className="button" href={'/downloads/' + mac.name}>下载安装包</a></> : <><p>正在准备中</p><small>需要 macOS 12 以上、Apple 芯片（M 系列）。做好会在这一页放出。</small></>}
+      </article>
+    </section>
+    <section className="dl-steps">
+      <h2>装上以后怎么用</h2>
+      <ol>
+        <li><b>用学生账号登录</b> —— 和网页端同一个账号。</li>
+        <li><b>等老师开始上课</b> —— 老师没点「立即上课」时，客户端只会显示你的课程。</li>
+        <li><b>进入课堂</b> —— 课堂开始后点进入，就在客户端里和 AI 一起做作品。</li>
+        <li><b>交作品</b> —— 做好的网页 / 文档直接提交，老师和你都能在「我的作品」里看到。</li>
+      </ol>
+      <p className="dl-note">还没有学生账号？<Link to="/demo">联系我们</Link>，我们会按你的班型开通。</p>
+    </section>
+  </main></>;
 }
 function Compare(){const rows=[['工具形态','多个网站 / App 来回切换','同一个工作台里完成：对话 + 预览 + 项目文件'],['课程交付','机构自建教案，平台不管课','课程中心标准课包，课时与课件一体'],['账号与安全','学生自备账号 / API Key，易泄露','机构账号分级，学员无需自备 Key'],['成本控制','个人账号各买各的，月底才知道超支','机构授权次数按班分配，用量有记录和提醒'],['成果沉淀','作业散落在群聊和个人电脑','作品展厅聚合展示，形成校区案例库'],['硬件实践','外部工具和环境另行配置','Arduino / micro:bit 软硬一体课程']];return <><Title eyebrow="选型对比" title={<>为什么不是<br/><em>再找个对话平台</em>？</>} desc="机构评估 AI 课程时，真正要比较的不是一个聊天框，而是一套能不能长期交付的课堂产品。"/><main className="inner"><section className="compare"><div className="compare-head"><span>对比维度</span><span>分散拼凑</span><b>{BRAND_NAME}</b></div>{rows.map(r=><div key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><b>✓ {r[2]}</b></div>)}</section><section className="compare-end"><div><small>一句话总结</small><h2>把「创作、课程、账号、计费、作品」<em>统一起来</em>。</h2></div><Button>联系我们</Button></section></main></>}
 // 官网公开端的内容兜底：公开接口不可用、或后台还没发布过该区块时，官网仍要有东西可看。
@@ -609,6 +657,7 @@ export function App(){
       '/intro': '灵动介绍 · ' + BRAND_NAME,
       '/handbook': '机构手册 · ' + BRAND_NAME,
       '/faq': '常见问题 · ' + BRAND_NAME,
+      '/download': '下载创作客户端 · ' + BRAND_NAME,
       '/compare': '选型对比 · ' + BRAND_NAME,
       '/demo': '联系我们 · ' + BRAND_NAME,
       '/terms': '用户协议 · ' + BRAND_NAME,
@@ -727,6 +776,7 @@ export function App(){
         <Route path='/handbook' element={<Handbook/>}/>
         <Route path='/intro' element={<Intro/>}/>
         <Route path='/faq' element={<Faq/>}/>
+        <Route path='/download' element={<Download/>}/>
         <Route path='/compare' element={<Compare/>}/>
         <Route path='/demo' element={<Demo/>}/>
         <Route path='/terms' element={<LegalPage type='terms'/>}/>
