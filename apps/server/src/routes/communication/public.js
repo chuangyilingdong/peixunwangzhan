@@ -19,6 +19,7 @@ import {
 import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
+import { plazaCategoryLabelOf, plazaCategoryMap, plazaCategoryOf } from '../../services/plazaCategories.js';
 import { WEBSITE_CONTENT_KEYS } from '../../services/websiteContentKeys.js';
 import { prepareFileDownload, prepareFilePreview } from '../fileAssets.js';
 import {
@@ -177,7 +178,7 @@ export function handlePublicCommunication(ctx) {
 
   // 公开 VibeCoding 作品（平台把老师已通过的作品发布到作品广场后，官网可点开直接玩）
   if (pathname === '/api/public/vibecoding-works' && method === 'GET') {
-    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 60, fallback: 20 });
+    const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 60 });
     const items = rows(`
       SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
              submission.featured_at, submission.submitted_at, submission.share_token,
@@ -464,6 +465,9 @@ function publicWorkRow(row) {
     studentName,
     // 导入件才有的字段（我们自己的画布/VibeCoding 作品一律是 null/false，前端据此分支）
     imported: Boolean(imported),
+    // 广场上的两个分类（画布作品 / VibeCoding作品）：导入件按映射表，站内作品按它自己的来源
+    plazaCategory: plazaCategoryOf({ imported, workType: imported?.workType, type: row.type }),
+    plazaCategoryLabel: plazaCategoryLabelOf({ imported, workType: imported?.workType, type: row.type }),
     workType: imported?.workType || null,
     workTypeLabel: imported?.workTypeLabel || null,
     coverUrl: imported?.coverUrl || null,
@@ -486,6 +490,9 @@ function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
   return {
     id: row.id,
     type: 'VIBECODING',
+    // 站内的 VibeCoding 提交天然属于「VibeCoding作品」这一类（不查映射表）
+    plazaCategory: 'VIBECODING',
+    plazaCategoryLabel: plazaCategoryLabelOf({ imported: false, type: 'VIBECODING' }),
     title: row.title,
     description: row.description || '',
     entryFile: row.entry_file || 'index.html',

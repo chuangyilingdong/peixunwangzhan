@@ -674,3 +674,18 @@
 .pl-thumb img{display:block;width:100%;height:100%;object-fit:cover}
 .pl-viewer-foot{display:flex;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid var(--line);color:#8b8498;font-size:12px}
 @media(max-width:900px){.works-page .works{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}.pl-viewer{padding:12px}}
+
+/* 翻页条 + 音频/内嵌 iframe（2026-09-19 晚第二版） */
+.pl-pager{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin:30px 0 6px}
+.pl-page{min-width:38px;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:10px;color:#5f586c;background:#fff;font-size:13px;font-weight:800;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease}
+.pl-page:hover:not(:disabled){border-color:#cdc3ef;color:var(--deep)}
+.pl-page.on{color:#fff;background:var(--purple);border-color:var(--purple)}
+.pl-page:disabled{opacity:.45;cursor:default}
+.pl-page-gap{color:#a09aa9;font-weight:800;padding:0 2px}
+.pl-page-info{margin-left:8px;color:#8b8498;font-size:12px}
+.pl-audio{width:min(560px,100%);margin:6vh auto;display:block}
+/* 外链作品在我们页面里跑（能否真跑取决于对方允不允许被 iframe 嵌入 —— 见 plOpenKind 注释） */
+.pl-frame{width:min(980px,100%);height:62vh;border:0;border-radius:12px;background:#fff}
+.pl-outlink{color:var(--deep);font-weight:800;text-decoration:underline;text-underline-offset:3px}
+/* 作者行右下角那一格：机构名（用户给的图2 红框位置） */
+.pl-author .pl-org{margin-left:auto;color:#a09aa9;font-weight:700}

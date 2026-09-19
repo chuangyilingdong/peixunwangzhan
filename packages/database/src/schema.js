@@ -1340,6 +1340,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS class_lesson_students (
 // P6-A01 AI provider policy and org budget migrations; safe for existing databases.
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN ai_provider_policy TEXT NOT NULL DEFAULT '{}'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+// 作品广场的**分类映射**（2026-09-19）：哪一类作品算「画布作品」、哪一类算「VibeCoding 作品」，
+// 由后台配置（用户口径：分类就两个，且要能配置）。JSON：{ "image": "CANVAS", "webpage": "VIBECODING", ... }；
+// 没配到的类型走代码里的默认表（见 services/plazaCategories.js）。
+try { db.exec("ALTER TABLE platform_settings ADD COLUMN plaza_category_map TEXT NOT NULL DEFAULT '{}'"); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
 // 算力网关（new-api）：地址与管理员账号；管理员密码走加密密钥文件（providerSecret.js），不落库。
 try { db.exec("ALTER TABLE platform_settings ADD COLUMN compute_gateway TEXT NOT NULL DEFAULT '{}'"); }
 catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }

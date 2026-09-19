@@ -8,6 +8,7 @@ import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
 import { assertKnownState, assertTransition } from '../../services/domainState.js';
+import { configuredPlazaCategoryMap, DEFAULT_PLAZA_CATEGORY_MAP, PLAZA_CATEGORIES, PLAZA_CATEGORY_LABEL, PLAZA_WORK_TYPES, plazaCategoryMap } from '../../services/plazaCategories.js';
 import { getAiProviderPolicy } from '../billingConfig.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
@@ -98,6 +99,39 @@ export async function handleWorks(ctx, part, method) {
     ).map((work) => ({ ...normalizeWork(work), studentLogin: work.student_login, packageName: work.package_name, sessionTitle: work.session_title, publicationState: work.publication_state, organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
+  // 作品广场的分类映射（2026-09-19 用户口径：「分类目前就 2 个…并且分类在后台可以配置」）。
+  // GET 回显「默认表 + 后台覆盖」的生效结果，PUT 只写覆盖项 —— 广场那边读同一份（services/plazaCategories.js），
+  // 所以后台改完立刻生效，不用发版。
+  if (part === '/plaza-category-map' && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    return {
+      map: plazaCategoryMap(),
+      configured: configuredPlazaCategoryMap(),
+      defaults: DEFAULT_PLAZA_CATEGORY_MAP,
+      types: PLAZA_WORK_TYPES,
+      categories: PLAZA_CATEGORIES,
+      labels: PLAZA_CATEGORY_LABEL,
+    };
+  }
+  if (part === '/plaza-category-map' && method === 'PUT') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const body = ctx.body || {};
+    const input = body.map && typeof body.map === 'object' ? body.map : body;
+    const clean = {};
+    for (const key of PLAZA_WORK_TYPES) {
+      const value = input?.[key];
+      if (value === undefined) continue;
+      if (!PLAZA_CATEGORIES.includes(value)) {
+        throw errors.badRequest(`「${key}」的分类只能是 CANVAS 或 VIBECODING`, 'PLAZA_CATEGORY_INVALID');
+      }
+      clean[key] = value;
+    }
+    const before = configuredPlazaCategoryMap();
+    q('UPDATE platform_settings SET plaza_category_map=?, updated_at=? WHERE id=1', [JSON.stringify(clean), nowIso()]);
+    audit(ctx, 'PLAZA_CATEGORY_MAP_UPDATE', 'PLATFORM', 'plaza-category-map', {}, { map: before }, { map: clean });
+    return { map: plazaCategoryMap(), configured: clean };
+  }
+
   if (part === '/works/export' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const { where, params } = platformWorkFilters(ctx);
