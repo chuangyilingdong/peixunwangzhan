@@ -91,12 +91,15 @@ patch('apps/desktop/src/main.ts',
   '引入登录门模块', 'lingdongDeepLink, runLingdongGate')
 patch('apps/desktop/src/main.ts',
   '  automaticCheck()\n  await reconcileBackend().catch(() => undefined)',
-  `  automaticCheck()
-  // 灵动ai 登录门：没有我们的账号、或这节课还没开始上课，就**不启动**创作环境。
+  `  // 灵动ai 登录门：没有我们的账号、或这节课还没开始上课，就**不启动**创作环境。
   // 学生登录后这里会向平台要这节课的运行时密钥与预设提示词（见 src/platform-gate.ts 文件头）。
+  // ⚠️ 必须在 automaticCheck() **之前**跑完：更新/恢复流程在它里面就可能把宿主起起来，
+  //    那一刻 process.env 里还没有网关密钥 —— 宿主起来后再补环境变量没用，每一轮都会
+  //    「API 密钥无效」（AUTH）。实测对照：密钥预置在进程环境里 → 成功；只靠登录门事后注入 → 失败。
   if ((await runLingdongGate(createMainWindow, isQuitting)).kind === 'quit') { app.quit(); return }
+  automaticCheck()
   await reconcileBackend().catch(() => undefined)`,
-  '在 reconcileBackend 之前插登录门', 'if ((await runLingdongGate(createMainWindow, isQuitting))')
+  '在 automaticCheck 之前插登录门', 'if ((await runLingdongGate(createMainWindow, isQuitting))')
 // 深链协议：安装器写进注册表，系统才知道怎么用 lingdong:// 拉起本客户端。
 // ⚠️ 单独一条、挂在 automaticCheck() 上 —— 挂在上面那个锚点上的话，登录门一插好锚点就没了。
 patch('apps/desktop/src/main.ts',

@@ -106,6 +106,38 @@ function pointDefaultModelToGateway(home: string): void {
   } catch (error) { console.error('灵动ai：写入默认模型失败（不影响登录）', error) }
 }
 
+/**
+ * 把运行时密钥写进 dsh 的**凭据文件**（`$DSH_HOME/.credentials.yaml` 的 `refs`）。
+ *
+ * ⚠️ **为什么不能只靠环境变量**：补丁里的渠道是 `apiKeyEnv: PLATFORM_GATEWAY_KEY`，而宿主进程
+ *    在启动时就把环境定下来了 —— 登录门事后往 `process.env` 里写，dsh 侧读不到。
+ *    实测对照：把密钥预置在进程环境里 → 消息成功、用量进账；只靠登录门事后注入 → 每一轮
+ *    「API 密钥无效」（AUTH），平台一条用量都没记到。
+ *    登录门跑在宿主启动**之前**，所以写这个文件是来得及的（而且它是 dsh 自己解析凭据引用的地方）。
+ *
+ * 只动 `refs:` 段里的一个键，文件其余内容（如 `records` 里的浏览器会话授权）原样保留；
+ * 改前留一份 .lingdong-backup。
+ */
+function writeGatewayCredential(home: string, key: string): void {
+  const file = join(home, '.credentials.yaml')
+  let text = ''
+  try { text = existsSync(file) ? readFileSync(file, 'utf8') : '' } catch { text = '' }
+  const entry = `  PLATFORM_GATEWAY_KEY: ${key}`
+  let next: string
+  if (/^refs:\s*$/mu.test(text)) {
+    next = /^ {2}PLATFORM_GATEWAY_KEY:.*$/mu.test(text)
+      ? text.replace(/^ {2}PLATFORM_GATEWAY_KEY:.*$/mu, entry)
+      : text.replace(/^refs:\s*$/mu, `refs:\n${entry}`)
+  } else {
+    next = `version: 1\nrefs:\n${entry}\n${text}`
+  }
+  try {
+    const backup = `${file}.lingdong-backup`
+    if (existsSync(file) && !existsSync(backup)) writeFileSync(backup, text)
+    writeFileSync(file, next)
+  } catch (error) { console.error('灵动ai：写入凭据失败', error) }
+}
+
 /** 铺好网关密钥与补丁层。**只有这节课真的在进行时**才会走到这里。 */
 function applyGateway(context: LingdongContext): void {
   const key = context.gateway?.key
@@ -118,6 +150,7 @@ function applyGateway(context: LingdongContext): void {
   if (existsSync(patch)) {
     try { writeFileSync(join(home, 'lingdong.patch.yml'), readFileSync(patch, 'utf8')) } catch (error) { console.error('灵动ai：写入补丁层失败', error) }
   }
+  writeGatewayCredential(home, String(key))
   pointDefaultModelToGateway(home)
   try {
     writeFileSync(join(app.getPath('userData'), 'lingdong-classroom.json'), JSON.stringify({

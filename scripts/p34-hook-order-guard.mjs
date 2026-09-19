@@ -82,10 +82,14 @@ function stripComments(source) {
       return line.slice(end + 2);
     }
     const trimmed = line.trimStart();
-    if (trimmed.startsWith('/*')) {
-      const end = line.indexOf('*/', line.indexOf('/*'));
-      if (end < 0) { inBlock = true; return ''; }
-      return line.slice(0, line.indexOf('/*')) + line.slice(end + 2);
+    // ⚠️ JSX 里的块注释写作 `{/* … */}`，行首是 `{` 而不是 `/*`：只认 `startsWith('/*')` 会漏掉它，
+    // 于是注释正文被当成代码扫，报出假的「未声明 setter」（2026-09-19：`main.jsx` 那句解释
+    // 「客户端侧注册 lingdong:// 见 deploy/desktop/（… + setAsDefaultProtocolClient）」就被误报）。
+    if (trimmed.startsWith('/*') || trimmed.startsWith('{/*')) {
+      const start = line.indexOf('/*');
+      const end = line.indexOf('*/', start + 2);
+      if (end < 0) { inBlock = true; return line.slice(0, start); }
+      return line.slice(0, start) + line.slice(end + 2);
     }
     if (trimmed.startsWith('//')) return '';
     return line.replace(/(^|[^:'"\`])\s*\/\/.*$/, '$1');
