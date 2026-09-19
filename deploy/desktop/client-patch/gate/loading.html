@@ -2,22 +2,30 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file: data:;" />
 <title>正在准备 · 灵动ai创作客户端</title>
 <style>
   :root { color-scheme: dark; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #000; color: #fff;
-    font: 14px/1.7 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: radial-gradient(120% 96% at 42% 34%, #7e1123 0%, #65101d 42%, #4d0a15 100%);
+    color: #f7f1f0; font: 14px/1.7 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
   main { text-align: center; }
-  .spin { width: 44px; height: 44px; margin: 0 auto 20px; border-radius: 50%;
-    border: 3px solid rgba(255,255,255,.14); border-top-color: #ff5c93; animation: spin 900ms linear infinite; }
+  .logo { display: block; width: 176px; margin: 0 auto 26px; }
+  .spin {
+    width: 46px; height: 46px; margin: 0 auto 20px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.16); border-top-color: #fd4c64; animation: spin 900ms linear infinite;
+  }
   @keyframes spin { to { transform: rotate(360deg) } }
   h1 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.02em; }
-  p { margin: 0; color: rgba(255,255,255,.5); font-size: 13px; }
+  p { margin: 0; color: rgba(255,255,255,.58); font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
+  <img class="logo" src="logo.png" alt="灵动ai" />
   <div class="spin"></div>
   <h1>正在准备你的创作环境…</h1>
   <p id="who">第一次启动会慢一点，之后就好</p>

@@ -2,33 +2,46 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file: data:;" />
 <title>等老师开始上课 · 灵动ai创作客户端</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --rose: #dd354b; --rose-deep: #c7253b; }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #000; color: #fff;
-    font: 14px/1.7 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; }
-  .aura { position: fixed; inset: 0; pointer-events: none;
-    background: radial-gradient(circle at 16% 22%, rgba(255,92,147,.14), transparent 46%),
-                radial-gradient(circle at 84% 78%, rgba(255,92,147,.09), transparent 42%); }
-  main { position: relative; width: min(460px, calc(100vw - 48px)); padding: 40px 36px 30px; text-align: center;
-    border: 1px solid rgba(255,255,255,.12); border-radius: 20px; background: rgba(255,255,255,.04); }
-  .dot { width: 54px; height: 54px; margin: 0 auto 18px; border-radius: 50%; display: grid; place-items: center;
-    background: rgba(255,92,147,.14); color: #ff5c93; font-size: 24px; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: radial-gradient(120% 96% at 42% 34%, #7e1123 0%, #65101d 42%, #4d0a15 100%);
+    color: #f7f1f0; font: 14px/1.7 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+  main {
+    width: min(520px, calc(100vw - 56px)); padding: 38px 38px 32px; text-align: center;
+    border: 1px solid rgba(255,255,255,.16); border-radius: 22px;
+    background: linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035));
+    box-shadow: 0 26px 60px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.10);
+    backdrop-filter: blur(14px);
+  }
+  .logo { display: block; width: 168px; margin: 0 auto 20px; }
+  .dot {
+    width: 58px; height: 58px; margin: 0 auto 16px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(253,76,100,.16); color: #fd4c64; font-size: 26px;
+  }
   h1 { margin: 0 0 10px; font-size: 22px; letter-spacing: -.02em; }
-  p { margin: 0 0 8px; color: rgba(255,255,255,.58); font-size: 13.5px; }
+  p { margin: 0 0 6px; color: rgba(255,255,255,.62); font-size: 13.5px; }
   .name { color: #fff; font-weight: 800; }
   .row { display: flex; gap: 12px; margin-top: 26px; }
-  button { flex: 1; padding: 13px; border: 0; border-radius: 12px; font: inherit; font-weight: 800; cursor: pointer; }
-  .primary { background: #ff5c93; color: #fff; }
-  .ghost { background: rgba(255,255,255,.08); color: rgba(255,255,255,.8); }
-  .tip { margin-top: 20px; color: rgba(255,255,255,.32); font-size: 11.5px; }
+  button {
+    flex: 1; height: 50px; border: 0; border-radius: 13px; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer;
+  }
+  .primary { color: #fff; background: linear-gradient(180deg, #e6394f, var(--rose-deep)); box-shadow: 0 12px 26px rgba(199,37,59,.32); }
+  .primary:hover:not(:disabled) { filter: brightness(1.06); }
+  .primary:disabled { opacity: .62; cursor: default; }
+  .ghost { color: rgba(255,255,255,.86); background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.16); }
+  .ghost:hover { background: rgba(255,255,255,.16); }
+  .tip { margin-top: 20px; color: rgba(255,255,255,.34); font-size: 11.5px; }
 </style>
 </head>
 <body>
-<div class="aura"></div>
 <main>
+  <img class="logo" src="logo.png" alt="灵动ai" />
   <div class="dot">⏳</div>
   <h1 id="title">老师还没有开始上课</h1>
   <p><span class="name" id="name"></span><span id="hint"></span></p>

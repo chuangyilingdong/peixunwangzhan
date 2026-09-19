@@ -18,6 +18,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** 本脚本所在目录（deploy/desktop）：⑤ 的图标源与 apply-client-gate.mjs 共用 client-patch/。 */
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 function arg(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -52,6 +56,14 @@ const edit = (file, transform) => {
   if (after === before) { changes.push([file, '无变化']); return; }
   if (!dryRun) fs.writeFileSync(full, after);
   changes.push([file, `已改（${before.length} → ${after.length} 字节）`]);
+};
+/** 整份覆盖（用于"上游那份是矢量稿、字符串替换一处也改不到"的文件）。 */
+const overwrite = (file, content) => {
+  const full = path.join(checkout, file);
+  if (!fs.existsSync(full)) { changes.push([file, '缺失，跳过']); return; }
+  if (fs.readFileSync(full, 'utf8') === content) { changes.push([file, '已是我们的牌（跳过）']); return; }
+  if (!dryRun) fs.writeFileSync(full, content);
+  changes.push([file, `整份换掉（${content.length} 字节）`]);
 };
 
 // ① 打包身份：productName 与安装包文件名（这两处是硬编码在上游配置里的）
@@ -109,10 +121,77 @@ for (const root of UI_ROOTS) {
 }
 changes.push([`${UI_ROOTS.join(' + ')} 里的 dsh 界面品牌串`, `扫 ${uiScanned} 个文件，命中并替换 ${uiChanged} 个`]);
 
+// ⑤ 应用图标：把 gate/ 里那张 1024×1024 铺到上游的三个图标位。
+//    ⚠️ 这一步以前是**手工复制**的（脚本末尾只留了一句提示），实测漏过一次 ——
+//       安装包里的图标与登录页/官网不是同一张图，很难发现，所以改成脚本自动铺。
+//    `macos` 那份上游本来就与 Windows 同图（历史遗留），这里保持一致。
+const iconSource = path.join(here, 'client-patch', 'gate', 'app-icon-1024.png');
+for (const name of ['icon-windows.png', 'icon-macos.png', 'icon.png']) {
+  const full = path.join(checkout, 'apps/desktop/resources', name);
+  if (!fs.existsSync(path.dirname(full))) { changes.push([`resources/${name}`, '目录不存在，跳过']); continue; }
+  const before = fs.existsSync(full) ? fs.readFileSync(full) : null;
+  const after = fs.readFileSync(iconSource);
+  if (before !== null && before.equals(after)) { changes.push([`resources/${name}`, '已是我们的图标（跳过）']); continue; }
+  if (!dryRun) fs.writeFileSync(full, after);
+  changes.push([`resources/${name}`, `已换成灵动ai图标（${after.length} 字节）`]);
+}
+
+// ⑥ dsh 界面里的字标：**字符串替换改不动** —— 上游那幅字标是矢量稿，
+//    "deepseek" 那几个字母是 SVG path 而不是文本节点（上一轮就是卡在这：扫了 4470 个文件、
+//    命中 150 个，学生打开客户端看到的还是上游字标）。所以直接换"字标产地"：
+//      · web/boot-page.ts —— 启动页（framework-free，dsh 起来前第一眼看到的那屏）；
+//      · ui-brand-official/Brand.tsx —— 侧栏品牌位（mark + name 两个 slot 的占用者）；
+//      · locale 里的 `brand.localBuild` —— 非 official 构建时侧栏回退显示的那个名字。
+//    ⚠️ 侧栏显示哪套由 `DSH_CLIENT_BUILD_PROFILE` 决定（见 ui-brand-official/README）：
+//      official → Brand.tsx 那两个组件；其它取值 → 回退成 `brand.localBuild` 这个名字。
+//      两条路都要是我们的牌，所以两边都换 —— 只换一边的话换个构建档就露馅。
+const UI_WORDMARK = '灵动ai';
+edit('packages/client/web/src/boot-page.ts', (text) =>
+  text.replace("div(css.wordmark, 'HARNESS')", `div(css.wordmark, '${UI_WORDMARK}')`));
+edit('packages/client/locale/src/locales/zh.ts', (text) =>
+  text.replace("'brand.localBuild': 'DSH 本地构建',", `'brand.localBuild': '${UI_WORDMARK}',`));
+edit('packages/client/locale/src/locales/en.ts', (text) =>
+  text.replace("'brand.localBuild': 'DSH Local Build',", "'brand.localBuild': 'LingdongAI',"));
+overwrite('packages/client/ui-brand-official/src/client/Brand.tsx', `/**
+ * 灵动ai 的品牌位（2026-09-19 起由本仓库的 deploy/desktop/rebrand-client.mjs 整份覆盖）。
+ *
+ * 为什么整份换掉：上游这份字标是**矢量稿** —— "deepseek" 那几个字母是 SVG path，
+ * 不是文本节点，所以 \`DeepSeek Harness → 灵动ai\` 那种字符串替换一处也改不到。
+ * 这里保持同名同签名，只换实现：调用方（同包 index.ts 的 slot 注册）一行都不用改。
+ */
+import type { SidebarBrandMarkOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
+
+/**
+ * 侧栏品牌图标：红底圆角方 + 橙色 Ai（与登录页、应用图标同一支红）。
+ * 用内联 SVG 而不是图片资源：客户端里没有现成的静态资源目录可挂，且这个尺寸下
+ * 矢量比位图稳。
+ * @param props - 宿主给的尺寸（正方形，px）
+ */
+export function OfficialBrandMark({ size }: SidebarBrandMarkOwnerProps) {
+  return (
+    <svg width={size} height={size} viewBox='0 0 32 32' aria-hidden='true' role='presentation'>
+      <rect width='32' height='32' rx='9' fill='#7e1123' />
+      <text x='16' y='22' textAnchor='middle' fontFamily='system-ui, sans-serif' fontSize='13' fontWeight='700' fill='#ff8a00'>Ai</text>
+    </svg>
+  )
+}
+
+/**
+ * 侧栏品牌名：我们的字标。中文字用 \`currentColor\` 跟着侧栏主题走（深色底上是白字），
+ * 只有 \`ai\` 用品牌橙 —— 侧栏有深/浅两套主题，写死蓝色会在深色底上糊成一片。
+ */
+export function OfficialBrandName() {
+  return (
+    <span style={{ fontWeight: 800, letterSpacing: '-.02em' }}>
+      灵动<span style={{ color: '#ff8a00' }}>ai</span>
+    </span>
+  )
+}
+`);
+
 console.log(`检出：${checkout}${dryRun ? '（--dry-run，不写入）' : ''}`);
 console.log(`品牌：${BRAND.productName}（英文 ${BRAND.productNameEn}）/ 安装包 ${BRAND.artifactName}`);
 for (const [file, result] of changes) console.log(`  · ${file} —— ${result}`);
-console.log('\n⚠️ 还要手工确认的两件（本脚本不动二进制资源）：');
-console.log('   ① 图标：apps/desktop/resources/icon-windows.png（换我们的 1024×1024 PNG）');
-console.log('   ② 安装器侧栏图：apps/desktop/installer/assets/brand*.png 与 uninstaller-sidebar.png');
-console.log(`   ③ 关于/署名：请在 About 里保留一句「${BRAND.attribution}」`);
+console.log('\n⚠️ 还要手工确认的：');
+console.log('   ① 关于/署名：请在 About 里保留一句「' + BRAND.attribution + '」');
+console.log('   ② 安装器侧栏图：apps/desktop/installer/assets/brand*.png 与 uninstaller-sidebar.png（本脚本不动安装器资源）');

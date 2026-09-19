@@ -75,31 +75,50 @@ contextBridge.exposeInMainWorld('lingdong', {
   '暴露 window.lingdong.gate')
 
 // ④ main.ts：在启动后端之前过登录门 + 注册深链协议
-// 先去重：早期版本只插过 `import { runLingdongGate }`，加 deepLink 后会与新的那条并存（踩过）
+// 先去重（两类，都实测踩过）：
+//   (a) 早期版本只插过 `import { runLingdongGate }`，加 deepLink 后会与新的那条并存；
+//   (b) 早期版本的登录门**没有第三个参数**（`resetHost`：过门后把可能已经起来的宿主停一次，
+//       见 platform-gate.ts 的 @param resetHost）。这里必须**原地换掉那一行**：
+//       若走下面那条按锚点插入的路，旧的那一行会留在上面 —— 登录门会弹两次。
 const mainFile = join(checkout, 'apps/desktop/src/main.ts')
+const STALE_GATE = "if ((await runLingdongGate(createMainWindow, isQuitting)).kind === 'quit') { app.quit(); return }"
+const GATE_CALL = 'if ((await runLingdongGate(createMainWindow, isQuitting, () => backend.stop())).kind === \'quit\') { app.quit(); return }'
+let gateInstalled = false
 if (existsSync(mainFile)) {
+  let current = readFileSync(mainFile, 'utf8')
   const stale = "import { runLingdongGate } from './platform-gate.ts'\n"
-  const current = readFileSync(mainFile, 'utf8')
   if (current.includes(stale)) {
-    write('apps/desktop/src/main.ts', current.replace(stale, ''))
+    current = current.replace(stale, '')
     report.push('✓  apps/desktop/src/main.ts：清掉重复的旧 import')
   }
+  if (current.includes(STALE_GATE)) {
+    current = current.replace(STALE_GATE, GATE_CALL)
+    report.push('✓  apps/desktop/src/main.ts：登录门升级到「过门后重启一次宿主」')
+  }
+  gateInstalled = current.includes(GATE_CALL)   // 升级过 / 本来就是新版
+  if (current !== readFileSync(mainFile, 'utf8')) write('apps/desktop/src/main.ts', current)
 }
-patch('apps/desktop/src/main.ts',
+// 只有**全新检出**（既没有旧那行、也没有新那行）才走这里按锚点插入。
+// ⚠️ 不能无条件插：旧的那行还在时这样插会**多出一行登录门**（过门两次）。
+if (!gateInstalled) {
+  patch('apps/desktop/src/main.ts',
   "import { fileURLToPath } from 'node:url'",
   "import { fileURLToPath } from 'node:url'\nimport { lingdongDeepLink, runLingdongGate } from './platform-gate.ts'",
   '引入登录门模块', 'lingdongDeepLink, runLingdongGate')
-patch('apps/desktop/src/main.ts',
+  patch('apps/desktop/src/main.ts',
   '  automaticCheck()\n  await reconcileBackend().catch(() => undefined)',
   `  // 灵动ai 登录门：没有我们的账号、或这节课还没开始上课，就**不启动**创作环境。
   // 学生登录后这里会向平台要这节课的运行时密钥与预设提示词（见 src/platform-gate.ts 文件头）。
   // ⚠️ 必须在 automaticCheck() **之前**跑完：更新/恢复流程在它里面就可能把宿主起起来，
   //    那一刻 process.env 里还没有网关密钥 —— 宿主起来后再补环境变量没用，每一轮都会
   //    「API 密钥无效」（AUTH）。实测对照：密钥预置在进程环境里 → 成功；只靠登录门事后注入 → 失败。
-  if ((await runLingdongGate(createMainWindow, isQuitting)).kind === 'quit') { app.quit(); return }
+  // ⚠️ 第三个参数 () => backend.stop() 是**兜底**：宿主可能已经从别的路径（更新/恢复、
+  //    策略检查）起来了，过门后停一次，让下面的 reconcileBackend() 用刚写好的密钥重新起。
+  if ((await runLingdongGate(createMainWindow, isQuitting, () => backend.stop())).kind === 'quit') { app.quit(); return }
   automaticCheck()
   await reconcileBackend().catch(() => undefined)`,
-  '在 automaticCheck 之前插登录门', 'if ((await runLingdongGate(createMainWindow, isQuitting))')
+  '在 automaticCheck 之前插登录门（含过门后重启宿主）', 'runLingdongGate(createMainWindow, isQuitting, () => backend.stop())')
+}
 // 深链协议：安装器写进注册表，系统才知道怎么用 lingdong:// 拉起本客户端。
 // ⚠️ 单独一条、挂在 automaticCheck() 上 —— 挂在上面那个锚点上的话，登录门一插好锚点就没了。
 patch('apps/desktop/src/main.ts',

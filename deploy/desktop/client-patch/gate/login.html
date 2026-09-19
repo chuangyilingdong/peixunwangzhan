@@ -2,49 +2,130 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+<!-- img-src 必须放开：这页要用随包分发的吉祥物与字标（file: 协议）。
+     参考图由用户提供（登录页红底 + 吉祥物 + 右侧玻璃卡），字体与间距按窗口尺寸自适应。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file: data:;" />
 <title>登录 · 灵动ai创作客户端</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --rose: #dd354b;          /* 登录按钮（参考图取色） */
+    --rose-deep: #c7253b;
+    --pink: #fd4c64;          /* 标语里的 Ai */
+    --ink: #f7f1f0;           /* 标语白字 */
+    --edge: rgba(255,255,255,.16);
+    --field: rgba(255,255,255,.09);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #000; color: #fff;
-    font: 14px/1.7 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; }
-  .aura { position: fixed; inset: 0; pointer-events: none;
-    background: radial-gradient(circle at 12% 18%, rgba(255,92,147,.16), transparent 45%),
-                radial-gradient(circle at 88% 82%, rgba(255,92,147,.10), transparent 42%); }
-  main { position: relative; width: min(420px, calc(100vw - 48px)); padding: 38px 34px 30px; border: 1px solid rgba(255,255,255,.12);
-    border-radius: 20px; background: rgba(255,255,255,.04); }
-  .brand { display: flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
-  .brand i { width: 12px; height: 12px; border-radius: 50%; background: #ff5c93; }
-  h1 { margin: 18px 0 6px; font-size: 24px; letter-spacing: -.02em; }
-  p.lead { margin: 0 0 22px; color: rgba(255,255,255,.55); font-size: 13px; }
-  label { display: block; margin-bottom: 14px; color: rgba(255,255,255,.72); font-size: 12.5px; font-weight: 700; }
-  input { width: 100%; margin-top: 7px; padding: 12px 14px; border: 1px solid rgba(255,255,255,.16); border-radius: 12px;
-    background: rgba(255,255,255,.06); color: #fff; font: inherit; outline: none; }
-  input:focus { border-color: rgba(255,92,147,.6); }
-  button { width: 100%; margin-top: 8px; padding: 13px; border: 0; border-radius: 12px; background: #ff5c93; color: #fff;
-    font: inherit; font-weight: 800; cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-  .error { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: rgba(255,92,147,.12);
-    color: #ffb3cd; font-size: 12.5px; }
+  body {
+    margin: 0; min-height: 100vh; display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(352px, 38%, 508px);
+    /* 深红底：中心一圈微亮、四角压暗（参考图取色 #7e1123 → #4a0a15） */
+    background:
+      radial-gradient(120% 96% at 42% 34%, #7e1123 0%, #65101d 42%, #4d0a15 100%);
+    color: var(--ink);
+    font: 14px/1.7 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── 左：吉祥物 + 标语 ─────────────────────────────────────────── */
+  .stage { position: relative; min-width: 0; }
+  .mascot {
+    position: absolute; left: 0; bottom: 0;
+    height: 96%; width: auto; max-width: 92%;
+    /* 右/上两条边在图里已经羽化过（见生成脚本），贴在窗口左下角不会有缝 */
+    user-select: none; -webkit-user-drag: none;
+  }
+  .slogan { position: absolute; left: 46%; bottom: 28%; z-index: 1; }
+  .slogan p {
+    margin: 0; color: var(--ink); font-size: clamp(20px, 2.35vw, 32px);
+    font-weight: 900; letter-spacing: .01em; line-height: 1.5;
+    text-shadow: 0 3px 18px rgba(0,0,0,.35);
+  }
+  .slogan em { font-style: normal; color: var(--pink); }
+  /* 参考图那句标语下的手绘红勾 */
+  .slogan .stroke { display: block; width: 74%; height: auto; margin: 6px 0 0 4px; opacity: .85; }
+
+  /* ── 右：登录卡 ────────────────────────────────────────────────── */
+  .panel { display: grid; align-content: center; gap: 14px; padding: 32px clamp(24px, 3vw, 52px); }
+  .card {
+    padding: clamp(24px, 2.6vw, 38px) clamp(22px, 2.4vw, 34px) clamp(26px, 2.8vw, 40px);
+    border: 1px solid var(--edge); border-radius: 22px;
+    background: linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035));
+    box-shadow: 0 26px 60px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.10);
+    backdrop-filter: blur(14px);
+  }
+  .logo { display: block; width: 62%; max-width: 230px; min-width: 132px; margin: 2px auto 22px; }
+  .lead { margin: 0 0 22px; color: rgba(255,255,255,.62); font-size: 12.5px; text-align: center; }
+  .error {
+    margin: 0 0 14px; padding: 10px 13px; border-radius: 11px; font-size: 12.5px;
+    background: rgba(0,0,0,.26); border: 1px solid rgba(253,76,100,.45); color: #ffc9d3;
+  }
   .error[hidden] { display: none; }
-  .foot { margin-top: 18px; color: rgba(255,255,255,.35); font-size: 11.5px; text-align: center; }
+
+  .field { position: relative; display: block; margin-bottom: 14px; }
+  .field .ico {
+    position: absolute; left: 15px; top: 50%; width: 17px; height: 17px; margin-top: -9px;
+    fill: rgba(255,255,255,.72); pointer-events: none;
+  }
+  .field input {
+    width: 100%; height: 54px; padding: 0 16px 0 44px;
+    border: 1px solid rgba(255,255,255,.14); border-radius: 14px;
+    background: var(--field); color: #fff; font: inherit; font-size: 14px; outline: none;
+    transition: border-color .18s ease, background .18s ease;
+  }
+  .field input::placeholder { color: rgba(255,255,255,.55); }
+  .field input:focus { border-color: rgba(253,76,100,.62); background: rgba(255,255,255,.13); }
+
+  button {
+    width: 100%; height: 56px; margin-top: 12px;
+    border: 0; border-radius: 14px; color: #fff;
+    background: linear-gradient(180deg, #e6394f, var(--rose-deep));
+    font: inherit; font-size: 16px; font-weight: 800; letter-spacing: .06em; cursor: pointer;
+    box-shadow: 0 14px 30px rgba(199,37,59,.34);
+    transition: filter .18s ease, transform .12s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.06); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .62; cursor: default; }
+
+  .foot { margin: 0; color: rgba(255,255,255,.34); font-size: 11.5px; text-align: center; }
+
+  /* 窄窗口（学生把窗口拖小了）：吉祥物让位给登录卡，别互相压 */
+  @media (max-width: 900px) {
+    body { grid-template-columns: minmax(0, 1fr); }
+    .stage { display: none; }
+    .panel { padding: 28px 20px; }
+  }
 </style>
 </head>
 <body>
-<div class="aura"></div>
-<main>
-  <div class="brand"><i></i>灵动ai创作客户端</div>
-  <h1>学生登录</h1>
-  <p class="lead">用你的学生账号登录；老师开始上课后就能进入课堂。</p>
-  <p class="error" id="error" hidden></p>
-  <form id="form">
-    <label>账号<input id="login" autocomplete="username" autofocus /></label>
-    <label>密码<input id="password" type="password" autocomplete="current-password" /></label>
+<div class="stage">
+  <img class="mascot" src="mascot.png" alt="" />
+  <div class="slogan">
+    <p>培养青少年<em>Ai</em>思维，<br />掌握<em>Ai</em>时代的创造方式。</p>
+    <svg class="stroke" viewBox="0 0 300 22" fill="none" aria-hidden="true">
+      <path d="M4 17C58 6 132 2 296 9" stroke="#c0223b" stroke-width="3.4" stroke-linecap="round" />
+    </svg>
+  </div>
+</div>
+<div class="panel">
+  <form class="card" id="form">
+    <img class="logo" src="logo.png" alt="灵动ai" />
+    <p class="lead">用你的账号登录；老师开始上课后就能进入课堂。</p>
+    <p class="error" id="error" hidden></p>
+    <label class="field">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4.2 4.2 0 1 0 0-8.4 4.2 4.2 0 0 0 0 8.4Zm0 1.9c-4.1 0-7.4 2.2-7.4 4.9V21h14.8v-2.2c0-2.7-3.3-4.9-7.4-4.9Z"/></svg>
+      <input id="login" placeholder="账号" autocomplete="username" autofocus />
+    </label>
+    <label class="field">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a1.6 1.6 0 0 0-1.6 1.6v8.8A1.6 1.6 0 0 0 7 21h10a1.6 1.6 0 0 0 1.6-1.6v-8.8A1.6 1.6 0 0 0 17 9Zm-7-2a2 2 0 1 1 4 0v2h-4V7Zm3.6 8.6a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0Z"/></svg>
+      <input id="password" type="password" placeholder="密码" autocomplete="current-password" />
+    </label>
     <button id="submit" type="submit">登录</button>
   </form>
-  <div class="foot">登录信息只保存在这台电脑上</div>
-</main>
+  <p class="foot">登录信息只保存在这台电脑上</p>
+</div>
 <script>
   const error = document.getElementById('error')
   const form = document.getElementById('form')

@@ -8,7 +8,9 @@
  * 所以这个守卫现在钉的是**页面归属**这件事：
  *   · 老工作台（平台自己的对话工作台）真的没了：文件、导出、路由都不在，
  *     也不存在任何一条指向它的入口 —— 否则「抛弃」只是嘴上说说；
- *   · VibeCoding 的入口就是「进入创作环境」（走宿主脚本拉起 dsh）+「提交作品」；
+ *   · VibeCoding 的入口是「打开创作客户端」（`lingdong://` 深链）+「下载客户端」——
+ *     2026-09-19 用户口径：「网站上的 dsh 就不要了，以后 vibecoding 就是在客户端进行」，
+ *     所以网页侧**不再拉起任何创作环境**（旧版这里是「进入创作环境」+「提交作品」）；
  *   · 三个功能（对话 / 写代码 / 做网页）做在 **dsh 那边**（见 deploy/dsh-student/feature-plugin）：
  *     输入框那一排三个按钮，点了就切，宿主侧把当前功能放进系统提示词 —— 不在平台里再造一套；
  *   · 后端的会话/产物/提交仍然在（dsh 那条路在用），所以老链路那部分提示词分档的断言保留，
@@ -94,7 +96,7 @@ check('会话下发带上了 mode（界面才能显示已选哪个）', /mode: n
 check('库里有这一列：新库建表带 mode，老库走 ALTER',
   /mode TEXT,/.test(read('packages/database/src/schema.js')) && /ALTER TABLE vibecoding_conversations ADD COLUMN mode TEXT/.test(read('packages/database/src/schema.js')));
 
-/* ── ④ 页面归属：老工作台真的没了，入口只走创作环境（dsh）─────────────────── */
+/* ── ④ 页面归属：老工作台真的没了；创作环境只在客户端，网页只负责把学生送过去 ────── */
 const classroom = read('packages/shared/src/classroom.jsx');
 const sharedIndex = read('packages/shared/src/index.js');
 const siteMain = read('apps/website/src/main.jsx');
@@ -104,12 +106,20 @@ check('老工作台的两个文件已删除', !fs.existsSync(path.join(root, 'pa
 check('shared 不再导出它们', !/vibecodingWorkspace\.jsx/.test(sharedIndex) && !/vibecodingStream\.js/.test(sharedIndex));
 check('网站不再有 /learn/vibecoding 路由（否则「抛弃」只是嘴上说说）',
   !/learn\/vibecoding/.test(siteMain) && !/VibeCodingWorkspace|VibeCodingClassroom/.test(siteMain));
-check('入口只走创作环境：VibeCoding 那一排就是「进入创作环境」+「提交作品」',
-  /\{runtime\.ready && offersVibe \? <RuntimeActions/.test(classroom));
+check('VibeCoding 的入口只把学生送到客户端（打开 / 下载），网页不拉起任何创作环境',
+  /\{offersVibe \? <ClientEntryActions lesson=\{lesson\} canEnter=\{canEnterVibe\} \/> : null\}/.test(classroom));
 check('平台里不再有「建对话再跳页面」这条入口（老工作台的路）',
   !/student\/vibecoding\/conversations/.test(classroom) && !/learn\/vibecoding/.test(classroom));
-check('这台机器开不了创作环境时，兜底按钮把原因写在按钮上（不留一个没头没尾的点不动按钮）',
-  /创作环境暂不可用/.test(classroom));
+// 2026-09-19 用户口径：「网站上的 dsh 就不要了，以后 vibecoding 就是在客户端进行」。
+// 这一条是**反向**自检：网页侧不许再出现任何拉起创作环境的调用（launch / deliverables / submit），
+// 也不许再有按机器状态变脸的「创作环境暂不可用」按钮 —— 那两种都说明网页又接管了创作环境。
+check('网页不再拉起创作环境：没有 launch / deliverables / submit，也没有「创作环境暂不可用」',
+  !fs.existsSync(path.join(root, 'packages/shared/src/runtimeWorkspace.jsx'))
+  && !/student\/runtime\/(launch|deliverables|submit)/.test(classroom)
+  && !/创作环境暂不可用/.test(classroom));
+check('「打开创作客户端」走的是 lingdong:// 深链，且下载入口永远在旁边',
+  /CLIENT_DEEP_LINK = 'lingdong:\/\/open'/.test(read('packages/shared/src/clientEntry.jsx'))
+  && /下载客户端/.test(read('packages/shared/src/clientEntry.jsx')));
 
 // 预览仍在沙箱 iframe 里：它现在服务的是**作品广场与机构端课堂详情**（学生工作台已删）
 const frame = read('packages/shared/src/console/PreviewFrame.jsx');

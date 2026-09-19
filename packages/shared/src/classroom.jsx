@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader } from './ui.jsx';
-import { RuntimeActions, useRuntimeStatus } from './runtimeWorkspace.jsx';
+import { ClientEntryActions } from './clientEntry.jsx';
 
 export function useData(load, deps = []) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
@@ -178,9 +178,6 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
   const [busy, setBusy] = useState(null);
   const [message, setMessage] = useState('');
   const [selectedCourseId, setSelectedCourseId] = useState(null);
-  // 学生创作环境（dsh）能不能用：能用就把 VibeCoding 课的入口换成它（见 runtimeWorkspace.jsx）。
-  // ⚠️ 这个 hook 必须在下面那些提前 return **之前**调用，否则偶尔会「少一个 hook」直接崩。
-  const runtime = useRuntimeStatus(api);
   if (classroom.loading) return <Loading label="正在读取课程中心…" />;
   if (classroom.error) return <ErrorState error={classroom.error} onRetry={classroom.refresh} />;
   const courses = (classroom.data?.classroomCourses || []).filter((course) => (course.lessons || []).length);
@@ -192,8 +189,9 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
   const modesOf = (lesson) => (lesson?.deliveryModes?.length ? lesson.deliveryModes : [lesson?.deliveryMode || 'CANVAS'])
     .filter((mode) => Object.hasOwn(DELIVERY_MODE_LABEL, mode));
 
-  // 只负责画布入口。VibeCoding 的入口是「进入创作环境」（RuntimeActions，走宿主脚本拉起 dsh），
-  // 与画布不是同一条流程，所以**不在这里按课时类型分支** —— 那个分支写法 2026-09-17 修过一次
+  // 只负责画布入口。VibeCoding 的入口是「打开创作客户端」（ClientEntryActions）——
+  // 2026-09-19 起创作环境只在客户端里，网页不再拉起 dsh，也与画布不是同一条流程；
+  // 所以**不在这里按课时类型分支** —— 那个分支写法 2026-09-17 修过一次
   //（一个课时两种都开时，按课时单值推会把 VibeCoding 按钮送进画布）。
   async function enter(lesson) {
     if (!lesson.canStart) return;
@@ -257,26 +255,18 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
               <span className={'status ' + (badge.tone === 'muted' ? '' : badge.tone)}>{badge.text}</span>
             </div>
             <div className="lesson-detail-action">
-              {/* VibeCoding 课（2026-09-17 口径变更）：**学生干活的地方就是创作环境（dsh）**。
-                  平台自己那套老工作台已删（用户口径：「我需要的是 dsh 那个页面来完成这些工作，
-                  抛弃掉以前的老 vibecoding」），所以这里不放任何指向平台内对话页的按钮 ——
-                  入口就是「进入创作环境」+「提交作品」。
-                  两种都开时**两个入口并列**（画布按钮 + VibeCoding 那两个），学生自己挑。 */}
-              {runtime.ready && offersVibe ? <RuntimeActions api={api} lesson={lesson} canEnter={canEnterVibe} /> : null}
+              {/* VibeCoding 课（2026-09-19 口径）：**创作环境只在客户端里**。
+                  用户原话「网站上的 dsh 就不要了，以后 vibecoding 就是在客户端进行」——
+                  网页这一屏只把学生送到客户端（打开 / 下载），不拉起任何创作环境，
+                  也不再有「提交作品」（作品上传改由客户端做，见交接文档）。
+                  两种都开时**两个入口并列**（画布按钮 + 客户端那两个），学生自己挑。 */}
+              {offersVibe ? <ClientEntryActions lesson={lesson} canEnter={canEnterVibe} /> : null}
               {offersCanvas ? <button className={canEnterCanvas ? 'primary-button' : 'secondary-button'} disabled={!canEnterCanvas || busy === lesson.id} onClick={() => enter(lesson)}>
                 {busy === lesson.id ? '正在进入…'
                   : canEnterCanvas ? (lesson.continueProject ? '继续创作' : '进入课堂')
                     : lesson.participationStatus === 'COMPLETED' ? '已完课'
                       : lesson.hasGrant === false ? '未授权'
                         : '等待开课'}
-              </button> : null}
-              {/* 只开 VibeCoding、而这台机器现在开不了创作环境时的兜底：按钮点不动，但**把原因说在按钮上**
-                  （别让卡片空着，也别让学生以为是自己点错了）。 */}
-              {offersVibe && !runtime.ready ? <button className="secondary-button" disabled>
-                {busy === lesson.id ? '正在进入…'
-                  : lesson.participationStatus === 'COMPLETED' ? '已完课'
-                    : lesson.hasGrant === false ? '未授权'
-                      : canEnterVibe ? '创作环境暂不可用' : '等待开课'}
               </button> : null}
             </div>
           </article>;

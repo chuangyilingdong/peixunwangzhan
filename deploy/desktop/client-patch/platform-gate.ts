@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
+import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
 
 /**
  * 灵动ai 创作客户端的「登录门」（2026-09-19）。
@@ -13,14 +14,20 @@ import { app, ipcMain, type BrowserWindow } from 'electron'
  *   ③ **没有正在进行的课堂就不启动 dsh**（老师没点「立即上课」→ 学生只看到「等老师开始上课」）。
  *      这不只是"不让进"：没有密钥，dsh 就算起来了也调不动网关（网关每次调用重新过门禁）。
  *
- * 网关注入的两个落点（都已验证可行）：
- *   · **环境变量**：Electron 主进程的 `process.env` 会被 `desktopNodeEnvironment()` 原样传给 dsh，
- *     所以这里把 `PLATFORM_GATEWAY_KEY` / `PLATFORM_GATEWAY_BASE_URL` 写进 `process.env`；
+ * 网关注入的三个落点：
+ *   · **环境变量**（**承重的那一条**）：Electron 主进程的 `process.env` 会被
+ *     `desktopNodeEnvironment()` 原样传给 dsh，所以这里把 `PLATFORM_GATEWAY_KEY` /
+ *     `PLATFORM_GATEWAY_BASE_URL` 写进 `process.env`；而宿主进程的环境是 **spawn 那一刻**
+ *     定下来的，所以过门之后还要 `resetHost()` 把可能已经起来的宿主停一次（见 runLingdongGate）。
  *   · **补丁层**：把随包的 `lingdong.patch.yml` 写到 `$DSH_HOME/lingdong.patch.yml`，由桌面宿主
  *     放进 `patchFiles`（见 apps/desktop-host/src/index.ts 的三行改动）。
  *     ⚠️ **不要写 profile 里的 `cordis.patch.yml`**：桌面宿主显式传的是 `patchFiles: []`，而
  *        `profile-context.ts` 是 `initialProfile?.patches ?? loadOptionalPatches(...)` ——
  *        空数组不是 undefined，所以那个文件**永远不会被读**；而且 app 的恢复流程还会把它重置并备份掉。
+ *   · **凭据文件的 `refs`**：一并写上（见 writeGatewayCredential），但**别把它当承重的那一条** ——
+ *     补丁层声明的是 `apiKeyEnv: PLATFORM_GATEWAY_KEY`（读环境变量），而不是 `apiKeyRef`，
+ *     所以 `refs` 里那个键现在我们这条链路上**没有任何读方**。上一轮"写凭据文件也没用"的结论
+ *     就来自这里，那是**实验设计的问题**，不是"宿主起太早"的证据。
  */
 const GATE_DIR = app.isPackaged
   ? join(process.resourcesPath, 'gate')
@@ -47,6 +54,25 @@ type GateOutcome = { kind: 'enter' } | { kind: 'quit' }
 let notifyDeepLink: (() => void) | null = null
 export function lingdongDeepLink(): void {
   try { notifyDeepLink?.() } catch { /* 深链只是便利，出错不该影响客户端 */ }
+}
+
+/** 门当前用的那个窗口（`show()` 里更新），只给 `matchTitleBarToGate` 用。 */
+let currentGateWindow: BrowserWindow | null = null
+
+/**
+ * Windows 的主窗口是无边框的（`titleBarStyle: 'hidden'` + `titleBarOverlay`）：
+ * 最小化/最大化/关闭那三个系统按钮画在**一层纯色条**上，默认颜色是深灰 —— 压在我们这张
+ * 深红页面顶上会是一条很明显的色带（参考图里那条正好是深红）。我们的三个页面
+ * （登录 / 等老师开始上课 / 准备中）是同一支深红，所以过门时统一把它调成页面顶边的颜色。
+ * 非 Windows 与「窗口不是无边框」的两种情况都会抛/无意义，一律忽略。
+ */
+function matchTitleBarToGate(): void {
+  if (process.platform !== 'win32') return
+  try {
+    const window = currentGateWindow
+    if (window === null || window.isDestroyed()) return
+    window.setTitleBarOverlay({ color: '#5c0e1b', symbolColor: '#ffd9de', height: WINDOWS_TITLEBAR_HEIGHT })
+  } catch { /* 非 frameless 窗口没有叠加层，忽略 */ }
 }
 
 const sessionFile = (): string => join(app.getPath('userData'), 'lingdong-session.json')
@@ -109,11 +135,11 @@ function pointDefaultModelToGateway(home: string): void {
 /**
  * 把运行时密钥写进 dsh 的**凭据文件**（`$DSH_HOME/.credentials.yaml` 的 `refs`）。
  *
- * ⚠️ **为什么不能只靠环境变量**：补丁里的渠道是 `apiKeyEnv: PLATFORM_GATEWAY_KEY`，而宿主进程
- *    在启动时就把环境定下来了 —— 登录门事后往 `process.env` 里写，dsh 侧读不到。
- *    实测对照：把密钥预置在进程环境里 → 消息成功、用量进账；只靠登录门事后注入 → 每一轮
- *    「API 密钥无效」（AUTH），平台一条用量都没记到。
- *    登录门跑在宿主启动**之前**，所以写这个文件是来得及的（而且它是 dsh 自己解析凭据引用的地方）。
+ * ⚠️ **这不是承重的那一条**（承重的是 `process.env` + 过门后重启宿主，见文件头与
+ *    runLingdongGate 的 @param resetHost）：补丁层声明的是 `apiKeyEnv: PLATFORM_GATEWAY_KEY`，
+ *    读的是环境变量；`refs` 里这个键目前**没有读方**。留着它是零成本的保险 ——
+ *    哪天有人把补丁层改成 `apiKeyRef`，这条链路就已经是通的。
+ *    上一轮"写凭据文件也没用"的结论因此不能当成"宿主起太早"的证据（那是实验设计的问题）。
  *
  * 只动 `refs:` 段里的一个键，文件其余内容（如 `records` 里的浏览器会话授权）原样保留；
  * 改前留一份 .lingdong-backup。
@@ -164,8 +190,20 @@ function applyGateway(context: LingdongContext): void {
  * 跑完登录门：返回 `enter` 才继续启动 dsh；返回 `quit` 表示该退出应用。
  * @param createWindow 应用自己的主窗口工厂（借它显示我们的页面）
  * @param isQuitting 应用是否正在退出
+ * @param resetHost **把已经起来的创作环境停掉**（宿主控制器 `backend.stop()`）。
+ *   为什么需要它：密钥必须赶在宿主**起进程的那一刻**就已经在环境里（宿主进程的环境是
+ *   spawn 时定下来的，事后写 `process.env` 到不了它那一侧）。门跑在 `reconcileBackend()`
+ *   之前，按理说天然赶得上 —— 但实测对不上（密钥预置在进程环境里 → 消息成功、用量进账；
+ *   只靠登录门注入 → 每轮「API 密钥无效」，而平台一条用量都没有）。说明宿主还在**别的路径**
+ *   上先起来过（更新/恢复、策略检查都会走到 `backend.start`）。与其去赌"哪条路径先起"，
+ *   不如在过门之后**明确停一次**：后面那条 `reconcileBackend()` 会用刚写好密钥的环境
+ *   重新起一个。宿主本来没起过时 `stop()` 是安全的空操作。
  */
-export async function runLingdongGate(createWindow: () => BrowserWindow, isQuitting: () => boolean): Promise<GateOutcome> {
+export async function runLingdongGate(
+  createWindow: () => BrowserWindow,
+  isQuitting: () => boolean,
+  resetHost: () => Promise<void>,
+): Promise<GateOutcome> {
   let waiting: ((action: GateAction) => void) | null = null
   const nextAction = (): Promise<GateAction> => new Promise((resolve) => { waiting = resolve })
 
@@ -188,8 +226,12 @@ export async function runLingdongGate(createWindow: () => BrowserWindow, isQuitt
   })
 
   const window = createWindow()
+  currentGateWindow = window
   const show = async (page: string, state: Record<string, unknown> = {}): Promise<void> => {
     await window.loadFile(join(GATE_DIR, page))
+    // 页面换好了才调：三个页面同一支深红，所以只在进门前调一次也够，但每次都调更省心
+    //（万一以后某一页换了底色，这里就是唯一的落点）。
+    matchTitleBarToGate()
     // 页面里的脚本读这个全局拿到「谁登录了 / 为什么在这等」；不经过 IPC，避免多一轮握手。
     await window.webContents.executeJavaScript(`window.__LINGDONG_STATE__ = ${JSON.stringify(state)}; window.__lingdongRender && window.__lingdongRender();`).catch(() => undefined)
   }
@@ -222,10 +264,15 @@ export async function runLingdongGate(createWindow: () => BrowserWindow, isQuitt
         continue // refresh：回循环顶部重新问一次「现在有没有课」
       }
       applyGateway(context)
+      // 到这一步密钥已经写进 process.env 与凭据文件，但**宿主可能已经用旧环境起来了** ——
+      // 停掉它，让下面那条 reconcileBackend() 用新环境重起（见本函数 @param resetHost）。
+      // 失败不拦人：真起不来时 reconcileBackend 自己会报错，这里只留一行日志。
+      await resetHost().catch((error: unknown) => { console.error('灵动ai：重启创作环境失败（继续走后面的 reconcile）', error) })
       return { kind: 'enter' }
     }
   } finally {
     notifyDeepLink = null
+    currentGateWindow = null
     ipcMain.removeHandler('lingdong:gate')
   }
 }

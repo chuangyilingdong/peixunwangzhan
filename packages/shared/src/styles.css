@@ -1422,3 +1422,8 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .course-package-cta{flex:none;padding:11px 22px;border:1px solid var(--ink);border-radius:999px;color:#fff;background:var(--ink);font-size:13px;font-weight:800;letter-spacing:.02em;white-space:nowrap;cursor:pointer;transition:background .25s ease,color .25s ease,transform .25s ease}
 .course-package-cta:hover{color:var(--ink);background:#fff;transform:translateY(-1px)}
 @media(max-width:680px){.course-package-desc{flex-direction:column;align-items:stretch;gap:12px}.course-package-cta{align-self:stretch}}
+
+/* 「打开创作客户端」是一个 <a>（lingdong:// 这个协议只有真导航才会交给系统去拉起应用），
+   但它在课时卡片里必须和旁边的 <button> 长得一模一样 —— .lesson-detail-action button 那条
+   规则选不到 <a>，所以这里补一份，数值照抄那条。 */
+.lesson-detail-action a.primary-button,.lesson-detail-action a.secondary-button{display:inline-flex;align-items:center;justify-content:center;min-width:104px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:800;line-height:1.2;text-decoration:none;cursor:pointer}
