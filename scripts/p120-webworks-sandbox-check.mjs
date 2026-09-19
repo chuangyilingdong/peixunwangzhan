@@ -139,7 +139,9 @@ async function main() {
     res.end(harness(url.searchParams.get('src')));
   });
   await new Promise((resolve) => server.listen(PORT, resolve));
-  const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  // 与 p115 同一套防节流参数：无焦点/被遮挡的窗口里 Chromium 会节流 rAF，
+  // 而这些作品里到处是 rAF 驱动的动画（粒子 / three.js 渲染循环），节流会让"没渲染"看起来像真的一样。
+  const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'] });
 
   // 金丝雀：同一源下的页面，在**这套 sandbox** 里必须碰不到 cookie / localStorage / 父文档
   const canaryPage = await browser.newPage();

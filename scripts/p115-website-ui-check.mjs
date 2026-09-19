@@ -147,7 +147,13 @@ try {
   for (let i = 0; i < 120; i += 1) { try { if ((await fetch(`${base}/`)).ok) { webUp = true; break; } } catch {} await new Promise((r) => setTimeout(r, 250)); }
   if (!webUp) throw new Error(`vite preview 没起来（${base}）：\n${webLog.slice(-1500)}`);
 
-  const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+  // ⚠️ 这几个 "--disable-…-throttling / backgrounding" 不是可有可无的润色：无焦点或被遮挡的窗口里
+  //    Chromium 会**节流 rAF**，而首页数据区那些数字是**从 0 滚上去**的（StatValue，900ms）——
+  //    被节流后，下面就算守住 1.3 秒也照样只滚到一半，于是报成
+  //    「口径①：首页数据区数字不一致」，把人带去查一个**根本不存在的回归**。
+  //    2026-09-19 实测踩到过一次：读到 [2 门, 27 节, 1 类, 1 套]（全是目标值 [3,48,2,1] 的中途值），
+  //    而同一份代码紧接着连跑两次都是绿的 —— 就是这条。
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true, args: ['--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'] });
   const pageErrors = [];
   const badRequests = [];
   let ignoreNetworkFailures = false; // 故意 abort 的那一遍不算问题
