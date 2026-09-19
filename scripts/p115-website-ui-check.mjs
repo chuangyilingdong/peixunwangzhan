@@ -59,8 +59,10 @@ const run = (args) => new Promise((resolve, reject) => {
 // ── 口径常量 ────────────────────────────────────────────────────────────────
 // 退役文案：口径变更之后再出现，就是有人把旧内容写回来了（不是测试漂移）。
 const RETIRED_COPY = ['给机构一套', '能落地的青少年 AI 课', '领航行动', '预约演示', 'AI魔法学院', 'AI 魔法学院', '灵动值'];
-// 官网主导航七项（apps/website/src/main.jsx 的 WEBSITE_NAV）：文案与顺序都算口径。
-const NAV_LABELS = ['首页', '灵动学习', '灵动课程', '灵动作品', '灵动介绍', '机构手册', '常见问题'];
+// 官网主导航八项（apps/website/src/main.jsx 的 WEBSITE_NAV）：文案与顺序都算口径。
+// 2026-09-19 晚口径变更（不是测试漂移）：首页 hero 下那行「下载创作客户端」小字入口按用户要求删除，
+// 下载入口改到导航最后一项「VibeCoding客户端下载」→ /download。
+const NAV_LABELS = ['首页', '灵动学习', '灵动课程', '灵动作品', '灵动介绍', '机构手册', '常见问题', 'VibeCoding客户端下载'];
 // 品牌名只认这一个（用户口径 2026-09-18）。
 const BRAND_NAME = '灵动ai学院';
 
@@ -228,7 +230,7 @@ try {
   if (homeNormal.stats.length !== 4) problems.push(`首页：数据区应当是 4 项（实际 ${homeNormal.stats.length} 项）`);
   for (const s of homeNormal.stats) if (!/^\d+\s*\S*$/.test(s)) problems.push(`首页：数据区数字格式异常「${s}」`);
 
-  // 导航七项：文案与顺序
+  // 导航八项：文案与顺序
   const navLabels = (await page.locator('.site-topbar nav a').allInnerTexts()).map((t) => t.trim());
   if (navLabels.join('|') !== NAV_LABELS.join('|')) {
     problems.push(`首页：主导航与 WEBSITE_NAV 不一致 —— 实际 [${navLabels.join(', ')}]，应为 [${NAV_LABELS.join(', ')}]`);
