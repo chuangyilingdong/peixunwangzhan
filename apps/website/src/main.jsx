@@ -386,7 +386,10 @@ function Org(){const faqCms=useWebsiteContent('FAQ');
   //    机构页这块原来读的是那份通用列表（= 现在的 student 档），所以这里继续用 student 档、保持一致；
   //    标题回到固定文案（`title` 没了之后 `faqCms.data?.title` 恒为 undefined，渲染结果与改动前相同）。
   //    ⚠️ 别把这里改成 `.items` —— 那个字段已经不存在了，页面会静默退回写死的兜底、后台改了也不生效。
-  const faqItems=cmsList(faqCms.data?.student).length?cmsList(faqCms.data?.student):CMS_FALLBACK.FAQ.student;const modules=[['机构账号','管理员、教师、学员分级；学员无需自备 API Key','课堂零配置，避免密钥泄露'],['授权次数','按机构开通、按班分给学生；剩余次数不足友好提示','用量可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];return <><Title eyebrow="机构方案" title={<>教培机构如何开<br/><em>青少年 AI 通识课</em></>} desc="平台提供课程、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。"/><main className="inner"><section className="org-intro"><div><i>“</i><h2>不是再找一个聊天网站，<br/>而是一套<span>可管、可教、可展示</span>的课堂产品。</h2><p>学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的游戏、动画、互动故事和硬件作品。</p></div><div className="steps">{[['01','平台开通机构','配置席位、开通授权次数、发布课包权限。'],['02','老师创建学员账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']].map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section><section className="faq"><div><Kicker>常见问题</Kicker><h2>开课前，你可能想知道</h2></div><div>{faqItems.map((item,i)=><details key={item.question||i} open={i===0}><summary>{item.question||''}</summary><p>{item.answer||''}</p></details>)}</div></section><End title="让你的校区拥有一门可复制的 AI 课" text="联系我们，获取试用账号与示范课包清单。"/></main></>}
+  // ⚠️ 2026-09-19：**去掉这里的兜底**。原来「student 为空 → 显示内置的 CMS_FALLBACK.FAQ.student」，
+  //    于是运营把学生端问题删光之后，/faq 那边那一档没了、这里反而还在显示旧问答 —— 同一份 CMS
+  //    在两个页面表现相反。按口径③（空 = 运营故意清空，不回退显示兜底）：空了就整块不显示。
+  const faqItems=cmsList(faqCms.data?.student);const modules=[['机构账号','管理员、教师、学员分级；学员无需自备 API Key','课堂零配置，避免密钥泄露'],['授权次数','按机构开通、按班分给学生；剩余次数不足友好提示','用量可控，适合班级教学'],['课程中心','11 门 / 87 节标准课包；PPT 与 HTML 互动课件','标准化交付，校区可复制'],['管理后台','账号开通、课包浏览、作品发布、用量记录','运营数据透明'],['作品展厅','机构内作品聚合展示与在线预览','成果可视化，利于续费与招新']];return <><Title eyebrow="机构方案" title={<>教培机构如何开<br/><em>青少年 AI 通识课</em></>} desc="平台提供课程、机构账号与用量计费；机构负责招生和教学。8–16 岁学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的作品。"/><main className="inner"><section className="org-intro"><div><i>“</i><h2>不是再找一个聊天网站，<br/>而是一套<span>可管、可教、可展示</span>的课堂产品。</h2><p>学生用中文与 AI 伙伴「阿飞」对话，当堂做出可展示的游戏、动画、互动故事和硬件作品。</p></div><div className="steps">{[['01','平台开通机构','配置席位、开通授权次数、发布课包权限。'],['02','老师创建学员账号','学生用机构账号登录，即可开始创作。'],['03','按课包授课','从课程中心进入课时，结合阿飞完成当堂作品。'],['04','作品沉淀与展示','优秀作业进入作品社区，形成校区案例库。']].map(x=><div key={x[0]}><b>{x[0]}</b><p><strong>{x[1]}</strong>{x[2]}</p></div>)}</div></section><section className="modules">{modules.map((m,i)=><article key={m[0]}><small>0{i+1}</small><h3>{m[0]}</h3><p>{m[1]}</p><b>{m[2]}</b></article>)}</section>{faqItems.length?<section className="faq"><div><Kicker>常见问题</Kicker><h2>开课前，你可能想知道</h2></div><div>{faqItems.map((item,i)=><details key={item.question||i} open={i===0}><summary>{item.question||''}</summary><p>{item.answer||''}</p></details>)}</div></section>:null}<End title="让你的校区拥有一门可复制的 AI 课" text="联系我们，获取试用账号与示范课包清单。"/></main></>}
 function Works(){
   const [items,setItems]=useState(FALLBACK_WORKS.map(w=>({title:w[1],description:w[3],studentName:'小创作者',emoji:w[0]})));
   const [loaded,setLoaded]=useState(false);
@@ -510,8 +513,12 @@ function Intro() {
 //    「没有找到答案？联系我们」都是用户看过实际页面后要求删掉的（2026-09-18 晚）—— 别再加回来。
 //    顺带：这一页现在**没有任何 CMS 文案**在接口回来前需要门控（标题与档位名都是常量），
 //    所以不再有「强刷先闪一帧与后台不符的字」的问题（那是 mp / 首页才需要的 ready 门控）。
-// 档位：字段名就是 CMS 里的 key，顺序 = 官网显示顺序；名字写在这里，不由 CMS 改。
+// 档位：字段名就是 CMS 里的 key，**名字**写在这里（不由 CMS 改）；**顺序**改由 CMS 的
+// `audienceOrder` 决定（2026-09-19 用户口径：「这 3 个标签可以在后台排序优先级，优先级高的排在最前面」），
+// FAQ_AUDIENCES 只作为「后台没配时的默认顺序」。
 const FAQ_AUDIENCES = [['student', '学生端'], ['teacher', '老师端'], ['org', '机构端']];
+const FAQ_LABELS = Object.fromEntries(FAQ_AUDIENCES);
+const FAQ_DEFAULT_ORDER = FAQ_AUDIENCES.map(([key]) => key);
 function Faq() {
   const cms = useWebsiteContent('FAQ');
   const content = cms.data || {};
@@ -519,28 +526,40 @@ function Faq() {
   // 初始态照参考稿：**一条都不展开**；切换档位时也收起 —— 否则会把这一档的第 N 条
   // 当成那一档的第 N 条继续展开（两档的问题条数本来就不一样）。
   const [openIndex, setOpenIndex] = useState(null);
-  // ⚠️ 存量库兼容：生产库里 FAQ 目前还是老的 { title, items } 形状。迁移脚本跑过之后这两行可以删。
-  //    没有它的话，「代码先上、迁移后跑」那个窗口里 FAQ 会是空的（老形状读不出 student）。
+  // ⚠️ 存量库兼容：生产库里 FAQ 过去是老的 { title, items } 形状。这一行是「代码先上、迁移后跑」
+  //    那个窗口的兜底（老形状读不出 student）—— 迁移脚本早就跑完了，保留着以防还有老库。
   const legacyItems = cmsList(content.items);
   const itemsOf = (key) => { const own = cmsList(content[key]); return own.length ? own : (key === 'student' ? legacyItems : own); };
-  const items = itemsOf(audience);
+  // 顺序：先按 CMS 的 audienceOrder（认不出的 key 丢掉），没排到的按默认顺序补在后面。
+  const configuredOrder = cmsList(content.audienceOrder).filter((key) => FAQ_LABELS[key]);
+  const orderedKeys = [...configuredOrder, ...FAQ_DEFAULT_ORDER.filter((key) => !configuredOrder.includes(key))];
+  // ⭐ 只显示**有内容**的档位（2026-09-19 用户口径：「如果没有内容就隐藏，有内容才出现」）：
+  //    后台把某一档的问题全删了，官网就不该再出现那个空档位 —— 否则点进去是一片空白，
+  //    访客还以为页面坏了。空 = 运营故意清空（口径③），所以这里**不回退**任何兜底内容。
+  const visible = orderedKeys.filter((key) => itemsOf(key).length).map((key) => [key, FAQ_LABELS[key]]);
+  // 选中的那一档可能已经被清空/被隐藏了：这时落到第一个还有内容的档位，而不是死守一个空档位。
+  const active = visible.some(([key]) => key === audience) ? audience : (visible[0]?.[0] ?? null);
+  const items = active ? itemsOf(active) : [];
   const pickAudience = (key) => { setAudience(key); setOpenIndex(null); };
+  // 键盘左右要在**看得见**的档位之间走，不能按完整清单走（否则焦点会跳到不存在的 tab 上）
   const stepAudience = (direction) => {
-    const index = FAQ_AUDIENCES.findIndex(([key]) => key === audience);
-    const next = (index + direction + FAQ_AUDIENCES.length) % FAQ_AUDIENCES.length;
-    pickAudience(FAQ_AUDIENCES[next][0]);
-    document.getElementById('fq-tab-' + FAQ_AUDIENCES[next][0])?.focus();
+    const index = visible.findIndex(([key]) => key === active);
+    const next = (index + direction + visible.length) % visible.length;
+    pickAudience(visible[next][0]);
+    document.getElementById('fq-tab-' + visible[next][0])?.focus();
   };
   return <main className="fq">
     <div className="fq-aura" aria-hidden="true" />
     <div className="fq-inner">
       <header className="fq-head"><h1 className="fq-title">常见问题</h1></header>
-      {/* 三档切换。用真 tablist：点击、键盘左右、读屏都能用（不用参考稿那种纯 div 点击） */}
-      <div className="fq-tabs" role="tablist" aria-label="按角色查看常见问题">
-        {FAQ_AUDIENCES.map(([key, label]) => <button key={key} type="button" role="tab" id={'fq-tab-' + key} aria-selected={audience === key} aria-controls={'fq-panel-' + audience} className={'fq-tab' + (audience === key ? ' on' : '')} onClick={() => pickAudience(key)} onKeyDown={(event) => { if (event.key === 'ArrowRight') { event.preventDefault(); stepAudience(1); } else if (event.key === 'ArrowLeft') { event.preventDefault(); stepAudience(-1); } }}>{label}</button>)}
-      </div>
-      {/* key={audience} 让切档时整列重挂载，CSS 入场动画随之重放（纯 keyframes，不用 IntersectionObserver） */}
-      <div className="fq-list" key={audience} role="tabpanel" id={'fq-panel-' + audience} aria-labelledby={'fq-tab-' + audience}>
+      {/* 档位切换。用真 tablist：点击、键盘左右、读屏都能用（不用参考稿那种纯 div 点击）。
+          ⚠️ 渲染的是 visible 而不是 FAQ_AUDIENCES —— 空档位在这一步就已经被剔掉了。
+          一档都不剩时整条 tablist 不渲染（页面上只剩标题）。 */}
+      {visible.length ? <div className="fq-tabs" role="tablist" aria-label="按角色查看常见问题">
+        {visible.map(([key, label]) => <button key={key} type="button" role="tab" id={'fq-tab-' + key} aria-selected={active === key} aria-controls={'fq-panel-' + active} className={'fq-tab' + (active === key ? ' on' : '')} onClick={() => pickAudience(key)} onKeyDown={(event) => { if (event.key === 'ArrowRight') { event.preventDefault(); stepAudience(1); } else if (event.key === 'ArrowLeft') { event.preventDefault(); stepAudience(-1); } }}>{label}</button>)}
+      </div> : null}
+      {/* key={active} 让切档时整列重挂载，CSS 入场动画随之重放（纯 keyframes，不用 IntersectionObserver） */}
+      {active ? <div className="fq-list" key={active} role="tabpanel" id={'fq-panel-' + active} aria-labelledby={'fq-tab-' + active}>
         {items.map((item, index) => {
           const isOpen = openIndex === index;
           return <article className={'fq-card' + (isOpen ? ' on' : '')} key={item.question || index}>
@@ -557,7 +576,7 @@ function Faq() {
             <div className="fq-panel"><div className="fq-answer"><p>{item.answer || ''}</p></div></div>
           </article>;
         })}
-      </div>
+      </div> : null}
     </div>
   </main>;
 }
@@ -630,6 +649,7 @@ const CMS_FALLBACK = {
   // （口径①：接口通/断不能显示两套内容）。student 取的是**生产 CMS 已发布的原文** ——
   // 原来这里只有 3 条、且少了「授权次数用完会怎样」，与线上那份对不上，正是那条口径要防的隐患。
   FAQ: {
+    audienceOrder: ['student', 'teacher', 'org'],
     student: [{ question: '需要学员自备 API Key 或对话平台账号吗？', answer: '不需要。机构账号登录即可使用平台统一模型能力。' }, { question: '机房和教室的电脑都能用吗？', answer: '可以，公开客户端支持 macOS Apple 芯片版与 Windows 64 位。' }, { question: '能否做 Arduino 和 micro:bit 硬件课？', answer: '支持 Arduino Uno 与 micro:bit 的课堂实践。' }, { question: '机构的授权次数用完了会怎样？', answer: '机构端会提示老师补足授权次数，补足后学生即可继续上课；平台不会因为算力用量去拦学生。' }],
     teacher: [{ question: '上课前需要做什么准备？', answer: '学生用机构账号登录，浏览器打开课堂即可开始；机房电脑不需要额外安装环境。' }, { question: '学生的作品和用量在哪里看？', answer: '机构后台可以查看学生的用量记录与作品，并把优秀作品发布到作品展厅。' }],
     org: [{ question: '学生需要自己买账号或自备 API Key 吗？', answer: '不需要。机构账号分级，学员无需自备 Key，由机构统一开通与管理。' }, { question: '平台提供哪些课程？', answer: '课程中心提供标准课包（含 PPT 与 HTML 互动课件），机构可按课包直接排课。' }],

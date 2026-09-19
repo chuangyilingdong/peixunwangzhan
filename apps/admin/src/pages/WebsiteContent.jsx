@@ -12,7 +12,13 @@ export function parseWebsiteDraft(value) {
 export function WebsitePreview({ content, selectedKey }) {
   if (!content) return <div className="cms-preview-empty">保存或修正 JSON 后可预览。</div>;
   if (selectedKey === 'HOME') return <div className="cms-preview-home"><span className="cms-preview-kicker">{content.heroKicker || '首页眉题'}</span><h3>{content.heroTitle || '首页标题'} <em>{content.heroAccent || '强调标题'}</em></h3><p>{content.heroDescription || '首页描述'}</p><div className="cms-preview-trust"><strong>{content.trustTitle || '信任区标题'}</strong><span>{content.trustDescription || '信任区描述'}</span></div>{content.coverImageUrl ? <img src={content.coverImageUrl} alt="首页封面预览" /> : null}</div>;
-  if (selectedKey === 'FAQ') return <div className="cms-preview-faq">{FAQ_AUDIENCES.map(([key, label]) => <div className="cms-preview-faq-group" key={key}><h4>{label}</h4>{cmsListOf(content[key]).length ? cmsListOf(content[key]).map((item, index) => <details key={`${key}-${index}`}><summary>{item.question || `问题 ${index + 1}`}</summary><p>{item.answer || '答案待填写'}</p></details>) : <p>这一档还没有问题</p>}</div>)}</div>;
+  // 常见问题：预览按**官网的真实结果**给（顺序 = audienceOrder；某一档为空则官网不显示那一档），
+  // 这样运营在保存前就能看出"这一档删空之后官网会怎样"。
+  if (selectedKey === 'FAQ') {
+    const order = faqAudienceOrder(content);
+    const visible = order.filter((key) => cmsListOf(content[key]).length);
+    return <div className="cms-preview-faq">{visible.length ? visible.map((key) => <div className="cms-preview-faq-group" key={key}><h4>{FAQ_LABELS[key]}</h4>{cmsListOf(content[key]).map((item, index) => <details key={`${key}-${index}`}><summary>{item.question || `问题 ${index + 1}`}</summary><p>{item.answer || '答案待填写'}</p></details>)}</div>) : <p>三档都没有问题 —— 官网这一页只显示标题，不会出现空的档位。</p>}</div>;
+  }
   if (selectedKey === 'BRAND') return <div className="cms-preview-brand"><strong>{content.name || '品牌名称'}</strong><span>{content.tagline || '品牌标语'}</span><small>{content.contactEmail || '联系邮箱'}</small></div>;
   if (selectedKey === 'MARKETPLACE') return <div className="cms-preview-faq"><h3>{content.title || '灵动Ai学院课包展示'}</h3>{content.lead ? <p>{content.lead}</p> : null}</div>;
   // 灵动介绍 / 机构手册：正文是「分节」结构，预览按可折叠列表展示，配图一起预览
@@ -23,11 +29,21 @@ export function WebsitePreview({ content, selectedKey }) {
 const cmsListOf = (value) => (Array.isArray(value) ? value : []);
 /**
  * 常见问题的三个档位（2026-09-18 晚用户口径：「最好3个选项，学生端、老师端、机构端，
- * 可以配置3个端的不同的问题」）。**字段名就是档位 key**，顺序与官网 FAQs 的档位一致 ——
- * 改这里要同时改 apps/website/src/main.jsx 的 FAQ_AUDIENCES，以及内容形状
- * （packages/database/src/websiteContentDefaults.js 的 FAQ、官网 CMS_FALLBACK.FAQ）。
+ * 可以配置3个端的不同的问题」）。**字段名就是档位 key**；这里只定义**有哪三档、叫什么名字**。
+ *
+ * ⚠️ **顺序不在这一行**（2026-09-19 用户口径：「这 3 个标签可以在后台排序优先级，优先级高的排在最前面」）：
+ *    真实顺序存在内容的 `audienceOrder` 里，由下面表单的 ↑/↓ 改；官网按它排 tab。
+ *    FAQ_AUDIENCES 的排列只是**没配时的默认值**，所以改顺序**不用再改官网代码**。
+ * ⚠️ 官网**只显示有内容的档位**：某一档问题删光 = 官网那一档不出现（同一条口径）。
  */
 const FAQ_AUDIENCES = [['student', '学生端'], ['teacher', '老师端'], ['org', '机构端']];
+const FAQ_LABELS = Object.fromEntries(FAQ_AUDIENCES);
+/** 档位的实际显示顺序：CMS 的 `audienceOrder` 打头，没排到的按默认顺序补在后。
+ *  **表单与预览共用这一份规则**，所以「后台看到的顺序」和「官网的顺序」不会各说各话。 */
+const faqAudienceOrder = (content) => {
+  const configured = cmsListOf(content?.audienceOrder).filter((key) => FAQ_LABELS[key]);
+  return [...configured, ...FAQ_AUDIENCES.map(([key]) => key).filter((key) => !configured.includes(key))];
+};
 /**
  * 「分节」编辑器（灵动介绍 / 机构手册共用）。
  * 两份内容的正文形状一样：{ title, body, bullets[], imageUrl, imageAlt }，所以只用一套表单。
@@ -174,6 +190,14 @@ export function WebsiteContent({ api }) {
   }
   function addList(field, blank) { updateStructured({ [field]: [...cmsListOf(structured?.[field]), blank] }); }
   function removeList(field, index) { updateStructured({ [field]: cmsListOf(structured?.[field]).filter((_, itemIndex) => itemIndex !== index) }); }
+  /** 某一档整体上下移一位 = 改它的显示优先级（官网 tab 顺序跟着变，改完发布即生效）。 */
+  function moveAudience(index, direction) {
+    const order = faqAudienceOrder(structured);
+    const next = index + direction;
+    if (next < 0 || next >= order.length) return;
+    [order[index], order[next]] = [order[next], order[index]];
+    updateStructured({ audienceOrder: order });
+  }
   // 配图上传：走平台已有的文件资产接口（与课程封面上传同一条路），拿到公开可读地址后写回字段。
   async function uploadImage(file, apply, key) {
     setUploading(key); setMessage('');
@@ -233,19 +257,27 @@ export function WebsiteContent({ api }) {
             <div className="cms-faq-list">{cmsListOf(structured?.stats).map((item, index) => <div className="cms-faq-item" key={`stat-${index}`}><div className="cms-faq-heading"><strong>第 {index + 1} 项</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList('stats', index, -1)} aria-label={`第 ${index + 1} 项上移`}>↑</button><button type="button" className="text-button" disabled={index === cmsListOf(structured?.stats).length - 1} onClick={() => moveList('stats', index, 1)} aria-label={`第 ${index + 1} 项下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList('stats', index)}>删除</button></div></div><div className="form-grid"><label>图标<input value={item.icon || ''} onChange={(event) => updateList('stats', index, { icon: event.target.value })} maxLength={4} /></label><label>数值<input value={item.value ?? ''} onChange={(event) => updateList('stats', index, { value: event.target.value })} maxLength={12} /></label><label>后缀<input value={item.suffix || ''} onChange={(event) => updateList('stats', index, { suffix: event.target.value })} maxLength={8} /></label><label>名称<input value={item.label || ''} onChange={(event) => updateList('stats', index, { label: event.target.value })} maxLength={24} /></label></div></div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={() => addList('stats', { icon: '✦', value: '', suffix: '', label: '' })}>新增数据项</button>
           </div>}
-          {selectedKey === 'FAQ' && <div className="cms-form">
-            {/* 三个档位各配一套问答（2026-09-18 晚用户口径）。三组共用同一套增删改 + 上下移，
-                档位 key 直接当字段名用（与官网 /faq 的三个 tab 一一对应）。
-                ⚠️ 某一档留空 = 官网那一档就是空的（口径③：空 = 运营故意清空，不回退显示兜底）。 */}
-            {FAQ_AUDIENCES.map(([key, label]) => {
-              const items = cmsListOf(structured?.[key]);
-              return <div className="cms-faq-group" key={key}>
-                <div className="cms-faq-group-head"><strong>{label}</strong><span>{items.length} 条 · 字段 {key}</span></div>
-                <div className="cms-faq-list">{items.map((item, index) => <div className="cms-faq-item" key={`faq-${key}-${index}`}><div className="cms-faq-heading"><strong>问题 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList(key, index, -1)} aria-label={`${label} 第 ${index + 1} 个问题上移`}>↑</button><button type="button" className="text-button" disabled={index === items.length - 1} onClick={() => moveList(key, index, 1)} aria-label={`${label} 第 ${index + 1} 个问题下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList(key, index)}>删除</button></div></div><label>问题<input value={item.question || ''} onChange={(event) => updateList(key, index, { question: event.target.value })} maxLength={200} /></label><label>答案<textarea value={item.answer || ''} onChange={(event) => updateList(key, index, { answer: event.target.value })} maxLength={1000} /></label></div>)}</div>
-                <button type="button" className="secondary-button top-gap" onClick={() => addList(key, { question: '', answer: '' })}>给{label}新增问题</button>
-              </div>;
-            })}
-          </div>}
+          {selectedKey === 'FAQ' && (() => {
+            // 三个档位各配一套问答（2026-09-18 晚用户口径）。三组共用同一套增删改 + 上下移，
+            // 档位 key 直接当字段名用（与官网 /faq 的 tab 一一对应）。
+            // ⚠️ 这里按 `audienceOrder`（= 官网真实显示顺序）渲染，所以**后台看到的顺序就是官网的顺序**；
+            //    每组标题右边的 ↑/↓ 改的就是它（2026-09-19 用户口径：「可以排序优先级，优先级高的排在最前面」）。
+            // ⚠️ 某一档问题为空 = 官网**不显示**那一档（口径：「没有内容就隐藏，有内容才出现」）；
+            //    空档位不回退任何兜底内容（口径③：空 = 运营故意清空）。
+            const order = faqAudienceOrder(structured);
+            return <div className="cms-form">
+              <div className="cms-section-heading"><strong>档位显示顺序</strong><span>优先级高的排在最前，官网 tab 按这个顺序；某一档问题为空则官网不显示那一档</span></div>
+              {order.map((key, position) => {
+                const label = FAQ_LABELS[key];
+                const items = cmsListOf(structured?.[key]);
+                return <div className="cms-faq-group" key={key}>
+                  <div className="cms-faq-group-head"><strong>第 {position + 1} 位 · {label}</strong><span>{items.length} 条 · 字段 {key} · {items.length ? '官网会显示' : '⚠️ 官网不显示这一档'}</span><div className="row-actions"><button type="button" className="text-button" disabled={position === 0} onClick={() => moveAudience(position, -1)} aria-label={`把${label}的显示优先级上移`}>↑</button><button type="button" className="text-button" disabled={position === order.length - 1} onClick={() => moveAudience(position, 1)} aria-label={`把${label}的显示优先级下移`}>↓</button></div></div>
+                  <div className="cms-faq-list">{items.map((item, index) => <div className="cms-faq-item" key={`faq-${key}-${index}`}><div className="cms-faq-heading"><strong>问题 {index + 1}</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList(key, index, -1)} aria-label={`${label} 第 ${index + 1} 个问题上移`}>↑</button><button type="button" className="text-button" disabled={index === items.length - 1} onClick={() => moveList(key, index, 1)} aria-label={`${label} 第 ${index + 1} 个问题下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList(key, index)}>删除</button></div></div><label>问题<input value={item.question || ''} onChange={(event) => updateList(key, index, { question: event.target.value })} maxLength={200} /></label><label>答案<textarea value={item.answer || ''} onChange={(event) => updateList(key, index, { answer: event.target.value })} maxLength={1000} /></label></div>)}</div>
+                  <button type="button" className="secondary-button top-gap" onClick={() => addList(key, { question: '', answer: '' })}>给{label}新增问题</button>
+                </div>;
+              })}
+            </div>;
+          })()}
           {selectedKey === 'BRAND' && <div className="cms-form"><div className="form-grid"><label>品牌名称<input value={structured?.name || ''} onChange={(event) => updateStructured({ name: event.target.value })} maxLength={100} /></label><label>联系邮箱<input type="email" value={structured?.contactEmail || ''} onChange={(event) => updateStructured({ contactEmail: event.target.value })} maxLength={200} /></label></div><label>品牌标语<input value={structured?.tagline || ''} onChange={(event) => updateStructured({ tagline: event.target.value })} maxLength={200} /></label></div>}
           {selectedKey === 'MARKETPLACE' && <div className="cms-form">
             <label>页面大标题<input value={structured?.title || ''} onChange={(event) => updateStructured({ title: event.target.value })} maxLength={100} /></label>
