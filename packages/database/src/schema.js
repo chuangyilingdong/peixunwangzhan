@@ -1917,6 +1917,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_session_students_unique ON session_student
 CREATE INDEX IF NOT EXISTS idx_session_students_student ON session_students(student_id, lesson_id, status);
 CREATE INDEX IF NOT EXISTS idx_session_students_session ON session_students(session_id, status);`);
 
+// VibeCoding「发送次数」（2026-09-19 用户口径）：建课时选 VibeCoding 就可以设「发送按钮能按几次」。
+// ⚠️ 数的是**学生按了几次发送**，不是网关被调了几次 —— dsh 自己也会发模型请求（压缩历史、起标题、
+//    多轮工具调用），按调用次数算会让「按 1 次发送」吃掉好几次额度。
+//    判据：网关每次都收到**完整对话历史**，所以「对话里 user 消息条数的单调最大值」就是发送次数 ——
+//    学生按一次发送只会让历史多一条 user 消息，内部请求不改变它；历史被压缩会变短，所以取最大值
+//    （只增不减）；编辑/重发导致条数不增时不追加（对学生有利的方向）。
+//    存在 session_students 上：它本来就是「每学生每场课堂」的状态表（completed_cost_fen 同一层）。
+//    老库补列默认 0 = 还没数到任何发送（**不是**"已用满"，别反过来回填）。
+//    ⚠️ 必须放在 CREATE TABLE session_students **之后**（放前面会在新库上 no such table）。
+try { db.exec('ALTER TABLE session_students ADD COLUMN vibecoding_sends INTEGER NOT NULL DEFAULT 0'); }
+catch (error) { if (!String(error?.message || '').includes('duplicate column name')) throw error; }
+
 // 历史课堂的学员回填 —— 只认**证据**：确实在这节课消耗过算力的人判为「已完课」。
 // 不按「今天的班级名单」回填：班级成员是可变的，用今天的名单去还原当时谁在这节课上，等于编数据。
 // 幂等：`NOT EXISTS (同课堂已有学员行)` 保证只回填「新模型之前的老课堂」，跑第二遍什么都不做。

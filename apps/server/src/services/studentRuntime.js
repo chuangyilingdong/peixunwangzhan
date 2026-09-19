@@ -294,6 +294,15 @@ function hostChannel(which) {
   return { available: true, reason: '' };
 }
 
+/**
+ * 学生侧要访问的网关地址 —— **宿主那条路（开盒子）与桌面客户端必须用同一个**，
+ * 所以只在这里读一次环境变量，两边都走这个函数（各读一份迟早会漂开）。
+ * 桌面客户端拿到它之后写进 dsh 的 provider baseURL；不写的话模型调用就不经过我们的账本。
+ */
+export function runtimeGatewayUrl() {
+  return config().gatewayUrl;
+}
+
 /** 这台机器现在能不能开盒子（给管理端/学生端一个明确的「不可用」而不是转圈）。 */
 export function studentRuntimeAvailability() {
   return hostChannel('launch');

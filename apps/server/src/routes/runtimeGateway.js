@@ -23,6 +23,8 @@ import { providerSelectionForModality } from './aiGeneration.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { getProviderApiKey } from '../services/providerSecret.js';
 import { recordAiUsage } from '../services/creditUsage.js';
+// VibeCoding「发送次数上限」：课时级设置 + 按学生的计数（见该文件头，与「算力额度只观测」是两套）
+import { enforceVibecodingSendLimit } from '../services/vibecodingLessonSettings.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { priceFenFor } from '../services/computePool.js';
 import { assertExternalAiAllowed, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
@@ -363,6 +365,23 @@ export async function handleRuntimeGateway(ctx) {
   const body = ctx.body || {};
   const messages = normalizeMessages(body);
   const stream = body.stream === true;
+
+  // VibeCoding 发送次数上限（2026-09-19 用户口径，机制见 services/vibecodingLessonSettings.js）。
+  // ⚠️ 位置有意放在**打上游之前**：超限的这一次既不花算力、也不进用量账，学生当场拿到原因。
+  // ⚠️ 这节课没配上限时 `allowed` 恒为 true（不填 = 不拦），所以没人配置时现状一字不改。
+  const sendGate = enforceVibecodingSendLimit({ sessionId: session.id, studentId: payload.u, lessonId: session.lesson_id || '', messages });
+  if (!sendGate.allowed) {
+    // 对外仍要说 OpenAI 方言（dsh 只认这个），客户端把 message 原样显示给学生
+    ctx.res.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    ctx.res.end(JSON.stringify({
+      error: {
+        message: `这节课的发送次数用完了（共 ${sendGate.limit} 次）。先把自己的想法写下来，或者请老师再开一次课堂。`,
+        type: 'send_limit_exceeded',
+        code: 'SEND_LIMIT_EXCEEDED',
+      },
+    }));
+    return { __streamed: true };
+  }
 
   const policy = getAiProviderPolicy();
   const requestedModel = String(body.model || '').trim();

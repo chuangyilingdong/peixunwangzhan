@@ -9,7 +9,9 @@
 //   · 本文件的 /submit —— 把取回来的产物按**现有作品链路**落进 vibecoding_submissions；
 //     网页里的本地图片存成私有文件资产并改写引用（见 fileAssets.js 的 storeStudentArtifactAsset）。
 import { errors, requireRole, row } from '../lib.js';
-import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
+import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, runtimeGatewayUrl, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
+import { issueRuntimeKey } from './runtimeGateway.js';
+import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
 import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingArtifacts.js';
 import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences } from './vibecoding.js';
@@ -75,6 +77,29 @@ export async function handleStudentRuntime(ctx) {
       available: availability.available,
       reason: availability.reason,
       classroom: classroom ? { id: classroom.id, lessonId: classroom.lesson_id, title: classroom.title } : null,
+    };
+  }
+
+  // 桌面客户端启动后要的那一份（2026-09-19）：本课能不能进、网关地址与密钥、预设提示词、剩余发送次数。
+  // ⚠️ 与 /launch 的区别：客户端**不在服务器上开任何进程**（学生环境跑在学生自己电脑上），
+  //    所以这里只发「能不能进 + 进门要用的密钥与上下文」，不碰宿主脚本、不进 broker。
+  // ⚠️ 没在上的课（老师没点「立即上课」）→ classroom:null：客户端据此只显示「我的课程」、
+  //    不给进入对话区的入口。这就是「点了立即上课才能进」那道闸 —— 而且是**服务端兜底**的：
+  //    客户端即使被改，没密钥就调不动网关（密钥里带机构/学生/课时/课堂，网关每次调用都重新过门禁）。
+  if (part === '/client-context' && method === 'GET') {
+    const classroom = resolveActiveClassroom(auth.user.id);
+    if (!classroom) return { classroom: null, message: '老师还没有开始上课' };
+    const lessonId = classroom.lesson_id || '';
+    const limit = vibecodingSendLimit(lessonId);
+    // ⚠️ 对外报的已用次数**封顶到上限**：库里存的是"观察到的发送次数最大值"（判据靠它，压缩也不会刷新
+    //    额度），但给学生/老师看的是"用了几次／共几次"，所以这里取 min。见 vibecodingLessonSettings.js。
+    const usedRaw = vibecodingSendUsage({ sessionId: classroom.id, studentId: auth.user.id });
+    const used = limit === null ? usedRaw : Math.min(usedRaw, limit);
+    return {
+      classroom: { id: classroom.id, lessonId, title: classroom.title },
+      gateway: { baseUrl: runtimeGatewayUrl(), key: issueRuntimeKey({ orgId, userId: auth.user.id, sessionId: classroom.id, lessonId }) },
+      presets: vibecodingPresetPrompts(lessonId),
+      sends: { limit, used, remaining: limit === null ? null : Math.max(0, limit - used) },
     };
   }
 

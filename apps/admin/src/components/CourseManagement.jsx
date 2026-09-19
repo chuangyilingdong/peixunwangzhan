@@ -220,6 +220,25 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   const update = (patch) => onChange((current) => ({ ...current, ...patch }));
   const updateGroups = (mapper) => onChange((current) => ({ ...current, materialGroups: mapper(current.materialGroups ?? lesson.materialGroups ?? []) }));
   const updateGroup = (index, patch) => updateGroups((list) => list.map((group, i) => i === index ? { ...group, ...patch } : group));
+  // VibeCoding 课时设置（2026-09-19 用户口径）：**发送次数上限** 与 **预设提示词**。
+  // 两者都放进 classroom_config.vibeCoding —— `normalizeClassroomConfig` 对该对象是整体透传的，
+  // 所以**不新增表、不需要数据迁移**；判定与计数在服务端（services/vibecodingLessonSettings.js）。
+  const vibeCodingConfig = classroomConfig.vibeCoding || {};
+  const presetPrompts = Array.isArray(vibeCodingConfig.presetPrompts) ? vibeCodingConfig.presetPrompts : [];
+  const updateVibeCoding = (patch) => onChange((current) => {
+    const config = classroomConfigFor(lesson, current);
+    return { ...current, classroomConfig: { ...config, vibeCoding: { ...(config.vibeCoding || {}), ...patch } } };
+  });
+  // 列表按函数式更新（与 materialGroups 同一套写法），连续编辑不会互相覆盖
+  const updatePresetPrompts = (mapper) => onChange((current) => {
+    const config = classroomConfigFor(lesson, current);
+    const vibe = config.vibeCoding || {};
+    const list = Array.isArray(vibe.presetPrompts) ? vibe.presetPrompts : [];
+    return { ...current, classroomConfig: { ...config, vibeCoding: { ...vibe, presetPrompts: mapper(list) } } };
+  });
+  const updatePresetPrompt = (index, patch) => updatePresetPrompts((list) => list.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  const addPresetPrompt = () => updatePresetPrompts((list) => [...list, { title: '', text: '' }]);
+  const removePresetPrompt = (index) => updatePresetPrompts((list) => list.filter((_, i) => i !== index));
   function updateMaterial(groupIndex, materialIndex, uid, patch) {
     updateGroups((list) => list.map((group, i) => {
       if (i !== groupIndex) return group;
@@ -342,7 +361,21 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
           ? '只开 VibeCoding：学生进入后与 AI 对话写代码（已自动勾上「AI 文字」）。'
           : '只开画布：学生进来后在画布里创作；下面按需要开放生图 / 生视频 / 音乐能力。'}</p>
     </div>
-    {offersVibe ? <section className="lesson-material-group-editor"><h3>VibeCoding 入口</h3><p className="muted">仅使用 AI 文字对话；图片、视频、音乐能力与画布素材属于画布入口。</p><label>文字模型<select value={classroomConfig.vibeCoding?.model || ''} onChange={(event) => update({ classroomConfig: { ...classroomConfig, vibeCoding: { ...classroomConfig.vibeCoding, model: event.target.value } } })}><option value="">跟随文字渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{model}</option>)}</select></label><label>给学生的编程任务 / 素材说明<textarea value={edit.lessonContent ?? lesson.lessonContent ?? ''} onChange={(event) => update({ lessonContent: event.target.value })} placeholder="描述编程目标、提供文字材料与操作指引" /></label></section> : null}
+    {offersVibe ? <section className="lesson-material-group-editor"><h3>VibeCoding 入口</h3><p className="muted">仅使用 AI 文字对话；图片、视频、音乐能力与画布素材属于画布入口。</p>
+      <label>文字模型<select value={vibeCodingConfig.model || ''} onChange={(event) => updateVibeCoding({ model: event.target.value })}><option value="">跟随文字渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+      {/* 发送次数上限（2026-09-19 用户口径「可以选发送按钮可以按几次」）。
+          ⚠️ 不填 = 不限次（现状一字不改）；填了就由**服务端**按「这个学生在这节课按了几次发送」拦，
+          客户端改不掉（计数在服务端，见 services/vibecodingLessonSettings.js）。 */}
+      <label>发送次数上限<input type="number" min="0" step="1" value={vibeCodingConfig.sendLimit ?? ''} onChange={(event) => updateVibeCoding({ sendLimit: event.target.value === '' ? undefined : Math.max(0, Math.floor(Number(event.target.value) || 0)) })} placeholder="不填 = 不限次" /><small className="muted">不填或填 0 = 不限次。按「学生在这节课按了几次发送」计，由服务端统计（dsh 自己的内部请求不计数）。</small></label>
+      {/* 预设提示词（2026-09-19 用户口径）：客户端显示成可点的提示词块，点一下把内容填进对话框 */}
+      <div className="lesson-config-heading"><strong>预设提示词</strong><button type="button" className="text-button" onClick={addPresetPrompt}>＋预设提示词</button></div>
+      <p className="muted">客户端会把它们显示在对话框旁边；学生点一下，就把内容**填进输入框**（不直接发送，还能自己改）。</p>
+      {presetPrompts.map((preset, index) => <div className="lesson-config-row" key={index}>
+        <input value={preset.title || ''} placeholder={`按钮上那句话（第 ${index + 1} 条）`} onChange={(event) => updatePresetPrompt(index, { title: event.target.value })} maxLength={40} />
+        <textarea value={preset.text || ''} placeholder="点下去要填进输入框的提示词" onChange={(event) => updatePresetPrompt(index, { text: event.target.value })} maxLength={2000} />
+        <button type="button" className="text-button danger-text" onClick={() => removePresetPrompt(index)}>删除</button>
+      </div>)}
+      <label>给学生的编程任务 / 素材说明<textarea value={edit.lessonContent ?? lesson.lessonContent ?? ''} onChange={(event) => update({ lessonContent: event.target.value })} placeholder="描述编程目标、提供文字材料与操作指引" /></label></section> : null}
     {offersCanvas ? <div className="lesson-capability-checks"><strong>画布入口开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => toggleCapability(value, event.target.checked)} disabled={offersVibe && value === 'text'} />{label}</label>)}</div> : null}
     {offersVibe && !offersCanvas ? null : <>
       <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={addGroup}>＋素材组</button></div>
