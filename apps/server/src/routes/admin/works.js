@@ -14,7 +14,8 @@ import { configuredPlazaCategoryMap, DEFAULT_PLAZA_CATEGORY_MAP, PLAZA_CATEGORIE
 import { getAiProviderPolicy } from '../billingConfig.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
-import { normalizeSubmission } from '../vibecoding.js';
+import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds } from '../vibecoding.js';
+import { prepareFileDownload, prepareFilePreview } from '../fileAssets.js';
 import {
   ENROLLMENT_STATUSES,
   ORG_MEMBER_ROLES,
@@ -210,6 +211,41 @@ export async function handleWorks(ctx, part, method) {
     q('DELETE FROM works WHERE id=?', [work.id]);
     audit(ctx, 'PLATFORM_WORK_DELETE', 'WORK', work.id, before, { deleted: true, reason, media }, { orgId: work.org_id });
     return { deleted: true, id: work.id, title: before.title, media };
+  }
+  // 平台端看**作品内容**（2026-09-20 用户口径：「平台能看到作品，但是也要能预览吧。现在只有个标题」）。
+  // 列表那条只给标题/状态，所以预览要另取一次详情：把 files / entryFile / artifacts 一起带上，
+  // 前端就能用与机构端同一套 Replay* 组件渲染（网页能玩、文档给服务端转的 PDF）。
+  // ⚠️ 真文件产物的取用地址在服务端拼好（前端不自己拼路由：前缀/编码错一处就是 404，两边都没法测）。
+  let vibeDetailMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
+  if (vibeDetailMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDetailMatch[1]]);
+    if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    const content = normalizeSubmission(submission, { includeContent: true });
+    const workBase = `/api/admin/vibecoding-works/${encodeURIComponent(submission.id)}`;
+    const fileUrls = Object.fromEntries(parseSnapshotArtifacts(submission)
+      .filter((item) => item.fileId)
+      .map((item) => [item.name, {
+        preview: `${workBase}/files/${encodeURIComponent(item.name)}/preview`,
+        download: `${workBase}/files/${encodeURIComponent(item.name)}/download`,
+      }]));
+    return { ...content, fileUrls };
+  }
+  let vibeDetailFileMatch = part.match(/^\/vibecoding-works\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
+  if (vibeDetailFileMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDetailFileMatch[1]]);
+    if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    let name = '';
+    try { name = decodeURIComponent(vibeDetailFileMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
+    if (!name || name.includes('/') || name.includes('\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_FILE_NAME');
+    // 准入与机构端那条一致：**只认这份作品快照里出现过的 fileId**
+    const fileId = snapshotArtifactByName(submission, name)?.fileId;
+    if (!fileId || !snapshotDocumentFileIds(submission).has(String(fileId))) throw errors.notFound('文件不属于此作品', 'VIBECODING_WORK_FILE_NOT_FOUND');
+    const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE') throw errors.notFound('作品文件不可用', 'VIBECODING_WORK_FILE_NOT_FOUND');
+    if (file.expires_at && Date.parse(file.expires_at) <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    return vibeDetailFileMatch[3] === 'preview' ? prepareFilePreview(ctx, file) : prepareFileDownload(ctx, file);
   }
   let vibeEditMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
   if (vibeEditMatch && method === 'PUT') {

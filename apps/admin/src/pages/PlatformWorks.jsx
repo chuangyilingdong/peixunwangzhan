@@ -3,6 +3,7 @@ import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, Pagi
 import { downloadCsv } from '../shared.jsx';
 
 const publicationLabels = { SUBMITTED: '已提交待发布', PUBLISHED: '已发布到官网', UNPUBLISHED: '已下架' };
+import { WorkPreview } from '../components/WorkPreview.jsx';
 // 只用于**后台显示**的类型中文名 —— 判断哪个类型算哪一类的是服务端（services/plazaCategories.js），
 // 这里只是别让管理员对着一串英文 key 做选择。与官网的 PL_TYPE_META 是两处，都只影响显示。
 const typeLabels = { image: '图片', video: '视频', webpage: '网页', miniGame: '小游戏', ppt: 'PPT', brandDesign: '品牌设计', music: '音乐', podcast: 'AI播客', agent: '智能体', workflow: '工作流', pictureBook: '绘本' };
@@ -19,6 +20,8 @@ export function PlatformWorks({ api }) {
   const [action, setAction] = useState(null);
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
+  // 作品预览（用户口径：「平台能看到作品，但是也要能预览吧。现在只有个标题」）
+  const [previewItem, setPreviewItem] = useState(null);
   const busy = useRef(false);
   const [exporting, setExporting] = useState(false);
   const [detailId, setDetailId] = useState(null);
@@ -174,7 +177,7 @@ export function PlatformWorks({ api }) {
           <td><strong>{item.packageName || '课包未记录'}</strong><div>{item.courseLessonTitle || item.lessonTitle || '课时未记录'}</div><div className="muted">{item.sessionTitle || '课堂未记录'}</div></td>
           <td><span className={`status ${item.publicationState === 'PUBLISHED' ? 'success' : ''}`}>{publicationLabels[item.publicationState] || '已提交待发布'}</span>{item.featured && <span className="status success">精选</span>}{item.publicationState === 'UNPUBLISHED' && item.unpublishReason && <div className="muted">下架原因：{item.unpublishReason}</div>}<div className="muted">{item.copyrightConfirmedAt ? '已确认展示授权' : '未确认展示授权'}</div></td>
           <td>{formatDate(item.submittedAt)}</td>
-          <td><div className="row-actions"><button className="text-button" disabled={saving || (item.publicationState !== 'PUBLISHED' && (!item.copyrightConfirmedAt || (kind === 'canvas' && item.status === 'REJECTED')))} onClick={() => confirmPublication(item)}>{item.publicationState === 'PUBLISHED' ? '下架' : '发布到官网'}</button>{item.publicationState === 'PUBLISHED' && item.shareToken && <a className="text-button" href={`/works/${item.shareToken}`} target="_blank" rel="noreferrer">查看官网作品</a>}{kind === 'canvas' && item.publicationState === 'PUBLISHED' && <button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button>}<button className="text-button" disabled={saving} onClick={() => openEdit(item, kind)}>编辑</button><button className="text-button" disabled={saving} onClick={() => openPurge(item, kind)}>彻底删除</button></div>{kind === 'canvas' && item.status === 'REJECTED' && <span className="muted">历史退回作品，需学生重新提交</span>}</td>
+          <td><div className="row-actions"><button className="text-button" disabled={saving || (item.publicationState !== 'PUBLISHED' && (!item.copyrightConfirmedAt || (kind === 'canvas' && item.status === 'REJECTED')))} onClick={() => confirmPublication(item)}>{item.publicationState === 'PUBLISHED' ? '下架' : '发布到官网'}</button>{item.publicationState === 'PUBLISHED' && item.shareToken && <a className="text-button" href={`/works/${item.shareToken}`} target="_blank" rel="noreferrer">查看官网作品</a>}{kind === 'canvas' && item.publicationState === 'PUBLISHED' && <button className="text-button" disabled={saving} onClick={() => toggleFeature(item)}>{item.featured ? '取消精选' : '设为精选'}</button>}{kind === 'vibecoding' && <button className="text-button" disabled={saving} onClick={() => setPreviewItem(item)}>预览</button>}<button className="text-button" disabled={saving} onClick={() => openEdit(item, kind)}>编辑</button><button className="text-button" disabled={saving} onClick={() => openPurge(item, kind)}>彻底删除</button></div>{kind === 'canvas' && item.status === 'REJECTED' && <span className="muted">历史退回作品，需学生重新提交</span>}</td>
         </tr>)}</tbody></table></div>
         <Pagination page={result.data.page} totalPages={result.data.totalPages} onChange={setPage} disabled={loading} />
       </> : <Empty title="没有符合条件的作品" body="可调整筛选条件，或切换作品类型。" />}
@@ -187,6 +190,8 @@ export function PlatformWorks({ api }) {
         <details><summary>提交历史（只读） · {detail.data.submissions?.length || 0}</summary>{detail.data.submissions?.map((item) => <p key={item.id}>第 {item.round} 次 · {item.title} · {formatDate(item.submittedAt)}</p>)}</details>
       </>}
     </Panel>}
+    {/* 作品预览（VibeCoding 产物）：网页在不带 allow-same-origin 的沙箱里真跑，文档给服务端转的 PDF */}
+    {previewItem ? <WorkPreview api={api} workId={previewItem.id} title={previewItem.title} onClose={() => setPreviewItem(null)} /> : null}
     <details onToggle={(event) => setMapOpen(event.currentTarget.open)}><summary>作品广场分类映射（改完即时生效，不用发版）</summary>
       {mapOpen && <Panel title="类型 → 分类">
         {plazaMap.loading ? <Loading /> : plazaMap.error ? <ErrorState error={plazaMap.error} onRetry={plazaMap.refresh} /> : plazaMap.data && mapDraft ? <>

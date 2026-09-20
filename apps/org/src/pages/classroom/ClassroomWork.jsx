@@ -21,8 +21,17 @@ async function readAsDataUrl(blob) {
   });
 }
 
-export function ClassroomWork({ api, sessionId, work = {}, onClose }) {
-  const detail = useData(() => api.get(`org/sessions/${encodeURIComponent(sessionId)}/works/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}`), [api, sessionId, work.source, work.id]);
+/**
+ * 只读作品预览弹窗（画布 / VibeCoding 产物都走它）。
+ *
+ * `workBase` 是接口前缀，**两种作用域共用这一个组件**（2026-09-20）：
+ *   · 课堂详情里：`org/sessions/<sessionId>/works` —— 只认挂在这堂课里的作品；
+ *   · 作品管理里：`org/works` —— 按机构看，**不要求作品有课堂**（有的提交没挂课堂，
+ *     用课堂作用域根本打不开）。
+ * 服务端两种作用域返回同一套图片 / 文件地址前缀，所以这里只换前缀、渲染逻辑一个字不动。
+ */
+export function ClassroomWork({ api, workBase, work = {}, onClose }) {
+  const detail = useData(() => api.get(`${workBase}/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}`), [api, workBase, work.source, work.id]);
   const [activeName, setActiveName] = useState('');
   const [images, setImages] = useState({});
   const [imageError, setImageError] = useState('');
@@ -31,7 +40,7 @@ export function ClassroomWork({ api, sessionId, work = {}, onClose }) {
     let cancelled = false;
     setImages({});
     setImageError('');
-    const prefix = `/api/org/sessions/${encodeURIComponent(sessionId)}/works/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}/images/`;
+    const prefix = `/api/${workBase}/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}/images/`;
     Promise.allSettled(Object.entries(data?.imageUrls || {}).map(async ([id, path]) => {
       if (typeof path !== 'string' || !path.startsWith(prefix)) throw new Error('图片地址不属于此作品。');
       const blobUrl = await api.fetchBlobUrl(path);
@@ -50,7 +59,7 @@ export function ClassroomWork({ api, sessionId, work = {}, onClose }) {
       if (!cancelled) setImageError(error.message || '作品图片读取失败。');
     });
     return () => { cancelled = true; };
-  }, [api, data, sessionId, work.id, work.source]);
+  }, [api, data, workBase, work.id, work.source]);
   const snapshotImage = (value) => {
     const raw = String(value || '');
     const match = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:[?#].*)?$/);

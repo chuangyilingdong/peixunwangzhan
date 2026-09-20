@@ -711,14 +711,37 @@ export async function handleOrg(ctx) {
     return manage || auth.user.role === 'TEACHER' ? assertSessionManager(auth, value) : value;
   };
 
+  /**
+   * 「作品详情 / 作品图片 / 作品文件」三条读路由的**作用域**（2026-09-20）。
+   *
+   * 原来只有**课堂作用域**（`/sessions/:id/works/...`）：机构端/老师在课堂详情里点「查看作品」走它。
+   * 但「作品管理」那个页面是按**机构**看的 —— 一份 VibeCoding 作品可能没有课堂
+   * （老数据、或提交时没挂课堂），用课堂作用域根本打不开。于是同一套读逻辑现在支持两种作用域：
+   *   · session：课堂属于本机构 **且** 作品挂在这堂课里（原行为，一字不改）；
+   *   · org    ：作品属于本机构即可（机构内可见，不看有没有课堂）。
+   * 两种作用域返回**同一套 URL 前缀**，前端（ClassroomWork）才能一处复用。
+   */
+  const resolveWorkScope = (sessionId) => {
+    if (!sessionId) return { sessionId: null, base: '/api/org/works' };
+    const session = sessionInOrg(sessionId, { manage: false });
+    return { sessionId: session.id, base: `/api/org/sessions/${encodeURIComponent(session.id)}/works` };
+  };
+  /** VibeCoding 作品：课堂作用域要它挂在这堂课里；机构作用域只认机构。 */
+  const vibeWorkWhere = (scope) => (scope.sessionId
+    ? { sql: 'submission.id=? AND submission.org_id=? AND conversation.class_session_id=?', params: [] }
+    : { sql: 'submission.id=? AND submission.org_id=?', params: [] });
+
   // 机构/老师看**私有作品里的真文件**（学生创作环境交上来的 PPT/Word/Excel 原文件）。
   // 预览走服务端转出来的 PDF、下载给原文件；准入与图片那条一样 ——
   // **只认这份作品快照里出现过的 fileId**，拿得到别人的 id 也读不到别人的文件。
   // （作品没发布时走不了公开地址，所以机构端必须有自己的这一条。）
   const sessionWorkFileMatch = part.match(/^\/sessions\/([^/]+)\/works\/(VIBECODING)\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
-  if (sessionWorkFileMatch && method === 'GET') {
-    const target = sessionInOrg(sessionWorkFileMatch[1], { manage: false });
-    const [, , , workId, rawName, mode] = sessionWorkFileMatch;
+  const orgWorkFileMatch = part.match(/^\/works\/(VIBECODING)\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
+  if ((sessionWorkFileMatch || orgWorkFileMatch) && method === 'GET') {
+    const scope = sessionWorkFileMatch ? resolveWorkScope(sessionWorkFileMatch[1]) : resolveWorkScope(null);
+    const [, workId, rawName, mode] = sessionWorkFileMatch
+      ? [, sessionWorkFileMatch[3], sessionWorkFileMatch[4], sessionWorkFileMatch[5]]
+      : [, orgWorkFileMatch[2], orgWorkFileMatch[3], orgWorkFileMatch[4]];
     let name = '';
     try { name = decodeURIComponent(rawName); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
     if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_FILE_NAME');
@@ -726,8 +749,8 @@ export async function handleOrg(ctx) {
           JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
             AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
           JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
-          WHERE submission.id=? AND submission.org_id=? AND conversation.class_session_id=?`, [workId, currentOrgId, target.id]);
-    if (!work) throw errors.notFound('作品不属于此课堂', 'SESSION_WORK_NOT_FOUND');
+          WHERE ${vibeWorkWhere(scope).sql}`, scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId]);
+    if (!work) throw errors.notFound(scope.sessionId ? '作品不属于此课堂' : '作品不存在', 'SESSION_WORK_NOT_FOUND');
     const fileId = snapshotArtifactByName(work, name)?.fileId;
     if (!fileId || !snapshotDocumentFileIds(work).has(String(fileId))) {
       throw errors.notFound('文件不属于此作品', 'SESSION_WORK_FILE_NOT_FOUND');
@@ -739,19 +762,24 @@ export async function handleOrg(ctx) {
   }
 
   const sessionWorkMatch = part.match(/^\/sessions\/([^/]+)\/works\/(CANVAS|VIBECODING)\/([^/]+)(?:\/images\/([^/]+))?$/);
-  if (sessionWorkMatch && method === 'GET') {
-    const target = sessionInOrg(sessionWorkMatch[1], { manage: false });
-    const [, , source, workId, imageId] = sessionWorkMatch;
+  const orgWorkMatch = part.match(/^\/works\/(CANVAS|VIBECODING)\/([^/]+)(?:\/images\/([^/]+))?$/);
+  if ((sessionWorkMatch || orgWorkMatch) && method === 'GET') {
+    const scope = sessionWorkMatch ? resolveWorkScope(sessionWorkMatch[1]) : resolveWorkScope(null);
+    const [source, workId, imageId] = sessionWorkMatch
+      ? [sessionWorkMatch[2], sessionWorkMatch[3], sessionWorkMatch[4]]
+      : [orgWorkMatch[1], orgWorkMatch[2], orgWorkMatch[3]];
     const work = source === 'CANVAS'
       ? row(`SELECT work.*,student.display_name student_name FROM works work
           JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
-          WHERE work.id=? AND work.org_id=? AND work.class_session_id=?`, [workId, currentOrgId, target.id])
+          WHERE work.id=? AND work.org_id=?${scope.sessionId ? ' AND work.class_session_id=?' : ''}`,
+          scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId])
       : row(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
           JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
             AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
           JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
-          WHERE submission.id=? AND submission.org_id=? AND conversation.class_session_id=?`, [workId, currentOrgId, target.id]);
-    if (!work) throw errors.notFound('作品不属于此课堂', 'SESSION_WORK_NOT_FOUND');
+          WHERE ${vibeWorkWhere(scope).sql}`,
+          scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId]);
+    if (!work) throw errors.notFound(scope.sessionId ? '作品不属于此课堂' : '作品不存在', 'SESSION_WORK_NOT_FOUND');
     const canvasSnapshot = source === 'CANVAS' ? normalizeWork(work, { includeSnapshot: true }).canvasSnapshot : null;
     const allowedImages = source === 'VIBECODING' ? snapshotImageFileIds(work) : new Set(
       (Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : []).flatMap((node) =>
@@ -765,12 +793,12 @@ export async function handleOrg(ctx) {
       return prepareFileDownload(ctx, file);
     }
     const base = { id: work.id, source, title: work.title, studentId: work.student_id, studentName: work.student_name || null, status: work.status, submittedAt: work.submitted_at };
-    const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `/api/org/sessions/${encodeURIComponent(target.id)}/works/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
+    const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `${scope.base}/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
     if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls };
     const content = normalizeSubmission(work, { includeContent: true });
     // 真文件产物（学生创作环境交上来的 PPT/Word/Excel）的取用地址也在服务端拼好：
     // 前端不该自己去拼路由（前缀/编码错一处就是 404，而且两边都没法测）。
-    const workBase = `/api/org/sessions/${encodeURIComponent(target.id)}/works/VIBECODING/${encodeURIComponent(work.id)}`;
+    const workBase = `${scope.base}/VIBECODING/${encodeURIComponent(work.id)}`;
     const fileUrls = Object.fromEntries(parseSnapshotArtifacts(work)
       .filter((item) => item.fileId)
       .map((item) => [item.name, {
@@ -1138,7 +1166,52 @@ export async function handleOrg(ctx) {
     }
     // 教师范围：作品挂在我创建的课堂（班级退场后不再按 class 圈定）
     where += sessionOwnedByTeacherExists('work.class_session_id', auth, params, { orgColumn: 'work.org_id' });
-    const items = rows(`SELECT work.*,student.display_name student_name,lesson.title lesson_title,series.title series_title,session.title session_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN class_sessions session ON session.id=work.class_session_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.submitted_at DESC LIMIT 200`, params).map((work) => ({ ...normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }), seriesTitle: work.series_title || null, sessionTitle: work.session_title || null, pendingReportCount: Number(work.pending_report_count || 0) })); return { items };
+    const canvasItems = rows(`SELECT work.*,student.display_name student_name,lesson.title lesson_title,series.title series_title,session.title session_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN class_sessions session ON session.id=work.class_session_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.submitted_at DESC LIMIT 200`, params).map((work) => ({ ...normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }), seriesTitle: work.series_title || null, sessionTitle: work.session_title || null, pendingReportCount: Number(work.pending_report_count || 0) }));
+
+    // VibeCoding 提交（2026-09-20）：**这个列表原来只读 `works`（画布）**，于是学生从创作环境交上来的
+    // 网页 / PPT 作品在「作品管理」里根本不出现 —— 平台端看得到、机构端看不到
+    // （用户报的「机构/老师看不到学生提交的作品」就是它）。按学生端 / 平台端同一套形状并进来。
+    // ⚠️ 筛选口径的差异：VibeCoding 没有 `PUBLISHED` 这个状态，那个筛选值在这里等价于
+    //    「已发布到官网」（is_public=1）；举报（work_reports）只挂 `works`，所以这类作品的待处理举报恒为 0。
+    // ⚠️ 老师范围与画布那条一致：只看得见**自己课堂**的作品 —— 没挂课堂的提交对老师不可见、机构管理员可见。
+    const vibeParams = [currentOrgId];
+    let vibeWhere = 'submission.org_id=?';
+    if (status) {
+      if (status === 'PUBLISHED') vibeWhere += ' AND submission.is_public=1';
+      else { vibeWhere += ' AND submission.status=?'; vibeParams.push(status); }
+    }
+    if (sessionFilter) { vibeWhere += ' AND conversation.class_session_id=?'; vibeParams.push(sessionFilter); }
+    if (search) {
+      const keyword = '%' + search.replace(new RegExp(`[%\_]`, 'g'), (char) => '\' + char) + '%';
+      vibeWhere += " AND (submission.title LIKE ? ESCAPE '\' OR student.display_name LIKE ? ESCAPE '\' OR lesson.title LIKE ? ESCAPE '\')";
+      vibeParams.push(keyword, keyword, keyword);
+    }
+    vibeWhere += sessionOwnedByTeacherExists('(SELECT class_session_id FROM vibecoding_conversations conv WHERE conv.id=submission.conversation_id)', auth, vibeParams, { orgColumn: 'submission.org_id' });
+    const vibeItems = rows(`SELECT submission.*,student.display_name student_name,COALESCE(lesson.published_title,lesson.title) lesson_title,series.title series_title,session.title session_title,conversation.class_session_id class_session_id FROM vibecoding_submissions submission JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id LEFT JOIN course_lessons lesson ON lesson.id=submission.lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id LEFT JOIN class_sessions session ON session.id=conversation.class_session_id WHERE ${vibeWhere} ORDER BY submission.submitted_at DESC LIMIT 200`, vibeParams).map((submission) => ({
+      id: submission.id,
+      source: 'VIBECODING',
+      title: submission.title,
+      description: submission.description || '',
+      studentId: submission.student_id,
+      studentName: submission.student_name || null,
+      status: submission.status,
+      submittedAt: submission.submitted_at,
+      seriesTitle: submission.series_title || null,
+      courseLessonTitle: submission.lesson_title || null,
+      sessionTitle: submission.session_title || null,
+      classSessionId: submission.class_session_id || null,
+      entryFile: submission.entry_file || 'index.html',
+      plazaPublished: Number(submission.is_public || 0) === 1,
+      // 这两个字段画布那边有、这里没有：机构精选与举报都只作用于 `works`（口径见上面的注释）
+      featured: false,
+      pendingReportCount: 0,
+      copyrightConfirmedAt: submission.copyright_confirmed_at || null,
+    }));
+
+    // 两类合并后统一排序：**精选仍置顶**（画布那条的既有口径），其余按提交时间倒序 ——
+    // 单独按来源分页/拼接会让"最新作品"被来源顺序盖住。
+    const items = [...canvasItems, ...vibeItems].sort((a, b) => (Number(Boolean(b.featured)) - Number(Boolean(a.featured))) || String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')));
+    return { items };
   }
   let orgFeatureMatch = part.match(/^\/works\/([^/]+)\/feature$/);
   if (orgFeatureMatch && method === 'PUT') {

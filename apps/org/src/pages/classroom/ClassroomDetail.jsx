@@ -227,7 +227,7 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
           </Panel>
         </> : null}
 
-    {modal?.kind === 'work' ? <ClassroomWork api={api} sessionId={openId} work={modal.work} onClose={closeModal} /> : null}
+    {modal?.kind === 'work' ? <ClassroomWork api={api} workBase={`org/sessions/${encodeURIComponent(openId)}/works`} work={modal.work} onClose={closeModal} /> : null}
 
     {/* 005-03A 编辑课堂名称 */}
     {modal?.kind === 'title' ? <Modal title="编辑课堂名称" parent={['课堂详情']} busy={busy} error={error} onClose={closeModal}
