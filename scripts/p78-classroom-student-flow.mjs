@@ -156,30 +156,6 @@ try {
   const dissolved = await api(`/api/org/sessions/${otherSession.data.id}/dissolve`, { method: 'POST', token: admin, body: { reason: 'P78 测试解散' } });
   check('②d 待上课的课堂可以解散（PENDING → DISSOLVED）', dissolved.status === 200 && dissolved.data?.status === 'DISSOLVED', JSON.stringify(dissolved).slice(0, 200));
 
-  // ②e 加人这一步拦住了，但**开课以前不复查占用** —— 只要名单里存在异常占用
-  //     （2026-09-13 那条校验最初只按**同一课时**过滤，跨课时拦不住；生产的演示数据就是那样进去的，
-  //     而 client-context 只会默默挑"最近开始的那一场"，学生做 A 课作业却拿到 B 课的上限），
-  //     一点「开始上课」就会造出「同一个学生两场 ACTIVE 课堂」。
-  //     这里**另起一场课堂 + 直写一行名单**来模拟那种历史数据（用 API 是造不出来的 —— 那正是这条断言的意义），
-  //     断言开课必须被拒、并说清占用的课堂。
-  const legacySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 历史名单课堂' } });
-  {
-    const db = new DatabaseSync(dbPath);
-    db.exec('PRAGMA busy_timeout = 5000');
-    const row = db.prepare('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?').get(legacySession.data.id);
-    const now = new Date().toISOString();
-    console.log('[p78 debug]', JSON.stringify({ sessionId: legacySession.data?.id, row, studentId: seeded.studentId }));
-    db.prepare(
-      "INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
-      "VALUES (?,?,?,?,?,?, 'PENDING', NULL, ?, ?)",
-    ).run(`sess_stu_legacy_${Math.random().toString(36).slice(2, 8)}`, row.id, seeded.studentId, row.org_id, row.lesson_id, row.series_id, now, now);
-    db.close();
-  }
-  const legacyStart = await api(`/api/org/sessions/${legacySession.data.id}/start`, { method: 'POST', token: admin });
-  check('②e 名单里有异常占用（历史数据）时，开课必须被拒并说清占用的课堂',
-    legacyStart.status === 409 && legacyStart.error?.code === 'STUDENT_IN_OTHER_SESSION' && /另一场课堂/.test(legacyStart.error?.message || ''),
-    JSON.stringify(legacyStart).slice(0, 240));
-
   /* ③ 老师结束课堂 → 学员立刻进不去，且状态结算成「未完课」（这次没消耗过算力） */
   const ended = await api(`/api/org/sessions/${sessionId}/end`, { method: 'POST', token: teacher, body: {} });
   check('③ 老师结束课堂（上课中 → 已结束）', ended.status === 200 && ended.data?.status === 'ENDED', JSON.stringify(ended).slice(0, 200));
@@ -230,6 +206,29 @@ try {
   const notInCurriculum = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: 'lesson_does_not_exist', title: 'P78 不存在' } });
   check('⑤ 课时不存在 → LESSON_NOT_ASSIGNED（拒绝原因不混）',
     ['LESSON_NOT_ASSIGNED', 'LESSON_REQUIRED'].includes(notInCurriculum.error?.code), JSON.stringify(notInCurriculum).slice(0, 220));
+
+  /* ⑥ 历史/异常名单：加人这一步拦住了，但**开课以前不复查占用** —— 只要名单里存在异常占用
+     （2026-09-13 那条校验最初只按**同一课时**过滤，跨课时拦不住；生产的演示数据就是那样进去的，
+     而 client-context 只会默默挑"最近开始的那一场"，学生做 A 课作业却拿到 B 课的上限），
+     一点「开始上课」就会造出「同一个学生两场 ACTIVE 课堂」→ 所以开课必须复查。
+     ⚠️ 这一段**故意放在最后**：它往名单里塞了一行"异常占用"，会挡住后面任何"再把这个学生加进别处"的动作。
+     直写库来模拟历史数据是**有意**的 —— 用 API 根本造不出这种名单，那正是这条断言要守的东西。 */
+  const legacySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 历史名单课堂' } });
+  {
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA busy_timeout = 5000');
+    const row = db.prepare('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?').get(legacySession.data.id);
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
+      "VALUES (?,?,?,?,?,?, 'PENDING', NULL, ?, ?)",
+    ).run(`sess_stu_legacy_${Math.random().toString(36).slice(2, 8)}`, row.id, seeded.studentId, row.org_id, row.lesson_id, row.series_id, now, now);
+    db.close();
+  }
+  const legacyStart = await api(`/api/org/sessions/${legacySession.data.id}/start`, { method: 'POST', token: admin });
+  check('⑥ 名单里有异常占用（历史数据）时，开课必须被拒并说清占用的课堂',
+    legacyStart.status === 409 && legacyStart.error?.code === 'STUDENT_IN_OTHER_SESSION' && /另一场课堂/.test(legacyStart.error?.message || ''),
+    JSON.stringify(legacyStart).slice(0, 240));
 
   console.log(JSON.stringify({ name: 'student-grant-gate', pass: failures === 0, failures }, null, 2));
 } catch (error) {
