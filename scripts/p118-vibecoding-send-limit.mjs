@@ -108,6 +108,28 @@ try {
   assert.ok(resolved?.classroom, 'client-context 没给出课堂（夹具没生效？）');
   const sessionId = resolved.classroom.id;
   const lessonId = resolved.classroom.lessonId;
+  // ①a 这节课"叫什么"：课包 / 课时 / 老师要与库里一致
+  //    （用户口径 2026-09-20：学生要在客户端上看得见自己进的是哪节课 —— 预设与次数上限都是按课时配的）。
+  //    ⚠️ 这条抓的是 **JOIN 写错**那类静默 bug：课包挂错 series 时接口照样 200、字段也在，只是名字指错了课。
+  //    所以拿库里的真值对，不只看字段在不在。
+  const lessonRow = readRow(
+    `SELECT COALESCE(lesson.published_title, lesson.title) AS lesson_title, series.title AS series_title,
+            teacher.display_name AS teacher_name
+       FROM class_sessions session
+       LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
+       LEFT JOIN course_series series ON series.id = lesson.series_id
+       LEFT JOIN users teacher ON teacher.id = session.teacher_id
+      WHERE session.id = ?`,
+    [sessionId],
+  );
+  await check('client-context 报的课包 / 课时 / 老师与库里一致', () => {
+    for (const key of ['seriesTitle', 'lessonTitle', 'teacherName']) {
+      assert.ok(Object.hasOwn(resolved.classroom, key), `classroom 缺字段 ${key}`);
+    }
+    assert.equal(resolved.classroom.lessonTitle, lessonRow?.lesson_title || null);
+    assert.equal(resolved.classroom.seriesTitle, lessonRow?.series_title || null);
+    assert.equal(resolved.classroom.teacherName, lessonRow?.teacher_name || null);
+  });
   // ⚠️ classroom_config 是 NOT NULL：清空配置要写 '{}'，不能写 null。
   const setLimit = (value) => write('UPDATE course_lessons SET classroom_config=? WHERE id=?', [
     value === null ? '{}' : JSON.stringify({ vibeCoding: { sendLimit: value } }), lessonId,
@@ -239,6 +261,19 @@ try {
     ]);
     assert.equal(response.status, 200);
     assert.equal(sends(sessionId, student.id), 3);
+  });
+
+  // ⑥ 课堂没开始（老师还没点「立即上课」）：不发密钥，但要把「接下来是哪节课」告诉客户端。
+  //    ⚠️ 这条钉的是**闸门**：没有 ACTIVE 课堂时必须没有 `gateway` —— 学生拿不到密钥就调不动网关，
+  //    「点了立即上课才能进」是服务端兜底的，不靠客户端自觉（见 studentRuntime.js 该处注释）。
+  write("UPDATE class_sessions SET status='PENDING' WHERE id=?", [sessionId]);
+  await check('课堂未开始时：classroom 为 null、不发网关密钥、upcoming 报出这节课', async () => {
+    const paused = await context();
+    assert.equal(paused.classroom, null);
+    assert.equal(paused.gateway, undefined, '没有在上的课堂却发了网关密钥 —— 闸门漏了');
+    assert.equal(paused.upcoming?.id, sessionId, 'upcoming 没指向那节还没开始的课');
+    assert.equal(paused.upcoming?.lessonTitle, lessonRow?.lesson_title || null);
+    assert.equal(paused.upcoming?.seriesTitle, lessonRow?.series_title || null);
   });
 
   if (checks.some((item) => !item.ok)) console.error(serverLog.slice(-1500));

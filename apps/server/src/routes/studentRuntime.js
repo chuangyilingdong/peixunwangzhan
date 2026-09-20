@@ -36,6 +36,57 @@ function requireActiveClassroom(studentId, what) {
   return classroom;
 }
 
+/**
+ * 这节课「叫什么」—— 学生得在客户端上**看得见自己进的是哪节课**（2026-09-20 用户口径）。
+ *
+ * 为什么要单独查一次：`client-context` 原来只回课堂标题（老师起的名字，比如「上午班」），
+ * 而**预设提示词与发送次数上限都是按课时配的** —— 学生只看到「上午班」对不上是哪个课包哪一节。
+ * 老师名一并带上：学生要能确认「是不是这节课、是不是这个老师」。
+ * ⚠️ 课时名取 `COALESCE(published_title, title)`：published_title 才是给学生看的那一版
+ *    （与作品列表同一口径；`getStudentClassrooms` 用的是 lesson.title，那是机构侧口径）。
+ */
+function classroomContext(sessionId) {
+  if (!sessionId) return null;
+  const info = row(
+    `SELECT session.status AS session_status, session.started_at,
+            COALESCE(lesson.published_title, lesson.title) AS lesson_title,
+            series.title AS series_title,
+            teacher.display_name AS teacher_name
+       FROM class_sessions session
+       LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
+       LEFT JOIN course_series series ON series.id = lesson.series_id
+       LEFT JOIN users teacher ON teacher.id = session.teacher_id
+      WHERE session.id = ?`,
+    [sessionId],
+  );
+  if (!info) return null;
+  return {
+    seriesTitle: info.series_title || null,
+    lessonTitle: info.lesson_title || null,
+    teacherName: info.teacher_name || null,
+    sessionStatus: info.session_status || null,
+    startedAt: info.started_at || null,
+  };
+}
+
+/**
+ * 学生名下**还没开始**的那节课（PENDING）。老师还没点「立即上课」时，学生至少能看见
+ * 「接下来要上哪节课」，而不是只看到一句「老师还没有开始上课」—— 但**不发密钥**，
+ * 「老师点了立即上课才能进」那道闸不动。
+ * 口径见 docs/README.md：一个学生全局最多属于一个未终态课堂，所以这里最多一条。
+ */
+function resolvePendingClassroom(studentId) {
+  return row(
+    `SELECT session.id, session.lesson_id, session.title
+       FROM class_sessions session
+       JOIN session_students part ON part.session_id = session.id
+      WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'PENDING'
+      ORDER BY session.created_at DESC LIMIT 1`,
+    [studentId],
+  );
+}
+
+
 /** 文件名的尺度与现有产物一致：**平铺**（不带路径分隔符）。叫得出来、能当 URL 段。 */
 function safeArtifactName(value) {
   const name = String(value || '').trim();
@@ -86,17 +137,55 @@ export async function handleStudentRuntime(ctx) {
   // ⚠️ 没在上的课（老师没点「立即上课」）→ classroom:null：客户端据此只显示「我的课程」、
   //    不给进入对话区的入口。这就是「点了立即上课才能进」那道闸 —— 而且是**服务端兜底**的：
   //    客户端即使被改，没密钥就调不动网关（密钥里带机构/学生/课时/课堂，网关每次调用都重新过门禁）。
+  //
+  // 2026-09-20（用户口径：学生要"跟这节课的设定对应上"）：
+  //   · `classroom` 补 `seriesTitle / lessonTitle / teacherName / startedAt` —— 预设与次数上限都是
+  //     **按课时**配的，学生只看到课堂名（「上午班」）对不上是哪个课包哪一节；
+  //   · 没有在上的课时给 `upcoming`（名下那节 PENDING 课堂的同组信息）—— 至少让他知道"接下来上哪节"，
+  //     但**仍然不发密钥**，闸门不动。
+  //   · ⚠️ **有意不加"选哪节课"的参数**：`docs/README.md` 有一条口径「一个学生全局最多属于一个
+  //     未终态课堂（PENDING/ACTIVE）」，且**加人时会被拒**（守卫 p66/p78：「试着把他加到另一个课堂
+  //     → 必须被拒，并说清占用的课堂」）。也就是说**根本没有第二节课可选**，参数加了是死代码。
+  //     真要做成"学生自己选课 / 同时上多节课"，那得先改那条口径与两道守卫，不是补个界面。
   if (part === '/client-context' && method === 'GET') {
     const classroom = resolveActiveClassroom(auth.user.id);
-    if (!classroom) return { classroom: null, message: '老师还没有开始上课' };
+    if (!classroom) {
+      // 还没开始上课：把「接下来是哪节课」也告诉客户端（学生要看得见对应关系），
+      // 但**不发密钥** —— 「老师点了立即上课才能进」那道闸不动。
+      const pending = resolvePendingClassroom(auth.user.id);
+      const pendingInfo = pending ? (classroomContext(pending.id) || {}) : null;
+      return {
+        classroom: null,
+        upcoming: pending ? {
+          id: pending.id,
+          lessonId: pending.lesson_id || '',
+          title: pending.title,
+          seriesTitle: pendingInfo.seriesTitle ?? null,
+          lessonTitle: pendingInfo.lessonTitle ?? null,
+          teacherName: pendingInfo.teacherName ?? null,
+          startedAt: null,
+        } : null,
+        message: '老师还没有开始上课',
+      };
+    }
     const lessonId = classroom.lesson_id || '';
     const limit = vibecodingSendLimit(lessonId);
     // ⚠️ 对外报的已用次数**封顶到上限**：库里存的是"观察到的发送次数最大值"（判据靠它，压缩也不会刷新
     //    额度），但给学生/老师看的是"用了几次／共几次"，所以这里取 min。见 vibecodingLessonSettings.js。
     const usedRaw = vibecodingSendUsage({ sessionId: classroom.id, studentId: auth.user.id });
     const used = limit === null ? usedRaw : Math.min(usedRaw, limit);
+    const info = classroomContext(classroom.id) || {};
     return {
-      classroom: { id: classroom.id, lessonId, title: classroom.title },
+      // 课包/课时/老师一起给学生：预设与次数上限都是**按课时**配的，客户端要能显示"这是哪节课的"。
+      classroom: {
+        id: classroom.id,
+        lessonId,
+        title: classroom.title,
+        seriesTitle: info.seriesTitle ?? null,
+        lessonTitle: info.lessonTitle ?? null,
+        teacherName: info.teacherName ?? null,
+        startedAt: info.startedAt ?? null,
+      },
       gateway: { baseUrl: runtimeGatewayUrl(), key: issueRuntimeKey({ orgId, userId: auth.user.id, sessionId: classroom.id, lessonId }) },
       presets: vibecodingPresetPrompts(lessonId),
       sends: { limit, used, remaining: limit === null ? null : Math.max(0, limit - used) },
