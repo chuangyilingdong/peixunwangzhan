@@ -629,7 +629,7 @@ try {
   if (await candidate.count()) {
     await candidate.click();
     await orgPage.waitForTimeout(500);
-    await orgExpect('002-04A 授权预览', ['本次授权预览', '授权后状态', '待激活', '剩余人次', '总人次', '确认授权后', '页面边界', '取消', '确认授权']);
+    await orgExpect('002-04A 授权预览', ['本次授权预览', '授权后状态', '待激活', '剩余人次', '总人次', '确认授权后', '取消', '确认授权']);
     if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
       problems.push('002-04A：抽屉里出现了取消类按钮（机构端没有取消权限）');
     }
@@ -649,7 +649,7 @@ try {
   // ── 002-04B 单授权详情抽屉（入口是行内的课包名按钮）
   await orgPage.locator('table tbody tr').first().getByRole('button').first().click();
   await orgPage.waitForTimeout(600);
-  await orgExpect('002-04B 单授权详情', ['单授权详情', '授权对象', '授权信息', '操作账号', '来源', '占用人次', '授权状态', '正式学习记录', '页面边界', '关闭']);
+  await orgExpect('002-04B 单授权详情', ['单授权详情', '授权对象', '授权信息', '操作账号', '来源', '占用人次', '授权状态', '正式学习记录', '关闭']);
   if (await orgPage.locator('.drawer-panel').getByRole('button', { name: /取消授权|取消资格|撤销授权/ }).count()) {
     problems.push('002-04B：抽屉里出现了取消类按钮 —— 机构端没有取消权限（用户口径）');
   }
@@ -695,12 +695,15 @@ try {
     problems.push('002-03：「授权情况 = 暂无课包」筛选后一行都没有 —— 夹具里应有 2 名没课包的学生');
   }
 
+  // ⚠️ 002-04A / 002-04B / 002-06 这三处原来都还钉着「页面边界」——那是 2026-09-20 用户口径
+  //    整块删掉的说明面板。以前 p111 崩在前面的分页那步、跑不到这里，所以这三条失败从没露过面
+  //    （守卫变哑的代价，见本文件上方 writeSamplePdf 的注释）。
   // ── 002-06 采购 / 增购 / 开通记录：三分类是**按批次序号算出来的**，不是写死的文案
   await orgPage.locator('.tab', { hasText: '采购与开通记录' }).click();
   await orgSettle();
   await orgExpect('002-06 采购与开通记录', [
     '采购 / 增购 / 开通记录', '业务记录', '初次开通', '增购', '平台调整',
-    '业务时间', '业务类型', '人次数量', '业务来源', '经办', '备注', '页面边界',
+    '业务时间', '业务类型', '人次数量', '业务来源', '经办', '备注',
   ]);
   const firstOpening = await cardValue('初次开通');
   const additional = await cardValue('增购');
