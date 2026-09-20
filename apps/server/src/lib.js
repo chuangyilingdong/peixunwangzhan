@@ -528,11 +528,24 @@ export function seriesDeliveryModesOf(lessons) {
  */
 export function publishedLessonVisibilitySql(alias = 'lesson') {
   const base = (name) => `(SELECT 1 FROM course_lessons base WHERE base.series_id = ${name}.series_id AND base.published_content IS NOT NULL)`;
-  const snapStatus = (name) => `COALESCE(CASE WHEN json_valid(${name}.published_content) THEN json_extract(${name}.published_content, '$.status') END, '')`;
+  // ⚠️ 这里**不能**回退实时状态：已定格的课包里，没有快照的课时（发布之后新建的）必须不可见。
+  const snapOnly = (name) => `COALESCE(CASE WHEN json_valid(${name}.published_content) THEN json_extract(${name}.published_content, '$.status') END, '')`;
   return `(
     (NOT EXISTS ${base(alias)} AND ${alias}.status = 'PUBLISHED')
-    OR (EXISTS ${base(alias)} AND ${snapStatus(alias)} = 'PUBLISHED')
+    OR (EXISTS ${base(alias)} AND ${snapOnly(alias)} = 'PUBLISHED')
   )`;
+}
+
+/**
+ * 读面要给出去的「这节课的状态」= 快照里的 status，**没有快照就回退实时**（老数据口径）。
+ *
+ * 与上面那个**判可见性**的判据是两件事，别混：
+ *   · 可见性：已定格的课包里没有快照 = 不可见（不能回退实时，否则就是这次修的泄漏）；
+ *   · 展示值：没有快照 = 沿用实时状态（老数据没有快照，不编一个状态出来）。
+ * 两个放一处写，是因为它们都得从同一个 JSON 里取 status —— 各写一遍迟早会漂。
+ */
+export function publishedLessonStatusSql(alias = 'lesson') {
+  return `COALESCE(CASE WHEN json_valid(${alias}.published_content) THEN json_extract(${alias}.published_content, '$.status') END, ${alias}.status)`;
 }
 
 export function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
@@ -556,7 +569,10 @@ export function normalizeLesson(value, { includeTeaching = false, asPublished = 
     title: pick('title', value.title),
     summary: pick('summary', value.summary) || '',
     sort: Number(value.sort || 0),
-    status: value.status,
+    // ⚠️ status 也走快照（`publishedLessonVisibilitySql` 就是按快照里的它判可见的）。
+    //    否则会出现「这节课能被机构端看到、但它的 status 显示成实时值（比如 ARCHIVED）」这种自相矛盾；
+    //    机构端详情原来还据此又过滤了一次，于是把「快照说已发布、实时被下掉」的课时直接滤没了。
+    status: pick('status', value.status),
     durationMinutes: Number(pick('durationMinutes', value.duration_minutes) || 0),
     promptPackAssetId: value.prompt_pack_asset_id || null,
     outcomePackAssetId: value.outcome_pack_asset_id || null,

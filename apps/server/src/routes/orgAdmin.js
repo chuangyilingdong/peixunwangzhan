@@ -619,7 +619,10 @@ export async function handleOrg(ctx) {
     const series = row(`SELECT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.id=? AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`, [currentOrgId, orgCourseDetailMatch[1], currentOrgId]);
     if (!series) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
     const detail = normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true, asPublished: true });
-    detail.lessons = (detail.lessons || []).filter((l) => l.status === 'PUBLISHED');
+    // 「有哪些课时」已经由 normalizeSeries 里的 publishedLessonVisibilitySql 判完了，这里**不要**再
+    // 加一道自己的过滤 —— 2026-09-20 那道 `filter(l => l.status === 'PUBLISHED')` 就是"两条规则打架"：
+    // 它读的是**实时** status，于是把「快照里已发布、实时被下掉」的课时从机构端滤没了，
+    // 与「没更新发布就还按上一版给机构看」的口径正好相反。判据只留一处。
     return detail;
   }
   /* ─────────────── 课堂（2026-09-13 批次 B：班级退场，课堂成为主对象）───────────────

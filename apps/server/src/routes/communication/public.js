@@ -9,6 +9,7 @@ import {
   nowIso,
   parseJson,
   platformPermissionForPathname,
+  publishedLessonStatusSql,
   publishedLessonVisibilitySql,
   q,
   requirePlatformPermission,
@@ -425,7 +426,8 @@ export function handlePublicCommunication(ctx) {
     // 与列表同一个判据（publishedLessonVisibilitySql）：没「更新发布」的新课时不该出现在官网，
     // 也不能被算进课时数 —— lessonCount 就是按这个数组的长度算的，改一处两处都对。
     const lessons = rows(
-      `SELECT lesson.id, lesson.series_id, lesson.title, lesson.summary, lesson.sort, lesson.status,
+      `SELECT lesson.id, lesson.series_id, lesson.title, lesson.summary, lesson.sort,
+              ${publishedLessonStatusSql('lesson')} AS status,
               lesson.duration_minutes, lesson.lesson_content, lesson.created_at, lesson.updated_at
        FROM course_lessons lesson WHERE lesson.series_id=? AND ${publishedLessonVisibilitySql('lesson')}
        ORDER BY lesson.sort, lesson.created_at`,
