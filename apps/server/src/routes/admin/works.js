@@ -238,7 +238,9 @@ export async function handleWorks(ctx, part, method) {
     if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
     let name = '';
     try { name = decodeURIComponent(vibeDetailFileMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
-    if (!name || name.includes('/') || name.includes('\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_FILE_NAME');
+    // ⚠️ 反斜杠这里用 charCode 拼：这条路由是用脚本写进文件的，而脚本里写 `\\` 常被吃掉一层
+    //    （这个仓库已经踩过两次），写成 '\' 就是语法错误、只有在服务端跑起来才炸。
+    if (!name || name.includes('/') || name.includes(String.fromCharCode(92)) || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_FILE_NAME');
     // 准入与机构端那条一致：**只认这份作品快照里出现过的 fileId**
     const fileId = snapshotArtifactByName(submission, name)?.fileId;
     if (!fileId || !snapshotDocumentFileIds(submission).has(String(fileId))) throw errors.notFound('文件不属于此作品', 'VIBECODING_WORK_FILE_NOT_FOUND');
