@@ -174,6 +174,13 @@ html.is-workbench-resizing * { cursor: col-resize !important; user-select: none 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 预览舞台（口径㉕ 的逻辑视口方案）：可用空间由**布局**给（作品页按面板高度、工作台用 flex 撑），
+   里面那张 iframe 才是「学生页的逻辑视口」，由 PreviewFrame 按 ≥ 640×768 算好并整体缩放。
+   ⚠️ `overflow: hidden` 是必须的：没有它，被放大到 1896px 的逻辑视口会把舞台自身撑宽，
+      下一次测量又基于更宽的舞台 —— 自反馈（实测能撑到 5315px）。
+   ⚠️ 这里**不要**给 iframe 写 height/width：它就是逻辑视口，由 JS 按可用空间算。 */
+.c-preview__stage { position: relative; overflow: hidden; background: #fff; }
+.c-preview__stage > iframe { position: absolute; left: 0; top: 0; display: block; border: 0; background: #fff; }
 .c-preview__frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; display: block; }
 .c-preview-stage {
   flex: 1;

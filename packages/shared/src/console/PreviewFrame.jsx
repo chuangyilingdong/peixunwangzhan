@@ -25,7 +25,7 @@ export const PREVIEW_LOGICAL_MIN = { w: 640, h: 768 };
  * @param onConsole 可选：(line) => void，接收学生页面里的 console 输出
  * @param reloadKey 变化即重新投递（用于「重新运行」）
  */
-export function PreviewFrame({ html, className = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false }) {
+export function PreviewFrame({ html, className = '', stageClassName = '', title = '预览', onConsole, reloadKey = 0, fitToLogical = false }) {
   const frameRef = useRef(null);
   const boxRef = useRef(null);
   const [fit, setFit] = useState(null);
@@ -88,5 +88,5 @@ export function PreviewFrame({ html, className = '', title = '预览', onConsole
   );
   // 不开适配时保持**原样结构**（工作台的编辑预览与手机模拟器自己有 stage，别动它们）
   if (!fitToLogical) return frame;
-  return <div ref={boxRef} className="c-preview__stage">{frame}</div>;
+  return <div ref={boxRef} className={`c-preview__stage ${stageClassName}`.trim()}>{frame}</div>;
 }
