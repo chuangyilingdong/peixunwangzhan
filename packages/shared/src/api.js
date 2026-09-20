@@ -130,6 +130,24 @@ export function createApiClient({ baseUrl = apiBase(), getToken = () => null, on
       if (!response.ok) throw new ApiError(fallbackMessage(response.status, '素材读取失败'), { status: response.status, code: 'ASSET_FETCH_FAILED', details: null });
       return URL.createObjectURL(await response.blob());
     },
+    // 把同样的素材取回来、转成 **data:** 地址。两种场合非它不可：
+    //   ① 要嵌进 opaque origin 的沙箱 iframe（网页作品预览）：那个文档**拿不到**父页面的 blob: 地址；
+    //   ② 拿到 blob: 之后想再 `fetch()` 它 —— 生产 CSP 是 `connect-src 'self'`，blob: 只在 img-src 白名单里，
+    //      再 fetch 会被直接拦成 "Failed to fetch"（2026-09-20 「我的作品」踩到过，org 端 CSP 不同所以没暴露）。
+    // 所以这一步**直接从 /api/ 取字节**，别绕 blob: 中转。
+    fetchDataUrl: async (path) => {
+      const target = String(path || '');
+      const token = getToken();
+      const response = await fetch(target.startsWith('/') ? target : requestUrl(baseUrl, target), { credentials: 'include', headers: { ...(token ? { authorization: 'Bearer ' + token } : {}) } });
+      if (!response.ok) throw new ApiError(fallbackMessage(response.status, '素材读取失败'), { status: response.status, code: 'ASSET_FETCH_FAILED', details: null });
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new ApiError('素材读取失败', { status: 0, code: 'ASSET_READ_FAILED', details: null }));
+        reader.readAsDataURL(blob);
+      });
+    },
     put: (path, body, options = {}) => request(path, { ...options, method: 'PUT', body }),
     patch: (path, body, options = {}) => request(path, { ...options, method: 'PATCH', body }),
     delete: (path, options = {}) => request(path, { ...options, method: 'DELETE' }),

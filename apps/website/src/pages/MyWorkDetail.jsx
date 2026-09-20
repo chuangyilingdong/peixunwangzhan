@@ -13,20 +13,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell, artifactGroup, formatDate, workPlazaLabel } from '@platform/shared';
+import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell, artifactGroup, formatDate, workPlazaLabel } from '@platform/shared';
 
-// 受鉴权保护的素材（`/api/**`）要带 token 取回来、转成 **data:** 才能给 <img>/<iframe> 用：
-// 这两个标签发不出 Authorization 头（画布那边同一个道理，见 @platform/canvas 的 resolveAssetUrl 注释）。
-// ⚠️ 用 data: 而**不是** blob: —— 网页作品跑在 opaque origin 的沙箱 iframe 里，
-//    它拿不到父页面的 blob: 地址（org 端踩过：<img src="blob:..."> 在该文档内必然 onerror）。
-async function readAsDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('作品图片读取失败。'));
-    reader.readAsDataURL(blob);
-  });
-}
+// 受鉴权保护的素材（`/api/**`）怎么变成能显示的地址，见共享 api 客户端的 fetchDataUrl
+// （要点：<img>/<iframe> 发不出 Authorization 头；而 blob: 在生产的 connect-src 里是被拦的，
+//  沙箱 iframe 也拿不到父页面的 blob: —— 所以那两个场合都必须走 data:）。
 
 /** 快照里的私有素材地址 → fileId（服务端拼的 imageUrls 用的就是这个地址）。 */
 function fileIdOfAssetUrl(value) {
@@ -62,12 +53,9 @@ export function MyWorkDetailPage({ api }) {
     if (!entries.length) return () => { cancelled = true; };
     Promise.allSettled(entries.map(async ([fileId, path]) => {
       if (typeof path !== 'string' || !path.startsWith('/api/student/file-assets/')) throw new Error('图片地址不属于这个作品。');
-      const blobUrl = await api.fetchBlobUrl(path);
-      try {
-        return [fileId, await readAsDataUrl(await (await fetch(blobUrl)).blob())];
-      } finally {
-        URL.revokeObjectURL(blobUrl);
-      }
+      // ⚠️ 用 fetchDataUrl（直接出 data:），不要 fetchBlobUrl 再自己 fetch：
+      //    生产 CSP 是 `connect-src 'self'`，blob: 只在 img-src 白名单里 —— 再 fetch 会被拦成 "Failed to fetch"。
+      return [fileId, await api.fetchDataUrl(path)];
     })).then((results) => {
       if (cancelled) return;
       setImages(Object.fromEntries(results.filter((item) => item.status === 'fulfilled' && item.value).map((item) => item.value)));
@@ -163,7 +151,7 @@ export function MyWorkDetailPage({ api }) {
           {!selected ? <ReplayPanel title="作品预览" icon="eye" className="c-replay__preview">
             <div className="c-replay__files"><ConsoleEmpty icon="file" title="这份作品没有可预览的产物" body="交上来的文件只能在右边看源码。" /></div>
           </ReplayPanel>
-            : documentFile ? <iframe className="c-replay__doc" src={documentFile.preview} title={selected.name} />
+            : documentFile ? <ReplayFilePreview url={documentFile.preview} name={selected.name} />
               : isDocument ? <ReplayPanel title="作品预览" icon="eye" className="c-replay__preview">
                 <ReplayDocument
                   artifact={{ ...selected, content: String(files[selected.name] ?? selected.content ?? '') }}
@@ -183,9 +171,9 @@ export function MyWorkDetailPage({ api }) {
                   onDownload={selected.downloadUrl ? () => window.location.assign(selected.downloadUrl) : null}
                 />
               </ReplayPanel>
-                : html ? <ReplayPanel title="作品预览" icon="eye" className="c-replay__preview">
-                  <ReplayPreview html={html} title={work.title || '我的作品'} />
-                </ReplayPanel>
+                // ⚠️ ReplayPreview **自己**带「作品预览」标题栏，别再包一层 ReplayPanel ——
+                //    包了就出现两层一模一样的标题（2026-09-20 线上截图里看到的）。
+                : html ? <ReplayPreview html={html} title={work.title || '我的作品'} />
                   : <ReplayPanel title="作品预览" icon="eye" className="c-replay__preview">
                     <div className="c-replay__files"><ConsoleEmpty icon="file" title="这份作品没有可预览的产物" body="交上来的文件只能在右边看源码。" /></div>
                   </ReplayPanel>}
