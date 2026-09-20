@@ -211,22 +211,29 @@ try {
      （2026-09-13 那条校验最初只按**同一课时**过滤，跨课时拦不住；生产的演示数据就是那样进去的，
      而 client-context 只会默默挑"最近开始的那一场"，学生做 A 课作业却拿到 B 课的上限），
      一点「开始上课」就会造出「同一个学生两场 ACTIVE 课堂」→ 所以开课必须复查。
-     ⚠️ 这一段**故意放在最后**：它往名单里塞了一行"异常占用"，会挡住后面任何"再把这个学生加进别处"的动作。
+     ⚠️ 这一段**故意放在最后**：它往名单里塞"异常占用"，会挡住后面任何"再把这个学生加进别处"的动作。
      直写库来模拟历史数据是**有意**的 —— 用 API 根本造不出这种名单，那正是这条断言要守的东西。 */
-  const legacySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 历史名单课堂' } });
-  {
+  const writeLegacyRoster = (targetSessionId) => {
     const db = new DatabaseSync(dbPath);
     db.exec('PRAGMA busy_timeout = 5000');
-    const row = db.prepare('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?').get(legacySession.data.id);
+    const row = db.prepare('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?').get(targetSessionId);
     const now = new Date().toISOString();
     db.prepare(
       "INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
       "VALUES (?,?,?,?,?,?, 'PENDING', NULL, ?, ?)",
     ).run(`sess_stu_legacy_${Math.random().toString(36).slice(2, 8)}`, row.id, seeded.studentId, row.org_id, row.lesson_id, row.series_id, now, now);
     db.close();
-  }
+  };
+  // ⑥a 学生此刻是自由的 → 照常能开课（这条复查只拦异常占用，**不能误伤正常开课**）
+  const busySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 占用中的课堂' } });
+  writeLegacyRoster(busySession.data.id);
+  const busyStart = await api(`/api/org/sessions/${busySession.data.id}/start`, { method: 'POST', token: admin });
+  check('⑥a 学生自由时照常能开课（复查不误伤正常开课）', busyStart.status === 200, JSON.stringify(busyStart).slice(0, 200));
+  // ⑥b 现在他被上一条占着（ACTIVE），另一场同样"有历史名单"的课就**不许再开**
+  const legacySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 历史名单课堂' } });
+  writeLegacyRoster(legacySession.data.id);
   const legacyStart = await api(`/api/org/sessions/${legacySession.data.id}/start`, { method: 'POST', token: admin });
-  check('⑥ 名单里有异常占用（历史数据）时，开课必须被拒并说清占用的课堂',
+  check('⑥b 名单里有异常占用（历史数据）时，开课必须被拒并说清占用的课堂',
     legacyStart.status === 409 && legacyStart.error?.code === 'STUDENT_IN_OTHER_SESSION' && /另一场课堂/.test(legacyStart.error?.message || ''),
     JSON.stringify(legacyStart).slice(0, 240));
 
