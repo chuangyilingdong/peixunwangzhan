@@ -347,7 +347,7 @@ try {
   // ── 005-03D 开始上课确认（校验清单必须来自服务端预检）
   await page.getByRole('button', { name: '开始上课' }).first().click();
   await page.waitForTimeout(700);
-  await expectText('开始确认', ['开始上课确认', '开始前资格校验', '课堂状态 = 待上课', '教师账号可正常教学', '课包 / 课程当前可用', '课堂至少有 1 名学生', '3 名学生资格仍有效', '全部通过', '确认开始后的状态变化', '进入「上课中」后']);
+  await expectText('开始确认', ['开始上课确认', '开始前资格校验', '课堂状态 = 待上课', '教师账号可正常教学', '课包 / 课程当前可用', '课堂至少有 1 名学生', '3 名学生资格仍有效', '全部通过', '确认开始后的状态变化', '不可移除已加入学生']);
   await shot('04-modal-start');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
