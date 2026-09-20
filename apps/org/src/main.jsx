@@ -523,14 +523,36 @@ function OrgCourses({ api }) {
     <PageHeader eyebrow="教学资源" title="课程中心" description="查看本机构已开通的平台课包、机构课包与课时安排。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
     <div className="metrics"><MetricCard label="可用课包" value={data.items.length} hint="仅统计当前已发布课程" /><MetricCard label="平台授权课包" value={data.items.filter((item) => item.ownerType === 'PLATFORM' && item.assignedToCurrentOrg).length} hint="平台单独授权后可见" tone="teal" /><MetricCard label="总课时" value={data.items.reduce((sum, item) => sum + item.lessonCount, 0)} hint="已发布课时" tone="orange" /></div>
     <Panel title="课程列表">
-      {data.items.length ? <><ListResultSummary total={data.total} page={data.page} totalPages={data.totalPages} label="个课包" /><div className="card-list">{data.items.map((course) => <article className="item-card" key={course.id}>
-        <div className="row-actions"><h3><button className="text-button" onClick={() => navigate('/courses/' + course.id)}>{course.title}</button></h3><Status value={course.status} /><span className="muted">{sourceLabels[course.ownerType] || course.ownerType}</span>{course.ownerType === 'PLATFORM' && course.assignedToCurrentOrg ? <span className="muted">平台已授权</span> : null}<span className="muted">v{course.version}</span></div>
-        <p>{course.description || '暂无课程说明'}</p>
-        <p className="muted">{course.difficultyLevel ? `难度 ${course.difficultyLevel}/5 · ` : ''}{course.ageRangeMin || course.ageRangeMax ? `适学 ${course.ageRangeMin ?? '?'}-${course.ageRangeMax ?? '?'}岁 · ` : ''}{course.lessonCount} 节课时{course.ownerType === 'PLATFORM' && course.assignedToCurrentOrg ? ' · 平台已授权' : ''}</p>
-        {Array.isArray(course.tags) && course.tags.length ? <div className="tag-list">{course.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
-        <div className="row-actions"><button className="text-button" onClick={() => setExpanded(expanded === course.id ? '' : course.id)}>{expanded === course.id ? '收起课时' : '查看课时'}</button><button className="text-button" onClick={() => navigate('/courses/' + course.id)}>查看详情</button><span className="muted">更新：{formatDate(course.updatedAt)}</span></div>
-        {expanded === course.id && (course.lessons?.length ? <ol className="course-lessons">{course.lessons.map((lesson) => <li key={lesson.id}>{lesson.title} · {lesson.durationMinutes} 分钟{lesson.summary ? ' · ' + lesson.summary : ''}</li>)}</ol> : <Empty title="该课包暂无已发布课时" />)}
-      </article>)}</div><Pagination page={data.page} totalPages={data.totalPages} onChange={setPage} disabled={loading} /></> : <Empty title="暂无可用课程" body="请让平台管理员授权课包，或先创建机构自有课程。" />}
+      {data.items.length ? <><ListResultSummary total={data.total} page={data.page} totalPages={data.totalPages} label="个课包" />
+        {/* ⭐ 卡片形式（用户口径 2026-09-20：「机构端/老师端的课程中心应该是卡片形式展示，类似于灵动学习那种形式」）。
+            直接复用学生端「灵动学习」那套 course-package-* 类（它们在 @platform/shared/styles.css 里）——
+            同一个课包在两端的观感一致，也不必再养一套新样式。 */}
+        <div className="course-package-grid">{data.items.map((course, index) => {
+          const cover = course.coverAssetId ? `/api/public/file-assets/${encodeURIComponent(course.coverAssetId)}/download` : (course.coverImageUrl || '');
+          return <article className="course-package-card" key={course.id}>
+            <div className={`course-package-cover cover-tone-${(index % 3) + 1}`}>
+              {cover ? <img src={cover} alt="" loading="lazy" /> : null}
+              <span className="course-cover-symbol" aria-hidden="true">✧</span>
+              {/* 封面这行写字号很小的标签：写「来源 · 版本」比重复一遍标题有用（标题就在下面一行） */}
+              <span className="course-cover-label">{sourceLabels[course.ownerType] || course.ownerType} · v{course.version}</span>
+            </div>
+            <div className="course-package-body">
+              <div className="course-package-heading"><h2>{course.title}</h2><Status value={course.status} /></div>
+              <p>{course.description || '暂无课程说明'}</p>
+              <p className="muted">{course.difficultyLevel ? `难度 ${course.difficultyLevel}/5 · ` : ''}{course.lessonCount} 节课时{course.ownerType === 'PLATFORM' && course.assignedToCurrentOrg ? ' · 平台已授权' : ''}{course.assignmentExpiresAt ? ` · 授权至 ${formatDate(course.assignmentExpiresAt)}` : ''}</p>
+              {Array.isArray(course.tags) && course.tags.length ? <div className="tag-list">{course.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}</div> : null}
+              <div className="course-package-footer">
+                <span>更新：{formatDate(course.updatedAt)}</span>
+                <div className="row-actions">
+                  <button className="text-button" onClick={() => setExpanded(expanded === course.id ? '' : course.id)}>{expanded === course.id ? '收起课时' : '查看课时'}</button>
+                  <button className="primary-button" onClick={() => navigate('/courses/' + course.id)}>查看课程</button>
+                </div>
+              </div>
+              {expanded === course.id ? (course.lessons?.length ? <ol className="course-lessons">{course.lessons.map((lesson) => <li key={lesson.id}>{lesson.title} · {lesson.durationMinutes} 分钟{lesson.summary ? ' · ' + lesson.summary : ''}</li>)}</ol> : <Empty title="该课包暂无已发布课时" />) : null}
+            </div>
+          </article>;
+        })}</div>
+        <Pagination page={data.page} totalPages={data.totalPages} onChange={setPage} disabled={loading} /></> : <Empty title="暂无可用课程" body="请让平台管理员授权课包，或先创建机构自有课程。" />}
     </Panel>
   </>;
 }
