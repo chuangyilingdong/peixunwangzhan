@@ -57,20 +57,35 @@ function CoverArt({ art }) {
 function WorkCover({ work, type }) {
   if (work.coverUrl) return <img src={work.coverUrl} alt="" loading="lazy" />;
   const seed = coverSeed(work);
-  const hue = ((type.hue + (seed % 25) - 12) % 360 + 360) % 360;
+  // ⚠️ 色相要**拉得开**：第一版只抖 ±12°，一排作品全是同一个粉色，等于还是"一个样"
+  //    （实测 15 张画布作品的封面几乎分不出来）。现在在类型色系左右各 45° 里取，
+  //    既看得出是同一类、又能一眼区分 — 同一份种子还决定下面用哪种构图。
+  const hue = ((type.hue + (seed % 91) - 45) % 360 + 360) % 360;
   const gradientId = `workcover-${String(work.id || 'x').replace(/[^A-Za-z0-9_-]/g, '')}`;
   const mark = String(work.title || '作').trim().charAt(0) || '作';
+  const layout = seed % 3;
   return <svg className="student-work-card__art" viewBox="0 0 320 150" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
     <defs>
       <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stopColor={`hsl(${hue} 58% 56%)`} />
-        <stop offset="1" stopColor={`hsl(${(hue + 22) % 360} 72% 74%)`} />
+        <stop offset="0" stopColor={`hsl(${hue} 56% ${50 + (seed % 9)}%)`} />
+        <stop offset="1" stopColor={`hsl(${(hue + 26) % 360} 70% ${70 + (seed % 7)}%)`} />
       </linearGradient>
     </defs>
     <rect width="320" height="150" fill={`url(#${gradientId})`} />
-    <circle cx="272" cy="26" r="58" fill="#ffffff" opacity="0.10" />
-    <circle cx="34" cy="136" r="44" fill="#ffffff" opacity="0.08" />
-    <text x="22" y="128" fill="#ffffff" opacity="0.20" fontSize="104" fontWeight="900" fontFamily="inherit">{mark}</text>
+    {/* 三种构图轮着来：圆环 / 斜带 / 点阵 —— 同一份种子决定，所以同一件作品永远同一张 */}
+    {layout === 0 ? <g fill="#ffffff" opacity="0.12">
+      <circle cx={276} cy={22} r={62} />
+      <circle cx={30} cy={140} r={48} />
+    </g> : null}
+    {layout === 1 ? <g fill="#ffffff" opacity="0.10" transform="rotate(-18 160 75)">
+      <rect x={-40} y={22} width={420} height={26} rx={13} />
+      <rect x={-40} y={72} width={420} height={14} rx={7} />
+      <rect x={-40} y={104} width={420} height={20} rx={10} />
+    </g> : null}
+    {layout === 2 ? <g fill="#ffffff" opacity="0.13">
+      {[0, 1, 2, 3].map((row) => [0, 1, 2, 3, 4].map((col) => <circle key={`${row}-${col}`} cx={252 + col * 18} cy={28 + row * 18} r={3.4} />))}
+    </g> : null}
+    <text x="22" y="128" fill="#ffffff" opacity="0.22" fontSize={96 + (seed % 18)} fontWeight="900" fontFamily="inherit">{mark}</text>
     <g transform="translate(266,86) scale(1.7)" fill="#ffffff" opacity="0.92"><CoverArt art={type.art} /></g>
   </svg>;
 }
