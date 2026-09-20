@@ -38,6 +38,15 @@ const preview = buildPreviewDocument(files, 'index.html');
 assert.ok(!preview.includes('style.css?v=1') && !preview.includes('app.js?v=1'), '带查询串的本地 CSS/JS 也必须内联');
 assert.ok(preview.includes("DOMContentLoaded',function(){console.error(\"early\")"), 'defer 本地脚本必须保留 DOM 就绪后执行语义');
 assert.ok(preview.indexOf('vibecoding-console') < preview.indexOf('console.error("early")'), '控制台桥必须早于 head 里的业务脚本');
+// ⭐ 沙箱里的存储替身（2026-09-20，用户报「图1 无法正常玩」）：预览跑在**不带 allow-same-origin**
+//    的沙箱里 ⇒ 文档是 opaque origin ⇒ `localStorage` 一读就抛 SecurityError。AI 生成的游戏常在
+//    **顶层**读最高分（学生那份打地鼠第 165 行就是），那一抛整个脚本就结束 —— 页面画得出来却点不动。
+//    所以预览文档必须自带一份内存实现，而且**必须早于**学生脚本。
+assert.ok(preview.includes("install('localStorage')") && preview.includes("install('sessionStorage')"), '预览文档必须带沙箱存储替身（localStorage / sessionStorage）');
+assert.ok(preview.indexOf("install('localStorage')") < preview.indexOf('console.error("early")'), '存储替身必须早于学生脚本（顶层那行 localStorage 就在脚本开头）');
+// 没有 <head>/<body> 的文档走的是「整段前插」那条分支，也得在最前面
+const barePreview = buildPreviewDocument({ 'bare.html': '<script>localStorage.getItem("x")</script>' }, 'bare.html');
+assert.ok(barePreview.indexOf("install('localStorage')") < barePreview.indexOf('localStorage.getItem'), '没有 head/body 的文档里，存储替身同样必须在最前');
 assert.ok(preview.includes('data:image/svg+xml'), '本地 SVG 必须内联进预览文档');
 assert.ok(!preview.includes('src="texture.svg"') && !preview.includes('url("texture.svg")'), '预览不能留下无法加载的本地 SVG 地址');
 

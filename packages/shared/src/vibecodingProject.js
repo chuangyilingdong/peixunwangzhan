@@ -35,6 +35,65 @@ export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 }
 
+/**
+ * **沙箱里的存储替身**（2026-09-20，用户报「图1 无法正常玩」的根因）。
+ *
+ * 预览跑在 `sandbox="allow-scripts …"` 里（**故意不带 `allow-same-origin`**，见口径⑧：
+ * 作品与主站同源，带了就读得到 cookie / localStorage），于是学生文档的 origin 是 **opaque** ——
+ * `localStorage` / `sessionStorage` / `document.cookie` **一碰就抛 SecurityError**。
+ * 而 AI 生成的游戏十有八九在**顶层**读一次最高分（实测：学生那份打地鼠第 165 行就是
+ * `let best = Number(localStorage.getItem('whack_best') || 0);`）：这一抛，整个 `<script>` 当场结束，
+ * 「开始游戏」的监听永远没人挂上 —— **页面画得出来但点不动**，看着像"作品坏了"，
+ * 其实是我们的沙箱把它的第一行干掉了。
+ *
+ * 顶上来的是一份**只活在这次预览里**的内存实现：不写盘、不跨作品也不跨刷新共享
+ * （真存储放在这里反而会变成侧信道），只保证语义够用：getItem/setItem/removeItem/clear/key/length，
+ * cookie 也只在本文档内存里记一份。
+ *
+ * ⚠️ 必须在学生脚本**之前**执行（顶层那一行就在脚本开头），所以它和下面的 console 桥一起
+ *    插进第一个 `<head>` / `<body>`。
+ * ⚠️ 它**不放松隔离**：文档仍是 opaque origin，仍旧读不到主站的任何东西、也读不到别的作品 ——
+ *    只是把「读自己的存储」从"抛异常"换成"一份空的内存"。p120 那条金丝雀（沙箱里三项必须
+ *    SecurityError）钉的是**隔离性**，与本替身不冲突。
+ * ⚠️ 管不到的那一面：广场上那 9 件**导入**的网页作品是 nginx 直接发 `entryUrl` 文件，
+ *    我们不参与拼装，注入不了。`单词小侦探` 也用了存储，但它的读被 try 包着，只是丢持久化。
+ */
+export const SANDBOX_STORAGE_SHIM = `<script>(function(){
+  function memory(){
+    var data={};
+    var api={
+      getItem:function(k){k=String(k);return Object.prototype.hasOwnProperty.call(data,k)?data[k]:null;},
+      setItem:function(k,v){data[String(k)]=String(v);},
+      removeItem:function(k){delete data[String(k)];},
+      clear:function(){data={};},
+      key:function(i){var keys=Object.keys(data);return i>=0&&i<keys.length?keys[i]:null;}
+    };
+    Object.defineProperty(api,'length',{get:function(){return Object.keys(data).length;}});
+    return api;
+  }
+  function install(name){
+    var store=memory();
+    try{Object.defineProperty(window,name,{configurable:true,get:function(){return store;},set:function(){}});}
+    catch(e){try{window[name]=store;}catch(e2){}}
+  }
+  install('localStorage');
+  install('sessionStorage');
+  try{
+    var jar={};
+    Object.defineProperty(Document.prototype,'cookie',{configurable:true,
+      get:function(){return Object.keys(jar).map(function(k){return k+'='+jar[k];}).join('; ');},
+      set:function(value){
+        var pair=String(value).split(';')[0];
+        var eq=pair.indexOf('=');
+        if(eq<0)return;
+        var k=pair.slice(0,eq).trim();
+        if(!k)return;
+        if(/max-age=0|expires=Thu, 01 Jan 1970/i.test(String(value))){delete jar[k];return;}
+        jar[k]=pair.slice(eq+1);
+      }});
+  }catch(e){}
+})();</script>`;
+
 // 预览文档里注入控制台桥：沙箱 iframe 不能同源读 DOM，但可以 postMessage 给父页面。
 export const CONSOLE_BRIDGE = `<script>(function(){
   var send=function(level,args){try{parent.postMessage({source:'vibecoding-console',level:level,text:args.map(function(item){try{return typeof item==='string'?item:JSON.stringify(item);}catch(e){return String(item);}}).join(' ')},'*');}catch(e){}};
@@ -85,10 +144,12 @@ export function buildPreviewDocument(files, entryFile) {
       return `<script>${content}</script>`;
     });
   const embedded = embedLocalAssets(html, files);
-  // 桥必须装在学生脚本之前，否则 head 里的早期 console/error 调用抓不到。
-  if (/<head[^>]*>/i.test(embedded)) return embedded.replace(/<head[^>]*>/i, (match) => `${match}${CONSOLE_BRIDGE}`);
-  if (/<body[^>]*>/i.test(embedded)) return embedded.replace(/<body[^>]*>/i, (match) => `${match}${CONSOLE_BRIDGE}`);
-  return CONSOLE_BRIDGE + embedded;
+  // 存储替身与桥都必须装在学生脚本**之前**：前者要抢在那行顶层 localStorage 之前，
+  // 后者要抢在 head 里的早期 console/error 调用之前。顺序：存储替身 → 控制台桥 → 学生脚本。
+  const preamble = `${SANDBOX_STORAGE_SHIM}${CONSOLE_BRIDGE}`;
+  if (/<head[^>]*>/i.test(embedded)) return embedded.replace(/<head[^>]*>/i, (match) => `${match}${preamble}`);
+  if (/<body[^>]*>/i.test(embedded)) return embedded.replace(/<body[^>]*>/i, (match) => `${match}${preamble}`);
+  return preamble + embedded;
 }
 
 /** 只有真正能在工作台里展示的主产物才允许单独提交。 */
