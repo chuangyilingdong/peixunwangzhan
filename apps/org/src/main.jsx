@@ -454,7 +454,6 @@ function OrgCourses({ api }) {
   const [page, setPage] = useState(1);
   const { loading, error, data, refresh } = useData(() => api.get(`org/course-series?page=${page}`), [api, page]);
   const detail = useData(() => seriesId ? api.get('org/course-series/' + encodeURIComponent(seriesId)) : Promise.resolve(null), [api, seriesId]);
-  const [expanded, setExpanded] = useState('');
   const [lessonDetail, setLessonDetail] = useState(null);
   const [assetError, setAssetError] = useState('');
   // 在线预览（2026-09-15 口径 A）：机构/老师**只能看不能下载**。
@@ -483,7 +482,10 @@ function OrgCourses({ api }) {
       {Array.isArray(c.tags) && c.tags.length ? <div className="tag-list"><span className="muted">标签：</span>{c.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div> : null}
       {c.assignmentExpiresAt ? <Notice>本课包对贵机构的授权有效期至 {formatDate(c.assignmentExpiresAt)}，到期后将从课程中心移除，如需继续使用请联系平台续期。</Notice> : null}
       <Panel title="课时列表">
-        {c.lessons?.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>标题</th><th>时长</th><th>正文</th><th>教学素材</th><th>操作</th></tr></thead><tbody>{c.lessons.map((lesson) => <tr key={lesson.id} className="lesson-row" onClick={() => setLessonDetail(lesson)}><td>{lesson.sort}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td>{lesson.durationMinutes} 分钟</td><td><div style={{ whiteSpace: 'pre-wrap', maxWidth: 360 }}>{lesson.lessonContent || '—'}</div></td><td>{(lesson.teachingGroups || []).reduce((total, group) => total + (group.assets || []).length, 0)} 个</td><td><button className="secondary-button" onClick={(event) => { event.stopPropagation(); setLessonDetail(lesson); }}>查看</button></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
+        {c.lessons?.length ? <div className="table-wrap"><table>{/* ⚠️ 序号用**行号**不用 lesson.sort：课时的 sort 是"第几节"的编排序号，删过课时之后会跳号
+    （线上就出现过 1,2,4,5,…，用户报「序号好像还是乱的」）。「正文」列也去掉了：线上每一行都是「—」，
+    正文要看就点进课时详情。时长与操作两列加 nowrap，否则窄列里「90 分钟」和「查看」会竖排。 */}
+      <thead><tr><th>#</th><th>标题</th><th style={{ whiteSpace: 'nowrap' }}>时长</th><th>教学素材</th><th style={{ whiteSpace: 'nowrap' }}>操作</th></tr></thead><tbody>{c.lessons.map((lesson, index) => <tr key={lesson.id} className="lesson-row" onClick={() => setLessonDetail(lesson)}><td>{index + 1}</td><td><strong>{lesson.title}</strong><div className="muted">{lesson.summary}</div></td><td style={{ whiteSpace: 'nowrap' }}>{lesson.durationMinutes} 分钟</td><td>{(lesson.teachingGroups || []).reduce((total, group) => total + (group.assets || []).length, 0)} 个</td><td><button className="secondary-button" style={{ whiteSpace: 'nowrap' }} onClick={(event) => { event.stopPropagation(); setLessonDetail(lesson); }}>查看</button></td></tr>)}</tbody></table></div> : <Empty title="暂无课时" />}
       </Panel>
       {/* 教学素材查看器：关掉浏览器内置 PDF 工具栏 + 自建翻页与全屏。实现与理由见组件头部注释。 */}
       {previewAsset ? <TeachingAssetViewer api={api} asset={previewAsset} onClose={() => setPreviewAsset(null)} /> : null}
@@ -543,12 +545,8 @@ function OrgCourses({ api }) {
               {Array.isArray(course.tags) && course.tags.length ? <div className="tag-list">{course.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}</div> : null}
               <div className="course-package-footer">
                 <span>更新：{formatDate(course.updatedAt)}</span>
-                <div className="row-actions">
-                  <button className="text-button" onClick={() => setExpanded(expanded === course.id ? '' : course.id)}>{expanded === course.id ? '收起课时' : '查看课时'}</button>
-                  <button className="primary-button" onClick={() => navigate('/courses/' + course.id)}>查看课程</button>
-                </div>
+                <button className="primary-button" onClick={() => navigate('/courses/' + course.id)}>查看课程</button>
               </div>
-              {expanded === course.id ? (course.lessons?.length ? <ol className="course-lessons">{course.lessons.map((lesson) => <li key={lesson.id}>{lesson.title} · {lesson.durationMinutes} 分钟{lesson.summary ? ' · ' + lesson.summary : ''}</li>)}</ol> : <Empty title="该课包暂无已发布课时" />) : null}
             </div>
           </article>;
         })}</div>
