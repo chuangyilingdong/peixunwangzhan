@@ -9,6 +9,7 @@ import {
   nowIso,
   parseJson,
   platformPermissionForPathname,
+  publishedLessonVisibilitySql,
   q,
   requirePlatformPermission,
   requireRole,
@@ -356,19 +357,19 @@ export function handlePublicCommunication(ctx) {
     const total = Number(row('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params)?.n || 0);
     const orderBy = sort === 'recent' ? 'series.created_at DESC' : 'series.sort ASC, series.title COLLATE NOCASE ASC';
     const series = rows(
-      `SELECT series.*, (SELECT COUNT(*) FROM course_lessons lesson WHERE lesson.series_id=series.id AND lesson.status='PUBLISHED') lesson_count
-       FROM course_series series WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+      `SELECT series.* FROM course_series series WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
-    // 课包的「课堂形式」以**已发布课时的并集**为准，不读 course_series.delivery_mode
-    // （两者会不一致 —— 线上有 series=CANVAS 而课时是 VIBECODING 的错配）。
-    // 一次把本页所有课包的课时形态查回来，避免 N+1。
+    // 课包的「课堂形式」与「课时数」都以**已发布读取面可见的课时**为准，不读 course_series.delivery_mode
+    // （两者会不一致 —— 线上有 series=CANVAS 而课时是 VIBECODING 的错配），也不按实时 status 过滤
+    // （那会让没「更新发布」的新课时提前露面）。判据只写一遍：lib.js 的 publishedLessonVisibilitySql。
+    // 一次把本页所有课包的课时查回来，避免 N+1。
     const lessonsBySeries = new Map();
     if (series.length) {
       const placeholders = series.map(() => '?').join(',');
       for (const lesson of rows(
-        `SELECT series_id, delivery_mode, delivery_modes FROM course_lessons
-         WHERE status='PUBLISHED' AND series_id IN (${placeholders})`,
+        `SELECT lesson.series_id, lesson.delivery_mode, lesson.delivery_modes FROM course_lessons lesson
+         WHERE lesson.series_id IN (${placeholders}) AND ${publishedLessonVisibilitySql('lesson')}`,
         series.map((item) => item.id),
       )) {
         if (!lessonsBySeries.has(lesson.series_id)) lessonsBySeries.set(lesson.series_id, []);
@@ -401,7 +402,7 @@ export function handlePublicCommunication(ctx) {
         ageRangeMin: item.age_range_min != null ? Number(item.age_range_min) : null,
         ageRangeMax: item.age_range_max != null ? Number(item.age_range_max) : null,
         tags,
-        lessonCount: Number(item.lesson_count || 0),
+        lessonCount: (lessonsBySeries.get(item.id) || []).length,
         deliveryMode: deliveryModes[0],
         deliveryModes,
         // 2026-09-18：不再下发 marketplaceRewardCredits（「积分激励」已随积分口径整体删除，
@@ -421,8 +422,13 @@ export function handlePublicCommunication(ctx) {
       [publicMarketplaceDetailMatch[1]],
     );
     if (!series) throw errors.notFound('课程不存在或未上架', 'MARKETPLACE_COURSE_NOT_FOUND');
+    // 与列表同一个判据（publishedLessonVisibilitySql）：没「更新发布」的新课时不该出现在官网，
+    // 也不能被算进课时数 —— lessonCount 就是按这个数组的长度算的，改一处两处都对。
     const lessons = rows(
-      "SELECT id, series_id, title, summary, sort, status, duration_minutes, lesson_content, created_at, updated_at FROM course_lessons WHERE series_id=? AND status='PUBLISHED' ORDER BY sort, created_at",
+      `SELECT lesson.id, lesson.series_id, lesson.title, lesson.summary, lesson.sort, lesson.status,
+              lesson.duration_minutes, lesson.lesson_content, lesson.created_at, lesson.updated_at
+       FROM course_lessons lesson WHERE lesson.series_id=? AND ${publishedLessonVisibilitySql('lesson')}
+       ORDER BY lesson.sort, lesson.created_at`,
       [series.id],
     ).map((l) => ({
       id: l.id,

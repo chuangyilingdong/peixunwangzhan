@@ -505,6 +505,36 @@ export function seriesDeliveryModesOf(lessons) {
   return DELIVERY_MODE_VALUES.filter((mode) => offered.has(mode));
 }
 
+/**
+ * 「**这个课时对已发布读取面（机构端 / 学生端 / 官网）可见吗**」的 SQL 判据。
+ *
+ * 口径（2026-09-20 用户报的一个真 bug 定下来的）：
+ *   「更新发布」之前，机构端/学生端/官网**不该**看到这个版本的改动 —— 包括**多了/少了一节课时**。
+ *   但原来只有课时的**字段**走快照，**成员与状态**是直接按实时的 `status='PUBLISHED'` 过滤的，
+ *   于是新建一节已发布课时，机构端立刻就能在「创建课堂」里选到它（用户原话：
+ *   「课包还没发布，在图1机构/老师端却已经能选了」）。
+ *
+ * 判据（`{%s}` 是课时表的别名，默认 `lesson`）：
+ *   · 课包**一节课时都没定格过**（老数据 / 从没「更新发布」过）→ 回退实时：看 `status='PUBLISHED'`
+ *     —— 这是既有口径「老数据没有快照 → 回退实时数据」在**课包级**的落点，不能改成按课时判，
+ *     否则像线上 S1 那种「9 节已发布里只有 1 节有快照」的课包会当场掉 8 节课时。
+ *   · 课包定格过 → 只认**快照里的 status**：没有快照的课时（本次发布之后新建的）一律不可见；
+ *     快照里是 DRAFT 的课时（发布时还是草稿）也不可见 —— 两者正是这次要修的泄漏。
+ *
+ * ⚠️ 机构端能选的课时集合、官网的课时数、学生端的课程列表**必须**共用这一个判据，
+ *    否则三个面会互相打脸（这个仓库已经踩过好几次"两套规则不一致"）。
+ * ⚠️ 只给**读**面用；平台端的编辑面（`includeAllLessons`）与写路径不要加它 ——
+ *    写路径更宽松是**有意**的：一节课时被后来的发布"盖住"之后，已经建好的课堂还得能继续加学生。
+ */
+export function publishedLessonVisibilitySql(alias = 'lesson') {
+  const base = (name) => `(SELECT 1 FROM course_lessons base WHERE base.series_id = ${name}.series_id AND base.published_content IS NOT NULL)`;
+  const snapStatus = (name) => `COALESCE(CASE WHEN json_valid(${name}.published_content) THEN json_extract(${name}.published_content, '$.status') END, '')`;
+  return `(
+    (NOT EXISTS ${base(alias)} AND ${alias}.status = 'PUBLISHED')
+    OR (EXISTS ${base(alias)} AND ${snapStatus(alias)} = 'PUBLISHED')
+  )`;
+}
+
 export function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
   if (!value) return null;
   // 平台端读实时数据（编辑用）；机构端/学生端/官网读「最近一次更新发布」定格的快照。
@@ -894,6 +924,16 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
       tags = [];
     }
   }
+  // 课时的**成员与状态**怎么取：
+  //   · 平台端编辑面（includeAllLessons）不加任何过滤；
+  //   · 已发布读取面（asPublished，机构端/学生端/官网）走快照判据 —— 没「更新发布」就看不到
+  //     新增或改了状态的课时（见 publishedLessonVisibilitySql 的长注释）；
+  //   · 其余调用方（asPublished:false 且没要全部课时）维持原样：只按实时状态过滤。
+  const lessonFilter = includeAllLessons
+    ? ''
+    : asPublished
+      ? ` AND ${publishedLessonVisibilitySql('lesson')}`
+      : " AND lesson.status = 'PUBLISHED'";
   const result = {
     id: value.id,
     title: snapPick('title', value.title),
@@ -934,7 +974,7 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     ageRangeMax: value.age_range_max != null ? Number(value.age_range_max) : null,
     tags,
     deliveryMode: value.delivery_mode || 'CANVAS',
-    lessonCount: count(`SELECT COUNT(*) AS n FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"}`, [value.id]),
+    lessonCount: count(`SELECT COUNT(*) AS n FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter}`, [value.id]),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -944,7 +984,7 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     result.assignmentExpiresAt = assignment?.expires_at || null;
   }
   if (includeLessons) {
-    result.lessons = rows(`SELECT * FROM course_lessons WHERE series_id = ?${includeAllLessons ? '' : " AND status = 'PUBLISHED'"} ORDER BY sort, created_at`, [value.id]).map((lesson) => normalizeLesson(lesson, { includeTeaching, asPublished }));
+    result.lessons = rows(`SELECT * FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter} ORDER BY lesson.sort, lesson.created_at`, [value.id]).map((lesson) => normalizeLesson(lesson, { includeTeaching, asPublished }));
   }
   return result;
 }

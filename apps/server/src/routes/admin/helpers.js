@@ -145,6 +145,10 @@ function capturePublishedContent(seriesId, at = nowIso(), { inTransaction = fals
         teachingGroups: live.teachingGroups,
         classroomConfig: live.classroomConfig, canvasTemplateSnapshot: live.canvasTemplateSnapshot,
         capabilities: live.capabilities, materialGroups: live.materialGroups, generationBoxes: live.generationBoxes,
+        // ⚠️ **必须**带上 status：读面判断「这节能不能被机构端/学生端/官网看到」看的是**快照里的** status，
+        //    不是实时列（见 lib.js 的 publishedLessonVisibilitySql）。漏了它，机构端就会把
+        //    「本次发布之后新建 / 改了状态的课时」当成没有快照处理 —— 要么全都看不见，要么继续泄漏。
+        status: lessonRow.status,
       }), live.title, lessonRow.id]);
     });
   };

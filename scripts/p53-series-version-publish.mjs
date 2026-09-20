@@ -4,13 +4,15 @@
  * 用户的规则（1.3）：课包发布后每次修改都要填**最新版本号**，并选**是否更新发布**；
  * 更新发布后，已授权机构与官网外显层面都要跟着更新。
  * 实现口径：版本号不再自动 +0.1（由人填写），每次「更新发布」写一条版本记录；
- * 读模型仍是当前内容，所以发布即对所有读取方生效；「有没有未发布的改动」由时间比较得出。
+ * **课时的内容、成员与状态都以快照为准**（`publishedLessonVisibilitySql`）——「更新发布」之前，
+ * 机构端/学生端/官网既看不到改动的内容，也看不到新增/收回的课时；「有没有未发布的改动」由时间比较得出。
  *
  * 盯住：
  *   ① 改课时/素材不再偷偷改版本号（老行为是任何改动自动 +0.1，版本号会失去意义）；
  *   ② 「有未发布的改动」能被识别出来，更新发布之后归零；
  *   ③ 版本号：必填、不能与当前相同、不能重复；
- *   ④ 更新发布后课包版本号落库，机构端/学生端读到的就是新内容（同一份数据）。
+ *   ④ 更新发布后课包版本号落库，机构端/学生端读到的就是新内容（同一份数据）；
+ *   ⑤ **草稿隔离的成员口径**：没更新发布，机构端/官网看不到新增/收回的课时（2026-09-20 用户报的泄漏）。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -100,6 +102,45 @@ try {
   await api(`/api/admin/course-series/${seriesId}/assignments`, { method: 'POST', token: admin, body: { orgIds: [orgAdmin.organization.id], validityDays: 365, quotaTotal: 10, amountMinor: 1000, currency: 'CNY', paymentStatus: 'PAID', orderNo: `P53-O-${seriesId}`, contractNo: `P53-C-${seriesId}`, idempotencyKey: `p53-purchase-${seriesId}` } });
   const orgCourse = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
   check('机构端读到的课时标题就是改后的内容（发布即生效）', JSON.stringify(orgCourse.data).includes('第1课（改过）'), JSON.stringify(orgCourse.data).slice(0, 160));
+
+  // ④ 草稿隔离的**成员**口径（2026-09-20 用户报的真 bug）：
+  //    「我在课包创建了新的课时，选择发布状态。但是课包还没发布，机构/老师端却已经能选了」。
+  //    判据见 lib.js 的 publishedLessonVisibilitySql：课包只要定格过，成员与状态就只认快照里的 status。
+  const added = await api(`/api/admin/course-series/${seriesId}/lessons`, {
+    method: 'POST', token: admin,
+    body: { lessons: [{ title: '第2课（发布前加的）', status: 'PUBLISHED', capabilities: ['text'], deliveryModes: ['CANVAS'] }] },
+  });
+  check('加一节已发布课时（此刻课包还没「更新发布」）', added.status === 200, JSON.stringify(added.data).slice(0, 140));
+  const platform2 = await api(`/api/admin/course-series/${seriesId}/detail`, { token: admin });
+  check('平台端编辑面照样看得到它（不然平台没法编辑）',
+    JSON.stringify(platform2.data).includes('第2课（发布前加的）'), JSON.stringify(platform2.data).slice(0, 160));
+  const orgBefore = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
+  check('机构端**看不到**没更新发布的新课时（这就是用户报的那个泄漏）',
+    !JSON.stringify(orgBefore.data).includes('第2课（发布前加的）'), JSON.stringify(orgBefore.data).slice(0, 200));
+  check('机构端的课时数也不含它', (orgBefore.data.lessons || []).length === 1, `lessons=${(orgBefore.data.lessons || []).length}`);
+  const marketBefore = await api(`/api/public/marketplace/${seriesId}`);
+  check('官网课包详情同样看不到它、且课时数一致',
+    !JSON.stringify(marketBefore.data).includes('第2课（发布前加的）') && marketBefore.data.lessonCount === 1,
+    `lessonCount=${marketBefore.data.lessonCount}`);
+
+  const published2 = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.2', note: '加了第 2 课' } });
+  check('再「更新发布」一次（1.2）', published2.status === 200 && published2.data.version === '1.2', `${published2.status}`);
+  const orgAfter = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
+  check('更新发布之后，机构端才看得到第 2 课',
+    JSON.stringify(orgAfter.data).includes('第2课（发布前加的）') && (orgAfter.data.lessons || []).length === 2,
+    `lessons=${(orgAfter.data.lessons || []).length}`);
+
+  // ⑤ 反方向：把已有课时收回草稿但不发布 → 机构端看到的还是上一版（快照里它仍是已发布）
+  await api(`/api/admin/course-lessons/${lessonId}`, { method: 'PUT', token: admin, body: { status: 'DRAFT' } });
+  const orgDraft = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
+  check('课时被改成草稿但没更新发布 → 机构端照旧看得到（状态也走快照）',
+    JSON.stringify(orgDraft.data).includes('第1课（改过）'), JSON.stringify(orgDraft.data).slice(0, 200));
+  const published3 = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.3', note: '把第 1 课收回草稿' } });
+  check('再「更新发布」一次（1.3）', published3.status === 200, `${published3.status}`);
+  const orgHidden = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
+  check('更新发布之后机构端就看不到那节课了（收回草稿生效）',
+    !JSON.stringify(orgHidden.data).includes('第1课（改过）') && (orgHidden.data.lessons || []).length === 1,
+    `lessons=${(orgHidden.data.lessons || []).length}`);
 
   console.log(JSON.stringify({ name: 'series-version-publish', pass: failures === 0, seriesId, failures }, null, 2));
 } catch (error) {

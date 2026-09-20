@@ -9,6 +9,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
+  publishedLessonVisibilitySql,
 } from '../lib.js';
 
 function rawValue(user, snake, camel) {
@@ -168,6 +169,11 @@ function grantedSeriesIds(userId, orgId) {
  *
  * ⚠️ 这里的范围是「本机构可访问的已发布课包」——**含还没有分给该学生的**，
  *    配上 `hasGrant` 让列表能标「未授权」（B1 口径：学生得知道自己该找老师要什么）。
+ *
+ * ⚠️ 「有哪些课时」用 publishedLessonVisibilitySql（快照口径），**不是**实时的 status='PUBLISHED' ——
+ *    否则平台没「更新发布」就加进去的课时会提前出现在学生端。见 lib.js 里那个函数的注释。
+ *    注意下面 resolveStudentLessonContext 的入口门禁**故意仍按实时状态**判：课堂一旦绑定了某节课，
+ *    后来的发布把它盖成草稿，也不该把已经在上的学生踢出去。
  */
 export function getStudentCourses(user) {
   const { id: userId, orgId } = studentIdentity(user);
@@ -183,7 +189,7 @@ export function getStudentCourses(user) {
         lesson.lesson_content AS lesson_lesson_content,
         lesson.created_at AS lesson_created_at, lesson.updated_at AS lesson_updated_at
      FROM course_series series
-     JOIN course_lessons lesson ON lesson.series_id = series.id AND lesson.status = 'PUBLISHED'
+     JOIN course_lessons lesson ON lesson.series_id = series.id AND ${publishedLessonVisibilitySql('lesson')}
      LEFT JOIN course_assignments assignment
        ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
      WHERE series.status = 'PUBLISHED'
