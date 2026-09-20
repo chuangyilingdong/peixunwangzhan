@@ -12,7 +12,10 @@ import { useState } from 'react';
 import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, Panel, ReplayDocument, ReplayFiles, ReplayPreview, useData } from '@platform/shared';
 
 export function WorkPreview({ api, workId, title, onClose }) {
-  const detail = useData(() => api.get(`vibecoding-works/${encodeURIComponent(workId)}`), [api, workId]);
+  // ⚠️ admin 应用的接口路径要带 `admin/` 前缀（这个页面别处的调用都长这样：
+  //    `admin/works/...` / `admin/vibecoding-works/...`）。少写这一段就会打到 `/api/vibecoding-works/...`，
+  //    界面报的是「接口不存在」——2026-09-20 我第一版就是这么漏的。
+  const detail = useData(() => api.get(`admin/vibecoding-works/${encodeURIComponent(workId)}`), [api, workId]);
   const [activeName, setActiveName] = useState('');
   const data = detail.data;
 
