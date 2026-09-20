@@ -152,7 +152,7 @@ function teachingAssetVisibleToOrg(fileId, orgId) {
           AND EXISTS (SELECT 1 FROM json_each(lesson.published_content, '$.teachingGroups') grp,
             json_each(grp.value, '$.assets') asset WHERE json_extract(asset.value, '$.fileAssetId') = ?))
          -- ② 快照里**没有这一键** → 按实时表判。
-         --    ⚠️ 这条必须与界面**同一口径**（口径㉞）：`normalizeLesson` 的 pick 是**逐键**回退 ——
+         --    ⚠️ 这条必须与界面**同一口径**（口径㉞）：normalizeLesson 的 pick 是**逐键**回退 ——
          --    快照没有 teachingGroups 这一键时，机构端看到的就是实时素材清单。
          --    线上踩过：1-4 魔法画室那节课实时挂着 PPT 与教案，而它的快照是在挂素材**之前**定格的
          --    （没有 teachingGroups 键）→ 界面照常列出「在线预览」，点开却报
