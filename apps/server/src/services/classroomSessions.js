@@ -28,7 +28,12 @@ export function canManageSession(auth, session) {
   if (!auth?.user || !session) return false;
   if (!['ORG_ADMIN', 'TEACHER'].includes(auth.user.role)) return false;
   if (session.teacher_id && session.teacher_id === auth.user.id) return true;
-  return auth.user.role === 'ORG_ADMIN' && Boolean(session.org_id) && session.org_id === auth.user.org_id;
+  if (auth.user.role !== 'ORG_ADMIN') return false;
+  // ⚠️ 两边都写两种拼法：auth 上的用户对象是**规范化后**的（`orgId`），而 session 是**原始行**（`org_id`）。
+  //    第一版我只写了 `auth.user.org_id` → 恒为 undefined → 机构管理员照样管不了（p96 当场抓到）。
+  const callerOrgId = auth.user.orgId || auth.user.org_id || null;
+  const sessionOrgId = session.org_id || session.orgId || null;
+  return Boolean(callerOrgId) && sessionOrgId === callerOrgId;
 }
 
 /** 写操作：负责人本人，或本机构的机构管理员（见 canManageSession）。 */

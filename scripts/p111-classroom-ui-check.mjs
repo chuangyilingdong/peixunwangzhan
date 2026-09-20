@@ -377,7 +377,7 @@ try {
   // ── 005-03E 解散课堂确认
   await page.getByRole('button', { name: '解散课堂' }).first().click();
   await page.waitForTimeout(700);
-  await expectText('解散弹窗', ['解散课堂确认', '解散前校验', '尚未记录实际开始时间', '课堂由当前教师账号创建', '允许解散', '确认解散后的状态变化', '不会发生的事情', '不创建补课课堂', '确认解散']);
+  await expectText('解散弹窗', ['解散课堂确认', '解散前校验', '尚未记录实际开始时间', '课堂由你负责，或你是本机构的机构管理员', '允许解散', '确认解散后的状态变化', '不会发生的事情', '不创建补课课堂', '确认解散']);
   await shot('07-modal-dissolve');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
