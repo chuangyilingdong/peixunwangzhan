@@ -416,12 +416,9 @@
 .mp-name{margin:0 0 8px;font-size:clamp(19px,2.1vw,26px);font-weight:700;letter-spacing:-.01em}
 /* 简介太长就用省略号收尾（用户口径）：两行截断，不做展开 */
 .mp-desc{display:-webkit-box;margin:0;overflow:hidden;color:#ffffff73;font-size:14px;line-height:1.7;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-/* 价格与按钮**并排、价格在左**（用户口径：参考稿是「价格 + 按钮」一行，不是上下堆叠）。
-   价格块内部仍然右对齐，这样数字挨着按钮、看着像一列。 */
+/* 按钮那一格。⚠️ 2026-09-20：价格整块已按用户口径删除（「不要显示价格和按课包开通」），
+   所以这里只剩右边那个按钮 —— 原来「价格在左、按钮在右」的说明与 .mp-price 样式一并删掉。 */
 .mp-side{display:flex;flex-direction:row;align-items:center;gap:clamp(16px,2.4vw,30px)}
-.mp-price{text-align:right}
-.mp-price strong{display:block;font-size:clamp(20px,2.2vw,27px);font-weight:700;letter-spacing:-.02em}
-.mp-price span{display:block;margin-top:5px;color:#ffffff4d;font-size:11px;font-weight:700;letter-spacing:.12em}
 .mp-cta{display:inline-flex;align-items:center;gap:8px;padding:14px 26px;border-radius:999px;color:#fff;background:var(--mp-accent);font-size:13px;font-weight:800;letter-spacing:.04em;white-space:nowrap;box-shadow:0 10px 30px #ff5c9338;transition:background .35s ease,color .35s ease,transform .35s ease}
 .mp-cta:hover{color:#141018;background:#fff;transform:translateY(-1px)}
 .mp-cta:active{transform:scale(.97)}
@@ -461,9 +458,8 @@
 .mp .mp-pages span{color:#fff;background:#ff5c932e}
 @media(max-width:900px){
   .mp-main{grid-template-columns:auto minmax(0,1fr);gap:16px}
-  /* 窄屏：价格与按钮移到信息区下面自己一行，仍然是「价格在左、按钮在右」 */
+  /* 窄屏：这一格（现在只剩按钮）移到信息区下面自己一行 */
   .mp-side{grid-column:1 / -1;align-items:center;justify-content:space-between;width:100%}
-  .mp-price{text-align:left}
   .mp-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:560px){

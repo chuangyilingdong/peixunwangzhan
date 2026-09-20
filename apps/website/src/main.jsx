@@ -953,12 +953,8 @@ function DifficultyStars({level}){
   if(!level) return null;
   return <span className="diff-stars">{Array.from({length:5},(_,i)=><b key={i} style={{color:i<level?'#ffb800':'#e0d9f0',fontSize:'13px'}}>★</b>)}</span>;
 }
-function ageLabel(min,max){
-  if(!min&&!max) return null;
-  if(min&&max) return `${min}–${max} 岁`;
-  if(min) return `${min}+ 岁`;
-  return `≤${max} 岁`;
-}
+// ⚠️ 2026-09-20：这里原来有个 `ageLabel()`，唯一调用点是课包详情里那行「适学年龄」——
+//    那行已按用户口径删除，没人调的函数一并删掉（留着会让下一个读代码的人以为它还活着）。
 function Marketplace(){
   const headCms = useWebsiteContent('MARKETPLACE');
   const content = headCms.data || {};
@@ -1008,9 +1004,8 @@ function Marketplace(){
        // ⚠️ 公开接口以前**两个都不下发**，所以这个位置一直是空的（只有首字占位块）。
        const cover=item.coverAssetId?('/api/public/file-assets/'+item.coverAssetId+'/download'):(item.coverImageUrl||'');
        // 课包目前没有折扣：只显示现价，不做划线原价（用户口径 2026-09-18）。
-       // 没定价（price_fen=0，默认值）时不假装是 0 元，写「价格面议」。
-       const priceFen=Number(item.priceFen||0);const yuan=priceFen/100;
-       const priceText=priceFen>0?'¥ '+(Number.isInteger(yuan)?yuan:yuan.toFixed(2)):'价格面议';
+       // ⚠️ 2026-09-20：**价格整块不再显示**（用户口径：「官网灵动课程这里不要显示价格和按课包开通，删除即可」）
+       //    —— 所以这里连 priceText 一起删掉，别再留一个算好了没人用的变量。
        // 那四个参数位（用户口径 2026-09-18 晚）：难度 / **版本号** / 课时 / 课堂形式。
        // ⚠️ 原来第二格是「适学年龄」，但线上 4 个课包全是「未设置」（课包编辑表单里能填、
        //    只是没人填），于是用户要求换成**版本号** —— 版本号在编辑表单里是有的。
@@ -1020,9 +1015,9 @@ function Marketplace(){
          <div className="mp-main">
            <div className={'mp-cover'+(cover?' has-image':'')} style={cover?{backgroundImage:'url('+cover+')'}:undefined}>{cover?null:<span>{item.title?.charAt(0)||'课'}</span>}</div>
            <div className="mp-info"><h2 className="mp-name">{item.title}</h2><p className="mp-desc">{item.description||'课包简介待补充。'}</p></div>
-           {/* 价格与按钮**同一行、价格在左**（用户口径：参考稿是「价格 + 按钮」并排，不是上下堆叠） */}
+           {/* 价格整块已删（用户口径 2026-09-20：「不要显示价格和按课包开通」）：
+               这一行现在只有右边那个按钮。 */}
            <div className="mp-side">
-             <div className="mp-price"><strong>{priceText}</strong><span>{priceFen>0?'按课包开通':'开通方案请联系我们'}</span></div>
              {/* ⚠️ 按钮里**不要箭头**（用户口径 2026-09-18 晚：「我们还有个箭头也要去掉」） */}
              <Link className="mp-cta" to={'/marketplace/'+item.id}>查看课程列表</Link>
            </div>
@@ -1064,12 +1059,12 @@ function MarketplaceDetail(){
         <h1 className="mkt-detail-title">{d.title}</h1>
         {d.description&&<p className="mkt-detail-desc">{d.description}</p>}
         <div className="mkt-detail-row"><span className="mkt-label2">难度</span><DifficultyStars level={d.difficultyLevel}/></div>
-        <div className="mkt-detail-row"><span className="mkt-label2">适学年龄</span><span>{ageLabel(d.ageRangeMin,d.ageRangeMax)||'未设置'}</span></div>
+        {/* 适学年龄整行已删（用户口径 2026-09-20：「适学年龄删除」）——
+            线上 4 个课包全是「未设置」，留着只是一行空话。 */}
         {(d.tags||[]).length>0&&<div className="mkt-detail-row"><span className="mkt-label2">标签</span><div className="mkt-chips">{(d.tags||[]).map(t=><span key={t} className="mkt-tag">{t}</span>)}</div></div>}
         {d.version&&<div className="mkt-detail-row"><span className="mkt-label2">版本</span><span>{d.version}</span></div>}
         <div className="mkt-detail-row"><span className="mkt-label2">课时</span><span>{d.lessonCount||0} 节</span></div>
-        {/* 参考价格：**不带小数、不带「（线下购买）」**（用户口径：「直接写 ￥8000 即可」） */}
-        {d.priceFen>0&&<div className="mkt-detail-row"><span className="mkt-label2">参考价格</span><span className="mkt-price">{'¥'+(Number.isInteger(d.priceFen/100)?d.priceFen/100:(d.priceFen/100).toFixed(2))}</span></div>}
+        {/* 参考价格整行已删（用户口径 2026-09-20：「参考价格也删除」） */}
       </div>
     </div>
     {/* 课时列表：**不显示那个「01 / 02」编号块**（用户口径：图1 红框那个编号删除） */}

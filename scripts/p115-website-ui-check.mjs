@@ -509,18 +509,18 @@ try {
       featureLabels: [...first.querySelectorAll('.mp-feature span')].map((el) => el.textContent),
       ctaText: cta ? cta.textContent.trim() : null,
       ctaHref: cta ? cta.getAttribute('href') : null,
-      priceText: first.querySelector('.mp-price strong')?.textContent || '',
-      // 价格与按钮是否**同一行**（用户口径：参考稿是并排、价格在左，不是上下堆叠）
-      priceRight: first.querySelector('.mp-price') ? Math.round(first.querySelector('.mp-price').getBoundingClientRect().right) : null,
+      // ⚠️ 2026-09-20：价格整块已按用户口径删除（「官网灵动课程这里不要显示价格和按课包开通」）——
+      //    这里不再量它的位置，而是**断言它不在**（顺带钉住"按课包开通/价格面议"这些字样别再回来）。
+      priceBlocks: first.querySelectorAll('.mp-price').length,
+      rowText: String(first.innerText || '').replace(/\s+/g, ' '),
       ctaLeft: cta ? Math.round(cta.getBoundingClientRect().left) : null,
-      priceCenterY: first.querySelector('.mp-price') ? Math.round(first.querySelector('.mp-price').getBoundingClientRect().top + first.querySelector('.mp-price').getBoundingClientRect().height / 2) : null,
       ctaCenterY: cta ? Math.round(cta.getBoundingClientRect().top + cta.getBoundingClientRect().height / 2) : null,
       featuresOpacity: features ? getComputedStyle(features).opacity : null,
     };
   });
   if (!rowGeo) problems.push('灵动课程：取不到课包行的几何与文案');
   else {
-    console.log(`  · 灵动课程：缩略图 ${rowGeo.coverWidth}×${rowGeo.coverHeight}px、参数 ${rowGeo.featureCount} 项 [${rowGeo.featureLabels.join(' / ')}]、价格「${rowGeo.priceText}」、CTA「${rowGeo.ctaText}」→ ${rowGeo.ctaHref}`);
+    console.log(`  · 灵动课程：缩略图 ${rowGeo.coverWidth}×${rowGeo.coverHeight}px、参数 ${rowGeo.featureCount} 项 [${rowGeo.featureLabels.join(' / ')}]、CTA「${rowGeo.ctaText}」→ ${rowGeo.ctaHref}`);
     // 缩略图：**横向封面比例**（用户口径 2026-09-18 晚「可以再宽一点，左侧还有空位」）
     if (rowGeo.coverWidth == null || rowGeo.coverWidth < 150) problems.push(`灵动课程：缩略图不够宽（${rowGeo.coverWidth}px，应 ≥150px；用户要求拉宽、用上左侧空位）`);
     if (rowGeo.coverWidth && rowGeo.coverHeight && rowGeo.coverWidth <= rowGeo.coverHeight) problems.push(`灵动课程：缩略图应当是横向封面（现在是 ${rowGeo.coverWidth}×${rowGeo.coverHeight}，正方形/竖的）`);
@@ -534,14 +534,10 @@ try {
     // 按钮里**不要箭头**（用户口径：「我们还有个箭头也要去掉」）
     if (String(rowGeo.ctaText).includes('↗')) problems.push(`灵动课程：按钮里不该有箭头（实际「${rowGeo.ctaText}」）`);
     if (!/^\/marketplace\/.+/.test(String(rowGeo.ctaHref))) problems.push(`灵动课程：按钮应当进到该课包的详细课程列表（实际 href=${rowGeo.ctaHref}）`);
-    if (!/¥|价格面议/.test(rowGeo.priceText)) problems.push(`灵动课程：价格位上既不是价格也不是「价格面议」（实际「${rowGeo.priceText}」）`);
-    // 价格在左、按钮在右，**同一行**（价格块的右边不出按钮的左边界、两者中线基本齐平）
-    if (rowGeo.priceRight != null && rowGeo.ctaLeft != null && rowGeo.priceRight > rowGeo.ctaLeft + 2) {
-      problems.push(`灵动课程：价格跑到按钮右边去了（价格右边缘 ${rowGeo.priceRight} > 按钮左边缘 ${rowGeo.ctaLeft}）—— 口径是价格在左`);
-    }
-    if (rowGeo.priceCenterY != null && rowGeo.ctaCenterY != null && Math.abs(rowGeo.priceCenterY - rowGeo.ctaCenterY) > 8) {
-      problems.push(`灵动课程：价格与按钮不在同一行（中线差 ${Math.abs(rowGeo.priceCenterY - rowGeo.ctaCenterY)}px）—— 参考稿是并排，不是上下堆叠`);
-    }
+    // ⚠️ 价格整块不该再出现（用户口径 2026-09-20：「不要显示价格和按课包开通，删除即可」）。
+    //    原来这两条断言量的是"价格在左、与按钮同一行"—— 价格没了，改成断言它不在。
+    if (rowGeo.priceBlocks) problems.push(`灵动课程：课包行里不该再有价格块（${rowGeo.priceBlocks} 个 .mp-price）`);
+    if (/按课包开通|价格面议/.test(rowGeo.rowText)) problems.push('灵动课程：课包行里不该再出现「按课包开通 / 价格面议」字样');
     // 参考稿的核心交互：那一排关键参数**默认收起、悬停（或键盘聚焦进入行内）才展开**。
     // ⚠️ 上一版我把它改成常显，用户当场指出「交互跟参考稿完全不一样」—— 所以这条要钉死。
     // 只在真有悬停能力的设备上要求「先收起」；触屏/窄屏收起来等于永久看不到参数，必须是常显。
@@ -581,10 +577,13 @@ try {
     const first = document.querySelector('.mp-row');
     if (!first) return null;
     const cover = first.querySelector('.mp-cover');
-    return { price: first.querySelector('.mp-price strong')?.textContent || '', coverHasImage: cover ? cover.classList.contains('has-image') : false, background: cover ? getComputedStyle(cover).backgroundImage : '' };
+    return { priceBlocks: first.querySelectorAll('.mp-price').length, text: String(first.innerText || '').replace(/\s+/g, ' '), coverHasImage: cover ? cover.classList.contains('has-image') : false, background: cover ? getComputedStyle(cover).backgroundImage : '' };
   });
-  console.log(`  · 灵动课程（写入价格 199 元 / 封面后）：价格「${priced?.price}」封面=${priced?.coverHasImage}`);
-  if (!priced || !String(priced.price).includes('199')) problems.push(`灵动课程：给课包写了 price_fen=19900，列表却没显示 ¥199（实际「${priced?.price}」）—— 公开接口是不是又漏下发 priceFen 了`);
+  console.log(`  · 灵动课程（写入价格 199 元 / 封面后）：价格块 ${priced?.priceBlocks} 个（应为 0）· 封面=${priced?.coverHasImage}`);
+  // ⚠️ 反过来钉（用户口径 2026-09-20）：**即使课包配了价格，卡片也不显示价格**。
+  //    这条同时挡住两种回归：谁把价格 UI 加回来、以及"按课包开通/价格面议"那类字样又冒出来。
+  if (priced?.priceBlocks) problems.push(`灵动课程：课包配了价格，卡片却把价格块显示出来了（${priced.priceBlocks} 个）—— 口径是不显示价格`);
+  if (/按课包开通|价格面议/.test(String(priced?.text || ''))) problems.push('灵动课程：卡片上出现了价格相关字样（按课包开通 / 价格面议）');
   if (!priced?.coverHasImage || !String(priced.background).includes('lingdong-ai-logo.png')) problems.push('灵动课程：给课包写了封面地址，缩略图却没渲染出来 —— 公开接口是不是又漏下发 coverAssetId / coverImageUrl 了');
   await shot('10-marketplace-priced');
 
@@ -601,17 +600,18 @@ try {
       numbers: document.querySelectorAll('.mkt-lesson-num').length,
       cta: document.querySelectorAll('.mkt-start,.mkt-cta').length,
       priceRow: [...document.querySelectorAll('.mkt-detail-row')].find((row) => row.textContent.includes('参考价格'))?.textContent?.replace(/\s+/g, ' ').trim() || null,
+      ageRow: [...document.querySelectorAll('.mkt-detail-row')].find((row) => row.textContent.includes('适学年龄'))?.textContent?.replace(/\s+/g, ' ').trim() || null,
       text: document.body.innerText.replace(/\s+/g, ' '),
     }));
-    console.log(`  · 课包详情：页头 ${detail.pageTitle} 个、信息区标题「${detail.infoTitle}」、编号块 ${detail.numbers} 个、开始学习块 ${detail.cta} 个、价格行「${detail.priceRow}」`);
+    console.log(`  · 课包详情：页头 ${detail.pageTitle} 个、信息区标题「${detail.infoTitle}」、编号块 ${detail.numbers} 个、开始学习块 ${detail.cta} 个、价格行「${detail.priceRow}」、年龄行「${detail.ageRow}」`);
     if (detail.pageTitle) problems.push('课包详情：页头（课程广场眉题 + 课包标题 + 简介）应当已删除');
     if (!detail.infoTitle) problems.push('课包详情：课包名称应当写在信息区里（.mkt-detail-title）');
     if (detail.numbers) problems.push(`课包详情：课时编号块应当已删除（还有 ${detail.numbers} 个）`);
     if (detail.cta) problems.push('课包详情：「开始学习」那一条应当已删除');
-    // 夹具里 price_fen=19900 → 参考价格要写 ¥199（不带小数、不带「线下购买」）
-    if (!detail.priceRow || !detail.priceRow.includes('¥199') || /\.00/.test(detail.priceRow)) {
-      problems.push(`课包详情：参考价格应写「¥199」（不带小数、不带「线下购买」），实际「${detail.priceRow}」`);
-    }
+    // ⚠️ 2026-09-20（用户口径）：**参考价格**与**适学年龄**两行都删掉了 —— 断言它们不在。
+    //    原来这条断言的是"参考价格要写 ¥199"（夹具写了 price_fen=19900）；价格行整个删了，所以反过来钉。
+    if (detail.priceRow) problems.push(`课包详情：「参考价格」那一行应当已删除（实际「${detail.priceRow}」）`);
+    if (detail.ageRow) problems.push(`课包详情：「适学年龄」那一行应当已删除（实际「${detail.ageRow}」）`);
     if (detail.text.includes('线下购买') || detail.text.includes('请联系客服办理')) problems.push('课包详情：不该再出现「线下购买」或「请联系客服办理」');
     await shot('18-marketplace-detail');
   }
