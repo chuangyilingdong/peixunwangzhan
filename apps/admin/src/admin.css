@@ -740,3 +740,31 @@ a.org-entry-card:hover {
 body {
   font-family: var(--cv-font);
 }
+
+/* ── 素材与宣传物料：卡片网格 + 三步向导（2026-09-20 重做）───────────────
+   为什么是网格而不是表格：这一页要"一眼看到有哪些物料、哪些还没配资源"，
+   封面 + 分类底色 + 两个角标（分类 / 已停用）比一行文字快得多；
+   统计与启停放在卡片自己的页脚，不用把视线挪到别的面板去。 */
+.material-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px;margin-bottom:16px}
+.material-card{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 8px 24px #2e235510}
+.material-card__cover{position:relative;height:132px;background-size:cover;background-position:center}
+.material-card__glyph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#ffffffd6;font-size:38px}
+.material-card__cat{position:absolute;right:10px;top:10px;padding:4px 10px;border-radius:99px;color:#fff;background:#5b4bb5cc;font-size:11px;font-weight:800;backdrop-filter:blur(6px)}
+.material-card__off{position:absolute;left:10px;top:10px;padding:4px 10px;border-radius:99px;color:#fff;background:#a33;font-size:11px;font-weight:800}
+.material-card__body{flex:1;padding:14px 16px 6px}
+.material-card__body h3{margin:0 0 6px;font-size:15px}
+.material-card__body p{margin:0;font-size:12px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.material-card__meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;color:#8b85a0;font-size:11px}
+.material-card__foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 16px;border-top:1px solid var(--line)}
+
+/* 三步向导 */
+.material-steps{display:flex;gap:18px;padding:14px 26px;border-bottom:1px solid var(--line);background:#faf9ff}
+.material-step{display:flex;align-items:center;gap:8px;color:#8b85a0;font-size:12px;font-weight:700}
+.material-step__no{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#e9e5f7;color:#6b6485;font-size:11px}
+.material-step.is-current{color:var(--purple)}
+.material-step.is-current .material-step__no{background:var(--purple);color:#fff}
+.material-step.is-done .material-step__no{background:#cfc8f0;color:#fff}
+.material-summary{display:grid;gap:8px;margin:0}
+.material-summary > div{display:flex;gap:12px}
+.material-summary dt{min-width:76px;color:#8b85a0;font-size:12px}
+.material-summary dd{margin:0;font-size:13px}
