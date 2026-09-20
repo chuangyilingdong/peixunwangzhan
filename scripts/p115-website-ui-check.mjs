@@ -788,6 +788,25 @@ try {
   console.log(`  · 课程中心的站内外壳：顶栏 ${learnChrome.topbar} 个、账号徽标 ${learnChrome.badge} 个、页脚 ${learnChrome.footer} 个`);
   if (!learnChrome.topbar) problems.push('课程中心（/learn）：应当有站内导航栏（用户口径：点灵动学习也要有导航栏）');
   if (!learnChrome.badge) problems.push('课程中心（/learn）：顶栏里应当显示当前账号徽标');
+
+  // ── ⑤f 学生端「我的作品」：**每张卡片都要有封面**（用户口径 2026-09-20：「图2 学生发布的作品
+  //    应该自动生成个封面」）。封面两条来源：服务端给的真封面（img）或我们按作品信息**当场画**的
+  //    那张 SVG；两者都没有就是漏了 —— 而且不许退回旧的 emoji 占位。
+  //    ⚠️ 断言里先要求"有卡片"：夹具没作品时那几个计数全是 0，等式成立、断言空转。
+  await page.goto(`${base}/my-works`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  const coverState = await page.evaluate(() => ({
+    cards: document.querySelectorAll('.student-card').length,
+    art: document.querySelectorAll('.student-work-card__art').length,
+    images: document.querySelectorAll('.student-work-card__cover img').length,
+    legacyIcons: document.querySelectorAll('.student-work-card__icon').length,
+    chips: Array.from(document.querySelectorAll('.student-work-card__type')).map((node) => node.textContent.trim()),
+  }));
+  console.log(`  · 我的作品：卡片 ${coverState.cards} 张、自动封面 ${coverState.art} 张、真封面 ${coverState.images} 张、类型 ${JSON.stringify(coverState.chips)}`);
+  if (coverState.cards === 0) problems.push('我的作品：夹具下应当有作品卡片（否则下面那条封面等式是空转）');
+  if (coverState.art + coverState.images !== coverState.cards) problems.push(`我的作品：每张卡片都要有封面（自动 ${coverState.art} + 真 ${coverState.images} ≠ 卡片 ${coverState.cards}）`);
+  if (coverState.legacyIcons) problems.push(`我的作品：不该再有旧的 emoji 占位图标（${coverState.legacyIcons} 个）`);
+  await shot('19-my-works-covers');
   // 课程卡片的四条口径（用户 2026-09-18 晚）
   const card = await page.evaluate(() => {
     const el = document.querySelector('.course-package-card');

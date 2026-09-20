@@ -13,15 +13,66 @@ function formatDate(value) {
 
 // 作品类型只看服务端给的产物线索：VibeCoding 的看产物文件名，画布的就是画布作品。
 // 不做「猜内容」的花活 —— 猜错比不显示更糟。
+// `hue` / `art` 是给下面的自动封面用的：类型决定配色家族与插画，所以一排作品看着是一套。
 function workType(work) {
   const name = String(work.entryFile || '').toLowerCase();
   if (name) {
-    if (/\.pptx?$/.test(name)) return { label: 'VibeCoding · 演示文稿', icon: '📊' };
-    if (/\.docx?$/.test(name)) return { label: 'VibeCoding · 文档', icon: '📄' };
-    if (/\.xlsx?$/.test(name)) return { label: 'VibeCoding · 表格', icon: '📈' };
-    return { label: 'VibeCoding · 网页应用', icon: '💻' };
+    if (/\.pptx?$/.test(name)) return { key: 'DECK', label: 'VibeCoding · 演示文稿', icon: '📊', hue: 28, art: 'deck' };
+    if (/\.docx?$/.test(name)) return { key: 'DOC', label: 'VibeCoding · 文档', icon: '📄', hue: 168, art: 'doc' };
+    if (/\.xlsx?$/.test(name)) return { key: 'SHEET', label: 'VibeCoding · 表格', icon: '📈', hue: 212, art: 'sheet' };
+    return { key: 'WEB', label: 'VibeCoding · 网页应用', icon: '💻', hue: 262, art: 'web' };
   }
-  return { label: '画布作品', icon: '🎨' };
+  return { key: 'CANVAS', label: '画布作品', icon: '🎨', hue: 322, art: 'canvas' };
+}
+
+/**
+ * **作品封面**（用户口径 2026-09-20：「学生发布的作品应该自动生成个封面」）。
+ *
+ * 学生不会自己传封面，所以封面必须**自己长出来**。两层：
+ *   ① 服务端给了真封面（`coverUrl`，将来是作品的截图）→ 直接用它；
+ *   ② 没有 → 用作品自身的信息**当场画一张**：类型定色系与插画，标题哈希做小幅色相偏移
+ *      （同一类型的几个作品互相区分得开），标题首字当水印。
+ * 刻意不引入任何图片资源：SVG 是内联的，不占带宽、不产生 404，也不依赖服务端。
+ *
+ * ⚠️ 为什么不用"猜内容"的花活（比如按标题选吉祥物）：猜错比留个中性的封面更糟。
+ */
+function coverSeed(work) {
+  const text = String(work.id || work.title || '');
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) hash = (hash * 31 + text.charCodeAt(index)) % 100003;
+  return hash;
+}
+
+function CoverArt({ art }) {
+  switch (art) {
+    case 'web': return <g><rect x="0" y="0" width="30" height="21" rx="3" /><rect x="11" y="23" width="8" height="3" rx="1.5" /><rect x="6" y="27" width="18" height="2.4" rx="1.2" /></g>;
+    case 'deck': return <g><rect x="0" y="1" width="30" height="19" rx="3" /><rect x="5" y="6" width="12" height="2.6" rx="1.3" /><rect x="5" y="11" width="18" height="2.6" rx="1.3" /><rect x="5" y="16" width="8" height="2.6" rx="1.3" /></g>;
+    case 'doc': return <g><rect x="1" y="0" width="26" height="30" rx="3" /><rect x="6" y="7" width="16" height="2.4" rx="1.2" /><rect x="6" y="13" width="16" height="2.4" rx="1.2" /><rect x="6" y="19" width="10" height="2.4" rx="1.2" /></g>;
+    case 'sheet': return <g><rect x="0" y="2" width="30" height="26" rx="3" /><rect x="0" y="10" width="30" height="2" /><rect x="0" y="18" width="30" height="2" /><rect x="15" y="2" width="2" height="26" /></g>;
+    case 'canvas': return <g><circle cx="15" cy="15" r="14" /><circle cx="10" cy="11" r="2.6" fill="#00000055" /><circle cx="20" cy="11" r="2.6" fill="#00000055" /><circle cx="10" cy="20" r="2.6" fill="#00000055" /><circle cx="20" cy="20" r="2.6" fill="#00000055" /></g>;
+    default: return null;
+  }
+}
+
+function WorkCover({ work, type }) {
+  if (work.coverUrl) return <img src={work.coverUrl} alt="" loading="lazy" />;
+  const seed = coverSeed(work);
+  const hue = ((type.hue + (seed % 25) - 12) % 360 + 360) % 360;
+  const gradientId = `workcover-${String(work.id || 'x').replace(/[^A-Za-z0-9_-]/g, '')}`;
+  const mark = String(work.title || '作').trim().charAt(0) || '作';
+  return <svg className="student-work-card__art" viewBox="0 0 320 150" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs>
+      <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stopColor={`hsl(${hue} 58% 56%)`} />
+        <stop offset="1" stopColor={`hsl(${(hue + 22) % 360} 72% 74%)`} />
+      </linearGradient>
+    </defs>
+    <rect width="320" height="150" fill={`url(#${gradientId})`} />
+    <circle cx="272" cy="26" r="58" fill="#ffffff" opacity="0.10" />
+    <circle cx="34" cy="136" r="44" fill="#ffffff" opacity="0.08" />
+    <text x="22" y="128" fill="#ffffff" opacity="0.20" fontSize="104" fontWeight="900" fontFamily="inherit">{mark}</text>
+    <g transform="translate(266,86) scale(1.7)" fill="#ffffff" opacity="0.92"><CoverArt art={type.art} /></g>
+  </svg>;
 }
 
 export function MyWorksPage({ api }) {
@@ -91,7 +142,7 @@ export function MyWorksPage({ api }) {
       const type = workType(work);
       return <article className="student-card" key={work.id}>
         <div className="student-work-card__cover">
-          <span className="student-work-card__icon">{type.icon}</span>
+          <WorkCover work={work} type={type} />
           <span className="student-work-card__type">{type.label}</span>
         </div>
         <div className="student-card__head">

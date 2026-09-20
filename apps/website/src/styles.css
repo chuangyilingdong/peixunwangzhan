@@ -251,7 +251,8 @@
 .student-work-toolbar__count strong{color:var(--deep);font-size:15px;margin-right:4px}
 .student-work-card__cover{position:relative;height:150px;overflow:hidden;border-radius:12px;background:linear-gradient(140deg,#8065df,#b3a4fa)}
 .student-work-card__cover img{display:block;width:100%;height:100%;object-fit:cover}
-.student-work-card__icon{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#ffffffd0;font-size:34px}
+/* 自动封面（内联 SVG）：铺满封面区，和真封面（img）占同一个位置 */
+.student-work-card__art{position:absolute;inset:0;display:block;width:100%;height:100%}
 .student-work-card__cover .student-work-card__type{position:absolute;right:10px;top:10px;left:auto;transform:none;padding:4px 10px;border-radius:99px;color:#fff;background:#5b4bb5cc;font-size:11px;font-weight:800;backdrop-filter:blur(6px)}
 .student-work-card__source{margin:0;color:#8b85a0;font-size:12px;line-height:1.6}
 .student-work-card__foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:12px;border-top:1px solid #f0edf8;color:#a49dba;font-size:11px}
