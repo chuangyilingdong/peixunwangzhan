@@ -294,6 +294,27 @@
 .work-detail__meta{margin:0;color:#918b9e;font-size:13px}
 .work-detail__canvas{margin:20px 0}
 .work-detail__foot{margin:18px 0 48px}
+/* ── 「我的作品」详情页的视图切换 + 图片相册（2026-09-20，用户口径：
+      一件作品有几种看法就摆几个视图让学生切；这节课出的图要能一张张选着看）─────────────── */
+.mw-provenance{margin:0 6px}
+.work-detail__meta .mw-provenance{padding:2px 10px;border-radius:99px;color:#6b5bb8;background:#f1edff;font-weight:700}
+.mw-views{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 14px}
+.mw-view{padding:8px 16px;border:1px solid var(--line);border-radius:99px;color:#5f586c;background:#fff;font-size:13px;font-weight:800;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease}
+.mw-view:hover{border-color:#cdc3ef;color:var(--deep)}
+.mw-view.is-active{color:#fff;background:var(--purple);border-color:var(--purple)}
+.mw-stage{margin:0 0 14px}
+/* 相册：大图在上、缩略图条在下（多张时才有那条）。图多也换行，不横向挤。 */
+.mw-gallery{display:grid;gap:12px;justify-items:center}
+.mw-gallery__stage{display:grid;place-items:center;width:100%;padding:14px;border-radius:16px;background:#fff;box-shadow:0 10px 30px #4030710f}
+.mw-gallery__stage img{max-width:100%;max-height:64vh;border-radius:12px;object-fit:contain}
+.mw-gallery__caption{margin:0;color:#6c6680;font-size:13px;text-align:center}
+.mw-gallery__thumbs{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.mw-gallery__thumb{width:78px;height:60px;padding:0;border:2px solid transparent;border-radius:10px;overflow:hidden;background:#fff;cursor:pointer}
+.mw-gallery__thumb.is-active{border-color:var(--purple)}
+.mw-gallery__thumb img{display:block;width:100%;height:100%;object-fit:cover}
+/* 源文件收进折叠块：它不再是「怎么看作品」的主视图，而是想深究的人再展开 */
+.mw-source{margin-top:18px}
+.mw-source summary{cursor:pointer;color:#8b8498;font-size:13px;font-weight:700}
 /* ── 官网顶栏：7 项主导航 + 未登录时的两个登录入口 ──────────────────────────
    2026-09-18：导航从 4 项扩到 7 项，未登录时并列「机构 / 老师登录」「学生登录」。项变多后
    顶栏在窄屏会挤，所以 1120px 以下把主导航收进汉堡抽屉（抽屉与桌面端共用 WEBSITE_NAV 同一份

@@ -921,6 +921,14 @@ export async function handleStudent(ctx) {
       : row('SELECT * FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     const isPublic = Number(work.is_public || 0) === 1;
+    // 课包 / 课时：学生要一眼看出这件作品是哪门课哪一节的（用户口径 2026-09-20）。
+    // 两类来源的外键名不同（画布是 course_lesson_id，VibeCoding 是 lesson_id），在这里归一。
+    const lessonId = source === 'CANVAS' ? work.course_lesson_id : work.lesson_id;
+    const lessonRow = lessonId
+      ? row(`SELECT COALESCE(lesson.published_title, lesson.title) AS lesson_title, series.title AS series_title
+             FROM course_lessons lesson LEFT JOIN course_series series ON series.id = lesson.series_id
+             WHERE lesson.id = ?`, [lessonId])
+      : null;
     const base = {
       id: work.id,
       source,
@@ -928,6 +936,8 @@ export async function handleStudent(ctx) {
       description: work.description || '',
       status: work.status,
       submittedAt: work.submitted_at,
+      seriesTitle: lessonRow?.series_title || null,
+      courseLessonTitle: lessonRow?.lesson_title || null,
       // 状态话术走 @platform/shared 的 workPlazaState（两条链路一套词）：它按这四个字段推导，
       // 少给一个就会把「精选」「已下架」显示成「已提交待发布」。
       plazaPublished: isPublic,
@@ -941,19 +951,38 @@ export async function handleStudent(ctx) {
       // 前端要拿它统一转成 data:（见 lib 的 readToken 注释）。
       // 与 org 端**同一条提取规则**：只认 previewUrl / assetUrl / referenceUrl 三个字段，
       // 别去扫整份快照 —— 扫宽了会把任意字段里的字串当素材，等于把别人的文件也列出来。
-      const snapshotImageIds = new Set(
-        (Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : []).flatMap((node) =>
-          ['previewUrl', 'assetUrl', 'referenceUrl'].map((key) => String(node?.data?.[key] || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean)),
-      );
+      const snapshotNodes = Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : [];
+      const assetUrls = snapshotNodes.flatMap((node) => ['previewUrl', 'assetUrl', 'referenceUrl']
+        .map((key) => String(node?.data?.[key] || '').trim()).filter(Boolean));
+      const snapshotImageIds = new Set(assetUrls
+        .map((url) => url.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean));
       const imageUrls = Object.fromEntries([...snapshotImageIds]
         .map((fileId) => [fileId, `/api/student/file-assets/${encodeURIComponent(fileId)}/download`]));
-      return { ...base, canvasSnapshot, imageUrls };
+      // 「图片」视图用的清单（学生作业里的图，能一张张选着看）。
+      // ⚠️ 地址有两种：我们自己的 `/api/student/file-assets/<id>/download`（要转 data: 才显示得出），
+      //    以及上游图床的 https 外链（直接能显示 —— 站点的 img-src 允许 https:，别去动它）。
+      // 判「是不是图片」与广场同一套直觉：节点类型是 image，或者地址长得像图片。
+      const images = snapshotNodes.flatMap((node) => {
+        const data = node?.data || {};
+        const url = String(data.assetUrl || data.previewUrl || data.referenceUrl || '').trim();
+        const looksImage = node?.type === 'image' || /^data:image\//i.test(url) || /\.(png|jpe?g|gif|webp|bmp|avif|svg)(\?|$)/i.test(url);
+        if (!url || !looksImage) return [];
+        return [{
+          url,
+          fileId: url.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1] || null,
+          caption: String(data.caption || data.title || '').trim() || null,
+        }];
+      });
+      return { ...base, canvasSnapshot, imageUrls, images };
     }
     const content = normalizeSubmission(work, { includeContent: true });
     // 图片地址由服务端拼好（前端不自己拼路由，前缀/编码错一处就是 404，两边都测不出来）：
     // 都是**学生自己的**素材，直接走已有的 file-assets 下载口（同源请求带 cookie，鉴权兜底见 lib 的 readToken）。
-    const imageUrls = Object.fromEntries([...snapshotImageFileIds(work)]
+    const imageIds = [...snapshotImageFileIds(work)];
+    const imageUrls = Object.fromEntries(imageIds
       .map((fileId) => [fileId, `/api/student/file-assets/${encodeURIComponent(fileId)}/download`]));
+    // 「图片」视图：提交里出现的图（生成图 / 学生传的附件图 / 内嵌图）—— 学生能一张张选着看。
+    const images = imageIds.map((fileId) => ({ url: imageUrls[fileId], fileId, caption: null }));
     // 真文件产物（学生创作环境交上来的 PPT/Word/Excel 原文件）：预览用服务端转出来的 PDF，下载给原文件。
     // 这类产物没有「规格文本」，客户端渲染不了 —— 与 org 端同一口径。
     const fileUrls = Object.fromEntries(parseSnapshotArtifacts(work)
@@ -962,7 +991,7 @@ export async function handleStudent(ctx) {
         preview: `/api/student/file-assets/${encodeURIComponent(item.fileId)}/preview`,
         download: `/api/student/file-assets/${encodeURIComponent(item.fileId)}/download`,
       }]));
-    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls, fileUrls };
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls, images, fileUrls };
   }
 
   if (part === '/showcase' && method === 'GET') {
