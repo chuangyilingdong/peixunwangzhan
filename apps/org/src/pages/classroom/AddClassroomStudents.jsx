@@ -5,8 +5,8 @@
 // 这节课没完课」的学生才会进「可添加」名单，所以进了这张表的人，后三列必然是
 // 未开课 / 无 / 待上课。这里照实算出来，规则哪天变了这几列会跟着变，不写死文案。
 import { useMemo, useState } from 'react';
-import { Empty, ErrorState, formatYuan, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
-import { BoundaryNote, ParentLine, RuleList } from './ui.jsx';
+import { Empty, ErrorState, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
+import { ParentLine } from './ui.jsx';
 import { SESSION_STATE, StateBadge } from './states.jsx';
 
 // 线框图的 A / B / C 三类「不可添加」原因，映射到服务端真实的原因码。
@@ -18,21 +18,6 @@ const BLOCK_GROUPS = [
 ];
 const groupOf = (reason) => BLOCK_GROUPS.find((group) => group.reasons.includes(reason)) || BLOCK_GROUPS[2];
 
-// 「这堂课给每个学生的算力」列：服务端给的 pool* 读的是**观测口径**（每学生 × 本场课堂的上游成本
-// 与观测上限，见 services/sessionCostCap.js）—— **只观测、不真拦**（2026-09-18 用户口径）。
-// 没配观测上限 → 只显示已用；配了 → 已用 / 观测上限 / 差额，并写明"不拦学生"。
-// 候选人多半还没进这堂课，所以「已用 ¥0.00」是**真实值**，不是占位符。
-// 注意：pool* 的值是**分**（formatYuan 的入参就是分）。
-function poolText(student) {
-  const used = formatYuan(student.poolUsedYuan || 0);
-  const unknown = student.poolUnknownCalls ? ` · ${student.poolUnknownCalls} 笔成本未知` : '';
-  if (student.poolUnlimited) return `已用 ${used}（未设观测上限，不拦学生）${unknown}`;
-  if (student.poolCapYuan == null) return `已用 ${used}${unknown}`;
-  const cap = formatYuan(student.poolCapYuan);
-  const remain = formatYuan(student.poolRemainYuan);
-  return `已用 ${used} / 观测上限 ${cap}（还剩 ${remain} · 仅观测，不拦学生）${unknown}`;
-}
-
 export function AddClassroomStudents({ api, openId, onBack }) {
   const detail = useData(() => openId ? api.get('org/sessions/' + encodeURIComponent(openId)) : Promise.resolve(null), [api, openId]);
   const current = !detail.loading && !detail.error && detail.data?.id === openId ? detail.data : null;
@@ -43,7 +28,6 @@ export function AddClassroomStudents({ api, openId, onBack }) {
   const ready = canAdd && !candidates.loading && !candidates.error && candidates.data?.sessionId === openId && candidates.data?.lessonId === current?.lessonId;
   const selectable = ready ? candidates.data.selectable || [] : [];
   const blocked = ready ? candidates.data.blocked || [] : [];
-  const alreadyIn = ready ? candidates.data.alreadyIn || [] : [];
 
   const [draftKeyword, setDraftKeyword] = useState('');
   const [keyword, setKeyword] = useState('');
@@ -105,19 +89,7 @@ export function AddClassroomStudents({ api, openId, onBack }) {
           <span className="muted">课程：{current.lessonTitle || '—'}</span>
           <span className="muted">当前学生 {current.studentSummary?.total ?? 0} 人</span>
         </div>
-        <BoundaryNote tone="info" title="候选池的前提条件" lines={[
-          '仅当学生账号正常、当前课包许可有效、当前无其他课堂占用时，才会进入候选池。',
-        ]} />
       </div>
-
-      <Notice tone="info">
-        <strong>添加规则：</strong>学生必须同时满足「未完成当前课程」且「当前不处于任何课堂的待上课 / 上课中」。
-        <div className="row-actions top-gap">
-          <span className="status warning">原因优先级 A &gt; B</span>
-          <span className="status success">不产生新增人次扣减</span>
-          {alreadyIn.length ? <span className="status">已在本课堂 {alreadyIn.length} 人（不重复显示）</span> : null}
-        </div>
-      </Notice>
 
       {!canAdd ? <Notice tone="warning">
         当前课堂状态为「{SESSION_STATE[current.status]?.label || current.status}」，不能再添加学生。
@@ -168,7 +140,7 @@ export function AddClassroomStudents({ api, openId, onBack }) {
                     checked={picked.includes(student.id)} onChange={() => toggle(student.id)} /></td>
                   <td><strong>{student.name || student.login}</strong></td>
                   <td className="muted">{student.login}</td>
-                  <td><span className="status success">已许可</span><div className="muted">{poolText(student)}</div></td>
+                  <td><span className="status success">已许可</span></td>
                   <td>未开课</td>
                   <td>无</td>
                   <td><span className="status warning">待上课</span></td>
@@ -186,7 +158,7 @@ export function AddClassroomStudents({ api, openId, onBack }) {
           <Panel title="不可添加学生">
             {keyword ? (visibleBlocked.length ? <div className="table-wrap"><table>
               <thead><tr>
-                <th>学生</th><th>登录账号</th><th>判定</th><th>原因</th><th>占用课堂</th><th>课包授权</th>
+                <th>学生</th><th>登录账号</th><th>判定</th><th>原因</th><th>占用课堂</th>
               </tr></thead>
               <tbody>{visibleBlocked.map((student) => <tr key={student.id}>
                 <td><strong>{student.name || student.login}</strong></td>
@@ -196,7 +168,6 @@ export function AddClassroomStudents({ api, openId, onBack }) {
                 <td>{student.session?.title
                   ? <>{student.session.title}<div className="muted">{SESSION_STATE[student.session.status]?.label || student.session.status} · {student.session.teacherName || '未知老师'}</div></>
                   : <span className="muted">—</span>}</td>
-                <td>{poolText(student)}</td>
               </tr>)}</tbody>
             </table></div> : <Empty title="搜到的学生不在不可添加名单里" body="他要么可以添加，要么本来就没进候选池。" />)
               : <Notice tone="warning">
@@ -217,10 +188,6 @@ export function AddClassroomStudents({ api, openId, onBack }) {
               <p className="muted">{group.hint}</p>
             </article>)}
           </div>
-          <BoundaryNote tone="info" lines={[
-            `当前候选池：可添加 ${selectable.length} 人 · 不可添加 ${blocked.length} 人 · 已在课堂 ${alreadyIn.length} 人。`,
-            '候选池与不可添加原因严格分层：可添加名单只受真实许可与占用影响，不受本页筛选或搜索影响。',
-          ]} />
         </Panel> : null}
       </>}
     </> : null}

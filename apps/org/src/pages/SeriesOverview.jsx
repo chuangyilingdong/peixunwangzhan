@@ -80,7 +80,6 @@ function StudentGrantCenter({ api, onOpenStudent, onAddGrants }) {
   }
 
   return <>
-    <Notice tone="info">这一屏按<strong>学生</strong>看授权。课包侧的库存、明细与「最近授权」在「课包库存」页签。</Notice>
     <div className="metrics">
       <MetricCard label="学生总数" value={totals.students ?? '—'} hint="本机构在册学生账号" />
       <MetricCard label="已有课包学生" value={totals.withGrants ?? '—'} hint="至少有一条有效授权" tone="teal" />
@@ -124,7 +123,6 @@ function StudentGrantCenter({ api, onOpenStudent, onAddGrants }) {
         </table></div>
         <Pagination page={data.data?.page} totalPages={data.data?.totalPages} onChange={setPage} disabled={data.loading} />
       </> : <Empty title="没有符合条件的学生" body="调整筛选条件，或先在「机构成员管理」里创建学生账号。" />}
-      <p className="muted top-gap">「已授权课包数」只数<strong>有效（未撤销）</strong>的授权。学生学没学是另一件事，看「查看授权」里的「正式学习记录」。</p>
     </Panel>
   </>;
 }
@@ -182,7 +180,6 @@ function AddGrantDrawer({ api, student, grants, onClose, onDone }) {
         </section>
         <section className="drawer-section">
           <h3>候选课包规则</h3>
-          <p className="muted">仅展示：机构已开通 + 当前可授权 + 剩余人次 &gt; 0 + 该学生当前无这一课包的有效授权。</p>
           <p className="muted">一次只能选 1 个课包；已存在有效授权、权益已停用、剩余人次为 0 的课包都不展示。</p>
         </section>
         <section className="drawer-section">
@@ -215,7 +212,6 @@ function AddGrantDrawer({ api, student, grants, onClose, onDone }) {
             <li>已分配人次 +1，剩余人次 −1</li>
             <li>写入平台侧的授权审计与许可收入台账</li>
           </ol>
-          <p className="muted">页面边界：不支持多选 / 批量授权，不设置授权有效期，不修改平台总人次。</p>
         </section> : null}
       </div>
       <footer className="drawer-foot">
@@ -243,16 +239,11 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
   const summary = data.data?.summary || {};
   const items = data.data?.items || [];
   const activeItems = items.filter((item) => item.status === 'ACTIVE');
-  const revokedCount = summary.revokedCount ?? (items.length - activeItems.length);
   const openGrant = items.find((item) => item.id === openGrantId) || null;
 
   return <>
     <PageHeader eyebrow="002-04" title="学生授权详情" description="父级：002-03 | 学生授权中心"
       actions={<><button className="secondary-button" onClick={onBack}>← 返回学生授权中心</button><button className="primary-button" onClick={() => setAdding(true)}>添加课包</button></>} />
-    <Notice tone="info">
-      本页只管理<strong>学生课包授权</strong>关系；学习结果、作品、课堂数据不在本页处理。新增授权进入 002-04A；单条授权进入 002-04B。
-      <div className="muted">撤销授权只有平台端有权限，机构端不提供该入口（因此没有 002-04C 这一步）。</div>
-    </Notice>
     {data.loading ? <Loading label="正在读取该学生的授权…" /> : data.error ? <ErrorState error={data.error} onRetry={data.refresh} /> : <>
       <Panel title="学生">
         <div className="row-actions">
@@ -281,26 +272,9 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
             <td><GrantStateBadge item={item} /></td>
           </tr>)}</tbody>
         </table></div> : <Empty title="该学生还没有任何课包授权" body="点右上角「添加课包」为他开一笔；每分给一人用掉 1 次。" />}
-        {revokedCount ? <p className="muted top-gap">另有 {revokedCount} 条已取消的授权不在本列表（按线框图口径本页只展示未取消的）—— 撤销由平台执行，原因与时间在「学生授权记录」里。</p> : null}
       </Panel>
 
-      <Panel title="授权规则">
-        <ol className="muted">
-          <li>授权状态：待激活 / 学习中 / 已取消；本页展示当前未取消的授权。</li>
-          <li>待激活＝尚未在该课包产生正式学习记录；学习中＝已进入正式课堂，或已产生有效 AI 学习记录。</li>
-          <li>「查看授权」进入 002-04B 单授权详情；<strong>撤销授权只有平台端有权限</strong>，本页不提供撤销，也不做撤销资格校验。</li>
-          <li>新增授权成功扣除 1 人次；误授权由平台兜底撤销，平台撤销后返还 1 人次。</li>
-        </ol>
-      </Panel>
 
-      <Panel title="本页负责">
-        <ol className="muted">
-          <li>确认授权对象：{student?.displayName || student?.login} · {student?.login}</li>
-          <li>查看学生当前课包授权及授权状态</li>
-          <li>发起新增课包授权（002-04A）</li>
-          <li>进入单授权详情判断后续操作（002-04B）</li>
-        </ol>
-      </Panel>
     </>}
 
     {openGrant ? <div className="drawer-overlay" onClick={() => setOpenGrantId('')}>
@@ -325,15 +299,6 @@ function StudentGrantDetail({ api, studentId, onBack, onOpenRecords }) {
           <section className="drawer-section">
             <h3>正式学习记录</h3>
             <p>{openGrant.learned ? <span className="status success">已产生</span> : <span className="muted">未产生</span>}</p>
-            <p className="muted">判定口径：该学生在属于这个课包的课堂上，有过成功且<strong>非演示（mock）</strong>的 AI 调用 —— 与课堂的「完课」判定同一套条件。</p>
-          </section>
-          <section className="drawer-section">
-            <h3>页面边界</h3>
-            {/* 线框图在这里画的是「取消资格校验 5 条 + 校验结论 + 取消成功后的影响 + 取消授权按钮」。
-                用户已定：机构端没有取消授权权限，所以那一整块不做 —— 连展示也不做，
-                否则等于给机构看「能不能取消」却不给按钮，是误导。施工文档 一.4 有完整口径。 */}
-            <p className="muted">本抽屉只做<strong>只读</strong>展示。取消授权只有平台端有权限，机构端不提供该操作，
-              因此也不展示「取消资格校验」与「取消后的影响」。</p>
           </section>
         </div>
         <footer className="drawer-foot"><button className="secondary-button" onClick={() => setOpenGrantId('')}>关闭</button></footer>
@@ -367,7 +332,6 @@ function LicenseBatches({ api, seriesOptions }) {
   }
 
   return <>
-    <Notice tone="info">本页只列<strong>平台侧发生</strong>的人次记录，机构只读。机构把课包分给学生的消耗在「课包库存」与「学生授权中心」。</Notice>
     <div className="metrics">
       <MetricCard label="业务记录" value={totals.total ?? 0} hint={`共 ${totals.quantity ?? 0} 人次`} />
       <MetricCard label="初次开通" value={totals.firstOpening ?? 0} hint="该授权单的第一条采购" tone="teal" />
@@ -413,11 +377,6 @@ function LicenseBatches({ api, seriesOptions }) {
         </table></div>
         <Pagination page={data.data?.page} totalPages={data.data?.totalPages} onChange={setPage} disabled={data.loading} />
       </> : <Empty title="没有符合条件的记录" body="调整筛选条件；如果本机构还没有过采购或开通，这里会是空的。" />}
-      <p className="muted top-gap">
-        页面边界：这里只有<strong>平台侧</strong>的采购 / 增购 / 开通 / 调整记录，机构只读；付款与合同口径以平台结算为准，
-        金额不在本页展示。「初次开通 / 增购」是按批次在同一张授权单里的先后顺序推出来的（库里没有这个分类列），
-        「平台调整」是平台开通时结转的期初人次。
-      </p>
     </Panel>
   </>;
 }
@@ -450,11 +409,6 @@ function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
   }
 
   return <>
-    <Notice tone="info">
-      本页用于授权操作审计。它**只看得见成功的操作**（失败的授权不落审计），
-      旧记录的「来源」也没有（本版起才随操作一起记录）。
-      <div className="muted">机构端没有取消授权权限，所以「取消授权」那一行的操作账号是<strong>平台</strong>侧的。</div>
-    </Notice>
     <div className="metrics">
       <MetricCard label="本月授权" value={totals.grantedThisMonth ?? 0} hint="本月新增的学生课包授权" />
       <MetricCard label="本月取消" value={totals.revokedThisMonth ?? 0} hint="本月由平台取消的授权" tone="orange" />
@@ -504,10 +458,6 @@ function GrantRecords({ api, seriesOptions, initialSearch = '' }) {
         </table></div>
         <Pagination page={data.data?.page} totalPages={data.data?.totalPages} onChange={setPage} disabled={data.loading} />
       </> : <Empty title="没有符合条件的记录" body="调整筛选条件；本机构还没有发生过授权时这里会是空的。" />}
-      <p className="muted top-gap">
-        记录边界：授权的成功操作与平台的取消操作都会保留审计记录；<strong>失败的授权不在这里</strong>（审计只落成功）。
-        人次增减的数值口径以平台侧的许可收入台账为准，本页只记"谁在什么时候对谁做了授权 / 取消"。
-      </p>
     </Panel>
   </>;
 }
@@ -610,10 +560,6 @@ export function SeriesOverview({ api }) {
             <span className={row.revokedAt ? 'muted' : 'status success'}>{row.revokedAt ? '已取消' : '授权成功'}</span>
             <span className="muted">-1</span>
           </div>)}</div> : <p className="muted">暂无授权记录。</p>}
-          <Notice tone="info">
-            这里只列<strong>学生授权</strong>引起的库存变化。
-            <div className="muted">平台的采购 / 增购 / 权益调整记录在「采购与开通记录」页签（线框图里那串「53→52」的前后值数据库里没有存，不编）。</div>
-          </Notice>
         </Panel>
       </div>
     </> : openStudentId ? <StudentGrantDetail api={api} studentId={openStudentId} onBack={() => setOpenStudentId('')}
@@ -624,7 +570,6 @@ export function SeriesOverview({ api }) {
           : tab === 'grant' ? <StudentGrants api={api} />
             : <>
               {overview.loading ? <Loading label="正在读取课包库存…" /> : overview.error ? <ErrorState error={overview.error} onRetry={overview.refresh} /> : <>
-                <Notice tone="info">总人次由平台授予，机构仅查看与使用，不可在本页面直接修改总人次。</Notice>
                 <div className="metrics">
                   <MetricCard label="已开通课包数" value={totals.seriesCount ?? 0} hint={`当前有效课包 ${allItems.filter((item) => item.assignmentStatus === 'ACTIVE').length} 个`} />
                   <MetricCard label="总人次" value={totals.quotaTotal ?? 0} hint="平台累计授予" tone="teal" />
@@ -662,14 +607,6 @@ export function SeriesOverview({ api }) {
                       <td><button type="button" className="text-button" onClick={() => setOpenId(item.seriesId)}>查看详情</button></td>
                     </tr>)}</tbody>
                   </table></div> : <Empty title="没有符合条件的课包" body="调整筛选条件，或等平台把课包授权给本机构。" />}
-                  <p className="muted top-gap">
-                    次数口径：平台给本机构的授权单上是「可授权次数」，每分给一名学生用掉 1 次；余额必须大于零才能分配，零次不代表不限。
-                    课堂按「这节课属于哪个课包」归集，所以待上课/上课中是<strong>当前存量</strong>，已结束是近 {days} 天内的。
-                  </p>
-                  {allItems.some((item) => item.grantedCount > item.quotaUsed) ? <Notice tone="info">
-                    有课包的「已授权学生」多于「已授权次数」——说明其中一部分许可是<strong>演示/历史数据</strong>（没走分配计数器）。
-                    剩余次数按计数器算；要核对具体是谁，点「查看详情」。
-                  </Notice> : null}
                 </Panel>
 
                 <Panel title="常用入口">
@@ -680,7 +617,6 @@ export function SeriesOverview({ api }) {
                     <Link className="secondary-button" to="/courses">教学课程库<div className="muted">课包 / 课程 / 教学资料</div></Link>
                     <Link className="secondary-button" to="/members">机构成员管理<div className="muted">学生 / 教师 / 账号</div></Link>
                   </div>
-                  <p className="muted">机构管理员，只读查看平台授予的人次库存；采购 / 增购 / 开通记录由平台侧维护。</p>
                 </Panel>
               </>}
             </>}

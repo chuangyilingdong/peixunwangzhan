@@ -61,11 +61,6 @@ function TeacherDashboard({ api }) {
     <PageHeader eyebrow="001-02" title="教师工作台" description="我的教学执行中心"
       actions={<span className="muted">{new Date().toLocaleDateString('zh-CN')}</span>} />
 
-    <Notice tone="info">
-      教师工作台只展示当前登录教师自己的教学任务与结果，不展示机构运营数据。
-      <div className="muted">当前账号只要存在「待上课 / 上课中」课堂，就不能创建新的课堂。</div>
-    </Notice>
-
     <div className="metrics">
       <MetricCard label="我的待上课课堂" value={counts.PENDING ?? 0} hint="当前账号" />
       <MetricCard label="我的上课中课堂" value={counts.ACTIVE ?? 0} hint="当前账号" tone="teal" />
@@ -91,7 +86,6 @@ function TeacherDashboard({ api }) {
               <button className="secondary-button" onClick={() => navigate('/classrooms/' + encodeURIComponent(ongoing.id) + '/students/new')}>添加学生</button>
               <button className="secondary-button" onClick={() => navigate('/classrooms/' + encodeURIComponent(ongoing.id))}>{ongoing.status === 'ACTIVE' ? '结束课堂' : '开始上课'}</button>
             </div>
-            <p className="muted">开始后不可移除学生 / 不可更换课包或课程 / 不提供学生 AI 控制。</p>
           </>}
       </Panel>
 
@@ -100,12 +94,6 @@ function TeacherDashboard({ api }) {
         {blocked > 0
           ? <Notice tone="warning">当前不可创建<div className="muted">原因：当前账号已有 {blocked} 个「待上课 / 上课中」课堂。需先结束或解散当前课堂，才可创建下一课堂。</div></Notice>
           : <p className="muted">当前账号无「待上课 / 上课中」课堂，可以创建。</p>}
-        <p className="muted"><strong>创建规则</strong></p>
-        <ol className="course-lessons">
-          <li>本人无「待上课 / 上课中」课堂 → 可创建</li>
-          <li>本人有「待上课 / 上课中」课堂 → 禁止创建</li>
-        </ol>
-        <p className="muted">规则只看当前账号（creator_account_id），不受其他教师的课堂影响。</p>
       </Panel>
     </div>
 
@@ -124,7 +112,6 @@ function TeacherDashboard({ api }) {
             </tr>)}</tbody>
           </table></div>
           : <p className="muted">暂无已结束课堂。</p>)}
-        <Notice tone="info">历史课堂只读<div className="muted">已结束课堂不可重新开始、添加/移除学生或更改课包/课程；学生完成结果由课堂结束时本课堂有效算力自动形成。</div></Notice>
       </Panel>
 
       <Panel title="最近学生作品" actions={<button className="text-button" onClick={() => navigate('/works')}>查看全部 →</button>}>
@@ -136,7 +123,6 @@ function TeacherDashboard({ api }) {
             <span className="muted">{formatDate(item.submittedAt || item.updatedAt || item.createdAt)}</span>
           </div>)}
         </div> : <p className="muted">暂无学生作品。</p>)}
-        <p className="muted">教师仅查看归档作品，不评价 / 评分 / 要求重交。</p>
       </Panel>
     </div>
 
@@ -146,7 +132,6 @@ function TeacherDashboard({ api }) {
         <button className="secondary-button" onClick={() => navigate('/classrooms')}>我的课堂<div className="muted">课堂创建 / 治理 / 历史</div></button>
         <button className="secondary-button" onClick={() => navigate('/works')}>学生学习结果与作品<div className="muted">学习结果 / 作品查看</div></button>
       </div>
-      <p className="muted">本页不含排课、预约、计划上课时间、机构库存与平台 AI 运营。</p>
     </Panel>
   </>;
 }
@@ -180,15 +165,12 @@ function Dashboard({ api }) {
         <div className="card-list">
           <Notice tone={data.attention?.exhaustedSeries ? 'warning' : 'success'}>
             <strong>课包剩余人次不足</strong> · {data.attention?.exhaustedSeries ?? 0} 个课包
-            <div className="muted">进入「机构课包库存与学生授权」处理库存与授权业务。这里只数**已经用尽**的课包 —— 平台没有定义「不足」的阈值，不为机构发明一个。</div>
           </Notice>
           <Notice tone={data.attention?.restrictedAccounts ? 'warning' : 'success'}>
             <strong>受限账号</strong> · {data.attention?.restrictedAccounts ?? 0} 个账号
-            <div className="muted">进入「机构成员管理」处理账号启停。</div>
           </Notice>
           <Notice tone={data.activeSessions ? 'info' : 'success'}>
             <strong>当前上课中课堂</strong> · {data.activeSessions ?? 0} 个课堂
-            <div className="muted">仅运营提示，本页不提供课堂操作。课包总人次由平台分配，机构工作台不提供调整入口。</div>
           </Notice>
           {alerts.map((alert) => <Notice key={alert.code} tone={alert.level || 'info'}><strong>{alert.title}</strong><div>{alert.message}</div></Notice>)}
         </div>
@@ -200,7 +182,6 @@ function Dashboard({ api }) {
           <div className="row-actions"><span className="muted">本月新增课包授权</span><strong>{data.month?.grants ?? 0} 次</strong></div>
           <div className="row-actions"><span className="muted">本月已结束课堂</span><strong>{data.month?.endedSessions ?? 0} 个</strong></div>
         </div>
-        <Notice tone="info">本区域无课堂创建 / 进入 / 开始 / 结束操作。</Notice>
       </Panel>
     </div>
     <div className="split">
@@ -571,7 +552,6 @@ function EnrollmentPage({ api, user }) {
   const summary = enrollmentData.summary || {};
   return <>
     <PageHeader eyebrow="学员经营" title="学员开通" description="登记线下履约、分配套餐席位并管理生效、停用、续费和到期提醒。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
-    <Notice tone="info">此页面只记录机构线下收款与履约状态；不接入在线支付、自动续费或收款回调。生效中的开通单占用套餐席位；停用、作废和到期后释放席位，并会停止该学员账号的登录与 AI 使用权限。</Notice>
     {message ? <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice> : null}
     <div className="metrics"><MetricCard label="待开通" value={summary.pending || 0} hint="尚未生效，不占席位" /><MetricCard label="生效中" value={summary.active || 0} hint="正在占用套餐席位" tone="teal" /><MetricCard label="已停用" value={summary.suspended || 0} hint="可恢复或续费" tone="orange" /><MetricCard label="30 日内到期" value={summary.expiringSoon || 0} hint="请及时安排续费" tone="pink" /></div>
     <div className="split">
@@ -646,7 +626,6 @@ function OrgMaterials({ api, user }) {
   async function openMaterial(item) { try { const result = await api.post(`org/materials/${item.id}/events`, { eventType: 'DOWNLOAD' }); if (result.resourceUrl) window.open(result.resourceUrl, '_blank', 'noopener,noreferrer'); } catch (err) { setMessage(err.message); } }
   return <>
     <PageHeader eyebrow="机构运营" title="宣传物料" description="查看平台下发的课程介绍、招生海报和活动资料。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
-    <Notice tone="info">物料访问会记录 VIEW / USE / DOWNLOAD 事件。没有配置真实资源地址的物料不会显示虚假下载链接。</Notice>
     {user?.role === 'ORG_ADMIN' ? <OrgFileUpload api={api} onDone={materials.refresh} /> : null}
     {message ? <Notice tone="success">{message}</Notice> : null}
     <Panel title="可用物料">{materials.loading ? <Loading /> : materials.error ? <ErrorState error={materials.error} onRetry={materials.refresh} /> : materials.data.items.length ? <div className="card-list">{materials.data.items.map((item) => <article className="item-card" key={item.id}><div className="row-actions"><strong>{item.title}</strong><Status value={item.category} /><span className="muted">{item.visibility === 'ALL_ORGS' ? '全机构' : '定向授权'}</span></div><p>{item.description || '暂无说明'}</p><div className="row-actions top-gap"><button className="secondary-button" onClick={() => useMaterial(item)}>记录使用</button>{item.resourceConfigured ? <button className="primary-button" onClick={() => openMaterial(item)}>打开资源</button> : <span className="muted">资源待配置</span>}</div></article>)}</div> : <Empty title="暂无可用物料" body="平台配置物料后会按机构授权范围显示。" />}</Panel>

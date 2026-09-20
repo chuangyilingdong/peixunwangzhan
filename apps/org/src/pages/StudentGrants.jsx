@@ -140,7 +140,6 @@ export function StudentGrants({ api }) {
         {!items.length ? <Notice tone="info">当前机构还没有被平台授权的课包，请先在「课程中心」查看，或联系平台授权。</Notice> : null}
         {noQuota ? <Notice tone="warning">
           这个课包当前**可授权次数为 0**：平台还没有给本机构分配人次，所以现在不能授权。
-          <div className="muted">零次不代表不限 —— 需要先让平台开通 / 增购人次。</div>
         </Notice> : null}
       </>}
     </Panel>

@@ -134,9 +134,9 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
               如需改课，请解散后重新创建。
             </div>
           </Notice> : null}
-          {current.status === 'ACTIVE' ? <Notice tone="success">课堂进行中：仍可添加符合条件的新学生，但开始后不可移除学生。最近活动来自真实记录，不代表学生当前在线。</Notice> : null}
+          {current.status === 'ACTIVE' ? <Notice tone="success">课堂进行中：仍可添加符合条件的新学生，但开始后不可移除学生。</Notice> : null}
           {terminal ? <Notice tone="info">{current.status === 'ENDED'
-            ? '课堂已结束，完课结果固定。结课时已记录的真实成功 AI 调用计入完课，零费用也计入；迟到回执仅计入用量账目。'
+            ? '课堂已结束，完课结果固定。'
             : '课堂已解散，学生占用已解除。'} 结果、作品与事件均为只读记录。</Notice> : null}
           {!canManage && !terminal ? <Notice tone="info">只读课堂：仅负责老师可以管理此课堂。</Notice> : null}
 

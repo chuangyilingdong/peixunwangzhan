@@ -5,17 +5,10 @@
 // 学生、上课时间、预约、评价这些都不在本页 —— 也就是线框图里那个「本页不包含」。
 import { useState } from 'react';
 import { Empty, ErrorState, Loading, Notice, PageHeader, Panel, SearchSelect, useData } from '@platform/shared';
-import { BoundaryNote, DefinitionGrid, FlowSteps, ParentLine, RuleList } from './ui.jsx';
+import { DefinitionGrid, FlowSteps, ParentLine } from './ui.jsx';
 import { deliveryModeLabels, publishedModes } from './states.jsx';
 
 const emptyForm = { seriesId: '', lessonId: '', title: '', teacherId: '' };
-const CREATE_RULES = [
-  '一个课堂只能绑定 1 个课包版本 + 1 门课程。',
-  '保存成功后课堂状态 = 待上课。',
-  '本页不添加学生；下一步进入课堂详情后再添加。',
-  '课堂绑定具体教学版本，后续平台发布新版本不会强制迁移。',
-  '创建后若尚无学生，可更换课包 / 课程。',
-];
 
 export function CreateClassroom({ api, isAdmin, onCancel, onCreated, parentLabel }) {
   const [form, setForm] = useState(emptyForm);
@@ -100,9 +93,6 @@ export function CreateClassroom({ api, isAdmin, onCancel, onCreated, parentLabel
               onChange={(teacherId) => setForm({ ...form, teacherId })} />
               <small className="muted">仅负责老师可以管理课堂；机构管理员查看其他老师课堂时为只读。</small></label> : null}
 
-            <BoundaryNote tone="info" title="本页不包含" lines={[
-              '学生选择、计划上课时间、预约、课堂时长、课程岁数、教师评价或 AI 控制 —— 这些都不在本页设置。',
-            ]} />
           </form>
         </Panel>
       </div>
@@ -121,9 +111,6 @@ export function CreateClassroom({ api, isAdmin, onCancel, onCreated, parentLabel
                 { label: '课程节次', value: `第 ${selectedLesson.sort} 节` },
               ]} />
             </> : <Empty title="尚未选择课程" body="选择课包与课程后，这里会显示本次课堂绑定的内容摘要。" />}
-        </Panel>
-        <Panel title="创建规则">
-          <RuleList tone="info" items={CREATE_RULES} />
         </Panel>
       </div>
     </div>

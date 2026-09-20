@@ -5,7 +5,7 @@
 // ③ 表格按线框图拆开「创建时间 / 实际开始 / 实际结束」；④ 底部有真实分页。
 import { useMemo, useState } from 'react';
 import { Empty, ErrorState, formatDate, ListResultSummary, Loading, MetricCard, Notice, Pagination, PageHeader, Panel, SearchSelect, useData } from '@platform/shared';
-import { ParentLine, RuleList } from './ui.jsx';
+import { ParentLine } from './ui.jsx';
 import { DELIVERY_LABEL, SESSION_STATE, StateBadge } from './states.jsx';
 
 const DAYS_OPTIONS = [['7', '近 7 天'], ['30', '近 30 天'], ['90', '近 90 天'], ['365', '近 1 年']];
@@ -127,14 +127,6 @@ export function ClassroomList({ api, isAdmin, onOpen, onCreate }) {
             <td><button className="text-button" onClick={() => onOpen(item.id)}>查看详情</button></td>
           </tr>)}</tbody>
         </table></div>
-        <div className="top-gap">
-          <RuleList tone="info" title="状态与时间规则" items={[
-            '待上课与上课中的课堂允许同一账号存在 1 个；已结束、已解散的课堂不占用这个名额。',
-            // ⚠️ 线框图写的是「已解散不产生实际开始/结束时间」，但这个平台解散时**会**写 ended_at。
-            // 表格照实显示并标明那一格是解散时刻 —— 不能让规则文案与数据互相打脸。
-            '已解散的课堂不会记录实际开始时间；「实际结束」那一格显示的是解散时刻。',
-          ]} footer={`列表按「进行中 → 待上课 → 已结束」排序，同一组内按实际开始时间倒序；共 ${total} 条课堂记录。`} />
-        </div>
         <ListResultSummary total={total} page={list.data?.page || 1} totalPages={list.data?.totalPages || 1} label="条课堂记录" />
         <Pagination page={list.data?.page || 1} totalPages={list.data?.totalPages || 1} onChange={setPage} disabled={list.loading} />
       </> : <Empty title="没有符合条件的课堂" body="调整筛选条件，或创建一个新课堂。" />}
