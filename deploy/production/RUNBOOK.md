@@ -35,8 +35,13 @@ systemctl restart learning-platform-production
 # 核验：BUILD-METADATA 的 commit / is-active / NRestarts=0 / health / 三端入口 200
 ```
 
-回滚 = 把 `current` 软链切回上一版 release 目录再重启（所有历史 release 目录都保留）；
-数据库回滚用 `backups/<stamp>/platform.db`。
+回滚 = 把 `current` 软链切回上一版 release 目录再重启。
+⚠️ **2026-09-20 起 release 目录只保留最新 10 份**（此前没有任何清理策略，攒到 364 份 / 3.3G）——
+  所以「所有历史 release 都保留」这句**已不成立**：可回滚窗口是最近 10 次发布，再往前要回滚得拿
+  git 里那个 commit 重新构建。清理是**手工**做的、没有定时任务；口径见
+  `docs/operations/开新会话先读-现状对齐-20260919.md` §三「2026-09-20 运维实查」，
+  删除前的 release→commit 清单留档在 `production/logs/releases-archive-20260920.tsv`。
+数据库回滚用 `backups/<stamp>/platform.db`（备份保留 14 天，未变动）。
 
 发布后要在**服务器上**做公网验收（本机出口封 HTTPS）：
 
