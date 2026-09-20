@@ -1151,7 +1151,10 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_usage_pool ON usage_records(user_id, ser
 
 // ── 课包版本与发布记录（2026-09-12，平台侧重做梳理 P1 第三刀）──────────────────
 // 版本号由人填写（不再「改一次自动 +0.1」）：每次「更新发布」写一条，记录版本号 / 变更说明 / 谁 / 何时。
-// 读模型仍是「当前内容」，所以发布后已授权机构与官网自然一起更新；
+// 机构端/学生端/官网**读的是快照**（course_series.published_content 与 course_lessons.published_content）：
+// 课时的内容、成员与状态都以「最近一次更新发布」那一版为准，没点这一下它们看不到改动。
+// ⚠️ 这里的注释原来说"读模型仍是当前内容"，那是旧行为（2026-09-20 修了「没发布的新课时
+//    机构端就能选」这个泄漏之后改的），别再照旧话理解。
 // 「有没有未发布的改动」用「最近一次版本记录时间 vs 课包与课时的最后修改时间」比较得出，不额外存标记。
 db.exec(`CREATE TABLE IF NOT EXISTS course_series_versions (
   id TEXT PRIMARY KEY,

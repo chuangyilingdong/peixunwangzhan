@@ -228,8 +228,10 @@ export async function handleCourses(ctx, part, method) {
     audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
     return platformSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
-  // 更新发布：版本号由人填（不再自动 +0.1），同时记一条版本历史。
-  // 读模型仍是「当前内容」，所以发布后已授权机构与官网自然一起更新。
+  // 更新发布：版本号由人填（不再自动 +0.1），同时记一条版本历史，
+  // 并把课包与**每个课时**的当前内容定格成快照（capturePublishedContent）——
+  // 机构端/学生端/官网读的是快照，所以**点这一下之前**它们看不到改动
+  // （含新增/收回的课时，判据见 lib.js 的 publishedLessonVisibilitySql）。
   const seriesVersionMatch = part.match(/^\/course-series\/([^/]+)\/versions$/);
   if (seriesVersionMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
