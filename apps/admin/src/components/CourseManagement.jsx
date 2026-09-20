@@ -375,7 +375,11 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
         <textarea value={preset.text || ''} placeholder="点下去要填进输入框的提示词" onChange={(event) => updatePresetPrompt(index, { text: event.target.value })} maxLength={2000} />
         <button type="button" className="text-button danger-text" onClick={() => removePresetPrompt(index)}>删除</button>
       </div>)}
-      <label>给学生的编程任务 / 素材说明<textarea value={edit.lessonContent ?? lesson.lessonContent ?? ''} onChange={(event) => update({ lessonContent: event.target.value })} placeholder="描述编程目标、提供文字材料与操作指引" /></label></section> : null}
+      {/* ⚠️ 2026-09-20：这里原来还有一个「给学生的编程任务 / 素材说明」文本域（写 lessonContent）。
+          用户口径「创建 vibeCoding 时这个内容删除」——与之前删掉的「平台预填 / 预置素材 / 素材说明」
+          三栏是同一条线：VibeCoding 课时的框体进画布后由**学生自己写描述、自己连图**，
+          平台不再在课时上预置任务说明。历史值仍留在库里（官网课时列表还会照旧显示），只是不再可编辑。 */}
+      </section> : null}
     {offersCanvas ? <div className="lesson-capability-checks"><strong>画布入口开放能力</strong>{LESSON_CAPABILITY_OPTIONS.map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={(event) => toggleCapability(value, event.target.checked)} disabled={offersVibe && value === 'text'} />{label}</label>)}</div> : null}
     {offersVibe && !offersCanvas ? null : <>
       <div className="lesson-material-groups"><div className="lesson-config-heading"><strong>本节课画布素材</strong><button type="button" className="text-button" onClick={addGroup}>＋素材组</button></div>

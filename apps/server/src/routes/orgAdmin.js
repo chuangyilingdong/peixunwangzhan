@@ -630,7 +630,16 @@ export async function handleOrg(ctx) {
    * ⚠️ 下列接口与旧的 /classes/* 并存一段时间：界面已切到课堂，旧接口留待批次 D 清理。
    */
   const assertTeacherSessionAvailable = (teacherId, excludeId = '') => {
-    if (row('SELECT role FROM users WHERE id=?', [teacherId])?.role !== 'TEACHER') return;
+    // ⚠️ 2026-09-20（用户报「我登录的是机构测试账号，为什么说我账号异常或已停用」）：
+    //    这里以前**完全不查账号能不能用**（不是 TEACHER 就直接 return），而界面上的预检
+    //    （sessionPrecheck）却要求 `role === 'TEACHER'` —— 两条规则不一致，机构管理员建的课堂
+    //    在界面上被标成「账号异常或已停用」（其实一点问题都没有，点开始上课也能开）。现在统一：
+    //    「能不能教学」= 账号存在、未删除、未停用；「有没有被别的课堂占着」只对 TEACHER 角色算。
+    const teacher = row('SELECT role, status, deleted_at, display_name FROM users WHERE id=?', [teacherId]);
+    if (!teacher) throw errors.badRequest('课堂的负责账号不存在', 'TEACHER_NOT_FOUND');
+    if (teacher.deleted_at) throw errors.badRequest('课堂的负责账号已删除，请先换一位负责老师', 'TEACHER_DELETED');
+    if (teacher.status !== 'ACTIVE') throw errors.badRequest('课堂的负责账号已停用，请先换一位负责老师', 'TEACHER_DISABLED');
+    if (teacher.role !== 'TEACHER') return;
     const occupied = row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [teacherId, excludeId]);
     if (occupied) throw errors.conflict(`教师已有待上课或上课中的课堂（${occupied.title || occupied.id}），请先结束或解散`, 'TEACHER_SESSION_OCCUPIED');
   };
@@ -659,8 +668,13 @@ export async function handleOrg(ctx) {
       ];
     }
     const teacher = row('SELECT id, display_name, status, role, deleted_at FROM users WHERE id=?', [session.teacher_id]);
-    const teacherOk = Boolean(teacher) && teacher.role === 'TEACHER' && teacher.status === 'ACTIVE' && !teacher.deleted_at;
-    const occupied = teacherOk
+    // ⚠️ 2026-09-20：**预检必须与写路径同一口径**（`assertTeacherSessionAvailable`）——
+    //    以前这里要求必须是 `TEACHER` 角色，而写路径对非 TEACHER 直接放行，于是机构管理员
+    //    （`teacher_id` 默认就是创建者自己，见建课堂那处 `let teacherId = auth.user.id`）建的课堂
+    //    在界面上被标红成「账号异常或已停用」，点开始上课却能开 —— 界面在撒谎。
+    //    现在：可用 = 存在 / 未删除 / 未停用；「被别的课堂占着」只对 TEACHER 角色算。
+    const teacherUsable = Boolean(teacher) && !teacher.deleted_at && teacher.status === 'ACTIVE';
+    const teacherBusy = teacherUsable && teacher.role === 'TEACHER'
       ? row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [session.teacher_id, session.id])
       : null;
     const lessonOk = Boolean(row("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [session.lesson_id]))
@@ -673,10 +687,12 @@ export async function handleOrg(ctx) {
       || (item.expires_at && Date.parse(item.expires_at) <= Date.now()) || !granted.has(item.student_id));
     return [
       statusCheck,
-      check('TEACHER_READY', '教师账号可正常教学', teacherOk && !occupied,
-        !teacherOk ? `${teacher?.display_name || '未知教师'} · 账号异常或已停用`
-          : occupied ? `${teacher.display_name} · 另有待上课/上课中的课堂（${occupied.title || occupied.id}）`
-            : `${teacher.display_name} · 状态正常`),
+      check('TEACHER_READY', '教师账号可正常教学', teacherUsable && !teacherBusy,
+        !teacher ? '找不到课堂的负责账号'
+          : teacher.deleted_at ? `${teacher.display_name || '未知教师'} · 账号已删除`
+            : teacher.status !== 'ACTIVE' ? `${teacher.display_name || '未知教师'} · 账号已停用`
+              : teacherBusy ? `${teacher.display_name} · 另有待上课/上课中的课堂（${teacherBusy.title || teacherBusy.id}）`
+                : `${teacher.display_name} · 状态正常（${teacher.role === 'TEACHER' ? '老师' : '机构管理员'}账号）`),
       check('LESSON_AVAILABLE', '课包 / 课程当前可用', lessonOk, lessonOk ? '当前版本与课程有效' : '课时未发布或课包授权已失效'),
       check('ROSTER_NOT_EMPTY', '课堂至少有 1 名学生', roster.length > 0, `当前 ${roster.length} 名`),
       check('STUDENTS_ELIGIBLE', `${roster.length} 名学生资格仍有效`, roster.length > 0 && ineligible.length === 0,
