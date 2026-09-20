@@ -132,9 +132,12 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
     '<!doctype html><html><head><meta charset="utf-8"><title>守卫用高页面</title></head>',
     '<body style="margin:0"><div style="height:700px;background:linear-gradient(#34b981,#0f6b4a);color:#fff;font:700 28px sans-serif;padding:24px">守卫用高页面：700px</div></body></html>',
   ].join('');
-  seedDb.prepare("INSERT OR IGNORE INTO vibecoding_conversations(id,org_id,student_id,title,model,files,entry_file,status,created_at,updated_at) VALUES ('conversation_guard_web',?,?,'守卫用网页作品','local-mock','{}',?,'ACTIVE',?,?)")
+  // ⚠️ 这两条**不用** `INSERT OR IGNORE`：第一版把 conversations.status 写成 'ACTIVE'（有 CHECK 只允许
+  //    DRAFT/SUBMITTED/ARCHIVED），OR IGNORE 把这一行**静默吞了**，直到下面的外键才报错 ——
+  //    临时库每次都是新的，不需要幂等，让它错就当场炸。
+  seedDb.prepare("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,model,files,entry_file,status,created_at,updated_at) VALUES ('conversation_guard_web',?,?,'守卫用网页作品','local-mock','{}',?,'DRAFT',?,?)")
     .run(owner.org_id, owner.id, entry, nowIso, nowIso);
-  seedDb.prepare("INSERT OR IGNORE INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,files,round,status,submitted_at,created_at,updated_at,entry_file,artifacts,is_public) VALUES ('vibesub_guard_web','conversation_guard_web',?,?,'守卫用网页作品',?,1,'PENDING',?,?,?,?,?,0)")
+  seedDb.prepare("INSERT INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,files,round,status,submitted_at,created_at,updated_at,entry_file,artifacts,is_public) VALUES ('vibesub_guard_web','conversation_guard_web',?,?,'守卫用网页作品',?,1,'PENDING',?,?,?,?,?,0)")
     .run(owner.id, owner.org_id, JSON.stringify({ [entry]: page }), nowIso, nowIso, nowIso, entry, JSON.stringify([{ name: entry, kind: 'html', bytes: page.length }]));
   console.log('VibeCoding 网页作品夹具：student-1 一件（页面 700px 高，入口 打地鼠.html）');
 }
