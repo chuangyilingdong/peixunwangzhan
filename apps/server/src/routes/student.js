@@ -4,6 +4,9 @@ import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
 import { assertTransition } from '../services/domainState.js';
 import { computePoolSummary } from '../services/computePool.js';
+// 「我的作品」点开一件要读 VibeCoding 产物的快照（产物清单 / 图片 fileId / 正文），
+// 与 org 端「课堂作品」同一套解析函数 —— 两处口径必须一致，别再抄一份。
+import { normalizeSubmission, parseSnapshotArtifacts, snapshotImageFileIds } from './vibecoding.js';
 
 const EMPTY_CANVAS = Object.freeze({ nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
 
@@ -902,6 +905,64 @@ export async function handleStudent(ctx) {
     );
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     return decorateWork(normalizeWork(work, { includeSnapshot: true }), ctx, { includeSubmissions: true });
+  }
+
+  // 学生看**自己**的作品（画布快照 / VibeCoding 产物）—— 「我的作品」点开一件用这个。
+  // 形状与 org 端 `/sessions/:id/works/:source/:id` 那条一致（那边给老师看同一件作品），
+  // 所以前端两处能用同一套渲染（CanvasEditor 只读 / Replay* 产物预览）。
+  // ⚠️ 鉴权口径是「**是不是你自己的**」，**不看发布状态** —— 没上广场的作品学生自己也该能打开看，
+  //    这正是原来「我的作品」不能用（卡片只能写"平台发布后可查看"）的那个缺口。
+  // ⚠️ 路径用三段：`/works/:id`（上面那条）是两段，不会打架。
+  match = part.match(/^\/works\/(CANVAS|VIBECODING)\/([^/]+)$/);
+  if (match && method === 'GET') {
+    const [, source, workId] = match;
+    const work = source === 'CANVAS'
+      ? row('SELECT * FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId])
+      : row('SELECT * FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
+    if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
+    const isPublic = Number(work.is_public || 0) === 1;
+    const base = {
+      id: work.id,
+      source,
+      title: work.title,
+      description: work.description || '',
+      status: work.status,
+      submittedAt: work.submitted_at,
+      // 状态话术走 @platform/shared 的 workPlazaState（两条链路一套词）：它按这四个字段推导，
+      // 少给一个就会把「精选」「已下架」显示成「已提交待发布」。
+      plazaPublished: isPublic,
+      featured: Boolean(work.featured_at),
+      unpublishReason: work.unpublish_reason || null,
+      publicUrl: isPublic && work.share_token ? `/works/${work.share_token}` : null,
+    };
+    if (source === 'CANVAS') {
+      const canvasSnapshot = normalizeWork(work, { includeSnapshot: true }).canvasSnapshot;
+      // 画布上挂的素材（图/视频）也要给前端一份「fileId → 地址」：那两个标签发不出 Authorization 头，
+      // 前端要拿它统一转成 data:（见 lib 的 readToken 注释）。
+      // 与 org 端**同一条提取规则**：只认 previewUrl / assetUrl / referenceUrl 三个字段，
+      // 别去扫整份快照 —— 扫宽了会把任意字段里的字串当素材，等于把别人的文件也列出来。
+      const snapshotImageIds = new Set(
+        (Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : []).flatMap((node) =>
+          ['previewUrl', 'assetUrl', 'referenceUrl'].map((key) => String(node?.data?.[key] || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean)),
+      );
+      const imageUrls = Object.fromEntries([...snapshotImageIds]
+        .map((fileId) => [fileId, `/api/student/file-assets/${encodeURIComponent(fileId)}/download`]));
+      return { ...base, canvasSnapshot, imageUrls };
+    }
+    const content = normalizeSubmission(work, { includeContent: true });
+    // 图片地址由服务端拼好（前端不自己拼路由，前缀/编码错一处就是 404，两边都测不出来）：
+    // 都是**学生自己的**素材，直接走已有的 file-assets 下载口（同源请求带 cookie，鉴权兜底见 lib 的 readToken）。
+    const imageUrls = Object.fromEntries([...snapshotImageFileIds(work)]
+      .map((fileId) => [fileId, `/api/student/file-assets/${encodeURIComponent(fileId)}/download`]));
+    // 真文件产物（学生创作环境交上来的 PPT/Word/Excel 原文件）：预览用服务端转出来的 PDF，下载给原文件。
+    // 这类产物没有「规格文本」，客户端渲染不了 —— 与 org 端同一口径。
+    const fileUrls = Object.fromEntries(parseSnapshotArtifacts(work)
+      .filter((item) => item.fileId)
+      .map((item) => [item.name, {
+        preview: `/api/student/file-assets/${encodeURIComponent(item.fileId)}/preview`,
+        download: `/api/student/file-assets/${encodeURIComponent(item.fileId)}/download`,
+      }]));
+    return { ...base, files: content.files, entryFile: content.entryFile, artifacts: content.artifacts, preview: content.preview, imageUrls, fileUrls };
   }
 
   if (part === '/showcase' && method === 'GET') {

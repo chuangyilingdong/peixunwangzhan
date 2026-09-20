@@ -914,7 +914,8 @@ function studentAiCenter(ctx) {
   return {
     provider: generationProviderInfo(),
     // 2026-09-13（P4 删积分）：原来的 period（周期额度 allowance/used/remaining）已删除。
-    // 学生的剩余额度看**算力池**（按 学生 × 课包 汇总，学生端「学习统计」与课时卡片都能看到）。
+    // 学生的剩余额度看**算力池**（按 学生 × 课包 汇总，学生端课时卡片与「我的课程」都能看到。
+    // ⚠️ 2026-09-20：「学习统计」那一页已按用户口径整页删除，注释别再指过去）。
     // 批次 D：`usageScope` 不再返回 —— 它对应已退役的 student_usage_scope，读它只会误导。
     activeSessions,
     capabilities,

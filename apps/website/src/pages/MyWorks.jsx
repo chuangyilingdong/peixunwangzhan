@@ -89,9 +89,6 @@ export function MyWorksPage({ api }) {
 
     {visible.length ? <div className="student-card-grid">{visible.map((work) => {
       const type = workType(work);
-      // 学生能「查看」的只有**平台已发布**的那份公开页（/works/:token）；
-      // 还没发布的只给状态，不做假入口。
-      const viewUrl = work.sharing?.publicUrl || null;
       return <article className="student-card" key={work.id}>
         <div className="student-work-card__cover">
           <span className="student-work-card__icon">{type.icon}</span>
@@ -106,7 +103,12 @@ export function MyWorksPage({ api }) {
         {work.status === 'REJECTED' && work.unpublishReason ? <p className="student-card__desc" data-testid="unpublish-reason"><strong>下架原因：</strong>{work.unpublishReason}</p> : null}
         <div className="student-work-card__foot">
           <span>创建时间 {formatDate(work.submittedAt)}</span>
-          {viewUrl ? <Link to={viewUrl}>查看 →</Link> : <span className="muted">{work.plazaPublished ? '暂无可查看的页面' : '平台发布后可查看'}</span>}
+          {/* ⭐ 每件作品都要能打开看（用户口径 2026-09-20：「我的作品要实际能用」）。
+              原来这里只在**已上广场**时才给「查看 →」，其余写「平台发布后可查看」= 学生做完的东西自己看不到。
+              现在统一进学生自己的作品页 /my-works/:source/:id —— 那条接口只校验「是不是你自己的」，
+              不看发布状态；作品上了广场，详情页里另给「在作品广场看」。
+              （广场页的直链收进详情页是有意的：页脚那个胶囊一多就糊成一片。） */}
+          <Link to={`/my-works/${work.source || 'CANVAS'}/${encodeURIComponent(work.id)}`}>打开作品 →</Link>
         </div>
       </article>;
     })}</div> : null}

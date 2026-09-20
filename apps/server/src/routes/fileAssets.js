@@ -812,6 +812,11 @@ export async function handleStudentFileAssets(ctx) {
   }
   const proxyMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
   if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
+  // 预览口（2026-09-20）：「我的作品」打开一件真文件产物（学生创作环境交上来的 PPT/Word/Excel）时
+  // 要给服务端**转出来的 PDF**，否则 iframe 里塞原文件只会触发下载。
+  // 权限与下载同一档（都是自己的文件）；鉴权头之外还有 cookie 兜底 —— iframe 发不出 Authorization。
+  const previewMatch = part.match(/^\/file-assets\/([^/]+)\/preview$/);
+  if (previewMatch && method === 'GET') return prepareFilePreview(ctx, authorizeFileAccess(ctx, previewMatch[1], 'DOWNLOAD'));
   return null;
 }
 

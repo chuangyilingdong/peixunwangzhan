@@ -6,7 +6,7 @@ import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
 import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
-import { MyStatsPage } from './pages/MyStats.jsx';
+import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
 import SpecularButton from './components/SpecularButton.jsx';
@@ -1122,7 +1122,6 @@ export function App(){
       '/learn': '灵动学习 · ' + BRAND_NAME,
       '/my-courses': '我的课程 · ' + BRAND_NAME,
       '/my-works': '我的作品 · ' + BRAND_NAME,
-      '/my-stats': '学习统计 · ' + BRAND_NAME,
       '/learn/canvas': '画布上课 · ' + BRAND_NAME,
     };
     // 动态路由（课程/作品详情）按前缀回落：否则它们会退到首页标题，浏览器标签上看着不像同一个站。
@@ -1169,10 +1168,10 @@ export function App(){
   const displayName = session?.user?.displayName || session?.user?.login || '用户';
   const userName = String(displayName);
   // 「我的课程」页（学生登录后的落地页）；原先这里写的是 '/learn'，见下面路由处的口径变更
+  // 用户口径 2026-09-20：「学习统计」整个删掉（下拉项、页面、路由、标题一并去掉）
   const studentMenuItems = [
     { to: '/learn', label: '我的课程' },
     { to: '/my-works', label: '我的作品' },
-    { to: '/my-stats', label: '学习统计' },
   ];
 
   // 账号徽标（用户口径 2026-09-18 晚，第三次调整）：
@@ -1244,12 +1243,16 @@ export function App(){
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
+        <Route path='/my-works/:source/:id' element={session ? <MyWorkDetailPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
         {/* ⚠️ 这两条是**老地址的重定向**：`/my-courses`（指标卡 + 课时列表那一版）已按用户口径删掉，
             学生端的「我的课程」就是 /learn 那个页面。留着重定向是为了老链接/老书签不 404。
             别把这两行删了 —— 删了就真的 404。 */}
         <Route path='/my-courses' element={<Navigate to='/learn' replace/>}/>
         <Route path='/my-courses/:courseId' element={<Navigate to='/learn' replace/>}/>
-        <Route path='/my-stats' element={session ? <MyStatsPage api={api} /> : <Navigate to='/login?as=student' replace />}/>
+        {/* 「学习统计」整页已按用户口径删除（2026-09-20：下拉项 / 页面 / 标题映射一并去掉）。
+            ⚠️ 照口径㉒「删一整页要一处不落、路由留重定向」，这里**留着重定向**给老书签，
+            删掉这一行老链接就真的 404 了。去向选 /learn：学生看进度的地方就是「我的课程」。 */}
+        <Route path='/my-stats' element={<Navigate to='/learn' replace/>}/>
         <Route path='*' element={<Home/>}/>
       </Routes>
       {!isFullPage && loc.pathname !== '/' && <Footer/>}
