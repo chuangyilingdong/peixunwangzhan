@@ -130,15 +130,20 @@ try {
     JSON.stringify(orgAfter.data).includes('第2课（发布前加的）') && (orgAfter.data.lessons || []).length === 2,
     `lessons=${(orgAfter.data.lessons || []).length}`);
 
-  // ⑤ 反方向：把已有课时收回草稿但不发布 → 机构端看到的还是上一版（快照里它仍是已发布）
-  await api(`/api/admin/course-lessons/${lessonId}`, { method: 'PUT', token: admin, body: { status: 'DRAFT' } });
+  // ⑤ 反方向：把已有课时下掉但不发布 → 机构端看到的还是上一版（快照里它仍是已发布）
+  //    ⚠️ 用 ARCHIVED 不用 DRAFT：课时状态机是 DRAFT→[PUBLISHED,ARCHIVED] / PUBLISHED→[ARCHIVED] /
+  //    ARCHIVED→[PUBLISHED]，**没有** PUBLISHED→DRAFT 这条（第一版测试就踩了这个，PUT 被拒后
+  //    状态没变，于是下面那条断言假红）。所以这里连 PUT 的返回码一起断言，免得状态机再变时
+  //    这条测试变成空转。
+  const archived = await api(`/api/admin/course-lessons/${lessonId}`, { method: 'PUT', token: admin, body: { status: 'ARCHIVED' } });
+  check('把第 1 课下掉（PUBLISHED → ARCHIVED，状态机允许的那条）', archived.status === 200, `${archived.status} ${archived.error?.code}`);
   const orgDraft = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
-  check('课时被改成草稿但没更新发布 → 机构端照旧看得到（状态也走快照）',
+  check('课时被下掉但没更新发布 → 机构端照旧看得到（状态也走快照）',
     JSON.stringify(orgDraft.data).includes('第1课（改过）'), JSON.stringify(orgDraft.data).slice(0, 200));
-  const published3 = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.3', note: '把第 1 课收回草稿' } });
-  check('再「更新发布」一次（1.3）', published3.status === 200, `${published3.status}`);
+  const published3 = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.3', note: '把第 1 课下掉' } });
+  check('再「更新发布」一次（1.3）', published3.status === 200, `${published3.status} ${published3.error?.code}`);
   const orgHidden = await api(`/api/org/course-series/${seriesId}`, { token: orgAdmin.token });
-  check('更新发布之后机构端就看不到那节课了（收回草稿生效）',
+  check('更新发布之后机构端就看不到那节课了（下掉生效）',
     !JSON.stringify(orgHidden.data).includes('第1课（改过）') && (orgHidden.data.lessons || []).length === 1,
     `lessons=${(orgHidden.data.lessons || []).length}`);
 
