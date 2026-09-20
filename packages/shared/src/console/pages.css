@@ -119,7 +119,11 @@
 }
 .c-replay__panel-head > span:first-of-type { flex: 1; }
 .c-replay__thread { max-height: 62vh; overflow-y: auto; padding: var(--sp-3) 0; }
-.c-replay__frame { height: 62vh; border: 0; background: #fff; display: block; }
+.c-replay__frame { border: 0; background: #fff; display: block; }
+/* 预览舞台：高度由布局给（这里按面板给 62vh），里面那张 iframe 才是「学生页的逻辑视口」，
+   由 PreviewFrame 按 ≥ 640×768 算好并缩放 —— 所以这里**不要**再去限制 iframe 的高度。 */
+.c-replay__stage { height: 62vh; position: relative; overflow: hidden; background: #fff; }
+.c-replay__stage > iframe { position: absolute; left: 0; top: 0; }
 /* 真文件产物的只读预览（服务端已经把 Office 转成 PDF）：铺满面板。
    ⚠️ 宽度必须显式写：iframe 不写宽度就是 300px，看起来像「预览坏了」。 */
 .c-replay__doc { width: 100%; height: 62vh; border: 0; background: #fff; display: block; }

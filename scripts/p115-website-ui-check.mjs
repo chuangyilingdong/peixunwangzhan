@@ -118,6 +118,27 @@ assert.ok(homeRow, 'fixture: seed 之后 HOME 应该已在 website_contents 里'
       .run(workId, projectId, owner.id, owner.org_id, `样例作品 ${index}`, snap, nowIso, `guardmore${index}`, nowIso);
   }
 }
+// ── 学生「我的作品」的 VibeCoding 网页作品夹具（2026-09-20）────────────────────
+// 为什么必须造：种子里学生的作品**全是画布**，于是"VibeCoding · 网页应用"那条卡片分支、
+// 以及"学生自己的网页作品点开能不能玩"这条路径，守卫里都没被走到过。
+// 页面高度特意做成 **700px**：旧的预览框体写死 62vh（720 视口下约 446px）→ 会滚起来；
+// 口径㉕ 的逻辑视口下界是 768 → 装得下、不该出现内层滚动条。
+{
+  const nowIso = new Date().toISOString();
+  const owner = seedDb.prepare("SELECT id, org_id FROM users WHERE login='student-1'").get();
+  assert.ok(owner, 'fixture: 需要 student-1 来挂 VibeCoding 作品');
+  const entry = '打地鼠.html';
+  const page = [
+    '<!doctype html><html><head><meta charset="utf-8"><title>守卫用高页面</title></head>',
+    '<body style="margin:0"><div style="height:700px;background:linear-gradient(#34b981,#0f6b4a);color:#fff;font:700 28px sans-serif;padding:24px">守卫用高页面：700px</div></body></html>',
+  ].join('');
+  seedDb.prepare("INSERT OR IGNORE INTO vibecoding_conversations(id,org_id,student_id,title,model,files,entry_file,status,created_at,updated_at) VALUES ('conversation_guard_web',?,?,'守卫用网页作品','local-mock','{}',?,'ACTIVE',?,?)")
+    .run(owner.org_id, owner.id, entry, nowIso, nowIso);
+  seedDb.prepare("INSERT OR IGNORE INTO vibecoding_submissions(id,conversation_id,student_id,org_id,title,files,round,status,submitted_at,created_at,updated_at,entry_file,artifacts,is_public) VALUES ('vibesub_guard_web','conversation_guard_web',?,?,'守卫用网页作品',?,1,'PENDING',?,?,?,?,?,0)")
+    .run(owner.id, owner.org_id, JSON.stringify({ [entry]: page }), nowIso, nowIso, nowIso, entry, JSON.stringify([{ name: entry, kind: 'html', bytes: page.length }]));
+  console.log('VibeCoding 网页作品夹具：student-1 一件（页面 700px 高，入口 打地鼠.html）');
+}
+
 const cmsHome = JSON.parse(homeRow.published_content);
 console.log(`CMS 当前 HOME：title=「${cmsHome.heroTitle}」 accent=「${cmsHome.heroAccent}」 stats=${(cmsHome.stats || []).map((s) => s.value + (s.suffix || '')).join(' / ')}`);
 
@@ -838,7 +859,43 @@ try {
   if (coverState.cards === 0) problems.push('我的作品：夹具下应当有作品卡片（否则下面那条封面等式是空转）');
   if (coverState.art + coverState.images !== coverState.cards) problems.push(`我的作品：每张卡片都要有封面（自动 ${coverState.art} + 真 ${coverState.images} ≠ 卡片 ${coverState.cards}）`);
   if (coverState.legacyIcons) problems.push(`我的作品：不该再有旧的 emoji 占位图标（${coverState.legacyIcons} 个）`);
+  if (!coverState.chips.includes('VibeCoding · 网页应用')) problems.push(`我的作品：夹具里有件网页作品，卡片类型标签应当出现「VibeCoding · 网页应用」（实际 ${JSON.stringify(coverState.chips)}）`);
   await shot('19-my-works-covers');
+
+  // ── ⑤g 学生自己的**网页作品**点开：要能玩，且**内层不能出现滚动条**（口径㉕，用户报的
+  //    「作品预览里出现滚动条」）。做法是"内层按不小于 640×768 的逻辑视口渲染、再整体等比缩放到
+  //    可用空间"，所以这里断言的是**结构**：iframe 的布局尺寸 ≥640×768、带一个 ≤1 的 scale、
+  //    外面套着裁剪的舞台。内层文档自己的滚动条在外层读不到（沙箱是 opaque origin），
+  //    所以另存截图 20-work-preview 供人眼复核。
+  await page.goto(`${base}/my-works/VIBECODING/vibesub_guard_web`, { waitUntil: 'domcontentloaded' });
+  await settle();
+  await page.waitForTimeout(600);
+  const viewer = await page.evaluate(() => {
+    const stage = document.querySelector('.c-replay__stage');
+    const frame = stage ? stage.querySelector('iframe') : document.querySelector('.c-replay__frame');
+    if (!frame) return { found: false };
+    const style = frame.style || {};
+    const box = frame.getBoundingClientRect();
+    return {
+      found: true,
+      hasStage: Boolean(stage),
+      stageOverflow: stage ? getComputedStyle(stage).overflow : null,
+      layoutW: Math.round(parseFloat(style.width) || box.width),
+      layoutH: Math.round(parseFloat(style.height) || box.height),
+      transform: style.transform || getComputedStyle(frame).transform,
+      sandbox: frame.getAttribute('sandbox') || '',
+    };
+  });
+  console.log(`  · 作品预览：舞台=${viewer.hasStage} 逻辑视口=${viewer.layoutW}×${viewer.layoutH} transform=${String(viewer.transform).slice(0, 42)}`);
+  if (!viewer.found) problems.push('作品详情：找不到作品预览的 iframe');
+  else {
+    if (viewer.layoutH < 768 || viewer.layoutW < 640) problems.push(`作品预览：内层逻辑视口必须 ≥ 640×768（实际 ${viewer.layoutW}×${viewer.layoutH}）—— 否则学生页会在框内滚起来`);
+    if (!/scale\(/.test(String(viewer.transform))) problems.push(`作品预览：应当整体等比缩放（transform 实际「${viewer.transform}」）`);
+    if (Number((String(viewer.transform).match(/scale\(([\d.]+)\)/) || [])[1] || 0) > 1) problems.push('作品预览：有空间时缩放不该放大（scale 要封顶 1）');
+    if (viewer.stageOverflow !== 'hidden') problems.push(`作品预览：舞台应当裁剪溢出（overflow 实际 ${viewer.stageOverflow}）`);
+    if (/allow-same-origin/.test(viewer.sandbox)) problems.push('作品预览：沙箱不许带 allow-same-origin（口径⑧）');
+  }
+  await shot('20-work-preview');
   // ⚠️ 反过来：真正的课堂（/learn/canvas）**必须仍然没有**站内导航（那是学生干活的全屏环境）
   await page.goto(`${base}/learn/canvas`, { waitUntil: 'domcontentloaded' });
   await settle();

@@ -67,7 +67,8 @@ export function ReplayPreview({ html, title = '作品预览', height = '62vh' })
       className="c-replay__preview"
       actions={<IconButton icon="refresh" size={14} label="重新运行" small onClick={() => setReloadKey((value) => value + 1)} />}
     >
-      <PreviewFrame className="c-replay__frame" html={html} reloadKey={reloadKey} title={title} />
+      {/* ⭐ 查看层要「零滚动条」：内层按逻辑视口渲染再整体缩放（口径㉕，见 PreviewFrame） */}
+      <PreviewFrame className="c-replay__frame" html={html} reloadKey={reloadKey} title={title} fitToLogical />
     </ReplayPanel>
   );
 }
