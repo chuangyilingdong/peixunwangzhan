@@ -138,7 +138,9 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
           {terminal ? <Notice tone="info">{current.status === 'ENDED'
             ? '课堂已结束，完课结果固定。'
             : '课堂已解散，学生占用已解除。'} 结果、作品与事件均为只读记录。</Notice> : null}
-          {!canManage && !terminal ? <Notice tone="info">只读课堂：仅负责老师可以管理此课堂。</Notice> : null}
+          {/* 口径 2026-09-20：可管理 = 负责老师本人，或**本机构的机构管理员**（见服务端 canManageSession）；
+              文案跟这条一起改，别让界面继续只说"仅负责老师" —— 机构管理员看得到按钮才不困惑。 */}
+          {!canManage && !terminal ? <Notice tone="info">只读课堂：只有负责老师或本机构的机构管理员可以管理。</Notice> : null}
 
           <div className="classroom-detail-grid">
             <Panel title="课堂信息">

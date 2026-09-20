@@ -7,7 +7,7 @@ import { hashPassword } from '@platform/database';
 import { scheduleReminder } from './communication.js';
 import { assertTransition } from '../services/domainState.js';
 import {
-  addSessionStudents, assertSessionManager, sessionRuntimeDetail, removeSessionStudent,
+  addSessionStudents, assertSessionManager, canManageSession, sessionRuntimeDetail, removeSessionStudent,
   sessionCandidates, sessionScope, sessionStudentCounts, settleSessionStudents,
 } from '../services/classroomSessions.js';
 import { computePoolSummary, salePriceFenSuccessSql } from '../services/computePool.js';
@@ -666,8 +666,9 @@ export async function handleOrg(ctx) {
         statusCheck,
         check('NOT_STARTED', '尚未记录实际开始时间', !session.started_at,
           session.started_at ? `已记录开始时间 ${session.started_at}` : '实际开始时间仍为空'),
-        check('OWNER_MATCH', '课堂由当前教师账号创建', session.teacher_id === auth.user.id,
-          session.teacher_id === auth.user.id ? '创建账号 = 当前账号' : '你不是这个课堂的负责老师'),
+        // 与写路径同一口径：负责人本人，或本机构的机构管理员（canManageSession）
+        check('OWNER_MATCH', '课堂由你负责，或你是本机构的机构管理员', canManageSession(auth, session),
+          canManageSession(auth, session) ? '你有权管理这个课堂' : '你不是这个课堂的负责老师，也不是本机构的机构管理员'),
       ];
     }
     const teacher = row('SELECT id, display_name, status, role, deleted_at FROM users WHERE id=?', [session.teacher_id]);

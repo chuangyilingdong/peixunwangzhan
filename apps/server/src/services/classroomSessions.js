@@ -13,10 +13,28 @@ import { errors, id, nowIso, q, row, rows, transaction } from '../lib.js';
 import { salePriceFenFor } from './computePool.js';
 import { sessionCostUsageByStudent, sessionCostCapState, studentCostCapFen } from './sessionCostCap.js';
 
-/** 写操作仅课堂负责人可执行；机构管理员对其他课堂只读。 */
+/**
+ * 谁可以**管理**这个课堂（开始 / 结束 / 解散 / 改名单 / 改名称）？
+ *
+ * ⭐ 2026-09-20 用户口径：「机构端应该拥有老师端的所有权限」 —— 原来是"仅课堂负责人本人"，
+ * 于是机构管理员打开别的老师建的课堂时**连「结束课堂」都点不了**（详情里所有权限都是 false），
+ * 机构没法给老师收尾。现在：**负责人本人**，或者**本机构的机构管理员**。
+ *
+ * ⚠️ 机构管理员那一支必须同时比 `org_id`：不然 A 机构的机构管理员就能改 B 机构的课堂（越权）。
+ * ⚠️ 这个判定**只有这一处**：写路径（assertSessionManager）、详情里的权限投影、
+ *    解散前的逐条校验都调它 —— 三处各写一遍迟早会打架（本项目已经栽过好几次）。
+ */
+export function canManageSession(auth, session) {
+  if (!auth?.user || !session) return false;
+  if (!['ORG_ADMIN', 'TEACHER'].includes(auth.user.role)) return false;
+  if (session.teacher_id && session.teacher_id === auth.user.id) return true;
+  return auth.user.role === 'ORG_ADMIN' && Boolean(session.org_id) && session.org_id === auth.user.org_id;
+}
+
+/** 写操作：负责人本人，或本机构的机构管理员（见 canManageSession）。 */
 export function assertSessionManager(auth, session) {
-  if (['ORG_ADMIN', 'TEACHER'].includes(auth.user.role) && session.teacher_id === auth.user.id) return session;
-  throw errors.forbidden('这不是你负责的课堂', 'SESSION_PERMISSION_DENIED');
+  if (canManageSession(auth, session)) return session;
+  throw errors.forbidden('这不是你负责的课堂（机构管理员只能管理本机构的课堂）', 'SESSION_PERMISSION_DENIED');
 }
 
 /**
@@ -313,7 +331,8 @@ export function sessionRuntimeDetail(session, auth, students) {
     return { ...normalizeSessionStudent(part), ai, presence: 'unknown', workCount: ownWorks.length,
       lastActivityAt: latest([ai.lastUsedAt, ...ownWorks.map((work) => work.submittedAt), ...activity.filter((item) => item.student_id === part.student_id).map((item) => item.activity_at)]) };
   });
-  const canManage = session.teacher_id === auth.user.id && ['PENDING', 'ACTIVE'].includes(session.status);
+  // 权限投影与写路径同一口径（见 canManageSession）：负责人本人，或本机构的机构管理员
+  const canManage = canManageSession(auth, session) && ['PENDING', 'ACTIVE'].includes(session.status);
   const pending = canManage && session.status === 'PENDING';
   const until = session.status === 'ACTIVE' ? asOf : session.ended_at;
   const duration = session.started_at && until ? Math.max(0, Math.floor((Date.parse(until) - Date.parse(session.started_at)) / 1000)) : null;

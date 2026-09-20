@@ -67,8 +67,18 @@ try {
   const after = snapshot();
   for (const key of Object.keys(before).filter((key) => !['title', 'updated_at'].includes(key))) assert.equal(after[key], before[key], key);
   check(await api(route, other), 403);
-  assert.equal(check(await api(route, admin)).canManage, false);
-  check(await api(route, admin, 'PUT', { title: 'forbidden' }), 403);
+  // ⭐ 口径变更（2026-09-20 用户口径）：「机构端应该拥有老师端的所有权限」——
+  //    原来是"仅课堂负责人本人"（机构管理员对别的老师建的课堂只读，连「结束课堂」都点不了，
+  //    机构没法给老师收尾）。现在：负责人本人，或**本机构的机构管理员**。这两条断言跟着翻。
+  assert.equal(check(await api(route, admin)).canManage, true, '机构管理员应当可以管理本机构老师的课堂');
+  check(await api(route, admin, 'PUT', { title: 'renamed-by-org-admin' }));
+  assert.equal(snapshot().title, 'renamed-by-org-admin');
+  check(await api(route, admin, 'PUT', { title: 'renamed' }));
+  // 解散前的逐条校验里那条 OWNER_MATCH 也要跟着放行（它是同一个判定的第三个落点）
+  const dissolvePrecheck = check(await api(`${route}/precheck?action=dissolve`, admin));
+  const ownerCheck = (dissolvePrecheck.checks || []).find((item) => item.key === 'OWNER_MATCH');
+  assert.ok(ownerCheck, '解散预检里应当有 OWNER_MATCH 这条');
+  assert.equal(ownerCheck.passed, true, `机构管理员看别的老师的课堂，OWNER_MATCH 应当是 passed（实际 ${JSON.stringify(ownerCheck)}）`);
   check(await api(`${route}/students`, teacher, 'POST', { studentIds: [student.id] }));
   assert.equal(db.prepare('SELECT status FROM session_students WHERE session_id=? AND student_id=?').get(created.id, student.id).status, 'PENDING');
   const denied = await api(route, teacher, 'PUT', { lessonId: second.id });
@@ -164,8 +174,12 @@ try {
   assert.ok(!JSON.stringify(detail.events).includes('before_data'));
   check(await api(`${route}/start`, teacher, 'POST', {}));
   check(await api(route, teacher, 'PUT', { title: 'active edit' }), 409);
-  check(await api(`${route}/end`, admin, 'POST', {}), 403);
-  check(await api(`${route}/end`, teacher, 'POST', {}));
+  // ⭐ 用户报的原场景（2026-09-20）：「老师端可以结束课堂，但是机构端没办法对机构下面老师创建的课堂结束」。
+  //    这里原来钉的是 **403**（机构管理员对别的老师的课堂只读）—— 那是旧口径。
+  //    现在：机构管理员对本机构的任何课堂都有管理权，所以**由机构管理员来结束**，并断言状态真的落了。
+  assert.equal(check(await api(route, admin)).canManage, true, '机构管理员应当能管理本机构老师创建的课堂');
+  check(await api(`${route}/end`, admin, 'POST', {}));
+  assert.equal(db.prepare('SELECT status FROM class_sessions WHERE id=?').get(created.id).status, 'ENDED', '机构管理员结束老师创建的课堂应当生效');
   assert.equal(check(await api(route, teacher)).canManage, false);
   const settled = db.prepare('SELECT * FROM session_students WHERE session_id=? AND student_id=?').get(created.id, student.id);
   assert.equal(settled.status, 'COMPLETED', 'real success before end completes the student');
