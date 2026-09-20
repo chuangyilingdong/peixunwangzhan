@@ -82,50 +82,39 @@ for (const studentId of grantedIds) {
  *
  * ⚠️ 为什么由守卫自己生成：这份夹具原来靠人手工往 `.tmp/test-sample.pdf` 塞了一个**最小单页** PDF，
  *    而下面「教学素材 → 工具栏翻页」那几步假设文档有多页 —— 单页时「下一页」本来就该是禁用的，
- *    守卫去点它必然 30 秒超时崩掉，于是**它后面所有断言、以及最后那份 PASS/FAIL 汇总都再也不会打印**
+ *    守卫去点它必然超时崩掉，于是**它后面所有断言、以及最后那份 PASS/FAIL 汇总都再也不会打印**
  *    （整条守卫变成哑的：只看得见"红"，看不见"红在哪"）。
  *    现在夹具由守卫自产：页数必然对得上，也不再依赖一个没进仓库的文件（缺了会直接 ENOENT）。
+ *
+ * ⚠️ 这里刻意**不出现任何反斜杠转义**（换行一律用 nl 拼）：用脚本往这个文件里写转义序列
+ *    很容易被中间某一层吃掉一层、在字符串里留下真换行，把守卫本身写成语法错误。
  */
 function writeSamplePdf(file, pageCount = 3) {
+  const nl = String.fromCharCode(10);
   const objects = ['<</Type/Catalog/Pages 2 0 R>>'];
   const kids = [];
-  for (let index = 0; index < pageCount; index += 1) kids.push(`${3 + index * 2} 0 R`);
-  objects.push(`<</Type/Pages/Kids[${kids.join(' ')}]/Count ${pageCount}>>`);
+  for (let index = 0; index < pageCount; index += 1) kids.push((3 + index * 2) + ' 0 R');
+  objects.push('<</Type/Pages/Kids[' + kids.join(' ') + ']/Count ' + pageCount + '>>');
   const fontObject = 3 + pageCount * 2;
   for (let index = 0; index < pageCount; index += 1) {
     const contentObject = 4 + index * 2;
-    objects.push(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Resources<</Font<</F1 ${fontObject} 0 R>>>>/Contents ${contentObject} 0 R>>`);
-    const stream = `BT /F1 24 Tf 60 150 Td (Page ${index + 1}) Tj ET`;
-    objects.push(`<</Length ${Buffer.byteLength(stream, 'latin1')}>>
-stream
-${stream}
-endstream`);
+    objects.push('<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Resources<</Font<</F1 ' + fontObject + ' 0 R>>>>/Contents ' + contentObject + ' 0 R>>');
+    const stream = 'BT /F1 24 Tf 60 150 Td (Page ' + (index + 1) + ') Tj ET';
+    objects.push('<</Length ' + Buffer.byteLength(stream, 'latin1') + '>>' + nl + 'stream' + nl + stream + nl + 'endstream');
   }
   objects.push('<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>');
-  let pdf = '%PDF-1.4
-';
+  const parts = ['%PDF-1.4'];
   const offsets = [];
   objects.forEach((body, index) => {
-    offsets.push(Buffer.byteLength(pdf, 'latin1'));
-    pdf += `${index + 1} 0 obj
-${body}
-endobj
-`;
+    offsets.push(Buffer.byteLength(parts.join(nl) + nl, 'latin1'));
+    parts.push((index + 1) + ' 0 obj', body, 'endobj');
   });
-  const xrefAt = Buffer.byteLength(pdf, 'latin1');
-  pdf += `xref
-0 ${objects.length + 1}
-0000000000 65535 f 
-`;
-  for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n 
-`;
-  pdf += `trailer
-<</Size ${objects.length + 1}/Root 1 0 R>>
-startxref
-${xrefAt}
-%%EOF
-`;
-  fs.writeFileSync(file, Buffer.from(pdf, 'latin1'));
+  const head = parts.join(nl) + nl;
+  const xrefAt = Buffer.byteLength(head, 'latin1');
+  const rows = ['xref', '0 ' + (objects.length + 1), '0000000000 65535 f '];
+  for (const offset of offsets) rows.push(String(offset).padStart(10, '0') + ' 00000 n ');
+  const tail = rows.join(nl) + nl + 'trailer' + nl + '<</Size ' + (objects.length + 1) + '/Root 1 0 R>>' + nl + 'startxref' + nl + xrefAt + nl + '%%EOF' + nl;
+  fs.writeFileSync(file, Buffer.from(head + tail, 'latin1'));
 }
 
 // ── 教学素材夹具（2026-09-17）───────────────────────────────────────────────
