@@ -1182,8 +1182,11 @@ export async function handleOrg(ctx) {
     }
     if (sessionFilter) { vibeWhere += ' AND conversation.class_session_id=?'; vibeParams.push(sessionFilter); }
     if (search) {
-      const keyword = '%' + search.replace(new RegExp(`[%\_]`, 'g'), (char) => '\' + char) + '%';
-      vibeWhere += " AND (submission.title LIKE ? ESCAPE '\' OR student.display_name LIKE ? ESCAPE '\' OR lesson.title LIKE ? ESCAPE '\')";
+      // 与上面画布那条**逐字同一套转义**（LIKE 的通配符要转义掉，否则用户输入 % 会把整表搜出来）。
+      // ⚠️ 这两行的反斜杠别用脚本往里写：脚本会吃掉一层、写成 `'\'` 就是语法错误，
+      //    而且**只有服务端跑起来才炸**（前端构建拦不到）。
+      const keyword = '%' + search.replace(new RegExp(`[%\\_]`, 'g'), (char) => '\\' + char) + '%';
+      vibeWhere += " AND (submission.title LIKE ? ESCAPE '\\' OR student.display_name LIKE ? ESCAPE '\\' OR lesson.title LIKE ? ESCAPE '\\')";
       vibeParams.push(keyword, keyword, keyword);
     }
     vibeWhere += sessionOwnedByTeacherExists('(SELECT class_session_id FROM vibecoding_conversations conv WHERE conv.id=submission.conversation_id)', auth, vibeParams, { orgColumn: 'submission.org_id' });
