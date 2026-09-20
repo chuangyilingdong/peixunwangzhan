@@ -657,7 +657,7 @@
 .pl-author .work-featured{color:var(--orange);font-style:normal}
 .pl-org{color:#a09aa9;font-weight:600}
 /* 查看层：图片看大图（多张给缩略图）、视频直接播 */
-.pl-viewer{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:24px;background:#0d0716d9;backdrop-filter:blur(6px)}
+.pl-viewer{--pl-viewer-pad:24px;position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:var(--pl-viewer-pad);background:#0d0716d9;backdrop-filter:blur(6px)}
 .pl-viewer-box{display:flex;flex-direction:column;width:min(1040px,100%);max-height:92vh;border-radius:18px;background:#fff;overflow:hidden;box-shadow:0 30px 70px #00000059}
 .pl-viewer-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border-bottom:1px solid var(--line)}
 .pl-viewer-head h3{margin:6px 0 0;font-size:17px}
@@ -670,7 +670,7 @@
 .pl-thumb.on{border-color:var(--purple)}
 .pl-thumb img{display:block;width:100%;height:100%;object-fit:cover}
 .pl-viewer-foot{display:flex;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid var(--line);color:#8b8498;font-size:12px}
-@media(max-width:900px){.works-page .works{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}.pl-viewer{padding:12px}}
+@media(max-width:900px){.works-page .works{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}.pl-viewer{--pl-viewer-pad:12px;padding:var(--pl-viewer-pad)}}
 
 /* 翻页条 + 音频/内嵌 iframe（2026-09-19 晚第二版） */
 .pl-pager{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin:30px 0 6px}
@@ -682,7 +682,29 @@
 .pl-page-info{margin-left:8px;color:#8b8498;font-size:12px}
 .pl-audio{width:min(560px,100%);margin:6vh auto;display:block}
 /* 外链作品在我们页面里跑（能否真跑取决于对方允不允许被 iframe 嵌入 —— 见 plOpenKind 注释） */
-.pl-frame{width:min(980px,100%);height:62vh;border:0;border-radius:12px;background:#fff}
+.pl-frame{border:0;border-radius:12px;background:#fff}
+/* ⭐ 网页作品 / 外链作品的框体：吃满**可用高度**，内层页面按"不小于 PL_FRAME_MIN 的逻辑视口"渲染，
+   再由 JS 等比缩放到这块空间（见 main.jsx 的 PL_FRAME_MIN）—— 于是**任何屏幕都完整可见、一根滚动条都没有**。
+   用户报的「小屏打开要往下滑、这游戏我根本无法玩」就是这条要修的。
+   ⚠️ 下面 height 是"视口高 − 遮罩内边距"（第二行 dvh 给手机浏览器：地址栏收起后才是真可视高）；
+   ⚠️ 必须连着解掉 .pl-viewer-box 上那条 max-height:92vh —— 它才是真正卡住高度的那个
+   （720 视口下 92vh=662，正好是只改 height 时的实测值，不解除就毫无效果）。 */
+.pl-viewer-box.has-frame{height:calc(100vh - var(--pl-viewer-pad) * 2);height:calc(100dvh - var(--pl-viewer-pad) * 2);max-height:none}
+/* 这块就是"可用空间"：不留内边距、不滚动 —— iframe 用行内 width/height/transform 缩放进来，正好贴满。 */
+.pl-viewer-box.has-frame .pl-viewer-body{padding:0;position:relative;overflow:hidden}
+.pl-frame-fit{position:absolute;inset:10px;border-radius:12px;overflow:hidden;background:#fff}
+/* transform-origin 必须是左上：缩放后的盒子尺寸就等于量出来的可用尺寸，正好贴住这块空间。
+   兜底的 width/height:100% 是 JS 还没量到时用的（按原生尺寸铺满），量到后立刻被行内样式覆盖。 */
+.pl-frame-fit .pl-frame{position:absolute;left:0;top:0;width:100%;height:100%;border-radius:0;transform-origin:top left}
+/* 矮屏（笔记本默认窗口、手机横屏）：把查看层自己的头/尾压紧，省下的高度全给这块空间，
+   缩放倍数就能大一点、作品看得更清楚。 */
+@media(max-height:780px){
+  .pl-viewer{--pl-viewer-pad:12px;padding:var(--pl-viewer-pad)}
+  .pl-viewer-box.has-frame .pl-viewer-head{padding:8px 12px}
+  .pl-viewer-box.has-frame .pl-viewer-head h3{margin:2px 0 0;font-size:15px}
+  .pl-viewer-box.has-frame .pl-viewer-foot{padding:8px 12px}
+  .pl-frame-fit{inset:6px}
+}
 .pl-outlink{color:var(--deep);font-weight:800;text-decoration:underline;text-underline-offset:3px}
 /* 作者行右下角那一格：机构名（用户给的图2 红框位置） */
 .pl-author .pl-org{margin-left:auto;color:#a09aa9;font-weight:700}

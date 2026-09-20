@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import '@platform/shared/styles.css';
@@ -169,13 +169,29 @@ const plOpenKind = (w) => {
   return 'none';
 };
 
+// ⭐ 跑网页作品 / 外链作品时给内层页面用的**最小逻辑视口**：页面按这个尺寸渲染，再整体等比缩放到可用空间。
+//    为什么必须这样：学生页自带固定尺寸（实测贪吃蛇那页要 600px 高、会动的彩色小猫要 560px 宽），
+//    而 iframe 是刻意的 opaque origin（不许带 allow-same-origin，见下面那段的注释），
+//    外部读不到它内部滚没滚 —— 只能在**外面**缩。不缩的话小屏上就只能在框里往下滚
+//    （用户报的「这游戏我根本无法玩，不可能玩的过程中还要去滚轮往下」）。
+//    实测广场上 9 件带 entryUrl 的作品，不滚所需的最小视口 ≤ 560×600，这里留足余量取 640×768 ——
+//    结果就是"逻辑视口的高度永远 ≥768"，实测最"高"的那件（贪吃蛇要 600）也不会再出现滚动条。
+//    ⚠️ 有空间时（宽高都够）缩放封顶 1，按原生尺寸渲染，不做无谓放大。
+const PL_FRAME_MIN = { w: 640, h: 768 };
+
 // 作品查看器：图片看大图（多张可翻）、视频直接播。参考站卡片点开没有动作，我们做成能看/能播。
 function WorkViewer({ work, onClose }) {
   const [active, setActive] = useState(0);
   useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // 开着查看层时锁住背后页面的滚动 —— 否则小屏上手指/滚轮一滑，动的是底下的广场页
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [onClose]);
   const images = plImageUrls(work);
   const kind = plOpenKind(work);
@@ -183,8 +199,32 @@ function WorkViewer({ work, onClose }) {
   const isAudio = kind === 'audio';
   const isEmbed = kind === 'embed';
   const isWebWork = kind === 'webwork';
+  const hasFrame = isWebWork || isEmbed;
+  // ⭐ 把内层页面等比缩放到这块可用空间：量出可用宽高 → 算出"至少 PL_FRAME_MIN"的逻辑视口 → 整体缩放。
+  //    这样无论屏幕多小，学生页都是**完整可见**的（缩放到装下为止），不会出现任何滚动条。
+  //    有空间时不放大（scale 封顶 1）；量不到（DOM 桩里没有 ResizeObserver）就退回 CSS 的 100% 铺满。
+  const frameBoxRef = useRef(null);
+  const [frameFit, setFrameFit] = useState(null);
+  useLayoutEffect(() => {
+    const box = frameBoxRef.current;
+    if (!box || !hasFrame || typeof ResizeObserver !== 'function') return undefined;
+    const measure = () => {
+      const w = box.clientWidth;
+      const h = box.clientHeight;
+      if (!w || !h) return;
+      const scale = Math.min(1, w / PL_FRAME_MIN.w, h / PL_FRAME_MIN.h);
+      setFrameFit({ scale, w: w / scale, h: h / scale });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [hasFrame, work]);
+  const frameStyle = frameFit
+    ? { width: `${Math.round(frameFit.w)}px`, height: `${Math.round(frameFit.h)}px`, transform: `scale(${frameFit.scale})` }
+    : undefined;
   return <div className="pl-viewer" role="dialog" aria-modal="true" aria-label={`查看作品：${work.title}`} onClick={onClose}>
-    <div className="pl-viewer-box" onClick={(event) => event.stopPropagation()}>
+    <div className={'pl-viewer-box' + (hasFrame ? ' has-frame' : '')} onClick={(event) => event.stopPropagation()}>
       <div className="pl-viewer-head">
         <div><span className="pl-badge">{(PL_TYPE_META[plTypeOf(work)] || {}).label || ''}</span><h3>{work.title}</h3></div>
         <button type="button" className="pl-viewer-close" onClick={onClose} aria-label="关闭">×</button>
@@ -194,21 +234,28 @@ function WorkViewer({ work, onClose }) {
           ? <video className="pl-video" src={work.contentUrls[0]} controls autoPlay playsInline />
           : isAudio
             ? <audio className="pl-audio" src={(work.contentUrls || [])[0]} controls autoPlay />
-            : isWebWork
-              // ⭐ 托管在**我们自己源**上的可运行网页作品（`/media/web-works/…`）。
-              //    ⚠️ 这里的 sandbox **绝不能**带 `allow-same-origin`：它与主站同源，
-              //    带上以后学生 HTML 就能读我们的 cookie / localStorage、甚至以我们的身份发请求。
-              //    不带时文档是 opaque origin，作品里的 three.js / p5 / CDN 依赖照样能加载，
-              //    相对路径资源也照常解析（sandbox 不影响 base URL）。
-              //    ⚠️ 同理**不给**「在新窗口打开」的出口（见下方 foot）——那等于把学生代码
-              //    提到我们源上当顶层页面跑，正好绕过这层沙箱。
-              ? <iframe className="pl-frame" src={work.entryUrl} title={work.title} loading="lazy" sandbox="allow-scripts allow-modals allow-forms allow-popups" />
-              : isEmbed
-              // 外链作品的"在我们页面里打开"：能嵌的嵌进来（对方 CSP 挡掉时这里是空白，
-              // 所以下面永远跟着一个「在新窗口打开」的出口）
-              ? <iframe className="pl-frame" src={work.externalUrl} title={work.title} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" referrerPolicy="no-referrer" />
+            : hasFrame
+              // ⭐ 跑网页作品 / 外链作品：内层页面按"不小于 PL_FRAME_MIN 的逻辑视口"渲染，
+              //    再整体缩放到这块空间（见 PL_FRAME_MIN 的注释）—— 保证任何屏幕都**完整可见、没有滚动条**。
+              ? <div className="pl-frame-fit" ref={frameBoxRef}>
+                {isWebWork
+                  // ⭐ 托管在**我们自己源**上的可运行网页作品（`/media/web-works/…`）。
+                  //    ⚠️ 这里的 sandbox **绝不能**带 `allow-same-origin`：它与主站同源，
+                  //    带上以后学生 HTML 就能读我们的 cookie / localStorage、甚至以我们的身份发请求。
+                  //    不带时文档是 opaque origin，作品里的 three.js / p5 / CDN 依赖照样能加载，
+                  //    相对路径资源也照常解析（sandbox 不影响 base URL）。
+                  //    ⚠️ 同理**不给**「在新窗口打开」的出口（见下方 foot）——那等于把学生代码
+                  //    提到我们源上当顶层页面跑，正好绕过这层沙箱。
+                  ? <iframe className="pl-frame" src={work.entryUrl} title={work.title} loading="lazy" sandbox="allow-scripts allow-modals allow-forms allow-popups" style={frameStyle} />
+                  // 外链作品的"在我们页面里打开"：能嵌的嵌进来（对方 CSP 挡掉时这里是空白，
+                  // 所以下面永远跟着一个「在新窗口打开」的出口）
+                  : <iframe className="pl-frame" src={work.externalUrl} title={work.title} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" referrerPolicy="no-referrer" style={frameStyle} />}
+              </div>
               : images.length ? <img className="pl-image" src={images[active]} alt={work.title} /> : null}
-        {!isVideo && images.length > 1 ? <div className="pl-thumbs">
+        {/* 缩略图只给「看图片」那条分支：框体件（hasFrame）里放的是一整个可运行页面，
+            它的 contentUrls 是空的（见 plOpenKind 注释），而且那块空间被绝对定位的缩放容器占满 ——
+            真渲染出来也只会藏在它后面。 */}
+        {!isVideo && !hasFrame && images.length > 1 ? <div className="pl-thumbs">
           {images.map((url, index) => <button type="button" key={url} className={'pl-thumb' + (index === active ? ' on' : '')} onClick={() => setActive(index)} aria-label={`第 ${index + 1} 张`}>
             <img src={url} alt="" loading="lazy" />
           </button>)}
