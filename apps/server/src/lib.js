@@ -481,13 +481,28 @@ const DELIVERY_MODE_VALUES = ['CANVAS', 'VIBECODING'];
  * 新字段 `delivery_modes` 是数组（画布 + VibeCoding 可同时开，学生端两个入口并列）；
  * 老数据只有单值 `delivery_mode`，这里统一成数组返回，避免每个读取方各写一遍回退逻辑。
  */
-function deliveryModesOf(value) {
+export function deliveryModesOf(value) {
   const parsed = parseJson(value?.delivery_modes, null);
   const list = Array.isArray(parsed)
     ? parsed.map((item) => String(item || '').trim().toUpperCase()).filter((item) => DELIVERY_MODE_VALUES.includes(item))
     : [];
   const unique = [...new Set(list)];
   return unique.length ? unique : [value?.delivery_mode || 'CANVAS'];
+}
+
+/**
+ * 一个**课包**对外提供哪些课堂形式 = 它已发布课时的 `deliveryModes` 并集，按 CANVAS → VIBECODING
+ * 的固定序返回（官网那几个参数位的显示顺序依赖它，别改成按课时顺序）。
+ *
+ * ⚠️ 不能读 `course_series.delivery_mode`：它是课包自己的单值字段，与课时**会不一致** ——
+ * 线上就有「series=CANVAS 而它唯一那节课是 VIBECODING」的错配（2026-09-20 用户报：
+ * 灵动课程把这种课包显示成「画布课程」）。课包里有几类，以**课时的并集**为准。
+ * 一个已发布课时都没有的课包返回空数组，由调用方决定回退成什么。
+ */
+export function seriesDeliveryModesOf(lessons) {
+  const offered = new Set();
+  for (const lesson of lessons || []) for (const mode of deliveryModesOf(lesson)) offered.add(mode);
+  return DELIVERY_MODE_VALUES.filter((mode) => offered.has(mode));
 }
 
 export function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {

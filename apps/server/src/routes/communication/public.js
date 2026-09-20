@@ -14,6 +14,7 @@ import {
   requireRole,
   row,
   rows,
+  seriesDeliveryModesOf,
   transaction,
 } from '../../lib.js';
 import { hostname } from 'node:os';
@@ -323,7 +324,14 @@ export function handlePublicCommunication(ctx) {
   }
 
   // 课程广场：平台自有、已发布（PUBLISHED）、可见范围是「上架课程广场」（visibility='PUBLIC'）
-  // 的课包自动出现，按课堂类型分为「画布课程」与「VibeCoding 课程」两类，不再需要人工上架。
+  // 的课包自动出现，不再需要人工上架。
+  // ⚠️ 课堂形式**不是二选一**（2026-09-20 用户口径）：一个课包可以同时有画布与 VibeCoding 两类课时，
+  //    所以下发的是 `deliveryModes`（已发布课时的并集，见 lib.js），官网照它显示「画布课程」或
+  //    「画布课程/VibeCoding 课程」。
+  // ⚠️ 下面那个 `category` 查询参数仍然按课包自己的单值字段 `series.delivery_mode` 过滤 —— 它与
+  //    课时并集**可能不一致**（线上有该字段=CANVAS 而课时是 VIBECODING 的课包）。官网已不用这个
+  //    筛选（2026-09-18 删掉了入口），目前没有已知调用方，所以没有顺手改语义；将来真要按形式筛，
+  //    得改成按课时并集筛，否则筛「VibeCoding」会漏掉那些被显示成 VibeCoding 的课包。
   // 注意：上架广场 **不等于** 授权给机构 —— 机构后台只认 course_assignments（见 orgSeriesAccessSql）。
   if (pathname === '/api/public/marketplace' && method === 'GET') {
     const difficulty = ctx.search.get('difficulty');
@@ -347,13 +355,34 @@ export function handlePublicCommunication(ctx) {
     const where = wheres.join(' AND ');
     const total = Number(row('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params)?.n || 0);
     const orderBy = sort === 'recent' ? 'series.created_at DESC' : 'series.sort ASC, series.title COLLATE NOCASE ASC';
-    const items = rows(
+    const series = rows(
       `SELECT series.*, (SELECT COUNT(*) FROM course_lessons lesson WHERE lesson.series_id=series.id AND lesson.status='PUBLISHED') lesson_count
        FROM course_series series WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, limit, offset],
-    ).map((item) => {
+    );
+    // 课包的「课堂形式」以**已发布课时的并集**为准，不读 course_series.delivery_mode
+    // （两者会不一致 —— 线上有 series=CANVAS 而课时是 VIBECODING 的错配）。
+    // 一次把本页所有课包的课时形态查回来，避免 N+1。
+    const lessonsBySeries = new Map();
+    if (series.length) {
+      const placeholders = series.map(() => '?').join(',');
+      for (const lesson of rows(
+        `SELECT series_id, delivery_mode, delivery_modes FROM course_lessons
+         WHERE status='PUBLISHED' AND series_id IN (${placeholders})`,
+        series.map((item) => item.id),
+      )) {
+        if (!lessonsBySeries.has(lesson.series_id)) lessonsBySeries.set(lesson.series_id, []);
+        lessonsBySeries.get(lesson.series_id).push(lesson);
+      }
+    }
+    const items = series.map((item) => {
       let tags = [];
       try { tags = item.tags ? JSON.parse(item.tags) : []; } catch { tags = []; }
+      // 课包提供的课堂形式（画布 / VibeCoding，可两者都有）= 已发布课时的并集；一个已发布课时都
+      // 没有的课包退回课包自己的单值字段（老行为）。官网据此显示「画布课程」或
+      // 「画布课程/VibeCoding 课程」；deliveryMode 仍是「第一种」，兼容既有读取方。
+      const lessonModes = seriesDeliveryModesOf(lessonsBySeries.get(item.id));
+      const deliveryModes = lessonModes.length ? lessonModes : [item.delivery_mode || 'CANVAS'];
       return {
         id: item.id,
         title: item.title,
@@ -373,7 +402,8 @@ export function handlePublicCommunication(ctx) {
         ageRangeMax: item.age_range_max != null ? Number(item.age_range_max) : null,
         tags,
         lessonCount: Number(item.lesson_count || 0),
-        deliveryMode: item.delivery_mode || 'CANVAS',
+        deliveryMode: deliveryModes[0],
+        deliveryModes,
         // 2026-09-18：不再下发 marketplaceRewardCredits（「积分激励」已随积分口径整体删除，
         // 官网也不再显示；该列保留在库里作为历史数据）。
       };

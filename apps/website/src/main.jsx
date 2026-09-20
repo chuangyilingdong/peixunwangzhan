@@ -955,6 +955,16 @@ function DifficultyStars({level}){
 }
 // ⚠️ 2026-09-20：这里原来有个 `ageLabel()`，唯一调用点是课包详情里那行「适学年龄」——
 //    那行已按用户口径删除，没人调的函数一并删掉（留着会让下一个读代码的人以为它还活着）。
+// 课包的「课堂形式」：一个课包**可以同时有**画布与 VibeCoding 两类课时（课时之间可不同），
+// 所以显示哪几种以接口下发的 `deliveryModes`（已发布课时的并集）为准 —— 有几类显示几类
+// （用户口径 2026-09-20：「课包里其中 1 个课程包含 2 类，这里就要显示 2 种课程形式」）。
+// ⚠️ 别退回按 `item.deliveryMode` 单值判断：那是课包自己的字段，与课时会不一致
+//    （线上有 series=CANVAS 而课时是 VIBECODING 的错配，会被显示成「画布课程」）。
+const MKT_DELIVERY_LABEL = { CANVAS: '画布课程', VIBECODING: 'VibeCoding 课程' };
+function deliveryModeText(item){
+  const modes = (item?.deliveryModes?.length ? item.deliveryModes : [item?.deliveryMode]).filter((mode) => MKT_DELIVERY_LABEL[mode]);
+  return modes.length ? modes.map((mode) => MKT_DELIVERY_LABEL[mode]).join('/') : '未设置';
+}
 function Marketplace(){
   const headCms = useWebsiteContent('MARKETPLACE');
   const content = headCms.data || {};
@@ -1010,7 +1020,7 @@ function Marketplace(){
        // ⚠️ 原来第二格是「适学年龄」，但线上 4 个课包全是「未设置」（课包编辑表单里能填、
        //    只是没人填），于是用户要求换成**版本号** —— 版本号在编辑表单里是有的。
        //    换的时候顺手补了列表接口的 version 字段（它以前没下发，不然这格又会是「未设置」）。
-       const params=[['难度',item.difficultyLevel?item.difficultyLevel+' / 5':'未设置'],['版本',item.version||'未设置'],['课时',(item.lessonCount||0)+' 节'],['课堂形式',item.deliveryMode==='VIBECODING'?'VibeCoding 课程':'画布课程']];
+       const params=[['难度',item.difficultyLevel?item.difficultyLevel+' / 5':'未设置'],['版本',item.version||'未设置'],['课时',(item.lessonCount||0)+' 节'],['课堂形式',deliveryModeText(item)]];
        return <article className="mp-row" key={item.id}>
          <div className="mp-main">
            <div className={'mp-cover'+(cover?' has-image':'')} style={cover?{backgroundImage:'url('+cover+')'}:undefined}>{cover?null:<span>{item.title?.charAt(0)||'课'}</span>}</div>
