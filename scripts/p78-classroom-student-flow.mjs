@@ -168,6 +168,7 @@ try {
     db.exec('PRAGMA busy_timeout = 5000');
     const row = db.prepare('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?').get(legacySession.data.id);
     const now = new Date().toISOString();
+    console.log('[p78 debug]', JSON.stringify({ sessionId: legacySession.data?.id, row, studentId: seeded.studentId }));
     db.prepare(
       "INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
       "VALUES (?,?,?,?,?,?, 'PENDING', NULL, ?, ?)",
