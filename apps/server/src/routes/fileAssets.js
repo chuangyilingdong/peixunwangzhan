@@ -145,12 +145,24 @@ function teachingAssetVisibleToOrg(fileId, orgId) {
      JOIN course_series series ON series.id = lesson.series_id
      LEFT JOIN course_assignments assignment ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql()}
      WHERE lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}
-       AND (CASE WHEN json_valid(lesson.published_content) AND lesson.published_content IS NOT NULL
-         THEN EXISTS (SELECT 1 FROM json_each(lesson.published_content, '$.teachingGroups') grp,
-           json_each(grp.value, '$.assets') asset WHERE json_extract(asset.value, '$.fileAssetId') = ?)
-         ELSE EXISTS (SELECT 1 FROM course_lesson_teaching_assets asset
-           JOIN course_lesson_teaching_groups grp ON grp.id=asset.group_id
-           WHERE grp.lesson_id=lesson.id AND asset.file_asset_id=?) END)
+       AND (
+         -- ① 快照里**有** teachingGroups → 以快照为准（机构端读「最近一次更新发布」定格的那份）
+         (lesson.published_content IS NOT NULL AND json_valid(lesson.published_content)
+          AND json_extract(lesson.published_content, '$.teachingGroups') IS NOT NULL
+          AND EXISTS (SELECT 1 FROM json_each(lesson.published_content, '$.teachingGroups') grp,
+            json_each(grp.value, '$.assets') asset WHERE json_extract(asset.value, '$.fileAssetId') = ?))
+         -- ② 快照里**没有这一键** → 按实时表判。
+         --    ⚠️ 这条必须与界面**同一口径**（口径㉞）：`normalizeLesson` 的 pick 是**逐键**回退 ——
+         --    快照没有 teachingGroups 这一键时，机构端看到的就是实时素材清单。
+         --    线上踩过：1-4 魔法画室那节课实时挂着 PPT 与教案，而它的快照是在挂素材**之前**定格的
+         --    （没有 teachingGroups 键）→ 界面照常列出「在线预览」，点开却报
+         --    「当前账号无权访问此教学素材」——界面在撒谎，根因是这里只认快照这一支。
+         OR ((lesson.published_content IS NULL OR NOT json_valid(lesson.published_content)
+              OR json_extract(lesson.published_content, '$.teachingGroups') IS NULL)
+          AND EXISTS (SELECT 1 FROM course_lesson_teaching_assets asset
+            JOIN course_lesson_teaching_groups grp ON grp.id=asset.group_id
+            WHERE grp.lesson_id=lesson.id AND asset.file_asset_id=?))
+       )
      LIMIT 1`,
     [orgId, orgId, fileId, fileId],
   );
