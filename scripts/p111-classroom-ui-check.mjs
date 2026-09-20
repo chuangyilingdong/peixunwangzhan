@@ -143,6 +143,10 @@ function writeSamplePdf(file, pageCount = 3) {
   // 快照里那张票据**故意写成早已过期**（1000000000000 = 2001 年）
   const deadPreviewUrl = `/api/org/file-assets/${fileId}/preview?t=1000000000000.deadbeef`;
   const snapshot = {
+    // ⚠️ 夹具必须与**生产同形状**：读面判断「这节能不能被机构端/学生端/官网看到」看的是快照里的
+    //    status（lib.js 的 publishedLessonVisibilitySql）。直接往库里插课时、快照里不带 status，
+    //    在机构端就是**看不见**的 —— 2026-09-20 加那道判据时这个夹具就这么红过一次。
+    status: 'PUBLISHED',
     capabilities: [], materialGroups: [], generationBoxes: [],
     teachingGroups: [{ id: 'tg-ui', title: '备课资料', sort: 1, assets: [{ id: 'ta-ui', title: 'P111 讲义', description: '端到端素材', assetType: 'FILE', fileAssetId: fileId, assetUrl: null, sort: 1, previewKind: 'PDF', previewUrl: deadPreviewUrl }] }],
   };
@@ -183,7 +187,7 @@ function writeSamplePdf(file, pageCount = 3) {
   // 把「共 3 条课堂记录」「3 名学生资格仍有效」这些别的断言一起带红（第一版就踩了）。
   const learnedLessonId = 'lesson-ui-learned';
   db.prepare(`INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,delivery_mode,published_content,created_at,updated_at)
-    VALUES(?,?,'第 2 课 · 学习记录样本','',99,'PUBLISHED',45,'CANVAS','{}',?,?)`).run(learnedLessonId, lesson.series_id, learnedAt, learnedAt);
+    VALUES(?,?,'第 2 课 · 学习记录样本','',99,'PUBLISHED',45,'CANVAS','{"status":"PUBLISHED"}',?,?)`).run(learnedLessonId, lesson.series_id, learnedAt, learnedAt);
   // teacher_id 特意留空：这节课只是「学习记录」的容器，不该出现在教师自己的课堂列表里
   // （挂了 teacher.id 就会把「共 3 条课堂记录」变成 4，污染教师视角的断言）。
   db.prepare(`INSERT INTO class_sessions(id,title,org_id,lesson_id,series_id,teacher_id,status,delivery_mode,started_at,created_at,updated_at)
