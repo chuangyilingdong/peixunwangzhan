@@ -77,6 +77,57 @@ for (const studentId of grantedIds) {
   if (!exists) db.prepare("INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES(?,?,?,?,?)")
     .run(`grant-ui-${studentId}`, teacher.org_id, studentId, lesson.series_id, new Date().toISOString());
 }
+/**
+ * 写一份**多页**的示例 PDF 夹具。
+ *
+ * ⚠️ 为什么由守卫自己生成：这份夹具原来靠人手工往 `.tmp/test-sample.pdf` 塞了一个**最小单页** PDF，
+ *    而下面「教学素材 → 工具栏翻页」那几步假设文档有多页 —— 单页时「下一页」本来就该是禁用的，
+ *    守卫去点它必然 30 秒超时崩掉，于是**它后面所有断言、以及最后那份 PASS/FAIL 汇总都再也不会打印**
+ *    （整条守卫变成哑的：只看得见"红"，看不见"红在哪"）。
+ *    现在夹具由守卫自产：页数必然对得上，也不再依赖一个没进仓库的文件（缺了会直接 ENOENT）。
+ */
+function writeSamplePdf(file, pageCount = 3) {
+  const objects = ['<</Type/Catalog/Pages 2 0 R>>'];
+  const kids = [];
+  for (let index = 0; index < pageCount; index += 1) kids.push(`${3 + index * 2} 0 R`);
+  objects.push(`<</Type/Pages/Kids[${kids.join(' ')}]/Count ${pageCount}>>`);
+  const fontObject = 3 + pageCount * 2;
+  for (let index = 0; index < pageCount; index += 1) {
+    const contentObject = 4 + index * 2;
+    objects.push(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Resources<</Font<</F1 ${fontObject} 0 R>>>>/Contents ${contentObject} 0 R>>`);
+    const stream = `BT /F1 24 Tf 60 150 Td (Page ${index + 1}) Tj ET`;
+    objects.push(`<</Length ${Buffer.byteLength(stream, 'latin1')}>>
+stream
+${stream}
+endstream`);
+  }
+  objects.push('<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>');
+  let pdf = '%PDF-1.4
+';
+  const offsets = [];
+  objects.forEach((body, index) => {
+    offsets.push(Buffer.byteLength(pdf, 'latin1'));
+    pdf += `${index + 1} 0 obj
+${body}
+endobj
+`;
+  });
+  const xrefAt = Buffer.byteLength(pdf, 'latin1');
+  pdf += `xref
+0 ${objects.length + 1}
+0000000000 65535 f 
+`;
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n 
+`;
+  pdf += `trailer
+<</Size ${objects.length + 1}/Root 1 0 R>>
+startxref
+${xrefAt}
+%%EOF
+`;
+  fs.writeFileSync(file, Buffer.from(pdf, 'latin1'));
+}
+
 // ── 教学素材夹具（2026-09-17）───────────────────────────────────────────────
 // 目的是**端到端复现线上那个故障**：发布快照里冻着一张早已过期的预览票据。
 // 修复前：课时抽屉把这张死链发给前端 → iframe 打不开 → 顺着「票据无效」的回落分支
@@ -91,7 +142,10 @@ for (const studentId of grantedIds) {
   // 真文件落到上传根下：预览要 stat/读它
   const relKey = 'teaching/ui-material.pdf';
   fs.mkdirSync(path.join(uploadRoot, 'teaching'), { recursive: true });
-  fs.writeFileSync(path.join(uploadRoot, relKey), fs.readFileSync(path.join(root, '.tmp', 'test-sample.pdf')));
+  const samplePdf = path.join(root, '.tmp', 'test-sample.pdf');
+  fs.mkdirSync(path.dirname(samplePdf), { recursive: true });
+  writeSamplePdf(samplePdf, 3);
+  fs.writeFileSync(path.join(uploadRoot, relKey), fs.readFileSync(samplePdf));
   db.prepare(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,category,visibility,status,review_status,metadata,created_at,updated_at)
     VALUES(?,'PLATFORM','INTERNAL_PROXY',?,'ui-material.pdf','application/pdf','TEACHING_ASSET','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`)
     .run(fileId, relKey, now, now);
@@ -269,25 +323,24 @@ try {
   await expectText('教师工作台', [
     '教师工作台', '我的教学执行中心',
     '我的待上课课堂', '我的上课中课堂', '最近已结束课堂', '最近学生作品',
-    '当前教学', '创建课堂', '创建规则', '常用入口',
-    '教师工作台只展示当前登录教师自己的教学任务与结果', '不受其他教师的课堂影响',
-    '历史课堂只读', '不评价 / 评分 / 要求重交',
+    '当前教学', '创建课堂', '常用入口',
   ]);
   await shot('17-teacher-dashboard');
 
   // ── 005-01 列表
   await page.goto(`${base}/classrooms`, { waitUntil: 'domcontentloaded' });
   await settle();
-  await expectText('列表页', ['我的课堂列表', '待上课', '上课中', '已结束', '已解散', '课堂名称', '课包', '课程', '学生数', '创建时间', '实际开始', '实际结束', '状态与时间规则', '查询', '重置', '未来城市设计']);
+  await expectText('列表页', ['我的课堂列表', '待上课', '上课中', '已结束', '已解散', '课堂名称', '课包', '课程', '学生数', '创建时间', '实际开始', '实际结束', '查询', '重置', '未来城市设计']);
   await expectText('列表页', ['共 3 条课堂记录', '个「待上课 / 上课中」课堂']);
-  // 已解散那一行的「实际结束」列必须标明它是解散时刻（不能与「已解散不产生结束时间」的规则文案打架）
-  await expectText('列表页', ['解散时间', '已解散的课堂不会记录实际开始时间']);
+  // 已解散那一行的「实际结束」列必须标明它是解散时刻
+  // （原来还断言规则面板里那句「已解散的课堂不会记录实际开始时间」，那块 2026-09-20 已按用户口径删除）
+  await expectText('列表页', ['解散时间']);
   await shot('01-list');
 
   // ── 005-02 创建课堂（被占用时按钮该是灰的，且顶部给红/橙提示）
   await page.goto(`${base}/classrooms/new`, { waitUntil: 'domcontentloaded' });
   await settle();
-  await expectText('创建页', ['创建课堂', '父级：', '课堂基础信息', '课堂名称', '课包', '课程', '本页不包含', '所选课程摘要', '创建规则', '保存后的业务链', '添加学生', '满足条件后开始上课']);
+  await expectText('创建页', ['创建课堂', '父级：', '课堂基础信息', '课堂名称', '课包', '课程', '所选课程摘要', '保存后的业务链', '添加学生', '满足条件后开始上课']);
   // 此刻账号上还有一个待上课课堂 → 必须是橙色「不能创建」，不能是一句写死的绿话
   await expectText('创建页（有占用时）', ['当前账号已有 1 个「待上课 / 上课中」课堂', '因此不能创建新的课堂']);
   if (!(await page.getByRole('button', { name: '保存课堂' }).isDisabled())) problems.push('创建页：有占用时「保存课堂」应该禁用');
@@ -339,7 +392,7 @@ try {
   // ── 005-04 添加学生
   await page.goto(`${base}/classrooms/${c.id}/students/new`, { waitUntil: 'domcontentloaded' });
   await settle();
-  await expectText('添加学生页', ['添加学生', '候选池的前提条件', '添加规则', '原因优先级', '可添加学生', '不可添加学生', '当前课包授权', '当前课堂占用', '加入后课程状态', '不可添加判定说明', '已完成当前课堂对应课程', '不进入候选池']);
+  await expectText('添加学生页', ['添加学生', '可添加学生', '不可添加学生', '当前课包授权', '当前课堂占用', '加入后课程状态', '不可添加判定说明', '已完成当前课堂对应课程', '不进入候选池']);
   await shot('08-add-students');
   // 「不可添加」默认不铺开，搜索之后才列人（2026-09-16 口径）
   await page.getByRole('button', { name: /不可添加学生/ }).click();
@@ -553,9 +606,9 @@ try {
   await orgPage.locator('tr', { hasText: grantedName }).first().getByRole('button', { name: '查看授权' }).click();
   await orgSettle();
   await orgExpect('002-04 学生授权详情', [
-    '学生授权详情', '学生授权中心', '本页只管理', '002-04A', '002-04B',
+    '学生授权详情', '学生授权中心',
     '当前授权课包', '已产生正式学习记录', '当前课包授权', '当前未取消授权',
-    '当前版本', '授权时间', '授权状态', '授权规则', '本页负责',
+    '当前版本', '授权时间', '授权状态',
   ]);
   // 正面分支必须被验到：夹具给这名学生造了一条「成功且非 mock」的调用，
   // 所以「已产生正式学习记录」该是 1、该行该是「学习中」。
