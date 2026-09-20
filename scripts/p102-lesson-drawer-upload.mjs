@@ -101,11 +101,47 @@ check(
   '检测函数没识别出被摘掉包装的文件域',
 );
 
+/* ------------------------------------------------- ③b 三端所有 UI 源码都不许有裸文件域 */
+//
+// 2026-09-20 扩到这里：平台端「素材与宣传物料」重做后，三步向导第一步与保留导出的上传面板
+// 各写了一个**裸** `<input type="file">` —— 页面上漏出原生「选择文件 / 未选择任何文件」。
+// 这正是 2026-09-16 那条缺陷的同一个形状（当时只钉了 CourseManagement.jsx 一个文件，
+// 于是新写的页面照犯）。既然规则是"文件域一律包在 .inline-file-upload 的 label 里"，
+// 就该按**全部 UI 源码**判，而不是按当初出事的那一个文件判。
+
+const scanJsx = (dir) => {
+  const out = [];
+  if (!fs.existsSync(dir)) return out;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...scanJsx(full));
+    else if (entry.name.endsWith('.jsx')) out.push(full);
+  }
+  return out;
+};
+const uiFiles = ['apps/admin/src', 'apps/org/src', 'apps/website/src'].flatMap((dir) => scanJsx(path.join(root, dir)));
+const bareAll = uiFiles
+  .map((file) => ({ file: path.relative(root, file).split(path.sep).join('/'), indexes: bareFileInputs(fs.readFileSync(file, 'utf8')) }))
+  .filter((item) => item.indexes.length);
+check(
+  `三端 UI 源码里没有裸文件域（扫了 ${uiFiles.length} 个 .jsx）`,
+  bareAll.length === 0,
+  bareAll.map((item) => `${item.file}（第 ${item.indexes.join('、')} 个）`).join('；'),
+);
+
 /* ---------------------------------------------------------------- ④ 上传行仍是两件 */
 
 // 素材编辑器的上传行＝「地址输入框 + 紧凑按钮」，按钮靠 label 自己的内边距成形。
+// ⚠️ 2026-09-20 修正锚点：`623c603`（「去掉三栏表单」那次）把这个文件里的上传行从 2 处减到 1 处，
+//    这条断言却还写着 >= 2 —— 于是它一直红着，谁也没管（"守卫红了没人看"就是这类）。
+//    锚点要的是**非空转**：这个文件里仍然有上传行、且仍然用 label 包着文件域，两条都成立才算数。
 const assetInputs = adminSource.match(/className="lesson-asset-input"/g) || [];
-check('素材编辑器仍有上传行（守卫不是空转）', assetInputs.length >= 2, `找到 ${assetInputs.length} 处`);
+const wrappedUploads = adminSource.match(/className="inline-file-upload"/g) || [];
+check(
+  '素材编辑器仍有上传行（守卫不是空转）',
+  assetInputs.length >= 1 && wrappedUploads.length >= 1,
+  `找到 ${assetInputs.length} 处上传行 / ${wrappedUploads.length} 处 label 包装`,
+);
 
 assert.ok(stylesCss.length > 0 && adminSource.length > 0);
 

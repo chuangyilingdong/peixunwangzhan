@@ -30,7 +30,7 @@ const EMPTY_FORM = { title: '', description: '', category: 'GENERAL', visibility
 export function FileUploadPanel({ api, onDone }) {
   const [file, setFile] = useState(null); const [progress, setProgress] = useState(0); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
   async function submit(event) { event.preventDefault(); if (!file) return setMessage('请选择文件'); setBusy(true); setProgress(10); setMessage(''); try { await api.upload('admin/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' }, { onProgress: setProgress }); setMessage('文件上传成功'); setFile(null); onDone?.(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
-  return <Panel title="安全上传"><form onSubmit={submit} className="form-grid"><label>选择图片、音频、视频或 PDF<input type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} disabled={busy} /></label><div className="row-actions"><button className="primary-button" disabled={busy || !file}>{busy ? `上传中 ${progress}%` : '上传文件'}</button>{message ? <span className="muted">{message}</span> : null}</div></form></Panel>;
+  return <Panel title="安全上传"><form onSubmit={submit} className="form-grid"><label className="inline-file-upload">{file ? '重新选择文件' : '选择图片、音频、视频或 PDF'}<input type="file" onChange={(event) => { const picked = event.target.files?.[0] || null; event.target.value = ''; setFile(picked); }} disabled={busy} /></label><div className="row-actions"><button className="primary-button" disabled={busy || !file}>{busy ? `上传中 ${progress}%` : '上传文件'}</button>{message ? <span className="muted">{message}</span> : null}</div></form></Panel>;
 }
 
 function MaterialCard({ item, onStats, onToggle, busy }) {
@@ -106,9 +106,13 @@ function AddMaterialWizard({ api, organizations, onClose, onDone }) {
       <div className="modal-body">
         {step === 0 ? <>
           <p className="muted">这一步只为<strong>上传文件</strong>（图片 / 音频 / 视频 / PDF），可以跳过直接下一步 —— 物料的资源地址是另一件事。</p>
-          <label>选择文件<input type="file" disabled={upload.busy} onChange={(event) => setUpload((current) => ({ ...current, file: event.target.files?.[0] || null, message: '' }))} /></label>
           <div className="row-actions">
+            {/* 文件域一律包在 .inline-file-upload 的 label 里（全局样式把它藏起来、由 label 当按钮）：
+                写成裸 <input type="file"> 会漏出原生「选择文件 / 未选择任何文件」，还会把这一行撑宽。
+                上一版就是裸的，2026-09-20 用 scripts/page-shot.mjs 截图时抓到的。 */}
+            <label className="inline-file-upload">{upload.file ? '重新选择文件' : '选择文件'}<input type="file" disabled={upload.busy} onChange={(event) => { const picked = event.target.files?.[0] || null; event.target.value = ''; setUpload((current) => ({ ...current, file: picked, message: '' })); }} /></label>
             <button className="secondary-button" disabled={upload.busy || !upload.file} onClick={doUpload}>{upload.busy ? `上传中 ${upload.progress}%` : '上传文件'}</button>
+            {upload.file && !upload.asset ? <span className="muted">已选：{upload.file.name}</span> : null}
             {upload.message ? <span className="muted">{upload.message}</span> : null}
           </div>
           {upload.asset ? <Notice tone="info">已上传：{upload.asset.fileName || upload.asset.id}

@@ -646,7 +646,7 @@ function OrgInbox({ api, user }) {
 function OrgFileUpload({ api, onDone }) {
   const [file, setFile] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
   async function submit(event) { event.preventDefault(); if (!file) return setMessage('请选择文件'); setBusy(true); setMessage(''); try { await api.upload('org/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'ORG' }); setMessage('文件上传成功'); setFile(null); onDone?.(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
-  return <Panel title="机构文件上传"><form onSubmit={submit} className="form-grid"><label>选择教学或宣传文件<input type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} disabled={busy} /></label><div className="row-actions"><button className="primary-button" disabled={busy || !file}>{busy ? '上传中…' : '上传文件'}</button>{message ? <span className="muted">{message}</span> : null}</div></form></Panel>;
+  return <Panel title="机构文件上传"><form onSubmit={submit} className="form-grid"><label className="inline-file-upload">{file ? '重新选择文件' : '选择教学或宣传文件'}<input type="file" onChange={(event) => { const picked = event.target.files?.[0] || null; event.target.value = ''; setFile(picked); }} disabled={busy} /></label><div className="row-actions"><button className="primary-button" disabled={busy || !file}>{busy ? '上传中…' : '上传文件'}</button>{message ? <span className="muted">{message}</span> : null}</div></form></Panel>;
 }
 
 function OrgMaterials({ api, user }) {

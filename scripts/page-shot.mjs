@@ -356,6 +356,11 @@ try {
     await page.goto(url, { waitUntil: 'domcontentloaded' }).catch((error) => fail(`${route.path} 打不开`, String(error?.message || error)));
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(opts.wait);
+    const slug = route.path.replace(/^\//, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/-+$/, '') || 'root';
+    const shotName = (suffix) => path.join(shotDir, `${String(index + 1).padStart(2, '0')}-${slug}${suffix}.png`);
+    const shots = [];
+    // 有 --click 时先留一张"点之前"的：列表/主视图与点开之后的向导/弹窗是两回事，都值得看
+    if (route.clicks.length) { const before = shotName(''); await page.screenshot({ path: before, fullPage: true }); shots.push(path.relative(root, before)); }
     // --click：一步步点下去（走向导、开弹窗），不然那些"藏在第二步/弹窗里"的东西永远看不到
     for (const label of route.clicks) {
       const target = page.getByRole('button', { name: label }).first();
@@ -379,9 +384,9 @@ try {
         hasPasswordField: document.querySelectorAll('input[type="password"]').length > 0,
       };
     });
-    const slug = route.path.replace(/^\//, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/-+$/, '') || 'root';
-    const shot = path.join(shotDir, `${String(index + 1).padStart(2, '0')}-${slug}.png`);
-    await page.screenshot({ path: shot, fullPage: true });
+    const after = shotName(route.clicks.length ? '-clicked' : '');
+    await page.screenshot({ path: after, fullPage: true });
+    shots.push(path.relative(root, after));
     await page.close();
 
     const apiBad = badResponses.filter((item) => item.includes('/api/'));
@@ -390,7 +395,7 @@ try {
     const missed = checks.filter((check) => !check.ok);
 
     console.log(`   h1=${state.heading || '（无）'}　会话=${state.sessionInStorage ? '✓' : '✗'}${state.hasPasswordField ? '（登录页！）' : ''}　按钮 ${state.buttons} / 输入 ${state.inputs} / 图 ${state.images}　正文 ${state.text.length} 字`);
-    console.log(`   截图 ${path.relative(root, shot)}`);
+    console.log(`   截图 ${shots.join('  ')}`);
     if (state.finalUrl.replace(origin, '') !== route.path) console.log(`   ⚠️ 落到了别的地址：${state.finalUrl.replace(origin, '')}`);
     if (opts.text) console.log(`   正文：${state.text.slice(0, 1200)}`);
     else console.log(`   正文开头：${state.text.slice(0, 160).replace(/\n/g, ' / ')}`);
@@ -408,7 +413,7 @@ try {
     const noisy = consoleErrors.filter((item) => !/Failed to load resource/.test(item));
     if (noisy.length) warn(`${route.path} 控制台有报错`, noisy.slice(0, 4).join(' | '));
 
-    report.push({ route: route.path, account: route.account, url, shot: path.relative(root, shot), ...state, text: state.text.slice(0, 8000), checks, pageErrors, consoleErrors: noisy, badResponses, failedRequests });
+    report.push({ route: route.path, account: route.account, url, shots, ...state, text: state.text.slice(0, 8000), checks, pageErrors, consoleErrors: noisy, badResponses, failedRequests });
   }
 
   if (opts.keep) {
