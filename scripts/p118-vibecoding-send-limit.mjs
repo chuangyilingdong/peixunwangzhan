@@ -266,14 +266,24 @@ try {
   // ⑥ 课堂没开始（老师还没点「立即上课」）：不发密钥，但要把「接下来是哪节课」告诉客户端。
   //    ⚠️ 这条钉的是**闸门**：没有 ACTIVE 课堂时必须没有 `gateway` —— 学生拿不到密钥就调不动网关，
   //    「点了立即上课才能进」是服务端兜底的，不靠客户端自觉（见 studentRuntime.js 该处注释）。
-  write("UPDATE class_sessions SET status='PENDING' WHERE id=?", [sessionId]);
-  await check('课堂未开始时：classroom 为 null、不发网关密钥、upcoming 报出这节课', async () => {
+  //    ⚠️ 夹具给这个学生挂了**不止一场** ACTIVE 课堂（它直接写库，绕开了"一个人只能在一个未终态课堂"
+  //    那道校验），所以这里必须**把他名下所有在上的课堂一起翻成 PENDING** ——
+  //    只翻一场的话 `resolveActiveClassroom` 会解析到另一场，断言就白写了（第一版就是这么错的）。
+  write("UPDATE class_sessions SET status='PENDING' WHERE status='ACTIVE' AND id IN (SELECT session_id FROM session_students WHERE student_id=?)", [student.id]);
+  await check('课堂未开始时：classroom 为 null、不发网关密钥、upcoming 报出那节待上课的课', async () => {
     const paused = await context();
     assert.equal(paused.classroom, null);
     assert.equal(paused.gateway, undefined, '没有在上的课堂却发了网关密钥 —— 闸门漏了');
-    assert.equal(paused.upcoming?.id, sessionId, 'upcoming 没指向那节还没开始的课');
-    assert.equal(paused.upcoming?.lessonTitle, lessonRow?.lesson_title || null);
-    assert.equal(paused.upcoming?.seriesTitle, lessonRow?.series_title || null);
+    assert.ok(paused.upcoming?.id, '没有报出 upcoming');
+    const owned = readRow(
+      `SELECT session.id FROM class_sessions session
+         JOIN session_students part ON part.session_id = session.id
+        WHERE session.id = ? AND part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'PENDING'`,
+      [paused.upcoming.id, student.id],
+    );
+    assert.ok(owned, 'upcoming 指向的不是这个学生名下的待上课课堂');
+    assert.ok(paused.upcoming.lessonTitle, 'upcoming 没带课时名');
+    assert.ok(paused.upcoming.seriesTitle, 'upcoming 没带课包名');
   });
 
   if (checks.some((item) => !item.ok)) console.error(serverLog.slice(-1500));
