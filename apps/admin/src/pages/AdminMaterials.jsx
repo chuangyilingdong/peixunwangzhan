@@ -17,7 +17,7 @@
 // 仍是外部存储地址（留空就是"资源待配置"）；「全部机构」对所有状态正常的机构开放，
 // 「指定机构」只在服务端向授权机构返回。
 import { useMemo, useState } from 'react';
-import { Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, Status, useData } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, ListResultSummary, MetricCard, Notice, PageHeader, Panel, Pagination, Status, useData } from '@platform/shared';
 
 export const MATERIAL_CATEGORIES = [['GENERAL', '通用'], ['COURSE', '课程'], ['POSTER', '海报'], ['ACTIVITY', '活动'], ['PARTNERSHIP', '合作']];
 const CATEGORY_LABELS = Object.fromEntries(MATERIAL_CATEGORIES);
