@@ -312,9 +312,15 @@ try {
     /student_cost_cap_fen INTEGER/.test(schema) && /ALTER TABLE class_sessions ADD COLUMN student_cost_cap_fen/.test(schema));
   const orgDetail = fs.readFileSync(path.join(root, 'apps/org/src/pages/classroom/ClassroomDetail.jsx'), 'utf8');
   const orgAdd = fs.readFileSync(path.join(root, 'apps/org/src/pages/classroom/AddClassroomStudents.jsx'), 'utf8');
-  check('退休 ⑥：老师端两处文案都写明"不拦学生"（不许留下"还剩多少额度"这种像闸门的话）',
-    /不拦学生/.test(orgDetail) && /不拦学生/.test(orgAdd)
-      && !/额度已经用完|已用尽|请找老师/.test(orgDetail) && !/额度已经用完|已用尽|请找老师/.test(orgAdd));
+  // ⎠ 2026-09-20 用户口径：老师端那套观测文案（“已用 / 观测上限 / 不拦学生”）
+  //    已**整块删除**（课堂详情的「本课堂每学生算力」、加学生页的算力列都没了）。
+  //    所以这条断言反过来：老师端**不出现任何观测类字样**，当然更不能出现像闸门的话。
+  //    （旧断言要求两处必须写明“不拦学生”—— 文案都删了，那句话反而会把回到旧样子的改动放过去）
+  const gateWords = /额度已经用完|已用尽|请找老师/;
+  const observWords = /不拦学生|未设观测上限|观测上限|还剩|poolText|poolUsedYuan/;
+  check('退休 ⑥：老师端不再展示这套算力观测（也没有像闸门的话）',
+    !observWords.test(orgDetail) && !observWords.test(orgAdd)
+      && !gateWords.test(orgDetail) && !gateWords.test(orgAdd));
 } catch (error) {
   console.error(serverLog.slice(-4000));
   throw error;
