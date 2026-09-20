@@ -62,6 +62,17 @@ function visibleToReadingFaces(lesson, seriesBaselined) {
   if (!seriesBaselined) return lesson.status === 'PUBLISHED';
   return snapped === 'PUBLISHED';
 }
+/**
+ * 模拟「迁移写完这一刻」的样子：把 status 键并进已有快照（其余键保留；坏 JSON / 没快照按空对象算）。
+ * 与下面真正的写入用的是同一段逻辑 —— 写之前先用它算一遍，才能在不改变任何可见集合上做出承诺。
+ */
+function afterMigrationSnapshot(lesson) {
+  let parsed = {};
+  if (lesson.published_content) {
+    try { const value = JSON.parse(lesson.published_content); if (value && typeof value === 'object') parsed = value; } catch { /* 坏 JSON 按没有快照处理 */ }
+  }
+  return JSON.stringify({ ...parsed, status: lesson.status });
+}
 
 console.log(`数据库：${dbPath}`);
 const db = new DatabaseSync(dbPath);
@@ -81,9 +92,9 @@ for (const series of seriesRows) {
   const lessons = bySeries.get(series.id) || [];
   const baselined = lessons.some((lesson) => lesson.published_content !== null && lesson.published_content !== undefined);
   const livePublished = lessons.filter((lesson) => lesson.status === 'PUBLISHED').length;
-  // 迁移**之后**的可见数：迁移会给每节课时都写上 status=当前状态，所以课包一律算「已定格」，
-  // 可见数就是「当前状态 = PUBLISHED」的节数 —— 与 livePublished 恒等，这正是要守住的不变量。
-  const visibleAfter = lessons.filter((lesson) => visibleToReadingFaces(lesson, true)).length;
+  // 迁移**之后**的可见数：按写入后的快照算（课包一律算已定格），必须与迁移前的实时已发布数相等
+  // —— 这就是这次迁移要守住的不变量：**不改变任何机构能看到的课时**。
+  const visibleAfter = lessons.filter((lesson) => visibleToReadingFaces({ ...lesson, published_content: afterMigrationSnapshot(lesson) }, true)).length;
   // 迁移**之前**、但判据已经切到新版时的可见数（用来演示"不迁移会掉多少"）
   const visibleIfSkipped = lessons.filter((lesson) => visibleToReadingFaces(lesson, baselined)).length;
   const needStatus = lessons.filter((lesson) => snapshotStatus(lesson.published_content) !== lesson.status);
@@ -93,7 +104,7 @@ for (const series of seriesRows) {
 let touched = 0;
 for (const item of plan) {
   if (!item.lessons.length && !item.needStatus.length) continue;
-  const flag = item.visibleIfSkipped !== item.livePublished ? `   ⚠️ 不迁移会从 ${item.visibleAfter} 节掉到 ${item.visibleIfSkipped} 节` : '';
+  const flag = item.visibleIfSkipped !== item.livePublished ? `   ⚠️ 不迁移会从 ${item.livePublished} 节掉到 ${item.visibleIfSkipped} 节` : '';
   console.log(`  · ${item.series.title}（v${item.series.version} / ${item.series.status}）课时 ${item.lessons.length} 节`
     + `，可见 ${item.livePublished} 节，需补 status 的 ${item.needStatus.length} 节${flag}`);
   touched += item.needStatus.length;
