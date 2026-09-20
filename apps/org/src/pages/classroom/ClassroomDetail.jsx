@@ -1,21 +1,19 @@
 // 005-03 课堂详情（2026-09-17 按线框图重做）。
 //
-// 结构按线框图分成「左：课堂信息 / 右：课堂操作」两栏，下面是学生名单，
-// 再往下是阶段说明与页面边界；四个二次确认弹窗（编辑名称 / 移除学生 / 开始上课 / 解散课堂）
+// 结构按线框图分成「左：课堂信息 / 右：课堂操作」两栏，下面是学生名单。
+// 四个二次确认弹窗（编辑名称 / 移除学生 / 开始上课 / 解散课堂）
 // 都改成「信息带 + 影响说明 + 逐条校验」的样子 —— 其中校验清单来自服务端预检接口，
 // 界面上不做任何推断（推不出来的条目宁可不显示，也不能凭空打勾）。
+//
+// ⚠️ 2026-09-20 用户口径：原先那两块说明面板（「XX 阶段可操作」「页面边界」）与课堂/学生的
+//    「AI 使用 · 算力观测 · 最近活动」那几行**已整块删除**（连同 STAGE_NOTES / capText / AiUsage）。
+//    那些是内部观测与文档式口径，不是老师要看的东西 —— 别再照线框图加回来。
+//    ⚠️ 名单里的「最近活动」**列**保留了（那只是活动时间；这次删的是课堂操作里那行汇总文案）。
 import { useEffect, useRef, useState } from 'react';
-import { Empty, ErrorState, formatDate, formatYuan, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, Notice, PageHeader, Panel, useData } from '@platform/shared';
 import { Block, BoundaryNote, Checklist, DefinitionGrid, InfoStrip, Modal, ParentLine, RuleList } from './ui.jsx';
 import { ClassroomWork } from './ClassroomWork.jsx';
 import { DELIVERY_LABEL, removedReasonLabel, SESSION_STATE, StateBadge, STUDENT_STATE } from './states.jsx';
-
-const STAGE_NOTES = {
-  PENDING: ['编辑课堂名称', '查看课程资料', '添加学生 / 移除学生', '开始上课 / 解散课堂'],
-  ACTIVE: ['查看课程资料', '添加符合条件的新学生', '结束课堂'],
-  ENDED: ['查看课程资料', '查看完课结果与作品'],
-  DISSOLVED: ['查看只读历史记录'],
-};
 
 function Duration({ runtime, status }) {
   const [now, setNow] = useState(Date.now());
@@ -34,29 +32,6 @@ function Duration({ runtime, status }) {
     seconds = Math.max(0, Math.floor(runtime.durationSeconds + (status === 'ACTIVE' && Number.isFinite(snapshot) ? Math.max(0, now - snapshot) / 1000 : 0)));
   }
   return <span>{seconds === null ? '尚未开始' : `${Math.floor(seconds / 3600)} 时 ${Math.floor(seconds % 3600 / 60)} 分 ${seconds % 60} 秒`}</span>;
-}
-
-// 「这堂课花了多少算力」——2026-09-18 用户口径：这套额度**只观测、不真拦**
-// （原话「学生算力额度的设置目前都是不真拦，都是给我们内部看的」）。
-// 读的是 `class_sessions.student_cost_cap_fen`（观测上限，分/人；留空 = 不设上限）。
-// ⚠️ 界面上**必须写明"不拦学生"**：老师看到"超了"时不能以为系统挡住了学生。
-function capText(costCap) {
-  if (!costCap) return null;
-  if (!costCap.configured) {
-    return `已用 ${formatYuan(costCap.usedFen || 0)} · 未设观测上限（仅内部观测，不拦学生）`;
-  }
-  const used = formatYuan(costCap.usedFen);
-  const cap = formatYuan(costCap.capFen);
-  const unknown = costCap.unknownCalls ? ` · ${costCap.unknownCalls} 笔成本未知（金额只是下界）` : '';
-  const over = costCap.exceeded ? ' · 已超观测上限（仅记录，不拦学生）' : '';
-  return `已用 ${used} / 观测上限 ${cap}（仅内部观测，不拦学生）${over}${unknown}`;
-}
-
-function AiUsage({ ai }) {
-  if (!ai) return <span className="muted">暂无用量数据</span>;
-  return <><span>成功 {ai.successCount ?? 0} · 失败 {ai.failedCount ?? 0}</span>
-    <div className="muted">售价消耗 {ai.salePriceFen == null ? '待确定' : formatYuan(ai.salePriceFen)}</div>
-    {capText(ai.costCap) ? <div className="muted">算力：{capText(ai.costCap)}</div> : null}</>;
 }
 
 export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
@@ -203,11 +178,6 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
               </div>
               {current.status === 'PENDING' && !summary.pending ? <p className="muted">名单为空：添加学生后才能开始上课。</p> : null}
               {current.status === 'PENDING' ? <p className="muted">开始或解散均需二次确认。</p> : null}
-              {current.runtime?.ai ? <p className="muted">课堂 AI 使用：<AiUsage ai={current.runtime.ai} /></p> : null}
-              {/* 这堂课每学生的算力消耗（观测口径：**只记录、不拦学生**）。
-                  超了也只是看得见，学生不会被系统挡住，也不会看到这个数字。 */}
-              {capText(current.runtime?.costCap) ? <p className="muted">本课堂每学生算力：{capText(current.runtime?.costCap)}</p> : null}
-              <p className="muted">最近活动：{formatDate(current.runtime?.lastActivityAt)}</p>
             </Panel>
           </div>
 
@@ -217,7 +187,7 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
             {roster.length ? <div className="table-wrap"><table>
               <thead><tr>
                 <th>序号</th><th>学生</th><th>登录账号</th><th>加入课堂时间</th><th>状态 / 完课结果</th>
-                <th>AI 使用</th><th>最近活动</th><th>作品</th><th>操作</th>
+                <th>最近活动</th><th>作品</th><th>操作</th>
               </tr></thead>
               <tbody>{roster.map((student, index) => <tr key={student.id}>
                 <td>{index + 1}</td>
@@ -227,7 +197,6 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
                 <td><StateBadge value={student.status} map={STUDENT_STATE} />
                   {student.removedReason ? <div className="muted">{removedReasonLabel(student.removedReason)}</div> : null}
                   {student.completedAt ? <div className="muted">完课于 {formatDate(student.completedAt)}</div> : null}</td>
-                <td><AiUsage ai={student.ai} /></td>
                 <td>{student.lastActivityAt ? formatDate(student.lastActivityAt) : '暂无活动记录'}</td>
                 <td>{student.workCount ?? '—'}</td>
                 <td>{allowed('canRemoveStudents') && current.status === 'PENDING' && student.status !== 'REMOVED'
@@ -236,19 +205,6 @@ export function ClassroomDetail({ api, openId, onBack, onAddStudents }) {
               </tr>)}</tbody>
             </table></div> : <Empty title="暂无学生" body={canAdd ? '点右上角「添加学生」把学生加进这堂课。' : '此课堂没有学生记录。'} />}
           </Panel>
-
-          <div className="classroom-detail-grid">
-            <Panel title={`${SESSION_STATE[current.status]?.label || ''}阶段可操作`}>
-              <RuleList tone="info" items={STAGE_NOTES[current.status] || []} />
-            </Panel>
-            <Panel title="页面边界">
-              <BoundaryNote lines={[
-                '本页不计算计划时间、课表、预约。',
-                '本页不提供评价打分、补课、实时 AI 观察或录制。',
-                current.status === 'PENDING' ? '进入「上课中」后学生不可再移除，课包 / 课程继续锁定。' : '课堂数据以只读记录为准。',
-              ]} />
-            </Panel>
-          </div>
 
           <Panel title={`课堂作品（${current.works?.length ?? 0}）`}>
             {current.works?.length ? <div className="table-wrap"><table>

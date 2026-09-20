@@ -168,10 +168,6 @@ function Dashboard({ api }) {
   return <>
     <PageHeader eyebrow="001-01" title="机构工作台" description="机构运营管理中心"
       actions={<button className="secondary-button" onClick={() => { refresh(); seriesBox.refresh(); }}>刷新看板</button>} />
-    <Notice tone="info">
-      机构工作台做机构运营总览，不代替教师的课堂执行。
-      <div className="muted">课堂的创建、进入与开课在「我的课堂」和教师工作台里；本页的课堂信息只作运营观察。</div>
-    </Notice>
     <div className="metrics">
       <MetricCard label="学生总数" value={data.students ?? 0} hint="本机构学生" />
       <MetricCard label="教师总数" value={data.teachers ?? 0} hint="本机构教师" tone="teal" />
@@ -207,11 +203,6 @@ function Dashboard({ api }) {
         <Notice tone="info">本区域无课堂创建 / 进入 / 开始 / 结束操作。</Notice>
       </Panel>
     </div>
-    <Panel title="统计口径">
-      <div className="row-actions"><Status value={data.org.status} /><span className="muted">{data.scope?.description}</span><span className="muted">课堂：待上课 {data.breakdown?.pendingSessions ?? data.pendingSessions ?? 0} · 上课中 {data.breakdown?.activeSessions ?? data.activeSessions}</span></div>
-      <p className="muted">合同到期：{formatDate(data.org.contractExpiresAt)}{isAdmin ? ` · 教师人数：${data.org.teacherUsedSeats} / ${data.org.teacherSeats} · 学生人数：${data.org.studentUsedSeats} / ${data.org.studentSeats}` : ' · 经营席位仅机构管理员可见'}</p>
-      <p className="muted">课包口径「已分配 / 可授权」＝平台给本机构的授权次数里已经分给学员的部分（每分给一名学员用掉 1 次）；「进行中的课堂」是当前存量，待上课的课堂还没开始。逐课包的明细见「课包与授权」。</p>
-    </Panel>
     <div className="split">
       <Panel title={isAdmin ? '经营提醒' : '教学提醒'}>
         {alerts.length ? <div className="card-list">{alerts.map((alert) => <Notice key={alert.code} tone={alert.level || 'info'}><strong>{alert.title}</strong><div>{alert.message}</div>{alert.daysRemaining !== undefined && <small>剩余 {alert.daysRemaining} 天</small>}{alert.used !== undefined && <small>已用 {alert.used} / {alert.total}</small>}</Notice>)}</div> : <Empty title={isAdmin ? '暂无经营预警' : '暂无教学预警'} body={isAdmin ? '合同与教师席位目前没有触发预警。' : '当前范围内没有需要优先处理的系统预警。'} />}
@@ -325,7 +316,6 @@ function Members({ api, user }) {
         </form>
       </Panel>
       <Panel title="批量导入">
-        <p className="muted">粘贴 CSV 或 TSV。列名：<code>login,displayName,role,password,phone</code>。系统先预览，提交时整批原子写入，任何错误都会全部回滚。学员进哪个课堂请在「课堂」页添加。</p>
         <textarea value={importText} rows="7" placeholder={'login,displayName,role,password,phone\nstudent-02,小明,STUDENT,student123,13800000001'} onChange={(event) => setImportText(event.target.value)} />
         <div className="row-actions"><button className="secondary-button" type="button" disabled={busy} onClick={previewImport}>预览导入</button>{importPreview?.invalidCount === 0 && <button className="primary-button" type="button" disabled={busy} onClick={commitImport}>确认整批导入</button>}</div>
         {importPreview && <div className="card-list"><Notice tone={importPreview.invalidCount ? 'danger' : 'success'}>共 {importPreview.total} 条，可导入 {importPreview.validCount} 条，失败 {importPreview.invalidCount} 条。</Notice>{importPreview.items.filter((item) => !item.valid).map((item) => <p className="muted" key={item.index}>第 {item.index} 行：{item.errors.join('；')}</p>)}</div>}
