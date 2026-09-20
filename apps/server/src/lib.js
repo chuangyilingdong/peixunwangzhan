@@ -49,6 +49,7 @@ export function platformPermissionForPathname(pathname) {
   const routes = [
     ['/api/admin/audit-logs', 'ADMIN_AUDIT'],
     ['/api/admin/platform-admins', 'ADMIN_AUDIT'],
+    ['/api/admin/client-update', 'ADMIN_AUDIT'],
     ['/api/admin/dashboard', 'ADMIN_ANALYTICS'],
     ['/api/admin/overview', 'ADMIN_ANALYTICS'],
     ['/api/admin/ai-usage', 'ADMIN_ANALYTICS'],

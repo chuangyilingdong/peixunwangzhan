@@ -41,6 +41,7 @@ export const navigation = [
   { heading: '系统管理' },
   { to: '/admins', icon: '⚙', label: '平台管理员', permission: 'ADMIN_AUDIT' },
   { to: '/audit', icon: '☉', label: '操作审计', permission: 'ADMIN_AUDIT' },
+  { to: '/client-update', icon: '⇧', label: '客户端更新', permission: 'ADMIN_AUDIT' },
   { to: '/security', icon: '🔑', label: '账号安全', permission: null },
 ];
 

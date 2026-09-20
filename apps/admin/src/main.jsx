@@ -23,6 +23,7 @@ import { AdminInbox } from './pages/AdminInbox.jsx';
 import { AdminMaterials } from './pages/AdminMaterials.jsx';
 import { WebsiteContent } from './pages/WebsiteContent.jsx';
 import { Security } from './pages/Security.jsx';
+import { ClientUpdate } from './pages/ClientUpdate.jsx';
 import '@platform/shared/styles.css';
 import './admin.css';
 import { AdminShell } from './components/AdminShell.jsx';
@@ -63,6 +64,7 @@ export function App() {
     <Route path="/admins" element={page('ADMIN_AUDIT', <PlatformAdmins api={api} currentUser={session.user} />)} />
     <Route path="/audit" element={page('ADMIN_AUDIT', <PlatformAudit api={api} />)} />
     <Route path="/notifications" element={page('ADMIN_CONTENT', <PlatformNotifications api={api} />)} />
+    <Route path="/client-update" element={page('ADMIN_AUDIT', <ClientUpdate api={api} />)} />
     <Route path="/security" element={<Security api={api} onSignedOut={() => { clearSession(); setSession(null); navigate('/login'); }} />} />
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Routes>
