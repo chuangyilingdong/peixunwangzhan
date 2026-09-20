@@ -263,6 +263,39 @@ try {
     assert.equal(sends(sessionId, student.id), 3);
   });
 
+  // ⑦ 选课：多于一节时，学生指定哪节就**按哪节**走（预设 / 次数上限 / 密钥都跟着）
+  //    ⭐ 这正是用户口径要的那件事：以前只取"最近开始的那一场"，学生做 A 课作业却拿到 B 课的上限。
+  //    夹具正好给了这个学生的**多场** ACTIVE 课堂（它直写库，绕开了"一个人只能在一个未终态课堂"那条校验）。
+  const others = resolved.classrooms.filter((item) => item.id !== sessionId);
+  await check('client-context 列出「你现在能进的课」，不传 sessionId 时默认仍是最近一场', () => {
+    assert.ok(Array.isArray(resolved.classrooms), 'client-context 没给 classrooms 字段');
+    assert.ok(resolved.classrooms.length >= 2, `夹具本该有多场 ACTIVE 课堂，实际 ${resolved.classrooms.length} 场`);
+    assert.equal(resolved.classroom.id, resolved.classrooms[0].id, '默认应当是最近开始的那一场');
+    for (const key of ['seriesTitle', 'lessonTitle', 'teacherName']) {
+      assert.ok(Object.hasOwn(resolved.classrooms[0], key), `候选缺字段 ${key}`);
+    }
+  });
+  await check('⭐ 带 sessionId 时，次数上限跟着**选的那一节**走（不再默默用别节的）', async () => {
+    const target = others[0];
+    write('UPDATE course_lessons SET classroom_config=? WHERE id=?', [JSON.stringify({ vibeCoding: { sendLimit: 7 } }), target.lessonId]);
+    const picked = (await (await api(`/api/student/runtime/client-context?sessionId=${encodeURIComponent(target.id)}`, {
+      headers: { authorization: `Bearer ${token}` },
+    })).json()).data;
+    assert.equal(picked.classroom.id, target.id, '指定了哪一节就该报哪一节');
+    assert.equal(picked.classroom.lessonTitle, target.lessonTitle, '课时名应当是选中那节的');
+    assert.equal(picked.sends.limit, 7, '次数上限没跟着选中的那节课走');
+    const fallback = await context();
+    assert.equal(fallback.classroom.id, resolved.classroom.id, '不传 sessionId 时应当仍按最近一场（老客户端不变）');
+  });
+  await check('选一节不可用的课（不属于自己 / 已结束）：明确报不可用，且**不发网关密钥**', async () => {
+    const bogus = (await (await api('/api/student/runtime/client-context?sessionId=csession_not_mine', {
+      headers: { authorization: `Bearer ${token}` },
+    })).json()).data;
+    assert.equal(bogus.classroom, null);
+    assert.equal(bogus.gateway, undefined, '选了一节不可用的课却发了网关密钥');
+    assert.equal(bogus.reason, 'CLASSROOM_NOT_AVAILABLE');
+  });
+
   // ⑥ 课堂没开始（老师还没点「立即上课」）：不发密钥，但要把「接下来是哪节课」告诉客户端。
   //    ⚠️ 这条钉的是**闸门**：没有 ACTIVE 课堂时必须没有 `gateway` —— 学生拿不到密钥就调不动网关，
   //    「点了立即上课才能进」是服务端兜底的，不靠客户端自觉（见 studentRuntime.js 该处注释）。

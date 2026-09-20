@@ -8,7 +8,7 @@
 //   · services/studentRuntime.js —— 门禁 → 签密钥 → 调宿主脚本（开 / 收 / 列产物 / 取产物）；
 //   · 本文件的 /submit —— 把取回来的产物按**现有作品链路**落进 vibecoding_submissions；
 //     网页里的本地图片存成私有文件资产并改写引用（见 fileAssets.js 的 storeStudentArtifactAsset）。
-import { errors, requireRole, row } from '../lib.js';
+import { errors, requireRole, row, rows } from '../lib.js';
 import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, runtimeGatewayUrl, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
 import { issueRuntimeKey } from './runtimeGateway.js';
 import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
@@ -86,6 +86,61 @@ function resolvePendingClassroom(studentId) {
   );
 }
 
+/**
+ * 「你现在能进哪几节课 + 这次算哪一节」。
+ *
+ * 为什么会有"好几节"：口径上「一个学生全局最多属于一个未终态课堂」（docs/README.md），加人时也会被拒
+ * （`IN_OTHER_SESSION`，守卫 p66/p78）—— 但**库里不一定干净**：种子/历史数据能绕过那条校验，
+ * **线上实测就有一个学生同时挂着两场 ACTIVE 课堂**。而这里原来只取"最近开始的那一场"，
+ * 于是学生做 A 课作业、拿到的却是 B 课的**次数上限与预设**，界面上还看不出任何异常。
+ *
+ * 所以：**候选全给出来**（客户端据此显示"你现在能进的课"），**选择可以被指定**
+ * （`?sessionId=`，只认这个学生自己那几场 ACTIVE 的）；不指定时仍取最近一场 —— 老客户端不变。
+ * 选的那节不可用（结束/被移除/不是他的）时**明说**，绝不默默换一节。
+ *
+ * 返回：`session` 保持库行形状（`id / lesson_id / title`，下游动作读它）、`classroom` 是给客户端看的
+ * 同一节（带课包/课时/老师）、`candidates` 是全部候选（同形状）。
+ */
+function resolveClassroomEntry(studentId, requestedSessionId) {
+  const raw = rows(
+    `SELECT session.id, session.lesson_id, session.title, session.started_at, session.created_at
+       FROM class_sessions session
+       JOIN session_students part ON part.session_id = session.id
+      WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'
+      ORDER BY session.started_at DESC, session.created_at DESC`,
+    [studentId],
+  );
+  const publicOf = (session) => ({
+    id: session.id,
+    lessonId: session.lesson_id || '',
+    title: session.title,
+    ...(classroomContext(session.id) || {}),
+  });
+  const candidates = raw.map(publicOf);
+  const requested = String(requestedSessionId || '').trim();
+  const session = requested ? (raw.find((item) => item.id === requested) || null) : (raw[0] || null);
+  return {
+    session,
+    classroom: session ? (candidates.find((item) => item.id === session.id) || null) : null,
+    candidates,
+    reason: session ? null : (requested ? 'CLASSROOM_NOT_AVAILABLE' : 'NOT_STARTED'),
+  };
+}
+
+/**
+ * 「需要一节正在上的课」的动作（列产物 / 交作品）用它取课：**跟着学生选的那节走**，
+ * 没选就取最近一场。选的那节不可用时**报错说清**，不能默默换成另一节 ——
+ * 那会把作品交到别的课上（学生以为在 A 课交的，结果挂在 B 课）。
+ */
+function requireSelectedClassroom(ctx, studentId, what) {
+  const entry = resolveClassroomEntry(studentId, ctx.search.get('sessionId') || ctx.body?.sessionId);
+  if (!entry.session) {
+    const prefix = entry.reason === 'CLASSROOM_NOT_AVAILABLE' ? '你选的那节课已经结束了，' : '你现在没有正在上的课堂，';
+    throw errors.forbidden(`${prefix}${what}`, 'RUNTIME_NO_ACTIVE_CLASSROOM');
+  }
+  return entry.session;
+}
+
 
 /** 文件名的尺度与现有产物一致：**平铺**（不带路径分隔符）。叫得出来、能当 URL 段。 */
 function safeArtifactName(value) {
@@ -143,19 +198,24 @@ export async function handleStudentRuntime(ctx) {
   //     **按课时**配的，学生只看到课堂名（「上午班」）对不上是哪个课包哪一节；
   //   · 没有在上的课时给 `upcoming`（名下那节 PENDING 课堂的同组信息）—— 至少让他知道"接下来上哪节"，
   //     但**仍然不发密钥**，闸门不动。
-  //   · ⚠️ **有意不加"选哪节课"的参数**：`docs/README.md` 有一条口径「一个学生全局最多属于一个
-  //     未终态课堂（PENDING/ACTIVE）」，且**加人时会被拒**（守卫 p66/p78：「试着把他加到另一个课堂
-  //     → 必须被拒，并说清占用的课堂」）。也就是说**根本没有第二节课可选**，参数加了是死代码。
-  //     真要做成"学生自己选课 / 同时上多节课"，那得先改那条口径与两道守卫，不是补个界面。
+  //   · ⭐ **`classrooms` 列出"你现在能进的课"，并接受 `?sessionId=` 指定**：
+  //     口径上「一个学生全局最多属于一个未终态课堂」（docs/README.md）、加人时也会被拒
+  //     （`IN_OTHER_SESSION`，p66/p78）——**但库里不一定干净**：线上实测就有一个学生同时挂着
+  //     两场 ACTIVE 课堂（种子/历史数据绕过了校验）。以前这里只取"最近开始的那一场"，
+  //     于是学生做 A 课作业、拿到的却是 B 课的上限与预设，界面上看不出任何异常。
+  //     现在：多于一节时客户端**让学自己选**（选哪节，预设/次数上限/密钥就按哪节走）。
+  //     不传 `sessionId` 时行为与以前一致（最近一场），老客户端不会坏。
   if (part === '/client-context' && method === 'GET') {
-    const classroom = resolveActiveClassroom(auth.user.id);
+    const entry = resolveClassroomEntry(auth.user.id, ctx.search.get('sessionId'));
+    const classroom = entry.classroom;
     if (!classroom) {
-      // 还没开始上课：把「接下来是哪节课」也告诉客户端（学生要看得见对应关系），
+      // 还没开始上课（或选的那节已经结束）：把「接下来是哪节课」也告诉客户端，
       // 但**不发密钥** —— 「老师点了立即上课才能进」那道闸不动。
       const pending = resolvePendingClassroom(auth.user.id);
       const pendingInfo = pending ? (classroomContext(pending.id) || {}) : null;
       return {
         classroom: null,
+        classrooms: entry.candidates,
         upcoming: pending ? {
           id: pending.id,
           lessonId: pending.lesson_id || '',
@@ -165,27 +225,21 @@ export async function handleStudentRuntime(ctx) {
           teacherName: pendingInfo.teacherName ?? null,
           startedAt: null,
         } : null,
-        message: '老师还没有开始上课',
+        reason: entry.reason,
+        message: entry.reason === 'CLASSROOM_NOT_AVAILABLE' ? '你选的那节课已经结束了' : '老师还没有开始上课',
       };
     }
-    const lessonId = classroom.lesson_id || '';
+    const lessonId = classroom.lessonId;
     const limit = vibecodingSendLimit(lessonId);
     // ⚠️ 对外报的已用次数**封顶到上限**：库里存的是"观察到的发送次数最大值"（判据靠它，压缩也不会刷新
     //    额度），但给学生/老师看的是"用了几次／共几次"，所以这里取 min。见 vibecodingLessonSettings.js。
     const usedRaw = vibecodingSendUsage({ sessionId: classroom.id, studentId: auth.user.id });
     const used = limit === null ? usedRaw : Math.min(usedRaw, limit);
-    const info = classroomContext(classroom.id) || {};
     return {
       // 课包/课时/老师一起给学生：预设与次数上限都是**按课时**配的，客户端要能显示"这是哪节课的"。
-      classroom: {
-        id: classroom.id,
-        lessonId,
-        title: classroom.title,
-        seriesTitle: info.seriesTitle ?? null,
-        lessonTitle: info.lessonTitle ?? null,
-        teacherName: info.teacherName ?? null,
-        startedAt: info.startedAt ?? null,
-      },
+      classroom,
+      classrooms: entry.candidates,
+      reason: null,
       gateway: { baseUrl: runtimeGatewayUrl(), key: issueRuntimeKey({ orgId, userId: auth.user.id, sessionId: classroom.id, lessonId }) },
       presets: vibecodingPresetPrompts(lessonId),
       sends: { limit, used, remaining: limit === null ? null : Math.max(0, limit - used) },
@@ -210,7 +264,7 @@ export async function handleStudentRuntime(ctx) {
 
   // 我这个创作环境里现在有哪些东西可以当作品交（读工作区；不改动任何文件）
   if (part === '/deliverables' && method === 'GET') {
-    const classroom = requireActiveClassroom(auth.user.id, '没有创作环境可看');
+    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可看');
     return listStudentDeliverables({
       sessionId: classroom.id, studentId: auth.user.id, orgId, lessonId: classroom.lesson_id || null,
     });
@@ -218,7 +272,7 @@ export async function handleStudentRuntime(ctx) {
 
   // 交作品：把选中的那份取回来，按现有作品链路落库（广场/发布/机构查看全都读这张表）
   if (part === '/submit' && method === 'POST') {
-    const classroom = requireActiveClassroom(auth.user.id, '没有创作环境可以交作品');
+    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品');
     const scope = { sessionId: classroom.id, studentId: auth.user.id, orgId, lessonId: classroom.lesson_id || null };
     // 与工作台那条路同一条规矩：提交即确认版权与展示授权，平台之后才能发到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
@@ -237,7 +291,7 @@ export async function handleStudentRuntime(ctx) {
   // ⚠️ 二进制用 base64 装在 JSON 里：body 上限是 `maxUploadBytes() + 1MB`（见 index.js），
   //    默认 25MB 文件 → 约 33MB 传输量，够学生交 PPT；超了会在这里明确报错而不是静默截断。
   if (part === '/submit-upload' && method === 'POST') {
-    const classroom = requireActiveClassroom(auth.user.id, '没有创作环境可以交作品');
+    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品');
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
