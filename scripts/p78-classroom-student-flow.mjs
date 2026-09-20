@@ -156,6 +156,29 @@ try {
   const dissolved = await api(`/api/org/sessions/${otherSession.data.id}/dissolve`, { method: 'POST', token: admin, body: { reason: 'P78 测试解散' } });
   check('②d 待上课的课堂可以解散（PENDING → DISSOLVED）', dissolved.status === 200 && dissolved.data?.status === 'DISSOLVED', JSON.stringify(dissolved).slice(0, 200));
 
+  // ②e 加人这一步拦住了，但**开课以前不复查占用** —— 只要名单里存在异常占用
+  //     （2026-09-13 那条校验最初只按**同一课时**过滤，跨课时拦不住；生产的演示数据就是那样进去的，
+  //     而 client-context 只会默默挑"最近开始的那一场"，学生做 A 课作业却拿到 B 课的上限），
+  //     一点「开始上课」就会造出「同一个学生两场 ACTIVE 课堂」。
+  //     这里**另起一场课堂 + 直写一行名单**来模拟那种历史数据（用 API 是造不出来的 —— 那正是这条断言的意义），
+  //     断言开课必须被拒、并说清占用的课堂。
+  const legacySession = await api('/api/org/sessions', { method: 'POST', token: admin, body: { lessonId: seeded.lessonId, title: 'P78 历史名单课堂' } });
+  {
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA busy_timeout = 5000');
+    const row = db.prepare('SELECT id, org_id, lesson_id, series_id FROM class_sessions WHERE id=?').get(legacySession.data.id);
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_by,added_at,updated_at) " +
+      "VALUES (?,?,?,?,?,?, 'PENDING', NULL, ?, ?)",
+    ).run(`sess_stu_legacy_${Math.random().toString(36).slice(2, 8)}`, row.id, seeded.studentId, row.org_id, row.lesson_id, row.series_id, now, now);
+    db.close();
+  }
+  const legacyStart = await api(`/api/org/sessions/${legacySession.data.id}/start`, { method: 'POST', token: admin });
+  check('②e 名单里有异常占用（历史数据）时，开课必须被拒并说清占用的课堂',
+    legacyStart.status === 409 && legacyStart.error?.code === 'STUDENT_IN_OTHER_SESSION' && /另一场课堂/.test(legacyStart.error?.message || ''),
+    JSON.stringify(legacyStart).slice(0, 240));
+
   /* ③ 老师结束课堂 → 学员立刻进不去，且状态结算成「未完课」（这次没消耗过算力） */
   const ended = await api(`/api/org/sessions/${sessionId}/end`, { method: 'POST', token: teacher, body: {} });
   check('③ 老师结束课堂（上课中 → 已结束）', ended.status === 200 && ended.data?.status === 'ENDED', JSON.stringify(ended).slice(0, 200));

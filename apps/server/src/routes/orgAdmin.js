@@ -959,6 +959,29 @@ export async function handleOrg(ctx) {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以开始上课', 'SESSION_NOT_PENDING');
       const ready = count("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status='PENDING'", [target.id]);
       if (!ready) throw errors.badRequest('先添加学员再开始上课（名单为空不能开课）', 'SESSION_STUDENTS_REQUIRED');
+      // ⭐ 开课要**复查占用**（2026-09-20，用户口径：「他进了这个课堂，别的课堂就加不进，必须先解散/结束」）。
+      //    加人那一步已经拦了（`IN_OTHER_SESSION`，连 PENDING 也算占用），但**开课这一步以前不查** ——
+      //    于是只要名单里存在异常占用（2026-09-13 那条校验最初**只按同一课时**过滤，跨课时拦不住，
+      //    生产的演示数据就是那样进去的；后来校验改宽了，可这些历史名单还在），
+      //    老师一点「开始上课」就会造出**同一个学生两场 ACTIVE 课堂**，
+      //    而 `client-context` 只会默默挑"最近开始的那一场"（学生做 A 课作业、拿到 B 课的次数上限）。
+      //    正常库上这条永不触发（加人时就已经拦住），它只对历史/异常名单说话。
+      const busy = rows(
+        `SELECT DISTINCT student.display_name AS name, session.title AS session_title,
+                COALESCE(lesson.published_title, lesson.title) AS lesson_title
+           FROM session_students part
+           JOIN class_sessions session ON session.id = part.session_id
+           JOIN users student ON student.id = part.student_id
+           LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
+          WHERE part.status IN ('PENDING','ACTIVE') AND session.status IN ('PENDING','ACTIVE')
+            AND session.id <> ?
+            AND part.student_id IN (SELECT student_id FROM session_students WHERE session_id=? AND status='PENDING')`,
+        [target.id, target.id],
+      );
+      if (busy.length) {
+        const detail = busy.map((item) => `${item.name}（${item.session_title || '未命名课堂'} · ${item.lesson_title || '未知课程'}）`).join('、');
+        throw errors.conflict(`这些学员还在另一场课堂里：${detail}。先结束或解散那场课堂，再开始这一节。`, 'STUDENT_IN_OTHER_SESSION');
+      }
       transaction(() => {
         assertTeacherSessionAvailable(target.teacher_id, target.id);
         if (!row("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [target.lesson_id]) || !accessibleLesson(currentOrgId, target.lesson_id)) throw errors.forbidden('课时未发布或授权已失效', 'LESSON_NOT_ASSIGNED');
