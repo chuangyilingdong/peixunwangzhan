@@ -45,6 +45,18 @@ export function isSelfHostedMediaUrl(url, selfOrigins = []) {
   });
 }
 
+// 上游对**生成任务里的素材**有大小上限（文档：图片 ≤30MB、音频/视频 ≤50MB；它的暂存接口本身 ≤50MB）。
+// 我们自己的单文件上限是 200MB（2026-09-21 用户口径），所以「学生传了个大文件当参考」完全可能 ——
+// 与其传到一半被上游拒、不如**读 body 之前**就按 content-length 拦下来，给一句能行动的提示。
+const MAX_UPLOAD_BYTES = Object.freeze({ image: 30 * 1024 * 1024, audio: 50 * 1024 * 1024, video: 50 * 1024 * 1024 });
+function maxBytesFor(contentType) {
+  const family = String(contentType || '').split('/')[0].toLowerCase();
+  return MAX_UPLOAD_BYTES[family] || MAX_UPLOAD_BYTES.video;
+}
+function describeSize(bytes) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.round(bytes / 1024)}KB`;
+}
+
 function mirrorFailure(detail) {
   const error = new Error(`素材上传到上游失败：${detail}`);
   error.code = PROVIDER_ERROR_CODES.UPSTREAM;
@@ -87,19 +99,23 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
   // ① 取源文件（我们自己的站点，取的是同机房的一次回环请求）
   let bytes;
   let contentType = '';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    timer.unref?.();
-    try {
-      const response = await doFetch(source, { signal: controller.signal });
-      if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
-      contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
-      bytes = new Uint8Array(await response.arrayBuffer());
-    } finally { clearTimeout(timer); }
+    const response = await doFetch(source, { signal: controller.signal });
+    if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
+    contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
+    // 大小闸：在**读 body 之前**按 content-length 判（上游上限只有 30/50MB，我们单文件上限是 200MB）
+    const declared = Number(response.headers?.get?.('content-length') || 0);
+    const cap = maxBytesFor(contentType);
+    if (declared > cap) throw mirrorFailure(`这张素材 ${describeSize(declared)}，超过上游 ${describeSize(cap)} 的上限（${contentType || '未知类型'}）—— 请换一张小一点的素材`);
+    bytes = new Uint8Array(await response.arrayBuffer());
   } catch (error) {
+    // 已经是给用户看的那句（大小超限）就别再套一层「读取素材失败」
+    if (/^素材上传到上游失败/.test(String(error?.message || ''))) throw error;
     throw mirrorFailure(`读取素材失败（${String(error?.message || error).slice(0, 120)}）`);
-  }
+  } finally { clearTimeout(timer); }
   if (!bytes?.length) throw mirrorFailure('素材是空的');
 
   // ② 传给上游

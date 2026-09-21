@@ -49,7 +49,7 @@ check('④ 没配自站域名时一律不动（默认关，别的上游不受影
 
 /* ── ② 改写：首帧 / 尾帧 / 参考素材都换成上游的 URL，且带缓存 ─────────────── */
 let calls = [];
-function fakeFetch({ failUpload = false, uploadUrls = [UPSTREAM_HOSTED, UPSTREAM_HOSTED_2] } = {}) {
+function fakeFetch({ failUpload = false, uploadUrls = [UPSTREAM_HOSTED, UPSTREAM_HOSTED_2], contentLength = 4 } = {}) {
   calls = [];
   let uploads = 0;
   const impl = async (url, init = {}) => {
@@ -64,7 +64,7 @@ function fakeFetch({ failUpload = false, uploadUrls = [UPSTREAM_HOSTED, UPSTREAM
       uploads += 1;
       return new Response(JSON.stringify({ url: hosted, file_type: 'image', expires_in: 86400 }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
-    if (target.startsWith(SELF)) return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { 'content-type': 'image/jpeg' } });
+    if (target.startsWith(SELF)) return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { 'content-type': 'image/jpeg', 'content-length': String(contentLength) } });
     if (target === VIDEO_SUBMIT) return new Response(JSON.stringify({ task_id: 'task_x' }), { status: 200, headers: { 'content-type': 'application/json' } });
     if (target.startsWith('https://api.seedance.nz/v2/query/')) return new Response(JSON.stringify({ task: { status: 'succeeded', content: { url: 'https://example.test/v.mp4' } } }), { status: 200, headers: { 'content-type': 'application/json' } });
     return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } });
@@ -124,6 +124,17 @@ check('⑬b 上传时文件名带上了后缀（上游只认 jpg/png/webp/mp3/wa
   /\.jpe?g$/i.test(uploadBody), uploadBody || '(假 fetch 没记到文件名)');
 check('⑬c 上游的错误原文会带进报错里（不然只剩一句 HTTP 400，排不动）',
   /素材上传到上游失败/.test(String(uploadError?.message || '')));
+
+// 上游对素材有大小上限（图片 30MB / 音频视频 50MB），而我们单文件上限是 200MB ——
+// 传个 100MB 的课件当参考完全可能，必须在**读 body 之前**按 content-length 拦下来。
+resetUpstreamMediaMirrorCache();
+const fBig = fakeFetch({ contentLength: 120 * 1024 * 1024 });
+let bigError = null;
+try { await mirrorSelfHostedMedia({ firstFrameUrl: OUR_IMAGE }, { selfOrigins: [SELF], uploadUrl: UPLOAD_URL, fetchImpl: fBig }); } catch (error) { bigError = error; }
+check('⑬d 素材超过上游上限时给一句能行动的提示（不是把上游那句英文甩给学生）',
+  /超过上游 30\.0MB 的上限/.test(String(bigError?.message || '')) && !/读取素材失败/.test(String(bigError?.message || '')),
+  String(bigError?.message || '(没报错)'));
+check('⑬e 超限时**没有**真的发起上传（不该白传一趟）', fBig.uploadCount() === 0, `uploads=${fBig.uploadCount()}`);
 
 /* ── ③ 端到端：适配器发出去的请求体里，首帧已经是上游的 URL ───────────────── */
 resetUpstreamMediaMirrorCache();
