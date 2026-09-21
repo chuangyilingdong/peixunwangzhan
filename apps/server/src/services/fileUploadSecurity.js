@@ -5,6 +5,12 @@ import path from 'node:path';
 import { errors } from '../lib.js';
 
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
+// 单文件上限的**硬顶**（env 只能往下调、不能越过它）。2026-09-21 从 100MB 提到 200MB：
+// 用户要传 100MB+ 的课件 PPT。⚠️ 上限真正的约束不在我们读 body（视图、不复制），而在**病毒扫描**：
+// `clamscan` 每次调用都重新加载病毒库，实测扫 150MB 文件峰值 RSS **≈990MB** —— 1.6G 的机器上
+// 一次 200MB 上传的峰值约 1.2GB（app 200MB + 扫描 1GB），所以 `index.js` 那边加了"读 body 之前
+// 的内存闸"（同时只允许一份这么大的请求在飞）。详见交接文档的「单文件上限」一节。
+const MAX_UPLOAD_CEILING_BYTES = 200 * 1024 * 1024;
 const MIME_EXTENSIONS = new Map([
   ['image/jpeg', ['.jpg', '.jpeg']],
   ['image/png', ['.png']],
@@ -34,7 +40,12 @@ const BLOCKED_EXTENSIONS = new Set(['.ade', '.apk', '.app', '.bat', '.cmd', '.co
 
 export function maxUploadBytes() {
   const configured = Number(process.env.FILE_UPLOAD_MAX_BYTES || DEFAULT_MAX_BYTES);
-  return Number.isInteger(configured) && configured > 0 ? Math.min(configured, 100 * 1024 * 1024) : DEFAULT_MAX_BYTES;
+  return Number.isInteger(configured) && configured > 0 ? Math.min(configured, MAX_UPLOAD_CEILING_BYTES) : DEFAULT_MAX_BYTES;
+}
+
+/** 单文件上限的硬顶（字节）—— 给守卫与运维看的，别在各处再写一遍常量。 */
+export function maxUploadCeilingBytes() {
+  return MAX_UPLOAD_CEILING_BYTES;
 }
 
 /**

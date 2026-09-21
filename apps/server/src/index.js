@@ -53,6 +53,35 @@ const jsonBodyLimitFor = (pathname) => {
   return JSON_BODY_LIMIT;
 };
 
+/**
+ * multipart 请求体的**内存闸**（2026-09-21，跟着单文件上限提到 200MB 一起来的）。
+ *
+ * 为什么需要它：请求体是一次性读进内存的，而随后的病毒扫描还要再吃近 1GB
+ * （每次上传 spawn 一个 `clamscan`，它重新加载病毒库；实测扫 150MB 峰值 RSS ≈990MB）。
+ * 这台机器 1.6GB，两份 200MB 的请求叠在一起就会 OOM —— 被 OOM 杀掉的不止这个进程
+ * （这台机器上出过学生环境被 OOM 带走的事故）。
+ * 所以：读 body **之前**先占名额，超了当场给一句中文（429），别走到分配内存那一步。
+ * 名额在请求结束（finish/close）时归还 —— 因为那块 Buffer 会活到响应发完。
+ */
+const MAX_INFLIGHT_BODIES = Math.max(1, Math.floor(Number(process.env.FILE_UPLOAD_MAX_INFLIGHT || 2) || 2));
+const MAX_INFLIGHT_BODY_BYTES = Math.max(1, Math.floor(Number(process.env.FILE_UPLOAD_MAX_INFLIGHT_BYTES || 256 * 1024 * 1024) || 256 * 1024 * 1024));
+const BODY_INFLIGHT = { count: 0, bytes: 0 };
+function acquireBodySlot(declaredBytes) {
+  const size = Number.isFinite(declaredBytes) && declaredBytes > 0 ? Math.floor(declaredBytes) : 0;
+  if (BODY_INFLIGHT.count + 1 > MAX_INFLIGHT_BODIES || BODY_INFLIGHT.bytes + size > MAX_INFLIGHT_BODY_BYTES) {
+    throw errors.tooMany('同时上传的文件太多，请稍后再试', 'UPLOAD_BUSY', { retryAfterSeconds: 10 });
+  }
+  BODY_INFLIGHT.count += 1;
+  BODY_INFLIGHT.bytes += size;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    BODY_INFLIGHT.count -= 1;
+    BODY_INFLIGHT.bytes -= size;
+  };
+}
+
 function sendFileResponse(res, fileResponse, req) {
   const headers = { ...corsHeaders(req, fileResponse.headers || {}) };
   res.writeHead(fileResponse.status || 200, headers);
@@ -106,6 +135,16 @@ const server = http.createServer(async (req, res) => {
         // 允许 multipart 边界和字段占用少量额外空间，但不接受明显超限请求。
         const requestLimit = maxUploadBytes() + 1024 * 1024;
         if (Number.isFinite(declaredLength) && declaredLength > requestLimit) throw errors.badRequest('请求体过大', 'PAYLOAD_TOO_LARGE');
+        // ⭐ 内存闸：**在读 body 之前**先要一个名额（本次请求结束时归还）。
+        // 为什么：请求体是一次性读进内存的（readBodyBuffer 拿到的是整块 Buffer，后面 multipart
+        // 解析用 subarray 做视图、不再复制 —— 峰值就是这一块）；而紧随其后的病毒扫描更狠：
+        // 每次上传都 spawn 一个 `clamscan`，它要重新加载病毒库（实测扫 150MB 峰值 RSS ≈990MB）。
+        // 上限提到 200MB 之后，两份这样的大请求叠在一起就能把 1.6G 的机器打穿（会 OOM 杀进程，
+        // 连带把学生环境一起带走 —— 这台机器上出过）。所以大请求**并发上限默认 2 份 / 合计 256MB**，
+        // 超了先给一句中文，别让它走到分配内存那一步。
+        const release = acquireBodySlot(Number.isFinite(declaredLength) ? declaredLength : 0);
+        res.on('finish', release);
+        res.on('close', release);
         ctx.rawBody = await readBodyBuffer(req, requestLimit);
       } else ctx.body = await readJson(req, jsonBodyLimitFor(ctx.pathname));
     }
