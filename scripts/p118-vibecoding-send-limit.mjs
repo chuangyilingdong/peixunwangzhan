@@ -82,6 +82,11 @@ try {
   await run(['packages/database/src/db.js', '--init'], 'db --init');
   await run(['packages/database/src/seed.js'], 'seed');
   ensureClassroom(dbPath);
+  // ⚠️ 2026-09-21：运行时接口（client-context / submit-upload / …）现在**只认 VIBECODING 课堂**
+  //    （客户端项目报的门禁缺口：画布课堂原来也会被下发 classroom + 网关密钥）。
+  //    夹具是按"课时的 delivery_mode"建课堂的，而种子里那几节默认是画布课 →
+  //    这条守卫验的是 VibeCoding 的发送次数，那它要的教室就该是一间 VibeCoding 课堂。
+  write("UPDATE class_sessions SET delivery_mode='VIBECODING'");
   const student = readRow("SELECT id, org_id FROM users WHERE login='student-1'");
 
   server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });

@@ -17,13 +17,25 @@ import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
 
-/** 这个学生现在该进哪个课堂：名单里 ACTIVE 且课堂 ACTIVE，最近的第一个。 */
+// 客户端运行时（dsh / VibeCoding）**只认 VIBECODING 课堂**。
+//
+// ⚠️ 2026-09-21（客户端项目报的）：这里的三个解析器原来都没有筛 `delivery_mode`，
+//    于是**画布课堂也会被当成"你现在能进的课"下发** —— `client-context.classroom` 有值、
+//    网关密钥照发，客户端看到 classroom != null 就打开 VibeCoding 环境。
+//    客户端拿不到 deliveryMode 字段，它没法自己判断，所以**这道门禁必须在服务端**
+//    （客户端只执行"平台下发的可进入结论"）。
+const RUNTIME_DELIVERY_MODE = 'VIBECODING';
+/** 「这节是不是客户端运行时的课」。 */
+const isRuntimeClassroom = (session) => String(session?.delivery_mode || '').toUpperCase() === RUNTIME_DELIVERY_MODE;
+
+/** 这个学生现在该进哪个课堂：名单里 ACTIVE 且课堂 ACTIVE、且是 VIBECODING 的，最近的第一个。 */
 function resolveActiveClassroom(studentId) {
   return row(
-    `SELECT s.id, s.lesson_id, s.title
+    `SELECT s.id, s.lesson_id, s.title, s.delivery_mode
        FROM class_sessions s
        JOIN session_students p ON p.session_id = s.id
       WHERE p.student_id = ? AND p.status = 'ACTIVE' AND s.status = 'ACTIVE'
+        AND s.delivery_mode = '${RUNTIME_DELIVERY_MODE}'
       ORDER BY s.started_at DESC, s.created_at DESC
       LIMIT 1`,
     [studentId],
@@ -77,10 +89,11 @@ function classroomContext(sessionId) {
  */
 function resolvePendingClassroom(studentId) {
   return row(
-    `SELECT session.id, session.lesson_id, session.title
+    `SELECT session.id, session.lesson_id, session.title, session.delivery_mode
        FROM class_sessions session
        JOIN session_students part ON part.session_id = session.id
       WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'PENDING'
+        AND session.delivery_mode = '${RUNTIME_DELIVERY_MODE}'
       ORDER BY session.created_at DESC LIMIT 1`,
     [studentId],
   );
@@ -103,7 +116,7 @@ function resolvePendingClassroom(studentId) {
  */
 function resolveClassroomEntry(studentId, requestedSessionId) {
   const raw = rows(
-    `SELECT session.id, session.lesson_id, session.title, session.started_at, session.created_at
+    `SELECT session.id, session.lesson_id, session.title, session.started_at, session.created_at, session.delivery_mode
        FROM class_sessions session
        JOIN session_students part ON part.session_id = session.id
       WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'
@@ -116,14 +129,25 @@ function resolveClassroomEntry(studentId, requestedSessionId) {
     title: session.title,
     ...(classroomContext(session.id) || {}),
   });
-  const candidates = raw.map(publicOf);
+  // ⭐ 候选**只放 VIBECODING 的**：画布课堂不该出现在"你现在能进的课"里（客户端会照单全收去开环境）。
+  //    注意 raw 要保留全部（不带筛），否则"学生选的这节是画布课堂"这件事就看不出来了。
+  const runtimeSessions = raw.filter(isRuntimeClassroom);
+  const candidates = runtimeSessions.map(publicOf);
   const requested = String(requestedSessionId || '').trim();
-  const session = requested ? (raw.find((item) => item.id === requested) || null) : (raw[0] || null);
+  if (requested) {
+    const hit = raw.find((item) => item.id === requested) || null;
+    if (!hit) return { session: null, classroom: null, candidates, reason: 'CLASSROOM_NOT_AVAILABLE' };
+    // 明确点名了一节画布课堂：**明说是类型不对，绝不默默换成另一节**（静默换课会把学生放到别的课上）。
+    if (!isRuntimeClassroom(hit)) return { session: null, classroom: null, candidates, reason: 'CLASSROOM_MODE_MISMATCH' };
+    return { session: hit, classroom: candidates.find((item) => item.id === hit.id) || null, candidates, reason: null };
+  }
+  const session = runtimeSessions[0] || null;
   return {
     session,
     classroom: session ? (candidates.find((item) => item.id === session.id) || null) : null,
     candidates,
-    reason: session ? null : (requested ? 'CLASSROOM_NOT_AVAILABLE' : 'NOT_STARTED'),
+    // 没有可进的 VIBECODING 课，但他**正在一节画布课上** → 说清是类型不对（不是"老师没开始上课"）
+    reason: session ? null : (raw.length ? 'CLASSROOM_MODE_MISMATCH' : 'NOT_STARTED'),
   };
 }
 
@@ -131,10 +155,16 @@ function resolveClassroomEntry(studentId, requestedSessionId) {
  * 「需要一节正在上的课」的动作（列产物 / 交作品）用它取课：**跟着学生选的那节走**，
  * 没选就取最近一场。选的那节不可用时**报错说清**，不能默默换成另一节 ——
  * 那会把作品交到别的课上（学生以为在 A 课交的，结果挂在 B 课）。
+ *
+ * ⚠️ `mismatch` 是「他在画布课堂上做 VibeCoding 的事」时那句话：客户端会把 message 显示出来，
+ *    所以按客户端契约写成同一句（错误码沿用 RUNTIME_NO_ACTIVE_CLASSROOM，客户端不用改）。
  */
-function requireSelectedClassroom(ctx, studentId, what) {
+function requireSelectedClassroom(ctx, studentId, what, mismatch = '') {
   const entry = resolveClassroomEntry(studentId, ctx.search.get('sessionId') || ctx.body?.sessionId);
   if (!entry.session) {
+    if (entry.reason === 'CLASSROOM_MODE_MISMATCH') {
+      throw errors.forbidden(mismatch || '当前是画布课堂，不能在 VibeCoding 创作环境里做这个操作', 'RUNTIME_NO_ACTIVE_CLASSROOM');
+    }
     const prefix = entry.reason === 'CLASSROOM_NOT_AVAILABLE' ? '你选的那节课已经结束了，' : '你现在没有正在上的课堂，';
     throw errors.forbidden(`${prefix}${what}`, 'RUNTIME_NO_ACTIVE_CLASSROOM');
   }
@@ -211,6 +241,19 @@ export async function handleStudentRuntime(ctx) {
     if (!classroom) {
       // 还没开始上课（或选的那节已经结束）：把「接下来是哪节课」也告诉客户端，
       // 但**不发密钥** —— 「老师点了立即上课才能进」那道闸不动。
+      //
+      // ⭐ 画布课堂走另一支：**只回 null 与一句话**（客户端契约的形状）——
+      //    classroom:null / classrooms:[] / upcoming:null / reason:CLASSROOM_MODE_MISMATCH，
+      //    并且**不带 gateway/presets/sends**（客户端拿不到密钥就开不了环境，这是服务端兜底）。
+      if (entry.reason === 'CLASSROOM_MODE_MISMATCH') {
+        return {
+          classroom: null,
+          classrooms: [],
+          upcoming: null,
+          reason: 'CLASSROOM_MODE_MISMATCH',
+          message: '当前是画布课堂，请在学生端进入画布课堂',
+        };
+      }
       const pending = resolvePendingClassroom(auth.user.id);
       const pendingInfo = pending ? (classroomContext(pending.id) || {}) : null;
       return {
@@ -264,7 +307,7 @@ export async function handleStudentRuntime(ctx) {
 
   // 我这个创作环境里现在有哪些东西可以当作品交（读工作区；不改动任何文件）
   if (part === '/deliverables' && method === 'GET') {
-    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可看');
+    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可看', '当前是画布课堂，没有 VibeCoding 创作环境可看');
     return listStudentDeliverables({
       sessionId: classroom.id, studentId: auth.user.id, orgId, lessonId: classroom.lesson_id || null,
     });
@@ -272,7 +315,7 @@ export async function handleStudentRuntime(ctx) {
 
   // 交作品：把选中的那份取回来，按现有作品链路落库（广场/发布/机构查看全都读这张表）
   if (part === '/submit' && method === 'POST') {
-    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品');
+    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
     const scope = { sessionId: classroom.id, studentId: auth.user.id, orgId, lessonId: classroom.lesson_id || null };
     // 与工作台那条路同一条规矩：提交即确认版权与展示授权，平台之后才能发到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
@@ -291,7 +334,7 @@ export async function handleStudentRuntime(ctx) {
   // ⚠️ 二进制用 base64 装在 JSON 里：body 上限是 `maxUploadBytes() + 1MB`（见 index.js），
   //    默认 25MB 文件 → 约 33MB 传输量，够学生交 PPT；超了会在这里明确报错而不是静默截断。
   if (part === '/submit-upload' && method === 'POST') {
-    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品');
+    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }

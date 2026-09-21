@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { ensureClassroom } from './lib/classroomFixture.mjs';
+import { ensureClassroom, openDb } from './lib/classroomFixture.mjs';
 
 const root = process.cwd();
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-kids-p119-upload-'));
@@ -34,6 +34,8 @@ const baseEnv = {
   DEPLOYMENT_MODE: 'development',
   AI_PROVIDER: 'local-mock',
   AI_PROVIDER_API_KEY: '',
+  // 签运行时网关密钥要它（原来这条守卫没走 client-context，所以没配也不影响；现在要下发/验收密钥）
+  RUNTIME_GATEWAY_SECRET: 'p119-guard-secret',
   PORT: String(PORT),
 };
 
@@ -60,6 +62,10 @@ ensureClassroom(dbPath);
 {
   const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
   db.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING'").run();
+  // ⚠️ 课堂的 delivery_mode 也要跟着改：夹具是**按当时的课时类型**建课堂的（种子里都是画布课），
+  //    只改课时不改课堂的话，这间课堂仍然是 CANVAS —— 而运行时接口从 2026-09-21 起只看 VIBECODING 课堂
+  //    （它的门禁就该这么严），于是这个守卫自己会被自己的门禁挡住。
+  db.prepare("UPDATE class_sessions SET delivery_mode='VIBECODING'").run();
   db.close();
 }
 
@@ -168,6 +174,89 @@ try {
     const result = await bad({ files: [{ name: 'index.html', content: beyond }] });
     assert.equal(result.error?.code, 'PAYLOAD_TOO_LARGE', JSON.stringify(result).slice(0, 200));
   });
+  /* ── 客户端运行时**只看 VIBECODING 课堂**（2026-09-21，客户端项目报的）────────────
+     平台建课堂时就写好了 `class_sessions.delivery_mode`（画布课 CANVAS / 客户端课 VIBECODING），
+     但运行时接口那三个解析器原来**都没筛它** → 画布课堂也会被当成"你现在能进的课"下发：
+     `classroom` 有值、网关密钥照发，客户端看到 `classroom != null` 就打开 VibeCoding 环境
+     （它拿不到 deliveryMode，自己判断不了）。口径：这道门禁在**服务端**，
+     客户端只执行"平台下发的可进入结论"。 */
+  {
+    const db = openDb(dbPath);
+    const studentId = db.prepare('SELECT id FROM users WHERE login=?').get(enrolled.login).id;
+    const mine = db.prepare(
+      `SELECT session.id FROM class_sessions session
+         JOIN session_students part ON part.session_id = session.id
+        WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'`,
+    ).all(studentId);
+    assert.ok(mine.length >= 2, `夹具应给这个学生多节 ACTIVE 课堂（现在 ${mine.length} 节）`);
+    const setModes = (modeOf) => {
+      const statement = db.prepare('UPDATE class_sessions SET delivery_mode=? WHERE id=?');
+      for (const item of mine) statement.run(modeOf(item), item.id);
+    };
+    const context = (sessionId = '') => api(`/api/student/runtime/client-context${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`, { token });
+    const uploadWork = (patch) => upload({ name: 'index.html', title: '课堂类型门禁', copyrightConfirmed: true, files: [{ name: 'index.html', content: html }], ...patch });
+
+    // ① 全是画布课堂 → classroom 必须为 null、**不许发网关密钥**、reason 说清是类型不对
+    setModes(() => 'CANVAS');
+    const canvasOnly = (await context()).data;
+    await check('画布课堂：client-context 的 classroom 必须是 null', async () => {
+      assert.equal(canvasOnly.classroom, null, JSON.stringify(canvasOnly).slice(0, 200));
+    });
+    await check('画布课堂：reason=CLASSROOM_MODE_MISMATCH + 那句话（客户端直接显示 message）', async () => {
+      assert.equal(canvasOnly.reason, 'CLASSROOM_MODE_MISMATCH', String(canvasOnly.reason));
+      assert.equal(canvasOnly.message, '当前是画布课堂，请在学生端进入画布课堂');
+      assert.deepEqual(canvasOnly.classrooms, []);
+      assert.equal(canvasOnly.upcoming, null);
+    });
+    await check('画布课堂：绝不出现 gateway（密钥/地址）、presets、sends', async () => {
+      const text = JSON.stringify(canvasOnly);
+      assert.equal(canvasOnly.gateway, undefined, `响应里出现了 gateway：${text.slice(0, 200)}`);
+      assert.equal(canvasOnly.presets, undefined);
+      assert.equal(canvasOnly.sends, undefined);
+      assert.ok(!text.includes('baseUrl') && !text.includes('"key"'), `画布课堂的响应里不许有网关地址/密钥：${text.slice(0, 200)}`);
+    });
+    await check('画布课堂：/status 也不认它（这条路的"能进哪节课"同样只看 VIBECODING）', async () => {
+      // ⚠️ 前面那两条会往服务端灌 17MB / 30MB 的包（测上限），紧接着的请求偶发在**连接层**失败
+      //    （Windows 上实测 "fetch failed"，不是业务错误）—— 重试一次只针对这种传输层抖动。
+      let status;
+      try { status = (await api('/api/student/runtime/status', { token })).data; }
+      catch { await sleep(500); status = (await api('/api/student/runtime/status', { token })).data; }
+      assert.equal(status.classroom, null, JSON.stringify(status).slice(0, 200));
+    });
+    await check('画布课堂：交作品被挡（RUNTIME_NO_ACTIVE_CLASSROOM + 中文原因）', async () => {
+      const result = (await uploadWork({})).data;
+      assert.equal(result.error?.code, 'RUNTIME_NO_ACTIVE_CLASSROOM', JSON.stringify(result).slice(0, 200));
+      assert.match(String(result.error?.message || ''), /当前是画布课堂，不能提交 VibeCoding 作品/);
+    });
+
+    // ② 全是 VIBECODING 课堂 → 照常下发（客户端仍能进）
+    setModes(() => 'VIBECODING');
+    const vibeOnly = (await context()).data;
+    await check('VIBECODING 课堂：classroom 正常返回 + 网关密钥正常下发', async () => {
+      assert.ok(vibeOnly.classroom?.id, JSON.stringify(vibeOnly).slice(0, 200));
+      assert.ok(String(vibeOnly.gateway?.key || '').length > 0, 'VIBECODING 课堂没下发密钥');
+      assert.ok(String(vibeOnly.gateway?.baseUrl || '').length > 0, 'VIBECODING 课堂没下发网关地址');
+    });
+
+    // ③ 两种都在 → 候选里只放 VIBECODING；**点名画布那节要明说，不许静默换课**
+    const [first, ...rest] = mine;
+    setModes((item) => (item.id === first.id ? 'VIBECODING' : 'CANVAS'));
+    const mixed = (await context()).data;
+    await check('两种课堂都在：候选里只放 VIBECODING', async () => {
+      assert.equal(mixed.classroom?.id, first.id, JSON.stringify(mixed.classroom));
+      assert.equal(mixed.classrooms.length, 1, `候选里应只有 VIBECODING：${JSON.stringify(mixed.classrooms.map((item) => item.id))}`);
+    });
+    await check('两种课堂都在：点名画布那节 → 明说类型不对，**不换成另一节**', async () => {
+      const asked = (await context(rest[0].id)).data;
+      assert.equal(asked.classroom, null, `不许静默换课：${JSON.stringify(asked.classroom)}`);
+      assert.equal(asked.reason, 'CLASSROOM_MODE_MISMATCH');
+      assert.ok(!JSON.stringify(asked).includes('gateway'), '点名画布课堂时也不许发密钥');
+      const result = (await uploadWork({ sessionId: rest[0].id })).data;
+      assert.equal(result.error?.code, 'RUNTIME_NO_ACTIVE_CLASSROOM', JSON.stringify(result).slice(0, 200));
+    });
+    db.close();
+  }
+
 } catch (error) {
   console.error(serverLog.slice(-1500));
   throw error;
