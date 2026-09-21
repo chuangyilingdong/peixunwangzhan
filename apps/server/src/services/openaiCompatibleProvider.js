@@ -29,7 +29,9 @@ const MEDIA_UPLOAD_PATHS = Object.freeze({
   'api.seedance.nz': '/v1/files/upload',
 });
 
-function defaultMediaUploadPath(endpoint) {
+// 导出是给**诊断/验收脚本**用的（deploy/production/live-ai-media-check.mjs 要按同一条规则
+// 拼出素材暂存地址，别在脚本里抄一份——抄一份就会漂）。
+export function defaultMediaUploadPath(endpoint) {
   try { return MEDIA_UPLOAD_PATHS[new URL(normalizeEndpoint(endpoint)).hostname.toLowerCase()] || ''; } catch { return ''; }
 }
 
