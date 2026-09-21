@@ -164,14 +164,18 @@
 .learning-node__generation-state.is-error { color: #ffb4b4; border-color: rgb(255 107 107 / 35%); background: rgb(255 107 107 / 12%); }
 .learning-node__text-result { max-height: 160px; padding: 9px 11px; overflow: auto; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); color: var(--cv-text-dim); background: var(--cv-surface-2); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 /* 2026-09-18 晚用户口径：生成出来的文字要**能选中复制**，并在右上角给一个复制按钮。
-   画布整体是拖拽面（react-flow 节点里默认选不中文字），所以这里显式打开 user-select；
-   右侧 padding 给复制按钮让位，免得按钮压住第一行文字。
-   ⚠️ 那条 `margin: 0 12px` 必须**挂在 wrapper 上**（不是结果块上）：复制按钮是按 wrapper 绝对定位的，
-   边距留在结果块上会让按钮偏出盒子右边（第一版就那样 —— 用户报「复制按钮位置有问题」，
-   它会压住结果块的边框和滚动条）。外边距归一处置，按钮与盒子才对得齐。 */
-.learning-node__text-wrap { position: relative; margin: 0 12px 10px; }
-.learning-node__text-result { margin: 0; user-select: text; -webkit-user-select: text; cursor: text; padding-right: 62px; }
-.learning-node__copy { position: absolute; top: 6px; right: 8px; z-index: 2; padding: 3px 10px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-dim); background: rgb(21 21 21 / 92%); font-size: 11px; font-weight: 700; cursor: pointer; transition: color .15s ease, border-color .15s ease; }
+   画布整体是拖拽面（react-flow 节点里默认选不中文字），所以这里显式打开 user-select。
+   ⚠️ 复制按钮的位置改过两版，别再动回去（用户 2026-09-21 复验：「还是错位的，应该放在右上角」）：
+   · 第一版：按钮绝对定位于结果块 → 压住结果块的边框；
+   · 第二版：把 margin 归到 wrapper、按钮仍绝对定位于结果块 → 压住**滚动条**，文字一长就顶到一起；
+   · 现在：按钮不在这里了 —— 挂在**卡片标题行**最右（`NodeFrame` 的 `headingExtra`，
+     样式见下面的 `.learning-node__heading .learning-node__copy`），所以右边距不用再给它让位。 */
+.learning-node__text-wrap { margin: 0 12px 10px; }
+.learning-node__text-result { margin: 0; user-select: text; -webkit-user-select: text; cursor: text; }
+/* 卡片右上角的「复制」：标题行的最后一个 flex 项，靠 `margin-left:auto` 贴右边。
+   `flex:0 0 auto` + 标题自己的省略号，保证长标题不会把按钮挤出去或压变形。 */
+.learning-node__heading .learning-node__copy { flex: 0 0 auto; margin-left: auto; }
+.learning-node__copy { padding: 3px 10px; border: 1px solid var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-dim); background: rgb(21 21 21 / 92%); font-size: 11px; font-weight: 700; cursor: pointer; transition: color .15s ease, border-color .15s ease; }
 .learning-node__copy:hover { color: var(--cv-text); border-color: var(--cv-text-dim); }
 
 /* 音频节点可能同时开放音乐/播客/配音，生成按钮并排显示 */

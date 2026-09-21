@@ -434,7 +434,10 @@ function NodePort({ side }) {
   </Handle>;
 }
 
-function NodeFrame({ icon, tone, title, children, selected, aspectRatio = '', variant = 'card', processing = false, onRename = null, renameDisabled = false }) {
+// `headingExtra`：标题行最右侧的位置（`margin-left:auto`），给「复制」这类**卡片级**的小按钮用。
+// ⚠️ 2026-09-21 用户第二次报「复制按钮还是错位的，应该放在右上角」：上一版把它绝对定位在**结果块**的
+//    右上角，于是它压着结果块的边框与滚动条（长文本一滚，按钮还压住文字）。卡片右上角就是这一行。
+function NodeFrame({ icon, tone, title, children, selected, aspectRatio = '', variant = 'card', processing = false, onRename = null, renameDisabled = false, headingExtra = null }) {
   const actions = useContext(CanvasActionsContext);
   const readOnly = Boolean(actions?.readOnly);
   // 标题默认是纯文本、双击才变输入框：单击就能编辑的话，学生想拖卡片往往点进输入框里，
@@ -480,6 +483,7 @@ function NodeFrame({ icon, tone, title, children, selected, aspectRatio = '', va
       <div className="learning-node__heading">
         <span>{icon}</span>
         {titleNode}
+        {headingExtra}
       </div>
       {children}
     </div>
@@ -584,6 +588,8 @@ function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, reference
 }
 
 // 一键复制（用户口径 2026-09-18 晚：生成出来的文字要能复制，且右上角给一个复制按钮）。
+// ⚠️ 2026-09-21 用户复验：「还是错位的，应该放在右上角」—— 挂在**卡片标题行**的最右侧（见 NodeFrame
+//    的 headingExtra），不是结果块的右上角（那样会压着结果块的边框与滚动条）。
 // 优先用剪贴板 API（生产是 HTTPS、本地 localhost 都算安全上下文）；被拒或老浏览器退回
 // textarea + execCommand —— 别让按钮点了没反应。复制成功后按钮上自己变「已复制」。
 function CopyTextButton({ text, onCopied }) {
@@ -601,20 +607,20 @@ function CopyTextButton({ text, onCopied }) {
       setTimeout(() => setDone(false), 1600);
     } catch { setDone(false); }
   }
-  return <button type="button" className="learning-node__copy" onClick={copy} aria-label={done ? '已复制' : '复制文字'}>{done ? '已复制' : '复制'}</button>;
+  // `nodrag`：按钮现在挂在**标题行**里（原来是挂在结果块的 nodrag 包裹层里），不带它按下去会被当成拖框体。
+  return <button type="button" className="learning-node__copy nodrag" onClick={copy} aria-label={done ? '已复制' : '复制文字'}>{done ? '已复制' : '复制'}</button>;
 }
 
 // 文字框体：卡片只负责展示（标题 + 生成结果），提示词与生成按钮都在画布底部面板里。
 // ⚠️ 2026-09-18 晚用户口径：生成结果**要能选中里面的文字复制**，并在右上角给一键复制按钮。
-// 画布整体是拖拽面（react-flow），默认选不中文字 —— 所以结果块显式 `user-select:text`，
-// 复制按钮挂在结果块右上角并带 `nodrag`（否则按按钮会被当成拖框体）。
+// 画布整体是拖拽面（react-flow），默认选不中文字 —— 所以结果块显式 `user-select:text`；
+// 复制按钮走 `headingExtra` 落在**卡片右上角**（标题行最右），按钮自己带 `nodrag`。
 function PromptNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const generated = String(data.generatedText || '');
-  return <NodeFrame icon="✎" tone="prompt" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✎" tone="prompt" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })} headingExtra={generated ? <CopyTextButton text={generated} /> : null}>
     {generated
       ? <div className="learning-node__text-wrap nodrag">
-        <CopyTextButton text={generated} />
         <div className="learning-node__text-result">{generated}</div>
       </div>
       // 文本框体也要有数字进度（用户 2026-09-21 口径：视频/图片/音乐/文本四类都要）

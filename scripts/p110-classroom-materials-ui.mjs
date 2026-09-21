@@ -166,13 +166,19 @@ check('【反向自检】类型色三处同源（学生端与老师端都从 mat
              ③「图3 文本生成这里的框应该是可以选中里面的文字进行复制的，同时在右上角提供复制按钮一键复制」
    （①「灵动学习页面这里的提示要删除」在 p115 里按真浏览器断言：/learn 页不得再出现那条横幅） */
 check('③ 生成结果能选中复制：结果块显式 user-select:text（画布是拖拽面，默认选不中文字）',
-  /\.learning-node__text-result \{ margin: 0; user-select: text; -webkit-user-select: text; cursor: text; padding-right: 62px; \}/.test(canvasCss));
-check('③ 复制按钮与结果块对得齐：那条 `margin: 0 12px …` 在 **wrapper** 上，不在结果块上（放错了按钮会偏出盒子右边）',
-  /\.learning-node__text-wrap \{ position: relative; margin: 0 12px 10px; \}/.test(canvasCss)
-  && !/\.learning-node__text-result \{ max-height: 160px; margin: 0 12px 10px;/.test(canvasCss));
-check('③ 右上角有「复制」按钮（JSX + CSS 都在；走剪贴板 API，且有 execCommand 兜底）',
-  /<CopyTextButton text=\{generated\} \/>/.test(canvasJsx)
-  && /\.learning-node__copy \{ position: absolute; top: 6px; right: 8px/.test(canvasCss)
+  /\.learning-node__text-result \{ margin: 0; user-select: text; -webkit-user-select: text; cursor: text; \}/.test(canvasCss));
+/* ⚠️ 2026-09-21 用户复验：「复制按钮还是错位的，应该放在右上角」—— 前两版都把它**绝对定位在结果块上**
+   （第一版压住结果块边框，第二版压住滚动条），所以判据改成钉"它属于卡片标题行"：
+   按钮从 `NodeFrame` 的 `headingExtra` 进标题行、由 CSS 靠 `margin-left:auto` 贴到卡片右上角。 */
+check('③ 「复制」在**卡片右上角**：按钮走标题行的 headingExtra，靠 margin-left:auto 贴右',
+  /headingExtra=\{generated \? <CopyTextButton text=\{generated\} \/> : null\}/.test(canvasJsx)
+  && /\{titleNode\}\s*\{headingExtra\}/.test(canvasJsx)
+  && /\.learning-node__heading \.learning-node__copy \{ flex: 0 0 auto; margin-left: auto; \}/.test(canvasCss));
+check('【反向自检】复制按钮不许再回到结果块里（绝对定位 / 给按钮让位的 padding-right 都不许留）',
+  !/\.learning-node__copy \{ position: absolute/.test(canvasCss)
+  && !/padding-right: 62px/.test(canvasCss));
+check('③ 复制按钮本身可用：带 nodrag（挂在标题行里，不带会被当成拖框体）+ 剪贴板 API + execCommand 兜底',
+  /className="learning-node__copy nodrag"/.test(canvasJsx)
   && /navigator\.clipboard\?\.writeText/.test(canvasJsx)
   && /document\.execCommand\('copy'\)/.test(canvasJsx));
 check('② 画布右下角那条提示（.cv-toast）不再一直挂着：非错误 5 秒自动消失、报错留着',
