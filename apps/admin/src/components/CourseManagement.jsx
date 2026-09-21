@@ -28,6 +28,21 @@ const MATERIAL_TYPE_OPTIONS = [
 const LEGACY_MATERIAL_TYPE_LABELS = { NOTE: '文字说明（旧数据）' };
 // 生成框体支持的模态；每个框体单独选模型与参数。
 const GENERATION_BOX_MODALITY_OPTIONS = [['TEXT', 'AI 文字'], ['IMAGE', 'AI 生图'], ['VIDEO', 'AI 生视频'], ['MUSIC', 'AI 音乐']];
+// 生成框体的「生成方式」（用户 2026-09-21 口径：这几个是**完全不一样的概念**，不能靠连线多少去推）。
+// 值就是服务端/上游那套枚举（VIDEO 的 inputModes、IMAGE 的 IMAGE_INPUT_MODES），标签只在这里给一次。
+const GENERATION_MODE_LABELS = {
+  TEXT: '文生视频（纯文本）',
+  FIRST_FRAME: '图生视频（首帧图）',
+  FIRST_LAST_FRAME: '首尾帧（首帧 + 尾帧）',
+  OMNI_REFERENCE: '全能参考（多图 / 多视频 / 多音频）',
+  IMAGE_REFERENCE: '图生图（参考素材）',
+};
+const IMAGE_MODE_LABELS = { TEXT: '文生图（不给参考）', IMAGE_REFERENCE: '图生图（参考素材）' };
+function generationModeOptions(caps, modality) {
+  const labels = String(modality).toUpperCase() === 'IMAGE' ? IMAGE_MODE_LABELS : GENERATION_MODE_LABELS;
+  const supported = Array.isArray(caps?.inputModes) && caps.inputModes.length ? caps.inputModes : Object.keys(labels);
+  return supported.map((value) => [value, labels[value] || value]);
+}
 // 音乐的生成模式：歌词生音乐（学生写词）/ 描述生音乐（平台代写词）
 const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描述生音乐（平台代写词）']];
 const TEACHING_TYPE_OPTIONS = [
@@ -429,6 +444,18 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                   <LessonField label="生成音频" hint={caps.audio ? '' : '当前模型不支持生成音频'}><select value={box.audio === true ? 'YES' : box.audio === false ? 'NO' : ''} disabled={!caps.audio} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audio: event.target.value === '' ? null : event.target.value === 'YES' }))}><option value="">学生自选（课堂里由学生挑）</option><option value="YES">带音频</option><option value="NO">不带音频</option></select></LessonField>
                 </div> : null}
                 {modality !== 'TEXT' && !caps.aspectRatios.length ? <p className="muted">该模型还没有配置可用比例，请先到「模型与算力 → 渠道与模型配置」里填写。</p> : null}
+                {/* 生成方式：这节课的这个框体"要哪种"（文生/图生/首尾帧/全能参考、文生图/图生图）。
+                    ⚠️ 用户 2026-09-21 口径：这几个是**完全不一样的概念**，不能靠"学生连了几条线"去推 ——
+                    连 2 张图也可能要全能参考而不是首尾帧。留空＝不锁（按连线与模型能力自动判断，旧课包就是这样）。
+                    锁了之后：画布按它限制能连什么，服务端按它决定连过来的素材算什么（首帧 / 尾帧 / 参考）。 */}
+                {(modality === 'IMAGE' || modality === 'VIDEO') ? <div className="lesson-field-row">
+                  <LessonField label="生成方式" hint={generationModeOptions(caps, modality).length > 1 ? '决定画布上能连什么、连过来的素材怎么用' : '当前模型只支持这一种'}>
+                    <select value={box.inputMode || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, inputMode: event.target.value }))}>
+                      <option value="">学生自选（按连线内容自动判断）</option>
+                      {generationModeOptions(caps, modality).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                  </LessonField>
+                </div> : null}
                                               </> : <>
                                 {isText
                   ? <LessonField label={material.materialType === 'PROMPT' ? '提示词内容' : '文字内容'}><textarea rows={3} value={snapshot.content || ''} onChange={(event) => updateMaterial(groupIndex, materialIndex, material.uid, { snapshot: { ...snapshot, content: event.target.value } })} /></LessonField>

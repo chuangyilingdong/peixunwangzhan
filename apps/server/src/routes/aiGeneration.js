@@ -3,7 +3,7 @@ import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
-import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, requestTemplateFor } from '../services/modelCapabilities.js';
+import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, inputModeShortLabel, normalizeInputModeValue, requestTemplateFor } from '../services/modelCapabilities.js';
 import { PUBLIC_SITE_URL } from '../config.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { recordAiUsage } from '../services/creditUsage.js';
@@ -123,20 +123,31 @@ export function assertLessonGenerationBox({ context, modality, projectId, boxId,
  * 视频的「输入画面」按模型声明的方式放行：模型支持多种方式时，学生给什么就用什么，
  * 不再二选一强制（MiniMax-H3 这类文生/图生/首尾帧都支持的模型，以前只能二选一）。
  */
-function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [], requestedFrames = false }) {
+function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [], requestedFrames = false, lockedMode = '' }) {
   const list = Array.isArray(modes) && modes.length ? modes : ['TEXT'];
   const hasFirst = Boolean(String(firstFrameUrl || '').trim());
   const hasLast = Boolean(String(lastFrameUrl || '').trim());
   const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
   const acceptsOmni = list.includes('OMNI_REFERENCE');
+  // 框体锁了生成方式时，错误文案要说清"这是**这个框体**要的方式"，而不是"模型不支持"——
+  // 老师配的是一条课堂规则，学生该看到的是"这节课的这个框体要这么用"（用户 2026-09-21 口径）。
+  const lockedLabel = lockedMode ? (inputModeShortLabel(lockedMode, 'VIDEO') || lockedMode) : '';
+  const scope = lockedLabel ? `这个框体设置的是「${lockedLabel}」` : '当前视频模型';
   // 上游 MiniMax V2：图生（首/尾帧）与多素材参考互斥，不能混用。
-  if (references.length && (hasFirst || hasLast || requestedFrames)) throw errors.badRequest('图生视频与全能参考不能混用：请只选一种输入方式', 'GENERATION_MIXED_INPUT_MODES');
-  if (references.length && !acceptsOmni) throw errors.forbidden('当前视频模型不支持多素材参考', 'GENERATION_REFERENCES_UNSUPPORTED');
+  // ⚠️ 锁成全能参考时**不算混用**：客户端把图当首帧传上来的，我们在 generationOptionsFor 里
+  //    已经把它折成参考素材了（否则"锁 omni + 学生连了一张图"会被这条误拦）。
+  const framesCounted = requestedFrames && lockedMode !== 'OMNI_REFERENCE';
+  if (references.length && (hasFirst || hasLast || framesCounted)) throw errors.badRequest(`${scope}，不能同时给首尾帧和参考素材：请只留一种`, 'GENERATION_MIXED_INPUT_MODES');
+  if (references.length && !acceptsOmni) throw errors.forbidden(`${scope}，不接受多素材参考`, 'GENERATION_REFERENCES_UNSUPPORTED');
   if (hasLast && !hasFirst) throw errors.badRequest('尾帧要配合首帧一起用：请先连接一张首帧图', 'GENERATION_LAST_FRAME_WITHOUT_FIRST');
-  if (hasFirst && !acceptsFirstFrame(list)) throw errors.forbidden('当前视频模型不支持图片输入，请去掉连接/预置的画面', 'GENERATION_FIRST_FRAME_UNSUPPORTED');
-  if (hasLast && !acceptsLastFrame(list)) throw errors.forbidden('当前视频模型不支持尾帧，请去掉第二张连线图片', 'GENERATION_LAST_FRAME_UNSUPPORTED');
-  // 模型不支持纯文本（i2v 类）时必须有画面输入，否则上游必然拒绝。
-  if (!hasFirst && !references.length && !list.includes('TEXT')) throw errors.forbidden('当前视频模型需要先连接一张画面（首帧）再生成', 'GENERATION_FIRST_FRAME_REQUIRED');
+  if (hasFirst && !acceptsFirstFrame(list)) throw errors.forbidden(`${scope}，不需要图片输入 —— 请去掉连线`, 'GENERATION_FIRST_FRAME_UNSUPPORTED');
+  if (hasLast && !acceptsLastFrame(list)) throw errors.forbidden(`${scope}，不接受尾帧 —— 请去掉第二张连线图片`, 'GENERATION_LAST_FRAME_UNSUPPORTED');
+  // 不支持纯文本（i2v 类）时必须有画面输入，否则上游必然拒绝。
+  if (!hasFirst && !references.length && !list.includes('TEXT')) {
+    // 锁成全能参考时，"缺的"是参考素材而不是首帧 —— 文案要跟着锁定的方式走
+    const need = acceptsOmni && !acceptsFirstFrame(list) ? '参考素材（图片/视频/音频）' : '画面（首帧）';
+    throw errors.forbidden(`${scope}，需要先连接${need}再生成`, 'GENERATION_FIRST_FRAME_REQUIRED');
+  }
 }
 
 /**
@@ -605,11 +616,20 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     resolution: chosen('resolution', capabilities.resolutions, '清晰度') || capabilities.resolutions[0] || '',
   };
   if (key === 'IMAGE') {
+    // 生图框体也有"生成方式"：文生图（不给参考）/ 图生图（给参考）。
+    // 锁定后就有了硬约束 —— 用户 2026-09-21：「如果视频可以做到，生图框体也同样有文生图和图生图的模式」。
+    const lockedImageMode = normalizeInputModeValue(target?.inputMode);
+    const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
+    if (lockedImageMode === 'TEXT' && references.length) {
+      throw errors.forbidden('这个框体设置的是「文生图」，不要连参考图 —— 请去掉连线再生成', 'GENERATION_REFERENCES_UNSUPPORTED');
+    }
+    if (lockedImageMode === 'IMAGE_REFERENCE' && !references.length) {
+      throw errors.forbidden('这个框体设置的是「图生图」，请先连一张参考图再生成', 'GENERATION_REFERENCE_REQUIRED');
+    }
     // 图片参考：学生把素材连到生图框体，就是「照这张图改」的意思。
     // ⚠️ 这里以前**根本没设过** options.referenceAssets（只有 VIDEO 分支设）——
     // 于是前端就算把连线传上来，也会在这一层被吃掉（2026-09-17 用户报「引用没有真实生效」的三层之一）。
     // 承载它的位置由渠道模板决定（默认模板用 {{referenceImageUrls}} → 顶层 images）。
-    const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
     if (references.length) {
       const template = requestTemplateFor(
         Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null,
@@ -636,13 +656,30 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     // 含音频：框体定了就按框体；框体没定（null）按学生选；模型不支持音频时一律不带。
     const lockedAudio = target?.audio;
     options.audio = (lockedAudio === true || lockedAudio === false ? lockedAudio : studentOptions?.audio === true) && capabilities.audio === true;
-    options.inputModes = Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT'];
+    // 生成方式：框体锁了就用锁的那种（**这节课要的方式**），没锁才按模型声明自由发挥。
+    // ⚠️ 用户 2026-09-21 的口径：「文生视频/图生视频/首尾帧/全能参考是**完全不一样的概念**」——
+    //    连 2 张图不等于就是首尾帧：锁成全能参考时，**1 张图也走参考**（不是首帧）。
+    //    所以这里把 options.inputModes 收成**一种**，下游（分支、预检、模板选择）全部跟着它走 ——
+    //    判断只有一处，不会再出现"客户端按一种、服务端按另一种"。
+    const lockedMode = normalizeInputModeValue(target?.inputMode);
+    options.inputModes = lockedMode && (Array.isArray(capabilities.inputModes) ? capabilities.inputModes : []).includes(lockedMode)
+      ? [lockedMode]
+      : (Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT']);
+    options.lockedInputMode = lockedMode || '';
     const references = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url);
     const presetAsset = String(target?.assetUrl || '').trim();
-    if (options.inputModes.includes('OMNI_REFERENCE') && (references.length || presetAsset)) {
+    // 锁成「全能参考」时，**锁定的方式赢过客户端的推断**：连过来的东西一律当参考发，
+    // 哪怕只有一张图、哪怕客户端把它当首帧传上来的 —— 这正是用户要的"连 2 张图也可能是参考、不是首尾帧"。
+    // ⚠️ 只对**框体锁了 omni** 的情形生效：模型自己只声明 omni（而框体没锁）时维持原行为
+    //    （"能当帧就当帧"，p11 场景 5.7 正面钉着）。
+    const forceOmni = String(target?.inputMode || '').trim().toUpperCase() === 'OMNI_REFERENCE';
+    if ((options.inputModes.includes('OMNI_REFERENCE') && (references.length || presetAsset)) || forceOmni) {
       // 全能参考：这些素材当参考发，不当首/尾帧（上游不允许混用）；框体预置素材也算一张图片参考。
       const presetResolved = resolvableAssetUrl(presetAsset);
-      const omniReferences = references.length ? references : (presetResolved ? [{ type: 'IMAGE', url: presetResolved }] : []);
+      const frameReferences = [String(firstFrameUrl || '').trim(), String(lastFrameUrl || '').trim()]
+        .filter(Boolean).map((url) => ({ type: 'IMAGE', url }));
+      const omniReferences = references.length ? references
+        : (frameReferences.length ? frameReferences : (presetResolved ? [{ type: 'IMAGE', url: presetResolved }] : []));
       // ⚠️ 与图片那条**同一个口径**：模板里没有能放参考的位置 → 上游一张图都收不到。
       //    静默丢掉的结果是「出来一段与参考无关的视频」，比报错糟得多 —— 用户 2026-09-21 撞的就是它
       //    （连了清明上河图当参考，出来的视频跟它毫无关系；根因是默认视频模板里没有 {{referenceItems}}）。
@@ -650,7 +687,7 @@ export function generationOptionsFor({ context, modality, policy, selection, box
       if (!/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(referencesTemplate || {}))) {
         throw errors.forbidden('当前视频模型不能带参考素材：请去掉连线，或让老师换一个支持参考的模型', 'GENERATION_REFERENCES_UNSUPPORTED');
       }
-      options.referenceAssets = omniReferences;
+      if (omniReferences.length) options.referenceAssets = omniReferences;
     } else {
       // 框体挂了预置素材时，它就是首帧（学生不必自己再连一张）。
       const presetFirstFrame = acceptsFirstFrame(options.inputModes) ? resolvableAssetUrl(presetAsset) : '';
@@ -783,7 +820,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   assertGenerationPreflight({
     user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id,
     boxId: box?.id || '', model: provider.model,
-    frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
+    frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame), lockedMode: options.lockedInputMode || '' },
   });
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
   try {
@@ -864,7 +901,7 @@ async function processAsyncGeneration(item) {
     });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId, model: provider.model,
-      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
+      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame), lockedMode: options.lockedInputMode || '' },
     });
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
@@ -1120,7 +1157,7 @@ export async function handleAiGeneration(ctx) {
     });
     assertGenerationPreflight({
       user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id, boxId: box?.id || '', model: provider.model,
-      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame) },
+      frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame), lockedMode: options.lockedInputMode || '' },
     });
     const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
     enqueuePersistedJob(jobId);

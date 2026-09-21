@@ -254,6 +254,47 @@ try {
   check('别的上游/别代模型（比例在 metadata 里、模板没有顶层 ratio）仍用固定比例，不替它做决定',
     otherShape.aspectRatio === '16:9', JSON.stringify(otherShape));
 
+  /* ── 场景 8：课包锁定的「生成方式」（用户 2026-09-21：文生/图生/首尾帧/全能参考是完全不一样的概念，
+     不能靠连了几条线去推 —— 连 2 张图也可能要全能参考）───────────────────────────────
+     锁定的方式必须：① 决定请求里连过来的素材算什么（首帧/尾帧/参考）② 传给上游的 roles 要对得上
+     ③ 与锁定方式冲突的连线当场报错（画布上也会挡，这里是服务端兜底）。 */
+  const lockBox = (inputMode) => ({ id: 'box-lock', title: '锁定方式的框体', modality: 'VIDEO', model: 'MiniMax-H3', aspectRatio: '', resolution: '', durationSeconds: null, audio: null, inputMode });
+  const lockOptions = (extra) => generationOptionsFor({ context: {}, modality: 'VIDEO', policy: ratioPolicy, selection: ratioSelection, box: lockBox(extra.locked), ...extra });
+  // ① 锁成全能参考 + 学生连了 2 张图（客户端会按首帧/尾帧传上来）→ 仍然全部当**参考**发
+  const lockedOmni = lockOptions({ locked: 'OMNI_REFERENCE', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' });
+  check('锁成「全能参考」时，连过来的图一律当参考发（不是首帧/尾帧）',
+    !lockedOmni.firstFrameUrl && !lockedOmni.lastFrameUrl
+    && JSON.stringify(lockedOmni.referenceAssets) === JSON.stringify([{ type: 'IMAGE', url: 'https://example.test/a.jpg' }, { type: 'IMAGE', url: 'https://example.test/b.jpg' }]),
+    JSON.stringify(lockedOmni));
+  // ② 没锁的框体维持原样：连 2 张图仍然是能当帧就当帧（首帧+尾帧）
+  const unlockedFrames = lockOptions({ locked: '', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' });
+  check('没锁的框体维持原行为（连 2 张图 = 首帧+尾帧），别把默认情形一起改了',
+    unlockedFrames.firstFrameUrl === 'https://example.test/a.jpg' && unlockedFrames.lastFrameUrl === 'https://example.test/b.jpg' && !unlockedFrames.referenceAssets,
+    JSON.stringify(unlockedFrames));
+  // ③ 锁成文生视频：不许带画面（客户端已经不给连，这里是兜底）
+  let lockedTextError = null;
+  try { lockOptions({ locked: 'TEXT', firstFrameUrl: 'https://example.test/a.jpg' }); } catch (error) { lockedTextError = error; }
+  check('锁成「文生视频」时连了图 → 当场拒绝（文案说清是这个框体的要求）',
+    lockedTextError?.code === 'GENERATION_FIRST_FRAME_UNSUPPORTED' && /文生视频/.test(String(lockedTextError?.message || '')),
+    String(lockedTextError?.message || '(没报错)'));
+  // ④ 锁成图生视频：第二张图（尾帧）不允许
+  let lockedI2vError = null;
+  try { lockOptions({ locked: 'FIRST_FRAME', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' }); } catch (error) { lockedI2vError = error; }
+  check('锁成「图生视频」时给两张图 → 当场拒绝（图生视频只连 1 张）',
+    lockedI2vError?.code === 'GENERATION_LAST_FRAME_UNSUPPORTED' && /图生视频/.test(String(lockedI2vError?.message || '')),
+    String(lockedI2vError?.message || '(没报错)'));
+  // ⑤ 锁成首尾帧：只有首帧也能生成（模型支持首尾帧，尾帧可选）
+  const lockedFirstLast = lockOptions({ locked: 'FIRST_LAST_FRAME', firstFrameUrl: 'https://example.test/a.jpg' });
+  check('锁成「首尾帧」时只连 1 张也能生成（尾帧可选），首帧照常发',
+    lockedFirstLast.firstFrameUrl === 'https://example.test/a.jpg' && lockedFirstLast.inputModes?.length === 1 && lockedFirstLast.inputModes[0] === 'FIRST_LAST_FRAME',
+    JSON.stringify(lockedFirstLast));
+  // ⑥ 锁定的方式要能被上游看见：请求体里角色必须与锁定方式一致（首帧 role / 参考 role）
+  const lockedOmniTemplate = requestTemplateFor(ratioChannel, 'VIDEO', { model: 'MiniMax-H3', withReferences: true });
+  const lockedOmniBody = renderRequestTemplate(lockedOmniTemplate, { model: 'MiniMax-H3', prompt: '动起来', durationSeconds: 5, resolution: '480P', aspectRatio: '16:9', referenceAssets: lockedOmni.referenceAssets });
+  check('锁成全能参考时，请求体里是 reference_image（不是 first_frame）—— 上游据此才走参考模式',
+    lockedOmniBody.content?.some((item) => item.role === 'reference_image') && !lockedOmniBody.content?.some((item) => item.role === 'first_frame'),
+    JSON.stringify(lockedOmniBody.content));
+
   if (failures.length) throw new Error(failures.join('; '));
   console.log('P11 video first-frame guard passed');
 } finally {

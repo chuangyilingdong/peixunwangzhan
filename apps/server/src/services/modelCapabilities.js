@@ -9,14 +9,34 @@ const MAX_LIST = 24;
 //   FIRST_FRAME        图生视频（可以给一张首帧图）
 //   FIRST_LAST_FRAME   首尾帧参考（首帧 + 尾帧）
 //   OMNI_REFERENCE     全能参考（多张图片 / 多段视频 / 多段音频混合参考）
-export const INPUT_MODES = Object.freeze(['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE']);
+//   IMAGE_REFERENCE    图生图（生图框体用：把连过来的素材当"照这张改"的参考）
+export const INPUT_MODES = Object.freeze(['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE', 'IMAGE_REFERENCE']);
 
 export const INPUT_MODE_LABELS = Object.freeze({
   TEXT: '文生视频（纯文本）',
   FIRST_FRAME: '图生视频（首帧图）',
   FIRST_LAST_FRAME: '首尾帧参考（首帧+尾帧）',
   OMNI_REFERENCE: '全能参考（多图/多视频/多音频）',
+  IMAGE_REFERENCE: '图生图（参考素材）',
 });
+
+// 生图框体只有两种"生成方式"：文生图（不给参考）/ 图生图（给参考）。视频那四个不适用于图片。
+export const IMAGE_INPUT_MODES = Object.freeze(['TEXT', 'IMAGE_REFERENCE']);
+// 给老师/学生看的中文短标签（面板那一行显示用）
+export const INPUT_MODE_SHORT_LABELS = Object.freeze({
+  TEXT: '文生视频',
+  FIRST_FRAME: '图生视频',
+  FIRST_LAST_FRAME: '首尾帧',
+  OMNI_REFERENCE: '全能参考',
+  IMAGE_REFERENCE: '图生图',
+});
+export function inputModeShortLabel(mode, modality = 'VIDEO') {
+  const value = normalizeInputModeValue(mode);
+  if (String(modality).toUpperCase() === 'IMAGE') {
+    return value === 'IMAGE_REFERENCE' ? '图生图' : (value === 'TEXT' ? '文生图' : '');
+  }
+  return INPUT_MODE_SHORT_LABELS[value] || '';
+}
 
 // 旧写法（含 2026-09-10 上线的三态版本）统一映射到新枚举。
 const INPUT_MODE_ALIASES = Object.freeze({
@@ -45,7 +65,7 @@ export const DEFAULT_MUSIC_STYLE = '适合儿童的中文流行歌曲，旋律�
 
 export const MODALITY_CAPABILITY_DEFAULTS = Object.freeze({
   // 默认值刻意保持与改造前硬编码一致（图片 1k、视频 480p / 5 秒），避免升级即改变线上请求。
-  IMAGE: Object.freeze({ aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1k', '2k', '4k'], durations: [], audio: false }),
+  IMAGE: Object.freeze({ aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1k', '2k', '4k'], durations: [], audio: false, inputModes: IMAGE_INPUT_MODES }),
   VIDEO: Object.freeze({ aspectRatios: ['16:9', '9:16', '1:1'], resolutions: ['480p', '720p', '1080p', '2k', '4k'], durations: [5, 10], audio: false }),
   MUSIC: Object.freeze({ modes: ['LYRICS', 'DESCRIPTION'] }),
 });

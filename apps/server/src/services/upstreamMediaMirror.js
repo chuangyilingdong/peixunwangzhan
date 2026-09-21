@@ -21,6 +21,7 @@
  */
 import { AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
+import { fitMediaToRatio, parseRatio } from './mediaFit.js';
 
 // 上游给的 URL 活 24h，留 4h 余量；到点重新上传。
 export const MIRROR_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
@@ -80,22 +81,25 @@ function mediaFileName(contentType, sourceUrl) {
 }
 
 /** 把一张素材传到上游，返回上游自己的 URL（带缓存）。 */
-export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null } = {}) {
+export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, fitRatioValue = '' } = {}) {
   const source = String(url || '').trim();
   const doFetch = fetchImpl || globalThis.fetch;
   if (!source || !uploadUrl || typeof doFetch !== 'function') return source;
-  const cached = cache.get(source);
+  // 缓存键要带上"要不要裁"：同一张图在两种情形下得到的上游 URL 不同（裁过的 / 没裁的），
+  // 混用会让学生拿到比例不对的那一份。
+  const cacheKey = fitRatioValue ? `${source}#fit=${fitRatioValue}` : source;
+  const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.at < MIRROR_CACHE_TTL_MS) return cached.url;
   // 同一张图被多处引用（首帧 + 参考）时**并行**过来：等同一份上传，别传两遍
   // （上游限流是每令牌每分钟 10 次，一次生成里重复传同一张很浪费）。
-  const pending = inflight.get(source);
+  const pending = inflight.get(cacheKey);
   if (pending) return pending;
-  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch });
-  inflight.set(source, task);
-  try { return await task; } finally { inflight.delete(source); }
+  const task = uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue });
+  inflight.set(cacheKey, task);
+  try { return await task; } finally { inflight.delete(cacheKey); }
 }
 
-async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch }) {
+async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl: doFetch, fitRatioValue = '' }) {
   // ① 取源文件（我们自己的站点，取的是同机房的一次回环请求）
   let bytes;
   let contentType = '';
@@ -123,6 +127,17 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
     throw mirrorFailure(`读取素材失败（${String(error?.message || error).slice(0, 120)}）`);
   } finally { clearTimeout(timer); }
   if (!bytes?.length) throw mirrorFailure('素材是空的');
+
+  // ①b 需要时把画面裁成目标比例（关键帧 + 固定比例）：上游会**执行**固定比例，
+  //     给它一张比例不符的图，它就把图硬拉成那个比例（用户 2026-09-21 报的「扁的画面」）。
+  //     裁在自己这边、发一张已经合比例的图，它就没什么可拉的了。失败一律回退成原图（不卡生成）。
+  if (fitRatioValue) {
+    const fitted = await fitMediaToRatio(Buffer.from(bytes), fitRatioValue, { source });
+    if (fitted.changed) {
+      bytes = new Uint8Array(fitted.bytes);
+      contentType = fitted.contentType;
+    }
+  }
 
   // ② 传给上游
   try {
@@ -162,20 +177,29 @@ function upstreamDetail(payload) {
 }
 
 /**
- * 把生成选项里「指向我们自己站点」的素材逐个镜像掉，返回一份**新的** options。
- * 覆盖：首帧 / 尾帧 / 参考素材（图片、视频、音频一视同仁）。
- * 没配上传地址、或没有任何需要镜像的素材时原样返回（不改形状）。
+ * 把生成选项里的素材"准备好再交给上游"，返回一份**新的** options。
+ *  · 指向我们自己域名的素材 → 先传到上游的素材暂存接口，换成上游自己的 URL（对方读不到我们的域名）
+ *  · 首帧/尾帧 + 固定比例 → 顺手**裁成那个比例**再发（上游会把比例不符的首帧硬拉变扁）
+ *  · 参考素材只镜像、**不裁**（参考是"启发素材"，裁它等于改内容；而且它的比例不决定输出比例）
+ * 没配上传地址、或没有任何要处理的素材时原样返回（不改形状）。
  */
-export async function mirrorSelfHostedMedia(options, { selfOrigins = [], uploadUrl = '', apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null } = {}) {
+export async function mirrorSelfHostedMedia(options, { selfOrigins = [], uploadUrl = '', apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null, frameFitRatio = '' } = {}) {
   const source = options && typeof options === 'object' ? options : {};
   if (!uploadUrl || !Array.isArray(selfOrigins) || !selfOrigins.length) return source;
+  const ratio = parseRatio(frameFitRatio) ? frameFitRatio : '';
+  // 首帧/尾帧：要裁（ratio 有值）时**不管素材在哪家**都得先取回来（上游托管的那张也一样会被拉扁）
+  const prepareFrame = (value, fitRatioValue) => {
+    if (!value) return Promise.resolve(value);
+    if (!fitRatioValue && !isSelfHostedMediaUrl(value, selfOrigins)) return Promise.resolve(value);
+    return mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl, fitRatioValue });
+  };
   const mirror = (value) => (isSelfHostedMediaUrl(value, selfOrigins)
     ? mirrorMediaUrl(value, { uploadUrl, apiKey, timeoutMs, fetchImpl })
     : Promise.resolve(value));
   const next = { ...source };
   const tasks = [];
-  if (source.firstFrameUrl) tasks.push(mirror(source.firstFrameUrl).then((url) => { next.firstFrameUrl = url; }));
-  if (source.lastFrameUrl) tasks.push(mirror(source.lastFrameUrl).then((url) => { next.lastFrameUrl = url; }));
+  if (source.firstFrameUrl) tasks.push(prepareFrame(source.firstFrameUrl, ratio).then((url) => { next.firstFrameUrl = url; }));
+  if (source.lastFrameUrl) tasks.push(prepareFrame(source.lastFrameUrl, ratio).then((url) => { next.lastFrameUrl = url; }));
   if (Array.isArray(source.referenceAssets) && source.referenceAssets.length) {
     next.referenceAssets = [...source.referenceAssets];
     source.referenceAssets.forEach((asset, index) => {

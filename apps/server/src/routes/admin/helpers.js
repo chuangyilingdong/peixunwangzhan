@@ -115,6 +115,9 @@ function normalizeBoxMaterial(material, materialIndex, title) {
     if (Number.isInteger(box.durationSeconds)) boxSnapshot.durationSeconds = box.durationSeconds;
     if (box.audio === true || box.audio === false) boxSnapshot.audio = box.audio;
   }
+  // 本节课的「生成方式」（文生视频/图生视频/首尾帧/全能参考、文生图/图生图）：
+  // 留空＝不锁（按接线与模型能力自选）；锁了就必须让上游与画布都知道（用户 2026-09-21 口径）。
+  if ((box.modality === 'IMAGE' || box.modality === 'VIDEO') && box.inputMode) boxSnapshot.inputMode = box.inputMode;
   // 音乐：记下生成模式（歌词生音乐 / 描述生音乐）
   if (box.modality === 'MUSIC') { boxSnapshot.mode = box.mode; }
   return { ...snapshot, box: boxSnapshot, content: box.prompt };

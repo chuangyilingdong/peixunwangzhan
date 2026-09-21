@@ -144,5 +144,44 @@ check('视频那条的「自动」原样送 auto 上去，由服务端按上游�
   assert.match(source, /aspectRatio: data\.aspectRatio \|\| student\.aspectRatio \|\| autoRatio/);
 });
 
+console.log('⑦ 生成方式（课包锁定）→ 画布上的连线闸门 + 看得见的标签（2026-09-21 用户口径）');
+check('连线闸门按「生成方式」限制：文生视频不给连、图生视频只连 1 张、首尾帧 2 张、全能参考 9/3/3', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /const canConnect = useCallback\(\(connection\) => \{/);
+  assert.match(source, /const mode = String\(target\?\.data\?\.inputMode \|\| ''\)\.toUpperCase\(\)/);
+  assert.match(source, /if \(!mode\) return true;/, '没锁方式的框体必须维持原样（旧课包没配过这个字段）');
+  assert.match(source, /FIRST_FRAME: \{ IMAGE: 1, VIDEO: 0, AUDIO: 0 \}/);
+  assert.match(source, /FIRST_LAST_FRAME: \{ IMAGE: 2, VIDEO: 0, AUDIO: 0 \}/);
+  assert.match(source, /OMNI_REFERENCE: \{ IMAGE: 9, VIDEO: 3, AUDIO: 3 \}/);
+  assert.match(source, /TEXT: \{ IMAGE: 0, VIDEO: 0, AUDIO: 0 \}/, '文生视频的框体不许有连线');
+  assert.match(source, /isValidConnection=\{readOnly \? undefined : canConnect\}/, '闸门要真的挂到 ReactFlow 上');
+});
+check('锁定的生成方式赢过"连了几条线"的推断（连 2 张图也可能要全能参考）', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /const lockedMode = String\(data\.inputMode \|\| ''\)\.toUpperCase\(\)/);
+  assert.match(source, /lockedMode === 'OMNI_REFERENCE' && allRefs\.length > 0/, '锁成全能参考时一张图也要走参考');
+  assert.match(source, /lockedFrames = lockedMode === 'FIRST_FRAME' \|\| lockedMode === 'FIRST_LAST_FRAME'/);
+});
+check('锁成文生视频的面板明说「不用连线」（别留一行"首帧未连接"让人误会）', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /if \(lockedMode === 'TEXT'\) \{/);
+  assert.match(source, /不用连线，直接写提示词/);
+});
+check('生成方式要显示出来：配置胶囊带中文标签、素材面板副标题也带', () => {
+  const canvas = read('packages/canvas/src/index.jsx');
+  assert.match(canvas, /const modeChip = String\(data\.inputModeLabel \|\| ''\)/);
+  assert.match(canvas, /if \(modeChip\) params\.push\(modeChip\)/);
+  const workspace = read('packages/shared/src/canvasWorkspace.jsx');
+  assert.match(workspace, /const modeLabel = box\.inputModeLabel \|\| ''/);
+  assert.match(workspace, /if \(modeLabel\) params\.unshift\(modeLabel\)/);
+  assert.match(workspace, /inputModeLabel: box\.inputModeLabel \|\| ''/, '节点 data 也要带上标签');
+});
+check('标签由服务端算（客户端不抄一份标签表）', () => {
+  const lib = read('apps/server/src/lib.js');
+  assert.match(lib, /box\.inputModeLabel = inputModeShortLabel\(box\.inputMode, modality\)/);
+  const workspace = read('packages/shared/src/canvasWorkspace.jsx');
+  assert.doesNotMatch(workspace, /INPUT_MODE_LABELS|INPUT_MODE_SHORT_LABELS/, '客户端不该有第二份标签表');
+});
+
 if (failures) { console.log(`\n❌ P122 不通过：${failures} 项`); process.exit(1); }
 console.log('\nP122 PASSED：框体删除规则与未生成占位图都成立');

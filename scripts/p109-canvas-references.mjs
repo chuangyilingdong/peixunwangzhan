@@ -207,11 +207,14 @@ check('⑤ 显式模板带不了参考时当场拒绝（不再静默出一段无
 /* ── ③b 客户端「连过来的素材怎么用」的判定（2026-09-21 修的那条语义）────────────
    学生连一张图 + 写「图片动起来」→ 要的是**这张图动起来**（首帧），不是"再画一段像它的"。
    原逻辑只要模型声明了全能参考就一律当参考发 → 出来的画面与参考毫无关系。 */
-check('能当帧就当帧：全是图片、1~2 张、模型支持帧 → 走首帧',
-  /const useFrames = supportsFirstFrame && frameUrls\.length > 0 && frameUrls\.length <= frameCapacity && frameUrls\.length === allRefs\.length/.test(canvas)
+check('没锁生成方式时：能当帧就当帧（全是图片、1~2 张、模型支持帧 → 走首帧）',
+  // 2026-09-21 晚：这条判定多了"课包锁定的生成方式"这一层（锁定赢过推断，见 p122 ⑦）——
+  // 但**没锁**时的默认行为必须还是原来那套，别把默认情形改了。
+  /const useFrames = lockedMode/.test(canvas)
+  && /supportsFirstFrame && frameUrls\.length > 0 && frameUrls\.length <= frameCapacity && frameUrls\.length === allRefs\.length/.test(canvas)
   && /sourceAssetUrl: useFrames \? \(frameUrls\[0\]/.test(canvas));
-check('够不着帧的（多张图 / 视频 / 音频混合）才走全能参考',
-  /const useOmni = !useFrames && omni && allRefs\.length > 0/.test(canvas));
+check('没锁生成方式时：够不着帧的（多张图 / 视频 / 音频混合）才走全能参考',
+  /: \(!useFrames && omni && allRefs\.length > 0\)/.test(canvas));
 check('尾帧判定用 FIRST_LAST_FRAME（原来写的 LAST_FRAME，尾帧永远不亮）',
   /const supportsLastFrame = modes\.includes\('FIRST_LAST_FRAME'\)/.test(canvas) && !/\.includes\('LAST_FRAME'\)/.test(canvas));
 check('面板那行与生成 payload 读**同一处**判定（不会生成一套、显示另一套）',

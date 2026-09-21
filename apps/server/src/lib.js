@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
-import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
+import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
 import { previewKindFor, signPreviewTicket } from './services/materialPreview.js';
 
 const TOKEN_TTL_DAYS = 7;
@@ -683,6 +683,16 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
     }
     // 学生端要按模型能力渲染「自己选参数」的下拉框，可选值随框体一起下发。
     box.paramOptions = { aspectRatios: [...capabilities.aspectRatios], resolutions: [...capabilities.resolutions] };
+    // 生图框体也有"生成方式"：文生图（不给参考）/ 图生图（给参考）。与视频那条同一套字段与语义
+    // （用户 2026-09-21：「如果视频可以做到，生图框体也同样有文生图和图生图的模式」）。
+    if (modality === 'IMAGE') {
+      const imageModes = Array.isArray(capabilities.inputModes) && capabilities.inputModes.length ? capabilities.inputModes : [''];
+      box.inputModes = [...imageModes];
+      const wanted = normalizeInputModeValue(raw.inputMode);
+      box.inputMode = wanted && imageModes.includes(wanted) ? wanted : '';
+      box.inputModeLabel = inputModeShortLabel(box.inputMode, 'IMAGE');
+      box.paramOptions.inputModes = [...imageModes];
+    }
   }
   if (modality === 'MUSIC') {
     // 音乐只有「生成模式」：歌词生音乐（学生直接写词）/ 描述生音乐（平台代写词）。
@@ -711,8 +721,18 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
     // 含音频三态：null＝学生自选，true/false＝平台定了（模型不支持音频时只能是不带音频）。
     box.audio = raw.audio === undefined || raw.audio === null ? null : (raw.audio === true && capabilities.audio === true);
     // 输入画面支持方式（可多选）：只能图生（不支持纯文本）时才要求必须给首帧。
+    // ⚠️ 这是**模型声明支持的**（来自渠道/模型能力），不是本节课选的那种 —— 本节课锁的那种叫
+    //    `inputMode`（单数，见下面）。两人分工：`inputModes` 回答"能不能"，`inputMode` 回答"这节课就要哪种"。
     box.inputModes = Array.isArray(capabilities.inputModes) ? capabilities.inputModes : ['TEXT'];
-    box.requiresFirstFrame = requiresFirstFrameFor(box.inputModes);
+    // 本节课锁定的生成方式（单数；'' = 不锁、按连接与模型自选）。
+    // 用户 2026-09-21 的口径：「文生视频 / 图生视频 / 首尾帧 / 全能参考是**完全不一样的概念**」——
+    // 连几张图**不等于**就是首尾帧（连 2 张也可能要"全能参考"），所以必须由课包显式定，
+    // 不能靠客户端"连了几条线"去推。只能从模型声明支持的方式里挑，挑不中就当没锁。
+    const wantedMode = normalizeInputModeValue(raw.inputMode);
+    box.inputMode = wantedMode && box.inputModes.includes(wantedMode) ? wantedMode : '';
+    box.inputModeLabel = inputModeShortLabel(box.inputMode, modality);
+    // 锁定后"要不要画面"跟着锁定那种走：文生视频不给画面、图生/首尾帧必须给画面、全能参考给素材
+    box.requiresFirstFrame = requiresFirstFrameFor(box.inputMode ? [box.inputMode] : box.inputModes);
     box.paramOptions = { ...(box.paramOptions || {}), durations: [...capabilities.durations], audio: capabilities.audio === true };
   }
   return box;

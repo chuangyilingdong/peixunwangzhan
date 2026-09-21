@@ -541,10 +541,18 @@ function referenceAssetLabels(assets) {
 }
 
 // 视频框体的「首帧 / 尾帧 / 参考素材」行：素材靠连线引进来（学生可从桌面拖文件进来再连线），未连时给明确提示
-function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame }) {
+function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame, lockedMode = '', lockedLabel = '' }) {
   const { updateNode, removeIncomingRef } = useCanvasActions();
   // 悬停右上角的 ×：连过来的删连线，框体自己的预置素材清配置
   const removePreset = () => updateNode(nodeId, { referenceUrl: '' });
+  // 课包锁成「文生视频」：这个框体**不该有线**，明说一句 —— 比留一行"首帧未连接"清楚得多
+  // （连线也会被 isValidConnection 挡住，这里只是让规则可见）。
+  if (lockedMode === 'TEXT') {
+    return <div className="learning-node__ref-row">
+      <span className="learning-node__seg-label">生成方式</span>
+      <span className="learning-node__ref-empty">{lockedLabel || '文生视频'}：不用连线，直接写提示词</span>
+    </div>;
+  }
   if (omni) {
     const named = referenceAssetLabels(referenceAssets);
     // 上限与上游一致（图片 9 / 视频 3 / 音频 3，服务端 `REFERENCE_LIMITS` 也是这套数）——
@@ -823,11 +831,15 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
   const data = node.data || {};
   const slotType = String(data.slotType || node.type || '').toLowerCase();
   const isBox = Boolean(data.boxId);
+  // 锁定了生成方式就把中文标签塞进配置胶囊（'生视频 · 480P · MiniMax-H3 · 首尾帧'）—— 标签由服务端下发。
+  const modeChip = String(data.inputModeLabel || '');
   const configLabel = (() => {
     const kind = slotType === 'image' ? '生图' : slotType === 'video' ? '生视频' : slotType === 'audio' || slotType === 'music' ? '音乐' : slotType === 'text' || slotType === 'prompt' ? '文字' : '';
     if (!kind) return '未配置';
     const params = [data.aspectRatio, data.resolution].filter(Boolean);
     if (data.model) params.push(data.model);
+    // 锁定的生成方式也要看得见（'生视频 · 480P · MiniMax-H3 · 首尾帧'）—— 老师配的就是这条规则
+    if (modeChip) params.push(modeChip);
     if (data.uploaded) return '本地素材';
     return params.length ? `${kind} · ${params.join(' · ')}` : kind;
   })();
@@ -845,13 +857,15 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
         : (data.assetUrl || data.generatedText) ? 'done' : 'empty';
   // 视频框体「连过来的素材怎么用」的**一处**判定（生成 payload 与面板那行提示都读它，别各写一遍）。
   //
-  // 2026-09-21 用户报：「视频生成出来跟参考也不一样啊。完全是两种东西啊」——
-  // 学生把《清明上河图》连到视频框体、写「图片动起来」，出来的却是另一段毫不相干的画面。
-  // 根因**不是**"参考没发出去"（模型模板里 `{{referenceItems}}` 是在的、图也发了），而是**语义错了**：
-  // 只要模型声明了全能参考（MiniMax-H3 声明了），原逻辑就一律把连过来的图当**参考**发 ——
-  // 而"参考"在上游是"启发素材"（画一段像它的），不是"这张图动起来"（首帧）。
-  // 所以：**能当帧就当帧**（全是图片、1~2 张、模型也支持帧）——「图片动起来」要的就是这个；
-  //       够不着的（多张图 / 视频 / 音频混合参考）才走全能参考。
+  // 2026-09-21 用户口径（两条，都很关键）：
+  //  ①「视频生成出来跟参考也不一样啊」→ 原来的根因是**语义错了**：只要模型声明了全能参考，
+  //    就把连过来的图一律当"参考"发 —— 而"参考"在上游是"启发素材"（画一段像它的），
+  //    不是"这张图动起来"（**首帧**）。所以默认**能当帧就当帧**（全是图片、1~2 张、模型也支持帧）。
+  //  ②「文生视频/图生视频、首尾帧、全能参考是**完全不一样的概念**……并不是靠我们连线的多少来决定的。
+  //    有可能连 2 张图片，但是并不需要首尾帧，而是全能参考的模式。」
+  //    → 所以**课包锁定的生成方式赢过推断**：`data.inputMode` 有值就按它走（下面 lockedMode 那几条），
+  //      没锁才用"能当帧就当帧"。
+  //  ③ 锁成文生视频时**根本不该有线**（`useFrames`/`useOmni` 都 false，连线也不让拉 —— 见 isValidConnection）。
   const videoInputPlan = (() => {
     const modes = Array.isArray(data.inputModes) && data.inputModes.length ? data.inputModes : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
     const supportsText = modes.includes('TEXT');
@@ -863,10 +877,19 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
     const frameUrls = getIncomingImageAssetUrls(id);
     const allRefs = getIncomingAssetRefs(id);
     const frameCapacity = supportsLastFrame ? 2 : 1;
-    const useFrames = supportsFirstFrame && frameUrls.length > 0 && frameUrls.length <= frameCapacity && frameUrls.length === allRefs.length;
-    const useOmni = !useFrames && omni && allRefs.length > 0;
+    // 课包锁定的生成方式（'' = 没锁）：锁了就按它决定"连过来的东西算什么"
+    const lockedMode = String(data.inputMode || '').toUpperCase();
+    const lockedFrames = lockedMode === 'FIRST_FRAME' || lockedMode === 'FIRST_LAST_FRAME';
+    const useFrames = lockedMode
+      ? lockedFrames
+      : (supportsFirstFrame && frameUrls.length > 0 && frameUrls.length <= frameCapacity && frameUrls.length === allRefs.length);
+    const useOmni = lockedMode
+      ? lockedMode === 'OMNI_REFERENCE' && allRefs.length > 0
+      : (!useFrames && omni && allRefs.length > 0);
     return {
-      modes, supportsText, supportsFirstFrame, supportsLastFrame, omni, frameUrls, allRefs, useFrames, useOmni,
+      modes, supportsText, supportsFirstFrame, supportsLastFrame, omni, frameUrls, allRefs, useFrames, useOmni, lockedMode,
+      // 锁成文生视频：不该有线（面板要明说"这个框体只写提示词"，连线也被挡在 isValidConnection 里）
+      textOnly: lockedMode === 'TEXT',
       sourceAssetUrl: useFrames ? (frameUrls[0] || String(data.referenceUrl || '')) : '',
       lastFrameAssetUrl: useFrames && supportsLastFrame ? String(frameUrls[1] || '') : '',
       referenceAssets: useOmni ? allRefs : [],
@@ -972,6 +995,8 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
       referenceAssets={videoInputPlan.useOmni ? videoInputPlan.allRefs : []}
       supportsFirstFrame={videoInputPlan.supportsFirstFrame}
       supportsLastFrame={videoInputPlan.supportsLastFrame}
+      lockedMode={videoInputPlan.lockedMode}
+      lockedLabel={modeChip}
     /> : null}
     {/* 生图框体：连过来的素材要**看得见**（缩略图，悬停出大图，右上角 × 断线）。
         ⚠️ 只在真有连线时才渲染这一行：以前它是无条件渲染的，多占 80px、面板一高就压住框体，
@@ -1276,6 +1301,29 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
       .filter(Boolean);
   }, [edges, nodes]);
   const getIncomingImageRefs = useCallback((nodeId) => getIncomingAssetRefs(nodeId).filter((asset) => asset.type === 'IMAGE'), [getIncomingAssetRefs]);
+
+  /**
+   * 连线闸门：按**目标框体锁定的生成方式**限制（用户 2026-09-21 口径：
+   * 「课包的课程选择的是文生视频，那么就无法连线。图生视频就只能连 1 张图片，类似这样的判定要有」）。
+   *
+   * ⚠️ 没锁方式的框体维持原样（只挡自连）——别把默认情形也管死（旧课包没配过这个字段）。
+   * 上限与服务端同一套数（图片 9 / 视频 3 / 音频 3，见 aiGeneration 的 REFERENCE_LIMITS）。
+   */
+  const canConnect = useCallback((connection) => {
+    if (!connection || connection.source === connection.target) return false;
+    const target = (nodes || []).find((node) => node.id === connection.target);
+    const mode = String(target?.data?.inputMode || '').toUpperCase();
+    if (!mode) return true;
+    const limits = { FIRST_FRAME: { IMAGE: 1, VIDEO: 0, AUDIO: 0 }, FIRST_LAST_FRAME: { IMAGE: 2, VIDEO: 0, AUDIO: 0 }, OMNI_REFERENCE: { IMAGE: 9, VIDEO: 3, AUDIO: 3 }, IMAGE_REFERENCE: { IMAGE: 9, VIDEO: 0, AUDIO: 0 }, TEXT: { IMAGE: 0, VIDEO: 0, AUDIO: 0 } };
+    const limit = limits[mode];
+    if (!limit) return true;
+    const source = (nodes || []).find((node) => node.id === connection.source);
+    const kind = NODE_ASSET_KIND[source?.type] || '';
+    // 算上"这次要连的那条"：同类现有条数 + 1 ≤ 上限
+    const existing = getIncomingAssetRefs(connection.target).filter((asset) => asset.type === kind).length;
+    if (!kind) return false;                       // 认不出类型的节点（角色/场景/便签）不进框体
+    return existing + 1 <= (limit[kind] ?? 0);
+  }, [getIncomingAssetRefs, nodes]);
   // ⚠️ removeIncomingRef 必须定义在 removeEdge 之后：deps 数组是立即求值的，写前面会踩 TDZ
   //    （ReferenceError → 整页白屏；本轮又踩了一次，见第五节第 31 条）。
   const addNodeAt = useCallback((type, position) => {
@@ -1484,7 +1532,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         // 只认「按住圆点拖到另一个圆点」，单击不会起线（避免学生误点就多一条连线）
         connectOnClick={false}
         connectionLineStyle={{ stroke: 'var(--cv-primary)', strokeWidth: 2.2, strokeLinecap: 'round' }}
-        isValidConnection={readOnly ? undefined : (connection) => connection.source !== connection.target}
+        isValidConnection={readOnly ? undefined : canConnect}
         onDrop={onDrop}
         onPaneContextMenu={handlePaneContextMenu}
         // 点空白处 = 取消选择：react-flow 自己会 resetSelectedElements（选中框的高亮它管），

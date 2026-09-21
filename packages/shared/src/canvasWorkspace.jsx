@@ -457,6 +457,8 @@ export function CanvasWorkspace({ api, ...props }) {
       modality: String(raw.modality || '').toUpperCase(), model: raw.model || '',
       aspectRatio: raw.aspectRatio || '', resolution: raw.resolution || '',
       durationSeconds: raw.durationSeconds, audio: raw.audio === true,
+      // 本节课锁定的生成方式（'' = 不锁）—— 列表里没有该框体时要自己拼，别漏（漏了画布就按模型自由发挥）
+      inputMode: String(raw.inputMode || '').toUpperCase(), inputModeLabel: raw.inputModeLabel || '',
       prompt: material.snapshot?.content || '', assetUrl: material.assetUrl || '',
     };
   }
@@ -476,6 +478,12 @@ export function CanvasWorkspace({ api, ...props }) {
       params.push(box.audio === true ? '含音频' : box.audio === false ? '不含音频' : '音频学生选');
     }
     if (box.model) params.push(box.model);
+    // 本节课锁定的生成方式要在**素材面板上就看得到**（老师配的是"这种课要用哪种方式"，
+    // 学生进来之前就该知道这个框体是要写提示词、还是必须连图）—— 没锁就不显示。
+    // 标签由服务端算好随框体下发（'文生视频' / '首尾帧' / '图生图' …）—— 单个真相源，
+    // 客户端不再抄一份标签表（抄了迟早会漂）
+    const modeLabel = box.inputModeLabel || '';
+    if (modeLabel) params.unshift(modeLabel);
     return params.filter(Boolean).join(' · ');
   }
 
@@ -493,6 +501,8 @@ export function CanvasWorkspace({ api, ...props }) {
       position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 },
       data: {
         title: box.title, slotType, boxId: box.id,
+        // 本节课锁定的生成方式（'' = 不锁）：画布据此限制连线数量/类型，并显示在面板上
+        inputMode: String(box.inputMode || '').toUpperCase(), inputModeLabel: box.inputModeLabel || '',
         // 平台定过的参数：空字符串表示「没定」，学生可以在画布上自己选。
         aspectRatio: box.aspectRatio || '', resolution: box.resolution || '', model: box.model || '',
         // 学生自选时可选项（来自该模型的能力配置，服务端随框体下发）

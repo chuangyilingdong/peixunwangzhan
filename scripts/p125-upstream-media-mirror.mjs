@@ -18,7 +18,9 @@
  * 这个守卫**真跑纯函数**（渲染 + 镜像改写 + 真发一次假请求看请求体），不是读源码猜。
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
+const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 let failures = 0;
 const check = (label, ok, detail = '') => {
   if (ok) console.log(`  ✓ ${label}`);
@@ -207,6 +209,40 @@ check('㉓d 渲染 2.0 的请求体：metadata 里带着 resolution 与 output_f
   === JSON.stringify({ model: 'zhenzhen-image-g-v2-lowprice', prompt: '古风图', n: 1, size: '16:9', metadata: { resolution: '1k', output_format: 'png' } }));
 check('㉔ 管理员在渠道/模型上配过的模板优先于内置默认（内置只是兜底）',
   JSON.stringify(requestTemplateFor({ modelRequestTemplates: { 'zhenzhen-image-g-v2.5-lowprice': { model: 'x' } } }, 'IMAGE', { model: 'zhenzhen-image-g-v2.5-lowprice' })) === JSON.stringify({ model: 'x' }));
+
+
+/* ── ⑤ 关键帧 + 固定比例：先把画面裁成那个比例再发（用户 2026-09-21 报「生成出来是扁的画面」）──────
+   上游会**执行**固定比例、把比例不符的首帧硬拉扁；裁在自己这边就没有可拉的东西了。
+   ffmpeg 不在就跳过（回退成"原图不动"，不影响生成）。 */
+const { fitMediaToRatio, parseRatio } = await import('../apps/server/src/services/mediaFit.js');
+check('比例解析：只认 N:N（adaptive/auto 不算比例）',
+  parseRatio('16:9')?.w === 16 && parseRatio('adaptive') === null && parseRatio('auto') === null);
+check('只在"关键帧 + 固定比例"时才裁；裁与不裁的上游结果分属两个缓存键（不能互相命中）',
+  /\^\\d\{1,4\}:\\d\{1,4\}\$/.test(read('apps/server/src/services/openaiCompatibleProvider.js'))
+  && /frameFitRatio,/.test(read('apps/server/src/services/openaiCompatibleProvider.js'))
+  && /#fit=/.test(read('apps/server/src/services/upstreamMediaMirror.js')));
+
+// 真拿 ffmpeg 裁一张（没有 ffmpeg 就跳过 —— 回退路径本来就不依赖它）
+const { spawnSync } = await import('node:child_process');
+const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+if (!hasFfmpeg) {
+  console.log('  ⚠️ 跳过裁剪实测（这台机器没有 ffmpeg；生产机上有，回退路径不受影响）');
+} else {
+  const made = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=gray:s=100x100', '-frames:v', '1', '/tmp/p125-square.png'], { stdio: 'ignore' });
+  check('造一张 100x100 的测试图', made.status === 0);
+  const square = fs.readFileSync('/tmp/p125-square.png');
+  const wide = await fitMediaToRatio(square, '2:1');
+  check('1:1 → 2:1 会**裁**（居中），不是拉伸', wide.changed === true, JSON.stringify({ changed: wide.changed, reason: wide.reason }));
+  if (wide.changed) {
+    fs.writeFileSync('/tmp/p125-wide.png', wide.bytes);
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', '/tmp/p125-wide.png'], { encoding: 'utf8' });
+    check('裁完的尺寸就是 100x50', String(probe.stdout).trim() === '100,50', String(probe.stdout).trim());
+  }
+  const same = await fitMediaToRatio(square, '1:1');
+  check('比例本来就一致 → 不重编码（省一次进程与一次画质损失）', same.changed === false && same.reason === 'already-matches', JSON.stringify(same));
+  const bogus = await fitMediaToRatio(square, 'adaptive');
+  check('不是比例的值（adaptive/auto）→ 原样不动', bogus.changed === false);
+}
 
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');

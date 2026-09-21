@@ -477,8 +477,12 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
       const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints, requestPaths);
       // 上游在境外、抓不到我们域名上的素材 → 首帧/尾帧/参考图先传到上游，
       // 用上游自己的 URL 发（不然上游静默当文生跑，出来的画面与参考毫无关系）。
+      // 另外：关键帧 + **固定比例**时把首帧裁成那个比例 —— 上游会执行固定比例、把比例不符的帧**硬拉**扁
+      // （用户 2026-09-21：「我让他生成 16:9…明显是扁的」）。'adaptive'/'auto' 不裁（那是"跟着图走"）。
+      const frameFitRatio = /^\d{1,4}:\d{1,4}$/.test(String(options?.aspectRatio || '').trim()) ? String(options.aspectRatio).trim() : '';
       const effectiveOptions = await mirrorSelfHostedMedia(options, {
         selfOrigins: selfMediaOrigins, uploadUrl: mediaUploadUrl, apiKey, timeoutMs: timeout,
+        frameFitRatio,
       });
       const response = await fetchWithTimeout(url, {
         body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options: effectiveOptions, referenceAssets: effectiveOptions.referenceAssets, requestTemplates, modelRequestTemplates, messages }),
