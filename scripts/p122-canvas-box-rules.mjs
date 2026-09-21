@@ -183,5 +183,22 @@ check('标签由服务端算（客户端不抄一份标签表）', () => {
   assert.doesNotMatch(workspace, /INPUT_MODE_LABELS|INPUT_MODE_SHORT_LABELS/, '客户端不该有第二份标签表');
 });
 
+console.log('⑧ 后台「生成方式」下拉只留两种（用户 2026-09-21 口径：视频只留文生/全能参考、图片只留文生图/图生图）');
+check('视频只有 文生视频 + 全能参考；图生视频/首尾帧不再列进选项，但历史值仍要看得见', () => {
+  const admin = read('apps/admin/src/components/CourseManagement.jsx');
+  const start = admin.indexOf('const VIDEO_MODE_LABELS = {');
+  assert.ok(start > 0, '视频标签表要在');
+  const table = admin.slice(start, admin.indexOf('};', start));
+  assert.match(table, /TEXT: '文生视频/);
+  assert.match(table, /OMNI_REFERENCE: '全能参考/);
+  assert.doesNotMatch(table, /FIRST_FRAME:|FIRST_LAST_FRAME:/, '首帧/首尾帧不该再列进选项');
+  assert.match(admin, /GENERATION_MODE_LEGACY_LABELS[\s\S]{0,300}FIRST_LAST_FRAME/, '历史值要有标签（否则老课包打开是一片空白）');
+  assert.match(admin, /generationModeSelectOptions\(caps, modality, box\.inputMode\)/, '下拉要走"含历史值"的那个函数');
+});
+check('图片只有 文生图 + 图生图', () => {
+  const admin = read('apps/admin/src/components/CourseManagement.jsx');
+  assert.match(admin, /const IMAGE_MODE_LABELS = \{ TEXT: '文生图[^}]*IMAGE_REFERENCE: '图生图/);
+});
+
 if (failures) { console.log(`\n❌ P122 不通过：${failures} 项`); process.exit(1); }
 console.log('\nP122 PASSED：框体删除规则与未生成占位图都成立');

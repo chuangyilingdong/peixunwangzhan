@@ -33,6 +33,18 @@ const GENERATION_BOX_MODALITY_OPTIONS = [['TEXT', 'AI 文字'], ['IMAGE', 'AI �
 // 生成框体的「生成方式」（用户 2026-09-21 口径：这几个是**完全不一样的概念**，不能靠连线多少去推）。
 // ⚠️ 用户当晚又定了一次：**视频只留「文生视频 / 全能参考」两种、图片只留「文生图 / 图生图」** ——
 //    图生视频（首帧）/ 首尾帧不再放进选项里（模型能力里仍可能有，老课包若配过照旧生效）。
+/** 下拉选项：本模态提供的那几种 + 这个框体已经存着的历史值（老课包可能配过首尾帧这类不再列出的方式）。
+ *  历史值必须显示出来：不然老师打开只看到一片空白，不知道原来配的是什么、也没法改。 */
+function generationModeSelectOptions(caps, modality, current) {
+  const list = generationModeOptions(caps, modality);
+  const value = String(current || '').toUpperCase();
+  if (value && !list.some(([item]) => item === value)) list.push([value, `${GENERATION_MODE_LEGACY_LABELS[value] || value}（历史配置）`]);
+  return list;
+}
+const GENERATION_MODE_LEGACY_LABELS = {
+  FIRST_FRAME: '图生视频（首帧图）',
+  FIRST_LAST_FRAME: '首尾帧（首帧 + 尾帧）',
+};
 const VIDEO_MODE_LABELS = {
   TEXT: '文生视频（纯文本）',
   OMNI_REFERENCE: '全能参考（多图 / 多视频 / 多音频）',
@@ -443,7 +455,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                   <LessonField label="生成方式" hint={generationModeOptions(caps, modality).length > 1 ? '决定画布上能连什么、连过来的素材怎么用' : '当前模型只支持这一种'}>
                     <select value={box.inputMode || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, inputMode: event.target.value }))}>
                       <option value="">学生自选（按连线内容自动判断）</option>
-                      {generationModeOptions(caps, modality).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      {generationModeSelectOptions(caps, modality, box.inputMode).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </select>
                   </LessonField>
                 </div> : null}
