@@ -4,6 +4,7 @@ import { openAiCompatibleProvider, chatCompletionsEndpoint, modalityEndpoint } f
 import { normalizeProviderError, PROVIDER_ERROR_CODES } from '../apps/server/src/services/providerContract.js';
 
 const requests = [];
+let flakyPolls = 0;
 const server = createServer(async (req, res) => {
   let raw = '';
   for await (const chunk of req) raw += chunk;
@@ -12,6 +13,26 @@ const server = createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/v1/videos/video-1') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ id: 'video-1', status: 'completed', metadata: { url: 'https://media.example/video.mp4' } }));
+    return;
+  }
+  // 「轮询抖两下才成功」：前两次查任务回 524（这家上游在境外中继上，实测真的会 520/524），
+  // 第三次才给终态。**单次轮询失败不该把整条生成判死** —— 2026-09-21 两条真跑就是这么被判死的，
+  // 而上游其实 `succeeded`、钱也扣了（见交接文档 §二.Q）。
+  if (req.method === 'GET' && req.url === '/v1/videos/video-flaky') {
+    flakyPolls += 1;
+    if (flakyPolls <= 2) {
+      res.writeHead(524, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'A timeout occurred' } }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'video-flaky', status: 'completed', metadata: { url: 'https://media.example/video-flaky.mp4' } }));
+    return;
+  }
+  // 反向：**非瞬时**的轮询错误（内容安全 400）不许被重试吃成"慢成功" —— 那是结论，不是抖动。
+  if (req.method === 'GET' && req.url === '/v1/videos/video-rejected') {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'content policy violation' } }));
     return;
   }
   const prompt = body.messages?.find((item) => item.role === 'user')?.content || body.prompt || body.input || '';
@@ -53,7 +74,9 @@ const server = createServer(async (req, res) => {
   }
   if (req.url === '/v1/videos') {
     res.writeHead(202, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'video-1', status: 'processing' }));
+    res.end(JSON.stringify(prompt === 'flaky-poll' ? { id: 'video-flaky', status: 'processing' }
+      : prompt === 'bad-poll' ? { id: 'video-rejected', status: 'processing' }
+        : { id: 'video-1', status: 'processing' }));
     return;
   }
   if (req.url === '/v1/podcasts/generations') {
@@ -107,8 +130,22 @@ try {
   await assert.rejects(() => provider.generate({ modality: 'TEXT', prompt: 'invalid' }), (error) => error.code === PROVIDER_ERROR_CODES.RESPONSE_INVALID);
   const timeoutProvider = openAiCompatibleProvider({ name: 'custom', model: 'test-model', endpoint, apiKey: 'secret-test-key', timeoutMs: 1000 });
   await assert.rejects(() => timeoutProvider.generate({ modality: 'TEXT', prompt: 'timeout' }), (error) => error.code === PROVIDER_ERROR_CODES.TIMEOUT);
+
+  // 轮询抖两下（524）也必须跑到终态：单次轮询失败是**瞬时**的，不是这条生成失败。
+  // 反向自检在下面 —— 非瞬时错误（内容安全 / 格式错）仍然要立刻抛，不许被重试吃成"慢成功"。
+  const flakyProvider = openAiCompatibleProvider({ name: 'custom', model: 'test-model', endpoint, apiKey: 'secret-test-key', pollIntervalMs: 10, timeoutMs: 5000 });
+  const flaky = await flakyProvider.generate({ modality: 'VIDEO', prompt: 'flaky-poll', title: '抖动' });
+  assert.equal(flaky.assets[0].assetUrl, 'https://media.example/video-flaky.mp4');
+  assert.ok(flakyPolls >= 3, `轮询应该被重试到第 3 次才成功（实际 ${flakyPolls} 次）`);
+  // 反向自检：内容安全（400）是**结论**不是抖动 —— 必须立刻抛，且第一次就抛。
+  const rejectedBefore = requests.filter((row) => row.url === '/v1/videos/video-rejected').length;
+  await assert.rejects(
+    () => flakyProvider.generate({ modality: 'VIDEO', prompt: 'bad-poll', title: '被拒' }),
+    (error) => normalizeProviderError(error).code === PROVIDER_ERROR_CODES.SAFETY_REJECTED,
+  );
+  assert.equal(requests.filter((row) => row.url === '/v1/videos/video-rejected').length - rejectedBefore, 1, '内容安全被拒只许查一次，不许重试');
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }
 
-console.log(JSON.stringify({ name: 'p6-a01-openai-compatible-adapter', pass: true, checks: 23 }));
+console.log(JSON.stringify({ name: 'p6-a01-openai-compatible-adapter', pass: true, checks: 26 }));

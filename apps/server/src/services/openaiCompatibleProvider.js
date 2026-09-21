@@ -432,19 +432,53 @@ function assetFromResponse({ payload, binary, contentType, modality, title, prov
   };
 }
 
+/**
+ * 单次轮询失败 ≠ 这次生成失败。
+ *
+ * 轮询是**一次一次独立**的查询：某一次慢到被 30 秒掐断、或上游/中继回 5xx/429（这家上游在境外的
+ * 中继上，实测会 520/524），**任务本身往往还在跑、甚至已经出片了** ——
+ * 2026-09-21 实测：两条走队列的真跑都由这里判失败，而上游两条其实都 `succeeded`
+ * （`task_Bwr3…` / `task_KYB0…`），钱已经花了、片也出来了，学生却只看到「AI 服务响应超时」。
+ *
+ * 所以把这类**瞬时**错误按退避重试到总 deadline；其余（4xx、内容安全、响应格式错…）照旧立刻抛。
+ */
+function isTransientPollFailure(error) {
+  const status = Number(error?.status || 0);
+  if (status === 408 || status === 429 || status >= 500) return true;
+  const code = String(error?.code || '');
+  if (code === PROVIDER_ERROR_CODES.TIMEOUT || code === PROVIDER_ERROR_CODES.UNAVAILABLE || code === PROVIDER_ERROR_CODES.RATE_LIMITED) return true;
+  // fetch 自己抛的网络错（ECONNRESET / socket hang up…）没有我们的 code —— 也算瞬时
+  return !code;
+}
+
 async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, timeout, pollIntervalMs, title, providerName, model, pollPath = '', clientRequestId, onEvidence }) {
   let payload = initialPayload;
   const deadline = Date.now() + timeout;
+  // 退避：正常时按渠道配的间隔，连续失败就翻倍（封顶 30 秒），成功一次立刻回到常规间隔。
+  let waitMs = pollIntervalMs;
+  let transientFailures = 0;
   while (pendingPayload(payload) && !mediaCandidate(payload, modality)) {
     const pollUrl = pollUrlFromPayload(payload, requestUrl, pollPath);
     if (!pollUrl) break;
-    const wait = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
+    const wait = Math.min(waitMs, Math.max(0, deadline - Date.now()));
     if (wait <= 0) throw providerError('AI 服务响应超时', PROVIDER_ERROR_CODES.TIMEOUT);
     await new Promise((resolve) => setTimeout(resolve, wait));
-    const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: Math.max(1000, Math.min(30000, deadline - Date.now())), modality, clientRequestId, onEvidence });
-    const next = await parseResponse(response, modality);
-    if (!response.ok) throw providerHttpError(response, next);
+    let next = null;
+    try {
+      const response = await fetchWithTimeout(pollUrl, { method: 'GET', apiKey, timeout: Math.max(1000, Math.min(30000, deadline - Date.now())), modality, clientRequestId, onEvidence });
+      next = await parseResponse(response, modality);
+      if (!response.ok) throw providerHttpError(response, next);
+    } catch (error) {
+      if (!isTransientPollFailure(error)) throw error;
+      if (Date.now() >= deadline) {
+        throw providerError(`查询上游任务时一直不稳定（${String(error?.message || error).slice(0, 80)}）—— 这条任务可能还在上游跑，稍后可以重试`, PROVIDER_ERROR_CODES.TIMEOUT);
+      }
+      transientFailures += 1;
+      waitMs = Math.min(waitMs * 2, 30000);
+      continue;
+    }
     payload = next;
+    waitMs = pollIntervalMs;
   }
   if (failedPayload(payload)) {
     throw providerError(providerFailureMessage(payload), PROVIDER_ERROR_CODES.UPSTREAM);
