@@ -20,7 +20,7 @@
  * → 首帧/参考图用**我们自己域名**上的地址 → 看产物。素材镜像那段逻辑（services/upstreamMediaMirror.js）
  * 会在发请求前把它换成上游自己的 URL —— 这个脚本验的就是"换了之后上游真的用了"。
  */
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createDecipheriv, createHash } from 'node:crypto';
 
 const RELEASE = process.env.RELEASE_DIR || '/srv/ai-kids-platform/production/current';
@@ -28,6 +28,18 @@ const PROD_DATA = '/srv/ai-kids-platform/production/data';
 const MODE = 'public';
 const VERIFY_DIR = process.env.VERIFY_DIR || '/tmp/ai-media-check';
 mkdirSync(VERIFY_DIR, { recursive: true });
+// 脚本自己打开的库用**生产库副本**：镜像/解析那几段会按 file_assets 查表（少一张表就会走错路、
+// 比如把"我们自己的文件"当成外部 URL 去 HTTP 取 → 私有素材 403）。副本 = 只读使用，不碰生产。
+const COPY_DB = `${VERIFY_DIR}/platform.db`;
+rmSync(COPY_DB, { force: true });   // 上一次跑留下的副本要先删，VACUUM INTO 不接受已存在的目标
+try {
+  const { DatabaseSync: DBSync } = await import('node:sqlite');
+  const src = new DBSync('/srv/ai-kids-platform/production/data/platform.db', { readOnly: true });
+  src.exec(`VACUUM INTO '${COPY_DB}'`);
+  src.close();
+} catch (error) {
+  console.log('取生产库副本失败（脚本仍会跑，但读表那条路会不准）：', error?.message || error);
+}
 
 const args = Object.fromEntries(process.argv.slice(2).map((item) => {
   const [key, ...rest] = String(item).replace(/^--/, '').split('=');
@@ -37,7 +49,7 @@ const only = String(args.only || '').toLowerCase();
 
 /* ── 生产配置：策略、密钥、AI_PROVIDER_*（脚本自己打开的库指到临时目录，别碰生产库）── */
 process.env.PLATFORM_DATA_DIR = VERIFY_DIR;
-process.env.PLATFORM_DB_PATH = `${VERIFY_DIR}/platform.db`;
+process.env.PLATFORM_DB_PATH = COPY_DB;
 process.env.DEPLOYMENT_MODE = MODE;
 
 const env = {};
@@ -48,7 +60,7 @@ for (const line of readFileSync('/etc/ai-kids-platform/production.env', 'utf8').
 // ⚠️ 必须真装进 process.env：视频的轮询上限跟着 AI_PROVIDER_TIMEOUT_MS（生产 300000、默认 120000），
 //    不装就会把一条 130 秒的正常视频报成"AI 服务响应超时"（2026-09-21 踩过）。
 for (const [name, value] of Object.entries(env)) {
-  if (/^AI_PROVIDER_/.test(name) || name === 'PUBLIC_SITE_URL') process.env[name] = value;
+  if (/^AI_PROVIDER_/.test(name) || /^FILE_UPLOAD_/.test(name) || name === 'PUBLIC_SITE_URL') process.env[name] = value;
 }
 const SELF = String(env.PUBLIC_SITE_URL || 'https://iicili.cyou').replace(/\/+$/, '');
 
