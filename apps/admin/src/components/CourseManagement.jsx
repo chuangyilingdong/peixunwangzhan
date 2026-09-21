@@ -30,20 +30,20 @@ const LEGACY_MATERIAL_TYPE_LABELS = { NOTE: '文字说明（旧数据）' };
 const GENERATION_BOX_MODALITY_OPTIONS = [['TEXT', 'AI 文字'], ['IMAGE', 'AI 生图'], ['VIDEO', 'AI 生视频'], ['MUSIC', 'AI 音乐']];
 // 生成框体的「生成方式」（用户 2026-09-21 口径：这几个是**完全不一样的概念**，不能靠连线多少去推）。
 // 值就是服务端/上游那套枚举（VIDEO 的 inputModes、IMAGE 的 IMAGE_INPUT_MODES），标签只在这里给一次。
-const GENERATION_MODE_LABELS = {
+// 生成框体的「生成方式」（用户 2026-09-21 口径：这几个是**完全不一样的概念**，不能靠连线多少去推）。
+// ⚠️ 用户当晚又定了一次：**视频只留「文生视频 / 全能参考」两种、图片只留「文生图 / 图生图」** ——
+//    图生视频（首帧）/ 首尾帧不再放进选项里（模型能力里仍可能有，老课包若配过照旧生效）。
+const VIDEO_MODE_LABELS = {
   TEXT: '文生视频（纯文本）',
-  FIRST_FRAME: '图生视频（首帧图）',
-  FIRST_LAST_FRAME: '首尾帧（首帧 + 尾帧）',
   OMNI_REFERENCE: '全能参考（多图 / 多视频 / 多音频）',
-  IMAGE_REFERENCE: '图生图（参考素材）',
 };
 const IMAGE_MODE_LABELS = { TEXT: '文生图（不给参考）', IMAGE_REFERENCE: '图生图（参考素材）' };
 function generationModeOptions(caps, modality) {
-  const labels = String(modality).toUpperCase() === 'IMAGE' ? IMAGE_MODE_LABELS : GENERATION_MODE_LABELS;
+  const labels = String(modality).toUpperCase() === 'IMAGE' ? IMAGE_MODE_LABELS : VIDEO_MODE_LABELS;
   const supported = Array.isArray(caps?.inputModes) && caps.inputModes.length ? caps.inputModes : Object.keys(labels);
-  return supported.map((value) => [value, labels[value] || value]);
+  // 只列我们提供的那几种，且这个模型得真支持（例如只会文生的模型就只出「文生视频」）
+  return Object.keys(labels).filter((value) => supported.includes(value)).map((value) => [value, labels[value]]);
 }
-// 音乐的生成模式：歌词生音乐（学生写词）/ 描述生音乐（平台代写词）
 const MUSIC_MODE_OPTIONS = [['LYRICS', '歌词生音乐'], ['DESCRIPTION', '描述生音乐（平台代写词）']];
 const TEACHING_TYPE_OPTIONS = [
   ['VIDEO', '视频'], ['PPT', 'PPT'], ['PDF', 'PDF'], ['WORD', 'Word'], ['EXCEL', 'Excel'], ['FILE', '其他文件'],

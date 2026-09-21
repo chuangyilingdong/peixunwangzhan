@@ -244,6 +244,23 @@ if (!hasFfmpeg) {
   check('不是比例的值（adaptive/auto）→ 原样不动', bogus.changed === false);
 }
 
+
+/* ── ⑥ 图片框体的「生成方式」不能被渠道配置吃掉（2026-09-21 用户报：选了文生图/图生图，保存后还是学生自选）──
+   根因：`normalizeModelCapabilities` 对 IMAGE 把 inputModes 写死成 `[]`，而生产的图片渠道**给两个模型都配过能力** ——
+   于是"按模型能力"那条路返回空 → 保存时 inputMode 校验不过、被静默丢掉（界面能选、存不下来）。
+   ⚠️ 这类"配过能力就失效"的默认值换个模态还会再犯：加能力字段时都要问一句"配过能力的模型会拿到什么"。 */
+const { normalizeModelCapabilities, normalizeImageInputModes, defaultCapabilities } = await import('../apps/server/src/services/modelCapabilities.js');
+const imageConfigured = normalizeModelCapabilities({ aspectRatios: ['1:1'], resolutions: ['1k'] }, 'IMAGE', 'zhenzhen-image-g-v2.5-lowprice');
+check('图片模型配过能力后，inputModes 不能变空（否则「生成方式」存不下来）',
+  JSON.stringify(imageConfigured.inputModes) === JSON.stringify(['TEXT', 'IMAGE_REFERENCE']), JSON.stringify(imageConfigured.inputModes));
+check('图片模态默认也给这两种（文生图 / 图生图）',
+  JSON.stringify(defaultCapabilities('IMAGE').inputModes) === JSON.stringify(['TEXT', 'IMAGE_REFERENCE']));
+check('显式配了就用配的；不认识的值不能把默认顶掉',
+  JSON.stringify(normalizeImageInputModes(['IMAGE_REFERENCE'])) === JSON.stringify(['IMAGE_REFERENCE'])
+  && JSON.stringify(normalizeImageInputModes(['T2V'])) === JSON.stringify(['TEXT', 'IMAGE_REFERENCE'])
+  && JSON.stringify(normalizeImageInputModes([])) === JSON.stringify(['TEXT', 'IMAGE_REFERENCE']));
+check('视频那条保持原样（按模型名推断 i2v）—— 别被这次改动带偏',
+  JSON.stringify(normalizeModelCapabilities({ resolutions: ['480P'] }, 'VIDEO', 'hailuo-h3-i2v').inputModes) === JSON.stringify(['FIRST_FRAME']));
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

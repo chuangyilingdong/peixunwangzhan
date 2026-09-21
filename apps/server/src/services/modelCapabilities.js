@@ -53,6 +53,14 @@ export function normalizeInputModeValue(value) {
   return INPUT_MODE_ALIASES[text] || text;
 }
 
+/** 图片框体的输入方式：只认 文生图 / 图生图；没配（或配了不认识的值）时**按两种都给**。
+ *  留空＝这个模型两种都能用（生产上两个图片模型都收 `images`，图生图确实可用）。 */
+export function normalizeImageInputModes(value) {
+  const raw = value === undefined || value === null || value === '' ? [] : (Array.isArray(value) ? value : [value]);
+  const mapped = raw.map((item) => normalizeInputModeValue(item)).filter((item) => IMAGE_INPUT_MODES.includes(item));
+  return mapped.length ? [...new Set(mapped)] : [...IMAGE_INPUT_MODES];
+}
+
 export function defaultInputModes(modelId) {
   return /(^|[-_/])i2v($|[-_/])/i.test(String(modelId || '').trim()) ? ['FIRST_FRAME'] : ['TEXT'];
 }
@@ -118,7 +126,12 @@ export function normalizeModelCapabilities(value, modality, modelId = '') {
     resolutions: stringList(input.resolutions),
     durations: key === 'VIDEO' ? durationList(input.durations) : [],
     audio: key === 'VIDEO' ? input.audio === true || input.audio === 1 || String(input.audio).toLowerCase() === 'true' : false,
-    inputModes: key === 'VIDEO' ? normalizeInputModes(input.inputModes ?? input.inputFrame, modelId) : [],
+    // 视频的输入方式按声明（留空按模型名推断 i2v）；
+    // ⚠️ 图片这条**必须给默认的两种**（文生图/图生图）：以前这里是写死的 `[]`，于是只要渠道给某个图片模型
+    //    配过能力（生产上两个图片模型都配过），`inputModes` 就恒为空 → 「生成方式」在保存时被静默丢掉
+    //    —— 用户 2026-09-21 报的「选了文生图/图生图，保存后再打开还是学生自选」就是它。
+    inputModes: key === 'VIDEO' ? normalizeInputModes(input.inputModes ?? input.inputFrame, modelId)
+      : (key === 'IMAGE' ? normalizeImageInputModes(input.inputModes) : []),
     modes: key === 'MUSIC' ? normalizeMusicModes(input.modes) : [],
     defaultStyle: key === 'MUSIC' ? String(input.defaultStyle || '').trim().slice(0, 200) : '',
   };
@@ -203,6 +216,14 @@ export function validateModelCapabilitiesInput(value, modality, modelId = '') {
     }
     const audio = input.audio;
     if (audio !== undefined && typeof audio !== 'boolean' && audio !== 1 && audio !== 0) errors.push('「支持生成音频」只能是勾选或不勾选');
+  }
+  if (key === 'IMAGE') {
+    const modesValue = input.inputModes;
+    if (modesValue !== undefined && modesValue !== null && modesValue !== '') {
+      const raw = Array.isArray(modesValue) ? modesValue : [modesValue];
+      const invalid = raw.map((item) => normalizeInputModeValue(item)).filter((item) => !IMAGE_INPUT_MODES.includes(item));
+      if (invalid.length) errors.push(`「生成方式」只支持 文生图 / 图生图，不认识：${invalid.join('、')}`);
+    }
   }
   if (key === 'MUSIC' && input.defaultStyle !== undefined && typeof input.defaultStyle !== 'string') errors.push('「默认曲风」应该是文字');
   if (key === 'MUSIC' && input.modes !== undefined && input.modes !== null) {
