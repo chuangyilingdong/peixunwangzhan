@@ -61,7 +61,7 @@ await run(['packages/database/src/seed.js']);
 ensureClassroom(dbPath);
 {
   const db = new DatabaseSync(dbPath); db.exec('PRAGMA busy_timeout = 5000');
-  db.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING'").run();
+  db.prepare("UPDATE course_lessons SET delivery_mode='VIBECODING', delivery_modes=?").run(JSON.stringify(['VIBECODING']));
   // ⚠️ 课堂的 delivery_mode 也要跟着改：夹具是**按当时的课时类型**建课堂的（种子里都是画布课），
   //    只改课时不改课堂的话，这间课堂仍然是 CANVAS —— 而运行时接口从 2026-09-21 起只看 VIBECODING 课堂
   //    （它的门禁就该这么严），于是这个守卫自己会被自己的门禁挡住。
@@ -174,30 +174,36 @@ try {
     const result = await bad({ files: [{ name: 'index.html', content: beyond }] });
     assert.equal(result.error?.code, 'PAYLOAD_TOO_LARGE', JSON.stringify(result).slice(0, 200));
   });
-  /* ── 客户端运行时**只看 VIBECODING 课堂**（2026-09-21，客户端项目报的）────────────
-     平台建课堂时就写好了 `class_sessions.delivery_mode`（画布课 CANVAS / 客户端课 VIBECODING），
-     但运行时接口那三个解析器原来**都没筛它** → 画布课堂也会被当成"你现在能进的课"下发：
+  /* ── 客户端运行时**只看"这节课声明了 VibeCoding"**（2026-09-21，客户端项目报的）──────
+     平台建课时会勾上课类型（可多选：只画布 / 只 VibeCoding / 两种同时），老师建课堂时那个单值
+     只是"跟着课时带的第一个"（9-16 口径「老师不再选课堂模式」，只作历史兼容）。
+     而运行时接口那三个解析器原来**什么都没筛** → 画布课也会被当成"你现在能进的课"下发：
      `classroom` 有值、网关密钥照发，客户端看到 `classroom != null` 就打开 VibeCoding 环境
-     （它拿不到 deliveryMode，自己判断不了）。口径：这道门禁在**服务端**，
-     客户端只执行"平台下发的可进入结论"。 */
+     （它拿不到类型字段，自己判断不了）。口径：这道门禁在**服务端**，
+     客户端只执行"平台下发的可进入结论"；**判据与网页侧同源 = 课时声明的类型**。 */
   {
     const db = openDb(dbPath);
     const studentId = db.prepare('SELECT id FROM users WHERE login=?').get(enrolled.login).id;
     const mine = db.prepare(
-      `SELECT session.id FROM class_sessions session
+      `SELECT session.id, session.lesson_id FROM class_sessions session
          JOIN session_students part ON part.session_id = session.id
         WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'`,
     ).all(studentId);
     assert.ok(mine.length >= 2, `夹具应给这个学生多节 ACTIVE 课堂（现在 ${mine.length} 节）`);
-    const setModes = (modeOf) => {
-      const statement = db.prepare('UPDATE class_sessions SET delivery_mode=? WHERE id=?');
-      for (const item of mine) statement.run(modeOf(item), item.id);
+    // 门禁看的是**课时声明的类型**（可多选），所以这里切课时、不切课堂：
+    //   '["CANVAS"]' / '["VIBECODING"]' / '["CANVAS","VIBECODING"]'（同时开两种）
+    const setLessonModes = (modesOf) => {
+      const statement = db.prepare('UPDATE course_lessons SET delivery_modes=?, delivery_mode=? WHERE id=?');
+      for (const item of mine) { const modes = modesOf(item); statement.run(JSON.stringify(modes), modes[0], item.lesson_id); }
     };
     const context = (sessionId = '') => api(`/api/student/runtime/client-context${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`, { token });
     const uploadWork = (patch) => upload({ name: 'index.html', title: '课堂类型门禁', copyrightConfirmed: true, files: [{ name: 'index.html', content: html }], ...patch });
 
-    // ① 全是画布课堂 → classroom 必须为 null、**不许发网关密钥**、reason 说清是类型不对
-    setModes(() => 'CANVAS');
+    // ① 全是画布课 → classroom 必须为 null、**不许发网关密钥**、reason 说清是类型不对
+    //    ⚠️ 这里**故意不动课堂那个单值**（夹具把它设成了 VIBECODING）：它是"跟着课时带的第一个"、
+    //    平台改了课时类型之后它可能还是老的 —— 门禁**不许看它**。上面那条反向自检（把它换回
+    //    "按课堂单值判"）会让这一组全红，就是这个道理。
+    setLessonModes(() => ['CANVAS']);
     const canvasOnly = (await context()).data;
     await check('画布课堂：client-context 的 classroom 必须是 null', async () => {
       assert.equal(canvasOnly.classroom, null, JSON.stringify(canvasOnly).slice(0, 200));
@@ -229,28 +235,40 @@ try {
       assert.match(String(result.error?.message || ''), /当前是画布课堂，不能提交 VibeCoding 作品/);
     });
 
-    // ② 全是 VIBECODING 课堂 → 照常下发（客户端仍能进）
-    setModes(() => 'VIBECODING');
+    // ② 全是 VIBECODING 课 → 照常下发（客户端仍能进）
+    setLessonModes(() => ['VIBECODING']);
     const vibeOnly = (await context()).data;
-    await check('VIBECODING 课堂：classroom 正常返回 + 网关密钥正常下发', async () => {
+    await check('VIBECODING 课：classroom 正常返回 + 网关密钥正常下发', async () => {
       assert.ok(vibeOnly.classroom?.id, JSON.stringify(vibeOnly).slice(0, 200));
-      assert.ok(String(vibeOnly.gateway?.key || '').length > 0, 'VIBECODING 课堂没下发密钥');
-      assert.ok(String(vibeOnly.gateway?.baseUrl || '').length > 0, 'VIBECODING 课堂没下发网关地址');
+      assert.ok(String(vibeOnly.gateway?.key || '').length > 0, 'VIBECODING 课没下发密钥');
+      assert.ok(String(vibeOnly.gateway?.baseUrl || '').length > 0, 'VIBECODING 课没下发网关地址');
     });
 
-    // ③ 两种都在 → 候选里只放 VIBECODING；**点名画布那节要明说，不许静默换课**
-    const [first, ...rest] = mine;
-    setModes((item) => (item.id === first.id ? 'VIBECODING' : 'CANVAS'));
-    const mixed = (await context()).data;
-    await check('两种课堂都在：候选里只放 VIBECODING', async () => {
-      assert.equal(mixed.classroom?.id, first.id, JSON.stringify(mixed.classroom));
-      assert.equal(mixed.classrooms.length, 1, `候选里应只有 VIBECODING：${JSON.stringify(mixed.classrooms.map((item) => item.id))}`);
+    // ③ ⭐ **同一节课同时开两种**（画布 + VibeCoding）→ 画布那一侧在网页上进、客户端这一侧也要能进。
+    //     用户口径 2026-09-21：「上课模式只有三种情况，只选画布、只选 vibecoding、两个模式同时存在」。
+    //     ⚠️ 这一条是**判据必须用课时类型、不能用课堂单值**的原因：课堂那个值是"跟着课时带的第一个"
+    //        （两种时 = CANVAS），按它判会把这节课的客户端入口误挡。
+    setLessonModes(() => ['CANVAS', 'VIBECODING']);
+    const dual = (await context()).data;
+    await check('同时开两种：客户端这一侧也要能进（下发 classroom + 密钥）', async () => {
+      assert.ok(dual.classroom?.id, `双开课时被误挡了：${JSON.stringify(dual).slice(0, 200)}`);
+      assert.ok(String(dual.gateway?.key || '').length > 0, '双开课时没下发密钥');
     });
-    await check('两种课堂都在：点名画布那节 → 明说类型不对，**不换成另一节**', async () => {
+
+    // ④ 两种都存在（一节画布课 + 一节双开课）→ 候选里只放"声明了 VibeCoding"的；
+    //    **点名那节纯画布课要明说，不许静默换课**
+    const [first, ...rest] = mine;
+    setLessonModes((item) => (item.id === first.id ? ['CANVAS', 'VIBECODING'] : ['CANVAS']));
+    const mixed = (await context()).data;
+    await check('两种都存在：候选里只放"声明了 VibeCoding"的课', async () => {
+      assert.equal(mixed.classroom?.id, first.id, JSON.stringify(mixed.classroom));
+      assert.equal(mixed.classrooms.length, 1, `候选里应只有声明了 VibeCoding 的：${JSON.stringify(mixed.classrooms.map((item) => item.id))}`);
+    });
+    await check('两种都存在：点名那节纯画布课 → 明说类型不对，**不换成另一节**', async () => {
       const asked = (await context(rest[0].id)).data;
       assert.equal(asked.classroom, null, `不许静默换课：${JSON.stringify(asked.classroom)}`);
       assert.equal(asked.reason, 'CLASSROOM_MODE_MISMATCH');
-      assert.ok(!JSON.stringify(asked).includes('gateway'), '点名画布课堂时也不许发密钥');
+      assert.ok(!JSON.stringify(asked).includes('gateway'), '点名画布课时也不许发密钥');
       const result = (await uploadWork({ sessionId: rest[0].id })).data;
       assert.equal(result.error?.code, 'RUNTIME_NO_ACTIVE_CLASSROOM', JSON.stringify(result).slice(0, 200));
     });

@@ -87,6 +87,7 @@ try {
   //    夹具是按"课时的 delivery_mode"建课堂的，而种子里那几节默认是画布课 →
   //    这条守卫验的是 VibeCoding 的发送次数，那它要的教室就该是一间 VibeCoding 课堂。
   write("UPDATE class_sessions SET delivery_mode='VIBECODING'");
+  write("UPDATE course_lessons SET delivery_mode='VIBECODING', delivery_modes=?", [JSON.stringify(['VIBECODING'])]);
   const student = readRow("SELECT id, org_id FROM users WHERE login='student-1'");
 
   server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });

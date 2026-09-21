@@ -8,7 +8,7 @@
 //   · services/studentRuntime.js —— 门禁 → 签密钥 → 调宿主脚本（开 / 收 / 列产物 / 取产物）；
 //   · 本文件的 /submit —— 把取回来的产物按**现有作品链路**落进 vibecoding_submissions；
 //     网页里的本地图片存成私有文件资产并改写引用（见 fileAssets.js 的 storeStudentArtifactAsset）。
-import { errors, requireRole, row, rows } from '../lib.js';
+import { deliveryModesOf, errors, requireRole, row, rows } from '../lib.js';
 import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, runtimeGatewayUrl, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
 import { issueRuntimeKey } from './runtimeGateway.js';
 import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
@@ -17,25 +17,32 @@ import { documentMime } from '../services/ooxml/documents.js';
 import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
 
-// 客户端运行时（dsh / VibeCoding）**只认 VIBECODING 课堂**。
+// 客户端运行时（dsh / VibeCoding）**只认"这节课声明了 VibeCoding"**。
 //
-// ⚠️ 2026-09-21（客户端项目报的）：这里的三个解析器原来都没有筛 `delivery_mode`，
-//    于是**画布课堂也会被当成"你现在能进的课"下发** —— `client-context.classroom` 有值、
-//    网关密钥照发，客户端看到 classroom != null 就打开 VibeCoding 环境。
-//    客户端拿不到 deliveryMode 字段，它没法自己判断，所以**这道门禁必须在服务端**
-//    （客户端只执行"平台下发的可进入结论"）。
+// ⚠️ 2026-09-21（客户端项目报的）：这里的三个解析器原来都没管上课类型，
+//    于是**画布课也会被当成"你现在能进的课"下发** —— `client-context.classroom` 有值、
+//    网关密钥照发，客户端看到 classroom != null 就打开 VibeCoding 环境
+//    （客户端拿不到类型字段，它没法自己判断，所以**这道门禁必须在服务端**）。
+//
+// ⚠️ 判据用**课时声明的类型**（`course_lessons.delivery_modes`，平台勾选的、可以是两种），
+//    **不用**课堂那个单值（`class_sessions.delivery_mode`）：那是老师建课堂时跟着课时带的
+//    "第一个"（9-16 口径「老师不再选课堂模式」，它只作历史兼容）—— 按它判会把
+//    "同时开了两种"的课时误挡（网页两个入口都亮、客户端却进不去）。
+//    这与学生端网页的入口判定同源（`lessonAvailability` 也看课时声明的类型）—— 见口径 61。
 const RUNTIME_DELIVERY_MODE = 'VIBECODING';
-/** 「这节是不是客户端运行时的课」。 */
-const isRuntimeClassroom = (session) => String(session?.delivery_mode || '').toUpperCase() === RUNTIME_DELIVERY_MODE;
+/** 「这节课是不是客户端运行时的课」= 它声明了 VIBECODING（两种都开时，客户端这一侧也算）。 */
+const isRuntimeLesson = (lessonRow) => deliveryModesOf({ delivery_modes: lessonRow?.lesson_delivery_modes, delivery_mode: lessonRow?.lesson_delivery_mode }).includes(RUNTIME_DELIVERY_MODE);
 
-/** 这个学生现在该进哪个课堂：名单里 ACTIVE 且课堂 ACTIVE、且是 VIBECODING 的，最近的第一个。 */
+/** 这个学生现在该进哪个课堂：名单里 ACTIVE 且课堂 ACTIVE、且**这节课声明了 VIBECODING**，最近的第一个。 */
 function resolveActiveClassroom(studentId) {
   return row(
-    `SELECT s.id, s.lesson_id, s.title, s.delivery_mode
+    `SELECT s.id, s.lesson_id, s.title, s.delivery_mode,
+            lesson.delivery_mode AS lesson_delivery_mode, lesson.delivery_modes AS lesson_delivery_modes
        FROM class_sessions s
        JOIN session_students p ON p.session_id = s.id
+       LEFT JOIN course_lessons lesson ON lesson.id = s.lesson_id
       WHERE p.student_id = ? AND p.status = 'ACTIVE' AND s.status = 'ACTIVE'
-        AND s.delivery_mode = '${RUNTIME_DELIVERY_MODE}'
+        AND (lesson.delivery_mode = '${RUNTIME_DELIVERY_MODE}' OR lesson.delivery_modes LIKE '%${RUNTIME_DELIVERY_MODE}%')
       ORDER BY s.started_at DESC, s.created_at DESC
       LIMIT 1`,
     [studentId],
@@ -89,11 +96,13 @@ function classroomContext(sessionId) {
  */
 function resolvePendingClassroom(studentId) {
   return row(
-    `SELECT session.id, session.lesson_id, session.title, session.delivery_mode
+    `SELECT session.id, session.lesson_id, session.title, session.delivery_mode,
+            lesson.delivery_mode AS lesson_delivery_mode, lesson.delivery_modes AS lesson_delivery_modes
        FROM class_sessions session
        JOIN session_students part ON part.session_id = session.id
+       LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
       WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'PENDING'
-        AND session.delivery_mode = '${RUNTIME_DELIVERY_MODE}'
+        AND (lesson.delivery_mode = '${RUNTIME_DELIVERY_MODE}' OR lesson.delivery_modes LIKE '%${RUNTIME_DELIVERY_MODE}%')
       ORDER BY session.created_at DESC LIMIT 1`,
     [studentId],
   );
@@ -116,9 +125,11 @@ function resolvePendingClassroom(studentId) {
  */
 function resolveClassroomEntry(studentId, requestedSessionId) {
   const raw = rows(
-    `SELECT session.id, session.lesson_id, session.title, session.started_at, session.created_at, session.delivery_mode
+    `SELECT session.id, session.lesson_id, session.title, session.started_at, session.created_at, session.delivery_mode,
+            lesson.delivery_mode AS lesson_delivery_mode, lesson.delivery_modes AS lesson_delivery_modes
        FROM class_sessions session
        JOIN session_students part ON part.session_id = session.id
+       LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
       WHERE part.student_id = ? AND part.status = 'ACTIVE' AND session.status = 'ACTIVE'
       ORDER BY session.started_at DESC, session.created_at DESC`,
     [studentId],
@@ -129,16 +140,16 @@ function resolveClassroomEntry(studentId, requestedSessionId) {
     title: session.title,
     ...(classroomContext(session.id) || {}),
   });
-  // ⭐ 候选**只放 VIBECODING 的**：画布课堂不该出现在"你现在能进的课"里（客户端会照单全收去开环境）。
-  //    注意 raw 要保留全部（不带筛），否则"学生选的这节是画布课堂"这件事就看不出来了。
-  const runtimeSessions = raw.filter(isRuntimeClassroom);
+  // ⭐ 候选**只放"这节课声明了 VIBECODING"的**：画布课不该出现在"你现在能进的课"里
+  //    （客户端会照单全收去开环境）。注意 raw 要保留全部，否则"学生点名的这节是画布课"就看不出来了。
+  const runtimeSessions = raw.filter(isRuntimeLesson);
   const candidates = runtimeSessions.map(publicOf);
   const requested = String(requestedSessionId || '').trim();
   if (requested) {
     const hit = raw.find((item) => item.id === requested) || null;
     if (!hit) return { session: null, classroom: null, candidates, reason: 'CLASSROOM_NOT_AVAILABLE' };
-    // 明确点名了一节画布课堂：**明说是类型不对，绝不默默换成另一节**（静默换课会把学生放到别的课上）。
-    if (!isRuntimeClassroom(hit)) return { session: null, classroom: null, candidates, reason: 'CLASSROOM_MODE_MISMATCH' };
+    // 明确点名了一节画布课：**明说是类型不对，绝不默默换成另一节**（静默换课会把学生放到别的课上）。
+    if (!isRuntimeLesson(hit)) return { session: null, classroom: null, candidates, reason: 'CLASSROOM_MODE_MISMATCH' };
     return { session: hit, classroom: candidates.find((item) => item.id === hit.id) || null, candidates, reason: null };
   }
   const session = runtimeSessions[0] || null;
@@ -146,7 +157,7 @@ function resolveClassroomEntry(studentId, requestedSessionId) {
     session,
     classroom: session ? (candidates.find((item) => item.id === session.id) || null) : null,
     candidates,
-    // 没有可进的 VIBECODING 课，但他**正在一节画布课上** → 说清是类型不对（不是"老师没开始上课"）
+    // 没有可进的客户端课，但他**正在一节画布课上** → 说清是类型不对（不是"老师没开始上课"）
     reason: session ? null : (raw.length ? 'CLASSROOM_MODE_MISMATCH' : 'NOT_STARTED'),
   };
 }
