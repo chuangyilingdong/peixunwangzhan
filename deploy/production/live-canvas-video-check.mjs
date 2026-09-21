@@ -69,16 +69,17 @@ const policy = JSON.parse(db.prepare('SELECT ai_provider_policy FROM platform_se
 const channelId = policy.modalityChannels?.VIDEO;
 const channel = (policy.channels || []).find((item) => item.id === channelId) || {};
 const prompt = '让图片动起来';
+const ratio = String(args.ratio || 'auto');   // 「自动」= 客户端现在会送 'auto'（服务端翻成 adaptive）
 const jobId = `generation_livecheck${Date.now().toString(16)}`;
 const now = new Date().toISOString();
 db.prepare(`INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,created_at,box_id,source_asset_url,request_options,credits_charged)
   VALUES (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,0)`)
-  .run(jobId, project.org_id, project.student_id, project.id, 'VIDEO', channel.provider || 'custom', channel.model || 'MiniMax-H3', prompt, now, box.id, asset, JSON.stringify({ aspectRatio: '16:9' }));
+  .run(jobId, project.org_id, project.student_id, project.id, 'VIDEO', channel.provider || 'custom', channel.model || 'MiniMax-H3', prompt, now, box.id, asset, JSON.stringify({ aspectRatio: ratio }));
 db.close();
 
 console.log(`项目：${project.id}（${project.title}）`);
 console.log(`框体：${box.id}「${box.title}」 模型 ${box.model}`);
-console.log(`素材：${asset}`);
+console.log(`素材：${asset}（${ratio === 'auto' ? '画幅走「自动」→ 服务端翻成 adaptive，输出应跟着源图比例' : `画幅固定 ${ratio}`}）`);
 console.log(`任务：${jobId}\n`);
 console.log('⚠️ 这会真花上游的钱（480P/5s ≈ ¥0.75），且是一次真实生成。\n');
 
