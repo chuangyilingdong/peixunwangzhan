@@ -196,6 +196,25 @@ try {
   q("INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES ('ovr1','org1','VIDEO',0,'测试覆盖','stu1',?,?)", [now, now]);
   await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'org override off');
 
+  /* ── 场景 6：**入队时解析一次、worker 真正执行时再解析一次**，两次必须一致 ─────────────
+     2026-09-21 用户报「视频还是没法参考，完全是两个东西」的真根因就在这两步之间：
+     入队把站内地址解析成**绝对地址**（`https://<站点>/api/public/file-assets/<id>/download`）写进 job 记录，
+     而 worker 从记录里读出来的正是这个绝对地址 —— 当时 `publicFileAssetUrl` 只认**站内相对地址**
+     （正则要求以 `/api/...` 开头），于是第二次解析返回空串 → 首帧被**悄悄丢掉** →
+     上游收到纯文本请求 → 出一段与参考无关的作品，而任务成功、日志干净。
+     这里复用上面那两个夹具（file_pub1 公开 / file_priv1 私有），把两次解析**都真跑一遍**。 */
+  const { resolveFirstFrameUrl } = await import('../apps/server/src/routes/aiGeneration.js');
+  const enqueueResolved = resolveFirstFrameUrl('proj1', '/api/student/file-assets/file_pub1/download');
+  check(/^https?:\/\/[^/]+\/api\/public\/file-assets\/file_pub1\/download$/.test(enqueueResolved),
+    `入队时：站内地址应解析成公开绝对地址，实际 ${enqueueResolved || '(空)'}`);
+  check(resolveFirstFrameUrl('proj1', enqueueResolved) === enqueueResolved,
+    `worker 第二次解析必须与入队一致（不一致=首帧被静默丢掉）：入队=${enqueueResolved || '(空)'} / 执行=${resolveFirstFrameUrl('proj1', enqueueResolved) || '(空)'}`);
+  // 反例：私有素材仍要被拒 —— 「只把公开素材交给上游」那条规矩不能跟着一起放开
+  check(resolveFirstFrameUrl('proj1', 'https://iicili.cyou/api/public/file-assets/file_priv1/download') === '',
+    '私有素材仍然不许交给上游（放开绝对地址不能顺手把这条也放开）');
+  check(resolveFirstFrameUrl('proj1', 'https://evil.example/x.png') === '',
+    '外部地址仍然解析不出来（只认本项目/本平台素材）');
+
   if (failures.length) throw new Error(failures.join('; '));
   console.log('P11 video first-frame guard passed');
 } finally {

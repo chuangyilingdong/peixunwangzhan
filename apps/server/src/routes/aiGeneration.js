@@ -228,16 +228,33 @@ function jobDetail(jobId, { requireAuth = null } = {}) {
  */
 // 站内相对地址（老师上传的素材是 /api/student/file-assets/<id>/download）上游抓不到，
 // 只要这个文件是「公开可见」的，就换成绝对地址的公开下载链接再发；不可公开的一律拒绝。
+//
+// ⚠️ 2026-09-21 修：这里原来**只认站内相对地址**（正则要求以 `/api/...` 开头），而 worker 从
+//    job 记录里读出来的是**绝对地址**（入队时就写成 `https://iicili.cyou/api/public/...`）→
+//    正则不匹配 → 返回空串 → 首帧/参考在"真正要发请求的那一刻"被**悄悄丢掉**，
+//    上游收到的是纯文本请求 → 出来一段与参考毫无关系的作品，任务还成功。
+//    （用户这一天报的「完全不一样的内容」就是它：入队时好好的，执行时没了。）
+//    所以：**自己域名的绝对地址也要认**。回查数据库用的是文件 id，且只回我们自己站点的公开地址，
+//    所以不存在"把外部地址送给上游"的口子 —— 外部地址仍然解析不出来（下面那条反例钉着）。
 function publicFileAssetUrl(value) {
-  const url = String(value || '').trim();
-  const match = url.match(/^\/api\/(?:student|public)\/file-assets\/([^/]+)\/download$/);
-  if (!match) return '';
-  const file = row('SELECT id,status,visibility,category,expires_at FROM file_assets WHERE id=?', [match[1]]);
-  if (!file || file.status !== 'ACTIVE') return '';
-  if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) return '';
-  if (file.category === 'TEACHING_ASSET') return '';
-  if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') return '';
-  return `${String(PUBLIC_SITE_URL || '').replace(/\/+$/, '')}/api/public/file-assets/${file.id}/download`;
+  const raw = String(value || '').trim();
+  const base = String(PUBLIC_SITE_URL || '').replace(/\/+$/, '');
+  // 摘 origin：自己域名的绝对地址直接摘前缀；域名万一变了（或记录是另一套 PUBLIC_SITE_URL 写的）
+  // 就用 pathname 再试一次 —— 只按**路径形状**认领，文件本身仍要在库里查到、且是公开的。
+  const candidates = [raw];
+  if (base && raw.startsWith(`${base}/`)) candidates.push(raw.slice(base.length));
+  else if (/^https?:\/\//i.test(raw)) { try { candidates.push(new URL(raw).pathname); } catch { /* 非法 URL 就用原串 */ } }
+  for (const candidate of candidates) {
+    const match = candidate.match(/^\/api\/(?:student|public)\/file-assets\/([^/]+)\/download$/);
+    if (!match) continue;
+    const file = row('SELECT id,status,visibility,category,expires_at FROM file_assets WHERE id=?', [match[1]]);
+    if (!file || file.status !== 'ACTIVE') continue;
+    if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) continue;
+    if (file.category === 'TEACHING_ASSET') continue;
+    if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') continue;
+    return `${base}/api/public/file-assets/${file.id}/download`;
+  }
+  return '';
 }
 
 // 生成用的画面/参考来源：已是绝对地址（生成素材、data URL、本地 mock）直接用，
@@ -249,12 +266,37 @@ function resolvableAssetUrl(value) {
   return publicFileAssetUrl(url);
 }
 
-function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
+// 导出是给守卫用的（p125）：入队时解析一次、worker 真正执行时**再解析一次**，
+// 这两次必须得到同一个结果。两次不一致 = 首帧/参考在"要发请求的那一刻"被丢掉。
+export function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   const url = String(sourceAssetUrl || '').trim();
   if (!url || url.length > 2000) return '';
   const asset = row("SELECT asset_url FROM media_assets WHERE project_id = ? AND modality = 'IMAGE' AND asset_url = ?", [projectId, url]);
   if (asset) return String(asset.asset_url);
   return publicFileAssetUrl(url);
+}
+
+/**
+ * worker 执行时的核对：**入队时交给我们的素材，执行时不能凭空消失**。
+ *
+ * 2026-09-21：`publicFileAssetUrl` 那时只认站内相对地址，而 job 记录里存的是绝对地址 →
+ * worker 第二次解析一律得到空串 → 上游收到的是没有输入的请求 → 出一段与参考无关的作品，
+ * 而任务**成功**、日志干净（用户报的「完全不一样的内容」就是它）。
+ * 所以这里改成：解析不出来就当场失败，并告诉学生"重新连一张" ——
+ * 静默降级成"没有输入"是最糟的结果（比报错糟得多，与「模板带不了参考就当场拒绝」同一条口径）。
+ */
+function assertMediaResolved({ sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], resolvedFirstFrame = '', resolvedLastFrame = '', resolvedReferences = [] }) {
+  const missing = [];
+  if (String(sourceAssetUrl || '').trim() && !String(resolvedFirstFrame || '').trim()) missing.push('首帧图');
+  if (String(lastFrameAssetUrl || '').trim() && !String(resolvedLastFrame || '').trim()) missing.push('尾帧图');
+  const wanted = (Array.isArray(referenceAssets) ? referenceAssets : []).filter((item) => item && item.url).length;
+  const got = (Array.isArray(resolvedReferences) ? resolvedReferences : []).length;
+  if (wanted > got) missing.push('参考素材');
+  if (!missing.length) return;
+  throw errors.badRequest(
+    `${missing.join('、')}现在读不到了（可能已被删除、或不是公开素材）—— 请回到画布重新连一张再生成`,
+    'GENERATION_MEDIA_UNRESOLVED',
+  );
 }
 
 // 描述生音乐：平台先用文本模型把学生的描述写成歌词，再交给音乐模型。
@@ -747,6 +789,12 @@ async function processAsyncGeneration(item) {
     const box = resolveLessonGenerationBox(context, modality, boxId);
     const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
     const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
+    const resolvedReferences = resolveReferenceAssets(project.id, referenceAssets);
+    // 入队时有的素材、执行时不能凭空消失（2026-09-21 的「完全不一样的内容」就是这里静默丢的）
+    assertMediaResolved({
+      sourceAssetUrl, lastFrameAssetUrl, referenceAssets,
+      resolvedFirstFrame: requestedFirstFrame, resolvedLastFrame: requestedLastFrame, resolvedReferences,
+    });
     const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
       ? await writeLyricsForMusic({ prompt, policy, requestContext, auth, lessonId: context.lesson?.id || '' })
       : '';
@@ -754,7 +802,7 @@ async function processAsyncGeneration(item) {
       context, modality, policy, selection: routedByGateway, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
-      referenceAssets: resolveReferenceAssets(project.id, referenceAssets),
+      referenceAssets: resolvedReferences,
       lyrics: writtenLyrics,
       studentOptions: requestOptions,
     });
