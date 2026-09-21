@@ -19,6 +19,19 @@ const DEFAULT_MIME_TYPES = Object.freeze({
 
 import { musicRequestContext, renderRequestTemplate, requestTemplateFor } from './modelCapabilities.js';
 import { isCnyCurrency } from './upstreamCost.js';
+import { mirrorSelfHostedMedia } from './upstreamMediaMirror.js';
+
+// 素材暂存接口：只有这家上游（境外中继）有，路径是它文档里的 `POST /v1/files/upload`。
+// 换别家上游、或它哪天改了路径 → 在渠道/工厂参数里给 `mediaUploadPath` 覆盖；给空串＝关掉镜像。
+// ⚠️ 后端**不认** new-api 那套网关（网关没有这个接口），所以走网关的分支不传 selfOrigins，
+//    镜像自然不会启动（见 services/generationProvider.js）。
+const MEDIA_UPLOAD_PATHS = Object.freeze({
+  'api.seedance.nz': '/v1/files/upload',
+});
+
+function defaultMediaUploadPath(endpoint) {
+  try { return MEDIA_UPLOAD_PATHS[new URL(normalizeEndpoint(endpoint)).hostname.toLowerCase()] || ''; } catch { return ''; }
+}
 
 function providerError(message, code, status = 0) {
   const error = new Error(message);
@@ -437,11 +450,14 @@ async function pollForAsset({ initialPayload, requestUrl, modality, apiKey, time
   return assetFromResponse({ payload, modality, title, providerName, model });
 }
 
-export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {}, requestPaths = {}, pollPaths = {} } = {}) {
+export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeoutMs = AI_PROVIDER_TIMEOUT_MS, modalityEndpoints = {}, voice = 'alloy', pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, requestTemplates = {}, modelRequestTemplates = {}, requestPaths = {}, pollPaths = {}, mediaUploadPath = defaultMediaUploadPath(endpoint), selfOrigins = [] } = {}) {
   const providerName = String(name || 'openai-compatible').trim();
   const providerModel = String(model || '').trim();
   const timeout = Math.max(1000, Math.min(300000, Number(timeoutMs) || AI_PROVIDER_TIMEOUT_MS));
   const pollInterval = Math.max(250, Math.min(10000, Number(pollIntervalMs) || DEFAULT_POLL_INTERVAL_MS));
+  // 素材镜像地址：`/v1/files/upload` 这类路径按上游 origin 拼绝对地址。
+  const mediaUploadUrl = mediaUploadPath ? absoluteEndpoint(endpoint, mediaUploadPath) : '';
+  const selfMediaOrigins = Array.isArray(selfOrigins) ? selfOrigins.filter(Boolean) : [];
 
   return {
     name: providerName,
@@ -457,8 +473,13 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         throw providerError('当前真实 AI 适配器暂不支持该素材类型。', PROVIDER_ERROR_CODES.MODALITY_UNSUPPORTED);
       }
       const url = modalityEndpoint(endpoint, normalizedModality, modalityEndpoints, requestPaths);
+      // 上游在境外、抓不到我们域名上的素材 → 首帧/尾帧/参考图先传到上游，
+      // 用上游自己的 URL 发（不然上游静默当文生跑，出来的画面与参考毫无关系）。
+      const effectiveOptions = await mirrorSelfHostedMedia(options, {
+        selfOrigins: selfMediaOrigins, uploadUrl: mediaUploadUrl, apiKey, timeoutMs: timeout,
+      });
       const response = await fetchWithTimeout(url, {
-        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options, referenceAssets: options.referenceAssets, requestTemplates, modelRequestTemplates, messages }),
+        body: requestBody({ modality: normalizedModality, model: providerModel, prompt, title, voice, options: effectiveOptions, referenceAssets: effectiveOptions.referenceAssets, requestTemplates, modelRequestTemplates, messages }),
         apiKey,
         timeout,
         modality: normalizedModality,

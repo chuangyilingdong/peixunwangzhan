@@ -1,10 +1,15 @@
-import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE } from '../config.js';
+import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_KEY, AI_PROVIDER_MODALITY_ENDPOINTS, AI_PROVIDER_POLL_INTERVAL_MS, AI_PROVIDER_VOICE, PUBLIC_SITE_URL } from '../config.js';
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
 import { id, json, nowIso, q, row } from '../lib.js';
 import { priceFenFor } from './computePool.js';
 import { collectUsageEvidence, computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, normalizeUpstreamUnitPrices, reportedCostRuleSnapshot } from './upstreamCost.js';
+
+// 「我们自己站点上的素材」是哪些域名。上游在境外**抓不到它们**（2026-09-21 实测：
+// 要么压根连不上、要么读一半就断），所以适配器会把这些 URL 先传到上游再用上游自己的地址发
+// （见 services/upstreamMediaMirror.js）。只在这里传 → 走网关/模拟器那两条分支不会启动镜像。
+const SELF_MEDIA_ORIGINS = [PUBLIC_SITE_URL].map((value) => String(value || '').trim()).filter(Boolean);
 
 function svgDataUrl(title, subtitle, hue) {
   const escape = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -207,8 +212,7 @@ export function getGenerationProvider(selection = {}) {
 
 function rawGenerationProvider(selection = {}) {
   const selected = providerSelection(selection);
-  const config = providerConfig(selected);
-  if (isMockProvider(config.provider)) return mockProvider(config.model);
+  const config = providerConfig(selected);  if (isMockProvider(config.provider)) return mockProvider(config.model);
   const definition = providerDefinition(config.provider);
   if (!config.valid || !definition?.adapterAvailable) return unavailableProvider({ name: config.provider, model: config.model, config });
   if (selected.gateway) {
@@ -223,5 +227,5 @@ function rawGenerationProvider(selection = {}) {
       requestTemplates: {}, modelRequestTemplates: {}, requestPaths: { IMAGE: '/v1/images/generations' }, pollPaths: {},
     });
   }
-  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: selected.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates, requestPaths: selected.requestPaths, pollPaths: selected.pollPaths });
+  return openAiCompatibleProvider({ name: config.provider, model: config.model, endpoint: config.endpoint, apiKey: selected.apiKey || getProviderApiKey(selected.channelId) || getProviderApiKey() || AI_PROVIDER_API_KEY, modalityEndpoints: AI_PROVIDER_MODALITY_ENDPOINTS, pollIntervalMs: AI_PROVIDER_POLL_INTERVAL_MS, voice: AI_PROVIDER_VOICE, requestTemplates: selected.requestTemplates, modelRequestTemplates: selected.modelRequestTemplates, requestPaths: selected.requestPaths, pollPaths: selected.pollPaths, selfOrigins: SELF_MEDIA_ORIGINS });
 }

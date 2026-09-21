@@ -375,10 +375,26 @@ export function parseRequestTemplate(text) {
 //
 // ⚠️ 2026-09-21 用户报：`zhenzhen-image-g-v2.5-lowprice` 报
 //    「AI 供应商调用失败（上游：output_format is not supported by this model）」，而 2.0 正常。
-//    根因：上游图像模型分两代，**2.5 系把 resolution / output_format / quality / background 放在
-//    请求体顶层**（docs: api.seedance.nz/docs/#image-g-v25-ext），而默认 IMAGE 模板把它们塞在
-//    `metadata` 里（2.0 收的就是嵌套那套）。按模型名给一把顶层形状的模板即可。
+//    **这条第一版修错了**（别再按那个思路改回来）：当时以为是"字段放错了位置"，
+//    就给 2.5 系换成**顶层** output_format —— 结果照样报同一个错。
+//    上游文档（api.seedance.nz/docs/llms.txt）写得很明白：2.5 有**两款不同能力**的模型 ——
+//    · 「Image G v2.5：Flare / Sunburst」：`output_format` / `quality` / `background` 都收，放**顶层**；
+//    · 「Image G v2.5：低价扩展版」（就是线上在用的 `zhenzhen-image-g-v2.5-lowprice`）：
+//      只认 model / prompt / images / n / size / resolution / nsfw_check，
+//      文档原话「此扩展版**不提供质量档位、输出格式、透明背景或流式选项**」→ 传 output_format 就是 400。
+//    所以按**模型名**分开给：低价版**一个都不带**，flare/sunburst 走带顶层 output_format 的那份。
 export const MODEL_TEMPLATE_DEFAULTS = Object.freeze([
+  {
+    // 低价扩展版：字段全部顶层，**没有输出格式**（上游不收，传了 400）。
+    // ⚠️ 这条必须排在下面那条通用 2.5 规则**前面**（先匹配先赢）。
+    pattern: /^zhenzhen-image-g-v2\.5-lowprice$/i,
+    IMAGE: Object.freeze({
+      model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}',
+      // images 最多 15 张（低价版的编辑模式）；没连参考图时这个键会被整段去掉（见 referenceImageUrls）
+      images: '{{referenceImageUrls}}',
+      resolution: '{{resolution}}',
+    }),
+  },
   {
     pattern: /^zhenzhen-image-g-v2\.5-/i,
     IMAGE: Object.freeze({
