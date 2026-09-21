@@ -172,6 +172,17 @@ const server = http.createServer(async (req, res) => {
 
 initializeAsyncGenerationQueue();
 
+// 客户端更新清单：把后台存过的策略复写回静态清单。
+// 为什么在启动时做：客户端发布流水线是**整体覆盖** manifest.json 的（它只写身份字段），
+// 覆盖会把后台配的 enabled/mandatory/minVersion 抹掉 —— 不自动复写就是「每次发客户端版本
+// 都静默重置后台策略」。这里只补差异，失败也只记一行（绝不能因此起不来）。
+{
+  const { applyStoredPolicy } = await import('./services/clientUpdateManifest.js');
+  const result = applyStoredPolicy();
+  if (result.applied) console.log('client update manifest: 已把后台策略复写回清单');
+  else if (result.reason && result.reason !== '清单里的策略已是最新' && result.reason !== '没有存过的策略') console.log(`client update manifest: 跳过（${result.reason}）`);
+}
+
 server.listen(PORT, API_HOST, () => {
   console.log(`AI Kids Platform API listening on http://${API_HOST}:${PORT}`);
 });
