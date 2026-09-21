@@ -29,7 +29,7 @@ const {
   mirrorSelfHostedMedia, mirrorMediaUrl, isSelfHostedMediaUrl, resetUpstreamMediaMirrorCache, upstreamMediaMirrorCacheSize,
 } = await import('../apps/server/src/services/upstreamMediaMirror.js');
 const { openAiCompatibleProvider } = await import('../apps/server/src/services/openaiCompatibleProvider.js');
-const { requestTemplateFor, renderRequestTemplate } = await import('../apps/server/src/services/modelCapabilities.js');
+const { requestTemplateFor, renderRequestTemplate, MODEL_TEMPLATE_DEFAULTS, DEFAULT_REQUEST_TEMPLATES } = await import('../apps/server/src/services/modelCapabilities.js');
 
 const SELF = 'https://iicili.cyou';
 const OUR_IMAGE = `${SELF}/api/public/file-assets/file_a65dc46d919e4b9dbf91/download`;
@@ -194,6 +194,17 @@ check('㉒ flare / sunburst 那两款**是**支持 output_format 的（放顶层
   && requestTemplateFor({}, 'IMAGE', { model: 'zhenzhen-image-g-v2.5-sunburst' })?.output_format === 'png');
 check('㉓ 2.0（zhenzhen-image-g-v2-lowprice）形状不变 —— 它一直能用，别动',
   requestTemplateFor({}, 'IMAGE', { model: 'zhenzhen-image-g-v2-lowprice' })?.metadata?.output_format === 'png');
+// 用户 2026-09-21 追问「2.5 改了，2.0 会受影响吗」—— 这两条就是把答案钉死在代码上：
+// 两份模型名只差 `v2-` 与 `v2.5-`，正则里那个 `.5-` 是必需的，所以 2.5 的两条**都命中不了 2.0**。
+check('㉓b 2.5 那两条内置规则**都不会**命中 2.0 的模型名（差在 `v2-` 与 `v2.5-`）',
+  MODEL_TEMPLATE_DEFAULTS.every((rule) => !rule.pattern.test('zhenzhen-image-g-v2-lowprice')),
+  MODEL_TEMPLATE_DEFAULTS.map((rule) => `${rule.pattern}`).join(' / '));
+check('㉓c 2.0 拿到的就是**默认 IMAGE 模板本身**（不是另一份拷贝）—— 请求体与改之前逐字一致',
+  requestTemplateFor({}, 'IMAGE', { model: 'zhenzhen-image-g-v2-lowprice' }) === DEFAULT_REQUEST_TEMPLATES.IMAGE,
+  JSON.stringify(requestTemplateFor({}, 'IMAGE', { model: 'zhenzhen-image-g-v2-lowprice' })));
+check('㉓d 渲染 2.0 的请求体：metadata 里带着 resolution 与 output_format（这就是它一直正常的那套）',
+  JSON.stringify(renderRequestTemplate(requestTemplateFor({}, 'IMAGE', { model: 'zhenzhen-image-g-v2-lowprice' }), { model: 'zhenzhen-image-g-v2-lowprice', prompt: '古风图', aspectRatio: '16:9', resolution: '1k' }))
+  === JSON.stringify({ model: 'zhenzhen-image-g-v2-lowprice', prompt: '古风图', n: 1, size: '16:9', metadata: { resolution: '1k', output_format: 'png' } }));
 check('㉔ 管理员在渠道/模型上配过的模板优先于内置默认（内置只是兜底）',
   JSON.stringify(requestTemplateFor({ modelRequestTemplates: { 'zhenzhen-image-g-v2.5-lowprice': { model: 'x' } } }, 'IMAGE', { model: 'zhenzhen-image-g-v2.5-lowprice' })) === JSON.stringify({ model: 'x' }));
 
