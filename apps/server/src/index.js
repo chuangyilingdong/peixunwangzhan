@@ -123,7 +123,7 @@ const server = http.createServer(async (req, res) => {
         // 上限提到 200MB 之后，两份这样的大请求叠在一起就能把 1.6G 的机器打穿（会 OOM 杀进程，
         // 连带把学生环境一起带走 —— 这台机器上出过）。所以大请求**并发上限默认 2 份 / 合计 256MB**，
         // 超了先给一句中文，别让它走到分配内存那一步。
-        const release = acquireBodySlot(Number.isFinite(declaredLength) ? declaredLength : 0);
+        const release = await acquireBodySlot(Number.isFinite(declaredLength) ? declaredLength : 0);
         res.on('finish', release);
         res.on('close', release);
         ctx.rawBody = await readBodyBuffer(req, requestLimit);

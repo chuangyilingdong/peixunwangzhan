@@ -88,18 +88,26 @@ assert.equal(response.headers['x-content-type-options'], 'nosniff');
   const gateEnv = { FILE_UPLOAD_MAX_INFLIGHT: '2', FILE_UPLOAD_MAX_INFLIGHT_BYTES: String(256 * 1024 * 1024) };
   assert.deepEqual(bodyGateLimits(gateEnv), { maxBodies: 2, maxBytes: 256 * 1024 * 1024 });
   const tooMany = (message, code, details) => Object.assign(new Error(message), { code, details });
-  const first = acquireBodySlot(200 * 1024 * 1024, { env: gateEnv, tooMany });
-  assert.throws(() => acquireBodySlot(200 * 1024 * 1024, { env: gateEnv, tooMany }),
-    (error) => error.code === 'UPLOAD_BUSY', '第二份 200MB 必须挡在读 body 之前');
-  assert.throws(() => acquireBodySlot(80 * 1024 * 1024, { env: gateEnv, tooMany }),
+  // 2026-09-21 起 acquireBodySlot 是 async 的：名额占满时**先排队等**（默认最多 18 秒）再拒。
+  // 下面是"等不到名额"的四种情形（waitMs:0 = 不许等，模拟"确实排不到"）。
+  const first = await acquireBodySlot(200 * 1024 * 1024, { env: gateEnv, tooMany });
+  await assert.rejects(() => acquireBodySlot(200 * 1024 * 1024, { env: gateEnv, tooMany, waitMs: 0 }),
+    (error) => error.code === 'UPLOAD_BUSY', '第二份 200MB 必须挡在读 body 之前（等不到名额时）');
+  await assert.rejects(() => acquireBodySlot(80 * 1024 * 1024, { env: gateEnv, tooMany, waitMs: 0 }),
     (error) => error.code === 'UPLOAD_BUSY', '合计超预算也要挡（200+80 > 256MB）');
-  const second = acquireBodySlot(40 * 1024 * 1024, { env: gateEnv, tooMany });
-  assert.throws(() => acquireBodySlot(1, { env: gateEnv, tooMany }),
+  const second = await acquireBodySlot(40 * 1024 * 1024, { env: gateEnv, tooMany, waitMs: 0 });
+  await assert.rejects(() => acquireBodySlot(1, { env: gateEnv, tooMany, waitMs: 0 }),
     (error) => error.code === 'UPLOAD_BUSY', '份数占满也要挡');
-  first(); first();   // release 必须幂等（finish 与 close 都会调）
-  assert.equal(bodyGateState().count, 1, '重复 release 不能把别人的名额也放掉');
-  second();
-  assert.deepEqual(bodyGateState(), { count: 0, bytes: 0, busy: 3 }, '全部释放后必须归零（否则上传会永久 429）');
+
+  // ④ 用户 2026-09-21 撞的那条：「同时上传的文件太多」原本是**一满就拒**，
+  //    而他只是接着传第二个文件（前一个还在扫毒、名额一直占着）。现在**先排队等**。
+  const queued = acquireBodySlot(30 * 1024 * 1024, { env: gateEnv, tooMany, waitMs: 3000 });
+  setTimeout(() => { first(); second(); }, 60);          // 60ms 后两个名额一起腾出来
+  const third = await queued;
+  assert.ok(typeof third === 'function', '名额被占满时要排队等一等，等到了就继续（而不是立刻 429）');
+  assert.equal(bodyGateState().waited, 1, '排队成功的次数要记下来（诊断用）');
+  first(); second(); third();
+  assert.deepEqual(bodyGateState(), { count: 0, bytes: 0, busy: 3, waited: 1 }, '全部释放后必须归零（否则上传会永久 429）');
 }
 
 await rm(root, { recursive: true, force: true });

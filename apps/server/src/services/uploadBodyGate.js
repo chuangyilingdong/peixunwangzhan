@@ -30,25 +30,43 @@ export function bodyGateLimits(env = process.env) {
   };
 }
 
-const state = { count: 0, bytes: 0, busy: 0 };
+const state = { count: 0, bytes: 0, busy: 0, waited: 0 };   // waited = 排队等到名额的次数（诊断用）
 
-/** 当前在飞的名额（给守卫与诊断看）。 */
+/** 当前在飞的名额与计数（给守卫与诊断看）：count/bytes 在飞、busy 被拒次数、waited 排队成功次数。 */
 export function bodyGateState() {
   return { ...state };
 }
 
 /**
- * 占一个名额。返回 release（幂等）。
+ * 占一个名额（**等一下再拒**）。返回 release（幂等）。
+ *
+ * ⚠️ 2026-09-21 用户撞到「同时上传的文件太多，请稍后再试」——那是"名额被占满的瞬间直接 429"。
+ *  但真实场景里绝大多数不是"并发太高"，而是**前一个上传还在扫毒**（一份 200MB 要扫十几秒到几十秒，
+ *  名额一直占着）：老师接着传第二个文件就必然撞上。所以改成**先排队等一会儿**（默认最多 18 秒，
+ *  可配 FILE_UPLOAD_GATE_WAIT_MS），等不到再报那句中文。内存保护不变：**等待期间不申请任何内存**，
+ *  名额也是拿到了才读 body。
+ *
  * @param {number} declaredBytes - 来自 content-length；未知时按 0 计（只占份数）
  * @param {(message: string, code: string, details?: object) => Error} tooMany - 由调用方注入错误构造器
  */
-export function acquireBodySlot(declaredBytes, { env = process.env, tooMany } = {}) {
+export async function acquireBodySlot(declaredBytes, { env = process.env, tooMany, waitMs } = {}) {
   const { maxBodies, maxBytes } = bodyGateLimits(env);
   const size = Number.isFinite(declaredBytes) && declaredBytes > 0 ? Math.floor(declaredBytes) : 0;
-  if (state.count + 1 > maxBodies || state.bytes + size > maxBytes) {
-    state.busy += 1;
-    throw tooMany('同时上传的文件太多，请稍后再试', 'UPLOAD_BUSY', { retryAfterSeconds: 10 });
+  const deadlineMs = Number.isFinite(Number(waitMs))
+    ? Math.max(0, Number(waitMs))
+    : Math.max(0, Number(env.FILE_UPLOAD_GATE_WAIT_MS ?? 18000));
+  const startedAt = Date.now();
+  const fits = () => state.count + 1 <= maxBodies && state.bytes + size <= maxBytes;
+  while (!fits()) {
+    const waited = Date.now() - startedAt;
+    if (waited >= deadlineMs) {
+      state.busy += 1;
+      throw tooMany('同时上传的文件太多，请稍后再试', 'UPLOAD_BUSY', { retryAfterSeconds: 10, waitedMs: waited });
+    }
+    // 50ms 一次轮询：够快（名额一空就走），也够轻（不占内存、不打满 CPU）
+    await new Promise((resolve) => setTimeout(resolve, Math.min(50, deadlineMs - waited)));
   }
+  if (Date.now() - startedAt > 0) state.waited += 1;
   state.count += 1;
   state.bytes += size;
   let released = false;
