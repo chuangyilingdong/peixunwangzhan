@@ -9,7 +9,7 @@ import { handleRuntimeGateway } from './routes/runtimeGateway.js';
 import { handleRuntimeSearchGateway } from './routes/runtimeSearchGateway.js';
 import { handleStudentRuntime } from './routes/studentRuntime.js';
 import { handleAi } from './routes/ai.js';
-import { handleAiGeneration, initializeAsyncGenerationQueue } from './routes/aiGeneration.js';
+import { handleAiGeneration, initializeAsyncGenerationQueue, interruptOwnJobsOnShutdown } from './routes/aiGeneration.js';
 // 2026-09-18：供应商账单两条线整体下线（用户口径）——服务、路由与「官方账单 API 日级定时拉取」
 // 一并删除，这里不再有任何账单 scheduler 的 import。
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
@@ -212,6 +212,11 @@ function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`API server received ${signal}; shutting down`);
+  // 正在跑的生成任务当场收尾：上游可能已经受理并计费，但我们再也拿不回结果了 ——
+  // 标成失败，学生那边立刻看到"这次中断了、可以重试"，框体也不会被判成"已经生成过了"而点不动。
+  // （不这么做的话，任务会停在 RUNNING：框体被占用、结果永远不出来 —— 2026-09-21 发布重启实测。）
+  const interrupted = interruptOwnJobsOnShutdown();
+  if (interrupted) console.warn(`[生成队列] 关服：${interrupted} 条在途任务标记为中断`);
   const forcedExit = setTimeout(() => process.exit(1), 10000);
   forcedExit.unref();
   server.close(() => {

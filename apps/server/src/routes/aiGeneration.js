@@ -47,6 +47,10 @@ const ASYNC_GENERATION_TIMEOUT_MS = 300000;
 const ASYNC_GENERATION_MAX_RETRIES = 2;
 const ASYNC_WORKER_ID = `ai-worker-${process.pid}-${id('w').slice(-8)}`;
 const ASYNC_RUNNING_LEASE_MS = ASYNC_GENERATION_TIMEOUT_MS + 30000;
+// 「服务重启把这次生成打断了」的对外口径：文案是给**学生**看的（客户端直接显示它），
+// 说清"结果没拿到、可以重试"，别让人以为要等（也别说"请核查后人工处理"那种给自己看的话）。
+const GENERATION_INTERRUPTED_CODE = 'GENERATION_INTERRUPTED';
+const GENERATION_INTERRUPTED_MESSAGE = '生成过程中服务重启了，这次的结果没拿到（上游可能已受理）；请重新点一次生成';
 export const AI_MODALITIES = [...MODALITIES];
 
 function modalityOf(value) {
@@ -368,8 +372,37 @@ function enqueuePersistedJob(jobId, delayMs = 0) {
   if (delayMs > 0) { const timer = setTimeout(enqueue, delayMs); timer.unref?.(); } else enqueue();
 }
 
+/**
+ * 回收**孤儿**的 RUNNING 任务 —— 进程重启后，任何 RUNNING 都意味着原来那个 worker 已经不在了
+ * （`worker_id` 里带进程号：`ai-worker-<pid>-<rand>`），上游可能已经受理甚至计费，但结果我们再也拿不回来。
+ *
+ * ⚠️ 2026-09-21 实测踩到（用户报「上游已经扣钱了，但是这边不返回了…再点击再次生成，也不行了」）：
+ *    一次发布重启正好打断了一次视频生成（任务 07:00:38 起、进程 07:02:12 被杀），
+ *    而这里原来的写法只回收**租约过期**（>5.5 分钟）的 RUNNING —— 那条才 94 秒，于是被跳过，
+ *    再也没人管它：学生那边「结果不出来」，而且这个框体因为**存在 RUNNING 任务**被判
+ *    「该生成框体已经生成过了」，**再也点不动**（`assertBoxNotGenerated` 把在途任务也算占用）。
+ *    现在按 worker 判：本进程认领过的才算自己的，其余一律收掉 → 任务变 FAILED、框体随之可重试。
+ */
+function interruptOrphanedJobs({ workerId = null } = {}) {
+  const now = nowIso();
+  const clause = workerId ? 'worker_id IS NULL OR worker_id != ?' : '1=1';
+  const params = [GENERATION_INTERRUPTED_CODE, GENERATION_INTERRUPTED_MESSAGE, now, ...(workerId ? [workerId] : [])];
+  const result = q(`UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE status='RUNNING' AND (${clause})`, params);
+  return Number(result?.changes || 0);
+}
+
+/** 关服时用：把自己认领的任务收掉（这样重启后学生立刻看到"这次中断了、可以重试"，不必等下一次启动）。 */
+export function interruptOwnJobsOnShutdown() {
+  try { return interruptOrphanedJobs({ workerId: ASYNC_WORKER_ID }); }
+  catch (error) { console.error('[GENERATION SHUTDOWN ERROR]', error); return 0; }
+}
+
 export function initializeAsyncGenerationQueue() {
   const now = nowIso();
+  // 本进程刚起来：此刻任何 RUNNING 都属于**已经没了**的那个 worker → 全部收掉（含只跑了 94 秒的那种）。
+  const interrupted = interruptOrphanedJobs();
+  if (interrupted) console.warn(`[生成队列] 回收了 ${interrupted} 条被中断的生成任务（服务重启，上游结果未知）`);
+  // 租约兜底保留：崩溃重启（没走关服钩子）时它照样会把老任务收掉。
   q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code='UPSTREAM_OUTCOME_UNKNOWN',error_message='执行中断，上游结果未知；请核查后人工处理',completed_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
   rows("SELECT id FROM generation_jobs WHERE status='QUEUED' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at", [now])
     .forEach(({ id: jobId }) => enqueuePersistedJob(jobId));
