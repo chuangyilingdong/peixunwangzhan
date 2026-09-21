@@ -243,6 +243,25 @@ check('⑤ 渲染出来的 2.5 请求体：resolution / size 在顶层、images 
   && JSON.stringify(body25.images) === JSON.stringify([IMAGE_REF.url]) && !('metadata' in body25),
   JSON.stringify(body25));
 
+/* ── ⑥ 参考素材超上限：当场报错，不静默截断（2026-09-21 用户给的上游口径：图片 9 / 视频 3 / 音频 3）──
+   以前超过上限的那几个是**悄悄丢掉**的：学生连了 10 张图、我们只发 9 张，出来的是"少了点什么"
+   的结果，而他完全不知道为什么。上限就是上游文档里那几个数（服务端 REFERENCE_LIMITS 同源）。 */
+const { resolveReferenceAssets } = await import('../apps/server/src/routes/aiGeneration.js');
+const manyImages = Array.from({ length: 10 }, (_, index) => ({ type: 'IMAGE', url: `https://example.test/i${index}.png` }));
+let tooMany = null;
+try { resolveReferenceAssets('proj-none', manyImages); } catch (error) { tooMany = error; }
+check('连了 10 张图片参考 → 明确报错（上限 9），不静默只发 9 张',
+  tooMany?.code === 'GENERATION_REFERENCES_TOO_MANY' && /最多 9 张图片/.test(String(tooMany?.message || '')),
+  String(tooMany?.message || '(没报错)'));
+const tooManyVideos = Array.from({ length: 4 }, (_, index) => ({ type: 'VIDEO', url: `https://example.test/v${index}.mp4` }));
+let tooManyVideo = null;
+try { resolveReferenceAssets('proj-none', tooManyVideos); } catch (error) { tooManyVideo = error; }
+check('连了 4 段视频参考 → 明确报错（上限 3）',
+  tooManyVideo?.code === 'GENERATION_REFERENCES_TOO_MANY' && /最多 3 段视频/.test(String(tooManyVideo?.message || '')),
+  String(tooManyVideo?.message || '(没报错)'));
+check('没超上限时不误报（9 张图片照常通过，只是解析不出地址会被跳过）',
+  Array.isArray(resolveReferenceAssets('proj-none', manyImages.slice(0, 9))));
+
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

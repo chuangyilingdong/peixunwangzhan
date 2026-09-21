@@ -92,5 +92,57 @@ check('插画文件真的在，而且没有几 MB（首屏之外的占位图不�
   assert.ok(size < 400 * 1024, `插画太大（${(size / 1024).toFixed(0)}KB），先压一下再进仓库`);
 });
 
+console.log('④ 生成按钮该不该出现（2026-09-21 用户：「本来就不能生成就不要显示这个按钮了」）');
+check('不能生成的节点（本课该模态配了框体、而节点不是框体）不显示生成按钮', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  // 判据必须只有一处：服务端就是这么判的（本课有该模态框体 + 节点没有 boxId → 403）
+  assert.match(source, /const needsBox = Boolean\(boxModality\) && boxModalities\.includes\(boxModality\)/);
+  assert.match(source, /const canGenerateHere = !needsBox \|\| Boolean\(data\.boxId\)/);
+  assert.match(source, /canGenerate && canGenerateHere && generate/, '按钮条件里必须带上 canGenerateHere');
+});
+check('已生成过的节点不再显示「重新生成」（平台规则：每个框体只能成功生成一次）', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /const alreadyProduced = state === 'done' \|\| state === 'asset'/);
+  assert.match(source, /!alreadyProduced/, '按钮条件里必须带上 alreadyProduced');
+});
+check('不能生成的节点不再挂着上一次那条误导报错（状态胶囊回到「未生成」）', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /const statusState = !canGenerateHere && state === 'failed' \? 'empty' : state/);
+  assert.match(source, /\$\{statusState === 'running'/, '状态胶囊要读 statusState');
+});
+check('本课配了哪些模态的框体：父层算好传下来（画布自己拿不到 generationBoxes）', () => {
+  const workspace = read('packages/shared/src/canvasWorkspace.jsx');
+  assert.match(workspace, /const boxModalities = \[\.\.\.new Set\(generationBoxes\.map/);
+  assert.match(workspace, /boxModalities=\{boxModalities\}/, '要把 boxModalities 传给画布');
+});
+
+console.log('⑤ 复制框体（2026-09-21 用户：「我现在可以用快捷键复制框体，这个应该要禁用掉」）');
+check('学生画布（allowNodeCreation=false）整段不给复制/粘贴', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /if \(!allowNodeCreation\) return;/);
+  // 这条 return 必须在复制/粘贴两段之前、在撤销/重做两行之后 —— 学生要能撤销
+  const handler = source.slice(source.indexOf('const handleKeyDown = (event) => {'));
+  const undoAt = handler.indexOf("key.toLowerCase() === 'z'");
+  const gateAt = handler.indexOf('if (!allowNodeCreation) return;');
+  const copyAt = handler.indexOf("key.toLowerCase() === 'c'");
+  assert.ok(undoAt > 0 && gateAt > undoAt && copyAt > gateAt, '复制闸门的位置不对：撤销/重做必须仍然可用');
+});
+check('框体节点压根不参与复制（两个节点共用同一个 boxId 没有意义）', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /const copyable = \(node\) => !node\.data\?\.boxId/);
+  assert.match(source, /node\.selected && copyable\(node\)/);
+});
+check('快捷键 effect 的依赖里有 allowNodeCreation（否则改开关不生效）', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /\}, \[allowNodeCreation, edges, nodes, pushHistory, readOnly, redo, setNodes, undo, viewport\]\);/);
+});
+
+console.log('⑥ 「自动」画幅不能在客户端就折成第一个比例（2026-09-21 用户：「生成出来是扁的画面」）');
+check('视频那条的「自动」原样送 auto 上去，由服务端按上游语义翻译', () => {
+  const source = read('packages/canvas/src/index.jsx');
+  assert.match(source, /const autoRatio = data\.slotType === 'video' \? 'auto'/);
+  assert.match(source, /aspectRatio: data\.aspectRatio \|\| student\.aspectRatio \|\| autoRatio/);
+});
+
 if (failures) { console.log(`\n❌ P122 不通过：${failures} 项`); process.exit(1); }
 console.log('\nP122 PASSED：框体删除规则与未生成占位图都成立');

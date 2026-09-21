@@ -434,6 +434,10 @@ export function CanvasWorkspace({ api, ...props }) {
   }
 
   const generationBoxes = Array.isArray(project.data.generationBoxes) ? project.data.generationBoxes : [];
+  // 本课**配了哪些模态的生成框体**（大写模态值）。画布面板用它判断"这个节点到底能不能生成"：
+  // 本课有该模态的框体、而节点没有 boxId → 点了必然被服务端拒（GENERATION_BOX_REQUIRED），
+  // 那就干脆不显示生成按钮（用户 2026-09-21：「本来就不能生成就不要显示这个按钮了」）。
+  const boxModalities = [...new Set(generationBoxes.map((box) => String(box.modality || '').toUpperCase()).filter(Boolean))];
 
   function boxNodes() {
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [] };
@@ -699,7 +703,7 @@ export function CanvasWorkspace({ api, ...props }) {
             用户 2026-09-17 口径：那两处文案删掉、「已保存」挪到顶部即可，给画布留更多空间。
             所以这条横条整条没了 —— 保存状态在上面的顶栏里（顶栏中间本来就有课时名，
             作品名也随这条横条一起去掉，需要的话说一声再加回来）。 */}
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${message.includes('失败') || message.includes('错误') ? 'is-error' : ''}`}>{message}</div>}

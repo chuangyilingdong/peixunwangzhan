@@ -346,24 +346,39 @@ function normalizeReferenceType(value) {
   return '';
 }
 
-function resolveReferenceAssets(projectId, value) {
+// 导出是给守卫用的（p109）：参考素材的条数上限必须当场拦，不能静默截断。
+export function resolveReferenceAssets(projectId, value) {
   // 新格式 [{ type, url }]；老格式（字符串数组）按图片处理。
   const list = Array.isArray(value) ? value : [];
-  const counts = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
-  const out = [];
+  const parsed = [];
   for (const item of list) {
     const raw = typeof item === 'string' ? { type: 'IMAGE', url: item } : (item && typeof item === 'object' ? item : null);
     if (!raw) continue;
-    const type = normalizeReferenceType(raw.type) || 'IMAGE';
     const url = String(raw.url || '').trim();
-    if (!url || counts[type] >= REFERENCE_LIMITS[type]) continue;
+    if (!url) continue;
+    parsed.push({ type: normalizeReferenceType(raw.type) || 'IMAGE', url });
+  }
+  // 超上限**当场报错**，不静默截断：学生连了 10 张图、我们只发 9 张，出来的是"少了点什么"的结果，
+  // 而他完全不知道为什么（与「模板带不了参考就当场拒绝」同一条口径）。上限就是上游文档里那几个数。
+  const counts = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
+  for (const item of parsed) counts[item.type] += 1;
+  const over = Object.entries(counts).find(([type, used]) => used > REFERENCE_LIMITS[type]);
+  if (over) {
+    const LABELS = { IMAGE: '张图片', VIDEO: '段视频', AUDIO: '条音频' };
+    throw errors.badRequest(`参考素材太多了：这个模型最多 ${REFERENCE_LIMITS[over[0]]} ${LABELS[over[0]]}，你连了 ${over[1]} ${LABELS[over[0]]} —— 请先去掉一些连线`, 'GENERATION_REFERENCES_TOO_MANY');
+  }
+  const kept = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
+  const out = [];
+  for (const item of parsed) {
+    const type = item.type;
+    if (kept[type] >= REFERENCE_LIMITS[type]) continue;
     const allowed = row(
       `SELECT asset_url FROM media_assets WHERE project_id=? AND asset_url=? AND modality IN (${REFERENCE_MODALITIES[type].map(() => '?').join(',')})`,
-      [projectId, url, ...REFERENCE_MODALITIES[type]],
+      [projectId, item.url, ...REFERENCE_MODALITIES[type]],
     );
-    const resolved = allowed ? String(allowed.asset_url) : publicFileAssetUrl(url);
+    const resolved = allowed ? String(allowed.asset_url) : publicFileAssetUrl(item.url);
     if (!resolved) continue;
-    counts[type] += 1;
+    kept[type] += 1;
     out.push({ type, url: resolved });
   }
   return out;
@@ -570,12 +585,16 @@ export function generationOptionsFor({ context, modality, policy, selection, box
   const channel = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === selection?.channelId) : null;
   const capabilities = effectiveCapabilities(channel, key, selection?.model);
   const target = box || resolveLessonGenerationBox(context, key, '');
+  // 「自动」是一个**特殊取值**（框体与学生都没指定比例时，客户端视频那条会明确送 `'auto'`）：
+  // 它不是"某个比例"，所以不过白名单 —— 具体翻译见函数末尾的 translateAutoAspectRatio。
+  const AUTO_ASPECT = 'auto';
   // 框体没指定 → 用学生选的；选了模型不支持的值当场 400，而不是静默换成别的。
   const chosen = (field, allowed, label) => {
     const locked = String(target?.[field] ?? '').trim();
     if (locked) return locked;
     const value = String(studentOptions?.[field] ?? '').trim();
     if (!value) return '';
+    if (value === AUTO_ASPECT && field === 'aspectRatio') return AUTO_ASPECT;
     if (allowed.length && !allowed.includes(value)) {
       throw errors.badRequest(`你选的${label}「${value}」不在该模型支持范围内（可用：${allowed.join('、')}）`, 'GENERATION_PARAM_INVALID');
     }
@@ -640,7 +659,44 @@ export function generationOptionsFor({ context, modality, policy, selection, box
       if (lastFrameUrl) options.lastFrameUrl = String(lastFrameUrl).trim();
     }
   }
+  // 「自动」画幅的翻译（放在最后：视频这条要看"这次到底带了什么画面"才翻得对）。
+  options.aspectRatio = translateAutoAspectRatio({
+    value: options.aspectRatio, channel, modality: key, model: selection?.model, options, capabilities,
+  });
   return options;
+}
+
+/**
+ * 「自动」画幅 → 真正发给上游的取值。
+ *
+ * 用户 2026-09-21 报「生成出来是扁的画面，没有自适应比例」：学生选了「自动」（= 不下发比例、
+ * 用模型默认），而模型默认是列表里的**第一个** 16:9 —— 一连接一张 4:3 的图当首帧，
+ * 上游会把图**硬拉**成 16:9（上游文档明说：关键帧请求"本服务会执行指定的固定比例"，
+ * 不像官方那样忽略它并自适应）。
+ *
+ * 上游（MiniMax V2）的规矩，逐条对应这里的分支：
+ *   · 关键帧请求（首帧/尾帧，且没有参考素材）→ 可传 `adaptive`（也接受别名 `auto`）**读取首帧图比例**；
+ *   · 纯文生请求 → **必须**填固定比例；
+ *   · 参考请求（全能参考）→ 省略按 16:9，**显式传 adaptive/auto 会报错**。
+ * 另外只在"模板确实把比例放在顶层 ratio"时才翻 —— 别的上游/别代模型的请求体形状不同，
+ * 不替它们做决定（例如 hailuo 那套把比例放在 metadata.aspect_ratio 里）。
+ * 图片那条不翻（图片模型对 `size: auto` 的支持随型号而异，2.0 的文档里没有）：仍取第一个比例。
+ */
+function translateAutoAspectRatio({ value, channel, modality, model, options = {}, capabilities = {} }) {
+  if (String(value || '').trim() !== 'auto') return value;
+  const fallback = capabilities.aspectRatios?.[0] || '';
+  if (String(modality || '').toUpperCase() !== 'VIDEO') return fallback;
+  const template = requestTemplateFor(channel, 'VIDEO', {
+    model,
+    requiresFirstFrame: Boolean(options.firstFrameUrl),
+    withLastFrame: Boolean(options.lastFrameUrl),
+    withReferences: Array.isArray(options.referenceAssets) && options.referenceAssets.length > 0,
+  });
+  const templateRatio = template?.ratio;
+  if (typeof templateRatio !== 'string' || !/\{\{aspectRatio\}\}/.test(templateRatio)) return fallback;
+  const hasFrame = Boolean(options.firstFrameUrl || options.lastFrameUrl);
+  const hasReferences = Array.isArray(options.referenceAssets) && options.referenceAssets.length > 0;
+  return hasFrame && !hasReferences ? 'adaptive' : fallback;
 }
 
 /**

@@ -215,6 +215,45 @@ try {
   check(resolveFirstFrameUrl('proj1', 'https://evil.example/x.png') === '',
     '外部地址仍然解析不出来（只认本项目/本平台素材）');
 
+  /* ── 场景 7：「自动」画幅的翻译（2026-09-21 用户报「生成出来是扁的画面，没有自适应比例」）──────
+     学生选「自动」= 不下发比例、用模型默认；而"模型默认"以前被折成列表里的**第一个** 16:9 ——
+     连一张 4:3 的图当首帧，上游会把图**硬拉**成 16:9（上游文档：关键帧请求"会执行指定的固定比例"，
+     不像官方那样忽略它并自适应）。上游（MiniMax V2）的规矩逐条对应下面四个断言：
+       关键帧请求可传 adaptive 读首帧图比例；纯文生必须填固定比例；参考请求显式传 adaptive/auto 会报错。 */
+  const { generationOptionsFor } = await import('../apps/server/src/routes/aiGeneration.js');
+  const ratioChannel = {
+    id: 'ch-ratio', provider: 'custom', model: 'MiniMax-H3', endpoint: 'https://api.example.com/v1',
+    modelRequestTemplates: {
+      'MiniMax-H3': { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{frameItems}}', '{{referenceItems}}'], duration: '{{durationSecondsNumber}}', resolution: '{{resolution}}', ratio: '{{aspectRatio}}' },
+    },
+    modelCapabilities: {
+      'MiniMax-H3': { inputModes: ['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE'], aspectRatios: ['16:9', '4:3', '1:1'], resolutions: ['480P'], durations: [5], audio: true },
+    },
+  };
+  const ratioPolicy = { channels: [ratioChannel], modalityChannels: { VIDEO: 'ch-ratio' } };
+  const ratioSelection = { channelId: 'ch-ratio', model: 'MiniMax-H3' };
+  const ratioOptions = (extra) => generationOptionsFor({ context: {}, modality: 'VIDEO', policy: ratioPolicy, selection: ratioSelection, box: {}, ...extra });
+  const autoWithFrame = ratioOptions({ firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: 'auto' } });
+  check('「自动」+ 首帧 → 发 adaptive（读首帧图比例，不再把图硬拉成 16:9）',
+    autoWithFrame.aspectRatio === 'adaptive', JSON.stringify(autoWithFrame));
+  const autoText = ratioOptions({ studentOptions: { aspectRatio: 'auto' } });
+  check('「自动」+ 纯文生 → 用模型第一个比例（上游要求纯文本必填比例）',
+    autoText.aspectRatio === '16:9', JSON.stringify(autoText));
+  const autoRefs = ratioOptions({ referenceAssets: [{ type: 'IMAGE', url: 'https://example.test/b.png' }], studentOptions: { aspectRatio: 'auto' } });
+  check('「自动」+ 全能参考 → 固定比例（上游：参考请求显式传 adaptive/auto 会报错）',
+    autoRefs.aspectRatio === '16:9' && autoRefs.referenceAssets?.length === 1, JSON.stringify(autoRefs));
+  const explicitRatio = ratioOptions({ firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: '4:3' } });
+  check('学生明确挑了比例 → 原样发，不被上面的自动逻辑吃掉',
+    explicitRatio.aspectRatio === '4:3', JSON.stringify(explicitRatio));
+  // 形状不同的上游（比例放在 metadata 里那套）不许被翻成 adaptive —— 那是别家的语义
+  const otherShape = generationOptionsFor({
+    context: {}, modality: 'VIDEO', selection: { channelId: 'ch-i2v', model: 'hailuo-h3-i2v' }, box: {},
+    policy: { channels: [{ id: 'ch-i2v', model: 'hailuo-h3-i2v', requestTemplates: {}, modelCapabilities: { 'hailuo-h3-i2v': { inputModes: ['FIRST_FRAME'], aspectRatios: ['16:9'], resolutions: ['768P'], durations: [5] } } }], modalityChannels: { VIDEO: 'ch-i2v' } },
+    firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: 'auto' },
+  });
+  check('别的上游/别代模型（比例在 metadata 里、模板没有顶层 ratio）仍用固定比例，不替它做决定',
+    otherShape.aspectRatio === '16:9', JSON.stringify(otherShape));
+
   if (failures.length) throw new Error(failures.join('; '));
   console.log('P11 video first-frame guard passed');
 } finally {

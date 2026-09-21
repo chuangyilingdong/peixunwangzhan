@@ -547,16 +547,18 @@ function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, reference
   const removePreset = () => updateNode(nodeId, { referenceUrl: '' });
   if (omni) {
     const named = referenceAssetLabels(referenceAssets);
+    // 上限与上游一致（图片 9 / 视频 3 / 音频 3，服务端 `REFERENCE_LIMITS` 也是这套数）——
+    // 原来只显示前 6 个：学生连满 9 张也只看得到 6 个缩略图，会以为后 3 张没连上。
     return <div className="learning-node__ref-row">
       <span className="learning-node__seg-label">参考</span>
       {named.length
-        ? <div className="learning-node__frame-chips">{named.slice(0, 6).map((asset, index) => <RefThumb
+        ? <div className="learning-node__frame-chips">{named.slice(0, 9).map((asset, index) => <RefThumb
           key={`${asset.url}-${index}`}
           url={asset.url}
           label={asset.label}
           index={index + 1}
           onRemove={asset.nodeId ? () => removeIncomingRef(nodeId, asset.nodeId) : null}
-        />)}</div>
+        />)}{named.length > 9 ? <span className="learning-node__ref-empty">还有 {named.length - 9} 个没显示（最多 9 张图片 / 3 段视频 / 3 条音频）</span> : null}</div>
         : <span className="learning-node__ref-empty">未连接（图片/视频/音频连过来即可）</span>}
     </div>;
   }
@@ -668,12 +670,18 @@ function SlotParamPickers({ id, data }) {
   </div>;
 }
 
-// 组装这次生成要用的参数：平台定过的用平台的，没定的用学生选的（没选就取第一个可选项）。
+// 组装这次生成要用的参数：平台定过的用平台的，没定的用学生选的。
+// ⚠️ 「自动」要**原样送上去**（`'auto'`），不能在客户端就折成"第一个比例"：折了之后服务端
+//    分不清"学生要自动"还是"学生明确选了 16:9"，而这两种在上游是两套语义 ——
+//    关键帧（图生视频）请求传 `adaptive` 才会**读首帧图的比例**，否则 4:3 的图会被硬拉成 16:9
+//    （用户 2026-09-21 报的「生成出来是扁的画面」）。图片那条的「自动」仍折成第一个比例：
+//    图片模型对 `size: auto` 的支持随型号而异（2.0 的文档里没有），不冒险。
 function resolveSlotParams(data) {
   const options = data.paramOptions || {};
   const student = data.studentParams || {};
+  const autoRatio = data.slotType === 'video' ? 'auto' : (options.aspectRatios?.[0] || '');
   const params = {
-    aspectRatio: data.aspectRatio || student.aspectRatio || options.aspectRatios?.[0] || '',
+    aspectRatio: data.aspectRatio || student.aspectRatio || autoRatio,
     resolution: data.resolution || student.resolution || options.resolutions?.[0] || '',
   };
   if (data.slotType === 'video') {
@@ -804,7 +812,7 @@ const edgeTypes = { default: GlowEdge };
 
 // 画布底部面板（复刻参考的独立底部面板）：编辑当前选中的框体——
 // 提示词 / 画面来源行 / 画幅·清晰度·时长分段胶囊 / 页脚（状态胶囊 + 配置 + ＋ + 生成 ↑）。
-function NodeEditPanel({ node, onRequestMaterials }) {
+function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
   const { updateNode, generateNode, canGenerate, readOnly, enabledCapabilities, getIncomingImageAssetUrls, getIncomingImageRefs, getIncomingAssetRefs } = useCanvasActions();
   // 输入框里的 @ 引用：@ 打开候选（连线连过来的素材 + 框体预置素材），选中就把「图片 1」这样的名字插进提示词。
   // hook 必须放在下面所有提前 return 之前（提前 return 之后再加 hook 会白屏，p34 守卫盯着这条）。
@@ -895,6 +903,21 @@ function NodeEditPanel({ node, onRequestMaterials }) {
   if (!supportsPrompt) {
     return <div className="learning-canvas__panel-inner"><span className="learning-node__seg-label">{data.title || node.type}</span><span className="cv-muted">这个节点直接在卡片上编辑，没有生成参数。</span></div>;
   }
+  // 「这个节点到底能不能生成」的**一处**判定（按钮显不显示、以及要不要忽略那条陈旧报错，都读它）：
+  // ① 本课给这个模态配了生成框体吗？配了 → 只有框体节点能生成。
+  //    服务端就是这么判的（`resolveLessonGenerationBox`：本课有该模态的框体、而这个节点没有 boxId
+  //    → 403 `GENERATION_BOX_REQUIRED`「请从课时配置的生成框体发起生成」）。
+  //    学生画布上除了框体，还能拖进本地文件、放普通素材节点 —— 它们以前也长着生成按钮，
+  //    学生一点必然报错刷红字（用户 2026-09-21：「本来就不能生成就不要显示这个按钮了」）。
+  // ② 已经出过东西的节点也不再显示生成按钮：平台规则是**每个框体只能成功生成一次**，
+  //    再点必被服务端拒（`GENERATION_BOX_USED`「该生成框体已经生成过了」）—— 留着按钮就是误导。
+  const boxModality = { image: 'IMAGE', video: 'VIDEO', animation: 'VIDEO', text: 'TEXT', prompt: 'TEXT', music: 'MUSIC', audio: 'MUSIC' }[slotType] || '';
+  const needsBox = Boolean(boxModality) && boxModalities.includes(boxModality);
+  const canGenerateHere = !needsBox || Boolean(data.boxId);
+  const alreadyProduced = state === 'done' || state === 'asset';
+  // 不能在这里生成的节点：**别把上一次点出来的报错继续挂在面板上**（那是"点了本来就不该点的按钮"造成的），
+  // 状态胶囊回到「未生成」。能生成的节点照旧：真失败仍然要看得见。
+  const statusState = !canGenerateHere && state === 'failed' ? 'empty' : state;
   // @ 引用的候选：连线连过来的素材（按类型编号）+ 框体自带的预置素材
   const referenceNames = [
     ...referenceAssetLabels(getIncomingAssetRefs(id)).map((asset) => ({
@@ -963,8 +986,8 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     <div className="learning-node__panel-footer nodrag">
       <button type="button" className="learning-canvas__config-chip" title="本框体的生成配置来自课时设置" onClick={() => onRequestMaterials?.()}>✦ {configLabel}</button>
       <span className="learning-canvas__panel-spacer" />
-      <span className={`learning-node__status-chip${state === 'running' ? ' is-running' : state === 'failed' ? ' is-error' : (state === 'done' || state === 'asset') ? ' is-done' : ''}`}>{state === 'running' ? '生成中…' : state === 'failed' ? (data.generationError || '生成失败') : state === 'done' ? '已生成' : state === 'asset' ? '素材' : '未生成'}</span>
-      {canGenerate && generate && state !== 'running' ? <button type="button" className="learning-node__submit" disabled={readOnly || Boolean(generate.blocked)} title={generate.blocked || generate.label} onClick={() => generateNode(id, generate.modality, generate.payload)}>{generate.label}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg></button> : null}
+      <span className={`learning-node__status-chip${statusState === 'running' ? ' is-running' : statusState === 'failed' ? ' is-error' : (statusState === 'done' || statusState === 'asset') ? ' is-done' : ''}`}>{statusState === 'running' ? '生成中…' : statusState === 'failed' ? (data.generationError || '生成失败') : statusState === 'done' ? '已生成' : statusState === 'asset' ? '素材' : '未生成'}</span>
+      {canGenerate && canGenerateHere && generate && statusState !== 'running' && !alreadyProduced ? <button type="button" className="learning-node__submit" disabled={readOnly || Boolean(generate.blocked)} title={generate.blocked || generate.label} onClick={() => generateNode(id, generate.modality, generate.payload)}>{generate.label}<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg></button> : null}
     </div>
     {/* ⚠️ 这里原来会把 generate.blocked（「先写下画面描述，再生成」这类前置提示）渲染成一条红色提示。
         用户要求「图4 这种提示要全部删除」——按下了就把按钮置灰 + title 提示即可，不再在面板里刷红字。
@@ -1014,7 +1037,7 @@ const COALESCED_EDIT_KEYS = new Set(['title', 'caption', 'text', 'name', 'trait'
 // 只认一条规则，别再退回「手势中不动、松手后归位」：那样面板是钉在**屏幕**上的，
 // 一拖画布就和框体分家（用户第十六轮原话：「我移动画布，输入框就保持跟框体一起」）。
 // 位置每帧用 transform 直接算、不加 CSS 过渡（加了跟随就慢半拍）。
-function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRoom, onRequestMaterials }) {
+function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRoom, onRequestMaterials, boxModalities = [] }) {
   const panelRef = useRef(null);
   const [panelHeight, setPanelHeight] = useState(0);
   const [box, setBox] = useState({ width: 0, height: 0 });
@@ -1126,7 +1149,7 @@ function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRo
     style={{ width: panelWidth, transform: `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`, visibility: ready ? undefined : 'hidden' }}
   >
     <div className="learning-canvas__beam is-active">
-      <NodeEditPanel node={node} onRequestMaterials={onRequestMaterials} />
+      <NodeEditPanel node={node} onRequestMaterials={onRequestMaterials} boxModalities={boxModalities} />
       <span className="learning-canvas__beam-bloom" aria-hidden="true" />
     </div>
   </div>;
@@ -1134,7 +1157,7 @@ function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRo
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, resolveAssetUrl = null, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, resolveAssetUrl = null, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null, boxModalities = [] }) {
   // 受控课堂画布（allowNodeCreation=false）默认不使用固定起始底稿，避免空画布每次刷新被自动填充。
   const shouldShowStarter = showStarter === undefined ? (!readOnly && allowNodeCreation) : showStarter;
   const initial = useMemo(() => {
@@ -1387,8 +1410,16 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
       if (target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); return; }
+      // ⚠️ 复制/粘贴**只在"能自由建节点"的画布上给**（学生画布 allowNodeCreation=false 一律没有）：
+      //    框体是课时配置的、每个只能成功生成一次，复制出来的框体**共用同一个 boxId** ——
+      //    生成必被服务端拒（「该生成框体已经生成过了」），还会让「这个框体是不是已经在画布上」的判断错乱。
+      //    用户 2026-09-21：「我现在可以用快捷键复制框体，这个应该要禁用掉」。
+      //    位置很关键：撤销/重做在上面两行，**不受这条影响**（学生要能撤销）。
+      if (!allowNodeCreation) return;
+      // 即便能自由建节点，**框体也不复制**（同一个 boxId 两个节点没有意义）。
+      const copyable = (node) => !node.data?.boxId;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
-        const selected = nodes.filter((node) => node.selected);
+        const selected = nodes.filter((node) => node.selected && copyable(node));
         if (selected.length) { clipboardRef.current = selected.map((node) => ({ ...node, selected: false, data: { ...node.data } })); event.preventDefault(); }
         return;
       }
@@ -1400,7 +1431,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [edges, nodes, pushHistory, readOnly, redo, setNodes, undo, viewport]);
+  }, [allowNodeCreation, edges, nodes, pushHistory, readOnly, redo, setNodes, undo, viewport]);
 
   useEffect(() => {
     if (!contextMenu) return undefined;
@@ -1498,7 +1529,7 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
         <MiniMap pannable zoomable className="learning-canvas__minimap" />
         <Controls showInteractive={false} />
       </ReactFlow>
-      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportBusy={viewportBusy} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} /> : null}
+      {!readOnly && activeNode ? <CanvasDockPanel node={activeNode} containerRef={canvasRef} viewportBusy={viewportBusy} onRequestRoom={requestRoom} onRequestMaterials={onRequestMaterials} boxModalities={boxModalities} /> : null}
       {!readOnly && <div className="learning-canvas__toolbar">
         <button type="button" className="learning-canvas__toolbar-btn" title="撤销（Ctrl+Z）" aria-label="撤销" onClick={undo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6"/></svg></button>
         <button type="button" className="learning-canvas__toolbar-btn" title="重做（Ctrl+Y）" aria-label="重做" onClick={redo}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12h-9a6 6 0 0 0-6 6"/></svg></button>
