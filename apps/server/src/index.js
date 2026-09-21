@@ -19,6 +19,7 @@ import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/b
 import { handleVibeCoding } from './routes/vibecoding.js';
 import { domainStateContract } from './services/domainState.js';
 import { maxUploadBytes } from './services/fileUploadSecurity.js';
+import { acquireBodySlot as acquireUploadBodySlot } from './services/uploadBodyGate.js';
 
 const bodyMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -54,32 +55,12 @@ const jsonBodyLimitFor = (pathname) => {
 };
 
 /**
- * multipart 请求体的**内存闸**（2026-09-21，跟着单文件上限提到 200MB 一起来的）。
- *
- * 为什么需要它：请求体是一次性读进内存的，而随后的病毒扫描还要再吃近 1GB
- * （每次上传 spawn 一个 `clamscan`，它重新加载病毒库；实测扫 150MB 峰值 RSS ≈990MB）。
- * 这台机器 1.6GB，两份 200MB 的请求叠在一起就会 OOM —— 被 OOM 杀掉的不止这个进程
- * （这台机器上出过学生环境被 OOM 带走的事故）。
- * 所以：读 body **之前**先占名额，超了当场给一句中文（429），别走到分配内存那一步。
- * 名额在请求结束（finish/close）时归还 —— 因为那块 Buffer 会活到响应发完。
+ * multipart 请求体的内存闸（实现见 services/uploadBodyGate.js，那里有为什么需要它的实测数据）。
+ * 这里只负责把它接进请求流：**读 body 之前**占名额，请求结束（finish/close）归还 ——
+ * 因为那块 Buffer 会活到响应发完。
  */
-const MAX_INFLIGHT_BODIES = Math.max(1, Math.floor(Number(process.env.FILE_UPLOAD_MAX_INFLIGHT || 2) || 2));
-const MAX_INFLIGHT_BODY_BYTES = Math.max(1, Math.floor(Number(process.env.FILE_UPLOAD_MAX_INFLIGHT_BYTES || 256 * 1024 * 1024) || 256 * 1024 * 1024));
-const BODY_INFLIGHT = { count: 0, bytes: 0 };
 function acquireBodySlot(declaredBytes) {
-  const size = Number.isFinite(declaredBytes) && declaredBytes > 0 ? Math.floor(declaredBytes) : 0;
-  if (BODY_INFLIGHT.count + 1 > MAX_INFLIGHT_BODIES || BODY_INFLIGHT.bytes + size > MAX_INFLIGHT_BODY_BYTES) {
-    throw errors.tooMany('同时上传的文件太多，请稍后再试', 'UPLOAD_BUSY', { retryAfterSeconds: 10 });
-  }
-  BODY_INFLIGHT.count += 1;
-  BODY_INFLIGHT.bytes += size;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    BODY_INFLIGHT.count -= 1;
-    BODY_INFLIGHT.bytes -= size;
-  };
+  return acquireUploadBodySlot(declaredBytes, { env: process.env, tooMany: errors.tooMany });
 }
 
 function sendFileResponse(res, fileResponse, req) {

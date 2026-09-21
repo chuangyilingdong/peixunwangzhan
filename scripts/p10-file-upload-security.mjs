@@ -60,6 +60,48 @@ const downloaded = Buffer.concat([...(await (async () => { const chunks = []; fo
 assert.equal(downloaded.toString(), 'secure-download');
 assert.equal(response.headers['x-content-type-options'], 'nosniff');
 
+/* ── 单文件上限的硬顶 + 「读 body 之前」的内存闸（2026-09-21，上限提到 200MB 时一起加的）──────
+   背景（实测）：`clamscan` 每次调用都要把病毒库读进内存，扫 150MB 文件峰值 RSS ≈990MB；
+   生产机 1.6GB。所以上限抬到 200MB 之后，**必须**有一道在读 body 之前的内存闸，
+   否则两份大请求叠在一起就是 OOM（这台机器上 OOM 挑走过学生环境）。 */
+{
+  const { maxUploadBytes, maxUploadCeilingBytes } = await import('../apps/server/src/services/fileUploadSecurity.js');
+  const { acquireBodySlot, bodyGateLimits, bodyGateState } = await import('../apps/server/src/services/uploadBodyGate.js');
+
+  // ① 硬顶：env 只能往下调，不能越过 200MB（抬硬顶要改代码 + 重新评估内存与扫描器）
+  assert.equal(maxUploadCeilingBytes(), 200 * 1024 * 1024, '单文件硬顶应当是 200MB');
+  const savedLimit = process.env.FILE_UPLOAD_MAX_BYTES;
+  process.env.FILE_UPLOAD_MAX_BYTES = String(5 * 1024 * 1024 * 1024);
+  assert.equal(maxUploadBytes(), 200 * 1024 * 1024, 'env 开到 5GB 也不能越过硬顶');
+  process.env.FILE_UPLOAD_MAX_BYTES = String(64 * 1024 * 1024);
+  assert.equal(maxUploadBytes(), 64 * 1024 * 1024, '往下调要生效');
+
+  // ② 超限那句话里的数字来自配置（别写成写死的 25MB）
+  process.env.FILE_UPLOAD_MAX_BYTES = String(2 * 1024 * 1024);
+  await assert.rejects(
+    () => persistSecureUpload({ fileName: 'too-big.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(3 * 1024 * 1024) }),
+    (error) => error.code === 'FILE_TOO_LARGE' && /不能超过 2 MB/.test(error.message),
+  );
+  if (savedLimit === undefined) delete process.env.FILE_UPLOAD_MAX_BYTES; else process.env.FILE_UPLOAD_MAX_BYTES = savedLimit;
+
+  // ③ 内存闸：默认「2 份 / 合计 256MB」→ 一份 200MB 天然互斥；释放之后又能占；release 幂等
+  const gateEnv = { FILE_UPLOAD_MAX_INFLIGHT: '2', FILE_UPLOAD_MAX_INFLIGHT_BYTES: String(256 * 1024 * 1024) };
+  assert.deepEqual(bodyGateLimits(gateEnv), { maxBodies: 2, maxBytes: 256 * 1024 * 1024 });
+  const tooMany = (message, code, details) => Object.assign(new Error(message), { code, details });
+  const first = acquireBodySlot(200 * 1024 * 1024, { env: gateEnv, tooMany });
+  assert.throws(() => acquireBodySlot(200 * 1024 * 1024, { env: gateEnv, tooMany }),
+    (error) => error.code === 'UPLOAD_BUSY', '第二份 200MB 必须挡在读 body 之前');
+  assert.throws(() => acquireBodySlot(80 * 1024 * 1024, { env: gateEnv, tooMany }),
+    (error) => error.code === 'UPLOAD_BUSY', '合计超预算也要挡（200+80 > 256MB）');
+  const second = acquireBodySlot(40 * 1024 * 1024, { env: gateEnv, tooMany });
+  assert.throws(() => acquireBodySlot(1, { env: gateEnv, tooMany }),
+    (error) => error.code === 'UPLOAD_BUSY', '份数占满也要挡');
+  first(); first();   // release 必须幂等（finish 与 close 都会调）
+  assert.equal(bodyGateState().count, 1, '重复 release 不能把别人的名额也放掉');
+  second();
+  assert.deepEqual(bodyGateState(), { count: 0, bytes: 0, busy: 3 }, '全部释放后必须归零（否则上传会永久 429）');
+}
+
 await rm(root, { recursive: true, force: true });
-console.log('P10 security upload checks: 9 pass / 0 fail');
+console.log('P10 security upload checks: 9 pass / 0 fail（另加上限硬顶与内存闸 3 组断言）');
 
