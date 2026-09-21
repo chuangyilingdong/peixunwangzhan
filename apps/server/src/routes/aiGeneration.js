@@ -548,7 +548,15 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     if (options.inputModes.includes('OMNI_REFERENCE') && (references.length || presetAsset)) {
       // 全能参考：这些素材当参考发，不当首/尾帧（上游不允许混用）；框体预置素材也算一张图片参考。
       const presetResolved = resolvableAssetUrl(presetAsset);
-      options.referenceAssets = references.length ? references : (presetResolved ? [{ type: 'IMAGE', url: presetResolved }] : []);
+      const omniReferences = references.length ? references : (presetResolved ? [{ type: 'IMAGE', url: presetResolved }] : []);
+      // ⚠️ 与图片那条**同一个口径**：模板里没有能放参考的位置 → 上游一张图都收不到。
+      //    静默丢掉的结果是「出来一段与参考无关的视频」，比报错糟得多 —— 用户 2026-09-21 撞的就是它
+      //    （连了清明上河图当参考，出来的视频跟它毫无关系；根因是默认视频模板里没有 {{referenceItems}}）。
+      const referencesTemplate = requestTemplateFor(channel, key, { model: selection?.model, withReferences: true });
+      if (!/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(referencesTemplate || {}))) {
+        throw errors.forbidden('当前视频模型不能带参考素材：请去掉连线，或让老师换一个支持参考的模型', 'GENERATION_REFERENCES_UNSUPPORTED');
+      }
+      options.referenceAssets = omniReferences;
     } else {
       // 框体挂了预置素材时，它就是首帧（学生不必自己再连一张）。
       const presetFirstFrame = acceptsFirstFrame(options.inputModes) ? resolvableAssetUrl(presetAsset) : '';

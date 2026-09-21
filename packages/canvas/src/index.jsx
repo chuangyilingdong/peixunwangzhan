@@ -230,9 +230,29 @@ function PromptEditor({ value, refs = [], readOnly = false, placeholder = '', on
   />;
 }
 
-// 生成中：框体里明写「魔法酝酿中」（用户要求：点了生成之后框体要有交代，别让学生干看着占位板）
-function GeneratingState({ className }) {
-  return <div className={`${className} is-generating`}><span>✨</span><small>魔法酝酿中…</small></div>;
+// 生成中：框体里明写「小灵施展魔法中 N%」（用户 2026-09-21 口径：四类框体都要有个数字进度条）。
+//
+// ⚠️ 这个百分比**不是上游的真实进度**：上游（seedance/Mureka/H3 那条中继）只回状态、不回百分比，
+//    我们也没存过原始响应（只有 request/payload id）。所以它是按**实测中位耗时**估的，
+//    并且封顶 **95%** —— 最后那 5% 留给"真的完成"，绝不出现"进度满了还在等"的假完成。
+//    期望值来自生产 generation_jobs 的实测（2026-09-21）：图片中位 45s / 最长 82s、文本 2s、视频 132s。
+//    （音乐生产上还没有样本，取 90s 的量级。）
+const GENERATION_EXPECTED_SECONDS = { TEXT: 6, IMAGE: 50, VIDEO: 130, MUSIC: 90 };
+function GeneratingState({ className, modality, startedAt }) {
+  const expected = GENERATION_EXPECTED_SECONDS[String(modality || '').toUpperCase()] || 45;
+  const start = Number(startedAt) || Date.now();
+  const [percent, setPercent] = useState(1);
+  useEffect(() => {
+    const tick = () => setPercent(Math.max(1, Math.min(95, Math.round(((Date.now() - start) / 1000 / expected) * 100))));
+    tick();
+    const timer = setInterval(tick, 700);
+    return () => clearInterval(timer);
+  }, [start, expected]);
+  return <div className={`${className} is-generating`}>
+    <span>✨</span>
+    <small>小灵施展魔法中{percent}%</small>
+    <i className="learning-node__progress" style={{ width: `${percent}%` }} aria-hidden="true" />
+  </div>;
 }
 
 function mediaKindOf(mimeType) {
@@ -587,7 +607,9 @@ function PromptNode({ id, data, selected }) {
         <CopyTextButton text={generated} />
         <div className="learning-node__text-result">{generated}</div>
       </div>
-      : <div className="learning-node__art"><span>✎</span><small>{data.slotType === 'text' ? '在底部面板写提示词，生成文字' : '在底部面板写下内容'}</small></div>}
+      // 文本框体也要有数字进度（用户 2026-09-21 口径：视频/图片/音乐/文本四类都要）
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__art" modality="TEXT" startedAt={data.generationStartedAt} />
+        : <div className="learning-node__art"><span>✎</span><small>{data.slotType === 'text' ? '在底部面板写提示词，生成文字' : '在底部面板写下内容'}</small></div>}
   </NodeFrame>;
 }
 
@@ -669,7 +691,7 @@ function ImageNode({ id, data, selected }) {
   const imageUrl = useDisplayUrl(data.previewUrl || data.assetUrl || referenceUrl);
   return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__art" data={data} />
-      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__art" />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__art" modality="IMAGE" startedAt={data.generationStartedAt} />
       : imageUrl
         ? <img className="learning-node__media" src={imageUrl} alt={data.caption || 'AI生成画面'} />
         : <div className="learning-node__art learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写画面描述，生成画面" loading="lazy" /></div>}
@@ -711,7 +733,7 @@ function VideoNode({ id, data, selected }) {
   const sourceUrl = useDisplayUrl(referenceUrl);
   return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__video-preview" data={data} />
-      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__video-preview" />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__video-preview" modality="VIDEO" startedAt={data.generationStartedAt} />
       : videoUrl
         ? <video className="learning-node__media" controls playsInline src={videoUrl} />
         : sourceUrl
@@ -737,7 +759,7 @@ function AudioNode({ id, data, selected }) {
   const audioUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
   return <NodeFrame icon="♫" tone="audio" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__audio-placeholder" data={data} />
-      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__audio-placeholder" />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__audio-placeholder" modality="MUSIC" startedAt={data.generationStartedAt} />
       : audioUrl
         ? <audio className="learning-node__audio" controls src={audioUrl} />
         : <div className="learning-node__audio-placeholder"><span>♫</span><small>在底部面板写歌词或描述，生成音乐</small></div>}
@@ -749,7 +771,7 @@ function AnimationNode({ id, data, selected }) {
   const videoUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
   return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__animation-placeholder" data={data} />
-      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__animation-placeholder" />
+      : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__animation-placeholder" modality="VIDEO" startedAt={data.generationStartedAt} />
       : videoUrl
         ? <video className="learning-node__media" controls muted loop src={videoUrl} />
         : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}
@@ -813,22 +835,43 @@ function NodeEditPanel({ node, onRequestMaterials }) {
     : data.generationStatus === 'FAILED' ? 'failed'
       : data.uploaded ? 'asset'
         : (data.assetUrl || data.generatedText) ? 'done' : 'empty';
+  // 视频框体「连过来的素材怎么用」的**一处**判定（生成 payload 与面板那行提示都读它，别各写一遍）。
+  //
+  // 2026-09-21 用户报：「视频生成出来跟参考也不一样啊。完全是两种东西啊」——
+  // 学生把《清明上河图》连到视频框体、写「图片动起来」，出来的却是另一段毫不相干的画面。
+  // 根因**不是**"参考没发出去"（模型模板里 `{{referenceItems}}` 是在的、图也发了），而是**语义错了**：
+  // 只要模型声明了全能参考（MiniMax-H3 声明了），原逻辑就一律把连过来的图当**参考**发 ——
+  // 而"参考"在上游是"启发素材"（画一段像它的），不是"这张图动起来"（首帧）。
+  // 所以：**能当帧就当帧**（全是图片、1~2 张、模型也支持帧）——「图片动起来」要的就是这个；
+  //       够不着的（多张图 / 视频 / 音频混合参考）才走全能参考。
+  const videoInputPlan = (() => {
+    const modes = Array.isArray(data.inputModes) && data.inputModes.length ? data.inputModes : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
+    const supportsText = modes.includes('TEXT');
+    const supportsFirstFrame = modes.includes('FIRST_FRAME') || modes.includes('FIRST_LAST_FRAME') || modes.includes('OMNI_REFERENCE');
+    // ⚠️ 尾帧的模态值是 `FIRST_LAST_FRAME`，不是 `LAST_FRAME` —— 原来写错了，尾帧永远不亮
+    //    （服务端 `acceptsLastFrame` 看的就是 FIRST_LAST_FRAME，两边口径又不一致）。
+    const supportsLastFrame = modes.includes('FIRST_LAST_FRAME');
+    const omni = modes.includes('OMNI_REFERENCE');
+    const frameUrls = getIncomingImageAssetUrls(id);
+    const allRefs = getIncomingAssetRefs(id);
+    const frameCapacity = supportsLastFrame ? 2 : 1;
+    const useFrames = supportsFirstFrame && frameUrls.length > 0 && frameUrls.length <= frameCapacity && frameUrls.length === allRefs.length;
+    const useOmni = !useFrames && omni && allRefs.length > 0;
+    return {
+      modes, supportsText, supportsFirstFrame, supportsLastFrame, omni, frameUrls, allRefs, useFrames, useOmni,
+      sourceAssetUrl: useFrames ? (frameUrls[0] || String(data.referenceUrl || '')) : '',
+      lastFrameAssetUrl: useFrames && supportsLastFrame ? String(frameUrls[1] || '') : '',
+      referenceAssets: useOmni ? allRefs : [],
+    };
+  })();
   const generate = (() => {
     // ⚠️ `referenceAssets` 不能省：连到生图框体上的素材就是「照这张图改」的意思。
     // 以前这里**没有带**（只有视频分支带），于是面板上写着「引用中」、请求里一张参考图都没有，
     // 出来的是另一张画（用户 2026-09-17 报「引用没有真实生效」的三层之一）。
     if (slotType === 'image') return { modality: 'IMAGE', label: data.assetUrl ? '重新生成' : '生成画面', payload: { title: data.title || '画面灵感', prompt: data.caption || '', referenceAssets: getIncomingAssetRefs(id), params: resolveSlotParams(data) }, blocked: missingPrompt ? '先写下画面描述，再生成' : '' };
     if (slotType === 'video' || slotType === 'animation') {
-      const inputModes = Array.isArray(data.inputModes) && data.inputModes.length ? data.inputModes : (data.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']);
-      const supportsText = inputModes.includes('TEXT');
-      const supportsFirstFrame = inputModes.includes('FIRST_FRAME');
-      const supportsLastFrame = inputModes.includes('LAST_FRAME');
-      const omni = inputModes.includes('OMNI_REFERENCE');
-      const incoming = getIncomingImageAssetUrls(id);
-      const referenceAssets = omni ? getIncomingAssetRefs(id) : [];
-      const sourceAssetUrl = !omni && supportsFirstFrame ? (incoming[0] || String(data.referenceUrl || '')) : '';
-      const lastFrameAssetUrl = !omni && supportsFirstFrame && supportsLastFrame ? String(incoming[1] || '') : '';
-      const needFrame = supportsFirstFrame && !supportsText && !sourceAssetUrl;
+      const { supportsText, supportsFirstFrame, supportsLastFrame, sourceAssetUrl, lastFrameAssetUrl, referenceAssets } = videoInputPlan;
+      const needFrame = supportsFirstFrame && !supportsText && !sourceAssetUrl && !referenceAssets.length;
       return {
         modality: 'VIDEO', label: data.assetUrl ? '重新生成' : '生成短片',
         payload: { title: data.title || '故事短片', prompt: data.text || '', sourceAssetUrl, lastFrameAssetUrl, referenceAssets, params: resolveSlotParams(data) },
@@ -902,10 +945,10 @@ function NodeEditPanel({ node, onRequestMaterials }) {
       nodeId={id}
       incomingRefs={getIncomingImageRefs(id)}
       referenceUrl={String(data.referenceUrl || '')}
-      omni={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('OMNI_REFERENCE')}
-      referenceAssets={getIncomingAssetRefs(id)}
-      supportsFirstFrame={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('FIRST_FRAME')}
-      supportsLastFrame={(Array.isArray(data.inputModes) ? data.inputModes : []).includes('LAST_FRAME')}
+      omni={videoInputPlan.useOmni}
+      referenceAssets={videoInputPlan.useOmni ? videoInputPlan.allRefs : []}
+      supportsFirstFrame={videoInputPlan.supportsFirstFrame}
+      supportsLastFrame={videoInputPlan.supportsLastFrame}
     /> : null}
     {/* 生图框体：连过来的素材要**看得见**（缩略图，悬停出大图，右上角 × 断线）。
         ⚠️ 只在真有连线时才渲染这一行：以前它是无条件渲染的，多占 80px、面板一高就压住框体，
@@ -1168,16 +1211,17 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
 
   const generateNode = useCallback(async (nodeId, modality, input) => {
     if (readOnly || !onGenerateNode) return;
-    updateNode(nodeId, { generationStatus: 'PENDING', generationError: '' });
+    // 记下开始时间：框体里的百分比用它算（估算进度，见 GeneratingState 的注释）
+    updateNode(nodeId, { generationStatus: 'PENDING', generationError: '', generationStartedAt: Date.now() });
     try {
       // 生成框体：把框体 id 一起提交，服务端据此取该框体自己的模型与参数，并保证每个框体只生成一次。
       const boxId = (nodes || []).find((node) => node.id === nodeId)?.data?.boxId || '';
       const asset = await onGenerateNode({ nodeId, modality, boxId, ...input });
       if (String(modality).toUpperCase() === 'TEXT') {
         // 文字结果写进 generatedText，保留学生自己写的提示词
-        updateNode(nodeId, { generatedText: String(asset?.metadata?.text || asset?.text || ''), generationStatus: null, generationError: '' });
+        updateNode(nodeId, { generatedText: String(asset?.metadata?.text || asset?.text || ''), generationStatus: null, generationError: '', generationStartedAt: null });
       } else {
-        updateNode(nodeId, { assetUrl: asset.assetUrl, previewUrl: asset.previewUrl, generationStatus: null, generationError: '' });
+        updateNode(nodeId, { assetUrl: asset.assetUrl, previewUrl: asset.previewUrl, generationStatus: null, generationError: '', generationStartedAt: null });
       }
     } catch (error) {
       updateNode(nodeId, { generationStatus: 'FAILED', generationError: error instanceof Error ? error.message : 'AI生成失败' });

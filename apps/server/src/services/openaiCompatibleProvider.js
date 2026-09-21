@@ -268,11 +268,13 @@ async function parseResponse(response, modality) {
 // 会被课时配置的取值替换，不再由代码写死。
 function requestBody({ modality, model, prompt, title, voice = 'alloy', options = {}, referenceAssets = [], requestTemplates = {}, modelRequestTemplates = {}, messages = null, stream = false, tools = null, toolChoice = null }) {
   const normalizedModality = String(modality || 'TEXT').trim().toUpperCase();
-  // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES。
+  // 按「这次真的带了哪些画面」选模板：只有首帧用 VIDEO_I2V，首帧+尾帧用 VIDEO_I2V_FRAMES，
+  // **只带参考素材（全能参考）用 VIDEO_OMNI** —— 那条模板才带 `{{referenceItems}}`，
+  // 选错模板参考会在渲染时被整个丢掉（2026-09-21 修的「连了参考、出来完全不一样」）。
   const firstFrameUrl = String(options.firstFrameUrl || '').trim();
   const lastFrameUrl = String(options.lastFrameUrl || '').trim();
   const musicContext = musicRequestContext({ prompt, mode: options.mode, lyrics: options.lyrics, defaultStyle: options.defaultStyle });
-  const template = requestTemplateFor({ requestTemplates, modelRequestTemplates }, normalizedModality, { model, requiresFirstFrame: Boolean(firstFrameUrl), withLastFrame: Boolean(lastFrameUrl) });
+  const template = requestTemplateFor({ requestTemplates, modelRequestTemplates }, normalizedModality, { model, requiresFirstFrame: Boolean(firstFrameUrl), withLastFrame: Boolean(lastFrameUrl), withReferences: Array.isArray(referenceAssets) && referenceAssets.length > 0 });
   if (template) {
     const rendered = renderRequestTemplate(template, {
       model,

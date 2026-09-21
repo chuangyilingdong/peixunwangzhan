@@ -262,6 +262,14 @@ export const DEFAULT_REQUEST_TEMPLATES = Object.freeze({
   // version 是该中继要求的 API 版本（不带会报 version is required），需要的话在渠道模板里改。
   MUSIC: Object.freeze({ model: '{{model}}', prompt: '{{style}}', metadata: { version: 'v9', lyrics: '{{lyrics}}', n: 1, stream: false } }),
   VIDEO: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
+  // 全能参考（多图 / 多视频 / 多音频混合参考，MiniMax V2 那套 `content[]`）。
+  // ⚠️ 2026-09-21 补的，**这是「连了参考图却没进请求」的根因**：`generationOptionsFor` 的 VIDEO 分支
+  //    在模型声明 OMNI_REFERENCE 时把素材放进 `options.referenceAssets`（不当首/尾帧），
+  //    而原来**没有任何默认模板带 `{{referenceItems}}`** → 渲染请求体时那个键根本不存在，
+  //    参考被静默丢掉、出来的视频与参考毫无关系（用户 2026-09-21：「清明上河图连了参考，
+  //    生成的视频完全是两种东西」；图片那条 2026-09-17 同理、已经修过）。
+  //    没连参考时 `content` 是空数组（不是缺键）——纯文生视频请走 VIDEO 那条（见 requestTemplateFor）。
+  VIDEO_OMNI: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', content: '{{referenceItems}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
   // 图生视频：上游要的是顶层 image 字段。注意 api.seedance.nz 的报错文案写的是
   // "firstFrameUrl is required"，但实测真正被接受的键是 image（传 firstFrameUrl 反而 400）。
   VIDEO_I2V: Object.freeze({ model: '{{model}}', prompt: '{{prompt}}', seconds: '{{durationSeconds}}', image: '{{firstFrameUrl}}', metadata: { resolution: '{{resolution}}', aspect_ratio: '{{aspectRatio}}', audio: '{{audio}}' } }),
@@ -362,7 +370,7 @@ export function parseRequestTemplate(text) {
   }
 }
 
-export function requestTemplateFor(channel, modality, { model = '', requiresFirstFrame = false, withLastFrame = false } = {}) {
+export function requestTemplateFor(channel, modality, { model = '', requiresFirstFrame = false, withLastFrame = false, withReferences = false } = {}) {
   const key = String(modality || '').toUpperCase();
   // 同一个渠道里的模型请求体可能完全不同（hailuo 要顶层 image，MiniMax-H3 V2 要 content[]），
   // 所以模型级模板优先于渠道级。
@@ -373,6 +381,9 @@ export function requestTemplateFor(channel, modality, { model = '', requiresFirs
   if (key === 'VIDEO' && requiresFirstFrame) {
     return withLastFrame ? DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V_FRAMES : DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V;
   }
+  // 全能参考：素材当参考发（不当首/尾帧，上游不允许混用）→ 必须走带 `{{referenceItems}}` 的那条，
+  // 否则参考会在渲染时被整个丢掉（2026-09-21 修的就是这条）。
+  if (key === 'VIDEO' && withReferences) return DEFAULT_REQUEST_TEMPLATES.VIDEO_OMNI;
   return DEFAULT_REQUEST_TEMPLATES[key] || null;
 }
 

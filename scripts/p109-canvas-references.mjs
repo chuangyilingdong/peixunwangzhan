@@ -37,6 +37,7 @@ const {
   DEFAULT_REQUEST_TEMPLATES,
   TEMPLATE_PLACEHOLDERS,
   renderRequestTemplate,
+  requestTemplateFor,
 } = await import('../apps/server/src/services/modelCapabilities.js');
 const { generationOptionsFor } = await import('../apps/server/src/routes/aiGeneration.js');
 
@@ -143,6 +144,78 @@ check('【反向自检】没有任何一处把参考图塞给不带参考的模�
 check('【反向自检】视频那套门禁还在（图生视频与全能参考不能混用）',
   /GENERATION_MIXED_INPUT_MODES/.test(read('apps/server/src/routes/aiGeneration.js'))
   && /GENERATION_REFERENCES_UNSUPPORTED/.test(read('apps/server/src/routes/aiGeneration.js')));
+
+/* ── ④ 视频的「全能参考」：参考必须真的进请求体（2026-09-21 用户报的那条）──────────
+   用户原话：「视频生成出来跟参考也不一样啊。完全是两种东西啊…现在还有视频/音乐这些参考」。
+   根因：模型声明 OMNI_REFERENCE 时素材走 `options.referenceAssets`（不当首/尾帧），
+   可**默认视频模板里没有 `{{referenceItems}}`** → 渲染请求体时参考被静默丢掉，
+   出来的视频与参考毫无关系。（图片那条 2026-09-17 修过；视频这条两样都缺：
+   默认模板 + "模板带不了就当场拒绝"。）
+   音乐那条**不算丢**：客户端的音乐 payload 里根本没有参考，UI 也没那行 —— 这是有意的。 */
+check('视频默认模板里有一条能放参考的位置（VIDEO_OMNI）',
+  /\{\{referenceItems\}\}/.test(JSON.stringify(DEFAULT_REQUEST_TEMPLATES.VIDEO_OMNI || {})),
+  JSON.stringify(Object.keys(DEFAULT_REQUEST_TEMPLATES)));
+
+// 生产现状的形状：视频渠道只写了模型名 + **在渠道里声明了 H3 的四种输入方式**（没配任何模板 → 走默认）。
+// ⚠️ 这一句声明就是 bug 的入口：声明了 OMNI_REFERENCE，客户端才会把连过来的素材当**参考**发。
+const videoChannel = {
+  id: 'ch-video',
+  model: 'MiniMax-H3',
+  modelCapabilities: {
+    'MiniMax-H3': { aspectRatios: ['16:9', '9:16'], resolutions: ['480P'], durations: [5, 10, 15], audio: true, inputModes: ['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE'] },
+  },
+};
+const videoOptions = generationOptionsFor({
+  context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] },
+  selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF],
+});
+check('① 服务端把参考放进 options.referenceAssets，且**不**设首帧（全能参考与首尾帧不混用）',
+  videoOptions.referenceAssets?.length === 1 && videoOptions.referenceAssets[0].url === IMAGE_REF.url && !videoOptions.firstFrameUrl,
+  JSON.stringify(videoOptions));
+
+const chosenVideoTemplate = requestTemplateFor(videoChannel, 'VIDEO', { model: 'MiniMax-H3', withReferences: true });
+check('② 带参考时选到的是全能参考那条模板（不是纯文生那条）',
+  /\{\{referenceItems\}\}/.test(JSON.stringify(chosenVideoTemplate || {})), JSON.stringify(chosenVideoTemplate));
+
+const renderedVideo = renderRequestTemplate(chosenVideoTemplate, {
+  model: 'MiniMax-H3', prompt: '图片动起来', durationSeconds: 5, aspectRatio: '16:9', resolution: '480p', audio: true, referenceAssets: [IMAGE_REF],
+});
+check('③ 渲染出来的请求体里**真的带着那张参考图**（content[].image_url.url）',
+  JSON.stringify(renderedVideo.content || []).includes(IMAGE_REF.url), JSON.stringify(renderedVideo).slice(0, 220));
+
+check('④ 没连参考时不会选到全能参考模板（纯文生视频的形状不变）',
+  !/\{\{referenceItems\}\}/.test(JSON.stringify(requestTemplateFor(videoChannel, 'VIDEO', { model: 'MiniMax-H3' }) || {})),
+  JSON.stringify(requestTemplateFor(videoChannel, 'VIDEO', { model: 'MiniMax-H3' })));
+
+// 另一个静默丢法：管理员**显式**配了一份带不了参考的视频模板 → 上游收不到图，必须当场拒绝
+// （渠道仍要声明 OMNI_REFERENCE，否则根本走不到全能参考那一支）
+const badVideoPolicy = {
+  channels: [{
+    id: 'ch-video', model: 'MiniMax-H3',
+    modelCapabilities: videoChannel.modelCapabilities,
+    requestTemplates: { VIDEO: { model: '{{model}}', prompt: '{{prompt}}' } },
+  }],
+};
+let videoRefused = null;
+try {
+  generationOptionsFor({ context: {}, modality: 'VIDEO', policy: badVideoPolicy, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF] });
+} catch (error) { videoRefused = error; }
+check('⑤ 显式模板带不了参考时当场拒绝（不再静默出一段无关的视频）',
+  videoRefused !== null && /GENERATION_REFERENCES_UNSUPPORTED|不能带参考素材/.test(String(videoRefused.message || videoRefused.code || videoRefused)),
+  videoRefused ? String(videoRefused.code || videoRefused.message) : '(没有报错，说明又被静默丢掉了)');
+
+/* ── ③b 客户端「连过来的素材怎么用」的判定（2026-09-21 修的那条语义）────────────
+   学生连一张图 + 写「图片动起来」→ 要的是**这张图动起来**（首帧），不是"再画一段像它的"。
+   原逻辑只要模型声明了全能参考就一律当参考发 → 出来的画面与参考毫无关系。 */
+check('能当帧就当帧：全是图片、1~2 张、模型支持帧 → 走首帧',
+  /const useFrames = supportsFirstFrame && frameUrls\.length > 0 && frameUrls\.length <= frameCapacity && frameUrls\.length === allRefs\.length/.test(canvas)
+  && /sourceAssetUrl: useFrames \? \(frameUrls\[0\]/.test(canvas));
+check('够不着帧的（多张图 / 视频 / 音频混合）才走全能参考',
+  /const useOmni = !useFrames && omni && allRefs\.length > 0/.test(canvas));
+check('尾帧判定用 FIRST_LAST_FRAME（原来写的 LAST_FRAME，尾帧永远不亮）',
+  /const supportsLastFrame = modes\.includes\('FIRST_LAST_FRAME'\)/.test(canvas) && !/\.includes\('LAST_FRAME'\)/.test(canvas));
+check('面板那行与生成 payload 读**同一处**判定（不会生成一套、显示另一套）',
+  /omni=\{videoInputPlan\.useOmni\}/.test(canvas) && /referenceAssets=\{videoInputPlan\.useOmni \? videoInputPlan\.allRefs : \[\]\}/.test(canvas));
 
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
