@@ -647,7 +647,11 @@ export function CanvasWorkspace({ api, ...props }) {
                   const onCanvas = boxOnCanvas(box.id);
                   const blocked = !editable ? '作品已提交，画布不能再修改' : (!enabled ? '本课未开放该 AI 能力' : '');
                   const state = onCanvas ? '已在画布上' : (running ? '生成中…' : (boxSucceeded(box.id) ? '已生成，点击接回画布' : '未生成'));
-                  return <button className="cv-item" key={material.id} type="button" disabled={Boolean(blocked)} title={blocked || (onCanvas ? '已在画布上：点击定位到这个框体' : undefined)} onClick={() => addBoxToCanvas(box)}>
+                  // ⭐ 生成框体带一圈金色（.is-gen-box，样式在 shared/styles.css）：
+                  //    用户 2026-09-21 口径「生成框体都要有四周边环绕的金色，一眼就知道这是生成框体、
+                  //    不是别的素材；只需要区分生成框体即可」。所以只加描边，不动图标那套模态色
+                  //    （生图/生视频/生音乐的区分仍在，见 materialVisual）。
+                  return <button className="cv-item is-gen-box" key={material.id} type="button" disabled={Boolean(blocked)} title={blocked || (onCanvas ? '已在画布上：点击定位到这个框体' : undefined)} onClick={() => addBoxToCanvas(box)}>
                     <span className={`cv-item__icon is-${visual.tone}`}><Icon name={visual.icon} size={15} /></span>
                     <span className="cv-item__text"><strong>{material.title}</strong><small>{visual.label} · {boxParamsLabel(box)} · {state}{blocked ? ' · ' + blocked : ''}</small></span>
                     <b className="cv-item__plus">{onCanvas ? '◎' : '＋'}</b>

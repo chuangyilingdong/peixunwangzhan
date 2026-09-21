@@ -809,8 +809,15 @@ function CourseDetail({ api, courseId, onBack }) {
         {detail.data.versions?.length ? <div className="table-wrap"><table><thead><tr><th>版本</th><th>变更说明</th><th>发布时间</th></tr></thead><tbody>{detail.data.versions.slice(0, 5).map((item) => <tr key={item.id}><td>v{item.version}</td><td>{item.note || '—'}</td><td>{item.publishedAt ? formatDate(item.publishedAt) : '尚未发布'}</td></tr>)}</tbody></table></div> : null}
       </Panel> : null}
       <nav className="tabs" role="tablist">
+        {/* 「有未发布的改动」必须**在标签上就看得见**（用户 2026-09-21 口径：不能点进去才知道）——
+            与「版本发布」面板里那个 status 同一个判据（detail.hasUnpublishedChanges），不会漂。 */}
         {[['basic', '基本信息'], ['lessons', `课时编排（${series.lessons.length}）`], ['publish', '版本发布']].map(([key, label]) =>
-          <button key={key} type="button" role="tab" aria-selected={activeTab === key} className={`tab ${activeTab === key ? 'is-active' : ''}`} onClick={() => setActiveTab(key)}>{label}</button>)}
+          <button key={key} type="button" role="tab" aria-selected={activeTab === key} className={`tab ${activeTab === key ? 'is-active' : ''}`} onClick={() => setActiveTab(key)}>
+            {label}
+            {key === 'publish' && detail.data.hasUnpublishedChanges
+              ? <span className="tab__flag" title="有未发布的改动：改完点「更新发布」才会同步到机构端与官网">有未发布</span>
+              : null}
+          </button>)}
       </nav>
 
       {activeTab === 'basic' ? <Panel title="课包资料">

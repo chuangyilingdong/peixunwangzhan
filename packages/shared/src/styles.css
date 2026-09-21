@@ -1091,6 +1091,10 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .tab { padding:9px 15px; border:0; border-radius:9px; color:#6d6680; background:transparent; font-size:13px; font-weight:700; cursor:pointer; }
 .tab:hover { background:#f5f2ff; color:var(--deep); }
 .tab.is-active { color:#fff; background:var(--purple); }
+/* 标签上的角标（例：课包详情的「版本发布」有未发布的改动）。用户口径 2026-09-21：
+   这种情况必须在标签上就看得见，不能点进去才知道。选中态在紫底上换半透明白，别被吃掉。 */
+.tab__flag { display:inline-block; margin-left:6px; padding:2px 6px; border-radius:999px; background:#fef3c7; color:#b45309; font-size:11px; font-weight:700; vertical-align:1px; }
+.tab.is-active .tab__flag { background:rgb(255 255 255 / 26%); color:#fff; }
 .form-section-title { margin:20px 0 6px; padding-bottom:7px; border-bottom:1px solid #f0edf5; color:var(--deep); font-size:12px; letter-spacing:.6px; }
 .form-section-title:first-child { margin-top:0; }
 .lesson-row { cursor:pointer; }
@@ -1236,6 +1240,13 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .cv-item { display: flex; align-items: center; gap: 9px; width: 100%; margin-bottom: 4px; padding: 8px 9px; border: 1px solid transparent; border-radius: 10px; color: var(--cv-text); background: rgb(255 255 255 / 3%); cursor: pointer; text-align: left; transition: background var(--cv-motion) ease-out, border-color var(--cv-motion) ease-out, opacity var(--cv-motion) ease-out; }
 .cv-item:hover:not(:disabled) { border-color: var(--cv-border-strong); background: rgb(255 255 255 / 7%); }
 .cv-item:disabled { opacity: .45; cursor: not-allowed; }
+/* 生成框体：四周一圈金色，和其他素材一眼分开（用户 2026-09-21 口径：「生成框体都需要在四周
+   有点金色的环绕，一看就知道这个是生成框体、而不是其他素材；只需要区分生成框体即可」）。
+   用 border + box-shadow 描一圈：四边都完整，悬停换色时也不会被吃掉；图标那套模态色不动
+   （生图/生视频/生音乐的区分仍然在）。 */
+.cv-item.is-gen-box { border-color: rgb(246 199 92 / 62%); box-shadow: 0 0 0 1px rgb(246 199 92 / 24%), 0 0 10px rgb(246 199 92 / 16%); }
+.cv-item.is-gen-box:hover:not(:disabled) { border-color: rgb(253 224 122 / 95%); background: rgb(246 199 92 / 10%); box-shadow: 0 0 0 1px rgb(246 199 92 / 45%), 0 0 14px rgb(246 199 92 / 26%); }
+.cv-item.is-gen-box:disabled { box-shadow: 0 0 0 1px rgb(246 199 92 / 14%); }
 .cv-item__icon { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 8px; color: var(--cv-primary); background: rgb(163 254 68 / 10%); font-size: 13px; }
 /* 素材类型分色：与画布上的框体同一套（.learning-node--* 的蓝 / 紫 / 粉），
    这样「生图框体 / 生视频框体 / 生音乐框体」在列表里也是一眼分得出来。 */

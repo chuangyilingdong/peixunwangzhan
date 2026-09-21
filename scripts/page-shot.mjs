@@ -363,9 +363,17 @@ try {
     if (route.clicks.length) { const before = shotName(''); await page.screenshot({ path: before, fullPage: true }); shots.push(path.relative(root, before)); }
     // --click：一步步点下去（走向导、开弹窗），不然那些"藏在第二步/弹窗里"的东西永远看不到
     for (const label of route.clicks) {
-      const target = page.getByRole('button', { name: label }).first();
-      const count = await target.count();
-      if (!count) { fail(`${route.path} 点不到「${label}」`, '页面上没有这个按钮（文案变了？还是它还没渲染出来）'); continue; }
+      // ⚠️ 别只按 role=button 找：标签页是 `role="tab"`、导航是 `role="link"`，
+      //    只试 button 会得到「点不到」的假失败（第一版就是这样漏掉「版本发布」这个标签的）。
+      const candidates = [
+        page.getByRole('button', { name: label }),
+        page.getByRole('tab', { name: label }),
+        page.getByRole('link', { name: label }),
+        page.getByText(label),
+      ];
+      let target = null;
+      for (const candidate of candidates) { if (await candidate.count()) { target = candidate.first(); break; } }
+      if (!target) { fail(`${route.path} 点不到「${label}」`, '页面上没有这个文案的按钮/标签（文案变了？还是它还没渲染出来）'); continue; }
       await target.click().catch((error) => fail(`${route.path} 点「${label}」失败`, String(error?.message || error)));
       await page.waitForTimeout(700);
     }
