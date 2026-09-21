@@ -22,6 +22,10 @@
 import { AI_PROVIDER_TIMEOUT_MS } from '../config.js';
 import { PROVIDER_ERROR_CODES } from './providerContract.js';
 import { fitMediaToRatio, parseRatio } from './mediaFit.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { uploadRoot } from './fileUploadSecurity.js';
+import { row } from '../lib.js';
 
 // 上游给的 URL 活 24h，留 4h 余量；到点重新上传。
 export const MIRROR_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
@@ -54,8 +58,36 @@ function maxBytesFor(contentType) {
   const family = String(contentType || '').split('/')[0].toLowerCase();
   return MAX_UPLOAD_BYTES[family] || MAX_UPLOAD_BYTES.video;
 }
+/** 上游素材上限：图片 30MB / 音视频 50MB（超了在读 body 之前就拦，别白传一趟）。 */
+function assertWithinUpstreamLimit(declared, contentType) {
+  if (!(declared > 0)) return;
+  const cap = maxBytesFor(contentType);
+  if (declared > cap) {
+    throw mirrorFailure(`这张素材 ${describeSize(declared)}，超过上游 ${describeSize(cap)} 的上限（${contentType || '未知类型'}）—— 请换一张小一点的素材`);
+  }
+}
+
 function describeSize(bytes) {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.round(bytes / 1024)}KB`;
+}
+
+/**
+ * 我们自己的文件资产 URL → 磁盘内容（读不到就返回 null，交给 HTTP 那条路试）。
+ * 只在"文件确实在库里且 storage_kind=INTERNAL_PROXY"时才读盘。
+ */
+function readOwnFileFromDisk(source) {
+  const match = String(source || '').match(/\/api\/(?:public|student|admin|org)\/file-assets\/([^/]+)\/download(?:$|[?#])/);
+  if (!match) return null;
+  try {
+    const file = row('SELECT storage_kind,storage_key,mime_type FROM file_assets WHERE id=?', [match[1]]);
+    if (!file || file.storage_kind !== 'INTERNAL_PROXY') return null;
+    const key = String(file.storage_key || '').replaceAll('\\', '/');
+    if (!key || key.startsWith('/') || /^[A-Za-z]:/.test(key) || key.split('/').includes('..')) return null;
+    const root = uploadRoot();
+    const absolute = path.resolve(root, key);
+    if (absolute !== root && !absolute.startsWith(root + path.sep)) return null;
+    return { bytes: readFileSync(absolute), contentType: String(file.mime_type || '').split(';')[0].trim() || 'application/octet-stream' };
+  } catch { return null; }
 }
 
 function mirrorFailure(detail) {
@@ -106,26 +138,30 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
-  try {
-    const response = await doFetch(source, { signal: controller.signal });
-    // 401/403：这是我们自己站点的**需要登录**的下载路由（例如 `/api/student/file-assets/...`）。
-    // 生成链路只会把公开路由（`/api/public/file-assets/...`）交给上游，所以走到这里说明
-    // 上游那侧也一定读不到 —— 直说，别让人去猜 HTTP 401 是什么意思。
-    if (response?.status === 401 || response?.status === 403) {
-      throw mirrorFailure(`这张素材需要登录才能读（HTTP ${response.status}）—— 要交给上游的素材必须是公开的 /api/public/file-assets/... 地址`);
-    }
-    if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
-    contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
-    // 大小闸：在**读 body 之前**按 content-length 判（上游上限只有 30/50MB，我们单文件上限是 200MB）
-    const declared = Number(response.headers?.get?.('content-length') || 0);
-    const cap = maxBytesFor(contentType);
-    if (declared > cap) throw mirrorFailure(`这张素材 ${describeSize(declared)}，超过上游 ${describeSize(cap)} 的上限（${contentType || '未知类型'}）—— 请换一张小一点的素材`);
-    bytes = new Uint8Array(await response.arrayBuffer());
-  } catch (error) {
-    // 已经是给用户看的那句（大小超限）就别再套一层「读取素材失败」
-    if (/^素材上传到上游失败/.test(String(error?.message || ''))) throw error;
-    throw mirrorFailure(`读取素材失败（${String(error?.message || error).slice(0, 120)}）`);
-  } finally { clearTimeout(timer); }
+  // ① 取源素材。两条路：
+  //    a) 我们自己站点上的文件资产 → **直接从磁盘读**。为什么不能走 HTTP：私有素材（学生自己上传的）
+  //       在 /api/public/... 上是 **403**（那条路由只服务公开文件），而 /api/student/... 要会话；
+  //       顺带省掉一次"自己请求自己"的回环。
+  //    b) 别处（上游自己的存储、外部图床、或 a 读不到时）→ HTTP 取回来。
+  const disk = readOwnFileFromDisk(source);
+  if (disk) {
+    contentType = disk.contentType;
+    assertWithinUpstreamLimit(disk.bytes.length, contentType);
+    bytes = new Uint8Array(disk.bytes);
+  } else {
+    try {
+      const response = await doFetch(source, { signal: controller.signal });
+      if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
+      contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
+      // 大小闸：在**读 body 之前**按 content-length 判（上游上限只有 30/50MB，我们单文件上限是 200MB）
+      assertWithinUpstreamLimit(Number(response.headers?.get?.('content-length') || 0), contentType);
+      bytes = new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      // 已经是给用户看的那句（大小超限）就别再套一层「读取素材失败」
+      if (/^素材上传到上游失败/.test(String(error?.message || ''))) throw error;
+      throw mirrorFailure(`读取素材失败（${String(error?.message || error).slice(0, 120)}）`);
+    } finally { clearTimeout(timer); }
+  }
   if (!bytes?.length) throw mirrorFailure('素材是空的');
 
   // ①b 需要时把画面裁成目标比例（关键帧 + 固定比例）：上游会**执行**固定比例，
