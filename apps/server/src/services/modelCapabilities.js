@@ -357,7 +357,16 @@ function typedTemplateValue(key, context) {
       counts[type] += 1;
       if (type === 'IMAGE') items.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
       else if (type === 'VIDEO') items.push({ type: 'video_url', video_url: { url }, role: 'reference_video' });
-      else items.push({ type: 'audio_url', audio_url: { url }, role: 'reference_audio' });
+      // ⚠️ 音频有**两种角色**，别再一律发 `reference_audio`（用户 2026-09-21 报「音频无法参考」的根因）：
+      //   · `reference_audio` = **声音参考**（音色风格），**不驱动画面**；
+      //   · `drive_audio`     = **目标音频驱动**（画面跟着音频动；上游默认 `lock_source` 还会把这条音频
+      //     留在产物音轨里）——上游 H3 专节：「`reference_audio` 提供声音参考；`drive_audio` 提供目标音频驱动」，
+      //     并写明 `drive_audio` 与 3 条参考音频**分开计数**（各算一条额度）。
+      //   学生把音频连到视频框体上，要的是"画面跟着这段音频"，所以**第一条音频当驱动发**，
+      //   其余（第 2、3 条）仍然当声音参考。实测：发 reference_audio 时产物音轨与源音频互相关 0.018
+      //   （等于没用上），发 drive_audio 才是同一条音频 —— 见 deploy/production/live-audio-drive-check.mjs。
+      //   ⚠️ 换上游/换模型时这条要跟着核：`drive_audio` 是这家上游的扩展角色，别家不一定认。
+      else items.push({ type: 'audio_url', audio_url: { url }, role: counts.AUDIO === 1 ? 'drive_audio' : 'reference_audio' });
     }
     return items;
   }

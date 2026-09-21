@@ -748,6 +748,17 @@ export function generationOptionsFor({ context, modality, policy, selection, box
       if (!/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(referencesTemplate || {}))) {
         throw errors.forbidden('当前视频模型不能带参考素材：请去掉连线，或让老师换一个支持参考的模型', 'GENERATION_REFERENCES_UNSUPPORTED');
       }
+      // ⚠️ 音频再往前一条：连过来的音频是当**驱动**发的（见 modelCapabilities 的 referenceItems），
+      //    而渠道模板里的 `audio_control.mode: native` 会把它彻底中和 —— 上游文档写的是
+      //    native＝「生成原生音轨，不锁驱动音频」、`add_drive_as_reference`（native 下默认 false）
+      //    决定它算不算声音参考；两者都没有 = 这条音频对产物**一点作用都没有**。
+      //    学生看到的就是「视频跟音频完全不一样」（用户 2026-09-21 报的）。这是模板里的配置错误，
+      //    静默中和比报错糟得多（同「模板带不了参考就当场拒绝」那条口径），当场拒绝并说清怎么改。
+      const audioControl = referencesTemplate?.audio_control;
+      const drivesAudio = omniReferences.some((item) => String(item.type || '').toUpperCase() === 'AUDIO');
+      if (drivesAudio && String(audioControl?.mode || '').toLowerCase() === 'native' && audioControl?.add_drive_as_reference !== true) {
+        throw errors.forbidden('当前视频模型把音轨固定成「原生生成」，连过来的音频不会起作用 —— 请让老师把这个模型的 audio_control 去掉（去掉后：连了音频就按音频驱动并保留它，没连则生成原生音轨）', 'GENERATION_AUDIO_DRIVE_BLOCKED');
+      }
       if (omniReferences.length) options.referenceAssets = omniReferences;
     } else {
       // 框体挂了预置素材时，它就是首帧（学生不必自己再连一张）。

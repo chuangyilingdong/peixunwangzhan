@@ -269,6 +269,60 @@ check('9 张都在但一张都留不住 → 报 GENERATION_MEDIA_UNUSABLE（不�
   allDropped?.code === 'GENERATION_MEDIA_UNUSABLE' && /都不能发给 AI/.test(String(allDropped?.message || '')),
   String(allDropped?.message || '(没报错)'));
 
+/* ── ⑦ 全能参考里的**音频**：第一条必须当「驱动音频」发（2026-09-21 用户报「音频无法参考」）──────
+   用户原话：「视频全能参考好像音频无法参考，刚才我生成了个让他参考音频前5秒，结果做出来的视频
+   跟音频完全不一样」。根因：`{{referenceItems}}` 把音频一律发成 `reference_audio` —— 上游文档
+   （H3 专节「驱动音频与声音参考」）写明它只是**声音参考**（音色风格），**不驱动画面**；
+   要画面跟着音频动、并把这条音频留在产物里，得发 `drive_audio`（上游缺省 `lock_source`）。
+   实测判据：发 reference_audio 时产物音轨与源音频互相关 0.018（= 没用上）——
+   对照脚本 deploy/production/live-audio-drive-check.mjs（直连上游，¥0.75 一跑）。 */
+const AUDIO_REF = { type: 'AUDIO', url: 'https://example.test/beat.mp3' };
+const AUDIO_REF_2 = { type: 'AUDIO', url: 'https://example.test/voice.wav' };
+const omniItems = renderRequestTemplate({ content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'] }, {
+  ...baseContext, referenceAssets: [IMAGE_REF, AUDIO_REF, AUDIO_REF_2, VIDEO_REF],
+}).content.filter((item) => item.type !== 'text');
+const roleOf = (items, url) => items.find((item) => JSON.stringify(item).includes(url))?.role || '';
+check('① 第一条音频发成 drive_audio（画面跟着音频动 + 默认 lock_source 把这条音频留在产物里）',
+  roleOf(omniItems, AUDIO_REF.url) === 'drive_audio', JSON.stringify(omniItems));
+check('② 其余音频仍是 reference_audio（上游：3 条参考音频 + 1 条驱动音频，分开计数）',
+  roleOf(omniItems, AUDIO_REF_2.url) === 'reference_audio');
+check('③ 图片/视频的角色没被带歪',
+  roleOf(omniItems, IMAGE_REF.url) === 'reference_image' && roleOf(omniItems, VIDEO_REF.url) === 'reference_video');
+
+// 配置那一半：模板里钉 `audio_control: {mode: native}` 会把驱动音频**彻底中和**（native 不锁驱动音频，
+// 且 `add_drive_as_reference` 在 native 下默认 false）= 这条音频对产物一点作用都没有。
+// 这种组合必须**当场拒绝**（静默中和比报错糟得多），而不是照发一段与音频无关的视频。
+const pinnedAudioChannel = {
+  id: 'ch-video-pinned', model: 'MiniMax-H3',
+  modelCapabilities: videoChannel.modelCapabilities,
+  modelRequestTemplates: {
+    'MiniMax-H3': { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'], duration: '{{durationSecondsNumber}}', resolution: '{{resolution}}', ratio: '{{aspectRatio}}', audio_control: { mode: 'native', add_drive_as_reference: false } },
+  },
+};
+let pinnedRefused = null;
+try {
+  generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' }, box: {}, referenceAssets: [AUDIO_REF] });
+} catch (error) { pinnedRefused = error; }
+check('④ 模板把音轨钉成 native（且不当声音参考）+ 连了音频 → 当场拒绝并说清怎么改',
+  pinnedRefused?.code === 'GENERATION_AUDIO_DRIVE_BLOCKED' && /audio_control/.test(String(pinnedRefused?.message || '')),
+  String(pinnedRefused?.code || '(没报错，说明音频会被静默中和)'));
+// 反向：同一份模板，但**没连音频** → 不许拦（钉 native 的课不至于整节课生成不了）
+let pinnedNoAudio = null;
+try {
+  pinnedNoAudio = generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF] });
+} catch (error) { pinnedNoAudio = error; }
+check('【反向自检】没连音频时那条拦截不生效（别把钉 native 的课整个拦住）',
+  pinnedNoAudio !== null && !pinnedNoAudio.code && pinnedNoAudio.referenceAssets?.length === 1,
+  String(pinnedNoAudio?.code || JSON.stringify(pinnedNoAudio || {}).slice(0, 120)));
+// 反向：模板本来就对（没有 audio_control = 迁移后的生产配置）→ 不许误拦
+let plainAudio = null;
+try {
+  plainAudio = generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] }, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [AUDIO_REF] });
+} catch (error) { plainAudio = error; }
+check('【反向自检】模板里没有 audio_control（迁移后的生产配置）→ 音频参考照常放行',
+  plainAudio !== null && !plainAudio.code && plainAudio.referenceAssets?.[0]?.url === AUDIO_REF.url,
+  String(plainAudio?.code || '(被误拦了)'));
+
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);
