@@ -75,7 +75,11 @@
 /* 节点铺满外层容器（外层宽度由内容撑出）；要有素材的框体按素材比例决定宽度。 */
 .learning-node { font-family: inherit; position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 250px; min-height: 120px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 14px; color: var(--cv-text); background: var(--cv-card); box-shadow: 0 12px 30px rgb(0 0 0 / 32%); transition: border-color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out; }
 /* 带素材的框体不设最小宽度：素材区多宽，卡片就多宽（9:16 的槽位就是一张竖卡） */
-.learning-node--image, .learning-node--video, .learning-node--audio, .learning-node--animation { min-width: 0; }
+.learning-node--image, .learning-node--video, .learning-node--animation { min-width: 0; }
+/* ⚠️ 音乐框体**不能**跟着上面那组把最小宽度去掉（用户 2026-09-21 报「播放器太窄了，没法正常播放」）：
+   图片/视频是"素材撑多宽卡片就多宽"，而音乐里是浏览器原生的 audio 播放条 —— 它本身会收缩，
+   卡片就跟着缩成一个小药丸，连播放键都被挤没了。所以给音乐卡片一个能放下播放条的最小宽度。 */
+.learning-node--audio { min-width: 260px; }
 .learning-node:hover { border-color: #3a3a44; }
 .react-flow__node.selected .learning-node { border-color: var(--cv-primary); box-shadow: 0 0 0 1px var(--cv-primary), 0 16px 40px rgb(0 0 0 / 40%); }
 
@@ -134,7 +138,7 @@
 .learning-node__scene-art small { max-width: 190px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
 @media (max-width: 700px) { .learning-canvas { min-height: 590px; height: 72vh; } .learning-canvas__tip { max-width: 230px; } }
 
-.learning-node__audio { display: block; width: calc(100% - 24px); margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
+.learning-node__audio { display: block; width: calc(100% - 24px); min-width: 0; margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
 .learning-node > * { flex-shrink: 0; }
 /* 画面（图片/视频）：**按素材自身比例**自适应，只受宽高上限约束 ——

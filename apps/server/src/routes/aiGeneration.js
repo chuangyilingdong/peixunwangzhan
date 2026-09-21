@@ -145,7 +145,9 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
   // 不支持纯文本（i2v 类）时必须有画面输入，否则上游必然拒绝。
   if (!hasFirst && !references.length && !list.includes('TEXT')) {
     // 锁成全能参考时，"缺的"是参考素材而不是首帧 —— 文案要跟着锁定的方式走
-    const need = acceptsOmni && !acceptsFirstFrame(list) ? '参考素材（图片/视频/音频）' : '画面（首帧）';
+    const need = lockedMode === 'OMNI_REFERENCE' || (acceptsOmni && !acceptsFirstFrame(list))
+      ? '参考素材（图片/视频/音频）'
+      : '画面（首帧）';
     throw errors.forbidden(`${scope}，需要先连接${need}再生成`, 'GENERATION_FIRST_FRAME_REQUIRED');
   }
 }
@@ -247,7 +249,7 @@ function jobDetail(jobId, { requireAuth = null } = {}) {
 //    （用户这一天报的「完全不一样的内容」就是它：入队时好好的，执行时没了。）
 //    所以：**自己域名的绝对地址也要认**。回查数据库用的是文件 id，且只回我们自己站点的公开地址，
 //    所以不存在"把外部地址送给上游"的口子 —— 外部地址仍然解析不出来（下面那条反例钉着）。
-function publicFileAssetUrl(value) {
+function publicFileAssetUrl(value, { ownerUserId = '' } = {}) {
   const raw = String(value || '').trim();
   const base = String(PUBLIC_SITE_URL || '').replace(/\/+$/, '');
   // 摘 origin：自己域名的绝对地址直接摘前缀；域名万一变了（或记录是另一套 PUBLIC_SITE_URL 写的）
@@ -258,11 +260,17 @@ function publicFileAssetUrl(value) {
   for (const candidate of candidates) {
     const match = candidate.match(/^\/api\/(?:student|public)\/file-assets\/([^/]+)\/download$/);
     if (!match) continue;
-    const file = row('SELECT id,status,visibility,category,expires_at FROM file_assets WHERE id=?', [match[1]]);
+    const file = row('SELECT id,status,visibility,category,expires_at,owner_type,owner_user_id FROM file_assets WHERE id=?', [match[1]]);
     if (!file || file.status !== 'ACTIVE') continue;
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) continue;
     if (file.category === 'TEACHING_ASSET') continue;
-    if (file.visibility !== 'PUBLIC_PLATFORM' && file.visibility !== 'PUBLIC_RELEASE') continue;
+    // 能不能交给上游：**公开素材**可以；**学生自己的上传**也可以 ——
+    // 学生把画布上自己传的图连到"全能参考/图生图"框体上，本来就该能生成（用户 2026-09-21 撞的就是它：
+    // 自己传的图是 PRIVATE，被这条挡下 → 参考被静默丢掉 → 还报「需要先连接画面」，完全误导）。
+    // 边界：只认**他本人**的文件（别人的私有素材仍然进不来），教学素材照旧一律不发。
+    const isOwnUpload = Boolean(ownerUserId) && file.owner_type === 'USER' && String(file.owner_user_id || '') === String(ownerUserId);
+    const isPublic = file.visibility === 'PUBLIC_PLATFORM' || file.visibility === 'PUBLIC_RELEASE';
+    if (!isOwnUpload && !isPublic) continue;
     return `${base}/api/public/file-assets/${file.id}/download`;
   }
   return '';
@@ -277,6 +285,11 @@ function resolvableAssetUrl(value) {
   return publicFileAssetUrl(url);
 }
 
+// 这个项目的学生是谁 —— publicFileAssetUrl 用它判断"这张图是不是他本人传的"。
+function projectStudentId(projectId) {
+  return String(row('SELECT student_id FROM student_projects WHERE id=?', [projectId])?.student_id || '');
+}
+
 // 导出是给守卫用的（p125）：入队时解析一次、worker 真正执行时**再解析一次**，
 // 这两次必须得到同一个结果。两次不一致 = 首帧/参考在"要发请求的那一刻"被丢掉。
 export function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
@@ -284,7 +297,7 @@ export function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   if (!url || url.length > 2000) return '';
   const asset = row("SELECT asset_url FROM media_assets WHERE project_id = ? AND modality = 'IMAGE' AND asset_url = ?", [projectId, url]);
   if (asset) return String(asset.asset_url);
-  return publicFileAssetUrl(url);
+  return publicFileAssetUrl(url, { ownerUserId: projectStudentId(projectId) });
 }
 
 /**
@@ -380,6 +393,7 @@ export function resolveReferenceAssets(projectId, value) {
   }
   const kept = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
   const out = [];
+  const dropped = [];
   for (const item of parsed) {
     const type = item.type;
     if (kept[type] >= REFERENCE_LIMITS[type]) continue;
@@ -387,10 +401,19 @@ export function resolveReferenceAssets(projectId, value) {
       `SELECT asset_url FROM media_assets WHERE project_id=? AND asset_url=? AND modality IN (${REFERENCE_MODALITIES[type].map(() => '?').join(',')})`,
       [projectId, item.url, ...REFERENCE_MODALITIES[type]],
     );
-    const resolved = allowed ? String(allowed.asset_url) : publicFileAssetUrl(item.url);
-    if (!resolved) continue;
+    const resolved = allowed ? String(allowed.asset_url) : publicFileAssetUrl(item.url, { ownerUserId: projectStudentId(projectId) });
+    if (!resolved) { dropped.push(item); continue; }
     kept[type] += 1;
     out.push({ type, url: resolved });
+  }
+  // ⚠️ 一个都没留住 → **当场报错**，别静默变成"没有输入"：
+  //    用户 2026-09-21 撞的就是这个 —— 连了两张自己传的图（PRIVATE），两张都被挡下，
+  //    结果收到一句「需要先连接画面（首帧）再生成」，而屏幕上明明写着"参考：图片1 图片2"（完全误导）。
+  if (!out.length && dropped.length) {
+    throw errors.badRequest(
+      `连过来的 ${dropped.length} 个素材都不能发给 AI（不是公开素材、也不是你上传的）—— 请换成课堂素材或自己重新上传后再试`,
+      'GENERATION_MEDIA_UNUSABLE',
+    );
   }
   return out;
 }

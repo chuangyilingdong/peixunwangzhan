@@ -159,10 +159,12 @@ try {
 
   // 5.10 参考素材只认本项目对应模态的素材：外站地址 / 不存在的视频素材都会被丢掉
   q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref2','mg1','全能参考2','','GENERATION_BOX',NULL,?,6,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
-  const filtered = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref2', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: 'https://evil.example/x.png' }, { type: 'VIDEO', url: 'mock://asset1' }] }));
-  check(filtered?.queued === true, '外站/类型不匹配的参考应被过滤掉，但请求本身仍可生成');
-  const filteredJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [filtered?.job?.id || '']);
-  check(!filteredJob?.reference_asset_urls, `不该有参考素材落库，实际 ${filteredJob?.reference_asset_urls}`);
+  // ⚠️ 口径变更（2026-09-21 晚）：原来这里是"过滤掉、请求照样生成"—— 但那等于**静默把学生连的参考丢了**：
+  //    他屏幕上写着「参考：图片1 图片2」，出来的却是一段纯文生视频（用户当晚撞的正是这一类）。
+  //    现在：**一个都留不住就当场报错**（GENERATION_MEDIA_UNUSABLE），说清"连过来的素材不能发给 AI"。
+  await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref2', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: 'https://evil.example/x.png' }, { type: 'VIDEO', url: 'mock://asset1' }] })), 'GENERATION_MEDIA_UNUSABLE', '外站/类型不匹配的参考一个都留不住时要当场报错');
+  const filteredJob = row("SELECT COUNT(*) n FROM generation_jobs WHERE box_id='box-omni-ref2'");
+  check(Number(filteredJob?.n || 0) === 0, '被拦下的请求不该落任何任务');
 
   // 5.11b 老师上传的「画布素材」（公开可见）可以当参考：相对地址会升级成上游可抓的绝对地址
   q("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('file_pub1','PLATFORM','INTERNAL_PROXY','ref.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)", [now, now]);
