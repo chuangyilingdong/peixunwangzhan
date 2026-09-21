@@ -152,6 +152,18 @@ try {
   const publishedProjectBoxes = await projectBoxes();
   check('④ 更新发布后：学生画布也一起换成框体 B（全部同步）', publishedProjectBoxes.some((box) => box.id === boxB) && !publishedProjectBoxes.some((box) => box.id === boxA), JSON.stringify(publishedProjectBoxes.map((box) => box.id)).slice(0, 200));
 
+  // ⑤「有未发布的改动」必须在**标签上**就看得见（用户口径 2026-09-21：
+  //    「如果有修改未发布的，应该是在版本发布这里有明显的提示，而不是点进去才看得到」）。
+  //    判据与面板里那个 status 同一处（detail.hasUnpublishedChanges），所以只要钉住：
+  //    ① 标签按这个判据渲染 .tab__flag；② 角标有样式（含选中态，紫底上不能被吃掉）。
+  const courseManagement = fs.readFileSync(path.join(root, 'apps/admin/src/components/CourseManagement.jsx'), 'utf8');
+  const sharedStyles = fs.readFileSync(path.join(root, 'packages/shared/src/styles.css'), 'utf8');
+  check('⑤ 课包详情：「版本发布」标签上有「有未发布」角标，判据与面板里那个 status 同一处',
+    /key === 'publish' && detail\.data\.hasUnpublishedChanges/.test(courseManagement)
+    && /className="tab__flag"/.test(courseManagement));
+  check('⑤ 角标有样式（含选中态：紫底上换半透明白，别被吃掉）',
+    /\.tab__flag \{/.test(sharedStyles) && /\.tab\.is-active \.tab__flag \{/.test(sharedStyles));
+
   console.log(JSON.stringify({ name: 'draft-isolation', pass: failures === 0, seriesId, failures }, null, 2));
 } catch (error) {
   console.error(serverLog);

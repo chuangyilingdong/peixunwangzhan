@@ -179,5 +179,16 @@ check('② 画布右下角那条提示（.cv-toast）不再一直挂着：非错
   /const timer = setTimeout\(\(\) => setMessage\(''\), 5000\);/.test(workspace)
   && /if \(message\.includes\('失败'\) \|\| message\.includes\('错误'\)\) return undefined;/.test(workspace));
 
+/* ── 生成框体一圈金环（2026-09-21 用户口径）────────────────────────────────
+   用户原话：「图2 是画布左侧素材生成框体，如果是生成框体，都需要在图2 四周有点金色的环绕，
+             可以跟其他素材区分开，一看就知道这个是生成框体。而不是其他的素材。只需要区分生成框体即可。」
+   ⚠️ 只判两件事：**框体那一项**有金环、**其他素材项没有**；图标那套模态色（生图/生视频/生音乐）不动。 */
+check('④ 生成框体那一项带 .is-gen-box，其他素材项是裸的 cv-item',
+  /className="cv-item is-gen-box"/.test(workspace)
+  && /className="cv-item" key=\{material\.id \|\| material\.title\}/.test(workspace));
+check('④ 金环是四边完整的描边（border + box-shadow 各一圈），悬停换色也不会被吃掉',
+  /\.cv-item\.is-gen-box \{ border-color: rgb\(246 199 92 \/ 62%\); box-shadow: 0 0 0 1px rgb\(246 199 92 \/ 24%\), 0 0 10px rgb\(246 199 92 \/ 16%\); \}/.test(sharedCss)
+  && /\.cv-item\.is-gen-box:hover:not\(:disabled\) \{ border-color: rgb\(253 224 122 \/ 95%\)/.test(sharedCss));
+
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

@@ -22,6 +22,11 @@
  *   · `--fresh` 用种子空库（不碰生产库；本机能跑但本机 node 得够新）
  *   · `--seed <文件.sql>` / `--sql '<SQL>'` 往**副本**里灌几条数据再截 ——
  *     空状态会盖住版面问题（卡片网格、角标、分页都看不到），生产库常常就是空的
+ *   · `--fixture <文件.mjs>` 页面需要**生产上不存在或不敢动**的状态时，先自己造：
+ *     那个文件导出 `prepare({ api, db, hashPassword, log })`，返回一个对象作为变量表，
+ *     路由里的 `{变量名}` 会被替换掉（例：`--fixture .tmp/fx.mjs /learn/canvas/{projectId}`）。
+ *     `api(pathname, { method, token, body })` 打的是临时实例；`db` 是副本的 sqlite 连接。
+ *     例：造一节有生成框体、已发布、学生已在课堂里的课，再把画布页面截下来。
  *   · `--text` 打印整页可见文本；`--check 文案1,文案2` 断言页面上有这些话
  *   · `--click 按钮文案` 先点一下再截（可以给多次，按顺序点）—— 向导第二步、弹窗里的样子靠它
  *   · `--viewport 390x844` 看窄屏（口径 57 那类"中文被折成竖排"的毛病只在窄列出现）
@@ -41,6 +46,7 @@ import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { chromium } from 'playwright-core';
@@ -52,7 +58,7 @@ const DEFAULT_MEDIA_ROOT = '/srv/ai-kids-platform/public-media';
 const DEFAULT_DOWNLOADS_ROOT = '/srv/ai-kids-platform/downloads';
 
 // ── 参数 ────────────────────────────────────────────────────────────────────
-const opts = { as: null, tag: null, db: null, build: true, fresh: false, text: false, wait: 1600, keep: false, viewport: '1440x1000', uploads: null, prodUploads: false, out: null, seed: null, sql: null };
+const opts = { as: null, tag: null, db: null, build: true, fresh: false, text: false, wait: 1600, keep: false, viewport: '1440x1000', uploads: null, prodUploads: false, out: null, seed: null, sql: null, fixture: null, vars: {} };
 const routes = [];
 const globalChecks = [];
 const argv = process.argv.slice(2);
@@ -73,6 +79,7 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (arg === '--out') opts.out = next();
   else if (arg === '--seed') opts.seed = next();
   else if (arg === '--sql') opts.sql = next();
+  else if (arg === '--fixture') opts.fixture = next();
   else if (arg === '--click') {
     const texts = String(next()).split(',').map((item) => item.trim()).filter(Boolean);
     (routes.length ? routes[routes.length - 1].clicks : []).push(...texts);
@@ -106,12 +113,17 @@ const ACCOUNTS = {
 // 键写错时页面只是安静地显示登录页，脚本还报了"✓"，正是这个项目最恨的那类哑守卫）
 const appForRoute = (route) => (route.path.startsWith('/admin') ? 'admin' : route.path.startsWith('/org') ? 'org' : 'website');
 const accountForRoute = (route) => opts.as || (route.path.startsWith('/admin') ? 'root' : route.path.startsWith('/org') ? 'org-admin' : 'student-1');
-for (const route of routes) {
-  route.account = accountForRoute(route);
-  route.app = appForRoute(route);
-  if (!ACCOUNTS[route.account]) { console.error(`--as 只认这几个账号：${Object.keys(ACCOUNTS).join(' / ')}（给的是 ${route.account}）`); process.exit(2); }
-}
-
+// 路由里的 `{变量}` 由 --fixture 的返回值填（fixture 跑在临时实例起来之后，见下）。
+// 必须放在 accountForRoute/appForRoute 之后 —— 放前面会撞 const 的暂时性死区。
+const assignRouteTargets = () => {
+  for (const route of routes) {
+    route.path = String(route.path).replace(/\{(\w+)\}/g, (match, key) => (opts.vars[key] === undefined ? match : encodeURIComponent(String(opts.vars[key]))));
+    route.account = accountForRoute(route);
+    route.app = appForRoute(route);
+    if (!ACCOUNTS[route.account]) { console.error(`--as 只认这几个账号：${Object.keys(ACCOUNTS).join(' / ')}（给的是 ${route.account}）`); process.exit(2); }
+  }
+};
+assignRouteTargets();
 const problems = [];
 const warnings = [];
 const fail = (label, detail) => problems.push({ label, detail });
@@ -295,6 +307,30 @@ try {
   };
   if (!(await ready())) throw new Error(`临时实例没起来：\n${apiLog.slice(-1500)}`);
   console.log(`临时实例：API http://127.0.0.1:${apiPort}（库是副本，不碰生产）`);
+
+  // --fixture：页面需要"生产上不存在或不敢动"的状态时先自己造（例：一节已发布、有生成框体、
+  // 学生已在课堂里的课 —— 才看得到画布左侧的素材面板）。它返回的变量表会填进路由里的 {变量}。
+  if (opts.fixture) {
+    const module = await import(pathToFileURL(path.resolve(root, opts.fixture)).href);
+    if (typeof module.prepare !== 'function') { console.error(`--fixture 的文件要导出 prepare({ api, db, hashPassword, log })：${opts.fixture}`); process.exit(2); }
+    const fixtureDb = new DatabaseSync(dbPath);
+    fixtureDb.exec('PRAGMA busy_timeout = 5000');
+    const api = async (pathname, { method = 'GET', token, body } = {}) => {
+      const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, {
+        method,
+        headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => null);
+      return { status: response.status, data: payload?.data ?? payload, error: payload?.error || null };
+    };
+    console.log(`跑夹具 ${opts.fixture} …`);
+    const vars = await module.prepare({ api, db: fixtureDb, hashPassword, log: (message) => console.log(`   ${message}`) });
+    fixtureDb.close();
+    Object.assign(opts.vars, vars || {});
+    assignRouteTargets();
+    console.log(`夹具返回变量：${JSON.stringify(opts.vars)}`);
+  }
 
   // 先把要用的账号都登一遍（拿 token），再一次性注进浏览器
   const sessions = {};
