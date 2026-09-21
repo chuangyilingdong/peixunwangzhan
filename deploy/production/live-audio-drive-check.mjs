@@ -120,7 +120,12 @@ async function prepareOne(asset, tries = 3) {
 }
 console.log('素材准备：');
 const prepared = [];
-for (const asset of [...images, audio]) {
+// --order=audio-first：把音频排在**内容项的图片之前**（画布上学生先连音频时就是这个顺序）。
+// 2026-09-21 晚加：走队列的真跑（音频在图片前）连续 3 次都没锁音轨，而直连探针（图片在前）2 次都锁上，
+// 所以怀疑上游是**按内容项顺序/第一个非文本项**选模式的 —— 这个开关就是为分辨它。
+const audioFirst = String(args.order || '') === 'audio-first';
+const orderedAssets = audioFirst ? [audio, ...images] : [...images, audio];
+for (const asset of orderedAssets) {
   const ready = await prepareOne(asset);
   if (!ready) { console.log(`   ❌ ${asset.type} 传不上去（上游暂存接口超时），这条不参与本次验证`); continue; }
   const unchanged = ready.url === asset.url;
@@ -134,16 +139,14 @@ if (!sentImages.length) console.log('⚠️ 一张图都没传上去：这次只
 if (dry) { console.log('\n（--dry：只验素材能不能被上游拿到，不生成）'); writeFileSync(`${WORK}/prepared.json`, JSON.stringify(prepared, null, 1)); process.exit(0); }
 
 /* ── 提交 ──────────────────────────────────────────────────────────────── */
+const imageItems = sentImages.map((item) => ({ type: 'image_url', image_url: { url: item.url }, role: 'reference_image' }));
+const audioItem = { type: 'audio_url', audio_url: { url: sentAudio?.url || audio.url }, role };
 const body = {
   model: channel.model || 'MiniMax-H3',
-  content: [
-    { type: 'text', text: prompt },
-    ...sentImages.map((item) => ({ type: 'image_url', image_url: { url: item.url }, role: 'reference_image' })),
-    { type: 'audio_url', audio_url: { url: sentAudio?.url || audio.url }, role },
-  ],
+  content: [{ type: 'text', text: prompt }, ...(audioFirst ? [audioItem, ...imageItems] : [...imageItems, audioItem])],
   duration: 5,
   resolution: '480P',
-  ratio: '3:4',
+  ratio: String(args.ratio || '3:4'),
 };
 if (pinNative) body.audio_control = { mode: 'native', add_drive_as_reference: false };
 writeFileSync(`${WORK}/request-body.json`, JSON.stringify(body, null, 1));
