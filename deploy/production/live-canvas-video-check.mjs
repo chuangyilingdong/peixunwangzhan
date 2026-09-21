@@ -24,7 +24,8 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 
-const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../..');
+const REPO = process.env.LIVE_CHECK_REPO
+  || path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../..');
 const WORK = process.env.LIVE_CHECK_DIR || '/tmp/live-canvas-video-check';
 const PORT = Number(process.env.LIVE_CHECK_PORT || 18877);
 const PROD_DB = '/srv/ai-kids-platform/production/data/platform.db';
