@@ -55,12 +55,20 @@ const SELF = String(env.PUBLIC_SITE_URL || 'https://iicili.cyou').replace(/\/+$/
 const { DatabaseSync } = await import('node:sqlite');
 const db = new DatabaseSync(`${PROD_DATA}/platform.db`, { readOnly: true });
 const policy = JSON.parse(db.prepare('SELECT ai_provider_policy FROM platform_settings WHERE id=1').get().ai_provider_policy || '{}');
-// 输入素材：优先用参数给的，否则拿"最近一张老师上传的图片素材"（相对路径 → 绝对地址）
-const rows = db.prepare("SELECT asset_url FROM course_lesson_materials WHERE material_type='IMAGE' AND asset_url LIKE '/api/%' ORDER BY created_at DESC LIMIT 1").all();
+// 输入素材：优先用参数给的，否则拿**一张公开可见的素材**（口径与 publicFileAssetUrl 一致：
+// 只有 PUBLIC_PLATFORM / PUBLIC_RELEASE 且不是教学素材的，才允许发给上游）。
+// ⚠️ 别直接拿 course_lesson_materials.asset_url —— 那多半是 `/api/student/...`（要登录），
+//    生成链路从不发它；拿它去跑只会撞 401，白折腾。
+const fileRow = args.asset
+  ? null
+  : db.prepare("SELECT id FROM file_assets WHERE status='ACTIVE' AND visibility IN ('PUBLIC_PLATFORM','PUBLIC_RELEASE') AND category<>'TEACHING_ASSET' ORDER BY created_at DESC LIMIT 1").get();
 db.close();
-const assetPath = String(args.asset || rows[0]?.asset_url || '').trim();
-if (!assetPath) { console.log('没找到可用的输入素材，请用 --asset=<url 或 /api/... 路径> 指定'); process.exit(1); }
-const ASSET = /^https?:\/\//i.test(assetPath) ? assetPath : `${SELF}${assetPath}`;
+const assetArg = String(args.asset || '').trim();
+const assetPath = assetArg || (fileRow ? `/api/public/file-assets/${fileRow.id}/download` : '');
+if (!assetPath) { console.log('没找到可用的输入素材，请用 --asset=<公开的 /api/public/file-assets/... 地址> 指定'); process.exit(1); }
+// 给了 student 作用域的地址也自动折成公开路由（和生成链路的口径一致）
+const normalizedPath = assetPath.replace(/^\/api\/(?:student|admin|org)\/file-assets\//, '/api/public/file-assets/');
+const ASSET = /^https?:\/\//i.test(normalizedPath) ? normalizedPath : `${SELF}${normalizedPath}`;
 if (!ASSET.startsWith(SELF)) { console.log(`⚠️ 给的素材不在我们自己域名下（${ASSET}）—— 这个脚本验的就是自站素材的镜像，换一个。`); process.exit(1); }
 
 const pepper = createHash('sha256').update(String(env.AUTH_PEPPER || 'p0-local-pepper')).digest();

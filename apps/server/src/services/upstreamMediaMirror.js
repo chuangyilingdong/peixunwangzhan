@@ -104,6 +104,12 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
   timer.unref?.();
   try {
     const response = await doFetch(source, { signal: controller.signal });
+    // 401/403：这是我们自己站点的**需要登录**的下载路由（例如 `/api/student/file-assets/...`）。
+    // 生成链路只会把公开路由（`/api/public/file-assets/...`）交给上游，所以走到这里说明
+    // 上游那侧也一定读不到 —— 直说，别让人去猜 HTTP 401 是什么意思。
+    if (response?.status === 401 || response?.status === 403) {
+      throw mirrorFailure(`这张素材需要登录才能读（HTTP ${response.status}）—— 要交给上游的素材必须是公开的 /api/public/file-assets/... 地址`);
+    }
     if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`);
     contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim();
     // 大小闸：在**读 body 之前**按 content-length 判（上游上限只有 30/50MB，我们单文件上限是 200MB）
