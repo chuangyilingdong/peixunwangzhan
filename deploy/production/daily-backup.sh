@@ -3,7 +3,11 @@ set -Eeuo pipefail
 
 ROOT="${PRODUCTION_ROOT:-/srv/ai-kids-platform/production}"
 BACKUP_ROOT="${PRODUCTION_BACKUP_ROOT:-${ROOT}/backups}"
-KEEP_DAYS="${PRODUCTION_BACKUP_RETENTION_DAYS:-14}"
+# 留存天数（用户口径 2026-09-21：**留近 7 天**；此前是 14 天）。
+# 为什么值得收：每次发布都会整库备份，发布多的时候一天 ~30 份、单份 ~21MB ——
+# 14 天就是 7.3G（磁盘一共 40G）。7 天约 3-4G。
+# ⚠️ 留着它就得留着「一周内任意一次发布的库」：更早的 release 若回滚，配套的库备份可能已经删了。
+KEEP_DAYS="${PRODUCTION_BACKUP_RETENTION_DAYS:-7}"
 SOURCE_DIR="${PRODUCTION_SOURCE_DIR:-/srv/ai-kids-platform/internal-test/source}"
 STATE_DIR="${ROOT}/state"
 STATE_FILE="${STATE_DIR}/last-backup-state.json"

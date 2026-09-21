@@ -41,7 +41,7 @@ systemctl restart learning-platform-production
   git 里那个 commit 重新构建。清理是**手工**做的、没有定时任务；口径见
   `docs/operations/开新会话先读-现状对齐-20260919.md` §三「2026-09-20 运维实查」，
   删除前的 release→commit 清单留档在 `production/logs/releases-archive-20260920.tsv`。
-数据库回滚用 `backups/<stamp>/platform.db`（备份保留 14 天，未变动）。
+数据库回滚用 `backups/<stamp>/platform.db`（备份保留 **7 天**；2026-09-21 从 14 天收紧，见下）。
 
 发布后要在**服务器上**做公网验收（本机出口封 HTTPS）：
 
@@ -194,7 +194,8 @@ bash /srv/ai-kids-platform/production/bin/daily-backup.sh
 bash /srv/ai-kids-platform/production/bin/restore-drill.sh
 ```
 
-- 每日 03:00 Asia/Shanghai 自动备份，保留 14 天；timer 为 `ai-kids-platform-production-daily-backup.timer`。
+- 每日 03:00 Asia/Shanghai 自动备份，保留 **7 天**（2026-09-21 由 14 天收紧：每次发布都会整库备份，一份 ~21MB、忙时一天 ~30 份，14 天要 7.3G）；
+  timer 为 `ai-kids-platform-production-daily-backup.timer`，留存天数由 `PRODUCTION_BACKUP_RETENTION_DAYS` 控制（脚本在 `production/bin/daily-backup.sh`，**不在 release 里、发布不会更新它**）。
 - 备份必须通过 SHA256 与 SQLite `integrity_check`，状态写入 `production/state/last-backup-state.json`。
 - 恢复演练只使用隔离目录与 `127.0.0.1:18789`，结束必须释放端口；不得覆盖生产库或停生产服务。
 - 每月至少执行一次真实备份恢复演练，并把结果追加到 P9 运维记录。
