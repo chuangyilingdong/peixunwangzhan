@@ -549,20 +549,39 @@ export function publishedLessonStatusSql(alias = 'lesson') {
   return `COALESCE(CASE WHEN json_valid(${alias}.published_content) THEN json_extract(${alias}.published_content, '$.status') END, ${alias}.status)`;
 }
 
+/**
+ * 读面要的「这节课的素材与框体」= 快照里**有哪一档就用哪一档**，缺的档回退实时。
+ *
+ * ⚠️ 读面与判定**必须共用这一个函数**：学生画布画的框体来自 normalizeProject，而「点生成」时服务端
+ *    校验 boxId 用的是生成接口那条路（studentContext → normalizeLesson）—— 两边必须是同一份。
+ *    2026-09-21 之前这两处各写一遍：画布读**实时**、判定读**快照**，于是两边指向两批不同的 id，
+ *    学生「看得见新框体，点生成却报『生成框体不存在或已不属于本课』」。生产上 17 节课全中
+ *    （1-1 那节快照里还有旧 id；其余 16 节快照里根本没这一键，判定侧拿到空数组，点哪个框体都报）。
+ *
+ * 口径（用户 2026-09-21 定）：**没发布 = 学生那边整体还是上一次发布的那一套，而且必须能正常用；
+ *    发布 = 一起换新**（他们发布总在凌晨、那时没有学生上课）。所以：
+ *    · 快照里有这一键 → 以快照为准（未发布的改动对学生不可见）；
+ *    · 快照里没有这一键 → 回退实时 —— 发布早于「生成框体」这个功能的老快照（生产上 16 节）里
+ *      没有这一键，给空数组等于把学生手里的框体全没收，那是同一个 bug 的另一半。
+ *    （与第二十四轮「教学素材可见性」那条判据同一个形状：逐键回退。）
+ */
+function mergedLessonCanvas(lessonRow, liveCanvas = null) {
+  const live = liveCanvas || lessonCanvasConfig(lessonRow?.id);
+  const snapshot = publishedSnapshotOf(lessonRow);
+  if (!snapshot) return live;
+  const pick = (key) => (Array.isArray(snapshot[key]) ? snapshot[key] : live[key]);
+  return { capabilities: pick('capabilities'), materialGroups: pick('materialGroups'), generationBoxes: pick('generationBoxes') };
+}
+
 export function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
   if (!value) return null;
   // 平台端读实时数据（编辑用）；机构端/学生端/官网读「最近一次更新发布」定格的快照。
   // 老数据没有快照 → 回退实时数据，行为与之前一致。
   const snapshot = asPublished ? publishedSnapshotOf(value) : null;
   const liveCanvas = lessonCanvasConfig(value.id);
-  const merged = snapshot
-    ? {
-      ...snapshot,
-      capabilities: Array.isArray(snapshot.capabilities) ? snapshot.capabilities : [],
-      materialGroups: Array.isArray(snapshot.materialGroups) ? snapshot.materialGroups : [],
-      generationBoxes: Array.isArray(snapshot.generationBoxes) ? snapshot.generationBoxes : [],
-    }
-    : null;
+  // 这三档按「有哪档用哪档、缺的档回退实时」合并 —— 与 normalizeProject 共用同一个函数，
+  // 读面与判定不会各写一遍（各写一遍正是 2026-09-21 那个 bug 的成因）。
+  const merged = snapshot ? { ...snapshot, ...mergedLessonCanvas(value, liveCanvas) } : null;
   const pick = (key, fallback) => (merged && merged[key] !== undefined ? merged[key] : fallback);
   return {
     id: value.id,
@@ -1082,7 +1101,10 @@ export function normalizeProject(value, { includeSnapshot = false } = {}) {
     workId: value.work_id || null,
     workStatus: value.work_status || null,
     workSubmittedAt: value.work_submitted_at || null,
-    ...lessonCanvasConfig(value.course_lesson_id),
+    // 学生画布上画的框体与课堂素材：与生成接口**同一份**（快照有哪档用哪档、缺的回退实时）。
+    // ⚠️ 这里以前是 lessonCanvasConfig()（纯实时），于是「画布看得见新框体、点生成说没有」——
+    //    查询里必须带上 lesson.published_content（映射成 lesson_published_content），否则等于又退回实时。
+    ...mergedLessonCanvas({ id: value.course_lesson_id, published_content: value.lesson_published_content }),
   };
   if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   return result;

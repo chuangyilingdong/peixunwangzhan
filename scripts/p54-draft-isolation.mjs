@@ -104,6 +104,54 @@ try {
   const orgAfterSeriesPublish = await orgRead();
   check('③ 更新发布后：机构端读到新课包标题与价格', orgAfterSeriesPublish.includes('改过') && orgAfterSeriesPublish.includes('29900'), orgAfterSeriesPublish.slice(0, 160));
 
+  // ④ 框体 / 课堂素材也要隔离，而且**画布与「点生成」的判定必须是同一份**
+  //
+  // 2026-09-21 生产 bug：学生画布画的框体来自 normalizeProject（读**实时**），而生成接口校验 boxId
+  // 用的是 studentContext（读**快照**）—— 两边指向两批不同的 id，学生「看得见新框体，点生成却报
+  // 「生成框体不存在或已不属于本课」」。生产上 17 节课全中（带框体的课时全在内）。
+  // ⚠️ p28 一直在绿，是因为它那节课**从来没发布过**（没有快照 → 两边都回退实时）—— 这条只能在这里钉。
+  const boxMaterial = (title, content) => ({ title, materialType: 'GENERATION_BOX', snapshot: { box: { modality: 'TEXT' }, content } });
+  // 保存框体：PUT 的响应就是整个课包（含课时素材，走平台端=实时），直接从里面取新 id
+  const saveBoxes = async (materials) => {
+    const saved = await api(`/api/admin/course-lessons/${lessonId}`, { method: 'PUT', token: admin, body: { materialGroups: [{ title: '任务一', materials }] } });
+    assert.equal(saved.status, 200, `保存框体失败: ${JSON.stringify(saved.data).slice(0, 200)}`);
+    const groups = (saved.data?.lessons || []).find((item) => item.id === lessonId)?.materialGroups || [];
+    return groups.flatMap((group) => group.materials || []).map((item) => item.id);
+  };
+  const studentLesson = async () => (await api(`/api/student/courses/${seriesId}`, { token: student.token })).data;
+  const boxesOf = (payload) => (payload?.lessons || []).find((item) => item.id === lessonId)?.generationBoxes || [];
+  const projectBoxes = async () => ((await api('/api/student/projects', { method: 'POST', token: student.token, body: { courseLessonId: lessonId, title: 'P54 框体' } })).data?.generationBoxes || []);
+
+  const boxA = (await saveBoxes([boxMaterial('任务一：文本框体（A）', '你好，AI！请介绍一下哪吒。')]))[0];
+  assert.ok(boxA, '框体 A 没保存成功');
+  const publishA = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.3', note: '发布框体 A' } });
+  assert.equal(publishA.status, 200, JSON.stringify(publishA.data).slice(0, 160));
+  check('④ 发布后：学生端课时读面拿到框体 A', JSON.stringify(boxesOf(await studentLesson())).includes(boxA), JSON.stringify(boxesOf(await studentLesson())).slice(0, 160));
+  check('④ 发布后：学生画布（项目 payload）也是框体 A', (await projectBoxes()).some((box) => box.id === boxA));
+
+  // 重建框体（新 id），**不发布** —— 学生那边必须整体还是 A，而且生成接口要认 A（两边同源）
+  const boxB = (await saveBoxes([boxMaterial('任务一：文本框体（B）', '重建后的新框体。')]))[0];
+  assert.ok(boxB && boxB !== boxA, `框体 B 应是一个新 id（A=${boxA} B=${boxB}）`);
+  const readWhileDraft = JSON.stringify(boxesOf(await studentLesson()));
+  check('④ 重建但没发布：学生端课时读面仍是框体 A（未发布不可见）', readWhileDraft.includes(boxA) && !readWhileDraft.includes(boxB), readWhileDraft.slice(0, 200));
+  const draftProjectBoxes = await projectBoxes();
+  check('④ 重建但没发布：学生画布（项目 payload）仍是框体 A —— 与判定同一份', draftProjectBoxes.some((box) => box.id === boxA) && !draftProjectBoxes.some((box) => box.id === boxB), JSON.stringify(draftProjectBoxes.map((box) => box.id)).slice(0, 200));
+  const generateWithA = await api('/api/ai/generations/async', { method: 'POST', token: student.token, body: { projectId: (await api('/api/student/projects', { method: 'POST', token: student.token, body: { courseLessonId: lessonId, title: 'P54 框体生成' } })).data.id, boxId: boxA, modality: 'TEXT', prompt: boxA ? '你好，AI！请介绍一下哪吒。' : '' } });
+  check('④ 重建但没发布：投递给接口的框体 id 属于快照（这一条只证明快照没被换掉）', generateWithA.data?.error?.code !== 'GENERATION_BOX_NOT_FOUND', JSON.stringify(generateWithA.data).slice(0, 200));
+  // ⭐ 这条才是用户看到的症状：客户端提交的是**画布上那个框体**的 id（它从项目 payload 里拿）。
+  //    画布读实时、判定读快照时，两边不是同一份 → 这里必红（GENERATION_BOX_NOT_FOUND）。
+  const canvasBoxId = draftProjectBoxes[0]?.id;
+  const generateFromCanvas = await api('/api/ai/generations/async', { method: 'POST', token: student.token, body: { projectId: (await api('/api/student/projects', { method: 'POST', token: student.token, body: { courseLessonId: lessonId, title: 'P54 画布框体生成' } })).data.id, boxId: canvasBoxId, modality: 'TEXT', prompt: '画布上那个框体点生成' } });
+  check('④ 重建但没发布：拿**画布上那个框体**去生成，不会报「生成框体不存在或已不属于本课」', generateFromCanvas.data?.error?.code !== 'GENERATION_BOX_NOT_FOUND', `boxId=${canvasBoxId} ${JSON.stringify(generateFromCanvas.data).slice(0, 200)}`);
+
+  // 发布 → 两边一起换成 B
+  const publishB = await api(`/api/admin/course-series/${seriesId}/versions`, { method: 'POST', token: admin, body: { version: '1.4', note: '发布框体 B' } });
+  assert.equal(publishB.status, 200, JSON.stringify(publishB.data).slice(0, 160));
+  const readAfterPublish = JSON.stringify(boxesOf(await studentLesson()));
+  check('④ 更新发布后：学生端课时读面换成框体 B', readAfterPublish.includes(boxB) && !readAfterPublish.includes(boxA), readAfterPublish.slice(0, 200));
+  const publishedProjectBoxes = await projectBoxes();
+  check('④ 更新发布后：学生画布也一起换成框体 B（全部同步）', publishedProjectBoxes.some((box) => box.id === boxB) && !publishedProjectBoxes.some((box) => box.id === boxA), JSON.stringify(publishedProjectBoxes.map((box) => box.id)).slice(0, 200));
+
   console.log(JSON.stringify({ name: 'draft-isolation', pass: failures === 0, seriesId, failures }, null, 2));
 } catch (error) {
   console.error(serverLog);

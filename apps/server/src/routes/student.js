@@ -43,6 +43,7 @@ const PROJECT_DELETE_RESTORE_DAYS = 30;
 function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted = false } = {}) {
   const project = row(
     `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
+            lesson.published_content AS lesson_published_content,
             series.id AS series_id, series.title AS series_title,
             class.name AS class_name,
             work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
@@ -62,6 +63,7 @@ function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted
 function fetchProject(ctx, projectId, { includeDeleted = false } = {}) {
   return row(
     `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
+            lesson.published_content AS lesson_published_content,
             series.id AS series_id, series.title AS series_title,
             class.name AS class_name,
             work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
@@ -485,6 +487,7 @@ export async function handleStudent(ctx) {
     const total = Number(row(`SELECT COUNT(DISTINCT project.id) n ${fromWhere}`, params)?.n || 0);
     const items = rows(
       `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
+              lesson.published_content AS lesson_published_content,
               series.id AS series_id, series.title AS series_title,
               class.name AS class_name,
               work.id AS work_id, work.status AS work_status, work.submitted_at AS work_submitted_at
