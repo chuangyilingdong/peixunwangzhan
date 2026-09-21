@@ -113,13 +113,17 @@ if ('dry' in args) {
   process.exit(0);
 }
 
+const asReference = 'as-reference' in args;   // 视频那条：把素材当**参考**发（不是首帧）
+
 if (only !== 'image') {
   const channel = channelFor('VIDEO');
-  console.log(`① 视频模型 ${channel.model}：把这张图当**首帧**（约 ¥0.75）`);
+  console.log(`① 视频模型 ${channel.model}：把这张图当**${asReference ? '参考（启发素材，模型会重画）' : '首帧（关键帧，模型会从这一帧开始）'}**（约 ¥0.75）`);
   try {
     const out = await providerFor('VIDEO').generate({
       modality: 'VIDEO', prompt: '让图片动起来', title: '验收',
-      options: { aspectRatio: '16:9', resolution: '480P', durationSeconds: 5, audio: false, firstFrameUrl: ASSET },
+      options: asReference
+      ? { aspectRatio: '16:9', resolution: '480P', durationSeconds: 5, audio: false, referenceAssets: [{ type: 'IMAGE', url: ASSET }] }
+      : { aspectRatio: '16:9', resolution: '480P', durationSeconds: 5, audio: false, firstFrameUrl: ASSET },
     });
     const url = out?.assets?.[0]?.assetUrl || '';
     console.log('   ✅ 已生成：', url);

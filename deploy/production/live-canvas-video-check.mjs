@@ -75,6 +75,33 @@ const now = new Date().toISOString();
 db.prepare(`INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,created_at,box_id,source_asset_url,request_options,credits_charged)
   VALUES (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,0)`)
   .run(jobId, project.org_id, project.student_id, project.id, 'VIDEO', channel.provider || 'custom', channel.model || 'MiniMax-H3', prompt, now, box.id, asset, JSON.stringify({ aspectRatio: ratio }));
+// 先在**副本**里保证这个学生在这节课上有一间进行中的课堂（生产上老师随时会结束课堂，
+// 没有这一步，验收脚本会因为 NOT_IN_CLASSROOM 跑不起来）。形状照抄 p4-o12 守卫里的做法。
+function ensureActiveSession() {
+  const active = db.prepare("SELECT s.id FROM class_sessions s JOIN session_students ss ON ss.session_id=s.id WHERE s.lesson_id=? AND s.status='ACTIVE' AND ss.student_id=? AND ss.status='ACTIVE' LIMIT 1").get(project.course_lesson_id, project.student_id);
+  if (active) return active.id;
+  const nowIso = new Date().toISOString();
+  const stale = db.prepare("SELECT ss.session_id id FROM session_students ss JOIN class_sessions s ON s.id=ss.session_id WHERE ss.student_id=? AND ss.status='ACTIVE' AND s.status IN ('PENDING','ACTIVE')").all(project.student_id);
+  for (const item of stale) {
+    db.prepare("UPDATE class_sessions SET status='ENDED', ended_at=? WHERE id=?").run(nowIso, item.id);
+    db.prepare("UPDATE session_students SET status='INCOMPLETE' WHERE session_id=? AND student_id=?").run(item.id, project.student_id);
+  }
+  const previous = db.prepare('SELECT class_id FROM class_sessions WHERE lesson_id=? ORDER BY started_at DESC LIMIT 1').get(project.course_lesson_id);
+  const klass = db.prepare('SELECT id, teacher_id FROM classes WHERE org_id=? LIMIT 1').get(project.org_id);
+  const classId = previous?.class_id || klass?.id;
+  if (!classId) throw new Error('副本里找不到可用班级，先在机构端建一个班');
+  const sessionId = `csession_livecheck${Date.now().toString(16)}`;
+  db.prepare("INSERT INTO class_sessions(id,class_id,lesson_id,status,started_by,started_at) VALUES (?,?,?,'ACTIVE',?,?)").run(sessionId, classId, project.course_lesson_id, klass?.teacher_id || null, nowIso);
+  const series = db.prepare('SELECT series_id FROM course_lessons WHERE id=?').get(project.course_lesson_id);
+  db.prepare("INSERT INTO session_students(id,session_id,student_id,org_id,lesson_id,series_id,status,added_at) VALUES (?,?,?,?,?,?,'ACTIVE',?)").run('ss_livecheck' + Date.now().toString(16), sessionId, project.student_id, project.org_id, project.course_lesson_id, series?.series_id || null, nowIso);
+  // 项目也要指向这间课堂（服务端按它解析「这个学生在上的哪节课」；p11 夹具里同样这一步）
+  db.prepare('UPDATE student_projects SET class_session_id=? WHERE id=?').run(sessionId, project.id);
+  db.prepare('UPDATE classes SET current_session_id=? WHERE id=?').run(sessionId, classId);
+  console.log(`（副本里补了一间进行中的课堂：${sessionId}）`);
+  return sessionId;
+}
+ensureActiveSession();
+
 // --mode=FIRST_FRAME / OMNI_REFERENCE / TEXT / FIRST_LAST_FRAME：只在**副本**里给这个框体锁上生成方式
 // （验"课包锁定的方式赢过客户端推断"用；生产库不动）。
 if (args.mode) {
