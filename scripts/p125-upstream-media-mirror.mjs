@@ -281,6 +281,9 @@ check('视频/音频也能翻（@视频 1 → @Video 1）',
 check('没有参考、或提示词里没有芯片时原样返回（纯文生视频不受影响）',
   upstreamPromptWithReferences('夜色江面缓缓推移', { originalReferences: [], sentReferences: [] }) === '夜色江面缓缓推移'
   && upstreamPromptWithReferences('画面动起来', { originalReferences: [refA], sentReferences: [refA] }) === '画面动起来');
+check('两条生成路径（同步 + 画布走的 worker）都接上了翻译 —— 只翻译发给上游的那份',
+  read("apps/server/src/routes/aiGeneration.js").split("= upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets").length - 1 === 2,
+  "两处调用点：" + (read("apps/server/src/routes/aiGeneration.js").split("= upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets").length - 1));
 check('框体预置素材这种"不在学生原始列表里"的参考不动学生的号（宁可不翻，别指错人）',
   upstreamPromptWithReferences('@图片 1 动起来', { originalReferences: [], sentReferences: [refA] }) === '@图片 1 动起来');
 assert.ok(true);
