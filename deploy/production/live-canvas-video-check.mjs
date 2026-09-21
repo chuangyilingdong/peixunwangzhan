@@ -55,27 +55,56 @@ const project = args.project
   : db.prepare("SELECT * FROM student_projects WHERE status='DRAFT' ORDER BY updated_at DESC LIMIT 1").get();
 if (!project) { console.log('找到不项目，退出'); process.exit(1); }
 const lessonId = project.course_lesson_id;
-const boxes = db.prepare(`
-  SELECT m.id, m.title, json_extract(m.snapshot,'$.box.model') model,
-         (SELECT COUNT(*) FROM generation_jobs j WHERE j.box_id=m.id) used
-  FROM course_lesson_materials m
-  WHERE m.material_type='GENERATION_BOX' AND json_extract(m.snapshot,'$.box.modality')='VIDEO'
-    AND m.group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)
-  ORDER BY used, m.sort`).all(lessonId);
-const box = args.box ? boxes.find((item) => item.id === args.box) : boxes.find((item) => Number(item.used) === 0);
-if (!box) { console.log('这节课没有可用的空视频框体，退出（或用 --box= 指定）'); process.exit(1); }
-// 素材：优先用参数给的；否则用这个项目里最近一条视频任务的首帧地址（就是生产上被丢掉的那条）
-const previous = db.prepare("SELECT source_asset_url FROM generation_jobs WHERE project_id=? AND modality='VIDEO' AND source_asset_url IS NOT NULL ORDER BY created_at DESC LIMIT 1").get(project.id);
-const asset = String(args.asset || previous?.source_asset_url || '').trim();
 // --refs-from=<任务 id>：照抄那条任务的**参考素材**（含音频）与提示词 —— 用来验「学生在画布上连了
 // 音频/图，走队列跑出来到底听不听音频的」。--refs='[{...}]' 可以直接给一份。
 // ⚠️ 2026-09-21 加这一路的原因：音频那条 bug 只有**走队列**（含 worker 第二次解析）才验得全；
 //    直接调 provider 会漏掉 worker 那一层（坑 91 就是这么来的）。
+// （这段要在挑框体**之前**：带不带参考决定"该挑哪种生成方式的框体"。）
 const refsFrom = String(args['refs-from'] || '').trim();
 const refsJob = refsFrom ? db.prepare('SELECT prompt, reference_asset_urls FROM generation_jobs WHERE id=?').get(refsFrom) : null;
 if (refsFrom && !refsJob) { console.log(`找不到任务 ${refsFrom}`); process.exit(1); }
 const refs = args.refs ? JSON.parse(args.refs) : (refsJob ? JSON.parse(refsJob.reference_asset_urls || '[]') : []);
 const audioRef = refs.find((item) => String(item?.type || '').toUpperCase() === 'AUDIO') || null;
+
+const boxes = db.prepare(`
+  SELECT m.id, m.title, json_extract(m.snapshot,'$.box.model') model,
+         json_extract(m.snapshot,'$.box.inputMode') live_mode,
+         (SELECT COUNT(*) FROM generation_jobs j WHERE j.box_id=m.id) used
+  FROM course_lesson_materials m
+  WHERE m.material_type='GENERATION_BOX' AND json_extract(m.snapshot,'$.box.modality')='VIDEO'
+    AND m.group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)
+  ORDER BY used, m.sort`).all(lessonId);
+/* ⚠️⚠️ 2026-09-21 晚踩到的坑（自己把自己骗了三次）：**已发布的课，学生的框体读的是发布快照**
+   （`course_lessons.published_content.materialGroups`，见口径 61/62），**不是**实时那一行。
+   所以：① `--mode` 必须同时写进**发布快照**，只改实时行等于没改；
+        ② 带参考素材跑时，得挑一个"发布快照里就是 OMNI_REFERENCE"的框体 ——
+           否则服务端按快照算出 `inputModes:['TEXT']`，参考会被**依设计**丢掉（纯文生），
+           上游收到 text-only，产物自然与音频无关，看着像产品坏了。 */
+function publishedBoxes() {
+  const row = db.prepare('SELECT published_content FROM course_lessons WHERE id=?').get(lessonId);
+  const published = JSON.parse(row?.published_content || '{}');
+  const out = [];
+  for (const group of published.materialGroups || []) for (const material of group.materials || []) if (material?.snapshot?.box) out.push({ id: material.id, mode: String(material.snapshot.box.inputMode || '') });
+  return out;
+}
+const publishedModes = publishedBoxes();
+const modeOf = (id) => (publishedModes.find((item) => item.id === id)?.mode) || '';
+const wantsRefs = Array.isArray(refs) && refs.length > 0;
+const box = args.box
+  ? boxes.find((item) => item.id === args.box)
+  : (wantsRefs ? boxes.find((item) => modeOf(item.id) === 'OMNI_REFERENCE') : null)
+    || boxes.find((item) => Number(item.used) === 0);
+if (!box) { console.log('这节课没有可用的空视频框体，退出（或用 --box= 指定）'); process.exit(1); }
+if (wantsRefs && !args.mode && modeOf(box.id) !== 'OMNI_REFERENCE') {
+  console.log(`⚠️ 这个框体在**发布快照**里的生成方式是「${modeOf(box.id) || '(没写)'}」——带参考素材跑会被服务端按设计丢掉（纯文生）。`);
+  console.log('  要么换一个快照里就是 OMNI_REFERENCE 的框体，要么用 --mode=OMNI_REFERENCE 把方式写进发布快照。');
+}
+// 生产上"一个框体只能生成一次"（服务端会拒）；副本里清掉它的历史任务，模拟"这个框体还没用过"。
+const cleared = db.prepare('DELETE FROM generation_jobs WHERE box_id=?').run(box.id);
+if (cleared.changes) console.log(`（副本里清掉这个框体的历史任务 ${cleared.changes} 条）`);
+// 素材：优先用参数给的；否则用这个项目里最近一条视频任务的首帧地址（就是生产上被丢掉的那条）
+const previous = db.prepare("SELECT source_asset_url FROM generation_jobs WHERE project_id=? AND modality='VIDEO' AND source_asset_url IS NOT NULL ORDER BY created_at DESC LIMIT 1").get(project.id);
+const asset = String(args.asset || previous?.source_asset_url || '').trim();
 if (!asset && !refs.length) { console.log('没有可用的素材地址，用 --asset= 指定一个公开素材的绝对地址（或 --refs-from=<任务 id>）'); process.exit(1); }
 
 const policy = JSON.parse(db.prepare('SELECT ai_provider_policy FROM platform_settings WHERE id=1').get().ai_provider_policy || '{}');
@@ -127,12 +156,30 @@ ensureActiveSession();
 
 // --mode=FIRST_FRAME / OMNI_REFERENCE / TEXT / FIRST_LAST_FRAME：只在**副本**里给这个框体锁上生成方式
 // （验"课包锁定的方式赢过客户端推断"用；生产库不动）。
+// ⚠️ **两处都要改**：实时那一行（老师编辑用的读面）+ **发布快照**（学生/判定真正读的那份，口径 61/62）。
+//    只改实时行 = 没改（第一版就是这么把自己骗了三次：以为锁成 OMNI，实际按快照跑的是 TEXT）。
 if (args.mode) {
+  const mode = String(args.mode).toUpperCase();
   const row = db.prepare('SELECT snapshot FROM course_lesson_materials WHERE id=?').get(box.id);
   const snapshot = JSON.parse(row?.snapshot || '{}');
-  snapshot.box = { ...(snapshot.box || {}), inputMode: String(args.mode).toUpperCase() };
+  snapshot.box = { ...(snapshot.box || {}), inputMode: mode };
   db.prepare('UPDATE course_lesson_materials SET snapshot=? WHERE id=?').run(JSON.stringify(snapshot), box.id);
-  console.log(`已在副本里把这个框体锁成：${String(args.mode).toUpperCase()}`);
+  const lessonRow = db.prepare('SELECT published_content FROM course_lessons WHERE id=?').get(project.course_lesson_id);
+  if (lessonRow?.published_content) {
+    const published = JSON.parse(lessonRow.published_content);
+    let patched = 0;
+    for (const group of published.materialGroups || []) {
+      for (const material of group.materials || []) {
+        if (material?.id !== box.id || !material.snapshot?.box) continue;
+        material.snapshot.box = { ...material.snapshot.box, inputMode: mode };
+        patched += 1;
+      }
+    }
+    if (patched) db.prepare('UPDATE course_lessons SET published_content=? WHERE id=?').run(JSON.stringify(published), project.course_lesson_id);
+    console.log(`已在副本里把这个框体锁成：${mode}（发布快照里改了 ${patched} 处、实时配置 1 处）`);
+  } else {
+    console.log(`已在副本里把这个框体锁成：${mode}（这节还没发布 → 只用实时配置）`);
+  }
 }
 db.close();
 
