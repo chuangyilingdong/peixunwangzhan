@@ -75,6 +75,15 @@ const now = new Date().toISOString();
 db.prepare(`INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,created_at,box_id,source_asset_url,request_options,credits_charged)
   VALUES (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,0)`)
   .run(jobId, project.org_id, project.student_id, project.id, 'VIDEO', channel.provider || 'custom', channel.model || 'MiniMax-H3', prompt, now, box.id, asset, JSON.stringify({ aspectRatio: ratio }));
+// --mode=FIRST_FRAME / OMNI_REFERENCE / TEXT / FIRST_LAST_FRAME：只在**副本**里给这个框体锁上生成方式
+// （验"课包锁定的方式赢过客户端推断"用；生产库不动）。
+if (args.mode) {
+  const row = db.prepare('SELECT snapshot FROM course_lesson_materials WHERE id=?').get(box.id);
+  const snapshot = JSON.parse(row?.snapshot || '{}');
+  snapshot.box = { ...(snapshot.box || {}), inputMode: String(args.mode).toUpperCase() };
+  db.prepare('UPDATE course_lesson_materials SET snapshot=? WHERE id=?').run(JSON.stringify(snapshot), box.id);
+  console.log(`已在副本里把这个框体锁成：${String(args.mode).toUpperCase()}`);
+}
 db.close();
 
 console.log(`项目：${project.id}（${project.title}）`);
