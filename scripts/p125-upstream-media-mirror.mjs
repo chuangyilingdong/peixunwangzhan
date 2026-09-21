@@ -54,7 +54,10 @@ function fakeFetch({ failUpload = false, uploadUrls = [UPSTREAM_HOSTED, UPSTREAM
   let uploads = 0;
   const impl = async (url, init = {}) => {
     const target = String(url);
-    calls.push({ url: target, method: String(init.method || 'GET').toUpperCase() });
+    // 记一下 multipart 里的文件名（上游按后缀认类型，这条必须钉住）
+    let fileName = '';
+    try { fileName = String(init.body?.get?.('file')?.name || ''); } catch { fileName = ''; }
+    calls.push({ url: target, method: String(init.method || 'GET').toUpperCase(), fileName });
     if (init.method === 'POST' && target === UPLOAD_URL) {
       if (failUpload) return new Response('{"error":"boom"}', { status: 500, headers: { 'content-type': 'application/json' } });
       const hosted = uploadUrls[Math.min(uploads, uploadUrls.length - 1)];
@@ -109,6 +112,18 @@ let uploadError = null;
 try { await mirrorSelfHostedMedia({ firstFrameUrl: OUR_IMAGE }, { selfOrigins: [SELF], uploadUrl: UPLOAD_URL, fetchImpl: f3 }); } catch (error) { uploadError = error; }
 check('⑬ 上传失败**必须报错**，不许退回原 URL 静默继续（静默=生成出与参考无关的作品）',
   Boolean(uploadError) && /素材上传到上游失败/.test(String(uploadError?.message || '')), String(uploadError?.message || '(没报错)'));
+
+// ⚠️ 上游按**文件名后缀**认素材类型（实测：filename=asset → 400 说
+//    「unsupported file type; allowed: jpg/jpeg/png/webp…」）；我们的下载路径是 /download、
+//    没有后缀 —— 必须按 content-type 补一个，否则**每种素材都传不上去**（第一版就是这么挂的）。
+resetUpstreamMediaMirrorCache();
+const fExt = fakeFetch();
+await mirrorSelfHostedMedia({ firstFrameUrl: OUR_IMAGE }, { selfOrigins: [SELF], uploadUrl: UPLOAD_URL, fetchImpl: fExt });
+const uploadBody = String(fExt.calls().find((item) => item.url === UPLOAD_URL)?.fileName || '');
+check('⑬b 上传时文件名带上了后缀（上游只认 jpg/png/webp/mp3/wav/flac/mp4… 这些后缀）',
+  /\.jpe?g$/i.test(uploadBody), uploadBody || '(假 fetch 没记到文件名)');
+check('⑬c 上游的错误原文会带进报错里（不然只剩一句 HTTP 400，排不动）',
+  /素材上传到上游失败/.test(String(uploadError?.message || '')));
 
 /* ── ③ 端到端：适配器发出去的请求体里，首帧已经是上游的 URL ───────────────── */
 resetUpstreamMediaMirrorCache();

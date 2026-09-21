@@ -52,6 +52,21 @@ function mirrorFailure(detail) {
   return error;
 }
 
+// 上游按**文件名后缀**认素材类型（实测：filename=asset → 400「unsupported file type;
+// allowed: jpg/jpeg/png/webp, mp3/wav/flac, mp4/avi/mov/mkv」）。我们的下载路径是 /download、
+// 没有后缀，所以按响应的 content-type 补一个后缀；认不出来就退回源 URL 的后缀。
+const EXTENSION_BY_MIME = Object.freeze({
+  'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+  'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/flac': 'flac',
+  'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/x-msvideo': 'avi', 'video/x-matroska': 'mkv',
+});
+function mediaFileName(contentType, sourceUrl) {
+  const ext = EXTENSION_BY_MIME[String(contentType || '').toLowerCase().split(';')[0].trim()]
+    || (String(sourceUrl).match(/\.([a-z0-9]{2,4})(?:\?|#|$)/i)?.[1] || '').toLowerCase()
+    || 'jpg';
+  return `asset.${ext}`;
+}
+
 /** 把一张素材传到上游，返回上游自己的 URL（带缓存）。 */
 export async function mirrorMediaUrl(url, { uploadUrl, apiKey = '', timeoutMs = MIRROR_TIMEOUT_MS, fetchImpl = null } = {}) {
   const source = String(url || '').trim();
@@ -90,7 +105,7 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
   // ② 传给上游
   try {
     const form = new FormData();
-    form.append('file', new Blob([bytes], { type: contentType || 'application/octet-stream' }), 'asset');
+    form.append('file', new Blob([bytes], { type: contentType || 'application/octet-stream' }), mediaFileName(contentType, source));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
@@ -105,7 +120,7 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
       });
       status = Number(response?.status || 0);
       payload = await response.json().catch(() => ({}));
-      if (!response?.ok) throw new Error(`HTTP ${status}`);
+      if (!response?.ok) throw new Error(`HTTP ${status}${upstreamDetail(payload)}`);
     } finally { clearTimeout(timer); }
     const mirrored = String(payload?.url || '').trim();
     if (!/^https?:\/\//i.test(mirrored)) throw new Error(`响应里没有素材 URL（HTTP ${status}）`);
@@ -115,6 +130,13 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
   } catch (error) {
     throw mirrorFailure(String(error?.message || error).slice(0, 120));
   }
+}
+
+// 上游的原文（例如「unsupported file type; allowed: …」）比一句 HTTP 400 有用得多，带上它
+// 才排得动（2026-09-21 实测就是靠这句话发现上游按**文件名后缀**认类型）。
+function upstreamDetail(payload) {
+  const text = String(payload?.detail || payload?.message || payload?.error?.message || payload?.error || '').replace(/\s+/g, ' ').trim();
+  return text ? `（上游：${text.slice(0, 160)}）` : '';
 }
 
 /**
