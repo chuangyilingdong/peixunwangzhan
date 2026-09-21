@@ -264,7 +264,10 @@
 .learning-node__status-chip.is-done { color: var(--cv-primary); border-color: rgb(163 254 68 / 35%); background: rgb(163 254 68 / 10%); }
 .learning-node__status-chip.is-running { color: var(--cv-text-dim); background: rgb(255 255 255 / 5%); }
 .learning-node__status-chip.is-error { color: #ffb4b4; border-color: rgb(255 107 107 / 40%); background: rgb(255 107 107 / 10%); }
-.learning-node__submit { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 8px 14px; border: 0; border-radius: 999px; color: var(--cv-primary-fg); background: var(--cv-primary); font-size: 12px; font-weight: 700; cursor: pointer; transition: filter var(--cv-motion) ease-out, opacity var(--cv-motion) ease-out; }
+/* ⚠️ `white-space: nowrap` 与 `flex: 0 0 auto` 都不能省（用户 2026-09-21：小屏下按钮被挤成竖排的
+   「生成画面」）。窄屏时这一行里还有状态/报错文字，flex 会把这个按钮压到只剩一列字宽 ——
+   中文于是按字折行，看着像按钮变形。按钮要么整块在、要么整块换行，绝不被压窄。 */
+.learning-node__submit { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 8px 14px; border: 0; border-radius: 999px; color: var(--cv-primary-fg); background: var(--cv-primary); font-size: 12px; font-weight: 700; white-space: nowrap; flex: 0 0 auto; cursor: pointer; transition: filter var(--cv-motion) ease-out, opacity var(--cv-motion) ease-out; }
 .learning-node__submit:hover:not(:disabled) { filter: brightness(1.07); }
 .learning-node__submit:disabled { opacity: .35; cursor: not-allowed; }
 

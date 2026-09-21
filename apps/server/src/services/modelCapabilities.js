@@ -370,14 +370,47 @@ export function parseRequestTemplate(text) {
   }
 }
 
+// 按模型的**内置默认模板**：同一个模态下不同代的模型请求体形状不一样，而管理员没配模板时
+// 必须给对的那一份（否则就是"2.0 能用、2.5 报错"这种事）。
+//
+// ⚠️ 2026-09-21 用户报：`zhenzhen-image-g-v2.5-lowprice` 报
+//    「AI 供应商调用失败（上游：output_format is not supported by this model）」，而 2.0 正常。
+//    根因：上游图像模型分两代，**2.5 系把 resolution / output_format / quality / background 放在
+//    请求体顶层**（docs: api.seedance.nz/docs/#image-g-v25-ext），而默认 IMAGE 模板把它们塞在
+//    `metadata` 里（2.0 收的就是嵌套那套）。按模型名给一把顶层形状的模板即可。
+export const MODEL_TEMPLATE_DEFAULTS = Object.freeze([
+  {
+    pattern: /^zhenzhen-image-g-v2\.5-/i,
+    IMAGE: Object.freeze({
+      model: '{{model}}', prompt: '{{prompt}}', n: 1, size: '{{aspectRatio}}',
+      // images 最多 16 张（2.5 的编辑模式）；没连参考图时这个键会被整段去掉（见 referenceImageUrls）
+      images: '{{referenceImageUrls}}',
+      resolution: '{{resolution}}', output_format: 'png',
+    }),
+  },
+]);
+
+/** 某模型在某模态下有没有内置的专用模板。 */
+export function modelTemplateDefault(model, modality) {
+  const id = String(model || '').trim();
+  const key = String(modality || '').toUpperCase();
+  for (const rule of MODEL_TEMPLATE_DEFAULTS) {
+    if (rule.pattern.test(id) && rule[key]) return rule[key];
+  }
+  return null;
+}
+
 export function requestTemplateFor(channel, modality, { model = '', requiresFirstFrame = false, withLastFrame = false, withReferences = false } = {}) {
   const key = String(modality || '').toUpperCase();
   // 同一个渠道里的模型请求体可能完全不同（hailuo 要顶层 image，MiniMax-H3 V2 要 content[]），
-  // 所以模型级模板优先于渠道级。
+  // 所以模型级模板优先于渠道级；**渠道/模型上配过的永远赢过内置默认**。
   const modelTemplate = model ? channel?.modelRequestTemplates?.[String(model).trim()] : null;
   if (modelTemplate && typeof modelTemplate === 'object') return modelTemplate;
   const custom = channel?.requestTemplates?.[key];
   if (custom && typeof custom === 'object') return custom;
+  // 内置的按模型默认（例：2.5 系图片模型要顶层 output_format；2.0 走下面那条通用图片模板）
+  const builtinModel = modelTemplateDefault(model, key);
+  if (builtinModel) return builtinModel;
   if (key === 'VIDEO' && requiresFirstFrame) {
     return withLastFrame ? DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V_FRAMES : DEFAULT_REQUEST_TEMPLATES.VIDEO_I2V;
   }

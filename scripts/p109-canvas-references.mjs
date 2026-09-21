@@ -217,6 +217,28 @@ check('尾帧判定用 FIRST_LAST_FRAME（原来写的 LAST_FRAME，尾帧永远
 check('面板那行与生成 payload 读**同一处**判定（不会生成一套、显示另一套）',
   /omni=\{videoInputPlan\.useOmni\}/.test(canvas) && /referenceAssets=\{videoInputPlan\.useOmni \? videoInputPlan\.allRefs : \[\]\}/.test(canvas));
 
+/* ── ⑤ 按模型的内置模板：2.5 系图片模型要**顶层** output_format（2026-09-21 用户报）──────────
+   用户原话：「为什么使用 2.5 这个模型会报错…2.0 的模型好像是可以正常的」，
+   上游原话：「AI 供应商调用失败（上游：output_format is not supported by this model）」。
+   根因：上游图像模型分两代 —— 2.5 系把 resolution / output_format / quality / background 放**顶层**
+   （docs: api.seedance.nz/docs/#image-g-v25-ext），而默认 IMAGE 模板把它们塞在 metadata 里（2.0 收那套）。 */
+const template25 = requestTemplateFor({ id: 'ch-image', model: 'zhenzhen-image-g-v2.5-lowprice' }, 'IMAGE', { model: 'zhenzhen-image-g-v2.5-lowprice' });
+check('① 2.5 系图片模型拿到**顶层** output_format 的模板（不再塞在 metadata 里）',
+  template25?.output_format === 'png' && !template25?.metadata, JSON.stringify(template25));
+check('② 2.0 / 其他模型仍是原来那份（metadata 里带 resolution 与 output_format）—— 线上没坏就别动',
+  requestTemplateFor({ id: 'ch', model: 'zhenzhen-image-g-v2-lowprice' }, 'IMAGE', { model: 'zhenzhen-image-g-v2-lowprice' })?.metadata?.output_format === 'png');
+check('③ 2.5 的模板仍然带得动参考图（顶层 images → {{referenceImageUrls}}）—— 否则图片那条门禁会当场拒绝',
+  /\{\{referenceImageUrls\}\}/.test(JSON.stringify(template25)));
+check('④ 管理员在渠道/模型上配过的模板**优先**于内置默认（内置只是兜底）',
+  // ⚠️ 形状：`modelRequestTemplates[模型名]` 就是**那份模板对象**（不是按模态再分一层 ——
+  //    生产里 MiniMax-H3 那条就是这么存的）。
+  JSON.stringify(requestTemplateFor({ modelRequestTemplates: { 'zhenzhen-image-g-v2.5-lowprice': { model: 'x' } } }, 'IMAGE', { model: 'zhenzhen-image-g-v2.5-lowprice' })) === JSON.stringify({ model: 'x' }));
+const body25 = renderRequestTemplate(template25, { ...baseContext, aspectRatio: '16:9', resolution: '2k', referenceAssets: [IMAGE_REF] });
+check('⑤ 渲染出来的 2.5 请求体：output_format / resolution / size 在顶层，images 是那张参考图，没有 metadata',
+  body25.output_format === 'png' && body25.resolution === '2k' && body25.size === '16:9'
+  && JSON.stringify(body25.images) === JSON.stringify([IMAGE_REF.url]) && !('metadata' in body25),
+  JSON.stringify(body25));
+
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);
