@@ -262,8 +262,12 @@ try { resolveReferenceAssets('proj-none', tooManyVideos); } catch (error) { tooM
 check('连了 4 段视频参考 → 明确报错（上限 3）',
   tooManyVideo?.code === 'GENERATION_REFERENCES_TOO_MANY' && /最多 3 段视频/.test(String(tooManyVideo?.message || '')),
   String(tooManyVideo?.message || '(没报错)'));
-check('没超上限时不误报（9 张图片照常通过，只是解析不出地址会被跳过）',
-  Array.isArray(resolveReferenceAssets('proj-none', manyImages.slice(0, 9))));
+// 9 张（没超上限）但一个都解析不出来 → 现在**当场报错**（口径：静默丢掉 = 出来一段与参考无关的作品）
+let allDropped = null;
+try { resolveReferenceAssets('proj-none', manyImages.slice(0, 9)); } catch (error) { allDropped = error; }
+check('9 张都在但一张都留不住 → 报 GENERATION_MEDIA_UNUSABLE（不再静默变成"没有输入"）',
+  allDropped?.code === 'GENERATION_MEDIA_UNUSABLE' && /都不能发给 AI/.test(String(allDropped?.message || '')),
+  String(allDropped?.message || '(没报错)'));
 
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');

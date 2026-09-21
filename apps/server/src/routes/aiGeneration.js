@@ -285,6 +285,44 @@ function resolvableAssetUrl(value) {
   return publicFileAssetUrl(url);
 }
 
+// 提示词里的引用芯片 → 上游认的写法。
+//
+// 画布上学生插的是中文芯片（「图片 1」「视频 1」），而上游文档里多模态参考的指代写法是
+// **`@Image 1` / `@Video 1`**（原文："多模态场景可用 @Image 1、@Video 1 指代第几个参考素材"）。
+// 不翻的话，学生那句「@图片 2 在跳舞然后转场到@图片 1」在上游眼里可能只是普通文字 ——
+// 谁是"图片 2"全靠模型猜（用户 2026-09-21 的提示词正是这种：核心语义全压在芯片上）。
+//
+// ⚠️ 序号要按**实际发出去**的那份参考算：万一有个参考没留住（文件坏了/不给发），
+// 后面的序号会前移，直接照抄学生写的号就会指错人。
+const CHIP_TYPES = Object.freeze([
+  Object.freeze({ cn: '图片', en: 'Image' }),
+  Object.freeze({ cn: '视频', en: 'Video' }),
+  Object.freeze({ cn: '音频', en: 'Audio' }),
+]);
+export function upstreamPromptWithReferences(prompt, { originalReferences = [], sentReferences = [] } = {}) {
+  const text = String(prompt || '');
+  if (!text) return text;
+  const ofType = (list, cn) => (Array.isArray(list) ? list : [])
+    .map((item) => ({ type: String(item?.type || 'IMAGE').toUpperCase(), url: String(item?.url || '').trim() }))
+    .filter((item) => item.url && (cn === '图片' ? item.type === 'IMAGE' : cn === '视频' ? item.type === 'VIDEO' : item.type === 'AUDIO'));
+  let out = text;
+  let touched = false;
+  for (const { cn, en } of CHIP_TYPES) {
+    const original = ofType(originalReferences, cn);
+    const sent = ofType(sentReferences, cn);
+    if (!sent.length) continue;
+    sent.forEach((item, index) => {
+      const oldIndex = original.findIndex((candidate) => candidate.url === item.url);
+      // 没在原始列表里找到（例如框体预置素材）就不动 —— 宁可不翻，也别把学生的号指着别人
+      if (oldIndex < 0) return;
+      // ⚠️ 用 [ ]? 而不是 s?：字符类不涉及转义（这行被 heredoc 转义掉一层过一次）
+      const pattern = new RegExp(cn + "[ ]?" + (oldIndex + 1), "g");
+      if (pattern.test(out)) { out = out.replace(pattern, `${en} ${index + 1}`); touched = true; }
+    });
+  }
+  return touched ? out : text;
+}
+
 // 这个项目的学生是谁 —— publicFileAssetUrl 用它判断"这张图是不是他本人传的"。
 function projectStudentId(projectId) {
   return String(row('SELECT student_id FROM student_projects WHERE id=?', [projectId])?.student_id || '');
@@ -847,7 +885,8 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   });
   const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
   try {
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
+    const upstreamPrompt = upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets, sentReferences: options.referenceAssets || [] });
+    const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
@@ -929,7 +968,10 @@ async function processAsyncGeneration(item) {
     const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
     q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
-    const generated = await provider.generate({ modality, prompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
+    // 发上游前把提示词里的中文引用芯片翻成上游认的写法（@Image N / @Video N）——
+    // 只改发给上游的这份，库里与界面上仍是学生写的中文芯片。
+    const upstreamPrompt = upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets, sentReferences: options.referenceAssets || [] });
+    const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
     settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });

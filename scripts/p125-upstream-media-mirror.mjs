@@ -261,6 +261,28 @@ check('显式配了就用配的；不认识的值不能把默认顶掉',
   && JSON.stringify(normalizeImageInputModes([])) === JSON.stringify(['TEXT', 'IMAGE_REFERENCE']));
 check('视频那条保持原样（按模型名推断 i2v）—— 别被这次改动带偏',
   JSON.stringify(normalizeModelCapabilities({ resolutions: ['480P'] }, 'VIDEO', 'hailuo-h3-i2v').inputModes) === JSON.stringify(['FIRST_FRAME']));
+
+/* ── ⑧ 提示词里的引用芯片要翻成上游认的写法、序号按实际发出去的参考算 ──────────────────
+   画布插的是中文芯片（「图片 1」），上游文档里多模态参考的指代是 `@Image 1` / `@Video 1`；
+   不翻的话学生那句「@图片 2 在跳舞然后转场到@图片 1」对上游可能只是普通文字（用户 2026-09-21 的提示词）。
+   而且万一有个参考没留住，后面的号会前移 —— 直接照抄学生的号就会指错人。 */
+const { upstreamPromptWithReferences } = await import('../apps/server/src/routes/aiGeneration.js');
+const refA = { type: 'IMAGE', url: 'https://example.test/a.png' };
+const refB = { type: 'IMAGE', url: 'https://example.test/b.png' };
+const cnPrompt = '@图片 2 在跳舞然后自然转场到@图片 1';
+check('中文芯片翻成 @Image N（画布上学看到的仍是中文，只改发给上游的那份）',
+  upstreamPromptWithReferences(cnPrompt, { originalReferences: [refA, refB], sentReferences: [refA, refB] }) === '@Image 2 在跳舞然后自然转场到@Image 1',
+  upstreamPromptWithReferences(cnPrompt, { originalReferences: [refA, refB], sentReferences: [refA, refB] }));
+check('第一张参考没留住时：留下的那张按新号翻，**被丢掉的那张保持原样**（宁可不动，也不能指错人）',
+  upstreamPromptWithReferences(cnPrompt, { originalReferences: [refA, refB], sentReferences: [refB] }) === '@Image 1 在跳舞然后自然转场到@图片 1',
+  upstreamPromptWithReferences(cnPrompt, { originalReferences: [refA, refB], sentReferences: [refB] }));
+check('视频/音频也能翻（@视频 1 → @Video 1）',
+  upstreamPromptWithReferences('参考@视频 1 的镜头运动', { originalReferences: [{ type: 'VIDEO', url: 'https://example.test/v.mp4' }], sentReferences: [{ type: 'VIDEO', url: 'https://example.test/v.mp4' }] }) === '参考@Video 1 的镜头运动');
+check('没有参考、或提示词里没有芯片时原样返回（纯文生视频不受影响）',
+  upstreamPromptWithReferences('夜色江面缓缓推移', { originalReferences: [], sentReferences: [] }) === '夜色江面缓缓推移'
+  && upstreamPromptWithReferences('画面动起来', { originalReferences: [refA], sentReferences: [refA] }) === '画面动起来');
+check('框体预置素材这种"不在学生原始列表里"的参考不动学生的号（宁可不翻，别指错人）',
+  upstreamPromptWithReferences('@图片 1 动起来', { originalReferences: [], sentReferences: [refA] }) === '@图片 1 动起来');
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);
