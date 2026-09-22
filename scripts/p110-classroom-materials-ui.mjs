@@ -182,9 +182,15 @@ check('③ 复制按钮本身可用：带 nodrag（挂在标题行里，不带�
   /className="learning-node__copy nodrag"/.test(canvasJsx)
   && /navigator\.clipboard\?\.writeText/.test(canvasJsx)
   && /document\.execCommand\('copy'\)/.test(canvasJsx));
+// ⚠️ 判据在 2026-09-22（第二十七轮 §二.T / p126）换过一次：原来靠**猜消息里的字**
+//    （`message.includes('失败')`）决定红绿与留不留，错误文案里没那几个词就会被当成成功；
+//    现在统一走 `errorText()` 打的前缀标记（`isErrorText`）。断言要跟着口径走 ——
+//    否则这条**每跑必红**，真出问题时反而被当成"又是那条老毛病"（README 里记着的那条教训的再犯）。
 check('② 画布右下角那条提示（.cv-toast）不再一直挂着：非错误 5 秒自动消失、报错留着',
   /const timer = setTimeout\(\(\) => setMessage\(''\), 5000\);/.test(workspace)
-  && /if \(message\.includes\('失败'\) \|\| message\.includes\('错误'\)\) return undefined;/.test(workspace));
+  && /if \(isErrorText\(message\)\) return undefined;/.test(workspace)
+  && /isErrorText\(message\) \? 'is-error' : ''/.test(workspace)
+  && /stripNoticeMark\(message\)/.test(workspace));
 
 /* ── 提交/离开课堂的收口（用户 2026-09-21 报的四条里的三条；第②条「作品页看媒体」在 p64）──
    用户原话：「提交作品后，自动返回课包页面…这个逻辑有问题，老师如果没点结束课堂，应该留在原页面。

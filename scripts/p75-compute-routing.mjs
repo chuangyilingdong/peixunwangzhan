@@ -46,7 +46,12 @@ try {
   calls = [];
   globalThis.fetch = async (url, opts) => { calls.push(url); return opts.method === 'POST' ? json({ task_id: 'accepted-task' }) : json({ error: 'rate limited' }, 429); };
   provider = getGenerationProvider(primary);
-  await assert.rejects(provider.generate({ modality: 'VIDEO' })); assert.equal(calls.length, 2);
+  // ⚠️ 2026-09-22 改判据：这一条原来钉 `calls.length === 2`（提交 + 轮询一次）。
+  //    第二十七轮 §二.Q ③ 改了轮询策略 ——**瞬时错误按退避重试到 deadline，不再一次就判死**
+  //    （「一轮询慢就把整条生成判死 = 上游已收钱、片也出了、结果却丢了」），
+  //    于是 429 会被重试，轮询次数**不再固定**（实测 8 次）。这里要钉的是"提交被接受后
+  //    task_id 已经落库、且确实去轮询过"，不是"只轮询一次" —— 钉死次数会让这条**每跑必红**。
+  await assert.rejects(provider.generate({ modality: 'VIDEO' })); assert.ok(calls.length >= 2, `应当至少提交 + 轮询一次，实际 ${calls.length}`);
   assert.equal(rows('SELECT task_id FROM compute_attempts WHERE call_id=?', [provider.compute.callId])[0].task_id, 'accepted-task');
   calls = [];
   globalThis.fetch = async url => { calls.push(url); return new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n', { headers: { 'content-type': 'text/event-stream' } }); };
