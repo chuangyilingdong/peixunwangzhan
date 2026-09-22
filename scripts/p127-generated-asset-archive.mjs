@@ -151,8 +151,12 @@ check('⑮ 机构端预览传了 resolveSrc（<img> 发不出 Authorization 头�
 
 /* ── ⑥ 读面：失效的媒体说人话，不再是浏览器的破图图标 ───────────────────────── */
 const gallery = read('packages/shared/src/workMedia.jsx');
-check('⑯ 加载失败时给一句人话（"图片已失效，读不出来了"），而不是只留一个破图占位',
-  /已失效，读不出来了/.test(gallery) && /onError=\{\(\) => setFailed\(true\)\}/.test(gallery));
+// ⚠️ 2026-09-22 判据跟着 workMedia 的重构换了（**不是把断言删掉**）：作品读面改成了
+// 「卡片 + 点开浮层」，于是失效提示有两个落点 —— 卡片上的缩略框（`work-media__thumb-missing`）
+// 与大图浮层里（`work-media__missing`）。意图不变：**加载失败要说人话，不能只留浏览器的破图图标**。
+check('⑯ 加载失败时给一句人话（卡片与大图两处都写"已失效"，而不是只留一个破图占位）',
+  /已失效，读不出来了/.test(gallery) && /work-media__thumb-missing/.test(gallery)
+  && /onError=\{markFailed\}/.test(gallery));
 
 /* ── ⑦ 存量回填脚本：三处一起改、可续跑、干跑优先 ─────────────────────────── */
 const backfill = read('deploy/production/backfill-generated-media.mjs');

@@ -124,9 +124,15 @@ try {
       && /media: canvasMediaFrom\(canvasSnapshot\)/.test(read('apps/server/src/routes/orgAdmin.js'))
       && /media: canvasMediaFrom\(canvas\)/.test(read('apps/server/src/routes/communication/public.js')));
     const gallery = read('packages/shared/src/workMedia.jsx');
-    check('② 作品页用同一个媒体组件（四处读面共用；图片网格、视频/音频带控件）',
+    // ⚠️ 2026-09-22 判据跟着作品读面的重构换了（**不是把断言删掉**）：
+    //   媒体项改成「卡片 + 点开浮层」，音频也不再是原生 `<audio controls>`（那个在窄容器里
+    //   会把进度条压没，用户报过），换成画布包里的两行式 AudioPlayer。
+    //   这一条要钉的仍是那两件事：**四处读面共用同一个组件** + **视频/音频都真的能播**。
+    check('② 作品页用同一个媒体组件（四处读面共用；图片网格卡片、视频与音频都能播）',
       /export function WorkMediaGallery/.test(gallery)
-      && /<video src=\{src\} controls/.test(gallery) && /<audio src=\{src\} controls/.test(gallery)
+      && /<video src=\{src\} controls/.test(gallery)
+      && /import \{ AudioPlayer \} from '@platform\/canvas'/.test(gallery)
+      && /<AudioPlayer className="work-media__player"/.test(gallery)
       && ['apps/website/src/pages/WorkDetail.jsx', 'apps/website/src/pages/MyWorkDetail.jsx', 'apps/org/src/main.jsx', 'apps/org/src/pages/classroom/ClassroomWork.jsx']
         .every((file) => read(file).includes('WorkMediaGallery')));
     check('② 广场与老师端**默认**看媒体，画布退到一个「创作画布」标签里',
