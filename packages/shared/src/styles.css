@@ -1440,24 +1440,71 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 .lesson-detail-action a.primary-button,.lesson-detail-action a.secondary-button{display:inline-flex;align-items:center;justify-content:center;min-width:104px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:800;line-height:1.2;text-decoration:none;cursor:pointer}
 
 /* ── 作品页的媒体展示（用户 2026-09-21 口径：作品读面要看成出来的图/视频/音频，不是画布） ──
-   图片用网格平铺、视频/音频各占一行、文字单独成块；深浅两套主题都能看（用 currentColor 与半透明底）。 */
-.work-media { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 18px 0; }
-.work-media__item { margin: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid rgb(0 0 0 / 10%); border-radius: 14px; background: rgb(0 0 0 / 3%); }
-.work-media__item.is-image { grid-column: span 1; }
-.work-media__item img { display: block; width: 100%; height: auto; border-radius: 10px; }
-.work-media__item.is-video, .work-media__item.is-audio { grid-column: 1 / -1; }
-.work-media__item video { display: block; width: 100%; max-height: 62vh; border-radius: 10px; background: #000; }
-.work-media__item audio { width: 100%; min-width: 260px; }
-.work-media__item figcaption { color: rgb(0 0 0 / 55%); font-size: 12px; line-height: 1.5; }
+   ⚠️ 2026-09-22 改成**卡片 + 点开放大**（用户原话：「一个画布课堂可能会产出很多图像和视频/音频，
+   这里应该是一个卡片形式展示，点击后放大。而不是现在这样一个大图，还看不完比如下拉」）：
+   原来图片撑满一列、视频/音频整行铺开，一件作品出十来张图就是一条几屏长的瀑布 —— 看不到全貌。
+   现在：固定比例的缩略图卡片平铺；点卡片开浮层看**完整**那一份（图片/视频原尺寸、音频给播放器、文字给整段）。
+   深浅两套主题都要能看（半透明底 + currentColor 那套）。 */
+.work-media { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); margin: 18px 0; }
+.work-media__item { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+/* 卡片本体就是缩略图那一块（4:3 固定比例，所以一行行对得齐、不会一张高一张矮） */
+.work-media__card { display: block; width: 100%; padding: 0; border: 1px solid rgb(0 0 0 / 10%); border-radius: 12px; overflow: hidden; background: rgb(0 0 0 / 4%); cursor: zoom-in; transition: border-color .18s ease-out, transform .18s ease-out; }
+.work-media__card.is-static { cursor: default; }
+.work-media__card:hover { border-color: rgb(0 0 0 / 28%); transform: translateY(-1px); }
+.work-media__card:focus-visible { outline: 2px solid #ff5c93; outline-offset: 2px; }
+.work-media__thumb-img, .work-media__thumb-video { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #0f0f11; }
+.work-media__thumb-video { position: relative; }
+.work-media__thumb-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.work-media__play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 20px; text-shadow: 0 2px 10px rgb(0 0 0 / 55%); pointer-events: none; }
+.work-media__thumb-audio, .work-media__thumb-text { display: grid; place-items: center; gap: 4px; width: 100%; aspect-ratio: 4 / 3; padding: 12px; text-align: center; background: rgb(0 0 0 / 5%); }
+.work-media__thumb-audio span { font-size: 30px; color: rgb(0 0 0 / 35%); }
+.work-media__thumb-audio small { max-width: 100%; color: rgb(0 0 0 / 55%); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-media__thumb-text { display: block; overflow: hidden; color: rgb(0 0 0 / 65%); font-size: 12px; line-height: 1.7; text-align: left; white-space: pre-wrap; }
+.work-media__thumb-missing { display: grid; place-items: center; width: 100%; aspect-ratio: 4 / 3; color: rgb(0 0 0 / 45%); font-size: 12px; }
+.work-media__item figcaption { color: rgb(0 0 0 / 55%); font-size: 12px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-media__text { grid-column: 1 / -1; margin: 0; padding: 12px 14px; border: 1px solid rgb(0 0 0 / 10%); border-radius: 14px; background: rgb(0 0 0 / 3%); }
 .work-media__text h4 { margin: 0 0 6px; font-size: 13px; color: rgb(0 0 0 / 55%); font-weight: 600; }
 .work-media__text p { margin: 0; white-space: pre-wrap; line-height: 1.7; }
 .work-media__missing { padding: 24px; border-radius: 10px; background: rgb(0 0 0 / 5%); color: rgb(0 0 0 / 45%); font-size: 12px; text-align: center; }
 .work-media__empty { margin: 18px 0; color: rgb(0 0 0 / 50%); font-size: 13px; }
+
+/* ── 点开之后的浮层（大图）────────────────────────────────────────────── */
+.work-media__lightbox { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 28px; background: rgb(8 8 10 / 82%); backdrop-filter: blur(3px); }
+.work-media__lightbox-panel { display: flex; flex-direction: column; gap: 10px; width: min(1080px, 100%); max-height: 92vh; padding: 14px; border: 1px solid rgb(255 255 255 / 12%); border-radius: 16px; background: #16161a; box-shadow: 0 30px 80px rgb(0 0 0 / 55%); }
+.work-media__lightbox-head { display: flex; align-items: center; gap: 12px; }
+.work-media__lightbox-head strong { flex: 1; min-width: 0; color: #f4f4f5; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-media__lightbox-close { width: 30px; height: 30px; padding: 0; border: 1px solid rgb(255 255 255 / 16%); border-radius: 999px; color: #f4f4f5; background: rgb(255 255 255 / 6%); font-size: 16px; line-height: 1; cursor: pointer; }
+.work-media__lightbox-close:hover { border-color: #ff5c93; color: #ff5c93; }
+.work-media__lightbox-body { display: grid; place-items: center; min-height: 0; overflow: auto; }
+.work-media__lightbox-body img, .work-media__lightbox-body video { display: block; max-width: 100%; max-height: 78vh; border-radius: 10px; background: #000; }
+.work-media__lightbox-text { margin: 0; max-height: 78vh; overflow: auto; color: #f4f4f5; white-space: pre-wrap; line-height: 1.8; }
+.work-media__lightbox .work-media__missing { width: 100%; background: rgb(255 255 255 / 6%); color: rgb(255 255 255 / 55%); }
+/* 浮层里的播放器是深底，用默认那套（画布色板）就行；卡片里那个在**浅底**站点上要换成深字 */
+.work-media__player { width: 100%; }
+.work-media__player .cv-audio__btn { border-color: rgb(0 0 0 / 15%); color: rgb(0 0 0 / 70%); background: rgb(0 0 0 / 4%); }
+.work-media__player .cv-audio__btn:hover { border-color: rgb(0 0 0 / 40%); color: rgb(0 0 0 / 85%); }
+.work-media__player .cv-audio__time { color: rgb(0 0 0 / 55%); }
+.work-media__player .cv-audio__progress::-webkit-slider-runnable-track { background: linear-gradient(to right, rgb(0 0 0 / 45%) var(--cv-audio-progress, 0%), rgb(0 0 0 / 12%) var(--cv-audio-progress, 0%)); }
+.work-media__player .cv-audio__progress::-webkit-slider-thumb { background: rgb(0 0 0 / 55%); }
+.work-media__player .cv-audio__progress::-moz-range-track { background: rgb(0 0 0 / 12%); }
+.work-media__player .cv-audio__progress::-moz-range-progress { background: rgb(0 0 0 / 45%); }
+.work-media__player .cv-audio__progress::-moz-range-thumb { background: rgb(0 0 0 / 55%); }
+
 /* 深色壳（画布/控制台那套）里用白字 */
-.c-replay .work-media__item, .cv-shell .work-media__item { border-color: rgb(255 255 255 / 12%); background: rgb(255 255 255 / 4%); }
 .c-replay .work-media__item figcaption, .cv-shell .work-media__item figcaption { color: rgb(255 255 255 / 55%); }
+.c-replay .work-media__card, .cv-shell .work-media__card { border-color: rgb(255 255 255 / 12%); background: rgb(255 255 255 / 4%); }
+.c-replay .work-media__card:hover, .cv-shell .work-media__card:hover { border-color: rgb(255 255 255 / 30%); }
+.c-replay .work-media__thumb-audio, .cv-shell .work-media__thumb-audio,
+.c-replay .work-media__thumb-text, .cv-shell .work-media__thumb-text { background: rgb(255 255 255 / 6%); color: rgb(255 255 255 / 70%); }
+.c-replay .work-media__thumb-audio span, .cv-shell .work-media__thumb-audio span { color: rgb(255 255 255 / 40%); }
+.c-replay .work-media__thumb-audio small, .cv-shell .work-media__thumb-audio small { color: rgb(255 255 255 / 55%); }
+.c-replay .work-media__thumb-missing, .cv-shell .work-media__thumb-missing { color: rgb(255 255 255 / 45%); }
 .c-replay .work-media__text, .cv-shell .work-media__text { border-color: rgb(255 255 255 / 12%); background: rgb(255 255 255 / 4%); }
 .c-replay .work-media__text h4 { color: rgb(255 255 255 / 55%); }
 .c-replay .work-media__missing, .cv-shell .work-media__missing { background: rgb(255 255 255 / 6%); color: rgb(255 255 255 / 45%); }
 .c-replay .work-media__empty, .cv-shell .work-media__empty { color: rgb(255 255 255 / 50%); }
+.c-replay .work-media__player .cv-audio__btn, .cv-shell .work-media__player .cv-audio__btn { border-color: var(--cv-border); color: var(--cv-text); background: rgb(255 255 255 / 6%); }
+.c-replay .work-media__player .cv-audio__btn:hover, .cv-shell .work-media__player .cv-audio__btn:hover { border-color: var(--cv-primary); color: var(--cv-primary); }
+.c-replay .work-media__player .cv-audio__time, .cv-shell .work-media__player .cv-audio__time { color: var(--cv-text-dim); }
+.c-replay .work-media__player .cv-audio__progress::-webkit-slider-runnable-track, .cv-shell .work-media__player .cv-audio__progress::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--cv-primary) var(--cv-audio-progress, 0%), rgb(255 255 255 / 16%) var(--cv-audio-progress, 0%)); }
+.c-replay .work-media__player .cv-audio__progress::-webkit-slider-thumb, .cv-shell .work-media__player .cv-audio__progress::-webkit-slider-thumb { background: var(--cv-primary); }

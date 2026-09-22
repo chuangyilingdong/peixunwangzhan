@@ -24,6 +24,7 @@ import './styles.css';
 import { ratioThumbSize } from './ratioThumb.js';
 // 框体「能不能删」的判据 + 未生成时的引导插画地址（纯函数单独放 .js，守卫 p122 才跑得到）
 import { BOX_EMPTY_ART, isProtectedBoxNode } from './boxRules.js';
+import { AudioPlayer } from './AudioPlayer.jsx';
 
 const CanvasActionsContext = createContext(null);
 // 受鉴权保护的素材地址（/api/**）不能直接塞进 <img>/<video>/<audio> 的 src：那些请求带不了
@@ -573,6 +574,9 @@ function referenceAssetLabels(assets) {
  */
 export const NO_WHEEL_ZOOM_CLASS = 'nowheel';
 
+// 两行式音频播放器（画布的音乐框体与作品读面共用同一份，别各写一个）
+export { AudioPlayer } from './AudioPlayer.jsx';
+
 function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame, lockedMode = '', lockedLabel = '', lockedAudioRole = 'LIP_SYNC' }) {
   const { updateNode, removeIncomingRef } = useCanvasActions();
   // 悬停右上角的 ×：连过来的删连线，框体自己的预置素材清配置
@@ -819,7 +823,9 @@ function AudioNode({ id, data, selected }) {
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__audio-placeholder" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__audio-placeholder" modality="MUSIC" startedAt={data.generationStartedAt} />
       : audioUrl
-        ? <audio className="learning-node__audio" controls src={audioUrl} />
+        // 用户 2026-09-22：「播放器进度条被压缩很小了，有没有可能是两行，第一行是进度条、
+        // 第二行才是操作按钮」—— 原生 <audio controls> 的内部布局改不了，所以换成自己画的两行式。
+        ? <AudioPlayer className="learning-node__audio" src={audioUrl} label={data.title} />
         : <div className="learning-node__audio-placeholder learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写歌词或描述，生成音乐" loading="lazy" /></div>}
   </NodeFrame>;
 }

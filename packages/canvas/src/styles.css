@@ -138,7 +138,23 @@
 .learning-node__scene-art small { max-width: 190px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
 @media (max-width: 700px) { .learning-canvas { min-height: 590px; height: 72vh; } .learning-canvas__tip { max-width: 230px; } }
 
-.learning-node__audio { display: block; width: calc(100% - 24px); min-width: 0; margin: 12px; border: 1px solid var(--cv-border); border-radius: var(--cv-radius); }
+/* 音乐框体里的播放器：**占满卡片宽度、不再靠原生控件**（用户 2026-09-22 报的图2：
+   原生 <audio controls> 在窄框体里会把进度条压成一小段）。两行式：进度条一行、按钮一行。 */
+.learning-node__audio { display: block; width: calc(100% - 24px); min-width: 0; margin: 12px; }
+.cv-audio { display: flex; flex-direction: column; gap: 6px; }
+/* 第一行：进度条自己占满整行 —— 宽度与卡片无关地被"操作按钮"挤压，这是这次要解决的问题 */
+.cv-audio__progress { display: block; width: 100%; height: 16px; margin: 0; padding: 0; appearance: none; background: transparent; cursor: pointer; }
+.cv-audio__progress::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--cv-primary) var(--cv-audio-progress, 0%), rgb(255 255 255 / 16%) var(--cv-audio-progress, 0%)); }
+.cv-audio__progress::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: 999px; background: var(--cv-primary); }
+.cv-audio__progress::-moz-range-track { height: 4px; border-radius: 999px; background: rgb(255 255 255 / 16%); }
+.cv-audio__progress::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--cv-primary); }
+.cv-audio__progress::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 999px; background: var(--cv-primary); }
+.cv-audio__progress:focus-visible { outline: 2px solid var(--cv-primary); outline-offset: 2px; }
+/* 第二行：按钮 + 时间 */
+.cv-audio__row { display: flex; align-items: center; gap: 8px; }
+.cv-audio__btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; padding: 0; border: 1px solid var(--cv-border); border-radius: 999px; color: var(--cv-text); background: rgb(255 255 255 / 6%); cursor: pointer; }
+.cv-audio__btn:hover { border-color: var(--cv-primary); color: var(--cv-primary); }
+.cv-audio__time { color: var(--cv-text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
 .learning-node > * { flex-shrink: 0; }
 /* 画面（图片/视频）：**按素材自身比例**自适应，只受宽高上限约束 ——
