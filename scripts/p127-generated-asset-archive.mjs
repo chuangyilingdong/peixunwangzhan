@@ -86,15 +86,22 @@ check('③ 字节真的写到了磁盘上（不是只插了一行）', Boolean(o
 /* ── ② 失败一律**保留原地址**、绝不抛错（与「素材传上游」正好相反）────────────── */
 check('④ 上游 403 → 跳过并说明原因（那些地址已经失效了，留着也没用，但绝不能因此判生成失败）',
   (await archiveOneGeneratedAsset({ assetUrl: UPSTREAM_IMAGE, modality: 'IMAGE', jobId: 'j', fetchImpl: bytesFetch({ status: 403 }) })).reason?.includes('HTTP 403') === true);
-// ⚠️ 上游会给 QuickTime 容器（`ftypqt`）：字节嗅探只看得到 `ftyp`、会判成 mp4，
-//    而浏览器**播不了** qt 品牌（2026-09-21 的 `.mov` 事故，要 ffmpeg 转 mp4 才行）。
-//    存成一份"看着是 mp4、其实播不动"的东西比留个会过期的外链更糟 —— 它看起来是好的。
-const quickTimeBytes = Buffer.concat([Buffer.from([0, 0, 0, 20]), Buffer.from('ftypqt  ', 'ascii'), Buffer.alloc(16)]);
-const weird = await archiveOneGeneratedAsset({ assetUrl: UPSTREAM_IMAGE, modality: 'VIDEO', jobId: 'j', fetchImpl: bytesFetch({ contentType: 'video/quicktime', bytes: quickTimeBytes }) });
-check('⑤ QuickTime 容器（.mov）跳过并记原因 —— 不存一份"看着是 mp4、其实播不动"的东西',
-  weird.ok === false && weird.reason?.includes('QuickTime') === true, JSON.stringify(weird));
+// ⚠️ 这一条**翻过一次面，别再改回去**：上游给的一批视频是 `.mp4` 后缀、
+//    major brand 却是 `qt  `（QuickTime）。我第一版按品牌把它们当"浏览器播不了"全拦了
+//    → **10 条生产视频一条都收不进来**。拿到真 Chromium 里实测才发现：
+//    那些文件**能播**（play() 之后 currentTime 真的在走、有画幅 1038x576、无报错）
+//    —— 容器品牌不等于播不动，**不能拿它当判据**。
+//    判据只能是**上游声明的 MIME**：声明 video/mp4 就收；
+//    声明 video/quicktime（真的 .mov，就是 README 里"浏览器播不了"那种）就不收。
+const qtBrandedMp4 = Buffer.concat([Buffer.from([0, 0, 0, 20]), Buffer.from('ftypqt  ', 'ascii'), Buffer.alloc(16)]);
+const qt = await archiveOneGeneratedAsset({ assetUrl: UPSTREAM_IMAGE, modality: 'VIDEO', jobId: 'j', fetchImpl: bytesFetch({ contentType: 'video/mp4', bytes: qtBrandedMp4 }) });
+check('⑤ qt 品牌的 mp4 照样归档（实测能播 —— 容器品牌不是判据）',
+  qt.ok === true && qt.mimeType === 'video/mp4', JSON.stringify(qt));
+const realMov = await archiveOneGeneratedAsset({ assetUrl: UPSTREAM_IMAGE, modality: 'VIDEO', jobId: 'j', fetchImpl: bytesFetch({ contentType: 'video/quicktime', bytes: qtBrandedMp4 }) });
+check('⑤b 但上游**声明** video/quicktime（真 .mov）不收 —— 判据是声明的 MIME，不是字节',
+  realMov.ok === false && realMov.reason?.includes('声明') === true, JSON.stringify(realMov));
 const notWhitelisted = await archiveOneGeneratedAsset({ assetUrl: UPSTREAM_IMAGE, modality: 'VIDEO', jobId: 'j', fetchImpl: bytesFetch({ contentType: 'application/pdf', bytes: Buffer.from('%PDF-1.4 hello') }) });
-check('⑤b 落盘白名单外的类型同样跳过（pdf 不是作品媒体）', notWhitelisted.ok === false && notWhitelisted.reason?.includes('白名单') === true, JSON.stringify(notWhitelisted));
+check('⑤c 落盘白名单外的类型同样跳过（pdf 不是作品媒体）', notWhitelisted.ok === false && notWhitelisted.reason?.includes('白名单') === true, JSON.stringify(notWhitelisted));
 check('⑥ data: / mock: 这类内联产物不动（它们本来就在我们库里）',
   (await archiveOneGeneratedAsset({ assetUrl: 'data:image/png;base64,AAAA', modality: 'IMAGE', jobId: 'j' })).ok === false);
 

@@ -18,8 +18,12 @@
  *      与「学生自己传的图」「PPT 插画」同一条路 —— 作品没发布之前不该有公网地址。
  *      ⚠️ 别改成 `PUBLIC_PLATFORM`：那会让未提交作品里的图有一个公网可取地址，是隐私口径倒退。
  *   ③ 只收**我们自己落盘校验认得的类型**（见 fileUploadSecurity 的 MIME_EXTENSIONS）。
- *      上游会给 `.mov`（容器品牌 `ftypqt`，浏览器本来就播不了）之类，那些**跳过并记原因**，
- *      不做转码 —— 转码是另一件事，别塞进生成链路里。
+ *      判据是**上游声明的 MIME / 字节嗅探**，**不是容器品牌** —— 这一点踩过：
+ *      上游给的一批视频是 `.mp4` 后缀、但 major brand 是 `qt  `（QuickTime），
+ *      我第一版按品牌把它们全拦了，结果**10 条生产视频一条都收不进来**。
+ *      拿到真 Chromium 里实测才发现：那些文件**能播**（currentTime 真的在走、有画幅、无报错）——
+ *      容器品牌不等于播不动，别拿它当判据。「浏览器播不了」那件事只对**真的 `.mov`**成立
+ *      （它声明 `video/quicktime`，本来就被白名单挡在外面）。
  */
 import { readFileSync } from 'node:fs';
 import { sniffMime } from './fileUploadSecurity.js';
@@ -44,18 +48,6 @@ export function studentAssetUrl(fileId) {
 
 function normalizeMime(value) {
   return String(value || '').toLowerCase().split(';', 1)[0].trim();
-}
-
-/**
- * 上游给的是不是 **QuickTime 容器**（品牌 `ftypqt`）。
- *
- * 为什么要单独判：字节嗅探只看得到 `ftyp` 四个字节，会把 `.mov` 判成 `video/mp4` ——
- * 而浏览器**播不了** qt 品牌（2026-09-21 那次 `.mov` 事故，唯一的修法是 `ffmpeg -c copy` 转 mp4）。
- * 存成一份"看着是 mp4、其实播不动"的东西，比留一个会过期的外链更糟：它看起来是好的。
- */
-function isQuickTimeContainer(buffer) {
-  return buffer.length >= 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp'
-    && buffer.subarray(8, 12).toString('ascii').startsWith('qt');
 }
 
 /**
@@ -87,15 +79,17 @@ export async function archiveOneGeneratedAsset({ assetUrl, modality, jobId, owne
   if (!buffer?.length) return { ok: false, reason: '产物是空的' };
   if (buffer.length > MAX_ARCHIVE_BYTES) return { ok: false, reason: `产物 ${(buffer.length / 1048576).toFixed(1)}MB，超过归档上限` };
 
-  // 上游偶尔回 `application/octet-stream`（不报错也不说是什么），这时按字节自己嗅；
-  // 两边都认不出来就跳过 —— 宁可留一个会过期的地址，也别塞一个存不进我们落盘校验的东西。
+  // ⚠️ **声明的 MIME 说了算**；嗅探**只救"上游没正经声明"的情况**（空 / octet-stream）。
+  //    为什么不一律按字节嗅：`.mov` 与 `.mp4` 的字节长得一样（都是 `ftyp` + 品牌），
+  //    按字节会把上游明说是 `video/quicktime` 的真 `.mov` 也收进来 —— 而那种浏览器播不了
+  //    （2026-09-21 那次事故，要 `ffmpeg -c copy` 转）。上游**声明**什么，是它给的唯一线索，先信它。
+  const generic = !declaredMime || declaredMime === 'application/octet-stream';
   let mimeType = ARCHIVABLE_MIME_EXTENSION[declaredMime] ? declaredMime : '';
-  if (!mimeType) {
+  if (!mimeType && generic) {
     const sniffed = normalizeMime(sniffMime(buffer));
     if (ARCHIVABLE_MIME_EXTENSION[sniffed]) mimeType = sniffed;
   }
-  if (!mimeType) return { ok: false, reason: `产物类型不在落盘白名单里（上游给的是 ${declaredMime || '未知'}）` };
-  if (mimeType === 'video/mp4' && isQuickTimeContainer(buffer)) return { ok: false, reason: '上游给的是 QuickTime 容器（浏览器播不了，要转 mp4 才行）' };
+  if (!mimeType) return { ok: false, reason: `产物类型不在落盘白名单里（上游声明的是 ${declaredMime || '空'}）` };
 
   try {
     const stored = await storeGeneratedAsset({
