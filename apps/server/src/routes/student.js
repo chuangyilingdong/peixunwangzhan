@@ -573,6 +573,12 @@ export async function handleStudent(ctx) {
     };
   }
 
+  // ⚠️ **这一行必须重新 match 一次**：上面 session-state 那条把 `match` 覆盖成了它自己的正则，
+  //    而 `PUT /projects/<id>` 不含 `/session-state` → `match` 是 null → 整个 PUT 分支被跳过 →
+  //    落到最外层变成 `ROUTE_NOT_FOUND`（用户 2026-09-22 看到的「保存失败：接口不存在」）。
+  //    症状是**自动保存整条失效**（学生的画布改动写不回服务器），而界面只是角落里一行小字。
+  //    同一个函数里 `match` 是复用的 —— 中间每插一条新路由，**后面用它的地方都要重新 match**。
+  match = part.match(/^\/projects\/([^/]+)$/);
   if (match && method === 'PUT') {
     const project = getOwnProject(ctx, match[1]);
     assertProjectUsable(ctx, project);
