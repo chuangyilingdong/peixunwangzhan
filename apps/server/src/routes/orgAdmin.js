@@ -782,9 +782,14 @@ export async function handleOrg(ctx) {
           scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId]);
     if (!work) throw errors.notFound(scope.sessionId ? '作品不属于此课堂' : '作品不存在', 'SESSION_WORK_NOT_FOUND');
     const canvasSnapshot = source === 'CANVAS' ? normalizeWork(work, { includeSnapshot: true }).canvasSnapshot : null;
-    const allowedImages = source === 'VIBECODING' ? snapshotImageFileIds(work) : new Set(
-      (Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : []).flatMap((node) =>
-        ['previewUrl', 'assetUrl', 'referenceUrl'].map((key) => String(node?.data?.[key] || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean)));
+    // 准入清单 = 画布里挂的站内素材 **∪ 生成产物归档件**。后者不在画布上也照样是"这件作品的东西"
+    // （作品读面会把 media_assets 列出来给老师看）—— 少这一半就是"界面上看得到地址、点开 404"。
+    const allowedImages = source === 'VIBECODING' ? snapshotImageFileIds(work) : new Set([
+      ...(Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : []).flatMap((node) =>
+        ['previewUrl', 'assetUrl', 'referenceUrl'].map((key) => String(node?.data?.[key] || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean)),
+      ...canvasMediaFrom(canvasSnapshot).map((item) => item.fileId).filter(Boolean),
+      ...rows('SELECT asset_url FROM media_assets WHERE project_id=?', [work.project_id]).map((asset) => String(asset.asset_url || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean),
+    ]);
     if (imageId) {
       if (!allowedImages.has(imageId)) throw errors.notFound('图片不属于此作品', 'SESSION_WORK_IMAGE_NOT_FOUND');
       const file = row('SELECT * FROM file_assets WHERE id=?', [imageId]);
@@ -1213,6 +1218,28 @@ export async function handleOrg(ctx) {
       pendingReportCount: 0,
       copyrightConfirmedAt: submission.copyright_confirmed_at || null,
     }));
+
+    // 作品预览里"做出来的东西"现在可能是**我们自己存的**生成产物（生成成功时归档成学生私有素材），
+    // 而 `<img>` 发不出 Authorization 头 —— 前端要有一份 fileId → 地址 的表才能显示
+    // （学生端/广场那两条链路早就是这么做的，这里补上，机构端才不至于"点开预览是一片坏图"）。
+    // 批量查一次 media_assets：**别每行一个查询**（列表上限 200 条）。
+    const projectIds = [...new Set(canvasItems.map((item) => item.projectId).filter(Boolean))];
+    const assetIdsByProject = new Map();
+    if (projectIds.length) {
+      for (const asset of rows(`SELECT project_id, asset_url FROM media_assets WHERE project_id IN (${projectIds.map(() => '?').join(',')})`, projectIds)) {
+        const fileId = String(asset.asset_url || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1];
+        if (!fileId) continue;
+        if (!assetIdsByProject.has(asset.project_id)) assetIdsByProject.set(asset.project_id, new Set());
+        assetIdsByProject.get(asset.project_id).add(fileId);
+      }
+    }
+    for (const item of canvasItems) {
+      const fileIds = new Set([
+        ...canvasMediaFrom(item.canvasSnapshot).map((media) => media.fileId).filter(Boolean),
+        ...(assetIdsByProject.get(item.projectId) || []),
+      ]);
+      item.imageUrls = Object.fromEntries([...fileIds].map((fileId) => [fileId, `/api/org/works/CANVAS/${encodeURIComponent(item.id)}/images/${encodeURIComponent(fileId)}`]));
+    }
 
     // 两类合并后统一排序：**精选仍置顶**（画布那条的既有口径），其余按提交时间倒序 ——
     // 单独按来源分页/拼接会让"最新作品"被来源顺序盖住。

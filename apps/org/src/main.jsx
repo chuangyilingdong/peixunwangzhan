@@ -355,6 +355,22 @@ function Works({ api }) {
   const [reportForm, setReportForm] = useState({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' });
   const [reportBusy, setReportBusy] = useState(false);
   const [selectedWork, setSelectedWork] = useState(null);
+  // 预览里"做出来的东西"若是**我们自己存的**素材（生成产物归档件），`<img>` 发不出 Authorization 头，
+  // 得带着 token 取回来转成 data: 才显示得出（与「我的作品」那条同一手法）。换一件作品就重取一份。
+  const [workImageData, setWorkImageData] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    setWorkImageData({});
+    const entries = Object.entries(selectedWork?.imageUrls || {});
+    if (!entries.length) return () => { cancelled = true; };
+    Promise.allSettled(entries.map(async ([fileId, path]) => [fileId, await api.fetchDataUrl(path)]))
+      .then((results) => {
+        if (cancelled) return;
+        setWorkImageData(Object.fromEntries(results.filter((item) => item.status === 'fulfilled' && item.value).map((item) => item.value)));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [api, selectedWork]);
   // 作品先看**做出来的东西**（图/视频/音频），画布只是过程（用户 2026-09-21 口径）。
   const [workMediaView, setWorkMediaView] = useState('media');
   // VibeCoding 产物的预览走弹窗（画布那半仍是就地开只读画布）
@@ -415,7 +431,7 @@ function Works({ api }) {
         </div>
         {workMediaView === 'canvas'
           ? <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly />
-          : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} />}
+          : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} resolveSrc={(item) => (item?.fileId ? (workImageData[item.fileId] || '') : '')} />}
       </Panel>
     </>}
 

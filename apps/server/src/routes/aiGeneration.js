@@ -10,6 +10,7 @@ import { recordAiUsage } from '../services/creditUsage.js';
 import { assertTransition } from '../services/domainState.js';
 import { applyGatewayRoute } from '../services/computeGateway.js';
 import { priceFenFor, salePriceFenSuccessSql } from '../services/computePool.js';
+import { archiveGeneratedAssets } from '../services/generatedAssetArchive.js';
 // 2026-09-18（用户口径）：`services/courseCuLedger.js` 已**整体删除** —— 那套课包 CU 额度
 // （`reserveCourseCu/settleCourseCu/releaseCourseCu`）的 `cu_limit` 全仓无人写，恒 `UNLIMITED`、
 // 两张 `student_course_cu_*` 表永远是空的。学生算力额度现在**只有一套、且只观测不拦人**：
@@ -912,7 +913,14 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
-    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
+    // 上游产物先留一份在我们自己这儿：它给的是**临时地址**，过一阵就 403，
+    // 而作品读面只存了那个引用（2026-09-22 实测：getapib.org 那批 21 条里 7 条已经 403）。
+    // 归档是 best-effort —— 拿不到就保留原地址并在 metadata 里记原因，**绝不因此判这次生成失败**。
+    const archivedAssets = await archiveGeneratedAssets(assetPayloads, {
+      modality, jobId, ownerUserId: auth.user.id, ownerOrgId: (auth.session?.org_id || auth.user.orgId),
+      log: (message) => console.log(`[GENERATED ASSET ARCHIVE] job=${jobId} ${message}`),
+    });
+    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
     audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
     const job = jobDetail(jobId);
     return { job, assets: job.assets };
@@ -997,7 +1005,12 @@ async function processAsyncGeneration(item) {
     const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
     const assetPayloads = Array.isArray(generated?.assets) ? generated.assets : [];
     if (!assetPayloads.length) throw Object.assign(new Error('生成服务没有返回素材'), { code: 'GENERATION_EMPTY_RESULT' });
-    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext, usage: generated?.usage || null });
+    // 同上（同步那条路）：上游产物先归档到本机，失败不判死本次生成。
+    const archivedAssets = await archiveGeneratedAssets(assetPayloads, {
+      modality, jobId, ownerUserId: auth.user.id, ownerOrgId: (auth.session?.org_id || auth.user.orgId),
+      log: (message) => console.log(`[GENERATED ASSET ARCHIVE] job=${jobId} ${message}`),
+    });
+    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
     audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
   } catch (error) {
     markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });

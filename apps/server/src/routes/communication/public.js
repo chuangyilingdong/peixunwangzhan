@@ -178,6 +178,27 @@ export function handlePublicCommunication(ctx) {
     return publicWorkRow(work);
   }
 
+  // 画布作品的媒体代理（2026-09-22）：生成产物现在归档在**我们自己**这里（学生私有的
+  // `/api/student/file-assets/<id>/download`），而公开页是未登录的访客 —— 那个地址他们拿不动。
+  // 所以由服务端按「这个 fileId 真的出现在这份**已公开**作品里」放行，与 VibeCoding 那条
+  // （`/api/public/vibecoding-works/<token>/images/<fileId>`）**同一套判据**。
+  // ⚠️ 这里的准入条件必须与上面那条详情路由**逐字相同**（`share_token=? AND is_public=1`）：
+  //    宽一格就是"看得到作品页、图却 403"，窄一格就是"图能取、作品页说没有"。
+  const publicWorkImageMatch = pathname.match(/^\/api\/public\/works\/([\w-]+)\/images\/([\w-]+)$/);
+  if (publicWorkImageMatch && method === 'GET') {
+    const work = row('SELECT id, canvas_snapshot FROM works WHERE share_token=? AND is_public=1', [publicWorkImageMatch[1]]);
+    if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
+    const allowed = new Set(canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
+      .map((item) => item.fileId).filter(Boolean));
+    if (!allowed.has(publicWorkImageMatch[2])) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
+    const file = row('SELECT * FROM file_assets WHERE id=?', [publicWorkImageMatch[2]]);
+    if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
+    if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
+    if (!/^(image|audio|video)\//.test(String(file.mime_type || ''))) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
+    if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
+    return prepareFileDownload(ctx, file);
+  }
+
   // 公开 VibeCoding 作品（平台把老师已通过的作品发布到作品广场后，官网可点开直接玩）
   if (pathname === '/api/public/vibecoding-works' && method === 'GET') {
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 60 });
@@ -497,7 +518,12 @@ function publicWorkRow(row) {
     canvasSnapshot: canvas,
     // 广场作品详情的**媒体清单**（图/视频/音频）：用户 2026-09-21 口径 —— 作品页要看成出来的东西，
     // 不是画布。与站内那两条链路共用同一个提取函数（`canvasMediaFrom`）。
-    media: canvasMediaFrom(canvas),
+    // ⚠️ 里面但凡是我们**自己的**素材（生成产物归档后就是），地址都得换成这份作品专属的公开代理：
+    //    访客没登录，`/api/student/file-assets/<id>/download` 对他是 403（前端也一样转不出 data:，
+    //    那条路要 token）。换完前端 `srcOf` 直接用 `item.url` 就能显示，不必再动前端。
+    media: canvasMediaFrom(canvas).map((item) => (item.fileId && row.share_token
+      ? { ...item, url: `/api/public/works/${encodeURIComponent(row.share_token)}/images/${encodeURIComponent(item.fileId)}` }
+      : item)),
     featured: Boolean(row.featured_at),
     submittedAt: row.submitted_at,
     publicUrl: row.share_token ? `/works/${row.share_token}` : null,
