@@ -158,29 +158,38 @@ ensureActiveSession();
 // （验"课包锁定的方式赢过客户端推断"用；生产库不动）。
 // ⚠️ **两处都要改**：实时那一行（老师编辑用的读面）+ **发布快照**（学生/判定真正读的那份，口径 61/62）。
 //    只改实时行 = 没改（第一版就是这么把自己骗了三次：以为锁成 OMNI，实际按快照跑的是 TEXT）。
-if (args.mode) {
-  const mode = String(args.mode).toUpperCase();
+// ⚠️ 要改**三处**，而且判定读的是第三处（坑 103 的准确说法，2026-09-21 晚又踩了一次）：
+//   · 实时素材表（老师编辑读面）
+//   · 发布快照的 `materialGroups[].materials[].snapshot.box`（**学生画布读面**）
+//   · 发布快照的 `generationBoxes[]`（**生成判定真正读的那份**：方框体 id → 配置、算 inputModes/audioRole）
+// 只改前两处 = 画布显示新值、判定还用旧值（看着像产品没生效）。
+function patchBoxInCopy(updates, label) {
   const row = db.prepare('SELECT snapshot FROM course_lesson_materials WHERE id=?').get(box.id);
   const snapshot = JSON.parse(row?.snapshot || '{}');
-  snapshot.box = { ...(snapshot.box || {}), inputMode: mode };
+  snapshot.box = { ...(snapshot.box || {}), ...updates };
   db.prepare('UPDATE course_lesson_materials SET snapshot=? WHERE id=?').run(JSON.stringify(snapshot), box.id);
   const lessonRow = db.prepare('SELECT published_content FROM course_lessons WHERE id=?').get(project.course_lesson_id);
-  if (lessonRow?.published_content) {
-    const published = JSON.parse(lessonRow.published_content);
-    let patched = 0;
-    for (const group of published.materialGroups || []) {
-      for (const material of group.materials || []) {
-        if (material?.id !== box.id || !material.snapshot?.box) continue;
-        material.snapshot.box = { ...material.snapshot.box, inputMode: mode };
-        patched += 1;
-      }
+  if (!lessonRow?.published_content) { console.log(`已在副本里把这个框体改成：${label}（这节还没发布 → 只用实时配置）`); return; }
+  const published = JSON.parse(lessonRow.published_content);
+  let patched = 0;
+  for (const group of published.materialGroups || []) {
+    for (const material of group.materials || []) {
+      if (material?.id !== box.id || !material.snapshot?.box) continue;
+      material.snapshot.box = { ...material.snapshot.box, ...updates };
+      patched += 1;
     }
-    if (patched) db.prepare('UPDATE course_lessons SET published_content=? WHERE id=?').run(JSON.stringify(published), project.course_lesson_id);
-    console.log(`已在副本里把这个框体锁成：${mode}（发布快照里改了 ${patched} 处、实时配置 1 处）`);
-  } else {
-    console.log(`已在副本里把这个框体锁成：${mode}（这节还没发布 → 只用实时配置）`);
   }
+  for (const item of published.generationBoxes || []) {
+    if (item?.id !== box.id) continue;
+    Object.assign(item, updates);
+    patched += 1;
+  }
+  db.prepare('UPDATE course_lessons SET published_content=? WHERE id=?').run(JSON.stringify(published), project.course_lesson_id);
+  console.log(`已在副本里把这个框体改成：${label}（发布快照里改了 ${patched} 处、实时配置 1 处）`);
 }
+if (args.mode) patchBoxInCopy({ inputMode: String(args.mode).toUpperCase() }, `生成方式 ${String(args.mode).toUpperCase()}`);
+// --audio-role=VOICE_REFERENCE：课包锁「音频怎么用」（口径：对口型 / 声音参考）
+if (args['audio-role']) patchBoxInCopy({ audioRole: String(args['audio-role']).toUpperCase() }, `音频角色 ${String(args['audio-role']).toUpperCase()}`);
 db.close();
 
 console.log(`项目：${project.id}（${project.title}）`);

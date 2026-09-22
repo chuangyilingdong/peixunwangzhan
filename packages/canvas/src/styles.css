@@ -280,12 +280,16 @@
 .learning-node__submit:disabled { opacity: .35; cursor: not-allowed; }
 
 /* 画面来源行：首帧 / 尾帧 / 参考素材（靠连线引入，不支持上传） */
-.learning-node__ref-row { display: flex; align-items: flex-start; gap: 8px; }
+/* flex-wrap：下面那条 `__ref-note`（音频用法/台词那句说明）要能整行换到 chips 下面 */
+.learning-node__ref-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
 .learning-node__frame-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; min-width: 0; }
 .learning-node__frame-chip { display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 9px 3px 3px; border: 1px solid rgb(163 254 68 / 30%); border-radius: 999px; }
 .learning-node__frame-chip img { width: 24px; height: 24px; border-radius: 999px; object-fit: cover; }
 .learning-node__frame-chip figcaption { color: var(--cv-text-dim); font-size: 10px; }
 .learning-node__ref-empty { padding: 5px 10px; border: 1px dashed var(--cv-border-strong); border-radius: 999px; color: var(--cv-text-faint); font-size: 10px; }
+/* 连了音频时那条一句说明（课包锁的音频用法 + "台词要写进提示词"）。
+   它要**能换行**（台词那句例子比较长），而且不能被 chips 挤出面板：故整行独占、允许收缩。 */
+.learning-node__ref-note { flex: 1 1 100%; min-width: 0; color: var(--cv-text-faint); font-size: 10px; line-height: 1.6; }
 
 /* ── 参考素材缩略图（复刻参考的展示）：小图 + 序号角标 + 名称胶囊；hover 在面板内向上展开大图 ── */
 .learning-node__ref-thumb { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; cursor: zoom-in; }

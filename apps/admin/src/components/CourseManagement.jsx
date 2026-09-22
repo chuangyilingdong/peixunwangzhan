@@ -459,6 +459,23 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                     </select>
                   </LessonField>
                 </div> : null}
+                {/* 音频怎么用（用户 2026-09-21 口径：也由课包锁，只要两档 —— 对口型 / 声音参考）。
+                    只对**能连音频**的框体显示：音频只连得到"全能参考"的视频框体上（其余方式连线闸门直接挡住）。
+                    两档在上游是两种**不同的角色**（`drive_audio` / `reference_audio`），产物差别很大（口径 81）：
+                    对口型的音频会驱动画面、并被原样保留在产物音轨里；声音参考只借音色、音轨由 AI 重新生成。 */}
+                {modality === 'VIDEO' && (box.inputMode === 'OMNI_REFERENCE' || !box.inputMode) ? <div className="lesson-field-row">
+                  <LessonField
+                    label="音频怎么用"
+                    hint={box.audioRole === 'VOICE_REFERENCE'
+                      ? '只借音色：画面不跟着它动，产物音轨由 AI 重新生成'
+                      : '对口型：画面跟着它动，并把这段音频原样留在视频里（要让角色念台词，台词要写进提示词，例如：口型跟随 <Audio 1>，说：<d>[中文] 你好呀。</d>）'}
+                  >
+                    <select value={box.audioRole === 'VOICE_REFERENCE' ? 'VOICE_REFERENCE' : 'LIP_SYNC'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, audioRole: event.target.value }))}>
+                      <option value="LIP_SYNC">对口型（画面跟音频动 + 保留原声）</option>
+                      <option value="VOICE_REFERENCE">声音参考（只借音色）</option>
+                    </select>
+                  </LessonField>
+                </div> : null}
                 {modality === 'IMAGE' || modality === 'VIDEO' ? <div className="lesson-field-row">
                   <LessonField label="比例"><select value={box.aspectRatio || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, aspectRatio: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.aspectRatios, box.aspectRatio).map((value) => <option key={value} value={value}>{value}</option>)}</select></LessonField>
                   <LessonField label="清晰度"><select value={box.resolution || ''} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, resolution: event.target.value }))}><option value={STUDENT_CHOICE}>学生自选（课堂里由学生挑）</option>{valueOptionsFor(caps.resolutions, box.resolution).map((value) => <option key={value} value={value}>{value}</option>)}</select></LessonField>

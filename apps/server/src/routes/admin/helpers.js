@@ -118,6 +118,9 @@ function normalizeBoxMaterial(material, materialIndex, title) {
   // 本节课的「生成方式」（文生视频/图生视频/首尾帧/全能参考、文生图/图生图）：
   // 留空＝不锁（按接线与模型能力自选）；锁了就必须让上游与画布都知道（用户 2026-09-21 口径）。
   if ((box.modality === 'IMAGE' || box.modality === 'VIDEO') && box.inputMode) boxSnapshot.inputMode = box.inputMode;
+  // 连过来的音频怎么用（用户 2026-09-21 口径：也由课包锁，只要两档 —— 对口型 / 声音参考）。
+  // 只对视频框体有意义（音频只连得到全能参考的视频框体上）；留空＝对口型（旧课包就是这样）。
+  if (box.modality === 'VIDEO' && (box.audioRole === 'LIP_SYNC' || box.audioRole === 'VOICE_REFERENCE')) boxSnapshot.audioRole = box.audioRole;
   // 音乐：记下生成模式（歌词生音乐 / 描述生音乐）
   if (box.modality === 'MUSIC') { boxSnapshot.mode = box.mode; }
   return { ...snapshot, box: boxSnapshot, content: box.prompt };

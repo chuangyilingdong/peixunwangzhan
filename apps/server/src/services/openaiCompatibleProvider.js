@@ -309,6 +309,9 @@ function requestBody({ modality, model, prompt, title, voice = 'alloy', options 
       // ⚠️ 这一项以前**没有传**，于是模板写不写 {{referenceItems}} 都会渲染成空数组 ——
       // 学生连了参考图、模板里也有占位符，请求体里却一张图都没有（2026-09-11 实测复现并修掉）。
       referenceAssets: Array.isArray(referenceAssets) ? referenceAssets : [],
+      // 音频角色（课包锁的 LIP_SYNC / VOICE_REFERENCE）：`{{referenceItems}}` 按它决定音频那条
+      // 发 `drive_audio` 还是 `reference_audio`（口径 81）。**不是模板占位符**，只在渲染函数内部用。
+      audioRole: String(options.audioRole || 'LIP_SYNC').trim().toUpperCase(),
       n: 1,
       messages: Array.isArray(messages) ? messages : undefined,
     });
@@ -527,6 +530,18 @@ export function openAiCompatibleProvider({ name, model, endpoint, apiKey, timeou
         onEvidence,
       });
       const parsed = await parseResponse(response, normalizedModality);
+      // 提交"不确定"时上游会给一个公共任务号（`X-Task-Id`），**能查就别重发**。
+      // 上游文档原文：「如果网关已经尝试提交，但收到超时（包括 HTTP 408）或 5xx 等不确定结果，
+      // 错误响应可带 `X-Task-Id` 和 `Retry-After: 5`…保存该响应头的公共任务 ID 并查询」，
+      // 并明确「未收到公共任务 ID 时，不要推断提交失败或盲目重提」——重发会双扣。
+      // 所以：HTTP 错误 + 有 X-Task-Id ⇒ 当成"已受理、待查询"，接着轮询（而不是判失败）。
+      const retryTaskId = (response.ok || normalizedModality === 'TEXT') ? '' : String(response.headers?.get('x-task-id') || '').trim();
+      if (!response.ok && retryTaskId) {
+        // 上游还给了 `Retry-After: 5`，头一次查询按它等（封顶 30 秒），别立刻去撞。
+        const retryAfterMs = Number(response.headers?.get('retry-after')) > 0 ? Math.min(30000, Number(response.headers.get('retry-after')) * 1000) : 0;
+        onSubmitted?.(retryTaskId);
+        return { assets: [await pollForAsset({ initialPayload: { task_id: retryTaskId }, requestUrl: url, modality: normalizedModality, apiKey, timeout, pollIntervalMs: Math.max(pollInterval, retryAfterMs), title, providerName, model: providerModel, pollPath: pollPaths[normalizedModality] || '', clientRequestId, onEvidence })] };
+      }
       if (!response.ok) throw providerHttpError(response, parsed);
       if (normalizedModality !== 'TEXT' && !parsed?.binary && pendingPayload(parsed)) {
         onSubmitted?.(payloadTaskId(parsed));

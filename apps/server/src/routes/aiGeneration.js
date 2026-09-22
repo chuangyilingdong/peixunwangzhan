@@ -3,7 +3,7 @@ import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import { getAiProviderPolicy, isModalityEnabled } from './billingConfig.js';
-import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, inputModeShortLabel, normalizeInputModeValue, requestTemplateFor } from '../services/modelCapabilities.js';
+import { effectiveCapabilities, acceptsFirstFrame, acceptsLastFrame, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, requestTemplateFor } from '../services/modelCapabilities.js';
 import { PUBLIC_SITE_URL } from '../config.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
 import { recordAiUsage } from '../services/creditUsage.js';
@@ -287,8 +287,13 @@ function resolvableAssetUrl(value) {
 
 // 提示词里的引用芯片 → 上游认的写法。
 //
-// 画布上学生插的是中文芯片（「图片 1」「视频 1」），而上游文档里多模态参考的指代写法是
-// **`@Image 1` / `@Video 1`**（原文："多模态场景可用 @Image 1、@Video 1 指代第几个参考素材"）。
+// 画布上学生插的是中文芯片（「图片 1」「视频 1」），上游文档里两种指代写法**不是一个地方写的**，
+// 所以按类型分别对齐（2026-09-21 晚复查上游文档后改的）：
+//   · 图片 / 视频：**`@Image 1` / `@Video 1`**（原文："多模态场景可用 @Image 1、@Video 1 指代第几个参考素材"）
+//     —— 学生画布插的芯片自带 `@`，所以只把中文换成英文、`@` 留着；
+//   · 音频：**尖括号 `<Audio 1>`** —— H3 专节「驱动音频与声音参考」的示例原文是
+//     `口型跟随 <Audio 1>，说：<d>[中文] 今天的天气真好。</d>`，那个 `<Audio 1>` **没有 `@`**，
+//     所以我们把学生写的 `@` 一并吃掉、换成 `<Audio N>`（否则会输出 `@<Audio 1>` 这种四不像）。
 // 不翻的话，学生那句「@图片 2 在跳舞然后转场到@图片 1」在上游眼里可能只是普通文字 ——
 // 谁是"图片 2"全靠模型猜（用户 2026-09-21 的提示词正是这种：核心语义全压在芯片上）。
 //
@@ -297,7 +302,7 @@ function resolvableAssetUrl(value) {
 const CHIP_TYPES = Object.freeze([
   Object.freeze({ cn: '图片', en: 'Image' }),
   Object.freeze({ cn: '视频', en: 'Video' }),
-  Object.freeze({ cn: '音频', en: 'Audio' }),
+  Object.freeze({ cn: '音频', en: 'Audio', bracket: true }),
 ]);
 export function upstreamPromptWithReferences(prompt, { originalReferences = [], sentReferences = [] } = {}) {
   const text = String(prompt || '');
@@ -307,7 +312,7 @@ export function upstreamPromptWithReferences(prompt, { originalReferences = [], 
     .filter((item) => item.url && (cn === '图片' ? item.type === 'IMAGE' : cn === '视频' ? item.type === 'VIDEO' : item.type === 'AUDIO'));
   let out = text;
   let touched = false;
-  for (const { cn, en } of CHIP_TYPES) {
+  for (const { cn, en, bracket } of CHIP_TYPES) {
     const original = ofType(originalReferences, cn);
     const sent = ofType(sentReferences, cn);
     if (!sent.length) continue;
@@ -316,8 +321,9 @@ export function upstreamPromptWithReferences(prompt, { originalReferences = [], 
       // 没在原始列表里找到（例如框体预置素材）就不动 —— 宁可不翻，也别把学生的号指着别人
       if (oldIndex < 0) return;
       // ⚠️ 用 [ ]? 而不是 s?：字符类不涉及转义（这行被 heredoc 转义掉一层过一次）
-      const pattern = new RegExp(cn + "[ ]?" + (oldIndex + 1), "g");
-      if (pattern.test(out)) { out = out.replace(pattern, `${en} ${index + 1}`); touched = true; }
+      // `(?![0-9])`：别把「音频 10」里的「音频 1」当成 1 号（上限虽然只有 3，但宁可不翻错）
+      const pattern = new RegExp((bracket ? '@?' : '') + cn + "[ ]?" + (oldIndex + 1) + "(?![0-9])", "g");
+      if (pattern.test(out)) { out = out.replace(pattern, bracket ? `<${en} ${index + 1}>` : `${en} ${index + 1}`); touched = true; }
     });
   }
   return touched ? out : text;
@@ -748,14 +754,20 @@ export function generationOptionsFor({ context, modality, policy, selection, box
       if (!/\{\{(referenceItems|referenceImageUrls)\}\}/.test(JSON.stringify(referencesTemplate || {}))) {
         throw errors.forbidden('当前视频模型不能带参考素材：请去掉连线，或让老师换一个支持参考的模型', 'GENERATION_REFERENCES_UNSUPPORTED');
       }
-      // ⚠️ 音频再往前一条：连过来的音频是当**驱动**发的（见 modelCapabilities 的 referenceItems），
+      // 「连过来的音频怎么用」由**课包锁**（AUDIO_ROLES：对口型＝驱动+保留原声 / 声音参考＝只借音色）。
+      // 留空＝对口型（旧课包与"没配过这个字段"的框体行为不变）。模板渲染时会照它决定 content 项的 role。
+      options.audioRole = normalizeAudioRole(target?.audioRole);
+      // ⚠️ 音频再往前一条：**对口型**时音频是当**驱动**发的（见 modelCapabilities 的 referenceItems），
       //    而渠道模板里的 `audio_control.mode: native` 会把它彻底中和 —— 上游文档写的是
       //    native＝「生成原生音轨，不锁驱动音频」、`add_drive_as_reference`（native 下默认 false）
       //    决定它算不算声音参考；两者都没有 = 这条音频对产物**一点作用都没有**。
       //    学生看到的就是「视频跟音频完全不一样」（用户 2026-09-21 报的）。这是模板里的配置错误，
       //    静默中和比报错糟得多（同「模板带不了参考就当场拒绝」那条口径），当场拒绝并说清怎么改。
+      //    ⚠️ 只在**真的发驱动音频**时才拦：课包锁成「声音参考」时根本不发 drive_audio，
+      //       钉 native 不会中和任何东西（那条音频照旧是声音参考），不该把课拦死。
       const audioControl = referencesTemplate?.audio_control;
-      const drivesAudio = omniReferences.some((item) => String(item.type || '').toUpperCase() === 'AUDIO');
+      const drivesAudio = options.audioRole !== 'VOICE_REFERENCE'
+        && omniReferences.some((item) => String(item.type || '').toUpperCase() === 'AUDIO');
       if (drivesAudio && String(audioControl?.mode || '').toLowerCase() === 'native' && audioControl?.add_drive_as_reference !== true) {
         throw errors.forbidden('当前视频模型把音轨固定成「原生生成」，连过来的音频不会起作用 —— 请让老师把这个模型的 audio_control 去掉（去掉后：连了音频就按音频驱动并保留它，没连则生成原生音轨）', 'GENERATION_AUDIO_DRIVE_BLOCKED');
       }

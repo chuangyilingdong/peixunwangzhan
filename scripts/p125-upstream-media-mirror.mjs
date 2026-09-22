@@ -276,8 +276,23 @@ check('中文芯片翻成 @Image N（画布上学看到的仍是中文，只改�
 check('第一张参考没留住时：留下的那张按新号翻，**被丢掉的那张保持原样**（宁可不动，也不能指错人）',
   upstreamPromptWithReferences(cnPrompt, { originalReferences: [refA, refB], sentReferences: [refB] }) === '@Image 1 在跳舞然后自然转场到@图片 1',
   upstreamPromptWithReferences(cnPrompt, { originalReferences: [refA, refB], sentReferences: [refB] }));
-check('视频/音频也能翻（@视频 1 → @Video 1）',
+check('视频也能翻（@视频 1 → @Video 1）',
   upstreamPromptWithReferences('参考@视频 1 的镜头运动', { originalReferences: [{ type: 'VIDEO', url: 'https://example.test/v.mp4' }], sentReferences: [{ type: 'VIDEO', url: 'https://example.test/v.mp4' }] }) === '参考@Video 1 的镜头运动');
+/* ⚠️ 音频是**另一种写法**（2026-09-21 晚复查上游文档后改的）：H3 专节「驱动音频与声音参考」的示例原文是
+   `口型跟随 <Audio 1>，说：<d>[中文] 今天的天气真好。</d>` —— 尖括号、而且**没有 `@`**。
+   所以音频这条要把学生写的 `@` 一并吃掉、换成 `<Audio N>`（否则会输出 `@<Audio 1>` 这种四不像）。 */
+const audioRefA = { type: 'AUDIO', url: 'https://example.test/a.mp3' };
+check('音频芯片翻成**尖括号** <Audio N>（H3 文档的写法），学生写的 @ 一起吃掉',
+  upstreamPromptWithReferences('口型跟随@音频 1，说台词', { originalReferences: [audioRefA], sentReferences: [audioRefA] }) === '口型跟随<Audio 1>，说台词'
+  && upstreamPromptWithReferences('用 音频 1 的前5秒', { originalReferences: [audioRefA], sentReferences: [audioRefA] }) === '用 <Audio 1> 的前5秒',
+  upstreamPromptWithReferences('口型跟随@音频 1，说台词', { originalReferences: [audioRefA], sentReferences: [audioRefA] }));
+check('「音频 10」这种不会被当成 1 号（号后面还跟数字就不翻）',
+  upstreamPromptWithReferences('音频 10 秒处', { originalReferences: [audioRefA], sentReferences: [audioRefA] }) === '音频 10 秒处');
+check('图片/视频那两种写法**不受影响**（@ 保留；只有音频走尖括号）',
+  upstreamPromptWithReferences('@图片 1 动起来，参考@视频 1', {
+    originalReferences: [refA, { type: 'VIDEO', url: 'https://example.test/v.mp4' }],
+    sentReferences: [refA, { type: 'VIDEO', url: 'https://example.test/v.mp4' }],
+  }) === '@Image 1 动起来，参考@Video 1');
 check('没有参考、或提示词里没有芯片时原样返回（纯文生视频不受影响）',
   upstreamPromptWithReferences('夜色江面缓缓推移', { originalReferences: [], sentReferences: [] }) === '夜色江面缓缓推移'
   && upstreamPromptWithReferences('画面动起来', { originalReferences: [refA], sentReferences: [refA] }) === '画面动起来');

@@ -38,6 +38,9 @@ const {
   TEMPLATE_PLACEHOLDERS,
   renderRequestTemplate,
   requestTemplateFor,
+  normalizeAudioRole,
+  audioRoleShortLabel,
+  AUDIO_ROLES,
 } = await import('../apps/server/src/services/modelCapabilities.js');
 const { generationOptionsFor } = await import('../apps/server/src/routes/aiGeneration.js');
 
@@ -289,6 +292,22 @@ check('② 其余音频仍是 reference_audio（上游：3 条参考音频 + 1 �
 check('③ 图片/视频的角色没被带歪',
   roleOf(omniItems, IMAGE_REF.url) === 'reference_image' && roleOf(omniItems, VIDEO_REF.url) === 'reference_video');
 
+// 音频角色由**课包锁**（用户 2026-09-21 口径：只要两档 —— 对口型 / 声音参考）。
+//   LIP_SYNC（对口型，默认）：第一条当驱动；VOICE_REFERENCE（声音参考）：全部只当音色、**一条驱动都不发**。
+const voiceRefItems = renderRequestTemplate({ content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'] }, {
+  ...baseContext, audioRole: 'VOICE_REFERENCE', referenceAssets: [IMAGE_REF, AUDIO_REF, AUDIO_REF_2],
+}).content.filter((item) => item.type !== 'text');
+check('④ 课包锁成「声音参考」→ 所有音频都发 reference_audio，一条 drive_audio 都没有',
+  roleOf(voiceRefItems, AUDIO_REF.url) === 'reference_audio' && roleOf(voiceRefItems, AUDIO_REF_2.url) === 'reference_audio'
+  && !JSON.stringify(voiceRefItems).includes('drive_audio'), JSON.stringify(voiceRefItems));
+check('⑤ 课包锁成「对口型」/留空/不认识的值 → 都按对口型（第一条驱动）—— 旧课包行为不变',
+  ['LIP_SYNC', '', undefined, 'WHATEVER'].every((value) => roleOf(renderRequestTemplate({ content: ['{{referenceItems}}'] }, {
+    ...baseContext, audioRole: value, referenceAssets: [AUDIO_REF],
+  }).content, AUDIO_REF.url) === 'drive_audio')
+  && normalizeAudioRole('') === 'LIP_SYNC' && normalizeAudioRole('voice_reference') === 'VOICE_REFERENCE' && normalizeAudioRole('garbage') === 'LIP_SYNC');
+check('⑥ 两个短标签就是老师/学生看到的那两个词（面板与后台共用同一处）',
+  audioRoleShortLabel('LIP_SYNC') === '对口型' && audioRoleShortLabel('VOICE_REFERENCE') === '声音参考');
+
 // 配置那一半：模板里钉 `audio_control: {mode: native}` 会把驱动音频**彻底中和**（native 不锁驱动音频，
 // 且 `add_drive_as_reference` 在 native 下默认 false）= 这条音频对产物一点作用都没有。
 // 这种组合必须**当场拒绝**（静默中和比报错糟得多），而不是照发一段与音频无关的视频。
@@ -322,6 +341,26 @@ try {
 check('【反向自检】模板里没有 audio_control（迁移后的生产配置）→ 音频参考照常放行',
   plainAudio !== null && !plainAudio.code && plainAudio.referenceAssets?.[0]?.url === AUDIO_REF.url,
   String(plainAudio?.code || '(被误拦了)'));
+// 反向：课包锁成「声音参考」时**不发 drive_audio** → 钉 native 不会中和任何东西，不许拦
+// （拦了就是把"只想借音色"的课整节挡住 —— 那是误伤，不是保护）
+let voiceRefPinned = null;
+try {
+  voiceRefPinned = generationOptionsFor({
+    context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' },
+    box: { audioRole: 'VOICE_REFERENCE' }, referenceAssets: [AUDIO_REF],
+  });
+} catch (error) { voiceRefPinned = error; }
+check('【反向自检】锁成「声音参考」时那条拦截不生效（不发驱动音频，native 没东西可中和）',
+  voiceRefPinned !== null && !voiceRefPinned.code && voiceRefPinned.audioRole === 'VOICE_REFERENCE',
+  String(voiceRefPinned?.code || JSON.stringify(voiceRefPinned || {}).slice(0, 120)));
+// 正面：锁成「对口型」时 options.audioRole 要真的带上（模板渲染靠它决定 role）
+let lipSyncOption = null;
+try {
+  lipSyncOption = generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] }, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: { audioRole: 'LIP_SYNC' }, referenceAssets: [AUDIO_REF] });
+} catch (error) { lipSyncOption = error; }
+check('① 对口型：options.audioRole 传到渲染层（默认/留空也算对口型）',
+  lipSyncOption?.audioRole === 'LIP_SYNC' && AUDIO_ROLES.includes('LIP_SYNC') && AUDIO_ROLES.includes('VOICE_REFERENCE'),
+  String(lipSyncOption?.audioRole || lipSyncOption?.code || '(没带上)'));
 
 assert.ok(true);
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');

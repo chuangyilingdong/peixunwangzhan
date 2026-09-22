@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
-import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
+import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
 import { previewKindFor, signPreviewTicket } from './services/materialPreview.js';
 
 const TOKEN_TTL_DAYS = 7;
@@ -731,6 +731,12 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
     const wantedMode = normalizeInputModeValue(raw.inputMode);
     box.inputMode = wantedMode && box.inputModes.includes(wantedMode) ? wantedMode : '';
     box.inputModeLabel = inputModeShortLabel(box.inputMode, modality);
+    // 「连过来的音频怎么用」——**也由课包锁**（用户 2026-09-21 口径：只要两档，驱动那档叫「对口型」）：
+    //   LIP_SYNC（默认）= 第一条音频当驱动（画面跟着它动，上游缺省还会把这段音频留在产物里）；
+    //   VOICE_REFERENCE = 只借音色，不驱动画面。
+    // 留空/不认识 → LIP_SYNC：旧课包没配过这个字段，行为与改造前一致（那时就是第一条当驱动）。
+    box.audioRole = normalizeAudioRole(raw.audioRole);
+    box.audioRoleLabel = audioRoleShortLabel(box.audioRole);
     // 锁定后"要不要画面"跟着锁定那种走：文生视频不给画面、图生/首尾帧必须给画面、全能参考给素材
     box.requiresFirstFrame = requiresFirstFrameFor(box.inputMode ? [box.inputMode] : box.inputModes);
     box.paramOptions = { ...(box.paramOptions || {}), durations: [...capabilities.durations], audio: capabilities.audio === true };

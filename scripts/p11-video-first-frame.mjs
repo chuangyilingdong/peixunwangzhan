@@ -178,9 +178,15 @@ try {
   check(!uploadRefs.includes('file_priv1'), `非公开素材不该被采用，实际 ${uploadRefs}`);
 
   // 5.11 视频/音频参考按各自类型展开（MiniMax V2 的 content 项）
+  // ⚠️ 音频角色**不再固定**：课包锁成「对口型」（默认）时第一条音频发 `drive_audio`（画面跟着它动、
+  //    上游缺省还会把这段音频留在产物里），锁成「声音参考」时才发 `reference_audio`（口径 81）。
+  //    两条都钉住；面板/后台那两档的读面在 p109 ⑦ 与 p122 ⑨。
   const typedBody = renderRequestTemplate({ model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'] }, { model: 'MiniMax-H3', prompt: '晨光', referenceAssets: [{ type: 'IMAGE', url: 'i1' }, { type: 'VIDEO', url: 'v1' }, { type: 'AUDIO', url: 'a1' }] });
   const roles = (typedBody.content || []).slice(1).map((item) => item.role);
-  check(roles.includes('reference_image') && roles.includes('reference_video') && roles.includes('reference_audio'), `三种参考角色都应展开，实际 ${JSON.stringify(roles)}`);
+  check(roles.includes('reference_image') && roles.includes('reference_video') && roles.includes('drive_audio'), `默认（对口型）时三种参考角色都应展开，实际 ${JSON.stringify(roles)}`);
+  const voiceBody = renderRequestTemplate({ model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'] }, { model: 'MiniMax-H3', prompt: '晨光', audioRole: 'VOICE_REFERENCE', referenceAssets: [{ type: 'IMAGE', url: 'i1' }, { type: 'AUDIO', url: 'a1' }] });
+  const voiceRoles = (voiceBody.content || []).slice(1).map((item) => item.role);
+  check(voiceRoles.includes('reference_audio') && !voiceRoles.includes('drive_audio'), `锁成「声音参考」时音频只发 reference_audio，实际 ${JSON.stringify(voiceRoles)}`);
 
   // 5.9 全能参考的请求体：content 里按角色展开参考图
   const refTemplate = { model: '{{model}}', content: [{ type: 'text', text: '{{prompt}}' }, '{{referenceItems}}'], duration: '{{durationSecondsNumber}}' };

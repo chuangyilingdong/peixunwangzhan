@@ -545,7 +545,9 @@ function referenceAssetLabels(assets) {
 }
 
 // 视频框体的「首帧 / 尾帧 / 参考素材」行：素材靠连线引进来（学生可从桌面拖文件进来再连线），未连时给明确提示
-function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame, lockedMode = '', lockedLabel = '' }) {
+// `lockedAudioRole`：课包锁的「音频怎么用」（LIP_SYNC 对口型 / VOICE_REFERENCE 声音参考），只影响这两处读面：
+// 行标上说明音频会怎么被用、以及"要念台词就把台词写进提示词"（上游不会替你转写音频）。
+function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame, lockedMode = '', lockedLabel = '', lockedAudioRole = 'LIP_SYNC' }) {
   const { updateNode, removeIncomingRef } = useCanvasActions();
   // 悬停右上角的 ×：连过来的删连线，框体自己的预置素材清配置
   const removePreset = () => updateNode(nodeId, { referenceUrl: '' });
@@ -559,6 +561,12 @@ function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, reference
   }
   if (omni) {
     const named = referenceAssetLabels(referenceAssets);
+    // 连了音频时，把「课包锁的音频用法」写在行标上（用户 2026-09-21 口径：音频也由课包锁）——
+    // 学生连上音频后最该知道的一件事就是"它到底会不会驱动画面/要不要念台词"。
+    const audioCount = named.filter((asset) => asset.type === 'AUDIO').length;
+    const audioHint = !audioCount ? null : (lockedAudioRole === 'VOICE_REFERENCE'
+      ? '音频只作声音参考（不驱动画面）'
+      : '音频＝对口型（画面跟着它动、并保留这段音频）');
     // 上限与上游一致（图片 9 / 视频 3 / 音频 3，服务端 `REFERENCE_LIMITS` 也是这套数）——
     // 原来只显示前 6 个：学生连满 9 张也只看得到 6 个缩略图，会以为后 3 张没连上。
     return <div className="learning-node__ref-row">
@@ -572,6 +580,8 @@ function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, reference
           onRemove={asset.nodeId ? () => removeIncomingRef(nodeId, asset.nodeId) : null}
         />)}{named.length > 9 ? <span className="learning-node__ref-empty">还有 {named.length - 9} 个没显示（最多 9 张图片 / 3 段视频 / 3 条音频）</span> : null}</div>
         : <span className="learning-node__ref-empty">未连接（图片/视频/音频连过来即可）</span>}
+      {/* 对口型 + 连了音频：上游**不会**替你把音频转成台词，台词得写在提示词里（H3 文档原文的写法）。 */}
+      {audioHint ? <span className="learning-node__ref-note">{audioHint}{lockedAudioRole === 'VOICE_REFERENCE' ? '' : '；要让角色念台词，台词要写在提示词里：口型跟随 <Audio 1>，说：<d>[中文] 你好呀。</d>'}</span> : null}
     </div>;
   }
   if (!supportsFirstFrame && !supportsLastFrame) return null;
@@ -894,6 +904,9 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
       : (!useFrames && omni && allRefs.length > 0);
     return {
       modes, supportsText, supportsFirstFrame, supportsLastFrame, omni, frameUrls, allRefs, useFrames, useOmni, lockedMode,
+      // 课包锁的「音频怎么用」（LIP_SYNC 对口型 / VOICE_REFERENCE 声音参考）：只影响面板读面
+      // —— 真正的 role（drive_audio / reference_audio）由服务端按同一份课包配置决定，客户端不参与。
+      audioRole: String(data.audioRole || 'LIP_SYNC').toUpperCase() === 'VOICE_REFERENCE' ? 'VOICE_REFERENCE' : 'LIP_SYNC',
       // 锁成文生视频：不该有线（面板要明说"这个框体只写提示词"，连线也被挡在 isValidConnection 里）
       textOnly: lockedMode === 'TEXT',
       sourceAssetUrl: useFrames ? (frameUrls[0] || String(data.referenceUrl || '')) : '',
@@ -1003,6 +1016,7 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
       supportsLastFrame={videoInputPlan.supportsLastFrame}
       lockedMode={videoInputPlan.lockedMode}
       lockedLabel={modeChip}
+      lockedAudioRole={videoInputPlan.audioRole}
     /> : null}
     {/* 生图框体：连过来的素材要**看得见**（缩略图，悬停出大图，右上角 × 断线）。
         ⚠️ 只在真有连线时才渲染这一行：以前它是无条件渲染的，多占 80px、面板一高就压住框体，

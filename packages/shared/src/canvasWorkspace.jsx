@@ -459,6 +459,9 @@ export function CanvasWorkspace({ api, ...props }) {
       durationSeconds: raw.durationSeconds, audio: raw.audio === true,
       // 本节课锁定的生成方式（'' = 不锁）—— 列表里没有该框体时要自己拼，别漏（漏了画布就按模型自由发挥）
       inputMode: String(raw.inputMode || '').toUpperCase(), inputModeLabel: raw.inputModeLabel || '',
+      // 课包锁的「音频怎么用」：漏了它会退回"对口型"（默认），与课包配的就不一致了
+      audioRole: String(raw.audioRole || 'LIP_SYNC').toUpperCase() === 'VOICE_REFERENCE' ? 'VOICE_REFERENCE' : 'LIP_SYNC',
+      audioRoleLabel: raw.audioRoleLabel || '',
       prompt: material.snapshot?.content || '', assetUrl: material.assetUrl || '',
     };
   }
@@ -519,6 +522,9 @@ export function CanvasWorkspace({ api, ...props }) {
           requiresFirstFrame: box.requiresFirstFrame === true,
           // 模型支持的输入画面方式（可多选）：文生 / 首帧 / 尾帧
           inputModes: Array.isArray(box.inputModes) ? box.inputModes : (box.requiresFirstFrame === true ? ['FIRST_FRAME'] : ['TEXT']),
+          // 课包锁的「音频怎么用」（用户 2026-09-21 口径：对口型 / 声音参考）——面板那行要照它写
+          audioRole: box.audioRole === 'VOICE_REFERENCE' ? 'VOICE_REFERENCE' : 'LIP_SYNC',
+          audioRoleLabel: box.audioRoleLabel || '',
         } : {}),
         ...(slotType === 'text' ? { generatedText: '' } : {}),
         // 音乐框体：歌词模式学生写词，描述模式学生写描述（歌词由平台代写）

@@ -38,6 +38,27 @@ export function inputModeShortLabel(mode, modality = 'VIDEO') {
   return INPUT_MODE_SHORT_LABELS[value] || '';
 }
 
+// 「连过来的音频怎么用」——**也由课包锁**（用户 2026-09-21 口径：只要两档，驱动那档叫「对口型」）。
+// 为什么必须锁而不是让学生/代码自己猜：上游把音频分两种角色，产物差别很大（口径 81）——
+//   · LIP_SYNC（对口型，**默认**）：第一条音频当 `drive_audio` 发给上游 = 画面跟着它动，
+//     上游缺省 `lock_source` 会把这段音频**原样留在产物音轨里**（跳舞跟拍、口型、节奏都靠它）；
+//   · VOICE_REFERENCE（声音参考）：所有音频当 `reference_audio` 发 = 只借音色/风格，**不驱动画面**，
+//     产物音轨是上游**重新生成**的（没有驱动音频时上游缺省 `native`）。
+// 留空/不认识 → 按 LIP_SYNC（旧课包没配过这个字段，行为与改造前一致：第一条音频当驱动）。
+export const AUDIO_ROLES = Object.freeze(['LIP_SYNC', 'VOICE_REFERENCE']);
+export const AUDIO_ROLE_LABELS = Object.freeze({
+  LIP_SYNC: '对口型（画面跟着音频动，并保留这段音频）',
+  VOICE_REFERENCE: '声音参考（只借音色，不驱动画面）',
+});
+export const AUDIO_ROLE_SHORT_LABELS = Object.freeze({ LIP_SYNC: '对口型', VOICE_REFERENCE: '声音参考' });
+export function normalizeAudioRole(value) {
+  const text = String(value ?? '').trim().toUpperCase();
+  return AUDIO_ROLES.includes(text) ? text : 'LIP_SYNC';
+}
+export function audioRoleShortLabel(role) {
+  return AUDIO_ROLE_SHORT_LABELS[normalizeAudioRole(role)] || '';
+}
+
 // 旧写法（含 2026-09-10 上线的三态版本）统一映射到新枚举。
 const INPUT_MODE_ALIASES = Object.freeze({
   NONE: 'TEXT',
@@ -350,6 +371,8 @@ function typedTemplateValue(key, context) {
     const limits = { IMAGE: 9, VIDEO: 3, AUDIO: 3 };
     const counts = { IMAGE: 0, VIDEO: 0, AUDIO: 0 };
     const items = [];
+    // 音频角色由**课包**定（口径 81 那条的落地）：对口型 = 第一条当驱动；声音参考 = 全部只当音色。
+    const audioRole = normalizeAudioRole(context.audioRole);
     for (const asset of assets) {
       const type = String(asset?.type || 'IMAGE').toUpperCase();
       const url = String(asset?.url || '').trim();
@@ -361,12 +384,11 @@ function typedTemplateValue(key, context) {
       //   · `reference_audio` = **声音参考**（音色风格），**不驱动画面**；
       //   · `drive_audio`     = **目标音频驱动**（画面跟着音频动；上游默认 `lock_source` 还会把这条音频
       //     留在产物音轨里）——上游 H3 专节：「`reference_audio` 提供声音参考；`drive_audio` 提供目标音频驱动」，
-      //     并写明 `drive_audio` 与 3 条参考音频**分开计数**（各算一条额度）。
-      //   学生把音频连到视频框体上，要的是"画面跟着这段音频"，所以**第一条音频当驱动发**，
-      //   其余（第 2、3 条）仍然当声音参考。实测：发 reference_audio 时产物音轨与源音频互相关 0.018
-      //   （等于没用上），发 drive_audio 才是同一条音频 —— 见 deploy/production/live-audio-drive-check.mjs。
+      //     并写明 `drive_audio` 与 3 条参考音频**分开计数**（各算一条额度，所以两种可以同时带）。
+      //   实测：发 reference_audio 时产物音轨与源音频互相关 0.018（等于没用上），发 drive_audio 才是
+      //   同一条音频（0.997）—— 见 deploy/production/live-audio-drive-check.mjs。
       //   ⚠️ 换上游/换模型时这条要跟着核：`drive_audio` 是这家上游的扩展角色，别家不一定认。
-      else items.push({ type: 'audio_url', audio_url: { url }, role: counts.AUDIO === 1 ? 'drive_audio' : 'reference_audio' });
+      else items.push({ type: 'audio_url', audio_url: { url }, role: audioRole === 'VOICE_REFERENCE' ? 'reference_audio' : (counts.AUDIO === 1 ? 'drive_audio' : 'reference_audio') });
     }
     return items;
   }

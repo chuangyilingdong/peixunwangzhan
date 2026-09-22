@@ -35,6 +35,13 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({ error: { message: 'content policy violation' } }));
     return;
   }
+  // 提交"不确定"：上游回 504 + `X-Task-Id`（文档：网关尝试提交但超时/5xx 时会带这个头 + Retry-After）。
+  // 这时**必须接着查那条任务**，不许当失败、更不许重发（重发会双扣）。
+  if (req.method === 'GET' && req.url === '/v1/videos/video-recovered') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'video-recovered', status: 'completed', metadata: { url: 'https://media.example/recovered.mp4' } }));
+    return;
+  }
   const prompt = body.messages?.find((item) => item.role === 'user')?.content || body.prompt || body.input || '';
   if (prompt === 'rate-limit') {
     res.writeHead(429, { 'content-type': 'application/json' });
@@ -73,6 +80,13 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.url === '/v1/videos') {
+    if (prompt === 'submit-uncertain') {
+      // 提交结果不确定：504 + 公共任务号（正文仍是错误 envelope，任务号只在响应头里）。
+      // ⚠️ 这个 writeHead 必须写在下面那个 202 之前（先写 202 再改 504 = ERR_HTTP_HEADERS_SENT）。
+      res.writeHead(504, { 'content-type': 'application/json', 'x-task-id': 'video-recovered', 'retry-after': '1' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'timeout_error', message: 'upstream timeout', http_code: '504' } }));
+      return;
+    }
     res.writeHead(202, { 'content-type': 'application/json' });
     res.end(JSON.stringify(prompt === 'flaky-poll' ? { id: 'video-flaky', status: 'processing' }
       : prompt === 'bad-poll' ? { id: 'video-rejected', status: 'processing' }
@@ -144,8 +158,16 @@ try {
     (error) => normalizeProviderError(error).code === PROVIDER_ERROR_CODES.SAFETY_REJECTED,
   );
   assert.equal(requests.filter((row) => row.url === '/v1/videos/video-rejected').length - rejectedBefore, 1, '内容安全被拒只许查一次，不许重试');
+
+  // 提交不确定（504 + X-Task-Id）：要**接着查那条任务**，不许判失败、更不许重发（重发=双扣）。
+  // 上游文档原文：「错误响应可带 `X-Task-Id` 和 `Retry-After: 5`……保存该响应头的公共任务 ID 并查询」。
+  const submitsBefore = requests.filter((row) => row.url === '/v1/videos' && row.method === 'POST').length;
+  const recovered = await flakyProvider.generate({ modality: 'VIDEO', prompt: 'submit-uncertain', title: '不确定' });
+  assert.equal(recovered.assets[0].assetUrl, 'https://media.example/recovered.mp4', '要用 X-Task-Id 查回产物');
+  assert.equal(requests.filter((row) => row.url === '/v1/videos' && row.method === 'POST').length - submitsBefore, 1, '只许提交一次（不许重发）');
+  assert.ok(requests.some((row) => row.url === '/v1/videos/video-recovered'), '要按 X-Task-Id 去查');
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }
 
-console.log(JSON.stringify({ name: 'p6-a01-openai-compatible-adapter', pass: true, checks: 26 }));
+console.log(JSON.stringify({ name: 'p6-a01-openai-compatible-adapter', pass: true, checks: 29 }));

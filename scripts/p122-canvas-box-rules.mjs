@@ -200,5 +200,32 @@ check('图片只有 文生图 + 图生图', () => {
   assert.match(admin, /const IMAGE_MODE_LABELS = \{ TEXT: '文生图[^}]*IMAGE_REFERENCE: '图生图/);
 });
 
+console.log('⑨ 课包锁「音频怎么用」（用户 2026-09-21 口径：只要两档 —— 对口型 / 声音参考）');
+check('后台下拉只有两档，且只对「能连音频」的框体显示（视频 + 全能参考/未锁）', () => {
+  const admin = read('apps/admin/src/components/CourseManagement.jsx');
+  assert.match(admin, /label="音频怎么用"/, '要有这一项');
+  assert.match(admin, /modality === 'VIDEO' && \(box\.inputMode === 'OMNI_REFERENCE' \|\| !box\.inputMode\)/, '只对能连音频的框体显示');
+  assert.match(admin, /value="LIP_SYNC">对口型/, '第一档叫对口型');
+  assert.match(admin, /value="VOICE_REFERENCE">声音参考/, '第二档叫声音参考');
+  assert.doesNotMatch(admin, /remix_source|reference_only/, '另外两档（重新配乐/只作参考）按口径不做');
+  assert.match(admin, /台词要写进提示词/, '对口型那档要提示"台词要写进提示词"（上游不会替你转写音频）');
+});
+check('保存链路把 audioRole 收进快照（后台白名单 + 服务端归一化，缺一处就等于没锁）', () => {
+  const helpers = read('apps/server/src/routes/admin/helpers.js');
+  assert.match(helpers, /box\.modality === 'VIDEO' && \(box\.audioRole === 'LIP_SYNC' \|\| box\.audioRole === 'VOICE_REFERENCE'\)\) boxSnapshot\.audioRole = box\.audioRole/);
+  const lib = read('apps/server/src/lib.js');
+  assert.match(lib, /box\.audioRole = normalizeAudioRole\(raw\.audioRole\)/, '读面要归一化（留空/不认识 → 对口型，旧课包行为不变）');
+  assert.match(lib, /box\.audioRoleLabel = audioRoleShortLabel\(box\.audioRole\)/, '标签由服务端算，客户端不抄一份');
+});
+check('画布读面：音频那行要标出用法 + 对口型时给"台词写进提示词"的写法', () => {
+  const canvas = read('packages/canvas/src/index.jsx');
+  assert.match(canvas, /音频＝对口型（画面跟着它动、并保留这段音频）/, '对口型要写在行标上');
+  assert.match(canvas, /音频只作声音参考（不驱动画面）/, '声音参考也要写出来');
+  assert.match(canvas, /口型跟随 <Audio 1>，说：<d>\[中文\] 你好呀。<\/d>/, '台词那句要给出上游文档的写法');
+  assert.match(canvas, /lockedAudioRole=\{videoInputPlan\.audioRole\}/, '角色要传进那一行');
+  const workspace = read('packages/shared/src/canvasWorkspace.jsx');
+  assert.match(workspace, /audioRole: box\.audioRole === 'VOICE_REFERENCE' \? 'VOICE_REFERENCE' : 'LIP_SYNC'/, '节点数据要带上（漏了面板就永远显示对口型）');
+});
+
 if (failures) { console.log(`\n❌ P122 不通过：${failures} 项`); process.exit(1); }
 console.log('\nP122 PASSED：框体删除规则与未生成占位图都成立');
