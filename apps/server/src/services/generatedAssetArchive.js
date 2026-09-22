@@ -47,6 +47,18 @@ function normalizeMime(value) {
 }
 
 /**
+ * 上游给的是不是 **QuickTime 容器**（品牌 `ftypqt`）。
+ *
+ * 为什么要单独判：字节嗅探只看得到 `ftyp` 四个字节，会把 `.mov` 判成 `video/mp4` ——
+ * 而浏览器**播不了** qt 品牌（2026-09-21 那次 `.mov` 事故，唯一的修法是 `ffmpeg -c copy` 转 mp4）。
+ * 存成一份"看着是 mp4、其实播不动"的东西，比留一个会过期的外链更糟：它看起来是好的。
+ */
+function isQuickTimeContainer(buffer) {
+  return buffer.length >= 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp'
+    && buffer.subarray(8, 12).toString('ascii').startsWith('qt');
+}
+
+/**
  * 把生成出来的字节存成学生私有素材。
  * @returns {Promise<{ok: true, url: string, mimeType: string, bytes: number}|{ok: false, reason: string}>}
  */
@@ -83,6 +95,7 @@ export async function archiveOneGeneratedAsset({ assetUrl, modality, jobId, owne
     if (ARCHIVABLE_MIME_EXTENSION[sniffed]) mimeType = sniffed;
   }
   if (!mimeType) return { ok: false, reason: `产物类型不在落盘白名单里（上游给的是 ${declaredMime || '未知'}）` };
+  if (mimeType === 'video/mp4' && isQuickTimeContainer(buffer)) return { ok: false, reason: '上游给的是 QuickTime 容器（浏览器播不了，要转 mp4 才行）' };
 
   try {
     const stored = await storeGeneratedAsset({

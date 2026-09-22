@@ -72,7 +72,6 @@ if (!apply) {
 
 let done = 0;
 let failed = 0;
-const replacements = [];   // 上游地址 → 我们自己的地址（后面用来改快照）
 
 for (const row of targets) {
   const source = String(row.asset_url || row.preview_url);
@@ -91,13 +90,23 @@ for (const row of targets) {
   const metadata = JSON.parse(row.metadata || '{}');
   db.prepare('UPDATE media_assets SET asset_url=?, preview_url=CASE WHEN preview_url=? THEN ? ELSE preview_url END, mime_type=COALESCE(mime_type,?), metadata=? WHERE id=?')
     .run(result.url, source, result.url, result.mimeType, JSON.stringify({ ...metadata, archive: { mirrored: true, sourceUrl: source, mimeType: result.mimeType, bytes: result.bytes, backfilledAt: new Date().toISOString() } }), row.id);
-  replacements.push([source, result.url]);
   done += 1;
   console.log(`  ✓ ${row.id} → ${result.url}（${(result.bytes / 1024).toFixed(0)}KB）`);
 }
 
+console.log(`\n落盘 ${done} 条、跳过 ${failed} 条。开始改快照…`);
+
 // ②③ 快照：字符串替换（快照里存的就是那个上游地址）。
+// ⚠️ 替换表**从库里推**，不是用本次跑出来的那份内存清单 —— 这个脚本逐条下载、慢，
+//    中途被杀（实测被 580 秒的 timeout 掐过一次）时库已经改了、而快照还没改，
+//    下次重跑如果只看"这次成功了几条"，那批就永远漏了。从 metadata.archive.sourceUrl 推就天然可续跑。
 // ⚠️ 只替换**确实归档成功**的那些地址：没归档成功的留着，它至少还有可能活着，换成一个不存在的地址更糟。
+const replacements = db.prepare("SELECT asset_url, metadata FROM media_assets WHERE metadata LIKE '%\"mirrored\":true%'").all()
+  .map((row) => {
+    try { return [String(JSON.parse(row.metadata || '{}')?.archive?.sourceUrl || ''), String(row.asset_url || '')]; } catch { return ['', '']; }
+  })
+  .filter(([from, to]) => from && to && from !== to);
+
 function rewriteSnapshot(table, idColumn) {
   let touched = 0;
   for (const record of db.prepare(`SELECT id, ${idColumn} AS snapshot FROM ${table} WHERE ${idColumn} LIKE '%http%'`).all()) {
@@ -115,6 +124,19 @@ function rewriteSnapshot(table, idColumn) {
 const projectsTouched = rewriteSnapshot('student_projects', 'canvas_snapshot');
 const worksTouched = rewriteSnapshot('works', 'canvas_snapshot');
 
-console.log(`\n结果：归档成功 ${done} 条、失败 ${failed} 条`);
+console.log(`\n结果：本次落盘 ${done} 条、跳过 ${failed} 条`);
 console.log(`快照改写：student_projects ${projectsTouched} 行、works ${worksTouched} 行`);
-console.log('复查：SELECT COUNT(*) FROM media_assets WHERE asset_url LIKE \'http%\' —— 剩下的应该都是归档失败的那几条。');
+
+// 自己复查一遍（别只印一句"请自行 SELECT"）：剩下还挂着外链的应该**只有**归档失败的那几条，
+// 而快照里不该再出现任何我们**已经归档成功过**的地址（出现了就说明替换漏了，那正是最难发现的那种半成品状态）。
+const stillExternal = db.prepare("SELECT COUNT(*) c FROM media_assets WHERE asset_url LIKE 'http%'").get().c;
+const mirrored = db.prepare("SELECT COUNT(*) c FROM media_assets WHERE metadata LIKE '%\"mirrored\":true%'").get().c;
+const staleSnapshots = replacements.reduce((total, [from]) => total
+  + db.prepare('SELECT COUNT(*) c FROM student_projects WHERE canvas_snapshot LIKE ?').get(`%${from}%`).c
+  + db.prepare('SELECT COUNT(*) c FROM works WHERE canvas_snapshot LIKE ?').get(`%${from}%`).c, 0);
+console.log(`复查：已归档 ${mirrored} 条；仍挂外链 ${stillExternal} 条（应为归档失败的条数）；`);
+console.log(`      快照里残留的**已归档**地址 ${staleSnapshots} 处（应为 0 —— 非 0 说明替换漏了）。`);
+if (staleSnapshots) {
+  console.log('⚠️ 快照没改干净：再看一眼上面的替换表与那几张表的 id 是否对得上。');
+  process.exitCode = 1;
+}

@@ -8,9 +8,26 @@
 //   · `assets`：这次创作产出的 `media_assets`（`{ modality, url, previewUrl, text, label }`）。
 // 地址解析交给调用方的 `resolveSrc`（受鉴权的站内素材要转 data: 才能显示，见共享 api 的 fetchDataUrl）；
 // 没给解析器就用原地址（上游图床的 https 外链本来就能直接显示）。
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 const MODALITY_LABELS = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频', MUSIC: '音乐', TEXT: '文字' };
+
+/**
+ * 媒体本体：**加载失败时说一句人话**。
+ *
+ * 为什么要有它（用户 2026-09-22 报的坏图）：作品里挂的媒体有些是上游的**临时地址**，
+ * 过期后返回 403 —— 浏览器的默认表现是一个破图图标，学生/老师看不出那是什么、也不知道该怎么办。
+ * ⚠️ 这只是把现象说清楚；**真正不让它发生**的是生成时把产物归档到本机
+ * （`services/generatedAssetArchive.js`），存量由 `deploy/production/backfill-generated-media.mjs` 收。
+ */
+function MediaContent({ modality, src, caption }) {
+  const [failed, setFailed] = useState(false);
+  const label = MODALITY_LABELS[modality] || '这份素材';
+  if (!src || failed) return <div className="work-media__missing">{label}已失效，读不出来了</div>;
+  if (modality === 'IMAGE') return <img src={src} alt={caption || '作品图片'} loading="lazy" onError={() => setFailed(true)} />;
+  if (modality === 'VIDEO') return <video src={src} controls playsInline preload="metadata" onError={() => setFailed(true)} />;
+  return <audio src={src} controls preload="metadata" onError={() => setFailed(true)} />;
+}
 
 function normalizeItems(media = [], assets = []) {
   const list = [];
@@ -51,18 +68,18 @@ export function WorkMediaGallery({ media = [], assets = [], resolveSrc = null, e
       }
       if (item.modality === 'VIDEO') {
         return <figure className="work-media__item is-video" key={key}>
-          {src ? <video src={src} controls playsInline preload="metadata" /> : <div className="work-media__missing">视频暂时读不出来</div>}
+          <MediaContent modality="VIDEO" src={src} caption={caption} />
           {caption ? <figcaption>{caption}</figcaption> : null}
         </figure>;
       }
       if (item.modality === 'AUDIO' || item.modality === 'MUSIC') {
         return <figure className="work-media__item is-audio" key={key}>
-          {src ? <audio src={src} controls preload="metadata" /> : <div className="work-media__missing">音频暂时读不出来</div>}
+          <MediaContent modality={item.modality} src={src} caption={caption} />
           <figcaption>{caption || MODALITY_LABELS[item.modality]}</figcaption>
         </figure>;
       }
       return <figure className="work-media__item is-image" key={key}>
-        {src ? <img src={src} alt={caption || '作品图片'} loading="lazy" /> : <div className="work-media__missing">图片暂时读不出来</div>}
+        <MediaContent modality="IMAGE" src={src} caption={caption} />
         {caption ? <figcaption>{caption}</figcaption> : null}
       </figure>;
     })}

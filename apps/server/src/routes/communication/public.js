@@ -184,14 +184,14 @@ export function handlePublicCommunication(ctx) {
   // （`/api/public/vibecoding-works/<token>/images/<fileId>`）**同一套判据**。
   // ⚠️ 这里的准入条件必须与上面那条详情路由**逐字相同**（`share_token=? AND is_public=1`）：
   //    宽一格就是"看得到作品页、图却 403"，窄一格就是"图能取、作品页说没有"。
-  const publicWorkImageMatch = pathname.match(/^\/api\/public\/works\/([\w-]+)\/images\/([\w-]+)$/);
-  if (publicWorkImageMatch && method === 'GET') {
-    const work = row('SELECT id, canvas_snapshot FROM works WHERE share_token=? AND is_public=1', [publicWorkImageMatch[1]]);
+  const publicCanvasWorkImageMatch = pathname.match(/^\/api\/public\/works\/([\w-]+)\/images\/([\w-]+)$/);
+  if (publicCanvasWorkImageMatch && method === 'GET') {
+    const work = row('SELECT id, canvas_snapshot FROM works WHERE share_token=? AND is_public=1', [publicCanvasWorkImageMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
     const allowed = new Set(canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
       .map((item) => item.fileId).filter(Boolean));
-    if (!allowed.has(publicWorkImageMatch[2])) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
-    const file = row('SELECT * FROM file_assets WHERE id=?', [publicWorkImageMatch[2]]);
+    if (!allowed.has(publicCanvasWorkImageMatch[2])) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
+    const file = row('SELECT * FROM file_assets WHERE id=?', [publicCanvasWorkImageMatch[2]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (!/^(image|audio|video)\//.test(String(file.mime_type || ''))) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
