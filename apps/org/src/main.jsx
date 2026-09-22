@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession, WorkMediaGallery } from '@platform/shared';
+import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession, WorkMediaGallery, errorText } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
 import { Classrooms } from './pages/Classrooms.jsx';
 import { TeachingAssetViewer } from './components/TeachingAssetViewer.jsx';
 import { ClassroomWork } from './pages/classroom/ClassroomWork.jsx';
+import { Modal } from './pages/classroom/ui.jsx';
 import '@platform/shared/styles.css';
 import './theme.css';
 
@@ -219,6 +220,8 @@ function Members({ api, user }) {
   const [roleFilter, setRoleFilter] = useState('');
   const [search, setSearch] = useState('');
   const [form, setForm] = useState({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' });
+  // 「创建账号」是个**按钮 + 弹窗**（用户 2026-09-21 口径）：表单不再常驻占着半屏。
+  const [createOpen, setCreateOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState(null);
   const [editing, setEditing] = useState('');
@@ -243,8 +246,13 @@ function Members({ api, user }) {
   }
   async function create(event) {
     event.preventDefault(); setBusy(true); setMessage('');
-    try { await api.post('org/users', form); setForm({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' }); setMessage('账号已创建'); await members.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    try {
+      await api.post('org/users', form);
+      setForm({ role: 'STUDENT', login: '', displayName: '', password: '', phone: '' });
+      setCreateOpen(false);
+      setMessage(`账号已创建：${form.displayName}（登录账号 ${form.login}）`);
+      await members.refresh();
+    } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
   function startEdit(item) {
     setEditing(item.id); setEditDraft({ id: item.id, displayName: item.displayName, phone: item.phone || '', status: item.status, permissions: item.permissions || [] });
@@ -252,51 +260,61 @@ function Members({ api, user }) {
   async function saveEdit(event) {
     event.preventDefault(); setBusy(true); setMessage('');
     try { await api.put(`org/users/${editDraft.id}`, editDraft); setEditing(''); setEditDraft(null); setMessage('成员信息已保存'); await members.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
   async function setStatus(item, status) {
     setBusy(true); setMessage('');
     try { await api.put(`org/users/${item.id}`, { status }); setMessage(status === 'ACTIVE' ? '账号已启用' : '账号已停用，已有会话已失效'); await members.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
   async function resetPassword(item) {
     const password = window.prompt(`为 ${item.displayName} 设置新密码（至少 6 位）`);
     if (password === null) return;
     setBusy(true); setMessage('');
     try { await api.put(`org/users/${item.id}/password`, { password }); setMessage('密码已重置，原有登录会话已失效'); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
   async function previewImport() {
     setBusy(true); setMessage('');
     try { const preview = await api.post('org/users/import/preview', { items: parseImport() }); setImportPreview(preview); setMessage(`预览完成：${preview.validCount} 条可导入，${preview.invalidCount} 条失败`); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
   async function commitImport() {
     setBusy(true); setMessage('');
     try { const result = await api.post('org/users/import/commit', { items: parseImport() }); setImportPreview(null); setImportText(''); setMessage(`批量导入完成：${result.total} 个账号已创建`); await members.refresh(); }
-    catch (error) { setMessage(error.message + (error.details?.items ? `（${error.details.invalidCount} 条失败，已全部回滚）` : '')); } finally { setBusy(false); }
+    catch (error) { const rollback = error.details?.items ? `（${error.details.invalidCount} 条失败，已全部回滚）` : ''; setMessage(errorText(String(error.message || error) + rollback)); } finally { setBusy(false); }
   }
   const visibleItems = items.filter((item) => (!roleFilter || item.role === roleFilter) && (!search.trim() || [item.login, item.displayName, item.phone].some((value) => String(value || '').toLowerCase().includes(search.trim().toLowerCase()))));
   if (members.loading) return <Loading />;
   if (members.error) return <ErrorState error={members.error} onRetry={members.refresh} />;
 
   return <>
-    <PageHeader eyebrow="机构成员" title="教师与学生" description={isAdmin ? '创建、编辑、停用账号。带哪个班、上哪节课改在「课堂」页里安排。' : '仅展示当前权限范围内的机构成员；成员写操作需要机构管理员权限。'} actions={<button className="secondary-button" onClick={members.refresh}>刷新</button>} />
+    <PageHeader
+      eyebrow="机构成员"
+      title="教师与学生"
+      description={isAdmin ? '创建、编辑、停用账号。带哪个班、上哪节课改在「课堂」页里安排。' : '仅展示当前权限范围内的机构成员；成员写操作需要机构管理员权限。'}
+      actions={<div className="row-actions">{isAdmin ? <button className="primary-button" onClick={() => { setMessage(''); setCreateOpen(true); }}>创建账号</button> : null}<button className="secondary-button" onClick={members.refresh}>刷新</button></div>}
+    />
     {/* B3（2026-09-13）：机构端有三套容易混的东西，这里把边界一次说清（界面上的「我该去哪」） */}
     <p className="muted">这里管的是<strong>账号本身</strong>（角色、启停）。学员的<strong>席位与有效期</strong>在「学员开通」，<strong>课包分给谁</strong>在「学员许可」。学员看不到课包时，先确认后两处。</p>
-    {message && <Notice tone={message.includes('失败') || message.includes('错误') || message.includes('无权') ? 'danger' : 'success'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
+    {/* 「创建账号」= 按钮 + 弹窗（用户 2026-09-21 口径）。字段顺序也按用户口径：
+        角色 → **姓名**（按角色叫「学生姓名 / 老师姓名」）→ **登录账号** → **登录密码**（两者挨着）→ 手机号。 */}
+    {isAdmin && createOpen ? <Modal
+      title="创建账号"
+      description="填好点下面的「创建账号」即可；创建后把登录账号与登录密码交给本人。"
+      onClose={() => setCreateOpen(false)}
+      footer={<div className="row-actions"><button className="primary-button" disabled={busy} onClick={create}>{busy ? '创建中…' : '创建账号'}</button><button className="secondary-button" type="button" onClick={() => setCreateOpen(false)}>取消</button></div>}
+    >
+      <form onSubmit={create}>
+        <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="STUDENT">学生</option><option value="TEACHER">老师</option></select></label>
+        <label>{form.role === 'TEACHER' ? '老师姓名' : '学生姓名'}<input value={form.displayName} required onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
+        <label>登录账号<input value={form.login} required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(event) => setForm({ ...form, login: event.target.value })} /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。姓名在同一批人里也不能重名。</small></label>
+        <label>登录密码<input type="password" minLength="6" value={form.password} required onChange={(event) => setForm({ ...form, password: event.target.value })} /><small className="muted">至少 6 位；把登录账号与这个密码一起交给本人。</small></label>
+        <label>手机号（可选）<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
+      </form>
+    </Modal> : null}
     {isAdmin && <div className="split">
-      <Panel title="新建账号">
-        <form onSubmit={create}>
-          <label>角色<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="STUDENT">学生</option><option value="TEACHER">教师</option></select></label>
-          <label>登录名<input value={form.login} required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxLength={50} title="只能用英文和数字（可带 . _ -）" onChange={(event) => setForm({ ...form, login: event.target.value })} /><small className="muted">只能用英文和数字（可带 . _ -）；全平台不能重复。姓名在同一批人里也不能重名。</small></label>
-          <label>姓名<input value={form.displayName} required onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
-          <label>初始密码<input type="password" minLength="6" value={form.password} required onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
-          <label>手机号（可选）<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
-          
-          <button className="primary-button" disabled={busy}>创建账号</button>
-        </form>
-      </Panel>
       <Panel title="批量导入">
         <textarea value={importText} rows="7" placeholder={'login,displayName,role,password,phone\nstudent-02,小明,STUDENT,student123,13800000001'} onChange={(event) => setImportText(event.target.value)} />
         <div className="row-actions"><button className="secondary-button" type="button" disabled={busy} onClick={previewImport}>预览导入</button>{importPreview?.invalidCount === 0 && <button className="primary-button" type="button" disabled={busy} onClick={commitImport}>确认整批导入</button>}</div>
@@ -362,7 +380,7 @@ function Works({ api }) {
       await api.put(`org/work-reports/${reportAction.id}`, reportForm);
       setMessage(`举报《${reportAction.workTitle}》已处理。`);
       setReportAction(null); setReportForm({ status: 'RESOLVED', actionTaken: 'NONE', resolution: '' }); reports.refresh(); refresh();
-    } catch (err) { setMessage(err.message); } finally { setReportBusy(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setReportBusy(false); }
   }
 
   async function handleFeature() {
@@ -372,7 +390,7 @@ function Works({ api }) {
       await api.put(`org/works/${featureAction.id}/feature`, featureForm);
       setMessage(featureForm.featured ? `《${featureAction.title}》已设为机构精选。` : `《${featureAction.title}》已取消机构精选。`);
       setFeatureAction(null); setFeatureForm({ featured: true, reason: '' }); refresh();
-    } catch (err) { setMessage(err.message); } finally { setFeatureBusy(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setFeatureBusy(false); }
   }
 
 
@@ -381,7 +399,7 @@ function Works({ api }) {
   if (error) return <ErrorState error={error} onRetry={refresh} />;
   return <>
     <PageHeader eyebrow="学习成果" title="作品管理" description="查看学生提交的作业、处理举报，并把优秀作品标为机构精选。作品是否上作品广场由平台决定。" />
-    {message && <Notice tone={message.includes('已') || message.includes('发送') ? 'success' : 'danger'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
     <Panel title="作品列表" actions={<button className="secondary-button" onClick={() => { refresh(); reports.refresh(); }}>刷新</button>}><div className="form-grid"><label>关键词<input value={filters.search} placeholder="作品、学生或课时" onChange={(event) => setFilters({ ...filters, search: event.target.value })} /></label><label>状态<select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}><option value="">全部状态</option><option value="PENDING">已提交</option><option value="APPROVED">已通过</option><option value="PUBLISHED">已发布到作品广场</option><option value="REJECTED">未通过</option><option value="UNPUBLISHED">已下架</option></select></label></div>
       {data.items.length ? <div className="table-wrap"><table><thead><tr><th>作品</th><th>学生</th><th>提交时间</th><th>状态与授权</th><th>举报</th><th>操作</th></tr></thead><tbody>{data.items.map((item) => <tr key={item.id}><td><strong>{item.title}</strong><div className="muted">{item.source === 'VIBECODING' ? `VibeCoding 产物${item.entryFile ? '（' + item.entryFile + '）' : ''}` : '画布作品'} · {item.description || '暂无说明'} · {item.seriesTitle || '—'} / {item.courseLessonTitle || '—'}{item.sessionTitle ? ' · 课堂：' + item.sessionTitle : ''}</div></td><td>{item.studentName}</td><td>{formatDate(item.submittedAt)}</td><td><Status value={item.status} /><div className="muted">{item.copyrightConfirmedAt ? '已确认机构内展示授权' : '未确认展示授权'}</div></td><td>{item.pendingReportCount ? <span className="status danger">待处理 {item.pendingReportCount}</span> : '—'}</td><td><div className="row-actions"><button className="text-button" onClick={() => openWork(item)}>查看作品</button>{item.status === 'PUBLISHED' && <button className="text-button" onClick={() => { setFeatureAction(item); setFeatureForm({ featured: !item.featured, reason: item.featuredReason || '' }); }}>{item.featured ? '取消精选' : '设为精选'}</button>}</div></td></tr>)}</tbody></table></div> : <Empty title="尚未收到作品" />}
     </Panel>
@@ -424,17 +442,17 @@ function HelpFeedbackPage({ api }) {
   async function openDetail(item) {
     setSelected(item); setDetail(null); setMessage('');
     try { setDetail(await api.get(`org/help-feedback/${item.id}`)); setForm({ status: item.status === 'SUBMITTED' ? 'IN_PROGRESS' : 'RESOLVED', resolution: item.resolution || '' }); }
-    catch (err) { setMessage(err.message); }
+    catch (err) { setMessage(errorText(err)); }
   }
   async function handleFeedback() {
     if (!selected) return; setBusy(true); setMessage('');
     try { await api.put(`org/help-feedback/${selected.id}`, form); setMessage('反馈处理结果已保存。'); setSelected(null); setDetail(null); refresh(); }
-    catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   return <>
     <PageHeader eyebrow="学生服务" title="问题反馈处理" description="跟进学生在帮助中心提交的问题反馈，形成可追踪的处理记录。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
     <div className="metrics"><MetricCard label="待处理" value={data?.submitted ?? 0} hint="学生已提交，等待机构响应" tone="orange" /><MetricCard label="处理中" value={data?.inProgress ?? 0} hint="已有管理员跟进" /><MetricCard label="已解决 / 关闭" value={data?.resolved ?? 0} hint="含已关闭反馈" tone="teal" /></div>
-    {message ? <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice> : null}
+    {message ? <Notice tone="success">{message}</Notice> : null}
     <Panel title="筛选">
       <div className="form-grid">
         <label>状态<select value={status} onChange={(event) => updateFilter('status', event.target.value)}><option value="">全部状态</option>{Object.entries(HELP_FEEDBACK_STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -578,12 +596,12 @@ function EnrollmentPage({ api, user }) {
   async function createEnrollment(event) {
     event.preventDefault(); setBusy(true); setMessage('');
     try { await api.post('org/billing/enrollments', form); setForm({ studentId: '', packageId: '', paymentStatus: 'UNRECORDED', notes: '' }); setMessage('已创建待开通单，请按线下履约情况登记并完成开通。'); await refresh(); }
-    catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   async function act(item, action, payload = {}) {
     setBusy(true); setMessage('');
     try { await api.post(`org/billing/enrollments/${item.id}/${action}`, payload); setMessage(action === 'payment-record' ? '已登记线下收款状态。' : '开通单状态已更新。'); await refresh(); }
-    catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   if (!isAdmin) return <><PageHeader eyebrow="学员经营" title="学员开通" description="学员套餐、席位与线下履约由机构管理员统一管理。" /><Notice tone="info">当前账号为教师，没有学员套餐开通与席位管理权限。</Notice></>;
   if (loading) return <Loading />;
@@ -591,7 +609,7 @@ function EnrollmentPage({ api, user }) {
   const summary = enrollmentData.summary || {};
   return <>
     <PageHeader eyebrow="学员经营" title="学员开通" description="登记线下履约、分配套餐席位并管理生效、停用、续费和到期提醒。" actions={<button className="secondary-button" onClick={refresh}>刷新</button>} />
-    {message ? <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice> : null}
+    {message ? <Notice tone="success">{message}</Notice> : null}
     <div className="metrics"><MetricCard label="待开通" value={summary.pending || 0} hint="尚未生效，不占席位" /><MetricCard label="生效中" value={summary.active || 0} hint="正在占用套餐席位" tone="teal" /><MetricCard label="已停用" value={summary.suspended || 0} hint="可恢复或续费" tone="orange" /><MetricCard label="30 日内到期" value={summary.expiringSoon || 0} hint="请及时安排续费" tone="pink" /></div>
     <div className="split">
       <Panel title="新建学员开通单"><form onSubmit={createEnrollment}>
@@ -639,30 +657,30 @@ function OrgInbox({ api, user }) {
   const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
   async function send(event) {
     event.preventDefault(); setSaving(true); setMessage('');
-    try { await api.post('org/inbox', form); setForm({ title: '', body: '', roles: ['TEACHER', 'STUDENT'], pinned: false }); setMessage('机构通知已发送。'); inbox.refresh(); } catch (err) { setMessage(err.message); } finally { setSaving(false); }
+    try { await api.post('org/inbox', form); setForm({ title: '', body: '', roles: ['TEACHER', 'STUDENT'], pinned: false }); setMessage('机构通知已发送。'); inbox.refresh(); } catch (err) { setMessage(errorText(err)); } finally { setSaving(false); }
   }
-  async function read(item) { try { await api.put(`org/inbox/${item.id}/read`, {}); inbox.refresh(); } catch (err) { setMessage(err.message); } }
+  async function read(item) { try { await api.put(`org/inbox/${item.id}/read`, {}); inbox.refresh(); } catch (err) { setMessage(errorText(err)); } }
   function toggleRole(role) { setForm((old) => ({ ...old, roles: old.roles.includes(role) ? old.roles.filter((item) => item !== role) : [...old.roles, role] })); }
   const isAdmin = user?.role === 'ORG_ADMIN';
   return <>
-    <PageHeader eyebrow="机构运营" title="站内信" description="接收平台公告与机构内部通知，已读状态由服务端记录。" actions={<div className="row-actions"><button className="secondary-button" onClick={() => api.put('org/inbox/read-all', {}).then(inbox.refresh).catch((err) => setMessage(err.message))}>全部标记已读</button><button className="secondary-button" onClick={inbox.refresh}>刷新</button></div>} />
+    <PageHeader eyebrow="机构运营" title="站内信" description="接收平台公告与机构内部通知，已读状态由服务端记录。" actions={<div className="row-actions"><button className="secondary-button" onClick={() => api.put('org/inbox/read-all', {}).then(inbox.refresh).catch((err) => setMessage(errorText(err)))}>全部标记已读</button><button className="secondary-button" onClick={inbox.refresh}>刷新</button></div>} />
     <div className="metrics"><MetricCard label="收件总数" value={inbox.data?.total || 0} hint="当前账号可见" /><MetricCard label="未读消息" value={inbox.data?.unread || 0} hint="需要关注的通知" tone="orange" /></div>
-    {isAdmin ? <Panel title="发送机构通知"><form onSubmit={send}><div className="form-grid"><label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>接收角色<div className="row-actions top-gap">{[['TEACHER', '教师'], ['STUDENT', '学员']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div></label></div><label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>{message ? <Notice tone={message.includes('失败') || message.includes('不能为空') ? 'danger' : 'success'}>{message}</Notice> : null}<button className="primary-button" disabled={saving}>{saving ? '发送中…' : '发送通知'}</button></form></Panel> : <Notice tone="info">授课教师可以查看和标记消息；机构内部通知由机构管理员发送。</Notice>}
+    {isAdmin ? <Panel title="发送机构通知"><form onSubmit={send}><div className="form-grid"><label>标题<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></label><label>接收角色<div className="row-actions top-gap">{[['TEACHER', '教师'], ['STUDENT', '学员']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div></label></div><label>内容<textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} required /></label>{message ? <Notice tone="success">{message}</Notice> : null}<button className="primary-button" disabled={saving}>{saving ? '发送中…' : '发送通知'}</button></form></Panel> : <Notice tone="info">授课教师可以查看和标记消息；机构内部通知由机构管理员发送。</Notice>}
     <Panel title="消息列表">{inbox.loading ? <Loading /> : inbox.error ? <ErrorState error={inbox.error} onRetry={inbox.refresh} /> : inbox.data.items.length ? <div className="card-list">{inbox.data.items.map((item) => <article className="item-card" key={item.id} style={{ borderColor: item.readAt ? undefined : '#c8baf7', background: item.readAt ? '#fff' : '#faf8ff' }}><div className="row-actions"><Status value={item.kind} /><strong>{item.pinned ? '📌 ' : ''}{item.title}</strong><span className="muted">{formatDate(item.publishAt || item.createdAt)}</span>{!item.readAt ? <button className="text-button" onClick={() => read(item)}>标记已读</button> : <span className="muted">已读</span>}</div><p>{item.body}</p>{item.senderName ? <small className="muted">发送人：{item.senderName}</small> : null}{item.targetUrl ? <div className="top-gap"><span className="muted">跳转：{item.targetUrl}</span></div> : null}</article>)}</div> : <Empty title="暂无站内信" body="平台公告或机构通知送达后会显示在这里。" />}</Panel>
   </>;
 }
 
 function OrgFileUpload({ api, onDone }) {
   const [file, setFile] = useState(null); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
-  async function submit(event) { event.preventDefault(); if (!file) return setMessage('请选择文件'); setBusy(true); setMessage(''); try { await api.upload('org/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'ORG' }); setMessage('文件上传成功'); setFile(null); onDone?.(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
+  async function submit(event) { event.preventDefault(); if (!file) return setMessage('请选择文件'); setBusy(true); setMessage(''); try { await api.upload('org/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'ORG' }); setMessage('文件上传成功'); setFile(null); onDone?.(); } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); } }
   return <Panel title="机构文件上传"><form onSubmit={submit} className="form-grid"><label className="inline-file-upload">{file ? '重新选择文件' : '选择教学或宣传文件'}<input type="file" onChange={(event) => { const picked = event.target.files?.[0] || null; event.target.value = ''; setFile(picked); }} disabled={busy} /></label><div className="row-actions"><button className="primary-button" disabled={busy || !file}>{busy ? '上传中…' : '上传文件'}</button>{message ? <span className="muted">{message}</span> : null}</div></form></Panel>;
 }
 
 function OrgMaterials({ api, user }) {
   const materials = useData(() => api.get('org/materials'), [api]);
   const [message, setMessage] = useState('');
-  async function useMaterial(item) { try { await api.post(`org/materials/${item.id}/events`, { eventType: 'USE' }); setMessage(`已记录使用：${item.title}`); materials.refresh(); } catch (err) { setMessage(err.message); } }
-  async function openMaterial(item) { try { const result = await api.post(`org/materials/${item.id}/events`, { eventType: 'DOWNLOAD' }); if (result.resourceUrl) window.open(result.resourceUrl, '_blank', 'noopener,noreferrer'); } catch (err) { setMessage(err.message); } }
+  async function useMaterial(item) { try { await api.post(`org/materials/${item.id}/events`, { eventType: 'USE' }); setMessage(`已记录使用：${item.title}`); materials.refresh(); } catch (err) { setMessage(errorText(err)); } }
+  async function openMaterial(item) { try { const result = await api.post(`org/materials/${item.id}/events`, { eventType: 'DOWNLOAD' }); if (result.resourceUrl) window.open(result.resourceUrl, '_blank', 'noopener,noreferrer'); } catch (err) { setMessage(errorText(err)); } }
   return <>
     <PageHeader eyebrow="机构运营" title="宣传物料" description="查看平台下发的课程介绍、招生海报和活动资料。" actions={<button className="secondary-button" onClick={materials.refresh}>刷新</button>} />
     {user?.role === 'ORG_ADMIN' ? <OrgFileUpload api={api} onDone={materials.refresh} /> : null}

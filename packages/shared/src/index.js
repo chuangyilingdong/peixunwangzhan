@@ -2,6 +2,7 @@ export * from './SearchSelect.jsx';
 export * from './api.js';
 export * from './auth.js';
 export * from './ui.jsx';
+export * from './notice.js';
 export * from './worksState.js';
 export * from './worksState.jsx';
 export * from './classroom.jsx';

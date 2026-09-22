@@ -4,6 +4,11 @@ import { NavLink } from 'react-router-dom';
 // 不再各写一份「✦ + 文字」的临时标记 —— 那套符号当初只是占位，logo 到位后就该退休。
 // 深色底（官网黑底首页、官网登录页）由各自的样式表补一层白底药丸，否则蓝色的「灵动」在深色上几乎看不清。
 import brandLogo from './assets/lingdong-ai-logo.png';
+// 提示语的语气标记（`errorText` / `isErrorText` / `stripNoticeMark`）在 `notice.js` 里 ——
+// 放普通 .js 是为了让守卫能真跑那几个纯函数（见 scripts/p126）。
+import { isErrorText, stripNoticeMark } from './notice.js';
+// 标记三件套也在这里转出一次：老代码里 `from './ui.jsx'` 的写法继续可用（实现仍在 notice.js）。
+export { errorText, isErrorText, stripNoticeMark, NOTICE_ERROR_MARK } from './notice.js';
 
 export function BrandLogo({ height = 26 }) {
   return <img className="brand-logo" src={brandLogo} alt="灵动ai学院" style={{ height }} />;
@@ -94,7 +99,11 @@ export function LoginPanel({ title, description, clientType, demos = [], onLogin
 }
 export function PageHeader({ eyebrow, title, description, actions }) { return <header className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{description&&<p className="page-description">{description}</p>}</div>{actions&&<div className="header-actions">{actions}</div>}</header> }
 export function MetricCard({ label, value, hint, tone='violet' }) { return <article className={'metric-card '+tone}><span className="metric-symbol">✦</span><p>{label}</p><strong>{value}</strong>{hint&&<small>{hint}</small>}</article> }
-export function Notice({ tone='info', children }) { return <div className={'notice '+tone}>{children}</div> }
+export function Notice({ tone='info', children }) {
+  // 消息里带错误标记 → 一律按危险色（压过调用方给的 tone，那些 tone 大多是猜出来的）
+  if (typeof children === 'string' && isErrorText(children)) return <div className="notice danger">{stripNoticeMark(children)}</div>;
+  return <div className={'notice '+tone}>{children}</div>;
+}
 export function Loading({ label='正在加载数据…' }) { return <div className="loading"><span>✦</span>{label}</div> }
 export function Empty({ title='暂时没有数据', body='数据出现后会显示在这里。' }) { return <div className="empty"><span>✦</span><strong>{title}</strong><p>{body}</p></div> }
 export function ErrorState({ error,onRetry }) { return <Notice tone="danger">{error?.message||'加载失败'} {onRetry&&<button className="text-button" onClick={onRetry}>重试</button>}</Notice> }

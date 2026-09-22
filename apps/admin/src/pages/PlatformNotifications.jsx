@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function PlatformNotifications({ api }) {
@@ -42,7 +42,7 @@ export function PlatformNotifications({ api }) {
       setLastEvent(result);
       setMessage(`事件已发布：${result.delivered} 投递 / ${result.suppressed} 抑制（共 ${result.totalTargets} 个目标）。`);
       events.refresh(); summary.refresh();
-    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   async function retryFailures() {
     const ids = Object.values(selected).filter(Boolean);
@@ -53,7 +53,7 @@ export function PlatformNotifications({ api }) {
       setMessage(`已重试 ${result.retried} 条，${result.skipped} 条被跳过（已忽略或达最大次数）。`);
       setSelected({});
       failures.refresh(); summary.refresh();
-    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   async function ignoreFailures() {
     const ids = Object.values(selected).filter(Boolean);
@@ -65,7 +65,7 @@ export function PlatformNotifications({ api }) {
       setMessage(`已忽略 ${result.ignored} 条失败记录。`);
       setSelected({});
       failures.refresh(); summary.refresh();
-    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   async function tickQueue() {
     setBusy(true); setMessage('');
@@ -73,7 +73,7 @@ export function PlatformNotifications({ api }) {
       const result = await api.post('admin/notification-queue/tick');
       setMessage(`队列扫描：处理 ${result.processed ?? 0}，成功 ${result.succeeded ?? 0}，失败 ${result.failed ?? 0}。`);
       queueSummary.refresh(); deadLetters.refresh(); failures.refresh();
-    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   async function requeueSelectedDeadLetters() {
     const ids = Object.values(dlSelected).filter(Boolean);
@@ -84,7 +84,7 @@ export function PlatformNotifications({ api }) {
       setMessage(`已恢复 ${result.requeued} 条死信，${result.skipped} 条跳过。`);
       setDlSelected({});
       queueSummary.refresh(); deadLetters.refresh(); failures.refresh();
-    } catch (err) { setMessage(err.message); } finally { setBusy(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setBusy(false); }
   }
   return <>
     <PageHeader eyebrow="平台系统" title="通知事件与失败运营" description="站内信（应用内）投递：按 eventKey 投递事件并自动抑制重复；查看、批量重试和忽略投递失败的接收人。当前没有邮件/短信/微信外发通道（按路线图冻结），「失败」指接收人账号已停用或删除，不是外发失败。" actions={<button className="secondary-button" onClick={() => { summary.refresh(); events.refresh(); failures.refresh(); }}>刷新</button>} />
@@ -126,7 +126,7 @@ export function PlatformNotifications({ api }) {
       <button className={tab === 'events' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('events')}>事件列表</button>
       <button className={tab === 'failures' ? 'primary-button' : 'secondary-button'} onClick={() => setTab('failures')}>失败运营（{summary.data?.failed ?? 0}）</button>
     </div>
-    {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
     {tab === 'dispatch' ? (
       <div className="split">
         <Panel title="投递事件（按 eventKey 抑制重复）">

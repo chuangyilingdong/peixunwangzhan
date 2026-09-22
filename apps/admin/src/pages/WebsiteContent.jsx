@@ -1,5 +1,5 @@
 import { useAdminConfirm } from '../components/AdminConfirm.jsx';
-import { readSession } from '@platform/shared';
+import { readSession, errorText } from '@platform/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
@@ -226,7 +226,7 @@ export function WebsiteContent({ api }) {
     try {
       const asset = await api.upload('admin/file-assets/upload', file, { category: 'PROMO_COVER', visibility: 'PUBLIC_PLATFORM' });
       apply(`/api/public/file-assets/${asset.id}/download`);
-    } catch (error) { setMessage('图片上传失败：' + (error.message || '未知错误')); }
+    } catch (error) { setMessage(errorText('图片上传失败：' + (error.message || '未知错误'))); }
     finally { setUploading(''); }
   }
   async function saveDraft() {
@@ -236,7 +236,7 @@ export function WebsiteContent({ api }) {
       if (!content || Array.isArray(content) || typeof content !== 'object') throw new Error('内容必须是 JSON 对象。');
       await api.put(`admin/website-content/${selectedKey}`, { content });
       clearRecovery(); setSavedDraft(draft); setMessage('草稿已保存。'); await detail.refresh(); await list.refresh();
-    } catch (error) { setMessage(error instanceof SyntaxError ? 'JSON 格式无效。' : error.message); }
+    } catch (error) { setMessage(errorText(error instanceof SyntaxError ? 'JSON 格式无效。' : error.message)); }
     finally { setBusy(false); }
   }
   async function publish() {
@@ -258,7 +258,7 @@ export function WebsiteContent({ api }) {
   return <>
     {confirmation}
     <PageHeader eyebrow="官网运营" title="官网内容 CMS" description="用结构化表单维护首页、灵动课程、机构手册、常见问题与品牌信息；公开端只读取已发布版本，保留历史版本供回滚。" actions={<button className="secondary-button" disabled={busy} onClick={reloadContent}>刷新</button>} />
-    {message && <Notice tone={message.includes('已') || message.includes('保存') ? 'success' : 'danger'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
     <div className="split website-cms">
       <Panel title="内容区块">
         {list.loading ? <Loading label="正在读取内容…" /> : list.error ? <ErrorState error={list.error} onRetry={list.refresh} /> : <div className="card-list">{(list.data?.items || []).map((item) => <button type="button" key={item.key} className={`item-card cms-key ${selectedKey === item.key ? 'selected' : ''}`} disabled={busy} aria-pressed={selectedKey === item.key} onClick={() => selectContent(item.key)}><strong>{WEBSITE_CONTENT_LABELS[item.key] || item.key}</strong><span>{item.key} · {item.status === 'PUBLISHED' ? '已发布' : item.status === 'DEFAULT' ? '内置默认' : '仅草稿'} · 草稿 v{item.draftVersion}</span></button>)}</div>}

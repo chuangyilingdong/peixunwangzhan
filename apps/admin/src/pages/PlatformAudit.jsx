@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function PlatformAudit({ api }) {
@@ -40,7 +40,7 @@ export function PlatformAudit({ api }) {
       document.body.appendChild(link); link.click(); document.body.removeChild(link);
       URL.revokeObjectURL(url);
       setMessage(`已导出 ${result.count} 条审计记录。`);
-    } catch (err) { setMessage(err.message); } finally { setExporting(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setExporting(false); }
   }
   return <>
     <PageHeader eyebrow="平台系统" title="操作审计中心" description="按机构、动作、操作者、目标、时间和请求路径检索全平台审计记录，导出 CSV 供归档与合规使用。" actions={<><button className="secondary-button" onClick={() => { list.refresh(); summary.refresh(); actions.refresh(); }}>刷新</button><button className="primary-button" disabled={exporting} onClick={exportCsv}>{exporting ? '导出中…' : '导出 CSV'}</button></>} />
@@ -58,7 +58,7 @@ export function PlatformAudit({ api }) {
         <label>返回条数<select value={String(limit)} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value="20">20</option><option value="50">50</option><option value="100">100</option><option value="200">200</option></select></label>
       </div>
       <div className="row-actions"><button type="button" className="secondary-button" onClick={reset}>重置筛选</button></div>
-      {message && <Notice tone={message.includes('已') || message.includes('成功') ? 'success' : 'danger'}>{message}</Notice>}
+      {message && <Notice tone="success">{message}</Notice>}
     </Panel>
     {summary.loading ? <Loading label="正在汇总审计指标…" /> : summary.error ? <ErrorState error={summary.error} onRetry={summary.refresh} /> : summary.data ? <>
       <div className="metrics">

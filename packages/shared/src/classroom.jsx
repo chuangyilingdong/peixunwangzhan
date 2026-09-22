@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ErrorState, Loading, Notice, Empty, Panel, PageHeader } from './ui.jsx';
+import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, errorText } from './ui.jsx';
 import { ClientEntryActions } from './clientEntry.jsx';
 
 export function useData(load, deps = []) {
@@ -92,7 +92,7 @@ export function CanvasClassroom({ api, onEnterProject }) {
         });
         target(project.id);
       }
-    } catch (error) { setMessage(error.message || '进入课堂失败'); }
+    } catch (error) { setMessage(errorText(error.message || '进入课堂失败')); }
     finally { setBusy(null); }
   }
 
@@ -219,7 +219,7 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
         canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
       });
       (onEnterCanvas || ((id) => navigate(`/learn/canvas/${id}`)))(project.id);
-    } catch (error) { setMessage(error.message || '进入课堂失败'); }
+    } catch (error) { setMessage(errorText(error.message || '进入课堂失败')); }
     finally { setBusy(null); }
   }
 

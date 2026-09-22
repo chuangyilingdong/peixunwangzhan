@@ -5,7 +5,7 @@
 // （用户口径：全局配置合成一块，不再散落在「高级」折叠里），所以这里要能只出内容、不要自己那层 Panel。
 // 顺带删掉只有一项的 ENDPOINT_BY_KIND 映射表：一个键的查表只是多一层绕。
 import { useState } from 'react';
-import { Empty, ErrorState, Loading, Notice, Panel, formatDate, useData } from '@platform/shared';
+import { Empty, ErrorState, Loading, Notice, Panel, formatDate, useData, errorText } from '@platform/shared';
 
 export function BillingSettings({ api, embedded = false }) {
   const modalities = useData(() => api.get('admin/billing-config/modalities'), [api]);
@@ -26,7 +26,7 @@ export function BillingSettings({ api, embedded = false }) {
       setMessage(`已保存：${edit.key}`);
       setEdit(null);
       modalities.refresh();
-    } catch (error) { setMessage(error.message); }
+    } catch (error) { setMessage(errorText(error)); }
     finally { setBusy(false); }
   }
 
@@ -58,13 +58,13 @@ export function BillingSettings({ api, embedded = false }) {
   if (embedded) return <div className="top-gap">
     <h4>模态总开关（平台级）</h4>
     <p className="muted">关闭后，学生将无法使用对应能力。课堂预算只做平台成本预警，请到“用量与成本”查看，不会在这里设置学生余额或配额。这里的改动有自己的保存按钮（每次都会写一条变更日志），不跟着页面底部的「保存全部配置」。</p>
-    {message ? <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice> : null}
+    {message ? <Notice tone="success">{message}</Notice> : null}
     {body}
   </div>;
 
   return <Panel title="模态开关（平台级总开关）">
     <p className="muted">关闭后，学生将无法使用对应能力。课堂预算只做平台成本预警，请到“用量与成本”查看，不会在这里设置学生余额或配额。</p>
-    {message ? <Notice tone={message.includes('已保存') ? 'success' : 'danger'}>{message}</Notice> : null}
+    {message ? <Notice tone="success">{message}</Notice> : null}
     {body}
   </Panel>;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Notice } from '@platform/shared';
+import { Notice, errorText } from '@platform/shared';
 
 export function CreateCourseModal({ api, onClose, onCreated }) {
   const [form, setForm] = useState({ title: '', description: '', coverImageUrl: '', coverAssetId: '', version: '1.0', priceYuan: '', visibility: 'PUBLIC', difficultyLevel: '' });
@@ -20,7 +20,7 @@ export function CreateCourseModal({ api, onClose, onCreated }) {
       if (!/^\d+(?:\.\d{1,2})?$/.test(form.priceYuan || '0')) throw new Error('价格最多支持两位小数');
       const course = await api.post('admin/course-series', { title: form.title, description: form.description, coverImageUrl: form.coverImageUrl || null, coverAssetId: form.coverAssetId || null, version: form.version, priceFen: Math.round(Number(form.priceYuan || 0) * 100), visibility: form.visibility, difficultyLevel: form.difficultyLevel === '' ? null : Number(form.difficultyLevel) });
       onCreated(course);
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
   async function upload(file) {
     if (!file) return;
@@ -29,7 +29,7 @@ export function CreateCourseModal({ api, onClose, onCreated }) {
       const asset = await api.upload('admin/file-assets/upload', file, { category: 'PROMO_COVER', visibility: 'PUBLIC_PLATFORM' });
       if (!asset?.id) throw new Error('上传未返回文件标识');
       update({ coverAssetId: asset.id, coverImageUrl: `/api/public/file-assets/${asset.id}/download` }); setMessage('封面上传成功');
-    } catch (error) { setMessage(error.message); } finally { setUploading(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setUploading(false); }
   }
   return <dialog ref={dialogRef} aria-labelledby="create-course-title" style={{ width: 'min(760px, calc(100vw - 32px))', maxWidth: 'min(760px, calc(100vw - 32px))', margin: 'auto', border: 0, padding: 0, maxHeight: '90vh', borderRadius: 18 }} onCancel={(event) => { event.preventDefault(); if (!busy && !uploading) onClose(); }}><form className="modal-content modal-large" style={{ width: '100%', maxWidth: 'none' }} onSubmit={submit}>
     <div className="modal-header"><h2 id="create-course-title">新建课包</h2><button type="button" className="modal-close" aria-label="关闭新建课包" disabled={busy || uploading} onClick={onClose}>×</button></div>

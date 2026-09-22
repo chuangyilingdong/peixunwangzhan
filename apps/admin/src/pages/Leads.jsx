@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react';
-import { Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, useData } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, useData, errorText } from '@platform/shared';
 import { downloadCsv } from '../shared.jsx';
 
 /**
@@ -47,7 +47,7 @@ export function Leads({ api }) {
       await api.put(`admin/leads/${item.id}`, { status: nextStatus || item.status, adminNotes: draft.adminNotes, assignedTo: draft.assignedTo });
       setMessage(nextStatus ? `已把「${item.orgName}」推进到${STATUS_LABELS[nextStatus]}。` : `已保存「${item.orgName}」的跟进记录。`);
       leads.refresh();
-    } catch (error) { setMessage(error.message); }
+    } catch (error) { setMessage(errorText(error)); }
   }
   function exportCsv() {
     const header = ['提交时间', '机构名称', '联系人', '联系电话', '意向', '补充说明', '状态', '跟进记录', '负责人'];

@@ -4,8 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Empty, ErrorState, Icon, ListResultSummary, Loading, MetricCard, Notice, PageHeader, Panel,
-  Pagination, Status, formatDate, materialVisual, useData,
-} from '@platform/shared';
+  Pagination, Status, formatDate, materialVisual, useData, errorText } from '@platform/shared';
 
 // 可见范围（2026-09-16 用户口径：三值改两值）：**公开** = 官网课程广场 + 授权机构都可以；
 // **私有** = 不对外。机构实际能不能用，仍只看「机构授权」那一栏（发布 ≠ 授权）。
@@ -551,7 +550,7 @@ function LessonDrawer({ api, lesson, onClose, onSaved }) {
       await api.request(`admin/course-lessons/${lesson.id}`, { method: 'PUT', body });
       onSaved?.(`课时「${title}」已保存。`);
       onClose();
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   const closeDisabled = busy || Boolean(edit.uploadCount);
@@ -657,20 +656,20 @@ function CourseList({ api, onOpen }) {
       await api.request(`admin/course-series/${course.id}/status`, { method: 'POST', body: { action } });
       setMessage(action === 'archive' ? '课包已下架。' : '课包已发布。');
       courses.refresh();
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   async function deleteCourse(course) {
     if (!window.confirm(`确认删除课包「${course.title}」？删除后课包与课时配置不可恢复；已被课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
     setBusy(true); setMessage('');
     try { await api.request(`admin/course-series/${course.id}`, { method: 'DELETE' }); setMessage(`课包「${course.title}」已删除。`); courses.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   return <>
     <PageHeader eyebrow="课程资产" title="平台课包" description="维护平台级课程资料、课时编排、发布状态与机构授权；改完点「更新发布」填新版本号。"
       actions={<button className="primary-button" onClick={() => setShowCreate(true)}>＋ 新建课包</button>} />
-    {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
     <Panel title="筛选">
       <div className="form-grid">
         <label>关键词<input value={filters.search} placeholder="课包名称 / ID" onChange={(event) => { setFilters({ ...filters, search: event.target.value }); setPage(1); }} /></label>
@@ -735,14 +734,14 @@ function CourseDetail({ api, courseId, onBack }) {
       setMessage(`已更新发布 v${String(version).trim()}，机构端与官网同步生效。`);
       setShowPublishReminder(false); setReleaseVersion(''); setReleaseNote('');
       detail.refresh();
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   async function run(path, method, body, successMessage, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return;
     setBusy(true); setMessage('');
     try { await api.request(path, { method, body }); setMessage(successMessage); detail.refresh(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   async function saveEdit(event) {
@@ -769,7 +768,7 @@ function CourseDetail({ api, courseId, onBack }) {
       setMessage('课包资料已保存，需在版本发布中显式更新。');
       setSaveState({ tone: 'success', text: '已保存，尚未更新发布。' });
       detail.refresh();
-    } catch (error) { setMessage(error.message); setSaveState({ tone: 'danger', text: error.message }); }
+    } catch (error) { setMessage(errorText(error)); setSaveState({ tone: 'danger', text: error.message }); }
     finally { setBusy(false); }
   }
 
@@ -784,7 +783,7 @@ function CourseDetail({ api, courseId, onBack }) {
     if (!window.confirm(`确认删除课包「${series.title}」？删除后课包与课时配置不可恢复；已被课堂引用的课包会拒绝删除，请改用「下架」。`)) return;
     setBusy(true); setMessage('');
     try { await api.request(`admin/course-series/${courseId}`, { method: 'DELETE' }); onBack(); }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   async function addLesson(event) {
@@ -817,7 +816,7 @@ function CourseDetail({ api, courseId, onBack }) {
       setMessage(`已授权该机构使用本课包，有效期至 ${formatDate(result?.expiresAt) || '—'}。`);
       setAssignOrgId(''); setAssignQuota(''); detail.refresh();
     }
-    catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   async function uploadEditCover(file) {
@@ -828,7 +827,7 @@ function CourseDetail({ api, courseId, onBack }) {
       if (!asset?.id) throw new Error('上传成功但未返回文件标识');
       setEditForm((current) => ({ ...current, coverAssetId: asset.id, coverImageUrl: `/api/public/file-assets/${asset.id}/download` }));
       setMessage('封面上传成功。');
-    } catch (error) { setMessage(error.message); } finally { setUploadingCover(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setUploadingCover(false); }
   }
 
   const activeAssignments = (detail.data?.assignedOrgs || []).filter((item) => !item.expired).length;
@@ -840,7 +839,7 @@ function CourseDetail({ api, courseId, onBack }) {
     <PageHeader eyebrow="课程资产 · 课包编排" title={series ? series.title : '课包详情'}
       description={series ? `状态 ${series.status} · 版本 v${series.version} · 共 ${series.lessons.length} 个课时` : '正在读取课包详情…'}
       actions={<><button className="secondary-button" onClick={onBack}>← 返回课包列表</button>{series ? <button className="secondary-button" disabled={busy} onClick={() => changeStatus('archive')}>下架</button> : null}{series ? <button className="text-button danger-text" disabled={busy} onClick={deleteCourse}>删除</button> : null}{series && series.status !== 'PUBLISHED' ? <button className="primary-button" disabled={busy} onClick={() => changeStatus('publish')}>发布课包</button> : null}</>} />
-    {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
     {showPublishReminder ? <Notice tone="info"><div role="status">课时已保存，课包尚未更新发布。是否现在填写新版本号并发布？</div><div className="row-actions top-gap"><button type="button" className="primary-button" onClick={() => { setActiveTab('publish'); setShowPublishReminder(false); }}>前往版本发布</button><button type="button" className="secondary-button" onClick={() => setShowPublishReminder(false)}>稍后发布，继续编排</button></div></Notice> : null}
     {detail.loading ? <Loading label="正在读取课包详情…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : !series ? <Empty title="课包不存在" /> : <>
       <div className="metrics">

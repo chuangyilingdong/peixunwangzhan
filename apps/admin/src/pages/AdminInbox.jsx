@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function AdminInbox({ api }) {
@@ -20,20 +20,20 @@ export function AdminInbox({ api }) {
       const publishAt = form.status === 'SCHEDULED' && form.publishAt ? new Date(form.publishAt).toISOString() : null;
       await api.post('admin/inbox', { title: form.title, body: form.body, kind: form.kind, targetUrl: form.targetUrl || null, pinned: form.pinned, status: form.status, publishAt, audience: { scope: form.scope, orgIds: form.orgIds, roles: form.roles } });
       setForm(emptyForm); setMessage(form.status === 'PUBLISHED' ? '通知已发布并生成投递记录。' : form.status === 'SCHEDULED' ? '通知已加入定时发布队列。' : '通知草稿已保存。'); inbox.refresh();
-    } catch (err) { setMessage(err.message); } finally { setSaving(false); }
+    } catch (err) { setMessage(errorText(err)); } finally { setSaving(false); }
   }
   async function update(item, status) {
-    try { await api.put(`admin/inbox/${item.id}`, { status }); setMessage(status === 'PUBLISHED' ? '通知已发布。' : status === 'RECALLED' ? '通知已撤回。' : '通知已更新。'); inbox.refresh(); } catch (err) { setMessage(err.message); }
+    try { await api.put(`admin/inbox/${item.id}`, { status }); setMessage(status === 'PUBLISHED' ? '通知已发布。' : status === 'RECALLED' ? '通知已撤回。' : '通知已更新。'); inbox.refresh(); } catch (err) { setMessage(errorText(err)); }
   }
   async function saveTemplate() {
     setMessage('');
     try {
       await api.post('admin/notification-templates', { name: templateName, title: form.title, body: form.body, kind: form.kind, targetUrl: form.targetUrl || null, audience: { scope: form.scope, orgIds: form.orgIds, roles: form.roles } });
       setTemplateName(''); setMessage('通知模板已保存。'); templates.refresh();
-    } catch (err) { setMessage(err.message); }
+    } catch (err) { setMessage(errorText(err)); }
   }
   async function toggleTemplate(item) {
-    try { await api.put(`admin/notification-templates/${item.id}`, { status: item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); templates.refresh(); } catch (err) { setMessage(err.message); }
+    try { await api.put(`admin/notification-templates/${item.id}`, { status: item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); templates.refresh(); } catch (err) { setMessage(errorText(err)); }
   }
   function applyTemplate(item) {
     setForm((old) => ({ ...old, title: item.title, body: item.body, kind: item.kind, targetUrl: item.targetUrl || '', scope: item.audience?.scope || 'ALL_ORGS', orgIds: item.audience?.orgIds || [], roles: item.audience?.roles || ['ORG_ADMIN', 'TEACHER', 'STUDENT'] }));
@@ -52,7 +52,7 @@ export function AdminInbox({ api }) {
       <div className="row-actions top-gap"><span className="muted">接收角色：</span>{[['ORG_ADMIN', '机构管理员'], ['TEACHER', '教师'], ['STUDENT', '学员']].map(([role, label]) => <button type="button" className={form.roles.includes(role) ? 'secondary-button' : 'text-button'} key={role} onClick={() => toggleRole(role)}>{label}</button>)}</div>
       <label>跳转地址（可选）<input value={form.targetUrl} placeholder="例如 /courses" onChange={(e) => setForm({ ...form, targetUrl: e.target.value })} /></label>
       <label className="row-actions"><input type="checkbox" checked={form.pinned} onChange={(e) => setForm({ ...form, pinned: e.target.checked })} /> 置顶通知</label>
-      {message ? <Notice tone={message.includes('失败') || message.includes('不能为空') || message.includes('必须') ? 'danger' : 'success'}>{message}</Notice> : null}
+      {message ? <Notice tone="success">{message}</Notice> : null}
       <button className="primary-button" disabled={saving}>{saving ? '保存中…' : '保存通知'}</button>
     </form></Panel><Panel title="通知模板">
       <div className="form-grid"><label>模板名称<input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="例如：课程更新提醒" /></label><label>保存当前内容<button type="button" className="secondary-button top-gap" onClick={saveTemplate}>保存为模板</button></label></div>

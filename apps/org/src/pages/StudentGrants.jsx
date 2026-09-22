@@ -25,7 +25,7 @@
 //      这种要自己算的话；
 //   ⑤ 课包次数为 0 时直接说明「平台还没给本机构分配人次」，而不是让人勾完再失败。
 import { useMemo, useState } from 'react';
-import { Empty, ErrorState, ListResultSummary, Loading, Notice, PageHeader, Pagination, Panel, formatDate, useData } from '@platform/shared';
+import { Empty, ErrorState, ListResultSummary, Loading, Notice, PageHeader, Pagination, Panel, formatDate, useData, errorText } from '@platform/shared';
 
 const PAGE_SIZE = 20;
 const toPicked = (student) => ({ id: student.id, name: student.displayName || student.login });
@@ -105,7 +105,7 @@ export function StudentGrants({ api }) {
       const left = result.quotaTotal > 0 ? `本课包已用 ${result.quotaUsed} / ${result.quotaTotal} 次` : '本课包不限次数';
       setMessage(`已授权 ${result.granted} 名学员${result.skipped ? `（跳过已授权 ${result.skipped} 名）` : ''}；${left}。`);
       setPicked([]); grants.refresh(); courses.refresh(); students.refresh();
-    } catch (error) { setMessage(error.message); } finally { setBusy(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); }
   }
 
   return <>
@@ -115,7 +115,7 @@ export function StudentGrants({ api }) {
       description="把课包的可用次数分给学员：每分给一名学员用掉 1 次；同一学员同一课包只能授权一次。"
       actions={<button className="secondary-button" onClick={() => { courses.refresh(); grants.refresh(); students.refresh(); }}>刷新</button>}
     />
-    {message && <Notice tone={message.includes('已授权') ? 'success' : 'danger'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
     {/* B3：把「账号 / 席位有效期 / 课包许可」三件事的边界写在页面上，省得老师找错地方 */}
     <p className="muted">学员账号在「教师与学生」创建，席位与有效期在「学员开通」，<strong>能不能学某个课包就看这里</strong>。</p>
 

@@ -19,7 +19,7 @@
 //   · 「算力网关」（new-api）整块 UI —— 生产未启用（上游本身已经是网关），留在页面上只会让人以为要配。
 //   · BillingUsagePanel（2026-09-18 更早一步删掉）—— 全仓零引用，里面那套 14 字段筛选表单从来没人能看到。
 import { useEffect, useState } from 'react';
-import { Empty, ErrorState, formatDate, formatYuan, Loading, Notice, Panel, useData } from '@platform/shared';
+import { Empty, ErrorState, formatDate, formatYuan, Loading, Notice, Panel, useData, errorText } from '@platform/shared';
 import { BillingSettings } from './BillingSettings.jsx';
 import { downloadCsv } from '../shared.jsx';
 
@@ -433,8 +433,8 @@ export function AiCapabilityPanel({ api }) {
       </div>
     </>;
   }
-  async function testChannel(channel) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/test', channelRequest(channel)); setMessage(`${channel.name}：${result.message || '连接成功'}`); } catch (e) { setMessage(`${channel.name}：${e.message || '连接失败'}`); } finally { setBusy(false); } }
-  async function fetchModels(channel, index) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', channelRequest(channel)); updateChannel(index, { modelMappings: result.items || [] }); setMessage(`${channel.name}：已读取 ${result.items?.length || 0} 个模型，请勾选本渠道可用模型`); } catch (e) { setMessage(e.message || '获取模型失败'); } finally { setBusy(false); } }
+  async function testChannel(channel) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/test', channelRequest(channel)); setMessage(`${channel.name}：${result.message || '连接成功'}`); } catch (e) { setMessage(errorText(`${channel.name}：${e.message || '连接失败'}`)); } finally { setBusy(false); } }
+  async function fetchModels(channel, index) { setBusy(true); setMessage(''); try { const result = await api.post('admin/billing-config/ai-provider/models', channelRequest(channel)); updateChannel(index, { modelMappings: result.items || [] }); setMessage(`${channel.name}：已读取 ${result.items?.length || 0} 个模型，请勾选本渠道可用模型`); } catch (e) { setMessage(errorText(e.message || '获取模型失败')); } finally { setBusy(false); } }
   /**
    * 「用当前渠道试一次」：把这套（可能还没保存的）渠道配置真发一次最小请求。
    * 只验证「上游认不认这套参数」，不扣学生额度，上游可能计费。
@@ -449,7 +449,7 @@ export function AiCapabilityPanel({ api }) {
       if (result.ok) setMessage(`${channel.name} · ${modality}：✓ ${result.message || '上游接受'}（${seconds} 秒）`);
       else if (result.accepted) setMessage(`${channel.name} · ${modality}：上游已受理（${seconds} 秒）—— ${result.error?.message || ''}`);
       else setMessage(`${channel.name} · ${modality}：✗ ${result.error?.message || '上游拒绝了这次请求'}${result.error?.code ? '（' + result.error.code + '）' : ''}`);
-    } catch (e) { setMessage(`${channel.name}：${e.message || '探测失败'}`); }
+    } catch (e) { setMessage(errorText(`${channel.name}：${e.message || '探测失败'}`)); }
     finally { setBusy(false); }
   }
   // 对外价：只送非负整数分；留空的模型回落到模态基础价。空输入不提交。
@@ -599,7 +599,7 @@ export function AiCapabilityPanel({ api }) {
         <Notice tone="warning">渠道只负责「连哪家上游」：名称 / 调用地址 / 可用模型 / 默认模型 + 密钥。
           <strong>模型单价与能力都在下面的价目表里填</strong>（一个模型只填一次）。「测试连接」只探接口可达；
           「用当前渠道试一次」会发起真实生成、可能运行数分钟并产生上游费用。</Notice>
-        {message ? <Notice tone={message.includes('失败') || message.includes('错误') ? 'danger' : 'success'}>{message}</Notice> : null}
+        {message ? <Notice tone="success">{message}</Notice> : null}
         <div className="row-actions top-gap"><strong>渠道列表</strong><button type="button" className="secondary-button" onClick={addChannel}>＋添加渠道</button></div>
         {!form.channels.length ? <div className="muted top-gap">还没有渠道，请先添加一个。</div> : form.channels.map((channel, index) => <div className="card top-gap" key={channel.id}>
           <div className="row-actions">
@@ -725,7 +725,7 @@ export function AiCapabilityPanel({ api }) {
       {/* 保存结果就放在保存按钮旁边（保存失败的红色提示必须在同一个视野里）。
           注：断言 p88 要求「保存失败：{saveError}」这一段原样存在 —— 后端拒绝非法合同单价时必须展示错误。 */}
       {saveError ? <Notice tone="danger">保存失败：{saveError}。修正后重试（合同单价必须是「非负整数分」，留空表示没配）。</Notice> : null}
-      {saveMessage ? <Notice tone={saveMessage.includes('失败') ? 'danger' : 'success'}>{saveMessage}</Notice> : null}
+      {saveMessage ? <Notice tone="success">{saveMessage}</Notice> : null}
       <div className="row-actions top-gap">
         <button className="primary-button" disabled={busy}>{busy ? '保存中…' : '保存全部配置（渠道 · 价目表 · 路由与开关）'}</button>
         <span className="muted">一次保存会写两处：渠道 / 价目表成本价 / 路由与开关 走 AI 渠道配置，对外价走对外价配置。模态总开关在 ③ 里单独保存。</span>
@@ -765,7 +765,7 @@ export function OrgStudentUsagePanel({ api }) {
       const result = await api.get(`admin/billing/org-student-usage/export?${params.toString()}`);
       downloadCsv(result.filename, result.content);
       setMessage(`已导出 ${result.count} 行${selected ? `（${selected.name}）` : '（全部机构）'}。`);
-    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setExporting(false); }
   }
 
   return <Panel
@@ -776,7 +776,7 @@ export function OrgStudentUsagePanel({ api }) {
       <button type="button" className="secondary-button" onClick={report.refresh}>刷新</button>
     </>}
   >
-    {message ? <Notice tone={message.includes('已导出') ? 'success' : 'danger'}>{message}</Notice> : null}
+    {message ? <Notice tone="success">{message}</Notice> : null}
     {report.loading ? <Loading label="正在读取机构消耗…" /> : report.error ? <ErrorState error={report.error} onRetry={report.refresh} /> : <>
       <p className="muted">
         近 {days} 天：<strong>{report.data?.totals?.orgCount ?? 0}</strong> 家机构里有消耗的{' '}

@@ -17,7 +17,7 @@
 // 仍是外部存储地址（留空就是"资源待配置"）；「全部机构」对所有状态正常的机构开放，
 // 「指定机构」只在服务端向授权机构返回。
 import { useMemo, useState } from 'react';
-import { Empty, ErrorState, formatDate, Loading, ListResultSummary, MetricCard, Notice, PageHeader, Panel, Pagination, Status, useData } from '@platform/shared';
+import { Empty, ErrorState, formatDate, Loading, ListResultSummary, MetricCard, Notice, PageHeader, Panel, Pagination, Status, useData, errorText } from '@platform/shared';
 
 export const MATERIAL_CATEGORIES = [['GENERAL', '通用'], ['COURSE', '课程'], ['POSTER', '海报'], ['ACTIVITY', '活动'], ['PARTNERSHIP', '合作']];
 const CATEGORY_LABELS = Object.fromEntries(MATERIAL_CATEGORIES);
@@ -29,7 +29,7 @@ const EMPTY_FORM = { title: '', description: '', category: 'GENERAL', visibility
 /** 裸文件上传面板（保留导出：这一页之外还有调用方）。 */
 export function FileUploadPanel({ api, onDone }) {
   const [file, setFile] = useState(null); const [progress, setProgress] = useState(0); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
-  async function submit(event) { event.preventDefault(); if (!file) return setMessage('请选择文件'); setBusy(true); setProgress(10); setMessage(''); try { await api.upload('admin/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' }, { onProgress: setProgress }); setMessage('文件上传成功'); setFile(null); onDone?.(); } catch (error) { setMessage(error.message); } finally { setBusy(false); } }
+  async function submit(event) { event.preventDefault(); if (!file) return setMessage('请选择文件'); setBusy(true); setProgress(10); setMessage(''); try { await api.upload('admin/file-assets/upload', file, { category: 'MEDIA_ASSET', visibility: 'PUBLIC_PLATFORM' }, { onProgress: setProgress }); setMessage('文件上传成功'); setFile(null); onDone?.(); } catch (error) { setMessage(errorText(error)); } finally { setBusy(false); } }
   return <Panel title="安全上传"><form onSubmit={submit} className="form-grid"><label className="inline-file-upload">{file ? '重新选择文件' : '选择图片、音频、视频或 PDF'}<input type="file" onChange={(event) => { const picked = event.target.files?.[0] || null; event.target.value = ''; setFile(picked); }} disabled={busy} /></label><div className="row-actions"><button className="primary-button" disabled={busy || !file}>{busy ? `上传中 ${progress}%` : '上传文件'}</button>{message ? <span className="muted">{message}</span> : null}</div></form></Panel>;
 }
 
@@ -169,14 +169,14 @@ export function AdminMaterials({ api }) {
   async function toggle(item) {
     setBusy(true); setMessage('');
     try { await api.put(`admin/materials/${encodeURIComponent(item.id)}`, { status: item.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); setMessage(item.status === 'ACTIVE' ? `《${item.title}》已停用。` : `《${item.title}》已启用。`); materials.refresh(); }
-    catch (err) { setMessage(err.message || '操作失败'); } finally { setBusy(false); }
+    catch (err) { setMessage(errorText(err.message || '操作失败')); } finally { setBusy(false); }
   }
   const filterChange = (values) => { setFilters({ ...filters, ...values }); setPage(1); };
 
   return <>
     <PageHeader eyebrow="平台内容" title="素材与宣传物料" description="招生海报、课程介绍与活动资料：授权范围与真实使用统计。"
       actions={<><button className="primary-button" onClick={() => setAdding(true)}>+ 添加物料</button><button className="secondary-button" onClick={materials.refresh}>刷新</button></>} />
-    {message ? <Notice tone={message.includes('失败') ? 'danger' : 'success'}>{message}</Notice> : null}
+    {message ? <Notice tone="success">{message}</Notice> : null}
     <div className="filters">
       <input value={filters.search} placeholder="搜索物料名称或说明" onChange={(event) => filterChange({ search: event.target.value })} />
       <select value={filters.status} onChange={(event) => filterChange({ status: event.target.value })}><option value="">全部状态</option><option value="ACTIVE">启用</option><option value="DISABLED">停用</option></select>

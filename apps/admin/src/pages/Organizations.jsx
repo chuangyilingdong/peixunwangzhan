@@ -343,7 +343,7 @@ export function Authorizations({ api }) {
   return <>
     <PageHeader title="授权管理" description="选择一个课包和一家机构，查看当前授权后再追加次数或调整有效期。" />
     {confirmation}
-    {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
     {inventory.loading || organizations.loading ? <Loading /> : inventory.error ? <ErrorState error={inventory.error} onRetry={inventory.refresh} /> : organizations.error ? <ErrorState error={organizations.error} onRetry={organizations.refresh} /> : <>
       <Panel title="选择授权对象"><div className="form-grid">
         <label>课包<SearchSelect ariaLabel="搜索课包" value={seriesId} onChange={(value) => { setSeriesId(value); setMessage(''); }} options={inventory.data?.items || []} placeholder="选择已发布课包" searchPlaceholder="搜索课包名称" /></label>

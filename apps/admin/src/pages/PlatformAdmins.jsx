@@ -1,7 +1,7 @@
 import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function PlatformAdmins({ api, currentUser }) {
@@ -28,7 +28,7 @@ export function PlatformAdmins({ api, currentUser }) {
   async function create(event) {
     event.preventDefault(); setSaving(true); setMessage('');
     try { await api.post('admin/platform-admins', form); setForm({ login: '', displayName: '', password: '', permissions: [] }); setMessage('平台管理员已创建。'); admins.refresh(); }
-    catch (err) { setMessage(err.message); } finally { setSaving(false); }
+    catch (err) { setMessage(errorText(err)); } finally { setSaving(false); }
   }
   async function update(target, payload, successMessage, confirmText) {
     const execute = async () => {
@@ -37,7 +37,7 @@ export function PlatformAdmins({ api, currentUser }) {
       finally { setSaving(false); }
     };
     if (confirmText) return confirm({ message: confirmText, execute });
-    try { await execute(); } catch (error) { setMessage(error.message); }
+    try { await execute(); } catch (error) { setMessage(errorText(error)); }
   }
   function resetPassword(item) {
     return confirm({ title: '重置管理员密码', message: `重置「${item.displayName}」的密码后，该账号全部登录会话将立即失效。`, password: true, confirmLabel: '确认重置', execute: async (password) => {
@@ -55,7 +55,7 @@ export function PlatformAdmins({ api, currentUser }) {
   async function showLogs(target) {
     setLogsLoading(true);
     try { const result = await api.get(`admin/platform-admins/${target.id}/audit-logs?limit=50`); setLogs({ admin: target, ...result }); }
-    catch (err) { setMessage(err.message); } finally { setLogsLoading(false); }
+    catch (err) { setMessage(errorText(err)); } finally { setLogsLoading(false); }
   }
   return <>
     {confirmation}
@@ -67,7 +67,7 @@ export function PlatformAdmins({ api, currentUser }) {
           <label>姓名<input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} required /></label>
           <label>权限码</label>
           <div className="row-actions">{permissionOptions.map((permission) => <label key={permission} className="checkbox-option"><input type="checkbox" checked={form.permissions.includes(permission)} onChange={() => toggle(permission)} />{ADMIN_PERMISSION_LABELS[permission] || permission}</label>)}</div>
-          {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+          {message && <Notice tone="success">{message}</Notice>}
           <div className="row-actions">
             <button className="primary-button" disabled={saving}>{saving ? '保存中…' : editing ? '保存管理员' : '创建管理员'}</button>
             {editing && <button type="button" className="secondary-button" onClick={() => { setEditing(null); setForm({ login: '', displayName: '', password: '', permissions: [] }); }}>取消编辑</button>}

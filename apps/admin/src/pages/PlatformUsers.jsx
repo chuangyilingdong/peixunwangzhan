@@ -1,7 +1,7 @@
 import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData, errorText } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function PlatformUsers({ api }) {
@@ -27,7 +27,7 @@ export function PlatformUsers({ api }) {
       const result = await api.get(`admin/platform-users/export?${params.toString()}`);
       downloadCsv(result.filename, result.content);
       setMessage(`已导出 ${result.count} 名用户。`);
-    } catch (error) { setMessage(error.message); } finally { setExporting(false); }
+    } catch (error) { setMessage(errorText(error)); } finally { setExporting(false); }
   }
   const roleLabels = { SUPER_ADMIN: '平台超管', ORG_ADMIN: '机构管理员', TEACHER: '教师', STUDENT: '学员' };
   async function run(target, action, body, successMessage, confirmText) {
@@ -41,7 +41,7 @@ export function PlatformUsers({ api }) {
     };
     if (confirmText || action === 'password') {
       await confirm({ message: confirmText || `确认重置「${target.displayName}」的密码？该账号全部会话将立即失效。`, execute });
-    } else { try { await execute(); } catch (error) { setMessage(error.message); } }
+    } else { try { await execute(); } catch (error) { setMessage(errorText(error)); } }
   }
   return <>
     {confirmation}
@@ -54,7 +54,7 @@ export function PlatformUsers({ api }) {
         <label>排序<select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }}><option value="created">创建时间</option><option value="name">姓名</option><option value="status">状态</option></select></label>
         <label>每页数量<select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}><option value={10}>10 条/页</option><option value={20}>20 条/页</option><option value={50}>50 条/页</option></select></label>
       </div>
-      {message && <Notice tone={message.includes('已') ? 'success' : 'danger'}>{message}</Notice>}
+      {message && <Notice tone="success">{message}</Notice>}
     </Panel>
     <Panel title="用户列表">
       {users.loading || organizations.loading ? <Loading /> : users.error ? <ErrorState error={users.error} onRetry={users.refresh} /> : users.data.items.length ? <><ListResultSummary total={users.data.total} page={users.data.page} totalPages={users.data.totalPages} label="名用户" /><div className="table-wrap"><table><thead><tr><th>用户</th><th>角色</th><th>机构</th><th>状态</th><th>有效期至</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.displayName}</strong><div className="muted">{item.login}{item.phone ? ` · ${item.phone}` : ''}</div></td><td>{roleLabels[item.role] || item.role}</td><td>{item.organizationName || '平台'}</td><td><Status value={item.status} /></td><td>{formatDate(item.expiresAt) || '长期'}</td><td>{formatDate(item.createdAt)}</td><td><div className="row-actions">

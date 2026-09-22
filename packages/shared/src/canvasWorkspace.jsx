@@ -5,10 +5,12 @@ import { formatDate } from './auth.js';
 import { Icon } from './icons.jsx';
 import { materialVisual } from './materialTypes.js';
 import { readSession } from './auth.js';
+import { isErrorText, stripNoticeMark } from './ui.jsx';
 // 品牌标（学生画布左上角）。与 dsh 学生端用的是同一张图，见 deploy/dsh-student/assets/。
 import brandLogo from './assets/lingdong-ai-logo.png';
 import { ErrorState, Loading, Notice, Empty, Panel, PageHeader, Status } from './ui.jsx';
 import { useData } from './classroom.jsx';
+import { errorText } from '@platform/shared';
 
 // Signatures and helpers (原独立学生端逻辑，已并入官网学习页)
 // 快照的「内容」用于判断有没有未保存改动。**必须包含节点位置**：
@@ -112,7 +114,8 @@ export function CanvasWorkspace({ api, ...props }) {
   // 现在的口径：**非错误的提示 5 秒后自动消失**；带「失败 / 错误」的留着（出错信息不该自己溜走）。
   useEffect(() => {
     if (!message) return undefined;
-    if (message.includes('失败') || message.includes('错误')) return undefined;
+    // 错误提示（`errorText` 带了标记）留着不走；其它 5 秒自动消失（口径见 §二.O）。
+    if (isErrorText(message)) return undefined;
     const timer = setTimeout(() => setMessage(''), 5000);
     return () => clearTimeout(timer);
   }, [message]);
@@ -344,7 +347,7 @@ export function CanvasWorkspace({ api, ...props }) {
       setGenerationForm((current) => ({ ...current, prompt: '', title: '' }));
       setMessage(`已完成 ${result.modality} 素材生成，并已添加到未保存画布。`);
       generations.refresh();
-    } catch (err) { setMessage(err.message); }
+    } catch (err) { setMessage(errorText(err)); }
     finally { setGenerating(false); }
   }
 
@@ -363,7 +366,7 @@ export function CanvasWorkspace({ api, ...props }) {
       // ⚠️ 2026-09-21 用户口径：**提交后不要自动跳走** —— 「老师如果没点结束课堂，应该留在原页面」。
       //    画布这时已经变成只读（作品已提交），学生可以继续看自己的作品、或点右上角「课程中心」离开；
       //    老师一结束课堂，下面那个轮询会把全班带回课程中心。
-    } catch (err) { setMessage(err.message); }
+    } catch (err) { setMessage(errorText(err)); }
     finally { setBusy(false); }
   }
 
@@ -747,7 +750,7 @@ export function CanvasWorkspace({ api, ...props }) {
         <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} /></div>
       </div>
     </section>
-    {message && <div className={`cv-toast ${message.includes('失败') || message.includes('错误') ? 'is-error' : ''}`}>{message}</div>}
+    {message && <div className={`cv-toast ${isErrorText(message) ? 'is-error' : ''}`}>{stripNoticeMark(message)}</div>}
     {promptTarget && <div className="cv-dialog" role="dialog" aria-modal="true"><div className="cv-dialog__panel"><strong>把「{promptTarget.material.title}」插入到哪个框体？</strong><div className="cv-dialog__list">{promptTarget.targets.map((node) => <button key={node.id} type="button" onClick={() => insertPromptToSlot(node.id)}>{node.data?.title || node.type}<small>{node.type === 'video' ? '生视频' : '生图'}{node.data?.aspectRatio ? ' · ' + node.data.aspectRatio : ''}</small></button>)}</div><button type="button" className="cv-text-btn" onClick={() => setPromptTarget(null)}>取消</button></div></div>}
   </main>;
 
