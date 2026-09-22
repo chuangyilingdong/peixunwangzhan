@@ -72,6 +72,7 @@ if (!apply) {
 
 let done = 0;
 let failed = 0;
+const archivedFileIds = [];   // 本次落盘的 file id（后面按它交还属主）
 
 for (const row of targets) {
   const source = String(row.asset_url || row.preview_url);
@@ -91,7 +92,28 @@ for (const row of targets) {
   db.prepare('UPDATE media_assets SET asset_url=?, preview_url=CASE WHEN preview_url=? THEN ? ELSE preview_url END, mime_type=COALESCE(mime_type,?), metadata=? WHERE id=?')
     .run(result.url, source, result.url, result.mimeType, JSON.stringify({ ...metadata, archive: { mirrored: true, sourceUrl: source, mimeType: result.mimeType, bytes: result.bytes, backfilledAt: new Date().toISOString() } }), row.id);
   done += 1;
+  archivedFileIds.push(String(result.url).match(/file-assets\/([\w-]+)\/download/)?.[1] || '');
   console.log(`  ✓ ${row.id} → ${result.url}（${(result.bytes / 1024).toFixed(0)}KB）`);
+}
+
+// ⚠️ **属主**：以 root 跑本脚本时，`persistSecureUpload` 落盘的文件属主是 root、权限 0640，
+//    而服务跑在 `ai-kids-prod` 下 —— **它读不到**，取图那条路由会在建流时把连接直接关掉
+//    （现象是公网 **502**、nginx 说 "upstream prematurely closed connection"，
+//     而 `stat` 看文件明明在、字节数也对）。2026-09-22 真踩了：广场作品页整页「图片已失效」。
+//    所以这里主动把本次落盘的文件交还给上传根的属主（只在以 root 跑的时候做）。
+if (typeof process.getuid === 'function' && process.getuid() === 0) {
+  const { chownSync, statSync } = await import('node:fs');
+  const root = statSync(uploads);
+  let fixed = 0;
+  for (const fileId of archivedFileIds.filter(Boolean)) {
+    const record = db.prepare('SELECT storage_key FROM file_assets WHERE id=?').get(`file_${fileId}`);
+    if (!record?.storage_key) continue;
+    try {
+      const file = path.join(uploads, record.storage_key);
+      if (statSync(file).uid !== root.uid) { chownSync(file, root.uid, root.gid); fixed += 1; }
+    } catch { console.log(`  ⚠️ ${fileId} 的文件不在上传根里，属主没改`); }
+  }
+  if (fixed) console.log(`属主：把 ${fixed} 个刚落盘的文件交还给 ${root.uid}:${root.gid}（服务用户读得到）`);
 }
 
 console.log(`\n落盘 ${done} 条、跳过 ${failed} 条。开始改快照…`);
