@@ -29,6 +29,14 @@
  *     例：造一节有生成框体、已发布、学生已在课堂里的课，再把画布页面截下来。
  *   · `--text` 打印整页可见文本；`--check 文案1,文案2` 断言页面上有这些话
  *   · `--click 按钮文案` 先点一下再截（可以给多次，按顺序点）—— 向导第二步、弹窗里的样子靠它
+ *     ⚠️ **同名按钮有多个时它只点第一个**（`first()`），命中哪一条完全看列表排序 ——
+ *     机构端「作品管理」每一行都有一个「查看作品」（实测 8 个），"点不动/点错对象"多半是这个，
+ *     不是按钮真的点不了。要挑特定那一行就用 `--then` 自己按行找。像 `--click` 一直点不开的，
+ *     先数一下同名元素有几个再下结论
+ *   · `--then <文件.mjs>` 点完之后再跑一段**真动作**（导出 `run({ page, api, db, log, shot })`）：
+ *     要等状态翻转、要看跳没跳、要按自己的判据断言的，`--click` 按一下就完事那种做不了。
+ *     返回值进 report 里的 `then`；返回 `{ expectRedirect: '/learn' }` 时底下那条"被重定向了"的
+ *     断言会改成**必须**落到这个地址（是把断言换准，不是关掉）
  *   · `--viewport 390x844` 看窄屏（口径 57 那类"中文被折成竖排"的毛病只在窄列出现）
  *   · `--keep` 截完不退出，把地址与账号打出来，留着人肉点
  * 产物：`.tmp/page-shots/<tag>/` 下每页一张 png + `report.json`
@@ -58,7 +66,7 @@ const DEFAULT_MEDIA_ROOT = '/srv/ai-kids-platform/public-media';
 const DEFAULT_DOWNLOADS_ROOT = '/srv/ai-kids-platform/downloads';
 
 // ── 参数 ────────────────────────────────────────────────────────────────────
-const opts = { as: null, tag: null, db: null, build: true, fresh: false, text: false, wait: 1600, keep: false, viewport: '1440x1000', uploads: null, prodUploads: false, out: null, seed: null, sql: null, fixture: null, vars: {} };
+const opts = { as: null, tag: null, db: null, build: true, fresh: false, text: false, wait: 1600, keep: false, viewport: '1440x1000', uploads: null, prodUploads: false, out: null, seed: null, sql: null, fixture: null, vars: {}, then: null };
 const routes = [];
 const globalChecks = [];
 const argv = process.argv.slice(2);
@@ -80,6 +88,7 @@ for (let i = 0; i < argv.length; i += 1) {
   else if (arg === '--seed') opts.seed = next();
   else if (arg === '--sql') opts.sql = next();
   else if (arg === '--fixture') opts.fixture = next();
+  else if (arg === '--then') opts.then = next();
   else if (arg === '--click') {
     const texts = String(next()).split(',').map((item) => item.trim()).filter(Boolean);
     (routes.length ? routes[routes.length - 1].clicks : []).push(...texts);
@@ -308,6 +317,17 @@ try {
   if (!(await ready())) throw new Error(`临时实例没起来：\n${apiLog.slice(-1500)}`);
   console.log(`临时实例：API http://127.0.0.1:${apiPort}（库是副本，不碰生产）`);
 
+  // 打临时实例的接口（夹具与 --then 共用）：走真 HTTP，所以过的是与页面同一条路
+  const apiCall = async (pathname, { method = 'GET', token, body } = {}) => {
+    const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, {
+      method,
+      headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => null);
+    return { status: response.status, data: payload?.data ?? payload, error: payload?.error || null };
+  };
+
   // --fixture：页面需要"生产上不存在或不敢动"的状态时先自己造（例：一节已发布、有生成框体、
   // 学生已在课堂里的课 —— 才看得到画布左侧的素材面板）。它返回的变量表会填进路由里的 {变量}。
   if (opts.fixture) {
@@ -315,21 +335,25 @@ try {
     if (typeof module.prepare !== 'function') { console.error(`--fixture 的文件要导出 prepare({ api, db, hashPassword, log })：${opts.fixture}`); process.exit(2); }
     const fixtureDb = new DatabaseSync(dbPath);
     fixtureDb.exec('PRAGMA busy_timeout = 5000');
-    const api = async (pathname, { method = 'GET', token, body } = {}) => {
-      const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, {
-        method,
-        headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      const payload = await response.json().catch(() => null);
-      return { status: response.status, data: payload?.data ?? payload, error: payload?.error || null };
-    };
+    const api = apiCall;
     console.log(`跑夹具 ${opts.fixture} …`);
     const vars = await module.prepare({ api, db: fixtureDb, hashPassword, log: (message) => console.log(`   ${message}`) });
     fixtureDb.close();
     Object.assign(opts.vars, vars || {});
     assignRouteTargets();
     console.log(`夹具返回变量：${JSON.stringify(opts.vars)}`);
+  }
+
+  // --then：页面加载（+ --click 点完）之后要跑一段**真动作**时用它 —— `--click` 只能按文案点一下，
+  // 而"老师结束课堂 → 学生端自己退出""点开预览看弹窗里的东西"这类要**等状态翻转、看跳没跳**，
+  // 按一下按钮是验不出来的（机构端那几页 --click 也点不动）。它导出的 run({ page, api, db, log, shot })
+  // 可以任意 await / 断言，返回值进 report[i].then；返回 `{ expectRedirect: '/learn' }` 时，
+  // 底下那条「被重定向了」的断言会改成**必须**落到这个地址（不是把断言关掉）。
+  let thenRun = null;
+  if (opts.then) {
+    const module = await import(pathToFileURL(path.resolve(root, opts.then)).href);
+    if (typeof module.run !== 'function') { console.error(`--then 的文件要导出 run({ page, api, db, log, shot })：${opts.then}`); process.exit(2); }
+    thenRun = module.run;
   }
 
   // 先把要用的账号都登一遍（拿 token），再一次性注进浏览器
@@ -413,6 +437,21 @@ try {
       await target.click().catch((error) => fail(`${route.path} 点「${label}」失败`, String(error?.message || error)));
       await page.waitForTimeout(700);
     }
+    // --then：跑这一段"真动作"（等状态翻转、看跳没跳、自己截图）
+    let thenResult = null;
+    if (thenRun) {
+      const shot = async (suffix = '-then') => { const file = shotName(suffix); await page.screenshot({ path: file, fullPage: true }); shots.push(path.relative(root, file)); return path.relative(root, file); };
+      const thenDb = new DatabaseSync(dbPath);
+      thenDb.exec('PRAGMA busy_timeout = 5000');
+      console.log(`   跑 --then ${opts.then} …`);
+      try {
+        thenResult = await thenRun({ page, context, api: apiCall, db: thenDb, log: (message) => console.log(`      ${message}`), shot, vars: opts.vars, route: route.path });
+      } catch (error) {
+        fail(`${route.path} 的 --then 自己抛了`, String(error?.message || error).slice(0, 400));
+      } finally { thenDb.close(); }
+      if (thenResult && Array.isArray(thenResult.problems)) for (const item of thenResult.problems) fail(`${route.path} --then：${item}`, '');
+      if (thenResult && Array.isArray(thenResult.notes)) for (const note of thenResult.notes) console.log(`      · ${note}`);
+    }
     const state = await page.evaluate(() => {
       const text = (document.body?.innerText || '').replace(/\n{2,}/g, '\n').trim();
       const heading = document.querySelector('h1')?.innerText?.replace(/\s+/g, ' ').trim() || '';
@@ -448,7 +487,13 @@ try {
     if (!state.sessionInStorage) fail(`${route.path} 的会话没注进去`, '页面上读不到 ai-kids-platform.session.v1.*（键名或账号有问题）');
     if (state.hasPasswordField) fail(`${route.path} 落在登录页`, '页面上有密码输入框 —— 这一张截图不能当"登录后的页面"用');
     if (state.text.length < 40) fail(`${route.path} 几乎是空白页`, `正文只有 ${state.text.length} 字`);
-    if (state.finalUrl.replace(origin, '') !== route.path) fail(`${route.path} 被重定向了`, `落到 ${state.finalUrl.replace(origin, '')}（多半是没登进去）`);
+    if (thenResult?.expectRedirect) {
+      // --then 明说了"这一页本来就该自己跳走"（例：老师结束课堂后学生端退出画布）。
+      // 不是把断言关掉 —— 换成**必须**落到它说的那个地址，跳晚了、跳到别处、压根没跳，都还是红。
+      const landed = state.finalUrl.replace(origin, '').split('?')[0];
+      if (landed !== thenResult.expectRedirect) fail(`${route.path} 该自己跳到 ${thenResult.expectRedirect}`, `实际落在 ${landed}（没跳 / 跳错地方 / 还没跳完）`);
+      else console.log(`   ✓ 自己跳到了 ${thenResult.expectRedirect}（--then 声明的落点）`);
+    } else if (state.finalUrl.replace(origin, '') !== route.path) fail(`${route.path} 被重定向了`, `落到 ${state.finalUrl.replace(origin, '')}（多半是没登进去）`);
     if (missed.length) fail(`${route.path} 少了该出现的文案`, missed.map((check) => check.text).join(' / '));
     if (apiBad.length) fail(`${route.path} 的接口报错`, apiBad.slice(0, 6).join(' | '));
     if (failedRequests.length) fail(`${route.path} 有请求根本没发出去`, failedRequests.slice(0, 6).join(' | '));
@@ -457,7 +502,7 @@ try {
     const noisy = consoleErrors.filter((item) => !/Failed to load resource/.test(item));
     if (noisy.length) warn(`${route.path} 控制台有报错`, noisy.slice(0, 4).join(' | '));
 
-    report.push({ route: route.path, account: route.account, url, shots, ...state, text: state.text.slice(0, 8000), checks, pageErrors, consoleErrors: noisy, badResponses, failedRequests });
+    report.push({ route: route.path, account: route.account, url, shots, ...state, then: thenResult, text: state.text.slice(0, 8000), checks, pageErrors, consoleErrors: noisy, badResponses, failedRequests });
   }
 
   if (opts.keep) {
