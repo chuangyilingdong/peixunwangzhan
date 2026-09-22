@@ -67,6 +67,7 @@ check('画布框体本来就有的类型色没被改坏', /\.learning-node--vide
 
 /* ── ① 取消「素材」大类：导航就是大分组 ──────────────────────────────────── */
 const workspace = read('packages/shared/src/canvasWorkspace.jsx');
+const classroom = read('packages/shared/src/classroom.jsx');
 check('导航按大分组渲染（一个分组一项）', /materialGroups\.map\(\(group, index\) => \{/.test(workspace) && /const key = `group:\$\{group\.id \|\| index\}`/.test(workspace));
 check('不再有「素材」这个大类导航项', !/\['materials', 'grid', '素材'\]/.test(workspace));
 check('面板只渲染当前选中的那一组', /const activeGroup = activeGroupIndex >= 0 \? materialGroups\[activeGroupIndex\] : null;/.test(workspace));
@@ -184,6 +185,30 @@ check('③ 复制按钮本身可用：带 nodrag（挂在标题行里，不带�
 check('② 画布右下角那条提示（.cv-toast）不再一直挂着：非错误 5 秒自动消失、报错留着',
   /const timer = setTimeout\(\(\) => setMessage\(''\), 5000\);/.test(workspace)
   && /if \(message\.includes\('失败'\) \|\| message\.includes\('错误'\)\) return undefined;/.test(workspace));
+
+/* ── 提交/离开课堂的收口（用户 2026-09-21 报的四条里的三条；第②条「作品页看媒体」在 p64）──
+   用户原话：「提交作品后，自动返回课包页面…这个逻辑有问题，老师如果没点结束课堂，应该留在原页面。
+             点击结束课堂就返回到课程中心，而且点进入课堂还能进入到新画布，这个肯定是bug」/
+             「老师只要点击结束课堂，学生端应该就要退出画布，跳转到课程中心」/
+             「图6 从画布课堂点击课程中心会进入到这个旧页面」。 */
+check('① 提交作品后**不再自动跳走**（老师没结束课堂就留在画布上；跳走那行已经删掉）',
+  !/setTimeout\(\(\) => navigate\('\/learn\/canvas'\)/.test(workspace)
+  && /老师可以看到你的课堂作品了。老师结束后回课程中心就行。/.test(workspace));
+check('④ 画布会盯「老师还在不在上课」：轮询 session-state，一旦结束就提示并回课程中心',
+  /student\/projects\/\$\{projectId\}\/session-state/.test(workspace)
+  && /老师已结束课堂/.test(workspace)
+  && /setTimeout\(\(\) => navigate\('\/learn'\), 1600\)/.test(workspace));
+check('③ 顶栏按钮改叫「课程中心」且去 `/learn`（不再跳那个旧页面 `/learn/canvas`）',
+  /onClick=\{\(\) => navigate\('\/learn'\)\}>课程中心</.test(workspace)
+  && !/navigate\('\/learn\/canvas'\)/.test(workspace));
+check('① 课时按钮按「本场课堂的项目」分三种文案：草稿→继续创作 / 已提交→**查看作品** / 没有→进入课堂',
+  /function canvasEntryLabel\(lesson\)/.test(classroom)
+  && classroom.includes("if (lesson.continueProject) return '继续创作';")
+  && classroom.includes("if (lesson.sessionProject) return '查看作品';")
+  && classroom.includes("return '进入课堂';")
+  // 两处入口（画布上课页 + 学生课程中心）都要用它，别只改一处
+  // ⚠️ 数**调用点**（都写成 `… ? canvasEntryLabel(lesson)`），别把函数定义那一行也算进来
+  && (classroom.split('? canvasEntryLabel(lesson)').length - 1) === 2);
 
 /* ── 生成框体一圈金环（2026-09-21 用户口径）────────────────────────────────
    用户原话：「图2 是画布左侧素材生成框体，如果是生成框体，都需要在图2 四周有点金色的环绕，

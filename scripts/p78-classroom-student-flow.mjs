@@ -237,6 +237,62 @@ try {
     legacyStart.status === 409 && legacyStart.error?.code === 'STUDENT_IN_OTHER_SESSION' && /另一场课堂/.test(legacyStart.error?.message || ''),
     JSON.stringify(legacyStart).slice(0, 240));
 
+  /* ⑦ 提交作品之后「再进课堂」必须回到**同一个项目**（用户 2026-09-21 报的 bug）
+     -----
+     原话：「提交作品后…进入课堂的按钮变为『进入课堂』…点击后进入新的画布。…点进入课堂还能进入到新画布，
+     这个肯定是bug」。根因：建项目时只认 `status='DRAFT'` → 已提交之后本场课堂"找不到项目" → 新开一个空画布。
+     这一节把三件事钉住：**同场课堂的项目是幂等的（提交前后都一样）**、课时的 `sessionProject` 要下发
+     （客户端据此写「查看作品」）、以及 `session-state` 能把"老师已结束"告诉学生（老师结束 → 学生退出画布）。 */
+  {
+    // 先把前面几节留下的**未终态**课堂收掉：学生只要还挂在别处，新课堂就开不起来
+    // （那正是产品的占用规则，别绕过去 —— 这里只是把夹具自己留下的状态清理干净）。
+    // 直接清库（临时库，跟 ⑥ 的 writeLegacyRoster 一个路数）：把学生从那几节留下的
+    // PENDING/ACTIVE 参与记录里摘出来 —— 占用判据就是 `part.status IN ('PENDING','ACTIVE')
+    // AND session.status IN ('PENDING','ACTIVE')`（activeParticipationFor）。
+    const staleDb = new DatabaseSync(dbPath); staleDb.exec('PRAGMA busy_timeout = 5000');
+    staleDb.prepare("UPDATE session_students SET status='INCOMPLETE' WHERE student_id=? AND status IN ('PENDING','ACTIVE')").run(seeded.studentId);
+    staleDb.exec("UPDATE class_sessions SET status='ENDED', ended_at=datetime('now') WHERE status IN ('PENDING','ACTIVE')");
+    staleDb.close();
+    // 前面第 ④ 节故意把许可撤了（那是它要验的），这一节要能进课 → 先把许可补回来。
+    grantNow();
+    const session = await api('/api/org/sessions', { method: 'POST', token: teacher, body: { lessonId: seeded.lessonId, deliveryMode: 'CANVAS', title: 'P78 提交后重进' } });
+    const added2 = await api(`/api/org/sessions/${session.data.id}/students`, { method: 'POST', token: teacher, body: { studentIds: [seeded.studentId] } });
+    const started2 = await api(`/api/org/sessions/${session.data.id}/start`, { method: 'POST', token: teacher });
+    check('⑦ 夹具：新课堂建好并开起来了（学生不再挂在别处）',
+      Boolean(session.data?.id) && (added2.data?.added || []).length === 1 && started2.status === 200,
+      `session=${session.status} ${JSON.stringify(session.data || session.error).slice(0, 120)} | added=${JSON.stringify(added2.data || added2.error).slice(0, 120)} | start=${started2.status} ${JSON.stringify(started2.error || {}).slice(0, 120)}`);
+    const enter = () => api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: seeded.lessonId, sessionId: session.data.id, title: 'P78 提交后重进' } });
+    const first = await enter();
+    const again = await enter();
+    // ⚠️ 必须要求 `first.data.id` **真的存在**：两个都是 undefined 时 `undefined === undefined` 也会绿，
+    //    那就是哑守卫（坑 93 的同一个坑）。
+    check('⑦ 同场课堂连进两次 → 同一个项目（不许每次新开一个空画布）',
+      Boolean(first.data?.id) && again.data?.id === first.data.id,
+      `first=${first.data?.id} again=${again.data?.id} ${JSON.stringify(first.error || {}).slice(0, 120)}`);
+    const submitted = await api(`/api/student/projects/${first.data.id}/submit`, { method: 'POST', token: student, body: { canvasSnapshot: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }, description: 'P78 提交', copyrightConfirmed: true } });
+    check('⑦ 作品能提交（这条接下来要验的就是"提交之后"）', submitted.status === 200, JSON.stringify(submitted).slice(0, 200));
+    const reenter = await enter();
+    check('⑦ **提交之后**再进课堂：还是同一个项目（不是新画布）★',
+      Boolean(first.data?.id) && reenter.data?.id === first.data.id,
+      `期望 ${first.data?.id}，实际 ${reenter.data?.id}`);
+    // 课时的 sessionProject（客户端按钮文案用它：草稿→继续创作 / 已提交→查看作品 / 没有→进入课堂）
+    const dashboard = await api('/api/student/dashboard', { token: student });
+    const lesson = (dashboard.data?.classroomCourses || []).flatMap((course) => course.lessons || []).find((item) => item.id === seeded.lessonId)
+      || (dashboard.data?.courses || []).flatMap((course) => course.lessons || []).find((item) => item.id === seeded.lessonId);
+    check('⑦ 仪表盘里找得到这节课（找不到就说明夹具/接口变了）', Boolean(lesson),
+      `classroomCourses=${(dashboard.data?.classroomCourses || []).length} 节 ${(dashboard.data?.classroomCourses || []).flatMap((c) => c.lessons || []).length} 课时 / seeded=${seeded.lessonId}`);
+    check('⑦ 课时带 sessionProject（已提交时客户端显示「查看作品」而不是「进入课堂」）',
+      lesson?.sessionProject?.id === first.data.id && lesson?.sessionProject?.status !== 'DRAFT',
+      JSON.stringify({ sessionProject: lesson?.sessionProject || null, continueProject: lesson?.continueProject || null, activeNow: lesson?.activeNow, participationStatus: lesson?.participationStatus, sessionId: lesson?.session?.id, projectId: first.data?.id }));
+    // session-state：老师结束课堂 → 学生画布能知道（前端据此退出画布、回课程中心）
+    const before = await api(`/api/student/projects/${first.data.id}/session-state`, { token: student });
+    check('⑦ 上课中：session-state 说 active', before.data?.active === true && before.data?.sessionStatus === 'ACTIVE', JSON.stringify(before.data).slice(0, 160));
+    await api(`/api/org/sessions/${session.data.id}/end`, { method: 'POST', token: teacher, body: {} });
+    const after = await api(`/api/student/projects/${first.data.id}/session-state`, { token: student });
+    check('④ 老师结束课堂：session-state 立刻说 active=false（学生端据此退出画布）',
+      after.data?.active === false && after.data?.sessionStatus !== 'ACTIVE', JSON.stringify(after.data).slice(0, 160));
+  }
+
   console.log(JSON.stringify({ name: 'student-grant-gate', pass: failures === 0, failures }, null, 2));
 } catch (error) {
   console.error(serverLog.slice(-3000));

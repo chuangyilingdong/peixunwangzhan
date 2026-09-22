@@ -32,6 +32,8 @@ const run = (args) => new Promise((resolve, reject) => {
   child.on('close', (code) => (code ? reject(new Error(err || out)) : resolve(code)));
 });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// 源码断言用（读仓库里的文件）
+const read = (relative) => fs.readFileSync(path.join(process.cwd(), relative), 'utf8');
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 
@@ -93,6 +95,45 @@ try {
   // 学生自己的作品列表仍要能读（历史申请/下架原因照常展示）—— 删接口不能把读取路径删坏
   const myWorks = await api('/api/student/works?limit=5', { token: student });
   check('① 学生端作品列表仍可读（没把读取路径删坏）', myWorks.status === 200 && Array.isArray(myWorks.data?.items), JSON.stringify(myWorks).slice(0, 200));
+
+  /* ── ② 作品读面要看成出来的**图/视频/音频**，不是画布（用户 2026-09-21 口径） ──
+     原话：「图4图5 作品发布后，网站显示的是画布内容，应该显示的是图片/视频/音频等等，而不是画布」。 */
+  {
+    const mediaFor = await (async () => {
+      const previous = process.env.PLATFORM_DB_PATH;
+      process.env.PLATFORM_DATA_DIR = temp; process.env.PLATFORM_DB_PATH = dbPath; process.env.DEPLOYMENT_MODE = 'local-mock';
+      try { return (await import('../apps/server/src/lib.js')).canvasMediaFrom; }
+      finally { if (previous === undefined) delete process.env.PLATFORM_DB_PATH; else process.env.PLATFORM_DB_PATH = previous; }
+    })();
+    const media = mediaFor({
+      nodes: [
+        { type: 'image', data: { assetUrl: '/api/student/file-assets/file_a/download', caption: '封面' } },
+        { type: 'video', data: { assetUrl: 'https://upstream.example/v.mp4' } },
+        { type: 'audio', data: { assetUrl: 'https://upstream.example/a.mp3' } },
+        { type: 'prompt', data: { text: '只是一段文字，不是媒体' } },
+        { type: 'image', data: { assetUrl: '/api/student/file-assets/file_a/download' } },   // 同一张出现两次
+      ],
+    });
+    check('② 画布快照 → 媒体清单：图/视频/音频都收、同类去重、认出我们自己的 fileId',
+      media.length === 3
+      && media[0].modality === 'IMAGE' && media[0].fileId === 'file_a' && media[0].caption === '封面'
+      && media[1].modality === 'VIDEO' && media[2].modality === 'AUDIO',
+      JSON.stringify(media));
+    check('② **三条**作品链路都下发 media（学生自己的 / 机构看学生 / **广场公开**）',
+      /canvasMediaFrom\(canvasSnapshot\)/.test(read('apps/server/src/routes/student.js'))
+      && /media: canvasMediaFrom\(canvasSnapshot\)/.test(read('apps/server/src/routes/orgAdmin.js'))
+      && /media: canvasMediaFrom\(canvas\)/.test(read('apps/server/src/routes/communication/public.js')));
+    const gallery = read('packages/shared/src/workMedia.jsx');
+    check('② 作品页用同一个媒体组件（四处读面共用；图片网格、视频/音频带控件）',
+      /export function WorkMediaGallery/.test(gallery)
+      && /<video src=\{src\} controls/.test(gallery) && /<audio src=\{src\} controls/.test(gallery)
+      && ['apps/website/src/pages/WorkDetail.jsx', 'apps/website/src/pages/MyWorkDetail.jsx', 'apps/org/src/main.jsx', 'apps/org/src/pages/classroom/ClassroomWork.jsx']
+        .every((file) => read(file).includes('WorkMediaGallery')));
+    check('② 广场与老师端**默认**看媒体，画布退到一个「创作画布」标签里',
+      /useState\('media'\)/.test(read('apps/website/src/pages/WorkDetail.jsx'))
+      && /创作画布/.test(read('apps/website/src/pages/WorkDetail.jsx'))
+      && /workMediaView === 'canvas'/.test(read('apps/org/src/main.jsx')));
+  }
 
   console.log(JSON.stringify({ name: 'works-plaza-unified', pass: failures === 0, failures }, null, 2));
 } catch (error) {

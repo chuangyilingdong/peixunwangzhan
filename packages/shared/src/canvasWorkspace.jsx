@@ -264,6 +264,27 @@ export function CanvasWorkspace({ api, ...props }) {
     return () => clearInterval(timer);
   }, [runningCount]);
 
+  // 盯着「老师还在不在上课」（用户 2026-09-21 口径：**老师一点结束课堂，学生端就该退出画布、
+  // 跳转回课程中心**）。每 10 秒问一次极小接口；一旦不是 ACTIVE 就提示一句再回课程中心。
+  // ⚠️ 只认服务端的 `active`：没绑定课堂的老项目服务端按"还在上课"处理（不该把人踢出去）。
+  useEffect(() => {
+    let stopped = false;
+    let leaveTimer = null;
+    async function checkSession() {
+      try {
+        const state = await api.get(`student/projects/${projectId}/session-state`);
+        if (stopped || state?.active !== false) return;
+        stopped = true;
+        clearInterval(timer);
+        setMessage(state.endedReason ? `老师已结束课堂（${state.endedReason}），正在回到课程中心…` : '老师已结束课堂，正在回到课程中心…');
+        // 让提示停留一下再跳（1.6 秒），别让学生以为页面自己崩了。
+        leaveTimer = setTimeout(() => navigate('/learn'), 1600);
+      } catch { /* 轮询失败不当回事：下一次再问（网络抖一下就退出课堂反而更糟） */ }
+    }
+    const timer = setInterval(checkSession, 10000);
+    return () => { stopped = true; clearInterval(timer); if (leaveTimer) clearTimeout(leaveTimer); };
+  }, [api, projectId, navigate]);
+
   // 到这里 hook 全部调用完毕，才可以提前返回。
   if (project.loading) return <Loading label="正在打开魔法画布…" />;
   if (project.error) return <ErrorState error={project.error} onRetry={project.refresh} />;
@@ -337,10 +358,11 @@ export function CanvasWorkspace({ api, ...props }) {
       setCanvasSnapshot(result.project.canvasSnapshot);
       setDraft(result.project.canvasSnapshot);
       setSavedSignature(canvasContentSignature(result.project.canvasSnapshot));
-      setMessage('作品已提交，老师可以看到你的课堂作品了。');
+      setMessage('作品已提交，老师可以看到你的课堂作品了。老师结束后回课程中心就行。');
       project.refresh();
-      // 提交即结束课堂：稍等一下让提示看得见，然后回课程大厅（不再需要「退出课堂」按钮）
-      window.setTimeout(() => navigate('/learn/canvas'), 1200);
+      // ⚠️ 2026-09-21 用户口径：**提交后不要自动跳走** —— 「老师如果没点结束课堂，应该留在原页面」。
+      //    画布这时已经变成只读（作品已提交），学生可以继续看自己的作品、或点右上角「课程中心」离开；
+      //    老师一结束课堂，下面那个轮询会把全班带回课程中心。
     } catch (err) { setMessage(err.message); }
     finally { setBusy(false); }
   }
@@ -628,7 +650,10 @@ export function CanvasWorkspace({ api, ...props }) {
           className={`cv-save-state ${saveError ? 'is-error' : changed ? 'is-dirty' : ''}`}
           title={saveError ? `保存失败：${saveError}（改动还没写进服务器，先别刷新；请把这条信息发给老师）` : undefined}
         >{saveError ? `保存失败：${saveError}` : changed ? (autoSaving ? '自动保存中…' : '有未保存修改') : '已保存'}</span>
-        <button type="button" className="cv-btn" onClick={() => navigate('/learn/canvas')}>课程大厅</button>
+        {/* ⚠️ 2026-09-21 用户口径：这里原来跳 `/learn/canvas`（「画布上课」那个**旧页面**）——
+            现在跳**课程中心**（`/learn`，学生端保留的那一版），并跟着改叫「课程中心」，
+            和"老师结束课堂后回到课程中心"是同一个落点。 */}
+        <button type="button" className="cv-btn" onClick={() => navigate('/learn')}>课程中心</button>
         <button type="button" className="cv-btn cv-btn--primary" disabled={!editable || busy || !draft || !hasNodes} onClick={submitWork}>{busy ? '提交中…' : '提交作品'}</button>
       </div>
     </header>

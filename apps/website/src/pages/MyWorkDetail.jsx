@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell, artifactGroup, formatDate, workPlazaLabel } from '@platform/shared';
+import { buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery, artifactGroup, formatDate, workPlazaLabel } from '@platform/shared';
 
 /** 快照里的私有素材地址 → fileId（服务端拼的 imageUrls 用的就是这个地址）。 */
 function fileIdOfAssetUrl(value) {
@@ -106,6 +106,8 @@ export function MyWorkDetailPage({ api }) {
   })), [work, imageData]);
 
   const images = useMemo(() => (Array.isArray(work?.images) ? work.images : []), [work]);
+  // 做出来的媒体（图/视频/音频）：服务端从画布快照提的那份
+  const media = useMemo(() => (Array.isArray(work?.media) ? work.media : []), [work]);
   const artifacts = useMemo(() => (Array.isArray(work?.artifacts) ? work.artifacts : []), [work]);
   const webArtifact = useMemo(() => artifacts.find(isHtmlArtifact) || null, [artifacts]);
   const documentArtifacts = useMemo(() => artifacts.filter(isDocumentArtifact), [artifacts]);
@@ -123,11 +125,14 @@ export function MyWorkDetailPage({ api }) {
     if (workSource === 'VIBECODING' && webArtifact && Object.hasOwn(files, webArtifact.name)) {
       list.push({ key: 'web', label: '网页', hint: '直接点开玩' });
     }
-    if (images.length) list.push({ key: 'images', label: images.length > 1 ? `图片 ${images.length}` : '图片' });
+    // 作品内容（图/视频/音频）：用户 2026-09-21 口径 —— 作品读面要看成出来的东西，画布只是过程。
+    // ⚠️ 只用媒体清单（`work.media`）；服务端没给（老 payload）时退回老那套「图片」清单。
+    if (media.length) list.push({ key: 'images', label: media.length > 1 ? `作品内容 ${media.length}` : '作品内容' });
+    else if (images.length) list.push({ key: 'images', label: images.length > 1 ? `图片 ${images.length}` : '图片' });
     if (documentArtifacts.length) list.push({ key: 'doc', label: '文档' });
     if (workSource === 'CANVAS') list.push({ key: 'canvas', label: '画布' });
     return list;
-  }, [workSource, webArtifact, documentArtifacts, images.length, files]);
+  }, [workSource, webArtifact, documentArtifacts, images.length, media.length, files]);
   const currentView = views.some((item) => item.key === activeView) ? activeView : (views[0]?.key || '');
 
   // 网页产物跑在与公开页同一个不透明起源沙箱里，外网一律掐掉（学生代码不该联网）
@@ -171,7 +176,9 @@ export function MyWorkDetailPage({ api }) {
       </header>
       {notice}
       {viewTabs}
-      {currentView === 'images' ? <ImageGallery list={images} src={resolveImageSrc} />
+      {currentView === 'images' ? (media.length
+        ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={(item) => (item?.fileId ? (imageData[item.fileId] || '') : '')} />
+        : <ImageGallery list={images} src={resolveImageSrc} />)
         : <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={resolveAssetUrl} /></div>}
       <div className="work-detail__foot">{plazaLink}{back}</div>
     </main>;
@@ -194,7 +201,9 @@ export function MyWorkDetailPage({ api }) {
       {viewTabs}
       <div className="mw-stage">
         {currentView === 'web' && webArtifact ? <ReplayPreview html={webHtml} title={work.title || '我的作品'} />
-          : currentView === 'images' ? <ImageGallery list={images} src={resolveImageSrc} />
+          : currentView === 'images' ? (media.length
+            ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={(item) => (item?.fileId ? (imageData[item.fileId] || '') : '')} />
+            : <ImageGallery list={images} src={resolveImageSrc} />)
             : currentView === 'doc' && selectedDocument ? (documentFile
               ? <ReplayFilePreview url={documentFile.preview} name={selectedDocument.name} />
               // 一件作品里的文档不止一份时才摆切换条 —— 否则另一半东西在这里就摸不到了。

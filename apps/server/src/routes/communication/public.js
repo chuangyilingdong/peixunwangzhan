@@ -17,8 +17,7 @@ import {
   row,
   rows,
   seriesDeliveryModesOf,
-  transaction,
-} from '../../lib.js';
+  transaction, canvasMediaFrom } from '../../lib.js';
 import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
@@ -496,6 +495,9 @@ function publicWorkRow(row) {
     title: row.title,
     description: row.description || '',
     canvasSnapshot: canvas,
+    // 广场作品详情的**媒体清单**（图/视频/音频）：用户 2026-09-21 口径 —— 作品页要看成出来的东西，
+    // 不是画布。与站内那两条链路共用同一个提取函数（`canvasMediaFrom`）。
+    media: canvasMediaFrom(canvas),
     featured: Boolean(row.featured_at),
     submittedAt: row.submitted_at,
     publicUrl: row.share_token ? `/works/${row.share_token}` : null,

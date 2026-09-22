@@ -48,6 +48,21 @@ function lessonStateBadge(lesson) {
   return { tone: 'warning', text: '未加入课堂' };
 }
 
+/**
+ * 画布入口按钮的文案：按**本场课堂的项目**到哪一步了分三种。
+ *   · 有草稿 → 「继续创作」；
+ *   · 本场课堂已提交过（`sessionProject.status = SUBMITTED/GRADED`）→ **「查看作品」**
+ *     （打开的是同一个项目、画布只读；服务端 POST /projects 会幂等返回它）；
+ *   · 本场还没建过项目 → 「进入课堂」。
+ * ⚠️ 只判草稿的旧写法有个坑（用户 2026-09-21 报的）：提交之后「找不到项目」→ 显示「进入课堂」→
+ *    点下去**新开一个空画布**。所以这里必须看 sessionProject（服务端下发的本场项目）。
+ */
+function canvasEntryLabel(lesson) {
+  if (lesson.continueProject) return '继续创作';
+  if (lesson.sessionProject) return '查看作品';
+  return '进入课堂';
+}
+
 // 画布上课入口（课程包卡片 + 课时卡片，亮的课才能进入）
 export function CanvasClassroom({ api, onEnterProject }) {
   const navigate = useNavigate();
@@ -120,7 +135,7 @@ export function CanvasClassroom({ api, onEnterProject }) {
             <div className="lesson-detail-action">
               <button className={lesson.canStart ? 'primary-button' : 'secondary-button'} disabled={buttonDisabled} onClick={() => enter(lesson)}>
                 {busy === lesson.id ? '正在进入…'
-                  : lesson.canStart ? (lesson.continueProject ? '继续创作' : '进入课堂')
+                  : lesson.canStart ? canvasEntryLabel(lesson)
                     : lesson.participationStatus === 'COMPLETED' ? '已完课'
                       : '等待开课'}
               </button>
@@ -261,9 +276,13 @@ export function StudentCourseCenter({ api, onEnterCanvas, homeHref }) {
                   也不再有「提交作品」（作品上传改由客户端做，见交接文档）。
                   两种都开时**两个入口并列**（画布按钮 + 客户端那两个），学生自己挑。 */}
               {offersVibe ? <ClientEntryActions lesson={lesson} canEnter={canEnterVibe} /> : null}
+              {/* 按钮文案按「本场课堂的项目到哪一步了」分三种（用户 2026-09-21 口径）：
+                  草稿 → 继续创作；**已提交 → 查看作品**（打开的是同一个项目、画布只读）；
+                  本场还没建过 → 进入课堂。原来只看草稿，提交之后就退回「进入课堂」，
+                  点下去会**新开一个空画布** —— 那是 bug。 */}
               {offersCanvas ? <button className={canEnterCanvas ? 'primary-button' : 'secondary-button'} disabled={!canEnterCanvas || busy === lesson.id} onClick={() => enter(lesson)}>
                 {busy === lesson.id ? '正在进入…'
-                  : canEnterCanvas ? (lesson.continueProject ? '继续创作' : '进入课堂')
+                  : canEnterCanvas ? canvasEntryLabel(lesson)
                     : lesson.participationStatus === 'COMPLETED' ? '已完课'
                       : lesson.hasGrant === false ? '未授权'
                         : '等待开课'}

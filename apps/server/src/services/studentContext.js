@@ -481,6 +481,10 @@ function studentLessonProgressMap(user) {
         lessonId,
         projectCount: 0,
         draftProjects: [],
+        // 这一节课**本场课堂的项目**（草稿与已提交都记）：学生点「进入课堂 / 查看作品」要回到**同一个**项目，
+        // 不能因为"已经提交过"就给他开一个新空画布（用户 2026-09-21：「点进入课堂还能进入到新画布，
+        // 这个肯定是bug」）。draftProjects 仍然只管草稿（「继续创作」用它判）。
+        sessionProjects: [],
         workCount: 0,
         works: [],
         bestWorkStatus: null,
@@ -498,18 +502,20 @@ function studentLessonProgressMap(user) {
     if (!project.course_lesson_id) continue;
     const item = ensure(project.course_lesson_id);
     item.projectCount += 1;
-    if (project.status === 'DRAFT') {
-      item.draftProjects.push({
-        id: project.id,
-        title: project.title,
-        classId: project.class_id,
-        sessionId: project.class_session_id,
-        status: project.status,
-        latestVersion: Number(project.latest_version || 0),
-        lastSavedAt: project.last_saved_at,
-        updatedAt: project.updated_at,
-      });
-    }
+    const projectEntry = {
+      id: project.id,
+      title: project.title,
+      classId: project.class_id,
+      sessionId: project.class_session_id,
+      status: project.status,
+      latestVersion: Number(project.latest_version || 0),
+      lastSavedAt: project.last_saved_at,
+      updatedAt: project.updated_at,
+    };
+    // 草稿 → 「继续创作」用它判；本场课堂的项目（**草稿与已提交都记**）→ 「查看作品」用它判。
+    // 只记草稿就解释了那个 bug：提交之后本场课堂找不着项目 → 客户端显示「进入课堂」→ 服务端新开一个空画布。
+    if (project.status === 'DRAFT') item.draftProjects.push(projectEntry);
+    if (project.class_session_id) item.sessionProjects.push(projectEntry);
     const updated = project.updated_at;
     if (updated && updated > item.lastActivityAt) item.lastActivityAt = updated;
   }
@@ -540,6 +546,7 @@ function studentLessonProgressMap(user) {
   }
   for (const item of progress.values()) {
     item.draftProjects.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    item.sessionProjects.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   }
   return progress;
 }
@@ -757,6 +764,9 @@ export function buildStudentDashboard(user) {
           lastActivityAt: progress.lastActivityAt,
         },
         continueProject: progress.draftProjects.find((project) => project.sessionId === state.session?.id) || null,
+        // 本场课堂的项目（草稿**或已提交**）：客户端据此把按钮写成「继续创作 / 查看作品」，
+        // 而不是"提交完就找不到项目、只好显示进入课堂"（那会新开一个空画布）。
+        sessionProject: (progress.sessionProjects || []).find((project) => project.sessionId === state.session?.id) || null,
         latestWork: [...progress.works].sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')))[0] || null,
       };
       allLessonTasks.push(task);
@@ -808,6 +818,9 @@ export function buildStudentDashboard(user) {
       // 「关闭再进入复用同一份创作」：progressByLesson 就是按课时分的，draftProjects 已按最近改动倒序，
       // 所以取第一篇即「这节课最近在做的那个草稿」—— 绝不因为 classId 对不上而新开一个项目。
       const continueProject = progress.draftProjects.find((project) => project.sessionId === state.session?.id) || null;
+      // 本场课堂的项目（草稿**或已提交**）：已提交时客户端要显示「查看作品」并打开**同一个**项目，
+      // 不能再新开一个空画布（用户 2026-09-21 报的就是它）。
+      const sessionProject = (progress.sessionProjects || []).find((project) => project.sessionId === state.session?.id) || null;
       return {
         ...lesson,
         classId: null,
@@ -835,6 +848,7 @@ export function buildStudentDashboard(user) {
         workStatus: progress.bestWorkStatus,
         lastActivityAt: progress.lastActivityAt,
         continueProject,
+        sessionProject,
       };
     });
     return {

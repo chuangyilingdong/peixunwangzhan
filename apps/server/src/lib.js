@@ -1136,6 +1136,35 @@ export function normalizeProject(value, { includeSnapshot = false } = {}) {
   return result;
 }
 
+/**
+ * 画布快照里的**媒体**（图片 / 视频 / 音频）→ 一份统一清单，给"作品读面"用。
+ *
+ * 用户 2026-09-21 口径：「作品发布后网站显示的是画布内容，应该显示的是图片/视频/音频等等，而不是画布」——
+ * 作品页要展示**做出来的东西**，画布只是过程。提取规则与 org 端现有的那条**同源**：只认
+ * `previewUrl / assetUrl / referenceUrl` 三个字段（别扫整份快照 —— 扫宽了会把任意字段里的字串当素材）。
+ * `modality` 按节点类型给（animation 也是视频），`fileId` 留给我们自己的下载口（要转 data: 才显示得出）。
+ */
+export function canvasMediaFrom(canvasSnapshot) {
+  const nodes = Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : [];
+  const out = [];
+  const seen = new Set();
+  for (const node of nodes) {
+    const data = node?.data || {};
+    const url = String(data.assetUrl || data.previewUrl || data.referenceUrl || '').trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const type = String(node?.type || '').toLowerCase();
+    const modality = type === 'video' || type === 'animation' ? 'VIDEO' : (type === 'audio' || type === 'music') ? 'AUDIO' : 'IMAGE';
+    out.push({
+      url,
+      modality,
+      fileId: url.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1] || null,
+      caption: String(data.caption || data.title || '').trim() || null,
+    });
+  }
+  return out;
+}
+
 export function normalizeWork(value, { includeSnapshot = false } = {}) {
   if (!value) return null;
   const result = {
@@ -1172,7 +1201,29 @@ export function normalizeWork(value, { includeSnapshot = false } = {}) {
     plazaPublished: Number(value.is_public || 0) === 1,
     shareToken: value.share_token || null,
   };
-  if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
+  if (includeSnapshot) {
+    result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
+    // 作品**做出来的东西**（图片 / 视频 / 音频 / 生成的文字）：作品的读面要展示这些，
+    // 而不是一张"画布截图"（用户 2026-09-21：「作品发布后网站显示的是画布内容，应该显示的是
+    // 图片/视频/音频等等，而不是画布」）。来源就是这次创作产出的 media_assets（按时间顺序）。
+    result.assets = rows(
+      `SELECT id, modality, label, asset_url, preview_url, mime_type, metadata, created_at
+         FROM media_assets WHERE project_id = ? ORDER BY created_at, id`,
+      [value.project_id],
+    ).map((asset) => {
+      const metadata = parseJson(asset.metadata, {}) || {};
+      return {
+        id: asset.id,
+        modality: String(asset.modality || 'IMAGE').toUpperCase(),
+        label: asset.label || '',
+        url: asset.asset_url || '',
+        previewUrl: asset.preview_url || asset.asset_url || '',
+        mimeType: asset.mime_type || null,
+        text: typeof metadata.text === 'string' ? metadata.text : '',
+        createdAt: asset.created_at || null,
+      };
+    }).filter((asset) => asset.url || asset.text);
+  }
   return result;
 }
 

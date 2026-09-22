@@ -1,5 +1,5 @@
 import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable } from '../lib.js';
-import { normalizeLesson } from '../lib.js';
+import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 import { prepareFileDownload, prepareFilePreview } from './fileAssets.js';
 import { hashPassword } from '@platform/database';
@@ -795,7 +795,9 @@ export async function handleOrg(ctx) {
     }
     const base = { id: work.id, source, title: work.title, studentId: work.student_id, studentName: work.student_name || null, status: work.status, submittedAt: work.submitted_at };
     const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `${scope.base}/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
-    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls };
+    // 作品页要展示的**媒体**（图/视频/音频）——老师端预览也要看"做出来的东西"，不是画布
+    // （用户 2026-09-21：「应该显示的是图片/视频/音频等等，而不是画布」）。
+    if (source === 'CANVAS') return { ...base, canvasSnapshot, imageUrls, media: canvasMediaFrom(canvasSnapshot) };
     const content = normalizeSubmission(work, { includeContent: true });
     // 真文件产物（学生创作环境交上来的 PPT/Word/Excel）的取用地址也在服务端拼好：
     // 前端不该自己去拼路由（前缀/编码错一处就是 404，而且两边都没法测）。

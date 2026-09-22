@@ -1,7 +1,7 @@
 // 课堂里「只读作品预览」弹窗（2026-09-17 从 pages/Classrooms.jsx 原样搬进来，逻辑未改）。
 import { useEffect, useState } from 'react';
 import { CanvasEditor } from '@platform/canvas';
-import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, useData } from '@platform/shared';
+import { buildPreviewDocument, Empty, ErrorState, formatDate, Loading, Notice, ReplayDocument, ReplayFiles, ReplayPreview, WorkMediaGallery, useData } from '@platform/shared';
 import { Modal } from './ui.jsx';
 
 export function previewHref(value) {
@@ -33,6 +33,8 @@ async function readAsDataUrl(blob) {
 export function ClassroomWork({ api, workBase, work = {}, onClose }) {
   const detail = useData(() => api.get(`${workBase}/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}`), [api, workBase, work.source, work.id]);
   const [activeName, setActiveName] = useState('');
+  // 作品先看**做出来的东西**（图/视频/音频）；画布放到「创作画布」那一档（用户 2026-09-21 口径）。
+  const [workView, setWorkView] = useState('media');
   const [images, setImages] = useState({});
   const [imageError, setImageError] = useState('');
   const data = detail.data;
@@ -97,9 +99,21 @@ export function ClassroomWork({ api, workBase, work = {}, onClose }) {
     {detail.loading ? <Loading label="正在读取私有作品…" /> : detail.error ? <ErrorState error={detail.error} onRetry={detail.refresh} /> : data ? <>
       <p className="muted">{data.studentName || '—'} · {formatDate(data.submittedAt)}</p>
       {imageError ? <Notice tone="warning">{imageError}</Notice> : null}
-      {data.source === 'CANVAS' ? data.canvasSnapshot
-        ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} />
-        : <Empty title="暂无画布快照" />
+      {data.source === 'CANVAS' ? (Array.isArray(data.media) && data.media.length
+        // 作品先看**做出来的东西**（图/视频/音频）——用户 2026-09-21：「应该显示的是图片/视频/音频等等，
+        // 而不是画布」。画布放到下面的「创作画布」里，想看过程随时切。
+        ? <>
+          <div className="row-actions" role="tablist">
+            <button type="button" role="tab" aria-selected={workView === 'media'} className={workView === 'media' ? 'primary-button' : 'secondary-button'} onClick={() => setWorkView('media')}>作品内容</button>
+            <button type="button" role="tab" aria-selected={workView === 'canvas'} className={workView === 'canvas' ? 'primary-button' : 'secondary-button'} onClick={() => setWorkView('canvas')}>创作画布</button>
+          </div>
+          {workView === 'canvas'
+            ? (data.canvasSnapshot ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} /> : <Empty title="暂无画布快照" />)
+            : <WorkMediaGallery media={data.media} assets={data.assets} resolveSrc={(item) => (item?.fileId ? snapshotImage(`/api/student/file-assets/${item.fileId}/download`) : '')} />}
+        </>
+        : (data.canvasSnapshot
+          ? <CanvasEditor key={data.id} initialSnapshot={data.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={snapshotImage} />
+          : <Empty title="暂无画布快照" />))
         : <div data-console="vibecoding" className="classroom-work-preview">
           {views.length > 1 ? <label>作品文件<select value={entry || ''} onChange={(event) => setActiveName(event.target.value)}>
             {views.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}

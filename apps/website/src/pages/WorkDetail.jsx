@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CanvasEditor } from '@platform/canvas';
-import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell } from '@platform/shared';
+import { artifactGroup, buildPreviewDocument, ConsoleEmpty, ConsoleIcon, ReplayDocument, ReplayFilePreview, ReplayFiles, ReplayPanel, ReplayPreview, ReplayShell, WorkMediaGallery } from '@platform/shared';
 
 function formatDate(value) {
   if (!value) return '';
@@ -27,6 +27,11 @@ export function WorkDetailPage({ api }) {
   const { token } = useParams();
   const [state, setState] = useState({ loading: true, error: null, work: null });
   const [activeName, setActiveName] = useState('');
+  // 作品先用**媒体**看（图/视频/音频），画布放到第二个标签（用户 2026-09-21 口径）。
+  const [view, setView] = useState('media');
+  // 站内素材（`/api/student/file-assets/…`）要转成 data: 才显示得出（<img> 发不出 Authorization 头）；
+  // 上游图床的 https 外链原样用（与「我的作品」那一屏同一条规则）。
+  const [imageData, setImageData] = useState({});
 
   useEffect(() => {
     let live = true;
@@ -39,6 +44,20 @@ export function WorkDetailPage({ api }) {
   }, [api, token]);
 
   const work = state.work;
+  // 作品里挂的站内素材 → data:（拿得到就换，拿不到就让 <img> 拿原地址试 —— 公开作品的外链本来就能显示）
+  useEffect(() => {
+    let cancelled = false;
+    const entries = Object.entries(work?.imageUrls || {});
+    if (!entries.length) { setImageData({}); return () => { cancelled = true; }; }
+    Promise.allSettled(entries.map(async ([fileId, path]) => {
+      if (typeof path !== 'string' || !path.startsWith('/api/student/file-assets/')) throw new Error('图片地址不属于这个作品。');
+      return [fileId, await api.fetchDataUrl(path)];
+    })).then((results) => {
+      if (cancelled) return;
+      setImageData(Object.fromEntries(results.filter((item) => item.status === 'fulfilled' && item.value).map((item) => item.value)));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [api, work]);
   const isVibeCoding = work?.type === 'VIBECODING';
   // 加载中也要先定好外壳：token 前缀已经说明它是哪一类作品，
   // 不然深色页会先闪一下浅色版式。
@@ -164,7 +183,16 @@ export function WorkDetailPage({ api }) {
           {work.submittedAt ? ` · 提交于 ${formatDate(work.submittedAt)}` : ''}
         </p>
       </header>
-      <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} /></div>
+      {/* 作品先给人看**做出来的东西**（图/视频/音频），画布只是过程（想看点一下切过去）。
+          用户 2026-09-21：「图4 作品发布后，网站显示的是画布内容，应该显示的是图片/视频/音频等等，
+          而不是画布」。 */}
+      <div className="work-detail__views" role="tablist">
+        <button type="button" role="tab" aria-selected={view === 'media'} className={'work-detail__tab' + (view === 'media' ? ' is-active' : '')} onClick={() => setView('media')}>作品内容</button>
+        <button type="button" role="tab" aria-selected={view === 'canvas'} className={'work-detail__tab' + (view === 'canvas' ? ' is-active' : '')} onClick={() => setView('canvas')}>创作画布</button>
+      </div>
+      {view === 'canvas'
+        ? <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} /></div>
+        : <WorkMediaGallery media={work.media} assets={work.assets} resolveSrc={(item) => (item?.fileId ? imageData[item.fileId] || '' : '')} />}
       <div className="work-detail__foot"><Link className="button soft" to="/works">看看更多作品</Link></div>
     </> : null}
   </main>;

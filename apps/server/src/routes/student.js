@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -501,7 +501,14 @@ export async function handleStudent(ctx) {
     const courseLessonId = nonEmptyString(ctx.body?.courseLessonId, '课时', { max: 100 });
     const lessonContext = resolveStudentLessonContext(auth.rawUser, courseLessonId, ctx.body?.sessionId || null);
     if (!lessonContext.canUseNow) throw errors.forbidden(lessonContext.blockReason, lessonContext.blockCode);
-    const existing = row("SELECT id FROM student_projects WHERE student_id=? AND org_id=? AND course_lesson_id=? AND class_session_id=? AND status='DRAFT' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1", [auth.user.id, auth.user.orgId, courseLessonId, lessonContext.session.id]);
+    // 「进入课堂」= **幂等取得本场课堂的创作**：同一场课堂 + 同一个课时**只该有一个项目**，草稿优先、
+    // 已提交的复用（画布只读）。
+    // ⚠️ 这里以前只认 `status='DRAFT'`：学生提交作品之后本场课堂就"找不到项目"了 →
+    //    客户端显示「进入课堂」→ 这里**新开一个空画布**（用户 2026-09-21 报的
+    //    「点进入课堂还能进入到新画布，这个肯定是bug」）。已提交的项目要能被重新打开，而不是丢掉。
+    const existing = row(`SELECT id FROM student_projects
+       WHERE student_id=? AND org_id=? AND course_lesson_id=? AND class_session_id=? AND deleted_at IS NULL
+       ORDER BY (status='DRAFT') DESC, updated_at DESC LIMIT 1`, [auth.user.id, auth.user.orgId, courseLessonId, lessonContext.session.id]);
     if (existing) {
       const project = normalizeProject(fetchProject(ctx, existing.id), { includeSnapshot: true });
       project.computePool = computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
@@ -544,6 +551,26 @@ export async function handleStudent(ctx) {
     // 算力池摘要：学生一进课堂就能看到「本课包还剩多少」（与闸门同源，不是另算一个数）
     project.computePool = computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
     return project;
+  }
+
+  // 学生画布盯「老师还在不在上课」（用户 2026-09-21 口径：**老师一点结束课堂，学生端就该退出画布、
+  // 跳转回课程中心**）。只回一个极小的对象，给学生画布按秒级轮询用 —— 别拿整个项目 payload 去轮询。
+  // ⚠️ 没绑定课堂的老项目（class_session_id 为空）一律按"还在上课"处理：没有课堂可结束，不该把人踢出去。
+  match = part.match(/^\/projects\/([^/]+)\/session-state$/);
+  if (match && method === 'GET') {
+    const project = getOwnProject(ctx, match[1]);
+    const session = project.class_session_id
+      ? row('SELECT id,status,title,ended_at,ended_reason,ai_paused FROM class_sessions WHERE id=?', [project.class_session_id])
+      : null;
+    return {
+      projectId: project.id,
+      sessionId: session?.id || null,
+      sessionTitle: session?.title || null,
+      sessionStatus: session?.status || 'UNBOUND',
+      endedAt: session?.ended_at || null,
+      endedReason: session?.ended_reason || null,
+      active: session ? session.status === 'ACTIVE' : true,
+    };
   }
 
   if (match && method === 'PUT') {
@@ -976,7 +1003,10 @@ export async function handleStudent(ctx) {
           caption: String(data.caption || data.title || '').trim() || null,
         }];
       });
-      return { ...base, canvasSnapshot, imageUrls, images };
+      // 作品页要展示的**媒体**（图/视频/音频）：与 `images` 同一个来源（画布节点），但把视频与音频也算进来
+      // —— 用户 2026-09-21：「应该显示的是图片/视频/音频等等，而不是画布」。
+      const media = canvasMediaFrom(canvasSnapshot);
+      return { ...base, canvasSnapshot, imageUrls, images, media };
     }
     const content = normalizeSubmission(work, { includeContent: true });
     // 图片地址由服务端拼好（前端不自己拼路由，前缀/编码错一处就是 404，两边都测不出来）：

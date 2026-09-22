@@ -1438,3 +1438,26 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
    但它在课时卡片里必须和旁边的 <button> 长得一模一样 —— .lesson-detail-action button 那条
    规则选不到 <a>，所以这里补一份，数值照抄那条。 */
 .lesson-detail-action a.primary-button,.lesson-detail-action a.secondary-button{display:inline-flex;align-items:center;justify-content:center;min-width:104px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:800;line-height:1.2;text-decoration:none;cursor:pointer}
+
+/* ── 作品页的媒体展示（用户 2026-09-21 口径：作品读面要看成出来的图/视频/音频，不是画布） ──
+   图片用网格平铺、视频/音频各占一行、文字单独成块；深浅两套主题都能看（用 currentColor 与半透明底）。 */
+.work-media { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 18px 0; }
+.work-media__item { margin: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid rgb(0 0 0 / 10%); border-radius: 14px; background: rgb(0 0 0 / 3%); }
+.work-media__item.is-image { grid-column: span 1; }
+.work-media__item img { display: block; width: 100%; height: auto; border-radius: 10px; }
+.work-media__item.is-video, .work-media__item.is-audio { grid-column: 1 / -1; }
+.work-media__item video { display: block; width: 100%; max-height: 62vh; border-radius: 10px; background: #000; }
+.work-media__item audio { width: 100%; min-width: 260px; }
+.work-media__item figcaption { color: rgb(0 0 0 / 55%); font-size: 12px; line-height: 1.5; }
+.work-media__text { grid-column: 1 / -1; margin: 0; padding: 12px 14px; border: 1px solid rgb(0 0 0 / 10%); border-radius: 14px; background: rgb(0 0 0 / 3%); }
+.work-media__text h4 { margin: 0 0 6px; font-size: 13px; color: rgb(0 0 0 / 55%); font-weight: 600; }
+.work-media__text p { margin: 0; white-space: pre-wrap; line-height: 1.7; }
+.work-media__missing { padding: 24px; border-radius: 10px; background: rgb(0 0 0 / 5%); color: rgb(0 0 0 / 45%); font-size: 12px; text-align: center; }
+.work-media__empty { margin: 18px 0; color: rgb(0 0 0 / 50%); font-size: 13px; }
+/* 深色壳（画布/控制台那套）里用白字 */
+.c-replay .work-media__item, .cv-shell .work-media__item { border-color: rgb(255 255 255 / 12%); background: rgb(255 255 255 / 4%); }
+.c-replay .work-media__item figcaption, .cv-shell .work-media__item figcaption { color: rgb(255 255 255 / 55%); }
+.c-replay .work-media__text, .cv-shell .work-media__text { border-color: rgb(255 255 255 / 12%); background: rgb(255 255 255 / 4%); }
+.c-replay .work-media__text h4 { color: rgb(255 255 255 / 55%); }
+.c-replay .work-media__missing, .cv-shell .work-media__missing { background: rgb(255 255 255 / 6%); color: rgb(255 255 255 / 45%); }
+.c-replay .work-media__empty, .cv-shell .work-media__empty { color: rgb(255 255 255 / 50%); }
