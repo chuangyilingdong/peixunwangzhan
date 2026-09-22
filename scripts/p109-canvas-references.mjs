@@ -220,8 +220,18 @@ check('没锁生成方式时：够不着帧的（多张图 / 视频 / 音频混�
   /: \(!useFrames && omni && allRefs\.length > 0\)/.test(canvas));
 check('尾帧判定用 FIRST_LAST_FRAME（原来写的 LAST_FRAME，尾帧永远不亮）',
   /const supportsLastFrame = modes\.includes\('FIRST_LAST_FRAME'\)/.test(canvas) && !/\.includes\('LAST_FRAME'\)/.test(canvas));
-check('面板那行与生成 payload 读**同一处**判定（不会生成一套、显示另一套）',
-  /omni=\{videoInputPlan\.useOmni\}/.test(canvas) && /referenceAssets=\{videoInputPlan\.useOmni \? videoInputPlan\.allRefs : \[\]\}/.test(canvas));
+// ⚠️ 2026-09-22 改判据（**不是把断言删掉**）：用户报「图5是全能参考的模式，为什么画面那还显示首帧尾帧」
+//    —— 面板显示哪一行原来跟着 `useOmni`，而它要求"已经连了东西"才为真；锁成全能参考但还没连线时
+//    就退回「画面/首帧未连接」那一行（那两种画面在这个模式下根本不存在）。
+//    现在拆成两个量，**都从同一个 videoInputPlan 出来**：
+//      · 面板那一行跟着**模式**走（omniRow：锁了就按锁的，没锁＝useOmni）；
+//      · 发给上游的素材跟着**实际连线**走（useOmni + allRefs）。
+//    两者只在"一件都没连"时不同，而那时 payload 本来就是空的 —— 所以"显示一套、生成另一套"仍然不成立。
+check('面板那行与生成 payload 读**同一处**判定（不会生成一套、显示另一套）—— 锁定时面板按模式、payload 按连线',
+  /omni=\{videoInputPlan\.omniRow\}/.test(canvas)
+  && /referenceAssets=\{videoInputPlan\.allRefs\}/.test(canvas)
+  && /const omniRow = lockedMode \? lockedMode === 'OMNI_REFERENCE' : useOmni;/.test(canvas)
+  && /referenceAssets: useOmni \? allRefs : \[\]/.test(canvas));
 
 /* ── ⑤ 按模型的内置模板：2.5 **低价扩展版**一个不支持的字都不能带（2026-09-21 用户报）─────────
    用户原话：「为什么使用 2.5 这个模型会报错…2.0 的模型好像是可以正常的」，

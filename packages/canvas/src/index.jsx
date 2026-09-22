@@ -210,7 +210,7 @@ function PromptEditor({ value, refs = [], readOnly = false, placeholder = '', on
 
   return <div
     ref={boxRef}
-    className={`learning-node__inputbox learning-node__prompt nodrag${readOnly ? ' is-readonly' : ''}`}
+    className={`learning-node__inputbox learning-node__prompt nodrag ${NO_WHEEL_ZOOM_CLASS}${readOnly ? ' is-readonly' : ''}`}
     contentEditable={!readOnly}
     suppressContentEditableWarning
     role="textbox"
@@ -310,6 +310,19 @@ function dropNodeSize(node) {
 
 // 素材画幅（9:16 / 16:9 / 1:1 …）→ CSS 变量，决定卡片里素材区的大小与比例：
 // 9:16 的槽位就该是一张竖卡（参考的节点也是各自按素材比例），要看大用画布缩放。
+/**
+ * 框体**实际显示**的比例：学生挑的画幅要立刻反映到框体形状上。
+ *
+ * 用户 2026-09-22 报的图2：「选择不同的尺寸，框体应该也要跟着变」。根因是两边读的不是一个字段 ——
+ * 画幅选取器写的是 `studentParams.aspectRatio`（学生自选），而框体尺寸读的是 `data.aspectRatio`
+ * （课包定死的那个，学生改不了它）→ 学生点了 9:16，框体还是原来那个形状，看着像没生效。
+ * 优先学生选的；没选（'' = 自动）就用课包定的（也是 '' 时交给 CSS 的默认比例）。
+ */
+function boxDisplayRatio(data) {
+  const picked = String(data?.studentParams?.aspectRatio || '').trim();
+  return picked || String(data?.aspectRatio || '');
+}
+
 function aspectRatioVars(value) {
   const matched = String(value || '').match(/^\s*(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)\s*$/i);
   if (!matched) return undefined;
@@ -547,6 +560,19 @@ function referenceAssetLabels(assets) {
 // 视频框体的「首帧 / 尾帧 / 参考素材」行：素材靠连线引进来（学生可从桌面拖文件进来再连线），未连时给明确提示
 // `lockedAudioRole`：课包锁的「音频怎么用」（LIP_SYNC 对口型 / VOICE_REFERENCE 声音参考），只影响这两处读面：
 // 行标上说明音频会怎么被用、以及"要念台词就把台词写进提示词"（上游不会替你转写音频）。
+/**
+ * 让「滚轮」在文本区里滚文本，而不是缩放画布 —— 用 xyflow 自己的约定：**给元素加 `nowheel` 类**。
+ *
+ * 用户 2026-09-22 报的图4：「右边的滚轮目前只能用鼠标手动拉，用滚轮就是画布缩放。」
+ * 根因：画布是 xyflow/react-flow，**滚轮默认被它拿去缩放**，节点里写了 `overflow-y:auto` 也收不到事件。
+ *
+ * ⚠️ **别用 React 的 `onWheel` + `stopPropagation` 去修**：xyflow 是在画布那层挂的**原生**监听器，
+ *    而 React 的合成事件挂在根容器上 —— 冒泡顺序是 `元素 → 画布(原生) → 根容器(React)`，
+ *    等 React 的处理器跑到时画布**早就缩放了**（第一版就是这么修的，实测没用，见 p129 的反向自检）。
+ *    xyflow 认的类名是 `nowheel`：`event.target.closest('.nowheel')` 命中就跳过缩放。
+ */
+export const NO_WHEEL_ZOOM_CLASS = 'nowheel';
+
 function FrameRefRows({ nodeId, incomingRefs = [], referenceUrl, omni, referenceAssets, supportsFirstFrame, supportsLastFrame, lockedMode = '', lockedLabel = '', lockedAudioRole = 'LIP_SYNC' }) {
   const { updateNode, removeIncomingRef } = useCanvasActions();
   // 悬停右上角的 ×：连过来的删连线，框体自己的预置素材清配置
@@ -628,14 +654,14 @@ function CopyTextButton({ text, onCopied }) {
 function PromptNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const generated = String(data.generatedText || '');
-  return <NodeFrame icon="✎" tone="prompt" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })} headingExtra={generated ? <CopyTextButton text={generated} /> : null}>
+  return <NodeFrame icon="✎" tone="prompt" aspectRatio={boxDisplayRatio(data)} processing={data.generationStatus === 'PENDING'} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })} headingExtra={generated ? <CopyTextButton text={generated} /> : null}>
     {generated
-      ? <div className="learning-node__text-wrap nodrag">
+      ? <div className={`learning-node__text-wrap nodrag ${NO_WHEEL_ZOOM_CLASS}`}>
         <div className="learning-node__text-result">{generated}</div>
       </div>
       // 文本框体也要有数字进度（用户 2026-09-21 口径：视频/图片/音乐/文本四类都要）
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__art" modality="TEXT" startedAt={data.generationStartedAt} />
-        : <div className="learning-node__art"><span>✎</span><small>{data.slotType === 'text' ? '在底部面板写提示词，生成文字' : '在底部面板写下内容'}</small></div>}
+        : <div className="learning-node__art learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt={data.slotType === 'text' ? '还没生成 —— 在底部面板写提示词，生成文字' : '还没生成 —— 在底部面板写下内容'} loading="lazy" /></div>}
   </NodeFrame>;
 }
 
@@ -721,7 +747,7 @@ function ImageNode({ id, data, selected }) {
   // 框体预置素材：老师为这个框体上传的参考图，生成前先给学生看。
   const referenceUrl = !data.previewUrl && !data.assetUrl ? String(data.referenceUrl || '') : '';
   const imageUrl = useDisplayUrl(data.previewUrl || data.assetUrl || referenceUrl);
-  return <NodeFrame icon="✦" tone="image" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✦" tone="image" aspectRatio={boxDisplayRatio(data)} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__art" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__art" modality="IMAGE" startedAt={data.generationStartedAt} />
       : imageUrl
@@ -731,7 +757,7 @@ function ImageNode({ id, data, selected }) {
 }
 function CharacterNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="♙" tone="character" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title || '故事角色'} selected={selected}>
+  return <NodeFrame icon="♙" tone="character" aspectRatio={boxDisplayRatio(data)} processing={data.generationStatus === 'PENDING'} title={data.title || '故事角色'} selected={selected}>
     <div className="learning-node__character-art">{data.emoji || '🧒'}</div>
     <input className="learning-node__input nodrag" value={data.name || ''} placeholder="角色名字" maxLength={40} onChange={(event) => updateNode(id, { name: event.target.value })} />
     <input className="learning-node__input learning-node__input--compact nodrag" value={data.trait || ''} placeholder="性格、能力或目标" maxLength={80} onChange={(event) => updateNode(id, { trait: event.target.value })} />
@@ -742,7 +768,7 @@ function CharacterNode({ id, data, selected }) {
 
 function SceneNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="⌂" tone="scene" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title || '故事场景'} selected={selected}>
+  return <NodeFrame icon="⌂" tone="scene" aspectRatio={boxDisplayRatio(data)} processing={data.generationStatus === 'PENDING'} title={data.title || '故事场景'} selected={selected}>
     <div className="learning-node__scene-art"><span>{data.emoji || '🌲'}</span><small>{data.mood || '神秘氛围'}</small></div>
     <input className="learning-node__input nodrag" value={data.place || ''} placeholder="场景地点" maxLength={60} onChange={(event) => updateNode(id, { place: event.target.value })} />
     <input className="learning-node__input learning-node__input--compact nodrag" value={data.mood || ''} placeholder="氛围，例如：温暖、紧张" maxLength={80} onChange={(event) => updateNode(id, { mood: event.target.value })} />
@@ -763,7 +789,7 @@ function VideoNode({ id, data, selected }) {
   // 只有生成出来的图/视频/音频才会出现在框体内」）。所以这里只看框体自己的预置素材和自己的生成结果；
   // 连线素材只在底部面板的「参考/首帧」行里出现，生成时再一起提交。
   const sourceUrl = useDisplayUrl(referenceUrl);
-  return <NodeFrame icon="▶" tone="video" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="▶" tone="video" aspectRatio={boxDisplayRatio(data)} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__video-preview" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__video-preview" modality="VIDEO" startedAt={data.generationStartedAt} />
       : videoUrl
@@ -771,13 +797,13 @@ function VideoNode({ id, data, selected }) {
         : sourceUrl
           // 画面本体就是卡片，按素材自身比例铺满；画面也可以直接拖着走（不再有「点图放大」）
           ? <img className="learning-node__media" src={sourceUrl} alt="画面来源" />
-          : <div className="learning-node__video-preview"><span>▶</span><small>在底部面板写提示词，生成短片</small></div>}
+          : <div className="learning-node__video-preview learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写提示词，生成短片" loading="lazy" /></div>}
   </NodeFrame>;
 }
 
 function NoteNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
-  return <NodeFrame icon="☼" tone="note" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING'} title={data.title || '创作便签'} selected={selected}>
+  return <NodeFrame icon="☼" tone="note" aspectRatio={boxDisplayRatio(data)} processing={data.generationStatus === 'PENDING'} title={data.title || '创作便签'} selected={selected}>
     <textarea className="learning-node__textarea nodrag" value={data.text || ''} placeholder="记录一个创作想法…" maxLength={300} onChange={(event) => updateNode(id, { text: event.target.value })} />
     {selected && <span className="learning-node__hint">便签可以保存你的灵感</span>}
   </NodeFrame>;
@@ -789,24 +815,24 @@ const AUDIO_MODALITIES = [['MUSIC', '生成音乐']];
 function AudioNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const audioUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
-  return <NodeFrame icon="♫" tone="audio" aspectRatio={data.aspectRatio} processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="♫" tone="audio" aspectRatio={boxDisplayRatio(data)} processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__audio-placeholder" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__audio-placeholder" modality="MUSIC" startedAt={data.generationStartedAt} />
       : audioUrl
         ? <audio className="learning-node__audio" controls src={audioUrl} />
-        : <div className="learning-node__audio-placeholder"><span>♫</span><small>在底部面板写歌词或描述，生成音乐</small></div>}
+        : <div className="learning-node__audio-placeholder learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写歌词或描述，生成音乐" loading="lazy" /></div>}
   </NodeFrame>;
 }
 
 function AnimationNode({ id, data, selected }) {
   const { updateNode } = useCanvasActions();
   const videoUrl = useDisplayUrl(data.previewUrl || data.assetUrl);
-  return <NodeFrame icon="✧" tone="animation" aspectRatio={data.aspectRatio} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
+  return <NodeFrame icon="✧" tone="animation" aspectRatio={boxDisplayRatio(data)} variant="media" processing={data.generationStatus === 'PENDING' || data.uploading === true} title={data.title} selected={selected} onRename={(value) => updateNode(id, { title: value })}>
     {data.uploading === true || data.uploadError ? <UploadState className="learning-node__animation-placeholder" data={data} />
       : data.generationStatus === 'PENDING' ? <GeneratingState className="learning-node__animation-placeholder" modality="VIDEO" startedAt={data.generationStartedAt} />
       : videoUrl
         ? <video className="learning-node__media" controls muted loop src={videoUrl} />
-        : <div className="learning-node__animation-placeholder"><span>✧</span><small>在底部面板写提示词，生成动画</small></div>}
+        : <div className="learning-node__animation-placeholder learning-node__art--illustration"><img src={BOX_EMPTY_ART} alt="还没生成 —— 在底部面板写提示词，生成动画" loading="lazy" /></div>}
   </NodeFrame>;
 }
 
@@ -902,8 +928,14 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
     const useOmni = lockedMode
       ? lockedMode === 'OMNI_REFERENCE' && allRefs.length > 0
       : (!useFrames && omni && allRefs.length > 0);
+    // ⚠️ **面板显示哪一行，由框体的「模式」决定，不由"连没连东西"决定。**
+    //    锁成全能参考、但学生还没连线时，`useOmni` 是 false（它要求 allRefs.length > 0）→
+    //    面板会退回「画面 / 首帧未连接 / 尾帧未连接」那一行 —— 而这两种画面在这个模式下**根本不存在**
+    //    （用户 2026-09-22 报的图5：「图5是全能参考的模式，为什么画面那还显示首帧尾帧」）。
+    //    所以行的选择用 omniRow（跟着锁走），**发给上游的素材仍然用 useOmni**（那个必须看实际连线）。
+    const omniRow = lockedMode ? lockedMode === 'OMNI_REFERENCE' : useOmni;
     return {
-      modes, supportsText, supportsFirstFrame, supportsLastFrame, omni, frameUrls, allRefs, useFrames, useOmni, lockedMode,
+      modes, supportsText, supportsFirstFrame, supportsLastFrame, omni, omniRow, frameUrls, allRefs, useFrames, useOmni, lockedMode,
       // 课包锁的「音频怎么用」（LIP_SYNC 对口型 / VOICE_REFERENCE 声音参考）：只影响面板读面
       // —— 真正的 role（drive_audio / reference_audio）由服务端按同一份课包配置决定，客户端不参与。
       audioRole: String(data.audioRole || 'LIP_SYNC').toUpperCase() === 'VOICE_REFERENCE' ? 'VOICE_REFERENCE' : 'LIP_SYNC',
@@ -1010,8 +1042,8 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
       nodeId={id}
       incomingRefs={getIncomingImageRefs(id)}
       referenceUrl={String(data.referenceUrl || '')}
-      omni={videoInputPlan.useOmni}
-      referenceAssets={videoInputPlan.useOmni ? videoInputPlan.allRefs : []}
+      omni={videoInputPlan.omniRow}
+      referenceAssets={videoInputPlan.allRefs}
       supportsFirstFrame={videoInputPlan.supportsFirstFrame}
       supportsLastFrame={videoInputPlan.supportsLastFrame}
       lockedMode={videoInputPlan.lockedMode}

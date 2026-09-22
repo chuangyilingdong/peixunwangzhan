@@ -328,7 +328,9 @@
 /* ── 提示词富文本编辑器（contenteditable）：文本和引用芯片在同一行里排版 ── */
 /* ⚠️ display 必须显式改回 block：它复用了 .learning-node__inputbox 的外框样式，而那层是 flex 列 ——
    不覆盖的话芯片和文字会各占一行（本轮踩过）。块级流里芯片才是「插在句子里」的。 */
-.learning-node__prompt { display: block; min-height: 74px; max-height: 260px; overflow-y: auto; color: var(--cv-text); font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; cursor: text; }
+/* user-select: 画布整体是拖拽面，节点里的文字默认选不中 —— 提示词本来就是要能选、能复制的
+   （用户 2026-09-22 报的图4：「文本内容可以选择的」）。 */
+.learning-node__prompt { display: block; min-height: 74px; max-height: 260px; overflow-y: auto; color: var(--cv-text); font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; cursor: text; user-select: text; -webkit-user-select: text; }
 .learning-node__prompt:focus { outline: none; }
 .learning-node__prompt.is-readonly { cursor: default; }
 /* 空的时候显示占位文案（contenteditable 没有 placeholder） */
