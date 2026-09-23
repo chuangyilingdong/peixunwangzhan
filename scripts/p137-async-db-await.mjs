@@ -29,7 +29,18 @@ const gate = process.argv.includes('--gate');
 const onlyFile = (() => { const i = process.argv.indexOf('--file'); return i >= 0 ? process.argv[i + 1] : null; })();
 
 const DB_FUNCS = ['row', 'rows', 'q', 'one', 'count', 'transaction'];
+
+// **按设计保留**同步 API 的文件：schema.js 就是这套同步 API 的实现本体，里面还有导入期
+// 建表/回填（它们是同步执行的）。门禁只判**应用代码**，这些文件单独列出来给人看。
+const SYNC_BY_DESIGN = new Set(['packages/database/src/schema.js']);
 const CALL_RE = new RegExp(`\\b(${DB_FUNCS.join('|')})\\s*\\(`, 'g');
+
+// 异步 API 名：这些调用**必须** await。
+// ⚠️ 为什么必须单独查它们（2026-09-23 实测踩到）：`\brow(` 匹配不到 `arow(`
+//    （`a` 与 `r` 之间没有词边界），所以"有人把 `await arow(` 改回 `arow(`" 这种**最常见的回退**，
+//    只查同步名的话门禁照样绿 —— 我插了一处漏 await 试验，门禁没拦住，才发现这个洞。
+const ASYNC_FUNCS = ['arow', 'arows', 'aq', 'aone', 'acount', 'atransaction', 'amap'];
+const ASYNC_CALL_RE = new RegExp(`\\b(${ASYNC_FUNCS.join('|')})\\s*\\(`, 'g');
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -45,6 +56,8 @@ const files = onlyFile
   : [...walk(path.join(root, 'apps/server/src')), ...walk(path.join(root, 'packages/database/src'))];
 
 const findings = [];
+const awaitedUses = [];
+const unawaitedAsync = [];
 for (const file of files) {
   const rel = path.relative(root, file).replaceAll('\\', '/');
   const lines = fs.readFileSync(file, 'utf8').split('\n');
@@ -61,30 +74,61 @@ for (const file of files) {
       if (/\bimport\b|^\s*\}?\s*from\b/.test(before)) continue;
       // 去掉行内注释后再判断有没有 await（`… row(…) // 注释` 里注释里的 await 不算）
       const code = before.split('//')[0];
-      if (/\bawait\b/.test(code)) continue;
+      const awaited = /\bawait\b/.test(code);
       // 声明式：`const row = …` / `function rows(` 等定义
       if (new RegExp(`\\b(const|let|var|function|class)\\s+${name}\\b`).test(code)) continue;
-      findings.push({ file: rel, line: i + 1, text: trimmed.slice(0, 110) });
+      // 两类都记：① 没 await 的（最危险）② 还在用**同步 API** 的（哪怕 await 了，也该用异步名）
+      (awaited ? awaitedUses : findings).push({ file: rel, line: i + 1, text: trimmed.slice(0, 110) });
+    }
+    // ⚠️ 异步 API 名（arow/arows/aq/…）也必须查：`\brow(` 匹配不到 `arow(`，
+    //    所以"有人把 await arow( 改成 arow("这种最常见的回退，只查同步名的话**完全看不见**
+    //    （2026-09-23 实测发现：插一处漏 await，门禁照样绿）。
+    for (const m of line.matchAll(ASYNC_CALL_RE)) {
+      const name = m[1];
+      const before = line.slice(0, m.index);
+      if (/\bfunction\s+$/.test(before)) continue;
+      if (/\.\s*$/.test(before)) continue;
+      if (/\bimport\b|^\s*\}?\s*from\b/.test(before)) continue;
+      const code = before.split('//')[0];
+      if (/\bawait\b/.test(code)) continue;
+      if (new RegExp(`\\b(const|let|var|function|class)\\s+${name}\\b`).test(code)) continue;
+      unawaitedAsync.push({ file: rel, line: i + 1, text: trimmed.slice(0, 110) });
     }
   });
 }
 
 const byFile = new Map();
 for (const f of findings) byFile.set(f.file, (byFile.get(f.file) || 0) + 1);
+const awaitedByFile = new Map();
+for (const f of awaitedUses) awaitedByFile.set(f.file, (awaitedByFile.get(f.file) || 0) + 1);
 
 console.log(`P137 数据访问 await 检查`);
-console.log(`  扫描了 ${files.length} 个文件，**没 await 的数据访问调用：${findings.length} 处**\n`);
-if (byFile.size) {
-  console.log('  按文件（前 15）:');
-  for (const [f, n] of [...byFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
-    console.log(`    ${String(n).padStart(4)}  ${f}`);
+console.log(`  扫描了 ${files.length} 个文件`);
+console.log(`  · **没 await 的数据访问调用：${findings.length} 处**`);
+console.log(`  · 还在用同步 API 名（row/rows/q/…）的调用：${awaitedUses.length} 处`);
+console.log(`  · **异步 API 名（arow/aq/…）没 await 的调用：${unawaitedAsync.length} 处**（最像"有人改回退了"的那一类）`);
+if (findings.length || awaitedUses.length) {
+  const all = new Map();
+  for (const [f, n] of byFile) all.set(f, n);
+  for (const [f, n] of awaitedByFile) all.set(f, `${all.get(f) ?? 0}(+${n} 同步名)`);
+  console.log('\n  按文件（前 15）:');
+  for (const [f, n] of [...all.entries()].sort((a, b) => String(b[1]).localeCompare(String(a[1]))).slice(0, 15)) {
+    const designed = SYNC_BY_DESIGN.has(f) ? '   ← 按设计保留（同步 API 的实现 + 导入期迁移）' : '';
+    console.log(`    ${String(n).padStart(4)}  ${f}${designed}`);
   }
   if (onlyFile || process.argv.includes('--list')) {
     console.log('\n  明细:');
-    for (const f of findings.slice(0, 60)) console.log(`    ${f.file}:${f.line}  ${f.text}`);
+    for (const f of [...findings, ...awaitedUses].slice(0, 60)) console.log(`    ${f.file}:${f.line}  ${f.text}`);
   }
 }
 if (gate) {
-  if (findings.length) { console.log(`\n门禁未过：还有 ${findings.length} 处没 await —— 改造没完成。`); process.exit(1); }
-  console.log('\n门禁通过：所有数据访问都 await 了。');
+  // 门禁只看**应用代码**：schema.js 是这套同步 API 的实现本体（还有导入期建表/回填），
+  // 它里面的同步调用是设计的一部分，改了就是自己吃自己。
+  const bad = [...findings, ...awaitedUses, ...unawaitedAsync].filter((f) => !SYNC_BY_DESIGN.has(f.file));
+  if (bad.length) {
+    console.log(`\n❌ 门禁未过：应用代码里还有 ${bad.length} 处同步数据访问（没 await 或还在用同步 API 名）—— 改造被回退了？`);
+    for (const f of bad.slice(0, 20)) console.log(`    ${f.file}:${f.line}  ${f.text}`);
+    process.exit(1);
+  }
+  console.log(`\n✅ 门禁通过：应用代码里同步数据访问 0 处、异步 API 漏 await 0 处（schema.js 里 ${findings.length + awaitedUses.length} 处按设计保留）。`);
 }

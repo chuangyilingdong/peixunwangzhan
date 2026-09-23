@@ -37,16 +37,27 @@ jobs:
       - name: Check server and acceptance scripts
         run: |
           find apps/server/src packages/database/src -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          find scripts -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
           node --input-type=module -e "await import('./apps/server/src/routes/adminOrg.js'); await import('./apps/server/src/routes/fileAssets.js'); await import('./apps/server/src/routes/auth.js')"
-          node --check scripts/p4-02-demo-data-inventory.mjs
-          node --check scripts/p4-o09-reminders.mjs
-          node --check scripts/p9-live-security-smoke.mjs
+
+      # 数据访问的 await 门禁（2026-09-23 RDS 阶段 1 加的）。
+      # 为什么必须有这道门禁：漏 await 的错 `node --check` 抓不到、运行时也常常不报错
+      # （拿 Promise 当数据用 → if 恒真、字段 undefined），只有静态检查兜得住；
+      # 运行时的 pendingResult 检测器只兜得住"属性访问"那类，`if (漏 await 的值)` 它兜不住。
+      - name: Data access await gate
+        run: node scripts/p137-async-db-await.mjs --gate
 
       - name: Run isolated acceptance tests
         run: |
           node scripts/p4-02-demo-data-inventory.mjs
           node scripts/p4-o09-reminders.mjs
           node scripts/p9-r04-ai-lesson-capability-guards.mjs
+
+      # 四条主流程 + 核心守卫的精选套件（约 20 秒）。
+      # 全量 150+ 个脚本在本地用 `node scripts/acceptance-suite.mjs` 跑；
+      # 改动前先存基线、改完用 --compare 对比，能抓出"静态检查全过但行为变了"的回归。
+      - name: Fast acceptance suite (replaces ad-hoc single scripts)
+        run: node scripts/acceptance-suite.mjs --fast --tag=ci
 
       - name: Build all four apps
         run: pnpm run build
