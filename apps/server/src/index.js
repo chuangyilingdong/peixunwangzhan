@@ -14,6 +14,7 @@ import { handleAiGeneration, initializeAsyncGenerationQueue, interruptOwnJobsOnS
 // 一并删除，这里不再有任何账单 scheduler 的 import。
 import { handleAdminCommunication, handleOrgCommunication, handlePublicCommunication, handleStudentCommunication, shutdownCommunicationWorkers } from './routes/communication.js';
 import { handleAdminFileAssets, handleOrgFileAssets, handleStudentFileAssets, handlePublicFileAssets } from './routes/fileAssets.js';
+import { handlePublicAssets } from './routes/publicAssets.js';
 // 2026-09-13（P4 删积分）：adminCredits.js / websiteCredits.js 两个路由文件已删除（积分体系下线）。
 import { handleAdminBillingConfig, handleStudentBillingConfig } from './routes/billingConfig.js';
 import { handleVibeCoding } from './routes/vibecoding.js';
@@ -69,9 +70,19 @@ function sendFileResponse(res, fileResponse, req) {
   // ⚠️ 302 本身不能被缓存 —— 签名会过期，缓存住等于把过期地址发给下一个人。
   if (fileResponse.redirectUrl) {
     res.writeHead(fileResponse.status || 302, {
-      ...corsHeaders(req, {}),
+      ...corsHeaders(req, fileResponse.headers || {}),
       location: fileResponse.redirectUrl,
-      'cache-control': 'private, no-store',
+      'cache-control': (fileResponse.headers && fileResponse.headers['cache-control']) || 'private, no-store',
+    });
+    res.end();
+    return;
+  }
+  // X-Accel-Redirect：告诉 nginx "这个响应你替我发"（内部 location，带 Range/静态缓存）。
+  // 用在"OSS 上没有、本地那份还在"的兜底路径上 —— 字节仍由 nginx 高效发出，不用我们搬。
+  if (fileResponse.accelRedirect) {
+    res.writeHead(fileResponse.status || 200, {
+      ...corsHeaders(req, fileResponse.headers || {}),
+      'x-accel-redirect': fileResponse.accelRedirect,
     });
     res.end();
     return;
@@ -156,7 +167,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const data = await handleRuntimeGateway(ctx)
+    const data = await handlePublicAssets(ctx)
+      ?? await handleRuntimeGateway(ctx)
       ?? await handleRuntimeSearchGateway(ctx)
       ?? await handlePublicCommunication(ctx)
       ?? await handlePublicFileAssets(ctx)

@@ -154,16 +154,36 @@ export function signedUrl(key, { expires = 900, contentDisposition, cacheControl
 }
 
 /**
+ * **稳定**签名 URL：同一个对象在同一个时间窗内产生**同一个地址**。
+ *
+ * 为什么需要它（是真问题，不是优化）：签名里带 Expires，若每次请求都重新签，
+ * 同一张图每次的地址都不一样 —— 浏览器会当成**不同的资源**，每次回源重下，
+ * 缓存等于没有，OSS 流量翻好几倍。
+ * 做法：把过期时间**对齐到窗口边界**（窗口内恒定），于是同一张图在整个窗口里只有一个地址，
+ * 浏览器/CDN 正常缓存；窗口过后自动换新地址。
+ *
+ * 用在**公开内容**上（广场媒体、客户端安装包）。课件与学生素材仍走 15 分钟的短签名 ——
+ * 那些不该被长期缓存。
+ */
+export function stableSignedUrl(key, { windowSeconds = 604800, contentDisposition } = {}) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const window = Math.max(300, Number(windowSeconds) || 604800);
+  const expiry = Math.ceil(nowSec / window) * window + window; // 对齐到窗口边界，且至少还能用一整个窗口
+  return signedUrl(key, { expires: expiry - nowSec, contentDisposition });
+}
+
+/**
  * 服务器侧上传一个对象（内网端点）。
  * 成功返回 { key, etag, size }；失败抛错（错误里带 OSS 的返回体，便于排查）。
  */
-export async function putObject(key, buffer, contentType = 'application/octet-stream') {
+export async function putObject(key, buffer, contentType = 'application/octet-stream', { cacheControl } = {}) {
   if (!ossConfigured()) throw new Error('OSS 未配置，无法上传');
   const c = cfg();
   const fullKey = withPrefix(key);
   const body = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const date = new Date().toUTCString();
   const signature = signV1({ verb: 'PUT', key: fullKey, contentType, dateOrExpires: date });
+  // Cache-Control 是**普通**头（不在 OSS 的 CanonicalizedOSSHeaders 里），所以不进签名 ✓
   const res = await fetch(serverUrl(fullKey), {
     method: 'PUT',
     headers: {
@@ -171,6 +191,7 @@ export async function putObject(key, buffer, contentType = 'application/octet-st
       'Content-Type': contentType,
       'Content-Length': String(body.length),
       Authorization: `OSS ${c.accessKeyId}:${signature}`,
+      ...(cacheControl ? { 'Cache-Control': cacheControl } : {}),
     },
     body,
   });

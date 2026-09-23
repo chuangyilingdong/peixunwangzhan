@@ -81,17 +81,26 @@ else
   bad "扫描器跑不通（$SCANNER）—— 生产 fail-closed，上传会一律被拒"
 fi
 
-log "7. 学生创作环境（dsh）"
-chk "dsh-host-broker active" "systemctl is-active --quiet dsh-host-broker"
-chk "broker socket 在" "ls /run/dsh-host-user/broker.sock"
-chk "dsh 运行时 node 可执行" "/opt/dsh-runtime/opt/node/bin/node -v"
-chk "dsh-host-reap.timer enabled" "systemctl is-enabled --quiet dsh-host-reap.timer"
-echo "  ⚠️ 真实验收只有一条路：开一节课，让学生环境起起来、连上 18201 那个端口。"
+log "7. 学生创作环境（浏览器版）—— **已按用户口径下线**，这里反过来验它确实关着"
+# 2026-09-23 用户口径：vibecoding 课堂只在**学生自己的电脑**上跑（桌面客户端），
+# 平台只负责校验 / 上传作品 / 模型网关 / 开课结课。服务器上那套（broker + 每学生一个 Linux 用户
+# + 18201-18600 端口）**没人用**，已下线（只关运行面，代码与运行时保留，随时能开回来）。
+# 所以这里断言的是"它必须处于关闭状态"—— 若哪天有人又把它打开而没人知道，这里会红。
+for u in dsh-host-broker dsh-host-reap.timer; do
+  if systemctl is-active --quiet "$u" || systemctl is-enabled --quiet "$u" 2>/dev/null; then
+    bad "$u 应为已下线，实际 $(systemctl is-active "$u")/$(systemctl is-enabled "$u" 2>&1)"
+  else
+    ok "$u 已下线（inactive/disabled）"
+  fi
+done
+chk "broker socket 已消失" "! test -e /run/dsh-host-user/broker.sock"
+chk "dsh 运行时仍在（留着当备用，删了就没法快速开回来）" "/opt/dsh-runtime/opt/node/bin/node -v"
+echo "  ℹ️ 客户端那条路不依赖这套：它只用 client-context / gateway / submit-upload，验过是好的。"
 
 log "8. 证书与防火墙"
 chk "certbot timer active" "systemctl is-active --quiet certbot.timer"
 if certbot certificates 2>/dev/null | grep -q "$DOMAIN"; then ok "有 $DOMAIN 的证书"; else bad "没有 $DOMAIN 的证书（跑 certbot --nginx -d $DOMAIN）"; fi
-chk "ufw 放行 18201:18220" "ufw status | grep -q 18201:18220"
+chk "ufw 未开放 18201:18220（服务器侧学生环境已下线）" "! ufw status | grep -q 18201:18220"
 
 log "9. 资源"
 echo "  内存：$(free -m | awk '/^Mem:/{print $3" used / "$2" total"}')   磁盘：$(df -h / | awk 'NR==2{print $3" used / "$2" ("$5")"}')"
