@@ -522,7 +522,11 @@ function useStepsTrack(sectionRef, trackRef, pinRef, count) {
       // ⚠️ 用 **clientWidth**（布局宽度）而不是 window.innerWidth：后者在桌面 Chromium 上**含竖滚动条**
       //    （约 15px）—— 差这十几像素，最后一张卡就会被切掉一条边（2026-09-23 真浏览器量出来的就是它）。
       const avail = Math.max(240, layoutWidth() - padX);
-      const perView = isDesktop() ? Math.min(cards.length, 4) : 1;
+      // 能全放下就**全放下**（用户口径：整个横屏都要是卡片、不要半张）；
+      // 只有当卡片挤到每张不足 minWidth（200px，再窄就不好看了）时才改成滑动，每屏放 maxFit 张。
+      const minWidth = 200;
+      const maxFit = Math.max(1, Math.floor((avail + gap) / (minWidth + gap)));
+      const perView = isDesktop() ? Math.min(cards.length, maxFit) : 1;
       const width = isDesktop() ? Math.floor((avail - (perView - 1) * gap) / perView) : 0;
       if (width > 0) section.style.setProperty('--hp-step-w', `${width}px`);
       else section.style.removeProperty('--hp-step-w');
