@@ -351,11 +351,56 @@ function Title({eyebrow,title,desc}){return <section className="page-title"><div
 //   （那两处与线上 CMS 也不一致，已记在交接文档里等用户定）。
 // ⚠️ 判断哪一组是对的，**只能打线上量**：p115 跑的是全新种子库（CMS = 种子），
 //   只要两个兜底互相一致它就绿 —— 它看不见生产 CMS 里那份不同的数字。
+/* 首页数据区那四个图标（用户 2026-09-23 口径：「用这些 logo，把官网首页图1这4个logo换一下」，
+   指的是 https://github.com/topics/svg-icon 那一页的图标集）。
+   取的是那一页排第一的 **css.gg**（MIT，https://github.com/astrit/css.gg ）——
+   与站内其它图标同一条做法：**内联 SVG、不引依赖**（官网依赖里没有图标库，也不想为四个图标加一个）。
+   ⚠️ MIT 要求保留出处：以后换图标时，把上面这两行许可说明一起换掉并注明新的来源。
+   ⚠️ 统一 `fill: currentColor`：颜色跟着 `.hp-stat i` 那层走（深色首页上是 rgba(255,255,255,.72)），
+      尺寸用 `1em` 跟着那一层的 font-size（clamp(18px,2.4vw,28px)）—— 改样式时只改 CSS。 */
+const HOME_STAT_ICONS = {
+  // gg-album → 标准课包（一本带书签的书）
+  package: <path fillRule="evenodd" clipRule="evenodd" d="M2 19C2 20.6569 3.34315 22 5 22H19C20.6569 22 22 20.6569 22 19V5C22 3.34315 20.6569 2 19 2H5C3.34315 2 2 3.34315 2 5V19ZM20 19C20 19.5523 19.5523 20 19 20H5C4.44772 20 4 19.5523 4 19V5C4 4.44772 4.44772 4 5 4H10V12.0111L12.395 12.0112L14.0001 9.86419L15.6051 12.0112H18.0001L18 4H19C19.5523 4 20 4.44772 20 5V19ZM16 4H12V9.33585L14.0001 6.66046L16 9.33571V4Z" />,
+  // gg-notes → 课时总量（一叠带行的纸）
+  lessons: <>
+    <path d="M6 6C6 5.44772 6.44772 5 7 5H17C17.5523 5 18 5.44772 18 6C18 6.55228 17.5523 7 17 7H7C6.44771 7 6 6.55228 6 6Z" />
+    <path d="M6 10C6 9.44771 6.44772 9 7 9H17C17.5523 9 18 9.44771 18 10C18 10.5523 17.5523 11 17 11H7C6.44771 11 6 10.5523 6 10Z" />
+    <path d="M7 13C6.44772 13 6 13.4477 6 14C6 14.5523 6.44771 15 7 15H17C17.5523 15 18 14.5523 18 14C18 13.4477 17.5523 13 17 13H7Z" />
+    <path d="M6 18C6 17.4477 6.44772 17 7 17H11C11.5523 17 12 17.4477 12 18C12 18.5523 11.5523 19 11 19H7C6.44772 19 6 18.5523 6 18Z" />
+    <path fillRule="evenodd" clipRule="evenodd" d="M2 4C2 2.34315 3.34315 1 5 1H19C20.6569 1 22 2.34315 22 4V20C22 21.6569 20.6569 23 19 23H5C3.34315 23 2 21.6569 2 20V4ZM5 3H19C19.5523 3 20 3.44771 20 4V20C20 20.5523 19.5523 21 19 21H5C4.44772 21 4 20.5523 4 20V4C4 3.44772 4.44771 3 5 3Z" />
+  </>,
+  // gg-board → 课堂形式（一块分成几栏的板 = 两种上课形式）
+  format: <path fillRule="evenodd" clipRule="evenodd" d="M6 4C3.79086 4 2 5.79086 2 8V16C2 18.2091 3.79086 20 6 20H18C20.2091 20 22 18.2091 22 16V8C22 5.79086 20.2091 4 18 4H6ZM14 6H10V18H14V6ZM16 6V18H18C19.1046 18 20 17.1046 20 16V8C20 6.89543 19.1046 6 18 6H16ZM6 18H8V6H6C4.89543 6 4 6.89543 4 8V16C4 17.1046 4.89543 18 6 18Z" />,
+  // gg-briefcase → 机构工作台（公文包）
+  console: <>
+    <path d="M14 11H10V13H14V11Z" />
+    <path fillRule="evenodd" clipRule="evenodd" d="M7 5V4C7 2.89545 7.89539 2 9 2H15C16.1046 2 17 2.89545 17 4V5H20C21.6569 5 23 6.34314 23 8V18C23 19.6569 21.6569 21 20 21H4C2.34314 21 1 19.6569 1 18V8C1 6.34314 2.34314 5 4 5H7ZM9 4H15V5H9V4ZM4 7C3.44775 7 3 7.44769 3 8V14H21V8C21 7.44769 20.5522 7 20 7H4ZM3 18V16H21V18C21 18.5523 20.5522 19 20 19H4C3.44775 19 3 18.5523 3 18Z" />
+  </>,
+};
+
+/* ⚠️ **老数据要能平滑升级**：生产 CMS 的 HOME.stats 里存的就是那几个字符（◆ ◇ ✧ ⌘，
+   2026-09-18 那次改版写进去的），所以只改代码兜底的话**线上一个图标都不会变**。
+   这里把它们按位映射到新图标 —— **不用动生产数据**就能立刻看到新图标；
+   运维在后台重新保存时仍存这几个字符，照样渲染成图标。
+   写了别的字符（emoji 之类）就按文字渲染，不进这张表。 */
+const LEGACY_HOME_STAT_ICONS = { '◆': 'package', '◇': 'lessons', '✧': 'format', '⌘': 'console' };
+
+function HomeStatIcon({ name }) {
+  const raw = String(name || '').trim();
+  const key = HOME_STAT_ICONS[raw] ? raw : LEGACY_HOME_STAT_ICONS[raw];
+  // 认不出来就照旧当文字（运维在后台写了个 emoji 也不该被吃掉）
+  if (!key) return <i>{raw || '✦'}</i>;
+  return <i className="hp-stat-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{HOME_STAT_ICONS[key]}</svg></i>;
+}
+
+// ⚠️ 这里的 `icon` 是**图标名**（HOME_STAT_ICONS 里的键），不再是字符 ——
+//    2026-09-23 用户口径：把 ◆ ◇ ✧ ⌘ 那几个字符换成真图标（见上面 HOME_STAT_ICONS）。
+//    老字符仍认（LEGACY_HOME_STAT_ICONS），所以生产 CMS 里那份老数据不用动。
 const HOME_STATS_FALLBACK = [
-  { icon: '◆', value: 3, suffix: ' 门', label: '标准课包' },
-  { icon: '◇', value: 48, suffix: ' 节', label: '课时总量' },
-  { icon: '✧', value: 2, suffix: ' 类', label: '课堂形式' },
-  { icon: '⌘', value: 1, suffix: ' 套', label: '机构工作台' },
+  { icon: 'package', value: 3, suffix: ' 门', label: '标准课包' },
+  { icon: 'lessons', value: 48, suffix: ' 节', label: '课时总量' },
+  { icon: 'format', value: 2, suffix: ' 类', label: '课堂形式' },
+  { icon: 'console', value: 1, suffix: ' 套', label: '机构工作台' },
 ];
 function StatValue({ value, suffix }) {
   const target = Number(value) || 0;
@@ -422,7 +467,7 @@ function HomeLanding() {
         <SpecularButton size="md" radius={999} tint="#ffffff" tintOpacity={0.08} blur={8} textColor="#ffffff" lineColor="#ffffff" baseColor="#8a8a92" intensity={0.9} shineSize={15} shineFade={45} thickness={1} speed={0.55} followMouse proximity={250} onClick={() => navigate('/marketplace')}>查看课程</SpecularButton>
       </div>
     </section>
-    {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><i>{item.icon || '✦'}</i><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
+    {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><HomeStatIcon name={item.icon} /><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
   </main>;
 }
 function Home(_props) { return <HomeLanding />; }

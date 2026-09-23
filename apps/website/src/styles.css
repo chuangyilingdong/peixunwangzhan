@@ -37,7 +37,7 @@
 .hp-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:6px}
 .hp-stats{position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,1.4vw,18px);width:min(920px,100%);margin:0 auto;padding:clamp(16px,2.6vh,28px) clamp(20px,4vw,40px) clamp(24px,3.6vh,42px);animation:hp-rise .85s cubic-bezier(.22,1,.36,1) .45s both}
 .hp-stat{display:grid;justify-items:center;gap:6px;padding:clamp(12px,1.8vw,18px);border:1px solid rgba(255,255,255,.16);border-radius:16px;background:rgba(40,40,42,.48)}
-.hp-stat i{color:rgba(255,255,255,.72);font-size:clamp(18px,2.4vw,28px);font-style:normal;line-height:1}
+.hp-stat i{color:rgba(255,255,255,.72);font-size:clamp(18px,2.4vw,28px);font-style:normal;line-height:1}/* 图标（内联 SVG）：尺寸与颜色都跟着这一层走（1em / currentColor）——改图标大小只改上面那条 font-size */.hp-stat i.hp-stat-icon svg{display:block;width:1em;height:1em;fill:currentColor}
 .hp-stat strong{color:#fff;font-size:clamp(17px,2.1vw,25px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .hp-stat span{color:#8e8e8e;font-size:clamp(11px,1.2vw,12.5px)}
 @keyframes hp-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}

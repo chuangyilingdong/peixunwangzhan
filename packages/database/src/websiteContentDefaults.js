@@ -29,10 +29,12 @@ export const WEBSITE_CONTENT_DEFAULTS = {
     //    判断哪一组对只能这么量：本地守卫跑的是全新种子库，看不见生产 CMS 里那份数字。
     //    注：/org 与 /demo 的硬编码文案写的是「11 门 / 87 节」，与线上 CMS 不一致，已在交接文档记录。
     stats: [
-      { icon: '◆', value: 3, suffix: ' 门', label: '标准课包' },
-      { icon: '◇', value: 48, suffix: ' 节', label: '课时总量' },
-      { icon: '✧', value: 2, suffix: ' 类', label: '课堂形式' },
-      { icon: '⌘', value: 1, suffix: ' 套', label: '机构工作台' },
+      // icon 是**图标名**（见 apps/website/src/main.jsx 的 HOME_STAT_ICONS）；
+      // 老库里那几个字符（◆ ◇ ✧ ⌘）也认，会映射到同样的图标 —— 不用迁移数据。
+      { icon: 'package', value: 3, suffix: ' 门', label: '标准课包' },
+      { icon: 'lessons', value: 48, suffix: ' 节', label: '课时总量' },
+      { icon: 'format', value: 2, suffix: ' 类', label: '课堂形式' },
+      { icon: 'console', value: 1, suffix: ' 套', label: '机构工作台' },
     ],
   },
   // 常见问题（/faq）：**按端分三档**（2026-09-18 晚用户口径：「最好3个选项，学生端、老师端、机构端，
