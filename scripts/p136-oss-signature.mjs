@@ -78,6 +78,12 @@ check('空值子资源不进签名（否则拼出 ?k= 这种无效项）', () =>
     'GET\n\n\n1\n/bucket-a/x.png',
   );
 });
+check('**有键无值**的子资源只拼键名（?policy / ?acl 这类，不能变成 ?policy=）', () => {
+  assert.equal(
+    stringToSignV1({ verb: 'PUT', key: '', contentType: 'application/json', dateOrExpires: 'D', subResources: { policy: true } }),
+    'PUT\n\napplication/json\nD\n/bucket-a/?policy',
+  );
+});
 
 console.log('③ 对象键与前缀');
 check('withPrefix 去掉两头的斜杠再拼', () => {

@@ -91,11 +91,15 @@ function encodeKey(key) {
  */
 export function stringToSignV1({ verb = 'GET', key = '', contentType = '', dateOrExpires = '', subResources = {} } = {}) {
   const c = cfg();
+  // 子资源有两种形态，都要正确进签名：
+  //   · 有值（response-content-disposition=attachment;…）→ 拼成 k=v
+  //   · **有键无值**（`?policy`、`?acl` 这类 bucket 级操作）→ 只拼键名，**不能带等号**
+  //     用 `true` 表示这种；'' / null / undefined 一律当"没有这一项"（那种拼出 `?k=` 是错的）
   const keys = Object.keys(subResources)
     .filter((k) => subResources[k] !== undefined && subResources[k] !== null && subResources[k] !== '')
     .sort();
   const canonicalResource = `/${c.bucket}/${String(key).replace(/^\/+/, '')}`
-    + (keys.length ? `?${keys.map((k) => `${k}=${subResources[k]}`).join('&')}` : '');
+    + (keys.length ? `?${keys.map((k) => (subResources[k] === true ? k : `${k}=${subResources[k]}`)).join('&')}` : '');
   return `${verb}\n\n${contentType}\n${dateOrExpires}\n${canonicalResource}`;
 }
 
@@ -217,6 +221,54 @@ export async function getObjectToFile(key, destPath) {
   await mkdir(dirname(destPath), { recursive: true });
   await writeFile(destPath, Buffer.from(await res.arrayBuffer()));
   return { path: destPath, bytes: Number(res.headers.get('content-length') || 0) };
+}
+
+/**
+ * 设置 **bucket 策略**（公开读只开指定前缀用）。
+ *
+ * ⚠️ 这是**安全边界**上的操作：策略写错会把私有的课件/学生素材一起放开。
+ *    所以这个函数只负责"把策略装上去"，**用什么策略由调用方决定**，
+ *    并且在装完之后**必须验证**：公开前缀能匿名读、私有前缀仍然拒绝（见 11 号脚本）。
+ *
+ * 请求形状（Aliyun V1）：`PUT /?policy`，CanonicalizedResource = `/<bucket>/?policy`，
+ * 策略 JSON 放在 body 里。不需要额外的 CanonicalizedOSSHeaders，所以现有的签名字段就够。
+ */
+export async function putBucketPolicy(policy) {
+  if (!ossConfigured()) throw new Error('OSS 未配置，无法设置策略');
+  const c = cfg();
+  const body = Buffer.from(typeof policy === 'string' ? policy : JSON.stringify(policy), 'utf8');
+  const date = new Date().toUTCString();
+  const signature = signV1({ verb: 'PUT', key: '', contentType: 'application/json', dateOrExpires: date, subResources: { policy: true } });
+  const res = await fetch(`https://${c.bucket}.${internalEndpoint()}/?policy`, {
+    method: 'PUT',
+    headers: {
+      Date: date,
+      'Content-Type': 'application/json',
+      'Content-Length': String(body.length),
+      Authorization: `OSS ${c.accessKeyId}:${signature}`,
+    },
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`OSS 设置策略失败：HTTP ${res.status} ${text.slice(0, 300)}`);
+  }
+  return { ok: true };
+}
+
+/** 读回当前 bucket 策略（验证用；没设过会返回 404，这里当"没有策略"处理） */
+export async function getBucketPolicy() {
+  if (!ossConfigured()) return null;
+  const c = cfg();
+  const date = new Date().toUTCString();
+  const signature = signV1({ verb: 'GET', key: '', dateOrExpires: date, subResources: { policy: true } });
+  const res = await fetch(`https://${c.bucket}.${internalEndpoint()}/?policy`, {
+    method: 'GET',
+    headers: { Date: date, Authorization: `OSS ${c.accessKeyId}:${signature}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) return null;
+  try { return await res.json(); } catch { return null; }
 }
 
 /** 服务器侧删除对象（内网端点）。删不存在的对象也返回 ok（OSS 语义）。 */
