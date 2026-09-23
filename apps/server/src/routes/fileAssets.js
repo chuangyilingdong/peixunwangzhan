@@ -237,7 +237,8 @@ export async function prepareFileDownload(ctx, file) {
   // 授权判断在这之前已经做完了（调用方先校验 grants / 票据），签名地址只是"取件凭证"。
   const redirectUrl = ossRedirectUrl(file, {
     expires: 900,
-    contentType: file.mime_type || undefined,
+    // 不传 contentType：阿里云不允许在 URL 上覆盖 content-type（会 400），
+    // 而对象上传时已经带对了 mime，浏览器拿到的类型本来就是对的。
     contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(String(file.file_name || 'download').replace(/[\r\n"\\/]/g, '_'))}`,
   });
   if (redirectUrl) {

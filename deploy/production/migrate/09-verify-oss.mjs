@@ -35,8 +35,15 @@ console.log('OSS 连通性验收');
 console.log('① 配置');
 const info = ossInfo();
 console.log(`  ${JSON.stringify(info)}`);
-step('FILE_STORAGE=oss 且配置齐全', info.backend === 'oss', info.backend !== 'oss' ? '当前判定不是 oss —— 后面几步没意义，先看上面缺哪项' : '');
-if (!ossConfigured()) { console.log('\n配置不齐，停止。'); process.exit(1); }
+// ⚠️ 这一步**不是**失败项：正常流程是"先把连通性验过、再打开 FILE_STORAGE"
+// （先开后验的话，一旦签名有问题，线上就已经在往 OSS 写了）。所以只提示状态。
+if (info.backend !== 'oss') {
+  console.log('  ℹ️  FILE_STORAGE 还没打开 —— 正常，验完再开（这恰好是我们想要的顺序）');
+}
+if (!ossConfigured()) {
+  console.log('  ✗ 配置不齐（缺 bucket / AK / SK / 端点之一）—— 停止。');
+  process.exit(1);
+}
 
 console.log('② 服务器写（内网端点）');
 try {
@@ -57,17 +64,19 @@ try {
 
 console.log('④ 浏览器视角（公网端点 + 签名 + 覆盖响应头）—— 最容易错的一步');
 try {
-  const url = signedUrl(KEY, {
-    expires: 300,
-    contentType: 'text/plain; charset=utf-8',
-    contentDisposition: 'inline; filename="verify.txt"',
-  });
+  // 实测（2026-09-23）：OSS **只认 attachment 类的覆盖** —— 请求 `inline` 会被无视，
+  // 回给你的仍是 `attachment`；而 `attachment; filename=…` 会原样生效。
+  // 这恰好符合我们的用法：走 OSS 重定向的只有**下载**（要的就是 attachment + 文件名）；
+  // **预览**走"取到本地再发"，不经过这条，所以 inline 不生效对我们没有影响。
+  const url = signedUrl(KEY, { expires: 300, contentDisposition: `attachment; filename*=UTF-8''verify.txt` });
   const res = await fetch(url);
   const got = Buffer.from(await res.arrayBuffer());
-  step('签名 URL 取回 200', res.ok, `HTTP ${res.status}`);
+  step('签名 URL 取回 200', res.ok, `HTTP ${res.status}${res.ok ? '' : ` — ${got.toString('utf8').slice(0, 160)}`}`);
   step('取回的字节与写进去的一致', sha(got) === sha(BODY), `sha ${sha(got).slice(0, 12)} / ${sha(BODY).slice(0, 12)}`);
-  step('覆盖的 content-type 生效', String(res.headers.get('content-type') || '').includes('text/plain'), res.headers.get('content-type') || '');
-  step('覆盖的 content-disposition 生效', String(res.headers.get('content-disposition') || '').includes('inline'), res.headers.get('content-disposition') || '');
+  step('对象自带的 content-type 正确', String(res.headers.get('content-type') || '').includes('text/plain'), res.headers.get('content-type') || '');
+  step('下载用的 content-disposition 覆盖生效（要带出文件名）',
+    String(res.headers.get('content-disposition') || '').includes('verify.txt'),
+    res.headers.get('content-disposition') || '(空)');
 } catch (error) { step('签名 URL 取回', false, error.message); }
 
 console.log('⑤ 清理（把测试对象删掉）');

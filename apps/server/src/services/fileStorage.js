@@ -44,12 +44,13 @@ export async function persistUploadBytes({ relativeKey, buffer, mimeType, writeL
  *     （这台机的公网出口只有 5 Mbps，媒体全从它出去会拖慢所有人）
  *   · 本地行 → 返回 null，调用方继续走原来的流式下发
  */
-export function ossRedirectUrl(file, { expires = 900, contentType, contentDisposition } = {}) {
+export function ossRedirectUrl(file, { expires = 900, contentDisposition } = {}) {
   if (!file || rowStorageBackend(file) !== 'oss') return null;
   const key = String(file.storage_key || '').replaceAll('\\', '/');
   if (!key) return null;
   if (!ossConfigured()) return null; // 配置被人临时撤掉时退回本地路径，让它照旧报"文件不存在"而不是 500
-  return signedUrl(key, { expires, contentType, contentDisposition });
+  // 不传 contentType：阿里云不允许在 URL 上覆盖 content-type（见 objectStorage.signedUrl 的注释）
+  return signedUrl(key, { expires, contentDisposition });
 }
 
 /** OSS 上有没有这个对象（回填脚本与巡检用） */

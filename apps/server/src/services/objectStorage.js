@@ -123,13 +123,20 @@ function serverUrl(key, subResources = {}) {
  *   contentDisposition 覆盖响应头 content-disposition（下载用 attachment; filename=…）
  *   cacheControl       覆盖响应头 cache-control
  */
-export function signedUrl(key, { expires = 900, contentType, contentDisposition, cacheControl, method = 'GET' } = {}) {
+export function signedUrl(key, { expires = 900, contentDisposition, cacheControl, method = 'GET' } = {}) {
   if (!ossConfigured()) throw new Error('OSS 未配置，无法签发 URL');
   const c = cfg();
   const fullKey = withPrefix(key);
   const expiresAt = Math.floor(Date.now() / 1000) + Math.max(1, Number(expires) || 900);
   const subResources = {};
-  if (contentType) subResources['response-content-type'] = contentType;
+  // ⚠️ 两条线都是**实测**出来的（2026-09-23），别照直觉改：
+  //   ① **不要传 response-content-type**：阿里云直接回 400
+  //      `InvalidRequest: Can not override response header on content-type`
+  //      —— 对象上传时已带 Content-Type，就不允许再由 URL 覆盖。我们上传时本来就把 mime
+  //      写对了，浏览器拿到的类型本来就是对的。
+  //   ② **`inline` 会被无视**：请求 `inline` 回给你的仍是 `attachment`；只有 `attachment; filename=…`
+  //      这类会原样生效。这对我们没有影响 —— 走这条重定向的只有**下载**（要的就是 attachment + 文件名），
+  //      而**预览**走的是"先把对象取到本地再发"（见 fileAssets.js），不经过签名 URL。
   if (contentDisposition) subResources['response-content-disposition'] = contentDisposition;
   if (cacheControl) subResources['response-cache-control'] = cacheControl;
   const signature = signV1({ verb: method, key: fullKey, dateOrExpires: expiresAt, subResources });
