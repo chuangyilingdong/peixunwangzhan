@@ -138,8 +138,8 @@ check('②d 那一排是**不折行的横向轨道**（flex + width:max-content�
   /\.hp-step-grid\{display:flex/.test(css) && /\.hp-step-grid\{[^}]*width:max-content/.test(css) && !/\.hp-step-grid\{[^}]*grid-template-columns/.test(css));
 check('②d 卡片宽度由 JS 写在 `--hp-step-w` 上（按整数张铺满算，不是写死宽度）',
   /\.hp-step\{[^}]*width:var\(--hp-step-w/.test(css) && /section\.style\.setProperty\('--hp-step-w'/.test(site));
-check('②d 每屏最多 4 张：`perView = Math.min(cards.length, 4)`（4 张以内一屏正好铺满，不用滑）',
-  /Math\.min\(cards\.length, 4\)/.test(site));
+check('②d 宽度算法：**能全放下就全放下**，只有挤到每张不足 200px 才改成滑动（5 张也要铺满一整屏）',
+  /const minWidth = 200/.test(site) && /const maxFit = Math\.max\(1, Math\.floor\(\(avail \+ gap\) \/ \(minWidth \+ gap\)\)\)/.test(site) && /Math\.min\(cards\.length, maxFit\)/.test(site));
 check('②d 卡片宽度按**布局宽度**算（clientWidth，不是 innerWidth —— 含滚动条会差十几像素、最后一张被切）',
   /layoutWidth\(\)/.test(site) && /document\.documentElement\?\.clientWidth/.test(site));
 check('②d 往下滑 → 卡片横移：章节高度 = 钉住的一屏 + 轨道多出来的宽，sticky + translate3d（机构手册那套）',
