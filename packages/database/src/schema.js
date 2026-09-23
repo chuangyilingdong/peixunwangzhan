@@ -1656,6 +1656,58 @@ export function transaction(fn) {
   catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
+// ─────────────────── 异步数据访问 API（RDS 改造用，2026-09-23 加）───────────────────
+//
+// 这套是给**阶段 1**（把数据访问从同步改成异步、真正接上 RDS）准备的。加它的这一刻
+// **不影响任何现有行为**：应用现在用的还是上面那套同步 API，这里只是先把门开出来。
+// 改造完成后这几个函数的**实现**换成 mysql2（真异步），而**调用点一行都不用再改**。
+//
+// ⚠️ 有一条必须理解的约束：**不能**用"同步实现的异步外壳"去做**渐进过渡**。
+//    SQLite 是单连接 + BEGIN IMMEDIATE，事务里 `await` 会让出事件循环，
+//    于是**别的请求会挤进同一个事务**、提交/回滚边界全乱，而且**一点报错都没有**。
+//    所以签名变更必须与全部调用点在同一次变更里完成（一个分支、一个原子提交）。
+//
+// 漏 `await` 是这个改造里最危险的错：`node --check` 抓不到、运行时不报错，
+// 表现为"拿 Promise 当数据用"（`if (user)` 恒真、`user.id` 是 undefined、`[...rows]` 空数组）。
+// 下面的 pendingResult() 就是让它**当场炸**的机制 —— 没有它，1203 处里漏掉的那些
+// 只能靠通读代码发现。
+function pendingResult(value, sql) {
+  const promise = Promise.resolve(value);
+  return new Proxy(promise, {
+    get(target, prop, receiver) {
+      // Promise 自身的协议 / 调试用的符号放行。
+      // ⚠️ 必须返回**绑定到 target 的函数**：`await proxy` 是"在 proxy 上调用 then"，
+      //    所以调用时的 this 会是 Proxy —— 直接返回 target 上的方法不够，会报
+      //    "Method Promise.prototype.then called on incompatible receiver"（踩了两次）。
+      if (prop === 'then' || prop === 'catch' || prop === 'finally'
+        || prop === Symbol.toStringTag
+        || (typeof prop === 'symbol' && String(prop).includes('inspect'))) {
+        const fn = Reflect.get(target, prop, target);
+        return typeof fn === 'function' ? fn.bind(target) : fn;
+      }
+      throw new Error(
+        `[数据访问] 这里漏了 await —— 拿到的是 Promise，不是数据。SQL: ${String(sql).slice(0, 100)}`,
+      );
+    },
+  });
+}
+
+// ⚠️ 这几个**不能写成 `async function`**：`async` 函数返回的是**原生 Promise**，
+//    它会把上面的 Proxy"吞掉"，于是漏 await 时又变成静默的了（我第一版就是这么写的，
+//    测的时候才发现检测器根本不触发）。直接 return Proxy：`await` 走 then、属性访问就炸。
+export function aq(sql, params = []) { return pendingResult(q(sql, params), sql); }
+export function arows(sql, params = []) { return pendingResult(rows(sql, params), sql); }
+export function arow(sql, params = []) { return pendingResult(row(sql, params), sql); }
+export function aone(sql, params = []) { return pendingResult(one(sql, params), sql); }
+export function acount(sql, params = []) { return pendingResult(count(sql, params), sql); }
+
+/** 异步事务：与同步版 BEGIN IMMEDIATE / COMMIT / ROLLBACK 语义一致，但支持 await 的 fn */
+export async function atransaction(fn) {
+  db.exec('BEGIN IMMEDIATE');
+  try { const result = await fn(); db.exec('COMMIT'); return result; }
+  catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+
 // P4-C03 migration: notification event deduplication, failure retry, ignore/archive
 try { db.exec("ALTER TABLE notification_recipients ADD COLUMN event_key TEXT"); } catch (_) {}
 try { db.exec("ALTER TABLE notification_recipients ADD COLUMN failure_reason TEXT"); } catch (_) {}
