@@ -98,6 +98,23 @@ check('② 没有外链字体（参考稿里那三个 Google Fonts 的 <link>）
 check('② 动效全是 CSS（@keyframes + IntersectionObserver），没有引动画库',
   /@keyframes hp-step-in/.test(css) && /IntersectionObserver/.test(site) && /再引一个动画库|不引依赖|framer-motion/.test(site));
 
+console.log('②b 底色跟页面整体的红协调（用户第二轮口径：「图1区域背景应该还是跟页面整体红色协调」）');
+// 用户原话见交接文档：这一栏原来是 `#000`，夹在红色首屏与红色页脚之间就是一条纯黑断层。
+// 现在要求两件事，缺一件就会在页面上看出来：
+//   ① 这一栏自己是**红家族渐变**（不是一块纯黑/纯灰）；
+//   ② 它的**末色 = 页脚的上缘色** —— 否则两段红之间会留一条深色缝（这是最容易做漏的一点）。
+const bandRule = (css.match(/\.hp-steps\{[^}]*\}/) || [])[0] || '';
+const footerRule = (css.match(/footer\.site-footer\{[^}]*\}/) || [])[0] || '';
+const lastStop = (rule) => { const stops = [...rule.matchAll(/#([0-9a-f]{3,8})\s+(\d+)%/gi)]; return stops.length ? `#${stops[stops.length - 1][1].toLowerCase()}` : ''; };
+const firstStop = (rule) => { const stops = [...rule.matchAll(/#([0-9a-f]{3,8})\s+(\d+)%/gi)]; return stops.length ? `#${stops[0][1].toLowerCase()}` : ''; };
+check('②b 这一栏底色是**渐变红**（不是纯黑 —— 用户报的就是那条断层）',
+  /background:radial-gradient\(/.test(bandRule) && /linear-gradient\(180deg/.test(bandRule) && !/background:#000(;|\})/.test(bandRule), bandRule.slice(0, 120));
+check('②b 两块红接得上：这一栏的**末色 = 页脚的上缘色**',
+  Boolean(lastStop(bandRule)) && lastStop(bandRule) === firstStop(footerRule), `栏末色=${lastStop(bandRule)} 页脚首色=${firstStop(footerRule)}`);
+// 灰字落在红底上会脏（页脚那一轮已经吃过这条），所以卡片正文/副标题必须是暖色系
+check('②b 红底上不用灰字（卡片说明与副标题是暖色，不是 #888 那类灰）',
+  !/\.hp-step p\{[^}]*color:#8/.test(css) && !/\.hp-steps-head p\{[^}]*color:#9/.test(css));
+
 console.log('③ 动效不能把内容藏起来');
 check('③ 卡片默认可见 —— 样式里 `.hp-step` 本身没有 opacity:0（别把内容留在"等 JS 才显示"）',
   !/\.hp-step\{[^}]*opacity:0/.test(css) && !/\.hp-steps\{[^}]*opacity:0/.test(css));

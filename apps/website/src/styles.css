@@ -43,27 +43,32 @@
 @keyframes hp-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
 /* ── 首页「三步一栏」（2026-09-23 用户口径：页脚上方那一栏，文字与图片后台可配）──────────────────
    参考稿是暗底 + 三张卡片 + 红色高光 + 悬停上浮。做法上**不引依赖**（不引 framer-motion/Tailwind）：
-   入场靠 .is-in 触发一次 @keyframes，悬停上浮用 transform、红色光晕用 box-shadow。
+   入场靠 .is-in 触发一次 @keyframes，悬停上浮用 transform、红光晕用 box-shadow。
    ⚠️ 卡片**默认就是可见的**，`.is-in` 只负责"播一次入场" —— 别反过来写成默认 opacity:0，
-      否则观察器没触发时运营看到的是一整块空白。 */
-.hp-steps{position:relative;z-index:1;padding:clamp(52px,6.6vw,92px) clamp(20px,4vw,40px) clamp(60px,7.4vw,100px);border-top:1px solid rgba(255,255,255,.08);background:#000}
+      否则观察器没触发时运营看到的是一整块空白。
+   ⚠️ 2026-09-23 第二轮（用户：「图1区域背景应该还是跟页面整体红色协调」）：底色原来是 `#000`，
+      夹在**红色首屏**（.hp-bg 那支视频）与**红色页脚**之间就是一条纯黑断层。现在这一栏用**跟页脚同一套
+      配方**（顶部一团红径向光 + 深→酒红→深四段线性渐变），而且**末色 = 页脚的上缘色 `#17060a`** ——
+      两段无缝接上，整页从首屏往下就是一片连贯的红。卡片保持深色（在红底上才立得起来），
+      但底色改成**暖黑**、文字改成**暖白**（灰字落在红底上会脏 —— 页脚那一轮已经吃过这条）。 */
+.hp-steps{position:relative;z-index:1;padding:clamp(52px,6.6vw,92px) clamp(20px,4vw,40px) clamp(60px,7.4vw,100px);border-top:1px solid rgb(255 255 255 / 8%);background:radial-gradient(120% 85% at 50% 0%,rgb(255 60 90 / 22%),transparent 58%),linear-gradient(180deg,#1b070d 0%,#5f1020 38%,#8a1526 62%,#17060a 100%)}
 .hp-steps-head{max-width:min(760px,94%);margin:0 auto clamp(28px,3.8vw,46px);text-align:center}
 .hp-steps-head h2{margin:0;color:#fff;font-size:clamp(25px,3.3vw,42px);font-weight:700;line-height:1.22;letter-spacing:-.02em}
-.hp-steps-head p{margin:14px auto 0;max-width:min(580px,92%);color:#999;font-size:clamp(13px,1.5vw,16px);line-height:1.65}
+.hp-steps-head p{margin:14px auto 0;max-width:min(580px,92%);color:#e4c8cd;font-size:clamp(13px,1.5vw,16px);line-height:1.65}
 .hp-step-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:clamp(14px,1.8vw,24px);max-width:1100px;margin:0 auto}
-.hp-step{display:flex;flex-direction:column;gap:14px;padding:clamp(20px,2.3vw,30px);border:1px solid rgba(255,255,255,.09);border-radius:24px;background:#0f0f0f;transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
-.hp-step:hover{transform:translateY(-10px);border-color:rgba(232,35,26,.42);box-shadow:0 20px 44px -20px rgba(232,35,26,.7),inset 0 0 0 1px rgba(232,35,26,.16)}
+.hp-step{display:flex;flex-direction:column;gap:14px;padding:clamp(20px,2.3vw,30px);border:1px solid rgb(255 255 255 / 14%);border-radius:24px;background:#170a0e;transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
+.hp-step:hover{transform:translateY(-10px);border-color:rgb(255 255 255 / 30%);box-shadow:0 22px 48px -18px rgb(255 60 90 / 85%),inset 0 0 0 1px rgb(255 255 255 / 14%)}
 .hp-step-number{color:#fff;font-size:clamp(34px,3.5vw,48px);font-weight:700;line-height:1;letter-spacing:-.04em}
-.hp-step-art{position:relative;overflow:hidden;aspect-ratio:16/10;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#1a1a1a}
+.hp-step-art{position:relative;overflow:hidden;aspect-ratio:16/10;border:1px solid rgb(255 255 255 / 12%);border-radius:14px;background:#210d12}
 .hp-step-art img{display:block;width:100%;height:100%;object-fit:cover}
 /* 没配图时画的占位（不是破图、也不是空白）：三行"骨架"，与参考稿里那些小示意图一个语气 */
 .hp-step-art.is-placeholder{display:flex;flex-direction:column;justify-content:center;gap:9px;padding:18px}
-.hp-step-art.is-placeholder i{display:block;height:9px;border-radius:5px;background:rgba(255,255,255,.11)}
-.hp-step-art.is-placeholder i:first-child{width:62%;background:rgba(232,35,26,.55)}
+.hp-step-art.is-placeholder i{display:block;height:9px;border-radius:5px;background:rgb(255 255 255 / 16%)}
+.hp-step-art.is-placeholder i:first-child{width:62%;background:rgba(232,35,26,.62)}
 .hp-step-art.is-placeholder i:nth-child(2){width:88%}
 .hp-step-art.is-placeholder i:nth-child(3){width:74%}
 .hp-step h3{margin:0;color:#fff;font-size:clamp(17px,1.85vw,21px);font-weight:700;letter-spacing:-.01em}
-.hp-step p{margin:0;color:#888;font-size:clamp(12.5px,1.3vw,14px);line-height:1.7}
+.hp-step p{margin:0;color:#d0b4ba;font-size:clamp(12.5px,1.3vw,14px);line-height:1.7}
 .hp-steps.is-in .hp-step{animation:hp-step-in .6s cubic-bezier(.22,1,.36,1) both;animation-delay:var(--step-delay,0ms)}
 @keyframes hp-step-in{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){.hp-steps.is-in .hp-step{animation:none}.hp-step{transition:none}.hp-step:hover{transform:none}}
