@@ -25,9 +25,14 @@
    ⚠️ 背景视频（.hp-bg）就在这个盒子里 —— 它原来是铺满整个 main.hp 的，2026-09-23 加了下面
    「三步一栏」之后 main.hp 变高，cover 就把视频放大到铺满整页（**兔子被放大到看不全**，用户报的），
    而且首屏还矮了一截。所以第一屏必须是一个**高度固定为一屏**的盒子，页面再长也不影响它的取景。 */
-.hp-first{position:relative;display:flex;flex-direction:column;min-height:100vh;min-height:100dvh}
+.hp-first{position:relative;display:flex;flex-direction:column;min-height:66.67vh;min-height:66.67dvh}
+/* ⚠️ 2026-09-23 第二轮（用户：「官网第一屏占满了，要压缩下，能露出 1/3 第二屏的内容」）：
+   第一屏从「正好一屏」压到**三分之二屏** —— 下面那一栏露出三分之一，一眼能看出"下面还有东西"。
+   用 min-height（不是 height）：窄屏/矮屏上内容装不下时它自己会长，不会把内容压掉。
+   代价是背景视频的取景跟着变（盒子矮了，cover 会上下裁掉更多）—— 所以 `object-position` 往上挪一点，
+   保住兔子的头和耳朵（裁掉的是画面下沿那点空地面）。 */
 .hp-bg{position:absolute;inset:0;z-index:0;overflow:hidden;background:#000}
-.hp-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.hp-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 34%;pointer-events:none}
 .hp-scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.74),rgba(0,0,0,.34) 42%,rgba(0,0,0,.84))}
 .hp-hero{position:relative;z-index:1;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:clamp(13px,2.1vh,22px);padding:clamp(96px,15vh,170px) clamp(20px,4vw,40px) clamp(18px,3.4vh,34px);text-align:center;animation:hp-rise .85s cubic-bezier(.22,1,.36,1) both}
 .hp-trust{display:inline-flex;align-items:center;gap:12px;max-width:min(720px,94%);padding:9px 20px 9px 11px;border:1px solid rgba(255,255,255,.28);border-radius:999px;background:rgba(40,40,42,.62)}
@@ -60,8 +65,17 @@
 .hp-steps-head{max-width:min(760px,94%);margin:0 auto clamp(28px,3.8vw,46px);text-align:center}
 .hp-steps-head h2{margin:0;color:#fff;font-size:clamp(25px,3.3vw,42px);font-weight:700;line-height:1.22;letter-spacing:-.02em}
 .hp-steps-head p{margin:14px auto 0;max-width:min(580px,92%);color:#e4c8cd;font-size:clamp(13px,1.5vw,16px);line-height:1.65}
-.hp-step-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:clamp(14px,1.8vw,24px);max-width:1100px;margin:0 auto}
-.hp-step{display:flex;flex-direction:column;gap:14px;padding:clamp(20px,2.3vw,30px);border:1px solid rgb(255 255 255 / 14%);border-radius:24px;background:#170a0e;transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
+/* ⚠️ 2026-09-23 第二轮（用户：「第二屏目前一排只能显示 3 个卡片，能否像机构手册这一屏那样
+   可以往下滑、一直这样一排显示」）：原来用 grid 自动换行 —— 4 张卡在 1440 宽下就是 3+1 两行。
+   现在改成**一排横向滑动**（不折行，卡片往右边续下去，第 4 张露出半个 = 天然的"还有更多"提示），
+   抄的是机构手册那一屏的做法（那张截图里也是 2.5 张卡、右边留半个）。
+   桌面用鼠标拖（见 main.jsx 的 useDragScroll），触屏用原生滑动；滚轮照旧滚页面（不劫持滚动）。 */
+.hp-steps-row{position:relative;max-width:1100px;margin:0 auto}
+.hp-steps-row::after{content:"";position:absolute;top:0;right:0;bottom:18px;width:clamp(24px,4vw,64px);background:linear-gradient(90deg,transparent,#17060a);pointer-events:none}
+.hp-step-grid{display:flex;gap:clamp(14px,1.8vw,24px);max-width:1100px;margin:0 auto;padding:4px 0 18px;overflow-x:auto;scroll-snap-type:x proximity;cursor:grab;scrollbar-width:none}
+.hp-step-grid::-webkit-scrollbar{display:none}
+.hp-step-grid.is-dragging{cursor:grabbing;scroll-snap-type:none}
+.hp-step{display:flex;flex-direction:column;gap:14px;flex:0 0 clamp(240px,30%,320px);scroll-snap-align:start;padding:clamp(20px,2.3vw,30px);border:1px solid rgb(255 255 255 / 14%);border-radius:24px;background:#170a0e;transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
 .hp-step:hover{transform:translateY(-10px);border-color:rgb(255 255 255 / 30%);box-shadow:0 22px 48px -18px rgb(255 60 90 / 85%),inset 0 0 0 1px rgb(255 255 255 / 14%)}
 .hp-step-number{color:#fff;font-size:clamp(34px,3.5vw,48px);font-weight:700;line-height:1;letter-spacing:-.04em}
 .hp-step-art{position:relative;overflow:hidden;aspect-ratio:16/10;border:1px solid rgb(255 255 255 / 12%);border-radius:14px;background:#210d12}

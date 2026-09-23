@@ -120,13 +120,27 @@ console.log('②c 第一屏不许被下面加的东西改变取景（用户 2026
 // `main.hp` —— 盒子一变高，`object-fit:cover` 就把视频放大到铺满整页（兔子被放大裁掉），
 // 而且首屏还矮了一截。修法：把「hero + 数据区」框成一个**高度锁一屏**的 `.hp-first`，视频放进它里面，
 // 三步一栏放在**它外面**（它在页面上仍然是"页脚上方"，只是不再影响第一屏的取景）。
-check('②c 第一屏是一个独立盒子 `.hp-first`，高度锁一屏（100vh/100dvh）',
-  /\.hp-first\{[^}]*min-height:100vh/.test(css) && /\.hp-first\{[^}]*min-height:100dvh/.test(css));
+check('②c 第一屏是一个独立盒子 `.hp-first`，高度锁**三分之二屏**（用户第二轮：「压缩下，能露出 1/3 第二屏」）',
+  /\.hp-first\{[^}]*min-height:66\.67vh/.test(css) && /\.hp-first\{[^}]*min-height:66\.67dvh/.test(css), (css.match(/\.hp-first\{[^}]*\}/) || [])[0] || '');
 check('②c 背景视频那一层在 `.hp-first` **里面**（视频只铺第一屏，不铺整页）',
   /<div className="hp-first">[\s\S]{0,200}className="hp-bg"/.test(site));
 check('②c 「三步」那一栏在 `.hp-first` **外面**（加它不该改变首屏取景）',
   site.indexOf('<HomeSteps') > site.indexOf('</div>\n    {/* 三步一栏') || /<\/div>\s*\{?\/\* 三步一栏/.test(site) || site.indexOf('<HomeSteps block=') > site.indexOf('hp-stats'), '检查 HomeSteps 与 .hp-first 的先后');
-// 真观感由 .tmp/then-home-steps.mjs 在真浏览器里量（第一屏高度 = 视口、背景层高度 = 视口，不是整页）。
+// 缩减首屏高度会让 cover 多裁掉一点视频 —— 取景要往上锚，保住兔子的头
+check('②c 视频取景往上锚（压缩之后别把兔子的头裁掉）', /\.hp-video\{[^}]*object-position:50% 34%/.test(css));
+
+console.log('②d 第二屏那一排：一排显示、横向滑动（用户第二轮：「像机构手册这一屏…一直这样一排显示」）');
+// 原来用 grid 自动换行 —— 4 张卡在 1440 宽下就是 3+1 两行。现在是一排横向滑动（不折行，右边留半个提示还有更多）。
+check('②d 那一排是**横向滚动**容器（flex + overflow-x:auto），不是会折行的 grid',
+  /\.hp-step-grid\{[^}]*display:flex/.test(css) && /\.hp-step-grid\{[^}]*overflow-x:auto/.test(css) && !/\.hp-step-grid\{[^}]*grid-template-columns/.test(css));
+check('②d 卡片宽度固定（flex:0 0 ...）—— 不然 flex 会把它们压扁塞进一屏、也就没有"滑"这件事了',
+  /\.hp-step\{[^}]*flex:0 0 clamp\(/.test(css));
+check('②d 藏掉滚动条 + 右边一道渐变提示（鼠标上靠"按住一拖"，见 main.jsx 的 useDragScroll）',
+  /\.hp-step-grid\{[^}]*scrollbar-width:none/.test(css) && /\.hp-step-grid::\-webkit-scrollbar\{display:none\}/.test(css) && /\.hp-steps-row::after\{[^}]*linear-gradient/.test(css));
+check('②d 桌面鼠标能拖（触屏交给原生滑动；不劫持页面滚轮）',
+  /function useDragScroll\(\)/.test(site) && /pointerType === 'touch'/.test(site) && /node\.scrollLeft = startLeft - delta/.test(site) && !/wheel/.test(site.replace(/onWheel/g, '')));
+// 真观感由 .tmp/then-home-steps.mjs 在真浏览器里量（第一屏 ≈ 2/3 视口、首屏底下露出 ≈ 1/3、
+// 卡片纵向只有一种位置 = 没折行、这一排内容宽 > 可视宽 = 真能滑）。
 
 console.log('③ 动效不能把内容藏起来');
 check('③ 卡片默认可见 —— 样式里 `.hp-step` 本身没有 opacity:0（别把内容留在"等 JS 才显示"）',

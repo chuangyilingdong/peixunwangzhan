@@ -484,8 +484,46 @@ function useRevealOnce() {
  * 保存 → 发布即生效（与首页其它区块同一条流程）；**配图由运营自己传**，没传就画占位（不出破图）。
  * 条数不写死：后台加一条就多一张卡；**把三步删空 = 官网不显示这一栏**（与 stats 同一条口径）。
  */
+/** 横向滑动那一排卡片：桌面用鼠标拖，触屏用原生滑动（2026-09-23 用户口径：一排显示、不折行）。
+ *  为什么要有这个：`overflow-x:auto` 在触屏上划得动、在**桌面鼠标**上却没法用（滚轮滚的是页面、
+ *  滚动条被藏起来了）—— 参考稿那张截图（机构手册）是"滚动驱动横移"，这里不做滚动劫持
+ *  （那一栏就在页脚上方，劫持滚动会让人以为页面卡住），改用最直白的"按住一拖"。
+ *  ⚠️ 只接管鼠标/触控笔（`pointerType !== 'touch'`），触屏交给浏览器原生滑动 —— 手指划和拖拽打架。 */
+function useDragScroll() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    let dragging = false; let startX = 0; let startLeft = 0;
+    const onDown = (event) => {
+      if (event.pointerType === 'touch' || event.button !== 0) return;
+      dragging = true; startX = event.clientX; startLeft = node.scrollLeft;
+      node.classList.add('is-dragging');
+    };
+    const onMove = (event) => {
+      if (!dragging) return;
+      const delta = event.clientX - startX;
+      if (Math.abs(delta) > 3 && event.cancelable) event.preventDefault();
+      node.scrollLeft = startLeft - delta;
+    };
+    const onUp = () => { dragging = false; node.classList.remove('is-dragging'); };
+    node.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      node.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, []);
+  return ref;
+}
+
 function HomeSteps({ block }) {
   const [ref, shown] = useRevealOnce();
+  const rowRef = useDragScroll();
   const items = Array.isArray(block?.items) ? block.items : [];
   if (!items.length) return null;
   return <section className={'hp-steps' + (shown ? ' is-in' : '')} ref={ref} aria-label="我们怎么开课">
@@ -493,6 +531,7 @@ function HomeSteps({ block }) {
       {block?.title ? <h2>{block.title}</h2> : null}
       {block?.lead ? <p>{block.lead}</p> : null}
     </div>}
+    <div className="hp-steps-row" ref={rowRef}>
     <div className="hp-step-grid">
       {items.map((item, index) => <article className="hp-step" key={`${item?.number || ''}-${item?.title || index}`} style={{ '--step-delay': `${index * 90}ms` }}>
         <span className="hp-step-number">{item?.number || String(index + 1).padStart(2, '0')}</span>
@@ -502,6 +541,7 @@ function HomeSteps({ block }) {
         {item?.title ? <h3>{item.title}</h3> : null}
         {item?.desc ? <p>{item.desc}</p> : null}
       </article>)}
+    </div>
     </div>
   </section>;
 }
