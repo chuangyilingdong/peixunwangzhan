@@ -36,6 +36,39 @@ export const WEBSITE_CONTENT_DEFAULTS = {
       { icon: 'format', value: 2, suffix: ' 类', label: '课堂形式' },
       { icon: 'console', value: 1, suffix: ' 套', label: '机构工作台' },
     ],
+    // 首页「三步一栏」（2026-09-23 用户口径：「在官网页脚上方做一栏。文字和图片都可以在后台可以配置」）。
+    // 参考稿是 AdGen AI 的 HowItWorks 三段（暗底 + 三张卡片 + 红色高光）。
+    // ⚠️ 这一份必须与 `packages/shared/src/siteDefaults.js` 的 HOME_STEPS_DEFAULT **逐字一致**
+    //    （那一份是官网兜底与后台表单预填共用的；本文件要零依赖、不能 import 它，所以手抄一份）。
+    //    守卫 scripts/p135-home-steps-band.mjs 会逐字段比对这两份 —— 别只改一边。
+    // ⚠️ 配图默认留空：官网画一个占位（不显示破图），运营在后台「上传图片」之后换成真图。
+    steps: {
+      title: '三步，把 AI 创作课开进课堂',
+      lead: '从开通机构到学生交出作品，中间不需要技术团队，学生也不用自备账号或 API Key。',
+      items: [
+        {
+          number: '01',
+          title: '开通机构与账号',
+          desc: '配置席位与授权次数，创建老师与学生账号。学生用机构账号登录，无需自备 API Key。',
+          imageUrl: '',
+          imageAlt: '',
+        },
+        {
+          number: '02',
+          title: '按课包直接排课',
+          desc: '课程中心提供标准课包与课件，老师选课即用；课堂零配置，机房电脑打开就能上。',
+          imageUrl: '',
+          imageAlt: '',
+        },
+        {
+          number: '03',
+          title: '当堂出作品、沉淀展厅',
+          desc: '学生每节课都用 AI 做出可展示的作品，提交后进入作品展厅，形成校区的案例库与招生素材。',
+          imageUrl: '',
+          imageAlt: '',
+        },
+      ],
+    },
   },
   // 常见问题（/faq）：**按端分三档**（2026-09-18 晚用户口径：「最好3个选项，学生端、老师端、机构端，
   // 可以配置3个端的不同的问题。后台配置也要对应配置」）。字段名就是档位 key，数组顺序 = 官网显示顺序；

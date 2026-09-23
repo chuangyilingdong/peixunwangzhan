@@ -4,8 +4,9 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import '@platform/shared/styles.css';
 import './styles.css';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, LEGAL_OWNER, LEGAL_STATUS, LEGAL_VERSION } from './legal.js';
-import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
+import { LoginPanel, BrandLogo, CanvasClassroom, CanvasWorkspace, StudentCourseCenter, HOME_STEPS_DEFAULT, Icon, Notice, createApiClient, readSession as readUserSession, writeSession as saveUserSession, clearSession as removeUserSession } from '@platform/shared';
 import { MyWorksPage } from './pages/MyWorks.jsx';
+import { StudentAccountPage } from './pages/AccountSecurity.jsx';
 import { MyWorkDetailPage } from './pages/MyWorkDetail.jsx';
 import { WorkDetailPage } from './pages/WorkDetail.jsx';
 // 首页按钮用 React Bits 的 SpecularButton（WebGL 镜面高光），见组件文件顶部的来源与注意事项
@@ -34,7 +35,7 @@ function LoginPage() {
   }
   // 背景按首页来做（用户口径 2026-09-18）：同一份视频资产、同一套「视频 + 压暗层」叠法。
   // 平台端/机构端登录页没有这个视频资源，所以视频只铺在官网这一侧（共享面板只给底色）。
-  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-animal.mp4' poster='/assets/hero-animal-poster.webp' autoPlay muted loop playsInline preload='auto' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} demos={[]} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<a href={ORG_APP_URL}>去机构后台</a></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
+  return <div className='website-login'><div className='login-bg' aria-hidden='true'><video src='/assets/hero-animal.mp4' poster='/assets/hero-animal-poster.webp' autoPlay muted loop playsInline preload='auto' /><div className='login-scrim' /></div><Link className='login-back' to='/'>← 返回官网首页</Link><LoginPanel title={asStudent ? '学生登录' : '机构 / 老师登录'} description={asStudent ? '登录后继续你的创作旅程。' : '登录后进入机构工作台。'} onLogin={handleLogin} /><p className='login-switch'>{asStudent ? <>我是机构 / 老师，<a href={ORG_APP_URL}>去机构后台</a></> : <>我是学生，<Link to='/login?as=student'>去学生登录</Link></>}</p></div>;
 }
 
 const ORG_APP_URL = import.meta.env?.VITE_ORG_APP_URL || '/org/';
@@ -452,6 +453,58 @@ function cmsPick(content, key, fallback) {
   const value = content?.[key];
   return value === undefined || value === null ? (fallback ?? '') : value;
 }
+/** 元素第一次进入视口时返回 true（首页「三步一栏」的入场动效用它加 `is-in`）。
+ *  为什么不直接用加载时的 CSS 动画：这一栏在首屏下面，加载时就播完 = 滚到那里什么都看不见。
+ *  观察器不可用（老浏览器）时直接算已进入 —— 内容照常显示，只是不播那一次动画。 */
+function useRevealOnce() {
+  const ref = useRef(null);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof IntersectionObserver !== 'function') { setShown(true); return; }
+    const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) { setShown(true); observer.disconnect(); } }, { rootMargin: '0px 0px -10% 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, shown];
+}
+
+/**
+ * 首页「三步一栏」（2026-09-23 用户口径）：「参考以下代码，在官网页脚上方做一栏。文字和图片都可以在后台可以配置」。
+ * 参考稿是 AdGen AI 的 HowItWorks 三段（暗底 + 三张卡片 + 红色高光 + 悬停上浮 + 入场淡入）。
+ *
+ * **照做的**：三张卡横排、编号大字、卡片暗底、悬停上浮并亮起红色光晕、滚到这里时淡入。
+ * **不照抄的**：参考稿那三个依赖（Tailwind / framer-motion / lucide）官网一个都没引 ——
+ *   /faq 与页脚那两轮已经定过这条口径（不为一张页面引依赖进来跟全局 styles.css 打架）。
+ *   所以：入场用 IntersectionObserver 加一次 `is-in` 触发 @keyframes、悬停上浮与红色光晕纯 CSS。
+ *   ⚠️ 反过来写（默认 opacity:0、靠 JS 显示）是不行的：脚本一旦没跑/观察器没触发，
+ *      运营看到的就是一整块空白 —— 内容必须**默认可见**，`is-in` 只负责"播一次动画"。
+ *
+ * 文案与配图全部来自 CMS（HOME.steps）：后台「官网内容 → 首页 → 三步一栏」可改，
+ * 保存 → 发布即生效（与首页其它区块同一条流程）；**配图由运营自己传**，没传就画占位（不出破图）。
+ * 条数不写死：后台加一条就多一张卡；**把三步删空 = 官网不显示这一栏**（与 stats 同一条口径）。
+ */
+function HomeSteps({ block }) {
+  const [ref, shown] = useRevealOnce();
+  const items = Array.isArray(block?.items) ? block.items : [];
+  if (!items.length) return null;
+  return <section className={'hp-steps' + (shown ? ' is-in' : '')} ref={ref} aria-label="我们怎么开课">
+    {(block?.title || block?.lead) && <div className="hp-steps-head">
+      {block?.title ? <h2>{block.title}</h2> : null}
+      {block?.lead ? <p>{block.lead}</p> : null}
+    </div>}
+    <div className="hp-step-grid">
+      {items.map((item, index) => <article className="hp-step" key={`${item?.number || ''}-${item?.title || index}`} style={{ '--step-delay': `${index * 90}ms` }}>
+        <span className="hp-step-number">{item?.number || String(index + 1).padStart(2, '0')}</span>
+        {item?.imageUrl
+          ? <div className="hp-step-art"><img src={item.imageUrl} alt={item.imageAlt || ''} loading="lazy" /></div>
+          : <div className="hp-step-art is-placeholder" aria-hidden="true"><i /><i /><i /></div>}
+        {item?.title ? <h3>{item.title}</h3> : null}
+        {item?.desc ? <p>{item.desc}</p> : null}
+      </article>)}
+    </div>
+  </section>;
+}
 function HomeLanding() {
   const cms = useWebsiteContent('HOME');
   const navigate = useNavigate();
@@ -492,6 +545,10 @@ function HomeLanding() {
       </div>
     </section>
     {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><HomeStatIcon name={item.icon} /><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
+    {/* 三步一栏（用户口径 2026-09-23：**在页脚上方**做一栏，文字与图片后台可配）—— 所以它排在
+        首页内容的最后一段，紧接着就是全站页脚。与 stats 同一条口径：**整块没配**用内置默认，
+        但运营把三步删空（items: []）就是不要这一栏，不回退。 */}
+    {ready ? <HomeSteps block={content.steps === undefined || content.steps === null ? HOME_STEPS_DEFAULT : content.steps} /> : null}
   </main>;
 }
 function Home(_props) { return <HomeLanding />; }
@@ -966,7 +1023,7 @@ const CMS_FALLBACK = {
   // 而别处是 11 门 / 87 节 —— 于是同一页会因为「接口通 / 断」显示两套数字
   // （接口断 → 用这份；接口通但行里没有 stats → 用 HOME_STATS_FALLBACK）。
   // scripts/p115-website-ui-check.mjs 会把两条路径各渲染一遍并逐字对比，就是为了钉住这条。
-  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK },
+  HOME: { heroKicker: '', heroTitle: '培养青少年Ai思维', heroAccent: '掌握Ai时代的创造方式', heroDescription: 'AI 画布创作 + Vibe Coding 对话编程，从兴趣到独立创作', trustTitle: '', trustDescription: '', stats: HOME_STATS_FALLBACK, steps: HOME_STEPS_DEFAULT },
   // 常见问题（/faq）：按端三档，与 packages/database/src/websiteContentDefaults.js 的 FAQ **逐字一致**
   // （口径①：接口通/断不能显示两套内容）。student 取的是**生产 CMS 已发布的原文** ——
   // 原来这里只有 3 条、且少了「授权次数用完会怎样」，与线上那份对不上，正是那条口径要防的隐患。
@@ -1236,7 +1293,8 @@ export function App(){
   // ⚠️ 2026-09-18 晚用户口径：「未登录点灵动学习跳的是机构/老师登录，应该跳学生登录」——
   // 这些 `/learn*`、`/my-*` 都是**学生**的页面，所以未登录时统一带去**学生登录**（`?as=student`）。
   // 原来落到 `/login` 会走默认那一支（机构/老师登录），学生点进来第一眼就看到老师的表单。
-  if (loc.pathname.startsWith('/learn') && !session) {
+  // 2026-09-23 起 `/account`（账号安全）也归这一档 —— 它读的是学生自己的接口。
+  if ((loc.pathname.startsWith('/learn') || loc.pathname === '/account') && !session) {
     return <Navigate to='/login?as=student' replace />;
   }
   const displayName = session?.user?.displayName || session?.user?.login || '用户';
@@ -1246,6 +1304,8 @@ export function App(){
   const studentMenuItems = [
     { to: '/learn', label: '我的课程' },
     { to: '/my-works', label: '我的作品' },
+    // 2026-09-23 用户口径：学生创建账号后要能自己改密码（之前只有接口、没有入口）
+    { to: '/account', label: '账号安全' },
   ];
 
   // 账号徽标（用户口径 2026-09-18 晚，第三次调整）：
@@ -1314,6 +1374,9 @@ export function App(){
         <Route path='/privacy' element={<LegalPage type='privacy'/>}/>
         <Route path='/minors' element={<LegalPage type='minors'/>}/>
         <Route path='/learn' element={<LearnPageInner api={api}/>}/>
+        {/* 学生「账号安全」：登录后从右上角用户名下拉进入（与「我的课程 / 我的作品」同一处）。
+            改密会撤销该账号所有会话，成功那一刻本地会话也一并清掉、回学生登录页 */}
+        <Route path='/account' element={session ? <StudentAccountPage api={api} user={session.user} onSignedOut={() => { removeUserSession(); setSession(null); navigate('/login?as=student'); }} /> : <Navigate to='/login?as=student' replace />}/>
         <Route path='/learn/canvas' element={<LearnCanvasPage api={api}/>}/>
         <Route path='/learn/canvas/:projectId' element={<LearnProjectPage api={api}/>}/>
         <Route path='/my-works' element={session ? <MyWorksPage api={api} /> : <Navigate to='/login?as=student' replace />}/>

@@ -41,6 +41,32 @@
 .hp-stat strong{color:#fff;font-size:clamp(17px,2.1vw,25px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .hp-stat span{color:#8e8e8e;font-size:clamp(11px,1.2vw,12.5px)}
 @keyframes hp-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+/* ── 首页「三步一栏」（2026-09-23 用户口径：页脚上方那一栏，文字与图片后台可配）──────────────────
+   参考稿是暗底 + 三张卡片 + 红色高光 + 悬停上浮。做法上**不引依赖**（不引 framer-motion/Tailwind）：
+   入场靠 .is-in 触发一次 @keyframes，悬停上浮用 transform、红色光晕用 box-shadow。
+   ⚠️ 卡片**默认就是可见的**，`.is-in` 只负责"播一次入场" —— 别反过来写成默认 opacity:0，
+      否则观察器没触发时运营看到的是一整块空白。 */
+.hp-steps{position:relative;z-index:1;padding:clamp(52px,6.6vw,92px) clamp(20px,4vw,40px) clamp(60px,7.4vw,100px);border-top:1px solid rgba(255,255,255,.08);background:#000}
+.hp-steps-head{max-width:min(760px,94%);margin:0 auto clamp(28px,3.8vw,46px);text-align:center}
+.hp-steps-head h2{margin:0;color:#fff;font-size:clamp(25px,3.3vw,42px);font-weight:700;line-height:1.22;letter-spacing:-.02em}
+.hp-steps-head p{margin:14px auto 0;max-width:min(580px,92%);color:#999;font-size:clamp(13px,1.5vw,16px);line-height:1.65}
+.hp-step-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:clamp(14px,1.8vw,24px);max-width:1100px;margin:0 auto}
+.hp-step{display:flex;flex-direction:column;gap:14px;padding:clamp(20px,2.3vw,30px);border:1px solid rgba(255,255,255,.09);border-radius:24px;background:#0f0f0f;transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
+.hp-step:hover{transform:translateY(-10px);border-color:rgba(232,35,26,.42);box-shadow:0 20px 44px -20px rgba(232,35,26,.7),inset 0 0 0 1px rgba(232,35,26,.16)}
+.hp-step-number{color:#fff;font-size:clamp(34px,3.5vw,48px);font-weight:700;line-height:1;letter-spacing:-.04em}
+.hp-step-art{position:relative;overflow:hidden;aspect-ratio:16/10;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#1a1a1a}
+.hp-step-art img{display:block;width:100%;height:100%;object-fit:cover}
+/* 没配图时画的占位（不是破图、也不是空白）：三行"骨架"，与参考稿里那些小示意图一个语气 */
+.hp-step-art.is-placeholder{display:flex;flex-direction:column;justify-content:center;gap:9px;padding:18px}
+.hp-step-art.is-placeholder i{display:block;height:9px;border-radius:5px;background:rgba(255,255,255,.11)}
+.hp-step-art.is-placeholder i:first-child{width:62%;background:rgba(232,35,26,.55)}
+.hp-step-art.is-placeholder i:nth-child(2){width:88%}
+.hp-step-art.is-placeholder i:nth-child(3){width:74%}
+.hp-step h3{margin:0;color:#fff;font-size:clamp(17px,1.85vw,21px);font-weight:700;letter-spacing:-.01em}
+.hp-step p{margin:0;color:#888;font-size:clamp(12.5px,1.3vw,14px);line-height:1.7}
+.hp-steps.is-in .hp-step{animation:hp-step-in .6s cubic-bezier(.22,1,.36,1) both;animation-delay:var(--step-delay,0ms)}
+@keyframes hp-step-in{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.hp-steps.is-in .hp-step{animation:none}.hp-step{transition:none}.hp-step:hover{transform:none}}
 /* 标题在窄屏必须允许换行：提示词是 nowrap（那版是英文短词），中文标题在 1120px 以下 nowrap 会横向溢出 */
 /* 标题字号由组件按内容长度内联给出（见 main.jsx 的 titleStyle），这里不再覆盖字号，
    只负责换行与留白 —— 两边都写字号会变成「改了一处不生效」的坑。 */
@@ -208,6 +234,11 @@
 .student-badge.is-ok{color:#208257;background:#ddf6ea}
 .student-badge.is-warn{color:#9a5b00;background:#fdf0dc}
 .student-page-hint{margin:0 0 14px;padding:10px 12px;border-radius:10px;color:#6b6485;background:#f7f5fc;font-size:13px;line-height:1.7}
+/* 学生「账号安全」（/account）：一张窄卡片装三端共用的改密表单。
+   表单本身（label / input / 按钮）用的是 @platform/shared 的样式，这里只管外面这一层容器。 */
+.student-account{max-width:560px;padding:26px 28px 30px;border:1px solid var(--line);border-radius:18px;background:#faf9ff}
+.student-account .form-grid{grid-template-columns:1fr}
+.student-account>p.muted{margin:0 0 6px;font-size:13px}
 .student-card__meta{margin:0;color:#8b85a0;font-size:12px;line-height:1.6}
 .student-card__desc{margin:0;color:#5f5975;font-size:13px;line-height:1.7}
 .student-card__feedback{padding:10px 12px;border-left:3px solid #c9bdf5;border-radius:0 10px 10px 0;background:#faf8ff}

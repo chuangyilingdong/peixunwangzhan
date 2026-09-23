@@ -95,13 +95,17 @@ export async function handleSelf(ctx, part, method) {
     if (!me) throw errors.notFound('账号不存在', 'USER_NOT_FOUND');
     if (!verifyPassword(currentPassword, me.password_hash)) throw errors.forbidden('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
     const now = nowIso();
+    let sessionsRevoked = 0;
     transaction(() => {
       q('UPDATE users SET password_hash=?,updated_at=? WHERE id=?', [hashPassword(newPassword), now, me.id]);
       // 改密后所有会话失效（含当前会话），前端据此重新登录
-      q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id]);
-      audit(ctx, 'PLATFORM_SELF_PASSWORD_UPDATE', 'USER', me.id, { login: me.login }, { passwordChanged: true }, { orgId: me.org_id || null });
+      sessionsRevoked = q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id]).changes;
+      audit(ctx, 'PLATFORM_SELF_PASSWORD_UPDATE', 'USER', me.id, { login: me.login }, { passwordChanged: true, sessionsRevoked }, { orgId: me.org_id || null });
     });
-    return { passwordChanged: true, reauthRequired: true };
+    // ⚠️ `sessionsRevoked` 是 2026-09-23 加的**加法**改动：机构端与学生端的自助改密都回这个计数，
+    //    三端界面共用同一个组件，靠它显示「已退出 N 处登录（含当前这一处）」。
+    //    `reauthRequired` 保持不动 —— p19 钉着它，不能为了对齐名字把它换掉。
+    return { passwordChanged: true, reauthRequired: true, sessionsRevoked };
   }
   if (part === '/me/mfa' && method === 'GET') {
     // 二次验证自助端点：登录中的平台管理员即可查看自己的绑定状态

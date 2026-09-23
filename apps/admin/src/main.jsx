@@ -4,7 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-route
 import { AppShell, ApiError, clearSession, createApiClient, LoginPanel, readSession, writeSession } from '@platform/shared';
 import { CourseSeriesDetailPage, CourseSeriesListPage } from './components/CourseManagement.jsx';
 import { ModelCompute } from './pages/ModelCompute.jsx';
-import { AdminPermissionGate, demos, visibleNavigation } from './shared.jsx';
+import { AdminPermissionGate, visibleNavigation } from './shared.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { Organizations, Authorizations } from './pages/Organizations.jsx';
 // P03（2026-09-18 按线框图对齐）：机构拆成「列表 / 详情 / 课包与授权次数 / 授权次数变更记录」四条路由，
@@ -36,8 +36,8 @@ export function App() {
   useEffect(() => { if (!session?.token) return; api.me().then((user) => setSession(writeSession({ ...session, user, organization: user.organization }))).catch(() => {}); }, [session?.token]);
   async function login(credentials) { const data = await api.login(credentials); if (data.user.role !== 'SUPER_ADMIN') throw new ApiError('该账号没有平台管理权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
-  if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和算力运营提供统一的控制台。" clientType="admin" demos={demos} onLogin={login} />} /></Routes>;
-  if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" demos={demos} onLogin={login} />;
+  if (!session) return <Routes><Route path="*" element={<LoginPanel title="平台管理中心" description="为课程、机构和算力运营提供统一的控制台。" clientType="admin" onLogin={login} />} /></Routes>;
+  if (session.user?.role !== 'SUPER_ADMIN') return <LoginPanel title="平台管理中心" description="当前会话没有平台管理权限。" clientType="admin" onLogin={login} />;
   const page = (permission, element) => <AdminPermissionGate user={session.user} permission={permission}>{element}</AdminPermissionGate>;
   return <AdminShell product="灵动ai学院" roleLabel="平台管理员" user={session.user} navigation={visibleNavigation(session.user)} onLogout={logout} onChangePassword={() => navigate('/security')}><Routes>
     <Route path="/dashboard" element={page('ADMIN_ANALYTICS', <Dashboard api={api} />)} />

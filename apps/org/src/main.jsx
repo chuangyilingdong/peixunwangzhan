@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate, useSearchParams } 
 import { CanvasEditor } from '@platform/canvas';
 import { ApiError, AppShell, clearSession, createApiClient, Empty, ErrorState, formatDate, formatYuan, ListResultSummary, Loading, LoginPanel, MetricCard, Notice, PageHeader, Pagination, Panel, readSession, Status, useData, writeSession, WorkMediaGallery, errorText } from '@platform/shared';
 import { StudentGrants } from './pages/StudentGrants.jsx';
+import { AccountSecurity } from './pages/AccountSecurity.jsx';
 import { SeriesOverview } from './pages/SeriesOverview.jsx';
 import { Classrooms } from './pages/Classrooms.jsx';
 import { TeachingAssetViewer } from './components/TeachingAssetViewer.jsx';
@@ -20,8 +21,11 @@ const navigation = [
   { to: '/classrooms', icon: '▦', label: '机构课堂总览' },
   { to: '/members', icon: '♙', label: '机构成员管理', adminOnly: true },
   { to: '/works', icon: '✦', label: '学生学习结果与作品' },
+  { to: '/account', icon: '🔑', label: '账号安全' },
 ];
-const demos = [{ label: '机构管理员', login: 'org-admin', password: 'org123' }, { label: '授课教师', login: 'teacher-1', password: 'teach123' }];
+// ⚠️ 2026-09-23：这里原来有 `demos`（机构管理员与老师的登录名 + 口令），喂给登录页的「演示账号」区块。
+//    用户口径「演示账号这些全部删除」—— 口令明文写在前端包里（打包后的 .js 谁都能下载）、
+//    而且指的是生产上真在用的账号，所以整块删掉，别再从这里导出任何口令。
 
 const ORG_SESSION_LABEL = { PENDING: '待上课', ACTIVE: '上课中', ENDED: '已结束', DISSOLVED: '已解散' };
 
@@ -714,9 +718,13 @@ export function App() {
   async function login(credentials) { const data = await api.login(credentials); if (!['ORG_ADMIN', 'TEACHER'].includes(data.user.role)) throw new ApiError('该账号没有机构教务权限', { code: 'ROLE_MISMATCH' }); setSession(writeSession(data)); navigate('/dashboard'); }
   async function logout() { try { await api.logout(); } catch { /* local logout still succeeds */ } clearSession(); setSession(null); navigate('/login'); }
   // 2026-09-13（批次 B-6）：班级退场后登录页文案也跟着改，别再说「管理班级」。
-  if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学员创作成果。" clientType="org" demos={demos} onLogin={login} />} /></Routes>;
-  if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" demos={demos} onLogin={login} />;
-  const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教师工作台' }, { to: '/courses', icon: '◇', label: '教学课程库' }, { to: '/classrooms', icon: '▦', label: '我的课堂' }, { to: '/works', icon: '✦', label: '学生学习结果与作品' }] : navigation;
-  return <AppShell product="灵动ai学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId/students/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
+  if (!session) return <Routes><Route path="*" element={<LoginPanel title="机构教务工作台" description="管理课堂、成员、课包与学员创作成果。" clientType="org" onLogin={login} />} /></Routes>;
+  if (!['ORG_ADMIN', 'TEACHER'].includes(session.user?.role)) return <LoginPanel title="机构教务工作台" description="当前会话没有机构教务权限。" clientType="org" onLogin={login} />;
+  // 老师那一套导航是**另写的一份**（只给自己相关的入口）—— 加/删入口时两份都要动，
+  // 否则会出现「机构管理员看得到、老师看不到」这种半边生效（本轮加「账号安全」就踩在这个点上）。
+  const visibleNavigation = session.user.role === 'TEACHER' ? [{ to: '/dashboard', icon: '◈', label: '教师工作台' }, { to: '/courses', icon: '◇', label: '教学课程库' }, { to: '/classrooms', icon: '▦', label: '我的课堂' }, { to: '/works', icon: '✦', label: '学生学习结果与作品' }, { to: '/account', icon: '🔑', label: '账号安全' }] : navigation;
+  // 改密成功后所有会话都失效（服务端撤销），所以这里只能清本地会话回登录页 —— 不装还在登录。
+  const signedOutByPasswordChange = () => { clearSession(); setSession(null); navigate('/login'); };
+  return <AppShell product="灵动ai学院" roleLabel={session.user.role === 'TEACHER' ? '授课教师' : '机构管理员'} user={session.user} navigation={visibleNavigation} onLogout={logout} onChangePassword={() => navigate('/account')}><Routes><Route path="/dashboard" element={<Dashboard api={api} />} /><Route path="/account" element={<AccountSecurity api={api} user={session.user} onSignedOut={signedOutByPasswordChange} />} /><Route path="/classrooms" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId" element={<Classrooms api={api} user={session.user} />} /><Route path="/classrooms/:sessionId/students/new" element={<Classrooms api={api} user={session.user} />} /><Route path="/members" element={session.user.role === 'ORG_ADMIN' ? <Members api={api} user={session.user} /> : <Navigate to="/classrooms" replace />} /><Route path="/works" element={<Works api={api} />} /><Route path="/inbox" element={<OrgInbox api={api} user={session.user} />} /><Route path="/courses" element={<OrgCourses api={api} />} /><Route path="/series-overview" element={session.user.role === 'ORG_ADMIN' ? <SeriesOverview api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/courses/:seriesId" element={<OrgCourses api={api} />} /><Route path="/enrollment" element={session.user.role === 'ORG_ADMIN' ? <EnrollmentPage api={api} user={session.user} /> : <Navigate to="/series-overview" replace />} /><Route path="/usage" element={session.user.role === 'ORG_ADMIN' ? <UsagePage api={api} /> : <Navigate to="/classrooms" replace />} /><Route path="/grants" element={session.user.role === 'ORG_ADMIN' ? <StudentGrants api={api} /> : <Navigate to="/series-overview" replace />} /><Route path="/materials" element={<OrgMaterials api={api} user={session.user} />} /> <Route path="/help-feedback" element={<HelpFeedbackPage api={api} />} /><Route path="*" element={<Navigate to="/dashboard" replace />} /></Routes></AppShell>;
 }
 createRoot(document.getElementById('root')).render(<BrowserRouter basename={APP_BASENAME}><App /></BrowserRouter>);

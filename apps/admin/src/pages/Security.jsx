@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, PasswordChangeForm, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function Security({ api, onSignedOut }) {
@@ -12,9 +12,6 @@ export function Security({ api, onSignedOut }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirm: '' });
-  const [passwordMessage, setPasswordMessage] = useState('');
-  const [passwordBusy, setPasswordBusy] = useState(false);
 
   async function run(action, successMessage) {
     setBusy(true); setError(''); setNotice('');
@@ -46,34 +43,16 @@ export function Security({ api, onSignedOut }) {
     const data = await run(() => api.post('admin/me/mfa/disable', { password, code }));
     if (data) { setRecoveryCodes([]); setCode(''); setPassword(''); setNotice('二次验证已关闭。'); status.refresh(); }
   }
-  async function changePassword(event) {
-    event.preventDefault();
-    if (passwordForm.newPassword.length < 6) { setPasswordMessage('新密码至少 6 位'); return; }
-    if (passwordForm.newPassword !== passwordForm.confirm) { setPasswordMessage('两次输入的新密码不一致'); return; }
-    setPasswordBusy(true); setPasswordMessage('');
-    try {
-      await api.put('admin/me/password', { currentPassword: passwordForm.currentPassword, newPassword: passwordForm.newPassword });
-      window.alert('密码已修改，请用新密码重新登录。');
-      onSignedOut();
-    } catch (err) { setPasswordMessage(err.message || '修改失败'); } finally { setPasswordBusy(false); }
-  }
-
   const enabled = !!status.data?.enabled;
   return <>
     <PageHeader eyebrow="我的账号" title="账号安全" description="维护登录密码，并为平台管理员账号开启二次验证（TOTP 动态码 + 一次性恢复码）。" />
     {error ? <Notice tone="danger">{error}</Notice> : null}
     {notice ? <Notice tone="success">{notice}</Notice> : null}
     <Panel title="登录密码">
-      {passwordMessage ? <Notice tone="danger">{passwordMessage}</Notice> : null}
-      <form onSubmit={changePassword}>
-        <div className="form-grid">
-          <label>当前密码<input type="password" value={passwordForm.currentPassword} required onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} /></label>
-          <label>新密码（至少 6 位）<input type="password" value={passwordForm.newPassword} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} /></label>
-          <label>确认新密码<input type="password" value={passwordForm.confirm} minLength={6} required onChange={(event) => setPasswordForm({ ...passwordForm, confirm: event.target.value })} /></label>
-        </div>
-        <p className="muted">改密后所有登录会话（含当前会话）都会失效，需要用新密码重新登录。</p>
-        <button className="primary-button" disabled={passwordBusy}>{passwordBusy ? '提交中…' : '确认修改'}</button>
-      </form>
+      {/* 2026-09-23：表单换成三端共用的 PasswordChangeForm（机构端与学生端也用同一个组件）。
+          行为上唯一的变化：原来这里弹 window.alert 再强制登出，现在改成**页面内提示 + 「去重新登录」按钮** ——
+          理由与机构端/学生端一致（口径②：改密后所有会话都被服务端撤销，界面不该装成还在登录）。 */}
+      <PasswordChangeForm api={api} endpoint="admin/me/password" onSignedOut={onSignedOut} />
     </Panel>
     <Panel title="二次验证（TOTP）" actions={<button className="secondary-button" onClick={status.refresh}>刷新</button>}>
       {status.loading ? <Loading /> : status.error ? <ErrorState error={status.error} onRetry={status.refresh} /> : <>

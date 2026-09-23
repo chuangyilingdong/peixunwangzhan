@@ -1,4 +1,4 @@
-import { audit, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable } from '../lib.js';
+import { audit, clearAuthCookie, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 import { prepareFileDownload, prepareFilePreview } from './fileAssets.js';
@@ -138,6 +138,39 @@ export async function handleOrg(ctx) {
   // /api/org/file-assets 由独立路由处理（含 STUDENT 角色）
   if (pathname.startsWith('/api/org/file-assets')) return null;
   const auth = requireRole(ctx, ['ORG_ADMIN', 'TEACHER']); const currentOrgId = orgId(auth); const part = pathname.slice('/api/org'.length);
+
+  // ── 自助改密（2026-09-23 用户口径：「机构端/老师端/学生端创建了账号后，他们应该是有自行修改密码的按钮和操作」）
+  // 在这之前机构端**没有**自助改密：本文件里只有「机构管理员改本机构成员密码」那条（改的是**别人**），
+  // 于是机构管理员与老师只能用创建账号时发的那个临时口令，自己改不掉。
+  // 三条与平台端（admin/me/password）、学生端（student/account/password）逐字对齐 ——
+  // 三端界面共用同一个组件（packages/shared/src/account.jsx 的 PasswordChangeForm），口径必须一致：
+  //   ① 必须验**当前密码**（捡到一次登录就能改密 = 能把别人的账号锁死）；
+  //   ② 成功后撤销该账号**所有**会话（含当前这一处）→ 界面只能回登录页重新登录；
+  //   ③ 新密码 ≥6 位、不能与当前密码相同。
+  // 放在 handleOrg 最前面（紧跟 auth）：这是**对自己**的操作，不依赖任何机构权限域，
+  // 所以不能学 /members/:id/password 那种"管理员改别人"的形状。
+  if (part === '/me/password' && method === 'PUT') {
+    const currentPassword = String(ctx.body?.currentPassword || '');
+    const newPassword = String(ctx.body?.newPassword || '');
+    if (!currentPassword) throw errors.badRequest('请输入当前密码', 'CURRENT_PASSWORD_REQUIRED');
+    if (newPassword.length < 6) throw errors.badRequest('新密码至少 6 位', 'PASSWORD_TOO_SHORT');
+    if (newPassword === currentPassword) throw errors.badRequest('新密码不能与当前密码相同', 'PASSWORD_UNCHANGED');
+    const me = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
+    if (!me) throw errors.notFound('账号不存在', 'USER_NOT_FOUND');
+    if (!verifyPassword(currentPassword, me.password_hash)) throw errors.forbidden('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
+    const now = nowIso();
+    let sessionsRevoked = 0;
+    transaction(() => {
+      // ⚠️ 只按主键 id 定位，**不**再叠 org_id 之类的条件：多一个条件就多一种
+      //    「UPDATE 匹配到 0 行、却照样返回成功」的静默失败。写完当场核对影响行数。
+      const written = q('UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND deleted_at IS NULL', [hashPassword(newPassword), now, me.id]).changes;
+      if (written !== 1) throw errors.conflict('密码没有写进库，请重试或联系平台', 'PASSWORD_WRITE_FAILED');
+      sessionsRevoked = q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id]).changes;
+    });
+    audit(ctx, 'ORG_PASSWORD_CHANGE', 'USER', me.id, null, { sessionsRevoked });
+    ctx.setCookie = clearAuthCookie();
+    return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
+  }
 
   if (part === '/overview' && method === 'GET') {
     // 2026-09-13（P4 删积分）：原来这里会 ensureOrgBilling() 并读机构积分账户，积分废弃后不再需要。

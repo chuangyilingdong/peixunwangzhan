@@ -24,9 +24,19 @@ export function AppShell({ product, roleLabel, user, navigation, onLogout, onCha
   return <><InternalTestBanner/><div className="app-shell"><aside className="sidebar"><div className="sidebar-top"><div className="brand"><BrandLogo height={22} /></div><div className="role-chip">{roleLabel}</div></div><nav className="app-nav">{navigation.map((item) => item.heading ? <p className="nav-heading" key={item.heading}>{item.heading}</p> : <NavLink key={item.to} to={item.to} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}><span className="nav-icon">{item.icon}</span>{item.label}{item.badge && <small>{item.badge}</small>}</NavLink>)}</nav><div className="sidebar-help"><span>✦</span><div><b>需要帮助？</b><small>查看开课与创作指南</small></div></div><div className="sidebar-footer"><div className="avatar">{(user?.displayName || user?.login || '?').slice(0, 1)}</div><div><strong>{user?.displayName || user?.login}</strong><small>{user?.login}</small></div>{onChangePassword ? <button className="icon-button" title="账号安全" onClick={onChangePassword}>🔑</button> : null}<button className="icon-button" title="退出登录" onClick={onLogout}>↪</button></div></aside><main className="app-main"><div className="app-topbar"><span className="crumb">灵动ai学院 / {roleLabel}</span><div><span className="top-status">● 服务正常</span><button className="top-help">?</button></div></div><div className="page-content">{children}</div></main></div></>;
 }
 
-export function LoginPanel({ title, description, clientType, demos = [], onLogin }) {
-  const [login, setLogin] = useState(demos[0]?.login || '');
-  const [password, setPassword] = useState(demos[0]?.password || '');
+/**
+ * 登录面板（三端共用）。
+ *
+ * ⚠️ 2026-09-23 用户口径（图1）：「演示账号这些全部删除」。
+ *   这里原来有一块「演示账号」快捷登录（点一下就填好登录名与口令），平台端与机构端各传一组。
+ *   删掉的理由不是"不好看"：**口令明文写在前端包里**（那几个 .js 谁都能下载），
+ *   而且它指的正是**生产上真在用的账号** —— 点一下就等于把生产账号的口令发给任何访客。
+ *   官网那一侧早就传空数组了（守卫 p115 钉着），这次把**这个区块与 prop 一起删掉**，
+ *   免得下一个页面又顺手传一组进来。
+ */
+export function LoginPanel({ title, description, clientType, onLogin }) {
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const [mfaRequired, setMfaRequired] = useState(false);
   const [pending, setPending] = useState(false);
@@ -92,7 +102,6 @@ export function LoginPanel({ title, description, clientType, demos = [], onLogin
           {error&&<Notice tone="danger">{error}</Notice>}
           <button className="login-submit" disabled={pending} aria-busy={pending}>{pending?<i className="btn-spinner" aria-hidden="true"/>:null}{pending?'正在验证…':(mfaRequired?'验证并进入':'进入工作台')}<span>→</span></button>
         </form>
-        {demos.length>0&&<div className="demo-list"><span>演示账号</span>{demos.map(d=><button key={d.login} type="button" onClick={()=>{setLogin(d.login);setPassword(d.password);setMfaRequired(false);setMfaCode('')}}><strong>{d.label}</strong><small>{d.login}</small><b>使用</b></button>)}</div>}
       </div>
     </section>
   </div>;

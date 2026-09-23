@@ -1409,15 +1409,8 @@ input[type=checkbox] { width:auto; padding:0; margin:0; flex:0 0 auto; }.lesson-
 @keyframes loginDrift{from{transform:translate3d(-2.5%,-1.5%,0) scale(1)}to{transform:translate3d(2.5%,2%,0) scale(1.09)}}
 @keyframes loginCardIn{from{opacity:0;transform:translateY(18px) scale(.986);filter:blur(10px)}to{opacity:1;transform:none;filter:blur(0)}}
 @keyframes loginRowIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-/* 演示账号（平台端/机构端登录页用；官网传 demos=[] 所以不显示） */
-.demo-list{display:grid;gap:7px;margin-top:24px}
-.demo-list>span{color:#ffffff99;font-size:11px;letter-spacing:.06em}
-.demo-list button{display:grid;grid-template-columns:1fr auto;column-gap:8px;padding:9px 10px;border:1px solid #ffffff40;border-radius:9px;color:#fff;background:#ffffff14;text-align:left;cursor:pointer}
-.demo-list button:hover{background:#ffffff24}
-.demo-list strong,.demo-list small{display:block}
-.demo-list strong{font-size:12px}
-.demo-list small{grid-row:2;margin-top:2px;color:#ffffff8f;font-size:10px}
-.demo-list b{grid-column:2;grid-row:1 / span 2;align-self:center;color:#ff9dc0;font-size:10px;font-weight:800}
+/* （「演示账号」那块样式 2026-09-23 随功能一起删了：口令明文在前端包里，
+   用户口径「演示账号这些全部删除」—— 见 ui.jsx 的 LoginPanel 注释） */
 @media(max-width:900px){.login-page{grid-template-columns:1fr}.login-intro{min-height:340px;padding:2.5rem}.login-copy{margin-top:2rem}.login-headline{font-size:clamp(1.1rem,7cqw,2.2rem)}.login-note,.login-foot{display:none}.login-side{padding:2.5rem 1.5rem 3rem}.login-card{margin-top:-2.5rem}}
 @media(max-width:480px){.login-page{overflow:visible}.login-intro{min-height:280px;padding:2rem 1.5rem}.login-copy{margin-top:1.5rem}.login-headline{font-size:clamp(1rem,7cqw,1.6rem)}.login-card{padding:1.9rem 1.4rem}.login-sub{margin-bottom:1.8rem}}
 @media(prefers-reduced-motion:reduce){.login-intro::before,.login-card,.login-card form>*{animation:none!important}.btn-spinner{animation:loginSpin 1.4s linear infinite}}

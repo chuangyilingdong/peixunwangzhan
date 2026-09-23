@@ -2,7 +2,7 @@ import { useAdminConfirm } from '../components/AdminConfirm.jsx';
 import { readSession, errorText } from '@platform/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, Empty, ErrorState, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
+import { ApiError, Empty, ErrorState, HOME_STEPS_DEFAULT, formatDate, Loading, MetricCard, Notice, PageHeader, Panel, Pagination, ListResultSummary, Status, useData } from '@platform/shared';
 import { ADMIN_PERMISSION_LABELS, WEBSITE_CONTENT_LABELS, downloadCsv, isoDateInput } from '../shared.jsx';
 
 export function parseWebsiteDraft(value) {
@@ -14,7 +14,15 @@ const PREVIEW_IMAGE_STYLE = { display: 'block', maxWidth: '100%', marginTop: '8p
 
 export function WebsitePreview({ content, selectedKey }) {
   if (!content) return <div className="cms-preview-empty">保存或修正 JSON 后可预览。</div>;
-  if (selectedKey === 'HOME') return <div className="cms-preview-home"><span className="cms-preview-kicker">{content.heroKicker || '首页眉题'}</span><h3>{content.heroTitle || '首页标题'} <em>{content.heroAccent || '强调标题'}</em></h3><p>{content.heroDescription || '首页描述'}</p><div className="cms-preview-trust"><strong>{content.trustTitle || '信任区标题'}</strong><span>{content.trustDescription || '信任区描述'}</span></div>{content.coverImageUrl ? <img src={content.coverImageUrl} alt="首页封面预览" /> : null}</div>;
+  if (selectedKey === 'HOME') return <div className="cms-preview-home"><span className="cms-preview-kicker">{content.heroKicker || '首页眉题'}</span><h3>{content.heroTitle || '首页标题'} <em>{content.heroAccent || '强调标题'}</em></h3><p>{content.heroDescription || '首页描述'}</p><div className="cms-preview-trust"><strong>{content.trustTitle || '信任区标题'}</strong><span>{content.trustDescription || '信任区描述'}</span></div>{content.coverImageUrl ? <img src={content.coverImageUrl} alt="首页封面预览" /> : null}
+    {/* 三步一栏：草稿里没有这一块时按**官网会显示什么**预览（内置默认那三条），
+        所以运营看到的就是实际效果；删空则明说官网不显示这一栏。 */}
+    <div className="cms-preview-trust"><strong>{content.steps?.title || HOME_STEPS_DEFAULT.title}</strong><span>{content.steps?.lead ?? HOME_STEPS_DEFAULT.lead}</span></div>
+    <p>{(() => {
+      const items = cmsListOf(content.steps ? content.steps.items : HOME_STEPS_DEFAULT.items);
+      return items.length ? `页脚上方的三步一栏：${items.map((item) => `${item.number || ''} ${item.title || '（未填标题）'}`.trim()).join(' / ')}` : '页脚上方的三步一栏：已清空 —— 官网不显示这一栏。';
+    })()}</p>
+  </div>;
   // 常见问题：预览按**官网的真实结果**给（顺序 = audienceOrder；某一档为空则官网不显示那一档），
   // 这样运营在保存前就能看出"这一档删空之后官网会怎样"。
   if (selectedKey === 'FAQ') {
@@ -158,6 +166,25 @@ export function WebsiteContent({ api }) {
   }
   function addStat() { updateStructured({ stats: [...(Array.isArray(structured?.stats) ? structured.stats : []), { value: '', label: '' }] }); }
   function removeStat(index) { updateStructured({ stats: (structured?.stats || []).filter((_, itemIndex) => itemIndex !== index) }); }
+  // ── 首页「三步一栏」（2026-09-23 用户口径：在官网页脚上方做一栏，文字与图片都要后台可配）──
+  // 草稿里**还没有这一块**时，表单用官网内置默认（HOME_STEPS_DEFAULT，与官网兜底/种子默认同一份）预填：
+  // 运营打开时看到的就是**官网正在显示的那三条**；一改动就把**整块**（默认值 + 本次改动）写进草稿，
+  // 所以不会出现"后台看着是空的、官网却有内容"这种没人看得懂的状态。
+  // ⚠️ 不走上面那套 updateList/moveList：它们从 `structured[field]` 取基准（草稿里可能没有这一块），
+  //    这里必须以**显示出来的这一份**为基准，否则第一次编辑会把默认那几条丢掉。
+  const stepsBlock = structured?.steps && typeof structured.steps === 'object' ? structured.steps : HOME_STEPS_DEFAULT;
+  const stepItems = Array.isArray(stepsBlock.items) ? stepsBlock.items : [];
+  function updateSteps(patch) { updateStructured({ steps: { ...stepsBlock, ...patch } }); }
+  function updateStep(index, patch) { updateSteps({ items: stepItems.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)) }); }
+  function moveStep(index, direction) {
+    const next = index + direction;
+    if (next < 0 || next >= stepItems.length) return;
+    const list = [...stepItems];
+    [list[index], list[next]] = [list[next], list[index]];
+    updateSteps({ items: list });
+  }
+  function addStep() { updateSteps({ items: [...stepItems, { number: String(stepItems.length + 1).padStart(2, '0'), title: '', desc: '', imageUrl: '', imageAlt: '' }] }); }
+  function removeStep(index) { updateSteps({ items: stepItems.filter((_, itemIndex) => itemIndex !== index) }); }
   function updateCourse(index, patch) {
     const list = Array.isArray(structured?.courses) ? structured.courses : [];
     updateStructured({ courses: list.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) });
@@ -278,6 +305,21 @@ export function WebsiteContent({ api }) {
             <div className="cms-section-heading top-gap"><strong>首页数据区（官网首页底部那一排）</strong><span>图标 / 数值 / 后缀 / 名称</span></div>
             <div className="cms-faq-list">{cmsListOf(structured?.stats).map((item, index) => <div className="cms-faq-item" key={`stat-${index}`}><div className="cms-faq-heading"><strong>第 {index + 1} 项</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveList('stats', index, -1)} aria-label={`第 ${index + 1} 项上移`}>↑</button><button type="button" className="text-button" disabled={index === cmsListOf(structured?.stats).length - 1} onClick={() => moveList('stats', index, 1)} aria-label={`第 ${index + 1} 项下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeList('stats', index)}>删除</button></div></div><div className="form-grid"><label>图标<input value={item.icon || ''} onChange={(event) => updateList('stats', index, { icon: event.target.value })} maxLength={24} placeholder="package / lessons / format / console" /><small className="muted">填图标名：package（课包）/ lessons（课时）/ format（形式）/ console（工作台）；也可以直接写一个字符或 emoji。</small></label><label>数值<input value={item.value ?? ''} onChange={(event) => updateList('stats', index, { value: event.target.value })} maxLength={12} /></label><label>后缀<input value={item.suffix || ''} onChange={(event) => updateList('stats', index, { suffix: event.target.value })} maxLength={8} /></label><label>名称<input value={item.label || ''} onChange={(event) => updateList('stats', index, { label: event.target.value })} maxLength={24} /></label></div></div>)}</div>
             <button type="button" className="secondary-button top-gap" onClick={() => addList('stats', { icon: 'package', value: '', suffix: '', label: '' })}>新增数据项</button>
+            {/* 三步一栏（官网页脚上方那一栏，2026-09-23 用户口径）：标题 + 副标题 + 每一步（编号/标题/说明/配图）。
+                配图走平台已有的文件资产接口（与机构手册那几处同一条路），传完把公开地址写回字段。
+                ⚠️ 把三步**全部删掉**是有效操作：官网那一栏会整栏不显示（与首页数据区同一条口径）。 */}
+            <div className="cms-section-heading top-gap"><strong>三步一栏（官网页脚上方）</strong><span>大标题 / 副标题 / 每一步的编号、标题、说明与配图 · 全部删掉 ＝ 官网不显示这一栏</span></div>
+            <div className="form-grid">
+              <label>大标题<input value={stepsBlock.title || ''} onChange={(event) => updateSteps({ title: event.target.value })} maxLength={60} placeholder="例如：三步，把 AI 创作课开进课堂" /></label>
+              <label>副标题<input value={stepsBlock.lead || ''} onChange={(event) => updateSteps({ lead: event.target.value })} maxLength={160} /></label>
+            </div>
+            <div className="cms-faq-list">{stepItems.map((item, index) => <div className="cms-faq-item" key={`hp-step-${index}`}><div className="cms-faq-heading"><strong>第 {index + 1} 步</strong><div className="row-actions"><button type="button" className="text-button" disabled={index === 0} onClick={() => moveStep(index, -1)} aria-label={`第 ${index + 1} 步上移`}>↑</button><button type="button" className="text-button" disabled={index === stepItems.length - 1} onClick={() => moveStep(index, 1)} aria-label={`第 ${index + 1} 步下移`}>↓</button><button type="button" className="text-button danger-text" onClick={() => removeStep(index)}>删除</button></div></div>
+              <div className="form-grid"><label>编号<input value={item.number || ''} onChange={(event) => updateStep(index, { number: event.target.value })} maxLength={8} placeholder="01" /></label><label>标题<input value={item.title || ''} onChange={(event) => updateStep(index, { title: event.target.value })} maxLength={40} /></label></div>
+              <label>说明<textarea value={item.desc || ''} onChange={(event) => updateStep(index, { desc: event.target.value })} maxLength={200} /></label>
+              <div className="form-grid"><label>配图地址<input value={item.imageUrl || ''} onChange={(event) => updateStep(index, { imageUrl: event.target.value })} placeholder="留空则官网画一个占位图（不出破图）" /></label><label>配图说明（无障碍用）<input value={item.imageAlt || ''} onChange={(event) => updateStep(index, { imageAlt: event.target.value })} maxLength={160} /></label></div>
+              <div className="row-actions top-gap"><label className="inline-file-upload">{uploading === `hp-step-${index}` ? '上传中…' : '上传配图'}<input type="file" accept="image/*" disabled={Boolean(uploading)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) uploadImage(file, (url) => updateStep(index, { imageUrl: url }), `hp-step-${index}`); }} /></label></div>
+            </div>)}</div>
+            <button type="button" className="secondary-button top-gap" onClick={addStep}>新增一步</button>
           </div>}
           {selectedKey === 'FAQ' && (() => {
             // 三个档位各配一套问答（2026-09-18 晚用户口径）。三组共用同一套增删改 + 上下移，

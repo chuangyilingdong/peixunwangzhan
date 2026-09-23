@@ -45,7 +45,9 @@ export const navigation = [
   { to: '/security', icon: '🔑', label: '账号安全', permission: null },
 ];
 
-export const demos = [{ label: '平台超管', login: 'root', password: 'admin123' }];
+// ⚠️ 2026-09-23：这里原来导出 `demos`（平台超管的登录名 + 口令），喂给登录页的「演示账号」区块。
+//    用户口径「演示账号这些全部删除」—— 口令明文写在前端包里（打包后的 .js 谁都能下载）、
+//    而且指的是生产上真在用的账号，所以整块删掉，别再从这里导出任何口令。
 
 // 官网内容区块的中文名（对应后端 website_contents.key）
 export const WEBSITE_CONTENT_LABELS = { HOME: '首页', FAQ: '常见问题', BRAND: '品牌信息', ORG: '机构方案', HANDBOOK: '机构手册', COMPARE: '选型对比', MARKETPLACE: '灵动课程' };
