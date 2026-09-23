@@ -37,6 +37,11 @@
  *     要等状态翻转、要看跳没跳、要按自己的判据断言的，`--click` 按一下就完事那种做不了。
  *     返回值进 report 里的 `then`；返回 `{ expectRedirect: '/learn' }` 时底下那条"被重定向了"的
  *     断言会改成**必须**落到这个地址（是把断言换准，不是关掉）
+ *   · 同一条思路，`--then` 还能返回两个"换准"开关（2026-09-23 为账号安全页加的）：
+ *       `{ expectPasswordForm: true }` —— 这一页**本来就有**密码输入框（改密页），
+ *         那条"落在登录页"的判据换成"会话在、且没渲染登录卡"；
+ *       `{ expectedApiErrors: ['/me/password'] }` —— 这些报错是我故意造的（拿错口令验红字提示），
+ *         命中的不算问题、没命中的照旧红。
  *   · `--viewport 390x844` 看窄屏（口径 57 那类"中文被折成竖排"的毛病只在窄列出现）
  *   · `--keep` 截完不退出，把地址与账号打出来，留着人肉点
  * 产物：`.tmp/page-shots/<tag>/` 下每页一张 png + `report.json`
@@ -231,7 +236,11 @@ const cleanup = () => {
   try { api.kill('SIGTERM'); } catch { /* 已退出 */ }
   if (browser) { try { browser.close(); } catch { /* ignore */ } }
   if (web) { try { web.close(); } catch { /* ignore */ } }
-  fs.rmSync(temp, { recursive: true, force: true });
+  // ⚠️ 2026-09-23：在 Windows 上这一行会 EPERM —— 刚被杀掉的子进程（Chromium / 前端静态服务）
+  //    还攥着临时目录里的句柄，删除当场失败，**整个脚本以 1 退出**（结论其实已经跑出来了，看着却像失败）。
+  //    带上退避重试即可（Node 对 EBUSY / EPERM / ENOTEMPTY 会按 retryDelay 重试）；Linux 上行为不变。
+  try { fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 }); }
+  catch (error) { console.log(`（临时目录没删干净：${error?.code || error?.message} —— 不影响本次结论）`); }
 };
 process.on('SIGINT', () => { console.log('\n收到 Ctrl-C，收工'); cleanup(); process.exit(130); });
 
@@ -465,6 +474,7 @@ try {
         // 少了它们，键名写错这种事故的现场就是"页面看着挺正常、脚本还挺绿"。
         sessionInStorage: Boolean(window.localStorage.getItem(`ai-kids-platform.session.v1.${bucket}`)),
         hasPasswordField: document.querySelectorAll('input[type="password"]').length > 0,
+        loginCard: document.querySelectorAll('.login-card').length,
       };
     });
     const after = shotName(route.clicks.length ? '-clicked' : '');
@@ -485,7 +495,12 @@ try {
 
     if (pageErrors.length) fail(`${route.path} 有 JS 异常`, pageErrors.join(' | '));
     if (!state.sessionInStorage) fail(`${route.path} 的会话没注进去`, '页面上读不到 ai-kids-platform.session.v1.*（键名或账号有问题）');
-    if (state.hasPasswordField) fail(`${route.path} 落在登录页`, '页面上有密码输入框 —— 这一张截图不能当"登录后的页面"用');
+    if (state.hasPasswordField && thenResult?.expectPasswordForm) {
+      // --then 明说了"这一页里**本来就有**密码输入框"（账号安全页 / 改密页）。
+      // 不是把断言关掉 —— 换成**必须不是登录页**：会话在、而且没有渲染登录卡。
+      if (state.sessionInStorage && !state.loginCard) console.log('   ✓ 页面上有密码输入框，但渲染的是账号安全页（不是登录页）—— --then 声明的');
+      else fail(`${route.path} 说是账号安全页，实际渲染成了登录页`, `会话=${state.sessionInStorage ? '在' : '不在'} 登录卡=${state.loginCard} 个`);
+    } else if (state.hasPasswordField) fail(`${route.path} 落在登录页`, '页面上有密码输入框 —— 这一张截图不能当"登录后的页面"用');
     if (state.text.length < 40) fail(`${route.path} 几乎是空白页`, `正文只有 ${state.text.length} 字`);
     if (thenResult?.expectRedirect) {
       // --then 明说了"这一页本来就该自己跳走"（例：老师结束课堂后学生端退出画布）。
@@ -495,7 +510,14 @@ try {
       else console.log(`   ✓ 自己跳到了 ${thenResult.expectRedirect}（--then 声明的落点）`);
     } else if (state.finalUrl.replace(origin, '') !== route.path) fail(`${route.path} 被重定向了`, `落到 ${state.finalUrl.replace(origin, '')}（多半是没登进去）`);
     if (missed.length) fail(`${route.path} 少了该出现的文案`, missed.map((check) => check.text).join(' / '));
-    if (apiBad.length) fail(`${route.path} 的接口报错`, apiBad.slice(0, 6).join(' | '));
+    if (apiBad.length) {
+      // --then 可以声明"这几条报错是我**故意**造出来的"（例：拿错口令打改密接口验红字提示）。
+      // 同样是把判据**换准**：命中的那些不算问题，没命中的照旧红；一条没命中也不额外报错。
+      const expected = (thenResult?.expectedApiErrors || []).map((pattern) => new RegExp(pattern));
+      const unexpected = apiBad.filter((item) => !expected.some((pattern) => pattern.test(item)));
+      if (unexpected.length) fail(`${route.path} 的接口报错`, unexpected.slice(0, 6).join(' | '));
+      else console.log(`   ✓ ${apiBad.length} 条接口报错都在 --then 声明的预期内（${apiBad.slice(0, 2).join('；')}）`);
+    }
     if (failedRequests.length) fail(`${route.path} 有请求根本没发出去`, failedRequests.slice(0, 6).join(' | '));
     if (assetBad.length) warn(`${route.path} 有静态资源 4xx/5xx`, assetBad.slice(0, 6).join(' | '));
     // console 里的报错里，"Failed to load resource" 已经由上面两类精确记录了 URL，别再重复报一次

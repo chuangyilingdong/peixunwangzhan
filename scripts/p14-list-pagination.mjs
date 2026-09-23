@@ -132,8 +132,23 @@ try {
   const grantedCourse = courseItems.find((course) => course.hasGrant !== false) || courseItems[0];
   const lessonId = grantedCourse?.currentLessonId || grantedCourse?.lessons?.[0]?.id || grantedCourse?.lesson?.id || grantedCourse?.id;
   assert.ok(lessonId, `未获取到课时 ID: ${JSON.stringify(courses.data)}`);
-  for (const title of ['P14 作品一', 'P14 作品二']) {
-    const created = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lessonId, title } });
+  // ⚠️ 2026-09-23 修：这里原来拿**同一个课时**建两个项目、各提交一次。第二十七轮 §二.S 把「建项目」
+  //    改成**幂等取得本场课堂的创作**（草稿优先、**已提交的复用**）之后，第二次 POST 拿回的就是
+  //    **同一个已提交的项目**，再提交必然 409（INVALID_PROJECT_TRANSITION: 项目已提交，不能重复提交）
+  //    → 这条断言从那以后一直是红的。这是「口径改了、断言没跟着换」那一类（坑 111）：
+  //    要的是"2 件作品"，就老老实实**用两个课时**建；凑不出第二个课时就明说，别装作验过了。
+  const lessonIds = [lessonId];
+  for (const course of courseItems.filter((item) => item.hasGrant !== false)) {
+    for (const lesson of course?.lessons || []) {
+      const candidate = lesson?.id || lesson?.lessonId;
+      if (candidate && !lessonIds.includes(candidate)) lessonIds.push(candidate);
+      if (lessonIds.length >= 2) break;
+    }
+    if (lessonIds.length >= 2) break;
+  }
+  assert.ok(lessonIds.length >= 2, `这个学生名下凑不出两个课时，没法验"2 件作品分页"：${JSON.stringify(lessonIds)}`);
+  for (const [index, targetLessonId] of lessonIds.slice(0, 2).entries()) {
+    const created = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: targetLessonId, title: `P14 作品${index + 1}` } });
     assert.equal(created.status, 200, `学生项目创建失败: ${JSON.stringify(created.data)}`);
     const submitted = await api(`/api/student/projects/${created.data.id}/submit`, { method: 'POST', token: student, body: { copyrightConfirmed: true } });
     assert.equal(submitted.status, 200, `作品提交失败: ${JSON.stringify(submitted.data)}`);
