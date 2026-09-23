@@ -64,6 +64,18 @@ function acquireBodySlot(declaredBytes) {
 }
 
 function sendFileResponse(res, fileResponse, req) {
+  // OSS 对象走这条：**302 到带签名的临时地址**，字节由 OSS 直接服务、不经过这台机
+  // （这台机的公网出口只有 5 Mbps，媒体全从它出去会拖慢所有人）。
+  // ⚠️ 302 本身不能被缓存 —— 签名会过期，缓存住等于把过期地址发给下一个人。
+  if (fileResponse.redirectUrl) {
+    res.writeHead(fileResponse.status || 302, {
+      ...corsHeaders(req, {}),
+      location: fileResponse.redirectUrl,
+      'cache-control': 'private, no-store',
+    });
+    res.end();
+    return;
+  }
   const headers = { ...corsHeaders(req, fileResponse.headers || {}) };
   res.writeHead(fileResponse.status || 200, headers);
   fileResponse.stream.on('error', () => { if (!res.destroyed) res.destroy(); });

@@ -24,6 +24,7 @@ import { assertTransition } from '../services/domainState.js';
 import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
+import { rowStorageBackend, ossRedirectUrl, materializeObject } from '../services/fileStorage.js';
 
 const STORAGE_KINDS = new Set(['EXTERNAL_URL', 'INTERNAL_PROXY', 'PENDING']);
 const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE']);
@@ -231,6 +232,18 @@ export async function prepareFileDownload(ctx, file) {
       statement: 'EXTERNAL_URL 模式：客户端可直接使用已授权的 storageUrl。',
     };
   }
+  // OSS 行：**不经过我们转发字节**，而是 302 到带签名的临时地址（见 services/fileStorage.js）。
+  // 为什么必须这样：这台机的公网出口只有 5 Mbps，媒体全从它出去会拖慢所有人。
+  // 授权判断在这之前已经做完了（调用方先校验 grants / 票据），签名地址只是"取件凭证"。
+  const redirectUrl = ossRedirectUrl(file, {
+    expires: 900,
+    contentType: file.mime_type || undefined,
+    contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(String(file.file_name || 'download').replace(/[\r\n"\\/]/g, '_'))}`,
+  });
+  if (redirectUrl) {
+    audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageBackend: 'oss', redirected: true });
+    return { __fileResponse: true, status: 302, redirectUrl };
+  }
   const root = uploadRoot();
   const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
   if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) {
@@ -341,7 +354,9 @@ async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null
   try {
     const fileId = id('file');
     const now = nowIso();
-    const metadata = { upload: { originalName: stored.fileName, security: stored.security, uploadedAt: now } };
+    // 记下这一行落在哪个后端：读的时候（下载 / 预览）靠它分流。
+    // 老数据没有这个字段 → 一律当本地盘，所以**不需要为历史数据做迁移**，回滚也就是删掉这个标记。
+    const metadata = { upload: { originalName: stored.fileName, security: stored.security, uploadedAt: now }, storageBackend: stored.storageBackend || 'local' };
     const proxyRoute = `/api/${scope}/file-assets/${fileId}/download`;
     q(
       `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -374,7 +389,7 @@ export async function storeGeneratedAsset({ buffer, mimeType, fileName, ownerUse
     [fileId, ownerUserId ? 'USER' : 'PLATFORM', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, stored.storageKey,
       `/api/public/file-assets/${fileId}/download`, null, stored.fileName, stored.mimeType, stored.fileSize,
       stored.checksum, category, visibility, 'ACTIVE', 'NOT_REQUIRED', null,
-      json({ ...metadata, generated: true, security: stored.security }), ownerUserId, now, now],
+      json({ ...metadata, generated: true, security: stored.security, storageBackend: stored.storageBackend || 'local' }), ownerUserId, now, now],
   );
   const created = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
   return { id: fileId, url: `/api/public/file-assets/${fileId}/download`, fileName: stored.fileName, mimeType: stored.mimeType, bytes: stored.fileSize, row: created };
@@ -595,8 +610,21 @@ export async function prepareFilePreview(ctx, file) {
   const root = uploadRoot();
   const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
   if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
-  const absolute = path.resolve(root, storageKey);
-  if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  // OSS 行：预览必须先把对象取到本地 —— Office 转换（LibreOffice）只认本地文件路径。
+  // 落到 uploads 下的一个缓存目录（该目录不在 web 根内），文件名用 file.id，同一份只下一次。
+  let absolute;
+  if (rowStorageBackend(file) === 'oss') {
+    const scratch = path.resolve(root, '.oss-preview-cache', `${file.id}${path.extname(storageKey) || ''}`);
+    try {
+      absolute = await materializeObject(file, scratch);
+    } catch (error) {
+      console.warn('[preview] 从 OSS 取对象失败：', error?.message || error);
+      throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+    }
+  } else {
+    absolute = path.resolve(root, storageKey);
+    if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  }
   if (needsConversion(kind)) {
     const converted = await ensurePreviewPdf({ sourcePath: absolute, cacheKey: file.id });
     // 转不出来就明说「无法预览」，**绝不回退去发原始 Office 文件** —— 那等于把下载又放回来了

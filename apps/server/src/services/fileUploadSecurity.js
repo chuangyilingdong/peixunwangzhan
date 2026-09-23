@@ -3,6 +3,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { errors } from '../lib.js';
+import { persistUploadBytes } from './fileStorage.js';
 
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 // 单文件上限的**硬顶**（env 只能往下调、不能越过它）。2026-09-21 从 100MB 提到 200MB：
@@ -229,16 +230,34 @@ export async function persistSecureUpload({ fileName, mimeType, buffer }) {
   const relative = path.join(String(now.getUTCFullYear()), String(now.getUTCMonth() + 1).padStart(2, '0'), `${randomUUID()}${validated.extension}`);
   const absolute = path.resolve(root, relative);
   if (!absolute.startsWith(root + path.sep)) throw errors.badRequest('存储路径无效', 'INVALID_STORAGE_PATH');
-  await mkdir(path.dirname(absolute), { recursive: true, mode: 0o750 });
+  // 写本地盘还是 OSS，由存储适配层按 FILE_STORAGE 决定（见 services/fileStorage.js）。
+  // 两条路都把手里的失败收敛成同一个错误码，调用方不用关心后端是谁。
+  let persisted;
   try {
-    await writeFile(absolute, buffer, { flag: 'wx', mode: 0o640 });
+    persisted = await persistUploadBytes({
+      relativeKey: relative.replaceAll(path.sep, '/'),
+      buffer,
+      mimeType: validated.mimeType,
+      writeLocal: async () => {
+        await mkdir(path.dirname(absolute), { recursive: true, mode: 0o750 });
+        try {
+          await writeFile(absolute, buffer, { flag: 'wx', mode: 0o640 });
+        } catch (error) {
+          await rm(absolute, { force: true }).catch(() => {});
+          throw error;
+        }
+        return absolute;
+      },
+    });
   } catch (error) {
-    await rm(absolute, { force: true }).catch(() => {});
+    // 后端（OSS）的原始错误不能吞 —— 否则线上只有一句「文件存储失败」，无从下手
+    console.warn('[storage] 上传写入失败：', error?.message || error);
     throw errors.badRequest('文件存储失败', 'FILE_STORAGE_FAILED');
   }
   return {
-    storageKey: relative.replaceAll(path.sep, '/'),
-    storagePath: absolute,
+    storageKey: persisted.storageKey,
+    storageBackend: persisted.storageBackend,
+    storagePath: persisted.storagePath,
     fileName: cleanFileName(fileName).normalized,
     mimeType: validated.mimeType,
     fileSize: buffer.length,
