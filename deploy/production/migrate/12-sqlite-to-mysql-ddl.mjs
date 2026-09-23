@@ -61,14 +61,46 @@ const tables = q(`SELECT name, sql FROM sqlite_master WHERE type='table' AND nam
 const indexes = q(`SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY tbl_name, name`);
 
 // ── 第一遍：读所有表的列 ──
+/**
+ * ⚠️ 线上 DDL 里有一处**漏了逗号**（generation_jobs 的 project_id 外键后面那个）：
+ *    `… ON DELETE CASCADE\n  FOREIGN KEY (retry_of_job_id) …`
+ *    SQLite 容忍这种写法（表一直在跑），MySQL 直接报语法错。
+ *
+ * 修法**不能**用全局正则补逗号 —— 我试过，它会把**列定义里的 CHECK** 也误伤
+ * （`status TEXT NOT NULL DEFAULT 'X' CHECK (…)` 前面被插逗号，列定义就破了）。
+ * 所以只在"这一部分**本身以表级约束关键字开头**"时才拆：按括号深度扫，顶层遇到下一个
+ * 约束关键字就切一刀。列定义里的 CHECK 在括号里（depth>0）或压根不以关键字开头，都不会被动。
+ */
+const CONSTRAINT_RE = /^(?:FOREIGN\s+KEY|UNIQUE|CHECK|PRIMARY\s+KEY|CONSTRAINT)\b/i;
+const NEXT_CONSTRAINT_RE = /^\s+(?=(?:FOREIGN\s+KEY|UNIQUE|CHECK|PRIMARY\s+KEY|CONSTRAINT)\b)/i;
+function splitConstraintRuns(part) {
+  const t = part.trim();
+  if (!CONSTRAINT_RE.test(t)) return [t];
+  // ⚠️ `CONSTRAINT <名字> CHECK (…)` **本身是一个整体**，里面的 CHECK 不是"下一个约束"。
+  //    线上 course_series 就是这么写的（而且逗号在行首：`… CASCADE\n, CONSTRAINT chk_… CHECK (…)`），
+  //    不排除这种情况就会把它拆成 `CONSTRAINT chk_difficulty` + `CHECK (…)` 两半 → MySQL 语法错。
+  if (/^CONSTRAINT\b/i.test(t)) return [t];
+  const out = []; let depth = 0; let cur = ''; let i = 0;
+  while (i < t.length) {
+    const ch = t[i];
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    if (depth === 0 && cur.trim()) {
+      const hit = t.slice(i).match(NEXT_CONSTRAINT_RE);
+      if (hit) { out.push(cur.trim()); cur = ''; i += hit[0].length; continue; }
+    }
+    cur += ch; i += 1;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
 const meta = [];
 for (const t of tables) {
   const cols = q(`SELECT * FROM pragma_table_info('${esc(t.name)}')`);
-  meta.push({
-    table: t.name,
-    cols,
-    body: splitTopLevel(String(t.sql).replace(/^CREATE TABLE[^(]*\(/i, '').replace(/\)\s*$/, '')),
-  });
+  const body = splitTopLevel(String(t.sql).replace(/^CREATE TABLE[^(]*\(/i, '').replace(/\)\s*$/, ''))
+    .flatMap(splitConstraintRuns);
+  meta.push({ table: t.name, cols, body });
 }
 
 // 哪些列被索引/是主键
@@ -109,40 +141,68 @@ out.push('');
 const stats = {};
 let colCount = 0;
 
+// MySQL 的单行固定宽度上限是 65535 字节（**不算** TEXT/BLOB）。
+// utf8mb4 下每个 VARCHAR(n) 占 n×4 字节 —— 一张有 16 个宽 JSON 列的表很容易爆。
+// 踩过：course_lessons(88308) / student_projects(71636) / vibecoding_submissions(66228) 三张表
+// 直接建不出来（ERROR 1118 Row size too large）。所以**按表算总宽度**，超了就把非索引列降级。
+const MAX_ROW_BYTES = 64000;
+const MEDIUMTEXT_COST = 20; // TEXT 系在行里只占一个指针 + 长度
+
 for (const m of meta) {
-  const lines = [];
-  for (const c of m.cols) {
-    colCount += 1;
+  // ── 第一趟：定初选类型、算固定宽度 ──
+  const plans = m.cols.map((c) => {
     const indexed = (indexedCols.get(m.table) || new Set()).has(c.name);
     const hasDefault = c.dflt_value !== null && c.dflt_value !== undefined;
     const len = maxLen.get(`${m.table}.${c.name}`) ?? 0;
     const isText = !c.type || /TEXT/i.test(String(c.type));
-
-    let mysqlType;
+    let mysqlType; let fixedWidth;
     if (!isText) {
       const t = String(c.type || '').toUpperCase();
       mysqlType = t.startsWith('INT') ? 'BIGINT'
         : (t.startsWith('REAL') || t.startsWith('DOUB') || t.startsWith('FLOA')) ? 'DOUBLE'
           : t.startsWith('BLOB') ? 'LONGBLOB' : 'BIGINT';
+      fixedWidth = mysqlType === 'BIGINT' || mysqlType === 'DOUBLE' ? 8 : MEDIUMTEXT_COST;
     } else if (indexed) {
-      mysqlType = 'VARCHAR(255)';
+      // 索引列也**按真实数据长度**定尺寸（下限 64、上限 255）。
+      // ⚠️ 不能一律 VARCHAR(255)：MySQL 的单条索引键上限是 3072 字节，utf8mb4 下
+      //    4 列 × 255 字符 = 4080 字节 → `ERROR 1071 Specified key was too long`。
+      //    id 这类列真实只有 25 字符左右，给 64 完全够，键长一下就下来了。
+      const size = Math.min(255, Math.max(64, Math.ceil((len * 1.2) / 16) * 16));
+      mysqlType = `VARCHAR(${size})`;
+      fixedWidth = size * 4;
       if (len > 255) notes.push(`⚠️ ${m.table}.${c.name} 是索引列但真实数据最长 ${len} 字符 > 255 —— **必须人工决定**（前缀索引？换做法？）`);
     } else {
-      // 按真实长度挑：装得下就用 VARCHAR（能保留 DEFAULT），装不下才 MEDIUMTEXT。
-      // ⚠️ 不要给这里加"上限截断"（我第一版 Math.min(16383,…) 就把 4 个列判成了 VARCHAR(16383)，
-      //    而它们真实有 7 万～15 万字符 —— 会静默截断）。宁可 MEDIUMTEXT。
       const size = len === 0 ? 255 : Math.max(255, Math.ceil((len * 1.2) / 64) * 64);
       mysqlType = size <= 16383 ? `VARCHAR(${size})` : 'MEDIUMTEXT';
+      fixedWidth = mysqlType === 'MEDIUMTEXT' ? MEDIUMTEXT_COST : size * 4;
     }
-    // MySQL 不允许 TEXT/MEDIUMTEXT 有默认值 —— 真要用大类型时，默认值只能丢
-    const dropDefault = mysqlType === 'MEDIUMTEXT' && hasDefault;
-    if (dropDefault) notes.push(`⚠️ ${m.table}.${c.name}：数据最长 ${len} 字符，只能用 MEDIUMTEXT，**默认值被丢掉** —— 确认插入时都会显式给值`);
-    stats[mysqlType] = (stats[mysqlType] || 0) + 1;
+    return { c, indexed, hasDefault, len, mysqlType, fixedWidth, dropDefault: false };
+  });
 
-    const raw = m.body.find((p) => unq(p.split(/\s+/)[0]) === c.name) || '';
+  // ── 降级：超行上限时，把**非索引**的 VARCHAR 从大到小改成 MEDIUMTEXT（默认值随之丢掉） ──
+  let total = plans.reduce((s, p) => s + p.fixedWidth, 0);
+  if (total > MAX_ROW_BYTES) {
+    const cands = plans.filter((p) => !p.indexed && /^VARCHAR/.test(p.mysqlType)).sort((a, b) => b.fixedWidth - a.fixedWidth);
+    for (const p of cands) {
+      if (total <= MAX_ROW_BYTES) break;
+      total -= p.fixedWidth - MEDIUMTEXT_COST;
+      p.mysqlType = 'MEDIUMTEXT';
+      p.fixedWidth = MEDIUMTEXT_COST;
+      p.dropDefault = p.hasDefault;
+      notes.push(`ℹ️ ${m.table}.${p.c.name} 因整行超 MySQL 上限被降级为 MEDIUMTEXT${p.hasDefault ? '（默认值随之丢掉）' : ''}`);
+    }
+  }
+  if (total > MAX_ROW_BYTES) notes.push(`⚠️ ${m.table}：降级后整行仍有 ${total} 字节 > ${MAX_ROW_BYTES} —— **必须人工处理**`);
+
+  const lines = [];
+  for (const p of plans) {
+    colCount += 1;
+    const { c, mysqlType } = p;
+    stats[mysqlType] = (stats[mysqlType] || 0) + 1;
+    const raw = m.body.find((x) => unq(x.split(/\s+/)[0]) === c.name) || '';
     let rest = raw ? raw.slice(raw.indexOf(c.name) + c.name.length).trim().replace(/^[A-Za-z]+(\s*\([^)]*\))?/i, '').trim() : '';
     if (Number(c.notnull) === 1 && !/\bNOT\s+NULL\b/i.test(rest)) rest = `NOT NULL ${rest}`.trim();
-    if (dropDefault) rest = rest.replace(/\s*DEFAULT\s+('(?:[^']|'')*'|\S+)/i, '').replace(/\s+/g, ' ').trim();
+    if (mysqlType === 'MEDIUMTEXT' && (p.hasDefault || p.dropDefault)) rest = rest.replace(/\s*DEFAULT\s+('(?:[^']|'')*'|\S+)/i, '').replace(/\s+/g, ' ').trim();
     lines.push(`  ${bt(c.name)} ${mysqlType}${rest ? ` ${rest}` : ''}`.replace(/\s+$/, ''));
     if (!raw) notes.push(`⚠️ ${m.table}.${c.name} 在原始 DDL 里没找到对应片段（约束可能没搬全）`);
   }

@@ -99,14 +99,20 @@ if (mode === 'load') {
 }
 
 // ─────────────────────────── 模式三：逐表比对 ───────────────────────────
-const my = (sql) => execFileSync('mysql', ['--batch', '--raw', '--skip-column-names', '-e', sql], { encoding: 'utf8' })
+// ⚠️ 必须显式带 -D <库名>：不带的话 mysql 会报 "No database selected"（我第一版就漏了，
+//    结果 89 张表全被误报成"查不到"）。
+const MYDB = String(process.env.RDS_DATABASE || 'aild_admin').trim();
+const my = (sql) => execFileSync('mysql', ['-D', MYDB, '--batch', '--raw', '--skip-column-names', '-e', sql], { encoding: 'utf8' })
   .trim().split('\n').filter((x) => x !== '');
 const digestOf = (rows, cols) => {
   const h = createHash('sha256');
   for (const r of rows) {
     for (const c of cols) {
       const v = r[c];
-      h.update(v === null || v === undefined ? '\u0000NULL' : (Buffer.isBuffer(v) ? v.toString('hex') : String(v)));
+      // ⚠️ 两边必须**归一到同一种表示**再比：SQLite 侧拿到的整数是真 number，
+      //    而 MySQL 侧经 XML 拿回来的是字符串 —— 不归一就会出现"内容不一致"的**假警报**
+      //    （第一版就是这么误报的）。NULL 用一个不可能与数据撞的标记表示。
+      h.update(v === null || v === undefined ? '\u0000NULL' : (Buffer.isBuffer(v) ? `buf:${v.toString('hex')}` : String(v)));
       h.update('\u0001');
     }
     h.update('\u0002');
@@ -131,12 +137,17 @@ for (const t of tables) {
     const order = cols.includes('id') ? 'id' : cols[0];
     const rowsS = db.prepare(`SELECT ${cols.map(bt).join(',')} FROM ${bt(t)} ORDER BY ${bt(order)}`).all();
     // MySQL 侧逐行取回来比对：用 XML 输出（数据里可能有制表符/换行，TSV 会切坏）
-    const xml = execFileSync('mysql', ['--xml', '-e', `SELECT ${cols.map(bt).join(',')} FROM ${bt(t)} ORDER BY ${bt(order)};`], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+    const xml = execFileSync('mysql', ['-D', MYDB, '--xml', '-e', `SELECT ${cols.map(bt).join(',')} FROM ${bt(t)} ORDER BY ${bt(order)};`], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
     const rowsM = [...xml.matchAll(/<row>([\s\S]*?)<\/row>/g)].map((m) => {
       const o = {};
-      for (const f of m[1].matchAll(/<field[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/field>/g)) {
-        const [, name, raw] = f;
-        o[name] = raw === null ? null : raw
+      // ⚠️ 必须识别 `xsi:nil="true"`：MySQL 的 XML 把 NULL 输出成自闭合的空 field，
+      //    不识别就会读成**空字符串** —— 于是"NULL vs ''"被判成内容不一致（第一版就是这么误报的）。
+      for (const f of m[1].matchAll(/<field([^>]*?)(?:\/>|>([\s\S]*?)<\/field>)/g)) {
+        const [, attrs, raw] = f;
+        const name = (attrs.match(/name="([^"]+)"/) || [])[1];
+        if (!name) continue;
+        if (/xsi:nil="true"/.test(attrs)) { o[name] = null; continue; }
+        o[name] = String(raw ?? '')
           .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"')
           .replaceAll('&amp;', '&').replaceAll('&apos;', "'");
       }
