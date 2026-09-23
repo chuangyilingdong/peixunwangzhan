@@ -88,30 +88,11 @@ function Header({ userBadge, signedIn }){
 }
 // ── 页脚（2026-09-23 按用户给的参考稿 Footer03Luma 重做）─────────────────────────
 // ⚠️ 参考稿是 Tailwind + framer-motion + lucide 三件套，官网**一个都没引**（也不为页脚引进来
-//    跟全局 styles.css 打架）—— 所以：布局用 CSS Grid、那三团漂移的光晕用 @keyframes 复刻同一件事、
-//    图标内联 svg（**css.gg，MIT**，与首页数据区那四个同源）。
-// ⚠️ 参考稿那一排是**社交账号**（Twitter/GitHub/LinkedIn/YouTube），我们一个账号都没有 ——
-//    死链比不放更糟（既有口径），所以那一排换成四个**真能点的入口**：邮箱 / 联系我们 / 下载客户端 / 机构后台。
-//    换图标或换入口时，把上面这两条（许可 + "不放假社交"）一起带着。
-const FOOTER_ICONS = {
-  mail: <path fillRule="evenodd" clipRule="evenodd" d="M3.00977 5.83789C3.00977 5.28561 3.45748 4.83789 4.00977 4.83789H20C20.5523 4.83789 21 5.28561 21 5.83789V17.1621C21 18.2667 20.1046 19.1621 19 19.1621H5C3.89543 19.1621 3 18.2667 3 17.1621V6.16211C3 6.11449 3.00333 6.06765 3.00977 6.0218V5.83789ZM5 8.06165V17.1621H19V8.06199L14.1215 12.9405C12.9499 14.1121 11.0504 14.1121 9.87885 12.9405L5 8.06165ZM6.57232 6.80554H17.428L12.7073 11.5263C12.3168 11.9168 11.6836 11.9168 11.2931 11.5263L6.57232 6.80554Z" />,
-  comment: <>
-    <path d="M17 9H7V7H17V9Z" />
-    <path d="M7 13H17V11H7V13Z" />
-    <path fillRule="evenodd" clipRule="evenodd" d="M2 18V2H22V18H16V22H14C11.7909 22 10 20.2091 10 18H2ZM12 16V18C12 19.1046 12.8954 20 14 20V16H20V4H4V16H12Z" />
-  </>,
-  download: <path d="M11.0001 3.67157L13.0001 3.67157L13.0001 16.4999L16.2426 13.2574L17.6568 14.6716L12 20.3284L6.34314 14.6716L7.75735 13.2574L11.0001 16.5001L11.0001 3.67157Z" />,
-  console: <>
-    <path d="M14 11H10V13H14V11Z" />
-    <path fillRule="evenodd" clipRule="evenodd" d="M7 5V4C7 2.89545 7.89539 2 9 2H15C16.1046 2 17 2.89545 17 4V5H20C21.6569 5 23 6.34314 23 8V18C23 19.6569 21.6569 21 20 21H4C2.34314 21 1 19.6569 1 18V8C1 6.34314 2.34314 5 4 5H7ZM9 4H15V5H9V4ZM4 7C3.44775 7 3 7.44769 3 8V14H21V8C21 7.44769 20.5522 7 20 7H4ZM3 18V16H21V18C21 18.5523 20.5522 19 20 19H4C3.44775 19 3 18.5523 3 18Z" />
-  </>,
-};
-const FOOTER_ACTIONS = [
-  { key: 'mail', label: '邮箱', href: 'mailto:hello@aimagc.cn' },
-  { key: 'comment', label: '联系我们', to: '/demo' },
-  { key: 'download', label: '下载客户端', to: '/download' },
-  { key: 'console', label: '机构后台', href: ORG_APP_URL },
-];
+//    跟全局 styles.css 打架）—— 所以：布局用 CSS Grid、那三团漂移的光晕用 @keyframes 复刻同一件事。
+// ⚠️ 参考稿品牌行那一排是**社交账号**（Twitter/GitHub/LinkedIn/YouTube），我们一个账号都没有。
+//    中途换成了四个真入口（邮箱/联系我们/下载客户端/机构后台），**用户 2026-09-23 看图后让整排删掉**，
+//    于是连同图标一起删了。**别再放这一排**：我们没有那些账号，放假链接比不放更糟。
+// ⚠️ 首页原来被 `loc.pathname !== '/'` 排除在页脚之外 —— 用户要求「官网下方也要有页脚」，已改。
 function FooterLink({ to, href, children }) {
   return to ? <Link to={to}>{children}</Link> : <a href={href}>{children}</a>;
 }
@@ -125,10 +106,7 @@ function Footer(){return <footer className="site-footer">
       <div><strong>条款与隐私</strong><FooterLink to="/terms">用户协议</FooterLink><FooterLink to="/privacy">隐私政策</FooterLink><FooterLink to="/minors">儿童 / 未成年人说明</FooterLink><FooterLink href="mailto:hello@aimagc.cn">联系合作</FooterLink></div>
     </div>
     <div className="ft-brand">
-      <div className="ft-brand__id"><Logo /><p>面向教培机构与学校的<br />青少年 AI 通识与 VibeCoding 开课平台。</p></div>
-      <div className="ft-actions">{FOOTER_ACTIONS.map((item) => item.to
-        ? <Link key={item.key} to={item.to} className="ft-action" title={item.label} aria-label={item.label}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{FOOTER_ICONS[item.key]}</svg></Link>
-        : <a key={item.key} href={item.href} className="ft-action" title={item.label} aria-label={item.label}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{FOOTER_ICONS[item.key]}</svg></a>)}</div>
+      <Logo />
       <div className="ft-legal">© 2026 {BRAND_NAME} <span>面向 8–16 岁 · 浏览器即用</span></div>
     </div>
   </div>

@@ -886,12 +886,15 @@
    ⚠️ 所有规则都带 `.site-footer` 前缀：这张表是**全站共用**的，别让页脚样式漏到别处去。
    ⚠️ prefers-reduced-motion 下不飘（站内其它动效同一条口径）。
    ════════════════════════════════════════════════════════════════════════════ */
-footer.site-footer{position:relative;overflow:hidden;padding:clamp(56px,7vw,92px) 28px 26px;border-top:1px solid rgb(255 255 255 / 7%);color:#9a94a7;background:#0b0a0e}
+footer.site-footer{position:relative;overflow:hidden;padding:clamp(56px,7vw,92px) 28px 26px;border-top:1px solid rgb(255 255 255 / 7%);color:#c9b6bd;/* 用户 2026-09-23：「页脚现在是纯黑，可以跟首页那样渐变红就行」——
+   首页那片红是**视频背景**里的颜色（.hp-bg 里的 hero-animal.mp4），没有可复用的 CSS 渐变，
+   所以按那个色调自己调一条：上缘深（接得住首页 hero 的暗底）→ 中段酒红 → 下缘再压暗。 */
+background:radial-gradient(120% 80% at 50% 0%,rgb(255 60 90 / 26%),transparent 62%),linear-gradient(180deg,#17060a 0%,#5f1020 44%,#8a1526 62%,#160409 100%)}
 .site-footer .ft-inner{position:relative;z-index:1;max-width:1184px;margin:auto}
 .site-footer .ft-glow{position:absolute;border-radius:50%;pointer-events:none;filter:blur(120px);will-change:transform}
-.site-footer .ft-glow--a{top:0;left:20%;width:min(600px,72vw);height:min(600px,72vw);margin-top:-38%;background:rgb(255 92 147 / 13%);animation:ft-drift-a 15s linear infinite}
-.site-footer .ft-glow--b{right:18%;bottom:0;width:min(500px,60vw);height:min(500px,60vw);margin-bottom:-30%;background:rgb(197 88 255 / 11%);animation:ft-drift-b 18s linear infinite}
-.site-footer .ft-glow--c{top:50%;left:50%;width:min(760px,86vw);height:min(760px,86vw);margin:-38% 0 0 -43%;background:rgb(255 122 92 / 9%);animation:ft-pulse 10s ease-in-out infinite}
+.site-footer .ft-glow--a{top:0;left:20%;width:min(600px,72vw);height:min(600px,72vw);margin-top:-38%;background:rgb(255 70 110 / 22%);animation:ft-drift-a 15s linear infinite}
+.site-footer .ft-glow--b{right:18%;bottom:0;width:min(500px,60vw);height:min(500px,60vw);margin-bottom:-30%;background:rgb(255 120 60 / 18%);animation:ft-drift-b 18s linear infinite}
+.site-footer .ft-glow--c{top:50%;left:50%;width:min(760px,86vw);height:min(760px,86vw);margin:-38% 0 0 -43%;background:rgb(255 40 80 / 14%);animation:ft-pulse 10s ease-in-out infinite}
 @keyframes ft-drift-a{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(40px,-30px,0)}}
 @keyframes ft-drift-b{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(-40px,30px,0)}}
 @keyframes ft-pulse{0%,100%{opacity:.72;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
@@ -903,13 +906,8 @@ footer.site-footer{position:relative;overflow:hidden;padding:clamp(56px,7vw,92px
 .site-footer .foot a:hover{color:#fff}
 .site-footer .foot a:after{content:"↗";font-size:11px;opacity:0;transform:translate(-3px,3px);transition:opacity .3s ease-out,transform .3s ease-out}
 .site-footer .foot a:hover:after{opacity:1;transform:translate(0,0)}
-.site-footer .ft-brand{display:grid;grid-template-columns:1fr auto;gap:20px 28px;align-items:center;padding-top:24px;border-top:1px solid rgb(255 255 255 / 7%)}
-.site-footer .ft-brand__id{display:flex;align-items:center;gap:16px}
-.site-footer .ft-brand__id p{margin:0;font-size:12px;line-height:1.8}
-.site-footer .ft-actions{display:flex;align-items:center;gap:10px}
-.site-footer .ft-action{display:grid;place-items:center;width:36px;height:36px;border:1px solid rgb(255 255 255 / 12%);border-radius:999px;color:rgb(255 255 255 / 62%);background:rgb(255 255 255 / 5%);transition:color .3s ease-out,background .3s ease-out,border-color .3s ease-out}
-.site-footer .ft-action:hover{color:#fff;background:rgb(255 255 255 / 12%);border-color:rgb(255 255 255 / 24%)}
-.site-footer .ft-action svg{display:block;width:16px;height:16px;fill:currentColor}
-.site-footer .ft-legal{grid-column:1 / -1;display:flex;justify-content:space-between;gap:10px;color:#5d5867;font-size:11px}
+/* 品牌行：用户 2026-09-23 把描述那句与那一排图标按钮都删了 → 只剩「logo 左 / 版权右」一行 */
+.site-footer .ft-brand{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px 28px;padding-top:24px;border-top:1px solid rgb(255 255 255 / 10%)}
+.site-footer .ft-legal{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 14px;color:rgb(255 255 255 / 46%);font-size:11px}
 @media(max-width:980px){.site-footer .foot{grid-template-columns:repeat(2,1fr);gap:34px 22px}}
-@media(max-width:700px){.site-footer{padding:52px 18px 22px}.site-footer .foot{grid-template-columns:repeat(2,1fr);gap:30px 16px}.site-footer .ft-brand{grid-template-columns:1fr;gap:18px}.site-footer .ft-legal{display:grid;gap:6px}}
+@media(max-width:700px){.site-footer{padding:52px 18px 22px}.site-footer .foot{grid-template-columns:repeat(2,1fr);gap:30px 16px}.site-footer .ft-brand{display:grid;gap:16px}.site-footer .ft-legal{display:grid;gap:6px}}
