@@ -97,7 +97,7 @@ export function ModelNamePanel({ api }) {
     <Panel title="这一栏改了什么、没改什么">
       <p className="muted">· 改的是：画布框体标题那行（<code>生视频 · 480P · MiniMax-H3 · 首尾帧</code> 里的模型那一段）、框体参数胶囊、以及 VibeCoding 课堂里的模型下拉。</p>
       <p className="muted">· 没改的是：调用上游时发的模型 ID、课包/课时里存的模型、发布快照里的内容 —— 所以改名字不会影响生成结果，也不用重新发布课包。</p>
-      <p className="muted">· 改完学生**刷新页面**就能看到新名字；正在上课的学生下一次打开画布/课堂也是新名字。</p>
+      <p className="muted">· 改完学生<strong>刷新页面</strong>就能看到新名字；正在上课的学生下一次打开画布/课堂也是新名字。</p>
     </Panel>
   </>;
 }
