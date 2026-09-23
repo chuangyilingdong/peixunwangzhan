@@ -529,8 +529,15 @@ function HomeLanding() {
   const longestLine = Math.max(titleWeight(title), titleWeight(accent), 1);
   const titleStyle = { fontSize: `clamp(26px, min(6vw, ${(92 / longestLine).toFixed(2)}vw), 76px)` };
   return <main className="hp">
-    <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
-    <section className="hp-hero">
+    {/* ⚠️「第一屏」是一个**单独的盒子**（`.hp-first`），背景视频也在这个盒子里。
+        2026-09-23 踩过一次：加了下面「三步一栏」之后 `main.hp` 变高，而视频原来是
+        `position:absolute; inset:0` 铺满 `main.hp` —— 盒子一变高，`object-fit:cover` 就把视频
+        放大到铺满整页，**兔子被放大到看不全**（用户报「兔子好像显示不全了」）；顺带首屏也矮了一截
+        （原本分给 hero 的那点富余空间被下面那一栏吃掉了）。
+        所以：视频只铺第一屏（100vh），hero + 数据区也限定在第一屏里 —— 与加那一栏之前的表现一致。 */}
+    <div className="hp-first">
+      <div className="hp-bg" aria-hidden="true"><video className="hp-video" src="/assets/hero-animal.mp4" poster="/assets/hero-animal-poster.webp" autoPlay muted loop playsInline preload="auto" /><div className="hp-scrim" /></div>
+      <section className="hp-hero">
       {ready && (trustTitle || trustDescription) && <div className="hp-trust"><span className="hp-trust-mark">✦</span><div>{trustTitle ? <strong>{trustTitle}</strong> : null}{trustDescription ? <span>{trustDescription}</span> : null}</div></div>}
       {ready && kicker ? <p className="hp-kicker">{kicker}</p> : null}
       {ready && (title || accent) && <h1 className="hp-title" style={titleStyle}>{title ? <span>{title}</span> : null}{accent ? <em>{accent}</em> : null}</h1>}
@@ -545,9 +552,11 @@ function HomeLanding() {
       </div>
     </section>
     {ready && stats.length ? <section className="hp-stats" aria-label="平台数据">{stats.map((item, index) => <div className="hp-stat" key={index + '-' + (item.label || '')}><HomeStatIcon name={item.icon} /><strong><StatValue value={item.value} suffix={item.suffix || ''} /></strong><span>{item.label || ''}</span></div>)}</section> : null}
+    </div>
     {/* 三步一栏（用户口径 2026-09-23：**在页脚上方**做一栏，文字与图片后台可配）—— 所以它排在
         首页内容的最后一段，紧接着就是全站页脚。与 stats 同一条口径：**整块没配**用内置默认，
-        但运营把三步删空（items: []）就是不要这一栏，不回退。 */}
+        但运营把三步删空（items: []）就是不要这一栏，不回退。
+        ⚠️ 它在 `.hp-first` **外面**：第一屏（含背景视频）就是第一屏，页面再长也不许改变首屏的取景。 */}
     {ready ? <HomeSteps block={content.steps === undefined || content.steps === null ? HOME_STEPS_DEFAULT : content.steps} /> : null}
   </main>;
 }

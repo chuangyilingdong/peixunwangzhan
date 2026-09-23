@@ -115,6 +115,19 @@ check('②b 两块红接得上：这一栏的**末色 = 页脚的上缘色**',
 check('②b 红底上不用灰字（卡片说明与副标题是暖色，不是 #888 那类灰）',
   !/\.hp-step p\{[^}]*color:#8/.test(css) && !/\.hp-steps-head p\{[^}]*color:#9/.test(css));
 
+console.log('②c 第一屏不许被下面加的东西改变取景（用户 2026-09-23：「官网首页这个兔子好像显示不全了」）');
+// 事故还原：加了「三步」一栏之后 `main.hp` 变高，而背景视频原来是 `position:absolute; inset:0` 铺满
+// `main.hp` —— 盒子一变高，`object-fit:cover` 就把视频放大到铺满整页（兔子被放大裁掉），
+// 而且首屏还矮了一截。修法：把「hero + 数据区」框成一个**高度锁一屏**的 `.hp-first`，视频放进它里面，
+// 三步一栏放在**它外面**（它在页面上仍然是"页脚上方"，只是不再影响第一屏的取景）。
+check('②c 第一屏是一个独立盒子 `.hp-first`，高度锁一屏（100vh/100dvh）',
+  /\.hp-first\{[^}]*min-height:100vh/.test(css) && /\.hp-first\{[^}]*min-height:100dvh/.test(css));
+check('②c 背景视频那一层在 `.hp-first` **里面**（视频只铺第一屏，不铺整页）',
+  /<div className="hp-first">[\s\S]{0,200}className="hp-bg"/.test(site));
+check('②c 「三步」那一栏在 `.hp-first` **外面**（加它不该改变首屏取景）',
+  site.indexOf('<HomeSteps') > site.indexOf('</div>\n    {/* 三步一栏') || /<\/div>\s*\{?\/\* 三步一栏/.test(site) || site.indexOf('<HomeSteps block=') > site.indexOf('hp-stats'), '检查 HomeSteps 与 .hp-first 的先后');
+// 真观感由 .tmp/then-home-steps.mjs 在真浏览器里量（第一屏高度 = 视口、背景层高度 = 视口，不是整页）。
+
 console.log('③ 动效不能把内容藏起来');
 check('③ 卡片默认可见 —— 样式里 `.hp-step` 本身没有 opacity:0（别把内容留在"等 JS 才显示"）',
   !/\.hp-step\{[^}]*opacity:0/.test(css) && !/\.hp-steps\{[^}]*opacity:0/.test(css));
