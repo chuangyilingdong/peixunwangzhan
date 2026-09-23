@@ -31,6 +31,7 @@ echo "  已备份：$BK"
 
 log "2. 扫描：哪些表/列含 $OLD_DOMAIN"
 FOUND=0
+SQL=""   # ⚠️ 必须初始化：脚本开头是 set -u，不初始化的话第一次拼 SQL 就 "unbound variable" 直接退出
 for t in $(sqlite3 -readonly "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"); do
   for c in $(sqlite3 -readonly "$DB" "SELECT name FROM pragma_table_info('$t');"); do
     n=$(sqlite3 -readonly "$DB" "SELECT COUNT(*) FROM \"$t\" WHERE CAST(\"$c\" AS TEXT) LIKE '%$OLD_DOMAIN%';" 2>/dev/null || echo 0)
