@@ -65,17 +65,31 @@
 .hp-steps-head{max-width:min(760px,94%);margin:0 auto clamp(28px,3.8vw,46px);text-align:center}
 .hp-steps-head h2{margin:0;color:#fff;font-size:clamp(25px,3.3vw,42px);font-weight:700;line-height:1.22;letter-spacing:-.02em}
 .hp-steps-head p{margin:14px auto 0;max-width:min(580px,92%);color:#e4c8cd;font-size:clamp(13px,1.5vw,16px);line-height:1.65}
-/* ⚠️ 2026-09-23 第二轮（用户：「第二屏目前一排只能显示 3 个卡片，能否像机构手册这一屏那样
-   可以往下滑、一直这样一排显示」）：原来用 grid 自动换行 —— 4 张卡在 1440 宽下就是 3+1 两行。
-   现在改成**一排横向滑动**（不折行，卡片往右边续下去，第 4 张露出半个 = 天然的"还有更多"提示），
-   抄的是机构手册那一屏的做法（那张截图里也是 2.5 张卡、右边留半个）。
-   桌面用鼠标拖（见 main.jsx 的 useDragScroll），触屏用原生滑动；滚轮照旧滚页面（不劫持滚动）。 */
-.hp-steps-row{position:relative;max-width:1100px;margin:0 auto}
-.hp-steps-row::after{content:"";position:absolute;top:0;right:0;bottom:18px;width:clamp(24px,4vw,64px);background:linear-gradient(90deg,transparent,#17060a);pointer-events:none}
-.hp-step-grid{display:flex;gap:clamp(14px,1.8vw,24px);max-width:1100px;margin:0 auto;padding:4px 0 18px;overflow-x:auto;scroll-snap-type:x proximity;cursor:grab;scrollbar-width:none}
-.hp-step-grid::-webkit-scrollbar{display:none}
-.hp-step-grid.is-dragging{cursor:grabbing;scroll-snap-type:none}
-.hp-step{display:flex;flex-direction:column;gap:14px;flex:0 0 clamp(240px,30%,320px);scroll-snap-align:start;padding:clamp(20px,2.3vw,30px);border:1px solid rgb(255 255 255 / 14%);border-radius:24px;background:#170a0e;transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
+/* ⚠️ 2026-09-23 第二轮 + 第三轮（用户：「能否像机构手册这一屏这样可以往下滑一直这样一排显示的效果」
+   → 我第一版做成"鼠标拖 + 右边露半张"，他直接否掉：「无法滑动啊，右边框体只显示一半很奇怪，
+   应该是整个横屏都要显示卡片吧就像图2，不可能有遮挡显示一半的情况吧」）。
+   所以改成**跟机构手册同一套做法**（`.hb-work` 那段）：章节高度 = 钉住的那一屏 + 轨道多出来的宽度，
+   里层 sticky 钉住一屏，滚动进度 → translateX —— **往下滑就是卡片横着走**，静止时一屏里正好是整数张卡。
+   卡片宽度不是写死的：main.jsx 的 useStepsTrack 按"整数张铺满可用宽"算出来写在 `--hp-step-w` 上，
+   所以永远不会出现被切掉半张的卡（下面那个 fallback 只在脚本没跑时兜底）。 */
+.hp-steps{--hp-gap:clamp(14px,1.8vw,24px);--hp-pad:clamp(20px,4vw,40px);flex:none;padding-left:var(--hp-pad);padding-right:var(--hp-pad)}
+.hp-steps__pin{position:sticky;top:0;overflow:hidden}
+/* ⚠️ 轨道的左右内边距就是那个 gap（不是页面那圈 padding）：这样"滑到底"时正好一张不剩半个 ——
+   滑动距离 = （卡片数 − 每屏张数）× 一个卡位，内边距与间隙一样宽，两端都对齐。
+   卡片宽度由 JS 写在 `--hp-step-w` 上（"整数张铺满可用宽"），每屏最多 4 张。 */
+/* ⚠️ 轨道用负外边距**抵消掉外面那圈页面 padding**（自己只留 gap 宽的内边距）：
+   否则"可用宽度"会少算 2×40px，最后一张卡会溢出屏幕 16px（2026-09-23 量出来的 1456 > 1440）。
+   所以卡片宽度是按 `视口宽 − 2×gap` 算的，轨道的左右也必须正好是那 2×gap。 */
+.hp-step-grid{display:flex;align-items:stretch;gap:var(--hp-gap);width:max-content;margin-inline:calc(-1 * var(--hp-pad));padding:4px var(--hp-gap) 18px;will-change:transform}
+.hp-step{display:flex;flex-direction:column;gap:14px;flex:none;width:var(--hp-step-w,380px);padding:clamp(20px,2.3vw,30px);border:1px solid rgb(255 255 255 / 14%);border-radius:24px;background:#170a0e;transition:transform .35s cubic-bezier(.22,1,.36,1),border-color .35s,box-shadow .35s}
+/* 窄屏 / reduced-motion：**完全不接管**（JS 会把写进去的高度与位移清掉），退回"一排横向原生滑动"
+   —— 手指划是触屏上最自然的方式，也避免"钉住了却动不了"的死状态。 */
+@media(max-width:900px),(prefers-reduced-motion:reduce){
+  .hp-steps__pin{position:static;overflow:visible;height:auto!important}
+  .hp-step-grid{width:auto;overflow-x:auto;transform:none!important;scrollbar-width:none}
+  .hp-step-grid::-webkit-scrollbar{display:none}
+  .hp-step{width:auto;flex:0 0 min(78%,420px)}
+}
 .hp-step:hover{transform:translateY(-10px);border-color:rgb(255 255 255 / 30%);box-shadow:0 22px 48px -18px rgb(255 60 90 / 85%),inset 0 0 0 1px rgb(255 255 255 / 14%)}
 .hp-step-number{color:#fff;font-size:clamp(34px,3.5vw,48px);font-weight:700;line-height:1;letter-spacing:-.04em}
 .hp-step-art{position:relative;overflow:hidden;aspect-ratio:16/10;border:1px solid rgb(255 255 255 / 12%);border-radius:14px;background:#210d12}

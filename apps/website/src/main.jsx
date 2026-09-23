@@ -484,55 +484,94 @@ function useRevealOnce() {
  * 保存 → 发布即生效（与首页其它区块同一条流程）；**配图由运营自己传**，没传就画占位（不出破图）。
  * 条数不写死：后台加一条就多一张卡；**把三步删空 = 官网不显示这一栏**（与 stats 同一条口径）。
  */
-/** 横向滑动那一排卡片：桌面用鼠标拖，触屏用原生滑动（2026-09-23 用户口径：一排显示、不折行）。
- *  为什么要有这个：`overflow-x:auto` 在触屏上划得动、在**桌面鼠标**上却没法用（滚轮滚的是页面、
- *  滚动条被藏起来了）—— 参考稿那张截图（机构手册）是"滚动驱动横移"，这里不做滚动劫持
- *  （那一栏就在页脚上方，劫持滚动会让人以为页面卡住），改用最直白的"按住一拖"。
- *  ⚠️ 只接管鼠标/触控笔（`pointerType !== 'touch'`），触屏交给浏览器原生滑动 —— 手指划和拖拽打架。 */
-function useDragScroll() {
-  const ref = useRef(null);
+/**
+ * 首页「三步一栏」那一排：**往下滑、卡片横着走**（2026-09-23 用户两轮口径）。
+ *
+ * 用户第一轮先说「一排只能显示 3 个卡片，能否像机构手册这一屏这样可以往下滑一直这样一排显示」，
+ * 我第一版做成了"鼠标拖 + 右边露半张"——第二轮他直接否掉：「无法滑动啊，右边框体只显示一半很奇怪，
+ * 应该是整个横屏都要显示卡片吧就像图2，不可能有遮挡显示一半的情况吧」。
+ * 所以这里改成**跟机构手册同一套做法**（`.hb-work` 那段）：章节高度 = 钉住的那一屏 + 轨道多出来的宽度，
+ * 里层 `position:sticky` 钉住一屏，滚动进度 → `translateX`。往下滑就是卡片横着走，静止时**没有半张卡**。
+ *
+ * 三个要点（都是踩过的）：
+ *   ① **卡片宽度按整数张算**（`（可用宽 − 间隙）÷ N`）：这样一屏里正好 N 张整卡 —— 静止时绝不出现
+ *      "右边被切掉半张"（用户明确说那很奇怪）。宽度由 JS 写在 `--hp-step-w` 上，CSS 只管用。
+ *   ② **轨道不满一屏就不钉**（distance = 0）：两张卡时没必要占一屏的滚动预算。
+ *   ③ 窄屏（<901px）与 reduced-motion：**完全不接管** —— 退回"一排横向原生滑动"（手指划），
+ *      并清掉 JS 写的高度/位移，避免出现"钉住了但动不了"的死状态。
+ */
+function useStepsTrack(sectionRef, trackRef, pinRef, count) {
   useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    let dragging = false; let startX = 0; let startLeft = 0;
-    const onDown = (event) => {
-      if (event.pointerType === 'touch' || event.button !== 0) return;
-      dragging = true; startX = event.clientX; startLeft = node.scrollLeft;
-      node.classList.add('is-dragging');
+    const section = sectionRef.current; const track = trackRef.current; const pin = pinRef.current;
+    if (!section || !track || !pin) return undefined;
+    const reduced = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const isDesktop = () => typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 901px)').matches : true;
+    // 布局宽度（不含滚动条）—— 算卡片宽度与滑动距离都用它，别用 innerWidth（见 sizeCards 里的注释）
+    const layoutWidth = () => document.documentElement?.clientWidth || window.innerWidth;
+    let frame = 0;
+    // 卡片宽度：让**整数张**正好铺满可用宽度 —— 2026-09-23 用户两轮口径的核心
+    //   （「应该是整个横屏都要显示卡片吧」「不可能有遮挡显示一半的情况吧」）。
+    //   每屏最多 4 张：4 张以内 → 一屏正好铺满、**根本不用滑**；超过 4 张 → 轨道比屏宽，
+    //   滑动距离正好是"（卡片数 − 每屏张数）× 一个卡位"，两端都对齐，静止时不会有半张卡。
+    const sizeCards = () => {
+      const cards = [...track.querySelectorAll('.hp-step')];
+      if (!cards.length) return;
+      const styles = window.getComputedStyle(track);
+      const gap = parseFloat(styles.columnGap || styles.gap || '0') || 0;
+      const padX = gap * 2; // 轨道左右内边距就是 gap（见 styles.css 的注释）
+      // ⚠️ 用 **clientWidth**（布局宽度）而不是 window.innerWidth：后者在桌面 Chromium 上**含竖滚动条**
+      //    （约 15px）—— 差这十几像素，最后一张卡就会被切掉一条边（2026-09-23 真浏览器量出来的就是它）。
+      const avail = Math.max(240, layoutWidth() - padX);
+      const perView = isDesktop() ? Math.min(cards.length, 4) : 1;
+      const width = isDesktop() ? Math.floor((avail - (perView - 1) * gap) / perView) : 0;
+      if (width > 0) section.style.setProperty('--hp-step-w', `${width}px`);
+      else section.style.removeProperty('--hp-step-w');
     };
-    const onMove = (event) => {
-      if (!dragging) return;
-      const delta = event.clientX - startX;
-      if (Math.abs(delta) > 3 && event.cancelable) event.preventDefault();
-      node.scrollLeft = startLeft - delta;
+    const measure = () => {
+      sizeCards();
+      if (reduced() || !isDesktop()) { section.style.height = ''; pin.style.height = ''; track.style.transform = ''; return; }
+      const distance = Math.max(0, track.scrollWidth - layoutWidth());
+      const contentHeight = pin.scrollHeight;
+      const pinHeight = Math.max(window.innerHeight, contentHeight);
+      pin.style.height = `${pinHeight}px`;
+      section.style.height = `${pinHeight + distance}px`;
     };
-    const onUp = () => { dragging = false; node.classList.remove('is-dragging'); };
-    node.addEventListener('pointerdown', onDown);
-    window.addEventListener('pointermove', onMove, { passive: false });
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
+    const paint = () => {
+      frame = 0;
+      if (reduced() || !isDesktop()) return;
+      const pinHeight = pin.offsetHeight;
+      const budget = Math.max(1, section.offsetHeight - pinHeight);
+      const progress = Math.min(1, Math.max(0, -section.getBoundingClientRect().top / budget));
+      const distance = Math.max(0, track.scrollWidth - layoutWidth());
+      track.style.transform = `translate3d(${(-progress * distance).toFixed(1)}px, 0, 0)`;
+    };
+    const onScroll = () => { if (!frame) frame = window.requestAnimationFrame(paint); };
+    const onResize = () => { measure(); paint(); };
+    measure(); paint();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize);
     return () => {
-      node.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onResize);
+      if (frame) window.cancelAnimationFrame(frame);
     };
-  }, []);
-  return ref;
+  }, [count]);
 }
 
 function HomeSteps({ block }) {
   const [ref, shown] = useRevealOnce();
-  const rowRef = useDragScroll();
+  const trackRef = useRef(null);
+  const pinRef = useRef(null);
   const items = Array.isArray(block?.items) ? block.items : [];
+  useStepsTrack(ref, trackRef, pinRef, items.length);
   if (!items.length) return null;
   return <section className={'hp-steps' + (shown ? ' is-in' : '')} ref={ref} aria-label="我们怎么开课">
+    <div className="hp-steps__pin" ref={pinRef}>
     {(block?.title || block?.lead) && <div className="hp-steps-head">
       {block?.title ? <h2>{block.title}</h2> : null}
       {block?.lead ? <p>{block.lead}</p> : null}
     </div>}
-    <div className="hp-steps-row" ref={rowRef}>
-    <div className="hp-step-grid">
+    <div className="hp-step-grid" ref={trackRef}>
       {items.map((item, index) => <article className="hp-step" key={`${item?.number || ''}-${item?.title || index}`} style={{ '--step-delay': `${index * 90}ms` }}>
         <span className="hp-step-number">{item?.number || String(index + 1).padStart(2, '0')}</span>
         {item?.imageUrl

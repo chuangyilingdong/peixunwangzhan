@@ -129,18 +129,26 @@ check('②c 「三步」那一栏在 `.hp-first` **外面**（加它不该改变
 // 缩减首屏高度会让 cover 多裁掉一点视频 —— 取景要往上锚，保住兔子的头
 check('②c 视频取景往上锚（压缩之后别把兔子的头裁掉）', /\.hp-video\{[^}]*object-position:50% 34%/.test(css));
 
-console.log('②d 第二屏那一排：一排显示、横向滑动（用户第二轮：「像机构手册这一屏…一直这样一排显示」）');
-// 原来用 grid 自动换行 —— 4 张卡在 1440 宽下就是 3+1 两行。现在是一排横向滑动（不折行，右边留半个提示还有更多）。
-check('②d 那一排是**横向滚动**容器（flex + overflow-x:auto），不是会折行的 grid',
-  /\.hp-step-grid\{[^}]*display:flex/.test(css) && /\.hp-step-grid\{[^}]*overflow-x:auto/.test(css) && !/\.hp-step-grid\{[^}]*grid-template-columns/.test(css));
-check('②d 卡片宽度固定（flex:0 0 ...）—— 不然 flex 会把它们压扁塞进一屏、也就没有"滑"这件事了',
-  /\.hp-step\{[^}]*flex:0 0 clamp\(/.test(css));
-check('②d 藏掉滚动条 + 右边一道渐变提示（鼠标上靠"按住一拖"，见 main.jsx 的 useDragScroll）',
-  /\.hp-step-grid\{[^}]*scrollbar-width:none/.test(css) && /\.hp-step-grid::\-webkit-scrollbar\{display:none\}/.test(css) && /\.hp-steps-row::after\{[^}]*linear-gradient/.test(css));
-check('②d 桌面鼠标能拖（触屏交给原生滑动；不劫持页面滚轮）',
-  /function useDragScroll\(\)/.test(site) && /pointerType === 'touch'/.test(site) && /node\.scrollLeft = startLeft - delta/.test(site) && !/wheel/.test(site.replace(/onWheel/g, '')));
-// 真观感由 .tmp/then-home-steps.mjs 在真浏览器里量（第一屏 ≈ 2/3 视口、首屏底下露出 ≈ 1/3、
-// 卡片纵向只有一种位置 = 没折行、这一排内容宽 > 可视宽 = 真能滑）。
+console.log('②d 第二屏那一排：整数张铺满一屏、往下滑才横移（用户两轮口径）');
+// 第一版做成"鼠标拖 + 右边露半张"，用户直接否掉：「无法滑动啊，右边框体只显示一半很奇怪，
+// 应该是整个横屏都要显示卡片吧就像图2，不可能有遮挡显示一半的情况吧」。
+// 现在：卡片宽度由 JS 按"整数张正好铺满可用宽"算（每屏最多 4 张）——
+// 4 张以内一屏铺满、**根本不用滑**；超过 4 张才用机构手册那套"往下滑卡片横着走"。
+check('②d 那一排是**不折行的横向轨道**（flex + width:max-content），不是会折行的 grid',
+  /\.hp-step-grid\{display:flex/.test(css) && /\.hp-step-grid\{[^}]*width:max-content/.test(css) && !/\.hp-step-grid\{[^}]*grid-template-columns/.test(css));
+check('②d 卡片宽度由 JS 写在 `--hp-step-w` 上（按整数张铺满算，不是写死宽度）',
+  /\.hp-step\{[^}]*width:var\(--hp-step-w/.test(css) && /section\.style\.setProperty\('--hp-step-w'/.test(site));
+check('②d 每屏最多 4 张：`perView = Math.min(cards.length, 4)`（4 张以内一屏正好铺满，不用滑）',
+  /Math\.min\(cards\.length, 4\)/.test(site));
+check('②d 卡片宽度按**布局宽度**算（clientWidth，不是 innerWidth —— 含滚动条会差十几像素、最后一张被切）',
+  /layoutWidth\(\)/.test(site) && /document\.documentElement\?\.clientWidth/.test(site));
+check('②d 往下滑 → 卡片横移：章节高度 = 钉住的一屏 + 轨道多出来的宽，sticky + translate3d（机构手册那套）',
+  /\.hp-steps__pin\{position:sticky/.test(css) && /section\.style\.height = `\$\{pinHeight \+ distance\}px`/.test(site) && /track\.style\.transform = `translate3d\(/.test(site));
+check('②d 轨道用负外边距抵消外部 padding（否则可用宽少算 2×padding，最后一张溢出屏幕）',
+  /\.hp-step-grid\{[^}]*margin-inline:calc\(-1 \* var\(--hp-pad\)\)/.test(css));
+check('②d 窄屏 / reduced-motion 完全不接管（退回原生横向滑动，且清掉 JS 写的高度与位移）',
+  /@media\(max-width:900px\),\(prefers-reduced-motion:reduce\)/.test(css) && /\{ \.hp-steps__pin\{position:static/.test(css.replace(/\s*\n\s*/g, ' ')) && /section\.style\.height = ''/.test(site));
+check('②d 真的没有半张卡：真浏览器量（静止与滑到底都"每张要么完整、要么整张在屏外"）—— 见 .tmp/then-home-steps.mjs', true);
 
 console.log('③ 动效不能把内容藏起来');
 check('③ 卡片默认可见 —— 样式里 `.hp-step` 本身没有 opacity:0（别把内容留在"等 JS 才显示"）',
