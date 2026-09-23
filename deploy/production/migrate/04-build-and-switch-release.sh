@@ -35,7 +35,18 @@ echo "  VITE_ORG_APP : ${VITE_ORG_APP_URL:-（空）}"
 
 log "2. 构建前的备份（换 release 之前先把库备一份，回滚才有得回）"
 export PATH=/srv/ai-kids-platform/runtime/node/bin:$PATH
-echo "  node: $(node -v)   pnpm: $(pnpm --version 2>/dev/null || echo '（缺！）')"
+
+# ⚠️ 国内机器上必须先把源指到镜像，否则 pnpm **静默卡死**（2026-09-23 实测）：
+#   · runtime 里的 pnpm 是 corepack 壳，第一次用要去网上取 pnpm 二进制；
+#   · pnpm install 还会按 node_modules/.modules.yaml 里记的 registry.npmjs.org 去核对 ——
+#     国内直连是"连上但不传数据"，而 build-production.sh 用了 --reporter=silent，
+#     日志里一个字都没有，看起来像死机（实测 60 秒零字节增长）。
+# 这两行只在没设过时生效，海外机器可以覆盖成空值跳过。
+export COREPACK_NPM_REGISTRY="${COREPACK_NPM_REGISTRY:-https://registry.npmmirror.com}"
+export npm_config_registry="${npm_config_registry:-https://registry.npmmirror.com}"
+
+echo "  node: $(node -v)   pnpm: $(timeout 120 pnpm --version 2>/dev/null || echo '（取不到——先看 COREPACK_NPM_REGISTRY / .npmrc 的源）')"
+echo "  npm 源: $(npm config get registry 2>/dev/null)"
 if [[ -f "$SRC/deploy/production/backup-production.sh" ]]; then
   bash "$SRC/deploy/production/backup-production.sh"
 else
