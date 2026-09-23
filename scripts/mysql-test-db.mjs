@@ -60,8 +60,8 @@ async function loadMysql2() {
   return (await import(pathToFileURL(entry).href)).default;
 }
 
-export async function resetMysqlDatabase({ silent = false } = {}) {
-  const env = mysqlEnvFromProcess();
+export async function resetMysqlDatabase({ silent = false, database = null, dropToo = [] } = {}) {
+  const env = { ...mysqlEnvFromProcess(), ...(database ? { MYSQL_DATABASE: database } : {}) };
   const { sql, tmp } = generateMysqlDdl();
   const mysql = await loadMysql2();
   const conn = await mysql.createConnection({
@@ -75,6 +75,9 @@ export async function resetMysqlDatabase({ silent = false } = {}) {
     decimalNumbers: true,
   });
   try {
+    // 每脚本一个新库名 → 上一个脚本残留的服务器（有些脚本 spawn 出来不杀）只会写进它自己那个旧库，
+    // 不会污染下一个脚本。旧库在这里顺手清掉（连着的会话不会阻塞 DROP）。
+    for (const name of dropToo) await conn.query(`DROP DATABASE IF EXISTS \`${name}\``).catch(() => {});
     await conn.query(`DROP DATABASE IF EXISTS \`${env.MYSQL_DATABASE}\``);
     await conn.query(`CREATE DATABASE \`${env.MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci`);
     await conn.query(`USE \`${env.MYSQL_DATABASE}\``);
@@ -127,9 +130,9 @@ async function copyBootstrapRows(sqliteDbPath, env, silent = false) {
 }
 
 /** 重置 + 灌种子（很多脚本假定有基础数据） */
-export async function resetAndSeed() {
-  await resetMysqlDatabase({ silent: true });
-  const env = mysqlEnvFromProcess();
+export async function resetAndSeed(database = null) {
+  await resetMysqlDatabase({ silent: true, database });
+  const env = { ...mysqlEnvFromProcess(), ...(database ? { MYSQL_DATABASE: database } : {}) };
   const res = spawnSync(NODE, ['packages/database/src/seed.js'], {
     cwd: ROOT, env: { ...process.env, ...env }, encoding: 'utf8', timeout: 120000,
   });

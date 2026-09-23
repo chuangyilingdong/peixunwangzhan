@@ -82,8 +82,11 @@ console.log(`验收套件：${files.length} 个脚本（node ${process.version}�
 
 for (let i = 0; i < files.length; i += 1) {
   const rel = files[i];
+  // 每个脚本一个**全新的库名**：脚本 spawn 出来的服务器如果没被杀干净，它连的是**上一个库**，
+  // 不会污染这一轮（否则会看到"同一个脚本单独跑能过、在套件里时好时坏"这种最浪费时间的假失败）。
+  const dbName = useMysql ? `aild_test_${i + 1}` : null;
   if (useMysql) {
-    try { await resetMysqlDatabase({ silent: true }); }
+    try { await resetMysqlDatabase({ silent: true, database: dbName, dropToo: i > 0 ? [`aild_test_${i}`] : [] }); }
     catch (error) { console.log(`  [mysql] 重置失败，跳过 ${rel}：${error.message}`); results.push({ script: rel, ok: false, status: -1, timedOut: false, ms: 0, tail: `mysql 重置失败：${error.message}` }); continue; }
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-'));
@@ -100,7 +103,7 @@ for (let i = 0; i < files.length; i += 1) {
     stdio: ['ignore', fd, fd],
     env: {
       ...process.env,
-      ...(useMysql ? mysqlEnvFromProcess() : {}),
+      ...(useMysql ? { ...mysqlEnvFromProcess(), MYSQL_DATABASE: dbName } : {}),
       PLATFORM_DATA_DIR: tmp,
       PLATFORM_DB_PATH: path.join(tmp, 'platform.db'),
       DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE || 'internal-test',
