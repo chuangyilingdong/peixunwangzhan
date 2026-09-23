@@ -138,12 +138,25 @@ check('②d 那一排是**不折行的横向轨道**（flex + width:max-content�
   /\.hp-step-grid\{display:flex/.test(css) && /\.hp-step-grid\{[^}]*width:max-content/.test(css) && !/\.hp-step-grid\{[^}]*grid-template-columns/.test(css));
 check('②d 卡片宽度由 JS 写在 `--hp-step-w` 上（按整数张铺满算，不是写死宽度）',
   /\.hp-step\{[^}]*width:var\(--hp-step-w/.test(css) && /section\.style\.setProperty\('--hp-step-w'/.test(site));
-check('②d 宽度算法：**能全放下就全放下**，只有挤到每张不足 200px 才改成滑动（5 张也要铺满一整屏）',
-  /const minWidth = 200/.test(site) && /const maxFit = Math\.max\(1, Math\.floor\(\(avail \+ gap\) \/ \(minWidth \+ gap\)\)\)/.test(site) && /Math\.min\(cards\.length, maxFit\)/.test(site));
+// ⚠️ 这一条来回改过三轮，最后落在"一屏固定 3 张"：**只放 3 张才有横移的余地**（放满 N 张 = 没有横移，
+//    用户立刻报「没任何横向滚动的效果」）；同时 3 张是整卡、下几张完全在屏外（不是切一半）。
+check('②d 一屏固定 3 张（桌面）：整卡铺满 + 留出横移的余地（卡片更少时才"全放下"）',
+  /Math\.min\(cards\.length, 3\)/.test(site));
 check('②d 卡片宽度按**布局宽度**算（clientWidth，不是 innerWidth —— 含滚动条会差十几像素、最后一张被切）',
   /layoutWidth\(\)/.test(site) && /document\.documentElement\?\.clientWidth/.test(site));
 check('②d 往下滑 → 卡片横移：章节高度 = 钉住的一屏 + 轨道多出来的宽，sticky + translate3d（机构手册那套）',
   /\.hp-steps__pin\{position:sticky/.test(css) && /section\.style\.height = `\$\{pinHeight \+ distance\}px`/.test(site) && /track\.style\.transform = `translate3d\(/.test(site));
+// ⚠️⚠️ 最容易做漏、也最致命的一条：**外层不许是 `overflow:hidden`**。
+//    2026-09-23 用户报「我现在往下滑就往下滑了，没任何横向滚动的效果」+「图2图3被裁切了，还不是因为滚动
+//    自然消失的」—— 真根因就是 `.hp{overflow:hidden}` 把 `.hp` 变成了**滚动容器**，
+//    里面那层 `position:sticky` 于是相对它钉、而不是相对视口：这一栏跟着页面滚走、横移完全看不出来，
+//    卡片还会在横移的同时被滚出屏幕（看着像"被裁掉"）。改成 `overflow:clip` 立刻正常。
+check('②d ★ 承载那一栏的外层（`.hp`/`.site`）用 `overflow:clip`，**不许用 hidden**（hidden 会让 sticky 失效）',
+  /\.hp\{[^}]*overflow:clip/.test(css) && !/\.hp\{[^}]*overflow:hidden/.test(css), (css.match(/\.hp\{[^}]*\}/) || [])[0] || '');
+check('②d 布局一变就重新量（ResizeObserver + fonts.ready）—— 只量一次会拿旧宽度、卡片就被切',
+  /new ResizeObserver/.test(site) && /observer\.observe\(document\.documentElement\)/.test(site) && /document\.fonts\.ready\.then/.test(site));
+check('②d 兜底：轨道比屏宽却没设上高度时，退回原生横向滑动（别让内容够不着）',
+  /track\.style\.overflowX = distance > 0 && !section\.style\.height \? 'auto'/.test(site));
 check('②d 轨道用负外边距抵消外部 padding（否则可用宽少算 2×padding，最后一张溢出屏幕）',
   /\.hp-step-grid\{[^}]*margin-inline:calc\(-1 \* var\(--hp-pad\)\)/.test(css));
 check('②d 窄屏 / reduced-motion 完全不接管（退回原生横向滑动，且清掉 JS 写的高度与位移）',

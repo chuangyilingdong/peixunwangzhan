@@ -20,7 +20,12 @@
        这里改用自托管字体（Latin 走 Inter/Geist，中文走站内 Noto Sans SC），靠字重与字距复刻气质。
      · 视频：提示词给的是第三方 CloudFront 地址，这里用站内 /assets/hero-animal.mp4。
    单屏不滚动：.hp 撑满一屏，页脚在首页不渲染（main.jsx 里控制）。 */
-.hp{position:relative;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:#000;color:#fff}
+/* ⚠️ 这里必须是 `overflow:clip` 而不是 `overflow:hidden`（2026-09-23 踩过）：
+   `hidden` 会把 `.hp` 变成**滚动容器**，于是里面「三步一栏」那层 `position:sticky` 会相对它钉住、
+   而不是相对视口 —— 表现就是"往下滑这一栏跟着滚走"，横移效果完全看不出来，
+   而且卡片会在横向位移的同时被页面滚走、看着像"被裁切"（用户两条反馈的真根因）。
+   `clip` 同样裁剪、但**不创建滚动容器**，sticky 照常相对视口工作。 */
+.hp{position:relative;min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;overflow:clip;background:#000;color:#fff}
 /* 首页「第一屏」：hero + 数据区，高度锁在一屏（100vh）。
    ⚠️ 背景视频（.hp-bg）就在这个盒子里 —— 它原来是铺满整个 main.hp 的，2026-09-23 加了下面
    「三步一栏」之后 main.hp 变高，cover 就把视频放大到铺满整页（**兔子被放大到看不全**，用户报的），

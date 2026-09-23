@@ -485,20 +485,21 @@ function useRevealOnce() {
  * 条数不写死：后台加一条就多一张卡；**把三步删空 = 官网不显示这一栏**（与 stats 同一条口径）。
  */
 /**
- * 首页「三步一栏」那一排：**往下滑、卡片横着走**（2026-09-23 用户两轮口径）。
+ * 首页「三步一栏」那一排：**一屏正好 N 张整卡，往下滑卡片横着走**（2026-09-23 用户四轮口径）。
  *
- * 用户第一轮先说「一排只能显示 3 个卡片，能否像机构手册这一屏这样可以往下滑一直这样一排显示」，
- * 我第一版做成了"鼠标拖 + 右边露半张"——第二轮他直接否掉：「无法滑动啊，右边框体只显示一半很奇怪，
- * 应该是整个横屏都要显示卡片吧就像图2，不可能有遮挡显示一半的情况吧」。
- * 所以这里改成**跟机构手册同一套做法**（`.hb-work` 那段）：章节高度 = 钉住的那一屏 + 轨道多出来的宽度，
- * 里层 `position:sticky` 钉住一屏，滚动进度 → `translateX`。往下滑就是卡片横着走，静止时**没有半张卡**。
+ * 用户要的效果就在机构手册那一屏里，来回说了三轮，最后落成这三条（缺一条他都能看出来）：
+ *   ① 「一排显示、不折行」→ 横向轨道；
+ *   ② 「整个横屏都要显示卡片」「不可能有遮挡显示一半的情况吧」→ **一屏里正好是整数张整卡**
+ *      （卡片宽度按 `(可用宽 − (N−1)×gap) ÷ N` 算），下几张**完全在屏外**，不是切一半露着；
+ *   ③ 「达不到机构手册那边的效果啊…没任何横向滚动的效果」→ 卡片多于 N 张时**必须真的横移**：
+ *      章节高度 = 钉住那一屏 + 轨道多出来的宽，里层 sticky，`translate3d` 跟滚动进度走。
+ *      ⚠️ 我第五轮为了"不出现半张卡"把卡片缩到"全放下"，结果**横移整个消失了** —— 他立刻报回来。
+ *      正解是手册那样：**一屏只放 N 张**（桌面 3 张），多出来的靠滑动看，而不是把卡片压小。
  *
- * 三个要点（都是踩过的）：
- *   ① **卡片宽度按整数张算**（`（可用宽 − 间隙）÷ N`）：这样一屏里正好 N 张整卡 —— 静止时绝不出现
- *      "右边被切掉半张"（用户明确说那很奇怪）。宽度由 JS 写在 `--hp-step-w` 上，CSS 只管用。
- *   ② **轨道不满一屏就不钉**（distance = 0）：两张卡时没必要占一屏的滚动预算。
- *   ③ 窄屏（<901px）与 reduced-motion：**完全不接管** —— 退回"一排横向原生滑动"（手指划），
- *      并清掉 JS 写的高度/位移，避免出现"钉住了但动不了"的死状态。
+ * 另加一层保险（他截图里出现过"卡片被裁切"）：**布局一变就重新量** ——
+ * `ResizeObserver` 盯着轨道与文档根，字体加载完、滚动条出现/消失、CMS 内容晚到、窗口缩放，
+ * 都会触发重新算宽度与高度。只靠一次 `measure()` 在这些时序里很容易量到旧尺寸（量旧了就裁）。
+ * 兜底：万一轨道还是比屏宽、而章节高度没设上（脚本没跑成），退回原生横向滑动，别让内容够不着。
  */
 function useStepsTrack(sectionRef, trackRef, pinRef, count) {
   useEffect(() => {
@@ -506,39 +507,38 @@ function useStepsTrack(sectionRef, trackRef, pinRef, count) {
     if (!section || !track || !pin) return undefined;
     const reduced = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const isDesktop = () => typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 901px)').matches : true;
-    // 布局宽度（不含滚动条）—— 算卡片宽度与滑动距离都用它，别用 innerWidth（见 sizeCards 里的注释）
+    // 布局宽度（不含滚动条）—— 算卡片宽度与滑动距离都用它，别用 innerWidth（后者含滚动条，
+    // 差那十几像素最后一张卡就会被切掉一条边）。
     const layoutWidth = () => document.documentElement?.clientWidth || window.innerWidth;
     let frame = 0;
-    // 卡片宽度：让**整数张**正好铺满可用宽度 —— 2026-09-23 用户两轮口径的核心
-    //   （「应该是整个横屏都要显示卡片吧」「不可能有遮挡显示一半的情况吧」）。
-    //   每屏最多 4 张：4 张以内 → 一屏正好铺满、**根本不用滑**；超过 4 张 → 轨道比屏宽，
-    //   滑动距离正好是"（卡片数 − 每屏张数）× 一个卡位"，两端都对齐，静止时不会有半张卡。
     const sizeCards = () => {
       const cards = [...track.querySelectorAll('.hp-step')];
       if (!cards.length) return;
       const styles = window.getComputedStyle(track);
       const gap = parseFloat(styles.columnGap || styles.gap || '0') || 0;
       const padX = gap * 2; // 轨道左右内边距就是 gap（见 styles.css 的注释）
-      // ⚠️ 用 **clientWidth**（布局宽度）而不是 window.innerWidth：后者在桌面 Chromium 上**含竖滚动条**
-      //    （约 15px）—— 差这十几像素，最后一张卡就会被切掉一条边（2026-09-23 真浏览器量出来的就是它）。
       const avail = Math.max(240, layoutWidth() - padX);
-      // 能全放下就**全放下**（用户口径：整个横屏都要是卡片、不要半张）；
-      // 只有当卡片挤到每张不足 minWidth（200px，再窄就不好看了）时才改成滑动，每屏放 maxFit 张。
-      const minWidth = 200;
-      const maxFit = Math.max(1, Math.floor((avail + gap) / (minWidth + gap)));
-      const perView = isDesktop() ? Math.min(cards.length, maxFit) : 1;
+      // 一屏固定放 3 张（桌面）：保证"看到的都是整卡"，同时**一定留出横移的余地**（卡片多于此数时）。
+      const perView = isDesktop() ? Math.min(cards.length, 3) : 1;
       const width = isDesktop() ? Math.floor((avail - (perView - 1) * gap) / perView) : 0;
       if (width > 0) section.style.setProperty('--hp-step-w', `${width}px`);
       else section.style.removeProperty('--hp-step-w');
     };
     const measure = () => {
       sizeCards();
-      if (reduced() || !isDesktop()) { section.style.height = ''; pin.style.height = ''; track.style.transform = ''; return; }
+      if (reduced() || !isDesktop()) {
+        section.style.height = ''; pin.style.height = ''; track.style.transform = '';
+        track.style.overflowX = '';
+        return;
+      }
       const distance = Math.max(0, track.scrollWidth - layoutWidth());
       const contentHeight = pin.scrollHeight;
       const pinHeight = Math.max(window.innerHeight, contentHeight);
       pin.style.height = `${pinHeight}px`;
       section.style.height = `${pinHeight + distance}px`;
+      // 兜底：轨道比屏宽、但这一栏的高度没设上（脚本没跑成/被别的东西清了）→ 退回原生横向滑动，
+      // 至少内容够得着（宁可让人划，也不许"看得见一半、永远滑不到"）。
+      track.style.overflowX = distance > 0 && !section.style.height ? 'auto' : '';
     };
     const paint = () => {
       frame = 0;
@@ -554,9 +554,15 @@ function useStepsTrack(sectionRef, trackRef, pinRef, count) {
     measure(); paint();
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onResize);
+    // ⚠️ 布局一变就重量：字体加载完、滚动条出现/消失、CMS 内容晚到、图片撑高卡片，都会改变可用宽高。
+    //    只量一次的话，量到的可能是"还没滚动条"时的宽度 —— 卡片就会比屏宽、最后一张被裁（用户截图里的样子）。
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(onResize) : null;
+    if (observer) { observer.observe(track); observer.observe(document.documentElement); }
+    if (document.fonts?.ready?.then) document.fonts.ready.then(onResize).catch(() => {});
     return () => {
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onResize);
+      if (observer) observer.disconnect();
       if (frame) window.cancelAnimationFrame(frame);
     };
   }, [count]);
