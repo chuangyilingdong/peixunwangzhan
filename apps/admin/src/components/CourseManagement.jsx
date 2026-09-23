@@ -298,30 +298,81 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
       return { snapshot: { ...snapshot, box: patcher(box) } };
     });
   }
-  // 切成生成框体时补一份默认框体配置；模态按本课已开放的能力挑第一个。
+  // 素材的默认值（用户 2026-09-23 口径：建课时绝大多数情况都是这几样，别再让学生一个个手填）。
+  //   · 提示词        → 标题「提示词（N）」（N = 这一组里已有几条提示词 + 1）
+  //   · 生成框体-生图 → 标题「图片框体」+ 模型 zhenzhen-image-g-v2.5-lowprice + 清晰度 1k
+  //   · 生成框体-生视频 → 标题「视频框体」+ 模型 MiniMax-H3 + 清晰度 480P + 时长 5 秒
+  //                     + 生成音频「带音频」+ 音频怎么用「声音参考（只借音色）」
+  // ⚠️ 这里写的模型名与档位**必须落在渠道配置里那个模型真实的能力清单上**
+  //    （生产上 2.5 低价版 = 1k/2k/4k，MiniMax-H3 = 480P/768P、5/10/15 秒、audio:true）。
+  //    写渠道里没有的档位，下拉框会显示成空值，而且换模型时会被"新模型不支持就退回学生自选"清掉。
+  // ⚠️ aspectRatio 刻意**不设默认**（比例留给学生在课堂上挑：图/视频各有各的合适比例）。
+  const BOX_DEFAULTS = {
+    IMAGE: { title: '图片框体', model: 'zhenzhen-image-g-v2.5-lowprice', resolution: '1k' },
+    VIDEO: { title: '视频框体', model: 'MiniMax-H3', resolution: '480P', durationSeconds: 5, audio: true, audioRole: 'VOICE_REFERENCE' },
+    TEXT: { title: '文字框体', model: '' },
+    MUSIC: { title: '音乐框体', model: '' },
+  };
+  function boxDefaultsFor(modality) {
+    const key = String(modality || 'TEXT').toUpperCase();
+    const preset = BOX_DEFAULTS[key] || {};
+    if (key === 'MUSIC') return { modality: key, model: preset.model || '', mode: 'LYRICS' };
+    return {
+      modality: key,
+      model: preset.model || '',
+      aspectRatio: '',
+      resolution: preset.resolution || '',
+      durationSeconds: preset.durationSeconds ?? null,
+      audio: preset.audio ?? null,
+      ...(key === 'VIDEO' ? { audioRole: preset.audioRole || 'LIP_SYNC' } : {}),
+    };
+  }
+  // 这一组里第几条提示词（标题「提示词（N）」用）
+  function nextPromptTitle(groupIndex) {
+    const materials = groups[groupIndex]?.materials || [];
+    const used = materials.filter((item) => (item.materialType || 'PROMPT') === 'PROMPT' && /^提示词（\d+）$/.test(String(item.title || ''))).length;
+    return `提示词（${used + 1}）`;
+  }
+  // 只在标题还是"没改过的默认值"时才换成新的默认标题 —— 老师手改过的名字不能被默认值覆盖。
+  // 判据：空 / `素材N` / `提示词（N）` / 四个框体名（图片框体 / 视频框体 / 文字框体 / 音乐框体）。
+  const DEFAULT_TITLE_RE = /^(素材\d+|提示词（\d+）|图片框体|视频框体|文字框体|音乐框体)$/;
+  function titleOrNext(groupIndex, materialIndex, next) {
+    const current = String(groups[groupIndex]?.materials?.[materialIndex]?.title || '').trim();
+    return !current || DEFAULT_TITLE_RE.test(current) ? next : current;
+  }
+  // 切成生成框体时补一份默认框体配置（标题 + 模型 + 参数见 BOX_DEFAULTS）；模态按本课已开放的能力挑第一个。
   function changeMaterialType(groupIndex, materialIndex, uid, materialType) {
-    if (materialType !== 'GENERATION_BOX') { updateMaterial(groupIndex, materialIndex, uid, { materialType }); return; }
+    // 切成提示词：标题给个默认（「提示词（N）」）——只在标题还是"素材N"这种默认值时换，别覆盖老师改过的名字
+    if (materialType !== 'GENERATION_BOX') {
+      const patch = { materialType };
+      if ((materialType || 'PROMPT') === 'PROMPT') patch.title = titleOrNext(groupIndex, materialIndex, nextPromptTitle(groupIndex));
+      updateMaterial(groupIndex, materialIndex, uid, patch);
+      return;
+    }
     const modality = capabilities.includes('image') ? 'IMAGE' : capabilities.includes('video') ? 'VIDEO' : 'TEXT';
     const caps = capabilitiesFor(modality, '');
+    const preset = BOX_DEFAULTS[modality] || {};
     patchMaterial(groupIndex, materialIndex, uid, (material) => {
       const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
+      const box = snapshot.box && typeof snapshot.box === 'object' ? snapshot.box : null;
+      // 已经有框体配置的（比如只是改了生成什么）不动参数，只补标题
       return {
         materialType,
-        snapshot: {
-          ...snapshot,
-          box: snapshot.box || (modality === 'MUSIC'
-            ? { modality, model: '', mode: 'LYRICS' }
-            // 参数默认留空＝学生自己在课堂里选（平台想固定再填）。
-            : { modality, model: '', aspectRatio: '', resolution: '', durationSeconds: null, audio: null }),
-        },
+        title: titleOrNext(groupIndex, materialIndex, box ? material.title : (preset.title || material.title)),
+        snapshot: { ...snapshot, box: box || boxDefaultsFor(modality) },
       };
     });
   }
-  // 换模态后重置参数：默认留空＝学生自选（平台想固定再填）。
+  // 换「生成什么」：按新模式套一份默认值（标题也跟着换，老师改过的不动）。
   function changeBoxModality(groupIndex, materialIndex, uid, modality) {
-    patchBox(groupIndex, materialIndex, uid, () => (modality === 'MUSIC'
-      ? { modality, model: '', mode: 'LYRICS' }
-      : { modality, model: '', aspectRatio: '', resolution: '', durationSeconds: null, audio: null }));
+    const preset = BOX_DEFAULTS[String(modality || '').toUpperCase()] || {};
+    patchMaterial(groupIndex, materialIndex, uid, (material) => {
+      const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
+      return {
+        title: titleOrNext(groupIndex, materialIndex, preset.title || material.title),
+        snapshot: { ...snapshot, box: { ...(snapshot.box || {}), ...boxDefaultsFor(modality) } },
+      };
+    });
   }
   // 换模型后：学生自选的保持自选，平台定过的值如果新模型不支持就退回「学生自选」。
   function changeBoxModel(groupIndex, materialIndex, uid, model) {
@@ -366,7 +417,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
   const addMaterial = (groupIndex) => updateGroups((list) => list.map((group, i) => {
     if (i !== groupIndex) return group;
     const materials = group.materials || [];
-    return { ...group, materials: [...materials, { uid: nextUid(), title: `素材${materials.length + 1}`, description: '', materialType: 'PROMPT', assetUrl: '', snapshot: {} }] };
+    return { ...group, materials: [...materials, { uid: nextUid(), title: nextPromptTitle(groupIndex), description: '', materialType: 'PROMPT', assetUrl: '', snapshot: {} }] };
   }));
   const addGroup = () => updateGroups((list) => [...list, { uid: nextUid(), title: `素材${list.length + 1}`, materials: [] }]);
 
