@@ -1,0 +1,34 @@
+# 生产 API 单元（2026-09-23 从旧机逐字抄回，含运行路径）
+# 安装：
+#   install -o root -g root -m 0644 learning-platform-production.service /etc/systemd/system/
+#   install -D -o root -g root -m 0644 learning-platform-production.service.d/uploads.conf \
+#     /etc/systemd/system/learning-platform-production.service.d/uploads.conf
+#   install -D -o root -g root -m 0644 learning-platform-production.service.d/oom-policy.conf \
+#     /etc/systemd/system/learning-platform-production.service.d/oom-policy.conf
+#   systemctl daemon-reload && systemctl enable --now learning-platform-production
+#
+# ⚠️ 那两个 drop-in 不能省：
+#   · uploads.conf  → 把 uploads 加进 ReadWritePaths（主单元里没有；缺了上传写不进去）
+#   · oom-policy.conf → OOMPolicy=continue（子进程被 OOM 杀掉时不重启整个服务）
+
+[Unit]
+Description=AI Kids Platform API (production)
+After=network.target
+
+[Service]
+Type=simple
+User=ai-kids-prod
+Group=ai-kids-prod
+WorkingDirectory=/srv/ai-kids-platform/production/current
+EnvironmentFile=/etc/ai-kids-platform/production.env
+ExecStart=/srv/ai-kids-platform/runtime/node/bin/node /srv/ai-kids-platform/production/current/apps/server/src/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/ai-kids-platform/production/data /srv/ai-kids-platform/production/logs
+
+[Install]
+WantedBy=multi-user.target

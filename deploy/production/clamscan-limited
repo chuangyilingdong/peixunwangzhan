@@ -1,0 +1,18 @@
+#!/bin/sh
+# 上传扫描用的 clamscan 包装：先给本进程一个**虚拟内存上限**。
+# 为什么：clamscan 每次调用都要把病毒库读进内存（实测扫 150MB 峰值 RSS ≈990MB），
+# 而生产机只有 1.6G。真到内存不够时，我们宁可让**这一次扫描失败**（应用会回一句中文
+# 「文件安全扫描失败，上传已拒绝」），也不要让内核 OOM 去挑受害者 —— 这台机器上
+# OOM 挑走过学生的创作环境。
+#
+# 安装（root）：
+#   install -o root -g root -m 0755 clamscan-limited /usr/local/bin/clamscan-limited
+# 然后在 /etc/ai-kids-platform/production.env 里设：
+#   FILE_UPLOAD_SCANNER=/usr/local/bin/clamscan-limited
+#
+# ⚠️ 这台包装是**内存紧张时的妥协**，不是安全边界：上限打得太低会让正常文件也扫失败。
+# 新机（4G 起）可以把 CLAMSCAN_VMEM_KB 放到 3000000（3G），或干脆直连
+# /usr/bin/clamscan（FILE_UPLOAD_SCANNER=/usr/bin/clamscan）—— 只有在内存仍然抠的时候，
+# 才需要这层上限。
+ulimit -v "${CLAMSCAN_VMEM_KB:-1300000}" 2>/dev/null || true
+exec /usr/bin/clamscan "$@"

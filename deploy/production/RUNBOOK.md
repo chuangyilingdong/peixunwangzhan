@@ -112,6 +112,12 @@ journalctl -u dsh-host-broker -n 30 --no-pager   # 每次操作一行（只记 o
 
 ### ⚠️ 文件安全扫描与内存（2026-09-16 实测，**这条是个已知风险**）
 
+> **2026-09-23 更正**：生产上 `FILE_UPLOAD_SCANNER` 指的**不是** `/usr/bin/clamscan`，而是
+> `/usr/local/bin/clamscan-limited` —— 一个只存在于服务器上的包装脚本（`ulimit -v` 限住峰值内存后
+> exec clamscan）。下面的内存分析与缓解措施仍然成立，但**换机器时那个包装必须一起装**，
+> 否则扫描器不可执行 → 生产 fail-closed → 上传一律被拒。它现在也进了仓库：
+> `deploy/production/clamscan-limited`（迁移脚本 01 会安装它）。
+
 生产配的是 `FILE_UPLOAD_SCANNER=/usr/bin/clamscan` —— 独立扫描器，**每次调用都重新加载
 108MB 病毒库**：冷启动 16–40 秒、热缓存约 10 秒，进程 RSS 峰值可达 **618MB**。
 这台机器只有 1607MB，两个学生环境就占约 940MB —— 一旦同时有学生在创作，
