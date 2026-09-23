@@ -6,7 +6,17 @@ LOG_FILE="${ROOT}/logs/monitoring-alerts.log"
 STATE_FILE="${ROOT}/state/last-alert-state.json"
 HEALTH_URL="${PRODUCTION_HEALTH_URL:-http://127.0.0.1:8789/health}"
 DISK_THRESHOLD="${PRODUCTION_DISK_ALERT_PERCENT:-80}"
-CERT_PATH="${PRODUCTION_CERT_PATH:-/etc/letsencrypt/live/iicili.cyou/fullchain.pem}"
+# 证书路径：**不要写死域名**。2026-09-23 迁到 aicyld.com 时，这里原来钉的是
+# /etc/letsencrypt/live/iicili.cyou/fullchain.pem —— 换域名后那个路径不存在，
+# 监控会一直报「证书不可读」，而 HTTPS 其实是好的（**假告警比没告警更费人**）。
+# 现在改成：先按 production.env 的 PUBLIC_SITE_URL 推域名，推不出来就扫 live 目录兜底。
+_cert_domain="$(sed -n 's|^PUBLIC_SITE_URL=[a-z]*://\([^/]*\).*|\1|p' /etc/ai-kids-platform/production.env 2>/dev/null | head -1)"
+if [[ -n "$_cert_domain" && -r "/etc/letsencrypt/live/${_cert_domain}/fullchain.pem" ]]; then
+  _cert_default="/etc/letsencrypt/live/${_cert_domain}/fullchain.pem"
+else
+  _cert_default="$(ls -1 /etc/letsencrypt/live/*/fullchain.pem 2>/dev/null | head -1)"
+fi
+CERT_PATH="${PRODUCTION_CERT_PATH:-${_cert_default:-/etc/letsencrypt/live/__none__/fullchain.pem}}"
 CERT_DAYS="${PRODUCTION_CERT_EXPIRY_DAYS:-14}"
 BACKUP_MAX_AGE_HOURS="${PRODUCTION_BACKUP_MAX_AGE_HOURS:-26}"
 NODE_BIN="${PRODUCTION_NODE_BIN:-/srv/ai-kids-platform/runtime/node-v24.19.0-linux-x64/bin/node}"
