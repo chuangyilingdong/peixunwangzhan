@@ -31,7 +31,7 @@ try {
     platformPermissionForPathname,
     requirePlatformPermission,
     q,
-    row,
+    row, aq, arow,
   } = await import('../apps/server/src/lib.js');
   const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
 
@@ -65,9 +65,9 @@ try {
   check(platformPermissionForPathname('/api/admin/course-lessons') === 'ADMIN_COURSES', 'course administration must remain in courses domain');
   requirePlatformPermission(ctx('/api/admin/organizations', root), 'ADMIN_ORGANIZATIONS');
 
-  q("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('root','root','Root','SUPER_ADMIN','[]','x','ACTIVE',datetime('now'),datetime('now'))");
-  q("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('operator','operator','Operator','SUPER_ADMIN',?, 'x','ACTIVE',datetime('now'),datetime('now'))", [JSON.stringify(PLATFORM_ADMIN_PERMISSIONS)]);
-  q("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('solo','solo','Solo','SUPER_ADMIN',?, 'x','ACTIVE',datetime('now'),datetime('now'))", [JSON.stringify(PLATFORM_ADMIN_PERMISSIONS)]);
+  await aq("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('root','root','Root','SUPER_ADMIN','[]','x','ACTIVE',datetime('now'),datetime('now'))");
+  await aq("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('operator','operator','Operator','SUPER_ADMIN',?, 'x','ACTIVE',datetime('now'),datetime('now'))", [JSON.stringify(PLATFORM_ADMIN_PERMISSIONS)]);
+  await aq("INSERT INTO users(id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES ('solo','solo','Solo','SUPER_ADMIN',?, 'x','ACTIVE',datetime('now'),datetime('now'))", [JSON.stringify(PLATFORM_ADMIN_PERMISSIONS)]);
 
   const allowedOrganizations = await handleAdmin(ctx('/api/admin/organizations', auth('operator', ['ADMIN_ORGANIZATIONS'])));
   check(Array.isArray(allowedOrganizations.items), 'organization domain allow matrix failed');
@@ -84,8 +84,8 @@ try {
   const financeInventory = await handleAdmin(ctx('/api/admin/authorizations', financeOnly));
   check(Array.isArray(financeInventory.items) && Array.isArray(financeInventory.organizations), 'billing admin must read authorization purchase inventory');
   await expectError(() => handleAdmin(ctx('/api/admin/authorizations', coursesOnly)), 'PERMISSION_DENIED', 'courses-only authorization inventory deny');
-  q("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES ('org-p9-billing','P9 Billing Org','ACTIVE',datetime('now'),datetime('now','+1 year'),0,datetime('now'),datetime('now'))");
-  q("INSERT INTO course_series(id,title,owner_type,status,stock_total,created_at,updated_at) VALUES ('series-p9-billing','P9 Billing Series','PLATFORM','PUBLISHED',10,datetime('now'),datetime('now'))");
+  await aq("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES ('org-p9-billing','P9 Billing Org','ACTIVE',datetime('now'),datetime('now','+1 year'),0,datetime('now'),datetime('now'))");
+  await aq("INSERT INTO course_series(id,title,owner_type,status,stock_total,created_at,updated_at) VALUES ('series-p9-billing','P9 Billing Series','PLATFORM','PUBLISHED',10,datetime('now'),datetime('now'))");
   const purchaseBody = { seriesId: 'series-p9-billing', orgId: 'org-p9-billing', additionalQuota: 2, amountMinor: 1200, currency: 'CNY', paymentStatus: 'PAID', orderNo: 'P9-ORDER', contractNo: 'P9-CONTRACT', idempotencyKey: 'p9-license-purchase' };
   const purchased = await handleAdmin(ctx('/api/admin/license-purchases/append', financeOnly, 'POST', purchaseBody));
   check(purchased.assignment?.quotaTotal === 2, 'billing-only admin must append license purchase');
@@ -102,7 +102,7 @@ try {
   await expectError(() => handleAdmin(ctx('/api/admin/platform-admins/solo', auth('solo', [...PLATFORM_ADMIN_PERMISSIONS]), 'PUT', { permissions: [] })), 'LAST_SUPER_ADMIN_FORBIDDEN', 'last effective administrator permission clear');
   await expectError(() => handleAdmin(ctx('/api/admin/platform-admins/solo', auth('solo', [...PLATFORM_ADMIN_PERMISSIONS]), 'PUT', { status: 'DISABLED' })), 'ADMIN_SELF_DISABLE_FORBIDDEN', 'self disable');
 
-  const audit = row("SELECT * FROM audit_logs WHERE action='PLATFORM_ADMIN_UPDATE' AND target_id='operator' ORDER BY created_at DESC LIMIT 1");
+  const audit = await arow("SELECT * FROM audit_logs WHERE action='PLATFORM_ADMIN_UPDATE' AND target_id='operator' ORDER BY created_at DESC LIMIT 1");
   check(Boolean(audit), 'platform admin update audit missing');
   check(String(audit?.after_data || '').includes('permissions'), 'platform admin audit does not include permission data');
 

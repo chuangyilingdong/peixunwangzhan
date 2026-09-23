@@ -120,7 +120,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const authResult = resolveAuth(req);
+  const authResult = await resolveAuth(req);
   const ctx = {
     ...requestContext(req),
     req,
@@ -214,7 +214,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-initializeAsyncGenerationQueue();
+await initializeAsyncGenerationQueue();
 
 // 客户端更新清单：把后台存过的策略复写回静态清单。
 // 为什么在启动时做：客户端发布流水线是**整体覆盖** manifest.json 的（它只写身份字段），
@@ -232,23 +232,23 @@ server.listen(PORT, API_HOST, () => {
 });
 
 let shuttingDown = false;
-function shutdown(signal) {
+async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`API server received ${signal}; shutting down`);
   // 正在跑的生成任务当场收尾：上游可能已经受理并计费，但我们再也拿不回结果了 ——
   // 标成失败，学生那边立刻看到"这次中断了、可以重试"，框体也不会被判成"已经生成过了"而点不动。
   // （不这么做的话，任务会停在 RUNNING：框体被占用、结果永远不出来 —— 2026-09-21 发布重启实测。）
-  const interrupted = interruptOwnJobsOnShutdown();
+  const interrupted = await interruptOwnJobsOnShutdown();
   if (interrupted) console.warn(`[生成队列] 关服：${interrupted} 条在途任务标记为中断`);
   const forcedExit = setTimeout(() => process.exit(1), 10000);
   forcedExit.unref();
-  server.close(() => {
+  server.close(async () => {
     clearTimeout(forcedExit);
-    try { shutdownCommunicationWorkers(); }
+    try { await shutdownCommunicationWorkers(); }
     catch (error) { console.error('[COMMUNICATION SHUTDOWN ERROR]', error); }
     process.exit(0);
   });
 }
-process.once('SIGTERM', () => shutdown('SIGTERM'));
-process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', async () => await shutdown('SIGTERM'));
+process.once('SIGINT', async () => await shutdown('SIGINT'));

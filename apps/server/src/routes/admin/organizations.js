@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, pageParams, pageResult, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable } from '../../lib.js';
+  assignmentActiveSql, pageParams, pageResult, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arow, arows, aq, atransaction, amap } from '../../lib.js';
 import { syncAssignmentExpiryForOrg } from '../../lib.js';
 import { hashPassword, nextOrgCode } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -108,30 +108,30 @@ export async function handleOrganizations(ctx, part, method) {
       expires: 'organization.contract_expires_at ASC, organization.id DESC',
     }[sort];
     const { where, params } = organizationFilters(ctx);
-    const total = Number(row('SELECT COUNT(*) n FROM organizations organization' + where, params)?.n || 0);
-    const items = rows('SELECT organization.* FROM organizations organization' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map(normalizeOrg);
+    const total = Number((await arow('SELECT COUNT(*) n FROM organizations organization' + where, params))?.n || 0);
+    const items = await amap((await arows('SELECT organization.* FROM organizations organization' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit])), normalizeOrg);
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/organizations/export' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const { where, params } = organizationFilters(ctx);
-    const items = rows('SELECT organization.* FROM organizations organization' + where + ' ORDER BY organization.created_at DESC, organization.id DESC LIMIT 2000', params);
+    const items = await arows('SELECT organization.* FROM organizations organization' + where + ' ORDER BY organization.created_at DESC, organization.id DESC LIMIT 2000', params);
     const content = csvDocument(
       ['机构名称', '机构ID', '状态', '试用', '合同开始', '合同到期', '基础教师席位', '购买教师席位', '创建时间'],
       items.map((org) => [org.name, org.id, org.status, org.is_trial ? '是' : '否', org.contract_start_at || '', org.contract_expires_at || '', org.base_teacher_seats, org.purchased_teacher_seats, org.created_at]),
     );
-    audit(ctx, 'PLATFORM_ORG_EXPORT', 'ORGANIZATION', null, null, { count: items.length, filters: { status: ctx.search.get('status') || null, search: ctx.search.get('search') || null } });
+    await audit(ctx, 'PLATFORM_ORG_EXPORT', 'ORGANIZATION', null, null, { count: items.length, filters: { status: ctx.search.get('status') || null, search: ctx.search.get('search') || null } });
     return { filename: csvFileName('organizations'), content, count: items.length };
   }
   if (part === '/organizations' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']); const body = ctx.body || {}; const name = String(body.name || '').trim();
     if (!name) throw errors.badRequest('机构名称不能为空');
-    if (row('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
+    if (await arow('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
     const login = normalizeLogin(body.adminLogin, '管理员账号');
     const adminDisplayName = String(body.adminDisplayName || login).trim().slice(0, 100);
     const password = String(body.adminPassword || '');
     if (password.length < 6) throw errors.badRequest('请显式设置至少6位的管理员密码', 'ORG_ADMIN_INPUT_REQUIRED');
-    assertLoginAvailable(login);
+    await assertLoginAvailable(login);
     const now = nowIso(); const organizationId = id('org');
     const purchasedTeacherSeats = integer(body.purchasedTeacherSeats, '购买教师席位');
     const totalTeacherSeats = body.teacherSeats === undefined ? null : integer(body.teacherSeats, '教师数量上限');
@@ -147,30 +147,30 @@ export async function handleOrganizations(ctx, part, method) {
     const shortName = optionalOrgText(body.shortName, '机构简称');
     const region = optionalOrgText(body.region, '所属区域');
     const orgCode = nextOrgCode();
-    transaction(() => {
-      q('INSERT INTO organizations(id,name,short_name,org_code,region,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, shortName, orgCode, region, body.isTrial ? 'TRIAL' : 'ACTIVE', contractStartAt, contractExpiresAt, body.isTrial ? 1 : 0, baseTeacherSeats, purchasedTeacherSeats, integer(body.studentSeats, '学生数量上限'), json(contactPayload(body.contact ?? {})), auth.user.id, now, now]);
-      ensureOrgBilling(organizationId);
-      q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('user'), organizationId, login, adminDisplayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
+    await atransaction(async () => {
+      await aq('INSERT INTO organizations(id,name,short_name,org_code,region,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, shortName, orgCode, region, body.isTrial ? 'TRIAL' : 'ACTIVE', contractStartAt, contractExpiresAt, body.isTrial ? 1 : 0, baseTeacherSeats, purchasedTeacherSeats, integer(body.studentSeats, '学生数量上限'), json(contactPayload(body.contact ?? {})), auth.user.id, now, now]);
+      await ensureOrgBilling(organizationId);
+      await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('user'), organizationId, login, adminDisplayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
     });
-    audit(ctx, 'ORG_CREATE', 'ORG', organizationId, null, { name, shortName, orgCode, region });
-    return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organizationId]));
+    await audit(ctx, 'ORG_CREATE', 'ORG', organizationId, null, { name, shortName, orgCode, region });
+    return await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [organizationId]));
   }
   // 下拉/筛选专用：只返回 id/name/status，上限 500 并带 total，避免前端用分页接口当选项源而静默丢机构
   if (part === '/organizations/options' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const total = Number(row('SELECT COUNT(*) n FROM organizations')?.n || 0);
-    const items = rows('SELECT id,name,status FROM organizations ORDER BY name COLLATE NOCASE,id LIMIT 500')
+    const total = Number((await arow('SELECT COUNT(*) n FROM organizations'))?.n || 0);
+    const items = (await arows('SELECT id,name,status FROM organizations ORDER BY name COLLATE NOCASE,id LIMIT 500'))
       .map((item) => ({ id: item.id, name: item.name, status: item.status }));
     return { items, total, limit: 500 };
   }
   let match = part.match(/^\/organizations\/([^/]+)$/);
   if (match && ['GET', 'PUT'].includes(method)) {
-    requireRole(ctx, ['SUPER_ADMIN']); const organization = organizationRow(match[1]);
-    if (method === 'GET') return normalizeOrg(organization);
+    requireRole(ctx, ['SUPER_ADMIN']); const organization = await organizationRow(match[1]);
+    if (method === 'GET') return await normalizeOrg(organization);
     const body = ctx.body || {};
     if (body.status !== undefined && body.status !== organization.status) throw errors.badRequest('机构状态必须通过状态动作接口修改', 'ORG_STATUS_ACTION_REQUIRED');
     const name = body.name === undefined ? organization.name : nonEmptyString(body.name, '机构名称', { max: 200 });
-    if (name !== organization.name && row('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
+    if (name !== organization.name && await arow('SELECT id FROM organizations WHERE name=?', [name])) throw errors.conflict('机构名称已存在', 'ORG_NAME_EXISTS');
     // 机构编码**创建后不可变**（「可读且稳定」的前提：它是对外报的口径，改了就跟历史对不上）；
     // 机构简称 / 所属区域可改，传空串等于清空。
     if (body.orgCode !== undefined && String(body.orgCode).trim() !== String(organization.org_code || '')) {
@@ -189,71 +189,71 @@ export async function handleOrganizations(ctx, part, method) {
       : totalTeacherSeats - purchasedTeacherSeats;
     const studentSeats = body.studentSeats === undefined ? Number(organization.student_seats || 0) : integer(body.studentSeats, '学生数量上限');
     const contact = body.contact === undefined ? parseJson(organization.contact, {}) : contactPayload(body.contact);
-    const before = normalizeOrg(organization);
-    transaction(() => {
-      const usage = normalizeOrg(organization);
+    const before = await normalizeOrg(organization);
+    await atransaction(async () => {
+      const usage = await normalizeOrg(organization);
       if (baseTeacherSeats + purchasedTeacherSeats < usage.teacherUsedSeats) throw errors.conflict('教师上限不能低于现有人数', 'TEACHER_SEATS_TOO_FEW');
       if (studentSeats < usage.studentUsedSeats) throw errors.conflict('学生上限不能低于现有人数', 'STUDENT_SEAT_LIMIT');
-      q('UPDATE organizations SET name=?,short_name=?,region=?,contract_start_at=?,contract_expires_at=?,base_teacher_seats=?,purchased_teacher_seats=?,student_seats=?,contact=?,updated_at=? WHERE id=?', [name, shortName, region, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, studentSeats, json(contact), nowIso(), organization.id]);
+      await aq('UPDATE organizations SET name=?,short_name=?,region=?,contract_start_at=?,contract_expires_at=?,base_teacher_seats=?,purchased_teacher_seats=?,student_seats=?,contact=?,updated_at=? WHERE id=?', [name, shortName, region, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, studentSeats, json(contact), nowIso(), organization.id]);
       // 授权有效期 = 机构合同到期日（2026-09-16 用户口径），所以合同一改就要同步过去：
       // 续签之后机构不该还因为「原来那条授权到期了」而看不到课包。
-      if (contractExpiresAt !== organization.contract_expires_at) syncAssignmentExpiryForOrg(organization.id, contractExpiresAt);
+      if (contractExpiresAt !== organization.contract_expires_at) await syncAssignmentExpiryForOrg(organization.id, contractExpiresAt);
     });
-    const after = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
-    audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, before, { name: after.name, shortName: after.shortName, region: after.region, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, contact }, { orgId: organization.id });
+    const after = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [organization.id]));
+    await audit(ctx, 'ORG_UPDATE', 'ORG', organization.id, before, { name: after.name, shortName: after.shortName, region: after.region, contractStartAt, contractExpiresAt, baseTeacherSeats, purchasedTeacherSeats, contact }, { orgId: organization.id });
     return after;
   }
   match = part.match(/^\/organizations\/([^/]+)\/seat-adjustments$/);
   if (match && method === 'POST') {
-    const auth = requireRole(ctx, ['SUPER_ADMIN']); const organization = row('SELECT * FROM organizations WHERE id=?', [match[1]]);
+    const auth = requireRole(ctx, ['SUPER_ADMIN']); const organization = await arow('SELECT * FROM organizations WHERE id=?', [match[1]]);
     if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
     // 2026-09-13（P4 删积分）：原来的 credit-adjustments（平台给机构充值/调整积分）已删除。
-    transaction(() => {
+    await atransaction(async () => {
       const seats = integer(ctx.body?.purchasedTeacherSeats, '购买教师席位');
-      if (organization.base_teacher_seats + seats < normalizeOrg(organization).teacherUsedSeats) throw errors.conflict('教师上限不能低于现有人数', 'TEACHER_SEATS_TOO_FEW');
-      q('UPDATE organizations SET purchased_teacher_seats=?,updated_at=? WHERE id=?', [seats, nowIso(), organization.id]);
+      if (organization.base_teacher_seats + seats < (await normalizeOrg(organization)).teacherUsedSeats) throw errors.conflict('教师上限不能低于现有人数', 'TEACHER_SEATS_TOO_FEW');
+      await aq('UPDATE organizations SET purchased_teacher_seats=?,updated_at=? WHERE id=?', [seats, nowIso(), organization.id]);
     });
-    audit(ctx, 'ORG_SEAT_ADJUST', 'ORG', organization.id, null, ctx.body); return normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
+    await audit(ctx, 'ORG_SEAT_ADJUST', 'ORG', organization.id, null, ctx.body); return await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [organization.id]));
   }
   let orgDetailMatch = part.match(/^\/organizations\/([^/]+)\/detail$/);
   if (orgDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    return buildOrganizationDetail(orgDetailMatch[1]);
+    return await buildOrganizationDetail(orgDetailMatch[1]);
   }
 
   let orgAdminMatch = part.match(/^\/organizations\/([^/]+)\/admins$/);
   if (orgAdminMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const organization = organizationRow(orgAdminMatch[1]);
-    return { items: orgAdminRows(organization.id) };
+    const organization = await organizationRow(orgAdminMatch[1]);
+    return { items: await orgAdminRows(organization.id) };
   }
   if (orgAdminMatch && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const organization = organizationRow(orgAdminMatch[1]);
+    const organization = await organizationRow(orgAdminMatch[1]);
     const body = ctx.body || {}; const now = nowIso();
     const login = String(body.login || '').trim(); const displayName = String(body.displayName || '').trim(); const password = String(body.password || '');
     if (!displayName) throw errors.badRequest('姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
     if (password.length < 6) throw errors.badRequest('管理员密码至少6位', 'ORG_ADMIN_INPUT_REQUIRED');
     normalizeLogin(login, '登录名');
-    assertLoginAvailable(login);
-    assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN' });
+    await assertLoginAvailable(login);
+    await assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN' });
     const userId = id('user');
-    q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [userId, organization.id, login, displayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
-    const admin = row('SELECT * FROM users WHERE id=?', [userId]);
-    audit(ctx, 'ORG_ADMIN_CREATE', 'USER', userId, null, { orgId: organization.id, login, displayName }, { orgId: organization.id });
+    await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [userId, organization.id, login, displayName, 'ORG_ADMIN', '[]', hashPassword(password), 'ACTIVE', now, now]);
+    const admin = await arow('SELECT * FROM users WHERE id=?', [userId]);
+    await audit(ctx, 'ORG_ADMIN_CREATE', 'USER', userId, null, { orgId: organization.id, login, displayName }, { orgId: organization.id });
     return normalizeUser(admin);
   }
 
   let orgAdminUpdateMatch = part.match(/^\/organizations\/([^/]+)\/admins\/([^/]+)$/);
   if (orgAdminUpdateMatch && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const organization = organizationRow(orgAdminUpdateMatch[1]);
-    const target = row("SELECT * FROM users WHERE id=? AND org_id=? AND role='ORG_ADMIN' AND deleted_at IS NULL", [orgAdminUpdateMatch[2], organization.id]);
+    const organization = await organizationRow(orgAdminUpdateMatch[1]);
+    const target = await arow("SELECT * FROM users WHERE id=? AND org_id=? AND role='ORG_ADMIN' AND deleted_at IS NULL", [orgAdminUpdateMatch[2], organization.id]);
     if (!target) throw errors.notFound('机构管理员不存在', 'ORG_ADMIN_NOT_FOUND');
     const body = ctx.body || {};
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName || '').trim();
     if (!displayName) throw errors.badRequest('管理员姓名不能为空', 'ORG_ADMIN_INPUT_REQUIRED');
-    if (displayName !== target.display_name) assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN', excludeUserId: target.id });
+    if (displayName !== target.display_name) await assertDisplayNameAvailable(displayName, { orgId: organization.id, role: 'ORG_ADMIN', excludeUserId: target.id });
     let passwordHash = target.password_hash;
     if (body.password !== undefined) {
       const password = String(body.password || '');
@@ -264,18 +264,18 @@ export async function handleOrganizations(ctx, part, method) {
     if (body.status !== undefined) {
       status = body.status;
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('管理员状态无效', 'INVALID_ORG_ADMIN_STATUS');
-      if (status === 'DISABLED') assertNotLastOrgAdmin(organization.id, target.id);
+      if (status === 'DISABLED') await assertNotLastOrgAdmin(organization.id, target.id);
     }
-    q('UPDATE users SET display_name=?,password_hash=?,status=?,updated_at=? WHERE id=?', [displayName, passwordHash, status, nowIso(), target.id]);
-    if (status === 'DISABLED' && target.status !== 'DISABLED') q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [nowIso(), target.id]);
-    audit(ctx, 'ORG_ADMIN_UPDATE', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { displayName, status, passwordChanged: body.password !== undefined }, { orgId: organization.id });
-    return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]));
+    await aq('UPDATE users SET display_name=?,password_hash=?,status=?,updated_at=? WHERE id=?', [displayName, passwordHash, status, nowIso(), target.id]);
+    if (status === 'DISABLED' && target.status !== 'DISABLED') await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [nowIso(), target.id]);
+    await audit(ctx, 'ORG_ADMIN_UPDATE', 'USER', target.id, { login: target.login, displayName: target.display_name, status: target.status }, { displayName, status, passwordChanged: body.password !== undefined }, { orgId: organization.id });
+    return normalizeUser(await arow('SELECT * FROM users WHERE id=?', [target.id]));
   }
 
   let orgStatusMatch = part.match(/^\/organizations\/([^/]+)\/status$/);
   if (orgStatusMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const organization = organizationRow(orgStatusMatch[1]);
+    const organization = await organizationRow(orgStatusMatch[1]);
     const action = String(ctx.body?.action || '').trim();
     const transitions = {
       disable: { to: 'DISABLED', from: ['TRIAL', 'ACTIVE', 'FROZEN'], auditAction: 'ORG_DISABLE' },
@@ -285,8 +285,8 @@ export async function handleOrganizations(ctx, part, method) {
     };
     const transition = transitions[action];
     if (!transition) throw errors.badRequest('无效的机构状态操作', 'INVALID_ORG_STATUS_ACTION');
-    assertTransition(ctx, 'organization', organization.status, transition.to, {
-      targetType: 'ORGANIZATION', targetId: organization.id, before: normalizeOrg(organization),
+    await assertTransition(ctx, 'organization', organization.status, transition.to, {
+      targetType: 'ORGANIZATION', targetId: organization.id, before: await normalizeOrg(organization),
       message: `当前状态 ${organization.status} 不允许执行 ${action}`, code: 'INVALID_ORG_STATUS_TRANSITION',
       details: { action }, allowedFrom: transition.from,
     });
@@ -299,11 +299,11 @@ export async function handleOrganizations(ctx, part, method) {
       if (reason.length > 500) throw errors.badRequest('禁用原因不能超过 500 个字符', 'ORG_DISABLE_REASON_TOO_LONG');
     }
     if (reason.length > 500) reason = reason.slice(0, 500);
-    const before = normalizeOrg(organization);
-    q('UPDATE organizations SET status=?,is_trial=?,updated_at=? WHERE id=?', [transition.to, transition.to === 'ACTIVE' ? 0 : organization.is_trial, nowIso(), organization.id]);
-    const after = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [organization.id]));
+    const before = await normalizeOrg(organization);
+    await aq('UPDATE organizations SET status=?,is_trial=?,updated_at=? WHERE id=?', [transition.to, transition.to === 'ACTIVE' ? 0 : organization.is_trial, nowIso(), organization.id]);
+    const after = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [organization.id]));
     // reason 落进审计（原来只有 {action,status,actor}）——「为什么禁用它」是这条审计的全部价值。
-    audit(ctx, transition.auditAction, 'ORG', organization.id, before, { action, status: after.status, actor: auth.user.login, reason: reason || null }, { orgId: organization.id });
+    await audit(ctx, transition.auditAction, 'ORG', organization.id, before, { action, status: after.status, actor: auth.user.login, reason: reason || null }, { orgId: organization.id });
     return after;
   }
 
@@ -321,16 +321,16 @@ export async function handleOrganizations(ctx, part, method) {
   const quotaAdjustMatch = part.match(/^\/organizations\/([^/]+)\/course-quotas\/([^/]+)\/adjust$/);
   if (quotaAdjustMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const organization = organizationRow(quotaAdjustMatch[1]);
+    const organization = await organizationRow(quotaAdjustMatch[1]);
     const seriesId = String(quotaAdjustMatch[2] || '').trim();
-    const series = row('SELECT id, title FROM course_series WHERE id=?', [seriesId]);
+    const series = await arow('SELECT id, title FROM course_series WHERE id=?', [seriesId]);
     if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const delta = integer(ctx.body?.delta, '调整值', { min: -100000000, max: 100000000, fallback: null });
     if (delta === null) throw errors.badRequest('请填写调整值（非零整数）', 'INVALID_QUOTA_DELTA');
     if (!delta) throw errors.badRequest('调整值不能为 0（正数=增加授权次数，负数=减少授权次数）', 'INVALID_QUOTA_DELTA');
     const reason = nonEmptyString(ctx.body?.reason, '调整原因', { max: 200 });
-    const applied = transaction(() => {
-      const assignment = row("SELECT * FROM course_assignments WHERE org_id=? AND series_id=? AND status='ACTIVE'", [organization.id, series.id]);
+    const applied = await atransaction(async () => {
+      const assignment = await arow("SELECT * FROM course_assignments WHERE org_id=? AND series_id=? AND status='ACTIVE'", [organization.id, series.id]);
       if (!assignment) throw errors.notFound('该机构没有此课包的有效授权，请先给机构开通课包', 'ASSIGNMENT_NOT_FOUND');
       const quotaTotalBefore = Number(assignment.quota_total || 0);
       const quotaUsedBefore = Number(assignment.quota_used || 0);
@@ -339,8 +339,8 @@ export async function handleOrganizations(ctx, part, method) {
       if (quotaTotalAfter < quotaUsedBefore) {
         throw errors.conflict(`调整后总授权次数（${quotaTotalAfter}）不能少于当前已授权次数（${quotaUsedBefore}）`, 'COURSE_QUOTA_BELOW_USED');
       }
-      q('UPDATE course_assignments SET quota_total=? WHERE id=?', [quotaTotalAfter, assignment.id]);
-      const change = recordQuotaChange({
+      await aq('UPDATE course_assignments SET quota_total=? WHERE id=?', [quotaTotalAfter, assignment.id]);
+      const change = await recordQuotaChange({
         orgId: organization.id, seriesId: series.id, assignmentId: assignment.id,
         changeType: delta > 0 ? 'ADD' : 'REDUCE',
         quotaTotalBefore, quotaUsedBefore,
@@ -349,7 +349,7 @@ export async function handleOrganizations(ctx, part, method) {
       });
       return { assignmentId: assignment.id, expiresAt: assignment.expires_at || null, quotaTotalBefore, quotaUsedBefore, quotaTotalAfter, quotaUsedAfter: quotaUsedBefore, change };
     });
-    audit(ctx, 'ORG_COURSE_QUOTA_ADJUST', 'COURSE_ASSIGNMENT', applied.assignmentId,
+    await audit(ctx, 'ORG_COURSE_QUOTA_ADJUST', 'COURSE_ASSIGNMENT', applied.assignmentId,
       { orgId: organization.id, seriesId: series.id, quotaTotal: applied.quotaTotalBefore, quotaUsed: applied.quotaUsedBefore },
       { orgId: organization.id, seriesId: series.id, quotaTotal: applied.quotaTotalAfter, quotaUsed: applied.quotaUsedAfter, delta, reason },
       { orgId: organization.id });
@@ -378,7 +378,7 @@ export async function handleOrganizations(ctx, part, method) {
   const quotaChangesMatch = part.match(/^\/organizations\/([^/]+)\/course-quota-changes$/);
   if (quotaChangesMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const organization = organizationRow(quotaChangesMatch[1]);
+    const organization = await organizationRow(quotaChangesMatch[1]);
     const conditions = ['change.org_id=?'];
     const params = [organization.id];
     const seriesId = String(ctx.search.get('seriesId') || '').trim();
@@ -402,19 +402,19 @@ export async function handleOrganizations(ctx, part, method) {
       conditions.push('change.created_at<?'); params.push(to);
     }
     const where = ' WHERE ' + conditions.join(' AND ');
-    const total = Number(row('SELECT COUNT(*) n FROM course_quota_changes change' + where, params)?.n || 0);
+    const total = Number((await arow('SELECT COUNT(*) n FROM course_quota_changes change' + where, params))?.n || 0);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
-    const items = rows(`SELECT change.*, series.title series_title, actor.display_name actor_name, actor.login actor_login
+    const items = (await arows(`SELECT change.*, series.title series_title, actor.display_name actor_name, actor.login actor_login
         FROM course_quota_changes change
         LEFT JOIN course_series series ON series.id=change.series_id
         LEFT JOIN users actor ON actor.id=change.actor_id
         ${where}
         ORDER BY change.created_at DESC, change.id DESC
-        LIMIT ? OFFSET ?`, [...params, limit, offset]).map(normalizeQuotaChange);
+        LIMIT ? OFFSET ?`, [...params, limit, offset])).map(normalizeQuotaChange);
     // 筛选项（不受上面筛选影响）：本机构有过变更的课包 + 五个变更类型，供图8 的下拉直接用。
-    const seriesOptions = rows(`SELECT series.id, series.title, COUNT(*) n FROM course_quota_changes change
+    const seriesOptions = (await arows(`SELECT series.id, series.title, COUNT(*) n FROM course_quota_changes change
         JOIN course_series series ON series.id=change.series_id
-        WHERE change.org_id=? GROUP BY series.id, series.title ORDER BY series.title`, [organization.id])
+        WHERE change.org_id=? GROUP BY series.id, series.title ORDER BY series.title`, [organization.id]))
       .map((item) => ({ id: item.id, title: item.title, changeCount: Number(item.n || 0) }));
     return { ...pageResult(items, { page, limit, total }), changeTypes: [...COURSE_QUOTA_CHANGE_TYPES], seriesOptions };
   }

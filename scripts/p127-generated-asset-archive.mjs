@@ -46,7 +46,7 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { archiveOneGeneratedAsset, archiveGeneratedAssets, archivableMimeFor, studentAssetUrl, ARCHIVABLE_MIME_EXTENSION } = await import('../apps/server/src/services/generatedAssetArchive.js');
-const { row } = await import('../apps/server/src/lib.js');
+const { row, arow } = await import('../apps/server/src/lib.js');
 
 /* ── 夹具：拿种子里的学生，给他一个项目（media_assets/快照的外键要立得住）─────── */
 let STUDENT = '';
@@ -75,7 +75,7 @@ const archived = await archiveOneGeneratedAsset({ assetUrl: UPSTREAM_IMAGE, moda
 check('① 上游产物归档成功，地址换成本人私有素材（/api/student/file-assets/<id>/download）',
   archived.ok === true && /^\/api\/student\/file-assets\/file_[\w-]+\/download$/.test(archived.url || ''), JSON.stringify(archived));
 const storedFileId = String(archived.url || '').match(/file_([\w-]+)\/download/)?.[1] || '';
-const fileRow = storedFileId ? row('SELECT * FROM file_assets WHERE id=?', [`file_${storedFileId}`]) : null;
+const fileRow = storedFileId ? await arow('SELECT * FROM file_assets WHERE id=?', [`file_${storedFileId}`]) : null;
 check('② 落盘的是 PRIVATE 私有素材、归这个学生（作品没发布之前不该有公网地址）',
   fileRow?.visibility === 'PRIVATE' && fileRow?.owner_user_id === STUDENT && fileRow?.storage_kind === 'INTERNAL_PROXY' && fileRow?.status === 'ACTIVE',
   JSON.stringify(fileRow && { visibility: fileRow.visibility, owner: fileRow.owner_user_id, kind: fileRow.storage_kind, status: fileRow.status }));
@@ -132,7 +132,8 @@ check('⑩ 新增画布作品的公开图片代理（访客未登录，拿不动
   && /PUBLIC_WORK_IMAGE_NOT_FOUND/.test(publicRoutes)
   && /canvasMediaFrom\(parseJson\(work\.canvas_snapshot/.test(publicRoutes));
 check('⑪ 那条代理的准入与作品详情**逐字同一条件**（`share_token=? AND is_public=1`）—— 宽一格就是"看得到作品页、图却 403"',
-  /const work = row\('SELECT id, canvas_snapshot FROM works WHERE share_token=\? AND is_public=1'/.test(publicRoutes));
+  // 2026-09-23 RDS 阶段 1：数据访问改异步（row → await arow），**SQL 条件一个字没动**，守卫跟着改名走。
+  /const work = await arow\('SELECT id, canvas_snapshot FROM works WHERE share_token=\? AND is_public=1'/.test(publicRoutes));
 check('⑫ publicWorkRow 把 fileId 形式的媒体换成作品专属代理地址（前端 srcOf 直接用 item.url 就能显示）',
   /url: `\/api\/public\/works\/\$\{encodeURIComponent\(row\.share_token\)\}\/images\//.test(publicRoutes));
 

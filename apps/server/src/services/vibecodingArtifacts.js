@@ -15,7 +15,7 @@
 //
 // 关键能力是**流式增量解析**：模型还在吐字时，每有一个围栏闭合就立刻落库并推事件，
 // 学生才能看到产物卡片一个个出现，而不是等整轮结束才一次性冒出来。
-import { count, id, json, nowIso, parseJson, q, row, rows } from '../lib.js';
+import { count, id, json, nowIso, parseJson, q, row, rows, aq, arows, arow, acount } from '../lib.js';
 import { parseCsv } from './ooxml/xlsx.js';
 import { parseDeckSpec } from './ooxml/documents.js';
 
@@ -224,30 +224,30 @@ export function normalizeArtifact(value) {
  * ⚠️ 产物**换了一版**（revision 变化）时必须清空：新的 deck 引用的页和提示词都变了，
  * 留着旧图会让「第 2 页配图」配上上一版的图 —— 而且不报错。
  */
-export function setArtifactAttachmentImages(artifactId, images) {
-  q('UPDATE vibecoding_artifacts SET attachment_images=? WHERE id=?', [json(images || []), artifactId]);
+export async function setArtifactAttachmentImages(artifactId, images) {
+  await aq('UPDATE vibecoding_artifacts SET attachment_images=? WHERE id=?', [json(images || []), artifactId]);
 }
 
-export function setArtifactGeneratedImages(artifactId, images) {
-  q('UPDATE vibecoding_artifacts SET generated_images=?, updated_at=? WHERE id=?', [json(images || []), nowIso(), artifactId]);
+export async function setArtifactGeneratedImages(artifactId, images) {
+  await aq('UPDATE vibecoding_artifacts SET generated_images=?, updated_at=? WHERE id=?', [json(images || []), nowIso(), artifactId]);
 }
 
-export function listArtifacts(conversationId, { includeContent = false } = {}) {
+export async function listArtifacts(conversationId, { includeContent = false } = {}) {
   const columns = includeContent ? '*' : 'id,conversation_id,message_id,name,kind,bytes,revision,created_at,updated_at';
-  return rows(
+  return (await arows(
     `SELECT ${columns} FROM vibecoding_artifacts WHERE conversation_id=? ORDER BY name ASC`,
     [conversationId],
-  ).map(normalizeArtifact);
+  )).map(normalizeArtifact);
 }
 
-export function getArtifact(conversationId, artifactId) {
-  return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=? AND conversation_id=?', [artifactId, conversationId]));
+export async function getArtifact(conversationId, artifactId) {
+  return normalizeArtifact(await arow('SELECT * FROM vibecoding_artifacts WHERE id=? AND conversation_id=?', [artifactId, conversationId]));
 }
 
 /** 产物 → 文件映射（预览文档拼装、提交快照、作品广场都用它） */
-export function artifactsAsFiles(conversationId) {
+export async function artifactsAsFiles(conversationId) {
   const result = {};
-  for (const artifact of rows('SELECT name, content FROM vibecoding_artifacts WHERE conversation_id=? ORDER BY name ASC', [conversationId])) {
+  for (const artifact of await arows('SELECT name, content FROM vibecoding_artifacts WHERE conversation_id=? ORDER BY name ASC', [conversationId])) {
     result[artifact.name] = String(artifact.content ?? '');
   }
   return result;
@@ -257,15 +257,15 @@ export function artifactsAsFiles(conversationId) {
  * 写入/更新一个产物。同名视为同一份产物的新修订（revision +1），
  * 而不是新建一条——否则模型每次重写都会在聊天里堆出一串重复卡片。
  */
-export function upsertArtifact({ conversationId, messageId = null, name, content, at = null }) {
+export async function upsertArtifact({ conversationId, messageId = null, name, content, at = null }) {
   const cleanName = String(name || '').trim();
   if (!cleanName) return null;
   const text = String(content ?? '');
   const bytes = Buffer.byteLength(text);
   if (bytes > ARTIFACT_LIMITS.maxFileBytes) return null;
-  const total = Number(count('SELECT COALESCE(SUM(bytes),0) n FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]) || 0);
-  const fileCount = Number(count('SELECT COUNT(*) n FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]) || 0);
-  const existing = row('SELECT * FROM vibecoding_artifacts WHERE conversation_id=? AND name=?', [conversationId, cleanName]);
+  const total = Number(await acount('SELECT COALESCE(SUM(bytes),0) n FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]) || 0);
+  const fileCount = Number(await acount('SELECT COUNT(*) n FROM vibecoding_artifacts WHERE conversation_id=?', [conversationId]) || 0);
+  const existing = await arow('SELECT * FROM vibecoding_artifacts WHERE conversation_id=? AND name=?', [conversationId, cleanName]);
   if (!existing && fileCount >= ARTIFACT_LIMITS.maxFiles) return null;
   const nextTotal = total - Number(existing?.bytes || 0) + bytes;
   if (nextTotal > ARTIFACT_LIMITS.maxTotalBytes) return null;
@@ -275,23 +275,23 @@ export function upsertArtifact({ conversationId, messageId = null, name, content
     // 内容没变就不动修订号（模型常把同一个文件原样再写一遍）
     if (existing.content === text) return normalizeArtifact(existing);
     // 内容变了就是新一版：把上一版的生成插画一起清掉（否则新 deck 的第 2 页会配上旧图，且不报错）
-    q('UPDATE vibecoding_artifacts SET content=?,bytes=?,kind=?,revision=revision+1,message_id=?,generated_images=NULL,attachment_images=NULL,updated_at=? WHERE id=?',
+    await aq('UPDATE vibecoding_artifacts SET content=?,bytes=?,kind=?,revision=revision+1,message_id=?,generated_images=NULL,attachment_images=NULL,updated_at=? WHERE id=?',
       [text, bytes, kindForName(cleanName), messageId, timestamp, existing.id]);
-    return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=?', [existing.id]));
+    return normalizeArtifact(await arow('SELECT * FROM vibecoding_artifacts WHERE id=?', [existing.id]));
   }
 
   const artifactId = id('vibeart');
-  q(`INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at)
+  await aq(`INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,kind,content,bytes,revision,created_at,updated_at)
      VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [artifactId, conversationId, messageId, cleanName, kindForName(cleanName), text, bytes, 1, timestamp, timestamp]);
-  return normalizeArtifact(row('SELECT * FROM vibecoding_artifacts WHERE id=?', [artifactId]));
+  return normalizeArtifact(await arow('SELECT * FROM vibecoding_artifacts WHERE id=?', [artifactId]));
 }
 
 /** 批量写入（整轮结束后的兜底补扫） */
-export function upsertArtifacts(conversationId, artifacts, { messageId = null } = {}) {
+export async function upsertArtifacts(conversationId, artifacts, { messageId = null } = {}) {
   const written = [];
   for (const artifact of artifacts) {
-    const saved = upsertArtifact({ conversationId, messageId, name: artifact.name, content: artifact.content });
+    const saved = await upsertArtifact({ conversationId, messageId, name: artifact.name, content: artifact.content });
     if (saved) written.push(saved);
   }
   return written;
@@ -321,6 +321,6 @@ export const DEFAULT_ARTIFACTS = Object.freeze([
   },
 ]);
 
-export function seedDefaultArtifacts(conversationId) {
-  return upsertArtifacts(conversationId, DEFAULT_ARTIFACTS);
+export async function seedDefaultArtifacts(conversationId) {
+  return await upsertArtifacts(conversationId, DEFAULT_ARTIFACTS);
 }

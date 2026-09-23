@@ -128,17 +128,17 @@ export function assertKnownState(domain, value, { field = 'status' } = {}) {
 /**
  * 在真正写库前校验状态转换。非法转换会产生审计记录，便于定位前端旧枚举、重复提交和越权调用。
  */
-export function assertTransition(ctx, domain, from, to, { targetType, targetId, before = null, details = null, message = null, code = null, allowedFrom = null, allowSameState = false } = {}) {
+export async function assertTransition(ctx, domain, from, to, { targetType, targetId, before = null, details = null, message = null, code = null, allowedFrom = null, allowSameState = false } = {}) {
   const current = assertKnownState(domain, from);
   const next = assertKnownState(domain, to);
   if ((canTransition(domain, current, next) || (allowSameState && current === next)) && (!allowedFrom || allowedFrom.includes(current))) return next;
   const transitionCode = code || `INVALID_${domainLabel(domain)}_TRANSITION`;
-  audit(ctx || {}, 'DOMAIN_INVALID_TRANSITION', targetType || domainLabel(domain), targetId, before ?? { status: current }, { status: next, domain, code: transitionCode, details });
+  await audit(ctx || {}, 'DOMAIN_INVALID_TRANSITION', targetType || domainLabel(domain), targetId, before ?? { status: current }, { status: next, domain, code: transitionCode, details });
   throw errors.conflict(message || `${domainLabel(domain)} 状态 ${current} 不允许转换为 ${next}`, transitionCode, { domain, from: current, to: next });
 }
 
-export function transitionOrThrow(domain, from, to, options = {}) {
-  return assertTransition(null, domain, from, to, options);
+export async function transitionOrThrow(domain, from, to, options = {}) {
+  return await assertTransition(null, domain, from, to, options);
 }
 
 export function domainStateContract() {

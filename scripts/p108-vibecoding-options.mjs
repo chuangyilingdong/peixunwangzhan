@@ -58,17 +58,17 @@ execFileSync(process.execPath, [path.join(root, 'packages/database/src/db.js'), 
 
 const { lessonSystemMessage, normalizeVibeMode, VIBE_MODES } = await import('../apps/server/src/routes/vibecoding.js');
 
-const textOf = (mode) => lessonSystemMessage(mode === undefined ? { lesson_id: null } : { lesson_id: null, mode }).content;
+const textOf = async (mode) => (await lessonSystemMessage(mode === undefined ? { lesson_id: null } : { lesson_id: null, mode })).content;
 
 check('选项取值域就是这三个', JSON.stringify(VIBE_MODES) === JSON.stringify(['CHAT', 'CODE', 'WEB']), JSON.stringify(VIBE_MODES));
 check('白名单之外的取值被规范化掉（不是原样存库）',
   normalizeVibeMode('chat') === 'CHAT' && normalizeVibeMode('  web ') === 'WEB' && normalizeVibeMode('HACK') === '' && normalizeVibeMode(undefined) === '');
 check('空值就是空值（老会话没有 mode，不能被默认成某个选项）', normalizeVibeMode(null) === '' && normalizeVibeMode('') === '');
 
-const noMode = textOf(undefined);
-const chat = textOf('CHAT');
-const code = textOf('CODE');
-const web = textOf('WEB');
+const noMode = await textOf(undefined);
+const chat = await textOf('CHAT');
+const code = await textOf('CODE');
+const web = await textOf('WEB');
 
 check('选了选项会带上那一档的角色说明', /【本节选项：对话】/.test(chat) && /【本节选项：写代码】/.test(code) && /【本节选项：做网页】/.test(web));
 check('三档互不串味（对话里不该出现「写代码」那档的说明，反之亦然）',

@@ -30,12 +30,12 @@
 //   · 计数列：`session_students.vibecoding_sends`（每学生每场课堂，与 `completed_cost_fen` 同一层）。
 //     老库补列默认 0 = 还没数到任何发送（不是"已用满"）。
 //   · **留空 = 不记上限，但仍然记账**：上课时照数，老师端/平台端将来能看到"这个学生按了几次"。
-import { q, row } from '../lib.js';
+import { q, row, arow, aq } from '../lib.js';
 
 /** 读这节课配的发送次数上限。返回 `null` = 不设上限（不填 / 0 / 非法值都按不设上限处理）。 */
-export function vibecodingSendLimit(lessonId) {
+export async function vibecodingSendLimit(lessonId) {
   if (!lessonId) return null;
-  const config = row('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId])?.classroom_config;
+  const config = (await arow('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId]))?.classroom_config;
   let parsed = null;
   try { parsed = config ? JSON.parse(config) : null; } catch { parsed = null; }
   const value = parsed?.vibeCoding?.sendLimit;
@@ -50,9 +50,9 @@ export function vibecodingSendLimit(lessonId) {
  * 形状固定为 `[{ title, text }]`：`title` 是按钮上那句话，`text` 是点下去填进输入框的内容。
  * 非法/缺省一律返回空数组（客户端不显示这一块），不做任何猜测。
  */
-export function vibecodingPresetPrompts(lessonId) {
+export async function vibecodingPresetPrompts(lessonId) {
   if (!lessonId) return [];
-  const config = row('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId])?.classroom_config;
+  const config = (await arow('SELECT classroom_config FROM course_lessons WHERE id=?', [lessonId]))?.classroom_config;
   let parsed = null;
   try { parsed = config ? JSON.parse(config) : null; } catch { parsed = null; }
   const list = parsed?.vibeCoding?.presetPrompts;
@@ -117,12 +117,12 @@ export function countUserMessages(messages) {
 }
 
 /** 这个学生在**这场课堂**里已记下的发送次数（单调最大值）。 */
-export function vibecodingSendUsage({ sessionId, studentId }) {
+export async function vibecodingSendUsage({ sessionId, studentId }) {
   if (!sessionId || !studentId) return 0;
-  const value = row(
+  const value = (await arow(
     "SELECT vibecoding_sends FROM session_students WHERE session_id=? AND student_id=? AND status <> 'REMOVED' ORDER BY added_at DESC LIMIT 1",
     [sessionId, studentId],
-  )?.vibecoding_sends;
+  ))?.vibecoding_sends;
   const used = Number(value);
   return Number.isFinite(used) && used > 0 ? used : 0;
 }
@@ -137,15 +137,15 @@ export function vibecodingSendUsage({ sessionId, studentId }) {
  *    不会因为学生超限后反复点而出现"这学生按了 37 次"这种脏数字，`used ≤ limit` 这个不变量也成立。
  * 返回 `{ limit, used, allowed, remaining, exceeded }`：`limit === null` 表示这节课没设上限。
  */
-export function enforceVibecodingSendLimit({ sessionId, studentId, lessonId, messages }) {
-  const limit = vibecodingSendLimit(lessonId);
+export async function enforceVibecodingSendLimit({ sessionId, studentId, lessonId, messages }) {
+  const limit = await vibecodingSendLimit(lessonId);
   const observed = countUserMessages(messages);
-  const seenBefore = vibecodingSendUsage({ sessionId, studentId });
+  const seenBefore = await vibecodingSendUsage({ sessionId, studentId });
   const seen = Math.max(seenBefore, observed);
   const exceeded = limit !== null && seen > limit;
   // 见到的最大值往前推就落库（含被拦下的那几次 —— 判据靠它，不落库就会漏放）
   if (seen > seenBefore && sessionId && studentId) {
-    q(
+    await aq(
       "UPDATE session_students SET vibecoding_sends=?, updated_at=? WHERE session_id=? AND student_id=? AND status <> 'REMOVED'",
       [seen, new Date().toISOString(), sessionId, studentId],
     );

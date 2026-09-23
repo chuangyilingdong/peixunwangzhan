@@ -7,7 +7,7 @@ import { lessonPlatformBudgetOverview } from './computePool.js';
 //     管理员密码复用既有的加密密钥文件（providerSecret.js，AES-256-GCM）；
 //   · 令牌名就是归集维度：约定 `机构:<orgId>` / `学生:<studentId>` / `课时:<lessonId>`，
 //     用量日志按令牌名解析即可还原「哪个机构/哪个学生/哪节课花了多少」，不需要动它一行代码。
-import { errors, id } from '../lib.js';
+import { errors, id, arow, aq } from '../lib.js';
 import { getProviderApiKey, setProviderApiKey } from './providerSecret.js';
 import { row, rows, q, nowIso, parseJson, json } from '../lib.js';
 
@@ -27,8 +27,8 @@ const routeCache = new Map();
 /** 正在自动发令牌的名字：并发的第一次调用不该发两张同名令牌。 */
 const provisioning = new Set();
 
-export function getComputeGatewayConfig() {
-  const value = parseJson(row('SELECT compute_gateway FROM platform_settings WHERE id=1')?.compute_gateway, {});
+export async function getComputeGatewayConfig() {
+  const value = parseJson((await arow('SELECT compute_gateway FROM platform_settings WHERE id=1'))?.compute_gateway, {});
   return {
     baseUrl: String(value.baseUrl || '').replace(/\/+$/, ''),
     username: String(value.username || 'root'),
@@ -40,8 +40,8 @@ export function getComputeGatewayConfig() {
   };
 }
 
-export function saveComputeGatewayConfig(patch, { password } = {}) {
-  const current = parseJson(row('SELECT compute_gateway FROM platform_settings WHERE id=1')?.compute_gateway, {});
+export async function saveComputeGatewayConfig(patch, { password } = {}) {
+  const current = parseJson((await arow('SELECT compute_gateway FROM platform_settings WHERE id=1'))?.compute_gateway, {});
   const next = {
     baseUrl: patch.baseUrl === undefined ? String(current.baseUrl || '') : String(patch.baseUrl || '').trim().replace(/\/+$/, ''),
     username: patch.username === undefined ? String(current.username || 'root') : String(patch.username || '').trim() || 'root',
@@ -51,14 +51,14 @@ export function saveComputeGatewayConfig(patch, { password } = {}) {
   };
   if (next.baseUrl && !/^https?:\/\//.test(next.baseUrl)) throw errors.badRequest('网关地址必须带 http(s)://', 'INVALID_GATEWAY_URL');
   if (password !== undefined && password !== null && String(password) !== '') setProviderApiKey(String(password), ADMIN_SECRET_KEY);
-  q('UPDATE platform_settings SET compute_gateway=? WHERE id=1', [json(next)]);
+  await aq('UPDATE platform_settings SET compute_gateway=? WHERE id=1', [json(next)]);
   clearGatewayRouteCache();
-  return getComputeGatewayConfig();
+  return await getComputeGatewayConfig();
 }
 
 /** 登录拿 JWT（new-api 的管理接口要 Bearer）。不缓存：管理员改密码后立刻生效，代价是一次登录请求。 */
 async function gatewayToken() {
-  const config = getComputeGatewayConfig();
+  const config = await getComputeGatewayConfig();
   if (!config.enabled) throw errors.forbidden('算力网关未启用', 'COMPUTE_GATEWAY_DISABLED');
   if (!config.baseUrl) throw errors.badRequest('还没有配置算力网关地址', 'COMPUTE_GATEWAY_NOT_CONFIGURED');
   const password = getProviderApiKey(ADMIN_SECRET_KEY);
@@ -95,7 +95,7 @@ async function gatewayRequest(path, { method = 'GET', body } = {}) {
 export async function testComputeGateway() {
   const started = Date.now();
   const self = await gatewayRequest('/api/user/self');
-  return { ok: true, gatewayUser: self?.username || self?.display_name || null, latencyMs: Date.now() - started, baseUrl: getComputeGatewayConfig().baseUrl };
+  return { ok: true, gatewayUser: self?.username || self?.display_name || null, latencyMs: Date.now() - started, baseUrl: (await getComputeGatewayConfig()).baseUrl };
 }
 
 /**
@@ -246,16 +246,16 @@ export function aggregateUsage(rowsInput, { quotaPerUnit = 500000 } = {}) {
 }
 
 // Classroom snapshot budgets aggregated across organizations.
-export function lessonBudgetOverview() { return lessonPlatformBudgetOverview(); }
+export async function lessonBudgetOverview() { return await lessonPlatformBudgetOverview(); }
 
 /** 平台端用：读日志并归集（默认近 7 天） */
 export async function gatewayUsageOverview({ days = 7 } = {}) {
-  const config = getComputeGatewayConfig();
+  const config = await getComputeGatewayConfig();
   const rowsOut = await listGatewayLogs({ days });
   const summary = aggregateUsage(rowsOut, { quotaPerUnit: config.quotaPerUnit || 500000 });
   return {
     days, quotaPerUnit: config.quotaPerUnit || 500000, ...summary,
-    byLessonBudget: lessonBudgetOverview({ byLesson: summary.byLesson }),
+    byLessonBudget: await lessonBudgetOverview({ byLesson: summary.byLesson }),
   };
 }
 
@@ -286,7 +286,7 @@ async function ensureGatewayToken({ name, budgetFen, models, unlimited = true })
       const existing = await findGatewayTokenByName(name);
       if (existing?.key) return { ...existing, created: false };
       if (existing && !existing.key) return null; // 有令牌但取不到 key：网关没暴露，别当成可用
-      await createGatewayToken({ name, budgetFen, models, unlimited, quotaPerUnit: getComputeGatewayConfig().quotaPerUnit });
+      await createGatewayToken({ name, budgetFen, models, unlimited, quotaPerUnit: (await getComputeGatewayConfig()).quotaPerUnit });
       const created = await findGatewayTokenByName(name);
       return created?.key ? { ...created, created: true } : null;
     } finally {
@@ -311,7 +311,7 @@ async function resolveRouteUncached({ orgId, studentId, lessonId, configured }) 
  * 解析这次调用该走哪儿。启用的学生文本/图片路由必须成功取得网关令牌；异常直接拒绝，不绕过网关。
  */
 export async function resolveGenerationRoute({ orgId = '', studentId = '', lessonId = '', modality = 'TEXT', models = '' } = {}) {
-  const configured = getComputeGatewayConfig();
+  const configured = await getComputeGatewayConfig();
   if (!configured.enabled) return { mode: 'direct', reason: 'GATEWAY_DISABLED' };
   if (!GATEWAY_MODALITIES.has(String(modality || '').toUpperCase())) return { mode: 'direct', reason: 'MODALITY_NOT_ON_GATEWAY' };
   if (!studentId) return { mode: 'direct', reason: 'NO_STUDENT' };
@@ -342,7 +342,7 @@ export async function applyGatewayRoute(selection, { orgId = '', studentId = '',
   let route;
   try { route = await resolveGenerationRoute({ orgId, studentId, lessonId, modality, models: model || selection?.model || '' }); }
   catch (error) {
-    q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,sale_snapshot,error_code,error_message,created_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    await aq(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,sale_snapshot,error_code,error_message,created_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id('attempt'),id('call'),1,orgId || null,studentId || null,modality,selection?.channelId || 'default',selection?.provider || '',model || selection?.model || '', 'gateway','BLOCKED',json({ charged:false, reason:'GATEWAY_PREFLIGHT' }),error.code || 'COMPUTE_GATEWAY_UNAVAILABLE','网关路由不可用，请联系管理员',nowIso(),nowIso()]);
     throw error;
   }

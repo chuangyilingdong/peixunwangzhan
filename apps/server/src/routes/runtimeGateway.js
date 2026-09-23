@@ -16,7 +16,7 @@
 //      容器里即使还有密钥也调不动了（不用等容器回收）。
 //   ③ 每一通调用都记账：与 VibeCoding 原来的链路完全同一套（算力池预算 → 渠道 → recordAiUsage）。
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { errors, id, json, nowIso, q, row } from '../lib.js';
+import { errors, id, json, nowIso, q, row, arow } from '../lib.js';
 import { AI_PROVIDER_API_KEY } from '../config.js';
 import { getAiProviderPolicy } from './billingConfig.js';
 import { providerSelectionForModality } from './aiGeneration.js';
@@ -78,12 +78,12 @@ export function verifyRuntimeKey(token) {
  * 也导出给「拉起容器」那条路用（`services/studentRuntime.js`）：**开盒子与调模型是同一套门禁**，
  * 两处各写一份迟早会走偏（比如开盒子时只看课堂、不看名单）。
  */
-export function assertRuntimeClassroomActive(payload) {
-  const session = row('SELECT id,org_id,lesson_id,status,teacher_id FROM class_sessions WHERE id=?', [payload.s]);
+export async function assertRuntimeClassroomActive(payload) {
+  const session = await arow('SELECT id,org_id,lesson_id,status,teacher_id FROM class_sessions WHERE id=?', [payload.s]);
   if (!session || session.org_id !== payload.o) throw errors.forbidden('课堂不存在或不属于该机构', 'RUNTIME_CLASSROOM_UNAVAILABLE');
   if (session.status !== 'ACTIVE') throw errors.forbidden('课堂已经结束，创作环境已关闭', 'RUNTIME_CLASSROOM_INACTIVE');
   if (payload.l && session.lesson_id !== payload.l) throw errors.forbidden('课时与课堂不一致', 'RUNTIME_LESSON_MISMATCH');
-  const part = row("SELECT status FROM session_students WHERE session_id=? AND student_id=? AND status='ACTIVE'", [session.id, payload.u]);
+  const part = await arow("SELECT status FROM session_students WHERE session_id=? AND student_id=? AND status='ACTIVE'", [session.id, payload.u]);
   if (!part) throw errors.forbidden('这名学生当前不在课堂名单里', 'RUNTIME_STUDENT_NOT_ACTIVE');
   return session;
 }
@@ -361,7 +361,7 @@ export async function handleRuntimeGateway(ctx) {
   if (path !== '/api/gateway/v1/chat/completions' || ctx.method !== 'POST') return null;
 
   const payload = verifyRuntimeKey(readRuntimeToken(ctx));
-  const session = assertRuntimeClassroomActive(payload);
+  const session = await assertRuntimeClassroomActive(payload);
   const body = ctx.body || {};
   const messages = normalizeMessages(body);
   const stream = body.stream === true;
@@ -369,7 +369,7 @@ export async function handleRuntimeGateway(ctx) {
   // VibeCoding 发送次数上限（2026-09-19 用户口径，机制见 services/vibecodingLessonSettings.js）。
   // ⚠️ 位置有意放在**打上游之前**：超限的这一次既不花算力、也不进用量账，学生当场拿到原因。
   // ⚠️ 这节课没配上限时 `allowed` 恒为 true（不填 = 不拦），所以没人配置时现状一字不改。
-  const sendGate = enforceVibecodingSendLimit({ sessionId: session.id, studentId: payload.u, lessonId: session.lesson_id || '', messages });
+  const sendGate = await enforceVibecodingSendLimit({ sessionId: session.id, studentId: payload.u, lessonId: session.lesson_id || '', messages });
   if (!sendGate.allowed) {
     // 对外仍要说 OpenAI 方言（dsh 只认这个），客户端把 message 原样显示给学生
     ctx.res.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -383,7 +383,7 @@ export async function handleRuntimeGateway(ctx) {
     return { __streamed: true };
   }
 
-  const policy = getAiProviderPolicy();
+  const policy = await getAiProviderPolicy();
   const requestedModel = String(body.model || '').trim();
   const withImages = hasImageParts(messages);
   // 渠道选择与预算检查与 VibeCoding 原链路同一套：机构/学生/课时/课堂四个维度都带上。
@@ -399,12 +399,12 @@ export async function handleRuntimeGateway(ctx) {
 
   const completionId = `chatcmpl-${id('rt')}`;
   const created = Math.floor(Date.now() / 1000);
-  const record = (status, { text = '', usage = null, failCode = null, providerName = provider.name } = {}) => {
-    recordAiUsage({
+  const record = async (status, { text = '', usage = null, failCode = null, providerName = provider.name } = {}) => {
+    await recordAiUsage({
       orgId: payload.o, userId: payload.u, sessionId: session.id,
       modality: 'TEXT', model: selection.model, status, failCode,
       inputTokens: usage?.inputTokens || 0, outputTokens: usage?.outputTokens || 0,
-      costFen: provider.compute?.saleSnapshot?.unitFen ?? priceFenFor({ modality: 'TEXT', model: selection.model }),
+      costFen: provider.compute?.saleSnapshot?.unitFen ?? await priceFenFor({ modality: 'TEXT', model: selection.model }),
       pricing: {
         compute: provider.compute, source: 'dsh-runtime-gateway', provider: providerName, mode: selection.provider,
         // 容器报的名字与我们真正调用的渠道/模型都留档：对账时能看出「学生选的那个名字」到底落在哪儿
@@ -431,7 +431,7 @@ export async function handleRuntimeGateway(ctx) {
       // 同流式：上游把工具调用当正文吐出来时（DSML），别原样交给客户端。
       const text = stripDsml(String(result?.assets?.[0]?.metadata?.text || '').trim());
       const usage = result?.usage || result?.assets?.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
-      record('SUCCESS', { text, usage });
+      await record('SUCCESS', { text, usage });
       ctx.res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       ctx.res.end(JSON.stringify({
         id: completionId, object: 'chat.completion', created, model: effectiveModel,
@@ -441,7 +441,7 @@ export async function handleRuntimeGateway(ctx) {
       return { __streamed: true };
     } catch (error) {
       const normalized = normalizeProviderError(error) || {};
-      record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
+      await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
       throw error;
     }
   }
@@ -499,7 +499,7 @@ export async function handleRuntimeGateway(ctx) {
     }
     usage = result?.usage || result?.assets?.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
     const text = String(result?.assets?.[0]?.metadata?.text || streamed || '').trim();
-    record('SUCCESS', { text, usage });
+    await record('SUCCESS', { text, usage });
     // 留个痕：这段被摘掉了多少字符。它持续大于 0 就说明上游还在拿工具调用当正文，
     // 那时要去看「打通 tools / tool_calls」这件事（本过滤只是止血）。
     if (dsmlStripped) console.warn(`[runtimeGateway] 摘掉工具调用标记 ${dsmlStripped} 字符（模型 ${effectiveModel}）`);
@@ -511,7 +511,7 @@ export async function handleRuntimeGateway(ctx) {
     sseWrite(res, '[DONE]');
   } catch (error) {
     const normalized = normalizeProviderError(error) || {};
-    record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
+    await record('FAILED', { failCode: normalized.code || PROVIDER_ERROR_CODES.UNKNOWN });
     sseWrite(res, { error: { message: String(error?.message || '上游调用失败'), type: 'upstream_error', code: normalized.code || 'UPSTREAM_ERROR' } });
     sseWrite(res, '[DONE]');
   } finally {

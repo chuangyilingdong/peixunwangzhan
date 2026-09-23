@@ -82,7 +82,7 @@ const refs = [IMAGE_REF];
 const noTemplatePolicy = { channels: [{ id: 'ch-img', model: 'zhenzhen-image-g-v2-lowprice', modelCapabilities: {} }] };
 // 没配模板的渠道 = **生产里那个图片渠道的实际情形**：它会落到默认图片模板，
 // 而默认模板现在带得动参考图 —— 所以这一条不能靠「没模板」来验，它必须能带上。
-const viaDefault = generationOptionsFor({ context: {}, modality: 'IMAGE', policy: noTemplatePolicy, selection: { channelId: 'ch-img', model: 'zhenzhen-image-g-v2-lowprice' }, box: {}, referenceAssets: refs });
+const viaDefault = await generationOptionsFor({ context: {}, modality: 'IMAGE', policy: noTemplatePolicy, selection: { channelId: 'ch-img', model: 'zhenzhen-image-g-v2-lowprice' }, box: {}, referenceAssets: refs });
 check('没配模板的图片渠道（= 生产现状）走默认模板也能带上参考', viaDefault.referenceAssets?.length === 1,
   JSON.stringify(viaDefault.referenceAssets));
 
@@ -91,19 +91,19 @@ check('没配模板的图片渠道（= 生产现状）走默认模板也能带�
 const badTemplatePolicy = { channels: [{ id: 'ch-img', model: 'm', requestTemplates: { IMAGE: { model: '{{model}}', prompt: '{{prompt}}', n: 1 } } }] };
 let refused = null;
 try {
-  generationOptionsFor({ context: {}, modality: 'IMAGE', policy: badTemplatePolicy, selection: { channelId: 'ch-img', model: 'm' }, box: {}, referenceAssets: refs });
+  await generationOptionsFor({ context: {}, modality: 'IMAGE', policy: badTemplatePolicy, selection: { channelId: 'ch-img', model: 'm' }, box: {}, referenceAssets: refs });
 } catch (error) { refused = error; }
 check('显式模板带不了参考图时 → 当场拒绝（不再静默出一张无关的图）',
   refused !== null && /GENERATION_REFERENCES_UNSUPPORTED|不能带参考图/.test(String(refused.message || refused.code || refused)),
   refused ? String(refused.code || refused.message) : '(没有报错，说明又被静默丢掉了)');
 
 const carriesPolicy = { channels: [{ id: 'ch-img', model: 'm', requestTemplates: { IMAGE: { model: '{{model}}', prompt: '{{prompt}}', images: '{{referenceImageUrls}}' } } }] };
-const carried = generationOptionsFor({ context: {}, modality: 'IMAGE', policy: carriesPolicy, selection: { channelId: 'ch-img', model: 'm' }, box: {}, referenceAssets: refs });
+const carried = await generationOptionsFor({ context: {}, modality: 'IMAGE', policy: carriesPolicy, selection: { channelId: 'ch-img', model: 'm' }, box: {}, referenceAssets: refs });
 check('模板能带参考时 → 参考进了 options.referenceAssets（这一层以前只有 VIDEO 分支设）',
   Array.isArray(carried.referenceAssets) && carried.referenceAssets.length === 1 && carried.referenceAssets[0].url === IMAGE_REF.url,
   JSON.stringify(carried.referenceAssets));
 
-const noRefs = generationOptionsFor({ context: {}, modality: 'IMAGE', policy: noTemplatePolicy, selection: { channelId: 'ch-img', model: 'zhenzhen-image-g-v2-lowprice' }, box: {}, referenceAssets: [] });
+const noRefs = await generationOptionsFor({ context: {}, modality: 'IMAGE', policy: noTemplatePolicy, selection: { channelId: 'ch-img', model: 'zhenzhen-image-g-v2-lowprice' }, box: {}, referenceAssets: [] });
 check('没连参考图时不做任何拦截（纯文生图照样能生成）', noRefs.referenceAssets === undefined);
 
 // 另一条静默丢法：素材库预置图 / 过期临时链接 / data: 地址都解析不出可公开访问的地址，
@@ -168,7 +168,7 @@ const videoChannel = {
     'MiniMax-H3': { aspectRatios: ['16:9', '9:16'], resolutions: ['480P'], durations: [5, 10, 15], audio: true, inputModes: ['TEXT', 'FIRST_FRAME', 'FIRST_LAST_FRAME', 'OMNI_REFERENCE'] },
   },
 };
-const videoOptions = generationOptionsFor({
+const videoOptions = await generationOptionsFor({
   context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] },
   selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF],
 });
@@ -201,7 +201,7 @@ const badVideoPolicy = {
 };
 let videoRefused = null;
 try {
-  generationOptionsFor({ context: {}, modality: 'VIDEO', policy: badVideoPolicy, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF] });
+  await generationOptionsFor({ context: {}, modality: 'VIDEO', policy: badVideoPolicy, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF] });
 } catch (error) { videoRefused = error; }
 check('⑤ 显式模板带不了参考时当场拒绝（不再静默出一段无关的视频）',
   videoRefused !== null && /GENERATION_REFERENCES_UNSUPPORTED|不能带参考素材/.test(String(videoRefused.message || videoRefused.code || videoRefused)),
@@ -265,19 +265,19 @@ check('⑤ 渲染出来的 2.5 请求体：resolution / size 在顶层、images 
 const { resolveReferenceAssets } = await import('../apps/server/src/routes/aiGeneration.js');
 const manyImages = Array.from({ length: 10 }, (_, index) => ({ type: 'IMAGE', url: `https://example.test/i${index}.png` }));
 let tooMany = null;
-try { resolveReferenceAssets('proj-none', manyImages); } catch (error) { tooMany = error; }
+try { await resolveReferenceAssets('proj-none', manyImages); } catch (error) { tooMany = error; }
 check('连了 10 张图片参考 → 明确报错（上限 9），不静默只发 9 张',
   tooMany?.code === 'GENERATION_REFERENCES_TOO_MANY' && /最多 9 张图片/.test(String(tooMany?.message || '')),
   String(tooMany?.message || '(没报错)'));
 const tooManyVideos = Array.from({ length: 4 }, (_, index) => ({ type: 'VIDEO', url: `https://example.test/v${index}.mp4` }));
 let tooManyVideo = null;
-try { resolveReferenceAssets('proj-none', tooManyVideos); } catch (error) { tooManyVideo = error; }
+try { await resolveReferenceAssets('proj-none', tooManyVideos); } catch (error) { tooManyVideo = error; }
 check('连了 4 段视频参考 → 明确报错（上限 3）',
   tooManyVideo?.code === 'GENERATION_REFERENCES_TOO_MANY' && /最多 3 段视频/.test(String(tooManyVideo?.message || '')),
   String(tooManyVideo?.message || '(没报错)'));
 // 9 张（没超上限）但一个都解析不出来 → 现在**当场报错**（口径：静默丢掉 = 出来一段与参考无关的作品）
 let allDropped = null;
-try { resolveReferenceAssets('proj-none', manyImages.slice(0, 9)); } catch (error) { allDropped = error; }
+try { await resolveReferenceAssets('proj-none', manyImages.slice(0, 9)); } catch (error) { allDropped = error; }
 check('9 张都在但一张都留不住 → 报 GENERATION_MEDIA_UNUSABLE（不再静默变成"没有输入"）',
   allDropped?.code === 'GENERATION_MEDIA_UNUSABLE' && /都不能发给 AI/.test(String(allDropped?.message || '')),
   String(allDropped?.message || '(没报错)'));
@@ -330,7 +330,7 @@ const pinnedAudioChannel = {
 };
 let pinnedRefused = null;
 try {
-  generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' }, box: {}, referenceAssets: [AUDIO_REF] });
+  await generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' }, box: {}, referenceAssets: [AUDIO_REF] });
 } catch (error) { pinnedRefused = error; }
 check('④ 模板把音轨钉成 native（且不当声音参考）+ 连了音频 → 当场拒绝并说清怎么改',
   pinnedRefused?.code === 'GENERATION_AUDIO_DRIVE_BLOCKED' && /audio_control/.test(String(pinnedRefused?.message || '')),
@@ -338,7 +338,7 @@ check('④ 模板把音轨钉成 native（且不当声音参考）+ 连了音频
 // 反向：同一份模板，但**没连音频** → 不许拦（钉 native 的课不至于整节课生成不了）
 let pinnedNoAudio = null;
 try {
-  pinnedNoAudio = generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF] });
+  pinnedNoAudio = await generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' }, box: {}, referenceAssets: [IMAGE_REF] });
 } catch (error) { pinnedNoAudio = error; }
 check('【反向自检】没连音频时那条拦截不生效（别把钉 native 的课整个拦住）',
   pinnedNoAudio !== null && !pinnedNoAudio.code && pinnedNoAudio.referenceAssets?.length === 1,
@@ -346,7 +346,7 @@ check('【反向自检】没连音频时那条拦截不生效（别把钉 native
 // 反向：模板本来就对（没有 audio_control = 迁移后的生产配置）→ 不许误拦
 let plainAudio = null;
 try {
-  plainAudio = generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] }, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [AUDIO_REF] });
+  plainAudio = await generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] }, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: {}, referenceAssets: [AUDIO_REF] });
 } catch (error) { plainAudio = error; }
 check('【反向自检】模板里没有 audio_control（迁移后的生产配置）→ 音频参考照常放行',
   plainAudio !== null && !plainAudio.code && plainAudio.referenceAssets?.[0]?.url === AUDIO_REF.url,
@@ -355,7 +355,7 @@ check('【反向自检】模板里没有 audio_control（迁移后的生产配�
 // （拦了就是把"只想借音色"的课整节挡住 —— 那是误伤，不是保护）
 let voiceRefPinned = null;
 try {
-  voiceRefPinned = generationOptionsFor({
+  voiceRefPinned = await generationOptionsFor({
     context: {}, modality: 'VIDEO', policy: { channels: [pinnedAudioChannel] }, selection: { channelId: 'ch-video-pinned', model: 'MiniMax-H3' },
     box: { audioRole: 'VOICE_REFERENCE' }, referenceAssets: [AUDIO_REF],
   });
@@ -366,7 +366,7 @@ check('【反向自检】锁成「声音参考」时那条拦截不生效（不�
 // 正面：锁成「对口型」时 options.audioRole 要真的带上（模板渲染靠它决定 role）
 let lipSyncOption = null;
 try {
-  lipSyncOption = generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] }, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: { audioRole: 'LIP_SYNC' }, referenceAssets: [AUDIO_REF] });
+  lipSyncOption = await generationOptionsFor({ context: {}, modality: 'VIDEO', policy: { channels: [videoChannel] }, selection: { channelId: 'ch-video', model: 'MiniMax-H3' }, box: { audioRole: 'LIP_SYNC' }, referenceAssets: [AUDIO_REF] });
 } catch (error) { lipSyncOption = error; }
 check('① 对口型：options.audioRole 传到渲染层（默认/留空也算对口型）',
   lipSyncOption?.audioRole === 'LIP_SYNC' && AUDIO_ROLES.includes('LIP_SYNC') && AUDIO_ROLES.includes('VOICE_REFERENCE'),

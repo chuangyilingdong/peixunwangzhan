@@ -57,7 +57,7 @@ seedDb.close();
 process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
 const { lessonSystemMessage } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
-const systemMessage = lessonSystemMessage({ lesson_id: lesson.id });
+const systemMessage = await lessonSystemMessage({ lesson_id: lesson.id });
 assert.equal(systemMessage.role, 'system', '应生成 system 消息');
 assert.ok(systemMessage.content.includes(lesson.title), 'system 上下文应含课时标题');
 assert.ok(systemMessage.content.includes('本课目标：用 AI 做出一个会动的小网页。'), 'system 上下文应含课时正文');

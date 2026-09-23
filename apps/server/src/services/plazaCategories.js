@@ -12,7 +12,7 @@
  * ⚠️ 公开接口（`routes/communication/public.js`）与后台（`routes/admin/works.js`）都读这里 ——
  *    两边各写一份的话，后台改完分类、广场却按另一套算，就会出现"后台显示 A、前端显示 B"。
  */
-import { row } from '../lib.js';
+import { row, arow } from '../lib.js';
 
 /** 两个分类的对外名字（前端直接用它渲染胶囊，别再各写一份中文）。 */
 export const PLAZA_CATEGORY_LABEL = { CANVAS: '画布作品', VIBECODING: 'VibeCoding作品' };
@@ -35,8 +35,8 @@ function parseJson(value, fallback) {
 }
 
 /** 后台配的那份（只认 CANVAS / VIBECODING 两个值，其它一律忽略，不猜）。 */
-export function configuredPlazaCategoryMap() {
-  const stored = parseJson(row('SELECT plaza_category_map FROM platform_settings WHERE id=1')?.plaza_category_map, {});
+export async function configuredPlazaCategoryMap() {
+  const stored = parseJson((await arow('SELECT plaza_category_map FROM platform_settings WHERE id=1'))?.plaza_category_map, {});
   const map = {};
   for (const [key, value] of Object.entries(stored || {})) {
     if (PLAZA_CATEGORIES.includes(value)) map[key] = value;
@@ -45,8 +45,8 @@ export function configuredPlazaCategoryMap() {
 }
 
 /** 实际生效的映射（默认表 + 后台覆盖），后台表单要拿它回显。 */
-export function plazaCategoryMap() {
-  return { ...DEFAULT_PLAZA_CATEGORY_MAP, ...configuredPlazaCategoryMap() };
+export async function plazaCategoryMap() {
+  return { ...DEFAULT_PLAZA_CATEGORY_MAP, ...await configuredPlazaCategoryMap() };
 }
 
 /**
@@ -55,12 +55,12 @@ export function plazaCategoryMap() {
  * @param input.workType 导入件的类型（video/webpage/…）
  * @param input.type 站内作品的来源标记（'VIBECODING' 或空）
  */
-export function plazaCategoryOf({ imported, workType, type }) {
+export async function plazaCategoryOf({ imported, workType, type }) {
   if (!imported) return type === 'VIBECODING' ? 'VIBECODING' : 'CANVAS';
-  return plazaCategoryMap()[workType] || 'CANVAS';
+  return (await plazaCategoryMap())[workType] || 'CANVAS';
 }
 
 /** 分类的中文名（前端直接用，别再各写一份）。 */
-export function plazaCategoryLabelOf(input) {
-  return PLAZA_CATEGORY_LABEL[plazaCategoryOf(input)] || '';
+export async function plazaCategoryLabelOf(input) {
+  return PLAZA_CATEGORY_LABEL[await plazaCategoryOf(input)] || '';
 }

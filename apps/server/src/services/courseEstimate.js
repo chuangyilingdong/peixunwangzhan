@@ -17,7 +17,7 @@
 //
 // 不在这里做的事：不做「每节课会用多少次」的用量预测。参考值只做**价目表折算**
 // （见 referenceFor），并把它用到的假设逐条写在 note 里。
-import { count, lessonCanvasConfig, parseJson, row, rows } from '../lib.js';
+import { count, lessonCanvasConfig, parseJson, row, rows, arow, arows, acount } from '../lib.js';
 import { normalizeModelUnitPrices, normalizeUpstreamUnitPrices, computeContractCost, resolveUnitPrice } from './upstreamCost.js';
 import { effectiveCapabilities, modalityChannel } from './modelCapabilities.js';
 
@@ -34,8 +34,8 @@ function perPerson(totalFen, students) {
 }
 
 /** 平台当前的 AI 供应商策略（只读）：渠道里的合同单价就是「当前价目表」。 */
-function providerPolicy() {
-  return parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
+async function providerPolicy() {
+  return parseJson((await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'))?.ai_provider_policy, {});
 }
 
 /**
@@ -49,7 +49,7 @@ function providerPolicy() {
  * 文本模型按 token 计价（分/百万 token），**无法折算成单次金额**：这类框体只列出单价、
  * 不计入 perPersonFen，并在 note 里说明。
  */
-function referenceFor(lessons, policy) {
+async function referenceFor(lessons, policy) {
   const boxes = [];
   const caveats = []; // 折算时做了哪些假设（例如按模型默认时长估）
   let perPersonFen = 0;
@@ -57,7 +57,7 @@ function referenceFor(lessons, policy) {
   let unpricedCalls = 0;
   let textCalls = 0;
   for (const lesson of lessons) {
-    const canvas = lessonCanvasConfig(lesson.id);
+    const canvas = await lessonCanvasConfig(lesson.id);
     for (const box of canvas.generationBoxes || []) {
       const modality = String(box.modality || '').toUpperCase();
       const channel = modalityChannel(policy, modality);
@@ -165,8 +165,8 @@ function textUnitPriceLabel(resolved) {
  * 该课包下真实发生的上游成本（按课时拆分），只认 `status='SUCCESS'` 的尝试。
  * 未知成本只计笔数，金额一侧永远只报**已知部分**（下界）。
  */
-function actualFor(seriesId) {
-  const attemptRows = rows(
+async function actualFor(seriesId) {
+  const attemptRows = await arows(
     `SELECT COALESCE(lesson.id, '') lesson_id,
             COALESCE(lesson.title, session.title, '未关联课时') lesson_title,
             COUNT(*) attempts,
@@ -183,7 +183,7 @@ function actualFor(seriesId) {
   );
   // 老课堂的用量没有 compute_attempts 那一行（P90 之前的记录）：金额同样「不知道」，
   // 只计笔数、不按 0 算 —— 与 computePool.classroomBudgetStatus 的历史用量口径一致。
-  const legacyRows = rows(
+  const legacyRows = (await arows(
     `SELECT COALESCE(lesson.id, '') lesson_id, COALESCE(lesson.title, session.title, '未关联课时') lesson_title, COUNT(*) legacy_calls
        FROM usage_records usage
        LEFT JOIN class_sessions session ON session.id = usage.class_session_id
@@ -193,7 +193,7 @@ function actualFor(seriesId) {
         AND NOT EXISTS (SELECT 1 FROM compute_attempts attempt WHERE attempt.call_id = usage.compute_call_id)
       GROUP BY COALESCE(lesson.id, ''), COALESCE(lesson.title, session.title, '未关联课时')`,
     [seriesId],
-  ).filter((item) => Number(item.legacy_calls || 0) > 0);
+  )).filter((item) => Number(item.legacy_calls || 0) > 0);
 
   const byLesson = new Map();
   const bucket = (lessonId) => {
@@ -228,8 +228,8 @@ function actualFor(seriesId) {
 }
 
 /** 「上过课的学生数」：以课堂名单为准（session_students），没有名单时才退回真实用过算力的人。 */
-function cohortFor(seriesId) {
-  const roster = Number(count(
+async function cohortFor(seriesId) {
+  const roster = Number(await acount(
     `SELECT COUNT(DISTINCT participant.student_id) n
        FROM session_students participant
        LEFT JOIN class_sessions session ON session.id = participant.session_id
@@ -238,7 +238,7 @@ function cohortFor(seriesId) {
         AND COALESCE(lesson.series_id, session.series_id, participant.series_id) = ?`,
     [seriesId],
   ) || 0);
-  const computeStudents = Number(count(
+  const computeStudents = Number(await acount(
     `SELECT COUNT(DISTINCT attempt.user_id) n
        FROM compute_attempts attempt
        LEFT JOIN class_sessions session ON session.id = attempt.class_session_id
@@ -257,13 +257,13 @@ function cohortFor(seriesId) {
  * 未知成本只计笔数：`actualTotalFen` / `actualPerPersonFen` 在成本没算全时是 `null`，
  * 已知部分另外给在 `actualKnownTotalFen` / `actualKnownPerPersonFen`（**下界**）里。
  */
-export function courseComputeEstimate(seriesId) {
-  const series = row('SELECT id,title,estimated_credits_per_person FROM course_series WHERE id=?', [seriesId]);
+export async function courseComputeEstimate(seriesId) {
+  const series = await arow('SELECT id,title,estimated_credits_per_person FROM course_series WHERE id=?', [seriesId]);
   if (!series) return null;
-  const lessons = rows('SELECT id,title,sort FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]);
+  const lessons = await arows('SELECT id,title,sort FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]);
   const estimatedPerPersonFen = Math.max(0, Math.round(Number(series.estimated_credits_per_person || 0)));
-  const actual = actualFor(seriesId);
-  const cohort = cohortFor(seriesId);
+  const actual = await actualFor(seriesId);
+  const cohort = await cohortFor(seriesId);
   const unknownCostCalls = actual.unknownCostAttempts + actual.uncostedLegacyCalls;
   const costComplete = unknownCostCalls === 0;
   const actualKnownTotalFen = actual.knownTotalFen;
@@ -273,7 +273,7 @@ export function courseComputeEstimate(seriesId) {
   // 超预估的判断用**已知下界**：已经超过就是真的超了（还有未知只会更多）。
   // 反过来（已知没超）不能断言没超 —— 面板靠 costComplete 说明这一点。
   const overEstimate = Boolean(estimatedPerPersonFen && cohort.studentCount && actualKnownPerPersonFen !== null && actualKnownPerPersonFen > estimatedPerPersonFen);
-  const reference = referenceFor(lessons, providerPolicy());
+  const reference = await referenceFor(lessons, await providerPolicy());
   return {
     seriesId: series.id,
     seriesTitle: series.title,

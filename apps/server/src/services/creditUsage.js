@@ -1,7 +1,7 @@
 // Successful usage is independent of student charges. Historical cost_fen remains untouched.
-import { id, json, nowIso, q, row } from '../lib.js';
+import { id, json, nowIso, q, row, arow, aq } from '../lib.js';
 
-export function recordAiUsage({
+export async function recordAiUsage({
   orgId, userId, projectId = null, sessionId = null, generationJobId = null,
   modality, model = 'local-p0', status, failCode = null, pricing = null,
   costFen = 0, seriesId = null, workId = null,
@@ -13,17 +13,17 @@ export function recordAiUsage({
   usage = null, usageSnapshot = null,
 }) {
   // Attribution is the original classroom's organization, never a browser-supplied key.
-  const session = sessionId ? row('SELECT org_id,lesson_id FROM class_sessions WHERE id=?', [sessionId]) : null;
+  const session = sessionId ? await arow('SELECT org_id,lesson_id FROM class_sessions WHERE id=?', [sessionId]) : null;
   orgId = session?.org_id || orgId;
   const reportedInput = usage?.inputTokens ?? inputTokens;
   const reportedOutput = usage?.outputTokens ?? outputTokens;
   if (pricing?.compute?.callId) {
     // COALESCE：provider 侧在成功分支已经写过用量证据，这里只补空、不覆盖。
-    q('UPDATE compute_attempts SET org_id=?,class_session_id=COALESCE(class_session_id,?),lesson_id=COALESCE(lesson_id,?),usage_snapshot=COALESCE(usage_snapshot,?) WHERE call_id=?',
+    await aq('UPDATE compute_attempts SET org_id=?,class_session_id=COALESCE(class_session_id,?),lesson_id=COALESCE(lesson_id,?),usage_snapshot=COALESCE(usage_snapshot,?) WHERE call_id=?',
       [orgId, sessionId, session?.lesson_id || null, usageSnapshot ? json(usageSnapshot) : null, pricing.compute.callId]);
   }
   const usageRecordId = id('usage');
-  q(
+  await aq(
     `INSERT INTO usage_records(
        id,org_id,user_id,class_session_id,project_id,generation_job_id,work_id,modality,model,credits_charged,status,fail_code,pricing_snapshot,cost_fen,series_id,input_tokens,output_tokens,created_at,compute_call_id
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -37,7 +37,7 @@ export function recordAiUsage({
     ],
   );
   if (pricing?.compute?.callId) {
-    q('UPDATE compute_attempts SET internal_usage_record_id=? WHERE call_id=?', [usageRecordId, pricing.compute.callId]);
+    await aq('UPDATE compute_attempts SET internal_usage_record_id=? WHERE call_id=?', [usageRecordId, pricing.compute.callId]);
   }
   // Late provider results remain in the ledger; ended classroom outcomes are frozen.
 }

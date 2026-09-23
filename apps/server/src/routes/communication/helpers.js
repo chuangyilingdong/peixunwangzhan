@@ -13,7 +13,7 @@ import {
   requireRole,
   row,
   rows,
-  transaction,
+  transaction, arows, aq, arow, atransaction,
 } from '../../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../../services/domainState.js';
@@ -143,7 +143,7 @@ function validateRoles(value, { defaultRoles = ['ORG_ADMIN', 'TEACHER', 'STUDENT
   return [...new Set(roles)];
 }
 
-function validateAudience(body) {
+async function validateAudience(body) {
   const audience = body?.audience || {};
   const scope = String(audience.scope || 'ALL_ORGS').toUpperCase();
   if (!NOTIFICATION_SCOPES.has(scope)) throw errors.badRequest('通知机构范围无效', 'INVALID_NOTIFICATION_SCOPE');
@@ -152,7 +152,7 @@ function validateAudience(body) {
   if (scope === 'ORG_IDS' && !orgIds.length) throw errors.badRequest('指定机构通知至少需要一个机构', 'NOTIFICATION_ORGS_REQUIRED');
   if (scope === 'ORG_IDS') {
     const placeholders = orgIds.map(() => '?').join(',');
-    const existing = rows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, orgIds).map((item) => item.id);
+    const existing = (await arows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, orgIds)).map((item) => item.id);
     if (existing.length !== orgIds.length) throw errors.badRequest('通知目标机构不存在', 'INVALID_NOTIFICATION_ORG');
   }
   return { scope, roles, orgIds };
@@ -173,7 +173,7 @@ function scheduledPublishAt(value, fallback = null) {
   return date.toISOString();
 }
 
-function notificationRecipients(notificationId, scopeType, notificationOrgId, audience, eventKey) {
+async function notificationRecipients(notificationId, scopeType, notificationOrgId, audience, eventKey) {
   const params = [...audience.roles];
   let where = `u.status='ACTIVE' AND u.deleted_at IS NULL AND u.role IN (${audience.roles.map(() => '?').join(',')})`;
   if (scopeType === 'ORG') {
@@ -185,30 +185,30 @@ function notificationRecipients(notificationId, scopeType, notificationOrgId, au
   } else {
     where += ' AND u.org_id IS NOT NULL';
   }
-  const targets = rows(`SELECT u.id FROM users u WHERE ${where}`, params);
+  const targets = await arows(`SELECT u.id FROM users u WHERE ${where}`, params);
   const targetIds = targets.map((target) => target.id);
   if (targetIds.length) {
-    q(`DELETE FROM notification_recipients WHERE notification_id=? AND user_id NOT IN (${targetIds.map(() => '?').join(',')})`, [notificationId, ...targetIds]);
+    await aq(`DELETE FROM notification_recipients WHERE notification_id=? AND user_id NOT IN (${targetIds.map(() => '?').join(',')})`, [notificationId, ...targetIds]);
   } else {
-    q('DELETE FROM notification_recipients WHERE notification_id=?', [notificationId]);
+    await aq('DELETE FROM notification_recipients WHERE notification_id=?', [notificationId]);
   }
   const now = nowIso();
-  targets.forEach((target) => {
-    q('INSERT OR IGNORE INTO notification_recipients(id,notification_id,user_id,event_key,delivery_status,delivered_at,created_at) VALUES (?,?,?,?,?,?,?)', [id('nrec'), notificationId, target.id, eventKey || null, 'DELIVERED', now, now]);
-  });
+  for (const target of targets) {
+    await aq('INSERT OR IGNORE INTO notification_recipients(id,notification_id,user_id,event_key,delivery_status,delivered_at,created_at) VALUES (?,?,?,?,?,?,?)', [id('nrec'), notificationId, target.id, eventKey || null, 'DELIVERED', now, now]);
+  };
   return targets.length;
 }
 
 // 事件去重：在事件抑制窗口内已存在同 event_key + user 的成功或待发投递则跳过；返回 { suppressed, delivered, failed }
-function dispatchRecipientEvent({ userId, notificationId, eventKey, maxRetries }) {
+async function dispatchRecipientEvent({ userId, notificationId, eventKey, maxRetries }) {
   if (eventKey) {
-    const prior = row("SELECT id, delivery_status, ignored FROM notification_recipients WHERE event_key=? AND user_id=? AND ignored=0 ORDER BY created_at DESC LIMIT 1", [eventKey, userId]);
+    const prior = await arow("SELECT id, delivery_status, ignored FROM notification_recipients WHERE event_key=? AND user_id=? AND ignored=0 ORDER BY created_at DESC LIMIT 1", [eventKey, userId]);
     if (prior && (prior.delivery_status === 'DELIVERED' || prior.delivery_status === 'PENDING')) {
       return { suppressed: true, reason: 'event_dedup' };
     }
   }
   const now = nowIso();
-  q('INSERT OR REPLACE INTO notification_recipients(id,notification_id,user_id,event_key,delivery_status,delivered_at,retry_count,max_retries,created_at) VALUES (?,?,?,?,?,?,?,?,?)', [id('nrec'), notificationId, userId, eventKey || null, 'DELIVERED', now, 0, maxRetries || 3, now]);
+  await aq('INSERT OR REPLACE INTO notification_recipients(id,notification_id,user_id,event_key,delivery_status,delivered_at,retry_count,max_retries,created_at) VALUES (?,?,?,?,?,?,?,?,?)', [id('nrec'), notificationId, userId, eventKey || null, 'DELIVERED', now, 0, maxRetries || 3, now]);
   return { suppressed: false, delivered: true };
 }
 
@@ -227,14 +227,14 @@ function dispatchRecipientEvent({ userId, notificationId, eventKey, maxRetries }
  * @param {string|null} [opts.targetUrl]    - 点击跳转 URL
  * @returns {{ notificationId: string|null, recipientId: string|null, suppressed: boolean, reason?: string }}
  */
-export function scheduleReminder({ title, body, kind = 'REMINDER', targetUserId, targetOrgId = null, eventKey = null, targetUrl = null }) {
+export async function scheduleReminder({ title, body, kind = 'REMINDER', targetUserId, targetOrgId = null, eventKey = null, targetUrl = null }) {
   // 1. 验证用户存在
-  const user = row('SELECT id, org_id, status FROM users WHERE id=? AND deleted_at IS NULL', [targetUserId]);
+  const user = await arow('SELECT id, org_id, status FROM users WHERE id=? AND deleted_at IS NULL', [targetUserId]);
   if (!user || user.status !== 'ACTIVE') return { notificationId: null, recipientId: null, suppressed: false, reason: 'USER_NOT_FOUND_OR_DISABLED' };
   const orgId = targetOrgId || user.org_id;
   // 2. 去重检查（24h 内同类事件不重复投递）
   if (eventKey) {
-    const prior = row(
+    const prior = await arow(
       "SELECT id FROM notification_recipients WHERE event_key=? AND user_id=? AND delivery_status='DELIVERED' AND created_at>=? ORDER BY created_at DESC LIMIT 1",
       [eventKey, targetUserId, new Date(Date.now() - 24 * 3600 * 1000).toISOString()],
     );
@@ -244,23 +244,23 @@ export function scheduleReminder({ title, body, kind = 'REMINDER', targetUserId,
   const now = nowIso();
   const notificationId = id('noti');
   const scopeType = orgId ? 'ORG' : 'PLATFORM';
-  q(
+  await aq(
     "INSERT INTO notifications(id,scope_type,org_id,sender_id,title,body,kind,target_url,audience,status,publish_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
     [notificationId, scopeType, orgId || null, targetUserId, String(title).slice(0, 200), String(body).slice(0, 1000), kind, targetUrl || null, '{}', 'PUBLISHED', now, now, now],
   );
   // 4. 复用 dispatchRecipientEvent 写 recipients，再查 recipientId
-  dispatchRecipientEvent({ userId: targetUserId, notificationId, eventKey, maxRetries: 3 });
-  const recipient = row('SELECT id FROM notification_recipients WHERE notification_id=? AND user_id=?', [notificationId, targetUserId]);
+  await dispatchRecipientEvent({ userId: targetUserId, notificationId, eventKey, maxRetries: 3 });
+  const recipient = await arow('SELECT id FROM notification_recipients WHERE notification_id=? AND user_id=?', [notificationId, targetUserId]);
   return { notificationId, recipientId: recipient?.id || null, suppressed: false };
 }
 
-function markRecipientFailed(recipientId, code, reason) {
+async function markRecipientFailed(recipientId, code, reason) {
   const now = nowIso();
-  q('UPDATE notification_recipients SET delivery_status=\'FAILED\', failure_code=?, failure_reason=?, delivered_at=NULL WHERE id=?', [code || 'UNKNOWN', reason || code || '投递失败', recipientId]);
+  await aq('UPDATE notification_recipients SET delivery_status=\'FAILED\', failure_code=?, failure_reason=?, delivered_at=NULL WHERE id=?', [code || 'UNKNOWN', reason || code || '投递失败', recipientId]);
   // 自动入队：同一接收人已有活跃 job 时跳过
-  const recipient = row('SELECT * FROM notification_recipients WHERE id=?', [recipientId]);
+  const recipient = await arow('SELECT * FROM notification_recipients WHERE id=?', [recipientId]);
   if (recipient) {
-    enqueueDispatchJob({
+    await enqueueDispatchJob({
       recipientId,
       notificationId: recipient.notification_id,
       userId: recipient.user_id,
@@ -270,14 +270,14 @@ function markRecipientFailed(recipientId, code, reason) {
   }
 }
 
-export function retryRecipient(recipientId) {
+export async function retryRecipient(recipientId) {
   const now = nowIso();
-  const row1 = row('SELECT retry_count, max_retries, notification_id, user_id, event_key FROM notification_recipients WHERE id=?', [recipientId]);
+  const row1 = await arow('SELECT retry_count, max_retries, notification_id, user_id, event_key FROM notification_recipients WHERE id=?', [recipientId]);
   if (!row1) return { retried: false, reason: 'NOT_FOUND' };
   if (row1.retry_count >= row1.max_retries) return { retried: false, reason: 'MAX_RETRIES_EXCEEDED' };
-  q('UPDATE notification_recipients SET delivery_status=\'DELIVERED\', failure_code=NULL, failure_reason=NULL, delivered_at=?, retry_count=retry_count+1 WHERE id=?', [now, recipientId]);
+  await aq('UPDATE notification_recipients SET delivery_status=\'DELIVERED\', failure_code=NULL, failure_reason=NULL, delivered_at=?, retry_count=retry_count+1 WHERE id=?', [now, recipientId]);
   // 自动入队：让 worker 真正执行重试投递
-  enqueueDispatchJob({
+  await enqueueDispatchJob({
     recipientId,
     notificationId: row1.notification_id,
     userId: row1.user_id,
@@ -294,12 +294,12 @@ const WORKER_ID = `${process.pid}-${hostname().slice(0, 16)}`;
  * 将失败接收人入队（幂等 UPSERT），同一 recipient_id 在 PENDING/IN_PROGRESS 时不重复入队。
  * 在 markRecipientFailed 内部事务中调用，或手动重试时调用。
  */
-export function enqueueDispatchJob({ recipientId, notificationId, userId, eventKey, maxAttempts = 3 }) {
+export async function enqueueDispatchJob({ recipientId, notificationId, userId, eventKey, maxAttempts = 3 }) {
   const now = nowIso();
-  const existing = row("SELECT id, status FROM notification_dispatch_jobs WHERE recipient_id=? AND status IN ('PENDING','IN_PROGRESS')", [recipientId]);
+  const existing = await arow("SELECT id, status FROM notification_dispatch_jobs WHERE recipient_id=? AND status IN ('PENDING','IN_PROGRESS')", [recipientId]);
   if (existing) return { enqueued: false, reason: 'ALREADY_ACTIVE', jobId: existing.id };
   const jobId = id('ndj');
-  q(
+  await aq(
     "INSERT INTO notification_dispatch_jobs(id,recipient_id,notification_id,user_id,event_key,attempt,max_attempts,status,next_run_at,created_at,updated_at) VALUES (?,?,?,?,?,0,?,?,?,?,?)",
     [jobId, recipientId, notificationId, userId, eventKey || null, maxAttempts, 'PENDING', now, now, now],
   );
@@ -322,52 +322,52 @@ function backoffSeconds(attempt) {
  * @param {number} limit - 每次最多拉取任务数
  * @returns {Array} claimed jobs
  */
-function claimDispatchJobs(workerId, limit = 10) {
+async function claimDispatchJobs(workerId, limit = 10) {
   const now = nowIso();
   // 原子：在同一事务内查找并锁定，避免多 worker 重复拉取
-  const candidates = rows(
+  const candidates = await arows(
     "SELECT * FROM notification_dispatch_jobs WHERE status='PENDING' AND next_run_at<=? ORDER BY next_run_at ASC LIMIT ?",
     [now, limit],
   );
   if (!candidates.length) return [];
   const ids = candidates.map((r) => r.id);
   const placeholders = ids.map(() => '?').join(',');
-  q(
+  await aq(
     `UPDATE notification_dispatch_jobs SET status='IN_PROGRESS',locked_by=?,locked_at=?,updated_at=? WHERE id IN (${placeholders}) AND status='PENDING'`,
     [workerId, now, now, ...ids],
   );
   // 返回真正被锁定的行（并发时可能部分失败）
-  return rows("SELECT * FROM notification_dispatch_jobs WHERE locked_by=? AND locked_at=? AND status='IN_PROGRESS'", [workerId, now]);
+  return await arows("SELECT * FROM notification_dispatch_jobs WHERE locked_by=? AND locked_at=? AND status='IN_PROGRESS'", [workerId, now]);
 }
 
 /**
  * 投递任务成功：标记 job 为 SUCCEEDED，清除 recipient 的 FAILED 状态。
  */
-function markJobSucceeded(jobId, workerId) {
+async function markJobSucceeded(jobId, workerId) {
   const now = nowIso();
-  const job = row('SELECT * FROM notification_dispatch_jobs WHERE id=? AND locked_by=? AND status=?', [jobId, workerId, 'IN_PROGRESS']);
+  const job = await arow('SELECT * FROM notification_dispatch_jobs WHERE id=? AND locked_by=? AND status=?', [jobId, workerId, 'IN_PROGRESS']);
   if (!job) return { succeeded: false, reason: 'NOT_FOUND_OR_NOT_LOCKED' };
-  q("UPDATE notification_dispatch_jobs SET status='SUCCEEDED',locked_by=NULL,locked_at=NULL,updated_at=? WHERE id=?", [now, jobId]);
-  q("UPDATE notification_recipients SET delivery_status='DELIVERED',failure_code=NULL,failure_reason=NULL,delivered_at=?,retry_count=? WHERE id=?", [now, job.attempt + 1, job.recipient_id]);
+  await aq("UPDATE notification_dispatch_jobs SET status='SUCCEEDED',locked_by=NULL,locked_at=NULL,updated_at=? WHERE id=?", [now, jobId]);
+  await aq("UPDATE notification_recipients SET delivery_status='DELIVERED',failure_code=NULL,failure_reason=NULL,delivered_at=?,retry_count=? WHERE id=?", [now, job.attempt + 1, job.recipient_id]);
   return { succeeded: true, jobId: job.id };
 }
 
 /**
  * 投递任务失败：按指数退避重排或进入死信。
  */
-function markJobFailed(jobId, workerId, errorCode, errorMessage) {
+async function markJobFailed(jobId, workerId, errorCode, errorMessage) {
   const now = nowIso();
-  const job = row('SELECT * FROM notification_dispatch_jobs WHERE id=? AND locked_by=? AND status=?', [jobId, workerId, 'IN_PROGRESS']);
+  const job = await arow('SELECT * FROM notification_dispatch_jobs WHERE id=? AND locked_by=? AND status=?', [jobId, workerId, 'IN_PROGRESS']);
   if (!job) return { failed: false, reason: 'NOT_FOUND_OR_NOT_LOCKED' };
   const nextAttempt = job.attempt + 1;
   const nextRunAt = new Date(Date.now() + backoffSeconds(nextAttempt) * 1000).toISOString();
   if (nextAttempt >= job.max_attempts) {
-    assertTransition(null, 'notificationDispatchJob', job.status, 'DEAD_LETTER', { targetType: 'NOTIFICATION_DISPATCH_JOB', targetId: jobId, before: job, details: { errorCode } });
-    q("UPDATE notification_dispatch_jobs SET status='DEAD_LETTER',locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,updated_at=? WHERE id=?", [errorCode || 'MAX_RETRIES', errorMessage || '已达到最大重试次数', now, jobId]);
+    await assertTransition(null, 'notificationDispatchJob', job.status, 'DEAD_LETTER', { targetType: 'NOTIFICATION_DISPATCH_JOB', targetId: jobId, before: job, details: { errorCode } });
+    await aq("UPDATE notification_dispatch_jobs SET status='DEAD_LETTER',locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,updated_at=? WHERE id=?", [errorCode || 'MAX_RETRIES', errorMessage || '已达到最大重试次数', now, jobId]);
     return { failed: true, jobId: job.id, status: 'DEAD_LETTER' };
   }
-  assertTransition(null, 'notificationDispatchJob', job.status, 'PENDING', { targetType: 'NOTIFICATION_DISPATCH_JOB', targetId: jobId, before: job, details: { errorCode } });
-  q("UPDATE notification_dispatch_jobs SET status='PENDING',attempt=?,locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,next_run_at=?,updated_at=? WHERE id=?", [nextAttempt, errorCode || 'UNKNOWN', errorMessage || '投递失败', nextRunAt, now, jobId]);
+  await assertTransition(null, 'notificationDispatchJob', job.status, 'PENDING', { targetType: 'NOTIFICATION_DISPATCH_JOB', targetId: jobId, before: job, details: { errorCode } });
+  await aq("UPDATE notification_dispatch_jobs SET status='PENDING',attempt=?,locked_by=NULL,locked_at=NULL,last_error_code=?,last_error_message=?,next_run_at=?,updated_at=? WHERE id=?", [nextAttempt, errorCode || 'UNKNOWN', errorMessage || '投递失败', nextRunAt, now, jobId]);
   return { failed: true, jobId: job.id, status: 'PENDING', nextRunAt, attempt: nextAttempt };
 }
 
@@ -375,33 +375,33 @@ function markJobFailed(jobId, workerId, errorCode, errorMessage) {
  * 单次 worker 扫描：拉取任务 → 评估是否可投递 → 成功或失败。
  * 在当前实现中，「投递」本质上是清除 FAILED 状态；若无法投递（如用户已删除），标记失败。
  */
-function runWorkerTick(workerId) {
-  const claimed = claimDispatchJobs(workerId, 10);
+async function runWorkerTick(workerId) {
+  const claimed = await claimDispatchJobs(workerId, 10);
   if (!claimed.length) return { processed: 0 };
   let succeeded = 0; let failed = 0;
   for (const job of claimed) {
     // 检查关联 recipient 是否仍然存在且未被忽略
-    const recipient = row('SELECT * FROM notification_recipients WHERE id=?', [job.recipient_id]);
+    const recipient = await arow('SELECT * FROM notification_recipients WHERE id=?', [job.recipient_id]);
     if (!recipient || recipient.ignored) {
       // 接收人已不存在或被忽略：直接成功（无需投递）
-      markJobSucceeded(job.id, workerId);
+      await markJobSucceeded(job.id, workerId);
       succeeded += 1;
       continue;
     }
     if (recipient.delivery_status !== 'FAILED') {
       // 状态不是 FAILED，说明已被其他路径处理（如手动重试成功），标记成功
-      markJobSucceeded(job.id, workerId);
+      await markJobSucceeded(job.id, workerId);
       succeeded += 1;
       continue;
     }
     // 尝试重新投递：更新为 DELIVERED
     const now = nowIso();
-    const upd = q("UPDATE notification_recipients SET delivery_status='DELIVERED',failure_code=NULL,failure_reason=NULL,delivered_at=?,retry_count=? WHERE id=? AND delivery_status='FAILED'", [now, job.attempt + 1, job.recipient_id]);
+    const upd = await aq("UPDATE notification_recipients SET delivery_status='DELIVERED',failure_code=NULL,failure_reason=NULL,delivered_at=?,retry_count=? WHERE id=? AND delivery_status='FAILED'", [now, job.attempt + 1, job.recipient_id]);
     if (upd.changes) {
-      markJobSucceeded(job.id, workerId);
+      await markJobSucceeded(job.id, workerId);
       succeeded += 1;
     } else {
-      markJobFailed(job.id, workerId, 'REDELIVERY_FAILED', '无法更新接收人状态');
+      await markJobFailed(job.id, workerId, 'REDELIVERY_FAILED', '无法更新接收人状态');
       failed += 1;
     }
   }
@@ -411,37 +411,37 @@ function runWorkerTick(workerId) {
 /**
  * 释放通知 worker 持有的任务并停止调度器，供服务入口优雅退出时调用。
  */
-export function shutdownCommunicationWorkers() {
+export async function shutdownCommunicationWorkers() {
   if (workerInterval) { clearInterval(workerInterval); workerInterval = null; }
   if (reminderInterval) { clearInterval(reminderInterval); reminderInterval = null; }
-  releaseWorkerJobs(WORKER_ID);
+  await releaseWorkerJobs(WORKER_ID);
 }
 
-export function releaseWorkerJobs(workerId) {
+export async function releaseWorkerJobs(workerId) {
   const now = nowIso();
-  q("UPDATE notification_dispatch_jobs SET status='PENDING',locked_by=NULL,locked_at=NULL,updated_at=? WHERE locked_by=? AND status='IN_PROGRESS'", [now, workerId]);
+  await aq("UPDATE notification_dispatch_jobs SET status='PENDING',locked_by=NULL,locked_at=NULL,updated_at=? WHERE locked_by=? AND status='IN_PROGRESS'", [now, workerId]);
 }
 
 /**
  * 汇总队列状态（供 summary 端点使用）。
  */
-export function summarizeQueue() {
-  const pending = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='PENDING'")?.n || 0);
-  const inProgress = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='IN_PROGRESS'")?.n || 0);
-  const failed = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='FAILED'")?.n || 0);
-  const deadLetter = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='DEAD_LETTER'")?.n || 0);
-  const succeeded = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='SUCCEEDED'")?.n || 0);
+export async function summarizeQueue() {
+  const pending = Number((await arow("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='PENDING'"))?.n || 0);
+  const inProgress = Number((await arow("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='IN_PROGRESS'"))?.n || 0);
+  const failed = Number((await arow("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='FAILED'"))?.n || 0);
+  const deadLetter = Number((await arow("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='DEAD_LETTER'"))?.n || 0);
+  const succeeded = Number((await arow("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='SUCCEEDED'"))?.n || 0);
   const total = pending + inProgress + failed + deadLetter + succeeded;
-  const byStatus = rows("SELECT status, COUNT(*) n FROM notification_dispatch_jobs GROUP BY status").map((item) => ({ status: item.status, count: Number(item.n) }));
+  const byStatus = (await arows("SELECT status, COUNT(*) n FROM notification_dispatch_jobs GROUP BY status")).map((item) => ({ status: item.status, count: Number(item.n) }));
   return { total, pending, inProgress, failed, deadLetter, succeeded, byStatus };
 }
 
 /**
  * 列出死信（供 dead-letters 端点使用）。
  */
-function listDeadLetters({ limit = 50, offset = 0 }) {
-  const items = rows("SELECT j.*, n.title, n.body, u.display_name user_name, u.login user_login FROM notification_dispatch_jobs j LEFT JOIN notifications n ON n.id=j.notification_id LEFT JOIN users u ON u.id=j.user_id WHERE j.status='DEAD_LETTER' ORDER BY j.updated_at DESC LIMIT ? OFFSET ?", [limit, offset]);
-  const total = Number(row("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='DEAD_LETTER'")?.n || 0);
+async function listDeadLetters({ limit = 50, offset = 0 }) {
+  const items = await arows("SELECT j.*, n.title, n.body, u.display_name user_name, u.login user_login FROM notification_dispatch_jobs j LEFT JOIN notifications n ON n.id=j.notification_id LEFT JOIN users u ON u.id=j.user_id WHERE j.status='DEAD_LETTER' ORDER BY j.updated_at DESC LIMIT ? OFFSET ?", [limit, offset]);
+  const total = Number((await arow("SELECT COUNT(*) n FROM notification_dispatch_jobs WHERE status='DEAD_LETTER'"))?.n || 0);
   return {
     items: items.map((item) => ({
       id: item.id,
@@ -470,15 +470,15 @@ function listDeadLetters({ limit = 50, offset = 0 }) {
 /**
  * 恢复死信（批量重新入队，供 requeue 端点使用）。
  */
-export function requeueDeadLetters(jobIds, reason) {
+export async function requeueDeadLetters(jobIds, reason) {
   const now = nowIso();
   const nextRunAt = now; // 立即可执行
   let requeued = 0; let skipped = 0;
   for (const jid of jobIds) {
-    const job = row("SELECT * FROM notification_dispatch_jobs WHERE id=? AND status='DEAD_LETTER'", [jid]);
+    const job = await arow("SELECT * FROM notification_dispatch_jobs WHERE id=? AND status='DEAD_LETTER'", [jid]);
     if (!job) { skipped += 1; continue; }
     // 重置 attempt 和 max_attempts，让其重新走完整重试流程
-    q("UPDATE notification_dispatch_jobs SET status='PENDING',attempt=0,last_error_code=NULL,last_error_message=NULL,next_run_at=?,updated_at=? WHERE id=?", [nextRunAt, now, jid]);
+    await aq("UPDATE notification_dispatch_jobs SET status='PENDING',attempt=0,last_error_code=NULL,last_error_message=NULL,next_run_at=?,updated_at=? WHERE id=?", [nextRunAt, now, jid]);
     requeued += 1;
   }
   return { requeued, skipped };
@@ -491,13 +491,13 @@ let workerStarted = false;
 export function startNotificationWorker() {
   if (workerStarted) return;
   workerStarted = true;
-  workerInterval = setInterval(() => {
-    try { runWorkerTick(WORKER_ID); }
+  workerInterval = setInterval(async () => {
+    try { await runWorkerTick(WORKER_ID); }
     catch (error) { console.error('[NOTIFICATION WORKER ERROR]', error); }
   }, 5000);
   workerInterval.unref();
   // 进程退出时释放持有的任务；服务入口收到终止信号后统一关闭 HTTP server 并退出。
-  process.on('exit', () => releaseWorkerJobs(WORKER_ID));
+  process.on('exit', async () => await releaseWorkerJobs(WORKER_ID));
 }
 
 // 顶层副作用：模块加载即启动 worker
@@ -513,9 +513,9 @@ let reminderStarted = false;
 export function startReminderScheduler() {
   if (reminderStarted) return;
   reminderStarted = true;
-  reminderInterval = setInterval(() => {
+  reminderInterval = setInterval(async () => {
     try {
-      const exp = scanContractExpiryOrgs();
+      const exp = await scanContractExpiryOrgs();
       if (exp.length) {
         console.log(`[REMINDER SCAN] contract_expiry=${exp.length}`);
       }
@@ -526,43 +526,43 @@ export function startReminderScheduler() {
 
 startReminderScheduler();
 
-function selectAudienceUsers(audience, orgId) {
+async function selectAudienceUsers(audience, orgId) {
   const params = [...audience.roles];
   let where = `u.status='ACTIVE' AND u.deleted_at IS NULL AND u.role IN (${audience.roles.map(() => '?').join(',')})`;
   if (orgId) { where += ' AND u.org_id=?'; params.push(orgId); }
   else if (audience.scope === 'ORG_IDS') { where += ` AND u.org_id IN (${audience.orgIds.map(() => '?').join(',')})`; params.push(...audience.orgIds); }
   else { where += ' AND u.org_id IS NOT NULL'; }
-  return rows(`SELECT u.id FROM users u WHERE ${where}`, params);
+  return await arows(`SELECT u.id FROM users u WHERE ${where}`, params);
 }
 
-export function dispatchDueNotifications() {
+export async function dispatchDueNotifications() {
   const now = nowIso();
-  const due = rows("SELECT * FROM notifications WHERE status='DRAFT' AND publish_at IS NOT NULL AND publish_at<=? ORDER BY publish_at ASC LIMIT 100", [now]);
+  const due = await arows("SELECT * FROM notifications WHERE status='DRAFT' AND publish_at IS NOT NULL AND publish_at<=? ORDER BY publish_at ASC LIMIT 100", [now]);
   if (!due.length) return 0;
   let published = 0;
-  transaction(() => {
-    due.forEach((notification) => {
-      assertTransition(null, 'notification', notification.status, 'PUBLISHED', { targetType: 'NOTIFICATION', targetId: notification.id, before: notification, details: { action: 'SCHEDULED_PUBLISH' } });
-      const result = q("UPDATE notifications SET status='PUBLISHED',updated_at=? WHERE id=? AND status='DRAFT' AND publish_at IS NOT NULL AND publish_at<=?", [now, notification.id, now]);
+  await atransaction(async () => {
+    for (const notification of due) {
+      await assertTransition(null, 'notification', notification.status, 'PUBLISHED', { targetType: 'NOTIFICATION', targetId: notification.id, before: notification, details: { action: 'SCHEDULED_PUBLISH' } });
+      const result = await aq("UPDATE notifications SET status='PUBLISHED',updated_at=? WHERE id=? AND status='DRAFT' AND publish_at IS NOT NULL AND publish_at<=?", [now, notification.id, now]);
       if (!result.changes) return;
       const audience = parseJson(notification.audience, {});
-      const recipientCount = notificationRecipients(notification.id, notification.scope_type, notification.org_id, audience);
-      const sender = row('SELECT role,org_id FROM users WHERE id=?', [notification.sender_id]);
-      q(`INSERT INTO audit_logs(id,org_id,actor_id,actor_role,action,target_type,target_id,request_method,request_path,before_data,after_data,ip,created_at)
+      const recipientCount = await notificationRecipients(notification.id, notification.scope_type, notification.org_id, audience);
+      const sender = await arow('SELECT role,org_id FROM users WHERE id=?', [notification.sender_id]);
+      await aq(`INSERT INTO audit_logs(id,org_id,actor_id,actor_role,action,target_type,target_id,request_method,request_path,before_data,after_data,ip,created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id('audit'), sender?.org_id || null, notification.sender_id, sender?.role || null, 'NOTIFICATION_SCHEDULED_PUBLISH', 'NOTIFICATION', notification.id, 'SYSTEM', '/internal/notification-scheduler', json({ status: 'SCHEDULED' }), json({ status: 'PUBLISHED', recipientCount }), null, now]);
       published += 1;
-    });
+    };
   });
   return published;
 }
 
-const scheduler = setInterval(() => {
-  try { dispatchDueNotifications(); }
+const scheduler = setInterval(async () => {
+  try { await dispatchDueNotifications(); }
   catch (error) { console.error('[NOTIFICATION SCHEDULER ERROR]', error); }
 }, 15000);
 scheduler.unref();
 
-function notificationAdminRows({ search = '', status = '', page = 1, limit = 20, sort = 'created' } = {}) {
+async function notificationAdminRows({ search = '', status = '', page = 1, limit = 20, sort = 'created' } = {}) {
   const conditions = ["n.scope_type='PLATFORM'"]; const params = [];
   if (search) { conditions.push('(n.title LIKE ? OR n.body LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
   if (status && ['DRAFT', 'PUBLISHED', 'SCHEDULED', 'RECALLED'].includes(status)) {
@@ -577,9 +577,9 @@ function notificationAdminRows({ search = '', status = '', page = 1, limit = 20,
     pinned: 'n.pinned DESC, COALESCE(n.publish_at,n.created_at) DESC',
   }[sort] || 'n.created_at DESC';
   const where = conditions.join(' AND ');
-  const total = Number(row(`SELECT COUNT(*) n FROM notifications n WHERE ${where}`, params)?.n || 0);
+  const total = Number((await arow(`SELECT COUNT(*) n FROM notifications n WHERE ${where}`, params))?.n || 0);
   const offset = (page - 1) * limit;
-  const items = rows(`
+  const items = (await arows(`
     SELECT n.*, sender.display_name sender_name,
       (SELECT COUNT(*) FROM notification_recipients recipient WHERE recipient.notification_id=n.id) recipient_count,
       (SELECT COUNT(*) FROM notification_recipients recipient WHERE recipient.notification_id=n.id AND recipient.read_at IS NULL AND recipient.delivery_status='DELIVERED') unread_count,
@@ -589,12 +589,12 @@ function notificationAdminRows({ search = '', status = '', page = 1, limit = 20,
     WHERE ${where}
     ORDER BY ${orderBy}
     LIMIT ? OFFSET ?
-  `, [...params, limit, offset]).map(normalizeNotification);
+  `, [...params, limit, offset])).map(normalizeNotification);
   return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
 }
 
-function notificationRecipientRows(currentOrgId, userId) {
-  return rows(`
+async function notificationRecipientRows(currentOrgId, userId) {
+  return (await arows(`
     SELECT n.*, sender.display_name sender_name, recipient.read_at, recipient.delivery_status
     FROM notification_recipients recipient
     JOIN notifications n ON n.id=recipient.notification_id
@@ -604,37 +604,37 @@ function notificationRecipientRows(currentOrgId, userId) {
       AND ((n.scope_type='ORG' AND n.org_id=?) OR n.scope_type='PLATFORM')
     ORDER BY n.pinned DESC, COALESCE(n.publish_at,n.created_at) DESC
     LIMIT 200
-  `, [userId, nowIso(), currentOrgId]).map(normalizeNotification);
+  `, [userId, nowIso(), currentOrgId])).map(normalizeNotification);
 }
 
-function markNotificationRead(ctx, currentOrgId, notificationId, userId) {
-  const result = q("UPDATE notification_recipients SET read_at=COALESCE(read_at,?) WHERE notification_id=? AND user_id=? AND delivery_status='DELIVERED' AND EXISTS (SELECT 1 FROM notifications n WHERE n.id=notification_recipients.notification_id AND n.status='PUBLISHED' AND (n.scope_type='PLATFORM' OR n.org_id=?))", [nowIso(), notificationId, userId, currentOrgId]);
+async function markNotificationRead(ctx, currentOrgId, notificationId, userId) {
+  const result = await aq("UPDATE notification_recipients SET read_at=COALESCE(read_at,?) WHERE notification_id=? AND user_id=? AND delivery_status='DELIVERED' AND EXISTS (SELECT 1 FROM notifications n WHERE n.id=notification_recipients.notification_id AND n.status='PUBLISHED' AND (n.scope_type='PLATFORM' OR n.org_id=?))", [nowIso(), notificationId, userId, currentOrgId]);
   if (!result.changes) throw errors.notFound('通知不存在或不属于当前账号', 'NOTIFICATION_NOT_FOUND');
-  audit(ctx, 'NOTIFICATION_READ', 'NOTIFICATION', notificationId);
+  await audit(ctx, 'NOTIFICATION_READ', 'NOTIFICATION', notificationId);
   return { read: true };
 }
 
-function markAllNotificationsRead(ctx, currentOrgId, userId) {
-  const result = q("UPDATE notification_recipients SET read_at=COALESCE(read_at,?) WHERE user_id=? AND read_at IS NULL AND delivery_status='DELIVERED' AND EXISTS (SELECT 1 FROM notifications n WHERE n.id=notification_recipients.notification_id AND n.status='PUBLISHED' AND (n.scope_type='PLATFORM' OR n.org_id=?))", [nowIso(), userId, currentOrgId]);
-  audit(ctx, 'NOTIFICATIONS_READ_ALL', 'USER', userId, null, { count: result.changes });
+async function markAllNotificationsRead(ctx, currentOrgId, userId) {
+  const result = await aq("UPDATE notification_recipients SET read_at=COALESCE(read_at,?) WHERE user_id=? AND read_at IS NULL AND delivery_status='DELIVERED' AND EXISTS (SELECT 1 FROM notifications n WHERE n.id=notification_recipients.notification_id AND n.status='PUBLISHED' AND (n.scope_type='PLATFORM' OR n.org_id=?))", [nowIso(), userId, currentOrgId]);
+  await audit(ctx, 'NOTIFICATIONS_READ_ALL', 'USER', userId, null, { count: result.changes });
   return { read: result.changes };
 }
 
-function templateRows() {
-  return rows(`SELECT template.*, creator.display_name created_by_name FROM notification_templates template LEFT JOIN users creator ON creator.id=template.created_by ORDER BY template.status='ACTIVE' DESC, template.updated_at DESC LIMIT 200`).map(normalizeTemplate);
+async function templateRows() {
+  return (await arows(`SELECT template.*, creator.display_name created_by_name FROM notification_templates template LEFT JOIN users creator ON creator.id=template.created_by ORDER BY template.status='ACTIVE' DESC, template.updated_at DESC LIMIT 200`)).map(normalizeTemplate);
 }
 
-function validateTemplateBody(body, existing = null) {
+async function validateTemplateBody(body, existing = null) {
   const name = body.name === undefined && existing ? existing.name : nonEmptyString(body.name, '模板名称', { max: 80 });
   const title = body.title === undefined && existing ? existing.title : nonEmptyString(body.title, '模板标题', { max: 160 });
   const content = body.body === undefined && existing ? existing.body : nonEmptyString(body.body, '模板内容', { max: 10000 });
   const kind = body.kind === undefined && existing ? existing.kind : validateKind(body.kind);
   const targetUrl = body.targetUrl === undefined && existing ? existing.target_url : (body.targetUrl ? String(body.targetUrl).trim().slice(0, 500) : null);
-  const audience = body.audience === undefined && existing ? parseJson(existing.audience, {}) : validateAudience(body);
+  const audience = body.audience === undefined && existing ? parseJson(existing.audience, {}) : await validateAudience(body);
   return { name, title, body: content, kind, targetUrl, audience };
 }
 
-function materialRows({ currentOrgId = null, admin = false, search = '', status = '', category = '', visibility = '', page = 1, limit = 20, sort = 'created' } = {}) {
+async function materialRows({ currentOrgId = null, admin = false, search = '', status = '', category = '', visibility = '', page = 1, limit = 20, sort = 'created' } = {}) {
   const conditions = []; const params = [];
   if (admin) conditions.push('1=1');
   else { conditions.push("material.status='ACTIVE'"); conditions.push("(material.visibility='ALL_ORGS' OR EXISTS (SELECT 1 FROM promo_material_assignments assignment WHERE assignment.material_id=material.id AND assignment.org_id=?))"); params.push(currentOrgId); }
@@ -653,39 +653,39 @@ function materialRows({ currentOrgId = null, admin = false, search = '', status 
     FROM promo_materials material
     LEFT JOIN users creator ON creator.id=material.created_by
   `;
-  const total = Number(row(`SELECT COUNT(*) n ${base} WHERE ${where}`, params)?.n || 0);
+  const total = Number((await arow(`SELECT COUNT(*) n ${base} WHERE ${where}`, params))?.n || 0);
   const offset = (page - 1) * limit;
-  const items = rows(`SELECT material.*, creator.display_name created_by_name,
+  const items = (await arows(`SELECT material.*, creator.display_name created_by_name,
       (SELECT GROUP_CONCAT(assignment.org_id) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_ids,
       (SELECT COUNT(*) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_count,
       (SELECT COUNT(*) FROM promo_material_events event WHERE event.material_id=material.id) event_count
     ${base} WHERE ${where}
-    ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [...params, limit, offset]).map(normalizeMaterial);
+    ORDER BY ${orderBy} LIMIT ? OFFSET ?`, [...params, limit, offset])).map(normalizeMaterial);
   return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
 }
 
-function materialStats(materialId) {
-  const materialValue = row(`SELECT material.*, creator.display_name created_by_name,
+async function materialStats(materialId) {
+  const materialValue = await arow(`SELECT material.*, creator.display_name created_by_name,
     (SELECT GROUP_CONCAT(assignment.org_id) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_ids,
     (SELECT COUNT(*) FROM promo_material_assignments assignment WHERE assignment.material_id=material.id) assigned_org_count,
     (SELECT COUNT(*) FROM promo_material_events event WHERE event.material_id=material.id) event_count
     FROM promo_materials material LEFT JOIN users creator ON creator.id=material.created_by WHERE material.id=?`, [materialId]);
   if (!materialValue) throw errors.notFound('宣传物料不存在', 'MATERIAL_NOT_FOUND');
   const material = normalizeMaterial(materialValue);
-  const counts = row(`SELECT COUNT(*) total_events,
+  const counts = await arow(`SELECT COUNT(*) total_events,
     SUM(CASE WHEN event_type='VIEW' THEN 1 ELSE 0 END) view_count,
     SUM(CASE WHEN event_type='USE' THEN 1 ELSE 0 END) use_count,
     SUM(CASE WHEN event_type='DOWNLOAD' THEN 1 ELSE 0 END) download_count,
     COUNT(DISTINCT org_id) organization_count,
     COUNT(DISTINCT user_id) user_count
     FROM promo_material_events WHERE material_id=?`, [materialId]);
-  const organizations = rows(`SELECT event.org_id, organization.name organization_name, COUNT(*) event_count,
+  const organizations = (await arows(`SELECT event.org_id, organization.name organization_name, COUNT(*) event_count,
     SUM(CASE WHEN event.event_type='VIEW' THEN 1 ELSE 0 END) view_count,
     SUM(CASE WHEN event.event_type='USE' THEN 1 ELSE 0 END) use_count,
     SUM(CASE WHEN event.event_type='DOWNLOAD' THEN 1 ELSE 0 END) download_count,
     MAX(event.created_at) last_event_at
     FROM promo_material_events event JOIN organizations organization ON organization.id=event.org_id
-    WHERE event.material_id=? GROUP BY event.org_id,organization.name ORDER BY event_count DESC,last_event_at DESC`, [materialId]).map((item) => ({
+    WHERE event.material_id=? GROUP BY event.org_id,organization.name ORDER BY event_count DESC,last_event_at DESC`, [materialId])).map((item) => ({
       orgId: item.org_id,
       organizationName: item.organization_name,
       eventCount: Number(item.event_count || 0),
@@ -694,9 +694,9 @@ function materialStats(materialId) {
       downloadCount: Number(item.download_count || 0),
       lastEventAt: item.last_event_at,
     }));
-  const recentEvents = rows(`SELECT event.id,event.event_type,event.created_at,event.org_id,organization.name organization_name,event.user_id,user.display_name user_name,user.role user_role
+  const recentEvents = (await arows(`SELECT event.id,event.event_type,event.created_at,event.org_id,organization.name organization_name,event.user_id,user.display_name user_name,user.role user_role
     FROM promo_material_events event JOIN organizations organization ON organization.id=event.org_id JOIN users user ON user.id=event.user_id
-    WHERE event.material_id=? ORDER BY event.created_at DESC LIMIT 50`, [materialId]).map((item) => ({
+    WHERE event.material_id=? ORDER BY event.created_at DESC LIMIT 50`, [materialId])).map((item) => ({
       id: item.id,
       eventType: item.event_type,
       createdAt: item.created_at,
@@ -721,7 +721,7 @@ function materialStats(materialId) {
   };
 }
 
-function validateMaterialBody(body, existing = null) {
+async function validateMaterialBody(body, existing = null) {
   const title = body.title === undefined && existing ? existing.title : nonEmptyString(body.title, '物料名称', { max: 120 });
   const description = body.description === undefined && existing ? existing.description : String(body.description || '').trim().slice(0, 2000);
   const category = body.category === undefined && existing ? existing.category : String(body.category || 'GENERAL').toUpperCase();
@@ -731,11 +731,11 @@ function validateMaterialBody(body, existing = null) {
   const mimeType = body.mimeType === undefined && existing ? existing.mime_type : (body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null);
   const resourceUrl = body.resourceUrl === undefined && existing ? existing.resource_url : (body.resourceUrl ? String(body.resourceUrl).trim().slice(0, 2000) : null);
   const coverUrl = body.coverUrl === undefined && existing ? existing.cover_url : (body.coverUrl ? String(body.coverUrl).trim().slice(0, 2000) : null);
-  const orgIds = body.orgIds === undefined && existing ? rows('SELECT org_id FROM promo_material_assignments WHERE material_id=?', [existing.id]).map((item) => item.org_id) : (Array.isArray(body.orgIds) ? [...new Set(body.orgIds.map((item) => String(item).trim()).filter(Boolean))] : []);
+  const orgIds = body.orgIds === undefined && existing ? (await arows('SELECT org_id FROM promo_material_assignments WHERE material_id=?', [existing.id])).map((item) => item.org_id) : (Array.isArray(body.orgIds) ? [...new Set(body.orgIds.map((item) => String(item).trim()).filter(Boolean))] : []);
   if (visibility === 'ASSIGNED_ORGS' && !orgIds.length) throw errors.badRequest('指定机构物料至少需要一个机构', 'MATERIAL_ORGS_REQUIRED');
   if (orgIds.length) {
     const placeholders = orgIds.map(() => '?').join(',');
-    if (rows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, orgIds).length !== orgIds.length) throw errors.badRequest('物料目标机构不存在', 'INVALID_MATERIAL_ORG');
+    if ((await arows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, orgIds)).length !== orgIds.length) throw errors.badRequest('物料目标机构不存在', 'INVALID_MATERIAL_ORG');
   }
   return { title, description, category, visibility, mimeType, resourceUrl, coverUrl, orgIds };
 }
@@ -769,8 +769,8 @@ function normalizeWebsiteContent(item, includeDraft = false) {
     publishedAt: item.published_at || null,
   };
 }
-function websiteContentRevisions(contentKey) {
-  return rows('SELECT * FROM website_content_revisions WHERE content_key=? ORDER BY version DESC', [contentKey]).map((item) => ({
+async function websiteContentRevisions(contentKey) {
+  return (await arows('SELECT * FROM website_content_revisions WHERE content_key=? ORDER BY version DESC', [contentKey])).map((item) => ({
     id: item.id, key: item.content_key, version: Number(item.version), content: parseJson(item.content, {}), action: item.action,
     changedBy: item.changed_by || null, reason: item.reason || '', createdAt: item.created_at,
   }));
@@ -817,15 +817,15 @@ function normalizeHelpFeedback(value, { includeUser = false } = {}) {
   return item;
 }
 
-function helpFeedbackRows(where, params) {
-  return rows(
+async function helpFeedbackRows(where, params) {
+  return (await arows(
     `SELECT feedback.*, student.display_name AS user_name, student.login AS user_login, handler.display_name AS handler_name
      FROM help_feedback feedback
      JOIN users student ON student.id=feedback.user_id
      LEFT JOIN users handler ON handler.id=feedback.handled_by
      WHERE ${where}`,
     params,
-  ).map((item) => normalizeHelpFeedback(item, { includeUser: true }));
+  )).map((item) => normalizeHelpFeedback(item, { includeUser: true }));
 }
 
 export {

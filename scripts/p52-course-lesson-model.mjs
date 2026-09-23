@@ -40,11 +40,11 @@ await run(['packages/database/src/seed.js']);
 
 // ① 纯函数：老数据回退（不起服务就能钉住）
 const { normalizeLesson } = await import(pathToFileURL(path.join(root, 'apps/server/src/lib.js')).href);
-check('老数据（只有 delivery_mode）读出来是单元素数组', JSON.stringify(normalizeLesson({ id: 'x', delivery_mode: 'VIBECODING' }).deliveryModes) === '["VIBECODING"]');
-check('坏 JSON 不会炸，回退到 delivery_mode', JSON.stringify(normalizeLesson({ id: 'x', delivery_mode: 'CANVAS', delivery_modes: '{oops' }).deliveryModes) === '["CANVAS"]');
-check('双类型数组原样读出', JSON.stringify(normalizeLesson({ id: 'x', delivery_mode: 'CANVAS', delivery_modes: '["CANVAS","VIBECODING"]' }).deliveryModes) === '["CANVAS","VIBECODING"]');
-check('非法类型被过滤后回退', JSON.stringify(normalizeLesson({ id: 'x', delivery_mode: 'CANVAS', delivery_modes: '["WECHAT"]' }).deliveryModes) === '["CANVAS"]');
-check('每学生算力上限不填时为 null', normalizeLesson({ id: 'x' }).perStudentBudgetFen === null);
+check('老数据（只有 delivery_mode）读出来是单元素数组', JSON.stringify((await normalizeLesson({ id: 'x', delivery_mode: 'VIBECODING' })).deliveryModes) === '["VIBECODING"]');
+check('坏 JSON 不会炸，回退到 delivery_mode', JSON.stringify((await normalizeLesson({ id: 'x', delivery_mode: 'CANVAS', delivery_modes: '{oops' })).deliveryModes) === '["CANVAS"]');
+check('双类型数组原样读出', JSON.stringify((await normalizeLesson({ id: 'x', delivery_mode: 'CANVAS', delivery_modes: '["CANVAS","VIBECODING"]' })).deliveryModes) === '["CANVAS","VIBECODING"]');
+check('非法类型被过滤后回退', JSON.stringify((await normalizeLesson({ id: 'x', delivery_mode: 'CANVAS', delivery_modes: '["WECHAT"]' })).deliveryModes) === '["CANVAS"]');
+check('每学生算力上限不填时为 null', (await normalizeLesson({ id: 'x' })).perStudentBudgetFen === null);
 
 const port = 18898;
 const server = spawn(process.execPath, ['apps/server/src/index.js'], { cwd: root, env: { ...baseEnv, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });

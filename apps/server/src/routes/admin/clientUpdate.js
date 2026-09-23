@@ -9,7 +9,7 @@ export async function handleClientUpdate(ctx, part, method) {
     try {
       const before = readClientUpdateManifest()
       const after = updateClientUpdateManifest(ctx.body)
-      audit(ctx, 'CLIENT_UPDATE_CONFIG', 'PLATFORM_SETTING', 'client-update', before, after)
+      await audit(ctx, 'CLIENT_UPDATE_CONFIG', 'PLATFORM_SETTING', 'client-update', before, after)
       return after
     } catch (error) {
       throw errors.badRequest(error instanceof Error ? error.message : String(error), 'CLIENT_UPDATE_CONFIG_INVALID')

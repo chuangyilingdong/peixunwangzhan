@@ -136,7 +136,7 @@ try {
   const context = { lesson: { generationBoxes: boxes } };
   const policy = { provider: 'local-mock', channels: [], modalityChannels: {} };
   const template = requestTemplateFor({ requestTemplates: {} }, 'MUSIC', {});
-  const lyricsOptions = generationOptionsFor({ context, modality: 'MUSIC', policy, selection: providerSelectionForModality(policy, 'MUSIC', ''), box: boxes[0] });
+  const lyricsOptions = await generationOptionsFor({ context, modality: 'MUSIC', policy, selection: providerSelectionForModality(policy, 'MUSIC', ''), box: boxes[0] });
   assert.equal(lyricsOptions.mode, 'LYRICS', '歌词模式应识别');
   const lyricsContext = musicRequestContext({ prompt: LYRICS, mode: lyricsOptions.mode, lyrics: lyricsOptions.lyrics });
   const lyricsBody = renderRequestTemplate(template, { model: 'mureka-v9-song', prompt: LYRICS, ...lyricsContext });

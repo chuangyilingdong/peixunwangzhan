@@ -40,7 +40,7 @@
 //
 // 改价不追溯：这个服务只读历史，不写任何配置。写合同单价是人在页面上点「采纳为成本价」的事。
 
-import { row, rows } from '../lib.js';
+import { row, rows, arows, arow } from '../lib.js';
 
 const MODALITIES = Object.freeze(['TEXT', 'IMAGE', 'VIDEO', 'MUSIC']);
 const MIN_SAMPLES_DEFAULT = 3;
@@ -84,7 +84,7 @@ function round(value, digits = 4) {
  * @param {Date|string} [options.now]    统计截止时间（默认现在；守卫用它固定窗口）
  * @returns {{days:number,since:string,until:string,minSamples:number,onlyCostSource:string,items:Array,excluded:object,meta:object}}
  */
-export function measuredUnitPrices({ days = 30, minSamples = MIN_SAMPLES_DEFAULT, now = null } = {}) {
+export async function measuredUnitPrices({ days = 30, minSamples = MIN_SAMPLES_DEFAULT, now = null } = {}) {
   const normalizedDays = normalizeDays(days);
   const normalizedMinSamples = Number.isFinite(Number(minSamples)) ? Math.max(1, Math.trunc(Number(minSamples))) : MIN_SAMPLES_DEFAULT;
   const untilDate = now ? new Date(now) : new Date();
@@ -94,7 +94,7 @@ export function measuredUnitPrices({ days = 30, minSamples = MIN_SAMPLES_DEFAULT
   const usableExpr = `(upstream_cost_fen IS NOT NULL AND (${unitExpr})>0)`;
 
   // 一次 SQL 把「同一 (渠道,模型,模态,来源)」的行合起来：内存里只按组算，不逐行拉回。
-  const groups = rows(`
+  const groups = await arows(`
     SELECT channel_id, model, UPPER(modality) modality, UPPER(cost_source) cost_source,
       COUNT(*) samples,
       SUM(CASE WHEN ${usableExpr} THEN 1 ELSE 0 END) usableSamples,
@@ -166,7 +166,7 @@ export function measuredUnitPrices({ days = 30, minSamples = MIN_SAMPLES_DEFAULT
     excluded.bySource[source] = (excluded.bySource[source] || 0) + Number(group.samples || 0);
   }
 
-  const nonSuccess = Number(row("SELECT COUNT(*) n FROM compute_attempts WHERE status<>'SUCCESS' AND created_at>=? AND created_at<?", [since, until])?.n || 0);
+  const nonSuccess = Number((await arow("SELECT COUNT(*) n FROM compute_attempts WHERE status<>'SUCCESS' AND created_at>=? AND created_at<?", [since, until]))?.n || 0);
   excluded.nonSuccess = nonSuccess;
 
   const items = [];

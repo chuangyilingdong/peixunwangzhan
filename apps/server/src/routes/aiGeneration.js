@@ -1,4 +1,4 @@
-import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, parseJson, q, requireRole, row, rows, transaction } from '../lib.js';
+import { ApiError, audit, count, errors, id, json, normalizeUser, nowIso, parseJson, q, requireRole, row, rows, transaction, arow, acount, arows, aq, atransaction } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { generationProviderInfo, getGenerationProvider } from '../services/generationProvider.js';
 import { assertExternalAiAllowed, assertProviderCapability, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
@@ -18,9 +18,9 @@ import { archiveGeneratedAssets } from '../services/generatedAssetArchive.js';
 // 这个路由**不再调用它** —— 额度不进生成链路（用户口径：额度是内部看的，不真拦）。
 
 /** 项目归属的课包 id（报表分组用）。失败路径上没有 context，所以这里按课时回查一次。 */
-function seriesIdOf(project) {
+async function seriesIdOf(project) {
   if (!project?.course_lesson_id) return null;
-  return row('SELECT series_id FROM course_lessons WHERE id=?', [project.course_lesson_id])?.series_id || null;
+  return (await arow('SELECT series_id FROM course_lessons WHERE id=?', [project.course_lesson_id]))?.series_id || null;
 }
 
 const MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
@@ -60,10 +60,10 @@ function modalityOf(value) {
   return modality;
 }
 
-function ownProject(auth, projectId) {
+async function ownProject(auth, projectId) {
   // 批次 D：原来的 class.name 取自班级表（class_id 现在恒为 NULL，取了也是空）——
   // 换成**课堂**名（student_projects.class_session_id 指向他进的那个课堂）。
-  const project = row(`SELECT project.*, lesson.title AS lesson_title, series.title AS series_title, session.title AS session_title
+  const project = await arow(`SELECT project.*, lesson.title AS lesson_title, series.title AS series_title, session.title AS session_title
      FROM student_projects project
      LEFT JOIN course_lessons lesson ON lesson.id = project.course_lesson_id
      LEFT JOIN course_series series ON series.id = lesson.series_id
@@ -75,8 +75,8 @@ function ownProject(auth, projectId) {
   return project;
 }
 
-function packageForUser(user, orgId) {
-  return user.billing_package_id ? row('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [user.billing_package_id, orgId]) : null;
+async function packageForUser(user, orgId) {
+  return user.billing_package_id ? await arow('SELECT * FROM billing_packages WHERE id = ? AND org_id = ?', [user.billing_package_id, orgId]) : null;
 }
 
 // 2026-09-16：删掉「套餐能力」这一层 —— 套餐不再参与「能不能用某个 AI 能力」的判定。
@@ -106,17 +106,17 @@ export function resolveLessonGenerationBox(context, modality, boxId) {
 }
 
 // 每个框体只能成功生成一次；同一框体的在途任务也算占用（并发点击不会重复扣费）。
-function assertBoxNotGenerated({ projectId, boxId, excludeJobId = '' }) {
+async function assertBoxNotGenerated({ projectId, boxId, excludeJobId = '' }) {
   if (!projectId || !boxId) return;
-  const inflight = count("SELECT COUNT(*) n FROM generation_jobs WHERE project_id=? AND box_id=? AND status IN ('QUEUED','RUNNING') AND id != ?", [projectId, boxId, excludeJobId || '']);
-  const generated = count('SELECT COUNT(*) n FROM media_assets asset JOIN generation_jobs job ON job.id=asset.job_id WHERE asset.project_id=? AND job.box_id=?', [projectId, boxId]);
+  const inflight = await acount("SELECT COUNT(*) n FROM generation_jobs WHERE project_id=? AND box_id=? AND status IN ('QUEUED','RUNNING') AND id != ?", [projectId, boxId, excludeJobId || '']);
+  const generated = await acount('SELECT COUNT(*) n FROM media_assets asset JOIN generation_jobs job ON job.id=asset.job_id WHERE asset.project_id=? AND job.box_id=?', [projectId, boxId]);
   if (Number(inflight || 0) + Number(generated || 0) > 0) throw errors.forbidden('该生成框体已经生成过了', 'GENERATION_BOX_USED');
 }
 
 /** 框体占用守卫：供生成链路与扣费类端点共用，保证同一套判断。 */
-export function assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId = '' }) {
+export async function assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId = '' }) {
   const box = resolveLessonGenerationBox(context, modality, boxId);
-  if (box) assertBoxNotGenerated({ projectId, boxId: box.id, excludeJobId });
+  if (box) await assertBoxNotGenerated({ projectId, boxId: box.id, excludeJobId });
   return box;
 }
 
@@ -167,7 +167,7 @@ function assertVideoFrames({ modes, firstFrameUrl = '', lastFrameUrl = '', refer
  * `model` / `units` 是给算力池算钱用的（单价按模型或模态取；units = 这次要花的次数，
  * 文档插画一次生成 3 张就是 3）。
  */
-export function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null, model = '', units = 1 }) {
+export async function assertGenerationPreflight({ user, orgId, context, modality, projectId = null, boxId = '', excludeJobId = '', frameCheck = null, model = '', units = 1 }) {
   assertCapability(modality, context.activeSession);
   assertSessionAiControls({ modality, session: context.activeSession, orgId, userId: user.id });
   // 2026-09-18（用户口径）：「学生算力额度只观测、不真拦」—— 这里原来有一行
@@ -175,7 +175,7 @@ export function assertGenerationPreflight({ user, orgId, context, modality, proj
   // 观测值仍在（老师端/平台端看得到），但没有任何调用会被它挡住。
   // ⚠️ 别把额度断言加回来当闸门 —— 要拦人得先有用户口径，并连同学生端文案、守卫一起改。
   // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
-  if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
+  if (!(await isModalityEnabled(orgId, modality)).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
   if (lessonCapability && !(context.lesson?.capabilities || []).includes(lessonCapability)) {
     throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
@@ -186,7 +186,7 @@ export function assertGenerationPreflight({ user, orgId, context, modality, proj
   // （实测：图片带参考图报「当前视频模型不支持多素材参考」，403）。
   if (frameCheck && String(modality || '').toUpperCase() === 'VIDEO') assertVideoFrames(frameCheck);
   // 框体占用同样属于业务拦截：入队前就能判断，不必等结算
-  if (projectId) assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
+  if (projectId) await assertLessonGenerationBox({ context, modality, projectId, boxId, excludeJobId });
 }
 
 function normalizeAsset(value) {
@@ -216,8 +216,8 @@ function normalizeJob(value, { assets = [] } = {}) {
   };
 }
 
-function assetsFor(jobId) {
-  return rows('SELECT * FROM media_assets WHERE job_id = ? ORDER BY created_at DESC', [jobId]).map(normalizeAsset);
+async function assetsFor(jobId) {
+  return (await arows('SELECT * FROM media_assets WHERE job_id = ? ORDER BY created_at DESC', [jobId])).map(normalizeAsset);
 }
 
 function jobQuery() {
@@ -229,11 +229,11 @@ function jobQuery() {
           LEFT JOIN class_sessions session ON session.id = project.class_session_id`;
 }
 
-function jobDetail(jobId, { requireAuth = null } = {}) {
-  const job = row(jobQuery() + ' WHERE job.id = ?', [jobId]);
+async function jobDetail(jobId, { requireAuth = null } = {}) {
+  const job = await arow(jobQuery() + ' WHERE job.id = ?', [jobId]);
   if (!job) return null;
   if (requireAuth && (job.org_id !== requireAuth.user.orgId || job.user_id !== requireAuth.user.id)) return null;
-  return normalizeJob(job, { assets: assetsFor(job.id) });
+  return normalizeJob(job, { assets: await assetsFor(job.id) });
 }
 
 /**
@@ -250,7 +250,7 @@ function jobDetail(jobId, { requireAuth = null } = {}) {
 //    （用户这一天报的「完全不一样的内容」就是它：入队时好好的，执行时没了。）
 //    所以：**自己域名的绝对地址也要认**。回查数据库用的是文件 id，且只回我们自己站点的公开地址，
 //    所以不存在"把外部地址送给上游"的口子 —— 外部地址仍然解析不出来（下面那条反例钉着）。
-function publicFileAssetUrl(value, { ownerUserId = '' } = {}) {
+async function publicFileAssetUrl(value, { ownerUserId = '' } = {}) {
   const raw = String(value || '').trim();
   const base = String(PUBLIC_SITE_URL || '').replace(/\/+$/, '');
   // 摘 origin：自己域名的绝对地址直接摘前缀；域名万一变了（或记录是另一套 PUBLIC_SITE_URL 写的）
@@ -261,7 +261,7 @@ function publicFileAssetUrl(value, { ownerUserId = '' } = {}) {
   for (const candidate of candidates) {
     const match = candidate.match(/^\/api\/(?:student|public)\/file-assets\/([^/]+)\/download$/);
     if (!match) continue;
-    const file = row('SELECT id,status,visibility,category,expires_at,owner_type,owner_user_id FROM file_assets WHERE id=?', [match[1]]);
+    const file = await arow('SELECT id,status,visibility,category,expires_at,owner_type,owner_user_id FROM file_assets WHERE id=?', [match[1]]);
     if (!file || file.status !== 'ACTIVE') continue;
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) continue;
     if (file.category === 'TEACHING_ASSET') continue;
@@ -279,11 +279,11 @@ function publicFileAssetUrl(value, { ownerUserId = '' } = {}) {
 
 // 生成用的画面/参考来源：已是绝对地址（生成素材、data URL、本地 mock）直接用，
 // 否则尝试升级成公开绝对地址（老师上传的素材走这条）。
-function resolvableAssetUrl(value) {
+async function resolvableAssetUrl(value) {
   const url = String(value || '').trim();
   if (!url || url.length > 2000) return '';
   if (/^(https?:\/\/|data:|mock:\/\/)/i.test(url)) return url;
-  return publicFileAssetUrl(url);
+  return await publicFileAssetUrl(url);
 }
 
 // 提示词里的引用芯片 → 上游认的写法。
@@ -331,18 +331,18 @@ export function upstreamPromptWithReferences(prompt, { originalReferences = [], 
 }
 
 // 这个项目的学生是谁 —— publicFileAssetUrl 用它判断"这张图是不是他本人传的"。
-function projectStudentId(projectId) {
-  return String(row('SELECT student_id FROM student_projects WHERE id=?', [projectId])?.student_id || '');
+async function projectStudentId(projectId) {
+  return String((await arow('SELECT student_id FROM student_projects WHERE id=?', [projectId]))?.student_id || '');
 }
 
 // 导出是给守卫用的（p125）：入队时解析一次、worker 真正执行时**再解析一次**，
 // 这两次必须得到同一个结果。两次不一致 = 首帧/参考在"要发请求的那一刻"被丢掉。
-export function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
+export async function resolveFirstFrameUrl(projectId, sourceAssetUrl) {
   const url = String(sourceAssetUrl || '').trim();
   if (!url || url.length > 2000) return '';
-  const asset = row("SELECT asset_url FROM media_assets WHERE project_id = ? AND modality = 'IMAGE' AND asset_url = ?", [projectId, url]);
+  const asset = await arow("SELECT asset_url FROM media_assets WHERE project_id = ? AND modality = 'IMAGE' AND asset_url = ?", [projectId, url]);
   if (asset) return String(asset.asset_url);
-  return publicFileAssetUrl(url, { ownerUserId: projectStudentId(projectId) });
+  return await publicFileAssetUrl(url, { ownerUserId: await projectStudentId(projectId) });
 }
 
 /**
@@ -416,7 +416,7 @@ function normalizeReferenceType(value) {
 }
 
 // 导出是给守卫用的（p109）：参考素材的条数上限必须当场拦，不能静默截断。
-export function resolveReferenceAssets(projectId, value) {
+export async function resolveReferenceAssets(projectId, value) {
   // 新格式 [{ type, url }]；老格式（字符串数组）按图片处理。
   const list = Array.isArray(value) ? value : [];
   const parsed = [];
@@ -442,11 +442,11 @@ export function resolveReferenceAssets(projectId, value) {
   for (const item of parsed) {
     const type = item.type;
     if (kept[type] >= REFERENCE_LIMITS[type]) continue;
-    const allowed = row(
+    const allowed = await arow(
       `SELECT asset_url FROM media_assets WHERE project_id=? AND asset_url=? AND modality IN (${REFERENCE_MODALITIES[type].map(() => '?').join(',')})`,
       [projectId, item.url, ...REFERENCE_MODALITIES[type]],
     );
-    const resolved = allowed ? String(allowed.asset_url) : publicFileAssetUrl(item.url, { ownerUserId: projectStudentId(projectId) });
+    const resolved = allowed ? String(allowed.asset_url) : await publicFileAssetUrl(item.url, { ownerUserId: await projectStudentId(projectId) });
     if (!resolved) { dropped.push(item); continue; }
     kept[type] += 1;
     out.push({ type, url: resolved });
@@ -463,49 +463,49 @@ export function resolveReferenceAssets(projectId, value) {
   return out;
 }
 
-function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, referenceAssetUrls = null, boxId = '', requestOptions = null, selection = null }) {
+async function createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId = null, requestContext = null, startImmediately = true, sourceAssetUrl = null, lastFrameAssetUrl = null, referenceAssetUrls = null, boxId = '', requestOptions = null, selection = null }) {
   const jobId = id('generation');
   const now = nowIso();
   // 对外售价观测：快照里的 unitFen 是「按当前公告价算出的售价」，只观测、不扣学生
   // （charged 恒 false，学生账本 usage_records.cost_fen/credits_charged 恒 0）。
-  const saleSnapshot = { modality, model: provider.model, unitFen: priceFenFor({ modality, model: provider.model }), charged: false, baseline: 'OBSERVATION_ONLY', basis: 'OBSERVATION_ONLY', capturedAt: now, route: selection ? { ...selection, apiKey: undefined, gateway: undefined, backup: selection.backup ? { ...selection.backup, apiKey: undefined, gateway: undefined } : undefined } : null };
-  transaction(() => q(`INSERT INTO generation_jobs(
+  const saleSnapshot = { modality, model: provider.model, unitFen: await priceFenFor({ modality, model: provider.model }), charged: false, baseline: 'OBSERVATION_ONLY', basis: 'OBSERVATION_ONLY', capturedAt: now, route: selection ? { ...selection, apiKey: undefined, gateway: undefined, backup: selection.backup ? { ...selection.backup, apiKey: undefined, gateway: undefined } : undefined } : null };
+  await atransaction(async () => await aq(`INSERT INTO generation_jobs(
        id,org_id,user_id,project_id,modality,provider,model,prompt,status,retry_of_job_id,created_at,started_at,source_asset_url,last_frame_asset_url,reference_asset_urls,box_id,request_options
      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [jobId, (auth.session?.org_id || auth.user.orgId), auth.user.id, project.id, modality, provider.name, provider.model, prompt, 'QUEUED', retryOfJobId, now, null, sourceAssetUrl, lastFrameAssetUrl, Array.isArray(referenceAssetUrls) && referenceAssetUrls.length ? JSON.stringify(referenceAssetUrls) : null, boxId || null, requestOptions ? JSON.stringify(requestOptions) : null]));
-  q('UPDATE generation_jobs SET compute_snapshot=? WHERE id=?', [json(saleSnapshot), jobId]);
+  await aq('UPDATE generation_jobs SET compute_snapshot=? WHERE id=?', [json(saleSnapshot), jobId]);
     if (startImmediately) {
-      assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
-      q("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
+      await assertTransition(auditContext(auth, requestContext), 'generationJob', 'QUEUED', 'RUNNING', { targetType: 'GENERATION_JOB', targetId: jobId, before: { status: 'QUEUED' }, details: { action: 'START' } });
+      await aq("UPDATE generation_jobs SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", [now, jobId]);
     }
   return jobId;
 }
 
-function queueItemFromJob(jobId) {
-  const job = row('SELECT * FROM generation_jobs WHERE id=?', [jobId]);
+async function queueItemFromJob(jobId) {
+  const job = await arow('SELECT * FROM generation_jobs WHERE id=?', [jobId]);
   if (!job) return null;
-  const user = row("SELECT * FROM users WHERE id=? AND org_id=? AND status='ACTIVE'", [job.user_id, job.org_id]);
+  const user = await arow("SELECT * FROM users WHERE id=? AND org_id=? AND status='ACTIVE'", [job.user_id, job.org_id]);
   if (!user) return null;
-  const auth = { user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org: row('SELECT * FROM organizations WHERE id=?', [job.org_id]) };
-  const project = ownProject(auth, job.project_id);
+  const auth = { user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org: await arow('SELECT * FROM organizations WHERE id=?', [job.org_id]) };
+  const project = await ownProject(auth, job.project_id);
   if (!project) return null;
   return { auth, project, modality: job.modality, prompt: job.prompt, title: '', jobId, sourceAssetUrl: job.source_asset_url || '', lastFrameAssetUrl: job.last_frame_asset_url || '', referenceAssets: parseJson(job.reference_asset_urls, []) || [], boxId: job.box_id || '', requestOptions: parseJson(job.request_options, null) || null, requestContext: null };
 }
 
-function enqueuePersistedJob(jobId, delayMs = 0) {
-  const enqueue = () => {
-    const item = queueItemFromJob(jobId);
+async function enqueuePersistedJob(jobId, delayMs = 0) {
+  const enqueue = async () => {
+    const item = await queueItemFromJob(jobId);
     if (!item) return;
-    const current = row('SELECT status,next_attempt_at FROM generation_jobs WHERE id=?', [jobId]);
+    const current = await arow('SELECT status,next_attempt_at FROM generation_jobs WHERE id=?', [jobId]);
     if (current?.status !== 'QUEUED') return;
     if (current.next_attempt_at && Date.parse(current.next_attempt_at) > Date.now()) {
-      enqueuePersistedJob(jobId, Date.parse(current.next_attempt_at) - Date.now());
+      await enqueuePersistedJob(jobId, Date.parse(current.next_attempt_at) - Date.now());
       return;
     }
     asyncGenerationQueue.push(item);
     drainAsyncGenerationQueue();
   };
-  if (delayMs > 0) { const timer = setTimeout(enqueue, delayMs); timer.unref?.(); } else enqueue();
+  if (delayMs > 0) { const timer = setTimeout(enqueue, delayMs); timer.unref?.(); } else await enqueue();
 }
 
 /**
@@ -519,32 +519,31 @@ function enqueuePersistedJob(jobId, delayMs = 0) {
  *    「该生成框体已经生成过了」，**再也点不动**（`assertBoxNotGenerated` 把在途任务也算占用）。
  *    现在按 worker 判：本进程认领过的才算自己的，其余一律收掉 → 任务变 FAILED、框体随之可重试。
  */
-function interruptOrphanedJobs({ workerId = null } = {}) {
+async function interruptOrphanedJobs({ workerId = null } = {}) {
   const now = nowIso();
   const clause = workerId ? 'worker_id IS NULL OR worker_id != ?' : '1=1';
   const params = [GENERATION_INTERRUPTED_CODE, GENERATION_INTERRUPTED_MESSAGE, now, ...(workerId ? [workerId] : [])];
-  const result = q(`UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE status='RUNNING' AND (${clause})`, params);
+  const result = await aq(`UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE status='RUNNING' AND (${clause})`, params);
   return Number(result?.changes || 0);
 }
 
 /** 关服时用：把自己认领的任务收掉（这样重启后学生立刻看到"这次中断了、可以重试"，不必等下一次启动）。 */
-export function interruptOwnJobsOnShutdown() {
-  try { return interruptOrphanedJobs({ workerId: ASYNC_WORKER_ID }); }
+export async function interruptOwnJobsOnShutdown() {
+  try { return await interruptOrphanedJobs({ workerId: ASYNC_WORKER_ID }); }
   catch (error) { console.error('[GENERATION SHUTDOWN ERROR]', error); return 0; }
 }
 
-export function initializeAsyncGenerationQueue() {
+export async function initializeAsyncGenerationQueue() {
   const now = nowIso();
   // 本进程刚起来：此刻任何 RUNNING 都属于**已经没了**的那个 worker → 全部收掉（含只跑了 94 秒的那种）。
-  const interrupted = interruptOrphanedJobs();
+  const interrupted = await interruptOrphanedJobs();
   if (interrupted) console.warn(`[生成队列] 回收了 ${interrupted} 条被中断的生成任务（服务重启，上游结果未知）`);
   // 租约兜底保留：崩溃重启（没走关服钩子）时它照样会把老任务收掉。
-  q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code='UPSTREAM_OUTCOME_UNKNOWN',error_message='执行中断，上游结果未知；请核查后人工处理',completed_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
-  rows("SELECT id FROM generation_jobs WHERE status='QUEUED' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at", [now])
-    .forEach(({ id: jobId }) => enqueuePersistedJob(jobId));
+  await aq("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code='UPSTREAM_OUTCOME_UNKNOWN',error_message='执行中断，上游结果未知；请核查后人工处理',completed_at=? WHERE status='RUNNING' AND (started_at IS NULL OR started_at < ?)", [now, new Date(Date.now() - ASYNC_RUNNING_LEASE_MS).toISOString()]);
+  for (const { id: jobId } of (await arows("SELECT id FROM generation_jobs WHERE status='QUEUED' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at", [now]))) { await enqueuePersistedJob(jobId); };
 }
 
-function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error, requestContext = null }) {
+async function markJobFailed({ jobId, orgId, userId, project, modality, provider, info, session, error, requestContext = null }) {
   // 业务侧拦截（课时能力 / 套餐能力 / 课堂管控 / 额度）保留原始错误码与文案；
   // 只有真正的上游调用失败才走供应商错误归一化，否则会被误报成「API Key 无效」。
   const normalized = error instanceof ApiError
@@ -553,32 +552,32 @@ function markJobFailed({ jobId, orgId, userId, project, modality, provider, info
   const failCode = normalized.code || error?.code || 'GENERATION_FAILED';
   const failMessage = normalized.message || error?.message || '素材生成失败';
   const failAt = nowIso();
-  transaction(() => {
+  await atransaction(async () => {
     // 2026-09-18：这里原来要 releaseCourseCu 释放课包 CU 预留（那套已整体删除，恒 UNLIMITED、
     // 从没真的预留过任何东西）。现在失败路径不需要回滚任何额度：按钱的那套是**调用前准入**，
     // 不做预留，也就不存在"失败要退"的问题。
-    const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
-    if (currentJob) assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
-    q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE id=?",
+    const currentJob = await arow('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
+    if (currentJob) await assertTransition(auditContext({ user: { id: userId, orgId }, rawUser: null }, requestContext), 'generationJob', currentJob.status, 'FAILED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { errorCode: failCode } });
+    await aq("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,error_code=?,error_message=?,completed_at=? WHERE id=?",
       [failCode, String(failMessage).slice(0, 1000), failAt, jobId]);
-    recordAiUsage({
+    await recordAiUsage({
       orgId, userId, projectId: project.id, sessionId: session?.id || null, generationJobId: jobId,
       modality, model: provider.model,
       status: BLOCKED_ERROR_CODES.has(failCode) ? 'BLOCKED' : 'FAILED', failCode,
       // 失败不花学生的钱（cost_fen 记 0 但**仍然记 series_id**，这样池子报表里能看出「有哪些失败调用」）
-      costFen: 0, seriesId: seriesIdOf(project) || null,
+      costFen: 0, seriesId: await seriesIdOf(project) || null,
       pricing: { compute: provider.compute, source: 'generation', provider: provider.name, mode: info.mode, charged: false, blocked: BLOCKED_ERROR_CODES.has(failCode) },
     });
   });
 }
 
-function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext = null, usage = null }) {
-  transaction(() => {
-    const user = row("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
-    const freshProject = ownProject(auth, project.id);
+async function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads, requestContext = null, usage = null }) {
+  await atransaction(async () => {
+    const user = await arow("SELECT * FROM users WHERE id = ? AND org_id = ? AND status = 'ACTIVE'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
+    const freshProject = await ownProject(auth, project.id);
     if (!user) throw errors.forbidden('学生账号不可用', 'ACCOUNT_DISABLED');
     if (freshProject.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
-    const freshContext = resolveProjectUsageContext(user, freshProject);
+    const freshContext = await resolveProjectUsageContext(user, freshProject);
     if (!freshContext.canUseNow) throw errors.forbidden(freshContext.blockReason, freshContext.blockCode);
     assertCapability(modality, freshContext.activeSession);
     assertSessionAiControls({ modality, session: freshContext.activeSession, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id });
@@ -587,38 +586,38 @@ function settleSuccessfulJob({ auth, project, modality, provider, info, jobId, a
       throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
     }
     // 框体占用在结算时再校验一次：等待期间同一框体可能已被另一次生成占用。
-    const settledBoxId = row('SELECT box_id FROM generation_jobs WHERE id=?', [jobId])?.box_id || '';
-    if (settledBoxId) assertBoxNotGenerated({ projectId: project.id, boxId: settledBoxId, excludeJobId: jobId });
+    const settledBoxId = (await arow('SELECT box_id FROM generation_jobs WHERE id=?', [jobId]))?.box_id || '';
+    if (settledBoxId) await assertBoxNotGenerated({ projectId: project.id, boxId: settledBoxId, excludeJobId: jobId });
     // 2026-09-13（P4 删积分）：成员 AI 上限 / 周期额度两道刹车已删除，且不再扣积分。
     // 这里只收尾记账；额度不在这一层拦（历史上那句 assertComputePoolBudget 是个从不抛错的空壳，2026-09-18 已删）。
     // C3 前置：上游给了 token 用量就记下来（计费仍是「每次调用 × 单价」，不改口径）
     const firstAssetTokens = assetPayloads.find((asset) => asset?.metadata?.tokens)?.metadata?.tokens || null;
     // P90：优先用 provider 返回的 usage 回执（流式是最后一帧给的），退回产物 metadata 里的那份。
     const recordedUsage = usage || firstAssetTokens || null;
-    recordAiUsage({
+    await recordAiUsage({
       orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, projectId: project.id,
       sessionId: freshContext.activeSession?.id || null, generationJobId: jobId,
       modality, model: provider.model, status: 'SUCCESS',
       inputTokens: recordedUsage?.inputTokens || 0, outputTokens: recordedUsage?.outputTokens || 0,
       usage: recordedUsage,
       // 算力池账本：成功才花钱，金额 = 本次单价（与调用前预扣用的是同一个函数，所以两边必然一致）
-      costFen: parseJson(row('SELECT compute_snapshot FROM generation_jobs WHERE id=?', [jobId])?.compute_snapshot, {})?.unitFen ?? provider.compute?.saleSnapshot?.unitFen ?? priceFenFor({ modality, model: provider.model }),
+      costFen: parseJson((await arow('SELECT compute_snapshot FROM generation_jobs WHERE id=?', [jobId]))?.compute_snapshot, {})?.unitFen ?? provider.compute?.saleSnapshot?.unitFen ?? await priceFenFor({ modality, model: provider.model }),
       seriesId: freshContext.series?.id || null,
-      pricing: { compute: provider.compute, source: 'generation', provider: provider.name, mode: info.mode, costFen: priceFenFor({ modality, model: provider.model }) },
+      pricing: { compute: provider.compute, source: 'generation', provider: provider.name, mode: info.mode, costFen: await priceFenFor({ modality, model: provider.model }) },
     });
-    assetPayloads.forEach((asset, index) => {
+    for (const [index, asset] of assetPayloads.entries()) {
       const assetId = id('asset');
-      q(`INSERT INTO media_assets(
+      await aq(`INSERT INTO media_assets(
            id,job_id,org_id,user_id,project_id,modality,label,mime_type,asset_url,preview_url,metadata,created_at
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         [assetId, jobId, (auth.session?.org_id || auth.user.orgId), auth.user.id, project.id, modality,
           String(asset.label || `${MODALITY_LABELS[modality] || modality} ${index + 1}`).slice(0, 120),
           asset.mimeType || null, String(asset.assetUrl || `mock://generation/${assetId}`), asset.previewUrl || null,
           json(asset.metadata || {}), nowIso()]);
-    });
-    const currentJob = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
-    assertTransition(auditContext(auth, requestContext), 'generationJob', currentJob?.status, 'SUCCEEDED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { modality } });
-    q("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,completed_at=? WHERE id=?", [nowIso(), jobId]);
+    };
+    const currentJob = await arow('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
+    await assertTransition(auditContext(auth, requestContext), 'generationJob', currentJob?.status, 'SUCCEEDED', { targetType: 'GENERATION_JOB', targetId: jobId, before: currentJob, details: { modality } });
+    await aq("UPDATE generation_jobs SET status='SUCCEEDED',worker_id=NULL,completed_at=? WHERE id=?", [nowIso(), jobId]);
   });
 }
 
@@ -649,7 +648,7 @@ export function providerSelectionForModality(policy, modality, modelOverride = '
  * 输入画面：按该模型声明的方式给 —— 支持文生就可以不带图，支持首帧才用连过来的图/框体预置素材，
  * 支持尾帧才带上尾帧。学生给了模型不支持的画面会被 assertVideoFrames 拦下。
  */
-export function generationOptionsFor({ context, modality, policy, selection, box = null, studentOptions = null, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [], lyrics = '' }) {
+export async function generationOptionsFor({ context, modality, policy, selection, box = null, studentOptions = null, firstFrameUrl = '', lastFrameUrl = '', referenceAssets = [], lyrics = '' }) {
   const key = String(modality || '').toUpperCase();
   if (key === 'MUSIC') {
     const target = box || resolveLessonGenerationBox(context, key, '');
@@ -743,7 +742,7 @@ export function generationOptionsFor({ context, modality, policy, selection, box
     const forceOmni = String(target?.inputMode || '').trim().toUpperCase() === 'OMNI_REFERENCE';
     if ((options.inputModes.includes('OMNI_REFERENCE') && (references.length || presetAsset)) || forceOmni) {
       // 全能参考：这些素材当参考发，不当首/尾帧（上游不允许混用）；框体预置素材也算一张图片参考。
-      const presetResolved = resolvableAssetUrl(presetAsset);
+      const presetResolved = await resolvableAssetUrl(presetAsset);
       const frameReferences = [String(firstFrameUrl || '').trim(), String(lastFrameUrl || '').trim()]
         .filter(Boolean).map((url) => ({ type: 'IMAGE', url }));
       const omniReferences = references.length ? references
@@ -775,7 +774,7 @@ export function generationOptionsFor({ context, modality, policy, selection, box
       if (omniReferences.length) options.referenceAssets = omniReferences;
     } else {
       // 框体挂了预置素材时，它就是首帧（学生不必自己再连一张）。
-      const presetFirstFrame = acceptsFirstFrame(options.inputModes) ? resolvableAssetUrl(presetAsset) : '';
+      const presetFirstFrame = acceptsFirstFrame(options.inputModes) ? await resolvableAssetUrl(presetAsset) : '';
       const resolvedFirstFrame = String(firstFrameUrl || '').trim() || presetFirstFrame;
       if (resolvedFirstFrame) options.firstFrameUrl = resolvedFirstFrame;
       if (lastFrameUrl) options.lastFrameUrl = String(lastFrameUrl).trim();
@@ -864,8 +863,8 @@ function auditContext(auth, ctx = null) {
 
 export async function runGenerationJob({ auth, project, modality, prompt, title, retryOfJobId = null, action = 'AI_GENERATION_CREATE', requestContext = null, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '', studentOptions = null }) {
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
-  const policy = getAiProviderPolicy();
-  const context = resolveProjectUsageContext(auth.rawUser, project);
+  const policy = await getAiProviderPolicy();
+  const context = await resolveProjectUsageContext(auth.rawUser, project);
   if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
   const box = resolveLessonGenerationBox(context, modality, boxId);
   // 走网关的话，这里换成「该学生在这节课的令牌」出口；解析不出来就原样直连。
@@ -876,7 +875,7 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
   const info = generationProviderInfo(providerSelection);
   assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
-  const resolvedReferences = resolveReferenceAssets(project.id, referenceAssets);
+  const resolvedReferences = await resolveReferenceAssets(project.id, referenceAssets);
   // 学生连了参考图，但**一张都没解析出可公开访问的地址**（素材库预置图、上游的过期临时链接、
   // data: 地址都会这样）—— 这时上游其实也收不到任何参考。当场拒绝，别让学生以为「引用生效了」
   // 却拿到一张无关的图（2026-09-17 用户报「引用没有真实生效」的另一条静默路径）。
@@ -889,12 +888,12 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
       throw errors.forbidden('这张参考图没法发给模型（它不在可公开访问的素材里）：重新上传素材再连一次，或先去掉连线', 'GENERATION_REFERENCE_UNRESOLVED');
     }
   }
-  const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
-  const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
+  const requestedFirstFrame = await resolveFirstFrameUrl(project.id, sourceAssetUrl);
+  const requestedLastFrame = await resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
   const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
     ? await writeLyricsForMusic({ prompt, policy, requestContext, auth, lessonId: context.lesson?.id || '' })
     : '';
-  const options = generationOptionsFor({
+  const options = await generationOptionsFor({
     context, modality, policy, selection: providerSelection, box,
     firstFrameUrl: requestedFirstFrame,
     lastFrameUrl: requestedLastFrame,
@@ -902,12 +901,12 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
     lyrics: writtenLyrics,
     studentOptions,
   });
-  assertGenerationPreflight({
+  await assertGenerationPreflight({
     user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id,
     boxId: box?.id || '', model: provider.model,
     frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame), lockedMode: options.lockedInputMode || '' },
   });
-  const jobId = createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
+  const jobId = await createJobRecord({ auth, project, modality, provider, prompt, retryOfJobId, requestContext, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
   try {
     const upstreamPrompt = upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets, sentReferences: options.referenceAssets || [] });
     const generated = await provider.generate({ modality, prompt: upstreamPrompt, title, projectId: project.id, userId: auth.user.id, options, computeContext: { orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, jobId } });
@@ -920,12 +919,12 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
       modality, jobId, ownerUserId: auth.user.id, ownerOrgId: (auth.session?.org_id || auth.user.orgId),
       log: (message) => console.log(`[GENERATED ASSET ARCHIVE] job=${jobId} ${message}`),
     });
-    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
-    audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
-    const job = jobDetail(jobId);
+    await settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
+    await audit(auditContext(auth, requestContext), action, 'GENERATION_JOB', jobId, retryOfJobId ? { jobId: retryOfJobId } : null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
+    const job = await jobDetail(jobId);
     return { job, assets: job.assets };
   } catch (error) {
-    markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
+    await markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
     if (error instanceof ApiError) throw error;
     const normalized = normalizeProviderError(error);
     throw errors.badRequest(normalized.message, normalized.code);
@@ -935,8 +934,8 @@ export async function runGenerationJob({ auth, project, modality, prompt, title,
 
 async function processAsyncGeneration(item) {
   const { auth, project, modality, prompt, title, jobId, requestContext, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '', requestOptions = null } = item;
-  const policy = getAiProviderPolicy();
-  const persistedJob = row('SELECT provider,model,compute_snapshot FROM generation_jobs WHERE id=?', [jobId]);
+  const policy = await getAiProviderPolicy();
+  const persistedJob = await arow('SELECT provider,model,compute_snapshot FROM generation_jobs WHERE id=?', [jobId]);
   // 兼容恢复的旧任务：local-mock 任务继续使用进程环境 provider；新外部任务使用创建时记录的 provider。
   const routedSelection = parseJson(persistedJob?.compute_snapshot, {})?.route || providerSelectionForModality(policy, modality);
   // ⚠️ 必须把 routedSelection **整份**带上（只覆盖 provider/model）。异步 worker 原来只挑了
@@ -952,7 +951,7 @@ async function processAsyncGeneration(item) {
   let provider = { name: persistedJob?.provider || 'unknown', model: persistedJob?.model || '' };
   let info = { mode: 'unknown' };
   try {
-    context = resolveProjectUsageContext(auth.rawUser, project);
+    context = await resolveProjectUsageContext(auth.rawUser, project);
     // 恢复任务也必须重新验证课堂与网关；失败进入统一收尾，不能使 worker 退出。
     const routedByGateway = await applyGatewayRoute(providerSelection, {
       orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
@@ -962,10 +961,10 @@ async function processAsyncGeneration(item) {
     info = generationProviderInfo(routedByGateway);
     // 异步任务重算一次「对外售价观测」快照（路由/模型在这时才最终确定）：
     // 只刷新 unitFen/baseline 与模型，**不动 route**，也不改学生账本（cost_fen 恒 0）。
-    q('UPDATE generation_jobs SET compute_snapshot=? WHERE id=?', [json({
+    await aq('UPDATE generation_jobs SET compute_snapshot=? WHERE id=?', [json({
       ...(routedByGateway.saleSnapshot || {}),
       modality, model: provider.model,
-      unitFen: priceFenFor({ modality, model: provider.model }),
+      unitFen: await priceFenFor({ modality, model: provider.model }),
       charged: false, baseline: 'OBSERVATION_ONLY', basis: 'OBSERVATION_ONLY',
       route: routedByGateway.saleSnapshot?.route || null,
       capturedAt: nowIso(),
@@ -973,9 +972,9 @@ async function processAsyncGeneration(item) {
     assertExternalAiAllowed({ mode: info.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     const box = resolveLessonGenerationBox(context, modality, boxId);
-    const requestedFirstFrame = resolveFirstFrameUrl(project.id, sourceAssetUrl);
-    const requestedLastFrame = resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
-    const resolvedReferences = resolveReferenceAssets(project.id, referenceAssets);
+    const requestedFirstFrame = await resolveFirstFrameUrl(project.id, sourceAssetUrl);
+    const requestedLastFrame = await resolveFirstFrameUrl(project.id, lastFrameAssetUrl);
+    const resolvedReferences = await resolveReferenceAssets(project.id, referenceAssets);
     // 入队时有的素材、执行时不能凭空消失（2026-09-21 的「完全不一样的内容」就是这里静默丢的）
     assertMediaResolved({
       sourceAssetUrl, lastFrameAssetUrl, referenceAssets,
@@ -984,7 +983,7 @@ async function processAsyncGeneration(item) {
     const writtenLyrics = String(modality).toUpperCase() === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
       ? await writeLyricsForMusic({ prompt, policy, requestContext, auth, lessonId: context.lesson?.id || '' })
       : '';
-    const options = generationOptionsFor({
+    const options = await generationOptionsFor({
       context, modality, policy, selection: routedByGateway, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
@@ -992,13 +991,13 @@ async function processAsyncGeneration(item) {
       lyrics: writtenLyrics,
       studentOptions: requestOptions,
     });
-    assertGenerationPreflight({
+    await assertGenerationPreflight({
       user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id, boxId: box?.id || '', excludeJobId: jobId, model: provider.model,
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame), lockedMode: options.lockedInputMode || '' },
     });
-    const current = row('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
+    const current = await arow('SELECT status FROM generation_jobs WHERE id=?', [jobId]);
     if (!current || current.status !== 'QUEUED') return;
-    q("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
+    await aq("UPDATE generation_jobs SET status='RUNNING',started_at=?,worker_id=?,next_attempt_at=NULL WHERE id=? AND status='QUEUED'", [nowIso(), ASYNC_WORKER_ID, jobId]);
     // 发上游前把提示词里的中文引用芯片翻成上游认的写法（@Image N / @Video N）——
     // 只改发给上游的这份，库里与界面上仍是学生写的中文芯片。
     const upstreamPrompt = upstreamPromptWithReferences(prompt, { originalReferences: referenceAssets, sentReferences: options.referenceAssets || [] });
@@ -1010,10 +1009,10 @@ async function processAsyncGeneration(item) {
       modality, jobId, ownerUserId: auth.user.id, ownerOrgId: (auth.session?.org_id || auth.user.orgId),
       log: (message) => console.log(`[GENERATED ASSET ARCHIVE] job=${jobId} ${message}`),
     });
-    settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
-    audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
+    await settleSuccessfulJob({ auth, project, modality, provider, info, jobId, assetPayloads: archivedAssets, requestContext, usage: generated?.usage || null });
+    await audit(auditContext(auth, requestContext), 'AI_GENERATION_ASYNC_COMPLETE', 'GENERATION_JOB', jobId, null, { modality, provider: provider.name }, { orgId: (auth.session?.org_id || auth.user.orgId) });
   } catch (error) {
-    markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
+    await markJobFailed({ jobId, orgId: (auth.session?.org_id || auth.user.orgId), userId: auth.user.id, project, modality, provider, info, session: context?.activeSession, error, requestContext });
   }
 }
 
@@ -1036,7 +1035,7 @@ function validPageSize(value) {
   return size;
 }
 
-function generationHistory(auth, search) {
+async function generationHistory(auth, search) {
   const page = validPage(search.get('page'));
   const pageSize = validPageSize(search.get('pageSize'));
   const modalityInput = search.get('modality');
@@ -1052,11 +1051,11 @@ function generationHistory(auth, search) {
   if (status) { filters.push('job.status = ?'); params.push(status); }
   if (projectId) { filters.push('job.project_id = ?'); params.push(projectId); }
   const where = filters.join(' AND ');
-  const total = count('SELECT COUNT(*) n FROM generation_jobs job WHERE ' + where, params);
-  const rawJobs = rows(jobQuery() + ` WHERE ${where} ORDER BY job.created_at DESC LIMIT ? OFFSET ?`,
+  const total = await acount('SELECT COUNT(*) n FROM generation_jobs job WHERE ' + where, params);
+  const rawJobs = await arows(jobQuery() + ` WHERE ${where} ORDER BY job.created_at DESC LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize]);
   const assetRows = rawJobs.length
-    ? rows('SELECT * FROM media_assets WHERE job_id IN (' + rawJobs.map(() => '?').join(',') + ') ORDER BY created_at DESC', rawJobs.map((job) => job.id))
+    ? await arows('SELECT * FROM media_assets WHERE job_id IN (' + rawJobs.map(() => '?').join(',') + ') ORDER BY created_at DESC', rawJobs.map((job) => job.id))
     : [];
   const assetsByJob = new Map();
   for (const asset of assetRows) {
@@ -1068,11 +1067,11 @@ function generationHistory(auth, search) {
     page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)),
     summary: {
       total,
-      succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
-      failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+      succeeded: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+      failed: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
       // 对外售价口径（2026-09-15）：学员看到的「消耗」= 算力账本里成功尝试的售价快照合计。
       // 原来读 usage_records.cost_fen —— 那一列现行代码恒为 0（平台承担成本、不扣学生），这里永远显示 0。
-      costFen: count(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+      costFen: await acount(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     },
     items,
   };
@@ -1098,8 +1097,8 @@ function assetUsageStatus(asset, currentSnapshot, snapshots) {
  *    改成从**课堂名单**取之后两个方向都对了。真实门禁一直在 studentContext（生成时才拦），
  *    所以这里错了只表现为**展示与口径矛盾**，不是安全洞 —— 但矛盾本身就是 bug。
  */
-function activeAiSessions(user) {
-  return rows(`SELECT session.*, lesson.title AS lesson_title
+async function activeAiSessions(user) {
+  return await arows(`SELECT session.*, lesson.title AS lesson_title
      FROM session_students part
      JOIN class_sessions session ON session.id = part.session_id
      LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
@@ -1128,12 +1127,12 @@ function normalizeAiSession(value) {
   };
 }
 
-function studentAiCenter(ctx) {
+async function studentAiCenter(ctx) {
   const auth = ctx.auth;
   const rawUser = auth.rawUser;
   const orgId = (auth.session?.org_id || auth.user.orgId);
   // 学生可见负载**不带额度**（2026-09-18 用户口径）：观测数字只在老师端/平台端。
-  const activeSessions = activeAiSessions(rawUser).map(normalizeAiSession);
+  const activeSessions = (await activeAiSessions(rawUser)).map(normalizeAiSession);
   const session = activeSessions[0] || null;
   const capabilities = AI_MODALITIES.map((modality) => {
     const capability = SESSION_CAPABILITY_BY_MODALITY[modality];
@@ -1160,13 +1159,13 @@ function studentAiCenter(ctx) {
     };
   });
   const jobs = {
-    total: count('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, orgId]),
-    succeeded: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
-    failed: count("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    total: await acount('SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ?', [auth.user.id, orgId]),
+    succeeded: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'SUCCEEDED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    failed: await acount("SELECT COUNT(*) n FROM generation_jobs WHERE user_id = ? AND org_id = ? AND status = 'FAILED'", [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
     // 同上：对外售价口径（2026-09-15），不读 usage_records.cost_fen。
-    costFen: count(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
+    costFen: await acount(`SELECT ${salePriceFenSuccessSql()} n FROM compute_attempts WHERE user_id = ? AND org_id = ?`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]),
   };
-  const assets = rows(`SELECT asset.*, project.title AS project_title, project.status AS project_status,
+  const assets = await arows(`SELECT asset.*, project.title AS project_title, project.status AS project_status,
             lesson.title AS lesson_title, session.title AS session_title
      FROM media_assets asset
      LEFT JOIN student_projects project ON project.id = asset.project_id
@@ -1174,18 +1173,18 @@ function studentAiCenter(ctx) {
      LEFT JOIN class_sessions session ON session.id = project.class_session_id
      WHERE asset.user_id = ? AND asset.org_id = ?
      ORDER BY asset.created_at DESC LIMIT 100`, [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
-  const projects = rows('SELECT id,canvas_snapshot FROM student_projects WHERE student_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
+  const projects = await arows('SELECT id,canvas_snapshot FROM student_projects WHERE student_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
   const currentByProject = new Map(projects.map((project) => [project.id, project.canvas_snapshot || '']));
   const snapshotsByProject = new Map();
   if (projects.length) {
-    const snapshots = rows('SELECT project_id,version,canvas_snapshot,created_at FROM project_snapshots WHERE project_id IN (' + projects.map(() => '?').join(',') + ') ORDER BY version',
+    const snapshots = await arows('SELECT project_id,version,canvas_snapshot,created_at FROM project_snapshots WHERE project_id IN (' + projects.map(() => '?').join(',') + ') ORDER BY version',
       projects.map((project) => project.id));
     for (const snapshot of snapshots) {
       if (!snapshotsByProject.has(snapshot.project_id)) snapshotsByProject.set(snapshot.project_id, []);
       snapshotsByProject.get(snapshot.project_id).push(snapshot);
     }
   }
-  const assetTotal = count('SELECT COUNT(*) n FROM media_assets WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
+  const assetTotal = await acount('SELECT COUNT(*) n FROM media_assets WHERE user_id = ? AND org_id = ?', [auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
   const normalizedAssets = assets.map((asset) => ({
     ...normalizeAsset(asset),
     projectTitle: asset.project_title || null,
@@ -1218,19 +1217,19 @@ function studentAiCenter(ctx) {
 export async function handleAiGeneration(ctx) {
   const { pathname, method, auth } = ctx;
   if (!pathname.startsWith('/api/ai/')) return null;
-  if (pathname === '/api/ai/providers' && method === 'GET') { const policy = getAiProviderPolicy(); return generationProviderInfo({ provider: policy.provider, model: policy.model, endpoint: policy.endpoint }); }
+  if (pathname === '/api/ai/providers' && method === 'GET') { const policy = await getAiProviderPolicy(); return generationProviderInfo({ provider: policy.provider, model: policy.model, endpoint: policy.endpoint }); }
   requireRole(ctx, ['STUDENT']);
 
-  if (pathname === '/api/ai/center' && method === 'GET') return studentAiCenter(ctx);
+  if (pathname === '/api/ai/center' && method === 'GET') return await studentAiCenter(ctx);
   // 说明：原来的 /api/ai/generations/history（GET 列表 / POST 重试）已删除 ——
   // 它与下方 /api/ai/generations（列表）返回同一份 payload，且没有任何调用方（界面与守卫都没用过）。
   // 保留的是 /api/ai/generations?projectId=…（列表，画布在用）、/history/:jobId（详情）、/cancel（取消）。
   if (pathname === '/api/ai/generations/async' && method === 'POST') {
     const body = ctx.body || {}; const projectId = String(body.projectId || '').trim(); const prompt = String(body.prompt || '').trim(); const title = String(body.title || '').trim().slice(0, 100); const modality = modalityOf(body.modality); const boxId = String(body.boxId || '').trim().slice(0, 64);
     if (!projectId || !prompt) throw errors.badRequest('projectId 和素材描述必填', 'GENERATION_FIELDS_REQUIRED');
-    const project = ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
-    const policy = getAiProviderPolicy();
-    const context = resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
+    const project = await ownProject(auth, projectId); if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
+    const policy = await getAiProviderPolicy();
+    const context = await resolveProjectUsageContext(auth.rawUser, project); if (!context.canUseNow) throw errors.forbidden(context.blockReason, context.blockCode);
     const box = resolveLessonGenerationBox(context, modality, boxId);
     const providerSelection = await applyGatewayRoute(providerSelectionForModality(policy, modality, box?.model || ''), {
       orgId: (auth.session?.org_id || auth.user.orgId), studentId: auth.user.id, lessonId: context.lesson?.id || '', modality,
@@ -1241,41 +1240,41 @@ export async function handleAiGeneration(ctx) {
     if (info.configured && info.adapterAvailable) assertProviderCapability(provider, modality);
     // 业务预检（平台模态开关 / 课时能力 / 课堂管控 / 框体占用 / 首帧）在入队前拦掉，
     // 别让任务跑一遍上游再失败——与同步路径保持同一套判断。
-    const requestedFirstFrame = resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim());
-    const requestedLastFrame = resolveFirstFrameUrl(project.id, String(body.lastFrameAssetUrl || '').trim());
+    const requestedFirstFrame = await resolveFirstFrameUrl(project.id, String(body.sourceAssetUrl || '').trim());
+    const requestedLastFrame = await resolveFirstFrameUrl(project.id, String(body.lastFrameAssetUrl || '').trim());
     const writtenLyrics = modality === 'MUSIC' && String(box?.mode || '').toUpperCase() === 'DESCRIPTION'
       ? await writeLyricsForMusic({ prompt, policy, requestContext: ctx, auth, lessonId: context.lesson?.id || '' })
       : '';
     // 平台把框体的比例/清晰度/时长留空时，采纳学生在画布上自选的值（仍按模型能力白名单校验）。
     const studentOptions = studentParamOptionsFrom(body);
-    const options = generationOptionsFor({
+    const options = await generationOptionsFor({
       context, modality, policy, selection: providerSelection, box,
       firstFrameUrl: requestedFirstFrame,
       lastFrameUrl: requestedLastFrame,
-      referenceAssets: resolveReferenceAssets(project.id, body.referenceAssets ?? body.referenceAssetUrls),
+      referenceAssets: await resolveReferenceAssets(project.id, body.referenceAssets ?? body.referenceAssetUrls),
       lyrics: writtenLyrics,
       studentOptions,
     });
-    assertGenerationPreflight({
+    await assertGenerationPreflight({
       user: auth.rawUser, orgId: (auth.session?.org_id || auth.user.orgId), context, modality, projectId: project.id, boxId: box?.id || '', model: provider.model,
       frameCheck: { modes: options.inputModes, firstFrameUrl: options.firstFrameUrl || '', lastFrameUrl: options.lastFrameUrl || '', referenceAssets: options.referenceAssets || [], requestedFrames: Boolean(requestedFirstFrame || requestedLastFrame), lockedMode: options.lockedInputMode || '' },
     });
-    const jobId = createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
-    enqueuePersistedJob(jobId);
-    return { job: jobDetail(jobId), queued: true };
+    const jobId = await createJobRecord({ auth, project, modality, provider, prompt, requestContext: ctx, startImmediately: false, sourceAssetUrl: options.firstFrameUrl || null, lastFrameAssetUrl: options.lastFrameUrl || null, referenceAssetUrls: options.referenceAssets || null, boxId: box?.id || '', requestOptions: effectiveStudentOptions(box, studentOptions), selection: providerSelection });
+    await enqueuePersistedJob(jobId);
+    return { job: await jobDetail(jobId), queued: true };
   }
   const cancelMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)\/cancel$/);
   if (cancelMatch && method === 'POST') {
-    const jobId = decodeURIComponent(cancelMatch[1]); const job = row('SELECT * FROM generation_jobs WHERE id=? AND user_id=? AND org_id=?', [jobId, auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
+    const jobId = decodeURIComponent(cancelMatch[1]); const job = await arow('SELECT * FROM generation_jobs WHERE id=? AND user_id=? AND org_id=?', [jobId, auth.user.id, (auth.session?.org_id || auth.user.orgId)]);
     if (!job) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
     if (!['QUEUED','RUNNING'].includes(job.status)) throw errors.conflict('当前任务不能取消', 'GENERATION_NOT_CANCELABLE');
     // 2026-09-18：取消不再需要释放任何额度（课包 CU 预留那套已删；按钱的那套是准入判断、不预留）。
-    q("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);
-    return jobDetail(jobId, { requireAuth: auth });
+    await aq("UPDATE generation_jobs SET status='FAILED',worker_id=NULL,cancelled_at=?,error_code='GENERATION_CANCELLED',error_message='用户取消生成',completed_at=? WHERE id=?", [nowIso(), nowIso(), jobId]);
+    return await jobDetail(jobId, { requireAuth: auth });
   }
   const detailMatch = pathname.match(/^\/api\/ai\/generations\/history\/([^/]+)$/);
   if (detailMatch && method === 'GET') {
-    const job = jobDetail(decodeURIComponent(detailMatch[1]), { requireAuth: auth });
+    const job = await jobDetail(decodeURIComponent(detailMatch[1]), { requireAuth: auth });
     if (!job) throw errors.notFound('生成任务不存在', 'GENERATION_JOB_NOT_FOUND');
     return job;
   }
@@ -1283,8 +1282,8 @@ export async function handleAiGeneration(ctx) {
   if (pathname === '/api/ai/generations' && method === 'GET') {
     const projectId = String(ctx.search.get('projectId') || '').trim();
     if (!projectId) throw errors.badRequest('projectId 必填', 'PROJECT_REQUIRED');
-    ownProject(auth, projectId);
-    return { provider: generationProviderInfo(), ...generationHistory(auth, new URLSearchParams({ projectId })) };
+    await ownProject(auth, projectId);
+    return { provider: generationProviderInfo(), ...await generationHistory(auth, new URLSearchParams({ projectId })) };
   }
   if (pathname !== '/api/ai/generations' || method !== 'POST') return null;
   const body = ctx.body || {};
@@ -1296,7 +1295,7 @@ export async function handleAiGeneration(ctx) {
   if (!projectId || projectId.length > 100) throw errors.badRequest('projectId 必填', 'PROJECT_REQUIRED');
   if (!prompt) throw errors.badRequest('请先写下素材描述', 'GENERATION_PROMPT_REQUIRED');
   if (prompt.length > 2000) throw errors.badRequest('素材描述不能超过 2000 个字符', 'GENERATION_PROMPT_TOO_LONG');
-  const project = ownProject(auth, projectId);
+  const project = await ownProject(auth, projectId);
   if (project.status !== 'DRAFT') throw errors.conflict('项目已提交，不能继续生成素材', 'PROJECT_NOT_EDITABLE');
   return runGenerationJob({ auth, project, modality, prompt, title, action: 'AI_GENERATION_CREATE', requestContext: ctx, boxId, studentOptions: studentParamOptionsFrom(body) });
 }

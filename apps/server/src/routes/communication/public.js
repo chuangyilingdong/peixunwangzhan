@@ -17,7 +17,7 @@ import {
   row,
   rows,
   seriesDeliveryModesOf,
-  transaction, canvasMediaFrom } from '../../lib.js';
+  transaction, canvasMediaFrom, arows, arow, aq, amap } from '../../lib.js';
 import { hostname } from 'node:os';
 import { Readable } from 'node:stream';
 import { assertTransition } from '../../services/domainState.js';
@@ -92,17 +92,17 @@ import {
   workerStarted,
 } from './helpers.js';
 
-export function handlePublicCommunication(ctx) {
+export async function handlePublicCommunication(ctx) {
   const { pathname, method } = ctx;
   if (pathname === '/api/public/website-content' && method === 'GET') {
-    const items = rows("SELECT * FROM website_contents WHERE published_content IS NOT NULL ORDER BY content_key").map((item) => normalizeWebsiteContent(item));
+    const items = (await arows("SELECT * FROM website_contents WHERE published_content IS NOT NULL ORDER BY content_key")).map((item) => normalizeWebsiteContent(item));
     return { generatedAt: nowIso(), items, byKey: Object.fromEntries(items.map((item) => [item.key, item.content])) };
   }
 
   const publicWebsiteKey = pathname.match(/^\/api\/public\/website-content\/([A-Za-z0-9_]+)$/);
   if (publicWebsiteKey && method === 'GET') {
     const key = websiteContentKey(publicWebsiteKey[1]);
-    const item = row('SELECT * FROM website_contents WHERE content_key=? AND published_content IS NOT NULL', [key]);
+    const item = await arow('SELECT * FROM website_contents WHERE content_key=? AND published_content IS NOT NULL', [key]);
     if (!item) throw errors.notFound('官网内容不存在', 'WEBSITE_CONTENT_NOT_FOUND');
     return normalizeWebsiteContent(item);
   }
@@ -130,9 +130,9 @@ export function handlePublicCommunication(ctx) {
     const legalConsentAt = legalConsentDate.toISOString();
     const leadId = id('lead');
     const now = nowIso();
-    q("INSERT INTO leads(id,org_name,contact_name,contact_phone,intent,notes,status,admin_notes,created_at,updated_at,legal_consent_version,legal_consented_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    await aq("INSERT INTO leads(id,org_name,contact_name,contact_phone,intent,notes,status,admin_notes,created_at,updated_at,legal_consent_version,legal_consented_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
       [leadId, orgName, contactName, contactPhone, intent, notes, 'NEW', '', now, now, legalConsentVersion, legalConsentAt]);
-    audit(ctx, 'LEAD_CREATE', 'LEAD', leadId, null, { orgName, intent, legalConsentVersion, legalConsentedAt: legalConsentAt }, { orgId: null });
+    await audit(ctx, 'LEAD_CREATE', 'LEAD', leadId, null, { orgName, intent, legalConsentVersion, legalConsentedAt: legalConsentAt }, { orgId: null });
     return { id: leadId, status: 'NEW', createdAt: now, legalConsentVersion, legalConsentedAt: legalConsentAt };
   }
 
@@ -143,7 +143,7 @@ export function handlePublicCommunication(ctx) {
     //    广场永远只显示前 60 件、类型胶囊上的件数也是错的。这一条是**公开只读**的口子，
     //    500 条元数据（不含内容）约 200KB，比图片本身小两个数量级；真要再涨就得改成翻页。
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 60 });
-    const items = rows(`
+    const items = await amap((await arows(`
       SELECT work.id, work.title, work.description, work.canvas_snapshot,
              work.featured_at, work.submitted_at, work.share_token,
              user.display_name AS student_name,
@@ -156,14 +156,14 @@ export function handlePublicCommunication(ctx) {
         AND work.copyright_confirmed_at IS NOT NULL
       ORDER BY work.featured_at DESC NULLS LAST, work.submitted_at DESC
       LIMIT ?
-    `, [limit]).map((row) => publicWorkRow(row));
+    `, [limit])), async (row) => await publicWorkRow(row));
     return { items, total: items.length };
   }
 
   // P5-W04: 公开作品详情
   const publicWorkMatch = pathname.match(/^\/api\/public\/works\/([\w-]+)$/);
   if (publicWorkMatch && method === 'GET') {
-    const work = row(`
+    const work = await arow(`
       SELECT work.id, work.title, work.description, work.canvas_snapshot,
              work.featured_at, work.submitted_at, work.share_token,
              user.display_name AS student_name,
@@ -175,7 +175,7 @@ export function handlePublicCommunication(ctx) {
       WHERE work.share_token=? AND work.is_public=1
     `, [publicWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
-    return publicWorkRow(work);
+    return await publicWorkRow(work);
   }
 
   // 画布作品的媒体代理（2026-09-22）：生成产物现在归档在**我们自己**这里（学生私有的
@@ -186,12 +186,12 @@ export function handlePublicCommunication(ctx) {
   //    宽一格就是"看得到作品页、图却 403"，窄一格就是"图能取、作品页说没有"。
   const publicCanvasWorkImageMatch = pathname.match(/^\/api\/public\/works\/([\w-]+)\/images\/([\w-]+)$/);
   if (publicCanvasWorkImageMatch && method === 'GET') {
-    const work = row('SELECT id, canvas_snapshot FROM works WHERE share_token=? AND is_public=1', [publicCanvasWorkImageMatch[1]]);
+    const work = await arow('SELECT id, canvas_snapshot FROM works WHERE share_token=? AND is_public=1', [publicCanvasWorkImageMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
     const allowed = new Set(canvasMediaFrom(parseJson(work.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }))
       .map((item) => item.fileId).filter(Boolean));
     if (!allowed.has(publicCanvasWorkImageMatch[2])) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
-    const file = row('SELECT * FROM file_assets WHERE id=?', [publicCanvasWorkImageMatch[2]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [publicCanvasWorkImageMatch[2]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (!/^(image|audio|video)\//.test(String(file.mime_type || ''))) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_WORK_IMAGE_NOT_FOUND');
@@ -202,7 +202,7 @@ export function handlePublicCommunication(ctx) {
   // 公开 VibeCoding 作品（平台把老师已通过的作品发布到作品广场后，官网可点开直接玩）
   if (pathname === '/api/public/vibecoding-works' && method === 'GET') {
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 60 });
-    const items = rows(`
+    const items = await amap((await arows(`
       SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
              submission.featured_at, submission.submitted_at, submission.share_token,
              user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
@@ -214,12 +214,12 @@ export function handlePublicCommunication(ctx) {
         AND submission.copyright_confirmed_at IS NOT NULL
       ORDER BY submission.featured_at DESC NULLS LAST, submission.submitted_at DESC
       LIMIT ?
-    `, [limit]).map((item) => publicVibeCodingWorkRow(item));
+    `, [limit])), async (item) => await publicVibeCodingWorkRow(item));
     return { items, total: items.length };
   }
   const publicVibeCodingWorkMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)$/);
   if (publicVibeCodingWorkMatch && method === 'GET') {
-    const work = row(`
+    const work = await arow(`
       SELECT submission.id, submission.title, submission.description, submission.entry_file, submission.files, submission.artifacts,
              submission.featured_at, submission.submitted_at, submission.share_token,
              user.display_name AS student_name, user.privacy_showcase_anonymous AS student_anon,
@@ -231,7 +231,7 @@ export function handlePublicCommunication(ctx) {
         AND submission.copyright_confirmed_at IS NOT NULL
     `, [publicVibeCodingWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在或已取消公开', 'PUBLIC_WORK_NOT_FOUND');
-    return publicVibeCodingWorkRow(work, { includeFiles: true });
+    return await publicVibeCodingWorkRow(work, { includeFiles: true });
   }
 
   // 已发布作品里的文档产物（PPT / Word / Excel）。
@@ -242,13 +242,13 @@ export function handlePublicCommunication(ctx) {
   // 文件名允许中文，所以要 decode。
   const publicDocumentMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)\/files\/(.+)\/download$/);
   if (publicDocumentMatch && method === 'GET') {
-    const submission = publicSubmission(publicDocumentMatch[1]);
+    const submission = await publicSubmission(publicDocumentMatch[1]);
     let name = '';
     try { name = decodeURIComponent(publicDocumentMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
     if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_VIBECODING_FILE_NAME');
     const stored = snapshotArtifactByName(submission, name)?.fileId;
-    if (stored) return prepareFileDownload(ctx, publicWorkFile(submission, stored));
-    const rendered = renderSnapshotDocument(submission, name);
+    if (stored) return prepareFileDownload(ctx, await publicWorkFile(submission, stored));
+    const rendered = await renderSnapshotDocument(submission, name);
     if (rendered.error) throw errors.notFound(rendered.error, 'PUBLIC_VIBECODING_FILE_NOT_FOUND');
     const safeName = String(rendered.filename || name || 'download').replace(/[\r\n"\\/]/g, '_');
     return {
@@ -270,13 +270,13 @@ export function handlePublicCommunication(ctx) {
   // 一个只能下载、点了没反应的卡片等于没发。转出来的 PDF 也顺手让原始 Office 文件不外发。
   const publicDocumentPreviewMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)\/files\/(.+)\/preview$/);
   if (publicDocumentPreviewMatch && method === 'GET') {
-    const submission = publicSubmission(publicDocumentPreviewMatch[1]);
+    const submission = await publicSubmission(publicDocumentPreviewMatch[1]);
     let name = '';
     try { name = decodeURIComponent(publicDocumentPreviewMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
     if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_VIBECODING_FILE_NAME');
     const stored = snapshotArtifactByName(submission, name)?.fileId;
     if (!stored) throw errors.notFound('这份作品没有可在线预览的文件', 'PUBLIC_VIBECODING_FILE_NOT_FOUND');
-    return prepareFilePreview(ctx, publicWorkFile(submission, stored));
+    return prepareFilePreview(ctx, await publicWorkFile(submission, stored));
   }
 
   // 作品里用到的学生上传图（PPT 规格里的 {"attachment": N}）。
@@ -285,11 +285,11 @@ export function handlePublicCommunication(ctx) {
   // 准入名单来自提交快照，未发布的提交拿不到 token，也就无从枚举。
   const publicWorkImageMatch = pathname.match(/^\/api\/public\/vibecoding-works\/([\w-]+)\/images\/([\w-]+)$/);
   if (publicWorkImageMatch && method === 'GET') {
-    const submission = publicSubmission(publicWorkImageMatch[1]);
+    const submission = await publicSubmission(publicWorkImageMatch[1]);
     if (!snapshotImageFileIds(submission).has(publicWorkImageMatch[2])) {
       throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_VIBECODING_IMAGE_NOT_FOUND');
     }
-    const file = row('SELECT * FROM file_assets WHERE id=?', [publicWorkImageMatch[2]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [publicWorkImageMatch[2]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (!String(file.mime_type || '').startsWith('image/')) throw errors.notFound('图片不存在于这份作品中', 'PUBLIC_VIBECODING_IMAGE_NOT_FOUND');
@@ -318,22 +318,22 @@ export function handlePublicCommunication(ctx) {
       wheres.push('series.tags LIKE ?');
       params.push('%' + String(ctx.search.get('tag')) + '%');
     }
-    const items = rows(
+    const items = await amap((await arows(
       `SELECT series.* FROM course_series series WHERE ${wheres.join(' AND ')} ORDER BY series.sort, series.title`,
       params,
-    ).map((item) => normalizeSeries(item, { parseTags: true }));
+    )), async (item) => await normalizeSeries(item, { parseTags: true }));
     return { items, total: items.length };
   }
 
   // P5-W05: 公开课包详情
   const publicCourseDetailMatch = pathname.match(/^\/api\/public\/course-series\/([\w-]+)$/);
   if (publicCourseDetailMatch && method === 'GET') {
-    const series = row(
+    const series = await arow(
       "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND owner_type='PLATFORM' AND visibility='PUBLIC'",
       [publicCourseDetailMatch[1]],
     );
     if (!series) throw errors.notFound('课包不存在或不可公开访问', 'COURSE_SERIES_NOT_FOUND');
-    const detail = normalizeSeries(series, { includeLessons: true, parseTags: true, asPublished: true });
+    const detail = await normalizeSeries(series, { includeLessons: true, parseTags: true, asPublished: true });
     detail.lessons = (detail.lessons || []).filter((l) => l.status === 'PUBLISHED');
     // lessonContent 截断到 2000 字
     detail.lessons = detail.lessons.map((l) => ({
@@ -375,9 +375,9 @@ export function handlePublicCommunication(ctx) {
     if (tag) { wheres.push('series.tags LIKE ?'); params.push('%' + String(tag) + '%'); }
     if (search) { wheres.push('series.title LIKE ?'); params.push('%' + String(search) + '%'); }
     const where = wheres.join(' AND ');
-    const total = Number(row('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params)?.n || 0);
+    const total = Number((await arow('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params))?.n || 0);
     const orderBy = sort === 'recent' ? 'series.created_at DESC' : 'series.sort ASC, series.title COLLATE NOCASE ASC';
-    const series = rows(
+    const series = await arows(
       `SELECT series.* FROM course_series series WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
@@ -388,7 +388,7 @@ export function handlePublicCommunication(ctx) {
     const lessonsBySeries = new Map();
     if (series.length) {
       const placeholders = series.map(() => '?').join(',');
-      for (const lesson of rows(
+      for (const lesson of await arows(
         `SELECT lesson.series_id, lesson.delivery_mode, lesson.delivery_modes FROM course_lessons lesson
          WHERE lesson.series_id IN (${placeholders}) AND ${publishedLessonVisibilitySql('lesson')}`,
         series.map((item) => item.id),
@@ -436,7 +436,7 @@ export function handlePublicCommunication(ctx) {
   // P5-M02: Public marketplace detail
   const publicMarketplaceDetailMatch = pathname.match(/^\/api\/public\/marketplace\/([\w-]+)$/);
   if (publicMarketplaceDetailMatch && method === 'GET') {
-    const series = row(
+    const series = await arow(
       // 与上面的列表用**同一套条件**：早先这里多要一个 marketplace_status='APPROVED'（而全站没有任何
       // 入口能把它置成 APPROVED），于是广场里点开的课程必然 404。上架与否只看 PUBLISHED + 上架范围。
       "SELECT * FROM course_series WHERE id=? AND status='PUBLISHED' AND owner_type='PLATFORM' AND visibility='PUBLIC'",
@@ -445,14 +445,14 @@ export function handlePublicCommunication(ctx) {
     if (!series) throw errors.notFound('课程不存在或未上架', 'MARKETPLACE_COURSE_NOT_FOUND');
     // 与列表同一个判据（publishedLessonVisibilitySql）：没「更新发布」的新课时不该出现在官网，
     // 也不能被算进课时数 —— lessonCount 就是按这个数组的长度算的，改一处两处都对。
-    const lessons = rows(
+    const lessons = (await arows(
       `SELECT lesson.id, lesson.series_id, lesson.title, lesson.summary, lesson.sort,
               ${publishedLessonStatusSql('lesson')} AS status,
               lesson.duration_minutes, lesson.lesson_content, lesson.created_at, lesson.updated_at
        FROM course_lessons lesson WHERE lesson.series_id=? AND ${publishedLessonVisibilitySql('lesson')}
        ORDER BY lesson.sort, lesson.created_at`,
       [series.id],
-    ).map((l) => ({
+    )).map((l) => ({
       id: l.id,
       seriesId: l.series_id,
       title: l.title,
@@ -493,7 +493,7 @@ export function handlePublicCommunication(ctx) {
   return null;
 }
 
-function publicWorkRow(row) {
+async function publicWorkRow(row) {
   const canvas = parseJson(row.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   // ⚠️ 导入件（`scripts/import-plaza-works.mjs` 从用户自己的另一个站扒过来的）：
   //    作品内容不是画布快照，而是「一张封面 + 一个本体（视频/图片/或原平台链接）」，
@@ -532,8 +532,8 @@ function publicWorkRow(row) {
     // 导入件才有的字段（我们自己的画布/VibeCoding 作品一律是 null/false，前端据此分支）
     imported: Boolean(imported),
     // 广场上的两个分类（画布作品 / VibeCoding作品）：导入件按映射表，站内作品按它自己的来源
-    plazaCategory: plazaCategoryOf({ imported, workType: imported?.workType, type: row.type }),
-    plazaCategoryLabel: plazaCategoryLabelOf({ imported, workType: imported?.workType, type: row.type }),
+    plazaCategory: await plazaCategoryOf({ imported, workType: imported?.workType, type: row.type }),
+    plazaCategoryLabel: await plazaCategoryLabelOf({ imported, workType: imported?.workType, type: row.type }),
     workType: imported?.workType || null,
     workTypeLabel: imported?.workTypeLabel || null,
     coverUrl: imported?.coverUrl || null,
@@ -551,7 +551,7 @@ function publicWorkRow(row) {
 // VibeCoding 作品：官网详情页用 files + entryFile 在 sandbox iframe 里直接运行；
 // 文档产物（PPT/Word/Excel）另给一份清单：能不能下载、配图在哪（见 publicArtifactCatalog）。
 // ⚠️ 「显示哪一份产物」由提交时的 entryFile 明确指定，不能再按时间或种子 index.html 猜。
-function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
+async function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
   let studentName = '小创作者';
   if (!row.student_anon && row.student_name) {
     const trimmed = String(row.student_name).trim();
@@ -563,7 +563,7 @@ function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
     type: 'VIBECODING',
     // 站内的 VibeCoding 提交天然属于「VibeCoding作品」这一类（不查映射表）
     plazaCategory: 'VIBECODING',
-    plazaCategoryLabel: plazaCategoryLabelOf({ imported: false, type: 'VIBECODING' }),
+    plazaCategoryLabel: await plazaCategoryLabelOf({ imported: false, type: 'VIBECODING' }),
     title: row.title,
     description: row.description || '',
     entryFile: row.entry_file || 'index.html',
@@ -582,8 +582,8 @@ function publicVibeCodingWorkRow(row, { includeFiles = false } = {}) {
  * 公开取一份已发布的 VibeCoding 作品（按分享码）。
  * 发布口径与列表/详情一致：is_public=1 且学生确认过展示授权。
  */
-function publicSubmission(token) {
-  const submission = row(
+async function publicSubmission(token) {
+  const submission = await arow(
     'SELECT * FROM vibecoding_submissions WHERE share_token=? AND is_public=1 AND copyright_confirmed_at IS NOT NULL',
     [token],
   );
@@ -595,11 +595,11 @@ function publicSubmission(token) {
  * 取这份已发布作品里的一个**真文件**产物（拿 fileId 换出 file_assets 行）。
  * 准入只认**提交快照里出现过的 fileId** —— 拿得到别人的 fileId 也读不到别人的文件。
  */
-function publicWorkFile(submission, fileId) {
+async function publicWorkFile(submission, fileId) {
   if (!snapshotDocumentFileIds(submission).has(String(fileId))) {
     throw errors.notFound('文件不存在于这份作品中', 'PUBLIC_VIBECODING_FILE_NOT_FOUND');
   }
-  const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
   if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
   if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
   if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');

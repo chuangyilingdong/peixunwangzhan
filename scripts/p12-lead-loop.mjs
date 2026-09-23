@@ -28,7 +28,7 @@ const adminCtx = (pathname, method = 'GET', body = {}) => ({ pathname, method, b
 
 try {
   const { handlePublicCommunication, handleAdminCommunication } = await import('../apps/server/src/routes/communication.js');
-  const { row } = await import('../apps/server/src/lib.js');
+  const { row, arow } = await import('../apps/server/src/lib.js');
 
   // 官网公开预约表单
   const created = await handlePublicCommunication(publicCtx('/api/public/contact', 'POST', {
@@ -58,7 +58,7 @@ try {
   check(converted?.status === 'CONVERTED', '应能推进到已转化');
 
   // 状态变更写审计
-  const auditRow = row("SELECT COUNT(*) AS n FROM audit_logs WHERE action='LEAD_UPDATE'");
+  const auditRow = await arow("SELECT COUNT(*) AS n FROM audit_logs WHERE action='LEAD_UPDATE'");
   check(Number(auditRow?.n || 0) >= 3, `线索状态变更应写审计，实际 ${auditRow?.n || 0} 条`);
 
   if (failures.length) throw new Error(failures.join('; '));

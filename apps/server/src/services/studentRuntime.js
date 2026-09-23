@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { connect } from 'node:net';
-import { errors, row } from '../lib.js';
+import { errors, row, arow } from '../lib.js';
 import { issueRuntimeKey, assertRuntimeClassroomActive } from '../routes/runtimeGateway.js';
 
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
@@ -118,7 +118,7 @@ function parseScriptJson(stdout, what) {
  */
 export async function listStudentDeliverables({ sessionId, studentId, orgId, lessonId = null }) {
   const cfg = config();
-  assertCollectable({ sessionId, studentId, orgId, lessonId });
+  await assertCollectable({ sessionId, studentId, orgId, lessonId });
   const stdout = await runHost('collect', { session: sessionId, student: studentId, mode: 'list' }, { timeout: COLLECT_TIMEOUT_MS });
   const parsed = parseScriptJson(stdout, '列产物');
   return {
@@ -136,7 +136,7 @@ export async function listStudentDeliverables({ sessionId, studentId, orgId, les
  */
 export async function collectStudentDeliverable({ sessionId, studentId, orgId, lessonId = null, name }) {
   const cfg = config();
-  assertCollectable({ sessionId, studentId, orgId, lessonId });
+  await assertCollectable({ sessionId, studentId, orgId, lessonId });
   const wanted = String(name || '').trim();
   if (!wanted) throw errors.badRequest('要取哪一份产物得说出来', 'RUNTIME_DELIVERABLE_REQUIRED');
   const stdout = await runHost('collect', { session: sessionId, student: studentId, mode: 'export', name: wanted }, { timeout: COLLECT_TIMEOUT_MS });
@@ -148,17 +148,17 @@ export async function collectStudentDeliverable({ sessionId, studentId, orgId, l
 }
 
 /** 列产物/取产物共用的前置：脚本在不在 + 门禁（与开盒子、调模型同一套）。 */
-function assertCollectable({ sessionId, studentId, orgId, lessonId }) {
+async function assertCollectable({ sessionId, studentId, orgId, lessonId }) {
   // 「取产物这条通道在不在」单独判：script 模式下它看的是 collect 脚本（与开盒子看的不是同一个文件）
   const availability = hostChannel('collect');
   if (!availability.available) {
     throw errors.conflict(`这台机器还不能取学生的作品：${availability.reason}`, 'RUNTIME_LAUNCH_UNAVAILABLE');
   }
-  const student = row('SELECT id,org_id FROM users WHERE id=?', [studentId]);
+  const student = await arow('SELECT id,org_id FROM users WHERE id=?', [studentId]);
   if (!student || student.org_id !== orgId) throw errors.forbidden('学生不属于该机构', 'RUNTIME_STUDENT_INVALID');
   // 门禁：课堂 ACTIVE + 学生在名单里。下课之后连「取作品」都不给 —— 作品靠宿主侧的留存兜底
   // （收环境前会先留一份，见 stop-student-user.sh），不靠让学生继续访问已经收掉的环境。
-  return assertRuntimeClassroomActive({ o: orgId, u: studentId, s: sessionId, l: lessonId });
+  return await assertRuntimeClassroomActive({ o: orgId, u: studentId, s: sessionId, l: lessonId });
 }
 
 function parseLaunchOutput(stdout) {
@@ -320,9 +320,9 @@ export async function launchStudentRuntime({ sessionId, studentId, orgId, lesson
 
   // ① 门禁：与调模型那条路同一套（课堂 ACTIVE + 学生在名单里）。这里是**开盒子**时的那道，
   //    调模型时还会再过一次 —— 中途被移出名单/课堂结束，盒子留着也用不了。
-  const student = row('SELECT id,org_id FROM users WHERE id=?', [studentId]);
+  const student = await arow('SELECT id,org_id FROM users WHERE id=?', [studentId]);
   if (!student || student.org_id !== orgId) throw errors.forbidden('学生不属于该机构', 'RUNTIME_STUDENT_INVALID');
-  const classroom = assertRuntimeClassroomActive({ o: orgId, u: studentId, s: sessionId, l: lessonId });
+  const classroom = await assertRuntimeClassroomActive({ o: orgId, u: studentId, s: sessionId, l: lessonId });
 
   // ② 身份：一把只属于这节课这个学生的运行时密钥 + 一张短时入口票据（容器起来后就认这张）
   const runtimeKey = issueRuntimeKey({ orgId, userId: studentId, sessionId: classroom.id, lessonId: classroom.lesson_id || null, ttlMs: DEFAULT_TTL_MS });

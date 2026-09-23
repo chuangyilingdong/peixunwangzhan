@@ -9,7 +9,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
-  publishedLessonVisibilitySql,
+  publishedLessonVisibilitySql, arows, arow, amap,
 } from '../lib.js';
 
 function rawValue(user, snake, camel) {
@@ -42,9 +42,9 @@ export const SESSION_STUDENT_STATE_LABELS = {
   PENDING: '待上课', ACTIVE: '上课中', COMPLETED: '已完课', INCOMPLETE: '未完课', REMOVED: '被移除',
 };
 
-export function getStudentLessonParticipations(user) {
+export async function getStudentLessonParticipations(user) {
   const { id: userId, orgId } = studentIdentity(user);
-  return rows(
+  return await arows(
     `SELECT part.*, session.title session_title, session.status session_status,
             session.delivery_mode session_delivery_mode, session.started_at session_started_at,
             session.ended_at session_ended_at, session.ended_reason session_ended_reason,
@@ -78,9 +78,9 @@ export function participationMapByLesson(participations) {
 }
 
 /** 学生自己的课堂（含六态），给「我的课堂」用。 */
-export function getStudentClassrooms(user) {
+export async function getStudentClassrooms(user) {
   const { id: userId, orgId } = studentIdentity(user);
-  return rows(
+  return (await arows(
     `SELECT session.id, session.title, session.status, session.delivery_mode,
             session.lesson_id, session.series_id, session.started_at, session.ended_at, session.created_at,
             part.status part_status, part.completed_at, part.completed_cost_fen, part.removed_reason,
@@ -94,7 +94,7 @@ export function getStudentClassrooms(user) {
       WHERE part.student_id = ? AND part.org_id = ? AND session.org_id = part.org_id AND session.status <> 'DISSOLVED'
       ORDER BY COALESCE(session.started_at, session.created_at) DESC`,
     [userId, orgId],
-  ).map((item) => ({
+  )).map((item) => ({
     id: item.id,
     title: item.title,
     status: item.status,
@@ -128,9 +128,9 @@ export function getStudentMemberships() {
 }
 
 /** 学生**正在进行**的课堂（批次 C：从课堂名单取，不再经班级）。 */
-export function getStudentActiveSessions(user) {
+export async function getStudentActiveSessions(user) {
   const { id: userId, orgId } = studentIdentity(user);
-  const participations = getStudentLessonParticipations(user);
+  const participations = await getStudentLessonParticipations(user);
   return participations
     .filter((part) => part.session_status === 'ACTIVE' && part.status === 'ACTIVE')
     .map((part) => ({
@@ -152,12 +152,12 @@ export function getStudentActiveSessions(user) {
  * 所以单独查一次挂到结果上 —— 不去动列表 SQL 的 SELECT（历史上往列表 SELECT 里加列
  * 把接口改崩过两次，见交接说明第 59 条）。
  */
-function grantedSeriesIds(userId, orgId) {
-  return new Set(rows(
+async function grantedSeriesIds(userId, orgId) {
+  return new Set((await arows(
     `SELECT series_id FROM student_course_grants
       WHERE org_id = ? AND student_id = ? AND revoked_at IS NULL`,
     [orgId, userId],
-  ).map((item) => item.series_id));
+  )).map((item) => item.series_id));
 }
 
 /**
@@ -175,10 +175,10 @@ function grantedSeriesIds(userId, orgId) {
  *    注意下面 resolveStudentLessonContext 的入口门禁**故意仍按实时状态**判：课堂一旦绑定了某节课，
  *    后来的发布把它盖成草稿，也不该把已经在上的学生踢出去。
  */
-export function getStudentCourses(user) {
+export async function getStudentCourses(user) {
   const { id: userId, orgId } = studentIdentity(user);
-  const granted = grantedSeriesIds(userId, orgId);
-  const items = rows(
+  const granted = await grantedSeriesIds(userId, orgId);
+  const items = await arows(
     `SELECT
         series.*,
         lesson.id AS lesson_id, lesson.title AS lesson_title,
@@ -202,7 +202,7 @@ export function getStudentCourses(user) {
   for (const item of items.filter((item) => granted.has(item.id))) {
     let series = seriesById.get(item.id);
     if (!series) {
-      series = normalizeSeries(item, { orgId, asPublished: true });
+      series = await normalizeSeries(item, { orgId, asPublished: true });
       series.lessons = [];
       series.classIds = [];
       series.hasGrant = granted.has(item.id);
@@ -210,7 +210,7 @@ export function getStudentCourses(user) {
     }
     let lesson = series.lessons.find((candidate) => candidate.id === item.lesson_id);
     if (!lesson) {
-      lesson = normalizeLesson({ ...row('SELECT * FROM course_lessons WHERE id=?', [item.lesson_id]), /* 学生读已发布快照 */
+      lesson = await normalizeLesson({ ...await arow('SELECT * FROM course_lessons WHERE id=?', [item.lesson_id]), /* 学生读已发布快照 */
         id: item.lesson_id,
         series_id: item.id,
         title: item.lesson_title,
@@ -238,9 +238,9 @@ export function getStudentCourses(user) {
  * 不受"是否已加入班级课单"限制。用于学员端"我的课程"列表与详情。
  * 支持 difficulty / ageMin / ageMax / tag / search 筛选。
  */
-export function getStudentAccessibleCourses(user, filters = {}) {
+export async function getStudentAccessibleCourses(user, filters = {}) {
   const { id: userId, orgId } = studentIdentity(user);
-  const granted = grantedSeriesIds(userId, orgId);
+  const granted = await grantedSeriesIds(userId, orgId);
   const params = [orgId, orgId];
   const wheres = [
     "series.status = 'PUBLISHED'",
@@ -267,7 +267,7 @@ export function getStudentAccessibleCourses(user, filters = {}) {
     const like = '%' + filters.search + '%';
     params.push(like, like);
   }
-  const items = rows(
+  const items = await arows(
     `SELECT series.* FROM course_series series
      LEFT JOIN course_assignments assignment
        ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
@@ -275,8 +275,8 @@ export function getStudentAccessibleCourses(user, filters = {}) {
      ORDER BY series.sort, series.title`,
     params,
   );
-  return items.filter((item) => granted.has(item.id)).map((item) => {
-    const series = normalizeSeries(item, { orgId, includeLessons: true, asPublished: true });
+  return await amap(items.filter((item) => granted.has(item.id)), async (item) => {
+    const series = await normalizeSeries(item, { orgId, includeLessons: true, asPublished: true });
     series.hasGrant = granted.has(item.id);
     return series;
   });
@@ -285,9 +285,9 @@ export function getStudentAccessibleCourses(user, filters = {}) {
 /**
  * P5-W05: 学员端单课包详情。校验可访问性 + 返回完整课时清单（含 lessonContent）。
  */
-export function getStudentCourseDetail(user, seriesId) {
+export async function getStudentCourseDetail(user, seriesId) {
   const { orgId } = studentIdentity(user);
-  const series = row(
+  const series = await arow(
     `SELECT series.* FROM course_series series
      LEFT JOIN course_assignments assignment
        ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql('assignment')}
@@ -295,8 +295,8 @@ export function getStudentCourseDetail(user, seriesId) {
        AND ${orgCourseAccessSql()}`,
     [orgId, seriesId, orgId],
   );
-  if (!series || !studentHasGrant(studentIdentity(user).id, orgId, seriesId)) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
-  const detail = normalizeSeries(series, { orgId, includeLessons: true, asPublished: true });
+  if (!series || !await studentHasGrant(studentIdentity(user).id, orgId, seriesId)) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
+  const detail = await normalizeSeries(series, { orgId, includeLessons: true, asPublished: true });
   detail.lessons = (detail.lessons || []).filter((lesson) => lesson.status === 'PUBLISHED');
   return detail;
 }
@@ -320,32 +320,32 @@ export function getStudentCourseDetail(user, seriesId) {
  * ⚠️ 2026-09-13 用户决定：**取消「在家练习」免课堂通道** —— 有许可只代表「能看课包与课时信息」，
  *    真要进操作环境必须被老师加进某节课的课堂。
  */
-export function resolveStudentLessonContext(user, courseLessonId, preferredSessionId = null) {
+export async function resolveStudentLessonContext(user, courseLessonId, preferredSessionId = null) {
   const { id: userId, orgId } = studentIdentity(user);
   if (!courseLessonId) throw errors.badRequest('请选择课时', 'LESSON_REQUIRED');
 
 
-  const lesson = row(
+  const lesson = await arow(
     `SELECT lesson.* FROM course_lessons lesson
       JOIN course_series series ON series.id = lesson.series_id AND series.status='PUBLISHED'
       WHERE lesson.id=? AND lesson.status='PUBLISHED'`,
     [courseLessonId],
   );
   if (!lesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_ASSIGNED');
-  const series = row("SELECT * FROM course_series series WHERE series.id=? AND series.status='PUBLISHED'", [lesson.series_id]);
-  const orgAccess = row(
+  const series = await arow("SELECT * FROM course_series series WHERE series.id=? AND series.status='PUBLISHED'", [lesson.series_id]);
+  const orgAccess = await arow(
     `SELECT series.id FROM course_series series
       LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql('assignment')}
       WHERE series.id=? AND ${orgSeriesAccessSql()}`,
     [orgId, lesson.series_id, orgId],
   );
   if (!series || !orgAccess) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
-  if (!studentHasGrant(userId, orgId, lesson.series_id)) {
+  if (!await studentHasGrant(userId, orgId, lesson.series_id)) {
     throw errors.forbidden('这个课包还没有分给你：请老师先把课包分给你，你才能上这节课。', 'COURSE_GRANT_REQUIRED');
   }
 
   // 这节课上属于他的参与记录（被移除的不算）；多条时优先取「上课中」那条
-  const participation = row(
+  const participation = await arow(
     `SELECT part.*, session.status session_status, session.delivery_mode session_delivery_mode,
         session.teacher_id, teacher.display_name teacher_name, session.ai_paused, session.student_cost_cap_fen,
         session.allow_text, session.allow_image, session.allow_music, session.allow_video,
@@ -364,7 +364,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
     throw errors.forbidden('老师还没有把这节课的课堂安排给你：请让老师把你加进课堂。', 'NOT_IN_CLASSROOM');
   }
 
-  const normalizedLesson = normalizeLesson({ ...lesson, lesson_id: lesson.id }, { asPublished: true });
+  const normalizedLesson = await normalizeLesson({ ...lesson, lesson_id: lesson.id }, { asPublished: true });
   const activeSession = normalizeSession({
     id: participation.session_id,
     title: participation.session_title,
@@ -413,7 +413,7 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
       completedCostFen: Number(participation.completed_cost_fen || 0),
     },
     lesson: normalizedLesson,
-    series: normalizeSeries(series, { orgId, asPublished: true }),
+    series: await normalizeSeries(series, { orgId, asPublished: true }),
     activeSession,
     canUseNow,
     canUseVibeCodingNow,
@@ -429,9 +429,9 @@ export function resolveStudentLessonContext(user, courseLessonId, preferredSessi
 }
 
 /** 学生是否持有该课包的有效许可（门禁第③步）。 */
-function studentHasGrant(userId, orgId, seriesId) {
+async function studentHasGrant(userId, orgId, seriesId) {
   if (!seriesId) return false;
-  return Boolean(row(
+  return Boolean(await arow(
     'SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=? AND revoked_at IS NULL LIMIT 1',
     [orgId, userId, seriesId],
   ));
@@ -439,15 +439,15 @@ function studentHasGrant(userId, orgId, seriesId) {
 
 const WORK_PROGRESS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
 
-function studentLessonProgressMap(user) {
+async function studentLessonProgressMap(user) {
   const { id: userId, orgId } = studentIdentity(user);
-  const projects = rows(
+  const projects = await arows(
     `SELECT id, class_id, class_session_id, course_lesson_id, title, status, latest_version, last_saved_at, updated_at
      FROM student_projects
      WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED' AND deleted_at IS NULL`,
     [userId, orgId],
   );
-  const works = rows(
+  const works = await arows(
     `SELECT work.id, work.project_id, work.course_lesson_id, work.title, work.status,
             work.teacher_comment, work.reviewed_at, work.submitted_at,
             (SELECT MAX(submission.round) FROM work_submissions submission WHERE submission.work_id=work.id) AS submission_round,
@@ -559,9 +559,9 @@ function sortDraftsByRecency(progressByLesson) {
   return progressByLesson;
 }
 
-function studentLatestNotifications(user, limit = 5) {
+async function studentLatestNotifications(user, limit = 5) {
   const { id: userId, orgId } = studentIdentity(user);
-  return rows(
+  return (await arows(
     `SELECT notification.id, notification.scope_type, notification.kind, notification.title, notification.body,
             notification.target_url, notification.pinned,
             COALESCE(notification.publish_at, notification.created_at) AS effective_at,
@@ -578,7 +578,7 @@ function studentLatestNotifications(user, limit = 5) {
      ORDER BY notification.pinned DESC, effective_at DESC
      LIMIT ?`,
     [userId, nowIso(), orgId, limit],
-  ).map((item) => ({
+  )).map((item) => ({
     id: item.id,
     kind: item.kind,
     title: item.title,
@@ -698,9 +698,9 @@ export function lessonAvailability({ lesson, hasGrant, participation }) {
  * @param user    学生用户
  * @param context 可选，已经算好的 `buildStudentContext(user)`，传进来就不重复查库
  */
-export function lessonStateMap(user, context = null) {
-  const resolved = context || buildStudentContext(user);
-  const participationByLesson = participationMapByLesson(getStudentLessonParticipations(user));
+export async function lessonStateMap(user, context = null) {
+  const resolved = context || await buildStudentContext(user);
+  const participationByLesson = participationMapByLesson(await getStudentLessonParticipations(user));
   const map = new Map();
   for (const course of resolved.courses || []) {
     const hasGrant = Boolean(course.hasGrant);
@@ -712,12 +712,12 @@ export function lessonStateMap(user, context = null) {
   return map;
 }
 
-export function buildStudentDashboard(user) {
-  const context = buildStudentContext(user);
+export async function buildStudentDashboard(user) {
+  const context = await buildStudentContext(user);
   const { id: userId, orgId } = studentIdentity(user);
-  const progressByLesson = sortDraftsByRecency(studentLessonProgressMap(user));
+  const progressByLesson = sortDraftsByRecency(await studentLessonProgressMap(user));
   // 批次 C：这节课对学生「是什么状态」全部由**课堂名单**决定（班级退场，没有 class 这一层了）
-  const participationByLesson = participationMapByLesson(getStudentLessonParticipations(user));
+  const participationByLesson = participationMapByLesson(await getStudentLessonParticipations(user));
   // 「今天」只由**正在进行的课堂**决定（2026-09-11 删掉课堂任务后不再有「今天到期的任务」这个来源；
   // learning_tasks 表保留历史数据，代码不再读写）。
   const allLessonTasks = [];
@@ -802,7 +802,7 @@ export function buildStudentDashboard(user) {
 
   // 课程中心那份清单（学生端「课程中心」渲染的就是它）。范围＝本机构可访问的已发布课包，
   // 所以在「我的课程」里能看到自己还没被分配的课包（标「未授权」，学生知道该找老师要什么）。
-  const classroomCourses = getStudentAccessibleCourses(user).map((course) => {
+  const classroomCourses = (await getStudentAccessibleCourses(user)).map((course) => {
     const courseHasGrant = Boolean(course.hasGrant);
     const lessons = (course.lessons || []).map((lesson) => {
       const progress = progressByLesson.get(lesson.id) || {
@@ -867,7 +867,7 @@ export function buildStudentDashboard(user) {
     .sort((a, b) => (taskPriority[a.status] ?? 9) - (taskPriority[b.status] ?? 9)
       || String(b.progress.lastActivityAt || '').localeCompare(String(a.progress.lastActivityAt || '')))
     .slice(0, 8);
-  const continueProjects = rows(
+  const continueProjects = (await arows(
     `SELECT project.id, project.title, project.course_lesson_id, project.class_id, project.status,
             project.latest_version, project.last_saved_at, project.updated_at,
             lesson.title AS lesson_title, series.title AS course_title
@@ -878,7 +878,7 @@ export function buildStudentDashboard(user) {
      ORDER BY project.updated_at DESC
      LIMIT 5`,
     [userId, orgId],
-  ).map((project) => ({
+  )).map((project) => ({
     id: project.id,
     title: project.title,
     lessonId: project.course_lesson_id,
@@ -893,7 +893,7 @@ export function buildStudentDashboard(user) {
     editableNow: context.canUseNow,
     blockReason: context.canUseNow ? null : context.blockReason,
   }));
-  const notifications = studentLatestNotifications(user);
+  const notifications = await studentLatestNotifications(user);
 
   return {
     ...context,
@@ -925,7 +925,7 @@ export function buildStudentDashboard(user) {
   };
 }
 
-export function resolveProjectUsageContext(user, project) {
+export async function resolveProjectUsageContext(user, project) {
   const { id: userId, orgId } = studentIdentity(user);
   if (!project || project.student_id !== userId || project.org_id !== orgId) {
     throw errors.notFound('项目不存在', 'PROJECT_NOT_FOUND');
@@ -934,7 +934,7 @@ export function resolveProjectUsageContext(user, project) {
     throw errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE');
   }
   if (!project.class_session_id) throw errors.forbidden('项目没有有效课堂归属，请从当前课堂进入', 'PROJECT_SESSION_REQUIRED');
-  return resolveStudentLessonContext(user, project.course_lesson_id, project.class_session_id);
+  return await resolveStudentLessonContext(user, project.course_lesson_id, project.class_session_id);
 }
 
 /**
@@ -945,16 +945,16 @@ export function resolveProjectUsageContext(user, project) {
  *   · `canUseNow` 只看「有没有正在进行的课堂」—— **不再有「在家练习免课堂」这条通道**
  *     （用户 2026-09-13 决定取消：有许可只代表能看课包与课时信息）。
  */
-export function buildStudentContext(user) {
-  const activeSessions = getStudentActiveSessions(user);
-  const classrooms = getStudentClassrooms(user);
+export async function buildStudentContext(user) {
+  const activeSessions = await getStudentActiveSessions(user);
+  const classrooms = await getStudentClassrooms(user);
   const canUseNow = activeSessions.length > 0;
   return {
     user: normalizeUser(user, { includeAuthMeta: true }),
     classes: [],
     classrooms,
     activeSessions: activeSessions.map(normalizeSession),
-    courses: getStudentCourses(user),
+    courses: await getStudentCourses(user),
     canUseNow,
     blockReason: canUseNow ? null : '跟随课堂账号需要教师先开启课堂后才能创作',
   };

@@ -25,7 +25,7 @@ import { fitMediaToRatio, parseRatio } from './mediaFit.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { uploadRoot } from './fileUploadSecurity.js';
-import { row } from '../lib.js';
+import { row, arow } from '../lib.js';
 
 // 上游给的 URL 活 24h，留 4h 余量；到点重新上传。
 export const MIRROR_CACHE_TTL_MS = 20 * 60 * 60 * 1000;
@@ -75,11 +75,11 @@ function describeSize(bytes) {
  * 我们自己的文件资产 URL → 磁盘内容（读不到就返回 null，交给 HTTP 那条路试）。
  * 只在"文件确实在库里且 storage_kind=INTERNAL_PROXY"时才读盘。
  */
-function readOwnFileFromDisk(source) {
+async function readOwnFileFromDisk(source) {
   const match = String(source || '').match(/\/api\/(?:public|student|admin|org)\/file-assets\/([^/]+)\/download(?:$|[?#])/);
   if (!match) return null;
   try {
-    const file = row('SELECT storage_kind,storage_key,mime_type FROM file_assets WHERE id=?', [match[1]]);
+    const file = await arow('SELECT storage_kind,storage_key,mime_type FROM file_assets WHERE id=?', [match[1]]);
     if (!file || file.storage_kind !== 'INTERNAL_PROXY') return null;
     const key = String(file.storage_key || '').replaceAll('\\', '/');
     if (!key || key.startsWith('/') || /^[A-Za-z]:/.test(key) || key.split('/').includes('..')) return null;
@@ -143,7 +143,7 @@ async function uploadMirrored(source, { uploadUrl, apiKey, timeoutMs, fetchImpl:
   //       在 /api/public/... 上是 **403**（那条路由只服务公开文件），而 /api/student/... 要会话；
   //       顺带省掉一次"自己请求自己"的回环。
   //    b) 别处（上游自己的存储、外部图床、或 a 读不到时）→ HTTP 取回来。
-  const disk = readOwnFileFromDisk(source);
+  const disk = await readOwnFileFromDisk(source);
   if (disk) {
     contentType = disk.contentType;
     assertWithinUpstreamLimit(disk.bytes.length, contentType);

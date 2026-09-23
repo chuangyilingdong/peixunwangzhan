@@ -2,7 +2,7 @@ import { AI_PROVIDER, AI_PROVIDER_ENDPOINT, AI_PROVIDER_MODEL, AI_PROVIDER_API_K
 import { isMockProvider, providerDefinition, unavailableProvider, validateProviderConfig } from './providerContract.js';
 import { openAiCompatibleProvider } from './openaiCompatibleProvider.js';
 import { getProviderApiKey } from './providerSecret.js';
-import { id, json, nowIso, q, row } from '../lib.js';
+import { id, json, nowIso, q, row, arow, aq } from '../lib.js';
 import { priceFenFor } from './computePool.js';
 import { collectUsageEvidence, computeContractCost, contractCostRuleSnapshot, normalizeModelUnitPrices, normalizeUpstreamUnitPrices, reportedCostRuleSnapshot } from './upstreamCost.js';
 
@@ -123,7 +123,7 @@ export function getGenerationProvider(selection = {}) {
     const modality = args.modality || 'TEXT';
     // 对外售价观测：unitFen 按「当前公告价」折算，仅用于观测与对账，**不代表学生被扣费**
     // （charged 恒 false，学生账本 usage_records.cost_fen/credits_charged 恒 0）。baseline 明确标注观测口径。
-    const salePriceFen = priceFenFor({ modality, model: primary.model });
+    const salePriceFen = await priceFenFor({ modality, model: primary.model });
     const snapshot = { model: primary.model, modality, unitFen: salePriceFen, charged: false, baseline: 'OBSERVATION_ONLY', capturedAt: nowIso(), basis: 'OBSERVATION_ONLY' };
     const callId = id('call');
     wrapper.compute = { callId, saleSnapshot: snapshot };
@@ -133,11 +133,11 @@ export function getGenerationProvider(selection = {}) {
       const selected = candidates[index]; const provider = index ? rawGenerationProvider(selected) : primary;
       const attemptId = id('attempt'); const clientRequestId = id('req'); let emitted = false; let submitted = false;
       const context = args.computeContext || selection.computeContext || {};
-      const project = args.projectId ? row('SELECT org_id,class_session_id,course_lesson_id FROM student_projects WHERE id=?',[args.projectId]) : null;
+      const project = args.projectId ? await arow('SELECT org_id,class_session_id,course_lesson_id FROM student_projects WHERE id=?',[args.projectId]) : null;
       const sessionId = context.sessionId || project?.class_session_id || null;
-      const session = sessionId ? row('SELECT org_id,lesson_id FROM class_sessions WHERE id=?',[sessionId]) : null;
+      const session = sessionId ? await arow('SELECT org_id,lesson_id FROM class_sessions WHERE id=?',[sessionId]) : null;
       // 观测价按本次实际路由到的模型折算（主/备不同模型价可能不同），只观测、不扣学生。
-      const attemptSalePriceFen = priceFenFor({ modality, model: provider.model });
+      const attemptSalePriceFen = await priceFenFor({ modality, model: provider.model });
       // 2026-09-18（用户口径：成本只留"价目表 → 合同单价"一套）：
       // 这里原来还有一档 `selected.estimatedCostFen`（渠道卡里手填的"估算成本 分/次"），
       // 它的优先级低于合同单价 —— 也就是说**填了合同单价，这档就完全被忽略、白填**，
@@ -153,16 +153,16 @@ export function getGenerationProvider(selection = {}) {
         estimatedCostFen: null,
         capturedAt: nowIso(),
       };
-      q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,sale_price_fen,cost_rule_snapshot,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      await aq(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,project_id,generation_job_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,sale_price_fen,cost_rule_snapshot,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [attemptId,callId,index+1,context.orgId || null,context.userId || args.userId || null,args.projectId || null,context.jobId || null,modality,selected.channelId || 'default',provider.name,provider.model,selected.gateway ? 'gateway' : 'direct','RUNNING',clientRequestId,selected.gateway ? null : (selected.channelId || 'default'),selected.providerAccountRef || null,attemptSalePriceFen,json(costRuleSnapshot),json(snapshot),nowIso()]);
-      q('UPDATE compute_attempts SET org_id=?,class_session_id=?,lesson_id=? WHERE id=?',[session?.org_id || context.orgId || project?.org_id || null,sessionId,session?.lesson_id || context.lessonId || project?.course_lesson_id || null,attemptId]);
-      const output = (callback) => (...values) => { if (values[0]) { emitted = true; q('UPDATE compute_attempts SET output_started=1 WHERE id=?',[attemptId]); } return callback?.(...values); };
+      await aq('UPDATE compute_attempts SET org_id=?,class_session_id=?,lesson_id=? WHERE id=?',[session?.org_id || context.orgId || project?.org_id || null,sessionId,session?.lesson_id || context.lessonId || project?.course_lesson_id || null,attemptId]);
+      const output = (callback) => async (...values) => { if (values[0]) { emitted = true; await aq('UPDATE compute_attempts SET output_started=1 WHERE id=?',[attemptId]); } return callback?.(...values); };
       try {
         const result = await provider[method]({ ...args,
           clientRequestId,
-          onEvidence: (evidence = {}) => q(`UPDATE compute_attempts SET response_request_id=COALESCE(?,response_request_id),response_payload_id=COALESCE(?,response_payload_id),usage_id=COALESCE(?,usage_id),gateway_log_id=COALESCE(?,gateway_log_id),actual_channel_id=COALESCE(?,actual_channel_id) WHERE id=?`, [evidence.responseRequestId || null,evidence.responsePayloadId || null,evidence.usageId || null,evidence.gatewayLogId || null,evidence.actualChannelId || null,attemptId]),
+          onEvidence: async (evidence = {}) => await aq(`UPDATE compute_attempts SET response_request_id=COALESCE(?,response_request_id),response_payload_id=COALESCE(?,response_payload_id),usage_id=COALESCE(?,usage_id),gateway_log_id=COALESCE(?,gateway_log_id),actual_channel_id=COALESCE(?,actual_channel_id) WHERE id=?`, [evidence.responseRequestId || null,evidence.responsePayloadId || null,evidence.usageId || null,evidence.gatewayLogId || null,evidence.actualChannelId || null,attemptId]),
           onDelta: output(args.onDelta), onReasoning: output(args.onReasoning),
-          onSubmitted: (taskId) => { submitted = true; q("UPDATE compute_attempts SET status='SUBMITTED',task_id=? WHERE id=?",[String(taskId),attemptId]); args.onSubmitted?.(taskId); },
+          onSubmitted: async (taskId) => { submitted = true; await aq("UPDATE compute_attempts SET status='SUBMITTED',task_id=? WHERE id=?",[String(taskId),attemptId]); args.onSubmitted?.(taskId); },
         });
         const reported = !selected.gateway ? result?.assets?.find(asset => asset?.metadata?.reportedCost)?.metadata?.reportedCost : null;
         // 合同单价折算（P90）：用量证据按模态采集（文本看上游 token 回执，图/视频/音乐看请求参数）。
@@ -183,7 +183,7 @@ export function getGenerationProvider(selection = {}) {
           provider: provider.name, channelId: selected.channelId || 'default', model: provider.model, reported,
         });
         const hasUsageEvidence = usage.evidence !== 'NONE';
-        q("UPDATE compute_attempts SET status='SUCCESS',cost_source=?,upstream_cost_fen=?,cost_rule_snapshot=COALESCE(?,cost_rule_snapshot),usage_snapshot=?,completed_at=? WHERE id=?",[computedSource,upstreamCostFen,ruleSnapshot ? json(ruleSnapshot) : null,hasUsageEvidence ? json(usage) : null,nowIso(),attemptId]);
+        await aq("UPDATE compute_attempts SET status='SUCCESS',cost_source=?,upstream_cost_fen=?,cost_rule_snapshot=COALESCE(?,cost_rule_snapshot),usage_snapshot=?,completed_at=? WHERE id=?",[computedSource,upstreamCostFen,ruleSnapshot ? json(ruleSnapshot) : null,hasUsageEvidence ? json(usage) : null,nowIso(),attemptId]);
         wrapper.name = provider.name; wrapper.model = provider.model;
         wrapper.compute = { ...wrapper.compute, costSource: computedSource, upstreamCostFen, costRuleSnapshot: ruleSnapshot, usageSnapshot: hasUsageEvidence ? usage : null };
         return { ...result, compute: wrapper.compute };
@@ -199,7 +199,7 @@ export function getGenerationProvider(selection = {}) {
           .split(selected.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]')
           .split(selected.gateway?.apiKey || '__NO_CONFIGURED_SECRET__').join('[redacted]')
           .slice(0, 1000);
-        q("UPDATE compute_attempts SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",[String(error.code || 'UPSTREAM_ERROR'),failMessage,nowIso(),attemptId]);
+        await aq("UPDATE compute_attempts SET status='FAILED',error_code=?,error_message=?,completed_at=? WHERE id=?",[String(error.code || 'UPSTREAM_ERROR'),failMessage,nowIso(),attemptId]);
         // Only an explicit pre-acceptance rejection is safe. Network ambiguity, accepted jobs and output never retry.
         if (index + 1 >= candidates.length || emitted || submitted || args.signal?.aborted || error.safeToRetry !== true) throw error;
       }

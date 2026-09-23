@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -103,14 +103,14 @@ const MEDIA_ROOT = process.env.PLAZA_MEDIA_ROOT || '/srv/ai-kids-platform/public
  *     粗判的代价只是"少删了一个目录"，方向是安全的）；
  *   · 目录本来就不在，算"没挪"，不算失败。
  */
-function quarantineImportedMedia(work) {
+async function quarantineImportedMedia(work) {
   const imported = parseJson(work.canvas_snapshot, {})?.imported;
   const sourceId = imported ? String(imported.sourceId || '') : '';
   const dirName = imported?.source === 'ltai' ? 'ltai-works' : imported?.source === 'webworks' ? 'web-works' : null;
   if (!dirName || !sourceId) return null;
   const relative = `${dirName}/${sourceId}`;
   const from = path.join(MEDIA_ROOT, relative);
-  const stillUsed = row('SELECT id FROM works WHERE id<>? AND canvas_snapshot LIKE ? LIMIT 1', [work.id, `%"sourceId":"${sourceId}"%`]);
+  const stillUsed = await arow('SELECT id FROM works WHERE id<>? AND canvas_snapshot LIKE ? LIMIT 1', [work.id, `%"sourceId":"${sourceId}"%`]);
   if (stillUsed) return { path: relative, action: 'kept', note: '还有别的作品引用同一份媒体，没有挪动' };
   if (!fs.existsSync(from)) return { path: relative, action: 'missing', note: '媒体目录本来就不在' };
   const to = path.join(MEDIA_ROOT, '_trash', `${nowIso().replace(/[:.]/g, '-')}-${sourceId}`);
@@ -134,11 +134,11 @@ export async function handleWorks(ctx, part, method) {
     const sort = Object.hasOwn({ featured: true, submitted: true, title: true }, sortKey) ? sortKey : 'featured';
     const sortSql = { featured: 'work.featured_at DESC, work.submitted_at DESC, work.id DESC', submitted: 'work.submitted_at DESC, work.id DESC', title: 'work.title COLLATE NOCASE ASC, work.id DESC' }[sort];
     const { where, params, publicationStateSql } = platformWorkFilters(ctx);
-    const total = Number(row('SELECT COUNT(*) n FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id' + where, params)?.n || 0);
-    const items = rows(
+    const total = Number((await arow('SELECT COUNT(*) n FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id' + where, params))?.n || 0);
+    const items = await amap((await arows(
       `SELECT work.*,student.login student_login,series.title package_name,session.title session_title,${publicationStateSql} publication_state,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN class_sessions session ON session.id=work.class_session_id${where} ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
       [...params, limit, (page - 1) * limit],
-    ).map((work) => ({ ...normalizeWork(work), studentLogin: work.student_login, packageName: work.package_name, sessionTitle: work.session_title, publicationState: work.publication_state, organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
+    )), async (work) => ({ ...await normalizeWork(work), studentLogin: work.student_login, packageName: work.package_name, sessionTitle: work.session_title, publicationState: work.publication_state, organizationName: work.organization_name || null, pendingReportCount: Number(work.pending_report_count || 0) }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   // 作品广场的分类映射（2026-09-19 用户口径：「分类目前就 2 个…并且分类在后台可以配置」）。
@@ -147,8 +147,8 @@ export async function handleWorks(ctx, part, method) {
   if (part === '/plaza-category-map' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     return {
-      map: plazaCategoryMap(),
-      configured: configuredPlazaCategoryMap(),
+      map: await plazaCategoryMap(),
+      configured: await configuredPlazaCategoryMap(),
       defaults: DEFAULT_PLAZA_CATEGORY_MAP,
       types: PLAZA_WORK_TYPES,
       categories: PLAZA_CATEGORIES,
@@ -168,10 +168,10 @@ export async function handleWorks(ctx, part, method) {
       }
       clean[key] = value;
     }
-    const before = configuredPlazaCategoryMap();
-    q('UPDATE platform_settings SET plaza_category_map=?, updated_at=? WHERE id=1', [JSON.stringify(clean), nowIso()]);
-    audit(ctx, 'PLAZA_CATEGORY_MAP_UPDATE', 'PLATFORM', 'plaza-category-map', {}, { map: before }, { map: clean });
-    return { map: plazaCategoryMap(), configured: clean };
+    const before = await configuredPlazaCategoryMap();
+    await aq('UPDATE platform_settings SET plaza_category_map=?, updated_at=? WHERE id=1', [JSON.stringify(clean), nowIso()]);
+    await audit(ctx, 'PLAZA_CATEGORY_MAP_UPDATE', 'PLATFORM', 'plaza-category-map', {}, { map: before }, { map: clean });
+    return { map: await plazaCategoryMap(), configured: clean };
   }
 
   // ── 作品编辑 / 彻底删除（2026-09-19 用户点名「后台作品的编辑/删除」，口径：「软删 + 彻底删除两档」）
@@ -190,26 +190,26 @@ export async function handleWorks(ctx, part, method) {
   let workEditMatch = part.match(/^\/works\/([^/]+)$/);
   if (workEditMatch && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const work = row('SELECT * FROM works WHERE id=?', [workEditMatch[1]]);
+    const work = await arow('SELECT * FROM works WHERE id=?', [workEditMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     const title = nonEmptyString(ctx.body?.title, '作品标题', { max: 200 });
     const description = String(ctx.body?.description ?? '').trim();
     if (description.length > 2000) throw errors.badRequest('作品描述不能超过 2000 个字符', 'VALIDATION_ERROR', { field: 'description' });
-    q('UPDATE works SET title=?,description=? WHERE id=?', [title, description, work.id]);
-    audit(ctx, 'PLATFORM_WORK_EDIT', 'WORK', work.id, { title: work.title, description: work.description }, { title, description }, { orgId: work.org_id });
-    return normalizeWork(row('SELECT * FROM works WHERE id=?', [work.id]));
+    await aq('UPDATE works SET title=?,description=? WHERE id=?', [title, description, work.id]);
+    await audit(ctx, 'PLATFORM_WORK_EDIT', 'WORK', work.id, { title: work.title, description: work.description }, { title, description }, { orgId: work.org_id });
+    return await normalizeWork(await arow('SELECT * FROM works WHERE id=?', [work.id]));
   }
   let workDeleteMatch = part.match(/^\/works\/([^/]+)$/);
   if (workDeleteMatch && method === 'DELETE') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const work = row('SELECT * FROM works WHERE id=?', [workDeleteMatch[1]]);
+    const work = await arow('SELECT * FROM works WHERE id=?', [workDeleteMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     if (ctx.body?.confirm !== true) throw errors.badRequest('彻底删除不可恢复，请显式确认', 'WORK_DELETE_CONFIRM_REQUIRED');
     const reason = nonEmptyString(ctx.body?.reason, '删除原因', { max: 200 });
-    const before = normalizeWork(work);
-    const media = quarantineImportedMedia(work);
-    q('DELETE FROM works WHERE id=?', [work.id]);
-    audit(ctx, 'PLATFORM_WORK_DELETE', 'WORK', work.id, before, { deleted: true, reason, media }, { orgId: work.org_id });
+    const before = await normalizeWork(work);
+    const media = await quarantineImportedMedia(work);
+    await aq('DELETE FROM works WHERE id=?', [work.id]);
+    await audit(ctx, 'PLATFORM_WORK_DELETE', 'WORK', work.id, before, { deleted: true, reason, media }, { orgId: work.org_id });
     return { deleted: true, id: work.id, title: before.title, media };
   }
   // 平台端看**作品内容**（2026-09-20 用户口径：「平台能看到作品，但是也要能预览吧。现在只有个标题」）。
@@ -219,7 +219,7 @@ export async function handleWorks(ctx, part, method) {
   let vibeDetailMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
   if (vibeDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDetailMatch[1]]);
+    const submission = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDetailMatch[1]]);
     if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
     const content = normalizeSubmission(submission, { includeContent: true });
     const workBase = `/api/admin/vibecoding-works/${encodeURIComponent(submission.id)}`;
@@ -234,7 +234,7 @@ export async function handleWorks(ctx, part, method) {
   let vibeDetailFileMatch = part.match(/^\/vibecoding-works\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
   if (vibeDetailFileMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDetailFileMatch[1]]);
+    const submission = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDetailFileMatch[1]]);
     if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
     let name = '';
     try { name = decodeURIComponent(vibeDetailFileMatch[2]); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
@@ -244,7 +244,7 @@ export async function handleWorks(ctx, part, method) {
     // 准入与机构端那条一致：**只认这份作品快照里出现过的 fileId**
     const fileId = snapshotArtifactByName(submission, name)?.fileId;
     if (!fileId || !snapshotDocumentFileIds(submission).has(String(fileId))) throw errors.notFound('文件不属于此作品', 'VIBECODING_WORK_FILE_NOT_FOUND');
-    const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
     if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE') throw errors.notFound('作品文件不可用', 'VIBECODING_WORK_FILE_NOT_FOUND');
     if (file.expires_at && Date.parse(file.expires_at) <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
     return vibeDetailFileMatch[3] === 'preview' ? prepareFilePreview(ctx, file) : prepareFileDownload(ctx, file);
@@ -252,34 +252,34 @@ export async function handleWorks(ctx, part, method) {
   let vibeEditMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
   if (vibeEditMatch && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeEditMatch[1]]);
+    const submission = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeEditMatch[1]]);
     if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
     const title = nonEmptyString(ctx.body?.title, '作品标题', { max: 200 });
     const description = String(ctx.body?.description ?? '').trim();
     if (description.length > 2000) throw errors.badRequest('作品描述不能超过 2000 个字符', 'VALIDATION_ERROR', { field: 'description' });
-    q('UPDATE vibecoding_submissions SET title=?,description=?,updated_at=? WHERE id=?', [title, description, nowIso(), submission.id]);
-    audit(ctx, 'PLATFORM_VIBECODING_WORK_EDIT', 'VIBECODING_SUBMISSION', submission.id, { title: submission.title, description: submission.description }, { title, description }, { orgId: submission.org_id });
-    return normalizeSubmission(row('SELECT * FROM vibecoding_submissions WHERE id=?', [submission.id]));
+    await aq('UPDATE vibecoding_submissions SET title=?,description=?,updated_at=? WHERE id=?', [title, description, nowIso(), submission.id]);
+    await audit(ctx, 'PLATFORM_VIBECODING_WORK_EDIT', 'VIBECODING_SUBMISSION', submission.id, { title: submission.title, description: submission.description }, { title, description }, { orgId: submission.org_id });
+    return normalizeSubmission(await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [submission.id]));
   }
   let vibeDeleteMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
   if (vibeDeleteMatch && method === 'DELETE') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDeleteMatch[1]]);
+    const submission = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeDeleteMatch[1]]);
     if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
     if (ctx.body?.confirm !== true) throw errors.badRequest('彻底删除不可恢复，请显式确认', 'WORK_DELETE_CONFIRM_REQUIRED');
     const reason = nonEmptyString(ctx.body?.reason, '删除原因', { max: 200 });
     const before = normalizeSubmission(submission);
     // ⚠️ 与 `works` 不同：VibeCoding 提交的产物（files / artifacts）都在**这一行里**，
     //    没有外键子表、也没有落盘目录，所以删行就是删干净了（学生那段对话记录不跟着删）。
-    q('DELETE FROM vibecoding_submissions WHERE id=?', [submission.id]);
-    audit(ctx, 'PLATFORM_VIBECODING_WORK_DELETE', 'VIBECODING_SUBMISSION', submission.id, before, { deleted: true, reason }, { orgId: submission.org_id });
+    await aq('DELETE FROM vibecoding_submissions WHERE id=?', [submission.id]);
+    await audit(ctx, 'PLATFORM_VIBECODING_WORK_DELETE', 'VIBECODING_SUBMISSION', submission.id, before, { deleted: true, reason }, { orgId: submission.org_id });
     return { deleted: true, id: submission.id, title: before.title, media: null };
   }
 
   if (part === '/works/export' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const { where, params } = platformWorkFilters(ctx);
-    const items = rows(
+    const items = await arows(
       `SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title
        FROM works work JOIN users student ON student.id=work.student_id
        LEFT JOIN organizations organization ON organization.id=work.org_id
@@ -292,44 +292,44 @@ export async function handleWorks(ctx, part, method) {
       ['作品标题', '学员', '机构', '班级', '课时', '状态', '已上作品广场', '精选', '提交时间'],
       items.map((work) => [work.title, work.student_name || '', work.organization_name || '', work.class_name || '', work.lesson_title || '', work.status, Number(work.is_public || 0) === 1 ? '是' : '否', work.featured_at ? '是' : '否', work.submitted_at]),
     );
-    audit(ctx, 'PLATFORM_WORK_EXPORT', 'WORK', null, null, { count: items.length, filters: { status: ctx.search.get('status') || null, orgId: ctx.search.get('orgId') || null, search: ctx.search.get('search') || null } });
+    await audit(ctx, 'PLATFORM_WORK_EXPORT', 'WORK', null, null, { count: items.length, filters: { status: ctx.search.get('status') || null, orgId: ctx.search.get('orgId') || null, search: ctx.search.get('search') || null } });
     return { filename: csvFileName('works'), content, count: items.length };
   }
   let platformWorkMatch = part.match(/^\/works\/([^/]+)\/unpublish$/);
   if (platformWorkMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
+    const work = await arow('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     // C2（2026-09-13）：下架写 UNPUBLISHED + unpublish_reason（**不再复用 REJECTED 与 teacher_comment**），
     // 「被驳回」与「被下架」在库里从此是两个值、两列原因，账面上也能分开统计。
-    assertTransition(ctx, 'work', work.status, 'UNPUBLISHED', { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), allowedFrom: ['PUBLISHED'], code: 'INVALID_WORK_TRANSITION', message: '仅已发布作品可以下架', details: { action: 'unpublish' } });
+    await assertTransition(ctx, 'work', work.status, 'UNPUBLISHED', { targetType: 'WORK', targetId: work.id, before: await normalizeWork(work), allowedFrom: ['PUBLISHED'], code: 'INVALID_WORK_TRANSITION', message: '仅已发布作品可以下架', details: { action: 'unpublish' } });
     const reason = String(ctx.body?.reason || '').trim();
     if (!reason) throw errors.badRequest('请填写下架原因', 'WORK_UNPUBLISH_REASON_REQUIRED');
     if (reason.length > 2000) throw errors.badRequest('下架原因不能超过 2000 个字符', 'WORK_UNPUBLISH_REASON_TOO_LONG');
-    q('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['UNPUBLISHED', reason, nowIso(), auth.user.id, nowIso(), work.id]);
-    audit(ctx, 'PLATFORM_WORK_UNPUBLISH', 'WORK', work.id, normalizeWork(work), { status: 'UNPUBLISHED', reason }, { orgId: work.org_id });
-    const updated = row('SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE work.id=?', [work.id]);
-    return { ...normalizeWork(updated), organizationName: updated.organization_name || null };
+    await aq('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['UNPUBLISHED', reason, nowIso(), auth.user.id, nowIso(), work.id]);
+    await audit(ctx, 'PLATFORM_WORK_UNPUBLISH', 'WORK', work.id, await normalizeWork(work), { status: 'UNPUBLISHED', reason }, { orgId: work.org_id });
+    const updated = await arow('SELECT work.*,student.display_name student_name,organization.name organization_name,class.name class_name,lesson.title lesson_title,reviewer.display_name reviewer_name FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN organizations organization ON organization.id=work.org_id LEFT JOIN classes class ON class.id=work.class_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE work.id=?', [work.id]);
+    return { ...await normalizeWork(updated), organizationName: updated.organization_name || null };
   }
   platformWorkMatch = part.match(/^\/works\/([^/]+)\/feature$/);
   if (platformWorkMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const work = row('SELECT work.*, student.privacy_allow_feature AS student_allow_feature FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id WHERE work.id=?', [platformWorkMatch[1]]);
+    const work = await arow('SELECT work.*, student.privacy_allow_feature AS student_allow_feature FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id WHERE work.id=?', [platformWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     if (!Object.hasOwn(ctx.body || {}, 'featured') || typeof ctx.body.featured !== 'boolean') throw errors.badRequest('请选择是否设为精选', 'WORK_FEATURED_REQUIRED');
     const featured = ctx.body.featured;
     if (featured && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可以设为精选', 'WORK_NOT_PUBLISHED');
     if (featured && !work.student_allow_feature) throw errors.forbidden('该学生已关闭精选展示授权', 'STUDENT_FEATURE_OPT_OUT');
     const reason = featured ? String(ctx.body?.reason || '').trim().slice(0, 500) : null;
-    q('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=?', [featured ? nowIso() : null, featured ? auth.user.id : null, reason || null, work.id]);
-    audit(ctx, featured ? 'PLATFORM_WORK_FEATURE' : 'PLATFORM_WORK_UNFEATURE', 'WORK', work.id, normalizeWork(work), { featured, reason: reason || null }, { orgId: work.org_id });
-    return normalizeWork(row('SELECT * FROM works WHERE id=?', [work.id]));
+    await aq('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=?', [featured ? nowIso() : null, featured ? auth.user.id : null, reason || null, work.id]);
+    await audit(ctx, featured ? 'PLATFORM_WORK_FEATURE' : 'PLATFORM_WORK_UNFEATURE', 'WORK', work.id, await normalizeWork(work), { featured, reason: reason || null }, { orgId: work.org_id });
+    return await normalizeWork(await arow('SELECT * FROM works WHERE id=?', [work.id]));
   }
   // 平台决定哪些作品进入「学生作品广场」：发布需要机构审核通过 + 学生已确认展示授权。
   platformWorkMatch = part.match(/^\/works\/([^/]+)\/plaza$/);
   if (platformWorkMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const work = row('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
+    const work = await arow('SELECT * FROM works WHERE id=?', [platformWorkMatch[1]]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     if (!Object.hasOwn(ctx.body || {}, 'published') || typeof ctx.body.published !== 'boolean') throw errors.badRequest('请选择是否发布到作品广场', 'WORK_PLAZA_FLAG_REQUIRED');
     const published = ctx.body.published;
@@ -340,20 +340,20 @@ export async function handleWorks(ctx, part, method) {
       let shareToken = work.share_token;
       if (!shareToken) {
         shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
-        while (row('SELECT id FROM works WHERE share_token=?', [shareToken])) shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
+        while (await arow('SELECT id FROM works WHERE share_token=?', [shareToken])) shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
       }
-      transaction(() => {
+      await atransaction(async () => {
         if (work.status !== 'PUBLISHED') {
-          assertTransition(ctx, 'work', work.status, 'PUBLISHED', { targetType: 'WORK', targetId: work.id, before: normalizeWork(work), code: 'INVALID_WORK_TRANSITION', message: '当前状态不能发布到作品广场' });
+          await assertTransition(ctx, 'work', work.status, 'PUBLISHED', { targetType: 'WORK', targetId: work.id, before: await normalizeWork(work), code: 'INVALID_WORK_TRANSITION', message: '当前状态不能发布到作品广场' });
         }
         // 重新上架要清掉上一次的下架原因，否则学生会看到一条早就过期的说明（与 VibeCoding 链路同口径）
-        q("UPDATE works SET status='PUBLISHED',is_public=1,share_token=?,reviewed_by=?,reviewed_at=?,unpublish_reason=NULL,unpublished_at=NULL WHERE id=?", [shareToken, auth.user.id, now, work.id]);
+        await aq("UPDATE works SET status='PUBLISHED',is_public=1,share_token=?,reviewed_by=?,reviewed_at=?,unpublish_reason=NULL,unpublished_at=NULL WHERE id=?", [shareToken, auth.user.id, now, work.id]);
       });
     } else {
-      q('UPDATE works SET is_public=0,share_token=NULL WHERE id=?', [work.id]);
+      await aq('UPDATE works SET is_public=0,share_token=NULL WHERE id=?', [work.id]);
     }
-    audit(ctx, published ? 'PLATFORM_WORK_PLAZA_PUBLISH' : 'PLATFORM_WORK_PLAZA_UNPUBLISH', 'WORK', work.id, { status: work.status, plazaPublished: Boolean(work.is_public) }, { status: published ? 'PUBLISHED' : work.status, plazaPublished: published }, { orgId: work.org_id });
-    return normalizeWork(row('SELECT * FROM works WHERE id=?', [work.id]));
+    await audit(ctx, published ? 'PLATFORM_WORK_PLAZA_PUBLISH' : 'PLATFORM_WORK_PLAZA_UNPUBLISH', 'WORK', work.id, { status: work.status, plazaPublished: Boolean(work.is_public) }, { status: published ? 'PUBLISHED' : work.status, plazaPublished: published }, { orgId: work.org_id });
+    return await normalizeWork(await arow('SELECT * FROM works WHERE id=?', [work.id]));
   }
   if (part === '/work-reports' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -361,36 +361,36 @@ export async function handleWorks(ctx, part, method) {
     const conditions = ['1=1']; const params = [];
     if (['PENDING', 'RESOLVED', 'DISMISSED'].includes(status)) { conditions.push('report.status=?'); params.push(status); }
     if (orgFilter) { conditions.push('report.org_id=?'); params.push(orgFilter); }
-    const items = workReportRows(conditions.join(' AND '), params);
+    const items = await workReportRows(conditions.join(' AND '), params);
     return { items, total: items.length, pending: items.filter((item) => item.status === 'PENDING').length };
   }
   let platformReportMatch = part.match(/^\/work-reports\/([^/]+)$/);
   if (platformReportMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const report = row('SELECT * FROM work_reports WHERE id=?', [platformReportMatch[1]]);
+    const report = await arow('SELECT * FROM work_reports WHERE id=?', [platformReportMatch[1]]);
     if (!report) throw errors.notFound('举报记录不存在', 'WORK_REPORT_NOT_FOUND');
     if (report.status !== 'PENDING') throw errors.conflict('举报已处理，不能重复处理', 'WORK_REPORT_ALREADY_HANDLED');
     const status = ctx.body?.status;
     if (!['RESOLVED', 'DISMISSED'].includes(status)) throw errors.badRequest('举报处理状态无效', 'INVALID_WORK_REPORT_STATUS');
     const actionTaken = ctx.body?.actionTaken || 'NONE';
     if (!['NONE', 'UNPUBLISH'].includes(actionTaken)) throw errors.badRequest('举报处理动作无效', 'INVALID_WORK_REPORT_ACTION');
-    const resolution = reportResolution(ctx.body); const work = row('SELECT * FROM works WHERE id=? AND org_id=?', [report.work_id, report.org_id]);
+    const resolution = reportResolution(ctx.body); const work = await arow('SELECT * FROM works WHERE id=? AND org_id=?', [report.work_id, report.org_id]);
     if (!work) throw errors.notFound('关联作品不存在', 'WORK_NOT_FOUND');
     if (actionTaken === 'UNPUBLISH' && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可因举报下架', 'WORK_NOT_PUBLISHED');
     const now = nowIso();
-    transaction(() => {
-      if (actionTaken === 'UNPUBLISH') q('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['UNPUBLISHED', resolution, now, auth.user.id, now, work.id]);
-      q('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=?', [status, auth.user.id, now, resolution, actionTaken, report.id]);
+    await atransaction(async () => {
+      if (actionTaken === 'UNPUBLISH') await aq('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=?', ['UNPUBLISHED', resolution, now, auth.user.id, now, work.id]);
+      await aq('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=?', [status, auth.user.id, now, resolution, actionTaken, report.id]);
     });
-    audit(ctx, 'PLATFORM_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: report.org_id });
-    if (actionTaken === 'UNPUBLISH') audit(ctx, 'PLATFORM_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWork(work), { status: 'UNPUBLISHED', reportId: report.id }, { orgId: work.org_id });
-    return workReportRows('report.id=?', [report.id])[0];
+    await audit(ctx, 'PLATFORM_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: report.org_id });
+    if (actionTaken === 'UNPUBLISH') await audit(ctx, 'PLATFORM_WORK_UNPUBLISH_REPORT', 'WORK', work.id, await normalizeWork(work), { status: 'UNPUBLISHED', reportId: report.id }, { orgId: work.org_id });
+    return (await workReportRows('report.id=?', [report.id]))[0];
   }
   let workDetailMatch = part.match(/^\/works\/([^/]+)\/detail$/);
   if (workDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const workId = workDetailMatch[1];
-    const workRow = row(
+    const workRow = await arow(
       `SELECT work.*,
               student.id AS student_id, student.login AS student_login, student.display_name AS student_name,
               student.privacy_allow_feature AS student_allow_feature,
@@ -410,45 +410,45 @@ export async function handleWorks(ctx, part, method) {
     );
     if (!workRow) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
 
-    const submissions = rows(
+    const submissions = (await arows(
       `SELECT s.*
        FROM work_submissions s
        WHERE s.work_id=? ORDER BY s.round DESC LIMIT 10`,
       [workId],
-    ).map((s) => ({
+    )).map((s) => ({
       id: s.id, round: s.round, title: s.title, description: s.description || '',
       reviewStatus: s.review_status || null, reviewComment: s.review_comment || null,
       reviewerName: null, reviewedAt: s.reviewed_at || null,
       submittedAt: s.submitted_at,
     }));
 
-    const annotations = rows(
+    const annotations = (await arows(
       `SELECT a.*, author.display_name AS author_name
        FROM work_annotations a
        JOIN users author ON author.id=a.author_id
        WHERE a.work_id=? ORDER BY a.created_at DESC LIMIT 5`,
       [workId],
-    ).map((a) => ({
+    )).map((a) => ({
       id: a.id, nodeId: a.node_id || null, content: a.content,
       authorName: a.author_name, createdAt: a.created_at,
       resolvedAt: a.resolved_at || null, resolvedBy: a.resolved_by || null,
     }));
 
-    const reports = rows(
+    const reports = (await arows(
       `SELECT report.*, reporter.display_name AS reporter_name, handler.display_name AS handler_name
        FROM work_reports report
        JOIN users reporter ON reporter.id=report.reporter_id
        LEFT JOIN users handler ON handler.id=report.handled_by
        WHERE report.work_id=? ORDER BY report.created_at DESC`,
       [workId],
-    ).map((r) => ({
+    )).map((r) => ({
       id: r.id, category: r.category, details: r.details || '',
       status: r.status, resolution: r.resolution || null, actionTaken: r.action_taken || 'NONE',
       reporterName: r.reporter_name, handlerName: r.handler_name || null,
       handledAt: r.handled_at || null, createdAt: r.created_at,
     }));
 
-    const latestPublishRequest = row(
+    const latestPublishRequest = await arow(
       `SELECT pr.*, handler.display_name AS handler_name
        FROM work_publish_requests pr
        LEFT JOIN users handler ON handler.id=pr.resolved_by
@@ -457,7 +457,7 @@ export async function handleWorks(ctx, part, method) {
     );
 
     return {
-      ...normalizeWork(workRow, { includeSnapshot: true }),
+      ...await normalizeWork(workRow, { includeSnapshot: true }),
       studentLogin: workRow.student_login,
       studentAllowFeature: Boolean(workRow.student_allow_feature),
       studentShowcaseAnonymous: Boolean(workRow.student_showcase_anonymous),
@@ -467,7 +467,7 @@ export async function handleWorks(ctx, part, method) {
       submissions,
       annotations,
       annotationCount: Number(
-        row('SELECT COUNT(*) AS n FROM work_annotations WHERE work_id=?', [workId])?.n || 0,
+        (await arow('SELECT COUNT(*) AS n FROM work_annotations WHERE work_id=?', [workId]))?.n || 0,
       ),
       reports,
       latestPublishRequest: latestPublishRequest ? normalizeWorkPublishRequest(latestPublishRequest) : null,
@@ -490,18 +490,18 @@ export async function handleWorks(ctx, part, method) {
       LEFT JOIN course_series series ON series.id=lesson.series_id
       LEFT JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
       LEFT JOIN class_sessions session ON session.id=conversation.class_session_id`;
-    const total = Number(row('SELECT COUNT(*) n' + joins + where, params)?.n || 0);
-    const items = rows(
+    const total = Number((await arow('SELECT COUNT(*) n' + joins + where, params))?.n || 0);
+    const items = (await arows(
       `SELECT submission.*, series.title package_name, session.title session_title, ${publicationStateSql} publication_state, student.display_name student_name, student.login student_login, organization.name organization_name, class.name class_name, lesson.title lesson_title` + joins + where +
       ` ORDER BY ${sortSql} LIMIT ? OFFSET ?`,
       [...params, limit, (page - 1) * limit],
-    ).map((item) => ({ ...normalizeSubmission(item), studentLogin: item.student_login, packageName: item.package_name, sessionTitle: item.session_title, publicationState: item.publication_state, organizationName: item.organization_name || null }));
+    )).map((item) => ({ ...normalizeSubmission(item), studentLogin: item.student_login, packageName: item.package_name, sessionTitle: item.session_title, publicationState: item.publication_state, organizationName: item.organization_name || null }));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   const vibeWorkPlazaMatch = part.match(/^\/vibecoding-works\/([^/]+)\/plaza$/);
   if (vibeWorkPlazaMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const submission = row('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeWorkPlazaMatch[1]]);
+    const submission = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeWorkPlazaMatch[1]]);
     if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
     if (!Object.hasOwn(ctx.body || {}, 'published') || typeof ctx.body.published !== 'boolean') throw errors.badRequest('请选择是否发布到作品广场', 'WORK_PLAZA_FLAG_REQUIRED');
     const now = nowIso();
@@ -510,20 +510,20 @@ export async function handleWorks(ctx, part, method) {
       let shareToken = submission.share_token;
       if (!shareToken) {
         shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);
-        while (row('SELECT id FROM vibecoding_submissions WHERE share_token=?', [shareToken])) shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);
+        while (await arow('SELECT id FROM vibecoding_submissions WHERE share_token=?', [shareToken])) shareToken = 'vbt_' + randomUUID().replace(/-/g, '').slice(0, 24);
       }
       // 重新发布时清掉上一次的下架原因（否则学生会看到一条早就过期的说明）
-      q('UPDATE vibecoding_submissions SET is_public=1,share_token=?,published_at=?,published_by=?,unpublish_reason=NULL,updated_at=? WHERE id=?', [shareToken, now, auth.user.id, now, submission.id]);
-      audit(ctx, 'PLATFORM_VIBECODING_WORK_PUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: Number(submission.is_public || 0) === 1 }, { isPublic: true, shareToken }, { orgId: submission.org_id });
+      await aq('UPDATE vibecoding_submissions SET is_public=1,share_token=?,published_at=?,published_by=?,unpublish_reason=NULL,updated_at=? WHERE id=?', [shareToken, now, auth.user.id, now, submission.id]);
+      await audit(ctx, 'PLATFORM_VIBECODING_WORK_PUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: Number(submission.is_public || 0) === 1 }, { isPublic: true, shareToken }, { orgId: submission.org_id });
     } else {
       // 下架必须写原因，且**学生能看到**（与画布链路同口径：作品被撤下来要给学生一个说法）
       const reason = String(ctx.body?.reason || '').trim();
       if (!reason) throw errors.badRequest('请填写下架原因（学生会看到）', 'WORK_UNPUBLISH_REASON_REQUIRED');
       if (reason.length > 2000) throw errors.badRequest('下架原因不能超过 2000 个字符', 'WORK_UNPUBLISH_REASON_TOO_LONG');
-      q('UPDATE vibecoding_submissions SET is_public=0,published_at=NULL,published_by=NULL,unpublish_reason=?,updated_at=? WHERE id=?', [reason, now, submission.id]);
-      audit(ctx, 'PLATFORM_VIBECODING_WORK_UNPUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: true }, { isPublic: false, reason }, { orgId: submission.org_id });
+      await aq('UPDATE vibecoding_submissions SET is_public=0,published_at=NULL,published_by=NULL,unpublish_reason=?,updated_at=? WHERE id=?', [reason, now, submission.id]);
+      await audit(ctx, 'PLATFORM_VIBECODING_WORK_UNPUBLISH', 'VIBECODING_SUBMISSION', submission.id, { isPublic: true }, { isPublic: false, reason }, { orgId: submission.org_id });
     }
-    const updated = row(
+    const updated = await arow(
       `SELECT submission.*, student.display_name student_name, student.login student_login, organization.name organization_name, class.name class_name, lesson.title lesson_title
        FROM vibecoding_submissions submission
        LEFT JOIN users student ON student.id=submission.student_id

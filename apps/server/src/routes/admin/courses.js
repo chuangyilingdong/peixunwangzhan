@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, contractExpiryForOrg, normalizeSeriesVisibility, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
+  assignmentActiveSql, contractExpiryForOrg, normalizeSeriesVisibility, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, acount, atransaction, amap,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -107,8 +107,8 @@ function singleAssignmentOrgId(body) {
  * lib.js 的 normalizeSeries 把该字段做成默认关闭的 `includeEstimatedCredits`，平台端在这里统一打开 ——
  * 好处是「哪些响应带内部成本口径」在本文件里一眼可见，也不会因为漏改一个调用点而丢字段。
  */
-function platformSeries(value, options = {}) {
-  return normalizeSeries(value, { includeEstimatedCredits: true, ...options });
+async function platformSeries(value, options = {}) {
+  return await normalizeSeries(value, { includeEstimatedCredits: true, ...options });
 }
 
 function assignmentSnapshot(assignment) {
@@ -150,8 +150,8 @@ export async function handleCourses(ctx, part, method) {
     const visibilityWanted = normalizeSeriesVisibility(visibilityFilter);
     if (visibilityWanted) { conditions.push('series.visibility=?'); params.push(visibilityWanted); }
     const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
-    const total = Number(row('SELECT COUNT(*) n FROM course_series series' + where, params)?.n || 0);
-    const items = rows('SELECT series.* FROM course_series series' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit]).map((item) => platformSeries(item));
+    const total = Number((await arow('SELECT COUNT(*) n FROM course_series series' + where, params))?.n || 0);
+    const items = await amap((await arows('SELECT series.* FROM course_series series' + where + ' ORDER BY ' + sortSql + ' LIMIT ? OFFSET ?', [...params, limit, (page - 1) * limit])), async (item) => await platformSeries(item));
     return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)), sort };
   }
   if (part === '/course-series' && method === 'POST') {
@@ -193,14 +193,14 @@ export async function handleCourses(ctx, part, method) {
     } else if (typeof body.tags === 'string' && body.tags.trim()) {
       tags = body.tags.split(',').map((t) => t.trim()).filter((t) => t.length > 0 && t.length <= 50).slice(0, 20);
     }
-    if (row("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
+    if (await arow("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
     const seriesId = id('series');
     const now = nowIso();
     const seriesDeliveryMode = normalizeDeliveryMode(body.deliveryMode);
     const createdLessonIds = [];
-    transaction(() => {
-      q('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, initialVersion, integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, now, now]);
-      lessons.forEach((lesson, index) => {
+    await atransaction(async () => {
+      await aq('INSERT INTO course_series(id,title,description,cover_image_url,cover_asset_id,price_fen,estimated_credits_per_person,grade_range,owner_type,org_id,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,delivery_mode,stock_total,per_student_budget_fen,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [seriesId, title, String(body.description || '').slice(0, 10000), coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, 'PLATFORM', null, visibility, initialVersion, integer(body.sort, '课包排序', { min: 0, max: 100000, fallback: 0 }), status, difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, JSON.stringify(tags), seriesDeliveryMode, stockTotal, perStudentBudgetFen, now, now]);
+      for (const [index, lesson] of lessons.entries()) {
         if (lesson.deliveryModes !== undefined && (!Array.isArray(lesson.deliveryModes) || !lesson.deliveryModes.length || lesson.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle) throw errors.badRequest(`第${index + 1}课标题不能为空`, 'LESSON_TITLE_REQUIRED');
@@ -212,21 +212,21 @@ export async function handleCourses(ctx, part, method) {
          //    以前只取 lesson.deliveryMode，而向导不发这个字段 → 双入口课时里老列恒为 CANVAS。
          const lessonModes = Array.isArray(lesson.deliveryModes) && lesson.deliveryModes.length ? lesson.deliveryModes : null;
          const deliveryMode = normalizeDeliveryMode((lessonModes && lessonModes[0]) || lesson.deliveryMode || seriesDeliveryMode); const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
-         q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
+         await aq('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, seriesId, lessonTitle, String(lesson.summary || '').slice(0, 10000), index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
          createdLessonIds.push({ id: lessonId, materialGroups: lesson.materialGroups, capabilities: lesson.capabilities, deliveryMode, deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen, platformBudgetFen: lesson.platformBudgetFen, classroomConfig, canvasTemplateSnapshot: lesson.canvasTemplateSnapshot, teachingGroups: lesson.teachingGroups });
-      });
-     createdLessonIds.forEach((lesson) => {
-       replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot, { deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen, platformBudgetFen: lesson.platformBudgetFen, inTransaction: true });
-       if (lesson.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, lesson.teachingGroups, { inTransaction: true });
-       const saved = row('SELECT * FROM course_lessons WHERE id=?', [lesson.id]);
-       if (saved.status === 'PUBLISHED') validateLessonForPublishing(saved);
-     });
+      };
+     for (const lesson of createdLessonIds) {
+       await replaceLessonCanvasConfig(lesson.id, lesson.materialGroups || [], lesson.capabilities || ['text'], lesson.deliveryMode, lesson.classroomConfig, lesson.canvasTemplateSnapshot, { deliveryModes: lesson.deliveryModes, perStudentBudgetFen: lesson.perStudentBudgetFen, platformBudgetFen: lesson.platformBudgetFen, inTransaction: true });
+       if (lesson.teachingGroups !== undefined) await replaceLessonTeachingMaterials(lesson.id, lesson.teachingGroups, { inTransaction: true });
+       const saved = await arow('SELECT * FROM course_lessons WHERE id=?', [lesson.id]);
+       if (saved.status === 'PUBLISHED') await validateLessonForPublishing(saved);
+     };
     // 初始版本也记一条：版本历史从「初始版本」开始，之后重复用过的版本号一律拒绝
-    q('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
+    await aq('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
       [id('seriesver'), seriesId, initialVersion, '初始版本', 'ARCHIVED', auth.user.id, now, null]);
     });
-    audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
-    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    await audit(ctx, 'COURSE_SERIES_CREATE', 'COURSE_SERIES', seriesId, null, { title, lessonCount: lessons.length });
+    return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [seriesId]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
   // 更新发布：版本号由人填（不再自动 +0.1），同时记一条版本历史，
   // 并把课包与**每个课时**的当前内容定格成快照（capturePublishedContent）——
@@ -235,23 +235,23 @@ export async function handleCourses(ctx, part, method) {
   const seriesVersionMatch = part.match(/^\/course-series\/([^/]+)\/versions$/);
   if (seriesVersionMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesVersionMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesVersionMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const version = nonEmptyString(ctx.body?.version, '版本号', { max: 100 });
     const note = String(ctx.body?.note || '').trim().slice(0, 500);
     if (version === series.version) throw errors.badRequest('版本号与当前版本相同，请填写新的版本号', 'VERSION_UNCHANGED');
-    if (row('SELECT id FROM course_series_versions WHERE series_id=? AND version=?', [series.id, version])) throw errors.conflict('该版本号已经用过，请换一个', 'VERSION_EXISTS');
-    validateSeriesForPublishing(series.id);
+    if (await arow('SELECT id FROM course_series_versions WHERE series_id=? AND version=?', [series.id, version])) throw errors.conflict('该版本号已经用过，请换一个', 'VERSION_EXISTS');
+    await validateSeriesForPublishing(series.id);
     const now = nowIso();
     let captured;
     const versionId = id('seriesver');
-    transaction(() => {
-      q('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
+    await atransaction(async () => {
+      await aq('INSERT INTO course_series_versions(id,series_id,version,note,status,created_by,created_at,published_at) VALUES (?,?,?,?,?,?,?,?)',
         [versionId, series.id, version, note, 'PUBLISHED', auth.user.id, now, now]);
       // updated_at 与版本记录取同一时间：这样「有未发布改动」的判定立刻归零
-      q("UPDATE course_series SET version=?,status='PUBLISHED',updated_at=? WHERE id=?", [version, now, series.id]);
-      captured = capturePublishedContent(series.id, now, { inTransaction: true });
-      audit(ctx, 'COURSE_SERIES_VERSION_PUBLISH', 'COURSE_SERIES', series.id, { version: series.version }, { version, note });
+      await aq("UPDATE course_series SET version=?,status='PUBLISHED',updated_at=? WHERE id=?", [version, now, series.id]);
+      captured = await capturePublishedContent(series.id, now, { inTransaction: true });
+      await audit(ctx, 'COURSE_SERIES_VERSION_PUBLISH', 'COURSE_SERIES', series.id, { version: series.version }, { version, note });
     });
     // 草稿隔离的落点：把当前内容定格成「已发布内容」，机构端/学生端/官网从这一刻起读到的就是它
     // （放在事务外：capturePublishedContent 自己会开一个事务，嵌套会抛错）
@@ -262,40 +262,40 @@ export async function handleCourses(ctx, part, method) {
   let seriesDetailMatch = part.match(/^\/course-series\/([^/]+)\/detail$/);
   if (seriesDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesDetailMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesDetailMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    const assignedOrgs = rows('SELECT assignment.id, assignment.org_id, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, organization.name org_name FROM course_assignments assignment JOIN organizations organization ON organization.id=assignment.org_id WHERE assignment.series_id=? AND assignment.status=\'ACTIVE\' ORDER BY assignment.assigned_at DESC', [series.id]).map((item) => ({ id: item.id, orgId: item.org_id, orgName: item.org_name, assignedAt: item.assigned_at, expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(), quotaTotal: Number(item.quota_total || 0), quotaUsed: Number(item.quota_used || 0) }));
+    const assignedOrgs = (await arows('SELECT assignment.id, assignment.org_id, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, organization.name org_name FROM course_assignments assignment JOIN organizations organization ON organization.id=assignment.org_id WHERE assignment.series_id=? AND assignment.status=\'ACTIVE\' ORDER BY assignment.assigned_at DESC', [series.id])).map((item) => ({ id: item.id, orgId: item.org_id, orgName: item.org_name, assignedAt: item.assigned_at, expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(), quotaTotal: Number(item.quota_total || 0), quotaUsed: Number(item.quota_used || 0) }));
     const usage = {
       // 批次 D（班级退场）：原来这里是 classesUsingSeries（「以该课包为默认课程的班级数」）与
       // curriculumItems（班级课单引用数）—— 两张都是历史表，数出来只是历史值，读的人会以为班级还在用。
       // 换成两类**真实在跑**的东西：这个课包开过多少课堂、其中几节正在进行。
-      sessionsForSeries: count('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
-      activeSessionsForSeries: count("SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=? AND session.status='ACTIVE'", [series.id]),
-      studentWorks: count('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
+      sessionsForSeries: await acount('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
+      activeSessionsForSeries: await acount("SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=? AND session.status='ACTIVE'", [series.id]),
+      studentWorks: await acount('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
     };
-    const versions = rows('SELECT * FROM course_series_versions WHERE series_id=? ORDER BY created_at DESC LIMIT 20', [series.id])
+    const versions = (await arows('SELECT * FROM course_series_versions WHERE series_id=? ORDER BY created_at DESC LIMIT 20', [series.id]))
       .map((item) => ({ id: item.id, version: item.version, note: item.note || '', status: item.status, createdBy: item.created_by, createdAt: item.created_at, publishedAt: item.published_at }));
     // 「有未发布的改动」= 课包或课时最后修改时间晚于最近一次版本记录
-    const lastVersionAt = row("SELECT MAX(published_at) t FROM course_series_versions WHERE series_id=? AND status='PUBLISHED'", [series.id])?.t || null;
-    const lastLessonAt = row('SELECT MAX(updated_at) AS t FROM course_lessons WHERE series_id=?', [series.id])?.t || null;
+    const lastVersionAt = (await arow("SELECT MAX(published_at) t FROM course_series_versions WHERE series_id=? AND status='PUBLISHED'", [series.id]))?.t || null;
+    const lastLessonAt = (await arow('SELECT MAX(updated_at) AS t FROM course_lessons WHERE series_id=?', [series.id]))?.t || null;
     const lastChangeAt = [series.updated_at, lastLessonAt].filter(Boolean).sort().pop() || series.updated_at;
     const hasUnpublishedChanges = lastVersionAt ? String(lastChangeAt) > String(lastVersionAt) : true;
     // 「算力预估 vs 实际」：挂在详情返回里（而不是新增端点）—— 面板就在这一页，一次请求拿全，
     // 也保证预估值与实际值来自同一时刻；service 是纯只读的聚合，见 services/courseEstimate.js。
-    const computeEstimate = courseComputeEstimate(series.id);
-    return { series: platformSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage, versions, hasUnpublishedChanges, lastChangeAt, lastVersionAt, computeEstimate };
+    const computeEstimate = await courseComputeEstimate(series.id);
+    return { series: await platformSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true }), assignedOrgs, usage, versions, hasUnpublishedChanges, lastChangeAt, lastVersionAt, computeEstimate };
   }
 
   let seriesEditMatch = part.match(/^\/course-series\/([^/]+)$/);
   if (seriesEditMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesEditMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesEditMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const body = ctx.body || {};
     if (body.version !== undefined) throw errors.badRequest('版本号必须通过更新发布接口修改', 'COURSE_VERSION_ACTION_REQUIRED');
     if (body.status !== undefined) throw errors.badRequest('课包状态必须通过状态动作接口修改', 'COURSE_STATUS_ACTION_REQUIRED');
     const title = body.title === undefined ? series.title : nonEmptyString(body.title, '课包标题', { max: 200 });
-    if (title !== series.title && row("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
+    if (title !== series.title && await arow("SELECT id FROM course_series WHERE title=? AND owner_type='PLATFORM'", [title])) throw errors.conflict('同名平台课包已存在', 'COURSE_SERIES_EXISTS');
     const description = body.description === undefined ? series.description : String(body.description).slice(0, 10000);
     const coverImageUrl = body.coverImageUrl === undefined ? series.cover_image_url : (body.coverImageUrl ? String(body.coverImageUrl).slice(0, 2000) : null);
     if (coverImageUrl && !/^(https:\/\/|\/api\/)/.test(coverImageUrl)) throw errors.badRequest('封面地址必须是 HTTPS 链接或平台上传地址', 'INVALID_COVER_URL');
@@ -332,42 +332,42 @@ export async function handleCourses(ctx, part, method) {
         tags = undefined;
       }
     }
-    const before = platformSeries(series);
+    const before = await platformSeries(series);
     const deliveryMode = body.deliveryMode === undefined ? undefined : normalizeDeliveryMode(body.deliveryMode);
-     q('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,per_student_budget_fen=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, seriesPerStudentBudgetFen, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
-    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
-    audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
-    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+     await aq('UPDATE course_series SET title=?,description=?,cover_image_url=?,cover_asset_id=?,price_fen=?,estimated_credits_per_person=?,grade_range=?,stock_total=?,per_student_budget_fen=?,visibility=?,sort=?,difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,delivery_mode=?,updated_at=? WHERE id=?', [title, description, coverImageUrl, coverAssetId, priceFen, estimatedCreditsPerPerson, gradeRange, stockTotal, seriesPerStudentBudgetFen, visibility, sort, difficultyLevel != null ? Number(difficultyLevel) : (difficultyLevel === null ? null : series.difficulty_level), ageRangeMin, ageRangeMax, tags != null ? JSON.stringify(tags) : series.tags, deliveryMode ?? series.delivery_mode, nowIso(), series.id]);
+    const after = await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]));
+    await audit(ctx, 'COURSE_SERIES_UPDATE', 'COURSE_SERIES', series.id, { difficultyLevel: before.difficultyLevel, ageRangeMin: before.ageRangeMin, ageRangeMax: before.ageRangeMax, tags: before.tags }, { difficultyLevel: difficultyLevel != null ? Number(difficultyLevel) : null, ageRangeMin, ageRangeMax, tags });
+    return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   // 删除平台课包：仅当没有任何班级/课单/课堂/作品引用时才允许，否则引导改用「下架」。
   if (seriesEditMatch && method === 'DELETE') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesEditMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesEditMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const refs = {
-      classes: count('SELECT COUNT(*) AS n FROM classes WHERE default_series_id=?', [series.id]),
-      curriculumItems: count('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE source_series_id=?', [series.id]),
-      sessions: count('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
-      works: count('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
+      classes: await acount('SELECT COUNT(*) AS n FROM classes WHERE default_series_id=?', [series.id]),
+      curriculumItems: await acount('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE source_series_id=?', [series.id]),
+      sessions: await acount('SELECT COUNT(*) AS n FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id WHERE lesson.series_id=?', [series.id]),
+      works: await acount('SELECT COUNT(*) AS n FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE lesson.series_id=?', [series.id]),
     };
     const blocked = refs.classes || refs.curriculumItems || refs.sessions || refs.works;
     if (blocked) {
       throw errors.badRequest(`该课包已被引用（班级 ${refs.classes} 处、课单 ${refs.curriculumItems} 处、课堂 ${refs.sessions} 场、作品 ${refs.works} 件），不能删除；请改用「下架」`, 'COURSE_SERIES_IN_USE');
     }
-    const before = platformSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true });
-    transaction(() => {
-      q('DELETE FROM course_assignments WHERE series_id=?', [series.id]);
-      q('DELETE FROM course_series WHERE id=?', [series.id]);
+    const before = await platformSeries(series, { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    await atransaction(async () => {
+      await aq('DELETE FROM course_assignments WHERE series_id=?', [series.id]);
+      await aq('DELETE FROM course_series WHERE id=?', [series.id]);
     });
-    audit(ctx, 'COURSE_SERIES_DELETE', 'COURSE_SERIES', series.id, before, { deleted: true }, {});
+    await audit(ctx, 'COURSE_SERIES_DELETE', 'COURSE_SERIES', series.id, before, { deleted: true }, {});
     return { deleted: true, id: series.id };
   }
 
   let seriesStatusMatch = part.match(/^\/course-series\/([^/]+)\/status$/);
   if (seriesStatusMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesStatusMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesStatusMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const action = String(ctx.body?.action || '').trim();
     const transitions = {
@@ -376,38 +376,38 @@ export async function handleCourses(ctx, part, method) {
     };
     const transition = transitions[action];
     if (!transition) throw errors.badRequest('无效的课包状态操作', 'INVALID_COURSE_STATUS_ACTION');
-    assertTransition(ctx, 'courseSeries', series.status, transition.to, {
-      targetType: 'COURSE_SERIES', targetId: series.id, before: platformSeries(series),
+    await assertTransition(ctx, 'courseSeries', series.status, transition.to, {
+      targetType: 'COURSE_SERIES', targetId: series.id, before: await platformSeries(series),
       allowedFrom: transition.from, code: 'INVALID_COURSE_STATUS_TRANSITION',
       message: '当前状态 ' + series.status + ' 不允许执行 ' + action, details: { action },
     });
     if (transition.requireLessons && series.published_content) throw errors.badRequest('重新发布请通过版本发布填写新版本号', 'COURSE_VERSION_ACTION_REQUIRED');
-    if (transition.requireLessons) validateSeriesForPublishing(series.id);
-    const before = platformSeries(series);
+    if (transition.requireLessons) await validateSeriesForPublishing(series.id);
+    const before = await platformSeries(series);
     const now = nowIso();
-    transaction(() => {
-      q('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, now, series.id]);
+    await atransaction(async () => {
+      await aq('UPDATE course_series SET status=?,updated_at=? WHERE id=?', [transition.to, now, series.id]);
       if (transition.to === 'PUBLISHED') {
-        capturePublishedContent(series.id, now, { inTransaction: true });
-        q("UPDATE course_series_versions SET status='PUBLISHED',published_at=? WHERE series_id=? AND version=?", [now, series.id, series.version]);
+        await capturePublishedContent(series.id, now, { inTransaction: true });
+        await aq("UPDATE course_series_versions SET status='PUBLISHED',published_at=? WHERE series_id=? AND version=?", [now, series.id, series.version]);
       }
     });
-    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]));
-    audit(ctx, transition.auditAction, 'COURSE_SERIES', series.id, { status: before.status }, { action, status: after.status });
+    const after = await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]));
+    await audit(ctx, transition.auditAction, 'COURSE_SERIES', series.id, { status: before.status }, { action, status: after.status });
     return after;
   }
 
   let seriesLessonsMatch = part.match(/^\/course-series\/([^/]+)\/lessons$/);
   if (seriesLessonsMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesLessonsMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesLessonsMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const lessons = ctx.body?.lessons;
     if (!Array.isArray(lessons) || lessons.length === 0 || lessons.length > 100) throw errors.badRequest('请提交 1-100 个课时', 'INVALID_LESSONS');
-    const maxSort = Number(row('SELECT MAX(sort) m FROM course_lessons WHERE series_id=?', [series.id])?.m || 0);
+    const maxSort = Number((await arow('SELECT MAX(sort) m FROM course_lessons WHERE series_id=?', [series.id]))?.m || 0);
     const now = nowIso(); const replaceQueue = [];
-    transaction(() => {
-      lessons.forEach((lesson, index) => {
+    await atransaction(async () => {
+      for (const [index, lesson] of lessons.entries()) {
         if (lesson.deliveryModes !== undefined && (!Array.isArray(lesson.deliveryModes) || !lesson.deliveryModes.length || lesson.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
         const lessonTitle = String(lesson?.title || '').trim();
         if (!lessonTitle || lessonTitle.length > 200) throw errors.badRequest('第' + (index + 1) + '课标题不能为空且不超过200字', 'LESSON_TITLE_REQUIRED');
@@ -417,69 +417,69 @@ export async function handleCourses(ctx, part, method) {
         const lessonModes2 = Array.isArray(lesson.deliveryModes) && lesson.deliveryModes.length ? lesson.deliveryModes : null;
         const deliveryMode = normalizeDeliveryMode((lessonModes2 && lessonModes2[0]) || lesson.deliveryMode || series.delivery_mode);
         const classroomConfig = normalizeClassroomConfig(lesson.classroomConfig);
-        q('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, series.id, lessonTitle, String(lesson.summary || '').slice(0, 10000), maxSort + index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
+        await aq('INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,delivery_mode,classroom_config,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [lessonId, series.id, lessonTitle, String(lesson.summary || '').slice(0, 10000), maxSort + index + 1, lessonStatus, integer(lesson.durationMinutes, '课时时长', { min: 1, max: 1440, fallback: 45 }), String(lesson.lessonContent || '').slice(0, 50000), deliveryMode, json(classroomConfig), now, now]);
         replaceQueue.push({ id: lessonId, lesson, deliveryMode, classroomConfig });
-      });
-      q('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
-    replaceQueue.forEach((item) => {
-      replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig, item.lesson.canvasTemplateSnapshot, { deliveryModes: item.lesson.deliveryModes, platformBudgetFen: item.lesson.platformBudgetFen, inTransaction: true });
-      if (item.lesson.teachingGroups !== undefined) replaceLessonTeachingMaterials(item.id, item.lesson.teachingGroups, { inTransaction: true });
-      const saved = row('SELECT * FROM course_lessons WHERE id=?', [item.id]);
-      if (saved.status === 'PUBLISHED') validateLessonForPublishing(saved);
+      };
+      await aq('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
+    for (const item of replaceQueue) {
+      await replaceLessonCanvasConfig(item.id, item.lesson.materialGroups || [], item.lesson.capabilities || ['text'], item.deliveryMode, item.classroomConfig, item.lesson.canvasTemplateSnapshot, { deliveryModes: item.lesson.deliveryModes, platformBudgetFen: item.lesson.platformBudgetFen, inTransaction: true });
+      if (item.lesson.teachingGroups !== undefined) await replaceLessonTeachingMaterials(item.id, item.lesson.teachingGroups, { inTransaction: true });
+      const saved = await arow('SELECT * FROM course_lessons WHERE id=?', [item.id]);
+      if (saved.status === 'PUBLISHED') await validateLessonForPublishing(saved);
+    };
     });
-    });
-    audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
-    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    await audit(ctx, 'COURSE_LESSON_CREATE', 'COURSE_SERIES', series.id, null, { count: lessons.length, titles: lessons.map((lesson) => String(lesson?.title || '').trim()) });
+    return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   let seriesReorderMatch = part.match(/^\/course-series\/([^/]+)\/lessons\/reorder$/);
   if (seriesReorderMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesReorderMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesReorderMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const lessonIds = Array.isArray(ctx.body?.lessonIds) ? ctx.body.lessonIds.map((value) => String(value || '').trim()).filter(Boolean) : null;
     if (!lessonIds || lessonIds.length === 0) throw errors.badRequest('请提交课时排序', 'INVALID_LESSON_IDS');
-    const existing = rows('SELECT id FROM course_lessons WHERE series_id=?', [series.id]).map((item) => item.id);
+    const existing = (await arows('SELECT id FROM course_lessons WHERE series_id=?', [series.id])).map((item) => item.id);
     const requested = [...new Set(lessonIds)];
     if (requested.length !== lessonIds.length) throw errors.badRequest('课时标识重复', 'INVALID_LESSON_IDS');
     if (requested.length !== existing.length || requested.some((lessonId) => !existing.includes(lessonId))) throw errors.badRequest('课时列表必须与课包现有课时完全一致', 'LESSON_SET_MISMATCH');
     const now = nowIso();
-    const maxSort = Number(row('SELECT MAX(sort) m FROM course_lessons WHERE series_id=?', [series.id])?.m || 0);
-    transaction(() => {
-      requested.forEach((lessonId, index) => {
-        q('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [maxSort + index + 1, now, lessonId]);
-      });
-      requested.forEach((lessonId, index) => {
-        q('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [index + 1, now, lessonId]);
-      });
-      q('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
+    const maxSort = Number((await arow('SELECT MAX(sort) m FROM course_lessons WHERE series_id=?', [series.id]))?.m || 0);
+    await atransaction(async () => {
+      for (const [index, lessonId] of requested.entries()) {
+        await aq('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [maxSort + index + 1, now, lessonId]);
+      };
+      for (const [index, lessonId] of requested.entries()) {
+        await aq('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [index + 1, now, lessonId]);
+      };
+      await aq('UPDATE course_series SET updated_at=? WHERE id=?', [now, series.id]);
     });
-    audit(ctx, 'COURSE_LESSON_REORDER', 'COURSE_SERIES', series.id, null, { lessonIds: requested });
-    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    await audit(ctx, 'COURSE_LESSON_REORDER', 'COURSE_SERIES', series.id, null, { lessonIds: requested });
+    return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   let seriesRevokeMatch = part.match(/^\/course-series\/([^/]+)\/assignments\/revoke$/);
   if (seriesRevokeMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesRevokeMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [seriesRevokeMatch[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const orgId = String(ctx.body?.orgId || '').trim();
     if (!orgId) throw errors.badRequest('请选择要撤销授权的机构', 'INVALID_ORG_IDS');
-    const assignment = row("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE'", [series.id, orgId]);
+    const assignment = await arow("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE'", [series.id, orgId]);
     if (!assignment) throw errors.notFound('该机构没有此课包的有效授权', 'ASSIGNMENT_NOT_FOUND');
-    assertTransition(ctx, 'courseAssignment', assignment.status, 'REVOKED', { targetType: 'COURSE_ASSIGNMENT', targetId: assignment.id, before: { status: assignment.status, orgId }, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能撤销' });
-    transaction(() => {
-      voidLicensePurchaseBatches(assignment.id);
-      q("UPDATE course_assignments SET status='REVOKED',quota_total=quota_used WHERE id=?", [assignment.id]);
+    await assertTransition(ctx, 'courseAssignment', assignment.status, 'REVOKED', { targetType: 'COURSE_ASSIGNMENT', targetId: assignment.id, before: { status: assignment.status, orgId }, code: 'INVALID_ASSIGNMENT_TRANSITION', message: '该课程授权当前状态不能撤销' });
+    await atransaction(async () => {
+      await voidLicensePurchaseBatches(assignment.id);
+      await aq("UPDATE course_assignments SET status='REVOKED',quota_total=quota_used WHERE id=?", [assignment.id]);
     });
-    audit(ctx, 'COURSE_SERIES_ASSIGN_REVOKE', 'COURSE_SERIES', series.id, { orgId, quotaTotal: Number(assignment.quota_total), quotaUsed: Number(assignment.quota_used) }, { orgId, status: 'REVOKED', quotaTotal: Number(assignment.quota_used), quotaUsed: Number(assignment.quota_used) });
+    await audit(ctx, 'COURSE_SERIES_ASSIGN_REVOKE', 'COURSE_SERIES', series.id, { orgId, quotaTotal: Number(assignment.quota_total), quotaUsed: Number(assignment.quota_used) }, { orgId, status: 'REVOKED', quotaTotal: Number(assignment.quota_used), quotaUsed: Number(assignment.quota_used) });
     return { revoked: true, orgId };
   }
 
   let lessonEditMatch = part.match(/^\/course-lessons\/([^/]+)$/);
   if (lessonEditMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const lesson = row('SELECT lesson.*, series.owner_type owner_type FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=?', [lessonEditMatch[1]]);
+    const lesson = await arow('SELECT lesson.*, series.owner_type owner_type FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=?', [lessonEditMatch[1]]);
     if (!lesson || lesson.owner_type !== 'PLATFORM') throw errors.notFound('平台课时不存在', 'LESSON_NOT_FOUND');
     const body = ctx.body || {};
     if (body.deliveryModes !== undefined && (!Array.isArray(body.deliveryModes) || !body.deliveryModes.length || body.deliveryModes.some((mode) => !['CANVAS', 'VIBECODING'].includes(mode)))) throw errors.badRequest('请至少选择一种有效课堂类型', 'INVALID_DELIVERY_MODES');
@@ -487,7 +487,7 @@ export async function handleCourses(ctx, part, method) {
     const summary = body.summary === undefined ? lesson.summary : String(body.summary).slice(0, 10000);
     const durationMinutes = body.durationMinutes === undefined ? lesson.duration_minutes : integer(body.durationMinutes, '课时时长', { min: 1, max: 1440 });
     const status = body.status === undefined ? lesson.status : String(body.status).toUpperCase();
-    if (body.status !== undefined) assertTransition(ctx, 'courseLesson', lesson.status, status, {
+    if (body.status !== undefined) await assertTransition(ctx, 'courseLesson', lesson.status, status, {
       targetType: 'COURSE_LESSON', targetId: lesson.id, before: { status: lesson.status, title: lesson.title },
       code: 'INVALID_LESSON_STATUS_TRANSITION', message: '当前课时状态不允许转换', details: { requestedStatus: status },
       allowSameState: true,
@@ -498,59 +498,59 @@ export async function handleCourses(ctx, part, method) {
      const deliveryMode = patchModes ? normalizeDeliveryMode(patchModes[0])
        : (body.deliveryMode === undefined ? (lesson.delivery_mode || 'CANVAS') : normalizeDeliveryMode(body.deliveryMode));
      const classroomConfig = body.classroomConfig === undefined ? parseJson(lesson.classroom_config, {}) : normalizeClassroomConfig(body.classroomConfig);
-    transaction(() => {
-    q('UPDATE course_lessons SET title=?,summary=?,duration_minutes=?,status=?,lesson_content=?,delivery_mode=?,classroom_config=?,updated_at=? WHERE id=?', [title, summary, durationMinutes, status, lessonContent, deliveryMode, json(classroomConfig), nowIso(), lesson.id]);
+    await atransaction(async () => {
+    await aq('UPDATE course_lessons SET title=?,summary=?,duration_minutes=?,status=?,lesson_content=?,delivery_mode=?,classroom_config=?,updated_at=? WHERE id=?', [title, summary, durationMinutes, status, lessonContent, deliveryMode, json(classroomConfig), nowIso(), lesson.id]);
     if (body.materialGroups !== undefined || body.capabilities !== undefined || body.deliveryMode !== undefined || body.deliveryModes !== undefined || body.perStudentBudgetFen !== undefined || body.platformBudgetFen !== undefined || body.classroomConfig !== undefined || body.canvasTemplateSnapshot !== undefined) {
-      const currentCanvas = lessonCanvasConfig(lesson.id);
-      replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig, body.canvasTemplateSnapshot ?? parseJson(lesson.canvas_template_snapshot, {}), { deliveryModes: body.deliveryModes ?? (body.deliveryMode !== undefined ? [deliveryMode] : undefined), perStudentBudgetFen: body.perStudentBudgetFen, platformBudgetFen: body.platformBudgetFen, inTransaction: true });
+      const currentCanvas = await lessonCanvasConfig(lesson.id);
+      await replaceLessonCanvasConfig(lesson.id, body.materialGroups ?? currentCanvas.materialGroups, body.capabilities ?? currentCanvas.capabilities, deliveryMode, classroomConfig, body.canvasTemplateSnapshot ?? parseJson(lesson.canvas_template_snapshot, {}), { deliveryModes: body.deliveryModes ?? (body.deliveryMode !== undefined ? [deliveryMode] : undefined), perStudentBudgetFen: body.perStudentBudgetFen, platformBudgetFen: body.platformBudgetFen, inTransaction: true });
     }
-    if (body.teachingGroups !== undefined) replaceLessonTeachingMaterials(lesson.id, body.teachingGroups, { inTransaction: true });
-    if (status === 'PUBLISHED') validateLessonForPublishing(row('SELECT * FROM course_lessons WHERE id=?', [lesson.id]));
-    q('UPDATE course_series SET updated_at=? WHERE id=?', [nowIso(), lesson.series_id]);
+    if (body.teachingGroups !== undefined) await replaceLessonTeachingMaterials(lesson.id, body.teachingGroups, { inTransaction: true });
+    if (status === 'PUBLISHED') await validateLessonForPublishing(await arow('SELECT * FROM course_lessons WHERE id=?', [lesson.id]));
+    await aq('UPDATE course_series SET updated_at=? WHERE id=?', [nowIso(), lesson.series_id]);
     });
-    audit(ctx, 'COURSE_LESSON_UPDATE', 'COURSE_LESSON', lesson.id, { title: lesson.title, status: lesson.status, durationMinutes: lesson.duration_minutes }, { title, status, durationMinutes, lessonContentChanged: body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content }, {});
+    await audit(ctx, 'COURSE_LESSON_UPDATE', 'COURSE_LESSON', lesson.id, { title: lesson.title, status: lesson.status, durationMinutes: lesson.duration_minutes }, { title, status, durationMinutes, lessonContentChanged: body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content }, {});
     if (body.lessonContent !== undefined && body.lessonContent !== lesson.lesson_content) {
-      audit(ctx, 'COURSE_LESSON_CONTENT_UPDATE', 'COURSE_LESSON', lesson.id, { lessonContent: lesson.lesson_content }, { lessonContent });
+      await audit(ctx, 'COURSE_LESSON_CONTENT_UPDATE', 'COURSE_LESSON', lesson.id, { lessonContent: lesson.lesson_content }, { lessonContent });
     }
-    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
 
   if (lessonEditMatch && method === 'DELETE') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const lesson = row('SELECT lesson.*, series.owner_type owner_type, series.version series_version FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=?', [lessonEditMatch[1]]);
+    const lesson = await arow('SELECT lesson.*, series.owner_type owner_type, series.version series_version FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=?', [lessonEditMatch[1]]);
     if (!lesson || lesson.owner_type !== 'PLATFORM') throw errors.notFound('平台课时不存在', 'LESSON_NOT_FOUND');
-    const curriculumRefs = count('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE lesson_id=?', [lesson.id]);
-    const sessionRefs = count('SELECT COUNT(*) AS n FROM class_sessions WHERE lesson_id=?', [lesson.id]);
+    const curriculumRefs = await acount('SELECT COUNT(*) AS n FROM class_curriculum_items WHERE lesson_id=?', [lesson.id]);
+    const sessionRefs = await acount('SELECT COUNT(*) AS n FROM class_sessions WHERE lesson_id=?', [lesson.id]);
     if (curriculumRefs > 0 || sessionRefs > 0) throw errors.badRequest('该课时已被班级课单或课堂引用（课单 ' + curriculumRefs + ' 处、课堂 ' + sessionRefs + ' 处），请改为归档', 'LESSON_IN_USE');
     const now = nowIso();
-    transaction(() => {
-      q('DELETE FROM course_lessons WHERE id=?', [lesson.id]);
-      const remaining = rows('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [lesson.series_id]);
-      remaining.forEach((item, index) => {
-        q('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [index + 1, now, item.id]);
-      });
-      q('UPDATE course_series SET updated_at=? WHERE id=?', [now, lesson.series_id]);
+    await atransaction(async () => {
+      await aq('DELETE FROM course_lessons WHERE id=?', [lesson.id]);
+      const remaining = await arows('SELECT id FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [lesson.series_id]);
+      for (const [index, item] of remaining.entries()) {
+        await aq('UPDATE course_lessons SET sort=?,updated_at=? WHERE id=?', [index + 1, now, item.id]);
+      };
+      await aq('UPDATE course_series SET updated_at=? WHERE id=?', [now, lesson.series_id]);
     });
-    audit(ctx, 'COURSE_LESSON_DELETE', 'COURSE_LESSON', lesson.id, { title: lesson.title }, { deleted: true, resequenced: true }, {});
-    return platformSeries(row('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
+    await audit(ctx, 'COURSE_LESSON_DELETE', 'COURSE_LESSON', lesson.id, { title: lesson.title }, { deleted: true, resequenced: true }, {});
+    return await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [lesson.series_id]), { includeLessons: true, includeAllLessons: true, includeTeaching: true });
   }
   match = part.match(/^\/course-series\/([^/]+)\/assignments$/);
   if (match && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     requirePlatformPermission(ctx, 'ADMIN_BILLING');
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [match[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [match[1]]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     const organizationId = singleAssignmentOrgId(ctx.body);
-    if (!row('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    if (!await arow('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     const now = nowIso();
     // 到期时间**不再由平台填**：跟机构的合同日期同步（2026-09-16 用户口径）。
     // 老前端仍会传 validityDays —— 照旧收下但**忽略**，免得老界面直接报错。
-    const expiresAt = contractExpiryForOrg(organizationId);
+    const expiresAt = await contractExpiryForOrg(organizationId);
     let before = null;
-    const result = transaction(() => {
-      const currentSeries = row('SELECT * FROM course_series WHERE id=?', [series.id]);
+    const result = await atransaction(async () => {
+      const currentSeries = await arow('SELECT * FROM course_series WHERE id=?', [series.id]);
       if (currentSeries.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
-      const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
+      const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
       before = assignmentSnapshot(existing);
       const quotaTotal = ctx.body?.quotaTotal === undefined && existing
         ? Number(existing.quota_total) : integer(ctx.body?.quotaTotal, '授权总次数', { min: 1, max: 100000000 });
@@ -559,17 +559,17 @@ export async function handleCourses(ctx, part, method) {
       const delta = quotaTotal - baseQuota;
       const purchase = delta > 0 ? normalizeLicensePurchaseInput(ctx.body, delta) : null;
       const assignmentId = existing?.id || id('assign');
-      const batch = purchase ? createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase }) : null;
+      const batch = purchase ? await createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase }) : null;
       if (!batch?.replayed) {
-        const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+        const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])).n);
         if (reserved + delta > Number(currentSeries.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
         if (existing) {
-          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
-          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
-        } else q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
+          await assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
+          await aq("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,expires_at=?,quota_total=? WHERE id=?", [auth.user.id, now, expiresAt, quotaTotal, existing.id]);
+        } else await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, expiresAt, quotaTotal]);
         // 授权次数变更流水（P03-04 写入点① 初始开通 / 增加 / 减少）——**就在本事务里**，
         // 与授权单落库同生共死（流水表只记新的，历史补不出来）。
-        recordQuotaChange({
+        await recordQuotaChange({
           orgId: organizationId, seriesId: series.id, assignmentId,
           changeType: 'AUTO', autoCreated: !existing, skipWhenUnchanged: true,
           quotaTotalBefore: Number(existing ? existing.quota_total : 0),
@@ -578,9 +578,9 @@ export async function handleCourses(ctx, part, method) {
           reason: '平台给机构开通课包', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
         });
       }
-      return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch?.replayed) };
+      return { assignment: assignmentSnapshot(await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch?.replayed) };
     });
-    if (!result.replayed) audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_ASSIGNMENT', result.assignment.id, before, result.assignment, { orgId: organizationId });
+    if (!result.replayed) await audit(ctx, 'COURSE_SERIES_ASSIGN', 'COURSE_ASSIGNMENT', result.assignment.id, before, result.assignment, { orgId: organizationId });
     return { assignedCount: 1, expiresAt, quotaTotal: result.assignment.quotaTotal, allocations: [result.assignment] };
   }
 
@@ -591,30 +591,30 @@ export async function handleCourses(ctx, part, method) {
     const organizationId = singleAssignmentOrgId(ctx.body);
     const additionalQuota = integer(ctx.body?.additionalQuota, '追加次数', { min: 1, max: 100000000 });
     const purchase = normalizeLicensePurchaseInput(ctx.body, additionalQuota);
-    if (!row('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    if (!await arow('SELECT id FROM organizations WHERE id=?', [organizationId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     let before = null;
-    const after = transaction(() => {
-      const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [assignmentAppendMatch[1]]);
+    const after = await atransaction(async () => {
+      const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [assignmentAppendMatch[1]]);
       if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
       if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可授权', 'COURSE_NOT_PUBLISHED');
-      const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
+      const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId]);
       before = assignmentSnapshot(existing);
       const now = nowIso();
       const assignmentId = existing?.id || id('assign');
-      const batch = createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase });
+      const batch = await createLicensePurchaseBatch({ assignmentId, orgId: organizationId, seriesId: series.id, actorId: auth.user.id, purchasedAt: now, ...purchase });
       if (!batch.replayed) {
-        const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+        const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])).n);
         if (reserved + additionalQuota > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
         if (existing) {
-          assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
+          await assertTransition(ctx, 'courseAssignment', existing.status, 'ACTIVE', { targetType: 'COURSE_ASSIGNMENT', targetId: existing.id, allowSameState: true });
           const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
-          q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [auth.user.id, now, baseQuota + additionalQuota, existing.id]);
+          await aq("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [auth.user.id, now, baseQuota + additionalQuota, existing.id]);
         } else {
           // 首次追加即建立授权：到期时间同样跟合同走
-          q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, contractExpiryForOrg(organizationId), additionalQuota]);
+          await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, organizationId, 'ACTIVE', auth.user.id, now, await contractExpiryForOrg(organizationId), additionalQuota]);
         }
         // 授权次数变更流水：同上（首次追加 = 初始开通，已有授权单追加 = 增加授权次数）。
-        recordQuotaChange({
+        await recordQuotaChange({
           orgId: organizationId, seriesId: series.id, assignmentId,
           changeType: 'AUTO', autoCreated: !existing, skipWhenUnchanged: true,
           quotaTotalBefore: Number(existing ? existing.quota_total : 0),
@@ -623,9 +623,9 @@ export async function handleCourses(ctx, part, method) {
           reason: '平台追加授权次数', source: COURSE_QUOTA_SOURCES.ADMIN_ASSIGN,
         });
       }
-      return { assignment: assignmentSnapshot(row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch.replayed) };
+      return { assignment: assignmentSnapshot(await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, organizationId])), replayed: Boolean(batch.replayed) };
     });
-    if (!after.replayed) audit(ctx, 'COURSE_ASSIGNMENT_QUOTA_APPEND', 'COURSE_ASSIGNMENT', after.assignment.id, before, { ...after.assignment, additionalQuota }, { orgId: organizationId });
+    if (!after.replayed) await audit(ctx, 'COURSE_ASSIGNMENT_QUOTA_APPEND', 'COURSE_ASSIGNMENT', after.assignment.id, before, { ...after.assignment, additionalQuota }, { orgId: organizationId });
     return { assignment: after.assignment, additionalQuota };
   }
 
@@ -634,24 +634,24 @@ export async function handleCourses(ctx, part, method) {
 
   if (part === '/authorizations' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const items = rows("SELECT * FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' ORDER BY title").map((series) => {
-      const allocations = rows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id]).map((a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at, purchaseBatches: licensePurchaseHistory(a.id) }));
+    const items = await amap((await arows("SELECT * FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' ORDER BY title")), async (series) => {
+      const allocations = await amap((await arows('SELECT a.*,o.name org_name FROM course_assignments a JOIN organizations o ON o.id=a.org_id WHERE a.series_id=? ORDER BY a.assigned_at DESC', [series.id])), async (a) => ({ id: a.id, orgId: a.org_id, orgName: a.org_name, status: a.status, quotaTotal: Number(a.quota_total), quotaUsed: Number(a.quota_used), remaining: Math.max(0, a.quota_total-a.quota_used), expiresAt: a.expires_at, purchaseBatches: await licensePurchaseHistory(a.id) }));
       const reserved = allocations.reduce((n,a) => n + (a.status === 'ACTIVE' ? a.quotaTotal : a.quotaUsed), 0);
       return { id: series.id, title: series.title, stockTotal: Number(series.stock_total || 0), reserved, available: Math.max(0, Number(series.stock_total || 0)-reserved), allocations };
     });
-    return { items, organizations: rows('SELECT id,name,status FROM organizations ORDER BY name,id') };
+    return { items, organizations: await arows('SELECT id,name,status FROM organizations ORDER BY name,id') };
   }
   const stockMatch = part.match(/^\/course-series\/([^/]+)\/stock$/);
   if (stockMatch && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const stockTotal = integer(ctx.body?.stockTotal, '库存总次数', { min: 0, max: 100000000 });
-    transaction(() => {
-      const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM' AND status='PUBLISHED'", [stockMatch[1]]);
+    await atransaction(async () => {
+      const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM' AND status='PUBLISHED'", [stockMatch[1]]);
       if (!series) throw errors.notFound('已发布课包不存在');
-      const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]).n);
+      const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])).n);
       if (stockTotal < reserved) throw errors.conflict('库存不能低于已分配或已消耗次数', 'COURSE_STOCK_BELOW_RESERVED');
-      q('UPDATE course_series SET stock_total=?,updated_at=? WHERE id=?', [stockTotal, nowIso(), series.id]);
-      audit(ctx, 'COURSE_STOCK_UPDATE', 'COURSE_SERIES', series.id, { stockTotal: series.stock_total }, { stockTotal });
+      await aq('UPDATE course_series SET stock_total=?,updated_at=? WHERE id=?', [stockTotal, nowIso(), series.id]);
+      await audit(ctx, 'COURSE_STOCK_UPDATE', 'COURSE_SERIES', series.id, { stockTotal: series.stock_total }, { stockTotal });
     });
     return { stockTotal };
   }
@@ -661,29 +661,29 @@ export async function handleCourses(ctx, part, method) {
   const grantRevokeMatch = part.match(/^\/course-grants\/([^/]+)\/revoke$/);
   if (grantRevokeMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const grant = row('SELECT * FROM student_course_grants WHERE id=?', [grantRevokeMatch[1]]);
+    const grant = await arow('SELECT * FROM student_course_grants WHERE id=?', [grantRevokeMatch[1]]);
     if (!grant) throw errors.notFound('授权记录不存在', 'COURSE_GRANT_NOT_FOUND');
     if (grant.revoked_at) throw errors.conflict('这次授权已经撤销过了', 'COURSE_GRANT_ALREADY_REVOKED');
     const reason = nonEmptyString(ctx.body?.reason, '撤销原因', { max: 500 });
-    const submitted = Number(row(
+    const submitted = Number((await arow(
       `SELECT
          (SELECT COUNT(*) FROM works work JOIN course_lessons lesson ON lesson.id=work.course_lesson_id
            WHERE lesson.series_id=? AND work.student_id=?) +
          (SELECT COUNT(*) FROM vibecoding_submissions submission JOIN course_lessons lesson ON lesson.id=submission.lesson_id
            WHERE lesson.series_id=? AND submission.student_id=?) AS n`,
       [grant.series_id, grant.student_id, grant.series_id, grant.student_id],
-    )?.n || 0);
+    ))?.n || 0);
     const now = nowIso();
-    transaction(() => {
-      q('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=? WHERE id=?', [now, auth.user.id, reason, grant.id]);
+    await atransaction(async () => {
+      await aq('UPDATE student_course_grants SET revoked_at=?,revoked_by=?,revoke_reason=? WHERE id=?', [now, auth.user.id, reason, grant.id]);
       if (!submitted && grant.source_assignment_id) {
         // 授权次数变更流水（P03-04 写入点⑤ 授权取消返还）：退回 1 次就是 quota_used −1，
         // 必须在同一个事务里记 —— 先把「退回前」的已授权次数读出来（MAX(quota_used-1,0) 在
         // quota_used 已经是 0 时不会真的变，那种情况就不写这笔流水，免得记出一条 0 变动）。
-        const assignmentBefore = row('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
-        q('UPDATE course_assignments SET quota_used=MAX(quota_used-1,0) WHERE id=?', [grant.source_assignment_id]);
+        const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
+        await aq('UPDATE course_assignments SET quota_used=MAX(quota_used-1,0) WHERE id=?', [grant.source_assignment_id]);
         if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
-          recordQuotaChange({
+          await recordQuotaChange({
             orgId: grant.org_id, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,
             changeType: 'GRANT_REFUND',
             quotaTotalBefore: Number(assignmentBefore.quota_total || 0),
@@ -692,11 +692,11 @@ export async function handleCourses(ctx, part, method) {
             reason, source: COURSE_QUOTA_SOURCES.ADMIN_GRANT_REVOKE,
           });
         }
-        const recognized = row("SELECT id FROM license_revenue_events WHERE grant_id=? AND event_type='GRANT' AND NOT EXISTS (SELECT 1 FROM license_revenue_events reversal WHERE reversal.reversal_of_event_id=license_revenue_events.id)", [grant.id]);
-        if (recognized) appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-reversal:${grant.id}:${grant.granted_at}` });
+        const recognized = await arow("SELECT id FROM license_revenue_events WHERE grant_id=? AND event_type='GRANT' AND NOT EXISTS (SELECT 1 FROM license_revenue_events reversal WHERE reversal.reversal_of_event_id=license_revenue_events.id)", [grant.id]);
+        if (recognized) await appendLicenseReversal({ grantId: grant.id, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-reversal:${grant.id}:${grant.granted_at}` });
       }
     });
-    audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null }, { revokedAt: now, reason, quotaRefunded: !submitted }, { orgId: grant.org_id });
+    await audit(ctx, 'COURSE_GRANT_REVOKE', 'STUDENT_COURSE_GRANT', grant.id, { revokedAt: null }, { revokedAt: now, reason, quotaRefunded: !submitted }, { orgId: grant.org_id });
     return { id: grant.id, revokedAt: now, quotaRefunded: !submitted, submittedLessonCount: submitted };
   }
 
@@ -715,14 +715,14 @@ export async function handleCourses(ctx, part, method) {
     if (['PENDING', 'APPROVED', 'REJECTED', 'NONE'].includes(statusFilter)) { wheres.push('series.marketplace_status=?'); params.push(statusFilter); }
     if (search) { wheres.push('series.title LIKE ?'); params.push('%' + search.replace(/[%_]/g, (c) => '[' + c + ']') + '%'); }
     const where = wheres.join(' AND ');
-    const total = Number(row('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params)?.n || 0);
-    const items = rows(
+    const total = Number((await arow('SELECT COUNT(*) n FROM course_series series WHERE ' + where, params))?.n || 0);
+    const items = await amap((await arows(
       `SELECT series.* FROM course_series series WHERE ${where}
        ORDER BY CASE series.marketplace_status WHEN 'PENDING' THEN 0 WHEN 'APPROVED' THEN 1 WHEN 'REJECTED' THEN 2 ELSE 3 END, series.created_at DESC
        LIMIT ? OFFSET ?`,
       [...params, limit, offset],
-    ).map((item) => {
-      const normalized = platformSeries(item, { parseTags: true });
+    )), async (item) => {
+      const normalized = await platformSeries(item, { parseTags: true });
       return {
         id: normalized.id,
         title: normalized.title,
@@ -742,9 +742,9 @@ export async function handleCourses(ctx, part, method) {
   const marketplaceDetailMatch = part.match(/^\/course-marketplace\/([^/]+)$/);
   if (marketplaceDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
     if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
-    const detail = platformSeries(series, { includeLessons: true, includeAllLessons: true, parseTags: true, includeTeaching: true });
+    const detail = await platformSeries(series, { includeLessons: true, includeAllLessons: true, parseTags: true, includeTeaching: true });
     return {
       ...detail,
       marketplaceStatus: detail.marketplaceStatus,
@@ -754,7 +754,7 @@ export async function handleCourses(ctx, part, method) {
 
   if (marketplaceDetailMatch && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const series = row("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
+    const series = await arow("SELECT * FROM course_series WHERE id=?", [marketplaceDetailMatch[1]]);
     if (!series) throw errors.notFound('课包不存在', 'COURSE_SERIES_NOT_FOUND');
     if (series.status !== 'PUBLISHED') throw errors.badRequest('仅已发布课包可变更应用市场状态', 'COURSE_NOT_PUBLISHED');
     const body = ctx.body || {};
@@ -763,10 +763,10 @@ export async function handleCourses(ctx, part, method) {
     // 2026-09-18：这里原来还能一并写「积分激励」（marketplace_reward_credits）。平台没有积分概念，
     // 该字段没有后台入口、没有任何调用方，也不再对公开接口下发，所以**不再接受它作为输入**：
     // 本端点只改应用市场状态，奖励列原值原样保留（本仓库惯例：删代码不删列，历史数据不动）。
-    const before = platformSeries(series, { parseTags: true });
-    q('UPDATE course_series SET marketplace_status=?,updated_at=? WHERE id=?', [newStatus, nowIso(), series.id]);
-    const after = platformSeries(row('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
-    audit(ctx, 'COURSE_SERIES_MARKETPLACE_UPDATE', 'COURSE_SERIES', series.id, { marketplaceStatus: before.marketplaceStatus }, { marketplaceStatus: after.marketplaceStatus });
+    const before = await platformSeries(series, { parseTags: true });
+    await aq('UPDATE course_series SET marketplace_status=?,updated_at=? WHERE id=?', [newStatus, nowIso(), series.id]);
+    const after = await platformSeries(await arow('SELECT * FROM course_series WHERE id=?', [series.id]), { parseTags: true });
+    await audit(ctx, 'COURSE_SERIES_MARKETPLACE_UPDATE', 'COURSE_SERIES', series.id, { marketplaceStatus: before.marketplaceStatus }, { marketplaceStatus: after.marketplaceStatus });
     return after;
   }
 

@@ -8,7 +8,7 @@ process.env.FILE_UPLOAD_ROOT = root;
 process.env.FILE_UPLOAD_REQUIRE_SCANNER = 'false';
 process.env.NODE_ENV = 'test';
 const { parseMultipartFormData, persistSecureUpload } = await import('../apps/server/src/services/fileUploadSecurity.js');
-const { q, nowIso } = await import('../apps/server/src/lib.js');
+const { q, nowIso, aq } = await import('../apps/server/src/lib.js');
 const { handleStudentFileAssets } = await import('../apps/server/src/routes/fileAssets.js');
 
 function multipart({ filename, mime, buffer, fields = {} }) {
@@ -48,7 +48,7 @@ const downloadKey = `2026/09/${downloadId}.bin`;
 const downloadPath = path.join(root, ...downloadKey.split('/'));
 await mkdir(path.dirname(downloadPath), { recursive: true });
 await writeFile(downloadPath, Buffer.from('secure-download'));
-q(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,file_size,category,visibility,status,review_status,metadata,created_at,updated_at)
+await aq(`INSERT INTO file_assets(id,owner_type,storage_kind,storage_key,file_name,mime_type,file_size,category,visibility,status,review_status,metadata,created_at,updated_at)
    VALUES (?,'PLATFORM','INTERNAL_PROXY',?,'download.txt','text/plain',15,'GENERAL','PUBLIC_PLATFORM','ACTIVE','NOT_REQUIRED','{}',?,?)`, [downloadId, downloadKey, nowIso(), nowIso()]);
 const response = await handleStudentFileAssets({
   pathname: `/api/student/file-assets/${downloadId}/download`, method: 'GET',

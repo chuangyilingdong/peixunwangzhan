@@ -80,12 +80,12 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
   // 门禁：和画布生图完全相同的那一套（课时能力 / 课堂开关 / 平台模态开关 / **算力池**）。
   // 任一条不满足就一张都不生成 —— 抛出去的 code 由调用方决定是提示还是静默。
   // units 传「这次一共打算出几张」：池子要按张数预估，不然一次任务算成 1 张会漏掉 2/3 的花费。
-  assertGenerationPreflight({
+  await assertGenerationPreflight({
     user: auth.rawUser, orgId: auth.user.orgId, context, modality: 'IMAGE',
     units: targets.reduce((total, target) => total + target.requests.length, 0),
   });
 
-  const policy = getAiProviderPolicy();
+  const policy = await getAiProviderPolicy();
   // 插画也是这个学生在花算力，同样按他的令牌走网关。
   const selection = await applyGatewayRoute(providerSelectionForModality(policy, 'IMAGE', ''), {
     orgId: auth.user.orgId, studentId: auth.user.id, lessonId: context?.lesson?.id || '', modality: 'IMAGE',
@@ -129,7 +129,7 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
         //    把售价塞进了成本列，让 usage_records.cost_fen 又多了第三种含义。
         //    现在机构端/学员端的「消耗」统一读 compute_attempts.sale_price_fen，而插画走的是
         //    getGenerationProvider（会写算力账本），所以它照样被算进去，不需要在这里重复记金额。
-        recordAiUsage({
+        await recordAiUsage({
           orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,
           modality: 'IMAGE', model: selection.model, status: 'SUCCESS',
           costFen: 0, seriesId,
@@ -138,7 +138,7 @@ export async function generateIllustrationsForArtifacts({ auth, context, artifac
       } catch (error) {
         // 单张失败不打断整体：记下来、这一页就不放图（界面上会说明有几张没做出来）。
         // 失败记 0 成本（不花学生的钱），但留一条记录以便看出「有哪些白花的调用」。
-        recordAiUsage({
+        await recordAiUsage({
           orgId: auth.user.orgId, userId: auth.user.id, sessionId: context?.activeSession?.id || null,
           modality: 'IMAGE', model: selection.model, status: 'FAILED',
           failCode: error?.code || 'ILLUSTRATION_FAILED', costFen: 0, seriesId,

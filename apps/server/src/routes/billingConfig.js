@@ -10,7 +10,7 @@ import {
   requireRole,
   row,
   rows,
-  transaction,
+  transaction, arow, aq, arows, amap,
 } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { GENERATION_PROVIDER_CATALOG, GENERATION_PROVIDER_IDS, normalizeProviderError, providerDefinition, validateProviderRegistration } from '../services/providerContract.js';
@@ -162,8 +162,8 @@ export function normalizeAiProviderPolicy(raw) {
   return normalizeProviderPolicy(raw);
 }
 
-export function getAiProviderPolicy() {
-  return normalizeProviderPolicy(row('SELECT ai_provider_policy,updated_at FROM platform_settings WHERE id=1'));
+export async function getAiProviderPolicy() {
+  return normalizeProviderPolicy(await arow('SELECT ai_provider_policy,updated_at FROM platform_settings WHERE id=1'));
 }
 
 // 2026-09-13（P4 删积分）：getOrgAiBudget / assertOrgAiBudget / assertAiBudgets 三个已删除。
@@ -228,8 +228,8 @@ function nonEmptyString(value, label, { max = 200 } = {}) {
   return s;
 }
 
-function logChange(configType, recordId, fieldName, oldValue, newValue, actorId, reason) {
-  q(
+async function logChange(configType, recordId, fieldName, oldValue, newValue, actorId, reason) {
+  await aq(
     'INSERT INTO platform_config_change_logs(id,config_type,record_id,field_name,old_value,new_value,changed_by,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
     [`ccl_${randomUUID().replace(/-/g, '').slice(0, 20)}`, configType, recordId, fieldName, String(oldValue ?? ''), String(newValue ?? ''), actorId, reason || '', nowIso()],
   );
@@ -296,23 +296,23 @@ function normalizeChangeLog(value) {
 /**
  * 平台级模态开关与单价查询（公开给 org/student，用于按需读取）
  */
-export function getModalitySettings() {
-  return rows('SELECT * FROM platform_modality_settings ORDER BY sort_order ASC, modality ASC').map(normalizeModality);
+export async function getModalitySettings() {
+  return (await arows('SELECT * FROM platform_modality_settings ORDER BY sort_order ASC, modality ASC')).map(normalizeModality);
 }
 
-export function getModalitySetting(modality) {
+export async function getModalitySetting(modality) {
   const m = String(modality || '').toUpperCase();
   if (!VALID_MODALITIES.has(m)) return null;
-  return normalizeModality(row('SELECT * FROM platform_modality_settings WHERE modality=?', [m]));
+  return normalizeModality(await arow('SELECT * FROM platform_modality_settings WHERE modality=?', [m]));
 }
 
-export function getAlerts() {
-  return rows('SELECT * FROM platform_alert_thresholds ORDER BY alert_type ASC').map(normalizeAlert);
+export async function getAlerts() {
+  return (await arows('SELECT * FROM platform_alert_thresholds ORDER BY alert_type ASC')).map(normalizeAlert);
 }
 
-export function getOrgOverrides(orgId) {
+export async function getOrgOverrides(orgId) {
   if (!orgId) return [];
-  return rows('SELECT * FROM org_capability_overrides WHERE org_id=? ORDER BY modality ASC', [orgId]).map(normalizeOrgOverride);
+  return (await arows('SELECT * FROM org_capability_overrides WHERE org_id=? ORDER BY modality ASC', [orgId])).map(normalizeOrgOverride);
 }
 
 /**
@@ -320,11 +320,11 @@ export function getOrgOverrides(orgId) {
  * 优先级：机构覆盖 > 平台开关。
  * 返回 { enabled, source: 'OVERRIDE' | 'PLATFORM' | 'UNKNOWN' }
  */
-export function isModalityEnabled(orgId, modality) {
+export async function isModalityEnabled(orgId, modality) {
   const m = String(modality || '').toUpperCase();
-  const override = orgId ? row('SELECT enabled, reason FROM org_capability_overrides WHERE org_id=? AND modality=?', [orgId, m]) : null;
+  const override = orgId ? await arow('SELECT enabled, reason FROM org_capability_overrides WHERE org_id=? AND modality=?', [orgId, m]) : null;
   if (override) return { enabled: !!override.enabled, source: 'OVERRIDE', reason: override.reason || '' };
-  const setting = getModalitySetting(m);
+  const setting = await getModalitySetting(m);
   if (!setting) return { enabled: false, source: 'UNKNOWN' };
   return { enabled: setting.enabled, source: 'PLATFORM' };
 }
@@ -339,14 +339,14 @@ export async function handleAdminBillingConfig(ctx) {
   // 模态设置
   if (part === '/billing-config/modalities' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    return { items: getModalitySettings() };
+    return { items: await getModalitySettings() };
   }
   const modMatch = part.match(/^\/billing-config\/modalities\/([^/]+)$/);
   if (modMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const modality = String(modMatch[1]).toUpperCase();
     if (!VALID_MODALITIES.has(modality)) throw errors.badRequest('modality 无效', 'INVALID_MODALITY');
-    const existing = row('SELECT * FROM platform_modality_settings WHERE modality=?', [modality]);
+    const existing = await arow('SELECT * FROM platform_modality_settings WHERE modality=?', [modality]);
     if (!existing) throw errors.notFound('模态不存在', 'MODALITY_NOT_FOUND');
     const body = ctx.body || {};
     const updates = [];
@@ -356,22 +356,22 @@ export async function handleAdminBillingConfig(ctx) {
     const newSortOrder = body.sortOrder === undefined ? Number(existing.sort_order) : integer(body.sortOrder, 'sortOrder', { min: 0, max: 1000 });
     const reason = body.reason ? String(body.reason).trim().slice(0, 500) : '';
     const now = nowIso();
-    if (newEnabled !== existing.enabled) { logChange('MODALITY_SETTING', existing.id, 'enabled', existing.enabled, newEnabled, auth.user.id, reason); updates.push(['enabled', newEnabled]); }
-    if (newDisplayName !== existing.display_name) { logChange('MODALITY_SETTING', existing.id, 'displayName', existing.display_name, newDisplayName, auth.user.id, reason); updates.push(['display_name', newDisplayName]); }
-    if (newDescription !== existing.description) { logChange('MODALITY_SETTING', existing.id, 'description', existing.description, newDescription, auth.user.id, reason); updates.push(['description', newDescription]); }
-    if (newSortOrder !== Number(existing.sort_order)) { logChange('MODALITY_SETTING', existing.id, 'sortOrder', existing.sort_order, newSortOrder, auth.user.id, reason); updates.push(['sort_order', newSortOrder]); }
+    if (newEnabled !== existing.enabled) { await logChange('MODALITY_SETTING', existing.id, 'enabled', existing.enabled, newEnabled, auth.user.id, reason); updates.push(['enabled', newEnabled]); }
+    if (newDisplayName !== existing.display_name) { await logChange('MODALITY_SETTING', existing.id, 'displayName', existing.display_name, newDisplayName, auth.user.id, reason); updates.push(['display_name', newDisplayName]); }
+    if (newDescription !== existing.description) { await logChange('MODALITY_SETTING', existing.id, 'description', existing.description, newDescription, auth.user.id, reason); updates.push(['description', newDescription]); }
+    if (newSortOrder !== Number(existing.sort_order)) { await logChange('MODALITY_SETTING', existing.id, 'sortOrder', existing.sort_order, newSortOrder, auth.user.id, reason); updates.push(['sort_order', newSortOrder]); }
     if (!updates.length) return normalizeModality(existing);
     const setClauses = updates.map(([k]) => `${k}=?`).join(', ');
     const values = updates.map(([, v]) => v);
-    q(`UPDATE platform_modality_settings SET ${setClauses}, updated_at=? WHERE id=?`, [...values, now, existing.id]);
-    audit(ctx, 'BILLING_CONFIG_MODALITY_UPDATE', 'PLATFORM_MODALITY_SETTING', existing.id, { modality, before: existing, after: { enabled: newEnabled, displayName: newDisplayName } }, { reason });
-    return normalizeModality(row('SELECT * FROM platform_modality_settings WHERE id=?', [existing.id]));
+    await aq(`UPDATE platform_modality_settings SET ${setClauses}, updated_at=? WHERE id=?`, [...values, now, existing.id]);
+    await audit(ctx, 'BILLING_CONFIG_MODALITY_UPDATE', 'PLATFORM_MODALITY_SETTING', existing.id, { modality, before: existing, after: { enabled: newEnabled, displayName: newDisplayName } }, { reason });
+    return normalizeModality(await arow('SELECT * FROM platform_modality_settings WHERE id=?', [existing.id]));
   }
 
   // AI provider 策略：通用目录 + 自定义供应商；学生外发由平台端统一控制；平台预算由平台端维护
   if (part === '/billing-config/ai-provider' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const policy = getAiProviderPolicy();
+    const policy = await getAiProviderPolicy();
     return {
       catalog: GENERATION_PROVIDER_CATALOG,
       policy,
@@ -388,7 +388,7 @@ export async function handleAdminBillingConfig(ctx) {
   }
   if (part === '/billing-config/ai-provider/models' && method === 'POST') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const policy = getAiProviderPolicy();
+    const policy = await getAiProviderPolicy();
     const apiKey = providerApiKeyForRequest(ctx.body || {});
     if (!apiKey) throw errors.badRequest('尚未配置 API Key', 'AI_PROVIDER_KEY_NOT_CONFIGURED');
     let url = String(ctx.body?.endpoint || policy.endpoint || '').trim();
@@ -434,7 +434,7 @@ export async function handleAdminBillingConfig(ctx) {
     const body = ctx.body || {};
     const modality = String(body.modality || 'TEXT').trim().toUpperCase();
     if (!['TEXT', 'IMAGE', 'MUSIC', 'VIDEO'].includes(modality)) throw errors.badRequest('不支持的素材类型', 'UNSUPPORTED_MODALITY');
-    const policy = getAiProviderPolicy();
+    const policy = await getAiProviderPolicy();
     const channelId = String(body.channelId || policy?.modalityChannels?.[modality] || 'default');
     const saved = Array.isArray(policy?.channels) ? policy.channels.find((item) => item.id === channelId) : null;
     // body.channel 传进来就优先用它 —— 这样**还没保存**的表单也能先试一次（保存前就知道行不行）。
@@ -462,14 +462,14 @@ export async function handleAdminBillingConfig(ctx) {
     const info = generationProviderInfo(selection);
     const started = Date.now();
     const base = { modality, model: selection.model, channelId, provider: selection.provider, mode: info.mode, routedVia: info.routedVia, configured: info.configured };
-    const finish = (payload) => {
-      audit(ctx, 'AI_PROVIDER_PROBE', 'PLATFORM_SETTINGS', '1', null, {
+    const finish = async (payload) => {
+      await audit(ctx, 'AI_PROVIDER_PROBE', 'PLATFORM_SETTINGS', '1', null, {
         modality, channelId, model: selection.model, ok: Boolean(payload.ok), errorCode: payload.error?.code || null, elapsedMs: Date.now() - started,
       });
       return { ...base, elapsedMs: Date.now() - started, ...payload };
     };
     if (!info.configured || info.mode === 'adapter-required') {
-      return finish({ ok: false, error: { code: info.configError || 'GENERATION_PROVIDER_UNAVAILABLE', message: '这套配置还没有可用的上游适配器（渠道 / 密钥 / 请求地址不完整）' } });
+      return await finish({ ok: false, error: { code: info.configError || 'GENERATION_PROVIDER_UNAVAILABLE', message: '这套配置还没有可用的上游适配器（渠道 / 密钥 / 请求地址不完整）' } });
     }
     const provider = getGenerationProvider(selection);
     const timeoutMs = PROBE_TIMEOUT_MS[modality] || 120000;
@@ -480,7 +480,7 @@ export async function handleAdminBillingConfig(ctx) {
         new Promise((resolve) => { timer = setTimeout(() => resolve({ __probeTimeout: true }), timeoutMs); }),
       ]);
       if (generated?.__probeTimeout) {
-        return finish({
+        return await finish({
           ok: false,
           accepted: false,
           error: {
@@ -490,7 +490,7 @@ export async function handleAdminBillingConfig(ctx) {
         });
       }
       const assets = Array.isArray(generated?.assets) ? generated.assets : [];
-      return finish({
+      return await finish({
         ok: true,
         accepted: true,
         assetCount: assets.length,
@@ -499,7 +499,7 @@ export async function handleAdminBillingConfig(ctx) {
       });
     } catch (error) {
       const normalized = normalizeProviderError(error);
-      return finish({ ok: false, error: { code: normalized.code || 'GENERATION_PROVIDER_UPSTREAM_ERROR', message: normalized.message || '上游拒绝了这次请求' } });
+      return await finish({ ok: false, error: { code: normalized.code || 'GENERATION_PROVIDER_UPSTREAM_ERROR', message: normalized.message || '上游拒绝了这次请求' } });
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -507,7 +507,7 @@ export async function handleAdminBillingConfig(ctx) {
   if (part === '/billing-config/ai-provider' && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const body = ctx.body || {};
-    const before = getAiProviderPolicy();
+    const before = await getAiProviderPolicy();
     const platformPerCallBudget = body.platformPerCallBudget === undefined ? Number(before.platformPerCallBudget || 0) : integer(body.platformPerCallBudget, '平台单次预算', { min: 0, max: 1000000 });
     const platformDailyBudget = body.platformDailyBudget === undefined ? Number(before.platformDailyBudget || 0) : integer(body.platformDailyBudget, '平台每日预算', { min: 0, max: 100000000 });
     if (platformPerCallBudget > platformDailyBudget) throw errors.badRequest('平台单次预算不能高于平台每日预算', 'AI_BUDGET_RANGE_INVALID');
@@ -594,12 +594,12 @@ export async function handleAdminBillingConfig(ctx) {
       allowStudentExternalContent,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });
-    q('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify(after), nowIso()]);
+    await aq('UPDATE platform_settings SET ai_provider_policy=?,updated_at=? WHERE id=1', [JSON.stringify(after), nowIso()]);
     if (changed) {
-      logChange('AI_PROVIDER_POLICY', '1', 'aiProviderPolicy', JSON.stringify({ ...before, updatedAt: undefined }), JSON.stringify(after), auth.user.id, String(body.reason || '').slice(0, 500));
-      audit(ctx, 'BILLING_CONFIG_AI_PROVIDER_UPDATE', 'PLATFORM_SETTINGS', '1', { before: { ...before, updatedAt: undefined }, after }, { reason: body.reason || '' });
+      await logChange('AI_PROVIDER_POLICY', '1', 'aiProviderPolicy', JSON.stringify({ ...before, updatedAt: undefined }), JSON.stringify(after), auth.user.id, String(body.reason || '').slice(0, 500));
+      await audit(ctx, 'BILLING_CONFIG_AI_PROVIDER_UPDATE', 'PLATFORM_SETTINGS', '1', { before: { ...before, updatedAt: undefined }, after }, { reason: body.reason || '' });
     }
-    const savedPolicy = getAiProviderPolicy();
+    const savedPolicy = await getAiProviderPolicy();
     return { catalog: GENERATION_PROVIDER_CATALOG, policy: savedPolicy, ...capabilityMetadata(), security: { allowStudentExternalContent: savedPolicy.allowStudentExternalContent, externalStudentRequestsBlocked: !savedPolicy.allowStudentExternalContent } };
   }
 
@@ -609,14 +609,14 @@ export async function handleAdminBillingConfig(ctx) {
   // 预警阈值
   if (part === '/billing-config/alerts' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    return { items: getAlerts() };
+    return { items: await getAlerts() };
   }
   const alertMatch = part.match(/^\/billing-config\/alerts\/([^/]+)$/);
   if (alertMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const alertType = String(alertMatch[1]).toUpperCase();
     if (!VALID_ALERT_TYPES.has(alertType)) throw errors.badRequest('alertType 无效', 'INVALID_ALERT_TYPE');
-    const existing = row('SELECT * FROM platform_alert_thresholds WHERE alert_type=?', [alertType]);
+    const existing = await arow('SELECT * FROM platform_alert_thresholds WHERE alert_type=?', [alertType]);
     if (!existing) throw errors.notFound('预警不存在', 'ALERT_NOT_FOUND');
     const body = ctx.body || {};
     const threshold = body.threshold === undefined ? Number(existing.threshold) : integer(body.threshold, 'threshold', { min: 0, max: 100000000 });
@@ -626,15 +626,15 @@ export async function handleAdminBillingConfig(ctx) {
     const note = body.note === undefined ? existing.note : String(body.note || '').slice(0, 500);
     const reason = body.reason ? String(body.reason).trim().slice(0, 500) : '';
     const updates = [];
-    if (threshold !== Number(existing.threshold)) { logChange('ALERT_THRESHOLD', existing.id, 'threshold', existing.threshold, threshold, auth.user.id, reason); updates.push(['threshold', threshold]); }
-    if (notifyEmail !== existing.notify_email) { logChange('ALERT_THRESHOLD', existing.id, 'notifyEmail', existing.notify_email, notifyEmail, auth.user.id, reason); updates.push(['notify_email', notifyEmail]); }
-    if (enabled !== existing.enabled) { logChange('ALERT_THRESHOLD', existing.id, 'enabled', existing.enabled, enabled, auth.user.id, reason); updates.push(['enabled', enabled]); }
-    if (note !== existing.note) { logChange('ALERT_THRESHOLD', existing.id, 'note', existing.note, note, auth.user.id, reason); updates.push(['note', note]); }
+    if (threshold !== Number(existing.threshold)) { await logChange('ALERT_THRESHOLD', existing.id, 'threshold', existing.threshold, threshold, auth.user.id, reason); updates.push(['threshold', threshold]); }
+    if (notifyEmail !== existing.notify_email) { await logChange('ALERT_THRESHOLD', existing.id, 'notifyEmail', existing.notify_email, notifyEmail, auth.user.id, reason); updates.push(['notify_email', notifyEmail]); }
+    if (enabled !== existing.enabled) { await logChange('ALERT_THRESHOLD', existing.id, 'enabled', existing.enabled, enabled, auth.user.id, reason); updates.push(['enabled', enabled]); }
+    if (note !== existing.note) { await logChange('ALERT_THRESHOLD', existing.id, 'note', existing.note, note, auth.user.id, reason); updates.push(['note', note]); }
     if (!updates.length) return normalizeAlert(existing);
     const setClauses = updates.map(([k]) => `${k}=?`).join(', ');
-    q(`UPDATE platform_alert_thresholds SET ${setClauses}, updated_at=? WHERE id=?`, [...updates.map(([, v]) => v), nowIso(), existing.id]);
-    audit(ctx, 'BILLING_CONFIG_ALERT_UPDATE', 'PLATFORM_ALERT_THRESHOLD', existing.id, { alertType, before: existing, after: { threshold, notifyEmail, enabled, note } }, { reason });
-    return normalizeAlert(row('SELECT * FROM platform_alert_thresholds WHERE id=?', [existing.id]));
+    await aq(`UPDATE platform_alert_thresholds SET ${setClauses}, updated_at=? WHERE id=?`, [...updates.map(([, v]) => v), nowIso(), existing.id]);
+    await audit(ctx, 'BILLING_CONFIG_ALERT_UPDATE', 'PLATFORM_ALERT_THRESHOLD', existing.id, { alertType, before: existing, after: { threshold, notifyEmail, enabled, note } }, { reason });
+    return normalizeAlert(await arow('SELECT * FROM platform_alert_thresholds WHERE id=?', [existing.id]));
   }
 
   // 机构级覆盖
@@ -642,42 +642,42 @@ export async function handleAdminBillingConfig(ctx) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const orgId = String(ctx.search.get('orgId') || '').trim();
     const items = orgId
-      ? rows('SELECT * FROM org_capability_overrides WHERE org_id=? ORDER BY org_id, modality', [orgId]).map(normalizeOrgOverride)
-      : rows('SELECT * FROM org_capability_overrides ORDER BY org_id, modality').map(normalizeOrgOverride);
+      ? (await arows('SELECT * FROM org_capability_overrides WHERE org_id=? ORDER BY org_id, modality', [orgId])).map(normalizeOrgOverride)
+      : (await arows('SELECT * FROM org_capability_overrides ORDER BY org_id, modality')).map(normalizeOrgOverride);
     return { items, total: items.length };
   }
   if (part === '/billing-config/org-overrides' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const body = ctx.body || {};
     const orgId = nonEmptyString(body.orgId, 'orgId', { max: 60 });
-    if (!row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    if (!await arow('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     const modality = String(body.modality || '').toUpperCase();
     if (!VALID_MODALITIES.has(modality)) throw errors.badRequest('modality 无效', 'INVALID_MODALITY');
     const enabled = body.enabled === undefined ? 1 : (bool(body.enabled) ? 1 : 0);
     const reason = String(body.reason || '').trim().slice(0, 500);
-    const existing = row('SELECT * FROM org_capability_overrides WHERE org_id=? AND modality=?', [orgId, modality]);
+    const existing = await arow('SELECT * FROM org_capability_overrides WHERE org_id=? AND modality=?', [orgId, modality]);
     const now = nowIso();
     if (existing) {
-      q("UPDATE org_capability_overrides SET enabled=?, reason=?, updated_at=? WHERE id=?", [enabled, reason, now, existing.id]);
-      logChange('ORG_OVERRIDE', existing.id, 'enabled', existing.enabled, enabled, auth.user.id, reason);
-      logChange('ORG_OVERRIDE', existing.id, 'reason', existing.reason || '', reason, auth.user.id, reason);
-      audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_UPDATE', 'ORG_CAPABILITY_OVERRIDE', existing.id, { before: existing, after: { enabled, reason } }, { orgId });
-      return normalizeOrgOverride(row('SELECT * FROM org_capability_overrides WHERE id=?', [existing.id]));
+      await aq("UPDATE org_capability_overrides SET enabled=?, reason=?, updated_at=? WHERE id=?", [enabled, reason, now, existing.id]);
+      await logChange('ORG_OVERRIDE', existing.id, 'enabled', existing.enabled, enabled, auth.user.id, reason);
+      await logChange('ORG_OVERRIDE', existing.id, 'reason', existing.reason || '', reason, auth.user.id, reason);
+      await audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_UPDATE', 'ORG_CAPABILITY_OVERRIDE', existing.id, { before: existing, after: { enabled, reason } }, { orgId });
+      return normalizeOrgOverride(await arow('SELECT * FROM org_capability_overrides WHERE id=?', [existing.id]));
     }
     const id = `orgov_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
-    q('INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [id, orgId, modality, enabled, reason, auth.user.id, now, now]);
-    logChange('ORG_OVERRIDE', id, 'create', '', JSON.stringify({ orgId, modality, enabled }), auth.user.id, reason);
-    audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_CREATE', 'ORG_CAPABILITY_OVERRIDE', id, null, { orgId, modality, enabled, reason });
-    return normalizeOrgOverride(row('SELECT * FROM org_capability_overrides WHERE id=?', [id]));
+    await aq('INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [id, orgId, modality, enabled, reason, auth.user.id, now, now]);
+    await logChange('ORG_OVERRIDE', id, 'create', '', JSON.stringify({ orgId, modality, enabled }), auth.user.id, reason);
+    await audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_CREATE', 'ORG_CAPABILITY_OVERRIDE', id, null, { orgId, modality, enabled, reason });
+    return normalizeOrgOverride(await arow('SELECT * FROM org_capability_overrides WHERE id=?', [id]));
   }
   const ovrMatch = part.match(/^\/billing-config\/org-overrides\/([^/]+)$/);
   if (ovrMatch && method === 'DELETE') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const target = row('SELECT * FROM org_capability_overrides WHERE id=?', [ovrMatch[1]]);
+    const target = await arow('SELECT * FROM org_capability_overrides WHERE id=?', [ovrMatch[1]]);
     if (!target) throw errors.notFound('覆盖不存在', 'ORG_OVERRIDE_NOT_FOUND');
-    q('DELETE FROM org_capability_overrides WHERE id=?', [target.id]);
-    logChange('ORG_OVERRIDE', target.id, 'delete', JSON.stringify({ orgId: target.org_id, modality: target.modality, enabled: target.enabled }), '', auth.user.id, '');
-    audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_DELETE', 'ORG_CAPABILITY_OVERRIDE', target.id, normalizeOrgOverride(target), null);
+    await aq('DELETE FROM org_capability_overrides WHERE id=?', [target.id]);
+    await logChange('ORG_OVERRIDE', target.id, 'delete', JSON.stringify({ orgId: target.org_id, modality: target.modality, enabled: target.enabled }), '', auth.user.id, '');
+    await audit(ctx, 'BILLING_CONFIG_ORG_OVERRIDE_DELETE', 'ORG_CAPABILITY_OVERRIDE', target.id, normalizeOrgOverride(target), null);
     return { id: target.id, deleted: true };
   }
 
@@ -690,8 +690,8 @@ export async function handleAdminBillingConfig(ctx) {
     const conditions = []; const params = [];
     if (configType) { if (!CONFIG_TYPES.has(configType)) throw errors.badRequest('configType 无效', 'INVALID_CONFIG_TYPE'); conditions.push('config_type=?'); params.push(configType); }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-    const items = rows(`SELECT * FROM platform_config_change_logs ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params).map(normalizeChangeLog);
-    const total = Number(row(`SELECT COUNT(*) n FROM platform_config_change_logs ${where}`, params)?.n || 0);
+    const items = (await arows(`SELECT * FROM platform_config_change_logs ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params)).map(normalizeChangeLog);
+    const total = Number((await arow(`SELECT COUNT(*) n FROM platform_config_change_logs ${where}`, params))?.n || 0);
     return { items, total, limit, offset };
   }
 
@@ -710,9 +710,9 @@ export async function handleStudentBillingConfig(ctx) {
 
   if (part === '/billing-config/effective-capabilities' && method === 'GET') {
     // 暴露给学生：把"机构覆盖 + 平台默认"合并后的真实可用能力
-    const modalities = getModalitySettings();
-    const items = modalities.map((m) => {
-      const e = isModalityEnabled(auth.user.orgId, m.modality);
+    const modalities = await getModalitySettings();
+    const items = await amap(modalities, async (m) => {
+      const e = await isModalityEnabled(auth.user.orgId, m.modality);
       return { modality: m.modality, displayName: m.displayName, enabled: e.enabled, source: e.source, reason: e.reason || '' };
     });
     return { items, orgId: auth.user.orgId };

@@ -302,7 +302,7 @@ try {
   check('退休 ④：观测状态里 `enforced` 恒为 false（这就是"不拦人"的机器可读承诺）',
     /enforced: false/.test(sessionCostCap));
   const capApi = await import('../apps/server/src/services/sessionCostCap.js');
-  const pureStatus = capApi.sessionCostCapStatus({ sessionId: cappedSession.id, studentId: seeded.studentId });
+  const pureStatus = await capApi.sessionCostCapStatus({ sessionId: cappedSession.id, studentId: seeded.studentId });
   check('退休 ④：读状态是个纯读函数（调用它不抛错、不改任何东西），且 enforced 恒 false',
     pureStatus?.enforced === false && pureStatus?.exceeded === true, JSON.stringify(pureStatus));
   check('退休 ⑤：机构端那个输入还在（列不删、入口不删），标签已改成"观测"口径',

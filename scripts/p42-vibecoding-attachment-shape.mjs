@@ -38,7 +38,7 @@ db.prepare("INSERT INTO vibecoding_messages(id,conversation_id,role,content,stat
 db.close();
 
 const { conversationHistory } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
-const history = conversationHistory('c1');
+const history = await conversationHistory('c1');
 
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ' — ' + detail : ''}`); } };

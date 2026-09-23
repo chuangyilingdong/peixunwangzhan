@@ -14,7 +14,7 @@ import {
   requireRole,
   row,
   rows,
-  transaction,
+  transaction, aq, arow,
 } from '../../lib.js';
 import { hostname } from 'node:os';
 import { assertTransition } from '../../services/domainState.js';
@@ -118,7 +118,7 @@ export async function handleStudentCommunication(ctx) {
   //    一进来就 ReferenceError（表现为 500 + 大片守卫同时红）。声明必须留着。
   let match = null;
   if (part === '/help' && method === 'GET') {
-    const items = helpFeedbackRows('feedback.user_id=? AND feedback.org_id=?', [auth.user.id, currentOrgId]);
+    const items = await helpFeedbackRows('feedback.user_id=? AND feedback.org_id=?', [auth.user.id, currentOrgId]);
     return {
       ...helpCenterPayload(),
       myFeedback: {
@@ -142,19 +142,19 @@ export async function handleStudentCommunication(ctx) {
     }
     const now = nowIso();
     const feedbackId = id('helpfb');
-    q(
+    await aq(
       'INSERT INTO help_feedback(id,user_id,org_id,category,subject,body,contact,status,submitted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
       [feedbackId, auth.user.id, currentOrgId, category, subject, body, contact, 'SUBMITTED', now, now, now],
     );
-    audit(ctx, 'HELP_FEEDBACK_CREATE', 'HELP_FEEDBACK', feedbackId, null, { category, subject });
+    await audit(ctx, 'HELP_FEEDBACK_CREATE', 'HELP_FEEDBACK', feedbackId, null, { category, subject });
     return {
-      feedback: normalizeHelpFeedback(row('SELECT * FROM help_feedback WHERE id=?', [feedbackId])),
+      feedback: normalizeHelpFeedback(await arow('SELECT * FROM help_feedback WHERE id=?', [feedbackId])),
       privacy: '反馈已提交给当前机构处理；请勿在描述中包含密码、身份证号或住址。',
     };
   }
   match = part.match(/^\/help\/feedback\/([^/]+)$/);
   if (match && method === 'GET') {
-    const feedback = helpFeedbackRows('feedback.id=? AND feedback.user_id=? AND feedback.org_id=?', [match[1], auth.user.id, currentOrgId])[0];
+    const feedback = (await helpFeedbackRows('feedback.id=? AND feedback.user_id=? AND feedback.org_id=?', [match[1], auth.user.id, currentOrgId]))[0];
     if (!feedback) throw errors.notFound('反馈不存在', 'HELP_FEEDBACK_NOT_FOUND');
     return feedback;
   }

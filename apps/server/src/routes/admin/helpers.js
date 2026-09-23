@@ -2,7 +2,7 @@ import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeLesson, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
   assignmentActiveSql, orgSeriesAccessSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
-  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN,
+  normalizeGenerationBox, GENERATION_BOX_MATERIAL_TYPE, normalizeSeriesVisibility, LOGIN_PATTERN, aq, arow, arows, acount, atransaction, amap,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -12,16 +12,16 @@ import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSet
 import { salePriceFenSuccessSql } from '../../services/computePool.js';
 import { normalizeSubmission } from '../vibecoding.js';
 
-function ensureOrgBilling(orgId) { q('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
-function platformIssuerName() {
-  const settings = row('SELECT platform_name FROM platform_settings WHERE id=1');
+async function ensureOrgBilling(orgId) { await aq('INSERT OR IGNORE INTO org_billing_accounts(org_id) VALUES (?)', [orgId]); }
+async function platformIssuerName() {
+  const settings = await arow('SELECT platform_name FROM platform_settings WHERE id=1');
   return String(settings?.platform_name || '').trim() || '灵动ai学院';
 }
 // 二次验证的敏感操作（关闭 / 重发恢复码）要求再输一次登录密码
-function assertSelfPassword(ctx, auth, action) {
+async function assertSelfPassword(ctx, auth, action) {
   const password = String(ctx.body?.password || '');
   if (!password) throw errors.badRequest('请输入当前密码', 'CURRENT_PASSWORD_REQUIRED');
-  const me = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
+  const me = await arow('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
   if (!me) throw errors.notFound('账号不存在', 'USER_NOT_FOUND');
   if (!verifyPassword(password, me.password_hash)) throw errors.forbidden(`当前密码不正确，无法${action}`, 'CURRENT_PASSWORD_INVALID');
 }
@@ -63,16 +63,16 @@ function normalizeClassroomConfig(value) {
   return result;
 }
 function orgId(auth) { if (!auth.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED'); return auth.user.orgId; }
-function orgUser(auth, userId) {
-  const user = row('SELECT * FROM users WHERE id=? AND org_id=? AND deleted_at IS NULL', [userId, orgId(auth)]);
+async function orgUser(auth, userId) {
+  const user = await arow('SELECT * FROM users WHERE id=? AND org_id=? AND deleted_at IS NULL', [userId, orgId(auth)]);
   if (!user) throw errors.notFound('用户不存在', 'USER_NOT_FOUND');
   return user;
 }
 function hasPermission(auth, permission) {
   return auth.user.role === 'ORG_ADMIN' || (auth.user.role === 'TEACHER' && parseJson(auth.rawUser.permissions, []).includes(permission));
 }
-function accessibleLesson(currentOrgId, lessonId) {
-  return row(
+async function accessibleLesson(currentOrgId, lessonId) {
+  return await arow(
     `SELECT lesson.* FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`,
     [currentOrgId, lessonId, currentOrgId],
   );
@@ -89,12 +89,12 @@ function normalizeCanvasTemplateSnapshot(snapshot) {
 
 // 生成框体素材：把「素材行的字段 + snapshot.content」当成一个框体来严格校验，
 // 通过后写回 snapshot.box（模型与参数）与 snapshot.content（预填提示词）。
-function normalizeBoxMaterial(material, materialIndex, title) {
+async function normalizeBoxMaterial(material, materialIndex, title) {
   const snapshot = material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
   const raw = snapshot.box && typeof snapshot.box === 'object' ? snapshot.box : {};
   let box;
   try {
-    box = normalizeGenerationBox({
+    box = await normalizeGenerationBox({
       ...raw,
       title,
       assetUrl: material?.assetUrl,
@@ -131,21 +131,21 @@ function normalizeBoxMaterial(material, materialIndex, title) {
  * 平台端之后继续编辑的是实时数据；机构端/学生端/官网读的是这份快照，
  * 所以「改了但没点更新发布」时它们看不到改动。
  */
-function capturePublishedContent(seriesId, at = nowIso(), { inTransaction = false } = {}) {
-  const series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
+async function capturePublishedContent(seriesId, at = nowIso(), { inTransaction = false } = {}) {
+  const series = await arow('SELECT * FROM course_series WHERE id=?', [seriesId]);
   if (!series) return { lessons: 0 };
-  const lessons = rows('SELECT * FROM course_lessons WHERE series_id=?', [seriesId]);
-  const write = () => {
-    q('UPDATE course_series SET published_content=? WHERE id=?', [json({
+  const lessons = await arows('SELECT * FROM course_lessons WHERE series_id=?', [seriesId]);
+  const write = async () => {
+    await aq('UPDATE course_series SET published_content=? WHERE id=?', [json({
       title: series.title, description: series.description || '', coverImageUrl: series.cover_image_url || null,
       coverAssetId: series.cover_asset_id || null, priceFen: Number(series.price_fen || 0), stockTotal: Number(series.stock_total || 0),
       difficultyLevel: series.difficulty_level == null ? null : Number(series.difficulty_level),
       visibility: series.visibility, gradeRange: series.grade_range || '', tags: parseJson(series.tags, []),
       estimatedCreditsPerPerson: Number(series.estimated_credits_per_person || 0),
     }), seriesId]);
-    lessons.forEach((lessonRow) => {
-      const live = normalizeLesson(lessonRow, { includeTeaching: true });
-      q('UPDATE course_lessons SET published_content=?,published_title=? WHERE id=?', [json({
+    for (const lessonRow of lessons) {
+      const live = await normalizeLesson(lessonRow, { includeTeaching: true });
+      await aq('UPDATE course_lessons SET published_content=?,published_title=? WHERE id=?', [json({
         title: live.title, summary: live.summary, durationMinutes: live.durationMinutes, lessonContent: live.lessonContent,
         deliveryMode: live.deliveryMode, deliveryModes: live.deliveryModes, platformBudgetFen: live.platformBudgetFen,
         teachingGroups: live.teachingGroups,
@@ -156,29 +156,29 @@ function capturePublishedContent(seriesId, at = nowIso(), { inTransaction = fals
         //    「本次发布之后新建 / 改了状态的课时」当成没有快照处理 —— 要么全都看不见，要么继续泄漏。
         status: lessonRow.status,
       }), live.title, lessonRow.id]);
-    });
+    };
   };
-  if (inTransaction) write(); else transaction(write);
+  if (inTransaction) await write(); else await atransaction(write);
   return { lessons: lessons.length, at };
 }
 
-function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}, extra = {}) {
+async function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliveryMode = 'CANVAS', classroomConfig = {}, canvasTemplateSnapshot = {}, extra = {}) {
   const groups = Array.isArray(materialGroups) ? materialGroups.slice(0, 50) : [];
   const caps = Array.isArray(capabilities) ? [...new Set(capabilities.map((value) => String(value).trim().toLowerCase()).filter((value) => ['text', 'image', 'video', 'music'].includes(value)))] : ['text'];
   const now = nowIso();
   // 素材/素材组的 id 保持不变：学生画布节点和 generation_jobs.box_id 都按 id 指回来，
   // 每次保存换新 id 会让「这个框体已经生成过」失效、学生端节点也认不出来。
-  const existingGroupIds = new Set(rows('SELECT id FROM course_lesson_material_groups WHERE lesson_id=?', [lessonId]).map((item) => item.id));
-  const existingMaterialIds = new Set(rows('SELECT id FROM course_lesson_materials WHERE group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)', [lessonId]).map((item) => item.id));
+  const existingGroupIds = new Set((await arows('SELECT id FROM course_lesson_material_groups WHERE lesson_id=?', [lessonId])).map((item) => item.id));
+  const existingMaterialIds = new Set((await arows('SELECT id FROM course_lesson_materials WHERE group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)', [lessonId])).map((item) => item.id));
   // 先整体校验再落库：框体素材的非法取值要在这里当场拒绝，避免写了一半。
-  const prepared = groups.map((group, groupIndex) => ({
+  const prepared = await amap(groups, async (group, groupIndex) => ({
     id: existingGroupIds.has(String(group?.id || '')) ? String(group.id) : id('material-group'),
     title: String(group?.title || `素材${groupIndex + 1}`).trim().slice(0, 100) || `素材${groupIndex + 1}`,
-    materials: (Array.isArray(group?.materials) ? group.materials.slice(0, 100) : []).map((material, materialIndex) => {
+    materials: await amap((Array.isArray(group?.materials) ? group.materials.slice(0, 100) : []), async (material, materialIndex) => {
       const title = String(material?.title || `素材${materialIndex + 1}`).trim().slice(0, 160);
       const materialType = String(material?.materialType || 'NOTE').toUpperCase().slice(0, 30);
       const snapshot = materialType === GENERATION_BOX_MATERIAL_TYPE
-        ? normalizeBoxMaterial(material, materialIndex, title)
+        ? await normalizeBoxMaterial(material, materialIndex, title)
         : (material?.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {});
       return {
         id: existingMaterialIds.has(String(material?.id || '')) ? String(material.id) : id('material'),
@@ -190,52 +190,52 @@ function replaceLessonCanvasConfig(lessonId, materialGroups, capabilities, deliv
       };
     }),
   }));
-  const write = () => {
-    q('DELETE FROM course_lesson_capabilities WHERE lesson_id=?', [lessonId]);
-    caps.forEach((capability) => q('INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,?,?)', [lessonId, capability, now]));
-    q('DELETE FROM course_lesson_materials WHERE group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)', [lessonId]);
-    q('DELETE FROM course_lesson_material_groups WHERE lesson_id=?', [lessonId]);
-    prepared.forEach((group, groupIndex) => {
-      q('INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)', [group.id, lessonId, group.title, groupIndex + 1, now, now]);
-      group.materials.forEach((material, materialIndex) => {
-        q('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [material.id, group.id, material.title, material.description, material.materialType, material.assetUrl, json(material.snapshot), materialIndex + 1, now, now]);
-      });
-    });
+  const write = async () => {
+    await aq('DELETE FROM course_lesson_capabilities WHERE lesson_id=?', [lessonId]);
+    for (const capability of caps) { await aq('INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES (?,?,?)', [lessonId, capability, now]); };
+    await aq('DELETE FROM course_lesson_materials WHERE group_id IN (SELECT id FROM course_lesson_material_groups WHERE lesson_id=?)', [lessonId]);
+    await aq('DELETE FROM course_lesson_material_groups WHERE lesson_id=?', [lessonId]);
+    for (const [groupIndex, group] of prepared.entries()) {
+      await aq('INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)', [group.id, lessonId, group.title, groupIndex + 1, now, now]);
+      for (const [materialIndex, material] of group.materials.entries()) {
+        await aq('INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [material.id, group.id, material.title, material.description, material.materialType, material.assetUrl, json(material.snapshot), materialIndex + 1, now, now]);
+      };
+    };
     // 上课类型可多选：数组进新列，第一种同时写回老列（兼容既有读取方）
-    const current = row('SELECT * FROM course_lessons WHERE id=?', [lessonId]);
+    const current = await arow('SELECT * FROM course_lessons WHERE id=?', [lessonId]);
     const modes = normalizeDeliveryModes(extra.deliveryModes === undefined ? parseJson(current.delivery_modes, undefined) : extra.deliveryModes, deliveryMode);
     const budgetFen = extra.perStudentBudgetFen === undefined ? current.per_student_budget_fen : normalizePerStudentBudgetFen(extra.perStudentBudgetFen);
-    q('UPDATE course_lessons SET delivery_mode=?,delivery_modes=?,per_student_budget_fen=?,classroom_config=?,canvas_template_snapshot=?,updated_at=? WHERE id=?',
+    await aq('UPDATE course_lessons SET delivery_mode=?,delivery_modes=?,per_student_budget_fen=?,classroom_config=?,canvas_template_snapshot=?,updated_at=? WHERE id=?',
       [modes[0], json(modes), budgetFen, json(normalizeClassroomConfig(classroomConfig)), json(normalizeCanvasTemplateSnapshot(canvasTemplateSnapshot)), now, lessonId]);
-    if (extra.platformBudgetFen !== undefined) q('UPDATE course_lessons SET platform_budget_fen=? WHERE id=?', [normalizePlatformBudgetFen(extra.platformBudgetFen), lessonId]);
+    if (extra.platformBudgetFen !== undefined) await aq('UPDATE course_lessons SET platform_budget_fen=? WHERE id=?', [normalizePlatformBudgetFen(extra.platformBudgetFen), lessonId]);
   };
-  if (extra.inTransaction) write(); else transaction(write);
+  if (extra.inTransaction) await write(); else await atransaction(write);
 }
 
 // 教学素材（教师备课资料）：整组替换，不影响学生画布素材。
-function replaceLessonTeachingMaterials(lessonId, groups, { inTransaction = false } = {}) {
+async function replaceLessonTeachingMaterials(lessonId, groups, { inTransaction = false } = {}) {
   const list = Array.isArray(groups) ? groups.slice(0, 50) : [];
   const now = nowIso();
-  const write = () => {
-    q('DELETE FROM course_lesson_teaching_assets WHERE group_id IN (SELECT id FROM course_lesson_teaching_groups WHERE lesson_id=?)', [lessonId]);
-    q('DELETE FROM course_lesson_teaching_groups WHERE lesson_id=?', [lessonId]);
-    list.forEach((group, groupIndex) => {
+  const write = async () => {
+    await aq('DELETE FROM course_lesson_teaching_assets WHERE group_id IN (SELECT id FROM course_lesson_teaching_groups WHERE lesson_id=?)', [lessonId]);
+    await aq('DELETE FROM course_lesson_teaching_groups WHERE lesson_id=?', [lessonId]);
+    for (const [groupIndex, group] of list.entries()) {
       const groupId = id('teaching-group');
       const title = String(group?.title || `教学素材${groupIndex + 1}`).trim().slice(0, 100) || `教学素材${groupIndex + 1}`;
-      q('INSERT INTO course_lesson_teaching_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)', [groupId, lessonId, title, groupIndex + 1, now, now]);
+      await aq('INSERT INTO course_lesson_teaching_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES (?,?,?,?,?,?)', [groupId, lessonId, title, groupIndex + 1, now, now]);
       const assets = Array.isArray(group?.assets) ? group.assets.slice(0, 100) : [];
-      assets.forEach((asset, assetIndex) => {
+      for (const [assetIndex, asset] of assets.entries()) {
         const assetId = id('teaching-asset');
-        q('INSERT INTO course_lesson_teaching_assets(id,group_id,title,description,asset_type,asset_url,file_asset_id,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [
+        await aq('INSERT INTO course_lesson_teaching_assets(id,group_id,title,description,asset_type,asset_url,file_asset_id,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [
           assetId, groupId, String(asset?.title || `素材${assetIndex + 1}`).trim().slice(0, 160),
           String(asset?.description || '').slice(0, 1000), String(asset?.assetType || 'FILE').toUpperCase().slice(0, 30),
           asset?.assetUrl ? String(asset.assetUrl).slice(0, 2000) : null, asset?.fileAssetId ? String(asset.fileAssetId).slice(0, 100) : null,
           assetIndex + 1, now, now,
         ]);
-      });
-    });
+      };
+    };
   };
-  if (inTransaction) write(); else transaction(write);
+  if (inTransaction) await write(); else await atransaction(write);
 }
 
 function normalizePlatformBudgetFen(value) {
@@ -243,16 +243,16 @@ function normalizePlatformBudgetFen(value) {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 1000000000) throw errors.badRequest('每场课堂平台预算必须是 0–1000000000 的整数分', 'INVALID_PLATFORM_BUDGET');
   return value;
 }
-function validateLessonForPublishing(lesson) {
+async function validateLessonForPublishing(lesson) {
   nonEmptyString(lesson.title, '课时名称', { max: 200 });
   if (!Number.isInteger(lesson.duration_minutes) || lesson.duration_minutes < 1 || lesson.duration_minutes > 1440) throw errors.badRequest('课时时长必须为 1–1440 分钟', 'INVALID_LESSON_DURATION');
   normalizePlatformBudgetFen(lesson.platform_budget_fen);
   const modes = normalizeDeliveryModes(parseJson(lesson.delivery_modes, undefined), lesson.delivery_mode);
-  const caps = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=?', [lesson.id]).map((item) => item.capability);
+  const caps = (await arows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=?', [lesson.id])).map((item) => item.capability);
   if (!caps.length) throw errors.badRequest(`课时「${lesson.title}」至少开放一种能力`, 'LESSON_CAPABILITIES_REQUIRED');
   if (modes.includes('VIBECODING') && !caps.includes('text')) throw errors.badRequest(`VibeCoding 课时「${lesson.title}」需要开放 AI 文字能力`, 'VIBECODING_TEXT_CAPABILITY_REQUIRED');
   const validUrl = (url) => typeof url === 'string' && /^(https:\/\/[^\s]+|\/api\/[^\s]+)$/.test(url);
-  const policy = parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
+  const policy = parseJson((await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'))?.ai_provider_policy, {});
   const validateModel = (modality, selected) => {
     if (!selected) return; // Empty means follow the configured channel default.
     const channel = (policy.channels || []).find((item) => item.id === policy.modalityChannels?.[modality]);
@@ -260,38 +260,38 @@ function validateLessonForPublishing(lesson) {
   };
   const config = parseJson(lesson.classroom_config, {});
   if (modes.includes('VIBECODING')) validateModel('TEXT', config.vibeCoding?.model);
-  const live = normalizeLesson(lesson, { includeTeaching: true });
-  live.materialGroups.forEach((group) => group.materials.forEach((material, index) => {
+  const live = await normalizeLesson(lesson, { includeTeaching: true });
+  for (const group of live.materialGroups) { for (const [index, material] of group.materials.entries()) {
     nonEmptyString(material.title, '学生素材名称', { max: 160 });
     if (!['IMAGE', 'VIDEO', 'AUDIO', 'NOTE', 'PROMPT', GENERATION_BOX_MATERIAL_TYPE].includes(material.materialType)) throw errors.badRequest('学生素材类型无效', 'INVALID_MATERIAL_TYPE');
     if (material.materialType === GENERATION_BOX_MATERIAL_TYPE) {
-      const snapshot = normalizeBoxMaterial(material, index, material.title);
+      const snapshot = await normalizeBoxMaterial(material, index, material.title);
       validateModel(snapshot.box.modality, snapshot.box.model);
       if (!caps.includes(snapshot.box.modality.toLowerCase())) throw errors.badRequest(`框体「${material.title}」未开放对应能力`, 'GENERATION_BOX_CAPABILITY_MISMATCH');
     } else if (['NOTE', 'PROMPT'].includes(material.materialType)) {
       nonEmptyString(material.snapshot?.content, `素材「${material.title}」内容`, { max: 50000 });
     } else if (!validUrl(material.assetUrl)) throw errors.badRequest(`素材「${material.title}」缺少有效资源地址`, 'MATERIAL_ASSET_REQUIRED');
     if (material.assetUrl && !validUrl(material.assetUrl)) throw errors.badRequest('素材地址必须是 HTTPS 或平台地址', 'INVALID_MATERIAL_URL');
-  }));
+  }; };
   live.teachingGroups.forEach((group) => group.assets.forEach((asset) => {
     nonEmptyString(asset.title, '教师素材名称', { max: 160 });
     if (!validUrl(asset.assetUrl)) throw errors.badRequest(`教师素材「${asset.title}」缺少有效资源地址`, 'TEACHING_ASSET_REQUIRED');
   }));
 }
-function validateSeriesForPublishing(seriesId) {
-  const series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
+async function validateSeriesForPublishing(seriesId) {
+  const series = await arow('SELECT * FROM course_series WHERE id=?', [seriesId]);
   nonEmptyString(series?.title, '课包名称', { max: 200 });
   nonEmptyString(series?.description, '课包简介', { max: 10000 });
   if (!series.cover_asset_id && !series.cover_image_url) throw errors.badRequest('发布前请设置课包封面', 'COURSE_COVER_REQUIRED');
   if (!Number.isInteger(series.price_fen) || series.price_fen < 0) throw errors.badRequest('课包价格无效', 'INVALID_COURSE_PRICE');
   if (!normalizeSeriesVisibility(series.visibility)) throw errors.badRequest('课包可见范围无效', 'INVALID_VISIBILITY');
-  const lessons = rows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId]).filter((lesson) => lesson.status !== 'ARCHIVED');
+  const lessons = (await arows('SELECT * FROM course_lessons WHERE series_id=? ORDER BY sort, created_at', [seriesId])).filter((lesson) => lesson.status !== 'ARCHIVED');
   if (!lessons.length) throw errors.badRequest('课包至少需要一个未归档课时才能发布', 'COURSE_LESSONS_REQUIRED');
   if (lessons.some((lesson) => lesson.status !== 'PUBLISHED')) throw errors.badRequest('请先完成课时配置并发布课时', 'COURSE_LESSONS_UNPUBLISHED');
-  lessons.forEach(validateLessonForPublishing);
+  for (const _item of lessons) await validateLessonForPublishing(_item);;
 }
-function accessibleSeries(currentOrgId, seriesId) {
-  return row(
+async function accessibleSeries(currentOrgId, seriesId) {
+  return await arow(
     `SELECT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.id=? AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`,
     [currentOrgId, seriesId, currentOrgId],
   );
@@ -299,11 +299,11 @@ function accessibleSeries(currentOrgId, seriesId) {
 const ORG_MEMBER_ROLES = new Set(['TEACHER', 'STUDENT']);
 const ORG_TEACHER_PERMISSIONS = new Set(['MANAGE_CLASSES']);
 
-function validateMemberPhone(phone, existingId = null) {
+async function validateMemberPhone(phone, existingId = null) {
   const value = phone == null ? '' : String(phone).trim();
   if (!value) return null;
   if (!/^[0-9+()\-\s]{6,30}$/.test(value)) throw errors.badRequest('手机号格式无效', 'INVALID_PHONE');
-  const duplicate = row('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL' + (existingId ? ' AND id<>?' : ''), existingId ? [value, existingId] : [value]);
+  const duplicate = await arow('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL' + (existingId ? ' AND id<>?' : ''), existingId ? [value, existingId] : [value]);
   if (duplicate) throw errors.conflict('手机号已被其他账号使用', 'PHONE_EXISTS');
   return value;
 }
@@ -344,8 +344,8 @@ function enrollmentDate(value, label, fallback) {
   return parsed.toISOString();
 }
 
-function enrollmentRow(currentOrgId, enrollmentId) {
-  const item = row(`SELECT enrollment.*, student.display_name student_name, student.login student_login,
+async function enrollmentRow(currentOrgId, enrollmentId) {
+  const item = await arow(`SELECT enrollment.*, student.display_name student_name, student.login student_login,
       package.name package_name, package.student_seats package_student_seats
     FROM student_enrollments enrollment
     JOIN users student ON student.id=enrollment.student_id AND student.org_id=enrollment.org_id
@@ -355,7 +355,7 @@ function enrollmentRow(currentOrgId, enrollmentId) {
   return item;
 }
 
-function normalizeEnrollment(value, { includeEvents = false } = {}) {
+async function normalizeEnrollment(value, { includeEvents = false } = {}) {
   if (!value) return null;
   const snapshot = parseJson(value.package_snapshot, {});
   const result = {
@@ -367,63 +367,63 @@ function normalizeEnrollment(value, { includeEvents = false } = {}) {
     notes: value.notes || '', eventCount: Number(value.event_count || 0), lastEventAt: value.last_event_at || null,
     createdAt: value.created_at, updatedAt: value.updated_at,
   };
-  if (includeEvents) result.events = rows(`SELECT event.* , actor.display_name actor_name
+  if (includeEvents) result.events = (await arows(`SELECT event.* , actor.display_name actor_name
     FROM student_enrollment_events event LEFT JOIN users actor ON actor.id=event.actor_id
-    WHERE event.enrollment_id=? ORDER BY event.created_at DESC LIMIT 100`, [value.id]).map((event) => ({
+    WHERE event.enrollment_id=? ORDER BY event.created_at DESC LIMIT 100`, [value.id])).map((event) => ({
     id: event.id, type: event.event_type, beforeStatus: event.before_status || null, afterStatus: event.after_status || null,
     data: parseJson(event.data, {}), actorName: event.actor_name || '系统', createdAt: event.created_at,
   }));
   return result;
 }
 
-function appendEnrollmentEvent({ enrollmentId, currentOrgId, eventType, beforeStatus = null, afterStatus = null, actorId = null, data = {} }) {
-  q(`INSERT INTO student_enrollment_events(id,enrollment_id,org_id,event_type,before_status,after_status,data,actor_id,created_at)
+async function appendEnrollmentEvent({ enrollmentId, currentOrgId, eventType, beforeStatus = null, afterStatus = null, actorId = null, data = {} }) {
+  await aq(`INSERT INTO student_enrollment_events(id,enrollment_id,org_id,event_type,before_status,after_status,data,actor_id,created_at)
     VALUES (?,?,?,?,?,?,?,?,?)`, [id('enroll_event'), enrollmentId, currentOrgId, eventType, beforeStatus, afterStatus, json(data), actorId, nowIso()]);
 }
 
-function expireDueEnrollments(currentOrgId) {
+async function expireDueEnrollments(currentOrgId) {
   const now = nowIso();
-  const due = rows("SELECT * FROM student_enrollments WHERE org_id=? AND status='ACTIVE' AND expires_at<=?", [currentOrgId, now]);
-  due.forEach((enrollment) => {
-    q("UPDATE student_enrollments SET status='EXPIRED',updated_at=? WHERE id=?", [now, enrollment.id]);
-    q("UPDATE users SET status='DISABLED',billing_package_id=NULL,updated_at=? WHERE id=? AND org_id=? AND billing_package_id=?", [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
-    q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
-    appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: 'EXPIRE', beforeStatus: 'ACTIVE', afterStatus: 'EXPIRED', data: { reason: '有效期届满' } });
-  });
+  const due = await arows("SELECT * FROM student_enrollments WHERE org_id=? AND status='ACTIVE' AND expires_at<=?", [currentOrgId, now]);
+  for (const enrollment of due) {
+    await aq("UPDATE student_enrollments SET status='EXPIRED',updated_at=? WHERE id=?", [now, enrollment.id]);
+    await aq("UPDATE users SET status='DISABLED',billing_package_id=NULL,updated_at=? WHERE id=? AND org_id=? AND billing_package_id=?", [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
+    await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
+    await appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: 'EXPIRE', beforeStatus: 'ACTIVE', afterStatus: 'EXPIRED', data: { reason: '有效期届满' } });
+  };
   return due.length;
 }
 
-function occupiedStudentSeats(currentOrgId, packageId, { excludeEnrollmentId = null } = {}) {
+async function occupiedStudentSeats(currentOrgId, packageId, { excludeEnrollmentId = null } = {}) {
   const params = [currentOrgId, packageId, nowIso()];
   let where = "org_id=? AND package_id=? AND status='ACTIVE' AND expires_at>?";
   if (excludeEnrollmentId) { where += ' AND id<>?'; params.push(excludeEnrollmentId); }
-  return count('SELECT COUNT(*) n FROM student_enrollments WHERE ' + where, params);
+  return await acount('SELECT COUNT(*) n FROM student_enrollments WHERE ' + where, params);
 }
 
-function assertEnrollmentSeat(currentOrgId, pkg, options = {}) {
-  const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+async function assertEnrollmentSeat(currentOrgId, pkg, options = {}) {
+  const org = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
   if (org.studentUsedSeats > org.studentSeats) throw errors.conflict('机构学生人数已超过上限', 'STUDENT_SEAT_LIMIT');
   return { limit: org.studentSeats, occupied: org.studentUsedSeats, available: Math.max(0, org.studentSeats - org.studentUsedSeats) };
 }
 
-function setStudentEnrollmentAccess(currentOrgId, enrollment, status) {
+async function setStudentEnrollmentAccess(currentOrgId, enrollment, status) {
   const snapshot = parseJson(enrollment.package_snapshot, {});
   const now = nowIso();
   if (status === 'ACTIVE') {
     // 2026-09-13（P4 删积分）：开通学员只给「有效期 + 套餐绑定」，
     // 不再把套餐的月度/赠送积分写进 users（那两列是积分时代的产物）。
-    q(`UPDATE users SET status='ACTIVE',expires_at=?,billing_package_id=?,updated_at=?
+    await aq(`UPDATE users SET status='ACTIVE',expires_at=?,billing_package_id=?,updated_at=?
       WHERE id=? AND org_id=? AND role='STUDENT'`, [enrollment.expires_at, enrollment.package_id, now, enrollment.student_id, currentOrgId]);
   } else {
-    q(`UPDATE users SET status='DISABLED',billing_package_id=NULL,updated_at=?
+    await aq(`UPDATE users SET status='DISABLED',billing_package_id=NULL,updated_at=?
       WHERE id=? AND org_id=? AND role='STUDENT' AND billing_package_id=?`, [now, enrollment.student_id, currentOrgId, enrollment.package_id]);
-    q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
+    await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, enrollment.student_id]);
   }
 }
 
-function packageWithSeatUsage(currentOrgId, value) {
+async function packageWithSeatUsage(currentOrgId, value) {
   const normalized = normalizePackage(value);
-  const occupiedSeats = occupiedStudentSeats(currentOrgId, value.id);
+  const occupiedSeats = await occupiedStudentSeats(currentOrgId, value.id);
   return { ...normalized, occupiedSeats, availableSeats: Math.max(0, Number(value.student_seats || 0) - occupiedSeats) };
 }
 
@@ -463,7 +463,7 @@ function importItems(body) {
   return items;
 }
 
-function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, seenNames, teacherSeatOffset = 0) {
+async function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, seenNames, teacherSeatOffset = 0) {
   const item = raw && typeof raw === 'object' ? raw : {};
   const role = String(item.role || '').trim().toUpperCase();
   const login = String(item.login || '').trim();
@@ -479,13 +479,13 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, se
   if (password.length < 6) errorsForRow.push('初始密码至少 6 位');
   if (phone && !/^[0-9+()\-\s]{6,30}$/.test(phone)) errorsForRow.push('手机号格式无效');
   if (seenLogins.has(login.toLowerCase())) errorsForRow.push('本批次登录名重复');
-  if (row('SELECT id FROM users WHERE LOWER(login)=LOWER(?)', [login])) errorsForRow.push('登录名已存在');
+  if (await arow('SELECT id FROM users WHERE LOWER(login)=LOWER(?)', [login])) errorsForRow.push('登录名已存在');
   // 同机构同角色不允许重名（本批次内 + 与库里已存在的都算）—— 2026-09-16 用户口径
-  if (displayName && (seenNames.has(displayName.toLowerCase()) || row('SELECT id FROM users WHERE display_name=? AND deleted_at IS NULL AND org_id IS ? AND role=?', [displayName, currentOrgId, role]))) {
+  if (displayName && (seenNames.has(displayName.toLowerCase()) || await arow('SELECT id FROM users WHERE display_name=? AND deleted_at IS NULL AND org_id IS ? AND role=?', [displayName, currentOrgId, role]))) {
     errorsForRow.push('本机构已有同名的' + (role === 'TEACHER' ? '老师' : '学员') + '，请换个名字或加个区分');
   }
   seenNames.add((displayName || '').toLowerCase());
-  if (phone && (seenPhones.has(phone) || row('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL', [phone]))) errorsForRow.push('手机号已被其他账号使用');
+  if (phone && (seenPhones.has(phone) || await arow('SELECT id FROM users WHERE phone=? AND deleted_at IS NULL', [phone]))) errorsForRow.push('手机号已被其他账号使用');
   let permissions = [];
   if (role === 'TEACHER') {
     try { permissions = validateMemberPermissions(item.permissions, role); } catch (error) { errorsForRow.push(error.message); }
@@ -493,7 +493,7 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, se
   // 批次 D：studentUsageScope 与 classIds 都不再参与导入 ——
   // 前者已退役（不再决定门禁），后者对应班级（历史表，进课堂改在机构端「课堂」页做）。
   // 传了就忽略，不当成校验错误（老客户端还在发也不要 400）。
-  if (item.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [item.billingPackageId, currentOrgId])) errorsForRow.push('套餐不属于当前机构');
+  if (item.billingPackageId && !await arow('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [item.billingPackageId, currentOrgId])) errorsForRow.push('套餐不属于当前机构');
   seenLogins.add(login);
   if (phone) seenPhones.add(phone);
   return {
@@ -512,35 +512,35 @@ function validateImportItem(raw, currentOrgId, index, seenLogins, seenPhones, se
   };
 }
 
-function previewImport(body, currentOrgId) {
+async function previewImport(body, currentOrgId) {
   const items = importItems(body);
   const seenLogins = new Set(); const seenPhones = new Set();
   // 本批次里已经用过的姓名（小写）：同机构同角色重名要在导入预览阶段就挡下来
   const seenNames = new Set();
-  const normalized = items.map((item, index) => validateImportItem(item, currentOrgId, index + 1, seenLogins, seenPhones, seenNames));
+  const normalized = await amap(items, async (item, index) => await validateImportItem(item, currentOrgId, index + 1, seenLogins, seenPhones, seenNames));
   const teacherCount = normalized.filter((item) => item.valid && item.value.role === 'TEACHER').length;
-  const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+  const org = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
   if ((org.teacherSeats - org.teacherUsedSeats) < teacherCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'TEACHER') { item.valid = false; item.errors.push('教师席位不足'); } });
   const studentCount = normalized.filter((item) => item.valid && item.value.role === 'STUDENT').length;
   if (org.studentSeats - org.studentUsedSeats < studentCount) normalized.forEach((item) => { if (item.valid && item.value.role === 'STUDENT') { item.valid = false; item.errors.push('机构学生容量不足'); } });
   return { total: normalized.length, validCount: normalized.filter((item) => item.valid).length, invalidCount: normalized.filter((item) => !item.valid).length, items: normalized };
 }
 
-function createMember(currentOrgId, value) {
-  const org = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+async function createMember(currentOrgId, value) {
+  const org = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
   if (value.role === 'STUDENT' && org.studentUsedSeats >= org.studentSeats) throw errors.conflict('机构学生容量不足', 'STUDENT_SEAT_LIMIT');
   if (value.role === 'TEACHER' && org.teacherUsedSeats >= org.teacherSeats) throw errors.conflict('教师席位不足', 'TEACHER_SEAT_LIMIT');
   const now = nowIso(); const userId = id('user');
   // 2026-09-13（P4 删积分）：建号不再写 monthly_credit_allowance / ai_credit_limit（积分已废弃）
-  q('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
+  await aq('INSERT INTO users(id,org_id,login,display_name,role,permissions,password_hash,phone,status,expires_at,student_usage_scope,billing_package_id,period_start_at,period_reset_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [userId, currentOrgId, value.login, value.displayName, value.role, json(value.permissions), hashPassword(value.password), value.phone, 'ACTIVE', value.expiresAt, value.studentUsageScope, value.billingPackageId, now, new Date(Date.now() + 30 * 86400000).toISOString(), now, now]);
   // 批次 D（班级退场）：不再往 class_members 写归属 —— 那是历史表，且「进哪个班」已经没有意义。
   // 学员进课堂改在机构端「课堂」页做（POST /api/org/sessions/:id/students）。
-  return row('SELECT * FROM users WHERE id=?', [userId]);
+  return await arow('SELECT * FROM users WHERE id=?', [userId]);
 }
 
-function validateTeacher(currentOrgId, teacherId) {
+async function validateTeacher(currentOrgId, teacherId) {
   if (!teacherId) return null;
-  const teacher = row("SELECT id FROM users WHERE id=? AND org_id=? AND role='TEACHER' AND status='ACTIVE' AND deleted_at IS NULL", [teacherId, currentOrgId]);
+  const teacher = await arow("SELECT id FROM users WHERE id=? AND org_id=? AND role='TEACHER' AND status='ACTIVE' AND deleted_at IS NULL", [teacherId, currentOrgId]);
   if (!teacher) throw errors.badRequest('教师不属于当前机构或已停用', 'INVALID_TEACHER');
   return teacher;
 }
@@ -556,9 +556,9 @@ function hasAnyPlatformPermission(value) {
 function platformUserRow(value) {
   return { ...normalizeUser(value, { includeAuthMeta: true }), organizationName: value.organization_name || null, billingPackageName: value.billing_package_name || null };
 }
-function lastSuperAdminGuard(target) {
+async function lastSuperAdminGuard(target) {
   if (target.role !== 'SUPER_ADMIN' || target.status !== 'ACTIVE') return;
-  const activeSuperAdmins = rows("SELECT id FROM users WHERE role='SUPER_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL");
+  const activeSuperAdmins = await arows("SELECT id FROM users WHERE role='SUPER_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL");
   if (activeSuperAdmins.length <= 1 && activeSuperAdmins.some((item) => item.id === target.id)) throw errors.badRequest('不能停用最后一个有效平台管理员', 'LAST_SUPER_ADMIN_FORBIDDEN');
 }
 
@@ -568,14 +568,14 @@ function bumpSeriesVersion(version) {
   if (Number.isFinite(minor)) { parts[1] = String(minor + 1); return parts.slice(0, 2).join('.'); }
   return '1.1';
 }
-function userLoginMeta(userIds) {
+async function userLoginMeta(userIds) {
   const meta = new Map();
   if (!userIds.length) return meta;
   const marks = userIds.map(() => '?').join(',');
-  for (const item of rows('SELECT actor_id, MAX(created_at) last_login FROM audit_logs WHERE action=\'AUTH_LOGIN\' AND actor_id IN (' + marks + ') GROUP BY actor_id', userIds)) {
+  for (const item of await arows('SELECT actor_id, MAX(created_at) last_login FROM audit_logs WHERE action=\'AUTH_LOGIN\' AND actor_id IN (' + marks + ') GROUP BY actor_id', userIds)) {
     meta.set(item.actor_id, { lastLoginAt: item.last_login, activeSessions: 0 });
   }
-  for (const item of rows('SELECT user_id, COUNT(*) n FROM sessions WHERE user_id IN (' + marks + ') AND superseded_at IS NULL AND expires_at>? GROUP BY user_id', [...userIds, nowIso()])) {
+  for (const item of await arows('SELECT user_id, COUNT(*) n FROM sessions WHERE user_id IN (' + marks + ') AND superseded_at IS NULL AND expires_at>? GROUP BY user_id', [...userIds, nowIso()])) {
     const existing = meta.get(item.user_id) || { lastLoginAt: null, activeSessions: 0 };
     existing.activeSessions = Number(item.n || 0);
     meta.set(item.user_id, existing);
@@ -587,8 +587,8 @@ function userLoginMeta(userIds) {
 
 
 
-function buildStudentDataExport(user, org) {
-  const classes = rows(
+async function buildStudentDataExport(user, org) {
+  const classes = await arows(
     `SELECT class.id, class.name, class.usage_mode, class.status, class_member.role AS member_role, class_member.joined_at
      FROM class_members class_member
      JOIN classes class ON class.id=class_member.class_id
@@ -596,7 +596,7 @@ function buildStudentDataExport(user, org) {
      ORDER BY class_member.joined_at DESC`,
     [user.id, user.org_id],
   );
-  const projects = rows(
+  const projects = await arows(
     `SELECT project.id, project.title, project.status, project.created_at, project.updated_at,
             lesson.title AS lesson_title, class.name AS class_name
      FROM student_projects project
@@ -606,7 +606,7 @@ function buildStudentDataExport(user, org) {
      ORDER BY project.created_at DESC LIMIT 500`,
     [user.id, user.org_id],
   );
-  const works = rows(
+  const works = await arows(
     `SELECT work.id, work.title, work.status, work.submitted_at, work.reviewed_at,
             lesson.title AS lesson_title, class.name AS class_name
      FROM works work
@@ -616,7 +616,7 @@ function buildStudentDataExport(user, org) {
      ORDER BY work.submitted_at DESC LIMIT 500`,
     [user.id, user.org_id],
   );
-  const generationJobs = rows(
+  const generationJobs = await arows(
     `SELECT job.id, job.modality, job.provider, job.model, job.status, job.credits_charged,
             job.created_at, job.completed_at, project.title AS project_title,
             -- 对外售价口径（2026-09-15）：导出里的金额取算力账本里成功尝试的售价快照。
@@ -628,7 +628,7 @@ function buildStudentDataExport(user, org) {
      ORDER BY job.created_at DESC LIMIT 500`,
     [user.id, user.org_id],
   );
-  const usageRecords = rows(
+  const usageRecords = await arows(
     `SELECT usage.id, usage.modality, usage.model, usage.credits_charged, usage.status, usage.created_at,
             project.title AS project_title,
             (SELECT ${salePriceFenSuccessSql('a')} FROM compute_attempts a WHERE a.call_id = usage.compute_call_id) AS sale_fen
@@ -697,20 +697,20 @@ function buildStudentDataExport(user, org) {
   };
 }
 
-function softDeleteStudent(ctx, user, now) {
-  const changes = q(
+async function softDeleteStudent(ctx, user, now) {
+  const changes = (await aq(
     `UPDATE users SET status='DISABLED', deleted_at=?, display_name='已注销学生', avatar_key=NULL,
      guardian_name=NULL, guardian_phone=NULL, guardian_relationship=NULL, guardian_consented_at=NULL,
      updated_at=? WHERE id=? AND org_id=? AND deleted_at IS NULL`,
     [now, now, user.id, user.org_id],
-  ).changes;
+  )).changes;
   if (!changes) throw errors.conflict('学生账号已注销，不能重复处理', 'ACCOUNT_REQUEST_STUDENT_DELETED');
-  q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND org_id=? AND superseded_at IS NULL', [now, user.id, user.org_id]);
+  await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND org_id=? AND superseded_at IS NULL', [now, user.id, user.org_id]);
 }
 
-function workInReviewScope(auth, currentOrgId, workId) {
+async function workInReviewScope(auth, currentOrgId, workId) {
   // 批次 D（班级退场）：作品的归属从「班级」换成「课堂」——判据是这节课的课堂是不是我创建的。
-  const work = row(
+  const work = await arow(
     `SELECT work.*, student.privacy_allow_feature AS student_allow_feature,
             session.teacher_id AS session_teacher_id
      FROM works work
@@ -725,8 +725,8 @@ function workInReviewScope(auth, currentOrgId, workId) {
   }
   return work;
 }
-function annotationRows(workId) {
-  return rows(
+async function annotationRows(workId) {
+  return (await arows(
     `SELECT annotation.*, author.display_name AS author_name, resolver.display_name AS resolver_name
      FROM work_annotations annotation
      JOIN users author ON author.id=annotation.author_id
@@ -734,7 +734,7 @@ function annotationRows(workId) {
      WHERE annotation.work_id=?
      ORDER BY annotation.created_at DESC LIMIT 500`,
     [workId],
-  ).map((annotation) => ({
+  )).map((annotation) => ({
     id: annotation.id, workId: annotation.work_id, nodeId: annotation.node_id || null,
     content: annotation.content, authorId: annotation.author_id, authorName: annotation.author_name || '教师',
     createdAt: annotation.created_at, resolvedAt: annotation.resolved_at || null,
@@ -750,8 +750,8 @@ function assertAnnotationNode(work, nodeId) {
   return nodeId;
 }
 
-function workReportRows(where = '1=1', params = []) {
-  return rows(
+async function workReportRows(where = '1=1', params = []) {
+  return (await arows(
     `SELECT report.*, work.title AS work_title, work.status AS work_status,
       reporter.display_name AS reporter_name, handler.display_name AS handler_name
      FROM work_reports report
@@ -761,15 +761,15 @@ function workReportRows(where = '1=1', params = []) {
      WHERE ${where}
      ORDER BY CASE report.status WHEN 'PENDING' THEN 0 ELSE 1 END, report.created_at DESC`,
     params,
-  ).map((report) => normalizeWorkReport(report, { includeReporter: true }));
+  )).map((report) => normalizeWorkReport(report, { includeReporter: true }));
 }
 
-function workReportInReviewScope(auth, currentOrgId, reportId) {
+async function workReportInReviewScope(auth, currentOrgId, reportId) {
   // 批次 D（班级退场）：这条判据原来查 `work.class_id` + `teacherCanAccessClass`。
   // work.class_id 现在恒为 NULL（新作品只记 class_session_id），于是教师会被一律拒掉 ——
   // 连**自己课堂里**作品的举报都处理不了。改成按「这节课的课堂是不是我创建的」判，与
   // workInReviewScope 同一口径。
-  const report = row(
+  const report = await arow(
     `SELECT report.*, work.title AS work_title, work.status AS work_status,
             work.class_session_id AS class_session_id, session.teacher_id AS session_teacher_id
      FROM work_reports report
@@ -813,8 +813,8 @@ function normalizeWorkPublishRequest(request) {
 }
 
 
-function organizationRow(orgId) {
-  const organization = row('SELECT * FROM organizations WHERE id=?', [orgId]);
+async function organizationRow(orgId) {
+  const organization = await arow('SELECT * FROM organizations WHERE id=?', [orgId]);
   if (!organization) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
   return organization;
 }
@@ -833,12 +833,12 @@ function contactPayload(value) {
   return result;
 }
 
-function orgAdminRows(orgId) {
-  return rows("SELECT * FROM users WHERE org_id=? AND role='ORG_ADMIN' AND deleted_at IS NULL ORDER BY status='ACTIVE' DESC, created_at ASC", [orgId]).map(normalizeUser);
+async function orgAdminRows(orgId) {
+  return (await arows("SELECT * FROM users WHERE org_id=? AND role='ORG_ADMIN' AND deleted_at IS NULL ORDER BY status='ACTIVE' DESC, created_at ASC", [orgId])).map(normalizeUser);
 }
 
-function assertNotLastOrgAdmin(orgId, targetUserId) {
-  const activeAdmins = rows("SELECT id FROM users WHERE org_id=? AND role='ORG_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL", [orgId]);
+async function assertNotLastOrgAdmin(orgId, targetUserId) {
+  const activeAdmins = await arows("SELECT id FROM users WHERE org_id=? AND role='ORG_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL", [orgId]);
   if (activeAdmins.length <= 1 && activeAdmins.some((item) => item.id === targetUserId)) throw errors.badRequest('不能停用该机构最后一个有效管理员', 'LAST_ORG_ADMIN_FORBIDDEN');
 }
 
@@ -976,30 +976,30 @@ function platformWorkFilters(ctx, kind = 'canvas') {
   return { where: conditions.length ? ' WHERE ' + conditions.join(' AND ') : '', params, publicationStateSql };
 }
 
-function buildOrganizationDetail(orgId) {
-  const organization = organizationRow(orgId);
-  ensureOrgBilling(organization.id);
-  const org = { ...normalizeOrg(organization), ...orgContractMeta(organization) };
-  const account = row('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
-  const admins = orgAdminRows(organization.id);
-  const packages = rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id]).map(normalizePackage);
-  const courseAssignments = rows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title
+async function buildOrganizationDetail(orgId) {
+  const organization = await organizationRow(orgId);
+  await ensureOrgBilling(organization.id);
+  const org = { ...await normalizeOrg(organization), ...orgContractMeta(organization) };
+  const account = await arow('SELECT * FROM org_billing_accounts WHERE org_id=?', [organization.id]);
+  const admins = await orgAdminRows(organization.id);
+  const packages = (await arows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC LIMIT 100', [organization.id])).map(normalizePackage);
+  const courseAssignments = (await arows(`SELECT assignment.id, assignment.series_id, assignment.status, assignment.assigned_at, assignment.expires_at, assignment.quota_total, assignment.quota_used, series.title AS series_title
     FROM course_assignments assignment JOIN course_series series ON series.id=assignment.series_id
-    WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id]).map((item) => {
+    WHERE assignment.org_id=? ORDER BY assignment.assigned_at DESC LIMIT 100`, [organization.id])).map((item) => {
     return {
       id: item.id, seriesId: item.series_id, title: item.series_title, status: item.status, assignedAt: item.assigned_at, quotaTotal: Number(item.quota_total), quotaUsed: Number(item.quota_used), remaining: Math.max(0, item.quota_total - item.quota_used),
       expiresAt: item.expires_at || null, expired: Boolean(item.expires_at) && new Date(item.expires_at).getTime() <= Date.now(),
     };
   });
   const summary = {
-    teachers: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [organization.id]),
-    students: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [organization.id]),
+    teachers: await acount("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [organization.id]),
+    students: await acount("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [organization.id]),
     activeClasses: 0,
-    activeSessions: count(`SELECT COUNT(*) AS n FROM class_sessions session WHERE session.org_id=? AND session.status='ACTIVE'`, [organization.id]),
-    projects: count('SELECT COUNT(*) AS n FROM student_projects WHERE org_id=? AND deleted_at IS NULL', [organization.id]),
-    works: count('SELECT COUNT(*) AS n FROM works WHERE org_id=?', [organization.id]),
+    activeSessions: await acount(`SELECT COUNT(*) AS n FROM class_sessions session WHERE session.org_id=? AND session.status='ACTIVE'`, [organization.id]),
+    projects: await acount('SELECT COUNT(*) AS n FROM student_projects WHERE org_id=? AND deleted_at IS NULL', [organization.id]),
+    works: await acount('SELECT COUNT(*) AS n FROM works WHERE org_id=?', [organization.id]),
   };
-  const audits = rows('SELECT id,action,target_type,target_id,actor_id,actor_role,ip,created_at,before_data,after_data FROM audit_logs WHERE org_id=? ORDER BY created_at DESC LIMIT 50', [organization.id]).map((item) => ({
+  const audits = (await arows('SELECT id,action,target_type,target_id,actor_id,actor_role,ip,created_at,before_data,after_data FROM audit_logs WHERE org_id=? ORDER BY created_at DESC LIMIT 50', [organization.id])).map((item) => ({
     id: item.id, action: item.action, targetType: item.target_type, targetId: item.target_id, actorId: item.actor_id,
     actorRole: item.actor_role, ip: item.ip, createdAt: item.created_at,
     beforeData: parseJson(item.before_data, null), afterData: parseJson(item.after_data, null),

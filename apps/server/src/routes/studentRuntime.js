@@ -8,7 +8,7 @@
 //   · services/studentRuntime.js —— 门禁 → 签密钥 → 调宿主脚本（开 / 收 / 列产物 / 取产物）；
 //   · 本文件的 /submit —— 把取回来的产物按**现有作品链路**落进 vibecoding_submissions；
 //     网页里的本地图片存成私有文件资产并改写引用（见 fileAssets.js 的 storeStudentArtifactAsset）。
-import { deliveryModesOf, errors, requireRole, row, rows } from '../lib.js';
+import { deliveryModesOf, errors, requireRole, row, rows, arow, arows, amap } from '../lib.js';
 import { collectStudentDeliverable, launchStudentRuntime, listStudentDeliverables, runtimeGatewayUrl, stopStudentRuntime, studentRuntimeAvailability } from '../services/studentRuntime.js';
 import { issueRuntimeKey } from './runtimeGateway.js';
 import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
@@ -34,8 +34,8 @@ const RUNTIME_DELIVERY_MODE = 'VIBECODING';
 const isRuntimeLesson = (lessonRow) => deliveryModesOf({ delivery_modes: lessonRow?.lesson_delivery_modes, delivery_mode: lessonRow?.lesson_delivery_mode }).includes(RUNTIME_DELIVERY_MODE);
 
 /** 这个学生现在该进哪个课堂：名单里 ACTIVE 且课堂 ACTIVE、且**这节课声明了 VIBECODING**，最近的第一个。 */
-function resolveActiveClassroom(studentId) {
-  return row(
+async function resolveActiveClassroom(studentId) {
+  return await arow(
     `SELECT s.id, s.lesson_id, s.title, s.delivery_mode,
             lesson.delivery_mode AS lesson_delivery_mode, lesson.delivery_modes AS lesson_delivery_modes
        FROM class_sessions s
@@ -49,8 +49,8 @@ function resolveActiveClassroom(studentId) {
   );
 }
 
-function requireActiveClassroom(studentId, what) {
-  const classroom = resolveActiveClassroom(studentId);
+async function requireActiveClassroom(studentId, what) {
+  const classroom = await resolveActiveClassroom(studentId);
   if (!classroom) throw errors.forbidden(`你现在没有正在上的课堂，${what}`, 'RUNTIME_NO_ACTIVE_CLASSROOM');
   return classroom;
 }
@@ -64,9 +64,9 @@ function requireActiveClassroom(studentId, what) {
  * ⚠️ 课时名取 `COALESCE(published_title, title)`：published_title 才是给学生看的那一版
  *    （与作品列表同一口径；`getStudentClassrooms` 用的是 lesson.title，那是机构侧口径）。
  */
-function classroomContext(sessionId) {
+async function classroomContext(sessionId) {
   if (!sessionId) return null;
-  const info = row(
+  const info = await arow(
     `SELECT session.status AS session_status, session.started_at,
             COALESCE(lesson.published_title, lesson.title) AS lesson_title,
             series.title AS series_title,
@@ -94,8 +94,8 @@ function classroomContext(sessionId) {
  * 「老师点了立即上课才能进」那道闸不动。
  * 口径见 docs/README.md：一个学生全局最多属于一个未终态课堂，所以这里最多一条。
  */
-function resolvePendingClassroom(studentId) {
-  return row(
+async function resolvePendingClassroom(studentId) {
+  return await arow(
     `SELECT session.id, session.lesson_id, session.title, session.delivery_mode,
             lesson.delivery_mode AS lesson_delivery_mode, lesson.delivery_modes AS lesson_delivery_modes
        FROM class_sessions session
@@ -123,8 +123,8 @@ function resolvePendingClassroom(studentId) {
  * 返回：`session` 保持库行形状（`id / lesson_id / title`，下游动作读它）、`classroom` 是给客户端看的
  * 同一节（带课包/课时/老师）、`candidates` 是全部候选（同形状）。
  */
-function resolveClassroomEntry(studentId, requestedSessionId) {
-  const raw = rows(
+async function resolveClassroomEntry(studentId, requestedSessionId) {
+  const raw = await arows(
     `SELECT session.id, session.lesson_id, session.title, session.started_at, session.created_at, session.delivery_mode,
             lesson.delivery_mode AS lesson_delivery_mode, lesson.delivery_modes AS lesson_delivery_modes
        FROM class_sessions session
@@ -134,16 +134,16 @@ function resolveClassroomEntry(studentId, requestedSessionId) {
       ORDER BY session.started_at DESC, session.created_at DESC`,
     [studentId],
   );
-  const publicOf = (session) => ({
+  const publicOf = async (session) => ({
     id: session.id,
     lessonId: session.lesson_id || '',
     title: session.title,
-    ...(classroomContext(session.id) || {}),
+    ...(await classroomContext(session.id) || {}),
   });
   // ⭐ 候选**只放"这节课声明了 VIBECODING"的**：画布课不该出现在"你现在能进的课"里
   //    （客户端会照单全收去开环境）。注意 raw 要保留全部，否则"学生点名的这节是画布课"就看不出来了。
   const runtimeSessions = raw.filter(isRuntimeLesson);
-  const candidates = runtimeSessions.map(publicOf);
+  const candidates = await amap(runtimeSessions, publicOf);
   const requested = String(requestedSessionId || '').trim();
   if (requested) {
     const hit = raw.find((item) => item.id === requested) || null;
@@ -170,8 +170,8 @@ function resolveClassroomEntry(studentId, requestedSessionId) {
  * ⚠️ `mismatch` 是「他在画布课堂上做 VibeCoding 的事」时那句话：客户端会把 message 显示出来，
  *    所以按客户端契约写成同一句（错误码沿用 RUNTIME_NO_ACTIVE_CLASSROOM，客户端不用改）。
  */
-function requireSelectedClassroom(ctx, studentId, what, mismatch = '') {
-  const entry = resolveClassroomEntry(studentId, ctx.search.get('sessionId') || ctx.body?.sessionId);
+async function requireSelectedClassroom(ctx, studentId, what, mismatch = '') {
+  const entry = await resolveClassroomEntry(studentId, ctx.search.get('sessionId') || ctx.body?.sessionId);
   if (!entry.session) {
     if (entry.reason === 'CLASSROOM_MODE_MISMATCH') {
       throw errors.forbidden(mismatch || '当前是画布课堂，不能在 VibeCoding 创作环境里做这个操作', 'RUNTIME_NO_ACTIVE_CLASSROOM');
@@ -219,7 +219,7 @@ export async function handleStudentRuntime(ctx) {
 
   if (part === '/status' && method === 'GET') {
     const availability = studentRuntimeAvailability();
-    const classroom = resolveActiveClassroom(auth.user.id);
+    const classroom = await resolveActiveClassroom(auth.user.id);
     return {
       available: availability.available,
       reason: availability.reason,
@@ -247,7 +247,7 @@ export async function handleStudentRuntime(ctx) {
   //     现在：多于一节时客户端**让学自己选**（选哪节，预设/次数上限/密钥就按哪节走）。
   //     不传 `sessionId` 时行为与以前一致（最近一场），老客户端不会坏。
   if (part === '/client-context' && method === 'GET') {
-    const entry = resolveClassroomEntry(auth.user.id, ctx.search.get('sessionId'));
+    const entry = await resolveClassroomEntry(auth.user.id, ctx.search.get('sessionId'));
     const classroom = entry.classroom;
     if (!classroom) {
       // 还没开始上课（或选的那节已经结束）：把「接下来是哪节课」也告诉客户端，
@@ -265,8 +265,8 @@ export async function handleStudentRuntime(ctx) {
           message: '当前是画布课堂，请在学生端进入画布课堂',
         };
       }
-      const pending = resolvePendingClassroom(auth.user.id);
-      const pendingInfo = pending ? (classroomContext(pending.id) || {}) : null;
+      const pending = await resolvePendingClassroom(auth.user.id);
+      const pendingInfo = pending ? (await classroomContext(pending.id) || {}) : null;
       return {
         classroom: null,
         classrooms: entry.candidates,
@@ -284,10 +284,10 @@ export async function handleStudentRuntime(ctx) {
       };
     }
     const lessonId = classroom.lessonId;
-    const limit = vibecodingSendLimit(lessonId);
+    const limit = await vibecodingSendLimit(lessonId);
     // ⚠️ 对外报的已用次数**封顶到上限**：库里存的是"观察到的发送次数最大值"（判据靠它，压缩也不会刷新
     //    额度），但给学生/老师看的是"用了几次／共几次"，所以这里取 min。见 vibecodingLessonSettings.js。
-    const usedRaw = vibecodingSendUsage({ sessionId: classroom.id, studentId: auth.user.id });
+    const usedRaw = await vibecodingSendUsage({ sessionId: classroom.id, studentId: auth.user.id });
     const used = limit === null ? usedRaw : Math.min(usedRaw, limit);
     return {
       // 课包/课时/老师一起给学生：预设与次数上限都是**按课时**配的，客户端要能显示"这是哪节课的"。
@@ -295,13 +295,13 @@ export async function handleStudentRuntime(ctx) {
       classrooms: entry.candidates,
       reason: null,
       gateway: { baseUrl: runtimeGatewayUrl(), key: issueRuntimeKey({ orgId, userId: auth.user.id, sessionId: classroom.id, lessonId }) },
-      presets: vibecodingPresetPrompts(lessonId),
+      presets: await vibecodingPresetPrompts(lessonId),
       sends: { limit, used, remaining: limit === null ? null : Math.max(0, limit - used) },
     };
   }
 
   if (part === '/launch' && method === 'POST') {
-    const classroom = requireActiveClassroom(auth.user.id, '没有创作环境可以开');
+    const classroom = await requireActiveClassroom(auth.user.id, '没有创作环境可以开');
     const launched = await launchStudentRuntime({
       sessionId: classroom.id,
       studentId: auth.user.id,
@@ -312,13 +312,13 @@ export async function handleStudentRuntime(ctx) {
   }
 
   if (part === '/stop' && method === 'POST') {
-    const classroom = requireActiveClassroom(auth.user.id, '没有环境可以收');
+    const classroom = await requireActiveClassroom(auth.user.id, '没有环境可以收');
     return stopStudentRuntime({ sessionId: classroom.id, studentId: auth.user.id });
   }
 
   // 我这个创作环境里现在有哪些东西可以当作品交（读工作区；不改动任何文件）
   if (part === '/deliverables' && method === 'GET') {
-    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可看', '当前是画布课堂，没有 VibeCoding 创作环境可看');
+    const classroom = await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可看', '当前是画布课堂，没有 VibeCoding 创作环境可看');
     return listStudentDeliverables({
       sessionId: classroom.id, studentId: auth.user.id, orgId, lessonId: classroom.lesson_id || null,
     });
@@ -326,7 +326,7 @@ export async function handleStudentRuntime(ctx) {
 
   // 交作品：把选中的那份取回来，按现有作品链路落库（广场/发布/机构查看全都读这张表）
   if (part === '/submit' && method === 'POST') {
-    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
+    const classroom = await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
     const scope = { sessionId: classroom.id, studentId: auth.user.id, orgId, lessonId: classroom.lesson_id || null };
     // 与工作台那条路同一条规矩：提交即确认版权与展示授权，平台之后才能发到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
@@ -345,7 +345,7 @@ export async function handleStudentRuntime(ctx) {
   // ⚠️ 二进制用 base64 装在 JSON 里：body 上限是 `maxUploadBytes() + 1MB`（见 index.js），
   //    默认 25MB 文件 → 约 33MB 传输量，够学生交 PPT；超了会在这里明确报错而不是静默截断。
   if (part === '/submit-upload' && method === 'POST') {
-    const classroom = requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
+    const classroom = await requireSelectedClassroom(ctx, auth.user.id, '没有创作环境可以交作品', '当前是画布课堂，不能提交 VibeCoding 作品');
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
@@ -500,7 +500,7 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
     });
   }
 
-  const conversation = ensureRuntimeConversation({
+  const conversation = await ensureRuntimeConversation({
     auth, lessonId: classroom.lesson_id || null, classSessionId: classroom.id,
     title: classroom.title || '创作环境',
   });
@@ -508,7 +508,7 @@ async function recordSubmissionFromArtifacts({ ctx, auth, orgId, classroom, coll
   const title = body.title === undefined || String(body.title).trim() === ''
     ? String(conversation.title || '我的作品').slice(0, 60)
     : String(body.title).trim().slice(0, 60);
-  const submission = recordRuntimeSubmission({
+  const submission = await recordRuntimeSubmission({
     ctx, auth, conversation, entryFile, files, artifacts, title,
     description: String(body.description || '').slice(0, 1000),
   });

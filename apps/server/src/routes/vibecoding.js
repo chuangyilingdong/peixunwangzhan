@@ -6,7 +6,7 @@
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
   ApiError, audit, count, corsHeaders, errors, id, json, modelDisplayName, nonEmptyString, nowIso, normalizeLesson,
-  pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction,
+  pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, arow, aq, arows, acount, atransaction, amap,
 } from '../lib.js';
 import { Readable } from 'node:stream';
 import { resolveStudentLessonContext } from '../services/studentContext.js';
@@ -20,9 +20,9 @@ import { applyGatewayRoute } from '../services/computeGateway.js';
 import { computePoolSummary, priceFenFor } from '../services/computePool.js';
 
 /** 会话归属的课包 id（算力池的键）。会话只存了课时，所以这里回查一次。 */
-function conversationSeriesId(conversation) {
+async function conversationSeriesId(conversation) {
   if (!conversation?.lesson_id) return null;
-  return row('SELECT series_id FROM course_lessons WHERE id=?', [conversation.lesson_id])?.series_id || null;
+  return (await arow('SELECT series_id FROM course_lessons WHERE id=?', [conversation.lesson_id]))?.series_id || null;
 }
 import { assertExternalAiAllowed, normalizeProviderError, PROVIDER_ERROR_CODES } from '../services/providerContract.js';
 import {
@@ -44,9 +44,9 @@ const HISTORY_MESSAGES = 20;
 // 学生也不能再直接改文件（PUT 会拒掉 files/entryFile）——所以这里不再留写侧校验。
 // 读侧刻意宽松（见 parseSnapshotFiles）：产物名允许中文，写侧的 ASCII 路径校验用在这里会误伤。
 
-function normalizeConversation(value, { includeArtifacts = false, artifacts: provided = null } = {}) {
+async function normalizeConversation(value, { includeArtifacts = false, artifacts: provided = null } = {}) {
   if (!value) return null;
-  const artifacts = includeArtifacts ? (provided || listArtifacts(value.id, { includeContent: true })) : null;
+  const artifacts = includeArtifacts ? (provided || await listArtifacts(value.id, { includeContent: true })) : null;
   const entry = includeArtifacts ? pickEntryArtifact(artifacts) : null;
   return {
     id: value.id, title: value.title, status: value.status, model: value.model || null,
@@ -146,9 +146,9 @@ function conversationScopeSql(alias = 'conversation') {
   return `${alias}.student_id = ? AND ${alias}.org_id = ?`;
 }
 
-function ownConversation(ctx, conversationId) {
+async function ownConversation(ctx, conversationId) {
   const auth = requireRole(ctx, ['STUDENT']);
-  const conversation = row(
+  const conversation = await arow(
     `SELECT conversation.*, lesson.title AS lesson_title, class.name AS class_name
      FROM vibecoding_conversations conversation
      LEFT JOIN course_lessons lesson ON lesson.id = conversation.lesson_id
@@ -165,7 +165,7 @@ function ownConversation(ctx, conversationId) {
  * 只接受本人上传的私有或公开文件；是否让模型看见由 mime/inline 决定。
  * 私有附件通过登录态下载，提交发布后再由作品快照代理公开，上传本身不会产生匿名公网入口。
  */
-function resolveAttachments(auth, rawList) {
+async function resolveAttachments(auth, rawList) {
   const entries = (Array.isArray(rawList) ? rawList : [])
     .map((item) => ({ id: String(typeof item === 'string' ? item : item?.id || '').trim(), inline: String(typeof item === 'string' ? '' : item?.inline || '') }))
     .filter((item) => item.id);
@@ -174,7 +174,7 @@ function resolveAttachments(auth, rawList) {
   if (ids.length > MAX_ATTACHMENTS) throw errors.badRequest(`一次最多带 ${MAX_ATTACHMENTS} 个附件`, 'VIBECODING_TOO_MANY_ATTACHMENTS');
   const resolved = [];
   for (const assetId of ids) {
-    const asset = row('SELECT * FROM file_assets WHERE id=?', [assetId]);
+    const asset = await arow('SELECT * FROM file_assets WHERE id=?', [assetId]);
     if (!asset || asset.status !== 'ACTIVE') throw errors.badRequest('附件不存在或已失效', 'VIBECODING_ATTACHMENT_NOT_FOUND');
     if (asset.owner_user_id !== auth.user.id) throw errors.forbidden('只能引用自己上传的附件', 'VIBECODING_ATTACHMENT_NOT_OWNED');
     if (!['PRIVATE', 'PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(asset.visibility)) {
@@ -191,14 +191,14 @@ function resolveAttachments(auth, rawList) {
   return resolved;
 }
 
-function activeStudent(auth) {
-  const user = row("SELECT * FROM users WHERE id=? AND org_id=? AND status='ACTIVE'", [auth.user.id, auth.user.orgId]);
+async function activeStudent(auth) {
+  const user = await arow("SELECT * FROM users WHERE id=? AND org_id=? AND status='ACTIVE'", [auth.user.id, auth.user.orgId]);
   if (!user) throw errors.forbidden('学生账号不可用', 'ACCOUNT_DISABLED');
   return user;
 }
 
-function vibeCodingContext(user, lessonId, classId) {
-  const context = resolveStudentLessonContext(user, lessonId, classId);
+async function vibeCodingContext(user, lessonId, classId) {
+  const context = await resolveStudentLessonContext(user, lessonId, classId);
   if (!context.canUseVibeCodingNow) {
     throw errors.forbidden(context.vibeCodingBlockReason || '当前不可进入 VibeCoding 课堂', context.vibeCodingBlockCode || 'VIBECODING_CLASSROOM_UNAVAILABLE');
   }
@@ -206,9 +206,9 @@ function vibeCodingContext(user, lessonId, classId) {
 }
 
 // 调上游前的预检：课堂管控 / 平台模态开关 / 课时能力 / 个人额度，任一不满足就不发起调用。
-function assertChatPreflight({ user, orgId, context, model = '' }) {
+async function assertChatPreflight({ user, orgId, context, model = '' }) {
   assertSessionAiControls({ modality: 'TEXT', session: context.activeSession, orgId, userId: user.id });
-  if (!isModalityEnabled(orgId, 'TEXT').enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
+  if (!(await isModalityEnabled(orgId, 'TEXT')).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
   if (!(context.lesson?.capabilities || []).includes('text')) throw errors.forbidden('本课时未开放 AI 文字能力', 'LESSON_CAPABILITY_DISABLED');
   // 2026-09-13（P4 删积分）：成员 AI 上限 / 周期额度两道刹车已删除（额度看算力池）。
   // 算力池（学生 × 课包）：对话也从这个池子扣，与画布/视频/音乐共用一个上限
@@ -228,9 +228,9 @@ function sseSend(ctx, event, payload) {
   ctx.res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
-function recordFailedMessage(conversationId, model, content, errorCode) {
+async function recordFailedMessage(conversationId, model, content, errorCode) {
   const messageId = id('vibemsg');
-  q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,error_code,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+  await aq('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,error_code,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
     [messageId, conversationId, 'assistant', content, model, 'FAILED', errorCode || 'VIBECODING_CHAT_FAILED', 0, nowIso()]);  return messageId;
 }
 
@@ -260,12 +260,12 @@ function assertConversationEditable(conversation) {
  * 学生在之后又聊了几轮的话，用「最近一轮」就会取错图。
  * 关联是可靠的：助手消息落库后会把 message_id 回填到产物上（见 streamAssistantReply）。
  */
-function triggeringImageAttachments(conversationId, artifact) {
+async function triggeringImageAttachments(conversationId, artifact) {
   // getArtifact() 返回的是驼峰字段（messageId），别按数据库列名（message_id）去读 —— 读错就永远取不到图，
   // 而且**不报错**：表现为「PPT 里就是没图」，最难查的那种。
   const messageId = artifact?.messageId || artifact?.message_id;
   if (!messageId) return [];
-  const message = row(
+  const message = await arow(
     `SELECT attachments FROM vibecoding_messages
       WHERE conversation_id=? AND role='user' AND attachments IS NOT NULL AND attachments<>''
         AND rowid < (SELECT rowid FROM vibecoding_messages WHERE id=?)
@@ -282,26 +282,26 @@ function referencedAttachmentOrdinals(artifact) {
   return [...new Set(deck.slides.map((slide) => Number(slide.imageAttachment)).filter((value) => Number.isInteger(value) && value > 0))];
 }
 
-function currentAttachmentImages(conversationId, artifact) {
+async function currentAttachmentImages(conversationId, artifact) {
   if (Array.isArray(artifact?.attachmentImages)) return artifact.attachmentImages;
-  const sources = triggeringImageAttachments(conversationId, artifact);
+  const sources = await triggeringImageAttachments(conversationId, artifact);
   return referencedAttachmentOrdinals(artifact)
     .map((index) => ({ index, fileId: sources[index - 1]?.id || '' }))
     .filter((item) => item.fileId);
 }
 
-function persistArtifactAttachmentImages(conversationId, artifact) {
+async function persistArtifactAttachmentImages(conversationId, artifact) {
   if (!artifact?.id || String(artifact.kind || '').toLowerCase() !== 'pptx' || Array.isArray(artifact.attachmentImages)) return;
-  setArtifactAttachmentImages(artifact.id, currentAttachmentImages(conversationId, artifact));
+  await setArtifactAttachmentImages(artifact.id, await currentAttachmentImages(conversationId, artifact));
 }
 
-function persistConversationAttachmentImages(conversationId) {
-  for (const artifact of listArtifacts(conversationId, { includeContent: true })) persistArtifactAttachmentImages(conversationId, artifact);
+async function persistConversationAttachmentImages(conversationId) {
+  for (const artifact of await listArtifacts(conversationId, { includeContent: true })) await persistArtifactAttachmentImages(conversationId, artifact);
 }
 
 /** 从本地存储读回一份素材的字节（不给自己的接口发 HTTP 请求，磁盘上就是那份文件） */
-function readAssetBytes(fileId) {
-  const asset = row('SELECT storage_kind, storage_key FROM file_assets WHERE id=?', [fileId]);
+async function readAssetBytes(fileId) {
+  const asset = await arow('SELECT storage_kind, storage_key FROM file_assets WHERE id=?', [fileId]);
   if (!asset || asset.storage_kind !== 'INTERNAL_PROXY') return null;
   const key = String(asset.storage_key || '').replaceAll('\\', '/');
   if (!key || key.startsWith('/') || key.split('/').includes('..')) return null;
@@ -317,13 +317,13 @@ function readAssetBytes(fileId) {
  * 活会话（学生自己下载）与提交快照（作品广场下载）走同一条路，
  * 免得「学生下载的 PPT 有图、广场下载的没图」这种两边都察觉不到的漂移。
  */
-function imageMapFrom(items, indexOf) {
+async function imageMapFrom(items, indexOf) {
   const images = new Map();
   for (const item of Array.isArray(items) ? items : []) {
     if (!item?.fileId || item.error) continue;
     const index = indexOf(item);
     if (!Number.isInteger(index) || index < -1) continue;
-    const buffer = readAssetBytes(item.fileId);
+    const buffer = await readAssetBytes(item.fileId);
     if (buffer) images.set(index, buffer);
   }
   return images;
@@ -334,8 +334,8 @@ function imageMapFrom(items, indexOf) {
  * ⚠️ **-1 是封面**（见 pptx.js 的 COVER_IMAGE_KEY），别当成非法下标丢掉 ——
  * 那样封面永远是纯色版、而且不报错。失败项与读不到的素材照样跳过。
  */
-function generatedImageMap(artifact) {
-  return imageMapFrom(artifact?.generatedImages, (item) => Number(item.slideIndex));
+async function generatedImageMap(artifact) {
+  return await imageMapFrom(artifact?.generatedImages, (item) => Number(item.slideIndex));
 }
 
 /**
@@ -343,8 +343,8 @@ function generatedImageMap(artifact) {
  * 导出是为了给 p47 做守卫：这条链路连着「产物 messageId」「附件里的 mime」「磁盘上的素材」
  * 三处，任何一处断掉都**不报错**、只是 PPT 里没图 —— 必须能被自动化盯住。
  */
-export function attachmentImageMap(conversationId, artifact) {
-  return imageMapFrom(currentAttachmentImages(conversationId, artifact), (item) => Number(item.index));
+export async function attachmentImageMap(conversationId, artifact) {
+  return await imageMapFrom(await currentAttachmentImages(conversationId, artifact), (item) => Number(item.index));
 }
 
 /**
@@ -352,10 +352,10 @@ export function attachmentImageMap(conversationId, artifact) {
  *   · generatedImages：[{slideIndex, fileId}]，-1 是封面
  *   · attachmentImages：[{index, fileId}]，index 从 1 起（对应规格里的 {"attachment": N}）
  */
-export function snapshotImageMaps(artifact) {
+export async function snapshotImageMaps(artifact) {
   return {
-    generatedImages: imageMapFrom(artifact?.generatedImages, (item) => Number(item.slideIndex)),
-    attachmentImages: imageMapFrom(artifact?.attachmentImages, (item) => Number(item.index)),
+    generatedImages: await imageMapFrom(artifact?.generatedImages, (item) => Number(item.slideIndex)),
+    attachmentImages: await imageMapFrom(artifact?.attachmentImages, (item) => Number(item.index)),
   };
 }
 
@@ -421,9 +421,9 @@ const MODE_ROLE_GUIDE = {
   ].join('\n'),
 };
 
-export function lessonSystemMessage(conversation) {
+export async function lessonSystemMessage(conversation) {
   const lesson = conversation?.lesson_id
-    ? row('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id])
+    ? await arow('SELECT title, summary, lesson_content FROM course_lessons WHERE id=?', [conversation.lesson_id])
     : null;
   const mode = normalizeVibeMode(conversation?.mode);
   const parts = [
@@ -443,11 +443,11 @@ export function lessonSystemMessage(conversation) {
   return { role: 'system', content: parts.join('\n\n') };
 }
 
-export function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
-  return rows(
+export async function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
+  return (await arows(
     "SELECT role, content, attachments FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at DESC, rowid DESC LIMIT ?",
     [conversationId, limit],
-  ).reverse().map((message) => {
+  )).reverse().map((message) => {
     const attachments = parseAttachments(message.attachments);
     // 带图的用户消息必须发成**内容块**：只发纯文本的话，模型完全看不到图
     //（实测过：同样的问题，纯文本回「未看到图片」）。
@@ -489,14 +489,14 @@ export function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
  * **不要把 `modelMappings` 一起放进来**——那是「读取模型」返回的候选清单，是给管理员
  * 挑选用的大列表（几百条，跨供应商），下发给学生就会冒出 gpt 之类的无关模型。
  */
-function textModelOptions() {
-  const channel = modalityChannel(getAiProviderPolicy(), 'TEXT');
+async function textModelOptions() {
+  const channel = modalityChannel(await getAiProviderPolicy(), 'TEXT');
   if (!channel) return [];
   const mappings = Array.isArray(channel.modelMappings) ? channel.modelMappings : [];
   // 显示名：**运营配的别名优先**，没配就还用「读取模型」拿到的上游名，再没有就是 ID
   // （2026-09-23 用户口径：「在画布或者 vibecoding 课堂模型名字这里可以映射我改过的名字」）。
   // ⚠️ 只是显示名 —— 会话里存、发上游用的都是 `id`（选模型那条校验也仍然比 ID）。
-  const policy = getAiProviderPolicy();
+  const policy = await getAiProviderPolicy();
   const displayNameOf = (id) => modelDisplayName(policy, id, mappings.find((item) => item?.id === id)?.displayName);
   const ids = new Set();
   for (const item of (Array.isArray(channel.models) ? channel.models : [])) {
@@ -515,8 +515,8 @@ function textModelOptions() {
  * 而不是一个空的「渠道默认模型」。留空存储、显示默认，是为了后台改了默认之后
  * 没自己选过模型的老会话能跟着走。
  */
-function textDefaultModel() {
-  return String(modalityChannel(getAiProviderPolicy(), 'TEXT')?.model || '').trim();
+async function textDefaultModel() {
+  return String(modalityChannel(await getAiProviderPolicy(), 'TEXT')?.model || '').trim();
 }
 
 /**
@@ -530,8 +530,8 @@ function textDefaultModel() {
  * （代码确实已经「写出来」了），只是不扣费。
  */
 async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) {
-  const policy = getAiProviderPolicy();
-  const lesson = normalizeLesson(row('SELECT * FROM course_lessons WHERE id=?', [conversation.lesson_id]), { asPublished: true });
+  const policy = await getAiProviderPolicy();
+  const lesson = await normalizeLesson(await arow('SELECT * FROM course_lessons WHERE id=?', [conversation.lesson_id]), { asPublished: true });
   const lessonModel = lesson?.classroomConfig?.vibeCoding?.model || '';
   // Resolve each new logical request once; its provider instance retains this route in flight.
   const selection = await applyGatewayRoute(
@@ -543,7 +543,7 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
   assertExternalAiAllowed({ mode: providerInfo.mode, allowStudentExternalContent: policy.allowStudentExternalContent });
   if (typeof provider.generateStream !== 'function') throw errors.conflict('当前 AI 渠道不支持流式对话', 'VIBECODING_STREAM_UNAVAILABLE');
 
-  const history = [lessonSystemMessage(conversation), ...conversationHistory(conversation.id)];
+  const history = [await lessonSystemMessage(conversation), ...await conversationHistory(conversation.id)];
   const scanner = createArtifactScanner();
   const emittedArtifactIds = new Set();
   sseOpen(ctx);
@@ -564,9 +564,9 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
   let reasoningChars = 0;
 
   /** 把这次新闭合的围栏写进产物表并推给前端 */
-  function flushArtifacts(deltas) {
+  async function flushArtifacts(deltas) {
     for (const candidate of deltas) {
-      const saved = upsertArtifact({
+      const saved = await upsertArtifact({
         conversationId: conversation.id,
         messageId: null, // 助手消息 id 要等整轮成功才有，产物先不挂它
         name: candidate.name,
@@ -590,12 +590,12 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
         // 前端自己累积（见 vibecodingWorkspace 的 onStatus）。
         sseSend(ctx, 'status', { phase: 'thinking', chars: reasoningChars, delta: piece });
       },
-      onDelta: (delta, full) => {
+      onDelta: async (delta, full) => {
         streamedText = full;
         sseSend(ctx, 'delta', { delta });
         // 每来一段就找一遍「这次新闭合」的围栏；未闭合的不会命中，所以不会产出半截文件
         const closed = scanner.push(delta);
-        if (closed.length) flushArtifacts(closed);
+        if (closed.length) await flushArtifacts(closed);
       },
     });
     // C3 前置：流式上游在最后一帧带 usage 时才有值（默认不比这个）；没有就是 null，不影响任何口径
@@ -605,51 +605,51 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
 
     // 兜底：万一渠道不是逐 delta 推的（一次性返回），这里再整段扫一遍
     const remaining = scanner.text === text ? [] : extractArtifacts(text);
-    if (remaining.length) flushArtifacts(remaining);
+    if (remaining.length) await flushArtifacts(remaining);
 
     const assistantMessageId = id('vibemsg');
-    transaction(() => {
-      const fresh = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]);
+    await atransaction(async () => {
+      const fresh = await arow('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]);
       if (!fresh) throw errors.notFound('创作会话不存在', 'VIBECODING_CONVERSATION_NOT_FOUND');
       // 2026-09-13（P4 删积分）：不再扣积分（原来这里是 chargeCreditsInTransaction + debitUserAiCredits）。
       // C3 前置：流式响应里若带 usage（上游支持 include_usage 时）就记下来；不带就是 0，计费口径不变
-      recordAiUsage({
+      await recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: fresh.class_session_id || null,
         modality: 'TEXT', model: selection.model, status: 'SUCCESS',
         inputTokens: streamedUsage?.inputTokens || 0, outputTokens: streamedUsage?.outputTokens || 0,
         // 算力池账本：对话也从这个池子扣（与画布/视频/音乐共用一个上限）
-        costFen: provider.compute?.saleSnapshot?.unitFen ?? priceFenFor({ modality: 'TEXT', model: selection.model }), seriesId: conversationSeriesId(conversation),
+        costFen: provider.compute?.saleSnapshot?.unitFen ?? await priceFenFor({ modality: 'TEXT', model: selection.model }), seriesId: await conversationSeriesId(conversation),
         pricing: { compute: provider.compute, source: 'vibecoding', provider: provider.name, conversationId: fresh.id, mode: selection.provider },
       });
-      q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
+      await aq('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,credits_charged,created_at) VALUES (?,?,?,?,?,?,?,?)',
         [assistantMessageId, fresh.id, 'assistant', text, selection.model, 'SUCCEEDED', 0, nowIso()]);
       // 这一轮产出的产物认领到这条消息上，方便聊天里按消息分组
       if (emittedArtifactIds.size) {
         const placeholders = [...emittedArtifactIds].map(() => '?').join(',');
-        q(`UPDATE vibecoding_artifacts SET message_id=? WHERE id IN (${placeholders}) AND message_id IS NULL`,
+        await aq(`UPDATE vibecoding_artifacts SET message_id=? WHERE id IN (${placeholders}) AND message_id IS NULL`,
           [assistantMessageId, ...emittedArtifactIds]);
       }
-      const entry = pickEntryArtifact(listArtifacts(fresh.id));
-      q('UPDATE vibecoding_conversations SET model=?,entry_file=?,last_message_at=?,updated_at=? WHERE id=?',
+      const entry = pickEntryArtifact(await listArtifacts(fresh.id));
+      await aq('UPDATE vibecoding_conversations SET model=?,entry_file=?,last_message_at=?,updated_at=? WHERE id=?',
         [selection.model, entry?.name || 'index.html', nowIso(), nowIso(), fresh.id]);
     });
-    const message = normalizeMessage(row('SELECT * FROM vibecoding_messages WHERE id=?', [assistantMessageId]));
+    const message = normalizeMessage(await arow('SELECT * FROM vibecoding_messages WHERE id=?', [assistantMessageId]));
     // 文档产物要配的插画，在这一轮**消息落库之后**才生成：这时产物已认领到这条消息上，
     // 也才有「产出那一轮」可回溯。生成期间照常推 status 事件，学生能看到「正在生成插画」，
     // 而不是干等（参考实现里那一步「正在收集 PPT 素材」就是这个位置）。
     // ⚠️ 注意：fresh 是在上面的 transaction 回调里声明的，出了回调就没了 ——
     // 在这里直接用它会在求值实参时抛 ReferenceError，被本层的 catch 吞掉，
     // 表现成「插画静默不生成」（我踩过）。所以在外面重新取一次。
-    const freshConversation = row('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]) || conversation;
-    for (const artifact of listArtifacts(conversation.id, { includeContent: true }).filter((item) => emittedArtifactIds.has(item.id))) {
-      persistArtifactAttachmentImages(conversation.id, artifact);
+    const freshConversation = await arow('SELECT * FROM vibecoding_conversations WHERE id=? AND student_id=?', [conversation.id, auth.user.id]) || conversation;
+    for (const artifact of (await listArtifacts(conversation.id, { includeContent: true })).filter((item) => emittedArtifactIds.has(item.id))) {
+      await persistArtifactAttachmentImages(conversation.id, artifact);
     }
     await illustrateTurn(ctx, auth, freshConversation, emittedArtifactIds);
     sseSend(ctx, 'done', {
       message,
       // 权威产物清单：前端拿它跟流式期间收到的卡片对账
-      artifacts: listArtifacts(conversation.id, { includeContent: true }),
-      entryFile: pickEntryArtifact(listArtifacts(conversation.id))?.name || 'index.html',
+      artifacts: await listArtifacts(conversation.id, { includeContent: true }),
+      entryFile: pickEntryArtifact(await listArtifacts(conversation.id))?.name || 'index.html',
       streamed: result?.streamed !== false,
     });
   } catch (error) {
@@ -657,18 +657,18 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
     // 学生主动停止时连接先断，抛出的可能是底层 socket 错误而不是我们自己的 ABORTED，
     // 所以以 abortController 状态为准：不落失败消息、不扣费。
     if (abortController.signal.aborted || rawCode === PROVIDER_ERROR_CODES.ABORTED) {
-      sseSend(ctx, 'aborted', { code: 'VIBECODING_ABORTED', artifacts: listArtifacts(conversation.id, { includeContent: true }) });
+      sseSend(ctx, 'aborted', { code: 'VIBECODING_ABORTED', artifacts: await listArtifacts(conversation.id, { includeContent: true }) });
     } else {
       // ⚠️ 这里必须**归一化后再给学生看**：网关「额度用尽」在 HTTP 上是 403，
       // 直接透原始文案就会把「请在管理后台重新填写并保存该渠道 API Key」这种给运维看的话
       // 甩给一个十来岁的学生（而且真正的原因是他这节课的钱花完了）。
       const normalized = normalizeProviderError(error);
       const code = normalized.code || rawCode;
-      recordFailedMessage(conversation.id, selection.model, streamedText, code);
-      recordAiUsage({
+      await recordFailedMessage(conversation.id, selection.model, streamedText, code);
+      await recordAiUsage({
         orgId: auth.user.orgId, userId: auth.user.id, sessionId: conversation.class_session_id || null,
         modality: 'TEXT', model: selection.model, status: 'FAILED', failCode: code,
-        costFen: 0, seriesId: conversationSeriesId(conversation),
+        costFen: 0, seriesId: await conversationSeriesId(conversation),
         pricing: { compute: provider.compute, source: 'vibecoding', provider: provider.name, conversationId: conversation.id },
       });
       sseSend(ctx, 'error', { code, message: normalized.message || error?.message || 'AI 回复失败' });
@@ -692,11 +692,11 @@ async function streamAssistantReply(ctx, { auth, conversation, userMessageId }) 
  */
 async function illustrateTurn(ctx, auth, conversation, artifactIds) {
   if (!artifactIds?.size) return;
-  const artifacts = listArtifacts(conversation.id, { includeContent: true }).filter((item) => artifactIds.has(item.id));
+  const artifacts = (await listArtifacts(conversation.id, { includeContent: true })).filter((item) => artifactIds.has(item.id));
   if (!collectIllustrationTargets(artifacts).length) return;
   try {
-    const user = activeStudent(auth);
-    const context = resolveStudentLessonContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
+    const user = await activeStudent(auth);
+    const context = await resolveStudentLessonContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
     const results = await generateIllustrationsForArtifacts({
       auth: { ...auth, rawUser: user },
       context,
@@ -704,8 +704,8 @@ async function illustrateTurn(ctx, auth, conversation, artifactIds) {
       onProgress: (info) => sseSend(ctx, 'status', info),
     });
     for (const [artifactId, images] of results) {
-      setArtifactGeneratedImages(artifactId, images);
-      const updated = getArtifact(conversation.id, artifactId);
+      await setArtifactGeneratedImages(artifactId, images);
+      const updated = await getArtifact(conversation.id, artifactId);
       if (updated) sseSend(ctx, 'artifact', { artifact: updated, created: false });
     }
   } catch (error) {
@@ -726,11 +726,11 @@ async function illustrateTurn(ctx, auth, conversation, artifactIds) {
 // 而作品广场要显示的是「交上来的那一版」。所以提交时把**产物清单**（含配图引用）定格一份，
 // 正文继续走 files 快照 —— 广场与下载都不去读活会话。
 
-function embeddedFileIds(files, ownerUserId = '') {
+async function embeddedFileIds(files, ownerUserId = '') {
   const ids = new Set();
   for (const content of Object.values(files || {})) {
     for (const match of String(content || '').matchAll(/\/api\/student\/file-assets\/([\w-]+)\/download/g)) {
-      const file = row('SELECT owner_user_id,visibility,status,mime_type FROM file_assets WHERE id=?', [match[1]]);
+      const file = await arow('SELECT owner_user_id,visibility,status,mime_type FROM file_assets WHERE id=?', [match[1]]);
       if (file?.status === 'ACTIVE' && String(file.mime_type || '').startsWith('image/')
         && (file.owner_user_id === ownerUserId || ['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))) ids.add(match[1]);
     }
@@ -743,10 +743,10 @@ function embeddedFileIds(files, ownerUserId = '') {
  * ⚠️ 配图引用必须一起定格：只存正文的话，广场渲染出来的 PPT 会**静默**丢掉所有图
  * （学生自己下载的那份有图、广场那份没有，而两边都不报错）。
  */
-export function snapshotArtifacts(conversationId, names = null, files = {}, ownerUserId = '') {
+export async function snapshotArtifacts(conversationId, names = null, files = {}, ownerUserId = '') {
   const allowed = names ? new Set(names) : null;
-  const webImageIds = embeddedFileIds(files, ownerUserId);
-  return listArtifacts(conversationId, { includeContent: true }).filter((artifact) => !allowed || allowed.has(artifact.name)).map((artifact) => ({
+  const webImageIds = await embeddedFileIds(files, ownerUserId);
+  return await amap((await listArtifacts(conversationId, { includeContent: true })).filter((artifact) => !allowed || allowed.has(artifact.name)), async (artifact) => ({
     name: artifact.name,
     kind: artifact.kind || kindForName(artifact.name),
     bytes: Number(artifact.bytes || 0),
@@ -757,7 +757,7 @@ export function snapshotArtifacts(conversationId, names = null, files = {}, owne
       .filter((item) => item?.fileId && !item.error)
       .map((item) => ({ slideIndex: Number(item.slideIndex), fileId: String(item.fileId) })),
     // 学生传的图：规格里 {"attachment": N} 指的是**产出这一轮**里的第 N 张
-    attachmentImages: currentAttachmentImages(conversationId, artifact),
+    attachmentImages: await currentAttachmentImages(conversationId, artifact),
     embeddedImages: artifact.name === names?.[0] && kindForName(artifact.name) === 'html'
       ? webImageIds.map((fileId) => ({ fileId })) : [],
   }));
@@ -866,7 +866,7 @@ export function snapshotArtifactByName(submission, name) {
 }
 
 /** 从提交快照渲染一份真文件（广场的下载口用它；学生自己下载走的是活会话那条） */
-export function renderSnapshotDocument(submission, name) {
+export async function renderSnapshotDocument(submission, name) {
   const files = parseSnapshotFiles(submission?.files);
   if (!Object.hasOwn(files, name)) return { error: '作品里没有这个文件' };
   const meta = parseSnapshotArtifacts(submission).find((item) => item.name === name);
@@ -874,7 +874,7 @@ export function renderSnapshotDocument(submission, name) {
   if (!isDocumentKind(kind)) return { error: '这个文件不是可下载的文档' };
   return renderDocument(
     { name, kind, content: String(files[name] ?? '') },
-    snapshotImageMaps(meta || {}),
+    await snapshotImageMaps(meta || {}),
   );
 }
 
@@ -953,8 +953,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const search = String(ctx.search.get('search') || '').trim();
     if (search) { conditions.push('conversation.title LIKE ?'); params.push('%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'); }
     const where = conditions.join(' AND ');
-    const total = Number(count(`SELECT COUNT(*) n FROM vibecoding_conversations conversation WHERE ${where}`, params) || 0);
-    const items = rows(
+    const total = Number(await acount(`SELECT COUNT(*) n FROM vibecoding_conversations conversation WHERE ${where}`, params) || 0);
+    const items = await amap((await arows(
       `SELECT conversation.*, lesson.title AS lesson_title, class.name AS class_name,
               (SELECT COUNT(*) FROM vibecoding_artifacts artifact WHERE artifact.conversation_id = conversation.id) AS artifact_count
        FROM vibecoding_conversations conversation
@@ -965,78 +965,78 @@ async function handleStudentVibeCoding(ctx, auth, part) {
                 COALESCE(conversation.last_message_at, conversation.created_at) DESC, conversation.id DESC
        LIMIT ? OFFSET ?`,
       [...params, limit, offset],
-    ).map((item) => normalizeConversation(item));
+    )), async (item) => await normalizeConversation(item));
     return pageResult(items, { page, limit, total });
   }
 
   if (part === '/conversations' && method === 'POST') {
     const lessonId = nonEmptyString(body.lessonId, '课时', { max: 100 });
     const classId = body.classId === undefined || body.classId === '' ? null : nonEmptyString(body.classId, '班级', { max: 100 });
-    const user = activeStudent(auth);
-    const context = vibeCodingContext(user, lessonId, body.sessionId || null);
-    const existing = row('SELECT * FROM vibecoding_conversations WHERE student_id=? AND org_id=? AND lesson_id=? AND class_session_id=? ORDER BY updated_at DESC LIMIT 1', [auth.user.id, auth.user.orgId, lessonId, context.activeSession.id]);
-    if (existing) return { ...normalizeConversation(existing, { includeArtifacts: true }), modelOptions: textModelOptions(), defaultModel: textDefaultModel() };
+    const user = await activeStudent(auth);
+    const context = await vibeCodingContext(user, lessonId, body.sessionId || null);
+    const existing = await arow('SELECT * FROM vibecoding_conversations WHERE student_id=? AND org_id=? AND lesson_id=? AND class_session_id=? ORDER BY updated_at DESC LIMIT 1', [auth.user.id, auth.user.orgId, lessonId, context.activeSession.id]);
+    if (existing) return { ...await normalizeConversation(existing, { includeArtifacts: true }), modelOptions: await textModelOptions(), defaultModel: await textDefaultModel() };
     const now = nowIso();
     const conversationId = id('vibeconv');
     const title = body.title === undefined || String(body.title).trim() === '' ? DEFAULT_TITLE : nonEmptyString(body.title, '会话标题', { max: 60 });
-    transaction(() => {
-      q(`INSERT INTO vibecoding_conversations(
+    await atransaction(async () => {
+      await aq(`INSERT INTO vibecoding_conversations(
            id,org_id,student_id,class_id,lesson_id,class_session_id,title,model,files,entry_file,status,last_message_at,created_at,updated_at
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [conversationId, auth.user.orgId, auth.user.id, null, lessonId,
           context.activeSession?.id || null, title, null, '{}', 'index.html', 'DRAFT', null, now, now]);
       // 起始产物：让学生一进课堂就有东西可跑，而不是面对一块空白
-      seedDefaultArtifacts(conversationId);
-      audit(ctx, 'VIBECODING_CONVERSATION_CREATE', 'VIBECODING_CONVERSATION', conversationId, null, { lessonId, title });
+      await seedDefaultArtifacts(conversationId);
+      await audit(ctx, 'VIBECODING_CONVERSATION_CREATE', 'VIBECODING_CONVERSATION', conversationId, null, { lessonId, title });
     });
-    const created = row(
+    const created = await arow(
       `SELECT conversation.*, lesson.title AS lesson_title, class.name AS class_name
        FROM vibecoding_conversations conversation
        LEFT JOIN course_lessons lesson ON lesson.id = conversation.lesson_id
        LEFT JOIN classes class ON class.id = conversation.class_id
        WHERE conversation.id = ?`, [conversationId]);
-    return { ...normalizeConversation(created, { includeArtifacts: true }), modelOptions: textModelOptions(), defaultModel: textDefaultModel() };
+    return { ...await normalizeConversation(created, { includeArtifacts: true }), modelOptions: await textModelOptions(), defaultModel: await textDefaultModel() };
   }
 
   const conversationMatch = part.match(/^\/conversations\/([^/]+)$/);
   if (conversationMatch && method === 'GET') {
-    const { conversation } = ownConversation(ctx, conversationMatch[1]);
+    const { conversation } = await ownConversation(ctx, conversationMatch[1]);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
-    const total = Number(count('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id = ?', [conversation.id]) || 0);
-    const messages = rows(
+    const total = Number(await acount('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id = ?', [conversation.id]) || 0);
+    const messages = (await arows(
       `SELECT * FROM vibecoding_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
       [conversation.id, limit, offset],
-    ).reverse().map(normalizeMessage);
+    )).reverse().map(normalizeMessage);
     // 一个对话现在可以有**多份产物的提交**（按产物提交，2026-09-15）。
     // 这里取最新的一条作为「当前提交」（旧代码是 row(...) 取一条 —— 有多条时是不确定的），
     // 同时把已提交过的产物名一并下发，界面才能准确标出哪几份已经交过。
-    const submissions = rows(submissionSelect() + ' WHERE submission.conversation_id = ? ORDER BY submission.submitted_at DESC', [conversation.id]);
+    const submissions = await arows(submissionSelect() + ' WHERE submission.conversation_id = ? ORDER BY submission.submitted_at DESC', [conversation.id]);
     const submission = submissions[0] || null;
     // 历史产物（message_id 为空，来自旧 files JSON 的迁移）挂到最后一条助手消息上。
     // 迁移不可能知道每个文件是哪一轮写出来的，但「这次创作产出了哪些文件」必须看得见——
     // 否则老会话在聊天里一张产物卡片都没有，看起来像功能没生效。
-    const artifacts = listArtifacts(conversation.id, { includeContent: true });
+    const artifacts = await listArtifacts(conversation.id, { includeContent: true });
     const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
     if (lastAssistant) {
       for (const artifact of artifacts) if (!artifact.messageId) artifact.messageId = lastAssistant.id;
     }
     return {
-      ...normalizeConversation(conversation, { includeArtifacts: true, artifacts }),
+      ...await normalizeConversation(conversation, { includeArtifacts: true, artifacts }),
       messages, messagesTotal: total, messagesPage: page,
       submission: normalizeSubmission(submission),
       submittedEntries: submissions.map((item) => item.entry_file),
-      modelOptions: textModelOptions(),
-      defaultModel: textDefaultModel(),
+      modelOptions: await textModelOptions(),
+      defaultModel: await textDefaultModel(),
       // 算力池摘要（本课包还剩多少）随会话详情下发，工作台顶部显示
-      computePool: computePoolSummary({ userId: conversation.student_id, seriesId: conversationSeriesId(conversation) }),
+      computePool: await computePoolSummary({ userId: conversation.student_id, seriesId: await conversationSeriesId(conversation) }),
     };
   }
 
   // 单个产物的完整内容：产物列表默认不带正文，工作台点开某个文件时才取
   const artifactMatch = part.match(/^\/conversations\/([^/]+)\/artifacts\/([^/]+)$/);
   if (artifactMatch && method === 'GET') {
-    const { conversation } = ownConversation(ctx, artifactMatch[1]);
-    const artifact = getArtifact(conversation.id, artifactMatch[2]);
+    const { conversation } = await ownConversation(ctx, artifactMatch[1]);
+    const artifact = await getArtifact(conversation.id, artifactMatch[2]);
     if (!artifact) throw errors.notFound('产物不存在', 'VIBECODING_ARTIFACT_NOT_FOUND');
     return artifact;
   }
@@ -1045,8 +1045,8 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   // .pptx / .docx / .xlsx 再发出去。见 services/ooxml/documents.js 里的取舍说明。
   const documentMatch = part.match(/^\/conversations\/([^/]+)\/artifacts\/([^/]+)\/download$/);
   if (documentMatch && method === 'GET') {
-    const { conversation } = ownConversation(ctx, documentMatch[1]);
-    const artifact = getArtifact(conversation.id, documentMatch[2]);
+    const { conversation } = await ownConversation(ctx, documentMatch[1]);
+    const artifact = await getArtifact(conversation.id, documentMatch[2]);
     if (!artifact) throw errors.notFound('产物不存在', 'VIBECODING_ARTIFACT_NOT_FOUND');
     if (!isDocumentKind(artifact.kind)) throw errors.badRequest('这个产物不是可下载的文档', 'VIBECODING_ARTIFACT_NOT_DOCUMENT');
     // 配图两个来源都要喂给渲染器：
@@ -1054,12 +1054,12 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     //   · 规格里 {"attachment": N} 指的是**产出这一轮里学生传的第 N 张图**，按序号取
     // 越界/读不到就不放图，不让整份下载失败。
     const rendered = renderDocument(artifact, {
-      attachmentImages: attachmentImageMap(conversation.id, artifact),
-      generatedImages: generatedImageMap(artifact),
+      attachmentImages: await attachmentImageMap(conversation.id, artifact),
+      generatedImages: await generatedImageMap(artifact),
     });
     if (rendered.error) throw errors.badRequest(rendered.error, 'VIBECODING_DOCUMENT_RENDER_FAILED');
     const safeName = String(rendered.filename || 'download').replace(/[\r\n"\\/]/g, '_');
-    audit(ctx, 'VIBECODING_ARTIFACT_DOWNLOAD', 'VIBECODING_ARTIFACT', artifact.id, null, { kind: artifact.kind, bytes: rendered.buffer.length });
+    await audit(ctx, 'VIBECODING_ARTIFACT_DOWNLOAD', 'VIBECODING_ARTIFACT', artifact.id, null, { kind: artifact.kind, bytes: rendered.buffer.length });
     return {
       __fileResponse: true,
       status: 200,
@@ -1077,15 +1077,15 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   // 置顶 / 取消置顶（只影响自己侧栏排序）
   const pinMatch = part.match(/^\/conversations\/([^/]+)\/pin$/);
   if (pinMatch && method === 'PUT') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, pinMatch[1]);
+    const { auth: ownerAuth, conversation } = await ownConversation(ctx, pinMatch[1]);
     if (!Object.hasOwn(body, 'pinned') || typeof body.pinned !== 'boolean') throw errors.badRequest('请选择是否置顶', 'VIBECODING_PIN_FLAG_REQUIRED');
-    q('UPDATE vibecoding_conversations SET pinned_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
+    await aq('UPDATE vibecoding_conversations SET pinned_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
       [body.pinned ? nowIso() : null, nowIso(), conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
-    return normalizeConversation(row('SELECT * FROM vibecoding_conversations WHERE id=?', [conversation.id]));
+    return await normalizeConversation(await arow('SELECT * FROM vibecoding_conversations WHERE id=?', [conversation.id]));
   }
 
   if (conversationMatch && method === 'PUT') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, conversationMatch[1]);
+    const { auth: ownerAuth, conversation } = await ownConversation(ctx, conversationMatch[1]);
     // 学生不再手写代码，所以这里只改「会话本身」的属性；代码只有一个来源——AI 产物。
     // 老客户端如果还在传 files/entryFile，明确拒掉而不是静默忽略，免得以为改成功了。
     if (body.files !== undefined || body.entryFile !== undefined) {
@@ -1096,7 +1096,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     if (body.model !== undefined) {
       const requested = String(body.model || '').trim();
       if (!requested) nextModel = null;
-      else if (!textModelOptions().some((item) => item.id === requested)) throw errors.badRequest('该模型不在当前 AI 渠道的可选范围内', 'VIBECODING_MODEL_NOT_AVAILABLE');
+      else if (!(await textModelOptions()).some((item) => item.id === requested)) throw errors.badRequest('该模型不在当前 AI 渠道的可选范围内', 'VIBECODING_MODEL_NOT_AVAILABLE');
       else nextModel = requested;
     }
     // 功能（对话 / 写代码 / 做网页，2026-09-17）：它决定系统提示词怎么拼。
@@ -1108,64 +1108,64 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       if (!requested) throw errors.badRequest('不认识的课堂功能（可选：对话 / 写代码 / 做网页）', 'INVALID_VIBE_MODE');
       nextMode = requested;
     }
-    q('UPDATE vibecoding_conversations SET title=?,model=?,mode=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
+    await aq('UPDATE vibecoding_conversations SET title=?,model=?,mode=?,updated_at=? WHERE id=? AND student_id=? AND org_id=?',
       [title, nextModel, nextMode || null, nowIso(), conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
-    const updated = row('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversation.id]);
-    return normalizeConversation(updated, { includeArtifacts: true });
+    const updated = await arow('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversation.id]);
+    return await normalizeConversation(updated, { includeArtifacts: true });
   }
 
   if (conversationMatch && method === 'DELETE') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, conversationMatch[1]);
-    transaction(() => {
-      q('DELETE FROM vibecoding_conversations WHERE id=? AND student_id=? AND org_id=?', [conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
-      audit(ctx, 'VIBECODING_CONVERSATION_DELETE', 'VIBECODING_CONVERSATION', conversation.id, normalizeConversation(conversation), null);
+    const { auth: ownerAuth, conversation } = await ownConversation(ctx, conversationMatch[1]);
+    await atransaction(async () => {
+      await aq('DELETE FROM vibecoding_conversations WHERE id=? AND student_id=? AND org_id=?', [conversation.id, ownerAuth.user.id, ownerAuth.user.orgId]);
+      await audit(ctx, 'VIBECODING_CONVERSATION_DELETE', 'VIBECODING_CONVERSATION', conversation.id, await normalizeConversation(conversation), null);
     });
     return { deleted: true, id: conversation.id };
   }
 
   const messageMatch = part.match(/^\/conversations\/([^/]+)\/messages$/);
   if (messageMatch && method === 'POST') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, messageMatch[1]);
+    const { auth: ownerAuth, conversation } = await ownConversation(ctx, messageMatch[1]);
     assertConversationEditable(conversation);
-    const user = activeStudent(ownerAuth);
-    const context = vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
-    assertChatPreflight({ user, orgId: ownerAuth.user.orgId, context, model: conversation.model || '' });
+    const user = await activeStudent(ownerAuth);
+    const context = await vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
+    await assertChatPreflight({ user, orgId: ownerAuth.user.orgId, context, model: conversation.model || '' });
     // 附件先校验，再决定正文是否可以为空（只发图不发字是允许的）
-    const attachments = resolveAttachments(ownerAuth, body.attachments);
+    const attachments = await resolveAttachments(ownerAuth, body.attachments);
     const rawContent = String(body.content ?? '').trim();
     if (!rawContent && !attachments.length) throw errors.badRequest('消息内容不能为空', 'VALIDATION_REQUIRED');
     const content = nonEmptyString(rawContent || '看看这张图', '消息内容', { max: MAX_MESSAGE_CHARS });
 
     const userMessageId = id('vibemsg');
     const now = nowIso();
-    q('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,attachments,created_at) VALUES (?,?,?,?,?,?,?,?)',
+    await aq('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,attachments,created_at) VALUES (?,?,?,?,?,?,?,?)',
       [userMessageId, conversation.id, 'user', content, conversation.model || null, 'SUCCEEDED', json(attachments), now]);
     const autoTitle = !conversation.title || conversation.title === DEFAULT_TITLE;
-    q('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [now, now, conversation.id]);
-    if (autoTitle) q('UPDATE vibecoding_conversations SET title=? WHERE id=?', [content.slice(0, 24), conversation.id]);
+    await aq('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [now, now, conversation.id]);
+    if (autoTitle) await aq('UPDATE vibecoding_conversations SET title=? WHERE id=?', [content.slice(0, 24), conversation.id]);
     return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId });
   }
   if (messageMatch && method === 'DELETE') {
     // 清空对话（保留会话本身与代码文件）
-    const { conversation } = ownConversation(ctx, messageMatch[1]);
+    const { conversation } = await ownConversation(ctx, messageMatch[1]);
     assertConversationEditable(conversation);
-    const removed = Number(count('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]) || 0);
-    persistConversationAttachmentImages(conversation.id);
-    q('DELETE FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]);
-    const preservedArtifacts = listArtifacts(conversation.id, { includeContent: true });
-    audit(ctx, 'VIBECODING_MESSAGES_CLEAR', 'VIBECODING_CONVERSATION', conversation.id, { count: removed }, { count: 0 });
+    const removed = Number(await acount('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]) || 0);
+    await persistConversationAttachmentImages(conversation.id);
+    await aq('DELETE FROM vibecoding_messages WHERE conversation_id=?', [conversation.id]);
+    const preservedArtifacts = await listArtifacts(conversation.id, { includeContent: true });
+    await audit(ctx, 'VIBECODING_MESSAGES_CLEAR', 'VIBECODING_CONVERSATION', conversation.id, { count: removed }, { count: 0 });
     return { cleared: true, removed, artifacts: preservedArtifacts };
   }
 
   // 重新生成：清掉最后一条用户消息之后的回答，重新问一次（失败重试也走这里）
   const regenerateMatch = part.match(/^\/conversations\/([^/]+)\/messages\/regenerate$/);
   if (regenerateMatch && method === 'POST') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, regenerateMatch[1]);
+    const { auth: ownerAuth, conversation } = await ownConversation(ctx, regenerateMatch[1]);
     assertConversationEditable(conversation);
-    const lastUser = row("SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
+    const lastUser = await arow("SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
     if (!lastUser) throw errors.badRequest('还没有可以重新生成的消息', 'VIBECODING_NO_MESSAGE');
-    persistConversationAttachmentImages(conversation.id);
-    q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
+    await persistConversationAttachmentImages(conversation.id);
+    await aq('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
       [conversation.id, lastUser.created_at, lastUser.created_at, lastUser.message_rowid]);
     return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId: lastUser.id });
   }
@@ -1173,42 +1173,42 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   // 编辑并重发：只允许改最后一条用户消息，改完连同后续回答一起重来
   const messageEditMatch = part.match(/^\/conversations\/([^/]+)\/messages\/([^/]+)\/edit$/);
   if (messageEditMatch && method === 'POST') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, messageEditMatch[1]);
+    const { auth: ownerAuth, conversation } = await ownConversation(ctx, messageEditMatch[1]);
     assertConversationEditable(conversation);
-    const message = row('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageEditMatch[2], conversation.id]);
+    const message = await arow('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageEditMatch[2], conversation.id]);
     if (!message) throw errors.notFound('消息不存在', 'VIBECODING_MESSAGE_NOT_FOUND');
     if (message.role !== 'user') throw errors.badRequest('只能编辑自己发出的消息', 'VIBECODING_MESSAGE_NOT_EDITABLE');
-    const lastUser = row("SELECT id FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
+    const lastUser = await arow("SELECT id FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
     if (lastUser?.id !== message.id) throw errors.badRequest('只能编辑最后一条消息', 'VIBECODING_MESSAGE_NOT_LAST');
     const content = nonEmptyString(body.content, '消息内容', { max: MAX_MESSAGE_CHARS });
-    persistConversationAttachmentImages(conversation.id);
-    q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
+    await persistConversationAttachmentImages(conversation.id);
+    await aq('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
       [conversation.id, message.created_at, message.created_at, message.message_rowid]);
-    q('UPDATE vibecoding_messages SET content=? WHERE id=?', [content, message.id]);
-    q('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [nowIso(), nowIso(), conversation.id]);
+    await aq('UPDATE vibecoding_messages SET content=? WHERE id=?', [content, message.id]);
+    await aq('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [nowIso(), nowIso(), conversation.id]);
     return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId: message.id });
   }
 
   // 删除单条消息：连同它之后的回答一起删，避免留下孤立的回复
   const messageDeleteMatch = part.match(/^\/conversations\/([^/]+)\/messages\/([^/]+)$/);
   if (messageDeleteMatch && method === 'DELETE') {
-    const { conversation } = ownConversation(ctx, messageDeleteMatch[1]);
+    const { conversation } = await ownConversation(ctx, messageDeleteMatch[1]);
     assertConversationEditable(conversation);
-    const message = row('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageDeleteMatch[2], conversation.id]);
+    const message = await arow('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageDeleteMatch[2], conversation.id]);
     if (!message) throw errors.notFound('消息不存在', 'VIBECODING_MESSAGE_NOT_FOUND');
-    persistConversationAttachmentImages(conversation.id);
-    q('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid >= ?))',
+    await persistConversationAttachmentImages(conversation.id);
+    await aq('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid >= ?))',
       [conversation.id, message.created_at, message.created_at, message.message_rowid]);
-    audit(ctx, 'VIBECODING_MESSAGE_DELETE', 'VIBECODING_CONVERSATION', conversation.id, { messageId: message.id, role: message.role }, null);
+    await audit(ctx, 'VIBECODING_MESSAGE_DELETE', 'VIBECODING_CONVERSATION', conversation.id, { messageId: message.id, role: message.role }, null);
     return { deleted: true, id: message.id };
   }
 
   const submitMatch = part.match(/^\/conversations\/([^/]+)\/submit$/);
   if (submitMatch && method === 'POST') {
-    const { auth: ownerAuth, conversation } = ownConversation(ctx, submitMatch[1]);
-    const user = activeStudent(ownerAuth);
-    vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
-    const allFiles = artifactsAsFiles(conversation.id);
+    const { auth: ownerAuth, conversation } = await ownConversation(ctx, submitMatch[1]);
+    const user = await activeStudent(ownerAuth);
+    await vibeCodingContext(user, conversation.lesson_id, conversation.class_session_id || 'MISSING_SESSION');
+    const allFiles = await artifactsAsFiles(conversation.id);
     // 2026-09-15 用户口径：**按产物提交**，不是按对话提交。
     // 「不需要提交整个作品，而是针对能展示出来的作品来提交」——学生做完一个游戏、一份 PPT，
     // 各自提交一次；后台才能把每一份都发到官网展示。同一份产物重复提交是覆盖（round+1），
@@ -1223,7 +1223,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
       throw errors.badRequest('只有网页、PPT、Word 和 Excel 可以作为作品提交', 'VIBECODING_ARTIFACT_NOT_SUBMITTABLE');
     }
     const includedNames = submissionArtifactNames(allFiles, entryFile);
-    const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
+    const existing = await arow('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
     // 没有老师点评这一环了：提交只是「交给平台」，可以反复提交（round+1），不再挡第二次
     // 与画布作品一致：提交即确认版权与展示授权，平台后续才可发布到作品广场
     if (ctx.body?.copyrightConfirmed !== true) {
@@ -1232,38 +1232,38 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const files = pickFiles(allFiles, includedNames);
     // 产物清单也要一起定格：作品广场靠它判断「这次交上来的到底是哪份产物」（见 submissionPreview），
     // 以及那份文档的配图在哪。只在提交这一刻取，之后学生再改也不会影响广场那一版。
-    const artifacts = snapshotArtifacts(conversation.id, includedNames, files, ownerAuth.user.id);
-    const transcript = rows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id])
+    const artifacts = await snapshotArtifacts(conversation.id, includedNames, files, ownerAuth.user.id);
+    const transcript = (await arows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id]))
       .map((message) => ({ role: message.role, content: message.content, createdAt: message.created_at }));
     const title = body.title === undefined || String(body.title).trim() === '' ? conversation.title : nonEmptyString(body.title, '作品标题', { max: 60 });
     const description = String(body.description || '').slice(0, 1000);
     const now = nowIso();
     const submissionId = existing?.id || id('vibesub');
-    transaction(() => {
+    await atransaction(async () => {
       if (existing) {
-        q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
+        await aq(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
              teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
              copyright_confirmed_at=?,copyright_confirmed_by=?,is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
              featured_at=NULL,unpublish_reason=NULL WHERE id=?`,
           [title, description, json(files), json(artifacts), json(transcript), entryFile, now, now, now, ownerAuth.user.id, submissionId]);
       } else {
-        q(`INSERT INTO vibecoding_submissions(
+        await aq(`INSERT INTO vibecoding_submissions(
              id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
              copyright_confirmed_at,copyright_confirmed_by
            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [submissionId, conversation.id, ownerAuth.user.id, ownerAuth.user.orgId, conversation.class_id, conversation.lesson_id,
             title, description, json(files), json(artifacts), json(transcript), entryFile, 1, 'PENDING', now, now, now, now, ownerAuth.user.id]);
       }
-      q("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
-      audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id, existing ? { round: existing.round } : null, { title, entryFile, round: Number(existing?.round || 0) + 1 });
+      await aq("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
+      await audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id, existing ? { round: existing.round } : null, { title, entryFile, round: Number(existing?.round || 0) + 1 });
     });
-    return normalizeSubmission(row(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
+    return normalizeSubmission(await arow(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
   }
 
   if (part === '/submissions' && method === 'GET') {
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
-    const total = Number(count('SELECT COUNT(*) n FROM vibecoding_submissions submission WHERE submission.student_id = ?', [auth.user.id]) || 0);
-    const items = rows(submissionSelect() + ' WHERE submission.student_id = ? ORDER BY submission.submitted_at DESC LIMIT ? OFFSET ?', [auth.user.id, limit, offset])
+    const total = Number(await acount('SELECT COUNT(*) n FROM vibecoding_submissions submission WHERE submission.student_id = ?', [auth.user.id]) || 0);
+    const items = (await arows(submissionSelect() + ' WHERE submission.student_id = ? ORDER BY submission.submitted_at DESC LIMIT ? OFFSET ?', [auth.user.id, limit, offset]))
       .map((item) => normalizeSubmission(item));
     return pageResult(items, { page, limit, total });
   }
@@ -1316,32 +1316,32 @@ export function rewriteLocalReferences(content, name, replacements) {
  * @param {{ctx: object, auth: object, conversation: object, entryFile: string,
  *          files: Record<string,string>, artifacts: Array<object>, title: string, description?: string}} input
  */
-export function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, files, artifacts, title, description = '' }) {
+export async function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, files, artifacts, title, description = '' }) {
   const now = nowIso();
-  const existing = row('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
+  const existing = await arow('SELECT * FROM vibecoding_submissions WHERE conversation_id = ? AND entry_file = ?', [conversation.id, entryFile]);
   const submissionId = existing?.id || id('vibesub');
   const transcript = json([]);
-  transaction(() => {
+  await atransaction(async () => {
     if (existing) {
-      q(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
+      await aq(`UPDATE vibecoding_submissions SET title=?,description=?,files=?,artifacts=?,transcript=?,entry_file=?,round=round+1,status='PENDING',
            teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,submitted_at=?,updated_at=?,
            copyright_confirmed_at=?,copyright_confirmed_by=?,is_public=0,share_token=NULL,published_at=NULL,published_by=NULL,
            featured_at=NULL,unpublish_reason=NULL WHERE id=?`,
         [title, description, json(files), json(artifacts), transcript, entryFile, now, now, now, auth.user.id, submissionId]);
     } else {
-      q(`INSERT INTO vibecoding_submissions(
+      await aq(`INSERT INTO vibecoding_submissions(
            id,conversation_id,student_id,org_id,class_id,lesson_id,title,description,files,artifacts,transcript,entry_file,round,status,submitted_at,created_at,updated_at,
            copyright_confirmed_at,copyright_confirmed_by
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [submissionId, conversation.id, auth.user.id, auth.user.orgId, conversation.class_id || null, conversation.lesson_id || null,
           title, description, json(files), json(artifacts), transcript, entryFile, 1, 'PENDING', now, now, now, now, auth.user.id]);
     }
-    q("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
-    audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id,
+    await aq("UPDATE vibecoding_conversations SET status='SUBMITTED',updated_at=? WHERE id=?", [now, conversation.id]);
+    await audit(ctx, 'VIBECODING_SUBMIT', 'VIBECODING_CONVERSATION', conversation.id,
       existing ? { round: existing.round } : null,
       { title, entryFile, round: Number(existing?.round || 0) + 1, source: 'STUDENT_RUNTIME' });
   });
-  return normalizeSubmission(row(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
+  return normalizeSubmission(await arow(submissionSelect() + ' WHERE submission.id = ?', [submissionId]), { includeContent: true });
 }
 
 /**
@@ -1350,22 +1350,22 @@ export function recordRuntimeSubmission({ ctx, auth, conversation, entryFile, fi
  * 作品广场也按「会话 × 产物」去重。所以按「学生 + 课 + 本次课堂」找一条现成的，
  * 没有就建一条（与老 /conversations 的查询同一套键，两处不会各建各的）。
  */
-export function ensureRuntimeConversation({ auth, lessonId, classSessionId, classId = null, title }) {
-  const existing = row(
+export async function ensureRuntimeConversation({ auth, lessonId, classSessionId, classId = null, title }) {
+  const existing = await arow(
     'SELECT * FROM vibecoding_conversations WHERE student_id=? AND org_id=? AND lesson_id=? AND class_session_id=? ORDER BY updated_at DESC LIMIT 1',
     [auth.user.id, auth.user.orgId, lessonId, classSessionId],
   );
   if (existing) return existing;
   const now = nowIso();
   const conversationId = id('vibeconv');
-  transaction(() => {
-    q(`INSERT INTO vibecoding_conversations(
+  await atransaction(async () => {
+    await aq(`INSERT INTO vibecoding_conversations(
          id,org_id,student_id,class_id,lesson_id,class_session_id,title,model,files,entry_file,status,last_message_at,created_at,updated_at
        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [conversationId, auth.user.orgId, auth.user.id, classId, lessonId, classSessionId,
         String(title || '创作环境').slice(0, 60), null, '{}', 'index.html', 'DRAFT', null, now, now]);
   });
-  return row('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversationId]);
+  return await arow('SELECT * FROM vibecoding_conversations WHERE id = ?', [conversationId]);
 }
 
 export async function handleVibeCoding(ctx) {

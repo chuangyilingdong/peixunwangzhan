@@ -153,12 +153,12 @@ try {
   /* ⑥ 模型级单价（2026-09-13）：界面上「按模型单独定价」承诺的行为 ——
        填了模型价就以模型价为准，没填的模型仍用模态价。这条规则以前只有后端实现、没人钉住。 */
   const pool = await import('../apps/server/src/services/computePool.js');
-  pool.saveComputePricing({perCall:{TEXT:60},models:{'p60-pricey-model':250,'p60-model':60}});
-  check('⑥ 填了模型价 → 按模型价算（250 分，而不是模态的 60 分）', pool.priceFenFor({ modality: 'TEXT', model: 'p60-pricey-model' }) === 250,
-    String(pool.priceFenFor({ modality: 'TEXT', model: 'p60-pricey-model' })));
-  check('⑥ 另一个填了模型价的模型按自己的价算（60 分）', pool.priceFenFor({ modality: 'TEXT', model: 'p60-model' }) === 60);
-  check('⑥ 没填模型价的模型 → 回落到模态价（60 分）', pool.priceFenFor({ modality: 'TEXT', model: 'p60-unlisted-model' }) === 60);
-  check('⑥ 不带模型时也回落到模态价（视频 500 分）', pool.priceFenFor({ modality: 'VIDEO' }) === 500, String(pool.priceFenFor({ modality: 'VIDEO' })));
+  await pool.saveComputePricing({perCall:{TEXT:60},models:{'p60-pricey-model':250,'p60-model':60}});
+  check('⑥ 填了模型价 → 按模型价算（250 分，而不是模态的 60 分）', await pool.priceFenFor({ modality: 'TEXT', model: 'p60-pricey-model' }) === 250,
+    String(await pool.priceFenFor({ modality: 'TEXT', model: 'p60-pricey-model' })));
+  check('⑥ 另一个填了模型价的模型按自己的价算（60 分）', await pool.priceFenFor({ modality: 'TEXT', model: 'p60-model' }) === 60);
+  check('⑥ 没填模型价的模型 → 回落到模态价（60 分）', await pool.priceFenFor({ modality: 'TEXT', model: 'p60-unlisted-model' }) === 60);
+  check('⑥ 不带模型时也回落到模态价（视频 500 分）', await pool.priceFenFor({ modality: 'VIDEO' }) === 500, String(await pool.priceFenFor({ modality: 'VIDEO' })));
 
   // Corrupt historical failed charges must never inflate the student pool or admin summaries.
   {

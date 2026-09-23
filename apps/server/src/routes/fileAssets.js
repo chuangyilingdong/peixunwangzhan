@@ -18,7 +18,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
-  previewInfoFor,
+  previewInfoFor, arows, arow, aq,
 } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
@@ -125,12 +125,12 @@ function validateVisibility(visibility, audience) {
   return visibility;
 }
 
-function validateAudienceOrgIds(orgIds) {
+async function validateAudienceOrgIds(orgIds) {
   if (!Array.isArray(orgIds) || !orgIds.length) return [];
   const cleaned = [...new Set(orgIds.map((id) => String(id).trim()).filter(Boolean))];
   if (cleaned.length > 200) throw errors.badRequest('最多 200 个机构', 'TOO_MANY_ORGS');
   const placeholders = cleaned.map(() => '?').join(',');
-  const found = rows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, cleaned).map((r) => r.id);
+  const found = (await arows(`SELECT id FROM organizations WHERE id IN (${placeholders})`, cleaned)).map((r) => r.id);
   if (found.length !== cleaned.length) throw errors.badRequest('存在不存在的机构', 'INVALID_ORG_ID');
   return cleaned;
 }
@@ -139,9 +139,9 @@ function validateAudienceOrgIds(orgIds) {
  * 教学素材（教师备课资料）的访问判定：必须挂在某个课时上，且该课时的课包
  * 对本机构有效授权（含未过期）。学生端不适用此函数。
  */
-function teachingAssetVisibleToOrg(fileId, orgId) {
+async function teachingAssetVisibleToOrg(fileId, orgId) {
   if (!orgId) return false;
-  return !!row(
+  return !!await arow(
     `SELECT 1 FROM course_lessons lesson
      JOIN course_series series ON series.id = lesson.series_id
      LEFT JOIN course_assignments assignment ON assignment.series_id = series.id AND assignment.org_id = ? AND ${assignmentActiveSql()}
@@ -176,9 +176,9 @@ function teachingAssetVisibleToOrg(fileId, orgId) {
  * @param {string} permission - 'READ' | 'DOWNLOAD'
  * @returns {Object} file_assets 行
  */
-export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
+export async function authorizeFileAccess(ctx, fileId, permission = 'READ') {
   if (!ctx?.auth?.user) throw errors.forbidden('需要登录', 'SESSION_INVALID');
-  const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
   if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
   if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
   if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
@@ -193,7 +193,7 @@ export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
   // 2. 教学素材是教师备课资料：学生一律不可访问，机构用户要求课包对本机构有效授权。
   if (file.category === 'TEACHING_ASSET') {
     if (role === 'STUDENT') throw errors.forbidden('教学素材仅教师可见', 'TEACHING_ASSET_FORBIDDEN');
-    if ((role === 'ORG_ADMIN' || role === 'TEACHER') && teachingAssetVisibleToOrg(file.id, orgId)) return file;
+    if ((role === 'ORG_ADMIN' || role === 'TEACHER') && await teachingAssetVisibleToOrg(file.id, orgId)) return file;
     throw errors.forbidden('当前账号无权访问此教学素材', 'FILE_ACCESS_DENIED');
   }
   // 3. 公开可见
@@ -202,7 +202,7 @@ export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
   if (file.owner_type === 'USER' && file.owner_user_id === user.id) return file;
   if (file.owner_type === 'ORG' && file.owner_org_id === orgId) return file;
   // 5. 授权表匹配
-  const grants = rows('SELECT * FROM file_access_grants WHERE file_id=?', [fileId]);
+  const grants = await arows('SELECT * FROM file_access_grants WHERE file_id=?', [fileId]);
   const now = Date.now();
   for (const g of grants) {
     if (g.expires_at && new Date(g.expires_at).getTime() <= now) continue;
@@ -224,7 +224,7 @@ export function authorizeFileAccess(ctx, fileId, permission = 'READ') {
 // 通过之后走的就是这里同一套落盘读取与 Range 处理，不另写一份。
 export async function prepareFileDownload(ctx, file) {
   if (file.storage_kind !== 'INTERNAL_PROXY') {
-    audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, external: true });
+    await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, external: true });
     return {
       id: file.id, fileName: file.file_name, mimeType: file.mime_type, fileSize: file.file_size,
       storageKind: file.storage_kind, storageUrl: file.storage_url, proxyRoute: file.proxy_route,
@@ -242,7 +242,7 @@ export async function prepareFileDownload(ctx, file) {
     contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(String(file.file_name || 'download').replace(/[\r\n"\\/]/g, '_'))}`,
   });
   if (redirectUrl) {
-    audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageBackend: 'oss', redirected: true });
+    await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageBackend: 'oss', redirected: true });
     return { __fileResponse: true, status: 302, redirectUrl };
   }
   const root = uploadRoot();
@@ -272,7 +272,7 @@ export async function prepareFileDownload(ctx, file) {
     }
     end = Math.min(end, total - 1); status = 206;
   }
-  audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageKey: file.storage_key, range: rangeHeader || null });
+  await audit(ctx, 'FILE_DOWNLOAD', 'FILE_ASSET', file.id, null, { storageKind: file.storage_kind, storageKey: file.storage_key, range: rangeHeader || null });
   const safeName = String(file.file_name || 'download').replace(/[\r\n"\\/]/g, '_');
   return {
     __fileResponse: true,
@@ -290,34 +290,34 @@ export async function prepareFileDownload(ctx, file) {
   };
 }
 
-export function linkFileAsset({ fileId, businessType, businessId, audience, grantedBy }) {
+export async function linkFileAsset({ fileId, businessType, businessId, audience, grantedBy }) {
   if (!fileId) return;
-  const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
   if (!file) return;
   const meta = parseJson(file.metadata, {});
   meta.linkedBusiness = { type: businessType, id: businessId };
-  q('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [json(meta), nowIso(), fileId]);
+  await aq('UPDATE file_assets SET metadata=?, updated_at=? WHERE id=?', [json(meta), nowIso(), fileId]);
   // 同步生成 grants：visibility → grants
-  syncFileGrants(fileId, file, audience, grantedBy);
+  await syncFileGrants(fileId, file, audience, grantedBy);
 }
 
-function syncFileGrants(fileId, file, audience, grantedBy) {
+async function syncFileGrants(fileId, file, audience, grantedBy) {
   const now = nowIso();
-  q('DELETE FROM file_access_grants WHERE file_id=?', [fileId]);
+  await aq('DELETE FROM file_access_grants WHERE file_id=?', [fileId]);
   if (file.visibility === 'PUBLIC_PLATFORM' || file.visibility === 'PUBLIC_RELEASE') {
-    q('INSERT INTO file_access_grants(id,file_id,grant_type,permission,granted_by,created_at) VALUES (?,?,?,?,?,?)', [id('fag'), fileId, 'PUBLIC', 'READ', grantedBy || null, now]);
+    await aq('INSERT INTO file_access_grants(id,file_id,grant_type,permission,granted_by,created_at) VALUES (?,?,?,?,?,?)', [id('fag'), fileId, 'PUBLIC', 'READ', grantedBy || null, now]);
     return;
   }
   if (file.visibility === 'ORG' && file.owner_org_id) {
-    q('INSERT INTO file_access_grants(id,file_id,grant_type,org_id,permission,granted_by,created_at) VALUES (?,?,?,?,?,?,?)', [id('fag'), fileId, 'ORG', file.owner_org_id, 'READ', grantedBy || null, now]);
+    await aq('INSERT INTO file_access_grants(id,file_id,grant_type,org_id,permission,granted_by,created_at) VALUES (?,?,?,?,?,?,?)', [id('fag'), fileId, 'ORG', file.owner_org_id, 'READ', grantedBy || null, now]);
   }
   if (file.visibility === 'ASSIGNED_ORGS' && Array.isArray(audience?.orgIds)) {
     for (const oid of audience.orgIds) {
-      q('INSERT INTO file_access_grants(id,file_id,grant_type,org_id,permission,granted_by,created_at) VALUES (?,?,?,?,?,?,?)', [id('fag'), fileId, 'ORG', oid, 'READ', grantedBy || null, now]);
+      await aq('INSERT INTO file_access_grants(id,file_id,grant_type,org_id,permission,granted_by,created_at) VALUES (?,?,?,?,?,?,?)', [id('fag'), fileId, 'ORG', oid, 'READ', grantedBy || null, now]);
     }
   }
   if (file.visibility === 'PRIVATE' && file.owner_user_id) {
-    q('INSERT INTO file_access_grants(id,file_id,grant_type,user_id,permission,granted_by,created_at) VALUES (?,?,?,?,?,?,?)', [id('fag'), fileId, 'USER', file.owner_user_id, 'READ', grantedBy || null, now]);
+    await aq('INSERT INTO file_access_grants(id,file_id,grant_type,user_id,permission,granted_by,created_at) VALUES (?,?,?,?,?,?,?)', [id('fag'), fileId, 'USER', file.owner_user_id, 'READ', grantedBy || null, now]);
   }
 }
 
@@ -326,7 +326,7 @@ async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null
   let multipart = { fields: {}, file: null };
   try { multipart = parseMultipartFormData(ctx.rawBody || Buffer.alloc(0), contentType); }
   catch (error) {
-    audit(ctx, 'FILE_UPLOAD_REJECTED', 'FILE_ASSET', null, null, { code: error?.code || 'INVALID_MULTIPART' }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
+    await audit(ctx, 'FILE_UPLOAD_REJECTED', 'FILE_ASSET', null, null, { code: error?.code || 'INVALID_MULTIPART' }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
     throw error;
   }
   const fields = multipart.fields;
@@ -335,17 +335,17 @@ async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null
   const audience = fields.audience ? (() => { try { return JSON.parse(fields.audience); } catch { throw errors.badRequest('audience JSON 无效', 'INVALID_AUDIENCE'); } })() : {};
   const visibility = validateVisibility(String(fields.visibility || defaultVisibility).toUpperCase(), audience);
   if (ownerType === 'ORG' && !['ORG', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('机构文件仅允许 PRIVATE/ORG/ASSIGNED_ORGS', 'INVALID_ORG_VISIBILITY');
-  const orgIds = visibility === 'ASSIGNED_ORGS' ? validateAudienceOrgIds(audience.orgIds) : [];
+  const orgIds = visibility === 'ASSIGNED_ORGS' ? await validateAudienceOrgIds(audience.orgIds) : [];
   if (ownerType === 'ORG' && visibility === 'ASSIGNED_ORGS' && !orgIds.includes(ownerOrgId)) orgIds.unshift(ownerOrgId);
   const expiresAt = fields.expiresAt ? new Date(fields.expiresAt).toISOString() : null;
   if (fields.expiresAt && Number.isNaN(new Date(fields.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
 
-  const releaseUpload = reserveUpload({ userId: auth.user.id, orgId: ownerOrgId || `platform:${ownerType}`, bytes: multipart.file?.buffer?.length || 0 });
+  const releaseUpload = await reserveUpload({ userId: auth.user.id, orgId: ownerOrgId || `platform:${ownerType}`, bytes: multipart.file?.buffer?.length || 0 });
   let stored;
   try {
     stored = await persistSecureUpload(multipart.file);
   } catch (error) {
-    audit(ctx, 'FILE_UPLOAD_REJECTED', 'FILE_ASSET', null, null, {
+    await audit(ctx, 'FILE_UPLOAD_REJECTED', 'FILE_ASSET', null, null, {
       code: error?.code || 'UPLOAD_REJECTED', fileName: multipart.file?.fileName || null,
       mimeType: multipart.file?.mimeType || null, fileSize: multipart.file?.buffer?.length || 0,
     }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
@@ -359,13 +359,13 @@ async function createUploadedFileAsset(ctx, { auth, ownerType, ownerOrgId = null
     // 老数据没有这个字段 → 一律当本地盘，所以**不需要为历史数据做迁移**，回滚也就是删掉这个标记。
     const metadata = { upload: { originalName: stored.fileName, security: stored.security, uploadedAt: now }, storageBackend: stored.storageBackend || 'local' };
     const proxyRoute = `/api/${scope}/file-assets/${fileId}/download`;
-    q(
+    await aq(
       `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [fileId, ownerType, ownerOrgId, ownerType === 'USER' ? auth.user.id : null, 'INTERNAL_PROXY', null, stored.storageKey, proxyRoute, null, stored.fileName, stored.mimeType, stored.fileSize, stored.checksum, category, visibility, 'ACTIVE', 'NOT_REQUIRED', expiresAt, json(metadata), auth.user.id, now, now],
     );
-    const created = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
-    syncFileGrants(fileId, created, { orgIds }, auth.user.id);
-    audit(ctx, 'FILE_UPLOAD', 'FILE_ASSET', fileId, null, { category, visibility, mimeType: stored.mimeType, fileSize: stored.fileSize, checksum: stored.checksum, storageKey: stored.storageKey, scanner: stored.security }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
+    const created = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    await syncFileGrants(fileId, created, { orgIds }, auth.user.id);
+    await audit(ctx, 'FILE_UPLOAD', 'FILE_ASSET', fileId, null, { category, visibility, mimeType: stored.mimeType, fileSize: stored.fileSize, checksum: stored.checksum, storageKey: stored.storageKey, scanner: stored.security }, ownerOrgId ? { orgId: ownerOrgId } : undefined);
     releaseUpload();
     return normalizeFileAsset(created);
   } catch (error) {
@@ -385,14 +385,14 @@ export async function storeGeneratedAsset({ buffer, mimeType, fileName, ownerUse
   const stored = await persistSecureUpload({ fileName, mimeType, buffer });
   const fileId = id('file');
   const now = nowIso();
-  q(
+  await aq(
     `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [fileId, ownerUserId ? 'USER' : 'PLATFORM', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, stored.storageKey,
       `/api/public/file-assets/${fileId}/download`, null, stored.fileName, stored.mimeType, stored.fileSize,
       stored.checksum, category, visibility, 'ACTIVE', 'NOT_REQUIRED', null,
       json({ ...metadata, generated: true, security: stored.security, storageBackend: stored.storageBackend || 'local' }), ownerUserId, now, now],
   );
-  const created = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+  const created = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
   return { id: fileId, url: `/api/public/file-assets/${fileId}/download`, fileName: stored.fileName, mimeType: stored.mimeType, bytes: stored.fileSize, row: created };
 }
 
@@ -413,7 +413,7 @@ export async function storeStudentArtifactAsset({ buffer, mimeType, fileName, ow
   const stored = await persistSecureUpload({ fileName, mimeType, buffer });
   const fileId = id('file');
   const now = nowIso();
-  q(
+  await aq(
     `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [fileId, 'USER', ownerOrgId, ownerUserId, 'INTERNAL_PROXY', null, stored.storageKey,
       `/api/student/file-assets/${fileId}/download`, null, stored.fileName, stored.mimeType, stored.fileSize,
@@ -444,7 +444,7 @@ export async function handleAdminFileAssets(ctx) {
     if (status) { conditions.push('status=?'); params.push(status); }
     if (visibility) { conditions.push('visibility=?'); params.push(visibility); }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-    const items = rows(`SELECT * FROM file_assets ${where} ORDER BY created_at DESC LIMIT ${limit}`, params).map(normalizeFileAsset);
+    const items = (await arows(`SELECT * FROM file_assets ${where} ORDER BY created_at DESC LIMIT ${limit}`, params)).map(normalizeFileAsset);
     return { items, total: items.length, limit };
   }
   if (part === '/file-assets/upload' && method === 'POST') {
@@ -461,7 +461,7 @@ export async function handleAdminFileAssets(ctx) {
     if (!CATEGORIES.has(category)) throw errors.badRequest('文件分类无效', 'INVALID_FILE_CATEGORY');
     const visibility = validateVisibility(String(body.visibility || 'PRIVATE').toUpperCase(), body.audience || {});
     const audience = body.audience || {};
-    const orgIds = visibility === 'ASSIGNED_ORGS' ? validateAudienceOrgIds(audience.orgIds) : [];
+    const orgIds = visibility === 'ASSIGNED_ORGS' ? await validateAudienceOrgIds(audience.orgIds) : [];
     const reviewStatus = String(body.reviewStatus || 'NOT_REQUIRED').toUpperCase();
     if (!REVIEW_STATUSES.has(reviewStatus)) throw errors.badRequest('reviewStatus 无效', 'INVALID_REVIEW_STATUS');
     const mimeType = body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null;
@@ -472,73 +472,73 @@ export async function handleAdminFileAssets(ctx) {
     const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {};
     const fileId = id('file');
     const now = nowIso();
-    q(
+    await aq(
       `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [fileId, 'PLATFORM', null, null, storageKind, storage.storageUrl, storage.storageKey, storage.proxyRoute, body.publicPath ? String(body.publicPath).trim().slice(0, 500) : null, fileName, mimeType, fileSize, checksum, category, visibility, 'ACTIVE', reviewStatus, expiresAt, json(metadata), auth.user.id, now, now],
     );
-    const created = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
-    syncFileGrants(fileId, created, { orgIds }, auth.user.id);
-    audit(ctx, 'FILE_ASSET_CREATE', 'FILE_ASSET', fileId, null, { category, visibility, storageKind });
+    const created = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    await syncFileGrants(fileId, created, { orgIds }, auth.user.id);
+    await audit(ctx, 'FILE_ASSET_CREATE', 'FILE_ASSET', fileId, null, { category, visibility, storageKind });
     return normalizeFileAsset(created);
   }
 
   const downloadMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
-  if (downloadMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, downloadMatch[1], 'DOWNLOAD'));
+  if (downloadMatch && method === 'GET') return prepareFileDownload(ctx, await authorizeFileAccess(ctx, downloadMatch[1], 'DOWNLOAD'));
 
   const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
   if (idMatch && method === 'GET') {
     const auth = requireRole(ctx, ['SUPER_ADMIN', 'ORG_ADMIN', 'TEACHER', 'STUDENT']);
-    return normalizeFileAsset(authorizeFileAccess(ctx, idMatch[1], 'READ'));
+    return normalizeFileAsset(await authorizeFileAccess(ctx, idMatch[1], 'READ'));
   }
   if (idMatch && method === 'PUT') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     const body = ctx.body || {};
     if (body.storageKind !== undefined || body.storageUrl !== undefined || body.storageKey !== undefined || body.proxyRoute !== undefined) {
       const storageKind = body.storageKind === undefined ? file.storage_kind : String(body.storageKind).toUpperCase();
       const storage = validateStoragePayload(storageKind, body);
-      q('UPDATE file_assets SET storage_kind=?, storage_url=?, storage_key=?, proxy_route=?, updated_at=? WHERE id=?', [storageKind, storage.storageUrl, storage.storageKey, storage.proxyRoute, nowIso(), file.id]);
+      await aq('UPDATE file_assets SET storage_kind=?, storage_url=?, storage_key=?, proxy_route=?, updated_at=? WHERE id=?', [storageKind, storage.storageUrl, storage.storageKey, storage.proxyRoute, nowIso(), file.id]);
     }
-    if (body.fileName !== undefined) q('UPDATE file_assets SET file_name=?, updated_at=? WHERE id=?', [nonEmptyString(body.fileName, '文件名', { max: 500 }), nowIso(), file.id]);
-    if (body.mimeType !== undefined) q('UPDATE file_assets SET mime_type=?, updated_at=? WHERE id=?', [body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null, nowIso(), file.id]);
-    if (body.checksum !== undefined) q('UPDATE file_assets SET checksum=?, updated_at=? WHERE id=?', [body.checksum ? String(body.checksum).trim().slice(0, 128) : null, nowIso(), file.id]);
+    if (body.fileName !== undefined) await aq('UPDATE file_assets SET file_name=?, updated_at=? WHERE id=?', [nonEmptyString(body.fileName, '文件名', { max: 500 }), nowIso(), file.id]);
+    if (body.mimeType !== undefined) await aq('UPDATE file_assets SET mime_type=?, updated_at=? WHERE id=?', [body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null, nowIso(), file.id]);
+    if (body.checksum !== undefined) await aq('UPDATE file_assets SET checksum=?, updated_at=? WHERE id=?', [body.checksum ? String(body.checksum).trim().slice(0, 128) : null, nowIso(), file.id]);
     if (body.visibility !== undefined) {
       const visibility = validateVisibility(String(body.visibility).toUpperCase(), body.audience || {});
-      q('UPDATE file_assets SET visibility=?, updated_at=? WHERE id=?', [visibility, nowIso(), file.id]);
+      await aq('UPDATE file_assets SET visibility=?, updated_at=? WHERE id=?', [visibility, nowIso(), file.id]);
       const audience = body.audience || {};
-      const orgIds = visibility === 'ASSIGNED_ORGS' ? validateAudienceOrgIds(audience.orgIds) : [];
-      const updated = row('SELECT * FROM file_assets WHERE id=?', [file.id]);
-      syncFileGrants(file.id, updated, { orgIds }, auth.user.id);
+      const orgIds = visibility === 'ASSIGNED_ORGS' ? await validateAudienceOrgIds(audience.orgIds) : [];
+      const updated = await arow('SELECT * FROM file_assets WHERE id=?', [file.id]);
+      await syncFileGrants(file.id, updated, { orgIds }, auth.user.id);
     }
     if (body.reviewStatus !== undefined) {
       const reviewStatus = String(body.reviewStatus).toUpperCase();
       if (!REVIEW_STATUSES.has(reviewStatus)) throw errors.badRequest('reviewStatus 无效', 'INVALID_REVIEW_STATUS');
-      assertTransition(ctx, 'fileReview', file.review_status, reviewStatus, { targetType: 'FILE_REVIEW', targetId: file.id, before: file, allowSameState: true });
-      q('UPDATE file_assets SET review_status=?, updated_at=? WHERE id=?', [reviewStatus, nowIso(), file.id]);
+      await assertTransition(ctx, 'fileReview', file.review_status, reviewStatus, { targetType: 'FILE_REVIEW', targetId: file.id, before: file, allowSameState: true });
+      await aq('UPDATE file_assets SET review_status=?, updated_at=? WHERE id=?', [reviewStatus, nowIso(), file.id]);
     }
     if (body.status !== undefined) {
       const status = String(body.status).toUpperCase();
       if (!['PENDING', 'ACTIVE', 'DISABLED', 'REMOVED'].includes(status)) throw errors.badRequest('status 无效', 'INVALID_FILE_STATUS');
-      assertTransition(ctx, 'fileAsset', file.status, status, { targetType: 'FILE_ASSET', targetId: file.id, before: file, allowSameState: true });
-      q('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
+      await assertTransition(ctx, 'fileAsset', file.status, status, { targetType: 'FILE_ASSET', targetId: file.id, before: file, allowSameState: true });
+      await aq('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
     }
     if (body.expiresAt !== undefined) {
       const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
       if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
-      q('UPDATE file_assets SET expires_at=?, updated_at=? WHERE id=?', [expiresAt, nowIso(), file.id]);
+      await aq('UPDATE file_assets SET expires_at=?, updated_at=? WHERE id=?', [expiresAt, nowIso(), file.id]);
     }
-    audit(ctx, 'FILE_ASSET_UPDATE', 'FILE_ASSET', file.id, normalizeFileAsset(file), body);
-    return normalizeFileAsset(row('SELECT * FROM file_assets WHERE id=?', [file.id]));
+    await audit(ctx, 'FILE_ASSET_UPDATE', 'FILE_ASSET', file.id, normalizeFileAsset(file), body);
+    return normalizeFileAsset(await arow('SELECT * FROM file_assets WHERE id=?', [file.id]));
   }
   if (idMatch && method === 'DELETE') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
-    assertTransition(ctx, 'fileAsset', file.status, 'REMOVED', { targetType: 'FILE_ASSET', targetId: file.id, before: file });
-    q("UPDATE file_assets SET status='REMOVED', updated_at=? WHERE id=?", [nowIso(), file.id]);
-    q('DELETE FROM file_access_grants WHERE file_id=?', [file.id]);
-    audit(ctx, 'FILE_ASSET_REMOVE', 'FILE_ASSET', file.id, normalizeFileAsset(file), null);
+    await assertTransition(ctx, 'fileAsset', file.status, 'REMOVED', { targetType: 'FILE_ASSET', targetId: file.id, before: file });
+    await aq("UPDATE file_assets SET status='REMOVED', updated_at=? WHERE id=?", [nowIso(), file.id]);
+    await aq('DELETE FROM file_access_grants WHERE file_id=?', [file.id]);
+    await audit(ctx, 'FILE_ASSET_REMOVE', 'FILE_ASSET', file.id, normalizeFileAsset(file), null);
     return { id: file.id, status: 'REMOVED' };
   }
 
@@ -547,15 +547,15 @@ export async function handleAdminFileAssets(ctx) {
   if (grantsMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const fileId = grantsMatch[1];
-    const file = row('SELECT id FROM file_assets WHERE id=?', [fileId]);
+    const file = await arow('SELECT id FROM file_assets WHERE id=?', [fileId]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
-    const grants = rows('SELECT * FROM file_access_grants WHERE file_id=? ORDER BY created_at DESC', [fileId]).map(normalizeGrant);
+    const grants = (await arows('SELECT * FROM file_access_grants WHERE file_id=? ORDER BY created_at DESC', [fileId])).map(normalizeGrant);
     return { items: grants, total: grants.length };
   }
   if (grantsMatch && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const fileId = grantsMatch[1];
-    const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     const body = ctx.body || {};
     const grantType = String(body.grantType || '').toUpperCase();
@@ -568,28 +568,28 @@ export async function handleAdminFileAssets(ctx) {
     // 角色授权必须绑定机构，否则一个机构的 STUDENT/TEACHER 角色会意外获得所有机构的文件。
     if (grantType === 'ROLE' && !orgId) throw errors.badRequest('ROLE 授权必须提供 orgId', 'ORG_REQUIRED');
     if (grantType === 'ORG' && !orgId) throw errors.badRequest('ORG 授权必须提供 orgId', 'ORG_REQUIRED');
-    if (orgId && !row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    if (orgId && !await arow('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     const userId = body.userId || null;
     if (grantType === 'USER' && !userId) throw errors.badRequest('USER 授权必须提供 userId', 'USER_REQUIRED');
-    const grantedUser = userId ? row('SELECT id,org_id FROM users WHERE id=?', [userId]) : null;
+    const grantedUser = userId ? await arow('SELECT id,org_id FROM users WHERE id=?', [userId]) : null;
     if (userId && !grantedUser) throw errors.badRequest('用户不存在', 'USER_NOT_FOUND');
     if (grantType === 'USER' && orgId && grantedUser.org_id !== orgId) throw errors.badRequest('用户不属于指定机构', 'USER_ORG_MISMATCH');
     const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
     if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
     const grantId = id('fag');
     const now = nowIso();
-    q('INSERT INTO file_access_grants(id,file_id,grant_type,org_id,user_id,role,permission,granted_by,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [grantId, fileId, grantType, orgId, userId, role, permission, auth.user.id, expiresAt, now]);
-    audit(ctx, 'FILE_ACCESS_GRANT_CREATE', 'FILE_ACCESS_GRANT', grantId, null, { fileId, grantType, permission });
-    return normalizeGrant(row('SELECT * FROM file_access_grants WHERE id=?', [grantId]));
+    await aq('INSERT INTO file_access_grants(id,file_id,grant_type,org_id,user_id,role,permission,granted_by,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [grantId, fileId, grantType, orgId, userId, role, permission, auth.user.id, expiresAt, now]);
+    await audit(ctx, 'FILE_ACCESS_GRANT_CREATE', 'FILE_ACCESS_GRANT', grantId, null, { fileId, grantType, permission });
+    return normalizeGrant(await arow('SELECT * FROM file_access_grants WHERE id=?', [grantId]));
   }
   const grantDelMatch = part.match(/^\/file-assets\/([^/]+)\/grants\/([^/]+)$/);
   if (grantDelMatch && method === 'DELETE') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const fileId = grantDelMatch[1]; const grantId = grantDelMatch[2];
-    const target = row('SELECT * FROM file_access_grants WHERE id=? AND file_id=?', [grantId, fileId]);
+    const target = await arow('SELECT * FROM file_access_grants WHERE id=? AND file_id=?', [grantId, fileId]);
     if (!target) throw errors.notFound('授权不存在', 'GRANT_NOT_FOUND');
-    q('DELETE FROM file_access_grants WHERE id=?', [grantId]);
-    audit(ctx, 'FILE_ACCESS_GRANT_DELETE', 'FILE_ACCESS_GRANT', grantId, normalizeGrant(target), null);
+    await aq('DELETE FROM file_access_grants WHERE id=?', [grantId]);
+    await audit(ctx, 'FILE_ACCESS_GRANT_DELETE', 'FILE_ACCESS_GRANT', grantId, normalizeGrant(target), null);
     return { id: grantId };
   }
   return null;
@@ -679,15 +679,15 @@ export async function handleOrgFileAssets(ctx) {
   const previewMatch = part.match(/^\/file-assets\/([^/]+)\/preview$/);
   if (previewMatch && method === 'GET') {
     const fileId = previewMatch[1];
-    const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     const ticketOk = verifyPreviewTicket(fileId, ctx.search.get('t'));
     if (!ticketOk) {
       const session = requireRole(ctx, ['ORG_ADMIN', 'TEACHER', 'STUDENT']);
       if (!session.user.orgId) throw errors.forbidden('当前账号未绑定机构', 'ORG_SCOPE_REQUIRED');
-      authorizeFileAccess(ctx, fileId, 'READ');
+      await authorizeFileAccess(ctx, fileId, 'READ');
     }
-    audit(ctx, 'FILE_PREVIEW', 'FILE_ASSET', file.id, null, { ticket: ticketOk });
+    await audit(ctx, 'FILE_PREVIEW', 'FILE_ASSET', file.id, null, { ticket: ticketOk });
     return await prepareFilePreview(ctx, file);
   }
 
@@ -699,8 +699,8 @@ export async function handleOrgFileAssets(ctx) {
   // 老师**点开素材那一刻**再来拿一张新鲜的，于是「课包里的素材随时能看」不依赖任何长时链接。
   const ticketMatch = part.match(/^\/file-assets\/([^/]+)\/preview-ticket$/);
   if (ticketMatch && method === 'GET') {
-    const file = authorizeFileAccess(ctx, ticketMatch[1], 'READ');
-    return previewInfoFor(file.id);
+    const file = await authorizeFileAccess(ctx, ticketMatch[1], 'READ');
+    return await previewInfoFor(file.id);
   }
 
   if (part === '/file-assets' && method === 'GET') {
@@ -715,7 +715,7 @@ export async function handleOrgFileAssets(ctx) {
     const where = `WHERE (${conditions.join(' ')}) AND category<>'TEACHING_ASSET' ${category ? 'AND category=?' : ''}`;
     const params = [currentOrgId, currentOrgId, currentOrgId];
     if (category) params.push(category);
-    const items = rows(`SELECT DISTINCT file_assets.* FROM file_assets ${where} ORDER BY created_at DESC LIMIT ${limit}`, params).map(normalizeFileAsset);
+    const items = (await arows(`SELECT DISTINCT file_assets.* FROM file_assets ${where} ORDER BY created_at DESC LIMIT ${limit}`, params)).map(normalizeFileAsset);
     return { items, total: items.length, limit };
   }
   if (part === '/file-assets/upload' && method === 'POST') {
@@ -733,7 +733,7 @@ export async function handleOrgFileAssets(ctx) {
     const visibility = validateVisibility(String(body.visibility || 'ORG').toUpperCase(), body.audience || {});
     if (!['ORG', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('机构文件仅允许 PRIVATE/ORG/ASSIGNED_ORGS', 'INVALID_ORG_VISIBILITY');
     const audience = body.audience || {};
-    let orgIds = visibility === 'ASSIGNED_ORGS' ? validateAudienceOrgIds(audience.orgIds) : [];
+    let orgIds = visibility === 'ASSIGNED_ORGS' ? await validateAudienceOrgIds(audience.orgIds) : [];
     if (visibility === 'ASSIGNED_ORGS' && !orgIds.includes(currentOrgId)) orgIds = [currentOrgId, ...orgIds];
     const reviewStatus = String(body.reviewStatus || 'NOT_REQUIRED').toUpperCase();
     if (!REVIEW_STATUSES.has(reviewStatus)) throw errors.badRequest('reviewStatus 无效', 'INVALID_REVIEW_STATUS');
@@ -744,79 +744,79 @@ export async function handleOrgFileAssets(ctx) {
     if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
     const fileId = id('file');
     const now = nowIso();
-    q(
+    await aq(
       `INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [fileId, 'ORG', currentOrgId, null, storageKind, storage.storageUrl, storage.storageKey, storage.proxyRoute, body.publicPath ? String(body.publicPath).trim().slice(0, 500) : null, fileName, mimeType, fileSize, checksum, category, visibility, 'ACTIVE', reviewStatus, expiresAt, json({}), auth.user.id, now, now],
     );
-    const created = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
-    syncFileGrants(fileId, created, { orgIds }, auth.user.id);
-    audit(ctx, 'FILE_ASSET_CREATE', 'FILE_ASSET', fileId, null, { category, visibility, storageKind }, { orgId: currentOrgId });
+    const created = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    await syncFileGrants(fileId, created, { orgIds }, auth.user.id);
+    await audit(ctx, 'FILE_ASSET_CREATE', 'FILE_ASSET', fileId, null, { category, visibility, storageKind }, { orgId: currentOrgId });
     return normalizeFileAsset(created);
   }
 
   const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
   if (idMatch && method === 'GET') {
-    return normalizeFileAsset(authorizeFileAccess(ctx, idMatch[1], 'READ'));
+    return normalizeFileAsset(await authorizeFileAccess(ctx, idMatch[1], 'READ'));
   }
   if (idMatch && method === 'PUT') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可更新文件', 'ORG_ADMIN_REQUIRED');
-    const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.owner_type !== 'ORG' || file.owner_org_id !== currentOrgId) throw errors.forbidden('只能修改本机构文件', 'FILE_OWNER_REQUIRED');
     const body = ctx.body || {};
     if (body.storageKind !== undefined || body.storageUrl !== undefined || body.storageKey !== undefined || body.proxyRoute !== undefined) {
       const storageKind = body.storageKind === undefined ? file.storage_kind : String(body.storageKind).toUpperCase();
       const storage = validateStoragePayload(storageKind, body);
-      q('UPDATE file_assets SET storage_kind=?, storage_url=?, storage_key=?, proxy_route=?, updated_at=? WHERE id=?', [storageKind, storage.storageUrl, storage.storageKey, storage.proxyRoute, nowIso(), file.id]);
+      await aq('UPDATE file_assets SET storage_kind=?, storage_url=?, storage_key=?, proxy_route=?, updated_at=? WHERE id=?', [storageKind, storage.storageUrl, storage.storageKey, storage.proxyRoute, nowIso(), file.id]);
     }
-    if (body.fileName !== undefined) q('UPDATE file_assets SET file_name=?, updated_at=? WHERE id=?', [nonEmptyString(body.fileName, '文件名', { max: 500 }), nowIso(), file.id]);
-    if (body.mimeType !== undefined) q('UPDATE file_assets SET mime_type=?, updated_at=? WHERE id=?', [body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null, nowIso(), file.id]);
-    if (body.checksum !== undefined) q('UPDATE file_assets SET checksum=?, updated_at=? WHERE id=?', [body.checksum ? String(body.checksum).trim().slice(0, 128) : null, nowIso(), file.id]);
+    if (body.fileName !== undefined) await aq('UPDATE file_assets SET file_name=?, updated_at=? WHERE id=?', [nonEmptyString(body.fileName, '文件名', { max: 500 }), nowIso(), file.id]);
+    if (body.mimeType !== undefined) await aq('UPDATE file_assets SET mime_type=?, updated_at=? WHERE id=?', [body.mimeType ? String(body.mimeType).trim().slice(0, 120) : null, nowIso(), file.id]);
+    if (body.checksum !== undefined) await aq('UPDATE file_assets SET checksum=?, updated_at=? WHERE id=?', [body.checksum ? String(body.checksum).trim().slice(0, 128) : null, nowIso(), file.id]);
     if (body.visibility !== undefined) {
       const visibility = validateVisibility(String(body.visibility).toUpperCase(), body.audience || {});
       if (!['ORG', 'ASSIGNED_ORGS', 'PRIVATE'].includes(visibility)) throw errors.badRequest('机构文件仅允许 PRIVATE/ORG/ASSIGNED_ORGS', 'INVALID_ORG_VISIBILITY');
-      q('UPDATE file_assets SET visibility=?, updated_at=? WHERE id=?', [visibility, nowIso(), file.id]);
+      await aq('UPDATE file_assets SET visibility=?, updated_at=? WHERE id=?', [visibility, nowIso(), file.id]);
       const audience = body.audience || {};
-      let orgIds = visibility === 'ASSIGNED_ORGS' ? validateAudienceOrgIds(audience.orgIds) : [];
+      let orgIds = visibility === 'ASSIGNED_ORGS' ? await validateAudienceOrgIds(audience.orgIds) : [];
       if (visibility === 'ASSIGNED_ORGS' && !orgIds.includes(currentOrgId)) orgIds = [currentOrgId, ...orgIds];
-      const updated = row('SELECT * FROM file_assets WHERE id=?', [file.id]);
-      syncFileGrants(file.id, updated, { orgIds }, auth.user.id);
+      const updated = await arow('SELECT * FROM file_assets WHERE id=?', [file.id]);
+      await syncFileGrants(file.id, updated, { orgIds }, auth.user.id);
     }
     if (body.reviewStatus !== undefined) {
       const reviewStatus = String(body.reviewStatus).toUpperCase();
       if (!REVIEW_STATUSES.has(reviewStatus)) throw errors.badRequest('reviewStatus 无效', 'INVALID_REVIEW_STATUS');
-      assertTransition(ctx, 'fileReview', file.review_status, reviewStatus, { targetType: 'FILE_REVIEW', targetId: file.id, before: file, allowSameState: true });
-      q('UPDATE file_assets SET review_status=?, updated_at=? WHERE id=?', [reviewStatus, nowIso(), file.id]);
+      await assertTransition(ctx, 'fileReview', file.review_status, reviewStatus, { targetType: 'FILE_REVIEW', targetId: file.id, before: file, allowSameState: true });
+      await aq('UPDATE file_assets SET review_status=?, updated_at=? WHERE id=?', [reviewStatus, nowIso(), file.id]);
     }
     if (body.status !== undefined) {
       const status = String(body.status).toUpperCase();
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('status 无效', 'INVALID_FILE_STATUS');
-      assertTransition(ctx, 'fileAsset', file.status, status, { targetType: 'FILE_ASSET', targetId: file.id, before: file, allowSameState: true });
-      q('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
+      await assertTransition(ctx, 'fileAsset', file.status, status, { targetType: 'FILE_ASSET', targetId: file.id, before: file, allowSameState: true });
+      await aq('UPDATE file_assets SET status=?, updated_at=? WHERE id=?', [status, nowIso(), file.id]);
     }
     if (body.expiresAt !== undefined) {
       const expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
       if (body.expiresAt && Number.isNaN(new Date(body.expiresAt).getTime())) throw errors.badRequest('expiresAt 无效', 'INVALID_EXPIRES_AT');
-      q('UPDATE file_assets SET expires_at=?, updated_at=? WHERE id=?', [expiresAt, nowIso(), file.id]);
+      await aq('UPDATE file_assets SET expires_at=?, updated_at=? WHERE id=?', [expiresAt, nowIso(), file.id]);
     }
-    audit(ctx, 'FILE_ASSET_UPDATE', 'FILE_ASSET', file.id, normalizeFileAsset(file), body, { orgId: currentOrgId });
-    return normalizeFileAsset(row('SELECT * FROM file_assets WHERE id=?', [file.id]));
+    await audit(ctx, 'FILE_ASSET_UPDATE', 'FILE_ASSET', file.id, normalizeFileAsset(file), body, { orgId: currentOrgId });
+    return normalizeFileAsset(await arow('SELECT * FROM file_assets WHERE id=?', [file.id]));
   }
   if (idMatch && method === 'DELETE') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可删除文件', 'ORG_ADMIN_REQUIRED');
-    const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.owner_type !== 'ORG' || file.owner_org_id !== currentOrgId) throw errors.forbidden('只能删除本机构文件', 'FILE_OWNER_REQUIRED');
-    assertTransition(ctx, 'fileAsset', file.status, 'REMOVED', { targetType: 'FILE_ASSET', targetId: file.id, before: file });
-    q("UPDATE file_assets SET status='REMOVED', updated_at=? WHERE id=?", [nowIso(), file.id]);
-    q('DELETE FROM file_access_grants WHERE file_id=?', [file.id]);
-    audit(ctx, 'FILE_ASSET_REMOVE', 'FILE_ASSET', file.id, normalizeFileAsset(file), null, { orgId: currentOrgId });
+    await assertTransition(ctx, 'fileAsset', file.status, 'REMOVED', { targetType: 'FILE_ASSET', targetId: file.id, before: file });
+    await aq("UPDATE file_assets SET status='REMOVED', updated_at=? WHERE id=?", [nowIso(), file.id]);
+    await aq('DELETE FROM file_access_grants WHERE file_id=?', [file.id]);
+    await audit(ctx, 'FILE_ASSET_REMOVE', 'FILE_ASSET', file.id, normalizeFileAsset(file), null, { orgId: currentOrgId });
     return { id: file.id, status: 'REMOVED' };
   }
 
   // 文件访问代理下载（先授权，再从 Web 根目录外流式输出）
   const proxyMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
-  if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
+  if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, await authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
   return null;
 }
 
@@ -830,7 +830,7 @@ export async function handleStudentFileAssets(ctx) {
 
   if (part === '/file-assets' && method === 'GET') {
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
-    const items = rows(
+    const items = (await arows(
       `SELECT DISTINCT file_assets.* FROM file_assets
        WHERE ((visibility='ASSIGNED_ORGS' AND EXISTS (SELECT 1 FROM file_access_grants g WHERE g.file_id=file_assets.id AND g.org_id=? AND g.grant_type='ORG'))
           OR (visibility='ORG' AND owner_org_id=?)
@@ -839,7 +839,7 @@ export async function handleStudentFileAssets(ctx) {
          AND category<>'TEACHING_ASSET'
        ORDER BY created_at DESC LIMIT ${limit}`,
       [currentOrgId, currentOrgId, auth.user.id],
-    ).map(normalizeFileAsset);
+    )).map(normalizeFileAsset);
     return { items, total: items.length, limit };
   }
   if (part === '/file-assets/upload' && method === 'POST') {
@@ -849,15 +849,15 @@ export async function handleStudentFileAssets(ctx) {
   }
   const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
   if (idMatch && method === 'GET') {
-    return normalizeFileAsset(authorizeFileAccess(ctx, idMatch[1], 'READ'));
+    return normalizeFileAsset(await authorizeFileAccess(ctx, idMatch[1], 'READ'));
   }
   const proxyMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
-  if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
+  if (proxyMatch && method === 'GET') return prepareFileDownload(ctx, await authorizeFileAccess(ctx, proxyMatch[1], 'DOWNLOAD'));
   // 预览口（2026-09-20）：「我的作品」打开一件真文件产物（学生创作环境交上来的 PPT/Word/Excel）时
   // 要给服务端**转出来的 PDF**，否则 iframe 里塞原文件只会触发下载。
   // 权限与下载同一档（都是自己的文件）；鉴权头之外还有 cookie 兜底 —— iframe 发不出 Authorization。
   const previewMatch = part.match(/^\/file-assets\/([^/]+)\/preview$/);
-  if (previewMatch && method === 'GET') return prepareFilePreview(ctx, authorizeFileAccess(ctx, previewMatch[1], 'DOWNLOAD'));
+  if (previewMatch && method === 'GET') return prepareFilePreview(ctx, await authorizeFileAccess(ctx, previewMatch[1], 'DOWNLOAD'));
   return null;
 }
 
@@ -868,7 +868,7 @@ export async function handlePublicFileAssets(ctx) {
 
   const idMatch = part.match(/^\/file-assets\/([^/]+)$/);
   if (idMatch && method === 'GET') {
-    const file = row('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [idMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
@@ -881,7 +881,7 @@ export async function handlePublicFileAssets(ctx) {
 
   const downloadMatch = part.match(/^\/file-assets\/([^/]+)\/download$/);
   if (downloadMatch && method === 'GET') {
-    const file = row('SELECT * FROM file_assets WHERE id=?', [downloadMatch[1]]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [downloadMatch[1]]);
     if (!file) throw errors.notFound('文件不存在', 'FILE_NOT_FOUND');
     if (file.status !== 'ACTIVE') throw errors.forbidden('文件不可用', 'FILE_NOT_ACTIVE');
     if (file.expires_at && new Date(file.expires_at).getTime() <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');

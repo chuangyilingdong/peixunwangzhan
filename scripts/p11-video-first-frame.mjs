@@ -30,40 +30,40 @@ async function expectError(fn, code, label) {
 }
 
 try {
-  const { q, row, normalizeUser } = await import('../apps/server/src/lib.js');
+  const { q, row, normalizeUser, aq, arow } = await import('../apps/server/src/lib.js');
   const { handleAiGeneration } = await import('../apps/server/src/routes/aiGeneration.js');
 
-  q("INSERT INTO organizations(id,name,contract_start_at,contract_expires_at,created_at,updated_at) VALUES ('org1','测试机构',?,?,?,?)", [now, now, now, now]);
-  q("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,student_usage_scope,billing_package_id,ai_credit_limit,magic_stones,monthly_credit_allowance,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE','HOME_PRACTICE','pkg1',100,100,100,?,?)", [now, now]);
-  q("INSERT INTO course_series(id,title,owner_type,org_id,visibility,version,sort,status,created_at,updated_at) VALUES ('series1','测试课包','PLATFORM',NULL,'PUBLIC','1.0',1,'PUBLISHED',?,?)", [now, now]);
+  await aq("INSERT INTO organizations(id,name,contract_start_at,contract_expires_at,created_at,updated_at) VALUES ('org1','测试机构',?,?,?,?)", [now, now, now, now]);
+  await aq("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,student_usage_scope,billing_package_id,ai_credit_limit,magic_stones,monthly_credit_allowance,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE','HOME_PRACTICE','pkg1',100,100,100,?,?)", [now, now]);
+  await aq("INSERT INTO course_series(id,title,owner_type,org_id,visibility,version,sort,status,created_at,updated_at) VALUES ('series1','测试课包','PLATFORM',NULL,'PUBLIC','1.0',1,'PUBLISHED',?,?)", [now, now]);
   // 平台课包「发布」不等于「授权给机构」：机构要看到/使用必须先有一条生效授权（见交接说明第四节）。
-  q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at) VALUES ('assign1','series1','org1','ACTIVE',NULL,?,NULL)", [now]);
+  await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at) VALUES ('assign1','series1','org1','ACTIVE',NULL,?,NULL)", [now]);
   // 2026-09-13 起这条链还有下一环：**机构把课包分给学员**（学生进课要求有效学员许可，叠加口径）。
   // 少了它，学生就被 COURSE_GRANT_REQUIRED 拦住 —— 这正是「机构必须有可用次数才能把课包给学生」的落点。
-  q("INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_at) VALUES ('grant1','org1','stu1','series1','assign1',?)", [now]);
-  q("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)",
+  await aq("INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_at) VALUES ('grant1','org1','stu1','series1','assign1',?)", [now]);
+  await aq("INSERT INTO course_lessons(id,series_id,title,sort,status,delivery_mode,classroom_config,canvas_template_snapshot,created_at,updated_at) VALUES ('lesson1','series1','测试课时',1,'PUBLISHED','CANVAS',?,?,?,?)",
     [JSON.stringify({ version: 3 }), '{}', now, now]);
-  q("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES ('lesson1','video',?)", [now]);
+  await aq("INSERT INTO course_lesson_capabilities(lesson_id,capability,created_at) VALUES ('lesson1','video',?)", [now]);
   // 生成框体是素材表里 type=GENERATION_BOX 的素材（id 直接当 boxId 用）
-  q("INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES ('mg1','lesson1','生成框体',1,?,?)", [now, now]);
-  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-video-1','mg1','素材1','','GENERATION_BOX',NULL,?,1,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'hailuo-h3-i2v', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
-  q("INSERT INTO classes(id,org_id,name,status,current_session_id,created_at,updated_at) VALUES ('class1','org1','测试班级','ACTIVE',NULL,?,?)", [now, now]);
-  q("INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES ('m1','class1','stu1','STUDENT',?)", [now]);
-  q("INSERT INTO class_curriculum_items(id,class_id,lesson_id,sort,source_series_id,added_at) VALUES ('ci1','class1','lesson1',1,'series1',?)", [now]);
-  q("INSERT INTO student_projects(id,student_id,org_id,class_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES ('proj1','stu1','org1','class1','lesson1','项目','DRAFT',?,?,?)", [now, now, now]);
-  q("INSERT INTO billing_packages(id,org_id,name,allow_video,status,created_at,updated_at) VALUES ('pkg1','org1','套餐',1,'ACTIVE',?,?)", [now, now]);
-  q("INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,credits_charged,created_at) VALUES ('job1','org1','stu1','proj1','IMAGE','local-mock','canvas-mock-v1','测试','SUCCEEDED',1,?)", [now]);
-  q("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset1','job1','org1','stu1','proj1','IMAGE','素材','mock://asset1',?)", [now]);
+  await aq("INSERT INTO course_lesson_material_groups(id,lesson_id,title,sort,created_at,updated_at) VALUES ('mg1','lesson1','生成框体',1,?,?)", [now, now]);
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-video-1','mg1','素材1','','GENERATION_BOX',NULL,?,1,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'hailuo-h3-i2v', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  await aq("INSERT INTO classes(id,org_id,name,status,current_session_id,created_at,updated_at) VALUES ('class1','org1','测试班级','ACTIVE',NULL,?,?)", [now, now]);
+  await aq("INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES ('m1','class1','stu1','STUDENT',?)", [now]);
+  await aq("INSERT INTO class_curriculum_items(id,class_id,lesson_id,sort,source_series_id,added_at) VALUES ('ci1','class1','lesson1',1,'series1',?)", [now]);
+  await aq("INSERT INTO student_projects(id,student_id,org_id,class_id,course_lesson_id,title,status,last_saved_at,created_at,updated_at) VALUES ('proj1','stu1','org1','class1','lesson1','项目','DRAFT',?,?,?)", [now, now, now]);
+  await aq("INSERT INTO billing_packages(id,org_id,name,allow_video,status,created_at,updated_at) VALUES ('pkg1','org1','套餐',1,'ACTIVE',?,?)", [now, now]);
+  await aq("INSERT INTO generation_jobs(id,org_id,user_id,project_id,modality,provider,model,prompt,status,credits_charged,created_at) VALUES ('job1','org1','stu1','proj1','IMAGE','local-mock','canvas-mock-v1','测试','SUCCEEDED',1,?)", [now]);
+  await aq("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset1','job1','org1','stu1','proj1','IMAGE','素材','mock://asset1',?)", [now]);
 
   // 批次 B：门禁第②③步要求「老师把学生排进某个**进行中的课堂**」—— 这条守卫是**进程内**跑的
   // （不起 HTTP 服务），所以直接对同一个库跑夹具补齐这一环；少了它，handleAiGeneration 会在
   // resolveStudentLessonContext 里抛 NOT_IN_CLASSROOM。夹具只认已有许可，不自己造许可。
   const { ensureClassroom } = await import('./lib/classroomFixture.mjs');
   ensureClassroom(process.env.PLATFORM_DB_PATH);
-  q("UPDATE student_projects SET class_session_id=(SELECT session_id FROM session_students WHERE student_id='stu1' AND lesson_id='lesson1' AND status='ACTIVE' LIMIT 1) WHERE id='proj1'");
+  await aq("UPDATE student_projects SET class_session_id=(SELECT session_id FROM session_students WHERE student_id='stu1' AND lesson_id='lesson1' AND status='ACTIVE' LIMIT 1) WHERE id='proj1'");
 
-  const dbUser = row("SELECT * FROM users WHERE id='stu1'");
-  const auth = { user: normalizeUser(dbUser, { includeAuthMeta: true }), rawUser: dbUser, org: row("SELECT * FROM organizations WHERE id='org1'") };
+  const dbUser = await arow("SELECT * FROM users WHERE id='stu1'");
+  const auth = { user: normalizeUser(dbUser, { includeAuthMeta: true }), rawUser: dbUser, org: await arow("SELECT * FROM organizations WHERE id='org1'") };
   const aiCtx = (body) => ({ pathname: '/api/ai/generations/async', method: 'POST', auth, body, search: new URLSearchParams(), req: { socket: { remoteAddress: '127.0.0.1' } } });
 
   // 场景 1：i2v 模型缺首帧图，应在入队前被业务拦截
@@ -73,14 +73,14 @@ try {
   await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'https://evil.example/x.png' })), 'GENERATION_FIRST_FRAME_REQUIRED', 'foreign first frame');
 
   // 拦截不产生任何扣费流水
-  const spendEntries = row("SELECT COUNT(*) AS n FROM credit_entries WHERE direction='OUT'");
+  const spendEntries = await arow("SELECT COUNT(*) AS n FROM credit_entries WHERE direction='OUT'");
   check(Number(spendEntries?.n || 0) === 0, `拦截路径不应产生支出流水，实际 ${spendEntries?.n || 0} 条`);
 
   // 场景 3：本项目图片素材可以当首帧，任务正常入队
   const queued = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' }));
   check(queued?.queued === true, '合法首帧应返回 queued=true');
   check(Boolean(queued?.job?.id), '合法首帧应创建任务');
-  const persisted = row("SELECT source_asset_url FROM generation_jobs WHERE id=?", [queued?.job?.id || '']);
+  const persisted = await arow("SELECT source_asset_url FROM generation_jobs WHERE id=?", [queued?.job?.id || '']);
   check(persisted?.source_asset_url === 'mock://asset1', `首帧来源应落库，实际 ${persisted?.source_asset_url}`);
 
   // 默认 i2v 模板把首帧放在顶层 image 字段（上游实测接受的键名，尽管其报错文案写的是 firstFrameUrl），且保留 metadata。
@@ -106,25 +106,25 @@ try {
     }],
     modalityChannels: { VIDEO: 'ch-video' },
   };
-  q("UPDATE platform_settings SET ai_provider_policy=? WHERE id=1", [JSON.stringify(policy)]);
+  await aq("UPDATE platform_settings SET ai_provider_policy=? WHERE id=1", [JSON.stringify(policy)]);
   // 每个框体只能成功生成一次，所以给每种输入方式各配一个框体
   for (const [index, boxId] of ['box-omni-text', 'box-omni-first', 'box-omni-last', 'box-omni-frames'].entries()) {
-    q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?, 'mg1', ?, '', 'GENERATION_BOX', NULL, ?, ?, ?, ?)", [boxId, `全能模型${index + 1}`, JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), index + 2, now, now]);
+    await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES (?, 'mg1', ?, '', 'GENERATION_BOX', NULL, ?, ?, ?, ?)", [boxId, `全能模型${index + 1}`, JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), index + 2, now, now]);
   }
-  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-t2v','mg1','只文生','','GENERATION_BOX',NULL,?,3,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 't2v-only', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
-  q("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset2','job1','org1','stu1','proj1','IMAGE','尾帧素材','mock://asset2',?)", [now]);
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-t2v','mg1','只文生','','GENERATION_BOX',NULL,?,3,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 't2v-only', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  await aq("INSERT INTO media_assets(id,job_id,org_id,user_id,project_id,modality,label,asset_url,created_at) VALUES ('asset2','job1','org1','stu1','proj1','IMAGE','尾帧素材','mock://asset2',?)", [now]);
 
   const omniCtx = (boxId, extra) => aiCtx({ projectId: 'proj1', boxId, modality: 'VIDEO', prompt: '夜色江面缓缓推移', ...extra });
 
   // 5.1 全能模型不给图：走文生，不再被强制要首帧
   const omniText = await handleAiGeneration(omniCtx('box-omni-text', {}));
   check(omniText?.queued === true, '支持文生的模型不给图也应能生成');
-  check(!row("SELECT source_asset_url FROM generation_jobs WHERE id=?", [omniText?.job?.id || ''])?.source_asset_url, '文生任务不应带首帧来源');
+  check(!(await arow("SELECT source_asset_url FROM generation_jobs WHERE id=?", [omniText?.job?.id || '']))?.source_asset_url, '文生任务不应带首帧来源');
 
   // 5.2 全能模型给首帧：走图生模板
   const omniFirst = await handleAiGeneration(omniCtx('box-omni-first', { sourceAssetUrl: 'mock://asset1' }));
   check(omniFirst?.queued === true, '全能模型给首帧应能生成');
-  check(row("SELECT source_asset_url FROM generation_jobs WHERE id=?", [omniFirst?.job?.id || ''])?.source_asset_url === 'mock://asset1', '图生任务应记下首帧来源');
+  check((await arow("SELECT source_asset_url FROM generation_jobs WHERE id=?", [omniFirst?.job?.id || '']))?.source_asset_url === 'mock://asset1', '图生任务应记下首帧来源');
 
   // 5.3 只给尾帧：尾帧必须配合首帧
   await expectError(() => handleAiGeneration(omniCtx('box-omni-last', { lastFrameAssetUrl: 'mock://asset2' })), 'GENERATION_LAST_FRAME_WITHOUT_FIRST', 'last frame without first');
@@ -132,7 +132,7 @@ try {
   // 5.4 首帧 + 尾帧：任务入队，两份来源都落库
   const omniFrames = await handleAiGeneration(omniCtx('box-omni-frames', { sourceAssetUrl: 'mock://asset1', lastFrameAssetUrl: 'mock://asset2' }));
   check(omniFrames?.queued === true, '首尾帧应能生成');
-  const framesJob = row("SELECT source_asset_url,last_frame_asset_url FROM generation_jobs WHERE id=?", [omniFrames?.job?.id || '']);
+  const framesJob = await arow("SELECT source_asset_url,last_frame_asset_url FROM generation_jobs WHERE id=?", [omniFrames?.job?.id || '']);
   check(framesJob?.source_asset_url === 'mock://asset1' && framesJob?.last_frame_asset_url === 'mock://asset2', `首尾帧来源都应落库，实际 ${JSON.stringify(framesJob)}`);
 
   // 5.5 只支持文生的模型：给图要被拦
@@ -144,35 +144,35 @@ try {
   check(framesBody2.image === 'mock://asset1' && framesBody2.last_frame === 'mock://asset2', `首尾帧模板应同时带两张图，实际 ${JSON.stringify(framesBody2).slice(0, 160)}`);
 
   // 5.7 只声明「全能参考」的模型：给首帧也算受支持（不该报 FIRST_FRAME_UNSUPPORTED）
-  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-ref','mg1','只全能参考','','GENERATION_BOX',NULL,?,4,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'reference-only', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-ref','mg1','只全能参考','','GENERATION_BOX',NULL,?,4,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'reference-only', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
   const refOnly = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', sourceAssetUrl: 'mock://asset1' }));
   check(refOnly?.queued === true, '只声明全能参考的模型给首帧也应能生成');
 
   // 5.8 全能参考：多张参考图能生成并落库；与首/尾帧不能混用
-  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref','mg1','全能参考','','GENERATION_BOX',NULL,?,5,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref','mg1','全能参考','','GENERATION_BOX',NULL,?,5,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
   await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', sourceAssetUrl: 'mock://asset1', referenceAssets: [{ type: 'IMAGE', url: 'mock://asset2' }] })), 'GENERATION_MIXED_INPUT_MODES', 'frames + references');
   const omniRefs = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: 'mock://asset1' }, { type: 'IMAGE', url: 'mock://asset2' }] }));
   check(omniRefs?.queued === true, '全能参考给多张参考图应能生成');
-  const refsJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [omniRefs?.job?.id || '']);
+  const refsJob = await arow("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [omniRefs?.job?.id || '']);
   check(String(refsJob?.reference_asset_urls || '').includes('mock://asset1') && String(refsJob?.reference_asset_urls || '').includes('mock://asset2'), `参考素材应落库，实际 ${refsJob?.reference_asset_urls}`);
   check(String(refsJob?.reference_asset_urls || '').includes('"type":"IMAGE"'), `参考素材应带类型，实际 ${refsJob?.reference_asset_urls}`);
 
   // 5.10 参考素材只认本项目对应模态的素材：外站地址 / 不存在的视频素材都会被丢掉
-  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref2','mg1','全能参考2','','GENERATION_BOX',NULL,?,6,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref2','mg1','全能参考2','','GENERATION_BOX',NULL,?,6,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
   // ⚠️ 口径变更（2026-09-21 晚）：原来这里是"过滤掉、请求照样生成"—— 但那等于**静默把学生连的参考丢了**：
   //    他屏幕上写着「参考：图片1 图片2」，出来的却是一段纯文生视频（用户当晚撞的正是这一类）。
   //    现在：**一个都留不住就当场报错**（GENERATION_MEDIA_UNUSABLE），说清"连过来的素材不能发给 AI"。
   await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref2', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: 'https://evil.example/x.png' }, { type: 'VIDEO', url: 'mock://asset1' }] })), 'GENERATION_MEDIA_UNUSABLE', '外站/类型不匹配的参考一个都留不住时要当场报错');
-  const filteredJob = row("SELECT COUNT(*) n FROM generation_jobs WHERE box_id='box-omni-ref2'");
+  const filteredJob = await arow("SELECT COUNT(*) n FROM generation_jobs WHERE box_id='box-omni-ref2'");
   check(Number(filteredJob?.n || 0) === 0, '被拦下的请求不该落任何任务');
 
   // 5.11b 老师上传的「画布素材」（公开可见）可以当参考：相对地址会升级成上游可抓的绝对地址
-  q("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('file_pub1','PLATFORM','INTERNAL_PROXY','ref.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)", [now, now]);
-  q("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('file_priv1','USER','INTERNAL_PROXY','private.png','image/png','MEDIA_ASSET','PRIVATE','ACTIVE',?,?)", [now, now]);
-  q("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref3','mg1','上传素材参考','','GENERATION_BOX',NULL,?,7,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
+  await aq("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('file_pub1','PLATFORM','INTERNAL_PROXY','ref.png','image/png','MEDIA_ASSET','PUBLIC_PLATFORM','ACTIVE',?,?)", [now, now]);
+  await aq("INSERT INTO file_assets(id,owner_type,storage_kind,file_name,mime_type,category,visibility,status,created_at,updated_at) VALUES ('file_priv1','USER','INTERNAL_PROXY','private.png','image/png','MEDIA_ASSET','PRIVATE','ACTIVE',?,?)", [now, now]);
+  await aq("INSERT INTO course_lesson_materials(id,group_id,title,description,material_type,asset_url,snapshot,sort,created_at,updated_at) VALUES ('box-omni-ref3','mg1','上传素材参考','','GENERATION_BOX',NULL,?,7,?,?)", [JSON.stringify({ box: { modality: 'VIDEO', model: 'omni-video', aspectRatio: '16:9', resolution: '480p', durationSeconds: 5, audio: false }, content: '' }), now, now]);
   const uploadRef = await handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-omni-ref3', modality: 'VIDEO', prompt: '夜色江面缓缓推移', referenceAssets: [{ type: 'IMAGE', url: '/api/student/file-assets/file_pub1/download' }, { type: 'IMAGE', url: '/api/student/file-assets/file_priv1/download' }] }));
   check(uploadRef?.queued === true, '上传素材作参考应能生成');
-  const uploadJob = row("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [uploadRef?.job?.id || '']);
+  const uploadJob = await arow("SELECT reference_asset_urls FROM generation_jobs WHERE id=?", [uploadRef?.job?.id || '']);
   const uploadRefs = String(uploadJob?.reference_asset_urls || '');
   check(uploadRefs.includes('/api/public/file-assets/file_pub1/download'), `公开素材应升级成公开绝对地址，实际 ${uploadRefs}`);
   check(!uploadRefs.includes('file_priv1'), `非公开素材不该被采用，实际 ${uploadRefs}`);
@@ -198,10 +198,10 @@ try {
   check(typeof frameBody.duration === 'number', 'duration 应是数字（durationSecondsNumber）');
 
   // 场景 4：平台模态开关关闭时，生成必须在入队前被拦（机构覆盖优先于平台开关）
-  q("UPDATE platform_modality_settings SET enabled=0 WHERE modality='VIDEO'");
+  await aq("UPDATE platform_modality_settings SET enabled=0 WHERE modality='VIDEO'");
   await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'platform modality off');
-  q("UPDATE platform_modality_settings SET enabled=1 WHERE modality='VIDEO'");
-  q("INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES ('ovr1','org1','VIDEO',0,'测试覆盖','stu1',?,?)", [now, now]);
+  await aq("UPDATE platform_modality_settings SET enabled=1 WHERE modality='VIDEO'");
+  await aq("INSERT INTO org_capability_overrides(id,org_id,modality,enabled,reason,created_by,created_at,updated_at) VALUES ('ovr1','org1','VIDEO',0,'测试覆盖','stu1',?,?)", [now, now]);
   await expectError(() => handleAiGeneration(aiCtx({ projectId: 'proj1', boxId: 'box-video-1', modality: 'VIDEO', prompt: '夜色江面', sourceAssetUrl: 'mock://asset1' })), 'MODALITY_DISABLED', 'org override off');
 
   /* ── 场景 6：**入队时解析一次、worker 真正执行时再解析一次**，两次必须一致 ─────────────
@@ -212,15 +212,15 @@ try {
      上游收到纯文本请求 → 出一段与参考无关的作品，而任务成功、日志干净。
      这里复用上面那两个夹具（file_pub1 公开 / file_priv1 私有），把两次解析**都真跑一遍**。 */
   const { resolveFirstFrameUrl } = await import('../apps/server/src/routes/aiGeneration.js');
-  const enqueueResolved = resolveFirstFrameUrl('proj1', '/api/student/file-assets/file_pub1/download');
+  const enqueueResolved = await resolveFirstFrameUrl('proj1', '/api/student/file-assets/file_pub1/download');
   check(/^https?:\/\/[^/]+\/api\/public\/file-assets\/file_pub1\/download$/.test(enqueueResolved),
     `入队时：站内地址应解析成公开绝对地址，实际 ${enqueueResolved || '(空)'}`);
-  check(resolveFirstFrameUrl('proj1', enqueueResolved) === enqueueResolved,
-    `worker 第二次解析必须与入队一致（不一致=首帧被静默丢掉）：入队=${enqueueResolved || '(空)'} / 执行=${resolveFirstFrameUrl('proj1', enqueueResolved) || '(空)'}`);
+  check(await resolveFirstFrameUrl('proj1', enqueueResolved) === enqueueResolved,
+    `worker 第二次解析必须与入队一致（不一致=首帧被静默丢掉）：入队=${enqueueResolved || '(空)'} / 执行=${await resolveFirstFrameUrl('proj1', enqueueResolved) || '(空)'}`);
   // 反例：私有素材仍要被拒 —— 「只把公开素材交给上游」那条规矩不能跟着一起放开
-  check(resolveFirstFrameUrl('proj1', 'https://iicili.cyou/api/public/file-assets/file_priv1/download') === '',
+  check(await resolveFirstFrameUrl('proj1', 'https://iicili.cyou/api/public/file-assets/file_priv1/download') === '',
     '私有素材仍然不许交给上游（放开绝对地址不能顺手把这条也放开）');
-  check(resolveFirstFrameUrl('proj1', 'https://evil.example/x.png') === '',
+  check(await resolveFirstFrameUrl('proj1', 'https://evil.example/x.png') === '',
     '外部地址仍然解析不出来（只认本项目/本平台素材）');
 
   /* ── 场景 7：「自动」画幅的翻译（2026-09-21 用户报「生成出来是扁的画面，没有自适应比例」）──────
@@ -240,21 +240,21 @@ try {
   };
   const ratioPolicy = { channels: [ratioChannel], modalityChannels: { VIDEO: 'ch-ratio' } };
   const ratioSelection = { channelId: 'ch-ratio', model: 'MiniMax-H3' };
-  const ratioOptions = (extra) => generationOptionsFor({ context: {}, modality: 'VIDEO', policy: ratioPolicy, selection: ratioSelection, box: {}, ...extra });
-  const autoWithFrame = ratioOptions({ firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: 'auto' } });
+  const ratioOptions = async (extra) => await generationOptionsFor({ context: {}, modality: 'VIDEO', policy: ratioPolicy, selection: ratioSelection, box: {}, ...extra });
+  const autoWithFrame = await ratioOptions({ firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: 'auto' } });
   check('「自动」+ 首帧 → 发 adaptive（读首帧图比例，不再把图硬拉成 16:9）',
     autoWithFrame.aspectRatio === 'adaptive', JSON.stringify(autoWithFrame));
-  const autoText = ratioOptions({ studentOptions: { aspectRatio: 'auto' } });
+  const autoText = await ratioOptions({ studentOptions: { aspectRatio: 'auto' } });
   check('「自动」+ 纯文生 → 用模型第一个比例（上游要求纯文本必填比例）',
     autoText.aspectRatio === '16:9', JSON.stringify(autoText));
-  const autoRefs = ratioOptions({ referenceAssets: [{ type: 'IMAGE', url: 'https://example.test/b.png' }], studentOptions: { aspectRatio: 'auto' } });
+  const autoRefs = await ratioOptions({ referenceAssets: [{ type: 'IMAGE', url: 'https://example.test/b.png' }], studentOptions: { aspectRatio: 'auto' } });
   check('「自动」+ 全能参考 → 固定比例（上游：参考请求显式传 adaptive/auto 会报错）',
     autoRefs.aspectRatio === '16:9' && autoRefs.referenceAssets?.length === 1, JSON.stringify(autoRefs));
-  const explicitRatio = ratioOptions({ firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: '4:3' } });
+  const explicitRatio = await ratioOptions({ firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: '4:3' } });
   check('学生明确挑了比例 → 原样发，不被上面的自动逻辑吃掉',
     explicitRatio.aspectRatio === '4:3', JSON.stringify(explicitRatio));
   // 形状不同的上游（比例放在 metadata 里那套）不许被翻成 adaptive —— 那是别家的语义
-  const otherShape = generationOptionsFor({
+  const otherShape = await generationOptionsFor({
     context: {}, modality: 'VIDEO', selection: { channelId: 'ch-i2v', model: 'hailuo-h3-i2v' }, box: {},
     policy: { channels: [{ id: 'ch-i2v', model: 'hailuo-h3-i2v', requestTemplates: {}, modelCapabilities: { 'hailuo-h3-i2v': { inputModes: ['FIRST_FRAME'], aspectRatios: ['16:9'], resolutions: ['768P'], durations: [5] } } }], modalityChannels: { VIDEO: 'ch-i2v' } },
     firstFrameUrl: 'https://example.test/a.jpg', studentOptions: { aspectRatio: 'auto' },
@@ -267,32 +267,32 @@ try {
      锁定的方式必须：① 决定请求里连过来的素材算什么（首帧/尾帧/参考）② 传给上游的 roles 要对得上
      ③ 与锁定方式冲突的连线当场报错（画布上也会挡，这里是服务端兜底）。 */
   const lockBox = (inputMode) => ({ id: 'box-lock', title: '锁定方式的框体', modality: 'VIDEO', model: 'MiniMax-H3', aspectRatio: '', resolution: '', durationSeconds: null, audio: null, inputMode });
-  const lockOptions = (extra) => generationOptionsFor({ context: {}, modality: 'VIDEO', policy: ratioPolicy, selection: ratioSelection, box: lockBox(extra.locked), ...extra });
+  const lockOptions = async (extra) => await generationOptionsFor({ context: {}, modality: 'VIDEO', policy: ratioPolicy, selection: ratioSelection, box: lockBox(extra.locked), ...extra });
   // ① 锁成全能参考 + 学生连了 2 张图（客户端会按首帧/尾帧传上来）→ 仍然全部当**参考**发
-  const lockedOmni = lockOptions({ locked: 'OMNI_REFERENCE', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' });
+  const lockedOmni = await lockOptions({ locked: 'OMNI_REFERENCE', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' });
   check('锁成「全能参考」时，连过来的图一律当参考发（不是首帧/尾帧）',
     !lockedOmni.firstFrameUrl && !lockedOmni.lastFrameUrl
     && JSON.stringify(lockedOmni.referenceAssets) === JSON.stringify([{ type: 'IMAGE', url: 'https://example.test/a.jpg' }, { type: 'IMAGE', url: 'https://example.test/b.jpg' }]),
     JSON.stringify(lockedOmni));
   // ② 没锁的框体维持原样：连 2 张图仍然是能当帧就当帧（首帧+尾帧）
-  const unlockedFrames = lockOptions({ locked: '', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' });
+  const unlockedFrames = await lockOptions({ locked: '', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' });
   check('没锁的框体维持原行为（连 2 张图 = 首帧+尾帧），别把默认情形一起改了',
     unlockedFrames.firstFrameUrl === 'https://example.test/a.jpg' && unlockedFrames.lastFrameUrl === 'https://example.test/b.jpg' && !unlockedFrames.referenceAssets,
     JSON.stringify(unlockedFrames));
   // ③ 锁成文生视频：不许带画面（客户端已经不给连，这里是兜底）
   let lockedTextError = null;
-  try { lockOptions({ locked: 'TEXT', firstFrameUrl: 'https://example.test/a.jpg' }); } catch (error) { lockedTextError = error; }
+  try { await lockOptions({ locked: 'TEXT', firstFrameUrl: 'https://example.test/a.jpg' }); } catch (error) { lockedTextError = error; }
   check('锁成「文生视频」时连了图 → 当场拒绝（文案说清是这个框体的要求）',
     lockedTextError?.code === 'GENERATION_FIRST_FRAME_UNSUPPORTED' && /文生视频/.test(String(lockedTextError?.message || '')),
     String(lockedTextError?.message || '(没报错)'));
   // ④ 锁成图生视频：第二张图（尾帧）不允许
   let lockedI2vError = null;
-  try { lockOptions({ locked: 'FIRST_FRAME', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' }); } catch (error) { lockedI2vError = error; }
+  try { await lockOptions({ locked: 'FIRST_FRAME', firstFrameUrl: 'https://example.test/a.jpg', lastFrameUrl: 'https://example.test/b.jpg' }); } catch (error) { lockedI2vError = error; }
   check('锁成「图生视频」时给两张图 → 当场拒绝（图生视频只连 1 张）',
     lockedI2vError?.code === 'GENERATION_LAST_FRAME_UNSUPPORTED' && /图生视频/.test(String(lockedI2vError?.message || '')),
     String(lockedI2vError?.message || '(没报错)'));
   // ⑤ 锁成首尾帧：只有首帧也能生成（模型支持首尾帧，尾帧可选）
-  const lockedFirstLast = lockOptions({ locked: 'FIRST_LAST_FRAME', firstFrameUrl: 'https://example.test/a.jpg' });
+  const lockedFirstLast = await lockOptions({ locked: 'FIRST_LAST_FRAME', firstFrameUrl: 'https://example.test/a.jpg' });
   check('锁成「首尾帧」时只连 1 张也能生成（尾帧可选），首帧照常发',
     lockedFirstLast.firstFrameUrl === 'https://example.test/a.jpg' && lockedFirstLast.inputModes?.length === 1 && lockedFirstLast.inputModes[0] === 'FIRST_LAST_FRAME',
     JSON.stringify(lockedFirstLast));

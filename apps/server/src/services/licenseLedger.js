@@ -1,4 +1,4 @@
-import { contractExpiryForOrg, errors, id, nowIso, q, row, rows, transaction } from '../lib.js';
+import { contractExpiryForOrg, errors, id, nowIso, q, row, rows, transaction, arow, aq, arows, atransaction } from '../lib.js';
 
 export const LICENSE_PAYMENT_STATUSES = new Set(['UNPAID', 'PARTIAL', 'PAID', 'REFUNDED']);
 
@@ -51,40 +51,40 @@ export function normalizeLicensePurchaseInput(value, quantity) {
   };
 }
 
-export function appendLicensePurchase({ seriesId, orgId, additionalQuota, actorId, ...input }) {
+export async function appendLicensePurchase({ seriesId, orgId, additionalQuota, actorId, ...input }) {
   const quantity = Number(additionalQuota);
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000000) throw errors.badRequest('追加次数无效', 'VALIDATION_ERROR');
   const purchase = normalizeLicensePurchaseInput(input, quantity);
-  return transaction(() => {
-    const series = row("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [String(seriesId || '')]);
+  return await atransaction(async () => {
+    const series = await arow("SELECT * FROM course_series WHERE id=? AND owner_type='PLATFORM'", [String(seriesId || '')]);
     if (!series) throw errors.notFound('平台课包不存在', 'COURSE_SERIES_NOT_FOUND');
     if (series.status !== 'PUBLISHED') throw errors.conflict('仅已发布课包可购买授权', 'COURSE_NOT_PUBLISHED');
-    if (!row('SELECT id FROM organizations WHERE id=?', [String(orgId || '')])) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
-    const existing = row('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, orgId]);
+    if (!await arow('SELECT id FROM organizations WHERE id=?', [String(orgId || '')])) throw errors.notFound('机构不存在', 'ORG_NOT_FOUND');
+    const existing = await arow('SELECT * FROM course_assignments WHERE series_id=? AND org_id=?', [series.id, orgId]);
     const assignmentId = existing?.id || id('assign');
     const now = nowIso();
-    const batch = createLicensePurchaseBatch({ assignmentId, orgId, seriesId: series.id, actorId, purchasedAt: now, ...purchase });
+    const batch = await createLicensePurchaseBatch({ assignmentId, orgId, seriesId: series.id, actorId, purchasedAt: now, ...purchase });
     if (!batch.replayed) {
-      const reserved = Number(row("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id])?.n || 0);
+      const reserved = Number((await arow("SELECT COALESCE(SUM(CASE WHEN status='ACTIVE' THEN quota_total ELSE quota_used END),0) n FROM course_assignments WHERE series_id=?", [series.id]))?.n || 0);
       if (reserved + quantity > Number(series.stock_total || 0)) throw errors.conflict('课包可分配库存不足', 'COURSE_QUOTA_EXCEEDS_STOCK');
       if (existing) {
         const baseQuota = Number(existing.status === 'ACTIVE' ? existing.quota_total : existing.quota_used);
-        q("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [actorId, now, baseQuota + quantity, existing.id]);
+        await aq("UPDATE course_assignments SET status='ACTIVE',assigned_by=?,assigned_at=?,quota_total=? WHERE id=?", [actorId, now, baseQuota + quantity, existing.id]);
       } else {
         const expiresAt = new Date(Date.now() + 365 * 86400000).toISOString();
-        q("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, orgId, 'ACTIVE', actorId, now, expiresAt, quantity]);
+        await aq("INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,expires_at,quota_total,quota_used) VALUES (?,?,?,?,?,?,?,?,0)", [assignmentId, series.id, orgId, 'ACTIVE', actorId, now, expiresAt, quantity]);
       }
     }
-    const assignment = row('SELECT * FROM course_assignments WHERE id=?', [assignmentId]);
+    const assignment = await arow('SELECT * FROM course_assignments WHERE id=?', [assignmentId]);
     return { batch, replayed: Boolean(batch.replayed), assignment: { id: assignment.id, orgId: assignment.org_id, seriesId: assignment.series_id, status: assignment.status, quotaTotal: Number(assignment.quota_total), quotaUsed: Number(assignment.quota_used), remaining: Math.max(0, Number(assignment.quota_total) - Number(assignment.quota_used)), expiresAt: assignment.expires_at || null } };
   });
 }
 
-export function createLicensePurchaseBatch({ assignmentId, orgId, seriesId, actorId, purchasedAt, ...purchase }) {
+export async function createLicensePurchaseBatch({ assignmentId, orgId, seriesId, actorId, purchasedAt, ...purchase }) {
   if (purchase.paymentStatus !== 'PAID') {
     throw errors.conflict('只有已收款购买才能增加授权次数', 'LICENSE_PURCHASE_NOT_PAID');
   }
-  const existing = row('SELECT * FROM license_purchase_batches WHERE idempotency_key=?', [purchase.idempotencyKey]);
+  const existing = await arow('SELECT * FROM license_purchase_batches WHERE idempotency_key=?', [purchase.idempotencyKey]);
   if (existing) {
     const same = existing.assignment_id === assignmentId
       && existing.org_id === orgId
@@ -100,7 +100,7 @@ export function createLicensePurchaseBatch({ assignmentId, orgId, seriesId, acto
   }
   const now = purchasedAt || nowIso();
   const batchId = id('licensepurchase');
-  q(`INSERT INTO license_purchase_batches(
+  await aq(`INSERT INTO license_purchase_batches(
       id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,
       order_no,contract_no,idempotency_key,purchased_by,purchased_at,created_at)
     VALUES (?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`, [
@@ -108,11 +108,11 @@ export function createLicensePurchaseBatch({ assignmentId, orgId, seriesId, acto
     purchase.currency, purchase.paymentStatus, purchase.orderNo, purchase.contractNo, purchase.idempotencyKey,
     actorId || null, now, now,
   ]);
-  return purchaseSnapshot(row('SELECT * FROM license_purchase_batches WHERE id=?', [batchId]));
+  return purchaseSnapshot(await arow('SELECT * FROM license_purchase_batches WHERE id=?', [batchId]));
 }
 
-function nextFifoUnit(assignmentId) {
-  const batches = rows(`SELECT batch.*,
+async function nextFifoUnit(assignmentId) {
+  const batches = await arows(`SELECT batch.*,
       COALESCE(SUM(allocation.quantity),0) allocated_quantity,
       SUM(allocation.amount_minor) recognized_amount_minor
     FROM license_purchase_batches batch
@@ -136,73 +136,73 @@ function nextFifoUnit(assignmentId) {
   return { batch, amountMinor };
 }
 
-export function appendLicenseGrantRevenue({ assignmentId, orgId, seriesId, grantId, actorId, occurredAt, idempotencyKey }) {
+export async function appendLicenseGrantRevenue({ assignmentId, orgId, seriesId, grantId, actorId, occurredAt, idempotencyKey }) {
   const key = idempotencyKey || `license-grant:${grantId}:${occurredAt}`;
-  const existing = row("SELECT * FROM license_revenue_events WHERE idempotency_key=? AND event_type='GRANT'", [key]);
+  const existing = await arow("SELECT * FROM license_revenue_events WHERE idempotency_key=? AND event_type='GRANT'", [key]);
   if (existing) return existing;
-  const { batch, amountMinor } = nextFifoUnit(assignmentId);
+  const { batch, amountMinor } = await nextFifoUnit(assignmentId);
   const now = occurredAt || nowIso();
   const eventId = id('licenserevenue');
-  q(`INSERT INTO license_revenue_events(
+  await aq(`INSERT INTO license_revenue_events(
       id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,reversal_of_event_id,
       idempotency_key,actor_id,occurred_at,created_at)
     VALUES (?,?,?,?,?,'GRANT',1,?,?,NULL,?,?,?,?)`, [
     eventId, assignmentId, orgId, seriesId, grantId, amountMinor, batch.currency,
     key, actorId || null, now, now,
   ]);
-  q(`INSERT INTO license_revenue_allocations(
+  await aq(`INSERT INTO license_revenue_allocations(
       id,revenue_event_id,purchase_batch_id,quantity,amount_minor,currency,created_at)
     VALUES (?,?,?,1,?,?,?)`, [id('licenseallocation'), eventId, batch.id, amountMinor, batch.currency, now]);
-  return row('SELECT * FROM license_revenue_events WHERE id=?', [eventId]);
+  return await arow('SELECT * FROM license_revenue_events WHERE id=?', [eventId]);
 }
 
-export function appendLicenseReversal({ grantId, actorId, occurredAt, idempotencyKey }) {
+export async function appendLicenseReversal({ grantId, actorId, occurredAt, idempotencyKey }) {
   if (idempotencyKey) {
-    const existing = row("SELECT * FROM license_revenue_events WHERE idempotency_key=? AND event_type='REVERSAL'", [idempotencyKey]);
+    const existing = await arow("SELECT * FROM license_revenue_events WHERE idempotency_key=? AND event_type='REVERSAL'", [idempotencyKey]);
     if (existing) {
       if (existing.grant_id !== grantId) throw errors.conflict('幂等键已用于另一笔许可冲销', 'LICENSE_REVERSAL_IDEMPOTENCY_CONFLICT');
       return existing;
     }
   }
-  const grantEvent = row(`SELECT event.* FROM license_revenue_events event
+  const grantEvent = await arow(`SELECT event.* FROM license_revenue_events event
     LEFT JOIN license_revenue_events reversal ON reversal.reversal_of_event_id=event.id
     WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL
     ORDER BY event.occurred_at DESC, event.created_at DESC, event.id DESC LIMIT 1`, [grantId]);
   if (!grantEvent) throw errors.conflict('找不到可冲销的许可收入事件', 'LICENSE_GRANT_REVENUE_NOT_FOUND');
   const key = idempotencyKey || `license-reversal:${grantEvent.id}`;
-  const allocation = row('SELECT * FROM license_revenue_allocations WHERE revenue_event_id=?', [grantEvent.id]);
+  const allocation = await arow('SELECT * FROM license_revenue_allocations WHERE revenue_event_id=?', [grantEvent.id]);
   if (!allocation) throw errors.conflict('许可收入缺少购买批次分摊', 'LICENSE_REVENUE_ALLOCATION_NOT_FOUND');
   const now = occurredAt || nowIso();
   const eventId = id('licenserevenue');
   const amountMinor = grantEvent.amount_minor == null ? null : -Number(grantEvent.amount_minor);
-  q(`INSERT INTO license_revenue_events(
+  await aq(`INSERT INTO license_revenue_events(
       id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,reversal_of_event_id,
       idempotency_key,actor_id,occurred_at,created_at)
     VALUES (?,?,?,?,?,'REVERSAL',-1,?,?,?,?,?,?,?)`, [
     eventId, grantEvent.assignment_id, grantEvent.org_id, grantEvent.series_id, grantId, amountMinor,
     grantEvent.currency, grantEvent.id, key, actorId || null, now, now,
   ]);
-  q(`INSERT INTO license_revenue_allocations(
+  await aq(`INSERT INTO license_revenue_allocations(
       id,revenue_event_id,purchase_batch_id,quantity,amount_minor,currency,created_at)
     VALUES (?,?,?,-1,?,?,?)`, [
     id('licenseallocation'), eventId, allocation.purchase_batch_id,
     allocation.amount_minor == null ? null : -Number(allocation.amount_minor), allocation.currency, now,
   ]);
-  return row('SELECT * FROM license_revenue_events WHERE id=?', [eventId]);
+  return await arow('SELECT * FROM license_revenue_events WHERE id=?', [eventId]);
 }
 
-export function voidLicensePurchaseBatches(assignmentId) {
-  q("UPDATE license_purchase_batches SET status='VOIDED' WHERE assignment_id=? AND status='ACTIVE'", [assignmentId]);
+export async function voidLicensePurchaseBatches(assignmentId) {
+  await aq("UPDATE license_purchase_batches SET status='VOIDED' WHERE assignment_id=? AND status='ACTIVE'", [assignmentId]);
 }
 
-export function licensePurchaseHistory(assignmentId) {
-  return rows(`SELECT batch.*, COALESCE(SUM(allocation.quantity),0) recognized_quantity,
+export async function licensePurchaseHistory(assignmentId) {
+  return (await arows(`SELECT batch.*, COALESCE(SUM(allocation.quantity),0) recognized_quantity,
       SUM(allocation.amount_minor) recognized_amount_minor
     FROM license_purchase_batches batch
     LEFT JOIN license_revenue_allocations allocation ON allocation.purchase_batch_id=batch.id
     WHERE batch.assignment_id=?
     GROUP BY batch.id
-    ORDER BY batch.purchased_at DESC, batch.created_at DESC, batch.id DESC`, [assignmentId]).map((batch) => ({
+    ORDER BY batch.purchased_at DESC, batch.created_at DESC, batch.id DESC`, [assignmentId])).map((batch) => ({
     ...purchaseSnapshot(batch),
     recognizedQuantity: Number(batch.recognized_quantity || 0),
     remainingQuantity: Math.max(0, Number(batch.quantity) - Number(batch.recognized_quantity || 0)),

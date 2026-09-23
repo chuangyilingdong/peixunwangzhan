@@ -9,7 +9,7 @@
 //   ① 已完课的学员**不能再被加到同一节课**（但可以上同课包的其他课时）；
 //   ② 未结束的参与（待上课/上课中）也不允许被别的课堂同时占用；
 //   ③ 被移除 = 解锁（可以再被其他课堂加）。
-import { errors, id, nowIso, q, row, rows, transaction } from '../lib.js';
+import { errors, id, nowIso, q, row, rows, transaction, arow, arows, aq, atransaction, amap } from '../lib.js';
 import { salePriceFenFor } from './computePool.js';
 import { sessionCostUsageByStudent, sessionCostCapState, studentCostCapFen } from './sessionCostCap.js';
 
@@ -60,16 +60,16 @@ export function sessionScope(alias, auth, params) {
  * 现在改为对外售价口径（见 computePool.salePriceFenFor 的完整说明）：
  * 机构/学员看到的是「按公告价算的消耗」，平台自己的进货成本与毛利只在「用量与成本」看。
  */
-export function lessonCostFenFor({ studentId, sessionId }) {
-  return salePriceFenFor({ sessionId, studentId });
+export async function lessonCostFenFor({ studentId, sessionId }) {
+  return await salePriceFenFor({ sessionId, studentId });
 }
 
 /** 学生全局非终态占用：不区分课包或课程；REMOVED 不算占用。 */
-export function activeParticipationFor({ studentId, lessonId = null, excludeSessionId = null }) {
+export async function activeParticipationFor({ studentId, lessonId = null, excludeSessionId = null }) {
   const lessonClause = lessonId ? ' AND part.lesson_id=?' : '';
   const params = lessonId ? [studentId, lessonId] : [studentId];
   if (excludeSessionId) { params.push(excludeSessionId); }
-  return row(
+  return await arow(
     `SELECT part.*, session.title session_title, session.status session_status, session.teacher_id session_teacher_id,
         session.lesson_id occupied_lesson_id, session.series_id occupied_series_id,
         lesson.title occupied_lesson_title, teacher.display_name teacher_name, session.started_at, session.created_at
@@ -84,8 +84,8 @@ export function activeParticipationFor({ studentId, lessonId = null, excludeSess
 }
 
 /** 该学生在这节课上是否已经完课（完课行不会被移除，所以直接查）。 */
-export function completedParticipationFor({ studentId, lessonId, excludeSessionId = null }) {
-  return row(
+export async function completedParticipationFor({ studentId, lessonId, excludeSessionId = null }) {
+  return await arow(
     `SELECT part.*, session.title session_title, session.teacher_id session_teacher_id, teacher.display_name teacher_name
       FROM session_students part
       JOIN class_sessions session ON session.id = part.session_id
@@ -107,18 +107,18 @@ const SESSION_STATE_LABELS = { PENDING: '待上课', ACTIVE: '上课中', ENDED:
  *   · 已经完课过这节课 → 不可加（可以上同课包其他课时）；
  *   · 被移除过 → 算可加（移除即解锁）。
  */
-export function sessionCandidates(session) {
-  const students = rows(
+export async function sessionCandidates(session) {
+  const students = await arows(
     `SELECT student.id, student.login, student.display_name, student.status, student.expires_at
       FROM users student
       WHERE student.org_id=? AND student.role='STUDENT' AND student.deleted_at IS NULL
       ORDER BY student.display_name, student.login`,
     [session.org_id],
   );
-  const granted = new Set(rows(
+  const granted = new Set((await arows(
     'SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL',
     [session.org_id, session.series_id],
-  ).map((item) => item.student_id));
+  )).map((item) => item.student_id));
   const selectable = [];
   const blocked = [];
   const alreadyIn = [];
@@ -131,9 +131,9 @@ export function sessionCandidates(session) {
     // 原来的池子那套恒 `unlimited`，「不限」是一句永远为真的废话。
     const base = {
       id: student.id, login: student.login, name: student.display_name || student.login, accountStatus: student.status,
-      ...candidateCostCap(session, student.id),
+      ...await candidateCostCap(session, student.id),
     };
-    const own = row(
+    const own = await arow(
       'SELECT status FROM session_students WHERE session_id=? AND student_id=? AND status<>\'REMOVED\'',
       [session.id, student.id],
     );
@@ -141,7 +141,7 @@ export function sessionCandidates(session) {
     if (student.status !== 'ACTIVE') { blocked.push({ ...base, reason: 'STUDENT_DISABLED', reasonText: '学员账号已停用' }); continue; }
     if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { blocked.push({ ...base, reason: 'STUDENT_EXPIRED', reasonText: '学员账号已到期' }); continue; }
     if (!granted.has(student.id)) { blocked.push({ ...base, reason: 'NO_GRANT', reasonText: '没有这个课包的许可（到「学员许可」分给 ta）' }); continue; }
-    const occupied = activeParticipationFor({ studentId: student.id });
+    const occupied = await activeParticipationFor({ studentId: student.id });
     if (occupied) {
       blocked.push({
         ...base, reason: 'IN_OTHER_SESSION',
@@ -150,7 +150,7 @@ export function sessionCandidates(session) {
       });
       continue;
     }
-    const completed = completedParticipationFor({ studentId: student.id, lessonId: session.lesson_id });
+    const completed = await completedParticipationFor({ studentId: student.id, lessonId: session.lesson_id });
     if (completed) {
       blocked.push({
         ...base, reason: 'COMPLETED',
@@ -175,9 +175,9 @@ export function sessionCandidates(session) {
  * 和**性质**（观测数字，不是闸门）。
  * ⚠️ 键名里的 `Yuan` 是历史命名，**值一律是「分」**（与全仓 `formatYuan(fen)` 的入参口径一致）。
  */
-function candidateCostCap(session, studentId) {
-  const capFen = session?.id ? studentCostCapFen(session.id) : null;
-  const usage = session?.id ? sessionCostUsageByStudent(session.id).get(studentId) : null;
+async function candidateCostCap(session, studentId) {
+  const capFen = session?.id ? await studentCostCapFen(session.id) : null;
+  const usage = session?.id ? (await sessionCostUsageByStudent(session.id)).get(studentId) : null;
   const status = sessionCostCapState({ capFen, usedFen: usage?.usedFen || 0, unknownCalls: usage?.unknownCalls || 0 });
   return {
     poolUnlimited: !status.configured,
@@ -196,18 +196,18 @@ function candidateCostCap(session, studentId) {
  * 结束课堂时结算学员状态：这节课花过算力 → 已完课，否则 → 未完课。
  * 幂等：只结算还在 PENDING/ACTIVE 的行；已结算的行不动（重复点「结束」不会重算）。
  */
-export function settleSessionStudents({ sessionId, actorId }) {
-  const session = row('SELECT status FROM class_sessions WHERE id=?', [sessionId]);
+export async function settleSessionStudents({ sessionId, actorId }) {
+  const session = await arow('SELECT status FROM class_sessions WHERE id=?', [sessionId]);
   if (!session || session.status !== 'ACTIVE') return { completed: 0, incomplete: 0 };
-  const parts = rows("SELECT * FROM session_students WHERE session_id=? AND status IN ('PENDING','ACTIVE')", [sessionId]);
+  const parts = await arows("SELECT * FROM session_students WHERE session_id=? AND status IN ('PENDING','ACTIVE')", [sessionId]);
   const now = nowIso();
   const summary = { completed: 0, incomplete: 0 };
   for (const part of parts) {
-    const costFen = lessonCostFenFor({ studentId: part.student_id, sessionId });
-    const used = row("SELECT id FROM usage_records WHERE class_session_id=? AND user_id=? AND org_id=? AND status='SUCCESS' AND UPPER(model) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%' LIMIT 1", [sessionId, part.student_id, part.org_id]);
+    const costFen = await lessonCostFenFor({ studentId: part.student_id, sessionId });
+    const used = await arow("SELECT id FROM usage_records WHERE class_session_id=? AND user_id=? AND org_id=? AND status='SUCCESS' AND UPPER(model) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%' AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%' LIMIT 1", [sessionId, part.student_id, part.org_id]);
     if (part.status === 'INCOMPLETE' && !used) continue;
     const status = used ? 'COMPLETED' : 'INCOMPLETE';
-    q('UPDATE session_students SET status=?, completed_at=?, completed_cost_fen=?, updated_at=? WHERE id=?',
+    await aq('UPDATE session_students SET status=?, completed_at=?, completed_cost_fen=?, updated_at=? WHERE id=?',
       [status, now, costFen, now, part.id]);
     if (status === 'COMPLETED') summary.completed += 1; else summary.incomplete += 1;
   }
@@ -216,33 +216,33 @@ export function settleSessionStudents({ sessionId, actorId }) {
 }
 
 /** 加学员（事务内）：把学生加进课堂名单；已结束/已解散的课堂不能加。 */
-export function addSessionStudents({ session, studentIds, actorId }) {
+export async function addSessionStudents({ session, studentIds, actorId }) {
   if (!['PENDING', 'ACTIVE'].includes(session.status)) throw errors.conflict('课堂已结束或已解散，不能再加学员', 'SESSION_NOT_OPEN');
   const now = nowIso();
   const added = [];
   const skipped = [];
-  transaction(() => {
+  await atransaction(async () => {
     for (const studentId of studentIds) {
-      const student = row("SELECT * FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, session.org_id]);
+      const student = await arow("SELECT * FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, session.org_id]);
       if (!student) { skipped.push({ studentId, reason: 'STUDENT_NOT_FOUND' }); continue; }
       if (student.status !== 'ACTIVE') { skipped.push({ studentId, reason: 'STUDENT_DISABLED' }); continue; }
       if (student.expires_at && Date.parse(student.expires_at) <= Date.now()) { skipped.push({ studentId, reason: 'STUDENT_EXPIRED' }); continue; }
-      const own = row("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status<>'REMOVED'", [session.id, studentId]);
+      const own = await arow("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status<>'REMOVED'", [session.id, studentId]);
       if (own) { skipped.push({ studentId, reason: 'ALREADY_IN' }); continue; }
-      const granted = row('SELECT id FROM student_course_grants WHERE org_id=? AND series_id=? AND student_id=? AND revoked_at IS NULL', [session.org_id, session.series_id, studentId]);
+      const granted = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND series_id=? AND student_id=? AND revoked_at IS NULL', [session.org_id, session.series_id, studentId]);
       if (!granted) { skipped.push({ studentId, reason: 'NO_GRANT' }); continue; }
-      const occupied = activeParticipationFor({ studentId, excludeSessionId: session.id });
+      const occupied = await activeParticipationFor({ studentId, excludeSessionId: session.id });
       if (occupied) { skipped.push({ studentId, reason: 'IN_OTHER_SESSION' }); continue; }
-      const completed = completedParticipationFor({ studentId, lessonId: session.lesson_id, excludeSessionId: session.id });
+      const completed = await completedParticipationFor({ studentId, lessonId: session.lesson_id, excludeSessionId: session.id });
       if (completed) { skipped.push({ studentId, reason: 'COMPLETED' }); continue; }
       // 被移除过的话：复用那行并复活（保留历史痕迹：清掉移除信息、重新标记 added_at）
-      const removed = row("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status='REMOVED'", [session.id, studentId]);
+      const removed = await arow("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status='REMOVED'", [session.id, studentId]);
       const status = session.status === 'ACTIVE' ? 'ACTIVE' : 'PENDING';
       if (removed) {
-        q('UPDATE session_students SET status=?, lesson_id=?, series_id=?, added_by=?, added_at=?, removed_by=NULL, removed_at=NULL, removed_reason=NULL, updated_at=? WHERE id=?',
+        await aq('UPDATE session_students SET status=?, lesson_id=?, series_id=?, added_by=?, added_at=?, removed_by=NULL, removed_at=NULL, removed_reason=NULL, updated_at=? WHERE id=?',
           [status, session.lesson_id, session.series_id, actorId, now, now, removed.id]);
       } else {
-        q(`INSERT INTO session_students(id, session_id, student_id, org_id, lesson_id, series_id, status, added_by, added_at, updated_at)
+        await aq(`INSERT INTO session_students(id, session_id, student_id, org_id, lesson_id, series_id, status, added_by, added_at, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)`,
         [id('sstudent'), session.id, studentId, session.org_id, session.lesson_id, session.series_id, status, actorId, now, now]);
       }
@@ -253,44 +253,44 @@ export function addSessionStudents({ session, studentIds, actorId }) {
 }
 
 /** 移除学员：只在开始上课前允许（用户口径「移除＝解锁」）。 */
-export function removeSessionStudent({ session, studentId, actorId, reason = null }) {
+export async function removeSessionStudent({ session, studentId, actorId, reason = null }) {
   if (session.status !== 'PENDING') throw errors.conflict('只能在开始上课前移除学员', 'SESSION_ALREADY_STARTED');
   const now = nowIso();
-  const part = row("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status<>'REMOVED'", [session.id, studentId]);
+  const part = await arow("SELECT * FROM session_students WHERE session_id=? AND student_id=? AND status<>'REMOVED'", [session.id, studentId]);
   if (!part) throw errors.notFound('这名学员不在课堂名单里', 'SESSION_STUDENT_NOT_FOUND');
-  q("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason=?, updated_at=? WHERE id=?",
+  await aq("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason=?, updated_at=? WHERE id=?",
     [actorId, now, reason, now, part.id]);
   return { studentId, removedAt: now };
 }
 
 /** 课堂列表上的学员统计（避免前端 N+1）。 */
-export function sessionStudentCounts(sessionIds) {
+export async function sessionStudentCounts(sessionIds) {
   if (!sessionIds.length) return new Map();
   const placeholders = sessionIds.map(() => '?').join(',');
-  return new Map(rows(
+  return new Map((await arows(
     `SELECT session_id, status, COUNT(*) n FROM session_students
       WHERE session_id IN (${placeholders}) AND status<>'REMOVED' GROUP BY session_id, status`,
     sessionIds,
-  ).map((item) => [`${item.session_id}:${item.status}`, Number(item.n || 0)]));
+  )).map((item) => [`${item.session_id}:${item.status}`, Number(item.n || 0)]));
 }
 
-export function sessionRuntimeDetail(session, auth, students) {
+export async function sessionRuntimeDetail(session, auth, students) {
   const asOf = nowIso();
   const latest = (values) => values.filter(Boolean).sort().at(-1) || null;
-  const usage = rows(`SELECT user_id, status, created_at FROM usage_records
+  const usage = await arows(`SELECT user_id, status, created_at FROM usage_records
     WHERE org_id=? AND class_session_id=? AND UPPER(model) NOT LIKE '%MOCK%'
     AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%'
     AND UPPER(COALESCE(json_extract(pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%'`, [session.org_id, session.id]);
   // 学生算力**观测**值（唯一那套，只观测不拦人）：每个学生在这堂课的上游成本 + 观测上限 + 差额。
   // 一次 group by 取全名单（不是每个学生打一次库），与老师端/平台端读的是同一份实现。
-  const costCapFen = studentCostCapFen(session.id);
-  const costUsage = sessionCostUsageByStudent(session.id);
+  const costCapFen = await studentCostCapFen(session.id);
+  const costUsage = await sessionCostUsageByStudent(session.id);
   const costCapFor = (studentId) => sessionCostCapState({
     capFen: costCapFen,
     usedFen: costUsage.get(studentId)?.usedFen || 0,
     unknownCalls: costUsage.get(studentId)?.unknownCalls || 0,
   });
-  const aiFor = (studentId = null) => {
+  const aiFor = async (studentId = null) => {
     const records = studentId ? usage.filter((item) => item.user_id === studentId) : usage;
     // costCap = 老师端要看的「这堂课花了多少 / 有没有超观测上限」（`enforced` 恒 false）。
     const costCap = studentId ? costCapFor(studentId) : sessionCostCapState({
@@ -302,19 +302,19 @@ export function sessionRuntimeDetail(session, auth, students) {
       failedCount: records.filter((item) => item.status === 'FAILED').length,
       lastUsedAt: latest(records.map((item) => item.created_at)),
       costCap,
-      salePriceFen: salePriceFenFor({ orgId: session.org_id, sessionId: session.id, ...(studentId ? { studentId } : {}) }) };
+      salePriceFen: await salePriceFenFor({ orgId: session.org_id, sessionId: session.id, ...(studentId ? { studentId } : {}) }) };
   };
-  const works = rows(`SELECT work.id,work.student_id,student.display_name student_name,work.title,work.status,
+  const works = (await arows(`SELECT work.id,work.student_id,student.display_name student_name,work.title,work.status,
       work.submitted_at,work.project_id FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
-      WHERE work.org_id=? AND work.class_session_id=?`, [session.org_id, session.id]).map((work) => ({
+      WHERE work.org_id=? AND work.class_session_id=?`, [session.org_id, session.id])).map((work) => ({
     id: work.id, source: 'CANVAS', studentId: work.student_id, studentName: work.student_name,
     title: work.title, status: work.status, createdAt: null, updatedAt: null, submittedAt: work.submitted_at,
     projectId: work.project_id, conversationId: null, entryFile: null, previewUrl: null,
   }));
-  works.push(...rows(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
+  works.push(...(await arows(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
     JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
     JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
-    WHERE submission.org_id=? AND conversation.class_session_id=?`, [session.org_id, session.id]).map((work) => ({
+    WHERE submission.org_id=? AND conversation.class_session_id=?`, [session.org_id, session.id])).map((work) => ({
     id: work.id, source: 'VIBECODING', studentId: work.student_id, studentName: work.student_name,
     title: work.title, status: work.status, createdAt: work.created_at, updatedAt: work.updated_at,
     submittedAt: work.submitted_at, projectId: null, conversationId: work.conversation_id,
@@ -323,15 +323,15 @@ export function sessionRuntimeDetail(session, auth, students) {
   for (const work of works) work.detailUrl = `/api/org/sessions/${encodeURIComponent(session.id)}/works/${work.source}/${encodeURIComponent(work.id)}`;
   works.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
   const labels = { SESSION_CREATE: '创建课堂', SESSION_UPDATE: '编辑课堂', SESSION_START: '开始上课', SESSION_END: '结束课堂', SESSION_DISSOLVE: '解散课堂', SESSION_STUDENTS_ADD: '添加学员', SESSION_STUDENT_REMOVE: '移除学员' };
-  const events = rows(`SELECT audit.id,audit.action,audit.actor_id,actor.display_name actor_name,audit.created_at
+  const events = (await arows(`SELECT audit.id,audit.action,audit.actor_id,actor.display_name actor_name,audit.created_at
     FROM audit_logs audit LEFT JOIN users actor ON actor.id=audit.actor_id
-    WHERE audit.org_id=? AND audit.target_type='CLASS_SESSION' AND audit.target_id=? ORDER BY audit.created_at DESC LIMIT 200`, [session.org_id, session.id])
+    WHERE audit.org_id=? AND audit.target_type='CLASS_SESSION' AND audit.target_id=? ORDER BY audit.created_at DESC LIMIT 200`, [session.org_id, session.id]))
     .filter((event) => labels[event.action]).map((event) => ({ id: event.id, action: event.action, actorId: event.actor_id,
       actorName: event.actor_name || null, createdAt: event.created_at, summary: labels[event.action] }));
-  const activity = rows(`SELECT student_id,updated_at activity_at FROM student_projects WHERE org_id=? AND class_session_id=? AND deleted_at IS NULL
+  const activity = await arows(`SELECT student_id,updated_at activity_at FROM student_projects WHERE org_id=? AND class_session_id=? AND deleted_at IS NULL
     UNION ALL SELECT student_id,COALESCE(last_message_at,updated_at) activity_at FROM vibecoding_conversations WHERE org_id=? AND class_session_id=?`, [session.org_id, session.id, session.org_id, session.id]);
-  const enrichedStudents = students.map((part) => {
-    const ai = aiFor(part.student_id);
+  const enrichedStudents = await amap(students, async (part) => {
+    const ai = await aiFor(part.student_id);
     const ownWorks = works.filter((work) => work.studentId === part.student_id);
     return { ...normalizeSessionStudent(part), ai, presence: 'unknown', workCount: ownWorks.length,
       lastActivityAt: latest([ai.lastUsedAt, ...ownWorks.map((work) => work.submittedAt), ...activity.filter((item) => item.student_id === part.student_id).map((item) => item.activity_at)]) };
@@ -341,7 +341,7 @@ export function sessionRuntimeDetail(session, auth, students) {
   const pending = canManage && session.status === 'PENDING';
   const until = session.status === 'ACTIVE' ? asOf : session.ended_at;
   const duration = session.started_at && until ? Math.max(0, Math.floor((Date.parse(until) - Date.parse(session.started_at)) / 1000)) : null;
-  const sessionAi = aiFor();
+  const sessionAi = await aiFor();
   return { canManage, permissions: { canManage, canEdit: pending, canStart: pending, canEnd: canManage && session.status === 'ACTIVE', canDissolve: pending, canAddStudents: canManage, canRemoveStudents: pending },
     runtime: { asOf, startedAt: session.started_at || null, endedAt: session.ended_at || null,
       durationSeconds: Number.isFinite(duration) ? duration : null,

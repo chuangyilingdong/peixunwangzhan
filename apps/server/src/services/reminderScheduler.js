@@ -5,7 +5,7 @@
  * ⚠️ 2026-09-13（P4 删积分）：原来的「低余额预警」已删除 —— 它按机构积分余额判定，
  * 积分体系废弃后这个口径没有意义了（扫描器本体也已去掉 scanLowBalanceOrgs）。
  */
-import { id, nowIso, q, row, rows } from '../lib.js';
+import { id, nowIso, q, row, rows, arows } from '../lib.js';
 import { scheduleReminder } from '../routes/communication.js';
 
 const CONTRACT_EXPIRY_DAYS = 7;  // 到期前 7 天内提醒
@@ -14,11 +14,11 @@ const CONTRACT_EXPIRY_DAYS = 7;  // 到期前 7 天内提醒
 /**
  * 扫 organizations，contract_expires_at 在未来 7 天内且上次提醒已超 3 天的 → 发 ORG_ADMIN
  */
-export function scanContractExpiryOrgs() {
+export async function scanContractExpiryOrgs() {
   const now = new Date();
   const in7days = new Date(now.getTime() + CONTRACT_EXPIRY_DAYS * 24 * 3600 * 1000).toISOString();
   const cutoff3d = new Date(now.getTime() - 3 * 24 * 3600 * 1000).toISOString();
-  const orgs = rows(`
+  const orgs = await arows(`
     SELECT o.id, o.name, o.contract_expires_at,
       COALESCE((SELECT MAX(nr.created_at) FROM notification_recipients nr
         JOIN notifications n ON n.id=nr.notification_id
@@ -35,10 +35,10 @@ export function scanContractExpiryOrgs() {
   for (const org of orgs) {
     if (org.last_reminder && org.last_reminder > cutoff3d) continue; // 3 天内已提醒过
     const daysLeft = Math.ceil((new Date(org.contract_expires_at).getTime() - now.getTime()) / (24 * 3600 * 1000));
-    const admins = rows("SELECT id FROM users WHERE org_id=? AND role='ORG_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL", [org.id]);
+    const admins = await arows("SELECT id FROM users WHERE org_id=? AND role='ORG_ADMIN' AND status='ACTIVE' AND deleted_at IS NULL", [org.id]);
     for (const admin of admins) {
       try {
-        scheduleReminder({
+        await scheduleReminder({
           title: '合同即将到期',
           body: `您的合同将于 ${daysLeft} 天后（${org.contract_expires_at.split('T')[0]}）到期，请及时续费以保障服务连续。`,
           kind: 'ANNOUNCEMENT',

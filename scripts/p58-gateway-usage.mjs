@@ -123,7 +123,7 @@ try {
     JSON.stringify({ org: multi.byOrg, student: multi.byStudent, lesson: multi.byLesson }));
   check('多段令牌名不算「未归属」', multi.unattributed.length === 0, JSON.stringify(multi.unattributed));
 
-  const comparison = lessonBudgetOverview({ byLesson: [{ key: seededLessons.budgeted, yuan: 9999 }] });
+  const comparison = await lessonBudgetOverview({ byLesson: [{ key: seededLessons.budgeted, yuan: 9999 }] });
   const budgeted = comparison.find(item => item.lessonId === seededLessons.budgeted);
   const noBudget = comparison.find(item => item.lessonId === seededLessons.noBudget);
   check('课堂快照预算相加，不乘学生数、不取历史售价', budgeted?.budgetFen === 400 && budgeted?.sessionCount === 2, JSON.stringify(budgeted));

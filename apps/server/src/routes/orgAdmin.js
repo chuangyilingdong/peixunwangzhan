@@ -1,4 +1,4 @@
-import { audit, clearAuthCookie, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable } from '../lib.js';
+import { audit, clearAuthCookie, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
 import { prepareFileDownload, prepareFilePreview } from './fileAssets.js';
@@ -31,7 +31,7 @@ import { COURSE_QUOTA_SOURCES, recordQuotaChange } from '../services/courseQuota
 async function warmSessionRuntimes(sessionId, lessonId, orgId) {
   let studentIds = [];
   try {
-    studentIds = rows("SELECT DISTINCT student_id FROM session_students WHERE session_id=? AND status='ACTIVE'", [sessionId]).map((item) => item.student_id);
+    studentIds = (await arows("SELECT DISTINCT student_id FROM session_students WHERE session_id=? AND status='ACTIVE'", [sessionId])).map((item) => item.student_id);
   } catch (error) {
     console.warn(`[runtime] 预热前读名单失败 session=${sessionId}：${error?.message || error}`);
     return;
@@ -81,7 +81,7 @@ async function warmSessionRuntimes(sessionId, lessonId, orgId) {
 async function releaseSessionRuntimes(sessionId, reason = 'SESSION_END') {
   let studentIds = [];
   try {
-    studentIds = rows('SELECT DISTINCT student_id FROM session_students WHERE session_id=?', [sessionId]).map((item) => item.student_id);
+    studentIds = (await arows('SELECT DISTINCT student_id FROM session_students WHERE session_id=?', [sessionId])).map((item) => item.student_id);
   } catch (error) {
     console.warn(`[runtime] 收环境前读名单失败 session=${sessionId}：${error?.message || error}`);
     return;
@@ -155,19 +155,19 @@ export async function handleOrg(ctx) {
     if (!currentPassword) throw errors.badRequest('请输入当前密码', 'CURRENT_PASSWORD_REQUIRED');
     if (newPassword.length < 6) throw errors.badRequest('新密码至少 6 位', 'PASSWORD_TOO_SHORT');
     if (newPassword === currentPassword) throw errors.badRequest('新密码不能与当前密码相同', 'PASSWORD_UNCHANGED');
-    const me = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
+    const me = await arow('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
     if (!me) throw errors.notFound('账号不存在', 'USER_NOT_FOUND');
     if (!verifyPassword(currentPassword, me.password_hash)) throw errors.forbidden('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
     const now = nowIso();
     let sessionsRevoked = 0;
-    transaction(() => {
+    await atransaction(async () => {
       // ⚠️ 只按主键 id 定位，**不**再叠 org_id 之类的条件：多一个条件就多一种
       //    「UPDATE 匹配到 0 行、却照样返回成功」的静默失败。写完当场核对影响行数。
-      const written = q('UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND deleted_at IS NULL', [hashPassword(newPassword), now, me.id]).changes;
+      const written = (await aq('UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND deleted_at IS NULL', [hashPassword(newPassword), now, me.id])).changes;
       if (written !== 1) throw errors.conflict('密码没有写进库，请重试或联系平台', 'PASSWORD_WRITE_FAILED');
-      sessionsRevoked = q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id]).changes;
+      sessionsRevoked = (await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id])).changes;
     });
-    audit(ctx, 'ORG_PASSWORD_CHANGE', 'USER', me.id, null, { sessionsRevoked });
+    await audit(ctx, 'ORG_PASSWORD_CHANGE', 'USER', me.id, null, { sessionsRevoked });
     ctx.setCookie = clearAuthCookie();
     return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
   }
@@ -175,35 +175,35 @@ export async function handleOrg(ctx) {
   if (part === '/overview' && method === 'GET') {
     // 2026-09-13（P4 删积分）：原来这里会 ensureOrgBilling() 并读机构积分账户，积分废弃后不再需要。
     const isTeacher = auth.user.role === 'TEACHER';
-    const orgRecord = row('SELECT * FROM organizations WHERE id=?', [currentOrgId]);
-    const normalizedOrg = normalizeOrg(orgRecord);
+    const orgRecord = await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]);
+    const normalizedOrg = await normalizeOrg(orgRecord);
     // 批次 D（2026-09-13）：教师数据范围从「班级」改成「课堂」——**只看自己创建的课堂**。
     // 落点统一在 class_sessions.teacher_id（作品靠 works.class_session_id、用量靠 usage_records.class_session_id）。
     // ⚠️ 安全相关：改这段之前先看 scripts/p69-teacher-data-scope.mjs，它把每一处范围都钉成了期望。
     const sessionScopeParams = [];
     const teacherSessionScope = sessionTeacherScope('session', auth, sessionScopeParams);
     const sessionParams = [currentOrgId, ...sessionScopeParams];
-    const activeSessions = count("SELECT COUNT(*) n FROM class_sessions session WHERE session.org_id=? AND session.status='ACTIVE'" + teacherSessionScope, sessionParams);
+    const activeSessions = await acount("SELECT COUNT(*) n FROM class_sessions session WHERE session.org_id=? AND session.status='ACTIVE'" + teacherSessionScope, sessionParams);
     // 待上课也算「排了课但还没开始」，机构总览要能看出存量
-    const pendingSessions = count("SELECT COUNT(*) n FROM class_sessions session WHERE session.org_id=? AND session.status='PENDING'" + teacherSessionScope, sessionParams);
+    const pendingSessions = await acount("SELECT COUNT(*) n FROM class_sessions session WHERE session.org_id=? AND session.status='PENDING'" + teacherSessionScope, sessionParams);
     // 班级退场：这个键保留但恒为 0（既有读取方不炸），课堂上数用 activeSessions/pendingSessions
     const activeClasses = 0;
     // 学员数：教师＝**自己课堂名单里的学员**（去重）；管理员＝本机构全部有效学员
     const students = isTeacher
-      ? count(
+      ? await acount(
         "SELECT COUNT(DISTINCT part.student_id) n FROM session_students part JOIN class_sessions session ON session.id=part.session_id JOIN users student ON student.id=part.student_id WHERE session.org_id=? AND part.status<>'REMOVED' AND student.deleted_at IS NULL" + teacherSessionScope,
         sessionParams,
       )
-      : count("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL AND status='ACTIVE'", [currentOrgId]);
-    const teachers = isTeacher ? 1 : count("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [currentOrgId]);
+      : await acount("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL AND status='ACTIVE'", [currentOrgId]);
+    const teachers = isTeacher ? 1 : await acount("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='TEACHER' AND deleted_at IS NULL", [currentOrgId]);
     // 作品范围：挂在**我创建的课堂**上（班级退场后不再有 work.class_id 这一层）
     const workScopeParams = [currentOrgId];
     const workSessionScope = sessionOwnedByTeacherExists('work.class_session_id', auth, workScopeParams, { orgColumn: 'work.org_id' });
     const worksScope = 'work.org_id=?' + workSessionScope;
     const worksParams = [...workScopeParams];
-    const works = count('SELECT COUNT(*) n FROM works work WHERE ' + worksScope, worksParams);
-    const pendingWorks = count('SELECT COUNT(*) n FROM works work WHERE ' + worksScope + ' AND work.status=\'PENDING\'', worksParams);
-    const workBreakdown = rows('SELECT work.status,COUNT(*) n FROM works work WHERE ' + worksScope + ' GROUP BY work.status', worksParams)
+    const works = await acount('SELECT COUNT(*) n FROM works work WHERE ' + worksScope, worksParams);
+    const pendingWorks = await acount('SELECT COUNT(*) n FROM works work WHERE ' + worksScope + ' AND work.status=\'PENDING\'', worksParams);
+    const workBreakdown = (await arows('SELECT work.status,COUNT(*) n FROM works work WHERE ' + worksScope + ' GROUP BY work.status', worksParams))
       .reduce((result, item) => ({ ...result, [item.status]: Number(item.n || 0) }), {});
     const since7 = new Date(Date.now() - 7 * 86400000).toISOString();
     // 用量范围：同一套逻辑，换成 usage_records.class_session_id
@@ -213,29 +213,29 @@ export async function handleOrg(ctx) {
     const usageParams = [...usageScopeParams];
     // 2026-09-13（P4 删积分）：这里原来统计 SUM(credits_charged)（积分），积分废弃后恒为 0，
     // 改成数调用次数 —— 「近 7 天 AI 调用」这个口径仍然有意义。
-    const usage7 = Number(row('SELECT COUNT(*) n FROM usage_records usage WHERE ' + usageScope, usageParams)?.n || 0);
-    const recentSessions = rows(
+    const usage7 = Number((await arow('SELECT COUNT(*) n FROM usage_records usage WHERE ' + usageScope, usageParams))?.n || 0);
+    const recentSessions = (await arows(
       "SELECT session.id,session.class_id,session.lesson_id,session.status,session.started_at,session.ended_at,session.title,session.delivery_mode,lesson.title lesson_title,series.title series_title,teacher.display_name teacher_name FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id LEFT JOIN course_series series ON series.id=session.series_id LEFT JOIN users teacher ON teacher.id=session.teacher_id WHERE session.org_id=?" + teacherSessionScope + " ORDER BY COALESCE(session.started_at,session.created_at) DESC LIMIT 8",
       sessionParams,
-    ).map((item) => ({
+    )).map((item) => ({
       id: item.id, classId: null, className: item.title || null, title: item.title || null,
       seriesTitle: item.series_title || null, deliveryMode: item.delivery_mode || 'CANVAS',
       lessonId: item.lesson_id || null, lessonTitle: item.lesson_title || null,
       teacherName: item.teacher_name || null,
       status: item.status, startedAt: item.started_at, endedAt: item.ended_at || null, startedByName: item.teacher_name || null,
     }));
-    const pendingWorkItems = rows(
+    const pendingWorkItems = await amap((await arows(
       'SELECT work.*,student.display_name student_name,lesson.title lesson_title FROM works work JOIN users student ON student.id=work.student_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE ' + worksScope + ' AND work.status=\'PENDING\' ORDER BY work.submitted_at DESC LIMIT 6',
       worksParams,
-    ).map((item) => normalizeWork(item));
+    )), async (item) => await normalizeWork(item));
     const notificationNow = nowIso();
     const notificationScope = "recipient.user_id=? AND recipient.delivery_status='DELIVERED' AND recipient.read_at IS NULL AND n.status='PUBLISHED' AND (n.publish_at IS NULL OR n.publish_at<=?) AND (n.scope_type='PLATFORM' OR (n.scope_type='ORG' AND n.org_id=?))";
     const notificationParams = [auth.user.id, notificationNow, currentOrgId];
-    const unreadNotifications = count('SELECT COUNT(*) n FROM notification_recipients recipient JOIN notifications n ON n.id=recipient.notification_id WHERE ' + notificationScope, notificationParams);
-    const unreadNotificationItems = rows(
+    const unreadNotifications = await acount('SELECT COUNT(*) n FROM notification_recipients recipient JOIN notifications n ON n.id=recipient.notification_id WHERE ' + notificationScope, notificationParams);
+    const unreadNotificationItems = (await arows(
       'SELECT n.*,sender.display_name sender_name,recipient.read_at,recipient.delivery_status FROM notification_recipients recipient JOIN notifications n ON n.id=recipient.notification_id LEFT JOIN users sender ON sender.id=n.sender_id WHERE ' + notificationScope + ' ORDER BY n.pinned DESC,COALESCE(n.publish_at,n.created_at) DESC LIMIT 5',
       notificationParams,
-    ).map((item) => ({ id: item.id, title: item.title, body: item.body, kind: item.kind, senderName: item.sender_name || null, createdAt: item.created_at, publishAt: item.publish_at || null }));
+    )).map((item) => ({ id: item.id, title: item.title, body: item.body, kind: item.kind, senderName: item.sender_name || null, createdAt: item.created_at, publishAt: item.publish_at || null }));
     const alerts = [];
     if (!isTeacher) {
       const contractTimestamp = Date.parse(normalizedOrg?.contractExpiresAt || '');
@@ -248,16 +248,16 @@ export async function handleOrg(ctx) {
     // 2026-09-17（001-01 机构工作台线框图）：补「机构运营摘要」要的**本月**口径与两个关注项。
     // 只对机构管理员算；教师视图一律 0（线框图也写明教师工作台不展示机构运营数据）。
     const monthStart = `${nowIso().slice(0, 7)}-01`;
-    const monthCount = (sql, params) => (isTeacher ? 0 : count(sql, params));
-    const monthNewStudents = monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role=\'STUDENT\' AND deleted_at IS NULL AND created_at>=?', [currentOrgId, monthStart]);
-    const monthNewTeachers = monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role=\'TEACHER\' AND deleted_at IS NULL AND created_at>=?', [currentOrgId, monthStart]);
-    const monthGrants = monthCount('SELECT COUNT(*) n FROM student_course_grants WHERE org_id=? AND granted_at>=?', [currentOrgId, monthStart]);
-    const monthEndedSessions = monthCount("SELECT COUNT(*) n FROM class_sessions WHERE org_id=? AND status='ENDED' AND ended_at>=?", [currentOrgId, monthStart]);
+    const monthCount = async (sql, params) => (isTeacher ? 0 : await acount(sql, params));
+    const monthNewStudents = await monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role=\'STUDENT\' AND deleted_at IS NULL AND created_at>=?', [currentOrgId, monthStart]);
+    const monthNewTeachers = await monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role=\'TEACHER\' AND deleted_at IS NULL AND created_at>=?', [currentOrgId, monthStart]);
+    const monthGrants = await monthCount('SELECT COUNT(*) n FROM student_course_grants WHERE org_id=? AND granted_at>=?', [currentOrgId, monthStart]);
+    const monthEndedSessions = await monthCount("SELECT COUNT(*) n FROM class_sessions WHERE org_id=? AND status='ENDED' AND ended_at>=?", [currentOrgId, monthStart]);
     // 「需要关注」的两条（合约/席位那两条仍在 alerts 里）：
-    const restrictedAccounts = monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role IN (\'STUDENT\',\'TEACHER\') AND deleted_at IS NULL AND status<>\'ACTIVE\'', [currentOrgId]);
+    const restrictedAccounts = await monthCount('SELECT COUNT(*) n FROM users WHERE org_id=? AND role IN (\'STUDENT\',\'TEACHER\') AND deleted_at IS NULL AND status<>\'ACTIVE\'', [currentOrgId]);
     // ⚠️ 线框图写的是「剩余人次不足」，但平台没定义「不足」的阈值 —— 这里只数**已经用尽**的，
     //    不替平台发明一个阈值（宁可少报，也不给机构一个凭空的门槛）。
-    const exhaustedSeries = monthCount('SELECT COUNT(*) n FROM course_assignments WHERE org_id=? AND status=\'ACTIVE\' AND quota_total>0 AND quota_used>=quota_total', [currentOrgId]);
+    const exhaustedSeries = await monthCount('SELECT COUNT(*) n FROM course_assignments WHERE org_id=? AND status=\'ACTIVE\' AND quota_total>0 AND quota_used>=quota_total', [currentOrgId]);
     return {
       scope: {
         role: auth.user.role,
@@ -294,25 +294,25 @@ export async function handleOrg(ctx) {
     // 如果一律按 20 条分页，这些页面会**静默只显示前 20 个人**（本轮差点就这么上线）。
     // 所以：分页由调用方显式声明（带 page），老调用方行为不变；total 一律给真的。
     const wantsPaging = ctx.search.get('page') !== null;
-    const total = Number(count('SELECT COUNT(*) n FROM users WHERE ' + where, params) || 0);
+    const total = Number(await acount('SELECT COUNT(*) n FROM users WHERE ' + where, params) || 0);
     if (!wantsPaging) {
-      const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT 500', params).map((item) => orgMemberRow(item, currentOrgId));
+      const items = (await arows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT 500', params)).map((item) => orgMemberRow(item, currentOrgId));
       // 老形态：给 items 与真 total（原来那个 total 是「当页条数」，本来就是错的）
       return { items, total, page: 1, limit: 500, totalPages: Math.max(1, Math.ceil(total / 500)) };
     }
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
-    const items = rows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?', [...params, limit, offset]).map((item) => orgMemberRow(item, currentOrgId));
+    const items = (await arows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?', [...params, limit, offset])).map((item) => orgMemberRow(item, currentOrgId));
     return pageResult(items, { page, limit, total });
   }
   let importMatch = part.match(/^\/users\/import\/(preview|commit)$/);
   if (importMatch && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可批量导入账号', 'ORG_ADMIN_REQUIRED');
-    const preview = previewImport(ctx.body || {}, currentOrgId);
+    const preview = await previewImport(ctx.body || {}, currentOrgId);
     if (importMatch[1] === 'preview') return preview;
     if (preview.invalidCount) throw errors.badRequest('批量导入校验失败，未写入任何账号', 'IMPORT_VALIDATION_FAILED', preview);
-    const created = transaction(() => preview.items.map((item) => createMember(currentOrgId, item.value)));
-    created.forEach((item) => audit(ctx, 'USER_IMPORT_CREATE', 'USER', item.id, null, { role: item.role, login: item.login }));
-    audit(ctx, 'USER_IMPORT_COMMIT', 'IMPORT_BATCH', null, null, { total: created.length, logins: created.map((item) => item.login) });
+    const created = await atransaction(async () => await amap(preview.items, async (item) => await createMember(currentOrgId, item.value)));
+    for (const item of created) { await audit(ctx, 'USER_IMPORT_CREATE', 'USER', item.id, null, { role: item.role, login: item.login }); };
+    await audit(ctx, 'USER_IMPORT_COMMIT', 'IMPORT_BATCH', null, null, { total: created.length, logins: created.map((item) => item.login) });
     return { total: created.length, validCount: created.length, invalidCount: 0, items: created.map((item) => orgMemberRow(item, currentOrgId)) };
   }
   if (part === '/users' && method === 'POST') {
@@ -322,15 +322,15 @@ export async function handleOrg(ctx) {
     // 登录名：只允许英文数字（可带 . _ -），全局唯一且**忽略大小写**；
     // 姓名：同机构同角色不允许重名（2026-09-16 用户口径：不同用户可能同登录名或同名字）
     normalizeLogin(login, '登录名');
-    assertLoginAvailable(login);
-    assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role });
-    const phone = validateMemberPhone(body.phone);
+    await assertLoginAvailable(login);
+    await assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role });
+    const phone = await validateMemberPhone(body.phone);
     const permissions = validateMemberPermissions(body.permissions, role);
-    const organization = normalizeOrg(row('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
+    const organization = await normalizeOrg(await arow('SELECT * FROM organizations WHERE id=?', [currentOrgId]));
     if (role === 'TEACHER' && organization.teacherSeats - organization.teacherUsedSeats <= 0) throw errors.badRequest('教师席位不足', 'TEACHER_SEAT_LIMIT');
-    if (body.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
+    if (body.billingPackageId && !await arow('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
     // 批次 D：不再接受 classIds（班级退场）—— 学员进课堂改在「课堂」页做。
-    const created = transaction(() => createMember(currentOrgId, {
+    const created = await atransaction(async () => await createMember(currentOrgId, {
       role, login, displayName, password: String(body.password), phone: phone || null,
       permissions, expiresAt: body.expiresAt || null,
       // 批次 D：student_usage_scope 已退役（取消「在家练习」免课堂通道后它不再决定任何事，
@@ -340,49 +340,49 @@ export async function handleOrg(ctx) {
       billingPackageId: role === 'STUDENT' ? (body.billingPackageId || null) : null,
       // 2026-09-13（P4 删积分）：不再接受 monthlyCreditAllowance / aiCreditLimit（两道刹车都没了）
     }));
-    audit(ctx, 'USER_CREATE', 'USER', created.id, null, { role, login });
+    await audit(ctx, 'USER_CREATE', 'USER', created.id, null, { role, login });
     return orgMemberRow(created, currentOrgId);
   }  let match = part.match(/^\/users\/([^/]+)$/);
   if (match && ['GET','PUT','DELETE'].includes(method)) {
-    if (!hasPermission(auth, 'MANAGE_MEMBERS')) throw errors.forbidden('无账号管理权限', 'ORG_MEMBER_PERMISSION_REQUIRED'); const target = orgUser(auth, match[1]); if (method === 'GET') return normalizeUser(target, { includeAuthMeta: true });
+    if (!hasPermission(auth, 'MANAGE_MEMBERS')) throw errors.forbidden('无账号管理权限', 'ORG_MEMBER_PERMISSION_REQUIRED'); const target = await orgUser(auth, match[1]); if (method === 'GET') return normalizeUser(target, { includeAuthMeta: true });
     if (method === 'DELETE') {
       const now = nowIso();
-      assertTransition(ctx, 'user', target.status, 'DISABLED', { targetType: 'USER', targetId: target.id, before: target, allowSameState: true });
-      transaction(() => { q('UPDATE users SET deleted_at=?,status=?,updated_at=? WHERE id=? AND org_id=?', [now, 'DISABLED', now, target.id, currentOrgId]); q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
-      audit(ctx, 'USER_DELETE', 'USER', target.id, normalizeUser(target), { status: 'DISABLED', deletedAt: now }); return { ok: true };
+      await assertTransition(ctx, 'user', target.status, 'DISABLED', { targetType: 'USER', targetId: target.id, before: target, allowSameState: true });
+      await atransaction(async () => { await aq('UPDATE users SET deleted_at=?,status=?,updated_at=? WHERE id=? AND org_id=?', [now, 'DISABLED', now, target.id, currentOrgId]); await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
+      await audit(ctx, 'USER_DELETE', 'USER', target.id, normalizeUser(target), { status: 'DISABLED', deletedAt: now }); return { ok: true };
     }
     const body = ctx.body || {};
-    if (body.billingPackageId && !row('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
+    if (body.billingPackageId && !await arow('SELECT id FROM billing_packages WHERE id=? AND org_id=?', [body.billingPackageId, currentOrgId])) throw errors.badRequest('套餐不属于当前机构', 'INVALID_BILLING_PACKAGE');
     const nextStatus = body.status === undefined ? target.status : body.status;
     if (!['ACTIVE', 'DISABLED'].includes(nextStatus)) throw errors.badRequest('账号状态无效', 'INVALID_MEMBER_STATUS');
-    assertTransition(ctx, 'user', target.status, nextStatus, { targetType: 'USER', targetId: target.id, before: target, allowSameState: true, code: 'INVALID_MEMBER_STATUS' });
+    await assertTransition(ctx, 'user', target.status, nextStatus, { targetType: 'USER', targetId: target.id, before: target, allowSameState: true, code: 'INVALID_MEMBER_STATUS' });
     if (nextStatus === 'DISABLED' && target.id === auth.user.id) throw errors.badRequest('不能停用当前登录账号', 'SELF_DISABLE_FORBIDDEN');
-    const phone = body.phone === undefined ? target.phone : validateMemberPhone(body.phone, target.id);
+    const phone = body.phone === undefined ? target.phone : await validateMemberPhone(body.phone, target.id);
     const displayName = body.displayName === undefined ? target.display_name : String(body.displayName).trim(); if (!displayName) throw errors.badRequest('姓名不能为空', 'DISPLAY_NAME_REQUIRED');
-    if (displayName !== target.display_name) assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role: target.role, excludeUserId: target.id });
+    if (displayName !== target.display_name) await assertDisplayNameAvailable(displayName, { orgId: currentOrgId, role: target.role, excludeUserId: target.id });
     // 批次 D：`studentUsageScope` 不再接受修改 —— 字段已退役（不再决定任何门禁）。
     // 传了就忽略（不报错），列本身保留历史值。要「能不能用 AI」请看算力池与课堂名单。
     const permissions = body.permissions === undefined ? parseJson(target.permissions, []) : validateMemberPermissions(body.permissions, target.role);
     const now = nowIso();
-    transaction(() => { q('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,billing_package_id=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
-    audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), { ...body, status: nextStatus }); return orgMemberRow(row('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
+    await atransaction(async () => { await aq('UPDATE users SET display_name=?,phone=?,permissions=?,status=?,billing_package_id=?,updated_at=? WHERE id=? AND org_id=?', [displayName, phone, json(permissions), nextStatus, body.billingPackageId === undefined ? target.billing_package_id : body.billingPackageId, now, target.id, currentOrgId]); if (nextStatus === 'DISABLED') await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); });
+    await audit(ctx, 'USER_UPDATE', 'USER', target.id, normalizeUser(target), { ...body, status: nextStatus }); return orgMemberRow(await arow('SELECT * FROM users WHERE id=?', [target.id]), currentOrgId);
   }
   match = part.match(/^\/users\/([^/]+)\/(password|permissions)$/);
   if (match && method === 'PUT') {
-    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作', 'ORG_ADMIN_REQUIRED'); const target = orgUser(auth, match[1]);
-    if (match[2] === 'password') { const password = String(ctx.body?.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位'); const now = nowIso(); transaction(() => { q('UPDATE users SET password_hash=?,updated_at=? WHERE id=? AND org_id=?', [hashPassword(password), now, target.id, currentOrgId]); q('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); }); }
-    if (match[2] === 'permissions') { if (target.role !== 'TEACHER') throw errors.badRequest('只能设置教师权限', 'INVALID_ROLE'); q('UPDATE users SET permissions=?,updated_at=? WHERE id=? AND org_id=?', [json(validateMemberPermissions(ctx.body?.permissions, target.role)), nowIso(), target.id, currentOrgId]); }
+    if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作', 'ORG_ADMIN_REQUIRED'); const target = await orgUser(auth, match[1]);
+    if (match[2] === 'password') { const password = String(ctx.body?.password || ''); if (password.length < 6) throw errors.badRequest('密码至少6位'); const now = nowIso(); await atransaction(async () => { await aq('UPDATE users SET password_hash=?,updated_at=? WHERE id=? AND org_id=?', [hashPassword(password), now, target.id, currentOrgId]); await aq('UPDATE sessions SET superseded_at=COALESCE(superseded_at,?) WHERE user_id=? AND superseded_at IS NULL', [now, target.id]); }); }
+    if (match[2] === 'permissions') { if (target.role !== 'TEACHER') throw errors.badRequest('只能设置教师权限', 'INVALID_ROLE'); await aq('UPDATE users SET permissions=?,updated_at=? WHERE id=? AND org_id=?', [json(validateMemberPermissions(ctx.body?.permissions, target.role)), nowIso(), target.id, currentOrgId]); }
     // 2026-09-13（P4 删积分）：原来还有 period-boosts（给成员加「本周期额外积分」），积分废弃后删除。
-    audit(ctx, 'USER_' + match[2].toUpperCase(), 'USER', target.id, null, ctx.body); return normalizeUser(row('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
+    await audit(ctx, 'USER_' + match[2].toUpperCase(), 'USER', target.id, null, ctx.body); return normalizeUser(await arow('SELECT * FROM users WHERE id=?', [target.id]), { includeAuthMeta: true });
   }
   if (part === '/audit-logs' && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看操作审计', 'ORG_ADMIN_REQUIRED');
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 200, fallback: 50 });
     const action = String(ctx.search.get('action') || '').trim(); const params = [currentOrgId]; let where = 'audit.org_id=?';
     if (action) { where += ' AND audit.action=?'; params.push(action); }
-    const items = rows(`SELECT audit.*,actor.display_name actor_name,actor.login actor_login
+    const items = (await arows(`SELECT audit.*,actor.display_name actor_name,actor.login actor_login
       FROM audit_logs audit LEFT JOIN users actor ON actor.id=audit.actor_id
-      WHERE ${where} ORDER BY audit.created_at DESC LIMIT ${limit}`, params).map((item) => ({
+      WHERE ${where} ORDER BY audit.created_at DESC LIMIT ${limit}`, params)).map((item) => ({
       id: item.id, action: item.action, targetType: item.target_type, targetId: item.target_id || null,
       actorName: item.actor_name || item.actor_login || '系统', actorRole: item.actor_role || null,
       before: parseJson(item.before_data, null), after: parseJson(item.after_data, null), createdAt: item.created_at,
@@ -391,33 +391,33 @@ export async function handleOrg(ctx) {
   }
   if (part === '/billing/packages' && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看计费套餐', 'ORG_ADMIN_REQUIRED');
-    expireDueEnrollments(currentOrgId);
-    return { items: rows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC', [currentOrgId]).map((item) => packageWithSeatUsage(currentOrgId, item)) };
+    await expireDueEnrollments(currentOrgId);
+    return { items: await amap((await arows('SELECT * FROM billing_packages WHERE org_id=? ORDER BY created_at DESC', [currentOrgId])), async (item) => await packageWithSeatUsage(currentOrgId, item)) };
   }
   if (part === '/billing/packages' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建套餐', 'ORG_ADMIN_REQUIRED');
     const body = ctx.body || {}; const name = String(body.name || '').trim();
     if (!name) throw errors.badRequest('套餐名称必填', 'PACKAGE_NAME_REQUIRED');
-    if (row('SELECT id FROM billing_packages WHERE org_id=? AND name=?', [currentOrgId, name])) throw errors.conflict('同名套餐已存在', 'BILLING_PACKAGE_EXISTS');
+    if (await arow('SELECT id FROM billing_packages WHERE org_id=? AND name=?', [currentOrgId, name])) throw errors.conflict('同名套餐已存在', 'BILLING_PACKAGE_EXISTS');
     const capabilities = body.capabilities || {}; const packageId = id('pkg'); const now = nowIso();
     const studentSeats = integer(body.studentSeats, '学员席位', { min: 1, max: 100000, fallback: 1 });
     // 2026-09-13（P4 删积分）：套餐的「月度积分 / 赠送积分」两列保留（历史数据），
     // 但不再作为输入 —— 新套餐一律写 0。套餐现在只服务「学员席位 + 能力开关」。
-    q('INSERT INTO billing_packages(id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,student_seats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+    await aq('INSERT INTO billing_packages(id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,student_seats,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
       packageId, currentOrgId, name, integer(body.priceFen, '价格'), 0, 0, integer(body.durationDays, '套餐有效期', { min: 1, max: 3650, fallback: 30 }),
       capabilities.allowImage ? 1 : 0, capabilities.allowMusic ? 1 : 0, capabilities.allowVideo ? 1 : 0, capabilities.allowPodcast ? 1 : 0, capabilities.allowDubbing ? 1 : 0, studentSeats, now, now,
     ]);
-    const created = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageId, currentOrgId]);
-    audit(ctx, 'BILLING_PACKAGE_CREATE', 'BILLING_PACKAGE', packageId, null, normalizePackage(created), { orgId: currentOrgId });
-    return packageWithSeatUsage(currentOrgId, created);
+    const created = await arow('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageId, currentOrgId]);
+    await audit(ctx, 'BILLING_PACKAGE_CREATE', 'BILLING_PACKAGE', packageId, null, normalizePackage(created), { orgId: currentOrgId });
+    return await packageWithSeatUsage(currentOrgId, created);
   }
   let packageMatch = part.match(/^\/billing\/packages\/([^/]+)$/);
   if (packageMatch && ['GET', 'PUT'].includes(method)) {
-    const target = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageMatch[1], currentOrgId]);
+    const target = await arow('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [packageMatch[1], currentOrgId]);
     if (!target) throw errors.notFound('套餐不存在', 'BILLING_PACKAGE_NOT_FOUND');
-    if (method === 'GET') return packageWithSeatUsage(currentOrgId, target);
+    if (method === 'GET') return await packageWithSeatUsage(currentOrgId, target);
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可修改套餐', 'ORG_ADMIN_REQUIRED');
-    expireDueEnrollments(currentOrgId);
+    await expireDueEnrollments(currentOrgId);
     const body = ctx.body || {}; const capabilities = body.capabilities || {};
     const name = body.name === undefined ? target.name : String(body.name).trim();
     if (!name) throw errors.badRequest('套餐名称必填', 'PACKAGE_NAME_REQUIRED');
@@ -425,14 +425,14 @@ export async function handleOrg(ctx) {
     if (body.status !== undefined) {
       status = body.status;
       if (!['ACTIVE', 'DISABLED'].includes(status)) throw errors.badRequest('套餐状态无效', 'INVALID_PACKAGE_STATUS');
-      if (status === 'DISABLED' && target.status !== 'DISABLED' && occupiedStudentSeats(currentOrgId, target.id) > 0) {
+      if (status === 'DISABLED' && target.status !== 'DISABLED' && await occupiedStudentSeats(currentOrgId, target.id) > 0) {
         throw errors.conflict('套餐仍有已开通学员，请先停用或到期处理对应开通单', 'PACKAGE_HAS_ACTIVE_ENROLLMENTS');
       }
     }
     const studentSeats = body.studentSeats === undefined ? Number(target.student_seats || 0) : integer(body.studentSeats, '学员席位', { min: 1, max: 100000, fallback: 1 });
-    const occupied = occupiedStudentSeats(currentOrgId, target.id);
+    const occupied = await occupiedStudentSeats(currentOrgId, target.id);
     if (studentSeats < occupied) throw errors.conflict('学员席位不能低于当前已占用数量', 'STUDENT_SEAT_BELOW_OCCUPIED');
-    q('UPDATE billing_packages SET name=?,price_fen=?,monthly_credits=?,bonus_credits=?,duration_days=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,student_seats=?,status=?,updated_at=? WHERE id=? AND org_id=?', [
+    await aq('UPDATE billing_packages SET name=?,price_fen=?,monthly_credits=?,bonus_credits=?,duration_days=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,student_seats=?,status=?,updated_at=? WHERE id=? AND org_id=?', [
       name,
       body.priceFen === undefined ? target.price_fen : integer(body.priceFen, '价格'),
       // 两列「月度积分 / 赠送积分」不再接受输入，原值原样保留（历史数据不动）
@@ -446,26 +446,26 @@ export async function handleOrg(ctx) {
       capabilities.allowDubbing === undefined ? target.allow_dubbing : (capabilities.allowDubbing ? 1 : 0),
       studentSeats, status, nowIso(), target.id, currentOrgId,
     ]);
-    const updated = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [target.id, currentOrgId]);
-    audit(ctx, 'BILLING_PACKAGE_UPDATE', 'BILLING_PACKAGE', target.id, normalizePackage(target), normalizePackage(updated), { orgId: currentOrgId });
-    return packageWithSeatUsage(currentOrgId, updated);
+    const updated = await arow('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [target.id, currentOrgId]);
+    await audit(ctx, 'BILLING_PACKAGE_UPDATE', 'BILLING_PACKAGE', target.id, normalizePackage(target), normalizePackage(updated), { orgId: currentOrgId });
+    return await packageWithSeatUsage(currentOrgId, updated);
   }
 
   if (part === '/billing/enrollments' && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学员开通', 'ORG_ADMIN_REQUIRED');
-    expireDueEnrollments(currentOrgId);
+    await expireDueEnrollments(currentOrgId);
     const status = String(ctx.search.get('status') || '').trim().toUpperCase();
     if (status && !ENROLLMENT_STATUSES.has(status)) throw errors.badRequest('开通状态无效', 'INVALID_ENROLLMENT_STATUS');
     const params = [currentOrgId]; let where = 'enrollment.org_id=?';
     if (status) { where += ' AND enrollment.status=?'; params.push(status); }
-    const items = rows(`SELECT enrollment.*,student.display_name student_name,student.login student_login,package.name package_name,
+    const items = await amap((await arows(`SELECT enrollment.*,student.display_name student_name,student.login student_login,package.name package_name,
         COUNT(event.id) event_count,MAX(event.created_at) last_event_at
       FROM student_enrollments enrollment
       JOIN users student ON student.id=enrollment.student_id AND student.org_id=enrollment.org_id
       JOIN billing_packages package ON package.id=enrollment.package_id AND package.org_id=enrollment.org_id
       LEFT JOIN student_enrollment_events event ON event.enrollment_id=enrollment.id
       WHERE ${where}
-      GROUP BY enrollment.id ORDER BY CASE enrollment.status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 WHEN 'SUSPENDED' THEN 2 ELSE 3 END,enrollment.expires_at ASC,enrollment.created_at DESC LIMIT 500`, params).map(normalizeEnrollment);
+      GROUP BY enrollment.id ORDER BY CASE enrollment.status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 WHEN 'SUSPENDED' THEN 2 ELSE 3 END,enrollment.expires_at ASC,enrollment.created_at DESC LIMIT 500`, params)), normalizeEnrollment);
     const active = items.filter((item) => item.status === 'ACTIVE');
     const now = Date.now();
     return { items, summary: { total: items.length, pending: items.filter((item) => item.status === 'PENDING').length, active: active.length, suspended: items.filter((item) => item.status === 'SUSPENDED').length, expiringSoon: active.filter((item) => { const days = Math.ceil((Date.parse(item.expiresAt) - now) / 86400000); return days >= 0 && days <= 30; }).length } };
@@ -473,102 +473,102 @@ export async function handleOrg(ctx) {
   if (part === '/billing/enrollments' && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可创建学员开通单', 'ORG_ADMIN_REQUIRED');
     const body = ctx.body || {}; const studentId = String(body.studentId || '').trim(); const packageId = String(body.packageId || '').trim();
-    const student = row("SELECT * FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
+    const student = await arow("SELECT * FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
     if (!student) throw errors.badRequest('学员不属于当前机构', 'INVALID_ENROLLMENT_STUDENT');
-    const pkg = row("SELECT * FROM billing_packages WHERE id=? AND org_id=? AND status='ACTIVE'", [packageId, currentOrgId]);
+    const pkg = await arow("SELECT * FROM billing_packages WHERE id=? AND org_id=? AND status='ACTIVE'", [packageId, currentOrgId]);
     if (!pkg) throw errors.badRequest('套餐不存在或已停用', 'INVALID_ENROLLMENT_PACKAGE');
-    if (row("SELECT id FROM student_enrollments WHERE student_id=? AND status='ACTIVE'", [student.id])) throw errors.conflict('该学员已有生效中的开通单，请使用续费或停用操作', 'STUDENT_ALREADY_ENROLLED');
+    if (await arow("SELECT id FROM student_enrollments WHERE student_id=? AND status='ACTIVE'", [student.id])) throw errors.conflict('该学员已有生效中的开通单，请使用续费或停用操作', 'STUDENT_ALREADY_ENROLLED');
     const now = nowIso(); const startsAt = enrollmentDate(body.startsAt, '开始时间', now);
     const expiresAt = new Date(new Date(startsAt).valueOf() + Number(pkg.duration_days || 0) * 86400000).toISOString();
     const paymentStatus = body.paymentStatus === undefined ? 'UNRECORDED' : String(body.paymentStatus).trim().toUpperCase();
     if (!PAYMENT_STATUSES.has(paymentStatus)) throw errors.badRequest('线下收款登记状态无效', 'INVALID_PAYMENT_STATUS');
     const notes = String(body.notes || '').trim(); if (notes.length > 2000) throw errors.badRequest('备注不能超过 2000 个字符', 'ENROLLMENT_NOTES_TOO_LONG');
     const enrollmentId = id('enrollment'); const snapshot = packageSnapshot(pkg);
-    q(`INSERT INTO student_enrollments(id,org_id,student_id,package_id,status,payment_status,price_fen,package_snapshot,starts_at,expires_at,notes,created_by,updated_by,created_at,updated_at)
+    await aq(`INSERT INTO student_enrollments(id,org_id,student_id,package_id,status,payment_status,price_fen,package_snapshot,starts_at,expires_at,notes,created_by,updated_by,created_at,updated_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [enrollmentId, currentOrgId, student.id, pkg.id, 'PENDING', paymentStatus, Number(pkg.price_fen || 0), json(snapshot), startsAt, expiresAt, notes, auth.user.id, auth.user.id, now, now]);
-    appendEnrollmentEvent({ enrollmentId, currentOrgId, eventType: 'CREATE', afterStatus: 'PENDING', actorId: auth.user.id, data: { packageId: pkg.id, paymentStatus, startsAt, expiresAt, notes } });
-    const created = enrollmentRow(currentOrgId, enrollmentId);
-    audit(ctx, 'STUDENT_ENROLLMENT_CREATE', 'STUDENT_ENROLLMENT', enrollmentId, null, normalizeEnrollment(created), { orgId: currentOrgId });
-    return normalizeEnrollment(created, { includeEvents: true });
+    await appendEnrollmentEvent({ enrollmentId, currentOrgId, eventType: 'CREATE', afterStatus: 'PENDING', actorId: auth.user.id, data: { packageId: pkg.id, paymentStatus, startsAt, expiresAt, notes } });
+    const created = await enrollmentRow(currentOrgId, enrollmentId);
+    await audit(ctx, 'STUDENT_ENROLLMENT_CREATE', 'STUDENT_ENROLLMENT', enrollmentId, null, await normalizeEnrollment(created), { orgId: currentOrgId });
+    return await normalizeEnrollment(created, { includeEvents: true });
   }
   let enrollmentMatch = part.match(/^\/billing\/enrollments\/([^/]+)$/);
   if (enrollmentMatch && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学员开通', 'ORG_ADMIN_REQUIRED');
-    expireDueEnrollments(currentOrgId);
-    return normalizeEnrollment(enrollmentRow(currentOrgId, enrollmentMatch[1]), { includeEvents: true });
+    await expireDueEnrollments(currentOrgId);
+    return await normalizeEnrollment(await enrollmentRow(currentOrgId, enrollmentMatch[1]), { includeEvents: true });
   }
   let enrollmentActionMatch = part.match(/^\/billing\/enrollments\/([^/]+)\/(payment-record|activate|suspend|resume|renew|void)$/);
   if (enrollmentActionMatch && method === 'POST') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可操作学员开通', 'ORG_ADMIN_REQUIRED');
-    expireDueEnrollments(currentOrgId);
-    const enrollment = enrollmentRow(currentOrgId, enrollmentActionMatch[1]); const action = enrollmentActionMatch[2]; const before = enrollment.status; const now = nowIso();
-    const pkg = row('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [enrollment.package_id, currentOrgId]);
+    await expireDueEnrollments(currentOrgId);
+    const enrollment = await enrollmentRow(currentOrgId, enrollmentActionMatch[1]); const action = enrollmentActionMatch[2]; const before = enrollment.status; const now = nowIso();
+    const pkg = await arow('SELECT * FROM billing_packages WHERE id=? AND org_id=?', [enrollment.package_id, currentOrgId]);
     if (!pkg) throw errors.conflict('开通单关联套餐已不可用', 'ENROLLMENT_PACKAGE_MISSING');
     let after = before; let eventData = {};
     if (action === 'payment-record') {
       const paymentStatus = String(ctx.body?.paymentStatus || 'RECORDED').trim().toUpperCase();
       if (!PAYMENT_STATUSES.has(paymentStatus)) throw errors.badRequest('线下收款登记状态无效', 'INVALID_PAYMENT_STATUS');
-      assertTransition(ctx, 'payment', enrollment.payment_status, paymentStatus, {
-        targetType: 'STUDENT_ENROLLMENT', targetId: enrollment.id, before: normalizeEnrollment(enrollment),
+      await assertTransition(ctx, 'payment', enrollment.payment_status, paymentStatus, {
+        targetType: 'STUDENT_ENROLLMENT', targetId: enrollment.id, before: await normalizeEnrollment(enrollment),
         code: 'INVALID_PAYMENT_STATUS_TRANSITION', details: { action }, message: `收款状态 ${enrollment.payment_status} 不允许转换为 ${paymentStatus}`, allowSameState: true,
       });
     } else {
       const requestedStatus = { activate: 'ACTIVE', suspend: 'SUSPENDED', resume: 'ACTIVE', renew: 'ACTIVE', void: 'VOIDED' }[action];
       const allowedFrom = { activate: ['PENDING'], suspend: ['ACTIVE'], resume: ['SUSPENDED'], renew: ['ACTIVE', 'SUSPENDED', 'EXPIRED'], void: ['PENDING', 'SUSPENDED'] }[action];
-      if (requestedStatus) assertTransition(ctx, 'enrollment', before, requestedStatus, {
-        targetType: 'STUDENT_ENROLLMENT', targetId: enrollment.id, before: normalizeEnrollment(enrollment),
+      if (requestedStatus) await assertTransition(ctx, 'enrollment', before, requestedStatus, {
+        targetType: 'STUDENT_ENROLLMENT', targetId: enrollment.id, before: await normalizeEnrollment(enrollment),
         code: 'INVALID_ENROLLMENT_TRANSITION', details: { action }, message: `当前开通单状态 ${before} 不允许执行 ${action}`, allowedFrom, allowSameState: action === 'renew',
       });
     }
-    transaction(() => {
+    await atransaction(async () => {
       if (action === 'payment-record') {
         const paymentStatus = String(ctx.body?.paymentStatus || 'RECORDED').trim().toUpperCase();
         const notes = ctx.body?.notes === undefined ? enrollment.notes : String(ctx.body.notes || '').trim();
         if (notes.length > 2000) throw errors.badRequest('备注不能超过 2000 个字符', 'ENROLLMENT_NOTES_TOO_LONG');
-        q('UPDATE student_enrollments SET payment_status=?,notes=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?', [paymentStatus, notes, auth.user.id, now, enrollment.id, currentOrgId]);
+        await aq('UPDATE student_enrollments SET payment_status=?,notes=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?', [paymentStatus, notes, auth.user.id, now, enrollment.id, currentOrgId]);
         eventData = { paymentStatus, notes };
       } else if (action === 'activate') {
         if (before !== 'PENDING') throw errors.conflict('仅待开通记录可以完成开通', 'INVALID_ENROLLMENT_TRANSITION');
         if (pkg.status !== 'ACTIVE') throw errors.conflict('套餐已停用，不能继续开通', 'PACKAGE_DISABLED');
-        assertEnrollmentSeat(currentOrgId, pkg);
+        await assertEnrollmentSeat(currentOrgId, pkg);
         after = 'ACTIVE';
-        q("UPDATE student_enrollments SET status='ACTIVE',activated_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
-        setStudentEnrollmentAccess(currentOrgId, enrollment, 'ACTIVE');
+        await aq("UPDATE student_enrollments SET status='ACTIVE',activated_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
+        await setStudentEnrollmentAccess(currentOrgId, enrollment, 'ACTIVE');
       } else if (action === 'suspend') {
         if (before !== 'ACTIVE') throw errors.conflict('仅生效中的开通单可以停用', 'INVALID_ENROLLMENT_TRANSITION');
         after = 'SUSPENDED';
-        q("UPDATE student_enrollments SET status='SUSPENDED',suspended_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
-        setStudentEnrollmentAccess(currentOrgId, enrollment, 'SUSPENDED');
+        await aq("UPDATE student_enrollments SET status='SUSPENDED',suspended_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
+        await setStudentEnrollmentAccess(currentOrgId, enrollment, 'SUSPENDED');
       } else if (action === 'resume') {
         if (before !== 'SUSPENDED') throw errors.conflict('仅已停用记录可以恢复', 'INVALID_ENROLLMENT_TRANSITION');
         if (enrollment.expires_at <= now) throw errors.conflict('开通单已到期，请先续费后再恢复', 'ENROLLMENT_EXPIRED');
         if (pkg.status !== 'ACTIVE') throw errors.conflict('套餐已停用，不能恢复开通', 'PACKAGE_DISABLED');
-        assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId: enrollment.id });
+        await assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId: enrollment.id });
         after = 'ACTIVE';
-        q("UPDATE student_enrollments SET status='ACTIVE',suspended_at=NULL,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [auth.user.id, now, enrollment.id, currentOrgId]);
-        setStudentEnrollmentAccess(currentOrgId, enrollment, 'ACTIVE');
+        await aq("UPDATE student_enrollments SET status='ACTIVE',suspended_at=NULL,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [auth.user.id, now, enrollment.id, currentOrgId]);
+        await setStudentEnrollmentAccess(currentOrgId, enrollment, 'ACTIVE');
       } else if (action === 'renew') {
         if (!['ACTIVE', 'SUSPENDED', 'EXPIRED'].includes(before)) throw errors.conflict('当前开通单不能续费', 'INVALID_ENROLLMENT_TRANSITION');
         if (pkg.status !== 'ACTIVE') throw errors.conflict('套餐已停用，不能续费', 'PACKAGE_DISABLED');
-        if (before !== 'ACTIVE') assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId: enrollment.id });
+        if (before !== 'ACTIVE') await assertEnrollmentSeat(currentOrgId, pkg, { excludeEnrollmentId: enrollment.id });
         const snapshot = parseJson(enrollment.package_snapshot, packageSnapshot(pkg)); const durationDays = Number(snapshot.durationDays || pkg.duration_days || 0);
         if (!Number.isInteger(durationDays) || durationDays < 1) throw errors.conflict('开通单套餐快照无有效期，无法续费', 'INVALID_ENROLLMENT_SNAPSHOT');
         const baseTime = Math.max(Date.parse(enrollment.expires_at), Date.now()); const expiresAt = new Date(baseTime + durationDays * 86400000).toISOString();
         after = 'ACTIVE'; eventData = { previousExpiresAt: enrollment.expires_at, expiresAt, durationDays };
-        q("UPDATE student_enrollments SET status='ACTIVE',expires_at=?,activated_at=COALESCE(activated_at,?),suspended_at=NULL,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [expiresAt, now, auth.user.id, now, enrollment.id, currentOrgId]);
+        await aq("UPDATE student_enrollments SET status='ACTIVE',expires_at=?,activated_at=COALESCE(activated_at,?),suspended_at=NULL,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [expiresAt, now, auth.user.id, now, enrollment.id, currentOrgId]);
         const renewed = { ...enrollment, expires_at: expiresAt };
-        setStudentEnrollmentAccess(currentOrgId, renewed, 'ACTIVE');
+        await setStudentEnrollmentAccess(currentOrgId, renewed, 'ACTIVE');
       } else if (action === 'void') {
         if (!['PENDING', 'SUSPENDED'].includes(before)) throw errors.conflict('仅待开通或已停用记录可以作废', 'INVALID_ENROLLMENT_TRANSITION');
         after = 'VOIDED';
-        q("UPDATE student_enrollments SET status='VOIDED',voided_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
-        if (before === 'SUSPENDED') setStudentEnrollmentAccess(currentOrgId, enrollment, 'VOIDED');
+        await aq("UPDATE student_enrollments SET status='VOIDED',voided_at=?,updated_by=?,updated_at=? WHERE id=? AND org_id=?", [now, auth.user.id, now, enrollment.id, currentOrgId]);
+        if (before === 'SUSPENDED') await setStudentEnrollmentAccess(currentOrgId, enrollment, 'VOIDED');
       }
-      appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: action.toUpperCase(), beforeStatus: before, afterStatus: after, actorId: auth.user.id, data: eventData });
+      await appendEnrollmentEvent({ enrollmentId: enrollment.id, currentOrgId, eventType: action.toUpperCase(), beforeStatus: before, afterStatus: after, actorId: auth.user.id, data: eventData });
     });
-    const updated = enrollmentRow(currentOrgId, enrollment.id);
-    audit(ctx, 'STUDENT_ENROLLMENT_' + action.toUpperCase(), 'STUDENT_ENROLLMENT', enrollment.id, normalizeEnrollment(enrollment), normalizeEnrollment(updated), { orgId: currentOrgId });
-    return normalizeEnrollment(updated, { includeEvents: true });
+    const updated = await enrollmentRow(currentOrgId, enrollment.id);
+    await audit(ctx, 'STUDENT_ENROLLMENT_' + action.toUpperCase(), 'STUDENT_ENROLLMENT', enrollment.id, await normalizeEnrollment(enrollment), await normalizeEnrollment(updated), { orgId: currentOrgId });
+    return await normalizeEnrollment(updated, { includeEvents: true });
   }
 
   if (part === '/ai-usage' && method === 'GET') {
@@ -595,7 +595,7 @@ export async function handleOrg(ctx) {
       conditions.push(`(${teacherUsageScope.replace(/^ AND /, '')})`);
     }
     if (search) { const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR class.name LIKE ? OR usage.fail_code LIKE ?)'); params.push(keyword, keyword, keyword, keyword, keyword); }
-    const items = rows(`SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
+    const items = (await arows(`SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
       session.title session_title,session.lesson_id session_lesson_id,lesson.title lesson_title,
       job.provider job_provider,job.model job_model,
       attempt.sale_price_fen sale_price_fen
@@ -610,7 +610,7 @@ export async function handleOrg(ctx) {
       LEFT JOIN compute_attempts attempt ON attempt.id = (
         SELECT a.id FROM compute_attempts a WHERE a.call_id = usage.compute_call_id AND a.status='SUCCESS'
         ORDER BY a.attempt LIMIT 1)
-      WHERE ${conditions.join(' AND ')} ORDER BY usage.created_at DESC LIMIT ${limit}`, params).map((item) => ({
+      WHERE ${conditions.join(' AND ')} ORDER BY usage.created_at DESC LIMIT ${limit}`, params)).map((item) => ({
       id: item.id, userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
       classSessionId: item.class_session_id || null, classId: item.class_id || null, sessionTitle: item.session_title || null,
       lessonId: item.session_lesson_id || item.project_lesson_id || null, lessonTitle: item.lesson_title || null,
@@ -630,28 +630,28 @@ export async function handleOrg(ctx) {
     const SALE_FEN = salePriceFenSuccessSql();
     const SALE_FEN_ATTEMPT = salePriceFenSuccessSql('attempt');
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 }); const since = new Date(Date.now() - days * 86400000).toISOString();
-    const totals = row(`SELECT ${SALE_FEN} costFen, COUNT(DISTINCT call_id) calls FROM compute_attempts WHERE org_id=? AND created_at>=?`, [currentOrgId, since]);
+    const totals = await arow(`SELECT ${SALE_FEN} costFen, COUNT(DISTINCT call_id) calls FROM compute_attempts WHERE org_id=? AND created_at>=?`, [currentOrgId, since]);
     return {
       totalFen: Number(totals?.costFen || 0), calls: Number(totals?.calls || 0),
-      modalities: rows(`SELECT modality,${SALE_FEN} costFen,COUNT(DISTINCT call_id) calls FROM compute_attempts WHERE org_id=? AND created_at>=? GROUP BY modality ORDER BY costFen DESC`, [currentOrgId, since]),
-      topUsers: rows(`SELECT user.id,user.display_name studentName,${SALE_FEN_ATTEMPT} costFen,COUNT(DISTINCT attempt.call_id) calls FROM compute_attempts attempt JOIN users user ON user.id=attempt.user_id AND user.org_id=attempt.org_id WHERE attempt.org_id=? AND attempt.created_at>=? GROUP BY user.id ORDER BY costFen DESC LIMIT 10`, [currentOrgId, since]),
+      modalities: await arows(`SELECT modality,${SALE_FEN} costFen,COUNT(DISTINCT call_id) calls FROM compute_attempts WHERE org_id=? AND created_at>=? GROUP BY modality ORDER BY costFen DESC`, [currentOrgId, since]),
+      topUsers: await arows(`SELECT user.id,user.display_name studentName,${SALE_FEN_ATTEMPT} costFen,COUNT(DISTINCT attempt.call_id) calls FROM compute_attempts attempt JOIN users user ON user.id=attempt.user_id AND user.org_id=attempt.org_id WHERE attempt.org_id=? AND attempt.created_at>=? GROUP BY user.id ORDER BY costFen DESC LIMIT 10`, [currentOrgId, since]),
     };
   }
 
   if (part === '/course-series' && method === 'GET') {
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
     const fromWhere = `FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`;
-    const total = Number(row(`SELECT COUNT(DISTINCT series.id) n ${fromWhere}`, [currentOrgId, currentOrgId])?.n || 0);
+    const total = Number((await arow(`SELECT COUNT(DISTINCT series.id) n ${fromWhere}`, [currentOrgId, currentOrgId]))?.n || 0);
     // 平台给本机构的授权次数（页面要显示「还剩几次」）：单独查一次，别动上面那条 DISTINCT 查询
-    const quotaBySeries = new Map(rows("SELECT series_id, quota_total, quota_used FROM course_assignments WHERE org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [currentOrgId, nowIso()]).map((item) => [item.series_id, { quotaTotal: Number(item.quota_total || 0), quotaUsed: Number(item.quota_used || 0) }]));
-    const items = rows(`SELECT DISTINCT series.* ${fromWhere} ORDER BY series.sort,series.title LIMIT ? OFFSET ?`, [currentOrgId, currentOrgId, limit, offset]).map((series) => ({ ...normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true, asPublished: true }), assignments: [quotaBySeries.get(series.id) || { quotaTotal: 0, quotaUsed: 0 }] }));
+    const quotaBySeries = new Map((await arows("SELECT series_id, quota_total, quota_used FROM course_assignments WHERE org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [currentOrgId, nowIso()])).map((item) => [item.series_id, { quotaTotal: Number(item.quota_total || 0), quotaUsed: Number(item.quota_used || 0) }]));
+    const items = await amap((await arows(`SELECT DISTINCT series.* ${fromWhere} ORDER BY series.sort,series.title LIMIT ? OFFSET ?`, [currentOrgId, currentOrgId, limit, offset])), async (series) => ({ ...await normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true, asPublished: true }), assignments: [quotaBySeries.get(series.id) || { quotaTotal: 0, quotaUsed: 0 }] }));
     return pageResult(items, { page, limit, total });
   }
   let orgCourseDetailMatch = part.match(/^\/course-series\/([^/]+)$/);
   if (orgCourseDetailMatch && method === 'GET') {
-    const series = row(`SELECT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.id=? AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`, [currentOrgId, orgCourseDetailMatch[1], currentOrgId]);
+    const series = await arow(`SELECT series.* FROM course_series series LEFT JOIN course_assignments assignment ON assignment.series_id=series.id AND assignment.org_id=? AND ${assignmentActiveSql()} WHERE series.id=? AND series.status='PUBLISHED' AND ${orgSeriesAccessSql()}`, [currentOrgId, orgCourseDetailMatch[1], currentOrgId]);
     if (!series) throw errors.notFound('课包不存在或不可访问', 'COURSE_SERIES_NOT_FOUND');
-    const detail = normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true, asPublished: true });
+    const detail = await normalizeSeries(series, { orgId: currentOrgId, includeLessons: true, includeTeaching: true, asPublished: true });
     // 「有哪些课时」已经由 normalizeSeries 里的 publishedLessonVisibilitySql 判完了，这里**不要**再
     // 加一道自己的过滤 —— 2026-09-20 那道 `filter(l => l.status === 'PUBLISHED')` 就是"两条规则打架"：
     // 它读的是**实时** status，于是把「快照里已发布、实时被下掉」的课时从机构端滤没了，
@@ -665,18 +665,18 @@ export async function handleOrg(ctx) {
    * 教师只能操作自己创建的课堂（sessionScope / assertSessionManager），机构管理员管全机构。
    * ⚠️ 下列接口与旧的 /classes/* 并存一段时间：界面已切到课堂，旧接口留待批次 D 清理。
    */
-  const assertTeacherSessionAvailable = (teacherId, excludeId = '') => {
+  const assertTeacherSessionAvailable = async (teacherId, excludeId = '') => {
     // ⚠️ 2026-09-20（用户报「我登录的是机构测试账号，为什么说我账号异常或已停用」）：
     //    这里以前**完全不查账号能不能用**（不是 TEACHER 就直接 return），而界面上的预检
     //    （sessionPrecheck）却要求 `role === 'TEACHER'` —— 两条规则不一致，机构管理员建的课堂
     //    在界面上被标成「账号异常或已停用」（其实一点问题都没有，点开始上课也能开）。现在统一：
     //    「能不能教学」= 账号存在、未删除、未停用；「有没有被别的课堂占着」只对 TEACHER 角色算。
-    const teacher = row('SELECT role, status, deleted_at, display_name FROM users WHERE id=?', [teacherId]);
+    const teacher = await arow('SELECT role, status, deleted_at, display_name FROM users WHERE id=?', [teacherId]);
     if (!teacher) throw errors.badRequest('课堂的负责账号不存在', 'TEACHER_NOT_FOUND');
     if (teacher.deleted_at) throw errors.badRequest('课堂的负责账号已删除，请先换一位负责老师', 'TEACHER_DELETED');
     if (teacher.status !== 'ACTIVE') throw errors.badRequest('课堂的负责账号已停用，请先换一位负责老师', 'TEACHER_DISABLED');
     if (teacher.role !== 'TEACHER') return;
-    const occupied = row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [teacherId, excludeId]);
+    const occupied = await arow("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [teacherId, excludeId]);
     if (occupied) throw errors.conflict(`教师已有待上课或上课中的课堂（${occupied.title || occupied.id}），请先结束或解散`, 'TEACHER_SESSION_OCCUPIED');
   };
   /**
@@ -689,7 +689,7 @@ export async function handleOrg(ctx) {
    * ⚠️ 这里**只读、只给界面看**。真正的写操作仍以下面 POST 里的断言为准：
    * 预检通过之后状态可能已经被别人改了，预检不是放行凭据。
    */
-  const sessionPrecheck = (session, action) => {
+  const sessionPrecheck = async (session, action) => {
     const check = (key, label, passed, detail) => ({ key, label, passed: Boolean(passed), detail });
     const pendingLabel = normalizeSession(session).statusLabel || session.status;
     const statusCheck = check('SESSION_PENDING', '课堂状态 = 待上课', session.status === 'PENDING',
@@ -704,7 +704,7 @@ export async function handleOrg(ctx) {
           canManageSession(auth, session) ? '你有权管理这个课堂' : '你不是这个课堂的负责老师，也不是本机构的机构管理员'),
       ];
     }
-    const teacher = row('SELECT id, display_name, status, role, deleted_at FROM users WHERE id=?', [session.teacher_id]);
+    const teacher = await arow('SELECT id, display_name, status, role, deleted_at FROM users WHERE id=?', [session.teacher_id]);
     // ⚠️ 2026-09-20：**预检必须与写路径同一口径**（`assertTeacherSessionAvailable`）——
     //    以前这里要求必须是 `TEACHER` 角色，而写路径对非 TEACHER 直接放行，于是机构管理员
     //    （`teacher_id` 默认就是创建者自己，见建课堂那处 `let teacherId = auth.user.id`）建的课堂
@@ -712,14 +712,14 @@ export async function handleOrg(ctx) {
     //    现在：可用 = 存在 / 未删除 / 未停用；「被别的课堂占着」只对 TEACHER 角色算。
     const teacherUsable = Boolean(teacher) && !teacher.deleted_at && teacher.status === 'ACTIVE';
     const teacherBusy = teacherUsable && teacher.role === 'TEACHER'
-      ? row("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [session.teacher_id, session.id])
+      ? await arow("SELECT id,title FROM class_sessions WHERE teacher_id=? AND status IN ('PENDING','ACTIVE') AND id<>? LIMIT 1", [session.teacher_id, session.id])
       : null;
-    const lessonOk = Boolean(row("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [session.lesson_id]))
-      && Boolean(accessibleLesson(currentOrgId, session.lesson_id));
-    const roster = rows(`SELECT part.student_id, student.display_name, student.login, student.status account_status, student.expires_at
+    const lessonOk = Boolean(await arow("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [session.lesson_id]))
+      && Boolean(await accessibleLesson(currentOrgId, session.lesson_id));
+    const roster = await arows(`SELECT part.student_id, student.display_name, student.login, student.status account_status, student.expires_at
       FROM session_students part JOIN users student ON student.id=part.student_id
       WHERE part.session_id=? AND part.status='PENDING'`, [session.id]);
-    const granted = new Set(rows('SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL', [session.org_id, session.series_id]).map((item) => item.student_id));
+    const granted = new Set((await arows('SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL', [session.org_id, session.series_id])).map((item) => item.student_id));
     const ineligible = roster.filter((item) => item.account_status !== 'ACTIVE'
       || (item.expires_at && Date.parse(item.expires_at) <= Date.now()) || !granted.has(item.student_id));
     return [
@@ -738,8 +738,8 @@ export async function handleOrg(ctx) {
           : '账号 / 课包许可均通过'),
     ];
   };
-  const sessionInOrg = (id, { manage = true } = {}) => {
-    const value = row('SELECT * FROM class_sessions WHERE id=?', [id]);
+  const sessionInOrg = async (id, { manage = true } = {}) => {
+    const value = await arow('SELECT * FROM class_sessions WHERE id=?', [id]);
     if (!value) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
     if (value.org_id !== currentOrgId) throw errors.notFound('课堂不存在', 'SESSION_NOT_FOUND');
     return manage || auth.user.role === 'TEACHER' ? assertSessionManager(auth, value) : value;
@@ -755,9 +755,9 @@ export async function handleOrg(ctx) {
    *   · org    ：作品属于本机构即可（机构内可见，不看有没有课堂）。
    * 两种作用域返回**同一套 URL 前缀**，前端（ClassroomWork）才能一处复用。
    */
-  const resolveWorkScope = (sessionId) => {
+  const resolveWorkScope = async (sessionId) => {
     if (!sessionId) return { sessionId: null, base: '/api/org/works' };
-    const session = sessionInOrg(sessionId, { manage: false });
+    const session = await sessionInOrg(sessionId, { manage: false });
     return { sessionId: session.id, base: `/api/org/sessions/${encodeURIComponent(session.id)}/works` };
   };
   /** VibeCoding 作品：课堂作用域要它挂在这堂课里；机构作用域只认机构。 */
@@ -772,14 +772,14 @@ export async function handleOrg(ctx) {
   const sessionWorkFileMatch = part.match(/^\/sessions\/([^/]+)\/works\/(VIBECODING)\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
   const orgWorkFileMatch = part.match(/^\/works\/(VIBECODING)\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
   if ((sessionWorkFileMatch || orgWorkFileMatch) && method === 'GET') {
-    const scope = sessionWorkFileMatch ? resolveWorkScope(sessionWorkFileMatch[1]) : resolveWorkScope(null);
+    const scope = sessionWorkFileMatch ? await resolveWorkScope(sessionWorkFileMatch[1]) : await resolveWorkScope(null);
     const [, workId, rawName, mode] = sessionWorkFileMatch
       ? [, sessionWorkFileMatch[3], sessionWorkFileMatch[4], sessionWorkFileMatch[5]]
       : [, orgWorkFileMatch[2], orgWorkFileMatch[3], orgWorkFileMatch[4]];
     let name = '';
     try { name = decodeURIComponent(rawName); } catch { throw errors.badRequest('文件名编码无效', 'INVALID_FILE_NAME_ENCODING'); }
     if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) throw errors.badRequest('文件名不合法', 'INVALID_FILE_NAME');
-    const work = row(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
+    const work = await arow(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
           JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
             AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
           JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
@@ -789,7 +789,7 @@ export async function handleOrg(ctx) {
     if (!fileId || !snapshotDocumentFileIds(work).has(String(fileId))) {
       throw errors.notFound('文件不属于此作品', 'SESSION_WORK_FILE_NOT_FOUND');
     }
-    const file = row('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
     if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE') throw errors.notFound('作品文件不可用', 'SESSION_WORK_FILE_NOT_FOUND');
     if (file.expires_at && Date.parse(file.expires_at) <= Date.now()) throw errors.forbidden('文件已过期', 'FILE_EXPIRED');
     return mode === 'preview' ? prepareFilePreview(ctx, file) : prepareFileDownload(ctx, file);
@@ -798,34 +798,34 @@ export async function handleOrg(ctx) {
   const sessionWorkMatch = part.match(/^\/sessions\/([^/]+)\/works\/(CANVAS|VIBECODING)\/([^/]+)(?:\/images\/([^/]+))?$/);
   const orgWorkMatch = part.match(/^\/works\/(CANVAS|VIBECODING)\/([^/]+)(?:\/images\/([^/]+))?$/);
   if ((sessionWorkMatch || orgWorkMatch) && method === 'GET') {
-    const scope = sessionWorkMatch ? resolveWorkScope(sessionWorkMatch[1]) : resolveWorkScope(null);
+    const scope = sessionWorkMatch ? await resolveWorkScope(sessionWorkMatch[1]) : await resolveWorkScope(null);
     const [source, workId, imageId] = sessionWorkMatch
       ? [sessionWorkMatch[2], sessionWorkMatch[3], sessionWorkMatch[4]]
       : [orgWorkMatch[1], orgWorkMatch[2], orgWorkMatch[3]];
     const work = source === 'CANVAS'
-      ? row(`SELECT work.*,student.display_name student_name FROM works work
+      ? await arow(`SELECT work.*,student.display_name student_name FROM works work
           JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
           WHERE work.id=? AND work.org_id=?${scope.sessionId ? ' AND work.class_session_id=?' : ''}`,
           scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId])
-      : row(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
+      : await arow(`SELECT submission.*,student.display_name student_name FROM vibecoding_submissions submission
           JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id
             AND conversation.org_id=submission.org_id AND conversation.student_id=submission.student_id
           JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id
           WHERE ${vibeWorkWhere(scope).sql}`,
           scope.sessionId ? [workId, currentOrgId, scope.sessionId] : [workId, currentOrgId]);
     if (!work) throw errors.notFound(scope.sessionId ? '作品不属于此课堂' : '作品不存在', 'SESSION_WORK_NOT_FOUND');
-    const canvasSnapshot = source === 'CANVAS' ? normalizeWork(work, { includeSnapshot: true }).canvasSnapshot : null;
+    const canvasSnapshot = source === 'CANVAS' ? (await normalizeWork(work, { includeSnapshot: true })).canvasSnapshot : null;
     // 准入清单 = 画布里挂的站内素材 **∪ 生成产物归档件**。后者不在画布上也照样是"这件作品的东西"
     // （作品读面会把 media_assets 列出来给老师看）—— 少这一半就是"界面上看得到地址、点开 404"。
     const allowedImages = source === 'VIBECODING' ? snapshotImageFileIds(work) : new Set([
       ...(Array.isArray(canvasSnapshot?.nodes) ? canvasSnapshot.nodes : []).flatMap((node) =>
         ['previewUrl', 'assetUrl', 'referenceUrl'].map((key) => String(node?.data?.[key] || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean)),
       ...canvasMediaFrom(canvasSnapshot).map((item) => item.fileId).filter(Boolean),
-      ...rows('SELECT asset_url FROM media_assets WHERE project_id=?', [work.project_id]).map((asset) => String(asset.asset_url || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean),
+      ...(await arows('SELECT asset_url FROM media_assets WHERE project_id=?', [work.project_id])).map((asset) => String(asset.asset_url || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1]).filter(Boolean),
     ]);
     if (imageId) {
       if (!allowedImages.has(imageId)) throw errors.notFound('图片不属于此作品', 'SESSION_WORK_IMAGE_NOT_FOUND');
-      const file = row('SELECT * FROM file_assets WHERE id=?', [imageId]);
+      const file = await arow('SELECT * FROM file_assets WHERE id=?', [imageId]);
       if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(String(file.mime_type || '').toLowerCase())
         || (file.owner_user_id !== work.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))
         || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'SESSION_WORK_IMAGE_NOT_FOUND');
@@ -880,19 +880,19 @@ export async function handleOrg(ctx) {
       LEFT JOIN course_series series ON series.id = session.series_id
       LEFT JOIN users teacher ON teacher.id = session.teacher_id`;
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 100 });
-    const total = count(`SELECT COUNT(*) n ${FROM} WHERE ${conditions.join(' AND ')}`, params);
+    const total = await acount(`SELECT COUNT(*) n ${FROM} WHERE ${conditions.join(' AND ')}`, params);
     const statusCounts = { PENDING: 0, ACTIVE: 0, ENDED: 0, DISSOLVED: 0 };
-    for (const item of rows(`SELECT session.status status, COUNT(*) n ${FROM} WHERE ${baseConditions.join(' AND ')} GROUP BY session.status`, baseParams)) {
+    for (const item of await arows(`SELECT session.status status, COUNT(*) n ${FROM} WHERE ${baseConditions.join(' AND ')} GROUP BY session.status`, baseParams)) {
       if (statusCounts[item.status] !== undefined) statusCounts[item.status] = Number(item.n || 0);
     }
-    const items = rows(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title,
+    const items = await arows(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title,
         teacher.display_name teacher_name
       ${FROM}
       WHERE ${conditions.join(' AND ')}
       ORDER BY CASE session.status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 ELSE 2 END,
                COALESCE(session.started_at, session.created_at) DESC
       LIMIT ? OFFSET ?`, [...params, limit, offset]);
-    const counts = sessionStudentCounts(items.map((item) => item.id));
+    const counts = await sessionStudentCounts(items.map((item) => item.id));
     return {
       ...pageResult(items.map((item) => ({
         ...normalizeSession(item),
@@ -901,7 +901,7 @@ export async function handleOrg(ctx) {
         completedCount: counts.get(`${item.id}:COMPLETED`) || 0,
       })), { page, limit, total }),
       statusCounts,
-      ongoingSession: auth.user.role === 'TEACHER' ? row("SELECT id,title,status FROM class_sessions WHERE org_id=? AND teacher_id=? AND status IN ('PENDING','ACTIVE') ORDER BY created_at DESC LIMIT 1", [currentOrgId, auth.user.id]) || null : null,
+      ongoingSession: auth.user.role === 'TEACHER' ? await arow("SELECT id,title,status FROM class_sessions WHERE org_id=? AND teacher_id=? AND status IN ('PENDING','ACTIVE') ORDER BY created_at DESC LIMIT 1", [currentOrgId, auth.user.id]) || null : null,
       filters: { status: statusFiltered ? status : null, days, seriesId: seriesId || null, lessonId: lessonId || null },
     };
   }
@@ -909,28 +909,28 @@ export async function handleOrg(ctx) {
     const body = ctx.body || {};
     const lessonId = String(body.lessonId || '').trim();
     if (!lessonId) throw errors.badRequest('请选择这节课（课包里的第几节）', 'SESSION_LESSON_REQUIRED');
-    const lesson = row("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [lessonId]);
+    const lesson = await arow("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [lessonId]);
     if (!lesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_FOUND');
-    if (!accessibleLesson(currentOrgId, lessonId)) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
-    const publishedLesson = normalizeLesson(lesson, { asPublished: true });
+    if (!await accessibleLesson(currentOrgId, lessonId)) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
+    const publishedLesson = await normalizeLesson(lesson, { asPublished: true });
     const deliveryMode = String(body.deliveryMode || publishedLesson.deliveryMode || 'CANVAS').trim().toUpperCase();
     if (!['CANVAS', 'VIBECODING'].includes(deliveryMode) || !publishedLesson.deliveryModes.includes(deliveryMode)) throw errors.badRequest('该课时未发布此入口类型', 'INVALID_DELIVERY_MODE');
     // 负责老师：教师建课挂自己；机构管理员可以指定本机构的教师，默认也挂自己
     let teacherId = auth.user.id;
     if (auth.user.role === 'ORG_ADMIN' && body.teacherId) {
-      const teacher = row("SELECT id FROM users WHERE id=? AND org_id=? AND role='TEACHER' AND deleted_at IS NULL", [String(body.teacherId), currentOrgId]);
+      const teacher = await arow("SELECT id FROM users WHERE id=? AND org_id=? AND role='TEACHER' AND deleted_at IS NULL", [String(body.teacherId), currentOrgId]);
       if (!teacher) throw errors.badRequest('指定的老师不属于本机构', 'INVALID_TEACHER');
       teacherId = teacher.id;
     }
-    const lessonCapabilities = lessonCanvasConfig(lessonId).capabilities || [];
+    const lessonCapabilities = (await lessonCanvasConfig(lessonId)).capabilities || [];
     const capability = body.capabilities || {};
     const capabilityDefault = (flag, key) => (capability[flag] === undefined ? (lessonCapabilities.includes(key) ? 1 : 0) : (capability[flag] ? 1 : 0));
     const sessionId = id('csession');
     const now = nowIso();
     const title = String(body.title || '').trim().slice(0, 120)
       || `${lesson.title} · ${new Date(now).toISOString().slice(5, 10)}`;
-    transaction(() => {
-      assertTeacherSessionAvailable(teacherId);
+    await atransaction(async () => {
+      await assertTeacherSessionAvailable(teacherId);
       // 2026-09-18（用户口径，两次更正后的最终口径）：学生算力额度**只观测、不真拦**
       // （原话：「学生算力额度的设置目前都是不真拦，都是给我们内部看的」）。
       // 这里写的是 `student_cost_cap_fen`：本课堂**每名学生**的**算力观测上限（分）**，
@@ -939,7 +939,7 @@ export async function handleOrg(ctx) {
       // **留空/不传 = NULL = 不设观测上限**（照样记账、照样统计，只是没有"超没超"可比）。
       // 字段名：capabilities.studentCostCapFen（单位「分」，不是次数；老字段 studentCallCap
       // 已退役，**故意不做单位换算**：把「次数」乘一个价猜成钱等于凭空发明数字）。
-      q(`INSERT INTO class_sessions(id, title, org_id, series_id, lesson_id, teacher_id, status, delivery_mode,
+      await aq(`INSERT INTO class_sessions(id, title, org_id, series_id, lesson_id, teacher_id, status, delivery_mode,
          ai_paused, student_cost_cap_fen, allow_text, allow_image, allow_music, allow_video, allow_podcast, allow_dubbing, created_at, updated_at, platform_budget_fen)
        VALUES (?,?,?,?,?,?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [sessionId, title, currentOrgId, lesson.series_id, lessonId, teacherId, deliveryMode,
@@ -951,8 +951,8 @@ export async function handleOrg(ctx) {
       capabilityDefault('allowText', 'text'), capabilityDefault('allowImage', 'image'),
       capabilityDefault('allowMusic', 'music'), capabilityDefault('allowVideo', 'video'), 0, 0, now, now, publishedLesson.platformBudgetFen ?? null]);
     });
-    audit(ctx, 'SESSION_CREATE', 'CLASS_SESSION', sessionId, null, { title, lessonId, deliveryMode, teacherId });
-    const created = row(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title, teacher.display_name teacher_name
+    await audit(ctx, 'SESSION_CREATE', 'CLASS_SESSION', sessionId, null, { title, lessonId, deliveryMode, teacherId });
+    const created = await arow(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title, teacher.display_name teacher_name
       FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
       LEFT JOIN course_series series ON series.id=session.series_id LEFT JOIN users teacher ON teacher.id=session.teacher_id
       WHERE session.id=?`, [sessionId]);
@@ -960,8 +960,8 @@ export async function handleOrg(ctx) {
   }
   let sessionDetailMatch = part.match(/^\/sessions\/([^/]+)$/);
   if (sessionDetailMatch && method === 'PUT') {
-    return transaction(() => {
-    const target = sessionInOrg(sessionDetailMatch[1]);
+    return await atransaction(async () => {
+    const target = await sessionInOrg(sessionDetailMatch[1]);
     if (target.status !== 'PENDING') throw errors.conflict('只有待上课课堂可以编辑名称', 'SESSION_NOT_PENDING');
     const body = ctx.body || {};
     const titleProvided = Object.prototype.hasOwnProperty.call(body, 'title');
@@ -969,44 +969,44 @@ export async function handleOrg(ctx) {
     const title = titleProvided ? String(body.title || '').trim().slice(0, 120) : target.title;
     if (titleProvided && !title) throw errors.badRequest('课堂名称不能为空', 'SESSION_TITLE_REQUIRED');
     if (!lessonProvided && !Object.prototype.hasOwnProperty.call(body, 'deliveryMode')) {
-      q('UPDATE class_sessions SET title=?,updated_at=? WHERE id=?', [title, nowIso(), target.id]);
-      const updated = row('SELECT * FROM class_sessions WHERE id=?', [target.id]);
-      audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, normalizeSession(target), { ...normalizeSession(updated), swappedLesson: false, rosterCleared: false });
+      await aq('UPDATE class_sessions SET title=?,updated_at=? WHERE id=?', [title, nowIso(), target.id]);
+      const updated = await arow('SELECT * FROM class_sessions WHERE id=?', [target.id]);
+      await audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, normalizeSession(target), { ...normalizeSession(updated), swappedLesson: false, rosterCleared: false });
       return normalizeSession(updated);
     }
     const nextLessonId = lessonProvided ? String(body.lessonId || '').trim() : target.lesson_id;
     if (!nextLessonId) throw errors.badRequest('请选择这节课（课包里的第几节）', 'SESSION_LESSON_REQUIRED');
-    const nextLesson = row("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [nextLessonId]);
+    const nextLesson = await arow("SELECT * FROM course_lessons WHERE id=? AND status='PUBLISHED'", [nextLessonId]);
     if (!nextLesson) throw errors.notFound('课时不存在或未发布', 'LESSON_NOT_FOUND');
-    if (!accessibleLesson(currentOrgId, nextLessonId)) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
-    const roster = Number(row("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status<>'REMOVED'", [target.id])?.n || 0);
+    if (!await accessibleLesson(currentOrgId, nextLessonId)) throw errors.forbidden('这个课包还没有授权给本机构', 'COURSE_NOT_ASSIGNED');
+    const roster = Number((await arow("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status<>'REMOVED'", [target.id]))?.n || 0);
     if (lessonProvided && nextLessonId !== target.lesson_id && roster > 0 && body.confirmClearStudents !== true) throw errors.conflict('换课会清空当前课堂名单，请明确确认', 'SESSION_SWAP_CONFIRM_REQUIRED');
-    const publishedLesson = normalizeLesson(nextLesson, { asPublished: true });
+    const publishedLesson = await normalizeLesson(nextLesson, { asPublished: true });
     // 未显式传 deliveryMode 时，换课取新课默认；同课编辑保留现有配置。
     const lessonChanged = lessonProvided && nextLessonId !== target.lesson_id;
     const deliveryMode = String(Object.prototype.hasOwnProperty.call(body, 'deliveryMode') ? (body.deliveryMode ?? '') : ((lessonChanged ? publishedLesson.deliveryMode : target.delivery_mode) || 'CANVAS')).trim().toUpperCase();
     if (!['CANVAS', 'VIBECODING'].includes(deliveryMode) || !publishedLesson.deliveryModes.includes(deliveryMode)) throw errors.badRequest('该课时未发布此入口类型', 'INVALID_DELIVERY_MODE');
     const before = normalizeSession(target); const now = nowIso();
     {
-      if (lessonChanged && roster > 0) q("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason='SESSION_LESSON_SWAP', updated_at=? WHERE session_id=? AND status<>'REMOVED'", [auth.user.id, now, now, target.id]);
+      if (lessonChanged && roster > 0) await aq("UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason='SESSION_LESSON_SWAP', updated_at=? WHERE session_id=? AND status<>'REMOVED'", [auth.user.id, now, now, target.id]);
       // 2026-09-18：`student_call_cap`（次数）→ `student_cost_cap_fen`（分，**观测口径、不拦人**）。
       // 「换课」时与 platform_budget_fen 一样重新取新课时快照 → 这里没有课时级的观测上限基准，
       // 所以换课就**清成 NULL（= 不设观测上限）**，绝不用老课的数字顶替新课堂。
-      q('UPDATE class_sessions SET title=?,lesson_id=?,series_id=?,delivery_mode=?,platform_budget_fen=?,ai_paused=?,student_cost_cap_fen=?,allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,updated_at=? WHERE id=?', [title, nextLessonId, nextLesson.series_id, deliveryMode, lessonChanged ? (publishedLesson.platformBudgetFen ?? null) : target.platform_budget_fen, lessonChanged ? 0 : target.ai_paused, lessonChanged ? null : target.student_cost_cap_fen, lessonChanged ? (publishedLesson.capabilities || []).includes('text') * 1 : target.allow_text, lessonChanged ? (publishedLesson.capabilities || []).includes('image') * 1 : target.allow_image, lessonChanged ? (publishedLesson.capabilities || []).includes('music') * 1 : target.allow_music, lessonChanged ? (publishedLesson.capabilities || []).includes('video') * 1 : target.allow_video, lessonChanged ? 0 : target.allow_podcast, lessonChanged ? 0 : target.allow_dubbing, now, target.id]);
+      await aq('UPDATE class_sessions SET title=?,lesson_id=?,series_id=?,delivery_mode=?,platform_budget_fen=?,ai_paused=?,student_cost_cap_fen=?,allow_text=?,allow_image=?,allow_music=?,allow_video=?,allow_podcast=?,allow_dubbing=?,updated_at=? WHERE id=?', [title, nextLessonId, nextLesson.series_id, deliveryMode, lessonChanged ? (publishedLesson.platformBudgetFen ?? null) : target.platform_budget_fen, lessonChanged ? 0 : target.ai_paused, lessonChanged ? null : target.student_cost_cap_fen, lessonChanged ? (publishedLesson.capabilities || []).includes('text') * 1 : target.allow_text, lessonChanged ? (publishedLesson.capabilities || []).includes('image') * 1 : target.allow_image, lessonChanged ? (publishedLesson.capabilities || []).includes('music') * 1 : target.allow_music, lessonChanged ? (publishedLesson.capabilities || []).includes('video') * 1 : target.allow_video, lessonChanged ? 0 : target.allow_podcast, lessonChanged ? 0 : target.allow_dubbing, now, target.id]);
     }
-    const updated = row('SELECT * FROM class_sessions WHERE id=?', [target.id]);
-    audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, before, { ...normalizeSession(updated), title, swappedLesson: lessonChanged, rosterCleared: lessonChanged && roster > 0 });
+    const updated = await arow('SELECT * FROM class_sessions WHERE id=?', [target.id]);
+    await audit(ctx, 'SESSION_UPDATE', 'CLASS_SESSION', target.id, before, { ...normalizeSession(updated), title, swappedLesson: lessonChanged, rosterCleared: lessonChanged && roster > 0 });
     return normalizeSession(updated);
     });
   }
   if (sessionDetailMatch && method === 'GET') {
-    const target = sessionInOrg(sessionDetailMatch[1], { manage: false });
-    const detail = row(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, lesson.lesson_content lesson_content,
+    const target = await sessionInOrg(sessionDetailMatch[1], { manage: false });
+    const detail = await arow(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, lesson.lesson_content lesson_content,
         series.title series_title, teacher.display_name teacher_name
       FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
       LEFT JOIN course_series series ON series.id=session.series_id LEFT JOIN users teacher ON teacher.id=session.teacher_id
       WHERE session.id=?`, [target.id]);
-    const students = rows(`SELECT part.*, student.display_name student_name, student.login student_login, adder.display_name added_by_name
+    const students = await arows(`SELECT part.*, student.display_name student_name, student.login student_login, adder.display_name added_by_name
       FROM session_students part
       JOIN users student ON student.id=part.student_id
       LEFT JOIN users adder ON adder.id=part.added_by
@@ -1017,7 +1017,7 @@ export async function handleOrg(ctx) {
       ...normalizeSession(detail),
       // 「查看课件」用：前端拿它在新标签打开机构端的课时教案抽屉
       coursewareUrl: detail.series_id ? `/org/courses/${detail.series_id}?lesson=${detail.lesson_id || ''}` : null,
-      ...sessionRuntimeDetail(target, auth, students),
+      ...await sessionRuntimeDetail(target, auth, students),
       studentSummary: {
         total: students.filter((item) => item.status !== 'REMOVED').length,
         pending: students.filter((item) => item.status === 'PENDING').length,
@@ -1031,21 +1031,21 @@ export async function handleOrg(ctx) {
   // 读权限与详情一致（本人课堂 / 机构管理员看全机构），因为它只是把详情的字段组合成一张清单。
   let sessionPrecheckMatch = part.match(/^\/sessions\/([^/]+)\/precheck$/);
   if (sessionPrecheckMatch && method === 'GET') {
-    const target = sessionInOrg(sessionPrecheckMatch[1], { manage: false });
+    const target = await sessionInOrg(sessionPrecheckMatch[1], { manage: false });
     const action = String(ctx.search.get('action') || 'start').trim().toLowerCase();
     if (!['start', 'dissolve'].includes(action)) throw errors.badRequest('预检类型只有 start / dissolve', 'INVALID_PRECHECK_ACTION');
-    const checks = sessionPrecheck(target, action);
+    const checks = await sessionPrecheck(target, action);
     return { sessionId: target.id, action, allPassed: checks.every((item) => item.passed), checks };
   }
   let sessionActionMatch = part.match(/^\/sessions\/([^/]+)\/(start|end|dissolve)$/);
   if (sessionActionMatch && method === 'POST') {
-    const target = sessionInOrg(sessionActionMatch[1]);
+    const target = await sessionInOrg(sessionActionMatch[1]);
     const action = sessionActionMatch[2];
     const reason = String(ctx.body?.reason || '').trim().slice(0, 500) || null;
     const now = nowIso();
     if (action === 'start') {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以开始上课', 'SESSION_NOT_PENDING');
-      const ready = count("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status='PENDING'", [target.id]);
+      const ready = await acount("SELECT COUNT(*) n FROM session_students WHERE session_id=? AND status='PENDING'", [target.id]);
       if (!ready) throw errors.badRequest('先添加学员再开始上课（名单为空不能开课）', 'SESSION_STUDENTS_REQUIRED');
       // ⭐ 开课要**复查占用**（2026-09-20，用户口径：「他进了这个课堂，别的课堂就加不进，必须先解散/结束」）。
       //    加人那一步已经拦了（`IN_OTHER_SESSION`，连 PENDING 也算占用），但**开课这一步以前不查** ——
@@ -1054,7 +1054,7 @@ export async function handleOrg(ctx) {
       //    老师一点「开始上课」就会造出**同一个学生两场 ACTIVE 课堂**，
       //    而 `client-context` 只会默默挑"最近开始的那一场"（学生做 A 课作业、拿到 B 课的次数上限）。
       //    正常库上这条永不触发（加人时就已经拦住），它只对历史/异常名单说话。
-      const busy = rows(
+      const busy = await arows(
         `SELECT DISTINCT student.display_name AS name, session.title AS session_title,
                 COALESCE(lesson.published_title, lesson.title) AS lesson_title
            FROM session_students part
@@ -1070,62 +1070,62 @@ export async function handleOrg(ctx) {
         const detail = busy.map((item) => `${item.name}（${item.session_title || '未命名课堂'} · ${item.lesson_title || '未知课程'}）`).join('、');
         throw errors.conflict(`这些学员还在另一场课堂里：${detail}。先结束或解散那场课堂，再开始这一节。`, 'STUDENT_IN_OTHER_SESSION');
       }
-      transaction(() => {
-        assertTeacherSessionAvailable(target.teacher_id, target.id);
-        if (!row("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [target.lesson_id]) || !accessibleLesson(currentOrgId, target.lesson_id)) throw errors.forbidden('课时未发布或授权已失效', 'LESSON_NOT_ASSIGNED');
-        assertTransition(ctx, 'classSession', target.status, 'ACTIVE', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能开始上课' });
-        q("UPDATE class_sessions SET status='ACTIVE', started_by=?, started_at=?, updated_at=? WHERE id=?", [auth.user.id, now, now, target.id]);
-        q("UPDATE session_students SET status='ACTIVE', updated_at=? WHERE session_id=? AND status='PENDING'", [now, target.id]);
+      await atransaction(async () => {
+        await assertTeacherSessionAvailable(target.teacher_id, target.id);
+        if (!await arow("SELECT lesson.id FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'", [target.lesson_id]) || !await accessibleLesson(currentOrgId, target.lesson_id)) throw errors.forbidden('课时未发布或授权已失效', 'LESSON_NOT_ASSIGNED');
+        await assertTransition(ctx, 'classSession', target.status, 'ACTIVE', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能开始上课' });
+        await aq("UPDATE class_sessions SET status='ACTIVE', started_by=?, started_at=?, updated_at=? WHERE id=?", [auth.user.id, now, now, target.id]);
+        await aq("UPDATE session_students SET status='ACTIVE', updated_at=? WHERE session_id=? AND status='PENDING'", [now, target.id]);
       });
-      audit(ctx, 'SESSION_START', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'ACTIVE', studentCount: ready });
+      await audit(ctx, 'SESSION_START', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'ACTIVE', studentCount: ready });
       // 开始上课就把这节课学生的环境**预热**（尽力而为、不阻塞这个响应）：
       // 学生点「进入创作环境」时环境已经热了 → 复用 0.07 秒，而不是干等 17.9 秒冷启动。
       warmSessionRuntimes(target.id, target.lesson_id, target.org_id);
     } else if (action === 'end') {
       if (target.status !== 'ACTIVE') throw errors.conflict('只有正在上课的课堂可以结束', 'SESSION_NOT_ACTIVE');
-      const settlement = transaction(() => {
-        assertTransition(ctx, 'classSession', target.status, 'ENDED', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能结束课堂' });
+      const settlement = await atransaction(async () => {
+        await assertTransition(ctx, 'classSession', target.status, 'ENDED', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能结束课堂' });
         // 先结算学员（按「这节课有没有消耗过算力」），再落课堂状态：两件事在同一事务里
-        const summary = settleSessionStudents({ sessionId: target.id, actorId: auth.user.id });
-        q("UPDATE class_sessions SET status='ENDED', ended_by=?, ended_at=?, ended_reason=?, updated_at=? WHERE id=?", [auth.user.id, now, reason || 'MANUAL', now, target.id]);
+        const summary = await settleSessionStudents({ sessionId: target.id, actorId: auth.user.id });
+        await aq("UPDATE class_sessions SET status='ENDED', ended_by=?, ended_at=?, ended_reason=?, updated_at=? WHERE id=?", [auth.user.id, now, reason || 'MANUAL', now, target.id]);
         return summary;
       });
-      audit(ctx, 'SESSION_END', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'ENDED', ...settlement });
+      await audit(ctx, 'SESSION_END', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'ENDED', ...settlement });
       releaseSessionRuntimes(target.id, 'SESSION_END');
     } else {
       if (target.status !== 'PENDING') throw errors.conflict('只有待上课的课堂可以解散', 'SESSION_NOT_PENDING');
-      transaction(() => {
-        assertTransition(ctx, 'classSession', target.status, 'DISSOLVED', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能解散课堂' });
-        q(`UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason=?, updated_at=?
+      await atransaction(async () => {
+        await assertTransition(ctx, 'classSession', target.status, 'DISSOLVED', { targetType: 'CLASS_SESSION', targetId: target.id, before: normalizeSession(target), code: 'INVALID_CLASS_SESSION_TRANSITION', message: '当前状态不能解散课堂' });
+        await aq(`UPDATE session_students SET status='REMOVED', removed_by=?, removed_at=?, removed_reason=?, updated_at=?
             WHERE session_id=? AND status<>'REMOVED'`, [auth.user.id, now, reason || '课堂已解散', now, target.id]);
-        q("UPDATE class_sessions SET status='DISSOLVED', ended_by=?, ended_at=?, ended_reason=?, updated_at=? WHERE id=?", [auth.user.id, now, reason || 'DISSOLVED', now, target.id]);
+        await aq("UPDATE class_sessions SET status='DISSOLVED', ended_by=?, ended_at=?, ended_reason=?, updated_at=? WHERE id=?", [auth.user.id, now, reason || 'DISSOLVED', now, target.id]);
       });
-      audit(ctx, 'SESSION_DISSOLVE', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'DISSOLVED' });
+      await audit(ctx, 'SESSION_DISSOLVE', 'CLASS_SESSION', target.id, normalizeSession(target), { status: 'DISSOLVED' });
       releaseSessionRuntimes(target.id, 'SESSION_DISSOLVE');
     }
-    const updated = row(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title, teacher.display_name teacher_name
+    const updated = await arow(`SELECT session.*, lesson.title lesson_title, lesson.sort lesson_sort, series.title series_title, teacher.display_name teacher_name
       FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id
       LEFT JOIN course_series series ON series.id=session.series_id LEFT JOIN users teacher ON teacher.id=session.teacher_id
       WHERE session.id=?`, [target.id]);
     return normalizeSession(updated);
   }
   if (part.match(/^\/sessions\/([^/]+)\/candidates$/) && method === 'GET') {
-    const target = sessionInOrg(part.match(/^\/sessions\/([^/]+)\/candidates$/)[1], { manage: false });
-    return { sessionId: target.id, lessonId: target.lesson_id, seriesId: target.series_id, status: target.status, ...sessionCandidates(target) };
+    const target = await sessionInOrg(part.match(/^\/sessions\/([^/]+)\/candidates$/)[1], { manage: false });
+    return { sessionId: target.id, lessonId: target.lesson_id, seriesId: target.series_id, status: target.status, ...await sessionCandidates(target) };
   }
   if (part.match(/^\/sessions\/([^/]+)\/students$/) && method === 'POST') {
-    const target = sessionInOrg(part.match(/^\/sessions\/([^/]+)\/students$/)[1]);
+    const target = await sessionInOrg(part.match(/^\/sessions\/([^/]+)\/students$/)[1]);
     const studentIds = Array.isArray(ctx.body?.studentIds) ? [...new Set(ctx.body.studentIds.map(String).filter(Boolean))] : [];
     if (!studentIds.length) throw errors.badRequest('请选择要添加的学员', 'SESSION_STUDENTS_REQUIRED');
-    const result = addSessionStudents({ session: target, studentIds, actorId: auth.user.id });
-    audit(ctx, 'SESSION_STUDENTS_ADD', 'CLASS_SESSION', target.id, null, { added: result.added.length, skipped: result.skipped });
+    const result = await addSessionStudents({ session: target, studentIds, actorId: auth.user.id });
+    await audit(ctx, 'SESSION_STUDENTS_ADD', 'CLASS_SESSION', target.id, null, { added: result.added.length, skipped: result.skipped });
     return result;
   }
   let sessionStudentMatch = part.match(/^\/sessions\/([^/]+)\/students\/([^/]+)$/);
   if (sessionStudentMatch && method === 'DELETE') {
-    const target = sessionInOrg(sessionStudentMatch[1]);
-    const result = removeSessionStudent({ session: target, studentId: sessionStudentMatch[2], actorId: auth.user.id, reason: String(ctx.body?.reason || '').trim().slice(0, 200) || null });
-    audit(ctx, 'SESSION_STUDENT_REMOVE', 'CLASS_SESSION', target.id, null, { studentId: result.studentId });
+    const target = await sessionInOrg(sessionStudentMatch[1]);
+    const result = await removeSessionStudent({ session: target, studentId: sessionStudentMatch[2], actorId: auth.user.id, reason: String(ctx.body?.reason || '').trim().slice(0, 200) || null });
+    await audit(ctx, 'SESSION_STUDENT_REMOVE', 'CLASS_SESSION', target.id, null, { studentId: result.studentId });
     // 被移出名单的学生：环境留着他也用不了（每次调用都会被门禁挡），但会一直占内存 —— 一并收掉。
     releaseSessionRuntimes(target.id, 'SESSION_STUDENT_REMOVE');
     return result;
@@ -1139,45 +1139,45 @@ export async function handleOrg(ctx) {
     const status = ctx.search.get('status'); if (['PENDING', 'RESOLVED', 'DISMISSED'].includes(status)) { where += ' AND report.status=?'; params.push(status); }
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
     const fromWhere = `FROM work_reports report JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE ${where}`;
-    const total = Number(row(`SELECT COUNT(*) n ${fromWhere}`, params)?.n || 0);
+    const total = Number((await arow(`SELECT COUNT(*) n ${fromWhere}`, params))?.n || 0);
     // pending 是筛选范围内的待处理总数（不是本页条数），页头徽标要一直准确
-    const pending = Number(row(`SELECT COUNT(*) n ${fromWhere} AND report.status='PENDING'`, params)?.n || 0);
-    const items = rows(
+    const pending = Number((await arow(`SELECT COUNT(*) n ${fromWhere} AND report.status='PENDING'`, params))?.n || 0);
+    const items = (await arows(
       `SELECT report.*, work.title AS work_title, work.status AS work_status, reporter.display_name AS reporter_name, handler.display_name AS handler_name
        FROM work_reports report JOIN works work ON work.id=report.work_id AND work.org_id=report.org_id
        JOIN users reporter ON reporter.id=report.reporter_id LEFT JOIN users handler ON handler.id=report.handled_by
        WHERE ${where}
        ORDER BY CASE report.status WHEN 'PENDING' THEN 0 ELSE 1 END, report.created_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset],
-    ).map((report) => normalizeWorkReport(report, { includeReporter: true }));
+    )).map((report) => normalizeWorkReport(report, { includeReporter: true }));
     return { ...pageResult(items, { page, limit, total }), pending };
   }
   let orgReportMatch = part.match(/^\/work-reports\/([^/]+)$/);
   if (orgReportMatch && method === 'PUT') {
-    const report = workReportInReviewScope(auth, currentOrgId, orgReportMatch[1]);
+    const report = await workReportInReviewScope(auth, currentOrgId, orgReportMatch[1]);
     if (report.status !== 'PENDING') throw errors.conflict('举报已处理，不能重复处理', 'WORK_REPORT_ALREADY_HANDLED');
     const status = ctx.body?.status; if (!['RESOLVED', 'DISMISSED'].includes(status)) throw errors.badRequest('举报处理状态无效', 'INVALID_WORK_REPORT_STATUS');
     const actionTaken = ctx.body?.actionTaken || 'NONE'; if (!['NONE', 'UNPUBLISH'].includes(actionTaken)) throw errors.badRequest('举报处理动作无效', 'INVALID_WORK_REPORT_ACTION');
-    const resolution = reportResolution(ctx.body); const work = workInReviewScope(auth, currentOrgId, report.work_id);
+    const resolution = reportResolution(ctx.body); const work = await workInReviewScope(auth, currentOrgId, report.work_id);
     if (actionTaken === 'UNPUBLISH' && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可因举报下架', 'WORK_NOT_PUBLISHED');
     const now = nowIso();
-    transaction(() => {
+    await atransaction(async () => {
       if (actionTaken === 'UNPUBLISH') {
-        q('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=? AND org_id=?', ['UNPUBLISHED', resolution, now, auth.user.id, now, work.id, currentOrgId]);
-        const latestSubmission = row('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
-        if (latestSubmission) q('UPDATE work_submissions SET review_status=?,review_comment=?,reviewed_at=?,updated_at=? WHERE id=?', ['REJECTED', resolution, now, now, latestSubmission.id]);
-        q(
+        await aq('UPDATE works SET status=?,unpublish_reason=?,unpublished_at=?,is_public=0,reviewed_by=?,reviewed_at=?,featured_at=NULL,featured_by=NULL,featured_reason=NULL WHERE id=? AND org_id=?', ['UNPUBLISHED', resolution, now, auth.user.id, now, work.id, currentOrgId]);
+        const latestSubmission = await arow('SELECT id FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [work.id]);
+        if (latestSubmission) await aq('UPDATE work_submissions SET review_status=?,review_comment=?,reviewed_at=?,updated_at=? WHERE id=?', ['REJECTED', resolution, now, now, latestSubmission.id]);
+        await aq(
           "UPDATE student_projects SET status='DRAFT',updated_at=? WHERE id=? AND org_id=? AND status='SUBMITTED' AND deleted_at IS NULL",
           [now, work.project_id, currentOrgId],
         );
       }
-      q('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=? AND org_id=?', [status, auth.user.id, now, resolution, actionTaken, report.id, currentOrgId]);
+      await aq('UPDATE work_reports SET status=?,handled_by=?,handled_at=?,resolution=?,action_taken=? WHERE id=? AND org_id=?', [status, auth.user.id, now, resolution, actionTaken, report.id, currentOrgId]);
     });
-    audit(ctx, 'ORG_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: currentOrgId });
-    if (actionTaken === 'UNPUBLISH') audit(ctx, 'ORG_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWorkReport(report), { status: 'REJECTED', reportId: report.id }, { orgId: currentOrgId });
+    await audit(ctx, 'ORG_WORK_REPORT_HANDLE', 'WORK_REPORT', report.id, normalizeWorkReport(report), { status, actionTaken, resolution }, { orgId: currentOrgId });
+    if (actionTaken === 'UNPUBLISH') await audit(ctx, 'ORG_WORK_UNPUBLISH_REPORT', 'WORK', work.id, normalizeWorkReport(report), { status: 'REJECTED', reportId: report.id }, { orgId: currentOrgId });
     // 自动提醒：举报已处理 → 通知作品作者学生（P4-O09）
     try {
       if (work?.student_id) {
-        scheduleReminder({
+        await scheduleReminder({
           title: status === 'RESOLVED' ? '举报已有处理结果' : '举报已被驳回',
           body: status === 'RESOLVED'
             ? `您举报的作品《${work.title || report.work_id}》已处理：${resolution}`
@@ -1189,7 +1189,7 @@ export async function handleOrg(ctx) {
         });
       }
     } catch { /* 提醒失败不影响主流程 */ }
-    return workReportRows('report.id=?', [report.id])[0];
+    return (await workReportRows('report.id=?', [report.id]))[0];
   }
   if (part === '/works' && method === 'GET') {
     const status = String(ctx.search.get('status') || '').trim();
@@ -1207,7 +1207,7 @@ export async function handleOrg(ctx) {
     }
     // 教师范围：作品挂在我创建的课堂（班级退场后不再按 class 圈定）
     where += sessionOwnedByTeacherExists('work.class_session_id', auth, params, { orgColumn: 'work.org_id' });
-    const canvasItems = rows(`SELECT work.*,student.display_name student_name,lesson.title lesson_title,series.title series_title,session.title session_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN class_sessions session ON session.id=work.class_session_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.submitted_at DESC LIMIT 200`, params).map((work) => ({ ...normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }), seriesTitle: work.series_title || null, sessionTitle: work.session_title || null, pendingReportCount: Number(work.pending_report_count || 0) }));
+    const canvasItems = await amap((await arows(`SELECT work.*,student.display_name student_name,lesson.title lesson_title,series.title series_title,session.title session_title,reviewer.display_name reviewer_name,COALESCE((SELECT COUNT(1) FROM work_reports report WHERE report.work_id=work.id AND report.status='PENDING'),0) pending_report_count FROM works work JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id LEFT JOIN class_sessions session ON session.id=work.class_session_id LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN users reviewer ON reviewer.id=work.reviewed_by WHERE ${where} ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.submitted_at DESC LIMIT 200`, params)), async (work) => ({ ...await normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' }), seriesTitle: work.series_title || null, sessionTitle: work.session_title || null, pendingReportCount: Number(work.pending_report_count || 0) }));
 
     // VibeCoding 提交（2026-09-20）：**这个列表原来只读 `works`（画布）**，于是学生从创作环境交上来的
     // 网页 / PPT 作品在「作品管理」里根本不出现 —— 平台端看得到、机构端看不到
@@ -1231,7 +1231,7 @@ export async function handleOrg(ctx) {
       vibeParams.push(keyword, keyword, keyword);
     }
     vibeWhere += sessionOwnedByTeacherExists('(SELECT class_session_id FROM vibecoding_conversations conv WHERE conv.id=submission.conversation_id)', auth, vibeParams, { orgColumn: 'submission.org_id' });
-    const vibeItems = rows(`SELECT submission.*,student.display_name student_name,COALESCE(lesson.published_title,lesson.title) lesson_title,series.title series_title,session.title session_title,conversation.class_session_id class_session_id FROM vibecoding_submissions submission JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id LEFT JOIN course_lessons lesson ON lesson.id=submission.lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id LEFT JOIN class_sessions session ON session.id=conversation.class_session_id WHERE ${vibeWhere} ORDER BY submission.submitted_at DESC LIMIT 200`, vibeParams).map((submission) => ({
+    const vibeItems = (await arows(`SELECT submission.*,student.display_name student_name,COALESCE(lesson.published_title,lesson.title) lesson_title,series.title series_title,session.title session_title,conversation.class_session_id class_session_id FROM vibecoding_submissions submission JOIN users student ON student.id=submission.student_id AND student.org_id=submission.org_id LEFT JOIN course_lessons lesson ON lesson.id=submission.lesson_id LEFT JOIN course_series series ON series.id=lesson.series_id LEFT JOIN vibecoding_conversations conversation ON conversation.id=submission.conversation_id LEFT JOIN class_sessions session ON session.id=conversation.class_session_id WHERE ${vibeWhere} ORDER BY submission.submitted_at DESC LIMIT 200`, vibeParams)).map((submission) => ({
       id: submission.id,
       source: 'VIBECODING',
       title: submission.title,
@@ -1259,7 +1259,7 @@ export async function handleOrg(ctx) {
     const projectIds = [...new Set(canvasItems.map((item) => item.projectId).filter(Boolean))];
     const assetIdsByProject = new Map();
     if (projectIds.length) {
-      for (const asset of rows(`SELECT project_id, asset_url FROM media_assets WHERE project_id IN (${projectIds.map(() => '?').join(',')})`, projectIds)) {
+      for (const asset of await arows(`SELECT project_id, asset_url FROM media_assets WHERE project_id IN (${projectIds.map(() => '?').join(',')})`, projectIds)) {
         const fileId = String(asset.asset_url || '').match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:\?.*)?$/)?.[1];
         if (!fileId) continue;
         if (!assetIdsByProject.has(asset.project_id)) assetIdsByProject.set(asset.project_id, new Set());
@@ -1281,18 +1281,18 @@ export async function handleOrg(ctx) {
   }
   let orgFeatureMatch = part.match(/^\/works\/([^/]+)\/feature$/);
   if (orgFeatureMatch && method === 'PUT') {
-    const work = workInReviewScope(auth, currentOrgId, orgFeatureMatch[1]);
+    const work = await workInReviewScope(auth, currentOrgId, orgFeatureMatch[1]);
     if (!Object.hasOwn(ctx.body || {}, 'featured') || typeof ctx.body.featured !== 'boolean') throw errors.badRequest('请选择是否设为机构精选', 'WORK_FEATURED_REQUIRED');
     const featured = ctx.body.featured;
     if (featured && work.status !== 'PUBLISHED') throw errors.conflict('仅已发布作品可以设为机构精选', 'WORK_NOT_PUBLISHED');
     if (featured && !work.student_allow_feature) throw errors.forbidden('该学生已关闭机构精选展示授权', 'STUDENT_FEATURE_OPT_OUT');
     const reason = featured ? String(ctx.body?.reason || '').trim().slice(0, 500) : null;
     const now = nowIso();
-    transaction(() => {
-      q('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=? AND org_id=?', [featured ? now : null, featured ? auth.user.id : null, reason || null, work.id, currentOrgId]);
+    await atransaction(async () => {
+      await aq('UPDATE works SET featured_at=?,featured_by=?,featured_reason=? WHERE id=? AND org_id=?', [featured ? now : null, featured ? auth.user.id : null, reason || null, work.id, currentOrgId]);
     });
-    audit(ctx, featured ? 'ORG_WORK_FEATURE' : 'ORG_WORK_UNFEATURE', 'WORK', work.id, normalizeWork(work), { featured, reason: reason || null }, { orgId: currentOrgId });
-    return normalizeWork(row('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
+    await audit(ctx, featured ? 'ORG_WORK_FEATURE' : 'ORG_WORK_UNFEATURE', 'WORK', work.id, await normalizeWork(work), { featured, reason: reason || null }, { orgId: currentOrgId });
+    return await normalizeWork(await arow('SELECT * FROM works WHERE id=? AND org_id=?', [work.id, currentOrgId]));
   }
 
 
@@ -1311,7 +1311,7 @@ export async function handleOrg(ctx) {
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const until = nowIso();
-    const series = rows(`SELECT series.id, series.title, series.cover_image_url, series.sort, series.version,
+    const series = await arows(`SELECT series.id, series.title, series.cover_image_url, series.sort, series.version,
         series.difficulty_level, series.age_range_min, series.age_range_max,
         COALESCE(assignment.quota_total, 0) quota_total, COALESCE(assignment.quota_used, 0) quota_used,
         assignment.status assignment_status, assignment.assigned_at assignment_assigned_at
@@ -1320,22 +1320,22 @@ export async function handleOrg(ctx) {
       WHERE series.status='PUBLISHED' AND ${orgSeriesAccessSql()}
       ORDER BY series.sort, series.title`, [currentOrgId, currentOrgId]);
     // 分给学生的许可（未撤销）：人次 + 去重人数
-    const grantBySeries = new Map(rows(`SELECT series_id, COUNT(*) granted, COUNT(DISTINCT student_id) students
-      FROM student_course_grants WHERE org_id=? AND revoked_at IS NULL GROUP BY series_id`, [currentOrgId])
+    const grantBySeries = new Map((await arows(`SELECT series_id, COUNT(*) granted, COUNT(DISTINCT student_id) students
+      FROM student_course_grants WHERE org_id=? AND revoked_at IS NULL GROUP BY series_id`, [currentOrgId]))
       .map((item) => [item.series_id, { grantedCount: Number(item.granted || 0), grantedStudents: Number(item.students || 0) }]));
     // 课堂：存量（待上课/上课中）
-    const liveBySeries = new Map(rows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n
+    const liveBySeries = new Map((await arows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n
       FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id
-      WHERE session.org_id=? AND session.status IN ('PENDING','ACTIVE') GROUP BY lesson.series_id, session.status`, [currentOrgId])
+      WHERE session.org_id=? AND session.status IN ('PENDING','ACTIVE') GROUP BY lesson.series_id, session.status`, [currentOrgId]))
       .map((item) => [`${item.series_id}:${item.status}`, Number(item.n || 0)]));
     // 课堂：区间内已结束/已解散 + 涉及老师
     // ⚠️ 批次 A 阶段课堂还没有 teacher_id（批次 B 才加），所以先用 started_by；
     //    批次 B 落地后改成 COALESCE(session.teacher_id, session.started_by)（一行改动）。
-    const doneBySeries = new Map(rows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n,
+    const doneBySeries = new Map((await arows(`SELECT lesson.series_id series_id, session.status status, COUNT(*) n,
         COUNT(DISTINCT session.teacher_id) teachers
       FROM class_sessions session JOIN course_lessons lesson ON lesson.id=session.lesson_id
       WHERE session.org_id=? AND session.ended_at IS NOT NULL AND session.ended_at >= ? AND session.ended_at < ?
-      GROUP BY lesson.series_id, session.status`, [currentOrgId, since, until])
+      GROUP BY lesson.series_id, session.status`, [currentOrgId, since, until]))
       .map((item) => [`${item.series_id}:${item.status}`, { n: Number(item.n || 0), teachers: Number(item.teachers || 0) }]));
     const items = series.map((row0) => {
       const grant = grantBySeries.get(row0.id) || { grantedCount: 0, grantedStudents: 0 };
@@ -1378,12 +1378,12 @@ export async function handleOrg(ctx) {
     const params = [currentOrgId];
     let where = 'grant.org_id=?';
     if (seriesFilter) { where += ' AND grant.series_id=?'; params.push(seriesFilter); }
-    const items = rows(`SELECT grant.id, grant.student_id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
+    const items = (await arows(`SELECT grant.id, grant.student_id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         student.display_name student_name, student.login student_login, series.title series_title
       FROM student_course_grants grant
       JOIN users student ON student.id=grant.student_id
       JOIN course_series series ON series.id=grant.series_id
-      WHERE ${where} ORDER BY grant.granted_at DESC LIMIT 500`, params).map((item) => ({
+      WHERE ${where} ORDER BY grant.granted_at DESC LIMIT 500`, params)).map((item) => ({
       id: item.id, studentId: item.student_id, studentName: item.student_name || null, studentLogin: item.student_login || null,
       seriesId: item.series_id, seriesTitle: item.series_title || null, grantedAt: item.granted_at,
       revokedAt: item.revoked_at || null, revokeReason: item.revoke_reason || null,
@@ -1399,15 +1399,15 @@ export async function handleOrg(ctx) {
     const requested = Array.isArray(ctx.body?.studentIds) ? ctx.body.studentIds : [];
     const studentIds = [...new Set(requested.map((value) => String(value || '').trim()).filter(Boolean))];
     if (!studentIds.length || studentIds.length > 200) throw errors.badRequest('请选择 1-200 名学员', 'INVALID_STUDENT_IDS');
-    return transaction(() => {
-    if (!row("SELECT id FROM course_series WHERE id=? AND status='PUBLISHED'", [seriesId])) throw errors.forbidden('课包未发布', 'COURSE_NOT_PUBLISHED');
-    const assignment = row("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [seriesId, currentOrgId, nowIso()]);
+    return await atransaction(async () => {
+    if (!await arow("SELECT id FROM course_series WHERE id=? AND status='PUBLISHED'", [seriesId])) throw errors.forbidden('课包未发布', 'COURSE_NOT_PUBLISHED');
+    const assignment = await arow("SELECT * FROM course_assignments WHERE series_id=? AND org_id=? AND status='ACTIVE' AND (expires_at IS NULL OR expires_at > ?)", [seriesId, currentOrgId, nowIso()]);
     if (!assignment) throw errors.forbidden('该课包未授权给当前机构', 'COURSE_NOT_AUTHORIZED');
     const placeholders = studentIds.map(() => '?').join(',');
-    const students = rows(`SELECT id, display_name, login FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
+    const students = await arows(`SELECT id, display_name, login FROM users WHERE id IN (${placeholders}) AND org_id=? AND role='STUDENT' AND deleted_at IS NULL`, [...studentIds, currentOrgId]);
     if (students.length !== studentIds.length) throw errors.badRequest('存在不属于本机构的学员', 'STUDENT_NOT_FOUND');
     // 已授权过的跳过（不重复扣次数）：同一机构 + 同一学生 + 同一课包只允许一条有效记录
-    const already = new Set(rows(`SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL AND student_id IN (${placeholders})`, [currentOrgId, seriesId, ...studentIds]).map((item) => item.student_id));
+    const already = new Set((await arows(`SELECT student_id FROM student_course_grants WHERE org_id=? AND series_id=? AND revoked_at IS NULL AND student_id IN (${placeholders})`, [currentOrgId, seriesId, ...studentIds])).map((item) => item.student_id));
     const fresh = studentIds.filter((studentId) => !already.has(studentId));
     const quotaTotal = Number(assignment.quota_total || 0);
     const quotaUsed = Number(assignment.quota_used || 0);
@@ -1415,37 +1415,37 @@ export async function handleOrg(ctx) {
       throw errors.conflict(`可用次数不足：授权 ${quotaTotal} 次，已用 ${quotaUsed} 次，本次需要 ${fresh.length} 次`, 'COURSE_QUOTA_EXHAUSTED');
     }
     const now = nowIso();
-      fresh.forEach((studentId) => {
-        const existing = row('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
+      for (const studentId of fresh) {
+        const existing = await arow('SELECT id FROM student_course_grants WHERE org_id=? AND student_id=? AND series_id=?', [currentOrgId, studentId, seriesId]);
         let grantId;
         if (existing) {
           // 主键维持稳定；每次重发由新的 granted_at 形成一代新事件，旧代必须已经完整冲销。
           grantId = existing.id;
-          const unreversed = row(`SELECT event.id FROM license_revenue_events event
+          const unreversed = await arow(`SELECT event.id FROM license_revenue_events event
             LEFT JOIN license_revenue_events reversal ON reversal.reversal_of_event_id=event.id
             WHERE event.grant_id=? AND event.event_type='GRANT' AND reversal.id IS NULL LIMIT 1`, [grantId]);
           if (unreversed) throw errors.conflict('上一次许可收入尚未冲销，不能重新授权', 'LICENSE_GRANT_REVERSAL_REQUIRED');
-          q('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, auth.user.id, assignment.id, grantId]);
+          await aq('UPDATE student_course_grants SET revoked_at=NULL,revoked_by=NULL,revoke_reason=NULL,granted_at=?,granted_by=?,source_assignment_id=? WHERE id=?', [now, auth.user.id, assignment.id, grantId]);
         } else {
           grantId = id('coursegrant');
-          q('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at) VALUES (?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now]);
+          await aq('INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at) VALUES (?,?,?,?,?,?,?)', [grantId, currentOrgId, studentId, seriesId, assignment.id, auth.user.id, now]);
         }
-        appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-grant:${grantId}:${now}` });
-      });
+        await appendLicenseGrantRevenue({ assignmentId: assignment.id, orgId: currentOrgId, seriesId, grantId, actorId: auth.user.id, occurredAt: now, idempotencyKey: `license-grant:${grantId}:${now}` });
+      };
       // 授权次数变更流水（P03-04 写入点④ 授权消耗）：只有真的扣了次数才记一笔
       // ——「同一学生同一课包重复授权被跳过」「撤销后重新授权（同一 grant 复活）」两条路径
       //   都以 `fresh`（= 本次真正新增的授权数）为准，所以不会记成两笔、也不会漏记。
-      // 与 quota_used 的更新在**同一个事务**里（本函数上面就是 transaction(() => {...})）。
+      // 与 quota_used 的更新在**同一个事务**里（本函数上面就是 atransaction(async () => {...})）。
       if (fresh.length) {
-        q('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
-        recordQuotaChange({
+        await aq('UPDATE course_assignments SET quota_used=quota_used+? WHERE id=?', [fresh.length, assignment.id]);
+        await recordQuotaChange({
           orgId: currentOrgId, seriesId, assignmentId: assignment.id,
           changeType: 'GRANT_CONSUME', quotaTotalBefore: quotaTotal, quotaUsedBefore: quotaUsed,
           actorId: auth.user.id, actorRole: auth.user.role,
           reason: '', source: COURSE_QUOTA_SOURCES.ORG_GRANT,
         });
       }
-    audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length, source: grantSource }, { orgId: currentOrgId });
+    await audit(ctx, 'ORG_COURSE_GRANT', 'COURSE_SERIES', seriesId, null, { studentIds: fresh, skipped: studentIds.length - fresh.length, source: grantSource }, { orgId: currentOrgId });
     return { granted: fresh.length, skipped: studentIds.length - fresh.length, quotaTotal, quotaUsed: quotaUsed + fresh.length };
     });
   }
@@ -1465,9 +1465,9 @@ export async function handleOrg(ctx) {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生授权中心', 'ORG_ADMIN_REQUIRED');
     const monthStart = `${nowIso().slice(0, 7)}-01`;
     const totals = {
-      students: count("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [currentOrgId]),
-      grantedThisMonth: count('SELECT COUNT(*) n FROM student_course_grants WHERE org_id=? AND granted_at>=?', [currentOrgId, monthStart]),
-      withGrants: count(`SELECT COUNT(DISTINCT grant.student_id) n FROM student_course_grants grant
+      students: await acount("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [currentOrgId]),
+      grantedThisMonth: await acount('SELECT COUNT(*) n FROM student_course_grants WHERE org_id=? AND granted_at>=?', [currentOrgId, monthStart]),
+      withGrants: await acount(`SELECT COUNT(DISTINCT grant.student_id) n FROM student_course_grants grant
         JOIN users student ON student.id=grant.student_id AND student.deleted_at IS NULL
         WHERE grant.org_id=? AND grant.revoked_at IS NULL AND student.role='STUDENT'`, [currentOrgId]),
     };
@@ -1495,9 +1495,9 @@ export async function handleOrg(ctx) {
     const fromSql = `FROM users student
       LEFT JOIN student_course_grants grant ON grant.student_id=student.id AND grant.org_id=student.org_id
       WHERE ${where} GROUP BY student.id${having}`;
-    const total = count(`SELECT COUNT(*) n FROM (SELECT student.id ${fromSql})`, params);
+    const total = await acount(`SELECT COUNT(*) n FROM (SELECT student.id ${fromSql})`, params);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
-    const listRows = rows(`SELECT student.id, student.login, student.display_name, student.phone, student.status,
+    const listRows = await arows(`SELECT student.id, student.login, student.display_name, student.phone, student.status,
         ${activeCountSql} active_count,
         MAX(CASE WHEN grant.revoked_at IS NULL THEN grant.granted_at END) last_granted_at
       ${fromSql}
@@ -1507,7 +1507,7 @@ export async function handleOrg(ctx) {
     const seriesByStudent = new Map();
     if (listRows.length) {
       const placeholders = listRows.map(() => '?').join(',');
-      for (const item of rows(`SELECT grant.student_id, series.id series_id, series.title
+      for (const item of await arows(`SELECT grant.student_id, series.id series_id, series.title
         FROM student_course_grants grant JOIN course_series series ON series.id=grant.series_id
         WHERE grant.org_id=? AND grant.revoked_at IS NULL AND grant.student_id IN (${placeholders})
         ORDER BY grant.granted_at DESC`, [currentOrgId, ...listRows.map((item) => item.id)])) {
@@ -1538,9 +1538,9 @@ export async function handleOrg(ctx) {
   if (studentGrantsMatch && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生授权详情', 'ORG_ADMIN_REQUIRED');
     const studentId = studentGrantsMatch[1];
-    const student = row("SELECT id, login, display_name, phone, status FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
+    const student = await arow("SELECT id, login, display_name, phone, status FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
     if (!student) throw errors.notFound('学生不存在或不属于本机构', 'STUDENT_NOT_FOUND');
-    const learnedSeries = new Set(rows(`SELECT DISTINCT lesson.series_id series_id
+    const learnedSeries = new Set((await arows(`SELECT DISTINCT lesson.series_id series_id
       FROM usage_records usage
       JOIN class_sessions session ON session.id=usage.class_session_id
       JOIN course_lessons lesson ON lesson.id=session.lesson_id
@@ -1548,25 +1548,25 @@ export async function handleOrg(ctx) {
         AND UPPER(usage.model) NOT LIKE '%MOCK%'
         AND UPPER(COALESCE(json_extract(usage.pricing_snapshot, '$.provider'), '')) NOT LIKE '%MOCK%'
         AND UPPER(COALESCE(json_extract(usage.pricing_snapshot, '$.mode'), '')) NOT LIKE '%MOCK%'`,
-      [studentId, currentOrgId]).map((item) => item.series_id));
+      [studentId, currentOrgId])).map((item) => item.series_id));
     // 「已进入正式课堂」= 这个学生在属于该课包的课堂上，课堂**已经正式开过**（上课中 / 已结束）。
     // 与「有没有 AI 调用」是两条不同的线：线框图把「学习中」定义成**两者之一**成立即可
     // （待激活 = 两者都没有）；而「完课」只看 AI 调用那一条（services/classroomSessions.js:164）。
     // 待上课（PENDING）不算 —— 排了课但没开课，学生还没真正进过课堂。
-    const enteredSeries = new Set(rows(`SELECT DISTINCT lesson.series_id series_id
+    const enteredSeries = new Set((await arows(`SELECT DISTINCT lesson.series_id series_id
       FROM session_students part
       JOIN class_sessions session ON session.id=part.session_id
       JOIN course_lessons lesson ON lesson.id=session.lesson_id
       WHERE part.student_id=? AND session.org_id=? AND session.status IN ('ACTIVE','ENDED')`,
-      [studentId, currentOrgId]).map((item) => item.series_id));
-    const items = rows(`SELECT grant.id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
+      [studentId, currentOrgId])).map((item) => item.series_id));
+    const items = (await arows(`SELECT grant.id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         grant.source_assignment_id, series.title, series.version,
         actor.display_name granted_by_name, actor.login granted_by_login
       FROM student_course_grants grant
       JOIN course_series series ON series.id=grant.series_id
       LEFT JOIN users actor ON actor.id=grant.granted_by
       WHERE grant.org_id=? AND grant.student_id=?
-      ORDER BY grant.revoked_at IS NOT NULL, grant.granted_at DESC`, [currentOrgId, studentId]).map((item) => {
+      ORDER BY grant.revoked_at IS NOT NULL, grant.granted_at DESC`, [currentOrgId, studentId])).map((item) => {
       const learned = learnedSeries.has(item.series_id);
       const entered = enteredSeries.has(item.series_id);
       // 授权状态（线框图 002-04「授权规则」1/2 第一次给了判定口径，所以现在能真算，不再是「没有状态列」）：
@@ -1624,7 +1624,7 @@ export async function handleOrg(ctx) {
     const sourceFilter = String(ctx.search.get('source') || '').trim().toUpperCase();
     const from = String(ctx.search.get('from') || '').trim();
     const to = String(ctx.search.get('to') || '').trim();
-    const allRows = rows(`SELECT batch.id, batch.series_id, batch.purchase_type, batch.quantity, batch.payment_status,
+    const allRows = await arows(`SELECT batch.id, batch.series_id, batch.purchase_type, batch.quantity, batch.payment_status,
         batch.order_no, batch.contract_no, batch.purchased_at,
         series.title series_title, actor.display_name actor_name,
         ROW_NUMBER() OVER (PARTITION BY batch.assignment_id, batch.purchase_type ORDER BY batch.purchased_at, batch.created_at, batch.id) seq
@@ -1684,7 +1684,7 @@ export async function handleOrg(ctx) {
    */
   if (part === '/student-grant-records' && method === 'GET') {
     if (auth.user.role !== 'ORG_ADMIN') throw errors.forbidden('仅机构管理员可查看学生授权记录', 'ORG_ADMIN_REQUIRED');
-    const logs = rows(`SELECT log.id, log.action, log.target_id, log.actor_id, log.before_data, log.after_data, log.created_at,
+    const logs = await arows(`SELECT log.id, log.action, log.target_id, log.actor_id, log.before_data, log.after_data, log.created_at,
         actor.display_name actor_name, actor.login actor_login
       FROM audit_logs log
       LEFT JOIN users actor ON actor.id=log.actor_id
@@ -1702,7 +1702,7 @@ export async function handleOrg(ctx) {
     const grantById = new Map();
     if (grantIds.size) {
       const placeholders = [...grantIds].map(() => '?').join(',');
-      for (const item of rows(`SELECT id, student_id, series_id FROM student_course_grants WHERE id IN (${placeholders})`, [...grantIds])) {
+      for (const item of await arows(`SELECT id, student_id, series_id FROM student_course_grants WHERE id IN (${placeholders})`, [...grantIds])) {
         grantById.set(item.id, item);
         studentIds.add(item.student_id);
       }
@@ -1710,7 +1710,7 @@ export async function handleOrg(ctx) {
     const studentById = new Map();
     if (studentIds.size) {
       const placeholders = [...studentIds].map(() => '?').join(',');
-      for (const item of rows(`SELECT id, login, display_name FROM users WHERE id IN (${placeholders})`, [...studentIds])) studentById.set(item.id, item);
+      for (const item of await arows(`SELECT id, login, display_name FROM users WHERE id IN (${placeholders})`, [...studentIds])) studentById.set(item.id, item);
     }
     // 课包：机构的授权记录里 target_id 就是 seriesId；撤销的要从 grant 行反查
     const seriesIds = new Set();
@@ -1722,7 +1722,7 @@ export async function handleOrg(ctx) {
     if (seriesIds.size) {
       const ids = [...seriesIds];
       const placeholders = ids.map(() => '?').join(',');
-      for (const item of rows(`SELECT id, title FROM course_series WHERE id IN (${placeholders})`, ids)) seriesById.set(item.id, item);
+      for (const item of await arows(`SELECT id, title FROM course_series WHERE id IN (${placeholders})`, ids)) seriesById.set(item.id, item);
     }
     const records = [];
     for (const log of logs) {

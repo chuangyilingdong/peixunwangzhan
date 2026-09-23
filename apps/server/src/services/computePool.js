@@ -2,7 +2,7 @@
 // 2026-09-18（用户口径）：**学生的算力上限只有一套，按钱的** —— services/sessionCostCap.js
 // （每学生 × 每场课堂，依据上游成本，会真的拦人）。本文件里没有任何会拦学生的闸门。
 // 历史 cost_fen 仅历史售价；课堂 platform_budget_fen 只预警、不拦人。
-import { errors } from '../lib.js';
+import { errors, arow, aq, arows, amap } from '../lib.js';
 import { row, rows, q, nowIso, parseJson, json } from '../lib.js';
 
 const MODALITIES = ['TEXT', 'IMAGE', 'VIDEO', 'MUSIC'];
@@ -14,8 +14,8 @@ const MODALITIES = ['TEXT', 'IMAGE', 'VIDEO', 'MUSIC'];
  */
 const DEFAULT_PER_CALL_FEN = Object.freeze({ TEXT: 10, IMAGE: 100, VIDEO: 500, MUSIC: 200 });
 
-export function getComputePricing() {
-  const value = parseJson(row('SELECT compute_pricing FROM platform_settings WHERE id=1')?.compute_pricing, {});
+export async function getComputePricing() {
+  const value = parseJson((await arow('SELECT compute_pricing FROM platform_settings WHERE id=1'))?.compute_pricing, {});
   const perCall = {};
   for (const modality of MODALITIES) {
     const raw = value?.perCall?.[modality];
@@ -39,8 +39,8 @@ export function getComputePricing() {
  *   - 上游成本另有一本账：compute_attempts.upstream_cost_fen（估算/上报，未知不按零算）。
  *   - 改价**不追溯**：已落库的 sale_price_fen / sale_snapshot 保持写入时的值，只有新调用用新价。
  */
-export function saveComputePricing(patch = {}) {
-  const current = getComputePricing();
+export async function saveComputePricing(patch = {}) {
+  const current = await getComputePricing();
   for (const map of [patch.perCall, patch.models]) {
     if (map !== undefined && (!map || typeof map !== 'object' || Array.isArray(map))) throw errors.badRequest('价格必须是对象', 'COMPUTE_PRICE_INVALID');
     for (const value of Object.values(map || {})) if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 100000000) throw errors.badRequest('售价必须是0至100000000之间的整数分', 'COMPUTE_PRICE_INVALID');
@@ -59,13 +59,13 @@ export function saveComputePricing(patch = {}) {
       nextModels[name] = Math.max(0, Math.round(Number(price) || 0));
     }
   }
-  q('UPDATE platform_settings SET compute_pricing=? WHERE id=1', [json({ perCall: nextPerCall, models: nextModels, updatedAt: nowIso() })]);
-  return getComputePricing();
+  await aq('UPDATE platform_settings SET compute_pricing=? WHERE id=1', [json({ perCall: nextPerCall, models: nextModels, updatedAt: nowIso() })]);
+  return await getComputePricing();
 }
 
 /** 这一次调用的单价（分）：模型级单价优先，否则按模态的默认单价。 */
-export function priceFenFor({ modality, model = '' } = {}) {
-  const pricing = getComputePricing();
+export async function priceFenFor({ modality, model = '' } = {}) {
+  const pricing = await getComputePricing();
   const key = String(model || '').trim();
   if (key && Object.prototype.hasOwnProperty.call(pricing.models, key)) return Number(pricing.models[key]);
   return Number(pricing.perCall[String(modality || '').toUpperCase()] ?? 0);
@@ -88,14 +88,14 @@ export function priceFenFor({ modality, model = '' } = {}) {
  *
  * 平台自己的**进货成本与毛利**不在这里：那本账在「用量与成本」，读 compute_attempts.upstream_cost_fen。
  */
-export function salePriceFenFor({ sessionId = null, studentId = null, orgId = null, since = null } = {}) {
+export async function salePriceFenFor({ sessionId = null, studentId = null, orgId = null, since = null } = {}) {
   const conditions = ["status='SUCCESS'"];
   const params = [];
   if (sessionId) { conditions.push('class_session_id=?'); params.push(sessionId); }
   if (studentId) { conditions.push('user_id=?'); params.push(studentId); }
   if (orgId) { conditions.push('org_id=?'); params.push(orgId); }
   if (since) { conditions.push('created_at>=?'); params.push(since); }
-  return Number(row(`SELECT COALESCE(SUM(sale_price_fen),0) fen FROM compute_attempts WHERE ${conditions.join(' AND ')}`, params)?.fen || 0);
+  return Number((await arow(`SELECT COALESCE(SUM(sale_price_fen),0) fen FROM compute_attempts WHERE ${conditions.join(' AND ')}`, params))?.fen || 0);
 }
 
 /**
@@ -124,12 +124,12 @@ export function salePriceFenSuccessSql(alias = '') {
  */
 export async function computePoolReconciliation({ days = 7 } = {}) {
   const { listGatewayLogs, getComputeGatewayConfig, parseTokenSegments } = await import('./computeGateway.js');
-  const config = getComputeGatewayConfig();
+  const config = await getComputeGatewayConfig();
   const quotaPerUnit = Number(config.quotaPerUnit || 500000);
   const sinceIso = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString();
 
   // ① 池子账（应用侧）：学员 × 课包 × 模态
-  const ours = rows(
+  const ours = await arows(
     `SELECT user_id AS userId, series_id AS seriesId, modality,
             COALESCE(SUM(cost_fen),0) AS fen, COUNT(*) AS calls
        FROM usage_records
@@ -153,7 +153,7 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
   const seriesOf = new Map();
   if (lessonIds.size) {
     const placeholders = [...lessonIds].map(() => '?').join(',');
-    for (const item of rows(`SELECT id, series_id FROM course_lessons WHERE id IN (${placeholders})`, [...lessonIds])) seriesOf.set(item.id, item.series_id);
+    for (const item of await arows(`SELECT id, series_id FROM course_lessons WHERE id IN (${placeholders})`, [...lessonIds])) seriesOf.set(item.id, item.series_id);
   }
 
   const buckets = new Map();
@@ -186,10 +186,10 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
   const ids = [...buckets.values()];
   if (ids.length) {
     for (const item of buckets.values()) {
-      const student = row('SELECT display_name, login, org_id FROM users WHERE id=?', [item.userId]);
+      const student = await arow('SELECT display_name, login, org_id FROM users WHERE id=?', [item.userId]);
       item.studentName = student?.display_name || student?.login || item.userId;
-      item.orgName = student?.org_id ? (row('SELECT name FROM organizations WHERE id=?', [student.org_id])?.name || '—') : '—';
-      item.seriesTitle = item.seriesId ? (row('SELECT title FROM course_series WHERE id=?', [item.seriesId])?.title || item.seriesId) : '（未归属课包）';
+      item.orgName = student?.org_id ? ((await arow('SELECT name FROM organizations WHERE id=?', [student.org_id]))?.name || '—') : '—';
+      item.seriesTitle = item.seriesId ? ((await arow('SELECT title FROM course_series WHERE id=?', [item.seriesId]))?.title || item.seriesId) : '（未归属课包）';
     }
   }
 
@@ -240,11 +240,11 @@ export async function computePoolReconciliation({ days = 7 } = {}) {
  *   要控成本、要拦人，都改那边；**不要再往这个函数里加第二套额度**（那就又回到 6 套并行）。
  *   前端仍在读 `unlimited` / `capYuan` 这几个键，所以**形状保持不变**、值恒为「不限（只记账）」。
  */
-export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}) {
+export async function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}) {
   void userId;
   return {
     seriesId: seriesId || null,
-    seriesTitle: seriesTitle || (seriesId ? (row('SELECT title FROM course_series WHERE id=?', [seriesId])?.title || null) : null),
+    seriesTitle: seriesTitle || (seriesId ? ((await arow('SELECT title FROM course_series WHERE id=?', [seriesId]))?.title || null) : null),
     unlimited: true,
     capYuan: null,
     usedYuan: null,
@@ -269,12 +269,12 @@ export function computePoolSummary({ userId, seriesId, seriesTitle = null } = {}
 // 下面这一族 `classroomBudget*` 保留，但只做**整场预警**（enforced 恒 false）：它不是学生额度。
 
 /** Known upstream amounts are a lower bound whenever any attempt has unknown cost. */
-export function classroomBudgetStatus(sessionId) {
+export async function classroomBudgetStatus(sessionId) {
   if (!sessionId) return { budgetState: 'UNKNOWN', budgetFen: null, knownCostFen: 0, usedFen: null, unknownCalls: 0 };
-  const session = row(`SELECT s.id, s.platform_budget_fen FROM class_sessions s WHERE s.id=?`, [sessionId]);
-  const cost = row(`SELECT SUM(CASE WHEN cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known,
+  const session = await arow(`SELECT s.id, s.platform_budget_fen FROM class_sessions s WHERE s.id=?`, [sessionId]);
+  const cost = await arow(`SELECT SUM(CASE WHEN cost_source<>'UNKNOWN' AND upstream_cost_fen IS NOT NULL THEN upstream_cost_fen ELSE 0 END) known,
     SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unknown FROM compute_attempts WHERE class_session_id=?`, [sessionId]);
-  const historical = Number(row(`SELECT COUNT(*) n FROM usage_records u WHERE class_session_id=? AND NOT EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=u.compute_call_id)`, [sessionId])?.n || 0);
+  const historical = Number((await arow(`SELECT COUNT(*) n FROM usage_records u WHERE class_session_id=? AND NOT EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=u.compute_call_id)`, [sessionId]))?.n || 0);
   const budgetFen = session?.platform_budget_fen ?? null;
   const knownCostFen = Number(cost?.known || 0);
   const unknownCalls = Number(cost?.unknown || 0) + historical;
@@ -288,26 +288,25 @@ export function classroomBudgetStatus(sessionId) {
     budgetState: budgetFen !== null && knownCostFen > budgetFen ? 'OVER_BUDGET' : unknownCalls || !session ? 'UNKNOWN' : budgetFen === null ? 'UNCONFIGURED' : 'WITHIN_BUDGET', enforced: false };
 }
 
-export function classroomBudgetReport({ limit = 100, orgId = '' } = {}) {
-  return rows(`SELECT s.id sessionId,s.org_id orgId,s.lesson_id lessonId,s.series_id seriesId,s.title sessionTitle,
+export async function classroomBudgetReport({ limit = 100, orgId = '' } = {}) {
+  return await amap((await arows(`SELECT s.id sessionId,s.org_id orgId,s.lesson_id lessonId,s.series_id seriesId,s.title sessionTitle,
     l.title lessonTitle,o.name orgName,
     (SELECT COUNT(*) FROM session_students p WHERE p.session_id=s.id AND p.status<>'REMOVED') studentCount,
     (SELECT COUNT(*) FROM compute_attempts a WHERE a.class_session_id=s.id) calls
     FROM class_sessions s LEFT JOIN course_lessons l ON l.id=s.lesson_id LEFT JOIN organizations o ON o.id=s.org_id
-    WHERE (?='' OR s.org_id=?) ORDER BY s.created_at DESC LIMIT ?`, [orgId, orgId, limit])
-    .map(item => ({ ...item, ...classroomBudgetStatus(item.sessionId) }));
+    WHERE (?='' OR s.org_id=?) ORDER BY s.created_at DESC LIMIT ?`, [orgId, orgId, limit])), async item => ({ ...item, ...await classroomBudgetStatus(item.sessionId) }));
 }
 
 /** Same lesson aggregated across organizations; each classroom contributes one baseline. */
-export function lessonPlatformBudgetOverview() {
-  return rows(`SELECT l.id lessonId,l.title lessonTitle,l.platform_budget_fen platformBudgetFen,
+export async function lessonPlatformBudgetOverview() {
+  return await amap((await arows(`SELECT l.id lessonId,l.title lessonTitle,l.platform_budget_fen platformBudgetFen,
     series.title seriesTitle,
     COUNT(s.id) sessionCount,COUNT(DISTINCT s.org_id) orgCount
     FROM course_lessons l
     LEFT JOIN course_series series ON series.id = l.series_id
     LEFT JOIN class_sessions s ON s.lesson_id=l.id
-    GROUP BY l.id ORDER BY l.sort`).map(item => {
-      const sessions = rows('SELECT id FROM class_sessions WHERE lesson_id=?', [item.lessonId]).map(s => classroomBudgetStatus(s.id));
+    GROUP BY l.id ORDER BY l.sort`)), async item => {
+      const sessions = await amap((await arows('SELECT id FROM class_sessions WHERE lesson_id=?', [item.lessonId])), async s => await classroomBudgetStatus(s.id));
       const unknownCalls = sessions.reduce((n,s) => n+s.unknownCalls,0);
       const knownCostFen = sessions.reduce((n,s) => n+s.knownCostFen,0);
       const overRows = sessions.filter(s => s.budgetState === 'OVER_BUDGET');

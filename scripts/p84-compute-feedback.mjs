@@ -29,7 +29,7 @@ assert.match(billingPanels, /精确路由（按模型）&gt; 模态主渠道 &gt
 assert.match(billingPanels, /<details className="top-gap"><summary>高级配置<\/summary>[\s\S]*接口协议[\s\S]*手动添加模型 ID/);
 
 const { applyGatewayRoute, resolveGenerationRoute, saveComputeGatewayConfig } = await import('../apps/server/src/services/computeGateway.js');
-saveComputeGatewayConfig({ baseUrl: '', enabled: false });
+await saveComputeGatewayConfig({ baseUrl: '', enabled: false });
 const direct = await resolveGenerationRoute({ orgId: 'org-p84', studentId: 'student-p84', modality: 'TEXT' });
 assert.deepEqual(direct, { mode: 'direct', reason: 'GATEWAY_DISABLED' });
 const providerSelection = { provider: 'custom', channelId: 'direct-a', model: 'model-a', endpoint: 'https://upstream.test/v1' };

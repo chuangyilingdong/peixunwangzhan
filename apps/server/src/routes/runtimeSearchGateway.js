@@ -20,7 +20,7 @@
 //   · `model`：换成我们自己渠道解析出来的模型名（绝不把调用方报的字符串原样发上游）；
 //   · `tools`：只留 web_search 类服务端工具 —— 这个端点就是给学生做网页搜索的，
 //     放行任意服务端工具等于把网关变成一台「能点上游任何服务端能力」的机器。
-import { errors, id, json, nowIso, q } from '../lib.js';
+import { errors, id, json, nowIso, q, aq } from '../lib.js';
 import { getAiProviderPolicy } from './billingConfig.js';
 import {
   verifyRuntimeKey, readRuntimeToken, assertRuntimeClassroomActive,
@@ -121,11 +121,11 @@ export async function handleRuntimeSearchGateway(ctx) {
   let channel; let selection; let upstream; let session; let payload;
   try {
     payload = verifyRuntimeKey(readRuntimeToken(ctx));
-    session = assertRuntimeClassroomActive(payload);
+    session = await assertRuntimeClassroomActive(payload);
     if (body.stream === true) throw errors.badRequest('搜索端点不支持流式请求，请去掉 stream', 'RUNTIME_SEARCH_STREAM_UNSUPPORTED');
     if (!Array.isArray(body.messages) || !body.messages.length) throw errors.badRequest('messages 不能为空', 'VALIDATION_REQUIRED');
     const tools = searchTools(body.tools);
-    const policy = getAiProviderPolicy();
+    const policy = await getAiProviderPolicy();
     const base = searchChannelSelection(policy, String(body.model || '').trim());
     channel = base.channel;
     // 算力网关的路由与聊天同一套（启用时换成网关令牌并按令牌限额走；未启用时原样返回）。
@@ -149,18 +149,18 @@ export async function handleRuntimeSearchGateway(ctx) {
   const attemptId = id('attempt');
   const callId = id('call');
   const providerName = channel?.provider || 'custom';
-  const salePriceFen = priceFenFor({ modality: 'TEXT', model: upstream.model });
+  const salePriceFen = await priceFenFor({ modality: 'TEXT', model: upstream.model });
   // compute_attempts：与聊天那条路同一张表、同一批列。搜索这一跳没有 provider 适配器，
   // 所以自己落一行 —— 不落的话搜索的花费在成本报表里完全看不见，正是本项目最怕的
   // 「用得掉、账上看不到」。用量证据与成本在拿到上游回执后回填。
-  q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,sale_price_fen,sale_snapshot,class_session_id,lesson_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  await aq(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,user_id,modality,channel_id,provider,model,routed_via,status,client_request_id,actual_channel_id,provider_account_ref,sale_price_fen,sale_snapshot,class_session_id,lesson_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [attemptId, callId, 1, payload.o, payload.u, 'TEXT', channel?.id || 'default', providerName, upstream.model,
       selection.gateway ? 'gateway' : 'direct', 'RUNNING', id('req'), selection.gateway ? null : (channel?.id || 'default'),
       channel?.providerAccountRef || null, salePriceFen,
       json({ model: upstream.model, modality: 'TEXT', unitFen: salePriceFen, charged: false, baseline: 'OBSERVATION_ONLY', basis: 'OBSERVATION_ONLY', capturedAt: nowIso() }),
       session.id, session.lesson_id || null, nowIso()]);
 
-  const finish = ({ status, failCode = null, raw = '', evidence = null, webSearches = null, upstreamStatus = null }) => {
+  const finish = async ({ status, failCode = null, raw = '', evidence = null, webSearches = null, upstreamStatus = null }) => {
     const usage = evidence || collectUsageEvidence({ modality: 'TEXT', result: null });
     const computed = computeContractCost({
       modality: 'TEXT', model: upstream.model,
@@ -175,10 +175,10 @@ export async function handleRuntimeSearchGateway(ctx) {
       computed,
     }) : null;
     // 折算不出来就保持 UNKNOWN，**绝不按 0 计**（与聊天那条路同一条铁律）。
-    q("UPDATE compute_attempts SET status=?,cost_source=?,upstream_cost_fen=?,cost_rule_snapshot=COALESCE(?,cost_rule_snapshot),usage_snapshot=?,error_code=?,error_message=?,completed_at=? WHERE id=?",
+    await aq("UPDATE compute_attempts SET status=?,cost_source=?,upstream_cost_fen=?,cost_rule_snapshot=COALESCE(?,cost_rule_snapshot),usage_snapshot=?,error_code=?,error_message=?,completed_at=? WHERE id=?",
       [status, computed ? 'COMPUTED' : 'UNKNOWN', computed ? computed.fen : null, ruleSnapshot ? json(ruleSnapshot) : null,
         hasEvidence ? json(usage) : null, failCode, failCode ? String(raw).slice(0, 500) : null, nowIso(), attemptId]);
-    recordAiUsage({
+    await recordAiUsage({
       orgId: payload.o, userId: payload.u, sessionId: session.id,
       modality: 'TEXT', model: upstream.model, status, failCode,
       inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0,
@@ -213,7 +213,7 @@ export async function handleRuntimeSearchGateway(ctx) {
     });
   } catch (error) {
     const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
-    finish({ status: 'FAILED', failCode: timedOut ? PROVIDER_ERROR_CODES.TIMEOUT : PROVIDER_ERROR_CODES.UPSTREAM, raw: String(error?.message || error) });
+    await finish({ status: 'FAILED', failCode: timedOut ? PROVIDER_ERROR_CODES.TIMEOUT : PROVIDER_ERROR_CODES.UPSTREAM, raw: String(error?.message || error) });
     console.error(`[runtimeSearchGateway] 上游请求失败（${upstream.endpoint}）：${String(error?.message || error)}`);
     return anthropicError(ctx.res, timedOut ? 504 : 502, 'api_error',
       timedOut ? '搜索上游超时，请稍后再试' : '连不上搜索上游，请让管理员检查渠道设置');
@@ -228,14 +228,14 @@ export async function handleRuntimeSearchGateway(ctx) {
   if (!response.ok) {
     const normalized = normalizeProviderError(Object.assign(new Error(upstreamDetail(parsed, response.status)), { status: response.status }), { status: response.status }) || {};
     // 记 FAILED 也把用量带上（上游即便报错也可能已经计了 token），但折算不出来仍保持 UNKNOWN。
-    finish({ status: 'FAILED', failCode: normalized.code || PROVIDER_ERROR_CODES.UPSTREAM, raw, evidence: anthropicEvidence(parsed), webSearches: anthropicSearches(parsed), upstreamStatus: response.status });
+    await finish({ status: 'FAILED', failCode: normalized.code || PROVIDER_ERROR_CODES.UPSTREAM, raw, evidence: anthropicEvidence(parsed), webSearches: anthropicSearches(parsed), upstreamStatus: response.status });
     // 上游的错误体原样回吐：它本来就是 Anthropic 方言，插件读得懂（还有上游自己的原话）。
     ctx.res.writeHead(response.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     ctx.res.end(raw || JSON.stringify({ type: 'error', error: { type: 'api_error', message: `上游返回 HTTP ${response.status}` } }));
     return { __streamed: true };
   }
 
-  finish({ status: 'SUCCESS', evidence: anthropicEvidence(parsed), webSearches: anthropicSearches(parsed), upstreamStatus: response.status });
+  await finish({ status: 'SUCCESS', evidence: anthropicEvidence(parsed), webSearches: anthropicSearches(parsed), upstreamStatus: response.status });
   ctx.res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   ctx.res.end(parsed ? JSON.stringify(parsed) : raw);
   return { __streamed: true };

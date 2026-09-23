@@ -9,7 +9,7 @@ process.env.PLATFORM_DATA_DIR = temp;
 process.env.AI_PROVIDER_API_KEY = 'test-only';
 const load = p => import(pathToFileURL(path.resolve(p)).href);
 const { getGenerationProvider } = await load('apps/server/src/services/generationProvider.js');
-const { rows } = await load('apps/server/src/lib.js');
+const { rows, arows } = await load('apps/server/src/lib.js');
 const originalFetch = globalThis.fetch;
 const primary = { provider: 'custom', model: 'primary', endpoint: 'https://primary.test/v1', channelId: 'primary', apiKey: 'test-only', backup: { provider: 'custom', model: 'backup', endpoint: 'https://backup.test/v1', channelId: 'backup', apiKey: 'test-only', estimatedCostFen: 12 } };
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
@@ -24,7 +24,7 @@ try {
   let provider = getGenerationProvider(primary);
   await provider.generate({ modality: 'TEXT' });
   assert.equal(calls.length, 2); assert.equal(provider.model, 'backup');
-  let attempts = rows('SELECT * FROM compute_attempts WHERE call_id=? ORDER BY attempt', [provider.compute.callId]);
+  let attempts = await arows('SELECT * FROM compute_attempts WHERE call_id=? ORDER BY attempt', [provider.compute.callId]);
   assert.deepEqual(attempts.map(x => x.status), ['FAILED', 'SUCCESS']);
   // 2026-09-18 口径变更（不是测试漂移）：渠道卡里手填的「估算成本」（夹具里的 estimatedCostFen: 12）
   // 已从成本取值链整体移除 —— 成本来源只剩 MOCK / REPORTED / COMPUTED / UNKNOWN 四种
@@ -52,7 +52,7 @@ try {
   //    于是 429 会被重试，轮询次数**不再固定**（实测 8 次）。这里要钉的是"提交被接受后
   //    task_id 已经落库、且确实去轮询过"，不是"只轮询一次" —— 钉死次数会让这条**每跑必红**。
   await assert.rejects(provider.generate({ modality: 'VIDEO' })); assert.ok(calls.length >= 2, `应当至少提交 + 轮询一次，实际 ${calls.length}`);
-  assert.equal(rows('SELECT task_id FROM compute_attempts WHERE call_id=?', [provider.compute.callId])[0].task_id, 'accepted-task');
+  assert.equal((await arows('SELECT task_id FROM compute_attempts WHERE call_id=?', [provider.compute.callId]))[0].task_id, 'accepted-task');
   calls = [];
   globalThis.fetch = async url => { calls.push(url); return new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n', { headers: { 'content-type': 'text/event-stream' } }); };
   provider = getGenerationProvider(primary);
@@ -61,7 +61,7 @@ try {
   globalThis.fetch = async url => { calls.push(url); return json({ error: 'rate limit' }, 429); };
   provider = getGenerationProvider({ ...primary, gateway: { endpoint: 'https://gateway.test', apiKey: 'test-only' } });
   await assert.rejects(provider.generate({ modality: 'TEXT' })); assert.equal(calls.length, 1);
-  assert.ok(!JSON.stringify(rows('SELECT * FROM compute_attempts')).includes('test-only'));
+  assert.ok(!JSON.stringify(await arows('SELECT * FROM compute_attempts')).includes('test-only'));
   const { reportedCost } = await load('apps/server/src/services/openaiCompatibleProvider.js');
   // 网关风格：金额在 usage.cost
   assert.equal(reportedCost({usage:{cost:3}}),null);

@@ -4,7 +4,7 @@ import { classroomBudgetReport, lessonPlatformBudgetOverview, computePoolReconci
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arows, arow, amap,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -358,9 +358,9 @@ export async function handleOverview(ctx, part, method) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const orgId = String(ctx.search.get('orgId') || '').trim();
     return {
-      students: rows("SELECT id,display_name name,login FROM users WHERE role='STUDENT' AND deleted_at IS NULL AND (?='' OR org_id=?) ORDER BY display_name,login", [orgId, orgId]),
-      series: rows('SELECT id,title name FROM course_series ORDER BY title'),
-      lessons: rows('SELECT id,title name,series_id seriesId FROM course_lessons ORDER BY title'),
+      students: await arows("SELECT id,display_name name,login FROM users WHERE role='STUDENT' AND deleted_at IS NULL AND (?='' OR org_id=?) ORDER BY display_name,login", [orgId, orgId]),
+      series: await arows('SELECT id,title name FROM course_series ORDER BY title'),
+      lessons: await arows('SELECT id,title name,series_id seriesId FROM course_lessons ORDER BY title'),
     };
   }
   if (part === '/compute-attempts' && method === 'GET') {
@@ -384,9 +384,9 @@ export async function handleOverview(ctx, part, method) {
     else if (evidenceMatch === 'UNMATCHED') conditions.push(`NOT ${evidenceSql}`);
     else if (evidenceMatch) throw errors.badRequest('证据匹配状态无效', 'INVALID_EVIDENCE_MATCH');
     const where = conditions.join(' AND ');
-    const total = Number(row(`SELECT COUNT(*) n FROM compute_attempts attempt WHERE ${where}`, params)?.n || 0);
+    const total = Number((await arow(`SELECT COUNT(*) n FROM compute_attempts attempt WHERE ${where}`, params))?.n || 0);
     const offset = (page - 1) * limit;
-    const items = rows(`SELECT attempt.*,org.name org_name,student.display_name student_name FROM compute_attempts attempt LEFT JOIN organizations org ON org.id=attempt.org_id LEFT JOIN users student ON student.id=attempt.user_id WHERE ${where} ORDER BY attempt.created_at DESC,attempt.attempt DESC LIMIT ? OFFSET ?`, [...params, limit, offset]).map((item) => {
+    const items = (await arows(`SELECT attempt.*,org.name org_name,student.display_name student_name FROM compute_attempts attempt LEFT JOIN organizations org ON org.id=attempt.org_id LEFT JOIN users student ON student.id=attempt.user_id WHERE ${where} ORDER BY attempt.created_at DESC,attempt.attempt DESC LIMIT ? OFFSET ?`, [...params, limit, offset])).map((item) => {
       const hasExact = Boolean(item.gateway_log_id || item.response_request_id || item.response_payload_id || item.task_id);
       const hasAny = hasExact || Boolean(item.usage_id);
       return {
@@ -399,7 +399,7 @@ export async function handleOverview(ctx, part, method) {
     });
     return {
       items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)),
-      summary: row(`SELECT COUNT(*) calls,SUM(CASE WHEN cost_source='ESTIMATED' THEN upstream_cost_fen ELSE 0 END) estimatedFen,
+      summary: await arow(`SELECT COUNT(*) calls,SUM(CASE WHEN cost_source='ESTIMATED' THEN upstream_cost_fen ELSE 0 END) estimatedFen,
         SUM(CASE WHEN cost_source='REPORTED' THEN upstream_cost_fen ELSE 0 END) reportedFen,
         SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unknownCalls,
         SUM(CASE WHEN ${exactEvidenceSql} THEN 1 ELSE 0 END) matchedCalls,
@@ -411,15 +411,15 @@ export async function handleOverview(ctx, part, method) {
   // ── 算力网关（new-api）：配置 / 测连 / 渠道 / 令牌分发 ──────────────────────
   if (part === '/compute-gateway' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    return { config: getComputeGatewayConfig() };
+    return { config: await getComputeGatewayConfig() };
   }
   if (part === '/compute-gateway' && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    const config = saveComputeGatewayConfig(ctx.body || {}, { password: ctx.body?.password });
+    const config = await saveComputeGatewayConfig(ctx.body || {}, { password: ctx.body?.password });
     // 路由缓存里存着「哪个学生用哪张令牌」，改完配置立刻失效 ——
     // 否则 60 秒内还在用旧地址/旧令牌，表现就是「改了没生效」。
     clearGatewayRouteCache();
-    audit(ctx, 'COMPUTE_GATEWAY_UPDATE', 'PLATFORM_SETTING', 'compute_gateway', null, { baseUrl: config.baseUrl, username: config.username, enabled: config.enabled, passwordChanged: Boolean(ctx.body?.password) });
+    await audit(ctx, 'COMPUTE_GATEWAY_UPDATE', 'PLATFORM_SETTING', 'compute_gateway', null, { baseUrl: config.baseUrl, username: config.username, enabled: config.enabled, passwordChanged: Boolean(ctx.body?.password) });
     return { config };
   }
   if (part === '/compute-gateway/test' && method === 'POST') {
@@ -434,20 +434,20 @@ export async function handleOverview(ctx, part, method) {
   // 算力单价（每次调用预估单价，用于折算池子消耗）+ 池子（学生 × 课包）的用量报表
   if (part === '/compute-pricing' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
-    return { pricing: getComputePricing() };
+    return { pricing: await getComputePricing() };
   }
   if (part === '/compute-pricing' && method === 'PUT') {
     requireRole(ctx, ['SUPER_ADMIN']);
     // 对外售价观测：这里维护的是「对学生的公告售价」，只用于观测与对账口径，
     // 不扣学生（usage_records.cost_fen / credits_charged 恒为 0），也不是上游真实成本。
-    const pricing = saveComputePricing(ctx.body || {});
-    audit(ctx, 'COMPUTE_PRICING_UPDATE', 'PLATFORM_SETTING', 'compute_pricing', null, { perCall: pricing.perCall, modelCount: Object.keys(pricing.models).length, baseline: 'OBSERVATION_ONLY' });
+    const pricing = await saveComputePricing(ctx.body || {});
+    await audit(ctx, 'COMPUTE_PRICING_UPDATE', 'PLATFORM_SETTING', 'compute_pricing', null, { perCall: pricing.perCall, modelCount: Object.keys(pricing.models).length, baseline: 'OBSERVATION_ONLY' });
     return { pricing, baseline: 'OBSERVATION_ONLY' };
   }
   if (part === '/compute-pools' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const limit = integer(ctx.search.get('limit'), '条数', { min: 1, max: 500, fallback: 100 });
-    return { items: classroomBudgetReport({ limit }), lessons: lessonPlatformBudgetOverview(), budgetedSeries: [] };
+    return { items: await classroomBudgetReport({ limit }), lessons: await lessonPlatformBudgetOverview(), budgetedSeries: [] };
   }
   // 对账：池子账（应用侧，四种模态、按单价折算）vs 网关账（精确，只含对话/图片）
   if (part === '/compute-pools/reconciliation' && method === 'GET') {
@@ -473,7 +473,7 @@ export async function handleOverview(ctx, part, method) {
     });
     // 刚发的令牌要能立刻被学生用上，别等 60 秒缓存过期。
     clearGatewayRouteCache();
-    audit(ctx, 'COMPUTE_GATEWAY_TOKEN_CREATE', 'PLATFORM_SETTING', 'compute_gateway', null, { name: String(ctx.body?.name || ''), budgetFen: Number(ctx.body?.budgetFen || 0), unlimited: ctx.body?.unlimited === true });
+    await audit(ctx, 'COMPUTE_GATEWAY_TOKEN_CREATE', 'PLATFORM_SETTING', 'compute_gateway', null, { name: String(ctx.body?.name || ''), budgetFen: Number(ctx.body?.budgetFen || 0), unlimited: ctx.body?.unlimited === true });
     return result;
   }
 
@@ -489,8 +489,8 @@ export async function handleOverview(ctx, part, method) {
   if (part === '/billing-config/measured-unit-prices' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     const days = integer(ctx.search.get('days'), '天数', { min: 1, max: 365, fallback: 30 });
-    const measured = measuredUnitPrices({ days });
-    const items = measuredUnitPriceItems(measured, getAiProviderPolicy());
+    const measured = await measuredUnitPrices({ days });
+    const items = measuredUnitPriceItems(measured, await getAiProviderPolicy());
     return {
       days: measured.days, since: measured.since, until: measured.until,
       minSamples: measured.minSamples, onlyCostSource: measured.onlyCostSource,
@@ -518,7 +518,7 @@ export async function handleOverview(ctx, part, method) {
   if (part === '/billing-config/upstream-wallet' && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
     requirePlatformPermission(ctx, 'ADMIN_BILLING');
-    const channels = (getAiProviderPolicy()?.channels || []).filter((channel) => channel?.id);
+    const channels = ((await getAiProviderPolicy())?.channels || []).filter((channel) => channel?.id);
     const probes = await Promise.all(channels.map((channel) => probeUpstreamWallet(channel)));
     return {
       fetchedAt: nowIso(),
@@ -540,7 +540,7 @@ export async function handleOverview(ctx, part, method) {
     const orgFilter = String(ctx.search.get('orgId') || '').trim();
     const fromProvided = ctx.search.has('from'); const from = fromProvided ? String(ctx.search.get('from') || '').trim() : '';
     const toProvided = ctx.search.has('to'); const to = toProvided ? String(ctx.search.get('to') || '').trim() : '';
-    if (orgFilter && !row('SELECT id FROM organizations WHERE id=?', [orgFilter])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    if (orgFilter && !await arow('SELECT id FROM organizations WHERE id=?', [orgFilter])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     const fromTime = from ? new Date(from) : null;
     const toTime = to ? new Date(to) : null;
     if (fromProvided && (!from || !fromTime || Number.isNaN(fromTime.getTime()) || fromTime.toISOString() !== from)) throw errors.badRequest('开始时间必须是有效 ISO 时间', 'INVALID_FROM');
@@ -556,58 +556,58 @@ export async function handleOverview(ctx, part, method) {
       if (orgFilter) { conditions.push(`${table}.org_id=?`); params.push(orgFilter); }
       return { where: conditions.join(' AND '), params };
     };
-    const singleNumber = (sql, params = []) => Number(row(sql, params)?.n || 0);
-    const organizations = singleNumber("SELECT COUNT(*) n FROM organizations WHERE (?='' OR id=?)", [orgFilter, orgFilter]);
-    const activeOrganizations = singleNumber("SELECT COUNT(*) n FROM organizations WHERE (?='' OR id=?) AND status IN ('TRIAL','ACTIVE')", [orgFilter, orgFilter]);
-    const orgScope = orgFilter ? rows('SELECT id,name,status FROM organizations WHERE id=?', [orgFilter]) : rows('SELECT id,name,status FROM organizations');
+    const singleNumber = async (sql, params = []) => Number((await arow(sql, params))?.n || 0);
+    const organizations = await singleNumber("SELECT COUNT(*) n FROM organizations WHERE (?='' OR id=?)", [orgFilter, orgFilter]);
+    const activeOrganizations = await singleNumber("SELECT COUNT(*) n FROM organizations WHERE (?='' OR id=?) AND status IN ('TRIAL','ACTIVE')", [orgFilter, orgFilter]);
+    const orgScope = orgFilter ? await arows('SELECT id,name,status FROM organizations WHERE id=?', [orgFilter]) : await arows('SELECT id,name,status FROM organizations');
     const orgIds = orgScope.map((item) => item.id);
     const usersScope = orgFilter ? "org_id=?" : "org_id IS NOT NULL";
     const usersParams = orgFilter ? [orgFilter] : [];
-    const teachers = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='TEACHER' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
-    const students = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
-    const admins = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='ORG_ADMIN' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
-    const classes = singleNumber(`SELECT COUNT(*) n FROM class_sessions WHERE (?='' OR org_id=?) AND status='ACTIVE'`, [orgFilter, orgFilter]);
-    const publishedCourses = singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED'`);
-    const activeAssignments = singleNumber(`SELECT COUNT(*) n FROM course_assignments assignment WHERE ${assignmentActiveSql()} AND (?='' OR org_id=?)`, [orgFilter, orgFilter]);
-    const marketplaceCourses = singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND marketplace_status='APPROVED'`);
-    const classSessions = singleNumber(`SELECT COUNT(*) n FROM class_sessions session WHERE (LENGTH(?)=0 OR session.org_id=?) AND session.started_at>=? AND session.started_at<?`, [orgFilter, orgFilter, since, until]);
-    const projects = singleNumber(`SELECT COUNT(*) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?`, [orgFilter, orgFilter, since, until]);
-    const works = singleNumber(`SELECT COUNT(*) n FROM works WHERE (?='' OR org_id=?) AND submitted_at>=? AND submitted_at<?`, [orgFilter, orgFilter, since, until]);
+    const teachers = await singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='TEACHER' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
+    const students = await singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
+    const admins = await singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='ORG_ADMIN' AND deleted_at IS NULL AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>?)`, [...usersParams, nowIso()]);
+    const classes = await singleNumber(`SELECT COUNT(*) n FROM class_sessions WHERE (?='' OR org_id=?) AND status='ACTIVE'`, [orgFilter, orgFilter]);
+    const publishedCourses = await singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED'`);
+    const activeAssignments = await singleNumber(`SELECT COUNT(*) n FROM course_assignments assignment WHERE ${assignmentActiveSql()} AND (?='' OR org_id=?)`, [orgFilter, orgFilter]);
+    const marketplaceCourses = await singleNumber(`SELECT COUNT(*) n FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND marketplace_status='APPROVED'`);
+    const classSessions = await singleNumber(`SELECT COUNT(*) n FROM class_sessions session WHERE (LENGTH(?)=0 OR session.org_id=?) AND session.started_at>=? AND session.started_at<?`, [orgFilter, orgFilter, since, until]);
+    const projects = await singleNumber(`SELECT COUNT(*) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?`, [orgFilter, orgFilter, since, until]);
+    const works = await singleNumber(`SELECT COUNT(*) n FROM works WHERE (?='' OR org_id=?) AND submitted_at>=? AND submitted_at<?`, [orgFilter, orgFilter, since, until]);
     // ── B4 统计指标细化：新增口径都写明来源，免得「这个数从哪来的」说不清 ──
-    const newStudents = singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND created_at>=? AND created_at<?`, [...usersParams, since, until]);
-    const activeStudents = singleNumber("SELECT COUNT(DISTINCT student_id) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?", [orgFilter, orgFilter, since, until]);
-    const lessonCompletions = singleNumber(`SELECT COUNT(*) n FROM session_students progress JOIN class_sessions classroom ON classroom.id=progress.session_id WHERE (?='' OR classroom.org_id=?) AND progress.status='COMPLETED' AND progress.completed_at>=? AND progress.completed_at<?`, [orgFilter, orgFilter, since, until]);
+    const newStudents = await singleNumber(`SELECT COUNT(*) n FROM users WHERE ${usersScope} AND role='STUDENT' AND deleted_at IS NULL AND created_at>=? AND created_at<?`, [...usersParams, since, until]);
+    const activeStudents = await singleNumber("SELECT COUNT(DISTINCT student_id) n FROM student_projects WHERE (?='' OR org_id=?) AND created_at>=? AND created_at<?", [orgFilter, orgFilter, since, until]);
+    const lessonCompletions = await singleNumber(`SELECT COUNT(*) n FROM session_students progress JOIN class_sessions classroom ON classroom.id=progress.session_id WHERE (?='' OR classroom.org_id=?) AND progress.status='COMPLETED' AND progress.completed_at>=? AND progress.completed_at<?`, [orgFilter, orgFilter, since, until]);
     // 官网匿名转化漏斗已随该功能整体下线（2026-09-16，用户要求彻底删除）：
     // 前端不再上报、服务端不再接收，这里也就不再返回 site 字段。
     // analytics_events 表与历史数据保留（本仓库惯例：删代码不删表），需要时可查库回溯。
     const usage = scoped('usage_records');
-    const usageTotal = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where}`, usage.params);
-    const usageSuccess = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='SUCCESS'`, usage.params);
-    const usageFailed = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='FAILED'`, usage.params);
-    const usageBlocked = singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='BLOCKED'`, usage.params);
+    const usageTotal = await singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where}`, usage.params);
+    const usageSuccess = await singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='SUCCESS'`, usage.params);
+    const usageFailed = await singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='FAILED'`, usage.params);
+    const usageBlocked = await singleNumber(`SELECT COUNT(*) n FROM usage_records WHERE ${usage.where} AND status='BLOCKED'`, usage.params);
     const abnormalTasks = usageFailed + usageBlocked;
-    const aiTasks = singleNumber(`SELECT COUNT(*) n FROM generation_jobs WHERE ${scoped('generation_jobs').where}`, scoped('generation_jobs').params);
+    const aiTasks = await singleNumber(`SELECT COUNT(*) n FROM generation_jobs WHERE ${scoped('generation_jobs').where}`, scoped('generation_jobs').params);
     // 2026-09-13（P4 删积分）：byOrg / byModality 从「积分」改成算力金额（分）——与算力层同一份账本。
-    const byOrg = rows(`SELECT organization.id,organization.name,COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END),0) fen,COUNT(usage.id) calls
+    const byOrg = (await arows(`SELECT organization.id,organization.name,COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END),0) fen,COUNT(usage.id) calls
       FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id AND usage.created_at>=? AND usage.created_at<?
-      ${orgFilter ? 'WHERE organization.id=?' : ''} GROUP BY organization.id ORDER BY fen DESC,organization.name ASC LIMIT 10`, orgFilter ? [since, until, orgFilter] : [since, until]).map((item) => ({ id: item.id, name: item.name, costFen: Number(item.fen || 0), calls: Number(item.calls || 0) }));
-    const byModality = rows(`SELECT modality,COUNT(*) calls,COALESCE(SUM((SELECT SUM(a.upstream_cost_fen) FROM compute_attempts a WHERE a.call_id=usage_records.compute_call_id AND a.cost_source<>'UNKNOWN')),0) fen,COUNT(CASE WHEN status='SUCCESS' THEN 1 END) successCalls,COUNT(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 END) abnormalCalls
-      FROM usage_records WHERE ${usage.where} GROUP BY modality ORDER BY fen DESC,modality ASC`, usage.params).map((item) => ({ modality: item.modality, calls: Number(item.calls || 0), costFen: Number(item.fen || 0), successCalls: Number(item.success_calls ?? item.successCalls ?? 0), abnormalCalls: Number(item.abnormal_calls ?? item.abnormalCalls ?? 0) }));
+      ${orgFilter ? 'WHERE organization.id=?' : ''} GROUP BY organization.id ORDER BY fen DESC,organization.name ASC LIMIT 10`, orgFilter ? [since, until, orgFilter] : [since, until])).map((item) => ({ id: item.id, name: item.name, costFen: Number(item.fen || 0), calls: Number(item.calls || 0) }));
+    const byModality = (await arows(`SELECT modality,COUNT(*) calls,COALESCE(SUM((SELECT SUM(a.upstream_cost_fen) FROM compute_attempts a WHERE a.call_id=usage_records.compute_call_id AND a.cost_source<>'UNKNOWN')),0) fen,COUNT(CASE WHEN status='SUCCESS' THEN 1 END) successCalls,COUNT(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 END) abnormalCalls
+      FROM usage_records WHERE ${usage.where} GROUP BY modality ORDER BY fen DESC,modality ASC`, usage.params)).map((item) => ({ modality: item.modality, calls: Number(item.calls || 0), costFen: Number(item.fen || 0), successCalls: Number(item.success_calls ?? item.successCalls ?? 0), abnormalCalls: Number(item.abnormal_calls ?? item.abnormalCalls ?? 0) }));
     // ── 统计：算力层（单位是「元」，来自应用侧算力池账本 —— 与「算力网关」页同一份数据）──
     // 为什么不再用 credits：积分已废弃（2026-09-13 P4），钱一律看算力池账本 cost_fen。
     // 这里直接给「花了多少钱、花在哪个模态上、哪个池子快满了」。
     const computeWhere = `record.created_at>=? AND record.created_at<? AND record.series_id IS NOT NULL${orgFilter ? ' AND record.org_id=?' : ''}`;
     const computeParams = orgFilter ? [since, until, orgFilter] : [since, until];
     const attemptScope = scoped('compute_attempts');
-    const computeTotals = row(`SELECT SUM(CASE WHEN cost_source<>'UNKNOWN' THEN upstream_cost_fen ELSE 0 END) fen, COUNT(*) calls,
+    const computeTotals = await arow(`SELECT SUM(CASE WHEN cost_source<>'UNKNOWN' THEN upstream_cost_fen ELSE 0 END) fen, COUNT(*) calls,
       SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) successCalls,
       SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unknownCalls
       FROM compute_attempts WHERE ${attemptScope.where}`, attemptScope.params);
-    const computeByModality = rows(`SELECT modality,SUM(CASE WHEN cost_source<>'UNKNOWN' THEN upstream_cost_fen ELSE 0 END) fen,COUNT(*) calls
+    const computeByModality = await arows(`SELECT modality,SUM(CASE WHEN cost_source<>'UNKNOWN' THEN upstream_cost_fen ELSE 0 END) fen,COUNT(*) calls
       FROM compute_attempts WHERE ${attemptScope.where} GROUP BY modality ORDER BY fen DESC`,attemptScope.params);
     // 池子健康度是**存量口径**（不随筛选时间变化）：有消耗的池子里，多少接近上限、多少已用尽。
     // 复用同一份报表口径（classroomBudgetReport），避免两处各算一套。
-    const poolRows = classroomBudgetReport({ limit: 500, orgId: orgFilter });
+    const poolRows = await classroomBudgetReport({ limit: 500, orgId: orgFilter });
     const pools = {
       counted: poolRows.length,
       unlimited: poolRows.filter((item) => item.budgetFen == null).length,
@@ -632,7 +632,7 @@ export async function handleOverview(ctx, part, method) {
         budgetFen: item.budgetFen, knownCostFen: item.knownCostFen, overBudgetFen: item.overBudgetFen, studentCount: item.studentCount,
       }));
     const platformBudgetAlert = {
-      lessons: lessonPlatformBudgetOverview()
+      lessons: (await lessonPlatformBudgetOverview())
         .filter((item) => item.overBudgetSessions > 0)
         .map((item) => ({
           lessonId: item.lessonId, lessonTitle: item.lessonTitle, seriesTitle: item.seriesTitle || null, platformBudgetFen: item.platformBudgetFen,
@@ -646,23 +646,23 @@ export async function handleOverview(ctx, part, method) {
     const computeTopStudents = [];
 
     // ── 统计：内容层（课包/课时的使用热度 + 作品发布情况）──
-    const lessonHot = rows(`SELECT lesson.id, lesson.title, series.title AS series_title, COUNT(session.id) AS sessions
+    const lessonHot = (await arows(`SELECT lesson.id, lesson.title, series.title AS series_title, COUNT(session.id) AS sessions
         FROM course_lessons lesson
         JOIN course_series series ON series.id = lesson.series_id
         LEFT JOIN class_sessions session ON session.lesson_id = lesson.id AND session.started_at>=? AND session.started_at<?
        WHERE series.owner_type='PLATFORM'
-       GROUP BY lesson.id HAVING sessions > 0 ORDER BY sessions DESC, lesson.sort ASC LIMIT 5`, [since, until]).map((item) => ({ id: item.id, title: item.title, seriesTitle: item.series_title, sessions: Number(item.sessions || 0) }));
+       GROUP BY lesson.id HAVING sessions > 0 ORDER BY sessions DESC, lesson.sort ASC LIMIT 5`, [since, until])).map((item) => ({ id: item.id, title: item.title, seriesTitle: item.series_title, sessions: Number(item.sessions || 0) }));
     // 作品发布：两条链路（画布 works / VibeCoding submissions）合并计数 —— 与用户看到的「一套状态话术」同口径
-    const submittedWorks = singleNumber(`SELECT (SELECT COUNT(*) FROM works WHERE submitted_at>=? AND submitted_at<?) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE submitted_at>=? AND submitted_at<?) n`, [since, until, since, until]);
+    const submittedWorks = await singleNumber(`SELECT (SELECT COUNT(*) FROM works WHERE submitted_at>=? AND submitted_at<?) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE submitted_at>=? AND submitted_at<?) n`, [since, until, since, until]);
     const content = {
       lessonHot,
       submittedWorks,
       // 在广场上 = 两条链路各自的 is_public（与 worksState 的判据一致）
-      onPlaza: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE is_public=1) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=1) n"),
-      featured: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE featured_at IS NOT NULL) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE featured_at IS NOT NULL) n"),
+      onPlaza: await singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE is_public=1) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=1) n"),
+      featured: await singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE featured_at IS NOT NULL) + (SELECT COUNT(*) FROM vibecoding_submissions WHERE featured_at IS NOT NULL) n"),
       // 2026-09-13（C2）：画布链路数**独立状态** UNPUBLISHED（以前数 teacher_comment，会把「未通过」也算成已下架）
-      unpublished: singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE status='UNPUBLISHED') + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=0 AND unpublish_reason IS NOT NULL AND unpublish_reason<>'') n"),
-      lessonsPublished: singleNumber("SELECT COUNT(*) n FROM course_lessons WHERE status='PUBLISHED'"),
+      unpublished: await singleNumber("SELECT (SELECT COUNT(*) FROM works WHERE status='UNPUBLISHED') + (SELECT COUNT(*) FROM vibecoding_submissions WHERE is_public=0 AND unpublish_reason IS NOT NULL AND unpublish_reason<>'') n"),
+      lessonsPublished: await singleNumber("SELECT COUNT(*) n FROM course_lessons WHERE status='PUBLISHED'"),
     };
 
     return {
@@ -747,28 +747,28 @@ export async function handleOverview(ctx, part, method) {
     const orderBy = sort === 'costFen' ? `(SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) DESC,usage.created_at DESC,usage.id DESC` : 'usage.created_at DESC,usage.id DESC';
     const where = conditions.join(' AND ');
     const countFromWhere = `FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id ${where ? 'WHERE ' + where : ''}`;
-    const total = Number(row(`SELECT COUNT(*) n ${countFromWhere}`, params)?.n || 0);
-    const unknownCosts = Number(row(`SELECT COUNT(*) n ${countFromWhere} AND (usage.compute_call_id IS NULL OR NOT EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) OR EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=usage.compute_call_id AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL)))`, params)?.n || 0);
-    const totalFen = Number(row(`SELECT COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END),0) n ${countFromWhere}`, params)?.n || 0);
+    const total = Number((await arow(`SELECT COUNT(*) n ${countFromWhere}`, params))?.n || 0);
+    const unknownCosts = Number((await arow(`SELECT COUNT(*) n ${countFromWhere} AND (usage.compute_call_id IS NULL OR NOT EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) OR EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=usage.compute_call_id AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL)))`, params))?.n || 0);
+    const totalFen = Number((await arow(`SELECT COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END),0) n ${countFromWhere}`, params))?.n || 0);
     if (part === '/billing/usage-overview') return {
       totalFen, knownCostFen: totalFen, unknownCosts, costBasis: 'KNOWN_UPSTREAM_ONLY', calls: total,
-      usage: rows(`SELECT usage.modality, SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END) costFen, COUNT(*) calls ${countFromWhere} GROUP BY usage.modality ORDER BY costFen DESC`, params),
-      topOrgs: rows(`SELECT organization.id,organization.name,SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END) costFen ${countFromWhere} GROUP BY organization.id ORDER BY costFen DESC LIMIT 10`, params),
+      usage: await arows(`SELECT usage.modality, SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END) costFen, COUNT(*) calls ${countFromWhere} GROUP BY usage.modality ORDER BY costFen DESC`, params),
+      topOrgs: await arows(`SELECT organization.id,organization.name,SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END) costFen ${countFromWhere} GROUP BY organization.id ORDER BY costFen DESC LIMIT 10`, params),
     };
     const offset = (page - 1) * limit;
-    const items = rows(
+    const items = await amap((await arows(
       `SELECT usage.*,organization.name organization_name,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,session.class_id class_id,session.title class_name FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id ${where ? 'WHERE ' + where : ''} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, limit, offset],
-    ).map((item) => ({
+    )), async (item) => ({
       id: item.id, orgId: item.org_id, organizationName: item.organization_name || null,
       userId: item.user_id, userLogin: item.user_login || null, userName: item.user_name || null,
       classSessionId: item.class_session_id || null, classId: item.class_id || null, className: item.class_name || null,
       lessonId: item.session_lesson_id || item.lesson_id || null, projectId: item.project_id || null, projectTitle: item.project_title || null,
       workId: item.work_id || null, workTitle: item.work_title || null, modality: item.modality, model: item.model,
       historicalSaleFen: Number(item.cost_fen || 0),
-      costFen: item.compute_call_id ? row("SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(upstream_cost_fen) END fen FROM compute_attempts WHERE call_id=?",[item.compute_call_id])?.fen ?? null : null,
+      costFen: item.compute_call_id ? (await arow("SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN cost_source='UNKNOWN' OR upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(upstream_cost_fen) END fen FROM compute_attempts WHERE call_id=?",[item.compute_call_id]))?.fen ?? null : null,
       pricingSnapshot: parseJson(item.pricing_snapshot, {}),
-      attempts: item.compute_call_id ? rows('SELECT id,attempt,channel_id channelId,provider,model,status,task_id taskId,cost_source costSource,upstream_cost_fen upstreamCostFen,error_code errorCode,error_message errorMessage,output_started outputStarted FROM compute_attempts WHERE call_id=? ORDER BY attempt', [item.compute_call_id]) : [],
+      attempts: item.compute_call_id ? await arows('SELECT id,attempt,channel_id channelId,provider,model,status,task_id taskId,cost_source costSource,upstream_cost_fen upstreamCostFen,error_code errorCode,error_message errorMessage,output_started outputStarted FROM compute_attempts WHERE call_id=? ORDER BY attempt', [item.compute_call_id]) : [],
       // C3 前置：上游返回过就带上（多数多模态接口不返回，所以允许为 0）
       inputTokens: Number(item.input_tokens || 0), outputTokens: Number(item.output_tokens || 0),
       status: item.status, failCode: item.fail_code || null, createdAt: item.created_at,
@@ -796,27 +796,27 @@ export async function handleOverview(ctx, part, method) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const { days, since, until } = usageRange(ctx);
     const orgId = String(ctx.search.get('orgId') || '').trim();
-    if (orgId && !row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    if (orgId && !await arow('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     // 所有机构（含这段时间没有消耗的）：LEFT JOIN 用量，零消耗也列出来
     // 每个机构 / 学员**两笔钱并排**（2026-09-15）：
     //   saleFen = 对外售价合计（机构/学员看到的「消耗」，只计成功尝试）；
     //   costFen = **我们已知的上游成本**；有任何一笔成本未知就整体给 null（不把已知部分当总额）。
     // 这就是「机构下面学生花的钱 vs 我们的成本」的对照。
     const SALE_FEN = `COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT SUM(a.sale_price_fen) FROM compute_attempts a WHERE a.call_id=usage.compute_call_id AND a.status='SUCCESS') ELSE 0 END), 0) saleFen`;
-    const orgs = rows(`SELECT organization.id, organization.name, organization.status,
+    const orgs = (await arows(`SELECT organization.id, organization.name, organization.status,
         ${SALE_FEN},
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls, COUNT(DISTINCT usage.user_id) studentCount
       FROM organizations organization
       LEFT JOIN usage_records usage ON usage.org_id = organization.id AND usage.created_at>=? AND usage.created_at<?
-      GROUP BY organization.id ORDER BY saleFen DESC, organization.name ASC`, [since, until])
+      GROUP BY organization.id ORDER BY saleFen DESC, organization.name ASC`, [since, until]))
       .map((item) => ({ id: item.id, name: item.name, status: item.status, saleFen: Number(item.saleFen || 0), costFen: Number(item.fen || 0), calls: Number(item.calls || 0), studentCount: Number(item.studentCount || 0) }));
-    const students = orgId ? rows(`SELECT student.id, student.login, student.display_name,
+    const students = orgId ? (await arows(`SELECT student.id, student.login, student.display_name,
         ${SALE_FEN},
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls,
         COUNT(DISTINCT usage.series_id) seriesCount, MAX(usage.created_at) lastAt
       FROM usage_records usage JOIN users student ON student.id = usage.user_id
       WHERE usage.org_id=? AND usage.created_at>=? AND usage.created_at<?
-      GROUP BY student.id ORDER BY saleFen DESC, student.display_name ASC`, [orgId, since, until])
+      GROUP BY student.id ORDER BY saleFen DESC, student.display_name ASC`, [orgId, since, until]))
       .map((item) => ({ id: item.id, login: item.login, name: item.display_name || item.login, saleFen: Number(item.saleFen || 0), costFen: Number(item.fen || 0), calls: Number(item.calls || 0), seriesCount: Number(item.seriesCount || 0), lastAt: item.last_at || item.lastAt || null })) : [];
     const totals = { saleFen: orgs.reduce((sum, item) => sum + item.saleFen, 0), costFen: orgs.reduce((sum, item) => sum + item.costFen, 0), calls: orgs.reduce((sum, item) => sum + item.calls, 0), orgCount: orgs.length, activeOrgCount: orgs.filter((item) => item.calls > 0).length };
     return { days, since, until, orgId: orgId || null, orgs, students, totals, costBasis: 'KNOWN_UPSTREAM_ONLY' };
@@ -825,9 +825,9 @@ export async function handleOverview(ctx, part, method) {
     requireRole(ctx, ['SUPER_ADMIN']);
     const { days, since, until } = usageRange(ctx);
     const orgId = String(ctx.search.get('orgId') || '').trim();
-    if (orgId && !row('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
+    if (orgId && !await arow('SELECT id FROM organizations WHERE id=?', [orgId])) throw errors.badRequest('机构不存在', 'ORG_NOT_FOUND');
     // 导出「机构 × 学员」两级的明细（选了机构就只导那家），列与页面一致
-    const items = rows(`SELECT organization.name orgName, organization.id orgId, student.login studentLogin,
+    const items = await arows(`SELECT organization.name orgName, organization.id orgId, student.login studentLogin,
         student.display_name studentName, student.id studentId,
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls
       FROM usage_records usage
@@ -840,7 +840,7 @@ export async function handleOverview(ctx, part, method) {
       ['机构', '机构ID', '学员', '学员账号', '学员ID', '调用次数', '已知成本合计（元，不含未知）'],
       items.map((item) => [item.orgName, item.orgId, item.studentName || item.studentLogin, item.studentLogin, item.studentId, Number(item.calls || 0), (Number(item.fen || 0) / 100).toFixed(2)]),
     );
-    audit(ctx, 'PLATFORM_USAGE_EXPORT', 'ORG', orgId || null, null, { count: items.length, days, orgId: orgId || null });
+    await audit(ctx, 'PLATFORM_USAGE_EXPORT', 'ORG', orgId || null, null, { count: items.length, days, orgId: orgId || null });
     return { filename: csvFileName(orgId ? 'student-usage' : 'org-student-usage'), content, count: items.length };
   }
   return null;

@@ -36,7 +36,7 @@ const rejects = async (fn, code, label) => {
 
 const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
 const { handleOrg } = await import('../apps/server/src/routes/orgAdmin.js');
-const { row } = await import('../apps/server/src/lib.js');
+const { row, arow } = await import('../apps/server/src/lib.js');
 
 // ⚠️ 查询串要**拆到 ctx.search**：处理器读的是 ctx.search.get(...)，而路由层负责把 '?a=b' 拆开。
 // 直接把带查询串的路径当 pathname 传，处理器会因为 part 不匹配而返回 null（踩过一次）。
@@ -92,7 +92,7 @@ const otherOrgSameName = await org(orgB.id, '/users', 'POST', { role: 'STUDENT',
 check('不同机构可以同名', Boolean(otherOrgSameName?.id));
 
 console.log('\n【四】改名也要过唯一性');
-const target = row("SELECT id FROM users WHERE login='stu.01'");
+const target = await arow("SELECT id FROM users WHERE login='stu.01'");
 await rejects(() => org(orgA.id, `/users/${target.id}`, 'PUT', { displayName: '合法stu01' }), 'DISPLAY_NAME_EXISTS', '改名撞上同机构同名要被拒');
 const renamed = await org(orgA.id, `/users/${target.id}`, 'PUT', { displayName: '换了个名字' });
 check('改成不冲突的名字可以', renamed?.displayName === '换了个名字');

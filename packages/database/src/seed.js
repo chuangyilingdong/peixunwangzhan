@@ -1,23 +1,23 @@
-import { hashPassword, id, json, nowIso, q, row, transaction } from './schema.js';
+import { hashPassword, id, json, nowIso, q, row, transaction, arow, aq, atransaction } from './schema.js';
 import { WEBSITE_CONTENT_DEFAULTS } from './websiteContentDefaults.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const PLUS_DAYS = (days) => new Date(Date.now() + days * DAY).toISOString();
 
-function ensureWebsiteContent(now) {
+async function ensureWebsiteContent(now) {
   const defaults = WEBSITE_CONTENT_DEFAULTS;
   for (const [contentKey, content] of Object.entries(defaults)) {
-    const existing = row('SELECT content_key FROM website_contents WHERE content_key=?', [contentKey]);
+    const existing = await arow('SELECT content_key FROM website_contents WHERE content_key=?', [contentKey]);
     if (!existing) {
       const value = json(content);
-      q('INSERT INTO website_contents(content_key,draft_content,published_content,draft_version,published_version,updated_by,published_by,created_at,updated_at,published_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [contentKey, value, value, 1, 1, null, null, now, now, now]);
-      q('INSERT INTO website_content_revisions(id,content_key,version,content,action,changed_by,reason,created_at) VALUES (?,?,?,?,?,?,?,?)', [id('wrev'), contentKey, 1, value, 'PUBLISH', null, 'seed default', now]);
+      await aq('INSERT INTO website_contents(content_key,draft_content,published_content,draft_version,published_version,updated_by,published_by,created_at,updated_at,published_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [contentKey, value, value, 1, 1, null, null, now, now, now]);
+      await aq('INSERT INTO website_content_revisions(id,content_key,version,content,action,changed_by,reason,created_at) VALUES (?,?,?,?,?,?,?,?)', [id('wrev'), contentKey, 1, value, 'PUBLISH', null, 'seed default', now]);
     }
   }
 }
 
-function ensurePlatformSettings(now) {
-  q(
+async function ensurePlatformSettings(now) {
+  await aq(
     // 2026-09-18：modalities / billing_settings 两列已下线（只有本种子写过，全仓无读取方）。
     `INSERT INTO platform_settings(id,platform_name,created_at,updated_at)
      VALUES (1,?,?,?)
@@ -28,11 +28,11 @@ function ensurePlatformSettings(now) {
   );
 }
 
-function ensureUser({ login, orgId = null, displayName, role, password, permissions = [], extras = {} }, now) {
-  let user = row('SELECT * FROM users WHERE login = ?', [login]);
+async function ensureUser({ login, orgId = null, displayName, role, password, permissions = [], extras = {} }, now) {
+  let user = await arow('SELECT * FROM users WHERE login = ?', [login]);
   if (!user) {
     const userId = id('user');
-    q(
+    await aq(
       `INSERT INTO users(
         id,org_id,login,display_name,role,permissions,password_hash,status,
         student_usage_scope,billing_package_id,monthly_credit_allowance,monthly_bonus_credits,
@@ -61,10 +61,10 @@ function ensureUser({ login, orgId = null, displayName, role, password, permissi
         now,
       ],
     );
-    user = row('SELECT * FROM users WHERE id = ?', [userId]);
+    user = await arow('SELECT * FROM users WHERE id = ?', [userId]);
   } else {
     // 演示账号以稳定登录名为锚点复用；只补齐和纠正 P0 必需字段，不清理任何历史业务数据。
-    q(
+    await aq(
       `UPDATE users SET
         org_id=?,display_name=?,role=?,permissions=?,password_hash=?,status='ACTIVE',deleted_at=NULL,
         student_usage_scope=?,billing_package_id=?,monthly_credit_allowance=?,monthly_bonus_credits=?,
@@ -88,16 +88,16 @@ function ensureUser({ login, orgId = null, displayName, role, password, permissi
         user.id,
       ],
     );
-    user = row('SELECT * FROM users WHERE id = ?', [user.id]);
+    user = await arow('SELECT * FROM users WHERE id = ?', [user.id]);
   }
   return user;
 }
 
-function ensureOrganization(now) {
-  let organization = row('SELECT * FROM organizations WHERE name = ?', ['示例创新学校']);
+async function ensureOrganization(now) {
+  let organization = await arow('SELECT * FROM organizations WHERE name = ?', ['示例创新学校']);
   if (!organization) {
     const orgId = id('org');
-    q(
+    await aq(
       `INSERT INTO organizations(
         id,name,status,contract_start_at,contract_expires_at,is_trial,
         base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at
@@ -118,18 +118,18 @@ function ensureOrganization(now) {
         now,
       ],
     );
-    organization = row('SELECT * FROM organizations WHERE id = ?', [orgId]);
+    organization = await arow('SELECT * FROM organizations WHERE id = ?', [orgId]);
   } else {
-    q(
+    await aq(
       `UPDATE organizations SET status='ACTIVE',is_trial=0,
        contract_expires_at=CASE WHEN contract_expires_at < ? THEN ? ELSE contract_expires_at END,
        base_teacher_seats=MAX(base_teacher_seats,3),
        purchased_teacher_seats=MAX(purchased_teacher_seats,2),updated_at=? WHERE id=?`,
       [now, PLUS_DAYS(365), now, organization.id],
     );
-    organization = row('SELECT * FROM organizations WHERE id = ?', [organization.id]);
+    organization = await arow('SELECT * FROM organizations WHERE id = ?', [organization.id]);
   }
-  q(
+  await aq(
     `INSERT INTO org_billing_accounts(org_id,credit_balance,total_credits_in,total_credits_spent,currency_paid_total_fen,updated_version)
      VALUES (?,?,?,?,?,1)
      ON CONFLICT(org_id) DO UPDATE SET
@@ -138,7 +138,7 @@ function ensureOrganization(now) {
     [organization.id, 100000, 100000, 0, 0],
   );
   // Keep the seeded opening balance auditable without inventing a paid recharge order.
-  q(
+  await aq(
     `INSERT INTO credit_entries(id,org_id,direction,type,credits,balance_after,status,reason,actor_id,created_at)
      SELECT ?,?,?,?,?,?,'EFFECTIVE',?,NULL,?
      WHERE NOT EXISTS (SELECT 1 FROM credit_entries WHERE org_id=? AND type='OPENING_BALANCE')`,
@@ -147,44 +147,44 @@ function ensureOrganization(now) {
   return organization;
 }
 
-function ensurePackage(orgId, now) {
-  let pkg = row('SELECT * FROM billing_packages WHERE org_id = ? AND name = ?', [orgId, '标准创作套餐']);
+async function ensurePackage(orgId, now) {
+  let pkg = await arow('SELECT * FROM billing_packages WHERE org_id = ? AND name = ?', [orgId, '标准创作套餐']);
   if (!pkg) {
     const packageId = id('pkg');
-    q(
+    await aq(
       `INSERT INTO billing_packages(
         id,org_id,name,price_fen,monthly_credits,bonus_credits,duration_days,
         allow_image,allow_music,allow_video,allow_podcast,allow_dubbing,student_seats,status,created_at,updated_at
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [packageId, orgId, '标准创作套餐', 9900, 500, 50, 30, 1, 1, 1, 0, 0, 30, 'ACTIVE', now, now],
     );
-    pkg = row('SELECT * FROM billing_packages WHERE id = ?', [packageId]);
+    pkg = await arow('SELECT * FROM billing_packages WHERE id = ?', [packageId]);
   } else {
-    q(
+    await aq(
       `UPDATE billing_packages SET monthly_credits=500,bonus_credits=50,duration_days=30,
        allow_image=1,allow_music=1,allow_video=1,allow_podcast=0,allow_dubbing=0,student_seats=MAX(student_seats,30),status='ACTIVE',updated_at=?
        WHERE id=?`,
       [now, pkg.id],
     );
-    pkg = row('SELECT * FROM billing_packages WHERE id = ?', [pkg.id]);
+    pkg = await arow('SELECT * FROM billing_packages WHERE id = ?', [pkg.id]);
   }
   return pkg;
 }
 
-function ensureCourse(now) {
-  let series = row(`SELECT * FROM course_series WHERE owner_type='PLATFORM' AND title=?`, ['AI古诗词创意营']);
+async function ensureCourse(now) {
+  let series = await arow(`SELECT * FROM course_series WHERE owner_type='PLATFORM' AND title=?`, ['AI古诗词创意营']);
   if (!series) {
     const seriesId = id('series');
-    q(
+    await aq(
       `INSERT INTO course_series(id,title,description,owner_type,visibility,version,sort,status,difficulty_level,age_range_min,age_range_max,tags,stock_total,created_at,updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [seriesId, 'AI古诗词创意营', '5 课时古诗情景动画与创意表达课程', 'PLATFORM', 'PUBLIC', '1.0', 1, 'PUBLISHED', 3, 8, 16, JSON.stringify(['语文', '创意', '古诗词', '动画']), 30, now, now],
     );
-    series = row('SELECT * FROM course_series WHERE id=?', [seriesId]);
+    series = await arow('SELECT * FROM course_series WHERE id=?', [seriesId]);
   } else {
     // P5-W05: 补全新课程元数据字段
-    q(`UPDATE course_series SET description=?,visibility='PUBLIC',status='PUBLISHED',difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?`, ['5 课时古诗情景动画与创意表达课程', 3, 8, 16, JSON.stringify(['语文', '创意', '古诗词', '动画']), now, series.id]);
-    series = row('SELECT * FROM course_series WHERE id=?', [series.id]);
+    await aq(`UPDATE course_series SET description=?,visibility='PUBLIC',status='PUBLISHED',difficulty_level=?,age_range_min=?,age_range_max=?,tags=?,updated_at=? WHERE id=?`, ['5 课时古诗情景动画与创意表达课程', 3, 8, 16, JSON.stringify(['语文', '创意', '古诗词', '动画']), now, series.id]);
+    series = await arow('SELECT * FROM course_series WHERE id=?', [series.id]);
   }
 
   const lessons = [
@@ -195,58 +195,58 @@ function ensureCourse(now) {
     ['第5课：完成作品并展示', '完善创作、讲述设计思路并提交作品展示。', '最后一课时聚焦于作品的整体完善与展示。学生将完成整个诗词创意动画的制作，并准备一段简短的设计思路分享，为作品展示做好充分准备。'],
   ];
   const lessonRows = [];
-  lessons.forEach(([title, summary, content], index) => {
+  for (const [index, [title, summary, content]] of lessons.entries()) {
     const sort = index + 1;
-    let lesson = row('SELECT * FROM course_lessons WHERE series_id=? AND sort=?', [series.id, sort]);
+    let lesson = await arow('SELECT * FROM course_lessons WHERE series_id=? AND sort=?', [series.id, sort]);
     if (!lesson) {
       const lessonId = id('lesson');
-      q(
+      await aq(
         `INSERT INTO course_lessons(id,series_id,title,summary,sort,status,duration_minutes,lesson_content,created_at,updated_at)
          VALUES (?,?,?,?,?,?,?,?,?,?)`,
         [lessonId, series.id, title, summary, sort, 'PUBLISHED', 45, content, now, now],
       );
-      lesson = row('SELECT * FROM course_lessons WHERE id=?', [lessonId]);
+      lesson = await arow('SELECT * FROM course_lessons WHERE id=?', [lessonId]);
     } else {
-      q(`UPDATE course_lessons SET title=?,summary=?,status='PUBLISHED',duration_minutes=45,lesson_content=?,updated_at=? WHERE id=?`, [title, summary, content, now, lesson.id]);
-      lesson = row('SELECT * FROM course_lessons WHERE id=?', [lesson.id]);
+      await aq(`UPDATE course_lessons SET title=?,summary=?,status='PUBLISHED',duration_minutes=45,lesson_content=?,updated_at=? WHERE id=?`, [title, summary, content, now, lesson.id]);
+      lesson = await arow('SELECT * FROM course_lessons WHERE id=?', [lesson.id]);
     }
     lessonRows.push(lesson);
-  });
+  };
   return { series, lessons: lessonRows };
 }
 
-function ensureClass({ orgId, teacherId, students, series, lessons }, now) {
-  let klass = row(`SELECT * FROM classes WHERE org_id=? AND name=? AND status='ACTIVE'`, [orgId, '三年级AI创作一班']);
+async function ensureClass({ orgId, teacherId, students, series, lessons }, now) {
+  let klass = await arow(`SELECT * FROM classes WHERE org_id=? AND name=? AND status='ACTIVE'`, [orgId, '三年级AI创作一班']);
   if (!klass) {
     const classId = id('class');
-    q(
+    await aq(
       `INSERT INTO classes(id,org_id,name,teacher_id,usage_mode,default_series_id,status,created_at,updated_at)
        VALUES (?,?,?,?,?,?,?,?,?)`,
       [classId, orgId, '三年级AI创作一班', teacherId, 'CLASS_ONLY', series.id, 'ACTIVE', now, now],
     );
-    klass = row('SELECT * FROM classes WHERE id=?', [classId]);
+    klass = await arow('SELECT * FROM classes WHERE id=?', [classId]);
   } else {
-    q(`UPDATE classes SET teacher_id=?,usage_mode='CLASS_ONLY',default_series_id=?,updated_at=? WHERE id=?`, [teacherId, series.id, now, klass.id]);
-    klass = row('SELECT * FROM classes WHERE id=?', [klass.id]);
+    await aq(`UPDATE classes SET teacher_id=?,usage_mode='CLASS_ONLY',default_series_id=?,updated_at=? WHERE id=?`, [teacherId, series.id, now, klass.id]);
+    klass = await arow('SELECT * FROM classes WHERE id=?', [klass.id]);
   }
 
-  const ensureMember = (userId, role) => {
-    const active = row(`SELECT id FROM class_members WHERE class_id=? AND user_id=? AND removed_at IS NULL`, [klass.id, userId]);
-    if (!active) q(`INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES (?,?,?,?,?)`, [id('member'), klass.id, userId, role, now]);
+  const ensureMember = async (userId, role) => {
+    const active = await arow(`SELECT id FROM class_members WHERE class_id=? AND user_id=? AND removed_at IS NULL`, [klass.id, userId]);
+    if (!active) await aq(`INSERT INTO class_members(id,class_id,user_id,role,joined_at) VALUES (?,?,?,?,?)`, [id('member'), klass.id, userId, role, now]);
   };
-  ensureMember(teacherId, 'TEACHER');
-  students.forEach((student) => ensureMember(student.id, 'STUDENT'));
+  await ensureMember(teacherId, 'TEACHER');
+  for (const student of students) { await ensureMember(student.id, 'STUDENT'); };
 
-  lessons.forEach((lesson, index) => {
-    const current = row(`SELECT id FROM class_curriculum_items WHERE class_id=? AND lesson_id=?`, [klass.id, lesson.id]);
+  for (const [index, lesson] of lessons.entries()) {
+    const current = await arow(`SELECT id FROM class_curriculum_items WHERE class_id=? AND lesson_id=?`, [klass.id, lesson.id]);
     if (!current) {
-      q(
+      await aq(
         `INSERT INTO class_curriculum_items(id,class_id,lesson_id,sort,source_series_id,added_at)
          VALUES (?,?,?,?,?,?)`,
         [id('curriculum'), klass.id, lesson.id, index + 1, series.id, now],
       );
     }
-  });
+  };
   // 2026-09-13（批次 B）记录一个**试过又回滚**的做法：曾在这里给第一个课时自动开一个「演示课堂」，
   // 好让演示账号一登录就能进课。但大量守卫依赖「初始状态干净」（断言开课前所有课时都是关的），
   // 种子一开课它们就集体变红 —— 所以种子只保留**结构性数据**（班级/课单/成员），
@@ -255,46 +255,46 @@ function ensureClass({ orgId, teacherId, students, series, lessons }, now) {
 }
 
 
-export function seedDatabase() {
+export async function seedDatabase() {
   const now = nowIso();
-  return transaction(() => {
-    ensurePlatformSettings(now);
-    ensureWebsiteContent(now);
-    ensureUser({ login: 'root', displayName: '平台超管', role: 'SUPER_ADMIN', password: 'admin123' }, now);
+  return await atransaction(async () => {
+    await ensurePlatformSettings(now);
+    await ensureWebsiteContent(now);
+    await ensureUser({ login: 'root', displayName: '平台超管', role: 'SUPER_ADMIN', password: 'admin123' }, now);
 
-    const organization = ensureOrganization(now);
-    const pkg = ensurePackage(organization.id, now);
-    ensureUser({ login: 'org-admin', orgId: organization.id, displayName: '机构管理员', role: 'ORG_ADMIN', password: 'org123' }, now);
-    const teacher1 = ensureUser({ login: 'teacher-1', orgId: organization.id, displayName: '王老师', role: 'TEACHER', password: 'teach123', permissions: [] }, now);
-    ensureUser({ login: 'teacher-2', orgId: organization.id, displayName: '李老师', role: 'TEACHER', password: 'teach123', permissions: [] }, now);
-    const student1 = ensureUser({
+    const organization = await ensureOrganization(now);
+    const pkg = await ensurePackage(organization.id, now);
+    await ensureUser({ login: 'org-admin', orgId: organization.id, displayName: '机构管理员', role: 'ORG_ADMIN', password: 'org123' }, now);
+    const teacher1 = await ensureUser({ login: 'teacher-1', orgId: organization.id, displayName: '王老师', role: 'TEACHER', password: 'teach123', permissions: [] }, now);
+    await ensureUser({ login: 'teacher-2', orgId: organization.id, displayName: '李老师', role: 'TEACHER', password: 'teach123', permissions: [] }, now);
+    const student1 = await ensureUser({
       login: 'student-1', orgId: organization.id, displayName: '小明', role: 'STUDENT', password: 'study123',
       extras: { studentUsageScope: 'FOLLOW_CLASS', billingPackageId: pkg.id, monthlyCreditAllowance: 100, monthlyBonusCredits: 20, magicStones: 120 },
     }, now);
-    const student2 = ensureUser({
+    const student2 = await ensureUser({
       login: 'student-2', orgId: organization.id, displayName: '小红', role: 'STUDENT', password: 'study123',
       extras: { studentUsageScope: 'HOME_PRACTICE', billingPackageId: pkg.id, monthlyCreditAllowance: 100, monthlyBonusCredits: 20, magicStones: 120 },
     }, now);
 
-    const course = ensureCourse(now);
-    const assignment = row('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [course.series.id, organization.id]);
+    const course = await ensureCourse(now);
+    const assignment = await arow('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [course.series.id, organization.id]);
     // 新演示授权显式给出有限额度；重复 seed 不重置现有额度或恢复已撤销许可。
     if (!assignment) {
       const assignmentId = id('assignment');
       const students = [student1, student2];
-      q(`INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,quota_total,quota_used)
+      await aq(`INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,quota_total,quota_used)
          VALUES (?,?,?,?,?,?,?,?)`, [assignmentId, course.series.id, organization.id, 'ACTIVE', null, now, 30, students.length]);
-      students.forEach((student) => {
-        q(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at)
+      for (const student of students) {
+        await aq(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at)
            VALUES (?,?,?,?,?,?,?)`, [id('coursegrant'), organization.id, student.id, course.series.id, assignmentId, null, now]);
-      });
+      };
     }
-    ensureClass({ orgId: organization.id, teacherId: teacher1.id, students: [student1, student2], ...course }, now);
+    await ensureClass({ orgId: organization.id, teacherId: teacher1.id, students: [student1, student2], ...course }, now);
     return { organizationId: organization.id, courseSeriesId: course.series.id };
   });
 }
 
 if (process.argv[1] && /seed\.js$/i.test(process.argv[1])) {
-  seedDatabase();
+  await seedDatabase();
   console.log('Seed complete.');
 }

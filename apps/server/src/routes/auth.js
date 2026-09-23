@@ -16,7 +16,7 @@ import {
   tokenHash,
   verifyPassword,
   id,
-  assertUserAccountAvailable,
+  assertUserAccountAvailable, arow, arows, aq,
 } from '../lib.js';
 import { mfaEnabledFor, verifyMfaChallenge } from '../services/mfa.js';
 
@@ -79,22 +79,22 @@ export async function handleAuth(ctx) {
     checkLoginRateLimit(ctx, login);
     const suppliedClientType = String(ctx.body?.clientType || 'web').trim().toLowerCase();
     const clientType = CLIENT_TYPES.has(suppliedClientType) ? suppliedClientType : 'web';
-    const user = row('SELECT * FROM users WHERE login = ? AND deleted_at IS NULL', [login]);
+    const user = await arow('SELECT * FROM users WHERE login = ? AND deleted_at IS NULL', [login]);
     if (!user || !verifyPassword(password, user.password_hash)) {
       recordLoginFailure(ctx, login);
       throw errors.unauthorized('登录名或密码错误', 'INVALID_CREDENTIALS');
     }
-    const org = user.org_id ? row('SELECT * FROM organizations WHERE id = ?', [user.org_id]) : null;
+    const org = user.org_id ? await arow('SELECT * FROM organizations WHERE id = ?', [user.org_id]) : null;
     assertUserAccountAvailable(user, org);
 
     // 二次验证：密码通过后再校验动态码 / 恢复码；失败同样计入登录限速
     let mfaMethod = null;
-    if (mfaEnabledFor(user.id)) {
+    if (await mfaEnabledFor(user.id)) {
       const suppliedCode = String(ctx.body?.mfaCode || '').trim();
       if (!suppliedCode) {
         throw errors.unauthorized('该账号已开启二次验证，请输入动态验证码或恢复码', 'MFA_REQUIRED');
       }
-      const challenge = verifyMfaChallenge(user.id, suppliedCode);
+      const challenge = await verifyMfaChallenge(user.id, suppliedCode);
       if (!challenge.ok) {
         recordLoginFailure(ctx, login);
         throw errors.unauthorized('动态验证码或恢复码不正确', 'MFA_INVALID_CODE');
@@ -108,30 +108,30 @@ export async function handleAuth(ctx) {
     const expiresAt = tokenExpiresAt();
     // 多设备同时在线：登录不再顶掉既有会话（学生家里、机房、平板上可以同时登着），
     // 只在超过 MAX_ACTIVE_SESSIONS 时把最老的会话顶下线，避免会话无限增长。
-    const activeSessions = rows('SELECT id FROM sessions WHERE user_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [user.id, now]);
+    const activeSessions = await arows('SELECT id FROM sessions WHERE user_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [user.id, now]);
     const staleSessions = activeSessions.slice(MAX_ACTIVE_SESSIONS - 1).map((item) => item.id);
-    if (staleSessions.length) q('UPDATE sessions SET superseded_at = ? WHERE id IN (' + staleSessions.map(() => '?').join(',') + ')', [now, ...staleSessions]);
-    q(
+    if (staleSessions.length) await aq('UPDATE sessions SET superseded_at = ? WHERE id IN (' + staleSessions.map(() => '?').join(',') + ')', [now, ...staleSessions]);
+    await aq(
       `INSERT INTO sessions(id,token_hash,user_id,role,org_id,client_type,created_at,expires_at)
        VALUES (?,?,?,?,?,?,?,?)`,
       [id('session'), tokenHash(token), user.id, user.role, user.org_id || null, clientType, now, expiresAt],
     );
     ctx.setCookie = setAuthCookie(token);
-    audit(loginAuditContext(ctx, user), 'AUTH_LOGIN', 'USER', user.id, null, { clientType, mfa: mfaMethod });
+    await audit(loginAuditContext(ctx, user), 'AUTH_LOGIN', 'USER', user.id, null, { clientType, mfa: mfaMethod });
     return {
       token,
       expiresAt,
       user: normalizeUser(user, { includeAuthMeta: true }),
-      organization: normalizeOrg(org),
+      organization: await normalizeOrg(org),
       mfa: mfaMethod,
     };
   }
 
   if (pathname === '/api/auth/logout' && method === 'POST') {
     const auth = requireAuth(ctx);
-    q('UPDATE sessions SET superseded_at = COALESCE(superseded_at, ?) WHERE id = ?', [nowIso(), auth.session.id]);
+    await aq('UPDATE sessions SET superseded_at = COALESCE(superseded_at, ?) WHERE id = ?', [nowIso(), auth.session.id]);
     ctx.setCookie = clearAuthCookie();
-    audit(ctx, 'AUTH_LOGOUT', 'USER', auth.user.id);
+    await audit(ctx, 'AUTH_LOGOUT', 'USER', auth.user.id);
     return { loggedOut: true };
   }
 
@@ -139,7 +139,7 @@ export async function handleAuth(ctx) {
     const auth = requireAuth(ctx);
     return {
       ...auth.user,
-      organization: normalizeOrg(auth.org),
+      organization: await normalizeOrg(auth.org),
       session: {
         id: auth.session.id,
         clientType: auth.session.client_type,
@@ -152,9 +152,9 @@ export async function handleAuth(ctx) {
     const auth = requireAuth(ctx);
     const displayName = nonEmptyString(ctx.body?.displayName, '显示名称', { max: 60 });
     const before = { displayName: auth.user.displayName };
-    q('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?', [displayName, nowIso(), auth.user.id]);
-    audit(ctx, 'USER_UPDATE_DISPLAY_NAME', 'USER', auth.user.id, before, { displayName });
-    return normalizeUser(row('SELECT * FROM users WHERE id = ?', [auth.user.id]), { includeAuthMeta: true });
+    await aq('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?', [displayName, nowIso(), auth.user.id]);
+    await audit(ctx, 'USER_UPDATE_DISPLAY_NAME', 'USER', auth.user.id, before, { displayName });
+    return normalizeUser(await arow('SELECT * FROM users WHERE id = ?', [auth.user.id]), { includeAuthMeta: true });
   }
 
   return null;

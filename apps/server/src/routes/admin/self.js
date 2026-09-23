@@ -2,7 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword,
+  assignmentActiveSql, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, aq, atransaction,
 } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
@@ -91,16 +91,16 @@ export async function handleSelf(ctx, part, method) {
     if (!currentPassword) throw errors.badRequest('请输入当前密码', 'CURRENT_PASSWORD_REQUIRED');
     if (newPassword.length < 6) throw errors.badRequest('新密码至少6位', 'USER_PASSWORD_REQUIRED');
     if (newPassword === currentPassword) throw errors.badRequest('新密码不能与当前密码相同', 'PASSWORD_UNCHANGED');
-    const me = row('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
+    const me = await arow('SELECT * FROM users WHERE id=? AND deleted_at IS NULL', [auth.user.id]);
     if (!me) throw errors.notFound('账号不存在', 'USER_NOT_FOUND');
     if (!verifyPassword(currentPassword, me.password_hash)) throw errors.forbidden('当前密码不正确', 'CURRENT_PASSWORD_INVALID');
     const now = nowIso();
     let sessionsRevoked = 0;
-    transaction(() => {
-      q('UPDATE users SET password_hash=?,updated_at=? WHERE id=?', [hashPassword(newPassword), now, me.id]);
+    await atransaction(async () => {
+      await aq('UPDATE users SET password_hash=?,updated_at=? WHERE id=?', [hashPassword(newPassword), now, me.id]);
       // 改密后所有会话失效（含当前会话），前端据此重新登录
-      sessionsRevoked = q('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id]).changes;
-      audit(ctx, 'PLATFORM_SELF_PASSWORD_UPDATE', 'USER', me.id, { login: me.login }, { passwordChanged: true, sessionsRevoked }, { orgId: me.org_id || null });
+      sessionsRevoked = (await aq('UPDATE sessions SET superseded_at=? WHERE user_id=? AND superseded_at IS NULL', [now, me.id])).changes;
+      await audit(ctx, 'PLATFORM_SELF_PASSWORD_UPDATE', 'USER', me.id, { login: me.login }, { passwordChanged: true, sessionsRevoked }, { orgId: me.org_id || null });
     });
     // ⚠️ `sessionsRevoked` 是 2026-09-23 加的**加法**改动：机构端与学生端的自助改密都回这个计数，
     //    三端界面共用同一个组件，靠它显示「已退出 N 处登录（含当前这一处）」。
@@ -110,40 +110,40 @@ export async function handleSelf(ctx, part, method) {
   if (part === '/me/mfa' && method === 'GET') {
     // 二次验证自助端点：登录中的平台管理员即可查看自己的绑定状态
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    return mfaSummary(auth.user.id);
+    return await mfaSummary(auth.user.id);
   }
   if (part === '/me/mfa/setup' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    const setup = startMfaSetup(auth.user.id, { account: auth.user.login, issuer: platformIssuerName() });
-    audit(ctx, 'PLATFORM_MFA_SETUP', 'USER', auth.user.id, null, { account: auth.user.login });
+    const setup = await startMfaSetup(auth.user.id, { account: auth.user.login, issuer: await platformIssuerName() });
+    await audit(ctx, 'PLATFORM_MFA_SETUP', 'USER', auth.user.id, null, { account: auth.user.login });
     return setup;
   }
   if (part === '/me/mfa/enable' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
     const code = String(ctx.body?.code || '').trim();
-    return transaction(() => {
-      const result = enableMfa(auth.user.id, code);
-      audit(ctx, 'PLATFORM_MFA_ENABLE', 'USER', auth.user.id, null, { account: auth.user.login, recoveryCodes: result.recoveryCodes.length });
+    return await atransaction(async () => {
+      const result = await enableMfa(auth.user.id, code);
+      await audit(ctx, 'PLATFORM_MFA_ENABLE', 'USER', auth.user.id, null, { account: auth.user.login, recoveryCodes: result.recoveryCodes.length });
       return result;
     });
   }
   if (part === '/me/mfa/disable' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    assertSelfPassword(ctx, auth, '关闭二次验证');
+    await assertSelfPassword(ctx, auth, '关闭二次验证');
     const code = String(ctx.body?.code || '').trim();
-    return transaction(() => {
-      const result = disableMfa(auth.user.id, code);
-      audit(ctx, 'PLATFORM_MFA_DISABLE', 'USER', auth.user.id, { account: auth.user.login }, { enabled: false });
+    return await atransaction(async () => {
+      const result = await disableMfa(auth.user.id, code);
+      await audit(ctx, 'PLATFORM_MFA_DISABLE', 'USER', auth.user.id, { account: auth.user.login }, { enabled: false });
       return result;
     });
   }
   if (part === '/me/mfa/recovery-codes' && method === 'POST') {
     const auth = requireRole(ctx, ['SUPER_ADMIN']);
-    assertSelfPassword(ctx, auth, '重新生成恢复码');
+    await assertSelfPassword(ctx, auth, '重新生成恢复码');
     const code = String(ctx.body?.code || '').trim();
-    return transaction(() => {
-      const result = regenerateRecoveryCodes(auth.user.id, code);
-      audit(ctx, 'PLATFORM_MFA_RECOVERY_REGENERATE', 'USER', auth.user.id, null, { account: auth.user.login, recoveryCodes: result.recoveryCodes.length });
+    return await atransaction(async () => {
+      const result = await regenerateRecoveryCodes(auth.user.id, code);
+      await audit(ctx, 'PLATFORM_MFA_RECOVERY_REGENERATE', 'USER', auth.user.id, null, { account: auth.user.login, recoveryCodes: result.recoveryCodes.length });
       return result;
     });
   }

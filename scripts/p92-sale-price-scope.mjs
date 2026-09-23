@@ -84,15 +84,15 @@ let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
 
 try {
-  const byStudent = salePriceFenFor({ sessionId: seeded.sessionId, studentId: seeded.student });
+  const byStudent = await salePriceFenFor({ sessionId: seeded.sessionId, studentId: seeded.student });
   check('① 课堂+学员的消耗 = 成功尝试的对外售价 100 分（不是 cost_fen 的 999，也不是成本的 4）', byStudent === 100, String(byStudent));
-  const bySession = salePriceFenFor({ sessionId: seeded.sessionId });
+  const bySession = await salePriceFenFor({ sessionId: seeded.sessionId });
   check('② 失败尝试的售价不计入（仍为 100，而不是 200）', bySession === 100, String(bySession));
-  const byOrg = salePriceFenFor({ orgId: seeded.orgId, since: new Date(Date.now() - 86400000).toISOString() });
+  const byOrg = await salePriceFenFor({ orgId: seeded.orgId, since: new Date(Date.now() - 86400000).toISOString() });
   check('③ 按机构 + 时间窗同理', byOrg === 100, String(byOrg));
-  check('④ 机构端「这节课消耗」的来源函数同口径', lessonCostFenFor({ studentId: seeded.student, sessionId: seeded.sessionId }) === 100);
+  check('④ 机构端「这节课消耗」的来源函数同口径', await lessonCostFenFor({ studentId: seeded.student, sessionId: seeded.sessionId }) === 100);
 
-  const budget = classroomBudgetStatus(seeded.sessionId);
+  const budget = await classroomBudgetStatus(seeded.sessionId);
   check('⑤ 平台成本口径没被改坏：knownCostFen 仍读 upstream_cost_fen（4 分）', Number(budget.knownCostFen) === 4, JSON.stringify(budget));
   check('⑥ 有成本未知的调用时不把已知部分当总额（usedFen 留空、未知单列）', budget.usedFen === null && Number(budget.unknownCalls) === 1, JSON.stringify(budget));
 

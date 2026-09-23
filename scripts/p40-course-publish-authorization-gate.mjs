@@ -36,7 +36,7 @@ try {
   const { handleAdmin: adminHandler } = await import('../apps/server/src/routes/adminOrg.js');
   const { handleOrg } = await import('../apps/server/src/routes/orgAdmin.js');
   const { handlePublicCommunication } = await import('../apps/server/src/routes/communication.js');
-  const { q, row, rows } = await import('../apps/server/src/lib.js');
+  const { q, row, rows, aq, arows } = await import('../apps/server/src/lib.js');
   const { getStudentAccessibleCourses } = await import('../apps/server/src/services/studentContext.js');
 
   const adminAuth = { user: { id: 'root', login: 'root', displayName: 'Root', role: 'SUPER_ADMIN', orgId: null, permissions: [] }, rawUser: { permissions: '[]' } };
@@ -76,10 +76,10 @@ try {
   //    合同当天到期的话「刚授权就已经失效」—— 那是对的，但这条用例要验的是「授权后机构可见」。
   const contractExpiry = new Date(Date.now() + 730 * 86400000).toISOString();
   for (const [orgId, name] of [['org1', '已授权学校'], ['org2', '未授权学校']]) {
-    q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    await aq('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
       [orgId, name, 'ACTIVE', now, contractExpiry, 0, 1, 0, null, now, now]);
   }
-  q("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE',?,?)", [now, now]);
+  await aq("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at) VALUES ('stu1','org1','stu1','学生1','STUDENT','x','ACTIVE',?,?)", [now, now]);
 
   // ── 平台建课包并发布
   const created = await handleAdmin(adminCtx('/api/admin/course-series', 'POST', {
@@ -102,7 +102,7 @@ try {
   check(!(await hasCourse('org1', seriesId)), '发布后未授权机构不应看到课包（发布 ≠ 授权）');
   check(!(await hasCourse('org2', seriesId)), '发布后未授权机构不应看到课包');
   await expectError(() => handleOrg(orgCtx('org1', `/api/org/course-series/${seriesId}`)), 'COURSE_SERIES_NOT_FOUND', '未授权机构读课包详情');
-  const beforeAssign = getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' });
+  const beforeAssign = await getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' });
   check(!(beforeAssign || []).some((item) => item.id === seriesId), '未授权机构的学生端也不应看到课包');
 
   // ③ 授权后机构可见，且带出有效期 —— 有效期 = 该机构的合同到期日（上面给了 2 年后），
@@ -118,21 +118,21 @@ try {
   check(orgListed?.assignmentExpiresAt === assigned.expiresAt, '机构端应带出授权到期时间供展示');
   const orgDetail = await handleOrg(orgCtx('org1', `/api/org/course-series/${seriesId}`));
   check(orgDetail?.id === seriesId, '授权后机构应能读到课包详情');
-  check(!getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' }).some((item) => item.id === seriesId), '仅机构授权、未发学员许可时学生不可见');
-  q("INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES ('grant-p40','org1','stu1',?,?)", [seriesId, now]);
-  check(getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' }).some((item) => item.id === seriesId), '发放学员许可后学生可见');
+  check(!(await getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' })).some((item) => item.id === seriesId), '仅机构授权、未发学员许可时学生不可见');
+  await aq("INSERT INTO student_course_grants(id,org_id,student_id,series_id,granted_at) VALUES ('grant-p40','org1','stu1',?,?)", [seriesId, now]);
+  check((await getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' })).some((item) => item.id === seriesId), '发放学员许可后学生可见');
 
   // ④ 授权到期 → 机构立刻看不到（不需要任何定时任务）
-  q("UPDATE course_assignments SET expires_at=? WHERE series_id=? AND org_id='org1'", [new Date(Date.now() - 60 * 1000).toISOString(), seriesId]);
+  await aq("UPDATE course_assignments SET expires_at=? WHERE series_id=? AND org_id='org1'", [new Date(Date.now() - 60 * 1000).toISOString(), seriesId]);
   check(!(await hasCourse('org1', seriesId)), '授权过期后机构不应再看到课包');
   await expectError(() => handleOrg(orgCtx('org1', `/api/org/course-series/${seriesId}`)), 'COURSE_SERIES_NOT_FOUND', '授权过期后读课包详情');
-  check(!getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' }).some((item) => item.id === seriesId), '授权过期后学生端也不应看到课包');
+  check(!(await getStudentAccessibleCourses({ id: 'stu1', org_id: 'org1' })).some((item) => item.id === seriesId), '授权过期后学生端也不应看到课包');
 
   // ⑤ 重新授权（续期覆盖原有效期）→ 又能看到
   const renewed = await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments`, 'POST', { orgIds: ['org1'], validityDays: 365, quotaTotal: 1 }));
   check(new Date(renewed.expiresAt).getTime() > Date.now(), '续期后到期时间应回到未来');
   check(await hasCourse('org1', seriesId), '续期后机构应重新看到课包');
-  check(rows('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [seriesId, 'org1']).length === 1, '续期应复用同一条授权记录');
+  check((await arows('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [seriesId, 'org1'])).length === 1, '续期应复用同一条授权记录');
 
   // ⑥ 撤销 → 立刻看不到；课包本身与广场展示不受影响
   await handleAdmin(adminCtx(`/api/admin/course-series/${seriesId}/assignments/revoke`, 'POST', { orgId: 'org1' }));

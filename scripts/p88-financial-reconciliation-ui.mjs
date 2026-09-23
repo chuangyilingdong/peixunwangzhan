@@ -12,7 +12,7 @@ process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = path.join(temp, 'platform.db');
 process.env.DEPLOYMENT_MODE = 'local-mock';
 
-const { q } = await import('../apps/server/src/lib.js');
+const { q, aq } = await import('../apps/server/src/lib.js');
 const { financialCallSummary, financialReconciliationReport, listFinancialCalls } = await import('../apps/server/src/services/financialReporting.js');
 // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
 const { saveComputePricing } = await import('../apps/server/src/services/computePool.js');
@@ -21,20 +21,20 @@ const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
 const now = new Date().toISOString();
 const later = new Date(Date.now() + 86400000).toISOString();
 for (const [id, name] of [['org-p88-known', 'P88 Known'], ['org-p88-unknown', 'P88 Unknown'], ['org-p88-partial', 'P88 Partial'], ['org-p88-disputed', 'P88 Disputed'], ['org-p88-usd', 'P88 USD'], ['org-p88-double', 'P88 Double Guard']]) {
-  q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [id, name, 'ACTIVE', now, later, 0, now, now]);
+  await aq('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', [id, name, 'ACTIVE', now, later, 0, now, now]);
 }
-const purchase = (id, orgId, seriesId, amount, currency, payment) => q(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,idempotency_key,purchased_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `assignment-${id}`, orgId, seriesId, 'PURCHASE', 1, amount, currency, payment, 'ACTIVE', `key-${id}`, now, now]);
-purchase('paid-cny', 'org-p88-known', 'series-cny', 1000, 'CNY', 'PAID');
-purchase('unpaid-cny', 'org-p88-known', 'series-cny', 700, 'CNY', 'UNPAID');
-purchase('paid-usd', 'org-p88-known', 'series-usd', 500, 'USD', 'PAID');
-purchase('paid-unknown', 'org-p88-unknown', 'series-cny', 400, 'CNY', 'PAID');
-const revenue = (id, orgId, seriesId, amount, currency) => q(`INSERT INTO license_revenue_events(id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,idempotency_key,occurred_at,created_at) VALUES (?,?,?,?,?,'GRANT',1,?,?,?,?,?)`, [id, `assignment-${id}`, orgId, seriesId, `grant-${id}`, amount, currency, `event-${id}`, now, now]);
-revenue('revenue-cny', 'org-p88-known', 'series-cny', 800, 'CNY');
-revenue('revenue-usd', 'org-p88-known', 'series-usd', 450, 'USD');
-revenue('revenue-unknown', 'org-p88-unknown', 'series-cny', null, 'CNY');
-const attempt = (id, requestId, amount, orgId = 'org-p88-known', internalUsageRecordId = null, { costSource = 'REPORTED', salePriceFen = null, modality = 'TEXT' } = {}) => q(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,modality,channel_id,provider,model,routed_via,status,client_request_id,response_request_id,actual_channel_id,provider_account_ref,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,created_at,internal_usage_record_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `call-${id}`, 1, orgId, modality, 'p88-channel', 'p88-provider', 'p88-model', 'direct', 'SUCCESS', requestId, requestId, 'p88-channel', 'p88-account', costSource, amount, salePriceFen, '{}', now, internalUsageRecordId]);
-attempt('attempt-active', 'request-active', 300);
-attempt('attempt-cancelled', 'request-cancelled', 200);
+const purchase = async (id, orgId, seriesId, amount, currency, payment) => await aq(`INSERT INTO license_purchase_batches(id,assignment_id,org_id,series_id,purchase_type,quantity,amount_minor,currency,payment_status,status,idempotency_key,purchased_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `assignment-${id}`, orgId, seriesId, 'PURCHASE', 1, amount, currency, payment, 'ACTIVE', `key-${id}`, now, now]);
+await purchase('paid-cny', 'org-p88-known', 'series-cny', 1000, 'CNY', 'PAID');
+await purchase('unpaid-cny', 'org-p88-known', 'series-cny', 700, 'CNY', 'UNPAID');
+await purchase('paid-usd', 'org-p88-known', 'series-usd', 500, 'USD', 'PAID');
+await purchase('paid-unknown', 'org-p88-unknown', 'series-cny', 400, 'CNY', 'PAID');
+const revenue = async (id, orgId, seriesId, amount, currency) => await aq(`INSERT INTO license_revenue_events(id,assignment_id,org_id,series_id,grant_id,event_type,quantity,amount_minor,currency,idempotency_key,occurred_at,created_at) VALUES (?,?,?,?,?,'GRANT',1,?,?,?,?,?)`, [id, `assignment-${id}`, orgId, seriesId, `grant-${id}`, amount, currency, `event-${id}`, now, now]);
+await revenue('revenue-cny', 'org-p88-known', 'series-cny', 800, 'CNY');
+await revenue('revenue-usd', 'org-p88-known', 'series-usd', 450, 'USD');
+await revenue('revenue-unknown', 'org-p88-unknown', 'series-cny', null, 'CNY');
+const attempt = async (id, requestId, amount, orgId = 'org-p88-known', internalUsageRecordId = null, { costSource = 'REPORTED', salePriceFen = null, modality = 'TEXT' } = {}) => await aq(`INSERT INTO compute_attempts(id,call_id,attempt,org_id,modality,channel_id,provider,model,routed_via,status,client_request_id,response_request_id,actual_channel_id,provider_account_ref,cost_source,upstream_cost_fen,sale_price_fen,sale_snapshot,created_at,internal_usage_record_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [id, `call-${id}`, 1, orgId, modality, 'p88-channel', 'p88-provider', 'p88-model', 'direct', 'SUCCESS', requestId, requestId, 'p88-channel', 'p88-account', costSource, amount, salePriceFen, '{}', now, internalUsageRecordId]);
+await attempt('attempt-active', 'request-active', 300);
+await attempt('attempt-cancelled', 'request-cancelled', 200);
 // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
 // 原先这里用供应商账单服务造「账单行」，再做自动/人工匹配与取消匹配，
 // 这些夹具与随之而来的 CSV 已核销金额断言一并删除；上游逐笔实扣金额改用 compute_attempts 的夹具表达。
@@ -45,49 +45,49 @@ for (const [id, orgId, currency, revenueAmount] of [
   ['usd', 'org-p88-usd', 'USD', 900],
   ['double', 'org-p88-double', 'CNY', 500],
 ]) {
-  purchase(`edge-paid-${id}`, orgId, `series-${id}`, revenueAmount + 100, currency, 'PAID');
-  revenue(`edge-revenue-${id}`, orgId, `series-${id}`, revenueAmount, currency);
+  await purchase(`edge-paid-${id}`, orgId, `series-${id}`, revenueAmount + 100, currency, 'PAID');
+  await revenue(`edge-revenue-${id}`, orgId, `series-${id}`, revenueAmount, currency);
 }
-attempt('attempt-partial', 'request-partial', 200, 'org-p88-partial');
-attempt('attempt-disputed', 'request-disputed', 250, 'org-p88-disputed');
-attempt('attempt-usd', 'request-usd', 300, 'org-p88-usd');
-q("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-double-linked','org-p88-double','student-double','TEXT','p88-model',0,'SUCCESS','{}',0,'series-double','call-attempt-double',?)", [now]);
-q("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-double-extra','org-p88-double','student-double','TEXT','p88-model',0,'SUCCESS','{}',0,'series-double','call-attempt-double',?)", [now]);
-attempt('attempt-double', 'request-double', 100, 'org-p88-double', 'usage-double-linked');
+await attempt('attempt-partial', 'request-partial', 200, 'org-p88-partial');
+await attempt('attempt-disputed', 'request-disputed', 250, 'org-p88-disputed');
+await attempt('attempt-usd', 'request-usd', 300, 'org-p88-usd');
+await aq("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-double-linked','org-p88-double','student-double','TEXT','p88-model',0,'SUCCESS','{}',0,'series-double','call-attempt-double',?)", [now]);
+await aq("INSERT INTO usage_records(id,org_id,user_id,modality,model,credits_charged,status,pricing_snapshot,cost_fen,series_id,compute_call_id,created_at) VALUES ('usage-double-extra','org-p88-double','student-double','TEXT','p88-model',0,'SUCCESS','{}',0,'series-double','call-attempt-double',?)", [now]);
+await attempt('attempt-double', 'request-double', 100, 'org-p88-double', 'usage-double-linked');
 // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
 // 原先这里导入第二份「供应商账单」并做部分匹配（150 分）+ 标记争议，用来验证「部分核销 / 争议行让真实毛利未知」；
 // 随 CSV 已核销口径一起删除。
 
-const known = financialReconciliationReport({ days: 1, orgId: 'org-p88-known', currency: 'CNY' });
+const known = await financialReconciliationReport({ days: 1, orgId: 'org-p88-known', currency: 'CNY' });
 assert.equal(known.summary.cashReceivedMinor, 1000, 'only PAID purchases are cash received');
 assert.equal(known.summary.recognizedRevenueMinor, 800);
 // 2026-09-18：settledCostMinor / grossProfitMinor / unreconciledMinor 与「USD 名义毛利、同一 call_id 不重复核销」
 // 这几条都建立在供应商账单匹配之上，随供应商账单下线一并删除（用户口径）。
-const unknown = financialReconciliationReport({ days: 1, orgId: 'org-p88-unknown', currency: 'CNY' });
+const unknown = await financialReconciliationReport({ days: 1, orgId: 'org-p88-unknown', currency: 'CNY' });
 assert.equal(unknown.rows[0].recognizedRevenueMinor, null, 'unknown revenue must stay unknown');
 assert.equal(unknown.summary.recognizedRevenueMinor, null, 'unknown revenue must not become zero');
 assert.equal(unknown.summary.grossProfitMinor, null);
-const multiCurrency = financialReconciliationReport({ days: 1, orgId: 'org-p88-known' });
+const multiCurrency = await financialReconciliationReport({ days: 1, orgId: 'org-p88-known' });
 assert.deepEqual(new Set(multiCurrency.currencies), new Set(['CNY', 'USD']));
 assert.equal(multiCurrency.summary.currency, null);
 assert.equal(multiCurrency.summary.grossProfitMinor, null, 'multi-currency summary must not calculate margin');
 
 // —— 调用账三档金额（对外售价 / 上游估算或报告 / 实际核销）与模态渠道汇总一致性 ——
-saveComputePricing({ perCall: { TEXT: 7 } });
-q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', ['org-p88-ledger', 'P88 Ledger', 'ACTIVE', now, later, 0, now, now]);
-attempt('ledger-snapshot', 'request-ledger-snapshot', 200, 'org-p88-ledger', null, { salePriceFen: 500 });
-attempt('ledger-fallback', 'request-ledger-fallback', 40, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
-attempt('ledger-deficit', 'request-ledger-deficit', 60, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
-attempt('ledger-unknownsale', 'request-ledger-unknownsale', null, 'org-p88-ledger', null, { costSource: 'UNKNOWN', modality: 'EMBEDDING' });
+await saveComputePricing({ perCall: { TEXT: 7 } });
+await aq('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', ['org-p88-ledger', 'P88 Ledger', 'ACTIVE', now, later, 0, now, now]);
+await attempt('ledger-snapshot', 'request-ledger-snapshot', 200, 'org-p88-ledger', null, { salePriceFen: 500 });
+await attempt('ledger-fallback', 'request-ledger-fallback', 40, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
+await attempt('ledger-deficit', 'request-ledger-deficit', 60, 'org-p88-ledger', null, { costSource: 'ESTIMATED' });
+await attempt('ledger-unknownsale', 'request-ledger-unknownsale', null, 'org-p88-ledger', null, { costSource: 'UNKNOWN', modality: 'EMBEDDING' });
 // 只读透出用量证据与价目层级来源：原样写库，服务不改口径、不重算。
-q("UPDATE compute_attempts SET usage_snapshot=?,cost_rule_snapshot=? WHERE id='ledger-snapshot'", [
+await aq("UPDATE compute_attempts SET usage_snapshot=?,cost_rule_snapshot=? WHERE id='ledger-snapshot'", [
   JSON.stringify({ modality: 'TEXT', evidence: 'UPSTREAM_USAGE', inputTokens: 800, outputTokens: 333, images: null, seconds: null, resolution: null, audio: null }),
   JSON.stringify({ basis: 'CONTRACT_UNIT_PRICE', provider: 'p88-provider', channelId: 'p88-channel', model: 'p88-model', estimatedCostFen: null, source: 'COMPUTED', priceLevel: 'MODEL', unitPrice: { perImageFen: 200 }, usage: { images: 2 }, computedFen: 400, capturedAt: now }),
 ]);
 // 2026-09-18：供应商账单两条线整体下线（用户口径），相关断言随之下线 —— 这是口径变更，不是测试漂移。
 // 原先这里导入一份「供应商账单」把 ledger-snapshot（200 分）与 ledger-deficit（50 分）核销掉，
 // 用来验证「实际核销金额 / 差额 = 对外售价 − 实际核销」；随 CSV 已核销口径一起删除。
-const ledgerCalls = listFinancialCalls({ days: 1, orgId: 'org-p88-ledger', limit: 100 }).items;
+const ledgerCalls = (await listFinancialCalls({ days: 1, orgId: 'org-p88-ledger', limit: 100 })).items;
 const byId = (id) => ledgerCalls.find((item) => item.id === id);
 const snapshotCall = byId('ledger-snapshot');
 assert.equal(snapshotCall.salePriceFen, 500, '对外售价优先取本次落库快照');
@@ -109,8 +109,8 @@ assert.equal(unknownSaleCall.salePriceSource, 'UNKNOWN');
 assert.equal(unknownSaleCall.differenceMinor, null, '对外售价未知时差额留空');
 // 2026-09-18 口径变更（两账）：对外价**已知**、上游成本**未知**时，差额同样必须留空 ——
 // 未知既不能当 0 参与差额，更不能把「成本未知」显示成正利润。这是原「未核销不算差额」规则的等价延续。
-attempt('ledger-unknowncost', 'request-unknowncost', null, 'org-p88-usd', null, { costSource: 'UNKNOWN', salePriceFen: 500 });
-const unknownCostCall = listFinancialCalls({ days: 1, orgId: 'org-p88-usd', limit: 100 }).items.find((item) => item.id === 'ledger-unknowncost');
+await attempt('ledger-unknowncost', 'request-unknowncost', null, 'org-p88-usd', null, { costSource: 'UNKNOWN', salePriceFen: 500 });
+const unknownCostCall = (await listFinancialCalls({ days: 1, orgId: 'org-p88-usd', limit: 100 })).items.find((item) => item.id === 'ledger-unknowncost');
 assert.equal(unknownCostCall.salePriceFen, 500, '该用例的对外价是已知快照价');
 assert.equal(unknownCostCall.costUnknown, true);
 assert.equal(unknownCostCall.settledAmountMinor, null, '成本未知不得当成 0');
@@ -122,7 +122,7 @@ assert.equal(snapshotCall.costRuleSnapshot.source, 'COMPUTED', '来源沿用上�
 assert.ok('usageSnapshot' in fallbackCall && fallbackCall.usageSnapshot === null, '无用量证据时 usageSnapshot 必须存在且为 null');
 assert.ok('costRuleSnapshot' in fallbackCall && fallbackCall.costRuleSnapshot === null, '无价目快照时 costRuleSnapshot 必须存在且为 null');
 
-const callSummary = financialCallSummary({ days: 1, orgId: 'org-p88-ledger' });
+const callSummary = await financialCallSummary({ days: 1, orgId: 'org-p88-ledger' });
 assert.equal(callSummary.totals.calls, 4);
 const modelGroup = callSummary.groups.model.find((group) => group.key === 'p88-model');
 assert.equal(modelGroup.externalAmountMinor, 514, '对外金额只累加已知对外价，未知单列');

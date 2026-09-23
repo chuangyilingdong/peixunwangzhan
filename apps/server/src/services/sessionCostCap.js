@@ -30,7 +30,7 @@
 // ⚠️ **学生端不下发**（2026-09-18 用户口径：额度是内部看的，学生既看不到也不会被它拦）：
 //   学生可见负载（`/api/ai/center`、`routes/ai.js`）里**没有**这套字段，也**不进**"能力不可用理由"。
 //   老师端（机构端课堂详情）与平台端（内部报表）保留这份数字。
-import { row, rows } from '../lib.js';
+import { row, rows, arow, arows } from '../lib.js';
 
 const KNOWN_COST_SQL = "(cost_source <> 'UNKNOWN' AND upstream_cost_fen IS NOT NULL)";
 const UNKNOWN_COST_SQL = "(cost_source = 'UNKNOWN' OR upstream_cost_fen IS NULL)";
@@ -39,9 +39,9 @@ const UNKNOWN_COST_SQL = "(cost_source = 'UNKNOWN' OR upstream_cost_fen IS NULL)
  * 这堂课配的「算力**观测**上限（分）」；**留空 = null = 不设观测上限**（老课堂都是 NULL）。
  * ⚠️ 它**只是分母**：没有任何地方会因为达到它而拒绝调用。
  */
-export function studentCostCapFen(sessionId) {
+export async function studentCostCapFen(sessionId) {
   if (!sessionId) return null;
-  const value = row('SELECT student_cost_cap_fen FROM class_sessions WHERE id=?', [sessionId])?.student_cost_cap_fen;
+  const value = (await arow('SELECT student_cost_cap_fen FROM class_sessions WHERE id=?', [sessionId]))?.student_cost_cap_fen;
   if (value === null || value === undefined || value === '') return null;
   const fen = Number(value);
   return Number.isFinite(fen) && fen >= 0 ? fen : null;
@@ -51,10 +51,10 @@ export function studentCostCapFen(sessionId) {
  * 一场课堂里**每个学生**的已花成本（同一张表的同一列，与平台用量报表、课堂成本预警同一套口径）。
  * 一次 group by 取全名单，避免老师端名单里 N 个学生打 N 次库。
  */
-export function sessionCostUsageByStudent(sessionId) {
+export async function sessionCostUsageByStudent(sessionId) {
   const map = new Map();
   if (!sessionId) return map;
-  for (const item of rows(`SELECT user_id,
+  for (const item of await arows(`SELECT user_id,
       SUM(CASE WHEN ${KNOWN_COST_SQL} THEN upstream_cost_fen ELSE 0 END) knownFen,
       SUM(CASE WHEN ${UNKNOWN_COST_SQL} THEN 1 ELSE 0 END) unknownCalls
     FROM compute_attempts WHERE class_session_id=? GROUP BY user_id`, [sessionId])) {
@@ -100,10 +100,10 @@ export function sessionCostCapState({ capFen = null, usedFen = 0, unknownCalls =
  *    同一个函数，两边不会有"两套算法"（这也是为什么守卫的自检要砸这个合计：砸了它，
  *    老师端与学生侧的状态会一起错，而"观测口径的可信度全在这个数算得对"）。
  */
-export function sessionCostCapStatus({ sessionId, studentId = null }) {
+export async function sessionCostCapStatus({ sessionId, studentId = null }) {
   if (!sessionId) return sessionCostCapState({ capFen: null });
-  const capFen = studentCostCapFen(sessionId);
-  const byStudent = sessionCostUsageByStudent(sessionId);
+  const capFen = await studentCostCapFen(sessionId);
+  const byStudent = await sessionCostUsageByStudent(sessionId);
   // ⚠️ 没有观测上限时也照样查已花金额：「不设上限」不等于「不记账」。
   const totals = studentId ? null : [...byStudent.values()].reduce(
     (sum, item) => ({ usedFen: sum.usedFen + item.usedFen, unknownCalls: sum.unknownCalls + item.unknownCalls }),

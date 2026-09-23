@@ -31,7 +31,7 @@
  *    否则会出现「授权单改了、流水没写」或反过来（见各调用点的注释）。
  *    也正因为如此，它只做「读一次变更后的实际值 + 插一条流水」，不改 course_assignments。
  */
-import { id, nowIso, q, row } from '../lib.js';
+import { id, nowIso, q, row, arow, aq } from '../lib.js';
 
 /** 五个变更类型（表里有 CHECK 约束，这里是代码侧的同一份白名单）。 */
 export const COURSE_QUOTA_CHANGE_TYPES = Object.freeze([
@@ -110,7 +110,7 @@ export function normalizeQuotaChange(value) {
  * @param reason       原因（平台调整/禁用撤销等场景必填，开通与授权消耗可以为空）
  * @param source       COURSE_QUOTA_SOURCES 里的来源
  */
-export function recordQuotaChange({
+export async function recordQuotaChange({
   orgId, seriesId, assignmentId = null, changeType,
   autoCreated = false, quotaTotalBefore = 0, quotaUsedBefore = 0,
   skipWhenUnchanged = false, actorId = null, actorRole = null, reason = '', source = '',
@@ -122,7 +122,7 @@ export function recordQuotaChange({
     throw new Error(`Unknown course quota change type: ${changeType}`);
   }
   // 「变更后」的实际值只读这一次：调用方已经改完 course_assignments（同一事务内可见）。
-  const assignment = row('SELECT id, org_id, series_id, quota_total, quota_used FROM course_assignments WHERE id=?', [assignmentId]);
+  const assignment = await arow('SELECT id, org_id, series_id, quota_total, quota_used FROM course_assignments WHERE id=?', [assignmentId]);
   if (!assignment) return null;
   const totalBefore = integerOf(quotaTotalBefore);
   const usedBefore = integerOf(quotaUsedBefore);
@@ -143,7 +143,7 @@ export function recordQuotaChange({
   if (skipWhenUnchanged && totalAfter === totalBefore && usedAfter === usedBefore) return null;
   const createdAt = nowIso();
   const changeId = id('quota_change');
-  q(`INSERT INTO course_quota_changes(
+  await aq(`INSERT INTO course_quota_changes(
       id,org_id,series_id,assignment_id,change_type,delta,
       quota_total_before,quota_total_after,quota_used_before,quota_used_after,
       actor_id,actor_role,reason,source,created_at)
@@ -153,5 +153,5 @@ export function recordQuotaChange({
     actorId || null, actorRole || null, String(reason || '').trim(), String(source || ''),
     createdAt,
   ]);
-  return normalizeQuotaChange(row('SELECT * FROM course_quota_changes WHERE id=?', [changeId]));
+  return normalizeQuotaChange(await arow('SELECT * FROM course_quota_changes WHERE id=?', [changeId]));
 }

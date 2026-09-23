@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
-import { db, q, rows, row, count, json, parseJson, transaction } from '../../../packages/database/src/schema.js';
+import { db, q, rows, row, count, json, parseJson, transaction, aq, arows, arow, aone, acount, atransaction, amap } from '../../../packages/database/src/schema.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
 import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
 import { previewKindFor, signPreviewTicket } from './services/materialPreview.js';
@@ -274,10 +274,10 @@ export function assertUserAccountAvailable(user, org = null) {
   }
 }
 
-export function resolveAuth(req) {
+export async function resolveAuth(req) {
   const token = readToken(req);
   if (!token) return { auth: null, error: null };
-  const session = row('SELECT * FROM sessions WHERE token_hash = ?', [tokenHash(token)]);
+  const session = await arow('SELECT * FROM sessions WHERE token_hash = ?', [tokenHash(token)]);
   if (!session) {
     return { auth: null, error: errors.unauthorized('登录状态无效', 'SESSION_INVALID') };
   }
@@ -287,8 +287,8 @@ export function resolveAuth(req) {
   if (session.expires_at <= nowIso()) {
     return { auth: null, error: errors.unauthorized('登录状态已过期', 'AUTH_EXPIRED') };
   }
-  const user = row('SELECT * FROM users WHERE id = ?', [session.user_id]);
-  const org = user?.org_id ? row('SELECT * FROM organizations WHERE id = ?', [user.org_id]) : null;
+  const user = await arow('SELECT * FROM users WHERE id = ?', [session.user_id]);
+  const org = user?.org_id ? await arow('SELECT * FROM organizations WHERE id = ?', [user.org_id]) : null;
   try {
     assertUserAccountAvailable(user, org);
   } catch (error) {
@@ -297,8 +297,8 @@ export function resolveAuth(req) {
   return { auth: { token, session, user: normalizeUser(user, { includeAuthMeta: true }), rawUser: user, org }, error: null };
 }
 
-export function getAuth(req) {
-  return resolveAuth(req).auth;
+export async function getAuth(req) {
+  return (await resolveAuth(req)).auth;
 }
 
 export function requireAuth(ctx) {
@@ -398,7 +398,7 @@ export function normalizeUser(value, { includeAuthMeta = false } = {}) {
   return result;
 }
 
-export function normalizeOrg(value) {
+export async function normalizeOrg(value) {
   if (!value) return null;
   const teacherSeats = Number(value.base_teacher_seats || 0) + Number(value.purchased_teacher_seats || 0);
   return {
@@ -416,8 +416,8 @@ export function normalizeOrg(value) {
     purchasedTeacherSeats: Number(value.purchased_teacher_seats || 0),
     teacherSeats,
     studentSeats: Number(value.student_seats || 0),
-    studentUsedSeats: count("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [value.id]),
-    teacherUsedSeats: count("SELECT COUNT(*) AS n FROM users WHERE org_id = ? AND role = 'TEACHER' AND deleted_at IS NULL", [value.id]),
+    studentUsedSeats: await acount("SELECT COUNT(*) AS n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [value.id]),
+    teacherUsedSeats: await acount("SELECT COUNT(*) AS n FROM users WHERE org_id = ? AND role = 'TEACHER' AND deleted_at IS NULL", [value.id]),
     contact: parseJson(value.contact, {}),
     createdBy: value.created_by || null,
     createdAt: value.created_at,
@@ -565,8 +565,8 @@ export function publishedLessonStatusSql(alias = 'lesson') {
  *      没有这一键，给空数组等于把学生手里的框体全没收，那是同一个 bug 的另一半。
  *    （与第二十四轮「教学素材可见性」那条判据同一个形状：逐键回退。）
  */
-function mergedLessonCanvas(lessonRow, liveCanvas = null) {
-  const live = liveCanvas || lessonCanvasConfig(lessonRow?.id);
+async function mergedLessonCanvas(lessonRow, liveCanvas = null) {
+  const live = liveCanvas || await lessonCanvasConfig(lessonRow?.id);
   const snapshot = publishedSnapshotOf(lessonRow);
   // 框体的**显示名**在这一刻现算（见 modelDisplayName 的注释②）：快照里存的是技术名，
   // 运营在后台改了显示名之后，学生那边刷新就该是新名字，不需要重新发布课包。
@@ -574,7 +574,7 @@ function mergedLessonCanvas(lessonRow, liveCanvas = null) {
   // ⚠️ 两处都要打标签：`generationBoxes`（画布节点/参数胶囊用它）**与**
   //    `materialGroups[].materials[].snapshot.box`（左侧「课堂素材」面板那行副标题用它，
   //    见 canvasWorkspace 的 boxParamsLabel）—— 少一处就是"右边改了、左边还写着技术名"。
-  const policy = aiProviderPolicy();
+  const policy = await aiProviderPolicy();
   const labelBox = (box) => (box && box.model ? { ...box, modelLabel: modelDisplayName(policy, box.model) } : box);
   const withLabels = (boxes) => (Array.isArray(boxes) ? boxes.map(labelBox) : boxes);
   const withGroupLabels = (groups) => (Array.isArray(groups) ? groups.map((group) => ({
@@ -588,15 +588,15 @@ function mergedLessonCanvas(lessonRow, liveCanvas = null) {
   return { capabilities: pick('capabilities'), materialGroups: withGroupLabels(pick('materialGroups')), generationBoxes: withLabels(pick('generationBoxes')) };
 }
 
-export function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
+export async function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
   if (!value) return null;
   // 平台端读实时数据（编辑用）；机构端/学生端/官网读「最近一次更新发布」定格的快照。
   // 老数据没有快照 → 回退实时数据，行为与之前一致。
   const snapshot = asPublished ? publishedSnapshotOf(value) : null;
-  const liveCanvas = lessonCanvasConfig(value.id);
+  const liveCanvas = await lessonCanvasConfig(value.id);
   // 这三档按「有哪档用哪档、缺的档回退实时」合并 —— 与 normalizeProject 共用同一个函数，
   // 读面与判定不会各写一遍（各写一遍正是 2026-09-21 那个 bug 的成因）。
-  const merged = snapshot ? { ...snapshot, ...mergedLessonCanvas(value, liveCanvas) } : null;
+  const merged = snapshot ? { ...snapshot, ...await mergedLessonCanvas(value, liveCanvas) } : null;
   const pick = (key, fallback) => (merged && merged[key] !== undefined ? merged[key] : fallback);
   return {
     id: value.id,
@@ -624,7 +624,7 @@ export function normalizeLesson(value, { includeTeaching = false, asPublished = 
     materialGroups: merged ? merged.materialGroups : liveCanvas.materialGroups,
     generationBoxes: merged ? merged.generationBoxes : liveCanvas.generationBoxes,
     // 教学素材是教师备课资料：只有机构端/平台端显式要求时才下发，学生端与公开接口一律不带。
-    ...(includeTeaching ? { teachingGroups: teachingGroupsFor(value.id, merged) } : {}),
+    ...(includeTeaching ? { teachingGroups: await teachingGroupsFor(value.id, merged) } : {}),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -634,8 +634,8 @@ const MAX_GENERATION_BOXES = 20;
 // 生成框体在素材表里的类型：框体就是一种素材，和图片/视频/提示词一起排在同一条顺序里。
 export const GENERATION_BOX_MATERIAL_TYPE = 'GENERATION_BOX';
 
-function aiProviderPolicy() {
-  return parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
+async function aiProviderPolicy() {
+  return parseJson((await arow('SELECT ai_provider_policy FROM platform_settings WHERE id=1'))?.ai_provider_policy, {});
 }
 
 /**
@@ -657,9 +657,9 @@ export function modelDisplayName(policy, modelId, fallback = '') {
 }
 
 /** 某模态 + 某模型的有效能力（比例/清晰度/时长/音频/首帧）；框体保存校验与下发共用同一套取值。 */
-export function generationBoxCapabilities(modality, modelId, policy = null) {
+export async function generationBoxCapabilities(modality, modelId, policy = null) {
   const key = String(modality || '').toUpperCase();
-  const channel = modalityChannel(policy || aiProviderPolicy(), key);
+  const channel = modalityChannel(policy || await aiProviderPolicy(), key);
   const model = String(modelId || '').trim() || String(channel?.model || '').trim();
   return effectiveCapabilities(channel, key, model);
 }
@@ -678,14 +678,14 @@ function uniqueBoxId(value, seen) {
  * strict=true 用于管理员保存：非法取值当场抛错（错误码 INVALID_GENERATION_CONFIG），不再静默丢弃；
  * strict=false 用于下发：非法取值回落到该模型支持的第一个取值，坏数据不下发到学生端。
  */
-export function normalizeGenerationBox(raw, { strict = false, policy = null, index = 0, id: fallbackId = '' } = {}) {
+export async function normalizeGenerationBox(raw, { strict = false, policy = null, index = 0, id: fallbackId = '' } = {}) {
   if (!raw || typeof raw !== 'object') return null;
-  const providerPolicy = policy || aiProviderPolicy();
+  const providerPolicy = policy || await aiProviderPolicy();
   const modality = String(raw.modality || '').trim().toUpperCase();
   const invalid = (message) => { if (strict) throw Object.assign(new Error(message), { code: 'INVALID_GENERATION_CONFIG' }); };
   if (!GENERATION_BOX_MODALITIES.includes(modality)) { invalid(`第 ${index + 1} 个生成框体的类型无效`); return null; }
   const model = String(raw.model || '').trim().slice(0, 120);
-  const capabilities = generationBoxCapabilities(modality, model, providerPolicy);
+  const capabilities = await generationBoxCapabilities(modality, model, providerPolicy);
   const box = {
     id: String(fallbackId || '').trim() || uniqueBoxId(raw.id, new Set()),
     title: String(raw.title || '').trim().slice(0, 60) || `素材${index + 1}`,
@@ -777,25 +777,25 @@ export function normalizeGenerationBox(raw, { strict = false, policy = null, ind
   return box;
 }
 
-export function normalizeGenerationBoxes(value, { strict = false, policy = null } = {}) {
+export async function normalizeGenerationBoxes(value, { strict = false, policy = null } = {}) {
   const list = Array.isArray(value) ? value.slice(0, MAX_GENERATION_BOXES) : [];
-  const providerPolicy = policy || aiProviderPolicy();
+  const providerPolicy = policy || await aiProviderPolicy();
   const seen = new Set();
-  return list.map((raw, index) => {
-    const box = normalizeGenerationBox(raw, { strict, policy: providerPolicy, index });
+  return (await amap(list, async (raw, index) => {
+    const box = await normalizeGenerationBox(raw, { strict, policy: providerPolicy, index });
     if (!box) return null;
     if (seen.has(box.id)) box.id = uniqueBoxId('', seen);
     else seen.add(box.id);
     return box;
-  }).filter(Boolean);
+  })).filter(Boolean);
 }
 
 // 框体在素材表里存的是 snapshot.box（模型与参数）+ snapshot.content（预填提示词）。
-export function boxFromMaterial(material, index = 0) {
+export async function boxFromMaterial(material, index = 0) {
   if (!material || String(material.materialType || material.material_type || '').toUpperCase() !== GENERATION_BOX_MATERIAL_TYPE) return null;
   const snapshot = material.snapshot && typeof material.snapshot === 'object' ? material.snapshot : {};
   const raw = snapshot.box && typeof snapshot.box === 'object' ? snapshot.box : {};
-  const box = normalizeGenerationBox(raw, { index, id: material.id });
+  const box = await normalizeGenerationBox(raw, { index, id: material.id });
   if (!box) return null;
   box.id = material.id;
   box.title = String(material.title || box.title).trim().slice(0, 60) || box.title;
@@ -813,34 +813,34 @@ function publishedSnapshotOf(value) {
   return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
-export function lessonCanvasConfig(lessonId, override = null) {
+export async function lessonCanvasConfig(lessonId, override = null) {
   if (override && Array.isArray(override.materialGroups)) {
     const groups = override.materialGroups;
     const generationBoxes = [];
-    groups.forEach((group) => {
-      (group.materials || []).forEach((material) => {
-        const box = boxFromMaterial(material, generationBoxes.length);
+    for (const group of groups) {
+      for (const material of (group.materials || [])) {
+        const box = await boxFromMaterial(material, generationBoxes.length);
         if (box) generationBoxes.push({ ...box, groupId: group.id, groupTitle: group.title });
-      });
-    });
+      };
+    };
     return { capabilities: override.capabilities?.length ? override.capabilities : ['text'], materialGroups: groups, generationBoxes };
   }
   if (!lessonId) return { capabilities: ['text'], materialGroups: [], generationBoxes: [] };
-  const capabilities = rows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=? ORDER BY capability', [lessonId]).map((item) => item.capability);
-  const groups = rows('SELECT * FROM course_lesson_material_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
-    id: group.id, title: group.title, sort: Number(group.sort || 0), materials: rows('SELECT * FROM course_lesson_materials WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
+  const capabilities = (await arows('SELECT capability FROM course_lesson_capabilities WHERE lesson_id=? ORDER BY capability', [lessonId])).map((item) => item.capability);
+  const groups = await amap((await arows('SELECT * FROM course_lesson_material_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId])), async (group) => ({
+    id: group.id, title: group.title, sort: Number(group.sort || 0), materials: (await arows('SELECT * FROM course_lesson_materials WHERE group_id=? ORDER BY sort, created_at', [group.id])).map((item) => ({
       id: item.id, title: item.title, description: item.description || '', materialType: item.material_type || 'NOTE', assetUrl: item.asset_url || null, snapshot: parseJson(item.snapshot, {}), sort: Number(item.sort || 0),
     })),
   }));
   // 生成框体就是素材表里 type=GENERATION_BOX 的素材：顺序跟着素材走，
   // 这里摊平成一条列表供生成链路（按框体取模型/参数、每框体一次）使用。
   const generationBoxes = [];
-  groups.forEach((group) => {
-    (group.materials || []).forEach((material) => {
-      const box = boxFromMaterial(material, generationBoxes.length);
+  for (const group of groups) {
+    for (const material of (group.materials || [])) {
+      const box = await boxFromMaterial(material, generationBoxes.length);
       if (box) generationBoxes.push({ ...box, groupId: group.id, groupTitle: group.title });
-    });
-  });
+    };
+  };
   return {
     capabilities: capabilities.length ? capabilities : ['text'],
     materialGroups: groups,
@@ -856,10 +856,10 @@ export function lessonCanvasConfig(lessonId, override = null) {
  * - OFFICE（PPT/DOCX）由服务端转成 PDF 再把 PDF 发出去，**原始文件不出服务器**。
  * ⚠️ 视频/PDF 只要浏览器能渲染就拦不住录屏/截屏，这是 web 的物理限制，见 materialPreview.js。
  */
-export function previewInfoFor(fileAssetId) {
+export async function previewInfoFor(fileAssetId) {
   const id = String(fileAssetId || '').trim();
   if (!id) return { previewKind: null, previewUrl: null };
-  const file = row('SELECT mime_type, file_name FROM file_assets WHERE id=?', [id]);
+  const file = await arow('SELECT mime_type, file_name FROM file_assets WHERE id=?', [id]);
   if (!file) return { previewKind: null, previewUrl: null };
   const { ticket } = signPreviewTicket(id);
   return {
@@ -879,14 +879,14 @@ export function previewInfoFor(fileAssetId) {
  *
  * 所以：内容取快照，`previewKind / previewUrl` 一律**现签**。
  */
-function teachingGroupsFor(lessonId, snapshot) {
+async function teachingGroupsFor(lessonId, snapshot) {
   const frozen = snapshot && Array.isArray(snapshot.teachingGroups) ? snapshot.teachingGroups : null;
-  if (!frozen) return lessonTeachingMaterials(lessonId).teachingGroups;
-  return frozen.map((group) => ({
+  if (!frozen) return (await lessonTeachingMaterials(lessonId)).teachingGroups;
+  return await amap(frozen, async (group) => ({
     ...group,
-    assets: (Array.isArray(group.assets) ? group.assets : []).map((asset) => (
+    assets: await amap((Array.isArray(group.assets) ? group.assets : []), async (asset) => (
       asset.fileAssetId
-        ? { ...asset, ...previewInfoFor(asset.fileAssetId) }
+        ? { ...asset, ...await previewInfoFor(asset.fileAssetId) }
         // 没有 file_asset_id 的素材本来就没有可预览的文件：把快照里可能残留的地址清掉，
         // 宁可前端显示「暂不支持在线预览」，也不要发一条指不回去的链接。
         : { ...asset, previewKind: null, previewUrl: null }
@@ -894,14 +894,14 @@ function teachingGroupsFor(lessonId, snapshot) {
   }));
 }
 
-export function lessonTeachingMaterials(lessonId) {
+export async function lessonTeachingMaterials(lessonId) {
   if (!lessonId) return { teachingGroups: [] };
-  const groups = rows('SELECT * FROM course_lesson_teaching_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId]).map((group) => ({
+  const groups = await amap((await arows('SELECT * FROM course_lesson_teaching_groups WHERE lesson_id=? ORDER BY sort, created_at', [lessonId])), async (group) => ({
     id: group.id, title: group.title, sort: Number(group.sort || 0),
-    assets: rows('SELECT * FROM course_lesson_teaching_assets WHERE group_id=? ORDER BY sort, created_at', [group.id]).map((item) => ({
+    assets: await amap((await arows('SELECT * FROM course_lesson_teaching_assets WHERE group_id=? ORDER BY sort, created_at', [group.id])), async (item) => ({
       id: item.id, title: item.title, description: item.description || '', assetType: item.asset_type || 'FILE',
       assetUrl: item.asset_url || null, fileAssetId: item.file_asset_id || null, sort: Number(item.sort || 0),
-      ...previewInfoFor(item.file_asset_id),
+      ...await previewInfoFor(item.file_asset_id),
     })),
   }));
   return { teachingGroups: groups };
@@ -939,8 +939,8 @@ export function normalizeLogin(value, field = '登录名') {
  * 口径：不同用户不能同登录名 —— 大小写不同也算同一个（`Zhang` 与 `zhang` 会被人认成一个人）。
  * 软删除的账号**仍然占着**这个登录名（它们还在库里，放行会造成两个同登录名的账号）。
  */
-export function assertLoginAvailable(login, { excludeUserId = null } = {}) {
-  const clash = row('SELECT id,login,display_name FROM users WHERE LOWER(login)=LOWER(?) AND (? IS NULL OR id<>?) LIMIT 1', [login, excludeUserId, excludeUserId]);
+export async function assertLoginAvailable(login, { excludeUserId = null } = {}) {
+  const clash = await arow('SELECT id,login,display_name FROM users WHERE LOWER(login)=LOWER(?) AND (? IS NULL OR id<>?) LIMIT 1', [login, excludeUserId, excludeUserId]);
   if (clash) throw errors.conflict(`登录名「${login}」已被占用（${clash.display_name || clash.login}）`, 'LOGIN_EXISTS');
 }
 
@@ -950,10 +950,10 @@ export function assertLoginAvailable(login, { excludeUserId = null } = {}) {
  * 会出问题的场景是「同一批名单里两个同名的人」—— 老师在学员列表里根本分不出来。
  * orgId 为空（平台管理员）时按全局同名同角色算。
  */
-export function assertDisplayNameAvailable(displayName, { orgId = null, role = null, excludeUserId = null } = {}) {
+export async function assertDisplayNameAvailable(displayName, { orgId = null, role = null, excludeUserId = null } = {}) {
   const name = String(displayName ?? '').trim();
   if (!name) return;
-  const clash = row(
+  const clash = await arow(
     `SELECT id,login,display_name FROM users
       WHERE display_name=? AND deleted_at IS NULL
         AND (? IS NULL OR org_id IS ?) AND (? IS NULL OR role=?) AND (? IS NULL OR id<>?)
@@ -981,8 +981,8 @@ export function normalizeSeriesVisibility(value) {
  * 所以授权不再有自己单独的有效期：合同续了，授权自动跟着续（见 syncAssignmentExpiryForOrg）。
  * 返回 null 表示这家机构没有合同到期日 —— 此时授权不设到期（与 assignmentActiveSql 的语义一致）。
  */
-export function contractExpiryForOrg(orgId) {
-  return row('SELECT contract_expires_at FROM organizations WHERE id=?', [String(orgId || '')])?.contract_expires_at || null;
+export async function contractExpiryForOrg(orgId) {
+  return (await arow('SELECT contract_expires_at FROM organizations WHERE id=?', [String(orgId || '')]))?.contract_expires_at || null;
 }
 
 /**
@@ -990,8 +990,8 @@ export function contractExpiryForOrg(orgId) {
  * 契约：授权有效期 = 合同到期日，所以这里不做任何「取更晚的那个」之类的小聪明 ——
  * 合同怎么改，授权就怎么变，这才叫「同步」。
  */
-export function syncAssignmentExpiryForOrg(orgId, expiresAt = null) {
-  return q("UPDATE course_assignments SET expires_at=? WHERE org_id=? AND status='ACTIVE'", [expiresAt, String(orgId || '')]);
+export async function syncAssignmentExpiryForOrg(orgId, expiresAt = null) {
+  return await aq("UPDATE course_assignments SET expires_at=? WHERE org_id=? AND status='ACTIVE'", [expiresAt, String(orgId || '')]);
 }
 
 /**
@@ -1005,7 +1005,7 @@ export function syncAssignmentExpiryForOrg(orgId, expiresAt = null) {
  *   · 其它所有调用方（公开/机构/学生）→ 什么都不用改，自动不带这个内部成本字段。
  * 反过来做（默认带、公开侧逐个剥）漏一个调用点就是一个对外泄漏，而且加新公开端点的人不会记得剥。
  */
-export function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false, includeEstimatedCredits = false } = {}) {
+export async function normalizeSeries(value, { includeLessons = false, orgId = null, includeAllLessons = false, parseTags = true, includeTeaching = false, asPublished = false, includeEstimatedCredits = false } = {}) {
   // 课包字段同样支持草稿隔离：机构端/学生端/官网读「更新发布」时的快照
   const seriesSnapshot = asPublished ? publishedSnapshotOf(value) : null;
   const snapPick = (key, fallback) => (seriesSnapshot && seriesSnapshot[key] !== undefined ? seriesSnapshot[key] : fallback);
@@ -1069,17 +1069,17 @@ export function normalizeSeries(value, { includeLessons = false, orgId = null, i
     ageRangeMax: value.age_range_max != null ? Number(value.age_range_max) : null,
     tags,
     deliveryMode: value.delivery_mode || 'CANVAS',
-    lessonCount: count(`SELECT COUNT(*) AS n FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter}`, [value.id]),
+    lessonCount: await acount(`SELECT COUNT(*) AS n FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter}`, [value.id]),
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
   if (orgId) {
-    const assignment = row("SELECT status, expires_at FROM course_assignments WHERE series_id = ? AND org_id = ?", [value.id, orgId]);
+    const assignment = await arow("SELECT status, expires_at FROM course_assignments WHERE series_id = ? AND org_id = ?", [value.id, orgId]);
     result.assignedToCurrentOrg = assignmentIsActive(assignment);
     result.assignmentExpiresAt = assignment?.expires_at || null;
   }
   if (includeLessons) {
-    result.lessons = rows(`SELECT * FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter} ORDER BY lesson.sort, lesson.created_at`, [value.id]).map((lesson) => normalizeLesson(lesson, { includeTeaching, asPublished }));
+    result.lessons = await amap((await arows(`SELECT * FROM course_lessons lesson WHERE lesson.series_id = ?${lessonFilter} ORDER BY lesson.sort, lesson.created_at`, [value.id])), async (lesson) => await normalizeLesson(lesson, { includeTeaching, asPublished }));
   }
   return result;
 }
@@ -1135,7 +1135,7 @@ export function normalizeSession(value) {
   };
 }
 
-export function normalizeProject(value, { includeSnapshot = false } = {}) {
+export async function normalizeProject(value, { includeSnapshot = false } = {}) {
   if (!value) return null;
   const result = {
     id: value.id,
@@ -1163,7 +1163,7 @@ export function normalizeProject(value, { includeSnapshot = false } = {}) {
     // 学生画布上画的框体与课堂素材：与生成接口**同一份**（快照有哪档用哪档、缺的回退实时）。
     // ⚠️ 这里以前是 lessonCanvasConfig()（纯实时），于是「画布看得见新框体、点生成说没有」——
     //    查询里必须带上 lesson.published_content（映射成 lesson_published_content），否则等于又退回实时。
-    ...mergedLessonCanvas({ id: value.course_lesson_id, published_content: value.lesson_published_content }),
+    ...await mergedLessonCanvas({ id: value.course_lesson_id, published_content: value.lesson_published_content }),
   };
   if (includeSnapshot) result.canvasSnapshot = parseJson(value.canvas_snapshot, { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } });
   return result;
@@ -1198,7 +1198,7 @@ export function canvasMediaFrom(canvasSnapshot) {
   return out;
 }
 
-export function normalizeWork(value, { includeSnapshot = false } = {}) {
+export async function normalizeWork(value, { includeSnapshot = false } = {}) {
   if (!value) return null;
   const result = {
     id: value.id,
@@ -1239,11 +1239,11 @@ export function normalizeWork(value, { includeSnapshot = false } = {}) {
     // 作品**做出来的东西**（图片 / 视频 / 音频 / 生成的文字）：作品的读面要展示这些，
     // 而不是一张"画布截图"（用户 2026-09-21：「作品发布后网站显示的是画布内容，应该显示的是
     // 图片/视频/音频等等，而不是画布」）。来源就是这次创作产出的 media_assets（按时间顺序）。
-    result.assets = rows(
+    result.assets = (await arows(
       `SELECT id, modality, label, asset_url, preview_url, mime_type, metadata, created_at
          FROM media_assets WHERE project_id = ? ORDER BY created_at, id`,
       [value.project_id],
-    ).map((asset) => {
+    )).map((asset) => {
       const metadata = parseJson(asset.metadata, {}) || {};
       return {
         id: asset.id,
@@ -1272,8 +1272,8 @@ export function normalizeWorkReport(value, { includeReporter = false } = {}) {
   return result;
 }
 
-export function audit(ctx, action, targetType, targetId, beforeData = null, afterData = null, { orgId } = {}) {
-  q(`INSERT INTO audit_logs(
+export async function audit(ctx, action, targetType, targetId, beforeData = null, afterData = null, { orgId } = {}) {
+  await aq(`INSERT INTO audit_logs(
     id,org_id,actor_id,actor_role,action,target_type,target_id,request_method,request_path,before_data,after_data,ip,created_at
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
     id('audit'),
@@ -1304,4 +1304,4 @@ export function tokenExpiresAt() {
   return new Date(Date.now() + TOKEN_TTL_DAYS * 86400_000).toISOString();
 }
 
-export { db, q, rows, row, count, json, parseJson, transaction };
+export { db, q, rows, row, count, json, parseJson, transaction, aq, arows, arow, aone, acount, atransaction, amap };

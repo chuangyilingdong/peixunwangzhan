@@ -11,7 +11,7 @@ process.env.AI_PROVIDER_API_KEY = 'p87-secret';
 const { getGenerationProvider } = await import('../apps/server/src/services/generationProvider.js');
 const { recordAiUsage } = await import('../apps/server/src/services/creditUsage.js');
 const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
-const { q, row } = await import('../apps/server/src/lib.js');
+const { q, row, arow, aq } = await import('../apps/server/src/lib.js');
 const originalFetch = globalThis.fetch;
 const selection = {
   provider: 'custom', model: 'evidence-model', endpoint: 'https://gateway.test/v1', channelId: 'configured-channel',
@@ -28,7 +28,7 @@ try {
   });
   const syncProvider = getGenerationProvider({ ...selection, gateway: null });
   await syncProvider.generate({ modality: 'TEXT', prompt: 'sync' });
-  const syncAttempt = row('SELECT * FROM compute_attempts WHERE call_id=?', [syncProvider.compute.callId]);
+  const syncAttempt = await arow('SELECT * FROM compute_attempts WHERE call_id=?', [syncProvider.compute.callId]);
   assert.ok(syncAttempt.client_request_id.startsWith('req_'));
   assert.equal(syncAttempt.response_request_id, 'sync-request-87');
   assert.equal(syncAttempt.response_payload_id, 'sync-payload-87');
@@ -43,7 +43,7 @@ try {
   };
   const streamProvider = getGenerationProvider({ ...selection, gateway: null });
   await streamProvider.generateStream({ messages: [{ role: 'user', content: 'stream' }] });
-  const streamAttempt = row('SELECT * FROM compute_attempts WHERE call_id=?', [streamProvider.compute.callId]);
+  const streamAttempt = await arow('SELECT * FROM compute_attempts WHERE call_id=?', [streamProvider.compute.callId]);
   assert.equal(streamRequestId, streamAttempt.client_request_id);
   assert.equal(streamAttempt.response_request_id, 'stream-request-87');
   assert.equal(streamAttempt.response_payload_id, 'stream-payload-87');
@@ -66,7 +66,7 @@ try {
 
   const provider = getGenerationProvider(selection);
   await provider.generate({ modality: 'VIDEO', prompt: 'test', title: 'evidence' });
-  const attempt = row('SELECT * FROM compute_attempts WHERE call_id=?', [provider.compute.callId]);
+  const attempt = await arow('SELECT * FROM compute_attempts WHERE call_id=?', [provider.compute.callId]);
   assert.ok(attempt.client_request_id.startsWith('req_'));
   assert.equal(sentClientRequestId, attempt.client_request_id);
   assert.equal(pollClientRequestId, attempt.client_request_id);
@@ -77,12 +77,12 @@ try {
   assert.equal(attempt.gateway_log_id, 'gateway-log-87');
   assert.equal(attempt.actual_channel_id, 'actual-channel-87');
   assert.equal(attempt.provider_account_ref, 'supplier-account-87');
-  q('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', ['org-87', 'P87 Org', 'ACTIVE', new Date().toISOString(), new Date(Date.now() + 86400000).toISOString(), 0, new Date().toISOString(), new Date().toISOString()]);
-  recordAiUsage({ orgId: 'org-87', userId: 'user-87', modality: 'VIDEO', model: 'evidence-model', status: 'SUCCESS', pricing: { compute: provider.compute } });
-  const linkedAttempt = row('SELECT * FROM compute_attempts WHERE id=?', [attempt.id]);
+  await aq('INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)', ['org-87', 'P87 Org', 'ACTIVE', new Date().toISOString(), new Date(Date.now() + 86400000).toISOString(), 0, new Date().toISOString(), new Date().toISOString()]);
+  await recordAiUsage({ orgId: 'org-87', userId: 'user-87', modality: 'VIDEO', model: 'evidence-model', status: 'SUCCESS', pricing: { compute: provider.compute } });
+  const linkedAttempt = await arow('SELECT * FROM compute_attempts WHERE id=?', [attempt.id]);
   assert.ok(linkedAttempt.internal_usage_record_id?.startsWith('usage_'));
   assert.equal(linkedAttempt.usage_id, 'usage-87', 'provider usage ID must remain upstream evidence');
-  assert.equal(row('SELECT compute_call_id FROM usage_records WHERE id=?', [linkedAttempt.internal_usage_record_id]).compute_call_id, attempt.call_id);
+  assert.equal((await arow('SELECT compute_call_id FROM usage_records WHERE id=?', [linkedAttempt.internal_usage_record_id])).compute_call_id, attempt.call_id);
   // 2026-09-18 口径变更（不是测试漂移）：渠道卡手填的「估算成本」（estimatedCostFen / modelCosts）
   // 已从成本取值链移除，快照的 basis 从 CONFIGURED_ESTIMATE 变成 UPSTREAM_REPORTED_OR_UNKNOWN，
   // estimatedCostFen 恒为 null。这条**故意保留**夹具里的 estimatedCostFen: 17 —— 它现在必须被忽略，
@@ -91,9 +91,9 @@ try {
     basis: 'UPSTREAM_REPORTED_OR_UNKNOWN', provider: 'custom', channelId: 'configured-channel', model: 'evidence-model', estimatedCostFen: null, capturedAt: JSON.parse(attempt.cost_rule_snapshot).capturedAt,
   });
   assert.ok(!JSON.stringify(attempt).includes('p87-secret'));
-  assert.throws(() => q('INSERT INTO compute_attempts(id,call_id,attempt,modality,status,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?)', ['duplicate', attempt.call_id, attempt.attempt, 'TEXT', 'RUNNING', '{}', new Date().toISOString()]));
+  await assert.rejects(async () => await aq('INSERT INTO compute_attempts(id,call_id,attempt,modality,status,sale_snapshot,created_at) VALUES (?,?,?,?,?,?,?)', ['duplicate', attempt.call_id, attempt.attempt, 'TEXT', 'RUNNING', '{}', new Date().toISOString()]));
 
-  q("INSERT INTO compute_attempts(id,call_id,attempt,modality,status,sale_snapshot,created_at) VALUES ('unmatched','call-unmatched',1,'TEXT','FAILED','{}',?)", [new Date().toISOString()]);
+  await aq("INSERT INTO compute_attempts(id,call_id,attempt,modality,status,sale_snapshot,created_at) VALUES ('unmatched','call-unmatched',1,'TEXT','FAILED','{}',?)", [new Date().toISOString()]);
   const matched = await handleAdmin(adminCtx('days=1&page=1&limit=1&evidenceMatch=MATCHED&callId=' + encodeURIComponent(attempt.call_id)));
   assert.equal(matched.total, 1);
   assert.equal(matched.items.length, 1);

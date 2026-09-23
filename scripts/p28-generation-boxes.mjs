@@ -179,18 +179,18 @@ try {
   const context = { lesson: { generationBoxes: boxes } };
   const policy = { provider: 'local-mock', channels: [], modalityChannels: {} };
   // 服务端按「框体自己的模型」选渠道（没有渠道时回落全局默认 + 框体模型），这里照做。
-  const optionsFor = (box) => generationOptionsFor({
+  const optionsFor = async (box) => await generationOptionsFor({
     context, modality: box.modality, policy, box,
     selection: providerSelectionForModality(policy, box.modality, box.model || ''),
   });
-  const vertical = optionsFor(boxes[0]);
-  const wide = optionsFor(boxes[1]);
+  const vertical = await optionsFor(boxes[0]);
+  const wide = await optionsFor(boxes[1]);
   assert.equal(vertical.aspectRatio, '9:16', `素材1 应为 9:16，实际 ${vertical.aspectRatio}`);
   assert.equal(vertical.resolution, '2k', `素材1 应为 2k，实际 ${vertical.resolution}`);
   assert.equal(wide.aspectRatio, '16:9', `素材2 应为 16:9，实际 ${wide.aspectRatio}`);
   assert.equal(wide.resolution, '1k', `素材2 应为 1k，实际 ${wide.resolution}`);
-  const shortClip = optionsFor(boxes[2]);
-  const longClip = optionsFor(boxes[3]);
+  const shortClip = await optionsFor(boxes[2]);
+  const longClip = await optionsFor(boxes[3]);
   assert.equal(shortClip.durationSeconds, 5, `先 5 秒，实际 ${shortClip.durationSeconds}`);
   assert.equal(longClip.durationSeconds, 10, `再 10 秒，实际 ${longClip.durationSeconds}`);
   // 框体挂了预置素材且模型要首帧（i2v）时，直接用预置素材当首帧

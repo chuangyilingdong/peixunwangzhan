@@ -2,7 +2,7 @@ import {
   errors,
   requireRole,
   row,
-  transaction,
+  transaction, arow, atransaction,
 } from '../lib.js';
 import { resolveProjectUsageContext } from '../services/studentContext.js';
 import { assertSessionAiControls } from '../services/aiControls.js';
@@ -29,12 +29,12 @@ function normalizedModality(value) {
 
 // 积分已废弃（2026-09-13 P4）：这个端点不再接受 / 扣减积分，只写 usage_records。
 // 端点本身保留（客户端的调用形状不变），钱由生成链路按单价记 cost_fen（算力池账本）。
-function recordUsage({ orgId, userId, projectId = null, sessionId = null, generationJobId = null, modality, status, failCode = null }) {
-  recordAiUsage({ orgId, userId, projectId, sessionId, generationJobId, modality, status, failCode });
+async function recordUsage({ orgId, userId, projectId = null, sessionId = null, generationJobId = null, modality, status, failCode = null }) {
+  await recordAiUsage({ orgId, userId, projectId, sessionId, generationJobId, modality, status, failCode });
 }
 
-function rejectWithUsage({ orgId, userId, projectId, sessionId = null, modality, error }) {
-  transaction(() => recordUsage({
+async function rejectWithUsage({ orgId, userId, projectId, sessionId = null, modality, error }) {
+  await atransaction(async () => await recordUsage({
     orgId, userId, projectId, sessionId, modality, status: 'BLOCKED', failCode: error.code || 'BLOCKED',
   }));
   throw error;
@@ -68,23 +68,23 @@ export async function handleAi(ctx) {
       throw errors.badRequest('projectId 必填', 'PROJECT_REQUIRED');
     }
   } catch (error) {
-    if (error?.code) return rejectWithUsage({ orgId, userId, projectId: projectId || null, modality, error });
+    if (error?.code) return await rejectWithUsage({ orgId, userId, projectId: projectId || null, modality, error });
     throw error;
   }
 
-  const project = row(
+  const project = await arow(
     `SELECT * FROM student_projects
      WHERE id = ? AND student_id = ? AND org_id = ? AND status != 'ARCHIVED'`,
     [projectId, userId, orgId],
   );
   if (!project) {
-    return rejectWithUsage({
+    return await rejectWithUsage({
       orgId, userId, projectId, modality,
       error: errors.notFound('项目不存在', 'PROJECT_NOT_FOUND'),
     });
   }
   if (project.status !== 'DRAFT') {
-    return rejectWithUsage({
+    return await rejectWithUsage({
       orgId, userId, projectId, modality,
       error: errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE'),
     });
@@ -92,24 +92,24 @@ export async function handleAi(ctx) {
 
   let lessonContext;
   try {
-    lessonContext = resolveProjectUsageContext(auth.rawUser, project);
+    lessonContext = await resolveProjectUsageContext(auth.rawUser, project);
     if (!lessonContext.canUseNow) {
       throw errors.forbidden(lessonContext.blockReason, lessonContext.blockCode);
     }
   } catch (error) {
-    if (error?.code) return rejectWithUsage({ orgId, userId, projectId, modality, error });
+    if (error?.code) return await rejectWithUsage({ orgId, userId, projectId, modality, error });
     throw error;
   }
 
   const sessionId = lessonContext.activeSession?.id || null;
   try {
-    transaction(() => {
-      const currentUser = row('SELECT * FROM users WHERE id = ? AND org_id = ? AND status = ?', [userId, orgId, 'ACTIVE']);
-      const currentProject = row('SELECT * FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [projectId, userId, orgId]);
+    await atransaction(async () => {
+      const currentUser = await arow('SELECT * FROM users WHERE id = ? AND org_id = ? AND status = ?', [userId, orgId, 'ACTIVE']);
+      const currentProject = await arow('SELECT * FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [projectId, userId, orgId]);
       if (!currentUser || !currentProject) throw errors.notFound('项目或学生不存在', 'PROJECT_NOT_FOUND');
       if (currentProject.status !== 'DRAFT') throw errors.conflict('项目当前不可继续创作', 'PROJECT_NOT_EDITABLE');
 
-      const currentContext = resolveProjectUsageContext(currentUser, currentProject);
+      const currentContext = await resolveProjectUsageContext(currentUser, currentProject);
       if (!currentContext.canUseNow) throw errors.forbidden(currentContext.blockReason, currentContext.blockCode);
       const currentSession = currentContext.activeSession;
       assertCapability(modality, currentSession);
@@ -118,14 +118,14 @@ export async function handleAi(ctx) {
       // 这里原来的额度断言**已删除**：本条端点不再因为额度拒绝任何人。
 
       // 平台模态开关（机构覆盖优先）必须真正拦住调用，不能只影响展示
-      if (!isModalityEnabled(orgId, modality).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
+      if (!(await isModalityEnabled(orgId, modality)).enabled) throw errors.forbidden('平台已关闭该 AI 能力', 'MODALITY_DISABLED');
 
       const lessonCapability = LESSON_CAPABILITY_BY_MODALITY[modality];
       if (lessonCapability && !(currentContext.lesson?.capabilities || []).includes(lessonCapability)) {
         throw errors.forbidden('本课时未开放该 AI 能力', 'LESSON_CAPABILITY_DISABLED');
       }
       // 生成框体：每框体只能生成一次；本课该模态没配框体时不限制（与生成链路同一套判断）
-      assertLessonGenerationBox({ context: currentContext, modality, projectId, boxId: String(body.boxId || '').trim().slice(0, 64) });
+      await assertLessonGenerationBox({ context: currentContext, modality, projectId, boxId: String(body.boxId || '').trim().slice(0, 64) });
 
       // 2026-09-13（P4 删积分）：这里原有的三道「积分刹车」已删除 ——
       //   ① 成员 AI 上限（ai_credit_limit/ai_credits_used）
@@ -133,10 +133,10 @@ export async function handleAi(ctx) {
       //   ③ 课堂用量上限（session_credit_cap/consumed_credits_total）
       // 额度统一由**算力池**管：学生 × 课包、四种模态共用一个上限（services/computePool.js）。
       // 这道端点只记 usage_records（不扣钱）—— 真正花钱的是生成链路，那里按单价记 cost_fen。
-      recordUsage({ orgId, userId, projectId, sessionId: currentSession?.id || null, modality, status: 'SUCCESS' });
+      await recordUsage({ orgId, userId, projectId, sessionId: currentSession?.id || null, modality, status: 'SUCCESS' });
     });
   } catch (error) {
-    if (error?.code) return rejectWithUsage({ orgId, userId, projectId, modality, sessionId, error });
+    if (error?.code) return await rejectWithUsage({ orgId, userId, projectId, modality, sessionId, error });
     throw error;
   }
 

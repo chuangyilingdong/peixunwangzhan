@@ -1,4 +1,5 @@
 import { randomBytes, scryptSync, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1699,17 +1700,84 @@ function pendingResult(value, sql) {
 // ⚠️ 这几个**不能写成 `async function`**：`async` 函数返回的是**原生 Promise**，
 //    它会把上面的 Proxy"吞掉"，于是漏 await 时又变成静默的了（我第一版就是这么写的，
 //    测的时候才发现检测器根本不触发）。直接 return Proxy：`await` 走 then、属性访问就炸。
-export function aq(sql, params = []) { return pendingResult(q(sql, params), sql); }
-export function arows(sql, params = []) { return pendingResult(rows(sql, params), sql); }
-export function arow(sql, params = []) { return pendingResult(row(sql, params), sql); }
-export function aone(sql, params = []) { return pendingResult(one(sql, params), sql); }
-export function acount(sql, params = []) { return pendingResult(count(sql, params), sql); }
+//
+// ─────────── 全局执行队列：让"两个异步任务的 SQL 不会互相插进对方的事务里" ───────────
+//
+// 为什么需要它（2026-09-23 实测踩到，而且**推翻了方案文档里"转换期不会交错"那句**）：
+//   方案里那次实测测的是**宏任务**（`setImmediate` 的回调会不会插进来）—— 结论对，但不充分。
+//   `await` 会让出的是**微任务队列**：进程里另一个异步任务（后台 worker、定时器）如果此刻正好
+//   有排队的续体，它就会在"BEGIN 与 COMMIT 之间"跑 SQL。实测症状：
+//   `Error: cannot start a transaction within a transaction`（aiGeneration 的 worker 与请求路径撞上），
+//   更安静的变体是"别人的 INSERT 混进我的事务里、跟着我一起回滚"。
+//   同步时代不会发生这件事：同步代码一口气跑完，中间没有让出点。
+//
+// 做法：所有数据访问都排到 `dbLock` 这一条链上；**事务**持有它直到 fn 跑完，
+//   事务内部（同一个异步上下文，用 AsyncLocalStorage 认领）保持**同步执行**，不重复排队（否则自锁）。
+//   代价：语句的实际执行从"调用那一刻"变成"拿到锁那一刻"。所有调用点都 await 过（p137 门禁 = 0），
+//   所以顺序语义不变。
+//
+// ⚠️ 这是**转换期**（底下还是同步 SQLite 单连接）的正确性机制。切到 mysql2 之后，
+//   每条语句各自取连接，"混进别人的事务"这件事天然不存在，届时这把锁可以退化成
+//   "只保护事务连接分配"（见阶段 1 方案"切换那一刻"）。
+const txContext = new AsyncLocalStorage();
+let dbLock = Promise.resolve();
+const inTransaction = () => Boolean(txContext.getStore()?.ownsLock);
 
-/** 异步事务：与同步版 BEGIN IMMEDIATE / COMMIT / ROLLBACK 语义一致，但支持 await 的 fn */
+/** 事务外：排到全局队列上执行（拿到锁才真正跑 SQL） */
+function queuedResult(exec, sql) {
+  const promise = dbLock.then(exec);
+  return pendingResult(promise, sql);
+}
+
+export function aq(sql, params = []) {
+  return inTransaction() ? pendingResult(q(sql, params), sql) : queuedResult(() => q(sql, params), sql);
+}
+export function arows(sql, params = []) {
+  return inTransaction() ? pendingResult(rows(sql, params), sql) : queuedResult(() => rows(sql, params), sql);
+}
+export function arow(sql, params = []) {
+  return inTransaction() ? pendingResult(row(sql, params), sql) : queuedResult(() => row(sql, params), sql);
+}
+export function aone(sql, params = []) {
+  return inTransaction() ? pendingResult(one(sql, params), sql) : queuedResult(() => one(sql, params), sql);
+}
+export function acount(sql, params = []) {
+  return inTransaction() ? pendingResult(count(sql, params), sql) : queuedResult(() => count(sql, params), sql);
+}
+
+/**
+ * 异步事务：与同步版 BEGIN IMMEDIATE / COMMIT / ROLLBACK 语义一致，但支持 await 的 fn。
+ * 全程持有全局锁 —— 这是"不让别的异步任务把 SQL 插进本事务"的唯一手段（转换期）。
+ */
 export async function atransaction(fn) {
-  db.exec('BEGIN IMMEDIATE');
-  try { const result = await fn(); db.exec('COMMIT'); return result; }
-  catch (error) { db.exec('ROLLBACK'); throw error; }
+  if (inTransaction()) throw new Error('[事务] 不支持嵌套事务（与 SQLite "cannot start a transaction within a transaction" 同一约束）');
+  const run = dbLock.then(async () => {
+    db.exec('BEGIN IMMEDIATE');
+    try { const result = await txContext.run({ ownsLock: true }, fn); db.exec('COMMIT'); return result; }
+    catch (error) { db.exec('ROLLBACK'); throw error; }
+  });
+  // 锁本身不能被拒绝污染：否则后面所有操作都会跟着炸（失败要让**调用方**看到，不是让队列看到）
+  dbLock = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+/**
+ * 顺序版 map：`await amap(list, async (x, i) => …)`。
+ *
+ * 为什么不能直接用 `Promise.all(list.map(async …))`（2026-09-23 实测踩到）：
+ * 同步代码里 `list.map(fn)` 是**一个接一个**跑的，所以 fn 对外层状态的写入是**有序**的。
+ * 换成 `Promise.all` 之后所有回调同时起跑 → 依赖顺序的逻辑静默出错。
+ * 实例：`admin/helpers.js` 的 `previewImport` 用 `seenLogins` 这个 Set 累积判「本批次登录名重复」，
+ * 包上 Promise.all 后每一项都在别人写入之前就查完了集合 → 批次内重复一条都查不出来（p101 挂在两项）。
+ *
+ * ⚠️ 更远的理由：等实现换成 mysql2（真 I/O）之后，`Promise.all` 就是**真并发** ——
+ * 一个请求内的多条 SQL 会交错执行、顺序不再确定。顺序版把这层风险整类消掉；
+ * 真要并发的场合应当**显式**写 `Promise.all`，而不是让这次改造顺手改掉语义。
+ */
+export async function amap(list, fn) {
+  const out = [];
+  for (let i = 0; i < list.length; i += 1) out.push(await fn(list[i], i, list));
+  return out;
 }
 
 // P4-C03 migration: notification event deduplication, failure retry, ignore/archive

@@ -36,7 +36,7 @@ process.env.PLATFORM_DATA_DIR = path.join(temp, 'data');
 process.env.PLATFORM_DB_PATH = path.join(temp, 'data', 'platform.db');
 process.env.DEPLOYMENT_MODE = 'local-mock';
 const { handleAdmin } = await import('../apps/server/src/routes/adminOrg.js');
-const { row, q } = await import('../apps/server/src/lib.js');
+const { row, q, arow, aq } = await import('../apps/server/src/lib.js');
 const ctx = (pathname, method = 'GET', body = null) => ({
   pathname, method, body, search: new URLSearchParams(),
   req: { socket: { remoteAddress: '127.0.0.1' } },
@@ -56,9 +56,9 @@ assert.equal(created.status, 'TRIAL');
 assert.equal(created.teacherSeats, 12);
 assert.equal(created.studentSeats, 180);
 assert.deepEqual(created.contact, { name: '王老师', phone: '13800138000', email: 'teacher@example.com', contractNotes: '年度合作' });
-assert.equal(row("SELECT display_name FROM users WHERE org_id=? AND role='ORG_ADMIN'", [created.id]).display_name, '机构管理员');
+assert.equal((await arow("SELECT display_name FROM users WHERE org_id=? AND role='ORG_ADMIN'", [created.id])).display_name, '机构管理员');
 
-q('UPDATE organizations SET purchased_teacher_seats=4,base_teacher_seats=8 WHERE id=?', [created.id]);
+await aq('UPDATE organizations SET purchased_teacher_seats=4,base_teacher_seats=8 WHERE id=?', [created.id]);
 const updated = await admin(`/organizations/${created.id}`, 'PUT', { teacherSeats: 15, studentSeats: 200 });
 assert.equal(updated.teacherSeats, 15);
 assert.equal(updated.baseTeacherSeats, 11);

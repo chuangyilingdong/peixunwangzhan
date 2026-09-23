@@ -12,7 +12,7 @@
 //   表、服务、路由都已删除，本文件不再查这些表、也不再按币种 UNION 它们。
 //   **对外字段名刻意保持不变**（settledAmountMinor / differenceMinor / settledCostMinor /
 //   supplierRowsComplete / unreconciledMinor 等），避免前端与守卫跟着改；但语义已变，见各处注释。
-import { errors, parseJson, row, rows } from '../lib.js';
+import { errors, parseJson, row, rows, arows, arow } from '../lib.js';
 import { getComputePricing } from './computePool.js';
 
 const CURRENCY = /^[A-Z]{3}$/;
@@ -30,9 +30,9 @@ const costUnknownOf = (source, fen) => source === 'UNKNOWN' || fen === null || f
 
 // sale_price_fen 由 schema 迁移补齐；列未落地前回退为 NULL，服务不因缺列报错。
 let salePriceColumn;
-function salePriceExpression() {
+async function salePriceExpression() {
   if (salePriceColumn === undefined) {
-    salePriceColumn = rows("PRAGMA table_info(compute_attempts)").some((item) => item.name === 'sale_price_fen') ? 'attempt.sale_price_fen' : 'NULL';
+    salePriceColumn = (await arows("PRAGMA table_info(compute_attempts)")).some((item) => item.name === 'sale_price_fen') ? 'attempt.sale_price_fen' : 'NULL';
   }
   return salePriceColumn;
 }
@@ -74,21 +74,21 @@ function pageNumber(value, fallback, max) {
   return parsed;
 }
 
-export function financialReportOptions() {
+export async function financialReportOptions() {
   // 币种下拉：购买批次 / 许可收入事件两个账本，外加**上游成本账**的币种（第二本账也要能选出来看）。
-  const licenseCurrencies = rows("SELECT currency id,currency name FROM (SELECT currency FROM license_purchase_batches WHERE currency IS NOT NULL UNION SELECT currency FROM license_revenue_events WHERE currency IS NOT NULL) ORDER BY currency");
-  const hasUpstreamCost = rows('SELECT 1 ok FROM compute_attempts WHERE upstream_cost_fen IS NOT NULL LIMIT 1').length > 0;
+  const licenseCurrencies = await arows("SELECT currency id,currency name FROM (SELECT currency FROM license_purchase_batches WHERE currency IS NOT NULL UNION SELECT currency FROM license_revenue_events WHERE currency IS NOT NULL) ORDER BY currency");
+  const hasUpstreamCost = (await arows('SELECT 1 ok FROM compute_attempts WHERE upstream_cost_fen IS NOT NULL LIMIT 1')).length > 0;
   const currencies = hasUpstreamCost && !licenseCurrencies.some((item) => item.id === PLATFORM_COST_CURRENCY)
     ? [...licenseCurrencies, { id: PLATFORM_COST_CURRENCY, name: PLATFORM_COST_CURRENCY }].sort((a, b) => String(a.id).localeCompare(String(b.id)))
     : licenseCurrencies;
   return {
-    organizations: rows('SELECT id,name FROM organizations ORDER BY name,id'),
-    students: rows("SELECT id,display_name name,login,org_id orgId FROM users WHERE role='STUDENT' AND deleted_at IS NULL ORDER BY display_name,login"),
-    series: rows('SELECT id,title name FROM course_series ORDER BY title,id'),
-    sessions: rows('SELECT id,COALESCE(title,id) name,org_id orgId,series_id seriesId,lesson_id lessonId FROM class_sessions ORDER BY created_at DESC,id DESC'),
-    lessons: rows('SELECT id,title name,series_id seriesId FROM course_lessons ORDER BY title,id'),
-    models: rows("SELECT DISTINCT model id,model name FROM compute_attempts WHERE model IS NOT NULL AND model<>'' ORDER BY model"),
-    channels: rows("SELECT DISTINCT COALESCE(actual_channel_id,channel_id) id,COALESCE(actual_channel_id,channel_id) name FROM compute_attempts WHERE COALESCE(actual_channel_id,channel_id) IS NOT NULL ORDER BY name"),
+    organizations: await arows('SELECT id,name FROM organizations ORDER BY name,id'),
+    students: await arows("SELECT id,display_name name,login,org_id orgId FROM users WHERE role='STUDENT' AND deleted_at IS NULL ORDER BY display_name,login"),
+    series: await arows('SELECT id,title name FROM course_series ORDER BY title,id'),
+    sessions: await arows('SELECT id,COALESCE(title,id) name,org_id orgId,series_id seriesId,lesson_id lessonId FROM class_sessions ORDER BY created_at DESC,id DESC'),
+    lessons: await arows('SELECT id,title name,series_id seriesId FROM course_lessons ORDER BY title,id'),
+    models: await arows("SELECT DISTINCT model id,model name FROM compute_attempts WHERE model IS NOT NULL AND model<>'' ORDER BY model"),
+    channels: await arows("SELECT DISTINCT COALESCE(actual_channel_id,channel_id) id,COALESCE(actual_channel_id,channel_id) name FROM compute_attempts WHERE COALESCE(actual_channel_id,channel_id) IS NOT NULL ORDER BY name"),
     currencies,
   };
 }
@@ -114,18 +114,18 @@ function callScope(filters, range) {
   return { conditions, params };
 }
 
-export function listFinancialCalls(filters = {}) {
+export async function listFinancialCalls(filters = {}) {
   const range = rangeOf(filters);
   const page = pageNumber(filters.page, 1, 100000);
   const limit = pageNumber(filters.limit, 20, 100);
   const scope = callScope(filters, range);
   const where = scope.conditions.join(' AND ');
-  const total = Number(row(`SELECT COUNT(DISTINCT attempt.id) n ${CALL_FROM} WHERE ${where}`, scope.params)?.n || 0);
-  const raw = rows(`SELECT attempt.*,organization.name organization_name,student.display_name student_name,
+  const total = Number((await arow(`SELECT COUNT(DISTINCT attempt.id) n ${CALL_FROM} WHERE ${where}`, scope.params))?.n || 0);
+  const raw = await arows(`SELECT attempt.*,organization.name organization_name,student.display_name student_name,
       usage.id linked_usage_id,COALESCE(usage.series_id,session.series_id) linked_series_id,
       COALESCE(attempt.class_session_id,usage.class_session_id) linked_session_id,COALESCE(attempt.lesson_id,session.lesson_id) linked_lesson_id
     ${CALL_FROM} WHERE ${where} GROUP BY attempt.id ORDER BY attempt.created_at DESC,attempt.id DESC LIMIT ? OFFSET ?`, [...scope.params, limit, (page - 1) * limit]);
-  const pricing = getComputePricing();
+  const pricing = await getComputePricing();
   const items = raw.map((item) => {
     const sale = resolveSalePrice({ salePriceFen: item.sale_price_fen, model: item.model, modality: item.modality }, pricing);
     const costUnknown = costUnknownOf(item.cost_source, item.upstream_cost_fen);
@@ -181,13 +181,13 @@ function merge(map, source, amountField, extras = []) {
  * 两账对照（原「三账与毛利」）：机构购买实收 / 许可确认收入（这两本账口径不变）与**上游成本**并排。
  * 上游成本来自 compute_attempts.upstream_cost_fen，按机构归集；成本未知的调用只计数、不进金额，毛利一律留空。
  */
-export function financialReconciliationReport(filters = {}) {
+export async function financialReconciliationReport(filters = {}) {
   const range = rangeOf(filters);
   const orgId = text(filters.orgId); const studentId = text(filters.studentId); const seriesId = text(filters.seriesId);
   const purchaseWhere = ["batch.status='ACTIVE'", "batch.purchase_type='PURCHASE'", 'batch.purchased_at>=?', 'batch.purchased_at<?'];
   const purchaseParams = [range.since, range.until];
   add(purchaseWhere, purchaseParams, orgId, 'batch.org_id=?'); add(purchaseWhere, purchaseParams, seriesId, 'batch.series_id=?'); add(purchaseWhere, purchaseParams, range.currency, 'batch.currency=?');
-  const purchases = rows(`SELECT batch.org_id orgId,organization.name organizationName,batch.currency,
+  const purchases = await arows(`SELECT batch.org_id orgId,organization.name organizationName,batch.currency,
       SUM(CASE WHEN batch.payment_status='PAID' THEN batch.amount_minor ELSE 0 END) amountMinor,
       SUM(CASE WHEN batch.payment_status='PAID' THEN 1 ELSE 0 END) paidPurchaseCount,
       SUM(CASE WHEN batch.payment_status IN ('PARTIAL','UNPAID') THEN 1 ELSE 0 END) pendingPaymentCount
@@ -196,7 +196,7 @@ export function financialReconciliationReport(filters = {}) {
 
   const revenueWhere = ['event.occurred_at>=?', 'event.occurred_at<?']; const revenueParams = [range.since, range.until];
   add(revenueWhere, revenueParams, orgId, 'event.org_id=?'); add(revenueWhere, revenueParams, seriesId, 'event.series_id=?'); add(revenueWhere, revenueParams, studentId, 'grant.student_id=?'); add(revenueWhere, revenueParams, range.currency, 'event.currency=?');
-  const revenues = rows(`SELECT event.org_id orgId,organization.name organizationName,event.currency,
+  const revenues = await arows(`SELECT event.org_id orgId,organization.name organizationName,event.currency,
       CASE WHEN SUM(CASE WHEN event.amount_minor IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(event.amount_minor) END amountMinor,
       SUM(event.quantity) recognizedQuantity,SUM(CASE WHEN event.amount_minor IS NULL THEN 1 ELSE 0 END) unknownRevenueEvents
     FROM license_revenue_events event LEFT JOIN organizations organization ON organization.id=event.org_id
@@ -212,13 +212,13 @@ export function financialReconciliationReport(filters = {}) {
   const costEnabled = !range.currency || range.currency === PLATFORM_COST_CURRENCY;
   const costWhere = ['attempt.created_at>=?', 'attempt.created_at<?']; const costParams = [range.since, range.until];
   add(costWhere, costParams, orgId, 'attempt.org_id=?'); add(costWhere, costParams, studentId, 'attempt.user_id=?'); add(costWhere, costParams, seriesId, 'COALESCE(usage.series_id,session.series_id)=?');
-  const costs = !costEnabled ? [] : rows(`SELECT attempt.org_id orgId,organization.name organizationName,
+  const costs = !costEnabled ? [] : (await arows(`SELECT attempt.org_id orgId,organization.name organizationName,
       CASE WHEN SUM(CASE WHEN attempt.cost_source='UNKNOWN' OR attempt.upstream_cost_fen IS NULL THEN 0 ELSE 1 END)=0
         THEN NULL
         ELSE SUM(CASE WHEN attempt.cost_source='UNKNOWN' OR attempt.upstream_cost_fen IS NULL THEN 0 ELSE attempt.upstream_cost_fen END) END amountMinor,
       COUNT(CASE WHEN attempt.cost_source<>'UNKNOWN' AND attempt.upstream_cost_fen IS NOT NULL THEN 1 END) settledMatchCount,
       SUM(CASE WHEN attempt.cost_source='UNKNOWN' OR attempt.upstream_cost_fen IS NULL THEN 1 ELSE 0 END) unresolvedSupplierLineCount
-    ${CALL_FROM} WHERE ${costWhere.join(' AND ')} GROUP BY attempt.org_id`, costParams)
+    ${CALL_FROM} WHERE ${costWhere.join(' AND ')} GROUP BY attempt.org_id`, costParams))
     .map((item) => ({ ...item, currency: PLATFORM_COST_CURRENCY }));
 
   const grouped = new Map();
@@ -324,16 +324,16 @@ function finalizeBucket(bucket) {
  * 对外售价（externalAmountMinor，未知单列 saleUnknownCount）与上游成本（knownUpstreamCostMinor，未知单列 upstreamUnknownCount）。
  * 未知一律单列计数，绝不并入差额、绝不按 0 处理。
  */
-export function financialCallSummary(filters = {}) {
+export async function financialCallSummary(filters = {}) {
   const range = rangeOf(filters);
   const scope = callScope(filters, range);
   const where = scope.conditions.join(' AND ');
-  const saleColumn = salePriceExpression();
-  const raw = rows(`SELECT attempt.id,attempt.modality,COALESCE(attempt.actual_channel_id,attempt.channel_id) channelId,
+  const saleColumn = await salePriceExpression();
+  const raw = await arows(`SELECT attempt.id,attempt.modality,COALESCE(attempt.actual_channel_id,attempt.channel_id) channelId,
       attempt.model,attempt.org_id orgId,organization.name organizationName,attempt.user_id userId,student.display_name studentName,
       ${saleColumn} salePriceFen,attempt.cost_source costSource,attempt.upstream_cost_fen upstreamCostFen
     ${CALL_FROM} WHERE ${where}`, scope.params);
-  const pricing = getComputePricing();
+  const pricing = await getComputePricing();
   const calls = raw.map((item) => {
     const sale = resolveSalePrice({ salePriceFen: item.salePriceFen, model: item.model, modality: item.modality }, pricing);
     const costUnknown = costUnknownOf(item.costSource, item.upstreamCostFen);

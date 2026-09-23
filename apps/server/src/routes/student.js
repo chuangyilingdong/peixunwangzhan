@@ -1,4 +1,4 @@
-import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword } from '../lib.js';
+import { asPositiveInteger, audit, clearAuthCookie, errors, id, json, nonEmptyString, normalizeOrg, normalizeProject, normalizeUser, normalizeWork, normalizeWorkReport, nowIso, canvasMediaFrom, pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, atransaction, amap } from '../lib.js';
 import { randomUUID } from 'node:crypto';
 import { hashPassword } from '@platform/database';
 import { buildStudentContext, buildStudentDashboard, getStudentAccessibleCourses, getStudentActiveSessions, getStudentClassrooms, getStudentCourseDetail, lessonStateMap, resolveProjectUsageContext, resolveStudentLessonContext } from '../services/studentContext.js';
@@ -40,8 +40,8 @@ export function normalizeCanvasSnapshot(input, { fallback = EMPTY_CANVAS } = {})
 
 const PROJECT_DELETE_RESTORE_DAYS = 30;
 
-function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted = false } = {}) {
-  const project = row(
+async function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted = false } = {}) {
+  const project = await arow(
     `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
             lesson.published_content AS lesson_published_content,
             series.id AS series_id, series.title AS series_title,
@@ -60,8 +60,8 @@ function getOwnProject(ctx, projectId, { includeArchived = false, includeDeleted
   if (!project) throw errors.notFound('项目不存在', 'PROJECT_NOT_FOUND');
   return project;
 }
-function fetchProject(ctx, projectId, { includeDeleted = false } = {}) {
-  return row(
+async function fetchProject(ctx, projectId, { includeDeleted = false } = {}) {
+  return await arow(
     `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
             lesson.published_content AS lesson_published_content,
             series.id AS series_id, series.title AS series_title,
@@ -77,8 +77,8 @@ function fetchProject(ctx, projectId, { includeDeleted = false } = {}) {
     [projectId, ctx.auth.user.id, ctx.auth.user.orgId],
   );
 }
-function fetchWork(ctx, workId) {
-  return row(
+async function fetchWork(ctx, workId) {
+  return await arow(
     `SELECT work.*, student.display_name AS student_name, class.name AS class_name,
             COALESCE(lesson.published_title, lesson.title) AS lesson_title, reviewer.display_name AS reviewer_name
      FROM works work
@@ -91,22 +91,22 @@ function fetchWork(ctx, workId) {
   );
 }
 
-function getOwnWork(ctx, workId) {
-  const work = row('SELECT * FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, ctx.auth.user.id, ctx.auth.user.orgId]);
+async function getOwnWork(ctx, workId) {
+  const work = await arow('SELECT * FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, ctx.auth.user.id, ctx.auth.user.orgId]);
   if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
   return work;
 }
 
-function currentSubmissionRound(workId) {
-  const latest = row('SELECT round FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [workId]);
+async function currentSubmissionRound(workId) {
+  const latest = await arow('SELECT round FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [workId]);
   return Number(latest?.round || 0);
 }
 
-function workSubmissionRows(workIds) {
+async function workSubmissionRows(workIds) {
   const ids = Array.isArray(workIds) ? workIds.filter(Boolean) : [workIds].filter(Boolean);
   if (!ids.length) return new Map();
   const placeholders = ids.map(() => '?').join(',');
-  const items = rows(
+  const items = await arows(
     `SELECT submission.id, submission.work_id, submission.round, submission.title, submission.description,
             submission.snapshot_version, submission.submitted_at, submission.review_status, submission.review_comment,
             submission.reviewed_at
@@ -155,15 +155,15 @@ function normalizeWorkPublishRequest(request) {
   };
 }
 
-function decorateWork(work, ctx, { includeSubmissions = false } = {}) {
+async function decorateWork(work, ctx, { includeSubmissions = false } = {}) {
   if (!work) return work;
-  const submissionsByWork = workSubmissionRows(work.id).get(work.id) || [];
+  const submissionsByWork = (await workSubmissionRows(work.id)).get(work.id) || [];
   const submissionRound = submissionsByWork[0]?.round || 0;
   // 没有老师点评这一环了：批注、已读回执这些随之删除（见第三节「取消老师点评」）
-  const publishRequests = rows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id]).map(normalizeWorkPublishRequest);
+  const publishRequests = (await arows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id])).map(normalizeWorkPublishRequest);
   const pendingPublishRequest = publishRequests.find((item) => item.status === 'PENDING') || null;
   const latestPublishRequest = publishRequests[0] || null;
-  const project = row('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.projectId, ctx.auth.user.id, ctx.auth.user.orgId]);
+  const project = await arow('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.projectId, ctx.auth.user.id, ctx.auth.user.orgId]);
   return {
     ...work,
     submissionRound,
@@ -184,9 +184,9 @@ function assertDraft(project) {
   if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能继续编辑', 'PROJECT_NOT_EDITABLE');
 }
 
-function assertProjectUsable(ctx, project) {
+async function assertProjectUsable(ctx, project) {
   assertDraft(project);
-  const usageContext = resolveProjectUsageContext(ctx.auth.rawUser, project);
+  const usageContext = await resolveProjectUsageContext(ctx.auth.rawUser, project);
   if (!usageContext.canUseNow) throw errors.forbidden(usageContext.blockReason, usageContext.blockCode);
   return usageContext;
 }
@@ -196,14 +196,14 @@ const USAGE_MODALITIES = new Set(['TEXT', 'IMAGE', 'MUSIC', 'VIDEO']);
 const USAGE_STATUSES = new Set(['SUCCESS', 'FAILED', 'BLOCKED']);
 const WORK_STATUS_RANK = { PUBLISHED: 4, APPROVED: 3, REJECTED: 2, PENDING: 1 };
 
-function studentCourseOverview(ctx) {
-  const context = buildStudentContext(ctx.auth.rawUser);
+async function studentCourseOverview(ctx) {
+  const context = await buildStudentContext(ctx.auth.rawUser);
   // 每节课的课堂状态（许可 / 名单 / 课堂是否开始 / 入口类型）走同一个权威算法，
   // 免得「我的课程」自己瞎猜：以前这里没有参与状态，页面就只好拿作品状态顶上，
   // 于是正在上课的课时也显示成「未开课」。
-  const stateByLesson = lessonStateMap(ctx.auth.rawUser, context);
-  const projects = rows(`SELECT id, course_lesson_id, class_id, title, status, updated_at FROM student_projects WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`, [ctx.auth.user.id, ctx.auth.user.orgId]);
-  const works = rows('SELECT id, project_id, course_lesson_id, class_id, title, status, submitted_at FROM works WHERE student_id = ? AND org_id = ?', [ctx.auth.user.id, ctx.auth.user.orgId]);
+  const stateByLesson = await lessonStateMap(ctx.auth.rawUser, context);
+  const projects = await arows(`SELECT id, course_lesson_id, class_id, title, status, updated_at FROM student_projects WHERE student_id = ? AND org_id = ? AND status != 'ARCHIVED'`, [ctx.auth.user.id, ctx.auth.user.orgId]);
+  const works = await arows('SELECT id, project_id, course_lesson_id, class_id, title, status, submitted_at FROM works WHERE student_id = ? AND org_id = ?', [ctx.auth.user.id, ctx.auth.user.orgId]);
   const classById = new Map(context.classes.map((item) => [item.id, item]));
   // 批次 C：班级退场后 `course.classes` 恒为空（键留着不炸既有读取方）；
   // 「这节课我上着哪个课堂」改由每个课时的 `participation*` / `classroomCount` 表达。
@@ -311,27 +311,27 @@ function assertCurrentPassword(ctx, value) {
   return currentPassword;
 }
 
-function studentAccountOverview(ctx) {
-  const rawUser = row('SELECT * FROM users WHERE id = ? AND org_id = ? AND deleted_at IS NULL', [ctx.auth.user.id, ctx.auth.user.orgId]);
+async function studentAccountOverview(ctx) {
+  const rawUser = await arow('SELECT * FROM users WHERE id = ? AND org_id = ? AND deleted_at IS NULL', [ctx.auth.user.id, ctx.auth.user.orgId]);
   if (!rawUser) throw errors.notFound('学生账号不存在', 'STUDENT_NOT_FOUND');
-  const sessions = rows('SELECT * FROM sessions WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [ctx.auth.user.id, ctx.auth.user.orgId, nowIso()]);
+  const sessions = await arows('SELECT * FROM sessions WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL AND expires_at > ? ORDER BY created_at DESC', [ctx.auth.user.id, ctx.auth.user.orgId, nowIso()]);
   // 2026-09-13：学员自助合规套件废掉后，这里不再返回 legalConsents / profileOptions / requests
   // （协议同意留痕、头像与监护人选项、账号申请都在被删的那套接口里，没有读取方了）。
   return {
     user: normalizeUser(rawUser),
-    organization: normalizeOrg(ctx.auth.org),
+    organization: await normalizeOrg(ctx.auth.org),
     // 批次 C：`classes` 恒为空（学生不再属于班级）；学生自己的课堂在 `classrooms`（含六态）。
     classes: [],
-    classrooms: getStudentClassrooms(rawUser),
-    activeSessions: getStudentActiveSessions(rawUser).map((item) => ({ id: item.id, classId: null, lessonId: item.lessonId, lessonTitle: item.lessonTitle, status: item.status, deliveryMode: item.deliveryMode, teacherName: item.teacherName, startedAt: item.startedAt })),
+    classrooms: await getStudentClassrooms(rawUser),
+    activeSessions: (await getStudentActiveSessions(rawUser)).map((item) => ({ id: item.id, classId: null, lessonId: item.lessonId, lessonTitle: item.lessonTitle, status: item.status, deliveryMode: item.deliveryMode, teacherName: item.teacherName, startedAt: item.startedAt })),
     sessions: sessions.map((item) => ({ id: item.id, clientType: item.client_type, createdAt: item.created_at, expiresAt: item.expires_at, current: item.id === ctx.auth.session.id })),
     currentSessionId: ctx.auth.session.id,
   };
 }
 
-function refreshStudentAccount(ctx, userId, orgId) {
-  const rawUser = row('SELECT * FROM users WHERE id = ? AND org_id = ?', [userId, orgId]);
-  return studentAccountOverview({ ...ctx, auth: { ...ctx.auth, rawUser } });
+async function refreshStudentAccount(ctx, userId, orgId) {
+  const rawUser = await arow('SELECT * FROM users WHERE id = ? AND org_id = ?', [userId, orgId]);
+  return await studentAccountOverview({ ...ctx, auth: { ...ctx.auth, rawUser } });
 }
 
 export async function handleStudent(ctx) {
@@ -340,30 +340,30 @@ export async function handleStudent(ctx) {
   const auth = requireRole(ctx, ['STUDENT']);
   const part = pathname.slice('/api/student'.length);
 
-  if (part === '/dashboard' && method === 'GET') return buildStudentDashboard(auth.rawUser);
+  if (part === '/dashboard' && method === 'GET') return await buildStudentDashboard(auth.rawUser);
   if (part === '/learning/overview' && method === 'GET') {
-    const courses = getStudentAccessibleCourses(auth.rawUser);
+    const courses = await getStudentAccessibleCourses(auth.rawUser);
     const lessons = courses.flatMap((course) => (course.lessons || []).map((lesson) => ({ ...lesson, courseId: course.id, courseTitle: course.title })));
-    const progress = rows(`SELECT progress.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title, series.title AS series_title
+    const progress = await arows(`SELECT progress.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title, series.title AS series_title
       FROM student_lesson_progress progress
       JOIN course_lessons lesson ON lesson.id=progress.lesson_id
       JOIN course_series series ON series.id=lesson.series_id
       WHERE progress.student_id=? AND progress.org_id=?`, [auth.user.id, auth.user.orgId]);
     const byLesson = new Map(progress.map((item) => [item.lesson_id, item]));
     const items = lessons.map((lesson) => { const item = byLesson.get(lesson.id); return { id: lesson.id, title: lesson.title, courseId: lesson.courseId, courseTitle: lesson.courseTitle, status: item?.status || 'NOT_STARTED', startedAt: item?.started_at || null, completedAt: item?.completed_at || null, lastAccessedAt: item?.last_accessed_at || null }; });
-    const projects = rows(`SELECT id,title,status,course_lesson_id,updated_at FROM student_projects WHERE student_id=? AND org_id=? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 10`, [auth.user.id, auth.user.orgId]);
+    const projects = await arows(`SELECT id,title,status,course_lesson_id,updated_at FROM student_projects WHERE student_id=? AND org_id=? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 10`, [auth.user.id, auth.user.orgId]);
     return { items, summary: { total: items.length, completed: items.filter((item) => item.status === 'COMPLETED').length, inProgress: items.filter((item) => item.status === 'IN_PROGRESS').length, pending: items.filter((item) => item.status !== 'COMPLETED').length }, recentProjects: projects.map((item) => ({ id: item.id, title: item.title, status: item.status, lessonId: item.course_lesson_id, updatedAt: item.updated_at })) };
   }
   const progressMatch = part.match(/^\/learning\/lessons\/([^/]+)\/(start|complete)$/);
   if (progressMatch && method === 'POST') {
     const lessonId = decodeURIComponent(progressMatch[1]);
-    const lesson = row(`SELECT lesson.id, lesson.title FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'`, [lessonId]);
+    const lesson = await arow(`SELECT lesson.id, lesson.title FROM course_lessons lesson JOIN course_series series ON series.id=lesson.series_id WHERE lesson.id=? AND lesson.status='PUBLISHED' AND series.status='PUBLISHED'`, [lessonId]);
     if (!lesson) throw errors.notFound('课时不存在或暂未开放', 'LESSON_NOT_FOUND');
-    const now = nowIso(); const existing = row('SELECT * FROM student_lesson_progress WHERE student_id=? AND lesson_id=?', [auth.user.id, lessonId]);
+    const now = nowIso(); const existing = await arow('SELECT * FROM student_lesson_progress WHERE student_id=? AND lesson_id=?', [auth.user.id, lessonId]);
     const status = progressMatch[2] === 'complete' ? 'COMPLETED' : (existing?.status === 'COMPLETED' ? 'COMPLETED' : 'IN_PROGRESS');
-    if (existing) q('UPDATE student_lesson_progress SET status=?, started_at=COALESCE(started_at,?), completed_at=?, last_accessed_at=?, updated_at=? WHERE id=?', [status, now, status === 'COMPLETED' ? now : existing.completed_at, now, now, existing.id]);
-    else q('INSERT INTO student_lesson_progress(id,student_id,org_id,lesson_id,status,started_at,completed_at,last_accessed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('lesson_progress'), auth.user.id, auth.user.orgId, lessonId, status, now, status === 'COMPLETED' ? now : null, now, now, now]);
-    audit(ctx, progressMatch[2] === 'complete' ? 'STUDENT_LESSON_COMPLETE' : 'STUDENT_LESSON_START', 'COURSE_LESSON', lessonId, existing, { status });
+    if (existing) await aq('UPDATE student_lesson_progress SET status=?, started_at=COALESCE(started_at,?), completed_at=?, last_accessed_at=?, updated_at=? WHERE id=?', [status, now, status === 'COMPLETED' ? now : existing.completed_at, now, now, existing.id]);
+    else await aq('INSERT INTO student_lesson_progress(id,student_id,org_id,lesson_id,status,started_at,completed_at,last_accessed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id('lesson_progress'), auth.user.id, auth.user.orgId, lessonId, status, now, status === 'COMPLETED' ? now : null, now, now, now]);
+    await audit(ctx, progressMatch[2] === 'complete' ? 'STUDENT_LESSON_COMPLETE' : 'STUDENT_LESSON_START', 'COURSE_LESSON', lessonId, existing, { status });
     return { lessonId, status, startedAt: existing?.started_at || now, completedAt: status === 'COMPLETED' ? now : (existing?.completed_at || null), lastAccessedAt: now };
   }
   if (part === '/courses' && method === 'GET') {
@@ -377,16 +377,16 @@ export async function handleStudent(ctx) {
     };
     const isFiltered = filters.difficulty || filters.ageMin || filters.ageMax || filters.tag || filters.search;
     if (isFiltered) {
-      return { items: getStudentAccessibleCourses(ctx.auth.rawUser, filters), filtered: true };
+      return { items: await getStudentAccessibleCourses(ctx.auth.rawUser, filters), filtered: true };
     }
-    return studentCourseOverview(ctx);
+    return await studentCourseOverview(ctx);
   }
   let courseDetailMatch = part.match(/^\/courses\/([^/]+)$/);
   if (courseDetailMatch && method === 'GET') {
     requireRole(ctx, ['STUDENT']);
-    const detail = getStudentCourseDetail(ctx.auth.rawUser, courseDetailMatch[1]);
+    const detail = await getStudentCourseDetail(ctx.auth.rawUser, courseDetailMatch[1]);
     // 课包详情里的课时也要带课堂状态，口径与「我的课程」完全一致（同一张 map）。
-    const stateByLesson = lessonStateMap(ctx.auth.rawUser);
+    const stateByLesson = await lessonStateMap(ctx.auth.rawUser);
     const lessons = (detail.lessons || []).map((lesson) => {
       const state = stateByLesson.get(lesson.id) || null;
       const classroomMode = state?.sessionMode || state?.lessonMode || lesson.deliveryMode || 'CANVAS';
@@ -407,7 +407,7 @@ export async function handleStudent(ctx) {
     });
     return { ...detail, lessons, hasGrant: true };
   }
-  if (part === '/account' && method === 'GET') return studentAccountOverview(ctx);
+  if (part === '/account' && method === 'GET') return await studentAccountOverview(ctx);
 
   // 2026-09-13：学员自助合规套件（改昵称/头像、监护人、隐私开关、协议同意、账号申请）已废掉，
   // 这些分支与其 helper 一并删除。**保留** /account（概览）、/account/password、
@@ -421,11 +421,11 @@ export async function handleStudent(ctx) {
     if (verifyPassword(newPassword, auth.rawUser.password_hash)) throw errors.badRequest('新密码不能与当前密码相同', 'PASSWORD_UNCHANGED');
     const now = nowIso();
     let sessionsRevoked = 0;
-    transaction(() => {
-      q('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND org_id = ?', [hashPassword(newPassword), now, auth.user.id, auth.user.orgId]);
-      sessionsRevoked = q('UPDATE sessions SET superseded_at = ? WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL', [now, auth.user.id, auth.user.orgId]).changes;
+    await atransaction(async () => {
+      await aq('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND org_id = ?', [hashPassword(newPassword), now, auth.user.id, auth.user.orgId]);
+      sessionsRevoked = (await aq('UPDATE sessions SET superseded_at = ? WHERE user_id = ? AND org_id = ? AND superseded_at IS NULL', [now, auth.user.id, auth.user.orgId])).changes;
     });
-    audit(ctx, 'STUDENT_PASSWORD_CHANGE', 'USER', auth.user.id, null, { sessionsRevoked });
+    await audit(ctx, 'STUDENT_PASSWORD_CHANGE', 'USER', auth.user.id, null, { sessionsRevoked });
     ctx.setCookie = clearAuthCookie();
     return { passwordChanged: true, sessionsRevoked, reloginRequired: true };
   }
@@ -433,11 +433,11 @@ export async function handleStudent(ctx) {
   const sessionMatch = part.match(/^\/account\/sessions\/([^/]+)\/revoke$/);
   if (sessionMatch && method === 'PUT') {
     assertCurrentPassword(ctx, ctx.body?.currentPassword);
-    const session = row('SELECT * FROM sessions WHERE id = ? AND user_id = ? AND org_id = ?', [sessionMatch[1], auth.user.id, auth.user.orgId]);
+    const session = await arow('SELECT * FROM sessions WHERE id = ? AND user_id = ? AND org_id = ?', [sessionMatch[1], auth.user.id, auth.user.orgId]);
     if (!session) throw errors.notFound('登录会话不存在', 'SESSION_NOT_FOUND');
     if (session.superseded_at || session.expires_at <= nowIso()) throw errors.conflict('登录会话已失效', 'SESSION_ALREADY_INVALID');
-    q('UPDATE sessions SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL', [nowIso(), session.id]);
-    audit(ctx, 'STUDENT_SESSION_REVOKE', 'SESSION', session.id);
+    await aq('UPDATE sessions SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL', [nowIso(), session.id]);
+    await audit(ctx, 'STUDENT_SESSION_REVOKE', 'SESSION', session.id);
     const current = session.id === ctx.auth.session.id;
     if (current) ctx.setCookie = clearAuthCookie();
     return { revoked: true, id: session.id, reloginRequired: current };
@@ -484,8 +484,8 @@ export async function handleStudent(ctx) {
        LEFT JOIN classes class ON class.id = project.class_id
        LEFT JOIN works work ON work.project_id = project.id
        WHERE ${where}`;
-    const total = Number(row(`SELECT COUNT(DISTINCT project.id) n ${fromWhere}`, params)?.n || 0);
-    const items = rows(
+    const total = Number((await arow(`SELECT COUNT(DISTINCT project.id) n ${fromWhere}`, params))?.n || 0);
+    const items = await amap((await arows(
       `SELECT project.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
               lesson.published_content AS lesson_published_content,
               series.id AS series_id, series.title AS series_title,
@@ -494,24 +494,24 @@ export async function handleStudent(ctx) {
        ${fromWhere}
        ORDER BY project.updated_at DESC LIMIT ? OFFSET ?`,
       [...params, limit, offset],
-    ).map((project) => normalizeProject(project));
+    )), async (project) => await normalizeProject(project));
     return { ...pageResult(items, { page, limit, total }), view };
   }
   if (part === '/projects' && method === 'POST') {
     const courseLessonId = nonEmptyString(ctx.body?.courseLessonId, '课时', { max: 100 });
-    const lessonContext = resolveStudentLessonContext(auth.rawUser, courseLessonId, ctx.body?.sessionId || null);
+    const lessonContext = await resolveStudentLessonContext(auth.rawUser, courseLessonId, ctx.body?.sessionId || null);
     if (!lessonContext.canUseNow) throw errors.forbidden(lessonContext.blockReason, lessonContext.blockCode);
     // 「进入课堂」= **幂等取得本场课堂的创作**：同一场课堂 + 同一个课时**只该有一个项目**，草稿优先、
     // 已提交的复用（画布只读）。
     // ⚠️ 这里以前只认 `status='DRAFT'`：学生提交作品之后本场课堂就"找不到项目"了 →
     //    客户端显示「进入课堂」→ 这里**新开一个空画布**（用户 2026-09-21 报的
     //    「点进入课堂还能进入到新画布，这个肯定是bug」）。已提交的项目要能被重新打开，而不是丢掉。
-    const existing = row(`SELECT id FROM student_projects
+    const existing = await arow(`SELECT id FROM student_projects
        WHERE student_id=? AND org_id=? AND course_lesson_id=? AND class_session_id=? AND deleted_at IS NULL
        ORDER BY (status='DRAFT') DESC, updated_at DESC LIMIT 1`, [auth.user.id, auth.user.orgId, courseLessonId, lessonContext.session.id]);
     if (existing) {
-      const project = normalizeProject(fetchProject(ctx, existing.id), { includeSnapshot: true });
-      project.computePool = computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
+      const project = await normalizeProject(await fetchProject(ctx, existing.id), { includeSnapshot: true });
+      project.computePool = await computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
       return project;
     }
     const now = nowIso();
@@ -523,8 +523,8 @@ export async function handleStudent(ctx) {
     const snapshot = normalizeCanvasSnapshot(
       template && Array.isArray(template.nodes) && template.nodes.length > 0 ? template : ctx.body?.canvasSnapshot,
     );
-    transaction(() => {
-      q(
+    await atransaction(async () => {
+      await aq(
         `INSERT INTO student_projects(
           id,student_id,org_id,class_id,class_session_id,course_lesson_id,title,status,canvas_snapshot,
           latest_version,last_saved_at,created_at,updated_at
@@ -532,24 +532,24 @@ export async function handleStudent(ctx) {
         // 2026-09-13（批次 B）：项目归属记「课堂」（class_id 列保留但不再写 —— 班级已退场）
         [projectId, auth.user.id, auth.user.orgId, null, lessonContext.session?.id || null, lessonContext.lesson.id, title, 'DRAFT', json(snapshot), 1, now, now, now],
       );
-      q(
+      await aq(
         `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
          VALUES (?,?,?,?,?,?,?)`,
         [id('snapshot'), projectId, 1, '初始版本', json(snapshot), auth.user.id, now],
       );
     });
-    audit(ctx, 'PROJECT_CREATE', 'STUDENT_PROJECT', projectId, null, { sessionId: lessonContext.session?.id || null, courseLessonId, title });
-    const createdProject = normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+    await audit(ctx, 'PROJECT_CREATE', 'STUDENT_PROJECT', projectId, null, { sessionId: lessonContext.session?.id || null, courseLessonId, title });
+    const createdProject = await normalizeProject(await fetchProject(ctx, projectId), { includeSnapshot: true });
     // 新建/复制也带上池子摘要：画布拿到项目就能显示「本课包还剩多少」，不必等下一次详情请求
-    createdProject.computePool = computePoolSummary({ userId: auth.user.id, seriesId: createdProject.seriesId, seriesTitle: createdProject.seriesTitle });
+    createdProject.computePool = await computePoolSummary({ userId: auth.user.id, seriesId: createdProject.seriesId, seriesTitle: createdProject.seriesTitle });
     return createdProject;
   }
 
   let match = part.match(/^\/projects\/([^/]+)$/);
   if (match && method === 'GET') {
-    const project = normalizeProject(getOwnProject(ctx, match[1]), { includeSnapshot: true });
+    const project = await normalizeProject(await getOwnProject(ctx, match[1]), { includeSnapshot: true });
     // 算力池摘要：学生一进课堂就能看到「本课包还剩多少」（与闸门同源，不是另算一个数）
-    project.computePool = computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
+    project.computePool = await computePoolSummary({ userId: auth.user.id, seriesId: project.seriesId, seriesTitle: project.seriesTitle });
     return project;
   }
 
@@ -558,9 +558,9 @@ export async function handleStudent(ctx) {
   // ⚠️ 没绑定课堂的老项目（class_session_id 为空）一律按"还在上课"处理：没有课堂可结束，不该把人踢出去。
   match = part.match(/^\/projects\/([^/]+)\/session-state$/);
   if (match && method === 'GET') {
-    const project = getOwnProject(ctx, match[1]);
+    const project = await getOwnProject(ctx, match[1]);
     const session = project.class_session_id
-      ? row('SELECT id,status,title,ended_at,ended_reason,ai_paused FROM class_sessions WHERE id=?', [project.class_session_id])
+      ? await arow('SELECT id,status,title,ended_at,ended_reason,ai_paused FROM class_sessions WHERE id=?', [project.class_session_id])
       : null;
     return {
       projectId: project.id,
@@ -580,8 +580,8 @@ export async function handleStudent(ctx) {
   //    同一个函数里 `match` 是复用的 —— 中间每插一条新路由，**后面用它的地方都要重新 match**。
   match = part.match(/^\/projects\/([^/]+)$/);
   if (match && method === 'PUT') {
-    const project = getOwnProject(ctx, match[1]);
-    assertProjectUsable(ctx, project);
+    const project = await getOwnProject(ctx, match[1]);
+    await assertProjectUsable(ctx, project);
     const body = ctx.body || {};
     if (body.title === undefined && body.canvasSnapshot === undefined && body.label === undefined) {
       throw errors.badRequest('请提交需要保存的项目内容', 'NO_PROJECT_CHANGES');
@@ -592,89 +592,89 @@ export async function handleStudent(ctx) {
     // 自动保存：只写当前画布，不递增版本号也不生成版本记录，避免刷新/连续改动把版本历史灌满。
     const autoSave = body.autoSave === true;
     let nextVersion = Number(project.latest_version || 1);
-    transaction(() => {
-      const fresh = getOwnProject(ctx, project.id);
-      assertProjectUsable(ctx, fresh);
+    await atransaction(async () => {
+      const fresh = await getOwnProject(ctx, project.id);
+      await assertProjectUsable(ctx, fresh);
       if (snapshot && autoSave) {
-        q(
+        await aq(
           `UPDATE student_projects SET title=?,canvas_snapshot=?,last_saved_at=?,updated_at=?
            WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
           [title, json(snapshot), now, now, fresh.id, auth.user.id, auth.user.orgId],
         );
       } else if (snapshot) {
         nextVersion = Number(fresh.latest_version || 1) + 1;
-        q(
+        await aq(
           `UPDATE student_projects SET title=?,canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?
            WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
           [title, json(snapshot), nextVersion, now, now, fresh.id, auth.user.id, auth.user.orgId],
         );
-        q(
+        await aq(
           `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
            VALUES (?,?,?,?,?,?,?)`,
           [id('snapshot'), fresh.id, nextVersion, body.label ? String(body.label).slice(0, 100) : `版本 ${nextVersion}`, json(snapshot), auth.user.id, now],
         );
       } else {
-        q(
+        await aq(
           "UPDATE student_projects SET title=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'",
           [title, now, fresh.id, auth.user.id, auth.user.orgId],
         );
       }
     });
-    audit(ctx, 'PROJECT_SAVE', 'STUDENT_PROJECT', project.id, { latestVersion: project.latest_version }, { title, latestVersion: nextVersion, hasCanvasSnapshot: Boolean(snapshot) });
-    return normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true });
+    await audit(ctx, 'PROJECT_SAVE', 'STUDENT_PROJECT', project.id, { latestVersion: project.latest_version }, { title, latestVersion: nextVersion, hasCanvasSnapshot: Boolean(snapshot) });
+    return await normalizeProject(await fetchProject(ctx, project.id), { includeSnapshot: true });
   }
 
   if (match && method === 'PATCH') {
-    const project = getOwnProject(ctx, match[1]);
+    const project = await getOwnProject(ctx, match[1]);
     const title = nonEmptyString(ctx.body?.title, '项目名称', { max: 100 });
     if (project.status !== 'DRAFT') throw errors.conflict('已提交或已评分项目不能重命名', 'PROJECT_NOT_RENAMABLE');
     const now = nowIso();
-    q(
+    await aq(
       "UPDATE student_projects SET title=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
       [title, now, project.id, auth.user.id, auth.user.orgId],
     );
-    audit(ctx, 'PROJECT_RENAME', 'STUDENT_PROJECT', project.id, { title: project.title }, { title });
-    return normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true });
+    await audit(ctx, 'PROJECT_RENAME', 'STUDENT_PROJECT', project.id, { title: project.title }, { title });
+    return await normalizeProject(await fetchProject(ctx, project.id), { includeSnapshot: true });
   }
 
   if (match && method === 'POST') {
     if (!ctx.body || ctx.body.action !== 'copy') throw errors.badRequest('不支持的项目操作', 'UNSUPPORTED_PROJECT_ACTION');
-    const project = getOwnProject(ctx, match[1]);
+    const project = await getOwnProject(ctx, match[1]);
     if (project.work_status === 'PUBLISHED') throw errors.conflict('已发布作品不能复制为可编辑草稿', 'PUBLISHED_WORK_NOT_COPYABLE');
     if (!project.canvas_snapshot) throw errors.conflict('项目画布内容缺失，不能复制', 'PROJECT_SNAPSHOT_REQUIRED');
-    const usageContext = resolveProjectUsageContext(auth.rawUser, project);
+    const usageContext = await resolveProjectUsageContext(auth.rawUser, project);
     if (!usageContext.canUseNow) throw errors.forbidden(usageContext.blockReason, usageContext.blockCode);
     const now = nowIso();
     const projectId = id('project');
     const title = `${String(project.title).slice(0, 96)} 副本`;
-    transaction(() => {
-      q(
+    await atransaction(async () => {
+      await aq(
         `INSERT INTO student_projects(
           id,student_id,org_id,class_id,course_lesson_id,title,status,canvas_snapshot,
           latest_version,last_saved_at,created_at,updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         [projectId, auth.user.id, auth.user.orgId, project.class_id, project.course_lesson_id, title, 'DRAFT', project.canvas_snapshot, 1, now, now, now],
       );
-      q(
+      await aq(
         `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
          VALUES (?,?,?,?,?,?,?)`,
         [id('snapshot'), projectId, 1, `复制自《${project.title}》`, project.canvas_snapshot, auth.user.id, now],
       );
     });
-    audit(ctx, 'PROJECT_COPY', 'STUDENT_PROJECT', projectId, null, { sourceProjectId: project.id, sourceVersion: Number(project.latest_version || 0), title });
-    const createdProject = normalizeProject(fetchProject(ctx, projectId), { includeSnapshot: true });
+    await audit(ctx, 'PROJECT_COPY', 'STUDENT_PROJECT', projectId, null, { sourceProjectId: project.id, sourceVersion: Number(project.latest_version || 0), title });
+    const createdProject = await normalizeProject(await fetchProject(ctx, projectId), { includeSnapshot: true });
     // 新建/复制也带上池子摘要：画布拿到项目就能显示「本课包还剩多少」，不必等下一次详情请求
-    createdProject.computePool = computePoolSummary({ userId: auth.user.id, seriesId: createdProject.seriesId, seriesTitle: createdProject.seriesTitle });
+    createdProject.computePool = await computePoolSummary({ userId: auth.user.id, seriesId: createdProject.seriesId, seriesTitle: createdProject.seriesTitle });
     return createdProject;
   }
 
   if (match && method === 'DELETE') {
     const view = ctx.search.get('view');
     const includeArchived = view === 'ARCHIVED' || view === 'DELETED';
-    const project = getOwnProject(ctx, match[1], { includeArchived });
+    const project = await getOwnProject(ctx, match[1], { includeArchived });
     const action = ctx.search.get('mode') || 'ARCHIVE';
     if (!['ARCHIVE', 'DELETE'].includes(action)) throw errors.badRequest('无效的删除模式', 'INVALID_PROJECT_DELETE_MODE');
-    assertTransition(ctx, 'studentProject', project.status, 'ARCHIVED', {
+    await assertTransition(ctx, 'studentProject', project.status, 'ARCHIVED', {
       targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status, deletedAt: project.deleted_at || null },
       code: 'INVALID_PROJECT_TRANSITION', message: '已提交或已评分项目不能删除或归档', details: { action },
     });
@@ -689,26 +689,26 @@ export async function handleStudent(ctx) {
 
     if (action === 'DELETE') {
       const restoreDeadline = new Date(new Date(now).getTime() + PROJECT_DELETE_RESTORE_DAYS * 86400_000).toISOString();
-      q(
+      await aq(
         "UPDATE student_projects SET status='ARCHIVED',archived_at=COALESCE(archived_at,?),deleted_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
         [now, now, now, project.id, auth.user.id, auth.user.orgId],
       );
-      audit(ctx, 'PROJECT_SOFT_DELETE', 'STUDENT_PROJECT', project.id, { title: project.title }, { restoreDeadline });
+      await audit(ctx, 'PROJECT_SOFT_DELETE', 'STUDENT_PROJECT', project.id, { title: project.title }, { restoreDeadline });
       return { deleted: true, id: project.id, restoreDays: PROJECT_DELETE_RESTORE_DAYS, restoreDeadline };
     }
-    q(
+    await aq(
       "UPDATE student_projects SET status='ARCHIVED',archived_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
       [now, now, project.id, auth.user.id, auth.user.orgId],
     );
-    audit(ctx, 'PROJECT_ARCHIVE', 'STUDENT_PROJECT', project.id);
+    await audit(ctx, 'PROJECT_ARCHIVE', 'STUDENT_PROJECT', project.id);
     return { archived: true, id: project.id };
   }
   match = part.match(/^\/projects\/([^/]+)\/snapshots$/);
   if (match && method === 'GET') {
-    const project = getOwnProject(ctx, match[1]);
+    const project = await getOwnProject(ctx, match[1]);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
-    const total = Number(row('SELECT COUNT(*) n FROM project_snapshots WHERE project_id = ?', [project.id])?.n || 0);
-    const items = rows(
+    const total = Number((await arow('SELECT COUNT(*) n FROM project_snapshots WHERE project_id = ?', [project.id]))?.n || 0);
+    const items = await arows(
       `SELECT snapshot.id, snapshot.project_id, snapshot.version, snapshot.label,
               snapshot.actor_id, snapshot.created_at, actor.display_name AS actor_name
        FROM project_snapshots snapshot
@@ -730,14 +730,14 @@ export async function handleStudent(ctx) {
 
   match = part.match(/^\/projects\/([^/]+)\/snapshots\/(\d+)$/);
   if (match && method === 'PUT') {
-    const project = getOwnProject(ctx, match[1]);
+    const project = await getOwnProject(ctx, match[1]);
     assertDraft(project);
     const version = Number(match[2]);
     const label = nonEmptyString(ctx.body?.label, '版本名称', { max: 100 });
-    const snapshot = row('SELECT * FROM project_snapshots WHERE project_id = ? AND version = ?', [project.id, version]);
+    const snapshot = await arow('SELECT * FROM project_snapshots WHERE project_id = ? AND version = ?', [project.id, version]);
     if (!snapshot) throw errors.notFound('项目版本不存在', 'PROJECT_SNAPSHOT_NOT_FOUND');
-    q('UPDATE project_snapshots SET label = ? WHERE project_id = ? AND version = ?', [label, project.id, version]);
-    audit(ctx, 'PROJECT_SNAPSHOT_LABEL', 'PROJECT_SNAPSHOT', snapshot.id, { label: snapshot.label || null }, { label, version });
+    await aq('UPDATE project_snapshots SET label = ? WHERE project_id = ? AND version = ?', [label, project.id, version]);
+    await audit(ctx, 'PROJECT_SNAPSHOT_LABEL', 'PROJECT_SNAPSHOT', snapshot.id, { label: snapshot.label || null }, { label, version });
     return {
       id: snapshot.id,
       projectId: snapshot.project_id,
@@ -749,8 +749,8 @@ export async function handleStudent(ctx) {
   }
 
   if (match && method === 'GET') {
-    const project = getOwnProject(ctx, match[1]);
-    const snapshot = row('SELECT snapshot.*, actor.display_name AS actor_name FROM project_snapshots snapshot LEFT JOIN users actor ON actor.id = snapshot.actor_id WHERE snapshot.project_id = ? AND snapshot.version = ?', [project.id, Number(match[2])]);
+    const project = await getOwnProject(ctx, match[1]);
+    const snapshot = await arow('SELECT snapshot.*, actor.display_name AS actor_name FROM project_snapshots snapshot LEFT JOIN users actor ON actor.id = snapshot.actor_id WHERE snapshot.project_id = ? AND snapshot.version = ?', [project.id, Number(match[2])]);
     if (!snapshot) throw errors.notFound('项目版本不存在', 'PROJECT_SNAPSHOT_NOT_FOUND');
     return {
       id: snapshot.id, projectId: snapshot.project_id, version: Number(snapshot.version), label: snapshot.label || null,
@@ -761,24 +761,24 @@ export async function handleStudent(ctx) {
 
   match = part.match(/^\/projects\/([^/]+)\/archive$/);
   if (match && method === 'POST') {
-    const project = getOwnProject(ctx, match[1]);
-    assertTransition(ctx, 'studentProject', project.status, 'ARCHIVED', {
+    const project = await getOwnProject(ctx, match[1]);
+    await assertTransition(ctx, 'studentProject', project.status, 'ARCHIVED', {
       targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status },
       code: 'INVALID_PROJECT_TRANSITION', message: '已提交或已评分项目不能归档', details: { action: 'archive' },
     });
     const now = nowIso();
-    q(
+    await aq(
       "UPDATE student_projects SET status='ARCHIVED',archived_at=?,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT' AND deleted_at IS NULL",
       [now, now, project.id, auth.user.id, auth.user.orgId],
     );
-    audit(ctx, 'PROJECT_ARCHIVE', 'STUDENT_PROJECT', project.id, { status: project.status }, { status: 'ARCHIVED' });
+    await audit(ctx, 'PROJECT_ARCHIVE', 'STUDENT_PROJECT', project.id, { status: project.status }, { status: 'ARCHIVED' });
     return { archived: true, id: project.id };
   }
 
   match = part.match(/^\/projects\/([^/]+)\/restore$/);
   if (match && method === 'POST') {
-    const project = getOwnProject(ctx, match[1], { includeArchived: true, includeDeleted: true });
-    assertTransition(ctx, 'studentProject', project.status, 'DRAFT', {
+    const project = await getOwnProject(ctx, match[1], { includeArchived: true, includeDeleted: true });
+    await assertTransition(ctx, 'studentProject', project.status, 'DRAFT', {
       targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status, deletedAt: project.deleted_at || null },
       code: 'INVALID_PROJECT_TRANSITION', message: '只有归档或已删除草稿可以恢复', details: { action: 'restore' },
     });
@@ -786,28 +786,28 @@ export async function handleStudent(ctx) {
     if (project.deleted_at) {
       const deadline = new Date(new Date(project.deleted_at).getTime() + PROJECT_DELETE_RESTORE_DAYS * 86400_000);
       if (deadline.getTime() <= Date.now()) throw errors.conflict('项目已超过 30 天恢复期，不能恢复', 'PROJECT_RESTORE_EXPIRED');
-      q(
+      await aq(
         "UPDATE student_projects SET deleted_at=NULL,status='DRAFT',updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='ARCHIVED'",
         [now, project.id, auth.user.id, auth.user.orgId],
       );
-      audit(ctx, 'PROJECT_RESTORE', 'STUDENT_PROJECT', project.id, { deletedAt: project.deleted_at }, { status: 'DRAFT' });
-      return normalizeProject(fetchProject(ctx, project.id, { includeDeleted: true }), { includeSnapshot: true });
+      await audit(ctx, 'PROJECT_RESTORE', 'STUDENT_PROJECT', project.id, { deletedAt: project.deleted_at }, { status: 'DRAFT' });
+      return await normalizeProject(await fetchProject(ctx, project.id, { includeDeleted: true }), { includeSnapshot: true });
     }
-    q(
+    await aq(
       "UPDATE student_projects SET status='DRAFT',archived_at=NULL,updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='ARCHIVED' AND deleted_at IS NULL",
       [now, project.id, auth.user.id, auth.user.orgId],
     );
-    audit(ctx, 'PROJECT_RESTORE', 'STUDENT_PROJECT', project.id, { status: 'ARCHIVED' }, { status: 'DRAFT' });
-    return normalizeProject(fetchProject(ctx, project.id, { includeDeleted: true }), { includeSnapshot: true });
+    await audit(ctx, 'PROJECT_RESTORE', 'STUDENT_PROJECT', project.id, { status: 'ARCHIVED' }, { status: 'DRAFT' });
+    return await normalizeProject(await fetchProject(ctx, project.id, { includeDeleted: true }), { includeSnapshot: true });
   }
   match = part.match(/^\/projects\/([^/]+)\/submit$/);
   if (match && method === 'POST') {
-    const project = getOwnProject(ctx, match[1]);
-    assertTransition(ctx, 'studentProject', project.status, 'SUBMITTED', {
+    const project = await getOwnProject(ctx, match[1]);
+    await assertTransition(ctx, 'studentProject', project.status, 'SUBMITTED', {
       targetType: 'STUDENT_PROJECT', targetId: project.id, before: { status: project.status },
       code: 'INVALID_PROJECT_TRANSITION', message: '项目已提交，不能重复提交', details: { action: 'submit' },
     });
-    assertProjectUsable(ctx, project);
+    await assertProjectUsable(ctx, project);
     if (ctx.body?.copyrightConfirmed !== true) {
       throw errors.badRequest('提交前请确认作品版权与机构内展示授权', 'WORK_COPYRIGHT_CONFIRMATION_REQUIRED');
     }
@@ -819,40 +819,40 @@ export async function handleStudent(ctx) {
     let workId = id('work');
     let round = 1;
     let resubmission = false;
-    const priorWork = row('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [project.id, auth.user.id, auth.user.orgId]);
-    if (priorWork) assertTransition(ctx, 'work', priorWork.status, 'PENDING', {
-      targetType: 'WORK', targetId: priorWork.id, before: normalizeWork(priorWork), code: 'INVALID_WORK_TRANSITION',
+    const priorWork = await arow('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [project.id, auth.user.id, auth.user.orgId]);
+    if (priorWork) await assertTransition(ctx, 'work', priorWork.status, 'PENDING', {
+      targetType: 'WORK', targetId: priorWork.id, before: await normalizeWork(priorWork), code: 'INVALID_WORK_TRANSITION',
       message: '当前作品状态不允许重新提交', details: { action: 'resubmit' },
     });
-    transaction(() => {
-      const fresh = getOwnProject(ctx, project.id);
+    await atransaction(async () => {
+      const fresh = await getOwnProject(ctx, project.id);
       if (fresh.status !== 'DRAFT') throw errors.conflict('项目已提交，不能重复提交', 'ALREADY_SUBMITTED');
-      assertProjectUsable(ctx, fresh);
-      const existingWork = row('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [fresh.id, auth.user.id, auth.user.orgId]);
+      await assertProjectUsable(ctx, fresh);
+      const existingWork = await arow('SELECT * FROM works WHERE project_id=? AND student_id=? AND org_id=?', [fresh.id, auth.user.id, auth.user.orgId]);
       if (requestedSnapshot) {
         canvasSnapshot = requestedSnapshot;
         latestVersion = Number(fresh.latest_version || 1) + 1;
-        q(
+        await aq(
           `UPDATE student_projects SET status='SUBMITTED',canvas_snapshot=?,latest_version=?,last_saved_at=?,updated_at=?
            WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'`,
           [json(canvasSnapshot), latestVersion, now, now, fresh.id, auth.user.id, auth.user.orgId],
         );
-        q(
+        await aq(
           `INSERT INTO project_snapshots(id,project_id,version,label,canvas_snapshot,actor_id,created_at)
            VALUES (?,?,?,?,?,?,?)`,
           [id('snapshot'), fresh.id, latestVersion, '提交版本', json(canvasSnapshot), auth.user.id, now],
         );
       } else {
-        q(
+        await aq(
           "UPDATE student_projects SET status='SUBMITTED',updated_at=? WHERE id=? AND student_id=? AND org_id=? AND status='DRAFT'",
           [now, fresh.id, auth.user.id, auth.user.orgId],
         );
       }
       if (existingWork) {
         resubmission = true;
-        const latestSubmission = row('SELECT round FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [existingWork.id]);
+        const latestSubmission = await arow('SELECT round FROM work_submissions WHERE work_id=? ORDER BY round DESC LIMIT 1', [existingWork.id]);
         round = Number(latestSubmission?.round || 0) + 1;
-        q(
+        await aq(
           `UPDATE works SET title=?,description=?,canvas_snapshot=?,status='PENDING',teacher_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,
              featured_at=NULL,featured_by=NULL,featured_reason=NULL,unpublish_reason=NULL,unpublished_at=NULL,submitted_at=?
            WHERE id=? AND project_id=? AND student_id=? AND org_id=?`,
@@ -860,7 +860,7 @@ export async function handleStudent(ctx) {
         );
         workId = existingWork.id;
       } else {
-        q(
+        await aq(
           // 批次 D：作品也要带上**课堂**（class_session_id）—— 教师的作品数据范围现在按
           // 「这个作品挂在我创建的哪节课的课堂上」圈定（班级退场后不再有 work.class_id 这一层）。
           // 忘了带这一列的表现是「教师静默看不到任何作品」，所以提交时就从项目上抄一份。
@@ -871,34 +871,34 @@ export async function handleStudent(ctx) {
         );
       }
       // 用量报表按 work_id 关联作品（works.project_id 唯一）；生成发生在提交之前，只能在这里回填
-      q(
+      await aq(
         'UPDATE usage_records SET work_id=? WHERE project_id=? AND org_id=? AND user_id=?',
         [workId, fresh.id, auth.user.orgId, auth.user.id],
       );
-      q(
+      await aq(
         `INSERT INTO work_submissions(
           id,work_id,project_id,student_id,org_id,round,title,description,canvas_snapshot,snapshot_version,submitted_at,created_at,updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id('submission'), workId, fresh.id, auth.user.id, fresh.org_id, round, fresh.title, description, json(canvasSnapshot), latestVersion, now, now, now],
       );
     });
-    audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id, round, resubmission }, { description, round, resubmission });
+    await audit(ctx, 'PROJECT_SUBMIT', 'WORK', workId, { projectId: project.id, round, resubmission }, { description, round, resubmission });
     return {
-      project: normalizeProject(fetchProject(ctx, project.id), { includeSnapshot: true }),
-      work: decorateWork(normalizeWork(fetchWork(ctx, workId), { includeSnapshot: true }), ctx, { includeSubmissions: true }),
+      project: await normalizeProject(await fetchProject(ctx, project.id), { includeSnapshot: true }),
+      work: await decorateWork(await normalizeWork(await fetchWork(ctx, workId), { includeSnapshot: true }), ctx, { includeSubmissions: true }),
     };
   }
 
   match = part.match(/^\/works\/([^/]+)\/submissions$/);
   if (match && method === 'GET') {
-    const work = getOwnWork(ctx, match[1]);
-    return { items: workSubmissionRows(work.id).get(work.id) || [], submissionRound: currentSubmissionRound(work.id) };
+    const work = await getOwnWork(ctx, match[1]);
+    return { items: (await workSubmissionRows(work.id)).get(work.id) || [], submissionRound: await currentSubmissionRound(work.id) };
   }
 
 
   match = part.match(/^\/works\/([^/]+)\/public$/);
   if (match && method === 'PUT') {
-    const work = getOwnWork(ctx, match[1]);
+    const work = await getOwnWork(ctx, match[1]);
     if (typeof ctx.body?.isPublic !== 'boolean') {
       throw errors.badRequest('isPublic 必须为布尔值', 'INVALID_IS_PUBLIC');
     }
@@ -915,14 +915,14 @@ export async function handleStudent(ctx) {
     if (ctx.body.isPublic && !shareToken) {
       // 生成唯一 share_token（16 字符十六进制）
       shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
-      while (row('SELECT id FROM works WHERE share_token=?', [shareToken])) {
+      while (await arow('SELECT id FROM works WHERE share_token=?', [shareToken])) {
         shareToken = 'wst_' + randomUUID().replace(/-/g, '').slice(0, 24);
       }
     } else if (!ctx.body.isPublic) {
       shareToken = null;
     }
-    q('UPDATE works SET is_public=?,share_token=? WHERE id=?', [ctx.body.isPublic ? 1 : 0, shareToken, work.id]);
-    audit(ctx, ctx.body.isPublic ? 'WORK_PUBLIC_OPEN' : 'WORK_PUBLIC_CLOSE', 'WORK', work.id,
+    await aq('UPDATE works SET is_public=?,share_token=? WHERE id=?', [ctx.body.isPublic ? 1 : 0, shareToken, work.id]);
+    await audit(ctx, ctx.body.isPublic ? 'WORK_PUBLIC_OPEN' : 'WORK_PUBLIC_CLOSE', 'WORK', work.id,
       { isPublic: Boolean(work.is_public), shareToken: work.share_token },
       { isPublic: ctx.body.isPublic, shareToken }, { orgId: work.org_id });
     return { id: work.id, isPublic: ctx.body.isPublic, shareToken };
@@ -930,7 +930,7 @@ export async function handleStudent(ctx) {
 
   match = part.match(/^\/works\/([^/]+)$/);
   if (match && method === 'GET') {
-    const work = row(
+    const work = await arow(
       `SELECT work.*, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title, reviewer.display_name AS reviewer_name
        FROM works work
        LEFT JOIN classes class ON class.id=work.class_id AND class.org_id=work.org_id
@@ -940,7 +940,7 @@ export async function handleStudent(ctx) {
       [match[1], auth.user.id, auth.user.orgId],
     );
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
-    return decorateWork(normalizeWork(work, { includeSnapshot: true }), ctx, { includeSubmissions: true });
+    return await decorateWork(await normalizeWork(work, { includeSnapshot: true }), ctx, { includeSubmissions: true });
   }
 
   // 学生看**自己**的作品（画布快照 / VibeCoding 产物）—— 「我的作品」点开一件用这个。
@@ -953,15 +953,15 @@ export async function handleStudent(ctx) {
   if (match && method === 'GET') {
     const [, source, workId] = match;
     const work = source === 'CANVAS'
-      ? row('SELECT * FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId])
-      : row('SELECT * FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
+      ? await arow('SELECT * FROM works WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId])
+      : await arow('SELECT * FROM vibecoding_submissions WHERE id=? AND student_id=? AND org_id=?', [workId, auth.user.id, auth.user.orgId]);
     if (!work) throw errors.notFound('作品不存在', 'WORK_NOT_FOUND');
     const isPublic = Number(work.is_public || 0) === 1;
     // 课包 / 课时：学生要一眼看出这件作品是哪门课哪一节的（用户口径 2026-09-20）。
     // 两类来源的外键名不同（画布是 course_lesson_id，VibeCoding 是 lesson_id），在这里归一。
     const lessonId = source === 'CANVAS' ? work.course_lesson_id : work.lesson_id;
     const lessonRow = lessonId
-      ? row(`SELECT COALESCE(lesson.published_title, lesson.title) AS lesson_title, series.title AS series_title
+      ? await arow(`SELECT COALESCE(lesson.published_title, lesson.title) AS lesson_title, series.title AS series_title
              FROM course_lessons lesson LEFT JOIN course_series series ON series.id = lesson.series_id
              WHERE lesson.id = ?`, [lessonId])
       : null;
@@ -982,7 +982,7 @@ export async function handleStudent(ctx) {
       publicUrl: isPublic && work.share_token ? `/works/${work.share_token}` : null,
     };
     if (source === 'CANVAS') {
-      const canvasSnapshot = normalizeWork(work, { includeSnapshot: true }).canvasSnapshot;
+      const canvasSnapshot = (await normalizeWork(work, { includeSnapshot: true })).canvasSnapshot;
       // 画布上挂的素材（图/视频）也要给前端一份「fileId → 地址」：那两个标签发不出 Authorization 头，
       // 前端要拿它统一转成 data:（见 lib 的 readToken 注释）。
       // 与 org 端**同一条提取规则**：只认 previewUrl / assetUrl / referenceUrl 三个字段，
@@ -1054,8 +1054,8 @@ export async function handleStudent(ctx) {
       return name ? name.slice(0, 1) + '同学' : '小创作者';
     };
     const where = conditions.join(' AND ');
-    const total = Number(row(`SELECT COUNT(1) AS total FROM works work LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE ${where}`, params).total || 0);
-    const filterOptions = rows(
+    const total = Number((await arow(`SELECT COUNT(1) AS total FROM works work LEFT JOIN course_lessons lesson ON lesson.id=work.course_lesson_id WHERE ${where}`, params)).total || 0);
+    const filterOptions = await arows(
       `SELECT class.id AS class_id, class.name AS class_name, lesson.id AS lesson_id, COALESCE(lesson.published_title, lesson.title) AS lesson_title, lesson.sort AS lesson_sort, COUNT(work.id) AS work_count
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
@@ -1081,7 +1081,7 @@ export async function handleStudent(ctx) {
         else accumulator.push({ id: item.lesson_id, title: item.lesson_title, workCount: Number(item.work_count || 0) });
         return accumulator;
       }, []);
-    const items = rows(
+    const items = await amap((await arows(
       `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
@@ -1090,8 +1090,8 @@ export async function handleStudent(ctx) {
        WHERE ${where}
        ORDER BY CASE WHEN work.featured_at IS NULL THEN 1 ELSE 0 END, work.featured_at DESC, work.reviewed_at DESC, work.submitted_at DESC LIMIT ? OFFSET ?`,
       [...params, pageSize, (page - 1) * pageSize],
-    ).map((work) => {
-      const normalized = normalizeWork(work, { includeSnapshot: false });
+    )), async (work) => {
+      const normalized = await normalizeWork(work, { includeSnapshot: false });
       return {
         ...normalized,
         studentName: publicName(work.student_name, !!work.student_anonymous),
@@ -1122,24 +1122,24 @@ export async function handleStudent(ctx) {
 
   match = part.match(/^\/showcase\/([^/]+)\/reports$/);
   if (match && method === 'POST') {
-    const work = row("SELECT * FROM works WHERE id=? AND org_id=? AND status='PUBLISHED'", [match[1], auth.user.orgId]);
+    const work = await arow("SELECT * FROM works WHERE id=? AND org_id=? AND status='PUBLISHED'", [match[1], auth.user.orgId]);
     if (!work) throw errors.notFound('已发布作品不存在', 'SHOWCASE_WORK_NOT_FOUND');
     if (work.student_id === auth.user.id) throw errors.forbidden('不能举报自己的作品', 'CANNOT_REPORT_OWN_WORK');
     const category = String(ctx.body?.category || '');
     if (!['INAPPROPRIATE', 'COPYRIGHT', 'PRIVACY', 'OTHER'].includes(category)) throw errors.badRequest('举报类型无效', 'INVALID_WORK_REPORT_CATEGORY');
     const details = String(ctx.body?.details || '').trim();
     if (details.length > 1000) throw errors.badRequest('举报说明不能超过 1000 个字符', 'WORK_REPORT_DETAILS_TOO_LONG');
-    const duplicate = row("SELECT id FROM work_reports WHERE work_id=? AND reporter_id=? AND status='PENDING'", [work.id, auth.user.id]);
+    const duplicate = await arow("SELECT id FROM work_reports WHERE work_id=? AND reporter_id=? AND status='PENDING'", [work.id, auth.user.id]);
     if (duplicate) throw errors.conflict('你已提交过该作品的待处理举报', 'WORK_REPORT_ALREADY_PENDING');
     const reportId = id('work_report'); const now = nowIso();
-    q('INSERT INTO work_reports(id,work_id,org_id,reporter_id,category,details,status,created_at) VALUES (?,?,?,?,?,?,?,?)', [reportId, work.id, work.org_id, auth.user.id, category, details, 'PENDING', now]);
-    audit(ctx, 'WORK_REPORT_CREATE', 'WORK_REPORT', reportId, null, { workId: work.id, category }, { orgId: work.org_id });
-    return normalizeWorkReport(row('SELECT * FROM work_reports WHERE id=?', [reportId]));
+    await aq('INSERT INTO work_reports(id,work_id,org_id,reporter_id,category,details,status,created_at) VALUES (?,?,?,?,?,?,?,?)', [reportId, work.id, work.org_id, auth.user.id, category, details, 'PENDING', now]);
+    await audit(ctx, 'WORK_REPORT_CREATE', 'WORK_REPORT', reportId, null, { workId: work.id, category }, { orgId: work.org_id });
+    return normalizeWorkReport(await arow('SELECT * FROM work_reports WHERE id=?', [reportId]));
   }
 
   match = part.match(/^\/showcase\/([^/]+)$/);
   if (match && method === 'GET') {
-    const work = row(
+    const work = await arow(
       `SELECT work.*, student.display_name AS student_name, student.privacy_showcase_anonymous AS student_anonymous, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title
        FROM works work
        JOIN users student ON student.id=work.student_id AND student.org_id=work.org_id
@@ -1149,7 +1149,7 @@ export async function handleStudent(ctx) {
       [match[1], auth.user.orgId],
     );
     if (!work) throw errors.notFound('已发布作品不存在', 'SHOWCASE_WORK_NOT_FOUND');
-    const normalized = normalizeWork(work, { includeSnapshot: true });
+    const normalized = await normalizeWork(work, { includeSnapshot: true });
     return {
       ...normalized,
       studentName: work.student_anonymous ? '小创作者' : (String(work.student_name || '').trim().slice(0, 1) + '同学' || '小创作者'),
@@ -1179,17 +1179,17 @@ export async function handleStudent(ctx) {
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20 });
     // 学生的作品有两个来源：画布作品（works）与 VibeCoding 产物（vibecoding_submissions，按产物各成一条）。
     // 只列其中一半会让「我的作品」跟学生真实做过的东西对不上，所以这里合并后再排序分页。
-    const workRowCount = Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId])?.n || 0);
-    const submissionRowCount = Number(row('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId])?.n || 0);
+    const workRowCount = Number((await arow('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId]))?.n || 0);
+    const submissionRowCount = Number((await arow('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=?', [auth.user.id, auth.user.orgId]))?.n || 0);
     // 汇总口径跨页，且必须按**两类来源相加**，不能只数画布作品
     const summary = {
       total: workRowCount + submissionRowCount,
-      published: Number(row('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId])?.n || 0)
-        + Number(row('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId])?.n || 0),
-      withFeedback: Number(row("SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND teacher_comment IS NOT NULL AND teacher_comment <> ''", [auth.user.id, auth.user.orgId])?.n || 0),
+      published: Number((await arow('SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId]))?.n || 0)
+        + Number((await arow('SELECT COUNT(*) n FROM vibecoding_submissions WHERE student_id=? AND org_id=? AND is_public=1', [auth.user.id, auth.user.orgId]))?.n || 0),
+      withFeedback: Number((await arow("SELECT COUNT(*) n FROM works WHERE student_id=? AND org_id=? AND teacher_comment IS NOT NULL AND teacher_comment <> ''", [auth.user.id, auth.user.orgId]))?.n || 0),
     };
     // 两类来源要合并后统一排序分页，所以这里**不能**先在 SQL 里分页（否则 total 与 items 都会少一半）。
-    const rawItems = rows(
+    const rawItems = await arows(
       `SELECT work.*, class.name AS class_name, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
               series.title AS series_title, reviewer.display_name AS reviewer_name
        FROM works work
@@ -1201,14 +1201,14 @@ export async function handleStudent(ctx) {
        ORDER BY work.submitted_at DESC`,
       [auth.user.id, auth.user.orgId],
     );
-    const submissionsByWork = workSubmissionRows(rawItems.map((work) => work.id));
-    const items = rawItems.map((work) => {
-      const normalized = normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' });
+    const submissionsByWork = await workSubmissionRows(rawItems.map((work) => work.id));
+    const items = await amap(rawItems, async (work) => {
+      const normalized = await normalizeWork(work, { includeSnapshot: ctx.search.get('includeSnapshot') === 'true' });
       const submissions = submissionsByWork.get(work.id) || [];
       const submissionRound = submissions[0]?.round || 0;
-      const publishRequests = rows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id]).map(normalizeWorkPublishRequest);
+      const publishRequests = (await arows('SELECT * FROM work_publish_requests WHERE work_id=? ORDER BY requested_at DESC', [work.id])).map(normalizeWorkPublishRequest);
       const pendingPublishRequest = publishRequests.find((item) => item.status === 'PENDING') || null;
-      const project = row('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.project_id, ctx.auth.user.id, ctx.auth.user.orgId]);
+      const project = await arow('SELECT id,status,deleted_at FROM student_projects WHERE id=? AND student_id=? AND org_id=?', [work.project_id, ctx.auth.user.id, ctx.auth.user.orgId]);
       return {
         ...normalized,
         source: 'CANVAS',
@@ -1238,7 +1238,7 @@ export async function handleStudent(ctx) {
       };
     });
     // VibeCoding 产物：按「产物」各成一条（与课堂作品、提交口径一致），映射成同一种作品形状。
-    const vibeItems = rows(
+    const vibeItems = (await arows(
       `SELECT submission.*, COALESCE(lesson.published_title, lesson.title) AS lesson_title,
               series.title AS series_title, conversation.class_session_id AS class_session_id
        FROM vibecoding_submissions submission
@@ -1247,7 +1247,7 @@ export async function handleStudent(ctx) {
        LEFT JOIN vibecoding_conversations conversation ON conversation.id = submission.conversation_id
        WHERE submission.student_id = ? AND submission.org_id = ?`,
       [auth.user.id, auth.user.orgId],
-    ).map((submission) => {
+    )).map((submission) => {
       const isPublic = Number(submission.is_public || 0) === 1;
       return {
         id: submission.id,

@@ -5,7 +5,12 @@ import { DatabaseSync } from 'node:sqlite';
 const helperSource = fs.readFileSync(new URL('../apps/server/src/routes/admin/helpers.js', import.meta.url), 'utf8');
 const routeSource = fs.readFileSync(new URL('../apps/server/src/routes/admin/works.js', import.meta.url), 'utf8');
 const pageSource = fs.readFileSync(new URL('../apps/admin/src/pages/PlatformWorks.jsx', import.meta.url), 'utf8');
-const helper = helperSource.slice(helperSource.indexOf('function platformWorkFilters('), helperSource.indexOf('\nfunction buildOrganizationDetail('));
+// 2026-09-23 RDS 阶段 1：被切出来的这两个函数现在是 `async function`（它们要访问数据库），
+// 所以结束标记要容 `async `；否则 indexOf 返回 -1、slice 会一路切到文件末尾（把 export { 也切进去）。
+const helper = helperSource.slice(
+  helperSource.indexOf('function platformWorkFilters('),
+  (() => { const m = helperSource.match(/\n(?:async )?function buildOrganizationDetail\(/); return m ? m.index : -1; })(),
+);
 const platformWorkFilters = new Function(`${helper}; return platformWorkFilters;`)();
 const db = new DatabaseSync(':memory:'); db.exec('PRAGMA busy_timeout = 5000');
 db.exec(`
@@ -37,11 +42,19 @@ for (const [id, student, org, lesson, status, published, reason] of [
 }
 const rows = (sql, params = []) => db.prepare(sql).all(...params);
 const row = (sql, params = []) => db.prepare(sql).get(...params);
+// 2026-09-23 RDS 阶段 1：数据访问改异步（row/rows/q/transaction → arow/arows/aq/atransaction）。
+// 这个脚本是把服务器函数**从源码里切出来、注入假依赖**跑单测，所以异步名也要一并注入；
+// 假实现就是同步那套的 async 外壳（与 packages/database/src/schema.js 转换期完全同构）。
+const arows = async (sql, params = []) => rows(sql, params);
+const arow = async (sql, params = []) => row(sql, params);
+const aq = async (sql, params = []) => db.prepare(sql).run(...params);
+const amap = async (list, fn) => { const out = []; for (let i = 0; i < list.length; i += 1) out.push(await fn(list[i], i, list)); return out; };
+const atransaction = async (fn) => { db.exec('BEGIN IMMEDIATE'); try { const result = await fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
 const requireRole = (ctx) => assert.equal(ctx.role, 'SUPER_ADMIN');
 const normalize = (value) => ({ id: value.id, title: value.title });
 const integer = (value, label, opts) => value ? Number(value) : opts.fallback;
-const route = new Function('platformWorkFilters', 'rows', 'row', 'requireRole', 'integer', 'normalizeWork', 'normalizeSubmission', 'csvDocument', 'csvFileName', 'audit', routeSource.slice(routeSource.indexOf('export async function handleWorks')).replace('export async function', 'async function') + '; return handleWorks;')(
-  platformWorkFilters, rows, row, requireRole, integer, normalize, normalize, (headers, items) => JSON.stringify(items), () => 'works.csv', () => {},
+const route = new Function('platformWorkFilters', 'rows', 'row', 'arow', 'arows', 'aq', 'atransaction', 'amap', 'requireRole', 'integer', 'normalizeWork', 'normalizeSubmission', 'csvDocument', 'csvFileName', 'audit', routeSource.slice(routeSource.indexOf('export async function handleWorks')).replace('export async function', 'async function') + '; return handleWorks;')(
+  platformWorkFilters, rows, row, arow, arows, aq, atransaction, amap, requireRole, integer, normalize, normalize, (headers, items) => JSON.stringify(items), () => 'works.csv', () => {},
 );
 const query = (path, filters = {}, role = 'SUPER_ADMIN') => route({ search: new URLSearchParams(filters), role }, path, 'GET');
 for (const path of ['/works', '/vibecoding-works']) {
