@@ -12,7 +12,7 @@
 //   表、服务、路由都已删除，本文件不再查这些表、也不再按币种 UNION 它们。
 //   **对外字段名刻意保持不变**（settledAmountMinor / differenceMinor / settledCostMinor /
 //   supplierRowsComplete / unreconciledMinor 等），避免前端与守卫跟着改；但语义已变，见各处注释。
-import { errors, parseJson, row, rows, arows, arow } from '../lib.js';
+import { errors, parseJson, row, rows, arows, arow, isMysql } from '../lib.js';
 import { getComputePricing } from './computePool.js';
 
 const CURRENCY = /^[A-Z]{3}$/;
@@ -29,10 +29,18 @@ const PLATFORM_COST_CURRENCY = 'CNY';
 const costUnknownOf = (source, fen) => source === 'UNKNOWN' || fen === null || fen === undefined;
 
 // sale_price_fen 由 schema 迁移补齐；列未落地前回退为 NULL，服务不因缺列报错。
+//
+// ⚠️ 判"列在不在"的写法**两种驱动不同**（RDS 阶段 2）：SQLite 用 `PRAGMA table_info(x)`，
+//    MySQL 没有 PRAGMA，用 information_schema（而且是可预处理的普通 SELECT —— `SHOW COLUMNS` 走不了
+//    mysql2 的预处理路径）。两边都返回"有这一列就一行"。
+const COLUMN_OF = (table, column) => (isMysql
+  ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = '${column}'`
+  : `PRAGMA table_info(${table})`);
+
 let salePriceColumn;
 async function salePriceExpression() {
   if (salePriceColumn === undefined) {
-    salePriceColumn = (await arows("PRAGMA table_info(compute_attempts)")).some((item) => item.name === 'sale_price_fen') ? 'attempt.sale_price_fen' : 'NULL';
+    salePriceColumn = (await arows(COLUMN_OF('compute_attempts', 'sale_price_fen'))).some((item) => item.name === 'sale_price_fen') ? 'attempt.sale_price_fen' : 'NULL';
   }
   return salePriceColumn;
 }

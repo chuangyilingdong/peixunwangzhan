@@ -146,7 +146,7 @@ export async function handleOrganizations(ctx, part, method) {
     // 见 packages/database/src/schema.js 的 nextOrgCode）。编码**不接受前端自定义**，也不在界面上编辑。
     const shortName = optionalOrgText(body.shortName, '机构简称');
     const region = optionalOrgText(body.region, '所属区域');
-    const orgCode = nextOrgCode();
+    const orgCode = await nextOrgCode();   // RDS 阶段 2：mysql 驱动下这一步是异步的（sqlite 下 await 是空操作）
     await atransaction(async () => {
       await aq('INSERT INTO organizations(id,name,short_name,org_code,region,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,student_seats,contact,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [organizationId, name, shortName, orgCode, region, body.isTrial ? 'TRIAL' : 'ACTIVE', contractStartAt, contractExpiresAt, body.isTrial ? 1 : 0, baseTeacherSeats, purchasedTeacherSeats, integer(body.studentSeats, '学生数量上限'), json(contactPayload(body.contact ?? {})), auth.user.id, now, now]);
       await ensureOrgBilling(organizationId);

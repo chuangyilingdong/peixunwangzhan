@@ -1,4 +1,5 @@
-import { hashPassword, id, json, nowIso, q, row, transaction, arow, aq, atransaction } from './schema.js';
+import { pathToFileURL } from 'node:url';
+import { hashPassword, id, json, nowIso, q, row, transaction, arow, aq, atransaction, isMysql, SQL_MAX, closePool } from './store.js';
 import { WEBSITE_CONTENT_DEFAULTS } from './websiteContentDefaults.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -19,7 +20,15 @@ async function ensureWebsiteContent(now) {
 async function ensurePlatformSettings(now) {
   await aq(
     // 2026-09-18：modalities / billing_settings 两列已下线（只有本种子写过，全仓无读取方）。
-    `INSERT INTO platform_settings(id,platform_name,created_at,updated_at)
+    // upsert 的方言差异（RDS 阶段 2）：SQLite 用 `ON CONFLICT(x) DO UPDATE … excluded.y`，
+    // MySQL 8 用 `… AS new ON DUPLICATE KEY UPDATE y=new.y`（VALUES(y) 在 8.0.20+ 已废弃但仍可用）。
+    isMysql
+      ? `INSERT INTO platform_settings(id,platform_name,created_at,updated_at)
+     VALUES (1,?,?,?) AS new
+     ON DUPLICATE KEY UPDATE
+       platform_name=new.platform_name,
+       updated_at=new.updated_at`
+      : `INSERT INTO platform_settings(id,platform_name,created_at,updated_at)
      VALUES (1,?,?,?)
      ON CONFLICT(id) DO UPDATE SET
        platform_name=excluded.platform_name,
@@ -123,18 +132,20 @@ async function ensureOrganization(now) {
     await aq(
       `UPDATE organizations SET status='ACTIVE',is_trial=0,
        contract_expires_at=CASE WHEN contract_expires_at < ? THEN ? ELSE contract_expires_at END,
-       base_teacher_seats=MAX(base_teacher_seats,3),
-       purchased_teacher_seats=MAX(purchased_teacher_seats,2),updated_at=? WHERE id=?`,
+       base_teacher_seats=${SQL_MAX}(base_teacher_seats,3),
+       purchased_teacher_seats=${SQL_MAX}(purchased_teacher_seats,2),updated_at=? WHERE id=?`,
       [now, PLUS_DAYS(365), now, organization.id],
     );
     organization = await arow('SELECT * FROM organizations WHERE id = ?', [organization.id]);
   }
   await aq(
     `INSERT INTO org_billing_accounts(org_id,credit_balance,total_credits_in,total_credits_spent,currency_paid_total_fen,updated_version)
-     VALUES (?,?,?,?,?,1)
-     ON CONFLICT(org_id) DO UPDATE SET
-       credit_balance=MAX(org_billing_accounts.credit_balance, excluded.credit_balance),
-       total_credits_in=MAX(org_billing_accounts.total_credits_in, excluded.total_credits_in)`,
+     VALUES (?,?,?,?,?,1)${isMysql ? ' AS new' : ''}
+     ${isMysql
+    ? `ON DUPLICATE KEY UPDATE credit_balance=${SQL_MAX}(org_billing_accounts.credit_balance, new.credit_balance), total_credits_in=${SQL_MAX}(org_billing_accounts.total_credits_in, new.total_credits_in)`
+    : `ON CONFLICT(org_id) DO UPDATE SET
+       credit_balance=${SQL_MAX}(org_billing_accounts.credit_balance, excluded.credit_balance),
+       total_credits_in=${SQL_MAX}(org_billing_accounts.total_credits_in, excluded.total_credits_in)`}`,
     [organization.id, 100000, 100000, 0, 0],
   );
   // Keep the seeded opening balance auditable without inventing a paid recharge order.
@@ -162,7 +173,7 @@ async function ensurePackage(orgId, now) {
   } else {
     await aq(
       `UPDATE billing_packages SET monthly_credits=500,bonus_credits=50,duration_days=30,
-       allow_image=1,allow_music=1,allow_video=1,allow_podcast=0,allow_dubbing=0,student_seats=MAX(student_seats,30),status='ACTIVE',updated_at=?
+       allow_image=1,allow_music=1,allow_video=1,allow_podcast=0,allow_dubbing=0,student_seats=${SQL_MAX}(student_seats,30),status='ACTIVE',updated_at=?
        WHERE id=?`,
       [now, pkg.id],
     );
@@ -298,3 +309,8 @@ if (process.argv[1] && /seed\.js$/i.test(process.argv[1])) {
   await seedDatabase();
   console.log('Seed complete.');
 }
+
+// mysql 驱动下要显式关池才会退出（SQLite 不需要；见 mysql.js 的 closePool 注释）。
+// ⚠️ **只能在本文件被当作入口运行时做**：这行是顶层代码，别人 `import` 它做夹具时也会执行 ——
+//    那样会把调用方正在用的连接池提前关掉（实测表现：后续查询全报 "Pool is closed"，打挂 p4-o09）。
+if (isMysql && process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) await closePool();

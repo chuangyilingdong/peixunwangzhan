@@ -1,5 +1,7 @@
-import { randomBytes, scryptSync, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+// 纯函数（json/parseJson/hashPassword/id/nowIso/formatOrgCode）统一放 shared.js：
+// mysql 驱动下也要能用，而本文件在被 import 的那一刻就会跑 2600 行建表，不能被它们拖进来。
+import { json, parseJson, hashPassword, id, nowIso, formatOrgCode, nextOrgCodeFrom } from './shared.js';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1626,7 +1628,7 @@ export function rows(sql, params = []) { return db.prepare(sql).all(...params); 
 export function row(sql, params = []) { return db.prepare(sql).get(...params); }
 export function count(sql, params = []) { return Number(row(sql, params).n || 0); }
 export function one(sql, params = []) { return db.prepare(sql).get(...params); }
-export function json(value) { return JSON.stringify(value ?? null); }
+export { json, parseJson, hashPassword, id, nowIso, formatOrgCode };
 
 /**
  * 加列（幂等），并且**容忍并发启动**。
@@ -1650,7 +1652,7 @@ export function addColumnIfMissing(table, column, type) {
     return false;
   }
 }
-export function parseJson(value, fallback = null) { if (value == null) return fallback; try { return JSON.parse(value); } catch { return fallback; } }
+
 export function transaction(fn) {
   db.exec('BEGIN IMMEDIATE');
   try { const result = fn(); db.exec('COMMIT'); return result; }
@@ -1815,11 +1817,7 @@ if (!_eventsTable) {
 
 export function initDatabase() { return db; }
 
-const PEPPER = process.env.AUTH_PEPPER || 'p0-local-pepper';
-export function hashPassword(password) {
-  const salt = randomBytes(16).toString('hex');
-  return `scrypt:${salt}:${scryptSync(`${PEPPER}:${password}`, salt, 64).toString('hex')}`;
-}
+
 
 
 
@@ -2160,34 +2158,21 @@ try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_org_code ON o
  * 「可读」= 人能一眼看出是第几家机构；「稳定」= 只与创建顺序有关，**创建后不再变**
  * （见 routes/admin/organizations.js 的 ORG_CODE_IMMUTABLE 守卫）。
  */
-export function formatOrgCode(sequence) {
-  const value = Math.max(1, Number(sequence) || 1);
-  return 'ORG' + String(value).padStart(4, '0');
-}
-
 /**
  * 下一个可用机构编码：取现有编码里最大的 `ORG<数字>` 再 +1，跳过已占用的。
  * 传入 codes 时用调用方给的快照（创建接口一次事务内连开多家机构时用），不传就现查库。
+ *
+ * ⚠️ 2026-09-23（RDS 阶段 2）：这个函数的"现查库"分支**不能同步**在 MySQL 上做（真异步驱动）。
+ *    做法：mysql 下返回 Promise、sqlite 下同步返回，**调用方一律 `await`**
+ *    （`await` 一个非 Promise 是空操作，两种驱动写法一致）。
+ *    它是 schema.js 里**唯一**被应用调用的"同步读库辅助函数"——阶段 1 的改造按 6 个原语名做的，
+ *    这种"名字不在名单里、内部却读库"的函数当时看不见，是阶段 2 才暴露出来的。
  */
-export function nextOrgCode(codes = null) {
-  const list = codes || rows("SELECT org_code FROM organizations WHERE org_code IS NOT NULL AND TRIM(org_code) <> ''").map((item) => item.org_code);
-  const used = new Set(list.map((code) => String(code)));
-  let max = 0;
-  for (const code of used) {
-    const matched = /^ORG(\d+)$/.exec(code);
-    if (matched) max = Math.max(max, Number(matched[1]));
-  }
-  let sequence = max;
-  let candidate = formatOrgCode(sequence + 1);
-  while (used.has(candidate)) { sequence += 1; candidate = formatOrgCode(sequence + 1); }
-  return candidate;
-}
-
 // 存量机构回填：**按 created_at 升序补号**（最早创建的机构拿 ORG0001），只补没有编码的。
 // 说明：建表/加列这套语句在每次进程启动时都会执行一遍（server 启动即 import 本文件），
 // 所以这里天然幂等 —— 已补齐的不会再动，seed/测试直接 INSERT 的机构下次启动也会被补上。
 for (const item of rows("SELECT id FROM organizations WHERE org_code IS NULL OR TRIM(org_code) = '' ORDER BY created_at, id")) {
-  q('UPDATE organizations SET org_code=? WHERE id=?', [nextOrgCode(), item.id]);
+  q('UPDATE organizations SET org_code=? WHERE id=?', [nextOrgCodeFrom(rows("SELECT org_code FROM organizations WHERE org_code IS NOT NULL AND TRIM(org_code) <> ''").map((r) => r.org_code)), item.id]);
 }
 
 // ── 授权次数变更流水（P03-04「授权次数变更记录」页的服务端）──────────────────────────────
@@ -2219,8 +2204,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS course_quota_changes (
 db.exec('CREATE INDEX IF NOT EXISTS idx_course_quota_changes_org_created ON course_quota_changes(org_id, created_at DESC, id DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_course_quota_changes_org_series ON course_quota_changes(org_id, series_id, created_at DESC, id DESC)');
 
-export function id(prefix) { return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 20)}`; }
-export function nowIso() { return new Date().toISOString(); }
+
 
 
 // P6-A01 member AI credit caps; NULL means unlimited subject to organization balance.

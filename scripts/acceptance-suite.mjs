@@ -20,6 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { mysqlEnvFromProcess, resetMysqlDatabase } from './mysql-test-db.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -32,6 +33,13 @@ const flag = (name, fallback = null) => {
 
 // 不是测试的脚本：基准/截图/导入/上线后检查/夹具 —— 跑它们要么超时要么需要外部依赖
 const NOT_TESTS = /^scripts\/(dev-bench|page-shot|import-|live-|verify-production|classroom-detail-qa-fixture)/;
+// 本套件自己的工具/夹具也不算测试（否则它会把自己再跑一遍 → 递归超时）
+const HARNESS = new Set([
+  'scripts/acceptance-suite.mjs',
+  'scripts/acceptance-script-wrapper.mjs',
+  'scripts/mysql-test-db.mjs',
+  'scripts/rds-p1-codemod',
+]);
 
 // CI 用精选：四条主流程（教师开课 / 学生进课堂 / 上传素材 / 广场浏览）+ 几个核心守卫
 const FAST = [
@@ -57,10 +65,14 @@ const files = explicit.length
     : fs.readdirSync(path.join(ROOT, 'scripts'))
       .filter((f) => f.endsWith('.mjs'))
       .map((f) => `scripts/${f}`)
-      .filter((f) => !NOT_TESTS.test(f))
+      .filter((f) => !NOT_TESTS.test(f) && !HARNESS.has(f))
       .sort();
 
 const tag = String(flag('tag', 'run'));
+// --mysql：每个脚本跑之前**重置 MySQL 库**（结构由代码现生成），并把 mysql 环境传给脚本。
+// 为什么必须每脚本重置：SQLite 那边每个脚本都拿到一个全新的临时库，MySQL 这边要等价对待；
+// 否则脚本之间会互相污染（上一个脚本建的数据被下一个脚本当成"本来就有"）。
+const useMysql = Boolean(flag('mysql', false));
 const timeout = Number(flag('timeout', 120000));
 const nodeBin = process.env.SUITE_NODE || process.execPath;
 const started = Date.now();
@@ -68,18 +80,27 @@ const results = [];
 
 console.log(`验收套件：${files.length} 个脚本（node ${process.version}，每脚本超时 ${Math.round(timeout / 1000)}s）\n`);
 
-files.forEach((rel, i) => {
+for (let i = 0; i < files.length; i += 1) {
+  const rel = files[i];
+  if (useMysql) {
+    try { await resetMysqlDatabase({ silent: true }); }
+    catch (error) { console.log(`  [mysql] 重置失败，跳过 ${rel}：${error.message}`); results.push({ script: rel, ok: false, status: -1, timedOut: false, ms: 0, tail: `mysql 重置失败：${error.message}` }); continue; }
+  }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-'));
   const logPath = path.join(tmp, 'log.txt');
   const fd = fs.openSync(logPath, 'w');
   const t0 = Date.now();
   // 输出写**文件**而不是管道：脚本里常起服务器，孙进程会握着管道不放，spawnSync 会一直等
-  const res = spawnSync(nodeBin, [rel], {
+  // mysql 驱动下用包装层跑：脚本结束后由包装层显式关连接池，
+  // 否则 mysql2 的池会握着事件循环 → 脚本跑完不退出 → 全被判成"超时"（假失败）。
+  const argv = useMysql ? [path.join(ROOT, 'scripts/acceptance-script-wrapper.mjs'), rel] : [rel];
+  const res = spawnSync(nodeBin, argv, {
     cwd: ROOT,
     timeout,
     stdio: ['ignore', fd, fd],
     env: {
       ...process.env,
+      ...(useMysql ? mysqlEnvFromProcess() : {}),
       PLATFORM_DATA_DIR: tmp,
       PLATFORM_DB_PATH: path.join(tmp, 'platform.db'),
       DEPLOYMENT_MODE: process.env.DEPLOYMENT_MODE || 'internal-test',
@@ -102,7 +123,7 @@ files.forEach((rel, i) => {
   };
   results.push(rec);
   console.log(`[${String(i + 1).padStart(3)}/${files.length}] ${rec.ok ? 'PASS' : 'FAIL'}${rec.timedOut ? '(超时)' : ''} ${String(Math.round(ms / 1000)).padStart(3)}s ${rel}${rec.ok ? '' : `  ← ${tail.slice(0, 110)}`}`);
-});
+}
 
 const secs = Math.round((Date.now() - started) / 1000);
 const pass = results.filter((r) => r.ok).length;

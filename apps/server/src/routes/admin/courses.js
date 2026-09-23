@@ -2,8 +2,7 @@
 import {
   audit, count, errors, id, json, normalizeOrg, normalizePackage,
   normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson,
-  assignmentActiveSql, contractExpiryForOrg, normalizeSeriesVisibility, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, acount, atransaction, amap,
-} from '../../lib.js';
+  assignmentActiveSql, contractExpiryForOrg, normalizeSeriesVisibility, PLATFORM_ADMIN_PERMISSIONS, platformPermissionForPathname, q, requirePlatformPermission, requireRole, row, rows, transaction, verifyPassword, arow, arows, aq, acount, atransaction, amap, SQL_MAX } from '../../lib.js';
 import { hashPassword } from '@platform/database';
 import { randomUUID } from 'node:crypto';
 import { scheduleReminder } from '../communication.js';
@@ -681,7 +680,8 @@ export async function handleCourses(ctx, part, method) {
         // 必须在同一个事务里记 —— 先把「退回前」的已授权次数读出来（MAX(quota_used-1,0) 在
         // quota_used 已经是 0 时不会真的变，那种情况就不写这笔流水，免得记出一条 0 变动）。
         const assignmentBefore = await arow('SELECT quota_total, quota_used FROM course_assignments WHERE id=?', [grant.source_assignment_id]);
-        await aq('UPDATE course_assignments SET quota_used=MAX(quota_used-1,0) WHERE id=?', [grant.source_assignment_id]);
+        // MySQL 的 MAX 是**聚合**函数（只吃一个参数），两参标量要写 GREATEST —— 见 shared.js 的 SQL_MAX
+        await aq(`UPDATE course_assignments SET quota_used=${SQL_MAX}(quota_used-1,0) WHERE id=?`, [grant.source_assignment_id]);
         if (assignmentBefore && Number(assignmentBefore.quota_used || 0) > 0) {
           await recordQuotaChange({
             orgId: grant.org_id, seriesId: grant.series_id, assignmentId: grant.source_assignment_id,

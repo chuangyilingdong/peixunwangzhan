@@ -1,1 +1,1 @@
-{"name":"@platform/database","version":"0.1.0","type":"module","main":"src/schema.js"}
+{"name":"@platform/database","version":"0.1.0","type":"module","main":"src/store.js","dependencies":{"mysql2":"^3.24.4"}}

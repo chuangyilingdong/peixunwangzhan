@@ -2,7 +2,7 @@
  * 平台管理员二次验证（TOTP + 恢复码）的状态读写与校验。
  * 表 user_mfa_credentials：secret 为 base32 明文，恢复码只存 sha256(pepper) 哈希。
  */
-import { errors, json, nowIso, parseJson, q, row, arow, aq } from '../lib.js';
+import { errors, json, nowIso, parseJson, q, row, arow, aq, isMysql } from '../lib.js';
 import {
   MFA_CONSTANTS,
   generateRecoveryCodes,
@@ -42,7 +42,12 @@ export async function startMfaSetup(userId, { account, issuer }) {
   const secret = generateTotpSecret();
   const now = nowIso();
   await aq(
-    `INSERT INTO user_mfa_credentials(user_id,secret,status,recovery_codes,last_totp_counter,enabled_at,created_at,updated_at)
+    // upsert 方言（RDS 阶段 2）：见 seed.js 同处注释
+    isMysql
+      ? `INSERT INTO user_mfa_credentials(user_id,secret,status,recovery_codes,last_totp_counter,enabled_at,created_at,updated_at)
+     VALUES (?,?,'PENDING','[]',NULL,NULL,?,?) AS new
+     ON DUPLICATE KEY UPDATE secret=new.secret,status='PENDING',recovery_codes='[]',last_totp_counter=NULL,enabled_at=NULL,updated_at=new.updated_at`
+      : `INSERT INTO user_mfa_credentials(user_id,secret,status,recovery_codes,last_totp_counter,enabled_at,created_at,updated_at)
      VALUES (?,?,'PENDING','[]',NULL,NULL,?,?)
      ON CONFLICT(user_id) DO UPDATE SET secret=excluded.secret,status='PENDING',recovery_codes='[]',last_totp_counter=NULL,enabled_at=NULL,updated_at=excluded.updated_at`,
     [userId, secret, now, now],

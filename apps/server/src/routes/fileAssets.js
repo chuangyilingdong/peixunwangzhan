@@ -18,8 +18,7 @@ import {
   rows,
   assignmentActiveSql,
   orgSeriesAccessSql,
-  previewInfoFor, arows, arow, aq,
-} from '../lib.js';
+  previewInfoFor, arows, arow, aq, jsonText, isMysql } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
 import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket } from '../services/materialPreview.js';
@@ -140,6 +139,19 @@ async function validateAudienceOrgIds(orgIds) {
  * 对本机构有效授权（含未过期）。学生端不适用此函数。
  */
 async function teachingAssetVisibleToOrg(fileId, orgId) {
+/**
+ * 快照里是否引用了这个教学素材：`teachingGroups[].assets[].fileAssetId = ?`。
+ * · SQLite 用 `json_each`（表值函数）展开两层；
+ * · MySQL 没有 json_each，用 `JSON_TABLE`（MySQL 8）—— 语义一致：把两层数组展开后逐项比对。
+ * 抽成函数是因为**整条 EXISTS 子句没法用翻译层处理**（形状不同，不是换个函数名的事）。
+ */
+const snapshotHasAssetSql = () => (isMysql
+  ? `EXISTS (SELECT 1 FROM JSON_TABLE(lesson.published_content, '$.teachingGroups[*]' COLUMNS (grp JSON PATH '$')) AS g,
+            JSON_TABLE(g.grp, '$.assets[*]' COLUMNS (asset JSON PATH '$')) AS a
+            WHERE JSON_UNQUOTE(JSON_EXTRACT(a.asset, '$.fileAssetId')) = ?)`
+  : `EXISTS (SELECT 1 FROM json_each(lesson.published_content, '$.teachingGroups') grp,
+            json_each(grp.value, '$.assets') asset WHERE json_extract(asset.value, '$.fileAssetId') = ?)`);
+
   if (!orgId) return false;
   return !!await arow(
     `SELECT 1 FROM course_lessons lesson
@@ -149,9 +161,8 @@ async function teachingAssetVisibleToOrg(fileId, orgId) {
        AND (
          -- ① 快照里**有** teachingGroups → 以快照为准（机构端读「最近一次更新发布」定格的那份）
          (lesson.published_content IS NOT NULL AND json_valid(lesson.published_content)
-          AND json_extract(lesson.published_content, '$.teachingGroups') IS NOT NULL
-          AND EXISTS (SELECT 1 FROM json_each(lesson.published_content, '$.teachingGroups') grp,
-            json_each(grp.value, '$.assets') asset WHERE json_extract(asset.value, '$.fileAssetId') = ?))
+          AND ${jsonText('lesson.published_content', '$.teachingGroups')} IS NOT NULL
+          AND ${snapshotHasAssetSql()})
          -- ② 快照里**没有这一键** → 按实时表判。
          --    ⚠️ 这条必须与界面**同一口径**（口径㉞）：normalizeLesson 的 pick 是**逐键**回退 ——
          --    快照没有 teachingGroups 这一键时，机构端看到的就是实时素材清单。
@@ -159,7 +170,7 @@ async function teachingAssetVisibleToOrg(fileId, orgId) {
          --    （没有 teachingGroups 键）→ 界面照常列出「在线预览」，点开却报
          --    「当前账号无权访问此教学素材」——界面在撒谎，根因是这里只认快照这一支。
          OR ((lesson.published_content IS NULL OR NOT json_valid(lesson.published_content)
-              OR json_extract(lesson.published_content, '$.teachingGroups') IS NULL)
+              OR ${jsonText('lesson.published_content', '$.teachingGroups')} IS NULL)
           AND EXISTS (SELECT 1 FROM course_lesson_teaching_assets asset
             JOIN course_lesson_teaching_groups grp ON grp.id=asset.group_id
             WHERE grp.lesson_id=lesson.id AND asset.file_asset_id=?))

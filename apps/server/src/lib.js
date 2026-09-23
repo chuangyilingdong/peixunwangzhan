@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
-import { db, q, rows, row, count, json, parseJson, transaction, aq, arows, arow, aone, acount, atransaction, amap } from '../../../packages/database/src/schema.js';
+import { db, q, rows, row, count, json, parseJson, jsonText, transaction, aq, arows, arow, aone, acount, atransaction, amap, dialect, isMysql, SQL_MAX, SQL_MIN } from '../../../packages/database/src/store.js';
 import { AUTH_PEPPER, CORS_ALLOWED_ORIGINS } from './config.js';
 import { effectiveCapabilities, modalityChannel, normalizeAspectRatio, inputModeShortLabel, normalizeInputModeValue, normalizeAudioRole, audioRoleShortLabel, requiresFirstFrameFor, MUSIC_MODES } from './services/modelCapabilities.js';
 import { previewKindFor, signPreviewTicket } from './services/materialPreview.js';
@@ -450,7 +450,14 @@ export function normalizePackage(value) {
 
 // 课包授权的有效条件：状态为 ACTIVE 且未过期（expires_at 为空表示永久有效）。
 // 用 SQLite 的 ISO 时间戳与 nowIso() 同格式比较，避免各调用点手工拼参数。
-export const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+// SQL 里的"现在"（用在准入条件的 `expires_at > NOW_SQL` 这类比较里）。
+// ⚠️ **两种驱动必须产出完全相同的字符串形式**：`YYYY-MM-DDTHH:MM:SS.mmmZ`（24 字符、3 位毫秒）。
+//    因为库里存的是 JS `toISOString()` 写的 ISO 串，而比较是按**字符串**比的 ——
+//    格式差一位（比如 MySQL 的 %f 给 6 位）就会让"没过期"被判成"已过期"。
+//    MySQL 没有 strftime，用 DATE_FORMAT + 微秒截断补到 3 位（已实测与 toISOString 同形同长）。
+export const NOW_SQL = isMysql
+  ? "CONCAT(DATE_FORMAT(NOW(3), '%Y-%m-%dT%H:%i:%s.'), LPAD(FLOOR(MICROSECOND(NOW(3))/1000), 3, '0'), 'Z')"
+  : "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 export function assignmentActiveSql(alias = 'assignment') {
   return `(${alias}.status='ACTIVE' AND (${alias}.expires_at IS NULL OR ${alias}.expires_at > ${NOW_SQL}))`;
 }
@@ -530,7 +537,7 @@ export function seriesDeliveryModesOf(lessons) {
 export function publishedLessonVisibilitySql(alias = 'lesson') {
   const base = (name) => `(SELECT 1 FROM course_lessons base WHERE base.series_id = ${name}.series_id AND base.published_content IS NOT NULL)`;
   // ⚠️ 这里**不能**回退实时状态：已定格的课包里，没有快照的课时（发布之后新建的）必须不可见。
-  const snapOnly = (name) => `COALESCE(CASE WHEN json_valid(${name}.published_content) THEN json_extract(${name}.published_content, '$.status') END, '')`;
+  const snapOnly = (name) => `COALESCE(CASE WHEN json_valid(${name}.published_content) THEN ${jsonText(`${name}.published_content`, '$.status')} END, '')`;
   return `(
     (NOT EXISTS ${base(alias)} AND ${alias}.status = 'PUBLISHED')
     OR (EXISTS ${base(alias)} AND ${snapOnly(alias)} = 'PUBLISHED')
@@ -546,7 +553,7 @@ export function publishedLessonVisibilitySql(alias = 'lesson') {
  * 两个放一处写，是因为它们都得从同一个 JSON 里取 status —— 各写一遍迟早会漂。
  */
 export function publishedLessonStatusSql(alias = 'lesson') {
-  return `COALESCE(CASE WHEN json_valid(${alias}.published_content) THEN json_extract(${alias}.published_content, '$.status') END, ${alias}.status)`;
+  return `COALESCE(CASE WHEN json_valid(${alias}.published_content) THEN ${jsonText(`${alias}.published_content`, '$.status')} END, ${alias}.status)`;
 }
 
 /**
@@ -1304,4 +1311,4 @@ export function tokenExpiresAt() {
   return new Date(Date.now() + TOKEN_TTL_DAYS * 86400_000).toISOString();
 }
 
-export { db, q, rows, row, count, json, parseJson, transaction, aq, arows, arow, aone, acount, atransaction, amap };
+export { db, q, rows, row, count, json, parseJson, jsonText, transaction, aq, arows, arow, aone, acount, atransaction, amap, dialect, isMysql, SQL_MAX, SQL_MIN };
