@@ -568,9 +568,24 @@ export function publishedLessonStatusSql(alias = 'lesson') {
 function mergedLessonCanvas(lessonRow, liveCanvas = null) {
   const live = liveCanvas || lessonCanvasConfig(lessonRow?.id);
   const snapshot = publishedSnapshotOf(lessonRow);
-  if (!snapshot) return live;
+  // 框体的**显示名**在这一刻现算（见 modelDisplayName 的注释②）：快照里存的是技术名，
+  // 运营在后台改了显示名之后，学生那边刷新就该是新名字，不需要重新发布课包。
+  // 没配别名时 modelLabel === 真 ID —— 画布上显示的字与以前完全一样（不配就零变化）。
+  // ⚠️ 两处都要打标签：`generationBoxes`（画布节点/参数胶囊用它）**与**
+  //    `materialGroups[].materials[].snapshot.box`（左侧「课堂素材」面板那行副标题用它，
+  //    见 canvasWorkspace 的 boxParamsLabel）—— 少一处就是"右边改了、左边还写着技术名"。
+  const policy = aiProviderPolicy();
+  const labelBox = (box) => (box && box.model ? { ...box, modelLabel: modelDisplayName(policy, box.model) } : box);
+  const withLabels = (boxes) => (Array.isArray(boxes) ? boxes.map(labelBox) : boxes);
+  const withGroupLabels = (groups) => (Array.isArray(groups) ? groups.map((group) => ({
+    ...group,
+    materials: Array.isArray(group?.materials)
+      ? group.materials.map((material) => (material?.snapshot?.box ? { ...material, snapshot: { ...material.snapshot, box: labelBox(material.snapshot.box) } } : material))
+      : group?.materials,
+  })) : groups);
+  if (!snapshot) return { ...live, materialGroups: withGroupLabels(live.materialGroups), generationBoxes: withLabels(live.generationBoxes) };
   const pick = (key) => (Array.isArray(snapshot[key]) ? snapshot[key] : live[key]);
-  return { capabilities: pick('capabilities'), materialGroups: pick('materialGroups'), generationBoxes: pick('generationBoxes') };
+  return { capabilities: pick('capabilities'), materialGroups: withGroupLabels(pick('materialGroups')), generationBoxes: withLabels(pick('generationBoxes')) };
 }
 
 export function normalizeLesson(value, { includeTeaching = false, asPublished = false } = {}) {
@@ -621,6 +636,24 @@ export const GENERATION_BOX_MATERIAL_TYPE = 'GENERATION_BOX';
 
 function aiProviderPolicy() {
   return parseJson(row('SELECT ai_provider_policy FROM platform_settings WHERE id=1')?.ai_provider_policy, {});
+}
+
+/**
+ * 模型显示名（2026-09-23 用户口径）：「AI 能力与价格 → 模型显示名」里运营给模型取的别名。
+ * 解析顺序：**别名 → 调用方给的兜底（一般是「读取模型」拿到的上游名）→ 原始 ID**。
+ *
+ * ⚠️ 三条约束，改之前先读：
+ *   ① 只影响**给人看的字样**，不改任何调用参数（发给上游的永远是 `box.model` / `channel.model` 那个真 ID）；
+ *   ② 必须**在每次下发时现算**，不能存进课包快照 / 框体里 —— 否则运营改完名字，学生那边读到的还是快照里
+ *      那份旧名（他会以为"改了没用"）。与第二十八轮『生产 CMS 存的是老字符、靠映射才换得动』同一类坑：
+ *      **显示层的东西要在显示的那一刻算**；
+ *   ③ 没配别名时返回原来的东西（ID 或兜底名）—— 也就是"不配就一点变化都没有"。
+ */
+export function modelDisplayName(policy, modelId, fallback = '') {
+  const id = String(modelId || '').trim();
+  if (!id) return '';
+  const alias = policy?.modelDisplayNames?.[id];
+  return String(alias || fallback || id).trim() || id;
 }
 
 /** 某模态 + 某模型的有效能力（比例/清晰度/时长/音频/首帧）；框体保存校验与下发共用同一套取值。 */

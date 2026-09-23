@@ -55,8 +55,10 @@ export function App() {
     {/* 2026-09-13：原「算力网关」与「计费与模型」合并成一页 —— 两个页面让人来回跳，理解成本太高。
         2026-09-18 路由收敛（用户口径「一个页面一个名字」「两个僵尸重定向删掉」）：
         删掉 /billing → /compute、/compute → /compute/config 这两条二层跳转（路径名跟页面名也对不上），
-        只留两条直达路由 —— /compute/config（渠道与价格）、/compute/usage（用量与成本）。 */}
+        只留直达路由 —— /compute/config（渠道与价格）、/compute/usage（用量与成本）。
+        2026-09-23 再加一条 /compute/names（模型显示名，用户口径：单独一页配映射名字）。 */}
     <Route path="/compute/config" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
+    <Route path="/compute/names" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/compute/usage" element={page('ADMIN_BILLING', <ModelCompute api={api} />)} />
     <Route path="/materials" element={page('ADMIN_CONTENT', <AdminMaterials api={api} />)} />
     <Route path="/website-content" element={page('ADMIN_CONTENT', <WebsiteContent api={api} />)} />

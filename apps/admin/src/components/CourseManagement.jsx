@@ -212,6 +212,14 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
     if (Array.isArray(channel.models) && channel.models.length) return channel.models;
     return channel.model ? [channel.model] : [];
   }
+  /** 模型下拉里那一行字（2026-09-23 用户口径「模型显示名」）。
+   *  这里是**给运营挑模型**的下拉，所以**别名与真 ID 都写出来**（`飞闪（deepseek-flash）`）——
+   *  只写别名的话，运营在别处（渠道卡、价目表）看到真 ID 时对不上号；只写 ID 的话，
+   *  他又认不出自己刚取的那个名字。两处都要对得上，就两个都写。 */
+  function modelOptionLabel(model) {
+    const alias = String(providerPolicy?.modelDisplayNames?.[model] || '').trim();
+    return alias && alias !== model ? `${alias}（${model}）` : model;
+  }
   // 某模态下选定模型的有效能力（比例/清晰度/时长/音频）；未单独配置时用模态默认值。
   function capabilitiesFor(modality, modelId) {
     const channel = channelOf(modality);
@@ -439,7 +447,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
           : '只开画布：学生进来后在画布里创作；下面按需要开放生图 / 生视频 / 音乐能力。'}</p>
     </div>
     {offersVibe ? <section className="lesson-material-group-editor"><h3>VibeCoding 入口</h3><p className="muted">仅使用 AI 文字对话；图片、视频、音乐能力与画布素材属于画布入口。</p>
-      <label>文字模型<select value={vibeCodingConfig.model || ''} onChange={(event) => updateVibeCoding({ model: event.target.value })}><option value="">跟随文字渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+      <label>文字模型<select value={vibeCodingConfig.model || ''} onChange={(event) => updateVibeCoding({ model: event.target.value })}><option value="">跟随文字渠道默认模型</option>{channelModels('TEXT').map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select></label>
       {/* 发送次数上限（2026-09-19 用户口径「可以选发送按钮可以按几次」）。
           ⚠️ 不填 = 不限次（现状一字不改）；填了就由**服务端**按「这个学生在这节课按了几次发送」拦，
           客户端改不掉（计数在服务端，见 services/vibecodingLessonSettings.js）。 */}
@@ -493,7 +501,7 @@ function LessonCanvasConfigEditor({ api, lesson, edit, onChange }) {
                 {capabilities.includes(modality.toLowerCase()) ? null : <p className="muted">本课没有开放「{capabilityLabel}」能力，学生看不到这个框体；勾选上方能力后才会出现。</p>}
                 <div className="lesson-field-row">
                   <LessonField label="生成什么"><select value={modality} onChange={(event) => changeBoxModality(groupIndex, materialIndex, material.uid, event.target.value)}>{GENERATION_BOX_MODALITY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField>
-                  <LessonField label="模型">{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</LessonField>
+                  <LessonField label="模型">{channelModels(modality).length ? <select value={box.model || ''} onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)}><option value="">使用渠道默认模型</option>{channelModels(modality).map((model) => <option key={model} value={model}>{modelOptionLabel(model)}</option>)}</select> : <input value={box.model || ''} placeholder="渠道未配置模型，可手填" onChange={(event) => changeBoxModel(groupIndex, materialIndex, material.uid, event.target.value)} />}</LessonField>
                   {modality === 'MUSIC' ? <LessonField label="生成模式"><select value={box.mode || 'LYRICS'} onChange={(event) => patchBox(groupIndex, materialIndex, material.uid, (current) => ({ ...current, mode: event.target.value }))}>{MUSIC_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></LessonField> : null}
                 </div>
                 {/* 生成方式：这节课的这个框体"要哪种"（文生/图生/首尾帧/全能参考、文生图/图生图）。

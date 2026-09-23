@@ -5,7 +5,7 @@
 // 产物模型的要点：学生不能手写代码，代码只有一个来源——AI 回复里带文件名的围栏。
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
-  ApiError, audit, count, corsHeaders, errors, id, json, nonEmptyString, nowIso, normalizeLesson,
+  ApiError, audit, count, corsHeaders, errors, id, json, modelDisplayName, nonEmptyString, nowIso, normalizeLesson,
   pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction,
 } from '../lib.js';
 import { Readable } from 'node:stream';
@@ -493,7 +493,11 @@ function textModelOptions() {
   const channel = modalityChannel(getAiProviderPolicy(), 'TEXT');
   if (!channel) return [];
   const mappings = Array.isArray(channel.modelMappings) ? channel.modelMappings : [];
-  const displayNameOf = (id) => mappings.find((item) => item?.id === id)?.displayName || id;
+  // 显示名：**运营配的别名优先**，没配就还用「读取模型」拿到的上游名，再没有就是 ID
+  // （2026-09-23 用户口径：「在画布或者 vibecoding 课堂模型名字这里可以映射我改过的名字」）。
+  // ⚠️ 只是显示名 —— 会话里存、发上游用的都是 `id`（选模型那条校验也仍然比 ID）。
+  const policy = getAiProviderPolicy();
+  const displayNameOf = (id) => modelDisplayName(policy, id, mappings.find((item) => item?.id === id)?.displayName);
   const ids = new Set();
   for (const item of (Array.isArray(channel.models) ? channel.models : [])) {
     const id = String(typeof item === 'string' ? item : item?.id || item?.name || '').trim();

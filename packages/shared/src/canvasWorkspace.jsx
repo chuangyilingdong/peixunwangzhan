@@ -480,6 +480,10 @@ export function CanvasWorkspace({ api, ...props }) {
     return {
       id: material.id, title: material.title,
       modality: String(raw.modality || '').toUpperCase(), model: raw.model || '',
+      // ⚠️ 手工重建这条路**也要带上显示名**（服务端给 material.snapshot.box 打了 modelLabel）：
+      //    这条路走的是"生成框体清单里没有它"的兜底（老课包/预览场景），漏一行就成了
+      //    "画布上写着中文名、左侧素材面板却还写着 deepseek-flash"（2026-09-23 真浏览器核验抓到的就是它）。
+      modelLabel: raw.modelLabel || '',
       aspectRatio: raw.aspectRatio || '', resolution: raw.resolution || '',
       durationSeconds: raw.durationSeconds, audio: raw.audio === true,
       // 本节课锁定的生成方式（'' = 不锁）—— 列表里没有该框体时要自己拼，别漏（漏了画布就按模型自由发挥）
@@ -495,17 +499,20 @@ export function CanvasWorkspace({ api, ...props }) {
   // 平台没定的参数写「学生选」，学生一眼就知道进画布后这几个是他自己挑的。
   function boxParamsLabel(box) {
     const slotType = String(box.modality || '').toLowerCase();
-    if (slotType === 'text') return box.model || '写提示词让 AI 生成文字';
+    // 模型这一格一律显示**显示名**（服务端随框体下发的 modelLabel，运营在「模型显示名」那一页配的）；
+    // 没配别名时 modelLabel === 真 ID，所以显示效果与以前一致（2026-09-23 用户口径）。
+    const modelName = box.modelLabel || box.model;
+    if (slotType === 'text') return modelName || '写提示词让 AI 生成文字';
     if (slotType === 'music') {
       const mode = box.mode === 'DESCRIPTION' ? '描述生音乐（平台代写词）' : '歌词生音乐';
-      return box.model ? `${mode} · ${box.model}` : mode;
+      return modelName ? `${mode} · ${modelName}` : mode;
     }
     const params = [box.aspectRatio || '比例学生选', box.resolution || '清晰度学生选'];
     if (slotType === 'video') {
       params.push(Number.isInteger(Number(box.durationSeconds)) && Number(box.durationSeconds) > 0 ? `${box.durationSeconds}秒` : '时长学生选');
       params.push(box.audio === true ? '含音频' : box.audio === false ? '不含音频' : '音频学生选');
     }
-    if (box.model) params.push(box.model);
+    if (modelName) params.push(modelName);
     // 本节课锁定的生成方式要在**素材面板上就看得到**（老师配的是"这种课要用哪种方式"，
     // 学生进来之前就该知道这个框体是要写提示词、还是必须连图）—— 没锁就不显示。
     // 标签由服务端算好随框体下发（'文生视频' / '首尾帧' / '图生图' …）—— 单个真相源，
@@ -533,6 +540,9 @@ export function CanvasWorkspace({ api, ...props }) {
         inputMode: String(box.inputMode || '').toUpperCase(), inputModeLabel: box.inputModeLabel || '',
         // 平台定过的参数：空字符串表示「没定」，学生可以在画布上自己选。
         aspectRatio: box.aspectRatio || '', resolution: box.resolution || '', model: box.model || '',
+        // 模型的**显示名**（2026-09-23 用户口径：后台「模型显示名」里配的别名）。服务端在每次下发时现算，
+        // 所以后台改完名字、学生刷新就见效，不用重新发布课包。没配别名时它 === model，画布上的字与以前一样。
+        modelLabel: box.modelLabel || '',
         // 学生自选时可选项（来自该模型的能力配置，服务端随框体下发）
         paramOptions: box.paramOptions || null,
         studentParams: {},

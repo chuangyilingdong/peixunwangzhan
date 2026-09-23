@@ -68,6 +68,17 @@ function normalizeModelRequestTemplates(value) {
   return out;
 }
 
+function sanitizeModelDisplayNames(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  for (const [rawId, rawName] of Object.entries(value).slice(0, 300)) {
+    const id = String(rawId || '').trim().slice(0, 200);
+    const name = String(rawName ?? '').trim().slice(0, 40);
+    if (id && name) out[id] = name;
+  }
+  return out;
+}
+
 function normalizeProviderPolicy(value) {
   const parsed = (() => { try { return JSON.parse(value?.ai_provider_policy || value || '{}') || {}; } catch { return {}; } })();
   const provider = String(parsed.provider || 'local-mock').trim().toLowerCase();
@@ -78,6 +89,13 @@ function normalizeProviderPolicy(value) {
   const websiteUrl = String(parsed.websiteUrl || '').trim().slice(0, 500);
   const endpointMode = ['BASE','FULL'].includes(String(parsed.endpointMode || '').toUpperCase()) ? String(parsed.endpointMode).toUpperCase() : 'BASE';
   const protocol = ['CHAT','RESPONSES','ANTHROPIC'].includes(String(parsed.protocol || '').toUpperCase()) ? String(parsed.protocol).toUpperCase() : 'CHAT';
+  // 模型显示名映射（2026-09-23 用户口径）：「AI 能力与价格」下有个**单独页面**配置映射名字 ——
+  //   渠道里显示的是 `deepseek-flash` 这类技术名，运营可以给它取个中文名，
+  //   **画布与 VibeCoding 课堂里显示的就是这个名字**（那两处现在显示的正是原始 ID）。
+  // ⚠️ 它只改「给人看的字样」，**不改任何调用参数**：发给上游的永远是真 ID（`model` 字段一个字节都不动）。
+  //   所以这张表丢了/填错了，最坏也只是显示成 ID，不会把请求打歪 —— 正因为它只是显示层，才敢让运营自己填。
+  // 键 = 模型 ID（渠道卡里勾选的那个），值 = 显示名；空串视为「没配」直接丢掉（清空 = 恢复原名）。
+  const modelDisplayNames = sanitizeModelDisplayNames(parsed.modelDisplayNames);
   const modelMappings = Array.isArray(parsed.modelMappings) ? parsed.modelMappings.filter((item) => item && item.model).map((item) => ({ displayName: String(item.displayName || item.model).slice(0,120), model: String(item.model).slice(0,200), contextWindow: Number(item.contextWindow || 0) || null, thinkingLevel: String(item.thinkingLevel || '').slice(0,30) })).slice(0,100) : [];
   const modalityChannels = parsed.modalityChannels && typeof parsed.modalityChannels === 'object' ? Object.fromEntries(Object.entries(parsed.modalityChannels).filter(([k,v]) => VALID_MODALITIES.has(k) && typeof v === 'string').map(([k,v]) => [k, String(v).slice(0,64)])) : {};
   const modalityBackupChannels = parsed.modalityBackupChannels || {};
@@ -125,6 +143,7 @@ function normalizeProviderPolicy(value) {
     model,
     displayName, note, websiteUrl, endpointMode, protocol, modelMappings, channels, modalityChannels, modalityBackupChannels, modelRoutes: parsed.modelRoutes || [],
     visionChannelId,
+    modelDisplayNames,
     allowStudentExternalContent,
     updatedAt: value?.updated_at || null,
   };
@@ -503,6 +522,10 @@ export async function handleAdminBillingConfig(ctx) {
     const protocol = body.protocol === undefined ? before.protocol : String(body.protocol || 'CHAT').toUpperCase();
     const modelMappings = body.modelMappings === undefined ? before.modelMappings : (Array.isArray(body.modelMappings) ? body.modelMappings : []);
     const channels = body.channels === undefined ? before.channels : (Array.isArray(body.channels) ? body.channels : []);
+    // 模型显示名映射（2026-09-23 用户口径）：**这里必须显式取一份** —— 下面那个 `after` 是逐字段重建的，
+    // 少写一行就等于"存了也白存"（守卫 p137 第一版就是这么红的：PUT 成功、读回来是空的）。
+    // 消毒交给 normalizeProviderPolicy（写库前统一走一遍），这一行只负责把它带进 after。
+    const modelDisplayNames = body.modelDisplayNames === undefined ? before.modelDisplayNames : body.modelDisplayNames;
     // 请求模板保存前校验，避免存进去一个跑不通的 JSON。
     for (const channel of channels) {
       const templates = channel?.requestTemplates;
@@ -567,6 +590,7 @@ export async function handleAdminBillingConfig(ctx) {
     const allowStudentExternalContent = body.allowStudentExternalContent === undefined ? before.allowStudentExternalContent : bool(body.allowStudentExternalContent, true);
     const after = {
       provider, model, endpoint, displayName: provider === 'custom' ? displayName : '', note, websiteUrl, endpointMode, protocol, modelMappings, channels: sanitizeProviderChannels(channels), modalityChannels, modalityBackupChannels, modelRoutes, visionChannelId,
+      modelDisplayNames: sanitizeModelDisplayNames(modelDisplayNames),
       allowStudentExternalContent,
     };
     const changed = JSON.stringify(before) !== JSON.stringify({ ...after, updatedAt: before.updatedAt });

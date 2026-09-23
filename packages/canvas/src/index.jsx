@@ -677,7 +677,9 @@ function SlotParams({ data }) {
   if (quality) params.push(quality);
   if (data.durationSeconds) params.push(`${data.durationSeconds}秒`);
   if (data.audio) params.push('含音频');
-  if (data.model) params.push(data.model);
+  // 模型这一格显示**运营配的显示名**（服务端下发的 modelLabel）；没配别名时它 === 真 ID
+  // （2026-09-23 用户口径：「在画布…模型名字这里可以映射我改过的名字」）。
+  if (data.modelLabel || data.model) params.push(data.modelLabel || data.model);
   if (!params.length) return null;
   return <span className="learning-node__slot-params">{params.join(' · ')}</span>;
 }
@@ -885,7 +887,8 @@ function NodeEditPanel({ node, onRequestMaterials, boxModalities = [] }) {
     const kind = slotType === 'image' ? '生图' : slotType === 'video' ? '生视频' : slotType === 'audio' || slotType === 'music' ? '音乐' : slotType === 'text' || slotType === 'prompt' ? '文字' : '';
     if (!kind) return '未配置';
     const params = [data.aspectRatio, data.resolution].filter(Boolean);
-    if (data.model) params.push(data.model);
+    // 同 SlotParams：显示运营配的显示名（没配别名时 === 真 ID）
+    if (data.modelLabel || data.model) params.push(data.modelLabel || data.model);
     // 锁定的生成方式也要看得见（'生视频 · 480P · MiniMax-H3 · 首尾帧'）—— 老师配的就是这条规则
     if (modeChip) params.push(modeChip);
     if (data.uploaded) return '本地素材';
