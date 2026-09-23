@@ -52,7 +52,13 @@ if ! ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o Conne
 fi
 echo "  通道正常：$(ssh -i "$KEY" -o BatchMode=yes "root@$OLD" 'hostname')"
 
-RSYNC=(rsync -aHAX --numeric-ids --info=progress2 -e "ssh -i $KEY -o BatchMode=yes")
+RSYNC=(rsync -aHAX --partial --timeout=300 --info=progress2 -e "ssh -i $KEY -o BatchMode=yes")
+# ⚠️ 这里**故意不加 --numeric-ids**：两台机的 ai-kids-prod uid/gid 不一样
+#   （2026-09-23 实测：旧机 uid=995/gid=982，新机 uid=999/gid=988）。
+#   带上 numeric-ids 会把旧机的数字 id 原样写进新机的文件属主 —— 那个号在新机上根本不存在，
+#   表现是"数据都在、权限也对不上"，平台进程（ai-kids-prod）写不了自己的 data/uploads。
+#   不加它，rsync 按**用户名**映射，两边都叫 ai-kids-prod，正好对上。
+#   搬完再 chown 一次是双保险（见第 9 步）。
 pull() { # pull <远端路径> <本地路径>
   log "拉取 $1"
   "${RSYNC[@]}" "root@$OLD:$1" "$2"
