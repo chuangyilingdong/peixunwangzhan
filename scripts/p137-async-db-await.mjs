@@ -92,6 +92,11 @@ for (const file of files) {
       const code = before.split('//')[0];
       if (/\bawait\b/.test(code)) continue;
       if (new RegExp(`\\b(const|let|var|function|class)\\s+${name}\\b`).test(code)) continue;
+      // `return arow(…)` 是**合法且必需**的委托写法：数据层自己的 aone 就这么写 ——
+      // 关键是这类函数**不能**声明成 async（async 返回原生 Promise，会把"漏 await 当场炸"的
+      // 检测器吞掉）。返回的就是那个 Proxy，漏 await 依旧会在**调用方**被抓住，
+      // 所以这里放行；调用方那一侧由本门禁的另外两类检查兜。
+      if (/\breturn\s*$/.test(code)) continue;
       unawaitedAsync.push({ file: rel, line: i + 1, text: trimmed.slice(0, 110) });
     }
   });
