@@ -87,6 +87,57 @@ const EXCLUDE = new Set([
   'scripts/rds-p2-fixture-codemod.mjs',
 ]);
 
+// ─────────────────── 跨文件预扫：谁会把 SQLite 句柄 **return** 出去（2026-09-24 补）───────────────────
+// 这是实测踩到、并且一次打挂 5 个脚本的那个缺口：`scripts/lib/classroomFixture.mjs` 的 `openDb()`
+// 把句柄 return 出去，而**调用方在别的文件**。只在单文件内找 producer 的话：
+//   · 调用方 `const db = openDb(p); db.prepare(…)` 一个都不转换、声明也不删；
+//   · 夹具那边 openDb 自己的 `const db = new DatabaseSync(…)` 被删掉 → 留下 `return db` → ReferenceError。
+// 做法：先扫全量算出"返回句柄的函数名"，主循环里凡是**导入了这些名字**的文件都把它们当句柄来源。
+const dbVarsOf = (mod) => {
+  const vars = new Set();
+  (function walk(node) {
+    if (!node || typeof node.type !== 'string') return;
+    if (node.type === 'VariableDeclarator' && node.init?.type === 'NewExpression'
+      && node.init.callee?.type === 'Identifier' && node.init.callee.name === 'DatabaseSync'
+      && node.id.type === 'Identifier') vars.add(node.id.name);
+    for (const k of Object.keys(node)) {
+      if (['type', 'start', 'end', 'loc', 'range'].includes(k)) continue;
+      const c = node[k];
+      if (Array.isArray(c)) { for (const x of c) if (x && typeof x.type === 'string') walk(x); }
+      else if (c && typeof c.type === 'string') walk(c);
+    }
+  })(mod.ast);
+  for (const [local, imp] of mod.imports) {
+    if (local === 'db' && String(imp.source).includes('schema.js')) vars.add('db');
+  }
+  return vars;
+};
+const dbVarsByFile = new Map([...mods].map(([f, m]) => [f, dbVarsOf(m)]));
+const handleProducersGlobal = new Map();   // 函数名 → 定义文件（跨文件用）
+for (const fn of fns) {
+  if (!fn.name || !fn.node?.body) continue;
+  const vars = dbVarsByFile.get(fn.file);
+  if (!vars?.size) continue;
+  let returnsHandle = false;
+  (function scan(node) {
+    if (!node || typeof node.type !== 'string' || returnsHandle) return;
+    if (node.type === 'ReturnStatement' && node.argument?.type === 'Identifier' && vars.has(node.argument.name)) { returnsHandle = true; return; }
+    for (const k of Object.keys(node)) {
+      if (['type', 'start', 'end', 'loc', 'range'].includes(k)) continue;
+      const c = node[k];
+      if (Array.isArray(c)) { for (const x of c) if (x && typeof x.type === 'string') scan(x); }
+      else if (c && typeof c.type === 'string') scan(c);
+    }
+  })(fn.node.body);
+  if (returnsHandle) handleProducersGlobal.set(fn.name, fn.file);
+}
+// 已知名单（扫描扫不到的）：夹具改造完之后 `openDb` 会变成一个**抛错的小壳**（不再 return 句柄），
+// 于是扫不出来 —— 但它的历史调用点（`const db = openDb(p)`）仍然要能被识别并删掉声明。
+for (const name of ['openDb']) if (!handleProducersGlobal.has(name)) handleProducersGlobal.set(name, 'scripts/lib/classroomFixture.mjs');
+if (handleProducersGlobal.size) {
+  console.log(`跨文件的"返回句柄"助手：${[...handleProducersGlobal].map(([n, f]) => `${n}@${f}`).join(', ')}`);
+}
+
 for (const [file, mod] of mods) {
   if (!file.startsWith('scripts/')) continue;
   if (EXCLUDE.has(file)) continue;
@@ -138,6 +189,8 @@ for (const [file, mod] of mods) {
     })(fn.node.body);
     if (returnsHandle) handleProducers.add(fn.name);
   }
+  // 再把**导入来的**句柄助手算进去（跨文件预扫的结果）——`const db = openDb(p)` 就靠这一步
+  for (const [local] of mod.imports) if (handleProducersGlobal.has(local)) handleProducers.add(local);
   if (handleProducers.size) {
     // 传递：`const db = openDb(p)` / `const db = helper(openDb(p))` 里的名字都算句柄
     let grew = true;
@@ -148,7 +201,13 @@ for (const [file, mod] of mods) {
         if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier' && node.init) {
           const src = code.slice(node.init.start, node.init.end);
           for (const prod of handleProducers) {
-            if (new RegExp(`\\b${prod}\\s*\\(`).test(src) && !dbVars.has(node.id.name)) { dbVars.add(node.id.name); grew = true; }
+            if (new RegExp(`\\b${prod}\\s*\\(`).test(src) && !dbVars.has(node.id.name)) {
+              dbVars.add(node.id.name);
+              // 这个声明也要删（`const db = openDb(p);`）——它的用法会被逐个转成数据层调用，
+              // 句柄本身不再需要；留着反而会引用一个已经不存在的函数/坏句柄。
+              dbDecls.push({ declarator: node, parent });
+              grew = true;
+            }
           }
         }
         for (const k of Object.keys(node)) {
@@ -345,6 +404,19 @@ if (!LIST) {
       if (best) seed.add(best.id);   // 顶层（不在任何函数里）不需要 async：ESM 顶层 await 合法
     }
   }
+  // ④a′ **手改过的夹具助手**：`scripts/lib/classroomFixture.mjs` 的 ensureClassroom / switchClassroom
+  //     现在是 async（内部 await 数据层），但**模型认不出**它们里面的数据层调用 ——
+  //     那里用的是 `const { aq } = await store()` 这种**动态 import 解构**（必须动态：静态 import
+  //     会被提升到最前面 → 数据层在 env 设好之前加载 → 走到仓库里的 data/platform.db，那是事故）。
+  //     模型认不出 → mustAsync 里没有它们 → 调用点不补 await → **夹具写库与服务启动抢跑**（不报错）。
+  //     所以按名字把这两个函数并进种子，④c/④d 就会给它们的调用点补 async / await。
+  //     ⚠️ 只认这一个夹具文件，别把 add() 的范围放大到 apps/ 或 packages/ 的生产源码上。
+  const FIXTURE_HELPERS = new Set(['ensureClassroom', 'switchClassroom']);
+  let helperSeeded = 0;
+  for (const fn of fns) {
+    if (fn.file === 'scripts/lib/classroomFixture.mjs' && FIXTURE_HELPERS.has(fn.name)) { seed.add(fn.id); helperSeeded += 1; }
+  }
+  if (helperSeeded) flags.push(`已把夹具助手 ${[...FIXTURE_HELPERS].join('/')} 并进 async 种子（${helperSeeded} 个）——它们的调用点会补上 await`);
   // ④b 不动点：谁调用了（直接或间接）这些函数，谁也要 async
   const rev = new Map();
   for (const [from, tos] of edges) for (const to of tos) { if (!rev.has(to)) rev.set(to, new Set()); rev.get(to).add(from); }
