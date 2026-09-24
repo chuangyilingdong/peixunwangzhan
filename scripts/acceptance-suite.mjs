@@ -39,6 +39,10 @@ const HARNESS = new Set([
   'scripts/acceptance-script-wrapper.mjs',
   'scripts/mysql-test-db.mjs',
   'scripts/rds-p1-codemod',
+  // 阶段 2 的夹具 codemod：同样是**工具**（默认试运行、--write 才写盘），不是测试。
+  // 漏在名单外时它会被当成一个测试跑（2026-09-24 那次全量里就跑了，虽然通过但计数被撑大一项，
+  // 而且哪天默认行为变了、真去改验收脚本，就是"套件在改套件自己"）。
+  'scripts/rds-p2-fixture-codemod.mjs',
 ]);
 
 // CI 用精选：四条主流程（教师开课 / 学生进课堂 / 上传素材 / 广场浏览）+ 几个核心守卫
@@ -55,6 +59,9 @@ const FAST = [
   'scripts/p127-generated-asset-archive.mjs',
   'scripts/p4-o09-reminders.mjs',
   'scripts/p9-r04-ai-lesson-capability-guards.mjs',
+  // 2026-09-24 加：超限拒绝之后那条连接不能再被复用（实测挂 304 秒）。它就是 p119 长期
+  // "偶发超时失败"的真凶 —— 断言全过、却被那条毒连接拖过 120s 超时线。
+  'scripts/p138-oversized-body-keepalive.mjs',
 ];
 
 const explicit = args.filter((a) => a.startsWith('scripts/'));

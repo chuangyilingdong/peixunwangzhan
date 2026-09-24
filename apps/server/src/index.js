@@ -210,7 +210,16 @@ const server = http.createServer(async (req, res) => {
       console.warn(`[API] 请求体过大被拒：${ctx.method} ${ctx.pathname}（上限 ${jsonBodyLimitFor(ctx.pathname)}，`
         + `nginx 收到的 content-length ${String(ctx.req?.headers?.['content-length'] || '未知')}）`);
     }
-    sendJson(res, apiError.status || 500, apiError.toResponse(), req, ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {});
+    sendJson(res, apiError.status || 500, apiError.toResponse(), req, {
+      ...(ctx.setCookie ? { 'set-cookie': ctx.setCookie } : {}),
+      // ⭐ 请求体**没读完**就不能再宣称 keep-alive：客户端会把这条连接放回池子，下一个请求
+      //    一旦复用到它就会一直等那些写不完的字节（实测挂 304 秒才报传输层错误）。所有"读到
+      //    一半 / 压根没读就回话"的拒绝都属这一类：readJson/readBodyBuffer 超限、以及读 body
+      //    之前就被内存闸挡下的 UPLOAD_BUSY。用 req.complete 判，而不是列举错误码 ——
+      //    列举法会漏掉下一个没想到的分支（这类教训这个仓库已经吃过好几次）。
+      //    实测语义（Node 22）：正常读完 / GET / DELETE / 空 body 都是 true，只有"没读完"是 false。
+      ...(ctx.req?.complete === false ? { connection: 'close' } : {}),
+    });
   }
 });
 
