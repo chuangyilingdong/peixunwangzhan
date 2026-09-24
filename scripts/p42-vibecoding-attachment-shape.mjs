@@ -25,6 +25,7 @@ await run(['packages/database/src/db.js', '--init']);
 const { DatabaseSync } = await import('node:sqlite');
  
 
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
 await aq("INSERT INTO vibecoding_conversations(id,org_id,student_id,title,files,entry_file,status,created_at,updated_at) VALUES('c1','o1','u1','t','{}','index.html','DRAFT',?,?)", [new Date().toISOString(), new Date().toISOString()]);
 const now = new Date().toISOString();
 const inline = 'data:image/png;base64,iVBORw0KGgo=';
@@ -36,7 +37,6 @@ await aq("INSERT INTO vibecoding_messages(id,conversation_id,role,content,status
 
 const { conversationHistory } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 const history = await conversationHistory('c1');
 

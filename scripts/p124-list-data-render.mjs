@@ -49,12 +49,14 @@ const freePort = () => new Promise((resolve, reject) => {
 });
 
 // ── 用例：账号都是种子账号；夹具只写进临时库 ─────────────────────────────────
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
+
 const now = () => new Date().toISOString();
 const CASES = [
   {
     app: 'admin', route: '/admin/materials', account: { login: 'root', password: 'admin123' },
     // 这条就是 2026-09-20 那次白屏：列表非空才会走到渲染崩掉的那一支
-    fixture: async (db) => await aq('INSERT OR REPLACE INTO promo_materials(id,title,description,category,mime_type,resource_url,cover_url,visibility,status,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', ['pm_guard_1', '守卫样例 · 招生海报', '夹具：这一页必须有物料才验得到列表分支。', 'POSTER', 'application/pdf', null, null, 'ALL_ORGS', 'ACTIVE', db.prepare("SELECT id FROM users WHERE login='root'").get().id, now(), now()]),
+    fixture: async () => await aq('INSERT OR REPLACE INTO promo_materials(id,title,description,category,mime_type,resource_url,cover_url,visibility,status,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', ['pm_guard_1', '守卫样例 · 招生海报', '夹具：这一页必须有物料才验得到列表分支。', 'POSTER', 'application/pdf', null, null, 'ALL_ORGS', 'ACTIVE', (await arow("SELECT id FROM users WHERE login='root'")).id, now(), now()]),
     expect: '.material-card', expectText: '个物料',
   },
   {
@@ -78,7 +80,6 @@ const dbPath = path.join(temp, 'platform.db');
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const { closeDb } = await import("../packages/database/src/store.js");
 
 const env = {
@@ -125,7 +126,7 @@ try {
   await run(['packages/database/src/seed.js']);
   
   
-  for (const item of CASES) if (item.fixture) item.fixture(db);
+  for (const item of CASES) if (item.fixture) item.fixture();
   // 种子账号的口令就是这三个（seed.js 里写着）；临时实例跑在默认 pepper 下，与 seed 一致
   
 

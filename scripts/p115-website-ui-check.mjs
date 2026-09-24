@@ -510,7 +510,7 @@ try {
   const mpSeed = await arow("SELECT published_content FROM website_contents WHERE content_key='MARKETPLACE'");
   assert.ok(mpSeed, 'fixture: seed 之后 MARKETPLACE 应该已在库里（新增 CMS 键要同时改白名单 / 标签 / 种子 / 表单四处）');
   const cmsPatch = JSON.stringify({ title: '课包展示（CMS 联调）', lead: '副标题来自 CMS 的联调文案。' });
-  await withDb(async (db) => await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='MARKETPLACE'", [cmsPatch, cmsPatch, new Date().toISOString()]));
+  await withDb(async () => await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='MARKETPLACE'", [cmsPatch, cmsPatch, new Date().toISOString()]));
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${base}/marketplace`, { waitUntil: 'domcontentloaded' });
@@ -592,9 +592,9 @@ try {
   // ③ 价格与封面：公开接口**以前根本不下发 priceFen / coverAssetId**，官网那两个引用一直是死的
   //    （缩略图只剩首字、价格那段 UI 永不出现）。这里真给课包写上价格与封面，再看列表渲染没有 ——
   //    这条断言能直接抓到「接口漏字段」这一类回归。
-  const seriesId = await withDb(async (db) => (await arow("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND visibility='PUBLIC' ORDER BY sort LIMIT 1"))?.id);
+  const seriesId = await withDb(async () => (await arow("SELECT id FROM course_series WHERE owner_type='PLATFORM' AND status='PUBLISHED' AND visibility='PUBLIC' ORDER BY sort LIMIT 1"))?.id);
   assert.ok(seriesId, 'fixture: 库里应当有一个已发布的平台课包');
-  await withDb(async (db) => await aq('UPDATE course_series SET price_fen=?, cover_image_url=?, updated_at=? WHERE id=?', [19900, '/assets/lingdong-ai-logo.png', new Date().toISOString(), seriesId]));
+  await withDb(async () => await aq('UPDATE course_series SET price_fen=?, cover_image_url=?, updated_at=? WHERE id=?', [19900, '/assets/lingdong-ai-logo.png', new Date().toISOString(), seriesId]));
   await page.goto(`${base}/marketplace`, { waitUntil: 'domcontentloaded' });
   for (let i = 0; i < 40; i += 1) { if (await page.locator('.mp-row').count()) break; await page.waitForTimeout(250); }
   await settle();
@@ -1006,9 +1006,9 @@ try {
   // ── ⑦ 空串 = 运营故意清空（用户报的「我在后台清空了为什么还显示」）─────────────
   // 直接改临时库里 HOME 的已发布内容（服务端每次请求直读库，没有缓存）
   const mutateHome = async (patch) => {
-    const current = await withDb(async (db) => JSON.parse((await arow("SELECT published_content FROM website_contents WHERE content_key='HOME'")).published_content));
+    const current = await withDb(async () => JSON.parse((await arow("SELECT published_content FROM website_contents WHERE content_key='HOME'")).published_content));
     const next = { ...current, ...patch };
-    await withDb(async (db) => await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='HOME'", [JSON.stringify(next), JSON.stringify(next), new Date().toISOString()]));
+    await withDb(async () => await aq("UPDATE website_contents SET draft_content=?, published_content=?, updated_at=? WHERE content_key='HOME'", [JSON.stringify(next), JSON.stringify(next), new Date().toISOString()]));
     return next;
   };
 

@@ -49,6 +49,7 @@ const { DatabaseSync } = await import('node:sqlite');
  
 
 const now = new Date().toISOString();
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const asset = async (item) => await aq(`INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_url,storage_key,proxy_route,public_path,file_name,mime_type,file_size,checksum,category,visibility,status,review_status,expires_at,metadata,created_by,created_at,updated_at)
    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [item.id, 'USER', 'o1', 'u1', 'INTERNAL_PROXY', null, item.key, null, null, item.name, item.mime, 8, 'x', 'MEDIA_ASSET', 'PUBLIC_PLATFORM', 'ACTIVE', 'NOT_REQUIRED', null, '{}', 'u1', now, now]);
 await asset(photo); await asset(doc);
@@ -69,7 +70,6 @@ await aq("INSERT INTO vibecoding_artifacts(id,conversation_id,message_id,name,ki
 const { attachmentImageMap } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
 const { getArtifact, setArtifactAttachmentImages } = await import(pathToFileURL(path.join(root, 'apps/server/src/services/vibecodingArtifacts.js')).href);
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 
 let failures = 0;

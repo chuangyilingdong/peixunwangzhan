@@ -34,6 +34,7 @@ await run(['packages/database/src/seed.js']);
 // 让课时带上正文，验证会注入到 system 上下文
 const { DatabaseSync } = await import('node:sqlite');
  
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const lesson = await arow('SELECT id, title FROM course_lessons ORDER BY sort LIMIT 1');
 await aq("UPDATE course_lessons SET delivery_mode='VIBECODING', lesson_content='本课目标：用 AI 做出一个会动的小网页。' WHERE id=?", [lesson.id]);
 await aq("INSERT OR IGNORE INTO course_lesson_capabilities(lesson_id, capability, created_at) VALUES (?,'text',datetime('now'))", [lesson.id]);
@@ -58,7 +59,6 @@ process.env.PLATFORM_DATA_DIR = temp;
 process.env.PLATFORM_DB_PATH = dbPath;
 const { lessonSystemMessage } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 const systemMessage = await lessonSystemMessage({ lesson_id: lesson.id });
 assert.equal(systemMessage.role, 'system', '应生成 system 消息');

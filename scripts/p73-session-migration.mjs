@@ -42,7 +42,7 @@ await run(['packages/database/src/seed.js']);
 
 // 把 class_sessions 退回**旧结构**（两态 + class_id/started_* 非空 + 旧唯一索引），并塞进真实数据
 const fixture = {};
-const dataSnapshot = async (db) => Object.fromEntries(['class_sessions', 'session_students', 'usage_records'].map(async (table) => [table, await arows(`SELECT * FROM ${table} ORDER BY id`)]));
+const dataSnapshot = async () => Object.fromEntries(['class_sessions', 'session_students', 'usage_records'].map(async (table) => [table, await arows(`SELECT * FROM ${table} ORDER BY id`)]));
 let migratedSnapshot;
 {
    
@@ -130,14 +130,14 @@ await run(['packages/database/src/db.js', '--init']);
     await aq("INSERT INTO session_students(id,session_id,student_id,org_id,status,added_at) VALUES ('p73_ss2','p73_pending',?,?,'PENDING',datetime('now'))", [fixture.studentB, fixture.orgId]);
   } catch (error) { dupError = error; }
   check('同一课堂同一学员不能重复加（部分唯一索引真的在挡）', Boolean(dupError), '重复插入竟然成功了');
-  migratedSnapshot = await dataSnapshot(db);
+  migratedSnapshot = await dataSnapshot();
   
 }
 
 await run(['packages/database/src/db.js', '--init']);
 {
    
-  const rerunSnapshot = await dataSnapshot(db);
+  const rerunSnapshot = await dataSnapshot();
   check('再跑一次没有半截迁移表', !(await arows("SELECT name FROM sqlite_master WHERE name LIKE '%migrated%'")).length);
   assert.deepEqual(rerunSnapshot, migratedSnapshot, '再次初始化不得改变课堂、学员、用量任何字段');
   

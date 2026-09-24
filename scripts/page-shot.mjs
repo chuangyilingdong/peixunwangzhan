@@ -184,6 +184,7 @@ if (opts.fresh) {
   try {
     // VACUUM INTO 是 SQLite 的一致性快照：对**正在被写**的库也安全，不会拷到撕裂的页。
     
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
     await aq(`VACUUM INTO '${dbPath.replace(/'/g, "''")}'`);
     
   } catch (error) {
@@ -198,7 +199,6 @@ if (opts.fresh) {
 delete process.env.AUTH_PEPPER;
 const { hashPassword } = await import('@platform/database');
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 const { closeDb } = await import("../packages/database/src/store.js");
 
 

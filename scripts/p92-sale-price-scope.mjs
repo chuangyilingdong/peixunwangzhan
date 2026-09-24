@@ -51,6 +51,7 @@ await run(['packages/database/src/seed.js']);
 const seeded = {};
 {
    
+const { aq, arow, arows } = await import('../packages/database/src/store.js');
   const orgId = (await arow("SELECT org_id FROM users WHERE login='org-admin'")).org_id;
   const student = (await arow("SELECT id FROM users WHERE login='student-1'")).id;
   const teacher = (await arow("SELECT id FROM users WHERE login='teacher-1'")).id;
@@ -75,7 +76,6 @@ const seeded = {};
 const { salePriceFenFor, classroomBudgetStatus } = await import('../apps/server/src/services/computePool.js');
 const { lessonCostFenFor } = await import('../apps/server/src/services/classroomSessions.js');
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
-const { aq, arow, arows } = await import('../packages/database/src/store.js');
 
 let failures = 0;
 const check = (label, ok, detail = '') => { if (ok) console.log(`  ✓ ${label}`); else { failures += 1; console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`); } };
