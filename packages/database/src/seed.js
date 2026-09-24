@@ -290,15 +290,27 @@ export async function seedDatabase() {
     const course = await ensureCourse(now);
     const assignment = await arow('SELECT id FROM course_assignments WHERE series_id=? AND org_id=?', [course.series.id, organization.id]);
     // 新演示授权显式给出有限额度；重复 seed 不重置现有额度或恢复已撤销许可。
+    let assignmentId = assignment?.id || null;
     if (!assignment) {
-      const assignmentId = id('assignment');
-      const students = [student1, student2];
+      assignmentId = id('assignment');
       await aq(`INSERT INTO course_assignments(id,series_id,org_id,status,assigned_by,assigned_at,quota_total,quota_used)
-         VALUES (?,?,?,?,?,?,?,?)`, [assignmentId, course.series.id, organization.id, 'ACTIVE', null, now, 30, students.length]);
-      for (const student of students) {
-        await aq(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at)
-           VALUES (?,?,?,?,?,?,?)`, [id('coursegrant'), organization.id, student.id, course.series.id, assignmentId, null, now]);
-      };
+         VALUES (?,?,?,?,?,?,?,?)`, [assignmentId, course.series.id, organization.id, 'ACTIVE', null, now, 30, 2]);
+    }
+    // ⭐ 2026-09-24：**许可也要补齐**，不能只在"没有授权单"时才发。
+    //    为什么：`schema.js` 被 import 的时候会写一批默认行（含一条课包 + 一条授权单），而验收脚本的
+    //    夹具现在走**数据层** —— 父进程哪怕只为拿连接也会先加载 schema.js，于是上面那条
+    //    `if (!assignment)` 守卫直接跳过发许可 → 夹具拿到 0 条许可 → 表现成"数据不存在"
+    //    （实测：p119 报"夹具没把任何学生放进课堂"、p52 报 403 NOT_IN_CLASSROOM）。
+    //    补齐是**幂等**的（按 (student_id, series_id) 查一次），也不动任何已用额度、
+    //    不恢复已撤销的许可 —— 与上面那条守卫的初衷不冲突。
+    for (const student of [student1, student2]) {
+      const granted = await arow(
+        'SELECT id FROM student_course_grants WHERE student_id=? AND series_id=? AND revoked_at IS NULL',
+        [student.id, course.series.id],
+      );
+      if (granted) continue;
+      await aq(`INSERT INTO student_course_grants(id,org_id,student_id,series_id,source_assignment_id,granted_by,granted_at)
+         VALUES (?,?,?,?,?,?,?)`, [id('coursegrant'), organization.id, student.id, course.series.id, assignmentId, null, now]);
     }
     await ensureClass({ orgId: organization.id, teacherId: teacher1.id, students: [student1, student2], ...course }, now);
     return { organizationId: organization.id, courseSeriesId: course.series.id };

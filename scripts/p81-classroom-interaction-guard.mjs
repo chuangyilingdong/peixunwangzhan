@@ -85,14 +85,9 @@ const dbPath = path.join(temp, 'platform.db');
     // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
-    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
-    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
-    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
-    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
-    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
-process.env.PLATFORM_DB_PATH = dbPath;
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { closeDb } = await import("../packages/database/src/store.js");
 
 const env = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, AI_PROVIDER_SECRET_FILE: path.join(temp, 'secrets.json'), DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
@@ -135,4 +130,16 @@ try {
   server.kill('SIGTERM');
 }
 console.log('P81 passed: classroom deep-link SSR, SearchSelect keyboard/ARIA, teacherId spoof API guard.');
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
 fs.rmSync(ssrTemp, { recursive: true, force: true });

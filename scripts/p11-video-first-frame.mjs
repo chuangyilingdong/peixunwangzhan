@@ -17,6 +17,9 @@ import { tmpdir } from 'node:os';
 const dir = mkdtempSync(path.join(tmpdir(), 'p11-video-first-frame-'));
 process.env.PLATFORM_DATA_DIR = dir;
 process.env.PLATFORM_DB_PATH = path.join(dir, 'platform.db');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import("../packages/database/src/store.js");
+
 process.env.DEPLOYMENT_MODE = 'local-mock';
 process.env.AI_PROVIDER = 'local-mock';
 

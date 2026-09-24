@@ -157,12 +157,6 @@ const dbPath = path.join(temp, 'platform.db');
     // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
-    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
-    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
-    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
-    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
-    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
-process.env.PLATFORM_DB_PATH = dbPath;
 const uploadRoot = opts.uploads || (opts.prodUploads ? DEFAULT_PROD_UPLOADS : path.join(temp, 'uploads'));
 if (opts.prodUploads) console.log(`上传根 = 生产目录 ${DEFAULT_PROD_UPLOADS}（只读使用；不传就看不到已上传的素材原文件）`);
 else console.log('上传根 = 临时空目录（页面里若该有素材原文件而没显示，加 --prod-uploads 再看一次）');
@@ -205,6 +199,7 @@ delete process.env.AUTH_PEPPER;
 const { hashPassword } = await import('@platform/database');
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 const { aq, arow, arows } = await import('../packages/database/src/store.js');
+const { closeDb } = await import("../packages/database/src/store.js");
 
 
 
@@ -247,17 +242,29 @@ api.stderr.on('data', (chunk) => { apiLog += chunk; });
 let browser = null;
 let web = null;
 let report = [];
-const cleanup = () => {
+const cleanup = async () => {
   try { api.kill('SIGTERM'); } catch { /* 已退出 */ }
   if (browser) { try { browser.close(); } catch { /* ignore */ } }
   if (web) { try { web.close(); } catch { /* ignore */ } }
   // ⚠️ 2026-09-23：在 Windows 上这一行会 EPERM —— 刚被杀掉的子进程（Chromium / 前端静态服务）
   //    还攥着临时目录里的句柄，删除当场失败，**整个脚本以 1 退出**（结论其实已经跑出来了，看着却像失败）。
   //    带上退避重试即可（Node 对 EBUSY / EPERM / ENOTEMPTY 会按 retryDelay 重试）；Linux 上行为不变。
-  try { fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 }); }
+  try { // 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+await closeDb();
+fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 }); }
   catch (error) { console.log(`（临时目录没删干净：${error?.code || error?.message} —— 不影响本次结论）`); }
 };
-process.on('SIGINT', () => { console.log('\n收到 Ctrl-C，收工'); cleanup(); process.exit(130); });
+process.on('SIGINT', async () => { console.log('\n收到 Ctrl-C，收工'); await cleanup(); process.exit(130); });
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -553,7 +560,7 @@ try {
 } finally {
   fs.mkdirSync(shotDir, { recursive: true });
   fs.writeFileSync(path.join(shotDir, 'report.json'), JSON.stringify({ at: new Date().toISOString(), viewport: opts.viewport, routes: report, problems, warnings }, null, 2));
-  cleanup();
+  await cleanup();
 }
 
 console.log(`\n截图目录：${path.relative(root, shotDir)}`);

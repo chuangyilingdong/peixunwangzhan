@@ -105,6 +105,12 @@ const wrapIfUsedAsMember = (parentsMap, node, text) => {
   return text;
 };
 
+/** 数据层模块相对**当前脚本**的路径：scripts/x.mjs → ../packages/…；scripts/lib/y.mjs → ../../packages/…
+ *  （写死 '../packages/…' 对 scripts/lib/ 下的文件是错的 —— 夹具就是被这么插坏的。） */
+const storeRelPath = (file) => {
+  const rel = path.posix.relative(path.posix.dirname(String(file)), 'packages/database/src/store.js');
+  return rel.startsWith('.') ? rel : './' + rel;
+};
 const topLevelBoundNames = (mod) => {
   const names = new Set();
   const collect = (pat) => {
@@ -124,6 +130,30 @@ const topLevelBoundNames = (mod) => {
   return names;
 };
 
+/** 句柄工厂：`const sqlite = () => new DatabaseSync(p)` / `function sqlite() { return new DatabaseSync(p) }`。
+ *  为什么不能只靠 fns 记录的名字：箭头函数的记录里 name 是 null（`node.id?.name ?? null`），
+ *  于是 `const db = sqlite()` 认不出句柄 —— p86 就是这样漏掉的。 */
+const producerNamesIn = (mod, code) => {
+  const names = new Set();
+  const isHandleNew = (n) => n?.type === "NewExpression" && n.callee?.type === "Identifier" && n.callee.name === "DatabaseSync";
+  (function walk(node) {
+    if (!node || typeof node.type !== "string") return;
+    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier" && node.init
+      && (node.init.type === "ArrowFunctionExpression" || node.init.type === "FunctionExpression")) {
+      const body = node.init.body;
+      const retHandle = isHandleNew(body)
+        || (body?.type === "BlockStatement" && code.slice(body.start, body.end).includes("new DatabaseSync"));
+      if (retHandle) names.add(node.id.name);
+    }
+    for (const k of Object.keys(node)) {
+      if (["type", "start", "end", "loc", "range"].includes(k)) continue;
+      const c = node[k];
+      if (Array.isArray(c)) { for (const x of c) if (x && typeof x.type === "string") walk(x); }
+      else if (c && typeof c.type === "string") walk(c);
+    }
+  })(mod.ast);
+  return names;
+};
 const dbVarsOf = (mod) => {
   const vars = new Set();
   (function walk(node) {
@@ -138,13 +168,49 @@ const dbVarsOf = (mod) => {
       else if (c && typeof c.type === 'string') walk(c);
     }
   })(mod.ast);
-  for (const [local, imp] of mod.imports) {
-    if (local === 'db' && String(imp.source).includes('schema.js')) vars.add('db');
-  }
+
+  // **动态 import 的 schema 句柄**（2026-09-24 补）：p4-o09 是这么写的 ——
+  //   const schema = await import('…/schema.js');  const { db } = schema;
+  // 模型只认静态 'import { db } from …schema.js'，这种形状会漏（漏了就把"还连着直连句柄的夹具"
+  // 留在了库里读不到的地方 —— MySQL 下又是一处静默写错库）。
+  const schemaMods = new Set();
+  (function walk(node) {
+    if (!node || typeof node.type !== 'string') return;
+    if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier' && node.init?.type === 'AwaitExpression'
+      && node.init.argument?.type === 'ImportExpression'
+      && String(node.init.argument.source?.value || '').includes('schema.js')) schemaMods.add(node.id.name);
+    for (const k of Object.keys(node)) {
+      if (['type', 'start', 'end', 'loc', 'range'].includes(k)) continue;
+      const c = node[k];
+      if (Array.isArray(c)) { for (const x of c) if (x && typeof x.type === 'string') walk(x); }
+      else if (c && typeof c.type === 'string') walk(c);
+    }
+  })(mod.ast);
+  (function walk(node) {
+    if (!node || typeof node.type !== 'string') return;
+    if (node.type === 'VariableDeclarator' && node.id?.type === 'ObjectPattern') {
+      const arg = node.init?.type === 'AwaitExpression' ? node.init.argument : node.init;
+      const fromSchema = (arg?.type === 'ImportExpression' && String(arg.source?.value || '').includes('schema.js'))
+        || (arg?.type === 'Identifier' && schemaMods.has(arg.name));
+      if (fromSchema) {
+        for (const prop of node.id.properties) {
+          const name = prop.key?.name || prop.value?.name;
+          if (name === 'db') vars.add('db');
+        }
+      }
+    }
+    for (const k of Object.keys(node)) {
+      if (['type', 'start', 'end', 'loc', 'range'].includes(k)) continue;
+      const c = node[k];
+      if (Array.isArray(c)) { for (const x of c) if (x && typeof x.type === 'string') walk(x); }
+      else if (c && typeof c.type === 'string') walk(c);
+    }
+  })(mod.ast);
   return vars;
 };
 const dbVarsByFile = new Map([...mods].map(([f, m]) => [f, dbVarsOf(m)]));
-const handleProducersGlobal = new Map();   // 函数名 → 定义文件（跨文件用）
+const handleProducersGlobal = new Map();
+const producersByFile = new Map([...mods].map(([f, m]) => [f, producerNamesIn(m, m.code)]));   // 函数名 → 定义文件（跨文件用）
 for (const fn of fns) {
   if (!fn.name || !fn.node?.body) continue;
   const vars = dbVarsByFile.get(fn.file);
@@ -153,6 +219,9 @@ for (const fn of fns) {
   (function scan(node) {
     if (!node || typeof node.type !== 'string' || returnsHandle) return;
     if (node.type === 'ReturnStatement' && node.argument?.type === 'Identifier' && vars.has(node.argument.name)) { returnsHandle = true; return; }
+      // 直接 return 一个 new DatabaseSync(...)（不经过变量）：p86 的 sqlite() 就是这么写的
+      if (node.type === 'ReturnStatement' && node.argument?.type === 'NewExpression'
+        && node.argument.callee?.type === 'Identifier' && node.argument.callee.name === 'DatabaseSync') { returnsHandle = true; return; }
     for (const k of Object.keys(node)) {
       if (['type', 'start', 'end', 'loc', 'range'].includes(k)) continue;
       const c = node[k];
@@ -162,6 +231,7 @@ for (const fn of fns) {
   })(fn.node.body);
   if (returnsHandle) handleProducersGlobal.set(fn.name, fn.file);
 }
+for (const [f, names] of producersByFile) for (const n of names) if (!handleProducersGlobal.has(n)) handleProducersGlobal.set(n, f);
 // 已知名单（扫描扫不到的）：夹具改造完之后 `openDb` 会变成一个**抛错的小壳**（不再 return 句柄），
 // 于是扫不出来 —— 但它的历史调用点（`const db = openDb(p)`）仍然要能被识别并删掉声明。
 for (const name of ['openDb']) if (!handleProducersGlobal.has(name)) handleProducersGlobal.set(name, 'scripts/lib/classroomFixture.mjs');
@@ -172,10 +242,16 @@ if (handleProducersGlobal.size) {
 for (const [file, mod] of mods) {
   if (!file.startsWith('scripts/')) continue;
   if (EXCLUDE.has(file)) continue;
+  // ⚠️ **不要动 scripts/lib/ 下的库**（2026-09-24 踩过）：那些是**被别的脚本静态 import** 的，
+  //    工具会往里插"顶层 await import(数据层)"—— 而静态 import 会被提升到最前面，
+  //    于是数据层在 PLATFORM_DB_PATH 还没设好时就加载 → 连到**仓库的 data/platform.db** 上，
+  //    夹具与脚本各写各的库（症状：夹具明明跑了却"没把任何学生放进课堂"）。
+  //    库要改造就**手工**改（classroomFixture.mjs 就是这么手写的：懒加载 + 方言无关）。
+  if (file.startsWith('scripts/lib/')) continue;
   const code = mod.code;
   // ⚠️ 也处理**只 import 夹具、自己没有 SQLite 句柄**的脚本（p52 就是这一类）：它们同样需要把
   //    `PLATFORM_DB_PATH` 指向自己的临时库 —— 夹具现在走数据层，读的就是进程 env。
-  const usesHandle = /new DatabaseSync|node:sqlite/.test(code);
+  const usesHandle = /new DatabaseSync|node:sqlite|schema[.]js/.test(code);
   const usesFixture = /classroomFixture.mjs/.test(code);
   if (!usesHandle && !usesFixture) continue;
 
@@ -201,6 +277,10 @@ for (const [file, mod] of mods) {
   // 也认从应用里拿到的 `db`（import { db } from '../../packages/database/src/schema.js'）
   for (const [local, imp] of mod.imports) {
     if (local === 'db' && String(imp.source).includes('schema.js')) dbVars.add('db');
+  // ⚠️ 主循环这份 dbVars 也要认**动态 import 出来的 schema 句柄**（p4-o09 是
+  //    `const schema = await import("…/schema.js"); const { db } = schema;`）——
+  //    上面那份是按静态 import 写的，这类写法会整篇漏掉（MySQL 下就是静默写错库）。
+  for (const name of dbVarsOf(mod)) dbVars.add(name);
   }
 
   // ①a **由函数返回的句柄**：`function openDb(p) { const h = new DatabaseSync(p); return h; }`
@@ -209,8 +289,12 @@ for (const [file, mod] of mods) {
   //     一次打挂 5 个脚本：p78/p119/p112/p127/p52 都共用 scripts/lib/classroomFixture.mjs 的 openDb）。
   //     做法：先找出"返回句柄"的函数，再把这些函数的调用结果也算作句柄（含跨文件、含再传一层）。
   const handleProducers = new Set();   // 返回句柄的函数名（本文件内）
+  for (const n of producerNamesIn(mod, code)) handleProducers.add(n);
   for (const fn of fns) {
     if (fn.file !== file || !fn.name) continue;
+    // 箭头函数表达式体：const sqlite = () => new DatabaseSync(p)
+    if (fn.node.body?.type === 'NewExpression' && fn.node.body.callee?.type === 'Identifier'
+      && fn.node.body.callee.name === 'DatabaseSync') { handleProducers.add(fn.name); continue; }
     let returnsHandle = false;
     (function scan(node) {
       if (!node || typeof node.type !== 'string' || returnsHandle) return;
@@ -256,20 +340,8 @@ for (const [file, mod] of mods) {
   }
   if (handleProducers.size) flags.push(`${file} 有"返回句柄"的助手（${[...handleProducers].join(',')}）—— 请人工确认它的调用方是否都已改成数据层 API`);
 
-    // 把脚本自己那份 dbPath 回填进 env（standalone 跑时不会误动仓库里的库；harness 已设则不动它）
-    const dbPathAssign = code.match(/(?:const|let|var)\s+(\w*[Pp]ath\w*)\s*=\s*[^;]*platform\.db[^;]*;/);
-    if (dbPathAssign && !/PLATFORM_DB_PATH\s*\|\|=/.test(code)) {
-      const stmt = mod.ast.body.find((x) => code.slice(x.start, x.end).includes(dbPathAssign[0]));
-      if (stmt) add(file, stmt.end, stmt.end, `
-    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
-    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
-    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
-    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
-    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
-process.env.PLATFORM_DB_PATH = ${dbPathAssign[1]};`, 0);
-    }
 
-  if (!dbVars.size) continue;
+  // （夹具专用文件也继续往下走：它们同样持有数据层连接，清理前要关掉）
   stats.files += 1;
 
   // ①b `const stmt = db.prepare(SQL)` 这种先存变量、之后用变量 `.run()` 的形态
@@ -380,48 +452,85 @@ process.env.PLATFORM_DB_PATH = ${dbPathAssign[1]};`, 0);
     replacements.push({ start: stmt.start, end: stmt.end, text: '' });
   }
 
-  // ②b 补数据层 import（**必须是"设好 env 之后"的顶层 await import**，不能是静态 import：
-  //     ESM 的静态 import 会被提升到最前面 → 数据层会在 PLATFORM_DB_PATH 还没设好时加载
-  //     → 走到仓库的 data/platform.db 上去，那是事故）。
-  // ⚠️ 2026-09-24 修：这里原来写的是三个「词边界转义」（反斜杠 + b），但文件里落进去的其实是
-  //    **字面退格符（0x08）** → 那条规则**永远匹配不到** → 数据层 import 一个都没插上 →
-  //    转换后的脚本全体 `ReferenceError: aq is not defined`。
-  //    与阶段 2 那条「翻译层规则静默不生效」是同一族错误：**不报错，只是不生效**。
-  //    别在这里用词边界转义（编辑器/工具链会把它变成真退格符）；直接匹配函数名 + 左括号就够。
-  const needsStore = /(aq|arow|arows)\(/.test(replacements.map((r) => r.text).join(' '));
-  if (needsStore) {
-    const hasStoreImport = /import\([^)]*store\.js/.test(code);
-    if (!hasStoreImport) {
-      // 插入点：**脚本自己那句 `const dbPath = …platform.db` 之后**（下面会把
-      // `process.env.PLATFORM_DB_PATH ||= dbPath;` 插在同一位置），再退回到最后一个顶层
-      // `process.env.PLATFORM_*` 赋值 / 最后一个 import。
-      // ⚠️ 为什么必须带上那句 dbPath 声明（2026-09-24 实测）：数据层的 `await import` 是
-      //    **按顺序执行**的顶层语句 —— 插在 env 赋值**之前**，数据层就会以"没有 env"的状态加载
-      //    → 走到仓库里的 data/platform.db（事故；症状是"夹具没把任何学生放进课堂"）。
-      let insertAt = 0;
-      for (const stmt of mod.ast.body) {
-        const text = code.slice(stmt.start, stmt.end);
-        if (/^(import|const .*await import)/.test(text.trim())) insertAt = Math.max(insertAt, stmt.end);
-        if (/^process\.env\.PLATFORM_(DB_PATH|DATA_DIR)\s*=/.test(text.trim())) insertAt = Math.max(insertAt, stmt.end);
-        if (/^const\s+\w*[Pp]ath\w*\s*=/.test(text.trim()) && /platform\.db/.test(text)) insertAt = Math.max(insertAt, stmt.end);
-      }
-      // ⚠️ 只声明**还没绑定**的名字：有的脚本已经从 lib.js 拿过 arow
-      //    （p127 就是 `const { row, arow } = await import('../apps/server/src/lib.js')`），
-      //    再声明一次就是 `Identifier 'arow' has already been declared` —— ESM 加载期直接失败。
-      const bound = topLevelBoundNames(mod);
-      const missing = ['aq', 'arow', 'arows'].filter((n) => !bound.has(n));
-      if (missing.length) {
-        add(file, insertAt, insertAt, [
+  // ②b 补数据层 import / env 行 / closeDb —— **凡是用到数据层的文件都要走这段**：
+  //     不只是"这次要转换的"（已经转换过的脚本再跑时 replacements 是空的，但 env 行、
+  //     closeDb 仍然可能要补 —— 2026-09-24 实测：只在有转换时才跑，会让补丁永远补不上）。
+  const converts = /(aq|arow|arows)\(/.test(replacements.map((r) => r.text).join(' '));
+  // 清理点：脚本**自己 mkdtemp 出来那个目录**的删除（别误伤截图目录之类的其它 rm —— 那种提前关库会打挂后面的查询）
+  const mkdtemp = code.match(/(?:const|let|var)[ \t]+([A-Za-z0-9_$]+)[ \t]*=[ \t]*(?:fs[.])?mkdtemp(?:Sync)?[ \t]*[(]/);
+  const cleanupRe = mkdtemp ? new RegExp('^(?:await[ \t]+)?(?:fs[.])?rm(?:Sync)?[(][ \t]*' + mkdtemp[1] + '[^A-Za-z0-9_$]') : null;
+  // ⚠️ 整棵树找，不能只看 mod.ast.body：脚本的 rm 多数在 finally / 函数里（p96 就是）
+  const cleanupStmts = [];
+  if (cleanupRe) (function walk(node) {
+    if (!node || typeof node.type !== 'string') return;
+    if (node.type === 'ExpressionStatement' && cleanupRe.test(code.slice(node.start, node.end).trim())) cleanupStmts.push(node);
+    for (const k of Object.keys(node)) {
+      if (['type', 'start', 'end', 'loc', 'range'].includes(k)) continue;
+      const c = node[k];
+      if (Array.isArray(c)) { for (const x of c) if (x && typeof x.type === 'string') walk(x); }
+      else if (c && typeof c.type === 'string') walk(c);
+    }
+  })(mod.ast);
+  const needsClose = cleanupStmts.length > 0 && !/await closeDb()/.test(code);
+  const needsDataLayer = converts || usesFixture || needsClose;
+  if (needsDataLayer) {
+    // 插入点：**脚本自己那句 `const dbPath = …platform.db` 之后**（env 行也插在同一位置），
+    // 再退回到最后一个顶层 `process.env.PLATFORM_*` 赋值 / 最后一个 import。
+    // ⚠️ 数据层的 `await import` 是**按顺序执行**的顶层语句 —— 插在 env 赋值**之前**，
+    //    数据层就会以"没有 env"的状态加载 → 走到仓库里的 data/platform.db（事故）。
+    let insertAt = 0;
+    for (const stmt of mod.ast.body) {
+      const text = code.slice(stmt.start, stmt.end);
+      if (/^(import|const .*await import)/.test(text.trim())) insertAt = Math.max(insertAt, stmt.end);
+      if (/^process\.env\.PLATFORM_(DB_PATH|DATA_DIR)\s*=/.test(text.trim())) insertAt = Math.max(insertAt, stmt.end);
+      if (/^const\s+\w*[Pp]ath\w*\s*=/.test(text.trim()) && /platform\.db/.test(text)) insertAt = Math.max(insertAt, stmt.end);
+    }
+    // ⚠️ 只声明**还没绑定**的名字：有的脚本已经从 lib.js 拿过 arow（p127），
+    //    再声明一次就是 `Identifier 'arow' has already been declared` —— ESM 加载期直接失败。
+    const bound = topLevelBoundNames(mod);
+    const want = [];
+    if (converts || usesFixture) want.push('aq', 'arow', 'arows');
+    if (needsClose) want.push('closeDb');
+    const missing = want.filter((n) => !bound.has(n));
+    const storeStmt = mod.ast.body.find((stmt) => code.slice(stmt.start, stmt.end).includes('store.js'));
+    // 首次用到数据层的**顶层语句**（夹具调用 / aq / arow …）：import 放在它前面，
+    // 这样既在 env 之后、又在脚本自己的 init/seed 子进程之后。
+    const firstUse = mod.ast.body.find((stmt) => /(aq|arow|arows|ensureClassroom|switchClassroom)[(]/.test(code.slice(stmt.start, stmt.end)));
+    const importAt = firstUse && firstUse.start > insertAt ? firstUse.start : insertAt;
+    if (missing.length) {
+      if (storeStmt && bound.has('aq')) {
+        // 已经有数据层 import 了：只把缺的补一行（同一个模块，重复 import 无副作用）
+        add(file, storeStmt.end, storeStmt.end, '\nconst { ' + missing.join(', ') + " } = await import(" + JSON.stringify(storeRelPath(file)) + ");", 1);
+      } else {
+        add(file, importAt, importAt, [
           '',
           '// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import',
-          `const { ${missing.join(', ')} } = await import('../packages/database/src/store.js');`,
+          'const { ' + missing.join(', ') + " } = await import(" + JSON.stringify(storeRelPath(file)) + ");",
           '',
         ].join('\n'), 1);
-        stats.importsFixed += 1;
       }
+      stats.importsFixed += 1;
+    }
+    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
+    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
+    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
+    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
+    // 所以是**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
+    const dbPathAssign = code.match(/(?:const|let|var)\s+(\w*[Pp]ath\w*)\s*=\s*[^;]*platform\.db[^;]*;/);
+    if (dbPathAssign && !/PLATFORM_DB_PATH\s*(?:\|\|=|=)/.test(code)) {
+      const stmt = mod.ast.body.find((x) => code.slice(x.start, x.end).includes(dbPathAssign[0]));
+      if (stmt) add(file, stmt.end, stmt.end, '\nprocess.env.PLATFORM_DB_PATH = ' + dbPathAssign[1] + ';', 0);
+    }
+    // 删临时目录前先关掉数据层连接：Windows 上**打开着的文件删不掉**（EBUSY）——
+    // 夹具改成走数据层之后，临时库被它一直握着（2026-09-24 实测 17 个脚本这么红的）。
+    for (const stmt of cleanupStmts.slice(-1)) {   // 只插最后一处：中间那些 rm 之后还要用库
+      add(file, stmt.start, stmt.start, [
+        '// 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删',
+        'await closeDb();',
+        '',
+      ].join('\n'), 1);
     }
   }
-
   // ③ 删掉 `const db = new DatabaseSync(path);` 整条声明
   for (const { declarator: d, parent } of dbDecls) {
     const stmt = parent;

@@ -30,12 +30,6 @@ const dbPath = path.join(temp, 'platform.db');
     // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
     // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
 process.env.PLATFORM_DB_PATH = dbPath;
-    // 把脚本自己那份 dbPath 写进 env —— 数据层（夹具）必须跟着**脚本自己的那个库**走：
-    // 验收套件会给每个脚本设一份 PLATFORM_DB_PATH（套件的临时目录），而脚本的**服务子进程**用的是
-    // 它自己 mkdtemp 出来的那份 —— 两边不是一个库，夹具写进套件那份、服务读脚本那份 → 守卫表现成
-    // "数据不存在"（实测：p119 单跑过、在套件里红；p52 报 403 NOT_IN_CLASSROOM）。
-    // 所以这里**硬设**（不是 ||=）：脚本自己的路径优先；MySQL 模式下这个键被忽略，无所谓。
-process.env.PLATFORM_DB_PATH = dbPath;
 const baseEnv = { ...process.env, PLATFORM_DATA_DIR: temp, PLATFORM_DB_PATH: dbPath, DEPLOYMENT_MODE: 'local-mock', AI_PROVIDER: 'local-mock' };
 const run = (args) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, { cwd: root, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -52,15 +46,18 @@ await run(['packages/database/src/db.js', '--init']);
 await run(['packages/database/src/seed.js']);
 
 const { DatabaseSync } = await import('node:sqlite');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import("../packages/database/src/store.js");
+
 const sqlite = () => new DatabaseSync(dbPath);
 
 // ① 存量回填：直接 INSERT 一家「没有机构编码」的老机构，服务启动（= 重新执行 schema.js 的补号语句）后应有编码
 {
-  const db = sqlite();
-  db.prepare("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,created_at,updated_at) VALUES ('org-legacy-p86','P86 存量机构','ACTIVE','2020-01-01T00:00:00.000Z','2030-01-01T00:00:00.000Z',0,3,0,'2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z')").run();
-  const before = db.prepare("SELECT org_code FROM organizations WHERE id='org-legacy-p86'").get();
+  
+  await aq("INSERT INTO organizations(id,name,status,contract_start_at,contract_expires_at,is_trial,base_teacher_seats,purchased_teacher_seats,created_at,updated_at) VALUES ('org-legacy-p86','P86 存量机构','ACTIVE','2020-01-01T00:00:00.000Z','2030-01-01T00:00:00.000Z',0,3,0,'2020-01-01T00:00:00.000Z','2020-01-01T00:00:00.000Z')");
+  const before = await arow("SELECT org_code FROM organizations WHERE id='org-legacy-p86'");
   check('① 存量机构回填前没有编码', before.org_code == null, JSON.stringify(before));
-  db.close();
+  
 }
 
 const port = 18986;
@@ -81,11 +78,11 @@ try {
 
   // ── ① 机构三列 + 编码生成 + 存量回填 ────────────────────────────────────────
   {
-    const db = sqlite();
-    const legacy = db.prepare("SELECT org_code FROM organizations WHERE id='org-legacy-p86'").get();
+    
+    const legacy = await arow("SELECT org_code FROM organizations WHERE id='org-legacy-p86'");
     check('① 存量机构回填后拿到 ORG 编码', /^ORG\d{4,}$/.test(String(legacy?.org_code || '')), JSON.stringify(legacy));
-    check('① 已回填的编码不重复', Number(db.prepare("SELECT COUNT(*) n FROM (SELECT org_code FROM organizations WHERE org_code IS NOT NULL GROUP BY org_code HAVING COUNT(*) > 1)").get().n) === 0);
-    db.close();
+    check('① 已回填的编码不重复', Number((await arow("SELECT COUNT(*) n FROM (SELECT org_code FROM organizations WHERE org_code IS NOT NULL GROUP BY org_code HAVING COUNT(*) > 1)")).n) === 0);
+    
   }
   const createdA = await api('/api/admin/organizations', { method: 'POST', token: admin, body: { name: 'P86 甲机构', shortName: '甲校', region: '北京市·海淀区', adminLogin: 'p86-admin-a', adminPassword: 'secret123', studentSeats: 5 } });
   check('① 建机构返回机构简称/编码/区域', createdA.status === 200 && createdA.data.shortName === '甲校' && createdA.data.region === '北京市·海淀区' && /^ORG\d{4,}$/.test(String(createdA.data.orgCode || '')), JSON.stringify(createdA.data).slice(0, 220));
@@ -112,9 +109,9 @@ try {
     check('② 禁用原因超 500 → 400', tooLong.status === 400 && tooLong.error?.code === 'ORG_DISABLE_REASON_TOO_LONG', `${tooLong.status} ${tooLong.error?.code}`);
     const disabled = await api(`/api/admin/organizations/${createdA.data.id}/status`, { method: 'POST', token: admin, body: { action: 'disable', reason: '合同欠费，暂停服务' } });
     check('② 禁用带原因成功且状态 = DISABLED', disabled.status === 200 && disabled.data.status === 'DISABLED', JSON.stringify(disabled.data).slice(0, 160));
-    const db = sqlite();
-    const auditRow = db.prepare("SELECT before_data, after_data FROM audit_logs WHERE action='ORG_DISABLE' ORDER BY created_at DESC LIMIT 1").get();
-    db.close();
+    
+    const auditRow = await arow("SELECT before_data, after_data FROM audit_logs WHERE action='ORG_DISABLE' ORDER BY created_at DESC LIMIT 1");
+    
     check('② 禁用原因落审计（ORG_DISABLE.after.reason）', JSON.parse(auditRow?.after_data || '{}').reason === '合同欠费，暂停服务', JSON.stringify(auditRow?.after_data));
     const recovered = await api(`/api/admin/organizations/${createdA.data.id}/status`, { method: 'POST', token: admin, body: { action: 'recover' } });
     check('② 恢复不强制原因（200）', recovered.status === 200 && recovered.data.status === 'ACTIVE', `${recovered.status} ${JSON.stringify(recovered.data).slice(0, 120)}`);
@@ -242,10 +239,10 @@ try {
 
   // 存量与新增的编码都唯一（唯一索引兜底）
   {
-    const db = sqlite();
-    const dup = db.prepare("SELECT COUNT(*) n FROM (SELECT org_code FROM organizations WHERE org_code IS NOT NULL GROUP BY org_code HAVING COUNT(*) > 1)").get();
-    const nulls = db.prepare("SELECT COUNT(*) n FROM organizations WHERE org_code IS NULL OR TRIM(org_code) = ''").get();
-    db.close();
+    
+    const dup = await arow("SELECT COUNT(*) n FROM (SELECT org_code FROM organizations WHERE org_code IS NOT NULL GROUP BY org_code HAVING COUNT(*) > 1)");
+    const nulls = await arow("SELECT COUNT(*) n FROM organizations WHERE org_code IS NULL OR TRIM(org_code) = ''");
+    
     check('① 全库机构编码唯一且无空值', Number(dup.n) === 0 && Number(nulls.n) === 0, JSON.stringify({ dup: dup.n, nulls: nulls.n }));
   }
 } catch (error) {

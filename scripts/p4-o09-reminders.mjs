@@ -21,11 +21,14 @@ const schema = await import('../packages/database/src/schema.js');
 const seed = await import('../packages/database/src/seed.js');
 const communication = await import('../apps/server/src/routes/communication.js');
 const scheduler = await import('../apps/server/src/services/reminderScheduler.js');
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+// RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
+const { aq, arow, arows } = await import("../packages/database/src/store.js");
 
 const { db } = schema;
 const seeded = await seed.seedDatabase();
-const orgAdmin = db.prepare("SELECT * FROM users WHERE org_id=? AND role='ORG_ADMIN'").get(seeded.organizationId);
-const org = db.prepare('SELECT * FROM organizations WHERE id=?').get(seeded.organizationId);
+const orgAdmin = await arow("SELECT * FROM users WHERE org_id=? AND role='ORG_ADMIN'", [seeded.organizationId]);
+const org = await arow('SELECT * FROM organizations WHERE id=?', [seeded.organizationId]);
 
 const checks = [];
 function check(name, condition, details = {}) {
@@ -40,10 +43,10 @@ try {
 
   // 2) contract expiry scan + event-key deduplication
   const expiry = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
-  db.prepare('UPDATE organizations SET contract_expires_at=? WHERE id=?').run(expiry, seeded.organizationId);
+  await aq('UPDATE organizations SET contract_expires_at=? WHERE id=?', [expiry, seeded.organizationId]);
   const contractFirst = await scheduler.scanContractExpiryOrgs();
   const contractSecond = await scheduler.scanContractExpiryOrgs();
-  const contractRecipients = db.prepare("SELECT COUNT(*) AS count FROM notification_recipients WHERE event_key LIKE ? AND user_id=? AND delivery_status='DELIVERED'").get(`CONTRACT_EXPIRY:${seeded.organizationId}:%`, orgAdmin.id).count;
+  const contractRecipients = (await arow("SELECT COUNT(*) AS count FROM notification_recipients WHERE event_key LIKE ? AND user_id=? AND delivery_status='DELIVERED'", [`CONTRACT_EXPIRY:${seeded.organizationId}:%`, orgAdmin.id])).count;
   check('contract-expiry first scan finds organization in 7-day window', contractFirst.length === 1 && contractFirst[0].orgId === seeded.organizationId, { contractFirst });
   check('contract-expiry first scan reports positive days remaining', Number(contractFirst[0]?.daysLeft) >= 1 && Number(contractFirst[0]?.daysLeft) <= 4, { contractFirst });
   check('contract-expiry second scan is deduplicated', contractSecond.length === 0 && Number(contractRecipients) === 1, { contractSecond, contractRecipients });
@@ -68,8 +71,7 @@ try {
   });
   const disabledId = 'p4-o09-disabled-user';
   const now = new Date().toISOString();
-  db.prepare("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
-    .run(disabledId, seeded.organizationId, disabledId, '验收禁用用户', 'STUDENT', 'not-a-password', 'DISABLED', now, now);
+  await aq("INSERT INTO users(id,org_id,login,display_name,role,password_hash,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)", [disabledId, seeded.organizationId, disabledId, '验收禁用用户', 'STUDENT', 'not-a-password', 'DISABLED', now, now]);
   const disabled = await communication.scheduleReminder({
     title: '不应投递',
     body: '禁用用户不得收到提醒',
@@ -82,12 +84,13 @@ try {
   check('scheduleReminder skips disabled user', disabled.notificationId === null && disabled.reason === 'USER_NOT_FOUND_OR_DISABLED', { disabled });
 
   const totals = {
-    notifications: db.prepare('SELECT COUNT(*) AS count FROM notifications').get().count,
-    deliveredRecipients: db.prepare("SELECT COUNT(*) AS count FROM notification_recipients WHERE delivery_status='DELIVERED'").get().count,
+    notifications: (await arow('SELECT COUNT(*) AS count FROM notifications')).count,
+    deliveredRecipients: (await arow("SELECT COUNT(*) AS count FROM notification_recipients WHERE delivery_status='DELIVERED'")).count,
   };
   const output = { ok: true, database: 'isolated-temporary-sqlite', organizationId: seeded.organizationId, checks, totals };
   console.log(JSON.stringify(output, null, 2));} finally {
   // communication.js 注册了 exit 清理钩子；先停止 worker，保持数据库打开直到进程退出，避免 exit 钩子访问已关闭连接。
   await communication.shutdownCommunicationWorkers();
-  try { rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* Windows may release SQLite handles after process exit; directory remains isolated temp data. */ }
+  try { // 数据层还握着这个临时库 —— Windows 上打开的文件删不掉，先关掉再删
+rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* Windows may release SQLite handles after process exit; directory remains isolated temp data. */ }
 }
