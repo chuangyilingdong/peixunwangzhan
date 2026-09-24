@@ -192,7 +192,7 @@ export function WorkDetailPage({ api }) {
       </div>
       {view === 'canvas'
         ? <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} /></div>
-        : <WorkMediaGallery media={work.media} assets={work.assets} resolveSrc={(item) => (item?.fileId ? imageData[item.fileId] || '' : '')} />}
+        : <WorkMediaGallery media={work.media} assets={work.assets} resolveSrc={(item) => (item?.fileId ? imageData[item.fileId] || work.imageUrls?.[item.fileId] || '' : '')} />}
       <div className="work-detail__foot"><Link className="button soft" to="/works">看看更多作品</Link></div>
     </> : null}
   </main>;

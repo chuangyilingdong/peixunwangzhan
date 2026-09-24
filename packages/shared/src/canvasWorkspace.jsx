@@ -147,6 +147,15 @@ export function CanvasWorkspace({ api, ...props }) {
   }, [api]);
   // 素材面板点「已在画布上」的框体时，让画布把对应节点选中并居中（见 CanvasEditor 的 focusRequest）
   const [focusRequest, setFocusRequest] = useState(null);
+  // 只供侧栏新增使用：由画布按实时视角计算中心，绝不把入场状态写进快照。
+  const placementRef = useRef(null);
+  const placementCountRef = useRef(0);
+  const [entranceRequest, setEntranceRequest] = useState(null);
+  useEffect(() => {
+    if (!entranceRequest) return undefined;
+    const timer = setTimeout(() => setEntranceRequest(null), 600);
+    return () => clearTimeout(timer);
+  }, [entranceRequest]);
   // 左侧工具栏面板是否收起（参考 ASUI Canvas 的可收起侧栏）
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -310,8 +319,9 @@ export function CanvasWorkspace({ api, ...props }) {
           ? { title: asset.label || 'AI 灵感提示词', text: generatedText, assetUrl: asset.assetUrl }
           : { title: asset.label || 'AI 创作素材', text: `${modality}：${generatedText}`, assetUrl: asset.assetUrl, previewUrl: asset.previewUrl };
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
-    const next = { ...current, nodes: [...(current.nodes || []), { id: nodeId, type, position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 }, data }] };
-    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
+    const { position, viewport } = sidebarPlacement(type);
+    const next = { ...current, viewport: viewport || current.viewport, nodes: [...(current.nodes || []), { id: nodeId, type, position, data }] };
+    setCanvasSnapshot(next); setDraft(next); setEntranceRequest({ id: nodeId }); setCanvasRevision((value) => value + 1);
   }
 
   async function generateCanvasNode({ modality, prompt, title, sourceAssetUrl = '', lastFrameAssetUrl = '', referenceAssets = [], boxId = '', params = null }) {
@@ -425,6 +435,13 @@ export function CanvasWorkspace({ api, ...props }) {
     if (placed) setMessage(`已把 ${placed} 个文件放进画布，左侧「本地素材」里也能找到它们。`);
   }
 
+  function sidebarPlacement(type) {
+    const offset = placementCountRef.current++ % 5;
+    const placed = placementRef.current?.(type, offset);
+    if (!placed) return { position: { x: 160 + offset * 36, y: 120 + offset * 26 }, viewport: null };
+    return placed;
+  }
+
   function addLessonMaterialToCanvas(material) {
     if (!editable || !material) return;
     const current = draft || canvasSnapshot || project.data.canvasSnapshot || { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } };
@@ -447,14 +464,15 @@ export function CanvasWorkspace({ api, ...props }) {
     const mediaData = mediaUrl && ['image', 'video', 'audio', 'animation'].includes(type)
       ? { assetUrl: mediaUrl, previewUrl: String(snapshot.previewUrl || snapshot.preview_url || '').trim() || mediaUrl }
       : {};
+    const { position, viewport } = sidebarPlacement(type);
     const node = {
       id: `lesson-material-${material.id}-${Date.now().toString(36)}`,
       type,
-      position: { x: 160 + ((current.nodes?.length || 0) % 4) * 280, y: 120 + ((current.nodes?.length || 0) % 3) * 180 },
+      position,
       data: { ...fallbackData, ...sourceData, ...mediaData, title: material.title || sourceData.title, lessonMaterialId: material.id, isLessonMaterial: true },
     };
-    const next = { ...current, nodes: [...(current.nodes || []), node] };
-    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
+    const next = { ...current, viewport: viewport || current.viewport, nodes: [...(current.nodes || []), node] };
+    setCanvasSnapshot(next); setDraft(next); setEntranceRequest({ id: node.id }); setCanvasRevision((value) => value + 1);
     setMessage(`已将“${material.title || '课堂素材'}”加入画布。`);
   }
 
@@ -588,15 +606,19 @@ export function CanvasWorkspace({ api, ...props }) {
     const job = jobByBox.get(box.id);
     const succeeded = String(job?.status || '') === 'SUCCEEDED';
     const node = buildBoxNode(box, current, { asset: succeeded ? job.assets?.[0] : null, pending: Boolean(job) && !succeeded });
-    const next = { ...current, nodes: [...(current.nodes || []), node] };
-    setCanvasSnapshot(next); setDraft(next); setCanvasRevision((value) => value + 1);
+    const { position, viewport } = sidebarPlacement(node.type);
+    const next = { ...current, viewport: viewport || current.viewport, nodes: [...(current.nodes || []), { ...node, position }] };
+    setCanvasSnapshot(next); setDraft(next); setEntranceRequest({ id: node.id }); setCanvasRevision((value) => value + 1);
     setMessage(job ? `已把「${box.title}」接回画布。` : `已添加「${box.title}」，请填写提示词或从素材插入。`);
   }
 
   function openPromptInsert(material) {
     if (!editable) return;
-    const targets = boxNodes().filter((node) => ['text', 'image', 'video'].includes(node.data?.slotType));
-    if (!targets.length) { setMessage('画布上还没有框体，请先从「生成框体」添加。'); return; }
+    const targets = boxNodes().filter((node) => {
+      if (!['text', 'image', 'video'].includes(node.data?.slotType)) return false;
+      return !boxSucceeded(node.data.boxId) && !node.data.generatedText && !node.data.assetUrl;
+    });
+    if (!targets.length) { setMessage('画布上没有可插入的未生成框体，请先从「生成框体」添加。'); return; }
     setPromptTarget({ material, targets });
   }
 
@@ -606,6 +628,12 @@ export function CanvasWorkspace({ api, ...props }) {
     const text = material.snapshot?.content || material.description || material.title || '';
     const current = draft || canvasSnapshot || project.data.canvasSnapshot;
     if (!current) return;
+    const target = (current.nodes || []).find((node) => node.id === nodeId);
+    if (!target || boxSucceeded(target.data?.boxId) || target.data?.generatedText || target.data?.assetUrl) {
+      setPromptTarget(null);
+      setMessage('这个框体已生成，不能再插入提示词。');
+      return;
+    }
     const next = { ...current, nodes: (current.nodes || []).map((node) => {
       if (node.id !== nodeId) return node;
       const field = node.data?.slotType === 'image' ? 'caption' : 'text';
@@ -757,7 +785,7 @@ export function CanvasWorkspace({ api, ...props }) {
             用户 2026-09-17 口径：那两处文案删掉、「已保存」挪到顶部即可，给画布留更多空间。
             所以这条横条整条没了 —— 保存状态在上面的顶栏里（顶栏中间本来就有课时名，
             作品名也随这条横条一起去掉，需要的话说一声再加回来）。 */}
-        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} /></div>
+        <div className="cv-viewport"><CanvasEditor key={`${project.data.id}-${canvasVersion}-${canvasRevision}`} initialSnapshot={canvasSnapshot || project.data.canvasSnapshot} capabilities={capabilities} readOnly={!editable} allowNodeCreation={false} boxModalities={boxModalities} showStarter={false} onGenerateNode={generateCanvasNode} onUploadFiles={uploadFiles} resolveAssetUrl={resolveAssetUrl} onRequestMaterials={openMaterialsPanel} onChange={setDraft} focusRequest={focusRequest} entranceRequest={entranceRequest} placementRef={placementRef} /></div>
       </div>
     </section>
     {message && <div className={`cv-toast ${isErrorText(message) ? 'is-error' : ''}`}>{stripNoticeMark(message)}</div>}

@@ -130,7 +130,7 @@ try {
     //   这一条要钉的仍是那两件事：**四处读面共用同一个组件** + **视频/音频都真的能播**。
     check('② 作品页用同一个媒体组件（四处读面共用；图片网格卡片、视频与音频都能播）',
       /export function WorkMediaGallery/.test(gallery)
-      && /<video src=\{src\} controls/.test(gallery)
+      && /<video src=\{displaySrc\} controls/.test(gallery)
       && /import \{ AudioPlayer \} from '@platform\/canvas'/.test(gallery)
       && /<AudioPlayer className="work-media__player"/.test(gallery)
       && ['apps/website/src/pages/WorkDetail.jsx', 'apps/website/src/pages/MyWorkDetail.jsx', 'apps/org/src/main.jsx', 'apps/org/src/pages/classroom/ClassroomWork.jsx']

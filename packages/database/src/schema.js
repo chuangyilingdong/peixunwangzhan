@@ -1300,7 +1300,7 @@ db.exec(`INSERT OR IGNORE INTO license_revenue_events(
   SELECT 'license_revenue_legacy_grant_' || grant.id, grant.source_assignment_id, grant.org_id, grant.series_id,
     grant.id, 'GRANT', 1, NULL, NULL, NULL, 'legacy-grant:' || grant.id, grant.granted_by,
     grant.granted_at, grant.granted_at
-  FROM student_course_grants grant
+  FROM student_course_grants AS \`grant\`
   JOIN license_purchase_batches batch
     ON batch.assignment_id=grant.source_assignment_id AND batch.purchase_type='LEGACY_OPENING_BALANCE'
   WHERE grant.revoked_at IS NULL
@@ -1309,7 +1309,7 @@ db.exec(`INSERT OR IGNORE INTO license_revenue_allocations(
     id,revenue_event_id,purchase_batch_id,quantity,amount_minor,currency,created_at)
   SELECT 'license_allocation_legacy_grant_' || grant.id, event.id,
     batch.id, 1, NULL, NULL, grant.granted_at
-  FROM student_course_grants grant
+  FROM student_course_grants AS \`grant\`
   JOIN license_purchase_batches batch
     ON batch.assignment_id=grant.source_assignment_id AND batch.purchase_type='LEGACY_OPENING_BALANCE'
   JOIN license_revenue_events event
@@ -1317,7 +1317,7 @@ db.exec(`INSERT OR IGNORE INTO license_revenue_allocations(
   WHERE grant.revoked_at IS NULL`);
 // quota_used 可能大于仍有效 grant 数；稳定编号的匿名事件补齐缺失历史消耗。
 const legacyAssignments = rows(`SELECT assignment.id,assignment.org_id,assignment.series_id,assignment.quota_used,assignment.assigned_at,
-    (SELECT COUNT(*) FROM student_course_grants grant
+    (SELECT COUNT(*) FROM student_course_grants AS \`grant\`
       WHERE grant.source_assignment_id=assignment.id AND grant.revoked_at IS NULL) active_grants
   FROM course_assignments assignment
   JOIN license_purchase_batches batch

@@ -1,0 +1,227 @@
+{
+  "_note": "本机测试库的\"与生产对齐\"覆盖表：只收**生产比代码生成的结构更宽 / 更严（NOT NULL）/ 带默认值**的列。生成方式：导出生产 RDS 与本机重置后的 test 库的 information_schema.COLUMNS，逐列比对（scripts/rds-schema-diff.mjs --write 可刷新）。为什么要它：script 12 的列类型按**本机种子数据长度**定，生产那份按**真实数据**定 —— 种子很小，所以生产上 mediumtext 的列在本地成了 varchar(255)，一写大对象就 Data too long（假失败）。",
+  "generatedFrom": "RDS aild_admin @ 2026-09-24（MySQL 8.0.36）",
+  "columns": {
+    "analytics_events.metadata": {
+      "type": "varchar(255)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "compute_attempts.sale_snapshot": {
+      "type": "varchar(256)",
+      "notNull": true
+    },
+    "course_lesson_materials.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "course_lesson_materials.snapshot": {
+      "type": "varchar(1216)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "course_lesson_teaching_assets.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "course_lessons.canvas_template_snapshot": {
+      "type": "varchar(255)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "course_lessons.classroom_config": {
+      "type": "varchar(2624)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "course_lessons.lesson_content": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "course_lessons.summary": {
+      "type": "varchar(256)",
+      "notNull": true
+    },
+    "course_series_versions.note": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "course_series.description": {
+      "type": "varchar(256)",
+      "notNull": true
+    },
+    "file_assets.metadata": {
+      "type": "varchar(640)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "generation_jobs.prompt": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "generation_jobs.reference_asset_urls": {
+      "type": "varchar(448)"
+    },
+    "help_feedback.body": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "leads.admin_notes": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "leads.notes": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "learning_task_submissions.student_note": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "learning_tasks.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "license_revenue_allocations.id": {
+      "type": "varchar(80)",
+      "notNull": true
+    },
+    "license_revenue_allocations.revenue_event_id": {
+      "type": "varchar(80)",
+      "notNull": true
+    },
+    "license_revenue_events.id": {
+      "type": "varchar(80)",
+      "notNull": true
+    },
+    "media_assets.asset_url": {
+      "type": "varchar(5568)",
+      "notNull": true
+    },
+    "media_assets.metadata": {
+      "type": "varchar(1280)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "notification_events.body": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "notification_recipients.event_key": {
+      "type": "varchar(80)"
+    },
+    "notification_templates.body": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "notifications.body": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "platform_alert_thresholds.note": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "platform_config_change_logs.new_value": {
+      "type": "mediumtext",
+      "notNull": true
+    },
+    "platform_config_change_logs.old_value": {
+      "type": "mediumtext",
+      "notNull": true
+    },
+    "platform_modality_settings.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "platform_settings.ai_provider_policy": {
+      "type": "mediumtext",
+      "notNull": true
+    },
+    "project_snapshots.canvas_snapshot": {
+      "type": "varchar(5120)",
+      "notNull": true
+    },
+    "promo_materials.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "student_enrollments.notes": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "student_enrollments.package_snapshot": {
+      "type": "varchar(256)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "student_projects.canvas_snapshot": {
+      "type": "mediumtext",
+      "notNull": true
+    },
+    "usage_records.pricing_snapshot": {
+      "type": "varchar(1344)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "vibecoding_artifacts.content": {
+      "type": "varchar(640)",
+      "notNull": true
+    },
+    "vibecoding_artifacts.generated_images": {
+      "type": "varchar(640)"
+    },
+    "vibecoding_messages.content": {
+      "type": "varchar(832)",
+      "notNull": true
+    },
+    "vibecoding_submissions.artifacts": {
+      "type": "varchar(704)",
+      "notNull": true,
+      "default": "[]"
+    },
+    "vibecoding_submissions.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "vibecoding_submissions.files": {
+      "type": "varchar(7680)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "vibecoding_submissions.transcript": {
+      "type": "varchar(2304)",
+      "notNull": true,
+      "default": "[]"
+    },
+    "website_content_revisions.content": {
+      "type": "varchar(2752)",
+      "notNull": true
+    },
+    "website_contents.draft_content": {
+      "type": "varchar(1728)",
+      "notNull": true,
+      "default": "{}"
+    },
+    "work_annotations.content": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "work_submissions.canvas_snapshot": {
+      "type": "varchar(5120)",
+      "notNull": true
+    },
+    "work_submissions.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    },
+    "works.canvas_snapshot": {
+      "type": "varchar(4992)",
+      "notNull": true
+    },
+    "works.description": {
+      "type": "varchar(255)",
+      "notNull": true
+    }
+  }
+}

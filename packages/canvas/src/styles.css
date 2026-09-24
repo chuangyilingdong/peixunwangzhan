@@ -74,6 +74,9 @@
 .react-flow__node { min-width: 0; }
 /* 节点铺满外层容器（外层宽度由内容撑出）；要有素材的框体按素材比例决定宽度。 */
 .learning-node { font-family: inherit; position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 250px; min-height: 120px; overflow: hidden; border: 1px solid var(--cv-border); border-radius: 14px; color: var(--cv-text); background: var(--cv-card); box-shadow: 0 12px 30px rgb(0 0 0 / 32%); transition: border-color var(--cv-motion) ease-out, box-shadow var(--cv-motion) ease-out; }
+/* 文字结果需要确定的卡片宽度：不能靠长串文字撑开 React Flow 节点。 */
+.react-flow__node-prompt { width: 320px; max-width: 320px; }
+.learning-node--prompt { width: 320px; max-width: 320px; min-width: 0; }
 /* 带素材的框体不设最小宽度：素材区多宽，卡片就多宽（9:16 的槽位就是一张竖卡） */
 .learning-node--image, .learning-node--video, .learning-node--animation { min-width: 0; }
 /* ⚠️ 音乐框体**不能**跟着上面那组把最小宽度去掉（用户 2026-09-21 报「播放器太窄了，没法正常播放」）：
@@ -82,6 +85,12 @@
 .learning-node--audio { min-width: 260px; }
 .learning-node:hover { border-color: #3a3a44; }
 .react-flow__node.selected .learning-node { border-color: var(--cv-primary); box-shadow: 0 0 0 1px var(--cv-primary), 0 16px 40px rgb(0 0 0 / 40%); }
+
+/* 侧栏加入的节点：轻微上浮淡入，入口状态由 CanvasSurface 临时投影，不会落库。 */
+.learning-canvas .react-flow__node.is-entering .learning-node { animation: cv-node-enter 520ms cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes cv-node-enter { from { opacity: 0; transform: translate3d(0, 14px, 0) scale(.97); } to { opacity: 1; transform: none; } }
+/* 文字节点用青绿色，和图片/视频/音频的蓝紫粉色保持明确区分。 */
+.learning-node--prompt .learning-node__heading > span { color: #67e8f9; background: rgb(103 232 249 / 14%); }
 
 /* 生成中：整卡扫过一道高光（参考 canvas-processing-scan） */
 .learning-node.is-processing::after { content: ''; position: absolute; inset: 0; z-index: 6; pointer-events: none; background: linear-gradient(100deg, transparent 20%, rgb(163 254 68 / 10%) 45%, rgb(255 255 255 / 14%) 50%, rgb(163 254 68 / 10%) 55%, transparent 80%); transform: translateX(-100%) skewX(-18deg); animation: cv-processing-scan 1.9s ease-in-out infinite; }
@@ -100,6 +109,9 @@
 .react-flow__node.selected .learning-node--media { border-color: transparent; box-shadow: none; }
 .learning-node__caption { display: flex; align-items: center; gap: 6px; max-width: var(--cv-media-max-w); padding: 0 2px 8px; color: var(--cv-text-dim); }
 .learning-node__caption-icon { display: grid; place-items: center; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 6px; color: var(--cv-primary); background: rgb(163 254 68 / 12%); font-size: 11px; font-weight: 900; }
+.learning-node--image .learning-node__caption-icon { color: #7dd3fc; background: rgb(125 211 252 / 14%); }
+.learning-node--video .learning-node__caption-icon { color: #c4b5fd; background: rgb(196 181 253 / 14%); }
+.learning-node--animation .learning-node__caption-icon { color: #a5b4fc; background: rgb(165 180 252 / 14%); }
 .learning-node__caption .learning-node__title-text { font-size: 12.5px; font-weight: 600; color: var(--cv-text-dim); }
 .learning-node__caption .learning-node__title { width: min(180px, 100%); font-size: 12.5px; padding: 1px 5px; }
 /* 画面：按自身比例铺满（不再有深色内框和内边距），高度上限只用来挡竖图 */
@@ -150,10 +162,13 @@
 .cv-audio__progress::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--cv-primary); }
 .cv-audio__progress::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 999px; background: var(--cv-primary); }
 .cv-audio__progress:focus-visible { outline: 2px solid var(--cv-primary); outline-offset: 2px; }
+.cv-audio__progress:disabled { opacity: .4; cursor: not-allowed; }
 /* 第二行：按钮 + 时间 */
 .cv-audio__row { display: flex; align-items: center; gap: 8px; }
 .cv-audio__btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; padding: 0; border: 1px solid var(--cv-border); border-radius: 999px; color: var(--cv-text); background: rgb(255 255 255 / 6%); cursor: pointer; }
-.cv-audio__btn:hover { border-color: var(--cv-primary); color: var(--cv-primary); }
+.cv-audio__btn:hover:not(:disabled) { border-color: var(--cv-primary); color: var(--cv-primary); }
+.cv-audio__btn:disabled { opacity: .4; cursor: not-allowed; }
+.cv-audio__error { display: block; min-width: 0; overflow-wrap: anywhere; color: #ffb4b4; font-size: 10px; line-height: 1.45; }
 .cv-audio__time { color: var(--cv-text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* 只有图片/视频跟着节点尺寸伸缩，其余区块保持自己的高度（拖高拖矮都看得见效果） */
 .learning-node > * { flex-shrink: 0; }
@@ -186,7 +201,8 @@
    · 第二版：把 margin 归到 wrapper、按钮仍绝对定位于结果块 → 压住**滚动条**，文字一长就顶到一起；
    · 现在：按钮不在这里了 —— 挂在**卡片标题行**最右（`NodeFrame` 的 `headingExtra`，
      样式见下面的 `.learning-node__heading .learning-node__copy`），所以右边距不用再给它让位。 */
-.learning-node__text-wrap { margin: 0 12px 10px; }
+.learning-node__text-wrap { min-width: 0; max-width: calc(100% - 24px); margin: 0 12px 10px; }
+.learning-node__text-result { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: normal; }
 .learning-node__text-result { margin: 0; user-select: text; -webkit-user-select: text; cursor: text; }
 /* 卡片右上角的「复制」：标题行的最后一个 flex 项，靠 `margin-left:auto` 贴右边。
    `flex:0 0 auto` + 标题自己的省略号，保证长标题不会把按钮挤出去或压变形。 */
@@ -507,6 +523,7 @@
 }
 /* 用户要求减少动效时不转圈，留一层静态描边辉光 */
 @media (prefers-reduced-motion: reduce) {
+  .learning-canvas .react-flow__node.is-entering .learning-node { animation: none; }
   .learning-canvas__beam.is-active { animation: cv-beam-fade-in .3s ease forwards; }
   .learning-canvas__beam.is-active::after, .learning-canvas__beam.is-active::before, .learning-canvas__beam.is-active .learning-canvas__beam-bloom { animation: none; }
 }

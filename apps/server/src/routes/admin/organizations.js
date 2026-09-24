@@ -402,17 +402,17 @@ export async function handleOrganizations(ctx, part, method) {
       conditions.push('change.created_at<?'); params.push(to);
     }
     const where = ' WHERE ' + conditions.join(' AND ');
-    const total = Number((await arow('SELECT COUNT(*) n FROM course_quota_changes change' + where, params))?.n || 0);
+    const total = Number((await arow('SELECT COUNT(*) n FROM course_quota_changes AS `change`' + where, params))?.n || 0);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
-    const items = (await arows(`SELECT change.*, series.title series_title, actor.display_name actor_name, actor.login actor_login
-        FROM course_quota_changes change
+    const items = (await arows(`SELECT \`change\`.*, series.title series_title, actor.display_name actor_name, actor.login actor_login
+        FROM course_quota_changes AS \`change\`
         LEFT JOIN course_series series ON series.id=change.series_id
         LEFT JOIN users actor ON actor.id=change.actor_id
         ${where}
         ORDER BY change.created_at DESC, change.id DESC
         LIMIT ? OFFSET ?`, [...params, limit, offset])).map(normalizeQuotaChange);
     // 筛选项（不受上面筛选影响）：本机构有过变更的课包 + 五个变更类型，供图8 的下拉直接用。
-    const seriesOptions = (await arows(`SELECT series.id, series.title, COUNT(*) n FROM course_quota_changes change
+    const seriesOptions = (await arows(`SELECT series.id, series.title, COUNT(*) n FROM course_quota_changes AS \`change\`
         JOIN course_series series ON series.id=change.series_id
         WHERE change.org_id=? GROUP BY series.id, series.title ORDER BY series.title`, [organization.id]))
       .map((item) => ({ id: item.id, title: item.title, changeCount: Number(item.n || 0) }));

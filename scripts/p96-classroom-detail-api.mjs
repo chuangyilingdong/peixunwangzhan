@@ -141,6 +141,16 @@ try {
   fs.writeFileSync(path.join(env.FILE_UPLOAD_ROOT, 'detail.png'), png);
   await aq("INSERT INTO file_assets(id,owner_type,owner_org_id,owner_user_id,storage_kind,storage_key,file_name,mime_type,visibility,status,created_at,updated_at) VALUES ('detail_image','USER',?,?,'INTERNAL_PROXY','detail.png','detail.png','image/png','PRIVATE','ACTIVE',?,?)", [student.org_id, student.id, now, now]);
   await aq('UPDATE vibecoding_submissions SET artifacts=? WHERE id=?', [JSON.stringify([{ name: 'index.html', kind: 'html', embeddedImages: [{ fileId: 'detail_image' }] }]), 'detail_vibe']);
+  const platformAdmin = await login('root', 'admin123');
+  const platformDetail = check(await api('admin/vibecoding-works/detail_vibe', platformAdmin));
+  assert.equal(platformDetail.imageUrls.detail_image, '/api/admin/vibecoding-works/detail_vibe/images/detail_image');
+  const platformImage = await fetch(`http://127.0.0.1:${port}${platformDetail.imageUrls.detail_image}`, { headers: { authorization: `Bearer ${platformAdmin}` } });
+  assert.equal(platformImage.status, 200);
+  assert.equal(platformImage.headers.get('content-type'), 'image/png');
+  assert.equal(platformImage.headers.get('content-disposition'), 'inline');
+  assert.deepEqual(Buffer.from(await platformImage.arrayBuffer()), png);
+  check(await api('admin/vibecoding-works/detail_vibe/images/foreign', platformAdmin), 404);
+  check(await api('admin/vibecoding-works/detail_vibe/images/detail_image', teacher), 403);
   const imageRoute = `${route}/works/VIBECODING/detail_vibe/images/detail_image`;
   const imageResponse = await fetch(`http://127.0.0.1:${port}/api/${imageRoute}`, { headers: { authorization: `Bearer ${teacher}` } });
   assert.equal(imageResponse.status, 200);
@@ -193,7 +203,7 @@ try {
   assert.equal(check(await api(route, teacher)).canManage, false);
   const settled = await arow('SELECT * FROM session_students WHERE session_id=? AND student_id=?', [created.id, student.id]);
   assert.equal(settled.status, 'COMPLETED', 'real success before end completes the student');
-  await run(['--input-type=module', '-e', `const {recordAiUsage}=await import('./apps/server/src/services/creditUsage.js'); recordAiUsage(${JSON.stringify({ orgId: student.org_id, userId: student.id, sessionId: created.id, modality: 'text', model: 'real-late', status: 'SUCCESS' })});`]);
+  await run(['--input-type=module', '-e', `const {recordAiUsage}=await import('./apps/server/src/services/creditUsage.js'); await recordAiUsage(${JSON.stringify({ orgId: student.org_id, userId: student.id, sessionId: created.id, modality: 'text', model: 'real-late', status: 'SUCCESS' })}); const {closePool}=await import('./packages/database/src/store.js'); await closePool();`]);
   assert.deepEqual(await arow('SELECT * FROM session_students WHERE session_id=? AND student_id=?', [created.id, student.id]), settled);
   const lateSession = check(await api('org/sessions', teacher, 'POST', { lessonId: first.id }));
   const lateRoute = `org/sessions/${lateSession.id}`;
@@ -202,7 +212,7 @@ try {
   check(await api(`${lateRoute}/end`, teacher, 'POST', {}));
   const frozen = await arow('SELECT * FROM session_students WHERE session_id=? AND student_id=?', [lateSession.id, student.id]);
   assert.equal(frozen.status, 'INCOMPLETE');
-  await run(['--input-type=module', '-e', `const {recordAiUsage}=await import('./apps/server/src/services/creditUsage.js'); const {settleSessionStudents}=await import('./apps/server/src/services/classroomSessions.js'); recordAiUsage(${JSON.stringify({ orgId: student.org_id, userId: student.id, sessionId: lateSession.id, modality: 'text', model: 'real-late', status: 'SUCCESS' })}); settleSessionStudents({sessionId:${JSON.stringify(lateSession.id)}});`]);
+  await run(['--input-type=module', '-e', `const {recordAiUsage}=await import('./apps/server/src/services/creditUsage.js'); const {settleSessionStudents}=await import('./apps/server/src/services/classroomSessions.js'); await recordAiUsage(${JSON.stringify({ orgId: student.org_id, userId: student.id, sessionId: lateSession.id, modality: 'text', model: 'real-late', status: 'SUCCESS' })}); await settleSessionStudents({sessionId:${JSON.stringify(lateSession.id)}}); const {closePool}=await import('./packages/database/src/store.js'); await closePool();`]);
   assert.deepEqual(await arow('SELECT * FROM session_students WHERE session_id=? AND student_id=?', [lateSession.id, student.id]), frozen);
   assert.equal((await arow("SELECT COUNT(*) n FROM usage_records WHERE class_session_id=? AND status='SUCCESS'", [lateSession.id])).n, 1, 'late success remains in ledger');
   assert.equal(check(await api(lateRoute, teacher)).students[0].status, 'INCOMPLETE');

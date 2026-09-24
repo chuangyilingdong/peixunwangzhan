@@ -185,7 +185,7 @@ async function actualFor(seriesId) {
   // 只计笔数、不按 0 算 —— 与 computePool.classroomBudgetStatus 的历史用量口径一致。
   const legacyRows = (await arows(
     `SELECT COALESCE(lesson.id, '') lesson_id, COALESCE(lesson.title, session.title, '未关联课时') lesson_title, COUNT(*) legacy_calls
-       FROM usage_records usage
+       FROM usage_records AS \`usage\`
        LEFT JOIN class_sessions session ON session.id = usage.class_session_id
        LEFT JOIN course_lessons lesson ON lesson.id = session.lesson_id
       WHERE COALESCE(lesson.series_id, session.series_id, usage.series_id) = ?

@@ -6,7 +6,7 @@
 // 每有一个围栏闭合就立刻落库并推 `artifact` 事件，所以产物卡片是逐个出现的。
 import {
   ApiError, audit, count, corsHeaders, errors, id, json, modelDisplayName, nonEmptyString, nowIso, normalizeLesson,
-  pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, arow, aq, arows, acount, atransaction, amap,
+  pageParams, pageResult, parseJson, q, requireRole, row, rows, transaction, arow, aq, arows, acount, atransaction, amap, isMysql,
 } from '../lib.js';
 import { Readable } from 'node:stream';
 import { resolveStudentLessonContext } from '../services/studentContext.js';
@@ -38,6 +38,19 @@ import path from 'node:path';
 const DEFAULT_TITLE = '新的创作对话';
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_MESSAGES = 20;
+
+// SQLite rowid records the insertion order of existing messages, including timestamp collisions.
+// RDS MySQL has no rowid or message sequence yet: id is only a deterministic tie-breaker,
+// NOT insertion order. Do not change the SQLite branch or claim MySQL parity without a
+// separately deployed/backfilled sequence on the production RDS schema.
+const messageOrderKey = isMysql ? 'id' : 'rowid';
+const messageOrderDesc = `created_at DESC, ${messageOrderKey} DESC`;
+const messageOrderAsc = `created_at, ${messageOrderKey}`;
+const messagePosition = isMysql ? '*' : 'rowid AS message_rowid, *';
+const messagePositionValue = (message) => isMysql ? message.id : message.message_rowid;
+const messageBefore = isMysql
+  ? '(created_at, id) < (SELECT created_at, id FROM vibecoding_messages WHERE id=?)'
+  : 'rowid < (SELECT rowid FROM vibecoding_messages WHERE id=?)';
 
 // 提交与作品广场沿用 files JSON 快照（按文件名取内容）。
 // ⚠️ 这份快照**只读**：写入口是产物表（配额在 vibecodingArtifacts.js），
@@ -268,8 +281,8 @@ async function triggeringImageAttachments(conversationId, artifact) {
   const message = await arow(
     `SELECT attachments FROM vibecoding_messages
       WHERE conversation_id=? AND role='user' AND attachments IS NOT NULL AND attachments<>''
-        AND rowid < (SELECT rowid FROM vibecoding_messages WHERE id=?)
-      ORDER BY rowid DESC LIMIT 1`,
+        AND ${messageBefore}
+      ORDER BY ${isMysql ? messageOrderDesc : 'rowid DESC'} LIMIT 1`,
     [conversationId, messageId],
   );
   return parseAttachments(message?.attachments).filter((item) => String(item.mime || '').startsWith('image/'));
@@ -445,7 +458,7 @@ export async function lessonSystemMessage(conversation) {
 
 export async function conversationHistory(conversationId, limit = HISTORY_MESSAGES) {
   return (await arows(
-    "SELECT role, content, attachments FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at DESC, rowid DESC LIMIT ?",
+    `SELECT role, content, attachments FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY ${messageOrderDesc} LIMIT ?`,
     [conversationId, limit],
   )).reverse().map((message) => {
     const attachments = parseAttachments(message.attachments);
@@ -1004,7 +1017,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 50 });
     const total = Number(await acount('SELECT COUNT(*) n FROM vibecoding_messages WHERE conversation_id = ?', [conversation.id]) || 0);
     const messages = (await arows(
-      `SELECT * FROM vibecoding_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM vibecoding_messages WHERE conversation_id = ? ORDER BY ${messageOrderDesc} LIMIT ? OFFSET ?`,
       [conversation.id, limit, offset],
     )).reverse().map(normalizeMessage);
     // 一个对话现在可以有**多份产物的提交**（按产物提交，2026-09-15）。
@@ -1158,15 +1171,18 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   }
 
   // 重新生成：清掉最后一条用户消息之后的回答，重新问一次（失败重试也走这里）
+  // SQLite 用原来的 rowid 边界，避免同毫秒随机 id 把历史消息删错；
+  // MySQL 尚无插入顺序列，只能按 (created_at, id) 做确定性截断（并非真实插入顺序）。
   const regenerateMatch = part.match(/^\/conversations\/([^/]+)\/messages\/regenerate$/);
   if (regenerateMatch && method === 'POST') {
     const { auth: ownerAuth, conversation } = await ownConversation(ctx, regenerateMatch[1]);
     assertConversationEditable(conversation);
-    const lastUser = await arow("SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
+    const lastUser = await arow(`SELECT ${messagePosition} FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY ${messageOrderDesc} LIMIT 1`, [conversation.id]);
     if (!lastUser) throw errors.badRequest('还没有可以重新生成的消息', 'VIBECODING_NO_MESSAGE');
     await persistConversationAttachmentImages(conversation.id);
-    await aq('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
-      [conversation.id, lastUser.created_at, lastUser.created_at, lastUser.message_rowid]);
+    const lastUserPosition = messagePositionValue(lastUser);
+    await aq(`DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND ${messageOrderKey} > ?))`,
+      [conversation.id, lastUser.created_at, lastUser.created_at, lastUserPosition]);
     return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId: lastUser.id });
   }
 
@@ -1175,15 +1191,16 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   if (messageEditMatch && method === 'POST') {
     const { auth: ownerAuth, conversation } = await ownConversation(ctx, messageEditMatch[1]);
     assertConversationEditable(conversation);
-    const message = await arow('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageEditMatch[2], conversation.id]);
+    const message = await arow(`SELECT ${messagePosition} FROM vibecoding_messages WHERE id=? AND conversation_id=?`, [messageEditMatch[2], conversation.id]);
     if (!message) throw errors.notFound('消息不存在', 'VIBECODING_MESSAGE_NOT_FOUND');
     if (message.role !== 'user') throw errors.badRequest('只能编辑自己发出的消息', 'VIBECODING_MESSAGE_NOT_EDITABLE');
-    const lastUser = await arow("SELECT id FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC, rowid DESC LIMIT 1", [conversation.id]);
+    const lastUser = await arow(`SELECT id FROM vibecoding_messages WHERE conversation_id=? AND role='user' ORDER BY ${messageOrderDesc} LIMIT 1`, [conversation.id]);
     if (lastUser?.id !== message.id) throw errors.badRequest('只能编辑最后一条消息', 'VIBECODING_MESSAGE_NOT_LAST');
     const content = nonEmptyString(body.content, '消息内容', { max: MAX_MESSAGE_CHARS });
     await persistConversationAttachmentImages(conversation.id);
-    await aq('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid > ?))',
-      [conversation.id, message.created_at, message.created_at, message.message_rowid]);
+    const messagePositionValueForEdit = messagePositionValue(message);
+    await aq(`DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND ${messageOrderKey} > ?))`,
+      [conversation.id, message.created_at, message.created_at, messagePositionValueForEdit]);
     await aq('UPDATE vibecoding_messages SET content=? WHERE id=?', [content, message.id]);
     await aq('UPDATE vibecoding_conversations SET last_message_at=?,updated_at=? WHERE id=?', [nowIso(), nowIso(), conversation.id]);
     return streamAssistantReply(ctx, { auth: ownerAuth, conversation, userMessageId: message.id });
@@ -1194,11 +1211,11 @@ async function handleStudentVibeCoding(ctx, auth, part) {
   if (messageDeleteMatch && method === 'DELETE') {
     const { conversation } = await ownConversation(ctx, messageDeleteMatch[1]);
     assertConversationEditable(conversation);
-    const message = await arow('SELECT rowid AS message_rowid, * FROM vibecoding_messages WHERE id=? AND conversation_id=?', [messageDeleteMatch[2], conversation.id]);
+    const message = await arow(`SELECT ${messagePosition} FROM vibecoding_messages WHERE id=? AND conversation_id=?`, [messageDeleteMatch[2], conversation.id]);
     if (!message) throw errors.notFound('消息不存在', 'VIBECODING_MESSAGE_NOT_FOUND');
     await persistConversationAttachmentImages(conversation.id);
-    await aq('DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND rowid >= ?))',
-      [conversation.id, message.created_at, message.created_at, message.message_rowid]);
+    await aq(`DELETE FROM vibecoding_messages WHERE conversation_id=? AND (created_at > ? OR (created_at = ? AND ${messageOrderKey} >= ?))`,
+      [conversation.id, message.created_at, message.created_at, messagePositionValue(message)]);
     await audit(ctx, 'VIBECODING_MESSAGE_DELETE', 'VIBECODING_CONVERSATION', conversation.id, { messageId: message.id, role: message.role }, null);
     return { deleted: true, id: message.id };
   }
@@ -1233,7 +1250,7 @@ async function handleStudentVibeCoding(ctx, auth, part) {
     // 产物清单也要一起定格：作品广场靠它判断「这次交上来的到底是哪份产物」（见 submissionPreview），
     // 以及那份文档的配图在哪。只在提交这一刻取，之后学生再改也不会影响广场那一版。
     const artifacts = await snapshotArtifacts(conversation.id, includedNames, files, ownerAuth.user.id);
-    const transcript = (await arows("SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY created_at, rowid", [conversation.id]))
+    const transcript = (await arows(`SELECT role, content, created_at FROM vibecoding_messages WHERE conversation_id=? AND status='SUCCEEDED' ORDER BY ${messageOrderAsc}`, [conversation.id]))
       .map((message) => ({ role: message.role, content: message.content, createdAt: message.created_at }));
     const title = body.title === undefined || String(body.title).trim() === '' ? conversation.title : nonEmptyString(body.title, '作品标题', { max: 60 });
     const description = String(body.description || '').slice(0, 1000);

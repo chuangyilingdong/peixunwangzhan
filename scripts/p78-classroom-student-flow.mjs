@@ -201,7 +201,7 @@ try {
      
     await aq("INSERT INTO usage_records(id,org_id,user_id,class_session_id,modality,model,credits_charged,status,pricing_snapshot,created_at,cost_fen) VALUES ('p78_success',?,?,?,'TEXT','real-model',0,'SUCCESS','{\"provider\":\"real\"}',datetime('now'),0)", [seeded.orgId, seeded.studentId, next.data.id]);
     
-    await run(['--input-type=module', '-e', `const {settleSessionStudents}=await import('./apps/server/src/services/classroomSessions.js'); settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}}); settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}});`]);
+    await run(['--input-type=module', '-e', `const {settleSessionStudents}=await import('./apps/server/src/services/classroomSessions.js'); await settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}}); await settleSessionStudents({sessionId:${JSON.stringify(next.data.id)}}); const {closePool}=await import('./packages/database/src/store.js'); await closePool();`]);
     const detail = await api(`/api/org/sessions/${next.data.id}`, { token: teacher });
     check('结束后真实成功不修改已结课结果，重复结算保持冻结', detail.data.students.find(x=>x.studentId===seeded.studentId)?.status === 'INCOMPLETE');
   }

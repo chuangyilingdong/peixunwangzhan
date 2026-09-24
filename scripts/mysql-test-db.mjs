@@ -60,6 +60,56 @@ async function loadMysql2() {
   return (await import(pathToFileURL(entry).href)).default;
 }
 
+/**
+ * 把「生产对齐表」（scripts/rds-schema-align.json）里的列，**在 DDL 文本里**就改成生产那份定义。
+ *
+ * 为什么在文本上改、而不是灌完再 ALTER（2026-09-24 实测后改的做法）：
+ *   · ALTER 是**整列重定义**，`MODIFY col MEDIUMTEXT` 会把 NOT NULL / DEFAULT 一起抹掉 ——
+ *     `old_value` / `metadata` 这类列就是这么变成"本机比生产宽松"的（省掉该列的 INSERT
+ *     在本地静默写进 NULL，而生产是 NOT NULL）。
+ *   · 每次重置几十条 ALTER 要好几秒，而验收套件**每个脚本都重置一次** —— 这笔开销会直接
+ *     摊到整套跑的时间上。改文本是零成本。
+ * 只动「列定义行」，表级约束/索引行一律不碰；行尾的 CHECK 会保留（重建定义时不能弄丢）。
+ *
+ * 返回 { sql, aligned, covered }：covered 是"已被对齐表接管"的列集合，兜底加宽要跳过它们。
+ */
+function alignColumnsInDdl(sql) {
+  let want = {};
+  try { want = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts/rds-schema-align.json'), 'utf8')).columns || {}; } catch { want = {}; }
+  const q = (v) => `'${String(v).replaceAll("'", "''")}'`;
+  let table = ''; let aligned = 0;
+  const out = sql.split('\n').map((line) => {
+    const head = /^CREATE TABLE IF NOT EXISTS `([^`]+)`/.exec(line);
+    if (head) { table = head[1]; return line; }
+    if (!table) return line;
+    const m = /^(\s*)`([^`]+)`\s+[A-Za-z][\w]*(?:\([^)]*\))?(.*)$/.exec(line);
+    if (!m) return line;
+    const indent = m[1]; const col = m[2]; const rest = m[3];
+    const spec = want[`${table}.${col}`];
+    if (!spec) return line;
+    const textType = /text|blob|json/i.test(spec.type);
+    // ⚠️ 不能"从头重建整行"：那样会丢掉行尾的逗号（第一版就是这么把 DDL 改坏的）。
+    //    这里只替换**类型**、按需补 NOT NULL / DEFAULT，其余（含 CHECK 与逗号）原样保留；
+    //    新增的约束插在 CHECK **之前**（CHECK 后面跟 NOT NULL 是语法错）。
+    const comma = /,\s*$/.test(rest) ? ',' : '';
+    const core = comma ? rest.replace(/,\s*$/, '') : rest;
+    const checkAt = core.search(/\sCHECK\s*\(/i);
+    let headPart = checkAt >= 0 ? core.slice(0, checkAt) : core;
+    const tail = checkAt >= 0 ? core.slice(checkAt) : '';
+    if (spec.notNull && !/\bNOT\s+NULL\b/i.test(headPart)) headPart += ' NOT NULL';
+    const defMatch = /\bDEFAULT\s+('(?:[^']|'')*'|\S+)/i.exec(headPart);
+    if (defMatch) {
+      // 已有默认值：新类型是 TEXT 系时必须改成表达式（MySQL 8 里 TEXT 列不收字面量默认值）
+      if (textType) headPart = headPart.replace(defMatch[0], `DEFAULT (${defMatch[1]})`);
+    } else if (spec.default !== undefined) {
+      headPart += textType ? ` DEFAULT (${q(spec.default)})` : ` DEFAULT ${q(spec.default)}`;
+    }
+    aligned += 1;
+    return `${indent}\`${col}\` ${spec.type.toUpperCase()}${headPart}${tail}${comma}`;
+  }).join('\n');
+  return { sql: out, aligned, covered: new Set(Object.keys(want)) };
+}
+
 export async function resetMysqlDatabase({ silent = false, database = null, dropToo = [] } = {}) {
   const env = { ...mysqlEnvFromProcess(), ...(database ? { MYSQL_DATABASE: database } : {}) };
   const { sql, tmp } = generateMysqlDdl();
@@ -97,29 +147,38 @@ export async function resetMysqlDatabase({ silent = false, database = null, drop
       for (const row of tables) await conn.query(`DROP TABLE IF EXISTS \`${row.t}\``);
       await conn.query('SET FOREIGN_KEY_CHECKS=1');
     }
-    await conn.query(sql);
-    // ── 夹具列加宽（2026-09-24）──────────────────────────────────────────────
-    // 为什么要这一步：列宽是 script 12 **按源库真实数据长度**定的，而本机的源库是种子数据
-    // （很小）→ 那些"生产上其实是 mediumtext"的 JSON 列在这里被定成 varchar(255)，
-    // 验收夹具一写大对象就 `Data too long for column`
-    // （实测：platform_settings.ai_provider_policy 本机 varchar(255) / 生产 RDS mediumtext）。
-    // 规则：**按列名特征**加宽（payload 类的列），而且**只加宽非索引列** —— 索引列会被 MySQL
-    // 直接拒（3072 字节上限），拒绝就跳过（`.catch(()=>{})`），绝不因此让"重置"失败。
+    // 灌之前先按「生产对齐表」把列定义改写掉（见 alignColumnsInDdl 的说明：在文本上改，零 ALTER 开销）
+    const prepared = alignColumnsInDdl(sql);
+    await conn.query(prepared.sql);
+    // ── 兜底加宽（2026-09-24）────────────────────────────────────────────────
+    // 列宽是 script 12 **按源库真实数据长度**定的，而本机的源库是种子数据（很小）→ 那些
+    // "生产上其实是 mediumtext"的 JSON 列在这里被定成 varchar(255)，夹具一写大对象就
+    // `Data too long for column`。生产对齐表已经覆盖了**已知**的这类列，这里只兜底
+    // "名字像 payload、但生产对齐表里还没有"的列（例如刚加的新列）。
+    // ⚠️ 必须保留 NOT NULL 与默认值：`MODIFY col MEDIUMTEXT` 是**整列重定义**，早先的写法
+    //    把 payload 列的 `NOT NULL DEFAULT '{}'` 一起抹掉了 —— 症状是"本机比生产宽松"。
+    //    MySQL 8 里 TEXT 列的默认值只能写成**表达式** `DEFAULT ('{}')`（字面量会被拒），
+    //    实测省略该列插入后取值仍是 `{}`。
     {
+      const sqlQuote = (v) => `'${String(v).replaceAll("'", "''")}'`;
       const WIDEN_NAME = /(policy|snapshot|content|metadata|attachments|settings|presets|references|payload|description|message|prompt|note|json|body|lines|params|options|before_data|after_data|_data$)/i;
       const [cols] = await conn.query(
-        'SELECT TABLE_NAME AS t, COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND DATA_TYPE IN ("varchar","char","tinytext","text")',
+        'SELECT TABLE_NAME AS t, COLUMN_NAME AS c, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND DATA_TYPE IN ("varchar","char","tinytext","text")',
         [env.MYSQL_DATABASE],
       );
       let widened = 0;
       for (const row of cols) {
+        if (prepared.covered.has(`${row.t}.${row.c}`)) continue;   // 已按生产定义建好，别再动它
         if (!WIDEN_NAME.test(String(row.c))) continue;
+        const notNull = row.IS_NULLABLE === 'NO' ? ' NOT NULL' : '';
+        const hasDefault = row.COLUMN_DEFAULT !== null && row.COLUMN_DEFAULT !== undefined;
         try {
-          await conn.query('ALTER TABLE `' + row.t + '` MODIFY `' + row.c + '` MEDIUMTEXT');
+          await conn.query(`ALTER TABLE \`${row.t}\` MODIFY \`${row.c}\` MEDIUMTEXT`
+            + `${notNull}${hasDefault ? ` DEFAULT (${sqlQuote(row.COLUMN_DEFAULT)})` : ''}`);
           widened += 1;
         } catch { /* 索引列/超行长：跳过（那说明它本来就该窄） */ }
       }
-      if (!silent && widened) process.stdout.write('  [mysql] 已加宽 ' + widened + ' 个 payload 列（与生产 RDS 同口径）\n');
+      if (!silent) process.stdout.write(`  [mysql] 列校准：生产对齐 ${prepared.aligned} · 兜底加宽 ${widened}\n`);
     }
 
   } finally {

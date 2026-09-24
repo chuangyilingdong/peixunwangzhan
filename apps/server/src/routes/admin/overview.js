@@ -589,7 +589,7 @@ export async function handleOverview(ctx, part, method) {
     const aiTasks = await singleNumber(`SELECT COUNT(*) n FROM generation_jobs WHERE ${scoped('generation_jobs').where}`, scoped('generation_jobs').params);
     // 2026-09-13（P4 删积分）：byOrg / byModality 从「积分」改成算力金额（分）——与算力层同一份账本。
     const byOrg = (await arows(`SELECT organization.id,organization.name,COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END),0) fen,COUNT(usage.id) calls
-      FROM organizations organization LEFT JOIN usage_records usage ON usage.org_id=organization.id AND usage.created_at>=? AND usage.created_at<?
+      FROM organizations organization LEFT JOIN usage_records AS \`usage\` ON usage.org_id=organization.id AND usage.created_at>=? AND usage.created_at<?
       ${orgFilter ? 'WHERE organization.id=?' : ''} GROUP BY organization.id ORDER BY fen DESC,organization.name ASC LIMIT 10`, orgFilter ? [since, until, orgFilter] : [since, until])).map((item) => ({ id: item.id, name: item.name, costFen: Number(item.fen || 0), calls: Number(item.calls || 0) }));
     const byModality = (await arows(`SELECT modality,COUNT(*) calls,COALESCE(SUM((SELECT SUM(a.upstream_cost_fen) FROM compute_attempts a WHERE a.call_id=usage_records.compute_call_id AND a.cost_source<>'UNKNOWN')),0) fen,COUNT(CASE WHEN status='SUCCESS' THEN 1 END) successCalls,COUNT(CASE WHEN status IN ('FAILED','BLOCKED') THEN 1 END) abnormalCalls
       FROM usage_records WHERE ${usage.where} GROUP BY modality ORDER BY fen DESC,modality ASC`, usage.params)).map((item) => ({ modality: item.modality, calls: Number(item.calls || 0), costFen: Number(item.fen || 0), successCalls: Number(item.success_calls ?? item.successCalls ?? 0), abnormalCalls: Number(item.abnormal_calls ?? item.abnormalCalls ?? 0) }));
@@ -746,7 +746,7 @@ export async function handleOverview(ctx, part, method) {
     const sort = Object.hasOwn({ created: true, costFen: true }, sortKey) ? sortKey : 'created';
     const orderBy = sort === 'costFen' ? `(SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) DESC,usage.created_at DESC,usage.id DESC` : 'usage.created_at DESC,usage.id DESC';
     const where = conditions.join(' AND ');
-    const countFromWhere = `FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id ${where ? 'WHERE ' + where : ''}`;
+    const countFromWhere = `FROM usage_records AS \`usage\` JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id ${where ? 'WHERE ' + where : ''}`;
     const total = Number((await arow(`SELECT COUNT(*) n ${countFromWhere}`, params))?.n || 0);
     const unknownCosts = Number((await arow(`SELECT COUNT(*) n ${countFromWhere} AND (usage.compute_call_id IS NULL OR NOT EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) OR EXISTS (SELECT 1 FROM compute_attempts a WHERE a.call_id=usage.compute_call_id AND (a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL)))`, params))?.n || 0);
     const totalFen = Number((await arow(`SELECT COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END),0) n ${countFromWhere}`, params))?.n || 0);
@@ -757,7 +757,7 @@ export async function handleOverview(ctx, part, method) {
     };
     const offset = (page - 1) * limit;
     const items = await amap((await arows(
-      `SELECT usage.*,organization.name organization_name,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,session.class_id class_id,session.title class_name FROM usage_records usage JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id ${where ? 'WHERE ' + where : ''} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+      `SELECT \`usage\`.*,organization.name organization_name,user.login user_login,user.display_name user_name,project.title project_title,work.title work_title,session.id session_id,session.lesson_id session_lesson_id,session.class_id class_id,session.title class_name FROM usage_records AS \`usage\` JOIN organizations organization ON organization.id=usage.org_id LEFT JOIN users user ON user.id=usage.user_id LEFT JOIN student_projects project ON project.id=usage.project_id LEFT JOIN works work ON work.id=usage.work_id LEFT JOIN class_sessions session ON session.id=usage.class_session_id ${where ? 'WHERE ' + where : ''} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     )), async (item) => ({
       id: item.id, orgId: item.org_id, organizationName: item.organization_name || null,
@@ -807,14 +807,14 @@ export async function handleOverview(ctx, part, method) {
         ${SALE_FEN},
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls, COUNT(DISTINCT usage.user_id) studentCount
       FROM organizations organization
-      LEFT JOIN usage_records usage ON usage.org_id = organization.id AND usage.created_at>=? AND usage.created_at<?
+      LEFT JOIN usage_records AS \`usage\` ON usage.org_id = organization.id AND usage.created_at>=? AND usage.created_at<?
       GROUP BY organization.id ORDER BY saleFen DESC, organization.name ASC`, [since, until]))
       .map((item) => ({ id: item.id, name: item.name, status: item.status, saleFen: Number(item.saleFen || 0), costFen: Number(item.fen || 0), calls: Number(item.calls || 0), studentCount: Number(item.studentCount || 0) }));
     const students = orgId ? (await arows(`SELECT student.id, student.login, student.display_name,
         ${SALE_FEN},
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls,
         COUNT(DISTINCT usage.series_id) seriesCount, MAX(usage.created_at) lastAt
-      FROM usage_records usage JOIN users student ON student.id = usage.user_id
+      FROM usage_records AS \`usage\` JOIN users student ON student.id = usage.user_id
       WHERE usage.org_id=? AND usage.created_at>=? AND usage.created_at<?
       GROUP BY student.id ORDER BY saleFen DESC, student.display_name ASC`, [orgId, since, until]))
       .map((item) => ({ id: item.id, login: item.login, name: item.display_name || item.login, saleFen: Number(item.saleFen || 0), costFen: Number(item.fen || 0), calls: Number(item.calls || 0), seriesCount: Number(item.seriesCount || 0), lastAt: item.last_at || item.lastAt || null })) : [];
@@ -830,7 +830,7 @@ export async function handleOverview(ctx, part, method) {
     const items = await arows(`SELECT organization.name orgName, organization.id orgId, student.login studentLogin,
         student.display_name studentName, student.id studentId,
         COALESCE(SUM(CASE WHEN usage.status='SUCCESS' THEN (SELECT CASE WHEN COUNT(*)=0 OR SUM(CASE WHEN a.cost_source='UNKNOWN' OR a.upstream_cost_fen IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(a.upstream_cost_fen) END FROM compute_attempts a WHERE a.call_id=usage.compute_call_id) ELSE 0 END), 0) fen, COUNT(usage.id) calls
-      FROM usage_records usage
+      FROM usage_records AS \`usage\`
       JOIN organizations organization ON organization.id = usage.org_id
       JOIN users student ON student.id = usage.user_id
       WHERE usage.created_at>=? AND usage.created_at<?${orgId ? ' AND usage.org_id=?' : ''}

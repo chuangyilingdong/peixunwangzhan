@@ -632,7 +632,7 @@ async function buildStudentDataExport(user, org) {
     `SELECT usage.id, usage.modality, usage.model, usage.credits_charged, usage.status, usage.created_at,
             project.title AS project_title,
             (SELECT ${salePriceFenSuccessSql('a')} FROM compute_attempts a WHERE a.call_id = usage.compute_call_id) AS sale_fen
-     FROM usage_records usage
+     FROM usage_records AS \`usage\`
  LEFT JOIN student_projects project ON project.id=usage.project_id AND project.student_id=usage.user_id AND project.org_id=usage.org_id
      WHERE usage.user_id=? AND usage.org_id=?
      ORDER BY usage.created_at DESC LIMIT 500`,

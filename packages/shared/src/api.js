@@ -137,6 +137,7 @@ export function createApiClient({ baseUrl = apiBase(), getToken = () => null, on
     // 所以这一步**直接从 /api/ 取字节**，别绕 blob: 中转。
     fetchDataUrl: async (path) => {
       const target = String(path || '');
+      if (/^data:image\//i.test(target)) return target;
       const token = getToken();
       const response = await fetch(target.startsWith('/') ? target : requestUrl(baseUrl, target), { credentials: 'include', headers: { ...(token ? { authorization: 'Bearer ' + token } : {}) } });
       if (!response.ok) throw new ApiError(fallbackMessage(response.status, '素材读取失败'), { status: response.status, code: 'ASSET_FETCH_FAILED', details: null });

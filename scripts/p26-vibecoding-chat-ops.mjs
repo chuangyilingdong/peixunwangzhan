@@ -58,6 +58,7 @@ assert.equal((await arow("SELECT COUNT(*) n FROM class_sessions WHERE teacher_id
 // 用与服务器相同的环境变量导入服务端模块，直接验证 system 上下文拼装
 process.env.PLATFORM_DATA_DIR = temp;
 const { lessonSystemMessage } = await import(pathToFileURL(path.join(root, 'apps/server/src/routes/vibecoding.js')).href);
+const { seedDefaultArtifacts } = await import(pathToFileURL(path.join(root, 'apps/server/src/services/vibecodingArtifacts.js')).href);
 // RDS 阶段 2：夹具改用数据层（同一个库、驱动无关）。必须是设好 PLATFORM_DB_PATH 之后的**动态** import
 
 const systemMessage = await lessonSystemMessage({ lesson_id: lesson.id });
@@ -212,6 +213,70 @@ try {
   assert.equal(submitted.status, 200, `提交失败: ${JSON.stringify(submitted.data)}`);
   const afterSubmitStream = await stream(`/api/student/vibecoding/conversations/${conversationId}/messages`, { token: student, body: { content: '提交后还能聊' } });
   assert.ok(afterSubmitStream.some((item) => item.event === 'done'), `提交后应当仍可继续创作: ${JSON.stringify(afterSubmitStream)}`);
+
+  // 8) 同毫秒消息顺序：SQLite 必须继续按 rowid 插入顺序，不能按随机 id 猜顺序。
+  // 每组都故意让后插入的消息 id 更小；按 id 排序会选错最后一条用户消息。
+  async function sameTimestampConversation(prefix) {
+    const conversationId = `${prefix}_conversation`;
+    await aq(`INSERT INTO vibecoding_conversations(id,org_id,student_id,lesson_id,class_session_id,title,files,entry_file,status,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,'{}','index.html','DRAFT',?,?)`, [
+      conversationId, classroomStudent.org_id, classroomStudent.id, lesson.id, 'p26_session', `P26 ${prefix}`, '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z',
+    ]);
+    await seedDefaultArtifacts(conversationId);
+    const timestamp = '2026-09-24T00:00:00.000Z';
+    for (const [id, role, content] of [
+      [`${prefix}_z_user`, 'user', `${prefix} first`],
+      [`${prefix}_z_assistant`, 'assistant', `${prefix} first answer`],
+      [`${prefix}_a_user`, 'user', `${prefix} second`],
+      [`${prefix}_a_assistant`, 'assistant', `${prefix} second answer`],
+    ]) {
+      await aq('INSERT INTO vibecoding_messages(id,conversation_id,role,content,model,status,created_at) VALUES (?,?,?,?,?,?,?)',
+        [id, conversationId, role, content, 'mock-model', 'SUCCEEDED', timestamp]);
+    }
+    return { conversationId, timestamp };
+  }
+
+  {
+    const { conversationId } = await sameTimestampConversation('same-order');
+    const reread = await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student });
+    assert.equal(reread.status, 200, '同毫秒会话读取失败');
+    assert.deepEqual(reread.data.messages.map((message) => message.id), [
+      'same-order_z_user', 'same-order_z_assistant', 'same-order_a_user', 'same-order_a_assistant',
+    ], 'SQLite 同毫秒消息必须保留插入顺序');
+  }
+
+  {
+    const { conversationId } = await sameTimestampConversation('same-regenerate');
+    const regenerated = await stream(`/api/student/vibecoding/conversations/${conversationId}/messages/regenerate`, { token: student });
+    assert.ok(regenerated.some((item) => item.event === 'done'), `同毫秒重新生成应完成: ${JSON.stringify(regenerated)}`);
+    const messages = (await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student })).data.messages;
+    assert.deepEqual(messages.map((message) => message.id).slice(0, 3), [
+      'same-regenerate_z_user', 'same-regenerate_z_assistant', 'same-regenerate_a_user',
+    ], '同毫秒重新生成不能误删最后用户消息及其之前的历史');
+    assert.equal(messages.length, 4, '同毫秒重新生成应保留三条历史并写入新的助手回复');
+    assert.notEqual(messages[3].id, 'same-regenerate_a_assistant', '重新生成应替换旧助手回复');
+  }
+
+  {
+    const { conversationId } = await sameTimestampConversation('same-edit');
+    const edit = await stream(`/api/student/vibecoding/conversations/${conversationId}/messages/same-edit_a_user/edit`, {
+      token: student, body: { content: 'same-edit changed' },
+    });
+    assert.ok(edit.some((item) => item.event === 'done'), '同毫秒编辑重发应完成');
+    const messages = (await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student })).data.messages;
+    assert.equal(messages.find((message) => message.id === 'same-edit_a_user')?.content, 'same-edit changed', '应编辑最后插入的用户消息');
+    assert.equal(messages.some((message) => message.id === 'same-edit_z_user' && message.content === 'same-edit first'), true, '较早用户消息不得被误编辑');
+  }
+
+  {
+    const { conversationId } = await sameTimestampConversation('same-delete');
+    const deleted = await api(`/api/student/vibecoding/conversations/${conversationId}/messages/same-delete_a_user`, { method: 'DELETE', token: student });
+    assert.equal(deleted.status, 200, `同毫秒删除失败: ${JSON.stringify(deleted.data)}`);
+    const messages = (await api(`/api/student/vibecoding/conversations/${conversationId}`, { token: student })).data.messages;
+    assert.deepEqual(messages.map((message) => message.id), [
+      'same-delete_z_user', 'same-delete_z_assistant',
+    ], '同毫秒删除只能删除目标消息及其之后的消息');
+  }
 
   console.log(JSON.stringify({
     name: 'vibecoding-chat-ops', pass: true,

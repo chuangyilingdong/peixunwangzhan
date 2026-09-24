@@ -9,17 +9,7 @@ export function previewHref(value) {
   return /^https?:\/\//i.test(value) || /^\/(?!\/)/.test(value) ? value : null;
 }
 
-// 作品图片一律转成 data: 地址：学生代码跑在 opaque 起源的 sandbox iframe 里，
-// 拿不到父页面的 blob: 地址（实测 <img src="blob:..."> 在该文档内必然 onerror），
-// 而 data: 在沙箱内和父页面都能显示（两处 CSP 都允许 img-src data:）。
-async function readAsDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('作品图片读取失败。'));
-    reader.readAsDataURL(blob);
-  });
-}
+// 作品图片直接从鉴权接口转 data:；不再 fetch blob:（生产 CSP 不允许 connect-src blob:）。
 
 /**
  * 只读作品预览弹窗（画布 / VibeCoding 产物都走它）。
@@ -45,14 +35,7 @@ export function ClassroomWork({ api, workBase, work = {}, onClose }) {
     const prefix = `/api/${workBase}/${encodeURIComponent(work.source)}/${encodeURIComponent(work.id)}/images/`;
     Promise.allSettled(Object.entries(data?.imageUrls || {}).map(async ([id, path]) => {
       if (typeof path !== 'string' || !path.startsWith(prefix)) throw new Error('图片地址不属于此作品。');
-      const blobUrl = await api.fetchBlobUrl(path);
-      try {
-        const dataUrl = await readAsDataUrl(await (await fetch(blobUrl)).blob());
-        if (cancelled) return null;
-        return [id, dataUrl];
-      } finally {
-        URL.revokeObjectURL(blobUrl);
-      }
+      return [id, await api.fetchDataUrl(path)];
     })).then((entries) => {
       if (cancelled) return;
       setImages(Object.fromEntries(entries.filter((entry) => entry.status === 'fulfilled' && entry.value).map((entry) => entry.value)));
@@ -67,7 +50,8 @@ export function ClassroomWork({ api, workBase, work = {}, onClose }) {
     const match = raw.match(/^\/api\/student\/file-assets\/([\w-]+)\/download(?:[?#].*)?$/);
     if (match) return images[match[1]] || null;
     const entry = Object.entries(data?.imageUrls || {}).find(([, path]) => path === raw);
-    return entry ? images[entry[0]] || null : null;
+    if (entry) return images[entry[0]] || null;
+    return /^data:image\//i.test(raw) || /^https:\/\//i.test(raw) || /^\/(?!\/|api\/student\/file-assets\/)/.test(raw) ? raw : null;
   };
   const files = Object.fromEntries(Object.entries(data?.files || {}).map(([name, content]) => {
     let resolved = String(content ?? '');

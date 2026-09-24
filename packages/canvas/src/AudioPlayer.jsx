@@ -38,38 +38,53 @@ function VolumeIcon({ muted }) {
   </svg>;
 }
 
-export function AudioPlayer({ src, label = '', className = '' }) {
+export function AudioPlayer({ src, fallbackSrc = '', label = '', className = '' }) {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [usingFallback, setUsingFallback] = useState(false);
+  const activeSrc = usingFallback ? fallbackSrc : src;
 
-  // 换素材要复位：否则上一首的进度会留在新素材的进度条上（看着像"新歌播到一半"）。
-  useEffect(() => { setPlaying(false); setCurrent(0); setDuration(0); }, [src]);
+  useEffect(() => { setPlaying(false); setCurrent(0); setDuration(0); setFailed(false); setUsingFallback(false); }, [src, fallbackSrc]);
 
   useEffect(() => {
     const element = audioRef.current;
     if (!element) return undefined;
     const onTime = () => setCurrent(element.currentTime || 0);
     const onMeta = () => setDuration(Number.isFinite(element.duration) ? element.duration : 0);
+    const onError = () => {
+      setPlaying(false);
+      if (!usingFallback && fallbackSrc && fallbackSrc !== src) setUsingFallback(true);
+      else setFailed(true);
+    };
     const onEnd = () => { setPlaying(false); setCurrent(0); };
     element.addEventListener('timeupdate', onTime);
     element.addEventListener('loadedmetadata', onMeta);
     element.addEventListener('durationchange', onMeta);
+    element.addEventListener('error', onError);
     element.addEventListener('ended', onEnd);
     return () => {
       element.removeEventListener('timeupdate', onTime);
       element.removeEventListener('loadedmetadata', onMeta);
       element.removeEventListener('durationchange', onMeta);
+      element.removeEventListener('error', onError);
       element.removeEventListener('ended', onEnd);
     };
-  }, [src]);
+  }, [src, fallbackSrc, usingFallback]);
 
   const toggle = () => {
     const element = audioRef.current;
-    if (!element) return;
-    if (element.paused) { element.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); }
+    if (!element || failed || !activeSrc) return;
+    if (element.paused) {
+      element.play().then(() => setPlaying(true)).catch(() => {
+        setPlaying(false);
+        if (!usingFallback && fallbackSrc && fallbackSrc !== src) setUsingFallback(true);
+        else setFailed(true);
+      });
+    }
     else { element.pause(); setPlaying(false); }
   };
   const seek = (event) => {
@@ -86,6 +101,7 @@ export function AudioPlayer({ src, label = '', className = '' }) {
   };
 
   return <div className={`cv-audio ${className}`.trim()}>
+    {failed ? <p className="cv-audio__error">音频已失效，暂时无法播放</p> : null}
     {/* 第一行：进度条（原生 input[range]，所以键盘左右键也能调） */}
     <input
       className="cv-audio__progress"
@@ -94,16 +110,17 @@ export function AudioPlayer({ src, label = '', className = '' }) {
       max={duration || 0}
       step="0.05"
       value={Math.min(current, duration || 0)}
+      disabled={failed || !activeSrc}
       onChange={seek}
       aria-label={label ? `${label} 播放进度` : '播放进度'}
       style={{ '--cv-audio-progress': `${duration ? Math.min(100, (current / duration) * 100) : 0}%` }}
     />
     {/* 第二行：操作按钮 + 时间（进度条单独占一行，窄框体里也不会被挤没） */}
     <div className="cv-audio__row">
-      <button type="button" className="cv-audio__btn nodrag" onClick={toggle} aria-label={playing ? '暂停' : '播放'}>{<PlayIcon playing={playing} />}</button>
+      <button type="button" className="cv-audio__btn nodrag" onClick={toggle} disabled={failed || !activeSrc} aria-label={playing ? '暂停' : '播放'}>{<PlayIcon playing={playing} />}</button>
       <span className="cv-audio__time">{formatTime(current)} / {formatTime(duration)}</span>
-      <button type="button" className="cv-audio__btn nodrag" onClick={toggleMute} aria-label={muted ? '取消静音' : '静音'}><VolumeIcon muted={muted} /></button>
+      <button type="button" className="cv-audio__btn nodrag" onClick={toggleMute} disabled={failed || !activeSrc} aria-label={muted ? '取消静音' : '静音'}><VolumeIcon muted={muted} /></button>
     </div>
-    <audio ref={audioRef} src={src} preload="metadata" hidden />
+    <audio ref={audioRef} src={activeSrc} preload="metadata" hidden />
   </div>;
 }

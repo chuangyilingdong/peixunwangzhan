@@ -93,8 +93,12 @@ export function MyWorkDetailPage({ api }) {
 
   // 画布节点的素材地址 → data:（CanvasEditor 收同步值或 Promise 都行，见它的 useDisplayUrl）
   const resolveAssetUrl = useCallback((value) => imageData[fileIdOfAssetUrl(value)] || null, [imageData]);
-  // 相册里一张图怎么显示：私有素材走已转好的 data:，外链（上游图床 https）原样用
-  const resolveImageSrc = useCallback((item) => (item?.fileId ? (imageData[item.fileId] || '') : String(item?.url || '')), [imageData]);
+  const resolveImageSrc = useCallback((item) => (item?.fileId
+    ? (imageData[item.fileId] || work?.imageUrls?.[item.fileId] || item.url || '')
+    : String(item?.url || '')), [imageData, work]);
+  const resolveMediaSrc = useCallback((item) => (item?.fileId
+    ? (imageData[item.fileId] || work?.imageUrls?.[item.fileId] || '')
+    : ''), [imageData, work]);
 
   // 产物正文里对私有素材的引用也要一起换掉，否则网页预览里全是裂图
   const files = useMemo(() => Object.fromEntries(Object.entries(work?.files || {}).map(([name, content]) => {
@@ -177,7 +181,7 @@ export function MyWorkDetailPage({ api }) {
       {notice}
       {viewTabs}
       {currentView === 'images' ? (media.length
-        ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={(item) => (item?.fileId ? (imageData[item.fileId] || '') : '')} />
+        ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={resolveMediaSrc} />
         : <ImageGallery list={images} src={resolveImageSrc} />)
         : <div className="work-detail__canvas"><CanvasEditor key={work.id} initialSnapshot={work.canvasSnapshot} readOnly showStarter={false} resolveAssetUrl={resolveAssetUrl} /></div>}
       <div className="work-detail__foot">{plazaLink}{back}</div>
@@ -202,7 +206,7 @@ export function MyWorkDetailPage({ api }) {
       <div className="mw-stage">
         {currentView === 'web' && webArtifact ? <ReplayPreview html={webHtml} title={work.title || '我的作品'} />
           : currentView === 'images' ? (media.length
-            ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={(item) => (item?.fileId ? (imageData[item.fileId] || '') : '')} />
+            ? <WorkMediaGallery media={media} assets={work?.assets} resolveSrc={resolveMediaSrc} />
             : <ImageGallery list={images} src={resolveImageSrc} />)
             : currentView === 'doc' && selectedDocument ? (documentFile
               ? <ReplayFilePreview url={documentFile.preview} name={selectedDocument.name} />

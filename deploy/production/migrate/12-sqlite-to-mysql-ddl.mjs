@@ -103,10 +103,45 @@ function splitConstraintRuns(part) {
   return out;
 }
 
+/**
+ * 去掉建表体里的 `--` 行注释。
+ *
+ * 为什么必须做（2026-09-24 实测）：解析片段靠"**片段第一个 token 是不是列名**"（下面 `raw` 那行），
+ * 而注释是粘在**下一个片段**上的 —— `usage_records.input_tokens` 上方正好有一行注释
+ * （`-- input/output_tokens 未采集：…`），于是那一段的第一个 token 是 `--`、永远匹配不上 →
+ * 片段被当成"原始 DDL 里没找到"，`DEFAULT 0` **静默丢掉**（NOT NULL 靠 pragma 补回来了，
+ * 所以症状只剩"这列没默认值"）。表现是 MySQL 侧 `ER_NO_DEFAULT_FOR_FIELD`：
+ * 应用那条省略列的 INSERT 在 SQLite 上一直好好的，一到 MySQL 就 500。
+ * 同理，注释粘在表级约束（FOREIGN KEY / CHECK…）前面时，约束也会被**一声不响**地漏掉。
+ *
+ * ⚠️ 不能拿正则一刀切：字符串字面量里的 `--`（`DEFAULT '--'`）和引号标识符里的都不能动，
+ *    所以按字符扫，只在"不在字面量里"时才把 `--` 到行尾整段丢掉。
+ *    SQLite 没有反斜杠转义（转义靠写成两个引号），所以"见到同种引号就出字面量"是安全的。
+ */
+function stripLineComments(sql) {
+  let out = ''; let quote = null;
+  for (let i = 0; i < sql.length; i += 1) {
+    const ch = sql[i];
+    if (quote) {
+      out += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; out += ch; continue; }
+    if (ch === '-' && sql[i + 1] === '-') {
+      while (i < sql.length && sql[i] !== '\n') i += 1;
+      out += '\n';
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 const meta = [];
 for (const t of tables) {
   const cols = q(`SELECT * FROM pragma_table_info('${esc(t.name)}')`);
-  const body = splitTopLevel(String(t.sql).replace(/^CREATE TABLE[^(]*\(/i, '').replace(/\)\s*$/, ''))
+  const body = splitTopLevel(stripLineComments(String(t.sql)).replace(/^CREATE TABLE[^(]*\(/i, '').replace(/\)\s*$/, ''))
     .flatMap(splitConstraintRuns);
   meta.push({ table: t.name, cols, body });
 }

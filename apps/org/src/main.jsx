@@ -435,7 +435,7 @@ function Works({ api }) {
         </div>
         {workMediaView === 'canvas'
           ? <CanvasEditor key={selectedWork.id} initialSnapshot={selectedWork.canvasSnapshot} readOnly />
-          : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} resolveSrc={(item) => (item?.fileId ? (workImageData[item.fileId] || '') : '')} />}
+          : <WorkMediaGallery media={selectedWork.media} assets={selectedWork.assets} resolveSrc={(item) => (item?.fileId ? (workImageData[item.fileId] || selectedWork.imageUrls?.[item.fileId] || '') : '')} />}
       </Panel>
     </>}
 

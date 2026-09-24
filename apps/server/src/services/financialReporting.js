@@ -104,7 +104,7 @@ export async function financialReportOptions() {
 const CALL_FROM = `FROM compute_attempts attempt
   LEFT JOIN organizations organization ON organization.id=attempt.org_id
   LEFT JOIN users student ON student.id=attempt.user_id
-  LEFT JOIN usage_records usage ON usage.id=attempt.internal_usage_record_id
+  LEFT JOIN usage_records AS \`usage\` ON usage.id=attempt.internal_usage_record_id
   LEFT JOIN class_sessions session ON session.id=COALESCE(attempt.class_session_id,usage.class_session_id)`;
 
 function callScope(filters, range) {
@@ -208,7 +208,7 @@ export async function financialReconciliationReport(filters = {}) {
       CASE WHEN SUM(CASE WHEN event.amount_minor IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE SUM(event.amount_minor) END amountMinor,
       SUM(event.quantity) recognizedQuantity,SUM(CASE WHEN event.amount_minor IS NULL THEN 1 ELSE 0 END) unknownRevenueEvents
     FROM license_revenue_events event LEFT JOIN organizations organization ON organization.id=event.org_id
-    LEFT JOIN student_course_grants grant ON grant.id=event.grant_id
+    LEFT JOIN student_course_grants AS \`grant\` ON grant.id=event.grant_id
     WHERE ${revenueWhere.join(' AND ')} GROUP BY event.org_id,event.currency`, revenueParams);
 
   // 上游成本账（第二本账）：compute_attempts.upstream_cost_fen，按机构归集到 PLATFORM_COST_CURRENCY。

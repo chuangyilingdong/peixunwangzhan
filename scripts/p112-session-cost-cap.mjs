@@ -153,8 +153,10 @@ try {
   const orgAdmin = (await api('/api/auth/login', { method: 'POST', body: { login: 'org-admin', password: 'org123' } })).data.token;
   const student = (await api('/api/auth/login', { method: 'POST', body: { login: 'student-2', password: 'study123' } })).data.token;
   assert.ok(admin && teacher && orgAdmin && student, '登录失败');
+  // 细节必须打出来：这条原来只断言状态码，红了只看到一行 ✗，还得手工重放才知道服务端说了什么。
+  const upstreamConfig = await configureUpstream(admin);
   check('⓪ 配置假上游（渠道带合同单价 → 成本可折算成 COMPUTED，不是 UNKNOWN）',
-    (await configureUpstream(admin)).status === 200);
+    upstreamConfig.status === 200, JSON.stringify(upstreamConfig).slice(0, 400));
 
   const newProject = async (lessonId) => {
     const project = await api('/api/student/projects', { method: 'POST', token: student, body: { courseLessonId: lessonId, title: 'P112 观测' } });
@@ -337,5 +339,8 @@ try {
   server.kill('SIGTERM');
   upstreamServer.close();
 }
+// 断言红了也必须把服务端日志打出来：否则 500 只剩一句「服务器内部错误」，
+// 真正的原因（`[API INTERNAL ERROR]` 那条）只在抛异常那条路上可见 —— 顶层的吞异常等于把证据藏了。
+if (failures) console.error('\n[服务端日志尾巴]\n' + serverLog.slice(-4000));
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);

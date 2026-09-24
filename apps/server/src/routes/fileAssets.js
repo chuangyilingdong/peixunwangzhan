@@ -1,6 +1,7 @@
 // P4-C04 统一文件元数据与访问授权模型
 // 提供：file_assets / file_access_grants 表的 CRUD + 授权校验 + 受保护文件流下载
 import { createReadStream } from 'node:fs';
+import { Readable, Transform } from 'node:stream';
 import { stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -20,7 +21,7 @@ import {
   orgSeriesAccessSql,
   previewInfoFor, arows, arow, aq, jsonText, isMysql } from '../lib.js';
 import { assertTransition } from '../services/domainState.js';
-import { parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
+import { maxUploadBytes, parseMultipartFormData, persistSecureUpload, uploadRoot } from '../services/fileUploadSecurity.js';
 import { ensurePreviewPdf, needsConversion, previewKindFor, verifyPreviewTicket } from '../services/materialPreview.js';
 import { reserveUpload } from '../services/uploadLimits.js';
 import { rowStorageBackend, ossRedirectUrl, materializeObject } from '../services/fileStorage.js';
@@ -30,6 +31,22 @@ const VISIBILITY_MODES = new Set(['PRIVATE', 'ORG', 'ASSIGNED_ORGS', 'PUBLIC_PLA
 const CATEGORIES = new Set(['PROMO_MATERIAL', 'PROMO_COVER', 'CLIENT_INSTALLER', 'MEDIA_ASSET', 'TEACHING_ASSET', 'GENERAL']);
 const REVIEW_STATUSES = new Set(['NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED']);
 const GRANT_TYPES = new Set(['ORG', 'ROLE', 'USER', 'PUBLIC']);
+// Image previews share the app server's memory/network budget; ordinary OSS downloads still redirect.
+const MAX_OSS_WORK_IMAGE_STREAMS = 8;
+let activeOssWorkImageStreams = 0;
+function acquireOssWorkImageStream() {
+  if (activeOssWorkImageStreams >= MAX_OSS_WORK_IMAGE_STREAMS) {
+    throw errors.serviceUnavailable('作品图片预览繁忙，请稍后重试', 'WORK_IMAGE_PREVIEW_BUSY');
+  }
+  activeOssWorkImageStreams += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeOssWorkImageStreams = Math.max(0, activeOssWorkImageStreams - 1);
+  };
+}
+
 
 function integer(value, label, { min = 0, max = 1000000, fallback = 0 } = {}) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -298,6 +315,119 @@ export async function prepareFileDownload(ctx, file) {
       'cache-control': 'private, no-store',
     },
     stream: createReadStream(absolute, { start, end }),
+  };
+}
+
+export async function prepareWorkImage(ctx, file) {
+  const mimeType = String(file?.mime_type || '').toLowerCase();
+  if (file?.storage_kind !== 'INTERNAL_PROXY' || !/^image\/(png|jpeg|gif|webp|avif)$/.test(mimeType)) {
+    throw errors.notFound('作品图片不可用', 'WORK_IMAGE_UNAVAILABLE');
+  }
+  // Keep previews aligned with the upload policy. The stream below enforces this
+  // again for OSS rows whose metadata or response headers are missing/stale.
+  const maxBytes = maxUploadBytes();
+  if (file.file_size != null && Number(file.file_size) > maxBytes) {
+    throw errors.badRequest('作品图片过大，无法在线预览', 'WORK_IMAGE_TOO_LARGE');
+  }
+
+  const storageKey = String(file.storage_key || '').replaceAll('\\', '/');
+  if (!storageKey || storageKey.startsWith('/') || /^[A-Za-z]:/.test(storageKey) || storageKey.split('/').includes('..')) {
+    throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+  }
+  let stream;
+  let bytes;
+  let releaseStreamSlot = null;
+  if (rowStorageBackend(file) === 'oss') {
+    releaseStreamSlot = acquireOssWorkImageStream();
+    const signed = ossRedirectUrl(file, { expires: 60 });
+    if (!signed) {
+      releaseStreamSlot();
+      releaseStreamSlot = null;
+      throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+    }
+    const url = new URL(signed);
+    // OSS signatures bind the object path, not the host. ECS in the same region reads over the private endpoint.
+    const internal = String(process.env.OSS_INTERNAL_ENDPOINT || '').trim().replace(/^https?:\/\//, '');
+    if (internal) url.host = `${process.env.OSS_BUCKET}.${internal}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    let response;
+    try {
+      response = await fetch(url, { signal: controller.signal, redirect: 'error' });
+      if (!response.ok || !response.body) throw new Error(`OSS HTTP ${response.status}`);
+      const lengthHeader = response.headers.get('content-length');
+      const declared = lengthHeader === null ? null : Number(lengthHeader);
+      if (declared !== null && Number.isFinite(declared) && declared >= 0 && declared > maxBytes) {
+        controller.abort();
+        throw errors.badRequest('作品图片过大，无法在线预览', 'WORK_IMAGE_TOO_LARGE');
+      }
+      bytes = declared !== null && Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
+      const source = Readable.fromWeb(response.body);
+      let seen = 0;
+      const limited = new Transform({
+        transform(chunk, encoding, callback) {
+          const size = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, encoding);
+          seen += size;
+          if (seen > maxBytes) {
+            controller.abort();
+            callback(errors.badRequest('作品图片过大，无法在线预览', 'WORK_IMAGE_TOO_LARGE'));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      const onClientClose = () => limited.destroy();
+      ctx.res?.once?.('close', onClientClose);
+      source.once('error', (error) => limited.destroy(error));
+      limited.once('close', () => {
+        clearTimeout(timeout);
+        ctx.res?.off?.('close', onClientClose);
+        controller.abort();
+        source.destroy();
+        releaseStreamSlot();
+      });
+      // The caller attaches its error handler after this function returns; do not
+      // pull OSS bytes (or emit stream errors) while the audit write is pending.
+      limited.once('resume', () => {
+        if (!limited.destroyed) source.pipe(limited);
+      });
+      stream = limited;
+    } catch (error) {
+      clearTimeout(timeout);
+      controller.abort();
+      releaseStreamSlot();
+      if (error?.code === 'WORK_IMAGE_TOO_LARGE') throw error;
+      throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+    }
+  } else {
+    const root = uploadRoot();
+    const absolute = path.resolve(root, storageKey);
+    if (absolute !== root && !absolute.startsWith(root + path.sep)) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+    let info;
+    try { info = await stat(absolute); } catch { throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND'); }
+    if (!info.isFile()) throw errors.notFound('文件存储对象不存在', 'FILE_STORAGE_NOT_FOUND');
+    bytes = info.size;
+    if (bytes > maxBytes) throw errors.badRequest('作品图片过大，无法在线预览', 'WORK_IMAGE_TOO_LARGE');
+    stream = createReadStream(absolute);
+  }
+  try {
+    await audit(ctx, 'FILE_WORK_IMAGE_PROXY', 'FILE_ASSET', file.id, null, { storageBackend: rowStorageBackend(file), bytes });
+  } catch (error) {
+    stream.destroy();
+    releaseStreamSlot?.();
+    throw error;
+  }
+  return {
+    __fileResponse: true,
+    status: 200,
+    headers: {
+      'content-type': file.mime_type,
+      ...(bytes == null ? {} : { 'content-length': String(bytes) }),
+      'content-disposition': 'inline',
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff',
+    },
+    stream,
   };
 }
 

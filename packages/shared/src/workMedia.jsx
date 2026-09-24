@@ -29,33 +29,38 @@ const MODALITY_LABELS = { IMAGE: '图片', VIDEO: '视频', AUDIO: '音频', MUS
  * ⚠️ 这只是把现象说清楚；**真正不让它发生**的是生成时把产物归档到本机
  * （`services/generatedAssetArchive.js`），存量由 `deploy/production/backfill-generated-media.mjs` 收。
  */
-function useMediaFailure(src) {
+function useMediaFailure(src, fallbackUrl) {
   const [failed, setFailed] = useState(false);
-  // 地址变了要把"失效"清掉：授权地址是**异步**解析出来的（resolveSrc → fetchDataUrl），
-  // 先拿不到地址的那一瞬间不能把这一项永久判成"已失效"。
-  useEffect(() => { setFailed(false); }, [src]);
-  return [failed, () => setFailed(true)];
+  const [usingFallback, setUsingFallback] = useState(false);
+  // 地址变了要把"失效"清掉：授权地址是异步解析出来的，先拿不到地址不能永久判坏。
+  useEffect(() => { setFailed(false); setUsingFallback(false); }, [src, fallbackUrl]);
+  const markFailed = () => {
+    if (!usingFallback && fallbackUrl && fallbackUrl !== src) setUsingFallback(true);
+    else setFailed(true);
+  };
+  return [failed, markFailed, usingFallback ? fallbackUrl : src];
 }
 
 /** 卡片上的缩略图（点开才放大：图片/视频用画面本身当缩略图，音频/文字用一张符号卡）。 */
 function MediaThumb({ item, src }) {
-  const [failed, markFailed] = useMediaFailure(src);
+  const [failed, markFailed, displaySrc] = useMediaFailure(src, item.fallbackUrl);
   const label = MODALITY_LABELS[item.modality] || '这份素材';
-  if (!src || failed) return <div className="work-media__thumb-missing">{label}已失效</div>;
-  if (item.modality === 'IMAGE') return <img className="work-media__thumb-img" src={src} alt={item.caption || '作品图片'} loading="lazy" onError={markFailed} />;
+  if (item.modality === 'TEXT') return <div className="work-media__thumb-text">{(item.text || '').slice(0, 96)}{(item.text || '').length > 96 ? '…' : ''}</div>;
+  if (item.modality === 'AUDIO' || item.modality === 'MUSIC') return <div className="work-media__thumb-audio"><span aria-hidden="true">♫</span><small>{item.caption || item.label || label}</small></div>;
+  if (!displaySrc || failed) return <div className="work-media__thumb-missing">{label}已失效</div>;
+  if (item.modality === 'IMAGE') return <img className="work-media__thumb-img" src={displaySrc} alt={item.caption || '作品图片'} loading="lazy" onError={markFailed} />;
   if (item.modality === 'VIDEO') {
     return <div className="work-media__thumb-video">
-      <video src={src} muted playsInline preload="metadata" onError={markFailed} />
+      <video src={displaySrc} muted playsInline preload="metadata" onError={markFailed} />
       <span className="work-media__play" aria-hidden="true">▶</span>
     </div>;
   }
-  if (item.modality === 'AUDIO' || item.modality === 'MUSIC') return <div className="work-media__thumb-audio"><span aria-hidden="true">♫</span><small>{item.caption || item.label || label}</small></div>;
-  return <div className="work-media__thumb-text">{(item.text || '').slice(0, 96)}{(item.text || '').length > 96 ? '…' : ''}</div>;
+  return null;
 }
 
 /** 点开之后的大图浮层：把**完整**的那一份放进来（图片/视频原尺寸、音频给播放器、文字给整段）。 */
 function MediaLightbox({ item, src, onClose }) {
-  const [failed, markFailed] = useMediaFailure(src);
+  const [failed, markFailed, displaySrc] = useMediaFailure(src, item.fallbackUrl);
   useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -70,11 +75,12 @@ function MediaLightbox({ item, src, onClose }) {
         <button type="button" className="work-media__lightbox-close" onClick={onClose} aria-label="关闭">×</button>
       </div>
       <div className="work-media__lightbox-body">
-        {!src || failed ? <p className="work-media__missing">{label}已失效，读不出来了</p>
-          : item.modality === 'IMAGE' ? <img src={src} alt={caption} onError={markFailed} />
-            : item.modality === 'VIDEO' ? <video src={src} controls autoPlay playsInline onError={markFailed} />
-              : item.modality === 'AUDIO' || item.modality === 'MUSIC' ? <AudioPlayer src={src} label={caption} />
-                : <p className="work-media__lightbox-text">{item.text}</p>}
+        {item.modality === 'TEXT' ? <p className="work-media__lightbox-text">{item.text}</p>
+          : !displaySrc || failed ? <p className="work-media__missing">{label}已失效，读不出来了</p>
+            : item.modality === 'IMAGE' ? <img src={displaySrc} alt={caption} onError={markFailed} />
+              : item.modality === 'VIDEO' ? <video src={displaySrc} controls autoPlay playsInline onError={markFailed} />
+                : item.modality === 'AUDIO' || item.modality === 'MUSIC' ? <AudioPlayer src={displaySrc} label={caption} />
+                  : null}
       </div>
     </div>
   </div>;
@@ -87,13 +93,15 @@ function normalizeItems(media = [], assets = []) {
     if (!item) return;
     const modality = String(item.modality || 'IMAGE').toUpperCase();
     const url = String(item.url || '').trim();
+    const previewUrl = String(item.previewUrl || '').trim();
+    const fallbackUrl = previewUrl && previewUrl !== url ? previewUrl : '';
     const text = String(item.text || '').trim();
-    if (modality !== 'TEXT' && !url) return;
+    if (modality !== 'TEXT' && !url && !fallbackUrl) return;
     if (modality === 'TEXT' && !text) return;
-    const key = `${modality}:${url || text.slice(0, 40)}`;
+    const key = `${modality}:${url || fallbackUrl || text.slice(0, 40)}`;
     if (seen.has(key)) return;
     seen.add(key);
-    list.push({ modality, url, text, caption: String(item.caption || item.label || '').trim(), fileId: item.fileId || null, label: String(item.label || '').trim() });
+    list.push({ modality, url, fallbackUrl, previewUrl, text, caption: String(item.caption || item.label || '').trim(), fileId: item.fileId || null, label: String(item.label || '').trim() });
   };
   (Array.isArray(media) ? media : []).forEach(push);
   (Array.isArray(assets) ? assets : []).forEach(push);
@@ -107,7 +115,7 @@ export function WorkMediaGallery({ media = [], assets = [], resolveSrc = null, e
   if (!items.length) return <p className={`work-media__empty ${className}`.trim()}>{emptyText}</p>;
   const srcOf = (item) => {
     const resolved = typeof resolveSrc === 'function' ? resolveSrc(item) : '';
-    return String(resolved || item.url || '');
+    return String(resolved || item.url || item.previewUrl || '');
   };
   const openedItem = opened >= 0 ? items[opened] : null;
   return <>
@@ -123,7 +131,7 @@ export function WorkMediaGallery({ media = [], assets = [], resolveSrc = null, e
             <div className="work-media__card is-static">
               <MediaThumb item={item} src={src} />
             </div>
-            <AudioPlayer className="work-media__player" src={src} label={caption} />
+            <AudioPlayer className="work-media__player" src={src} fallbackSrc={item.fallbackUrl} label={caption} />
             <figcaption>{caption}</figcaption>
           </figure>;
         }

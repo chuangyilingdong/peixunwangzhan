@@ -14,8 +14,8 @@ import { configuredPlazaCategoryMap, DEFAULT_PLAZA_CATEGORY_MAP, PLAZA_CATEGORIE
 import { getAiProviderPolicy } from '../billingConfig.js';
 import { effectiveCapabilities, normalizeAspectRatio } from '../../services/modelCapabilities.js';
 import { disableMfa, enableMfa, mfaSummary, regenerateRecoveryCodes, startMfaSetup } from '../../services/mfa.js';
-import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds } from '../vibecoding.js';
-import { prepareFileDownload, prepareFilePreview } from '../fileAssets.js';
+import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from '../vibecoding.js';
+import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from '../fileAssets.js';
 import {
   ENROLLMENT_STATUSES,
   ORG_MEMBER_ROLES,
@@ -216,6 +216,17 @@ export async function handleWorks(ctx, part, method) {
   // 列表那条只给标题/状态，所以预览要另取一次详情：把 files / entryFile / artifacts 一起带上，
   // 前端就能用与机构端同一套 Replay* 组件渲染（网页能玩、文档给服务端转的 PDF）。
   // ⚠️ 真文件产物的取用地址在服务端拼好（前端不自己拼路由：前缀/编码错一处就是 404，两边都没法测）。
+  let vibeImageMatch = part.match(/^\/vibecoding-works\/([^/]+)\/images\/([^/]+)$/);
+  if (vibeImageMatch && method === 'GET') {
+    requireRole(ctx, ['SUPER_ADMIN']);
+    const submission = await arow('SELECT * FROM vibecoding_submissions WHERE id=?', [vibeImageMatch[1]]);
+    if (!submission) throw errors.notFound('VibeCoding 作品不存在', 'VIBECODING_SUBMISSION_NOT_FOUND');
+    const fileId = vibeImageMatch[2];
+    if (!snapshotImageFileIds(submission).has(fileId)) throw errors.notFound('图片不属于此作品', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
+    const file = await arow('SELECT * FROM file_assets WHERE id=?', [fileId]);
+    if (!file || file.status !== 'ACTIVE' || (file.owner_user_id !== submission.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility)) || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'VIBECODING_WORK_IMAGE_NOT_FOUND');
+    return prepareWorkImage(ctx, file);
+  }
   let vibeDetailMatch = part.match(/^\/vibecoding-works\/([^/]+)$/);
   if (vibeDetailMatch && method === 'GET') {
     requireRole(ctx, ['SUPER_ADMIN']);
@@ -229,7 +240,8 @@ export async function handleWorks(ctx, part, method) {
         preview: `${workBase}/files/${encodeURIComponent(item.name)}/preview`,
         download: `${workBase}/files/${encodeURIComponent(item.name)}/download`,
       }]));
-    return { ...content, fileUrls };
+    const imageUrls = Object.fromEntries([...snapshotImageFileIds(submission)].map((fileId) => [fileId, `${workBase}/images/${encodeURIComponent(fileId)}`]));
+    return { ...content, fileUrls, imageUrls };
   }
   let vibeDetailFileMatch = part.match(/^\/vibecoding-works\/([^/]+)\/files\/(.+?)\/(preview|download)$/);
   if (vibeDetailFileMatch && method === 'GET') {

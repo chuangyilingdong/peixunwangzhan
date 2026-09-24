@@ -1254,7 +1254,7 @@ function CanvasDockPanel({ node, containerRef, viewportBusy = false, onRequestRo
 
 const nodeTypes = { prompt: PromptNode, image: ImageNode, character: CharacterNode, scene: SceneNode, video: VideoNode, note: NoteNode, audio: AudioNode, animation: AnimationNode };
 
-function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, resolveAssetUrl = null, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null, boxModalities = [] }) {
+function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, onUploadFiles, onRequestMaterials, resolveAssetUrl = null, showStarter, capabilities = ['text'], allowNodeCreation = true, focusRequest = null, boxModalities = [], entranceRequest = null, placementRef = null }) {
   // 受控课堂画布（allowNodeCreation=false）默认不使用固定起始底稿，避免空画布每次刷新被自动填充。
   const shouldShowStarter = showStarter === undefined ? (!readOnly && allowNodeCreation) : showStarter;
   const initial = useMemo(() => {
@@ -1304,6 +1304,23 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
   const activeNode = nodes.find((item) => item.id === activeNodeId) || null;
   const enabledCapabilities = useMemo(() => new Set(Array.isArray(capabilities) && capabilities.length ? capabilities : ['text']), [capabilities]);
   const canvasRef = useRef(null);
+  // 侧栏新节点按当前实际视口中心落点；只读实时 viewport，不触碰已有节点的 focusRequest。
+  useEffect(() => {
+    if (!placementRef) return undefined;
+    placementRef.current = (type, offset = 0) => {
+      const bounds = canvasRef.current?.getBoundingClientRect();
+      if (!bounds?.width || !bounds?.height) return null;
+      const currentViewport = getViewport();
+      const center = screenToFlowPosition({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 });
+      const width = type === 'prompt' || type === 'note' ? 320 : type === 'audio' ? 260 : 226;
+      const height = type === 'prompt' ? 170 : 160;
+      return {
+        position: { x: center.x - width / 2 + offset * 36, y: center.y - height / 2 + offset * 26 },
+        viewport: currentViewport,
+      };
+    };
+    return () => { placementRef.current = null; };
+  }, [getViewport, placementRef, screenToFlowPosition]);
   const historyRef = useRef({ past: [], future: [] });
   const clipboardRef = useRef([]);
   const restoringHistoryRef = useRef(false);
@@ -1587,11 +1604,15 @@ function CanvasSurface({ initialSnapshot, readOnly, onChange, onGenerateNode, on
       return { ...base, ...resolvePortSides(edge, nodeById) };
     });
   }, [edges, nodes]);
+  // 入口样式只投影给 React Flow，原始 nodes / onChange / 自动保存均不包含这个临时类。
+  const displayNodes = useMemo(() => nodes.map((node) => node.id === entranceRequest?.id
+    ? { ...node, className: `${node.className || ''} is-entering`.trim() }
+    : node), [entranceRequest?.id, nodes]);
 
   return <AssetUrlContext.Provider value={resolveAssetUrl}><CanvasActionsContext.Provider value={{ updateNode, generateNode, canGenerate: Boolean(onGenerateNode), removeEdge, removeIncomingRef, readOnly, enabledCapabilities, getIncomingImageAssetUrl, getIncomingImageAssetUrls, getIncomingImageRefs, getIncomingAssetRefs }}>
     <div className={`learning-canvas${readOnly ? ' is-readonly' : ''}`} ref={canvasRef}>
       <ReactFlow
-        nodes={nodes}
+        nodes={displayNodes}
         edges={displayEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}

@@ -1,7 +1,7 @@
 import { audit, clearAuthCookie, count, errors, id, json, normalizeOrg, normalizePackage, normalizeSeries, normalizeSession, normalizeUser, normalizeWork, normalizeWorkReport, lessonCanvasConfig, nonEmptyString, nowIso, parseJson, assignmentActiveSql, orgSeriesAccessSql, pageParams, pageResult, q, requireRole, row, rows, transaction, verifyPassword, normalizeLogin, assertLoginAvailable, assertDisplayNameAvailable, arows, arow, aq, acount, atransaction, amap } from '../lib.js';
 import { normalizeLesson, canvasMediaFrom } from '../lib.js';
 import { normalizeSubmission, parseSnapshotArtifacts, snapshotArtifactByName, snapshotDocumentFileIds, snapshotImageFileIds } from './vibecoding.js';
-import { prepareFileDownload, prepareFilePreview } from './fileAssets.js';
+import { prepareFileDownload, prepareFilePreview, prepareWorkImage } from './fileAssets.js';
 import { hashPassword } from '@platform/database';
 
 import { scheduleReminder } from './communication.js';
@@ -213,7 +213,7 @@ export async function handleOrg(ctx) {
     const usageParams = [...usageScopeParams];
     // 2026-09-13（P4 删积分）：这里原来统计 SUM(credits_charged)（积分），积分废弃后恒为 0，
     // 改成数调用次数 —— 「近 7 天 AI 调用」这个口径仍然有意义。
-    const usage7 = Number((await arow('SELECT COUNT(*) n FROM usage_records usage WHERE ' + usageScope, usageParams))?.n || 0);
+    const usage7 = Number((await arow('SELECT COUNT(*) n FROM usage_records AS `usage` WHERE ' + usageScope, usageParams))?.n || 0);
     const recentSessions = (await arows(
       "SELECT session.id,session.class_id,session.lesson_id,session.status,session.started_at,session.ended_at,session.title,session.delivery_mode,lesson.title lesson_title,series.title series_title,teacher.display_name teacher_name FROM class_sessions session LEFT JOIN course_lessons lesson ON lesson.id=session.lesson_id LEFT JOIN course_series series ON series.id=session.series_id LEFT JOIN users teacher ON teacher.id=session.teacher_id WHERE session.org_id=?" + teacherSessionScope + " ORDER BY COALESCE(session.started_at,session.created_at) DESC LIMIT 8",
       sessionParams,
@@ -296,12 +296,12 @@ export async function handleOrg(ctx) {
     const wantsPaging = ctx.search.get('page') !== null;
     const total = Number(await acount('SELECT COUNT(*) n FROM users WHERE ' + where, params) || 0);
     if (!wantsPaging) {
-      const items = (await arows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT 500', params)).map((item) => orgMemberRow(item, currentOrgId));
+      const items = (await arows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, id DESC LIMIT 500', params)).map((item) => orgMemberRow(item, currentOrgId));
       // 老形态：给 items 与真 total（原来那个 total 是「当页条数」，本来就是错的）
       return { items, total, page: 1, limit: 500, totalPages: Math.max(1, Math.ceil(total / 500)) };
     }
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
-    const items = (await arows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?', [...params, limit, offset])).map((item) => orgMemberRow(item, currentOrgId));
+    const items = (await arows('SELECT * FROM users WHERE ' + where + ' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', [...params, limit, offset])).map((item) => orgMemberRow(item, currentOrgId));
     return pageResult(items, { page, limit, total });
   }
   let importMatch = part.match(/^\/users\/import\/(preview|commit)$/);
@@ -595,11 +595,11 @@ export async function handleOrg(ctx) {
       conditions.push(`(${teacherUsageScope.replace(/^ AND /, '')})`);
     }
     if (search) { const keyword = '%' + search.replace(/[%_]/g, (char) => '[' + char + ']') + '%'; conditions.push('(user.login LIKE ? OR user.display_name LIKE ? OR project.title LIKE ? OR class.name LIKE ? OR usage.fail_code LIKE ?)'); params.push(keyword, keyword, keyword, keyword, keyword); }
-    const items = (await arows(`SELECT usage.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
+    const items = (await arows(`SELECT \`usage\`.*,user.login user_login,user.display_name user_name,project.title project_title,project.course_lesson_id project_lesson_id,
       session.title session_title,session.lesson_id session_lesson_id,lesson.title lesson_title,
       job.provider job_provider,job.model job_model,
       attempt.sale_price_fen sale_price_fen
-      FROM usage_records usage
+      FROM usage_records AS \`usage\`
       LEFT JOIN users user ON user.id=usage.user_id AND user.org_id=usage.org_id
       LEFT JOIN student_projects project ON project.id=usage.project_id AND project.org_id=usage.org_id
       LEFT JOIN class_sessions session ON session.id=usage.class_session_id
@@ -829,7 +829,7 @@ export async function handleOrg(ctx) {
       if (!file || file.storage_kind !== 'INTERNAL_PROXY' || file.status !== 'ACTIVE' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'video/mp4', 'video/webm'].includes(String(file.mime_type || '').toLowerCase())
         || (file.owner_user_id !== work.student_id && !['PUBLIC_PLATFORM', 'PUBLIC_RELEASE'].includes(file.visibility))
         || (file.expires_at && Date.parse(file.expires_at) <= Date.now())) throw errors.notFound('作品图片不可用', 'SESSION_WORK_IMAGE_NOT_FOUND');
-      return prepareFileDownload(ctx, file);
+      return String(file.mime_type || '').toLowerCase().startsWith('image/') ? prepareWorkImage(ctx, file) : prepareFileDownload(ctx, file);
     }
     const base = { id: work.id, source, title: work.title, studentId: work.student_id, studentName: work.student_name || null, status: work.status, submittedAt: work.submitted_at };
     const imageUrls = Object.fromEntries([...allowedImages].map((fileId) => [fileId, `${scope.base}/${source}/${encodeURIComponent(work.id)}/images/${encodeURIComponent(fileId)}`]));
@@ -1380,7 +1380,7 @@ export async function handleOrg(ctx) {
     if (seriesFilter) { where += ' AND grant.series_id=?'; params.push(seriesFilter); }
     const items = (await arows(`SELECT grant.id, grant.student_id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         student.display_name student_name, student.login student_login, series.title series_title
-      FROM student_course_grants grant
+      FROM student_course_grants AS \`grant\`
       JOIN users student ON student.id=grant.student_id
       JOIN course_series series ON series.id=grant.series_id
       WHERE ${where} ORDER BY grant.granted_at DESC LIMIT 500`, params)).map((item) => ({
@@ -1467,7 +1467,7 @@ export async function handleOrg(ctx) {
     const totals = {
       students: await acount("SELECT COUNT(*) n FROM users WHERE org_id=? AND role='STUDENT' AND deleted_at IS NULL", [currentOrgId]),
       grantedThisMonth: await acount('SELECT COUNT(*) n FROM student_course_grants WHERE org_id=? AND granted_at>=?', [currentOrgId, monthStart]),
-      withGrants: await acount(`SELECT COUNT(DISTINCT grant.student_id) n FROM student_course_grants grant
+      withGrants: await acount(`SELECT COUNT(DISTINCT grant.student_id) n FROM student_course_grants AS \`grant\`
         JOIN users student ON student.id=grant.student_id AND student.deleted_at IS NULL
         WHERE grant.org_id=? AND grant.revoked_at IS NULL AND student.role='STUDENT'`, [currentOrgId]),
     };
@@ -1493,7 +1493,7 @@ export async function handleOrg(ctx) {
     if (grantState === 'WITH') having = ` HAVING ${activeCountSql} > 0`;
     else if (grantState === 'WITHOUT') having = ` HAVING ${activeCountSql} = 0`;
     const fromSql = `FROM users student
-      LEFT JOIN student_course_grants grant ON grant.student_id=student.id AND grant.org_id=student.org_id
+      LEFT JOIN student_course_grants AS \`grant\` ON grant.student_id=student.id AND grant.org_id=student.org_id
       WHERE ${where} GROUP BY student.id${having}`;
     const total = await acount(`SELECT COUNT(*) n FROM (SELECT student.id ${fromSql})`, params);
     const { page, limit, offset } = pageParams(ctx.search, { defaultLimit: 20, maxLimit: 200 });
@@ -1508,7 +1508,7 @@ export async function handleOrg(ctx) {
     if (listRows.length) {
       const placeholders = listRows.map(() => '?').join(',');
       for (const item of await arows(`SELECT grant.student_id, series.id series_id, series.title
-        FROM student_course_grants grant JOIN course_series series ON series.id=grant.series_id
+        FROM student_course_grants AS \`grant\` JOIN course_series series ON series.id=grant.series_id
         WHERE grant.org_id=? AND grant.revoked_at IS NULL AND grant.student_id IN (${placeholders})
         ORDER BY grant.granted_at DESC`, [currentOrgId, ...listRows.map((item) => item.id)])) {
         if (!seriesByStudent.has(item.student_id)) seriesByStudent.set(item.student_id, []);
@@ -1541,7 +1541,7 @@ export async function handleOrg(ctx) {
     const student = await arow("SELECT id, login, display_name, phone, status FROM users WHERE id=? AND org_id=? AND role='STUDENT' AND deleted_at IS NULL", [studentId, currentOrgId]);
     if (!student) throw errors.notFound('学生不存在或不属于本机构', 'STUDENT_NOT_FOUND');
     const learnedSeries = new Set((await arows(`SELECT DISTINCT lesson.series_id series_id
-      FROM usage_records usage
+      FROM usage_records AS \`usage\`
       JOIN class_sessions session ON session.id=usage.class_session_id
       JOIN course_lessons lesson ON lesson.id=session.lesson_id
       WHERE usage.user_id=? AND usage.org_id=? AND usage.status='SUCCESS'
@@ -1562,7 +1562,7 @@ export async function handleOrg(ctx) {
     const items = (await arows(`SELECT grant.id, grant.series_id, grant.granted_at, grant.revoked_at, grant.revoke_reason,
         grant.source_assignment_id, series.title, series.version,
         actor.display_name granted_by_name, actor.login granted_by_login
-      FROM student_course_grants grant
+      FROM student_course_grants AS \`grant\`
       JOIN course_series series ON series.id=grant.series_id
       LEFT JOIN users actor ON actor.id=grant.granted_by
       WHERE grant.org_id=? AND grant.student_id=?

@@ -227,5 +227,24 @@ check('④ 金环是四边完整的描边（border + box-shadow 各一圈），�
   /\.cv-item\.is-gen-box \{ border-color: rgb\(246 199 92 \/ 62%\); box-shadow: 0 0 0 1px rgb\(246 199 92 \/ 24%\), 0 0 10px rgb\(246 199 92 \/ 16%\); \}/.test(sharedCss)
   && /\.cv-item\.is-gen-box:hover:not\(:disabled\) \{ border-color: rgb\(253 224 122 \/ 95%\)/.test(sharedCss));
 
+/* ── 侧栏新节点、文字结果与提示词目标 ─────────────────────────────────────── */
+check('侧栏新节点用实时视角中心，存回当前 viewport；已存在节点仍走 focusRequest',
+  /screenToFlowPosition\(\{ x: bounds\.left \+ bounds\.width \/ 2, y: bounds\.top \+ bounds\.height \/ 2 \}\)/.test(canvasJsx)
+  && /viewport: currentViewport/.test(canvasJsx)
+  && /viewport: viewport \|\| current\.viewport/.test(workspace)
+  && /if \(existing\) \{ setFocusRequest\(/.test(workspace));
+check('侧栏新增有小幅错位和临时入场态，不污染节点快照；减少动效时关闭动画',
+  /offset \* 36/.test(canvasJsx) && /offset \* 26/.test(canvasJsx)
+  && /nodes=\{displayNodes\}/.test(canvasJsx) && /onChange\?\.\(\{ nodes, edges, viewport: getViewport\(\) \}\)/.test(canvasJsx)
+  && /\.react-flow__node\.is-entering \.learning-node \{ animation: cv-node-enter/.test(canvasCss)
+  && /\.react-flow__node\.is-entering \.learning-node \{ animation: none; \}/.test(canvasCss));
+check('生成过的文字/图片/视频框体不再接收提示词，插入时也重新校验',
+  /!boxSucceeded\(node\.data\.boxId\) && !node\.data\.generatedText && !node\.data\.assetUrl/.test(workspace)
+  && /boxSucceeded\(target\.data\?\.boxId\) \|\| target\.data\?\.generatedText \|\| target\.data\?\.assetUrl/.test(workspace));
+check('文字卡片宽度固定且长串可折行，结果仍可选中/滚动/复制',
+  /\.react-flow__node-prompt \{ width: 320px; max-width: 320px; \}/.test(canvasCss)
+  && /\.learning-node__text-result \{ min-width: 0; max-width: 100%; overflow-wrap: anywhere;/.test(canvasCss)
+  && /learning-node__text-wrap nodrag \$\{NO_WHEEL_ZOOM_CLASS\}/.test(canvasJsx));
+
 console.log(failures ? `\n结果：${failures} 项失败\n` : '\n结果：全部通过\n');
 process.exit(failures ? 1 : 0);
