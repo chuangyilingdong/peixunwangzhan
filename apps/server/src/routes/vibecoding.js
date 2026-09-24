@@ -489,7 +489,7 @@ export async function conversationHistory(conversationId, limit = HISTORY_MESSAG
  * **不要把 `modelMappings` 一起放进来**——那是「读取模型」返回的候选清单，是给管理员
  * 挑选用的大列表（几百条，跨供应商），下发给学生就会冒出 gpt 之类的无关模型。
  */
-async function textModelOptions() {
+export async function textModelOptions() {
   const channel = modalityChannel(await getAiProviderPolicy(), 'TEXT');
   if (!channel) return [];
   const mappings = Array.isArray(channel.modelMappings) ? channel.modelMappings : [];
@@ -515,7 +515,7 @@ async function textModelOptions() {
  * 而不是一个空的「渠道默认模型」。留空存储、显示默认，是为了后台改了默认之后
  * 没自己选过模型的老会话能跟着走。
  */
-async function textDefaultModel() {
+export async function textDefaultModel() {
   return String(modalityChannel(await getAiProviderPolicy(), 'TEXT')?.model || '').trim();
 }
 

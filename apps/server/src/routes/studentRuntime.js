@@ -14,7 +14,7 @@ import { issueRuntimeKey } from './runtimeGateway.js';
 import { vibecodingPresetPrompts, vibecodingSendLimit, vibecodingSendUsage } from '../services/vibecodingLessonSettings.js';
 import { isSubmittableArtifactKind, kindForName } from '../services/vibecodingArtifacts.js';
 import { documentMime } from '../services/ooxml/documents.js';
-import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences } from './vibecoding.js';
+import { ensureRuntimeConversation, recordRuntimeSubmission, rewriteLocalReferences, textDefaultModel, textModelOptions } from './vibecoding.js';
 import { storeStudentArtifactAsset } from './fileAssets.js';
 
 // 客户端运行时（dsh / VibeCoding）**只认"这节课声明了 VibeCoding"**。
@@ -297,6 +297,14 @@ export async function handleStudentRuntime(ctx) {
       gateway: { baseUrl: runtimeGatewayUrl(), key: issueRuntimeKey({ orgId, userId: auth.user.id, sessionId: classroom.id, lessonId }) },
       presets: await vibecodingPresetPrompts(lessonId),
       sends: { limit, used, remaining: limit === null ? null : Math.max(0, limit - used) },
+      // ⭐ 模型清单下发给客户端（2026-09-24 客户端口径）：客户端不再把模型名写死在补丁层里，
+      //    而是**用 displayName 显示、用 id 发上游** —— 否则运营在后台改的别名到不了学生眼前。
+      //    ⚠️ 只放 TEXT 渠道**实际启用**的模型（+ 渠道默认），**不是** modelMappings：
+      //    那是管理员挑选用的大列表（几百条跨供应商），下发给学生会冒出 gpt 之类的无关模型。
+      //    未开课/画布课堂那两支**故意不带**（客户端拿不到环境时的契约是"只回 null 与一句话"，
+      //    它会退回内置兜底列表）。
+      models: await textModelOptions(),
+      defaultModel: await textDefaultModel(),
     };
   }
 

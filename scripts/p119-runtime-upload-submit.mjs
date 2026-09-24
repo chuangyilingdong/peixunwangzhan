@@ -66,6 +66,23 @@ ensureClassroom(dbPath);
   //    只改课时不改课堂的话，这间课堂仍然是 CANVAS —— 而运行时接口从 2026-09-21 起只看 VIBECODING 课堂
   //    （它的门禁就该这么严），于是这个守卫自己会被自己的门禁挡住。
   db.prepare("UPDATE class_sessions SET delivery_mode='VIBECODING'").run();
+  // 模型清单的夹具备料（2026-09-24 客户端口径）：/client-context 要把"当前 TEXT 渠道实际启用的
+  // 模型"下发给桌面客户端，客户端**用 displayName 显示、用 id 发上游** —— 否则运营在后台改的
+  // 别名到不了学生眼前（客户端现在把模型名写死在补丁层里）。
+  // 三条的取值刚好覆盖 displayName 的三级来源（别名 → 上游名 → id 本身）。
+  db.prepare('UPDATE platform_settings SET ai_provider_policy=? WHERE id=1').run(JSON.stringify({
+    provider: 'local-mock',
+    channels: [{
+      id: 'p119-text', provider: 'local-mock', model: 'p119-flash',
+      models: ['p119-flash', 'p119-pro', 'p119-bare'],
+      modelMappings: [
+        { id: 'p119-flash', displayName: '上游名（有别名时不该赢）' },
+        { id: 'p119-pro', displayName: '上游给的名字' },
+      ],
+    }],
+    modalityChannels: { TEXT: 'p119-text' },
+    modelDisplayNames: { 'p119-flash': '运营改的别名' },
+  }));
   db.close();
 }
 
@@ -221,6 +238,10 @@ try {
       assert.equal(canvasOnly.sends, undefined);
       assert.ok(!text.includes('baseUrl') && !text.includes('"key"'), `画布课堂的响应里不许有网关地址/密钥：${text.slice(0, 200)}`);
     });
+    await check('画布课堂：也不下发模型清单（这一支的契约是"只回 null 与一句话"）', async () => {
+      assert.equal(canvasOnly.models, undefined, JSON.stringify(canvasOnly).slice(0, 200));
+      assert.equal(canvasOnly.defaultModel, undefined);
+    });
     await check('画布课堂：/status 也不认它（这条路的"能进哪节课"同样只看 VIBECODING）', async () => {
       // ⚠️ 前面那两条会往服务端灌 17MB / 30MB 的包（测上限），紧接着的请求偶发在**连接层**失败
       //    （Windows 上实测 "fetch failed"，不是业务错误）—— 重试一次只针对这种传输层抖动。
@@ -242,6 +263,28 @@ try {
       assert.ok(vibeOnly.classroom?.id, JSON.stringify(vibeOnly).slice(0, 200));
       assert.ok(String(vibeOnly.gateway?.key || '').length > 0, 'VIBECODING 课没下发密钥');
       assert.ok(String(vibeOnly.gateway?.baseUrl || '').length > 0, 'VIBECODING 课没下发网关地址');
+    });
+
+    // ②′ ⭐ 模型清单（2026-09-24 客户端口径）：客户端不再把模型名写死在补丁层里 ——
+    //     它拿这套清单去显示（displayName）和发上游（id）。少了这一条，运营在后台改的别名
+    //     就到不了学生眼前（学生看到的还是写死的 "DeepSeek Flash"）。
+    await check('模型清单下发给客户端：displayName 三级取值（运营别名 → 上游名 → id 本身）', async () => {
+      const models = vibeOnly.models;
+      assert.ok(Array.isArray(models), `models 必须是数组：${JSON.stringify(vibeOnly).slice(0, 200)}`);
+      const nameOf = new Map(models.map((item) => [item.id, item.displayName]));
+      assert.equal(models.length, 3, `只下发当前 TEXT 渠道启用的那几个：${JSON.stringify(models)}`);
+      assert.equal(nameOf.get('p119-flash'), '运营改的别名', '运营配的别名优先（哪怕渠道里还留着上游名）');
+      assert.equal(nameOf.get('p119-pro'), '上游给的名字', '没配别名时退到"读取模型"拿到的上游名');
+      assert.equal(nameOf.get('p119-bare'), 'p119-bare', '两者都没有就退回 id');
+      assert.ok(models.every((item) => typeof item.id === 'string' && item.id.length > 0), JSON.stringify(models));
+    });
+    await check('模型清单：defaultModel = 渠道默认模型的 id（会话里留空 = 跟随渠道默认）', async () => {
+      assert.equal(vibeOnly.defaultModel, 'p119-flash', JSON.stringify(vibeOnly.defaultModel));
+    });
+    await check('模型清单：**不许**混进 modelMappings（管理员那几百条候选里有 gpt 之类的无关模型）', async () => {
+      const text = JSON.stringify(vibeOnly);
+      assert.ok(!text.includes('modelMappings'), `响应里出现了 modelMappings：${text.slice(0, 300)}`);
+      assert.ok(!text.includes('上游名（有别名时不该赢）'), `把没启用的候选也带出来了：${text.slice(0, 300)}`);
     });
 
     // ③ ⭐ **同一节课同时开两种**（画布 + VibeCoding）→ 画布那一侧在网页上进、客户端这一侧也要能进。
